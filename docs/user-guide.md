@@ -434,7 +434,7 @@ dsh-tui 自身区块（写入 settings.yaml 用户层，实时生效）共 21 �
 | whale | 开屏头部像素鲸鱼娘（默认开）；每次启动随机三选一开屏动画：经典组合开场（眨眼+喷水+摆尾）/ 爱心 / 睡觉，`/deepseek` 彩蛋每次重掷 |
 | diffLayout | Edit/Write diff 布局：auto（≥110 列双栏）/ split / unified |
 | thinkingFold | 思考块：preview（流式 2-3 行预览 + 落定折叠）/ full（展开到轮末） |
-| smoothStreaming | 流式平滑输出（默认开）：实时回复/展开思考/工具卡正文按 ~30fps 匀速揭示，突发送达不再跳变，一次性到达的非流式回复也平滑打出；回放/历史始终完整直出 |
+| smoothStreaming | 流式平滑输出（默认关）：实时回复/展开思考/工具卡正文按 ~20fps 匀速揭示，突发送达不再跳变，一次性到达的非流式回复也平滑打出；回放/历史始终完整直出。揭示按自身节奏持续渲染，长流式任务在较慢终端上可能感到卡顿，故默认关闭 |
 | toolBackground | 工具卡背景强调：none / subtle / strong |
 | statusBar.* | 上表全部状态栏开关（compact/model/thinking/cwd/contextUsage/cache/tokens/cost/tps/gitBranch/sessionTitle/sessionId/mode/contextBar/activity/trajectory；statusBar.sessionId 是底栏显示开关，与 cordis 的启动 sessionId 无关） |
 

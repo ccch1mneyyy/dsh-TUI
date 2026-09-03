@@ -17,6 +17,10 @@ process.env.FORCE_COLOR = '3'
 process.env.DSH_TUI_THEME = 'dark'
 process.env.DSH_TUI_LANG = 'zh'
 process.env.WT_SESSION = 'headless-windows-terminal-probe'
+// Windows 终端栈已默认禁用 DECSTBM（全屏残影类，见 hasDecstbmScrollBug）；
+// 本复现验证的是"选区污染帧不得喂进 DECSTBM 快路径"这一独立守卫，强制
+// 开启 DECSTBM 才能观测到该守卫的效果。
+process.env.DSH_TUI_FORCE_DECSTBM = '1'
 delete process.env.TERM_PROGRAM
 delete process.env.TMUX
 

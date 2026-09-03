@@ -61,9 +61,19 @@ function probeEnv(env: Record<string, string | undefined>): { jet: boolean; sync
       decstbm: isDecstbmSafe(),
     }))
   `
+  // Scrub inherited keys that could skew the sync/JediTerm halves (tmux,
+  // kitty, Zed, VTE, a host WT_SESSION, leftover FORCE), then apply the
+  // caller's overrides — undefined values mean "leave unset".
+  const childEnv: NodeJS.ProcessEnv = { ...process.env, TERM: 'xterm-256color' }
+  for (const key of ['TMUX', 'KITTY_WINDOW_ID', 'ZED_TERM', 'VTE_VERSION', 'WT_SESSION', 'DSH_TUI_FORCE_DECSTBM', 'TERMINAL_EMULATOR', 'TERM_PROGRAM']) {
+    delete childEnv[key]
+  }
+  for (const [key, value] of Object.entries(env)) {
+    if (value !== undefined) childEnv[key] = value
+  }
   const res = spawnSync(process.execPath, ['--import', 'tsx/esm', '-e', src], {
     cwd: repoRoot,
-    env: { ...process.env, ...env },
+    env: childEnv,
     encoding: 'utf8',
   })
   if (res.status !== 0) throw new Error(`probe failed: ${res.stderr}`)
@@ -75,7 +85,18 @@ check('JetBrains env detected via TERMINAL_EMULATOR', jb.jet)
 check('sync output enabled for JediTerm', jb.sync)
 check('DECSTBM excluded for JediTerm', jb.sync && !jb.decstbm)
 
-const vscode = probeEnv({ TERMINAL_EMULATOR: '', TERM_PROGRAM: 'vscode' })
+// The Windows-terminal-stack gate: WT_SESSION must exclude DECSTBM even with
+// DEC 2026 support (the persistent fullscreen-ghost class — one mis-applied
+// region scroll shifts static chrome forever). The bypass env re-enables it
+// without weakening the sync/JediTerm gates.
+const wt = probeEnv({ TERMINAL_EMULATOR: '', TERM_PROGRAM: 'WezTerm', WT_SESSION: '1', DSH_TUI_FORCE_DECSTBM: undefined })
+check('Windows Terminal stack: sync on, DECSTBM excluded', wt.sync && !wt.decstbm)
+const wtForced = probeEnv({ TERMINAL_EMULATOR: '', TERM_PROGRAM: 'WezTerm', WT_SESSION: '1', DSH_TUI_FORCE_DECSTBM: '1' })
+check('DSH_TUI_FORCE_DECSTBM bypasses the Windows gate only', wtForced.sync && wtForced.decstbm)
+
+// VS Code is exercised through the force bypass: on Windows dev machines the
+// probe's real platform would otherwise (correctly) exclude DECSTBM.
+const vscode = probeEnv({ TERMINAL_EMULATOR: '', TERM_PROGRAM: 'vscode', DSH_TUI_FORCE_DECSTBM: '1' })
 check('VS Code still sync + DECSTBM', vscode.sync && vscode.decstbm)
 
 const plain = probeEnv({ TERMINAL_EMULATOR: '', TERM_PROGRAM: '' })

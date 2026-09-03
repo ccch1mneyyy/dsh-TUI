@@ -2,14 +2,14 @@ import React from 'react'
 import { getRevealVersion, subscribeReveal } from '../components/smoothReveal.js'
 
 /**
- * Reveal-frame wakeup as a React hook — bumps once per advancing ~30fps
+ * Reveal-frame wakeup as a React hook — bumps once per advancing ~20fps
  * scheduler tick so consumers re-run their render-phase cursor reads
  * ({@link revealTextOf}/{@link revealLinesOf}) and feed fresh slices through
  * the MemoRow prop pipeline. The returned number is a render trigger only;
  * its value carries no meaning.
  *
  * Deliberately NOT useSyncExternalStore: a store change forces a SYNCLANE
- * re-render (forceStoreRerender hardcodes lane 2), and at 30fps that sync
+ * re-render (forceStoreRerender hardcodes lane 2), and at 20fps that sync
  * render preempts/discards whatever DefaultLane streaming render is in
  * flight. Every such sync commit then ends with Default work still pending,
  * which React's commit-end lane accounting counts as a NESTED update —

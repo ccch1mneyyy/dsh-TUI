@@ -74,6 +74,17 @@ const GROUPS = {
 // shrunk 帧冻结的旧 scrollTop 与失准的 clamp 边界越过内容底，整屏裁剪
 // 成"只剩输入框"（Orca pane 宽度抖动的现场取证复现）。
     ["repro-resize-blank", ['node', '--import', 'tsx/esm', 'scripts/repro-resize-blank.tsx']],
+// DECSTBM Windows 终端栈门禁回归：四组 required 全跑 ubuntu（win32 半支
+// 不可测）、Windows lane 只 import、repro 全带 FORCE 绕门——删门时这里是
+// 唯一会红的防线（WT 排除 + FORCE 仅绕 Windows 门不弱化 sync/JediTerm）。
+    ["verify-decstbm-gate", ['node', '--import', 'tsx/esm', 'scripts/verify-decstbm-gate.tsx']],
+// 最小化→恢复回归：Windows Terminal/conpty 可只发「尺寸未变」resize，
+// 同时丢 1049/focus/paste 或弄脏物理 surface。恢复查询期间不得把鲸鱼/
+// 状态栏增量帧写进 main；reset→重进并立即全绘，set→原 buffer 全绘。
+    ["repro-fullscreen-selfheal", ['node', '--import', 'tsx/esm', 'scripts/repro-fullscreen-selfheal.tsx']],
+// #713 背压门控 × Smooth Streaming：跳写帧已经消费 DOM dirty，drain
+// 重试不得把旧 frontFrame blit 回去；即使 reveal 已追平并停表，终帧也要落盘。
+    ["repro-backpressure-final-frame", ['node', '--import', 'tsx/esm', 'scripts/repro-backpressure-final-frame.tsx']],
 // 空转重渲染风暴回归（issue #433）：长历史 + 30ms 空转 commit 风暴下
 // renderScrollTop / 画面 / 输入框行数必须逐帧恒定，几何不震荡。
     ["repro-idle-oscillation", ['node', '--import', 'tsx/esm', 'scripts/repro-idle-oscillation.tsx']],

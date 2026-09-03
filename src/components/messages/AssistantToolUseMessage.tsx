@@ -14,7 +14,7 @@ import { t } from '../../i18n.js'
 import type { ToolBackground } from '../../tuiDisplayPrefs.js'
 import type { Theme } from '../../theme.js'
 import type { ClickEvent } from '../../ink/events/click-event.js'
-import { revealLinesOf, snapReveal } from '../smoothReveal.js'
+import { revealLinesOf, snapReveal, splitRevealKey, toolRevealKey } from '../smoothReveal.js'
 import { useRevealVersion } from '../../hooks/useRevealVersion.js'
 
 type Props = {
@@ -62,7 +62,7 @@ type Props = {
   /**
    * Smooth streaming reveal (settings `dsh-tui.smoothStreaming`): the card
    * BODY (diff hunks / write content — model-authored prose, not tool
-   * output) paints through an even ~30fps line reveal when it first appears,
+   * output) paints through an even ~20fps line reveal when it first appears,
    * instead of one jarring block. Only the pending CALL view animates; the
    * settled result view paints complete (real output is progress, not
    * prose), and so do replayed cards.
@@ -73,6 +73,8 @@ type Props = {
   fresh?: boolean
   /** Reveal version supplied by MessageList to avoid one store subscriber per card. */
   revealVersion?: number
+  /** Transcript generation namespace; call ids may repeat after session reset. */
+  revealGeneration?: number
 }
 
 /** Tool display names: DSH emits lowercase tool ids (`bash`); Claude Code
@@ -482,6 +484,7 @@ export function AssistantToolUseMessage({
   smoothReveal = false,
   fresh = false,
   revealVersion,
+  revealGeneration,
 }: Props): React.ReactNode {
   // MessageList owns the single production subscription and passes a version
   // prop only to active reveal rows. Standalone consumers keep the fallback
@@ -568,15 +571,23 @@ export function AssistantToolUseMessage({
   const rendered: BodyLine[] =
     footnote === undefined ? lines : [...lines, { text: footnote, tone: 'hint' }]
   // Smooth reveal (line-unit, pending CALL body only): model-authored prose
-  // (diff hunks, write content) flows in at ~30fps; the settled RESULT view,
+  // (diff hunks, write content) flows in at ~20fps; the settled RESULT view,
   // error bodies, verbose/expanded cards, and replayed (non-fresh) cards all
   // paint complete. `snapReveal` on every non-revealable render retires a
   // cursor the moment its card stops qualifying (result arrived, user
   // expanded) — idempotent, safe during render.
-  const revealKey = `tool:${tool.callId}`
+  const revealKey = toolRevealKey(revealGeneration, tool.callId)
   const revealable = smoothReveal && !isError && isRunning && view !== undefined &&
     tool.resultView === undefined && !verbose && !isExpanded && fresh
-  if (!revealable) snapReveal(revealKey)
+  if (!revealable) {
+    // Retire BOTH cursors: the body cursor and the split-diff pane cursor.
+    // SplitDiffView stops reading its key once `reveal` is gone, so an
+    // unsnapped split cursor would drain in the background for dozens of
+    // ticks, keeping the shared timer and its per-tick MessageList renders
+    // alive for nothing.
+    snapReveal(revealKey)
+    snapReveal(splitRevealKey(revealKey))
+  }
   const revealedLineCount = revealable
     ? revealLinesOf(revealKey, rendered.length, { enabled: true, active: true })
     : rendered.length
@@ -646,7 +657,7 @@ export function AssistantToolUseMessage({
               maxRows={DIFF_BODY_MAX_LINES}
               verbose={verbose}
               toolBackground={ordinaryToolBackground}
-              reveal={revealable ? { key: `${revealKey}:split` } : undefined}
+              reveal={revealable ? { key: splitRevealKey(revealKey) } : undefined}
             />
           </Box>
         ) : (

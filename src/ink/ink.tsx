@@ -42,7 +42,7 @@ import { applySearchHighlight } from './searchHighlight.js';
 import { applySelectionOverlay, captureScrolledRows, clearSelection, createSelectionState, extendSelection, type FocusMove, findPlainTextUrlAt, getSelectedText, hasSelection, moveFocus, pickFollowForSelection, type SelectionState, selectLineAt, selectWordAt, shiftAnchor, shiftSelection, shiftSelectionForFollow, shiftSelectionForViewportResize, shiftSelectionForViewportTranslation, startSelection, updateSelection } from './selection.js';
 import { isDecstbmSafe, SYNC_OUTPUT_SUPPORTED, serializeDiff, supportsDecrqmProbe, supportsExtendedKeys, supportsWin32InputMode, type Terminal, writeDiffToTerminal } from './terminal.js';
 import { CURSOR_HOME, cursorMove, cursorPosition, DISABLE_KITTY_KEYBOARD, DISABLE_MODIFY_OTHER_KEYS, DISABLE_WIN32_INPUT_MODE, ENABLE_KITTY_KEYBOARD, ENABLE_MODIFY_OTHER_KEYS, ENABLE_WIN32_INPUT_MODE, ERASE_SCREEN, ERASE_SCROLLBACK, SGR_RESET } from './termio/csi.js';
-import { DBP, DFE, DISABLE_MOUSE_TRACKING, ENABLE_MOUSE_TRACKING, ENTER_ALT_SCREEN, EXIT_ALT_SCREEN, SHOW_CURSOR } from './termio/dec.js';
+import { DBP, DFE, DISABLE_MOUSE_TRACKING, EBP, EFE, ENABLE_MOUSE_TRACKING, ENTER_ALT_SCREEN, EXIT_ALT_SCREEN, SHOW_CURSOR } from './termio/dec.js';
 import { CLEAR_ITERM2_PROGRESS, CLEAR_TAB_STATUS, setClipboard, supportsTabStatus, wrapForMultiplexer } from './termio/osc.js';
 import { decrqm } from './terminal-querier.js';
 import { TerminalWriteProvider } from './useTerminalNotification.js';
@@ -55,13 +55,35 @@ const ALT_SCREEN_ANCHOR_CURSOR = Object.freeze({
   y: 0,
   visible: false
 });
+const ALT_SCREEN_SURFACE_RECOVERY_TIMEOUT_MS = 1000;
+/** A terminal that accepted no new frame for this long may have been hidden,
+ *  detached, or renderer-reset. Its first drain is a surface boundary, not
+ *  merely permission to resume incremental diffs.
+ *
+ *  250ms (was 1000ms): while the write gate holds, frames are SKIPPED and
+ *  the physical surface may apply partial/congested byte streams in ways the
+ *  diff baseline cannot model (ConPTY buffering while the window is hidden,
+ *  a mis-applied scroll). Resuming with an incremental delta against a
+ *  possibly-diverged surface PERSERVES that divergence forever on static
+ *  rows (the fullscreen ghost class). One full erase+repaint per congestion
+ *  episode heals it; the 250ms floor matches the surface-refresh dedupe
+ *  window so sub-second congestion bursts cannot spam full repaints. */
+const BACKPRESSURE_SURFACE_RECOVERY_MS = 250;
+/** Dedupe window for consecutive benign full-surface refresh signals
+ *  (window-settle resize bursts, resize+FOCUS_IN pairs, a stdin-gap refresh
+ *  right after either). Full restore-from-invalid refreshes bypass it. */
+const ALT_SCREEN_SURFACE_REFRESH_DEDUPE_MS = 250;
 const CURSOR_HOME_PATCH = Object.freeze({
   type: 'stdout' as const,
   content: CURSOR_HOME
 });
 const ERASE_THEN_HOME_PATCH = Object.freeze({
-  type: 'stdout' as const,
-  content: ERASE_SCREEN + CURSOR_HOME
+  // `clearTerminal` makes serializeDiff close DEC-2026 before ED2 and reopen
+  // it for the paint. Windows Terminal can leave a partially stale viewport
+  // when ED2 itself is enclosed by BSU/ESU; Ctrl+L succeeds because its clear
+  // is outside that block. Keep clear+paint in the same stdout.write call.
+  type: 'clearTerminal' as const,
+  reason: 'clear' as const,
 });
 
 // Cached per-Ink-instance, invalidated on resize. frame.cursor.y for
@@ -72,6 +94,14 @@ function makeAltScreenParkPatch(terminalRows: number) {
     content: cursorPosition(terminalRows, 1)
   });
 }
+
+/** A minimized ConPTY may temporarily report 0/undefined dimensions. */
+function positiveTerminalDimension(value: number | undefined): number | undefined {
+  return typeof value === 'number' && Number.isInteger(value) && value > 0
+    ? value
+    : undefined;
+}
+
 export type Options = {
   stdout: NodeJS.WriteStream;
   stdin: NodeJS.ReadStream;
@@ -129,6 +159,9 @@ export default class Ink {
   private readonly unsubscribeTTYHandlers?: () => void;
   private terminalColumns: number;
   private terminalRows: number;
+  // Minimize can make ConPTY expose 0×0/undefined temporarily. Keep the last
+  // valid layout and suppress frame writes until a positive size returns.
+  private terminalSizeUnavailable = false;
   /** Columns the Yoga root was last constrained with (see onComputeLayout). */
   private lastLayoutColumns = -1;
   private currentNode: ReactNode = null;
@@ -143,6 +176,9 @@ export default class Ink {
   private drainListener: (() => void) | null = null;
   /** Fallback re-probe delay while backpressured (bounded backoff). */
   private drainBackoffMs = DRAIN_BACKOFF_BASE_MS;
+  /** Start of the current uninterrupted output stall. A long stall makes the
+   *  physical terminal surface untrustworthy even when virtual frames agree. */
+  private backpressureStartedAt: number | null = null;
   // Every scheduled microtask carries the generation that created it. Immediate
   // renders invalidate older trailing work before it can append an old frame.
   private renderGeneration = 0;
@@ -208,18 +244,35 @@ export default class Ink {
     columns: number;
     rows: number;
   } | null = null;
-  // True when the previous frame's screen buffer cannot be trusted for
-  // blit — selection overlay mutated it, resetFramesForAltScreen()
-  // replaced it with blanks, or forceRedraw() reset it to 0×0. Forces
-  // one full-render frame; steady-state frames after clear it and regain
-  // the blit + narrow-damage fast path.
+  // True when renderer blitting cannot be trusted — selection overlay
+  // mutated the previous screen, a reset replaced it with blanks/0×0, or a
+  // backpressure-skipped candidate consumed DOM dirty flags without becoming
+  // the terminal baseline. Forces one full-render frame; a successful clean
+  // frame clears it and regains the blit + narrow-damage fast path.
   private prevFrameContaminated = false;
-  // Set by handleResize: prepend ERASE_SCREEN to the next onRender's patches
-  // INSIDE the BSU/ESU block so clear+paint is atomic. Writing ERASE_SCREEN
-  // synchronously in handleResize would leave the screen blank for the ~80ms
-  // render() takes; deferring into the atomic block means old content stays
-  // visible until the new frame is fully ready.
+  // Set by handleResize/recovery: prepend a `clearTerminal` patch to the next
+  // onRender. serializeDiff keeps it in the SAME stdout.write as the repaint,
+  // but executes ED2 outside DEC-2026 (Windows Terminal can leave stale cells
+  // when ED2 is enclosed by BSU/ESU), then reopens sync for the content paint.
+  // Deferring until the frame is ready also avoids a long clear→paint gap.
   private needsEraseBeforePaint = false;
+  // A same-size resize can be the only signal that Windows Terminal restored
+  // after a renderer reset. While its 1049 health query is in flight, hold
+  // incremental alt-screen writes: if the physical terminal already fell
+  // back to main, those deltas would otherwise be painted into scrollback.
+  // The recovery completion always emits one full frame and clears the gate.
+  private altScreenSurfaceRecoveryPending = false;
+  private altScreenSurfaceRecoveryTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Bounded retry for a refreshSurface probe request parked behind the
+   *  gesture latch (see probeAltScreenHealth). Without it, a lost mouse
+   *  release (window unfocused at release time) plus a dropped DECSET-1004
+   *  (no FOCUS_OUT to settle the latch) could strand a required surface
+   *  refresh indefinitely while incremental frames keep painting against a
+   *  possibly-diverged surface — the exact ghost class this batch fixes. */
+  private pendingProbeRetryTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Completion time of the last full alt-screen surface refresh (dedupe
+   *  window for consecutive benign refresh signals, see probe entry). */
+  private lastSurfaceRefreshAt = 0;
   // Native cursor positioning: a component (via useDeclaredCursor) declares
   // where the terminal cursor should be parked after each frame. Terminal
   // emulators render IME preedit text at the physical cursor position, and
@@ -255,8 +308,11 @@ export default class Ink {
       stdout: options.stdout,
       stderr: options.stderr
     };
-    this.terminalColumns = options.stdout.columns || 80;
-    this.terminalRows = options.stdout.rows || 24;
+    const initialColumns = positiveTerminalDimension(options.stdout.columns);
+    const initialRows = positiveTerminalDimension(options.stdout.rows);
+    this.terminalSizeUnavailable = initialColumns === undefined || initialRows === undefined;
+    this.terminalColumns = initialColumns ?? 80;
+    this.terminalRows = initialRows ?? 24;
     this.altScreenParkPatch = makeAltScreenParkPatch(this.terminalRows);
     this.stylePool = new StylePool();
     this.charPool = new CharPool();
@@ -412,13 +468,53 @@ export default class Ink {
   // blank→paint flicker). useVirtualScroll's height scaling already bounds
   // the per-resize cost; synchronous handling keeps dimensions consistent.
   private handleResize = () => {
-    const cols = this.options.stdout.columns || 80;
-    const rows = this.options.stdout.rows || 24;
-    // Terminals often emit 2+ resize events for one user action (window
-    // settling). Same-dimension events are no-ops; skip to avoid redundant
-    // frame resets and renders.
-    if (cols === this.terminalColumns && rows === this.terminalRows) return;
+    const cols = positiveTerminalDimension(this.options.stdout.columns);
+    const rows = positiveTerminalDimension(this.options.stdout.rows);
+    // ConPTY may expose 0×0 (or undefined) while the window is minimized.
+    // 80×24 is only a construction fallback, never a real resize target:
+    // laying out and painting that synthetic size deposits a bogus frame
+    // which is replayed when the window returns.
+    if (cols === undefined || rows === undefined) {
+      if (!this.terminalSizeUnavailable) noteFrameCause('resize');
+      this.terminalSizeUnavailable = true;
+      return;
+    }
+    const restoredFromUnavailable = this.terminalSizeUnavailable;
+    this.terminalSizeUnavailable = false;
+    // Windows Terminal / conpty can emit a same-dimension resize when a
+    // minimized window is restored or its renderer restarts. That event is
+    // NOT a no-op: DEC modes (including 1049) and the physical surface may
+    // have reset while our virtual frame still claims they are intact. Use a
+    // recovery repaint instead of the ordinary geometry path. Healthy
+    // duplicate resize events stay cheap in alt-screen (one mode query, then
+    // one atomic repaint); main-screen uses its proven viewport re-anchor.
+    if (cols === this.terminalColumns && rows === this.terminalRows) {
+      noteFrameCause('resize');
+      // A real resize/restore notification is stronger than a stale output
+      // gate. Retry immediately; if the stream is still saturated, the normal
+      // backlog check re-arms the gate without losing the recovery erase.
+      this.detachDrainListener();
+      this.backpressured = false;
+      this.backpressureStartedAt = null;
+      this.drainBackoffMs = DRAIN_BACKOFF_BASE_MS;
+      if (this.drainTimer !== null) {
+        clearTimeout(this.drainTimer);
+        this.drainTimer = null;
+      }
+      // Pointer coordinates are unknown after a minimize→restore (the window
+      // was gone): drop stale hover/click-chain state the same way a real
+      // resize does, so a post-restore click cannot merge with a pre-minimize
+      // one and stale highlights clear on the next motion.
+      clearHovered(this.hoveredNodes);
+      this.app?.resetPointerState();
+      invalidateNoInterestRect();
+      this.reassertTerminalModes(false, true, restoredFromUnavailable);
+      return;
+    }
     noteFrameCause('resize');
+    if (restoredFromUnavailable && !this.isPaused && this.currentNode !== null) {
+      this.reassertInputModes();
+    }
     this.terminalColumns = cols;
     this.terminalRows = rows;
     this.altScreenParkPatch = makeAltScreenParkPatch(this.terminalRows);
@@ -445,6 +541,8 @@ export default class Ink {
     this.scheduleRender.cancel?.();
     this.detachDrainListener();
     this.backpressured = false;
+    this.backpressureStartedAt = null;
+    this.drainBackoffMs = DRAIN_BACKOFF_BASE_MS;
     if (this.drainTimer !== null) {
       clearTimeout(this.drainTimer);
       this.drainTimer = null;
@@ -460,23 +558,14 @@ export default class Ink {
     // constraint every node was measured against.
     dom.markTreeDirty(this.rootNode);
 
-    // Alt screen: reset frame buffers so the next render repaints from
-    // scratch (prevFrameContaminated → every cell written, wrapped in
-    // BSU/ESU — old content stays visible until the new frame swaps
-    // atomically). Re-assert mouse tracking (some emulators reset it on
-    // resize). Do NOT write ENTER_ALT_SCREEN: iTerm2 treats ?1049h as a
-    // buffer clear even when already in alt — that's the blank flicker.
-    // Self-healing re-entry (if something kicked us out of alt) is handled
-    // by handleResume (SIGCONT) and the sleep-wake detector; resize itself
-    // doesn't exit alt-screen. Do NOT write ERASE_SCREEN: render() below
-    // can take ~80ms; erasing first leaves the screen blank that whole time.
-    if (this.altScreenActive && !this.isPaused && this.options.stdout.isTTY) {
-      // Blind mouse re-assert + 1049 probe: conpty resets modes on resize
-      // too, and a dropped 1049 means every subsequent frame paints onto
-      // the MAIN screen (looks like the app spontaneously exited
-      // fullscreen). The probe's re-entry is gated on a positive DECRPM
-      // "reset" answer, so this stays inert on healthy terminals.
-      this.probeAltScreenHealth();
+    // Alt screen: seed a blank virtual baseline so the new-size frame paints
+    // every cell. The 1049 query starts only after the new React/Yoga layout
+    // commits below: a restore from 0×0 gates that renderer microtask until
+    // the query decides between re-entry and an in-buffer atomic repaint.
+    // Never blindly write ENTER_ALT_SCREEN here — iTerm2 clears an already-
+    // active alt buffer on repeated 1049h.
+    const recoverAltScreen = this.altScreenActive && !this.isPaused && this.options.stdout.isTTY;
+    if (recoverAltScreen) {
       this.resetFramesForAltScreen();
       this.needsEraseBeforePaint = true;
     }
@@ -488,6 +577,20 @@ export default class Ink {
     // layout is updated, causing a mismatch between viewport and content dimensions.
     if (this.currentNode !== null) {
       this.render(this.currentNode);
+    }
+    if (recoverAltScreen) {
+      // Start the mode query only AFTER the synchronous React/layout commit.
+      // A 0×0→changed-size restore gates the renderer until 1049 is known
+      // (bypassing the consecutive-refresh dedupe window) and may need a
+      // corrective re-entry. Ordinary geometry changes keep their existing
+      // eager full repaint so terminals/test harnesses that ignore DECRQM
+      // cannot freeze resize. The probe still starts before the renderer
+      // microtask; unsupported DECRQM fallback repaints against the new
+      // Yoga layout.
+      this.probeAltScreenHealth({
+        refreshSurface: restoredFromUnavailable,
+        bypassRefreshDedupe: restoredFromUnavailable,
+      });
     }
   };
   resolveExitPromise: () => void = () => {};
@@ -538,6 +641,10 @@ export default class Ink {
    * returns, fullscreen scroll is dead.
    */
   exitAlternateScreen(): void {
+    // This method performs its own full-surface re-enter/repaint (and is the
+    // editor-handoff resume): any recovery that was in flight before the
+    // handoff is void — its gate would swallow the resume repaint below.
+    this.cancelAltScreenSurfaceRecovery();
     if (this.altScreenActive) {
       // Fullscreen: re-enter alt FIRST — terminal editors (vim, nano, less)
       // write smcup/rmcup, so the editor's rmcup on exit dropped us to the
@@ -584,13 +691,9 @@ export default class Ink {
       this.prevFrameContaminated = true;
       this.resume();
     }
-    // Re-enable focus reporting and extended key reporting — terminal
-    // editors (vim, nano, etc.) write their own modifyOtherKeys level on
-    // entry and reset it on exit, leaving us unable to distinguish
-    // ctrl+shift+<letter> from ctrl+<letter>. Pop-before-push keeps the
-    // Kitty stack balanced (a well-behaved editor restores our entry, so
-    // without the pop we'd accumulate depth on each editor round-trip).
-    this.options.stdout.write('\x1b[?1004h' + (supportsWin32InputMode() ? ENABLE_WIN32_INPUT_MODE : supportsExtendedKeys() ? DISABLE_KITTY_KEYBOARD + ENABLE_KITTY_KEYBOARD + ENABLE_MODIFY_OTHER_KEYS : ''));
+    // Editors may reset bracketed paste, focus, and extended-key reporting.
+    // Restore the complete input protocol set, with balanced Kitty depth.
+    this.reassertInputModes();
   }
   /**
    * One-shot viewport re-anchor for the NEXT main-screen frame: repaint the
@@ -630,6 +733,38 @@ export default class Ink {
     this.onRender();
   }
 
+  private noteBackpressureStart(): void {
+    if (this.backpressureStartedAt === null) {
+      this.backpressureStartedAt = performance.now();
+    }
+  }
+
+  private backpressureNeedsSurfaceRecovery(): boolean {
+    return this.backpressureStartedAt !== null &&
+      performance.now() - this.backpressureStartedAt >= BACKPRESSURE_SURFACE_RECOVERY_MS;
+  }
+
+  /** Resume output after a real drain. A short congestion window only needs
+   *  the coalesced final frame; a long one is also a terminal-visibility /
+   *  transport boundary, so incremental diffs can no longer trust the
+   *  physical surface and must take the full recovery path. */
+  private resumeAfterBackpressure(): void {
+    const recoverSurface = this.backpressureNeedsSurfaceRecovery();
+    this.backpressured = false;
+    if (recoverSurface) {
+      this.backpressureStartedAt = null;
+      if (this.options.stdout.isTTY) {
+        this.reassertTerminalModes(false, true, true);
+      } else {
+        // Non-TTY streams have no physical surface or terminal modes; they
+        // still need the coalesced final output after a long blocked write.
+        this.renderNow();
+      }
+      return;
+    }
+    this.renderNow();
+  }
+
   /**
    * Schedule the next scroll-drain frame — Grok Build's Presenter, ported.
    * Grok keeps TWO cadence knobs (min_draw_ms for renders, scroll_ms for
@@ -652,9 +787,9 @@ export default class Ink {
    *    input→paint latency, which reads as sticky, laggy scrolling on
    *    Windows terminals.
    *
-   * The gate holds only DRAIN frames; React-driven renders (keystrokes,
-   * streaming) still render via the normal throttle — user-visible updates
-   * must never wait behind scroll output.
+   * The gate holds terminal WRITES from every producer while saturated.
+   * React/streaming commits may still build candidates, so skipped candidates
+   * must poison renderer blitting until one coalesced current-DOM frame lands.
    */
   private scheduleDrain(): void {
     const stdout = this.options.stdout as Writable & { writableLength?: number };
@@ -679,6 +814,7 @@ export default class Ink {
     // write result re-asserts the true state — so a stream that silently
     // recovered resumes painting without ever busy-looping. Never a fixed
     // 4ms poll while backpressured.
+    this.noteBackpressureStart();
     this.backpressured = true;
     // ALWAYS ensure the drain listener exists while backpressured — even
     // when the fallback timer is already armed. renderNow() detaches the
@@ -697,8 +833,21 @@ export default class Ink {
           ? stdout.writableLength
           : 0;
       if (nowBacklog <= PTY_BACKLOG_BYTES) {
-        // The stream looks drained (or never reports a backlog): try a
-        // frame; the write result re-asserts the gate.
+        // The stream looks drained (or never reports a backlog). A long stall
+        // is also a restore boundary: do not resume with a local delta against
+        // a physical surface the terminal may have discarded while hidden.
+        if (this.backpressureNeedsSurfaceRecovery()) {
+          this.backpressured = false;
+          this.backpressureStartedAt = null;
+          if (this.options.stdout.isTTY) {
+            this.reassertTerminalModes(false, true, true);
+          } else {
+            this.renderNow();
+          }
+          return;
+        }
+        // Short congestion: resume at the normal quarter-frame cadence; the
+        // write result re-asserts the gate if the stream was not really ready.
         this.backpressured = false;
       }
       this.scheduleDrain();
@@ -714,10 +863,7 @@ export default class Ink {
       this.drainListener = null;
       stdout.removeListener('drain', handler);
       if (this.isUnmounted || this.isPaused) return;
-      // The stream drained: clear the gate so this render actually writes
-      // (the write result re-asserts the true backpressure state).
-      this.backpressured = false;
-      this.renderNow();
+      this.resumeAfterBackpressure();
     };
     this.drainListener = handler;
     stdout.once('drain', handler);
@@ -735,7 +881,15 @@ export default class Ink {
     if (this.isUnmounted || this.isPaused) {
       return;
     }
-    if (GEOMETRY_TRACE_ENABLED) beginGeometryFrame(this.renderGeneration);
+    // A restore health query is deciding whether the physical target is the
+    // alt buffer or main. Coalesce React/animation ticks until that answer;
+    // writing an incremental diff now is exactly how whale/status fragments
+    // leaked into main-screen scrollback after minimize → restore. Recovery
+    // completion paths always clear the gate before issuing their own
+    // full-frame repaint, so this coalescing can never starve the recovery.
+    if (this.altScreenActive && this.altScreenSurfaceRecoveryPending) {
+      return;
+    }
     // Entering a render cancels any pending drain tick — this render will
     // handle the drain (and re-schedule below if needed). Prevents a
     // wheel-event-triggered render AND a drain-timer render both firing.
@@ -763,13 +917,18 @@ export default class Ink {
     // On drift, route through the resize path (cache sync + markTreeDirty
     // + re-render) and bail: the render handleResize schedules paints the
     // correctly-laid-out frame.
-    const liveColumns = this.options.stdout.columns || 80;
-    const liveRows = this.options.stdout.rows || 24;
-    if (this.options.stdout.isTTY && (liveColumns !== this.terminalColumns || liveRows !== this.terminalRows)) {
+    const liveColumns = positiveTerminalDimension(this.options.stdout.columns);
+    const liveRows = positiveTerminalDimension(this.options.stdout.rows);
+    if (
+      this.options.stdout.isTTY &&
+      (liveColumns === undefined || liveRows === undefined || this.terminalSizeUnavailable ||
+        liveColumns !== this.terminalColumns || liveRows !== this.terminalRows)
+    ) {
       this.handleResize();
       return;
     }
 
+    if (GEOMETRY_TRACE_ENABLED) beginGeometryFrame(this.renderGeneration);
     const renderStart = performance.now();
     const terminalWidth = this.terminalColumns;
     const terminalRows = this.terminalRows;
@@ -1044,7 +1203,7 @@ export default class Ink {
     const tOptimize = performance.now();
     const optimized = optimize(diff);
     const optimizeMs = performance.now() - tOptimize;
-    const hasDiff = optimized.length > 0;
+    let hasDiff = optimized.length > 0;
     // Backpressure gate, computed BEFORE the optimized patch list is built:
     // write() === false is the authoritative signal (a stream with a small
     // high-water mark can reject writes while writableLength is still below
@@ -1052,7 +1211,7 @@ export default class Ink {
     const stdout = this.options.stdout as Writable & { writableLength?: number };
     const backlog = typeof stdout.writableLength === 'number' ? stdout.writableLength : 0;
     const writing = !this.backpressured && backlog <= PTY_BACKLOG_BYTES;
-    if (this.altScreenActive && hasDiff && writing) {
+    if (this.altScreenActive && writing && (hasDiff || this.needsEraseBeforePaint)) {
       // Prepend CSI H to anchor the physical cursor to (0,0) so
       // log-update's relative moves compute from a known spot (self-healing
       // against out-of-band cursor drift, see the ALT_SCREEN_ANCHOR_CURSOR
@@ -1064,14 +1223,13 @@ export default class Ink {
       // position independently. Parking at bottom (not 0,0) keeps the guide
       // where the user's attention is.
       //
-      // After resize, prepend ERASE_SCREEN too. The diff only writes cells
-      // that changed; cells where new=blank and prev-buffer=blank get skipped
-      // — but the physical terminal still has stale content there (shorter
-      // lines at new width leave old-width text tails visible). ERASE inside
-      // BSU/ESU is atomic: old content stays visible until the whole
-      // erase+paint lands, then swaps in one go. Writing ERASE_SCREEN
-      // synchronously in handleResize would blank the screen for the ~80ms
-      // render() takes.
+      // After resize/recovery, prepend a full ED2 clear too. The diff only
+      // writes cells that changed; cells where new=blank and virtual-prev=blank
+      // get skipped even when the PHYSICAL terminal still contains stale text.
+      // The clearTerminal patch makes serializeDiff close DEC-2026 before ED2
+      // (required by Windows Terminal), then reopen it for the full paint. It
+      // remains in this frame's single stdout.write, unlike an eager clear in
+      // handleResize that could leave a visible clear→render gap.
       if (this.needsEraseBeforePaint) {
         this.needsEraseBeforePaint = false;
         optimized.unshift(ERASE_THEN_HOME_PATCH);
@@ -1079,6 +1237,10 @@ export default class Ink {
         optimized.unshift(CURSOR_HOME_PATCH);
       }
       optimized.push(this.altScreenParkPatch);
+      // A recovery erase is itself terminal output even when the target frame
+      // is entirely blank. Carry that fact into cursor restoration and the
+      // write path instead of preserving the empty-diff fast path.
+      hasDiff = true;
     }
 
     // Native cursor positioning: park the terminal cursor at the declared
@@ -1176,18 +1338,23 @@ export default class Ink {
     }
     const tWrite = performance.now();
     // Skip THIS write while backpressured (see the gate above) and wait for
-    // the stream's own drain. The diff engine compares against frontFrame —
-    // the last frame the terminal ACTUALLY received — so a skipped frame
-    // coalesces into the next write instead of being lost (and its erase/
-    // cursor patches never reach the terminal, so needsEraseBeforePaint and
-    // displayCursor stay truthful).
+    // the stream's own drain. The diff engine keeps frontFrame at the last
+    // frame the terminal ACTUALLY received, and the skipped branch below
+    // poisons clean-subtree blits because this candidate consumed DOM dirty
+    // flags. Together those invariants make the retry rebuild current DOM and
+    // coalesce the skipped frame instead of silently restoring old content.
     let writeMs = 0;
     if (writing) {
       const flushed = writeDiffToTerminal(this.terminal, optimized, this.altScreenActive && !SYNC_OUTPUT_SUPPORTED);
       writeMs = performance.now() - tWrite;
       this.backpressured = !flushed;
-      if (flushed && this.drainBackoffMs !== DRAIN_BACKOFF_BASE_MS) {
-        this.drainBackoffMs = DRAIN_BACKOFF_BASE_MS;
+      if (flushed) {
+        this.backpressureStartedAt = null;
+        if (this.drainBackoffMs !== DRAIN_BACKOFF_BASE_MS) {
+          this.drainBackoffMs = DRAIN_BACKOFF_BASE_MS;
+        }
+      } else {
+        this.noteBackpressureStart();
       }
       // One frame reached the terminal. Components holding a widened mount
       // window until its content is actually flushed (MessageList's paint
@@ -1201,19 +1368,22 @@ export default class Ink {
       // lost forever.
       this.backFrame = this.frontFrame;
       this.frontFrame = frame;
-
       // Update blit safety for the NEXT frame. The frame just rendered
       // becomes frontFrame (= next frame's prevScreen). If we applied the
       // selection overlay, that buffer has inverted cells. selActive/hlActive
       // are only ever true in alt-screen; in main-screen this is false→false.
       this.prevFrameContaminated = selActive || hlActive;
     } else {
-      // Skipped write: the frame never reached the terminal, so the cursor
-      // park target (displayCursor, set above) and the contamination flag
-      // must stay at their last-WRITTEN values — displayCursor was already
-      // updated for this frame, so roll it back; the next written frame
-      // recomputes both fresh from the same baseline.
+      // Skipped write: the frame never reached the terminal. Roll the cursor
+      // model back to the last-WRITTEN frame, and poison renderer blitting for
+      // the retry: renderNodeToOutput already consumed/cleared the DOM dirty
+      // flags while building this skipped candidate. Without the poison, the
+      // drain render sees a clean tree and blits `frontFrame` (the old terminal
+      // contents) over the current DOM; a one-shot update—or Smooth Streaming
+      // after its reveal timer retires—then has no producer left to repair the
+      // permanently lost final frame.
       this.displayCursor = parked;
+      this.prevFrameContaminated = true;
       this.backpressured = true;
       noteFrameCause('backpressure');
     }
@@ -1298,6 +1468,10 @@ export default class Ink {
    */
   forceRedraw(): void {
     if (!this.options.stdout.isTTY || this.isUnmounted || this.isPaused) return;
+    // This path performs its own full-surface clear+repaint, so any in-flight
+    // surface recovery is superseded — its gate must not swallow the repaint
+    // below (the user just asked for a redraw; nothing to coalesce behind).
+    this.cancelAltScreenSurfaceRecovery();
     // SGR reset first — ERASE_SCREEN fills with the current background
     // (BCE); ctrl+l is exactly the recovery a user reaches for when the
     // screen is already wrecked (e.g. a stuck colored SGR after a torn
@@ -1325,6 +1499,9 @@ export default class Ink {
    */
   clearScrollbackAndRedraw(): void {
     if (!this.options.stdout.isTTY || this.isUnmounted || this.isPaused) return;
+    // Same supersede rationale as forceRedraw: destructive UI boundary with
+    // its own full repaint; an in-flight recovery must not gate it.
+    this.cancelAltScreenSurfaceRecovery();
     // Keep 3J outside synchronized output. Windows Terminal can relocate the
     // viewport when erase-buffer commands execute inside BSU/ESU.
     this.options.stdout.write(
@@ -1362,6 +1539,12 @@ export default class Ink {
    */
   setAltScreenActive(active: boolean, mouseTracking = false): void {
     if (this.altScreenActive === active) return;
+    // Either transition is a full surface change: an in-flight recovery from
+    // the previous mode is void (its gate must not swallow the fresh entry's
+    // first frame, and a stale deferred re-entry must not erase an unrelated
+    // later alt screen — iTerm2 clears an already-active alt buffer on a
+    // repeated 1049h).
+    this.cancelAltScreenSurfaceRecovery();
     const resetOldPointerContext = (): void => {
       // Fire leave handlers before dropping the set — a bare clear strands
       // old rows with hovered=true. resetPointerState also emits dragend for
@@ -1412,68 +1595,75 @@ export default class Ink {
     return this.altScreenActive;
   }
 
+  /** Full input-mode restore after a terminal renderer / transport reset. */
+  private inputModeReassertion(): string {
+    // Bracketed paste and focus reporting are DECSET modes too. The former
+    // keeps pasted newlines framed; the latter is how the next minimize /
+    // restore becomes observable. The old recovery restored only keyboard +
+    // mouse, so one renderer reset permanently disabled both.
+    return EBP + EFE + (supportsWin32InputMode()
+      ? ENABLE_WIN32_INPUT_MODE
+      : supportsExtendedKeys()
+        // Kitty is a stack: pop-before-push keeps depth at one. A reset leaves
+        // an empty stack, where the pop is defined as a no-op.
+        ? DISABLE_KITTY_KEYBOARD + ENABLE_KITTY_KEYBOARD + ENABLE_MODIFY_OTHER_KEYS
+        : '');
+  }
+
+  private reassertInputModes(): void {
+    this.options.stdout.write(this.inputModeReassertion());
+  }
+
   /**
    * Re-assert terminal modes after a gap (>5s stdin silence or event-loop
-   * stall). Catches tmux detach→attach, ssh reconnect, and laptop
-   * sleep/wake — none of which send SIGCONT. The terminal may reset DEC
-   * private modes on reconnect; this method restores them.
+   * stall). Catches tmux detach→attach, ssh reconnect, laptop wake, and the
+   * same-size resize emitted when a minimized Windows Terminal is restored.
    *
-   * Always re-asserts extended key reporting and mouse tracking. Mouse
-   * tracking is idempotent (DEC private mode set-when-set is a no-op). The
-   * Kitty keyboard protocol is NOT — CSI >1u is a stack push, so we pop
-   * first to keep depth balanced (pop on empty stack is a no-op per spec,
-   * so after a terminal reset this still restores depth 0→1). Without the
-   * pop, each >5s idle gap adds a stack entry, and the single pop on exit
-   * or suspend can't drain them — the shell is left in CSI u mode where
-   * Ctrl+C/Ctrl+D leak as escape sequences. The alt-screen
-   * re-entry (ERASE_SCREEN + frame reset) is NOT idempotent — it blanks the
-   * screen — so it's opt-in via includeAltScreen. The stdin-gap caller fires
-   * on ordinary >5s idle + keypress and must not erase; the event-loop stall
-   * detector fires on genuine sleep/wake and opts in. tmux attach / ssh
-   * reconnect typically send a resize, which already covers alt-screen via
-   * handleResize.
+   * `refreshSurface` is reserved for a strong terminal-refresh signal. In
+   * alt-screen it holds incremental writes until DECRQM tells us whether to
+   * re-enter 1049 or repaint the healthy buffer; in main-screen the existing
+   * viewport re-anchor already provides the full repaint. A caller sets
+   * `bypassRefreshDedupe` for a distinct correctness boundary (0×0 recovery or
+   * a long output stall), so it cannot be mistaken for a duplicate signal.
    */
-  reassertTerminalModes = (includeAltScreen = false): void => {
+  private handleStdinResume = (): void => {
+    // A >5s input gap is the last recovery signal when a renderer reset also
+    // dropped focus reporting and emitted no resize. Unlike periodic health
+    // probes, this path must rebuild unchanged/static cells as well.
+    this.reassertTerminalModes(false, true);
+  };
+
+  reassertTerminalModes = (
+    includeAltScreen = false,
+    refreshSurface = false,
+    bypassRefreshDedupe = false,
+  ): void => {
     if (!this.options.stdout.isTTY) return;
     // Shutdown latch: the >5s idle-gap trigger (or an event-loop stall
-    // detector firing during the dispose window) must not re-assert mouse
-    // tracking after the exit cleanup disabled it (issue #522).
+    // detector firing during the dispose window) must not re-assert modes
+    // after the exit cleanup disabled them (issue #522).
     if (this.isUnmounted) return;
     // Don't touch the terminal during an editor handoff — re-enabling kitty
     // keyboard here would undo enterAlternateScreen's disable and nano would
     // start seeing CSI-u sequences again.
     if (this.isPaused) return;
-    // Extended keys — re-assert if enabled (App.tsx enables these on
-    // allowlisted terminals at raw-mode entry; a terminal reset clears them).
-    // Pop-before-push keeps Kitty stack depth at 1 instead of accumulating
-    // on each call. win32-input-mode is a plain DEC private mode (no stack),
-    // so a bare re-set suffices.
-    if (supportsWin32InputMode()) {
-      this.options.stdout.write(ENABLE_WIN32_INPUT_MODE);
-    } else if (supportsExtendedKeys()) {
-      this.options.stdout.write(DISABLE_KITTY_KEYBOARD + ENABLE_KITTY_KEYBOARD + ENABLE_MODIFY_OTHER_KEYS);
-    }
+    this.reassertInputModes();
     if (!this.altScreenActive) {
-      // Main-screen self-heal: alt-screen re-anchors the cursor with CSI H
-      // every frame, but inline diffs are purely relative — a third-party
-      // tty write during the idle gap (an MCP subprocess's stderr, issue
-      // #17) shifts every subsequent write by N rows and nothing detects
-      // it after the fact (see requestViewportReanchor). The same
-      // gap-then-keypress signal that re-asserts DEC modes is the natural
-      // moment to blindly re-sync: repaint the viewport from the physical
-      // cursor position. Idempotent when nothing drifted — the user sees
-      // no change, at O(viewport) bytes once per >5s idle gap.
+      // Main-screen self-heal: repaint from an absolute viewport-home anchor.
+      // This is idempotent on a healthy screen and reconstructs a surface the
+      // terminal discarded without touching native scrollback.
       this.log.requestViewportReanchor();
       this.renderNow();
       return;
     }
     // Mouse tracking + alt-screen health — the probe re-asserts mouse
     // blindly (idempotent) and re-enters alt only if the terminal answers
-    // DECRPM with "1049 reset".
-    this.probeAltScreenHealth();
-    // Drain any deferred re-entry: a >5s stdin gap is a safe boundary (no
-    // button can be held — the terminal would have sent motion events), and
-    // resume is exactly the moment a confirmed 1049 loss should heal.
+    // DECRPM with "1049 reset". A same-size resize additionally requests a
+    // full surface repaint after the answer.
+    this.probeAltScreenHealth({ refreshSurface, bypassRefreshDedupe });
+    // Try any deferred re-entry now; the drain itself preserves the gesture
+    // latch. The first post-gap input can be a mouse press, so a long silence
+    // alone is not proof that no button is currently held.
     this.drainAltScreenReentry();
     // Alt-screen re-entry — destructive (ERASE_SCREEN). Only for callers that
     // have a strong signal the terminal actually dropped mode 1049.
@@ -1568,6 +1758,7 @@ export default class Ink {
           this.drainTimer = null;
         }
         this.backpressured = false;
+        this.backpressureStartedAt = null;
         this.drainBackoffMs = DRAIN_BACKOFF_BASE_MS;
       },
       () => (this.app ?? this.shutdownApp)?.beginShutdown(),
@@ -1740,12 +1931,17 @@ export default class Ink {
    * gesture's end and drained by setPointerGestureActive(false).
    */
   private pendingAltScreenReentry = false;
+  /** A same-size restore probe confirmed 1049 is still set, but its full
+   * surface repaint must wait for the active pointer gesture to finish. */
+  private pendingAltScreenSurfaceRefresh = false;
   /**
    * Set when probeAltScreenHealth was blocked by an active gesture. The
    * probe is retried at the release tail (drainAltScreenReentry) with the
    * original caller's skipMouseReassert semantics.
    */
-  private pendingProbeRequest: { skipMouseReassert?: boolean } | undefined = undefined;
+  private pendingProbeRequest:
+    | { skipMouseReassert?: boolean; refreshSurface?: boolean; bypassRefreshDedupe?: boolean }
+    | undefined = undefined;
   setPointerGestureActive = (active: boolean): void => {
     this.pointerGestureActive = active;
     // Do NOT drain pendingAltScreenReentry here: the gesture latch clears at
@@ -1758,27 +1954,23 @@ export default class Ink {
   setProtocolCandidateActive = (active: boolean): void => {
     this.protocolCandidateActive = active;
   };
-  /**
-   * Execute a deferred alt-screen re-entry, if one was confirmed while a
-   * gesture was latched. Called by App after the release tail completes.
-   * Only clears the pending flag when the re-entry actually runs — a pause
-   * or alt-screen exit during the gesture keeps the recovery signal alive
-   * for the next safe boundary (resume, focus, or a later release).
-   */
+  /** Execute a deferred alt-screen re-entry or surface repaint after the
+   * active gesture's release tail. Re-entry wins when both are pending. */
   drainAltScreenReentry = (): void => {
-    if (!this.pendingAltScreenReentry) return;
-    // Shutdown latch: beginShutdown permanently cancels the producer — a
-    // pending re-entry must never re-enter after DISABLE_MOUSE_TRACKING /
-    // EXIT_ALT_SCREEN have been written.
+    if (!this.pendingAltScreenReentry && !this.pendingAltScreenSurfaceRefresh) return;
+    // Shutdown latch: recovery must never re-enable modes after cleanup.
     if (this.isUnmounted || this.isPaused || !this.altScreenActive) return;
-    // Dual latch: never re-enter while a physical button is held OR while a
-    // protocol candidate (split SGR prefix) is in flight. The destructive
-    // re-entry (1049h + 2J + mouse DECSET) would erase the screen under the
-    // user's pointer and reset button tracking mid-drag, or corrupt a
-    // half-parsed report.
+    // Both operations reset frame buffers / terminal pixels, so wait until no
+    // physical button or split protocol candidate is in flight.
     if (this.pointerGestureActive || this.protocolCandidateActive) return;
-    this.pendingAltScreenReentry = false;
-    this.reenterAltScreen();
+    if (this.pendingAltScreenReentry) {
+      this.pendingAltScreenReentry = false;
+      this.pendingAltScreenSurfaceRefresh = false;
+      this.reenterAltScreen();
+      return;
+    }
+    this.pendingAltScreenSurfaceRefresh = false;
+    this.refreshAltScreenSurface();
   };
   /**
    * Retry a health probe that was blocked by an active gesture. Called by
@@ -1801,8 +1993,17 @@ export default class Ink {
     // protocol candidate is in flight — the probe's DECSET/DECRQM writes
     // would corrupt the stream.
     if (this.pointerGestureActive || this.protocolCandidateActive) return;
+    // Editor handoff: a probe write now would corrupt the editor's stream.
+    // Unlike the latch case, DO keep the request — a deferred surface
+    // refresh must survive the handoff (exitAlternateScreen re-asserts
+    // input modes but performs no surface refresh of its own).
+    if (this.isPaused) {
+      const retry = setTimeout(() => this.drainPendingProbe(), ALT_SCREEN_SURFACE_RECOVERY_TIMEOUT_MS);
+      retry.unref?.();
+      return;
+    }
     const now = Date.now();
-    const throttleLeft = 250 - (now - this.lastHealthProbeAt);
+    const throttleLeft = req.refreshSurface ? 0 : 250 - (now - this.lastHealthProbeAt);
     if (throttleLeft > 0) {
       // Still inside the throttle window: keep the request pending and
       // schedule the retry for when the window closes. The timer is
@@ -1813,6 +2014,7 @@ export default class Ink {
       return;
     }
     this.pendingProbeRequest = undefined;
+    this.clearPendingProbeRetryTimer();
     this.probeAltScreenHealth(req);
   };
   /**
@@ -1824,96 +2026,259 @@ export default class Ink {
     this.drainAltScreenReentry();
     this.drainPendingProbe();
   };
-  probeAltScreenHealth = (options?: { skipMouseReassert?: boolean }): void => {
+  probeAltScreenHealth = (options?: {
+    skipMouseReassert?: boolean
+    refreshSurface?: boolean
+    /** Bypass consecutive-refresh dedupe for a distinct correctness boundary
+     *  (0×0 recovery or a long output stall). */
+    bypassRefreshDedupe?: boolean
+  }): void => {
     // Shutdown latch: during the dispose window after beginShutdown (up to
     // the 5s fallback exit) stray input, focus, resize or a pending DECRPM
-    // reply would otherwise re-write ENABLE_MOUSE_TRACKING AFTER the exit
-    // cleanup's DISABLE_MOUSE_TRACKING — the mouse-reporting residue the
-    // shell then echoes as SGR garbage (issue #522). The exit funnel latches
-    // isUnmounted via beginShutdown() BEFORE any cleanup sequence is
-    // written, while raw mode is still held; the cooked-mode restore lands
-    // only in concludeShutdown() after the settle window.
+    // reply must not re-enable terminal modes after cleanup (#522).
     if (this.isUnmounted) return;
-    // Dual latch: never write while a physical button is held OR while a
-    // protocol candidate (split SGR prefix) is in flight. The physical latch
-    // covers press→release; the candidate latch covers the window between
-    // the first byte of a report and its completion — a DECSET re-assert
-    // there corrupts the stream mid-parse.
+    // Duplicate same-size resize events coalesce behind the first query. The
+    // pending recovery will end with a full repaint, so no signal is lost.
+    if (options?.refreshSurface && this.altScreenSurfaceRecoveryPending) return;
+    // Consecutive refresh signals (window-settle resize bursts, a resize
+    // followed by FOCUS_IN, a stdin-gap refresh right after either) within
+    // the window are the same restore reported twice: skip the duplicate
+    // full erase+paint cycle. Distinct correctness boundaries bypass this.
+    if (
+      options?.refreshSurface &&
+      !options.bypassRefreshDedupe &&
+      Date.now() - this.lastSurfaceRefreshAt < ALT_SCREEN_SURFACE_REFRESH_DEDUPE_MS
+    ) {
+      return;
+    }
+    // Dual latch: never write while a physical button or split protocol
+    // candidate is in flight. Merge requests so a later ordinary interaction
+    // cannot downgrade a required surface refresh.
     if (this.pointerGestureActive || this.protocolCandidateActive) {
-      this.pendingProbeRequest = { ...options };
+      const pending = this.pendingProbeRequest;
+      this.pendingProbeRequest = pending
+        ? {
+            skipMouseReassert: Boolean(pending.skipMouseReassert && options?.skipMouseReassert),
+            refreshSurface: Boolean(pending.refreshSurface || options?.refreshSurface),
+            bypassRefreshDedupe: Boolean(pending.bypassRefreshDedupe || options?.bypassRefreshDedupe),
+          }
+        : { ...options };
+      // A parked refreshSurface request is correctness work, not a periodic
+      // sample: arm a bounded retry so a stuck latch (lost release + dropped
+      // focus reporting) cannot strand the surface recovery indefinitely.
+      if (this.pendingProbeRequest.refreshSurface) this.armPendingProbeRetry();
       return;
     }
     const now = Date.now();
-    if (now - this.lastHealthProbeAt < 250) return;
+    // A physical-surface refresh is correctness work, not a periodic health
+    // sample: never drop it behind the 250ms interaction throttle.
+    if (!options?.refreshSurface && now - this.lastHealthProbeAt < 250) return;
     this.lastHealthProbeAt = now;
     if (!this.options.stdout.isTTY || this.isPaused || !this.altScreenActive) return;
-    // Mouse-driven callers pass skipMouseReassert: the event that triggered
-    // the probe already proves tracking is alive, so the blind DECSET
-    // re-assert is pure risk near gestures — only the 1049 query below is
-    // worth sending (conpty can drop 1049 while mouse tracking survives;
-    // without a mouse-path probe a mouse-only user never recovers, since
-    // mouse input keeps lastStdinTime fresh and starves the >5s gap path).
+    // Mouse-driven callers pass skipMouseReassert: the arriving report itself
+    // proves mouse tracking is alive. Resize/restore callers re-assert it.
     if (this.altScreenMouseTracking && !options?.skipMouseReassert) {
       this.options.stdout.write(ENABLE_MOUSE_TRACKING);
     }
     const querier = this.app?.querier;
-    if (querier === undefined) return;
-    // macOS Terminal.app prints the trailing `p` of `CSI ? 1049 $ p` as
-    // literal text instead of ignoring the unsupported query, leaking a
-    // visible character at the cursor on every probe. The blind
-    // mouse-tracking re-assert above still runs there — only the round trip
-    // is skipped, which costs nothing: Terminal.app never answered it.
-    if (!supportsDecrqmProbe()) return;
+    // Terminal.app is deliberately excluded because it prints the DECRQM
+    // trailing `p`. Without a safe mode query we can still repaint the buffer
+    // we are in; only a positive reset answer may perform destructive 1049h.
+    if (querier === undefined || !supportsDecrqmProbe()) {
+      if (options?.refreshSurface) this.refreshAltScreenSurface();
+      return;
+    }
+    if (options?.refreshSurface) {
+      // Coalesce animation/streaming renders until we know whether they belong
+      // in alt or main. A bounded fallback is mandatory: TerminalQuerier's DA1
+      // barrier is reliable on real VT terminals, but a broken multiplexer or
+      // test transport must never freeze rendering forever. Note the fallback
+      // can paint into main if 1049 was genuinely dropped AND the answer was
+      // lost — the accepted trade for not freezing; a later reset answer
+      // corrects via reenterAltScreen.
+      this.altScreenSurfaceRecoveryPending = true;
+      this.armAltScreenSurfaceRecoveryTimer();
+    }
     void Promise.all([querier.send(decrqm(1049)), querier.flush()]).then(([reply]) => {
-      // DECRPM status: 1/3 = set, 2/4 = reset, 0/undefined = unknown.
-      // Heal only on a POSITIVE reset — an unanswered probe must not
-      // trigger the destructive re-entry.
-      if (reply === undefined || (reply.status !== 2 && reply.status !== 4)) return;
-      // The reply resolves asynchronously: focus/keyboard/resize issued the
-      // query, but a mouse press may have latched a gesture since (or a
-      // protocol candidate may be in flight). Re-entering now would erase
-      // the screen under the user's pointer and reset button tracking
-      // mid-drag — defer to the gesture's end instead.
+      const reset = reply !== undefined && (reply.status === 2 || reply.status === 4);
+      // The reply resolves asynchronously: a press or split mouse sequence may
+      // have started since the query. Defer destructive buffer work to the
+      // release tail while keeping incremental writes gated.
       if (this.pointerGestureActive || this.protocolCandidateActive) {
-        this.pendingAltScreenReentry = true;
+        if (reset) this.pendingAltScreenReentry = true;
+        else if (this.altScreenSurfaceRecoveryPending) this.pendingAltScreenSurfaceRefresh = true;
         return;
       }
-      // Same re-check for the wider world: the probe ran with alt-screen
-      // active, but an exit or editor handoff may have landed meanwhile.
-      if (this.isUnmounted || this.isPaused || !this.altScreenActive) return;
-      this.reenterAltScreen();
+      // The probe may outlive an editor handoff, alt-screen exit, or shutdown.
+      if (this.isUnmounted || this.isPaused || !this.altScreenActive) {
+        this.cancelAltScreenSurfaceRecovery();
+        return;
+      }
+      if (reset) {
+        // 1049 was dropped: destructive re-entry is the only correct heal.
+        this.reenterAltScreen();
+      } else if (this.altScreenSurfaceRecoveryPending) {
+        // A healthy answer (1049 still set) from ANY probe — including
+        // ordinary interaction probes — completes a pending recovery: the
+        // terminal just proved the mode intact, so an in-buffer erase+paint
+        // is safe and the render gate must not outlive its healers.
+        this.refreshAltScreenSurface();
+      }
     }).catch(() => {
-      /* probe is best-effort; the next trigger retries */
+      // Query failures must not leave the render gate stuck forever. Stay in
+      // the current buffer and reconstruct it; the next signal retries 1049.
+      if (options?.refreshSurface && this.altScreenSurfaceRecoveryPending) {
+        this.refreshAltScreenSurface();
+      }
     });
   };
 
-  /** Refocus = first observable moment after a conpty-side mode reset. */
+  /** Refocus is the minimize→restore signal even when no resize is emitted. */
   handleTerminalFocusProbe = (focused: boolean): void => {
-    if (focused) {
-      this.probeAltScreenHealth();
-      // Refocus is a safe boundary: the OS delivered the focus event, so no
-      // button can be held (a held button would have generated motion or a
-      // release first). Drain any deferred re-entry confirmed while the
-      // window was unfocused.
-      this.drainAltScreenReentry();
+    if (!focused) {
+      // Window lost focus (minimize / alt-tab): pointer state is stale by
+      // the time it returns. Clear hover highlights, tooltip dwell, the
+      // multi-click chain and the no-interest rect cache NOW (invisible
+      // while unfocused) so the restore repaint starts clean instead of
+      // resurrecting pre-focus-loss highlights at stale coordinates.
+      // Doing it at blur — not in the recovery repaint — avoids tooltip
+      // flicker on every plain re-focus.
+      clearHovered(this.hoveredNodes);
+      this.app?.resetPointerState();
+      invalidateNoInterestRect();
+      return;
     }
+    // Some PTYs update rows/columns back to positive values before FOCUS_IN
+    // but omit the matching resize event. Let the normal size-recovery path
+    // consume that transition; it handles both inline and alternate screens.
+    if (this.terminalSizeUnavailable) {
+      this.handleResize();
+      return;
+    }
+    // Focus restore is a strong surface boundary in BOTH rendering modes.
+    // Alt-screen queries 1049 and either re-enters or repaints the buffer;
+    // inline mode uses LogUpdate's absolute viewport re-anchor. The previous
+    // alt-only return left a no-resize inline surface stale until Ctrl+L.
+    this.reassertTerminalModes(false, true);
+    // Try any alt recovery deferred from the blurred phase. The drain still
+    // re-checks the gesture latch: a FOCUS_IN and a fresh press may share one
+    // stdin batch, or focus can arrive while an intentional drag is active.
+    // (No-op in inline mode.)
+    this.drainAltScreenReentry();
   };
 
+  private clearAltScreenSurfaceRecoveryTimer(): void {
+    if (this.altScreenSurfaceRecoveryTimer === null) return;
+    clearTimeout(this.altScreenSurfaceRecoveryTimer);
+    this.altScreenSurfaceRecoveryTimer = null;
+  }
+
+  /** Arm the one-shot recovery fallback; re-arms itself while a pointer
+   *  gesture stays latched (a single deferral without re-arm would strand
+   *  the render gate: lost mouse release + dead focus reporting leaves no
+   *  drain to clear it). Self-terminates once the gate clears. */
+  private armAltScreenSurfaceRecoveryTimer(): void {
+    this.clearAltScreenSurfaceRecoveryTimer();
+    this.altScreenSurfaceRecoveryTimer = setTimeout(() => {
+      this.altScreenSurfaceRecoveryTimer = null;
+      if (!this.altScreenSurfaceRecoveryPending) return;
+      if (this.pointerGestureActive || this.protocolCandidateActive) {
+        this.pendingAltScreenSurfaceRefresh = true;
+        this.armAltScreenSurfaceRecoveryTimer();
+        return;
+      }
+      this.refreshAltScreenSurface();
+    }, ALT_SCREEN_SURFACE_RECOVERY_TIMEOUT_MS);
+    this.altScreenSurfaceRecoveryTimer.unref?.();
+  }
+
+  /** Arm the parked-probe retry; re-arms itself while the request stays
+   *  parked (latch still held). Self-terminates once the request is
+   *  consumed or cancelled. Idempotent while already armed. */
+  private armPendingProbeRetry(): void {
+    if (this.pendingProbeRetryTimer !== null) return;
+    const timer = setTimeout(() => {
+      this.pendingProbeRetryTimer = null;
+      if (this.pendingProbeRequest === undefined) return;
+      this.drainPendingProbe();
+      if (this.pendingProbeRequest !== undefined) this.armPendingProbeRetry();
+    }, ALT_SCREEN_SURFACE_RECOVERY_TIMEOUT_MS);
+    timer.unref?.();
+    this.pendingProbeRetryTimer = timer;
+  }
+
+  private clearPendingProbeRetryTimer(): void {
+    if (this.pendingProbeRetryTimer === null) return;
+    clearTimeout(this.pendingProbeRetryTimer);
+    this.pendingProbeRetryTimer = null;
+  }
+
+  /** Cancel an in-flight surface recovery. Callers that perform their own
+   *  full-surface reset — forceRedraw, clearScrollbackAndRedraw, alt-screen
+   *  exit/re-entry, editor handoff — supersede any pending recovery: leaving
+   *  its gate up would swallow their repaint, and a stale deferred re-entry
+   *  could erase an unrelated later alt entry. */
+  private cancelAltScreenSurfaceRecovery(): void {
+    this.clearAltScreenSurfaceRecoveryTimer();
+    this.clearPendingProbeRetryTimer();
+    this.altScreenSurfaceRecoveryPending = false;
+    this.pendingAltScreenSurfaceRefresh = false;
+    this.pendingAltScreenReentry = false;
+    // A refresh request blocked before it could start belongs to the same
+    // superseded recovery transaction. Leaving it queued would make Ctrl+L,
+    // an alt-screen transition, or editor return unexpectedly start another
+    // erase/query after the replacement surface is already authoritative.
+    this.pendingProbeRequest = undefined;
+  }
+
+  /** Reconstruct every cell in a still-active alternate buffer. */
+  private refreshAltScreenSurface(): void {
+    this.clearAltScreenSurfaceRecoveryTimer();
+    this.altScreenSurfaceRecoveryPending = false;
+    this.pendingAltScreenSurfaceRefresh = false;
+    this.lastSurfaceRefreshAt = Date.now();
+    if (this.isUnmounted || this.isPaused || !this.altScreenActive) return;
+    if (this.terminalSizeUnavailable) {
+      // Dimensions invalid: nothing can be painted right now. Keep the erase
+      // armed and poison the diff baseline so the FIRST frame painted once a
+      // valid size returns full-erases the stale surface instead of relying
+      // on a later trigger to notice it.
+      this.needsEraseBeforePaint = true;
+      this.prevFrameContaminated = true;
+      return;
+    }
+    this.resetFramesForAltScreen();
+    // The virtual blank baseline cannot prove the physical terminal is blank;
+    // the next frame clears outside DEC-2026 (WT-safe) and then reopens sync
+    // for the repaint, so stale long-line tails and renderer-loss residue go.
+    this.needsEraseBeforePaint = true;
+    this.renderNow();
+  }
+
   /**
-   * Re-enter alt-screen, clear, home, re-enable mouse tracking, and reset
-   * frame buffers so the next render repaints from scratch. Self-heal for
-   * SIGCONT, resize, and stdin-gap/event-loop-stall (sleep/wake) — any of
-   * which can leave the terminal in main-screen mode while altScreenActive
-   * stays true. ENTER_ALT_SCREEN is a terminal-side no-op if already in alt.
+   * Re-enter alt-screen, restore every input mode, and repaint immediately.
+   * Resetting only the frame buffers used to leave a static UI blank forever:
+   * no animation/React commit existed to trigger the promised "next" frame.
    */
   private reenterAltScreen(): void {
-    // Same shutdown latch as probeAltScreenHealth: a DECRPM reply resolving
-    // after detachForShutdown (or a SIGCONT racing unmount) must not re-enter
-    // the alt screen or re-enable mouse tracking past the exit cleanup
-    // (issue #522).
-    if (this.isUnmounted) return;
-    this.options.stdout.write(ENTER_ALT_SCREEN + ERASE_SCREEN + CURSOR_HOME + (this.altScreenMouseTracking ? ENABLE_MOUSE_TRACKING : ''));
+    this.cancelAltScreenSurfaceRecovery();
+    this.lastSurfaceRefreshAt = Date.now();
+    if (this.isUnmounted || this.isPaused || !this.altScreenActive) return;
+    if (this.terminalSizeUnavailable) {
+      // Same as refreshAltScreenSurface: cannot paint at invalid dimensions.
+      // The recovery decision itself is void until a valid size returns.
+      this.needsEraseBeforePaint = true;
+      this.prevFrameContaminated = true;
+      return;
+    }
+    this.options.stdout.write(
+      ENTER_ALT_SCREEN + ERASE_SCREEN + CURSOR_HOME +
+      this.inputModeReassertion() +
+      (this.altScreenMouseTracking ? ENABLE_MOUSE_TRACKING : ''),
+    );
+    this.needsEraseBeforePaint = false;
     this.resetFramesForAltScreen();
+    this.renderNow();
   }
 
   /**
@@ -2544,7 +2909,7 @@ export default class Ink {
   };
   render(node: ReactNode): void {
     this.currentNode = node;
-    const tree = <App ref={this.setAppRef} stdin={this.options.stdin} stdout={this.options.stdout} stderr={this.options.stderr} exitOnCtrlC={this.options.exitOnCtrlC} onExit={this.handleAppExit} terminalColumns={this.terminalColumns} terminalRows={this.terminalRows} selection={this.selection} onSelectionChange={this.notifySelectionChange} onClickAt={this.dispatchClick} onContextMenuAt={this.dispatchContextMenu} onHoverAt={this.dispatchHover} onWheelAt={this.dispatchWheelAt} getHyperlinkAt={this.getHyperlinkAt} onOpenHyperlink={this.openHyperlink} onMultiClick={this.handleMultiClick} onSelectionDrag={this.handleSelectionDrag} onDragTargetAt={this.findDragTargetAt} onDragDispatch={this.dispatchDrag} onPointerGestureChange={this.setPointerGestureActive} onProtocolCandidateChange={this.setProtocolCandidateActive} onReleaseTail={this.drainReleaseTail} onClickProbe={this.clickProbeAtBatchTail} onStdinResume={this.reassertTerminalModes} onTerminalFocus={this.handleTerminalFocusProbe} onCursorDeclaration={this.setCursorDeclaration} dispatchKeyboardEvent={this.dispatchKeyboardEvent}>
+    const tree = <App ref={this.setAppRef} stdin={this.options.stdin} stdout={this.options.stdout} stderr={this.options.stderr} exitOnCtrlC={this.options.exitOnCtrlC} onExit={this.handleAppExit} terminalColumns={this.terminalColumns} terminalRows={this.terminalRows} selection={this.selection} onSelectionChange={this.notifySelectionChange} onClickAt={this.dispatchClick} onContextMenuAt={this.dispatchContextMenu} onHoverAt={this.dispatchHover} onWheelAt={this.dispatchWheelAt} getHyperlinkAt={this.getHyperlinkAt} onOpenHyperlink={this.openHyperlink} onMultiClick={this.handleMultiClick} onSelectionDrag={this.handleSelectionDrag} onDragTargetAt={this.findDragTargetAt} onDragDispatch={this.dispatchDrag} onPointerGestureChange={this.setPointerGestureActive} onProtocolCandidateChange={this.setProtocolCandidateActive} onReleaseTail={this.drainReleaseTail} onClickProbe={this.clickProbeAtBatchTail} onStdinResume={this.handleStdinResume} onTerminalFocus={this.handleTerminalFocusProbe} onCursorDeclaration={this.setCursorDeclaration} dispatchKeyboardEvent={this.dispatchKeyboardEvent}>
         <TerminalWriteProvider value={this.writeRaw}>
           {node}
         </TerminalWriteProvider>
@@ -2670,6 +3035,11 @@ export default class Ink {
       }
       /* eslint-enable custom-rules/no-sync-fs */
     } finally {
+      // Explicit recovery cancellation: the React teardown path also cancels
+      // via setAltScreenActive(false), but an explicit call here is robust
+      // against future teardown-order refactors (both are idempotent).
+      this.cancelAltScreenSurfaceRecovery();
+
       this.isUnmounted = true;
 
       // Cancel any pending throttled renders to prevent accessing freed Yoga nodes
@@ -2688,6 +3058,7 @@ export default class Ink {
         this.drainTimer = null;
       }
       this.backpressured = false;
+      this.backpressureStartedAt = null;
       this.drainBackoffMs = DRAIN_BACKOFF_BASE_MS;
 
       // @ts-ignore -- ported CC build; type drift tolerated updateContainerSync exists in react-reconciler but not in @types/react-reconciler
