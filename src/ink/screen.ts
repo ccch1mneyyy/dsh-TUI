@@ -108,11 +108,41 @@ const INVERSE_CODE: AnsiCode = {
   endCode: '\x1b[27m',
 }
 // Bold (SGR 1) — stacks cleanly, no reflow in monospace. endCode 22
-// also cancels dim (SGR 2); harmless here since we never add dim.
+// also cancels dim (SGR 2); transitionAnsiCodes re-applies whichever
+// intensity the target style keeps.
 const BOLD_CODE: AnsiCode = {
   type: 'ansi',
   code: '\x1b[1m',
   endCode: '\x1b[22m',
+}
+// Faint (SGR 2): the backdrop shade behind a modal layer. Terminal-native
+// (every mainstream emulator renders it by blending the foreground toward
+// its own background), so it needs no knowledge of the terminal palette.
+const DIM_CODE: AnsiCode = {
+  type: 'ansi',
+  code: '\x1b[2m',
+  endCode: '\x1b[22m',
+}
+const INTENSITY_END = '\x1b[22m'
+
+/**
+ * The SGR codes that move a cell from style `from` to style `to`.
+ * `diffAnsiCodes` undoes a dropped intensity code with SGR 22, which
+ * cancels BOTH bold and dim, and does not re-apply the intensity `to`
+ * keeps (bold+dim → bold lost the bold). Every emitter goes through this
+ * wrapper so a shaded bold word returns to plain bold when the shade lifts.
+ * @param from - the current style stack.
+ * @param to - the target style stack.
+ * @returns the codes to emit, undo codes first.
+ */
+export function transitionAnsiCodes(from: AnsiCode[], to: AnsiCode[]): AnsiCode[] {
+  const diff = diffAnsiCodes(from, to)
+  if (!diff.some(code => code.code === INTENSITY_END)) return diff
+  const emitted = new Set(diff.map(code => code.code))
+  for (const code of to) {
+    if (code.endCode === INTENSITY_END && !emitted.has(code.code)) diff.push(code)
+  }
+  return diff
 }
 // Underline (SGR 4). Kept alongside yellow+bold — the underline is the
 // unambiguous visible-on-any-theme marker. Yellow-bg-via-inverse can
@@ -197,7 +227,7 @@ export class StylePool {
     const key = fromId * 0x100000 + toId
     let str = this.transitionCache.get(key)
     if (str === undefined) {
-      str = ansiCodesToString(diffAnsiCodes(this.get(fromId), this.get(toId)))
+      str = ansiCodesToString(transitionAnsiCodes(this.get(fromId), this.get(toId)))
       this.transitionCache.set(key, str)
     }
     return str
@@ -270,6 +300,27 @@ export class StylePool {
         codes.push(UNDERLINE_CODE)
       id = this.intern(codes)
       this.currentMatchCache.set(baseId, id)
+    }
+    return id
+  }
+
+  /**
+   * Backdrop shade: the base style plus faint (SGR 2). Idempotent — a
+   * style that already carries faint (a `dimColor` text, or a cell shaded
+   * last frame and blitted back from prevScreen) maps to itself, so
+   * re-shading a region never stacks.
+   * @param baseId - the cell's current style ID.
+   * @returns the shaded style ID (`baseId` when already faint).
+   */
+  private dimCache = new Map<number, number>()
+  withDim(baseId: number): number {
+    let id = this.dimCache.get(baseId)
+    if (id === undefined) {
+      const baseCodes = this.get(baseId)
+      id = baseCodes.some(c => c.code === DIM_CODE.code)
+        ? baseId
+        : this.intern([...baseCodes, DIM_CODE])
+      this.dimCache.set(baseId, id)
     }
     return id
   }
@@ -1812,4 +1863,51 @@ export function markNoSelectRegion(
     const rowStart = row * stride
     noSel.fill(1, rowStart + Math.max(0, x), rowStart + maxX)
   }
+}
+
+/**
+ * Shade a region: every glyph cell already painted there gets the faint
+ * attribute (StylePool.withDim). Space cells are skipped — faint has no
+ * visible effect on them, and restyling them would only make the diff
+ * rewrite blank runs — and spacer tails have no style of their own. The
+ * mapping is idempotent per style, so blitted cells that were shaded last
+ * frame stay as they are. Damage covers the region so the diff scans it.
+ * @param screen - the screen being composed.
+ * @param styles - the pool the screen's style IDs belong to.
+ * @param x - the region's left column.
+ * @param y - the region's top row.
+ * @param width - the region's width in cells.
+ * @param height - the region's height in rows.
+ */
+export function shadeRegion(
+  screen: Screen,
+  styles: StylePool,
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+): void {
+  const startX = Math.max(0, x)
+  const startY = Math.max(0, y)
+  const maxX = Math.min(x + width, screen.width)
+  const maxY = Math.min(y + height, screen.height)
+  if (startX >= maxX || startY >= maxY) return
+  const cells = screen.cells
+  const stride = screen.width
+  for (let row = startY; row < maxY; row++) {
+    for (let col = startX; col < maxX; col++) {
+      const ci = (row * stride + col) << 1
+      if (cells[ci] === EMPTY_CHAR_INDEX) continue
+      const word1 = cells[ci + 1]!
+      const cellWidth = word1 & WIDTH_MASK
+      if (cellWidth === CellWidth.SpacerTail) continue
+      const styleId = word1 >>> STYLE_SHIFT
+      const shaded = styles.withDim(styleId)
+      if (shaded === styleId) continue
+      const hid = (word1 >>> HYPERLINK_SHIFT) & HYPERLINK_MASK
+      cells[ci + 1] = packWord1(shaded, hid, cellWidth)
+    }
+  }
+  const rect = { x: startX, y: startY, width: maxX - startX, height: maxY - startY }
+  screen.damage = screen.damage ? unionRect(screen.damage, rect) : rect
 }

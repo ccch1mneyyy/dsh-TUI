@@ -156,7 +156,9 @@ anything ambiguous stays verbatim text. In fullscreen, clicking a staged
 over the transcript area; the image takes at most about 70% of its width and 80% of its
 height, and the surrounding conversation, the prompt, status rows and sticky header stay visible
 (Esc or a click outside the card closes it; narrow terminals get a
-metadata-only card). The card's title sits centered in its top border as
+metadata-only card). While the preview is open, the conversation outside the
+card is dimmed with the terminal's faint attribute; the card, the prompt and
+the status rows are not, and closing restores everything. The card's title sits centered in its top border as
 `Image #N — format · width×height · size · file name`; the card is at least as
 wide as the title, so a small image never squeezes the file name, and a title
 wider than the transcript area shortens the file name in its middle first.

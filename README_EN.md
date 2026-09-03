@@ -51,8 +51,8 @@ the interface, and removing it leaves no core modifications behind.
   assistant/tool output render as in-transcript previews through Kitty graphics,
   with a same-size text fallback when graphics are unavailable. In fullscreen,
   clicking a staged `[Image #N]` token or a transcript thumbnail opens one
-  shared preview centered over the transcript, leaving the prompt visible (Esc
-  or click outside closes); its title reads `Image #N — format · size · bytes ·
+  shared preview centered over the transcript, dimming the conversation around
+  it and leaving the prompt visible (Esc or click outside closes); its title reads `Image #N — format · size · bytes ·
   file name` and images staged in this session show their source path on the
   card's bottom row. Finder-copied
   image files paste straight into the attachment store as `[Image #N]`.

@@ -212,6 +212,7 @@ export function ImagePreviewOverlay({
         height="100%"
         flexShrink={0}
         overflow="hidden"
+        backdrop="dim"
         onClick={closeFromCatcher}
       />
       <Box

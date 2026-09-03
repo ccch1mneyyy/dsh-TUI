@@ -19,6 +19,7 @@ import {
   filterOutHyperlinkStyles,
   markNoSelectRegion,
   OSC8_PREFIX,
+  shadeRegion,
   recordCellRunEntry,
   recordSpacerRunEntry,
   replayCellRun,
@@ -188,15 +189,31 @@ type Options = {
   previousImages?: readonly TerminalImagePlacement[]
 }
 
-/** A queued paint operation: write, clip, unclip, blit, clear, noSelect, or shift. */
+/** A queued paint operation: write, clip, unclip, blit, clear, shade, noSelect, or shift. */
 export type Operation =
   | WriteOperation
   | ClipOperation
   | UnclipOperation
   | BlitOperation
   | ClearOperation
+  | ShadeOperation
   | NoSelectOperation
   | ShiftOperation
+
+/** How a backdrop node treats the cells already painted beneath it. */
+export type ShadeMode = 'dim'
+
+/**
+ * Restyle the cells already in the region at this point of the paint
+ * order: a modal layer's backdrop. Applied in sequence like a write, so
+ * everything painted earlier (the transcript beneath) is shaded and
+ * everything painted later (the card on top) is not.
+ */
+type ShadeOperation = {
+  type: 'shade'
+  region: Rectangle
+  mode: ShadeMode
+}
 
 type WriteOperation = {
   type: 'write'
@@ -623,6 +640,17 @@ export default class Output {
    * the mark wins regardless of what's blitted into the region.
    * @param region - the region to mark.
    */
+  /**
+   * Shade the cells painted so far inside `region` (see ShadeOperation).
+   * Idempotent per cell, so a clean subtree blitted back from prevScreen
+   * with last frame's shade is not shaded twice.
+   * @param region - the backdrop node's rect.
+   * @param mode - the shade to apply.
+   */
+  shade(region: Rectangle, mode: ShadeMode): void {
+    this.operations.push({ type: 'shade', region, mode })
+  }
+
   noSelect(region: Rectangle): void {
     this.operations.push({ type: 'noSelect', region })
   }
@@ -917,6 +945,22 @@ export default class Output {
 
         case 'shift': {
           shiftRows(screen, operation.top, operation.bottom, operation.n)
+          continue
+        }
+
+        case 'shade': {
+          // Honour the active clip like a write: a backdrop inside an
+          // overflow-hidden ancestor must not shade cells outside it.
+          const { x, y, width, height } = operation.region
+          const clip = clips.at(-1)
+          const startX = Math.max(x, clip?.x1 ?? 0)
+          const startY = Math.max(y, clip?.y1 ?? 0)
+          const maxX = Math.min(x + width, clip?.x2 ?? Infinity)
+          const maxY = Math.min(y + height, clip?.y2 ?? Infinity)
+          if (startX >= maxX || startY >= maxY) continue
+          // 'dim' is the only mode today; the switch keeps the seam for a
+          // palette-aware blend once the terminal background is known.
+          shadeRegion(screen, this.stylePool, startX, startY, maxX - startX, maxY - startY)
           continue
         }
 
