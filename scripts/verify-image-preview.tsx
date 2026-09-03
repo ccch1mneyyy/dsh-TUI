@@ -544,6 +544,32 @@ function screenOf(terminal: InstanceType<typeof XTerm>, rows: number): Screen {
 }
 {
   clearTranscriptImageCacheForTests()
+  const terminal = new XTerm({ cols: COLS, rows: ROWS, scrollback: 0, allowProposedApi: true })
+  const stdout = new FakeStdout(terminal)
+  const big = { ...fakeImage('sha256:big', 'big.png'), width: 4000, height: 3000 }
+  const app = await render(
+    <Box width={COLS} height={ROWS}>
+      <ImagePreviewOverlay image={big} onClose={() => {}} />
+    </Box>,
+    { stdin: new FakeStdin() as never, stdout: stdout as never, stderr: new FakeStderr() as never, exitOnCtrlC: false, patchConsole: false },
+  )
+  const screen = screenOf(terminal, ROWS)
+  await settled(() => screen.text().includes('Esc or click outside to close'))
+  const lines = screen.text().split('\n')
+  const top = lines.findIndex(line => line.includes('╭'))
+  const bottom = lines.findIndex(line => line.includes('╰'))
+  const left = top === -1 ? -1 : lines[top]!.indexOf('╭')
+  const right = top === -1 ? -1 : lines[top]!.lastIndexOf('╮')
+  check('overlay: a large image keeps the card within 70% width and 80% height of its region',
+    top !== -1 && bottom !== -1 && left !== -1 && right !== -1
+      && (right - left + 1) <= Math.floor(COLS * 0.7)
+      && (bottom - top + 1) <= Math.floor(ROWS * 0.8),
+    JSON.stringify({ top, bottom, left, right, COLS, ROWS }))
+  await app.unmount()
+  terminal.dispose()
+}
+{
+  clearTranscriptImageCacheForTests()
   const id = 'sha256:\x1b[31mBAD\x07'
   const terminal = new XTerm({ cols: COLS, rows: ROWS, scrollback: 0, allowProposedApi: true })
   const stdout = new FakeStdout(terminal)

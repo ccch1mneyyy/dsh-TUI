@@ -153,7 +153,8 @@ forwards a drop as pasted text (Ghostty sends a shell-escaped path through the
 PTY), the paste stages only when it is exactly one existing local image path —
 anything ambiguous stays verbatim text. In fullscreen, clicking a staged
 `[Image #N]` token or a transcript thumbnail opens one shared preview centered
-over the transcript area; the prompt, status rows and sticky header stay visible
+over the transcript area, taking at most about 70% of its width and 80% of its
+height; the surrounding conversation, the prompt, status rows and sticky header stay visible
 (Esc or a click outside the card closes it; narrow terminals get a
 metadata-only card), and a stale `[Image #N]` placeholder (evicted past 128
 staged images or cleared by a session switch) warns on click, on submit, and when
