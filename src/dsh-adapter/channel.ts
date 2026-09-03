@@ -199,7 +199,7 @@ const PERMISSION_PRESET_DESCRIPTION_CELLS = 400
 
 type PermissionPresetService = {
   names?: unknown
-  current?: (events: readonly SessionEvent[]) => unknown
+  current?: (session: { events: readonly SessionEvent[] }) => unknown
   optionOf?: (name: string) => unknown
 }
 
@@ -259,18 +259,27 @@ function normalizePermissionPresetOption(value: unknown): PermissionPresetOption
   }
 }
 
+/**
+ * Read and validate the host permission-preset registry for the live session.
+ *
+ * The registry methods are receiver-bound service methods, so they must be
+ * invoked through `runtime` rather than extracted into bare callbacks.
+ *
+ * @param service - The optional host-provided permission-preset service.
+ * @param session - The live DSH session whose effective preset is displayed.
+ * @returns A validated runtime snapshot, or an unavailable snapshot when the
+ *   host service does not satisfy the compatibility contract.
+ */
 function permissionPresetSnapshotFromService(
   service: unknown,
-  events: readonly SessionEvent[],
+  session: { events: readonly SessionEvent[] },
 ): PermissionPresetSnapshot {
   if (!isRecord(service)) return unavailablePermissionPresetSnapshot()
   const runtime = service as PermissionPresetService
   try {
     const capturedNames = runtime.names
-    const current = runtime.current
-    const optionOf = runtime.optionOf
     if (!Array.isArray(capturedNames) || capturedNames.length === 0) return unavailablePermissionPresetSnapshot()
-    if (typeof current !== 'function' || typeof optionOf !== 'function') return unavailablePermissionPresetSnapshot()
+    if (typeof runtime.current !== 'function' || typeof runtime.optionOf !== 'function') return unavailablePermissionPresetSnapshot()
 
     const names = [...capturedNames]
     const seen = new Set<string>()
@@ -283,16 +292,16 @@ function permissionPresetSnapshotFromService(
 
     const options: PermissionPresetOption[] = []
     for (const name of names) {
-      const option = normalizePermissionPresetOption(optionOf(name))
+      const option = normalizePermissionPresetOption(runtime.optionOf(name))
       if (option === undefined || option.value !== name) return unavailablePermissionPresetSnapshot()
       options.push({ ...option })
     }
 
-    const currentValue = current(events)
+    const currentValue = runtime.current(session)
     if (typeof currentValue !== 'string' || (currentValue !== PERMISSION_PRESET_CUSTOM && !seen.has(currentValue))) {
       return unavailablePermissionPresetSnapshot()
     }
-    const currentOption = normalizePermissionPresetOption(optionOf(currentValue))
+    const currentOption = normalizePermissionPresetOption(runtime.optionOf(currentValue))
     if (currentOption === undefined || currentOption.value !== currentValue) return unavailablePermissionPresetSnapshot()
     if (currentValue !== PERMISSION_PRESET_CUSTOM) {
       const rosterOption = options.find(option => option.value === currentValue)
@@ -5614,6 +5623,10 @@ export function createChannel(
       state.notify(t('activity-indicator-switched', { name }))
       return true
     },
+    /**
+     * Return the validated permission-preset roster for the live session.
+     * @returns The current registry-backed permission snapshot.
+     */
     permissionPresets() {
       let service: unknown
       try {
@@ -5622,7 +5635,7 @@ export function createChannel(
         return unavailablePermissionPresetSnapshot()
       }
       if (service === undefined) return legacyPermissionPresetSnapshot(state.mode.sandbox)
-      return permissionPresetSnapshotFromService(service, agent.session.events)
+      return permissionPresetSnapshotFromService(service, agent.session)
     },
     /** Localized roster projection for the /preset picker — resolves
      *  built-in display text through the dictionary under `en`; the
