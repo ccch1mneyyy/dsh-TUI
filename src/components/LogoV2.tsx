@@ -143,6 +143,10 @@ export function LogoV2({
   // one-way heart1→heart2→heart3 (350ms each), then the whale resumes
   // whatever it was showing; a fresh click restarts it from the small heart.
   const [heartSeq, setHeartSeq] = React.useState(-1)
+  // heartKey restarts the pass on every click, even when heartSeq is already 0
+  // (setHeartSeq(0) alone bails in React when the value is unchanged, so a
+  // repeat click mid-pass would otherwise do nothing).
+  const [heartKey, setHeartKey] = React.useState(0)
   React.useEffect(() => {
     if (heartSeq < 0) return
     const timer = setTimeout(() => {
@@ -151,7 +155,7 @@ export function LogoV2({
     return () => {
       clearTimeout(timer)
     }
-  }, [heartSeq])
+  }, [heartSeq, heartKey])
 
   const [themeName] = useTheme()
   const theme = getTheme(themeName)
@@ -191,11 +195,13 @@ export function LogoV2({
       if (timer !== undefined) clearTimeout(timer)
     }
   }, [settled, whaleIdle, showWhale, working])
-  // Frame priority: intro → heart overlay → idle behavior → standard pose.
-  const frameIndex = !settled
-    ? sequence[step].frame
-    : heartSeq >= 0
-      ? (HEART_PASS[heartSeq] ?? STANDARD_FRAME_INDEX)
+  // Frame priority: heart overlay → intro → idle behavior → standard pose.
+  // The heart beats the intro so a click during the opening animation is
+  // actually visible instead of staying hidden behind the opening frames.
+  const frameIndex = heartSeq >= 0
+    ? (HEART_PASS[heartSeq] ?? STANDARD_FRAME_INDEX)
+    : !settled
+      ? sequence[step].frame
       : (idleFrame ?? STANDARD_FRAME_INDEX)
   // Frozen clock for the settled header: t=0 parks every sweep highlight
   // off-screen, leaving the static gradient behind.
@@ -224,7 +230,7 @@ export function LogoV2({
     <Box ref={ref} flexDirection="column" marginTop={1}>
       <Box flexDirection="row" gap={2} width="100%" alignItems="center">
         {showWhale && (
-          <Box flexShrink={0} onClick={(): void => { setHeartSeq(0) }}>
+          <Box flexShrink={0} onClick={(): void => { setHeartSeq(0); setHeartKey(k => k + 1) }}>
             <WhaleArt frameIndex={frameIndex} width={FULL_WHALE_WIDTH} />
           </Box>
         )}

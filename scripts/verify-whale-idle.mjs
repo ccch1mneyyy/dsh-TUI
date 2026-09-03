@@ -119,6 +119,16 @@ function drive(input, steps, start = 0) {
     assert.equal(h3.frameIndex, F.heart3)
     assert.notEqual(h4.frameIndex, F.heart3, 'pass ends after the large heart')
   })
+  check('a repeat click mid-heart re-arms from the small heart', () => {
+    // Start a pass, then click again while heart2 is showing: the planner must
+    // restart at heart1 (the LogoV2 component additionally bumps a heartKey so
+    // its effect re-runs even when heartSeq is already 0).
+    const startState = initialWhaleIdleState(0)
+    const first = nextWhaleIdleStep(startState, { working: false, heart: true }, 0)
+    const mid = nextWhaleIdleStep(first.state, { working: false, heart: false }, 5)
+    const rearmed = nextWhaleIdleStep(mid.state, { working: false, heart: true }, 10)
+    assert.equal(rearmed.frameIndex, F.heart1, 're-click restarts from the small heart')
+  })
   check('heart over sleep does not wake the whale', () => {
     let s = initialWhaleIdleState(0)
     let t = 0
