@@ -758,6 +758,22 @@ function makeChannel() {
   const thumb2 = screen.find('Image · sent.png')!
   click(thumb2.col, thumb2.row)
   await settled(() => screen.text().includes(OVERLAY_HINT))
+  {
+    // Reopening must not wipe the transcript around the card: on the card's
+    // rows, the cells left of its border still carry the logo/banner glyphs.
+    // (A dirty absolute node clears its whole rect before repainting; the
+    // layer keeps its transparent catcher childless so that never fires.)
+    await sleep(300)
+    const lines = screen.text().split('\n')
+    const top = lines.findIndex(line => line.includes('╭'))
+    const bottom = lines.findIndex((line, i) => i > top && line.includes('╰'))
+    const left = top === -1 ? -1 : lines[top]!.indexOf('╭')
+    const outside = top === -1 || bottom === -1
+      ? ''
+      : lines.slice(top, bottom + 1).map(line => line.slice(0, Math.max(0, left))).join('')
+    check('chat: reopening the preview keeps the transcript visible around the card',
+      outside.trim().length > 0, JSON.stringify({ top, bottom, left, sample: outside.slice(0, 80) }))
+  }
   click(0, 0)
   check('chat: click outside the card closes the preview',
     await settled(() => !screen.text().includes(OVERLAY_HINT)), screen.text())
@@ -798,11 +814,13 @@ function makeChannel() {
     screen.text())
   const editorToken = screen.find('[Image #2]')!
   click(editorToken.col + 2, editorToken.row)
+  // The card is a bounded layer (≤70% × 80% of the screen here), so editor
+  // chrome outside it stays visible; what matters is that the card paints
+  // above the editor and its image box is present.
   check('chat: preview is the top modal above the expanded editor',
     await settled(() =>
       screen.text().includes(OVERLAY_HINT) &&
-      screen.text().includes('[Image · staged.png]') &&
-      !screen.text().includes('Draft editor')),
+      screen.text().includes('[Image · staged.png]')),
     screen.text())
   stdin.write('\x1b')
   check('chat: Esc closes only the preview and restores the expanded draft',
