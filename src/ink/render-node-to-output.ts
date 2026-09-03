@@ -4,6 +4,7 @@ import type { DOMElement } from './dom.js'
 import { GEOMETRY_TRACE_ENABLED, noteScrollGeometry } from './geometry-trace.js'
 import getMaxWidth from './get-max-width.js'
 import type { Rectangle } from './layout/geometry.js'
+import type { CachedLayout } from './node-cache.js'
 import { LayoutDisplay, LayoutEdge, type LayoutNode } from './layout/node.js'
 import { nodeCache, pendingClears } from './node-cache.js'
 import type Output from './output.js'
@@ -68,8 +69,8 @@ let scrollHint: ScrollHint | null = null
 // three paths — full-render nodeCache.set, node-level blit early-return,
 // blitEscapingAbsoluteDescendants — so clean-overlay consecutive scrolls
 // still have the rect.
-let absoluteRectsPrev: Rectangle[] = []
-let absoluteRectsCur: Rectangle[] = []
+let absoluteRectsPrev: CachedLayout[] = []
+let absoluteRectsCur: CachedLayout[] = []
 
 // position:absolute nodes of the CURRENT frame with their paint rects, for
 // pointer hit-testing. hitTest's containment recursion cannot reach an
@@ -97,6 +98,12 @@ export function resetScrollHint(): void {
   absoluteHitList = []
 }
 
+/** A node fills every cell of its rect when it has its own background or
+ *  is declared `opaque`; anything else leaves gaps to the layer below. */
+function paintsOwnRect(node: DOMElement): boolean {
+  return node.style.opaque === true || node.style.backgroundColor !== undefined
+}
+
 /**
  * Frame-end check: did any PREVIOUS frame's absolute overlay vacate cells
  * that no CURRENT overlay rect covers (the overlay shrank or moved)?
@@ -112,13 +119,20 @@ export function resetScrollHint(): void {
  * covers shrink/move: the caller poisons the NEXT frame (renders without
  * prevScreen) so the vacated cells are re-derived from the real tree.
  * Growth is fine — a current rect that fully contains the previous rect
- * repaints the whole area itself this frame.
+ * repaints the whole area itself this frame — but only when that current
+ * node is opaque (own background or `opaque`). A transparent absolute node
+ * (a click-catcher spanning the transcript) paints nothing of its own, so
+ * it cannot stand in for the cells an opaque sibling card vacated when it
+ * shrank: the clean subtree underneath would blit the old card's pixels
+ * back from prevScreen (real-machine report: switching the image preview to
+ * a smaller image left the wider card's borders and title on screen).
  */
 export function hasOverlayVacatedCells(): boolean {
   if (absoluteRectsPrev.length === 0) return false
   outer: for (const prev of absoluteRectsPrev) {
     if (prev.width <= 0 || prev.height <= 0) continue
     for (const cur of absoluteRectsCur) {
+      if (cur.opaque !== true) continue
       if (
         cur.x <= prev.x &&
         cur.y <= prev.y &&
@@ -754,7 +768,7 @@ function renderNodeToOutput(
     // y+1, not y). HelpV2's third shortcuts column hits this — skipping
     // unconditionally drops "ctrl + z to suspend" from /help output.
     if (height === 0 && siblingSharesY(node, yogaNode)) {
-      nodeCache.set(node, { x, y, width, height, top: yogaTop })
+      nodeCache.set(node, { x, y, width, height, top: yogaTop, opaque: paintsOwnRect(node) })
       node.dirty = false
       return
     }
@@ -1662,7 +1676,15 @@ function renderNodeToOutput(
     }
 
     // Cache layout bounds for dirty tracking
-    const rect = { x, y, width, height, top: yogaTop, bg: effectiveBg }
+    const rect: CachedLayout = {
+      x,
+      y,
+      width,
+      height,
+      top: yogaTop,
+      bg: effectiveBg,
+      opaque: paintsOwnRect(node),
+    }
     nodeCache.set(node, rect)
     if (node.style.position === 'absolute') {
       absoluteRectsCur.push(rect)
