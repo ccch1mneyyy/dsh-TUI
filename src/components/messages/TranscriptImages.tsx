@@ -2,6 +2,7 @@ import React from 'react'
 import { Box, Image, Text, useTerminalSize } from '../../ui.js'
 import type { TerminalImageSource } from '../../ink/terminal-image.js'
 import type { TranscriptImage } from '../../dsh-adapter/transcript-images.js'
+import { loadSharp } from '../../dsh-adapter/sharp.js'
 import { t } from '../../i18n.js'
 
 const PREVIEW_PIXELS = 384
@@ -117,7 +118,8 @@ async function loadDecodedImage(image: TranscriptImage): Promise<TerminalImageSo
   }
 
   const pending = image.read().then(async data => {
-    const { default: sharp } = await import('sharp')
+    const sharp = await loadSharp()
+    if (sharp === undefined) throw new Error('sharp is unavailable')
     const decoded = await sharp(data, { failOn: 'error' })
       .resize({
         width: PREVIEW_PIXELS,

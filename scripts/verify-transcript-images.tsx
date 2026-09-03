@@ -14,6 +14,7 @@ import React from 'react'
 import xterm from '@xterm/headless'
 import sharp from 'sharp'
 import type { ChatRow } from '../src/dsh-adapter/channel.js'
+import { loadSharp, sharpCandidatePaths } from '../src/dsh-adapter/sharp.js'
 import type { TranscriptImage } from '../src/dsh-adapter/transcript-images.js'
 import type { ScrollBoxHandle } from '../src/ui.js'
 import type { DOMElement } from '../src/ink/dom.js'
@@ -514,6 +515,20 @@ await withTerminal(
     )
   },
 )
+
+// --- host-first sharp loader ------------------------------------------------
+// One sharp instance per process: the loader is memoized, the module it
+// returns is callable, and every candidate path is an absolute entry file
+// (host tree first when the anchor resolves, own optional copy last).
+{
+  const candidates = sharpCandidatePaths()
+  assert.ok(candidates.length >= 1, 'at least one sharp candidate path resolves')
+  assert.ok(candidates.every(path => path.startsWith('/') && path.includes('sharp')), candidates.join('\n'))
+  const first = await loadSharp()
+  const second = await loadSharp()
+  assert.equal(typeof first, 'function', 'loadSharp returns the callable sharp module')
+  assert.equal(first, second, 'loadSharp memoizes one module instance')
+}
 
 closeSync(cleanupFd)
 console.log('Transcript image projection and rendering regression passed')
