@@ -23,6 +23,8 @@ const PREVIEW_MAX_WIDTH_RATIO = 0.7
 const PREVIEW_MAX_HEIGHT_RATIO = 0.8
 const CARD_CHROME_ROWS = 7
 const CARD_CHROME_COLS = 6
+/** Narrowest card: room for the metadata line and the close hint. */
+const MIN_CARD_COLUMNS = 40
 
 /**
  * The shared modal image preview: one centered card over a click-catcher
@@ -31,8 +33,9 @@ const CARD_CHROME_COLS = 6
  * transcript row, so the prompt, status rows and sticky header stay visible
  * and untouched; only while the fullscreen draft editor is open does it sit
  * at the root and cover the whole screen. The card is sized from the
- * catcher's measured cell box (one layout pass; the card renders on the
- * next frame), never from the raw terminal size. The catcher click closes
+ * region the caller reports (the transcript viewport), refined by the
+ * catcher's measured cell box on later commits; it renders on the layer's
+ * first frame. The catcher click closes
  * (click-outside), the card swallows its own clicks; Esc handling belongs
  * to Chat's key chain. The layer only paints themed cells — terminal
  * graphics stay inside the host `Image` primitive, which keeps its own
@@ -41,28 +44,45 @@ const CARD_CHROME_COLS = 6
 export function ImagePreviewOverlay({
   image,
   onClose,
+  region,
 }: {
   readonly image: TranscriptImage
   readonly onClose: () => void
+  /**
+   * Cell box of the region the layer fills, known to the caller before the
+   * first paint (Chat passes the transcript viewport). The card renders at
+   * this size on its first frame; without it the first frame falls back to
+   * the terminal size. Either way the catcher's measured box refines it on
+   * the next commit.
+   */
+  readonly region?: { readonly columns: number; readonly rows: number }
 }): React.ReactNode {
+  // The card must exist on the layer's FIRST frame. A frame with an empty
+  // catcher followed by a frame with the card marks the catcher dirty, and
+  // the renderer clears a dirty absolute node's whole rect before repainting
+  // it — the transparent catcher covers the transcript row, so that clear
+  // wiped the conversation underneath (visible as a blank flash on the
+  // first open and as a blank transcript on every reopen).
   // Re-measure on every commit: the transcript row also changes height when
   // bottom-chrome rows (spinner, pill, panels) come and go, not only on
   // terminal resize. setState with an equal box is a no-op, so this settles.
-  useTerminalSize()
+  const terminal = useTerminalSize()
   const catcherRef = React.useRef<DOMElement | null>(null)
-  const [bounds, setBounds] = React.useState<{ columns: number; rows: number } | null>(null)
+  const [bounds, setBounds] = React.useState<{ columns: number; rows: number }>(
+    () => region ?? { columns: terminal.columns, rows: terminal.rows },
+  )
   React.useLayoutEffect(() => {
     const node = catcherRef.current
     if (!node) return
     const { width, height } = measureElement(node)
     if (width <= 0 || height <= 0) return
     setBounds(previous =>
-      previous !== null && previous.columns === width && previous.rows === height
+      previous.columns === width && previous.rows === height
         ? previous
         : { columns: width, rows: height })
   })
-  const columns = bounds?.columns ?? 0
-  const rows = bounds?.rows ?? 0
+  const columns = bounds.columns
+  const rows = bounds.rows
   const graphicsFit = columns >= MIN_GRAPHICS_COLUMNS && rows >= MIN_GRAPHICS_ROWS
   const [state, setState] = React.useState<
     | { readonly kind: 'loading' }
@@ -73,7 +93,7 @@ export function ImagePreviewOverlay({
   React.useEffect(() => {
     // The metadata-only narrow card never draws pixels — decoding for it
     // would only fill the full-tier cache with bytes nobody paints.
-    if (bounds === null || !graphicsFit) return
+    if (!graphicsFit) return
     let live = true
     setState({ kind: 'loading' })
     void loadTranscriptImageFull(image).then(
@@ -81,7 +101,7 @@ export function ImagePreviewOverlay({
       () => { if (live) setState({ kind: 'failed' }) },
     )
     return () => { live = false }
-  }, [image, graphicsFit, bounds === null])
+  }, [image, graphicsFit])
 
   const label = transcriptImageLabel(image)
   const meta = [
@@ -103,37 +123,64 @@ export function ImagePreviewOverlay({
       ? t('transcript-image-ready', { name: label })
       : t('transcript-image-loading', { name: label })
 
+  // The card is positioned by hand, as an absolute SIBLING of the catcher
+  // rather than its child. Any update inside the card (image decoded, size
+  // refined) marks its ancestors dirty, and the renderer clears a dirty
+  // absolute node's whole rect before repainting it: a transparent parent
+  // spanning the transcript row would wipe the conversation underneath.
+  // The catcher has no children and stable props, so it never repaints.
+  const cardColumns = Math.max(1, Math.min(columns, graphicsFit
+    ? Math.max(imageWidth + CARD_CHROME_COLS, MIN_CARD_COLUMNS)
+    : MIN_CARD_COLUMNS))
+  const cardRows = Math.max(1, Math.min(rows, graphicsFit
+    ? imageHeight + CARD_CHROME_ROWS
+    : CARD_CHROME_ROWS - 2))
+  const cardLeft = Math.max(0, Math.floor((columns - cardColumns) / 2))
+  const cardTop = Math.max(0, Math.floor((rows - cardRows) / 2))
+
+  // Stable click handler: a new function identity each render would count
+  // as a prop change and dirty the catcher.
+  const onCloseRef = React.useRef(onClose)
+  onCloseRef.current = onClose
+  const closeFromCatcher = React.useCallback((event: { stopImmediatePropagation(): void }) => {
+    // Click outside the card (anywhere on the catcher) closes. The card is a
+    // later sibling in paint order, so its own clicks never reach here.
+    event.stopImmediatePropagation()
+    onCloseRef.current()
+  }, [])
+  const swallow = React.useCallback((event: { stopImmediatePropagation(): void }) => {
+    event.stopImmediatePropagation()
+  }, [])
+
   return (
-    <Box
-      ref={catcherRef}
-      position="absolute"
-      top={0}
-      left={0}
-      width="100%"
-      height="100%"
-      flexShrink={0}
-      overflow="hidden"
-      alignItems="center"
-      justifyContent="center"
-      onClick={event => {
-        // Click outside the card (anywhere on the catcher) closes. The card
-        // below stops propagation, so only true outside clicks land here.
-        event.stopImmediatePropagation()
-        onClose()
-      }}
-    >
-      {bounds === null ? null : (
+    <>
       <Box
+        ref={catcherRef}
+        position="absolute"
+        top={0}
+        left={0}
+        width="100%"
+        height="100%"
+        flexShrink={0}
+        overflow="hidden"
+        onClick={closeFromCatcher}
+      />
+      <Box
+        position="absolute"
+        top={cardTop}
+        left={cardLeft}
+        width={cardColumns}
+        height={cardRows}
         flexDirection="column"
+        flexShrink={0}
+        overflow="hidden"
         borderStyle="round"
         borderColor="suggestion"
         backgroundColor="toolCardBackground"
         opaque
         paddingX={2}
         paddingY={0}
-        onClick={event => {
-          event.stopImmediatePropagation()
-        }}
+        onClick={swallow}
       >
         <Text bold wrap="truncate">{label}</Text>
         <Text dimColor wrap="truncate">{meta} · {source}</Text>
@@ -157,11 +204,10 @@ export function ImagePreviewOverlay({
           </Box>
         ) : null}
         <Box marginTop={graphicsFit ? 1 : 0} justifyContent="center">
-          <Text dimColor>{t('image-preview-close-hint')}</Text>
+          <Text dimColor wrap="truncate">{t('image-preview-close-hint')}</Text>
         </Box>
       </Box>
-      )}
-    </Box>
+    </>
   )
 }
 

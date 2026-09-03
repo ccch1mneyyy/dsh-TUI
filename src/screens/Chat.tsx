@@ -3528,11 +3528,18 @@ export function Chat({
   // and status rows stay visible. While the fullscreen draft editor is open
   // it moves to the root, after PromptEditorLayer, so it still paints above
   // the editor (the editor state stays put; closing the preview restores it).
+  // The layer needs its region before its first paint (see the component):
+  // the transcript viewport height from the ScrollBox handle and the content
+  // column width. The full-screen (editor-open) placement uses the terminal.
+  const imagePreviewRegion = promptEditorOpen
+    ? { columns: terminalColumns, rows: terminalRows }
+    : { columns: terminalColumns, rows: handle?.getViewportHeight() ?? terminalRows }
   const imagePreviewNode = overlay.kind === 'image-preview' && imagePreviewOwned
     ? (
       <ImagePreviewOverlay
         image={overlay.image}
         onClose={() => dispatchOverlay({ type: 'close-if', kind: 'image-preview' })}
+        region={imagePreviewRegion}
       />
     )
     : null
