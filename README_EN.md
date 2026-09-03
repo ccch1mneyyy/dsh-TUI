@@ -48,6 +48,13 @@ the interface, and removing it leaves no core modifications behind.
   with a note), history
   search, message selection, inline or alternate-screen rendering, and `/lang`
   zh/en UI language switching.
+- **Pixel whale pet**: one of three randomized startup intros plays on every
+  launch; **clicking the whale pops a heart pass** any time, and with
+  `/settings → whaleIdle` enabled the settled whale keeps fluttering its fins
+  and thumping its tail, swims continuously while the agent works, falls
+  asleep with Z's after 10s of inactivity, and wakes on any work. The 22
+  hand-drawn frames and the idle behaviors are ported from
+  [dsh-ui-whale](https://github.com/lhh010/dsh-ui-whale) by [@lhh010](https://github.com/lhh010).
 - **Timeline navigation**: a Grok-style turn rail covering **every turn
   (folded ones included)** — even when the fold window only exposes the last
   few turns, the full history stays one click away (clicking a folded tick
@@ -527,6 +534,14 @@ for details.
 
 The DeepSeek Harness official WeChat account featured this plugin among its
 early user-built extensions. [View the feature screenshot](screenshots/wechat-official.png).
+
+## Acknowledgments
+
+- The pixel whale's 22 hand-drawn frames (drawn cell by cell in Excel) and
+  its idle behaviors (fin flutters, tail thumps, sleep Z's, click hearts)
+  are ported from **[dsh-ui-whale](https://github.com/lhh010/dsh-ui-whale)**
+  (the DeepSeek Harness web whale-pet plugin, by [@lhh010](https://github.com/lhh010),
+  BSD-3-Clause) — thank you for the art and the inspiration 🐋💜
 
 ## Friends' Links
 

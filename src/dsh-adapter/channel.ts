@@ -907,6 +907,10 @@ export interface Channel {
   readonly statusBar: Readonly<StatusBarConfig>
   /** Whether the header's pixel whale art shows (settings `dsh-tui.whale`). */
   readonly whale: boolean
+  /** Whether the settled header whale keeps behaving — fin flutters, tail
+   * thumps, sleep after inactivity (settings `dsh-tui.whaleIdle`; off by
+   * default so the settled header holds zero timers). */
+  readonly whaleIdle: boolean
   /** Minimal mode (settings `dsh-tui.minimal`): no header splash, no emoji
    *  glyphs, no decorative colors; code highlight and tool colors stay. */
   readonly minimal: boolean
@@ -1422,8 +1426,12 @@ export interface ChannelState {
   setStatusBar(config: Partial<StatusBarConfig>): void
   /** Whale header art switch (see the public Channel type). */
   whale: boolean
+  /** Idle whale behaviors switch (see the public Channel type). */
+  whaleIdle: boolean
   /** Apply a whale-visibility change (see the public Channel type). */
   setWhale(visible: boolean): void
+  /** Apply an idle-whale-behavior change (see the public Channel type). */
+  setWhaleIdle(enabled: boolean): void
   minimal: boolean
   /** Apply a minimal-mode change (see the public Channel type). */
   setMinimal(enabled: boolean): void
@@ -2007,6 +2015,9 @@ export function createChannel(
     statusBar?: Partial<StatusBarConfig>
     /** Show the header's pixel whale art; default on. */
     whale?: boolean
+    /** Idle whale behaviors (fin/tail/sleep) after the intro settles;
+     * default off (click-hearts are always available). */
+    whaleIdle?: boolean
     /** Minimal mode; default off (settings `dsh-tui.minimal`). */
     minimal?: boolean
     /** Show the segmented context bar row in the status footer; default on
@@ -3702,6 +3713,7 @@ export function createChannel(
     smoothStreaming: options.smoothStreaming !== false,
     statusBar: normalizeStatusBar(options.statusBar),
     whale: options.whale !== false,
+    whaleIdle: options.whaleIdle === true,
     minimal: options.minimal === true,
     activityEnabled: options.activity !== false,
     contextBarEnabled: options.contextBar !== false,
@@ -5630,6 +5642,11 @@ export function createChannel(
     setWhale(visible) {
       if (visible === state.whale) return
       state.whale = visible
+      state.emit()
+    },
+    setWhaleIdle(enabled) {
+      if (enabled === state.whaleIdle) return
+      state.whaleIdle = enabled
       state.emit()
     },
     setMinimal(enabled) {

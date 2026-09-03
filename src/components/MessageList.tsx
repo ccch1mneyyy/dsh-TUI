@@ -1557,12 +1557,17 @@ export function LogoHeader({
   effort,
   cwd,
   whale = true,
+  whaleIdle = false,
+  working = false,
   skipIntro = false,
 }: {
   model: string
   effort?: string | undefined
   cwd: string
   whale?: boolean
+  /** Idle whale behaviors + working signal (passed through to LogoV2). */
+  whaleIdle?: boolean
+  working?: boolean
   /** Jump straight to the settled header (long-session resume: the ~3.4s
    *  opening animation competes with transcript mount batches). */
   skipIntro?: boolean
@@ -1572,7 +1577,7 @@ export function LogoHeader({
   if (isMinimalMode()) return null
   return (
     <Box flexDirection="column" marginBottom={1}>
-      <LogoV2 model={model} effort={effort} cwd={cwd} whale={whale} skipIntro={skipIntro} />
+      <LogoV2 model={model} effort={effort} cwd={cwd} whale={whale} whaleIdle={whaleIdle} working={working} skipIntro={skipIntro} />
     </Box>
   )
 }

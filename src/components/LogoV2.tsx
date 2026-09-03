@@ -14,6 +14,13 @@ import { stringWidth } from '../ink/stringWidth.js'
 import { BRAND, FLASH, ICE, PALE, sweep } from './shimmer.js'
 import { STANDARD_FRAME_INDEX, WhaleArt } from './Whale.js'
 import { OPENING_SEQUENCES, pickOpeningSequence, type OpeningStep, type WhaleIntroId } from './whaleFrames.js'
+import {
+  HEART_HOLD_MS,
+  initialWhaleIdleState,
+  nextWhaleIdleStep,
+  type WhaleIdleState,
+} from './whaleIdle.js'
+import { WHALE_FRAME_INDEX } from './whaleFrames.js'
 
 /**
  * Header badge version, read from the installed package.json so the display
@@ -51,6 +58,11 @@ const FULL_WHALE_WIDTH = 40
  */
 const WHALE_CENTER = 18.5
 
+/** Heart pass frames (click feedback): heart1 → heart2 → heart3, one-way. */
+const HEART_FRAMES: readonly number[] = [
+  WHALE_FRAME_INDEX.heart1, WHALE_FRAME_INDEX.heart2, WHALE_FRAME_INDEX.heart3,
+]
+
 /** `max` → `Max` (effort levels arrive lower-case from the adapter). */
 function capitalize(text: string): string {
   return text.length === 0 ? text : text[0].toUpperCase() + text.slice(1)
@@ -81,6 +93,8 @@ export function LogoV2({
   intro,
   tip,
   whale = true,
+  whaleIdle = false,
+  working = false,
   drift,
 }: {
   model: string
@@ -94,6 +108,13 @@ export function LogoV2({
   tip?: Tip
   /** Show the pixel whale art (settings `dsh-tui.whale`); off → text-only header. */
   whale?: boolean
+  /** Idle whale behaviors — fin flutters, tail thumps, sleep after
+   * inactivity (settings `dsh-tui.whaleIdle`; off by default: the settled
+   * header otherwise holds zero timers). Click-hearts work regardless. */
+  whaleIdle?: boolean
+  /** Whether an agent turn is active: working wakes the whale and keeps
+   * it moving; sustained !working lets it fall asleep. */
+  working?: boolean
   /** Test seam: pin/suppress the upstream-drift notice (`null` forces it off;
    * `undefined` — the production default — auto-detects the install). */
   drift?: UpstreamDriftSummary | null
@@ -121,6 +142,22 @@ export function LogoV2({
     }
   }, [step, settled, sequence])
 
+  // ── Settled whale behaviors (ported from the dsh-ui-whale pet) ─────────
+  // Click → heart pass: purely event-driven (zero idle cost), available
+  // whenever the whale shows, independent of `whaleIdle`. The pass is
+  // one-way heart1→heart2→heart3 (350ms each), then the whale resumes
+  // whatever it was showing; a fresh click restarts it from the small heart.
+  const [heartSeq, setHeartSeq] = React.useState(-1)
+  React.useEffect(() => {
+    if (heartSeq < 0) return
+    const timer = setTimeout(() => {
+      setHeartSeq(s => (s >= HEART_FRAMES.length - 1 ? -1 : s + 1))
+    }, HEART_HOLD_MS)
+    return () => {
+      clearTimeout(timer)
+    }
+  }, [heartSeq])
+
   const [themeName] = useTheme()
   const theme = getTheme(themeName)
   const { columns } = useTerminalSize()
@@ -130,7 +167,41 @@ export function LogoV2({
   const taglineRGB = parseRGB(theme.claudeBlue_FOR_SYSTEM_SPINNER) ?? ICE
 
   const showWhale = whale && columns >= WHALE_MIN_COLUMNS
-  const frameIndex = settled ? STANDARD_FRAME_INDEX : sequence[step].frame
+
+  // Idle behaviors (settings `dsh-tui.whaleIdle`): fin flutters, tail
+  // thumps and blips while idle, continuous motion while the agent works,
+  // and a sleep-Z loop after sustained inactivity. The planner is
+  // event-driven — while the whale rests, the ONLY pending timer is the
+  // one waiting for the next due event, and with the setting off there is
+  // no timer at all (the idle-wakeup contract keeps holding).
+  const [idleFrame, setIdleFrame] = React.useState<number | null>(null)
+  const idleStateRef = React.useRef<WhaleIdleState>(initialWhaleIdleState(0))
+  React.useEffect(() => {
+    if (!settled || !whaleIdle || !showWhale) {
+      setIdleFrame(null)
+      return
+    }
+    // A working flip restarts the loop: work wakes a sleeping whale and
+    // slides every idle deadline forward (see nextWhaleIdleStep).
+    idleStateRef.current = initialWhaleIdleState(Date.now())
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const tick = (): void => {
+      const step = nextWhaleIdleStep(idleStateRef.current, { working, heart: false }, Date.now())
+      idleStateRef.current = step.state
+      setIdleFrame(step.frameIndex)
+      timer = setTimeout(tick, step.delayMs)
+    }
+    tick()
+    return () => {
+      if (timer !== undefined) clearTimeout(timer)
+    }
+  }, [settled, whaleIdle, showWhale, working])
+  // Frame priority: intro → heart overlay → idle behavior → standard pose.
+  const frameIndex = !settled
+    ? sequence[step].frame
+    : heartSeq >= 0
+      ? (HEART_FRAMES[heartSeq] ?? STANDARD_FRAME_INDEX)
+      : (idleFrame ?? STANDARD_FRAME_INDEX)
   // Frozen clock for the settled header: t=0 parks every sweep highlight
   // off-screen, leaving the static gradient behind.
   const t = settled ? 0 : time
@@ -157,7 +228,11 @@ export function LogoV2({
   return (
     <Box ref={ref} flexDirection="column" marginTop={1}>
       <Box flexDirection="row" gap={2} width="100%" alignItems="center">
-        {showWhale && <WhaleArt frameIndex={frameIndex} width={FULL_WHALE_WIDTH} />}
+        {showWhale && (
+          <Box flexShrink={0} onClick={(): void => { setHeartSeq(0) }}>
+            <WhaleArt frameIndex={frameIndex} width={FULL_WHALE_WIDTH} />
+          </Box>
+        )}
         <Box flexDirection="column" flexShrink={1}>
           <Text wrap="truncate-end">
             {sweep('✦ dsh-TUI', t, wordmarkRGB, wordmarkShimmerRGB, 60)}

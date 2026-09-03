@@ -57,6 +57,7 @@
   - **功能全面**：`/resume` 按工作目录分类浏览、搜索与预览历史会话（左键恢复、右键弹出操作菜单；可固定常用会话——「已固定」分组置顶显示，行内 ★ 或 `Ctrl+P` 切换，持久化到 `~/.dsh-tui`），另有 `/agentview` 会话总览（CC 同款 agent view：空输入 `←` 一键后台化，后台会话派发/预览/回复/停止一站式管理）、`/new`、`/compact`、`/export`、`/btw`，模型热切换，原生subagent，会话fork，自动更新，输入框 `/vim` vim 编辑模式、鼠标选区编辑（拖选高亮、Shift+click 扩展、双击选词、Ctrl+C 复制选区）与全屏草稿编辑（`Ctrl+Shift+E` 或输入行 `⛶` 按钮：行号 + 当前行高亮、Enter 换行、Ctrl+Enter 发送、滚轮滚动、点击/拖选，长草稿独占整屏；`/settings` 可关）；可在vs code中[以vscode插件形式启动](docs/vscode.md)，已上架 VS Code Marketplace。
   - **扩展丰富**：原生浏览器交互，compter use等大量附属功能性扩展
   - **技能归 DSH 管理**：`/skills` 展示当前 profile、用户与项目发现的技能；dsh-TUI 不预装通用技能。
+  - **像素鲸鱼娘**：开屏随机三选一开场动画；**点击鲸鱼冒爱心**随时可用，`/settings → whaleIdle` 开启闲置动画后，开屏定格的鲸鱼会继续摆鱼鳍、拍尾巴，agent 工作时持续游动，空闲 10 秒入睡冒 Z，任何工作立即唤醒。鲸鱼娘的 22 帧手绘原图与闲置行为移植自 [dsh-ui-whale](https://github.com/lhh010/dsh-ui-whale)（作者 [@lhh010](https://github.com/lhh010)），特此致谢。
 
 
 
@@ -182,6 +183,10 @@ sh install.sh
 `dsh-TUI` 不实现独立沙箱，而是使用当前 DSH profile 的文件、Shell、sandbox 与 approval 策略。权限预设来自 DSH `permissionPresets` registry：服务缺失时使用 legacy 三项兼容名册；服务已挂载但为空、损坏或不一致时标记为 unavailable，TUI fail closed，不伪造名册。可用 registry 按声明顺序提供第三方预设，只有符合既有 command-token 语法的 ID 才进入补全，`custom` 只显示为当前态，不是可选择目标；切换始终走官方 `/permission <preset>` 命令。若外部 `/permission` 命令本身未注册，输入沿用现有默认命令/model dispatch。在包含敏感凭证或不可信仓库的环境中启动前，请先检查 profile 配置。
 
 详见[权限边界与已知限制](docs/architecture.md#权限与安全边界)。
+
+### 致谢
+
+- 像素鲸鱼娘的 22 帧手绘原图（Excel 逐格绘制）与闲置动画行为（摆鱼鳍、拍尾巴、入睡冒 Z、点击冒爱心）移植自 **[dsh-ui-whale](https://github.com/lhh010/dsh-ui-whale)**（DeepSeek Harness Web 端鲸鱼宠物插件，作者 [@lhh010](https://github.com/lhh010)，BSD-3-Clause），感谢作者与灵感 🐋💜
 
 ### 友情链接
 
