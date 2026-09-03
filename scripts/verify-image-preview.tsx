@@ -324,6 +324,18 @@ const png = new Uint8Array(await sharp({
       && commandImages[1]?.name === 'save-6.png',
     JSON.stringify({ accepted, commandExecutions, commandImages }))
 
+  // A command line whose [Image #N] has no live staging is plain text plus a
+  // warning, as on the submit path; the command still executes without images.
+  const beforeStaleExecutions = commandExecutions
+  const beforeStaleNotices = channel.notifications.length
+  const stale = await channel.runExternalCommandOutcome('probe', ' [Image #9]', commandRefs)
+  const staleNotices = channel.notifications.slice(beforeStaleNotices)
+  check('channel: a command with an unstaged token warns and still executes without images',
+    stale?.kind === 'success' && commandExecutions === beforeStaleExecutions + 1
+      && (commandImages?.length ?? 0) === 0
+      && staleNotices.some(item => item.text.includes('[Image #9]')),
+    JSON.stringify({ stale, commandExecutions, commandImages, staleNotices }))
+
   const legacyText = await channel.runExternalCommand('probe', '')
   check('channel: public scene command API retains its legacy text result',
     legacyText === 'accepted', JSON.stringify(legacyText))
