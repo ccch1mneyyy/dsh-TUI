@@ -18,6 +18,7 @@ process.on('exit', () => rmSync(isolatedHome, { recursive: true, force: true }))
 
 const { createChannel } = await import('../src/dsh-adapter/channel.js')
 const { stablePermissionRosterOrder } = await import('../src/sessionModes.js')
+const { isCommandCompletionToken } = await import('../src/commands.js')
 
 type FakeEvent = { type: string; seq: number; time: number; data: Record<string, unknown> }
 type Handler = (session: FakeSession, event: FakeEvent) => void
@@ -38,6 +39,7 @@ type TestEnv = {
   channel: ReturnType<typeof createChannel>
   service?: PermissionService
   warnings: string[]
+  commands: string[]
 }
 
 let failures = 0
@@ -73,8 +75,9 @@ function makeService(active = 'auto'): PermissionService & { active: string; ent
   return registry
 }
 
-function makeEnv(service: unknown | typeof missing = missing): TestEnv {
+function makeEnv(service: unknown | typeof missing = missing, modes: Array<{ id: string; permission?: string }> = []): TestEnv {
   const handlers = new Map<string, Handler>()
+  const commands: string[] = []
   const warnings: string[] = []
   const events: FakeEvent[] = []
   const session: FakeSession = {
@@ -89,6 +92,24 @@ function makeEnv(service: unknown | typeof missing = missing): TestEnv {
     },
   }
   const services: Record<string, unknown> = service === missing ? {} : { permissionPresets: service }
+  if (service !== missing) {
+    services.commands = {
+      list() {
+        return [{ name: 'permission', description: 'Permission presets' }]
+      },
+      find(_agent: unknown, name: string) {
+        return name === 'permission' ? { name: 'permission' } : undefined
+      },
+      async execute(_agent: FakeSession, line: string) {
+        commands.push(line)
+        const target = line.startsWith('/permission ') ? line.slice('/permission '.length).trim() : ''
+        if (!target || !isCommandCompletionToken(target)) return undefined
+        ;(service as PermissionService & { active?: string }).active = target
+        session.append('permission/preset', { preset: target })
+        return { result: { text: 'ok' } }
+      },
+    }
+  }
   const ctx = {
     on(event: string, handler: Handler) {
       handlers.set(event, handler)
@@ -113,8 +134,9 @@ function makeEnv(service: unknown | typeof missing = missing): TestEnv {
     cwd: '/tmp',
     provider: 'deepseek',
     activity: false,
+    modes,
   })
-  return { channel, ...(service === missing ? {} : { service: service as PermissionService }), warnings }
+  return { channel, ...(service === missing ? {} : { service: service as PermissionService }), warnings, commands }
 }
 
 // 1. A class-like registry must be invoked with its receiver intact.
@@ -194,6 +216,29 @@ for (const [name, service] of malformed) {
     'stable roster deduplicates malformed input',
     stablePermissionRosterOrder(['auto', 'auto'], ['safe', 'safe']).join(',') === 'safe',
   )
+}
+
+// 7. Configured permission identities must be one safe command token before
+// mode application builds the official command line.
+{
+  const service = makeService('read-only')
+  const { channel, commands } = makeEnv(service, [
+    { id: 'read', permission: 'read-only' },
+    { id: 'auto', permission: 'auto' },
+  ])
+  await channel.cycleMode()
+  check('safe configured identity invokes official permission command', commands.join(',') === '/permission auto', JSON.stringify(commands))
+  check('safe configured identity is confirmed by the snapshot', channel.mode.id === 'auto', channel.mode.id)
+}
+{
+  const service = makeService('read-only')
+  const { channel, commands, warnings } = makeEnv(service, [
+    { id: 'read', permission: 'read-only' },
+    { id: 'invalid', permission: 'auto extra' },
+  ])
+  await channel.cycleMode()
+  check('unsafe configured identity does not invoke permission', commands.length === 0, JSON.stringify(commands))
+  check('unsafe configured identity warns before command dispatch', warnings.some(message => message.includes('not a safe command token')), JSON.stringify(warnings))
 }
 
 if (failures > 0) {

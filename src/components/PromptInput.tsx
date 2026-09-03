@@ -1306,6 +1306,12 @@ export function PromptInput({
       event.stopImmediatePropagation()
       return
     }
+    // Completion menus own Backtab just like plain Tab; do not mutate the
+    // background session mode while the user is choosing a candidate.
+    if (key.tab && key.shift && (fileOverlayOpen || overlayOpen)) {
+      event.stopImmediatePropagation()
+      return
+    }
     // Shift+Tab cycles the configured session modes (default: 默认 →
     // 计划模式 → 完全访问; each mode bundles plan/sandbox/approval atoms —
     // see the `modes` config). Keep this before the fullscreen editor's Tab

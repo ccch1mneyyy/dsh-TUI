@@ -3379,6 +3379,10 @@ export function createChannel(
     session: Agent['session'],
     requireRuntime: boolean,
   ): Promise<boolean> => {
+    if (!isCommandCompletionToken(target)) {
+      ctx.logger.warn('dsh-tui: permission mode "' + target + '" skipped because its identity is not a safe command token')
+      return false
+    }
     let registered = false
     try {
       registered = commandService?.find(agent, 'permission') !== undefined

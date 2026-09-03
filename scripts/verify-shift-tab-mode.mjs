@@ -11,6 +11,7 @@ import { Writable, PassThrough } from 'node:stream'
 import React from 'react'
 import { render } from '../lib/types/ui.js'
 import { PromptInput } from '../lib/types/components/PromptInput.js'
+import { PromptEditorLayer } from '../lib/types/components/PromptEditor.js'
 
 let failed = 0
 function check(name, ok, extra = '') {
@@ -71,13 +72,16 @@ function makeChannel() {
 const { stdout, stderr, stdin } = makeStreams()
 const channel = makeChannel()
 const instance = await render(
-  React.createElement(PromptInput, {
-    channel,
-    helpOpen: false,
-    onToggleHelp() {},
-    onRunCommand: () => false,
-    selectionActive: false,
-  }),
+  React.createElement(React.Fragment, null,
+    React.createElement(PromptInput, {
+      channel,
+      helpOpen: false,
+      onToggleHelp() {},
+      onRunCommand: () => false,
+      selectionActive: false,
+    }),
+    React.createElement(PromptEditorLayer),
+  ),
   { stdout, stderr, stdin, exitOnCtrlC: false, patchConsole: false },
 )
 await sleep(600)
@@ -98,10 +102,13 @@ stdin.write('\t')
 await sleep(300)
 check('plain Tab does not cycle the mode', channel.cycled.length === 2, JSON.stringify(channel.cycled.length))
 
-// Fullscreen draft editor: Ctrl+Shift+E opens the cover, but Shift+Tab must
-// still reach the mode cycle instead of being swallowed as indentation.
+// Fullscreen draft editor: Ctrl+Shift+E opens the real cover, but Shift+Tab
+// must still reach the mode cycle instead of being swallowed as indentation.
+const beforeFullscreen = stdout.frames.length
 stdin.write('\x1b[69;6u')
 await sleep(250)
+const fullscreenOutput = stdout.frames.slice(beforeFullscreen).join('')
+check('fullscreen editor layer is mounted', fullscreenOutput.includes('hello'))
 stdin.write('\x1b[Z')
 await sleep(300)
 check('fullscreen backtab cycles the session mode', channel.cycled.length === 3, JSON.stringify(channel.cycled.length))
