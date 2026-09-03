@@ -727,6 +727,9 @@ function makeChannel() {
   return {
     version: 0,
     rows: [
+      // Plain transcript text for the backdrop checks: faint while the
+      // preview is open, plain again once it closes.
+      { id: 0, kind: 'user', text: 'LPROBE backdrop probe text', images: [] },
       { id: 1, kind: 'user', text: '', images: [fakeImage('sha256:sent', 'sent.png')] },
     ] as ChatRow[],
     status: 'idle' as const,
@@ -815,7 +818,12 @@ function makeChannel() {
     stdin.write(`\x1b[<0;${col + 1};${row + 1}M`)
     stdin.write(`\x1b[<0;${col + 1};${row + 1}m`)
   }
+  const dimAt = (col: number, row: number): boolean =>
+    (terminal.buffer.active.getLine(row)?.getCell(col)?.isDim() ?? 0) !== 0
   const OVERLAY_HINT = ' — PNG · '
+  check('chat: transcript text is plain before any preview opens',
+    (() => { const probe = screen.find('LPROBE'); return probe !== null && !dimAt(probe.col, probe.row) })(),
+    screen.text())
 
   // Transcript thumbnail (text fallback body) → the shared overlay.
   check('chat: transcript thumbnail fallback renders',
@@ -838,6 +846,18 @@ function makeChannel() {
     check('chat: the preview card sits above the prompt row',
       hint !== null && promptGlyph !== null && hint.row < promptGlyph.row,
       JSON.stringify({ hint, promptGlyph }))
+    // The backdrop shades the conversation behind the card (terminal faint);
+    // the card's title row and the prompt row are untouched.
+    const probe = screen.find('LPROBE')
+    check('chat: transcript text outside the card is faint while the preview is open',
+      probe !== null && dimAt(probe.col, probe.row) && dimAt(probe.col + 5, probe.row),
+      JSON.stringify({ probe }))
+    check('chat: the card title row is not faint',
+      hint !== null && !dimAt(hint.col + 3, hint.row) && !dimAt(hint.col - 4, hint.row),
+      JSON.stringify({ hint }))
+    check('chat: the prompt row is not faint',
+      promptGlyph !== null && !dimAt(promptGlyph.col, promptGlyph.row),
+      JSON.stringify({ promptGlyph }))
   }
 
   // Keep the same public id but replace the agent binding (the ABA case from
@@ -860,6 +880,11 @@ function makeChannel() {
     await settled(() => !screen.text().includes(OVERLAY_HINT)
       && screen.text().includes('RICH-BUDGET-PROBE')
       && screen.find('Image · sent.png') !== null), screen.text())
+  check('chat: closing the preview lifts the shade from the transcript',
+    await settled(() => {
+      const probe = screen.find('LPROBE')
+      return probe !== null && !dimAt(probe.col, probe.row) && !dimAt(probe.col + 5, probe.row)
+    }), screen.text())
 
   // Reopen, then a click OUTSIDE the centered card closes it.
   const readsAfterFirstOpen = readCounts.get('sha256:sent') ?? 0

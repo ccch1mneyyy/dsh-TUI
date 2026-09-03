@@ -104,6 +104,10 @@ function paintsOwnRect(node: DOMElement): boolean {
   return node.style.opaque === true || node.style.backgroundColor !== undefined
 }
 
+function sameRect(a: CachedLayout, b: CachedLayout): boolean {
+  return a.x === b.x && a.y === b.y && a.width === b.width && a.height === b.height
+}
+
 /**
  * Frame-end check: did any PREVIOUS frame's absolute overlay vacate cells
  * that no CURRENT overlay rect covers (the overlay shrank or moved)?
@@ -132,7 +136,11 @@ export function hasOverlayVacatedCells(): boolean {
   outer: for (const prev of absoluteRectsPrev) {
     if (prev.width <= 0 || prev.height <= 0) continue
     for (const cur of absoluteRectsCur) {
-      if (cur.opaque !== true) continue
+      // A node that kept its exact rect vacated nothing, opaque or not.
+      // Without this the transparent click-catcher spanning the transcript
+      // was never "covered" and poisoned every frame while a preview was
+      // open (full re-render instead of the blit fast path).
+      if (cur.opaque !== true && !sameRect(cur, prev)) continue
       if (
         cur.x <= prev.x &&
         cur.y <= prev.y &&
@@ -677,6 +685,11 @@ function renderNodeToOutput(
     if (
       !node.dirty &&
       !skipSelfBlit &&
+      // A backdrop node re-emits its shade every frame: the cells beneath it
+      // may have been rewritten by an earlier sibling (streaming text), and
+      // only a shade placed at this node's point in the paint order dims
+      // them without touching the card painted after it.
+      node.style.backdrop === undefined &&
       node.pendingScrollDelta === undefined &&
       cached &&
       cached.x === x &&
@@ -1613,6 +1626,14 @@ function renderNodeToOutput(
         // Disable prevScreen for children: the fill overwrites the entire
         // interior each render, so child blits from prevScreen would restore
         // stale cells (wrong bg if it changed) on top of the fresh fill.
+        // Backdrop: shade whatever earlier nodes painted under this rect
+        // before this node's own fill and children go on top.
+        if (node.style.backdrop !== undefined) {
+          output.shade(
+            { x: Math.floor(x), y: Math.floor(y), width: Math.floor(width), height: Math.floor(height) },
+            node.style.backdrop,
+          )
+        }
         const ownBackgroundColor = node.style.backgroundColor
         if (ownBackgroundColor || node.style.opaque) {
           const borderLeft = yogaNode.getComputedBorder(LayoutEdge.Left)
