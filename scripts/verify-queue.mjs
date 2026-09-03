@@ -195,6 +195,35 @@ async function run() {
     instance.unmount()
   }
 
+  // ---- Scenario 4b: text typed first, then a bare LF on its own while
+  // working. The LF is Ctrl+J (newline insert), not Enter: nothing steers,
+  // nothing submits, the draft keeps the text.
+  {
+    const { stdout, stderr, stdin } = makeStreams()
+    const channel = makeChannel(true)
+    const instance = await render(
+      React.createElement(PromptInput, {
+        channel,
+        helpOpen: false,
+        onToggleHelp() {},
+        onRunCommand: () => false,
+        selectionActive: false,
+      }),
+      { stdout, stderr, stdin, exitOnCtrlC: false, patchConsole: false },
+    )
+    await sleep(600)
+    stdin.write('piped')
+    await sleep(200)
+    stdin.write('\n')
+    await sleep(300)
+    check(
+      'a bare LF after separately typed text inserts a newline while working (no steer, no submit)',
+      channel.steered.length === 0 && channel.submitted.length === 0,
+      JSON.stringify({ steered: channel.steered, submitted: channel.submitted }),
+    )
+    instance.unmount()
+  }
+
   // ---- Scenario 5: idle — Enter submits directly (unchanged behavior).
   {
     const { stdout, stderr, stdin } = makeStreams()
