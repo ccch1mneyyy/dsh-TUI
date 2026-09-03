@@ -834,8 +834,9 @@ export function Chat({
     }
   }, [overlay.kind, questionSnapshot, approvalSnapshot, dialogSnapshot])
   // Caret-driven preview (Grok Build's chip peek): while the composer caret
-  // sits on a staged `[Image #N]` — its start or its end — the same card
-  // shows over the transcript, and it goes away when the caret leaves. It is
+  // sits on a staged `[Image #N]` — at its start, the token inverted — the
+  // same card shows over the transcript, and it goes away when the caret
+  // leaves (the cell just after the token is not "on" it). It is
   // derived state, not an overlay: the prompt keeps the keyboard, so ←/→
   // walk from image to image with the card following. Esc (or a click
   // outside the card) dismisses it for THIS token until the caret leaves and

@@ -156,8 +156,9 @@ composer: the caret never rests inside it, ←/→ step over it, Backspace at it
 end, Delete at its start and Ctrl+W remove it whole, and a selection edge inside
 it grows to cover the token. It renders in the theme accent and inverts whole
 while the caret sits at its start; clicking it places the caret at its start and
-opens the preview. The preview opens by itself while the caret rests at a token's
-start or end and closes when the caret leaves; the keyboard stays with the
+opens the preview. The preview opens by itself while the token is selected (the
+caret at its start) and closes when the caret leaves; the cell just after the
+token does not count. The keyboard stays with the
 prompt meanwhile, so ←/→ walk from image to image with the card following. Esc
 or a click outside the card dismisses only that token's preview until the caret
 leaves and returns; a click on the token always shows it. Look-alike text typed

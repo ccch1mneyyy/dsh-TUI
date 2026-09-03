@@ -279,21 +279,16 @@ check('peek: Esc dismisses the caret preview',
 const previewOpen = (): boolean => text().includes(' — PNG · ')
 const title5 = t5.slice(1, -1)
 
-// Dismissed for THIS token: its end is still the same token.
+// The cell just after the token is not "on" it: the token is plain there
+// and no preview shows (only the selected, inverted token previews).
 stdin.write(RIGHT)
 await sleep(200)
-check('peek: after Esc the token stays dismissed at its other edge',
-  !previewOpen() && inverseAt(p5.col + t5.length, p5.row), text())
-// Leaving resets the dismissal; ← back onto the end re-shows it (both
-// edges count, as in Grok Build).
-stdin.write(RIGHT)
-await sleep(120)
+check('peek: the caret just after the token shows no preview (token not selected)',
+  !previewOpen() && noneInverse(p5, t5) && inverseAt(p5.col + t5.length, p5.row), text())
+// Leaving reset the dismissal: ← back to the start shows it again.
 stdin.write(LEFT)
-check('peek: ← onto the token end shows its preview again',
-  await settled(() => previewOpen() && text().includes(title5)), text())
-stdin.write(LEFT)
-check('peek: ← to the token start keeps the preview and selects the token',
-  await settled(() => previewOpen() && wholeInverse(p5, t5)), text())
+check('peek: ← back to the token start selects it and shows its preview again',
+  await settled(() => previewOpen() && text().includes(title5) && wholeInverse(p5, t5)), text())
 // The keyboard stays with the prompt while the preview is up: typing at
 // the token's start inserts before it, and the caret is still on the token.
 stdin.write('x')
