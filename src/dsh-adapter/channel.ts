@@ -3576,15 +3576,21 @@ export function createChannel(
     staged: ReadonlyMap<string, ChannelImageBlock['attachment']>,
     signal: AbortSignal,
   ): Promise<RegistryCommandImageBatch> => {
-    const referenced = [...new Set([...line.matchAll(COMPOSER_IMAGE_TOKEN)].map(match => match[0]))]
+    const ordered = orderedComposerImages(line, imageRefs, staged)
+    // A `[Image #N]` with no live staging is plain text here, exactly as on
+    // the submit path (deliverUserText): warn once, keep the line unchanged.
+    // Only referenced, staged images take part in the batch below.
+    for (const match of line.matchAll(COMPOSER_IMAGE_TOKEN)) {
+      if (!ordered.has(match[0])) {
+        state.notify(t('input-image-token-stale', { token: match[0] }), { color: 'warning', timeoutMs: 5000 })
+        break
+      }
+    }
     if (!commandServiceSupportsImages(service)) {
-      return imageRefs.length > 0 || referenced.length > 0
-        ? { kind: 'error', reason: 'runtime', tokens: referenced }
+      return ordered.size > 0
+        ? { kind: 'error', reason: 'runtime', tokens: [...ordered.keys()] }
         : { kind: 'legacy' }
     }
-    const ordered = orderedComposerImages(line, imageRefs, staged)
-    const missing = referenced.filter(token => !ordered.has(token))
-    if (missing.length > 0) return { kind: 'error', reason: 'missing', tokens: missing }
     if (ordered.size === 0) return { kind: 'ready', images: [] }
     const store = mentionAttachments(ctx) as
       | (MentionAttachments & { readImage?(ref: unknown, signal?: AbortSignal): Promise<{ data: Uint8Array }> })
