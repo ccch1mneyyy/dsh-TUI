@@ -303,6 +303,9 @@ check('peek: → back onto the token reopens it',
   await settled(() => previewOpen() && wholeInverse(p5x, t5)), text())
 stdin.write('\x1b')
 await settled(() => !previewOpen())
+// Past the double-click window: the previous click on this token was one
+// column away, and a fast second click would select a word instead.
+await sleep(600)
 click(p5x.col + 3, p5x.row)
 check('peek: a click on a dismissed token shows its preview again',
   await settled(() => previewOpen() && wholeInverse(p5x, t5)), text())

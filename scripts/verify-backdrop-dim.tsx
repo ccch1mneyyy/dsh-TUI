@@ -26,9 +26,10 @@ import xterm from '@xterm/headless'
 import { settled, sleep } from './lib/term-test.mjs'
 
 const { Terminal: XTerm } = xterm
-const [{ render, Box, Text }, { transitionAnsiCodes }] = await Promise.all([
+const [{ render, Box, Text }, { transitionAnsiCodes }, { default: instances }] = await Promise.all([
   import('../src/ui.js'),
   import('../src/ink/screen.js'),
+  import('../src/ink/instances.js'),
 ])
 
 let failures = 0
@@ -79,7 +80,15 @@ function Harness(): React.ReactNode {
         <Text color="red">red row three</Text>
         <Text>stream: {state.stream}</Text>
         <Text dimColor>already faint row</Text>
-        {Array.from({ length: 5 }, (_, i) => <Text key={i}>filler {i}</Text>)}
+        {Array.from({ length: 3 }, (_, i) => <Text key={i}>filler {i}</Text>)}
+        {/* Half-block pixel pair: upper pixel in the fg, lower in the bg —
+            the whale's technique. Plus a solid pixel: a space with a bg. */}
+        <Text>
+          <Text color="rgb(200,100,50)" backgroundColor="rgb(20,40,60)">▀▀</Text>
+          <Text backgroundColor="rgb(20,40,60)">  </Text>
+          <Text>pixels</Text>
+        </Text>
+        <Text>filler 4</Text>
       </Box>
       {state.open && (
         <Box
@@ -121,6 +130,10 @@ const app = await render(<Harness />, {
   exitOnCtrlC: false,
   patchConsole: false,
 })
+// The shade target ThemeProvider would set from OSC 11 (black: a dark
+// terminal). Explicit colours fade halfway toward it; default text takes
+// faint.
+instances.get(stdout as never)!.setShadeTarget({ r: 0, g: 0, b: 0 })
 
 const line = (y: number): string => terminal.buffer.active.getLine(y)?.translateToString(true) ?? ''
 const text = (): string => Array.from({ length: ROWS }, (_, y) => line(y)).join('\n')
@@ -144,6 +157,11 @@ const rowPlain = (y: number): boolean => {
   return cols.length > 0 && cols.every(x => !isDim(x, y))
 }
 const cardCol = (): number => line(6).indexOf('╭')
+/** RGB of a cell's fg/bg as xterm packs them (0xRRGGBB), or -1 for default. */
+const fgOf = (x: number, y: number): number => cell(x, y)?.getFgColor() ?? -1
+const bgOf = (x: number, y: number): number => cell(x, y)?.getBgColor() ?? -1
+const packed = (r: number, g: number, b: number): number => (r << 16) | (g << 8) | b
+const PIXEL_ROW = 8
 
 await settled(() => text().includes('filler 4'))
 // Row 4 is excluded from the "plain" checks: `dimColor` is the theme's own
@@ -152,6 +170,11 @@ await settled(() => text().includes('filler 4'))
 const PLAIN_ROWS = [0, 1, 2, 3, 5, 6, 7, 8, 9]
 check('closed: no faint cell anywhere',
   PLAIN_ROWS.every(rowPlain), text())
+const closedDimRowFg = fgOf(glyphCols(4)[0] ?? 0, 4)
+check('closed: the pixel pair carries its own fg and bg, the solid pixel its bg',
+  fgOf(0, PIXEL_ROW) === packed(200, 100, 50) && bgOf(0, PIXEL_ROW) === packed(20, 40, 60)
+    && bgOf(2, PIXEL_ROW) === packed(20, 40, 60),
+  JSON.stringify({ fg: fgOf(0, PIXEL_ROW).toString(16), bg: bgOf(0, PIXEL_ROW).toString(16), solid: bgOf(2, PIXEL_ROW).toString(16) }))
 
 setState({ open: true, stream: 'first', backdropRows: '100%' })
 await settled(() => text().includes('CARD'))
@@ -159,8 +182,22 @@ check('open: text under the backdrop is faint',
   rowDim(0) && rowDim(2) && rowDim(3) && rowDim(5), text())
 check('open: bold text under the backdrop is faint AND still bold',
   rowDim(1) && glyphCols(1).every(x => isBold(x, 1)), text())
-check('open: an already-faint row is unchanged (idempotent)',
-  rowDim(4), text())
+// `dimColor` is the theme's business: SGR faint stays faint, a dim colour
+// blends like any explicit colour — either way the row reads as shaded.
+check('open: an already-dim row is shaded once (faint kept, or its colour blended)',
+  rowDim(4) || fgOf(glyphCols(4)[0] ?? 0, 4) !== closedDimRowFg, text())
+// Explicit colours blend toward the target instead of taking faint: the
+// pixel pair keeps its structure (both halves fade), the solid pixel's bg
+// fades too, and the plain text after them is faint.
+check('open: a half-block pixel pair fades fg AND bg halfway toward the target, without faint',
+  fgOf(0, PIXEL_ROW) === packed(100, 50, 25) && bgOf(0, PIXEL_ROW) === packed(10, 20, 30)
+    && !isDim(0, PIXEL_ROW) && fgOf(1, PIXEL_ROW) === packed(100, 50, 25),
+  JSON.stringify({ fg: fgOf(0, PIXEL_ROW).toString(16), bg: bgOf(0, PIXEL_ROW).toString(16), dim: isDim(0, PIXEL_ROW) }))
+check('open: a solid pixel (space with a bg) fades its bg',
+  bgOf(2, PIXEL_ROW) === packed(10, 20, 30) && bgOf(3, PIXEL_ROW) === packed(10, 20, 30),
+  JSON.stringify({ solid: bgOf(2, PIXEL_ROW).toString(16) }))
+check('open: default-coloured text next to the pixels takes faint',
+  isDim(4, PIXEL_ROW) && isDim(9, PIXEL_ROW), line(PIXEL_ROW))
 {
   const left = cardCol()
   const cardText = line(7).indexOf('CARD')
@@ -200,6 +237,10 @@ await settled(() => !text().includes('CARD'))
 await sleep(60)
 check('closed again: no faint cell remains',
   PLAIN_ROWS.every(rowPlain), text())
+check('closed again: the pixel colours are restored exactly',
+  fgOf(0, PIXEL_ROW) === packed(200, 100, 50) && bgOf(0, PIXEL_ROW) === packed(20, 40, 60)
+    && bgOf(2, PIXEL_ROW) === packed(20, 40, 60),
+  JSON.stringify({ fg: fgOf(0, PIXEL_ROW).toString(16), bg: bgOf(0, PIXEL_ROW).toString(16) }))
 
 await app.unmount()
 terminal.dispose()
