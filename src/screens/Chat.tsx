@@ -253,6 +253,12 @@ let fallbackApprovalStore: ApprovalStore | undefined
 let fallbackDialogStore: TuiDialogStore | undefined
 let fallbackStatusStore: TuiStatusStore | undefined
 
+/** Identity of one caret-preview dismissal: the token (its title) on the
+ *  image, so the same image staged twice is dismissed per token. */
+function peekKey(image: TranscriptImage, title: string | undefined): string {
+  return `${title ?? ''} ${image.id}`
+}
+
 export function Chat({
   channel,
   questionStore,
@@ -827,6 +833,49 @@ export function Chat({
       dispatchOverlay({ type: 'close-if', kind: 'image-preview' })
     }
   }, [overlay.kind, questionSnapshot, approvalSnapshot, dialogSnapshot])
+  // Caret-driven preview (Grok Build's chip peek): while the composer caret
+  // sits on a staged `[Image #N]` — its start or its end — the same card
+  // shows over the transcript, and it goes away when the caret leaves. It is
+  // derived state, not an overlay: the prompt keeps the keyboard, so ←/→
+  // walk from image to image with the card following. Esc (or a click
+  // outside the card) dismisses it for THIS token until the caret leaves and
+  // comes back; a click on the token always shows it again.
+  const [caretPreview, setCaretPreview] = React.useState<
+    { image: TranscriptImage; title?: string } | null
+  >(null)
+  const [peekSuppressed, setPeekSuppressed] = React.useState<string | null>(null)
+  const handleCaretImage = React.useCallback((
+    image: TranscriptImage | undefined,
+    title: string | undefined,
+    reason: 'caret' | 'click',
+  ): void => {
+    if (image === undefined) {
+      setCaretPreview(null)
+      setPeekSuppressed(null)
+      return
+    }
+    setCaretPreview({ image, ...(title === undefined ? {} : { title }) })
+    const key = peekKey(image, title)
+    setPeekSuppressed(current => reason === 'click' || current !== key ? null : current)
+  }, [])
+  const peekPreview =
+    overlay.kind === 'none' && caretPreview !== null
+      && peekSuppressed !== peekKey(caretPreview.image, caretPreview.title)
+      ? caretPreview
+      : null
+  /** Esc / click-outside on the peek: dismissed for this token until the
+   *  caret leaves it. PromptInput's Esc arm calls this first — its listener
+   *  runs before Chat's and the prompt stays live under a peek. */
+  const dismissPeek = (): void => {
+    if (peekPreview !== null) setPeekSuppressed(peekKey(peekPreview.image, peekPreview.title))
+  }
+  /** The card on screen, if any: the modal overlay first, else the peek. */
+  const activePreview: { image: TranscriptImage; title?: string; peek: boolean } | null =
+    overlay.kind === 'image-preview'
+      ? { image: overlay.image, ...(overlay.title === undefined ? {} : { title: overlay.title }), peek: false }
+      : peekPreview !== null
+        ? { ...peekPreview, peek: true }
+        : null
 
   const handleOpenTarget = React.useCallback((url: string): void => {
     const classification = classifyOpenTarget(url)
@@ -2596,6 +2645,16 @@ export function Chat({
       event.stopImmediatePropagation()
       return
     }
+    if (peekPreview !== null && key.escape) {
+      // Caret-driven preview: Esc dismisses it until the caret leaves the
+      // token (PromptInput's own Esc arm normally gets there first; this is
+      // the fallback when the prompt is not listening). Every other key
+      // stays with the prompt, so the caret keeps moving (and the card
+      // follows it) while the preview is up.
+      dismissPeek()
+      event.stopImmediatePropagation()
+      return
+    }
     // Esc clears a settled mouse selection before the ordinary chat meanings
     // below, but never before a top-level modal. Otherwise a preview opened
     // over selected transcript text needed two Esc presses to close.
@@ -3537,12 +3596,14 @@ export function Chat({
   const imagePreviewRegion = promptEditorOpen
     ? { columns: terminalColumns, rows: terminalRows }
     : { columns: terminalColumns, rows: handle?.getViewportHeight() ?? terminalRows }
-  const imagePreviewNode = overlay.kind === 'image-preview' && imagePreviewOwned
+  const imagePreviewNode = activePreview !== null && (activePreview.peek || imagePreviewOwned)
     ? (
       <ImagePreviewOverlay
-        image={overlay.image}
-        title={overlay.title}
-        onClose={() => dispatchOverlay({ type: 'close-if', kind: 'image-preview' })}
+        image={activePreview.image}
+        title={activePreview.title}
+        onClose={activePreview.peek
+          ? () => setPeekSuppressed(peekKey(activePreview.image, activePreview.title))
+          : () => dispatchOverlay({ type: 'close-if', kind: 'image-preview' })}
         region={imagePreviewRegion}
       />
     )
@@ -3638,7 +3699,7 @@ export function Chat({
           onOpenJobs={() => setJobsPanelOpen(true)}
           onOpenFile={openFileActions}
           onPreviewImage={openImagePreview}
-          suppressImageGraphics={overlay.kind === 'image-preview'}
+          suppressImageGraphics={activePreview !== null}
         />
         </ScrollBox>
         {(() => {
@@ -3747,7 +3808,7 @@ export function Chat({
             {statusEntries.map(entry => entry.text).join(' · ')}
           </Text>
         )}
-        {overlay.kind !== 'image-preview' && statusViews.map(view => (
+        {activePreview === null && statusViews.map(view => (
           <PluginStatusViewBoundary
             key={`${view.key}:${view.registrationId}`}
             viewKey={view.key}
@@ -3858,7 +3919,9 @@ export function Chat({
               : undefined
           }
           controllerRef={promptControllerRef}
-          onPreviewImage={openImagePreview}
+          onCaretImage={handleCaretImage}
+          caretPreviewOpen={peekPreview !== null}
+          onDismissCaretPreview={dismissPeek}
         />
         <StatusLine
           channel={channel}

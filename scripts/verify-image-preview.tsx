@@ -73,9 +73,9 @@ function check(name: string, ok: boolean, detail = ''): void {
   check('chat: preview modal consumes Esc before transcript mouse selection',
     previewModalGuard !== -1 && mouseSelectionEsc > previewModalGuard,
     `preview=${previewModalGuard}, selection=${mouseSelectionEsc}`)
-  check('chat: modal owns the global graphics budget while open',
-    chatSource.includes("overlay.kind !== 'image-preview' && statusViews.map(view => (")
-      && chatSource.includes("suppressImageGraphics={overlay.kind === 'image-preview'}"))
+  check('chat: any preview card (modal or caret peek) owns the global graphics budget while open',
+    chatSource.includes('activePreview === null && statusViews.map(view => (')
+      && chatSource.includes('suppressImageGraphics={activePreview !== null}'))
   check('chat: adapter command outcomes own draft-consumption semantics',
     chatSource.includes('outcome.consumeDraft'))
 }

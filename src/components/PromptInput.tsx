@@ -422,8 +422,23 @@ export interface PromptInputProps {
   backgroundAgentsNeedingInput?: number
   /** Filled with the live controller each render (see PromptController). */
   controllerRef?: React.RefObject<PromptController | null>
-  /** Click on a staged `[Image #N]` token: open the shared preview overlay. */
-  onPreviewImage?(image: TranscriptImage, title?: string): void
+  /**
+   * The staged image the caret is on — at a token's start or its end — or
+   * undefined once it leaves; reported whenever that changes (`'caret'`),
+   * and again on every click on a token (`'click'`, even when unchanged) so
+   * the caller can re-show a preview the user dismissed. `title` is the
+   * token without brackets (`Image #2`). Reported as undefined while the
+   * prompt is suspended and on unmount.
+   */
+  onCaretImage?(image: TranscriptImage | undefined, title: string | undefined, reason: 'caret' | 'click'): void
+  /**
+   * True while the caller shows the caret-driven preview. Esc then goes to
+   * `onDismissCaretPreview` ahead of every other Esc meaning (the ladder's
+   * "close the image preview" rung): this input's listener runs before
+   * Chat's, and the prompt is NOT inert under a caret preview.
+   */
+  caretPreviewOpen?: boolean
+  onDismissCaretPreview?(): void
 }
 
 /**
@@ -470,7 +485,9 @@ export function PromptInput({
   onBackgroundRequest,
   backgroundAgentsNeedingInput,
   controllerRef,
-  onPreviewImage,
+  onCaretImage,
+  caretPreviewOpen = false,
+  onDismissCaretPreview,
 }: PromptInputProps) {
   const [themeName] = useTheme()
   // Raw stdout writer for OSC 52 clipboard writes (selection copy) — must
@@ -840,6 +857,47 @@ export function PromptInput({
     cursorRef.current = snapped
     setCursor(snapped)
   }
+
+  /**
+   * The staged image the caret is on: a token whose start or end is the
+   * caret (start wins when two tokens touch). Undefined for a raw or stale
+   * token.
+   */
+  const caretImageAt = (
+    text: string,
+    offset: number,
+  ): { image: TranscriptImage; title: string } | undefined => {
+    const spans = boundImageSpans(text)
+    const span = spans.find(s => s.start === offset) ?? spans.find(s => s.end === offset)
+    if (span === undefined) return undefined
+    const stageId = draftImagesRef.current.get(span.token)
+    const image = stageId === undefined ? undefined : channel.stagedImage(stageId)
+    return image === undefined ? undefined : { image, title: span.token.slice(1, -1) }
+  }
+  const onCaretImageRef = React.useRef(onCaretImage)
+  onCaretImageRef.current = onCaretImage
+  const lastCaretImageRef = React.useRef<{ image: TranscriptImage | undefined; title: string | undefined }>(
+    { image: undefined, title: undefined },
+  )
+  /** Tell the caller which staged image the caret is on. `'caret'` reports
+   *  only changes; `'click'` always reports (see onCaretImage). */
+  const reportCaretImage = (reason: 'caret' | 'click'): void => {
+    const report = onCaretImageRef.current
+    if (report === undefined) return
+    const found = suspended ? undefined : caretImageAt(valueRef.current, cursorRef.current)
+    const last = lastCaretImageRef.current
+    if (reason === 'caret' && last.image === found?.image && last.title === found?.title) return
+    lastCaretImageRef.current = { image: found?.image, title: found?.title }
+    report(found?.image, found?.title, reason)
+  }
+  // After every commit: the caret, the text and the staged map are all
+  // settled by then, and a no-change report is skipped.
+  React.useEffect(() => { reportCaretImage('caret') })
+  React.useEffect(() => () => {
+    if (lastCaretImageRef.current.image !== undefined) {
+      onCaretImageRef.current?.(undefined, undefined, 'caret')
+    }
+  }, [])
 
   /** Fold-block state + a synchronous mirror (setInput reads the ref).
    *  Creating a block also drags a caret that sits inside it out to the
@@ -1453,6 +1511,15 @@ export function PromptInput({
     const value = valueRef.current
     const cursor = cursorRef.current
     const selection = selectionRef.current
+
+    // ── caret-driven image preview ──────────────────────────────────────
+    // Esc dismisses the preview the caret opened, before any other Esc
+    // meaning (help stays above it: the help menu is modal over the prompt).
+    if (key.escape && caretPreviewOpen && !helpOpen) {
+      event?.stopImmediatePropagation()
+      onDismissCaretPreview?.()
+      return
+    }
 
     // ── mouse selection (drag / Shift+click / double-click) ─────────────
     // Layered ahead of the fold-block rules: with an active selection, Esc
@@ -2939,11 +3006,12 @@ export function PromptInput({
    * value box starts at the line-number gutter, so its callers subtract
    * the gutter width (0 for the inline prompt).
    */
-  /** Open the shared image preview when a plain click lands on a staged
-   *  `[Image #N]` token the channel still knows. Offsets come from the
-   *  input's own click-to-cursor mapping, never from screen coordinates. */
+  /** A plain click on a `[Image #N]` token: a staged one is reported as the
+   *  caret image (the caret was just placed at its start, so the caller
+   *  shows the preview even if it was dismissed); a stale one warns.
+   *  Offsets come from the input's own click-to-cursor mapping, never from
+   *  screen coordinates. */
   const openStagedImageAt = (offset: number): void => {
-    if (onPreviewImage === undefined) return
     syncImageGeneration()
     for (const match of valueRef.current.matchAll(COMPOSER_IMAGE_TOKEN)) {
       const start = match.index ?? 0
@@ -2953,11 +3021,13 @@ export function PromptInput({
         const image = stageId === undefined ? undefined : channel.stagedImage(stageId)
         if (image === undefined) {
           // Evicted by the FIFO cap or cleared by a session switch: the
-          // placeholder text will NOT attach an image on submit.
-          channel.notify(t('input-image-token-stale', { token: match[0] }), { color: 'warning', timeoutMs: 5000 })
+          // placeholder text will NOT attach an image on submit. A raw
+          // token (never staged) is plain text and gets no notice.
+          if (stageId !== undefined) {
+            channel.notify(t('input-image-token-stale', { token: match[0] }), { color: 'warning', timeoutMs: 5000 })
+          }
         } else {
-          // `[Image #2]` → `Image #2`: the card's title leads with the token.
-          onPreviewImage(image, match[0].slice(1, -1))
+          reportCaretImage('click')
         }
         return
       }
