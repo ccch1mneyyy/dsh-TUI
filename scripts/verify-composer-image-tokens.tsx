@@ -274,7 +274,45 @@ click(p5.col + 3, p5.row)
 check('click: clicking a staged token opens the preview and selects the token',
   await settled(() => text().includes(' — PNG · ') && wholeInverse(p5, t5)), text())
 stdin.write('\x1b')
-await settled(() => !text().includes(' — PNG · '))
+check('peek: Esc dismisses the caret preview',
+  await settled(() => !text().includes(' — PNG · ')), text())
+const previewOpen = (): boolean => text().includes(' — PNG · ')
+const title5 = t5.slice(1, -1)
+
+// Dismissed for THIS token: its end is still the same token.
+stdin.write(RIGHT)
+await sleep(200)
+check('peek: after Esc the token stays dismissed at its other edge',
+  !previewOpen() && inverseAt(p5.col + t5.length, p5.row), text())
+// Leaving resets the dismissal; ← back onto the end re-shows it (both
+// edges count, as in Grok Build).
+stdin.write(RIGHT)
+await sleep(120)
+stdin.write(LEFT)
+check('peek: ← onto the token end shows its preview again',
+  await settled(() => previewOpen() && text().includes(title5)), text())
+stdin.write(LEFT)
+check('peek: ← to the token start keeps the preview and selects the token',
+  await settled(() => previewOpen() && wholeInverse(p5, t5)), text())
+// The keyboard stays with the prompt while the preview is up: typing at
+// the token's start inserts before it, and the caret is still on the token.
+stdin.write('x')
+check('peek: typing before the token keeps the caret on it and the preview open',
+  await settled(() => text().includes(`x${t5}`) && previewOpen()), text())
+const p5x = find(t5)!
+stdin.write(LEFT)
+check('peek: ← off the token closes the preview (arrows keep moving the caret)',
+  await settled(() => !previewOpen() && inverseAt(p5x.col - 1, p5x.row)), text())
+stdin.write(RIGHT)
+check('peek: → back onto the token reopens it',
+  await settled(() => previewOpen() && wholeInverse(p5x, t5)), text())
+stdin.write('\x1b')
+await settled(() => !previewOpen())
+click(p5x.col + 3, p5x.row)
+check('peek: a click on a dismissed token shows its preview again',
+  await settled(() => previewOpen() && wholeInverse(p5x, t5)), text())
+stdin.write('\x1b')
+await settled(() => !previewOpen())
 
 // A raw token with no capability is ordinary text: ← steps inside it and
 // it takes the text colour.

@@ -89,9 +89,12 @@ export type ChatOverlay =
    */
   | { kind: 'file-actions'; path: string; index: number; isDir: boolean }
   /**
-   * Modal image preview: opened by clicking a staged `[Image #N]` token in
-   * the composer or a transcript thumbnail. Renders as its own centered
-   * layer (not inside `<OverlayAbove>`); Esc / click-outside closes.
+   * Modal image preview: opened by clicking a transcript thumbnail. Renders
+   * as its own centered layer (not inside `<OverlayAbove>`); Esc /
+   * click-outside closes. The composer's caret-driven preview (the caret on
+   * a staged `[Image #N]`) is NOT an overlay: it is derived state in Chat,
+   * shows only while this union is `none`, and leaves the keyboard with the
+   * prompt.
    */
   | { kind: 'image-preview'; image: TranscriptImage; title?: string }
 
