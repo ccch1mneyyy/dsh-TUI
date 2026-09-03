@@ -2621,6 +2621,19 @@ export function Chat({
       event.stopImmediatePropagation()
       return
     }
+    // Shift+Tab is a Chat-level session action, but every modal/overlay owns
+    // that key. Stop propagation before PromptInput's handler so a picker or
+    // dialog cannot cycle the session mode behind its visible focus.
+    if (key.tab && key.shift && (
+      helpOpen
+      || overlay.kind !== 'none'
+      || questionSnapshot !== null
+      || approvalSnapshot !== null
+      || dialogSnapshot !== null
+    )) {
+      event.stopImmediatePropagation()
+      return
+    }
     // Help is modal over Chat. Chat's listener registers before PromptInput's,
     // so yield every remaining key before any global/custom shortcut, search,
     // selection, or working-turn cancellation branch can mutate hidden state.

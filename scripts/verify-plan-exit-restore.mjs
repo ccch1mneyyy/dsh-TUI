@@ -41,7 +41,7 @@ function fold(events, type, key) {
  * dsh-session-faithful reentrancy guard: append() throws when called while
  * an earlier append is still publishing to the session/event handler.
  */
-function makeEnv({ withApproval = true, noopApproval = false, deferredPlan = false, history = [] } = {}) {
+function makeEnv({ withApproval = true, noopApproval = false, deferredPlan = false, withPermission = false, history = [] } = {}) {
   const commands = []
   const approvalPolicies = []
   const appended = []
@@ -52,11 +52,35 @@ function makeEnv({ withApproval = true, noopApproval = false, deferredPlan = fal
   let reentrantAppends = 0
   const services = {
     planMode: { get: () => ({ pending: pendingPlan }) },
+    ...(withPermission
+      ? {
+          permissionPresets: {
+            names: ['read-only', 'auto', 'workspace-write'],
+            entries: new Map([
+              ['read-only', { value: 'read-only', name: 'Read only', description: 'No writes' }],
+              ['auto', { value: 'auto', name: 'Auto', description: 'Automatic policy' }],
+              ['workspace-write', { value: 'workspace-write', name: 'Workspace write', description: 'Write in workspace' }],
+            ]),
+            current(log) {
+              let value = 'auto'
+              for (const event of log) {
+                if (event.type === 'permission/preset' && typeof event.data?.preset === 'string') value = event.data.preset
+              }
+              return value
+            },
+            optionOf(name) {
+              return this.entries.get(name)
+            },
+          },
+        }
+      : {}),
     commands: {
       list: () => [],
-      find: (_agent, name) => name === 'plan'
-        ? { name: 'plan', description: 'Toggle plan mode', handler() {} }
-        : undefined,
+      find: (_agent, name) => {
+        if (name === 'plan') return { name: 'plan', description: 'Toggle plan mode', handler() {} }
+        if (withPermission && name === 'permission') return { name: 'permission', description: 'Set permission preset', handler() {} }
+        return undefined
+      },
       execute: async (agent, line, _signal) => {
         commands.push(line)
         if (line.startsWith('/plan')) {
@@ -65,6 +89,22 @@ function makeEnv({ withApproval = true, noopApproval = false, deferredPlan = fal
           agent.session.append('command/run', { commandId, name: 'plan', args: active ? '' : 'off' })
           if (deferredPlan) pendingPlan = active
           else agent.session.append('plan/mode', { active })
+          agent.session.append('command/done', { commandId, kind: 'success' })
+          return { result: { text: 'ok' } }
+        }
+        if (withPermission && line.startsWith('/permission ')) {
+          const preset = line.slice('/permission '.length).trim()
+          if (!['read-only', 'auto', 'workspace-write'].includes(preset)) return { result: { text: 'unknown permission' } }
+          const commandId = `command-${commands.length}`
+          agent.session.append('command/run', { commandId, name: 'permission', args: preset })
+          agent.session.append('permission/preset', { preset })
+          if (preset === 'read-only') {
+            agent.session.append('sandbox/mode', { mode: 'read-only' })
+            agent.session.append('approval/policy', { policy: 'ask' })
+          } else if (preset === 'workspace-write') {
+            agent.session.append('sandbox/mode', { mode: 'workspace-write' })
+            agent.session.append('approval/policy', { policy: 'ask' })
+          }
           agent.session.append('command/done', { commandId, kind: 'success' })
           return { result: { text: 'ok' } }
         }
@@ -443,6 +483,34 @@ for (const resume of [false, true]) {
     fold(env.events, 'sandbox/mode', 'mode'),
   )
   check('reconciled session leaves the plan indicator', channel.mode.id !== 'plan', channel.mode.id)
+}
+
+// Dynamic permission identity is canonicalized only after the original
+// pre-plan sandbox/approval bundle has been captured, then restored without
+// reintroducing the old dynamic identity.
+{
+  const env = makeEnv({
+    withPermission: true,
+    history: [
+      { type: 'sandbox/mode', seq: 1, time: Date.now(), data: { mode: 'workspace-write' } },
+      { type: 'approval/policy', seq: 2, time: Date.now(), data: { policy: 'ask' } },
+      { type: 'permission/preset', seq: 3, time: Date.now(), data: { preset: 'auto' } },
+    ],
+  })
+  const channel = createChannel(env.ctx, env.agent, { ...baseOptions, modes: [
+    { id: 'plan', plan: true, sandbox: 'read-only', approval: 'ask' },
+    { id: 'default', plan: false, sandbox: 'workspace-write', approval: 'ask' },
+  ] })
+  check('dynamic permission mode is visible before plan', channel.mode.permission === 'auto', channel.mode.id)
+  await channel.cycleMode()
+  check('dynamic to plan uses the official permission command', env.commands.includes('/permission read-only'), JSON.stringify(env.commands))
+  check('dynamic to plan captures the plan target', channel.mode.id === 'plan', channel.mode.id)
+  env.agent.session.append('plan/mode', { active: false })
+  await settleMicrotasks()
+  check('dynamic plan exit restores the original sandbox', fold(env.events, 'sandbox/mode', 'mode') === 'workspace-write')
+  check('dynamic plan exit restores the original approval', fold(env.events, 'approval/policy', 'policy') === 'ask')
+  check('dynamic plan exit keeps the canonical identity', fold(env.events, 'permission/preset', 'preset') === 'read-only')
+  check('dynamic plan exit returns to the static mode', channel.mode.id === 'default', channel.mode.id)
 }
 
 process.exit(failed)

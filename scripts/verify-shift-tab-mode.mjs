@@ -97,6 +97,14 @@ check('second backtab cycles again', channel.cycled.length === 2, JSON.stringify
 stdin.write('\t')
 await sleep(300)
 check('plain Tab does not cycle the mode', channel.cycled.length === 2, JSON.stringify(channel.cycled.length))
+
+// Fullscreen draft editor: Ctrl+Shift+E opens the cover, but Shift+Tab must
+// still reach the mode cycle instead of being swallowed as indentation.
+stdin.write('\x1b[69;6u')
+await sleep(250)
+stdin.write('\x1b[Z')
+await sleep(300)
+check('fullscreen backtab cycles the session mode', channel.cycled.length === 3, JSON.stringify(channel.cycled.length))
 instance.unmount()
 
 process.exit(failed)

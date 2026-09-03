@@ -10,7 +10,7 @@
 | `Tab` | 补全 `/` 命令或 `@` 文件；模型工作且输入非空时排入当前回合之后的 follow-up |
 | `Ctrl+Enter` | 打断当前回合并立即处理输入消息 |
 | `Shift+Enter` / `Ctrl+J` | 在光标处插入换行；终端无法上报 Shift 修饰键时可用 `Ctrl+J`（LF）兜底，macOS Terminal.app 用 `Option+Enter` |
-| `Shift+Tab` | 在配置的会话模式间循环（默认：默认 → 计划模式 → 完全访问） |
+| `Shift+Tab` | 在配置的会话模式间循环（默认：默认 → 计划模式 → 完全访问）；运行时可用的第三方 permission preset 按 registry 顺序追加到循环末尾，`custom`/`status`、canonical 预设、重复 identity 和不安全 token 不加入 |
 | `Alt/Option+Up` | 把最后一条尚未处理的消息取回输入框编辑 |
 | `Up/Down` | 菜单选择；普通输入中浏览历史或在多行文本间移动 |
 | `Ctrl+V` / `Alt+V` | 从系统剪贴板插入文本或文件；图片作为持久附件发送。终端拦截 `Ctrl+V` 时用 `Alt+V` |
@@ -34,9 +34,7 @@
 transcript 模式中打开会话全文搜索。全文搜索使用 `n`/`N` 在结果间前后跳转。
 
 插件可以经 `tuiShortcuts` 接缝注册额外组合键（必须带 Ctrl 或 Alt）；内建绑定
-永远优先，冲突的组合在注册时就会被拒绝。插件弹出的托管对话框
-（select/confirm/input）打开期间独占键盘：`↑`/`↓` 移动、`Enter` 确认、
-`Esc` 取消；插件在状态行（提示框上方）也可能有纯展示的贡献文本。
+永远优先，冲突的组合在注册时就会被拒绝。插件弹出的托管对话框（select/confirm/input）、帮助、权限选择器、审批/问题面板及其他 overlay 打开期间独占键盘；`Shift+Tab` 会被 modal guard 拦截，不穿透到背景会话模式。方向键移动、`Enter` 确认、`Esc` 取消；插件在状态行（提示框上方）也可能有纯展示的贡献文本。
 
 ## 输入编辑
 
@@ -92,8 +90,8 @@ Tab 会在进入编辑缓冲区时展开为空格。
   光标行号提亮）；光标行整行浅底色；标题行实时显示行数/字数，状态行显示
   `行 L · 列 C` 与 vim 徽标（`/vim` 开启时）。
 - **键位**：`Enter` 换行（绝不误发送）、`Ctrl+Enter` 或「⏎ 发送」按钮发送并
-  收起；`Esc` 分层（先清选区，再收起编辑器，草稿保留）；`Tab` 插入 4 空格
-  缩进；其余编辑键（方向/词跳/Home/End/Ctrl+U/K/W、vim NORMAL 键位）与
+  收起；`Esc` 分层（先清选区，再收起编辑器，草稿保留）；`Tab` 插入 4 空格缩进，
+  `Shift+Tab` 仍按全局模式循环；其余编辑键（方向/词跳/Home/End/Ctrl+U/K/W、vim NORMAL 键位）与
   输入框一致。**折叠块互斥**：收起态粘贴大文本照旧折叠成 chip；编辑器一旦
   展开块即散开（与点击 chip 展开同语义），展开期间粘贴一律是纯文本、直接
   可编辑，收起后也不会再变回块。
@@ -420,7 +418,7 @@ dsh-TUI 不预装通用技能；技能内容与发现规则由 DSH 及当前组�
 - `/effort` 打开推理强度滑杆（←/→ 实时调整）；`/effort <id>` 直接设定，
   `/effort status` 查看当前档位。
 - `/theme <name>` 与 `/theme status` 见主题文档。
-- `/permission` 的名册来自 DSH `permissionPresets` registry，按声明顺序显示并参与补全；第三方预设无需 TUI 硬编码，`custom` 只显示当前态，不是可选目标。registry 服务缺失时 TUI 使用三项 legacy 兼容名册；服务已挂载但损坏、为空或不一致时标记 unavailable 并 fail closed。若外部 `/permission` 命令未注册，输入沿用现有默认命令/model dispatch。
+- `/permission` 的名册来自 DSH `permissionPresets` registry，按声明顺序显示并参与补全；符合 command-token 语法的第三方预设会追加到显式/默认会话模式末尾并进入 `Shift+Tab` 循环，后续刷新保留已见 identity 的相对顺序。`custom`、`status`、canonical 预设、重复 identity 和不安全 token 严格排除；每次切换调用官方 `/permission <preset>` 并回读当前 identity 验证。registry 服务缺失时 TUI 使用三项 legacy 兼容名册；服务已挂载但损坏、为空或不一致时标记 unavailable 并 fail closed。若外部 `/permission` 命令未注册，输入沿用现有默认命令/model dispatch。
 - `/lang` 切换中英界面语言（见「界面语言」）。
 - `/compact` 压缩会话历史；minimal preset（仅 bash+编辑器）下不可用。
 - `/thinking` 扩展思考显示开关，仅本次界面状态、**不持久化**。

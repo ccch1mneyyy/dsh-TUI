@@ -127,8 +127,10 @@ export interface Config {
   shortcuts?: Partial<Record<ShortcutActionId, string>>
   /** Shift+Tab session-mode cycle (array order IS the cycle order; index 0
    *  is the unmarked base mode). Each entry bundles any subset of the
-   *  `plan`/`sandbox`/`approval` atoms; absent → the built-in
-   *  default/plan/full cycle (see sessionModes.ts). */
+   *  `plan`/`sandbox`/`approval` atoms or a durable `permission` identity;
+   *  absent → the built-in default/plan/full cycle (see sessionModes.ts).
+   *  `permission` may be combined with `plan`, but not with
+   *  `sandbox`/`approval`. */
   modes?: SessionModeSpec[]
 }
 
@@ -195,6 +197,7 @@ export const Config: Schema<Config> = Schema.object({
       plan: Schema.boolean().required(false),
       sandbox: Schema.union(['read-only', 'workspace-write', 'danger-full-access']).required(false),
       approval: Schema.union(['ask', 'never']).required(false),
+      permission: Schema.string().required(false),
     }),
   ).required(false),
 })

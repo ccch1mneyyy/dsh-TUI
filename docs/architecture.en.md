@@ -139,9 +139,12 @@ mounted by `cordis.patch.yml`:
   access and should be treated as code-execution surfaces in the same policy
   domain.
 - `/permission` reads the mounted DSH `permissionPresets` registry in declared
-  order. Third-party presets appear in the picker automatically; only IDs that
-  fit the existing command-token grammar enter Tab completion. `custom` is a
-  current-state projection, never a selectable target.
+  order. Third-party presets are appended after configured/default session modes
+  and enter the `Shift+Tab` cycle; only IDs that fit the existing command-token
+  grammar enter completion. First observation follows registry order, while later
+  refreshes preserve the relative order of identities already seen. `custom`,
+  `status`, canonical presets, duplicate identities, and unsafe tokens are
+  strictly excluded. `custom` is a current-state projection, never a target.
 - The TUI distinguishes `runtime`, `legacy`, and `unavailable`: the legacy
   three-row roster is used only when the service is truly absent. A mounted
   service that is empty, inconsistent, broken, or unsafe fails closed instead

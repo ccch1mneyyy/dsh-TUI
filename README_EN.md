@@ -197,6 +197,7 @@ For migration from the former `dsh-cc-tui` package and `cc-tui` profile, see
 | `Ctrl+Enter` (⌘Enter) | **Interrupt the current turn and send immediately** (interrupt) |
 | `Alt+Up` | Pull the last unhandled message back into the input for editing (without interrupting the turn) |
 | `Tab` | Complete `/` commands or `@` files (keep drilling into directories); **while the model is working = follow-up** (queued after the current turn) |
+| `Shift+Tab` | Cycle configured session modes; runtime permission presets are appended after the configured/default modes in stable registry order and use the official `/permission <preset>` command |
 | `Ctrl+C` | Interrupt the current turn; press again while the interrupt is still settling to force-exit; press twice while idle to exit; **with an active mouse selection in the prompt, copies it to the clipboard and keeps it** |
 | `Esc` | Close the command/file menu; **with an active selection in the prompt: only clears the selection**; double-press while idle clears the input; **double-press on empty input = time rewind** |
 | `←` (empty input) | **Background this session and open the agent view** (CC agent view; with text, ← moves the caret as usual) |
@@ -509,10 +510,14 @@ responsible for their maintenance and security.
 `dsh-TUI` does not implement a separate sandbox. It uses the filesystem,
 shell, sandbox, and approval policies of the active DSH profile. Permission
 presets come from the mounted DSH `permissionPresets` registry: third-party
-presets appear automatically in the picker in registry order, while only IDs
-accepted by the existing command-token grammar enter completion. `custom` is a
-current-state label only, never a selectable target. Switching always uses the
-official `/permission <preset>` command.
+presets appear automatically in the picker in registry order. IDs accepted by
+the existing command-token grammar enter both completion and the `Shift+Tab`
+cycle; runtime presets are appended after configured/default modes, with later
+refreshes preserving the relative order of identities already seen. `custom`,
+`status`, canonical presets, duplicate identities, and unsafe tokens are
+strictly excluded. Switching always uses the official `/permission <preset>`
+command and verifies the resulting current identity; the TUI never fabricates
+permission events.
 When the `permissionPresets` service is absent, TUI keeps its legacy three-row
 compatibility roster. A mounted but unusable service is marked unavailable and
 fails closed instead of inventing a roster. If the external `/permission` command

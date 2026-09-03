@@ -10,7 +10,7 @@
 | `Tab` | Complete a `/` command or `@` file; while the model is working, queue non-empty input as a post-turn follow-up |
 | `Ctrl+Enter` | Interrupt the running turn and process the input immediately |
 | `Shift+Enter` / `Ctrl+J` | Insert a newline at the caret; `Ctrl+J` (LF) is the fallback when the terminal cannot report the Shift modifier; macOS Terminal.app uses `Option+Enter` |
-| `Shift+Tab` | Cycle the configured session modes (default: default → plan → full-access) |
+| `Shift+Tab` | Cycle configured session modes (default: default → plan → full-access); available third-party permission presets are appended in registry order, excluding `custom`/`status`, canonical presets, duplicate identities, and unsafe tokens |
 | `Alt/Option+Up` | Pull the latest undelivered message back into the editor |
 | `Up/Down` | Select menu items; in ordinary input, browse history or move through multiline text |
 | `Ctrl+V` / `Alt+V` | Insert clipboard text or files; images are sent as durable attachments. Use `Alt+V` when the terminal intercepts `Ctrl+V` |
@@ -36,8 +36,10 @@ move forward and backward through matches.
 
 Plugins may register additional combos through the `tuiShortcuts` seam (they
 must carry Ctrl or Alt); built-in bindings always win and conflicting combos
-are refused at registration. A managed plugin dialog (select/confirm/input)
-owns the keyboard while open: `↑`/`↓` to move, `Enter` to confirm, `Esc` to
+are refused at registration. A managed plugin dialog (select/confirm/input), help, permission picker,
+approval/question panel, or other overlay owns the keyboard while open.
+`Shift+Tab` is blocked by the modal guard and never reaches the background
+session-mode cycle. Use `↑`/`↓` to move, `Enter` to confirm, and `Esc` to
 cancel. Plugins may also contribute display-only text to the status line
 above the prompt.
 
@@ -103,8 +105,8 @@ points (the `⛶` affordance and the shortcut) then disappear.
   shows `Ln L, Col C` plus the vim badge (when `/vim` is on).
 - **Keys**: `Enter` inserts a newline (never mis-sends), `Ctrl+Enter` or
   the `⏎ Send` button sends and collapses; `Esc` is layered (clear the
-  selection first, then collapse keeping the draft); `Tab` inserts a
-  4-space indent; every other editing key (arrows, word jumps, Home/End,
+  selection first, then collapse keeping the draft); `Tab` inserts a 4-space
+  indent, while `Shift+Tab` still cycles session modes; every other editing key (arrows, word jumps, Home/End,
   Ctrl+U/K/W, vim NORMAL keys) matches the inline prompt. **Fold blocks are
   mutually exclusive with it**: a big paste still folds into a chip while
   collapsed, but expanding the editor unfolds it (same semantics as
@@ -478,7 +480,7 @@ Additional forms:
 - `/effort` opens the reasoning-effort slider (←/→ adjusts live);
   `/effort <id>` sets a level directly; `/effort status` reports the current one.
 - `/theme <name>` and `/theme status` are described in the theme guide.
-- `/permission` reads the DSH `permissionPresets` registry, preserving registry order for the picker and completion. Third-party presets need no TUI hard-coding; `custom` is a current-state label only, never a selectable target. When the registry service is absent, TUI uses its legacy three-row compatibility roster; a mounted but broken service is unavailable and fails closed. If the external `/permission` command is not registered, input follows the existing default/model dispatch path.
+- `/permission` reads the DSH `permissionPresets` registry, preserving registry order for the picker and completion. Third-party presets need no TUI hard-coding: IDs accepted by the command-token grammar are appended after configured/default session modes and enter the `Shift+Tab` cycle; later refreshes preserve the relative order of identities already seen. `custom`, `status`, canonical presets, duplicate identities, and unsafe tokens are strictly excluded. Every switch calls the official `/permission <preset>` command and verifies the current identity. When the registry service is absent, TUI uses its legacy three-row compatibility roster; a mounted but broken service is unavailable and fails closed. If the external `/permission` command is not registered, input follows the existing default/model dispatch path.
 - `/lang` toggles the interface language (see “Interface language”).
 - `/compact` compresses the session history; unavailable under the minimal
   preset (bash + editor only).

@@ -78,7 +78,7 @@ import { extractMentions } from '../utils/mentions.js'
 import { getLang, LANGS, t, tOr, type Lang } from '../i18n.js'
 import { AUTO_THEME_NAME } from '../theme.js'
 import { listThemeCatalog } from '../themeCatalog.js'
-import { modeDisplayName, resolveSessionModes, type SessionModeSpec } from '../sessionModes.js'
+import { modeDisplayName, resolveSessionModes, stablePermissionRosterOrder, type SessionModeSpec } from '../sessionModes.js'
 import { normalizePageMargin, normalizeScrollGutter, normalizeStatusBar, normalizeToolBackground, type PageMarginSetting, type ScrollGutterMode, type StatusBarConfig, type ToolBackground } from '../tuiDisplayPrefs.js'
 import { SubagentActivityStore, type SubagentState } from './subagents.js'
 export type { SubagentState } from './subagents.js'
@@ -195,6 +195,7 @@ function normalizeRewindPromptDecision(
 const NOTICE_CELLS = 200
 
 const PERMISSION_PRESET_CUSTOM = 'custom'
+const CANONICAL_PERMISSION_PRESETS = new Set(['read-only', 'workspace-write', 'danger-full-access'])
 const PERMISSION_PRESET_NAME_CELLS = 120
 const PERMISSION_PRESET_DESCRIPTION_CELLS = 400
 
@@ -231,17 +232,30 @@ function legacyPermissionPresetOptions(): readonly PermissionPresetOption[] {
 function legacyPermissionPresetSnapshot(sandbox: SessionModeSpec['sandbox']): PermissionPresetSnapshot {
   const options = legacyPermissionPresetOptions()
   const currentOption = sandbox === undefined ? undefined : options.find(option => option.value === sandbox)
-  return {
+  return freezePermissionPresetSnapshot({
     availability: 'legacy',
     options,
     ...(currentOption === undefined
       ? {}
       : { current: { ...currentOption, kind: 'preset' as const } }),
-  }
+  })
 }
 
 function unavailablePermissionPresetSnapshot(): PermissionPresetSnapshot {
-  return { availability: 'unavailable', options: [] }
+  return freezePermissionPresetSnapshot({ availability: 'unavailable', options: [] })
+}
+
+/** Keep a permission roster read-only after it crosses the adapter boundary.
+ * The registry may reuse and mutate its option objects between reads; callers
+ * must observe one stable snapshot instead of a live view into that service. */
+function freezePermissionPresetSnapshot(snapshot: PermissionPresetSnapshot): PermissionPresetSnapshot {
+  const options = Object.freeze(snapshot.options.map(option => Object.freeze({ ...option })))
+  const current = snapshot.current === undefined ? undefined : Object.freeze({ ...snapshot.current })
+  return Object.freeze({
+    availability: snapshot.availability,
+    options,
+    ...(current === undefined ? {} : { current }),
+  })
 }
 
 function normalizePermissionPresetOption(value: unknown): PermissionPresetOption | undefined {
@@ -268,10 +282,8 @@ function permissionPresetSnapshotFromService(
   const runtime = service as PermissionPresetService
   try {
     const capturedNames = runtime.names
-    const current = runtime.current
-    const optionOf = runtime.optionOf
     if (!Array.isArray(capturedNames) || capturedNames.length === 0) return unavailablePermissionPresetSnapshot()
-    if (typeof current !== 'function' || typeof optionOf !== 'function') return unavailablePermissionPresetSnapshot()
+    if (typeof runtime.current !== 'function' || typeof runtime.optionOf !== 'function') return unavailablePermissionPresetSnapshot()
 
     const names = [...capturedNames]
     const seen = new Set<string>()
@@ -284,16 +296,16 @@ function permissionPresetSnapshotFromService(
 
     const options: PermissionPresetOption[] = []
     for (const name of names) {
-      const option = normalizePermissionPresetOption(optionOf(name))
+      const option = normalizePermissionPresetOption(runtime.optionOf(name))
       if (option === undefined || option.value !== name) return unavailablePermissionPresetSnapshot()
       options.push({ ...option })
     }
 
-    const currentValue = current(events)
+    const currentValue = runtime.current(events)
     if (typeof currentValue !== 'string' || (currentValue !== PERMISSION_PRESET_CUSTOM && !seen.has(currentValue))) {
       return unavailablePermissionPresetSnapshot()
     }
-    const currentOption = normalizePermissionPresetOption(optionOf(currentValue))
+    const currentOption = normalizePermissionPresetOption(runtime.optionOf(currentValue))
     if (currentOption === undefined || currentOption.value !== currentValue) return unavailablePermissionPresetSnapshot()
     if (currentValue !== PERMISSION_PRESET_CUSTOM) {
       const rosterOption = options.find(option => option.value === currentValue)
@@ -306,14 +318,14 @@ function permissionPresetSnapshotFromService(
       }
     }
 
-    return {
+    return freezePermissionPresetSnapshot({
       availability: 'runtime',
       options,
       current: {
         ...currentOption,
         kind: currentValue === PERMISSION_PRESET_CUSTOM ? 'custom' : 'preset',
       },
-    }
+    })
   } catch {
     return unavailablePermissionPresetSnapshot()
   }
@@ -2380,12 +2392,83 @@ export function createChannel(
   const rendererRuntime = getHostRenderers(ctx.get('tuiRenderers') as TuiRendererRuntime | undefined)
   // Shift+Tab session-mode cycle: cordis.yml `modes` wins; absent/empty/
   // atom-less → the built-in default/plan/full cycle (sessionModes.ts).
-  const { modes: sessionModes, dropped: droppedModeIds } = resolveSessionModes(options.modes)
+  const { modes: configuredSessionModes, dropped: droppedModeIds } = resolveSessionModes(options.modes)
   if (droppedModeIds.length > 0) {
     ctx.logger.warn(
-      `dsh-tui: session modes ${droppedModeIds.map(id => `"${id}"`).join(', ')} declare no plan/sandbox/approval atom; dropped from the Shift+Tab cycle`,
+      `dsh-tui: session modes ${droppedModeIds.map(id => `"${id}"`).join(', ')} declare no plan/sandbox/approval/permission atom; dropped from the Shift+Tab cycle`,
     )
   }
+  const conflictingModeIds = (options.modes ?? [])
+    .filter(spec => spec.permission !== undefined && (spec.sandbox !== undefined || spec.approval !== undefined))
+    .map(spec => spec.id)
+  if (conflictingModeIds.length > 0) {
+    ctx.logger.warn(
+      `dsh-tui: session modes ${conflictingModeIds.map(id => `"${id}"`).join(", ")} declare permission with sandbox/approval; dropped from the Shift+Tab cycle`,
+    )
+  }
+  let sessionModes: readonly SessionModeSpec[] = configuredSessionModes
+  const warnedPermissionModeEntries = new Set<string>()
+  // The registry is authoritative on first observation. Later rebuilds retain
+  // that relative order so unrelated command-registry churn cannot reshuffle
+  // Shift+Tab; removed values drop out and a future re-add is new again.
+  const runtimePermissionModeOrder = new WeakMap<object, readonly string[]>()
+  const readRuntimePermissionSnapshot = (target: Agent): PermissionPresetSnapshot | undefined => {
+    let service: unknown
+    try {
+      service = ctx.get('permissionPresets')
+    } catch {
+      return undefined
+    }
+    if (service === undefined) return undefined
+    const snapshot = permissionPresetSnapshotFromService(service, target.session.events)
+    return snapshot.availability === 'runtime' ? snapshot : undefined
+  }
+  const rebuildSessionModes = (target: Agent): void => {
+    const snapshot = readRuntimePermissionSnapshot(target)
+    let hasPermissionCommand = false
+    try {
+      hasPermissionCommand = commandService?.find(target, 'permission') !== undefined
+    } catch {
+      hasPermissionCommand = false
+    }
+    const dynamic: SessionModeSpec[] = []
+    const seen = new Set(
+      configuredSessionModes.flatMap(spec => spec.permission === undefined ? [] : [spec.permission]),
+    )
+    const candidates = new Map<string, PermissionPresetOption>()
+    if (snapshot !== undefined && hasPermissionCommand) {
+      for (const option of snapshot.options) {
+        let reason: string | undefined
+        if (option.value === PERMISSION_PRESET_CUSTOM || option.value === 'status') reason = 'reserved sentinel'
+        else if (CANONICAL_PERMISSION_PRESETS.has(option.value)) reason = 'canonical preset'
+        else if (!isCommandCompletionToken(option.value)) reason = 'unsafe command token'
+        else if (seen.has(option.value)) reason = 'duplicate identity'
+        if (reason !== undefined) {
+          const key = `${String(target.id)}:${option.value}:${reason}`
+          if (!warnedPermissionModeEntries.has(key)) {
+            warnedPermissionModeEntries.add(key)
+            ctx.logger.warn(`dsh-tui: permission preset "${option.value}" skipped from Shift+Tab (${reason})`)
+          }
+          continue
+        }
+        seen.add(option.value)
+        candidates.set(option.value, option)
+      }
+    }
+    const order = stablePermissionRosterOrder(
+      runtimePermissionModeOrder.get(target.session) ?? [],
+      [...candidates.keys()],
+    )
+    runtimePermissionModeOrder.set(target.session, order)
+    for (const value of order) {
+      const option = candidates.get(value)
+      if (option !== undefined) {
+        dynamic.push({ id: `permission:${option.value}`, label: option.name, permission: option.value })
+      }
+    }
+    sessionModes = [...configuredSessionModes, ...dynamic]
+  }
+  rebuildSessionModes(agent)
   const listeners = new Set<() => void>()
   /** True while a frame-aligned stream notification is pending (emitStream). */
   let streamNotifyScheduled = false
@@ -3121,12 +3204,32 @@ export function createChannel(
     }
     return policy
   }
+  const foldPermissionPreset = (events: readonly SessionEvent[]): string | undefined => {
+    let preset: string | undefined
+    for (const event of events) {
+      if ((event as { type: string }).type !== 'permission/preset') continue
+      const value = (event.data as unknown as { preset?: unknown }).preset
+      if (typeof value === 'string') preset = value
+    }
+    return preset
+  }
 
   /** First configured mode whose declared atoms all match the folds;
    *  undeclared atoms are wildcards; no match → index 0 (the base mode).
    *  Matching is exact: a fresh session has no `approval/policy` event, so
    *  a mode declaring `approval: 'ask'` never falsely matches it. */
   const deriveModeIndex = (events: readonly SessionEvent[]): number => {
+    // A durable permission identity is stronger than the derived sandbox /
+    // approval atoms. This keeps a runtime preset (including one that happens
+    // to map to the same atoms) selected after resume or manual commands.
+    const permission = foldPermissionPreset(events)
+    if (permission !== undefined) {
+      const permissionIndex = sessionModes.findIndex(spec =>
+        spec.permission === permission
+        && (spec.plan === undefined || foldPlanActive(events) === spec.plan),
+      )
+      if (permissionIndex >= 0) return permissionIndex
+    }
     const index = sessionModes.findIndex(
       spec =>
         (spec.plan === undefined || foldPlanActive(events) === spec.plan) &&
@@ -3212,6 +3315,93 @@ export function createChannel(
     }
   }
 
+  const effectiveSandboxForMode = (
+    spec: SessionModeSpec,
+    session: Agent['session'],
+  ): SessionModeSpec['sandbox'] | undefined => {
+    if (spec.sandbox !== undefined) return spec.sandbox
+    const folded = foldSandboxMode(session.events)
+    if (folded === 'read-only' || folded === 'workspace-write' || folded === 'danger-full-access') return folded
+    try {
+      const sandbox = ctx.get('sandboxPolicy') as { defaultMode?: unknown } | undefined
+      const value = sandbox?.defaultMode
+      if (value === 'read-only' || value === 'workspace-write' || value === 'danger-full-access') return value
+    } catch {
+      // Optional service; an unknown default means the target is not safely mappable.
+    }
+    return undefined
+  }
+
+  const effectiveApprovalForMode = (
+    spec: SessionModeSpec,
+    session: Agent['session'],
+  ): SessionModeSpec['approval'] | undefined => {
+    if (spec.approval !== undefined) return spec.approval
+    const folded = foldApprovalPolicy(session.events)
+    if (folded === 'ask' || folded === 'never') return folded
+    try {
+      const approval = ctx.get('approval') as
+        | { effectivePolicy?(s: Agent['session']): unknown; config?: { policy?: unknown } }
+        | undefined
+      const value = approval?.effectivePolicy?.(session) ?? approval?.config?.policy
+      if (value === 'ask' || value === 'never') return value
+    } catch {
+      // Optional service; an unknown default means the target is not safely mappable.
+    }
+    return undefined
+  }
+
+  const canonicalPermissionForMode = (
+    spec: SessionModeSpec,
+    session: Agent['session'],
+  ): string | undefined => {
+    const sandbox = effectiveSandboxForMode(spec, session)
+    const approval = effectiveApprovalForMode(spec, session)
+    if (sandbox === 'read-only' && approval === 'ask') return 'read-only'
+    if (sandbox === 'workspace-write' && approval === 'ask') return 'workspace-write'
+    if (sandbox === 'danger-full-access' && approval === 'never') return 'danger-full-access'
+    return undefined
+  }
+
+  const permissionSnapshotMatches = (target: string, requireRuntime: boolean): boolean => {
+    try {
+      const snapshot = state.permissionPresets()
+      return (!requireRuntime || snapshot.availability === 'runtime')
+        && snapshot.current?.kind === 'preset'
+        && snapshot.current.value === target
+    } catch {
+      return false
+    }
+  }
+
+  const applyPermissionIdentity = async (
+    target: string,
+    session: Agent['session'],
+    requireRuntime: boolean,
+  ): Promise<boolean> => {
+    let registered = false
+    try {
+      registered = commandService?.find(agent, 'permission') !== undefined
+    } catch {
+      registered = false
+    }
+    if (!registered) {
+      ctx.logger.warn('dsh-tui: permission mode "' + target + '" skipped because /permission is not registered')
+      return false
+    }
+    const result = await executeRegistryCommand('permission', ' ' + target)
+    if (session !== agent.session) return false
+    if (result === undefined) {
+      ctx.logger.warn('dsh-tui: permission mode "' + target + '" could not invoke /permission')
+      return false
+    }
+    if (!permissionSnapshotMatches(target, requireRuntime)) {
+      ctx.logger.warn('dsh-tui: permission mode "' + target + '" was not confirmed by permissionPresets.current()')
+      return false
+    }
+    return true
+  }
+
   /** Apply the configured atoms; an explicit exit owns its target mode. */
   const applyMode = async (spec: SessionModeSpec): Promise<void> => {
     const session = agent.session
@@ -3220,6 +3410,54 @@ export function createChannel(
       | { get?(a: Agent): { active: boolean; pending?: boolean } }
       | undefined
     const planActive = foldPlanActive(session.events)
+    const planChange = spec.plan !== undefined && (planMode?.get?.(agent).pending ?? planActive) !== spec.plan
+    if (planChange) {
+      let registered = false
+      try {
+        registered = commandService?.find(agent, 'plan') !== undefined
+      } catch {
+        registered = false
+      }
+      if (!registered) {
+        state.notify(t('mode-plan-unavailable'), { color: 'warning' })
+        return
+      }
+    }
+    // Capture the pre-plan sandbox/approval bundle before any permission
+    // canonicalization can append replacement events. The restore intentionally
+    // excludes the old durable permission identity.
+    if (planChange && spec.plan && !planActive && !prePlanModes.has(session)) {
+      const previous = modePermissions(session.events)
+      const sandbox = ctx.get('sandboxPolicy') as { defaultMode?: SessionModeSpec['sandbox'] } | undefined
+      const approval = ctx.get('approval') as { effectivePolicy?(session: Agent['session']): SessionModeSpec['approval'] } | undefined
+      const base = previous.sandbox === undefined && previous.approval === undefined ? sessionModes[0] : undefined
+      previous.sandbox ??= sandbox?.defaultMode ?? base?.sandbox
+      previous.approval ??= approval?.effectivePolicy?.(session) ?? base?.approval
+      prePlanModes.set(session, previous)
+      // Persist missing defaults before /plan, so resume can recover them.
+      applyModeAtoms(previous)
+    }
+    // Permission identity is applied before plan and atom changes. Dynamic
+    // presets must use the official command path and a fresh runtime snapshot;
+    // never manufacture permission events in the TUI.
+    if (spec.permission !== undefined) {
+      if (!(await applyPermissionIdentity(spec.permission, session, true))) return
+    } else {
+      // Leaving a third-party preset behind would make a static mode appear
+      // selected only because its sandbox/approval bundle happens to match.
+      // Canonicalize through /permission before applying the target atoms.
+      const currentPermission = foldPermissionPreset(session.events)
+      if (currentPermission !== undefined
+        && currentPermission !== PERMISSION_PRESET_CUSTOM
+        && !CANONICAL_PERMISSION_PRESETS.has(currentPermission)) {
+        const canonical = canonicalPermissionForMode(spec, session)
+        if (canonical === undefined) {
+          ctx.logger.warn('dsh-tui: static mode "' + spec.id + '" cannot safely clear permission identity')
+          return
+        }
+        if (!(await applyPermissionIdentity(canonical, session, true))) return
+      }
+    }
     // Reconcile a stale explicit-exit marker before acting. The marker only
     // legitimately survives while a deferred exit awaits its plan/mode:false
     // (foldPlanActive && pending === false). If plan is still logged active
@@ -3229,22 +3467,7 @@ export function createChannel(
     if (planActive && planMode?.get?.(agent).pending === undefined) {
       explicitPlanExits.delete(session)
     }
-    if (spec.plan !== undefined && (planMode?.get?.(agent).pending ?? planActive) !== spec.plan) {
-      if (commandService?.find(agent, 'plan') === undefined) {
-        state.notify(t('mode-plan-unavailable'), { color: 'warning' })
-        return
-      }
-      if (spec.plan && !planActive && !prePlanModes.has(session)) {
-        const previous = modePermissions(session.events)
-        const sandbox = ctx.get('sandboxPolicy') as { defaultMode?: SessionModeSpec['sandbox'] } | undefined
-        const approval = ctx.get('approval') as { effectivePolicy?(session: Agent['session']): SessionModeSpec['approval'] } | undefined
-        const base = previous.sandbox === undefined && previous.approval === undefined ? sessionModes[0] : undefined
-        previous.sandbox ??= sandbox?.defaultMode ?? base?.sandbox
-        previous.approval ??= approval?.effectivePolicy?.(session) ?? base?.approval
-        prePlanModes.set(session, previous)
-        // Persist missing defaults before /plan, so resume can recover them.
-        applyModeAtoms(previous)
-      }
+    if (planChange) {
       if (!spec.plan) explicitPlanExits.add(session)
       try {
         const text = await executeRegistryCommand('plan', spec.plan ? '' : ' off')
@@ -7180,7 +7403,11 @@ export function createChannel(
       restoreLastGood()
     })
   }
-  ctx.on('commands/change', refreshCommandList)
+  ctx.on('commands/change', () => {
+    refreshCommandList()
+    rebuildSessionModes(agent)
+    refreshMode()
+  })
   ctx.on('skills/change', refreshCommandList)
 
   /**
@@ -8642,6 +8869,7 @@ ${output}
       selection.current = { provider: state.provider, model: state.model }
     }
     void applyPreferredEffort()
+    rebuildSessionModes(agent)
     refreshMode()
     agentSubscriptions = [
       installModelSelection(agent.ctx, selection),
@@ -8734,7 +8962,7 @@ ${output}
         // Mode-affecting atoms fold into the Shift+Tab mode indicator the
         // moment they land (whether appended by cycleMode or by hand).
         const eventType = (event as { type: string }).type
-        if (eventType === 'plan/mode' || eventType === 'sandbox/mode' || eventType === 'approval/policy') {
+        if (eventType === 'plan/mode' || eventType === 'sandbox/mode' || eventType === 'approval/policy' || eventType === 'permission/preset') {
           refreshMode()
         }
         if (eventType === 'plan/mode' && (event.data as unknown as { active?: boolean }).active === false) {

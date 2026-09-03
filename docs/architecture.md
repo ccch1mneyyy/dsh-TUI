@@ -119,8 +119,11 @@ answerer（`approval/request` waterfall），仅允许一次/拒绝两种决定�
 - MCP、Shell、文件工具和自定义 preset 都会扩展模型可见能力，应当视为同一权限域
   内的代码执行入口。
 - `/permission` 的可切换名册由已挂载的 DSH `permissionPresets` registry 提供，
-  保持 registry 声明顺序；第三方预设会自动进入 picker，只有符合既有命令 token
-  语法的 ID 进入 Tab 补全。`custom` 只作为 registry 投影出的当前态，不是目标。
+  保持 registry 声明顺序；第三方预设会自动追加到显式/默认会话模式末尾并进入
+  `Shift+Tab` 循环，只有符合既有命令 token 语法的 ID 进入补全。首次观察遵循
+  registry 顺序，后续刷新保留已见 identity 的相对顺序；`custom`、`status`、三个
+  canonical 预设、重复 identity 及不安全 token 严格排除。`custom` 只作为 registry
+  投影出的当前态，不是目标。
 - TUI 将服务状态区分为 runtime、legacy、unavailable：只有服务确实缺失时才保留
   旧三项 legacy 兼容；服务已挂载但损坏、空或数据不一致时 fail closed，不从
   sandbox/approval 组合猜测当前预设。所有切换仍调用官方 `/permission <preset>`。
