@@ -5,7 +5,13 @@ export const TERMINAL_IMAGE_MAX_EDGE = 1024
 export const TERMINAL_IMAGE_MAX_BYTES = 4 * 1024 * 1024
 /** Maximum decoded RGBA bytes represented by placements in one frame. */
 export const TERMINAL_IMAGE_MAX_FRAME_BYTES = 16 * 1024 * 1024
-export const TERMINAL_IMAGE_MAX_CELLS = 512
+/**
+ * Cell-box cap for one placement (a 128×128 grid). Pixel payload is bounded
+ * separately by MAX_EDGE / MAX_BYTES / MAX_FRAME_BYTES; this only bounds the
+ * screen area one image may claim, so a modal preview can fill a large
+ * transcript while thumbnails and status views keep their own small boxes.
+ */
+export const TERMINAL_IMAGE_MAX_CELLS = 128 * 128
 export const TERMINAL_IMAGE_MAX_PLACEMENTS = 64
 
 /**
