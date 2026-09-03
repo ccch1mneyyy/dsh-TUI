@@ -91,6 +91,45 @@ function sanitizeEditableText(text: string): string {
 
 const COMPOSER_IMAGE_TOKEN = /\[Image #\d+\]/gu
 
+/** One `[Image #N]` occurrence: [start, end) offsets into the draft. */
+interface ImageTokenSpan {
+  readonly start: number
+  readonly end: number
+  readonly token: string
+}
+
+/** Every `[Image #N]` in `text`, in order. */
+function imageTokenSpans(text: string): ImageTokenSpan[] {
+  const spans: ImageTokenSpan[] = []
+  for (const match of text.matchAll(COMPOSER_IMAGE_TOKEN)) {
+    const start = match.index ?? 0
+    spans.push({ start, end: start + match[0].length, token: match[0] })
+  }
+  return spans
+}
+
+/** The span whose interior (exclusive of both edges) contains `offset`. */
+function imageTokenAround(spans: readonly ImageTokenSpan[], offset: number): ImageTokenSpan | undefined {
+  return spans.find(span => span.start < offset && offset < span.end)
+}
+
+/**
+ * A caret never rests inside a staged token: an offset in a span's interior
+ * moves to the edge `prefer` names — `'start'` (the token becomes the caret
+ * cluster), `'end'`, or whichever is nearer.
+ */
+function snapOffImageToken(
+  spans: readonly ImageTokenSpan[],
+  offset: number,
+  prefer: 'start' | 'end' | 'nearest',
+): number {
+  const span = imageTokenAround(spans, offset)
+  if (span === undefined) return offset
+  if (prefer === 'start') return span.start
+  if (prefer === 'end') return span.end
+  return offset - span.start < span.end - offset ? span.start : span.end
+}
+
 /** Capabilities referenced by `text`, in first occurrence order. A raw token
  * restored from disk/history has no sidecar entry and therefore stays inert. */
 export function composerImageRefsForText(
@@ -784,6 +823,24 @@ export function PromptInput({
     !selectionActive &&
     fileEscRef.current !== mention?.start
 
+  /**
+   * The `[Image #N]` tokens of `text` that carry a live draft capability.
+   * These are atomic: the caret never rests inside one, ←/→ step over the
+   * whole token, Backspace at its end / Delete at its start remove it whole,
+   * a selection never cuts it, and it renders as a chip (the whole token is
+   * the caret cluster when the caret sits at its start). A raw token typed
+   * or restored without a capability is ordinary text.
+   */
+  const boundImageSpans = (text: string): ImageTokenSpan[] =>
+    imageTokenSpans(text).filter(span => draftImagesRef.current.has(span.token))
+
+  /** Move the caret to `offset`, snapped off any token interior. */
+  const placeCaret = (offset: number, prefer: 'start' | 'end' | 'nearest'): void => {
+    const snapped = snapOffImageToken(boundImageSpans(valueRef.current), offset, prefer)
+    cursorRef.current = snapped
+    setCursor(snapped)
+  }
+
   /** Fold-block state + a synchronous mirror (setInput reads the ref).
    *  Creating a block also drags a caret that sits inside it out to the
    *  block's end (the block is atomic; typing continues after it). */
@@ -835,6 +892,14 @@ export function PromptInput({
       if (start >= end) updateFoldBlock(null)
       else if (start !== block.start || end !== block.end) updateFoldBlock({ start, end })
     }
+    // Staged `[Image #N]` tokens are atomic: a caret that would land inside
+    // one continues in its direction of travel (←/word-left/↑ → the token's
+    // start, →/word-right/↓ → its end); with no travel, the nearer edge.
+    offset = snapOffImageToken(
+      boundImageSpans(next),
+      offset,
+      offset < prevCursor ? 'start' : offset > prevCursor ? 'end' : 'nearest',
+    )
     // The synchronous mirrors are what batch-dispatched events (one stdin
     // read → several keys, no render in between) read on their next turn.
     if (next !== prev) inputEditSequenceRef.current += 1
@@ -878,6 +943,11 @@ export function PromptInput({
         hi = Math.max(hi, block.end)
       }
     }
+    // A selection never cuts a staged token: an edge inside one grows
+    // outward to cover the whole token.
+    const spans = boundImageSpans(text)
+    lo = snapOffImageToken(spans, lo, 'start')
+    hi = snapOffImageToken(spans, hi, 'end')
     if (lo >= hi) {
       selectionRef.current = null
       setSelection(null)
@@ -1445,6 +1515,24 @@ export function PromptInput({
       }
       if (key.rightArrow && cursor === block.start) {
         setInput(value, block.end)
+        return
+      }
+    }
+
+    // Staged `[Image #N]` tokens are atomic (see boundImageSpans): Backspace
+    // at a token's end and Delete at its start remove the whole token — its
+    // capability is released by setInput when the text no longer carries
+    // it. ←/→ need no arm here: setInput snaps a caret that would land
+    // inside a token to the far edge in its direction of travel.
+    if (!selection && (key.backspace || key.delete)) {
+      const spans = boundImageSpans(value)
+      const whole = key.backspace
+        ? spans.find(span => span.end === cursor)
+        : spans.find(span => span.start === cursor)
+      if (whole !== undefined) {
+        setInput(value.slice(0, whole.start) + value.slice(whole.end), whole.start)
+        setSelectedCommand(0)
+        setFileSelected(0)
         return
       }
     }
@@ -2097,7 +2185,9 @@ export function PromptInput({
       while (end > 0 && /\s/.test(before[end - 1]!)) end--
       let start = end
       while (start > 0 && !/\s/.test(before[start - 1]!)) start--
-      const clipped = clampRowStart(start)
+      // The word scan stops at the space inside `[Image #N]`; a staged token
+      // is deleted whole or not at all.
+      const clipped = snapOffImageToken(boundImageSpans(value), clampRowStart(start), 'start')
       setInput(value.slice(0, clipped) + value.slice(cursor), clipped)
       return
     }
@@ -2595,38 +2685,43 @@ export function PromptInput({
   const rowHighlightPieces = (
     text: string,
     absoluteLine: number,
-  ): Array<{ text: string; inverse: boolean }> => {
-    const intervals: Array<[number, number]> = []
-    const sel = selection
-    if (sel) {
-      const [rowStart, rowEnd] = lineRanges[absoluteLine] ?? [0, 0]
-      const lo = Math.min(Math.max(sel.start - rowStart, 0), text.length)
-      const hi = Math.min(Math.max(sel.end - rowStart, 0), text.length)
-      if (hi > lo) intervals.push([lo, hi])
+  ): Array<{ text: string; inverse: boolean; chip: boolean }> => {
+    const [rowStart] = lineRanges[absoluteLine] ?? [0, 0]
+    // Per-character style: 0 plain, 1 chip (a staged token), 2 inverse
+    // (selection or caret cluster). Inverse wins over chip.
+    const PLAIN = 0
+    const CHIP = 1
+    const INVERSE = 2
+    const kinds = new Uint8Array(text.length)
+    const fill = (lo: number, hi: number, kind: number): void => {
+      for (let i = Math.max(lo, 0); i < Math.min(hi, text.length); i++) kinds[i] = kind
     }
+    const spans = boundImageSpans(value)
+    for (const span of spans) fill(span.start - rowStart, span.end - rowStart, CHIP)
+    const sel = selection
+    if (sel) fill(sel.start - rowStart, sel.end - rowStart, INVERSE)
     let endBlankCaret = false
     if (absoluteLine === caretVisualLine) {
       const col = Math.min(caretCharCol, text.length)
-      const clusterEnd = nextGraphemeBoundary(graphemeBoundaries(text), col)
-      if (clusterEnd > col) intervals.push([col, clusterEnd])
+      // A staged token is one caret cluster: with the caret at its start the
+      // whole token inverts (the selected-chip look), and Delete removes it.
+      const tokenAtCaret = spans.find(span => span.start === rowStart + col)
+      const clusterEnd = tokenAtCaret !== undefined
+        ? Math.min(tokenAtCaret.end - rowStart, text.length)
+        : nextGraphemeBoundary(graphemeBoundaries(text), col)
+      if (clusterEnd > col) fill(col, clusterEnd, INVERSE)
       else endBlankCaret = col === text.length
     }
-    intervals.sort((a, b) => a[0] - b[0])
-    const runs: Array<[number, number]> = []
-    for (const [s, e] of intervals) {
-      const last = runs[runs.length - 1]
-      if (last && s <= last[1]) last[1] = Math.max(last[1], e)
-      else runs.push([s, e])
-    }
-    const pieces: Array<{ text: string; inverse: boolean }> = []
+    const pieces: Array<{ text: string; inverse: boolean; chip: boolean }> = []
     let pos = 0
-    for (const [s, e] of runs) {
-      if (s > pos) pieces.push({ text: text.slice(pos, s), inverse: false })
-      pieces.push({ text: text.slice(s, e), inverse: true })
-      pos = Math.max(pos, e)
+    while (pos < text.length) {
+      const kind = kinds[pos]!
+      let end = pos + 1
+      while (end < text.length && kinds[end] === kind) end++
+      pieces.push({ text: text.slice(pos, end), inverse: kind === INVERSE, chip: kind === CHIP })
+      pos = end
     }
-    if (pos < text.length) pieces.push({ text: text.slice(pos), inverse: false })
-    if (endBlankCaret) pieces.push({ text: ' ', inverse: true })
+    if (endBlankCaret) pieces.push({ text: ' ', inverse: true, chip: false })
     return pieces
   }
 
@@ -2663,6 +2758,10 @@ export function PromptInput({
         {pieces.length === 0 ? ' ' : pieces.map((piece, pieceIndex) =>
           piece.inverse ? (
             <Text key={pieceIndex} inverse>
+              {piece.text}
+            </Text>
+          ) : piece.chip ? (
+            <Text key={pieceIndex} color="suggestion">
               {piece.text}
             </Text>
           ) : (
@@ -2712,6 +2811,10 @@ export function PromptInput({
             {pieces.map((piece, pieceIndex) =>
               piece.inverse ? (
                 <Text key={pieceIndex} inverse>
+                  {piece.text}
+                </Text>
+              ) : piece.chip ? (
+                <Text key={pieceIndex} color="suggestion">
                   {piece.text}
                 </Text>
               ) : (
@@ -2896,18 +2999,20 @@ export function PromptInput({
         const w = wordSelectionAt(value, offset, side ? 0 : block.end, side ? block.start : value.length)
         if (w) {
           updateSelection(w.start, w.end)
-          setCursor(w.end)
+          placeCaret(selectionRef.current?.end ?? w.end, 'end')
         }
         return
       }
       if (e.shift) {
         const base = selectionRef.current ? selectionRef.current.start : cursorRef.current
         updateSelection(base, offset)
-        setCursor(offset)
+        placeCaret(offset, 'nearest')
         return
       }
       clearSelection()
-      setCursor(offset)
+      // A click on a staged token puts the caret at its start: the token is
+      // the caret cluster, so it highlights whole.
+      placeCaret(offset, 'start')
       openStagedImageAt(offset)
       return
     }
@@ -2933,18 +3038,18 @@ export function PromptInput({
       const w = wordSelectionAt(value, offset, 0, value.length)
       if (w) {
         updateSelection(w.start, w.end)
-        setCursor(w.end)
+        placeCaret(selectionRef.current?.end ?? w.end, 'end')
       }
       return
     }
     if (e.shift) {
       const base = selectionRef.current ? selectionRef.current.start : cursorRef.current
       updateSelection(base, offset)
-      setCursor(offset)
+      placeCaret(offset, 'nearest')
       return
     }
     clearSelection()
-    setCursor(offset)
+    placeCaret(offset, 'start')
     openStagedImageAt(offset)
   }
 
@@ -2964,7 +3069,7 @@ export function PromptInput({
       return
     }
     dragAnchorRef.current = anchor
-    setCursor(anchor)
+    placeCaret(anchor, 'nearest')
   }
   const handleDragMove = (e: DragEvent, colOffset = 0) => {
     const anchor = dragAnchorRef.current
@@ -2980,7 +3085,7 @@ export function PromptInput({
       caret = anchor <= block.start ? Math.min(focus, block.start) : Math.max(focus, block.end)
     }
     updateSelection(anchor, focus)
-    setCursor(normalizeCursorOffset(valueRef.current, caret))
+    placeCaret(normalizeCursorOffset(valueRef.current, caret), 'nearest')
   }
   const handleDragEnd = () => {
     dragAnchorRef.current = null
@@ -3412,6 +3517,10 @@ function wrapLineRows(
   if (line === '') return [{ start: 0, end: 0 }]
   const rows: Array<{ start: number; end: number }> = []
   const segmenter = getGraphemeSegmenter()
+  // The space inside `[Image #N]` is not a break opportunity: the token is
+  // one unit on screen (its caret cluster and chip styling span it), so it
+  // wraps whole, like a word.
+  const unbreakable = imageTokenSpans(line)
   let rowStart = 0
   let currentWidth = 0
   let offset = 0
@@ -3433,7 +3542,7 @@ function wrapLineRows(
     }
     currentWidth += w
     offset += segment.length
-    if (segment === ' ') lastBreak = offset
+    if (segment === ' ' && imageTokenAround(unbreakable, offset) === undefined) lastBreak = offset
   }
   rows.push({ start: rowStart, end: offset })
   return rows

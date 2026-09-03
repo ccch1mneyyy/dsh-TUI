@@ -151,7 +151,13 @@ the attachment store exactly like clipboard bitmaps and appear as `[Image #N]`
 sends a real image block. The prompt never contains base64. When a terminal
 forwards a drop as pasted text (Ghostty sends a shell-escaped path through the
 PTY), the paste stages only when it is exactly one existing local image path —
-anything ambiguous stays verbatim text. In fullscreen, clicking a staged
+anything ambiguous stays verbatim text. A staged `[Image #N]` is one unit in the
+composer: the caret never rests inside it, ←/→ step over it, Backspace at its
+end, Delete at its start and Ctrl+W remove it whole, and a selection edge inside
+it grows to cover the token. It renders in the theme accent and inverts whole
+while the caret sits at its start; clicking it places the caret at its start and
+opens the preview. Look-alike text typed by hand or restored from history without
+an attachment capability stays ordinary text. In fullscreen, clicking a staged
 `[Image #N]` token or a transcript thumbnail opens one shared preview centered
 over the transcript area; the image takes at most about 70% of its width and 80% of its
 height, and the surrounding conversation, the prompt, status rows and sticky header stay visible
