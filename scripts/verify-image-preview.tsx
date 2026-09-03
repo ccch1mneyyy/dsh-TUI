@@ -30,7 +30,7 @@ import { settled, sleep } from './lib/term-test.mjs'
 
 const { Terminal: XTerm } = xterm
 const [
-  { render, AlternateScreen, Box },
+  { render, AlternateScreen, Box, Text },
   { Chat },
   { QuestionStore },
   { TuiDialogStore },
@@ -565,6 +565,46 @@ function screenOf(terminal: InstanceType<typeof XTerm>, rows: number): Screen {
       && (right - left + 1) <= Math.floor(COLS * 0.7)
       && (bottom - top + 1) <= Math.floor(ROWS * 0.8),
     JSON.stringify({ top, bottom, left, right, COLS, ROWS }))
+  await app.unmount()
+  terminal.dispose()
+}
+{
+  clearTranscriptImageCacheForTests()
+  const terminal = new XTerm({ cols: COLS, rows: ROWS, scrollback: 0, allowProposedApi: true })
+  const stdout = new FakeStdout(terminal)
+  // Tall-ish first image: height-limited fit → the tallest card the region
+  // allows. Wide second image: width-limited fit → a much shorter card of
+  // the same width, so the rows the first card vacates sit below the second.
+  const tall = { ...fakeImage('sha256:tall', 'tall.png'), width: 5000, height: 3400 }
+  const wide = { ...fakeImage('sha256:wide', 'wide.png'), width: 9000, height: 3000 }
+  const tree = (image: TranscriptImage) => (
+    <Box width={COLS} height={ROWS} flexDirection="column">
+      {Array.from({ length: ROWS }, (_, i) => <Text key={i}>{'#'.repeat(COLS)}</Text>)}
+      <ImagePreviewOverlay image={image} onClose={() => {}} />
+    </Box>
+  )
+  const app = await render(
+    tree(tall),
+    { stdin: new FakeStdin() as never, stdout: stdout as never, stderr: new FakeStderr() as never, exitOnCtrlC: false, patchConsole: false },
+  )
+  const screen = screenOf(terminal, ROWS)
+  await settled(() => screen.text().includes('tall.png'))
+  const before = screen.text().split('\n')
+  const oldTop = before.findIndex(line => line.includes('╭'))
+  const oldBottom = before.findIndex((line, i) => i > oldTop && line.includes('╰'))
+  app.rerender(tree(wide))
+  await settled(() => screen.text().includes('wide.png'))
+  await sleep(200)
+  const lines = screen.text().split('\n')
+  const top = lines.findIndex(line => line.includes('╭'))
+  const bottom = lines.findIndex((line, i) => i > top && line.includes('╰'))
+  // Rows the first card occupied but the second does not must show the
+  // underlying '#' row again — no leftover borders, title or hint.
+  const vacated = lines.filter((_, i) => i >= oldTop && i <= oldBottom && (i < top || i > bottom))
+  const clean = vacated.every(line => line === '#'.repeat(COLS))
+  check('overlay: switching to a shorter card repaints the rows the taller card vacated',
+    oldBottom > bottom && vacated.length > 0 && clean && !screen.text().includes('tall.png'),
+    JSON.stringify({ oldTop, oldBottom, top, bottom, vacatedRows: vacated.length, sample: vacated.filter(l => l !== '#'.repeat(COLS)).slice(0, 2) }))
   await app.unmount()
   terminal.dispose()
 }
