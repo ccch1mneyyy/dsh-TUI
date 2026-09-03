@@ -128,7 +128,7 @@ import type {
   TuiRewindMode,
   TuiRewindPromptDecision,
 } from './extension-events.js'
-import { transcriptImageFromAttachment, transcriptImagesOf, type TranscriptImage } from './transcript-images.js'
+import { rememberImagePath, transcriptImageFromAttachment, transcriptImagesOf, type TranscriptImage } from './transcript-images.js'
 
 /** `tui/input` return normalization: transform/handled/cancel or no opinion.
  *  A blank `{ text }` rewrite is NOT a decision — it is logged and the chain
@@ -425,6 +425,9 @@ export interface StagedImageInput {
   data: Uint8Array
   mediaType: ChannelImageMediaType
   name?: string
+  /** Absolute local path the bytes were read from, for the preview card's
+   *  path row. Not handed to the attachment store and never persisted. */
+  path?: string
 }
 
 /** Opaque capability returned for one staged composer image. The visible
@@ -2869,7 +2872,10 @@ export function createChannel(
     if (input.data.byteLength > attachments.imageLimits.maxImageBytes) {
       throw new Error(`image exceeds this profile's per-image size limit`)
     }
-    const attachment = await attachments.saveImage(input)
+    // The source path is TUI-side display metadata; the store only sees the
+    // fields its contract names.
+    const { path, ...stored } = input
+    const attachment = await attachments.saveImage(stored)
     // A session change (/new, resume, rewind, model switch, background)
     // cleared the maps while the save was in flight: the durable object is
     // harmless, but the OLD session's capability must not reach the new one.
@@ -2878,6 +2884,7 @@ export function createChannel(
     }
     const stageId = randomUUID()
     stagedImages.set(stageId, attachment)
+    if (path !== undefined) rememberImagePath(String(attachment.attachmentId), path)
     const view = transcriptImageFromAttachment(attachment, () => ctx.get('attachments'))
     if (view !== undefined) stagedImageViews.set(stageId, view)
     // References are content-addressed and durable. This map only connects

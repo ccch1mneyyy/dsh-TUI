@@ -2,7 +2,7 @@ import React from 'react'
 import stripAnsi from 'strip-ansi'
 import { constants as fsConstants } from 'node:fs'
 import { open, unlink } from 'node:fs/promises'
-import { basename } from 'node:path'
+import { basename, resolve } from 'node:path'
 import { t } from '../i18n.js'
 import { Box, Text, useInput, useTerminalSize, useTheme, type ScrollBoxHandle } from '../ui.js'
 import { EffortChargeGlyph } from './EffortChargeGlyph.js'
@@ -1301,6 +1301,9 @@ export function PromptInput({
       // Callers gate on imagePathMediaType; the assertion is unreachable.
       mediaType: imagePathMediaType(path) ?? 'image/png',
       name: basename(path),
+      // The preview card's path row: the file that was read, as an
+      // absolute path (a clipboard bitmap shows its temp export).
+      path: resolve(path),
     }, lease.generation)
   }
 

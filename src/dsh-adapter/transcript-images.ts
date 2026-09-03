@@ -13,7 +13,32 @@ export interface TranscriptImage {
   readonly mediaType?: string
   /** Stored byte size, when the durable reference carries one. */
   readonly bytes?: number
+  /**
+   * Absolute local path the bytes were staged from in THIS process: a pasted
+   * or dropped file, or the clipboard bitmap's temp export. Display-only and
+   * never persisted — the durable event carries a content hash, so images
+   * restored from the session log have none.
+   */
+  readonly path?: string
   read(): Promise<Uint8Array>
+}
+
+/**
+ * Source paths of images staged in this process, by attachment id, so the
+ * transcript projection of an image the user just sent shows the same path
+ * as its composer preview did. Bounded FIFO; a restart forgets everything.
+ */
+const rememberedImagePaths = new Map<string, string>()
+const REMEMBERED_IMAGE_PATHS_MAX = 256
+
+export function rememberImagePath(attachmentId: string, path: string): void {
+  rememberedImagePaths.delete(attachmentId)
+  rememberedImagePaths.set(attachmentId, path)
+  while (rememberedImagePaths.size > REMEMBERED_IMAGE_PATHS_MAX) {
+    const oldest = rememberedImagePaths.keys().next().value
+    if (oldest === undefined) break
+    rememberedImagePaths.delete(oldest)
+  }
 }
 
 interface AttachmentReader {
@@ -61,13 +86,16 @@ export function transcriptImageFromAttachment(
 ): TranscriptImage | undefined {
   const attachment = validAttachment(value)
   if (attachment === undefined) return undefined
+  const id = String(attachment.attachmentId)
+  const path = rememberedImagePaths.get(id)
   return {
-    id: String(attachment.attachmentId),
+    id,
     width: attachment.width,
     height: attachment.height,
     ...(attachment.name === undefined ? {} : { name: attachment.name }),
     mediaType: attachment.mediaType,
     ...(positiveInteger(attachment.bytes) ? { bytes: attachment.bytes } : {}),
+    ...(path === undefined ? {} : { path }),
     async read() {
       const reader = resolveAttachments() as AttachmentReader | undefined
       if (typeof reader?.readImage !== 'function') {
