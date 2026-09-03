@@ -10,6 +10,7 @@ import Schema from '@deepseek-ai/schemastery'
 import { Config } from './index.js'
 import { createChannel } from './channel.js'
 import { createChildStderrReporter, installChildStderrGuard } from './childStderr.js'
+import { removeClipboardImageDir } from '../utils/clipboard.js'
 import { logForDebugging } from '../utils/debug.js'
 import { QuestionStore } from './questions.js'
 import { prepareQuestionAnswerer } from './questions-answerer.js'
@@ -1953,6 +1954,9 @@ export async function finishExit(
   } catch {
     ctx.logger.debug('dsh-tui: terminal cleanup failed; continuing with process shutdown')
   }
+  // Filesystem-only: the exported clipboard images live in a per-process
+  // temp directory that nothing else removes.
+  removeClipboardImageDir()
   done()
 }
 
