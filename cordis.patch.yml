@@ -385,9 +385,8 @@
         # Edit/Write diff 呈现：auto（≥110 列双栏对照，窄屏统一式）/
         # split（强制双栏）/ unified（强制统一式）。/settings 屏可实时改。
         # diffLayout: auto
-        # 每个请求实际生效的推理强度，按当前路由的 adapter 档位校验
-        #（deepseek: off/low/high/max）；非法值回落 adapter 默认。
-        effort: max
+        # Leave effort unset so the adapter default is used on first launch and
+        # the TUI's persisted /effort choice can win on later launches.
         # Shift+Tab session-mode cycle (array order IS the cycle order;
         # absent → the built-in default/plan/full trio below). Each entry
         # may declare any subset of the plan (on/off), sandbox (read-only/

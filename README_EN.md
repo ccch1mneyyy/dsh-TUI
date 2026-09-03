@@ -315,7 +315,10 @@ The complete bilingual index is [`docs/README.md`](docs/README.md).
   plus the TUI-bundled Liangshen mode (`liangshen`),
   switched with `/preset`; sessions that already have a conversation cannot switch, while
   blank sessions take effect immediately. The default preset persists in
-  `~/.dsh-tui/agent-preset.json`; `/model` selections persist in `~/.dsh-tui/model.json`.
+  `~/.dsh-tui/agent-preset.json`; `/model` selections persist in `~/.dsh-tui/model.json`,
+  `/effort` selections in `~/.dsh-tui/effort.json`, and `/permission` selections in
+  `~/.dsh-tui/permission.json` for new sessions. Resumed sessions keep their own
+  durable choices.
   Under the `en` UI language the `/preset` picker shows localized English names
   and descriptions for the built-in presets.
   See [Configuration](docs/configuration.en.md#agent-preset).
@@ -513,6 +516,8 @@ presets appear automatically in the picker in registry order, while only IDs
 accepted by the existing command-token grammar enter completion. `custom` is a
 current-state label only, never a selectable target. Switching always uses the
 official `/permission <preset>` command.
+The `/permission` and `/effort` choices are persisted as defaults for new sessions;
+resuming an existing session keeps the durable choices recorded by that session.
 When the `permissionPresets` service is absent, TUI keeps its legacy three-row
 compatibility roster. A mounted but unusable service is marked unavailable and
 fails closed instead of inventing a roster. If the external `/permission` command

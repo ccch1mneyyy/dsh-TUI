@@ -81,6 +81,7 @@ import {
 import { writeActivityFrames } from '../activityPrefs.js'
 import { isPathLikeQuery, rankFileCandidates, type FileCandidate } from '../utils/fileSuggestions.js'
 import { readEffortPref, writeEffortPref } from '../effortPrefs.js'
+import { readPermissionPref, writePermissionPref } from '../permissionPrefs.js'
 import { readModelPref, writeModelPref } from '../modelPrefs.js'
 import { explicitModelRoute, recordedModelRoute, resolveModelRoute, validateModelRoute } from '../modelRoute.js'
 import type { OAuthProviderStatus, OAuthSetupHost, ProfilePathOp, ProviderSetupHost } from './providerWizard.js'
@@ -218,6 +219,7 @@ type PermissionPresetService = {
   names?: unknown
   current?: (events: readonly SessionEvent[]) => unknown
   optionOf?: (name: string) => unknown
+  set?: (session: { events: readonly SessionEvent[] }, name: string) => void
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -2029,6 +2031,9 @@ export function createChannel(
     configuredActivityFrames?: string
     /** The preset the initial agent's session runs under (from resolveAgent). */
     agentPreset?: string
+    /** Apply the persisted permission preset to a brand-new session; resumed
+     *  sessions keep the permission events recorded in their own history. */
+    freshSession?: boolean
     /** Shift+Tab session-mode cycle from cordis.yml `modes`; undefined →
      *  the built-in default/plan/full cycle (sessionModes.ts). */
     modes?: readonly SessionModeSpec[]
@@ -2039,6 +2044,33 @@ export function createChannel(
   let agent = initialAgent
   let currentHandle: AgentHandle | undefined = options.handle
   const themeHost = getHostThemes(ctx.get('tuiThemes') as TuiThemeRuntime | undefined)
+  let applyingPreferredPermission = false
+
+  /** Apply the last `/permission` choice only to fresh sessions. Resumed
+   *  sessions already carry their own durable permission events, while the
+   *  host service's `defaultPreset` is a deployment fallback rather than the
+   *  user's last interactive choice. */
+  const applyPreferredPermission = (target: Agent, freshSession = false): void => {
+    if (options.freshSession !== true && !freshSession) return
+    const preferred = readPermissionPref()
+    if (preferred === undefined) return
+    let service: PermissionPresetService | undefined
+    try {
+      service = ctx.get('permissionPresets') as PermissionPresetService | undefined
+    } catch {
+      return
+    }
+    if (!Array.isArray(service?.names) || !service.names.includes(preferred) || typeof service.set !== 'function') return
+    applyingPreferredPermission = true
+    try {
+      service.set(target.session, preferred)
+    } catch {
+      // A stale preset or an unavailable host writer must not prevent boot;
+      // the service's configured default remains in force for this session.
+    } finally {
+      applyingPreferredPermission = false
+    }
+  }
 
   // ── agent view (CC's `claude agents`) internal state ──────────────────────
   // Handles of background sessions this channel dispatched or backgrounded.
@@ -5297,6 +5329,7 @@ export function createChannel(
       const previousSessionId = String(agent.session.id)
       agent = handle.agent
       currentHandle = handle
+      applyPreferredPermission(agent, true)
       bindAgent()
       refreshCommandList()
       void refreshLoadedContext()
@@ -6371,6 +6404,7 @@ export function createChannel(
         state.notify(t('agentview-dispatch-failed', { err: message }), { color: 'error', timeoutMs: 8000 })
         return { ok: false, reason: 'failed', error: message }
       }
+      applyPreferredPermission(handle.agent, true)
       backgroundHandles.set(String(sessionId), handle)
       // Record ownership BEFORE delivery: even a delivery failure must not
       // silently drop the session from the view.
@@ -6508,6 +6542,7 @@ export function createChannel(
       } catch {
         // Optional ledger, same as dispatch.
       }
+      applyPreferredPermission(handle.agent, true)
       const previousHandle = currentHandle
       const previousSessionId = String(agent.session.id)
       // CC parity: even an EMPTY session is backgrounded (it shows as a
@@ -8560,6 +8595,10 @@ ${output}
         // Mode-affecting atoms fold into the Shift+Tab mode indicator the
         // moment they land (whether appended by cycleMode or by hand).
         const eventType = (event as { type: string }).type
+        if (eventType === 'permission/preset' && !applyingPreferredPermission) {
+          const preset = (event.data as unknown as { preset?: unknown }).preset
+          if (typeof preset === 'string' && preset.trim() !== '') writePermissionPref(preset)
+        }
         if (eventType === 'plan/mode' || eventType === 'sandbox/mode' || eventType === 'approval/policy') {
           refreshMode()
         }
@@ -8663,6 +8702,7 @@ ${output}
       model: state.model,
     }
   })
+  applyPreferredPermission(agent)
   bindAgent()
   // Cordis owns the Channel lifetime. Rebinding handles the common case;
   // this effect closes the final timer when the Channel's context unloads.

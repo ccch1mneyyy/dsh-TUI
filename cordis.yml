@@ -61,11 +61,8 @@
     # wl-copy/xclip/xsel 兜底）、滚轮滚动、双击选词/三击选行。false 则退回
     # inline 渲染, 鼠标交给终端模拟器原生选择。
     fullscreen: true
-    # Reasoning effort applied to every request, validated against the live
-    # route's adapter levels. An unlisted level falls back to the adapter
-    # default; this wins over the persisted /effort choice and seeds the
-    # startup header/statusline.
-    effort: max
+    # Leave effort unset so the adapter default is used on first launch and
+    # the TUI's persisted /effort choice can win on later launches.
     # Shift+Tab 会话模式循环（数组顺序即循环顺序；缺省为下面三档）。
     # 每档可声明 plan（计划模式开/关）、sandbox（read-only/
     # workspace-write/danger-full-access）、approval（ask/never）三个

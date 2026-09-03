@@ -92,11 +92,14 @@ stdout 打印诊断；使用 stderr 的 `DSH_TUI_DEBUG` 或 `DSH_TUI_RENDER_LOG`
 | `~/.dsh-tui/themes/` | 用户自定义主题 JSON；运行时插件主题不写入此目录 |
 | `~/.dsh-tui/working-activity.json` | 工作状态动画选择 |
 | `~/.dsh-tui/agent-preset.json` | 新会话默认 Agent preset |
+| `~/.dsh-tui/effort.json` | 新会话默认推理强度 |
+| `~/.dsh-tui/permission.json` | 新会话默认权限预设 |
 
 `DSH_TUI_SESSION_ROOT` 在两种组合中都改写 JSONL 根目录。profile 默认使用
 `$DSH_HOME/sessions`（通常为 `~/.dsh/sessions/`）；直接运行根目录的
 `cordis.yml` 时默认使用 `~/.dsh-tui/sessions/`。偏好文件是可选状态：损坏或
-缺失时回退，不应阻止 TUI 启动。
+缺失时回退，不应阻止 TUI 启动。`effort.json` 和 `permission.json` 只作为新会话默认值；
+恢复已有会话时，以该会话自身的持久化事件为准。
 
 数据目录已从 `~/.dsh-cc` 更名为 `~/.dsh-tui`：首次启动时若旧目录存在而新目录
 不存在，会整体复制（不移动）到新目录并提示一行，旧目录保留由用户自行删除。

@@ -106,12 +106,15 @@ ConPTY.
 | `~/.dsh-tui/themes/` | User theme JSON files; runtime plugin themes do not write here |
 | `~/.dsh-tui/working-activity.json` | Activity animation selection |
 | `~/.dsh-tui/agent-preset.json` | Default Agent preset for new sessions |
+| `~/.dsh-tui/effort.json` | Default reasoning effort for new sessions |
+| `~/.dsh-tui/permission.json` | Default permission preset for new sessions |
 
 `DSH_TUI_SESSION_ROOT` overrides the JSONL root in either composition. The
 profile defaults to `$DSH_HOME/sessions` (normally `~/.dsh/sessions/`);
 direct `cordis.yml` runs default to `~/.dsh-tui/sessions/`. Preference files
 are optional state: malformed or missing files fall back silently rather than
-preventing startup.
+preventing startup. `effort.json` and `permission.json` are defaults for new sessions only;
+resuming an existing session keeps the durable events recorded by that session.
 
 The data directory was renamed from `~/.dsh-cc` to `~/.dsh-tui`: on first
 launch, if the old directory exists and the new one does not, it is copied

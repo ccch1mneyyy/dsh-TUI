@@ -34,7 +34,7 @@ A complete common override looks like this:
     # root containing the launch directory. To pin a fixed workspace, use an
     # absolute path (e.g. cwd: /repo/packages/app), NOT `!!js process.cwd()`
     # (that pins the workspace to the launch subdirectory, issue #96).
-    effort: max
+    # effort: max  # optional fixed level; omit to remember the /effort choice
     activity: true
     activityFrames: claude
     contextBar: true
@@ -50,7 +50,7 @@ A complete common override looks like this:
 | `model` | Harness `agentDefaultModel`; bare compositions fall back to `deepseek-v4-flash` | Startup model; `/model` can switch through a session fork |
 | `cwd` | git worktree root containing the launch directory (`process.cwd()` when outside any worktree; a dotfiles repo at `$HOME` does not count) | TUI-side session workspace: agent meta, `@` completion/mention expansion, /resume filtering, statusline; resuming an existing session adopts that session's persisted cwd. Note the bash/fs-policy/sandbox roots are still owned by the composition layer's cordis config (default: the launch directory, governed by dsh-base) and may differ from this session-side cwd |
 | `workspace` | unset | Startup workspace target: a local path, `file://` URL, or plugin-provided URI; takes precedence over `cwd` |
-| `effort` | normally `max` in the bundle | Reasoning effort applied to every request (validated against the runtime model's levels; invalid levels silently fall back to the adapter default and the configured value wins over the persisted `/effort` choice), also shown in the header at startup |
+| `effort` | runtime adapter default; an explicit value wins over persistence | Reasoning effort applied to every request (validated against the runtime model's levels; invalid levels silently fall back to the adapter default); when unset, the saved `/effort` choice is used, and the level is shown in the startup header |
 | `modes` | built-in trio | Shift+Tab session-mode cycle (plan/sandbox/approval atom bundles); defaults to default → plan → full-access |
 | `activity` | `true` | Show the live activity row |
 | `activityFrames` | persisted choice or `claude` | Activity animation preset; `/activity` changes it at runtime |
@@ -58,6 +58,12 @@ A complete common override looks like this:
 | `fullscreen` | `false` | `true` uses the alternate screen, app scrolling, and mouse selection; `false` uses inline mode |
 | `preset` | roster default `standard` | Agent preset for new sessions; explicit configuration wins over persisted preference |
 | `sessionId` | unset | Session to resume, normally injected by the Windows `--resume` launcher |
+
+The `/effort` choice is stored in `~/.dsh-tui/effort.json`. The permission preset selected
+with `/permission` is stored in `~/.dsh-tui/permission.json` and becomes the default for
+new sessions and `/new`; resuming an existing session keeps the permission events in that
+session's own log. If the saved preset is no longer advertised by the active profile, the
+profile's configured permission default is used instead.
 
 ## Live activity row
 
