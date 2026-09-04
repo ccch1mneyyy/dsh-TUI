@@ -22,6 +22,12 @@
  *                     paging must not be stolen (mirrors the wheel no-op).
  *  - help open      → Chat yields these keys to PromptInput's help viewport,
  *                     so the transcript behind must not move.
+ *  - question panel → does NOT yield: the panel mounts below the transcript
+ *                     (replacing the prompt, never covering it) and binds no
+ *                     paging keys, so the wheel-parity contract holds — the
+ *                     transcript pages while a decision is pending.
+ *  - narrow 70x24   → margins and the gutter shrink the transcript width,
+ *                     paging behavior is unchanged.
  *
  * Run after build: `node scripts/verify-transcript-paging.mjs`
  */
@@ -129,11 +135,41 @@ function makeChannel() {
   return channel
 }
 
-async function mount(fullscreen) {
-  const term = new XTerm({ cols: TERM_COLS, rows: TERM_ROWS, allowProposedApi: true })
+/** A questionStore that can arm/disarm a real snapshot, so a scenario can
+ *  open the AskUserQuestionPanel through Chat's actual useSyncExternalStore. */
+function makeQuestionStore() {
+  let snapshot = null
+  const listeners = new Set()
+  return {
+    subscribe: l => {
+      listeners.add(l)
+      return () => listeners.delete(l)
+    },
+    getSnapshot: () => snapshot,
+    answerCurrent() {},
+    arm() {
+      snapshot = {
+        key: 'q1',
+        question: { id: 'q1', question: 'PICK-ONE-ANCHOR', options: [{ label: 'A' }, { label: 'B' }] },
+        position: 1,
+        total: 1,
+        answered: 0,
+        canGoBack: false,
+      }
+      for (const l of listeners) l()
+    },
+    disarm() {
+      snapshot = null
+      for (const l of listeners) l()
+    },
+  }
+}
+
+async function mount(fullscreen, cols = TERM_COLS, rows = TERM_ROWS) {
+  const term = new XTerm({ cols, rows, allowProposedApi: true })
   const stdout = new Writable({ write(chunk, _enc, cb) { term.write(String(chunk), cb) } })
-  stdout.columns = TERM_COLS
-  stdout.rows = TERM_ROWS
+  stdout.columns = cols
+  stdout.rows = rows
   stdout.isTTY = true
   const stderr = new Writable({ write(_c, _e, cb) { cb() } })
   stderr.isTTY = true
@@ -145,6 +181,7 @@ async function mount(fullscreen) {
   stdin.unref = () => stdin
 
   const channel = makeChannel()
+  const questionStore = makeQuestionStore()
   // Mirror the real fullscreen mount (dsh-adapter/plugin.ts): ThemeProvider >
   // AlternateScreen > PageMargin > Chat. The AlternateScreen wrap is not
   // cosmetic — it constrains the transcript ScrollBox to the terminal rows;
@@ -153,7 +190,7 @@ async function mount(fullscreen) {
   // only, matching the host's inline path.
   const chat = React.createElement(Chat, {
     channel,
-    questionStore: { subscribe: () => () => {}, getSnapshot: () => null, answerCurrent: () => {} },
+    questionStore,
     fullscreen,
     onExit() {},
   })
@@ -166,7 +203,7 @@ async function mount(fullscreen) {
   // Fixed wait: the first frame carries a random tip, so there is no stable
   // content anchor to poll for (same compromise as verify-keymap.mjs).
   await sleep(700)
-  return { term, stdin, instance, channel }
+  return { term, stdin, instance, channel, questionStore }
 }
 
 const PGUP = '\x1b[5~'
@@ -226,7 +263,27 @@ if (helpShown) {
   full.stdin.write(PGUP)
   await sleep(400)
   check('fullscreen: help open yields PgUp to the help viewport', screenHas(full.term, marker(LAST)) === tail)
+  full.stdin.write('\x1b')
+  await sleep(300)
 }
+
+// The question panel must NOT take these keys away: it mounts BELOW the
+// transcript (replacing the prompt, never covering it), and the wheel branch
+// scrolls the still-visible transcript in exactly this state. Lock that
+// wheel parity in: with a question pending, PgUp pages the transcript and
+// the panel stays exactly where it is.
+full.questionStore.arm()
+const panelShown = await settled(() => screenHas(full.term, 'PICK-ONE-ANCHOR'), { timeoutMs: 3000 })
+check('fullscreen: question panel opens through the store', panelShown)
+if (panelShown) {
+  const panelVisible = screenHas(full.term, 'PICK-ONE-ANCHOR')
+  full.stdin.write(PGUP)
+  await sleep(400)
+  check('fullscreen: question panel open — PgUp still pages the transcript', !screenHas(full.term, marker(LAST)))
+  check('fullscreen: question panel open — the panel is undisturbed', screenHas(full.term, 'PICK-ONE-ANCHOR') === panelVisible)
+}
+full.questionStore.disarm()
+await settled(() => !screenHas(full.term, 'PICK-ONE-ANCHOR'), { timeoutMs: 3000 })
 await full.instance.unmount()
 
 // ---- inline: the terminal owns these keys ----
@@ -237,6 +294,20 @@ inline.stdin.write(PGUP)
 await sleep(500)
 check('inline: PgUp leaves the TUI viewport alone (terminal scrollback owns it)', screenHas(inline.term, marker(LAST)))
 await inline.instance.unmount()
+
+// ---- narrow terminal: margins + gutter shrink the transcript, not paging ----
+// The return leg polls instead of assuming one press: at 24 rows the
+// virtualization window is re-mounting rows mid-scroll and a single PgDn can
+// race the layout — the contract under test is "paging works at narrow
+// width", not single-press symmetry.
+const narrow = await mount(true, 70, 24)
+check('narrow 70x24: pinned to the bottom', screenHas(narrow.term, marker(LAST)))
+narrow.stdin.write(PGUP)
+await sleep(400)
+check('narrow 70x24: PgUp pages away from the tail', !screenHas(narrow.term, marker(LAST)))
+const narrowDown = await pageUntil(narrow.term, narrow.stdin, PGDN, () => screenHas(narrow.term, marker(LAST)), 3)
+check('narrow 70x24: PgDn returns to the tail', narrowDown > 0 && screenHas(narrow.term, marker(LAST)), `${narrowDown} presses`)
+await narrow.instance.unmount()
 
 console.log(failed === 0 ? '\nAll transcript paging checks passed.' : `\n${failed} check(s) failed.`)
 process.exit(failed === 0 ? 0 : 1)

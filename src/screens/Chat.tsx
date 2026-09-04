@@ -2482,6 +2482,13 @@ export function Chat({
     // so the transcript behind them must not move. Every guard above (session
     // tree, settings, scenes, dashboards) already claimed the keyboard — those
     // surfaces page their own lists with these keys.
+    //
+    // The question/approval/dialog panels deliberately do NOT yield: like the
+    // wheel branch above (whose comment spells this out), those panels mount
+    // BELOW the transcript — replacing the prompt, not covering it — so the
+    // transcript above them stays visible and scrollable while a decision is
+    // pending. The panels bind ↑/↓/Space/Tab/Enter/Esc and never these keys,
+    // so paging cannot steal anything from them.
     if ((key.pageUp || key.pageDown) && fullscreen) {
       if (helpOpen) return
       const overlayModal =
