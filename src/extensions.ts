@@ -46,7 +46,7 @@ export type {
   TuiDialogSnapshot,
 } from './dsh-adapter/dialogs.js'
 export { TuiStatusRuntime, TuiStatusStore } from './dsh-adapter/status.js'
-export type { TuiStatusEntry } from './dsh-adapter/status.js'
+export type { TuiStatusEntry, TuiStatusSegment, SegmentColor } from './dsh-adapter/status.js'
 export { matchShortcut, parseShortcutCombo, TuiShortcutRuntime } from './dsh-adapter/shortcuts.js'
 export type { TuiShortcutKey, TuiShortcutOptions } from './dsh-adapter/shortcuts.js'
 export { TuiRendererRuntime } from './dsh-adapter/renderers.js'

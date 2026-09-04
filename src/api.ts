@@ -27,6 +27,8 @@ export type {
   TuiDialogSelectRequest,
   TuiDialogSnapshot,
   TuiStatusEntry,
+  TuiStatusSegment,
+  SegmentColor,
   TuiShortcutKey,
   TuiShortcutOptions,
   TuiEntryRenderer,
