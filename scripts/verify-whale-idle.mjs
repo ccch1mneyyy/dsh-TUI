@@ -75,6 +75,12 @@ function drive(input, steps, start = 0) {
   check('idle whale runs occasional blink/flutter passes before sleeping', () => {
     assert.ok(frames.slice(0, 20).includes(F.blink), 'blink fires while awake')
   })
+  check('idle whale thumps its tail before falling asleep', () => {
+    const asleepAt = frames.findIndex(f => f === F.sleep1)
+    assert.ok(asleepAt > 0, 'sleep frames eventually play')
+    assert.ok(frames.slice(0, asleepAt).includes(F.tail4), 'the full tail pass plays while awake')
+    assert.ok(frames.slice(0, asleepAt).includes(F.fin2), 'fin flutter still precedes sleep')
+  })
   check(`idle whale falls asleep (within ~${SLEEP_DELAY_MS}ms + passes)`, () => {
     const asleepAt = frames.findIndex(f => f === F.sleep1)
     assert.ok(asleepAt > 0, 'sleep frames eventually play')

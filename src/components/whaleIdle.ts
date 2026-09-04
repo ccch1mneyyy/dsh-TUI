@@ -65,9 +65,12 @@ const IDLE_BLINK_GAP_MS = 5_000
 
 /**
  * Planner state. `queue`/`queueIndex` name the frame to show on the NEXT
- * step call; the sleep loop keeps its own position. Idle event timestamps
- * schedule the occasional passes; `sleepAt` is the sleep deadline, pushed
- * forward by every working step (work counts as activity).
+ * step call; the sleep loop keeps its own position. Each occasional-pass
+ * clock (blinkAt/flutterAt/thumpAt) seeds ONE fire per awake window and is
+ * cleared when it fires (see the idle branch) — so a window is: blink once,
+ * flutter once, thump once, then sleep. `sleepAt` is the sleep deadline,
+ * measured as 10s of quiet after the LAST motion: every working step and
+ * every occasional pass pushes it past its own end + SLEEP_DELAY_MS.
  */
 export interface WhaleIdleState {
   readonly asleep: boolean
@@ -181,8 +184,12 @@ export function nextWhaleIdleStep(
   }
 
   // Awake and idle: sleep when the inactivity deadline is the nearest due
-  // event, else fire whichever occasional pass came due, else rest on the
-  // standard pose until the nearest event.
+  // event (it always is, once each occasional pass has fired its one shot),
+  // else fire whichever occasional pass came due, else rest on the standard
+  // pose until the nearest event. Sleep never preempts a pass: every pass
+  // pushes the sleep deadline past its own end + SLEEP_DELAY_MS, and the
+  // blink (shortest gap) always fires first and buys room for flutter and
+  // thump inside the window.
   const dues: ReadonlyArray<{ at: number; kind: 'sleep' | 'blink' | 'flutter' | 'thump' }> = [
     { at: prev.sleepAt, kind: 'sleep' },
     { at: prev.blinkAt, kind: 'blink' },
@@ -200,11 +207,24 @@ export function nextWhaleIdleStep(
       delayMs: SLEEP_SETTLE_MS,
     }
   }
+  // Each occasional pass fires once per awake window (clock → ∞, no
+  // re-arm) and counts as activity: the sleep deadline moves to the end of
+  // the pass plus 10s of quiet, so sleep only comes after every pass got
+  // its turn — the idle thump included.
   if (nearest.kind === 'blink') {
-    return startPass(prev, BLINK_PASS, BLINK_HOLD_MS, { blinkAt: now + IDLE_BLINK_GAP_MS })
+    return startPass(prev, BLINK_PASS, BLINK_HOLD_MS, {
+      blinkAt: Number.POSITIVE_INFINITY,
+      sleepAt: now + BLINK_PASS.length * BLINK_HOLD_MS + SLEEP_DELAY_MS,
+    })
   }
   if (nearest.kind === 'flutter') {
-    return startPass(prev, FLUTTER_PASS, IDLE_FLUTTER_HOLD_MS, { flutterAt: now + IDLE_FLUTTER_GAP_MS })
+    return startPass(prev, FLUTTER_PASS, IDLE_FLUTTER_HOLD_MS, {
+      flutterAt: Number.POSITIVE_INFINITY,
+      sleepAt: now + FLUTTER_PASS.length * IDLE_FLUTTER_HOLD_MS + SLEEP_DELAY_MS,
+    })
   }
-  return startPass(prev, WAG_PASS, IDLE_WAG_HOLD_MS, { thumpAt: now + IDLE_THUMP_GAP_MS })
+  return startPass(prev, WAG_PASS, IDLE_WAG_HOLD_MS, {
+    thumpAt: Number.POSITIVE_INFINITY,
+    sleepAt: now + WAG_PASS.length * IDLE_WAG_HOLD_MS + SLEEP_DELAY_MS,
+  })
 }
