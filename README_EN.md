@@ -516,14 +516,23 @@ responsible for their maintenance and security.
 `dsh-TUI` does not implement a separate sandbox. It uses the filesystem,
 shell, sandbox, and approval policies of the active DSH profile. Permission
 presets come from the mounted DSH `permissionPresets` registry: third-party
-presets appear automatically in the picker in registry order, while only IDs
-accepted by the existing command-token grammar enter completion. `custom` is a
-current-state label only, never a selectable target. Switching always uses the
-official `/permission <preset>` command.
+presets appear automatically in the picker, completion and the `Shift+Tab`
+cycle (excluding `custom`/`status`, canonical presets, duplicate identities
+and unsafe tokens), with the registry's declaration order kept stable across
+refreshes. `custom` is a current-state label only, never a selectable target.
+While the service snapshot is usable, `/permission` is surfaced as a first-class
+local command: switches prefer the official `/permission <preset>` command; when
+the command row never reaches the agent's registry, the TUI falls back to the
+permissionPresets service's own official write path (the same handler the
+command drives — real `permission/preset`/`sandbox/mode`/`approval/policy`
+events, never fabricated by the TUI) and confirms via event/readback; when
+neither path exists it fails loudly instead of silently falling through.
+Exiting plan mode restores the pre-plan atoms first, then returns the durable
+identity to the preset you were on before plan mode (while the registry still
+offers it).
 When the `permissionPresets` service is absent, TUI keeps its legacy three-row
 compatibility roster. A mounted but unusable service is marked unavailable and
-fails closed instead of inventing a roster. If the external `/permission` command
-is not registered, input follows the existing default/model dispatch path. Inspect
+fails closed instead of inventing a roster. Inspect
 the profile before starting it around sensitive credentials or an untrusted
 repository.
 

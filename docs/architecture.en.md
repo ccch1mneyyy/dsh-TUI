@@ -139,14 +139,28 @@ mounted by `cordis.patch.yml`:
   access and should be treated as code-execution surfaces in the same policy
   domain.
 - `/permission` reads the mounted DSH `permissionPresets` registry in declared
-  order. Third-party presets appear in the picker automatically; only IDs that
-  fit the existing command-token grammar enter Tab completion. `custom` is a
-  current-state projection, never a selectable target.
+  order. Third-party presets appear in the picker, Tab completion and the
+  `Shift+Tab` cycle automatically (excluding `custom`/`status`, canonical
+  presets, duplicate identities and unsafe tokens); the first observation
+  follows registry order while later refreshes keep the relative order of
+  identities already seen. `custom` is a current-state projection, never a
+  selectable target.
+- While the service snapshot is usable the TUI owns `/permission` locally:
+  switches PREFER the official `/permission <preset>` command; when the
+  command row never reaches this agent's registry (composition-dependent),
+  the TUI FALLS BACK to the permissionPresets service's own official write
+  path `set(session, preset)` — the same handler the command drives, writing
+  real `permission/preset`/`sandbox/mode`/`approval/policy` events (never
+  fabricated by the TUI) — and confirms via event/readback; when neither path
+  exists it fails loudly with a toast + log instead of sending the input to
+  the model. Exiting plan mode restores the pre-plan atoms first, then the
+  durable preset identity from before plan mode (while the registry offers it).
 - The TUI distinguishes `runtime`, `legacy`, and `unavailable`: the legacy
   three-row roster is used only when the service is truly absent. A mounted
   service that is empty, inconsistent, broken, or unsafe fails closed instead
-  of inferring identity from sandbox/approval knobs. All switches still call
-  the official `/permission <preset>` command.
+  of inferring identity from sandbox/approval knobs. The adapter reads the
+  real service contract — `current(session)` through the session-projection
+  seam — with a compatibility fallback for the older event-log shape.
 
 Inspect the active profile patch before running in an untrusted repository; the
 visual TUI alone does not describe the effective policy.

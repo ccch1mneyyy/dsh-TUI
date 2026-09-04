@@ -1059,10 +1059,18 @@ export function Chat({
    * result text lands as a notification. `rawInput` carries the text after
    * the command name (`/plan off` → ` off`).
    */
-  /** Route every permission switch through the official command path. */
+  /** Route every permission switch through the official command path when it
+   *  is registered; otherwise fall back to the permission-presets service's
+   *  own write path (the same handler the command drives) so the picker and
+   *  typed `/permission <preset>` keep working on compositions where the
+   *  command row never reaches this agent's registry. */
   const runPermissionCommand = (rawInput: string): void => {
     const originAgentBinding = channel.agentBindingGeneration
-    void channel.runExternalCommand('permission', rawInput).then((text) => {
+    const mounted = channel.commandList.some(command => command.external && command.name === 'permission')
+    const run = mounted
+      ? channel.runExternalCommand('permission', rawInput)
+      : channel.runPermissionPreset(rawInput.trim()).then(ok => (ok ? '' : undefined))
+    void run.then((text) => {
       if (channel.agentBindingGeneration !== originAgentBinding) return
       if (text === undefined) {
         channel.notify(t('command-not-found', { name: 'permission' }), { color: 'error' })
@@ -1818,18 +1826,24 @@ export function Chat({
         channel.notify(t('login-logout-hint'))
         return true
       case 'permission': {
-        // The command itself is registered by dsh-sandbox-policy (dsh-base
-        // permission-presets row): bare `/permission` opens the preset
-        // picker and
-        // Enter dispatches `/permission <preset>` through the same
-        // external-command path a hand-typed argument takes. `/permission
-        // status` prints the policy explainer; other arguments pass through
-        // verbatim.
-        // When the row is not mounted the default external path (or the
-        // model, when nothing is registered) wins.
+        // The command itself is registered by the permission-presets row
+        // (dsh-base): bare `/permission` opens the preset picker and Enter
+        // dispatches `/permission <preset>`; `/permission status` prints the
+        // policy explainer; other arguments pass through verbatim.
+        // The row may be mounted as a service without its command ever
+        // reaching this agent's registry (composition-dependent) — when the
+        // service snapshot is usable the TUI still owns the entry and
+        // switches through the service write path (never the model).
         const mounted = channel.commandList.some(command => command.external && command.name === 'permission')
+        let serviceUsable = false
+        try {
+          serviceUsable = channel.permissionPresets().availability === 'runtime'
+        } catch {
+          serviceUsable = false
+        }
+        const reachable = mounted || serviceUsable
         const parts = rawInput.trim().split(/\s+/).filter(Boolean)
-        if (mounted && parts[0] === 'status') {
+        if (reachable && parts[0] === 'status') {
           setHelpOpen(false)
           const snapshot = channel.permissionPresets()
           if (snapshot.options.some(option => option.value === 'status')) {
@@ -1848,7 +1862,7 @@ export function Chat({
           ])
           return true
         }
-        if (mounted && parts.length === 0) {
+        if (reachable && parts.length === 0) {
           setHelpOpen(false)
           const snapshot = channel.permissionPresets()
           if (snapshot.availability === 'unavailable' || snapshot.options.length === 0) {
@@ -1872,7 +1886,7 @@ export function Chat({
           })
           return true
         }
-        if (mounted) {
+        if (reachable) {
           setHelpOpen(false)
           runPermissionCommand(rawInput)
           return true
