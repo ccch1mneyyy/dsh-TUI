@@ -4263,8 +4263,11 @@ export function createChannel(
         } else if (typeof persistence.list === 'function') {
           const headers = await persistence.list()
           listed = headers.flatMap(raw => {
-            const header = readHeader(raw)
-            return header === undefined ? [] : [{ header, raw }]
+            const nested = raw !== null && typeof raw === 'object'
+              ? (raw as { header?: unknown }).header
+              : undefined
+            const header = readHeader(nested) ?? readHeader(raw)
+            return header === undefined ? [] : [{ header, raw: nested ?? raw }]
           })
         }
       } catch {

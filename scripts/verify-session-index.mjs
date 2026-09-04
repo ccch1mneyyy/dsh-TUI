@@ -458,6 +458,23 @@ check(
   viaSnapshots.map(s => [s.id, s.title.text]).sort(),
   fromCold.map(s => [s.id, s.title.text]).sort(),
 )
+// dsh 0.1.2+ has no listSnapshots(); it put {header, revision, sizeBytes} on
+// list() itself. Parsing those rows as bare headers drops every session.
+const listReturnsSnapshots = {
+  list: async () =>
+    allHeaders.map(header => ({
+      header,
+      revision: `rev:${header.id}:${statSync(join(root, '--proj--', header.id, 'session.jsonl.zstd')).size}`,
+      sizeBytes: 1,
+    })),
+}
+rmSync(INDEX_FILE, { force: true })
+const viaListSnapshotShape = await listSummaries(listReturnsSnapshots)
+check(
+  'list() that returns snapshots (dsh 0.1.2+) still resolves titles',
+  viaListSnapshotShape.map(s => [s.id, s.title.text]).sort(),
+  fromCold.map(s => [s.id, s.title.text]).sort(),
+)
 check('a backend that lists nothing yields nothing', (await listSummaries({})).length, 0)
 check('a backend that throws yields nothing rather than propagating', (await listSummaries({ list: async () => { throw new Error('boom') } })).length, 0)
 
