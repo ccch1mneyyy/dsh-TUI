@@ -12,9 +12,6 @@
  */
 process.env.FORCE_COLOR = '3'
 process.env.TERM_PROGRAM = 'WezTerm'  // DEC-2026 同步输出，使 DECSTBM 滚动优化生效
-// Windows 终端栈默认禁用 DECSTBM（全屏残影类）；本复现的目的正是验证
-// DECSTBM 快速路径自身的模型一致性，强制开启。
-process.env.DSH_TUI_FORCE_DECSTBM = '1'
 process.env.DSH_TUI_THEME = 'dark'
 
 const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render, AlternateScreen }, { Chat }, { QuestionStore }] = await Promise.all([

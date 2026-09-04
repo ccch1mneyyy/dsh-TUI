@@ -308,38 +308,9 @@ export function hasCursorUpViewportYankBug(): boolean {
 export const SYNC_OUTPUT_SUPPORTED = isSynchronizedOutputSupported()
 
 /**
- * True when the terminal stack must not be trusted with the DECSTBM
- * hardware-scroll shortcut — the Windows terminal stack (ConPTY → Windows
- * Terminal / conhost). The per-frame `CSI top;bot r + CSI n S/T + CSI r`
- * sequence assumes the emulator applies the scroll EXACTLY inside the
- * modeled region; when the outer stack mis-applies it even once (region
- * dropped or deferred across a sync block, a restore-time replay, a
- * passthrough rewrite), the terminal scrolls MORE than the model and every
- * row OUTSIDE the region — status bar, input row, page margins — is left
- * shifted/duplicated. Those rows are static: the diff model believes them
- * unchanged, so nothing ever repaints them (the persistent fullscreen
- * ghost; Ctrl+L is the only repair). Same failure class as upstream
- * claude-code#14716 ("scroll margins not reset" on Windows Terminal) and
- * the reason JediTerm is excluded below. Disabling trades the 12-byte
- * scroll shortcut for the cell-by-cell fallback that every terminal renders
- * identically; write volume during scroll drains rises but stays bounded.
- *
- * `DSH_TUI_FORCE_DECSTBM=1` bypasses THIS gate only (not the sync/JediTerm
- * gates) so the fast path itself stays testable on Windows and available to
- * users who trust their terminal stack.
- */
-export function hasDecstbmScrollBug(): boolean {
-  if (process.env.DSH_TUI_FORCE_DECSTBM === '1') return false
-  return process.platform === 'win32' || !!process.env.WT_SESSION
-}
-
-/**
  * Whether the DECSTBM hardware-scroll optimization may be used to paint
- * ScrollBox scrolls. Called once per frame; SYNC_OUTPUT_SUPPORTED is a
- * module-load constant, so the per-call cost is two live process.env reads
- * (DSH_TUI_FORCE_DECSTBM + WT_SESSION) plus a platform check — negligible,
- * and deliberately un-cached so env-driven probes in verify scripts stay
- * honest against the real gate.
+ * ScrollBox scrolls. Called once per frame — the same env reads as the
+ * SYNC_OUTPUT_SUPPORTED gate, so the extra cost is a single comparison.
  *
  * JediTerm is explicitly excluded even though it implements DEC 2026: its
  * scroll-region (DECSTBM) + CSI S/T handling deviates from xterm and, when
@@ -348,12 +319,9 @@ export function hasDecstbmScrollBug(): boolean {
  * The diff engine falls back to repainting the shifted rows cell-by-cell,
  * which every terminal renders identically. Same gate as upstream Claude
  * Code, which hard-disables DECSTBM on JetBrains terminals.
- * The Windows terminal stack is excluded for the same reason (see
- * {@link hasDecstbmScrollBug}).
  * @returns true when DECSTBM scroll optimization is safe on this terminal.
  */
 export function isDecstbmSafe(): boolean {
-  if (hasDecstbmScrollBug()) return false
   return SYNC_OUTPUT_SUPPORTED && !isJetBrainsIdeTerminal()
 }
 
@@ -503,18 +471,15 @@ export function serializeDiff(
  * @param terminal - the terminal to write to.
  * @param diff - the frame diff patches to render.
  * @param skipSyncMarkers - when true, omit the BSU/ESU wrapping.
- * @returns `false` when the underlying stream reported backpressure
- *   (`stdout.write()` returned false) — callers gate scroll-drain and
- *   backlog handling on this.
  */
 export function writeDiffToTerminal(
   terminal: Terminal,
   diff: Diff,
   skipSyncMarkers = false,
-): boolean {
+): void {
   const buffer = serializeDiff(terminal, diff, skipSyncMarkers)
   if (buffer === '') {
-    return true
+    return
   }
-  return terminal.stdout.write(buffer)
+  terminal.stdout.write(buffer)
 }

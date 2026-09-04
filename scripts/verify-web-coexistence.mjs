@@ -2,14 +2,16 @@
  * Regression gate for mixed dsh-web + dsh-tui profiles.
  *
  * The installed web-app is always checked. A source checkout supplies the
- * unpublished alpha baseline; CI requires it instead of silently skipping it.
+ * source-authoritative prerelease baseline; CI requires it instead of silently
+ * skipping it.
  * Scoped TUI host rows must never collide with either bundle generation and
  * must yield to every official row that generation owns.
  */
 
 import assert from 'node:assert/strict'
 import { existsSync, readFileSync } from 'node:fs'
-import { join, resolve } from 'node:path'
+import { createRequire } from 'node:module'
+import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { parse } from 'yaml'
 import { applyEntryPatches } from '@deepseek-ai/cordis-plugin-include'
@@ -37,11 +39,11 @@ const sourceRoot = process.env.DSH_HARNESS_SOURCE_ROOT === undefined
 const sourceWebPath = join(sourceRoot, 'packages/bundle/web-app/cordis.patch.yml')
 const sourceWebManifest = join(sourceRoot, 'packages/bundle/web-app/package.json')
 const sourceBasePath = join(sourceRoot, 'packages/bundle/base/cordis.patch.yml')
-const requireAlphaBaseline = process.env.DSH_REQUIRE_ALPHA_BASELINE === '1'
+const requireSourceBaseline = process.env.DSH_REQUIRE_ALPHA_BASELINE === '1'
 if (existsSync(sourceWebPath) && existsSync(sourceWebManifest) && existsSync(sourceBasePath)) {
   const sourceWebVersion = JSON.parse(readFileSync(sourceWebManifest, 'utf8')).version
-  if (requireAlphaBaseline && sourceWebVersion !== '0.1.2-alpha.2') {
-    throw new Error(`required alpha baseline is 0.1.2-alpha.2, got ${sourceWebVersion}`)
+  if (requireSourceBaseline && sourceWebVersion !== '0.1.2-rc.1') {
+    throw new Error(`required source baseline is 0.1.2-rc.1, got ${sourceWebVersion}`)
   }
   const resolver = prepareUpstreamSourceResolver(sourceRoot)
   baselines.push({
@@ -51,8 +53,8 @@ if (existsSync(sourceWebPath) && existsSync(sourceWebManifest) && existsSync(sou
     basePath: sourceBasePath,
     webPath: sourceWebPath,
   })
-} else if (requireAlphaBaseline) {
-  throw new Error(`required alpha baseline missing under ${sourceRoot}`)
+} else if (requireSourceBaseline) {
+  throw new Error(`required source baseline missing under ${sourceRoot}`)
 }
 
 const tuiPatches = loadPatch(tuiPath)
@@ -75,11 +77,38 @@ const shared = [
 ]
 
 for (const baseline of baselines) {
-  const alpha = baseline.version.startsWith('0.1.2-alpha.')
+  const require = createRequire(baseline.baseUrl)
+  const resolvePackage = specifier => {
+    try {
+      return require.resolve(specifier)
+    } catch (error) {
+      if (
+        error?.code === 'ERR_MODULE_NOT_FOUND'
+        || error?.code === 'MODULE_NOT_FOUND'
+        || error?.code === 'ERR_PACKAGE_PATH_NOT_EXPORTED'
+      ) return undefined
+      throw error
+    }
+  }
+  const presetManifest = resolvePackage('@deepseek-ai/dsh-agent-presets/package.json')
+  const shippedStandardPreset = presetManifest === undefined
+    ? undefined
+    : join(dirname(presetManifest), 'presets', 'standard', 'agent.cordis.yml')
+  const hasShippedPresets = shippedStandardPreset !== undefined && existsSync(shippedStandardPreset)
+  const shippedOwnsCommandGoal = hasShippedPresets
+    && loadPatch(shippedStandardPreset).some(row => row?.id === 'command-goal')
+  const hasSubagentModelSelectionSettings = resolvePackage(
+    '@deepseek-ai/dsh-tool-subagent/model-selection-settings',
+  ) !== undefined
   const basePatches = baseline.basePath === undefined ? [] : loadPatch(baseline.basePath)
   const webPatches = loadPatch(baseline.webPath)
   assert.ok(Array.isArray(basePatches), `${baseline.label}: base patch must be a top-level list`)
   assert.ok(Array.isArray(webPatches), `${baseline.label}: web-app patch must be a top-level list`)
+  assert.equal(
+    shippedOwnsCommandGoal,
+    webPatches.some(row => row?.id === 'command-goal' && row?.disabled === true),
+    `${baseline.label}: direct shipped command-goal ownership must match the official web override`,
+  )
 
   const officialRows = insertedRows([...basePatches, ...webPatches])
   const composed = applyEntryPatches([], [...basePatches, ...webPatches, ...tuiPatches], () => {})
@@ -128,10 +157,10 @@ for (const baseline of baselines) {
       }]
       assert.equal(
         Boolean(evaluateFor(baseline, tuiRow.disabled, disabledInventory)),
-        !alpha,
+        !hasSubagentModelSelectionSettings,
         `${baseline.label}: ${scopedId} capability must follow the package export, not inventory state`,
       )
-      if (alpha) {
+      if (officialExpected) {
         assert.equal(
           Boolean(evaluateFor(baseline, tuiRow.disabled, [{
             options: { id, name },
@@ -160,8 +189,8 @@ for (const baseline of baselines) {
   )
   assert.equal(
     Boolean(evaluateFor(baseline, commandGoalPatch.disabled)),
-    alpha,
-    `${baseline.label}: host command-goal must remain on for rc presets and yield to alpha shipped presets`,
+    shippedOwnsCommandGoal,
+    `${baseline.label}: host command-goal must yield exactly when the shipped standard preset owns it`,
   )
 
   const presetRow = composed.find(row => row?.id === 'dsh-tui-agent-presets')
@@ -170,13 +199,13 @@ for (const baseline of baselines) {
   assert.equal(presetConfig?.default, 'standard', `${baseline.label}: standard remains the default preset`)
   assert.equal(
     Object.hasOwn(presetConfig ?? {}, 'roots'),
-    !alpha,
-    `${baseline.label}: rc needs the dsh CLI preset root; alpha must use agent-presets includeShippedRoot`,
+    !hasShippedPresets,
+    `${baseline.label}: only package generations without shipped presets need the dsh CLI root`,
   )
-  if (!alpha) {
-    assert.equal(Array.isArray(presetConfig.roots), true, `${baseline.label}: rc preset roots must be an array`)
-    assert.equal(presetConfig.roots.length, 1, `${baseline.label}: rc needs exactly one system preset root`)
-    assert.equal(presetConfig.roots[0]?.trust, 'system', `${baseline.label}: rc preset root must keep system trust`)
+  if (!hasShippedPresets) {
+    assert.equal(Array.isArray(presetConfig.roots), true, `${baseline.label}: legacy preset roots must be an array`)
+    assert.equal(presetConfig.roots.length, 1, `${baseline.label}: legacy packages need exactly one system preset root`)
+    assert.equal(presetConfig.roots[0]?.trust, 'system', `${baseline.label}: legacy preset root must keep system trust`)
   }
 }
 

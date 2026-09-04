@@ -3,7 +3,7 @@
  * fake compaction 服务）：
  *
  *  1. 取消先于快照——压缩进行中 /model：switchModel 必须先 abort 并等压缩
- *     落定、再 sessions.fork（顺序断言），fork 的 seed 不含任何压缩产物；
+ *     落定、再切片 source 快照（顺序断言），seed 不含任何压缩产物；
  *     toast 报「已取消并切换」，且不再追加误导性的通用「压缩失败」。
  *  2. persistence 分类——checkpoint 已提交但落盘失败（code:'persistence'）
  *     的拒绝必须与通用失败分开提示（含「压缩已生效」语义，不再裸报失败）。
@@ -65,11 +65,19 @@ function makeEvents(turns = 2): Array<Record<string, unknown>> {
   return events
 }
 const stubAgentCtx = { on: () => () => {} }
-function makeAgent(id: string, sessionEvents: readonly unknown[]) {
+function makeAgent(id: string, sessionEvents: readonly unknown[], onSnapshot?: () => void) {
   return {
     id,
     status: 'idle',
-    session: { id: `s-${id}`, seq: sessionEvents.length, events: sessionEvents, header: {} },
+    session: {
+      id: `s-${id}`,
+      seq: sessionEvents.length,
+      get events() {
+        onSnapshot?.()
+        return sessionEvents
+      },
+      header: {},
+    },
     ctx: stubAgentCtx,
     followup() {},
     steer() {},
@@ -109,23 +117,17 @@ function makeCompaction(script: Script) {
   }
 }
 
-// ---- 组装 ctx：sessions.fork / agents.create 记录调用顺序 --------------------
+// ---- 组装 ctx：source snapshot / agents.create 记录调用顺序 -----------------
 function assemble(script: Script) {
   const order: string[] = []
   const stamps = new Map<string, number>()
   const mark = (name: string) => {
     order.push(name)
-    stamps.set(name, Date.now())
+    if (!stamps.has(name)) stamps.set(name, Date.now())
   }
   const compaction = makeCompaction(script)
   let agentCounter = 0
   const services: Record<string, unknown> = {
-    sessions: {
-      fork(session: { events: readonly unknown[] }) {
-        mark('fork')
-        return { events: [...session.events] }
-      },
-    },
     agents: {
       async create(options: { sessionId: string; seed: readonly unknown[] }) {
         mark('create')
@@ -150,7 +152,7 @@ function assemble(script: Script) {
     },
     logger: { warn() {} },
   }
-  const agent = makeAgent('a1', makeEvents())
+  const agent = makeAgent('a1', makeEvents(), () => mark('snapshot'))
   const channel = createChannel(ctx as never, agent as never, {
     model: 'model-a',
     cwd: '/tmp/demo',
@@ -168,17 +170,22 @@ const toasts = (channel: { notifications: readonly { text: string }[] }) =>
   channel.compact()
   const started = await settle(() => compaction.calls.length === 1)
   check('scene1: compactNow invoked', started)
-  check('scene1: no fork before switch', !order.includes('fork'))
+  check('scene1: no create before switch', !order.includes('create'))
 
+  // createChannel 的启动回放也读取一次日志；只观测本次 switchModel 的
+  // source snapshot，且保留该窗口内第一次读取的时间戳。
+  stamps.delete('snapshot')
   const switchResult = await channel.switchModel('fake-provider', 'model-b')
   check('scene1: switch succeeds', switchResult === true, JSON.stringify(order))
-  // 严格顺序：abort 时间戳必须不晚于 fork——取消等待完成后才允许快照 seed。
+  // 严格顺序：取消落定后才能读取 seed；读取完成后才能 create。
   const abortedAt = compaction.calls[0]?.abortedAt
-  const forkAt = stamps.get('fork')
+  const snapshotAt = stamps.get('snapshot')
+  const createAt = stamps.get('create')
   check(
-    'scene1: abort strictly precedes the fork snapshot',
-    abortedAt !== undefined && forkAt !== undefined && abortedAt <= forkAt,
-    `abortedAt=${String(abortedAt)} forkAt=${String(forkAt)}`,
+    'scene1: abort precedes seed snapshot, which precedes create',
+    abortedAt !== undefined && snapshotAt !== undefined && createAt !== undefined
+      && abortedAt <= snapshotAt && snapshotAt <= createAt,
+    `abortedAt=${String(abortedAt)} snapshotAt=${String(snapshotAt)} createAt=${String(createAt)}`,
   )
 
   // toast：取消提示出现；随后不追加通用「压缩失败」（抑制闩）。
@@ -188,7 +195,7 @@ const toasts = (channel: { notifications: readonly { text: string }[] }) =>
   check('scene1: cancel toast shown', text.includes('已取消并切换'), text)
   check('scene1: no misleading generic failure toast', !/压缩失败 ·/.test(text), text)
   // seed 快照不含压缩产物（checkpoint 事件从未写入——abort 先于提交）。
-  check('scene1: fork happened after cancel', order.includes('fork'), JSON.stringify(order))
+  check('scene1: create happened after cancel', order.includes('create'), JSON.stringify(order))
 }
 
 // ==== 场景 2：persistence 分类提示 ============================================

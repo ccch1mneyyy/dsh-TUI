@@ -1,7 +1,7 @@
 /**
  * Smooth streaming reveal — decouples "text the provider has delivered" from
  * "text the screen is showing" (the oh-my-pi `display.smoothStreaming` idea,
- * see their `StreamingRevealController`). A shared ~20fps scheduler advances
+ * see their `StreamingRevealController`). A shared ~30fps scheduler advances
  * each reveal cursor by an adaptive catch-up step, so burst-delivered text (a
  * slow provider dumping a large batch, or a non-streaming response arriving
  * whole) paints as a brief even flow instead of one jarring jump, while
@@ -26,8 +26,7 @@
  * live here keyed by row identity, the READS happen during render (they feed
  * the same flattened `text` prop the streaming path already uses), and the
  * WRITES happen on the scheduler tick, which bumps a version that
- * MessageList subscribes to through the DefaultLane useRevealVersion hook.
- * A reveal therefore
+ * MessageList subscribes to via useSyncExternalStore. A reveal therefore
  * rides the exact same update pipeline as an arriving chunk: prop change →
  * memo miss → re-render → post-commit measurement. Render-phase reads are
  * idempotent and safe to re-run (a discarded concurrent render at worst
@@ -37,18 +36,12 @@
  * unit per character). Surrogate pairs are never split (see {@link
  * safeSliceEnd}); grapheme clusters longer than a surrogate pair (emoji ZWJ
  * chains) may briefly show a partial cluster mid-reveal — transient frames
- * repaint within ~50ms, and settled rendering is always the full text.
+ * repaint within 33ms, and settled rendering is always the full text.
  */
 import { registerOverflowQuench, swallowNestedUpdateOverflow } from '../ink/update-overflow-guard.js'
 
-/**
- * Reveal tick cadence — ~20fps. 30fps (oh-my-pi's controller) measured as a
- * ~2.2× multiplier on cumulative Yoga/layout work during long streamed turns
- * (every tick drives a full React→Yoga→diff frame regardless of chunk
- * cadence; probe-smooth-chat-perf). 20fps keeps the typewriter visually even
- * while cutting the tick-driven frame budget by ~40%.
- */
-export const REVEAL_FRAME_MS = 1000 / 20
+/** Reveal tick cadence — ~30fps, matching oh-my-pi's controller. */
+export const REVEAL_FRAME_MS = 1000 / 30
 /** Minimum units (code units or lines) advanced per tick while work remains. */
 export const REVEAL_MIN_STEP = 3
 /** Catch-up bound: the reveal settles any backlog within this many frames. */
@@ -204,33 +197,6 @@ export function snapReveal(key: string): void {
   if (textCursors.delete(key) || countCursors.delete(key)) markRevealCompleted(key)
 }
 
-/**
- * Whether a cursor for `key` is still advancing (created and not yet caught
- * up). Callers gate per-row work on this: a row mid-reveal re-renders every
- * tick, while rows without a cursor must stay memoized (the reveal version
- * prop, virtualization remount guards). O(1) map lookups, no allocation.
- */
-export function hasActiveReveal(key: string): boolean {
-  return textCursors.has(key) || countCursors.has(key)
-}
-
-/**
- * Cursor-key constructors — the SINGLE source of truth for tool-card reveal
- * keys. MessageList's per-card version gating and the card's own cursor
- * reads MUST agree on these shapes (generation prefix + `:split` suffix);
- * a drift between duplicated copies would silently freeze a card
- * mid-reveal (cursor active but revealVersion stuck at 0), so every
- * construction site goes through these exports.
- */
-export function toolRevealKey(generation: number | undefined, callId: string): string {
-  return generation === undefined ? `tool:${callId}` : `tool:${generation}:${callId}`
-}
-
-/** The split-diff pane cursor key derived from the owning card's key. */
-export function splitRevealKey(cardKey: string): string {
-  return `${cardKey}:split`
-}
-
 // ---------------------------------------------------------------------------
 // Render-phase reads
 // ---------------------------------------------------------------------------
@@ -371,9 +337,4 @@ export function resetRevealForTest(): void {
 /** Whether the shared scheduler currently runs (refcount assertions). */
 export function isRevealTimerRunning(): boolean {
   return revealTimer !== undefined
-}
-
-/** Number of mounted reveal subscribers (test-only fanout invariant). */
-export function revealListenerCountForTest(): number {
-  return revealListeners.size
 }

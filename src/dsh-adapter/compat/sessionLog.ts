@@ -686,6 +686,50 @@ export function readSessionEventsFromLog(
   return readEvents(file, maxEvents, maxScanned, skipBelowSeq)
 }
 
+function seedLengthOfPhysicalHeader(record: unknown): number | undefined {
+  if (record === null || typeof record !== 'object' || Array.isArray(record)) return undefined
+  const rec = record as Record<string, unknown>
+  if (rec['type'] !== 'session') return undefined
+  const seed = rec['seedLength']
+  if (typeof seed === 'number' && Number.isSafeInteger(seed) && seed >= 0 && !Object.is(seed, -0)) return seed
+  return undefined
+}
+
+/**
+ * Read the physical JSONL header's `seedLength` from the first record.
+ * Logical alpha.4 list headers only have `isSeeded`; the exact cut stays on
+ * this first line. Does not scan events or guess from `session/end-seed`.
+ */
+export function readPhysicalHeaderSeedLength(path: string): number | undefined {
+  const file = resolveLocatedPath(path)
+  if (file === undefined) return undefined
+  let fd: number | undefined
+  try {
+    fd = openSync(file.path, 'r')
+    for (const record of logRecords(fd, file.compressed)) {
+      return seedLengthOfPhysicalHeader(record)
+    }
+    return undefined
+  } catch {
+    return undefined
+  } finally {
+    if (fd !== undefined) {
+      try {
+        closeSync(fd)
+      } catch {
+        // A close failure leaves nothing actionable.
+      }
+    }
+  }
+}
+
+/** Locate a session log by id and read its physical header `seedLength`. */
+export function readPhysicalHeaderSeedLengthForSession(sessionId: string): number | undefined {
+  const file = findSessionLogFileAnyEncoding(sessionId)
+  if (file === undefined) return undefined
+  return readPhysicalHeaderSeedLength(file.path)
+}
+
 /**
  * Decode a (possibly multi-frame) zstd jsonl log. Frames are split by magic
  * scan; any frame failing to decode or any line failing to parse throws, so

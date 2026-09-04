@@ -14,7 +14,7 @@ import { t } from '../../i18n.js'
 import type { ToolBackground } from '../../tuiDisplayPrefs.js'
 import type { Theme } from '../../theme.js'
 import type { ClickEvent } from '../../ink/events/click-event.js'
-import { revealLinesOf, snapReveal, splitRevealKey, toolRevealKey } from '../smoothReveal.js'
+import { revealLinesOf, snapReveal } from '../smoothReveal.js'
 import { useRevealVersion } from '../../hooks/useRevealVersion.js'
 
 type Props = {
@@ -62,7 +62,7 @@ type Props = {
   /**
    * Smooth streaming reveal (settings `dsh-tui.smoothStreaming`): the card
    * BODY (diff hunks / write content — model-authored prose, not tool
-   * output) paints through an even ~20fps line reveal when it first appears,
+   * output) paints through an even ~30fps line reveal when it first appears,
    * instead of one jarring block. Only the pending CALL view animates; the
    * settled result view paints complete (real output is progress, not
    * prose), and so do replayed cards.
@@ -73,8 +73,6 @@ type Props = {
   fresh?: boolean
   /** Reveal version supplied by MessageList to avoid one store subscriber per card. */
   revealVersion?: number
-  /** Transcript generation namespace; call ids may repeat after session reset. */
-  revealGeneration?: number
 }
 
 /** Tool display names: DSH emits lowercase tool ids (`bash`); Claude Code
@@ -301,13 +299,16 @@ function foldTerminalTitle(title: string): FoldedTitle | undefined {
   return { first, hidden }
 }
 
-/** Metadata line for the header hover tooltip when the header itself is
- *  complete: start/finish wall-clock and the terminal result's exit code /
- *  signal — everything the header's relative `· 2m` chip and the body's
+/** Addendum line appended to the header hover tooltip when the header hides
+ *  content (folded script / clipped args / width-truncated title): start or
+ *  finish wall-clock and the terminal result's exit code / signal —
+ *  everything the header's relative `· 2m` chip and the body's
  *  `Running… (…)` line do NOT say. Durations stay out on purpose: showing
  *  a value twice, once on the card and once in the float, is exactly the
- *  noise class this tooltip exists to avoid. Returns '' when the row
- *  carries no timing data. */
+ *  noise class this tooltip exists to avoid. A fully visible header pops
+ *  NOTHING (meta included) — a float that repeats or annotates content
+ *  already on screen is noise, not detail. Returns '' when the row carries
+ *  no timing data. */
 function toolCardMetaTooltip(tool: ToolRow, isRunning: boolean, isError: boolean): string {
   const parts: string[] = []
   const startedAt = tool.startedAt
@@ -344,42 +345,44 @@ function HeaderTitle({ name, title, isTerminal, folded, displayArgs, argsLanguag
    *  segment renders underlined and clickable (opens the file menu). */
   filePath?: string
   onOpenFile?: (path: string) => void
-  /** Metadata line shown on hover when the header is complete: start/finish
-   *  wall-clock, terminal exit code/signal — everything the relative chip
-   *  and the body's Running… line do NOT say. Lazy getter, resolved at
-   *  show time so a running card's start stays fresh. '' = nothing. */
+  /** Addendum line for the header hover tooltip when the header HIDES
+   *  content (folded script / clipped args / width-truncated title):
+   *  start/finish wall-clock, terminal exit code/signal — everything the
+   *  relative chip and the body's Running… line do NOT say. Lazy getter,
+   *  resolved at show time so a running card's start stays fresh. '' =
+   *  nothing. A fully visible header pops no tooltip at all. */
   metaTooltip: () => string
   /**
-   * Column budget for `name + (title)` on the header line — what
+   * Column budget for the NON-terminal one-line title on the header line —
    * `useTerminalSize().columns` (already margin-adjusted) minus the fixed
-   * header chrome (loader, hover ▾ indicator, settled chip, gutter slack).
-   * When the wrapped text exceeds it, ink's truncate-end CUTS the title on
-   * the screen and the tooltip must prefer the complete text over the
-   * metadata; otherwise the metadata is everything the float adds.
+   * chrome of the row: loader dot 2 + hover ▾ indicator 2 (present while
+   * the pointer dwells) + the settled elapsed chip + slack for the
+   * transcript gutter. Only this title renders in a truncate-end Text, so
+   * only it can be cut by layout width (terminal titles wrap; args are
+   * clipped by the 480-char budget) — this budget gates just that cut.
    */
   headerTextBudget: number
 }): React.ReactNode {
-  // Hover tooltip priority: genuinely HIDDEN content first — a folded
-  // terminal script, args clipped past the 480-char budget, or a single-line
-  // title cut by layout width (truncate-end). Only a header that really
-  // fits its row offers just the metadata, and stays silent when the row
-  // has no timing data. Empty content is a no-op inside the hook.
+  // Hover tooltip rule: pop ONLY when the header genuinely hides content —
+  // a folded terminal script, args clipped past the 480-char budget, or a
+  // non-terminal one-line title cut by layout width (truncate-end). A header
+  // that fully fits its row stays silent: a float that repeats or annotates
+  // text already visible next to the pointer is noise, not detail. Empty
+  // content is a no-op inside the hook.
   const headerTooltip = useTooltip(() => {
     const meta = metaTooltip()
     const withMeta = (full: string): string => (meta === '' ? full : `${full}\n${meta}`)
     if (folded !== undefined) return withMeta(title ?? '')
     if (title === undefined && clipHeaderArgs(displayArgs) !== displayArgs) return withMeta(displayArgs)
-    // Width truncation: the truncate-end Text cuts long one-line titles by
-    // layout, not by a budget — same hidden-content rule as above.
-    const wrapped = title === undefined
-      ? `(${clipHeaderArgs(displayArgs)})`
-      : isTerminal
-        ? `(${title})`
-        : title.trim()
-    if (stringWidth(name) + stringWidth(wrapped) > headerTextBudget) {
-      return withMeta(title === undefined ? displayArgs : title.trim())
+    // Width truncation: only the non-terminal title Text is truncate-end —
+    // a long one-line title is really cut by layout when it overflows the
+    // row. Terminal titles WRAP instead (default Text wrap, nothing hidden)
+    // and args within the 480 budget wrap too; they never reach this gate.
+    if (title !== undefined && !isTerminal && stringWidth(title.trim()) > headerTextBudget) {
+      return withMeta(title.trim())
     }
-    return meta
+    // Header fully visible: nothing hidden, nothing to add — stay silent.
+    return ''
   })
   if (title === undefined) {
     return (
@@ -484,7 +487,6 @@ export function AssistantToolUseMessage({
   smoothReveal = false,
   fresh = false,
   revealVersion,
-  revealGeneration,
 }: Props): React.ReactNode {
   // MessageList owns the single production subscription and passes a version
   // prop only to active reveal rows. Standalone consumers keep the fallback
@@ -538,16 +540,23 @@ export function AssistantToolUseMessage({
   // source line per terminal row (truncate) keeps the panes row-aligned,
   // which the flat add/del line model cannot express.
   const { columns } = useTerminalSize()
+  // Interactive rows grow a ▾/▴ disclose column while the pointer dwells
+  // (fixed, no layout shift elsewhere). The tooltip resolves at show time —
+  // i.e. exactly while that column is present — so the budget must reserve
+  // it for clickable cards only; non-interactive rows never render it.
+  const interactive = onClick !== undefined
   // Header-row budget for the title Text. useTerminalSize() already reports
   // the margin-adjusted content width, so this is the fixed chrome of the
-  // line only: loader dot 2 + hover ▾ indicator 2 (present while the pointer
-  // dwells) + the settled elapsed chip + slack for the transcript gutter.
-  // Over the budget ink's truncate-end cuts the title on screen (a *layout*
-  // truncation, not the 480-char budget) — HeaderTitle then prefers the
-  // complete text.
-  const headerTextBudget = Math.max(0, columns - 2 - 2 - stringWidth(name)
-    - (!isRunning && elapsedText !== '' ? stringWidth(elapsedText) : 0)
-    - 4)
+  // line only: loader dot 2 + hover ▾ indicator 2 (interactive rows, present
+  // while the pointer dwells) + the settled elapsed chip. Calibrated against
+  // the renderer (probe-tooltip-truncation): a truncate-end title whose
+  // width exceeds columns − loader − ▾ − chip is really cut on screen at
+  // tooltip time; anything at or under the budget fits fully and must NOT
+  // pop a tooltip. No extra slack, and the tool name is NOT deducted — a
+  // non-terminal title carries its own first word, so double-counting name
+  // pushed the gate ~10 cols too tight and floated fully visible titles.
+  const headerTextBudget = Math.max(0, columns - 2 - (interactive ? 2 : 0)
+    - (!isRunning && elapsedText !== '' ? stringWidth(elapsedText) : 0))
   const useSplitDiff = !isError && view?.card === 'diff' &&
     (diffLayout === 'split' || (diffLayout !== 'unified' && columns >= SPLIT_DIFF_MIN_COLS))
   let body: BodyLine[] = []
@@ -571,23 +580,15 @@ export function AssistantToolUseMessage({
   const rendered: BodyLine[] =
     footnote === undefined ? lines : [...lines, { text: footnote, tone: 'hint' }]
   // Smooth reveal (line-unit, pending CALL body only): model-authored prose
-  // (diff hunks, write content) flows in at ~20fps; the settled RESULT view,
+  // (diff hunks, write content) flows in at ~30fps; the settled RESULT view,
   // error bodies, verbose/expanded cards, and replayed (non-fresh) cards all
   // paint complete. `snapReveal` on every non-revealable render retires a
   // cursor the moment its card stops qualifying (result arrived, user
   // expanded) — idempotent, safe during render.
-  const revealKey = toolRevealKey(revealGeneration, tool.callId)
+  const revealKey = `tool:${tool.callId}`
   const revealable = smoothReveal && !isError && isRunning && view !== undefined &&
     tool.resultView === undefined && !verbose && !isExpanded && fresh
-  if (!revealable) {
-    // Retire BOTH cursors: the body cursor and the split-diff pane cursor.
-    // SplitDiffView stops reading its key once `reveal` is gone, so an
-    // unsnapped split cursor would drain in the background for dozens of
-    // ticks, keeping the shared timer and its per-tick MessageList renders
-    // alive for nothing.
-    snapReveal(revealKey)
-    snapReveal(splitRevealKey(revealKey))
-  }
+  if (!revealable) snapReveal(revealKey)
   const revealedLineCount = revealable
     ? revealLinesOf(revealKey, rendered.length, { enabled: true, active: true })
     : rendered.length
@@ -609,7 +610,6 @@ export function AssistantToolUseMessage({
   // No layout change: the indicator is a fixed column on the header line, the
   // body never moves.
   const [hovered, setHovered] = React.useState(false)
-  const interactive = onClick !== undefined
   const hoverTint = interactive && hovered && !isSelected
 
   return (
@@ -657,7 +657,7 @@ export function AssistantToolUseMessage({
               maxRows={DIFF_BODY_MAX_LINES}
               verbose={verbose}
               toolBackground={ordinaryToolBackground}
-              reveal={revealable ? { key: splitRevealKey(revealKey) } : undefined}
+              reveal={revealable ? { key: `${revealKey}:split` } : undefined}
             />
           </Box>
         ) : (

@@ -21,6 +21,12 @@ export type Frame = {
   readonly scrollHint?: ScrollHint | null
   /** A ScrollBox has remaining pendingScrollDelta — schedule another frame. */
   readonly scrollDrainPending?: boolean
+  /**
+   * An absolute overlay shrank/moved this frame and vacated cells were
+   * blitted stale from prevScreen: the NEXT frame must render without
+   * prevScreen (full re-derive) and be scheduled explicitly.
+   */
+  readonly poisonNextFrame?: boolean
 }
 
 /**

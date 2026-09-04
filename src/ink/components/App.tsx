@@ -177,9 +177,9 @@ type Props = {
 	// fullscreen) re-enters alt-screen + mouse tracking. Idempotent on the
 	// terminal side. Optional so testing.tsx doesn't need to stub it.
 	readonly onStdinResume?: () => void;
-	// Called on DECSET-1004 focus events and on a synthesized refocus when
-	// real user input arrives while focus is still known blurred. Ink probes
-	// the alt-screen/mouse mode state and rebuilds the physical surface.
+	// Called on DECSET-1004 focus events. Ink probes the alt-screen/mouse
+	// mode state on refocus — the moment a conpty-side mode reset (DPI
+	// change, renderer restart) becomes observable — and self-heals.
 	readonly onTerminalFocus?: (focused: boolean) => void;
 	// Receives the declared native-cursor position from useDeclaredCursor
 	// so ink.tsx can park the terminal cursor there after each frame.
@@ -216,16 +216,6 @@ export default class App extends PureComponent<Props, State> {
 	// Count how many components enabled raw mode to avoid disabling
 	// raw mode until all components don't need it anymore
 	rawModeEnabledCount = 0;
-	// Shutdown latch (set by beginShutdown): gates writeRaw and switches
-	// handleReadable to drain-only so no input is dispatched to React
-	// handlers during the exit funnel's settle window.
-	shutdownLatched = false;
-	// Whether the tty is physically in raw mode. Separate from the borrow
-	// count because the shutdown latch DEFERS the physical release: React
-	// effect cleanups during unmount drain the count to zero while the exit
-	// funnel is still spending its settle window in raw mode (#522) — the
-	// actual setRawMode(false) then happens in concludeShutdown.
-	private rawModePhysicallyHeld = false;
 	internal_eventEmitter = new EventEmitter();
 	keyParseState = INITIAL_STATE;
 	// Timer for flushing incomplete escape sequences
@@ -337,25 +327,6 @@ export default class App extends PureComponent<Props, State> {
 	}
 
 	/**
-	 * Settle pointer state owned by the OLD terminal-focus epoch. A release can
-	 * be swallowed while the window is unfocused; retaining that physical latch
-	 * would block every recovery probe forever. Call when a focus epoch ends,
-	 * or before synthetic recovery starts a new one, so a later press can
-	 * establish a fresh latch normally.
-	 */
-	settlePointerGestureForFocusBoundary(): void {
-		this.heldButtons = 0;
-		this.ambiguousHeld = false;
-		this.props.onPointerGestureChange?.(false);
-		this.finishDragSession();
-		const sel = this.props.selection;
-		if (sel.isDragging) {
-			finishSelection(sel);
-			this.props.onSelectionChange();
-		}
-	}
-
-	/**
 	 * Reset all transient pointer state. Called by Ink when the alt screen
 	 * is entered/exited and on resize: rects, hover targets, and the click
 	 * chain from the previous screen geometry/scene must not leak into the
@@ -404,11 +375,6 @@ export default class App extends PureComponent<Props, State> {
 	// <AlternateScreen>'s insertion effect every frame, flapping the alt
 	// screen on/off.
 	writeRaw = (data: string): void => {
-		// Shutdown gate: once beginShutdown latches, app-side raw writes
-		// (async OSC 52 clipboard callbacks, notification sequences) must not
-		// reach the terminal — they would land between DISABLE_MOUSE_TRACKING
-		// and the settle drain, or on the main screen after EXIT_ALT_SCREEN.
-		if (this.shutdownLatched) return;
 		if (data.includes("\x1b[?1049")) {
 			logMouseDebug("stdout:1049", { len: data.length, head: data.slice(0, 60) });
 		}
@@ -475,104 +441,28 @@ export default class App extends PureComponent<Props, State> {
 		if (this.props.stdout.isTTY) {
 			this.props.stdout.write(SHOW_CURSOR);
 		}
-		// Latch only: the cooked-mode restore is owned by the exit funnel
-		// (finishExit's concludeShutdown) so it happens after the raw-mode
-		// settle window. Ink.unmount concludes itself when NO funnel follows
-		// (host teardown / signal-exit).
-		this.beginShutdown();
+		this.detachForShutdown();
 	}
 
-	/**
-	 * Release timers and stdin ownership without requiring a React unmount.
-	 * Composite of the two shutdown phases for one-shot callers that must
-	 * restore cooked mode themselves; the exit funnel (finishExit) calls the
-	 * phases separately so raw mode survives across its settle window.
-	 */
+	/** Release timers and stdin ownership without requiring a React unmount. */
 	detachForShutdown() {
-		this.beginShutdown();
-		this.concludeShutdown();
-	}
-
-	/**
-	 * Phase 1: stop input/output producers — clear pending timers, dispose
-	 * the querier, and latch the shutdown gate (writeRaw blocked, stdin
-	 * drained without dispatch) — WITHOUT touching raw mode. The exit funnel
-	 * sends its DISABLE/cleanup sequences and waits out its settle window
-	 * while still raw, so late mouse reports are consumed as input instead
-	 * of echoed by the kernel line discipline. querier.dispose() releases
-	 * pending raw-mode holds, but every hold sits on top of the app's own
-	 * useInput hold (a pending query implies rawModeEnabledCount >= 2), so
-	 * cooked mode cannot be reached from here. Idempotent, and each step is
-	 * isolated: a throwing dispose (raw-hold release on a revoked tty) must
-	 * not skip the remaining teardown.
-	 */
-	beginShutdown() {
-		if (this.shutdownLatched) return;
-		this.shutdownLatched = true;
-		const steps: Array<() => void> = [
-			// Clear any pending timers
-			() => {
-				if (this.incompleteEscapeTimer) {
-					clearTimeout(this.incompleteEscapeTimer);
-					this.incompleteEscapeTimer = null;
-				}
-			},
-			() => {
-				if (this.pendingHyperlinkTimer) {
-					clearTimeout(this.pendingHyperlinkTimer);
-					this.pendingHyperlinkTimer = null;
-				}
-			},
-			() => {
-				if (this.xtversionProbe) {
-					clearImmediate(this.xtversionProbe);
-					this.xtversionProbe = null;
-				}
-			},
-			() => this.querier.dispose(),
-			// React's error unwinding runs the throwing subtree's effect
-			// cleanups BEFORE the boundary's componentDidCatch — so by the time
-			// handleExit latches, a useInput cleanup may already have drained
-			// the borrow count and physically released raw mode. The settle
-			// window contract (cleanup consumed while raw, #522) matters MORE
-			// on exactly that crash path, so re-acquire raw mode here if it
-			// was lost: tty-local only (no mode-enable escape sequences —
-			// re-emitting EBP/EFE/kitty after the cleanup's disables would be
-			// the residue bug through another door), with the readable pump
-			// re-attached in the latched drain-only mode. concludeShutdown
-			// performs the final release either way.
-			() => {
-				if (!this.isRawModeSupported() || this.rawModePhysicallyHeld) return;
-				const { stdin } = this.props;
-				stdin.ref();
-				stdin.setRawMode(true);
-				this.rawModePhysicallyHeld = true;
-				stdin.addListener("readable", this.handleReadable);
-			},
-		];
-		for (const step of steps) {
-			try {
-				step();
-			} catch (error) {
-				logError(error instanceof Error ? error : new Error(String(error)));
-			}
+		// Clear any pending timers
+		if (this.incompleteEscapeTimer) {
+			clearTimeout(this.incompleteEscapeTimer);
+			this.incompleteEscapeTimer = null;
 		}
-	}
-
-	/**
-	 * Phase 2: restore cooked mode — drains the raw-mode borrow count, which
-	 * also removes the readable pump and unrefs stdin. Must run LAST in the
-	 * exit funnel: once the tty flips back to canonical+echo, any mouse
-	 * report still in flight echoes as caret-notation garbage (issue #522).
-	 */
-	concludeShutdown() {
+		if (this.pendingHyperlinkTimer) {
+			clearTimeout(this.pendingHyperlinkTimer);
+			this.pendingHyperlinkTimer = null;
+		}
+		if (this.xtversionProbe) {
+			clearImmediate(this.xtversionProbe);
+			this.xtversionProbe = null;
+		}
+		this.querier.dispose();
 		// ignore calling setRawMode on an handle stdin it cannot be called
 		if (this.isRawModeSupported()) {
 			while (this.rawModeEnabledCount > 0) this.handleSetRawMode(false);
-			// The count may already be drained (React effect cleanups during
-			// unmount ran while latched and only deferred the release) — the
-			// physical restore is owed regardless.
-			this.releaseRawModePhysical();
 		}
 	}
 	override componentDidCatch(error: Error) {
@@ -593,10 +483,6 @@ export default class App extends PureComponent<Props, State> {
 		}
 		stdin.setEncoding("utf8");
 		if (isEnabled) {
-			// Post-latch the tty's raw state is owned by the shutdown funnel:
-			// new borrowers get nothing, and their symmetric cleanups no-op on
-			// the zero count below.
-			if (this.shutdownLatched) return;
 			// Ensure raw mode is enabled only once
 			if (this.rawModeEnabledCount === 0) {
 				// Stop early input capture right before we add our own readable handler.
@@ -606,7 +492,6 @@ export default class App extends PureComponent<Props, State> {
 				stopCapturingEarlyInput();
 				stdin.ref();
 				stdin.setRawMode(true);
-				this.rawModePhysicallyHeld = true;
 				stdin.addListener("readable", this.handleReadable);
 				// Enable bracketed paste mode
 				this.props.stdout.write(EBP);
@@ -673,42 +558,11 @@ export default class App extends PureComponent<Props, State> {
 			this.props.stdout.write(DFE);
 			// Disable bracketed paste mode
 			this.props.stdout.write(DBP);
-			// Latched: the exit funnel keeps raw mode held across its settle
-			// window (#522) — the physical release is owed to
-			// concludeShutdown, which the funnel runs LAST.
-			if (!this.shutdownLatched) this.releaseRawModePhysical();
+			stdin.setRawMode(false);
+			stdin.removeListener("readable", this.handleReadable);
+			stdin.unref();
 		}
 	};
-
-	/**
-	 * The actual cooked-mode restore (setRawMode(false) + pump detach). Split
-	 * from the borrow bookkeeping so the shutdown latch can defer it: once
-	 * beginShutdown latches, draining the count updates bookkeeping only, and
-	 * concludeShutdown performs the physical release as the funnel's LAST
-	 * step — after the settle window gave the terminal time to consume the
-	 * disable bytes (#522).
-	 */
-	private releaseRawModePhysical(): void {
-		if (!this.rawModePhysicallyHeld) return;
-		this.rawModePhysicallyHeld = false;
-		const { stdin } = this.props;
-		stdin.setRawMode(false);
-		stdin.removeListener("readable", this.handleReadable);
-		stdin.unref();
-		// Raw mode fully released: no more input can reach the parser, so
-		// an incomplete escape sequence can never complete. Cancel its
-		// timer and reset the parse state — otherwise the timer re-arms
-		// forever on the leftover readableLength (no reader attached) and
-		// a partial paste/escape corrupts the next raw session. This runs
-		// on BOTH release paths (borrow-drain and the shutdown funnel's
-		// concludeShutdown) because it is the physical release that ends
-		// parser input, not the borrow bookkeeping.
-		if (this.incompleteEscapeTimer) {
-			clearTimeout(this.incompleteEscapeTimer);
-			this.incompleteEscapeTimer = null;
-		}
-		this.keyParseState = { ...INITIAL_STATE };
-	}
 
 	// Helper to flush incomplete escape sequences
 	flushIncomplete = (): void => {
@@ -717,14 +571,6 @@ export default class App extends PureComponent<Props, State> {
 
 		// Only proceed if we have incomplete sequences
 		if (!this.keyParseState.incomplete) return;
-
-		// Raw mode released while a sequence was incomplete: the parser is
-		// dead (no readable listener, no further input), so the sequence can
-		// never complete — drop it instead of re-arming forever.
-		if (this.rawModeEnabledCount === 0) {
-			this.keyParseState = { ...INITIAL_STATE };
-			return;
-		}
 
 		// Fullscreen: if stdin has data waiting, it's almost certainly the
 		// continuation of the buffered sequence (e.g. `[<64;74;16M` after a
@@ -815,24 +661,6 @@ export default class App extends PureComponent<Props, State> {
 		}
 	};
 	handleReadable = (): void => {
-		// Shutdown latch: drain-only. Bytes arriving during the exit funnel's
-		// settle window (late mouse reports, terminal replies) must still be
-		// consumed — otherwise the readable event spins and the bytes linger
-		// for the shell — but never dispatched: useInput handlers are output
-		// producers (a selection copy writes OSC 52, keys fire clipboard /
-		// notification side effects), and the writeRaw gate above only
-		// covers their write, not their other effects.
-		if (this.shutdownLatched) {
-			try {
-				let chunk;
-				while ((chunk = this.props.stdin.read()) !== null) {
-					void chunk;
-				}
-			} catch (error) {
-				logError(error);
-			}
-			return;
-		}
 		// Detect long stdin gaps (tmux attach, ssh reconnect, laptop wake).
 		// The terminal may have reset DEC private modes; re-assert mouse
 		// tracking. One Date.now() covers all chunks in this readable event.
@@ -842,14 +670,6 @@ export default class App extends PureComponent<Props, State> {
 		try {
 			let chunk;
 			while ((chunk = this.props.stdin.read() as string | null) !== null) {
-				// Chunk-level shutdown gate: a mid-batch exit (Ctrl+C in an
-				// earlier chunk of this same readable event) latches
-				// beginShutdown synchronously — later chunks in the loop must
-				// not be dispatched to React handlers anymore. Drain them.
-				if (this.shutdownLatched) {
-					void chunk;
-					continue;
-				}
 				// Process the input chunk
 				this.processInput(chunk);
 			}
@@ -900,15 +720,9 @@ export default class App extends PureComponent<Props, State> {
 		// keyboard protocol terminals (Ghostty, iTerm2, kitty, WezTerm)
 	};
 	handleExit = (error?: Error): void => {
-		// Latch producers immediately (writeRaw gated, stdin drained without
-		// dispatch) but DO NOT release raw mode here: the exit funnel owns the
-		// raw-mode lifecycle end to end — cleanup bytes must be written (and
-		// the settle window spent) while raw is still held, or late mouse
-		// reports echo as caret garbage once cooked+echo returns (#522).
-		// Raw is released by concludeShutdown: Ink.unmount runs it for
-		// funnel-less exits (teardown / signal-exit), finishExit's finally
-		// runs it for every funneled exit — including this one.
-		this.beginShutdown();
+		if (this.isRawModeSupported()) {
+			this.handleSetRawMode(false);
+		}
 		this.props.onExit(error);
 	};
 	handleTerminalFocus = (isFocused: boolean): void => {
@@ -1027,21 +841,6 @@ function processKeysInBatch(
 			continue;
 		}
 
-		// FOCUS_IN can disappear after a terminal reset drops DECSET 1004. Any
-		// subsequent real user input is equivalent proof that focus returned.
-		// Promote that first key/paste/mouse event to the same batch-tail surface
-		// recovery as an explicit FOCUS_IN. This check must precede the mouse
-		// branch: ParsedMouse used to `continue` before the old key-only failsafe,
-		// leaving mouse-only users on a stale surface indefinitely.
-		const isExplicitFocusSignal =
-			item.kind === "key" &&
-			(item.sequence === FOCUS_IN || item.sequence === FOCUS_OUT);
-		if (!isExplicitFocusSignal && !getTerminalFocused()) {
-			app.settlePointerGestureForFocusBoundary();
-			app.handleTerminalFocus(true);
-			app.pendingFocusProbe = true;
-		}
-
 		// Mouse click/drag events update selection state (fullscreen only).
 		// Terminal sends 1-indexed col/row; convert to 0-indexed for the
 		// screen buffer. Button bit 0x20 = drag (motion while button held).
@@ -1071,22 +870,37 @@ function processKeysInBatch(
 		}
 		if (sequence === FOCUS_OUT) {
 			app.handleTerminalFocus(false);
-			// Ink-side pointer-state reset (hover highlights, tooltip dwell,
-			// multi-click chain, no-interest cache): pointer geometry is stale
-			// once the window loses focus — minimize/alt-tab — and clearing it
-			// NOW (invisible while unfocused) keeps the restore repaint from
-			// resurrecting pre-focus-loss highlights at stale coordinates.
-			app.props.onTerminalFocus?.(false);
-			// A focus boundary terminates the old physical gesture even when
-			// its release was swallowed outside the window. Shared with synthetic
-			// focus recovery so no stale latch can strand later probes.
-			app.settlePointerGestureForFocusBoundary();
+			// Gesture latch: focus loss means no release event is coming for
+			// a held button (released outside the window or swallowed by the
+			// OS) — clear the held-button set so the health probe may write
+			// again.
+			app.heldButtons = 0;
+			app.ambiguousHeld = false;
+			app.props.onPointerGestureChange?.(false);
+			// Drag protocol: focus loss also orphans an in-flight drag
+			// session — settle it with a dragend (if started) like the
+			// selection recovery below.
+			app.finishDragSession();
+			// Defensive: if we lost the release event (mouse released outside
+			// terminal window — some emulators drop it rather than capturing the
+			// pointer), focus-out is the next observable signal that the drag is
+			// over. Without this, drag-to-scroll's timer runs until the scroll
+			// boundary is hit.
+			if (app.props.selection.isDragging) {
+				finishSelection(app.props.selection);
+				app.props.onSelectionChange();
+			}
 			// Safe boundary: mark the batch for a deferred drain at the batch
 			// tail (not mid-batch — see release's finally).
 			app.pendingReleaseTail = true;
 			const event = new TerminalFocusEvent("terminalblur");
 			app.internal_eventEmitter.emit("terminalblur", event);
 			continue;
+		}
+
+		// Failsafe: if we receive input, the terminal must be focused
+		if (!getTerminalFocused()) {
+			setTerminalFocused(true);
 		}
 
 		// Handle Ctrl+Z (suspend) using parsed key to support both raw (\x1a) and

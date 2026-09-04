@@ -63,7 +63,7 @@ boundaries and helpers over introducing parallel abstractions.
   branches do not spread into bootstrap or channel actions. Note: the
   questionnaire "provider seat"
   guard (DUPLICATE_PROVIDER probe + private symbol check, #586) only applies to
-  the rc `registerProvider` path. On alpha.2's `user-questions/request`
+  the legacy rc `registerProvider` path. On the 0.1.2 line's `user-questions/request`
   waterfall, Cordis first scope-filters requests carrying an agent; agentless
   `/auth` requests are dispatched without a scope carrier. Under the answerer
   convention, the first eligible listener that returns instead of delegating
@@ -263,7 +263,6 @@ change, also run the closest focused script:
 | Mouse pointer event pipeline (wheel coords/modifier bits, click/hover dispatch, out-of-bounds clamping, pointer-state reset) | `node --import tsx/esm scripts/verify-pointer-events.ts` |
 | Hover event performance (complete interest boundaries, no-interest rect fast path, frame/multi-root invalidation) | `node --import tsx/esm scripts/verify-hover-coalesce.tsx` |
 | Prompt-input mouse selection editing (drag/Shift+click/double-click word select, delete/replace, layered Esc, Ctrl+C copy, CJK wide cells, fold-side clamping) | `node --import tsx/esm scripts/verify-input-selection.tsx` |
-| Exit-funnel terminal cleanup (finishExit: latch → stdout queue barrier → synchronous DISABLE/cleanup writes → raw-mode settle → cooked restore in finally) | `node --import tsx/esm scripts/verify-exit-mouse-disable-order.tsx`, `node --import tsx/esm scripts/verify-exit-mouse-residue.tsx`, `node --import tsx/esm scripts/verify-exit-mouse-cleanup.tsx` |
 
 Most focused scripts invoked with plain `node` import `lib/types/`; run
 `pnpm build` first. Scripts that import TypeScript sources declare the
@@ -384,12 +383,6 @@ the required credentials.
   such as `DSH_TUI_DEBUG`, or the existing `DSH_TUI_RENDER_LOG` frame capture.
 - Preserve raw-mode, cursor, alternate-screen, synchronized-output, mouse,
   focus, and terminal-query cleanup on success, error, interrupt, and teardown.
-  The physical raw-mode restore (`setRawMode(false)`) belongs solely to the
-  exit funnel's conclude phase (`finishExit` → `concludeShutdown`): the
-  error-boundary and Ctrl+C paths must never release it themselves; when
-  React's error unwinding already released it before the latch,
-  `beginShutdown` re-acquires raw mode (tty-local only — no mode-enable
-  sequences are re-emitted) so the settle window is still spent raw (#522).
 - Avoid render-time unbounded collections or per-token/per-frame allocations.
   Streaming sessions are long lived, and this repository has explicit
   regressions for prior OOM and scroll-performance failures.
@@ -428,6 +421,7 @@ the required credentials.
 | Skill discovery or presentation | DSH adapter, slash-command merge, `/skills`, and focused regressions; maintainer-only skills live in `.agents/skills/` and must stay out of npm |
 | User-facing documented behavior | Chinese and English READMEs, plus config comments/help text where applicable |
 | Package version or dependency | `package.json`, `pnpm-lock.yaml`, generated/published artifacts as applicable; do not churn the legacy npm lock incidentally |
+| Upstream validated-line bump | `src/dsh-adapter/contract.ts`, both peer and dev ranges in `package.json`, bundled `dsh-auth/package.json` and `dsh-auth/pnpm-lock.yaml`, `pnpm-workspace.yaml`, the upstream SHA in the `alpha-compat` job of `.github/workflows/ci.yml`, the version constants in `scripts/verify-{alpha-source,patch-surface,web-coexistence,upstream-contract}`, `patch-surface.snapshot.json`, `ADAPTER.md`, `docs/user-guide.md`; steps in the upgrade section of [ADAPTER.md](../ADAPTER.md) |
 
 ## Git And Release Safety
 

@@ -21,6 +21,7 @@ import type { AgentSetup } from '@deepseek-ai/dsh-agent'
 import type { SessionId } from '@deepseek-ai/dsh-session'
 import type { PromptAssembly } from '@deepseek-ai/dsh-system-prompt'
 import { recordedModelRoute, type ModelRoute } from '../modelRoute.js'
+import { snapshotLiveSessionEvents } from './compat/liveSession.js'
 import {
   resolveCompatiblePreset,
   resolveRecordedPreset,
@@ -106,14 +107,12 @@ export async function resolvePersistedPreset(ctx: Context, sessionId: SessionId)
  * `agent-preset/selected` wins over the header). Used for fork-style creates
  * (rewind/model switch) and for reading an already-live agent's composition.
  *
- * @param session - The live session (`header` + `events`).
+ * @param session - The live session.
  * @returns The running preset id, or undefined when the log records none.
  */
-export function runningPresetOf(session: {
-  header: { agentPreset?: string }
-  events: readonly { type: string; data: unknown }[]
-}): string | undefined {
-  return resolveRecordedPreset(session)
+export function runningPresetOf(session: unknown): string | undefined {
+  const header = (session as { header?: { agentPreset?: string } }).header ?? {}
+  return resolveRecordedPreset({ header, events: snapshotLiveSessionEvents(session) })
 }
 
 /**

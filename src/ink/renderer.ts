@@ -7,6 +7,7 @@ import Output from './output.js'
 import renderNodeToOutput, {
   getScrollDrainNode,
   getScrollHint,
+  hasOverlayVacatedCells,
   resetLayoutShifted,
   resetScrollDrainNode,
   resetScrollHint,
@@ -21,10 +22,10 @@ export type RenderOptions = {
   terminalWidth: number
   terminalRows: number
   altScreen: boolean
-  // True when blitting from the previous screen is unsafe: it was mutated
-  // post-render (selection overlay), reset to blank/0×0, or a skipped-output
-  // render consumed the DOM dirty flags without advancing the terminal frame.
-  // Blitting then copies stale cells; false means the baseline is safe.
+  // True when the previous frame's screen buffer was mutated post-render
+  // (selection overlay), reset to blank (alt-screen enter/resize/SIGCONT),
+  // or reset to 0×0 (forceRedraw). Blitting from such a prevScreen would
+  // copy stale inverted cells, blanks, or nothing. When false, blit is safe.
   prevFrameContaminated: boolean
 }
 
@@ -131,11 +132,12 @@ export default function createRenderer(
     resetScrollHint()
     resetScrollDrainNode()
 
-    // prevFrameContaminated: selection overlay mutated the returned screen,
-    // a reset replaced it with blanks/0×0, or a backpressure-skipped render
-    // consumed DOM dirty flags without reaching the terminal. Blit on the
-    // NEXT frame would copy stale cells and lose the current DOM. When clean,
-    // blit restores the O(unchanged) fast path (spinner tick, text stream).
+    // prevFrameContaminated: selection overlay mutated the returned screen
+    // buffer post-render (in ink.tsx), resetFramesForAltScreen() replaced it
+    // with blanks, or forceRedraw() reset it to 0×0. Blit on the NEXT frame
+    // would copy stale inverted cells / blanks / nothing. When clean, blit
+    // restores the O(unchanged) fast path for steady-state frames (spinner
+    // tick, text stream).
     // Removing an absolute-positioned node poisons prevScreen: it may
     // have painted over non-siblings (e.g. an overlay over a ScrollBox
     // earlier in tree order), so their blits would restore the removed
@@ -150,6 +152,15 @@ export default function createRenderer(
     })
 
     const renderedScreen = output.get()
+
+    // An absolute overlay shrank/moved this frame: its vacated cells were
+    // blitted from prevScreen (stale overlay pixels) because the underlying
+    // clean subtree never re-rendered. Flag the NEXT frame as contaminated
+    // so it renders without prevScreen and re-derives those cells from the
+    // tree (see hasOverlayVacatedCells). The current frame's diff is a
+    // no-op at those cells (output == prevScreen there), so nothing stale
+    // reaches the terminal; the poisoned frame writes the correction.
+    const overlayVacated = hasOverlayVacatedCells()
 
     // Drain continuation: render cleared scrollbox.dirty, so next frame's
     // root blit would skip the subtree. markDirty walks ancestors so the
@@ -169,6 +180,7 @@ export default function createRenderer(
           ? getScrollHint()
           : null,
       scrollDrainPending: drainNode !== null,
+      poisonNextFrame: overlayVacated,
       screen: renderedScreen,
       viewport: {
         width: terminalWidth,

@@ -16,6 +16,7 @@
 
 import type { ApprovalOutcome, ApprovalRequest } from '@deepseek-ai/dsh-user-approval'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
+import { snapshotLiveSessionEvents } from './compat/liveSession.js'
 
 /** What the TUI renders while an approval is pending. */
 export interface ApprovalSnapshot {
@@ -90,7 +91,7 @@ const COMMAND_CLIP = 500
  */
 function commandOf(req: ApprovalRequest): string | undefined {
   if (req.callId === undefined) return undefined
-  const events = req.agent.session.events
+  const events = snapshotLiveSessionEvents(req.agent.session)
   for (let i = events.length - 1; i >= 0; i -= 1) {
     const event: SessionEvent = events[i]!
     if (event.type !== 'tool/call') continue
@@ -121,7 +122,7 @@ function commandOf(req: ApprovalRequest): string | undefined {
  */
 function isLiveToolApproval(req: ApprovalRequest): boolean {
   if (req.callId === undefined) return false
-  const events = req.agent.session.events
+  const events = snapshotLiveSessionEvents(req.agent.session)
   let callIndex = -1
   for (let i = events.length - 1; i >= 0; i -= 1) {
     const event: SessionEvent = events[i]!
@@ -287,7 +288,7 @@ export class ApprovalStore {
   private refreshActiveExternal(): void {
     const pending = this.active
     if (pending === undefined || pending.snapshot.external === true) return
-    const events = pending.request.agent.session.events
+    const events = snapshotLiveSessionEvents(pending.request.agent.session)
     if (events.length === this.externalCheckedAtEvents) return
     this.externalCheckedAtEvents = events.length
     if (isLiveToolApproval(pending.request)) return
@@ -306,7 +307,7 @@ export class ApprovalStore {
    * verdict live→external, so everything else is dropped here; the internal
    * length memo then skips the recheck whenever the event belongs to a
    * different session than the active ask's. The notification the SDK
-   * fires arrives after the event is already in `session.events`, so the
+   * fires arrives after the event is already in the live session log, so the
    * recheck sees the settled result.
    * @param event - The appended session event.
    */

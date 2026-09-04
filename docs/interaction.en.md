@@ -48,7 +48,7 @@ above the prompt.
 | `Left/Right` | Move by character; **with a selection, collapse to the corresponding edge** |
 | `Ctrl+Left/Right` | Move by word |
 | `Home/End` | Move to the start/end of the current logical line |
-| `Ctrl+A` / `Ctrl+E` | In the editor, move to the start/end of the current logical line; `Ctrl+E` also expands or folds hidden older rows in long transcripts |
+| `Ctrl+A` / `Ctrl+E` | `Ctrl+A` opens the subagent dashboard (`Mod+A` in the editor still moves to line start); `Ctrl+E` moves to line end and also expands or folds hidden older rows in long transcripts |
 | `Ctrl+U` | Delete before the caret |
 | `Ctrl+K` | Delete after the caret |
 | `Ctrl+W` | Delete the preceding word |
@@ -309,9 +309,9 @@ A full-screen scene (no scrollback pollution) over the whole session timeline:
 
 ### /settings editor
 
-`/settings` opens the plugin settings editor, read/edit by namespace. Editing
-is **staged**: `↑`/`↓` to move, `Enter` to expand/toggle/edit, `s` saves /
-`d` discards / `Esc` first drops dirty sections, then exits. Fields under the
+`/settings` opens the plugin settings editor, read/edit by namespace. Edits
+**auto-save**: `↑`/`↓` to move, `Enter` to expand/toggle/edit, booleans/selects
+write on the spot, text drafts confirm on Enter, `Esc` just exits. Fields under the
 dsh-tui namespace are written to the user layer of settings.yaml and take
 **effect immediately** (`lang`, `statusBar.*`, …); namespaces without a
 declared TUI section are listed read-only and need manual edits to
@@ -349,7 +349,7 @@ flows remain available.
 
 ## Fullscreen and mouse
 
-`fullscreen: false` is the default inline mode, where the terminal emulator
+`fullscreen: false` restores inline mode (fullscreen is the factory default since 0.9.0), where the terminal emulator
 owns native scrollback and selection.
 
 `fullscreen: true` uses the alternate screen and enables in-app mouse handling:

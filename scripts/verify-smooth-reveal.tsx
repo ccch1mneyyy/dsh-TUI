@@ -31,7 +31,6 @@ import {
   isRevealTimerRunning,
   revealLengthOf,
   revealLinesOf,
-  revealListenerCountForTest,
   revealStep,
   resetRevealForTest,
 } from '../src/components/smoothReveal.js'
@@ -50,9 +49,6 @@ function check(ok: boolean, label: string, detail = ''): void {
   }
 }
 const sleep = (ms: number): Promise<void> => new Promise(resolve => setTimeout(resolve, ms))
-/** Catch-up sleep budget: sized for the ~20fps reveal cadence (REVEAL_FRAME_MS
- *  50ms — a 2400-char burst needs ~48 ticks ≈ 2.4s) plus CI-load margin. */
-const CATCHUP_SLEEP_MS = 3600
 
 // ---------------------------------------------------------------------------
 // Group A — scheduler/cursor units
@@ -76,8 +72,8 @@ check(revealStep(25) === 4, 'A1 revealStep(25) = 4')
   const mid = revealLengthOf('a1', grown, { enabled: true, active: true })
   check(mid > 0 && mid < grown.length, 'A2 partial reveal mid-flight', `len=${mid}/${grown.length}`)
   // Exponential decay over the backlog (~1/8 per frame) + MIN_STEP tail: a
-  // 1200-char target needs ~2s to fully land at the ~20fps cadence.
-  await sleep(CATCHUP_SLEEP_MS)
+  // 1200-char target needs ~1.3s to fully land.
+  await sleep(2200)
   check(
     revealLengthOf('a1', grown, { enabled: true, active: true }) === grown.length,
     'A2 catch-up completes (exponential decay + MIN_STEP tail)',
@@ -104,7 +100,7 @@ check(revealStep(25) === 4, 'A1 revealStep(25) = 4')
   check(isRevealTimerRunning(), 'A3 cursor creation starts the shared timer')
   await sleep(120)
   check(getRevealVersion() > before, 'A3 ticks bump the version store')
-  await sleep(CATCHUP_SLEEP_MS)
+  await sleep(2600)
   check(!isRevealTimerRunning(), 'A3 timer retires once every cursor caught up')
 }
 
@@ -193,7 +189,7 @@ console.log('--- B: MessageList integration ---')
       const early = screen()
       check(!early.includes('omega-end'), 'B1 streaming row: tail hidden early in the reveal')
       check(early.includes('alpha-start'), 'B1 streaming row: head visible early')
-      await sleep(CATCHUP_SLEEP_MS)
+      await sleep(2600)
       check(screen().includes('omega-end'), 'B1 streaming row: tail visible after catch-up')
     },
   )
@@ -210,7 +206,7 @@ console.log('--- B: MessageList integration ---')
     async screen => {
       await sleep(80)
       check(!screen().includes('omega-end'), 'B2 settled-fresh row: tail hidden early (non-streaming becomes smooth)')
-      await sleep(CATCHUP_SLEEP_MS)
+      await sleep(2600)
       check(screen().includes('omega-end'), 'B2 settled-fresh row: complete after catch-up')
     },
   )
@@ -242,30 +238,6 @@ console.log('--- B: MessageList integration ---')
     async screen => {
       await sleep(80)
       check(screen().includes('omega-end'), 'B4 smoothStreaming=false: full text paints immediately')
-    },
-  )
-}
-
-// B5: transcript generations reuse row ids; a completed cursor from the old
-// generation must not make the new fresh row skip its reveal.
-{
-  resetRevealForTest()
-  const oldText = LONG_TEXT.replace('omega-end', 'old-generation-omega')
-  const newText = LONG_TEXT.replace('omega-end', 'new-generation-omega')
-  let rows: ChatRow[] = [
-    { id: 7, kind: 'assistant', text: oldText, streaming: false, fresh: true },
-  ]
-  await withTerminal(
-    () => <MessageList rows={rows} rowsGeneration={1} smoothStreaming {...listProps} />,
-    async (screen, rerender) => {
-      await sleep(CATCHUP_SLEEP_MS)
-      check(screen().includes('old-generation-omega'), 'B5 old generation reveal completes')
-      rows = [{ id: 7, kind: 'assistant', text: newText, streaming: false, fresh: true }]
-      rerender(<MessageList rows={rows} rowsGeneration={2} smoothStreaming {...listProps} />)
-      await sleep(80)
-      check(!screen().includes('new-generation-omega'), 'B5 reused id in a new generation reveals again')
-      await sleep(CATCHUP_SLEEP_MS)
-      check(screen().includes('new-generation-omega'), 'B5 new generation reveal completes')
     },
   )
 }
@@ -333,51 +305,16 @@ console.log('--- C: component contracts ---')
   await withTerminal(
     () => <AssistantToolUseMessage tool={runningTool} addMargin={false} verbose={false} smoothReveal fresh />,
     async (screen, rerender) => {
-      // Mid-reveal must be SAMPLED, not slept past: CI tick cadence can
-      // finish a short body inside one 160ms window, but the FIRST sample
-      // where the head is visible always lands inside the reveal window on
-      // any machine speed (the cursor starts at zero and the first tick
-      // only lands ~50ms after mount).
-      let early: string | null = null
-      const c2Deadline = Date.now() + 3000
-      while (Date.now() < c2Deadline && early === null) {
-        const sample = screen()
-        if (sample.includes('old line 0')) early = sample
-        else await sleep(10)
-      }
-      check(early !== null, 'C2 running card: body head visible early', early ?? 'timeout')
-      check(early !== null && !early.includes('lines (ctrl+o to expand)'), 'C2 running card: capped tail row hidden early in the reveal', early ?? 'timeout')
-      await sleep(CATCHUP_SLEEP_MS)
+      await sleep(60)
+      const early = screen()
+      check(early.includes('old line 0'), 'C2 running card: body head visible early', early)
+      check(!early.includes('lines (ctrl+o to expand)'), 'C2 running card: capped tail row hidden early in the reveal', early)
+      await sleep(2200)
       check(screen().includes('lines (ctrl+o to expand)'), 'C2 running card: body complete after catch-up')
       // C3: result arriving mid/after reveal snaps complete.
       rerender(<AssistantToolUseMessage tool={doneTool} addMargin={false} verbose={false} smoothReveal fresh />)
       await sleep(80)
       check(screen().includes('settled-result-marker'), 'C3 settled result paints complete (no reveal)')
-      // A new transcript may reuse the same tool call id. Generation scope
-      // prevents the completed cursor above from suppressing the new reveal.
-      rerender(
-        <AssistantToolUseMessage
-          tool={{ ...runningTool, startedAt: Date.now() }}
-          addMargin={false}
-          verbose={false}
-          smoothReveal
-          fresh
-          revealGeneration={2}
-        />,
-      )
-      // Same sampling discipline as C2: the rerender recreates the cursor
-      // at zero, so the first sample where the new body head is showing
-      // (and the settled marker is gone) is inside the fresh reveal.
-      let midRegen: string | null = null
-      const c4Deadline = Date.now() + 3000
-      while (Date.now() < c4Deadline && midRegen === null) {
-        const sample = screen()
-        if (sample.includes('old line 0') && !sample.includes('settled-result-marker')) midRegen = sample
-        else await sleep(10)
-      }
-      check(midRegen !== null && !midRegen.includes('lines (ctrl+o to expand)'), 'C4 reused call id reveals in a new generation', midRegen ?? 'timeout')
-      await sleep(CATCHUP_SLEEP_MS)
-      check(screen().includes('lines (ctrl+o to expand)'), 'C4 new-generation tool reveal completes')
     },
   )
 }
@@ -431,47 +368,9 @@ console.log('--- D: long-session reveal subscriber fanout ---')
     () => <MessageList rows={[...historyTools, activeTool]} smoothStreaming {...listProps} />,
     async screen => {
       await sleep(120)
-      check(revealListenerCountForTest() === 1,
-        'D1 MessageList owns the only production reveal subscription',
-        `listeners=${revealListenerCountForTest()}`)
       check(screen().includes('old line 0'), 'D1 active tool remains visible with many history cards')
-      await sleep(CATCHUP_SLEEP_MS)
+      await sleep(2200)
       check(screen().includes('lines (ctrl+o to expand)'), 'D1 active tool reveal completes without nested store updates')
-    },
-  )
-}
-
-// E: inline (main-screen) scrollback is immutable — only the transcript TAIL
-// may reveal there. A fresh row that stops being the tail mid-reveal must
-// snap complete in the same commit: native scrollback cannot rewrite a
-// partially revealed row, so a lingering cursor would permanently truncate
-// it once it scrolls up (E1, the inline-truncation regression). A fresh row
-// that is never the tail paints complete from its first frame (E2).
-console.log('--- E: inline scrollback tail-only reveal ---')
-{
-  resetRevealForTest()
-  const mk = (id: number, head: string, tail: string): ChatRow => ({
-    id,
-    kind: 'assistant',
-    text: [head, 'body line one', 'body line two', 'body line three', tail].join('\n'),
-    streaming: false,
-    fresh: true,
-  })
-  const rows: ChatRow[] = [
-    mk(1, 'inline-head-early', 'inline-tail-early'),
-    mk(2, 'inline-head-late', 'inline-tail-late'),
-  ]
-  await withTerminal(
-    () => <MessageList rows={rows} smoothStreaming historyPaintEnabled rowsGeneration={1} {...listProps} />,
-    async (screen, rerender) => {
-      await sleep(80)
-      const early = screen()
-      check(early.includes('inline-tail-early'), 'E2 non-tail fresh row paints complete immediately (inline tail-only)')
-      check(!early.includes('inline-tail-late'), 'E1 tail row reveals gradually')
-      rows.push({ id: 3, kind: 'user', text: 'follow-up question' })
-      rerender(<MessageList rows={rows} smoothStreaming historyPaintEnabled rowsGeneration={1} {...listProps} />)
-      await sleep(120)
-      check(screen().includes('inline-tail-late'), 'E1 mid-reveal row snaps complete when it stops being the tail')
     },
   )
 }

@@ -37,9 +37,9 @@
   config:
     agents: []
 
-# Preserve the TUI's opt-in privacy stance across the alpha base default
+# Preserve the TUI's opt-in privacy stance across the 0.1.2 base default
 # change to FEEDBACK_ONLY. An explicit DSH_TELEMETRY_MODE still wins. This
-# restates the whole alpha config because include patches replace config
+# restates the whole 0.1.2 config because include patches replace config
 # objects rather than merging them.
 - id: session-telemetry-otel
   config:
@@ -55,7 +55,7 @@
       maxExportBatchSize: 2048
       exportTimeoutMillis: 1500
 
-# The alpha base sends the active Loader package inventory on official
+# The 0.1.2 base sends the active Loader package inventory on official
 # DeepSeek requests by default. TUI keeps that diagnostic metadata opt-in.
 - id: plugin-package-inventory-deepseek
   config:
@@ -66,8 +66,8 @@
 # The model-facing plugin set moves INTO the agent-presets roster: every
 # session composes its tools/prompt sections from one preset directory
 # (standard/ptc/minimal/cordis) instead of the host rows below. The TUI's
-# roster row uses the scoped `dsh-tui-agent-presets` id. alpha packages prepend
-# their bundled system root; the validated rc line still needs the dsh CLI's
+# roster row uses the scoped `dsh-tui-agent-presets` id. The 0.1.2 generation
+# prepends its bundled system root; legacy 0.1.1-rc.2 still needs the dsh CLI's
 # `config/agent-presets/` directory supplied explicitly. Both append
 # `$DSH_HOME/.agent-presets`. Mirroring the official dsh-web-app patch: every
 # dsh-base row a preset now owns is disabled here, so a minimal agent does not
@@ -104,9 +104,9 @@
 
 - id: command-goal
   # rc.2 presets do not carry this command, so their host row must remain
-  # active. alpha disables it only when the shipped standard preset really
-  # owns the command; reading the capability avoids guessing from another
-  # optional Loader row.
+  # active. Newer packages disable it only when the shipped standard preset
+  # really owns the command; reading the capability avoids guessing from
+  # another optional Loader row.
   disabled: !!js >-
     (() => {
       const require = process.getBuiltinModule('node:module').createRequire(ctx.baseUrl)
@@ -245,7 +245,7 @@
       name: '@deepseek-ai/dsh-code-runtime-worker-thread'
       disabled: !!js "[...ctx.loader.entries()].some(entry => entry.options.id === 'code-runtime' && entry.options.name === '@deepseek-ai/dsh-code-runtime-worker-thread' && !entry.disabled)"
 
-    # Alpha presets opt their delegation tool into Host-owned model-selection
+    # 0.1.2 presets opt their delegation tool into Host-owned model-selection
     # settings. Without this service standard/ptc/cordis preset mounting fails.
     # The package subpath does not exist on rc.2, so resolve that capability
     # directly before Loader attempts the import. An enabled official row still
@@ -302,9 +302,9 @@
       name: '@deepseek-harness-tui/dsh-tui/extensions'
 
     # The agent-preset roster (issue #8): `ctx.agentPresets`, the service the
-    # TUI composes every session's model-facing world from. alpha packages
-    # prepend their bundled presets as the read-only system root; rc.2 packages
-    # have no bundled root and still scan the dsh CLI directory. Both append
+    # TUI composes every session's model-facing world from. 0.1.2 packages
+    # prepend their bundled presets as the read-only system root; legacy rc.2
+    # packages have no bundled root and still scan the dsh CLI directory. Both append
     # `$DSH_HOME/.agent-presets` as the user root. Deployment-added roots may
     # still be supplied by a later patch.
     - id: dsh-tui-agent-presets

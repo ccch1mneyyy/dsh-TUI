@@ -45,7 +45,7 @@ transcript 模式中打开会话全文搜索。全文搜索使用 `n`/`N` 在结
 | `Left/Right` | 按字符移动光标；**有选区时坍缩到选区对应边缘** |
 | `Ctrl+Left/Right` | 按单词移动 |
 | `Home/End` | 移到当前逻辑行首/行尾 |
-| `Ctrl+A` / `Ctrl+E` | 编辑器中移到当前逻辑行首/行尾；`Ctrl+E` 还会展开或折叠长会话中隐藏的旧消息 |
+| `Ctrl+A` / `Ctrl+E` | `Ctrl+A` 打开子代理面板（编辑器内 `Mod+A` 仍移到行首）；`Ctrl+E` 移到行尾，还会展开或折叠长会话中隐藏的旧消息 |
 | `Ctrl+U` | 删除光标前内容 |
 | `Ctrl+K` | 删除光标后内容 |
 | `Ctrl+W` | 删除前一个单词 |
@@ -269,9 +269,9 @@ prompt + 已有历史）做一次**无工具、单轮**的模型调用，答案�
 
 ### /settings 设置编辑器
 
-`/settings` 打开插件设置编辑器，按命名空间读取/编辑。编辑是**暂存制**：
-`↑`/`↓` 移动、`Enter` 展开/切换/编辑，`s` 保存 / `d` 放弃 / `Esc` 先丢弃
-脏区再退出。鼠标：字段/组行点击 = 设焦点并执行该行 Enter 动作，悬停即
+`/settings` 打开插件设置编辑器，按命名空间读取/编辑。**改动自动保存**：
+`↑`/`↓` 移动、`Enter` 展开/切换/编辑，布尔/选项即时写入，文本草稿回车确认，
+`Esc` 直接退出。鼠标：字段/组行点击 = 设焦点并执行该行 Enter 动作，悬停即
 移动焦点，滚轮走焦点（焦点跟随窗口下即滚动）。dsh-tui 自身命名空间的字段写入 settings.yaml 用户层并**实时生效**
 （`lang`、`statusBar.*` 等）；未声明 TUI 区块的命名空间以只读形式列出，需
 手工编辑 `~/.dsh/settings.yaml`。
@@ -302,7 +302,7 @@ scheme 和 `/workspace` 子命令可由可选插件注册，TUI 本身不认识�
 
 ## Fullscreen 与鼠标
 
-`fullscreen: false` 是默认 inline 模式，终端模拟器拥有原生 scrollback 和选区。
+`fullscreen: false` 恢复 inline 模式（0.9.0 起出厂默认为 fullscreen），此时终端模拟器拥有原生 scrollback 和选区。
 
 `fullscreen: true` 使用 alternate screen，并启用应用内鼠标处理：
 

@@ -311,7 +311,7 @@ export function SplitDiffView({
   /**
    * Smooth-streaming participation (the card owning this view computes
    * eligibility): when present, the capped row list reveals line-by-line at
-   * the shared ~20fps cadence instead of painting as one block. The `+N
+   * the shared ~30fps cadence instead of painting as one block. The `+N
    * lines` fold hint stays rendered throughout — it describes the cap, not
    * the reveal.
    */

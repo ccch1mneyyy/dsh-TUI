@@ -19,6 +19,16 @@ import { dispatcher } from './reconciler.js'
  * top) win. Nodes not in nodeCache (not rendered this frame, or lacking a
  * yogaNode) are skipped along with their subtrees.
  *
+ * Ancestor containment is NOT required: an unclipped node's children can
+ * paint (and receive hits) outside the parent's rect — negative margins
+ * (the PageMargin bleed row: the transcript gutter rail sits at the
+ * terminal edge while its ancestors end at the content column) and plain
+ * overflow. Pruning at such a node would leave the overflow region dead to
+ * the mouse. Only clipped nodes (overflow hidden/scroll) confine their
+ * subtree and prune. Each node still gates on its OWN rect, so the walk
+ * stays cheap whenever the point falls inside a clipped subtree (the
+ * transcript ScrollBox prunes everything below it).
+ *
  * Returns the hit node even if it has no onClick — dispatchClick walks up
  * via parentNode to find handlers.
  * @param node - the subtree root to test.
@@ -33,13 +43,24 @@ export function hitTest(
 ): DOMElement | null {
   const rect = nodeCache.get(node)
   if (!rect) return null
-  if (
-    col < rect.x ||
-    col >= rect.x + rect.width ||
-    row < rect.y ||
-    row >= rect.y + rect.height
-  ) {
-    return null
+  const inside =
+    col >= rect.x &&
+    col < rect.x + rect.width &&
+    row >= rect.y &&
+    row < rect.y + rect.height
+  if (!inside) {
+    const style = node.style
+    const overflowX = style.overflowX ?? style.overflow
+    const overflowY = style.overflowY ?? style.overflow
+    const clipped =
+      overflowX === 'hidden' ||
+      overflowX === 'scroll' ||
+      overflowY === 'hidden' ||
+      overflowY === 'scroll'
+    // Clipped nodes confine their subtree: no child can sit at a point
+    // outside the clip. Unclipped nodes do not — descend anyway and let
+    // each child's own rect decide (see the overflow note above).
+    if (clipped) return null
   }
   // Later siblings paint on top; reversed traversal returns topmost hit.
   for (let i = node.childNodes.length - 1; i >= 0; i--) {
@@ -48,7 +69,7 @@ export function hitTest(
     const hit = hitTest(child, col, row)
     if (hit) return hit
   }
-  return node
+  return inside ? node : null
 }
 
 // Full-tree hit-test call counter. Regression tests (verify-hover-coalesce)

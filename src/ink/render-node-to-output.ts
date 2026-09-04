@@ -97,6 +97,43 @@ export function resetScrollHint(): void {
 }
 
 /**
+ * Frame-end check: did any PREVIOUS frame's absolute overlay vacate cells
+ * that no CURRENT overlay rect covers (the overlay shrank or moved)?
+ *
+ * Opaque/filled absolute overlays (OverlayAbove pickers above the input,
+ * tooltips) paint over non-sibling subtrees (e.g. the transcript ScrollBox,
+ * which rendered EARLIER in tree order). When such a rect shrinks, the cells
+ * it vacated exist in prevScreen only as the overlay's own pixels; the
+ * underlying subtree is clean, so its blit would restore those stale pixels
+ * and the diff never clears them (real-machine report: the slash menu keeps
+ * its old rows after a filter narrows it, until any unrelated repaint).
+ * DOM removal covers the CLOSE case (consumeAbsoluteRemovedFlag); this check
+ * covers shrink/move: the caller poisons the NEXT frame (renders without
+ * prevScreen) so the vacated cells are re-derived from the real tree.
+ * Growth is fine — a current rect that fully contains the previous rect
+ * repaints the whole area itself this frame.
+ */
+export function hasOverlayVacatedCells(): boolean {
+  if (absoluteRectsPrev.length === 0) return false
+  outer: for (const prev of absoluteRectsPrev) {
+    if (prev.width <= 0 || prev.height <= 0) continue
+    for (const cur of absoluteRectsCur) {
+      if (
+        cur.x <= prev.x &&
+        cur.y <= prev.y &&
+        cur.x + cur.width >= prev.x + prev.width &&
+        cur.y + cur.height >= prev.y + prev.height
+      ) {
+        // A current overlay still covers this previous rect completely.
+        continue outer
+      }
+    }
+    return true
+  }
+  return false
+}
+
+/**
  * The scroll hint captured this frame, or null.
  * @returns the scroll hint, or null when none was captured.
  */
@@ -1570,7 +1607,8 @@ function renderNodeToOutput(
 // AFTER a dirty/removed sibling can contain stale overflow in prevScreen.
 // Disable blit for siblings after a dirty child — but still pass prevScreen
 // TO the dirty child itself so its clean descendants can blit. The dirty
-// child's own blit check already fails (node.dirty=true at line 216), so
+// child's own blit check already fails (node.dirty=true, set by markDirty
+// in dom.ts), so
 // passing prevScreen only benefits its subtree.
 // For removed children we don't know their original position, so
 // conservatively disable blit for all.

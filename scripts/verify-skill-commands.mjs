@@ -43,11 +43,7 @@ const commandService = {
     if (registered.has(descriptor.name)) throw new Error(`duplicate command: ${descriptor.name}`)
     registered.set(descriptor.name, descriptor)
     fire('commands/change')
-    // Real dsh-commands emits commands/change on unregister too (the effect
-    // disposer tears the layer down and notifyChange() fires); the menu
-    // merge must hear about a disposed handler or it keeps listing skills
-    // whose dispatch command no longer exists.
-    return () => { registered.delete(descriptor.name); fire('commands/change') }
+    return () => { registered.delete(descriptor.name) }
   },
 }
 
@@ -445,75 +441,6 @@ fire('skills/change')
     'current agent B returns a fresh /skills snapshot',
     freshSkills?.some(skill => skill.name === 'fresh') === true,
   )
-}
-
-// ---- an observation that NEVER completes retries a bounded number of
-// times with backoff, then stops polling and keeps last-good until the
-// next skills/change (the provider's own invalidation). Without the cap a
-// broken provider would keep an 800ms re-read loop alive forever.
-{
-  // Establish a last-good command set first (complete observation).
-  let snapshotCalls = 0
-  let incomplete = false
-  let recovered = false
-  ctx.get = (name) => {
-    if (name === 'commands') return { list: () => [{ name: 'plan', description: 'Toggle plan mode' }] }
-    if (name === 'skills') {
-      return {
-        snapshot: async () => {
-          snapshotCalls += 1
-          if (incomplete) return { skills: [], complete: false }
-          if (recovered) {
-            return {
-              skills: [{ name: 'recovered-skill', description: 'Recovered', invocation: { modelInvocable: true, userInvocable: true } }],
-              complete: true,
-            }
-          }
-          return {
-            skills: [{ name: 'kept-skill', description: 'Kept', invocation: { modelInvocable: true, userInvocable: true } }],
-            complete: true,
-          }
-        },
-      }
-    }
-    return undefined
-  }
-  ctx.logger = { warn() {} }
-  fire('skills/change')
-  check('retry ladder: last-good established',
-    await settled(() => channel.commandList.some(command => command.name === 'kept-skill')))
-  const callsAfterGood = snapshotCalls
-  incomplete = true
-  fire('skills/change')
-  // Each skills/change fires BOTH consumers (the menu merge AND the
-  // command registration), so one change costs two snapshot reads; the
-  // registration ladder then retries 800+1600+3200ms (3 re-reads). The
-  // bound: 2 (change) + 3 (ladder) = 5 extra snapshot calls max.
-  await sleep(6800)
-  const callsAfterRetries = snapshotCalls
-  check('retry ladder: incomplete observation retries a bounded number of times',
-    callsAfterRetries <= callsAfterGood + 5,
-    `snapshot calls=${callsAfterRetries} after ladder (good=${callsAfterGood})`)
-  // A further window must see ZERO additional retries: the ladder is
-  // exhausted and last-good is preserved.
-  await sleep(1500)
-  check('retry ladder: retries stop after the cap',
-    snapshotCalls === callsAfterRetries,
-    `snapshot calls=${snapshotCalls}`)
-  check('retry ladder: last-good skills survive the exhausted ladder',
-    channel.commandList.some(command => command.name === 'kept-skill'))
-  // Recovery: the provider's own skills/change re-enters and completes. The
-  // provider now returns a DIFFERENT skill — asserting on `kept-skill` again
-  // would be a false positive (last-good kept it visible through the whole
-  // exhausted ladder, so the old check passed even if the re-read never
-  // landed). The NEW command appearing is the actual proof of recovery.
-  incomplete = false
-  recovered = true
-  fire('skills/change')
-  check('retry ladder: a later skills/change recovers with fresh content',
-    await settled(() => channel.commandList.some(command => command.name === 'recovered-skill')))
-  check('retry ladder: recovered snapshot replaced the last-good entry',
-    !channel.commandList.some(command => command.name === 'kept-skill'))
 }
 
 console.log(failed === 0 ? 'ALL PASS' : `${failed} FAILED`)
