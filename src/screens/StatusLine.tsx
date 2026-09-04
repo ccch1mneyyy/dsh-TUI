@@ -28,6 +28,7 @@ import {
   tpsStats,
 } from './StatusMetrics.js'
 import type { WaveBand } from '../dsh-adapter/types.js'
+import type { TuiStatusEntry } from '../dsh-adapter/status.js'
 
 /**
  * The footer under the prompt input, in Claude Code's PromptInputFooter
@@ -123,6 +124,7 @@ export function StatusLine({
   selectionActive = false,
   helpOpen = false,
   wake,
+  statusEntries = undefined,
 }: {
   channel: Channel
   selectionActive?: boolean
@@ -137,6 +139,14 @@ export function StatusLine({
    * folds the event log.
    */
   wake?: { band: WaveBand; hint?: string; tick: number }
+  /**
+   * Plugin status contributions (tuiStatus seam), rendered rightmost in the
+   * right field group — the Claude Code statusline position. Styled
+   * contributions (`setStyled`) render their colored runs; plain ones render
+   * dim. Entries are separate fields, joined by the Byline separator like
+   * every field row.
+   */
+  statusEntries?: readonly TuiStatusEntry[]
 }) {
   const { columns } = useTerminalSize()
   const [themeName] = useTheme()
@@ -392,6 +402,31 @@ export function StatusLine({
       : []),
   ]
 
+  // Plugin status contributions (tuiStatus seam) — the outermost right edge
+  // of the statusline, like Claude Code's statusline: styled runs carry
+  // their plugin-provided colors, plain contributions render dim. Kept OUT
+  // of rightFields so compact mode can right-pin them in their own slot
+  // (the merged single row is left-aligned and would strand them mid-line).
+  const statusFields: FieldPart[] = statusEntries !== undefined
+    ? statusEntries.map(entry => ({
+        key: `status:${entry.key}`,
+        node:
+          entry.segments !== undefined
+            ? entry.segments.map((segment, segmentIndex) => (
+                <Text
+                  key={segmentIndex}
+                  color={segment.fg}
+                  backgroundColor={segment.bg}
+                  bold={segment.weight === 'bold'}
+                  dimColor={segment.weight === 'dim'}
+                >
+                  {segment.text}
+                </Text>
+              ))
+            : <Text dimColor>{entry.text}</Text>,
+      }))
+    : []
+
   const hint = selectionActive
     ? t('statusline-hint-select')
     : channel.working
@@ -434,7 +469,7 @@ export function StatusLine({
     ...leftFields,
     ...(ctxNode !== undefined ? [{ key: 'context', id: 'ctx' as const, node: ctxNode }] : []),
   ]
-  const hasStatusFields = compactFields.length > 0 || ctxNode !== undefined
+  const hasStatusFields = compactFields.length > 0 || ctxNode !== undefined || statusFields.length > 0
   // The supplemental row is PERMANENTLY mounted (height pinned to 1)
   // whenever the footer carries hoverable chrome — mounting it from nothing
   // on hover is what made the footer grow mid-gesture and shoved the
@@ -485,9 +520,18 @@ export function StatusLine({
             <Box flexGrow={1} flexShrink={1} flexDirection="row" overflow="hidden">
               <FieldLine parts={compactFields} hoverProps={hoverProps} />
             </Box>
-            {ctxNode !== undefined ? (
-              <Box flexShrink={0} {...hoverProps('ctx')}>
-                <Text wrap="truncate">{ctxNode}</Text>
+            {ctxNode !== undefined || statusFields.length > 0 ? (
+              <Box flexShrink={0} flexDirection="row" gap={2}>
+                {ctxNode !== undefined ? (
+                  <Box flexShrink={0} {...hoverProps('ctx')}>
+                    <Text wrap="truncate">{ctxNode}</Text>
+                  </Box>
+                ) : null}
+                {statusFields.length > 0 ? (
+                  <Box flexShrink={1} overflow="hidden">
+                    <FieldLine parts={statusFields} hoverProps={hoverProps} />
+                  </Box>
+                ) : null}
               </Box>
             ) : null}
           </Box>
@@ -502,7 +546,7 @@ export function StatusLine({
               flexDirection="row"
               overflow="hidden"
             >
-              <FieldLine parts={rightFields} hoverProps={hoverProps} />
+              <FieldLine parts={[...rightFields, ...statusFields]} hoverProps={hoverProps} />
             </Box>
           </Box>
         ) : null}

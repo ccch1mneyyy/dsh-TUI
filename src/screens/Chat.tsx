@@ -317,8 +317,8 @@ export function Chat({
     listener => dialogs.subscribe(listener),
     () => dialogs.getSnapshot(),
   )
-  // Plugin status-line contributions (tuiStatus seam): keyed texts joined
-  // into one line above the prompt.
+  // Plugin status-line contributions (tuiStatus seam): keyed texts rendered
+  // rightmost in the StatusLine row (styled segments keep their colors).
   const statusContributions = extensionStatus ?? (fallbackStatusStore ??= new TuiStatusStore())
   const statusEntries = React.useSyncExternalStore(
     listener => statusContributions.subscribe(listener),
@@ -3568,14 +3568,6 @@ export function Chat({
             onDismiss={() => setBalance(null)}
           />
         )}
-        {statusEntries.length > 0 && (
-          // Plugin status contributions (tuiStatus seam): one joined line,
-          // truncated by the Text wrap contract — the host owns the layout,
-          // plugins own only their text.
-          <Text dimColor wrap="truncate">
-            {statusEntries.map(entry => entry.text).join(' · ')}
-          </Text>
-        )}
         {approvalPanelNode !== null ? (
           approvalPanelNode
         ) : dialogSnapshot !== null ? (
@@ -3665,6 +3657,7 @@ export function Chat({
           channel={channel}
           selectionActive={selectionActive}
           helpOpen={helpOpen}
+          statusEntries={statusEntries}
           wake={
             wakeBand === undefined
               ? undefined

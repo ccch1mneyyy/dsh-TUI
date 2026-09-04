@@ -32,8 +32,10 @@ const [
   { PassThrough, Writable },
   React,
   { Context },
-  { render },
+  { render, ThemeProvider },
   { Chat },
+  { StatusLine },
+  { Terminal: XTerm },
   { QuestionStore },
   { TuiDialogStore, TuiDialogRuntime, getHostDialogStore, INPUT_CELLS },
   { TuiStatusStore, TuiStatusRuntime, getHostStatusStore },
@@ -43,6 +45,7 @@ const [
   { dispatchTuiDecision, normalizeCancelDecision },
   { stringWidth },
   { KNOWN_SESSION_EVENT_TYPES },
+  { DEFAULT_STATUS_BAR },
   { settle, settled, sleep },
 ] = await Promise.all([
   import('node:stream'),
@@ -50,6 +53,8 @@ const [
   import('@deepseek-ai/cordis'),
   import('../src/ui.js'),
   import('../src/screens/Chat.js'),
+  import('../src/screens/StatusLine.js'),
+  import('@xterm/headless'),
   import('../src/dsh-adapter/questions.js'),
   import('../src/dsh-adapter/dialogs.js'),
   import('../src/dsh-adapter/status.js'),
@@ -59,6 +64,7 @@ const [
   import('../src/dsh-adapter/extension-events.js'),
   import('../src/ink/stringWidth.js'),
   import('@deepseek-ai/dsh-session'),
+  import('../src/tuiDisplayPrefs.js'),
   import('./lib/term-test.mjs'),
 ])
 const { mountAdmitted, testManifest, DECISION_COORDINATE } = await import('../src/dsh-adapter/plugin-test-utils.js')
@@ -215,6 +221,40 @@ const warnCount = (fragment: string) => warnings.filter(line => line.includes(fr
   check('status store: redundant clear does not emit', seen.length === 4, String(seen.length))
   check('status store: snapshot referentially stable between emits',
     store.getSnapshot() === store.getSnapshot())
+}
+
+// ── A2. styled status store units (setStyled) ────────────────────────────
+{
+  const store = new TuiStatusStore()
+  const styled = [
+    { text: '●', fg: 'ansi:green' as const },
+    { text: ' ready', fg: 'ansi:white' as const, weight: 'bold' as const },
+  ]
+  store.setStyled('s', styled)
+  const entry = store.getSnapshot()[0]
+  check('status store: setStyled joins runs into text and keeps segments',
+    entry?.key === 's' && entry.text === '● ready'
+    && entry.segments?.length === 2
+    && entry.segments[0].fg === 'ansi:green'
+    && entry.segments[1].weight === 'bold', JSON.stringify(entry))
+  check('status store: empty segments clear the key',
+    (store.setStyled('s', []), store.getSnapshot().length === 0))
+  store.setStyled('s', styled)
+  // Identical styled write adopts the new token without re-emitting, and
+  // must not drop the styled representation.
+  store.setStyled('s', styled)
+  check('status store: identical styled write does not lose segments',
+    store.getSnapshot()[0]?.segments?.length === 2)
+  // A plain set() with the same text REPLACES the styled entry (segments
+  // dropped) — the plain path never leaves stale colored runs behind.
+  store.set('s', '● ready')
+  check('status store: plain set over a styled entry drops segments',
+    store.getSnapshot()[0]?.text === '● ready'
+    && store.getSnapshot()[0]?.segments === undefined, JSON.stringify(store.getSnapshot()[0]))
+  // clearIf token semantics carry segments along.
+  store.setStyled('s', styled, 7)
+  store.clearIf('s', 7)
+  check('status store: clearIf removes a styled entry', store.getSnapshot().length === 0)
 }
 
 // ── B. runtime units over real cordis ────────────────────────────────────
@@ -388,6 +428,60 @@ const plugin = pluginCtx
   disposeSecond()
   check('tuiStatus: the owning disposer clears the same-value write',
     !statusStore.getSnapshot().some(e => e.key === 'aba'))
+}
+
+{
+  // setStyled: colored text runs, named palette only — never raw ANSI.
+  const disposeStyled = plugin.tuiStatus.setStyled('styled', [
+    { text: '●', fg: 'ansi:green' },
+    { text: ' ready', fg: 'ansi:white', weight: 'bold' },
+  ])
+  check('tuiStatus.setStyled: runs joined, segments kept in the snapshot',
+    statusStore.getSnapshot().some(e => e.key === 'styled' && e.text === '●ready' && e.segments?.length === 2),
+    JSON.stringify(statusStore.getSnapshot()))
+  check('tuiStatus.setStyled: unknown color refused + warn',
+    (plugin.tuiStatus.setStyled('styled-bad', [{ text: 'x', fg: 'ansi:neon' as never }]),
+      statusStore.getSnapshot().length === 1 && warnCount('tuiStatus.setStyled rejected an unknown color/weight') === 1))
+  check('tuiStatus.setStyled: unknown weight refused + warn',
+    (plugin.tuiStatus.setStyled('styled-bad', [{ text: 'x', weight: 'heavy' as never }]),
+      warnCount('tuiStatus.setStyled rejected an unknown color/weight') === 2))
+  check('tuiStatus.setStyled: non-string run refused + warn',
+    (plugin.tuiStatus.setStyled('styled-bad', [{ text: 42 } as never]),
+      warnCount('tuiStatus.setStyled rejected a non-string segment') === 1))
+  check('tuiStatus.setStyled: invalid segments shape refused + warn',
+    (plugin.tuiStatus.setStyled('styled-bad', 'not-a-list' as never),
+      warnCount('tuiStatus.setStyled rejected invalid segments') === 1))
+  // Control chars are stripped per run; the joined text is capped at
+  // 200 cells — a run pushing past the cap is dropped with a warn.
+  plugin.tuiStatus.setStyled('styled-wide', [
+    { text: 'x'.repeat(150) },
+    { text: 'y'.repeat(80) },
+  ])
+  check('tuiStatus.setStyled: 200-cell line cap drops the overflow run',
+    statusStore.getSnapshot().find(e => e.key === 'styled-wide')?.text === 'x'.repeat(150)
+    && warnCount('tuiStatus.setStyled truncated') === 1)
+  plugin.tuiStatus.setStyled('styled-wide', undefined)
+  // Stale disposer must not wipe a newer styled write; the owning disposer
+  // clears it (token semantics shared with set()).
+  const styledOld = plugin.tuiStatus.setStyled('styled-life', [{ text: '旧' }])
+  const styledNew = plugin.tuiStatus.setStyled('styled-life', [{ text: '新' }])
+  styledOld()
+  check('tuiStatus.setStyled: stale disposer keeps the newer write',
+    statusStore.getSnapshot().find(e => e.key === 'styled-life')?.text === '新')
+  styledNew()
+  check('tuiStatus.setStyled: owning disposer clears the write',
+    !statusStore.getSnapshot().some(e => e.key === 'styled-life'))
+  // A plain set() over a styled key must replace it as PLAIN text — the
+  // plain path never renders stale colored runs.
+  plugin.tuiStatus.setStyled('styled', [{ text: '同文' }])
+  plugin.tuiStatus.set('styled', '同文')
+  check('tuiStatus: plain set over a styled key drops the segments',
+    (() => {
+      const entry = statusStore.getSnapshot().find(e => e.key === 'styled')
+      return entry?.text === '同文' && entry.segments === undefined
+    })(), JSON.stringify(statusStore.getSnapshot()))
+  disposeStyled()
+  plugin.tuiStatus.set('styled', undefined)
 }
 
 {
@@ -896,6 +990,93 @@ const screen = (back = 30) => plainText(stdout.frames.slice(-back))
   // 空洞成立，轮询会立即返回——保留固定窗口等待重绘发生。
   await sleep(300)
   check('ui: status line clears', !plainText(stdout.frames.slice(mark)).includes('构建中'))
+}
+
+// StatusLine row-level seam render (xterm): contributions land RIGHTMOST in
+// the footer row — the same row as the host fields (model · cwd · …), never
+// a separate line above the prompt; styled segments render host-side colors.
+// Both layouts are asserted: compact (single merged row, the DEFAULT) must
+// right-pin the contributions in their own slot, not strand them mid-line.
+{
+  const baseSeamChannel = {
+    statusBar: { ...DEFAULT_STATUS_BAR },
+    agentId: 'seam-probe',
+    lastUsage: { input: 1000, cacheRead: 0, cacheWrite: 0, output: 10 },
+    contextWindow: 200_000,
+    reasoningEffort: 'max',
+    modeIndex: 0,
+    mode: { id: 'default', plan: false },
+    model: 'model-00',
+    cwd: '/tmp/demo',
+    tokens: { input: 100, output: 10 },
+    tps: 0,
+    tpsSamples: [],
+    working: false,
+    gitBranch: 'main',
+    displayCwd: '/tmp/demo',
+    sessionTitle: 'seam probe',
+    workingActivity: undefined,
+    activityFrames: [],
+    contextBarEnabled: true,
+    contextSegments: { system: 1000, prompt: 1000, assistant: 1000, thinking: 1000, tools: 1000 },
+  }
+  const seamStatusStore = new TuiStatusStore()
+  seamStatusStore.setStyled('demo-styled', [
+    { text: '●', fg: 'ansi:green' },
+    { text: ' green-demo', fg: 'ansi:white' },
+  ])
+  seamStatusStore.set('demo-plain', 'plain-demo')
+  const renderSeam = async (compact: boolean) => {
+    const term = new XTerm({ cols: 140, rows: 8, scrollback: 0, allowProposedApi: true })
+    const writes: string[] = []
+    class SeamOutput extends Writable {
+      columns = 140
+      rows = 8
+      isTTY = true
+      _write(chunk: unknown, _encoding: BufferEncoding, callback: () => void): void {
+        const text = String(chunk)
+        writes.push(text)
+        term.write(text, callback)
+      }
+    }
+    const channel = { ...baseSeamChannel, statusBar: { ...DEFAULT_STATUS_BAR, compact } }
+    const instance = await render(
+      <ThemeProvider theme="dark">
+        <StatusLine channel={channel as never} statusEntries={seamStatusStore.getSnapshot()} />
+      </ThemeProvider>,
+      {
+        stdout: new SeamOutput(),
+        stderr: new SeamOutput(),
+        stdin: new FakeStdin(),
+        exitOnCtrlC: false,
+        patchConsole: false,
+      },
+    )
+    await sleep(180)
+    let footerRow = -1
+    for (let row = term.buffer.active.length - 1; row >= 0 && footerRow < 0; row -= 1) {
+      if (term.buffer.active.getLine(row)?.translateToString(true).includes('model-00')) footerRow = row
+    }
+    const footer = footerRow >= 0
+      ? term.buffer.active.getLine(footerRow)?.translateToString(true) ?? ''
+      : ''
+    await instance.unmount()
+    term.dispose()
+    return { footer, writes }
+  }
+  const compactSeam = await renderSeam(true)
+  check('statusline: contribution renders in the footer row (same row as model)',
+    compactSeam.footer.includes('green-demo'), compactSeam.footer)
+  check('statusline: contribution is after the cwd field',
+    compactSeam.footer.includes('green-demo') && compactSeam.footer.indexOf('green-demo') > compactSeam.footer.indexOf('/tmp/demo'),
+    compactSeam.footer)
+  check('statusline: contribution right-pinned at the row end (compact)',
+    compactSeam.footer.trimEnd().endsWith('plain-demo'), compactSeam.footer)
+  check('statusline: styled segment emits its named color (SGR 32)',
+    compactSeam.writes.some(frame => /\x1b\[32m/.test(frame)))
+  const roomySeam = await renderSeam(false)
+  check('statusline: contribution right-pinned at the row end (non-compact)',
+    roomySeam.footer.trimEnd().endsWith('plain-demo'), roomySeam.footer)
 }
 
 // Shortcut through Chat: the keypress is consumed, the handler runs; the
