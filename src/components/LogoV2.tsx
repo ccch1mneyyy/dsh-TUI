@@ -13,14 +13,18 @@ import { renderBigText } from './bigfont.js'
 import { stringWidth } from '../ink/stringWidth.js'
 import { BRAND, FLASH, ICE, PALE, sweep } from './shimmer.js'
 import { STANDARD_FRAME_INDEX, WhaleArt } from './Whale.js'
-import { OPENING_SEQUENCES, pickOpeningSequence, type OpeningStep, type WhaleIntroId } from './whaleFrames.js'
+import { OPENING_SEQUENCES, pickOpeningSequence, WHALE_FRAME_INDEX, type OpeningStep, type WhaleIntroId } from './whaleFrames.js'
+import { RESTING_POSE, type WhaleLayerPose } from './whaleLayers.js'
 import {
-  HEART_HOLD_MS,
-  HEART_PASS,
   initialWhaleIdleState,
   nextWhaleIdleStep,
   type WhaleIdleState,
 } from './whaleIdle.js'
+
+/** Intro-phase heart pass (whole frames — the planner owns the settled phase). */
+const INTRO_HEART_PASS: readonly number[] = [
+  WHALE_FRAME_INDEX.heart1, WHALE_FRAME_INDEX.heart2, WHALE_FRAME_INDEX.heart3,
+]
 
 /**
  * Header badge version, read from the installed package.json so the display
@@ -137,25 +141,24 @@ export function LogoV2({
     }
   }, [step, settled, sequence])
 
-  // ── Settled whale behaviors (ported from the dsh-ui-whale pet) ─────────
-  // Click → heart pass: purely event-driven (zero idle cost), available
-  // whenever the whale shows, independent of `whaleIdle`. The pass is
-  // one-way heart1→heart2→heart3 (350ms each), then the whale resumes
-  // whatever it was showing; a fresh click restarts it from the small heart.
+  // ── Whale behaviors (ported from the dsh-ui-whale pet) ─────────────────
+  // Intro-phase click → heart pass: whole heart frames over the opening
+  // animation (one-way heart1→heart2→heart3). Once the header settles, the
+  // layered planner below owns hearts as an overlay, so this state only
+  // matters before settle. heartKey restarts the pass on every click, even
+  // when heartSeq is already 0 (setHeartSeq(0) alone bails in React when the
+  // value is unchanged).
   const [heartSeq, setHeartSeq] = React.useState(-1)
-  // heartKey restarts the pass on every click, even when heartSeq is already 0
-  // (setHeartSeq(0) alone bails in React when the value is unchanged, so a
-  // repeat click mid-pass would otherwise do nothing).
   const [heartKey, setHeartKey] = React.useState(0)
   React.useEffect(() => {
-    if (heartSeq < 0) return
+    if (heartSeq < 0 || settled) return
     const timer = setTimeout(() => {
-      setHeartSeq(s => (s >= HEART_PASS.length - 1 ? -1 : s + 1))
-    }, HEART_HOLD_MS)
+      setHeartSeq(s => (s >= INTRO_HEART_PASS.length - 1 ? -1 : s + 1))
+    }, 350)
     return () => {
       clearTimeout(timer)
     }
-  }, [heartSeq, heartKey])
+  }, [heartSeq, heartKey, settled])
 
   const [themeName] = useTheme()
   const theme = getTheme(themeName)
@@ -168,16 +171,21 @@ export function LogoV2({
   const showWhale = whale && columns >= WHALE_MIN_COLUMNS
 
   // Idle behaviors (settings `dsh-tui.whaleIdle`): fin flutters, tail
-  // thumps and blips while idle, continuous motion while the agent works,
-  // and a sleep-Z loop after sustained inactivity. The planner is
-  // event-driven — while the whale rests, the ONLY pending timer is the
-  // one waiting for the next due event, and with the setting off there is
-  // no timer at all (the idle-wakeup contract keeps holding).
-  const [idleFrame, setIdleFrame] = React.useState<number | null>(null)
+  // thumps and blinks while idle, continuous motion while the agent works,
+  // and a sleep-Z loop after sustained inactivity — all as INDEPENDENT
+  // layers composed per tick (whaleLayers.ts), so a click heart plays over
+  // a mid-wag tail or the sleep-Z loop instead of replacing it. The
+  // planner is event-driven — while the whale rests, the ONLY pending
+  // timer is the one waiting for the next due event, and with the setting
+  // off there is no timer at all (the idle-wakeup contract keeps holding).
+  const [idlePose, setIdlePose] = React.useState<WhaleLayerPose | null>(null)
   const idleStateRef = React.useRef<WhaleIdleState>(initialWhaleIdleState(0))
+  const pendingHeartRef = React.useRef(false)
+  const tickRef = React.useRef<(() => void) | null>(null)
   React.useEffect(() => {
     if (!settled || !whaleIdle || !showWhale) {
-      setIdleFrame(null)
+      setIdlePose(null)
+      tickRef.current = null
       return
     }
     // A working flip restarts the loop: work wakes a sleeping whale and
@@ -185,24 +193,29 @@ export function LogoV2({
     idleStateRef.current = initialWhaleIdleState(Date.now())
     let timer: ReturnType<typeof setTimeout> | undefined
     const tick = (): void => {
-      const step = nextWhaleIdleStep(idleStateRef.current, { working, heart: false }, Date.now())
+      const heart = pendingHeartRef.current
+      pendingHeartRef.current = false
+      const step = nextWhaleIdleStep(idleStateRef.current, { working, heart }, Date.now())
       idleStateRef.current = step.state
-      setIdleFrame(step.frameIndex)
+      setIdlePose(step.pose)
       timer = setTimeout(tick, step.delayMs)
     }
+    tickRef.current = tick
     tick()
     return () => {
+      tickRef.current = null
       if (timer !== undefined) clearTimeout(timer)
     }
   }, [settled, whaleIdle, showWhale, working])
-  // Frame priority: heart overlay → intro → idle behavior → standard pose.
-  // The heart beats the intro so a click during the opening animation is
-  // actually visible instead of staying hidden behind the opening frames.
-  const frameIndex = heartSeq >= 0
-    ? (HEART_PASS[heartSeq] ?? STANDARD_FRAME_INDEX)
+  // Render priority: settled → the layered planner pose (hearts and blinks
+  // compose over the body planes). Intro → the opening frames, with a click
+  // heart playing over them as whole heart frames (the layered planner only
+  // runs on the settled standard body).
+  const frameIndex = !settled && heartSeq >= 0
+    ? (INTRO_HEART_PASS[heartSeq] ?? STANDARD_FRAME_INDEX)
     : !settled
       ? sequence[step].frame
-      : (idleFrame ?? STANDARD_FRAME_INDEX)
+      : STANDARD_FRAME_INDEX
   // Frozen clock for the settled header: t=0 parks every sweep highlight
   // off-screen, leaving the static gradient behind.
   const t = settled ? 0 : time
@@ -230,8 +243,27 @@ export function LogoV2({
     <Box ref={ref} flexDirection="column" marginTop={1}>
       <Box flexDirection="row" gap={2} width="100%" alignItems="center">
         {showWhale && (
-          <Box flexShrink={0} onClick={(): void => { setHeartSeq(0); setHeartKey(k => k + 1) }}>
-            <WhaleArt frameIndex={frameIndex} width={FULL_WHALE_WIDTH} />
+          <Box
+            flexShrink={0}
+            onClick={(): void => {
+              // Settled: the layered planner consumes the click on its next
+              // tick — run that tick immediately so the heart shows instantly
+              // instead of after the current delay. Intro: the whole-frame
+              // heart pass above.
+              if (settled && whaleIdle) {
+                pendingHeartRef.current = true
+                tickRef.current?.()
+              } else {
+                setHeartSeq(0)
+                setHeartKey(k => k + 1)
+              }
+            }}
+          >
+            <WhaleArt
+              frameIndex={frameIndex}
+              pose={settled ? (idlePose ?? RESTING_POSE) : undefined}
+              width={FULL_WHALE_WIDTH}
+            />
           </Box>
         )}
         <Box flexDirection="column" flexShrink={1}>

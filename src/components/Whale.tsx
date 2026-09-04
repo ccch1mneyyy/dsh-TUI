@@ -1,6 +1,7 @@
 import React from 'react'
 import { Box, Text } from '../ui.js'
 import { WHALE_FRAMES, type WhaleFrame } from './whaleFrames.js'
+import { composeWhaleGrid, poseKey, type WhaleLayerPose } from './whaleLayers.js'
 
 /**
  * The DeepSeek pixel whale from the hand-drawn Excel art (whale_frames.zip):
@@ -34,8 +35,7 @@ const RESET = '\x1b[0m'
  * trailing transparent cells are dropped so the rows measure exactly the
  * sprite's bounding box.
  */
-export function renderSpriteRows(frame: WhaleFrame, palette: Record<string, Rgb | undefined>): string[] {
-  const sprite = frame.rows
+export function renderSpriteRows(sprite: readonly string[], palette: Record<string, Rgb | undefined>): string[] {
   const rows: string[] = []
   for (let r = 0; r < sprite.length; r += 2) {
     const upper = sprite[r]
@@ -77,7 +77,23 @@ export function renderSpriteRows(frame: WhaleFrame, palette: Record<string, Rgb 
 }
 
 /** Pre-rendered ANSI rows for every whale frame, computed once at module load. */
-const RENDERED: readonly string[][] = WHALE_FRAMES.map(frame => renderSpriteRows(frame, PALETTE))
+const RENDERED: readonly string[][] = WHALE_FRAMES.map(frame => renderSpriteRows(frame.rows, PALETTE))
+
+/**
+ * Layered-pose render cache: composed grids are pure functions of the pose,
+ * and idle ticks repaint the same handful of poses thousands of times.
+ */
+const LAYERED_CACHE = new Map<string, string[]>()
+
+/** Render one composed pose (body + action layers) to ANSI rows, cached. */
+export function layeredWhaleRows(pose: WhaleLayerPose): string[] {
+  const key = poseKey(pose)
+  const cached = LAYERED_CACHE.get(key)
+  if (cached !== undefined) return cached
+  const rows = renderSpriteRows(composeWhaleGrid(pose).map(row => row.join('')), PALETTE)
+  LAYERED_CACHE.set(key, rows)
+  return rows
+}
 
 
 /** Index of the `standard` frame — the settled header's static pose. */
@@ -92,12 +108,15 @@ export const STANDARD_FRAME_INDEX = 0
  */
 export function WhaleArt({
   frameIndex = STANDARD_FRAME_INDEX,
+  pose,
   width,
 }: {
   frameIndex?: number
+  /** Layered pose (parallel actions composited); wins over `frameIndex`. */
+  pose?: WhaleLayerPose
   width?: number
 }): React.ReactNode {
-  const rows = RENDERED[frameIndex] ?? RENDERED[STANDARD_FRAME_INDEX]
+  const rows = pose !== undefined ? layeredWhaleRows(pose) : RENDERED[frameIndex] ?? RENDERED[STANDARD_FRAME_INDEX]
   return (
     <Box flexDirection="column" flexShrink={0} width={width}>
       {rows.map((row, index) => (
