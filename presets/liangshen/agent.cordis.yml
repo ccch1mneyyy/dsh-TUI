@@ -64,16 +64,11 @@
 
 # ── identity ────────────────────────────────────────────────────────────────
 
-# Keep this text byte-identical to the Minimal preset. `complete` prevents the
-# Harness identity and per-tool guidance from changing the system prompt, while
-# runtime-context suppression leaves task and repository rules to user messages
-# and explicit file reads. Tool schemas and their runtime enforcement remain.
-- id: persona
-  name: '@deepseek-ai/dsh-persona'
-  config:
-    text: You are a helpful software engineer assistant.
-    complete: true
-    includeRuntimeContext: false
+# The Minimal persona now lives in ./plan-aware-persona.mjs inside the
+# `planning` group below. Normal mode stays byte-identical to the old static
+# persona row, and `/planPrompt` splices the deployment plan guidance into
+# that SAME complete section on demand. `complete` + runtime-context
+# suppression keep the system prompt exactly as before when the switch is off.
 
 # Instruction FILES are NOT injected (replaces dsh-agent-instructions, local
 # addition): the full AGENTS.md/CLAUDE.md digest is a large injected block
@@ -262,6 +257,13 @@
               Make the plan decision-complete: state the goal and success criteria; group implementation changes by subsystem; identify public API, schema, and data-flow changes; cover edge cases, failure modes, tests, acceptance criteria, and explicit assumptions. Keep it concise enough to review but detailed enough that another engineer can implement it without making design decisions.
 
               When ready, call exit_plan_mode with the complete plan markdown, starting with a # title. Make exit_plan_mode the only and final tool call in that assistant response: it presents the plan for approval, and implementation begins only in a later step after approval. Do not paste the final plan as a plain reply or ask "should I proceed?" through prose or ask_user_question. If review rejects it, incorporate the feedback and present again. If the review channel is unavailable or aborted, stay in plan mode and ask the user to switch modes manually; do not proceed with implementation.
+
+    # Owns the complete persona slot so `/planPrompt` (the TUI local command)
+    # can inject the plan section above into liangshen's otherwise
+    # Minimal-exact system prompt. The plugin only READS `planMode.section`;
+    # it does not touch plan mode state, so `/plan` behavior is unchanged.
+    - id: plan-aware-persona
+      name: ./plan-aware-persona.mjs
 
 # ── compaction ──────────────────────────────────────────────────────────────
 

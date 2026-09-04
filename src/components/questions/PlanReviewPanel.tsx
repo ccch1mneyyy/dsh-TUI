@@ -3,14 +3,24 @@
  * for the DSH user-interaction seam. plan-mode's `exit_plan_mode` tool asks
  * through `ctx.userQuestions` with `intent: { kind: 'plan-review',
  * approve }`: the plan markdown arrives in `detail`, the approve/decline
- * choices in `options` (labels verbatim — the protocol answers with the
- * asker's own labels).
+ * choices in `options`. The decline row is RELABELED as Exit planning for
+ * display only when the caller opts in (`exitPlanning` — Chat does this for
+ * Liangshen sessions with `/planPrompt` on). Everywhere else the decline
+ * row keeps the asker's own label, description, and keep-planning answer,
+ * so standard `/plan` sessions are byte-for-byte the pre-Exit panel.
  *
- * Protocol-exact answer mapping (dsh-plan-mode):
+ * Answer mapping (dsh-plan-mode + the TUI's opt-in Exit planning row):
  * - Approve: `{ selected: [intent.approve] }` — custom MUST be absent, or
  *   plan-mode treats it as keep-planning-with-feedback.
- * - Keep planning / feedback: `{ selected: [declineLabel], custom? }` where
- *   declineLabel is the first option that is not the approve label.
+ * - Exit planning (exitPlanning only): the displayed replacement for the
+ *   asker's first non-approve option. It never answers the ask;
+ *   `onExitPlanning` leaves plan mode through dsh-plan-mode's controller
+ *   (replacing any queued `/plan on` pending intent, not just appending
+ *   `plan/mode` off), rejects the question with PLAN_REVIEW_EXITED, and
+ *   aborts the calling agent's turn so the unapproved plan cannot run.
+ * - Keep planning / feedback: the decline option (or the feedback row)
+ *   sends `{ selected: [declineLabel], custom? }` where declineLabel is the
+ *   asker's first option that is not the approve label.
  * - Esc / Ctrl+C: the store rejects with ASK_CANCELLED, which plan-mode
  *   reads as "the user dismissed the review to speak instead".
  */
@@ -39,16 +49,30 @@ export type PlanReviewPanelProps = {
   readonly onAnswer: (selection: QuestionSelection) => void
   /** Esc / Ctrl+C — dismissed to speak instead (ASK_CANCELLED). */
   readonly onCancel: () => void
+  /** Second decision row: exit plan mode + /planPrompt without approving. */
+  readonly onExitPlanning: () => void
+  /** Opt-in Exit planning row (Liangshen preset + `/planPrompt` on). When
+   *  false (the default), the asker's decline option keeps its own label,
+   *  description, and keep-planning answer. */
+  readonly exitPlanning?: boolean
 }
 
 export function PlanReviewPanel({
   question,
   onAnswer,
   onCancel,
+  onExitPlanning,
+  exitPlanning,
 }: PlanReviewPanelProps): React.ReactNode {
   const options = question.options ?? []
   const approveLabel = question.intent?.approve ?? options[0]?.label
+  const exitPlanningEnabled = exitPlanning === true
+  /** The asker's keep-planning option is the protocol label for feedback-row
+   *  answers, and becomes the Exit planning row only when opted in. */
   const declineLabel = options.find(option => option.label !== approveLabel)?.label
+  const exitIndex = exitPlanningEnabled
+    ? options.findIndex(option => option.label !== approveLabel)
+    : -1
   /** Rows: the asker's options plus the feedback input row at the tail. */
   const rowCount = options.length + 1
   const [focusIndex, setFocusIndex] = React.useState(0)
@@ -93,7 +117,7 @@ export function PlanReviewPanel({
   }
 
   /** Typing anywhere appends to the feedback buffer and focuses the input
-   *  row — plan review has no "attach" semantics: approve must be clean. */
+   *  row — plan review has no "attach" semantics: decisions must be clean. */
   const appendFeedback = (text: string): void => {
     setFeedback(previous => previous + text)
     setCursor(previous => previous + text.length)
@@ -107,16 +131,25 @@ export function PlanReviewPanel({
     setCursor(previous => previous - 1)
   }
 
-  /** The decline answer: the other option's label when the asker named one,
-   *  else an empty selection (plan-mode reads any non-approve as decline). */
+  /** The decline answer for the feedback row: the asker's other-option label
+   *  when it named one, else an empty selection (plan-mode reads any
+   *  non-approve as decline). */
   const declineSelected = (): string[] => declineLabel !== undefined ? [declineLabel] : []
 
-  /** Enter on an option row. Approve with feedback in the buffer is an
-   *  error — the protocol would silently read it as keep-planning. */
+  /** Enter on an option row. Approve (always) and Exit planning (when
+   *  enabled) with feedback in the buffer are errors — clean decisions. */
   const submitOption = (index: number): void => {
     const label = options[index]?.label
     if (label === undefined) return
     const text = feedback.trim()
+    if (exitPlanningEnabled && index === exitIndex) {
+      if (text !== '') {
+        setError(t('plan-review-exit-needs-empty'))
+        return
+      }
+      onExitPlanning()
+      return
+    }
     if (label === approveLabel && text !== '') {
       setError(t('plan-review-approve-needs-empty'))
       return
@@ -261,6 +294,9 @@ export function PlanReviewPanel({
         {options.map((option, index) => {
           const focused = index === focusIndex
           const isApprove = option.label === approveLabel
+          const isExit = exitPlanningEnabled && index === exitIndex
+          const label = isExit ? t('plan-review-exit-label') : option.label
+          const description = isExit ? t('plan-review-exit-description') : option.description
           return (
             <Box
               key={option.label}
@@ -282,11 +318,11 @@ export function PlanReviewPanel({
                   color={focused || isApprove ? 'claude' : undefined}
                   wrap="wrap"
                 >
-                  {index + 1}. {option.label}
+                  {index + 1}. {label}
                 </Text>
-                {option.description !== undefined && (
+                {description !== undefined && (
                   <Text dimColor wrap="wrap">
-                    {option.description}
+                    {description}
                   </Text>
                 )}
               </Box>
@@ -330,7 +366,7 @@ export function PlanReviewPanel({
         </Box>
       )}
       <Box marginTop={1}>
-        <Text dimColor>{t('plan-review-hint')}</Text>
+        <Text dimColor>{t(exitPlanningEnabled ? 'plan-review-exit-hint' : 'plan-review-hint')}</Text>
       </Box>
     </Box>
   )

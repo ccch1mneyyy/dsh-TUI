@@ -567,6 +567,10 @@ const interactChannel = {
   lastUserText: '',
   notifications: [],
   pushLocal: () => {},
+  // Liangshen + /planPrompt on: the only scope where the Exit planning row
+  // is enabled (the gate is preset AND the durable injection switch).
+  agentPreset: 'liangshen',
+  planPromptEnabled: () => true,
 } as never
 const interactStdin = new FakeStdin()
 const interactStdout = new FakeStdout()
@@ -605,13 +609,58 @@ await new Promise(resolve => setTimeout(resolve, 400))
 const reviewFrame = plainText(interactStdout.frames.slice(mark))
 console.log('--- plan review header?', reviewFrame.includes('Plan review'))
 console.log('--- plan review markdown body?', reviewFrame.includes('Demo plan') && reviewFrame.includes('step'))
-console.log('--- plan review decision rows?', reviewFrame.includes('Approve') && reviewFrame.includes('Keep planning'))
-console.log('--- plan review hint?', reviewFrame.includes('Esc 打断评审'))
+console.log('--- plan review decision rows?', reviewFrame.includes('Approve') && reviewFrame.includes('Exit planning') && !reviewFrame.includes('Keep planning'))
+console.log('--- plan review hint?', reviewFrame.includes('Esc dismiss') && reviewFrame.includes('exit planning'))
 interactStdin.write('\r')
 const approveAnswer = await reviewApprove
 console.log('--- clean approve payload?', JSON.stringify(approveAnswer) === JSON.stringify({ answers: [{ id: 'plan-review', selected: ['Approve'] }] }))
 
-// Review 2: typing routes to the feedback row; Enter there declines with
+// Review 2: the second row is Exit planning — it leaves plan mode without
+// answering the ask, rejects with the dedicated exit code, and aborts the
+// calling agent's turn through the hook installed by the plugin.
+const exitPlanEvents: Array<{ type: string; data: unknown }> = []
+const exitPlanCancels: Array<{ cause: unknown; options: unknown }> = []
+interactQuestions.setExitPlanReviewHandler(agent => {
+  ;(agent as unknown as { cancel(cause: unknown, options?: unknown): void }).cancel(
+    { kind: 'user' },
+    { keepInbox: true },
+  )
+})
+const reviewExitRequest = {
+  ...reviewRequest,
+  agent: {
+    id: 'exit-probe',
+    cancel(cause: unknown, options?: unknown) {
+      exitPlanCancels.push({ cause, options })
+    },
+    session: {
+      append(type: string, data: unknown) {
+        exitPlanEvents.push({ type, data })
+      },
+    },
+  },
+} as never
+mark = interactStdout.frames.length
+const reviewExit = interactQuestions.ask(reviewExitRequest)
+await new Promise(resolve => setTimeout(resolve, 400))
+interactStdin.write('2')
+const exitCode = await reviewExit.then(
+  () => 'resolved',
+  (error: unknown) => error instanceof UserQuestionError ? error.code : 'other',
+)
+console.log(
+  '--- exit planning payload?',
+  exitCode === 'PLAN_REVIEW_EXITED' &&
+  exitPlanEvents.length === 1 &&
+  exitPlanEvents[0]?.type === 'plan/mode' &&
+  (exitPlanEvents[0]?.data as { active?: boolean } | undefined)?.active === false &&
+  exitPlanCancels.length === 1 &&
+  (exitPlanCancels[0]?.cause as { kind?: string } | undefined)?.kind === 'user' &&
+  (exitPlanCancels[0]?.options as { keepInbox?: boolean } | undefined)?.keepInbox === true,
+)
+interactQuestions.setExitPlanReviewHandler(undefined)
+
+// Review 3: typing routes to the feedback row; Enter there declines with
 // the feedback as custom text.
 mark = interactStdout.frames.length
 const reviewFeedback = interactQuestions.ask(reviewRequest)
@@ -622,7 +671,7 @@ interactStdin.write('\r')
 const feedbackAnswer = await reviewFeedback
 console.log('--- feedback payload?', JSON.stringify(feedbackAnswer) === JSON.stringify({ answers: [{ id: 'plan-review', selected: ['Keep planning'], custom: '改一下' }] }))
 
-// Review 3: Esc dismisses with ASK_CANCELLED (plan-mode reads it as "the
+// Review 4: Esc dismisses with ASK_CANCELLED (plan-mode reads it as "the
 // user dismissed the review to speak instead").
 const reviewDismiss = interactQuestions.ask(reviewRequest)
 await new Promise(resolve => setTimeout(resolve, 400))
@@ -632,6 +681,54 @@ const dismissCode = await reviewDismiss.then(
   (error: unknown) => error instanceof UserQuestionError ? error.code : 'other',
 )
 console.log('--- dismiss rejects ASK_CANCELLED?', dismissCode === 'ASK_CANCELLED')
+
+// Review 5: a standard-preset session must keep the legacy plan-review
+// panel — the asker's own decline row (Keep planning) with its description
+// and quick-pick hint, and digit 2 resolves keep-planning (NOT the
+// Exit-planning turn abort).
+const standardInteractChannel = {
+  ...channel,
+  version: 2,
+  rows: [],
+  lastUserText: '',
+  notifications: [],
+  pushLocal: () => {},
+  agentPreset: 'standard',
+  planPromptEnabled: () => false,
+} as never
+const standardInteractStdin = new FakeStdin()
+const standardInteractStdout = new FakeStdout()
+const standardInteractQuestions = new QuestionStore()
+const standardInteractApprovals = new ApprovalStore()
+await render(
+  <Chat channel={standardInteractChannel} questionStore={standardInteractQuestions} approvalStore={standardInteractApprovals} />,
+  {
+    stdout: standardInteractStdout,
+    stdin: standardInteractStdin,
+    stderr: new FakeStderr(),
+    exitOnCtrlC: false,
+    patchConsole: false,
+  },
+)
+await new Promise(resolve => setTimeout(resolve, 600))
+
+mark = standardInteractStdout.frames.length
+const standardReview = standardInteractQuestions.ask(reviewRequest)
+await new Promise(resolve => setTimeout(resolve, 400))
+const standardReviewFrame = plainText(standardInteractStdout.frames.slice(mark))
+console.log(
+  '--- standard plan-review keeps legacy decline row?',
+  standardReviewFrame.includes('Keep planning') &&
+  standardReviewFrame.includes('Stay in plan mode and keep refining the plan.') &&
+  !standardReviewFrame.includes('Exit planning') &&
+  standardReviewFrame.includes('1/2 quick-pick'),
+)
+standardInteractStdin.write('2')
+const standardDeclineAnswer = await standardReview
+console.log(
+  '--- standard digit 2 keeps planning?',
+  JSON.stringify(standardDeclineAnswer) === JSON.stringify({ answers: [{ id: 'plan-review', selected: ['Keep planning'] }] }),
+)
 
 // Approval while a question is parked: the approval panel takes precedence.
 const fakeApprovalReq = (callId: string, command: string) => ({

@@ -1,4 +1,5 @@
 import React from 'react'
+import { normalizeLocalCommandName } from '../commands.js'
 import { t, getLang, setLang, isLang, writeLangPref, readLangPref, subscribeLang, LANGS, type Lang } from '../i18n.js'
 import { readThemePref } from '../themePrefs.js'
 import { readPresetPref } from '../presetPrefs.js'
@@ -1054,6 +1055,9 @@ export function Chat({
 
   /**
    * Dispatch a slash command; false lets the input flow to the model.
+   * The parsed name is first folded back to the merged catalog's spelling
+   * (`/PLANPROMPT` → `planPrompt`), so the switch and registry lookups stay
+   * case-sensitive while the user-facing match stays case-insensitive.
    * Built-in names run the local switch; anything registered by a DSH
    * plugin (plan/goal/…) dispatches through the command registry, whose
    * result text lands as a notification. `rawInput` carries the text after
@@ -1116,7 +1120,12 @@ export function Chat({
   }
 
   const runCommand = (name: string, rawInput = ''): boolean => {
-    switch (name) {
+    // Normalize once, before the switch: parseCommandName preserves the
+    // typed casing, so `/PLANPROMPT` and `/planprompt` must dispatch to the
+    // same catalog case as `/planPrompt`.
+    const commandName = normalizeLocalCommandName(name, channel.commandList)
+    if (commandName === undefined) return false
+    switch (commandName) {
       case 'activity': {
         // Ported from the pi working-activity extension: bare `/activity`
         // opens the interactive indicator picker; `/activity frames <name>`
@@ -1160,6 +1169,45 @@ export function Chat({
             index: Math.max(0, PRESET_NAMES.indexOf(channel.activityFrames ?? 'random')),
           },
         })
+        return true
+      }
+      case 'planPrompt': {
+        // Liangshen-only plan prompt switch. The command lives in the local
+        // catalog only when channel.agentPreset === 'liangshen'; the channel
+        // appends `plan-prompt/mode` AND keeps `plan/mode` consistent, so
+        // the injected "You are in plan mode" prompt and `exit_plan_mode`
+        // agree. Plain `/plan` behavior is unchanged.
+        setHelpOpen(false)
+        const parts = rawInput.trim().toLowerCase().split(/\s+/).filter(Boolean)
+        if (parts.length === 0 || parts[0] === 'on') {
+          const before = channel.planPromptEnabled()
+          const enabled = channel.setPlanPrompt(true)
+          if (enabled === undefined) {
+            channel.notify(t('plan-prompt-unavailable'), { color: 'warning' })
+          } else {
+            channel.notify(before ? t('plan-prompt-already-on') : t('plan-prompt-on'), { color: 'success' })
+          }
+          return true
+        }
+        if (parts[0] === 'off') {
+          const before = channel.planPromptEnabled()
+          const enabled = channel.setPlanPrompt(false)
+          if (enabled === undefined) {
+            channel.notify(t('plan-prompt-unavailable'), { color: 'warning' })
+          } else {
+            channel.notify(before ? t('plan-prompt-off') : t('plan-prompt-already-off'), { color: 'success' })
+          }
+          return true
+        }
+        if (parts[0] === 'status') {
+          channel.pushLocal('/planPrompt', [
+            channel.planPromptEnabled() ? t('plan-prompt-status-on') : t('plan-prompt-status-off'),
+            channel.planModeEnabled() ? t('plan-status-on') : t('plan-status-off'),
+            t('plan-prompt-usage'),
+          ])
+          return true
+        }
+        channel.notify(t('plan-prompt-usage'), { color: 'warning' })
         return true
       }
       case 'preset': {
@@ -2110,7 +2158,7 @@ export function Chat({
       case 'deepseek': {
         // Hidden easter egg: replay the logo header's whale spout + text
         // shimmer. The command is intentionally not in the suggestion/help
-        // catalogs; PromptInput recognizes it through HIDDEN_COMMAND_NAMES.
+        // catalogs; PromptInput recognizes it through the hidden-command fold.
         setHelpOpen(false)
         suppressLogoIntroRef.current = false
         setLogoNonce(n => n + 1)
@@ -2134,15 +2182,15 @@ export function Chat({
         // plan-mode projection folds those records, so /plan state stays
         // consistent). Unknown names fall through to the model.
         const external = channel.commandList.find(
-          command => command.external && command.name === name,
+          command => command.external && command.name === commandName,
         )
         if (external) {
           setHelpOpen(false)
-          void channel.runExternalCommand(name, rawInput).then((text) => {
+          void channel.runExternalCommand(commandName, rawInput).then((text) => {
             if (text !== undefined && text !== '') {
               channel.notify(text)
             } else if (text === undefined) {
-              channel.notify(t('command-not-found', { name }), { color: 'error' })
+              channel.notify(t('command-not-found', { name: commandName }), { color: 'error' })
             }
           })
           return true
@@ -3172,6 +3220,8 @@ export function Chat({
       onBack={questionSnapshot.canGoBack
         ? draft => questionStore.backCurrent(draft)
         : undefined}
+      onExitPlanning={() => questionStore.exitPlanReview()}
+      exitPlanning={channel.agentPreset === 'liangshen' && channel.planPromptEnabled()}
     />
   ) : null
   const interruptPanel = approvalPanelNode ?? questionPanelNode

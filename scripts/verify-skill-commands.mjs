@@ -121,7 +121,13 @@ check(
 )
 check(
   'locals all kept',
-  LOCAL_COMMANDS.every(local => names.includes(local.name)),
+  // `/planPrompt` is preset-gated: it only appears in the menu when the
+  // session runs the Liangshen preset (its receiver is the packaged
+  // plan-aware persona). Its Liangshen listing is covered by
+  // scripts/verify-plan-prompt-command.mjs.
+  LOCAL_COMMANDS
+    .filter(command => command.name !== 'planPrompt')
+    .every(local => names.includes(local.name)),
 )
 
 // ---- live refresh: skills/change re-reads the catalog

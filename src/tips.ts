@@ -313,6 +313,12 @@ export const TIPS: readonly Tip[] = [
     en: '/preset liangshen starts minimal, then opens up',
   },
   {
+    id: 'cmd-plan-prompt',
+    group: 'commands',
+    zh: '/planPrompt 在梁神模式进入 plan mode 并注入提示词 · off 关闭并退出',
+    en: '/planPrompt enters plan mode and injects the prompt in Liangshen mode · off exits',
+  },
+  {
     id: 'cmd-settings',
     group: 'commands',
     zh: '/settings 自定义底栏：开关 TPS/轨迹条/上下文条等',

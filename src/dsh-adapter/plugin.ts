@@ -21,7 +21,7 @@ import { readModelPref } from '../modelPrefs.js'
 import { explicitModelRoute, recordedModelRoute, resolveModelRoute, validateModelRoute } from '../modelRoute.js'
 import type { ModelRoute } from '../modelRoute.js'
 import { migratePresetPref, readPresetPref } from '../presetPrefs.js'
-import { composePreset, filterMinimalPresetTools, resolvePersistedPreset, resolvePersistedRoute, runningPresetOf } from './presets.js'
+import { composePreset, filterMinimalPresetTools, resolvePersistedPreset, resolvePersistedRoute, runningPresetOf, serviceForAgent } from './presets.js'
 import { ensurePackagedPresets } from './packaged-presets.js'
 import { ensureLegacySessionEventTypes, snapshotLiveSessionEvents } from './compat/index.js'
 import { clearResumeTarget, resumeTargetFromArgv, writeResumeTarget } from '../sessionHistory.js'
@@ -205,6 +205,15 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     return
   }
 
+  // Seam 1 (session persistence): register every TUI-vouched log-only event
+  // type (legacy activity/status plus the channel's own plan-prompt/mode)
+  // into every reachable KNOWN_SESSION_EVENT_TYPES copy BEFORE any strict
+  // read path can run (--resume below, the /resume command, picker-backed
+  // loads). In-process only: the shared session log is never rewritten.
+  // Idempotent and never throws; unresolved trees degrade to the previous
+  // fail-closed behavior.
+  ensureLegacySessionEventTypes()
+
   // The official profile launcher owns the system preset root and replaces
   // any bundle-supplied roots at boot. Install dsh-tui's bundled presets via
   // the roster's supported user-root seam before resolving the first agent.
@@ -323,7 +332,29 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   // adapter binds either registration to this Cordis fiber; this separate
   // effect rejects asks still parked in the UI during teardown.
   ctx.effect(() => () => questionStore.rejectAll())
-  // `/debug-prompt` snapshots the final provider-neutral request at the
+
+  // "Exit planning" must leave plan mode through dsh-plan-mode's own
+  // controller. Appending `plan/mode { active: false }` directly cannot
+  // replace a queued `/plan on` pending intent; the stale intent would win
+  // at the next accepted pre-step and silently re-enter plan mode. The raw
+  // event append stays as the fallback for bare compositions without the
+  // controller.
+  questionStore.setPlanModeOffHandler(agent => {
+    let planMode: { set(agent: Agent, active: boolean): unknown } | undefined
+    try {
+      planMode = serviceForAgent<{ set(agent: Agent, active: boolean): unknown }>(ctx, agent, 'planMode')
+    } catch {
+      planMode = undefined
+    }
+    if (planMode?.set !== undefined) {
+      planMode.set(agent, false)
+    } else {
+      ;(agent.session as unknown as { append(type: string, data: Record<string, unknown>): unknown }).append(
+        'plan/mode',
+        { active: false },
+      )
+    }
+  })  // `/debug-prompt` snapshots the final provider-neutral request at the
   // llm/stream boundary, after every prompt and tool contributor has run.
   registerPromptDebug(ctx)
   // API selection and registration live behind one adapter boundary. The UI
@@ -347,6 +378,11 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     )
     questionSeatNotice = t('question-provider-occupied', { id: displayId })
   }
+
+  ctx.effect(() => () => {
+    questionStore.setExitPlanReviewHandler(undefined)
+    questionStore.setPlanModeOffHandler(undefined)
+  })
 
   // Child-process stderr guard (issue #17): MCP servers spawned with an
   // inherited stderr (the MCP SDK's stdio default) write straight to the
@@ -566,6 +602,20 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   // (swapping layouts requires re-mounting the whole tree).
   let bootedFullscreen = config.fullscreen === true
   let fullscreenFrozen = false
+  // "Exit planning" must terminate the turn, not just reject the question:
+  // dsh-plan-mode surfaces the rejection as a failed `exit_plan_mode` tool
+  // result, and the agent loop would otherwise hand that error back to the
+  // model, which can keep stepping and execute the unapproved plan. For the
+  // TUI's own live agent, route through channel.cancel() so the in-flight
+  // guard and keep-inbox semantics match a normal Esc interrupt; any other
+  // live root asking through this provider gets the same direct abort.
+  questionStore.setExitPlanReviewHandler(requestAgent => {
+    if (String(requestAgent.id) === channel.agentId) {
+      channel.cancel()
+      return
+    }
+    requestAgent.cancel({ kind: 'user' }, { keepInbox: true })
+  })
   // The settings service may come up AFTER this plugin's apply: the cordis
   // inject callback defers until the service registers, so the first
   // `apply(scope.get())` below can land after the mount (field report: the
@@ -1662,9 +1712,11 @@ async function resolveAgent(
       return { agent: existing, agentPreset: runningPresetOf(existing.session) }
     }
     try {
-      // Compat boundary: register vouched-for legacy event types before the
-      // strict read path (issue #153) — same seam as the /resume picker,
-      // here for the launch-time --resume flow. In-process only.
+      // Compat boundary: the load-time registration above normally already
+      // covered this process; re-ensure before the strict read path as
+      // defense in depth for any direct-import/runner flow (issue #153) —
+      // same seam as the /resume picker, here for the launch-time --resume
+      // flow. Idempotent, in-process only.
       ensureLegacySessionEventTypes()
       // The resumed session keeps the preset its log records (last
       // `agent-preset/selected` wins over the creation header), never the

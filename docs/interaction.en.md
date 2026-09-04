@@ -411,7 +411,10 @@ FIFO order. A compact Q&A summary is added to the local transcript afterward.
 
 When the model calls `exit_plan_mode` in plan mode, the full plan is rendered
 as markdown in the review panel (the dedicated decision layout for
-`intent: plan-review`):
+`intent: plan-review`). Only in Liangshen mode with `/planPrompt` on does the
+first non-approve option show as `Exit planning`; every other preset (and
+Liangshen with `/planPrompt` off) shows the asker's original label and treats
+it as “continue planning”:
 
 | Key | Behavior |
 | --- | --- |
@@ -419,7 +422,9 @@ as markdown in the review panel (the dedicated decision layout for
 | Mouse wheel | Scroll the plan body; Approve / Keep planning / feedback stay pinned in view |
 | `1`/`2` | Submit the corresponding option directly (when the feedback buffer is empty; otherwise digits are treated as feedback characters) |
 | Typing | Enters the feedback input line |
-| `Enter` (option row) | Submit that option; an approval row with feedback errors out — approval must carry no feedback, or the protocol treats it as “continue planning” |
+| `Enter` (`Approve` row) | Approve the plan and leave plan mode; with feedback it errors out — approval must carry no feedback, or the protocol treats it as “continue planning” |
+| `Enter` (other option row) | Submit that option (usually “continue planning”, optionally with feedback text) |
+| `Enter` (`Exit planning` row) | Shown only in Liangshen mode with `/planPrompt` on: leave plan mode and turn off `/planPrompt` WITHOUT approving this plan; the model is told to stop and wait for the next message |
 | `Enter` (input line) | Submit “continue planning” with the feedback text |
 | `Esc` | Interrupt the review to talk (`ASK_CANCELLED`); the model stays in plan mode |
 

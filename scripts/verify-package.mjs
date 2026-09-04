@@ -46,6 +46,7 @@ for (const presetFile of [
   'presets/liangshen/preset.yml',
   'presets/liangshen/.dsh-tui-managed.json',
   'presets/liangshen/tool-bootstrap.mjs',
+  'presets/liangshen/plan-aware-persona.mjs',
 ]) {
   if (!packed.has(presetFile)) throw new Error(`packaged preset file missing from tarball: ${presetFile}`)
 }
