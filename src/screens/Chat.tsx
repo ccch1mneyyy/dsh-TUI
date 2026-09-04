@@ -3592,6 +3592,11 @@ export function Chat({
             {statusEntries.map(entry => entry.text).join(' · ')}
           </Text>
         )}
+        {/* 输入簇：可替换输入行链 + 状态行 + 瞬态浮层。浮层锚点收窄到本簇
+            顶边（= 输入行顶边），picker 紧贴输入框向上展开，盖住其上
+            todo/spinner/转录尾部行（用户接受的取舍），自身零布局高度、
+            不推动帧布局。 */}
+        <Box flexDirection="column" flexShrink={0}>
         {approvalPanelNode !== null ? (
           approvalPanelNode
         ) : dialogSnapshot !== null ? (
@@ -3691,11 +3696,13 @@ export function Chat({
                 }
           }
         />
-        {/* 瞬态面板浮层：absolute + bottom:'100%' 钉在本 chrome Box 顶边，向上
-            覆盖转录尾部行，自身零布局高度。in-flow 挂载会让帧高随面板开关涨落，
-            把帧顶行滚进 scrollback 并在关闭重绘时二次写入（每切一次 /model 多
-            一份启动画的根因）。maxHeight 预留 prompt/statusline 行，防短会话
-            高列表探出帧顶。整体条件挂载：见 dialogOverlayOpen 注释。 */}
+        {/* 瞬态面板浮层：absolute + bottom:'100%' 钉在输入簇 Box 顶边（=
+            输入行顶边），紧贴输入框向上覆盖其上 todo/spinner/转录尾部行，
+            自身零布局高度。in-flow 挂载会让帧高随面板开关涨落，把帧顶行滚进
+            scrollback 并在关闭重绘时二次写入（每切一次 /model 多一份启动画
+            的根因）。浮层盖住 todo 是刻意取舍（贴输入框优先）；maxHeight
+            预留 prompt/statusline 行，防短会话高列表探出帧顶。整体条件
+            挂载：见 dialogOverlayOpen 注释。 */}
         {dialogOverlayOpen && (
         <OverlayAbove maxHeight={Math.max(terminalRows - 8, 1)}>
           {overlay.kind === 'thinking' && (
@@ -4013,6 +4020,7 @@ export function Chat({
           {overlay.kind === 'search' && <TranscriptSearchBar query={searchQuery} cursorOffset={searchCursor} count={searchCount} current={searchCurrent} />}
         </OverlayAbove>
         )}
+        </Box>
       </Box>
       {/* Tooltip 悬停浮层：absolute 零布局高度，挂在根 Box 最后确保盖在
           其余内容之上（yoga 的 absolute 相对父级，根 Box 原点即屏原点，
