@@ -18,8 +18,8 @@ const PREFS_DIR = DATA_DIR
 const PRESET_ID = /^[a-z0-9][a-z0-9-]*$/
 
 /** Parse the value exactly as stored. Preset aliases are roster-dependent:
- * rc.2 ships `code`, while alpha.2 ships `ptc`, so this file cannot safely
- * canonicalize either name before the active roster has been queried. */
+ * legacy rc.2 ships `code`, while the 0.1.2 line ships `ptc`, so this file
+ * cannot safely canonicalize either name before the active roster has been queried. */
 export function parsePresetPref(text: string): string | undefined {
   try {
     const parsed: unknown = JSON.parse(text)

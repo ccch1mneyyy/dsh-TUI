@@ -46,18 +46,16 @@ export function ActivityLine({
   warnDanger?: boolean
   suffix?: string
 }): React.ReactNode {
-  // Static branch stays static: the done summary renders a fixed line, so it
-  // must not subscribe to the animation clock (a null interval unsubscribes).
-  // The live branch drives the shimmer sweep + frame rotation at 60ms.
-  const animate = activity.phase !== 'done'
-  const [, time] = useAnimationFrame(animate ? 60 : null)
+  // 60ms frames: the shimmer sweep advances one column per frame (3.3× the
+  // ported 200ms cadence — the slow crawl read as lag).
+  const [, time] = useAnimationFrame(60)
   const [themeName] = useTheme()
   const theme = getTheme(themeName)
   const preset = React.useMemo(
     () => resolvePreset(activityFrames),
     [activityFrames],
   )
-  const frameIndex = animate ? Math.floor(time / preset.intervalMs) % preset.frames.length : 0
+  const frameIndex = Math.floor(time / preset.intervalMs) % preset.frames.length
   const frame = preset.frames[frameIndex] ?? '·'
   const color =
     activity.phase === 'done' || activity.phase === 'tool'

@@ -14,6 +14,10 @@ import type { PointerEvent } from '../ink/events/pointer-event.js'
  * fields); after a ~600ms dwell the full content pops up in a floating card
  * anchored at the pointer, and disappears the moment the pointer leaves.
  *
+ * Attach it ONLY when the text is actually hidden: a float that repeats
+ * content already visible next to the pointer is noise, not detail (the
+ * tool-call header gates on folded/clipped content for this reason).
+ *
  * Hover events only exist in fullscreen (alternate screen + mouse
  * tracking); inline mode never fires the handlers, so the store can only
  * be written from a live fullscreen tree.

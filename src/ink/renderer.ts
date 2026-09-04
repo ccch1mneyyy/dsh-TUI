@@ -7,6 +7,7 @@ import Output from './output.js'
 import renderNodeToOutput, {
   getScrollDrainNode,
   getScrollHint,
+  hasOverlayVacatedCells,
   resetLayoutShifted,
   resetScrollDrainNode,
   resetScrollHint,
@@ -152,6 +153,15 @@ export default function createRenderer(
 
     const renderedScreen = output.get()
 
+    // An absolute overlay shrank/moved this frame: its vacated cells were
+    // blitted from prevScreen (stale overlay pixels) because the underlying
+    // clean subtree never re-rendered. Flag the NEXT frame as contaminated
+    // so it renders without prevScreen and re-derives those cells from the
+    // tree (see hasOverlayVacatedCells). The current frame's diff is a
+    // no-op at those cells (output == prevScreen there), so nothing stale
+    // reaches the terminal; the poisoned frame writes the correction.
+    const overlayVacated = hasOverlayVacatedCells()
+
     // Drain continuation: render cleared scrollbox.dirty, so next frame's
     // root blit would skip the subtree. markDirty walks ancestors so the
     // next frame descends. Done AFTER render so the clear-dirty at the end
@@ -170,6 +180,7 @@ export default function createRenderer(
           ? getScrollHint()
           : null,
       scrollDrainPending: drainNode !== null,
+      poisonNextFrame: overlayVacated,
       screen: renderedScreen,
       viewport: {
         width: terminalWidth,

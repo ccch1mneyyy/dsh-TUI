@@ -1,8 +1,8 @@
 /**
  * User-question answerer compatibility.
  *
- * rc.2 exposes one global `registerProvider` seat. alpha.2 removed that API
- * in favour of a scope-aware `user-questions/request` waterfall. Keep the
+ * Legacy rc.2 exposes one global `registerProvider` seat. The 0.1.2 line removed that
+ * API in favour of a scope-aware `user-questions/request` waterfall. Keep the
  * capability probe and both registration paths here so the TUI bootstrap only
  * consumes a small prepared-registration result.
  */

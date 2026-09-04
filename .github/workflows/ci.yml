@@ -197,14 +197,16 @@ jobs:
             vendor/dsh-std/packages/storage/lib/
             vendor/dsh-std/packages/messages/lib/
 
-  # Alpha is source-first (alpha.2 also ships to npm, but CI keeps the rc.2
-  # build as the installed baseline). Type-check the adapter and compose both
-  # patches against the immutable upstream alpha.2 source SHA. Missing source
+  # The newest prerelease is source-checked while CI keeps rc.2 as the installed
+  # compatibility baseline. Type-check the adapter and compose both patches
+  # against the immutable upstream rc.1 source SHA. Missing source
   # is a hard failure.
   alpha-compat:
     needs: changes
     if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     env:
       DSH_TUI_LANG: zh
       DSH_HARNESS_SOURCE_ROOT: ${{ github.workspace }}/.upstream/deepseek-harness
@@ -213,14 +215,16 @@ jobs:
       - uses: actions/checkout@v7
         with:
           submodules: recursive
+          persist-credentials: false
 
-      # deepseek-ai/deepseek-harness tag dsh-v0.1.2-alpha.2
+      # deepseek-ai/deepseek-harness tag dsh-v0.1.2-rc.1
       - uses: actions/checkout@v7
         with:
           repository: deepseek-ai/deepseek-harness
-          ref: 0a53fb55bea101816fa226bb964ae2bed71c343b
+          ref: a66e4702047846cdaa10c66c9d3df3951f5ea70d
           path: .upstream/deepseek-harness
           fetch-depth: 1
+          persist-credentials: false
 
       # 版本来自 package.json 的 packageManager 字段，不在此内联 pin。
       - uses: pnpm/action-setup@v6
@@ -238,10 +242,15 @@ jobs:
       - run: pnpm install --frozen-lockfile --ignore-scripts
 
       # build keeps the installed rc.2 regression line green and, with the
-      # required source env above, must also compose the alpha base/web patch.
+      # required source env above, must also compose the rc.1 base/web patch.
       - run: pnpm build
 
       - run: pnpm verify:alpha-source
+
+      # Exercise the compatibility facade in both directions: it reads a real
+      # rc.1 Session and the real rc.1 constructor accepts the seed metadata
+      # it emits. The ordinary rc.2 CI groups keep running the fixture suite.
+      - run: TSX_TSCONFIG_PATH="$DSH_HARNESS_SOURCE_ROOT/tsconfig.base.json" pnpm verify:live-session -- --real-upstream
 
       # dsh-auth 的 48 项 provider 回归此前无任何 lane 执行（build 链只
       # 构建 dsh-auth 不跑其测试）。build:dsh-auth 已装好依赖与产物，

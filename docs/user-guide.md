@@ -33,8 +33,8 @@ dsh-tui
 - `dsh-tui --resume`：恢复上次会话；Windows 可用仓库里的 `dsh-tui.cmd`（等价）。
 - `dsh --profile dsh-tui`：与 `dsh-tui` 等价的手工启动方式（`/update` 仅此方式可用）。
 - 运行模型需要 `DEEPSEEK_API_KEY`；环境自检用 `/doctor`。
-- 已验证的 dsh 引擎版本：`0.1.2-alpha.2`，以及 `0.1.0-rc.6/7/8`、
-  `0.1.1-rc.1/2` 兼容线。
+- 已验证的 dsh 引擎版本：`0.1.2-rc.1`，以及 `0.1.2-alpha.3/4/5`、
+  `0.1.0-rc.6/7/8`、`0.1.1-rc.1/2` 兼容线。
   更老或更新的版本仍可启动，但 logo 页会提示版本漂移并给出对齐命令。
 
 ### 1.2 首次启动你会看到
@@ -171,7 +171,7 @@ dsh-tui
 `q`/`Esc` 退出（Esc 三层：收详情→清查询→关闭）
 
 **/settings 设置面板**
-`↑/↓` 移动 · `Enter` 展开/切换/编辑 · `s` 保存 · `d` 放弃 · `Esc` 先丢脏草稿再退出
+`↑/↓` 移动 · `Enter` 展开/切换/编辑 · 改动自动保存，`Esc` 直接退出
 
 **/btw 侧问面板**
 `↑/↓` 滚动 · `Space`/`Enter`/`Esc` 关闭 · `c` 复制答案 · 等待中 `Esc` 取消
@@ -244,8 +244,9 @@ dsh-tui
 | `/thinking` | 无 | 扩展思考显示开关（流式时思考逐条展开） |
 | `/tokens` | 无 | token 用量 + 上下文百分比 |
 | `/activity` | `frames <名>` / `status` | 工作状态行动画：无参选择器；`frames` 列全部预设；`frames <名>` 直接设置。帧名 30 个（`random` 随机 + `claude/star2/sand/triangle/box/box2/corners/point/layer/flip/aesthetic/hamburger/moon/moon8/comet/breathe/dots/arrow/spark/bar/braille/arc/circle/grow/noise/bounce/rainbow/dqpb/toggle`，默认 `moon8`）。持久化 `~/.dsh-tui/working-activity.json` |
-| `/preset` | `<id>` / `status` | Agent 预设切换：官方 `standard` / `ptc`（alpha.2；RC 名为 `code`）/ `minimal` / `cordis` + TUI 打包**梁神模式 `liangshen`** + 用户自定义；`ptc` / `code` 可跨版本兼容解析；**已开始的会话不可切换**（blank-only 锁定）。持久化 `~/.dsh-tui/agent-preset.json` |
-| `/planPrompt` | `off` / `on` / `status` | **仅梁神模式**：开启时进入 plan mode 并注入 plan 提示词；`off` 关闭注入并退出 plan mode（不改变 `/plan` 本身的用法） || `/theme` | `<名字>` / `status` | 主题：无参选择器；`<名字>` 直接切换；`status` 当前主题（auto 时附 OSC 11 解析结果）。持久化 `~/.dsh-tui/theme.json` |
+| `/preset` | `<id>` / `status` | Agent 预设切换：官方 `standard` / `ptc`（0.1.2；旧 0.1.1 名为 `code`）/ `minimal` / `cordis` + TUI 打包**梁神模式 `liangshen`** + 用户自定义；`ptc` / `code` 可跨版本兼容解析；**已开始的会话不可切换**（blank-only 锁定）。持久化 `~/.dsh-tui/agent-preset.json` |
+| `/planPrompt` | `off` / `on` / `status` | **仅梁神模式**：开启时进入 plan mode 并注入 plan 提示词；`off` 关闭注入并退出 plan mode（不改变 `/plan` 本身的用法） |
+| `/theme` | `<名字>` / `status` | 主题：无参选择器；`<名字>` 直接切换；`status` 当前主题（auto 时附 OSC 11 解析结果）。持久化 `~/.dsh-tui/theme.json` |
 | `/color` | 无参 / `<名>` / `status` / `reset` | 会话强调色：**无参打开调色板选择器**（8 色 + 色点预览，`↑/↓` 选择、`Enter` 应用）；`<名>` 直接设置；`status` 当前；`reset` 恢复主题默认。输入框边框 + 会话名标签变色（标签显示在输入框顶边框**右上角**，**默认关闭**，`/settings` 的「会话名标签」可开启；`red/orange/yellow/green/blue/purple/pink/cyan`）。按会话经 `session/color` 事件保存，resume/rewind 后仍在 |
 | `/lang` | `en` / `zh` / `status` | 界面语言热切换。优先级：`DSH_TUI_LANG` > settings.yaml > cordis.yml > 持久化 |
 | `/vim` | 无 | **vim 编辑模式开关**（见 §2.4）：输入框切到 vim 键位编辑，会话级、不持久化 |
@@ -352,7 +353,7 @@ dsh-TUI 不预装通用技能。`/skills` 浏览 DSH 从当前 profile、用户�
 ### 4.6 模型切换与预设
 
 - `/model`：选择器，**切换 = fork 会话续聊**（历史保留、只换 provider/model 路由，preset 不变）；旧会话留在 `/resume`；选择持久化 `~/.dsh-tui/model.json`。运行时切换被拒绝。
-- `/preset`：`standard`（默认全功能）/ `ptc`（PTC）/ `minimal`（仅 bash+编辑器，无 compaction）/ `cordis`（创造模式）/ `liangshen`（梁神模式：首轮最小双工具，首次工具调用后开放全目录）。alpha 名册会把旧版 `code` 作为 `ptc` 的兼容别名；rc 名册仍使用 `code` 真名。
+- `/preset`：`standard`（默认全功能）/ `ptc`（PTC）/ `minimal`（仅 bash+编辑器，无 compaction）/ `cordis`（创造模式）/ `liangshen`（梁神模式：首轮最小双工具，首次工具调用后开放全目录）。0.1.2 名册会把旧版 `code` 作为 `ptc` 的兼容别名；旧 0.1.1 名册仍使用 `code` 真名。
   **已产生对话的会话不可切换**（blank-only：选择只保存为下次 `/new` 的默认）。
 - 会话模式 `Shift+Tab` 循环三档：default（workspace-write + 审批）→ plan（read-only）→ full（danger-full-access）。
 
@@ -392,12 +393,14 @@ dsh-TUI 不预装通用技能。`/skills` 浏览 DSH 从当前 profile、用户�
 空会话顶部是鲸鱼 Logo 区（随对话滚动消失）：
 
 - **开场动画**（约 3.4 秒，只播一次）：眨眼 → 喷水花 ×6 → 摇尾，之后定格为静态鲸鱼。
+- **闲置动画**（`whaleIdle`，默认关）：开屏定格后鲸鱼继续摆鱼鳍、偶尔拍尾巴，agent 回合运行中持续游动，连续空闲 10 秒后睡着冒 Z；任何工作会立即唤醒。**点击鲸鱼冒爱心**始终可用（事件驱动，零空闲开销），与该设置无关。
 - 鲸鱼右侧文字列：`✦ dsh-TUI v版本号` → 5 行块体大字 `DEEPSEEK / HARNESS`（品牌蓝渐变）
   → 当前模型 + effort → 工作目录 → **启动提示行**（`/model` 切换模型 · `/help` 查看命令 · `Tab` 自动补全）。
   若 dsh 引擎版本不在验证范围内，提示行下方会多出一行 **⚠ 版本漂移警告**
   （更新/更旧/混装/异常四形态，附 `npm i -g @deepseek-ai/dsh@<版本>` 对齐命令）。
 - 鲸鱼下方居中的欢迎语：`探索未至之境！`（Explore the uncharted!）。
 - 终端宽度 **< 64 列时隐藏鲸鱼**，仅保留文字列。
+- 像素鲸鱼的 22 帧手绘原图与闲置行为移植自 [dsh-ui-whale](https://github.com/lhh010/dsh-ui-whale)（作者 [@lhh010](https://github.com/lhh010)），特此致谢。
 
 ### 5.2 底部状态栏（输入框下方三行）
 
@@ -425,13 +428,14 @@ dsh-TUI 不预装通用技能。`/skills` 浏览 DSH 从当前 profile、用户�
 
 ### 5.3 /settings 设置编辑器
 
-`/settings` 打开插件设置编辑器；**编辑是暂存制**：`s` 保存 / `d` 放弃 / `Esc` 丢弃脏区退出。
-dsh-tui 自身区块（写入 settings.yaml 用户层，实时生效）共 21 个字段：
+`/settings` 打开插件设置编辑器；**改动自动保存**，`Esc` 直接退出。
+dsh-tui 自身区块（写入 settings.yaml 用户层，实时生效）共 22 个字段：
 
 | 字段 | 说明 |
 |---|---|
 | lang | 界面语言 zh/en（DSH_TUI_LANG 钉死时不可改） |
-| whale | 开屏头部像素鲸鱼娘（默认开） |
+| whale | 开屏头部像素鲸鱼娘（默认开）；每次启动随机三选一开屏动画：经典组合开场（眨眼+喷水+摆尾）/ 爱心 / 睡觉，`/deepseek` 彩蛋每次重掷 |
+| whaleIdle | 鲸鱼娘闲置动画（默认关）：开屏后继续摆鱼鳍/拍尾巴，空闲 10 秒入睡冒 Z，工作中持续游动；点击冒爱心不依赖此设置。空闲时增加少量重绘，故默认关闭 |
 | diffLayout | Edit/Write diff 布局：auto（≥110 列双栏）/ split / unified |
 | thinkingFold | 思考块：preview（流式 2-3 行预览 + 落定折叠）/ full（展开到轮末） |
 | smoothStreaming | 流式平滑输出（默认开）：实时回复/展开思考/工具卡正文按 ~30fps 匀速揭示，突发送达不再跳变，一次性到达的非流式回复也平滑打出；回放/历史始终完整直出 |
@@ -457,7 +461,7 @@ provider / model / cwd / effort / fullscreen / preset / workspace / sessionId / 
 |---|---|---|
 | 模型 | `/model` | 选择器；**切换 = fork 会话续聊**（历史保留、仅换路由）；持久化 `~/.dsh-tui/model.json`，重启与 `/new` 沿用 |
 | 推理强度 | `/effort` | 滑杆（←/→ 实时）或 `/effort <id>`；`/effort status` 看当前 |
-| Agent 预设 | `/preset` | `standard` / `ptc`（alpha.2；RC 名为 `code`）/ `minimal` / `cordis` + **梁神模式 `liangshen`**；**已开始会话不可切换**（blank-only） |
+| Agent 预设 | `/preset` | `standard` / `ptc`（0.1.2；旧 0.1.1 名为 `code`）/ `minimal` / `cordis` + **梁神模式 `liangshen`**；**已开始会话不可切换**（blank-only） |
 | 主题 | `/theme` | `auto`（OSC 11 跟随终端背景）/ `light` / `dark` / `dark-ansi`；`/theme <名>` 直接切；`/theme status` 看解析结果 |
 | 自定义主题 | 手动 | `~/.dsh-tui/themes/<名>.json`，`{base, colors}` 格式，选中即热切换；命名为 `auto` 会被内置遮蔽 |
 | 语言 | `/lang` | `en` / `zh` 热切换；优先级 `DSH_TUI_LANG` > settings.yaml > cordis.yml > 持久化 |

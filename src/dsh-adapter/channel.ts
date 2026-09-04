@@ -29,7 +29,23 @@ import type { Context } from '@deepseek-ai/cordis'
 import { extname, isAbsolute, join } from 'node:path'
 import { completeCommands, HIDDEN_COMMAND_NAMES, isCommandCompletionToken, isHiddenCommandName, isLocalCommandName, LOCAL_COMMANDS, parseCommandName, type CommandCompletion, type CommandCompletionNode, type LocalCommand } from '../commands.js'
 import { clearResumeTarget, forgetAgentViewSession, forgetSession, readAgentViewSessions, readResumeTarget, touchAgentViewSession, touchSession, writeResumeTarget } from '../sessionHistory.js'
-import { appendSessionTitle, defaultMaxScanned, deleteSessionLog, ensureLegacySessionEventTypes, readSessionEventsFromFile, readSessionEventsFromLog, sessionsRoots } from './compat/index.js'
+import {
+  appendSessionTitle,
+  defaultMaxScanned,
+  deleteSessionLog,
+  ensureLegacySessionEventTypes,
+  appendInterruptedTurnEnd,
+  liveSessionCreateOptions,
+  liveSessionListingFields,
+  liveSessionOffset,
+  readPhysicalHeaderSeedLength,
+  readPhysicalHeaderSeedLengthForSession,
+  readSessionEventsFromFile,
+  readSessionEventsFromLog,
+  sessionsRoots,
+  sliceLiveSessionSeed,
+  snapshotLiveSessionEvents,
+} from './compat/index.js'
 import {
   buildSessionTree,
   forkTarget,
@@ -46,6 +62,7 @@ import {
   noteBranch,
   previewSession,
   readHeader,
+  readInheritedCut,
   type PreviewEntry,
   type RawSessionHeader,
   type SessionSource,
@@ -78,7 +95,7 @@ import { extractMentions } from '../utils/mentions.js'
 import { getLang, LANGS, t, tOr, type Lang } from '../i18n.js'
 import { AUTO_THEME_NAME } from '../theme.js'
 import { listThemeCatalog } from '../themeCatalog.js'
-import { modeDisplayName, resolveSessionModes, type SessionModeSpec } from '../sessionModes.js'
+import { canonicalPresetFor, DEFAULT_SESSION_MODES, modeDisplayName, permissionCycleEntry, RESERVED_PERMISSION_PRESETS, resolveSessionModes, stablePermissionRosterOrder, type SessionModeSpec } from '../sessionModes.js'
 import { normalizePageMargin, normalizeScrollGutter, normalizeStatusBar, normalizeToolBackground, type PageMarginSetting, type ScrollGutterMode, type StatusBarConfig, type ToolBackground } from '../tuiDisplayPrefs.js'
 import { SubagentActivityStore, type SubagentState } from './subagents.js'
 export type { SubagentState } from './subagents.js'
@@ -87,7 +104,6 @@ import type { SpinnerMode } from '../components/Spinner/spinnerMode.js'
 import { ActivityTracker, type ActivityState } from 'dsh-working-activity/status'
 import type { TrackerConfig } from 'dsh-working-activity/status'
 import { featureOn } from 'dsh-working-activity/config'
-import { emptyTrajectory, extendTrajectory, extendTrajectoryEvents, type TrajBuild } from './trajectory/index.js'
 import { setMinimalMode } from '../minimalMode.js'
 import { readActivityConfig } from '../activityPrefs.js'
 import { attachSessionToWorkspace } from './workspace.js'
@@ -217,8 +233,17 @@ const PERMISSION_PRESET_DESCRIPTION_CELLS = 400
 
 type PermissionPresetService = {
   names?: unknown
-  current?: (events: readonly SessionEvent[]) => unknown
+  /** Real harness registries resolve `current(session)` through their
+   *  session-projections seam; earlier contract versions folded a raw event
+   *  log. The adapter passes the session and falls back to its events. */
+  current?: (subject: unknown) => unknown
   optionOf?: (name: string) => unknown
+  /** Official write path — the same one the /permission command handler
+   *  drives. Fallback when the command never reaches the agent's registry. */
+  set?(session: unknown, name: string): unknown
+  /** Bundle resolution for table-driven canonical matching (deployments may
+   *  rename or extend the preset table). */
+  resolve?(name: string): unknown
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -245,20 +270,33 @@ function legacyPermissionPresetOptions(): readonly PermissionPresetOption[] {
   ]
 }
 
+/** Keep a permission roster read-only after it crosses the adapter boundary.
+ *  The registry may reuse and mutate its option objects between reads; callers
+ *  must observe one stable snapshot instead of a live view into that service. */
+function freezePermissionPresetSnapshot(snapshot: PermissionPresetSnapshot): PermissionPresetSnapshot {
+  const options = Object.freeze(snapshot.options.map(option => Object.freeze({ ...option })))
+  const current = snapshot.current === undefined ? undefined : Object.freeze({ ...snapshot.current })
+  return Object.freeze({
+    availability: snapshot.availability,
+    options,
+    ...(current === undefined ? {} : { current }),
+  })
+}
+
 function legacyPermissionPresetSnapshot(sandbox: SessionModeSpec['sandbox']): PermissionPresetSnapshot {
   const options = legacyPermissionPresetOptions()
   const currentOption = sandbox === undefined ? undefined : options.find(option => option.value === sandbox)
-  return {
+  return freezePermissionPresetSnapshot({
     availability: 'legacy',
     options,
     ...(currentOption === undefined
       ? {}
       : { current: { ...currentOption, kind: 'preset' as const } }),
-  }
+  })
 }
 
 function unavailablePermissionPresetSnapshot(): PermissionPresetSnapshot {
-  return { availability: 'unavailable', options: [] }
+  return freezePermissionPresetSnapshot({ availability: 'unavailable', options: [] })
 }
 
 function normalizePermissionPresetOption(value: unknown): PermissionPresetOption | undefined {
@@ -277,18 +315,52 @@ function normalizePermissionPresetOption(value: unknown): PermissionPresetOption
   }
 }
 
+/** Atom bundles a service resolves for its preset table (value →
+ *  sandbox/approval). Empty when the service is absent or does not resolve
+ *  atoms — canonical resolution then falls back to the stock bundles. */
+function permissionBundlesFromService(service: unknown): readonly {
+  value: string
+  sandbox?: SessionModeSpec['sandbox']
+  approval?: SessionModeSpec['approval']
+}[] {
+  if (!isRecord(service)) return []
+  const runtime = service as PermissionPresetService
+  if (typeof runtime.resolve !== 'function') return []
+  const names = runtime.names
+  if (!Array.isArray(names)) return []
+  const bundles: { value: string; sandbox?: SessionModeSpec['sandbox']; approval?: SessionModeSpec['approval'] }[] = []
+  for (const name of names) {
+    if (typeof name !== 'string') continue
+    try {
+      const spec = runtime.resolve(name)
+      if (!isRecord(spec)) continue
+      const sandbox = spec.sandbox
+      const approval = spec.approval
+      if (
+        (sandbox === 'read-only' || sandbox === 'workspace-write' || sandbox === 'danger-full-access')
+        && (approval === 'ask' || approval === 'never')
+      ) {
+        bundles.push({ value: name, sandbox, approval })
+      }
+    } catch {
+      // Optional resolution; a broken entry just does not extend the table.
+    }
+  }
+  return bundles
+}
+
 function permissionPresetSnapshotFromService(
   service: unknown,
-  events: readonly SessionEvent[],
+  subject: unknown,
 ): PermissionPresetSnapshot {
   if (!isRecord(service)) return unavailablePermissionPresetSnapshot()
   const runtime = service as PermissionPresetService
   try {
     const capturedNames = runtime.names
-    const current = runtime.current
-    const optionOf = runtime.optionOf
     if (!Array.isArray(capturedNames) || capturedNames.length === 0) return unavailablePermissionPresetSnapshot()
-    if (typeof current !== 'function' || typeof optionOf !== 'function') return unavailablePermissionPresetSnapshot()
+    if (typeof runtime.current !== 'function' || typeof runtime.optionOf !== 'function') {
+      return unavailablePermissionPresetSnapshot()
+    }
 
     const names = [...capturedNames]
     const seen = new Set<string>()
@@ -301,16 +373,30 @@ function permissionPresetSnapshotFromService(
 
     const options: PermissionPresetOption[] = []
     for (const name of names) {
-      const option = normalizePermissionPresetOption(optionOf(name))
+      const option = normalizePermissionPresetOption(runtime.optionOf(name))
       if (option === undefined || option.value !== name) return unavailablePermissionPresetSnapshot()
       options.push({ ...option })
     }
 
-    const currentValue = current(events)
+    // Real harness registries resolve `current(session)` through their
+    // session-projections seam; earlier contract versions folded a raw event
+    // log. Try the session first, then the event-log shape.
+    let currentValue: unknown
+    try {
+      currentValue = runtime.current(subject)
+    } catch {
+      try {
+        currentValue = runtime.current(
+          (subject as { events?: unknown } | null)?.events ?? subject,
+        )
+      } catch {
+        return unavailablePermissionPresetSnapshot()
+      }
+    }
     if (typeof currentValue !== 'string' || (currentValue !== PERMISSION_PRESET_CUSTOM && !seen.has(currentValue))) {
       return unavailablePermissionPresetSnapshot()
     }
-    const currentOption = normalizePermissionPresetOption(optionOf(currentValue))
+    const currentOption = normalizePermissionPresetOption(runtime.optionOf(currentValue))
     if (currentOption === undefined || currentOption.value !== currentValue) return unavailablePermissionPresetSnapshot()
     if (currentValue !== PERMISSION_PRESET_CUSTOM) {
       const rosterOption = options.find(option => option.value === currentValue)
@@ -323,14 +409,14 @@ function permissionPresetSnapshotFromService(
       }
     }
 
-    return {
+    return freezePermissionPresetSnapshot({
       availability: 'runtime',
       options,
       current: {
         ...currentOption,
         kind: currentValue === PERMISSION_PRESET_CUSTOM ? 'custom' : 'preset',
       },
-    }
+    })
   } catch {
     return unavailablePermissionPresetSnapshot()
   }
@@ -484,7 +570,7 @@ export interface JobRow {
 /**
  * One rendered transcript row. The DSH session log is the source of truth:
  * rows are derived from `session/event` records (and the initial
- * `agent.session.events` replay), never from optimistic local state.
+ * `snapshotLiveSessionEvents(agent.session)` replay), never from optimistic local state.
  */
 export interface ChatRow {
   id: number
@@ -908,6 +994,10 @@ export interface Channel {
   readonly statusBar: Readonly<StatusBarConfig>
   /** Whether the header's pixel whale art shows (settings `dsh-tui.whale`). */
   readonly whale: boolean
+  /** Whether the settled header whale keeps behaving — fin flutters, tail
+   * thumps, sleep after inactivity (settings `dsh-tui.whaleIdle`; off by
+   * default so the settled header holds zero timers). */
+  readonly whaleIdle: boolean
   /** Minimal mode (settings `dsh-tui.minimal`): no header splash, no emoji
    *  glyphs, no decorative colors; code highlight and tool colors stay. */
   readonly minimal: boolean
@@ -961,6 +1051,13 @@ export interface Channel {
    * back to sending the line to the model).
    */
   runExternalCommand(name: string, rawInput: string): Promise<string | undefined>
+  /**
+   * TUI-side permission preset switch: the official `/permission` command
+   * when registered, otherwise the permission-presets service's own write
+   * path (the same handler the command drives). Resolves true when the
+   * durable identity confirms the target. Never falls through to the model.
+   */
+  runPermissionPreset(name: string): Promise<boolean>
   /**
    * Plugin-registered full-screen scene currently replacing the conversation
    * (the `dsh-tui-scenes` runtime), if any. The chat screen renders its
@@ -1291,23 +1388,6 @@ export interface Channel {
    * time; agent swaps (/resume /rewind /new) are reflected immediately.
    */
   traceEvents(): readonly SessionEvent[]
-  /**
-   * The session trajectory projection, folded incrementally by the channel
-   * as session events arrive — never on the render path. The returned build
-   * is stable between event batches (screens may read it during render);
-   * agent swaps (/resume /rewind /new) rebuild it from the new session's
-   * log. Headless/stub channels that do not provide the seam fall back to
-   * the same module-level empty build.
-   */
-  trajectory(): TrajBuild
-  /**
-   * Counter bumped exactly when an existing transcript row's `streaming`
-   * flag flips in place (turn settle, revive). MessageList keys its filter
-   * cache on it; new rows bump `rows.length` instead.
-   */
-  rowsStreamingVersion: number
-  /** Transcript generation (see the ChannelState field). */
-  rowsGeneration: number
 }
 
 /** @internal */
@@ -1410,22 +1490,6 @@ export interface ChannelState {
   tpsSamples: { tps: number; at: number }[]
   /** Latest working-activity snapshot (see the public Channel type). */
   workingActivity: ActivityStatus | undefined
-  /** Incremental trajectory projection (see the public Channel type). */
-  trajectory: () => TrajBuild
-  /**
-   * Counter bumped exactly when an existing row's `streaming` flag flips in
-   * place (turn settle, revive) — the transcript list's filter cache keys on
-   * it so settles invalidate without an O(rows) scan per render.
-   */
-  rowsStreamingVersion: number
-  /**
-   * Transcript generation: bumped whenever the transcript is cleared and
-   * row ids restart at 0 (clear, session swap, loadOlder prepend, rewind,
-   * new, workspace/model switch). MessageList keys its height/painted/
-   * signature caches on it so a fresh transcript never reuses a previous
-   * one's per-id state.
-   */
-  rowsGeneration: number
   /** Working-activity indicator preset (see the public Channel type). */
   activityFrames: string | undefined
   /** Raw cordis.yml pins `/reload` must respect (see the public Channel type). */
@@ -1476,8 +1540,12 @@ export interface ChannelState {
   setStatusBar(config: Partial<StatusBarConfig>): void
   /** Whale header art switch (see the public Channel type). */
   whale: boolean
+  /** Idle whale behaviors switch (see the public Channel type). */
+  whaleIdle: boolean
   /** Apply a whale-visibility change (see the public Channel type). */
   setWhale(visible: boolean): void
+  /** Apply an idle-whale-behavior change (see the public Channel type). */
+  setWhaleIdle(enabled: boolean): void
   minimal: boolean
   /** Apply a minimal-mode change (see the public Channel type). */
   setMinimal(enabled: boolean): void
@@ -1511,6 +1579,8 @@ export interface ChannelState {
   commandCompletions(input: string): readonly CommandCompletion[]
   /** Run a plugin-registered command (see the public Channel type). */
   runExternalCommand(name: string, rawInput: string): Promise<string | undefined>
+  /** TUI-side permission preset switch (see the public Channel type). */
+  runPermissionPreset(name: string): Promise<boolean>
   /** Open plugin scene mirrored from the scenes runtime (see the public Channel type). */
   pluginScene: TuiSceneDescriptor | undefined
   /** Open a plugin scene by id (see the public Channel type). */
@@ -1984,13 +2054,13 @@ const PREVIEW_ENTRIES = 8
  *  expires. Polling the session log is race-free here: fork reads the same
  *  append-only log. */
 async function waitForTurnEnd(
-  session: { seq: number; events: readonly SessionEvent[] },
+  session: unknown,
   fromSeq: number,
   timeoutMs: number,
 ): Promise<boolean> {
   const deadline = Date.now() + timeoutMs
   while (Date.now() < deadline) {
-    const last = session.events.at(-1)
+    const last = snapshotLiveSessionEvents(session).at(-1)
     if (last !== undefined && last.type === 'turn/end' && last.seq >= fromSeq) {
       return true
     }
@@ -2067,6 +2137,9 @@ export function createChannel(
     statusBar?: Partial<StatusBarConfig>
     /** Show the header's pixel whale art; default on. */
     whale?: boolean
+    /** Idle whale behaviors (fin/tail/sleep) after the intro settles;
+     * default off (click-hearts are always available). */
+    whaleIdle?: boolean
     /** Minimal mode; default off (settings `dsh-tui.minimal`). */
     minimal?: boolean
     /** Show the segmented context bar row in the status footer; default on
@@ -2144,7 +2217,7 @@ export function createChannel(
   // token-level streaming (a fresh frozen events array per append).
   const agentViewFolds = new Map<string, { events: readonly SessionEvent[]; fold: AgentViewFold }>()
   const foldOf = (liveAgent: Agent): AgentViewFold => {
-    const events = liveAgent.session.events
+    const events = snapshotLiveSessionEvents(liveAgent.session)
     const cached = agentViewFolds.get(String(liveAgent.id))
     const base: AgentViewFold = {
       hasTurns: false,
@@ -2423,12 +2496,124 @@ export function createChannel(
   const rendererRuntime = getHostRenderers(ctx.get('tuiRenderers') as TuiRendererRuntime | undefined)
   // Shift+Tab session-mode cycle: cordis.yml `modes` wins; absent/empty/
   // atom-less → the built-in default/plan/full cycle (sessionModes.ts).
-  const { modes: sessionModes, dropped: droppedModeIds } = resolveSessionModes(options.modes)
+  // Configured entries may additionally pin a durable `permission` preset
+  // identity (permission + plan allowed; permission + sandbox/approval is
+  // contradictory and dropped with a warning).
+  const { modes: resolvedConfiguredSessionModes, dropped: droppedModeIds } = resolveSessionModes(options.modes)
+  const invalidConfiguredPermissionIds = resolvedConfiguredSessionModes
+    .filter(spec => spec.permission !== undefined && !isCommandCompletionToken(spec.permission))
+    .map(spec => spec.id)
+  const filteredConfiguredSessionModes = resolvedConfiguredSessionModes
+    .filter(spec => spec.permission === undefined || isCommandCompletionToken(spec.permission))
+  const configuredSessionModes = filteredConfiguredSessionModes.length > 0
+    ? filteredConfiguredSessionModes
+    : DEFAULT_SESSION_MODES
   if (droppedModeIds.length > 0) {
     ctx.logger.warn(
-      `dsh-tui: session modes ${droppedModeIds.map(id => `"${id}"`).join(', ')} declare no plan/sandbox/approval atom; dropped from the Shift+Tab cycle`,
+      `dsh-tui: session modes ${droppedModeIds.map(id => `"${id}"`).join(', ')} declare no plan/sandbox/approval/permission atom; dropped from the Shift+Tab cycle`,
     )
   }
+  if (invalidConfiguredPermissionIds.length > 0) {
+    ctx.logger.warn(
+      `dsh-tui: session modes ${invalidConfiguredPermissionIds.map(id => `"${id}"`).join(', ')} declare an unsafe permission identity; dropped from the Shift+Tab cycle`,
+    )
+  }
+  const conflictingModeIds = (options.modes ?? [])
+    .filter(spec => spec.permission !== undefined && (spec.sandbox !== undefined || spec.approval !== undefined))
+    .map(spec => spec.id)
+  if (conflictingModeIds.length > 0) {
+    ctx.logger.warn(
+      `dsh-tui: session modes ${conflictingModeIds.map(id => `"${id}"`).join(', ')} declare permission with sandbox/approval; dropped from the Shift+Tab cycle`,
+    )
+  }
+  // Runtime permission presets (mounted DSH `permissionPresets` registry) are
+  // appended AFTER the configured/default modes in stable order. They enter
+  // the cycle whenever the SERVICE snapshot is usable — no dependency on the
+  // external /permission command reaching this agent's registry: switching
+  // falls back to the service's own write path when the command row is
+  // absent.
+  let sessionModes: readonly SessionModeSpec[] = configuredSessionModes
+  const warnedPermissionModeEntries = new Set<string>()
+  // Registry order is authoritative on first observation; later rebuilds
+  // preserve the relative order of identities already seen so unrelated
+  // command-registry churn cannot reshuffle Shift+Tab. Removed identities
+  // drop out; a future re-add is treated as new.
+  const runtimePermissionModeOrder = new WeakMap<object, readonly string[]>()
+  const readRuntimePermissionSnapshot = (target: Agent): PermissionPresetSnapshot | undefined => {
+    let service: unknown
+    try {
+      service = ctx.get('permissionPresets')
+    } catch {
+      return undefined
+    }
+    if (service === undefined) return undefined
+    const snapshot = permissionPresetSnapshotFromService(service, target.session)
+    return snapshot.availability === 'runtime' ? snapshot : undefined
+  }
+  const rebuildSessionModes = (target: Agent): void => {
+    const snapshot = readRuntimePermissionSnapshot(target)
+    const dynamic: SessionModeSpec[] = []
+    const configuredPermissionIds = new Set(
+      configuredSessionModes.flatMap(spec => spec.permission === undefined ? [] : [spec.permission]),
+    )
+    // Canonical targets of the static modes are never dynamic entries: on a
+    // stock table that is the three built-in names; on renamed tables the
+    // deployment's own names for the same bundles (otherwise the indicator
+    // would snap to the dynamic look-alike instead of the static mode).
+    let bundles: readonly { value: string; sandbox?: SessionModeSpec['sandbox']; approval?: SessionModeSpec['approval'] }[] = []
+    let service: unknown
+    try {
+      service = ctx.get('permissionPresets')
+    } catch {
+      service = undefined
+    }
+    if (service !== undefined) bundles = permissionBundlesFromService(service)
+    const staticCanonicalTargets = new Set<string>()
+    for (const spec of configuredSessionModes) {
+      if (spec.permission !== undefined || spec.sandbox === undefined || spec.approval === undefined) continue
+      const canonical = canonicalPresetFor(spec.sandbox, spec.approval, bundles)
+      if (canonical !== undefined) staticCanonicalTargets.add(canonical)
+    }
+    const candidates = new Map<string, PermissionPresetOption>()
+    if (snapshot !== undefined) {
+      for (const option of snapshot.options) {
+        if (staticCanonicalTargets.has(option.value)) {
+          warnOnceForPermissionEntry(target, option.value, 'canonical target')
+          continue
+        }
+        if (!isCommandCompletionToken(option.value)) {
+          warnOnceForPermissionEntry(target, option.value, 'unsafe command token')
+          continue
+        }
+        const decision = permissionCycleEntry(option, configuredPermissionIds)
+        if (!decision.accepted) {
+          warnOnceForPermissionEntry(target, option.value, decision.reason)
+          continue
+        }
+        candidates.set(option.value, option)
+      }
+    }
+    const order = stablePermissionRosterOrder(
+      runtimePermissionModeOrder.get(target.session) ?? [],
+      [...candidates.keys()],
+    )
+    runtimePermissionModeOrder.set(target.session, order)
+    for (const value of order) {
+      const option = candidates.get(value)
+      if (option !== undefined) {
+        dynamic.push({ id: `permission:${option.value}`, label: option.name, permission: option.value })
+      }
+    }
+    sessionModes = [...configuredSessionModes, ...dynamic]
+  }
+  const warnOnceForPermissionEntry = (target: Agent, value: string, reason: string): void => {
+    const key = `${String(target.id)}:${value}:${reason}`
+    if (warnedPermissionModeEntries.has(key)) return
+    if (warnedPermissionModeEntries.size >= 200) warnedPermissionModeEntries.clear()
+    warnedPermissionModeEntries.add(key)
+    ctx.logger.warn(`dsh-tui: permission preset "${value}" skipped from Shift+Tab (${reason})`)
+  }
+  rebuildSessionModes(agent)
   /**
    * Serializes Shift+Tab cycles. `applyMode` awaits the `/plan` registry
    * command, so without a tail each overlapping call re-derives the same
@@ -2751,7 +2936,6 @@ export function createChannel(
     lastReasoningRow = undefined
     toolCards.clear()
     nextRowId = 0
-    state.rowsGeneration += 1
     state.rows.length = 0
     resetSubagentProjection()
     resetJobProjection()
@@ -3177,7 +3361,7 @@ export function createChannel(
     } catch {
       // Roster/service resolution is best-effort; the log fold is authoritative alone.
     }
-    return { active: foldPlanActive(agent.session.events) }
+    return { active: foldPlanActive(snapshotLiveSessionEvents(agent.session)) }
   }
   const planModeEnabled = (): boolean => {
     const plan = planModeState()
@@ -3260,17 +3444,48 @@ export function createChannel(
     }
     return policy
   }
+  /** Last durable permission preset identity (`permission/preset`), if any.
+   *  Registered by the harness permission preset service, never manufactured
+   *  by the TUI. */
+  const foldPermissionPreset = (events: readonly SessionEvent[]): string | undefined => {
+    let preset: string | undefined
+    for (const event of events) {
+      if ((event as { type: string }).type === 'permission/preset') {
+        const value = (event.data as unknown as { preset?: string }).preset
+        if (typeof value === 'string') preset = value
+      }
+    }
+    return preset
+  }
 
   /** First configured mode whose declared atoms all match the folds;
    *  undeclared atoms are wildcards; no match → index 0 (the base mode).
    *  Matching is exact: a fresh session has no `approval/policy` event, so
    *  a mode declaring `approval: 'ask'` never falsely matches it. */
   const deriveModeIndex = (events: readonly SessionEvent[]): number => {
+    // A durable permission identity is stronger than the derived sandbox /
+    // approval atoms. This keeps a runtime preset (including one that maps
+    // to the same atoms as a static mode) selected after resume or manual
+    // commands instead of snapping to a look-alike static mode.
+    const permission = foldPermissionPreset(events)
+    if (permission !== undefined) {
+      const permissionIndex = sessionModes.findIndex(
+        spec =>
+          spec.permission === permission
+          && (spec.plan === undefined || foldPlanActive(events) === spec.plan),
+      )
+      if (permissionIndex >= 0) return permissionIndex
+    }
+    // Atom fallback: permission-only (dynamic) specs declare no atoms and
+    // would wildcard-match ANY session state, stealing the indicator on
+    // sessions that never held a durable identity. They can only be
+    // selected through the permission branch above.
     const index = sessionModes.findIndex(
       spec =>
-        (spec.plan === undefined || foldPlanActive(events) === spec.plan) &&
-        (spec.sandbox === undefined || foldSandboxMode(events) === spec.sandbox) &&
-        (spec.approval === undefined || foldApprovalPolicy(events) === spec.approval),
+        spec.permission === undefined
+        && (spec.plan === undefined || foldPlanActive(events) === spec.plan)
+        && (spec.sandbox === undefined || foldSandboxMode(events) === spec.sandbox)
+        && (spec.approval === undefined || foldApprovalPolicy(events) === spec.approval),
     )
     return index >= 0 ? index : 0
   }
@@ -3278,13 +3493,18 @@ export function createChannel(
   /** Re-derive the current mode from the live session log (boot, every
    *  agent re-bind, and after mode-affecting session events). */
   const refreshMode = (): void => {
-    state.modeIndex = deriveModeIndex(agent.session.events)
+    state.modeIndex = deriveModeIndex(snapshotLiveSessionEvents(agent.session))
     state.mode = sessionModes[state.modeIndex]!
   }
 
   // Session.append rejects observer reentry; restore after publication unwinds.
   const pendingPlanExitRestores = new Map<object, SessionModeSpec>()
   const prePlanModes = new WeakMap<object, SessionModeSpec>()
+  /** Durable preset identity captured when plan mode starts; an implicit plan
+   *  exit (approval / manual `/plan off`) prefers returning to it over the
+   *  canonical bundle of the restored atoms, so the user lands back on their
+   *  own preset (e.g. a third-party `auto`), not on a look-alike static mode. */
+  const prePlanPermissionIdentity = new WeakMap<object, string>()
   // An in-turn /plan off commits at pre-step, after the command has returned.
   const explicitPlanExits = new WeakSet<object>()
 
@@ -3328,7 +3548,7 @@ export function createChannel(
   const applyModeAtoms = (spec: SessionModeSpec): void => {
     // The durable sandbox override is one session event (dsh-sandbox-policy's
     // own write path); the session/event arm picks it up immediately.
-    if (spec.sandbox !== undefined && foldSandboxMode(agent.session.events) !== spec.sandbox) {
+    if (spec.sandbox !== undefined && foldSandboxMode(snapshotLiveSessionEvents(agent.session)) !== spec.sandbox) {
       // sandbox/mode stays a widened append: the event type belongs to
       // dsh-sandbox-policy, which this channel deliberately does not import
       // (not a peer/blessed dependency), so the key is absent from this
@@ -3342,7 +3562,7 @@ export function createChannel(
     }
     // Prefer the approval service (it narrates the switch to the model);
     // the raw durable event is the fallback when it is unmounted.
-    if (spec.approval !== undefined && foldApprovalPolicy(agent.session.events) !== spec.approval) {
+    if (spec.approval !== undefined && foldApprovalPolicy(snapshotLiveSessionEvents(agent.session)) !== spec.approval) {
       const approval = ctx.get('approval') as
         | { setPolicy(a: Agent, policy: 'ask' | 'never'): void }
         | undefined
@@ -3354,12 +3574,185 @@ export function createChannel(
       // (the built-in plan mode's `ask`) can never match and Shift+Tab
       // gets stuck re-applying the same mode. Log the explicit override
       // only if the service still left the fold short of the target policy.
-      if (foldApprovalPolicy(agent.session.events) !== spec.approval) {
+      if (foldApprovalPolicy(snapshotLiveSessionEvents(agent.session)) !== spec.approval) {
         ;(agent.session as unknown as { append(type: string, data: Record<string, unknown>): unknown }).append(
           'approval/policy',
           { policy: spec.approval },
         )
       }
+    }
+  }
+
+  /** Effective sandbox of a mode target: its explicit atom, else the folded
+   *  session value, else the sandbox-policy service default. Unknown means
+   *  the bundle is not safely mappable. */
+  const effectiveSandboxForMode = (spec: SessionModeSpec): SessionModeSpec['sandbox'] | undefined => {
+    if (spec.sandbox !== undefined) return spec.sandbox
+    const folded = foldSandboxMode(snapshotLiveSessionEvents(agent.session))
+    if (folded === 'read-only' || folded === 'workspace-write' || folded === 'danger-full-access') return folded
+    try {
+      const sandbox = ctx.get('sandboxPolicy') as { defaultMode?: unknown } | undefined
+      const value = sandbox?.defaultMode
+      if (value === 'read-only' || value === 'workspace-write' || value === 'danger-full-access') return value
+    } catch {
+      // Optional service; an unknown default means the target is not safely
+      // mappable.
+    }
+    return undefined
+  }
+
+  /** Effective approval policy of a mode target: its explicit atom, else the
+   *  folded session value, else the approval service configuration. */
+  const effectiveApprovalForMode = (spec: SessionModeSpec): SessionModeSpec['approval'] | undefined => {
+    if (spec.approval !== undefined) return spec.approval
+    const folded = foldApprovalPolicy(snapshotLiveSessionEvents(agent.session))
+    if (folded === 'ask' || folded === 'never') return folded
+    try {
+      const approval = ctx.get('approval') as
+        | { effectivePolicy?(session: Agent['session']): unknown; config?: { policy?: unknown } }
+        | undefined
+      const value = approval?.effectivePolicy?.(agent.session) ?? approval?.config?.policy
+      if (value === 'ask' || value === 'never') return value
+    } catch {
+      // Optional service; an unknown default means the target is not safely
+      // mappable.
+    }
+    return undefined
+  }
+
+  /** Canonical preset for an effective sandbox/approval bundle, when one
+   *  exists among the deployment's runtime table (or the stock built-ins
+   *  when the service does not resolve atoms). Undefined means no visible
+   *  preset matches the bundle. */
+  const canonicalPermissionForMode = (
+    spec: SessionModeSpec,
+  ): string | undefined => {
+    const sandbox = effectiveSandboxForMode(spec)
+    const approval = effectiveApprovalForMode(spec)
+    if (sandbox === undefined || approval === undefined) return undefined
+    let service: unknown
+    try {
+      service = ctx.get('permissionPresets')
+    } catch {
+      service = undefined
+    }
+    const bundles = service === undefined ? undefined : permissionBundlesFromService(service)
+    return canonicalPresetFor(sandbox, approval, bundles)
+  }
+
+  /** The durable permission identity reports the target: either the folded
+   *  `permission/preset` session event or a runtime registry readback. */
+  const permissionTargetConfirmed = (target: string): boolean => {
+    if (foldPermissionPreset(snapshotLiveSessionEvents(agent.session)) === target) return true
+    try {
+      const snapshot = state.permissionPresets()
+      if (
+        snapshot.availability === 'runtime'
+        && snapshot.current?.kind === 'preset'
+        && snapshot.current.value === target
+      ) {
+        return true
+      }
+    } catch {
+      // The registry may be unmounted mid-switch; the fold check above
+      // remains authoritative for the durable identity.
+    }
+    return false
+  }
+
+  /** Poll fold/registry readback for the target within a grace window; a
+   *  runtime registry may confirm asynchronously (approval step, event
+   *  batching), while without one only a short fold-based grace makes sense
+   *  before failing closed. */
+  const confirmPermissionTarget = async (target: string, session: Agent['session'], timeoutMs: number): Promise<boolean> => {
+    const deadline = Date.now() + timeoutMs
+    while (Date.now() < deadline) {
+      if (session !== agent.session) return false
+      if (permissionTargetConfirmed(target)) return true
+      await new Promise(resolve => setTimeout(resolve, 50))
+    }
+    ctx.logger.warn(`dsh-tui: permission mode "${target}" was not confirmed by permissionPresets.current()/permission/preset`)
+    state.notify(t('mode-permission-unconfirmed'), { color: 'warning' })
+    return false
+  }
+
+  /** Official `/permission <preset>` switch, then confirmation. The TUI
+   *  never fabricates permission events: success requires the durable
+   *  `permission/preset` event or a runtime registry readback to report the
+   *  target within a short grace window (the external command may append its
+   *  event asynchronously or behind an approval step). Already being on the
+   *  target is a no-op — no redundant command, no approval prompt.
+   *  When the /permission COMMAND is not registered, falls back to the
+   *  permission-presets service's own write path — the same handler the
+   *  command drives. */
+  const applyPermissionIdentity = async (target: string): Promise<boolean> => {
+    if (!isCommandCompletionToken(target)) {
+      ctx.logger.warn(`dsh-tui: permission mode "${target}" skipped because its identity is not a safe command token`)
+      return false
+    }
+    if (permissionTargetConfirmed(target)) return true
+    let registered = false
+    try {
+      registered = commandService?.find(agent, 'permission') !== undefined
+    } catch {
+      registered = false
+    }
+    const session = agent.session
+    if (!registered) {
+      let service: unknown
+      try {
+        service = ctx.get('permissionPresets')
+      } catch {
+        service = undefined
+      }
+      const runtime = service as PermissionPresetService | undefined
+      if (runtime !== undefined && typeof runtime.set === 'function') {
+        try {
+          runtime.set(session, target)
+        } catch (error) {
+          ctx.logger.warn(
+            `dsh-tui: permission mode "${target}" could not be applied by the permissionPresets service: ${error instanceof Error ? error.message : String(error)}`,
+          )
+          state.notify(t('mode-permission-invoke-failed'), { color: 'warning' })
+          return false
+        }
+        return await confirmPermissionTarget(target, session, 2000)
+      }
+      ctx.logger.warn(`dsh-tui: permission mode "${target}" skipped because /permission is not registered`)
+      state.notify(t('mode-permission-unregistered'), { color: 'warning' })
+      return false
+    }
+    const result = await executeRegistryCommand('permission', ` ${target}`)
+    if (session !== agent.session) return false
+    if (result === undefined) {
+      ctx.logger.warn(`dsh-tui: permission mode "${target}" could not invoke /permission`)
+      state.notify(t('mode-permission-invoke-failed'), { color: 'warning' })
+      return false
+    }
+    let availability: PermissionPresetAvailability = 'unavailable'
+    try {
+      availability = state.permissionPresets().availability
+    } catch {
+      // keep the default
+    }
+    return await confirmPermissionTarget(target, session, availability === 'runtime' ? 2000 : 300)
+  }
+
+  /** Durable identity to restore after an implicit plan exit: the preset the
+   *  user was on when plan mode ran, provided the runtime registry still
+   *  recognizes it as current (a drifted knob combination reads back as
+   *  custom and must fall back to the canonical bundle of the atoms). */
+  const rememberPrePlanIdentity = (session: Agent['session']): string | undefined => {
+    const identity = foldPermissionPreset(snapshotLiveSessionEvents(session))
+    if (identity === undefined || identity === PERMISSION_PRESET_CUSTOM) return undefined
+    try {
+      const snapshot = state.permissionPresets()
+      if (snapshot.availability !== 'runtime') return undefined
+      if (snapshot.current?.kind !== 'preset' || snapshot.current.value !== identity) return undefined
+      if (!snapshot.options.some(option => option.value === identity)) return undefined
+      return identity
+    } catch {
+      return undefined
     }
   }
 
@@ -3370,7 +3763,57 @@ export function createChannel(
     const planMode = ctx.get('planMode') as
       | { get?(a: Agent): { active: boolean; pending?: boolean } }
       | undefined
-    const planActive = foldPlanActive(session.events)
+    const planActive = foldPlanActive(snapshotLiveSessionEvents(session))
+    const planChange = spec.plan !== undefined && (planMode?.get?.(agent).pending ?? planActive) !== spec.plan
+    if (planChange && commandService?.find(agent, 'plan') === undefined) {
+      state.notify(t('mode-plan-unavailable'), { color: 'warning' })
+      return
+    }
+    // Capture the pre-plan sandbox/approval bundle (and the durable preset
+    // identity, when authoritative) BEFORE any permission canonicalization
+    // can append replacement events.
+    if (planChange && spec.plan && !planActive && !prePlanModes.has(session)) {
+      const previous = modePermissions(snapshotLiveSessionEvents(session))
+      const sandbox = ctx.get('sandboxPolicy') as { defaultMode?: SessionModeSpec['sandbox'] } | undefined
+      const approval = ctx.get('approval') as { effectivePolicy?(session: Agent['session']): SessionModeSpec['approval'] } | undefined
+      const base = previous.sandbox === undefined && previous.approval === undefined ? sessionModes[0] : undefined
+      previous.sandbox ??= sandbox?.defaultMode ?? base?.sandbox
+      previous.approval ??= approval?.effectivePolicy?.(session) ?? base?.approval
+      prePlanModes.set(session, previous)
+      const remembered = rememberPrePlanIdentity(session)
+      if (remembered !== undefined) prePlanPermissionIdentity.set(session, remembered)
+      else prePlanPermissionIdentity.delete(session)
+      // Persist missing defaults before /plan, so resume can recover them.
+      applyModeAtoms(previous)
+    }
+    // Permission identity is applied before plan and atom changes. Dynamic
+    // presets use the official command path (or the service write fallback)
+    // and are confirmed by event / registry readback; the TUI never
+    // manufactures permission events.
+    if (spec.permission !== undefined) {
+      if (!(await applyPermissionIdentity(spec.permission))) return
+    } else {
+      // Static modes own a canonical permission identity. Leaving any OTHER
+      // durable identity behind (third-party preset OR a stale canonical,
+      // e.g. plan left `read-only` while atoms were restored to
+      // workspace-write) would make a static mode appear selected only
+      // because its sandbox/approval bundle happens to match, and would let
+      // the durable identity lie about the real policy. Canonicalize BEFORE
+      // applying atoms; when no canonical preset exists for the target
+      // bundle, fail closed with a visible notice.
+      const currentPermission = foldPermissionPreset(snapshotLiveSessionEvents(session))
+      if (currentPermission !== undefined && currentPermission !== PERMISSION_PRESET_CUSTOM) {
+        const canonical = canonicalPermissionForMode(spec)
+        if (canonical === undefined) {
+          ctx.logger.warn(`dsh-tui: static mode "${spec.id}" cannot safely clear permission identity "${currentPermission}"`)
+          state.notify(t('mode-permission-no-canonical', { name: modeDisplayName(spec) }), { color: 'warning' })
+          return
+        }
+        if (canonical !== currentPermission) {
+          if (!(await applyPermissionIdentity(canonical))) return
+        }
+      }
+    }
     // Reconcile a stale explicit-exit marker before acting. The marker only
     // legitimately survives while a deferred exit awaits its plan/mode:false
     // (foldPlanActive && pending === false). If plan is still logged active
@@ -3380,23 +3823,13 @@ export function createChannel(
     if (planActive && planMode?.get?.(agent).pending === undefined) {
       explicitPlanExits.delete(session)
     }
-    if (spec.plan !== undefined && (planMode?.get?.(agent).pending ?? planActive) !== spec.plan) {
-      if (commandService?.find(agent, 'plan') === undefined) {
-        state.notify(t('mode-plan-unavailable'), { color: 'warning' })
-        return
+    if (planChange) {
+      if (!spec.plan) {
+        // An explicit switch away from plan owns its target mode; the
+        // remembered pre-plan identity no longer applies.
+        explicitPlanExits.add(session)
+        prePlanPermissionIdentity.delete(session)
       }
-      if (spec.plan && !planActive && !prePlanModes.has(session)) {
-        const previous = modePermissions(session.events)
-        const sandbox = ctx.get('sandboxPolicy') as { defaultMode?: SessionModeSpec['sandbox'] } | undefined
-        const approval = ctx.get('approval') as { effectivePolicy?(session: Agent['session']): SessionModeSpec['approval'] } | undefined
-        const base = previous.sandbox === undefined && previous.approval === undefined ? sessionModes[0] : undefined
-        previous.sandbox ??= sandbox?.defaultMode ?? base?.sandbox
-        previous.approval ??= approval?.effectivePolicy?.(session) ?? base?.approval
-        prePlanModes.set(session, previous)
-        // Persist missing defaults before /plan, so resume can recover them.
-        applyModeAtoms(previous)
-      }
-      if (!spec.plan) explicitPlanExits.add(session)
       try {
         const text = await executeRegistryCommand('plan', spec.plan ? '' : ' off')
         if (session !== agent.session) return
@@ -3407,8 +3840,8 @@ export function createChannel(
       } finally {
         if (session === agent.session) {
           const pending = planMode?.get?.(agent).pending
-          if (!foldPlanActive(session.events) || pending !== false) explicitPlanExits.delete(session)
-          if (!foldPlanActive(session.events) && pending !== true) prePlanModes.delete(session)
+          if (!foldPlanActive(snapshotLiveSessionEvents(session)) || pending !== false) explicitPlanExits.delete(session)
+          if (!foldPlanActive(snapshotLiveSessionEvents(session)) && pending !== true) prePlanModes.delete(session)
         }
       }
     }
@@ -3426,7 +3859,7 @@ export function createChannel(
    *  press instead of racing on the same pre-switch snapshot. */
   const cycleMode = (): Promise<void> => {
     const run = modeCycleTail.then(async () => {
-      const index = deriveModeIndex(agent.session.events)
+      const index = deriveModeIndex(snapshotLiveSessionEvents(agent.session))
       await applyMode(sessionModes[(index + 1) % sessionModes.length]!)
     })
     modeCycleTail = run.catch(() => {})
@@ -3539,8 +3972,8 @@ export function createChannel(
    *  `/plan` command keeps its own behavior). */
   const setPlanPrompt = (active: boolean): boolean | undefined => {
     if (state.agentPreset !== 'liangshen') return undefined
-    const promptActive = foldPlanPromptEnabled(agent.session.events)
-    const planActive = foldPlanActive(agent.session.events)
+    const promptActive = foldPlanPromptEnabled(snapshotLiveSessionEvents(agent.session))
+    const planActive = foldPlanActive(snapshotLiveSessionEvents(agent.session))
     // The plan/mode fallback below still needs this widened append because
     // rc.8's SessionEventMap does not declare that type yet (upstream lag).
     const session = agent.session as unknown as { append(type: string, data: Record<string, unknown>): unknown }
@@ -3561,7 +3994,7 @@ export function createChannel(
       } else if (!planActive) {
         session.append('plan/mode', { active: true })
       }
-    } else if (promptActive && foldPlanPromptOwnsPlanMode(agent.session.events)) {
+    } else if (promptActive && foldPlanPromptOwnsPlanMode(snapshotLiveSessionEvents(agent.session))) {
       // Never let an OFF command tear down a plan mode the user entered
       // through plain `/plan`: only touch plan state when this switch
       // ACQUIRED plan mode itself (it was off at the switch's ON moment).
@@ -3573,7 +4006,7 @@ export function createChannel(
     }
     return active
   }
-  const planPromptEnabled = (): boolean => foldPlanPromptEnabled(agent.session.events)
+  const planPromptEnabled = (): boolean => foldPlanPromptEnabled(snapshotLiveSessionEvents(agent.session))
 
   // --- Manual-compaction lifecycle ---------------------------------------
   // The in-flight /compact transaction: its abort hook plus the settled
@@ -3631,7 +4064,6 @@ export function createChannel(
     lastReasoningRow = undefined
     toolCards.clear()
     nextRowId = 0
-    state.rowsGeneration += 1
     state.rows.length = 0
     state.todos = []
     state.pending = []
@@ -3651,7 +4083,7 @@ export function createChannel(
     state.displayCwd = workspaceService.describe(state.cwd).description ?? state.cwd
     refreshGitBranch()
     state.agentPreset = runningPresetOf(target.session)
-    const adoptedRoute = recordedModelRoute(target.session.events)
+    const adoptedRoute = recordedModelRoute(snapshotLiveSessionEvents(target.session))
     if (adoptedRoute !== undefined) {
       state.provider = adoptedRoute.provider
       state.model = adoptedRoute.model
@@ -3672,7 +4104,7 @@ export function createChannel(
       thinking: 0,
       tools: 0,
     }
-    replayEvents(target.session.events)
+    replayEvents(snapshotLiveSessionEvents(target.session))
     settleStreaming()
     state.working = target.status === 'running'
     agent = target
@@ -3690,7 +4122,7 @@ export function createChannel(
     const keepPrevious =
       previousHandle !== undefined
       && previousHandle.agent !== target
-      && (previousHandle.agent.status === 'running' || agentViewHasTurns(previousHandle.agent.session.events))
+      && (previousHandle.agent.status === 'running' || agentViewHasTurns(snapshotLiveSessionEvents(previousHandle.agent.session)))
     if (previousHandle !== undefined && previousHandle.agent !== target) {
       if (keepPrevious) backgroundHandles.set(previousSessionId, previousHandle)
       else void previousHandle.dispose().catch(() => {})
@@ -3791,7 +4223,6 @@ export function createChannel(
     lastReasoningRow = undefined
     toolCards.clear()
     nextRowId = 0
-    state.rowsGeneration += 1
     state.rows.length = 0
     state.todos = []
     state.pending = []
@@ -3811,7 +4242,7 @@ export function createChannel(
     state.displayCwd = workspaceService.describe(state.cwd).description ?? state.cwd
     refreshGitBranch()
     state.agentPreset = resumeComposed.agentPreset
-    const resumedRoute = resumeRoute ?? recordedModelRoute(handle.agent.session.events)
+    const resumedRoute = resumeRoute ?? recordedModelRoute(snapshotLiveSessionEvents(handle.agent.session))
     if (resumedRoute !== undefined) {
       state.provider = resumedRoute.provider
       state.model = resumedRoute.model
@@ -3832,7 +4263,7 @@ export function createChannel(
       thinking: 0,
       tools: 0,
     }
-    replayEvents(handle.agent.session.events)
+    replayEvents(snapshotLiveSessionEvents(handle.agent.session))
     settleStreaming()
     state.working = handle.agent.status === 'running'
     const oldHandle = currentHandle
@@ -3849,7 +4280,7 @@ export function createChannel(
     const keepPrevious =
       keepCurrent
       && oldHandle !== undefined
-      && (oldHandle.agent.status === 'running' || agentViewHasTurns(oldHandle.agent.session.events))
+      && (oldHandle.agent.status === 'running' || agentViewHasTurns(snapshotLiveSessionEvents(oldHandle.agent.session)))
     if (oldHandle !== undefined) {
       if (keepPrevious) backgroundHandles.set(previousSessionId, oldHandle)
       else void oldHandle.dispose().catch(() => {})
@@ -3907,9 +4338,6 @@ export function createChannel(
     mode: sessionModes[0]!,
     modeIndex: 0,
     workingActivity: undefined,
-    trajectory: () => trajectoryBuild,
-    rowsStreamingVersion: 0,
-    rowsGeneration: 0,
     activityFrames: options.activityFrames,
     configuredProvider: options.configuredProvider,
     configuredModel: options.configuredModel,
@@ -3927,6 +4355,7 @@ export function createChannel(
     smoothStreaming: options.smoothStreaming !== false,
     statusBar: normalizeStatusBar(options.statusBar),
     whale: options.whale !== false,
+    whaleIdle: options.whaleIdle === true,
     minimal: options.minimal === true,
     activityEnabled: options.activity !== false,
     contextBarEnabled: options.contextBar !== false,
@@ -4068,7 +4497,7 @@ export function createChannel(
         if (path.length === 1 && path[0] === 'permission') {
           const snapshot = state.permissionPresets()
           return snapshot.options
-            .filter(option => isCommandCompletionToken(option.value))
+            .filter(option => isCommandCompletionToken(option.value) && !RESERVED_PERMISSION_PRESETS.has(option.value))
             .map(option => ({
               name: option.value,
               description: option.description ?? option.name,
@@ -4161,7 +4590,7 @@ export function createChannel(
       // batch first, clearing the folded marks. The log is the authoritative
       // source, so restored rows match a fresh replay; live streaming rows
       // are never folded, so nothing here races a running turn.
-      const restored = foldBack(state.rows, agent.session.events, { call: presentCallView, result: presentResultView })
+      const restored = foldBack(state.rows, snapshotLiveSessionEvents(agent.session), { call: presentCallView, result: presentResultView })
       if (restored > 0) state.emit()
       return restored
     },
@@ -4319,13 +4748,10 @@ export function createChannel(
     },
     async rewindTo(row: ChatRow, mode: string | null = null): Promise<string | null> {
       if (row.seq === undefined) return null
-      const sessions = ctx.get('sessions') as
-        | { fork(source: unknown, boundary?: number): { events: readonly SessionEvent[] } }
-        | undefined
       const agents = ctx.get('agents') as
         | { create(options: CreateAgentOptions): Promise<AgentHandle> }
         | undefined
-      if (!sessions || !agents) {
+      if (!agents) {
         state.notify(t('rewind-unavailable'), { color: 'error' })
         return null
       }
@@ -4333,7 +4759,7 @@ export function createChannel(
       // rejects boundaries inside open turns, and Agent.cancel() closes the
       // turn asynchronously (a long thinking turn can take seconds to settle).
       const wasWorking = state.working
-      const cancelSeq = agent.session.seq
+      const cancelSeq = liveSessionOffset(agent.session)
       if (wasWorking) agent.cancel({ kind: 'user' })
       if (wasWorking) {
         const turnSettled = await waitForTurnEnd(agent.session, cancelSeq, 30000)
@@ -4352,7 +4778,7 @@ export function createChannel(
       // hit OPEN_TURN. Rewind to just BEFORE the message's turn/start: the
       // conversation restarts at that point and the message itself comes
       // back into the input for re-editing (CC's rewind semantics).
-      const events = agent.session.events
+      const events = snapshotLiveSessionEvents(agent.session)
       let boundary = row.seq
       for (let i = row.seq; i >= 0; i--) {
         const event = events[i]
@@ -4364,16 +4790,16 @@ export function createChannel(
         }
         if (event.type === 'turn/end') break
       }
-      // Slice the seed ourselves instead of storing a fork: agents.create
-      // must own the session (a pre-created fork session would collide on
-      // the same id). The create boundary validates the seed (contiguous
-      // from seq 0, no open turns), which our boundary already guarantees.
+      // Slice the SOURCE snapshot through an inclusive seq. Never
+      // sessions.fork(): that registers a real child whose snapshot includes
+      // child-owned session/end-seed, so snapshot.length is not the inherited
+      // cut. agents.create owns the new session id.
       let seed: readonly SessionEvent[]
       try {
         if (boundary < 0) {
           throw new Error('cannot rewind to the very first message')
         }
-        seed = sessions.fork(agent.session, boundary).events
+        seed = sliceLiveSessionSeed(agent.session, boundary)
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error)
         state.notify(t('rewind-fork-failed', { err: message }), { color: 'error' })
@@ -4387,20 +4813,17 @@ export function createChannel(
       // conversation, so a `/model` switch must survive it (issue #30).
       const rewindComposed = await composePreset(ctx, runningPresetOf(agent.session))
       try {
-        handle = await agents.create({
+        handle = await agents.create(liveSessionCreateOptions({
           sessionId: childId,
           seed,
-          meta: {
-            cwd: state.cwd,
-            parentSession: agent.session.id,
-            seedLength: seed.length,
-            ...(rewindComposed.agentPreset === undefined
-              ? {}
-              : { agentPreset: rewindComposed.agentPreset }),
-          },
+          runtimeSession: agent.session,
+          inheritedCount: seed.length,
+          cwd: state.cwd,
+          parentSession: agent.session.id,
+          agentPreset: rewindComposed.agentPreset,
           agentOptions: { provider: state.provider, model: state.model },
-          ...(rewindComposed.setup === undefined ? {} : { setup: rewindComposed.setup }),
-        })
+          setup: rewindComposed.setup,
+        }))
       } catch {
         state.notify(t('rewind-create-failed'), { color: 'error' })
         return null
@@ -4458,7 +4881,10 @@ export function createChannel(
         | (SessionSource & {
           // Optional at runtime: fakes and third-party backends may not
           // implement the full coordinator surface.
-          inspect?(id: SessionId, signal?: AbortSignal): Promise<{ events: readonly SessionEvent[] }>
+          inspect?(id: SessionId, signal?: AbortSignal): Promise<{
+            events: readonly SessionEvent[]
+            inheritedEventCount?: unknown
+          }>
         })
         | undefined
       if (!persistence) {
@@ -4514,9 +4940,22 @@ export function createChannel(
       // The live session's header may not be materialized in list() yet
       // (the jsonl backend writes on first append) — overlay the in-memory
       // header so the ancestor walk below still finds a fresh fork's parent.
+      const liveListed = liveSessionListingFields(liveSession)
       const liveMeta = (liveSession as { header?: SessionHeader }).header
-      if (!headerById.has(currentId) && liveMeta !== undefined) {
-        headerById.set(currentId, { header: readHeader(liveMeta) ?? { id: currentId, cwd: undefined, createdAt: undefined, parentSession: undefined, origin: undefined, delegationDepth: undefined, seedLength: undefined, agentPreset: undefined }, raw: liveMeta })
+      if (!headerById.has(currentId) && liveListed.id !== undefined) {
+        headerById.set(currentId, {
+          header: {
+            id: liveListed.id,
+            cwd: liveListed.cwd,
+            createdAt: liveListed.createdAt,
+            parentSession: liveListed.parentSession,
+            origin: liveListed.origin,
+            delegationDepth: liveListed.delegationDepth,
+            seedLength: liveListed.seedLength,
+            agentPreset: liveListed.agentPreset,
+          },
+          raw: liveMeta,
+        })
       }
       // Family = the live session's ancestor chain PLUS every descendant of
       // its topmost known ancestor (siblings and cousins included).
@@ -4652,12 +5091,9 @@ export function createChannel(
         if (!selected.has(id)) continue
         const entry = headerById.get(id)
         if (id === currentId) {
-          const liveParentId = liveHeader?.header.parentSession ?? liveMeta?.parentSession
+          const liveParentId = liveHeader?.header.parentSession ?? liveListed.parentSession
           const liveParent = liveParentId !== undefined ? String(liveParentId) : undefined
-          const parentCovered = liveParent !== undefined
-            ? (coveredThrough.get(liveParent) ?? -1)
-            : -1
-          const liveEvents = liveSession.events
+          const liveEvents = snapshotLiveSessionEvents(liveSession)
           const remaining = Math.max(0, MAX_TREE_EVENTS - eventBudget)
           // The live session's in-memory log is SELF-CONTAINED: a fork's
           // events still carry the inherited seed prefix, which the parent's
@@ -4665,12 +5101,20 @@ export function createChannel(
           // Skipping it exactly like the non-live reads do keeps a live fork
           // of a huge parent from spending the whole family budget on
           // duplicated history and evicting its own siblings.
-          const liveSeed = liveHeader?.header.seedLength ?? liveMeta?.seedLength
+          const liveSeed = liveHeader?.header.seedLength ?? liveListed.seedLength
+          // A recorded parent without an exact cut is not a usable coverage
+          // edge: the pure tree detaches it, so forwarding the parent's range
+          // here would let descendants skip history no root displays.
+          const parentCovered = liveParent !== undefined && liveSeed !== undefined
+            ? (coveredThrough.get(liveParent) ?? -1)
+            : -1
           const skipBelow =
             liveParent !== undefined && liveSeed !== undefined
               ? Math.min(liveSeed, parentCovered + 1)
               : 0
-          const own = skipBelow > 0 ? liveEvents.filter(event => event.seq >= skipBelow) : liveEvents
+          const own = skipBelow > 0
+            ? liveEvents.filter(event => event.seq >= skipBelow || event.type === 'session/title')
+            : liveEvents
           // A live session larger than the remaining budget keeps its TAIL,
           // aligned to whole turns (sessionTree.liveTailWindow): leftover
           // entries of a turn whose turn/start was cut away render as
@@ -4688,10 +5132,10 @@ export function createChannel(
           if (events.length !== own.length) truncated = true
           familySessions.push({
             id,
-            createdAt: liveHeader?.header.createdAt ?? liveMeta?.createdAt ?? Date.now(),
+            createdAt: liveHeader?.header.createdAt ?? liveListed.createdAt ?? Date.now(),
             ...(liveParent !== undefined ? { parentSession: liveParent } : {}),
-            ...(liveHeader?.header.seedLength !== undefined || liveMeta?.seedLength !== undefined
-              ? { seedLength: liveHeader?.header.seedLength ?? liveMeta!.seedLength }
+            ...(liveHeader?.header.seedLength !== undefined || liveListed.seedLength !== undefined
+              ? { seedLength: liveHeader?.header.seedLength ?? liveListed.seedLength }
               : {}),
             events,
             live: true,
@@ -4712,19 +5156,59 @@ export function createChannel(
         }
         const header = entry?.header
         const parentId = header?.parentSession
-        const parentCovered = parentId !== undefined ? (coveredThrough.get(parentId) ?? -1) : -1
+        const structuralParentCovered = parentId !== undefined ? (coveredThrough.get(parentId) ?? -1) : -1
+        const locate = persistence.locate
+        const hasLocate = typeof locate === 'function'
+        let locatedPath: string | undefined
+        if (hasLocate && entry !== undefined) {
+          try {
+            const location: unknown = locate.call(persistence, entry.raw)
+            // Only the jsonl kind enters the compat file layer — a foreign
+            // kind's artifact is the backend's own format (inspect below).
+            if (location !== null && typeof location === 'object') {
+              const record = location as { kind?: unknown; path?: unknown }
+              if (record.kind === 'jsonl' && typeof record.path === 'string') {
+                locatedPath = record.path
+              }
+            }
+          } catch {
+            // Best effort — a locate hiccup falls through to inspect.
+          }
+        }
+        // Alpha.4 deliberately omits the inherited cut from logical list
+        // headers. Resolve it only for the SELECTED family node currently
+        // being read: JSONL keeps the exact physical `seedLength`; non-file
+        // backends expose the cut on inspect below. Never scan every listed
+        // session and never infer it from an end-seed marker or log length.
+        let inheritedCut = parentId === undefined ? undefined : readInheritedCut(entry?.raw)
+        if (parentId !== undefined && inheritedCut === undefined) {
+          inheritedCut = locatedPath !== undefined
+            ? readPhysicalHeaderSeedLength(locatedPath)
+            : !hasLocate
+                ? readPhysicalHeaderSeedLengthForSession(id)
+                : undefined
+        }
+        // Keep structural ancestry separate from proven dedup coverage. The
+        // model layer detaches a parent edge whose exact cut is unavailable;
+        // treating that edge as covered here would hide a child's prefix
+        // under a parent root that no longer owns it.
+        let parentCovered = parentId !== undefined && inheritedCut !== undefined
+          ? structuralParentCovered
+          : -1
         // Never skip past the seed prefix: events beyond it are this
         // session's OWN — no ancestor can show them. A parent that was never
         // read (evicted, or outside the family) covers nothing (skip 0).
-        const skipBelow =
-          parentId !== undefined && header?.seedLength !== undefined
-            ? Math.min(header.seedLength, parentCovered + 1)
+        let skipBelow =
+          parentId !== undefined && inheritedCut !== undefined
+            ? Math.min(inheritedCut, parentCovered + 1)
             : 0
-        const facts = {
+        let facts: FamilySession = {
           id,
           createdAt: header?.createdAt ?? 0,
+          events: [],
+          live: false,
           ...(parentId !== undefined ? { parentSession: parentId } : {}),
-          ...(header?.seedLength !== undefined ? { seedLength: header.seedLength } : {}),
+          ...(inheritedCut !== undefined ? { seedLength: inheritedCut } : {}),
         }
         if (eventBudget >= MAX_TREE_EVENTS || scanBudget <= 0) {
           // Budget spent: keep the STRUCTURE — the session degrades to an
@@ -4768,23 +5252,7 @@ export function createChannel(
         // Per-log scan allowance: the usual 4×-of-remaining derivation,
         // clamped to what the tree-level scan budget still has.
         const scanAllowance = Math.min(defaultMaxScanned(remaining), scanBudget)
-        const locate = persistence.locate
-        const hasLocate = typeof locate === 'function'
-        if (hasLocate && entry !== undefined) {
-          let locatedPath: string | undefined
-          try {
-            const location: unknown = locate.call(persistence, entry.raw)
-            // Only the jsonl kind enters the compat file layer — a foreign
-            // kind's artifact is the backend's own format (inspect below).
-            if (location !== null && typeof location === 'object') {
-              const record = location as { kind?: unknown; path?: unknown }
-              if (record.kind === 'jsonl' && typeof record.path === 'string') {
-                locatedPath = record.path
-              }
-            }
-          } catch {
-            // Best effort — a locate hiccup falls through to inspect.
-          }
+        if (hasLocate) {
           if (locatedPath !== undefined) {
             const viaPath = readSessionEventsFromFile(locatedPath, remaining, scanAllowance, skipBelow)
             if (viaPath !== undefined) {
@@ -4812,6 +5280,15 @@ export function createChannel(
         if (!failed && events === undefined && typeof persistence.inspect === 'function') {
           try {
             const inspection = await persistence.inspect(SessionId(id))
+            const inspectedCut = readInheritedCut(inspection)
+            if (parentId !== undefined && inheritedCut === undefined && inspectedCut !== undefined) {
+              inheritedCut = inspectedCut
+              parentCovered = structuralParentCovered
+              skipBelow = parentId !== undefined
+                ? Math.min(inheritedCut, parentCovered + 1)
+                : 0
+              facts = { ...facts, seedLength: inheritedCut }
+            }
             // inspect parses the WHOLE log up front: charge the full length
             // to the scan budget (may overdraw; the next iterations skip).
             scanBudget -= inspection.events.length
@@ -4819,7 +5296,9 @@ export function createChannel(
             // the inherited-prefix skip the file readers got must apply here
             // too, or a long prefix would fill the slice and the branch's OWN
             // events — the only ones nobody else displays — would be cut.
-            const all = skipBelow > 0 ? inspection.events.filter(event => event.seq >= skipBelow) : inspection.events
+            const all = skipBelow > 0
+              ? inspection.events.filter(event => event.seq >= skipBelow || event.type === 'session/title')
+              : inspection.events
             readFrom = skipBelow
             events = all
             if (events.length > remaining) {
@@ -4885,7 +5364,7 @@ export function createChannel(
       let sourceCwd = state.cwd
       let forkFromLive = true
       if (sessionId === currentId) {
-        sourceEvents = entrySession.events
+        sourceEvents = snapshotLiveSessionEvents(entrySession)
       } else {
         forkFromLive = false
         const persistence = ctx.get('sessionPersistence') as
@@ -4968,7 +5447,7 @@ export function createChannel(
       // settle). Cross-session rewinds need this too: the live agent is
       // about to be disposed, and its turn must close cleanly.
       const wasWorking = state.working
-      const cancelSeq = agent.session.seq
+      const cancelSeq = liveSessionOffset(agent.session)
       if (wasWorking) agent.cancel({ kind: 'user' })
       if (wasWorking) {
         const turnSettled = await waitForTurnEnd(agent.session, cancelSeq, 30000)
@@ -4980,38 +5459,27 @@ export function createChannel(
       // Slice the seed from the PINNED event snapshot. Never sessions.fork
       // here: fork() rejects a boundary inside an open turn, which is
       // exactly where a keep-style cut lands (closeTurn set) — close it
-      // with the exact event a real user interrupt writes instead (the
-      // persistence layer closes crash-orphaned turns the same way).
+      // with the exact event a real user cancellation writes instead.
       // agents.create validates the result itself (contiguous from seq 0,
       // no open turns).
       const seed = sourceEvents.filter(event => event.seq <= boundary)
+      const inheritedCount = seed.length
       if (target.closeTurn !== undefined) {
-        const last = seed[seed.length - 1]
-        if (last !== undefined) {
-          seed.push({
-            type: 'turn/end',
-            seq: last.seq + 1,
-            time: last.time + 1,
-            data: { turn: target.closeTurn, reason: { kind: 'aborted', reason: { kind: 'user' } } },
-          })
-        }
+        appendInterruptedTurnEnd(seed, target.closeTurn)
       }
       let handle: AgentHandle
       try {
-        handle = await agents.create({
+        handle = await agents.create(liveSessionCreateOptions({
           sessionId: childId,
           seed,
-          meta: {
-            cwd: sourceCwd,
-            parentSession: SessionId(sessionId),
-            seedLength: seed.length,
-            ...(rewindComposed.agentPreset === undefined
-              ? {}
-              : { agentPreset: rewindComposed.agentPreset }),
-          },
+          runtimeSession: entrySession,
+          inheritedCount,
+          cwd: sourceCwd,
+          parentSession: SessionId(sessionId),
+          agentPreset: rewindComposed.agentPreset,
           agentOptions: { provider: state.provider, model: state.model },
-          ...(rewindComposed.setup === undefined ? {} : { setup: rewindComposed.setup }),
-        })
+          setup: rewindComposed.setup,
+        }))
       } catch {
         state.notify(t('rewind-create-failed'), { color: 'error' })
         return null
@@ -5038,13 +5506,10 @@ export function createChannel(
       return restoredText
     },
     async forkSession(): Promise<boolean> {
-      const sessions = ctx.get('sessions') as
-        | { fork(source: unknown, boundary?: number): { events: readonly SessionEvent[] } }
-        | undefined
       const agents = ctx.get('agents') as
         | { create(options: CreateAgentOptions): Promise<AgentHandle> }
         | undefined
-      if (!sessions || !agents) {
+      if (!agents) {
         state.notify(t('fork-unavailable'), { color: 'error' })
         return false
       }
@@ -5061,12 +5526,12 @@ export function createChannel(
       await settleManualCompaction()
       const source = agent.session
       const childId = SessionId(randomUUID())
-      // No boundary: the whole (turn-closed) log. Slice via sessions.fork for
-      // the same validation the rewind path gets, never sessions.fork's
-      // session-storing sibling — agents.create must own the new session.
+      // No boundary: the whole (turn-closed) source log. Slice the source
+      // snapshot — sessions.fork() would register a child and append
+      // session/end-seed, so snapshot.length is not a lineage cut.
       let seed: readonly SessionEvent[]
       try {
-        seed = sessions.fork(source).events
+        seed = sliceLiveSessionSeed(source)
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error)
         state.notify(t('fork-failed', { err: message }), { color: 'error' })
@@ -5077,24 +5542,21 @@ export function createChannel(
       const forkComposed = await composePreset(ctx, runningPresetOf(source))
       let handle: AgentHandle
       try {
-        handle = await agents.create({
+        handle = await agents.create(liveSessionCreateOptions({
           sessionId: childId,
           seed,
-          meta: {
-            cwd: state.cwd,
-            // NO parentSession: a /fork copy is an independent conversation
-            // (kimi-code semantics — a copy of the message list under a new
-            // root session, like /new plus the history), not a rewind branch.
-            // Recording lineage would fold it into the source's family in
-            // /resume and the user would never find it.
-            seedLength: seed.length,
-            ...(forkComposed.agentPreset === undefined
-              ? {}
-              : { agentPreset: forkComposed.agentPreset }),
-          },
+          runtimeSession: source,
+          inheritedCount: seed.length,
+          cwd: state.cwd,
+          // NO parentSession: a /fork copy is an independent conversation
+          // (kimi-code semantics — a copy of the message list under a new
+          // root session, like /new plus the history), not a rewind branch.
+          // Recording lineage would fold it into the source's family in
+          // /resume and the user would never find it.
+          agentPreset: forkComposed.agentPreset,
           agentOptions: { provider: state.provider, model: state.model },
-          ...(forkComposed.setup === undefined ? {} : { setup: forkComposed.setup }),
-        })
+          setup: forkComposed.setup,
+        }))
       } catch {
         state.notify(t('fork-create-failed'), { color: 'error' })
         return false
@@ -5248,7 +5710,6 @@ export function createChannel(
       lastReasoningRow = undefined
       toolCards.clear()
       nextRowId = 0
-      state.rowsGeneration += 1
       state.rows.length = 0
       resetSubagentProjection()
       resetJobProjection()
@@ -5286,7 +5747,7 @@ export function createChannel(
       // route it actually continues on — a complete cordis.yml pin, else the
       // route its own request/header records carry. A bare log (no turn ever
       // started) records none; keep the current display as best effort.
-      const resumedRoute = resumeRoute ?? recordedModelRoute(handle.agent.session.events)
+      const resumedRoute = resumeRoute ?? recordedModelRoute(snapshotLiveSessionEvents(handle.agent.session))
       if (resumedRoute !== undefined) {
         state.provider = resumedRoute.provider
         state.model = resumedRoute.model
@@ -5308,7 +5769,7 @@ export function createChannel(
         thinking: 0,
         tools: 0,
       }
-      replayEvents(handle.agent.session.events)
+      replayEvents(snapshotLiveSessionEvents(handle.agent.session))
       settleStreaming()
       // A log ending mid-turn replays a turn/start that set working=true;
       // mirror the boot path's post-replay reset (a still-running agent
@@ -5442,7 +5903,6 @@ export function createChannel(
       assistantRowsByStep.clear()
       lastTextDelta.clear()
       nextRowId = 0
-      state.rowsGeneration += 1
       state.rows.length = 0
       resetSubagentProjection()
       resetJobProjection()
@@ -5572,13 +6032,10 @@ export function createChannel(
         })
         return false
       }
-      const sessions = ctx.get('sessions') as
-        | { fork(source: unknown, boundary?: number): { events: readonly SessionEvent[] } }
-        | undefined
       const agents = ctx.get('agents') as
         | { create(options: CreateAgentOptions): Promise<AgentHandle> }
         | undefined
-      if (!sessions || !agents) {
+      if (!agents) {
         state.notify(t('model-switch-unavailable'), {
           color: 'error',
         })
@@ -5591,8 +6048,8 @@ export function createChannel(
         // the model-switched child would start from the summary alone while
         // the user believes the full history carried over ("context lost").
         await settleManualCompaction()
-        // No boundary = fork the whole log (continue the conversation).
-        seed = sessions.fork(agent.session).events
+        // No boundary = the whole source log (continue the conversation).
+        seed = sliceLiveSessionSeed(agent.session)
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error)
         state.notify(t('model-switch-fork-failed', { err: message }), { color: 'error' })
@@ -5604,20 +6061,17 @@ export function createChannel(
       // request route changes (same rule as rewindTo).
       const modelComposed = await composePreset(ctx, runningPresetOf(agent.session))
       try {
-        handle = await agents.create({
+        handle = await agents.create(liveSessionCreateOptions({
           sessionId: childId,
           seed,
-          meta: {
-            cwd: state.cwd,
-            parentSession: agent.session.id,
-            seedLength: seed.length,
-            ...(modelComposed.agentPreset === undefined
-              ? {}
-              : { agentPreset: modelComposed.agentPreset }),
-          },
+          runtimeSession: agent.session,
+          inheritedCount: seed.length,
+          cwd: state.cwd,
+          parentSession: agent.session.id,
+          agentPreset: modelComposed.agentPreset,
           agentOptions: { provider, model },
-          ...(modelComposed.setup === undefined ? {} : { setup: modelComposed.setup }),
-        })
+          setup: modelComposed.setup,
+        }))
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error)
         state.notify(t('model-switch-failed', { err: message }), { color: 'error', timeoutMs: 8000 })
@@ -5639,7 +6093,6 @@ export function createChannel(
       lastReasoningRow = undefined
       toolCards.clear()
       nextRowId = 0
-      state.rowsGeneration += 1
       state.rows.length = 0
       resetSubagentProjection()
       resetJobProjection()
@@ -5726,7 +6179,6 @@ export function createChannel(
     clear() {
       state.rows.length = 0
       nextRowId = 0
-      state.rowsGeneration += 1
       streaming = undefined
       reasoning = undefined
       toolCards.clear()
@@ -5837,6 +6289,11 @@ export function createChannel(
       state.whale = visible
       state.emit()
     },
+    setWhaleIdle(enabled) {
+      if (enabled === state.whaleIdle) return
+      state.whaleIdle = enabled
+      state.emit()
+    },
     setMinimal(enabled) {
       setMinimalMode(enabled)
       if (enabled === state.minimal) return
@@ -5871,7 +6328,7 @@ export function createChannel(
         return unavailablePermissionPresetSnapshot()
       }
       if (service === undefined) return legacyPermissionPresetSnapshot(state.mode.sandbox)
-      return permissionPresetSnapshotFromService(service, agent.session.events)
+      return permissionPresetSnapshotFromService(service, agent.session)
     },
     /** Localized roster projection for the /preset picker — resolves
      *  built-in display text through the dictionary under `en`; the
@@ -5939,7 +6396,7 @@ export function createChannel(
       // Official rule (dsh-agent-presets): only a session that has produced
       // nothing may swap compositions — a started session's logged tool calls
       // would strand under a different tool set. Blank = no turn ever ran.
-      const blank = !agent.session.events.some(event => event.type === 'turn/start')
+      const blank = !snapshotLiveSessionEvents(agent.session).some(event => event.type === 'turn/start')
       if (!blank) {
         // Persist as the default for future sessions instead of failing.
         if (!writePresetPref(target.id)) {
@@ -6646,7 +7103,7 @@ export function createChannel(
     },
     async peekAgentSession(sessionId) {
       const live = (ctx.get('agents') as { get(id: SessionId): Agent | undefined } | undefined)?.get(SessionId(sessionId))
-      if (live !== undefined) return agentViewLivePreview(live.session.events, PREVIEW_ENTRIES)
+      if (live !== undefined) return agentViewLivePreview(snapshotLiveSessionEvents(live.session), PREVIEW_ENTRIES)
       const persistence = ctx.get('sessionPersistence') as SessionSource | undefined
       if (!persistence) return []
       const path = await locateSession(persistence, sessionId)
@@ -6730,7 +7187,6 @@ export function createChannel(
       lastReasoningRow = undefined
       toolCards.clear()
       nextRowId = 0
-      state.rowsGeneration += 1
       state.rows.length = 0
       state.todos = []
       state.pending = []
@@ -6810,7 +7266,7 @@ export function createChannel(
       if (!llm) return { summary: null, error: t('recap-llm-unavailable') }
       const header = agent.session.requestHeader()
       const config = header?.config
-      const activity = collectRecentActivity(agent.session.events, RECAP_RECENT_CHARS)
+      const activity = collectRecentActivity(snapshotLiveSessionEvents(agent.session), RECAP_RECENT_CHARS)
       if (activity === '') return { summary: null, error: t('recap-no-activity') }
       const messages: Message[] = [
         createUserMessage({
@@ -6981,6 +7437,10 @@ export function createChannel(
     runExternalCommand(name, rawInput) {
       return executeRegistryCommand(name, rawInput)
     },
+    /** TUI-side permission switch (see the public Channel type). */
+    runPermissionPreset(name) {
+      return applyPermissionIdentity(name.trim())
+    },
     pluginScene: sceneRuntime?.active,
     openPluginScene(id: string) {
       return sceneRuntime?.open(id) ?? false
@@ -7043,7 +7503,7 @@ export function createChannel(
         t('export-dir', { cwd: state.cwd }),
         '',
       ]
-      for (const event of agent.session.events) {
+      for (const event of snapshotLiveSessionEvents(agent.session)) {
         switch (event.type) {
           case 'user/message': {
             if (event.data.source.kind !== 'user') break
@@ -7195,7 +7655,7 @@ export function createChannel(
     traceEvents() {
       // Immutable per-append snapshot (dsh-session caches the frozen array);
       // reads follow agent swaps (/resume /rewind /new) automatically.
-      return agent.session.events
+      return snapshotLiveSessionEvents(agent.session)
     },
   }
 
@@ -7329,6 +7789,31 @@ export function createChannel(
         })
       }
     }
+    // The permission-presets service may be mounted (service row + session
+    // projection) while its /permission COMMAND never reaches this agent's
+    // registry view — command-row composition varies between harness
+    // versions. When the service snapshot is usable, surface a TUI-side entry
+    // so picker / completion / typed switches stay reachable; the switch
+    // itself prefers the official command and falls back to the service's own
+    // write path.
+    if (!merged.some(command => command.name === 'permission')) {
+      let service: unknown
+      try {
+        service = ctx.get('permissionPresets')
+      } catch {
+        service = undefined
+      }
+      const usable = service !== undefined
+        && permissionPresetSnapshotFromService(service, target.session).availability === 'runtime'
+      if (usable) {
+        merged.push({
+          name: 'permission',
+          // English fallback text; the live label resolves through the
+          // `cmd-desc-permission` dictionary entry (localizedDescription).
+          description: 'Switch the permission preset (sandbox mode + approval policy)',
+        })
+      }
+    }
     state.commandList = merged
     state.emit()
     // The skill catalog resolves asynchronously (filesystem providers scan
@@ -7395,7 +7880,15 @@ export function createChannel(
       restoreLastGood()
     })
   }
-  ctx.on('commands/change', refreshCommandList)
+  // A registry mount or unmount can arrive as a command change (the harness
+  // advertises /permission through the same commands service that also backs
+  // the preset registry) — rebuild the dynamic Shift+Tab modes and re-derive
+  // the indicator whenever the menu changes.
+  ctx.on('commands/change', () => {
+    refreshCommandList()
+    rebuildSessionModes(agent)
+    refreshMode()
+  })
   ctx.on('skills/change', refreshCommandList)
 
   /**
@@ -7435,23 +7928,6 @@ export function createChannel(
   const skillCommandsRefused = new Set<string>()
   /** Pending re-read after an incomplete catalog observation. */
   let skillCommandsRetry: ReturnType<typeof setTimeout> | undefined
-  /**
-   * Bounded retry ladder for `complete:false` observations: a provider still
-   * warming its watcher re-reads a few times with exponential backoff, then
-   * gives up and keeps the last-good command set until the next
-   * `skills/change` (the provider's own invalidation) or an explicit
-   * refresh. Without the cap a provider that NEVER completes keeps an
-   * 800ms retry loop alive forever, re-snapshotting the catalog each time.
-   */
-  let skillRetryAttempts = 0
-  let skillRetryDelayMs = SKILL_COMMAND_RETRY_MS
-  const MAX_SKILL_RETRY_ATTEMPTS = 3
-  /**
-   * Refresh generation: bumped by releaseContributions (and rebinds) so an
-   * in-flight snapshot resolving afterwards is recognized as stale and
-   * never re-registers commands against a released channel.
-   */
-  let skillCommandSeq = 0
 
   /**
    * Publish every user-invocable skill as a slash command (issue #86).
@@ -7474,10 +7950,6 @@ export function createChannel(
   const refreshSkillCommands = async (): Promise<void> => {
     if (commandService === undefined) return
     const target = agent
-    // Generation snapshot: only release/rebind bump skillCommandSeq, so
-    // concurrent refreshes share one generation and all land (last write
-    // wins); a released/rebound channel invalidates every in-flight read.
-    const token = skillCommandSeq
     const registry = skillRegistryFor(target)
     if (registry === undefined) return
     let observation
@@ -7487,48 +7959,15 @@ export function createChannel(
       ctx.logger.warn('skill commands: catalog read failed: %o', error)
       return
     }
-    if (token !== skillCommandSeq || target !== agent) return
+    if (target !== agent) return
     // A provider still warming its watcher reports an incomplete observation;
-    // re-read a bounded number of times with exponential backoff so a cold
-    // start cannot leave the menu permanently short, while a provider that
-    // NEVER completes stops retrying (the next skills/change re-enters and
-    // the last-good command set stays in place). The partial observation
-    // still reconciles below — registering the visible subset is idempotent
-    // (same names/descriptions dispose nothing) and keeps a warm start as
-    // complete as the provider can make it.
-    if (!observation.complete) {
-      // Incomplete (provider failure/rescan mid-flight): NOT authoritative —
-      // neither the menu merge (refreshCommandList) nor the command registry
-      // may reconcile against it. In particular the registry must KEEP every
-      // currently registered handler: refreshCommandList only restores the
-      // last-good MENU entries, not disposed command handlers, so disposing
-      // here would leave the menu pointing at handlers that no longer exist.
-      if (skillCommandsRetry === undefined && skillRetryAttempts < MAX_SKILL_RETRY_ATTEMPTS) {
-        skillRetryAttempts += 1
-        skillCommandsRetry = setTimeout(() => {
-          skillCommandsRetry = undefined
-          void refreshSkillCommands()
-        }, skillRetryDelayMs)
-        skillCommandsRetry.unref?.()
-        skillRetryDelayMs *= 2
-        ctx.logger.warn(
-          `skill command merge: incomplete catalog observation (%d/%d attempts), retrying in %dms`,
-          skillRetryAttempts,
-          MAX_SKILL_RETRY_ATTEMPTS,
-          skillRetryDelayMs / 2,
-        )
-      } else {
-        ctx.logger.warn(
-          'skill command merge: incomplete catalog observation, retries exhausted — keeping last-good skills until skills/change',
-        )
-      }
-      return
+    // re-read once so a cold start cannot leave the menu permanently short.
+    if (!observation.complete && skillCommandsRetry === undefined) {
+      skillCommandsRetry = setTimeout(() => {
+        skillCommandsRetry = undefined
+        void refreshSkillCommands()
+      }, SKILL_COMMAND_RETRY_MS)
     }
-    // Complete observation: the catalog is authoritative, so reset the
-    // retry ladder (a later transient failure starts back at the base
-    // delay with a fresh attempt budget).
-    skillRetryAttempts = 0
-    skillRetryDelayMs = SKILL_COMMAND_RETRY_MS
     const wanted = new Map<string, string>(
       observation.skills
         .filter(skill => isUserInvocable(skill))
@@ -7632,9 +8071,6 @@ export function createChannel(
   })
   /** See {@link Channel.releaseContributions}. */
   const releaseSkillCommands = (): void => {
-    // Invalidate any in-flight refresh (its token no longer matches), then
-    // cancel the retry ladder and dispose the registered handlers.
-    skillCommandSeq += 1
     if (skillCommandsRetry !== undefined) clearTimeout(skillCommandsRetry)
     skillCommandsRetry = undefined
     for (const entry of skillCommands.values()) entry.dispose()
@@ -7646,17 +8082,6 @@ export function createChannel(
   void refreshSkillCommands()
 
   let nextRowId = 0
-
-  /**
-   * Bump the rows-streaming version: the transcript list keys its filter
-   * cache on this counter, which changes ONLY when an existing row's
-   * `streaming` flag flips in place (turn settle, revive). New rows change
-   * rows.length instead, so they need no bump. Declared before
-   * renderEvent/replayEvents — the boot replay settles rows and calls this.
-   */
-  const markStreamingChanged = (): void => {
-    state.rowsStreamingVersion += 1
-  }
   /** The leaf's bash executor (dsh-bash-local in the example leaf) — the DSH
  *  execution seam for local `!` commands and the git status breadcrumb. The
  *  service registers under `ctx.shell` (ShellExecutor; dsh-bash-local and
@@ -7857,7 +8282,6 @@ ${output}
       : [...state.rows].reverse().find(row => row.kind === 'assistant' && row.seq === seq)
     if (existing !== undefined) {
       existing.streaming = true
-      markStreamingChanged()
       streaming = existing
       return existing
     }
@@ -7886,7 +8310,6 @@ ${output}
       ) {
         reasoning = lastReasoningRow.row
         reasoning.streaming = true
-        markStreamingChanged()
         const sealedIdx = sealedReasoning.indexOf(reasoning)
         if (sealedIdx !== -1) sealedReasoning.splice(sealedIdx, 1)
         reasoningStart = Date.now() - (reasoning.durationMs ?? 0)
@@ -7920,14 +8343,12 @@ ${output}
     const duration = Math.max(0, Date.now() - reasoningStart)
     reasoning.durationMs = duration
     reasoning.streaming = false
-    markStreamingChanged()
     sealedReasoning.push(reasoning)
     reasoning = undefined
     logForDebugging(`thinking: folded at ${where} (${duration}ms)`)
   }
 
   const settleStreaming = (): void => {
-    const flipped = streaming !== undefined || sealedReasoning.length > 0 || reasoning !== undefined
     if (streaming !== undefined) streaming.streaming = false
     streaming = undefined
     const folded = sealedReasoning.length + (reasoning !== undefined ? 1 : 0)
@@ -7938,7 +8359,6 @@ ${output}
       reasoning.durationMs = Math.max(0, Date.now() - reasoningStart)
     }
     reasoning = undefined
-    if (flipped) markStreamingChanged()
     if (folded > 0) logForDebugging(`thinking: folded ${folded} reasoning row(s) at turn settle`)
   }
 
@@ -8147,13 +8567,7 @@ ${output}
             const row = assistantRowsByStep.get(key) ?? ensureStreaming(event.seq)
             assistantRowsByStep.set(key, row)
             streaming = row
-            // Revive of a previously sealed row (reconnect replay): the
-            // in-place streaming flip is invisible to rows identity/length,
-            // so the transcript list's filter cache must hear about it.
-            if (row.streaming !== true) {
-              row.streaming = true
-              markStreamingChanged()
-            }
+            row.streaming = true
             const before = row.text.length
             appendTextDelta(row, chunk.text)
             state.responseChars += Math.max(0, row.text.length - before)
@@ -8235,7 +8649,6 @@ ${output}
           row.time = event.time
           if (text) row.text = text
           row.streaming = false
-          markStreamingChanged()
           // Live settles keep the smooth-reveal cursor alive (a one-shot
           // non-streaming delivery still paints as a flow); replayed
           // settles must not — the transcript would typewrite on open.
@@ -8251,10 +8664,7 @@ ${output}
           // (/settings opt-in) keeps the block expanded until turn settle
           // — settleStreaming folds the sealed rows then.
           reasoning.durationMs = Math.max(0, Date.now() - reasoningStart)
-          if (state.thinkingFold === 'preview') {
-            reasoning.streaming = false
-            markStreamingChanged()
-          }
+          if (state.thinkingFold === 'preview') reasoning.streaming = false
           sealedReasoning.push(reasoning)
           logForDebugging(`thinking: step sealed (${reasoning.durationMs}ms), expanded until turn/end`)
         }
@@ -8553,7 +8963,7 @@ ${output}
         nextRowId += 1
         break
       default:
-        // dsh-tool-todo owns this optional module augmentation in alpha.2.
+        // dsh-tool-todo owns this optional module augmentation on the 0.1.2 line.
         // Match by name so the TUI remains loadable without that plugin.
         if ((event as { type: string }).type === 'todo/write') {
           const todos = todoPanelItems((event as unknown as { data?: unknown }).data)
@@ -8619,7 +9029,7 @@ ${output}
   }
 
   // Replay the durable transcript first, then follow live events.
-  replayEvents(agent.session.events)
+  replayEvents(snapshotLiveSessionEvents(agent.session))
   settleStreaming()
   // Attached to an idle agent: any replayed turn/start belongs to a previous
   // session run, so the spinner must not come up on boot.
@@ -8665,74 +9075,11 @@ ${output}
     return new ActivityTracker(prefs.config, Date.now, prefs.customActions)
   })()
   let activityTickTimer: NodeJS.Timeout | undefined
-  /**
-   * Wall-clock since the done line last changed. The done summary keeps a
-   * short-lived completed-tool fragment (~3s, upstream DONE_FRAGMENT_MS),
-   * so the tick retires only once the line has been STABLE for a grace
-   * window — then it stops until a live phase returns (updateWorkingActivity
-   * re-arms it). An idle conversation therefore holds no 500ms wakeup.
-   */
-  const ACTIVITY_DONE_STABLE_MS = 4000
-  let activityDoneStableSince: number | undefined
 
   const stopActivityTick = (): void => {
     if (activityTickTimer === undefined) return
     clearInterval(activityTickTimer)
     activityTickTimer = undefined
-  }
-
-  /**
-   * Create the 500ms activity tick if it is not running. `activity: false`
-   * never creates it (the projection is not read then). Live phases
-   * (waiting/thinking/tool) emit every tick so turnElapsedMs stays current;
-   * settled phases emit only when the line actually changes.
-   */
-  const ensureActivityTick = (): void => {
-    if (options.activity === false || activityTickTimer !== undefined) return
-    activityTickTimer = setInterval(() => {
-      const previous = state.workingActivity
-      const rendered = updateWorkingActivity('activity tick')
-      if (rendered === undefined) {
-        // Projection unavailable (render/projection error — updateWorkingActivity
-        // swallowed and reported it, or the activity sidecar was switched off).
-        // Retire the tick instead of spinning forever: every 500ms wake would
-        // re-throw inside the tracker for zero UI value. A later REAL activity
-        // event (turn start, phase change, tool start) goes through
-        // updateWorkingActivity again, whose live-phase branch re-arms this
-        // tick — so recovery costs nothing.
-        stopActivityTick()
-        return
-      }
-      if (rendered.phase === 'done') {
-        // Retire once the done line has been stable past the fragment
-        // window — no more React updates, timer or tracker work needed.
-        if (previous !== undefined && previous.line === rendered.line) {
-          activityDoneStableSince ??= Date.now()
-          if (Date.now() - activityDoneStableSince >= ACTIVITY_DONE_STABLE_MS) {
-            stopActivityTick()
-            return
-          }
-        } else {
-          activityDoneStableSince = undefined
-        }
-      } else {
-        activityDoneStableSince = undefined
-      }
-      // Live phases deliberately wake at 500 ms even when the formatted line
-      // has not crossed its next whole-second boundary: turnElapsedMs remains
-      // a current state value, while line changes cover phrase rotation and
-      // the short-lived completed-tool summary.
-      if (
-        rendered.phase === 'waiting' ||
-        rendered.phase === 'thinking' ||
-        rendered.phase === 'tool' ||
-        previous?.phase !== rendered.phase ||
-        previous.line !== rendered.line
-      ) {
-        state.emit()
-      }
-    }, 500)
-    activityTickTimer.unref()
   }
 
   /** Render the current tracker into the TUI-only projection. */
@@ -8757,18 +9104,7 @@ ${output}
   ): ActivityStatus | undefined => {
     try {
       update?.()
-      const rendered = renderWorkingActivity()
-      // Live phases need the 500ms tick to keep turnElapsedMs/phrase
-      // rotation current — (re)arm it whenever an event or status change
-      // brings the tracker back to a live phase (a done/idle phase lets
-      // the tick retire itself, see maybeRetireActivityTick).
-      if (
-        rendered !== undefined &&
-        (rendered.phase === 'waiting' || rendered.phase === 'thinking' || rendered.phase === 'tool')
-      ) {
-        ensureActivityTick()
-      }
-      return rendered
+      return renderWorkingActivity()
     } catch (error: unknown) {
       if (!activityFailureReported) {
         activityFailureReported = true
@@ -8798,45 +9134,11 @@ ${output}
     updateSpinnerMode()
   }
 
-  // ── trajectory projection (channel-owned, event-driven) ───────────────────
-  // The session trajectory is folded HERE — at event time — so Chat renders
-  // never touch the session event getter (hosts without a snapshot cache pay
-  // an O(n) copy per render otherwise). The fold is incremental: identical
-  // prefix (object identity at the previous last index) → tail-only consume;
-  // anything else (session swap, rewind fork, /new) rebuilds from scratch.
-  // bindAgent resets the build explicitly so a swap can never extend a stale
-  // projection.
-  let trajectoryBuild: TrajBuild = emptyTrajectory()
-  /**
-   * Fold ONE newly observed main-session event into the trajectory build —
-   * incrementally, from the event the observer already holds. The session
-   * getter (`agent.session.events`) is O(n) on hosts that rebuild a frozen
-   * snapshot per append, so it must stay off the token-rate path: a full
-   * fold happens only in bindAgent (once per agent swap, where O(n) is
-   * the correct cost).
-   */
-  const foldTrajectoryEvent = (event: SessionEvent): void => {
-    trajectoryBuild = extendTrajectoryEvents(trajectoryBuild, [event])
-  }
-
   const bindAgent = (): void => {
     agentBindingGeneration += 1
     state.agentBindingGeneration = agentBindingGeneration
     for (const dispose of agentSubscriptions) dispose()
     stopActivityTick()
-    // A new agent starts with a fresh skill-retry budget (an old ladder's
-    // attempt counter must not shorten the new agent's retries). In-flight
-    // refreshes from the previous agent are already stale via the
-    // `target !== agent` check — the refresh generation is NOT bumped here
-    // because the boot-time refresh resolves AFTER this first bindAgent.
-    skillRetryAttempts = 0
-    skillRetryDelayMs = SKILL_COMMAND_RETRY_MS
-    // The trajectory build belongs to ONE bound agent's session log. A
-    // replacement (rewind/resume/new/workspace/model-switch) must never
-    // extend the previous session's projection — reset and fold the new
-    // session's full log once here (O(n) once per swap, never per event).
-    trajectoryBuild = emptyTrajectory()
-    trajectoryBuild = extendTrajectory(trajectoryBuild, agent.session.events)
     // Cancel state and deferred interrupt delivery belong to one bound agent.
     // A replacement must neither inherit the old latch nor receive its queued
     // microtask after the session identity changes.
@@ -8845,8 +9147,26 @@ ${output}
     const prefs = activityPrefsSnapshot()
     activityTracker = new ActivityTracker(prefs.config, Date.now, prefs.customActions)
     activityFailureReported = false
-    activityDoneStableSince = undefined
     updateWorkingActivity('agent bind', () => activityTracker.onAgentStatus(agent.status))
+    activityTickTimer = setInterval(() => {
+      const previous = state.workingActivity
+      const rendered = updateWorkingActivity('activity tick')
+      if (rendered === undefined) return
+      // Live phases deliberately wake at 500 ms even when the formatted line
+      // has not crossed its next whole-second boundary: turnElapsedMs remains
+      // a current state value, while line changes cover phrase rotation and
+      // the short-lived completed-tool summary.
+      if (
+        rendered.phase === 'waiting' ||
+        rendered.phase === 'thinking' ||
+        rendered.phase === 'tool' ||
+        previous?.phase !== rendered.phase ||
+        previous.line !== rendered.line
+      ) {
+        state.emit()
+      }
+    }, 500)
+    activityTickTimer.unref()
     // Re-couple the channel-owned model selection to the new agent's
     // assembly/request waterfalls, then re-apply the persisted effort when
     // this agent's route offers it (dsh-agent installModelSelection).
@@ -8868,6 +9188,7 @@ ${output}
       selection.current = { provider: state.provider, model: state.model }
     }
     void applyPreferredEffort()
+    rebuildSessionModes(agent)
     refreshMode()
     agentSubscriptions = [
       installModelSelection(agent.ctx, selection),
@@ -8960,7 +9281,12 @@ ${output}
         // Mode-affecting atoms fold into the Shift+Tab mode indicator the
         // moment they land (whether appended by cycleMode or by hand).
         const eventType = (event as { type: string }).type
-        if (eventType === 'plan/mode' || eventType === 'sandbox/mode' || eventType === 'approval/policy') {
+        if (
+          eventType === 'plan/mode'
+          || eventType === 'sandbox/mode'
+          || eventType === 'approval/policy'
+          || eventType === 'permission/preset'
+        ) {
           refreshMode()
         }
         if (eventType === 'plan/mode') {
@@ -8971,7 +9297,7 @@ ${output}
           // event so status and a later bare `/planPrompt` agree with reality.
           if (
             planEventActive !== true &&
-            foldPlanPromptEnabled(session.events) &&
+            foldPlanPromptEnabled(snapshotLiveSessionEvents(session)) &&
             !pendingPlanPromptClears.has(session)
           ) {
             pendingPlanPromptClears.add(session)
@@ -8979,7 +9305,7 @@ ${output}
               pendingPlanPromptClears.delete(session)
               // Re-check after the publishing append has unwound: a queued
               // `/planPrompt` back-on in the same tick must not be cleared.
-              if (foldPlanActive(session.events) || !foldPlanPromptEnabled(session.events)) return
+              if (foldPlanActive(snapshotLiveSessionEvents(session)) || !foldPlanPromptEnabled(snapshotLiveSessionEvents(session))) return
               try {
                 session.append(LIANGSHEN_PLAN_PROMPT_EVENT, { active: false })
               } catch (error) {
@@ -8990,7 +9316,7 @@ ${output}
             })
           }
           if (planEventActive === false) {
-            const target = prePlanModes.get(session) ?? prePlanModeSpec(session.events)
+            const target = prePlanModes.get(session) ?? prePlanModeSpec(snapshotLiveSessionEvents(session))
             prePlanModes.delete(session)
             if (!explicitPlanExits.delete(session) && target !== undefined) {
               const queued = pendingPlanExitRestores.has(session)
@@ -8999,23 +9325,32 @@ ${output}
                 const restore = pendingPlanExitRestores.get(session)
                 pendingPlanExitRestores.delete(session)
                 // Rebinding, reentry, or an explicit switch supersedes this restore.
-                if (restore === undefined || session !== agent.session || foldPlanActive(session.events)) return
+                if (restore === undefined || session !== agent.session || foldPlanActive(snapshotLiveSessionEvents(session))) return
                 applyMode(restore).catch(error => {
                   ctx.logger.warn(
                     `dsh-tui: plan-exit mode restore failed: ${error instanceof Error ? error.message : String(error)}`,
                   )
+                }).finally(() => {
+                  // Return the user to the preset they were on before plan mode
+                  // (when the runtime registry still offers it) instead of
+                  // parking them on the canonical bundle of the restored atoms.
+                  const remembered = prePlanPermissionIdentity.get(session)
+                  prePlanPermissionIdentity.delete(session)
+                  if (remembered === undefined || session !== agent.session) return
+                  applyPermissionIdentity(remembered).then((ok) => {
+                    if (!ok || session !== agent.session) return
+                    refreshMode()
+                    state.notify(t('mode-switched', { name: modeDisplayName(state.mode) }))
+                  }).catch(() => {
+                    // The identity restore is best-effort; failures already
+                    // surfaced through applyPermissionIdentity's own notices.
+                  })
                 })
               })
             }
           }
         }
         renderEvent(event)
-        // Fold the trajectory incrementally here — at EVENT time, not render
-        // time: Chat renders must never touch the session getter, and the
-        // token-rate path must not re-read the O(n) session snapshot. The
-        // observer already holds the event, so the fold consumes it directly
-        // (chunks are pure timing updates, O(1) with no state copy).
-        foldTrajectoryEvent(event)
         // Streaming deltas (one event per token) take the frame-aligned
         // path; every other event keeps synchronous notification.
         if (event.type === 'assistant/chunk') state.emitStream()
@@ -9081,8 +9416,8 @@ ${output}
     // per agent bind so status and the persona gate never disagree.
     if (
       state.agentPreset === 'liangshen' &&
-      !foldPlanActive(agent.session.events) &&
-      foldPlanPromptEnabled(agent.session.events)
+      !foldPlanActive(snapshotLiveSessionEvents(agent.session)) &&
+      foldPlanPromptEnabled(snapshotLiveSessionEvents(agent.session))
     ) {
       agent.session.append(LIANGSHEN_PLAN_PROMPT_EVENT, { active: false })
     }

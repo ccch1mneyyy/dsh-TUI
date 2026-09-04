@@ -410,8 +410,16 @@ export function Settings({
     })
   }
 
-  /** Cycle a boolean/select field and save the change immediately. */
-  const cycleField = (ns: string, field: TuiSettingsField): void => {
+  /**
+   * Cycle a boolean/select field (or any options-bearing field) and save
+   * the change immediately. ←/→ and Enter/click all route here; arrow
+   * direction selects the step, Enter/click keep the historical forward
+   * step (wrap-around). A value outside the options (a custom text spec
+   * such as the page-margin `3x1`) sits before the first option for →
+   * and after the last for ←, so either arrow re-enters the preset cycle
+   * from the natural end.
+   */
+  const cycleField = (ns: string, field: TuiSettingsField, direction: 1 | -1 = 1): void => {
     const form = forms.get(ns)
     if (form === undefined || !form.available) return
     const current = form.field(field).text
@@ -421,7 +429,9 @@ export function Settings({
       const options = field.options ?? []
       if (options.length === 0) return
       const index = options.findIndex(option => option.value === current)
-      form.edit(field, options[(index + 1) % options.length]?.value ?? options[0]?.value ?? '')
+      const size = options.length
+      const next = options[(((index + direction) % size) + size) % size]
+      form.edit(field, next?.value ?? options[0]?.value ?? '')
     }
     bump()
     saveSoon(ns)
@@ -496,6 +506,17 @@ export function Settings({
       setFocusIndex(Math.max(0, effFocus - 1))
     } else if (key.downArrow) {
       setFocusIndex(Math.min(Math.max(0, focusable.length - 1), effFocus + 1))
+    } else if (key.leftArrow || key.rightArrow) {
+      // ←/→ cycle an options-bearing field (select rows and hybrid
+      // text-with-options rows such as the page margin presets). Rows
+      // without options ignore the arrows; boolean rows keep Enter as
+      // their only toggle.
+      if (focused !== undefined && focused.kind === 'field') {
+        const field = focused.field
+        if ((field.options?.length ?? 0) > 0) {
+          cycleField(focused.ns, field, key.rightArrow === true ? 1 : -1)
+        }
+      }
     } else if (isPlainReturn(key) && focused !== undefined) {
       activateEntry(focused)
     } else if (key.escape) {
@@ -553,14 +574,17 @@ export function Settings({
       value = state.text
     }
 
-    // select 的值渲染成按钮 chip：用选项的本地化文案（'zh' → '中文'）而不是
-    // 存储的原始值；没命中选项时退回原始值。仅在非编辑态、值非空时提供。
-    const selectLabel = field.kind === 'select' && !isEditing && state.text !== ''
-      ? (() => {
-          const option = field.options?.find(entry => entry.value === state.text)
-          return option === undefined ? state.text : pick(option.label, option.descriptions)
-        })()
-      : undefined
+    // Options-bearing values render as chips: use the option's localized
+    // label ('zh' → '常规') instead of the stored raw value; a value that
+    // matches no option (a custom text spec such as `3x1`) falls back to
+    // the raw text. Only when not editing and the value is non-empty.
+    const selectLabel =
+      ((field.kind === 'select' || (field.options?.length ?? 0) > 0) && !isEditing && state.text !== '')
+        ? (() => {
+            const option = field.options?.find(entry => entry.value === state.text)
+            return option === undefined ? state.text : pick(option.label, option.descriptions)
+          })()
+        : undefined
 
     return (
       <FieldRow

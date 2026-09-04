@@ -9,6 +9,8 @@ import { SplitDiffView } from '../SplitDiffView.js'
 import { SyntaxText } from '../SyntaxText.js'
 import { useTooltip } from '../Tooltip.js'
 import { formatDuration } from '../../cc/format.js'
+import { formatClock } from '../../trajectory/format.js'
+import { t } from '../../i18n.js'
 import type { ToolBackground } from '../../tuiDisplayPrefs.js'
 import type { Theme } from '../../theme.js'
 import type { ClickEvent } from '../../ink/events/click-event.js'
@@ -297,7 +299,40 @@ function foldTerminalTitle(title: string): FoldedTitle | undefined {
   return { first, hidden }
 }
 
-function HeaderTitle({ name, title, isTerminal, folded, displayArgs, argsLanguage, nameColor, filePath, onOpenFile }: {
+/** Addendum line appended to the header hover tooltip when the header hides
+ *  content (folded script / clipped args / width-truncated title): start or
+ *  finish wall-clock and the terminal result's exit code / signal —
+ *  everything the header's relative `· 2m` chip and the body's
+ *  `Running… (…)` line do NOT say. Durations stay out on purpose: showing
+ *  a value twice, once on the card and once in the float, is exactly the
+ *  noise class this tooltip exists to avoid. A fully visible header pops
+ *  NOTHING (meta included) — a float that repeats or annotates content
+ *  already on screen is noise, not detail. Returns '' when the row carries
+ *  no timing data. */
+function toolCardMetaTooltip(tool: ToolRow, isRunning: boolean, isError: boolean): string {
+  const parts: string[] = []
+  const startedAt = tool.startedAt
+  if (isRunning) {
+    if (startedAt !== undefined) parts.push(t('tool-tip-started', { time: formatClock(startedAt) }))
+  } else {
+    const durationMs = tool.durationMs
+    if (startedAt !== undefined && durationMs !== undefined) {
+      parts.push(t(isError ? 'tool-tip-failed' : 'tool-tip-finished', { time: formatClock(startedAt + durationMs) }))
+    }
+  }
+  const resultView = tool.resultView
+  if (resultView !== undefined && resultView.card === 'terminal') {
+    if ('exitCode' in resultView && resultView.exitCode !== undefined && resultView.exitCode !== 0) {
+      parts.push(t('tool-tip-exit', { code: resultView.exitCode }))
+    }
+    if ('signal' in resultView && resultView.signal !== undefined) {
+      parts.push(t('tool-tip-signal', { name: String(resultView.signal) }))
+    }
+  }
+  return parts.join(' · ')
+}
+
+function HeaderTitle({ name, title, isTerminal, folded, displayArgs, argsLanguage, nameColor, filePath, onOpenFile, metaTooltip, headerTextBudget }: {
   name: string
   title: string | undefined
   isTerminal: boolean
@@ -310,14 +345,44 @@ function HeaderTitle({ name, title, isTerminal, folded, displayArgs, argsLanguag
    *  segment renders underlined and clickable (opens the file menu). */
   filePath?: string
   onOpenFile?: (path: string) => void
+  /** Addendum line for the header hover tooltip when the header HIDES
+   *  content (folded script / clipped args / width-truncated title):
+   *  start/finish wall-clock, terminal exit code/signal — everything the
+   *  relative chip and the body's Running… line do NOT say. Lazy getter,
+   *  resolved at show time so a running card's start stays fresh. '' =
+   *  nothing. A fully visible header pops no tooltip at all. */
+  metaTooltip: () => string
+  /**
+   * Column budget for the NON-terminal one-line title on the header line —
+   * `useTerminalSize().columns` (already margin-adjusted) minus the fixed
+   * chrome of the row: loader dot 2 + hover ▾ indicator 2 (present while
+   * the pointer dwells) + the settled elapsed chip + slack for the
+   * transcript gutter. Only this title renders in a truncate-end Text, so
+   * only it can be cut by layout width (terminal titles wrap; args are
+   * clipped by the 480-char budget) — this budget gates just that cut.
+   */
+  headerTextBudget: number
 }): React.ReactNode {
-  // Hover tooltip: the header line truncates long paths/commands, so the
-  // full string (or the unfolded terminal script) pops up after a dwell.
-  // Empty content is a no-op inside the hook.
+  // Hover tooltip rule: pop ONLY when the header genuinely hides content —
+  // a folded terminal script, args clipped past the 480-char budget, or a
+  // non-terminal one-line title cut by layout width (truncate-end). A header
+  // that fully fits its row stays silent: a float that repeats or annotates
+  // text already visible next to the pointer is noise, not detail. Empty
+  // content is a no-op inside the hook.
   const headerTooltip = useTooltip(() => {
-    if (title === undefined) return displayArgs
-    if (isTerminal) return title
-    return title.trim()
+    const meta = metaTooltip()
+    const withMeta = (full: string): string => (meta === '' ? full : `${full}\n${meta}`)
+    if (folded !== undefined) return withMeta(title ?? '')
+    if (title === undefined && clipHeaderArgs(displayArgs) !== displayArgs) return withMeta(displayArgs)
+    // Width truncation: only the non-terminal title Text is truncate-end —
+    // a long one-line title is really cut by layout when it overflows the
+    // row. Terminal titles WRAP instead (default Text wrap, nothing hidden)
+    // and args within the 480 budget wrap too; they never reach this gate.
+    if (title !== undefined && !isTerminal && stringWidth(title.trim()) > headerTextBudget) {
+      return withMeta(title.trim())
+    }
+    // Header fully visible: nothing hidden, nothing to add — stay silent.
+    return ''
   })
   if (title === undefined) {
     return (
@@ -475,6 +540,23 @@ export function AssistantToolUseMessage({
   // source line per terminal row (truncate) keeps the panes row-aligned,
   // which the flat add/del line model cannot express.
   const { columns } = useTerminalSize()
+  // Interactive rows grow a ▾/▴ disclose column while the pointer dwells
+  // (fixed, no layout shift elsewhere). The tooltip resolves at show time —
+  // i.e. exactly while that column is present — so the budget must reserve
+  // it for clickable cards only; non-interactive rows never render it.
+  const interactive = onClick !== undefined
+  // Header-row budget for the title Text. useTerminalSize() already reports
+  // the margin-adjusted content width, so this is the fixed chrome of the
+  // line only: loader dot 2 + hover ▾ indicator 2 (interactive rows, present
+  // while the pointer dwells) + the settled elapsed chip. Calibrated against
+  // the renderer (probe-tooltip-truncation): a truncate-end title whose
+  // width exceeds columns − loader − ▾ − chip is really cut on screen at
+  // tooltip time; anything at or under the budget fits fully and must NOT
+  // pop a tooltip. No extra slack, and the tool name is NOT deducted — a
+  // non-terminal title carries its own first word, so double-counting name
+  // pushed the gate ~10 cols too tight and floated fully visible titles.
+  const headerTextBudget = Math.max(0, columns - 2 - (interactive ? 2 : 0)
+    - (!isRunning && elapsedText !== '' ? stringWidth(elapsedText) : 0))
   const useSplitDiff = !isError && view?.card === 'diff' &&
     (diffLayout === 'split' || (diffLayout !== 'unified' && columns >= SPLIT_DIFF_MIN_COLS))
   let body: BodyLine[] = []
@@ -528,7 +610,6 @@ export function AssistantToolUseMessage({
   // No layout change: the indicator is a fixed column on the header line, the
   // body never moves.
   const [hovered, setHovered] = React.useState(false)
-  const interactive = onClick !== undefined
   const hoverTint = interactive && hovered && !isSelected
 
   return (
@@ -553,7 +634,7 @@ export function AssistantToolUseMessage({
             isError={isError}
             toolName={tool.name}
           />
-          <HeaderTitle name={name} title={headerTitle} isTerminal={headerIsTerminal} folded={foldedHeader} displayArgs={displayArgs} argsLanguage={argsLanguage} nameColor={toolNameColor(tool.name)} filePath={filePath} onOpenFile={onOpenFile} />
+          <HeaderTitle name={name} title={headerTitle} isTerminal={headerIsTerminal} folded={foldedHeader} displayArgs={displayArgs} argsLanguage={argsLanguage} nameColor={toolNameColor(tool.name)} filePath={filePath} onOpenFile={onOpenFile} metaTooltip={() => toolCardMetaTooltip(tool, isRunning, isError)} headerTextBudget={headerTextBudget} />
           {!isRunning && (
             <Box flexWrap="nowrap">
               <Text dimColor={!hovered}>{elapsedText}</Text>

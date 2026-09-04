@@ -50,7 +50,7 @@ DeepSeek Harness 拥有，TUI 只消费它们。
   user-questions / agent-preset 的上游预发布兼容分派，避免把版本分支散进
   bootstrap 与 channel 动作面。注意：问卷
   "provider 座位"守卫（DUPLICATE_PROVIDER 探测 + 私有 symbol 校验，#586）只在
-  rc 的 `registerProvider` 路径生效。alpha.2 的 `user-questions/request`
+  旧 rc 的 `registerProvider` 路径生效。0.1.2 线的 `user-questions/request`
   waterfall 对带 agent 的请求先按 scope 过滤 listener；agentless 的 `/auth` 请求
   不带 scope carrier。按 answerer 约定，首个不调用 `next()` 委派的 eligible
   listener 会 claim 请求；但 Cordis waterfall 是 around middleware，外层 listener
@@ -202,7 +202,6 @@ CI 回归都要跑。窄改动还要跑最近的聚焦脚本：
 | 鼠标指针事件管线（滚轮坐标/修饰位、点击/hover 派发、越界 clamp、指针态重置） | `node --import tsx/esm scripts/verify-pointer-events.ts` |
 | Hover 事件性能（兴趣边界完整、无兴趣矩形快路径、帧边界/多 root 失效） | `node --import tsx/esm scripts/verify-hover-coalesce.tsx` |
 | 输入框鼠标选区编辑（拖选/Shift+click/双击选词/删除替换/Esc 分层/Ctrl+C 复制、CJK 宽字符与 fold 侧钳制） | `node --import tsx/esm scripts/verify-input-selection.tsx` |
-| 退出漏斗终端清理（finishExit：闩锁→stdout 队列 barrier→同步写 DISABLE/清理块→raw 态 settle→finally 恢复 cooked） | `node --import tsx/esm scripts/verify-exit-mouse-disable-order.tsx`、`node --import tsx/esm scripts/verify-exit-mouse-residue.tsx`、`node --import tsx/esm scripts/verify-exit-mouse-cleanup.tsx` |
 
 多数用普通 `node` 调用的脚本 import `lib/types/`——先跑 `pnpm build`。import
 TypeScript 源的脚本在头部声明 `node --import tsx/esm <script>` 形式。不要凭
@@ -295,11 +294,7 @@ TypeScript 源的脚本在头部声明 `node --import tsx/esm <script>` 形式�
   诊断。用 opt-in 的 stderr/调试路径（如 `DSH_TUI_DEBUG`）或既有
   `DSH_TUI_RENDER_LOG` 帧捕获。
 - 在成功、错误、中断与收尾时都保持 raw 模式、光标、alt-screen、同步输出、
-  鼠标、焦点与终端查询的清理。raw 模式的物理恢复（`setRawMode(false)`）
-  只归退出漏斗的 conclude 阶段（`finishExit` → `concludeShutdown`）：
-  error boundary 与 Ctrl+C 路径不得自行释放；React 错误解卷若在闩锁前
-  已释放，`beginShutdown` 会重新获取（仅 tty 本地模式，不重发启用序列），
-  保证 settle 窗在 raw 态度过（#522）。
+  鼠标、焦点与终端查询的清理。
 - 避免渲染期无界集合或每 token/每帧分配。流式会话长命，本仓库对先前的 OOM
   与滚动性能失败有明确回归。
 - 布局改动不得让 transcript 内容挤掉输入行与状态行。改动相关路径时演练
@@ -331,6 +326,7 @@ TypeScript 源的脚本在头部声明 `node --import tsx/esm <script>` 形式�
 | 技能发现或呈现 | DSH adapter、slash 命令合并、`/skills` 与相关回归；项目维护技能放 `.agents/skills/` 且不得加入 npm 包 |
 | 用户可见的文档化行为 | 中英文 README，外加适用的配置注释/帮助文本 |
 | 包版本或依赖 | `package.json`、`pnpm-lock.yaml`、适用时的生成/发布产物；不要顺手搅动旧 npm 锁文件 |
+| 上游验证线 bump | `src/dsh-adapter/contract.ts`、`package.json` peer+dev 两组范围、随包内置的 `dsh-auth/package.json` 与 `dsh-auth/pnpm-lock.yaml`、`pnpm-workspace.yaml`、`.github/workflows/ci.yml` alpha-compat 的上游 SHA、`scripts/verify-{alpha-source,patch-surface,web-coexistence,upstream-contract}` 内的版本常量、`patch-surface.snapshot.json`、`ADAPTER.md`、`docs/user-guide.md`；步骤见 [ADAPTER.md](../ADAPTER.md) 升级流程 |
 
 ## Git 与发布安全（Git And Release Safety）
 

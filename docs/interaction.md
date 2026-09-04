@@ -10,7 +10,7 @@
 | `Tab` | 补全 `/` 命令或 `@` 文件；模型工作且输入非空时排入当前回合之后的 follow-up |
 | `Ctrl+Enter` | 打断当前回合并立即处理输入消息 |
 | `Shift+Enter` / `Ctrl+J` | 在光标处插入换行；终端无法上报 Shift 修饰键时可用 `Ctrl+J`（LF）兜底，macOS Terminal.app 用 `Option+Enter` |
-| `Shift+Tab` | 在配置的会话模式间循环（默认：默认 → 计划模式 → 完全访问） |
+| `Shift+Tab` | 在配置的会话模式间循环（默认：默认 → 计划模式 → 完全访问）；运行时可用的第三方 permission preset 按 registry 顺序追加到循环末尾，`custom`/`status`、canonical 预设、重复 identity 和不安全 token 不加入 |
 | `Alt/Option+Up` | 把最后一条尚未处理的消息取回输入框编辑 |
 | `Up/Down` | 菜单选择；普通输入中浏览历史或在多行文本间移动 |
 | `Ctrl+V` / `Alt+V` | 从系统剪贴板插入文本或文件；图片作为持久附件发送。终端拦截 `Ctrl+V` 时用 `Alt+V` |
@@ -45,7 +45,7 @@ transcript 模式中打开会话全文搜索。全文搜索使用 `n`/`N` 在结
 | `Left/Right` | 按字符移动光标；**有选区时坍缩到选区对应边缘** |
 | `Ctrl+Left/Right` | 按单词移动 |
 | `Home/End` | 移到当前逻辑行首/行尾 |
-| `Ctrl+A` / `Ctrl+E` | 编辑器中移到当前逻辑行首/行尾；`Ctrl+E` 还会展开或折叠长会话中隐藏的旧消息 |
+| `Ctrl+A` / `Ctrl+E` | `Ctrl+A` 打开子代理面板（编辑器内 `Mod+A` 仍移到行首）；`Ctrl+E` 移到行尾，还会展开或折叠长会话中隐藏的旧消息 |
 | `Ctrl+U` | 删除光标前内容 |
 | `Ctrl+K` | 删除光标后内容 |
 | `Ctrl+W` | 删除前一个单词 |
@@ -269,9 +269,9 @@ prompt + 已有历史）做一次**无工具、单轮**的模型调用，答案�
 
 ### /settings 设置编辑器
 
-`/settings` 打开插件设置编辑器，按命名空间读取/编辑。编辑是**暂存制**：
-`↑`/`↓` 移动、`Enter` 展开/切换/编辑，`s` 保存 / `d` 放弃 / `Esc` 先丢弃
-脏区再退出。鼠标：字段/组行点击 = 设焦点并执行该行 Enter 动作，悬停即
+`/settings` 打开插件设置编辑器，按命名空间读取/编辑。**改动自动保存**：
+`↑`/`↓` 移动、`Enter` 展开/切换/编辑，布尔/选项即时写入，文本草稿回车确认，
+`Esc` 直接退出。鼠标：字段/组行点击 = 设焦点并执行该行 Enter 动作，悬停即
 移动焦点，滚轮走焦点（焦点跟随窗口下即滚动）。dsh-tui 自身命名空间的字段写入 settings.yaml 用户层并**实时生效**
 （`lang`、`statusBar.*` 等）；未声明 TUI 区块的命名空间以只读形式列出，需
 手工编辑 `~/.dsh/settings.yaml`。
@@ -302,7 +302,7 @@ scheme 和 `/workspace` 子命令可由可选插件注册，TUI 本身不认识�
 
 ## Fullscreen 与鼠标
 
-`fullscreen: false` 是默认 inline 模式，终端模拟器拥有原生 scrollback 和选区。
+`fullscreen: false` 恢复 inline 模式（0.9.0 起出厂默认为 fullscreen），此时终端模拟器拥有原生 scrollback 和选区。
 
 `fullscreen: true` 使用 alternate screen，并启用应用内鼠标处理：
 
@@ -424,7 +424,7 @@ dsh-TUI 不预装通用技能；技能内容与发现规则由 DSH 及当前组�
 - `/effort` 打开推理强度滑杆（←/→ 实时调整）；`/effort <id>` 直接设定，
   `/effort status` 查看当前档位。
 - `/theme <name>` 与 `/theme status` 见主题文档。
-- `/permission` 的名册来自 DSH `permissionPresets` registry，按声明顺序显示并参与补全；第三方预设无需 TUI 硬编码，`custom` 只显示当前态，不是可选目标。registry 服务缺失时 TUI 使用三项 legacy 兼容名册；服务已挂载但损坏、为空或不一致时标记 unavailable 并 fail closed。若外部 `/permission` 命令未注册，输入沿用现有默认命令/model dispatch。
+- `/permission` 的名册来自 DSH `permissionPresets` registry，按声明顺序显示并参与补全与 `Shift+Tab` 循环；第三方预设无需 TUI 硬编码。服务可用时 `/permission` 以本地命令常驻菜单：裸命令打开 picker、参数直接切换、`status` 打印当前预设与策略说明。切换优先调用官方 `/permission <preset>` 命令；命令未暴露给本 agent 时回退到服务自身的官方写路径（同一 handler、真实事件），并以事件/读回确认；两者都不可用时显式报错，不会把输入当普通消息发给模型。registry 服务缺失时 TUI 使用三项 legacy 兼容名册；服务已挂载但损坏、为空或不一致时标记 unavailable 并 fail closed。退出计划模式先恢复进入前的 sandbox/approval，再还原进入前所在的权限预设（registry 仍提供时）。
 - `/lang` 切换中英界面语言（见「界面语言」）。
 - `/compact` 压缩会话历史；minimal preset（仅 bash+编辑器）下不可用。
 - `/thinking` 扩展思考显示开关，仅本次界面状态、**不持久化**。

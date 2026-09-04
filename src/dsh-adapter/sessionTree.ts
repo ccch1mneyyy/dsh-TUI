@@ -298,8 +298,7 @@ export interface RewindTarget {
   /**
    * Set when the boundary cuts a turn in the middle: the fork must append a
    * synthetic turn/end for this turn number (the exact shape a real user
-   * interrupt writes — the persistence layer closes crash-orphaned turns the
-   * same way). Undefined when the seed already ends turn-closed.
+   * cancellation writes). Undefined when the seed already ends turn-closed.
    */
   readonly closeTurn?: number
 }
@@ -665,8 +664,15 @@ export function buildSessionTree(
   // surviving root deterministic, and every structural read below goes
   // through parentOf so the cut is observed consistently.
   const cutEdges = new Set<string>()
-  const parentOf = (session: FamilySession): string | undefined =>
-    cutEdges.has(session.id) ? undefined : session.parentSession
+  const parentOf = (session: FamilySession): string | undefined => {
+    if (cutEdges.has(session.id)) return undefined
+    // A parent id without the exact inherited cut proves ancestry, but not
+    // where the fork belongs. Treat that unprovable edge as detached: the
+    // self-contained child remains visible as a root instead of silently
+    // inventing `seedLength = 0`, duplicating/anchoring the branch wrongly.
+    if (session.parentSession !== undefined && session.seedLength === undefined) return undefined
+    return session.parentSession
+  }
   for (const session of sessions) {
     const seen = new Set<string>([session.id])
     let cursor: FamilySession = session
@@ -736,8 +742,8 @@ export function buildSessionTree(
       unloaded: session.unloaded === true,
     })
     const parentId = parentOf(session)
-    const trimFrom = parentId !== undefined && byId.has(parentId)
-      ? Math.min(session.seedLength ?? 0, coverOf(parentId) + 1)
+    const trimFrom = parentId !== undefined && byId.has(parentId) && session.seedLength !== undefined
+      ? Math.min(session.seedLength, coverOf(parentId) + 1)
       : 0
     const own = session.unreadable === true ? [] : extractEntries(session.id, session.events).filter(entry => entry.seq >= trimFrom)
     // Rewind UX facts: own turn ranges (drop-turn confirm warning) and the
@@ -821,9 +827,10 @@ export function buildSessionTree(
   }
   /** Last displayed entry with seq <= boundary, walking up from the parent. */
   const findAnchor = (fork: FamilySession): TreeNode | undefined => {
-    const boundary = (fork.seedLength ?? 0) - 1
+    if (fork.seedLength === undefined) return undefined
+    const boundary = fork.seedLength - 1
     const visited = new Set<string>()
-    let cursorId = fork.parentSession
+    let cursorId = parentOf(fork)
     while (cursorId !== undefined && !visited.has(cursorId)) {
       visited.add(cursorId)
       const holder = byId.get(cursorId)
@@ -895,8 +902,9 @@ export function buildSessionTree(
       const parentId = parentOf(current)
       if (parentId === undefined || !byId.has(parentId)) break
       if (visited.has(parentId)) break
+      if (current.seedLength === undefined) break
       visited.add(parentId)
-      boundary = Math.min(boundary, (current.seedLength ?? 0) - 1)
+      boundary = Math.min(boundary, current.seedLength - 1)
       for (const node of chains.get(parentId)!) {
         if (node.entry !== null && node.entry.seq <= boundary) activePath.add(node.id)
       }

@@ -48,6 +48,13 @@ the interface, and removing it leaves no core modifications behind.
   with a note), history
   search, message selection, inline or alternate-screen rendering, and `/lang`
   zh/en UI language switching.
+- **Pixel whale pet**: one of three randomized startup intros plays on every
+  launch; **clicking the whale pops a heart pass** any time, and with
+  `/settings → whaleIdle` enabled the settled whale keeps fluttering its fins
+  and thumping its tail, swims continuously while the agent works, falls
+  asleep with Z's after 10s of inactivity, and wakes on any work. The 22
+  hand-drawn frames and the idle behaviors are ported from
+  [dsh-ui-whale](https://github.com/lhh010/dsh-ui-whale) by [@lhh010](https://github.com/lhh010).
 - **Timeline navigation**: a Grok-style turn rail covering **every turn
   (folded ones included)** — even when the fold window only exposes the last
   few turns, the full history stays one click away (clicking a folded tick
@@ -210,7 +217,7 @@ For migration from the former `dsh-cc-tui` package and `cc-tui` profile, see
 | `?` | Keybinding menu (responds only when the input is empty) |
 | `Shift+↑` | Message selection mode (`Enter` expands a single message) |
 | `Ctrl+P` | Toggle the startup loaded-context panel while it is on screen; inside `/resume`, pin/unpin the selected session |
-| `Home` / `End`, `Ctrl+A` / `Ctrl+E` | Logical line start / end; `Ctrl+E` is dual-purpose: line end in the input, expand/collapse hidden older messages during transcription |
+| `Home` / `End`, `Ctrl+A` / `Ctrl+E` | `Ctrl+A` opens the subagent dashboard (in-editor `Mod+A` still moves to line start); `Ctrl+E` is dual-purpose: line end in the input, expand/collapse hidden older messages during transcription |
 | `Ctrl+←` / `Ctrl+→` (⌘←/→) | Jump by word |
 | `Ctrl+U` / `Ctrl+K` | Delete before the cursor (to line start) / after the cursor (to line end) |
 | `Ctrl+W` | Delete the previous word |
@@ -509,14 +516,23 @@ responsible for their maintenance and security.
 `dsh-TUI` does not implement a separate sandbox. It uses the filesystem,
 shell, sandbox, and approval policies of the active DSH profile. Permission
 presets come from the mounted DSH `permissionPresets` registry: third-party
-presets appear automatically in the picker in registry order, while only IDs
-accepted by the existing command-token grammar enter completion. `custom` is a
-current-state label only, never a selectable target. Switching always uses the
-official `/permission <preset>` command.
+presets appear automatically in the picker, completion and the `Shift+Tab`
+cycle (excluding `custom`/`status`, canonical presets, duplicate identities
+and unsafe tokens), with the registry's declaration order kept stable across
+refreshes. `custom` is a current-state label only, never a selectable target.
+While the service snapshot is usable, `/permission` is surfaced as a first-class
+local command: switches prefer the official `/permission <preset>` command; when
+the command row never reaches the agent's registry, the TUI falls back to the
+permissionPresets service's own official write path (the same handler the
+command drives — real `permission/preset`/`sandbox/mode`/`approval/policy`
+events, never fabricated by the TUI) and confirms via event/readback; when
+neither path exists it fails loudly instead of silently falling through.
+Exiting plan mode restores the pre-plan atoms first, then returns the durable
+identity to the preset you were on before plan mode (while the registry still
+offers it).
 When the `permissionPresets` service is absent, TUI keeps its legacy three-row
 compatibility roster. A mounted but unusable service is marked unavailable and
-fails closed instead of inventing a roster. If the external `/permission` command
-is not registered, input follows the existing default/model dispatch path. Inspect
+fails closed instead of inventing a roster. Inspect
 the profile before starting it around sensitive credentials or an untrusted
 repository.
 
@@ -527,6 +543,14 @@ for details.
 
 The DeepSeek Harness official WeChat account featured this plugin among its
 early user-built extensions. [View the feature screenshot](screenshots/wechat-official.png).
+
+## Acknowledgments
+
+- The pixel whale's 22 hand-drawn frames (drawn cell by cell in Excel) and
+  its idle behaviors (fin flutters, tail thumps, sleep Z's, click hearts)
+  are ported from **[dsh-ui-whale](https://github.com/lhh010/dsh-ui-whale)**
+  (the DeepSeek Harness web whale-pet plugin, by [@lhh010](https://github.com/lhh010),
+  BSD-3-Clause) — thank you for the art and the inspiration 🐋💜
 
 ## Friends' Links
 

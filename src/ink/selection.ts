@@ -696,8 +696,8 @@ export function shiftAnchor(
  * Whether both ends of the selection are strictly past the SAME edge of
  * [minRow, maxRow] — the fully-off-screen condition. Rows are read through
  * the virtual (pre-clamp) trackers so a clamped-then-reversed scroll
- * evaluates at the TRUE position. Shared by shiftSelectionForFollow's
- * immediate clear and finishSelection's deferred commit-time check.
+ * evaluates at the TRUE position. Called by finishSelection's deferred
+ * commit-time check (shiftSelectionForFollow keeps its own inline copy).
  */
 export function selectionFullyOffEdge(
   s: SelectionState,

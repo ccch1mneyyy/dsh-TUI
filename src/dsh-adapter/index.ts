@@ -195,6 +195,7 @@ export const Config: Schema<Config> = Schema.object({
       plan: Schema.boolean().required(false),
       sandbox: Schema.union(['read-only', 'workspace-write', 'danger-full-access']).required(false),
       approval: Schema.union(['ask', 'never']).required(false),
+      permission: Schema.string().required(false),
     }),
   ).required(false),
 })

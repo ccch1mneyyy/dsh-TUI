@@ -5,6 +5,7 @@ import type { ClickEvent } from '../../ink/events/click-event.js'
 import type { ContextMenuEvent } from '../../ink/events/context-menu-event.js'
 import { useTooltip } from '../Tooltip.js'
 import {
+  formatAbsolute,
   formatBytes,
   formatWhen,
   kindMark,
@@ -60,6 +61,21 @@ export function SessionListRow({
   const mark = kindMark(session.kind)
   const [hovered, setHovered] = useState(false)
   const pinTooltip = useTooltip(t(pinned ? 'resume-menu-unpin' : 'resume-menu-pin'))
+  // Title hover tooltip: the row truncates a long title mid-word; when it
+  // does, the float leads with the full title. The absolute timestamp and
+  // cwd ride along in every case — the facts line shows only relative time
+  // and never the working directory, so that pair is always new information
+  // for telling look-alike sessions apart.
+  const titleText = session.label ?? session.title.text
+  const titleBudget = body - 2 - (mark === undefined ? 0 : 2)
+  const shownTitle = truncateWidth(titleText, titleBudget)
+  const titleTooltip = useTooltip(() => {
+    const parts: string[] = []
+    if (shownTitle !== titleText) parts.push(titleText)
+    parts.push(formatAbsolute(session.updatedAt))
+    if (session.cwd !== '') parts.push(session.cwd)
+    return parts.join('\n')
+  })
 
   const facts: string[] = [formatWhen(session.updatedAt, now)]
   if (session.branch !== undefined) facts.push(session.branch)
@@ -101,12 +117,13 @@ export function SessionListRow({
           <Text color={pinned ? 'remember' : undefined} dimColor={!pinned}>{pinned ? '★ ' : '☆ '}</Text>
         </Box>
         {mark !== undefined && <Text color={mark.color}>{`${mark.glyph} `}</Text>}
-        <Text color={titleColor(session.title.source, focused)} bold={focused}>
-          {truncateWidth(
-            session.label ?? session.title.text,
-            body - 2 - (mark === undefined ? 0 : 2),
-          )}
-        </Text>
+        {/* The tooltip rides ONLY the title text, not the whole line: the
+            pin slot's own tooltip must win over its two cells. */}
+        <Box {...titleTooltip}>
+          <Text color={titleColor(session.title.source, focused)} bold={focused}>
+            {shownTitle}
+          </Text>
+        </Box>
       </Box>
       <Box>
         <Text dimColor>

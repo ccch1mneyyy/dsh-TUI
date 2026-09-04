@@ -104,7 +104,7 @@ import { useAnimationFrame } from '../ink/hooks/use-animation-frame.js'
 import { useExternalVersion } from '../hooks/useExternalVersion.js'
 import { TrajectoryScene } from './TrajectoryScene.js'
 import { AgentView } from './AgentView.js'
-import { extendTrajectory, emptyTrajectory, projectWave, type TrajBuild } from '../dsh-adapter/trajectory/index.js'
+import { extendTrajectory, projectWave, type TrajBuild } from '../dsh-adapter/trajectory/index.js'
 import { miniWakeWidth } from '../components/trajectory/MiniWake.js'
 import { readTrajectorySeen, writeTrajectorySeen } from '../trajectoryPrefs.js'
 import type { SessionEvent } from '../dsh-adapter/types.js'
@@ -120,15 +120,8 @@ import {
   type WorkspaceFlowInput,
 } from './chatOverlay.js'
 
-/** Shared empty snapshot for channels without an event log (legacy stubs). */
+/** Shared empty snapshot for hosts whose channel has no event log. */
 const NO_EVENTS: readonly SessionEvent[] = []
-/** Shared empty build for channels that provide neither seam (stable
- *  identity keeps stub renders churn-free). */
-const EMPTY_TRAJECTORY = emptyTrajectory()
-/** Shared no-op unsubscribe for stub channels without an agent-view feed. */
-const EMPTY_SUBSCRIBE = (): (() => void) => () => {}
-/** Shared empty agent-view rows for stub channels (see EMPTY_TRAJECTORY). */
-const EMPTY_AGENT_VIEW_ROWS: readonly never[] = []
 
 const PERMISSION_RESULT_CELLS = 200
 
@@ -302,15 +295,8 @@ export function Chat({
   React.useSyncExternalStore(subscribeLang, getLang)
   // The pending ask-user-question (DSH user-interaction seam): the model's
   // `ask_user_question` tool parks here until the panel is answered.
-  // useSyncExternalStore re-subscribes whenever the subscribe function
-  // identity changes, so these bindings are stable per store instance
-  // (useCallback) instead of fresh closures per render.
-  const subscribeQuestions = React.useCallback(
-    (listener: () => void) => questionStore.subscribe(listener),
-    [questionStore],
-  )
   const questionSnapshot = React.useSyncExternalStore(
-    subscribeQuestions,
+    listener => questionStore.subscribe(listener),
     () => questionStore.getSnapshot(),
   )
   // The pending tool-approval ask (DSH approval seam): the permission layer
@@ -318,12 +304,8 @@ export function Chat({
   // questionnaire since it gates a tool about to run. Hosts that pass no
   // approvalStore share one inert instance that never holds an ask.
   const approvals = approvalStore ?? (fallbackApprovalStore ??= new ApprovalStore())
-  const subscribeApprovals = React.useCallback(
-    (listener: () => void) => approvals.subscribe(listener),
-    [approvals],
-  )
   const approvalSnapshot = React.useSyncExternalStore(
-    subscribeApprovals,
+    listener => approvals.subscribe(listener),
     () => approvals.getSnapshot(),
   )
   // The pending managed plugin dialog (tuiDialogs seam): a plugin's
@@ -332,23 +314,15 @@ export function Chat({
   // plugin's question) and above the questionnaire. Hosts without the
   // extensions row share one inert store that never holds a dialog.
   const dialogs = extensionDialogs ?? (fallbackDialogStore ??= new TuiDialogStore())
-  const subscribeDialogs = React.useCallback(
-    (listener: () => void) => dialogs.subscribe(listener),
-    [dialogs],
-  )
   const dialogSnapshot = React.useSyncExternalStore(
-    subscribeDialogs,
+    listener => dialogs.subscribe(listener),
     () => dialogs.getSnapshot(),
   )
   // Plugin status-line contributions (tuiStatus seam): keyed texts joined
   // into one line above the prompt.
   const statusContributions = extensionStatus ?? (fallbackStatusStore ??= new TuiStatusStore())
-  const subscribeStatus = React.useCallback(
-    (listener: () => void) => statusContributions.subscribe(listener),
-    [statusContributions],
-  )
   const statusEntries = React.useSyncExternalStore(
-    subscribeStatus,
+    listener => statusContributions.subscribe(listener),
     () => statusContributions.getSnapshot(),
   )
   // Shortcut handler failures surface as toasts (the registry also logs
@@ -485,13 +459,10 @@ export function Chat({
   /** Live agent-view rows: the prompt footer's "← N agents" hint reads the
    *  needs-input count from here (cached snapshot in the channel). The
    *  `?.()` fallbacks keep pre-agent-view test stubs (channel facades in
-   *  scripts/*) rendering — the real channel always provides the seams. The
-   *  fallbacks are module-level constants: useSyncExternalStore must see a
-   *  stable subscribe/getSnapshot identity or it re-subscribes (and
-   *  snapshot-compares) on every render.
-   */
+   *  scripts/*) rendering — the real channel always provides the seams. */
+  const EMPTY_AGENT_VIEW_ROWS: readonly never[] = []
   const agentViewRows = React.useSyncExternalStore(
-    channel.subscribeAgentView ?? EMPTY_SUBSCRIBE,
+    listener => channel.subscribeAgentView?.(listener) ?? (() => {}),
     () => channel.agentViewRows?.() ?? EMPTY_AGENT_VIEW_ROWS,
   )
   const backgroundAgentsNeedingInput = agentViewRows.filter(
@@ -560,12 +531,6 @@ export function Chat({
     auto?: boolean
     expanded?: boolean
     rowsAtTrigger?: number
-    /** rowsGeneration when the auto run started. Row ids are
-     * transcript-SCOPED: /clear restarts them at 0 under the same agentId,
-     * so a same-generation comparison (`lastUserRowId > rowsAtTrigger`)
-     * alone would keep a stale recap on screen long after its transcript
-     * was deleted — in a NEW generation, any new user row retires it. */
-    genAtTrigger?: number
   } | null>(null)
   const recapAbortRef = React.useRef<AbortController | null>(null)
   const closeRecap = () => {
@@ -610,7 +575,7 @@ export function Chat({
     const controller = new AbortController()
     recapAbortRef.current = controller
     const lastUserId = channel.rows.filter(row => row.kind === 'user').at(-1)?.id ?? -1
-    setRecap({ raw: '', summary: '', error: undefined, done: false, titleApplied: false, auto: true, expanded: false, rowsAtTrigger: lastUserId, genAtTrigger: channel.rowsGeneration })
+    setRecap({ raw: '', summary: '', error: undefined, done: false, titleApplied: false, auto: true, expanded: false, rowsAtTrigger: lastUserId })
     void channel.recapRecent({
       signal: controller.signal,
       onText: delta => setRecap(prev => (prev ? { ...prev, raw: prev.raw + delta } : prev)),
@@ -627,71 +592,18 @@ export function Chat({
   }, [autoRecapSessionId])
   // The user starts a new message → the auto recap has served its purpose
   // (catching them up) and bows out. A newer user row is the signal; the
-  // assistant's own streamed rows don't count. `lastUserRowId` is tracked
-  // amortized O(1) per render: within ONE transcript generation user rows
-  // are only ever APPENDED to the tail (folds keep the newest), so only rows
-  // appended past the last scan can hold a newer user row. The scan state
-  // keys on BOTH agentId and rowsGeneration: `/clear` keeps the agentId and
-  // REUSES row ids from 0, so agentId alone cannot detect the reset — a
-  // stale `scanned` would suppress rescans until the new transcript grew
-  // past the old length, leaving lastUserRowId (and the auto-recap retire
-  // below) stuck on the previous transcript. `rows.length < scanned` is a
-  // defensive reset for hosts without a generation seam.
-  const lastUserRowStateRef = React.useRef<{
-    agentId: string
-    rowsGeneration: number | undefined
-    scanned: number
-    id: number
-  }>({
-    agentId: '',
-    rowsGeneration: undefined,
-    scanned: 0,
-    id: -1,
-  })
-  const lastUserRowState = lastUserRowStateRef.current
-  let lastUserRowId = lastUserRowState.id
-  const transcriptEpochChanged =
-    lastUserRowState.agentId !== channel.agentId ||
-    lastUserRowState.rowsGeneration !== channel.rowsGeneration ||
-    channel.rows.length < lastUserRowState.scanned
-  if (transcriptEpochChanged) {
-    lastUserRowId = -1
-    for (let index = channel.rows.length - 1; index >= 0; index--) {
-      if (channel.rows[index]?.kind === 'user') {
-        lastUserRowId = channel.rows[index]!.id
-        break
-      }
-    }
-    lastUserRowStateRef.current = {
-      agentId: channel.agentId,
-      rowsGeneration: channel.rowsGeneration,
-      scanned: channel.rows.length,
-      id: lastUserRowId,
-    }
-  } else if (channel.rows.length > lastUserRowState.scanned) {
-    for (let index = lastUserRowState.scanned; index < channel.rows.length; index++) {
-      const row = channel.rows[index]
-      if (row?.kind === 'user' && row.id > lastUserRowId) lastUserRowId = row.id
-    }
-    lastUserRowState.scanned = channel.rows.length
-    lastUserRowState.id = lastUserRowId
-  }
+  // assistant's own streamed rows don't count.
+  const lastUserRowId = channel.rows.filter(row => row.kind === 'user').at(-1)?.id ?? -1
   React.useEffect(() => {
     if (
       recap !== null &&
       recap.auto &&
       recap.rowsAtTrigger !== undefined &&
-      lastUserRowId >= 0 &&
-      // Row ids are transcript-SCOPED: within the recap's own generation a
-      // strictly newer user row retires it; in a NEW generation (/clear
-      // restarted ids at 0 under the same agentId) ANY new user row does —
-      // the old absolute-id comparison would wait for the fresh transcript
-      // to outgrow the deleted one's id space before retiring.
-      (recap.genAtTrigger !== channel.rowsGeneration || lastUserRowId > recap.rowsAtTrigger)
+      lastUserRowId > recap.rowsAtTrigger
     ) {
       closeRecap()
     }
-  }, [lastUserRowId, recap, channel.rowsGeneration])
+  }, [lastUserRowId, recap])
   /**
    * Session switches that do not go through `/new` (agent-view attach,
    * backgrounding, `/resume`) remount the transcript tree without resetting
@@ -777,7 +689,7 @@ export function Chat({
 
   /** Open the scene, mark failures seen, and retire the key hint for good. */
   const openScene = React.useCallback(() => {
-    seenFailuresRef.current = trajectoryRef.current.counts.errors
+    seenFailuresRef.current = trajectoryRef.current?.counts.errors ?? 0
     setTrajectorySeen(previous => {
       if (!previous) writeTrajectorySeen()
       return true
@@ -892,27 +804,6 @@ export function Chat({
     (listener: () => void) => (handle ? handle.subscribe(listener) : () => {}),
     [handle],
   )
-  // The sticky header pins the turn owning the viewport top row
-  // (timeline.activeId, reported by MessageList) — scrolled up to an old
-  // turn, it carries THAT turn's prompt, not the latest one. The lookup is
-  // memoized: a user row's text is immutable after creation, so the result
-  // can only change when the anchor id or the session changes (row ids
-  // restart at 0 on a swap). Declared BEFORE the screen-swap early returns
-  // (scene/browser/agent-view): a hook placed after them would drop from
-  // the hook list while a replacement screen is up, and React would throw
-  // "Rendered fewer hooks than expected" on the way back.
-  const anchorUserRowId = timeline.activeId
-  const anchorUserText = React.useMemo(
-    () =>
-      anchorUserRowId === null
-        ? null
-        : channel.rows.find(row => row.id === anchorUserRowId)?.text ?? null,
-    // oxlint-disable-next-line react-hooks/exhaustive-deps
-    // rowsGeneration is part of the key: /clear / rewind reuse row ids from
-    // 0 while agentId stays — without it the memo could serve the PREVIOUS
-    // transcript's prompt for the new id-identical anchor row.
-    [anchorUserRowId, channel.agentId, channel.rowsGeneration],
-  )
 
   // "N new messages" pill: new rows whose top edge is still BELOW the
   // viewport bottom. The count decrements as the user scrolls down through
@@ -947,13 +838,10 @@ export function Chat({
   // Live view into the prompt's text for the Ctrl+C rule (clears text when
   // non-empty; the double-press exit only arms on an empty input).
   const promptControllerRef = React.useRef<PromptController | null>(null)
-  // Publish the external-injection controller (dsh.nvim etc.) so the
-  // adapter-owned socket can append to the prompt and submit. `submit`
+  // Publish the external-injection controller (dsh.nvim etc.) every render so
+  // the adapter-owned socket can append to the prompt and submit. `submit`
   // mirrors an Enter press: `channel.submit` routes through the DSH inbox
   // (queued after the current turn while working), then the input is cleared.
-  // Mounted once per channel: every closure reads the LIVE prompt controller
-  // through the ref at call time, so the published value never goes stale —
-  // re-running this effect on every commit would churn the ref for nothing.
   React.useEffect(() => {
     if (!injectControllerRef) return
     injectControllerRef.current = {
@@ -976,10 +864,7 @@ export function Chat({
     return () => {
       injectControllerRef.current = null
     }
-    // oxlint-disable-next-line react-hooks/exhaustive-deps -- the ref and
-    // channel identities are stable for the life of the mount; the closures
-    // read live state through refs, so no per-render refresh is needed.
-  }, [channel, injectControllerRef])
+  })
   const requestExit = () => {
     if (exitPendingRef.current) {
       onExit()
@@ -1178,10 +1063,18 @@ export function Chat({
    * result text lands as a notification. `rawInput` carries the text after
    * the command name (`/plan off` → ` off`).
    */
-  /** Route every permission switch through the official command path. */
+  /** Route every permission switch through the official command path when it
+   *  is registered; otherwise fall back to the permission-presets service's
+   *  own write path (the same handler the command drives) so the picker and
+   *  typed `/permission <preset>` keep working on compositions where the
+   *  command row never reaches this agent's registry. */
   const runPermissionCommand = (rawInput: string): void => {
     const originAgentBinding = channel.agentBindingGeneration
-    void channel.runExternalCommand('permission', rawInput).then((text) => {
+    const mounted = channel.commandList.some(command => command.external && command.name === 'permission')
+    const run = mounted
+      ? channel.runExternalCommand('permission', rawInput)
+      : channel.runPermissionPreset(rawInput.trim()).then(ok => (ok ? '' : undefined))
+    void run.then((text) => {
       if (channel.agentBindingGeneration !== originAgentBinding) return
       if (text === undefined) {
         channel.notify(t('command-not-found', { name: 'permission' }), { color: 'error' })
@@ -1981,18 +1874,24 @@ export function Chat({
         channel.notify(t('login-logout-hint'))
         return true
       case 'permission': {
-        // The command itself is registered by dsh-sandbox-policy (dsh-base
-        // permission-presets row): bare `/permission` opens the preset
-        // picker and
-        // Enter dispatches `/permission <preset>` through the same
-        // external-command path a hand-typed argument takes. `/permission
-        // status` prints the policy explainer; other arguments pass through
-        // verbatim.
-        // When the row is not mounted the default external path (or the
-        // model, when nothing is registered) wins.
+        // The command itself is registered by the permission-presets row
+        // (dsh-base): bare `/permission` opens the preset picker and Enter
+        // dispatches `/permission <preset>`; `/permission status` prints the
+        // policy explainer; other arguments pass through verbatim.
+        // The row may be mounted as a service without its command ever
+        // reaching this agent's registry (composition-dependent) — when the
+        // service snapshot is usable the TUI still owns the entry and
+        // switches through the service write path (never the model).
         const mounted = channel.commandList.some(command => command.external && command.name === 'permission')
+        let serviceUsable = false
+        try {
+          serviceUsable = channel.permissionPresets().availability === 'runtime'
+        } catch {
+          serviceUsable = false
+        }
+        const reachable = mounted || serviceUsable
         const parts = rawInput.trim().split(/\s+/).filter(Boolean)
-        if (mounted && parts[0] === 'status') {
+        if (reachable && parts[0] === 'status') {
           setHelpOpen(false)
           const snapshot = channel.permissionPresets()
           if (snapshot.options.some(option => option.value === 'status')) {
@@ -2011,7 +1910,7 @@ export function Chat({
           ])
           return true
         }
-        if (mounted && parts.length === 0) {
+        if (reachable && parts.length === 0) {
           setHelpOpen(false)
           const snapshot = channel.permissionPresets()
           if (snapshot.availability === 'unavailable' || snapshot.options.length === 0) {
@@ -2035,7 +1934,7 @@ export function Chat({
           })
           return true
         }
-        if (mounted) {
+        if (reachable) {
           setHelpOpen(false)
           runPermissionCommand(rawInput)
           return true
@@ -2374,45 +2273,22 @@ export function Chat({
   }
 
   /**
-   * The session's trajectory projection, folded incrementally by the channel
-   * at EVENT time — never here. Render reads the ready build (a stable
-   * channel-owned object), so no render touches the session event getter.
+   * The session's trajectory projection, folded here rather than inside the
+   * scene.
    *
-   * Legacy/headless channels that only provide `traceEvents()` (test stubs,
-   * bare embeds) fall back to a snapshot-identity-cached fold here: the
-   * getter is called at most ONCE per event-snapshot identity, and the
-   * fold itself is incremental, so the fallback stays O(1) per render on an
-   * unchanged snapshot. Real channels provide `trajectory()` and never hit
-   * this path.
+   * Two things fall out of owning it at this level: the status-line chip can
+   * show live counters without a second fold, and opening the scene is
+   * instant because the build is already warm. The fold is incremental — it
+   * consumes only events appended since the last render — so an idle
+   * conversation pays nothing for it.
    */
-  const trajectoryFallbackRef = React.useRef<{
-    version: number
-    events: readonly SessionEvent[]
-    build: TrajBuild
-  } | null>(null)
-  const trajectory = channel.trajectory
-    ? channel.trajectory()
-    : (() => {
-        const cached = trajectoryFallbackRef.current
-        // Version gate: the getter is consulted only when the channel
-        // version moved (the stub's own change signal); renders triggered
-        // by anything else (animation ticks, local state) pay nothing.
-        if (cached !== null && cached.version === channel.version) return cached.build
-        const events = channel.traceEvents?.() ?? NO_EVENTS
-        if (cached !== null && cached.events === events) {
-          // Same snapshot, new version (a notify without session events):
-          // reuse the build — the fold stays incremental.
-          trajectoryFallbackRef.current = { version: channel.version, events, build: cached.build }
-          return cached.build
-        }
-        const build = extendTrajectory(cached?.build ?? null, events)
-        trajectoryFallbackRef.current = { version: channel.version, events, build }
-        return build
-      })()
-  // Mirrors the current build for callbacks defined before `trajectory` is in
-  // scope (openScene) without re-creating them per render.
-  const trajectoryRef = React.useRef(trajectory)
-  trajectoryRef.current = trajectory
+  const trajectoryRef = React.useRef<TrajBuild | null>(null)
+  trajectoryRef.current = extendTrajectory(
+    trajectoryRef.current,
+    // oxlint-disable-next-line typescript/no-unnecessary-condition -- runtime guard: headless hosts render Chat with a partial channel
+    channel.traceEvents?.() ?? NO_EVENTS,
+  )
+  const trajectory = trajectoryRef.current
 
   /**
    * The status-line wake.
@@ -2437,32 +2313,11 @@ export function Chat({
         // rather than as short. It simply grows as the session does.
         : projectWave(trajectory.nodes, Math.min(wakeWidth, trajectory.nodes.length), 'sequence'),
     // The node array is mutated in place by the incremental fold, so its
-    // identity never changes and its length misses in-place closes (a
-    // tool/result only flips an existing node's status). The build's
-    // monotonic revision covers every consumed event — including closes.
+    // length is the honest dependency; its identity never changes.
     // oxlint-disable-next-line react-hooks/exhaustive-deps
-    [trajectory.nodes, trajectory.counts.rows, trajectory.revision, wakeWidth],
+    [trajectory.nodes, trajectory.counts.rows, wakeWidth],
   )
-  // The mini-wake clock runs ONLY while the strip can actually be seen: the
-  // main chat surface is rendered (no replacement screen owns the viewport —
-  // a swapped-out screen leaves the wake ref's element unmounted and the
-  // viewport hook's isVisible stale at its last value), the terminal is wide
-  // enough for a strip (miniWakeWidth > 0), the trajectory chrome is enabled,
-  // and a turn is actually working. All four are read every render, so the
-  // animation unsubscribes the moment any condition drops.
-  const mainSurfaceRendered =
-    !sceneOpen &&
-    channel.pluginScene === undefined &&
-    !agentViewOpen &&
-    !browserOpen &&
-    !treeOpen &&
-    !settingsOpen &&
-    subagentDetailId === null &&
-    !jobsPanelOpen &&
-    !subagentDashboardOpen
-  const wakeTickActive =
-    channel.working && wakeWidth > 0 && mainSurfaceRendered && channel.statusBar?.trajectory === true
-  const [wakeTickRef, wakeTime] = useAnimationFrame(wakeTickActive ? 120 : null)
+  const [wakeTickRef, wakeTime] = useAnimationFrame(channel.working ? 120 : null)
   /**
    * The key hint beside the strip retires itself once the trajectory has been
    * opened — teaching belongs in the first minute, not on every frame forever.
@@ -2486,18 +2341,8 @@ export function Chat({
       if (row?.kind === 'tool' && row.tool?.status === 'error') return row.id
     }
     return null
-    // The newest failed tool row can only change when the trajectory's error
-    // count grows or the session swaps — NOT on every channel version bump.
-    // Keying on those (instead of channel.version) keeps the reverse scan
-    // off the streaming frame path: an idle/long session re-renders without
-    // touching rows at all, and a streaming session scans only when an error
-    // actually lands.
-    // rowsGeneration must be part of the key: /clear reuses row ids from 0
-    // under the SAME agentId, so the memoized id could otherwise point at a
-    // fresh, healthy row in the new transcript and pin the stale failure
-    // footnote under it.
     // oxlint-disable-next-line react-hooks/exhaustive-deps
-  }, [trajectory.counts.errors, channel.agentId, channel.rowsGeneration, unreadFailures])
+  }, [channel.rows, channel.version, unreadFailures])
 
   // Row seeking under layout virtualization: a mounted row seeks directly;
   // an unmounted one is force-mounted first, then sought by the completion
@@ -3524,7 +3369,7 @@ export function Chat({
     return fullscreen ? scene : <AlternateScreen>{scene}</AlternateScreen>
   }
 
-  // Subagent dashboard: displays all active and completed subagents.
+  // Jobs panel: background jobs (running/killed) with kill/inspect actions.
   // Like the browser and settings, it replaces the conversation entirely.
   if (jobsPanelOpen) {
     const panel = (
@@ -3591,6 +3436,16 @@ export function Chat({
   }) && !(overlay.kind === 'permission'
     && (approvalSnapshot !== null || questionSnapshot !== null || dialogSnapshot !== null))
 
+  // The sticky header pins the turn owning the viewport top row
+  // (timeline.activeId, reported by MessageList) — scrolled up to an old
+  // turn, it carries THAT turn's prompt, not the latest one.
+  // channel.rows is a live in-place array, so the lookup is per-render.
+  const anchorUserRowId = timeline.activeId
+  const anchorUserText =
+    anchorUserRowId === null
+      ? null
+      : channel.rows.find(row => row.id === anchorUserRowId)?.text ?? null
+
   return (
     <Box ref={wakeTickRef} flexDirection="column" flexGrow={1} width="100%">
       {!isSticky && anchorUserText && (
@@ -3626,6 +3481,8 @@ export function Chat({
           effort={channel.reasoningEffort}
           cwd={channel.displayCwd}
           whale={channel.whale}
+          whaleIdle={channel.whaleIdle}
+          working={channel.working}
           // Resuming a long session skips the ~3.4s opening animation: it
           // keeps firing low-frequency React commits that compete with the
           // transcript mount batches (and the first wheel events) for the
@@ -3649,8 +3506,6 @@ export function Chat({
         )}
         <MessageList
           rows={channel.rows}
-          streamingVersion={channel.rowsStreamingVersion}
-          rowsGeneration={channel.rowsGeneration}
           failureHintRowId={failureHintRowId}
           failureHint={t('traj-hint-failure', { key: `${modLabel}t` })}
           expanded={expanded}
@@ -3787,6 +3642,11 @@ export function Chat({
             {statusEntries.map(entry => entry.text).join(' · ')}
           </Text>
         )}
+        {/* 输入簇：可替换输入行链 + 状态行 + 瞬态浮层。浮层锚点收窄到本簇
+            顶边（= 输入行顶边），picker 紧贴输入框向上展开，盖住其上
+            todo/spinner/转录尾部行（用户接受的取舍），自身零布局高度、
+            不推动帧布局。 */}
+        <Box flexDirection="column" flexShrink={0}>
         {approvalPanelNode !== null ? (
           approvalPanelNode
         ) : dialogSnapshot !== null ? (
@@ -3886,11 +3746,13 @@ export function Chat({
                 }
           }
         />
-        {/* 瞬态面板浮层：absolute + bottom:'100%' 钉在本 chrome Box 顶边，向上
-            覆盖转录尾部行，自身零布局高度。in-flow 挂载会让帧高随面板开关涨落，
-            把帧顶行滚进 scrollback 并在关闭重绘时二次写入（每切一次 /model 多
-            一份启动画的根因）。maxHeight 预留 prompt/statusline 行，防短会话
-            高列表探出帧顶。整体条件挂载：见 dialogOverlayOpen 注释。 */}
+        {/* 瞬态面板浮层：absolute + bottom:'100%' 钉在输入簇 Box 顶边（=
+            输入行顶边），紧贴输入框向上覆盖其上 todo/spinner/转录尾部行，
+            自身零布局高度。in-flow 挂载会让帧高随面板开关涨落，把帧顶行滚进
+            scrollback 并在关闭重绘时二次写入（每切一次 /model 多一份启动画
+            的根因）。浮层盖住 todo 是刻意取舍（贴输入框优先）；maxHeight
+            预留 prompt/statusline 行，防短会话高列表探出帧顶。整体条件
+            挂载：见 dialogOverlayOpen 注释。 */}
         {dialogOverlayOpen && (
         <OverlayAbove maxHeight={Math.max(terminalRows - 8, 1)}>
           {overlay.kind === 'thinking' && (
@@ -4208,6 +4070,7 @@ export function Chat({
           {overlay.kind === 'search' && <TranscriptSearchBar query={searchQuery} cursorOffset={searchCursor} count={searchCount} current={searchCurrent} />}
         </OverlayAbove>
         )}
+        </Box>
       </Box>
       {/* Tooltip 悬停浮层：absolute 零布局高度，挂在根 Box 最后确保盖在
           其余内容之上（yoga 的 absolute 相对父级，根 Box 原点即屏原点，

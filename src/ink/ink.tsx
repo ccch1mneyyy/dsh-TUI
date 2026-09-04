@@ -11,11 +11,10 @@ import { getYogaCounters } from '../native-ts/yoga-layout/index.js';
 import { logForDebugging } from '../utils/debug.js';
 import { logError } from '../utils/log.js';
 import { format } from 'util';
-import type { Writable } from 'stream';
 import { colorize } from './colorize.js';
 import App from './components/App.js';
 import type { CursorDeclaration, CursorDeclarationSetter } from './components/CursorDeclarationContext.js';
-import { DRAIN_BACKOFF_BASE_MS, DRAIN_BACKOFF_MAX_MS, FRAME_INTERVAL_MS, PTY_BACKLOG_BYTES } from './constants.js';
+import { FRAME_INTERVAL_MS, PTY_BACKLOG_BYTES } from './constants.js';
 import * as dom from './dom.js';
 import { beginGeometryFrame, endGeometryFrame, GEOMETRY_TRACE_ENABLED, noteFrameCause } from './geometry-trace.js';
 import { callWithUpdateOverflowGuard, installNestedUpdateOverflowProcessGuard } from './update-overflow-guard.js';
@@ -85,36 +84,11 @@ export default class Ink {
   private readonly log: LogUpdate;
   private readonly terminal: Terminal;
   private app: App | null = null;
-  // The last live App ref, kept for the shutdown phases: React detaches the
-  // ref (setAppRef(null)) while unmounting the tree, but concludeShutdown
-  // runs AFTER the tree is gone (unmount's finally, or the finishExit
-  // funnel behind an app-driven exit) and still needs the component for its
-  // raw-mode bookkeeping (borrow drain, cooked restore, readable-pump
-  // detach) — a null ref there would silently skip it and leak the pump.
-  private shutdownApp: App | undefined;
   private scheduleRender: (() => void) & {
     cancel?: () => void;
   };
   // Ignore last render after unmounting a tree to prevent empty output before exit
   private isUnmounted = false;
-  // Shutdown phase state machine: 0 = live, 1 = beginShutdown ran (latched,
-  // raw mode still held), 2 = concludeShutdown ran (cooked restored). The
-  // guards make the phases idempotent and record how far teardown got, so a
-  // throwing cleanup step can neither skip later steps nor re-run earlier
-  // ones when the exit funnel and a late unmount() race.
-  private shutdownPhase: 0 | 1 | 2 = 0;
-  // Set when unmount() itself wrote the terminal cleanup block (React
-  // error-boundary / signal-exit path): finishExit then skips re-writing
-  // DISABLE_MOUSE_TRACKING / EXIT_ALT_SCREEN and only parks the cursor and
-  // prints the notice.
-  private exitCleanupWritten = false;
-  // Set when the exit was driven by the app itself (Ctrl+C, error boundary,
-  // a component calling exit()): the plugin's exit funnel observes the
-  // settled exit promise and runs finishExit, which owns the cooked-mode
-  // restore (concludeShutdown) after its raw-mode settle window. External
-  // unmounts (host teardown, signal-exit) have no funnel behind them, so
-  // unmount() restores cooked mode itself.
-  private appDrivenExit = false;
   private isPaused = false;
   private readonly container: FiberRoot;
   private rootNode: dom.DOMElement;
@@ -129,20 +103,11 @@ export default class Ink {
   private readonly unsubscribeTTYHandlers?: () => void;
   private terminalColumns: number;
   private terminalRows: number;
-  /** Columns the Yoga root was last constrained with (see onComputeLayout). */
-  private lastLayoutColumns = -1;
   private currentNode: ReactNode = null;
   private frontFrame: Frame;
   private backFrame: Frame;
   private lastPoolResetTime = performance.now();
   private drainTimer: ReturnType<typeof setTimeout> | null = null;
-  /** True while the stream holds unflushed output above the backlog gate;
-   *  frame writes are skipped (coalesced) until the stream drains. */
-  private backpressured = false;
-  /** The pending stdout 'drain' listener (one per stream). */
-  private drainListener: (() => void) | null = null;
-  /** Fallback re-probe delay while backpressured (bounded backoff). */
-  private drainBackoffMs = DRAIN_BACKOFF_BASE_MS;
   // Every scheduled microtask carries the generation that created it. Immediate
   // renders invalidate older trailing work before it can append an old frame.
   private renderGeneration = 0;
@@ -330,23 +295,8 @@ export default class Ink {
       }
       if (this.rootNode.yogaNode) {
         const t0 = performance.now();
-        const root = this.rootNode.yogaNode;
-        // setWidth marks the WHOLE tree dirty — calling it with an unchanged
-        // value would force a full layout pass on every commit (idle commits
-        // included). Only touch the constraint when the terminal width
-        // actually changed; handleResize re-renders with the new size, so
-        // the first commit after a resize still re-constrains.
-        if (this.lastLayoutColumns !== this.terminalColumns) {
-          this.lastLayoutColumns = this.terminalColumns;
-          root.setWidth(this.terminalColumns);
-        }
-        // Clean-tree early bail: every style/text mutation marks its node
-        // dirty (the engine's own dirty-skip depends on it), so a fully
-        // clean tree with unchanged constraints has nothing to recompute —
-        // skip the layout walk (and its round pass) entirely.
-        if (root.isDirty()) {
-          root.calculateLayout(this.terminalColumns);
-        }
+        this.rootNode.yogaNode.setWidth(this.terminalColumns);
+        this.rootNode.yogaNode.calculateLayout(this.terminalColumns);
         const ms = performance.now() - t0;
         recordYogaMs(ms);
         const c = getYogaCounters();
@@ -443,8 +393,6 @@ export default class Ink {
     this.renderGeneration++;
     this.pendingRenderGeneration = null;
     this.scheduleRender.cancel?.();
-    this.detachDrainListener();
-    this.backpressured = false;
     if (this.drainTimer !== null) {
       clearTimeout(this.drainTimer);
       this.drainTimer = null;
@@ -616,14 +564,7 @@ export default class Ink {
     this.renderGeneration++;
     this.pendingRenderGeneration = null;
     this.scheduleRender.cancel?.();
-    // A fresh frame is being produced right now — any pending drain-wait
-    // (listener or timer) is obsolete; this render re-arms what it needs.
-    // EXCEPT while backpressured: the drain event may already have been
-    // emitted before the listener attached (a one-shot signal), and the
-    // backing-off re-probe is then the ONLY recovery path — cancelling it
-    // here on every animation render would deadlock the writer.
-    this.detachDrainListener();
-    if (this.drainTimer !== null && !this.backpressured) {
+    if (this.drainTimer !== null) {
       clearTimeout(this.drainTimer);
       this.drainTimer = null;
     }
@@ -641,94 +582,31 @@ export default class Ink {
    *    (DECSTBM + ~10 patches); scroll throughput is unchanged.
    *  - IN-FLIGHT GATE: while stdout still holds unflushed bytes above
    *    PTY_BACKLOG_BYTES (slow ConPTY round trip, ssh link), queue nothing
-   *    further — wait for the stream's OWN drain event instead of
-   *    re-probing at quarter interval (a 250Hz busy loop that never
-   *    advances while the terminal stays saturated). A bounded fallback
-   *    timer (backing off 250ms → 1s) covers streams that never emit
-   *    drain; each fire re-checks the backlog and either resumes or
-   *    re-arms. Grok's equivalent (in_flight_target + writer ack) exists
-   *    to keep latency bounded under exactly this backpressure; without it
-   *    each stacked frame adds its full render+write to the
-   *    input→paint latency, which reads as sticky, laggy scrolling on
-   *    Windows terminals.
+   *    further — re-probe at quarter interval instead. Grok's equivalent
+   *    (in_flight_target + writer ack) exists to keep latency bounded
+   *    under exactly this backpressure; without it each stacked frame adds
+   *    its full render+write to the input→paint latency, which reads as
+   *    sticky, laggy scrolling on Windows terminals.
    *
    * The gate holds only DRAIN frames; React-driven renders (keystrokes,
    * streaming) still render via the normal throttle — user-visible updates
    * must never wait behind scroll output.
    */
   private scheduleDrain(): void {
-    const stdout = this.options.stdout as Writable & { writableLength?: number };
+    if (this.drainTimer !== null) return;
+    const stdout = this.options.stdout;
     const backlog =
-      typeof stdout.writableLength === 'number'
-        ? stdout.writableLength
+      typeof (stdout as { writableLength?: number }).writableLength === 'number'
+        ? (stdout as { writableLength: number }).writableLength
         : 0;
-    // Fast path only when the writer is NOT backpressured: write() === false
-    // is the authoritative signal (a stream with a small high-water mark can
-    // reject writes while writableLength is still under the threshold), and
-    // the backlog check is an additional bound, never a way to override a
-    // rejected write into a 4ms retry loop.
-    if (!this.backpressured && backlog <= PTY_BACKLOG_BYTES) {
-      if (this.drainTimer !== null) return;
-      this.drainTimer = setTimeout(this.renderNow, FRAME_INTERVAL_MS >> 2);
+    if (backlog > PTY_BACKLOG_BYTES) {
+      this.drainTimer = setTimeout(() => {
+        this.drainTimer = null;
+        this.scheduleDrain();
+      }, FRAME_INTERVAL_MS >> 2);
       return;
     }
-    // Backpressure path: wait for the stream's own drain event (fires once
-    // the buffered bytes flush after a rejected write); a bounded, backing-
-    // off re-probe covers streams that never emit it. The re-probe
-    // OPTIMISTICALLY clears the flag at the slow cadence (250ms→1s) — the
-    // write result re-asserts the true state — so a stream that silently
-    // recovered resumes painting without ever busy-looping. Never a fixed
-    // 4ms poll while backpressured.
-    this.backpressured = true;
-    // ALWAYS ensure the drain listener exists while backpressured — even
-    // when the fallback timer is already armed. renderNow() detaches the
-    // listener on every immediate render (obsolete-wait invalidation) but
-    // deliberately KEEPS the backoff timer; if this early-returned on the
-    // armed timer, a drain event landing in that window would be missed and
-    // recovery would degrade from drain-first (~instant) to polling
-    // (250ms→1s backoff). Listener first, timer second.
-    this.attachDrainListener();
-    if (this.drainTimer !== null) return;
-    this.drainTimer = setTimeout(() => {
-      this.drainTimer = null;
-      if (this.isUnmounted) return;
-      const nowBacklog =
-        typeof stdout.writableLength === 'number'
-          ? stdout.writableLength
-          : 0;
-      if (nowBacklog <= PTY_BACKLOG_BYTES) {
-        // The stream looks drained (or never reports a backlog): try a
-        // frame; the write result re-asserts the gate.
-        this.backpressured = false;
-      }
-      this.scheduleDrain();
-    }, this.drainBackoffMs);
-    this.drainBackoffMs = Math.min(DRAIN_BACKOFF_MAX_MS, this.drainBackoffMs * 2);
-  }
-
-  /** Arm the one-per-stream 'drain' listener; a no-op when already armed. */
-  private attachDrainListener(): void {
-    if (this.drainListener !== null) return;
-    const stdout = this.options.stdout;
-    const handler = (): void => {
-      this.drainListener = null;
-      stdout.removeListener('drain', handler);
-      if (this.isUnmounted || this.isPaused) return;
-      // The stream drained: clear the gate so this render actually writes
-      // (the write result re-asserts the true backpressure state).
-      this.backpressured = false;
-      this.renderNow();
-    };
-    this.drainListener = handler;
-    stdout.once('drain', handler);
-  }
-
-  /** Cancel the drain listener; keeps the timer handling intact. */
-  private detachDrainListener(): void {
-    if (this.drainListener !== null) {
-      this.options.stdout.removeListener('drain', this.drainListener);
-      this.drainListener = null;
-    }
+    this.drainTimer = setTimeout(this.renderNow, FRAME_INTERVAL_MS >> 2);
   }
 
   onRender() {
@@ -739,10 +617,7 @@ export default class Ink {
     // Entering a render cancels any pending drain tick — this render will
     // handle the drain (and re-schedule below if needed). Prevents a
     // wheel-event-triggered render AND a drain-timer render both firing.
-    // While backpressured this render SKIPS its write (see the gate below),
-    // so it does not handle the drain — keep the backing-off re-probe
-    // armed or the writer deadlocks (drain may already have been emitted).
-    if (this.drainTimer !== null && !this.backpressured) {
+    if (this.drainTimer !== null) {
       clearTimeout(this.drainTimer);
       this.drainTimer = null;
     }
@@ -1013,10 +888,9 @@ export default class Ink {
     // implementation deviates from xterm and garbles scrolling content.
     isDecstbmSafe());
     const diffMs = performance.now() - tDiff;
-    // NOTE: frontFrame/backFrame are NOT swapped here — the candidate frame
-    // may be skipped by the backpressure gate below, and the diff engine
-    // must keep comparing against the last frame the terminal actually
-    // received. The swap happens in the write-success branch.
+    // Swap buffers
+    this.backFrame = this.frontFrame;
+    this.frontFrame = frame;
 
     // Periodically reset char/hyperlink pools to prevent unbounded growth
     // during long sessions. 5 minutes is infrequent enough that the O(cells)
@@ -1045,14 +919,7 @@ export default class Ink {
     const optimized = optimize(diff);
     const optimizeMs = performance.now() - tOptimize;
     const hasDiff = optimized.length > 0;
-    // Backpressure gate, computed BEFORE the optimized patch list is built:
-    // write() === false is the authoritative signal (a stream with a small
-    // high-water mark can reject writes while writableLength is still below
-    // the threshold); the backlog check is an additional bound only.
-    const stdout = this.options.stdout as Writable & { writableLength?: number };
-    const backlog = typeof stdout.writableLength === 'number' ? stdout.writableLength : 0;
-    const writing = !this.backpressured && backlog <= PTY_BACKLOG_BYTES;
-    if (this.altScreenActive && hasDiff && writing) {
+    if (this.altScreenActive && hasDiff) {
       // Prepend CSI H to anchor the physical cursor to (0,0) so
       // log-update's relative moves compute from a known spot (self-healing
       // against out-of-band cursor drift, see the ALT_SCREEN_ANCHOR_CURSOR
@@ -1175,48 +1042,22 @@ export default class Ink {
       }
     }
     const tWrite = performance.now();
-    // Skip THIS write while backpressured (see the gate above) and wait for
-    // the stream's own drain. The diff engine compares against frontFrame —
-    // the last frame the terminal ACTUALLY received — so a skipped frame
-    // coalesces into the next write instead of being lost (and its erase/
-    // cursor patches never reach the terminal, so needsEraseBeforePaint and
-    // displayCursor stay truthful).
-    let writeMs = 0;
-    if (writing) {
-      const flushed = writeDiffToTerminal(this.terminal, optimized, this.altScreenActive && !SYNC_OUTPUT_SUPPORTED);
-      writeMs = performance.now() - tWrite;
-      this.backpressured = !flushed;
-      if (flushed && this.drainBackoffMs !== DRAIN_BACKOFF_BASE_MS) {
-        this.drainBackoffMs = DRAIN_BACKOFF_BASE_MS;
-      }
-      // One frame reached the terminal. Components holding a widened mount
-      // window until its content is actually flushed (MessageList's paint
-      // expansion hold) key off this tick — a commit can be superseded before
-      // its frame flushes, so "mounted" alone must never unlock tightening.
-      noteTerminalFlush();
+    writeDiffToTerminal(this.terminal, optimized, this.altScreenActive && !SYNC_OUTPUT_SUPPORTED);
+    const writeMs = performance.now() - tWrite;
+    // One frame reached the terminal. Components holding a widened mount
+    // window until its content is actually flushed (MessageList's paint
+    // expansion hold) key off this tick — a commit can be superseded before
+    // its frame flushes, so "mounted" alone must never unlock tightening.
+    noteTerminalFlush();
 
-      // The terminal now holds `frame`: it becomes the diff baseline for
-      // every later pass. Swap AFTER a successful write — a skipped frame
-      // must never advance the baseline or the delta against it would be
-      // lost forever.
-      this.backFrame = this.frontFrame;
-      this.frontFrame = frame;
-
-      // Update blit safety for the NEXT frame. The frame just rendered
-      // becomes frontFrame (= next frame's prevScreen). If we applied the
-      // selection overlay, that buffer has inverted cells. selActive/hlActive
-      // are only ever true in alt-screen; in main-screen this is false→false.
-      this.prevFrameContaminated = selActive || hlActive;
-    } else {
-      // Skipped write: the frame never reached the terminal, so the cursor
-      // park target (displayCursor, set above) and the contamination flag
-      // must stay at their last-WRITTEN values — displayCursor was already
-      // updated for this frame, so roll it back; the next written frame
-      // recomputes both fresh from the same baseline.
-      this.displayCursor = parked;
-      this.backpressured = true;
-      noteFrameCause('backpressure');
-    }
+    // Update blit safety for the NEXT frame. The frame just rendered
+    // becomes frontFrame (= next frame's prevScreen). If we applied the
+    // selection overlay, that buffer has inverted cells. selActive/hlActive
+    // are only ever true in alt-screen; in main-screen this is false→false.
+    // poisonNextFrame: an absolute overlay shrank/moved this frame and its
+    // vacated cells were blitted stale — the next frame must render without
+    // prevScreen to re-derive them from the tree.
+    this.prevFrameContaminated = selActive || hlActive || frame.poisonNextFrame === true;
 
     // A ScrollBox has pendingScrollDelta left to drain — schedule the next
     // frame via scheduleDrain (cadence + pty backpressure gate, see there).
@@ -1226,8 +1067,8 @@ export default class Ink {
     // → leadingEdge fires IMMEDIATELY → double render ~0.1ms apart → jank.
     // If a wheel event or immediate render arrives first, renderNow cancels
     // this timer — no double.
-    if (frame.scrollDrainPending || this.backpressured) {
-      noteFrameCause('scroll-drain');
+    if (frame.scrollDrainPending || frame.poisonNextFrame === true) {
+      noteFrameCause(frame.scrollDrainPending ? 'scroll-drain' : 'overlay-shrink');
       this.scheduleDrain();
     }
     const yogaMs = getLastYogaMs();
@@ -1483,29 +1324,6 @@ export default class Ink {
   };
 
   /**
-   * The output stream this instance renders to. finishExit must target THIS
-   * stream for its barrier/cleanup/notice writes — not whatever
-   * process.stdout happens to point at during shutdown: a host that swapped
-   * process.stdout after render would otherwise latch THIS instance while
-   * writing the cleanup bytes to the replacement stream, leaving this
-   * stream's queued frames and mouse state unhandled (stdout identity
-   * drift, issue #522).
-   */
-  get stdout(): NodeJS.WriteStream {
-    return this.options.stdout;
-  }
-
-  /**
-   * Whether unmount() already wrote the terminal cleanup block itself
-   * (React error-boundary / signal-exit path). finishExit checks this and
-   * skips re-writing DISABLE_MOUSE_TRACKING / EXIT_ALT_SCREEN, so the
-   * error path no longer double-resets the terminal.
-   */
-  get hasWrittenExitCleanup(): boolean {
-    return this.exitCleanupWritten;
-  }
-
-  /**
    * Mark this instance as unmounted so future unmount() calls early-return.
    * Called by gracefulShutdown's cleanupTerminalModes() after it has sent
    * EXIT_ALT_SCREEN but before the remaining terminal-reset sequences.
@@ -1515,109 +1333,38 @@ export default class Ink {
    * The result is 2-3 redundant EXIT_ALT_SCREEN sequences landing on the
    * main screen AFTER printResumeHint(), which tmux (at least) interprets
    * as restoring the saved cursor position — clobbering the resume hint.
-   *
-   * Composite of beginShutdown() + concludeShutdown() for one-shot callers;
-   * the exit funnel (finishExit) invokes the phases separately so the
-   * cooked-mode restore happens only AFTER its post-cleanup settle window.
    */
   detachForShutdown(): void {
-    this.beginShutdown();
-    this.concludeShutdown();
-  }
-
-  /**
-   * Shutdown phase 1: latch isUnmounted and stop every output producer
-   * (pending renders, health probes, the querier), release process/stdout
-   * listeners and output patches — but KEEP stdin raw mode. The exit funnel
-   * writes DISABLE_MOUSE_TRACKING and the cleanup block, then waits out its
-   * settle window in this state: mouse reports that arrive while the disable
-   * is still in transit are consumed as raw input (and drained below)
-   * instead of echoed by the kernel line discipline once cooked+echo
-   * returns (the `^[[<35;130;47M` residue of issue #522).
-   *
-   * Idempotent (shutdownPhase guard) and step-isolated: a throwing step
-   * (e.g. querier.dispose releasing a raw-mode hold on a revoked tty) is
-   * logged and must not skip the remaining releases.
-   */
-  beginShutdown(): void {
-    if (this.shutdownPhase >= 1) return;
-    this.shutdownPhase = 1;
     this.isUnmounted = true;
-    // Render producer kills (#713 backpressure pipeline × #701 shutdown
-    // funnel): ALL of these must land BEFORE the exit funnel's stdout
-    // barrier / terminal cleanup — a late microtask render or a drain-event
-    // callback firing after DISABLE_MOUSE_TRACKING would write an ordinary
-    // frame onto the post-cleanup terminal.
-    const steps: Array<() => void> = [
-      // Cancel any pending throttled render so it doesn't fire between
-      // cleanupTerminalModes() and process.exit() and write to main screen.
-      () => this.scheduleRender.cancel?.(),
-      // Invalidate pending microtask renders: a trailing render scheduled
-      // before the latch must not append a frame after the barrier.
-      () => {
-        this.renderGeneration++;
-        this.pendingRenderGeneration = null;
-      },
-      // Backpressure recovery producers: the stdout drain listener and the
-      // bounded fallback re-probe are ordinary-frame producers — a late
-      // `drain` event must not trigger renderNow past the cleanup bytes.
-      () => this.detachDrainListener(),
-      () => {
-        if (this.drainTimer !== null) {
-          clearTimeout(this.drainTimer);
-          this.drainTimer = null;
-        }
-        this.backpressured = false;
-        this.drainBackoffMs = DRAIN_BACKOFF_BASE_MS;
-      },
-      () => (this.app ?? this.shutdownApp)?.beginShutdown(),
-      // Shutdown bypasses the normal unmount path, so release the process
-      // and stdout listeners here as well. Otherwise a SIGCONT or resize
-      // arriving while an updater is running can re-enter the alternate
-      // screen or render through this detached instance after terminal
-      // cleanup has completed.
-      () => this.unsubscribeTTYHandlers?.(),
-      () => this.unsubscribeExit(),
-      // unmount() early-returns on isUnmounted above, so its
-      // instances.delete never runs — a detached instance would stay in the
-      // map and a later instances.get(stdout) lookup (Chat's
-      // reanchorViewport plumbing) could hand out a dead renderer. Remove
-      // the mapping here too.
-      () => instances.delete(this.options.stdout),
-      // `detachForShutdown()` deliberately makes later `unmount()` calls a
-      // no-op, so release process-level output patches here rather than
-      // relying on unmount() to do it. The shutdown continuation may run an
-      // updater (or report its failure) after this point; leaving stderr
-      // intercepted would silently route those messages to the debug log
-      // instead of the terminal.
-      () => {
-        if (typeof this.restoreConsole === 'function') {
-          this.restoreConsole();
-        }
-      },
-      () => this.restoreStderr?.(),
-    ];
-    for (const step of steps) {
-      try {
-        step();
-      } catch (error) {
-        logError(error instanceof Error ? error : new Error(String(error)));
-      }
+    // Cancel any pending throttled render so it doesn't fire between
+    // cleanupTerminalModes() and process.exit() and write to main screen.
+    this.scheduleRender.cancel?.();
+    if (this.drainTimer !== null) {
+      clearTimeout(this.drainTimer);
+      this.drainTimer = null;
     }
-  }
-
-  /**
-   * Shutdown phase 2: restore cooked mode. Must run LAST in the exit
-   * funnel, after the settle window has given the terminal time to process
-   * DISABLE_MOUSE_TRACKING and late reports have been drained — once the
-   * tty flips back to canonical+echo, any mouse report still in flight is
-   * echoed at the parked cursor (issue #522). Idempotent and step-isolated
-   * like phase 1: the raw-off throw of a revoked tty must not skip the
-   * stdin drain or the fallback restore.
-   */
-  concludeShutdown(): void {
-    if (this.shutdownPhase >= 2) return;
-    this.shutdownPhase = 2;
+    this.app?.detachForShutdown();
+    // Shutdown bypasses the normal unmount path, so release the process and
+    // stdout listeners here as well. Otherwise a SIGCONT or resize arriving
+    // while an updater is running can re-enter the alternate screen or render
+    // through this detached instance after terminal cleanup has completed.
+    this.unsubscribeTTYHandlers?.();
+    this.unsubscribeExit();
+    // unmount() early-returns on isUnmounted above, so its instances.delete
+    // never runs — a detached instance would stay in the map and a later
+    // instances.get(stdout) lookup (Chat's reanchorViewport plumbing) could
+    // hand out a dead renderer. Remove the mapping here too.
+    instances.delete(this.options.stdout);
+    // `detachForShutdown()` deliberately makes later `unmount()` calls a
+    // no-op, so release process-level output patches here rather than relying
+    // on unmount() to do it. The shutdown continuation may run an updater
+    // (or report its failure) after this point; leaving stderr intercepted
+    // would silently route those messages to the debug log instead of the
+    // terminal.
+    if (typeof this.restoreConsole === 'function') {
+      this.restoreConsole();
+    }
+    this.restoreStderr?.();
     // Restore stdin from raw mode. unmount() used to do this via React
     // unmount (App.componentWillUnmount → handleSetRawMode(false)) but we're
     // short-circuiting that path. Must use this.options.stdin — NOT
@@ -1627,30 +1374,14 @@ export default class Ink {
       isRaw?: boolean;
       setRawMode?: (m: boolean) => void;
     };
-    const steps: Array<() => void> = [
-      // App's raw-off drains the raw-mode borrow count, which also removes
-      // the readable pump and unrefs stdin. The ref itself is already null
-      // when the React teardown ran first (unmount's finally, finishExit
-      // behind an app-driven exit), so fall back to the last live ref.
-      () => (this.app ?? this.shutdownApp)?.concludeShutdown(),
-      () => this.drainStdin(),
-      () => {
-        if (stdin.isTTY && stdin.isRaw && stdin.setRawMode) {
-          try {
-            stdin.setRawMode(false);
-          } catch {
-            // The TTY may have been revoked (for example after an SSH
-            // disconnect). Shutdown must continue even if raw-mode
-            // restoration is no longer possible.
-          }
-        }
-      },
-    ];
-    for (const step of steps) {
+    this.drainStdin();
+    if (stdin.isTTY && stdin.isRaw && stdin.setRawMode) {
       try {
-        step();
-      } catch (error) {
-        logError(error instanceof Error ? error : new Error(String(error)));
+        stdin.setRawMode(false);
+      } catch {
+        // The TTY may have been revoked (for example after an SSH
+        // disconnect). Shutdown must continue even if raw-mode restoration
+        // is no longer possible.
       }
     }
   }
@@ -1767,9 +1498,6 @@ export default class Ink {
    */
   drainAltScreenReentry = (): void => {
     if (!this.pendingAltScreenReentry) return;
-    // Shutdown latch: beginShutdown permanently cancels the producer — a
-    // pending re-entry must never re-enter after DISABLE_MOUSE_TRACKING /
-    // EXIT_ALT_SCREEN have been written.
     if (this.isUnmounted || this.isPaused || !this.altScreenActive) return;
     // Dual latch: never re-enter while a physical button is held OR while a
     // protocol candidate (split SGR prefix) is in flight. The destructive
@@ -1790,13 +1518,6 @@ export default class Ink {
   drainPendingProbe = (): void => {
     const req = this.pendingProbeRequest;
     if (!req) return;
-    // Shutdown latch: beginShutdown permanently cancels the producer — a
-    // late release-tail drain (or a throttle-retry timer armed before the
-    // latch) must not write a probe after the exit funnel's cleanup bytes.
-    if (this.isUnmounted) {
-      this.pendingProbeRequest = undefined;
-      return;
-    }
     // Dual latch: never probe while a physical button is held OR while a
     // protocol candidate is in flight — the probe's DECSET/DECRQM writes
     // would corrupt the stream.
@@ -1825,14 +1546,12 @@ export default class Ink {
     this.drainPendingProbe();
   };
   probeAltScreenHealth = (options?: { skipMouseReassert?: boolean }): void => {
-    // Shutdown latch: during the dispose window after beginShutdown (up to
-    // the 5s fallback exit) stray input, focus, resize or a pending DECRPM
-    // reply would otherwise re-write ENABLE_MOUSE_TRACKING AFTER the exit
-    // cleanup's DISABLE_MOUSE_TRACKING — the mouse-reporting residue the
-    // shell then echoes as SGR garbage (issue #522). The exit funnel latches
-    // isUnmounted via beginShutdown() BEFORE any cleanup sequence is
-    // written, while raw mode is still held; the cooked-mode restore lands
-    // only in concludeShutdown() after the settle window.
+    // Shutdown latch: during the dispose window after detachForShutdown
+    // (up to the 5s fallback exit) stray input, focus, resize or a pending
+    // DECRPM reply would otherwise re-write ENABLE_MOUSE_TRACKING AFTER the
+    // exit cleanup's DISABLE_MOUSE_TRACKING — the mouse-reporting residue
+    // the shell then echoes as SGR garbage (issue #522). isUnmounted is set
+    // by detachForShutdown() before any cleanup sequence is written.
     if (this.isUnmounted) return;
     // Dual latch: never write while a physical button is held OR while a
     // protocol candidate (split SGR prefix) is in flight. The physical latch
@@ -2511,12 +2230,6 @@ export default class Ink {
   // cascades through useContext → <AlternateScreen>'s useLayoutEffect dep
   // array → spurious exit+re-enter of the alt screen on every SIGWINCH.
   private writeRaw(data: string): void {
-    // Shutdown gate: once beginShutdown latches, raw writes (async OSC 52
-    // clipboard callbacks from copySelectionNoClear, querier leftovers)
-    // must not reach the terminal — they would land between
-    // DISABLE_MOUSE_TRACKING and the settle drain, or on the main screen
-    // after EXIT_ALT_SCREEN.
-    if (this.isUnmounted) return;
     if (data.includes('\x1b[?1049')) {
       logMouseDebug('stdout:1049', { len: data.length, head: data.slice(0, 60) });
     }
@@ -2530,21 +2243,10 @@ export default class Ink {
   };
   private setAppRef(app: App | null): void {
     this.app = app;
-    if (app !== null) this.shutdownApp = app;
   }
-  /**
-   * App-driven exits (Ctrl+C, error boundary, context exit()) always settle
-   * the exit promise, and the plugin's funnel answers every such settle with
-   * finishExit — so unmount() must DEFER the cooked-mode restore to that
-   * funnel (its raw-mode settle window depends on it, #522).
-   */
-  private handleAppExit = (error?: Error): void => {
-    this.appDrivenExit = true;
-    this.unmount(error);
-  };
   render(node: ReactNode): void {
     this.currentNode = node;
-    const tree = <App ref={this.setAppRef} stdin={this.options.stdin} stdout={this.options.stdout} stderr={this.options.stderr} exitOnCtrlC={this.options.exitOnCtrlC} onExit={this.handleAppExit} terminalColumns={this.terminalColumns} terminalRows={this.terminalRows} selection={this.selection} onSelectionChange={this.notifySelectionChange} onClickAt={this.dispatchClick} onContextMenuAt={this.dispatchContextMenu} onHoverAt={this.dispatchHover} onWheelAt={this.dispatchWheelAt} getHyperlinkAt={this.getHyperlinkAt} onOpenHyperlink={this.openHyperlink} onMultiClick={this.handleMultiClick} onSelectionDrag={this.handleSelectionDrag} onDragTargetAt={this.findDragTargetAt} onDragDispatch={this.dispatchDrag} onPointerGestureChange={this.setPointerGestureActive} onProtocolCandidateChange={this.setProtocolCandidateActive} onReleaseTail={this.drainReleaseTail} onClickProbe={this.clickProbeAtBatchTail} onStdinResume={this.reassertTerminalModes} onTerminalFocus={this.handleTerminalFocusProbe} onCursorDeclaration={this.setCursorDeclaration} dispatchKeyboardEvent={this.dispatchKeyboardEvent}>
+    const tree = <App ref={this.setAppRef} stdin={this.options.stdin} stdout={this.options.stdout} stderr={this.options.stderr} exitOnCtrlC={this.options.exitOnCtrlC} onExit={this.unmount} terminalColumns={this.terminalColumns} terminalRows={this.terminalRows} selection={this.selection} onSelectionChange={this.notifySelectionChange} onClickAt={this.dispatchClick} onContextMenuAt={this.dispatchContextMenu} onHoverAt={this.dispatchHover} onWheelAt={this.dispatchWheelAt} getHyperlinkAt={this.getHyperlinkAt} onOpenHyperlink={this.openHyperlink} onMultiClick={this.handleMultiClick} onSelectionDrag={this.handleSelectionDrag} onDragTargetAt={this.findDragTargetAt} onDragDispatch={this.dispatchDrag} onPointerGestureChange={this.setPointerGestureActive} onProtocolCandidateChange={this.setProtocolCandidateActive} onReleaseTail={this.drainReleaseTail} onClickProbe={this.clickProbeAtBatchTail} onStdinResume={this.reassertTerminalModes} onTerminalFocus={this.handleTerminalFocusProbe} onCursorDeclaration={this.setCursorDeclaration} dispatchKeyboardEvent={this.dispatchKeyboardEvent}>
         <TerminalWriteProvider value={this.writeRaw}>
           {node}
         </TerminalWriteProvider>
@@ -2590,135 +2292,73 @@ export default class Ink {
     // complete before exit. We unconditionally send all disable sequences
     // because terminal detection may not work correctly (e.g., in tmux,
     // screen) and these are no-ops on terminals that don't support them.
-    //
-    // Each segment is isolated: a throwing fd (revoked tty, EIO after an
-    // ssh drop) must not skip the mouse-tracking disable or the remaining
-    // resets, and the finally below must run the state teardown even when
-    // every write fails — otherwise a late finishExit would see a live
-    // instance and double-write this cleanup, or waitUntilExit would hang.
     /* eslint-disable custom-rules/no-sync-fs -- process exiting; async writes would be dropped */
-    try {
-      if (this.options.stdout.isTTY) {
-        // Node's TTY WriteStream exposes .fd; the NodeJS.WriteStream interface
-        // doesn't declare it, hence the local intersection cast.
-        const stdoutWithFd = this.options.stdout as NodeJS.WriteStream & { fd?: number | null };
-        const stdoutFd = typeof stdoutWithFd.fd === 'number' ? stdoutWithFd.fd : undefined;
-        // With no usable fd (TTY-like custom streams, wrapped embedders) fall
-        // back to the stream's OWN ordered queue — never a hard-coded
-        // writeSync(1): fd 1 belongs to the host process, so the cleanup
-        // would bypass the target stream entirely while the enable writes
-        // reached it (#522). Queueing also keeps these bytes behind any
-        // in-flight frames, preserving the frame → EXIT_ALT_SCREEN order.
-        const emit = stdoutFd === undefined
-          ? (text: string): void => { this.options.stdout.write(text); }
-          : (text: string): void => { writeSync(stdoutFd, text); };
-        // Any segment failure leaves exitCleanupWritten false, so the
-        // finishExit funnel rewrites the whole block (all sequences are
-        // idempotent resets) rather than trusting a partial cleanup.
-        let cleanupFailed = false;
-        try {
-          // The last frame must land on the ALT screen while it is still up:
-          // writing it through the async stream would race the synchronous
-          // EXIT_ALT_SCREEN below and the frame bytes would arrive AFTER the
-          // switch to the main screen, painting misplaced residue over the
-          // shell (issue #522).
-          if (lastFrame !== '') {
-            emit(lastFrame);
-          }
-          if (this.altScreenActive) {
-            // <AlternateScreen>'s unmount effect won't run during signal-exit.
-            // Exit alt screen FIRST so other cleanup sequences go to the main screen.
-            emit(EXIT_ALT_SCREEN);
-          }
-        } catch (segmentError) {
-          cleanupFailed = true;
-          logError(segmentError instanceof Error ? segmentError : new Error(String(segmentError)));
-        }
-        try {
-          // Disable mouse tracking — unconditional because altScreenActive can be
-          // stale if AlternateScreen's unmount (which flips the flag) raced a
-          // blocked event loop + SIGINT. No-op if tracking was never enabled.
-          emit(DISABLE_MOUSE_TRACKING);
-          // Drain stdin so in-flight mouse events don't leak to the shell
-          this.drainStdin();
-        } catch (segmentError) {
-          cleanupFailed = true;
-          logError(segmentError instanceof Error ? segmentError : new Error(String(segmentError)));
-        }
-        try {
-          // Disable extended key reporting (both kitty and modifyOtherKeys)
-          emit(DISABLE_MODIFY_OTHER_KEYS);
-          emit(DISABLE_KITTY_KEYBOARD);
-          // Disable win32-input-mode (no-op where never enabled)
-          emit(DISABLE_WIN32_INPUT_MODE);
-          // Disable focus events (DECSET 1004)
-          emit(DFE);
-          // Disable bracketed paste mode
-          emit(DBP);
-          // Show cursor
-          emit(SHOW_CURSOR);
-          // Clear iTerm2 progress bar
-          emit(CLEAR_ITERM2_PROGRESS);
-          // Clear tab status (OSC 21337) so a stale dot doesn't linger
-          if (supportsTabStatus()) emit(wrapForMultiplexer(CLEAR_TAB_STATUS));
-        } catch (segmentError) {
-          cleanupFailed = true;
-          logError(segmentError instanceof Error ? segmentError : new Error(String(segmentError)));
-        }
-        // All three segments landed — finishExit can skip its rewrite.
-        this.exitCleanupWritten = !cleanupFailed;
+    if (this.options.stdout.isTTY) {
+      // Node's TTY WriteStream exposes .fd; the NodeJS.WriteStream interface
+      // doesn't declare it, hence the local intersection cast.
+      const stdoutWithFd = this.options.stdout as NodeJS.WriteStream & { fd?: number | null };
+      const stdoutFd = typeof stdoutWithFd.fd === 'number' ? stdoutWithFd.fd : 1;
+      // The last frame must land on the ALT screen while it is still up:
+      // writing it through the async stream would race the synchronous
+      // EXIT_ALT_SCREEN below and the frame bytes would arrive AFTER the
+      // switch to the main screen, painting misplaced residue over the
+      // shell (issue #522).
+      if (lastFrame !== '') {
+        writeSync(stdoutFd, lastFrame);
       }
-      /* eslint-enable custom-rules/no-sync-fs */
-    } finally {
-      this.isUnmounted = true;
+      if (this.altScreenActive) {
+        // <AlternateScreen>'s unmount effect won't run during signal-exit.
+        // Exit alt screen FIRST so other cleanup sequences go to the main screen.
+        writeSync(stdoutFd, EXIT_ALT_SCREEN);
+      }
+      // Disable mouse tracking — unconditional because altScreenActive can be
+      // stale if AlternateScreen's unmount (which flips the flag) raced a
+      // blocked event loop + SIGINT. No-op if tracking was never enabled.
+      writeSync(stdoutFd, DISABLE_MOUSE_TRACKING);
+      // Drain stdin so in-flight mouse events don't leak to the shell
+      this.drainStdin();
+      // Disable extended key reporting (both kitty and modifyOtherKeys)
+      writeSync(stdoutFd, DISABLE_MODIFY_OTHER_KEYS);
+      writeSync(stdoutFd, DISABLE_KITTY_KEYBOARD);
+      // Disable win32-input-mode (no-op where never enabled)
+      writeSync(stdoutFd, DISABLE_WIN32_INPUT_MODE);
+      // Disable focus events (DECSET 1004)
+      writeSync(stdoutFd, DFE);
+      // Disable bracketed paste mode
+      writeSync(stdoutFd, DBP);
+      // Show cursor
+      writeSync(stdoutFd, SHOW_CURSOR);
+      // Clear iTerm2 progress bar
+      writeSync(stdoutFd, CLEAR_ITERM2_PROGRESS);
+      // Clear tab status (OSC 21337) so a stale dot doesn't linger
+      if (supportsTabStatus()) writeSync(stdoutFd, wrapForMultiplexer(CLEAR_TAB_STATUS));
+    }
+    /* eslint-enable custom-rules/no-sync-fs */
 
-      // Cancel any pending throttled renders to prevent accessing freed Yoga nodes
-      this.scheduleRender.cancel?.();
-      // Invalidate pending microtask renders (see beginShutdown) — a trailing
-      // render must not append a frame past the cleanup block above.
-      this.renderGeneration++;
-      this.pendingRenderGeneration = null;
-      // The final renderNow() above may have re-armed the backpressure wait
-      // (a backpressured final frame re-attaches the drain listener): release
-      // it unconditionally so a stdout that never drains cannot hold the
-      // renderer (and its stream listener) past unmount.
-      this.detachDrainListener();
-      if (this.drainTimer !== null) {
-        clearTimeout(this.drainTimer);
-        this.drainTimer = null;
-      }
-      this.backpressured = false;
-      this.drainBackoffMs = DRAIN_BACKOFF_BASE_MS;
+    this.isUnmounted = true;
 
-      // @ts-ignore -- ported CC build; type drift tolerated updateContainerSync exists in react-reconciler but not in @types/react-reconciler
-      reconciler.updateContainerSync(null, this.container, null, noop);
-      // @ts-ignore -- ported CC build; type drift tolerated flushSyncWork exists in react-reconciler but not in @types/react-reconciler
-      reconciler.flushSyncWork();
-      // Cooked-mode restore: app-driven exits defer it to the exit funnel
-      // (finishExit holds raw mode across its post-cleanup settle window,
-      // #522); external unmounts (host teardown, signal-exit) have no funnel
-      // behind them, so restore cooked mode here. Idempotent via the
-      // shutdownPhase guard, and the React teardown above already ran
-      // App.componentWillUnmount's beginShutdown latch.
-      if (!this.appDrivenExit) {
-        try {
-          this.concludeShutdown();
-        } catch (concludeError) {
-          logError(concludeError instanceof Error ? concludeError : new Error(String(concludeError)));
-        }
-      }
-      instances.delete(this.options.stdout);
+    // Cancel any pending throttled renders to prevent accessing freed Yoga nodes
+    this.scheduleRender.cancel?.();
+    if (this.drainTimer !== null) {
+      clearTimeout(this.drainTimer);
+      this.drainTimer = null;
+    }
 
-      // Free the root yoga node, then clear its reference. Children are already
-      // freed by the reconciler's removeChildFromContainer; using .free() (not
-      // .freeRecursive()) avoids double-freeing them.
-      this.rootNode.yogaNode?.free();
-      this.rootNode.yogaNode = undefined;
-      if (error instanceof Error) {
-        this.rejectExitPromise(error);
-      } else {
-        this.resolveExitPromise();
-      }
+    // @ts-ignore -- ported CC build; type drift tolerated updateContainerSync exists in react-reconciler but not in @types/react-reconciler
+    reconciler.updateContainerSync(null, this.container, null, noop);
+    // @ts-ignore -- ported CC build; type drift tolerated flushSyncWork exists in react-reconciler but not in @types/react-reconciler
+    reconciler.flushSyncWork();
+    instances.delete(this.options.stdout);
+
+    // Free the root yoga node, then clear its reference. Children are already
+    // freed by the reconciler's removeChildFromContainer; using .free() (not
+    // .freeRecursive()) avoids double-freeing them.
+    this.rootNode.yogaNode?.free();
+    this.rootNode.yogaNode = undefined;
+    if (error instanceof Error) {
+      this.rejectExitPromise(error);
+    } else {
+      this.resolveExitPromise();
     }
   }
   async waitUntilExit(): Promise<void> {
@@ -2858,13 +2498,11 @@ export default class Ink {
  *    open /dev/tty fresh with O_NONBLOCK (all fds to the controlling
  *    terminal share one line-discipline input queue).
  *
- * 2. Callers reach this in mixed tty states: finishExit drains while still
- *    raw (between its settle window and concludeShutdown's raw-off), while
- *    concludeShutdown/unmount callers drain after cooked (canonical) mode
- *    has already returned. Canonical mode line-buffers input until newline,
- *    so O_NONBLOCK reads return EAGAIN even when mouse bytes are sitting in
- *    the buffer. When not already raw, we briefly re-enter raw mode so
- *    reads return any available bytes, then restore the previous state.
+ * 2. By the time forceExit calls this, detachForShutdown has already put
+ *    the TTY back in cooked (canonical) mode. Canonical mode line-buffers
+ *    input until newline, so O_NONBLOCK reads return EAGAIN even when
+ *    mouse bytes are sitting in the buffer. We briefly re-enter raw mode
+ *    so reads return any available bytes, then restore cooked mode.
  *
  * Safe to call multiple times. Call as LATE as possible in the exit path:
  * DISABLE_MOUSE_TRACKING has terminal round-trip latency, so events can

@@ -59,7 +59,12 @@ export interface TuiSettingsField {
   /** Optional group id; grouped fields render on that group's subpage. */
   group?: string
   kind: TuiSettingsFieldKind
-  /** Choices for `kind: 'select'` (ignored otherwise). */
+  /**
+   * Choices for `kind: 'select'`; any options-bearing field (text hybrids
+   * included — e.g. the page-margin presets) also cycles via ←/→ in the
+   * settings list while Enter keeps the kind's own action (select cycles,
+   * text opens the editor for a custom value).
+   */
   options?: readonly TuiSettingsFieldOption[]
   /** Input placeholder for `kind: 'text' | 'number'`. */
   placeholder?: string

@@ -126,25 +126,6 @@ const GROUPS = {
 // 恢复历史会话落点回归：/resume 后最新消息末行必须可见且可达
 // （scrollToBottom 补画完成后的锚定终态），不再落屏外。
     ["repro-resume-position", ['node', '--import', 'tsx/esm', 'scripts/repro-resume-position.tsx']],
-// rowsGeneration 缓存身份回归（#713 整合审 blocker 1-3）：/clear 复用
-// row id（同一 live 数组、同长度、同 streaming bits、不同 generation）
-// 后——MessageList 可见行缓存渲染新行；failureHint 不钉在新行上；
-// lastUserRowId 重跟新 transcript 且 auto recap 在新 generation 的首条
-// user 消息即退场。
-    ["verify-rows-generation", ['node', '--import', 'tsx/esm', 'scripts/verify-rows-generation.tsx']],
-// formatWhen 边界确定性回归（#713 整合审 blocker 6）：now→minutes、
-// 分钟内、分钟→小时、小时→天、day 7→绝对日期的精确翻转时刻（嵌套
-// round 语义、oracle 二分），绝对日期后 Infinity（零 wake）。
-    ["verify-format-when-boundary", ['node', '--import', 'tsx/esm', 'scripts/verify-format-when-boundary.ts']],
-// GoalTodoPanel elapsed 基线回归（#713 整合审 blocker 5）：active 推进、
-// paused 冻结零 timer、resume 以已提交 transition 重定基线（标签从 ~0s
-// 重新计）、新 goal id 换新基线——transition 只落在 commit 后的 effect。
-    ["verify-goal-todo-baseline", ['node', '--import', 'tsx/esm', 'scripts/verify-goal-todo-baseline.tsx']],
-// 静态 UI 零空闲唤醒回归（#713）：Chat idle / JobsPanel settled /
-// GoalTodo paused / AgentView 静态列表在静默窗口零 frame，对应活跃态
-// 有 frame；trajectory seam 渲染零 getter 调用（含 mount 时）。
-    ["verify-idle-wakeups", ['node', '--import', 'tsx/esm', 'scripts/verify-idle-wakeups.tsx']],
-    ["verify-trajectory-cache", ['node', '--import', 'tsx/esm', 'scripts/verify-trajectory-cache.tsx']],
   ],
   'input-terminal': [
 // 按键解析回归（issue #110）：Option+Enter（ESC CR）精确/合并/分块
@@ -181,28 +162,6 @@ const GROUPS = {
 // 字节、不得拉回 raw mode——在途回复与鼠标事件由清理后的 re-drain
 // 吞掉，不再落入 shell。
     ["verify-exit-mouse-residue", ['node', '--import', 'tsx/esm', 'scripts/verify-exit-mouse-residue.tsx']],
-// 退出回显窗口回归（#522 的 SSH 慢链路门）：DISABLE_MOUSE 同步写在 raw
-// mode 仍持有时落盘，settle 窗也在 raw 态度过（cooked 恢复只在最后的
-// concludeShutdown）；写前 stdout 队列 barrier 排空预排队帧/ENABLE；
-// 写入失败（fd 与 stream 都抛）仍必进 conclude/handoff/done。
-    ["verify-exit-mouse-disable-order", ['node', '--import', 'tsx/esm', 'scripts/verify-exit-mouse-disable-order.tsx']],
-// finishExit runtime 选择回归（#701 整合审）：显式传入的 render handle 优先
-// 于 instances map——map/process.stdout 指向 B 时 finishExit(...,A) 只
-// begin/conclude A、清理字节只落 A 的流，B 零 latch 零清理；无 handle 时
-// map 兜底仍可用。
-    ["verify-exit-runtime-selection", ['node', '--import', 'tsx/esm', 'scripts/verify-exit-runtime-selection.tsx']],
-// #711（手势/协议闩锁）× #701（两相 shutdown）交叉回归：Case A 手势
-// active 时退出零 probe/ENABLE/DECRQM 且 DISABLE→EXIT_ALT 保序；Case B
-// 分片 SGR candidate active 时退出不等待补全、shutdown 后输入 drain-only；
-// Case C pendingAltScreenReentry/pendingProbe 被 beginShutdown 永久取消；
-// Case D 正常手势的 release→batch-tail→probe 恢复不被 shutdown gate 破坏；
-// 各 Case 均断言 teardown 后 stdin readable listener === 0。
-    ["verify-exit-gesture-protocol", ['node', '--import', 'tsx/esm', 'scripts/verify-exit-gesture-protocol.tsx']],
-// #713（stdout 背压）× #701（shutdown 漏斗）交叉回归（整合审 §8）：饱和
-// stdout + drain listener/fallback 在挂时执行 finishExit——shutdown 窗口
-// 内 emit drain 不得触发普通 frame；DISABLE→EXIT_ALT 保序；结束后
-// drain listener 与 fallback timer 均为 0、stdin readable 为 0。
-    ["verify-exit-backpressure", ['node', '--import', 'tsx/esm', 'scripts/verify-exit-backpressure.tsx']],
 // 组件级拖拽协议回归：无修饰左键 press 捕获 drag target，首动 dragstart、
 // 连续 dragmove、release/focus-out/reset 收尾 dragend；未移动仍走 click，
 // 无 handler 与修饰键区域保留基线文本选择；真实 SGR 管线 + 最小滑块消费者。
@@ -252,10 +211,6 @@ const GROUPS = {
 // 转录拉进不可选取区。真实 Chat 树 + SGR 拖选注入，静息/上滚阅读+
 // 流式并发/流式结束后三场景断言 OSC 52 携带完整选中文本。
     ["repro-drag-select-streaming", ['node', '--import', 'tsx/esm', 'scripts/repro-drag-select-streaming.tsx']],
-// grants 文件 watcher 回归（#713）：目录 watcher 事件驱动通知（原子
-// rename/delete-recreate 均覆盖）、退订即停、父目录不存在时经 2s 轮询
-// fallback 拾取新建（真 fallback 路径——目录本身不存在时 fs.watch 才失败）。
-    ["verify-grants-watch", ['node', '--import', 'tsx/esm', 'scripts/verify-grants-watch.ts']],
   ],
   'session-workspace': [
 // 审批服务配置回归（issue #49 尾巴）：裸组合 cordis.yml 必须挂载
@@ -365,6 +320,15 @@ const GROUPS = {
 // 不出现、到点内容正确、leave 即隐、leave 早于延迟取消、自定义 delayMs、
 // 多行内容锚点上方、屏顶锚点转下方、resize 隐藏（几何失效）、窄屏水平钳制。
     ["verify-tooltip", ['node', '--import', 'tsx/esm', 'scripts/verify-tooltip.tsx']],
+// 工具卡头部 hover tooltip 内容门控回归：头部已经完整显示（单行标题 / 未
+// 超出预算的 args）时悬停不再弹「重复可见文本」的浮层，改弹卡片元数据
+// （开始/结束时刻、耗时、运行中时长）；折叠的终端脚本与超出 480 字符预算
+// 的 args 仍弹完整内容（弹层优先真隐藏内容）。
+    ["verify-tool-tooltip-gating", ['node', '--import', 'tsx/esm', 'scripts/verify-tool-tooltip-gating.tsx']],
+// 悬停浮层第二批回归：@ 文件补全面板长路径悬停弹全路径（完整可见的短路径
+// 不弹）、会话列表行标题截断悬停弹完整标题+绝对时间+cwd（未截断不重复
+// 标题）、状态栏 model/git 字段悬停明细（provider/ctx 窗口/完整分支）。
+    ["verify-hover-details", ['node', '--import', 'tsx/esm', 'scripts/verify-hover-details.tsx']],
 // 便携包更新解压链安全回归：Windows 解压优先 tar.exe 数组参数，回退
 // Expand-Archive 的两个路径按 PowerShell 约定把 ' 双写为 ''——路径派生
 // 自环境变量，不转义即可注入任意命令；解压与替换之间的提取树校验拒绝
@@ -408,6 +372,14 @@ const GROUPS = {
     ["verify-compact", ['node', '--import', 'tsx/esm', 'scripts/verify-compact.mjs']],
     ["verify-channel-goal-todo", ['node', '--import', 'tsx/esm', 'scripts/verify-channel-goal-todo.mjs']],
     ["verify-whale-toggle", ['node', '--import', 'tsx/esm', 'scripts/verify-whale-toggle.mjs']],
+// 开屏鲸鱼三选一（classic 组合开场/heart/sleep）：帧表完整性（22 帧
+// 含 heart/sleep 新调色）、序列合法性（standard 起止/纯自家行为帧、
+// classic 仍捆绑眨眼+喷水+摆尾）、随机选取 API 覆盖/钳制/每次挂载
+// 独立重掷、LogoV2 渲染冒烟（粉爱心/灰 Z 上屏后落定消失）。
+    ["verify-whale-intro", ['node', '--import', 'tsx/esm', 'scripts/verify-whale-intro.mjs']],
+// 开屏定格后的鲸鱼闲置行为（whaleIdle 设置，默认关）：纯规划器帧选
+// 择与节拍（闲置偶动/入睡/工作唤醒/点击爱心单向播完）、频道接线。
+    ["verify-whale-idle", ['node', '--import', 'tsx/esm', 'scripts/verify-whale-idle.mjs']],
 // 计划退出恢复进入前权限；覆盖延迟切换、会话恢复与未知权限不提权。
     ["verify-plan-exit-restore", ['node', 'scripts/verify-plan-exit-restore.mjs']],
 // 会话切换/清屏卫生：子代理投影（行 map/任务描述队列/仪表盘快照）随
@@ -437,6 +409,7 @@ const GROUPS = {
 // abort 并等压缩落定再 fork 快照（后台提交 checkpoint = "压缩失败后换模型
 // 丢上下文"事故根因）；persistence 类失败与通用失败分开提示。
     ["verify-compact-switch", ['node', '--import', 'tsx/esm', 'scripts/verify-compact-switch.tsx']],
+    ["verify-live-session", ['node', '--import', 'tsx/esm', 'scripts/verify-live-session.ts']],
 // 裸 ● 空行回归：纯思考/纯工具步骤（无文本块）的 assistant/message
 // 不得创建空 assistant 行，否则思考块折叠后转录里多出一个只有
 // ● 前缀、内容为空的行。

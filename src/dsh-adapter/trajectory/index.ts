@@ -13,7 +13,6 @@ export {
   buildTrajectory,
   emptyTrajectory,
   extendTrajectory,
-  extendTrajectoryEvents,
   type StepTiming,
   type TrajBuild,
 } from './projection.js'

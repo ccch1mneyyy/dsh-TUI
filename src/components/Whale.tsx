@@ -4,21 +4,24 @@ import { WHALE_FRAMES, type WhaleFrame } from './whaleFrames.js'
 
 /**
  * The DeepSeek pixel whale from the hand-drawn Excel art (whale_frames.zip):
- * a 40×25 sprite in four true-color tones (deep-navy outline, DeepSeek-blue
- * body, ice-blue belly, white mouth). Rendered with the half-block
- * technique — each terminal cell packs two vertical pixels into one `▀`/`▄`
- * glyph (foreground = upper pixel, background = lower), so the whale shows
- * at 40 columns × 13 rows with visually square pixels.
+ * a 40×25 sprite in six true-color tones (deep-navy outline, DeepSeek-blue
+ * body, ice-blue belly, white mouth, pink heart, gray sleep-Z). Rendered
+ * with the half-block technique — each terminal cell packs two vertical
+ * pixels into one `▀`/`▄` glyph (foreground = upper pixel, background =
+ * lower), so the whale shows at 40 columns × 13 rows with visually square
+ * pixels.
  */
 
 type Rgb = readonly [number, number, number]
 
-/** Sprite palette: D outline · B body · L belly · W mouth · `.` transparent. */
+/** Sprite palette: D outline · B body · L belly · W mouth · H heart · Z sleep-Z · `.` transparent. */
 const PALETTE: Record<string, Rgb | undefined> = {
   D: [20, 38, 96],
   B: [78, 111, 255],
   L: [190, 225, 255],
   W: [255, 255, 255],
+  H: [204, 51, 153],
+  Z: [128, 128, 128],
 }
 
 const fg = (rgb: Rgb): string => `\x1b[38;2;${rgb[0]};${rgb[1]};${rgb[2]}m`
@@ -82,7 +85,7 @@ export const STANDARD_FRAME_INDEX = 0
 
 /**
  * One whale pose as an Ink component: 13 rows × 40 columns, never
- * shrinking. Pass `frameIndex` from OPENING_SEQUENCE while animating, or
+ * shrinking. Pass `frameIndex` from the opening sequence while animating, or
  * STANDARD_FRAME_INDEX for the static header whale. `width` pins the box
  * width so the neighbouring text column never shifts when frames widen
  * (the tail-wag frames reach 4 columns further right than standard).

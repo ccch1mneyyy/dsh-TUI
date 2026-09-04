@@ -503,6 +503,11 @@ const dict = {
   'mode-plan': { zh: '计划模式', en: 'plan mode' },
   'mode-full': { zh: '完全访问', en: 'full access' },
   'mode-plan-unavailable': { zh: '当前 preset 未注册 /plan 命令，无法切换计划模式', en: 'The active preset does not register /plan; cannot toggle plan mode' },
+  'mode-permission-unregistered': { zh: '当前 preset 未注册 /permission 命令，无法切换权限模式', en: 'The active preset does not register /permission; cannot switch the permission mode' },
+  'mode-permission-invoke-failed': { zh: '/permission 切换失败，请重试或查看日志', en: '/permission switch failed; retry or check the logs' },
+  'mode-permission-unconfirmed': { zh: '权限切换未被 DSH 确认，模式未改变', en: 'The permission switch was not confirmed by DSH; the mode is unchanged' },
+  'mode-permission-no-canonical': { zh: '模式「{{name}}」的 sandbox/approval 组合没有对应权限预设，无法安全切换', en: 'Mode "{{name}}" has no matching permission preset for its sandbox/approval combo; cannot switch safely' },
+  'cmd-desc-permission': { zh: '切换权限预设（沙箱模式 + 审批策略）', en: 'Switch the permission preset (sandbox mode + approval policy)' },
 
   // ── components/LogoV2.tsx ───────────────────────────────────────────
   'logo-tagline': { zh: '探索未至之境！', en: 'Explore the uncharted!' },
@@ -558,6 +563,16 @@ const dict = {
   'input-expand-editor-collapse': { zh: '收起', en: 'Collapse' },
   'input-expand-editor-hint-send': { zh: 'Ctrl+Enter 发送', en: 'Ctrl+Enter sends' },
   'input-expand-editor-hint-collapse': { zh: 'Esc 收起', en: 'Esc collapses' },
+
+  // ── messages/AssistantToolUseMessage.tsx（工具卡头部悬停元数据浮层）─────
+  // 头部已完整显示标题/参数时，悬停不再重复可见文本，改弹卡片元数据：
+  // 开始/结束/失败时刻、退出码与信号（这些头部都没有）。时长不入内——
+  // settled 卡的头部 chip（`· 5m30s`）与运行中卡的 body 已显示时长。
+  'tool-tip-started': { zh: '开始 {{time}}', en: 'started {{time}}' },
+  'tool-tip-finished': { zh: '结束 {{time}}', en: 'finished {{time}}' },
+  'tool-tip-failed': { zh: '失败 {{time}}', en: 'failed {{time}}' },
+  'tool-tip-exit': { zh: '退出码 {{code}}', en: 'exit {{code}}' },
+  'tool-tip-signal': { zh: '信号 {{name}}', en: 'signal {{name}}' },
 
   // ── components/SuggestionCard.tsx（/ 命令菜单 · @ 文件菜单）─────────
   'sugg-commands-title': { zh: '命令', en: 'commands' },

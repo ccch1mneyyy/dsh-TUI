@@ -215,8 +215,6 @@ export function MessageList({
   onLoadOlder,
   thinkingVisible = true,
   historyPaintEnabled = true,
-  streamingVersion,
-  rowsGeneration,
   registerRowRef,
   scrollHandle,
   forceMountRowId,
@@ -268,24 +266,6 @@ export function MessageList({
    * seconds of lex/highlight/layout before first paint).
    */
   historyPaintEnabled?: boolean
-  /**
-   * Channel-owned counter that bumps exactly when an existing row's
-   * `streaming` flag flips IN PLACE (turn settle, revive). The filter cache
-   * keys on it so a settle that changes the empty-assistant filter boundary
-   * rebuilds without scanning every row per render. Absent on embedders
-   * that pass no channel metadata — they fall back to the allocation-free
-   * bit scan.
-   */
-  streamingVersion?: number
-  /**
-   * Transcript generation from the channel: bumped whenever the transcript
-   * is cleared and row ids restart at 0 (clear, session swap, loadOlder
-   * prepend, rewind/new/model/workspace switch). All per-row-id caches
-   * (heights, layout signatures, painted-once marks, timeline previews,
-   * header base) must be dropped on a generation change — ids alone cannot
-   * distinguish a fresh transcript from a previous one.
-   */
-  rowsGeneration?: number
   /** Transcript search: register each row's DOM element for scroll-to-match. */
   registerRowRef?: (rowId: number, el: DOMElement | null) => void
   /** Scroll viewport the list virtualizes against. */
@@ -349,14 +329,6 @@ export function MessageList({
   const visibleRowsCacheRef = React.useRef<{
     rows: readonly ChatRow[]
     rowsLength: number
-    /** Transcript epoch for the cached pass (channel.rowsGeneration). The
-     * rows array is LIVE and mutated in place: /clear / rewind / session
-     * swap keep its identity while row ids restart from 0 — the same
-     * length + ids + streaming bits can recur, and a generation-blind key
-     * would serve the PREVIOUS transcript's ChatRow objects for the new
-     * one. undefined = host passes no seam; then identity+length+bits is
-     * the best available key. */
-    rowsGeneration: number | undefined
     showAll: boolean
     thinkingVisible: boolean
     out: readonly ChatRow[]
@@ -365,8 +337,6 @@ export function MessageList({
      * in place, rows identity/length unchanged) changes empty-assistant
      * filtering below, so the cache must rebuild on any bit change. */
     streamBits: Uint8Array
-    /** The streamingVersion the bits were captured at (-1 = scanned). */
-    streamVersion: number
   } | null>(null)
   /** Generation counter for the visibleRows cache (timeline memo key). */
   const visGenRef = React.useRef(0)
@@ -375,29 +345,18 @@ export function MessageList({
   // settle) are invisible to the rows-identity/length key above, but an
   // assistant row that settles with EMPTY text crosses the empty-assistant
   // filter boundary (visible-while-streaming → filtered-when-settled).
-  // The channel owns a version counter that bumps exactly on such in-place
-  // flips, so the cache key can skip the O(rows) scan per render; hosts
-  // that pass no seam fall back to the allocation-free scan.
-  let streamBitsSame = false
-  if (visibleCache !== null && visibleCache.streamBits.length === rows.length) {
-    if (streamingVersion !== undefined) {
-      streamBitsSame = visibleCache.streamVersion === streamingVersion
-    } else {
-      const bits = visibleCache.streamBits
-      streamBitsSame = true
-      for (let i = 0; i < rows.length; i++) {
-        if (bits[i] !== (rows[i]!.streaming === true ? 1 : 0)) {
-          streamBitsSame = false
-          break
-        }
-      }
+  // Allocation-free scan; rebuild only when a bit actually flipped.
+  let streamBitsSame = visibleCache !== null && visibleCache.streamBits.length === rows.length
+  if (streamBitsSame) {
+    const bits = visibleCache!.streamBits
+    for (let i = 0; i < rows.length; i++) {
+      if (bits[i] !== (rows[i]!.streaming === true ? 1 : 0)) { streamBitsSame = false; break }
     }
   }
   if (
     visibleCache === null ||
     visibleCache.rows !== rows ||
     visibleCache.rowsLength !== rows.length ||
-    visibleCache.rowsGeneration !== rowsGeneration ||
     visibleCache.showAll !== (showAll || hiddenCount <= 0) ||
     visibleCache.thinkingVisible !== thinkingVisible ||
     !streamBitsSame
@@ -453,13 +412,11 @@ export function MessageList({
     visibleRowsCacheRef.current = {
       rows,
       rowsLength: rows.length,
-      rowsGeneration,
       showAll: showAll || hiddenCount <= 0,
       thinkingVisible,
       out,
       margins,
       streamBits,
-      streamVersion: streamingVersion ?? -1,
     }
     visGenRef.current++
   }
@@ -560,12 +517,6 @@ export function MessageList({
     heightsVersionRef.current++
     baseRef.current = null
   }
-
-  // A transcript generation change (clear / session swap / loadOlder /
-  // rewind / new) reuses row ids from 0: every per-row-id cache belongs to
-  // the PREVIOUS transcript and must be dropped wholesale, or a fresh
-  // session would inherit stale heights, painted-once marks and previews.
-  const lastRowsGeneration = React.useRef(rowsGeneration)
 
   // --- layout signature: stale-height invalidation ------------------------
   // heightsRef entries outlive the commits that measured them, but many
@@ -915,45 +866,33 @@ export function MessageList({
   let upTurnIndex: number | null = null
   let downTurnIndex: number | null = null
   const timelineMemoRef = React.useRef<{ key: string; turns: TimelineTurn[] } | null>(null)
-  const timelineListRef = React.useRef<{
-    key: string
-    turns: Array<{ id: number; preview: string }>
-  } | null>(null)
-  const timelineTopsRef = React.useRef<{ key: string; tops: Map<number, number> } | null>(null)
-  // A transcript generation change (clear / session swap / loadOlder /
-  // rewind / new) reuses row ids from 0: every per-row-id cache belongs to
-  // the PREVIOUS transcript and must be dropped wholesale, or a fresh
-  // session would inherit stale heights, painted-once marks and previews.
-  // Placed after every cache ref it touches is declared.
-  if (lastRowsGeneration.current !== rowsGeneration) {
-    lastRowsGeneration.current = rowsGeneration
-    heightsRef.current.clear()
-    heightsVersionRef.current++
-    sigRef.current.clear()
-    paintedOnceRef.current = new Set()
-    paintedBaseRef.current = undefined
-    baseRef.current = null
-    previewCacheRef.current.clear()
-    timelineMemoRef.current = null
-    timelineListRef.current = null
-    timelineTopsRef.current = null
-    paintEdgeRef.current = -1
-    lastStartRef.current = -1
-  }
-
   {
-    // Split into THREE caches so a scroll tick or a streaming commit does not
-    // rebuild the whole timeline: (a) the turns LIST (id + preview) keyed on
-    // the visibleRows cache generation — user rows never leave the list, so
-    // visGen is its only input; (b) the measured Tops map keyed on geometry
-    // (visGen + heightsVersion + base); (c) the merged array keyed on the
-    // tops key. A streaming commit bumps heightsVersion (growing row) but
-    // NOT visGen, so the O(rows) walk of (a) runs only when the fold window
-    // actually moves; the per-frame target scan below stays allocation-free.
-    const listKey = `${visGenRef.current}`
-    if (timelineListRef.current === null || timelineListRef.current.key !== listKey) {
+    // Split into (a) a GEOMETRY-memoized turns list and (b) a per-frame
+    // allocation-free target scan. Before the split this block rebuilt on
+    // EVERY scroll tick: an 800-object turns array, an 800-entry
+    // measuredTops Map, and the report effect's turns.map().join('|')
+    // signature — several hundred KB of churn per second of scrolling on a
+    // tool-heavy session.
+    //
+    // (a) turns/tops/folded change ONLY when geometry changes: row heights
+    // (heightsVersion — bumped at every heightsRef mutation), the visible
+    // window's content (visGen — bumped when the visibleRows cache
+    // rebuilds), the measured header base, or the rows array growing. Key
+    // on those; previews stay in their own id-keyed cache.
+    const memo = timelineMemoRef.current
+    const memoKey = `${visGenRef.current}:${heightsVersionRef.current}:${base}:${rows.length}:${columns}`
+    if (memo === null || memo.key !== memoKey) {
       const previewCache = previewCacheRef.current
       if (previewCache.size > 2000) previewCache.clear()
+      // Measured tops for turns INSIDE the fold window (user rows are never
+      // filtered by the thinking toggle, so a user row absent from
+      // visibleRows is exactly a folded one).
+      const measuredTops = new Map<number, number>()
+      for (let i = 0; i < visibleRows.length; i++) {
+        const row = visibleRows[i]!
+        if (row.kind !== 'user') continue
+        measuredTops.set(row.id, base + offsets[i]! + (margins.get(row.id) === true ? 1 : 0))
+      }
       // Walk ALL rows (not the fold window): the rail must cover the whole
       // conversation — a tool-heavy session packs 300 rows into a handful
       // of turns, and window-only turns made the rail show "2-3 nodes".
@@ -961,7 +900,7 @@ export function MessageList({
       // until revealed (they are all ABOVE the viewport, so active/down
       // over measured turns is unaffected; ▲ may name a folded turn — its
       // click goes through the reveal path, not scrollTo).
-      const turns: Array<{ id: number; preview: string }> = []
+      const turns: TimelineTurn[] = []
       for (const row of rows) {
         if (row.kind !== 'user') continue
         let cached = previewCache.get(row.id)
@@ -969,37 +908,14 @@ export function MessageList({
           cached = { len: row.text.length, preview: clipPreview(row.text) }
           previewCache.set(row.id, cached)
         }
-        turns.push({ id: row.id, preview: cached.preview })
-      }
-      timelineListRef.current = { key: listKey, turns }
-    }
-    const topsKey = `${visGenRef.current}:${heightsVersionRef.current}:${base}`
-    if (timelineTopsRef.current === null || timelineTopsRef.current.key !== topsKey) {
-      // Measured tops for turns INSIDE the fold window (user rows are never
-      // filtered by the thinking toggle, so a user row absent from
-      // visibleRows is exactly a folded one).
-      const tops = new Map<number, number>()
-      for (let i = 0; i < visibleRows.length; i++) {
-        const row = visibleRows[i]!
-        if (row.kind !== 'user') continue
-        tops.set(row.id, base + offsets[i]! + (margins.get(row.id) === true ? 1 : 0))
-      }
-      timelineTopsRef.current = { key: topsKey, tops }
-    }
-    const memo = timelineMemoRef.current
-    if (memo === null || memo.key !== topsKey) {
-      const tops = timelineTopsRef.current!.tops
-      const list = timelineListRef.current!.turns
-      const turns: TimelineTurn[] = []
-      for (const entry of list) {
-        const textTop = tops.get(entry.id)
+        const textTop = measuredTops.get(row.id)
         if (textTop !== undefined) {
-          turns.push({ id: entry.id, top: textTop, preview: entry.preview })
+          turns.push({ id: row.id, top: textTop, preview: cached.preview })
         } else {
-          turns.push({ id: entry.id, top: -1, preview: entry.preview, folded: true })
+          turns.push({ id: row.id, top: -1, preview: cached.preview, folded: true })
         }
       }
-      timelineMemoRef.current = { key: topsKey, turns }
+      timelineMemoRef.current = { key: memoKey, turns }
     }
     timelineTurns = timelineMemoRef.current!.turns
     // (b) per-frame target scan — pure integer comparisons over the
@@ -1535,6 +1451,7 @@ function TranscriptRow({
             toolBackground={toolBackground}
             smoothReveal={smoothStreaming}
             fresh={fresh}
+            revealVersion={revealVersion}
             foldTerminalCommand={foldTerminalCommand}
             onClick={foldOnClick}
             onOpenFile={onOpenFile}
@@ -1640,12 +1557,17 @@ export function LogoHeader({
   effort,
   cwd,
   whale = true,
+  whaleIdle = false,
+  working = false,
   skipIntro = false,
 }: {
   model: string
   effort?: string | undefined
   cwd: string
   whale?: boolean
+  /** Idle whale behaviors + working signal (passed through to LogoV2). */
+  whaleIdle?: boolean
+  working?: boolean
   /** Jump straight to the settled header (long-session resume: the ~3.4s
    *  opening animation competes with transcript mount batches). */
   skipIntro?: boolean
@@ -1655,7 +1577,7 @@ export function LogoHeader({
   if (isMinimalMode()) return null
   return (
     <Box flexDirection="column" marginBottom={1}>
-      <LogoV2 model={model} effort={effort} cwd={cwd} whale={whale} skipIntro={skipIntro} />
+      <LogoV2 model={model} effort={effort} cwd={cwd} whale={whale} whaleIdle={whaleIdle} working={working} skipIntro={skipIntro} />
     </Box>
   )
 }

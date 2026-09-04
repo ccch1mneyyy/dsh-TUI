@@ -83,33 +83,5 @@ instances.delete(captured)
 check('runtime-present shutdown detaches without unmount', detaches === 1 && handoffs === 1 && unmountsB === 0 && doneB)
 check('runtime-present shutdown prints the notice', captured.chunks.join('').includes('hint-two'))
 
-// Case C: concurrent finishExit calls share ONE cleanup — the second awaits
-// the in-flight first and deliberately never invokes its own done(): the
-// process-level exit action belongs to the exit that actually ran the
-// terminal cleanup (double-run would repeat the exit sequence and could
-// spawn the /update or /restart handoff twice).
-const streamC = new CapturingStream() as unknown as NodeJS.WriteStream
-const eventsC: string[] = []
-instances.set(streamC, {
-  stdout: streamC,
-  beginShutdown() { eventsC.push('begin') },
-  concludeShutdown() { eventsC.push('conclude') },
-  detachStdinForHandoff() { eventsC.push('handoff') },
-  drainStdin() {},
-} as never)
-swapStdout(streamC)
-let doneC1 = 0
-let doneC2 = 0
-await Promise.all([
-  finishExit(ctx, fakeInstance(() => {}), false, 'hint-concurrent', undefined, () => { doneC1 += 1 }),
-  finishExit(ctx, fakeInstance(() => {}), false, 'hint-concurrent', undefined, () => { doneC2 += 1 }),
-])
-swapStdout(originalStdout)
-instances.delete(streamC)
-const noticeCount = streamC.chunks.join('').split('hint-concurrent').length - 1
-check('concurrent finishExit runs latch/conclude/handoff exactly once', eventsC.join(',') === 'begin,conclude,handoff')
-check('concurrent finishExit writes the exit sequence once', noticeCount === 1)
-check('concurrent finishExit invokes done() once (first caller wins)', doneC1 === 1 && doneC2 === 0)
-
 console.log(results.join('\n'))
 if (failures > 0) process.exit(1)
