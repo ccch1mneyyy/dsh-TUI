@@ -2466,6 +2466,40 @@ export function Chat({
       event.stopImmediatePropagation()
       return
     }
+    // PgUp/PgDn page the transcript a full viewport at a time — the keyboard
+    // counterpart of the wheel branch above. Without it, a fullscreen session
+    // has no keyboard route to scrollback at all: the alt screen holds no
+    // native scrollback (see MessageList's historyPaint gate), so a mouse-less
+    // user cannot reach an earlier turn.
+    //
+    // Fullscreen only, on purpose. Inline mode paints committed history onto
+    // the main screen, so the terminal's OWN scrollback owns these keys there;
+    // claiming them would break paging that already works, exactly like the
+    // wheel branch above is a no-op inline.
+    //
+    // Routing mirrors the wheel branch: help stays yielded (PromptInput pages
+    // its help viewport with the same keys) and open pickers/dialogs are modal,
+    // so the transcript behind them must not move. Every guard above (session
+    // tree, settings, scenes, dashboards) already claimed the keyboard — those
+    // surfaces page their own lists with these keys.
+    if ((key.pageUp || key.pageDown) && fullscreen) {
+      if (helpOpen) return
+      const overlayModal =
+        overlay.kind !== 'none' &&
+        (overlay.kind !== 'workspace-picker' || workspaceTargets.length > 0)
+      if (overlayModal) return
+      // One less than the viewport keeps a row of context so a page never
+      // reads as a blank jump; a not-yet-measured handle falls back to a
+      // fixed page rather than paging by 0 (a dead key). The final page
+      // overshoots and the renderer clamps it exactly onto maxScroll, whose
+      // positional at-bottom restore re-pins sticky (the #421/#422 wheel
+      // contract) — so paging back home clears the new-messages pill too.
+      const viewport = handle?.getViewportHeight() ?? 0
+      const page = viewport > 1 ? viewport - 1 : 12
+      handle?.scrollBy(key.pageUp ? -page : page)
+      event.stopImmediatePropagation()
+      return
+    }
     // Help is modal over Chat. Chat's listener registers before PromptInput's,
     // so yield every remaining key before any global/custom shortcut, search,
     // selection, or working-turn cancellation branch can mutate hidden state.
