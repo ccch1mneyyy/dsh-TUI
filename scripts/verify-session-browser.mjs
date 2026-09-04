@@ -248,7 +248,7 @@ function makeChannel() {
       return {
         ok: false,
         reason: 'failed',
-        error: 'corrupt session log: seq gap in committed region',
+        error: 'session "a1b78223-cd6d-4f1e-bafe-a4e9deeb47da" contains event type "session/color" (seq 3) unknown to this harness and not marked ignorable; refusing to interpret the log — it was likely written by a newer harness',
       }
     },
     newSession: async () => false,
@@ -675,13 +675,29 @@ check('a ghost pin never becomes a row',
 
 // ── resume failure detail ──────────────────────────────────────────────────
 stdin.write('\r')
-const failureShown = await settled(() => /corrupt session log: seq gap in committed region/.test(flat(screen())))
+const failureShown = await settled(() => /contains event type "session\/color"/.test(flat(screen())))
+// #746: the tail of the harness's failure sentence must be on screen too —
+// the old single-line truncate lost everything after "contains even…".
+const failureTailShown = failureShown && /refusing to interpret the log/.test(flat(screen()))
 s = screen()
 check('a failed resume stays in the browser', /Resume session/.test(flat(s)), flat(s).slice(0, 180))
 check(
-  'the browser shows the real resume failure',
+  'the browser shows the real resume failure (head)',
   failureShown,
-  flat(s).slice(-220),
+  flat(s).slice(-260),
+)
+check(
+  'the whole failure sentence is readable, not truncated (#746)',
+  failureTailShown,
+  flat(s).slice(-300),
+)
+check(
+  'the error notice unwraps to at most 3 rows',
+  (() => {
+    const rows = s.split('\n').filter(l => l.includes('session/color') || l.includes('refusing to interpret'))
+    return rows.length > 0 && rows.length <= 3
+  })(),
+  JSON.stringify(s.split('\n').filter(l => l.includes('session/color') || l.includes('refusing')).length),
 )
 check(
   'the browser does not misreport every failure as a running model',
