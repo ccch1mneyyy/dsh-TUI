@@ -7,7 +7,7 @@
  *  - verifyAssetChecksum：SHA256SUMS 清单解析（`hex␣␣name` / `hex␣*name`
  *    二进制格式 / 大小写 hex / 单资产纯 digest 旁注）、篡改字节拒绝、
  *    缺条目拒绝（fail-closed）、畸形清单拒绝；
- *  - fetchGithubLatestRelease：release 资产列表中的 SHA256SUMS /
+ *  - fetchGithubNewestRelease：release 资产列表中的 SHA256SUMS /
  *    *.sha256 旁注被解析成 checksumUrl（注入 apiBaseUrl + 本地 http）；
  *  - downloadAndReplaceStandaloneBinary（本地 http server + 临时假二进制）：
  *    (a) sums 匹配 → 替换成功；篡改资产字节 → 拒绝替换且磁盘不留下载
@@ -80,9 +80,9 @@ if (typeof verifyAssetChecksum === 'function') {
   check('空清单 → 拒绝', !verifyAssetChecksum(payload, '', asset))
 }
 
-// ═══════════════ Part 2：fetchGithubLatestRelease 解析 checksumUrl ═══════════════
+// ═══════════════ Part 2：fetchGithubNewestRelease 解析 checksumUrl ═══════════════
 
-// 本地 http server 充当 GitHub：/releases/latest 返回 JSON，/asset 返回
+// 本地 http server 充当 GitHub：/releases 列表端点返回 JSON 数组，/asset 返回
 // 归档字节（tampered 标志切换内容），/SHA256SUMS 返回清单。
 let tamperAsset = false
 let omitSums = false
@@ -105,8 +105,9 @@ const ASSET_NAME = 'dsh-tui-standalone-linux-x64.tar.gz'
 
 const server = http.createServer(async (req, res) => {
   const url = req.url ?? ''
-  // 注意：fetchGithubLatestRelease 请求的是 `<apiBaseUrl>/repos/<repo>/releases/latest`。
-  if (url === '/repos/ccch1mneyyy/dsh-TUI/releases/latest') {
+  // 注意：fetchGithubNewestRelease 请求的是 `<apiBaseUrl>/repos/<repo>/releases?per_page=30`（列表端点，
+  // 含预发布；最新条目由 semver gt() 选出）。
+  if (url.startsWith('/repos/ccch1mneyyy/dsh-TUI/releases')) {
     const assets: Array<Record<string, string>> = [
       { name: ASSET_NAME, browser_download_url: `http://127.0.0.1:${serverPort()}/asset` },
     ]
@@ -123,7 +124,10 @@ const server = http.createServer(async (req, res) => {
       assets.push({ name: 'dsh-tui-standalone-win-x64.zip.sha256', browser_download_url: `http://127.0.0.1:${serverPort()}/dsh-tui-standalone-win-x64.zip.sha256` })
     }
     res.writeHead(200, { 'content-type': 'application/json' })
-    res.end(JSON.stringify({ tag_name: 'v9.9.9', assets }))
+    res.end(JSON.stringify([
+      { tag_name: 'v9.9.8', assets: [] },
+      { tag_name: 'v9.9.9', assets, prerelease: true },
+    ]))
     return
   }
   if (url === '/asset') {
@@ -187,19 +191,19 @@ function serverPort(): number {
 const base = `http://127.0.0.1:${serverPort()}`
 
 {
-  const release = await updateModule.fetchGithubLatestRelease({ apiBaseUrl: base })
+  const release = await updateModule.fetchGithubNewestRelease({ apiBaseUrl: base })
   check(
-    'fetchGithubLatestRelease 解析版本号',
+    'fetchGithubNewestRelease 解析版本号',
     (release as { version?: string } | undefined)?.version === '9.9.9',
     JSON.stringify(release),
   )
   check(
-    'fetchGithubLatestRelease 从 SHA256SUMS 资产解析 checksumUrl',
+    'fetchGithubNewestRelease 从 SHA256SUMS 资产解析 checksumUrl',
     typeof (release as { checksumUrl?: string } | undefined)?.checksumUrl === 'string',
     JSON.stringify(release),
   )
   omitSums = true
-  const noSums = await updateModule.fetchGithubLatestRelease({ apiBaseUrl: base })
+  const noSums = await updateModule.fetchGithubNewestRelease({ apiBaseUrl: base })
   check(
     'release 无 SHA256SUMS 资产时 checksumUrl 缺省（走 transition 警告路径）',
     (noSums as { checksumUrl?: string } | undefined)?.checksumUrl === undefined,
@@ -208,7 +212,7 @@ const base = `http://127.0.0.1:${serverPort()}`
   // 精确旁注（<assetName>.sha256）：仍被认领——单资产 digest 旁注校验的
   // 就是伴随的那一个资产，语义无歧义。
   sidecarMode = 'exact'
-  const exactSidecar = await updateModule.fetchGithubLatestRelease({ apiBaseUrl: base })
+  const exactSidecar = await updateModule.fetchGithubNewestRelease({ apiBaseUrl: base })
   check(
     'release 只发布精确 <assetName>.sha256 旁注时解析为 checksumUrl',
     (exactSidecar as { checksumUrl?: string } | undefined)?.checksumUrl === `${base}/${ASSET_NAME}.sha256`,
@@ -219,7 +223,7 @@ const base = `http://127.0.0.1:${serverPort()}`
   // 的任意 endsWith('.sha256') 兜底会抓错清单，fail-closed 把无辜用户的
   // 更新误拒成 checksum mismatch。
   sidecarMode = 'foreign'
-  const foreignSidecar = await updateModule.fetchGithubLatestRelease({ apiBaseUrl: base })
+  const foreignSidecar = await updateModule.fetchGithubNewestRelease({ apiBaseUrl: base })
   check(
     'release 只有其他资产名的 .sha256 旁注时 checksumUrl 缺省（不抓错清单）',
     (foreignSidecar as { checksumUrl?: string } | undefined)?.checksumUrl === undefined,

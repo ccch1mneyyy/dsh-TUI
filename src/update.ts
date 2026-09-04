@@ -104,11 +104,17 @@ export interface TuiUpdateInfo {
   downloadUrl?: string
   /** SHA256SUMS manifest URL when the release publishes one; absent = the update warning path. */
   checksumUrl?: string
+  /**
+   * What the install's registry serves when every observed source ahead of it
+   * (GitHub newest, npmjs.org) exceeds it: the update notice appends a
+   * registry-lag note so the user knows /update may not reach `latest` yet.
+   */
+  registryLatest?: string
 }
 
 /** What a fresh registry lookup says about this install. */
 export type TuiUpdateTarget =
-  | { kind: 'update'; current: string; latest: string; authoritative?: string; isStandalone?: boolean; downloadUrl?: string; checksumUrl?: string }
+  | { kind: 'update'; current: string; latest: string; authoritative?: string; registryLatest?: string; isStandalone?: boolean; downloadUrl?: string; checksumUrl?: string }
   | { kind: 'latest'; current: string; isStandalone?: boolean }
   | { kind: 'unknown'; isStandalone?: boolean }
 
@@ -274,7 +280,7 @@ export function getStandaloneAssetName(platform = process.platform, arch = proce
     : 'dsh-tui-standalone-linux-x64.tar.gz'
 }
 
-/** Options for {@link fetchGithubLatestRelease} — injectable for tests. */
+/** Options for {@link fetchGithubNewestRelease} — injectable for tests. */
 export interface GithubReleaseQuery {
   /** GitHub API base; defaults to `https://api.github.com`. */
   apiBaseUrl?: string
@@ -342,44 +348,70 @@ async function probeChecksumManifestUrl(url: string): Promise<string | undefined
 }
 
 /**
- * Fetch latest release info from GitHub Releases API for the standalone asset.
+ * Extract the standalone asset download URL and checksum manifest URL from
+ * one GitHub release payload object.
+ * @param payload - A single release object from the GitHub Releases API.
+ * @param version - The release's parsed semver version (for the fixed-name
+ *   download-URL fallback when the asset list lacks the platform asset).
+ */
+function standaloneReleaseInfo(payload: Record<string, unknown>, version: string): { downloadUrl?: string; checksumUrl?: string } {
+  const assetName = getStandaloneAssetName()
+  let downloadUrl: string | undefined
+  let checksumUrl: string | undefined
+  if (Array.isArray(payload.assets)) {
+    const asset = (payload.assets as unknown[]).find(
+      (a: unknown) => isRecord(a) && a.name === assetName && typeof a.browser_download_url === 'string',
+    ) as Record<string, unknown> | undefined
+    if (asset !== undefined && typeof asset.browser_download_url === 'string') {
+      downloadUrl = asset.browser_download_url
+    }
+    checksumUrl = findChecksumAssetUrl(payload.assets as unknown[], assetName)
+  }
+  if (downloadUrl === undefined) {
+    downloadUrl = `https://github.com/${GITHUB_REPO}/releases/download/v${version}/${assetName}`
+  }
+  return checksumUrl === undefined ? { downloadUrl } : { downloadUrl, checksumUrl }
+}
+
+/**
+ * Fetch the NEWEST release from GitHub for the standalone asset — by semver
+ * over the releases LIST, not `/releases/latest`.
+ *
+ * `/releases/latest` returns only the newest non-prerelease, so while the
+ * project rides a prerelease line (e.g. 0.10.0-beta.*) the "latest" endpoint
+ * serves an older tag than the newest published release (measured 2026-09-04:
+ * latest = v0.10.0-beta.3 while v0.10.0-beta.5 was published) and standalone
+ * installs would never be offered the newer prereleases. The list endpoint
+ * includes prereleases; the newest entry by `gt()` is the release the
+ * updater must compare against.
  *
  * @param options - Injectable API base / fetch for tests.
- * @returns Release version tag, matching asset download URL, and the
- *   SHA256SUMS manifest URL when the release ships one, or `undefined` on any
- *   failure.
+ * @returns Release version, matching asset download URL, and the SHA256SUMS
+ *   manifest URL when the release ships one, or `undefined` on any failure.
  */
-export async function fetchGithubLatestRelease(options: GithubReleaseQuery = {}): Promise<{ version: string; downloadUrl?: string; checksumUrl?: string } | undefined> {
+export async function fetchGithubNewestRelease(options: GithubReleaseQuery = {}): Promise<{ version: string; downloadUrl?: string; checksumUrl?: string } | undefined> {
   const doFetch = options.fetchImpl ?? fetch
   const controller = new AbortController()
   const timeout = setTimeout(() => controller.abort(), UPDATE_CHECK_TIMEOUT_MS)
   try {
-    const response = await doFetch(`${options.apiBaseUrl ?? 'https://api.github.com'}/repos/${GITHUB_REPO}/releases/latest`, {
+    const response = await doFetch(`${options.apiBaseUrl ?? 'https://api.github.com'}/repos/${GITHUB_REPO}/releases?per_page=30`, {
       headers: { accept: 'application/vnd.github.v3+json', 'user-agent': 'dsh-tui-updater' },
       signal: controller.signal,
     })
     if (!response.ok) return undefined
     const payload: unknown = await response.json()
-    if (!isRecord(payload) || typeof payload.tag_name !== 'string') return undefined
-    const rawTag = payload.tag_name.replace(/^v/, '')
-    const version = valid(rawTag)
-    if (version === null) return undefined
-    const assetName = getStandaloneAssetName()
-    let downloadUrl: string | undefined
-    let checksumUrl: string | undefined
-    if (Array.isArray(payload.assets)) {
-      const asset = (payload.assets as unknown[]).find(
-        (a: unknown) => isRecord(a) && a.name === assetName && typeof a.browser_download_url === 'string',
-      ) as Record<string, unknown> | undefined
-      if (asset !== undefined && typeof asset.browser_download_url === 'string') {
-        downloadUrl = asset.browser_download_url
+    if (!Array.isArray(payload) || payload.length === 0) return undefined
+    let newest: { version: string; payload: Record<string, unknown> } | undefined
+    for (const entry of payload as unknown[]) {
+      if (!isRecord(entry) || typeof entry.tag_name !== 'string') continue
+      const version = valid(entry.tag_name.replace(/^v/, ''))
+      if (version === null) continue
+      if (newest === undefined || gt(version, newest.version)) {
+        newest = { version, payload: entry }
       }
-      checksumUrl = findChecksumAssetUrl(payload.assets as unknown[], assetName)
     }
-    if (downloadUrl === undefined) {
-      downloadUrl = `https://github.com/${GITHUB_REPO}/releases/download/v${version}/${assetName}`
-    }
-    return checksumUrl === undefined ? { version, downloadUrl } : { version, downloadUrl, checksumUrl }
+    if (newest === undefined) return undefined
+    return { version: newest.version, ...standaloneReleaseInfo(newest.payload, newest.version) }
   } catch {
     return undefined
   } finally {
@@ -829,7 +861,7 @@ export async function resolveTuiUpdateTarget(): Promise<TuiUpdateTarget> {
   if (currentVersion === null) return { kind: 'unknown' }
 
   if (isStandaloneRuntime()) {
-    const ghRelease = await fetchGithubLatestRelease()
+    const ghRelease = await fetchGithubNewestRelease()
     const latest = ghRelease?.version ?? (await fetchLatestVersion(resolveRegistryBase()))
     if (latest === undefined) return { kind: 'unknown' }
     if (!gt(latest, currentVersion)) return { kind: 'latest', current: currentVersion, isStandalone: true }
@@ -849,15 +881,38 @@ export async function resolveTuiUpdateTarget(): Promise<TuiUpdateTarget> {
       : { kind: 'update', current: currentVersion, latest, isStandalone: true, downloadUrl, checksumUrl }
   }
 
+  // The repository's GitHub releases are the authoritative version source
+  // (they are what the release automation publishes first); the registry
+  // decides what /update can actually install, and npmjs.org arbitrates
+  // mirror lag. The newest observable version across all three is what the
+  // user is told about — a registry that lags GitHub must not hide a
+  // published release, and a GitHub that lags npm must not hide a published
+  // package.
   const registryBase = resolveRegistryBase()
-  const [latest, official] = await Promise.all([
+  const [registryLatest, official, ghRelease] = await Promise.all([
     fetchLatestVersion(registryBase),
     registryBase === DEFAULT_REGISTRY ? undefined : fetchLatestVersion(DEFAULT_REGISTRY),
+    fetchGithubNewestRelease(),
   ])
-  if (latest === undefined) return { kind: 'unknown' }
+  const candidates = [registryLatest, official, ghRelease?.version].filter(
+    (v): v is string => v !== undefined,
+  )
+  if (candidates.length === 0) return { kind: 'unknown' }
+  const latest = candidates.reduce((a, b) => (gt(b, a) ? b : a))
   if (!gt(latest, currentVersion)) return { kind: 'latest', current: currentVersion }
   const authoritative = official !== undefined && gt(official, latest) ? official : undefined
-  return { kind: 'update', current: currentVersion, latest, ...(authoritative === undefined ? {} : { authoritative }) }
+  // GitHub ahead of every registry the install could pull from: the notice
+  // must say so, because /update on an npm install can only fetch what the
+  // registry serves — the user may see "update available" for a version
+  // /update cannot install until the npm publish catches up.
+  const registryAhead = registryLatest !== undefined && gt(latest, registryLatest) ? registryLatest : undefined
+  return {
+    kind: 'update',
+    current: currentVersion,
+    latest,
+    ...(authoritative === undefined ? {} : { authoritative }),
+    ...(registryAhead === undefined ? {} : { registryLatest: registryAhead }),
+  }
 }
 
 /**
@@ -874,6 +929,7 @@ export async function checkForTuiUpdate(): Promise<TuiUpdateInfo | undefined> {
         isStandalone: target.isStandalone,
         downloadUrl: target.downloadUrl,
         checksumUrl: target.checksumUrl,
+        registryLatest: target.registryLatest,
       }
     : undefined
 }
