@@ -56,6 +56,7 @@ const LAST = 59
 
 function makeChannel() {
   const rows = []
+  let localSeq = 0
   for (let i = FIRST; i <= LAST; i += 1) {
     rows.push({ id: i, kind: 'assistant', text: marker(i), seq: i, fresh: false })
   }
@@ -96,7 +97,14 @@ function makeChannel() {
     commandCompletions: () => [],
     contextSegments: { system: 0, prompt: 0, assistant: 0, thinking: 0, tools: 0 },
     notify() {},
-    pushLocal() {},
+    // Real pushLocal folds a local row into the transcript; mirroring that
+    // (row + emit) lets the question-close effect's drained summary be
+    // asserted end-to-end instead of mocked into a void.
+    pushLocal(title, lines) {
+      localSeq += 1
+      rows.push({ id: 1000 + localSeq, kind: 'local', text: `${title} ${lines.join(' ')}`, seq: 1000 + localSeq, fresh: false })
+      channel.emit()
+    },
     subscribe(l) {
       listeners.add(l)
       return () => listeners.delete(l)
@@ -139,6 +147,7 @@ function makeChannel() {
  *  open the AskUserQuestionPanel through Chat's actual useSyncExternalStore. */
 function makeQuestionStore() {
   let snapshot = null
+  let summaries = [{ title: 'QA-DRAIN-ANCHOR', lines: ['drained-ok'] }]
   const listeners = new Set()
   return {
     subscribe: l => {
@@ -147,6 +156,17 @@ function makeQuestionStore() {
     },
     getSnapshot: () => snapshot,
     answerCurrent() {},
+    // Chat's panel-close effect calls this unconditionally (drains completed
+    // batch summaries into the transcript). Handing back one summary turns
+    // the drain into an observable: the drained row must surface in the
+    // transcript after disarm. Omitting the method entirely throws a
+    // TypeError mid-effect — a race the assertions can sometimes outrun,
+    // which is exactly the flakiness this script must not contain.
+    takeSummaries: () => {
+      const drained = summaries
+      summaries = []
+      return drained
+    },
     arm() {
       snapshot = {
         key: 'q1',
@@ -282,8 +302,19 @@ if (panelShown) {
   check('fullscreen: question panel open — PgUp still pages the transcript', !screenHas(full.term, marker(LAST)))
   check('fullscreen: question panel open — the panel is undisturbed', screenHas(full.term, 'PICK-ONE-ANCHOR') === panelVisible)
 }
+// Return to the tail before closing: the panel scenario left the view one
+// page up, and the drained summary lands at the very bottom — only visible
+// with the follow re-pinned.
+const backDown = await pageUntil(full.term, full.stdin, PGDN, () => screenHas(full.term, marker(LAST)), 3)
+check('fullscreen: paged home before closing the panel', backDown > 0 || screenHas(full.term, marker(LAST)))
 full.questionStore.disarm()
-await settled(() => !screenHas(full.term, 'PICK-ONE-ANCHOR'), { timeoutMs: 3000 })
+const panelClosed = await settled(() => !screenHas(full.term, 'PICK-ONE-ANCHOR'), { timeoutMs: 3000 })
+check('fullscreen: question panel closes cleanly', panelClosed)
+// The close effect drains takeSummaries() through pushLocal — the summary
+// must surface as a transcript row (this is the check that turns a broken
+// store contract into a red line instead of a silent mid-effect TypeError).
+const drained = await settled(() => screenHas(full.term, 'QA-DRAIN-ANCHOR'), { timeoutMs: 3000 })
+check('fullscreen: closed panel drains its summary into the transcript', drained)
 await full.instance.unmount()
 
 // ---- inline: the terminal owns these keys ----
