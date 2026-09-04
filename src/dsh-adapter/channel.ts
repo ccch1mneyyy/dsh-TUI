@@ -6584,8 +6584,11 @@ export function createChannel(
     setSessionColor(color) {
       // `session/color` is a dsh-tui plugin event — not in dsh-session's
       // typed union, so appended through the same cast applyMode uses for
-      // its sandbox/approval overrides. It replays on resume/rewind like
-      // session/title, keeping each session's accent color its own.
+      // its sandbox/approval overrides. Strict reads only accept it via the
+      // LEGACY_SESSION_EVENT_TYPES registration (compat/sessionLog.ts) —
+      // upstream's whitelist does NOT know this type the way it knows
+      // session/title, so resume/rewind survive solely through that
+      // registration; new persisted own types must be listed there.
       ;(agent.session as unknown as { append(type: string, data: Record<string, unknown>): unknown })
         .append('session/color', { color })
       state.sessionColor = color

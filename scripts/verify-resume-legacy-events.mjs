@@ -49,9 +49,9 @@ const {
 } = await import('../lib/types/dsh-adapter/compat/sessionLog.js')
 
 /** Hand-craft one pre-#143 shaped log: header frame + one event frame. */
-function writeTaintedLog(id, eventType) {
+function writeTaintedLog(id, eventType, data = {}) {
   const header = { type: 'session', version: SESSION_FORMAT_VERSION, id, createdAt: 1, cwd: '/tmp/verify', delegationDepth: 0 }
-  const event = { type: eventType, seq: 0, time: 2, data: {} }
+  const event = { type: eventType, seq: 0, time: 2, data }
   const dir = join(root, '--tmp-verify--', id)
   mkdirSync(dir, { recursive: true })
   const file = join(dir, 'session.jsonl.zstd')
@@ -120,6 +120,20 @@ for (const type of LEGACY_SESSION_EVENT_TYPES) {
 assert.ok(!KNOWN_SESSION_EVENT_TYPES.has('acme/required-policy'), 'unknown stays unknown')
 ensureLegacySessionEventTypes() // second call: no-op, never throws
 assert.equal((await persistence.load(legacyId)).events.length, 1, 'still loads after re-ensure')
+
+// 6. `session/color` (the /color persistence; unlisted until 2026-09-04,
+// which made every colored session un-resumable — user-reported). The
+// whitelist-coherence loop in step 5 already proves it registered in every
+// reachable KNOWN copy; here prove the payload itself survives the strict
+// read with the real shape ({ color: string }).
+{
+  const colorId = 'aaaaaaa1-bbbb-cccc-dddd-eeeeeeeeeeee'
+  writeTaintedLog(colorId, 'session/color', { color: 'red' })
+  const loaded = await persistence.load(colorId)
+  assert.equal(loaded.events.length, 1, 'colored session loads after registration')
+  assert.equal(loaded.events[0].type, 'session/color')
+  assert.deepEqual(loaded.events[0].data, { color: 'red' }, 'color payload survives the strict read')
+}
 
 // --- part 2: split CLI/profile trees ---------------------------------------
 // Three PHYSICAL dsh-session copies (stub packages — anchor coverage is
