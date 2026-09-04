@@ -128,6 +128,7 @@ import type {
   TuiRewindMode,
   TuiRewindPromptDecision,
 } from './extension-events.js'
+import { IdeChannel, ideLockDir, type SelectionAttachedInfo, type SelectionSnapshot } from './ide-channel.js'
 
 /** `tui/input` return normalization: transform/handled/cancel or no opinion.
  *  A blank `{ text }` rewrite is NOT a decision — it is logged and the chain
@@ -578,6 +579,12 @@ export interface ChatRow {
   /** Source session event seq — present on every log-derived row (rewind
    *  fork anchor on user rows; window-floor bookkeeping for the rest). */
   seq?: number
+  /** IDE selection indicator attached to this user turn (PR-B · AC-5):
+   *  rendered above the prompt bubble. Present only on live-submitted rows
+   *  that consumed a selection — replayed rows have no record of it (the
+   *  session log stores model-facing blocks, not UI bookkeeping), which is
+   *  the correct degradation: an old transcript shows no false indicators. */
+  selectionAttached?: SelectionAttachedInfo
   /** True when the row's full text was folded to keep the transcript window
    *  bounded (see MAX_ROWS); the session log still holds the full content
    *  and loadOlder() restores it. */
@@ -1011,6 +1018,14 @@ export interface Channel {
    * panel stays hidden until it lands.
    */
   readonly loadedContext: LoadedContext | undefined
+  /**
+   * The live IDE selection (loopback channel), or `undefined` when no IDE is
+   * connected / the selection is empty — the prompt footer renders a
+   * `⧉ N lines selected` badge from it (T-FIX-02). Cleared by an isEmpty
+   * notification; every update bumps `version` so subscribed screens
+   * re-render immediately, before any submit consumes the selection.
+   */
+  readonly selection: SelectionSnapshot | undefined
   /**
    * Messages submitted while the model was working and not yet claimed by a
    * turn (`steer` → next step boundary of the running turn, `followup` →
@@ -1522,6 +1537,8 @@ export interface ChannelState {
   todos: TodoPanelItem[]
   /** Loaded-context snapshot (see the public Channel type). */
   loadedContext: LoadedContext | undefined
+  /** Live IDE selection projection (see the public Channel type). */
+  selection: SelectionSnapshot | undefined
   /** Messages submitted while working, awaiting their turn/step boundary.
    *  Driven by agent inbox events (inserted/claimed/discarded). */
   pending: PendingMessage[]
@@ -2680,6 +2697,12 @@ export function createChannel(
    * attachment block. The pending preview tracks the typed text.
    */
   const deliverUserText = (text: string, placement: PendingMessage['placement']): void => {
+    // ENQUEUE-time capture (maintainer review #4): read the live selection
+    // and cwd synchronously NOW — while the user is hitting submit — not
+    // inside the async chain, where expandMentions parks the delivery and a
+    // selection made in between would attach to the wrong message.
+    const enqSelection = currentSelection
+    const enqCwd = state.cwd
     sendChain = sendChain.then(async () => {
       const expansion = await expandMentions(
         mentionFs(ctx),
@@ -2688,10 +2711,19 @@ export function createChannel(
         mentionAttachments(ctx),
         stagedImages,
       )
+      // IDE selection consumption (PR-B · AC-5, DESIGN D7): after `@`-mention
+      // expansion, append the live editor selection as its own attached-file
+      // block — direct construction, never text parsing, failures silently
+      // skipped. attachIdeSelection lives with the ideChannel wiring near the
+      // end of this factory.
+      const selectionAttached = await attachIdeSelection(expansion.blocks, enqCwd, enqSelection)
       const message = createUserMessage({
         content: expansion.blocks,
         source: { kind: 'user' },
       })
+      if (selectionAttached !== undefined) {
+        rememberSelectionAttached(message.id, selectionAttached)
+      }
       // Track BEFORE the agent call: a synchronous throw inside
       // followup/steer rolls the preview back; otherwise the inbox events
       // retire it once the message is claimed or discarded.
@@ -4161,6 +4193,7 @@ export function createChannel(
     goal: undefined,
     todos: [],
     loadedContext: undefined,
+    selection: undefined,
     pending: [],
     commandList: LOCAL_COMMANDS,
     commandCompletions(input: string) {
@@ -5539,6 +5572,7 @@ export function createChannel(
       // breadcrumb follows the adopted cwd.
       state.cwd = handle.agent.session.header.cwd ?? state.cwd
       state.displayCwd = workspaceService.describe(state.cwd).description ?? state.cwd
+      resetIdeSelection()
       refreshGitBranch()
       state.agentPreset = resumeComposed.agentPreset
       // Status-line route follows the resumed session (review feedback): the
@@ -5786,6 +5820,7 @@ export function createChannel(
       const previousDisplay = state.displayCwd
       state.cwd = target.cwd
       state.displayCwd = target.description ?? target.uri
+      resetIdeSelection()
       const switched = await state.newSession()
       if (!switched) {
         state.cwd = previousCwd
@@ -7442,6 +7477,13 @@ export function createChannel(
     releaseContributions() {
       releaseSkillCommands()
       unsubscribeScenes?.()
+      // Release the loopback IDE socket on overall teardown (coderabbit
+      // review). Deliberately NOT on agent/disposed: the factory outlives
+      // agent swaps (/new /resume /rewind) — stopping the channel mid-session
+      // would cut a live connection the next agent would then lack.
+      // ideChannel is declared later in the factory; the closure only reads
+      // it when this method runs (plugin teardown), well after init.
+      ideChannel.stop()
     },
     traceEvents() {
       // Immutable per-append snapshot (dsh-session caches the frozen array);
@@ -8247,6 +8289,26 @@ ${output}
     }
   }
 
+  /**
+   * Selection indicator bookkeeping for the transcript (T06 renders it):
+   * keyed by message id because rows are derived from session-log replay —
+   * the replay path (state.rows.push kind:'user') cannot know this at push
+   * time, so the live user/message handler looks the info up by
+   * `event.data.id`. Declared BEFORE the boot replay below: that replay is
+   * a top-level factory statement, so a later declaration would be dead in
+   * TDZ when the first replayed user/message arrives. Bounded like
+   * stagedImages: a long session must not grow it forever.
+   */
+  const selectionAttachedByMessageId = new Map<string, SelectionAttachedInfo>()
+  const rememberSelectionAttached = (messageId: string, info: SelectionAttachedInfo): void => {
+    selectionAttachedByMessageId.set(messageId, info)
+    while (selectionAttachedByMessageId.size > 128) {
+      const oldest = selectionAttachedByMessageId.keys().next().value as string | undefined
+      if (oldest === undefined) break
+      selectionAttachedByMessageId.delete(oldest)
+    }
+  }
+
   const renderEvent = (event: SessionEvent): void => {
     // Top-level `goal/change` events are how the goal service actually
     // records durable goal mutations (create/edit/pause/resume/complete/
@@ -8318,7 +8380,13 @@ ${output}
         if (event.data.source.kind !== 'user') break
         const text = firstTextOf(event.data.content)
         if (text) {
-          state.rows.push({ id: nextRowId, kind: 'user', text, seq: event.seq })
+          // T06 (PR-B · AC-5): the selection consumed by THIS message's
+          // delivery — deliverUserText keyed it by the same message id that
+          // arrives here as `event.data.id`. Replay misses the Map (UI
+          // bookkeeping is not in the session log), so restored rows carry
+          // no indicator, which is the intended degradation.
+          const selectionAttached = selectionAttachedByMessageId.get(event.data.id)
+          state.rows.push({ id: nextRowId, kind: 'user', text, seq: event.seq, selectionAttached })
           state.lastUserText = text
           // The context estimate counts everything sent to the model —
           // typed text AND the `@`-mention attachment blocks.
@@ -9226,6 +9294,83 @@ ${output}
   }
   refreshGitBranch()
 
+  // IDE selection channel (PR-B · AC-5): one IdeChannel per channel factory,
+  // started in the background against the session cwd — lock discovery needs
+  // it, env direct-connect does not but tolerates the extra hint. start() is
+  // fully non-throwing and self-degrading, so a missing IDE costs nothing
+  // (AC-4) and startup never waits on the loopback dial.
+  const ideChannel = new IdeChannel()
+  void ideChannel.start(process.env, ideLockDir(), state.cwd).catch(() => {})
+  let currentSelection: SelectionSnapshot | undefined
+  ideChannel.onSelection(snapshot => {
+    // The channel already clears empty snapshots internally; mirror that
+    // here so consumption reads one consistent variable.
+    currentSelection = snapshot.isEmpty ? undefined : snapshot
+    // Live prompt-footer badge (T-FIX-02): the projection must reach the
+    // screen BEFORE the user submits — emit() bumps `version` so the
+    // useSyncExternalStore tree re-renders with the new badge immediately.
+    state.selection = currentSelection
+    state.emit()
+  })
+
+  /**
+   * Invalidate the live selection when the session's working directory
+   * changes (coderabbit Major review): `/resume` takes over the persisted
+   * header cwd, `/workspace` switches to another directory. A selection made
+   * in the OLD workspace would otherwise stay in currentSelection /
+   * state.selection — the badge shows it and the next submit resolves its
+   * RELATIVE path against the NEW cwd, attaching the wrong file.
+   *
+   * Deliberately does NOT stop()/start() the IdeChannel: its state machine is
+   * terminal-on-disconnect by design (DESIGN §3) — stop() leaves
+   * `disconnected`, and start() guard-clauses on `state !== 'idle'`, so a
+   * stop-then-start can never reconnect and silently kills the whole channel
+   * (the extension then falls back to the sendText typing approximation).
+   * In the primary env-direct launch the same VS Code window keeps pushing
+   * selection_changed after the cwd switch, so clearing the value is enough —
+   * the next snapshot repopulates it for the new workspace.
+   */
+  const resetIdeSelection = (): void => {
+    currentSelection = undefined
+    state.selection = undefined
+    state.emit()
+  }
+
+  /**
+   * Append the live selection's attached-file block to a message's content.
+   * Returns what was attached ({lines, path}) or undefined when there is
+   * nothing to attach — no selection since the last isEmpty, or an
+   * unresolvable/unreadable file. Every failure mode is silent: an IDE-side
+   * extra must never block a user send. The snapshot survives consumption so
+   * consecutive submits can re-attach the same selection (DESIGN §3).
+   */
+  const attachIdeSelection = async (
+    blocks: ContentBlock[],
+    cwd: string,
+    snapshot?: SelectionSnapshot,
+  ): Promise<SelectionAttachedInfo | undefined> => {
+    // A call-site snapshot wins (deliverUserText captures at enqueue so the
+    // attach reflects what was selected AT SUBMIT, review #4); the live-value
+    // default keeps standalone verifier calls reading the current selection.
+    const selection = snapshot ?? currentSelection
+    if (selection === undefined || selection.isEmpty) return undefined
+    try {
+      const fs = mentionFs(ctx)
+      if (fs === undefined) return undefined
+      const absolute = isAbsolute(selection.path) ? selection.path : join(cwd, selection.path)
+      const target = await fs.resolve(absolute)
+      const info = await fs.stat(target)
+      if (info?.type !== 'file') return undefined
+      const content = await fs.readText(target)
+      const block = buildSelectionBlock(selection, content)
+      if (block === undefined) return undefined
+      blocks.push({ type: 'text', text: block.text })
+      return { lines: block.lines, path: selection.path }
+    } catch {
+      return undefined
+    }
+  }
+
   return state
 }
 
@@ -9490,6 +9635,28 @@ async function tryResolveMention(fs: MentionFs, absolute: string): Promise<Resol
   }
 }
 
+/**
+ * Slice `content` into the 1-based inclusive [`startLine`, `endLine`] range
+ * (the IDE selection block shares this single slice source). Returns
+ * undefined for malformed ranges (non-safe integers, zero/negative start,
+ * inverted) and for a start past EOF — counted against REAL lines: a
+ * trailing newline splits into a phantom final element that is not a line.
+ */
+function sliceLines(
+  content: string,
+  startLine: number,
+  endLine?: number,
+): string | undefined {
+  const end = endLine ?? startLine
+  if (!Number.isSafeInteger(startLine) || startLine < 1) return undefined
+  if (!Number.isSafeInteger(end) || end < startLine) return undefined
+  const lines = content.split('\n')
+  // A trailing newline splits into a phantom final element that is not a line.
+  if (lines.length > 1 && lines[lines.length - 1] === '') lines.pop()
+  if (startLine > lines.length) return undefined
+  return lines.slice(startLine - 1, end).join('\n')
+}
+
 export interface MentionExpansion {
   /** Model-facing blocks: the typed text first, one block per attachment. */
   blocks: ContentBlock[]
@@ -9497,6 +9664,60 @@ export interface MentionExpansion {
   attached: string[]
   /** Mention tokens that failed to resolve (kept literal, warned about). */
   missing: string[]
+}
+
+/** The IDE selection snapshot a submit consumes. Kept as a plain shape so
+ *  the block builder stays a pure function (verifier-friendly). */
+export type SelectionBlockInput = SelectionSnapshot
+
+/**
+ * Escape a path for reuse inside a quoted `<attached-file path="…">` attribute
+ * (coderabbit review): POSIX filenames are legal with `"`, `&`, `<`, `>` — a
+ * raw interpolated path could break out of the attribute or smuggle markup
+ * into the model-facing block. Escaping covers the XML-significant set; `&`
+ * first so the replacements themselves are not re-escaped.
+ */
+export function escapeSnippetAttr(value: string): string {
+  return value.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+}
+
+/**
+ * Build the `<attached-file path="…" selection>` block for an IDE selection
+ * (PR-B · AC-5, DESIGN D7): unlike `@`-mentions this never goes through text
+ * parsing — selection paths may contain spaces no tokenizer could survive —
+ * and reuses the same sliceLines single source as `#L` mentions. Coordinates
+ * arrive 0-based inclusive from the extension and convert to sliceLines'
+ * 1-based; an endLine past EOF clamps to the last line (the model receives
+ * every remaining line), while a startLine past EOF yields undefined — the
+ * caller silently skips instead of attaching an empty or stale block. An
+ * empty selection is rejected here too so the guard cannot be bypassed.
+ */
+export function buildSelectionBlock(
+  selection: SelectionBlockInput,
+  content: string,
+): { text: string; lines: number } | undefined {
+  if (selection.isEmpty) return undefined
+  // 0-based inclusive [start, end] → 1-based inclusive [start+1, end+1].
+  // sliceLines clamps an oversized end itself (Array#slice bounds); a start
+  // past EOF returns undefined and the whole attach is silently dropped.
+  const sliced = sliceLines(
+    content,
+    selection.startLine + 1,
+    selection.endLine + 1,
+  )
+  if (sliced === undefined || sliced === '') return undefined
+  // Capped like @-mention attachments (coderabbit review): a huge selection
+  // would otherwise exceed the context window. Same policy as expandMentions
+  // (MENTION_MAX_FILE_CHARS), with the same visible truncation marker so the
+  // model knows the tail was cut.
+  let body = sliced
+  if (body.length > MENTION_MAX_FILE_CHARS) {
+    body = `${body.slice(0, MENTION_MAX_FILE_CHARS)}\n[… truncated]`
+  }
+  return {
+    text: `<attached-file path="${escapeSnippetAttr(selection.path)}" selection>\n${body}\n</attached-file>`,
+    lines: sliced.split('\n').length,
+  }
 }
 
 /**

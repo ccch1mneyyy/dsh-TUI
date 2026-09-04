@@ -13,6 +13,7 @@ import { formatJobDuration, type BackgroundJobState } from '../dsh-adapter/jobs.
  *  real Chat with partial channel literals that predate the jobs field. */
 const NO_BACKGROUND_JOBS: readonly BackgroundJobState[] = []
 import type { Channel } from '../dsh-adapter/channel.js'
+import type { SelectionSnapshot } from '../dsh-adapter/ide-channel.js'
 import { modeDisplayName } from '../sessionModes.js'
 import { MiniWake } from '../components/trajectory/MiniWake.js'
 import { ContextBarView } from '../components/ContextBarView.js'
@@ -280,6 +281,7 @@ export function StatusLine({
     }
   }
 
+const selectionBadge = formatSelectionBadge(channel.selection)
   // Background-job chip (ctx.jobs; /jobs): live count of running/stopping
   // jobs, shown only while non-zero — a silent zero is not information.
   // Not preference-gated: it is transient situational state like the goal
@@ -300,7 +302,6 @@ export function StatusLine({
           </Text>
         ),
       }
-
   const leftFields: FieldPart[] = [
     ...(statusBar.model
       ? [{ key: 'model', id: 'model' as const, node: <Text color="inactiveShimmer">{channel.model}</Text> }]
@@ -342,6 +343,17 @@ export function StatusLine({
   ]
 
   const rightFields: FieldPart[] = [
+    // Live IDE-selection badge first: it tracks the user's in-editor gesture,
+    // the freshest signal in the footer (T-FIX-02). Absent without an IDE —
+    // no placeholder, matching the official Claude Code footer.
+    ...(selectionBadge !== undefined
+      ? [{
+          key: 'ideSelection',
+          node: (
+            <Text color="ide" wrap="truncate">{selectionBadge}</Text>
+          ),
+        }]
+      : []),
     // Goal chip first: session-level state outranks repo/location details.
     ...(statusBar.goal && channel.goal !== undefined
       ? [{
@@ -720,6 +732,24 @@ export function formatCacheHitRate(usage: UsageSnapshot | undefined): string | u
   const total = usage.input + usage.cacheRead + usage.cacheWrite
   if (!Number.isFinite(total) || total <= 0) return undefined
   return `${((usage.cacheRead / total) * 100).toFixed(1)}%`
+}
+
+/**
+ * The prompt footer's live IDE-selection badge (T-FIX-02), mirroring Claude
+ * Code's `⧉ N lines selected`: English only (like every other footer field),
+ * singular/plural aware, line count from the snapshot's 0-based inclusive
+ * range. `undefined` (no IDE yet / cleared by an isEmpty notification)
+ * renders no field at all — a manually launched session never shows a
+ * placeholder. Exported for scripts/verify-ide-channel.tsx.
+ */
+export function formatSelectionBadge(
+  selection:
+    | { startLine: number; endLine: number; isEmpty?: boolean }
+    | undefined,
+): string | undefined {
+  if (selection === undefined || selection.isEmpty === true) return undefined
+  const lines = selection.endLine - selection.startLine + 1
+  return `⧉ ${lines} ${lines === 1 ? 'line' : 'lines'} selected`
 }
 
 function basename(path: string): string {

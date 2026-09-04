@@ -72,13 +72,19 @@ the interface, and removing it leaves no core modifications behind.
   in-row star or `Ctrl+P` toggles, pins persist in `~/.dsh-tui`), alongside
   `/new`, `/workspace`, `/compact`, `/export`,
   the `/btw` side question, model switching, double-`Esc` rewind through a
-  session fork, vim editing for the prompt (`/vim`), mouse selection
+session fork, vim editing for the prompt (`/vim`), mouse selection
   editing in the prompt (drag to select, Shift+click to extend,
   double-click word select, `Ctrl+C` to copy the selection), and a
   fullscreen draft editor (`Ctrl+Shift+E` or the `⛶` row button: line
   numbers, current-line highlight, `Enter` = newline, `Ctrl+Enter` = send,
   wheel scrolling, click/drag selection — long drafts get the whole
   screen; disable it in `/settings`).
+- **IDE selection channel**: when launched from the VS Code extension, selecting
+  code in the editor instantly shows a `⧉ N lines selected` badge under the
+  prompt, and submitting attaches only the selected lines (with a
+  `⧉ Selected N lines` indicator in the transcript). Manually launched sessions
+  (tmux/SSH) discover a local IDE through lock files automatically; without an
+  IDE everything degrades silently. See [vscode.md](docs/vscode.md).
 - **Official DSH integrations**: agent presets, skills, MCP, goals, todos,
   subagents, and `ask_user_question` are connected through existing services
   and registries. `/skills` shows skills discovered from the active profile,

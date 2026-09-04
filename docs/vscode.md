@@ -36,7 +36,18 @@ dsh-TUI 是终端程序：它把 ANSI 写进 PTY、从 PTY 读按键，因此任
 | 多会话 | 每次点击新开一个会话终端 | 同，旧会话继续运行 |
 | 侧边栏 | sessions 会话列表 | 会话历史（按项目分组树，更强） |
 | 自动启停 | 打开 = 启动；关闭终端 = 结束 | 同 |
-| 环境注入 | — | `DSH_TUI_LANG` / `$VISUAL` / `$DSH_HOME` / 指定会话 id |
+| 环境注入 | — | `DSH_TUI_LANG` / `$VISUAL` / `$DSH_HOME` / 指定会话 id / `DSH_TUI_IDE_PORT/TOKEN`（选区通道） |
+| 编辑器选区联动 | 选区自动进上下文，prompt 下方 `⧉ N lines selected` | 同（IDE 选区通道，见下） |
+
+### IDE 选区通道
+
+搭配 dsh-tui ≥ 含 IDE 选区通道的版本，扩展会在本机起一个 loopback WebSocket 服务并写入 lock 文件；dsh-tui 启动时通过环境变量直连（手动启动的会话则扫描 lock 自动发现）。此后：
+
+- 编辑器选中代码 → TUI prompt 下方**实时**出现 `⧉ N lines selected` 徽标（清空选区即消失）；
+- 提交消息 → 选中行按坐标切片自动附加进模型上下文，transcript 用户消息上方渲染「⧉ Selected N lines from <相对路径>」指示行；
+- 选区推送只含坐标（不含文本），文件内容由 TUI 按需读取；无 IDE / 断连时静默降级，TUI 其余功能零影响。
+
+![IDE 选区通道：footer 实时徽标与 transcript 指示行](../screenshots/ide-selection-badge.png)
 
 ### 前置条件
 

@@ -3485,6 +3485,7 @@ export function Chat({
           onOpenSubagent={(agentId) => setSubagentDetailId(agentId)}
           onOpenJobs={() => setJobsPanelOpen(true)}
           onOpenFile={openFileActions}
+          sessionCwd={channel.cwd}
         />
         </ScrollBox>
         {(() => {

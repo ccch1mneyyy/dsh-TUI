@@ -43,7 +43,18 @@ TUI's rendering core — it only **hosts** it and adds editor integration.
 | Multiple sessions | Every click opens a new session terminal | Same; old sessions keep running |
 | Sidebar | Sessions list | Session history (grouped by project — stronger) |
 | Auto start/stop | Open = start; closing the terminal = end | Same |
-| Env injection | — | `DSH_TUI_LANG` / `$VISUAL` / `$DSH_HOME` / session id |
+| Env injection | — | `DSH_TUI_LANG` / `$VISUAL` / `$DSH_HOME` / session id / `DSH_TUI_IDE_PORT/TOKEN` (selection channel) |
+| Editor selection sync | Selection enters context automatically; `⧉ N lines selected` under the prompt | Same (IDE selection channel, below) |
+
+### IDE selection channel
+
+With a dsh-tui build that includes the IDE selection channel, the extension runs a loopback WebSocket server and writes a lock file; dsh-tui connects via injected env vars when launched from the extension (manually launched sessions discover it by scanning the lock). Afterwards:
+
+- Selecting code in the editor instantly shows a `⧉ N lines selected` badge under the TUI prompt (it disappears when the selection clears);
+- Submitting a message attaches only the selected lines to the model context, with a `⧉ Selected N lines from <relative path>` indicator above the user bubble;
+- Selection pushes carry coordinates only (no text) — the TUI reads file content on demand; without an IDE or on disconnect everything degrades silently with zero impact on the rest of the TUI.
+
+![IDE selection channel: live footer badge and transcript indicator](../screenshots/ide-selection-badge.png)
 
 ### Prerequisites
 
