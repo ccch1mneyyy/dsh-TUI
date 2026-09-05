@@ -200,9 +200,6 @@ export type Operation =
   | NoSelectOperation
   | ShiftOperation
 
-/** How a backdrop node treats the cells already painted beneath it. */
-export type ShadeMode = 'dim'
-
 /**
  * Restyle the cells already in the region at this point of the paint
  * order: a modal layer's backdrop. Applied in sequence like a write, so
@@ -212,7 +209,6 @@ export type ShadeMode = 'dim'
 type ShadeOperation = {
   type: 'shade'
   region: Rectangle
-  mode: ShadeMode
 }
 
 type WriteOperation = {
@@ -634,23 +630,22 @@ export default class Output {
   }
 
   /**
+   * Shade the cells painted so far inside `region` (see ShadeOperation).
+   * Idempotent per cell, so a clean subtree blitted back from prevScreen
+   * with last frame's shade is not shaded twice.
+   * @param region - the backdrop node's rect.
+   */
+  shade(region: Rectangle): void {
+    this.operations.push({ type: 'shade', region })
+  }
+
+  /**
    * Mark a region as non-selectable (excluded from fullscreen text
    * selection copy + highlight). Used by <NoSelect> to fence off
    * gutters (line numbers, diff sigils). Applied AFTER blit/write so
    * the mark wins regardless of what's blitted into the region.
    * @param region - the region to mark.
    */
-  /**
-   * Shade the cells painted so far inside `region` (see ShadeOperation).
-   * Idempotent per cell, so a clean subtree blitted back from prevScreen
-   * with last frame's shade is not shaded twice.
-   * @param region - the backdrop node's rect.
-   * @param mode - the shade to apply.
-   */
-  shade(region: Rectangle, mode: ShadeMode): void {
-    this.operations.push({ type: 'shade', region, mode })
-  }
-
   noSelect(region: Rectangle): void {
     this.operations.push({ type: 'noSelect', region })
   }
@@ -958,8 +953,6 @@ export default class Output {
           const maxX = Math.min(x + width, clip?.x2 ?? Infinity)
           const maxY = Math.min(y + height, clip?.y2 ?? Infinity)
           if (startX >= maxX || startY >= maxY) continue
-          // 'dim' is the only mode today; the switch keeps the seam for a
-          // palette-aware blend once the terminal background is known.
           shadeRegion(screen, this.stylePool, startX, startY, maxX - startX, maxY - startY)
           continue
         }

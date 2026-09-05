@@ -14,6 +14,8 @@
  *   4. closing releases every shaded cell (absolute removal poisons prevScreen);
  *   5. transitionAnsiCodes re-applies bold when SGR 22 drops a shade
  *      (bold+dim → bold used to lose the bold).
+ *   6. overlapping source/shaded colours stay independent across cached
+ *      frames and target changes, for both foreground and background.
  *
  * Run: node --import tsx/esm scripts/verify-backdrop-dim.tsx
  */
@@ -26,7 +28,7 @@ import xterm from '@xterm/headless'
 import { settled, sleep } from './lib/term-test.mjs'
 
 const { Terminal: XTerm } = xterm
-const [{ render, Box, Text }, { transitionAnsiCodes }, { default: instances }] = await Promise.all([
+const [{ render, Box, Text }, { StylePool, transitionAnsiCodes }, { default: instances }] = await Promise.all([
   import('../src/ui.js'),
   import('../src/ink/screen.js'),
   import('../src/ink/instances.js'),
@@ -39,6 +41,29 @@ function check(name: string, ok: boolean, detail = ''): void {
     failures++
     console.error(`FAIL ${name}${detail === '' ? '' : `\n      ${detail}`}`)
   }
+}
+
+// A derived colour can equal a separately painted source colour. They
+// still need independent shading, regardless of interning/visitation order.
+for (const order of [[200, 100], [100, 200]]) {
+  const styles = new StylePool()
+  styles.setShadeTarget({ r: 0, g: 0, b: 0 })
+  const source = (n: number) => styles.intern([
+    { type: 'ansi', code: `\x1b[38;2;${n};${n};${n}m`, endCode: '\x1b[39m' },
+  ])
+  const shaded = order.map(n => styles.withDim(source(n)))
+  check(`pool: overlapping colours shade independently (${order})`,
+    shaded.every((id, i) => styles.get(id)[0]?.code === `\x1b[38;2;${order[i]! / 2};${order[i]! / 2};${order[i]! / 2}m`))
+  check('pool: a cached shade is idempotent', shaded.every(id => styles.withDim(id) === id))
+  styles.setShadeTarget({ r: 255, g: 255, b: 255 })
+  check('pool: cached cells shade from their source after a target change',
+    shaded.every((id, i) => {
+      const n = Math.round((order[i]! + 255) / 2)
+      return styles.get(styles.withDim(id))[0]?.code === `\x1b[38;2;${n};${n};${n}m`
+    }))
+  styles.setShadeTarget({ r: 0, g: 0, b: 0 })
+  check('pool: revisiting a target reuses its styles',
+    shaded.every((id, i) => styles.withDim(source(order[i]!)) === id))
 }
 
 const COLS = 40
@@ -88,7 +113,10 @@ function Harness(): React.ReactNode {
           <Text backgroundColor="rgb(20,40,60)">  </Text>
           <Text>pixels</Text>
         </Text>
-        <Text>filler 4</Text>
+        <Text>
+          <Text color="rgb(200,200,200)" backgroundColor="rgb(200,200,200)">H</Text>
+          <Text color="rgb(100,100,100)" backgroundColor="rgb(100,100,100)">L</Text>
+        </Text>
       </Box>
       {state.open && (
         <Box
@@ -198,6 +226,10 @@ check('open: a solid pixel (space with a bg) fades its bg',
   JSON.stringify({ solid: bgOf(2, PIXEL_ROW).toString(16) }))
 check('open: default-coloured text next to the pixels takes faint',
   isDim(4, PIXEL_ROW) && isDim(9, PIXEL_ROW), line(PIXEL_ROW))
+const collisionRowShaded = (): boolean =>
+  fgOf(0, 9) === packed(100, 100, 100) && bgOf(0, 9) === packed(100, 100, 100)
+    && fgOf(1, 9) === packed(50, 50, 50) && bgOf(1, 9) === packed(50, 50, 50)
+check('open: colliding source/shaded colours fade both fg and bg', collisionRowShaded(), line(9))
 {
   const left = cardCol()
   const cardText = line(7).indexOf('CARD')
@@ -219,6 +251,7 @@ check('stream: text rewritten under the backdrop is faint on the frame it appear
   rowDim(3) && line(3).includes('stream: second'), text())
 check('stream: untouched rows keep exactly their shade (blit + idempotent re-shade)',
   rowDim(0) && rowDim(1) && rowDim(2) && rowDim(5) && !isDim(cardCol(), 6), text())
+check('stream: colliding colours keep one shade across cached frames', collisionRowShaded(), line(9))
 
 // Shrink: rows the backdrop vacates come back plain on the next frame.
 setState({ open: true, stream: 'second', backdropRows: 3 })
@@ -241,6 +274,9 @@ check('closed again: the pixel colours are restored exactly',
   fgOf(0, PIXEL_ROW) === packed(200, 100, 50) && bgOf(0, PIXEL_ROW) === packed(20, 40, 60)
     && bgOf(2, PIXEL_ROW) === packed(20, 40, 60),
   JSON.stringify({ fg: fgOf(0, PIXEL_ROW).toString(16), bg: bgOf(0, PIXEL_ROW).toString(16) }))
+check('closed again: colliding colours return to their independent sources',
+  fgOf(0, 9) === packed(200, 200, 200) && bgOf(0, 9) === packed(200, 200, 200)
+    && fgOf(1, 9) === packed(100, 100, 100) && bgOf(1, 9) === packed(100, 100, 100), line(9))
 
 await app.unmount()
 terminal.dispose()
