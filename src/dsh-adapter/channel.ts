@@ -15,6 +15,10 @@ import { createWorkspaceActions } from './channel/workspace-actions.js'
 import { createModelSwitchAction } from './channel/model-switch.js'
 import { createModeActions } from './channel/mode-actions.js'
 import { markChannelReadDirty } from '../adapter/channel/read-view.js'
+import { createAgentViewProjection } from './channel/agent-view-projection.js'
+import { createJobProjection } from './channel/job-projection.js'
+import { createBackgroundCurrentAction } from './channel/background-action.js'
+import { createSubagentProjection } from './channel/subagent-projection.js'
 import { createChannelNotifications } from './channel/notifications.js'
 import type { Context } from '@deepseek-ai/cordis'
 import { assembleContextFor, installModelSelection, type Agent, type AgentHandle, type CreateAgentOptions, type ModelSelectionRef } from '@deepseek-ai/dsh-agent'
@@ -52,7 +56,7 @@ import { getLang, LANGS, t, tOr, type Lang } from '../i18n.js'
 import { readModelPref } from '../modelPrefs.js'
 import { resolveModelRoute, validateModelRoute } from '../modelRoute.js'
 import { readPresetPref } from '../presetPrefs.js'
-import { clearResumeTarget, forgetAgentViewSession, forgetSession, readAgentViewSessions, readResumeTarget, touchAgentViewSession, touchSession, writeResumeTarget } from '../sessionHistory.js'
+import { clearResumeTarget, forgetSession, readAgentViewSessions, readResumeTarget, touchAgentViewSession, touchSession, writeResumeTarget } from '../sessionHistory.js'
 import { resolveSessionModes, type SessionModeSpec } from '../sessionModes.js'
 import { AUTO_THEME_NAME } from '../theme.js'
 import { listThemeCatalog } from '../themeCatalog.js'
@@ -61,15 +65,6 @@ import { resolveDshProfileName } from '../update.js'
 import { logForDebugging } from '../utils/debug.js'
 import { isPathLikeQuery, rankFileCandidates, type FileCandidate } from '../utils/fileSuggestions.js'
 import { homeDir, LEGACY_DATA_DIR } from '../utils/paths.js'
-import {
-  AGENT_VIEW_STATUS_ORDER,
-  agentViewLivePreview,
-  agentViewStatusOf,
-  foldAgentViewEvents,
-  oneLine,
-  sessionTitleFallback,
-  type AgentViewFold,
-} from './agent-view.js'
 import { channelCommands } from './channel/commands.js'
 import { normalizeInputDecision, normalizeRewindDoneSummary, normalizeRewindPromptDecision, NOTICE_CELLS } from './channel/decisions.js'
 import { createChannelEmitter } from './channel/emitter.js'
@@ -94,7 +89,7 @@ import type {
 } from './extension-events.js'
 import { dispatchTuiDecision, dispatchTuiNotification, normalizeCancelDecision } from './extension-events.js'
 import { getHostGrantStore } from './host-grants.js'
-import { BackgroundJobStore, formatJobDuration, type JobsRuntime } from './jobs.js'
+import type { JobsRuntime } from './jobs.js'
 import { getHostMessageObserver, type TuiMessageObserverRuntime } from './message-observer.js'
 import { getHostFacade } from './plugin-host.js'
 import { pluginsInfoLines } from './plugins-info.js'
@@ -241,6 +236,7 @@ export function createChannel(
   },
 ): ChannelState {
   const owner = createChannelOwner()
+  const rowIds = { value: 0 }
   const binding = createChannelBinding(initialAgent, options.handle, owner)
   // Detached work (/fork and agent-view dispatch) must be cancellable by the
   // channel owner without pretending its temporary handle is a foreground
@@ -280,100 +276,12 @@ export function createChannel(
   const adapterRuntime = adapterRuntimeFor(ctx)
   const themeHost = getHostThemes(ctx.get('tuiThemes') as TuiThemeRuntime | undefined)
 
-  // ── agent view internal state ─────────────────────────────────────────────
-  // Handles of background sessions this channel dispatched or backgrounded.
-  // The agents themselves live in the host registry (ctx.agents) and die with
-  // this process's tree; the handles are what stopping one needs to dispose.
+  // Detached handles are a stable ledger shared with adoption actions. The
+  // agent-view factory itself starts only after the full state surface exists.
   const backgroundHandles = new Map<string, AgentHandle>()
-  // The plugin's approval store, bound post-construction (bindApprovalStore):
-  // row derivation reads the agent ids it has parked requests for, and its
-  // emit re-publishes as an agent-view change so "needs input" appears live.
-  let approvalStore: {
-    pendingAgentIds(): readonly string[]
-    pendingAgentDetail(agentId: string): { toolName: string; reason?: string; command?: string } | undefined
-    subscribe(listener: () => void): () => void
-  } | undefined
-  const agentViewListeners = new Set<() => void>()
-  // The row snapshot is a cached array rebuilt on the next read after a
-  // notify — useSyncExternalStore demands a stable reference between changes.
-  let agentViewRowsCache: readonly AgentViewRow[] | undefined
-  const notifyAgentView = (): void => {
-    agentViewRowsCache = undefined
-    for (const listener of agentViewListeners) listener()
-  }
-  // Background-agent activity (status flips, session events) refreshes the
-  // rows at most every 300 ms — token-level streaming must not rebuild the
-  // snapshot per token.
-  let agentViewRefreshTimer: NodeJS.Timeout | undefined
-  const scheduleAgentViewRefresh = (): void => {
-    if (agentViewRefreshTimer !== undefined) return
-    agentViewRefreshTimer = setTimeout(() => {
-      agentViewRefreshTimer = undefined
-      notifyAgentView()
-    }, 300)
-  }
-  // Persisted sessions without a live agent, cached so the synchronous row
-  // snapshot can merge them; refreshed by listSessions() and attachToAgent.
-  let persistedRowsCache: readonly SessionSummary[] = []
-  void listSessionsSnapshot(ctx).then((rows) => {
-    persistedRowsCache = rows
-    notifyAgentView()
-  })
-  // Incremental fold cache per live agent: re-folded only over events
-  // appended since the last call, so agentViewRows() stays cheap during
-  // token-level streaming (a fresh frozen events array per append).
-  const agentViewFolds = new Map<string, { events: readonly SessionEvent[]; fold: AgentViewFold }>()
-  const foldOf = (liveAgent: Agent): AgentViewFold => {
-    const events = snapshotLiveSessionEvents(liveAgent.session)
-    const cached = agentViewFolds.get(String(liveAgent.id))
-    const base: AgentViewFold = {
-      hasTurns: false,
-      firstPrompt: '',
-      summary: '',
-      summaryKind: 'none',
-      title: '',
-      updatedAt: liveAgent.session.header.createdAt,
-      lastTurnFailed: false,
-    }
-    if (cached === undefined) {
-      const fold = foldAgentViewEvents(events, 0, base)
-      agentViewFolds.set(String(liveAgent.id), { events, fold })
-      return fold
-    }
-    if (cached.events === events) return cached.fold
-    const fold = foldAgentViewEvents(events, cached.events.length, cached.fold)
-    agentViewFolds.set(String(liveAgent.id), { events, fold })
-    return fold
-  }
-  const dropFold = (sessionId: string): void => {
-    agentViewFolds.delete(sessionId)
-  }
-  // One process-lifetime set of agent-lifecycle listeners (the TUI and the
-  // channel share the process): any agent's status/creation/disposal moves
-  // rows in the view, not only the attached session's.
-  ctx.on('agent/status', () => scheduleAgentViewRefresh())
-  ctx.on('agent/created', () => notifyAgentView())
-  ctx.on('agent/disposed', ({ agent: subject }: { agent: { id?: unknown } }) => {
-    dropFold(String(subject.id ?? ''))
-    notifyAgentView()
-  })
-  const subagentControl: SubagentControl = {
-    interrupt(agentId) {
-      const child = subagentStore.get(agentId)
-      const target = child?.sessionId ?? agentId
-      const runtime = (ctx as any).subagents
-      if (!runtime?.interrupt || !target) return false
-      try {
-        runtime.interrupt(target, { kind: 'ancestor', agent: binding.agent })
-        subagentStore.onCancelled(agentId, 'interrupted')
-        syncSubagentsNow()
-        state.emit()
-        return true
-      } catch {
-        return false
-      }
-    },
-  }
+  let backgroundCurrentAction: () => Promise<import('./channel/types.js').BackgroundResult> = async () => ({ ok: false })
+  let agentView!: ReturnType<typeof createAgentViewProjection>
+
   // D-7 backstop: the extensions row installs the decision-subscription
   // gate, but the channel IS the dispatch path — a stale patch without that
   // row (or a bare embed mounting neither) would otherwise leave tui/input
@@ -393,184 +301,31 @@ export function createChannel(
   // live feature) from "events can actually be dispatched here". The
   // returned disposer is owned by this channel's Cordis lifecycle below.
   const unmarkDecisionTopology = markDecisionDispatchTopology(ctx)
-  // Subagent activity tracking: collects agent/subagent/*, session/event for
-  // subagents, and exposes live snapshots for the UI.
-  const subagentStore = new SubagentActivityStore()
-  // Subagent ChatRow tracking: maps agentId to its ChatRow for live updates.
-  const subagentRowsByAgentId = new Map<string, ChatRow>()
-  // Task tool descriptions, queued in call order; each subagent/start consumes
-  // the oldest one so the card shows the user-visible task label.
-  const pendingTaskDescriptions: string[] = []
-  // Background-job tracking (`ctx.jobs`, optional service): the registry's
-  // host-level listeners see every owner's commits; the channel re-reads the
-  // CURRENT agent's visible set after each one and projects it into
-  // transcript rows (kind 'job'), the /jobs panel, the status-line chip and
-  // completion toasts. The registry read stays untouched — output is
-  // mirrored from the agent's own job_output results (see onOutputSeen).
-  const jobRowsByJobId = new Map<string, ChatRow>()
-  const syncJobRows = (): void => {
-    state.backgroundJobs = jobStore.snapshot()
-    for (const job of state.backgroundJobs) {
-      let row = jobRowsByJobId.get(job.id)
-      if (!row) {
-        // New job: card joins the transcript tail, like the subagent cards.
-        row = {
-          id: rowIds.value++,
-          kind: 'job',
-          text: job.label,
-          job: undefined,
-        }
-        jobRowsByJobId.set(job.id, row)
-        state.rows.push(row)
-      }
-      row.job = {
-        id: job.id,
-        kind: job.kind,
-        label: job.label,
-        status: job.status,
-        ...(job.detail === undefined ? {} : { detail: job.detail }),
-        startedAt: job.startedAt,
-        ...(job.finishedAt === undefined ? {} : { finishedAt: job.finishedAt }),
-        outputLines: job.outputLines,
-      }
-      row.text = job.label
-      markChannelReadDirty(row)
-      markChannelReadDirty(state.rows)
-    }
-  }
-  const jobStore = new BackgroundJobStore({
-    onSettled(job) {
-      notify(
-        t(
-          job.status === 'completed'
-            ? 'jobs-toast-completed'
-            : job.status === 'failed'
-              ? 'jobs-toast-failed'
-              : 'jobs-toast-killed',
-          {
-            id: job.id,
-            label: job.label,
-            duration: formatJobDuration(job),
-            detail: job.detail ?? '',
-          },
-        ),
-        {
-          color: job.status === 'completed' ? 'success' : job.status === 'failed' ? 'error' : 'warning',
-          timeoutMs: 6000,
-        },
-      )
-    },
-    onChanged() {
-      syncJobRows()
-      state.emit()
+  // Subagent projection owns the child store, transcript row identity and
+  // stream batching. Transport subscriptions below only route scoped events.
+  const subagentProjection = createSubagentProjection(() => state, {
+    rowIds,
+    agent: () => binding.agent,
+    subagents: () => (ctx as { get(name: string): unknown }).get('subagents') as { interrupt?(target: string, reason: unknown): void } | undefined,
+    lookupChild: id => {
+      const agents = ctx.get('agents') as { get(id: string): { session?: unknown; options?: { provider?: string; model?: string } } | undefined } | undefined
+      return agents?.get(id)
     },
   })
-  /** Live reference to the registry while the jobs service is mounted;
-   *  cleared again when the service goes away (inject fiber cleanup). */
-  let jobsRuntime: JobsRuntime | undefined
-  const jobControl: JobControl = {
-    kill(id) {
-      const jobs = jobsRuntime
-      if (!jobs?.kill) return false
-      const job = jobStore.get(id)
-      try {
-        jobs.kill(id, binding.agent, 'dsh-tui /jobs panel')
-      } catch {
-        return false
-      }
-      // kill() marks the job reported, which SUPPRESSES the harness
-      // completion notice — without this steer the model only learns about
-      // the user's kill lazily, from its next job_list/job_output read.
-      // Steer only for a job that was actually live; the steering row
-      // doubles as the transcript record of the action.
-      if (job !== undefined && (job.status === 'running' || job.status === 'stopping')) {
-        channelCommands(state).steer(t('jobs-steer-killed', { id, label: job.label }))
-      }
-      return true
-    },
-  }
-  // The jobs registry is optional: compositions without it load the UI
-  // unchanged (feature silently off). inject() handles any load order when
-  // the context offers it; stub/embedded contexts without the inject
-  // lifecycle fall back to a direct lookup — the same degradation posture
-  // as `(ctx as any).subagents` above.
-  const attachJobs = (jobs: JobsRuntime | undefined, onDetach?: (dispose: () => void) => void): void => {
-    if (jobs === undefined) return
-    jobsRuntime = jobs
-    const refresh = (): void => {
-      try {
-        jobStore.replace(jobs.list(binding.agent))
-      } catch {
-        // Owner no longer live / service disposing: keep the last view.
-      }
-    }
-    const disposers = [
-      typeof jobs.onJobsChanged === 'function' ? jobs.onJobsChanged(refresh) : undefined,
-      typeof jobs.onJobDone === 'function' ? jobs.onJobDone(refresh) : undefined,
-    ]
-    refresh()
-    onDetach?.(() => {
-      jobsRuntime = undefined
-      for (const dispose of disposers) dispose?.()
-    })
-  }
-  if (typeof (ctx as { inject?: unknown }).inject === 'function') {
-    ctx.inject(['jobs'], jobsCtx => {
-      attachJobs(
-        (jobsCtx as { jobs?: JobsRuntime }).jobs,
-        dispose => jobsCtx.effect(() => dispose),
-      )
-    })
-  } else {
-    attachJobs((ctx as { get?: (name: string) => unknown }).get?.('jobs') as JobsRuntime | undefined)
-  }
+  const subagentStore = subagentProjection.store
+  const subagentControl = subagentProjection.control
+  const pendingTaskDescriptions = subagentProjection.pendingTaskDescriptions
+  // Job projection owns registry callbacks and transcript rows. The optional
+  // service attachment has no authority after its injected lifetime ends.
+  const jobProjection = createJobProjection(() => state, {
+    owner, notify: (...args) => notify(...args), rowIds, agent: () => binding.agent, steer: text => channelCommands(state).steer(text),
+  })
+  const jobStore = jobProjection.store
+  const jobControl = jobProjection.control
+  const attachJobs = jobProjection.attach
+  const resetJobProjection = jobProjection.reset
 
-  /**
-   * Sync subagentStore state into ChatRows (insert/update in state.rows).
-   * Called whenever subagent state changes (spawned/completed/failed/output).
-   * Accepts a caller-taken snapshot to avoid the double copy on the hot path
-   * (session/event fires per subagent token: snapshot here + snapshot in the
-   * caller = two full state copies before emitStream's 16ms throttle).
-   */
-  const syncSubagentRows = (preSnapshot?: readonly SubagentState[]): void => {
-    const snapshot = preSnapshot ?? subagentStore.snapshot()
-    for (const sub of snapshot) {
-      let row = subagentRowsByAgentId.get(sub.agentId)
-      if (!row) {
-        // New subagent: insert a new ChatRow after the last user or assistant message
-        row = {
-          id: rowIds.value++,
-          kind: 'subagent',
-          text: sub.description,
-          subagent: undefined, // will be filled below
-        }
-        subagentRowsByAgentId.set(sub.agentId, row)
-        state.rows.push(row)
-      }
-      const subagentRow: SubagentRow = {
-        agentId: sub.agentId,
-        runId: sub.runId,
-        description: sub.description,
-        provider: sub.provider,
-        model: sub.model || 'default',
-        effort: sub.effort,
-        status: sub.status,
-        startedAt: sub.startedAt,
-        completedAt: sub.completedAt,
-        durationMs: sub.completedAt ? sub.completedAt - sub.startedAt : Date.now() - sub.startedAt,
-        outputLines: sub.output.slice(-3),
-        toolCalls: sub.toolCalls,
-        tokens: sub.tokens,
-        summary: sub.summary,
-        stopReason: sub.stopReason,
-        error: sub.error,
-      }
-      row.subagent = subagentRow
-      row.text = sub.description
-      markChannelReadDirty(row)
-      markChannelReadDirty(state.rows)
-    }
-  }
+
   // The DSH slash-command registry (optional service): /plan, /goal and
   // friends register here; the TUI merges their descriptors into the slash
   // menu and dispatches through `execute` (which logs the paired
@@ -627,61 +382,8 @@ export function createChannel(
       `dsh-tui: session modes ${droppedModeIds.map(id => `"${id}"`).join(', ')} declare no plan/sandbox/approval/permission atom; dropped from the Shift+Tab cycle`,
     )
   }
-  const emitter = createChannelEmitter(() => state, () => flushSubagentStream())
+  const emitter = createChannelEmitter(() => state, () => subagentProjection.flush())
   if (typeof ctx.effect === 'function') ctx.effect(() => () => { owner.dispose(); emitter.dispose() })
-  /** True while subagent assistant/chunk deltas have deferred their
-   *  snapshot+projection to the frame-aligned flush (emitStream's timer).
-   *  Chunks arrive at token rate (100-300 events/s) and the projection is a
-   *  full deep state copy (SubagentActivityStore.snapshot) plus a SubagentRow
-   *  rebuild per tracked agent — running that per token sits BEFORE
-   *  emitStream's 16ms coalescing and defeats it. Non-chunk events
-   *  (tool/call, subagent/end, interrupt) project immediately and clear
-   *  this flag, so lifecycle transitions stay synchronous. */
-  let subagentStreamDirty = false
-  /** Deferred projection for the frame-aligned flush: runs INSIDE the
-   *  emitStream timer, before listeners wake, so React always reads fully
-   *  projected rows. No-op unless a chunk marked the projection dirty. */
-  const flushSubagentStream = (): boolean => {
-    if (!subagentStreamDirty) return false
-    subagentStreamDirty = false
-    state.subagents = subagentStore.snapshot()
-    syncSubagentRows(state.subagents)
-    return true
-  }
-  /** Immediate projection; supersedes any pending deferred flush (the fresh
-   *  snapshot already contains everything the deferred pass would project). */
-  const syncSubagentsNow = (): void => {
-    subagentStreamDirty = false
-    state.subagents = subagentStore.snapshot()
-    syncSubagentRows(state.subagents)
-  }
-  /** Drop the subagent row map (transcript wipe): the next event for a still
-   *  live subagent re-creates its card as a fresh row instead of feeding a
-   *  row object no transcript holds (update-only orphan). */
-  const dropSubagentRows = (): void => {
-    subagentStreamDirty = false
-    subagentRowsByAgentId.clear()
-  }
-  /** Full subagent reset for a session swap: the row map, the queued task
-   *  descriptions and the store itself are all scoped to the OLD agent's
-   *  session. Leaked into the adopted one, they would keep dead subagents in
-   *  the dashboard snapshot until new events overwrite it, grow the row map
-   *  without bound across swaps, and hand a stale queued description to the
-   *  new session's first card. */
-  const resetSubagentProjection = (): void => {
-    dropSubagentRows()
-    pendingTaskDescriptions.length = 0
-    subagentStore.reset()
-    state.subagents = []
-  }
-  /** Full job reset for a session swap: the row map and store are scoped to
-   *  the OLD agent's session. Runs BEFORE the swap disposes the old agent,
-   *  so the teardown cancellation those jobs receive finds an empty store —
-   *  no "killed" toast storm for work the swap itself took down. */
-  const resetJobProjection = (): void => {
-    jobRowsByJobId.clear()
-    jobStore.reset()
-  }
   // foldRows incremental cursor (see foldRows): rows only append past the
   // fold line, so each pass touches only newly-eligible rows.
   const foldCursor: { rows: unknown; index: number } = { rows: null, index: 0 }
@@ -1337,10 +1039,10 @@ export function createChannel(
       // map lets their next event re-create the card as a fresh row instead
       // of feeding a row object no transcript holds (the store keeps live
       // tracking for the dashboard — same session, still running).
-      dropSubagentRows()
+      subagentProjection.dropRows()
       // Live jobs keep running across the wipe too (same session): clear the
       // row map so their next commit re-creates the card as a fresh row.
-      jobRowsByJobId.clear()
+      jobProjection.dropRows()
       state.activeToolCount = 0
       state.responseChars = 0
       state.rows.push({
@@ -1510,8 +1212,7 @@ export function createChannel(
       // folded away — is a view decision, and keeping it out of here is what
       // lets the browser toggle those views without re-reading a single log.
       const rows = await listSessionsSnapshot(ctx)
-      persistedRowsCache = rows
-      notifyAgentView()
+      agentView.setPersisted(rows)
       return rows
     },
     async previewSession(sessionId) {
@@ -1520,370 +1221,16 @@ export function createChannel(
       const path = await locateSession(persistence, sessionId)
       return path === undefined ? [] : previewSession(path, PREVIEW_ENTRIES)
     },
-    // ── agent view ──────────────────────────────────────────────────────────
-    bindApprovalStore(store) {
-      approvalStore = store
-      ctx.effect(() => store.subscribe(notifyAgentView))
-      notifyAgentView()
-    },
-    agentViewRows() {
-      // Cached snapshot (see notifyAgentView): the array identity is stable
-      // between changes, which useSyncExternalStore requires.
-      if (agentViewRowsCache !== undefined) return agentViewRowsCache
-      const agentsService = ctx.get('agents') as
-        | { list(): readonly Agent[] }
-        | undefined
-      const pendingIds = new Set(approvalStore?.pendingAgentIds() ?? [])
-      const live: AgentViewRow[] = []
-      if (agentsService !== undefined) {
-        // Minimal test fixtures mount an agents service without enumeration
-        // (create-only); an empty roster is the honest projection there.
-        const roster = typeof agentsService.list === 'function' ? agentsService.list() : []
-        for (const liveAgent of roster) {
-          // Subagent children are not agent-view rows: they
-          // belong to their parent's conversation.
-          if (liveAgent.session.header.origin === 'subagent') continue
-          const fold = foldOf(liveAgent)
-          const id = String(liveAgent.id)
-          const isCurrent = id === String(binding.agent.session.id)
-          // A session that never held a conversation is not a row (the
-          // session browser's rule): the fresh terminal session a `/bg`
-          // creates stays visible only while it IS the attached one.
-          if (!fold.hasTurns && !isCurrent) continue
-          const needsInput = pendingIds.has(id)
-          const status = agentViewStatusOf(liveAgent.status, fold, needsInput)
-          // A blocked row's summary is the question it is
-          // waiting on (the parked approval's reason/gated command).
-          const ask = needsInput ? approvalStore?.pendingAgentDetail(id) : undefined
-          // A prompt-kind summary is the session's own prompt echoed back —
-          // the name column already says it, so the row stays clean.
-          const summary = ask !== undefined
-            ? oneLine(ask.reason ?? ask.command ?? ask.toolName ?? '')
-            : fold.summaryKind === 'prompt' ? '' : fold.summary
-          live.push({
-            id,
-            title: fold.title.length > 0 ? fold.title : sessionTitleFallback(fold, liveAgent.session.header.cwd),
-            cwd: liveAgent.session.header.cwd ?? state.cwd,
-            summary,
-            status,
-            live: true,
-            current: isCurrent,
-            createdAt: liveAgent.session.header.createdAt,
-            updatedAt: fold.updatedAt,
-          })
-        }
-      }
-      const liveIds = new Set(live.map(row => row.id))
-      // Stopped rows come from the shared persistence store, which also
-      // holds sessions other front doors (web, other profiles) created and
-      // the ordinary /resume history. The agent-view ledger is the exact
-      // ownership record: only sessions this TUI dispatched, backgrounded,
-      // or attached to FROM the view appear here (background sessions, not the
-      // whole history).
-      const agentViewSessions = readAgentViewSessions()
-      const persisted: AgentViewRow[] = persistedRowsCache
-        .filter(summary =>
-          !liveIds.has(summary.id)
-          && summary.kind.kind !== 'subagent'
-          && agentViewSessions[summary.id] !== undefined
-          // Never list a session that holds no conversation (the session
-          // browser's rule): a `/bg` fresh session the user never typed
-          // into is not an agent-view row once it stops.
-          && summary.hasPrompt)
-        .map(summary => ({
-          id: summary.id,
-          title: summary.title.text,
-          cwd: summary.cwd,
-          summary: summary.label === undefined ? '' : oneLine(summary.label),
-          status: 'stopped',
-          live: false,
-          current: false,
-          createdAt: summary.createdAt,
-          updatedAt: summary.updatedAt,
-        }))
-      const rows = [...live, ...persisted]
-      const rank = (row: AgentViewRow): number => {
-        const index = AGENT_VIEW_STATUS_ORDER.indexOf(row.status)
-        return index < 0 ? AGENT_VIEW_STATUS_ORDER.length : index
-      }
-      rows.sort((left, right) =>
-        rank(left) - rank(right)
-        || right.updatedAt - left.updatedAt
-        || right.createdAt - left.createdAt
-        || (left.id < right.id ? -1 : left.id > right.id ? 1 : 0))
-      agentViewRowsCache = rows
-      return rows
-    },
-    subscribeAgentView(listener) {
-      agentViewListeners.add(listener)
-      return () => {
-        agentViewListeners.delete(listener)
-      }
-    },
-    async dispatchBackgroundAgent(prompt) {
-      const text = prompt.trim()
-      if (text.length === 0) {
-        return { ok: false, reason: 'failed', error: t('agentview-empty-prompt') }
-      }
-      const agentsService = ctx.get('agents') as
-        | { create(options: CreateAgentOptions): Promise<AgentHandle> }
-        | undefined
-      if (!agentsService) {
-        notify(t('agentview-dispatch-unavailable'), { color: 'error' })
-        return { ok: false, reason: 'unavailable' }
-      }
-      const sessionId = SessionId(randomUUID())
-      // Same composition as /new: the caller's default preset + model route.
-      // Every failure path below must return a result (never reject): the
-      // screen shows the error, and a silent rejection would look like a
-      // "missing" session.
-      let handle: AgentHandle
-      let detached: Awaited<ReturnType<typeof createDetachedHandle>>
-      try {
-        owner.assertActive()
-        const composed = await composePreset(ctx, options.configuredPreset ?? readPresetPref())
-        const resolved = resolveModelRoute(
-          { provider: options.configuredProvider, model: options.configuredModel },
-          readModelPref(),
-          { provider: options.provider, model: options.model },
-        )
-        const llm = ctx.get('llm') as
-          | { listModels(provider: string): Promise<readonly { id: string }[]> }
-          | undefined
-        const { route } = await validateModelRoute(llm, resolved, {
-          provider: options.provider,
-          model: options.model,
-        })
-        owner.assertActive()
-        detached = await createDetachedHandle(() => agentsService.create({
-          sessionId,
-          meta: {
-            cwd: state.cwd,
-            ...(composed.agentPreset === undefined ? {} : { agentPreset: composed.agentPreset }),
-          },
-          agentOptions: route,
-          ...(composed.setup === undefined ? {} : { setup: composed.setup }),
-        }))
-        handle = detached.handle
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error)
-        notify(t('agentview-dispatch-failed', { err: message }), { color: 'error', timeoutMs: 8000 })
-        return { ok: false, reason: 'failed', error: message }
-      }
-      if (!owner.current()) { await detached.release(); return { ok: false, reason: 'failed', error: 'Channel lifetime ended' } }
-      try {
-        await attachSessionToWorkspace(ctx, state.cwd, sessionId)
-      } catch {
-        // The workspace ledger is optional bookkeeping; the session runs
-        // without it and the next resume repairs the entry.
-      }
-      if (!owner.current()) {
-        await detached.release()
-        return { ok: false, reason: 'failed', error: 'Channel lifetime ended' }
-      }
-      // The independent background lifecycle owns the handle only after all
-      // owner-scoped preparation and attachment awaits have passed.
-      detached.transfer()
-      backgroundHandles.set(String(sessionId), handle)
-      // Record ownership BEFORE delivery: even a delivery failure must not
-      // silently drop the session from the view.
-      touchAgentViewSession(String(sessionId))
-      touchSession(sessionId)
-      // Deliver the prompt as a user message; the agent loop picks it up and
-      // the session keeps running unattended until its turn ends. A failure
-      // here must be loud — a silent rejection would leave an empty row and
-      // a "missing" session with no explanation.
-      try {
-        handle.agent.followup(createUserMessage({
-          content: [{ type: 'text', text }],
-          source: { kind: 'user' },
-        }))
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error)
-        notify(t('agentview-dispatch-failed', { err: message }), { color: 'error', timeoutMs: 8000 })
-        return { ok: false, reason: 'failed', error: message }
-      }
-      notifyAgentView()
-      return { ok: true, sessionId: String(sessionId) }
-    },
-    async stopBackgroundAgent(sessionId) {
-      // The attached session cannot be stopped from the view: the channel
-      // drives it, and disposing it out from under the UI would strand the
-      // terminal on a dead agent.
-      if (sessionId === String(binding.agent.session.id)) return false
-      const handle = backgroundHandles.get(sessionId)
-      if (handle === undefined) return false
-      backgroundHandles.delete(sessionId)
-      try {
-        handle.agent.cancel({ kind: 'user' })
-        await handle.dispose()
-      } catch (error) {
-        logForDebugging(`agent view: stop of "${sessionId}" failed: ${error instanceof Error ? error.message : String(error)}`)
-      }
-      dropFold(sessionId)
-      void listSessionsSnapshot(ctx).then((rows) => {
-        persistedRowsCache = rows
-      })
-      notifyAgentView()
-      return true
-    },
-    async attachToAgent(sessionId) {
-      if (sessionId === String(binding.agent.session.id)) return { ok: true }
-      const agentsService = ctx.get('agents') as
-        | { get(id: SessionId): Agent | undefined }
-        | undefined
-      const liveTarget = agentsService?.get(SessionId(sessionId))
-      if (liveTarget !== undefined) {
-        if (await sessionSwitchVetoed('agent-view', sessionId)) return { ok: false, reason: 'cancelled' }
-        return adoptLiveAgent(liveTarget)
-      }
-      // Not alive in this process: resume it through the persistence seam,
-      // keeping the current agent running in the background.
-      if (await sessionSwitchVetoed('agent-view', sessionId)) return { ok: false, reason: 'cancelled' }
-      return resumeInto(sessionId, 'agent-view', true)
-    },
-    async peekAgentSession(sessionId) {
-      const live = (ctx.get('agents') as { get(id: SessionId): Agent | undefined } | undefined)?.get(SessionId(sessionId))
-      if (live !== undefined) return agentViewLivePreview(snapshotLiveSessionEvents(live.session), PREVIEW_ENTRIES)
-      const persistence = ctx.get('sessionPersistence') as SessionSource | undefined
-      if (!persistence) return []
-      const path = await locateSession(persistence, sessionId)
-      return path === undefined ? [] : previewSession(path, PREVIEW_ENTRIES)
-    },
-    async replyToAgent(sessionId, text) {
-      const trimmed = text.trim()
-      if (trimmed.length === 0) {
-        notify(t('agentview-reply-empty'), { color: 'warning' })
-        return false
-      }
-      const live = (ctx.get('agents') as { get(id: SessionId): Agent | undefined } | undefined)?.get(SessionId(sessionId))
-      if (live === undefined) {
-        // A stopped session takes a reply only through a restarted agent:
-        // attach into it and send from the conversation instead.
-        notify(t('agentview-reply-stopped'), { color: 'warning' })
-        return false
-      }
-      live.followup(createUserMessage({
-        content: [{ type: 'text', text: trimmed }],
-        source: { kind: 'user' },
-      }))
-      notifyAgentView()
-      return true
-    },
-    async backgroundCurrent() {
-      const adoption = binding.capture()
-      // `/bg` — the attached session moves to the background (it keeps
-      // running in this process) and the terminal lands on a fresh one.
-      const agentsService = ctx.get('agents') as
-        | { create(options: CreateAgentOptions): Promise<AgentHandle> }
-        | undefined
-      if (!agentsService) {
-        notify(t('agentview-dispatch-unavailable'), { color: 'error' })
-        return { ok: false }
-      }
-      const sessionId = SessionId(randomUUID())
-      const composed = await composePreset(ctx, options.configuredPreset ?? readPresetPref())
-      const resolved = resolveModelRoute(
-        { provider: options.configuredProvider, model: options.configuredModel },
-        readModelPref(),
-        { provider: options.provider, model: options.model },
-      )
-      const llm = ctx.get('llm') as
-        | { listModels(provider: string): Promise<readonly { id: string }[]> }
-        | undefined
-      const { route } = await validateModelRoute(llm, resolved, {
-        provider: options.provider,
-        model: options.model,
-      })
-      let handle: AgentHandle
-      try {
-        handle = await binding.prepare(adoption, () => agentsService.create({
-          sessionId,
-          meta: {
-            cwd: state.cwd,
-            ...(composed.agentPreset === undefined ? {} : { agentPreset: composed.agentPreset }),
-          },
-          agentOptions: route,
-          ...(composed.setup === undefined ? {} : { setup: composed.setup }),
-        }))
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error)
-        notify(t('agentview-dispatch-failed', { err: message }), { color: 'error', timeoutMs: 8000 })
-        return { ok: false }
-      }
-      if (!binding.isCurrent(adoption)) { await binding.abandon(handle); return { ok: false } }
-      try {
-        await attachSessionToWorkspace(ctx, state.cwd, sessionId)
-      } catch (error) {
-        // The workspace ledger is optional bookkeeping; retain the baseline
-        // warning-and-continue policy for the newly foregrounded session.
-        ctx.logger.warn('dsh-tui: background session attachment failed: %o', error)
-      }
-      if (!owner.current()) { await binding.abandon(handle); return { ok: false, reason: 'failed', error: 'Channel lifetime ended' } }
-      // Fresh-session reset shape (mirrors /new; nothing to replay).
-      return binding.adopt(handle, adoption, (committed, disposePrevious) => {
-      const previousHandle = committed.handle
-      const previousSessionId = String(committed.agent.session.id)
-      // CC parity: even an EMPTY session is backgrounded (it shows as a
-      // "send a prompt to start" row; Esc in the view returns to it), so the
-      // handle is always kept for stopping/adopting — never disposed here.
-      if (previousHandle !== undefined) {
-        backgroundHandles.set(previousSessionId, previousHandle)
-        disposePrevious('park')
-      }
-      projector.reset()
-
-
-
-      rowIds.value = 0
-      state.rows.length = 0
-      markChannelReadDirty(state.rows)
-      state.todos = []
-      state.pending = []
-      state.goal = undefined
-      state.sessionTitle = ''
-      state.sessionColor = ''
-      state.tokens = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, peak: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, idle: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } }
-      state.responseChars = 0
-      state.activeToolCount = 0
-      state.lastUserText = ''
-      state.working = false
-      state.cancelPending = false
-      state.spinnerMode = 'requesting'
-      state.status = handle.agent.status
-      state.agentId = handle.agent.id
-      state.tps = undefined
-      state.tpsSamples = []
-      state.lastUsage = undefined
-      state.workingActivity = undefined
-      state.loadedContext = undefined
-      state.contextWindow = undefined
-      state.effortLevels = undefined
-      state.reasoningEffort = undefined
-      modelActions.refreshEffortLevels()
-      state.contextSegments = {
-        system: 0,
-        prompt: 0,
-        assistant: 0,
-        thinking: 0,
-        tools: 0,
-      }
-      bindAgent()
-      clearStagedImages()
-      refreshCommandList()
-      void refreshLoadedContext()
-      void refreshSkillCommands()
-      clearResumeTarget()
-      touchSession(handle.agent.id)
-      // Both sides of a backgrounding belong to the agent view: the session
-      // left running and the fresh one the terminal lands on.
-      touchAgentViewSession(previousSessionId)
-      touchAgentViewSession(String(handle.agent.id))
-      notifySessionSwitched('background', String(handle.agent.id), previousSessionId)
-      notifyAgentView()
-      return { ok: true, backgroundedSessionId: previousSessionId }
-      })
-    },
+    // ── agent view (CC's `claude agents`) ───────────────────────────────────
+    bindApprovalStore(store) { agentView.bindApprovalStore(store) },
+    agentViewRows() { return agentView.rows() },
+    subscribeAgentView(listener) { return agentView.subscribe(listener) },
+    dispatchBackgroundAgent(prompt) { return agentView.dispatch(prompt) },
+    stopBackgroundAgent(sessionId) { return agentView.stop(sessionId) },
+    attachToAgent(sessionId) { return agentView.attach(sessionId) },
+    peekAgentSession(sessionId) { return agentView.peek(sessionId) },
+    replyToAgent(sessionId, text) { return agentView.reply(sessionId, text) },
+    backgroundCurrent() { return agentView.backgroundCurrent() },
     setResumeTarget(sessionId) {
       writeResumeTarget(sessionId)
     },
@@ -1954,7 +1301,7 @@ export function createChannel(
       if (sessionId === binding.agent.session.id) return false
       if (deleteSessionLog(sessionId) !== 'deleted') return false
       forgetSession(sessionId)
-      forgetAgentViewSession(sessionId)
+      agentView.forget(sessionId)
       // A resume marker naming the deleted session would make the next
       // `dsh-tui --resume` launch target a log that no longer exists.
       if (readResumeTarget() === sessionId) clearResumeTarget()
@@ -2222,6 +1569,34 @@ export function createChannel(
       // reads follow agent swaps (/resume /rewind /new) automatically.
       return binding.agent.session.events
     },
+  }
+
+  // Agent-view is activated after the complete state/action surface exists:
+  // no roster callback or persistence continuation can observe an unbound UI.
+  agentView = createAgentViewProjection(ctx, {
+    owner, binding, cwd: () => state.cwd,
+    configuredPreset: options.configuredPreset,
+    configuredProvider: options.configuredProvider,
+    configuredModel: options.configuredModel,
+    provider: options.provider, model: options.model,
+    notify,
+    listPersisted: () => listSessionsSnapshot(ctx),
+    createDetached: createDetachedHandle,
+    sessionSwitchVetoed: (kind, sessionId) => sessionSwitchVetoed(kind, sessionId),
+    adoptLive: target => adoptLiveAgent(target),
+    resumeInto: (sessionId, kind, keepCurrent) => resumeInto(sessionId, kind, keepCurrent),
+    backgroundCurrent: () => backgroundCurrentAction(),
+    backgroundHandles,
+  })
+
+  // Attach optional jobs only after the state exists; an inject callback may
+  // synchronously publish its initial list.
+  if (typeof (ctx as { inject?: unknown }).inject === 'function') {
+    ctx.inject(['jobs'], jobsCtx => {
+      attachJobs((jobsCtx as { jobs?: JobsRuntime }).jobs, dispose => jobsCtx.effect(() => dispose))
+    })
+  } else {
+    attachJobs((ctx as { get?: (name: string) => unknown }).get?.('jobs') as JobsRuntime | undefined)
   }
 
   /**
@@ -2647,7 +2022,6 @@ export function createChannel(
   void refreshLoadedContext()
   void refreshSkillCommands()
 
-  const rowIds = { value: 0 }
   /** The leaf's bash executor (dsh-bash-local in the example leaf) — the DSH
  *  execution seam for local `!` commands and the git status breadcrumb. The
  *  service registers under `ctx.shell` (ShellExecutor; dsh-bash-local and
@@ -2799,7 +2173,7 @@ ${output}
     // Compaction is installed below before the channel binds or exposes input.
     settleCompaction: () => settleManualCompaction(),
     resetProjector: () => projector.reset(),
-    resetSubagents: resetSubagentProjection,
+    resetSubagents: subagentProjection.reset,
     resetJobs: resetJobProjection,
     replay: events => projector.replayEvents(events),
     settleReplay: projector.settleStreaming,
@@ -2990,30 +2364,13 @@ ${output}
         // checking the stale child mapping first would swallow every main event
         // (including turn/end) and leave working/cancelPending latched forever.
         const isMainSession = session === binding.agent.session
-        const subagentId = isMainSession
-          ? undefined
-          : subagentStore.getSubagentIdBySession(session)
-        if (subagentId !== undefined) {
-          subagentStore.onSessionEvent(subagentId, event)
-          if (event.type === 'assistant/chunk') {
-            // Token-rate path (100-300 events/s): the store append stays
-            // synchronous (cheap); the expensive snapshot + row projection
-            // defers to the frame-aligned flush inside emitStream's 16ms
-            // timer, so it coalesces exactly like the main-agent stream.
-            subagentStreamDirty = true
-            state.emitStream()
-          } else {
-            syncSubagentsNow()
-            state.emit()
-          }
-          return
-        }
+        if (!isMainSession && subagentProjection.onSessionEvent(session, event)) return
         // Otherwise handle the bound main-agent session.
         if (!isMainSession) return
         if (session !== binding.agent.session) {
           // A background (agent view) session is active: refresh the rows
           // so its summary/status follows the live output, throttled.
-          scheduleAgentViewRefresh()
+          agentView.schedule()
           return
         }
         // Observation broker (C-042): maps user/message + assistant/message
@@ -3038,59 +2395,14 @@ ${output}
         if (event.type === 'assistant/chunk') state.emitStream()
         else state.emit()
       }),
-      // Subagent lifecycle tracking. The dsh-subagent service publishes scoped
-      // observe-only events as `subagent/start` and `subagent/end`; the parent
-      // Agent is carried by Cordis scope dispatch, not included in the payload.
+      // Child lifecycle remains an observe-only transport; the projection
+      // performs synchronous settlement and frame-batched streaming itself.
       (() => {
         const disposeStart = on('subagent/start' as any, (info: { id: string; runId?: string; provider: string; local?: boolean }) => {
-          if (!info?.id) return
-          subagentStore.onSpawned(info.id, info.provider || 'subagent', info.provider, {
-            runId: info.runId ?? info.id,
-            local: info.local,
-            description: pendingTaskDescriptions.shift() ?? `${info.provider || 'subagent'} task`,
-          })
-          // In-process providers publish a child Agent during this notification.
-          // Resolve through ctx.get('agents') (the property proxy is
-          // topology-sensitive); the child carries its session (live output
-          // stream) and its provider/model route for the card header.
-          try {
-            const agents = ctx.get('agents') as
-              | { get(id: string): { session?: unknown; options?: { provider?: string; model?: string } } | undefined }
-              | undefined
-            const child = agents?.get(info.id)
-            if (child?.session) {
-              subagentStore.linkSession(info.id, child.session)
-              const model = child.options?.model ?? child.options?.provider
-              if (model) subagentStore.patch(info.id, { model, provider: child.options?.provider ?? info.provider })
-            }
-          } catch {
-            // Session discovery is best-effort and must not break the parent turn.
-          }
-          syncSubagentsNow()
-          state.emit()
+          subagentProjection.onStart(info)
         })
-        const disposeEnd = on('subagent/end' as any, (info: { id: string; stopReason: string; lastAssistantMessage?: unknown[] }) => {
-          if (!info?.id) return
-          const output = Array.isArray(info.lastAssistantMessage)
-            ? info.lastAssistantMessage
-                .map(block => typeof block === 'object' && block !== null && 'text' in block ? String((block as { text?: unknown }).text ?? '') : '')
-                .filter(Boolean)
-                .join('\n')
-            : ''
-          // The final assistant output becomes the card's summary only; the
-          // running waterfall came from the child session stream, so echoing
-          // it into the output buffer would duplicate it on the collapsed card.
-          subagentStore.flushOutput(info.id)
-          if (info.stopReason === 'completed') subagentStore.onCompleted(info.id, output, info.stopReason)
-          else if (info.stopReason === 'cancelled' || info.stopReason === 'aborted') subagentStore.onCancelled(info.id, info.stopReason, output)
-          else subagentStore.onFailed(info.id, info.stopReason || 'Unknown error')
-          syncSubagentsNow()
-          state.emit()
-        })
-        return () => {
-          disposeStart()
-          disposeEnd()
-        }
+        const disposeEnd = on('subagent/end' as any, (info: { id: string; stopReason: string; lastAssistantMessage?: unknown[] }) => subagentProjection.onEnd(info))
+        return () => { disposeStart(); disposeEnd() }
       })(),
     ]
   }
@@ -3108,7 +2420,7 @@ ${output}
     binding,
     rowIds,
     resetProjector: () => projector.reset(),
-    resetSubagents: resetSubagentProjection,
+    resetSubagents: subagentProjection.reset,
     resetJobs: resetJobProjection,
     replay: events => projector.replayEvents(events),
     settleReplay: projector.settleStreaming,
@@ -3126,7 +2438,7 @@ ${output}
     backgroundHandles,
     rowIds,
     resetProjector: () => projector.reset(),
-    resetSubagents: resetSubagentProjection,
+    resetSubagents: subagentProjection.reset,
     resetJobs: resetJobProjection,
     replay: events => projector.replayEvents(events),
     settleReplay: projector.settleStreaming,
@@ -3138,7 +2450,7 @@ ${output}
     refreshSkillCommands,
     clearStagedImages,
     notifySessionSwitched,
-    notifyAgentView,
+    notifyAgentView: agentView.notify,
   })
 
   const resumeActions = createSessionResumeActions(ctx, state, {
@@ -3153,7 +2465,7 @@ ${output}
     backgroundHandles,
     rowIds,
     resetProjector: () => projector.reset(),
-    resetSubagents: resetSubagentProjection,
+    resetSubagents: subagentProjection.reset,
     resetJobs: resetJobProjection,
     replay: events => projector.replayEvents(events),
     settleReplay: projector.settleStreaming,
@@ -3209,6 +2521,30 @@ ${output}
   })
   settleManualCompaction = manualCompaction.settle
   compactManualSession = manualCompaction.compact
+  backgroundCurrentAction = createBackgroundCurrentAction(ctx, state, {
+    configuredPreset: options.configuredPreset,
+    configuredProvider: options.configuredProvider,
+    configuredModel: options.configuredModel,
+    provider: options.provider,
+    model: options.model,
+  }, {
+    owner,
+    binding,
+    backgroundHandles,
+    rowIds,
+    resetProjector: () => projector.reset(),
+    resetSubagents: subagentProjection.reset,
+    resetJobs: resetJobProjection,
+    refreshEffortLevels: () => modelActions.refreshEffortLevels(),
+    bindAgent,
+    refreshCommands: refreshCommandList,
+    refreshLoadedContext,
+    refreshSkillCommands,
+    clearStagedImages,
+    notifySessionSwitched,
+    notify: (...args) => notify(...args),
+    notifyAgentView: agentView.notify,
+  })
 
   // Subagents inherit provider/model from AgentOptions, but resumed TUI
   // agents can legitimately carry their route only in persisted request
@@ -3242,8 +2578,6 @@ ${output}
     unmarkDecisionTopology()
     releaseSkillCommands()
     unsubscribeScenes?.()
-    if (agentViewRefreshTimer !== undefined) clearTimeout(agentViewRefreshTimer)
-    agentViewListeners.clear()
   })
   effect?.call(ctx, () => releaseLifecycle, 'dsh-tui channel lifecycle')
   // Statusline breadcrumb: current git branch of the session cwd (best-effort).

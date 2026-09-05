@@ -15,7 +15,7 @@ import { TuiPluginHostRuntime, getHostFacade } from '../src/dsh-adapter/plugin-h
 import { createChannelEmitter } from '../src/dsh-adapter/channel/emitter.js'
 
 const tick = () => new Promise(resolve => setTimeout(resolve, 40))
-function fixture() {
+function fixture(jobs?: unknown) {
   const writes: string[] = []
   let creates = 0
   const listeners = new Map<string, (...args: unknown[]) => void>()
@@ -47,6 +47,7 @@ function fixture() {
       logout: async () => { writes.push('logout'); return true },
     } },
   }
+  if (jobs !== undefined) services.jobs = jobs
   const ctx = {
     on(event: string, listener: (...args: unknown[]) => void) {
       listeners.set(event, listener)
@@ -95,6 +96,37 @@ function fixture() {
   await assert.rejects(raw.switchWorkspace({ cwd: '/other', label: 'other' } as never), /lifetime/)
   unregister()
   raw.releaseContributions()
+}
+
+// A direct-lookup jobs service is owner-owned too: a retained registry
+// callback after production mount disposal cannot re-read or re-project it.
+{
+  let lists = 0
+  let retained: (() => void) | undefined
+  let unsubscribes = 0
+  const jobs = {
+    list() {
+      lists += 1
+      return [{ id: 'retained-job', kind: 'bash', label: 'before dispose', status: 'running' as const, startedAt: 1 }]
+    },
+    kill() {},
+    onJobsChanged(listener: () => void) {
+      retained = listener
+      return () => { unsubscribes += 1 }
+    },
+  }
+  const { ctx, raw } = fixture(jobs)
+  const unregister = registerTuiChannel(ctx, raw)
+  const mount = mountChannelUi(ctx, raw, undefined, 'new')
+  assert.equal(lists, 1)
+  assert.equal(raw.backgroundJobs.length, 1)
+  mount.dispose()
+  const rowsBefore = raw.rows.length
+  retained?.()
+  assert.equal(lists, 1, 'retained callback after mount.dispose must not call jobs.list')
+  assert.equal(raw.rows.length, rowsBefore, 'retained callback after mount.dispose must not change job rows')
+  assert.equal(unsubscribes, 1, 'owner cleanup unregisters the direct jobs service exactly once')
+  unregister(); raw.releaseContributions()
 }
 
 // All explicit effectful UI commands and nested handles refuse in both shadows.
