@@ -282,6 +282,7 @@ async function withTerminal(
     rawOutput: () => string,
   ) => Promise<void>,
   graphics = false,
+  terminalImages = true,
 ): Promise<void> {
   const graphicsEnv = ['TMUX', 'STY', 'CLAUDE_CODE_ACCESSIBILITY', 'DSH_TUI_DISABLE_TERMINAL_IMAGES']
   const previousEnv = graphicsEnv.map(name => process.env[name])
@@ -298,13 +299,14 @@ async function withTerminal(
     stderr: new FakeStderr() as NodeJS.WriteStream,
     exitOnCtrlC: false,
     patchConsole: false,
+    terminalImages,
   })
   const screen = (): string => Array.from(
     { length: ROWS },
     (_, y) => terminal.buffer.active.getLine(y)?.translateToString(true) ?? '',
   ).join('\n')
   try {
-    if (graphics) {
+    if (graphics && terminalImages) {
       assert.ok(await settled(() => stdout.output.includes(kittyGraphics(31).request)),
         'image demand starts the capability probe before decoding')
       stdin.write('\x1b_Gi=31;OK\x1b\\\x1b[6;20;10t\x1b[4;720;720t' +
@@ -510,18 +512,23 @@ await withTerminal(
   },
 )
 
-clearTranscriptImageCacheForTests()
-let fallbackReads = 0
-await withTerminal(
-  <TranscriptImages images={[{
-    ...image('no-graphics', 'metadata.png'),
-    async read() { fallbackReads += 1; return png },
-  }]} indent={0} />,
-  async screen => {
-    assert.equal(await settled(() => screen().includes('Image · metadata.png')), true)
-    assert.equal(fallbackReads, 0, 'inline metadata fallback does not read or decode attachment pixels')
-  },
-)
+for (const [graphics, terminalImages] of [[false, true], [true, false]] as const) {
+  clearTranscriptImageCacheForTests()
+  let fallbackReads = 0
+  await withTerminal(
+    <TranscriptImages images={[{
+      ...image('no-graphics', 'metadata.png'),
+      async read() { fallbackReads += 1; return png },
+    }]} indent={0} />,
+    async (screen, _rerender, rawOutput) => {
+      assert.equal(await settled(() => screen().includes('Image · metadata.png')), true)
+      assert.equal(fallbackReads, 0, 'inline or disabled previews never read attachment pixels')
+      assert.doesNotMatch(rawOutput(), /\x1b_G/u, 'metadata fallback does not probe or render images')
+    },
+    graphics,
+    terminalImages,
+  )
+}
 
 clearTranscriptImageCacheForTests()
 let firstStoreReads = 0

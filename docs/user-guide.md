@@ -428,11 +428,13 @@ dsh-TUI 不预装通用技能。`/skills` 浏览 DSH 从当前 profile、用户�
 ### 5.3 /settings 设置编辑器
 
 `/settings` 打开插件设置编辑器；**改动自动保存**，`Esc` 直接退出。
-dsh-tui 自身区块（写入 settings.yaml 用户层，实时生效）字段很多（下表为常用项；完整列表见 /settings 屏）：
+dsh-tui 自身区块写入 settings.yaml 用户层，多数设置实时生效；全屏和图片预览开关需 `/restart`。下表为常用项，完整列表见 /settings 屏：
 
 | 字段 | 说明 |
 |---|---|
 | lang | 界面语言 zh/en（DSH_TUI_LANG 钉死时不可改） |
+| fullscreen | 全屏模式（默认开）；保存后用 `/restart` 生效 |
+| terminalImages | 终端图片预览（默认开，需终端支持）；保存后用 `/restart` 生效。关闭后只显示文字信息并跳过预览解码，不影响向模型发送图片 |
 | whale | 开屏头部像素鲸鱼娘（默认开）；每次启动随机三选一开屏动画：经典组合开场（眨眼+喷水+摆尾）/ 爱心 / 睡觉，`/deepseek` 彩蛋每次重掷 |
 | whaleIdle | 鲸鱼娘闲置动画（默认关）：开屏后继续摆鱼鳍/拍尾巴，空闲 10 秒入睡冒 Z，工作中持续游动；点击冒爱心不依赖此设置。空闲时增加少量重绘，故默认关闭 |
 | diffLayout | Edit/Write diff 布局：auto（≥110 列双栏）/ split / unified |
@@ -443,7 +445,7 @@ dsh-tui 自身区块（写入 settings.yaml 用户层，实时生效）字段很
 | statusBar.* | 上表全部状态栏开关（compact/model/thinking/cwd/contextUsage/cache/tokens/cost/tps/gitBranch/sessionTitle/sessionId/mode/contextBar/activity/trajectory；statusBar.sessionId 是底栏显示开关，与 cordis 的启动 sessionId 无关） |
 
 未声明 TUI 区块的命名空间以只读形式列出，需手工编辑 `~/.dsh/settings.yaml`。
-provider / model / cwd / fullscreen / preset / workspace / sessionId / modes
+provider / model / cwd / preset / workspace / sessionId / modes
 **不在 /settings 内**，要改 `$DSH_HOME/profiles/dsh-tui/cordis.patch.yml`；其中启动级
 `effort` 键也在此改，/settings 里对应的是会话默认档 `effortDefault`（见上表）。
 
@@ -541,7 +543,7 @@ provider / model / cwd / fullscreen / preset / workspace / sessionId / modes
 31. `/update` 只更新 profile runtime 不动全局安装；提示版本错位时按提示执行
     `npm install -g @deepseek-harness-tui/dsh-tui@<版本>` 对齐启动器。
 32. `/reload` 重读偏好文件（主题/语言/预设/模型/动画），但**不重读** `cordis.yml` 根配置与
-    全屏布局，也不加载新构建的代码——改这些用 `/restart`（回合运行中 `/restart` 会被拒绝，先 `Ctrl+C`）。
+    全屏布局、图片预览开关，也不加载新构建的代码——改这些用 `/restart`（回合运行中 `/restart` 会被拒绝，先 `Ctrl+C`）。
 33. macOS 的 ⌘ 键需要 iTerm2/kitty/WezTerm/ghostty/tmux；Terminal.app 用 Ctrl 即可。
 34. 鼠标拖选即复制（fullscreen 模式）；`DSH_TUI_DISABLE_MOUSE=1` 可临时关闭鼠标。
 35. logo 页出现 **⚠ 版本漂移警告**时按提示对齐 dsh 引擎：
