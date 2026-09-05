@@ -21,6 +21,7 @@ import { readModelPref } from '../modelPrefs.js'
 import { explicitModelRoute, recordedModelRoute, resolveModelRoute, validateModelRoute } from '../modelRoute.js'
 import type { ModelRoute } from '../modelRoute.js'
 import { migratePresetPref, readPresetPref } from '../presetPrefs.js'
+import { readEffortPref } from '../effortPrefs.js'
 import { composePreset, filterMinimalPresetTools, resolvePersistedPreset, resolvePersistedRoute, runningPresetOf } from './presets.js'
 import { ensurePackagedPresets } from './packaged-presets.js'
 import { ensureLegacySessionEventTypes, snapshotLiveSessionEvents } from './compat/index.js'
@@ -617,6 +618,10 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
         expandEditor: Schema.boolean(),
         // Same no-default rule: applyDisplay resolves `?? config.smoothStreaming ?? true`.
         smoothStreaming: Schema.boolean(),
+        // No default on purpose: unset keeps the boot chain decisive
+        // (applyEffortDefault hands `undefined` to channel.setDefaultEffort,
+        // which resolves cordis.yml `effort` → effort.json → adapter default).
+        effortDefault: Schema.string(),
         statusBar: Schema.object({
           compact: Schema.boolean().default(DEFAULT_STATUS_BAR.compact),
           model: Schema.boolean().default(DEFAULT_STATUS_BAR.model),
@@ -667,6 +672,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
       minimal?: boolean
       fullscreen?: boolean
       thinkingFold?: 'preview' | 'full'
+      effortDefault?: string
       toolBackground?: ToolBackground
       scrollGutter?: ScrollGutterMode
       pageMargin?: PageMarginSetting
@@ -746,6 +752,19 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
       }
       setKeymapOverrides(merged)
     }
+    // The /settings default-reasoning-effort field (effortDefault): re-seat
+    // the channel's future-sessions default without touching effort.json
+    // (the user layer outranks that file). Only the field's own changes
+    // re-apply — unrelated settings edits must not disturb a live /effort
+    // choice mid-session.
+    let lastEffortDefault: string | null | undefined = undefined
+    const applyEffortDefault = (value: SettingsValue): void => {
+      const next = value.effortDefault ?? null
+      if (next === lastEffortDefault) return
+      lastEffortDefault = next
+      const level = next === null || next === 'auto' ? undefined : next
+      channel.setDefaultEffort(level)
+    }
     const apply = (next: SettingsValue): void => {
       applyLayout(next)
       applyWhale(next)
@@ -753,6 +772,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
       applyMinimal(next)
       applyLang(next)
       applyDisplay(next)
+      applyEffortDefault(next)
       applyShortcuts(next)
       applyFullscreen(next)
     }
@@ -1068,6 +1088,30 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
           format(value: unknown): string {
             // Unset in settings.yaml: the default is on.
             return value === undefined || value === null ? 'true' : String(value)
+          },
+        },
+        {
+          path: ['effortDefault'],
+          label: 'Default reasoning effort',
+          descriptions: { zh: '默认推理强度' },
+          hint: 'Reasoning-effort level new sessions start on; the current session applies it to its next request too, when the model offers the tier (an unlisted level falls back to the model default). Auto = follow the cordis.yml `effort` pin, then the persisted /effort choice, then the model default.',
+          hintDescriptions: { zh: '新会话起始的推理强度档位；模型提供该档位时，当前会话的下一请求也会应用（模型不提供的档位会静默回落到模型默认）。自动 = 依次跟随 cordis.yml 的 effort 配置、持久化的 /effort 选择、模型默认档。' },
+          kind: 'select',
+          options: [
+            { value: 'auto', label: 'Auto (model default)', descriptions: { zh: '自动（模型默认）' } },
+            { value: 'off', label: 'Off', descriptions: { zh: '关闭' } },
+            { value: 'low', label: 'Low', descriptions: { zh: '低' } },
+            { value: 'high', label: 'High', descriptions: { zh: '高' } },
+            { value: 'max', label: 'Max', descriptions: { zh: '最高' } },
+          ],
+          format(value: unknown): string {
+            // Unset in settings.yaml: show what a boot would actually start
+            // on (the cordis effort pin → the persisted /effort choice)
+            // instead of a misleading blank.
+            if (value === undefined || value === null || value === 'auto') {
+              return config.effort ?? readEffortPref() ?? 'auto'
+            }
+            return String(value)
           },
         },
         ...shortcutFields,

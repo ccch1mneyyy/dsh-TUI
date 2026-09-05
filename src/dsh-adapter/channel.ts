@@ -80,7 +80,7 @@ import {
 } from './agent-view.js'
 import { writeActivityFrames } from '../activityPrefs.js'
 import { isPathLikeQuery, rankFileCandidates, type FileCandidate } from '../utils/fileSuggestions.js'
-import { readEffortPref, writeEffortPref } from '../effortPrefs.js'
+import { readEffortPref, resolveEffortDefault, writeEffortPref } from '../effortPrefs.js'
 import { readModelPref, writeModelPref } from '../modelPrefs.js'
 import { explicitModelRoute, recordedModelRoute, resolveModelRoute, validateModelRoute } from '../modelRoute.js'
 import type { OAuthProviderStatus, OAuthSetupHost, ProfilePathOp, ProviderSetupHost } from './providerWizard.js'
@@ -1161,6 +1161,14 @@ export interface Channel {
    *  false + a notify when the id is not offered. Persists like the old
    *  Shift+Tab cycle (~/.dsh-tui/effort.json). */
   setEffort(id: string): Promise<boolean>
+  /** Re-seat the default reasoning effort new sessions start on (the
+   *  /settings 默认推理强度 field). Unlike {@link Channel.setEffort} it
+   *  does not write effort.json — the settings user layer outranks that
+   *  file — and `undefined` (the field's auto option) re-derives the boot
+   *  chain (cordis.yml `effort` → persisted /effort choice → adapter
+   *  default). The live agent is re-pinned too when its route offers the
+   *  level, so a change lands on its next request. */
+  setDefaultEffort(id: string | undefined): void
   /** The session mode currently in force (matched from the session log, or
    *  the last one Shift+Tab applied). */
   readonly mode: SessionModeSpec
@@ -1603,6 +1611,9 @@ export interface ChannelState {
   listEfforts(): Promise<{ efforts: readonly EffortOption[]; defaultEffort: string | undefined }>
   /** Set one effort level by id (see the public Channel type). */
   setEffort(id: string): Promise<boolean>
+  /** Re-seat the future-sessions default reasoning effort (see the public
+   *  Channel.setDefaultEffort). */
+  setDefaultEffort(id: string | undefined): void
   /** The session mode currently in force (see the public Channel type). */
   mode: SessionModeSpec
   /** Index of `mode` in the configured cycle (see the public Channel type). */
@@ -2977,8 +2988,10 @@ export function createChannel(
    *  re-couples it to each new agent's prompt assembly + request config. */
   const selection: ModelSelectionRef = { current: undefined, assembled: undefined }
   /** The effort chosen this run (or persisted from a previous one); applied
-   *  to every newly bound agent once validated against its adapter's list. */
-  let preferredEffort: string | undefined = options.effort ?? readEffortPref()
+   *  to every newly bound agent once validated against its adapter's list.
+   *  Chain: settings user layer (applied later via setDefaultEffort) →
+   *  cordis.yml `effort` → the persisted /effort choice → adapter default. */
+  let preferredEffort: string | undefined = resolveEffortDefault(undefined, options.effort, readEffortPref())
 
   /** Pin `preferredEffort` on the live agent when its route offers it;
    *  silent no-op otherwise (the next request/header corrects the display). */
@@ -3107,6 +3120,19 @@ export function createChannel(
     }
     applyEffort(found)
     return true
+  }
+
+  /** The /settings “default reasoning effort” (see the public Channel
+   *  type): re-seat the future-sessions default without touching effort.json
+   *  (the settings user layer outranks that file); an absent level re-derives
+   *  the boot chain (cordis `effort` → the persisted /effort choice). Also
+   *  re-pins the live agent when its route offers the level, so the change
+   *  lands on the next request. No-op when the effective level is unchanged. */
+  const setDefaultEffort = (id: string | undefined): void => {
+    const resolved = resolveEffortDefault(id, options.effort, readEffortPref())
+    if (resolved === preferredEffort) return
+    preferredEffort = resolved
+    void applyPreferredEffort()
   }
 
   /** One composer image accompanying a registry-command line: structural
@@ -5970,6 +5996,7 @@ export function createChannel(
     },
     listEfforts,
     setEffort,
+    setDefaultEffort,
     cycleMode,
     clear() {
       state.rows.length = 0

@@ -240,7 +240,7 @@ dsh-tui
 | 命令 | 参数 | 作用 |
 |---|---|---|
 | `/model` | 无 | 模型选择器；**切换 = fork 会话续聊**（历史保留、仅换路由），选择持久化到 `~/.dsh-tui/model.json` |
-| `/effort` | `status` / `<id>` | 推理强度：无参滑杆（←/→ 实时调整）；`status` 当前档位；`<id>` 直接设定。持久化 `~/.dsh-tui/effort.json` |
+| `/effort` | `status` / `<id>` | 推理强度：无参滑杆（←/→ 实时调整）；`status` 当前档位；`<id>` 直接设定。持久化 `~/.dsh-tui/effort.json`（作为后续会话的次级默认；新会话起始档优先看 /settings 的默认推理强度 `effortDefault`，见 §5.3） |
 | `/thinking` | 无 | 扩展思考显示开关（流式时思考逐条展开） |
 | `/tokens` | 无 | token 用量 + 上下文百分比 |
 | `/activity` | `frames <名>` / `status` | 工作状态行动画：无参选择器；`frames` 列全部预设；`frames <名>` 直接设置。帧名 30 个（`random` 随机 + `claude/star2/sand/triangle/box/box2/corners/point/layer/flip/aesthetic/hamburger/moon/moon8/comet/breathe/dots/arrow/spark/bar/braille/arc/circle/grow/noise/bounce/rainbow/dqpb/toggle`，默认 `moon8`）。持久化 `~/.dsh-tui/working-activity.json` |
@@ -428,7 +428,7 @@ dsh-TUI 不预装通用技能。`/skills` 浏览 DSH 从当前 profile、用户�
 ### 5.3 /settings 设置编辑器
 
 `/settings` 打开插件设置编辑器；**改动自动保存**，`Esc` 直接退出。
-dsh-tui 自身区块（写入 settings.yaml 用户层，实时生效）共 22 个字段：
+dsh-tui 自身区块（写入 settings.yaml 用户层，实时生效）字段很多（下表为常用项；完整列表见 /settings 屏）：
 
 | 字段 | 说明 |
 |---|---|
@@ -437,13 +437,15 @@ dsh-tui 自身区块（写入 settings.yaml 用户层，实时生效）共 22 �
 | whaleIdle | 鲸鱼娘闲置动画（默认关）：开屏后继续摆鱼鳍/拍尾巴，空闲 10 秒入睡冒 Z，工作中持续游动；点击冒爱心不依赖此设置。空闲时增加少量重绘，故默认关闭 |
 | diffLayout | Edit/Write diff 布局：auto（≥110 列双栏）/ split / unified |
 | thinkingFold | 思考块：preview（流式 2-3 行预览 + 落定折叠）/ full（展开到轮末） |
+| effortDefault | 默认推理强度：auto / off / low / high / max。新会话的起始档位（模型提供该档时当前会话下一请求同样生效，否则静默回落模型默认）；优先级 settings 用户层 > cordis `effort` > 上次 `/effort`（effort.json）> 模型默认 |
 | smoothStreaming | 流式平滑输出（默认开）：实时回复/展开思考/工具卡正文按 ~30fps 匀速揭示，突发送达不再跳变，一次性到达的非流式回复也平滑打出；回放/历史始终完整直出 |
 | toolBackground | 工具卡背景强调：none / subtle / strong |
 | statusBar.* | 上表全部状态栏开关（compact/model/thinking/cwd/contextUsage/cache/tokens/cost/tps/gitBranch/sessionTitle/sessionId/mode/contextBar/activity/trajectory；statusBar.sessionId 是底栏显示开关，与 cordis 的启动 sessionId 无关） |
 
 未声明 TUI 区块的命名空间以只读形式列出，需手工编辑 `~/.dsh/settings.yaml`。
-provider / model / cwd / effort / fullscreen / preset / workspace / sessionId / modes
-**不在 /settings 内**，要改 `$DSH_HOME/profiles/dsh-tui/cordis.patch.yml`。
+provider / model / cwd / fullscreen / preset / workspace / sessionId / modes
+**不在 /settings 内**，要改 `$DSH_HOME/profiles/dsh-tui/cordis.patch.yml`；其中启动级
+`effort` 键也在此改，/settings 里对应的是会话默认档 `effortDefault`（见上表）。
 
 ### 5.4 终端要求
 
@@ -459,7 +461,7 @@ provider / model / cwd / effort / fullscreen / preset / workspace / sessionId / 
 | 项 | 命令 | 说明 |
 |---|---|---|
 | 模型 | `/model` | 选择器；**切换 = fork 会话续聊**（历史保留、仅换路由）；持久化 `~/.dsh-tui/model.json`，重启与 `/new` 沿用 |
-| 推理强度 | `/effort` | 滑杆（←/→ 实时）或 `/effort <id>`；`/effort status` 看当前 |
+| 推理强度 | `/effort` | 滑杆（←/→ 实时）或 `/effort <id>`；`/effort status` 看当前；新会话默认档在 /settings → 默认推理强度 |
 | Agent 预设 | `/preset` | `standard` / `ptc`（0.1.2；旧 0.1.1 名为 `code`）/ `minimal` / `cordis` + **梁神模式 `liangshen`**；**已开始会话不可切换**（blank-only） |
 | 主题 | `/theme` | `auto`（OSC 11 跟随终端背景）/ `light` / `dark` / `dark-ansi`；`/theme <名>` 直接切；`/theme status` 看解析结果 |
 | 自定义主题 | 手动 | `~/.dsh-tui/themes/<名>.json`，`{base, colors}` 格式，选中即热切换；命名为 `auto` 会被内置遮蔽 |
