@@ -8,9 +8,9 @@ index 92a90a1..b131fdf 100644
  **Host:** dsh-TUI 0.9.x（`@deepseek-harness-tui/dsh-tui`）/ Cordis 4.x profile；上游 `@deepseek-ai/*` 主校验线 `0.1.2-alpha.1`（兼容 `0.1.0-rc.6/7/8`、`0.1.1-rc.1/2`）
 -**仓库:** https://github.com/ccch1mneyyy/dsh-TUI（`src/dsh-adapter/`、`src/plugin-spec/`）
 +**仓库:** https://github.com/ccch1mneyyy/dsh-TUI（`src/dsh-adapter/`、`src/adapter/standard/`）
- 
+
  ## 定位
- 
+
 diff --git a/docs/plugin-admission-and-development.md b/docs/plugin-admission-and-development.md
 index 0a1e1a3..f2aa9c0 100644
 --- a/docs/plugin-admission-and-development.md

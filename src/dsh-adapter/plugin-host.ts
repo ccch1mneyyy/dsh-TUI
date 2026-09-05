@@ -326,7 +326,12 @@ export class TuiPluginHostRuntime extends Service implements TuiPluginHost {
       }
       return build
     }
-    // Legacy fallback for bare/test compositions without a KernelRuntime.
+    // Only an explicitly legacy composition may publish mounted-service
+    // compatibility claims. Shadow, pending, failed and disposed Kernels have
+    // no completed live evidence and must never fall through to that path.
+    if (state.runtime.mode !== 'legacy') {
+      return buildHostDescriptor({ generationId: state.generationId })
+    }
     // This is the explicit legacy-compatibility path: the old mounted-service
     // topology is declared with `buildLegacyHostDescriptor`, which is separate
     // from the live-only new-Kernel descriptor and does not run any reversible

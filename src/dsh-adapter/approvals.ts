@@ -333,21 +333,19 @@ export class ApprovalStore {
    * different session than the active ask's. The notification the SDK
    * fires arrives after the event is already in `session.events`, so the
    * recheck sees the settled result.
+   * @param agentId - The emitting session's id (DSH shares agent/session identity).
    * @param event - The appended session event.
    */
-  noteSessionEvent(event: SessionEvent): void {
+  noteSessionEvent(agentId: string, event: SessionEvent): void {
     if (event.type !== 'tool/result') return
     // Hygiene for {@link consumedCallIds}: once the paired result landed,
     // the liveness check marks any future twin on its own, so the consumed
     // entry can go.
     const resultCallId = (event.data.message as { source?: { callId?: unknown } } | undefined)?.source?.callId
     if (resultCallId !== undefined) {
-      // Composite keys carry an agent prefix; a landed result retires the
-      // callId in every agent domain (suffix match — only ever removes).
-      const suffix = `::${String(resultCallId)}`
-      for (const entry of this.consumedCallIds) {
-        if (entry.endsWith(suffix)) this.consumedCallIds.delete(entry)
-      }
+      // Low-entropy callIds repeat across agents. A different session's
+      // result must not reopen this agent's park-after-decide replay window.
+      this.consumedCallIds.delete(consumedKey(agentId, resultCallId))
     }
     this.refreshActiveExternal()
   }

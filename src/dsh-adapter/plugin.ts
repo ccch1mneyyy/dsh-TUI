@@ -1276,7 +1276,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     // session other than the active ask's, so no agent filtering is needed
     // here. The firehose fires post-commit, after the event entered
     // session.events, so the recheck sees the settled result.
-    ctx.on('session/event', (_session, event) => approvalStore.noteSessionEvent(event))
+    ctx.on('session/event', (session, event) => approvalStore.noteSessionEvent(session.id, event))
     ctx.effect(() => () => approvalStore.settleAll('cancelled'))
   }
   // The agent view reads parked ask ids for its "needs input" state.

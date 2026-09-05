@@ -166,7 +166,7 @@ assert.equal(unknown!.command, undefined)
   let notifies = 0
   store.subscribe(() => { notifies += 1 }) // 探针：面板的 re-render 通道
   log.push(toolResult('call-push')) // tool/result 落地——不再调用 getSnapshot
-  store.noteSessionEvent(toolResult('call-push')) // 会话事件回调直达 store
+  store.noteSessionEvent('agent-1', toolResult('call-push')) // 会话事件回调直达 store
   await sleep(30) // scheduleNotify 走微任务
   assert.ok(notifies >= 1,
     'P-4: a settled tool/result must emit so a silent render loop re-reads the flipped snapshot')
@@ -266,6 +266,40 @@ assert.equal(unknown!.command, undefined)
   store.settleAll('cancelled')
   assert.equal(await askA, 'allowed-once')
   assert.equal(await askB, 'cancelled')
+}
+
+// Agent A's result must not retire Agent B's consumed marker for the same
+// low-entropy callId. The same-agent result still releases its own marker.
+{
+  const store = new ApprovalStore()
+  const requestB = () => ({
+    agent: { id: 'agent-2', session: { id: 'agent-2', seq: 2, events: events('call-0') } },
+    toolName: 'Bash', callId: 'call-0', reason: 'x',
+  } as never)
+  const firstB = store.park(requestB())
+  assert.equal(store.getSnapshot()!.external, undefined)
+  store.decide('allowed-once')
+  assert.equal(await firstB, 'allowed-once')
+  store.noteSessionEvent('agent-1', toolResult('call-0'))
+  const twinB = store.park(requestB())
+  assert.equal(store.getSnapshot()!.external, true,
+    'Agent A result must not unbadge a forged B approval while B is still executing')
+  store.settleAll('cancelled')
+  assert.equal(await twinB, 'cancelled')
+
+  store.noteSessionEvent('agent-2', toolResult('different-call'))
+  const stillConsumed = store.park(requestB())
+  assert.equal(store.getSnapshot()!.external, true, 'a different result must not clear the marker')
+  store.settleAll('cancelled')
+  assert.equal(await stillConsumed, 'cancelled')
+
+  store.noteSessionEvent('agent-2', toolResult('call-0'))
+  // A fresh log represents a subsequent call reusing the now-retired id.
+  const freshB = store.park(requestB())
+  assert.equal(store.getSnapshot()!.external, undefined,
+    'the matching agent/result must retire its own consumed marker')
+  store.settleAll('cancelled')
+  assert.equal(await freshB, 'cancelled')
 }
 
 // ── 面板渲染：external 行可见，非 external 不出现 ─────────────────────

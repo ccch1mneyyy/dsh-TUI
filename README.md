@@ -200,6 +200,7 @@ TUI 的 shadow/门禁只覆盖自有托管接缝；以下由 Cordis/上游 DSH �
   namespace，也不保留探针数据。
 - **MessageObserver live probe**：通过 broker 的内部 probe-only 发布通道添加一个临时探针订阅并投递一条合成事件；真实插件的 `session:*` 通配订阅不会收到任何探针消息，探针结束后订阅数回到原值。这些 live probe 方法不是插件可见的公开 service 方法，宿主内核通过内部 host-only accessor 调用。
 - **默认 legacy 兼容发布**：`DSH_TUI_ADAPTER_MODE` 默认是 `legacy`，不会加载新 Kernel、不会执行可逆 live probe。该模式保留旧发布语义，使用独立的 `buildLegacyHostDescriptor` 路径：只要 Command / LocalStorage / MessageObserver 的既有服务行已挂载，`describe()` / `hostDescriptor()` 就发布这些契约供插件准入使用；构建结果会在 warnings 中明确标注为 legacy 兼容声明，与新模式 live-only 的公开 descriptor 分离。
+- **模式配置 fail-closed**：只有未设置 `DSH_TUI_ADAPTER_MODE` 时才默认 `legacy`；显式值只接受 `legacy` / `passive-shadow` / `replay-shadow` / `new`（忽略大小写与首尾空白），空值或未知值会报错并拒绝启动。非 legacy 模式在 Kernel 未就绪、refresh skipped/failed 或已释放时返回空契约 descriptor，不回退兼容发布。
 - **Host probe 访问边界**：`host-probe-access` 内部的 token 是模块级不导出符号，普通包 exports 路径也拒绝 deep import。但插件与宿主同进程时，绝对路径加载内部文件仍无法被 `exports` 阻止——这是 **trusted-in-process 边界，不是安全沙箱**；宿主不会用“插件不可调用”这类无限定承诺。内部注册函数不会覆盖已引导的宿主 probe runner。
 - **Passive Shadow**：不执行上述可逆 probe，只做只读 detect/descriptor 快照；
   **Replay Shadow**：生产环境不接真实 DSH，必须通过 `scripts/verify-adapter-replay-harness.ts`

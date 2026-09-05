@@ -559,6 +559,13 @@ harness:
   `describe()` / `hostDescriptor()` publish those contracts for plugin
   admission. The build result explicitly labels this as a legacy compatibility
   declaration in warnings, separate from new-mode live-only descriptors.
+- **Fail-closed mode configuration**: only an unset `DSH_TUI_ADAPTER_MODE`
+  defaults to `legacy`. Explicit values must be `legacy`, `passive-shadow`,
+  `replay-shadow`, or `new` (case-insensitive, with surrounding whitespace
+  ignored); empty or unknown values raise an error and refuse startup.
+  Non-legacy compositions return an empty-contract descriptor while the Kernel
+  is not ready, refresh is skipped/failed, or the Kernel is disposed; they never
+  fall back to compatibility publication.
 - **Host probe access boundary**: the `host-probe-access` token is a
   module-local non-exported symbol and the normal package `exports` map rejects
   deep imports. Because plugins and the host share a process, absolute-path

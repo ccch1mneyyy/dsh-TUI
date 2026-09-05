@@ -141,8 +141,10 @@ export function createReplayChannelProvider(source: ReplayChannelSnapshotSource)
   if (!Array.isArray(source.snapshots) || source.snapshots.length === 0) {
     throw new TypeError('replay Channel provider requires at least one snapshot')
   }
-  if (source.methods !== undefined && (source.methods === null || typeof source.methods !== 'object' || Array.isArray(source.methods))) {
-    throw new TypeError('replay Channel methods must be an object map')
+  if (source.methods !== undefined && (source.methods === null
+    || typeof source.methods !== 'object'
+    || (Object.getPrototypeOf(source.methods) !== Object.prototype && Object.getPrototypeOf(source.methods) !== null))) {
+    throw new TypeError('replay Channel methods must be a plain object map')
   }
   for (const [name, handler] of Object.entries(source.methods ?? {})) {
     if (typeof handler !== 'function') {
@@ -225,8 +227,10 @@ export function createReplayChannelProvider(source: ReplayChannelSnapshotSource)
       if (channel.channelId !== channelId) {
         throw new Error('CHANNEL_NOT_FOUND')
       }
-      const handler = source.methods?.[method]
-      if (handler === undefined) {
+      const handler = source.methods !== undefined && Object.hasOwn(source.methods, method)
+        ? source.methods[method]
+        : undefined
+      if (typeof handler !== 'function') {
         // Unknown methods are protocol errors, never a successful no-op.
         throw new Error(`FEATURE_UNAVAILABLE: unknown Channel method "${method}"`)
       }

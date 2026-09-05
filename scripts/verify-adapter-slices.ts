@@ -275,6 +275,14 @@ assert.ok(facadeAfter.settings === undefined, 'dispose must remove mounted setti
 // unknown fail-closed, and corrected ownership (presentation must not load
 // toast, messages must not load decisions).
 {
+  assert.equal(parseAdapterRuntime({}).mode, 'legacy')
+  for (const mode of ['legacy', 'new', 'passive-shadow', 'replay-shadow']) {
+    assert.equal(parseAdapterRuntime({ DSH_TUI_ADAPTER_MODE: ` ${mode.toUpperCase()} ` }).mode, mode)
+  }
+  for (const mode of ['passive_shadow', 'replay', 'bogus', '', '   ']) {
+    assert.throws(() => parseAdapterRuntime({ DSH_TUI_ADAPTER_MODE: mode }),
+      /unknown DSH_TUI_ADAPTER_MODE/u, `invalid mode ${JSON.stringify(mode)} must fail closed`)
+  }
   assert.deepEqual(normalizeAdapterSliceList([' Presentation ']), ['presentation'])
   assert.deepEqual(normalizeAdapterSliceList(['dialogs']), ['presentation'])
   assert.deepEqual(normalizeAdapterSliceList(['decision-events']), ['decisions'])
