@@ -86,7 +86,7 @@ import { explicitModelRoute, recordedModelRoute, resolveModelRoute, validateMode
 import type { OAuthProviderStatus, OAuthSetupHost, ProfilePathOp, ProviderSetupHost } from './providerWizard.js'
 import { migratePresetPref, readPresetPref, writePresetPref } from '../presetPrefs.js'
 import { composePreset, resolvePersistedPreset, resolvePersistedRoute, runningPresetOf, serviceForAgent } from './presets.js'
-import { resolveCompatiblePreset, rosterOf, type AgentPresetInfo } from './preset-resolution.js'
+import { presetDisplayId, resolveCompatiblePreset, rosterOf, type AgentPresetInfo } from './preset-resolution.js'
 import { isPresetName, PRESET_NAMES } from '../components/activityFrames.js'
 import { existsSync, statSync, writeFileSync } from 'node:fs'
 import { logForDebugging } from '../utils/debug.js'
@@ -6141,17 +6141,23 @@ export function createChannel(
       const localized = getLang() === 'en'
       try {
         const list = await presets.list()
-        return list.map(preset => ({
-          id: preset.id,
-          ...(preset.name === undefined
-            ? {}
-            : { name: localized ? tOr(`preset-name-${preset.id}`, preset.name) : preset.name }),
-          ...(preset.description === undefined
-            ? {}
-            : { description: localized ? tOr(`preset-desc-${preset.id}`, preset.description) : preset.description }),
-          ...(preset.broken === undefined ? {} : { broken: preset.broken }),
-          isDefault: preset.id === presets.defaultId,
-        }))
+        return list.map(preset => {
+          // The 0.1.2 line renamed the official PTC preset `code` → `ptc`, but
+          // the dictionary keys keep the legacy `code` id (preset-name-code /
+          // preset-desc-code), so the display lookup bridges the roster id back.
+          const displayId = presetDisplayId(preset.id)
+          return {
+            id: preset.id,
+            ...(preset.name === undefined
+              ? {}
+              : { name: localized ? tOr(`preset-name-${displayId}`, preset.name) : preset.name }),
+            ...(preset.description === undefined
+              ? {}
+              : { description: localized ? tOr(`preset-desc-${displayId}`, preset.description) : preset.description }),
+            ...(preset.broken === undefined ? {} : { broken: preset.broken }),
+            isDefault: preset.id === presets.defaultId,
+          }
+        })
       } catch {
         return []
       }
