@@ -187,7 +187,7 @@ type Pending =
       resolve: (r: TerminalResponse | undefined) => void
       releaseRawMode: () => void
     }
-  | { kind: 'sentinel'; resolve: () => void; releaseRawMode: () => void }
+  | { kind: 'sentinel'; resolve: (attributes?: Da1Response) => void; releaseRawMode: () => void }
 
 /**
  * Sends terminal queries to stdout and resolves their responses, using a
@@ -263,12 +263,14 @@ export class TerminalQuerier {
    *
    * Safe to call with no pending queries — still waits for a round-trip.
    */
-  flush(): Promise<void> {
+  flush(): Promise<void>
+  flush(options: { attributes: true }): Promise<Da1Response | undefined>
+  flush(options?: { attributes: true }): Promise<void | Da1Response> {
     if (this.disposed || this.suspended) return Promise.resolve()
     return new Promise(resolve => {
       this.queue.push({
         kind: 'sentinel',
-        resolve,
+        resolve: attributes => resolve(options?.attributes ? attributes : undefined),
         releaseRawMode: this.holdRawMode(),
       })
       this.stdout.write(SENTINEL)
@@ -318,7 +320,7 @@ export class TerminalQuerier {
       if (s === -1) return
       for (const p of this.queue.splice(0, s + 1)) {
         if (p.kind === 'query') p.resolve(undefined)
-        else p.resolve()
+        else p.resolve(r)
         p.releaseRawMode()
       }
     }

@@ -116,6 +116,9 @@ importers:
       highlight.js:
         specifier: ^11.11.1
         version: 11.12.0
+      image-q:
+        specifier: 4.0.0
+        version: 4.0.0
       indent-string:
         specifier: ^5.0.0
         version: 5.0.0
@@ -137,6 +140,9 @@ importers:
       signal-exit:
         specifier: ^4.0.0
         version: 4.1.0
+      sixel:
+        specifier: 0.16.0
+        version: 0.16.0
       stack-utils:
         specifier: ^2.0.0
         version: 2.0.6
@@ -2340,6 +2346,9 @@ packages:
   '@types/lodash@4.17.25':
     resolution: {integrity: sha512-+K1NIO8I+F9/wNulfVvu23QYd0Pe9/OCqRrim4NoYIf1VoEDL90Ve4ClzpyqBLc7NpGGWRvYNCKZ1BE/Jpf8dQ==}
 
+  '@types/node@16.9.1':
+    resolution: {integrity: sha512-QpLcX9ZSsq3YYUUnD3nFDY8H7wctAhQj/TFKL8Ya8v5fMm3CFXxo8zStsLAl780ltoYoo1WvKUVGBQK+1ifr7g==}
+
   '@types/node@26.4.0':
     resolution: {integrity: sha512-faiGnoIrLH/V8cibOMEAZ8pMw6oXqSukl29ra4mN8GdaB2ZewzeaLj+INpV5N+Z1eKWzY+IzaIZH2EIR6YZRNQ==}
 
@@ -2608,6 +2617,9 @@ packages:
     resolution: {integrity: sha512-vK9P5/iUfdl95AI+JVyUuIcVtd4ofvtrOr3HNtM2yxC9bnMbEdp3x01OhQNnjb8IJYi38VlTE3mBXwcfvywuSw==}
     engines: {node: '>= 14'}
 
+  image-q@4.0.0:
+    resolution: {integrity: sha512-PfJGVgIfKQJuq3s0tTDOKtztksibuUEbJQIYT3by6wctQo+Rdlh7ef4evJ5NCdxY4CfMbvFkocEwbl4BF8RlJw==}
+
   immer@10.2.0:
     resolution: {integrity: sha512-d/+XTN3zfODyjr89gM3mPq1WNX2B8pYsu7eORitdwyA2sBubnTl3laYlBk4sXY5FUa5qTZGBDPJICVbvqzjlbw==}
 
@@ -2814,6 +2826,9 @@ packages:
   signal-exit@4.1.0:
     resolution: {integrity: sha512-bzyZ1e88w9O1iNJbKnOlvYTrWPDl46O1bG0D3XInv+9tkPrxrN8jUUTiFlDkkmKWgn1M6CfIA13SuGqOa9Korw==}
     engines: {node: '>=14'}
+
+  sixel@0.16.0:
+    resolution: {integrity: sha512-xicu6Y6Cyhmv5rjyHxq2r5RnKerlL/nyZEGjOU5bLCshXkZryc9JFJThTCKPOAtWXCfeWquEKFVFfMPcTD25PA==}
 
   stack-utils@2.0.6:
     resolution: {integrity: sha512-XlkWvfIm6RmsWtNJx+uqtKLS8eqFbxUg0ZzLXqY0caEy9l7hruX8IpiDnjsLavoBgqCCR71TqWO8MaXYheJ3RQ==}
@@ -5014,6 +5029,8 @@ snapshots:
 
   '@types/lodash@4.17.25': {}
 
+  '@types/node@16.9.1': {}
+
   '@types/node@26.4.0':
     dependencies:
       undici-types: 8.3.0
@@ -5261,6 +5278,10 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
+  image-q@4.0.0:
+    dependencies:
+      '@types/node': 16.9.1
+
   immer@10.2.0: {}
 
   indent-string@5.0.0: {}
@@ -5478,6 +5499,8 @@ snapshots:
     optional: true
 
   signal-exit@4.1.0: {}
+
+  sixel@0.16.0: {}
 
   stack-utils@2.0.6:
     dependencies:

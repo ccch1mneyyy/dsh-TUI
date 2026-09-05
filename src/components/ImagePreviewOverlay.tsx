@@ -135,12 +135,13 @@ export function ImagePreviewOverlay({
   React.useEffect(() => {
     if (!graphicsAvailable) return
     let live = true
+    const controller = new AbortController()
     setState({ kind: 'loading' })
-    void loadTranscriptImageFull(image).then(
+    void loadTranscriptImageFull(image, controller.signal).then(
       source => { if (live) setState({ kind: 'ready', source }) },
       () => { if (live) setState({ kind: 'failed' }) },
     )
-    return () => { live = false }
+    return () => { live = false; controller.abort() }
   }, [image, graphicsAvailable])
 
   // Title: `Image #N — PNG · 361×379 · 19.0 KB · name.png`, fitted to the
@@ -258,6 +259,7 @@ export function ImagePreviewOverlay({
           <Box flexGrow={1} alignItems="center" justifyContent="center">
             {graphicsFit ? (
               <Image
+                presentation="preview"
                 source={graphicsAvailable && state.kind === 'ready' ? state.source : undefined}
                 width={imageWidth}
                 height={imageHeight}

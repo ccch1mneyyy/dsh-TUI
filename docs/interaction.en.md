@@ -185,11 +185,18 @@ it appears as a slash-command argument.
 After submission, user images are re-projected from durable session events into
 the transcript. Assistant messages and tool results use the same preview path
 whenever their content contains image blocks. Fullscreen sessions with a
-successful Kitty graphics probe show bounded, aspect-preserving thumbnails;
+successful Kitty graphics or Sixel probe show bounded, aspect-preserving thumbnails;
 inline, accessibility, multiplexer, and read-failure paths reserve the same
 layout with a text fallback. Visible attachments are read and decoded only when
 graphics are available; other paths use metadata without loading the decoder.
 Resumed sessions do not depend on the original local path.
+
+Sixel thumbnails are cropped to the visible transcript while scrolling, without
+squeezing the whole image into the remaining rows or painting over the prompt.
+Opening a full preview withdraws background thumbnails; closing it restores them
+from cache. Unrelated text updates do not retransmit unchanged images. Decode and
+transport concurrency, queues and byte budgets are bounded, with text fallback
+on overflow or failure.
 
 ## Interface language
 
@@ -418,7 +425,7 @@ owns native scrollback and selection.
 | Single-click a tool card / thinking / compact summary | Expand / collapse (header brightens on hover; trailing blank cells do not trigger) |
 | Single-click a subagent card | Open that subagent's detail scene (status glyph brightens on hover) |
 | Single-click the input box | Place the text caret at the click (multi-line, wrapped rows and CJK all width-aligned) |
-| Click a `[Image #N]` token in the input box / a transcript thumbnail | Open the centered image preview (image metadata when Kitty graphics is unavailable); clicking outside the preview closes it |
+| Click a `[Image #N]` token in the input box / a transcript thumbnail | Open the centered image preview (image metadata when Kitty/Sixel graphics is unavailable); clicking outside the preview closes it |
 | Drag inside the prompt input | Build an in-input selection (rendered highlight, caret rides the drag end): `Backspace`/`Delete` delete it, typing replaces it, `←/→` collapse it to the corresponding edge, `Esc` only clears it; drags map only visible rows (no edge auto-scroll yet); a folded paste block keeps the selection on the clicked side (never across the chip row) |
 | `Shift+click` in the prompt input | Extend the selection from its start edge (or the caret) to the clicked position |
 | Double-click a word in the prompt input | Select the whole word (detected in the component, 500 ms / 1 cell; paths and punctuation runs select as one) |

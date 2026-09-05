@@ -6,6 +6,40 @@ import { loadSharp } from '../../dsh-adapter/sharp.js'
 import { cleanRenderText } from '../../dsh-adapter/sanitize.js'
 import { getLang, subscribeLang, t } from '../../i18n.js'
 
+// Bound attachment I/O and native Sharp work across both resolution tiers.
+let activeDecodes = 0
+const decodeQueue: Array<{ start: () => void; cancel: () => void }> = []
+function pumpDecodes(): void {
+  while (activeDecodes < 2 && decodeQueue.length) decodeQueue.shift()!.start()
+}
+function scheduleDecode(signal: AbortSignal, work: () => Promise<TerminalImageSource>, priority = false): Promise<TerminalImageSource> {
+  return new Promise((resolve, reject) => {
+    if (signal.aborted) { reject(signal.reason); return }
+    if (decodeQueue.length >= (priority ? 65 : 64)) { reject(new Error('Image decode queue budget exceeded')); return }
+    const job = {
+      start: (): void => {
+        signal.removeEventListener('abort', job.cancel)
+        if (signal.aborted) { reject(signal.reason); return }
+        activeDecodes++
+        void Promise.resolve().then(work).then(resolve, reject).finally(() => {
+          activeDecodes--
+          pumpDecodes()
+        })
+      },
+      cancel: (): void => {
+        const index = decodeQueue.indexOf(job)
+        if (index >= 0) decodeQueue.splice(index, 1)
+        signal.removeEventListener('abort', job.cancel)
+        reject(signal.reason)
+      },
+    }
+    signal.addEventListener('abort', job.cancel, { once: true })
+    if (priority) decodeQueue.unshift(job)
+    else decodeQueue.push(job)
+    pumpDecodes()
+  })
+}
+
 /**
  * Decode caches in two size tiers sharing one LRU implementation (a hit
  * re-inserts, eviction takes the least recently used): small thumbnails for
@@ -15,16 +49,23 @@ import { getLang, subscribeLang, t } from '../../i18n.js'
  * re-projected as a new object simply re-decodes.
  */
 function makeDecodeTier(maxPixels: number, limit: number) {
-  const cache = new Map<TranscriptImage, Promise<TerminalImageSource>>()
-  const load = (image: TranscriptImage): Promise<TerminalImageSource> => {
-    const cached = cache.get(image)
-    if (cached !== undefined) {
-      cache.delete(image)
-      cache.set(image, cached)
-      return cached
+  type Entry = { promise: Promise<TerminalImageSource>; controller: AbortController; refs: number; settled: boolean }
+  const cache = new Map<TranscriptImage, Entry>()
+  const trim = (): void => {
+    for (const [image, entry] of cache) {
+      if (cache.size <= limit) break
+      if (entry.settled && entry.refs === 0) cache.delete(image)
     }
-    const pending = image.read().then(async data => {
+  }
+  const create = (image: TranscriptImage): Entry => {
+    const controller = new AbortController()
+    const signal = controller.signal
+    const pending = scheduleDecode(signal, async () => {
+      signal.throwIfAborted()
+      const data = await image.read(signal)
+      signal.throwIfAborted()
       const sharp = await loadSharp()
+      signal.throwIfAborted()
       if (sharp === undefined) throw new Error('sharp is unavailable')
       const decoded = await sharp(data, { failOn: 'error' })
         .resize({
@@ -37,6 +78,7 @@ function makeDecodeTier(maxPixels: number, limit: number) {
         .ensureAlpha()
         .raw()
         .toBuffer({ resolveWithObject: true })
+      signal.throwIfAborted()
       if (
         decoded.info.channels !== 4 ||
         decoded.data.byteLength !== decoded.info.width * decoded.info.height * 4
@@ -48,19 +90,44 @@ function makeDecodeTier(maxPixels: number, limit: number) {
         width: decoded.info.width,
         height: decoded.info.height,
       }
+    }, maxPixels > 384)
+    const entry: Entry = { promise: pending, controller, refs: 0, settled: false }
+    void pending.then(() => { entry.settled = true; trim() }, () => {
+      entry.settled = true
+      if (cache.get(image) === entry) cache.delete(image)
     })
-    cache.set(image, pending)
-    while (cache.size > limit) {
-      const oldest = cache.keys().next().value as TranscriptImage | undefined
-      if (oldest === undefined) break
-      cache.delete(oldest)
-    }
-    void pending.catch(() => {
-      if (cache.get(image) === pending) cache.delete(image)
-    })
-    return pending
+    return entry
   }
-  return { load, clear: () => cache.clear() }
+  const load = (image: TranscriptImage, signal?: AbortSignal): Promise<TerminalImageSource> => {
+    if (signal?.aborted) return Promise.reject(signal.reason)
+    const entry = cache.get(image) ?? create(image)
+    cache.delete(image)
+    cache.set(image, entry)
+    entry.refs++
+    trim()
+    return new Promise((resolve, reject) => {
+      let released = false
+      const release = (): boolean => {
+        if (released) return false
+        released = true
+        signal?.removeEventListener('abort', abort)
+        entry.refs--
+        if (!entry.settled && entry.refs === 0) {
+          if (cache.get(image) === entry) cache.delete(image)
+          entry.controller.abort()
+        }
+        trim()
+        return true
+      }
+      const abort = (): void => { if (release()) reject(signal?.reason) }
+      signal?.addEventListener('abort', abort, { once: true })
+      void entry.promise.then(value => { if (release()) resolve(value) }, error => { if (release()) reject(error) })
+    })
+  }
+  return { load, clear: (): void => {
+    for (const entry of cache.values()) entry.controller.abort()
+    cache.clear()
+  } }
 }
 
 const thumbnailTier = makeDecodeTier(384, 24)
@@ -144,12 +211,13 @@ function TranscriptImagePreview({
   React.useEffect(() => {
     if (!graphicsAvailable) return
     let live = true
+    const controller = new AbortController()
     setState({ kind: 'loading' })
-    void thumbnailTier.load(image).then(
+    void thumbnailTier.load(image, controller.signal).then(
       source => { if (live) setState({ kind: 'ready', source }) },
       () => { if (live) setState({ kind: 'failed' }) },
     )
-    return () => { live = false }
+    return () => { live = false; controller.abort() }
   }, [image, graphicsAvailable])
 
   const label = transcriptImageLabel(image)
@@ -162,6 +230,7 @@ function TranscriptImagePreview({
         : t('transcript-image-ready', { name: label })
   const preview = (
     <Image
+      presentation="transcript"
       source={graphicsAvailable && state.kind === 'ready' ? state.source : undefined}
       width={width}
       height={height}

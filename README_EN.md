@@ -48,7 +48,7 @@ the interface, and removing it leaves no core modifications behind.
   with a note), history
   search, message selection, inline or alternate-screen rendering, and `/lang`
   zh/en UI language switching. Durable image blocks from user attachments and
-  assistant/tool output render as in-transcript previews through Kitty graphics,
+  assistant/tool output render as in-transcript previews through Kitty graphics or Sixel,
   with a same-size text fallback when graphics are unavailable. In fullscreen,
   clicking a staged `[Image #N]` token or a transcript thumbnail opens one
   shared preview centered over the transcript, dimming the conversation around
@@ -61,6 +61,18 @@ the interface, and removing it leaves no core modifications behind.
   preview opens, closing again when the caret leaves. Vim `x`/`X`/`d…` also
   delete whole attachments, and `u` restores both text and attachment bindings;
   undo stays within the current draft.
+  Windows Terminal with Sixel support displays embedded transcript thumbnails
+  and the fullscreen preview card. Non-fullscreen inline mode stays text-only.
+  Sixel uses a bounded 256-color adaptive palette and background-composited
+  transparency. A worker caches quantized pixels and encodes only the visible
+  crop while scrolling; removed or covered images are erased. Attachment reads
+  and decodes share two execution slots and cancel when their last consumer leaves.
+  Queues, caches and frame transfers are bounded, with text fallback on overflow.
+  Detection prefers Kitty, then Sixel advertised by DA1.
+  `DSH_TUI_IMAGE_PROTOCOL=auto|kitty|sixel|none` overrides protocol selection;
+  `DSH_TUI_DISABLE_TERMINAL_IMAGES=1`, accessibility mode, non-TTY output and
+  tmux/screen still disable graphics. Missing image dependencies or an encoding
+  failure preserve the text fallback. The override does not enable inline Sixel.
 - **Pixel whale pet**: one of three randomized startup intros plays on every
   launch; **clicking the whale pops a heart pass** any time, and with
   `/settings → whaleIdle` enabled the settled whale keeps fluttering its fins
@@ -261,7 +273,7 @@ so keep using `Ctrl`.
 | Click a timeline-rail tick | Jump to that turn — the rail covers every turn (folded ones included); a folded tick reveals its turn first, then scrolls it into place |
 | `Esc` | Cancel an in-progress drag selection (no copy) |
 | Single-click a message line | Expand/collapse that line |
-| Click a staged `[Image #N]` token / a transcript thumbnail | Open the centered image preview (metadata fallback without Kitty graphics); click outside the preview to close it |
+| Click a staged `[Image #N]` token / a transcript thumbnail | Open the centered image preview (metadata fallback without Kitty/Sixel graphics); click outside the preview to close it |
 | Click "load earlier messages" / "ctrl+e show previous N" | Load earlier messages / expand all |
 | Click the StickyHeader / "↓ N new messages" | Jump back to the pinned message / scroll to the bottom |
 | Click a hyperlink | Open it in your browser |

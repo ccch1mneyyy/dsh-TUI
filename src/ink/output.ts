@@ -185,6 +185,7 @@ type Options = {
   screen: Screen
   /** Paint image fallbacks as blank backing cells and collect placements. */
   terminalImages?: boolean
+  imageReady?: (placement: TerminalImagePlacement) => boolean
   /** Image requests from the diff baseline, reused by clean subtree blits. */
   previousImages?: readonly TerminalImagePlacement[]
 }
@@ -493,10 +494,12 @@ export default class Output {
   private readonly stylePool: StylePool
   private screen: Screen
   terminalImagesEnabled: boolean
+  private imageReady: ((placement: TerminalImagePlacement) => boolean) | undefined
 
   private readonly operations: Operation[] = []
   private readonly imagePlacements: TerminalImagePlacement[] = []
   private readonly imageNodes = new Set<DOMElement>()
+  private readonly imageBackingEnds = new Map<DOMElement, number>()
   private readonly imageClips: Clip[] = []
   private imageDecodedBytes = 0
   private previousImages: readonly TerminalImagePlacement[]
@@ -557,6 +560,7 @@ export default class Output {
     this.stylePool = stylePool
     this.screen = screen
     this.terminalImagesEnabled = options.terminalImages ?? false
+    this.imageReady = options.imageReady
     this.previousImages = options.previousImages ?? []
 
     resetScreen(screen, width, height)
@@ -578,15 +582,18 @@ export default class Output {
     screen: Screen,
     terminalImages = false,
     previousImages: readonly TerminalImagePlacement[] = [],
+    imageReady?: (placement: TerminalImagePlacement) => boolean,
   ): void {
     this.width = width
     this.height = height
     this.screen = screen
     this.terminalImagesEnabled = terminalImages
+    this.imageReady = imageReady
     this.previousImages = previousImages
     this.operations.length = 0
     this.imagePlacements.length = 0
     this.imageNodes.clear()
+    this.imageBackingEnds.clear()
     this.imageClips.length = 0
     this.imageDecodedBytes = 0
     resetScreen(screen, width, height)
@@ -662,8 +669,9 @@ export default class Output {
     columns: number,
     rows: number,
     source: TerminalImageSource,
+    background?: string,
   ): boolean {
-    if (this.imageNodes.has(node)) return true
+    if (this.imageNodes.has(node)) return this.imagePlacements.find(p => p.node === node)?.graphicsReady !== false
     if (this.imagePlacements.length >= TERMINAL_IMAGE_MAX_PLACEMENTS) return false
     const left = Math.floor(x)
     const top = Math.floor(y)
@@ -676,24 +684,31 @@ export default class Output {
     ) {
       return false
     }
-    if (
+    const presentation = node.attributes.imagePresentation
+    const canCrop = this.imageReady !== undefined && (presentation === 'preview' || presentation === 'transcript')
+    if (!canCrop && (
       left < 0 ||
       top < 0 ||
       left + width > this.width ||
       top + height > this.height
-    ) {
+    )) {
       return false
     }
     const clip = this.imageClips.at(-1)
-    if (
+    if (!canCrop && (
       clip !== undefined &&
       ((clip.x1 !== undefined && left < clip.x1) ||
         (clip.x2 !== undefined && left + width > clip.x2) ||
         (clip.y1 !== undefined && top < clip.y1) ||
         (clip.y2 !== undefined && top + height > clip.y2))
-    ) {
+    )) {
       return false
     }
+    const visibleLeft = Math.max(0, left, Math.ceil(clip?.x1 ?? 0))
+    const visibleTop = Math.max(0, top, Math.ceil(clip?.y1 ?? 0))
+    const visibleRight = Math.min(this.width, left + width, Math.floor(clip?.x2 ?? this.width))
+    const visibleBottom = Math.min(this.height, top + height, Math.floor(clip?.y2 ?? this.height))
+    if (visibleRight <= visibleLeft || visibleBottom <= visibleTop) return false
     const decodedBytes = source.data.byteLength
     if (
       this.imageDecodedBytes + decodedBytes >
@@ -701,17 +716,22 @@ export default class Output {
     ) {
       return false
     }
-    this.imagePlacements.push({
+    const placement: TerminalImagePlacement = {
       node,
       x: left,
       y: top,
       columns: width,
       rows: height,
       source,
-    })
+      ...(presentation === 'preview' || presentation === 'transcript' ? { presentation } : {}),
+      ...(canCrop ? { clip: { x: visibleLeft, y: visibleTop, columns: visibleRight - visibleLeft, rows: visibleBottom - visibleTop } } : {}),
+      ...(background !== undefined ? { background } : {}),
+    }
+    const graphicsReady = this.imageReady?.(placement)
+    this.imagePlacements.push(graphicsReady === undefined ? placement : { ...placement, graphicsReady })
     this.imageNodes.add(node)
     this.imageDecodedBytes += decodedBytes
-    return true
+    return graphicsReady !== false
   }
 
   /**
@@ -721,19 +741,22 @@ export default class Output {
    * of blitting its old blank backing cells.
    */
   reuseImages(node: DOMElement): boolean {
+    // A scrollable image's current clip is only known inside its ScrollBox.
+    // Descend first rather than admitting stale placements from an ancestor blit.
+    if (this.imageReady && this.previousImages.some(p => isNodeInSubtree(p.node, node))) return false
     let reusedAll = true
     for (const placement of this.previousImages) {
       if (!isNodeInSubtree(placement.node, node)) continue
-      if (
-        !this.image(
-          placement.node,
-          placement.x,
-          placement.y,
-          placement.columns,
-          placement.rows,
-          placement.source,
-        )
-      ) {
+      const ready = this.image(
+        placement.node,
+        placement.x,
+        placement.y,
+        placement.columns,
+        placement.rows,
+        placement.source,
+        placement.background,
+      )
+      if (!ready || ready !== (placement.graphicsReady !== false)) {
         reusedAll = false
       }
     }
@@ -742,7 +765,7 @@ export default class Output {
 
   /** Whether this node owned a terminal placement in the previous frame. */
   hadPreviousImage(node: DOMElement): boolean {
-    return this.previousImages.some(placement => placement.node === node)
+    return this.previousImages.some(placement => placement.node === node && placement.graphicsReady !== false)
   }
 
   /** Whether a baseline placement overlaps a screen region. */
@@ -757,6 +780,7 @@ export default class Output {
     const bottom = y + height
     return this.previousImages.some(
       placement =>
+        placement.graphicsReady !== false &&
         placement.x < right &&
         placement.x + placement.columns > x &&
         placement.y < bottom &&
@@ -766,7 +790,28 @@ export default class Output {
 
   /** Current frame's immutable-by-convention terminal image requests. */
   getImages(): readonly TerminalImagePlacement[] {
-    return this.imagePlacements.slice()
+    return this.imagePlacements.map(placement => {
+      const end = this.imageBackingEnds.get(placement.node)
+      if (end === undefined) return placement
+      const visible = placement.clip ?? placement
+      const overlaps = (rect: Rectangle): boolean => rect.x < visible.x + visible.columns &&
+        rect.x + rect.width > visible.x && rect.y < visible.y + visible.rows &&
+        rect.y + rect.height > visible.y
+      const occluded = this.operations.slice(end).some(op => {
+        if (op.type === 'write') return overlaps({ x: op.x, y: op.y,
+          width: widestLine(op.text), height: op.text.split('\n').length })
+        if (op.type === 'blit') return overlaps(op)
+        if (op.type === 'clear' || op.type === 'shade') return overlaps(op.region)
+        if (op.type === 'shift') return overlaps({ x: 0, y: op.top, width: this.width, height: op.bottom - op.top + 1 })
+        return false
+      })
+      return { ...placement, occluded }
+    })
+  }
+
+  /** Pixel ownership is determined by paint order, not just final text values. */
+  imageBacking(node: DOMElement): void {
+    if (this.imageReady) this.imageBackingEnds.set(node, this.operations.length)
   }
 
   /**
