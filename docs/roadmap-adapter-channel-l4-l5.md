@@ -22,7 +22,13 @@
 - `src/dsh-adapter/channel/` 提取 types、transcript 折叠/恢复、usage 辅助、
   mentions、paths、decision 归一化、permission 投影、preferences、settings/provider
   hosts、input actions 和 emitter。第二阶段继续提取唯一 live/replay projector、input FIFO/staging、
-  binding cell、session tree 和 notifications；原入口保留导出，本体仍约 5,000 行，不是薄装配层。
+  binding cell、session tree 和 notifications；本轮将手动压缩事务迁至
+  `channel/compaction.ts`，共同前台会话投影复位迁至 `channel/session-reset.ts`，
+  prepared fork 的同步 binding-adoption tail 迁至 `channel/session-adoption.ts`，
+  rewind decision、row rewind 与 detached `/fork` 动作分别迁至
+  `channel/session-actions.ts` / `channel/session-rewind.ts` /
+  `channel/session-fork.ts`。原入口保留装配、resume/new/tree-node 与其余会话动作，
+  本体仍非薄装配层。
 - 生产 React 树及 scene props 改为 `ChannelUi`；命令、嵌套 settings/provider/OAuth、
   job/subagent handles 使用显式 effect 表和捕获生命周期的 guard。bootstrap display
   watcher 与初始输入/通知使用同一 capability；原对象只用于注册及宿主生命周期。

@@ -2,6 +2,12 @@ import { createSessionTreeReader } from './channel/session-tree.js'
 import { createInputDelivery } from './channel/input-delivery.js'
 import { createChannelBinding } from './channel/binding.js'
 import { createChannelProjection } from './channel/projection.js'
+import { createManualCompaction } from './channel/compaction.js'
+import { resetSessionProjection } from './channel/session-reset.js'
+import { createSessionAdoption } from './channel/session-adoption.js'
+import { createRewindPromptAction } from './channel/session-actions.js'
+import { createForkSessionAction } from './channel/session-fork.js'
+import { createRewindToAction } from './channel/session-rewind.js'
 import { markChannelReadDirty } from '../adapter/channel/read-view.js'
 import { createChannelNotifications } from './channel/notifications.js'
 import type { Context } from '@deepseek-ai/cordis'
@@ -793,87 +799,16 @@ export function createChannel(
    * rebind subscriptions to the new agent, and free the replaced handle.
    * Returns the source session's id (for the session-switched notification).
    */
-  const adoptForkedAgent = (
+  // Installed after ChannelState initialization. The action surface is inert
+  // during construction, then delegates its synchronous adoption tail to the
+  // binding-owned session-adoption module.
+  let adoptForkedAgent: (
     handle: AgentHandle,
     capture: ReturnType<typeof binding.capture>,
     seed: readonly SessionEvent[],
     agentPreset: string | undefined,
     childId: SessionId,
-  ): string => binding.adopt(handle, capture, (previous, disposePrevious) => {
-    // This is the one authority handoff. No projection is reset until the
-    // prepared handle has won the binding race and subscriptions moved with it.
-    const sourceSessionId = String(previous.agent.session.id)
-    // Replay the forked history into a fresh transcript (tokens/spinner
-    // counters land back at the rewind point, matching the fork).
-    projector.reset()
-
-    // Stale sealed/thinking bookkeeping belongs to the OLD agent's rows;
-    // keep it out of the next turn's settle logs and revive cache.
-
-
-    rowIds.value = 0
-    state.rows.length = 0
-    markChannelReadDirty(state.rows)
-    resetSubagentProjection()
-    resetJobProjection()
-    // Goal/todo/title are session-scoped; the replay re-derives them for
-    // the session being entered (or leaves them empty).
-    state.todos = []
-    // Queued-but-undelivered messages live in the OLD agent's inbox; the
-    // swap must drop their previews or they linger forever (unretirable —
-    // retire events are filtered to the new agent, unwithdrawable — the
-    // new inbox never heard of them).
-    state.pending = []
-    state.goal = undefined
-    state.sessionTitle = ''
-    state.sessionColor = ''
-    state.tokens = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, peak: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, idle: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } }
-    state.responseChars = 0
-    state.activeToolCount = 0
-    state.lastUserText = ''
-    state.working = false
-    state.cancelPending = false
-    state.spinnerMode = 'requesting'
-    state.status = handle.agent.status
-    state.agentId = handle.agent.id
-    state.agentPreset = agentPreset
-    state.tps = undefined
-    state.tpsSamples = []
-    state.lastUsage = undefined
-    state.workingActivity = undefined
-    state.contextSegments = {
-      system: 0,
-      prompt: 0,
-      assistant: 0,
-      thinking: 0,
-      tools: 0,
-    }
-    projector.replayEvents(seed)
-    projector.settleStreaming()
-    // A seed ending mid-turn replays a turn/start that set working=true;
-    // the boot path resets this after replay — mirror it here so an idle
-    // rewound agent doesn't sit with a live spinner (a still-running
-    // agent re-asserts on its next event).
-    state.working = handle.agent.status === 'running'
-    // Rebind subscriptions to the new agent, then free the old one.
-    bindAgent()
-    // bindAgent is synchronous and quiet; revoke OLD-session capabilities
-    // before refreshCommandList exposes the replacement to subscribers.
-    clearStagedImages()
-    refreshCommandList()
-    void refreshLoadedContext()
-    void refreshSkillCommands()
-    // The forked session (rewind) becomes the most recently used.
-    touchSession(childId)
-    state.emit()
-    disposePrevious('dispose')
-    // The staged-image map is session-scoped (the same contract the
-    // resumeTo/newSession tails enforce): tokens typed against the rewound
-    // conversation must not ride into the fork's next send, and the epoch
-    // bump fences saves still in flight for the old session.
-    clearStagedImages()
-    return sourceSessionId
-  })
+  ) => string = () => { throw new Error('dsh-tui: session adoption is not initialized') }
   /** Monotonic token: only the latest `interruptAndDeliver` re-queues, so a
    *  second interrupt while the abort settles cannot double-deliver. */
   const inputConvergence: InputConvergence = { interruptSeq: 0, cancelInFlight: false }
@@ -1786,40 +1721,12 @@ export function createChannel(
     }).catch(() => {})
   }
 
-  // --- Manual-compaction lifecycle ---------------------------------------
-  // The in-flight /compact transaction: its abort hook plus the settled
-  // promise. Every path that replaces `agent` (rewind / rewind-node /
-  // resume / new / model switch) must cancel and await it BEFORE snapshot-
-  // ting the session. Without this, a slow summarizer keeps running against
-  // the OLD session across the switch and can commit its replacement
-  // checkpoint AFTER the fork snapshot — silently swapping the history the
-  // user believed intact ("compaction failed → /model → context lost").
-  let manualCompaction:
-    | { controller: AbortController; settled: Promise<void> }
-    | undefined
-  /** Compactions cancelled by settleManualCompaction: their rejection is expected. */
-  const cancelledCompactions = new WeakSet<AbortController>()
-
-  /**
-   * Cancel an in-flight manual compaction and wait for it to settle.
-   * Aborting tears the summarizer stream down; dsh-compaction then closes
-   * the transaction with an error end marker and rejects compactNow with
-   * the `cancelled` class — no checkpoint is committed, the surface stays
-   * whole. The settle race is capped so a stuck stream can never wedge the
-   * session switch itself.
-   */
-  const settleManualCompaction = async (): Promise<void> => {
-    const active = manualCompaction
-    if (active === undefined) return
-    manualCompaction = undefined
-    cancelledCompactions.add(active.controller)
-    active.controller.abort(new Error('session switch'))
-    notify(t('compact-cancelled-switch'), { color: 'warning', timeoutMs: 4000 })
-    await Promise.race([
-      active.settled,
-      new Promise<void>(resolve => { setTimeout(resolve, 3000) }),
-    ])
-  }
+  // Session actions close over these inert placeholders. They are explicitly
+  // installed after ChannelState initialization below.
+  let settleManualCompaction: () => Promise<void> = async () => undefined
+  let compactManualSession: () => void = () => undefined
+  let forkSessionAction: () => Promise<boolean> = async () => false
+  let rewindToAction: (row: ChatRow, mode?: string | null) => Promise<string | null> = async () => null
 
   /**
    * Adopt a live agent in this process — the agent view's attach path for a
@@ -1837,27 +1744,9 @@ export function createChannel(
     const previousHandle = committed.handle
     const previousSessionId = String(committed.agent.session.id)
     backgroundHandles.delete(String(target.id))
-    // Same reset shape as resumeTo (no history replay sources differ — the
-    // target's own events are replayed below).
-    projector.reset()
-
-
-
-    rowIds.value = 0
-    state.rows.length = 0
-    markChannelReadDirty(state.rows)
-    state.todos = []
-    state.pending = []
-    state.goal = undefined
-    state.sessionTitle = ''
-    state.sessionColor = ''
-    state.tokens = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, peak: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, idle: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } }
-    state.responseChars = 0
-    state.activeToolCount = 0
-    state.lastUserText = ''
-    state.working = false
-    state.cancelPending = false
-    state.spinnerMode = 'requesting'
+    // Same common reset as a persisted adoption. Live-agent adoption keeps
+    // its explicit cwd/route/background ownership differences below.
+    resetSessionProjection(state, rowIds, () => projector.reset(), resetSubagentProjection, resetJobProjection)
     state.status = target.status
     state.agentId = target.id
     state.cwd = target.session.header.cwd ?? state.cwd
@@ -1998,28 +1887,9 @@ export function createChannel(
         { color: 'warning', timeoutMs: 8000 },
       )
     }
-    // Replay the persisted history into a fresh transcript (same reset as
-    // rewindTo, plus the context window which the replay re-derives).
+    // Replay persisted history only after binding commits the prepared handle.
     return binding.adopt(handle, adoption, (committed, disposePrevious) => {
-      projector.reset()
-
-
-
-    rowIds.value = 0
-    state.rows.length = 0
-    markChannelReadDirty(state.rows)
-    state.todos = []
-    state.pending = []
-    state.goal = undefined
-    state.sessionTitle = ''
-    state.sessionColor = ''
-    state.tokens = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, peak: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, idle: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } }
-    state.responseChars = 0
-    state.activeToolCount = 0
-    state.lastUserText = ''
-    state.working = false
-    state.cancelPending = false
-    state.spinnerMode = 'requesting'
+      resetSessionProjection(state, rowIds, () => projector.reset(), resetSubagentProjection, resetJobProjection)
     state.status = handle.agent.status
     state.agentId = handle.agent.id
     state.cwd = handle.agent.session.header.cwd ?? state.cwd
@@ -2349,169 +2219,14 @@ export function createChannel(
      * host-localized when absent) or offer extra modes rendered in the
      * confirm pane. Returns 'cancel', the modes, or null for "no opinion".
      */
-    async promptRewind(row: ChatRow): Promise<{ modes: readonly TuiRewindMode[] } | 'cancel' | null> {
-      if (row.seq === undefined) return null
-      // D-6, same as the other decision points: a slow /new or /resume can
-      // replace the agent while this decision parks. Without the identity
-      // check the picker would go on to show the OLD session's row in the
-      // confirm pane and rewindTo would cut the NEW session at the old
-      // seq — a wrong rewind or a fork failure. Compare agent REFERENCES
-      // (session ids are reusable — ABA) and stale-cancel.
-      const originAgent = binding.agent
-      const decision = await withDecisionPending('tui/rewind-prompt', dispatchTuiDecision(ctx, 'tui/rewind-prompt', {
-        text: row.text,
-        seq: row.seq,
-        sessionId: state.agentId,
-        cwd: state.cwd,
-      }, normalizeRewindPromptDecision))
-      if (binding.agent !== originAgent) {
-        notify(t('ext-stale-dropped'), { color: 'warning', timeoutMs: 4000 })
-        return 'cancel'
-      }
-      if (decision === undefined) return null
-      if ('cancel' in decision) {
-        notify(decision.reason ?? t('ext-action-cancelled'), { color: 'warning', timeoutMs: 4000 })
-        return 'cancel'
-      }
-      return { modes: decision.modes }
-    },
-    async rewindTo(row: ChatRow, mode: string | null = null): Promise<string | null> {
-      if (row.seq === undefined) return null
-      const adoption = binding.capture()
-      const sessions = ctx.get('sessions') as
-        | { fork(source: unknown, boundary?: number): { events: readonly SessionEvent[] } }
-        | undefined
-      const agents = ctx.get('agents') as
-        | { create(options: CreateAgentOptions): Promise<AgentHandle> }
-        | undefined
-      if (!sessions || !agents) {
-        notify(t('rewind-unavailable'), { color: 'error' })
-        return null
-      }
-      // Stop a running turn first and WAIT for its turn/end to land — fork
-      // rejects boundaries inside open turns, and Agent.cancel() closes the
-      // turn asynchronously (a long thinking turn can take seconds to settle).
-      const wasWorking = state.working
-      const cancelSeq = binding.agent.session.seq
-      if (wasWorking) binding.agent.cancel({ kind: 'user' })
-      if (wasWorking) {
-        const turnSettled = await waitForTurnEnd(binding.agent.session, cancelSeq, 30000)
-        if (!turnSettled) {
-          notify(t('rewind-settling'), { color: 'error' })
-          return null
-        }
-      }
-      // An in-flight manual compaction must not straddle the fork: cancel it
-      // and wait, or its checkpoint could commit right after the seed snapshot
-      // below and quietly replace history the rewind was meant to preserve.
-      await settleManualCompaction()
-      const childId = SessionId(randomUUID())
-      // DSH event order is `turn/start → user/message → … → turn/end`, so a
-      // message's own seq always sits inside its turn — forking there would
-      // hit OPEN_TURN. Rewind to just BEFORE the message's turn/start: the
-      // conversation restarts at that point and the message itself comes
-      // back into the input for re-editing (CC's rewind semantics).
-      const events = binding.agent.session.events
-      let boundary = row.seq
-      for (let i = row.seq; i >= 0; i--) {
-        const event = events[i]
-        // oxlint-disable-next-line typescript/no-unnecessary-condition -- runtime guard: seq may exceed events
-        if (event === undefined) break
-        if (event.type === 'turn/start') {
-          boundary = event.seq - 1
-          break
-        }
-        if (event.type === 'turn/end') break
-      }
-      // Slice the SOURCE snapshot through an inclusive seq. Never
-      // sessions.fork(): that registers a real child whose snapshot includes
-      // child-owned session/end-seed, so snapshot.length is not the inherited
-      // cut. agents.create owns the new session id.
-      let seed: readonly SessionEvent[]
-      try {
-        if (boundary < 0) {
-          throw new Error('cannot rewind to the very first message')
-        }
-        seed = sessions.fork(binding.agent.session, boundary).events
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error)
-        notify(t('rewind-fork-failed', { err: message }), { color: 'error' })
-        return null
-      }
-      let handle: AgentHandle
-      // The fork continues under the source session's own preset: switches
-      // are blank-only, so every `agent-preset/selected` event predates any
-      // rewind boundary and the source log resolves the exact composition.
-      // The route likewise stays the live one — a rewind continues the same
-      // conversation, so a `/model` switch must survive it (issue #30).
-      const rewindComposed = await composePreset(ctx, runningPresetOf(binding.agent.session))
-      try {
-        handle = await binding.prepare(adoption, () => agents.create({
-          sessionId: childId,
-          seed,
-          meta: {
-            cwd: state.cwd,
-            parentSession: binding.agent.session.id,
-            seedLength: seed.length,
-            ...(rewindComposed.agentPreset === undefined
-              ? {}
-              : { agentPreset: rewindComposed.agentPreset }),
-          },
-          agentOptions: { provider: state.provider, model: state.model },
-          ...(rewindComposed.setup === undefined ? {} : { setup: rewindComposed.setup }),
-        }))
-      } catch {
-        notify(t('rewind-create-failed'), { color: 'error' })
-        return null
-      }
-      if (!binding.isCurrent(adoption)) { await binding.abandon(handle); return null }
-      try {
-        await attachSessionToWorkspace(ctx, state.cwd, childId)
-      } catch (error) {
-        notify(
-          t('rewind-attach-failed', { err: error instanceof Error ? error.message : String(error) }),
-          { color: 'warning', timeoutMs: 8000 },
-        )
-      }
-      // Swap the live agent for the fork (shared with rewindToNode): replay
-      // the seed, rebind, and free the replaced handle.
-      const sourceSessionId = adoptForkedAgent(handle, adoption, seed, rewindComposed.agentPreset, childId)
-      // Decision-event pair around the completed rewind: `tui/rewind-done`
-      // (the first non-empty string is toasted as the post-rewind summary,
-      // e.g. a plugin reporting restored files) and the generic
-      // `tui/session-switched` notification. Listener failures are logged,
-      // never surfaced — the rewind itself already succeeded.
-      //
-      // rewind-done is a post-hoc summary, NOT a gate, so it is dispatched
-      // DECOUPLED from the return value: the picker is already closed and
-      // PromptInput is live — awaiting a slow listener here would delay the
-      // picked text's return to the draft, letting its late arrival
-      // overwrite whatever the user typed meanwhile, and a listener that
-      // never settles would park tui/session-switched forever. The summary
-      // toasts whenever it lands.
-      try {
-        void dispatchTuiDecision(ctx, 'tui/rewind-done', {
-          text: row.text,
-          mode,
-          boundarySeq: boundary,
-          sourceSessionId,
-          childSessionId: String(childId),
-          sessionId: String(childId),
-          cwd: state.cwd,
-        }, normalizeRewindDoneSummary)
-          .then(summary => {
-            if (summary !== undefined) notify(summary, { timeoutMs: 6000 })
-          })
-          .catch((error: unknown) => {
-            ctx.logger.warn('dsh-tui: tui/rewind-done dispatch failed: %o', error)
-          })
-      } catch (error) {
-        // A bare embedder's context may lack the event bus entirely; the
-        // rewind itself already succeeded, so this stays a log line.
-        ctx.logger.warn('dsh-tui: tui/rewind-done dispatch failed: %o', error)
-      }
-      notifySessionSwitched('rewind', String(childId), sourceSessionId)
-      return row.text
+    promptRewind: createRewindPromptAction(ctx, {
+      agent: () => binding.agent,
+      state: () => state,
+      withDecisionPending,
+      notify,
+    }),
+    rewindTo(row: ChatRow, mode: string | null = null) {
+      return rewindToAction(row, mode)
     },
     buildSessionTree: createSessionTreeReader(ctx, binding, () => state.cwd, (...args) => notify(...args), owner),
     async rewindToNode(sessionId: string, seq: number, mode: 'rewind' | 'fork' = 'rewind'): Promise<string | null> {
@@ -2686,103 +2401,8 @@ export function createChannel(
       notifySessionSwitched(mode === 'fork' ? 'fork' : 'rewind', String(childId), sourceSessionId)
       return restoredText
     },
-    async forkSession(): Promise<boolean> {
-      const agents = ctx.get('agents') as
-        | { create(options: CreateAgentOptions): Promise<AgentHandle> }
-        | undefined
-      if (!sessions || !agents) {
-        notify(t('fork-unavailable'), { color: 'error' })
-        return false
-      }
-      // kimi-code /fork semantics: refuse mid-turn instead of cancelling —
-      // the fork must not surprise the user by killing their running turn,
-      // and sessions.fork rejects an open-turn log anyway.
-      if (state.working) {
-        notify(t('fork-while-working'), { color: 'warning' })
-        return false
-      }
-      // An in-flight manual compaction must not straddle the fork snapshot:
-      // cancel and await it, or its checkpoint could commit right after the
-      // seed copy below and quietly replace history the fork preserved.
-      await settleManualCompaction()
-      const source = binding.agent.session
-      const childId = SessionId(randomUUID())
-      // No boundary: the whole (turn-closed) source log. Slice the source
-      // snapshot — sessions.fork() would register a child and append
-      // session/end-seed, so snapshot.length is not a lineage cut.
-      let seed: readonly SessionEvent[]
-      try {
-        seed = sliceLiveSessionSeed(source)
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error)
-        notify(t('fork-failed', { err: message }), { color: 'error' })
-        return false
-      }
-      // Same preset/route rule as a rewind fork: the source log's own
-      // composition, the live route (a /model switch survives forking).
-      const forkComposed = await composePreset(ctx, runningPresetOf(source))
-      let detached: Awaited<ReturnType<typeof createDetachedHandle>>
-      try {
-        detached = await createDetachedHandle(() => agents.create({
-          sessionId: childId,
-          seed,
-          runtimeSession: source,
-          inheritedCount: seed.length,
-          cwd: state.cwd,
-          // NO parentSession: a /fork copy is an independent conversation
-          // (kimi-code semantics — a copy of the message list under a new
-          // root session, like /new plus the history), not a rewind branch.
-          // Recording lineage would fold it into the source's family in
-          // /resume and the user would never find it.
-          agentPreset: forkComposed.agentPreset,
-          agentOptions: { provider: state.provider, model: state.model },
-          ...(forkComposed.setup === undefined ? {} : { setup: forkComposed.setup }),
-        }))
-      } catch {
-        notify(t('fork-create-failed'), { color: 'error' })
-        return false
-      }
-      const handle = detached.handle
-      if (!owner.current()) { await detached.release(); return false }
-      // STAY in the source session: adopting the fork would dispose the live
-      // agent (killing its in-flight turn and background tasks) — the fork is
-      // an independent copy the user enters via /resume or the printed resume
-      // command. The teardown order matters:
-      // 1. attach while the fork's agent is still LIVE — the workspace's
-      //    header read resolves live sessions from the registry, so attaching
-      //    after dispose races the persistence index and can fail with
-      //    "cannot validate session".
-      // 2. await the dispose so the seed log finishes flushing…
-      // 3. …then append the Fork: title — appending mid-flush races the
-      //    writer and the frame is silently dropped.
-      try {
-        await attachSessionToWorkspace(ctx, state.cwd, childId)
-      } catch (error) {
-        notify(
-          t('fork-attach-failed', { err: error instanceof Error ? error.message : String(error) }),
-          { color: 'warning', timeoutMs: 8000 },
-        )
-      }
-      if (!owner.current()) { await detached.release(); return false }
-      try {
-        await detached.release()
-      } catch (error: unknown) {
-        ctx.logger.warn('dsh-tui: forked session dispose failed: %o', error)
-      }
-      // kimi's naming convention: the fork wears `Fork: <source title>` (the
-      // prefix stays English in both locales). Best effort — a backend whose
-      // log the compat layer cannot reach just leaves the fork untitled.
-      const sourceTitle = state.sessionTitle.trim()
-      appendSessionTitle(String(childId), `Fork: ${sourceTitle === '' ? String(source.id).slice(0, 8) : sourceTitle}`)
-      // The same resume-command shape the exit hint prints (plugin.ts
-      // resumeCommand): DSH_TUI_RESUME_SESSION + the boot profile.
-      const profile = resolveDshProfileName()
-      const boot = profile === undefined ? 'dsh --config cordis.yml' : `dsh --profile ${profile}`
-      const command = process.platform === 'win32'
-        ? `dsh-tui --resume ${childId}`
-        : `DSH_TUI_RESUME_SESSION=${childId} ${boot}`
-      notify(t('fork-done', { id: String(childId), command }), { timeoutMs: 8000 })
-      return true
+    forkSession() {
+      return forkSessionAction()
     },
     async resumeTo(sessionId: string): Promise<ResumeResult> {
       const adoption = binding.capture()
@@ -2889,35 +2509,7 @@ export function createChannel(
       // Replay the persisted history into a fresh transcript (same reset as
       // rewindTo, plus the context window which the replay re-derives).
       return binding.adopt(handle, adoption, (committed, disposePrevious) => {
-      projector.reset()
-
-      // Stale sealed/thinking bookkeeping belongs to the OLD agent's rows;
-      // keep it out of the next turn's settle logs and revive cache.
-
-
-      rowIds.value = 0
-      state.rows.length = 0
-      markChannelReadDirty(state.rows)
-      resetSubagentProjection()
-      resetJobProjection()
-      // Goal/todo/title are session-scoped; the replay re-derives them for
-      // the session being entered (or leaves them empty).
-      state.todos = []
-      // Queued-but-undelivered messages live in the OLD agent's inbox; the
-      // swap must drop their previews or they linger forever (unretirable —
-      // retire events are filtered to the new agent, unwithdrawable — the
-      // new inbox never heard of them).
-      state.pending = []
-      state.goal = undefined
-      state.sessionTitle = ''
-      state.sessionColor = ''
-      state.tokens = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, peak: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, idle: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } }
-      state.responseChars = 0
-      state.activeToolCount = 0
-      state.lastUserText = ''
-      state.working = false
-      state.cancelPending = false
-      state.spinnerMode = 'requesting'
+      resetSessionProjection(state, rowIds, () => projector.reset(), resetSubagentProjection, resetJobProjection)
       state.status = handle.agent.status
       state.agentId = handle.agent.id
       // Adopt the resumed session's persisted cwd (issue #96): pre-upgrade
@@ -3080,40 +2672,7 @@ export function createChannel(
       }
       if (!owner.current()) { await binding.abandon(handle); return false }
       return binding.adopt(handle, adoption, (committed, disposePrevious) => {
-      projector.reset()
-
-      // Stale sealed/thinking bookkeeping belongs to the OLD agent's rows;
-      // keep it out of the next turn's settle logs and revive cache. Event
-      // sequence numbers restart in the fresh session, so its dedupe ledgers
-      // must not retain the old session's sequence ids.
-
-
-
-
-
-      rowIds.value = 0
-      state.rows.length = 0
-      markChannelReadDirty(state.rows)
-      resetSubagentProjection()
-      resetJobProjection()
-      // Goal/todo/title are session-scoped; the replay re-derives them for
-      // the session being entered (or leaves them empty).
-      state.todos = []
-      // Queued-but-undelivered messages live in the OLD agent's inbox; the
-      // swap must drop their previews or they linger forever (unretirable —
-      // retire events are filtered to the new agent, unwithdrawable — the
-      // new inbox never heard of them).
-      state.pending = []
-      state.goal = undefined
-      state.sessionTitle = ''
-      state.sessionColor = ''
-      state.tokens = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, peak: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, idle: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } }
-      state.responseChars = 0
-      state.activeToolCount = 0
-      state.lastUserText = ''
-      state.working = false
-      state.cancelPending = false
-      state.spinnerMode = 'requesting'
+      resetSessionProjection(state, rowIds, () => projector.reset(), resetSubagentProjection, resetJobProjection)
       state.status = handle.agent.status
       state.agentId = handle.agent.id
       state.agentPreset = newComposed.agentPreset
@@ -4146,110 +3705,7 @@ export function createChannel(
       return true
     },
     compact() {
-      // DSH compaction service key: `ctx.compaction` (dsh-compaction's
-      // CompactionEngine; dsh-compaction-basic provides it in the example
-      // leaf). Under agent presets the engine lives in the preset's isolate
-      // realm, invisible from the root context — resolve through the agent's
-      // scope chain first (minimal composes NO compaction: stays unavailable).
-      const compactService = serviceForAgent<{
-          // rc.6 signature: compactNow(agent: ManualCompactAgentContext,
-          // signal, sourceCommandId?) — an Agent satisfies the context
-          // (session/options/runMaintenance). The result shape is only used
-          // for truthiness here.
-          compactNow(
-            agent: unknown,
-            signal: AbortSignal,
-          ): Promise<unknown>
-        }>(ctx, binding.agent, 'compaction')
-      if (!compactService) {
-        notify(t('compact-unavailable'), {
-          color: 'warning',
-        })
-        return
-      }
-      if (state.working) {
-        notify(t('compact-while-working'), { color: 'warning' })
-        return
-      }
-      // Plugin veto point (tui/compact): the first answering plugin may
-      // cancel the compaction before anything runs.
-      const originAgentId = state.agentId
-      // Compare the AGENT REFERENCE after the await, not the id — session
-      // ids are reusable (A → /new → /resume A returns the same id on a new
-      // agent), so an id comparison has an ABA hole that would hand the new
-      // agent to the OLD scope's compaction service.
-      const originAgent = binding.agent
-      void (async () => {
-        const decision = await withDecisionPending('tui/compact', dispatchTuiDecision(ctx, 'tui/compact', {
-          sessionId: originAgentId,
-          cwd: state.cwd,
-        }, normalizeCancelDecision))
-        if (decision !== undefined) {
-          notify(decision.reason ?? t('ext-action-cancelled'), { color: 'warning', timeoutMs: 4000 })
-          return
-        }
-        // Stale-drop (same rule as tui/input): the await parked us while the
-        // user switched sessions — `compactService` was resolved through the
-        // OLD agent's scope chain, and the mutable `agent` now points at the
-        // new session. Running now would hand the new agent to the old
-        // service (or call into an unloaded one).
-        if (binding.agent !== originAgent) {
-          notify(t('ext-compact-stale'), { color: 'warning', timeoutMs: 4000 })
-          return
-        }
-        if (state.working) {
-          // The await above gave a queued turn time to start; compacting
-          // mid-turn now would be the same race the check upfront avoided.
-          notify(t('compact-while-working'), { color: 'warning' })
-          return
-        }
-        const controller = new AbortController()
-        notify(t('compact-working'))
-        // Register the in-flight transaction so any agent-replacing path
-        // (rewind/resume/new/model switch) can cancel it before snapshotting
-        // the session — see settleManualCompaction. `settled` never rejects:
-        // every branch lands in a notification.
-        const settled = (async () => {
-          try {
-            const result = await compactService.compactNow(binding.agent, controller.signal)
-            notify(result ? t('compact-done') : t('compact-nothing'))
-            // Compaction quip rides the next thinking rotation (pi parity).
-            if (result) updateWorkingActivity('compaction', () => activityTracker.onCompact('done'))
-          } catch (error: unknown) {
-            // ManualCompactionError('persistence'): the replacement checkpoint
-            // is ALREADY committed — only the durability flush failed. The
-            // surface is now the summary, so a plain "failed" toast here sent
-            // users to /model expecting full history and finding only the
-            // summary ("context lost"). Distinguish it, structurally — the
-            // TUI must not import the error class across the adapter seam.
-            if ((error as { code?: unknown }).code === 'persistence') {
-              notify(t('compact-flush-failed'), { color: 'warning', timeoutMs: 12000 })
-              return
-            }
-            // A switch-initiated abort rejects compactNow with the abort reason;
-            // the cancellation was already toasted above — a second generic
-            // "failed" toast for the same, expected rejection would mislead.
-            if (cancelledCompactions.has(controller)) return
-            notify(
-              t('compact-failed', { err: error instanceof Error ? error.message : String(error) }),
-              { color: 'error', timeoutMs: 8000 },
-            )
-          }
-        })()
-        manualCompaction = { controller, settled }
-        void settled.finally(() => {
-          if (manualCompaction?.controller === controller) manualCompaction = undefined
-        })
-      })().catch((error: unknown) => {
-        // Sync throws from compactNow (e.g. runMaintenance rejecting a
-        // non-idle agent right after /resume) reject this IIFE itself;
-        // uncaught, that is an unhandled rejection and Node exits the
-        // whole TUI. Surface it as the same failure notification.
-        notify(
-          t('compact-failed', { err: error instanceof Error ? error.message : String(error) }),
-          { color: 'error', timeoutMs: 8000 },
-        )
-      })
+      compactManualSession()
     },
     runExternalCommand(name, rawInput, images = []) {
       return executeRegistryCommand(name, rawInput, images).then(outcome => outcome?.text)
@@ -5371,6 +4827,49 @@ ${output}
       throw error
     }
   }
+  const sessionAdoption = createSessionAdoption(state, {
+    binding,
+    rowIds,
+    resetProjector: () => projector.reset(),
+    resetSubagents: resetSubagentProjection,
+    resetJobs: resetJobProjection,
+    replay: events => projector.replayEvents(events),
+    settleReplay: projector.settleStreaming,
+    bindAgent,
+    refreshCommands: refreshCommandList,
+    refreshLoadedContext,
+    refreshSkillCommands,
+    clearStagedImages,
+    touchSession,
+  })
+  adoptForkedAgent = sessionAdoption.adoptForkedAgent
+
+  rewindToAction = createRewindToAction(ctx, state, {
+    owner,
+    binding,
+    settleCompaction: settleManualCompaction,
+    notify,
+    adoptForkedAgent,
+    notifySessionSwitched,
+  })
+
+  forkSessionAction = createForkSessionAction(ctx, state, {
+    owner,
+    settleCompaction: settleManualCompaction,
+    notify,
+    source: () => binding.agent.session,
+    createDetachedHandle,
+  })
+
+  const manualCompaction = createManualCompaction(ctx, state, {
+    agent: () => binding.agent,
+    withDecisionPending,
+    notify,
+    onComplete: () => updateWorkingActivity('compaction', () => activityTracker.onCompact('done')),
+  })
+  settleManualCompaction = manualCompaction.settle
+  compactManualSession = manualCompaction.compact
+
   // Subagents inherit provider/model from AgentOptions, but resumed TUI
   // agents can legitimately carry their route only in persisted request
   // headers. Their child scopes do not share this channel's per-agent
