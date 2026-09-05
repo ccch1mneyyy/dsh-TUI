@@ -247,6 +247,10 @@ export class StylePool {
    */
   intern(styles: AnsiCode[]): number {
     const key = styles.length === 0 ? '' : styles.map(s => s.code).join('\0')
+    return this.internWithKey(styles, key)
+  }
+
+  private internWithKey(styles: AnsiCode[], key: string): number {
     let id = this.ids.get(key)
     if (id === undefined) {
       const rawId = this.styles.length
@@ -374,7 +378,6 @@ export class StylePool {
       && current.r === rgb.r && current.g === rgb.g && current.b === rgb.b)) return
     this.shadeTarget = rgb
     this.dimCache.clear()
-    this.shadedIds.clear()
   }
 
   /**
@@ -383,17 +386,17 @@ export class StylePool {
    * pixel (`▀` with the upper pixel in the fg and the lower in the bg)
    * fades as one pixel pair instead of losing only its upper half; a cell
    * with no such foreground gets faint (SGR 2) so the terminal blends its
-   * default text colour toward its own background. Idempotent — a style
-   * this pool already produced as a shade (a cell shaded last frame and
-   * blitted back from prevScreen) or one that already carries faint maps to
-   * itself, so re-shading a region never stacks.
+   * default text colour toward its own background. Derived IDs retain
+   * their source style, so a cell blitted from prevScreen is shaded once,
+   * even after the target changes. Equal ANSI colours painted separately
+   * must not share that provenance.
    * @param baseId - the cell's current style ID.
-   * @returns the shaded style ID (`baseId` when nothing changes).
+   * @returns the shaded style ID, reused for the same source and shade.
    */
   private dimCache = new Map<number, number>()
-  private shadedIds = new Set<number>()
+  private shadedBaseIds = new Map<number, number>()
   withDim(baseId: number): number {
-    if (this.shadedIds.has(baseId)) return baseId
+    baseId = this.shadedBaseIds.get(baseId) ?? baseId
     let id = this.dimCache.get(baseId)
     if (id === undefined) {
       const baseCodes = this.get(baseId)
@@ -410,8 +413,11 @@ export class StylePool {
         if (parsed.plane === 'fg') fgBlended = true
       }
       if (!fgBlended && !baseCodes.some(c => c.code === DIM_CODE.code)) codes.push(DIM_CODE)
-      id = this.intern(codes)
-      this.shadedIds.add(id)
+      // Keep shades separate from ordinary ANSI interning: e.g. shaded
+      // rgb(200,200,200) and independently painted rgb(100,100,100).
+      // Including the source also preserves it when two shades coincide.
+      id = this.internWithKey(codes, `shade:${baseId}:${codes.map(c => c.code).join('\0')}`)
+      this.shadedBaseIds.set(id, baseId)
       this.dimCache.set(baseId, id)
     }
     return id
@@ -1963,8 +1969,8 @@ export function markNoSelectRegion(
  * to fade, and restyling it would only make the diff rewrite blank runs —
  * but a space carrying a background (a solid pixel, a card fill) is shaded
  * like a glyph; spacer tails have no style of their own. The mapping is
- * idempotent per style, so blitted cells that were shaded last frame stay
- * as they are. Damage covers the region so the diff scans it.
+ * derived from each style's original source, so blitted cells never stack
+ * shades. Damage covers the region so the diff scans it.
  * @param screen - the screen being composed.
  * @param styles - the pool the screen's style IDs belong to.
  * @param x - the region's left column.

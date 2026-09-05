@@ -1631,7 +1631,6 @@ function renderNodeToOutput(
         if (node.style.backdrop !== undefined) {
           output.shade(
             { x: Math.floor(x), y: Math.floor(y), width: Math.floor(width), height: Math.floor(height) },
-            node.style.backdrop,
           )
         }
         const ownBackgroundColor = node.style.backgroundColor
