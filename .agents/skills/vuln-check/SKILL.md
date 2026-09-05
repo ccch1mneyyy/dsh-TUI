@@ -1,26 +1,14 @@
 ---
 name: vuln-check
-description: Use when asked to check for security vulnerabilities, or when the /vuln-check command runs — scan the project for known vulnerable dependencies and security anti-patterns.
+description: Check resolved dependencies and relevant code paths for security vulnerabilities. Use for security checks or /vuln-check; use audit for a broader correctness and maintainability assessment.
 ---
 
-# Vulnerability Check
+Assess the requested security surface with evidence. A check returns findings; implement remediation when the user has requested it.
 
-Check the current project for security vulnerabilities: dependency advisories and code-level security anti-patterns.
+1. Read `package.json` and `pnpm-lock.yaml` for the affected dependency paths. Use current advisory data, such as `pnpm audit`, and record the resolved version, advisory, affected range, and verified fixed version where available. Distinguish a dependency advisory match from a demonstrated exploit path in this project.
+2. Trace untrusted inputs through guards to sensitive operations: shell execution, filesystem access, plugin capabilities, and terminal escape output. For paths, check containment and symlink behavior where relevant; normalization alone does not prevent traversal. Inspect actual validation and authorization before treating a suspicious API as a vulnerability.
+   Scan committed repository files for potential secrets; report only the path, line, and secret type, never the value or a source excerpt.
+3. Report findings by severity with location, trigger, impact, evidence, and the smallest effective remedy. Separate confirmed issues from leads needing verification. Preserve the upstream peer/dev dependency contract when proposing upgrades.
+4. State the scope, sources checked, and gaps. If advisories are unavailable, report that the dependency check is incomplete; absence of findings is not a claim that the project is vulnerability-free.
 
-## Procedure
-
-1. **依赖审计**: inspect the lockfile/manifest (package-lock.json / pnpm-lock.yaml / requirements.txt…) for known-vulnerable versions. Use the local toolchain (npm audit / pnpm audit when available and network permits) or compare against known advisory data.
-2. **代码检查**: scan for security anti-patterns with file/line evidence:
-   - shell command injection (string interpolation into exec/spawn with shell:true)
-   - path traversal (user input joined into paths without normalization)
-   - secrets committed (API keys, tokens, private keys in the tree); report only the file path, line, and secret type, never the value or source excerpt
-   - unsafe eval / dynamic import of user input
-   - missing input validation at trust boundaries
-3. Report findings ordered by severity, each with: location, CVE/advisory id when applicable, impact, and remediation (upgrade to which version, or the code change needed).
-4. State explicitly when the project is clean in a category.
-
-## Constraints
-
-- Never disclose a complete secret; diagnostics may report only whether it is set.
-- Distinguish "verified vulnerable" from "needs verification" — never overstate.
-- Do not modify code during the check.
+Report potential secrets only by path, line, and type, never their value or a source excerpt. Do not run automatic dependency fixes as part of a check; for requested remediation, make targeted changes and validate the affected paths.
