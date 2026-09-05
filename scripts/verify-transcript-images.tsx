@@ -21,10 +21,11 @@ import type { DOMElement } from '../src/ink/dom.js'
 import type { ContentBlock } from '@deepseek-ai/dsh-llm'
 import type { TimelineSnapshot } from '../src/ink/timeline-rail.js'
 import { settled } from './lib/term-test.mjs'
+import { kittyGraphics } from '../src/ink/terminal-querier.js'
 
 const { Terminal: XTerm } = xterm
 const [
-  { render, Box, Text },
+  { render, AlternateScreen, Box, Text },
   { MessageList },
   { clearTranscriptImageCacheForTests, TranscriptImages },
   { transcriptImagesOf },
@@ -280,11 +281,19 @@ async function withTerminal(
     rerender: (tree: React.ReactElement) => void,
     rawOutput: () => string,
   ) => Promise<void>,
+  graphics = false,
 ): Promise<void> {
+  const graphicsEnv = ['TMUX', 'STY', 'CLAUDE_CODE_ACCESSIBILITY', 'DSH_TUI_DISABLE_TERMINAL_IMAGES']
+  const previousEnv = graphicsEnv.map(name => process.env[name])
+  if (graphics) for (const name of graphicsEnv) delete process.env[name]
   const terminal = new XTerm({ cols: COLS, rows: ROWS, scrollback: 0, allowProposedApi: true })
   const stdout = new FakeStdout(terminal)
-  const app = await render(tree, {
-    stdin: new FakeStdin() as NodeJS.ReadStream,
+  const stdin = new FakeStdin()
+  const wrap = (next: React.ReactElement): React.ReactElement => graphics
+    ? <AlternateScreen>{next}</AlternateScreen>
+    : next
+  const app = await render(wrap(tree), {
+    stdin: stdin as NodeJS.ReadStream,
     stdout: stdout as NodeJS.WriteStream,
     stderr: new FakeStderr() as NodeJS.WriteStream,
     exitOnCtrlC: false,
@@ -295,10 +304,20 @@ async function withTerminal(
     (_, y) => terminal.buffer.active.getLine(y)?.translateToString(true) ?? '',
   ).join('\n')
   try {
-    await check(screen, next => { app.rerender(next) }, () => stdout.output)
+    if (graphics) {
+      assert.ok(await settled(() => stdout.output.includes(kittyGraphics(31).request)),
+        'image demand starts the capability probe before decoding')
+      stdin.write('\x1b_Gi=31;OK\x1b\\\x1b[6;20;10t\x1b[4;720;720t' +
+        '\x1b[?61;4c\x1b[?61;4c\x1b[?61;4c')
+    }
+    await check(screen, next => { app.rerender(wrap(next)) }, () => stdout.output)
   } finally {
     await app.unmount()
     terminal.dispose()
+    if (graphics) graphicsEnv.forEach((name, index) => {
+      if (previousEnv[index] === undefined) delete process.env[name]
+      else process.env[name] = previousEnv[index]
+    })
   }
 }
 
@@ -492,6 +511,19 @@ await withTerminal(
 )
 
 clearTranscriptImageCacheForTests()
+let fallbackReads = 0
+await withTerminal(
+  <TranscriptImages images={[{
+    ...image('no-graphics', 'metadata.png'),
+    async read() { fallbackReads += 1; return png },
+  }]} indent={0} />,
+  async screen => {
+    assert.equal(await settled(() => screen().includes('Image · metadata.png')), true)
+    assert.equal(fallbackReads, 0, 'inline metadata fallback does not read or decode attachment pixels')
+  },
+)
+
+clearTranscriptImageCacheForTests()
 let firstStoreReads = 0
 let secondStoreReads = 0
 const sharedIdA: TranscriptImage = {
@@ -520,6 +552,7 @@ await withTerminal(
     )
     assert.deepEqual([firstStoreReads, secondStoreReads], [1, 1])
   },
+  true,
 )
 
 clearTranscriptImageCacheForTests()
@@ -532,7 +565,7 @@ await withTerminal(
     assert.equal(
       await settled(() => screen().includes('Image · wide.png')),
       true,
-      'decoded image has a readable non-Kitty fallback',
+      'an image has a readable metadata fallback without decoding',
     )
     const lines = screen().split('\n')
     assert.equal(
@@ -554,6 +587,7 @@ await withTerminal(
     )
     assert.ok(!rawOutput().includes('\u001b[31mbad.png\u001b[0m'), 'injected label ANSI never reaches the terminal')
   },
+  true,
 )
 
 await withTerminal(
@@ -571,6 +605,7 @@ await withTerminal(
       setLang('en')
     }
   },
+  true,
 )
 
 // --- host-first sharp loader ------------------------------------------------

@@ -152,8 +152,9 @@ the transcript. Assistant messages and tool results use the same preview path
 whenever their content contains image blocks. Fullscreen sessions with a
 successful Kitty graphics probe show bounded, aspect-preserving thumbnails;
 inline, accessibility, multiplexer, and read-failure paths reserve the same
-layout with a text fallback. Images load lazily for visible messages, so resumed
-sessions do not depend on the original local path.
+layout with a text fallback. Visible attachments are read and decoded only when
+graphics are available; other paths use metadata without loading the decoder.
+Resumed sessions do not depend on the original local path.
 
 ## Interface language
 
