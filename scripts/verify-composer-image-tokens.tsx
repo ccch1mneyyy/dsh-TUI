@@ -8,6 +8,8 @@
  * start. It renders as a chip in the theme accent and inverts whole when
  * the caret sits at its start (the selected-chip look). A raw token typed
  * without a capability stays ordinary text.
+ * Vim deletions and undo preserve attachment bindings through submission;
+ * clearing, session replacement, undo eviction and unmount release them.
  *
  * Colour is on (FORCE_COLOR=3): the chip colour and the inverse caret are
  * chalk-level styling that verify-image-preview's colourless run strips.
@@ -25,7 +27,7 @@ import { PassThrough, Writable } from 'node:stream'
 import React from 'react'
 import xterm from '@xterm/headless'
 import sharp from 'sharp'
-import type { ChatRow } from '../src/dsh-adapter/channel.js'
+import type { ChatRow, ComposerImageRef } from '../src/dsh-adapter/channel.js'
 import type { TranscriptImage } from '../src/dsh-adapter/transcript-images.js'
 import { settled, sleep } from './lib/term-test.mjs'
 
@@ -87,10 +89,14 @@ function fakeImage(id: string, name: string): TranscriptImage {
 }
 
 function makeChannel() {
-  const staged = new Map<string, TranscriptImage>([
-    ['stage-1', fakeImage('sha256:staged', 'staged.png')],
-  ])
+  const staged = new Map<string, TranscriptImage>()
+  const submissions: Array<{ text: string; images: readonly ComposerImageRef[] }> = []
+  const listeners = new Set<() => void>()
+  let nextStage = 1
+  let generation = 0
   return {
+    staged,
+    submissions,
     version: 0,
     rows: [] as ChatRow[],
     status: 'idle' as const,
@@ -117,22 +123,37 @@ function makeChannel() {
     commandCompletions: () => [],
     notifications: [],
     contextSegments: { system: 0, prompt: 0, assistant: 0, thinking: 0, tools: 0 },
-    subscribe: () => () => {},
-    submit() {},
+    subscribe(listener: () => void) {
+      listeners.add(listener)
+      return () => { listeners.delete(listener) }
+    },
+    submit(text: string, images: readonly ComposerImageRef[] = []) {
+      submissions.push({ text, images })
+    },
     steer() {},
     cancel() {},
     clear() {},
     notify() {},
-    stagedImageGeneration: () => 0,
+    stagedImageGeneration: () => generation,
     stageImage: async () => '[Image #1]',
-    stageComposerImage: async () => ({ stageId: 'stage-1' }),
-    discardStagedImage() {},
+    async stageComposerImage() {
+      const stageId = `stage-${nextStage++}`
+      staged.set(stageId, fakeImage(`sha256:${stageId}`, 'staged.png'))
+      return { stageId }
+    },
+    discardStagedImage(stageId: string) { staged.delete(stageId) },
     hasStagedImage: (stageId: string) => staged.has(stageId),
     stagedImage: (stageId: string) => staged.get(stageId),
     stagedImageLimits: () => ({ maxImageBytes: 1024 * 1024, maxImagesPerMessage: 8 }),
     listModels: () => Promise.resolve([]),
     listSessions: () => [],
     setResumeTarget: () => {},
+    replaceSession() {
+      generation++
+      this.version++
+      staged.clear()
+      for (const listener of listeners) listener()
+    },
   }
 }
 
@@ -325,7 +346,109 @@ check('raw: a token without a capability is ordinary text (caret steps inside it
 check('raw: a token without a capability takes the text colour',
   cellAt(raw.col, raw.row)?.getFgColor() === cellAt(p5.col - 2, p5.row)?.getFgColor(), text())
 
+// Vim edits must carry the same atomic spans as ordinary deletion. Check
+// the submitted capability after undo, not just the restored token's text.
+stdin.write('\x03')
+await settled(() => noTokenFragment())
+stdin.write('/vim\r')
+check('vim: enabled in INSERT', await settled(() => text().includes('❯ INSERT')), text())
+const lastStageId = (): string => [...channel.staged.keys()].at(-1)!
+const vimDraft = (): string =>
+  (lines().find(line => line.includes('❯ NORMAL'))?.split('❯ NORMAL')[1] ?? '\0')
+    .replace(/⛶\s*$/u, '').trim()
+const enterNormal = async (): Promise<void> => {
+  stdin.write('\x1b')
+  check('vim: entered NORMAL', await settled(() => text().includes('❯ NORMAL')), text())
+}
+const selectToken = async (token: string): Promise<void> => {
+  stdin.write('\x1b[H')
+  check('vim: caret selects the token', await settled(() => {
+    const pos = find(token)
+    return pos !== null && wholeInverse(pos, token)
+  }), text())
+}
+for (const command of ['x', 'X', 'dw', 'dd', 'd$', 'd0', 'd^']) {
+  const token = await paste()
+  const stageId = lastStageId()
+  stdin.write('tail')
+  await enterNormal()
+  await selectToken(token)
+  if (command === 'X' || command === 'd0' || command === 'd^') stdin.write(RIGHT)
+  stdin.write(command)
+  const remaining = command === 'dd' || command === 'd$' ? '' : 'tail'
+  check(`vim ${command}: deletes the whole token`,
+    await settled(() => vimDraft() === remaining && noTokenFragment()), text())
+  check(`vim ${command}: undo retains the attachment`, channel.hasStagedImage(stageId))
+  stdin.write('u')
+  check(`vim ${command}: undo restores the draft`,
+    await settled(() => vimDraft() === `${token} tail`), text())
+  const before = channel.submissions.length
+  stdin.write('\r')
+  await settled(() => channel.submissions.length > before)
+  check(`vim ${command}: restored attachment reaches submit`,
+    channel.submissions[before]?.images.some(ref => ref.token === token && ref.stageId === stageId) === true,
+    JSON.stringify(channel.submissions[before]))
+  stdin.write('i')
+  await settled(() => text().includes('❯ INSERT'))
+}
+
+// `$x` deletes the last grapheme of a line; a token ending that line is
+// still one atom. Undo restores its binding just as at the token's start.
+const endToken = await paste()
+const endStage = lastStageId()
+stdin.write(BACKSPACE) // remove the paste's trailing space
+await enterNormal()
+stdin.write('x')
+check('vim x at line end: removes the whole token',
+  await settled(() => vimDraft() === '' && noTokenFragment()), text())
+stdin.write('u')
+check('vim x at line end: undo restores the attachment',
+  await settled(() => text().includes(endToken)) && channel.hasStagedImage(endStage), text())
+stdin.write('x')
+await settled(noTokenFragment)
+stdin.write('i tail')
+await settled(() => text().includes('❯ INSERT tail'))
+await enterNormal()
+stdin.write('\x03')
+check('vim clear: releases attachments retained only by undo',
+  await settled(() => !channel.hasStagedImage(endStage)))
+stdin.write('ui')
+await settled(() => text().includes('❯ INSERT'))
+check('vim clear: cannot undo into the discarded draft', noTokenFragment(), text())
+
+const evictedToken = await paste()
+const evictedStage = lastStageId()
+stdin.write('z'.repeat(105))
+await enterNormal()
+await selectToken(evictedToken)
+stdin.write('x')
+await settled(noTokenFragment)
+check('vim eviction: deleted image starts retained', channel.hasStagedImage(evictedStage))
+stdin.write('x'.repeat(100))
+check('vim eviction: dropping the last snapshot releases its image',
+  await settled(() => !channel.hasStagedImage(evictedStage)))
+stdin.write('\x03')
+await settled(() => /❯ NORMAL\s*$/mu.test(text()))
+
+stdin.write('i')
+const sessionToken = await paste()
+await enterNormal()
+await selectToken(sessionToken)
+stdin.write('x')
+await settled(noTokenFragment)
+channel.replaceSession()
+stdin.write('ui')
+await settled(() => text().includes('❯ INSERT'))
+check('vim session replacement: undo cannot restore an old session draft', noTokenFragment(), text())
+
+const unmountToken = await paste()
+const unmountStage = lastStageId()
+await enterNormal()
+await selectToken(unmountToken)
+stdin.write('x')
+await settled(noTokenFragment)
 await app.unmount()
+check('vim unmount: releases images retained only by undo', !channel.hasStagedImage(unmountStage))
 terminal.dispose()
 
 if (failures > 0) {

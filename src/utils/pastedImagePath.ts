@@ -55,7 +55,7 @@ export function parsePastedImagePath(text: string): string | null {
       path = unescapeDoubleQuoted(inner)
     }
   } else {
-    path = unescapeBackslashes(trimmed, { failOnBareWhitespace: true })
+    path = unescapeBackslashes(trimmed)
   }
   if (path === null) return null
 
@@ -86,13 +86,9 @@ function unescapeDoubleQuoted(text: string): string | null {
   return out
 }
 
-/** Resolve `\x` escapes with one linear scan. With `failOnBareWhitespace`,
- *  an unescaped space/tab (multiple shell tokens) or a dangling trailing
- *  backslash makes the whole parse fail. */
-function unescapeBackslashes(
-  text: string,
-  options: { failOnBareWhitespace?: boolean } = {},
-): string | null {
+/** Resolve `\x` escapes with one linear scan. An unescaped space/tab
+ *  (multiple shell tokens) or a dangling trailing backslash fails. */
+function unescapeBackslashes(text: string): string | null {
   let out = ''
   for (let index = 0; index < text.length; index++) {
     const char = text[index]!
@@ -102,7 +98,7 @@ function unescapeBackslashes(
       index += 1
       continue
     }
-    if (options.failOnBareWhitespace === true && (char === ' ' || char === '\t')) {
+    if (char === ' ' || char === '\t') {
       return null
     }
     out += char
