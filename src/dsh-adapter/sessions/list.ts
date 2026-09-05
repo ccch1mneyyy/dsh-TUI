@@ -45,7 +45,11 @@ const TITLE_SCAN_BUDGET_BYTES = 16 * 1024 * 1024
 export interface SessionSource {
   /** Headers plus per-log change tokens — the contract built for this. */
   listSnapshots?: (signal?: AbortSignal) => Promise<readonly unknown[]>
-  /** Headers alone, for a backend or version without snapshots. */
+  /**
+   * Persistence listing. dsh 0.1.2+ returns snapshots
+   * `{ header, revision, sizeBytes }`. Older backends returned the header
+   * itself. Both shapes are accepted below.
+   */
   list?: (signal?: AbortSignal) => Promise<readonly unknown[]>
   /** Absolute artifact path for one header; absent for storeless backends. */
   locate?: (meta: unknown) => unknown
@@ -74,9 +78,10 @@ function readSnapshot(value: unknown): Listed | undefined {
  *
  * Prefers `listSnapshots()` because its revision is the backend's own answer
  * to "has this log changed", and falls back to `list()` when the resolved
- * service predates it — in which case the change token is derived from the
- * file's own size and mtime further down. Both are honest change tokens for an
- * append-only log; only the authority differs.
+ * service predates it. dsh 0.1.2 put the snapshot shape on `list()` itself
+ * (no `listSnapshots` method), so that fallback must unwrap
+ * `{ header, revision }` as well as a bare header. Both are honest change
+ * tokens for an append-only log; only the authority differs.
  */
 async function enumerate(source: SessionSource, signal?: AbortSignal): Promise<Listed[]> {
   if (typeof source.listSnapshots === 'function') {
@@ -87,6 +92,8 @@ async function enumerate(source: SessionSource, signal?: AbortSignal): Promise<L
     const headers = await source.list(signal)
     return headers
       .map((raw): Listed | undefined => {
+        const snapshot = readSnapshot(raw)
+        if (snapshot !== undefined) return snapshot
         const header = readHeader(raw)
         return header === undefined ? undefined : { header, raw, revision: undefined }
       })
@@ -220,7 +227,14 @@ export async function listSummaries(
                   ? undefined
                   : { text: previous.title, source: previous.titleSource }
               }
-              hasPrompt = previous.hasPrompt
+              // The log GREW since that previous verdict; the digest above was
+              // computed on the current file, so its prompt answer is the more
+              // honest one, and a log past its head window is counted as having
+              // a conversation by construction. A verdict across an append only
+              // strengthens: carrying hasPrompt=false forward here hid real
+              // sessions from /resume as "empty" when an early listing caught
+              // the log before its first human prompt.
+              hasPrompt = previous.hasPrompt || digest.hasPrompt
               titleComplete = true
             }
           }
