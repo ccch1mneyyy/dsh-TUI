@@ -14,6 +14,9 @@ import { createModelActions } from './channel/model-actions.js'
 import { createWorkspaceActions } from './channel/workspace-actions.js'
 import { createModelSwitchAction } from './channel/model-switch.js'
 import { createModeActions } from './channel/mode-actions.js'
+import { createFileActions } from './channel/file-actions.js'
+import { createReportActions } from './channel/reports.js'
+import { createSessionMetadataActions } from './channel/session-metadata.js'
 import { markChannelReadDirty } from '../adapter/channel/read-view.js'
 import { createAgentViewProjection } from './channel/agent-view-projection.js'
 import { createJobProjection } from './channel/job-projection.js'
@@ -26,23 +29,16 @@ import { createChannelNotifications } from './channel/notifications.js'
 import type { Context } from '@deepseek-ai/cordis'
 import { installModelSelection, type Agent, type AgentHandle, type CreateAgentOptions, type ModelSelectionRef } from '@deepseek-ai/dsh-agent'
 import type { CommandRuntime } from '@deepseek-ai/dsh-commands'
-import { isUserInvocable } from '@deepseek-ai/dsh-skill'
-import type { LlmModelInfo } from '@deepseek-ai/dsh-llm'
 import {
   createUserMessage,
   ReasoningEffortId,
-  type ContentBlock,
-  type Message
 } from '@deepseek-ai/dsh-llm'
 import { SessionId, type SessionEvent } from '@deepseek-ai/dsh-session'
 import { randomUUID } from 'node:crypto'
 import { featureOn } from 'dsh-working-activity/config'
 import type { TrackerConfig } from 'dsh-working-activity/status'
 import { ActivityTracker } from 'dsh-working-activity/status'
-import { existsSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
 import { readActivityConfig, writeActivityFrames } from '../activityPrefs.js'
-import { collectAdapterDiagnostics } from '../adapter/kernel/diagnostics.js'
 import { adapterRuntimeFor } from '../adapter/kernel/runtime-context.js'
 import {
   assertCapabilityShadowPolicy,
@@ -51,36 +47,31 @@ import { readGrantStore } from '../adapter/standard/grants.js'
 import { SESSION_COLOR_NAMES } from '../cc/sessionColors.js'
 import { completeCommands, HIDDEN_COMMAND_NAMES, isCommandCompletionToken, isLocalCommandName, LOCAL_COMMANDS, parseCommandName, type CommandCompletionNode, type LocalCommand } from '../commands.js'
 import { isPresetName, PRESET_NAMES } from '../components/activityFrames.js'
-import { fetchBalance } from '../deepseekBalance.js'
-import { isPeakHour } from '../deepseekPricing.js'
 import { getLang, LANGS, t, tOr, type Lang } from '../i18n.js'
 import { readModelPref } from '../modelPrefs.js'
 import { resolveModelRoute, validateModelRoute } from '../modelRoute.js'
 import { readPresetPref } from '../presetPrefs.js'
-import { clearResumeTarget, forgetSession, readAgentViewSessions, readResumeTarget, touchAgentViewSession, touchSession, writeResumeTarget } from '../sessionHistory.js'
+import { readAgentViewSessions, touchAgentViewSession, touchSession } from '../sessionHistory.js'
 import { resolveSessionModes, type SessionModeSpec } from '../sessionModes.js'
 import { AUTO_THEME_NAME } from '../theme.js'
 import { listThemeCatalog } from '../themeCatalog.js'
 import { normalizePageMargin, normalizeScrollGutter, normalizeStatusBar, normalizeToolBackground, type PageMarginSetting, type ScrollGutterMode, type StatusBarConfig, type ToolBackground } from '../tuiDisplayPrefs.js'
 import { resolveDshProfileName } from '../update.js'
 import { logForDebugging } from '../utils/debug.js'
-import { isPathLikeQuery, rankFileCandidates, type FileCandidate } from '../utils/fileSuggestions.js'
-import { homeDir, LEGACY_DATA_DIR } from '../utils/paths.js'
 import { channelCommands } from './channel/commands.js'
 import { normalizeInputDecision, normalizeRewindDoneSummary, normalizeRewindPromptDecision, NOTICE_CELLS } from './channel/decisions.js'
 import { createChannelEmitter } from './channel/emitter.js'
 import { createInputActions, type InputConvergence } from './channel/input-actions.js'
 import { expandMentions, mentionAttachments, mentionFs } from './channel/mentions.js'
-import { listFilesDeepCandidates, listPathCandidates, sessionCwdMatches } from './channel/paths.js'
+import { sessionCwdMatches } from './channel/paths.js'
 import { legacyPermissionPresetSnapshot, permissionPresetSnapshotFromService, unavailablePermissionPresetSnapshot } from './channel/permissions.js'
 import { createPreferences } from './channel/preferences.js'
 import { createSettingsHosts } from './channel/settings-host.js'
 import { createChannelOwner, registerChannelOwner } from './channel/owner.js'
 import { ARGS_PREVIEW_LIMIT, foldBack, harnessToolResultView, LOCAL_OUTPUT_LIMIT, prepareReplayEvents, preview, RESULT_PREVIEW_LIMIT, toolErrorText } from './channel/transcript.js'
-import type { ActivityStatus, AgentViewRow, Channel, ChannelGoal, ChannelImageBlock, ChannelState, ChatRow, CredentialStatus, EffortOption, JobControl, LoadedContextEntry, LoadedContextFile, LoadedContextSkill, LoadedContextTool, MentionFs, NotificationItem, PendingMessage, PresetOption, ResumeResult, SideQuestionLlm, StagedImageInput, SubagentControl, SubagentRow, TodoPanelItem, ToolCallView, ToolResultView, ToolsRegistryLike } from './channel/types.js'
+import type { ActivityStatus, AgentViewRow, Channel, ChannelGoal, ChannelImageBlock, ChannelState, ChatRow, CredentialStatus, EffortOption, JobControl, LoadedContextEntry, LoadedContextFile, LoadedContextSkill, LoadedContextTool, MentionFs, NotificationItem, PendingMessage, PresetOption, ResumeResult, StagedImageInput, SubagentControl, SubagentRow, TodoPanelItem, ToolCallView, ToolResultView, ToolsRegistryLike } from './channel/types.js'
 import { estimateTokens, isTokenDelta, tokenDeltaChars, usageOutputTokens } from './channel/usage.js'
 import { getHostCommandTrees } from './command-trees.js'
-import { appendSessionTitle, defaultMaxScanned, deleteSessionLog, readSessionEventsFromFile, readSessionEventsFromLog, sessionsRoots } from './compat/index.js'
 import { installDecisionGuard, markDecisionDispatchTopology } from './decision-guard.js'
 import type {
   TuiRewindMode
@@ -89,20 +80,13 @@ import { dispatchTuiDecision, dispatchTuiNotification, normalizeCancelDecision }
 import { getHostGrantStore } from './host-grants.js'
 import type { JobsRuntime } from './jobs.js'
 import { getHostMessageObserver, type TuiMessageObserverRuntime } from './message-observer.js'
-import { getHostFacade } from './plugin-host.js'
-import { pluginsInfoLines } from './plugins-info.js'
 import { composePreset, runningPresetOf, serviceForAgent } from './presets.js'
-import { collectRecentActivity, parseRecapResponse, RECAP_RECENT_CHARS, wrapRecapPrompt } from './recap.js'
 import { getHostRenderers, type TuiRendererRuntime } from './renderers.js'
 import { cleanRenderText } from './sanitize.js'
 import { getHostSceneRuntime, type TuiSceneRuntime } from './scenes.js'
 import {
   listSummaries,
-  locateSession,
   noteBranch,
-  previewSession,
-  readHeader,
-  type RawSessionHeader,
   type SessionSource,
   type SessionSummary
 } from './sessions/index.js'
@@ -113,7 +97,6 @@ import {
   type SessionTreeData,
 } from './sessionTree.js'
 import { getHostSettingsSections, getLocalSettingsSectionsHost, type TuiSettingsSection, type TuiSettingsSectionsRuntime } from './settings-sections.js'
-import { runSideQuestion, wrapSideQuestion } from './sideQuestion.js'
 import { SubagentActivityStore, type SubagentState } from './subagents.js'
 import { getHostThemes, type TuiThemeRuntime } from './themes.js'
 import { attachSessionToWorkspace } from './workspace.js'
@@ -123,9 +106,6 @@ export type { SubagentState } from './subagents.js'
 import { isSubagentToolName, parseJobOutputId, toolCommandOf, BACKGROUND_START_ACK, todoPanelItems } from './channel/projection-helpers.js'
 /** Buffer below the context window at which CC warns (autoCompact.ts). */
 const CONTEXT_WARNING_BUFFER_TOKENS = 20_000
-
-/** How many trailing exchanges the browser's preview pane asks for. */
-const PREVIEW_ENTRIES = 8
 
 /**
  * Read the persistence backend's full session list (empty without one) —
@@ -513,9 +493,6 @@ export function createChannel(
   // Durable mode folds/transitions are composed after state construction.
   // Model/preset completion caches are owned by model-actions.ts.
 
-  // Session-lifetime cache for non-path file completion, keyed by workspace cwd.
-  const fileCandidateCache = { cwd: '', load: undefined as Promise<readonly FileCandidate[]> | undefined }
-
   // Session actions close over these inert placeholders. They are explicitly
   // installed after ChannelState initialization below.
   let settleManualCompaction: () => Promise<void> = async () => undefined
@@ -535,6 +512,9 @@ export function createChannel(
   let modelActions: ReturnType<typeof createModelActions>
   let workspaceActions: ReturnType<typeof createWorkspaceActions>
   let switchModelAction: (provider: string, model: string) => Promise<boolean>
+  let fileActions: ReturnType<typeof createFileActions>
+  let reportActions: ReturnType<typeof createReportActions>
+  let sessionMetadataActions: ReturnType<typeof createSessionMetadataActions>
 
   const state: ChannelState = {
     ...createInputActions(() => state, () => binding.agent, inputConvergence,
@@ -898,137 +878,20 @@ export function createChannel(
     listModels() { return modelActions.listModels() },
     listProviders() { return modelActions.listProviders() },
     invalidateModelCompletion() { modelActions.dropModelNodeCache() },
-    async listSkills() {
-      // snapshot() over list(): only a COMPLETE observation is authoritative
-      // (same contract as the skill-command merge above) — a partial catalog
-      // must surface as "failed", not as a misleading near-empty picker.
-      const target = binding.agent
-      const registry = skillRegistryFor(target)
-      if (registry === undefined) return []
-      try {
-        const observation = await registry.snapshot(skillViewOptions(target))
-        if (target !== binding.agent || !observation.complete) {
-          return undefined
-        }
-        return observation.skills.map(skill => ({
-          name: skill.name,
-          description: skill.description,
-          userInvocable: isUserInvocable(skill),
-          source: skill.source,
-        }))
-      } catch {
-        return undefined
-      }
-    },
-    async describeCredential(ref) {
-      const credentials = ctx.get('credentials') as
-        | { describe(ref: string): Promise<CredentialStatus> }
-        | undefined
-      if (!credentials) return undefined
-      return credentials.describe(ref)
-    },
-    async balanceInfo() {
-      // Same key resolution order as the community balance plugins: the
-      // harness credentials seam first, the process environment as fallback
-      // (the /doctor check reads the env directly). The value rides only in
-      // the Authorization header — never logged, printed or persisted.
-      const credentials = ctx.get('credentials') as
-        | { resolve(ref: string): Promise<{ value: string } | undefined> }
-        | undefined
-      let apiKey = ''
-      if (credentials !== undefined) {
-        try {
-          apiKey = (await credentials.resolve('DEEPSEEK_API_KEY'))?.value ?? ''
-        } catch {
-          apiKey = ''
-        }
-      }
-      if (apiKey === '') apiKey = process.env.DEEPSEEK_API_KEY ?? ''
-      return fetchBalance(apiKey)
-    },
+    listSkills() { return sessionMetadataActions.listSkills() },
+    describeCredential(ref) { return sessionMetadataActions.describeCredential(ref) },
+    balanceInfo() { return reportActions.balanceInfo() },
     settingsSections(): readonly TuiSettingsSection[] {
       return settingsSectionsRuntime?.list() ?? []
     },
     subscribeSettingsSections(listener: () => void): () => void {
       return emitter.subscribe(listener)
     },
-    async sideQuestion(
-      question: string,
-      options?: { signal?: AbortSignal; onText?: (delta: string) => void },
-    ): Promise<{ answer: string | null; error?: string }> {
-      // /btw：无工具单轮辅助调用，重放 deriveMessages() 前缀 + 一条
-      // 包装问题。tools 永不传（侧问无工具是核心语义）；usage 不回收
-      // （skipCacheWrite 同义——答案不进主上下文也不进 token 计数）。
-      const llm = ctx.get('llm') as SideQuestionLlm | undefined
-      if (!llm) return { answer: null, error: t('btw-llm-unavailable') }
-      const header = binding.agent.session.requestHeader()
-      const config = header?.config
-      const messages: Message[] = [
-        ...binding.agent.session.deriveMessages(),
-        createUserMessage({
-          content: [{ type: 'text', text: wrapSideQuestion(question) }],
-          source: { kind: 'plugin', plugin: 'dsh-tui/side-question' },
-        }),
-      ]
-      const request: Record<string, unknown> = {
-        provider: config?.provider ?? state.provider,
-        model: config?.model ?? state.model,
-        messages,
-        ...(header?.system !== undefined && { system: header.system }),
-        ...(config?.reasoningEffort !== undefined && { reasoningEffort: config.reasoningEffort }),
-        ...(config?.temperature !== undefined && { temperature: config.temperature }),
-        ...(config?.maxTokens !== undefined && { maxTokens: config.maxTokens }),
-        ...(config?.stop !== undefined && { stop: [...config.stop] }),
-        sessionId: binding.agent.session.id,
-        ...(options?.signal && { signal: options.signal }),
-      }
-      return runSideQuestion({
-        stream: llm.stream.bind(llm),
-        options: request,
-        onText: options?.onText,
-        signal: options?.signal,
-      })
-    },
-    async listFileCandidates(query: string, options?: { signal?: AbortSignal; topK?: number }) {
-      const fs = ctx.get('fs') as MentionFs | undefined
-      if (!fs || options?.signal?.aborted) return []
-      if (isPathLikeQuery(query)) {
-        return listPathCandidates(fs, state.cwd, query, options?.signal, options?.topK ?? 50)
-      }
-      if (fileCandidateCache.cwd !== state.cwd) {
-        fileCandidateCache.cwd = state.cwd
-        fileCandidateCache.load = undefined
-      }
-      fileCandidateCache.load ??= listFilesDeepCandidates(fs, state.cwd).then(candidates => {
-        if (candidates.length > 0) return candidates
-        // An empty scan is not worth caching forever — retry on next query.
-        fileCandidateCache.load = undefined
-        return candidates
-      })
-      const candidates = await fileCandidateCache.load
-      if (options?.signal?.aborted) return []
-      return rankFileCandidates(candidates, query, options?.topK ?? 50)
-    },
-    async listFiles() {
-      const fs = ctx.get('fs') as MentionFs | undefined
-      const candidates = await listFilesDeepCandidates(fs, state.cwd)
-      return candidates.map(candidate => candidate.path)
-    },
-    async listSessions() {
-      // Every stored session, classified and unfiltered. Which of them a
-      // surface shows — this project only, conversations only, sub-agent runs
-      // folded away — is a view decision, and keeping it out of here is what
-      // lets the browser toggle those views without re-reading a single log.
-      const rows = await listSessionsSnapshot(ctx)
-      agentView.setPersisted(rows)
-      return rows
-    },
-    async previewSession(sessionId) {
-      const persistence = ctx.get('sessionPersistence') as SessionSource | undefined
-      if (!persistence) return []
-      const path = await locateSession(persistence, sessionId)
-      return path === undefined ? [] : previewSession(path, PREVIEW_ENTRIES)
-    },
+    sideQuestion(question, options) { return sessionMetadataActions.sideQuestion(question, options) },
+    listFileCandidates(query, options) { return fileActions.listFileCandidates(query, options) },
+    listFiles() { return fileActions.listFiles() },
+    listSessions() { return sessionMetadataActions.listSessions() },
+    previewSession(sessionId) { return sessionMetadataActions.previewSession(sessionId) },
     // ── agent view (CC's `claude agents`) ───────────────────────────────────
     bindApprovalStore(store) { agentView.bindApprovalStore(store) },
     agentViewRows() { return agentView.rows() },
@@ -1039,99 +902,12 @@ export function createChannel(
     peekAgentSession(sessionId) { return agentView.peek(sessionId) },
     replyToAgent(sessionId, text) { return agentView.reply(sessionId, text) },
     backgroundCurrent() { return agentView.backgroundCurrent() },
-    setResumeTarget(sessionId) {
-      writeResumeTarget(sessionId)
-    },
-    renameSession(title) {
-      // `session/title` is a known envelope type (dsh-session-title writes
-      // it for the first prompt). The append publishes through the session
-      // firehose, so the event case above updates state.sessionTitle and
-      // the persistence flush makes it durable for the next picker open.
-      binding.agent.session.append('session/title', { title })
-      state.sessionTitle = title
-      state.emit()
-    },
-    setSessionColor(color) {
-      // `session/color` is a dsh-tui plugin event — not in dsh-session's
-      // typed union, so appended through the same cast applyMode uses for
-      // its sandbox/approval overrides. It replays on resume/rewind like
-      // session/title, keeping each session's accent color its own.
-      ;(binding.agent.session as unknown as { append(type: string, data: Record<string, unknown>): unknown })
-        .append('session/color', { color })
-      state.sessionColor = color
-      state.emit()
-    },
-    async recapRecent(options) {
-      // `/recap` (pi-recap semantics): one tool-less LLM call over the
-      // session's TAIL exchanges — unlike /btw it does not replay the full
-      // derived history (the excerpt IS the payload), so it stays cheap.
-      // The answer is pure UI state: never appended to the session log.
-      const llm = ctx.get('llm') as SideQuestionLlm | undefined
-      if (!llm) return { summary: null, error: t('recap-llm-unavailable') }
-      const header = binding.agent.session.requestHeader()
-      const config = header?.config
-      const activity = collectRecentActivity(binding.agent.session.events, RECAP_RECENT_CHARS)
-      if (activity === '') return { summary: null, error: t('recap-no-activity') }
-      const messages: Message[] = [
-        createUserMessage({
-          content: [{ type: 'text', text: wrapRecapPrompt(activity) }],
-          source: { kind: 'plugin', plugin: 'dsh-tui/recap' },
-        }),
-      ]
-      const request: Record<string, unknown> = {
-        provider: config?.provider ?? state.provider,
-        model: config?.model ?? state.model,
-        messages,
-        ...(header?.system !== undefined && { system: header.system }),
-        ...(config?.reasoningEffort !== undefined && { reasoningEffort: config.reasoningEffort }),
-        ...(config?.temperature !== undefined && { temperature: config.temperature }),
-        ...(config?.maxTokens !== undefined && { maxTokens: config.maxTokens }),
-        ...(config?.stop !== undefined && { stop: [...config.stop] }),
-        sessionId: binding.agent.session.id,
-        ...(options?.signal && { signal: options.signal }),
-      }
-      const outcome = await runSideQuestion({
-        stream: llm.stream.bind(llm),
-        options: request,
-        onText: options?.onText,
-        signal: options?.signal,
-      })
-      if (outcome.answer === null) return { summary: null, error: outcome.error }
-      const parsed = parseRecapResponse(outcome.answer)
-      return parsed.title === undefined
-        ? { summary: parsed.summary }
-        : { summary: parsed.summary, title: parsed.title }
-    },
-    async deleteSession(sessionId) {
-      // The live session's log is still being appended by this process —
-      // deleting it from under the writer is never offered in the picker
-      // (the current session is filtered out), so refuse it here too.
-      if (sessionId === binding.agent.session.id) return false
-      if (deleteSessionLog(sessionId) !== 'deleted') return false
-      forgetSession(sessionId)
-      agentView.forget(sessionId)
-      // A resume marker naming the deleted session would make the next
-      // `dsh-tui --resume` launch target a log that no longer exists.
-      if (readResumeTarget() === sessionId) clearResumeTarget()
-      return true
-    },
-    async renameSessionTo(sessionId, title) {
-      if (sessionId === binding.agent.session.id) {
-        // The live session renames through session.append so the firehose
-        // updates the status line right away (same as /rename).
-        binding.agent.session.append('session/title', { title })
-        state.sessionTitle = title
-        state.emit()
-        return true
-      }
-      if (appendSessionTitle(sessionId, title) !== 'appended') return false
-      // The append changed the log, so the next listing sees a new revision,
-      // re-derives, and reads back the very title event just written — no
-      // second path to the same answer. Touching it is about ordering, not
-      // titles: a rename is user interaction, so the row belongs at the top.
-      touchSession(sessionId)
-      return true
-    },
+    setResumeTarget(sessionId) { sessionMetadataActions.setResumeTarget(sessionId) },
+    renameSession(title) { sessionMetadataActions.renameSession(title) },
+    setSessionColor(color) { sessionMetadataActions.setSessionColor(color) },
+    recapRecent(options) { return sessionMetadataActions.recapRecent(options) },
+    deleteSession(sessionId) { return sessionMetadataActions.deleteSession(sessionId) },
+    renameSessionTo(sessionId, title) { return sessionMetadataActions.renameSessionTo(sessionId, title) },
     compact() {
       compactManualSession()
     },
@@ -1163,175 +939,11 @@ export function createChannel(
       }
       state.emit()
     },
-    mcpStatus() {
-      // MCP tools land on the tool runtime under mcp__<server>__<tool>
-      // public names (dsh-mcp-client's naming contract); group by server.
-      const runtime = ctx.get('tools') as
-        | { schemas(scope?: unknown): readonly { name: string; description: string }[] }
-        | undefined
-      const schemas = runtime?.schemas() ?? []
-      const byServer = new Map<string, string[]>()
-      for (const schema of schemas) {
-        const match = schema.name.match(/^mcp__([a-z0-9-]+)__(.+)$/)
-        if (!match) continue
-        const list = byServer.get(match[1]) ?? []
-        list.push(match[2])
-        byServer.set(match[1], list)
-      }
-      if (byServer.size === 0) {
-        return [
-          t('mcp-none-configured'),
-          t('mcp-insert-hint'),
-          '  - insert:',
-          '      - id: mcp-context7',
-          "        name: '@deepseek-ai/dsh-mcp-client'",
-          '        config: { transport: stdio, serverName: context7, command: npx, args: ["-y", "@upstash/context7-mcp"] }',
-          t('mcp-readme-hint'),
-        ]
-      }
-      const lines: string[] = []
-      for (const [server, tools] of byServer) {
-        lines.push(t('mcp-server-tools', { server, count: tools.length, tools: tools.join(', ') }))
-      }
-      return lines
-    },
-    exportSession() {
-      // Export from the session log — the authoritative, complete record —
-      // not the bounded transcript window (folded rows keep only previews).
-      const parts: string[] = [
-        t('export-title'),
-        '',
-        t('export-time', { time: new Date().toLocaleString() }),
-        t('export-model', { model: state.model }),
-        t('export-session', { id: state.agentId }),
-        t('export-dir', { cwd: state.cwd }),
-        '',
-      ]
-      for (const event of binding.agent.session.events) {
-        switch (event.type) {
-          case 'user/message': {
-            if (event.data.source.kind !== 'user') break
-            // Export what the user SAW: the typed prompt, not the expanded
-            // `@`-mention attachment blocks.
-            const text = projector.firstTextOf(event.data.content)
-            if (text) parts.push(`${t('export-user-section')}\n\n${text}\n`)
-            break
-          }
-          case 'assistant/message': {
-            const blocks = event.data.message.content
-            for (const block of blocks) {
-              if (block.type === 'reasoning' && block.text) {
-                parts.push(`${t('export-thinking-section')}\n\n${block.text}\n`)
-              } else if (block.type === 'text' && block.text) {
-                parts.push(`${t('export-assistant-section')}\n\n${block.text}\n`)
-              }
-            }
-            break
-          }
-          case 'tool/call': {
-            parts.push(`${t('export-tool-section', { name: event.data.name })}\n\n\`\`\`json\n${event.data.arguments}\n\`\`\`\n`)
-            break
-          }
-          case 'tool/result': {
-            const block = event.data.message.content[0]
-            // oxlint-disable-next-line typescript/no-unnecessary-condition -- durable session data may not match type
-            if (block.type === 'tool-result') {
-              const text = projector.textOf(block.content)
-              if (text) parts.push(`${t('export-result-section')}\n\n\`\`\`\n${text}\n\`\`\`\n`)
-            }
-            break
-          }
-          default:
-            break
-        }
-      }
-      const fileName = `dsh-tui-export-${Date.now()}.md`
-      try {
-        const target = join(state.cwd, fileName)
-        writeFileSync(target, parts.join('\n'), 'utf8')
-        return target
-      } catch {
-        return null
-      }
-    },
-    initWorkspace() {
-      const target = join(state.cwd, 'AGENTS.md')
-      if (existsSync(target)) return 'exists'
-      const template = [
-        '# AGENTS.md',
-        '',
-        t('agentsmd-project'),
-        '',
-        t('agentsmd-project-body'),
-        '',
-        t('agentsmd-conventions'),
-        '',
-        t('agentsmd-convention-read'),
-        t('agentsmd-convention-style'),
-        '',
-      ].join('\n')
-      try {
-        writeFileSync(target, template, 'utf8')
-        return target
-      } catch {
-        return null
-      }
-    },
-    doctorInfo() {
-      const lines: string[] = []
-      lines.push(`Node ${process.version} · ${process.platform} ${process.arch}`)
-      lines.push(`${t('doctor-api-key', { state: process.env.DEEPSEEK_API_KEY ? t('doctor-key-configured') : t('doctor-key-missing') })}`)
-      lines.push(t('doctor-model', { model: state.model, provider: options.provider }))
-      lines.push(t('doctor-cwd', { cwd: state.cwd }))
-      lines.push(t('doctor-context-window', { window: state.contextWindow ?? t('doctor-unknown') }))
-      lines.push(`${t('doctor-session', { id: state.agentId })}${state.sessionTitle ? ' · ' + state.sessionTitle : ''}`)
-      const userHome = homeDir()
-      const configCandidates = [
-        join(userHome, '.dsh-tui/cordis.yml'),
-        join(userHome, '.dsh/profiles/dsh-tui/cordis.patch.yml'),
-      ]
-      for (const candidate of configCandidates) {
-        lines.push(`${t('doctor-config', { candidate, state: existsSync(candidate) ? '✓' : t('doctor-config-missing') })}`)
-      }
-      // Session store candidates mirror the compat layer (sessionsRoots):
-      // the active root depends on the composition (bare cordis.yml →
-      // legacy ~/.dsh-tui/sessions, profile → $DSH_HOME/sessions), so list every
-      // candidate with its own state instead of hardcoding one.
-      for (const dir of sessionsRoots()) {
-        lines.push(`${t('doctor-storage', { dir, state: existsSync(dir) ? '✓' : t('doctor-storage-uninit') })}`)
-      }
-      // Plugin-spec diagnostics (v0.15): the runtime generation and the
-      // vendored registry self-check, both soft-probed (#183 discipline).
-      const pluginHost = ctx.get('tuiPluginHost')
-      lines.push(t('doctor-plugin-generation', { id: pluginHost?.generationId ?? t('doctor-plugin-host-missing') }))
-      const violations = pluginHost?.selfCheck()
-      lines.push(t('doctor-plugin-registry', {
-        state: violations === undefined ? t('doctor-plugin-host-missing') : violations.length === 0 ? '✓' : `✗ ${violations.length}`,
-      }))
-      // P2 kernel consumer: /doctor reads the read-only HostFacade backed by
-      // the KernelRuntime's unified lifecycle evidence. The same facade is the
-      // host-internal diagnostic bridge; live probes are reflected here when
-      // they have completed.
-      const facade = getHostFacade(pluginHost)
-      if (facade === undefined) {
-        lines.push('Adapter kernel (P2): HostFacade unavailable')
-      } else {
-        const snapshot = facade.descriptor.snapshot()
-        const permissions = getHostGrantStore(pluginHost)?.knownPermissions() ?? []
-        const adapterDiagnostics = collectAdapterDiagnostics(adapterRuntime, snapshot, permissions)
-        lines.push(
-          `Adapter kernel (P2): mode=${adapterDiagnostics.runtime.mode} · contracts=${adapterDiagnostics.descriptor.contracts.length} · permissions=${adapterDiagnostics.permissions.length}`,
-        )
-      }
-      return lines
-    },
-    pluginsInfo(args: string) {
-      const host = ctx.get('tuiPluginHost')
-      return pluginsInfoLines(args, {
-        grants: getHostGrantStore(host) ?? currentGrantStore(),
-        host: host?.describe(),
-      })
-    },
+    mcpStatus() { return reportActions.mcpStatus() },
+    exportSession() { return reportActions.exportSession() },
+    initWorkspace() { return reportActions.initWorkspace() },
+    doctorInfo() { return reportActions.doctorInfo() },
+    pluginsInfo(args: string) { return reportActions.pluginsInfo(args) },
     async listSubagents() {
       const subagents = ctx.get('subagents') as
         | {
@@ -1422,6 +1034,41 @@ export function createChannel(
   const refreshCommandList = skillCatalog.refreshCommands
   const refreshSkillCommands = skillCatalog.refreshSkillCommands
   const releaseSkillCommands = skillCatalog.release
+  // Each helper captures binding/cwd at invocation, rather than receiving a
+  // root-state bag. Its late completions are rejected by owner + binding.
+  fileActions = createFileActions({
+    owner,
+    capture: () => binding.capture(),
+    current: capture => binding.isCurrent(capture as ReturnType<typeof binding.capture>),
+    cwd: () => state.cwd,
+    fs: () => ctx.get('fs') as MentionFs | undefined,
+  })
+  reportActions = createReportActions(ctx, {
+    owner,
+    capture: () => binding.capture(),
+    current: capture => binding.isCurrent(capture),
+    cwd: () => state.cwd,
+    model: () => state.model,
+    provider: () => options.provider,
+    contextWindow: () => state.contextWindow,
+    sessionTitle: () => state.sessionTitle,
+    runtime: adapterRuntime,
+    grantStore: currentGrantStore,
+  })
+  sessionMetadataActions = createSessionMetadataActions(ctx, {
+    owner,
+    binding,
+    provider: () => state.provider,
+    model: () => state.model,
+    emit: () => state.emit(),
+    sessionTitle: () => state.sessionTitle,
+    setSessionTitle: title => { state.sessionTitle = title },
+    setSessionColor: color => { state.sessionColor = color },
+    forgetAgentView: sessionId => agentView.forget(sessionId),
+    setPersistedSessions: rows => agentView.setPersisted(rows),
+    skillRegistryFor,
+    skillViewOptions,
+  })
   const loadedContext = createLoadedContextRefresher(ctx, {
     owner,
     agent: () => binding.agent,

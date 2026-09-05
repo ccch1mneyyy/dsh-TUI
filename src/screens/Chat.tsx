@@ -613,8 +613,19 @@ export function Chat({
   }, [channel])
   const balanceSessionId = channel.agentId
   React.useEffect(() => {
+    // Retire every in-flight /balance completion from the previous binding;
+    // the balance seam has no UI session id in its readonly DTO.
+    balanceSeqRef.current += 1
     setBalance(null)
   }, [balanceSessionId])
+  // A side question belongs to its captured session just like a recap. Chat
+  // remains mounted across /resume, so explicitly retire its request/UI when
+  // the binding changes instead of allowing a former conversation to finish.
+  React.useEffect(() => {
+    btwAbortRef.current?.abort()
+    btwAbortRef.current = null
+    setBtw(null)
+  }, [channel.agentId])
   // Auto-recap (`dsh-tui.recapOnOpen`): every time the session switches
   // (mount = open/resume, rewind/fork included), summarize its tail into
   // the dim AutoRecapRow. Failures stay silent in auto mode — `/recap`
