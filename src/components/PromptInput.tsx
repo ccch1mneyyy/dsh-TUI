@@ -50,6 +50,10 @@ interface PromptHistoryEntry {
   readonly images: readonly ComposerImageRef[]
 }
 
+interface VimUndoEntry extends PromptHistoryEntry {
+  readonly cursor: number
+}
+
 interface DraftImageLease {
   readonly generation: number
   readonly revision: number
@@ -128,6 +132,14 @@ function snapOffImageToken(
   if (prefer === 'start') return span.start
   if (prefer === 'end') return span.end
   return offset - span.start < span.end - offset ? span.start : span.end
+}
+
+/** Expand a deletion or selection to include every staged token it touches. */
+function expandImageTokenRange(spans: readonly ImageTokenSpan[], start: number, end: number) {
+  return {
+    start: snapOffImageToken(spans, start, 'start'),
+    end: snapOffImageToken(spans, end, 'end'),
+  }
 }
 
 /** Capabilities referenced by `text`, in first occurrence order. A raw token
@@ -524,8 +536,8 @@ export function PromptInput({
   const vimInsertRef = React.useRef(true)
   vimEnabledRef.current = vimEnabled
   vimInsertRef.current = vimInsert
-  /** Undo stack: vim editing ops push {value, cursor}; `u` pops. */
-  const vimUndoRef = React.useRef<Array<{ value: string; cursor: number }>>([])
+  /** Undo owns the draft's image bindings as well as its text and caret. */
+  const vimUndoRef = React.useRef<VimUndoEntry[]>([])
   /** Pending vim operator: `d` pressed, awaiting its second key. */
   const vimPendingRef = React.useRef<'' | 'd'>('')
   /**
@@ -623,24 +635,50 @@ export function PromptInput({
   const detachDraftImages = (): void => {
     advanceDraftRevision()
     draftImagesRef.current.clear()
+    clearVimUndo()
   }
-  const stageIdIsRetained = (stageId: string): boolean =>
-    history.current.some(entry => entry.images.some(image => image.stageId === stageId))
-    || historyDraft.current.images.some(image => image.stageId === stageId)
-    || channel.pending.some(item => item.images?.some(image => image.stageId === stageId) === true)
-  const discardDraftImages = (): void => {
-    advanceDraftRevision()
-    const stageIds = new Set(draftImagesRef.current.values())
-    draftImagesRef.current.clear()
-    for (const stageId of stageIds) {
+  const stageIdIsRetained = (stageId: string): boolean => {
+    for (const current of draftImagesRef.current.values()) {
+      if (current === stageId) return true
+    }
+    return vimUndoRef.current.some(entry => entry.images.some(image => image.stageId === stageId))
+      || history.current.some(entry => entry.images.some(image => image.stageId === stageId))
+      || historyDraft.current.images.some(image => image.stageId === stageId)
+      || channel.pending.some(item => item.images?.some(image => image.stageId === stageId) === true)
+  }
+  const discardUnretainedImages = (stageIds: Iterable<string>): void => {
+    for (const stageId of new Set(stageIds)) {
       if (!stageIdIsRetained(stageId)) channel.discardStagedImage(stageId)
     }
+  }
+  const clearVimUndo = (): void => {
+    const previous = vimUndoRef.current
+    vimUndoRef.current = []
+    discardUnretainedImages(previous.flatMap(entry => entry.images.map(image => image.stageId)))
+  }
+  const discardDraftImages = (): void => {
+    advanceDraftRevision()
+    const stageIds = [...draftImagesRef.current.values()]
+    clearVimUndo()
+    draftImagesRef.current.clear()
+    discardUnretainedImages(stageIds)
+  }
+  const replaceDraftImages = (images: readonly ComposerImageRef[]): void => {
+    const previous = [...draftImagesRef.current.values()]
+    draftImagesRef.current.clear()
+    for (const ref of images) {
+      if (channel.hasStagedImage?.(ref.stageId) === true) {
+        draftImagesRef.current.set(ref.token, ref.stageId)
+      }
+    }
+    discardUnretainedImages(previous)
   }
   const syncImageGeneration = (): number => {
     const generation = channel.stagedImageGeneration?.() ?? 0
     if (draftImagesGenerationRef.current !== generation) {
       // The channel has already cleared every old-generation capability.
       // Only detach the UI sidecar; calling discard would be redundant.
+      vimUndoRef.current = []
       detachDraftImages()
       draftImagesGenerationRef.current = generation
       // Presentation numbering is session-local like the old channel-owned
@@ -726,7 +764,7 @@ export function PromptInput({
         vimInsertRef.current = true
         setVimInsert(true)
         vimPendingRef.current = ''
-        vimUndoRef.current = []
+        clearVimUndo()
         return next
       },
       vimActive: () => vimEnabledRef.current,    }
@@ -978,6 +1016,13 @@ export function PromptInput({
     setCursor(offset)
   }
 
+  const deleteInputRange = (start: number, end: number): void => {
+    if (start >= end) return
+    const text = valueRef.current
+    const range = expandImageTokenRange(boundImageSpans(text), start, end)
+    setInput(text.slice(0, range.start) + text.slice(range.end), range.start)
+  }
+
   /**
    * Write the selection [start, end) (snapped to grapheme boundaries,
    * start ≤ end); a degenerate range clears it. With a fold block the
@@ -1003,9 +1048,9 @@ export function PromptInput({
     }
     // A selection never cuts a staged token: an edge inside one grows
     // outward to cover the whole token.
-    const spans = boundImageSpans(text)
-    lo = snapOffImageToken(spans, lo, 'start')
-    hi = snapOffImageToken(spans, hi, 'end')
+    const range = expandImageTokenRange(boundImageSpans(text), lo, hi)
+    lo = range.start
+    hi = range.end
     if (lo >= hi) {
       selectionRef.current = null
       setSelection(null)
@@ -1107,14 +1152,9 @@ export function PromptInput({
 
   const restoreDraftImages = (entry: PromptHistoryEntry): void => {
     syncImageGeneration()
-    // History navigation can return to either side, so detach without
-    // revoking capabilities still owned by a saved entry.
-    detachDraftImages()
-    for (const ref of entry.images) {
-      if (channel.hasStagedImage?.(ref.stageId) === true) {
-        draftImagesRef.current.set(ref.token, ref.stageId)
-      }
-    }
+    advanceDraftRevision()
+    replaceDraftImages(entry.images)
+    clearVimUndo()
   }
 
   const submitText = (text: string, notice?: string) => {
@@ -1532,8 +1572,7 @@ export function PromptInput({
       return
     }
     if ((key.backspace || key.delete) && selection) {
-      const next = value.slice(0, selection.start) + value.slice(selection.end)
-      setInput(next, selection.start)
+      deleteInputRange(selection.start, selection.end)
       setSelectedCommand(0)
       setFileSelected(0)
       return
@@ -1582,24 +1621,6 @@ export function PromptInput({
       }
       if (key.rightArrow && cursor === block.start) {
         setInput(value, block.end)
-        return
-      }
-    }
-
-    // Staged `[Image #N]` tokens are atomic (see boundImageSpans): Backspace
-    // at a token's end and Delete at its start remove the whole token — its
-    // capability is released by setInput when the text no longer carries
-    // it. ←/→ need no arm here: setInput snaps a caret that would land
-    // inside a token to the far edge in its direction of travel.
-    if (!selection && (key.backspace || key.delete)) {
-      const spans = boundImageSpans(value)
-      const whole = key.backspace
-        ? spans.find(span => span.end === cursor)
-        : spans.find(span => span.start === cursor)
-      if (whole !== undefined) {
-        setInput(value.slice(0, whole.start) + value.slice(whole.end), whole.start)
-        setSelectedCommand(0)
-        setFileSelected(0)
         return
       }
     }
@@ -2199,13 +2220,13 @@ export function PromptInput({
     if (key.backspace) {
       if (cursor === 0) return
       const start = previousGraphemeBoundary(bounds, cursor)
-      setInput(value.slice(0, start) + value.slice(cursor), start)
+      deleteInputRange(start, cursor)
       return
     }
     if (key.delete) {
       const end = nextGraphemeBoundary(bounds, cursor)
       if (end === cursor) return
-      setInput(value.slice(0, cursor) + value.slice(end), cursor)
+      deleteInputRange(cursor, end)
       return
     }
     if (key.home) {
@@ -2233,14 +2254,14 @@ export function PromptInput({
     if (isMod(key) && input === 'u') {
       // Delete to start of line (never into the block).
       const lineStart = clampRowStart(value.lastIndexOf('\n', cursor - 1) + 1)
-      setInput(value.slice(0, lineStart) + value.slice(cursor), lineStart)
+      deleteInputRange(lineStart, cursor)
       return
     }
     if (isMod(key) && input === 'k') {
       // Delete to end of line (never into the block).
       const nextLine = value.indexOf('\n', cursor)
       const end = nextLine === -1 ? value.length : clampRowEnd(nextLine)
-      setInput(value.slice(0, cursor) + value.slice(end), cursor)
+      deleteInputRange(cursor, end)
       return
     }
     if (isMod(key) && input === 'w') {
@@ -2252,10 +2273,7 @@ export function PromptInput({
       while (end > 0 && /\s/.test(before[end - 1]!)) end--
       let start = end
       while (start > 0 && !/\s/.test(before[start - 1]!)) start--
-      // The word scan stops at the space inside `[Image #N]`; a staged token
-      // is deleted whole or not at all.
-      const clipped = snapOffImageToken(boundImageSpans(value), clampRowStart(start), 'start')
-      setInput(value.slice(0, clipped) + value.slice(cursor), clipped)
+      deleteInputRange(clampRowStart(start), cursor)
       return
     }
     // ── vim mode (`/vim`) ──────────────────────────────────────────────
@@ -2271,8 +2289,18 @@ export function PromptInput({
       setFileSelected(0)
     }
     const vimPushUndo = () => {
-      if (vimUndoRef.current.length >= 100) vimUndoRef.current.shift()
-      vimUndoRef.current.push({ value: valueRef.current, cursor: cursorRef.current })
+      const images = imageRefsFor(valueRef.current)
+      const evicted = vimUndoRef.current.length >= 100 ? vimUndoRef.current.shift() : undefined
+      vimUndoRef.current.push({ text: valueRef.current, cursor: cursorRef.current, images })
+      if (evicted !== undefined) discardUnretainedImages(evicted.images.map(image => image.stageId))
+    }
+    const vimDeleteRange = (start: number, end: number): void => {
+      if (start >= end) return
+      vimPushUndo()
+      updateFoldBlock(null)
+      deleteInputRange(start, end)
+      setSelectedCommand(0)
+      setFileSelected(0)
     }
     const handleVimNormal = (input: string) => {
       // One stdin batch can merge several bare keys into a single event
@@ -2290,31 +2318,27 @@ export function PromptInput({
         switch (input) {
           case 'd': { // delete the whole line, newline included (vim `dd`);
             // the last line has no newline — its content is cleared
-            vimPushUndo()
             const lineStart = vimLineStart(value, cursor)
             const lineEnd = vimLineEnd(value, cursor)
             const end = lineEnd < value.length ? lineEnd + 1 : lineEnd
-            vimNormalEdit(value.slice(0, lineStart) + value.slice(end), lineStart)
+            vimDeleteRange(lineStart, end)
             return
           }
           case '$': { // delete to end of line
-            vimPushUndo()
             const end = vimLineEnd(value, cursor)
-            vimNormalEdit(value.slice(0, cursor) + value.slice(end), cursor)
+            vimDeleteRange(cursor, end)
             return
           }
           case '0':
           case '^': { // delete to start of line
-            vimPushUndo()
             const start =
               input === '^' ? vimLineFirstNonBlank(value, cursor) : vimLineStart(value, cursor)
-            vimNormalEdit(value.slice(0, start) + value.slice(cursor), start)
+            vimDeleteRange(start, cursor)
             return
           }
           case 'w': { // delete to end of word
-            vimPushUndo()
             const end = vimWordEnd(value, cursor)
-            vimNormalEdit(value.slice(0, cursor) + value.slice(end), cursor)
+            vimDeleteRange(cursor, end)
             return
           }
           default:
@@ -2371,31 +2395,31 @@ export function PromptInput({
           // char, not the newline (which would join the lines).
           if (cursor > 0 && (cursor === value.length || value[cursor] === '\n')) {
             const start = previousGraphemeBoundary(bounds, cursor)
-            vimPushUndo()
-            vimNormalEdit(value.slice(0, start) + value.slice(cursor), start)
+            vimDeleteRange(start, cursor)
             return
           }
           const end = nextGraphemeBoundary(bounds, cursor)
           if (end === cursor) return
-          vimPushUndo()
-          vimNormalEdit(value.slice(0, cursor) + value.slice(end), cursor)
+          vimDeleteRange(cursor, end)
           return
         }
         case 'X': { // delete the character before the caret
           if (cursor === 0) return
           const start = previousGraphemeBoundary(bounds, cursor)
-          vimPushUndo()
-          vimNormalEdit(value.slice(0, start) + value.slice(cursor), start)
+          vimDeleteRange(start, cursor)
           return
         }
         case 'd':
           vimPendingRef.current = 'd'
           return
         case 'u': { // undo the last vim edit
+          syncImageGeneration()
           const prev = vimUndoRef.current.pop()
           if (prev === undefined) return
+          advanceDraftRevision()
+          replaceDraftImages(prev.images)
           updateFoldBlock(null)
-          setInput(prev.value, prev.cursor)
+          setInput(prev.text, prev.cursor)
           setSelectedCommand(0)
           setFileSelected(0)
           return

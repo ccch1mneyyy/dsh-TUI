@@ -58,7 +58,9 @@ the interface, and removing it leaves no core modifications behind.
   image files paste straight into the attachment store as `[Image #N]`; in the
   composer a staged `[Image #N]` is one unit — the caret steps over it, deletes
   remove it whole, and while the caret sits on it the token inverts and its
-  preview opens, closing again when the caret leaves.
+  preview opens, closing again when the caret leaves. Vim `x`/`X`/`d…` also
+  delete whole attachments, and `u` restores both text and attachment bindings;
+  undo stays within the current draft.
 - **Pixel whale pet**: one of three randomized startup intros plays on every
   launch; **clicking the whale pops a heart pass** any time, and with
   `/settings → whaleIdle` enabled the settled whale keeps fluttering its fins
