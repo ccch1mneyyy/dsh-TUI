@@ -61,6 +61,10 @@ the interface, and removing it leaves no core modifications behind.
   preview opens, closing again when the caret leaves. Vim `x`/`X`/`d…` also
   delete whole attachments, and `u` restores both text and attachment bindings;
   undo stays within the current draft.
+  Terminal image previews default to on. Disable them in `/settings → Terminal image previews`
+  or set `terminalImages: false`, then use `/restart` to apply. Disabled previews keep text
+  metadata and skip preview decoding; sending images to the model is unaffected.
+  `DSH_TUI_DISABLE_TERMINAL_IMAGES=1` always forces previews off.
 - **Pixel whale pet**: one of three randomized startup intros plays on every
   launch; **clicking the whale pops a heart pass** any time, and with
   `/settings → whaleIdle` enabled the settled whale keeps fluttering its fins

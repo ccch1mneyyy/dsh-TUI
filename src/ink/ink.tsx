@@ -83,6 +83,7 @@ export type Options = {
   stderr: NodeJS.WriteStream;
   exitOnCtrlC: boolean;
   patchConsole: boolean;
+  terminalImages?: boolean;
   waitUntilExit?: () => Promise<void>;
   onFrame?: (event: FrameEvent) => void;
 };
@@ -1726,6 +1727,7 @@ export default class Ink {
       (placements.length === 0 && this.terminalImageRequests === 0) ||
       this.isUnmounted ||
       this.kittyGraphicsProbeStarted ||
+      this.options.terminalImages === false ||
       !this.altScreenActive ||
       this.isPaused ||
       this.terminalQueriesSuspended ||

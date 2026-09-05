@@ -39,6 +39,7 @@ A complete common override looks like this:
     activityFrames: claude
     contextBar: true
     fullscreen: false
+    terminalImages: true
     preset: !!js process.env.DSH_TUI_PRESET ?? undefined
     workspace: !!js process.env.DSH_TUI_WORKSPACE_TARGET ?? undefined
     sessionId: !!js process.env.DSH_TUI_RESUME_SESSION ?? undefined
@@ -56,8 +57,21 @@ A complete common override looks like this:
 | `activityFrames` | persisted choice or `claude` | Activity animation preset; `/activity` changes it at runtime |
 | `contextBar` | `true` | Segmented context-usage bar below the input box; `false` hides the row |
 | `fullscreen` | `true` (factory default since 0.9.0) | `true` uses the alternate screen, app scrolling, and mouse selection; `false` uses inline mode |
+| `terminalImages` | `true` | Allow previews in supported terminals; `false` keeps text metadata and skips image probing and preview decoding. Restart to apply changes |
 | `preset` | roster default `standard` | Agent preset for new sessions; explicit configuration wins over persisted preference |
 | `sessionId` | unset | Session to resume, normally injected by the Windows `--resume` launcher |
+
+The choice saved in `/settings → Terminal image previews` overrides `config.terminalImages`.
+Without a saved choice, the configuration value applies and defaults to on. Enabling previews
+still requires Kitty graphics support and a display mode that allows image rendering.
+`DSH_TUI_DISABLE_TERMINAL_IMAGES=1` always forces previews off. Disabled previews do not read
+or decode image data or send image rendering commands; sending images to the model is unaffected.
+The checkbox edits the preview preference; an environment override is shown separately as
+“Image previews (forced off)” in the settings list.
+
+This switch is read at startup. Use `/restart` after changing it to automatically restart the
+TUI and resume the current session; `/reload` does not apply it. If a turn is running, wait for
+it to finish or stop it with `Ctrl+C` before restarting.
 
 ## Live activity row
 
@@ -168,7 +182,7 @@ for the complete field reference.
 | `DSH_TUI_PRESET` | Override the default Agent preset for new sessions |
 | `DSH_TUI_THEME` | Pin a built-in (`auto`/`light`/`dark`/`dark-ansi`), static theme, or registered plugin theme ahead of persisted selection |
 | `DSH_TUI_DISABLE_MOUSE` | Temporarily disable mouse handling in fullscreen mode |
-| `DSH_TUI_DISABLE_TERMINAL_IMAGES` | Disable the Kitty graphics probe and terminal image rendering; images show only their same-size text fallback |
+| `DSH_TUI_DISABLE_TERMINAL_IMAGES` | Set to `1` to force image probing, preview reads/decoding, and terminal image rendering off, overriding config and /settings; text metadata remains visible |
 | `DSH_TUI_RESUME_SESSION` | Resume a session at startup, normally set by a launcher |
 | `DSH_TUI_WORKSPACE_TARGET` | Workspace path or URI resolved at startup, normally set by `dsh-tui <target>` |
 | `DSH_TUI_SESSION_ROOT` | Override the JSONL session root; profile default `$DSH_HOME/sessions`, bare `cordis.yml` default `~/.dsh-tui/sessions` |

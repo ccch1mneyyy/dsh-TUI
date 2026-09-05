@@ -10,7 +10,7 @@ import {
   PromptEditorLayer,
   setPromptEditorNode,
 } from '../src/components/PromptEditor.js'
-import { AlternateScreen, Box, Image, render, Text } from '../src/ui.js'
+import { AlternateScreen, Box, createRoot, Image, render, Text } from '../src/ui.js'
 import { createNode } from '../src/ink/dom.js'
 import instances from '../src/ink/instances.js'
 import {
@@ -564,6 +564,40 @@ const imageTree = (
     </Box>
   </AlternateScreen>
 )
+
+for (const entrypoint of ['render', 'createRoot'] as const) {
+  for (const forcedByEnv of [false, true]) {
+    if (forcedByEnv) process.env.DSH_TUI_DISABLE_TERMINAL_IMAGES = '1'
+    const disabledStdout = new FakeStdout()
+    const options = {
+      stdin: new FakeStdin(),
+      stdout: disabledStdout,
+      stderr: new FakeStderr(),
+      exitOnCtrlC: false,
+      patchConsole: false,
+      terminalImages: forcedByEnv,
+    }
+    const disabledInstance = entrypoint === 'render'
+      ? await render(imageTree(false), options)
+      : await createRoot(options)
+    try {
+      if ('render' in disabledInstance) disabledInstance.render(imageTree(false))
+      assert.ok(
+        await settled(() => disabledStdout.output.includes('▓')),
+        `${entrypoint} must render text fallback when previews are disabled`,
+      )
+      assert.doesNotMatch(
+        disabledStdout.output,
+        /\x1b_G/u,
+        `${entrypoint} must respect both the image option and the forced environment override`,
+      )
+    } finally {
+      disabledStdout.isTTY = false
+      disabledInstance.unmount()
+      delete process.env.DSH_TUI_DISABLE_TERMINAL_IMAGES
+    }
+  }
+}
 
 const interruptedStdin = new FakeStdin()
 const interruptedStdout = new FakeStdout()

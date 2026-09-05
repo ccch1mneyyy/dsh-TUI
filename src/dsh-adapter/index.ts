@@ -71,6 +71,10 @@ export interface Config {
    *  installs start there; cordis.yml `fullscreen: false` or a /settings
    *  toggle opts back into the inline main-screen layout. */
   fullscreen?: boolean
+  /** Allow terminal image previews when supported (default true). Saved
+   *  /settings choices override this value after restart. The environment
+   *  override DSH_TUI_DISABLE_TERMINAL_IMAGES can always force previews off. */
+  terminalImages?: boolean
   /** UI language: `en` / `zh`. When absent, the `DSH_TUI_LANG` env var wins,
    *  then the `/lang` choice persisted in `~/.dsh-tui/lang.json`, then `zh`. */
   lang?: string
@@ -147,6 +151,7 @@ export const Config: Schema<Config> = Schema.object({
   activityFrames: Schema.string().required(false),
   contextBar: Schema.boolean().default(true),
   fullscreen: Schema.boolean().default(true),
+  terminalImages: Schema.boolean().default(true),
   lang: Schema.string().required(false),
   preset: Schema.string().required(false),
   diffLayout: Schema.union(['auto', 'split', 'unified']).default('auto'),

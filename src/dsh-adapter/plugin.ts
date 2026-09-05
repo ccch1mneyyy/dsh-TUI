@@ -12,6 +12,7 @@ import { createChannel } from './channel.js'
 import { createChildStderrReporter, installChildStderrGuard } from './childStderr.js'
 import { removeClipboardImageDir } from '../utils/clipboard.js'
 import { logForDebugging } from '../utils/debug.js'
+import { isEnvTruthy } from '../utils/envUtils.js'
 import { QuestionStore } from './questions.js'
 import { prepareQuestionAnswerer } from './questions-answerer.js'
 import { ApprovalStore } from './approvals.js'
@@ -75,13 +76,15 @@ import { CLEAR_ITERM2_PROGRESS, CLEAR_TAB_STATUS, supportsTabStatus, wrapForMult
  * apply() re-resolves `bootedFullscreen` from cordis config, and the
  * settings user layer (settings.yaml) can arrive after the 300ms
  * `settingsReady` bound when the recompose is also re-mounting the settings
- * service. The tree would then mount INLINE and `fullscreenFrozen` would
+ * service. The tree would then mount INLINE and `rendererSettingsFrozen` would
  * swallow the late application — the app lands on the main screen
  * ("exited fullscreen", dead mouse, unpinned input) until restart. A
  * session that already mounted fullscreen must never regress on a
  * recompose: latch the decision.
  */
 let lastBootedFullscreen: boolean | undefined
+// Image preferences also stay fixed across host recomposes until /restart.
+let lastBootedTerminalImages: boolean | undefined
 
 /**
  * Extract the startup prompt from raw app argv. `--resume <session>` selects
@@ -562,12 +565,14 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   // Fullscreen layout decision: the settings user layer (edited through the
   // /settings screen) overrides cordis.yml when set. The settings injection
   // below resolves it synchronously when the host settings service is up —
-  // i.e. before the tree mounts. `fullscreenFrozen` latches at mount: the
+  // i.e. before the tree mounts. `rendererSettingsFrozen` latches at mount: the
   // exit funnel and the AlternateScreen wrap must keep reading the mode this
   // session ACTUALLY runs, never a mid-session edit meant for the next boot
   // (swapping layouts requires re-mounting the whole tree).
   let bootedFullscreen = config.fullscreen === true
-  let fullscreenFrozen = false
+  let bootedTerminalImages = lastBootedTerminalImages ?? config.terminalImages ?? true
+  let rendererSettingsFrozen = false
+  const terminalImagesDisabledByEnv = isEnvTruthy(process.env.DSH_TUI_DISABLE_TERMINAL_IMAGES)
   // The settings service may come up AFTER this plugin's apply: the cordis
   // inject callback defers until the service registers, so the first
   // `apply(scope.get())` below can land after the mount (field report: the
@@ -657,6 +662,8 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
         // Same no-default rule: unset keeps cordis.yml's `fullscreen`
         // decisive; set overrides it from the next boot on.
         fullscreen: Schema.boolean(),
+        // Unset inherits cordis.yml; a saved choice takes effect after restart.
+        terminalImages: Schema.boolean(),
         // Built-in action-shortcut overrides, one optional combo string per
         // action (see src/utils/keymap.ts). Unset keeps the default binding
         // and the section's format() shows the effective combos.
@@ -672,6 +679,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
       whaleIdle?: boolean
       minimal?: boolean
       fullscreen?: boolean
+      terminalImages?: boolean
       thinkingFold?: 'preview' | 'full'
       effortDefault?: string
       toolBackground?: ToolBackground
@@ -697,14 +705,13 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     const applyMinimal = (value: { minimal?: boolean }): void => {
       channel.setMinimal(value.minimal ?? false)
     }
-    // Fullscreen: only meaningful before the tree mounts (the freeze latch
-    // above). A later doc change (mid-session /settings edit) is persisted
-    // by the service and picked up on the next boot; the watch below says
-    // so with a notify.
-    const applyFullscreen = (value: SettingsValue): void => {
-      if (!fullscreenFrozen && typeof value.fullscreen === 'boolean') {
+    // Renderer settings are resolved before mount; later edits wait for restart.
+    const applyRendererSettings = (value: SettingsValue): void => {
+      if (rendererSettingsFrozen) return
+      if (typeof value.fullscreen === 'boolean') {
         bootedFullscreen = value.fullscreen
       }
+      bootedTerminalImages = lastBootedTerminalImages ?? value.terminalImages ?? config.terminalImages ?? true
     }
     // The /settings language field writes `lang` through the settings
     // service (user layer): apply it live and mirror it to lang.json so
@@ -775,7 +782,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
       applyDisplay(next)
       applyEffortDefault(next)
       applyShortcuts(next)
-      applyFullscreen(next)
+      applyRendererSettings(next)
     }
     // One-time fullscreen factory-default migration (companion to the
     // schema + cordis.patch.yml flip false→true): a `fullscreen: false`
@@ -786,7 +793,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     // boot decision cannot wait for the async doc write — the stale value
     // is shadowed out of the first apply below (destructuring omission,
     // not an explicit undefined), and the later watch commit (fullscreen
-    // back to undefined) is a no-op for applyFullscreen.
+    // back to undefined) leaves the fullscreen decision unchanged.
     const bootSettings = scope.get()
     const fullscreenMigration = planFullscreenFactoryMigration(bootSettings.fullscreen, readAppliedMigrations())
     void commitFullscreenFactoryMigration(fullscreenMigration, {
@@ -797,11 +804,17 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     }
     const { fullscreen: staleFullscreen, ...migratedSettings } = bootSettings
     apply(fullscreenMigration === 'unset' ? migratedSettings : bootSettings)
+    let lastTerminalImages = bootSettings.terminalImages ?? config.terminalImages ?? true
     scope.watch(next => {
       apply(next)
       if (typeof next.fullscreen === 'boolean' && next.fullscreen !== bootedFullscreen) {
         channel.notify(t('settings-fullscreen-restart'), { color: 'warning' })
       }
+      const terminalImages = next.terminalImages ?? config.terminalImages ?? true
+      if (terminalImages !== lastTerminalImages && terminalImages !== bootedTerminalImages) {
+        channel.notify(t('settings-terminal-images-restart'), { color: 'warning' })
+      }
+      lastTerminalImages = terminalImages
     })
     resolveSettingsReady?.()
   })
@@ -956,6 +969,24 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
             // Unset in settings.yaml: show what THIS session booted with
             // (the cordis.yml resolution) instead of a misleading false.
             return value === undefined || value === null ? String(bootedFullscreen) : String(value)
+          },
+        },
+        {
+          path: ['terminalImages'],
+          label: terminalImagesDisabledByEnv ? 'Image previews (forced off)' : 'Terminal image previews',
+          descriptions: { zh: terminalImagesDisabledByEnv ? '图片预览（环境强制关闭）' : '终端图片预览' },
+          hint: terminalImagesDisabledByEnv
+            ? 'Checkbox saves your preference. Relaunch without DSH_TUI_DISABLE_TERMINAL_IMAGES to enable previews.'
+            : 'Preview images in supported terminals. Use /restart to apply. Sending images is unaffected.',
+          hintDescriptions: {
+            zh: terminalImagesDisabledByEnv
+              ? '勾选框保存预览偏好；移除 DSH_TUI_DISABLE_TERMINAL_IMAGES 后重新启动才能显示图片。'
+              : '在支持的终端中预览图片。修改后用 /restart 生效；不影响向模型发送图片。',
+          },
+          kind: 'boolean',
+          format(value: unknown): string {
+            // The editor toggles this value; runtime overrides must not replace the preference.
+            return String(value ?? config.terminalImages ?? true)
           },
         },
         {
@@ -1577,7 +1608,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   if (bootedFullscreen === false && lastBootedFullscreen === true) {
     bootedFullscreen = true
   }
-  fullscreenFrozen = true
+  rendererSettingsFrozen = true
   // fullscreen: wrap the tree in <AlternateScreen> (DEC 1049 + SGR mouse
   // tracking), which turns on in-app text selection (copy-on-select via
   // useCopyOnSelect), wheel scroll, and click/hover hit-testing. Inline
@@ -1594,9 +1625,10 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     themeHost,
     children: marginChildren,
   })
-  instance = await render(tree, { exitOnCtrlC: false })
+  instance = await render(tree, { exitOnCtrlC: false, terminalImages: bootedTerminalImages })
   const isRecompose = lastBootedFullscreen !== undefined
   lastBootedFullscreen = bootedFullscreen
+  lastBootedTerminalImages = bootedTerminalImages
   logMouseDebug('apply mount', { bootedFullscreen, isRecompose })
   // /restart handoff diagnosis: the replacement got all the way to a mounted
   // UI, so any later death is post-boot (and its stderr keeps flowing to the
