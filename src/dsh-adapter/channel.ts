@@ -4713,10 +4713,18 @@ export function createChannel(
             return header === undefined ? [] : [{ header, raw }]
           })
         } else if (typeof persistence.list === 'function') {
-          const headers = await persistence.list()
-          listed = headers.flatMap(raw => {
+          // dsh 0.1.2-rc.1: persistence.list() returns SessionPersistenceSnapshot
+          // records ({ header, revision }) rather than bare headers. Both shapes
+          // pass through the sessions reader's snapshot parse first; a bare
+          // header (older hosts) has no 'header' key and falls through to the
+          // legacy readHeader parse — the same dual-shape discipline
+          // sessions/list.ts enumerate() applies.
+          const entries = await persistence.list()
+          listed = entries.flatMap(entry => {
+            const snapshot = entry as { header?: unknown } | null
+            const raw = snapshot?.header ?? entry
             const header = readHeader(raw)
-            return header === undefined ? [] : [{ header, raw }]
+            return header === undefined ? [] : [{ header, raw: entry }]
           })
         }
       } catch {
@@ -4955,10 +4963,28 @@ export function createChannel(
         const header = entry?.header
         const parentId = header?.parentSession
         const structuralParentCovered = parentId !== undefined ? (coveredThrough.get(parentId) ?? -1) : -1
+        // dsh 0.1.2-rc.1: locate() was demoted to private on the jsonl
+        // backend; its public successor resolveLog(id) returns the artifact
+        // path directly. Prefer the public API and keep the locate shape for
+        // older hosts and third-party backends that still expose it.
+        const resolveLog = (persistence as { resolveLog?: (id: string) => Promise<string | undefined> }).resolveLog
         const locate = persistence.locate
+        const hasResolveLog = typeof resolveLog === 'function'
         const hasLocate = typeof locate === 'function'
         let locatedPath: string | undefined
-        if (hasLocate && entry !== undefined) {
+        let resolveLogFailed = false
+        if (hasResolveLog) {
+          try {
+            const resolved: unknown = await resolveLog.call(persistence, id)
+            if (typeof resolved === 'string' && resolved.length > 0) locatedPath = resolved
+          } catch {
+            // A THROWN resolveLog is a resolution hiccup, not the backend's
+            // authoritative "no artifact" (that answer is undefined/empty) —
+            // remember it so the stock scan below still gets its chance.
+            resolveLogFailed = true
+          }
+        }
+        if (locatedPath === undefined && hasLocate && entry !== undefined) {
           try {
             const location: unknown = locate.call(persistence, entry.raw)
             // Only the jsonl kind enters the compat file layer — a foreign
@@ -5165,24 +5191,41 @@ export function createChannel(
         sourceEvents = snapshotLiveSessionEvents(entrySession)
       } else {
         forkFromLive = false
+        // dsh 0.1.2-rc.1 removed SessionPersistence.load(); the read-handle
+        // seam (open -> read(0) -> header -> close) replaces it. open() throws
+        // SessionPersistenceNotFoundError for a missing session, which lands
+        // in the same user-facing catch below.
         const persistence = ctx.get('sessionPersistence') as
           | {
-            load(id: SessionId): Promise<{ meta: SessionHeader; events: readonly SessionEvent[] }>
+            open(id: SessionId, mode: 'read'): Promise<{
+              header: SessionHeader
+              read(fromSeq: number): Promise<readonly SessionEvent[]>
+              close(): Promise<void>
+            }>
           }
           | undefined
-        if (!persistence || typeof persistence.load !== 'function') {
+        if (!persistence || typeof persistence.open !== 'function') {
           state.notify(t('rewind-no-persistence'), { color: 'error' })
           return null
         }
+        let handle: Awaited<ReturnType<typeof persistence.open>>
         try {
           ensureLegacySessionEventTypes()
-          const loaded = await persistence.load(SessionId(sessionId))
-          sourceEvents = loaded.events
-          sourceCwd = loaded.meta.cwd ?? state.cwd
+          handle = await persistence.open(SessionId(sessionId), 'read')
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error)
           state.notify(t('rewind-load-failed', { err: message }), { color: 'error' })
           return null
+        }
+        try {
+          sourceEvents = await handle.read(0)
+          sourceCwd = handle.header.cwd ?? state.cwd
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error)
+          state.notify(t('rewind-load-failed', { err: message }), { color: 'error' })
+          return null
+        } finally {
+          await handle.close().catch(() => {})
         }
       }
       // DSH event order is `turn/start → user/message → … → turn/end`, and a

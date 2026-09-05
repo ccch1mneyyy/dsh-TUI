@@ -45,8 +45,13 @@ const TITLE_SCAN_BUDGET_BYTES = 16 * 1024 * 1024
 export interface SessionSource {
   /** Headers plus per-log change tokens — the contract built for this. */
   listSnapshots?: (signal?: AbortSignal) => Promise<readonly unknown[]>
-  /** Headers alone, for a backend or version without snapshots. */
-  list?: (signal?: AbortSignal) => Promise<readonly unknown[]>
+  /**
+   * Headers (or dsh 0.1.2-rc.1+ snapshot records) alone, for a backend or
+   * version without listSnapshots. Dual-shape: rc.1+ takes an options object
+   * ({ signal }); older hosts took the positional signal and ignore an object.
+   */
+  list?: ((options?: { signal?: AbortSignal }) => Promise<readonly unknown[]>)
+    & ((signal?: AbortSignal) => Promise<readonly unknown[]>)
   /** Absolute artifact path for one header; absent for storeless backends. */
   locate?: (meta: unknown) => unknown
 }
@@ -84,12 +89,20 @@ async function enumerate(source: SessionSource, signal?: AbortSignal): Promise<L
     return snapshots.map(readSnapshot).filter((entry): entry is Listed => entry !== undefined)
   }
   if (typeof source.list === 'function') {
-    const headers = await source.list(signal)
-    return headers
-      .map((raw): Listed | undefined => {
+    // dsh 0.1.2-rc.1: list() takes an options object ({ signal }). Legacy
+    // positional-signal hosts ignore the object (their signal simply goes
+    // unused), so the object shape is safe on both lines.
+    const entries = await source.list(signal !== undefined ? { signal } : undefined)
+    // dsh 0.1.2-rc.1: persistence.list() returns SessionPersistenceSnapshot
+    // records ({ header, revision }) rather than bare headers. Both shapes
+    // pass through readSnapshot first; a bare header (older hosts) has no
+    // `header` key, so it falls through to the legacy readHeader parse and
+    // keeps its undefined revision (derived from the file below).
+    return entries
+      .map((raw): Listed | undefined => readSnapshot(raw) ?? (() => {
         const header = readHeader(raw)
         return header === undefined ? undefined : { header, raw, revision: undefined }
-      })
+      })())
       .filter((entry): entry is Listed => entry !== undefined)
   }
   return []

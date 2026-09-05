@@ -17,6 +17,11 @@
  *   4. a missing/corrupt artifact returns undefined, not a throw;
  *   5. a context without sessionPersistence returns undefined.
  *
+ * The stub mirrors the dsh 0.1.2-rc.1 read-handle surface (open('read') →
+ * { header, read, close }): the rc.1 line removed load()/inspect(), and the
+ * resolvePersistedRoute seam reads through open/read — a stub still shaped
+ * like load() silently degrades every route assertion to undefined.
+ *
  * Run with plain node against the compiled lib:
  *   node scripts/verify-resume-route.mjs
  */
@@ -37,10 +42,21 @@ const header = (provider, model) => ({
   data: { header: { config: { provider, model } } },
 })
 
-const ctxOf = (load) => ({
+// rc.1 SessionReadHandle shape: open('read') hands back the log through
+// read(fromSeq); header is a passthrough here (the route fold reads events).
+const ctxOf = (events) => ({
   get(key) {
-    return key === 'sessionPersistence' && load !== undefined
-      ? { load }
+    return key === 'sessionPersistence' && events !== undefined
+      ? {
+          // Single-shot read: the seam always calls read(0) once, so the
+          // fromSeq parameter is intentionally ignored here (known limit —
+          // a future segmented read would need this stub extended).
+          open: async () => ({
+            header: {},
+            read: async () => (typeof events === 'function' ? events() : events),
+            close: async () => {},
+          }),
+        }
       : undefined
   },
 })
@@ -49,10 +65,7 @@ const sid = '00000000-1111-2222-3333-444444444444'
 
 // 1. Full route recorded → returned.
 {
-  const route = await resolvePersistedRoute(ctxOf(async () => ({
-    meta: {},
-    events: [header('deepseek-official', 'deepseek-v4-flash')],
-  })), sid)
+  const route = await resolvePersistedRoute(ctxOf([header('deepseek-official', 'deepseek-v4-flash')]), sid)
   check(
     'recorded request/header yields the full route',
     route?.provider === 'deepseek-official' && route?.model === 'deepseek-v4-flash',
@@ -62,26 +75,33 @@ const sid = '00000000-1111-2222-3333-444444444444'
 
 // 2. Provider-only recorded (half pin) → undefined, never a half-merged route.
 {
-  const route = await resolvePersistedRoute(ctxOf(async () => ({
-    meta: {},
-    events: [header('deepseek-official', undefined)],
-  })), sid)
+  const route = await resolvePersistedRoute(ctxOf([header('deepseek-official', undefined)]), sid)
   check('provider-only record yields undefined', route === undefined, JSON.stringify(route))
 }
 
 // 3. No request/header → undefined.
 {
-  const route = await resolvePersistedRoute(ctxOf(async () => ({
-    meta: {},
-    events: [{ type: 'user/message', seq: 1, time: 1, data: {} }],
-  })), sid)
+  const route = await resolvePersistedRoute(ctxOf([{ type: 'user/message', seq: 1, time: 1, data: {} }]), sid)
   check('bare log (no header) yields undefined', route === undefined, JSON.stringify(route))
 }
 
-// 4. Unreadable artifact → undefined, not a throw.
+// 4a. Unreadable artifact: the handle cannot even be OPENED → undefined.
+{
+  const ctx = {
+    get(key) {
+      return key === 'sessionPersistence'
+        ? { open: async () => { throw new Error('corrupt') } }
+        : undefined
+    },
+  }
+  const route = await resolvePersistedRoute(ctx, sid)
+  check('unreadable artifact (open throws) yields undefined', route === undefined, String(route))
+}
+
+// 4b. Unreadable artifact: the handle opens but READ fails → undefined.
 {
   const route = await resolvePersistedRoute(ctxOf(async () => { throw new Error('corrupt') }), sid)
-  check('unreadable artifact yields undefined', route === undefined, String(route))
+  check('unreadable artifact (read throws) yields undefined', route === undefined, String(route))
 }
 
 // 5. No persistence service → undefined.
@@ -92,10 +112,10 @@ const sid = '00000000-1111-2222-3333-444444444444'
 
 // 6. Last header wins (the route the session actually continues on).
 {
-  const route = await resolvePersistedRoute(ctxOf(async () => ({
-    meta: {},
-    events: [header('deepseek-official', 'deepseek-v4-flash'), header('other-provider', 'other-model')],
-  })), sid)
+  const route = await resolvePersistedRoute(ctxOf([
+    header('deepseek-official', 'deepseek-v4-flash'),
+    header('other-provider', 'other-model'),
+  ]), sid)
   check(
     'last request/header wins',
     route?.provider === 'other-provider' && route?.model === 'other-model',

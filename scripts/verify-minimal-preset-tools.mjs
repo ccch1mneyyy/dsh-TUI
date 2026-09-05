@@ -105,7 +105,18 @@ assert.deepEqual(brokenComposition, {})
 const persistedPreset = await resolvePersistedPreset({
   get(name) {
     if (name !== 'sessionPersistence') return undefined
-    return { async load() { return { meta: legacyHeaderSession.header, events: legacyHeaderSession.events } } }
+    // dsh 0.1.2-rc.1 read-handle seam: persistence.load() is gone; the
+    // fixture persistence answers open(id, 'read') with the handle shape.
+    return {
+      async open(id, mode) {
+        assert.equal(mode, 'read')
+        return {
+          header: legacyHeaderSession.header,
+          read: async () => legacyHeaderSession.events,
+          close: async () => {},
+        }
+      },
+    }
   },
 }, 'legacy-session')
 assert.equal(persistedPreset, 'code')
