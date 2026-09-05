@@ -3,7 +3,7 @@ name: bug
 description: Turn a reported defect into an actionable bug report or issue draft. Use when the user asks to capture or document a bug; a request to fix broken behavior should proceed to diagnosis and repair.
 ---
 
-Produce a concise report another person can reproduce or investigate. If the user asked for a fix, use the report as working context and continue the repair.
+Produce a concise report another person can reproduce or investigate. If the user asked for a fix, use the report as working context, continue the repair, and validate the result.
 
 1. Extract the symptom, expected behavior, and reproduction details already supplied. Inspect available logs and relevant code before asking for facts the workspace can provide.
 2. Ask only for missing information that materially affects reproduction or diagnosis, such as terminal mode or the triggering input. Continue independent investigation while waiting; label unknowns instead of guessing.

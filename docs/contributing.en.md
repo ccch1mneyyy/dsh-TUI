@@ -343,7 +343,9 @@ guide owns detailed contracts such as the toolchain and verification matrix.
 
 - A skill description should say when to use it and distinguish adjacent skills.
   Keep the body focused on one outcome, the evidence needed to finish, and the
-  necessary steps. Link shared rules to their authoritative document to avoid drift.
+  necessary steps. `AGENTS.md` introduces shared rules; skills should not repeat
+  their content or reading reminders. Link additional references only when the
+  task needs them, and say when to read them.
 - Preserve the user's goal and existing authorization: review, repair, reporting,
   and publishing are different tasks. Ask only for missing information that affects
   the result. If external data is unavailable, state the gap instead of substituting
