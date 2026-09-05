@@ -249,6 +249,9 @@ const GROUPS = {
 // 放行；日志字节与 0600 权限绝不被改写；非白名单未知类型保持拒读
 // （上游 fail-closed 新格式保护不破）。
     ["verify-resume-legacy-events", ['node', 'scripts/verify-resume-legacy-events.mjs']],
+// 写端漂移门：session.append 持久化的自有事件类型必须在 LEGACY 注册
+// （/color 事故的制度化防复发——写入端与登记端自此被 CI 强制联动）。
+    ["verify-session-append-registry", ['node', 'scripts/verify-session-append-registry.mjs']],
 // 会话 cwd 回归（issue #96）：启动目录向上解析 git 仓库根（普通克隆
 // 与 .git 文件 worktree 均覆盖、dotfiles ~/.git 守卫），/resume 过滤
 // 双向兼容升级前记录的子目录会话，$HOME/盘符根容器目录只精确匹配

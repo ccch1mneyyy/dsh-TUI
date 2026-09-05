@@ -131,6 +131,7 @@
     "verify:boundary": "node --import tsx/esm scripts/verify-adapter-boundary.ts",
     "verify:i18n": "node --import tsx/esm scripts/verify-i18n.ts",
     "verify:contract": "node --import tsx/esm scripts/verify-upstream-contract.ts",
+    "verify:session-append-registry": "node scripts/verify-session-append-registry.mjs",
     "verify:alpha-source": "node scripts/verify-alpha-source.mjs",
     "verify:herdr": "node --import tsx/esm scripts/verify-herdr-integration.ts",
     "verify:manifest-deps": "node --import tsx/esm scripts/verify-manifest-deps.ts",
