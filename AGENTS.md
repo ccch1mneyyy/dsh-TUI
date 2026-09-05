@@ -1,72 +1,39 @@
 # AGENTS.md
 
-dsh-TUI 是 DeepSeek Harness 的终端界面插件：零核心改动、纯插件挂载的 Claude Code 风格 TUI（`@deepseek-harness-tui/dsh-tui`）。Agent、会话、模型、工具、持久化与策略域由 DeepSeek Harness 拥有，本包只消费它们。改动前先读 [docs/contributing.md](docs/contributing.md)（本仓库共享开发契约的权威文本）与 [ADAPTER.md](ADAPTER.md)（上游边界与契约）；整体结构见 [docs/architecture.md](docs/architecture.md)。
+dsh-TUI（`@deepseek-harness-tui/dsh-tui`）通过 Cordis 挂载终端界面。DeepSeek Harness 拥有 Agent、会话、模型、工具、技能、持久化与策略域，本包消费这些服务。
 
-## 仓库布局
+## 按任务读文档
 
-```
-src/index.ts        公共 Cordis 插件入口、配置 Schema、对运行时实现的惰性移交
-src/plugin.ts       运行时实现：TTY 校验、服务注册、Agent 创建/恢复、React 树挂载与收尾
-src/channel.ts      会话事件 → 视图投影 + 非 React 动作面（submit/steer/rewind/resume/切换）
-src/screens/        Chat.tsx 交互协调器与状态栏呈现
-src/components/     功能组件；design-system/ 是主题感知原语
-src/themeCatalog.ts  内置、静态 JSON 与运行时插件主题的统一列表/解析
-src/ui.ts           本地渲染器、主题化 Box/Text 与公共 TUI 原语的首选门面
-src/ink/            移植的 Ink 渲染器与终端实现——敏感基础设施，改动聚焦并附专用回归
-src/native-ts/      渲染器使用的移植 Yoga 布局引擎
-src/cc/             Claude Code 风格的终端格式化与呈现辅助
-src/dsh-adapter/    唯一允许 import 官方 @deepseek-ai/* 的位置；themes.ts 提供 tuiThemes 插件接缝
-src/*Prefs.ts 等    ~/.dsh-tui 下的持久化用户偏好与会话元数据
-.agents/skills/     仅供仓库维护者使用的项目技能，不随 npm 包分发
-presets/            随包分发的 preset（liangshen）
-bin/dsh-tui.js      dsh-tui 直达命令入口
-vendor/dsh-std      vendored 依赖（frozen lockfile 构建，见 scripts/build 相关脚本）
-dsh-ecosystem-spec/ 生态适配规范子项目（自带 CONTRIBUTING 与治理文档）
-cordis.patch.yml    profile 安装的包级覆盖层；行序、行 ID 与 insert/override 语义关键
-cordis.yml          直接 Cordis/DSH 启动的完整裸组合示例
-scripts/            无头回归、复现环境、探针与诊断；运行前先读脚本头部说明
-docs/               根 README 之外的完整文档；中文无后缀，英文 .en.md 后缀
-lib/                由 src/ 生成的产物——忽略入库、随 npm 分发，绝不手改
-```
+- 改动前读 [docs/contributing.md](docs/contributing.md) 中相关章节：这是共享开发契约，包含仓库地图、工具链、验证矩阵与跨文件同步清单。
+- 改上游集成、依赖版本或 `cordis.patch.yml` 时读 [ADAPTER.md](ADAPTER.md)：它定义 adapter 边界、peer/dev 依赖契约与 patch 快照更新流程。
+- 调整职责或运行链路时读 [docs/architecture.md](docs/architecture.md)。改 `dsh-ecosystem-spec/` 时先读其 CONTRIBUTING 与治理文档。
+- 运行 `scripts/` 中的脚本前读其头部：输入可能是 `src/` 或编译后的 `lib/types/`，取证、PTY 和性能工具也不一定是有界测试。
 
-完整仓库地图与运行时链路见 [docs/contributing.md](docs/contributing.md)。
+## 工作方式
 
-## 命令
+- 按用户当前目标完成工作：审查请求默认给发现；明确要求修复时继续实施和验证；不要把修复变成只写报告。缺少会影响结果的关键信息时再提问，已有上下文和授权继续有效。
+- 编辑前检查工作树与相关 diff，保留他人的改动。先读受影响实现与调用方，复用现有服务和辅助函数；只有当前需求确实需要时才增加抽象。
+- 指引或 skill 与用户要求冲突时按用户要求执行；若仍有必须暂停的具体约束，指出来源和缺少什么，继续不受影响的工作。
 
-```sh
-pnpm install --frozen-lockfile  # pnpm 11；Node ^22.19 || >=24（CI 用 Node 24）
-pnpm compile                    # 干净编译 src/ → lib/types/（先删整个 lib/）
-pnpm build                      # compile + 全部构建门禁
-pnpm verify:build               # 构建门禁（边界/契约/patch surface/plugin 系列等），不重复编译
-pnpm verify:package             # npm tarball 目标完整 + 入口 smoke import
-pnpm smoke                      # 通用无头屏幕组装冒烟
-```
+## 常用工程约束
 
-仓库**没有根级 `test` 或 `lint` 脚本**——不要声称跑过它们。静态关口是 TypeScript 构建；行为验证靠聚焦回归脚本与复现环境。多数用普通 `node` 调用的脚本 import `lib/types/`，先 `pnpm build`；import TypeScript 源的脚本在头部声明 `node --import tsx/esm <script>`。不要凭扩展名推断输入层（`verify-themes.mjs` 实际经 tsx import `src/`）。`scripts/` 还含取证/交互工具（堆分析、PTY 探针、回放捕获、性能探针），不是有界测试，不要当套件全跑。
+- **上游边界**：官方 `@deepseek-ai/*` 只允许在 `src/dsh-adapter/` 内 import。UI 经 adapter facade 消费上游，不重实现 DSH 域服务。
+- **职责**：`src/index.ts` 保持公共配置与惰性入口；`src/dsh-adapter/plugin.ts` 负责运行时挂载与收尾；`src/dsh-adapter/channel.ts` 负责投影和 TUI 动作；`src/screens/Chat.tsx` 协调交互与按键优先级；`src/ink/` 负责终端协议、布局与帧差分。
+- **会话真源**：transcript 从持久化的 DSH 会话事件投影，保留事件顺序、序列锚点与 call-ID 匹配；不要插入可能与持久化分歧的乐观助手/工具事实。
+- **生命周期**：资源经 Cordis 注册，用 `ctx.effect` 或既有单一退出漏斗清理。渲染失败须报错并非零退出；退出时恢复 raw 模式、光标、alt-screen、同步输出、鼠标与焦点状态。
+- **终端**：优先使用 `src/ui.ts` 的主题原语和仓库的显示宽度、切片、换行辅助函数，考虑 ANSI、组合字符、emoji 与东亚宽字符。TUI 活动期间保持 stdout 安静，诊断用 opt-in 的 stderr/调试路径。
+- **源码**：只编辑 `src/`，不手改或提交生成的 `lib/`。TypeScript 使用 ESM、相对导入 `.js`、`import type` 与 `unknown` 收窄；遵循周边风格，不批量格式化移植的 Ink/Yoga 文件。
+- **文档**：用户可见的行为、配置、快捷键与限制同步到 `README.md` 与 `README_EN.md`；其他中英文文档修改成对同步。
 
-- 按改动面选验证：共享渲染、`Chat`、提示/问卷布局、工具卡、主题原语或 `ink/` core 的改动必须跑 CI 回归；窄改动跑对应聚焦脚本，对照表见 [docs/contributing.md](docs/contributing.md)。终端可见改动在无头断言之外，环境可用时在 inline 与 fullscreen 两种模式、窄终端宽度下手动演练受影响流程。
-- 纯文档、纯 workflow、纯 YAML 改动不需要重建（除非同时改了 TypeScript 输入）。
+## 验证与交付
 
-## 上游边界与契约
+- 代码或类型改动跑 `pnpm build` 与 `pnpm verify:package`。按共享开发契约的验证矩阵选择回归；共享渲染、Chat、问卷、工具卡、主题原语或 Ink core 的行为改动须跑全部三个 CI 回归。
+- 终端可见改动在无头断言之外，环境可用时在 inline、fullscreen 和窄终端宽度下演练受影响流程。
+- 纯文档或普通注释改动按共享开发契约检查内容、链接及代码未变的证据；不为改写文字新增行为测试。CI 的路径分流与本地验证范围分开判断。
+- 仓库没有根级 `test` 或 `lint` 脚本。验证通过后，只有新改动、失败或未解决的风险才需要扩大或重复检查；交付时如实报告验证结果与限制。
+- 只暂存显式路径；不运行破坏性清理命令，不丢弃或隐藏他人的工作。commit、push、tag、发布与 Release 遵循用户在本次会话中的授权；发布版本与 tag 规则见共享开发契约。
+- 密钥只能报告是否已设置，不输出值；交互启动读取 `DEEPSEEK_API_KEY`。
 
-- 官方 `@deepseek-ai/*` 包只允许在 `src/dsh-adapter/` 内 import；UI 层（`screens/`、`components/`、`ink/`、`hooks/`、`utils/`、`cc/`）一律通过 adapter facade 间接接触上游。`pnpm run verify:boundary` 扫描全部源码，发现越界即失败。
-- 校验版本线、peer 范围与 blessed 包清单在 `src/dsh-adapter/contract.ts`；本地检测到 drift 打警告，CI 上 `verify:contract` 直接失败。
-- 运行时或发布类型引用的 `@deepseek-ai/*` 框架包必须同时是 peer 与 dev 依赖（`verify:manifest-deps` 门禁）；仅测试/脚本使用的框架包只进 dev 依赖。
-- `cordis.patch.yml` 对官方行的干预已快照到 `patch-surface.snapshot.json`，改动需保持同步（`verify:patch-surface` 门禁）。
+## 维护指引
 
-## 约定与红线
-
-- **源码与产物分离**：改 `src/`，绝不直接改 `lib/`，不提交 `lib/` 下的生成结果。
-- **真源投影**：持久化的 DSH 会话事件日志是 transcript 真源；不要插入可能与持久化分歧的乐观助手/工具事实。保留事件顺序、序列锚点与 call-ID 匹配。
-- **职责分层**：投影与 TUI 动作属于 `channel.ts`，交互模式与按键优先级属于 `Chat.tsx`，终端协议、布局与帧差分属于 `ink/`。不要为界面好写而在 TUI 里重实现 DSH 域服务——经 channel 或既有注册表缝隙适配。
-- **注册即效应**：资源经 Cordis 注册，用 `ctx.effect` 或既有单一退出漏斗清理。渲染失败必须响亮且非零退出；正常退出前恢复终端状态（raw 模式、光标、alt-screen、同步输出、鼠标、焦点）。
-- **渲染安静**：TUI 活动期间不加 `console.log` 或 stdout 诊断；用 opt-in 的 stderr/调试路径（`DSH_TUI_DEBUG`、`DSH_TUI_RENDER_LOG`）。
-- **TypeScript**：纯 ESM，相对导入用 `.js` 后缀；纯类型依赖优先 `import type`；不因移植 Ink core 的放宽而引入 `any`，用 `unknown` 收窄；遵循现有两空格、单引号、无分号风格，不批量格式化移植文件。
-- **终端宽度是显示单元宽度**，不是 JS 字符串长度；考虑 ANSI 转义、组合字符、emoji 与东亚宽字符，用仓库的宽度/切片/换行辅助函数。
-- **双语文档同步**：行为、配置、快捷键与限制在 `README.md` 与 `README_EN.md` 两版同步。插件配置、slash 命令、主题、渲染器、技能发现的跨文件同步清单见 [docs/contributing.md](docs/contributing.md)。
-- **密钥**：交互启动读取 `DEEPSEEK_API_KEY`；诊断只能报告是否已设置，绝不泄露完整值。
-- **Git 安全**：只暂存显式路径，不用 `git add .`/`git add -A`；不运行破坏性清理命令；未经要求不 commit、不打 tag、不 push、不发布。发布由 `v*` tag 驱动且必须与 `package.json` 版本完全一致。
-
-## 编辑本文件
-
-`CLAUDE.md` 是指向 `AGENTS.md` 的符号链接；编辑真身。每条规则保持自包含，细节链接到权威文档；表达在清晰存活时优先精简。
+`CLAUDE.md` 是指向本文件的符号链接，编辑真身。常用约束留在这里，详细规则留在权威文档，并说明何时读取。`.agents/skills/` 仅供仓库维护者使用，不随 npm 分发；编写原则见 [docs/contributing.md](docs/contributing.md) 的“项目指引与技能”。

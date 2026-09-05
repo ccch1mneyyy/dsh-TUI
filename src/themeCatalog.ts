@@ -1,5 +1,5 @@
 /**
- * Cordis-free theme catalog shared by future pickers, commands and hosts.
+ * Cordis-free theme catalog shared by the theme picker and channel actions.
  *
  * The catalog is an ordered projection, not a cache: static JSON palettes stay
  * owned by customTheme.ts, while runtime palettes stay owned by TuiThemeHost.
