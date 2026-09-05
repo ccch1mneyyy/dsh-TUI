@@ -36,4 +36,4 @@ dsh-TUI（`@deepseek-harness-tui/dsh-tui`）通过 Cordis 挂载终端界面。D
 
 ## 维护指引
 
-`CLAUDE.md` 是指向本文件的符号链接，编辑真身。常用约束留在这里，详细规则留在权威文档，并说明何时读取。`.agents/skills/` 仅供仓库维护者使用，不随 npm 分发；编写原则见 [docs/contributing.md](docs/contributing.md) 的“项目指引与技能”。
+`CLAUDE.md` 是指向本文件的符号链接，编辑真身。常用约束留在这里，详细规则留在权威文档，并说明何时读取。`.agents/skills/` 仅供仓库维护者使用，不随 npm 分发；skill 聚焦任务专有的判断与步骤，不重复引入全局约定。

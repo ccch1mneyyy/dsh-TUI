@@ -10,5 +10,3 @@ Review the requested scope and report actionable findings. If the user also aske
 3. Verify each suspected issue against the implementation and existing guards. Report its location, concrete trigger, impact, and smallest useful fix, ordered by severity. Separate demonstrated defects from optional simplifications.
 4. Use a short call tree or before/after diff when it explains an ownership or ordering problem more clearly than prose. Show only the affected path and use real symbols from the code.
 5. State what was reviewed and any verification limits. If there are no actionable findings, say so; do not manufacture nits or add a compulsory praise section.
-
-Choose validation from [the contributing guide](../../../docs/contributing.md) when implementing fixes. A review alone does not require running every regression.

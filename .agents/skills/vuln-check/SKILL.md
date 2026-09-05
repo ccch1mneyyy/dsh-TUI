@@ -10,4 +10,4 @@ Assess the requested security surface with evidence. A check returns findings; i
 3. Report findings by severity with location, trigger, impact, evidence, and the smallest effective remedy. Separate confirmed issues from leads needing verification. Preserve the upstream peer/dev dependency contract when proposing upgrades.
 4. State the scope, sources checked, and gaps. If advisories are unavailable, report that the dependency check is incomplete; absence of findings is not a claim that the project is vulnerability-free.
 
-Report potential secrets only by path, line, and type, never their value or a source excerpt. Do not run automatic dependency fixes as part of a check; for requested remediation, make targeted changes and select validation from [the contributing guide](../../../docs/contributing.md).
+Report potential secrets only by path, line, and type, never their value or a source excerpt. Do not run automatic dependency fixes as part of a check; for requested remediation, make targeted changes and validate the affected paths.

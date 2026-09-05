@@ -2163,11 +2163,10 @@ function layoutNode(
     const consumedMain = lineConsumedMain[li]!
     const n = line.length
 
-    // Re-stretch children whose cross is auto and align is stretch, now that
-    // the line cross size is known. Needed for multi-line wrap (line cross
-    // wasn't known during initial measure) AND single-line when the container
-    // cross was not Exactly (initial stretch was skipped because
-    // innerCrossSize wasn't defined — the container sized to max child cross).
+    // Re-stretch auto-cross children with Align.Stretch to the resolved line
+    // cross size. Wrapped lines need their intrinsic cross size measured first.
+    // Single-line initial stretch requires Exactly: AtMost/Undefined skip it
+    // even when innerCrossSize is defined.
     if (isWrap || crossMode !== MeasureMode.Exactly) {
       for (const c of line) {
         const cStyle = c.style
