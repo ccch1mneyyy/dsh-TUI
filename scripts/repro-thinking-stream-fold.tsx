@@ -52,6 +52,8 @@ const stdin = new FakeStdin(), stdout = new FakeStdout(), stderr = new FakeStder
 const BODY = Array.from({ length: 12 }, (_, i) => `推理第${i}行：探索未至之境`).join('\n')
 const listeners = new Set<() => void>()
 const channel: any = {
+  // 探针确定性：鲸鱼欢迎期闲置动画（默认开）不进本探针的测量窗口。
+  whaleIdle: false,
   version: 0,
   rows: [{ id: 1, kind: 'reasoning', text: BODY, streaming: true }],
   status: 'idle',

@@ -65,6 +65,8 @@ function check(name: string, ok: boolean, extra = '') {
 
 const listeners = new Set<() => void>()
 const channel: any = {
+  // 探针确定性：鲸鱼欢迎期闲置动画（默认开）不进本探针的测量窗口。
+  whaleIdle: false,
   version: 0, rows: [] as any[], status: 'idle', sessionTitle: 'probe', agentId: 'probe',
   model: 'deepseek-v4-flash',
   mode: { plan: false }, reasoningEffort: 'max', tokens: { input: 120, output: 45 },

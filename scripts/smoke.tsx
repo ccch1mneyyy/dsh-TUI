@@ -430,6 +430,8 @@ class FakeStdin extends PassThrough {
 const EMPTY_AGENT_VIEW_ROWS = []
 
 const channel = {
+  // 探针确定性：鲸鱼欢迎期闲置动画（默认开）不进本探针的测量窗口。
+  whaleIdle: false,
   version: 0,
   rows: [    { id: 0, kind: 'user', text: 'hello' },
     { id: 1, kind: 'assistant', text: '**hi** from markdown with a list:\n- one\n- two\n\n| A | B |\n| --- | --- |\n| 1 | x |', time: Date.parse('2026-01-02T03:04:05Z') },
