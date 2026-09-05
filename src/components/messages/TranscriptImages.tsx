@@ -3,6 +3,7 @@ import { Box, Image, Text, useTerminalSize } from '../../ui.js'
 import type { TerminalImageSource } from '../../ink/terminal-image.js'
 import type { TranscriptImage } from '../../dsh-adapter/transcript-images.js'
 import { loadSharp } from '../../dsh-adapter/sharp.js'
+import { cleanRenderText } from '../../dsh-adapter/sanitize.js'
 import { t } from '../../i18n.js'
 
 const PREVIEW_PIXELS = 384
@@ -68,7 +69,7 @@ function TranscriptImagePreview({
     return () => { live = false }
   }, [image])
 
-  const label = cleanLabel(image.name) || t('transcript-image')
+  const label = cleanRenderText(image.name ?? '', 80) || t('transcript-image')
   const fallback = state.kind === 'failed'
     ? t('transcript-image-unavailable', { name: label })
     : state.kind === 'loading'
@@ -153,10 +154,6 @@ async function loadDecodedImage(image: TranscriptImage): Promise<TerminalImageSo
     if (decodedImages.get(image) === pending) decodedImages.delete(image)
   })
   return pending
-}
-
-function cleanLabel(value: string | undefined): string {
-  return (value ?? '').replace(/[\u0000-\u001f\u007f-\u009f]/gu, ' ').trim().slice(0, 80)
 }
 
 /** @internal Focused regression scripts clear the process-local LRU. */

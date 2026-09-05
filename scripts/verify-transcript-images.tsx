@@ -9,16 +9,17 @@ process.env.FORCE_COLOR = '0'
 import assert from 'node:assert/strict'
 import { closeSync, openSync } from 'node:fs'
 import { devNull } from 'node:os'
+import { isAbsolute } from 'node:path'
 import { PassThrough, Writable } from 'node:stream'
 import React from 'react'
 import xterm from '@xterm/headless'
-import sharp from 'sharp'
 import type { ChatRow } from '../src/dsh-adapter/channel.js'
 import { loadSharp, sharpCandidatePaths } from '../src/dsh-adapter/sharp.js'
 import type { TranscriptImage } from '../src/dsh-adapter/transcript-images.js'
 import type { ScrollBoxHandle } from '../src/ui.js'
 import type { DOMElement } from '../src/ink/dom.js'
 import type { ContentBlock } from '@deepseek-ai/dsh-llm'
+import type { TimelineSnapshot } from '../src/ink/timeline-rail.js'
 import { settled } from './lib/term-test.mjs'
 
 const { Terminal: XTerm } = xterm
@@ -28,13 +29,21 @@ const [
   { clearTranscriptImageCacheForTests, TranscriptImages },
   { transcriptImagesOf },
   { createChannel },
+  { setLang },
 ] = await Promise.all([
   import('../src/ui.js'),
   import('../src/components/MessageList.js'),
   import('../src/components/messages/TranscriptImages.js'),
   import('../src/dsh-adapter/transcript-images.js'),
   import('../src/dsh-adapter/channel.js'),
+  import('../src/i18n.js'),
 ])
+
+const sharp = await loadSharp()
+if (sharp === undefined) {
+  console.log('SKIP transcript image regression: optional sharp decoder is unavailable')
+  process.exit(0)
+}
 
 const png = new Uint8Array(await sharp({
   create: {
@@ -96,6 +105,20 @@ const malformed = transcriptImagesOf([
   { type: 'image', attachment: { ...attachment, width: 0 } },
 ] as unknown as readonly ContentBlock[], () => reader)
 assert.equal(malformed.length, 0, 'invalid durable dimensions are skipped')
+assert.deepEqual(
+  transcriptImagesOf([
+    null,
+    undefined,
+    { type: 'tool-result' },
+    { type: 'tool-result', content: null },
+    { type: 'tool-result', content: {} },
+    { type: 'tool-result', content: 'invalid' },
+    { type: 'tool-result', content: [null, { type: 'image', attachment }] },
+    { type: 'image', attachment: nestedAttachment },
+  ] as unknown as readonly ContentBlock[], () => reader).map(image => image.id),
+  [attachment.attachmentId, nestedAttachment.attachmentId],
+  'malformed blocks and nested content do not hide valid sibling images',
+)
 
 const toolResult = {
   type: 'tool-result',
@@ -307,6 +330,7 @@ const rows: ChatRow[] = [
   },
 ]
 
+let timeline: TimelineSnapshot | undefined
 const messageList = (listRows: readonly ChatRow[] = rows): React.ReactElement => (
   <MessageList
     rows={listRows}
@@ -318,12 +342,13 @@ const messageList = (listRows: readonly ChatRow[] = rows): React.ReactElement =>
     showAll
     onToggleAll={() => {}}
     historyPaintEnabled={false}
+    onTimeline={state => { timeline = state }}
   />
 )
 
 await withTerminal(
   messageList(),
-  async (screen, rerender) => {
+  async screen => {
     assert.equal(
       await settled(() => {
         const text = screen()
@@ -332,7 +357,18 @@ await withTerminal(
       true,
       'image-only user row and tool-result image stay visible',
     )
-    void rerender
+    assert.equal(await settled(() => timeline?.turns[0]?.preview === '1 image'), true)
+    try {
+      setLang('zh')
+      assert.equal(
+        await settled(() => timeline?.turns[0]?.preview === '1 张图片'),
+        true,
+        'image-only timeline previews update when language changes without new rows or geometry',
+      )
+    } finally {
+      setLang('en')
+    }
+    assert.equal(await settled(() => timeline?.turns[0]?.preview === '1 image'), true)
     assert.match(screen(), /Image · assistant\.png/u)
     assert.match(screen(), /image_tool/iu, 'tool card remains visible above its image')
   },
@@ -506,12 +542,12 @@ await withTerminal(
 
 clearTranscriptImageCacheForTests()
 await withTerminal(
-  <TranscriptImages images={[image('failed-image', 'bad.png', true)]} indent={0} />,
+  <TranscriptImages images={[image('failed-image', '\u001b[31mbad.png\u001b[0m', true)]} indent={0} />,
   async screen => {
     assert.equal(
       await settled(() => screen().includes('Cannot preview bad.png')),
       true,
-      'failed attachment reads degrade to a stable text alternative',
+      'failed attachment reads use a text alternative with a sanitized image name',
     )
   },
 )
@@ -523,7 +559,7 @@ await withTerminal(
 {
   const candidates = sharpCandidatePaths()
   assert.ok(candidates.length >= 1, 'at least one sharp candidate path resolves')
-  assert.ok(candidates.every(path => path.startsWith('/') && path.includes('sharp')), candidates.join('\n'))
+  assert.ok(candidates.every(path => isAbsolute(path) && path.includes('sharp')), candidates.join('\n'))
   const first = await loadSharp()
   const second = await loadSharp()
   assert.equal(typeof first, 'function', 'loadSharp returns the callable sharp module')
