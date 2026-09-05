@@ -468,6 +468,12 @@ Want to build a plugin or extension for dsh-TUI? Join the ecosystem:
   (start from the template and ship a plugin in minutes)
 - **Reference implementation**: `dsh-working-activity` (live working-status
   line with dual outlets: TUI prompt slot + `activity/status` session events)
+- **Candidate sub-plugin (under review)**: [dsh-tui-browser-use](https://github.com/FlameTN7/dsh-tui-browser-use) —
+  browser automation for the agent (21 `browser_*` tools, Playwright-driven,
+  screenshot vision understanding). The project **may** be mounted as a dsh-tui
+  sub-plugin (Cordis) in the `dsh --profile dsh-tui` composition; it is not yet
+  officially listed. This notice is for maintainers: please review its seam
+  usage and compatibility.
 
 ### Seam stability reference
 

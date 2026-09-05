@@ -130,6 +130,7 @@ sh install.sh
 - **生态组织**：[dsh-tui-ecosystem](https://github.com/dsh-tui-ecosystem)（社区插件与模板的家）
 - **模板仓库**：[plugin-template](https://github.com/dsh-tui-ecosystem/plugin-template)（从模板起步，5 分钟出一个插件）
 - **参考实现**：`dsh-working-activity`（实时工作状态行：TUI 槽位 + `activity/status` 会话事件双出口）
+- **候选子插件（待审）**：[dsh-tui-browser-use](https://github.com/FlameTN7/dsh-tui-browser-use)——为 agent 提供浏览器自动化能力（21 个 `browser_*` 工具，Playwright 驱动，含截图视觉理解）。该项目**可能**作为 dsh-tui 的子插件（Cordis）随 `dsh --profile dsh-tui` 组合加载，尚未正式收录；在此知会各位维护者，欢迎审阅其接缝使用与兼容性。
 
 ### 接缝稳定性参考
 
