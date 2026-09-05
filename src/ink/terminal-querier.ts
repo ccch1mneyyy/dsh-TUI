@@ -38,6 +38,7 @@ type DecrpmResponse = Extract<TerminalResponse, { type: 'decrpm' }>
 type Da1Response = Extract<TerminalResponse, { type: 'da1' }>
 type Da2Response = Extract<TerminalResponse, { type: 'da2' }>
 type KittyResponse = Extract<TerminalResponse, { type: 'kittyKeyboard' }>
+type KittyGraphicsResponse = Extract<TerminalResponse, { type: 'kittyGraphics' }>
 type CursorPosResponse = Extract<TerminalResponse, { type: 'cursorPosition' }>
 type OscResponse = Extract<TerminalResponse, { type: 'osc' }>
 type XtversionResponse = Extract<TerminalResponse, { type: 'xtversion' }>
@@ -90,6 +91,21 @@ export function kittyKeyboard(): TerminalQuery<KittyResponse> {
   return {
     request: csi('?u'),
     match: (r): r is KittyResponse => r.type === 'kittyKeyboard',
+  }
+}
+
+/**
+ * Query direct-data support for the Kitty graphics protocol with one 1×1
+ * RGB pixel. The terminal echoes the caller-owned image id in its APC reply.
+ */
+export function kittyGraphics(
+  imageId: number,
+): TerminalQuery<KittyGraphicsResponse> {
+  const id = Number.isSafeInteger(imageId) && imageId > 0 ? imageId : 31
+  return {
+    request: `\u001b_Gi=${id},s=1,v=1,a=q,t=d,f=24;AAAA\u001b\\`,
+    match: (r): r is KittyGraphicsResponse =>
+      r.type === 'kittyGraphics' && r.imageId === id,
   }
 }
 

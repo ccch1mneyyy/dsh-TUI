@@ -15,6 +15,7 @@ import {
 } from './squash-text-nodes.js'
 import type { Color } from './styles.js'
 import { isXtermJs } from './terminal.js'
+import { terminalImageSourceFromAttributes } from './terminal-image.js'
 import { widestLine } from './widest-line.js'
 import wrapText from './wrap-text.js'
 
@@ -617,6 +618,14 @@ function renderNodeToOutput(
     let y = offsetY + yogaTop
     const width = yogaNode.getComputedWidth()
     const height = yogaNode.getComputedHeight()
+    const imageSource =
+      node.nodeName === 'ink-image'
+        ? terminalImageSourceFromAttributes(node.attributes)
+        : undefined
+    const imageAdmitted =
+      imageSource === undefined
+        ? false
+        : output.image(node, x, y, width, height, imageSource)
 
     // Absolute-positioned overlays anchored above their parent
     // (bottom='100%') compute negative screen y when their content is
@@ -647,6 +656,10 @@ function renderNodeToOutput(
     // moved.
     const effectiveBg = node.style.backgroundColor ?? inheritedBackgroundColor
     const bgChanged = cached?.bg !== effectiveBg
+    const imageBackingChanged =
+      node.nodeName === 'ink-image' &&
+      output.terminalImagesEnabled &&
+      imageAdmitted !== output.hadPreviousImage(node)
     if (
       !node.dirty &&
       !skipSelfBlit &&
@@ -657,25 +670,36 @@ function renderNodeToOutput(
       cached.width === width &&
       cached.height === height &&
       !bgChanged &&
+      !imageBackingChanged &&
       prevScreen
     ) {
       const fx = Math.floor(x)
       const fy = Math.floor(y)
       const fw = Math.floor(width)
       const fh = Math.floor(height)
-      output.blit(prevScreen, fx, fy, fw, fh)
-      if (node.style.position === 'absolute') {
-        absoluteRectsCur.push(cached)
-        absoluteHitList.push({ node, rect: cached })
+      if (output.reuseImages(node)) {
+        output.blit(prevScreen, fx, fy, fw, fh)
+        if (node.style.position === 'absolute') {
+          absoluteRectsCur.push(cached)
+          absoluteHitList.push({ node, rect: cached })
+        }
+        // Absolute descendants can paint outside this node's layout bounds
+        // (e.g. a slash menu with position='absolute' bottom='100%' floats
+        // above). If a dirty clipped sibling re-rendered and overwrote those
+        // cells, the blit above only restored this node's own rect — the
+        // absolute descendants' cells are lost. Re-blit them from prevScreen
+        // so the overlays survive.
+        blitEscapingAbsoluteDescendants(
+          node,
+          output,
+          prevScreen,
+          fx,
+          fy,
+          fw,
+          fh,
+        )
+        return
       }
-      // Absolute descendants can paint outside this node's layout bounds
-      // (e.g. a slash menu with position='absolute' bottom='100%' floats
-      // above). If a dirty clipped sibling re-rendered and overwrote those
-      // cells, the blit above only restored this node's own rect — the
-      // absolute descendants' cells are lost. Re-blit them from prevScreen
-      // so the overlays survive.
-      blitEscapingAbsoluteDescendants(node, output, prevScreen, fx, fy, fw, fh)
-      return
     }
 
     // Clear stale content from the old position when re-rendering.
@@ -822,7 +846,34 @@ function renderNodeToOutput(
 
         output.write(x, y, text, softWrap)
       }
-    } else if (node.nodeName === 'ink-box') {
+    } else if (
+      node.nodeName === 'ink-image' &&
+      imageAdmitted &&
+      output.terminalImagesEnabled
+    ) {
+      // Kitty placements use an extreme negative z-index so later terminal
+      // cells can cover them. A colored ancestor has already filled this
+      // rect, though, and those non-default-background cells would also hide
+      // the image itself. Replace only the image-owned cells with default-
+      // background spaces; layout and surrounding inherited color stay intact.
+      const imageWidth = Math.floor(width)
+      const imageHeight = Math.floor(height)
+      const imageLine = ' '.repeat(imageWidth)
+      output.write(
+        Math.floor(x),
+        Math.floor(y),
+        Array(imageHeight).fill(imageLine).join('\n'),
+      )
+      output.noSelect({
+        x: Math.floor(x),
+        y: Math.floor(y),
+        width: imageWidth,
+        height: imageHeight,
+      })
+      for (const child of node.childNodes) {
+        if (child.nodeName !== '#text') dropSubtreeCache(child as DOMElement)
+      }
+    } else if (node.nodeName === 'ink-box' || node.nodeName === 'ink-image') {
       const boxBackgroundColor =
         node.style.backgroundColor ?? inheritedBackgroundColor
 
@@ -1284,12 +1335,25 @@ function renderNodeToOutput(
             !hint ||
             heightDelta === 0 ||
             (hint.delta > 0 && heightDelta === hint.delta)
+          const graphicsInScrollRegion =
+            hint !== null &&
+            output.hasPreviousImageInRegion(
+              Math.floor(x),
+              hint.top,
+              Math.floor(width),
+              hint.bottom - hint.top + 1,
+            )
           // scrollHint is set above when hint is captured. If safeForFastPath
           // is false the full path renders a next.screen that doesn't match
           // the DECSTBM shift — emitting DECSTBM leaves stale rows (seen as
           // content bleeding through during scroll-up + streaming). Clear it.
-          if (!safeForFastPath) scrollHint = null
-          if (hint && prevScreen && safeForFastPath) {
+          if (!safeForFastPath || graphicsInScrollRegion) scrollHint = null
+          if (
+            hint &&
+            prevScreen &&
+            safeForFastPath &&
+            !graphicsInScrollRegion
+          ) {
             const { top, bottom, delta } = hint
             const w = Math.floor(width)
             output.blit(prevScreen, Math.floor(x), top, w, bottom - top + 1)
@@ -1567,7 +1631,12 @@ function renderNodeToOutput(
           // same reason: the old fill lives in prevScreen and the children's
           // blits would resurrect it — the frame then equals prevScreen and
           // the diff never clears the stale highlight.
-          ownBackgroundColor || node.style.opaque || bgChanged ? undefined : prevScreen,
+          node.nodeName === 'ink-image' ||
+            ownBackgroundColor ||
+            node.style.opaque ||
+            bgChanged
+            ? undefined
+            : prevScreen,
           boxBackgroundColor,
         )
       }

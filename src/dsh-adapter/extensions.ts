@@ -7,7 +7,8 @@
  * Services mounted here (each documented in its own module):
  *
  * - `ctx.tuiDialogs`   — managed select/confirm/input dialogs
- * - `ctx.tuiStatus`    — keyed status-line contributions
+ * - `ctx.tuiStatus`    — keyed text and bounded rich status contributions;
+ *   `registerView()` returns `undefined` on refusal, otherwise its disposer
  * - `ctx.tuiShortcuts` — keyboard shortcut registry
  * - `ctx.tuiRenderers` — custom session-entry text renderers
  * - `ctx.tuiToast`     — transient fire-and-forget notifications

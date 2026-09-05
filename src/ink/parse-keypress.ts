@@ -76,9 +76,9 @@ const SGR_MOUSE_TAIL_PREFIX_RE = /^\[<\d+;\d+;\d+[Mm]/
 // from FIRST capture, not "survived this call", or a press split by two
 // quiet flushes (>~100ms of SSH jitter / render stall) is destroyed and its
 // tail leaks into the prompt as text (field-reproduced: `18;34M` typed
-// itself). 1s covers WAN jitter and heavy-render stalls while staying far
-// too short for a user to type a tail-shaped continuation by hand. The
-// check runs at the top of every call (not only on flush) so continuous
+// itself). 1s covers WAN jitter and heavy-render stalls. Digits/semicolons
+// typed during that window are indistinguishable from report fragments;
+// the deadline bounds this ambiguity. It runs on every call so continuous
 // input cannot starve it into a de-facto immortal hold.
 const MOUSE_TAIL_HOLD_GRACE_MS = 1000
 
@@ -150,6 +150,9 @@ const DA2_RE = /^\x1b\[>([\d;]*)c$/
 // (private ? marker distinguishes from CSI u key events)
 // eslint-disable-next-line no-control-regex
 const KITTY_FLAGS_RE = /^\x1b\[\?(\d+)u$/
+// Kitty graphics APC response: ESC_G key=value,...;OK|error ESC\\
+// eslint-disable-next-line no-control-regex
+const KITTY_GRAPHICS_RE = /^\x1b_G([^;]*);([^\x1b]*)\x1b\\$/
 // DECXCPR cursor position: CSI ? row ; col R
 // The ? marker disambiguates from modified F3 keys (Shift+F3 = CSI 1;2 R,
 // Ctrl+F3 = CSI 1;5 R, etc.) — plain CSI row;col R is genuinely ambiguous.
@@ -208,6 +211,8 @@ export type TerminalResponse =
   | { type: 'da2'; params: number[] }
   /** Kitty keyboard protocol: current flags (answer to CSI ? u) */
   | { type: 'kittyKeyboard'; flags: number }
+  /** Kitty graphics protocol response to an a=q capability query. */
+  | { type: 'kittyGraphics'; imageId: number; status: string }
   /** DSR: cursor position report (answer to CSI 6 n) */
   | { type: 'cursorPosition'; row: number; col: number }
   /** OSC response: generic operating-system-command reply (e.g. OSC 11 bg color) */
@@ -274,6 +279,23 @@ function parseTerminalResponse(s: string): TerminalResponse | null {
     const m = XTVERSION_RE.exec(s)
     if (m) {
       return { type: 'xtversion', name: m[1]! }
+    }
+  }
+
+  if (s.startsWith('\x1b_G')) {
+    const m = KITTY_GRAPHICS_RE.exec(s)
+    if (m) {
+      const imageId = m[1]!
+        .split(',')
+        .map(field => field.split('=', 2))
+        .find(([key]) => key === 'i')?.[1]
+      if (imageId !== undefined && /^\d+$/u.test(imageId)) {
+        return {
+          type: 'kittyGraphics',
+          imageId: parseInt(imageId, 10),
+          status: m[2]!,
+        }
+      }
     }
   }
 
@@ -1051,8 +1073,8 @@ export function parseMultipleKeypresses(
         SGR_MOUSE_PREFIX_RE.test(token.value) ||
         // Continuation of an active hold: with the prefix already captured,
         // the next fragment (`32;5M`'s leading digits, more params) is
-        // digits/semicolons — meaningless as typing on its own and part of
-        // the in-flight report. Any completion is caught by the tail branch
+        // digits/semicolons — ambiguous with typing, so treat them as part
+        // of the in-flight report until the deadline. Completion uses the branch
         // above first, so reaching here with a hold means still incomplete.
         (mouseTailHold !== undefined && /^[\d;]*$/.test(token.value) && token.value !== '')
       ) {

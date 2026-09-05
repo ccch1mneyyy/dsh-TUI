@@ -10,6 +10,7 @@ import { flushInteractionTime } from '../bootstrap/state.js';
 import { getYogaCounters } from '../native-ts/yoga-layout/index.js';
 import { logForDebugging } from '../utils/debug.js';
 import { logError } from '../utils/log.js';
+import { isEnvTruthy } from '../utils/envUtils.js';
 import { format } from 'util';
 import { colorize } from './colorize.js';
 import App from './components/App.js';
@@ -28,6 +29,7 @@ import { noteTerminalFlush } from './flush-tick.js';
 import instances from './instances.js';
 import { suppressInputFor } from './input-suppression.js';
 import { LogUpdate } from './log-update.js';
+import { KittyGraphicsManager } from './kitty-graphics.js';
 import { nodeCache } from './node-cache.js';
 import { optimize } from './optimizer.js';
 import Output from './output.js';
@@ -43,8 +45,9 @@ import { isDecstbmSafe, SYNC_OUTPUT_SUPPORTED, serializeDiff, supportsDecrqmProb
 import { CURSOR_HOME, cursorMove, cursorPosition, DISABLE_KITTY_KEYBOARD, DISABLE_MODIFY_OTHER_KEYS, DISABLE_WIN32_INPUT_MODE, ENABLE_KITTY_KEYBOARD, ENABLE_MODIFY_OTHER_KEYS, ENABLE_WIN32_INPUT_MODE, ERASE_SCREEN, ERASE_SCROLLBACK, SGR_RESET } from './termio/csi.js';
 import { DBP, DFE, DISABLE_MOUSE_TRACKING, ENABLE_MOUSE_TRACKING, ENTER_ALT_SCREEN, EXIT_ALT_SCREEN, SHOW_CURSOR } from './termio/dec.js';
 import { CLEAR_ITERM2_PROGRESS, CLEAR_TAB_STATUS, setClipboard, supportsTabStatus, wrapForMultiplexer } from './termio/osc.js';
-import { decrqm } from './terminal-querier.js';
+import { decrqm, kittyGraphics } from './terminal-querier.js';
 import { TerminalWriteProvider } from './useTerminalNotification.js';
+import type { TerminalImagePlacement } from './terminal-image.js';
 
 // Alt-screen: renderer.ts sets cursor.visible = !isTTY || screen.height===0,
 // which is always false in alt-screen (TTY + content fills screen).
@@ -83,6 +86,9 @@ export type Options = {
 export default class Ink {
   private readonly log: LogUpdate;
   private readonly terminal: Terminal;
+  private readonly kittyGraphicsManager = new KittyGraphicsManager();
+  private kittyGraphicsSupported = false;
+  private kittyGraphicsProbeStarted = false;
   private app: App | null = null;
   private scheduleRender: (() => void) & {
     cancel?: () => void;
@@ -451,7 +457,15 @@ export default class Ink {
   enterAlternateScreen(): void {
     this.pause();
     this.suspendStdin();
+    // Kitty placements are independent of the terminal cell grid: clearing
+    // the screen for an external editor does not remove them. Delete every
+    // renderer-owned image before handing the buffer over, otherwise a
+    // negative-z preview can remain visible through the editor's default-
+    // background cells. deleteAll() also forgets the ids so the restore pass
+    // uploads fresh data after resetFramesForAltScreen().
+    const deleteImages = this.kittyGraphicsManager.deleteAll();
     this.options.stdout.write(
+    deleteImages +
     // Disable extended key reporting first — editors that don't speak
     // CSI-u (e.g. nano) show "Unknown sequence" for every Ctrl-<key> if
     // kitty/modifyOtherKeys stays active. exitAlternateScreen re-enables.
@@ -655,9 +669,11 @@ export default class Ink {
       terminalWidth,
       terminalRows,
       altScreen: this.altScreenActive,
+      terminalImages: this.altScreenActive && this.kittyGraphicsSupported,
       prevFrameContaminated: this.prevFrameContaminated
     });
     const rendererMs = performance.now() - renderStart;
+    this.maybeProbeKittyGraphics(frame.images ?? []);
 
     // Viewport-shrink translation (companion to the follow block below):
     // chrome mounting around a ScrollBox (the new-messages pill, the sticky
@@ -916,9 +932,16 @@ export default class Ink {
       }
     }
     const tOptimize = performance.now();
+    if (flickers.length > 0 || this.needsEraseBeforePaint) {
+      this.kittyGraphicsManager.invalidateAll();
+    }
     const optimized = optimize(diff);
     const optimizeMs = performance.now() - tOptimize;
-    const hasDiff = optimized.length > 0;
+    const graphicsOutput =
+      this.altScreenActive && this.kittyGraphicsSupported
+        ? this.kittyGraphicsManager.reconcile(frame.images ?? [])
+        : '';
+    const hasDiff = optimized.length > 0 || graphicsOutput !== '';
     if (this.altScreenActive && hasDiff) {
       // Prepend CSI H to anchor the physical cursor to (0,0) so
       // log-update's relative moves compute from a known spot (self-healing
@@ -944,6 +967,9 @@ export default class Ink {
         optimized.unshift(ERASE_THEN_HOME_PATCH);
       } else {
         optimized.unshift(CURSOR_HOME_PATCH);
+      }
+      if (graphicsOutput !== '') {
+        optimized.push({ type: 'stdout', content: graphicsOutput });
       }
       optimized.push(this.altScreenParkPatch);
     }
@@ -1213,7 +1239,11 @@ export default class Ink {
     };
     // Leaving must settle dragend WHILE the dispatch gate is still active;
     // flipping altScreenActive first would silently drop the cleanup event.
-    if (!active) resetOldPointerContext();
+    if (!active) {
+      resetOldPointerContext();
+      const deleteImages = this.kittyGraphicsManager.deleteAll();
+      if (deleteImages !== '') this.options.stdout.write(deleteImages);
+    }
     this.altScreenActive = active;
     this.altScreenMouseTracking = active && mouseTracking;
     // Entering has no old alt-screen drag to notify, but the main-screen
@@ -1342,6 +1372,13 @@ export default class Ink {
     if (this.drainTimer !== null) {
       clearTimeout(this.drainTimer);
       this.drainTimer = null;
+    }
+    // Delete Kitty placements before terminal mode cleanup. This write uses
+    // the renderer's own ordered stream, matching the rest of this shutdown
+    // path and leaving unmount's synchronous cleanup safely idempotent.
+    const deleteImages = this.kittyGraphicsManager.deleteAll();
+    if (deleteImages !== '' && this.options.stdout.isTTY) {
+      this.options.stdout.write(deleteImages);
     }
     this.app?.detachForShutdown();
     // Shutdown bypasses the normal unmount path, so release the process and
@@ -1618,6 +1655,46 @@ export default class Ink {
     }
   };
 
+  /** Probe Kitty graphics only after a real image reaches a fullscreen frame. */
+  private maybeProbeKittyGraphics(
+    placements: readonly TerminalImagePlacement[],
+  ): void {
+    if (
+      placements.length === 0 ||
+      this.kittyGraphicsProbeStarted ||
+      !this.altScreenActive ||
+      !this.options.stdout.isTTY ||
+      process.env.TMUX !== undefined ||
+      process.env.STY !== undefined ||
+      isEnvTruthy(process.env.CLAUDE_CODE_ACCESSIBILITY) ||
+      isEnvTruthy(process.env.DSH_TUI_DISABLE_TERMINAL_IMAGES)
+    ) {
+      return;
+    }
+    const querier = this.app?.querier;
+    if (querier === undefined) return;
+    this.kittyGraphicsProbeStarted = true;
+    const queryId = 31;
+    void Promise.all([
+      querier.send(kittyGraphics(queryId)),
+      querier.flush(),
+    ])
+      .then(([reply]) => {
+        if (reply === undefined || !reply.status.startsWith('OK')) return;
+        this.kittyGraphicsSupported = true;
+        if (this.isUnmounted || this.isPaused || !this.altScreenActive) return;
+        // The preceding frame painted text fallback cells. Force one complete
+        // paint so image nodes replace those cells with blank backing before
+        // their graphics placements are uploaded.
+        dom.markTreeDirty(this.rootNode);
+        this.prevFrameContaminated = true;
+        this.scheduleRender();
+      })
+      .catch(() => {
+        /* Capability detection is best-effort; fallback remains visible. */
+      });
+  }
+
   /**
    * Re-enter alt-screen, clear, home, re-enable mouse tracking, and reset
    * frame buffers so the next render repaints from scratch. Self-heal for
@@ -1668,6 +1745,7 @@ export default class Ink {
     this.frontFrame = blank();
     this.backFrame = blank();
     this.log.reset();
+    this.kittyGraphicsManager.invalidateAll();
     // Defense-in-depth: alt-screen skips the cursor preamble anyway (CSI H
     // resets), but a stale displayCursor would be misleading if we later
     // exit to main-screen without an intervening render.
@@ -2305,6 +2383,10 @@ export default class Ink {
       // shell (issue #522).
       if (lastFrame !== '') {
         writeSync(stdoutFd, lastFrame);
+      }
+      const deleteImages = this.kittyGraphicsManager.deleteAll();
+      if (deleteImages !== '') {
+        writeSync(stdoutFd, deleteImages);
       }
       if (this.altScreenActive) {
         // <AlternateScreen>'s unmount effect won't run during signal-exit.

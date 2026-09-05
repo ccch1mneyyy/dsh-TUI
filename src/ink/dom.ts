@@ -29,6 +29,7 @@ export type ElementNames =
   | 'ink-virtual-text'
   | 'ink-link'
   | 'ink-progress'
+  | 'ink-image'
   | 'ink-raw-ansi'
 
 /**
@@ -139,7 +140,7 @@ export type DOMNode<T = { nodeName: NodeNames }> = T extends {
 /**
  * Attribute values storable on an ink DOM element.
  */
-export type DOMNodeAttribute = boolean | string | number
+export type DOMNodeAttribute = boolean | string | number | Uint8Array | undefined
 
 /**
  * Create an element node of the given kind, allocating its yoga layout node

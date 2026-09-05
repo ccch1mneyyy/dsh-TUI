@@ -7,7 +7,7 @@ import { readActivityFrames } from '../activityPrefs.js'
 import { envThemeOverride } from '../components/design-system/ThemeProvider.js'
 import { hasPath } from '../dsh-adapter/settingsEditor.js'
 import { planReload, type ReloadKind } from '../reload.js'
-import { AlternateScreen, Box, Text, useInput, ScrollBox, type ScrollBoxHandle, useTheme, useTerminalSize } from '../ui.js'
+import { AlternateScreen, Box, Image, Text, useInput, ScrollBox, type ScrollBoxHandle, useTheme, useTerminalSize } from '../ui.js'
 import * as tuiKit from '../ui.js'
 import { usePageInset } from '../components/PageMargin.js'
 import { POINTER } from '../cc/figures.js'
@@ -27,7 +27,7 @@ import { readModelRecents, recordModelUse, type ModelRecentsRef } from '../model
 import { sessionCwdMatches, type Channel, type ChatRow, type EffortOption, type PermissionPresetSnapshot, type PresetOption, type SkillInfo } from '../dsh-adapter/channel.js'
 import type { QuestionStore } from '../dsh-adapter/questions.js'
 import { TuiDialogStore } from '../dsh-adapter/dialogs.js'
-import { TuiStatusStore } from '../dsh-adapter/status.js'
+import { TuiStatusStore, type TuiStatusViewUi } from '../dsh-adapter/status.js'
 import type { TuiShortcutHost } from '../dsh-adapter/shortcuts.js'
 import type { TuiThemeHost } from '../dsh-adapter/themes.js'
 import type { TuiRewindMode } from '../dsh-adapter/extension-events.js'
@@ -63,6 +63,7 @@ import { WorkingSpinner, useThinkingStatus } from '../components/WorkingSpinner.
 import { ActivityLine, contextPressurePct } from '../components/ActivityLine.js'
 import { ModelPicker } from '../components/ModelPicker.js'
 import { PluginSceneBoundary } from '../components/PluginSceneBoundary.js'
+import { PluginStatusViewBoundary } from '../components/PluginStatusViewBoundary.js'
 import { SkillsPicker, SkillsPickerLoading } from '../components/SkillsPicker.js'
 import { SessionBrowser } from './SessionBrowser.js'
 import { SessionTree } from './SessionTree.js'
@@ -118,6 +119,42 @@ import {
   wrapIndex,
   type WorkspaceFlowInput,
 } from './chatOverlay.js'
+
+/** Strip the focus/global-input surface even from untyped plugins. Local
+ * click, hover, and captured drag stay inside the view and are kept. */
+function StatusViewBox({
+  ref: _ref,
+  tabIndex: _tabIndex,
+  autoFocus: _autoFocus,
+  onContextMenu: _onContextMenu,
+  onFocus: _onFocus,
+  onFocusCapture: _onFocusCapture,
+  onBlur: _onBlur,
+  onBlurCapture: _onBlurCapture,
+  onKeyDown: _onKeyDown,
+  onKeyDownCapture: _onKeyDownCapture,
+  onWheel: _onWheel,
+  ...props
+}: React.ComponentProps<typeof Box>): React.ReactNode {
+  return <Box {...props} />
+}
+
+/** Text refs would expose the host DOM node; status text is presentation. */
+function StatusViewText({
+  ref: _ref,
+  ...props
+}: React.ComponentProps<typeof Text>): React.ReactNode {
+  return <Text {...props} />
+}
+
+/** Rich status views receive pointer-only layout/text primitives, never the
+ * input, channel, raw-ANSI, or terminal-write parts of the full UI kit. */
+const STATUS_VIEW_UI = Object.freeze({
+  Box: StatusViewBox,
+  Image,
+  Text: StatusViewText,
+  useTerminalSize,
+}) satisfies TuiStatusViewUi
 
 /** Shared empty snapshot for hosts whose channel has no event log. */
 const NO_EVENTS: readonly SessionEvent[] = []
@@ -208,7 +245,7 @@ let fallbackApprovalStore: ApprovalStore | undefined
 /**
  * Shared inert extension stores for hosts that render Chat without the
  * dsh-tui-extensions row (headless verify scripts, bare embeds). Never
- * written, so the dialog panel and the plugin status line never mount and
+ * written, so plugin dialogs/status contributions never mount and
  * no shortcut ever matches.
  */
 let fallbackDialogStore: TuiDialogStore | undefined
@@ -243,7 +280,7 @@ export function Chat({
    * park unanswered (their `timeoutMs` is the plugin's guard).
    */
   extensionDialogs?: TuiDialogStore
-  /** Plugin status-line contributions (tuiStatus service's store). */
+  /** Plugin text and bounded rich status contributions. */
   extensionStatus?: TuiStatusStore
   /** Host-only keyboard shortcut dispatch path. */
   extensionShortcuts?: TuiShortcutHost
@@ -317,12 +354,20 @@ export function Chat({
     listener => dialogs.subscribe(listener),
     () => dialogs.getSnapshot(),
   )
-  // Plugin status-line contributions (tuiStatus seam): keyed texts joined
-  // into one line above the prompt.
+  // Plugin status contributions: text keys join into one line; bounded rich
+  // views keep their own rows immediately above the prompt.
   const statusContributions = extensionStatus ?? (fallbackStatusStore ??= new TuiStatusStore())
+  const subscribeStatus = React.useCallback(
+    (listener: () => void) => statusContributions.subscribe(listener),
+    [statusContributions],
+  )
   const statusEntries = React.useSyncExternalStore(
-    listener => statusContributions.subscribe(listener),
+    subscribeStatus,
     () => statusContributions.getSnapshot(),
+  )
+  const statusViews = React.useSyncExternalStore(
+    subscribeStatus,
+    () => statusContributions.getViewSnapshot(),
   )
   // Shortcut handler failures surface as toasts (the registry also logs
   // them); the hook is re-pointed on every mount so a stale closure never
@@ -3592,6 +3637,27 @@ export function Chat({
             {statusEntries.map(entry => entry.text).join(' · ')}
           </Text>
         )}
+        {statusViews.map(view => (
+          <PluginStatusViewBoundary
+            key={`${view.key}:${view.registrationId}`}
+            viewKey={view.key}
+            onError={(key, error) => statusContributions.reportViewError(key, error)}
+          >
+            <Box
+              flexDirection="column"
+              flexShrink={0}
+              maxHeight={view.maxRows}
+              overflow="hidden"
+            >
+              <Box flexDirection="column" flexShrink={0}>
+                {React.createElement(view.component, {
+                  React,
+                  ui: STATUS_VIEW_UI,
+                })}
+              </Box>
+            </Box>
+          </PluginStatusViewBoundary>
+        ))}
         {/* 输入簇：可替换输入行链 + 状态行 + 瞬态浮层。浮层锚点收窄到本簇
             顶边（= 输入行顶边），picker 紧贴输入框向上展开，盖住其上
             todo/spinner/转录尾部行（用户接受的取舍），自身零布局高度、
