@@ -92,6 +92,8 @@ DeepSeek Harness 拥有，TUI 只消费它们。
   被禁用的 host 行、insert/override 语义都很关键。
 - `cordis.yml`：直接 Cordis/DSH 启动的完整裸组合示例。
 - `scripts/`：无头回归、复现环境、探针与诊断。运行前先读脚本头部说明。
+- `.github/scripts/pr-intake/`：PR 入口门禁（语言、关单文案、白名单、issue-link）。
+  workflow 只编排；`pr-gate.yml` 必须 checkout 默认分支，不能跑 PR 头。
 - `lib/`：由 `src/` 生成、忽略入库并随 npm 分发的 JavaScript、声明与声明映射。
   `./invariant` 也直接使用 `lib/types/dsh-adapter/invariant.js` 的编译结果。
 - `README.md` 与 `README_EN.md`：中英文用户文档。行为、配置、快捷键与限制
@@ -338,7 +340,7 @@ TypeScript 源的脚本在头部声明 `node --import tsx/esm <script>` 形式�
 | 渲染器/布局行为 | `src/ink/` 或 Yoga 源、编译产物、CI 回归、聚焦滚动/resize/PTY 探针 |
 | 技能发现或呈现 | DSH adapter、slash 命令合并、`/skills` 与相关回归；项目维护技能放 `.agents/skills/` 且不得加入 npm 包 |
 | 用户可见的文档化行为 | 中英文 README，外加适用的配置注释/帮助文本 |
-| 贡献入口或 PR 门禁 | `docs/contributing.md`、`docs/contributing.en.md`、`.github/workflows/pr-gate.yml`、`.github/APPROVED_CONTRIBUTORS` |
+| 贡献入口或 PR 门禁 | `docs/contributing.md`、`docs/contributing.en.md`、`.github/workflows/pr-gate.yml`、`.github/scripts/pr-intake/`、`.github/APPROVED_CONTRIBUTORS` |
 | 包版本或依赖 | `package.json`、`pnpm-lock.yaml`、适用时的生成/发布产物；不要顺手搅动旧 npm 锁文件 |
 | 上游验证线 bump | `src/dsh-adapter/contract.ts`、`package.json` peer+dev 两组范围、随包内置的 `dsh-auth/package.json` 与 `dsh-auth/pnpm-lock.yaml`、`pnpm-workspace.yaml`、`.github/workflows/ci.yml` alpha-compat 的上游 SHA、`scripts/verify-{alpha-source,patch-surface,web-coexistence,upstream-contract}` 内的版本常量、`patch-surface.snapshot.json`、`ADAPTER.md`、`docs/user-guide.md`；步骤见 [ADAPTER.md](../ADAPTER.md) 升级流程 |
 

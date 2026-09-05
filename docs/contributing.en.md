@@ -123,6 +123,9 @@ boundaries and helpers over introducing parallel abstractions.
 - `cordis.yml`: full bare-composition example for direct Cordis/DSH startup.
 - `scripts/`: headless regressions, reproduction harnesses, probes, and
   diagnostics. Read each script's header before running it.
+- `.github/scripts/pr-intake/`: PR intake gate (locale, close copy, allowlist,
+  issue-link). Workflows only orchestrate; `pr-gate.yml` must check out the
+  default branch and must not run the PR head.
 - `lib/`: ignored JavaScript, declarations, and declaration maps generated from
   `src/` and shipped to npm. `./invariant` uses the compiled
   `lib/types/dsh-adapter/invariant.js` entry as well.
@@ -442,7 +445,7 @@ the required credentials.
 | Renderer/layout behavior | `src/ink/` or Yoga source, compiled output, CI regressions, focused scroll/resize/PTY probe |
 | Skill discovery or presentation | DSH adapter, slash-command merge, `/skills`, and focused regressions; maintainer-only skills live in `.agents/skills/` and must stay out of npm |
 | User-facing documented behavior | Chinese and English READMEs, plus config comments/help text where applicable |
-| Contribution intake or PR gate | `docs/contributing.md`, `docs/contributing.en.md`, `.github/workflows/pr-gate.yml`, `.github/APPROVED_CONTRIBUTORS` |
+| Contribution intake or PR gate | `docs/contributing.md`, `docs/contributing.en.md`, `.github/workflows/pr-gate.yml`, `.github/scripts/pr-intake/`, `.github/APPROVED_CONTRIBUTORS` |
 | Package version or dependency | `package.json`, `pnpm-lock.yaml`, generated/published artifacts as applicable; do not churn the legacy npm lock incidentally |
 | Upstream validated-line bump | `src/dsh-adapter/contract.ts`, both peer and dev ranges in `package.json`, bundled `dsh-auth/package.json` and `dsh-auth/pnpm-lock.yaml`, `pnpm-workspace.yaml`, the upstream SHA in the `alpha-compat` job of `.github/workflows/ci.yml`, the version constants in `scripts/verify-{alpha-source,patch-surface,web-coexistence,upstream-contract}`, `patch-surface.snapshot.json`, `ADAPTER.md`, `docs/user-guide.md`; steps in the upgrade section of [ADAPTER.md](../ADAPTER.md) |
 

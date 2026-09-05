@@ -80,56 +80,17 @@ jobs:
       pull-requests: read
       issues: read
     steps:
+      - uses: actions/checkout@v7
       - uses: actions/github-script@v9
         with:
           script: |
-            // push 事件没有 PR 可查，直接放行——门禁的对象是 PR。
-            if (context.eventName !== 'pull_request') {
-              core.notice('非 pull_request 事件，跳过关联 issue 检查')
-              return
-            }
-            const pr = context.payload.pull_request
-            const CUTOFF = '2026-08-25T00:00:00Z'
-            if (new Date(pr.created_at) < new Date(CUTOFF)) {
-              core.notice(`PR 建于 ${pr.created_at}，早于门禁生效时间 ${CUTOFF}，按旧规则放行`)
-              return
-            }
-            if (pr.user.type === 'Bot' || pr.user.login.endsWith('[bot]')) {
-              core.notice(`作者 ${pr.user.login} 是机器人，跳过`)
-              return
-            }
-            if ((pr.labels ?? []).some(l => l.name === 'no-issue-needed')) {
-              core.notice('带 no-issue-needed 标签，维护者已豁免')
-              return
-            }
-            // 查询失败时不放行（fail-closed）：github-script 默认让抛出的
-            // 异常判定 step 失败，这里不 catch，与 ci-gate 的同一姿态。
-            const { repository } = await github.graphql(
-              `query($owner:String!, $repo:String!, $number:Int!) {
-                repository(owner:$owner, name:$repo) {
-                  pullRequest(number:$number) {
-                    closingIssuesReferences(first: 20) { nodes { number } }
-                  }
-                }
-              }`,
-              { owner: context.repo.owner, repo: context.repo.repo, number: pr.number },
-            )
-            const linked = repository.pullRequest.closingIssuesReferences.nodes.map(n => n.number)
-            if (linked.length === 0) {
-              const text = `${pr.title || ''}\n${pr.body || ''}`
-                .replace(/<!--[\s\S]*?-->/g, ' ')
-                .replace(/```[\s\S]*?```/g, ' ')
-                .replace(/`[^`]+`/g, ' ')
-                .replace(/https?:\/\/\S+/g, ' ')
-              const cjk = (text.match(/\p{Script=Han}/gu) || []).length
-              const latin = (text.match(/[A-Za-z]/g) || []).length
-              const zh = cjk > 0 && (latin === 0 || cjk / (cjk + latin) >= 0.2 || cjk >= 12)
-              core.setFailed(zh
-                ? '代码 PR 必须关联 issue。在描述里写一行 `Closes #<issue 号>`（或用侧边栏 Development 关联）。还没有 issue：bug 用 bug 表单开一个；功能建议先发 Discussions Ideas，等维护者认可后再开跟踪 issue（见 docs/contributing.md）。'
-                : 'A code PR must link an issue. Add `Closes #<issue>` in the description (or link it in the Development sidebar). No issue yet: file a bug through the bug form; feature ideas go to Discussions Ideas and wait for a maintainer tracking issue (see docs/contributing.en.md).')
-              return
-            }
-            core.notice(`已关联 issue：${linked.map(n => `#${n}`).join(' ')}`)
+            const { pathToFileURL } = await import('node:url')
+            const { join } = await import('node:path')
+            const { runIssueLink } = await import(pathToFileURL(join(
+              process.env.GITHUB_WORKSPACE,
+              '.github/scripts/pr-intake/issue-link.mjs',
+            )).href)
+            await runIssueLink({ github, context, core })
 
   build:
     needs: changes

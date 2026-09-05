@@ -1,7 +1,8 @@
 # PR 白名单门禁——docs/contributing.md「如何贡献」的 CI 落地。
-# 模型抄 Herdr 的 pr-gate：默认分支上的名单 + 协作者权限，未列入者关 PR。
-# 用 pull_request_target 才能关别人仓库推过来的 PR；只经 API 读默认分支上的
-# 名单，不 checkout PR 头，避免在可信上下文里跑 fork 代码。
+# 逻辑在 .github/scripts/pr-intake/，本文件只编排。
+#
+# pull_request_target 才能关别人仓库推过来的 PR。必须 checkout 默认分支，
+# 禁止 checkout PR 头，避免在可信上下文里跑 fork 代码。
 #
 # 不追溯：只监听 opened / reopened。门禁合入前已经开着的 PR 不会收到 opened，
 # 因而不会被关掉。维护者 reopen 视为一次性放行；其他人 reopen 再关一次。
@@ -24,251 +25,20 @@ jobs:
       issues: write
       pull-requests: write
     steps:
+      - name: Checkout default branch only
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+
       - name: Check pull request intake policy
         uses: actions/github-script@v9
         with:
           script: |
-            const GITHUB_ACTIONS_BOT_ID = 41898282
-            const CI_ONLY_PR_AUTHOR_IDS = new Set([
-              49699333, // dependabot[bot]
-              41898282, // github-actions[bot]
-            ])
-            const COMMENT_MARKER = '<!-- dsh-tui-pr-gate -->'
-
-            const pullNumber = context.payload.pull_request.number
-            const defaultBranch = context.payload.repository.default_branch
-
-            const { data: pr } = await github.rest.pulls.get({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              pull_number: pullNumber,
-            })
-            const prAuthor = pr.user.login
-            const docsUrl = `https://github.com/${context.repo.owner}/${context.repo.repo}/blob/${defaultBranch}/docs`
-            const listUrl = `https://github.com/${context.repo.owner}/${context.repo.repo}/blob/${defaultBranch}/.github/APPROVED_CONTRIBUTORS`
-
-            // 标题+正文里汉字占「汉字+字母」≥ 20%，或汉字 ≥ 12，回中文。
-            // 先剥模板注释、代码块、URL，避免 API 名把拉丁字母撑高。
-            function detectReplyLocale(title, body) {
-              const text = `${title || ''}\n${body || ''}`
-                .replace(/<!--[\s\S]*?-->/g, ' ')
-                .replace(/```[\s\S]*?```/g, ' ')
-                .replace(/`[^`]+`/g, ' ')
-                .replace(/https?:\/\/\S+/g, ' ')
-              const cjk = (text.match(/\p{Script=Han}/gu) || []).length
-              const latin = (text.match(/[A-Za-z]/g) || []).length
-              if (cjk === 0) return 'en'
-              if (latin === 0) return 'zh'
-              return (cjk / (cjk + latin) >= 0.2 || cjk >= 12) ? 'zh' : 'en'
-            }
-
-            async function linkedIssueNumbers() {
-              const { repository } = await github.graphql(
-                `query($owner:String!, $repo:String!, $number:Int!) {
-                  repository(owner:$owner, name:$repo) {
-                    pullRequest(number:$number) {
-                      closingIssuesReferences(first: 20) { nodes { number } }
-                    }
-                  }
-                }`,
-                { owner: context.repo.owner, repo: context.repo.repo, number: pullNumber },
-              )
-              return repository.pullRequest.closingIssuesReferences.nodes.map(node => node.number)
-            }
-
-            function closeMessage(locale, reason) {
-              const zh = {
-                not_approved: [
-                  `Hi @${prAuthor}，感谢你愿意贡献。`,
-                  '',
-                  `dsh-TUI 不接受未列入 [\`.github/APPROVED_CONTRIBUTORS\`](${listUrl}) 的实现 PR。`,
-                  '作者不在白名单里，所以这个 PR 会被关闭。',
-                  '',
-                  '可复现的 bug 请走 bug issue 表单。报告不预留实现，也不授权开 PR。',
-                  '功能建议请发 GitHub Discussions。不要为已经写好的实现再开一个 issue 当通行证。',
-                  '',
-                  '维护者如果明确要这份实现，可以 reopen；其他人 reopen 会被再次关闭。',
-                  '不要开 issue 或 Discussion 申请加入白名单。',
-                  '',
-                  `政策见 ${docsUrl}/contributing.md`,
-                ],
-                not_approved_issue: [
-                  `Hi @${prAuthor}，感谢你愿意贡献。`,
-                  '',
-                  `dsh-TUI 不接受未列入 [\`.github/APPROVED_CONTRIBUTORS\`](${listUrl}) 的实现 PR。`,
-                  '关联了 issue 也不授权开 PR，所以这个 PR 会被关闭。',
-                  '',
-                  '可复现的 bug 请走 bug issue 表单，等维护者或名单里的人修。',
-                  '功能建议请发 GitHub Discussions。',
-                  '',
-                  '维护者如果明确要这份实现，可以 reopen；其他人 reopen 会被再次关闭。',
-                  '不要开 issue 或 Discussion 申请加入白名单。',
-                  '',
-                  `政策见 ${docsUrl}/contributing.md`,
-                ],
-              }
-              const en = {
-                not_approved: [
-                  `Hi @${prAuthor}, thanks for your interest in contributing.`,
-                  '',
-                  'dsh-TUI does not accept unsolicited implementation pull requests from people who are not listed in `.github/APPROVED_CONTRIBUTORS`.',
-                  'The author is not on that list, so this pull request is being closed.',
-                  '',
-                  'Report a reproducible bug through the bug issue template. A report does not reserve the work or authorize a pull request.',
-                  'Feature requests belong in GitHub Discussions. Do not open an issue merely to justify an implementation that was already written.',
-                  '',
-                  'If a maintainer explicitly wants this implementation, they can reopen the pull request. Reopening by anyone else will be closed again automatically.',
-                  'Do not open an issue or discussion asking to be added to the list.',
-                  '',
-                  `See ${docsUrl}/contributing.en.md`,
-                ],
-                not_approved_issue: [
-                  `Hi @${prAuthor}, thanks for your interest in contributing.`,
-                  '',
-                  'dsh-TUI does not accept unsolicited implementation pull requests from people who are not listed in `.github/APPROVED_CONTRIBUTORS`.',
-                  'Linking an issue does not authorize a pull request, so this one is being closed.',
-                  '',
-                  'Report a reproducible bug through the bug issue template and leave the fix to a maintainer or an approved contributor.',
-                  'Feature requests belong in GitHub Discussions.',
-                  '',
-                  'If a maintainer explicitly wants this implementation, they can reopen the pull request. Reopening by anyone else will be closed again automatically.',
-                  'Do not open an issue or discussion asking to be added to the list.',
-                  '',
-                  `See ${docsUrl}/contributing.en.md`,
-                ],
-              }
-              return (locale === 'zh' ? zh : en)[reason].join('\n')
-            }
-
-            async function getPermission(username) {
-              try {
-                const { data } = await github.rest.repos.getCollaboratorPermissionLevel({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  username,
-                })
-                return data.permission
-              } catch (error) {
-                // 404: 不是协作者。401/403/限流/5xx 必须抛出——吞掉会把
-                // write 协作者当成路人，reopen 例外也会失效。
-                if (error.status === 404) return null
-                throw error
-              }
-            }
-
-            async function getTextFile(path) {
-              try {
-                const { data } = await github.rest.repos.getContent({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  path,
-                  ref: defaultBranch,
-                })
-                if (!('content' in data) || typeof data.content !== 'string') {
-                  throw new Error(`Expected file content for ${path}`)
-                }
-                return Buffer.from(data.content, 'base64').toString('utf8')
-              } catch (error) {
-                if (error.status === 404) return ''
-                throw error
-              }
-            }
-
-            function parseUserList(content) {
-              return new Set(content
-                .split('\n')
-                .map(line => line.trim().toLowerCase())
-                .filter(line => line && !line.startsWith('#')))
-            }
-
-            async function hasWriteAccess(username) {
-              if (!username) return false
-              return ['admin', 'maintain', 'write'].includes(await getPermission(username))
-            }
-
-            async function hasVerifiedRecovery() {
-              const events = await github.paginate(github.rest.issues.listEventsForTimeline, {
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: pullNumber,
-                per_page: 100,
-              })
-              const latestStateEvent = events.findLast(event =>
-                ['closed', 'reopened'].includes(event.event))
-              return latestStateEvent?.event === 'reopened'
-                && await hasWriteAccess(latestStateEvent.actor?.login)
-            }
-
-            async function upsertGateComment(message) {
-              const comments = await github.paginate(github.rest.issues.listComments, {
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: pullNumber,
-                per_page: 100,
-              })
-              const existing = comments.find(comment =>
-                comment.user?.id === GITHUB_ACTIONS_BOT_ID
-                && comment.body?.includes(COMMENT_MARKER))
-              const body = `${COMMENT_MARKER}\n${message}`
-              if (existing?.body === body) return
-              if (existing) {
-                await github.rest.issues.updateComment({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  comment_id: existing.id,
-                  body,
-                })
-                return
-              }
-              await github.rest.issues.createComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: pullNumber,
-                body,
-              })
-            }
-
-            async function closePullRequest(reason) {
-              if (await hasVerifiedRecovery()) {
-                core.info(`PR #${pullNumber} was recovered by a write collaborator; leaving it open`)
-                return
-              }
-              const locale = detectReplyLocale(pr.title, pr.body)
-              core.info(`Closing PR #${pullNumber} reason=${reason} locale=${locale}`)
-              await upsertGateComment(closeMessage(locale, reason))
-              if (await hasVerifiedRecovery()) {
-                core.info(`PR #${pullNumber} was recovered while the gate was running; leaving it open`)
-                return
-              }
-              await github.rest.pulls.update({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                pull_number: pullNumber,
-                state: 'closed',
-              })
-            }
-
-            if (pr.state === 'closed') return
-
-            if (CI_ONLY_PR_AUTHOR_IDS.has(pr.user.id)
-              || pr.user.type === 'Bot'
-              || prAuthor.endsWith('[bot]')) {
-              core.info(`Leaving CI-only bot PR open: ${prAuthor}`)
-              return
-            }
-
-            if (await hasWriteAccess(prAuthor)) {
-              core.info(`${prAuthor} has write/admin/maintain`)
-              return
-            }
-
-            const approvedContributors = parseUserList(
-              await getTextFile('.github/APPROVED_CONTRIBUTORS'),
-            )
-            if (approvedContributors.has(prAuthor.toLowerCase())) {
-              core.info(`${prAuthor} is in the approved contributors list`)
-              return
-            }
-
-            const linked = await linkedIssueNumbers()
-            await closePullRequest(linked.length > 0 ? 'not_approved_issue' : 'not_approved')
+            const { pathToFileURL } = await import('node:url')
+            const { join } = await import('node:path')
+            const { runPrGate } = await import(pathToFileURL(join(
+              process.env.GITHUB_WORKSPACE,
+              '.github/scripts/pr-intake/gate.mjs',
+            )).href)
+            await runPrGate({ github, context, core })
