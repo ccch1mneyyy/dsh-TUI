@@ -575,7 +575,7 @@ function fileHasMethodCallNamedWithUndefinedArg(relative: string, method: string
 // sites below are the ones the gate promises.
 const EXTRA_CAPABILITY_GUARDS: ReadonlyArray<{ capability: string; file: string }> = Object.freeze([
   { capability: 'host.grants.evaluate', file: 'adapter/standard/grants.ts' },
-  { capability: 'host.commands.invoke', file: 'dsh-adapter/channel.ts' },
+  { capability: 'host.commands.invoke', file: 'dsh-adapter/channel/external-commands.ts' },
   { capability: 'host.presentation.ask', file: 'dsh-adapter/questions.ts' },
   { capability: 'host.presentation.approve', file: 'dsh-adapter/approvals.ts' },
 ])
@@ -588,15 +588,15 @@ assert.ok(ADAPTER_CAPABILITY_EFFECT_CLASSES['host.commands.invoke'] === 'mutate'
 assert.ok(ADAPTER_CAPABILITY_EFFECT_CLASSES['host.presentation.ask'] === 'mutate')
 assert.ok(ADAPTER_CAPABILITY_EFFECT_CLASSES['host.presentation.approve'] === 'mutate')
 
-// The grant evaluation path in channel.ts is a host-internal use of the grant
-// store, not an adapter capability guard. It is still a machine-checkable
-// invocation claim, so keep it in the explicit heuristic section below rather
-// than adding it to the AST guard list above.
+// The grant evaluation path is hosted by external-commands.ts, not an adapter
+// capability guard. It is still a machine-checkable invocation claim, so keep
+// it in the explicit heuristic section below rather than adding it to the AST
+// guard list above.
 const HEURISTIC_INTEGRATION_CLAIMS: ReadonlyArray<{ file: string; description: string; needle: string }> = Object.freeze([
   {
-    file: 'dsh-adapter/channel.ts',
-    description: 'channel wraps grant evaluation through currentGrantStore().allows',
-    needle: 'currentGrantStore().allows(',
+    file: 'dsh-adapter/channel/external-commands.ts',
+    description: 'external command invoker receives grant evaluation through allows',
+    needle: 'deps.allows(',
   },
   {
     file: 'adapter/upstream/host-descriptor-driver.ts',

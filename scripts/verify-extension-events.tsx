@@ -696,12 +696,14 @@ await sleep(800)
   channel.compact()
   await settle(() => parked) // the compact decision is parked on the gate
   const switched = await channel.newSession()
-  check('compact stale-drop setup: /new succeeded mid-await', switched === true)
+  check('compact phase cancellation: /new succeeded mid-decision', switched === true)
+  check('compact phase cancellation: switch immediately toasts cancellation before decision release',
+    notified('压缩进行中，已取消并切换会话'))
   release(undefined)
-  const staleToasted = await settled(() => notified('压缩已取消'))
-  check('compact stale-drop: the old session’s compaction never ran',
+  // The actively settled transaction exits silently after its cancellation;
+  // ext-compact-stale remains covered by live, non-cancelled stale paths.
+  check('compact phase cancellation: the old session’s compaction never ran',
     captured.compactCalls.length === 1, JSON.stringify(captured.compactCalls))
-  check('compact stale-drop: stale notice toasted', staleToasted)
   dispose()
 }
 

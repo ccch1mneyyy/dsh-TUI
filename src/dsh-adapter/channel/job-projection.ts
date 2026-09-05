@@ -112,10 +112,12 @@ export function createJobProjection(
         store.replace(snapshot)
       } catch { /* optional service is disposing */ }
     }
-    const disposers = [
-      typeof jobs.onJobsChanged === 'function' ? jobs.onJobsChanged(refresh) : undefined,
-      typeof jobs.onJobDone === 'function' ? jobs.onJobDone(refresh) : undefined,
-    ]
+    // Publish the attachment identity before subscription: registries are
+    // allowed to synchronously deliver their current snapshot from on*().
+    // Every registration below is transactional because a second on*() can
+    // throw after the first one successfully subscribed.
+    const disposers: Array<(() => void) | undefined> = []
+    let releaseOwner: (() => void) | undefined
     detach = (): void => {
       if (detached) return
       detached = true
@@ -125,14 +127,27 @@ export function createJobProjection(
         attachmentCurrent = () => false
       }
       if (jobsRuntime === jobs) jobsRuntime = undefined
-      for (const dispose of disposers) dispose?.()
+      for (const dispose of disposers.splice(0)) dispose?.()
+      // A service-context detach happens before channel teardown on remount;
+      // release its Channel owner entry now rather than retaining one cleanup
+      // per remount until the entire channel exits.
+      const release = releaseOwner
+      releaseOwner = undefined
+      release?.()
     }
     detachActive = detach
     attachmentToken = token
     attachmentCurrent = current
-    deps.owner.own(detach)
-    ownService?.(detach)
-    refresh()
+    try {
+      if (typeof jobs.onJobsChanged === 'function') disposers.push(jobs.onJobsChanged(refresh))
+      if (typeof jobs.onJobDone === 'function') disposers.push(jobs.onJobDone(refresh))
+      releaseOwner = deps.owner.own(detach)
+      ownService?.(detach)
+      refresh()
+    } catch (error) {
+      detach()
+      throw error
+    }
   }
 
   const dropRows = (): void => { jobRowsByJobId.clear() }

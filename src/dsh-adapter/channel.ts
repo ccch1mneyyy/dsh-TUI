@@ -17,13 +17,16 @@ import { createModeActions } from './channel/mode-actions.js'
 import { markChannelReadDirty } from '../adapter/channel/read-view.js'
 import { createAgentViewProjection } from './channel/agent-view-projection.js'
 import { createJobProjection } from './channel/job-projection.js'
+import { createExternalCommandInvoker } from './channel/external-commands.js'
+import { createLoadedContextRefresher } from './channel/loaded-context.js'
+import { createSkillCatalog } from './channel/skill-catalog.js'
 import { createBackgroundCurrentAction } from './channel/background-action.js'
 import { createSubagentProjection } from './channel/subagent-projection.js'
 import { createChannelNotifications } from './channel/notifications.js'
 import type { Context } from '@deepseek-ai/cordis'
-import { assembleContextFor, installModelSelection, type Agent, type AgentHandle, type CreateAgentOptions, type ModelSelectionRef } from '@deepseek-ai/dsh-agent'
-import { loadBaselineInstructions } from '@deepseek-ai/dsh-agent-instructions'
-import type { CommandExecution, CommandRuntime } from '@deepseek-ai/dsh-commands'
+import { installModelSelection, type Agent, type AgentHandle, type CreateAgentOptions, type ModelSelectionRef } from '@deepseek-ai/dsh-agent'
+import type { CommandRuntime } from '@deepseek-ai/dsh-commands'
+import { isUserInvocable } from '@deepseek-ai/dsh-skill'
 import type { LlmModelInfo } from '@deepseek-ai/dsh-llm'
 import {
   createUserMessage,
@@ -32,8 +35,6 @@ import {
   type Message
 } from '@deepseek-ai/dsh-llm'
 import { SessionId, type SessionEvent } from '@deepseek-ai/dsh-session'
-import { isModelInvocable, isUserInvocable, renderSkillContent, type SkillSummary } from '@deepseek-ai/dsh-skill'
-import { renderContextSections, renderPrompt } from '@deepseek-ai/dsh-system-prompt'
 import { randomUUID } from 'node:crypto'
 import { featureOn } from 'dsh-working-activity/config'
 import type { TrackerConfig } from 'dsh-working-activity/status'
@@ -78,11 +79,8 @@ import { createChannelOwner, registerChannelOwner } from './channel/owner.js'
 import { ARGS_PREVIEW_LIMIT, foldBack, harnessToolResultView, LOCAL_OUTPUT_LIMIT, prepareReplayEvents, preview, RESULT_PREVIEW_LIMIT, toolErrorText } from './channel/transcript.js'
 import type { ActivityStatus, AgentViewRow, Channel, ChannelGoal, ChannelImageBlock, ChannelState, ChatRow, CredentialStatus, EffortOption, JobControl, LoadedContextEntry, LoadedContextFile, LoadedContextSkill, LoadedContextTool, MentionFs, NotificationItem, PendingMessage, PresetOption, ResumeResult, SideQuestionLlm, StagedImageInput, SubagentControl, SubagentRow, TodoPanelItem, ToolCallView, ToolResultView, ToolsRegistryLike } from './channel/types.js'
 import { estimateTokens, isTokenDelta, tokenDeltaChars, usageOutputTokens } from './channel/usage.js'
-import { commandOwner } from './command-attribution.js'
-import { hasCommandErrorCode, mapCommandError } from './command-errors.js'
 import { getHostCommandTrees } from './command-trees.js'
 import { appendSessionTitle, defaultMaxScanned, deleteSessionLog, readSessionEventsFromFile, readSessionEventsFromLog, sessionsRoots } from './compat/index.js'
-import { installedMeetsVersion } from './contract.js'
 import { installDecisionGuard, markDecisionDispatchTopology } from './decision-guard.js'
 import type {
   TuiRewindMode
@@ -121,12 +119,6 @@ import { getHostThemes, type TuiThemeRuntime } from './themes.js'
 import { attachSessionToWorkspace } from './workspace.js'
 import { createLocalWorkspaceRuntime, getHostWorkspaceRuntime, type TuiWorkspaceTarget } from './workspaces.js'
 export type { SubagentState } from './subagents.js'
-
-/**
- * Delay before re-reading a skill catalog that reported an incomplete
- * observation (a provider whose directory watcher is still warming).
- */
-const SKILL_COMMAND_RETRY_MS = 800
 
 import { isSubagentToolName, parseJobOutputId, toolCommandOf, BACKGROUND_START_ACK, todoPanelItems } from './channel/projection-helpers.js'
 /** Buffer below the context window at which CC warns (autoCompact.ts). */
@@ -281,6 +273,7 @@ export function createChannel(
   const backgroundHandles = new Map<string, AgentHandle>()
   let backgroundCurrentAction: () => Promise<import('./channel/types.js').BackgroundResult> = async () => ({ ok: false })
   let agentView!: ReturnType<typeof createAgentViewProjection>
+  let unsubscribeScenes: (() => void) | undefined
 
   // D-7 backstop: the extensions row installs the decision-subscription
   // gate, but the channel IS the dispatch path — a stale patch without that
@@ -503,204 +496,19 @@ export function createChannel(
   // Model selection is installed by bindAgent; route/effort state is owned by model-actions.
   const selection: ModelSelectionRef = { current: undefined, assembled: undefined }
   // Model/effort/preset actions are composed after state construction.
-  /** One composer image accompanying a registry-command line: structural
-   *  mirror of rc.8's `EncodedImageAttachment` (`@deepseek-ai/dsh-attachment/
-   *  types`). Kept local so older installs never resolve rc.8-only types. */
-  type RegistryCommandImageMediaType = 'image/png' | 'image/jpeg' | 'image/webp' | 'image/gif'
-  interface RegistryCommandImage {
-    mediaType: RegistryCommandImageMediaType
-    data: string
-    name?: string
-  }
-  type RegistryCommandImageBatch =
-    | { readonly kind: 'legacy' }
-    | { readonly kind: 'ready'; readonly images: readonly RegistryCommandImage[] }
-    | { readonly kind: 'error'; readonly reason: 'runtime' | 'missing' | 'limits'; readonly tokens: readonly string[] }
-  /** Legacy command-service execute (rc.7 and older): (agent, line, signal). */
-  type CommandExecuteLegacy = (agent: Agent, line: string, signal: AbortSignal) => Promise<CommandExecution | undefined>
-  /** rc.8 command-service execute: composer images precede the signal. */
-  type CommandExecuteWithImages = (
-    agent: Agent,
-    line: string,
-    images: readonly RegistryCommandImage[],
-    signal: AbortSignal,
-  ) => Promise<CommandExecution | undefined>
-
-  /** Whether the installed command service takes composer images: version
-   *  gate (composer images arrived on 0.1.0-rc.8 and every later family —
-   *  0.1.1 included — keeps the 4-param shape) with a structural fallback,
-   *  so a failed manifest probe (bundlers, exotic loaders) still lands on
-   *  the 4-param rc.8 shape at runtime. */
-  const commandServiceSupportsImages = (service: CommandRuntime): boolean => {
-    if (installedMeetsVersion('@deepseek-ai/dsh-commands', '0.1.0-rc.8')) return true
-    return typeof (service.execute as { length?: number } | undefined)?.length === 'number'
-      && (service.execute as { length: number }).length >= 4
-  }
-
-  /** Run one DSH registry command (`/plan`, …) on the live agent; the text
-   *  of its result, '' when the result is textless, undefined when the
-   *  command is not registered, and the error message when it throws. */
-  const executeRegistryCommand = async (name: string, rawInput: string): Promise<string | undefined> => {
-    const invocation = binding.capture()
-    assertCapabilityShadowPolicy('host.commands.invoke', adapterRuntime.mode, adapterRuntime.slices)
-    if (!commandService) return undefined
-    const commandAgent = agent
-    const stagedSnapshot = new Map(stagedImages)
-    // Resolve the exact definition that execute() will select for this agent.
-    // Same names may exist in distinct agent scopes, so a name-only lookup can
-    // apply another scope's owner policy.
-    const definition = commandService.find(binding.agent, name)
-    const owner = commandOwner(ctx, definition)
-    // The root checkpoint covers host/direct registrations.  A built-in name
-    // is not necessarily a namespaced contribution id, so use a deterministic
-    // host scope for that case; legacy unscoped denies still conservatively
-    // revoke every valid command scope.
-    const rootScope = owner?.commandId
-      ?? (/^[a-z][a-z0-9]*(?:[.-][a-z0-9][a-z0-9-]*)+$/u.test(name)
-        ? name
-        : `dsh-tui.${name.toLowerCase().replace(/[^a-z0-9-]+/gu, '-').replace(/^-+|-+$/gu, '') || 'command'}`)
-    try {
-      const signal = new AbortController().signal
-      const line = `/${name}${rawInput}`
-      const images = await registryCommandImages(commandService, definition, line, signal)
-      if (!binding.isCurrent(invocation)) return undefined
-      // rc.8 moved the signal to the 4th parameter and added composer
-      // images; older lines (rc.7/rc.6) take (agent, line, signal).
-      const execution = images === undefined
-        ? await (commandService.execute as unknown as CommandExecuteLegacy)(invocation.agent, line, signal)
-        : await (commandService.execute as unknown as CommandExecuteWithImages)(invocation.agent, line, images.images, signal)
-      if (images !== undefined && images.dropped.length > 0) {
-        // Loud-drop policy mirrors the submit pipeline (mentions-missing):
-        // a referenced image that never reached the command must be visible.
-        notify(t('mentions-missing', { paths: images.dropped.join(' ') }), {
-          color: 'warning',
-          timeoutMs: 4000,
-        })
-      }
-      // `undefined` = not registered; a handler error surfaces as its
-      // message so the user sees why the command failed.
-      return execution === undefined ? undefined : execution.result.text ?? ''
-    } catch (error) {
-      return {
-        kind: 'error',
-        text: error instanceof Error ? error.message : String(error),
-        consumeDraft: false,
-      }
-    }
-  }
-
-  /** Encode the staged `@`-mention images the user pasted for THIS command
-   *  line into rc.8's `EncodedImageAttachment` payloads; `kind: 'legacy'`
-   *  means the installed dsh-commands line predates composer images
-   *  (rc.7/rc.6), so the caller uses the legacy 3-arg invoke. Matches the
-   *  submit pipeline's
-   *  token rule (expandMentions): a staged image attaches only when the
-   *  line references its token. The composer preflights `input.images`, but
-   *  this adapter still forwards every supplied image: rc.8 owns admission,
-   *  so non-UI callers cannot accidentally bypass the registry contract.
-   *  Preparation is atomic: limits are checked from durable metadata before
-   *  any read/base64 work, and one missing or unreadable image prevents the
-   *  handler from running with a silently truncated batch. */
-  const registryCommandImages = async (
-    service: CommandRuntime,
-    line: string,
-    imageRefs: readonly ComposerImageRef[],
-    staged: ReadonlyMap<string, ChannelImageBlock['attachment']>,
-    signal: AbortSignal,
-  ): Promise<{ images: RegistryCommandImage[]; dropped: string[] } | undefined> => {
-    if (!commandServiceSupportsImages(service)) return undefined
-    const declaresImages = (definition as { input?: { images?: boolean } } | undefined)?.input?.images === true
-    const stagedImages = inputDelivery.stagedImages()
-    if (!declaresImages || stagedImages.size === 0) return { images: [], dropped: [] }
-    const store = mentionAttachments(ctx) as
-      | { readImage?(ref: unknown, signal?: AbortSignal): Promise<{ data: Uint8Array }> }
-      | undefined
-    if (typeof store?.readImage !== 'function') return { images: [], dropped: [] }
-    const images: RegistryCommandImage[] = []
-    const dropped: string[] = []
-    for (const [token, attachment] of stagedImages) {
-      if (!line.includes(token)) continue
-      try {
-        const stored = await store.readImage(attachment, signal)
-        if (stored?.data instanceof Uint8Array && stored.data.byteLength > 0) {
-          images.push({
-            mediaType: attachment.mediaType,
-            data: Buffer.from(stored.data).toString('base64'),
-            name: attachment.name,
-          })
-        } else {
-          dropped.push(token)
-        }
-      } catch {
-        // One unreadable staged image is dropped — same loud policy as the
-        // submit pipeline's mentions-missing warning (deliverUserText).
-        dropped.push(token)
-      }
-    }
-    if (!commandServiceSupportsImages(service)) {
-      return ordered.size > 0
-        ? { kind: 'error', reason: 'runtime', tokens: [...ordered.keys()] }
-        : { kind: 'legacy' }
-    }
-    if (ordered.size === 0) return { kind: 'ready', images: [] }
-    const store = mentionAttachments(ctx) as
-      | (MentionAttachments & { readImage?(ref: unknown, signal?: AbortSignal): Promise<{ data: Uint8Array }> })
-      | undefined
-    if (typeof store?.readImage !== 'function') {
-      return { kind: 'error', reason: 'missing', tokens: [...ordered.keys()] }
-    }
-    const { imageLimits: limits } = store
-    let declaredBytes = 0
-    for (const attachment of ordered.values()) {
-      if (
-        !Number.isSafeInteger(attachment.bytes)
-        || attachment.bytes <= 0
-        || attachment.bytes > limits.maxImageBytes
-        || !limits.mediaTypes.includes(attachment.mediaType)
-      ) {
-        return { kind: 'error', reason: 'limits', tokens: [...ordered.keys()] }
-      }
-      declaredBytes += attachment.bytes
-    }
-    if (
-      ordered.size > limits.maxImagesPerMessage
-      || declaredBytes > limits.maxMessageImageBytes
-    ) {
-      return { kind: 'error', reason: 'limits', tokens: [...ordered.keys()] }
-    }
-    const loaded: Array<{
-      readonly token: string
-      readonly attachment: ChannelImageBlock['attachment']
-      readonly data: Uint8Array
-    }> = []
-    let actualBytes = 0
-    for (const [token, attachment] of ordered) {
-      try {
-        const stored = await store.readImage(attachment, signal)
-        if (!(stored?.data instanceof Uint8Array) || stored.data.byteLength <= 0) {
-          return { kind: 'error', reason: 'missing', tokens: [token] }
-        }
-        actualBytes += stored.data.byteLength
-        if (
-          stored.data.byteLength > limits.maxImageBytes
-          || actualBytes > limits.maxMessageImageBytes
-        ) {
-          return { kind: 'error', reason: 'limits', tokens: [...ordered.keys()] }
-        }
-        loaded.push({ token, attachment, data: stored.data })
-      } catch {
-        return { kind: 'error', reason: 'missing', tokens: [token] }
-      }
-    }
-    return {
-      kind: 'ready',
-      images: loaded.map(({ attachment, data }) => ({
-        mediaType: attachment.mediaType,
-        data: Buffer.from(data).toString('base64'),
-        name: attachment.name,
-      })),
-    }
-  }
+  // Registry command policy and rc.8 image encoding are an owner-scoped module.
+  const externalCommands = createExternalCommandInvoker(ctx, {
+    commandService,
+    runtime: adapterRuntime,
+    agent: () => binding.agent,
+    capture: () => binding.capture(),
+    bindingCurrent: capture => binding.isCurrent(capture as ReturnType<typeof binding.capture>),
+    allows: (subject, permission, scope) => currentGrantStore().allows(subject, permission, scope),
+    stagedImages: inputDelivery.stagedImages,
+    attachments: () => mentionAttachments(ctx) as never,
+    notify: (...args) => notify(...args),
+  })
+  const executeRegistryCommand = externalCommands.invoke
 
   // Durable mode folds/transitions are composed after state construction.
   // Model/preset completion caches are owned by model-actions.ts.
@@ -1599,428 +1407,38 @@ export function createChannel(
     attachJobs((ctx as { get?: (name: string) => unknown }).get?.('jobs') as JobsRuntime | undefined)
   }
 
-  /**
-   * Assemble the context a fresh conversation for the live agent will load,
-   * for the startup panel: the system prompt (sections + dynamic context +
-   * tools), the workspace instruction files baseline discovery would
-   * inject, and the skill catalog. Runs at boot and on every agent swap;
-   * every source degrades independently, and a total failure leaves the
-   * panel hidden instead of showing a broken snapshot. A snapshot computed
-   * for a previous agent is discarded (swaps rebind `agent` mid-flight).
-   */
-  const refreshLoadedContext = async (): Promise<void> => {
-    if (!owner.current()) return
-    const target = binding.agent
-    const sections: LoadedContextEntry[] = []
-    const contexts: LoadedContextEntry[] = []
-    const files: LoadedContextFile[] = []
-    const skills: LoadedContextSkill[] = []
-    const tools: LoadedContextTool[] = []
-    try {
-      const systemPrompt = ctx.get('systemPrompt')
-      if (systemPrompt !== undefined) {
-        const assembly = await systemPrompt.assemble(assembleContextFor(target))
-        if (!owner.current() || target !== binding.agent) return
-        // Render each section through the shared strict interpolator with
-        // this assembly's variables (renderPrompt joins; a single-section
-        // assembly renders exactly one section), keeping non-empty results.
-        for (const section of assembly.sections) {
-          const text = renderPrompt({
-            sections: [section],
-            contexts: [],
-            tools: [],
-            variables: assembly.variables,
-          })
-          if (text.length > 0) sections.push({ name: section.name, text })
-        }
-        contexts.push(...renderContextSections(assembly))
-        for (const tool of assembly.tools) {
-          tools.push({ name: tool.name, description: tool.description ?? '' })
-        }
-      }
-      const renderedInstructions = await loadBaselineInstructions({
-        cwd: state.cwd,
-        maxBytes: 1024 * 1024,
-        maxSourceBytes: 1024 * 1024,
-      }, ctx.get('fs'))
-      if (!owner.current() || target !== binding.agent) return
-      const instructionSources = renderedInstructions as (typeof renderedInstructions & {
-        represented?: readonly { displayPath: string }[]
-      })
-      const instructionPaths = new Set([
-        ...(instructionSources?.represented ?? []).map(file => file.displayPath),
-        ...(renderedInstructions?.omitted ?? []).map(file => file.displayPath),
-        ...(renderedInstructions?.truncated ?? []).map(file => file.displayPath),
-      ])
-      files.push(...[...instructionPaths].map(displayPath => ({ displayPath })))
-      // A registry entry reaches the model only through dsh-tool-skill's
-      // catalog, which is gated on that exact tool being visible to the agent.
-      const skillsRegistry = tools.some(tool => tool.name === 'skill')
-        ? skillRegistryFor(target)
-        : undefined
-      if (skillsRegistry !== undefined) {
-        const observation = await skillsRegistry.snapshot(skillViewOptions(target))
-        if (!owner.current() || target !== binding.agent) return
-        if (observation.complete) {
-          skills.push(...observation.skills.filter(isModelInvocable).map(skill => ({
-            name: skill.name,
-            description: skill.description,
-          })))
-        }
-      }
-    } catch (error) {
-      ctx.logger.warn('loaded-context snapshot failed: %o', error)
-      return
-    }
-    state.loadedContext = { sections, contexts, files, skills, tools }
-    state.emit()
-  }
-
-  /**
-   * Rebuild the merged slash-command list: built-in locals, then registry
-   * commands (plan/goal/…), then user-invocable skills from the DSH skill
-   * registry (issue #86 — filesystem-discovered skills must appear in the
-   * `/` menu and Tab completion, like /my-skill). Skill entries
-   * are completion-only: dispatch falls through to the model as plain text,
-   * where dsh-tool-skill's pre-step hook injects the skill body — the same
-   * path a hand-typed `/skill-name` takes. Registry and skill reads are
-   * scoped to the LIVE agent, so this runs on `commands/change` +
-   * `skills/change` and again whenever the live agent is swapped
-   * (rewind/resume/new/model). A failed skill read restores the last
-   * successfully merged skill set for the same agent (last-good), so a
-   * transient provider failure never makes known skills vanish.
-   */
-  let commandListSeq = 0
-  /**
-   * The last successfully merged skill entries, tagged with the agent whose
-   * scope produced them. A failed catalog read restores these instead of
-   * dropping skill entries from the menu until the next successful refresh
-   * (last-good); the agent tag refuses cross-agent restores — a different
-   * scope's skills may not exist for the live agent at all.
-   */
-  let lastGoodSkills: { agent: Agent; commands: LocalCommand[] } | undefined
-  const refreshCommandList = (): void => {
-    const target = binding.agent
-    const token = ++commandListSeq
-    const merged: LocalCommand[] = [...LOCAL_COMMANDS]
-    if (commandService) {
-      for (const descriptor of commandService.list(target)) {
-        // Hidden TUI commands (e.g. /deepseek) stay out of the public
-        // command catalog even if a plugin/skill happens to share the name.
-        if (HIDDEN_COMMAND_NAMES.has(descriptor.name)) continue
-        if (merged.some(command => command.name === descriptor.name)) continue
-        const descriptions = commandTrees?.descriptions(descriptor.name)
-        merged.push({
-          name: descriptor.name,
-          description: descriptor.description,
-          ...(descriptions === undefined ? {} : { descriptions }),
-          tag: descriptor.input?.hint,
-          external: true,
-          acceptsImages: descriptor.input?.images === true,
-          // Skills reach the registry as ordinary commands, so the menu would
-          // lose the marker HelpMenu uses to keep them out of the chrome list.
-          // This channel registered them and is the authority on which names
-          // are skills.
-          ...(skillCommands.has(descriptor.name) ? { skill: true } : {}),
-        })
-      }
-    }
-    // The permission-presets service may be mounted (service row + session
-    // projection) while its /permission COMMAND never reaches this agent's
-    // registry view — command-row composition varies between harness
-    // versions. When the service snapshot is usable, surface a TUI-side entry
-    // so picker / completion / typed switches stay reachable; the switch
-    // itself prefers the official command and falls back to the service's own
-    // write path.
-    if (!merged.some(command => command.name === 'permission')) {
-      let service: unknown
-      try {
-        service = ctx.get('permissionPresets')
-      } catch {
-        service = undefined
-      }
-      const usable = service !== undefined
-        && permissionPresetSnapshotFromService(service, target.session).availability === 'runtime'
-      if (usable) {
-        merged.push({
-          name: 'permission',
-          // English fallback text; the live label resolves through the
-          // `cmd-desc-permission` dictionary entry (localizedDescription).
-          description: 'Switch the permission preset (sandbox mode + approval policy)',
-        })
-      }
-    }
-    state.commandList = merged
-    state.emit()
-    // The skill catalog resolves asynchronously (filesystem providers scan
-    // their roots), so skills append in a continuation; a newer refresh or
-    // an agent swap supersedes this run (token/identity check, same rule as
-    // refreshLoadedContext). Locals and registry commands win name
-    // collisions — a skill named `plan` must not shadow the registry's.
-    const skillsService = serviceForAgent<{
-      snapshot(options?: { scope?: unknown; cwd?: string }): Promise<{
-        skills: readonly SkillSummary[]
-        complete: boolean
-      }>
-    }>(ctx, target, 'skills')
-    if (skillsService === undefined) return
-    /** Last-good restore shared by the failed-read and incomplete-read
-     *  paths; the caller holds the staleness check. */
-    const restoreLastGood = (): void => {
-      const fallback = lastGoodSkills?.agent === target ? lastGoodSkills.commands : []
-      const restored = fallback.filter(entry =>
-        !merged.some(command => command.name === entry.name))
-      if (restored.length === 0) return
-      state.commandList = [...merged, ...restored]
-      state.emit()
-    }
-    // snapshot() over list(): only a COMPLETE observation is authoritative
-    // — list() discards `complete`, so a provider failure or a rescan still
-    // in flight would resolve as a partial/empty catalog and wrongly clear
-    // the last-good set (dsh-skill's own consumer contract).
-    void skillsService.snapshot({
-      scope: target,
-      cwd: (target.session as { header?: { cwd?: string } }).header?.cwd ?? state.cwd,
-    }).then((observation) => {
-      if (!owner.current() || token !== commandListSeq || target !== binding.agent) return
-      if (!observation.complete) {
-        // Incomplete (provider failure/rescan mid-flight): NOT authoritative
-        // — never clear last-good or repopulate from the partial catalog.
-        // The provider's next invalidate fires skills/change for the retry.
-        ctx.logger.warn('skill command merge: incomplete catalog observation, keeping last-good skills')
-        restoreLastGood()
-        return
-      }
-      const withSkills = [...merged]
-      for (const skill of observation.skills) {
-        if (!isUserInvocable(skill)) continue
-        if (withSkills.some(command => command.name === skill.name)) continue
-        withSkills.push({ name: skill.name, description: skill.description, skill: true })
-      }
-      const added = withSkills.slice(merged.length)
-      lastGoodSkills = { agent: target, commands: added }
-      // The sync phase already assigned `merged`; a complete read that adds
-      // nothing leaves the state as-is (and authoritatively clears the
-      // last-good set above).
-      if (added.length === 0) return
-      state.commandList = withSkills
-      state.emit()
-    }).catch((error: unknown) => {
-      // A superseded read (a newer refresh or an agent swap beat it) says
-      // nothing about the live menu: stay silent instead of logging a
-      // misleading failure warning.
-      if (!owner.current() || token !== commandListSeq || target !== binding.agent) return
-      ctx.logger.warn('skill command merge failed: %o', error)
-      // Last-good: a transient provider failure (rescan error, permission
-      // hiccup) must not make known skills vanish from completion.
-      restoreLastGood()
-    })
-  }
-  // A registry mount or unmount can arrive as a command change (the harness
-  // advertises /permission through the same commands service that also backs
-  // the preset registry) — rebuild the dynamic Shift+Tab modes and re-derive
-  // the indicator whenever the menu changes.
-  ctx.on('commands/change', () => {
-    refreshCommandList()
-    rebuildSessionModes(agent)
-    refreshMode()
+  // Catalog/context services own their caches, registrations and async origin fences.
+  const skillCatalog = createSkillCatalog(ctx, {
+    owner,
+    commandService,
+    agent: () => binding.agent,
+    cwd: () => state.cwd,
+    setCommands(commands) { state.commandList = commands; state.emit() },
+    commandDescriptions: name => commandTrees?.descriptions(name),
+    deliverUserText,
   })
-  ctx.on('skills/change', refreshCommandList)
-
-  /**
-   * The view a skill-catalog read must be taken through, as ONE value.
-   *
-   * The registry is host-plane but scope-LAYERED: a provider mounted by an
-   * agent preset's standing composition files into that preset's layer, and a
-   * read taken without the scope sees only the host layer. Passing the pair
-   * together keeps a read from being taken half-scoped.
-   *
-   * @param target - the agent whose view is wanted.
-   */
-  const skillViewOptions = (target: Agent): { scope: Agent; cwd: string } => ({
-    scope: target,
-    cwd: state.cwd,
+  const skillViewOptions = skillCatalog.viewOptions
+  const skillRegistryFor = skillCatalog.registryFor
+  const refreshCommandList = skillCatalog.refreshCommands
+  const refreshSkillCommands = skillCatalog.refreshSkillCommands
+  const releaseSkillCommands = skillCatalog.release
+  const loadedContext = createLoadedContextRefresher(ctx, {
+    owner,
+    agent: () => binding.agent,
+    cwd: () => state.cwd,
+    skillRegistryFor,
+    skillViewOptions,
+    publish(context) { state.loadedContext = context; state.emit() },
   })
-
-  /** The skill registry as the given agent sees it, or undefined when a boot
-   *  mounts none. `serviceForAgent` resolves through the agent's mount and
-   *  falls back to the host context. */
-  const skillRegistryFor = (target: Agent) =>
-    serviceForAgent<{
-      snapshot(options?: { scope?: unknown; cwd?: string }): Promise<{
-        skills: readonly SkillSummary[]
-        complete: boolean
-      }>
-      get(name: string, options?: { scope?: unknown; cwd?: string; signal?: AbortSignal }): Promise<unknown>
-    }>(ctx, target, 'skills')
-
-  /**
-   * Skill commands this channel owns, by skill name. The value keeps the
-   * description the command was registered with so an edited SKILL.md
-   * re-registers instead of leaving a stale menu entry.
-   */
-  const skillCommands = new Map<string, { dispose: () => void; description: string }>()
-  /** Skill names the registry refused (name taken, or invalid) — warn once. */
-  const skillCommandsRefused = new Set<string>()
-  /** Pending re-read after an incomplete catalog observation. */
-  let skillCommandsRetry: ReturnType<typeof setTimeout> | undefined
-
-  /**
-   * Publish every user-invocable skill as a slash command (issue #86).
-   *
-   * The completion menu already lists these skills, but a menu entry is not a
-   * command: nothing dispatches it, so typing the name and pressing Enter does
-   * nothing. Registering through the host command registry is what makes them
-   * runnable, and buys three things the TUI would otherwise reimplement:
-   * `register` emits `commands/change`, so the menu merge folds the entry in
-   * on its own; Enter dispatches through the normal command path, so the
-   * invocation is logged as a paired `command/run`/`command/done` like every
-   * other command; and the handler runs host-side, so invoking a skill is
-   * DETERMINISTIC — the body is injected here, instead of sending `/name` to
-   * the model and depending on it to recognize the text and reach for its
-   * skill loader.
-   *
-   * `userInvocable` covers "human-facing command catalogs AND loaders", so
-   * discovery alone would honor half the flag.
-   */
-  const refreshSkillCommands = async (): Promise<void> => {
-    if (!owner.current()) return
-    if (commandService === undefined) return
-    const target = binding.agent
-    const registry = skillRegistryFor(target)
-    if (registry === undefined) return
-    let observation
-    try {
-      observation = await registry.snapshot(skillViewOptions(target))
-    } catch (error) {
-      ctx.logger.warn('skill commands: catalog read failed: %o', error)
-      return
-    }
-    if (!owner.current() || target !== binding.agent) return
-    // A provider still warming its watcher reports an incomplete observation;
-    // re-read once so a cold start cannot leave the menu permanently short.
-    if (!observation.complete && skillCommandsRetry === undefined) {
-      skillCommandsRetry = setTimeout(() => {
-        skillCommandsRetry = undefined
-        void refreshSkillCommands()
-      }, SKILL_COMMAND_RETRY_MS)
-    }
-    const wanted = new Map<string, string>(
-      observation.skills
-        .filter(skill => isUserInvocable(skill))
-        // A name the TUI's own command grammar cannot parse would show in the
-        // menu and then fail to dispatch when typed; ask the real parser
-        // instead of restating its pattern here.
-        .filter(skill => parseCommandName(`/${skill.name}`)?.name === skill.name)
-        // Built-in locals win a name collision, exactly as they do over
-        // plugin-registered commands in refreshCommandList.
-        .filter(skill => !isLocalCommandName(skill.name))
-        .map(skill => [skill.name, skill.description] as const),
-    )
-    for (const [name, entry] of skillCommands) {
-      if (wanted.get(name) === entry.description) continue
-      entry.dispose()
-      skillCommands.delete(name)
-    }
-    for (const [name, description] of wanted) {
-      if (skillCommands.has(name) || skillCommandsRefused.has(name)) continue
-      // Another plugin already owns this name (plan/goal/…): leave it alone.
-      if (commandService.find(target, name) !== undefined) continue
-      try {
-        const dispose = commandService.register({
-          name,
-          description,
-          // Deliberately omit `input.images`: skill gestures are text-only.
-          // Capable composers refuse image batches, and rc.8+ command
-          // executors enforce the same contract before this handler runs.
-          // The invocation line is re-submitted as a user message (kernel
-          // path) or replaced by the injected body (fallback) — recording
-          // the raw input here too would duplicate it in the session log.
-          recordInput: false,
-          handler: async ({ agent: invoker, rawInput, signal }) => {
-            // Kernel gesture path: the `skill` tool and dsh-tool-skill's
-            // pre-step boundary mount together, so a visible `skill` tool
-            // means the boundary scans this agent's user messages for the
-            // `/name` gesture and injects the rendered body host-side —
-            // the same architecture as the web client's ui-skill. Routing
-            // through it keeps the user's args in the transcript message
-            // (rawInput rides along instead of being swallowed by the
-            // command layer) and matches the kernel's own adjudication.
-            const tools = ctx.get('tools') as ToolsRegistryLike | undefined
-            if (tools?.get('skill', invoker) !== undefined) {
-              dispatchUserText(`/${name}${rawInput}`, 'followup')
-              // Silent success: the submitted message is the feedback.
-              return { kind: 'success' }
-            }
-            // Fallback for compositions without dsh-tool-skill (e.g. the
-            // minimal preset): inject the rendered body directly, in the
-            // official user-explicit invocation shape (dsh-skill's
-            // SkillInvocationSource).
-            const view = { ...skillViewOptions(invoker), signal }
-            const skill = await skillRegistryFor(invoker)?.get(name, view)
-            if (skill === undefined || !isUserInvocable(skill as SkillSummary)) {
-              return { kind: 'error', text: t('skill-unavailable', { name }) }
-            }
-            invoker.followup(createUserMessage({
-              content: [{ type: 'text', text: renderSkillContent(skill as never) }],
-              source: { kind: 'skill-invocation', name, form: 'instructions' },
-            }))
-            return { kind: 'success' }
-          },
-        })
-        skillCommands.set(name, { dispose, description })
-        ctx.get('tuiEffectLedger')?.record(
-          { operation: 'create', resource: { kind: 'command', id: name }, result: 'applied' },
-          ctx,
-        )
-      } catch (error) {
-        // C-041: a duplicate registration arrives as a plain-message Error
-        // from dsh-commands; map it onto the contract code before handling
-        // (the refusal path itself is unchanged).
-        const mapped = mapCommandError(error)
-        skillCommandsRefused.add(name)
-        ctx.logger.warn(
-          `skill commands: "${name}" not registrable%s: %o`,
-          hasCommandErrorCode(mapped, 'DUPLICATE_CONTRIBUTION_ID') ? ' (DUPLICATE_CONTRIBUTION_ID)' : '',
-          mapped,
-        )
-        ctx.get('tuiEffectLedger')?.record(
-          {
-            operation: 'create',
-            resource: { kind: 'command', id: name },
-            result: 'failed',
-            errorCode: hasCommandErrorCode(mapped, 'DUPLICATE_CONTRIBUTION_ID') ? 'DUPLICATE_CONTRIBUTION_ID' : 'COMMAND_FAILED',
-          },
-          ctx,
-        )
-      }
-    }
-  }
-  ctx.on('skills/change', () => {
-    void refreshSkillCommands()
-  })
-  /**
-   * Mirror the scene runtime's active scene into channel state, so screens
-   * swap to it through the ordinary version-bump re-render instead of a
-   * second subscription channel.
-   */
+  const refreshLoadedContext = loadedContext.refresh
   owner.own(settingsSectionsRuntime?.subscribe(() => { if (owner.current()) state.emit() }) ?? (() => undefined))
-  const unsubscribeScenes = sceneRuntime?.subscribe(() => {
+  unsubscribeScenes = sceneRuntime?.subscribe(() => {
     if (state.pluginScene === sceneRuntime.active) return
     state.pluginScene = sceneRuntime.active
     state.emit()
   })
-  /** See {@link Channel.releaseContributions}. */
-  const releaseSkillCommands = (): void => {
-    if (skillCommandsRetry !== undefined) clearTimeout(skillCommandsRetry)
-    skillCommandsRetry = undefined
-    for (const entry of skillCommands.values()) entry.dispose()
-    skillCommands.clear()
-  }
-
-  refreshCommandList()
+  skillCatalog.start()
   void refreshLoadedContext()
-  void refreshSkillCommands()
 
   /** The leaf's bash executor (dsh-bash-local in the example leaf) — the DSH
  *  execution seam for local `!` commands and the git status breadcrumb. The

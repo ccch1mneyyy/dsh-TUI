@@ -35,7 +35,9 @@ assert.match(background, /deps\.binding\.prepare/u)
 assert.match(background, /deps\.binding\.adopt/u)
 assert.match(background, /deps\.binding\.isCurrent\(adoption\)/u, 'rival switch rejects prepared handoff')
 assert.match(jobs, /attachmentCurrent/u, 'jobs callbacks are token and owner guarded')
-assert.match(jobs, /deps\.owner\.own\(detach\)/u, 'every attachment is owned by the channel')
+assert.match(jobs, /releaseOwner = deps\.owner\.own\(detach\)/u, 'every attachment is owned by the channel')
+assert.match(jobs, /for \(const dispose of disposers\.splice\(0\)\)/u, 'a partial registration rolls its first subscription back')
+assert.match(jobs, /release\?\.\(\)/u, 'a service detach releases its owner cleanup immediately')
 assert.match(jobs, /markChannelReadDirty/u, 'job projection retains read-view dirty marks')
 assert.match(subagents, /lookupChild/u, 'child discovery is a lazy optional callback')
 assert.match(subagents, /streamDirty/u)
@@ -93,6 +95,24 @@ const fakeAgent = (id = 'main') => ({
   assert.equal(state.rows.length, rowsBeforeDispose, 'retained callback after owner disposal must not alter rows')
   assert.equal(firstUnsubscribes, 1, 'replacement cleanup runs once')
   assert.equal(secondUnsubscribes, 1, 'dual owner/service cleanup remains idempotent')
+}
+
+// A synchronous eager callback followed by a throwing second registration
+// must roll back the first listener and not retain an owner cleanup.
+{
+  const owner = createChannelOwner()
+  let firstUnsubscribes = 0
+  const projection = createJobProjection(() => ({ backgroundJobs: [], rows: [], emit() {} }) as never, {
+    owner, notify() {}, rowIds: { value: 0 }, agent: () => fakeAgent() as never, steer() {},
+  })
+  const jobs = {
+    list: () => [],
+    onJobsChanged(listener: () => void) { listener(); return () => { firstUnsubscribes += 1 } },
+    onJobDone() { throw new Error('second registration failed') },
+  }
+  assert.throws(() => projection.attach(jobs as never), /second registration failed/)
+  assert.equal(firstUnsubscribes, 1, 'first eager subscription is rolled back when second registration throws')
+  assert.equal(owner.cleanupCount, 0, 'failed attachment leaves no Channel owner cleanup')
 }
 
 // A discovery seam can fail at either Context lookup or agents.get without
