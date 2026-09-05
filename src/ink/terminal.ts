@@ -93,6 +93,17 @@ export function isJetBrainsIdeTerminal(): boolean {
 }
 
 /**
+ * Detects zellij, which multiplexes the outer terminal instead of emulating
+ * it. Capability probes therefore describe the *outer* terminal — zellij even
+ * forwards KITTY_WINDOW_ID into the pane, so kitty detection matches — while
+ * zellij's own grid decides how control sequences actually apply.
+ * @returns true when the process runs inside a zellij pane.
+ */
+export function isZellij(): boolean {
+  return !!process.env.ZELLIJ
+}
+
+/**
  * Checks if the terminal supports DEC mode 2026 (synchronized output).
  * When supported, BSU/ESU sequences prevent visible flicker during redraws.
  * @returns true when the terminal supports DEC 2026.
@@ -319,10 +330,19 @@ export const SYNC_OUTPUT_SUPPORTED = isSynchronizedOutputSupported()
  * The diff engine falls back to repainting the shifted rows cell-by-cell,
  * which every terminal renders identically. Same gate as upstream Claude
  * Code, which hard-disables DECSTBM on JetBrains terminals.
+ *
+ * zellij is excluded for the same class of reason. Its `CSI T`
+ * (grid.rs rotate_scroll_region_up) shifts rows only while the cursor sits
+ * inside the scroll region, and its `CSI r` does not home the cursor outside
+ * origin mode — but the renderer parks the cursor on the last screen row,
+ * below every ScrollBox. The shift is silently dropped while the diff assumes
+ * it happened, so stale rows survive every scroll-up frame (tearing, leftover
+ * transcript lines). Only DECSTBM is withdrawn: zellij does implement DEC
+ * 2026, so BSU/ESU stay on and frames remain atomic.
  * @returns true when DECSTBM scroll optimization is safe on this terminal.
  */
 export function isDecstbmSafe(): boolean {
-  return SYNC_OUTPUT_SUPPORTED && !isJetBrainsIdeTerminal()
+  return SYNC_OUTPUT_SUPPORTED && !isJetBrainsIdeTerminal() && !isZellij()
 }
 
 /**
