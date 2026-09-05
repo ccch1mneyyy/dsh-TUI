@@ -1027,6 +1027,10 @@ const dict = {
   'provider-q-route-id': { zh: '输入路由名', en: 'Enter a route name' },
   'provider-q-route-id-detail': { zh: '小写字母开头，可含数字与连字符，如 my-gateway', en: 'Lowercase letter first, digits and dashes allowed, e.g. my-gateway' },
   'provider-route-id-invalid': { zh: '路由名不合法：须以小写字母开头，仅含小写字母 / 数字 / 连字符', en: 'Invalid route name: must start with a lowercase letter, only lowercase letters / digits / dashes' },
+  'provider-q-name': { zh: '给这个服务商起个名字（支持中文）', en: 'Name this provider (Chinese is fine)' },
+  'provider-q-name-detail': { zh: '将作为 /model 里的显示名。符合路由名规则（小写字母开头、仅含小写字母 / 数字 / 连字符，如 my-gateway）的名字直接用作路由名；其余名字自动派生一个英文路由名（仅供机器内部使用）', en: 'Shown as the provider name in /model. A name that is already a valid route id (lowercase letter first, then lowercase letters / digits / dashes, e.g. my-gateway) becomes the route id directly; other names get an auto-derived ASCII route id (internal use only)' },
+  'provider-name-required': { zh: '名字不能为空', en: 'Name cannot be empty' },
+  'provider-line-name': { zh: '显示名：{{name}}', en: 'Display name: {{name}}' },
   'provider-q-apikey': { zh: '输入 API key', en: 'Enter the API key' },
   'provider-q-apikey-detail': { zh: '密钥将写入 ~/.dsh/.credentials.yaml（权限 0600），不会出现在会话记录中', en: 'The key is stored in ~/.dsh/.credentials.yaml (mode 0600) and never shown in the transcript' },
   'provider-q-baseurl-choice': { zh: '是否覆盖默认 API 端点（baseURL）？', en: 'Override the default API endpoint (baseURL)?' },
@@ -1095,6 +1099,7 @@ const dict = {
   // /provider 编辑菜单（选中 provider 后；每项改完立即保存并退出）
   'provider-q-edit-menu': { zh: '{{route}} 要编辑哪一项？', en: 'What would you like to change for {{route}}?' },
   'provider-opt-edit-key': { zh: '编辑 API Key', en: 'Edit API Key' },
+  'provider-opt-edit-name': { zh: '编辑显示名', en: 'Edit display name' },
   'provider-opt-edit-baseurl': { zh: '编辑 Base URL', en: 'Edit Base URL' },
   'provider-opt-edit-protocol': { zh: '编辑 wire protocol', en: 'Edit wire protocol' },
   'provider-opt-edit-models': { zh: '编辑模型列表', en: 'Edit model list' },

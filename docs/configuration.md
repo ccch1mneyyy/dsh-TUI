@@ -177,9 +177,11 @@ Profile 模式不再使用旧的 `DSH_TUI_COMPACT_RATIO`、
 - **添加新 provider**：内置目录或自定义 API 端点（见下）。
 - **编辑已有 provider**：从**用户配置层**已写入的路由中选择（组合 base
   继承来的 provider 无法从用户层删除，不进入编辑/删除菜单），进入编辑菜单
-  ——内置 provider 可选 **编辑 API Key**、**编辑模型列表**、**删除该
-  provider**；自定义端点额外提供 **编辑 Base URL** 与 **编辑 wire
-  protocol**（内置路由即使 profile 显式写了 `api` 覆盖，仍按内置对待）。任一
+  ——内置 provider 可选 **编辑 API Key**、**编辑显示名**、**编辑模型列表**、
+  **删除该 provider**；自定义端点额外提供 **编辑 Base URL** 与 **编辑 wire
+  protocol**（内置路由即使 profile 显式写了 `api` 覆盖，仍按内置对待）。
+  「编辑显示名」接受任意语言（中文亦可），写入 profile 的 `displayName`
+  字段，`/model` 组名随即使用该显示名。任一
   编辑项改完只原地修补所选项那一个字段并立即退出，无需再确认——profile 其余
   字段（含 `headers`、`timeoutMs`、`retryPolicy` 等 TUI 未建模的键）完全不
   进写入，原样保留；「编辑模型列表」会自动勾选当前已启用的模型，勾选项的
@@ -193,7 +195,10 @@ Profile 模式不再使用旧的 `DSH_TUI_COMPACT_RATIO`、
 - **内置 provider**：从 `llm.listConfigurableProviders()` 列出的 catalog
   路由（openai、anthropic、deepseek 等）中选择，只需输入 API key；baseURL
   可选覆盖（代理网关场景），协议与模型目录自动继承。
-- **自定义 API 端点**：输入路由名、API key、baseURL 与协议
+- **自定义 API 端点**：输入名字（支持中文——将作为 `/model` 里的显示名；
+  符合路由名规则（小写字母开头、仅含小写字母 / 数字 / 连字符）的名字直接用作路由名，
+  其余名字自动派生一个英文路由名（ASCII slug 或哈希，仅供机器内部使用））、
+  API key、baseURL 与协议
   （`openai-completions` / `openai-responses` / `anthropic-messages`），
   向导会用草稿凭据探测端点公布的模型供勾选（探测失败则手输模型 id）。
 - **订阅账号登录（OAuth）**：仅当捆绑的 dsh-auth 插件挂载时多出该选项——从

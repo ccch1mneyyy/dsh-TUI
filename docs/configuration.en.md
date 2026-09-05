@@ -196,9 +196,13 @@ restart. The first step picks an action:
   layer** carries (providers inherited from the composition base cannot be
   removed from the user layer, so they stay out of the edit/delete menu),
   then edit through a menu. Built-in routes offer **Edit API Key**, **Edit
+  display name**, **Edit
   model list**, and **Delete this provider**; custom endpoints additionally
   get **Edit Base URL** and **Edit wire protocol** (a built-in route stays
-  built-in even when its profile carries an explicit `api` override). Any
+  built-in even when its profile carries an explicit `api` override).
+  **Edit display name** accepts any language (Chinese included), writes the
+  profile's `displayName` field, and `/model` group labels pick it up
+  immediately. Any
   edit patches only the picked field in place and exits immediately — no
   further confirmation; every other profile field (including keys the TUI
   does not model, like `headers`, `timeoutMs`, `retryPolicy`) never enters
@@ -218,7 +222,11 @@ the bundled dsh-auth plugin is mounted):
   from `llm.listConfigurableProviders()`; only the API key is required. The
   baseURL can optionally be overridden (proxy gateways); the protocol and
   model catalog are inherited.
-- **Custom API endpoint**: enter a route name, API key, baseURL, and the wire
+- **Custom API endpoint**: enter a name (Chinese is fine — it becomes the
+  display name in `/model`; a valid lowercase ASCII route id
+  (`PROVIDER_ROUTE_ID`) is used as the route directly, while all other names
+  get an auto-derived ASCII route id (slug or hash, internal use only)),
+  API key, baseURL, and the wire
   protocol (`openai-completions` / `openai-responses` / `anthropic-messages`).
   The wizard probes the endpoint with the draft credential and offers the
   advertised models for selection (manual id entry as fallback).
