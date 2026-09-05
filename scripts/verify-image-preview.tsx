@@ -27,11 +27,11 @@ import type { PromptController } from '../src/components/PromptInput.js'
 import type { InjectController } from '../src/dsh-adapter/inject-channel.js'
 import type { TuiStatusViewProps } from '../src/dsh-adapter/status.js'
 import type { TranscriptImage } from '../src/dsh-adapter/transcript-images.js'
-import { settled, sleep } from './lib/term-test.mjs'
+import { settled, sleep, viewportLines } from './lib/term-test.mjs'
 
 const { Terminal: XTerm } = xterm
 const [
-  { render, AlternateScreen, Box, Text },
+  { render, AlternateScreen, Box, Text, ThemeProvider },
   { Chat },
   { QuestionStore },
   { TuiDialogStore },
@@ -43,6 +43,7 @@ const [
   { LOCAL_COMMANDS },
   { createChannel },
   { transcriptImagesOf },
+  { PageMargin },
 ] = await Promise.all([
   import('../src/ui.js'),
   import('../src/screens/Chat.js'),
@@ -56,6 +57,7 @@ const [
   import('../src/commands.js'),
   import('../src/dsh-adapter/channel.js'),
   import('../src/dsh-adapter/transcript-images.js'),
+  import('../src/components/PageMargin.js'),
 ])
 
 const sharp = await loadSharp()
@@ -478,9 +480,13 @@ class FakeStdout extends Writable {
   columns = COLS
   rows = ROWS
   isTTY = true
+  onFrame?: () => void
   constructor(private readonly terminal: InstanceType<typeof XTerm>) { super() }
   _write(chunk: unknown, _encoding: BufferEncoding, callback: () => void): void {
-    this.terminal.write(String(chunk), callback)
+    this.terminal.write(String(chunk), () => {
+      this.onFrame?.()
+      callback()
+    })
   }
 }
 class FakeStderr extends Writable {
@@ -499,10 +505,7 @@ type Screen = {
   readonly find: (needle: string) => { row: number; col: number } | null
 }
 function screenOf(terminal: InstanceType<typeof XTerm>, rows: number): Screen {
-  const lines = (): string[] => Array.from(
-    { length: rows },
-    (_, y) => terminal.buffer.active.getLine(y)?.translateToString(true) ?? '',
-  )
+  const lines = (): string[] => viewportLines(terminal, rows)
   return {
     text: () => lines().join('\n'),
     find: needle => {
@@ -799,6 +802,43 @@ function makeChannel() {
     listSessions: () => [],
     setResumeTarget: () => {},
   }
+}
+
+// Inline frames grow into scrollback. Center the preview in the visible
+// transcript tail, not in the full (potentially much taller) layout tree.
+for (const columns of [32, 80]) {
+  const terminalRows = 18
+  const terminal = new XTerm({ cols: columns, rows: terminalRows, scrollback: 500, allowProposedApi: true })
+  const stdout = new FakeStdout(terminal)
+  stdout.columns = columns
+  stdout.rows = terminalRows
+  const stdin = new FakeStdin()
+  const imagePath = `${process.env.HOME}/inline-preview.png`
+  writeFileSync(imagePath, png)
+  const app = await render(
+    <ThemeProvider theme="dark">
+      <PageMargin>
+        <Chat channel={makeChannel() as never} questionStore={new QuestionStore()} onExit={() => {}} fullscreen={false} />
+      </PageMargin>
+    </ThemeProvider>,
+    { stdin: stdin as never, stdout: stdout as never, stderr: new FakeStderr() as never, exitOnCtrlC: false, patchConsole: false },
+  )
+  const screen = screenOf(terminal, terminalRows)
+  await settled(() => screen.text().includes('model-00'))
+  stdin.write(`\x1b[200~${imagePath}\x1b[201~`)
+  check(`inline ${columns}: the staged image remains in the visible prompt`,
+    await settled(() => screen.text().includes('[Image #1]')), screen.text())
+  stdin.write('\x1b[H')
+  const previewVisible = () => screen.text().split('\n').some(line => line.includes('╭') && line.includes('Image #1'))
+  check(`inline ${columns}: the preview opens above the prompt after content enters scrollback`,
+    await settled(() => previewVisible() && screen.text().includes('❯') && screen.text().includes('model-00'))
+      && terminal.buffer.active.baseY > 0,
+    screen.text())
+  stdin.write('\x1b')
+  check(`inline ${columns}: Esc closes the preview and retains the draft`,
+    await settled(() => !previewVisible() && screen.text().includes('[Image #1]')), screen.text())
+  await app.unmount()
+  terminal.dispose()
 }
 
 {
@@ -1144,6 +1184,31 @@ function makeChannel() {
   check('chat dialog: external injection resumes only after the dialog closes',
     await settled(() => screen.text().includes('POST-DIALOG')),
     screen.text())
+
+  const chip = screen.find('[Image #1]')!
+  stdin.write(`\x1b[<0;${chip.col + 2};${chip.row + 1}M\x1b[<0;${chip.col + 2};${chip.row + 1}m`)
+  const peekVisible = () => screen.text().split('\n').some(line => line.includes('╭') && line.includes('Image #1'))
+  check('chat dialog: clicking the draft image opens its caret preview', await settled(peekVisible), screen.text())
+  const overlappingFrames: string[] = []
+  stdout.onFrame = () => {
+    if (screen.text().includes('PEEK-SUSPEND-DIALOG') && peekVisible()) overlappingFrames.push(screen.text())
+  }
+  const peekDialog = dialogStore.ask({
+    kind: 'confirm', title: 'PEEK-SUSPEND-DIALOG', confirmLabel: 'Continue', cancelLabel: 'Cancel',
+  })
+  check('chat dialog: a blocking dialog hides the caret preview from its first visible frame',
+    await settled(() => screen.text().includes('PEEK-SUSPEND-DIALOG') && !peekVisible())
+      && overlappingFrames.length === 0,
+    overlappingFrames.join('\n') || screen.text())
+  stdout.onFrame = undefined
+  stdin.write('\x1b')
+  await peekDialog
+  check('chat dialog: closing the blocking dialog retains the image draft',
+    await settled(() => screen.text().includes('[Image #1]') && screen.text().includes('POST-DIALOG')),
+    screen.text())
+  // Leave the chip before the next scenario opens the fullscreen editor.
+  stdin.write('\x1b[F')
+  await settled(() => !peekVisible())
 
   // A dialog can also arrive independently while the fullscreen draft editor
   // is open. It must withdraw the graphics layer and restore the same editor

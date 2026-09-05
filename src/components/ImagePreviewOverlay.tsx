@@ -1,6 +1,7 @@
 import React from 'react'
 import { Box, Image, Text, useTerminalSize } from '../ui.js'
 import measureElement from '../ink/measure-element.js'
+import useApp from '../ink/hooks/use-app.js'
 import { stringWidth } from '../ink/stringWidth.js'
 import { truncateToWidth } from '../ink/truncateToWidth.js'
 import type { DOMElement } from '../ink/dom.js'
@@ -12,7 +13,7 @@ import {
 } from './messages/TranscriptImages.js'
 import { formatBytes } from '../sessions/format.js'
 import { truncateMiddle } from '../utils/truncateMiddle.js'
-import { t } from '../i18n.js'
+import { getLang, subscribeLang, t } from '../i18n.js'
 
 /** Below these viewport sizes the card is metadata-only: an image box would
  *  be too small to read and the chrome itself barely fits. */
@@ -38,13 +39,13 @@ const MIN_TITLE_NAME_COLUMNS = 8
 
 /**
  * The shared modal image preview: one centered card over a click-catcher
- * that fills its parent, used by both the composer's staged `[Image #N]`
+ * over the visible part of its parent, used by the composer's `[Image #N]`
  * tokens and the transcript thumbnails. Chat mounts it inside the
  * transcript row, so the prompt, status rows and sticky header stay visible
  * and untouched; only while the fullscreen draft editor is open does it sit
  * at the root and cover the whole screen. The card is sized from the
  * region the caller reports (the transcript viewport), refined by the
- * catcher's measured cell box on later commits; it renders on the layer's
+ * parent's visible cell box on later commits; it renders on the layer's
  * first frame.
  *
  * The card's title sits in its top border, centered: `Image #N — PNG ·
@@ -72,7 +73,7 @@ export function ImagePreviewOverlay({
    * Cell box of the region the layer fills, known to the caller before the
    * first paint (Chat passes the transcript viewport). The card renders at
    * this size on its first frame; without it the first frame falls back to
-   * the terminal size. Either way the catcher's measured box refines it on
+   * the terminal size. Either way the parent's visible box refines it on
    * the next commit.
    */
   readonly region?: { readonly columns: number; readonly rows: number }
@@ -90,19 +91,36 @@ export function ImagePreviewOverlay({
   // bottom-chrome rows (spinner, pill, panels) come and go, not only on
   // terminal resize. setState with an equal box is a no-op, so this settles.
   const terminal = useTerminalSize()
+  const { stdout } = useApp()
+  React.useSyncExternalStore(subscribeLang, getLang)
   const catcherRef = React.useRef<DOMElement | null>(null)
   const [bounds, setBounds] = React.useState<{ columns: number; rows: number }>(
     () => region ?? { columns: terminal.columns, rows: terminal.rows },
   )
   React.useLayoutEffect(() => {
     const node = catcherRef.current
-    if (!node) return
-    const { width, height } = measureElement(node)
+    const parent = node?.parentNode
+    if (!node || !parent) return
+    const { width } = measureElement(node)
+    const { height } = measureElement(parent)
     if (width <= 0 || height <= 0) return
+    // Inline layouts extend into scrollback. Anchor the layer to the
+    // parent's visible tail, using Ink's extra cursor-restore row when the
+    // root overflows. Measuring the parent keeps our own height out of the
+    // next pass's input.
+    let bottom = height
+    let rootHeight = height
+    for (let ancestor: DOMElement | undefined = parent; ancestor; ancestor = ancestor.parentNode) {
+      bottom += ancestor.yogaNode?.getComputedTop() ?? 0
+      rootHeight = ancestor.yogaNode?.getComputedHeight() ?? rootHeight
+    }
+    const terminalRows = stdout.rows ?? terminal.rows
+    const viewportTop = rootHeight > terminalRows ? rootHeight - terminalRows + 1 : 0
+    const visibleHeight = Math.max(1, Math.min(height, bottom - viewportTop))
     setBounds(previous =>
-      previous.columns === width && previous.rows === height
+      previous.columns === width && previous.rows === visibleHeight
         ? previous
-        : { columns: width, rows: height })
+        : { columns: width, rows: visibleHeight })
   })
   const columns = bounds.columns
   const rows = bounds.rows
@@ -165,7 +183,7 @@ export function ImagePreviewOverlay({
   // refined) marks its ancestors dirty, and the renderer clears a dirty
   // absolute node's whole rect before repainting it: a transparent parent
   // spanning the transcript row would wipe the conversation underneath.
-  // The catcher has no children and stable props, so it never repaints.
+  // The catcher has no children, so image decoding does not dirty it.
   // Width: the image plus chrome, never narrower than the title needs.
   const cardColumns = Math.max(1, Math.min(maxCardColumns, Math.max(
     graphicsFit ? imageWidth + CARD_CHROME_COLS : 0,
@@ -184,13 +202,13 @@ export function ImagePreviewOverlay({
     ? imageHeight + CARD_CHROME_ROWS
     : CAPTION_ONLY_ROWS) + pathRows))
   const cardLeft = Math.max(0, Math.floor((columns - cardColumns) / 2))
-  const cardTop = Math.max(0, Math.floor((rows - cardRows) / 2))
+  const cardBottom = Math.max(0, Math.ceil((rows - cardRows) / 2))
   const titleRow = borderTitleRow(fullTitle, cardColumns)
 
   // Stable click handler: a new function identity each render would count
   // as a prop change and dirty the catcher.
   const onCloseRef = React.useRef(onClose)
-  onCloseRef.current = onClose
+  React.useLayoutEffect(() => { onCloseRef.current = onClose }, [onClose])
   const closeFromCatcher = React.useCallback((event: { stopImmediatePropagation(): void }) => {
     // Click outside the card (anywhere on the catcher) closes. The card is a
     // later sibling in paint order, so its own clicks never reach here.
@@ -206,10 +224,10 @@ export function ImagePreviewOverlay({
       <Box
         ref={catcherRef}
         position="absolute"
-        top={0}
+        bottom={0}
         left={0}
         width="100%"
-        height="100%"
+        height={rows}
         flexShrink={0}
         overflow="hidden"
         backdrop="dim"
@@ -217,7 +235,7 @@ export function ImagePreviewOverlay({
       />
       <Box
         position="absolute"
-        top={cardTop}
+        bottom={cardBottom}
         left={cardLeft}
         width={cardColumns}
         height={cardRows}
