@@ -94,6 +94,14 @@ async function run() {
   scrollHandle.scrollTo(36)
   check('bottom scroll landed at maxScroll', await settled(() => frameLog.at(-1)?.scrollTop === 36 && frameLog.at(-1)?.scrollHeight === 60), JSON.stringify(frameLog.at(-1)))
 
+  // ---- wheel-down at the bottom must not break stickiness (pill-flash
+  // regression): the renderer re-pins sticky, then a wheel-down cannot move
+  // the viewport — scrollBy must keep isSticky() true synchronously so Chat's
+  // "back to bottom" pill never flickers on.
+  check('sticky re-pinned at bottom', await settled(() => scrollHandle.isSticky() === true))
+  scrollHandle.scrollBy(5)
+  check('wheel-down at bottom keeps sticky (no pill flash)', scrollHandle.isSticky() === true)
+
   // ---- shrink frame: 20 rows → content collapses to the viewport height
   // (24; the content wrapper flexGrows to at least the viewport), so
   // maxScroll = 0. scrollTo(36) landed on the exact bottom, which re-pins
