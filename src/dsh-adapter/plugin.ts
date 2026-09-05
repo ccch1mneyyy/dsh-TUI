@@ -1246,8 +1246,8 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
           path: ['whaleIdle'],
           label: 'Welcome whale idle',
           descriptions: { zh: '鲸鱼娘闲置动画（欢迎期）' },
-          hint: 'Welcome-phase idle behaviors: after the intro the whale flutters its fins, thumps its tail, and dozes off when idle; clicking pops a heart. The first agent turn freezes it to the static standard frame.',
-          hintDescriptions: { zh: '欢迎期闲置行为：开屏后鲸鱼娘摆鱼鳍、偶尔拍尾巴，空闲会睡着冒 Z；点击冒爱心。开始第一个任务后定格为静态标准帧。' },
+          hint: 'Welcome-phase idle behaviors: after the intro the whale flutters its fins, thumps its tail, and dozes off when idle; clicking wakes a dozing whale and pops a heart. The first agent turn freezes it to the static standard frame.',
+          hintDescriptions: { zh: '欢迎期闲置行为：开屏后鲸鱼娘摆鱼鳍、偶尔拍尾巴，空闲会睡着冒 Z；点击唤醒睡着的鲸鱼娘并冒爱心。开始第一个任务后定格为静态标准帧。' },
           kind: 'boolean',
         },
         {

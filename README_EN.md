@@ -50,7 +50,8 @@ the interface, and removing it leaves no core modifications behind.
   zh/en UI language switching.
 - **Pixel whale pet**: one of three randomized startup intros plays on every
   launch. During the welcome phase (before the first task), **clicking the
-  whale pops a heart pass**, it flutters its fins and thumps its tail while
+  whale pops a heart pass and wakes it from a doze**, it flutters its fins
+  and thumps its tail while
   idle (`/settings → whaleIdle` turns this off), and dozes off with Z's
   after 10s of inactivity. **The first agent task freezes it to the static
   standard frame for good** — zero ongoing cost. The 22

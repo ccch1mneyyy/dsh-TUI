@@ -8,8 +8,8 @@
  * Web-faithful layer semantics: continuous tail/fin cycling while the agent
  * works, occasional passes while idle AND while asleep (the web pet never
  * freezes mid-sleep), a sticky sleep entered after SLEEP_DELAY_MS of
- * inactivity that only work clears, and a one-way 1-2-3 heart pass that
- * never wakes the whale.
+ * inactivity that work or a click clears (the web pet's sleep is
+ * click-sticky — TUI divergence), and a one-way 1-2-3 heart pass.
  *
  * Event-driven: while resting, the ONLY pending timer is the next due layer
  * transition, and with the setting off the component holds no timer at all
@@ -157,7 +157,9 @@ export function nextWhaleIdleStep(
   now: number,
 ): WhaleIdleStep {
   // Heart plane — a click (re)arms the one-way pass from the small heart,
-  // even mid-pass; it overlays everything and never wakes the whale.
+  // even mid-pass; it overlays everything. On the TUI a click also WAKES a
+  // sleeping whale (the web pet's sleep is click-sticky — deliberate
+  // divergence: the whale should respond to the one gesture it has).
   let heartStep = prev.heartStep
   let heartHoldUntil = prev.heartHoldUntil
   if (input.heart) {
@@ -168,12 +170,14 @@ export function nextWhaleIdleStep(
     if (heartStep >= 0) heartHoldUntil = now + HEART_HOLD_MS
   }
 
-  // Sleep plane — sticky while idle: only work clears it; a click does not.
+  // Sleep plane — sticky while idle: work or a click clears it (a click
+  // wakes the whale AND plays the heart pass), and both re-arm the sleep
+  // delay so it dozes off again only after a fresh idle stretch.
   let asleep = prev.asleep
   let sleepStep = prev.sleepStep
   let sleepHoldUntil = prev.sleepHoldUntil
   let sleepAt = prev.sleepAt
-  if (input.working) {
+  if (input.working || (input.heart && asleep)) {
     if (asleep || sleepStep >= 0) {
       asleep = false
       sleepStep = -1

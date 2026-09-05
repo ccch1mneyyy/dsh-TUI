@@ -254,7 +254,7 @@ function gridRows(pose) {
   }
 }
 
-// ── 8. PARALLEL: heart over sleep does not wake the whale ─────────────────
+// ── 8. Click wakes the sleeping whale (heart plays, Z cleared) ────────────
 {
   let state = initialWhaleIdleState(0)
   let now = 0
@@ -266,10 +266,13 @@ function gridRows(pose) {
     if (state.asleep && state.sleepStep >= 1) break
   }
   const clicked = nextWhaleIdleStep(state, { working: false, heart: true }, now)
-  check('heart over sleep does not wake the whale', () => {
+  check('click wakes the sleeping whale and plays the heart', () => {
     assert.equal(clicked.pose.heart, 1)
-    assert.equal(clicked.state.asleep, true, 'still asleep underneath')
-    assert.ok(clicked.pose.sleep >= 1, 'the sleep-Z stays up under the heart')
+    assert.equal(clicked.state.asleep, false, 'sleep cleared by the click')
+    assert.equal(clicked.state.sleepStep, -1, 'the Z is gone')
+  })
+  check('waking re-arms the sleep delay for a fresh idle stretch', () => {
+    assert.equal(clicked.state.sleepAt, now + SLEEP_DELAY_MS)
   })
 }
 
