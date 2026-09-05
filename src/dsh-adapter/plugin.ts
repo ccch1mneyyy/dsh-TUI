@@ -1552,6 +1552,9 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
           if (target.authoritative !== undefined) {
             channel.notify(t('update-mirror-lag', { latest: target.latest, authoritative: target.authoritative }))
           }
+          if (target.registryLatest !== undefined) {
+            channel.notify(t('update-registry-lag', { registry: target.registryLatest, latest: target.latest }))
+          }
           updateTargetVersion = target.latest
         }
         if (isStandaloneRuntime()) {
@@ -1634,8 +1637,14 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     const suffix = update.isStandalone && update.checksumUrl === undefined
       ? ` ${t('update-standalone-no-checksum')}`
       : ''
+    // The newest version came from a source ahead of the install's registry
+    // (GitHub releases / npmjs.org vs a lagging registry): say so, because
+    // /update can only install what that registry serves.
+    const lagSuffix = update.registryLatest === undefined
+      ? ''
+      : t('update-registry-lag', { registry: update.registryLatest, latest: update.latest })
     channel.notify(
-      `${t(key, { current: update.current, latest: update.latest })}${suffix}`,
+      `${t(key, { current: update.current, latest: update.latest })}${suffix}${lagSuffix}`,
       { color: 'warning', timeoutMs: 12000 },
     )
   })
