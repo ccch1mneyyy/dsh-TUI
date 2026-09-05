@@ -155,12 +155,13 @@ prepare 白名单），不受支持，请装 registry 包。本地与 CI 使用�
 生成产物规则：
 
 - 改 `src/`，**绝不直接改 `lib/`**。
-- 代码或类型改动后运行 `pnpm build`，但不要提交 `lib/` 下的生成结果。
+- 任何源码改动后运行 `pnpm build`，但不要提交 `lib/` 下的生成结果。
 - 干净编译会先删除整个 `lib/`，源模块重命名或删除后不会留下过期输出。
 - 运行 `pnpm verify:package` 检查 `main`、`types`、`bin` 与 `exports` 的所有目标
   都进入 npm tarball，并 smoke-import 主入口和 invariant 入口。
-- 纯文档、普通注释、纯 workflow、纯 YAML 改动不需要本地重建，除非影响了
-  代码、类型或构建输入；具体检查见“验证”。
+- 纯文档、纯 workflow、纯 YAML 改动不需要重建（除非同时改了 TypeScript 输入）。
+- 仅普通注释与空行的改动可免本地重建；行为、类型、配置或构建输入改动不适用。
+  该豁免不免除下述按改动面必跑的回归；具体检查见“验证”。
 - 使用 `--ignore-scripts` 安装 Git URL 会跳过 `prepare`，因而不受支持；registry
   包已经包含编译结果，不依赖消费者执行生命周期脚本。
 
@@ -169,8 +170,8 @@ prepare 白名单），不受支持，请装 registry 包。本地与 CI 使用�
 
 ## 验证（Verification）
 
-仓库没有根级 `test` 或 `lint` 脚本；不要声称跑过它们。代码改动通过 TypeScript
-构建做静态检查，再按影响范围运行聚焦的可执行回归。
+仓库没有根级 `test` 或 `lint` 脚本；不要声称跑过它们。TypeScript 构建是通用
+静态关口，随后是聚焦的可执行回归。
 
 本地验证按实际影响选择。文档与 skill 改动检查事实、链接、触发条件和指令
 冲突；普通注释改动检查说明与实现一致，并确认代码和类型未变（可用忽略
@@ -194,7 +195,7 @@ node --import tsx/esm scripts/verify-askpanel-layout.tsx
 node --import tsx/esm scripts/repro-toolcards.tsx
 ```
 
-改动共享渲染、`Chat`、提示/问卷布局、工具卡、主题原语或 Ink core 的行为时，三个
+改动共享渲染、`Chat`、提示/问卷布局、工具卡、主题原语或 Ink core 时，三个
 CI 回归都要跑。窄改动还要跑最近的聚焦脚本：
 
 | 改动区域 | 聚焦验证 |

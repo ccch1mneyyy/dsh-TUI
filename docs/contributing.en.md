@@ -208,16 +208,19 @@ implicitly runs the root lifecycle.
 Rules for generated output:
 
 - Edit `src/`, never `lib/`, to implement behavior.
-- After code or type changes, run `pnpm build`, but do not commit generated files
+- After any source change, run `pnpm build`, but do not commit generated files
   from `lib/`.
 - Clean compilation removes the complete `lib/` first, so renamed or deleted
   source modules cannot leave stale output behind.
 - Run `pnpm verify:package` to ensure every `main`, `types`, `bin`, and `exports`
   target is present in the npm tarball and to smoke-import the main and
   invariant entries.
-- Documentation, ordinary comments, workflow-only, and YAML-only changes do not
-  require a local rebuild unless they affect code, types, or build inputs. See
-  Verification for the applicable checks.
+- Documentation-only, workflow-only, and YAML-only changes do not require a
+  rebuild unless they also alter TypeScript inputs.
+- Changes limited to ordinary comments and blank lines may skip the local rebuild;
+  behavior, type, configuration, or build-input changes are not exempt. This does
+  not waive the regressions required below for the changed area; see Verification
+  for the applicable checks.
 - Git URL installation with `--ignore-scripts` skips `prepare` and is therefore
   unsupported. Registry packages already contain compiled output and do not
   depend on lifecycle scripts running on the consumer's machine.
@@ -228,9 +231,9 @@ It is not the default build command for this standalone repository.
 
 ## Verification
 
-There is no root `test` or `lint` script. Do not claim that either ran. Code changes
-use the TypeScript build for static checks, followed by focused executable
-regressions selected for the affected behavior.
+There is no root `test` or `lint` script. Do not claim that either ran. The
+TypeScript build is the universal static gate, followed by focused executable
+regressions.
 
 Select local verification by actual impact. For documentation and skills, check
 facts, links, triggers, and conflicting instructions. For ordinary comments,
@@ -259,7 +262,7 @@ node --import tsx/esm scripts/verify-askpanel-layout.tsx
 node --import tsx/esm scripts/repro-toolcards.tsx
 ```
 
-Run all three CI regressions for behavior changes to shared rendering, `Chat`, prompt or
+Run all three CI regressions for changes to shared rendering, `Chat`, prompt or
 question layout, tool cards, theme primitives, or the Ink core. For a narrow
 change, also run the closest focused script:
 
