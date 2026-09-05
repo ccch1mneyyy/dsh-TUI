@@ -1,0 +1,44 @@
+# PR 白名单门禁——docs/contributing.md「如何贡献」的 CI 落地。
+# 逻辑在 .github/scripts/pr-intake/，本文件只编排。
+#
+# pull_request_target 才能关别人仓库推过来的 PR。必须 checkout 默认分支，
+# 禁止 checkout PR 头，避免在可信上下文里跑 fork 代码。
+#
+# 不追溯：只监听 opened / reopened。门禁合入前已经开着的 PR 不会收到 opened，
+# 因而不会被关掉。维护者 reopen 视为一次性放行；其他人 reopen 再关一次。
+name: PR Gate
+
+on:
+  pull_request_target:
+    types: [opened, reopened]
+
+concurrency:
+  group: pr-gate-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  check-contributor:
+    if: github.repository == 'ccch1mneyyy/dsh-TUI'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+    steps:
+      - name: Checkout default branch only
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+
+      - name: Check pull request intake policy
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const { pathToFileURL } = await import('node:url')
+            const { join } = await import('node:path')
+            const { runPrGate } = await import(pathToFileURL(join(
+              process.env.GITHUB_WORKSPACE,
+              '.github/scripts/pr-intake/gate.mjs',
+            )).href)
+            await runPrGate({ github, context, core })
