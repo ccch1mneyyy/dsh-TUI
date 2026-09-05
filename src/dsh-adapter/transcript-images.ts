@@ -29,8 +29,10 @@ export function transcriptImagesOf(
   resolveAttachments: () => unknown,
 ): readonly TranscriptImage[] {
   const images: TranscriptImage[] = []
-  const visit = (blocks: readonly ContentBlock[]): void => {
+  const visit = (blocks: readonly ContentBlock[] | undefined): void => {
+    if (!Array.isArray(blocks)) return
     for (const block of blocks) {
+      if (typeof block !== 'object' || block === null) continue
       if (block.type === 'tool-result') {
         visit(block.content)
         continue
@@ -57,7 +59,7 @@ export function transcriptImagesOf(
       })
     }
   }
-  visit(content ?? [])
+  visit(content)
   return images
 }
 

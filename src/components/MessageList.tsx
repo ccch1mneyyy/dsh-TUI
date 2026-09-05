@@ -1,5 +1,5 @@
 import React, { useState } from 'react'
-import { t } from '../i18n.js'
+import { getLang, subscribeLang, t, type Lang } from '../i18n.js'
 import { Box, Text, useTerminalSize, type ScrollBoxHandle } from '../ui.js'
 import type { ClickEvent } from '../ink/events/click-event.js'
 import type { ChatRow, ToolRow, ToolCallView, ToolResultView, SubagentRow, JobRow } from '../dsh-adapter/channel.js'
@@ -322,6 +322,7 @@ export function MessageList({
   /** 点击工具卡内的文件路径（打开文件操作菜单）。 */
   onOpenFile?: (path: string) => void
 }) {
+  const lang = React.useSyncExternalStore(subscribeLang, getLang)
   const hiddenCount = rows.length - MAX_RENDERED_ROWS
   // The thinking filter runs BEFORE virtualization so window indices line up.
   //
@@ -605,7 +606,7 @@ export function MessageList({
 
   // Cached rail/header preview per user row (see the timeline block for why
   // the length guard exists alongside the id key).
-  const previewCacheRef = React.useRef(new Map<number, { len: number; imageCount: number; preview: string }>())
+  const previewCacheRef = React.useRef(new Map<number, { len: number; imageCount: number; lang: Lang; preview: string }>())
 
   const heightOf = (row: ChatRow): number =>
     heightsRef.current.get(row.id) ?? DEFAULT_ROW_HEIGHT
@@ -888,9 +889,9 @@ export function MessageList({
     // (heightsVersion — bumped at every heightsRef mutation), the visible
     // window's content (visGen — bumped when the visibleRows cache
     // rebuilds), the measured header base, or the rows array growing. Key
-    // on those; previews stay in their own id-keyed cache.
+    // on those and the language used by image-only previews.
     const memo = timelineMemoRef.current
-    const memoKey = `${visGenRef.current}:${heightsVersionRef.current}:${base}:${rows.length}:${columns}`
+    const memoKey = `${visGenRef.current}:${heightsVersionRef.current}:${base}:${rows.length}:${columns}:${lang}`
     if (memo === null || memo.key !== memoKey) {
       const previewCache = previewCacheRef.current
       if (previewCache.size > 2000) previewCache.clear()
@@ -915,10 +916,11 @@ export function MessageList({
         if (row.kind !== 'user') continue
         let cached = previewCache.get(row.id)
         const imageCount = row.images?.length ?? 0
-        if (cached === undefined || cached.len !== row.text.length || cached.imageCount !== imageCount) {
+        if (cached === undefined || cached.len !== row.text.length || cached.imageCount !== imageCount || cached.lang !== lang) {
           cached = {
             len: row.text.length,
             imageCount,
+            lang,
             preview: row.text === '' && imageCount > 0
               ? t('transcript-image-message', { count: imageCount })
               : clipPreview(row.text),
