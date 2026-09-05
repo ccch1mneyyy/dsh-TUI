@@ -35,6 +35,7 @@ const { installDecisionGuard, markDecisionDispatchTopology, unmarkDecisionDispat
 const pluginHostRow = await import('../src/dsh-adapter/plugin-host.js')
 const { buildHostDescriptor, buildHostDescriptorFromLifecycles, HOST_SUPPORTED_CONTRACTS, readOwnPackageVersion } = await import('../src/adapter/standard/descriptor.js')
 const { lifecycleFromDetection, verifyAndPromote } = await import('../src/adapter/kernel/lifecycle.js')
+const { KernelRuntime } = await import('../src/adapter/kernel/kernel-runtime.js')
 const { TUI_DECISION_EVENT_NAMES } = await import('../src/adapter/standard/tui-extension.js')
 const { loadSpecData, digestFile, verifyRegistry, verifyContractProfiles } = await import('../src/adapter/standard/registry.js')
 const { createContractIndex, validateHost } = await import('../src/adapter/standard/validate.js')
@@ -521,6 +522,93 @@ check1('decision permission map is immutable',
       decisionError !== undefined && decisionError.message.includes('REQUIRED_PROTOCOL_UNAVAILABLE')
       && decisionError.message.includes('tui.dsh/v1alpha1#DecisionEvents'),
       decisionError?.message ?? 'no error')
+
+    // mountAdmitted must surface Cordis' stored apply/admission error instead
+    // of converting it to a generic readiness timeout.
+    let helperAdmissionError: Error | undefined
+    try {
+      await mountAdmitted(
+        admissionCtx,
+        'helper-required-command-plugin',
+        testManifest({
+          id: 'helper-required-command-plugin',
+          requires: [COMMAND_COORDINATE],
+        }),
+      )
+    } catch (error) {
+      helperAdmissionError = error instanceof Error ? error : new Error(String(error))
+    }
+    check1('mountAdmitted propagates the actual Cordis admission error',
+      helperAdmissionError?.message.includes('REQUIRED_PROTOCOL_UNAVAILABLE') === true
+      && helperAdmissionError.message.includes('commands.dsh/v1alpha1#Command'),
+      helperAdmissionError?.message ?? 'no error')
+  }
+
+  // A stale completed refresh can retain the topology that existed before a
+  // channel marks DecisionEvents. Admission must use build(), which performs
+  // the same synchronous detection as hostDescriptor(), before reading that
+  // refresh snapshot. The controlled Kernel seam below makes the old direct
+  // descriptorBuild() bypass deterministically return the pre-marker build;
+  // it is not timing- or retry-based.
+  {
+    const topologyCtx = new Context()
+    topologyCtx.logger.warn = () => undefined
+    topologyCtx.plugin({ name: pluginHostRow.name, apply: pluginHostRow.apply })
+    await sleep(50)
+    const topologyHost = topologyCtx.get('tuiPluginHost')
+    const staleBuild = topologyHost?.describe()
+    check1('stale-topology fixture starts without DecisionEvents',
+      staleBuild !== undefined && !staleBuild.descriptor.contracts.some(contract => contract.kind === 'DecisionEvents'),
+      JSON.stringify(staleBuild?.descriptor.contracts.map(contract => contract.kind)))
+    const releaseTopology = markDecisionDispatchTopology(topologyCtx)
+    const freshBuild = topologyHost?.describe()
+    check1('stale-topology fixture synchronously detects DecisionEvents after marker registration',
+      freshBuild !== undefined && freshBuild.descriptor.contracts.some(contract => contract.kind === 'DecisionEvents'),
+      JSON.stringify(freshBuild?.descriptor.contracts.map(contract => contract.kind)))
+    const originalDetect = KernelRuntime.prototype.detect
+    const originalDescriptorBuild = KernelRuntime.prototype.descriptorBuild
+    let synchronousTopologyDetection = false
+    let descriptorBuildDepth = 0
+    const isTopologyKernel = (runtime: InstanceType<typeof KernelRuntime>): boolean => {
+      const context = (runtime as unknown as { context?: { get?(name: string): unknown } }).context
+      return context?.get?.('tuiPluginHost') === topologyHost
+    }
+    KernelRuntime.prototype.detect = function (): ReturnType<typeof originalDetect> {
+      if (isTopologyKernel(this) && descriptorBuildDepth === 0) synchronousTopologyDetection = true
+      return originalDetect.call(this)
+    }
+    KernelRuntime.prototype.descriptorBuild = function (): ReturnType<typeof originalDescriptorBuild> {
+      if (!isTopologyKernel(this) || staleBuild === undefined || freshBuild === undefined) return originalDescriptorBuild.call(this)
+      descriptorBuildDepth += 1
+      try {
+        originalDescriptorBuild.call(this)
+        return synchronousTopologyDetection ? freshBuild : staleBuild
+      } finally {
+        descriptorBuildDepth -= 1
+      }
+    }
+    let topologyAdmissionError: Error | undefined
+    let topologyAdmitted: Awaited<ReturnType<typeof mountAdmitted>> | undefined
+    try {
+      topologyAdmitted = await mountAdmitted(
+        topologyCtx,
+        'stale-topology-decision-plugin',
+        testManifest({
+          id: 'stale-topology-decision-plugin',
+          requires: [DECISION_COORDINATE],
+        }),
+      )
+    } catch (error) {
+      topologyAdmissionError = error instanceof Error ? error : new Error(String(error))
+    } finally {
+      KernelRuntime.prototype.detect = originalDetect
+      KernelRuntime.prototype.descriptorBuild = originalDescriptorBuild
+      releaseTopology()
+    }
+    check1('admission synchronously rebuilds stale DecisionEvents topology',
+      topologyAdmitted !== undefined && topologyAdmissionError === undefined,
+      topologyAdmissionError?.message ?? 'admission did not complete')
+    await Promise.resolve(topologyAdmitted?.fiber.dispose())
   }
 
   // A lazy descriptor must also follow services that appear or disappear

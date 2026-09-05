@@ -441,13 +441,15 @@ export class TuiPluginHostRuntime extends Service implements TuiPluginHost {
           request.scope,
         ),
       }))
-    // Admission and public publication use the same descriptor used by the
-    // active runtime path. In new/non-legacy modes that is the live-only
-    // Kernel descriptor; in the default legacy mode it is the explicit
-    // legacy-compatibility mounted-service descriptor, so existing plugins
-    // required against Command/LocalStorage/MessageObserver are not rejected
-    // simply because the default mode does not start the new Kernel.
-    const decision = negotiate(index, manifest, this.hostDescriptor(), grants)
+    // Admission must rebuild through the same synchronous topology path as
+    // public descriptor publication. In particular, `build()` runs Kernel
+    // detection before reading its descriptor, so a DecisionEvents dispatch
+    // marker mounted between an async refresh and this activation is visible.
+    // New-mode remains fail-closed: without completed live evidence,
+    // `build()` returns the empty non-legacy descriptor rather than a legacy
+    // compatibility claim.
+    const admissionHost = this.build().descriptor
+    const decision = negotiate(index, manifest, admissionHost, grants)
     if (decision.decision !== 'compatible' && decision.decision !== 'compatible_degraded') {
       const missing = 'missingRequired' in decision && decision.missingRequired !== undefined
         ? ` (${decision.missingRequired.join(', ')})`

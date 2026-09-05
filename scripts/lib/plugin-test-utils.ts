@@ -52,7 +52,7 @@ export async function mountAdmitted(
   admissionOptions: { activationId?: string } = {},
 ): Promise<{ context: Context; fiber: { dispose(): unknown } }> {
   let context: Context | undefined
-  let fiber: { dispose(): unknown } | undefined
+  let fiber: { dispose(): unknown; await(): Promise<unknown> } | undefined
   fiber = root.plugin({
     name,
     apply: (candidate: Context) => {
@@ -65,14 +65,23 @@ export async function mountAdmitted(
       admission.admit(candidate, manifestSource, { source, ...admissionOptions })
       context = candidate
     },
-  }) as unknown as { dispose(): unknown }
-  // Activation is asynchronous; a fixed 30 ms sleep races compilation/CI
-  // load. Wait for the same readiness condition with a finite failure bound.
-  const deadline = Date.now() + 2000
-  while (context === undefined && Date.now() < deadline) await sleep(10)
-  if (context === undefined || fiber === undefined) {
-    await Promise.resolve(fiber?.dispose())
-    throw new Error(`Component activation ${name} did not admit`)
+  }) as unknown as { dispose(): unknown; await(): Promise<unknown> }
+  // Cordis retains an apply/admission exception on its Fiber and exposes it
+  // through await(). Propagate that original error instead of timing out and
+  // hiding its admission reason behind a generic readiness failure.
+  try {
+    await fiber.await()
+  } catch (error) {
+    try {
+      await Promise.resolve(fiber.dispose())
+    } catch {
+      // Preserve the startup/admission error as the actionable failure.
+    }
+    throw error
+  }
+  if (context === undefined) {
+    await Promise.resolve(fiber.dispose())
+    throw new Error(`Component activation ${name} completed without an admission context`)
   }
   return { context, fiber }
 }
