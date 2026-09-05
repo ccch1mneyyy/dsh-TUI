@@ -825,14 +825,15 @@ export function Chat({
   // A questionnaire/approval/plugin dialog owns the keyboard while pending
   // (their guard runs BEFORE the overlay key chain), so a preview left open
   // underneath would be visually on top yet key-dead. Close it instead.
+  const previewBlocked = questionSnapshot !== null || approvalSnapshot !== null || dialogSnapshot !== null
   React.useEffect(() => {
     if (
       overlay.kind === 'image-preview' &&
-      (questionSnapshot !== null || approvalSnapshot !== null || dialogSnapshot !== null)
+      previewBlocked
     ) {
       dispatchOverlay({ type: 'close-if', kind: 'image-preview' })
     }
-  }, [overlay.kind, questionSnapshot, approvalSnapshot, dialogSnapshot])
+  }, [overlay.kind, previewBlocked])
   // Caret-driven preview (Grok Build's chip peek): while the composer caret
   // sits on a staged `[Image #N]` — at its start, the token inverted — the
   // same card shows over the transcript, and it goes away when the caret
@@ -860,7 +861,7 @@ export function Chat({
     setPeekSuppressed(current => reason === 'click' || current !== key ? null : current)
   }, [])
   const peekPreview =
-    overlay.kind === 'none' && caretPreview !== null
+    !previewBlocked && overlay.kind === 'none' && caretPreview !== null
       && peekSuppressed !== peekKey(caretPreview.image, caretPreview.title)
       ? caretPreview
       : null
@@ -872,7 +873,7 @@ export function Chat({
   }
   /** The card on screen, if any: the modal overlay first, else the peek. */
   const activePreview: { image: TranscriptImage; title?: string; peek: boolean } | null =
-    overlay.kind === 'image-preview'
+    !previewBlocked && overlay.kind === 'image-preview'
       ? { image: overlay.image, ...(overlay.title === undefined ? {} : { title: overlay.title }), peek: false }
       : peekPreview !== null
         ? { ...peekPreview, peek: true }
