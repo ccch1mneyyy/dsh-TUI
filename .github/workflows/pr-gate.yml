@@ -53,8 +53,11 @@ jobs:
                   username,
                 })
                 return data.permission
-              } catch {
-                return null
+              } catch (error) {
+                // 404: 不是协作者。401/403/限流/5xx 必须抛出——吞掉会把
+                // write 协作者当成路人，reopen 例外也会失效。
+                if (error.status === 404) return null
+                throw error
               }
             }
 
