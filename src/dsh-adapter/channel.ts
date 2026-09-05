@@ -3,11 +3,13 @@ import { createInputDelivery } from './channel/input-delivery.js'
 import { createChannelBinding } from './channel/binding.js'
 import { createChannelProjection } from './channel/projection.js'
 import { createManualCompaction } from './channel/compaction.js'
-import { resetSessionProjection } from './channel/session-reset.js'
 import { createSessionAdoption } from './channel/session-adoption.js'
 import { createRewindPromptAction } from './channel/session-actions.js'
 import { createForkSessionAction } from './channel/session-fork.js'
 import { createRewindToAction } from './channel/session-rewind.js'
+import { createLiveAgentAdoption } from './channel/session-live-adoption.js'
+import { createSessionResumeActions } from './channel/session-resume.js'
+import { createTreeRewindAction } from './channel/session-tree-actions.js'
 import { markChannelReadDirty } from '../adapter/channel/read-view.js'
 import { createChannelNotifications } from './channel/notifications.js'
 import type { Context } from '@deepseek-ai/cordis'
@@ -21,13 +23,13 @@ import {
   type ContentBlock,
   type Message
 } from '@deepseek-ai/dsh-llm'
-import { SessionId, type SessionEvent, type SessionHeader } from '@deepseek-ai/dsh-session'
+import { SessionId, type SessionEvent } from '@deepseek-ai/dsh-session'
 import { isModelInvocable, isUserInvocable, renderSkillContent, type SkillSummary } from '@deepseek-ai/dsh-skill'
 import { renderContextSections, renderPrompt } from '@deepseek-ai/dsh-system-prompt'
+import { randomUUID } from 'node:crypto'
 import { featureOn } from 'dsh-working-activity/config'
 import type { TrackerConfig } from 'dsh-working-activity/status'
 import { ActivityTracker } from 'dsh-working-activity/status'
-import { randomUUID } from 'node:crypto'
 import { existsSync, statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { readActivityConfig, writeActivityFrames } from '../activityPrefs.js'
@@ -45,7 +47,7 @@ import { isPeakHour } from '../deepseekPricing.js'
 import { readEffortPref, writeEffortPref } from '../effortPrefs.js'
 import { getLang, LANGS, t, tOr, type Lang } from '../i18n.js'
 import { readModelPref, writeModelPref } from '../modelPrefs.js'
-import { explicitModelRoute, recordedModelRoute, resolveModelRoute, validateModelRoute } from '../modelRoute.js'
+import { resolveModelRoute, validateModelRoute } from '../modelRoute.js'
 import { migratePresetPref, readPresetPref, writePresetPref } from '../presetPrefs.js'
 import { clearResumeTarget, forgetAgentViewSession, forgetSession, readAgentViewSessions, readResumeTarget, touchAgentViewSession, touchSession, writeResumeTarget } from '../sessionHistory.js'
 import { modeDisplayName, resolveSessionModes, type SessionModeSpec } from '../sessionModes.js'
@@ -58,7 +60,6 @@ import { isPathLikeQuery, rankFileCandidates, type FileCandidate } from '../util
 import { homeDir, LEGACY_DATA_DIR } from '../utils/paths.js'
 import {
   AGENT_VIEW_STATUS_ORDER,
-  agentViewHasTurns,
   agentViewLivePreview,
   agentViewStatusOf,
   foldAgentViewEvents,
@@ -82,7 +83,7 @@ import { estimateTokens, isTokenDelta, tokenDeltaChars, usageOutputTokens } from
 import { commandOwner } from './command-attribution.js'
 import { hasCommandErrorCode, mapCommandError } from './command-errors.js'
 import { getHostCommandTrees } from './command-trees.js'
-import { appendSessionTitle, defaultMaxScanned, deleteSessionLog, ensureLegacySessionEventTypes, readSessionEventsFromFile, readSessionEventsFromLog, sessionsRoots } from './compat/index.js'
+import { appendSessionTitle, defaultMaxScanned, deleteSessionLog, readSessionEventsFromFile, readSessionEventsFromLog, sessionsRoots } from './compat/index.js'
 import { installedMeetsVersion } from './contract.js'
 import { installDecisionGuard, markDecisionDispatchTopology } from './decision-guard.js'
 import type {
@@ -95,7 +96,7 @@ import { getHostMessageObserver, type TuiMessageObserverRuntime } from './messag
 import { getHostFacade } from './plugin-host.js'
 import { pluginsInfoLines } from './plugins-info.js'
 import { resolveCompatiblePreset, rosterOf, type AgentPresetInfo } from './preset-resolution.js'
-import { composePreset, resolvePersistedPreset, resolvePersistedRoute, runningPresetOf, serviceForAgent } from './presets.js'
+import { composePreset, runningPresetOf, serviceForAgent } from './presets.js'
 import { collectRecentActivity, parseRecapResponse, RECAP_RECENT_CHARS, wrapRecapPrompt } from './recap.js'
 import { getHostRenderers, type TuiRendererRuntime } from './renderers.js'
 import { cleanRenderText } from './sanitize.js'
@@ -112,10 +113,7 @@ import {
 } from './sessions/index.js'
 import {
   buildSessionTree,
-  forkTarget,
   liveTailWindow,
-  rewindTarget,
-  turnUserText,
   type FamilySession,
   type SessionTreeData,
 } from './sessionTree.js'
@@ -139,26 +137,6 @@ const CONTEXT_WARNING_BUFFER_TOKENS = 20_000
 
 /** How many trailing exchanges the browser's preview pane asks for. */
 const PREVIEW_ENTRIES = 8
-
-/** Resolve once a `turn/end` event newer than `fromSeq` lands in the session
- *  log (Agent.cancel closes the turn asynchronously), or when the timeout
- *  expires. Polling the session log is race-free here: fork reads the same
- *  append-only log. */
-async function waitForTurnEnd(
-  session: unknown,
-  fromSeq: number,
-  timeoutMs: number,
-): Promise<boolean> {
-  const deadline = Date.now() + timeoutMs
-  while (Date.now() < deadline) {
-    const last = snapshotLiveSessionEvents(session).at(-1)
-    if (last !== undefined && last.type === 'turn/end' && last.seq >= fromSeq) {
-      return true
-    }
-    await new Promise(resolve => setTimeout(resolve, 200))
-  }
-  return false
-}
 
 /**
  * Read the persistence backend's full session list (empty without one) —
@@ -1727,231 +1705,12 @@ export function createChannel(
   let compactManualSession: () => void = () => undefined
   let forkSessionAction: () => Promise<boolean> = async () => false
   let rewindToAction: (row: ChatRow, mode?: string | null) => Promise<string | null> = async () => null
+  let rewindToNodeAction: (sessionId: string, seq: number, mode?: 'rewind' | 'fork') => Promise<string | null> = async () => null
+  let resumeToAction: (sessionId: string) => Promise<ResumeResult> = async () => ({ ok: false, reason: 'unavailable' })
+  let newSessionAction: () => Promise<boolean> = async () => false
+  let resumeInto: (sessionId: string, kind: 'resume' | 'agent-view', keepCurrent: boolean) => Promise<ResumeResult> = async () => ({ ok: false, reason: 'unavailable' })
+  let adoptLiveAgent: (target: Agent) => Promise<ResumeResult> = async () => ({ ok: false, reason: 'unavailable' })
 
-  /**
-   * Adopt a live agent in this process — the agent view's attach path for a
-   * background session. The target is already composed (preset, route,
-   * tools), so no persistence resolution runs; the projection resets and
-   * replays the target's in-memory log. The previously attached agent is
-   * NOT disposed when it still has something to run or say: it keeps living
-   * as a background session (backgroundHandles), and an empty one is freed.
-   */
-  const adoptLiveAgent = async (target: Agent): Promise<ResumeResult> => {
-    // Agent-view adoption is already live, so it skips preparation but still
-    // crosses the same synchronous binding authority point before resetting
-    // any session projection.
-    return binding.switchTo(target, backgroundHandles.get(String(target.id)), (committed, disposePrevious) => {
-    const previousHandle = committed.handle
-    const previousSessionId = String(committed.agent.session.id)
-    backgroundHandles.delete(String(target.id))
-    // Same common reset as a persisted adoption. Live-agent adoption keeps
-    // its explicit cwd/route/background ownership differences below.
-    resetSessionProjection(state, rowIds, () => projector.reset(), resetSubagentProjection, resetJobProjection)
-    state.status = target.status
-    state.agentId = target.id
-    state.cwd = target.session.header.cwd ?? state.cwd
-    state.displayCwd = workspaceService.describe(state.cwd).description ?? state.cwd
-    refreshGitBranch()
-    state.agentPreset = runningPresetOf(target.session)
-    const adoptedRoute = recordedModelRoute(snapshotLiveSessionEvents(target.session))
-    if (adoptedRoute !== undefined) {
-      state.provider = adoptedRoute.provider
-      state.model = adoptedRoute.model
-    }
-    state.tps = undefined
-    state.tpsSamples = []
-    state.lastUsage = undefined
-    state.workingActivity = undefined
-    state.loadedContext = undefined
-    state.contextWindow = undefined
-    state.effortLevels = undefined
-    state.reasoningEffort = undefined
-    refreshEffortLevels()
-    state.contextSegments = {
-      system: 0,
-      prompt: 0,
-      assistant: 0,
-      thinking: 0,
-      tools: 0,
-    }
-    projector.replayEvents(target.session.events)
-    projector.settleStreaming()
-    state.working = target.status === 'running'
-    bindAgent()
-    clearStagedImages()
-    refreshCommandList()
-    void refreshLoadedContext()
-    void refreshSkillCommands()
-    writeResumeTarget(String(target.id))
-    touchSession(target.id)
-    state.emit()
-    const keepPrevious =
-      previousHandle !== undefined
-      && previousHandle.agent !== target
-      && (previousHandle.agent.status === 'running' || agentViewHasTurns(snapshotLiveSessionEvents(previousHandle.agent.session)))
-    if (previousHandle !== undefined && previousHandle.agent !== target) {
-      if (keepPrevious) {
-        backgroundHandles.set(previousSessionId, previousHandle)
-        disposePrevious('park')
-      } else {
-        disposePrevious('dispose')
-      }
-    }
-    // Both sessions are now part of the view's working set: the adopted one
-    // and the one the terminal detached from.
-    touchAgentViewSession(String(target.id))
-    touchAgentViewSession(previousSessionId)
-    notifySessionSwitched('agent-view', String(target.id), previousSessionId)
-    notifyAgentView()
-    return { ok: true }
-    })
-  }
-
-  /**
-   * Resume a persisted session — the shared core of `/resume` and the agent
-   * view's attach path for a session no live agent owns. `keepCurrent`
-   * moves the previously attached agent into the background instead of
-   * disposing it (the agent view never kills what it is not told to stop).
-   */
-  const resumeInto = async (
-    sessionId: string,
-    kind: 'resume' | 'agent-view',
-    keepCurrent: boolean,
-  ): Promise<ResumeResult> => {
-      const adoption = binding.capture()
-    const agents = ctx.get('agents') as
-      | {
-        resume(options: {
-          resumeSessionId: SessionId
-          agentOptions?: { provider?: string; model?: string }
-          setup?: CreateAgentOptions['setup']
-        }): Promise<AgentHandle>
-      }
-      | undefined
-    if (!agents) {
-      notify(t('resume-unavailable'), { color: 'error' })
-      return { ok: false, reason: 'unavailable' }
-    }
-    // Compat boundary: register vouched-for legacy event types (e.g.
-    // activity/status from pre-#143 logs) in every reachable dsh-session
-    // copy before ANY strict read path (preset lookup below, then the
-    // harness seed validation) loads the target — the plugin's #119
-    // registration never ran in processes where it is unmounted (issue
-    // #153). In-process only: the shared log is never rewritten.
-    ensureLegacySessionEventTypes()
-    // The target session's own preset (from its persisted log) — never the
-    // current preference: a resume re-enters the composition its history
-    // was produced under. Same rule for the route: only an explicit
-    // cordis.yml provider/model overrides the route the target's own
-    // request/header records (issue #30) — and only as a COMPLETE pair
-    // (issue #67): a provider-only pin must not merge with the recorded
-    // model half into a route no adapter recognizes.
-    const resumeComposed = await composePreset(
-      ctx,
-      await resolvePersistedPreset(ctx, SessionId(sessionId)),
-    )
-    const resumeRoute = explicitModelRoute({
-      provider: options.configuredProvider,
-      model: options.configuredModel,
-    })
-    // The recorded route feeds back into agentOptions too — not just the
-    // status line below: a provider-only cordis.yml pin (issue #67) leaves
-    // agentOptions.model undefined on resume, which breaks the `{{model}}`
-    // persona variable for the resumed agent's own assembly AND for every
-    // subagent it spawns (dsh-subagent's resolveChildAgentOptions inherits
-    // `parent.options.model`).
-    const recordedRoute = await resolvePersistedRoute(ctx, SessionId(sessionId))
-    let handle: AgentHandle
-    try {
-      handle = await binding.prepare(adoption, () => agents.resume({
-        resumeSessionId: SessionId(sessionId),
-        agentOptions: {
-          provider: resumeRoute?.provider ?? recordedRoute?.provider,
-          model: resumeRoute?.model ?? recordedRoute?.model,
-        },
-        ...(resumeComposed.setup === undefined ? {} : { setup: resumeComposed.setup }),
-      }))
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error)
-      notify(t('resume-failed', { err: message }), { color: 'error', timeoutMs: 8000 })
-      return { ok: false, reason: 'failed', error: message }
-    }
-    if (!binding.isCurrent(adoption)) { await binding.abandon(handle); return { ok: false, reason: 'cancelled' } }
-    try {
-      // Adopting this persisted conversation; this also repairs sessions
-      // created by TUI versions that predate the workspace ownership ledger.
-      await attachSessionToWorkspace(ctx, handle.agent.session.header.cwd ?? state.cwd, SessionId(sessionId))
-    } catch (error) {
-      notify(
-        t('resume-attach-failed', { err: error instanceof Error ? error.message : String(error) }),
-        { color: 'warning', timeoutMs: 8000 },
-      )
-    }
-    // Replay persisted history only after binding commits the prepared handle.
-    return binding.adopt(handle, adoption, (committed, disposePrevious) => {
-      resetSessionProjection(state, rowIds, () => projector.reset(), resetSubagentProjection, resetJobProjection)
-    state.status = handle.agent.status
-    state.agentId = handle.agent.id
-    state.cwd = handle.agent.session.header.cwd ?? state.cwd
-    state.displayCwd = workspaceService.describe(state.cwd).description ?? state.cwd
-    refreshGitBranch()
-    state.agentPreset = resumeComposed.agentPreset
-    const resumedRoute = resumeRoute ?? recordedModelRoute(snapshotLiveSessionEvents(handle.agent.session))
-    if (resumedRoute !== undefined) {
-      state.provider = resumedRoute.provider
-      state.model = resumedRoute.model
-    }
-    state.tps = undefined
-    state.tpsSamples = []
-    state.lastUsage = undefined
-    state.workingActivity = undefined
-    state.loadedContext = undefined
-    state.contextWindow = undefined
-    state.effortLevels = undefined
-    state.reasoningEffort = undefined
-    refreshEffortLevels()
-    state.contextSegments = {
-      system: 0,
-      prompt: 0,
-      assistant: 0,
-      thinking: 0,
-      tools: 0,
-    }
-    projector.replayEvents(handle.agent.session.events)
-    projector.settleStreaming()
-    state.working = handle.agent.status === 'running'
-    const oldHandle = committed.handle
-    const previousSessionId = String(committed.agent.session.id)
-    bindAgent()
-    clearStagedImages()
-    refreshCommandList()
-    void refreshLoadedContext()
-    void refreshSkillCommands()
-    writeResumeTarget(sessionId)
-    touchSession(sessionId)
-    state.emit()
-    const keepPrevious =
-      keepCurrent
-      && oldHandle !== undefined
-      && (oldHandle.agent.status === 'running' || agentViewHasTurns(snapshotLiveSessionEvents(oldHandle.agent.session)))
-    if (oldHandle !== undefined) {
-      if (keepPrevious) {
-        backgroundHandles.set(previousSessionId, oldHandle)
-        disposePrevious('park')
-      } else {
-        disposePrevious('dispose')
-      }
-    }
-    // Attaching FROM the agent view makes both sides view sessions; the
-    // plain /resume path keeps its history out of the view's ledger.
-    if (kind === 'agent-view') {
-      touchAgentViewSession(sessionId)
-      touchAgentViewSession(previousSessionId)
-    }
-    notifySessionSwitched(kind, sessionId, previousSessionId)
-    return { ok: true }
-    })
-  }
   const state: ChannelState = {
     ...createInputActions(() => state, () => binding.agent, inputConvergence,
       (text, placement) => dispatchUserText(text, placement),
@@ -2229,488 +1988,17 @@ export function createChannel(
       return rewindToAction(row, mode)
     },
     buildSessionTree: createSessionTreeReader(ctx, binding, () => state.cwd, (...args) => notify(...args), owner),
-    async rewindToNode(sessionId: string, seq: number, mode: 'rewind' | 'fork' = 'rewind'): Promise<string | null> {
-      const adoption = binding.capture()
-      const agents = ctx.get('agents') as
-        | { create(options: CreateAgentOptions): Promise<AgentHandle> }
-        | undefined
-      if (!agents) {
-        notify(t('rewind-unavailable'), { color: 'error' })
-        return null
-      }
-      // An in-flight manual compaction must not straddle the snapshot below
-      // (live branch) nor keep summarizing the current session while the
-      // rewind targets another — cancel and await it first.
-      await settleManualCompaction()
-      // Pin the entry-time session: the awaits below (log load, preset
-      // compose, agent create) are windows in which a queued switch
-      // (/new, /resume, /model) can swap `agent` — the mutation queue only
-      // serializes the REPLACING entries, so the boundary and restored text
-      // derive from THIS session's log and any swap along the way aborts
-      // the rewind (forking or disposing whatever agent happens to be
-      // current at the end would rewind the wrong session).
-      const entrySession = binding.agent.session
-      const currentId = String(entrySession.id)
-      const childId = SessionId(randomUUID())
-      // Source events: the live session from memory; any other family member
-      // from its durable log (legacy event types registered first — the same
-      // in-process compat seam as resumeTo, since load validates known types).
-      let sourceEvents: readonly SessionEvent[]
-      let sourceCwd = state.cwd
-      let forkFromLive = true
-      if (sessionId === currentId) {
-        sourceEvents = snapshotLiveSessionEvents(entrySession)
-      } else {
-        forkFromLive = false
-        const persistence = ctx.get('sessionPersistence') as
-          | {
-            load(id: SessionId): Promise<{ meta: SessionHeader; events: readonly SessionEvent[] }>
-          }
-          | undefined
-        if (!persistence || typeof persistence.load !== 'function') {
-          notify(t('rewind-no-persistence'), { color: 'error' })
-          return null
-        }
-        try {
-          ensureLegacySessionEventTypes()
-          const loaded = await persistence.load(SessionId(sessionId))
-          sourceEvents = loaded.events
-          sourceCwd = loaded.meta.cwd ?? state.cwd
-        } catch (error) {
-          const message = error instanceof Error ? error.message : String(error)
-          notify(t('rewind-load-failed', { err: message }), { color: 'error' })
-          return null
-        }
-      }
-      // DSH event order is `turn/start → user/message → … → turn/end`, and a
-      // fork seed must not end inside an open turn. pi's navigateTree
-      // semantics mapped onto that constraint (sessionTree.rewindTarget): a
-      // USER message drops its turn — the boundary sits just before the
-      // turn/start and the prompt comes back into the input for re-editing;
-      // any OTHER entry keeps through its enclosing STEP — a mid-turn cut at
-      // the step/end with the turn closed synthetically (DSH agentic turns
-      // span thousands of events, so turn-granular keeping would barely move
-      // the visible history). Fork mode (pi's /fork) instead KEEPS the
-      // picked entry: a user message cuts right after itself (the turn's
-      // reply drops) and never returns text to the input.
-      const target = mode === 'fork'
-        ? forkTarget(sourceEvents, seq)
-        : rewindTarget(sourceEvents, seq)
-      const boundary = target.boundary
-      if (boundary < 0) {
-        notify(t('rewind-first-message'), { color: 'error' })
-        return null
-      }
-      // Keeping the entry can still be a NO-OP: when nothing message-bearing
-      // follows the boundary (only a turn/end, or nothing at all), the fork's
-      // transcript would be identical to the live one. pi truncates to right
-      // after the entry; DSH's step/turn-closed seed cannot always express
-      // that, so the honest answer is to say there is nothing to rewind. A
-      // DEAD session's tip still forks: that adopts the branch, a real
-      // switch.
-      if (forkFromLive && !sourceEvents.some(event =>
-        event.seq > boundary &&
-        (event.type === 'user/message' || event.type === 'assistant/message' ||
-          event.type === 'tool/call' || event.type === 'tool/result'))) {
-        notify(t('rewind-noop'), { color: 'warning' })
-        return null
-      }
-      // The dropped turn's own prompt text, restored into the input after
-      // the swap ('' whenever the entry was kept — fork mode included — or
-      // the turn had no human-typed text to restore).
-      const restoredText = mode === 'fork' ? '' : turnUserText(sourceEvents, seq)
-      // The fork continues under the source session's own preset: switches
-      // are blank-only, so every `agent-preset/selected` event predates any
-      // rewind boundary and the source log resolves the exact composition.
-      // The route likewise stays the live one — a rewind continues the same
-      // conversation, so a `/model` switch must survive it (issue #30).
-      const sourcePreset = forkFromLive
-        ? runningPresetOf(entrySession)
-        : ((await resolvePersistedPreset(ctx, SessionId(sessionId))) ?? runningPresetOf(entrySession))
-      const rewindComposed = await composePreset(ctx, sourcePreset)
-      // Everything fallible is done — only NOW stop a running turn (a load
-      // or preset failure above must not kill it). But bail first when the
-      // live session was swapped during those awaits: cancelling/forking
-      // now would hit the NEW session with THIS session's boundary.
-      if (!owner.current() || binding.agent.session !== entrySession) {
-        notify(t('rewind-session-changed'), { color: 'error' })
-        return null
-      }
-      // Stop a running turn first and WAIT for its turn/end to land: fork
-      // rejects boundaries inside open turns, and Agent.cancel() closes the
-      // turn asynchronously (a long thinking turn can take seconds to
-      // settle). Cross-session rewinds need this too: the live agent is
-      // about to be disposed, and its turn must close cleanly.
-      const wasWorking = state.working
-      const cancelSeq = binding.agent.session.seq
-      if (wasWorking) binding.agent.cancel({ kind: 'user' })
-      if (wasWorking) {
-        const turnSettled = await waitForTurnEnd(binding.agent.session, cancelSeq, 30000)
-        if (!turnSettled) {
-          notify(t('rewind-settling'), { color: 'error' })
-          return null
-        }
-      }
-      // Slice the seed from the PINNED event snapshot. Never sessions.fork
-      // here: fork() rejects a boundary inside an open turn, which is
-      // exactly where a keep-style cut lands (closeTurn set) — close it
-      // with the exact event a real user cancellation writes instead.
-      // agents.create validates the result itself (contiguous from seq 0,
-      // no open turns).
-      const seed = sourceEvents.filter(event => event.seq <= boundary)
-      const inheritedCount = seed.length
-      if (target.closeTurn !== undefined) {
-        appendInterruptedTurnEnd(seed, target.closeTurn)
-      }
-      let handle: AgentHandle
-      try {
-        handle = await binding.prepare(adoption, () => agents.create({
-          sessionId: childId,
-          seed,
-          runtimeSession: entrySession,
-          inheritedCount,
-          cwd: sourceCwd,
-          parentSession: SessionId(sessionId),
-          agentPreset: rewindComposed.agentPreset,
-          agentOptions: { provider: state.provider, model: state.model },
-          ...(rewindComposed.setup === undefined ? {} : { setup: rewindComposed.setup }),
-        }))
-      } catch {
-        notify(t('rewind-create-failed'), { color: 'error' })
-        return null
-      }
-      if (!binding.isCurrent(adoption)) { await binding.abandon(handle); return null }
-      try {
-        await attachSessionToWorkspace(ctx, sourceCwd, childId)
-      } catch (error) {
-        notify(
-          t('rewind-attach-failed', { err: error instanceof Error ? error.message : String(error) }),
-          { color: 'warning', timeoutMs: 8000 },
-        )
-      }
-      // The create await was another swap window: adopting now would dispose
-      // the NEW session's agent. Free the fork we just made and bail.
-      if (!owner.current() || binding.agent.session !== entrySession) {
-        await binding.abandon(handle)
-        notify(t('rewind-session-changed'), { color: 'error' })
-        return null
-      }
-      // Replay the forked history into a fresh transcript (the same swap
-      // tail rewindTo runs), then announce the session switch.
-      const sourceSessionId = adoptForkedAgent(handle, adoption, seed, rewindComposed.agentPreset, childId)
-      notifySessionSwitched(mode === 'fork' ? 'fork' : 'rewind', String(childId), sourceSessionId)
-      return restoredText
+    rewindToNode(sessionId: string, seq: number, mode: 'rewind' | 'fork' = 'rewind'): Promise<string | null> {
+      return rewindToNodeAction(sessionId, seq, mode)
     },
     forkSession() {
       return forkSessionAction()
     },
-    async resumeTo(sessionId: string): Promise<ResumeResult> {
-      const adoption = binding.capture()
-      // Switch the live agent to a persisted session: /resume picker Enter
-      // loads the history immediately (the `--resume` launcher path keeps
-      // resolving through DSH_TUI_RESUME_SESSION at boot).
-      if (state.working) {
-        notify(t('resume-while-working'), { color: 'warning' })
-        return { ok: false, reason: 'working' }
-      }
-      const agents = ctx.get('agents') as
-        | {
-          resume(options: {
-            resumeSessionId: SessionId
-            agentOptions?: { provider?: string; model?: string }
-            setup?: CreateAgentOptions['setup']
-          }): Promise<AgentHandle>
-        }
-        | undefined
-      if (!agents) {
-        notify(t('resume-unavailable'), { color: 'error' })
-        return { ok: false, reason: 'unavailable' }
-      }
-      // Plugin veto point (tui/session-switch): before any read of the
-      // target — a veto leaves the live session and its transcript
-      // untouched.
-      if (await sessionSwitchVetoed('resume', sessionId)) return { ok: false, reason: 'cancelled' }
-      // The live session's in-flight manual compaction must not keep running
-      // (and commit its checkpoint) once we leave it for the target — cancel
-      // and await it before any target read.
-      await settleManualCompaction()
-      // Identity pin for the rival-swap guard below: everything between here
-      // and the adoption can await (veto, preset, route, agents.resume), and
-      // an interrupt-queued /new or a second /resume may commit a different
-      // swap in that window.
-      const entrySession = binding.agent.session
-      let handle: AgentHandle
-      // Compat boundary: register vouched-for legacy event types (e.g.
-      // activity/status from pre-#143 logs) in every reachable dsh-session
-      // copy before ANY strict read path (preset lookup below, then the
-      // harness seed validation) loads the target — the plugin's #119
-      // registration never ran in processes where it is unmounted (issue
-      // #153). In-process only: the shared log is never rewritten.
-      ensureLegacySessionEventTypes()
-      // The target session's own preset (from its persisted log) — never the
-      // current preference: a resume re-enters the composition its history
-      // was produced under. Same rule for the route: only an explicit
-      // cordis.yml provider/model overrides the route the target's own
-      // request/header records (issue #30) — and only as a COMPLETE pair
-      // (issue #67): a provider-only pin must not merge with the recorded
-      // model half into a route no adapter recognizes.
-      const resumeComposed = await composePreset(
-        ctx,
-        await resolvePersistedPreset(ctx, SessionId(sessionId)),
-      )
-      const resumeRoute = explicitModelRoute({
-        provider: options.configuredProvider,
-        model: options.configuredModel,
-      })
-      // The recorded route feeds back into agentOptions too — not just the
-      // status line below: a provider-only cordis.yml pin (issue #67) leaves
-      // agentOptions.model undefined on resume, which breaks the `{{model}}`
-      // persona variable for the resumed agent's own assembly AND for every
-      // subagent it spawns (dsh-subagent's resolveChildAgentOptions inherits
-      // `parent.options.model`).
-      const recordedRoute = await resolvePersistedRoute(ctx, SessionId(sessionId))
-      try {
-        handle = await binding.prepare(adoption, () => agents.resume({
-          resumeSessionId: SessionId(sessionId),
-          agentOptions: {
-            provider: resumeRoute?.provider ?? recordedRoute?.provider,
-            model: resumeRoute?.model ?? recordedRoute?.model,
-          },
-          ...(resumeComposed.setup === undefined ? {} : { setup: resumeComposed.setup }),
-        }))
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error)
-        notify(t('resume-failed', { err: message }), { color: 'error', timeoutMs: 8000 })
-        return { ok: false, reason: 'failed', error: message }
-      }
-      if (!binding.isCurrent(adoption)) { await binding.abandon(handle); return { ok: false, reason: 'failed', error: 'Channel lifetime ended' } }
-      try {
-        // `/resume` is an explicit adoption of this persisted conversation.
-        // This also repairs sessions created by TUI versions that predate the
-        // separate workspace ownership ledger.
-        await attachSessionToWorkspace(ctx, handle.agent.session.header.cwd ?? state.cwd, SessionId(sessionId))
-      } catch (error) {
-        notify(
-          t('resume-attach-failed', { err: error instanceof Error ? error.message : String(error) }),
-          { color: 'warning', timeoutMs: 8000 },
-        )
-      }
-      // Rival-swap guard (rewindToNode's entrySession check, applied to the
-      // resume path): the awaits above can straddle another session swap
-      // committing first, and adopting now would stomp the newer session's
-      // live transcript with this target's replay. Free the just-created
-      // handle and bail — the live session stays exactly as the rival left
-      // it, and the persisted target simply stays in /resume.
-      if (!owner.current() || binding.agent.session !== entrySession) {
-        await binding.abandon(handle)
-        notify(t('resume-session-changed'), { color: 'error' })
-        return { ok: false, reason: 'failed', error: 'live session changed during resume' }
-      }
-      // Replay the persisted history into a fresh transcript (same reset as
-      // rewindTo, plus the context window which the replay re-derives).
-      return binding.adopt(handle, adoption, (committed, disposePrevious) => {
-      resetSessionProjection(state, rowIds, () => projector.reset(), resetSubagentProjection, resetJobProjection)
-      state.status = handle.agent.status
-      state.agentId = handle.agent.id
-      // Adopt the resumed session's persisted cwd (issue #96): pre-upgrade
-      // sessions recorded the LAUNCH directory (often a repo subdirectory),
-      // so keeping the freshly resolved root would split @ expansion / file
-      // completion (state.cwd) from the agent's own workspace record — and
-      // drop the session back out of the /resume filter. The branch
-      // breadcrumb follows the adopted cwd.
-      state.cwd = handle.agent.session.header.cwd ?? state.cwd
-      state.displayCwd = workspaceService.describe(state.cwd).description ?? state.cwd
-      refreshGitBranch()
-      state.agentPreset = resumeComposed.agentPreset
-      // Status-line route follows the resumed session (review feedback): the
-      // route it actually continues on — a complete cordis.yml pin, else the
-      // route its own request/header records carry. A bare log (no turn ever
-      // started) records none; keep the current display as best effort.
-      const resumedRoute = resumeRoute ?? recordedModelRoute(snapshotLiveSessionEvents(handle.agent.session))
-      if (resumedRoute !== undefined) {
-        state.provider = resumedRoute.provider
-        state.model = resumedRoute.model
-      }
-      state.tps = undefined
-      state.tpsSamples = []
-      state.lastUsage = undefined
-      state.workingActivity = undefined
-      state.contextWindow = undefined
-      // Route changed: a stale tier table would let top-tier UI fire on the
-      // wrong level (or never fire on the real one); clear and re-resolve.
-      state.effortLevels = undefined
-      state.reasoningEffort = undefined
-      refreshEffortLevels()
-      state.contextSegments = {
-        system: 0,
-        prompt: 0,
-        assistant: 0,
-        thinking: 0,
-        tools: 0,
-      }
-      projector.replayEvents(handle.agent.session.events)
-      projector.settleStreaming()
-      // A log ending mid-turn replays a turn/start that set working=true;
-      // mirror the boot path's post-replay reset (a still-running agent
-      // re-asserts on its next event).
-      state.working = handle.agent.status === 'running'
-      // Rebind subscriptions to the resumed agent, then free the old one.
-      const oldHandle = committed.handle
-      const previousSessionId = String(committed.agent.session.id)
-      bindAgent()
-      clearStagedImages()
-      refreshCommandList()
-      void refreshLoadedContext()
-      void refreshSkillCommands()
-      // Keep the `--resume` launcher contract pointing at the same session.
-      writeResumeTarget(sessionId)
-      // The resumed session is now the most recently used.
-      touchSession(sessionId)
-      state.emit()
-      disposePrevious('dispose')
-      clearStagedImages()
-      notifySessionSwitched('resume', sessionId, previousSessionId)
-      return { ok: true }
-      })
+    resumeTo(sessionId: string): Promise<ResumeResult> {
+      return resumeToAction(sessionId)
     },
-    async newSession(): Promise<boolean> {
-      const adoption = binding.capture()
-      // `/new` — start a fresh conversation: brand-new agent + session, the
-      // transcript reset, the `--resume` marker forgotten (the old session
-      // stays persisted for /resume). Same reset shape as rewindTo/resumeTo.
-      if (state.working) {
-        notify(t('new-session-while-working'), {
-          color: 'warning',
-        })
-        return false
-      }
-      const agents = ctx.get('agents') as
-        | { create(options: CreateAgentOptions): Promise<AgentHandle> }
-        | undefined
-      if (!agents) {
-        notify(t('new-session-unavailable'), {
-          color: 'error',
-        })
-        return false
-      }
-      // Plugin veto point (tui/session-switch): no side effects have
-      // happened yet — the session id below is not even allocated.
-      if (await sessionSwitchVetoed('new')) return false
-      // Leaving the live session: its in-flight manual compaction must not
-      // keep summarizing (and later commit a checkpoint the user believes
-      // cancelled) — cancel and await it first.
-      await settleManualCompaction()
-      const sessionId = SessionId(randomUUID())
-      let handle: AgentHandle
-      // A fresh session composes the caller's DEFAULT preset: the cordis.yml
-      // `preset` key wins over the persisted `/preset` choice, which wins
-      // over the roster default (same precedence as activityFrames).
-      const presetPref = options.configuredPreset === undefined ? readPresetPref() : undefined
-      const newComposed = await composePreset(ctx, options.configuredPreset ?? presetPref)
-      if (!migratePresetPref(presetPref, newComposed.agentPreset)) {
-        notify(
-          t('preset-switched-pref-failed', { id: newComposed.agentPreset ?? presetPref ?? 'unknown' }),
-          { color: 'warning' },
-        )
-      }
-      // Same precedence for the route (issues #14/#30/#67): the pair resolves
-      // atomically — a complete cordis.yml route wins whole, else the
-      // persisted `/model` choice (a switch earlier in this run just wrote
-      // it, so `/new` follows the live model) wins whole, else the startup
-      // route. A stale persisted choice that the adapter catalog rejects
-      // falls back to the startup route wholesale, with a warning.
-      const newResolved = resolveModelRoute(
-        { provider: options.configuredProvider, model: options.configuredModel },
-        readModelPref(),
-        { provider: options.provider, model: options.model },
-      )
-      const newLlm = ctx.get('llm') as
-        | { listModels(provider: string): Promise<readonly { id: string }[]> }
-        | undefined
-      const { route, rejected } = await validateModelRoute(newLlm, newResolved, {
-        provider: options.provider,
-        model: options.model,
-      })
-      if (rejected !== undefined) {
-        notify(
-          t('model-route-invalid', {
-            provider: rejected.provider,
-            model: rejected.model,
-            fallback: `${route.provider}/${route.model}`,
-          }),
-          { color: 'warning', timeoutMs: 8000 },
-        )
-      }
-      try {
-        handle = await binding.prepare(adoption, () => agents.create({
-          sessionId,
-          meta: {
-            cwd: state.cwd,
-            ...(newComposed.agentPreset === undefined
-              ? {}
-              : { agentPreset: newComposed.agentPreset }),
-          },
-          agentOptions: route,
-          ...(newComposed.setup === undefined ? {} : { setup: newComposed.setup }),
-        }))
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error)
-        notify(t('new-session-failed', { err: message }), {
-          color: 'error',
-          timeoutMs: 8000,
-        })
-        return false
-      }
-      if (!binding.isCurrent(adoption)) { await binding.abandon(handle); return false }
-      try {
-        await attachSessionToWorkspace(ctx, state.cwd, sessionId)
-      } catch (error) {
-        notify(
-          t('new-session-attach-failed', { err: error instanceof Error ? error.message : String(error) }),
-          { color: 'warning', timeoutMs: 8000 },
-        )
-      }
-      if (!owner.current()) { await binding.abandon(handle); return false }
-      return binding.adopt(handle, adoption, (committed, disposePrevious) => {
-      resetSessionProjection(state, rowIds, () => projector.reset(), resetSubagentProjection, resetJobProjection)
-      state.status = handle.agent.status
-      state.agentId = handle.agent.id
-      state.agentPreset = newComposed.agentPreset
-      state.model = route.model
-      state.provider = route.provider
-      state.tps = undefined
-      state.tpsSamples = []
-      state.lastUsage = undefined
-      state.workingActivity = undefined
-      state.loadedContext = undefined
-      state.contextWindow = undefined
-      // Route changed: a stale tier table would let top-tier UI fire on the
-      // wrong level (or never fire on the real one); clear and re-resolve.
-      state.effortLevels = undefined
-      state.reasoningEffort = undefined
-      refreshEffortLevels()
-      state.contextSegments = {
-        system: 0,
-        prompt: 0,
-        assistant: 0,
-        thinking: 0,
-        tools: 0,
-      }
-      const oldHandle = committed.handle
-      const previousSessionId = String(committed.agent.session.id)
-      bindAgent()
-      clearStagedImages()
-      refreshCommandList()
-      void refreshLoadedContext()
-      void refreshSkillCommands()
-      clearResumeTarget()
-      // The brand-new session becomes the most recently used.
-      touchSession(handle.agent.id)
-      disposePrevious('dispose')
-      clearStagedImages()
-      notifySessionSwitched('new', String(handle.agent.id), previousSessionId)
-      return true
-      })
+    newSession(): Promise<boolean> {
+      return newSessionAction()
     },
     listWorkspaces() {
       return workspaceService.list(state.cwd)
@@ -4844,10 +4132,73 @@ ${output}
   })
   adoptForkedAgent = sessionAdoption.adoptForkedAgent
 
+  adoptLiveAgent = createLiveAgentAdoption(state, {
+    binding,
+    backgroundHandles,
+    rowIds,
+    resetProjector: () => projector.reset(),
+    resetSubagents: resetSubagentProjection,
+    resetJobs: resetJobProjection,
+    replay: events => projector.replayEvents(events),
+    settleReplay: projector.settleStreaming,
+    describeWorkspace: cwd => workspaceService.describe(cwd),
+    refreshGitBranch: () => refreshGitBranch(),
+    refreshEffortLevels,
+    bindAgent,
+    refreshCommands: refreshCommandList,
+    refreshLoadedContext,
+    refreshSkillCommands,
+    clearStagedImages,
+    notifySessionSwitched,
+    notifyAgentView,
+  })
+
+  const resumeActions = createSessionResumeActions(ctx, state, {
+    configuredPreset: options.configuredPreset,
+    configuredProvider: options.configuredProvider,
+    configuredModel: options.configuredModel,
+    provider: options.provider,
+    model: options.model,
+  }, {
+    owner,
+    binding,
+    backgroundHandles,
+    rowIds,
+    resetProjector: () => projector.reset(),
+    resetSubagents: resetSubagentProjection,
+    resetJobs: resetJobProjection,
+    replay: events => projector.replayEvents(events),
+    settleReplay: projector.settleStreaming,
+    describeWorkspace: cwd => workspaceService.describe(cwd),
+    refreshGitBranch: () => refreshGitBranch(),
+    refreshEffortLevels,
+    bindAgent,
+    refreshCommands: refreshCommandList,
+    refreshLoadedContext,
+    refreshSkillCommands,
+    clearStagedImages,
+    settleCompaction: () => settleManualCompaction(),
+    sessionSwitchVetoed,
+    notify,
+    notifySessionSwitched,
+  })
+  resumeInto = resumeActions.resumeInto
+  resumeToAction = resumeActions.resumeTo
+  newSessionAction = resumeActions.newSession
+
+  rewindToNodeAction = createTreeRewindAction(ctx, state, {
+    owner,
+    binding,
+    settleCompaction: () => settleManualCompaction(),
+    notify,
+    adoptForkedAgent,
+    notifySessionSwitched,
+  })
+
   rewindToAction = createRewindToAction(ctx, state, {
     owner,
     binding,
-    settleCompaction: settleManualCompaction,
+    settleCompaction: () => settleManualCompaction(),
     notify,
     adoptForkedAgent,
     notifySessionSwitched,
@@ -4855,13 +4206,14 @@ ${output}
 
   forkSessionAction = createForkSessionAction(ctx, state, {
     owner,
-    settleCompaction: settleManualCompaction,
+    settleCompaction: () => settleManualCompaction(),
     notify,
     source: () => binding.agent.session,
     createDetachedHandle,
   })
 
   const manualCompaction = createManualCompaction(ctx, state, {
+    owner,
     agent: () => binding.agent,
     withDecisionPending,
     notify,

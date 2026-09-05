@@ -1,0 +1,270 @@
+import type { Agent, AgentHandle, CreateAgentOptions } from '@deepseek-ai/dsh-agent'
+import { randomUUID } from 'node:crypto'
+import type { Context } from '@deepseek-ai/cordis'
+import { SessionId, type SessionEvent } from '@deepseek-ai/dsh-session'
+import { explicitModelRoute, recordedModelRoute, resolveModelRoute, validateModelRoute } from '../../modelRoute.js'
+import { clearResumeTarget, touchAgentViewSession, touchSession, writeResumeTarget } from '../../sessionHistory.js'
+import { t } from '../../i18n.js'
+import { readModelPref } from '../../modelPrefs.js'
+import { migratePresetPref, readPresetPref } from '../../presetPrefs.js'
+import { agentViewHasTurns } from '../agent-view.js'
+import { ensureLegacySessionEventTypes } from '../compat/index.js'
+import { composePreset, resolvePersistedPreset, resolvePersistedRoute } from '../presets.js'
+import { attachSessionToWorkspace } from '../workspace.js'
+import { resetSessionProjection } from './session-reset.js'
+import type { createChannelBinding } from './binding.js'
+import type { ChannelOwner } from './owner.js'
+import type { ChannelState, ResumeResult } from './types.js'
+
+type Binding = ReturnType<typeof createChannelBinding>
+type ResumeState = Pick<
+  ChannelState,
+  | 'working'
+  | 'status'
+  | 'agentId'
+  | 'cwd'
+  | 'displayCwd'
+  | 'agentPreset'
+  | 'provider'
+  | 'model'
+  | 'loadedContext'
+  | 'contextWindow'
+  | 'effortLevels'
+  | 'reasoningEffort'
+  | 'working'
+  | 'emit'
+> & Parameters<typeof resetSessionProjection>[0]
+
+type ResumeAgents = {
+  resume(options: {
+    resumeSessionId: SessionId
+    agentOptions?: { provider?: string; model?: string }
+    setup?: CreateAgentOptions['setup']
+  }): Promise<AgentHandle>
+}
+
+/** Persisted-session and fresh-session foreground actions. */
+export function createSessionResumeActions(
+  ctx: Context,
+  state: ResumeState,
+  options: {
+    configuredPreset?: string
+    configuredProvider?: string
+    configuredModel?: string
+    provider: string
+    model: string
+  },
+  deps: {
+    owner: Pick<ChannelOwner, 'current'>
+    binding: Pick<Binding, 'agent' | 'capture' | 'isCurrent' | 'prepare' | 'abandon' | 'adopt'>
+    backgroundHandles: Map<string, AgentHandle>
+    rowIds: { value: number }
+    resetProjector(): void
+    resetSubagents(): void
+    resetJobs(): void
+    replay(events: readonly SessionEvent[]): void
+    settleReplay(): void
+    describeWorkspace(cwd: string): { description?: string }
+    refreshGitBranch(): void
+    refreshEffortLevels(): void
+    bindAgent(): void
+    refreshCommands(): void
+    refreshLoadedContext(): Promise<void>
+    refreshSkillCommands(): Promise<void>
+    clearStagedImages(): void
+    settleCompaction(): Promise<void>
+    sessionSwitchVetoed(kind: 'new' | 'resume' | 'agent-view', targetSessionId?: string): Promise<boolean>
+    notify: ChannelState['notify']
+    notifySessionSwitched(kind: 'new' | 'resume' | 'agent-view', sessionId: string, previousSessionId: string): void
+  },
+) {
+  const resetAndBind = (
+    handle: AgentHandle,
+    agentPreset: string | undefined,
+    route: { provider: string; model: string } | undefined,
+    replay: boolean,
+  ): void => {
+    resetSessionProjection(state, deps.rowIds, deps.resetProjector, deps.resetSubagents, deps.resetJobs)
+    state.status = handle.agent.status
+    state.agentId = handle.agent.id
+    state.agentPreset = agentPreset
+    if (route !== undefined) {
+      state.provider = route.provider
+      state.model = route.model
+    }
+    state.loadedContext = undefined
+    state.contextWindow = undefined
+    state.effortLevels = undefined
+    state.reasoningEffort = undefined
+    deps.refreshEffortLevels()
+    if (replay) {
+      deps.replay(handle.agent.session.events)
+      deps.settleReplay()
+      // A resumed log can end mid-turn; mirror boot's post-replay status.
+      state.working = handle.agent.status === 'running'
+    }
+    deps.bindAgent()
+    deps.refreshCommands()
+    void deps.refreshLoadedContext()
+    void deps.refreshSkillCommands()
+  }
+
+  /** Resume a persisted session, optionally parking the attached agent for agent-view attachment. */
+  const resume = async (
+    sessionId: string,
+    kind: 'resume' | 'agent-view',
+    keepCurrent: boolean,
+    adoption: ReturnType<Binding['capture']>,
+    entrySession?: Agent['session'],
+  ): Promise<ResumeResult> => {
+    const agents = ctx.get('agents') as ResumeAgents | undefined
+    if (!agents) {
+      deps.notify(t('resume-unavailable'), { color: 'error' })
+      return { ok: false, reason: 'unavailable' }
+    }
+    ensureLegacySessionEventTypes()
+    const composed = await composePreset(ctx, await resolvePersistedPreset(ctx, SessionId(sessionId)))
+    const explicitRoute = explicitModelRoute({ provider: options.configuredProvider, model: options.configuredModel })
+    const persistedRoute = await resolvePersistedRoute(ctx, SessionId(sessionId))
+    let handle: AgentHandle
+    try {
+      handle = await deps.binding.prepare(adoption, () => agents.resume({
+        resumeSessionId: SessionId(sessionId),
+        agentOptions: {
+          provider: explicitRoute?.provider ?? persistedRoute?.provider,
+          model: explicitRoute?.model ?? persistedRoute?.model,
+        },
+        ...(composed.setup === undefined ? {} : { setup: composed.setup }),
+      }))
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      deps.notify(t('resume-failed', { err: message }), { color: 'error', timeoutMs: 8000 })
+      return { ok: false, reason: 'failed', error: message }
+    }
+    if (!deps.binding.isCurrent(adoption)) {
+      await deps.binding.abandon(handle)
+      return { ok: false, reason: 'cancelled' }
+    }
+    try {
+      await attachSessionToWorkspace(ctx, handle.agent.session.header.cwd ?? state.cwd, SessionId(sessionId))
+    } catch (error) {
+      deps.notify(t('resume-attach-failed', { err: error instanceof Error ? error.message : String(error) }), { color: 'warning', timeoutMs: 8000 })
+    }
+    if (entrySession !== undefined && (!deps.owner.current() || deps.binding.agent.session !== entrySession)) {
+      await deps.binding.abandon(handle)
+      deps.notify(t('resume-session-changed'), { color: 'error' })
+      return { ok: false, reason: 'failed', error: 'live session changed during resume' }
+    }
+    return deps.binding.adopt(handle, adoption, (committed, disposePrevious) => {
+      const previousSessionId = String(committed.agent.session.id)
+      state.cwd = handle.agent.session.header.cwd ?? state.cwd
+      state.displayCwd = deps.describeWorkspace(state.cwd).description ?? state.cwd
+      deps.refreshGitBranch()
+      resetAndBind(handle, composed.agentPreset, explicitRoute ?? recordedModelRoute(handle.agent.session.events), true)
+      writeResumeTarget(sessionId)
+      touchSession(sessionId)
+      state.emit()
+      const keepPrevious = keepCurrent && committed.handle !== undefined
+        && (committed.handle.agent.status === 'running' || agentViewHasTurns(committed.handle.agent.session.events))
+      if (committed.handle !== undefined) {
+        if (keepPrevious) {
+          deps.backgroundHandles.set(previousSessionId, committed.handle)
+          disposePrevious('park')
+        } else {
+          disposePrevious('dispose')
+        }
+      }
+      if (kind === 'agent-view') {
+        touchAgentViewSession(sessionId)
+        touchAgentViewSession(previousSessionId)
+      }
+      deps.clearStagedImages()
+      deps.notifySessionSwitched(kind, sessionId, previousSessionId)
+      return { ok: true }
+    })
+  }
+
+  const resumeInto = (sessionId: string, kind: 'resume' | 'agent-view', keepCurrent: boolean): Promise<ResumeResult> =>
+    resume(sessionId, kind, keepCurrent, deps.binding.capture())
+
+  /** `/resume` keeps the entry capture across its veto/compaction awaits, so a rival switch cannot adopt over newer state. */
+  const resumeTo = async (sessionId: string): Promise<ResumeResult> => {
+    const adoption = deps.binding.capture()
+    if (state.working) {
+      deps.notify(t('resume-while-working'), { color: 'warning' })
+      return { ok: false, reason: 'working' }
+    }
+    const agents = ctx.get('agents') as ResumeAgents | undefined
+    if (!agents) {
+      deps.notify(t('resume-unavailable'), { color: 'error' })
+      return { ok: false, reason: 'unavailable' }
+    }
+    if (await deps.sessionSwitchVetoed('resume', sessionId)) return { ok: false, reason: 'cancelled' }
+    await deps.settleCompaction()
+    const entrySession = deps.binding.agent.session
+    return resume(sessionId, 'resume', false, adoption, entrySession)
+  }
+
+  const newSession = async (): Promise<boolean> => {
+    const adoption = deps.binding.capture()
+    if (state.working) {
+      deps.notify(t('new-session-while-working'), { color: 'warning' })
+      return false
+    }
+    const agents = ctx.get('agents') as { create(options: CreateAgentOptions): Promise<AgentHandle> } | undefined
+    if (!agents) {
+      deps.notify(t('new-session-unavailable'), { color: 'error' })
+      return false
+    }
+    if (await deps.sessionSwitchVetoed('new')) return false
+    await deps.settleCompaction()
+    const sessionId = SessionId(randomUUID())
+    const presetPref = options.configuredPreset === undefined ? readPresetPref() : undefined
+    const composed = await composePreset(ctx, options.configuredPreset ?? presetPref)
+    if (!migratePresetPref(presetPref, composed.agentPreset)) {
+      deps.notify(t('preset-switched-pref-failed', { id: composed.agentPreset ?? presetPref ?? 'unknown' }), { color: 'warning' })
+    }
+    const resolved = resolveModelRoute(
+      { provider: options.configuredProvider, model: options.configuredModel },
+      readModelPref(),
+      { provider: options.provider, model: options.model },
+    )
+    const llm = ctx.get('llm') as { listModels(provider: string): Promise<readonly { id: string }[]> } | undefined
+    const { route, rejected } = await validateModelRoute(llm, resolved, { provider: options.provider, model: options.model })
+    if (rejected !== undefined) {
+      deps.notify(t('model-route-invalid', { provider: rejected.provider, model: rejected.model, fallback: `${route.provider}/${route.model}` }), { color: 'warning', timeoutMs: 8000 })
+    }
+    let handle: AgentHandle
+    try {
+      handle = await deps.binding.prepare(adoption, () => agents.create({
+        sessionId,
+        meta: { cwd: state.cwd, ...(composed.agentPreset === undefined ? {} : { agentPreset: composed.agentPreset }) },
+        agentOptions: route,
+        ...(composed.setup === undefined ? {} : { setup: composed.setup }),
+      }))
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      deps.notify(t('new-session-failed', { err: message }), { color: 'error', timeoutMs: 8000 })
+      return false
+    }
+    if (!deps.binding.isCurrent(adoption)) { await deps.binding.abandon(handle); return false }
+    try {
+      await attachSessionToWorkspace(ctx, state.cwd, sessionId)
+    } catch (error) {
+      deps.notify(t('new-session-attach-failed', { err: error instanceof Error ? error.message : String(error) }), { color: 'warning', timeoutMs: 8000 })
+    }
+    if (!deps.owner.current()) { await deps.binding.abandon(handle); return false }
+    return deps.binding.adopt(handle, adoption, (committed, disposePrevious) => {
+      const previousSessionId = String(committed.agent.session.id)
+      resetAndBind(handle, composed.agentPreset, route, false)
+      clearResumeTarget()
+      touchSession(handle.agent.id)
+      disposePrevious('dispose')
+      deps.clearStagedImages()
+      deps.notifySessionSwitched('new', String(handle.agent.id), previousSessionId)
+      return true
+    })
+  }
+
+  return { resumeInto, resumeTo, newSession }
+}
