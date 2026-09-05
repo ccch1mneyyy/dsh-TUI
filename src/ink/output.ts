@@ -19,6 +19,7 @@ import {
   filterOutHyperlinkStyles,
   markNoSelectRegion,
   OSC8_PREFIX,
+  shadeRegion,
   recordCellRunEntry,
   recordSpacerRunEntry,
   replayCellRun,
@@ -188,15 +189,27 @@ type Options = {
   previousImages?: readonly TerminalImagePlacement[]
 }
 
-/** A queued paint operation: write, clip, unclip, blit, clear, noSelect, or shift. */
+/** A queued paint operation: write, clip, unclip, blit, clear, shade, noSelect, or shift. */
 export type Operation =
   | WriteOperation
   | ClipOperation
   | UnclipOperation
   | BlitOperation
   | ClearOperation
+  | ShadeOperation
   | NoSelectOperation
   | ShiftOperation
+
+/**
+ * Restyle the cells already in the region at this point of the paint
+ * order: a modal layer's backdrop. Applied in sequence like a write, so
+ * everything painted earlier (the transcript beneath) is shaded and
+ * everything painted later (the card on top) is not.
+ */
+type ShadeOperation = {
+  type: 'shade'
+  region: Rectangle
+}
 
 type WriteOperation = {
   type: 'write'
@@ -617,6 +630,16 @@ export default class Output {
   }
 
   /**
+   * Shade the cells painted so far inside `region` (see ShadeOperation).
+   * Idempotent per cell, so a clean subtree blitted back from prevScreen
+   * with last frame's shade is not shaded twice.
+   * @param region - the backdrop node's rect.
+   */
+  shade(region: Rectangle): void {
+    this.operations.push({ type: 'shade', region })
+  }
+
+  /**
    * Mark a region as non-selectable (excluded from fullscreen text
    * selection copy + highlight). Used by <NoSelect> to fence off
    * gutters (line numbers, diff sigils). Applied AFTER blit/write so
@@ -917,6 +940,20 @@ export default class Output {
 
         case 'shift': {
           shiftRows(screen, operation.top, operation.bottom, operation.n)
+          continue
+        }
+
+        case 'shade': {
+          // Honour the active clip like a write: a backdrop inside an
+          // overflow-hidden ancestor must not shade cells outside it.
+          const { x, y, width, height } = operation.region
+          const clip = clips.at(-1)
+          const startX = Math.max(x, clip?.x1 ?? 0)
+          const startY = Math.max(y, clip?.y1 ?? 0)
+          const maxX = Math.min(x + width, clip?.x2 ?? Infinity)
+          const maxY = Math.min(y + height, clip?.y2 ?? Infinity)
+          if (startX >= maxX || startY >= maxY) continue
+          shadeRegion(screen, this.stylePool, startX, startY, maxX - startX, maxY - startY)
           continue
         }
 

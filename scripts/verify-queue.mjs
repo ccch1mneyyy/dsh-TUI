@@ -1,12 +1,14 @@
 /**
- * Headless verification of the prompt-input send semantics: Enter submits
- * IMMEDIATELY — even while the model is streaming (channel.submit is DSH
- * followup / next-turn inbox: processed after the current turn, never
- * interrupting). No staging queue; a `\r`+`\n` double event must not send
- * twice; Esc only clears the input.
+ * Headless verification of prompt send semantics: while the model streams,
+ * Enter steers, Tab queues a followup, and Ctrl+Enter interrupts; a complete
+ * piped line keeps the legacy direct-submit path. A `\r`+`\n` double event
+ * must not send twice, and Esc either delivers pending input or clears the
+ * draft according to the current state.
  *
  * Run with plain node against the compiled lib: `node scripts/verify-queue.mjs`
+ * (assertions check Chinese notices; DSH_TUI_LANG defaults to zh here).
  */
+import './lib/default-lang-zh.mjs'
 import { Writable, PassThrough } from 'node:stream'
 import React from 'react'
 import { render } from '../lib/types/ui.js'
@@ -69,10 +71,13 @@ function makeChannel(working) {
     steer(text) { steered.push(text); pending = [...pending, { id: `s${++seq}`, text, placement: 'steer' }] },
     removePending(id) { pending = pending.filter(item => item.id !== id); return true },
     cancel() { cancelled.push('cancel') },
-    interruptAndDeliver(texts) {
+    interruptAndDeliver(inputs) {
       cancelled.push('interruptAndDeliver')
       pending = []
-      const trimmed = texts.map(text => text.trim()).filter(text => text !== '')
+      const trimmed = inputs
+        .map(input => typeof input === 'string' ? input : input.text)
+        .map(text => text.trim())
+        .filter(text => text !== '')
       submitted.push(...trimmed)
       pending = trimmed.map(text => ({ id: `i${++seq}`, text, placement: 'followup' }))
       return trimmed.length
@@ -165,7 +170,36 @@ async function run() {
     instance.unmount()
   }
 
-  // ---- Scenario 4: piped Enter (`\n` alone) steers while working.
+  // ---- Scenario 4: a piped line arrives as one `text + \n` batch and keeps
+  // the legacy direct-submit path. A standalone LF after separately typed
+  // text is Ctrl+J in the terminal protocol and inserts a newline.
+  {
+    const { stdout, stderr, stdin } = makeStreams()
+    const channel = makeChannel(true)
+    const instance = await render(
+      React.createElement(PromptInput, {
+        channel,
+        helpOpen: false,
+        onToggleHelp() {},
+        onRunCommand: () => false,
+        selectionActive: false,
+      }),
+      { stdout, stderr, stdin, exitOnCtrlC: false, patchConsole: false },
+    )
+    await sleep(600)
+    stdin.write('piped\n')
+    await sleep(300)
+    check(
+      'piped line keeps the legacy direct-submit path while working',
+      channel.submitted.length === 1 && channel.submitted[0] === 'piped' && channel.steered.length === 0,
+      JSON.stringify({ steered: channel.steered, submitted: channel.submitted }),
+    )
+    instance.unmount()
+  }
+
+  // ---- Scenario 4b: text typed first, then a bare LF on its own while
+  // working. The LF is Ctrl+J (newline insert), not Enter: nothing steers,
+  // nothing submits, the draft keeps the text.
   {
     const { stdout, stderr, stdin } = makeStreams()
     const channel = makeChannel(true)
@@ -184,7 +218,20 @@ async function run() {
     await sleep(200)
     stdin.write('\n')
     await sleep(300)
-    check('piped Enter steers while working', channel.steered.length === 1 && channel.steered[0] === 'piped')
+    check(
+      'a bare LF after separately typed text inserts a newline while working (no steer, no submit)',
+      channel.steered.length === 0 && channel.submitted.length === 0,
+      JSON.stringify({ steered: channel.steered, submitted: channel.submitted }),
+    )
+    stdin.write('next')
+    await sleep(100)
+    stdin.write('\r')
+    await sleep(300)
+    check(
+      'Enter after Ctrl+J delivers both draft lines with the inserted newline',
+      channel.steered.length === 1 && channel.steered[0] === 'piped\nnext' && channel.submitted.length === 0,
+      JSON.stringify({ steered: channel.steered, submitted: channel.submitted }),
+    )
     instance.unmount()
   }
 

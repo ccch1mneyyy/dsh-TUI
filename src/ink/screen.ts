@@ -108,11 +108,97 @@ const INVERSE_CODE: AnsiCode = {
   endCode: '\x1b[27m',
 }
 // Bold (SGR 1) — stacks cleanly, no reflow in monospace. endCode 22
-// also cancels dim (SGR 2); harmless here since we never add dim.
+// also cancels dim (SGR 2); transitionAnsiCodes re-applies whichever
+// intensity the target style keeps.
 const BOLD_CODE: AnsiCode = {
   type: 'ansi',
   code: '\x1b[1m',
   endCode: '\x1b[22m',
+}
+// Faint (SGR 2): the backdrop shade behind a modal layer. Terminal-native
+// (every mainstream emulator renders it by blending the foreground toward
+// its own background), so it needs no knowledge of the terminal palette.
+const DIM_CODE: AnsiCode = {
+  type: 'ansi',
+  code: '\x1b[2m',
+  endCode: '\x1b[22m',
+}
+const INTENSITY_END = '\x1b[22m'
+
+/** An sRGB triple, 0–255 per channel. */
+export type Rgb = { readonly r: number; readonly g: number; readonly b: number }
+
+/** How far a shaded explicit colour moves toward the shade target. */
+const SHADE_BLEND = 0.5
+
+/** The xterm 256-colour palette entry `n` as RGB (16–231 cube, 232–255
+ *  greys, 0–15 the conventional defaults). */
+function ansi256ToRgb(n: number): Rgb {
+  if (n >= 232) {
+    const v = 8 + (n - 232) * 10
+    return { r: v, g: v, b: v }
+  }
+  if (n >= 16) {
+    const i = n - 16
+    const levels = [0, 95, 135, 175, 215, 255] as const
+    return {
+      r: levels[Math.floor(i / 36) % 6]!,
+      g: levels[Math.floor(i / 6) % 6]!,
+      b: levels[i % 6]!,
+    }
+  }
+  const basic: readonly Rgb[] = [
+    { r: 0, g: 0, b: 0 }, { r: 205, g: 0, b: 0 }, { r: 0, g: 205, b: 0 }, { r: 205, g: 205, b: 0 },
+    { r: 0, g: 0, b: 238 }, { r: 205, g: 0, b: 205 }, { r: 0, g: 205, b: 205 }, { r: 229, g: 229, b: 229 },
+    { r: 127, g: 127, b: 127 }, { r: 255, g: 0, b: 0 }, { r: 0, g: 255, b: 0 }, { r: 255, g: 255, b: 0 },
+    { r: 92, g: 92, b: 255 }, { r: 255, g: 0, b: 255 }, { r: 0, g: 255, b: 255 }, { r: 255, g: 255, b: 255 },
+  ]
+  return basic[Math.max(0, Math.min(15, n))]!
+}
+
+/** A truecolor (`38;2` / `48;2`) or 256-colour (`38;5` / `48;5`) SGR as a
+ *  plane + RGB; null for anything else (basic ANSI colours included — the
+ *  terminal's palette for those is unknown, so they take the faint path). */
+function parseSgrColor(code: string): { plane: 'fg' | 'bg'; rgb: Rgb } | null {
+  const match = /^\x1b\[(38|48);(2|5);(\d+)(?:;(\d+);(\d+))?m$/u.exec(code)
+  if (match === null) return null
+  const plane = match[1] === '38' ? 'fg' : 'bg'
+  if (match[2] === '5') return { plane, rgb: ansi256ToRgb(Number(match[3])) }
+  if (match[4] === undefined || match[5] === undefined) return null
+  return { plane, rgb: { r: Number(match[3]), g: Number(match[4]), b: Number(match[5]) } }
+}
+
+function sgrColor(plane: 'fg' | 'bg', rgb: Rgb): AnsiCode {
+  return {
+    type: 'ansi',
+    code: `\x1b[${plane === 'fg' ? 38 : 48};2;${rgb.r};${rgb.g};${rgb.b}m`,
+    endCode: plane === 'fg' ? '\x1b[39m' : '\x1b[49m',
+  }
+}
+
+function mixRgb(from: Rgb, to: Rgb, amount: number): Rgb {
+  const channel = (a: number, b: number): number => Math.round(a + (b - a) * amount)
+  return { r: channel(from.r, to.r), g: channel(from.g, to.g), b: channel(from.b, to.b) }
+}
+
+/**
+ * The SGR codes that move a cell from style `from` to style `to`.
+ * `diffAnsiCodes` undoes a dropped intensity code with SGR 22, which
+ * cancels BOTH bold and dim, and does not re-apply the intensity `to`
+ * keeps (bold+dim → bold lost the bold). Every emitter goes through this
+ * wrapper so a shaded bold word returns to plain bold when the shade lifts.
+ * @param from - the current style stack.
+ * @param to - the target style stack.
+ * @returns the codes to emit, undo codes first.
+ */
+export function transitionAnsiCodes(from: AnsiCode[], to: AnsiCode[]): AnsiCode[] {
+  const diff = diffAnsiCodes(from, to)
+  if (!diff.some(code => code.code === INTENSITY_END)) return diff
+  const emitted = new Set(diff.map(code => code.code))
+  for (const code of to) {
+    if (code.endCode === INTENSITY_END && !emitted.has(code.code)) diff.push(code)
+  }
+  return diff
 }
 // Underline (SGR 4). Kept alongside yellow+bold — the underline is the
 // unambiguous visible-on-any-theme marker. Yellow-bg-via-inverse can
@@ -161,6 +247,10 @@ export class StylePool {
    */
   intern(styles: AnsiCode[]): number {
     const key = styles.length === 0 ? '' : styles.map(s => s.code).join('\0')
+    return this.internWithKey(styles, key)
+  }
+
+  private internWithKey(styles: AnsiCode[], key: string): number {
     let id = this.ids.get(key)
     if (id === undefined) {
       const rawId = this.styles.length
@@ -197,7 +287,7 @@ export class StylePool {
     const key = fromId * 0x100000 + toId
     let str = this.transitionCache.get(key)
     if (str === undefined) {
-      str = ansiCodesToString(diffAnsiCodes(this.get(fromId), this.get(toId)))
+      str = ansiCodesToString(transitionAnsiCodes(this.get(fromId), this.get(toId)))
       this.transitionCache.set(key, str)
     }
     return str
@@ -270,6 +360,65 @@ export class StylePool {
         codes.push(UNDERLINE_CODE)
       id = this.intern(codes)
       this.currentMatchCache.set(baseId, id)
+    }
+    return id
+  }
+
+  /**
+   * The colour a backdrop shade fades explicit colours toward: the
+   * terminal's background (OSC 11), or black/white by the active theme's
+   * lightness when it is unknown. Null keeps every colour and shades with
+   * faint alone. Changing it drops the shade caches.
+   * @param rgb - the shade target, or null.
+   */
+  private shadeTarget: Rgb | null = null
+  setShadeTarget(rgb: Rgb | null): void {
+    const current = this.shadeTarget
+    if (current === rgb || (current !== null && rgb !== null
+      && current.r === rgb.r && current.g === rgb.g && current.b === rgb.b)) return
+    this.shadeTarget = rgb
+    this.dimCache.clear()
+  }
+
+  /**
+   * Backdrop shade. Explicit truecolor / 256-colour foregrounds AND
+   * backgrounds move halfway toward the shade target, so a half-block
+   * pixel (`▀` with the upper pixel in the fg and the lower in the bg)
+   * fades as one pixel pair instead of losing only its upper half; a cell
+   * with no such foreground gets faint (SGR 2) so the terminal blends its
+   * default text colour toward its own background. Derived IDs retain
+   * their source style, so a cell blitted from prevScreen is shaded once,
+   * even after the target changes. Equal ANSI colours painted separately
+   * must not share that provenance.
+   * @param baseId - the cell's current style ID.
+   * @returns the shaded style ID, reused for the same source and shade.
+   */
+  private dimCache = new Map<number, number>()
+  private shadedBaseIds = new Map<number, number>()
+  withDim(baseId: number): number {
+    baseId = this.shadedBaseIds.get(baseId) ?? baseId
+    let id = this.dimCache.get(baseId)
+    if (id === undefined) {
+      const baseCodes = this.get(baseId)
+      const target = this.shadeTarget
+      const codes: AnsiCode[] = []
+      let fgBlended = false
+      for (const code of baseCodes) {
+        const parsed = target === null ? null : parseSgrColor(code.code)
+        if (parsed === null || target === null) {
+          codes.push(code)
+          continue
+        }
+        codes.push(sgrColor(parsed.plane, mixRgb(parsed.rgb, target, SHADE_BLEND)))
+        if (parsed.plane === 'fg') fgBlended = true
+      }
+      if (!fgBlended && !baseCodes.some(c => c.code === DIM_CODE.code)) codes.push(DIM_CODE)
+      // Keep shades separate from ordinary ANSI interning: e.g. shaded
+      // rgb(200,200,200) and independently painted rgb(100,100,100).
+      // Including the source also preserves it when two shades coincide.
+      id = this.internWithKey(codes, `shade:${baseId}:${codes.map(c => c.code).join('\0')}`)
+      this.shadedBaseIds.set(id, baseId)
+      this.dimCache.set(baseId, id)
     }
     return id
   }
@@ -1812,4 +1961,53 @@ export function markNoSelectRegion(
     const rowStart = row * stride
     noSel.fill(1, rowStart + Math.max(0, x), rowStart + maxX)
   }
+}
+
+/**
+ * Shade a region: every painted cell there gets its shaded style
+ * (StylePool.withDim). A space with no visible style is skipped — nothing
+ * to fade, and restyling it would only make the diff rewrite blank runs —
+ * but a space carrying a background (a solid pixel, a card fill) is shaded
+ * like a glyph; spacer tails have no style of their own. The mapping is
+ * derived from each style's original source, so blitted cells never stack
+ * shades. Damage covers the region so the diff scans it.
+ * @param screen - the screen being composed.
+ * @param styles - the pool the screen's style IDs belong to.
+ * @param x - the region's left column.
+ * @param y - the region's top row.
+ * @param width - the region's width in cells.
+ * @param height - the region's height in rows.
+ */
+export function shadeRegion(
+  screen: Screen,
+  styles: StylePool,
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+): void {
+  const startX = Math.max(0, x)
+  const startY = Math.max(0, y)
+  const maxX = Math.min(x + width, screen.width)
+  const maxY = Math.min(y + height, screen.height)
+  if (startX >= maxX || startY >= maxY) return
+  const cells = screen.cells
+  const stride = screen.width
+  for (let row = startY; row < maxY; row++) {
+    for (let col = startX; col < maxX; col++) {
+      const ci = (row * stride + col) << 1
+      const word1 = cells[ci + 1]!
+      const styleId = word1 >>> STYLE_SHIFT
+      // Bit 0 of a style ID: visible on a space (background, inverse, …).
+      if (cells[ci] === EMPTY_CHAR_INDEX && (styleId & 1) === 0) continue
+      const cellWidth = word1 & WIDTH_MASK
+      if (cellWidth === CellWidth.SpacerTail) continue
+      const shaded = styles.withDim(styleId)
+      if (shaded === styleId) continue
+      const hid = (word1 >>> HYPERLINK_SHIFT) & HYPERLINK_MASK
+      cells[ci + 1] = packWord1(shaded, hid, cellWidth)
+    }
+  }
+  const rect = { x: startX, y: startY, width: maxX - startX, height: maxY - startY }
+  screen.damage = screen.damage ? unionRect(screen.damage, rect) : rect
 }

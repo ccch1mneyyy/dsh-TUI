@@ -29,6 +29,7 @@
  *      exactly as before.
  */
 import type { ChatRow, PermissionPresetSnapshot } from '../dsh-adapter/channel.js'
+import type { TranscriptImage } from '../dsh-adapter/transcript-images.js'
 import type { TuiRewindMode } from '../dsh-adapter/extension-events.js'
 import type { TuiWorkspaceCommandResult } from '../workspaces.js'
 
@@ -87,6 +88,15 @@ export type ChatOverlay =
    * the target is a directory (first row reads "open folder").
    */
   | { kind: 'file-actions'; path: string; index: number; isDir: boolean }
+  /**
+   * Modal image preview: opened by clicking a transcript thumbnail. Renders
+   * as its own centered layer (not inside `<OverlayAbove>`); Esc /
+   * click-outside closes. The composer's caret-driven preview (the caret on
+   * a staged `[Image #N]`) is NOT an overlay: it is derived state in Chat,
+   * shows only while this union is `none`, and leaves the keyboard with the
+   * prompt.
+   */
+  | { kind: 'image-preview'; image: TranscriptImage; title?: string }
 
 export const NO_OVERLAY: ChatOverlay = { kind: 'none' }
 
@@ -249,6 +259,10 @@ export function dialogOverlayVisible(
 ): boolean {
   switch (overlay.kind) {
     case 'none':
+      return false
+    // The preview paints its own absolute layer; mounting the empty
+    // `<OverlayAbove>` wrapper for it would only churn the prompt area.
+    case 'image-preview':
       return false
     case 'workspace-picker':
       return gates.workspaceTargetCount > 0

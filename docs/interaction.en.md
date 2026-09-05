@@ -16,7 +16,8 @@
 | `Ctrl+V` / `Alt+V` | Insert clipboard text or files; images are sent as durable attachments. Use `Alt+V` when the terminal intercepts `Ctrl+V` |
 | `Ctrl+G` | Edit the current input in an external editor (`$VISUAL` → `$EDITOR`); saving and quitting fills it back, `:cq`/non-zero exit keeps the draft; with neither variable set the TUI asks you to configure one (no `vi` fallback) |
 | `Ctrl+Shift+E` | Expand the fullscreen draft editor (or click the `⛶` affordance at the end of the input row): line numbers + current-line highlight + live line/char stats, `Enter` inserts a newline, `Ctrl+Enter` or the Send button sends, `Esc` or the Collapse button keeps the draft and returns; wheel-scrolls freely, click/drag/double-click selection work as in the inline prompt; remappable via `/settings` |
-| `Esc` | Ladder: close help → close the command menu → close the file menu (only the current `@` token) → **with a selection in the prompt input: only clear it (text untouched)** → interrupt the turn and redeliver pending messages → clear non-empty input → double-tap on empty input = rewind; in fullscreen, an active mouse selection is cleared first (not copied) |
+| `Esc` | Ladder: close help → close the image preview → close the command menu → close the file menu (only the current `@` token) → **with a selection in the prompt input: only clear it (text untouched)** → interrupt the turn and redeliver pending messages → clear non-empty input → double-tap on empty input = rewind; in fullscreen, an active mouse selection is cleared first (not copied) |
+| `Esc` / `Ctrl+C` / `Enter` while an image preview is open | Close the preview and restore the surface underneath; other keys are not passed through |
 | `Ctrl+C` | Interrupt while working; press again while the interrupt is still settling to force-exit; clear non-empty idle input; **while idle with a selection in the prompt input, copy it to the clipboard (selection kept for editing)**; press twice on empty input to exit |
 | `Ctrl+D` | Same ladder as `Ctrl+C`: interrupt while working (press again to force-exit if the interrupt stalls); press twice while idle to exit |
 | `Ctrl+O` | Toggle transcript/verbose detail, including full reasoning and tool arguments/output |
@@ -143,10 +144,44 @@ and directory listings are attached as text; PNG, JPEG, WebP,
 and GIF files are sent as durable Harness image blocks. Reads use the active
 workspace filesystem, including provider-owned workspaces.
 
-On `Ctrl+V`, files copied from a file manager (Windows Explorer, GNOME Files, KDE
-Dolphin, …) insert as paths, while image files become `@` references. Clipboard
-bitmaps are saved in the attachment store and appear as `[Image #N]`; submitting
-the prompt sends a real image block. The prompt never contains base64.
+On `Ctrl+V`, files copied from a file manager (Finder, Windows Explorer, GNOME
+Files, KDE Dolphin, …) insert as paths, while copied image files are staged into
+the attachment store exactly like clipboard bitmaps and appear as `[Image #N]`
+(falling back to an `@` reference when staging fails); submitting the prompt
+sends a real image block. The prompt never contains base64. When a terminal
+forwards a drop as pasted text (Ghostty sends a shell-escaped path through the
+PTY), the paste stages only when it is exactly one existing local image path —
+anything ambiguous stays verbatim text. A staged `[Image #N]` is one unit in the
+composer: the caret never rests inside it, ←/→ step over it, Backspace at its
+end, Delete at its start and Ctrl+W remove it whole, and a selection edge inside
+it grows to cover the token. It renders in the theme accent and inverts whole
+while the caret sits at its start; clicking it places the caret at its start and
+opens the preview. The preview opens by itself while the token is selected (the
+caret at its start) and closes when the caret leaves; the cell just after the
+token does not count. The keyboard stays with the
+prompt meanwhile, so ←/→ walk from image to image with the card following. Esc
+or a click outside the card dismisses only that token's preview until the caret
+leaves and returns; a click on the token always shows it. Look-alike text typed
+by hand or restored from history without an attachment capability stays ordinary
+text. In fullscreen, clicking a staged
+`[Image #N]` token or a transcript thumbnail opens one shared preview centered
+over the transcript area; the image takes at most about 70% of its width and 80% of its
+height, and the surrounding conversation, the prompt, status rows and sticky header stay visible
+(Esc or a click outside the card closes it; narrow terminals get a
+metadata-only card). While the preview is open, the conversation outside the
+card fades: explicit foreground and background colours (pixel art, tool cards,
+syntax highlighting) blend halfway toward the terminal background (from OSC 11;
+black or white by theme lightness when unknown), and uncoloured text takes the
+terminal's faint attribute. The card, the prompt and the status rows are not
+touched, and closing restores everything. The card's title sits centered in its top border as
+`Image #N — format · width×height · size · file name`; the card is at least as
+wide as the title, so a small image never squeezes the file name, and a title
+wider than the transcript area shortens the file name in its middle first.
+Images staged from a file or the clipboard in this session show their source
+path on the card's bottom row (`Path: …`, head and tail kept, middle elided);
+images restored from the session log have none. A stale `[Image #N]` placeholder (evicted past 128
+staged images or cleared by a session switch) warns on click, on submit, and when
+it appears as a slash-command argument.
 After submission, user images are re-projected from durable session events into
 the transcript. Assistant messages and tool results use the same preview path
 whenever their content contains image blocks. Fullscreen sessions with a
@@ -383,6 +418,7 @@ owns native scrollback and selection.
 | Single-click a tool card / thinking / compact summary | Expand / collapse (header brightens on hover; trailing blank cells do not trigger) |
 | Single-click a subagent card | Open that subagent's detail scene (status glyph brightens on hover) |
 | Single-click the input box | Place the text caret at the click (multi-line, wrapped rows and CJK all width-aligned) |
+| Click a `[Image #N]` token in the input box / a transcript thumbnail | Open the centered image preview (image metadata when Kitty graphics is unavailable); clicking outside the preview closes it |
 | Drag inside the prompt input | Build an in-input selection (rendered highlight, caret rides the drag end): `Backspace`/`Delete` delete it, typing replaces it, `←/→` collapse it to the corresponding edge, `Esc` only clears it; drags map only visible rows (no edge auto-scroll yet); a folded paste block keeps the selection on the clicked side (never across the chip row) |
 | `Shift+click` in the prompt input | Extend the selection from its start edge (or the caret) to the clicked position |
 | Double-click a word in the prompt input | Select the whole word (detected in the component, 500 ms / 1 cell; paths and punctuation runs select as one) |

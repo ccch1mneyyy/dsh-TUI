@@ -26,6 +26,9 @@ export interface LocalCommand {
   tag?: string
   /** True when a DSH plugin registered this command (not built in). */
   external?: boolean
+  /** True when this command explicitly accepts composer images. Local
+   * commands default to false; registry entries mirror `input.images`. */
+  acceptsImages?: boolean
   /**
    * True when the entry is a user-invocable skill discovered by the DSH
    * skill registry (issue #86). Skill entries are completion-only: dispatch

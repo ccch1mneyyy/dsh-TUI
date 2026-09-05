@@ -128,7 +128,7 @@ import type {
   TuiRewindMode,
   TuiRewindPromptDecision,
 } from './extension-events.js'
-import { transcriptImagesOf, type TranscriptImage } from './transcript-images.js'
+import { rememberImagePath, transcriptImageFromAttachment, transcriptImagesOf, type TranscriptImage } from './transcript-images.js'
 
 /** `tui/input` return normalization: transform/handled/cancel or no opinion.
  *  A blank `{ text }` rewrite is NOT a decision — it is logged and the chain
@@ -425,6 +425,66 @@ export interface StagedImageInput {
   data: Uint8Array
   mediaType: ChannelImageMediaType
   name?: string
+  /** Absolute local path the bytes were read from, for the preview card's
+   *  path row. Not handed to the attachment store and never persisted. */
+  path?: string
+}
+
+/** Opaque capability returned for one staged composer image. The visible
+ * `[Image #N]` label is deliberately absent: PromptInput owns presentation
+ * numbering while this id is the non-reusable attachment identity. */
+export interface StagedImageHandle {
+  readonly stageId: string
+}
+
+/** One visible composer token bound to its opaque staged-image capability. */
+export interface ComposerImageRef {
+  readonly token: string
+  readonly stageId: string
+}
+
+/** Text plus the image capabilities that belong to that exact draft. */
+export interface ComposerSubmission {
+  readonly text: string
+  readonly images?: readonly ComposerImageRef[]
+}
+
+/** UI-safe projection of one settled DSH registry command. Keeping the
+ * result kind across the adapter boundary lets the composer retain a
+ * rejected image draft instead of treating the error text as success. */
+export type ExternalCommandOutcome =
+  | { readonly kind: 'success'; readonly text: string; readonly consumeDraft: true }
+  | { readonly kind: 'error'; readonly text: string; readonly consumeDraft: boolean }
+
+const COMPOSER_IMAGE_TOKEN = /\[Image #\d+\]/gu
+const COMPOSER_IMAGE_TOKEN_EXACT = /^\[Image #\d+\]$/u
+
+const formatMissingReference = (reference: string): string =>
+  COMPOSER_IMAGE_TOKEN_EXACT.test(reference) ? reference : `@${reference}`
+
+/** Resolve only capabilities explicitly carried by this draft, in first
+ * textual-occurrence order. The visible token is presentation, never
+ * identity: raw history/rewind text has no stageId and therefore resolves
+ * to nothing even if a later draft happens to display the same number. */
+function orderedComposerImages<T>(
+  text: string,
+  refs: readonly ComposerImageRef[],
+  staged: ReadonlyMap<string, T>,
+): Map<string, T> {
+  const byToken = new Map<string, string>()
+  for (const ref of refs) {
+    if (!byToken.has(ref.token)) byToken.set(ref.token, ref.stageId)
+  }
+  const ordered = new Map<string, T>()
+  for (const match of text.matchAll(COMPOSER_IMAGE_TOKEN)) {
+    const token = match[0]
+    if (ordered.has(token)) continue
+    const stageId = byToken.get(token)
+    if (stageId === undefined) continue
+    const image = staged.get(stageId)
+    if (image !== undefined) ordered.set(token, image)
+  }
+  return ordered
 }
 
 /** Tool-call card state, mirroring the Claude Code tool-use presentation. */
@@ -1032,11 +1092,20 @@ export interface Channel {
   /**
    * Run a plugin-registered slash command against the live agent (DSH
    * `dsh-commands` registry): logs `command/run`/`command/done` and returns
-   * the handler's result text — `''` when the handler succeeded silently,
-   * `undefined` when the registry has no such command (the caller falls
-   * back to sending the line to the model).
+   * the handler's result text. Kept stable for public scene consumers.
    */
-  runExternalCommand(name: string, rawInput: string): Promise<string | undefined>
+  runExternalCommand(
+    name: string,
+    rawInput: string,
+    images?: readonly ComposerImageRef[],
+  ): Promise<string | undefined>
+  /** Detailed companion used by draft-owning composers. `undefined` means
+   * the registry no longer has the command, so the draft stays untouched. */
+  runExternalCommandOutcome(
+    name: string,
+    rawInput: string,
+    images?: readonly ComposerImageRef[],
+  ): Promise<ExternalCommandOutcome | undefined>
   /**
    * TUI-side permission preset switch: the official `/permission` command
    * when registered, otherwise the permission-presets service's own write
@@ -1087,24 +1156,45 @@ export interface Channel {
   /** Cancellation of a background job with the owning agent's authority. */
   readonly jobControl: JobControl
   subscribe: (listener: () => void) => () => void
-  /** Validate and persist a pasted image, returning its prompt placeholder. */
+  /** Current composer generation. Async paste continuations capture this
+   *  before I/O and must not mutate a different session's draft. */
+  stagedImageGeneration(): number
+  /** Validate and persist an image, returning the historical scene-facing
+   * `[Image #N]` token accepted by submit/steer/registry commands. */
   stageImage(input: StagedImageInput): Promise<string>
-  submit(text: string): void
+  /** Draft-safe composer companion: bind persistence to one session epoch
+   * and return an opaque capability whose visible label belongs to Prompt. */
+  stageComposerImage(input: StagedImageInput, generation: number): Promise<StagedImageHandle>
+  /** Whether a capability is still live in the current composer session. */
+  hasStagedImage(stageId: string): boolean
+  /** Revoke a capability that was staged for a draft which no longer exists.
+   * Durable attachment storage remains content-addressed; this only releases
+   * the editable-composer lookup and its preview facade. */
+  discardStagedImage(stageId: string): void
+  /** The staged image behind one opaque capability, as the same lazily-read
+   *  facade transcript rows use; undefined once evicted or cleared. */
+  stagedImage(stageId: string): TranscriptImage | undefined
+  /** The profile's image-paste limits, for callers that must bound work
+   *  BEFORE reading bytes (a Finder path is untrusted input). Undefined
+   *  when the composition has no attachment service. */
+  stagedImageLimits(): { readonly maxImageBytes: number; readonly maxImagesPerMessage: number } | undefined
+  submit(text: string, images?: readonly ComposerImageRef[]): void
   /**
    * Steer a message into the running turn (Codex/pi semantics): injected at
    * the next step boundary, the agent continues without aborting.
    */
-  steer(text: string): void
+  steer(text: string, images?: readonly ComposerImageRef[]): void
   /** Pull a pending message back out of the inbox (Alt+Up) for re-editing. */
   removePending(id: string): boolean
   /** Abort the in-flight turn (`Ctrl+C` while working). While `cancelPending`
    *  stays true the abort has not converged; Chat force-exits on the next
    *  Ctrl+C press in that window. */
   cancel(): void
-  /** Abort the in-flight turn and process `texts` right away (Esc/Ctrl+Enter
-   *  with queued input): each text is re-queued as a followup once the abort
-   *  settles, so the new turn starts immediately. Returns the count queued. */
-  interruptAndDeliver(texts: readonly string[]): number
+  /** Abort the in-flight turn and process `inputs` right away (Esc/Ctrl+Enter
+   *  with queued input): each message is re-queued as a followup once the abort
+   *  settles, so the new turn starts immediately. Plain strings remain the
+   *  compatibility form for non-composer callers. Returns the count queued. */
+  interruptAndDeliver(inputs: readonly (string | ComposerSubmission)[]): number
   /** Rewind the conversation to a past user message (CC's double-Esc rewind):
    *  forks the session through that message, swaps in a fresh agent, and
    *  returns the message text for re-editing — or `null` when unwritable.
@@ -1407,6 +1497,7 @@ export interface PermissionPresetSnapshot {
 export interface PendingMessage {
   id: string
   text: string
+  images: readonly ComposerImageRef[]
   placement: 'steer' | 'followup'
 }
 
@@ -1552,7 +1643,17 @@ export interface ChannelState {
   /** Context-aware slash completions (see the public Channel type). */
   commandCompletions(input: string): readonly CommandCompletion[]
   /** Run a plugin-registered command (see the public Channel type). */
-  runExternalCommand(name: string, rawInput: string): Promise<string | undefined>
+  runExternalCommand(
+    name: string,
+    rawInput: string,
+    images?: readonly ComposerImageRef[],
+  ): Promise<string | undefined>
+  /** Run a command while retaining its draft-consumption outcome. */
+  runExternalCommandOutcome(
+    name: string,
+    rawInput: string,
+    images?: readonly ComposerImageRef[],
+  ): Promise<ExternalCommandOutcome | undefined>
   /** TUI-side permission preset switch (see the public Channel type). */
   runPermissionPreset(name: string): Promise<boolean>
   /** Open plugin scene mirrored from the scenes runtime (see the public Channel type). */
@@ -1576,19 +1677,25 @@ export interface ChannelState {
   backgroundJobs: readonly BackgroundJobState[]
   jobControl: JobControl
   subscribe: (listener: () => void) => () => void
+  stagedImageGeneration(): number
   stageImage(input: StagedImageInput): Promise<string>
+  stageComposerImage(input: StagedImageInput, generation: number): Promise<StagedImageHandle>
+  hasStagedImage(stageId: string): boolean
+  discardStagedImage(stageId: string): void
+  stagedImage(stageId: string): TranscriptImage | undefined
+  stagedImageLimits(): { readonly maxImageBytes: number; readonly maxImagesPerMessage: number } | undefined
   /** @internal event bump (the public `notify(text)` posts a notification). */
   emit(): void
   /** @internal frame-aligned emit for high-frequency streaming deltas:
    *  version bumps synchronously but listeners fire at most once per 16ms
    *  window (trailing edge). */
   emitStream(): void
-  submit(text: string): void
-  steer(text: string): void
+  submit(text: string, images?: readonly ComposerImageRef[]): void
+  steer(text: string, images?: readonly ComposerImageRef[]): void
   removePending(id: string): boolean
   cancel(): void
   /** @internal interrupt-and-deliver (see the public Channel type). */
-  interruptAndDeliver(texts: readonly string[]): number
+  interruptAndDeliver(inputs: readonly (string | ComposerSubmission)[]): number
   rewindTo(row: ChatRow, mode?: string | null): Promise<string | null>
   /** @internal rewind decision prompt (see the public Channel.promptRewind). */
   promptRewind(row: ChatRow): Promise<{ modes: readonly TuiRewindMode[] } | 'cancel' | null>
@@ -2664,8 +2771,12 @@ export function createChannel(
    * Register a submitted message as pending and notify the UI. The inbox
    * events (claimed/discarded) retire it; nothing here guesses timing.
    */
-  const trackPending = (message: { id: string; text: string }, placement: PendingMessage['placement']): void => {
-    state.pending = [...state.pending, { id: message.id, text: message.text, placement }]
+  const trackPending = (
+    message: { id: string; text: string },
+    placement: PendingMessage['placement'],
+    images: readonly ComposerImageRef[],
+  ): void => {
+    state.pending = [...state.pending, { id: message.id, text: message.text, images: [...images], placement }]
     state.emit()
   }
   /** Remove one pending entry (rollback on a refused send, steering
@@ -2677,15 +2788,122 @@ export function createChannel(
   }
   /**
    * `@` file mentions (issue #15): expansion reads files asynchronously, so
-   * every user-text delivery (submit / steer / interrupt-requeue) funnels
-   * through this chain to keep the send order FIFO.
+   * decision and delivery share one FIFO (`inputChain` below). Keeping a
+   * second delivery chain would let it outlive the agent/cwd it was queued
+   * against and adopt mutable state from a replacement session.
    */
-  let sendChain: Promise<void> = Promise.resolve()
-  let stagedImageSequence = 0
+  /** Session epoch for the staged-image maps: bumped by every clear so a
+   *  `saveImage` that was still in flight when the session changed cannot
+   *  register its capability in the NEW session. */
+  let stagedImageEpoch = 0
   const stagedImages = new Map<string, ChannelImageBlock['attachment']>()
+  /** Compatibility bindings minted by the public scene `stageImage()` API.
+   * New Prompt drafts carry explicit opaque refs instead. */
+  const legacyStagedImageRefs = new Map<string, string>()
+  let legacyStagedImageSequence = 0
+  /** UI facades for staged capabilities, one stable object per id so the
+   *  component-side decode cache (keyed by object identity) can hit. Keys
+   *  mirror `stagedImages` exactly — same insert, evict and clear. */
+  const stagedImageViews = new Map<string, TranscriptImage>()
+  /** Session-bound decision indicators. A session replacement cancels their
+   * timers and dismisses already-visible sticky notices even when a plugin's
+   * promise never settles. */
+  const pendingDecisionCleanups = new Set<() => void>()
+  /** Decision + delivery FIFO for the CURRENT session. A replacement starts
+   * a fresh chain: an unabortable old fs/plugin await may finish and stale-
+   * drop later, but it must not wedge inputs typed in the new session. */
+  let inputChain: Promise<void> = Promise.resolve()
   const clearStagedImages = (): void => {
+    const decisionCleanups = [...pendingDecisionCleanups]
+    // Revoke capabilities quietly before dismissing decision notices:
+    // dismiss() emits synchronously, so subscribers must never observe the
+    // replacement agent with an OLD session's epoch or image map.
+    stagedImageEpoch += 1
     stagedImages.clear()
-    stagedImageSequence = 0
+    stagedImageViews.clear()
+    legacyStagedImageRefs.clear()
+    legacyStagedImageSequence = 0
+    inputChain = Promise.resolve()
+    for (const cleanup of decisionCleanups) cleanup()
+  }
+
+  const deleteStagedImage = (stageId: string): void => {
+    stagedImages.delete(stageId)
+    stagedImageViews.delete(stageId)
+    for (const [token, candidate] of legacyStagedImageRefs) {
+      if (candidate === stageId) legacyStagedImageRefs.delete(token)
+    }
+  }
+
+  /** Add scene-era token bindings only when the caller did not supply an
+   * explicit draft capability for that visible token. This keeps old scene
+   * `stageImage() -> submit(token)` code working without letting a raw token
+   * alias a different Prompt draft's image. */
+  const includeLegacyImageRefs = (
+    text: string,
+    images: readonly ComposerImageRef[],
+  ): readonly ComposerImageRef[] => {
+    if (legacyStagedImageRefs.size === 0) return images
+    const merged = images.map(image => ({ ...image }))
+    const claimed = new Set(merged.map(image => image.token))
+    for (const match of text.matchAll(COMPOSER_IMAGE_TOKEN)) {
+      const token = match[0]
+      if (claimed.has(token)) continue
+      const stageId = legacyStagedImageRefs.get(token)
+      if (stageId === undefined || !stagedImages.has(stageId)) continue
+      merged.push({ token, stageId })
+      claimed.add(token)
+    }
+    return merged
+  }
+
+  const persistComposerImage = async (
+    input: StagedImageInput,
+    generation: number,
+  ): Promise<StagedImageHandle> => {
+    const attachments = mentionAttachments(ctx)
+    if (attachments === undefined) throw new Error('image attachments are unavailable in this profile')
+    if (generation !== stagedImageEpoch) {
+      throw new Error('the session changed while the image was being staged')
+    }
+    if (!attachments.imageLimits.mediaTypes.includes(input.mediaType)) {
+      throw new Error(`${input.mediaType} images are not accepted by this profile`)
+    }
+    if (input.data.byteLength > attachments.imageLimits.maxImageBytes) {
+      throw new Error(`image exceeds this profile's per-image size limit`)
+    }
+    // The source path is TUI-side display metadata; the store only sees the
+    // fields its contract names.
+    const { path, ...stored } = input
+    const attachment = await attachments.saveImage(stored)
+    // A session change (/new, resume, rewind, model switch, background)
+    // cleared the maps while the save was in flight: the durable object is
+    // harmless, but the OLD session's capability must not reach the new one.
+    if (generation !== stagedImageEpoch) {
+      throw new Error('the session changed while the image was being staged')
+    }
+    const stageId = randomUUID()
+    stagedImages.set(stageId, attachment)
+    if (path !== undefined) rememberImagePath(String(attachment.attachmentId), path)
+    const view = transcriptImageFromAttachment(attachment, () => ctx.get('attachments'))
+    if (view !== undefined) stagedImageViews.set(stageId, view)
+    // References are content-addressed and durable. This map only connects
+    // editable placeholders to them; the 128 cap is insertion-order FIFO.
+    while (stagedImages.size > 128) {
+      const oldest = stagedImages.keys().next().value as string | undefined
+      if (oldest === undefined) break
+      deleteStagedImage(oldest)
+    }
+    return { stageId }
+  }
+
+  interface UserTextOrigin {
+    readonly agent: Agent
+    readonly agentId: string
+    readonly cwd: string
+    readonly fs: MentionFs | undefined
+    readonly attachments: MentionAttachments | undefined
+    readonly stagedImages: ReadonlyMap<string, ChannelImageBlock['attachment']>
   }
   /**
    * Expand the text's `@` mentions and deliver ONE user message: the typed
@@ -2693,46 +2911,61 @@ export function createChannel(
    * never the file dump) and each resolved reference appends a model-facing
    * attachment block. The pending preview tracks the typed text.
    */
-  const deliverUserText = (text: string, placement: PendingMessage['placement']): void => {
-    sendChain = sendChain.then(async () => {
-      const expansion = await expandMentions(
-        mentionFs(ctx),
-        state.cwd,
-        text,
-        mentionAttachments(ctx),
-        stagedImages,
-      )
-      const message = createUserMessage({
-        content: expansion.blocks,
-        source: { kind: 'user' },
-      })
-      // Track BEFORE the agent call: a synchronous throw inside
-      // followup/steer rolls the preview back; otherwise the inbox events
-      // retire it once the message is claimed or discarded.
-      trackPending({ id: message.id, text }, placement)
-      try {
-        if (placement === 'steer') agent.steer(message)
-        else agent.followup(message)
-      } catch (error) {
-        untrackPending(message.id)
-        throw error
+  const deliverUserText = async (
+    text: string,
+    placement: PendingMessage['placement'],
+    images: readonly ComposerImageRef[],
+    origin: UserTextOrigin,
+  ): Promise<void> => {
+    const orderedImages = orderedComposerImages(text, images, origin.stagedImages)
+    // A `[Image #N]` placeholder whose staging was evicted (FIFO cap) or
+    // whose draft capability was lost (history/rewind/session switch) would
+    // otherwise ship as plain text with no image attached — warn loudly,
+    // deliver unchanged (the text is the user's; rewriting is worse).
+    for (const match of text.matchAll(COMPOSER_IMAGE_TOKEN)) {
+      if (!orderedImages.has(match[0])) {
+        state.notify(t('input-image-token-stale', { token: match[0] }), { color: 'warning', timeoutMs: 5000 })
+        break
       }
-      if (expansion.attached.length > 0) {
-        state.notify(t('mentions-attached', { count: expansion.attached.length }), { timeoutMs: 2500 })
-      }
-      if (expansion.missing.length > 0) {
-        state.notify(t('mentions-missing', { paths: expansion.missing.map(path => `@${path}`).join(' ') }), {
-          color: 'warning',
-          timeoutMs: 4000,
-        })
-      }
-    }).catch((error: unknown) => {
-      // The chain must survive a failed send: log and notify, then continue
-      // with the next queued delivery.
-      const message = error instanceof Error ? error.message : String(error)
-      logForDebugging(`submit: delivery failed (${message})`)
-      state.notify(t('send-failed', { err: message }), { color: 'error' })
+    }
+    const expansion = await expandMentions(
+      origin.fs,
+      origin.cwd,
+      text,
+      origin.attachments,
+      orderedImages,
+    )
+    // Mention reads can park for arbitrary I/O. A session switch during that
+    // await invalidates the whole submission; neither the old nor the new
+    // agent may receive a message assembled for a different conversation.
+    if (agent !== origin.agent) {
+      state.notify(t('ext-stale-dropped'), { color: 'warning', timeoutMs: 4000 })
+      return
+    }
+    const message = createUserMessage({
+      content: expansion.blocks,
+      source: { kind: 'user' },
     })
+    // Track BEFORE the agent call: a synchronous throw inside
+    // followup/steer rolls the preview back; otherwise the inbox events
+    // retire it once the message is claimed or discarded.
+    trackPending({ id: message.id, text }, placement, images)
+    try {
+      if (placement === 'steer') origin.agent.steer(message)
+      else origin.agent.followup(message)
+    } catch (error) {
+      untrackPending(message.id)
+      throw error
+    }
+    if (expansion.attached.length > 0) {
+      state.notify(t('mentions-attached', { count: expansion.attached.length }), { timeoutMs: 2500 })
+    }
+    if (expansion.missing.length > 0) {
+      state.notify(t('mentions-missing', { paths: expansion.missing.map(formatMissingReference).join(' ') }), {
+        color: 'warning',
+        timeoutMs: 4000,
+      })
+    }
   }
   /**
    * RFC 0005 D-8: a flow parked on a plugin decision must be user-observable.
@@ -2743,8 +2976,25 @@ export function createChannel(
    */
   const DECISION_PENDING_MS = 400
   const withDecisionPending = <T>(name: string, pending: Promise<T>): Promise<T> => {
+    const originAgent = agent
     let dismiss: (() => void) | undefined
-    const timer = setTimeout(() => {
+    let active = true
+    let timer: ReturnType<typeof setTimeout>
+    const cleanup = (): void => {
+      if (!active) return
+      active = false
+      clearTimeout(timer)
+      dismiss?.()
+      pendingDecisionCleanups.delete(cleanup)
+    }
+    timer = setTimeout(() => {
+      // The agent may already have changed while its replacement is still
+      // completing. Suppress the old notice before clearStagedImages reaches
+      // its ordinary session-swap cleanup.
+      if (agent !== originAgent) {
+        cleanup()
+        return
+      }
       // Sticky (timeoutMs 0), D-8: the indicator must cover the WHOLE wait —
       // an auto-expiring notice would vanish after ~4s while the decision,
       // the delivery and every queued FIFO task behind them stay parked,
@@ -2754,12 +3004,10 @@ export function createChannel(
       // state.
       dismiss = state.notify(t('ext-decision-pending', { event: name }), { timeoutMs: 0 })
     }, DECISION_PENDING_MS)
+    pendingDecisionCleanups.add(cleanup)
     // Both exits are covered: a fast decision clears the timer before it
     // fires; a slow one dismisses the indicator it raised.
-    return pending.finally(() => {
-      clearTimeout(timer)
-      dismiss?.()
-    })
+    return pending.finally(cleanup)
   }
   /**
    * The `tui/input` decision event (pi's `input` seam): the FIRST plugin
@@ -2778,12 +3026,11 @@ export function createChannel(
    * stale text with a notice instead of sending the old conversation's
    * words to the new session.
    */
-  let inputChain: Promise<void> = Promise.resolve()
   const runUserTextDecision = async (
     text: string,
     placement: PendingMessage['placement'],
-    originAgent: Agent,
-    originAgentId: string,
+    images: readonly ComposerImageRef[],
+    origin: UserTextOrigin,
   ): Promise<void> => {
     // Stale detection compares the AGENT REFERENCE, not the id: session ids
     // are reusable (A → /new → /resume A lands back on the same id with a
@@ -2791,12 +3038,23 @@ export function createChannel(
     // ENQUEUE-time captures (see dispatchUserText): a decision parked behind
     // a slow predecessor must still be judged against the session its text
     // was typed in, not whichever session is live when it finally runs.
+    const dropIfStale = (): boolean => {
+      if (agent === origin.agent) return false
+      state.notify(t('ext-stale-dropped'), { color: 'warning', timeoutMs: 4000 })
+      return true
+    }
+    // A follower can wait behind an older slow decision while /new replaces
+    // the session. Do not even expose that stale text to plugins.
+    if (dropIfStale()) return
     const decision = await withDecisionPending('tui/input', dispatchTuiDecision(ctx, 'tui/input', {
       text,
       delivery: placement === 'steer' ? 'steer' : 'followup',
-      sessionId: originAgentId,
-      cwd: state.cwd,
+      sessionId: origin.agentId,
+      cwd: origin.cwd,
     }, normalizeInputDecision))
+    // Staleness wins over cancel/handled: an old plugin result must neither
+    // toast into nor claim input from the replacement session.
+    if (dropIfStale()) return
     if (decision !== undefined) {
       // Both intercepts toast — a bare {cancel}/{handled} must not make the
       // typed line vanish silently (the host-localized fallback mirrors the
@@ -2811,21 +3069,36 @@ export function createChannel(
       }
       text = decision.text.trim()
     }
-    if (agent !== originAgent) {
-      state.notify(t('ext-stale-dropped'), { color: 'warning', timeoutMs: 4000 })
-      return
+    try {
+      await deliverUserText(text, placement, images, origin)
+    } catch (error: unknown) {
+      // The FIFO must survive a failed expansion/send: surface it, then let
+      // the next input proceed through the settled inputChain.
+      const message = error instanceof Error ? error.message : String(error)
+      logForDebugging(`submit: delivery failed (${message})`)
+      state.notify(t('send-failed', { err: message }), { color: 'error' })
     }
-    deliverUserText(text, placement)
   }
-  const dispatchUserText = (text: string, placement: PendingMessage['placement']): void => {
+  const dispatchUserText = (
+    text: string,
+    placement: PendingMessage['placement'],
+    images: readonly ComposerImageRef[] = [],
+  ): void => {
     // D-6: bind the submission to the session it was typed in AT ENQUEUE
     // TIME. The FIFO chain may park this task behind a slow predecessor
     // while the user /new's away — capturing the agent at run time would
     // adopt the NEW session as this text's origin and deliver the old
     // conversation's words into it.
-    const originAgent = agent
-    const originAgentId = state.agentId
-    inputChain = inputChain.then(() => runUserTextDecision(text, placement, originAgent, originAgentId)).catch((error: unknown) => {
+    const origin: UserTextOrigin = {
+      agent,
+      agentId: state.agentId,
+      cwd: state.cwd,
+      fs: mentionFs(ctx),
+      attachments: mentionAttachments(ctx),
+      stagedImages: new Map(stagedImages),
+    }
+    const capturedImages = includeLegacyImageRefs(text, images).map(image => ({ ...image }))
+    inputChain = inputChain.then(() => runUserTextDecision(text, placement, capturedImages, origin)).catch((error: unknown) => {
       // The chain must survive a failed decision: log, then continue with
       // the next queued submission.
       ctx.logger.warn('dsh-tui: tui/input dispatch failed: %o', error)
@@ -2947,6 +3220,9 @@ export function createChannel(
     agent = handle.agent
     currentHandle = handle
     bindAgent()
+    // bindAgent is synchronous and quiet; revoke OLD-session capabilities
+    // before refreshCommandList exposes the replacement to subscribers.
+    clearStagedImages()
     refreshCommandList()
     void refreshLoadedContext()
     void refreshSkillCommands()
@@ -2954,11 +3230,6 @@ export function createChannel(
     touchSession(childId)
     state.emit()
     void oldHandle?.dispose().catch(() => {})
-    // The staged-image map is session-scoped (the same contract the
-    // resumeTo/newSession tails enforce): tokens typed against the rewound
-    // conversation must not ride into the fork's next send, and the epoch
-    // bump fences saves still in flight for the old session.
-    clearStagedImages()
     return sourceSessionId
   }
   /** Monotonic token: only the latest `interruptAndDeliver` re-queues, so a
@@ -3147,6 +3418,10 @@ export function createChannel(
     data: string
     name?: string
   }
+  type RegistryCommandImageBatch =
+    | { readonly kind: 'legacy' }
+    | { readonly kind: 'ready'; readonly images: readonly RegistryCommandImage[] }
+    | { readonly kind: 'error'; readonly reason: 'runtime' | 'missing' | 'limits'; readonly tokens: readonly string[] }
   /** Legacy command-service execute (rc.7 and older): (agent, line, signal). */
   type CommandExecuteLegacy = (agent: Agent, line: string, signal: AbortSignal) => Promise<CommandExecution | undefined>
   /** rc.8 command-service execute: composer images precede the signal. */
@@ -3168,15 +3443,20 @@ export function createChannel(
       && (service.execute as { length: number }).length >= 4
   }
 
-  /** Run one DSH registry command (`/plan`, …) on the live agent; the text
-   *  of its result, '' when the result is textless, undefined when the
-   *  command is not registered, and the error message when it throws. */
-  const executeRegistryCommand = async (name: string, rawInput: string): Promise<string | undefined> => {
+  /** Run one DSH registry command (`/plan`, …) on the live agent while
+   *  preserving its settled result kind for composer admission. */
+  const executeRegistryCommand = async (
+    name: string,
+    rawInput: string,
+    imageRefs: readonly ComposerImageRef[] = [],
+  ): Promise<ExternalCommandOutcome | undefined> => {
     if (!commandService) return undefined
+    const commandAgent = agent
+    const stagedSnapshot = new Map(stagedImages)
     // Resolve the exact definition that execute() will select for this agent.
     // Same names may exist in distinct agent scopes, so a name-only lookup can
     // apply another scope's owner policy.
-    const definition = commandService.find(agent, name)
+    const definition = commandService.find(commandAgent, name)
     const owner = commandOwner(ctx, definition)
     // The root checkpoint covers host/direct registrations.  A built-in name
     // is not necessarily a namespaced contribution id, so use a deterministic
@@ -3186,118 +3466,196 @@ export function createChannel(
       ?? (/^[a-z][a-z0-9]*(?:[.-][a-z0-9][a-z0-9-]*)+$/u.test(name)
         ? name
         : `dsh-tui.${name.toLowerCase().replace(/[^a-z0-9-]+/gu, '-').replace(/^-+|-+$/gu, '') || 'command'}`)
-    if (!currentGrantStore().allows(
-      { componentId: 'root' },
-      'commands.invoke',
-      rootScope,
-    )) {
-      ctx.logger.warn('dsh-tui: registry command invocation denied (commands.invoke revoked for "root" in the grants file)')
-      ctx.get('tuiEffectLedger')?.record(
-        {
-          operation: 'bind',
-          resource: { kind: 'permission', id: `root:commands.invoke:${rootScope}` },
-          result: 'failed',
-          errorCode: 'PERMISSION_NOT_GRANTED',
-        },
-        ctx,
-      )
-      return t('command-invoke-denied')
-    }
-    // Per-owner gate (C-041): a command REGISTERED BY A PLUGIN through the
-    // plugin-host row's mediated registerCommand (see command-attribution.js)
-    // is additionally gated on the OWNER's grant, so a denies entry for the
-    // plugin closes the host-mediated invocation of ITS commands.
-    // Unattributed host/direct registrations remain inside the documented
-    // trusted-in-process boundary and have no plugin grant to evaluate.
-    if (owner !== undefined && !currentGrantStore().allows(
-      { componentId: owner.componentId, activationId: owner.activationId },
-      'commands.invoke',
-      owner.commandId,
-    )) {
-      ctx.logger.warn(
-        `dsh-tui: registry command "/${name}" invocation denied — owner Component "${owner.componentId}" lost commands.invoke for "${owner.commandId}"`,
-      )
-      ctx.get('tuiEffectLedger')?.record(
-        {
-          operation: 'bind',
-          resource: { kind: 'permission', id: `${owner.componentId}:commands.invoke:${owner.commandId}` },
-          result: 'failed',
-          errorCode: 'PERMISSION_NOT_GRANTED',
-        },
-        ctx,
-      )
-      return t('command-invoke-denied-owner', { name, owner: owner.componentId })
-    }
     try {
       const signal = new AbortController().signal
       const line = `/${name}${rawInput}`
-      const images = await registryCommandImages(commandService, definition, line, signal)
+      const batch = await registryCommandImages(
+        commandService,
+        line,
+        includeLegacyImageRefs(line, imageRefs),
+        stagedSnapshot,
+        signal,
+      )
+      if (batch.kind === 'error') {
+        const text = batch.reason === 'runtime'
+          ? t('command-images-runtime-unsupported', { name })
+          : batch.reason === 'limits'
+            ? t('command-images-limit', { name })
+            : t('command-images-missing', { name, paths: batch.tokens.join(' ') })
+        return { kind: 'error', text, consumeDraft: false }
+      }
+      // Image preparation can await storage. Do not authorize definition A
+      // and then execute a newly registered same-name definition B after A
+      // was unloaded while those reads were pending.
+      if (commandService.find(commandAgent, name) !== definition) {
+        return { kind: 'error', text: t('command-changed', { name }), consumeDraft: false }
+      }
+      if (agent !== commandAgent) {
+        state.notify(t('ext-stale-dropped'), { color: 'warning', timeoutMs: 4000 })
+        return { kind: 'error', text: '', consumeDraft: false }
+      }
+      // Grants are a live per-operation decision. Image reads above may
+      // park, so take the single authoritative snapshot only now — after
+      // preparation/identity guards and immediately before execute.
+      if (!currentGrantStore().allows(
+        { componentId: 'root' },
+        'commands.invoke',
+        rootScope,
+      )) {
+        ctx.logger.warn('dsh-tui: registry command invocation denied (commands.invoke revoked for "root" in the grants file)')
+        ctx.get('tuiEffectLedger')?.record(
+          {
+            operation: 'bind',
+            resource: { kind: 'permission', id: `root:commands.invoke:${rootScope}` },
+            result: 'failed',
+            errorCode: 'PERMISSION_NOT_GRANTED',
+          },
+          ctx,
+        )
+        return { kind: 'error', text: t('command-invoke-denied'), consumeDraft: false }
+      }
+      // A mediated plugin command additionally needs its owner's scoped
+      // grant. Direct host registrations stay in the trusted host boundary.
+      if (owner !== undefined && !currentGrantStore().allows(
+        { componentId: owner.componentId, activationId: owner.activationId },
+        'commands.invoke',
+        owner.commandId,
+      )) {
+        ctx.logger.warn(
+          `dsh-tui: registry command "/${name}" invocation denied — owner Component "${owner.componentId}" lost commands.invoke for "${owner.commandId}"`,
+        )
+        ctx.get('tuiEffectLedger')?.record(
+          {
+            operation: 'bind',
+            resource: { kind: 'permission', id: `${owner.componentId}:commands.invoke:${owner.commandId}` },
+            result: 'failed',
+            errorCode: 'PERMISSION_NOT_GRANTED',
+          },
+          ctx,
+        )
+        return { kind: 'error', text: t('command-invoke-denied-owner', { name, owner: owner.componentId }), consumeDraft: false }
+      }
       // rc.8 moved the signal to the 4th parameter and added composer
       // images; older lines (rc.7/rc.6) take (agent, line, signal).
-      const execution = images === undefined
-        ? await (commandService.execute as unknown as CommandExecuteLegacy)(agent, line, signal)
-        : await (commandService.execute as unknown as CommandExecuteWithImages)(agent, line, images.images, signal)
-      if (images !== undefined && images.dropped.length > 0) {
-        // Loud-drop policy mirrors the submit pipeline (mentions-missing):
-        // a referenced image that never reached the command must be visible.
-        state.notify(t('mentions-missing', { paths: images.dropped.join(' ') }), {
-          color: 'warning',
-          timeoutMs: 4000,
-        })
-      }
-      // `undefined` = not registered; a handler error surfaces as its
-      // message so the user sees why the command failed.
-      return execution === undefined ? undefined : execution.result.text ?? ''
+      const execution = batch.kind === 'legacy'
+        ? await (commandService.execute as unknown as CommandExecuteLegacy)(commandAgent, line, signal)
+        : await (commandService.execute as unknown as CommandExecuteWithImages)(commandAgent, line, batch.images, signal)
+      // The handler itself may park. Its durable lifecycle belongs to the
+      // old agent, but its toast/consume acknowledgment must never land on a
+      // replacement session after /new, resume, rewind, or model switch.
+      if (agent !== commandAgent) return { kind: 'error', text: '', consumeDraft: false }
+      if (execution === undefined) return undefined
+      return execution.result.kind === 'success'
+        ? { kind: 'success', text: execution.result.text ?? '', consumeDraft: true }
+        : {
+            kind: 'error',
+            text: execution.result.text,
+            // Upstream composers retain image-bearing handler failures so
+            // the user can fix the grammar without rebuilding attachments;
+            // imageless handler errors remain consumed durable outcomes.
+            consumeDraft: batch.kind === 'ready' ? batch.images.length === 0 : true,
+          }
     } catch (error) {
-      return error instanceof Error ? error.message : String(error)
+      return {
+        kind: 'error',
+        text: error instanceof Error ? error.message : String(error),
+        consumeDraft: false,
+      }
     }
   }
 
   /** Encode the staged `@`-mention images the user pasted for THIS command
-   *  line into rc.8's `EncodedImageAttachment` payloads; undefined = the
-   *  installed dsh-commands line predates composer images (rc.7/rc.6), so
-   *  the caller uses the legacy 3-arg invoke. Matches the submit pipeline's
+   *  line into rc.8's `EncodedImageAttachment` payloads; `kind: 'legacy'`
+   *  means the installed dsh-commands line predates composer images
+   *  (rc.7/rc.6), so the caller uses the legacy 3-arg invoke. Matches the
+   *  submit pipeline's
    *  token rule (expandMentions): a staged image attaches only when the
-   *  line references its token. A command that does not declare
-   *  `input.images` gets NO images — rc.8 admission settles such a batch
-   *  as an error, and upstream sends images only to image-capable commands.
-   *  A failing read drops just that image (reported via the returned
-   *  tokens) while the command still runs. */
+   *  line references its token. The composer preflights `input.images`, but
+   *  this adapter still forwards every supplied image: rc.8 owns admission,
+   *  so non-UI callers cannot accidentally bypass the registry contract.
+   *  Preparation is atomic: limits are checked from durable metadata before
+   *  any read/base64 work, and one missing or unreadable image prevents the
+   *  handler from running with a silently truncated batch. */
   const registryCommandImages = async (
     service: CommandRuntime,
-    definition: unknown,
     line: string,
+    imageRefs: readonly ComposerImageRef[],
+    staged: ReadonlyMap<string, ChannelImageBlock['attachment']>,
     signal: AbortSignal,
-  ): Promise<{ images: RegistryCommandImage[]; dropped: string[] } | undefined> => {
-    if (!commandServiceSupportsImages(service)) return undefined
-    const declaresImages = (definition as { input?: { images?: boolean } } | undefined)?.input?.images === true
-    if (!declaresImages || stagedImages.size === 0) return { images: [], dropped: [] }
-    const store = mentionAttachments(ctx) as
-      | { readImage?(ref: unknown, signal?: AbortSignal): Promise<{ data: Uint8Array }> }
-      | undefined
-    if (typeof store?.readImage !== 'function') return { images: [], dropped: [] }
-    const images: RegistryCommandImage[] = []
-    const dropped: string[] = []
-    for (const [token, attachment] of stagedImages) {
-      if (!line.includes(token)) continue
-      try {
-        const stored = await store.readImage(attachment, signal)
-        if (stored?.data instanceof Uint8Array && stored.data.byteLength > 0) {
-          images.push({
-            mediaType: attachment.mediaType,
-            data: Buffer.from(stored.data).toString('base64'),
-            name: attachment.name,
-          })
-        } else {
-          dropped.push(token)
-        }
-      } catch {
-        // One unreadable staged image is dropped — same loud policy as the
-        // submit pipeline's mentions-missing warning (deliverUserText).
-        dropped.push(token)
+  ): Promise<RegistryCommandImageBatch> => {
+    const ordered = orderedComposerImages(line, imageRefs, staged)
+    // A `[Image #N]` with no live staging is plain text here, exactly as on
+    // the submit path (deliverUserText): warn once, keep the line unchanged.
+    // Only referenced, staged images take part in the batch below.
+    for (const match of line.matchAll(COMPOSER_IMAGE_TOKEN)) {
+      if (!ordered.has(match[0])) {
+        state.notify(t('input-image-token-stale', { token: match[0] }), { color: 'warning', timeoutMs: 5000 })
+        break
       }
     }
-    return { images, dropped }
+    if (!commandServiceSupportsImages(service)) {
+      return ordered.size > 0
+        ? { kind: 'error', reason: 'runtime', tokens: [...ordered.keys()] }
+        : { kind: 'legacy' }
+    }
+    if (ordered.size === 0) return { kind: 'ready', images: [] }
+    const store = mentionAttachments(ctx) as
+      | (MentionAttachments & { readImage?(ref: unknown, signal?: AbortSignal): Promise<{ data: Uint8Array }> })
+      | undefined
+    if (typeof store?.readImage !== 'function') {
+      return { kind: 'error', reason: 'missing', tokens: [...ordered.keys()] }
+    }
+    const { imageLimits: limits } = store
+    let declaredBytes = 0
+    for (const attachment of ordered.values()) {
+      if (
+        !Number.isSafeInteger(attachment.bytes)
+        || attachment.bytes <= 0
+        || attachment.bytes > limits.maxImageBytes
+        || !limits.mediaTypes.includes(attachment.mediaType)
+      ) {
+        return { kind: 'error', reason: 'limits', tokens: [...ordered.keys()] }
+      }
+      declaredBytes += attachment.bytes
+    }
+    if (
+      ordered.size > limits.maxImagesPerMessage
+      || declaredBytes > limits.maxMessageImageBytes
+    ) {
+      return { kind: 'error', reason: 'limits', tokens: [...ordered.keys()] }
+    }
+    const loaded: Array<{
+      readonly token: string
+      readonly attachment: ChannelImageBlock['attachment']
+      readonly data: Uint8Array
+    }> = []
+    let actualBytes = 0
+    for (const [token, attachment] of ordered) {
+      try {
+        const stored = await store.readImage(attachment, signal)
+        if (!(stored?.data instanceof Uint8Array) || stored.data.byteLength <= 0) {
+          return { kind: 'error', reason: 'missing', tokens: [token] }
+        }
+        actualBytes += stored.data.byteLength
+        if (
+          stored.data.byteLength > limits.maxImageBytes
+          || actualBytes > limits.maxMessageImageBytes
+        ) {
+          return { kind: 'error', reason: 'limits', tokens: [...ordered.keys()] }
+        }
+        loaded.push({ token, attachment, data: stored.data })
+      } catch {
+        return { kind: 'error', reason: 'missing', tokens: [token] }
+      }
+    }
+    return {
+      kind: 'ready',
+      images: loaded.map(({ attachment, data }) => ({
+        mediaType: attachment.mediaType,
+        data: Buffer.from(data).toString('base64'),
+        name: attachment.name,
+      })),
+    }
   }
 
   // Session-mode folds: last-wins projections over the session log. The
@@ -3709,10 +4067,14 @@ export function createChannel(
         prePlanPermissionIdentity.delete(session)
       }
       try {
-        const text = await executeRegistryCommand('plan', spec.plan ? '' : ' off')
+        const execution = await executeRegistryCommand('plan', spec.plan ? '' : ' off')
         if (session !== agent.session) return
-        if (text === undefined) {
+        if (execution === undefined) {
           state.notify(t('mode-plan-unavailable'), { color: 'warning' })
+          return
+        }
+        if (execution.kind === 'error') {
+          if (execution.text !== '') state.notify(execution.text, { color: 'error' })
           return
         }
       } finally {
@@ -3940,6 +4302,7 @@ export function createChannel(
     currentHandle = backgroundHandles.get(String(target.id))
     backgroundHandles.delete(String(target.id))
     bindAgent()
+    clearStagedImages()
     refreshCommandList()
     void refreshLoadedContext()
     void refreshSkillCommands()
@@ -3958,7 +4321,6 @@ export function createChannel(
     // and the one the terminal detached from.
     touchAgentViewSession(String(target.id))
     touchAgentViewSession(previousSessionId)
-    clearStagedImages()
     notifySessionSwitched('agent-view', String(target.id), previousSessionId)
     notifyAgentView()
     return { ok: true }
@@ -4098,6 +4460,7 @@ export function createChannel(
     agent = handle.agent
     currentHandle = handle
     bindAgent()
+    clearStagedImages()
     refreshCommandList()
     void refreshLoadedContext()
     void refreshSkillCommands()
@@ -4118,7 +4481,6 @@ export function createChannel(
       touchAgentViewSession(sessionId)
       touchAgentViewSession(previousSessionId)
     }
-    clearStagedImages()
     notifySessionSwitched(kind, sessionId, previousSessionId)
     return { ok: true }
   }
@@ -4421,31 +4783,48 @@ export function createChannel(
       if (restored > 0) state.emit()
       return restored
     },
+    stagedImageGeneration() {
+      return stagedImageEpoch
+    },
     async stageImage(input: StagedImageInput): Promise<string> {
-      const attachments = mentionAttachments(ctx)
-      if (attachments === undefined) throw new Error('image attachments are unavailable in this profile')
-      if (!attachments.imageLimits.mediaTypes.includes(input.mediaType)) {
-        throw new Error(`${input.mediaType} images are not accepted by this profile`)
-      }
-      if (input.data.byteLength > attachments.imageLimits.maxImageBytes) {
-        throw new Error(`image exceeds this profile's per-image size limit`)
-      }
-      const attachment = await attachments.saveImage(input)
-      stagedImageSequence += 1
-      const token = `[Image #${stagedImageSequence}]`
-      stagedImages.set(token, attachment)
-      // References are content-addressed and durable. This map only connects
-      // editable prompt placeholders to them; cap it to bound a long TUI run.
-      while (stagedImages.size > 128) {
-        const oldest = stagedImages.keys().next().value as string | undefined
-        if (oldest === undefined) break
-        stagedImages.delete(oldest)
-      }
+      const generation = stagedImageEpoch
+      const { stageId } = await persistComposerImage(input, generation)
+      legacyStagedImageSequence += 1
+      const token = `[Image #${legacyStagedImageSequence}]`
+      legacyStagedImageRefs.set(token, stageId)
       return token
     },
-    submit(text) {
+    stageComposerImage(input: StagedImageInput, generation: number): Promise<StagedImageHandle> {
+      return persistComposerImage(input, generation)
+    },
+    hasStagedImage(stageId: string): boolean {
+      return stagedImages.has(stageId)
+    },
+    discardStagedImage(stageId: string): void {
+      deleteStagedImage(stageId)
+    },
+    stagedImage(stageId: string): TranscriptImage | undefined {
+      return stagedImageViews.get(stageId)
+    },
+    stagedImageLimits() {
+      const limits = mentionAttachments(ctx)?.imageLimits
+      if (limits === undefined) return undefined
+      return {
+        maxImageBytes: limits.maxImageBytes,
+        maxImagesPerMessage: limits.maxImagesPerMessage,
+      }
+    },
+    submit(text, images = []) {
       const trimmed = text.trim()
       if (!trimmed) return
+      const submittedImages = includeLegacyImageRefs(trimmed, images)
+      // Non-UI callers do not pass through PromptInput's admission guard.
+      // Shell routes have no image grammar: reject loudly before spawning
+      // anything rather than silently ignoring the supplied capabilities.
+      if (submittedImages.length > 0 && trimmed.startsWith('!')) {
+        state.notify(t('shell-images-unsupported'), { color: 'warning', timeoutMs: 4000 })
+        return
+      }
       // Claude Code's `!` mode: `!cmd` runs locally and only shows the
       // output; `!!cmd` additionally sends the output to the model as a
       // user message (CC's <bash-stdout> convention).
@@ -4460,12 +4839,12 @@ export function createChannel(
       // The current session is being used — move it to the MRU front
       // (/resume sorts by last-used).
       touchSession(state.agentId)
-      void dispatchUserText(trimmed, 'followup')
+      dispatchUserText(trimmed, 'followup', submittedImages)
     },
     /** Steer a message into the RUNNING turn (Codex/pi semantics): it is
      *  injected at the next step boundary of the current turn and the agent
      *  continues without stopping — faster than followup, never an abort. */
-    steer(text) {
+    steer(text, images = []) {
       const trimmed = text.trim()
       if (!trimmed) return
       touchSession(state.agentId)
@@ -4475,7 +4854,7 @@ export function createChannel(
       // rejected step leaves it parked for the next wake, and the inbox
       // events retire the preview (claimed → turn boundary, discarded →
       // cancel).
-      void dispatchUserText(trimmed, 'steer')
+      dispatchUserText(trimmed, 'steer', images)
     },
     /** Pull a pending message back out of the inbox (Alt+Up): it returns to
      *  the input for editing instead of being delivered. */
@@ -4504,11 +4883,15 @@ export function createChannel(
       state.cancelPending = true
       agent.cancel({ kind: 'user' }, { keepInbox: true })
     },
-    interruptAndDeliver(texts: readonly string[]): number {
-      const queued = texts.map(text => text.trim()).filter(text => text !== '')
+    interruptAndDeliver(inputs: readonly (string | ComposerSubmission)[]): number {
+      const queued = inputs
+        .map(input => typeof input === 'string'
+          ? { text: input.trim(), images: [] as readonly ComposerImageRef[] }
+          : { text: input.text.trim(), images: [...(input.images ?? [])] })
+        .filter(input => input.text !== '')
       if (queued.length === 0) return 0
       // No keepInbox: the parked copies are dropped (their discard events
-      // retire the preview), then each text is re-queued as a fresh
+      // retire the preview), then each message is re-queued as a fresh
       // followup. dsh-agent's cancel-convergence wake latch accepts this
       // wake immediately after cancel and starts it once the aborted turn
       // retires; waiting for whenIdle is unsafe because it also follows
@@ -4525,12 +4908,12 @@ export function createChannel(
         // A second interrupt while the abort is still settling must not
         // double-deliver: only the latest request's re-queue runs.
         if (interruptSeq !== token) return
-        for (const text of queued) {
+        for (const input of queued) {
           touchSession(state.agentId)
           // Same tui/input decision pass as a typed submit: Ctrl+Enter must
           // not bypass a plugin's cancel/transform policy, and re-queued
           // texts keep submission order through the one FIFO chain.
-          dispatchUserText(text, 'followup')
+          dispatchUserText(input.text, 'followup', input.images)
         }
       }
       // Let cancel finish its synchronous inbox bookkeeping before waking.
@@ -5608,6 +5991,7 @@ export function createChannel(
       agent = handle.agent
       currentHandle = handle
       bindAgent()
+      clearStagedImages()
       refreshCommandList()
       void refreshLoadedContext()
       void refreshSkillCommands()
@@ -5617,7 +6001,6 @@ export function createChannel(
       touchSession(sessionId)
       state.emit()
       void oldHandle?.dispose().catch(() => {})
-      clearStagedImages()
       notifySessionSwitched('resume', sessionId, previousSessionId)
       return { ok: true }
     },
@@ -5779,6 +6162,7 @@ export function createChannel(
       agent = handle.agent
       currentHandle = handle
       bindAgent()
+      clearStagedImages()
       refreshCommandList()
       void refreshLoadedContext()
       void refreshSkillCommands()
@@ -5786,7 +6170,6 @@ export function createChannel(
       // The brand-new session becomes the most recently used.
       touchSession(handle.agent.id)
       void oldHandle?.dispose().catch(() => {})
-      clearStagedImages()
       notifySessionSwitched('new', String(handle.agent.id), previousSessionId)
       return true
     },
@@ -5975,6 +6358,7 @@ export function createChannel(
       agent = handle.agent
       currentHandle = handle
       bindAgent()
+      clearStagedImages()
       // Model-switch quip rides the fresh tracker (pi parity).
       updateWorkingActivity('model switch', () => activityTracker.onModelSwitch(model))
       refreshCommandList()
@@ -5984,9 +6368,6 @@ export function createChannel(
       touchSession(childId)
       state.emit()
       void oldHandle?.dispose().catch(() => {})
-      // Staged image tokens were typed against the pre-switch conversation;
-      // resumeTo/newSession already drop theirs on the swap — same contract.
-      clearStagedImages()
       // Persist the choice so the next boot and `/new` start on it (same
       // contract as /preset and /effort; issues #14/#30). A failed
       // write keeps the live switch but warns it will not survive a restart.
@@ -7042,6 +7423,7 @@ export function createChannel(
       agent = handle.agent
       currentHandle = handle
       bindAgent()
+      clearStagedImages()
       refreshCommandList()
       void refreshLoadedContext()
       void refreshSkillCommands()
@@ -7051,7 +7433,6 @@ export function createChannel(
       // left running and the fresh one the terminal lands on.
       touchAgentViewSession(previousSessionId)
       touchAgentViewSession(String(handle.agent.id))
-      clearStagedImages()
       notifySessionSwitched('background', String(handle.agent.id), previousSessionId)
       notifyAgentView()
       return { ok: true, backgroundedSessionId: previousSessionId }
@@ -7255,8 +7636,11 @@ export function createChannel(
         )
       })
     },
-    runExternalCommand(name, rawInput) {
-      return executeRegistryCommand(name, rawInput)
+    runExternalCommand(name, rawInput, images = []) {
+      return executeRegistryCommand(name, rawInput, images).then(outcome => outcome?.text)
+    },
+    runExternalCommandOutcome(name, rawInput, images = []) {
+      return executeRegistryCommand(name, rawInput, images)
     },
     /** TUI-side permission switch (see the public Channel type). */
     runPermissionPreset(name) {
@@ -7596,6 +7980,7 @@ export function createChannel(
           ...(descriptions === undefined ? {} : { descriptions }),
           tag: descriptor.input?.hint,
           external: true,
+          acceptsImages: descriptor.input?.images === true,
           // Skills reach the registry as ordinary commands, so the menu would
           // lose the marker HelpMenu uses to keep them out of the chrome list.
           // This channel registered them and is the authority on which names
@@ -7808,6 +8193,9 @@ export function createChannel(
         const dispose = commandService.register({
           name,
           description,
+          // Deliberately omit `input.images`: skill gestures are text-only.
+          // Capable composers refuse image batches, and rc.8+ command
+          // executors enforce the same contract before this handler runs.
           // The invocation line is re-submitted as a user message (kernel
           // path) or replaced by the injected body (fallback) — recording
           // the raw input here too would duplicate it in the session log.
@@ -7823,7 +8211,7 @@ export function createChannel(
             // command layer) and matches the kernel's own adjudication.
             const tools = ctx.get('tools') as ToolsRegistryLike | undefined
             if (tools?.get('skill', invoker) !== undefined) {
-              deliverUserText(`/${name}${rawInput}`, 'followup')
+              dispatchUserText(`/${name}${rawInput}`, 'followup')
               // Silent success: the submitted message is the feedback.
               return { kind: 'success' }
             }
@@ -9565,11 +9953,65 @@ export async function expandMentions(
   let budget = MENTION_MAX_TOTAL_CHARS
   let imageCount = 0
   let imageBytes = 0
-  if (fs !== undefined) {
-    for (const mention of mentions) {
+  type ExpansionReference =
+    | { kind: 'mention'; start: number; mention: (typeof mentions)[number] }
+    | { kind: 'staged-image'; start: number; token: string; attachment: MentionImageBlock['attachment'] }
+  const references: ExpansionReference[] = fs === undefined
+    ? []
+    : mentions.map(mention => ({ kind: 'mention', start: mention.start, mention }))
+  if (stagedImages !== undefined) {
+    const seen = new Set<string>()
+    for (const match of text.matchAll(COMPOSER_IMAGE_TOKEN)) {
+      const token = match[0]
+      if (seen.has(token)) continue
+      seen.add(token)
+      const attachment = stagedImages.get(token)
+      if (attachment === undefined) continue
+      references.push({
+        kind: 'staged-image',
+        start: match.index,
+        token,
+        attachment,
+      })
+    }
+  }
+  references.sort((a, b) => a.start - b.start)
+
+  // `@image` files and staged `[Image #N]` capabilities share one admission
+  // queue. The earliest reference in the user's text wins both the per-
+  // message count and byte budgets, and image blocks preserve that order.
+  for (const reference of references) {
+    if (reference.kind === 'staged-image') {
+      const { attachment, token } = reference
+      // A referenced-but-dropped staged image must be loud: silently sending
+      // the bare token would leave the user believing the image reached the
+      // model. Reuse the missing-mention warning channel.
+      if (attachments === undefined) {
+        missing.push(token)
+        continue
+      }
+      const limits = attachments.imageLimits
+      if (
+        imageCount >= limits.maxImagesPerMessage
+        || imageBytes + attachment.bytes > limits.maxMessageImageBytes
+        || !limits.mediaTypes.includes(attachment.mediaType)
+      ) {
+        missing.push(token)
+        continue
+      }
+      blocks.push({ type: 'image', attachment })
+      imageCount += 1
+      imageBytes += attachment.bytes
+      continue
+    }
+
+    if (fs === undefined) continue
+    const { mention } = reference
     const display = mention.literal ?? mention.path
     const imageMediaType = mentionImageMediaType(mention.path)
-    if (budget <= 0 && imageMediaType === undefined) break
+    // A depleted text budget must not hide a later image reference: image
+    // admission has independent limits and still follows source order.
+    if (budget <= 0 && imageMediaType === undefined) continue
     // Mentions resolve against the session cwd, same as the model-facing fs
     // tools; absolute paths pass through untouched. A `#L12-14` line suffix
     // (issue #359) is stripped before resolution; when the stripped path
@@ -9682,27 +10124,6 @@ export async function expandMentions(
     }
     // Absent (stat → undefined) or a special file.
     missing.push(display)
-    }
-  }
-  if (attachments !== undefined && stagedImages !== undefined) {
-    const limits = attachments.imageLimits
-    for (const [token, attachment] of stagedImages) {
-      if (!text.includes(token)) continue
-      // A referenced-but-dropped staged image must be loud: silently sending
-      // the bare token would leave the user believing the image reached the
-      // model. Reuse the missing-mention warning channel.
-      if (
-        imageCount >= limits.maxImagesPerMessage
-        || imageBytes + attachment.bytes > limits.maxMessageImageBytes
-        || !limits.mediaTypes.includes(attachment.mediaType)
-      ) {
-        missing.push(token)
-        continue
-      }
-      blocks.push({ type: 'image', attachment })
-      imageCount += 1
-      imageBytes += attachment.bytes
-    }
   }
   return { blocks, attached, missing }
 }
