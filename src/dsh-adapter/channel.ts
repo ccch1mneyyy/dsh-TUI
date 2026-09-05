@@ -977,9 +977,11 @@ export interface Channel {
   readonly statusBar: Readonly<StatusBarConfig>
   /** Whether the header's pixel whale art shows (settings `dsh-tui.whale`). */
   readonly whale: boolean
-  /** Whether the settled header whale keeps behaving — fin flutters, tail
-   * thumps, sleep after inactivity (settings `dsh-tui.whaleIdle`; on by
-   * default — an explicit false keeps the settled header timer-free). */
+  /** Whether the settled header whale keeps behaving during the welcome
+   * phase — fin flutters, tail thumps, sleep after inactivity (settings
+   * `dsh-tui.whaleIdle`; on by default — an explicit false keeps the
+   * settled header timer-free). The first agent turn freezes the whale to
+   * the static standard frame regardless of this flag. */
   readonly whaleIdle: boolean
   /** Minimal mode (settings `dsh-tui.minimal`): no header splash, no emoji
    *  glyphs, no decorative colors; code highlight and tool colors stay. */
