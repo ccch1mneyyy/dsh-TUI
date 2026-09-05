@@ -177,6 +177,10 @@ export class TuiPluginHostRuntime extends Service implements TuiPluginHost {
     super(ctx, 'tuiPluginHost')
     const runtime = adapterRuntimeFor(ctx)
     const rawGrants = Object.freeze(readGrantStore(undefined, undefined, runtime))
+    let signalInitialKernelRefreshStarted!: () => void
+    const initialKernelRefreshStarted = new Promise<void>(resolve => {
+      signalInitialKernelRefreshStarted = resolve
+    })
     const state: HostState = {
       hostContext: compositionRoot(ctx),
       generationId: randomUUID(),
@@ -187,6 +191,10 @@ export class TuiPluginHostRuntime extends Service implements TuiPluginHost {
       kernelRuntime: undefined,
       descriptorBuildInProgress: false,
       kernelStarted: false,
+      initialKernelRefresh: undefined,
+      initialKernelRefreshStarted,
+      signalInitialKernelRefreshStarted,
+      initialKernelRefreshResult: Object.freeze({ status: 'pending' }),
     }
     hostStates.set(this, state)
     registerCommandLiveProbe(this, () => this.#runReversibleCommandProbe())
@@ -236,16 +244,44 @@ export class TuiPluginHostRuntime extends Service implements TuiPluginHost {
     // without being denied by the plugin/root boundary.
     withHostRootCapability(() => {
       if (state.runtime.mode !== 'passive-shadow' && state.runtime.mode !== 'replay-shadow') {
-        void kernelRuntime.refresh()
+        // Keep the initial asynchronous verification owned by this host row.
+        // New-mode publication/admission remains fail-closed until it settles;
+        // the adapter-only test accessor below exposes its outcome without
+        // leaking Kernel controls into the public plugin surface.
+        state.initialKernelRefresh = kernelRuntime.refresh()
           .then(() => {
+            const status = kernelRuntime.refreshStatus()
+            const error = status === 'failed' ? kernelRuntime.diagnosticSnapshot().refreshError : undefined
+            const result = Object.freeze({
+              status,
+              ...(error === undefined ? {} : { error }),
+            })
+            state.initialKernelRefreshResult = result
             state.descriptorBuild = undefined
             state.descriptorTopology = undefined
+            return result
           })
           .catch((error) => {
-            this.ctx.logger.warn(`dsh-tui: kernel live refresh failed: ${error instanceof Error ? error.message : String(error)}`)
+            const message = error instanceof Error ? error.message : String(error)
+            const result = Object.freeze({ status: kernelRuntime.refreshStatus(), error: message })
+            state.initialKernelRefreshResult = result
+            this.ctx.logger.warn(`dsh-tui: kernel live refresh failed: ${message}`)
             state.descriptorBuild = undefined
             state.descriptorTopology = undefined
+            return result
           })
+        state.signalInitialKernelRefreshStarted()
+      } else {
+        // Shadow modes intentionally do not run an initial live refresh on a
+        // real host. Make the host-owned test seam settle explicitly instead
+        // of leaving a diagnostic waiter pending forever.
+        const result = Object.freeze({
+          status: 'skipped' as const,
+          error: `${state.runtime.mode}: initial live refresh is not run`,
+        })
+        state.initialKernelRefreshResult = result
+        state.initialKernelRefresh = Promise.resolve(result)
+        state.signalInitialKernelRefreshStarted()
       }
       // Production mount/dispose closure: mount the kernel drivers now and
       // dispose them when the plugin-host service's owning fiber unloads.
@@ -757,6 +793,17 @@ interface HostState {
   kernelRuntime: KernelRuntime | undefined
   descriptorBuildInProgress: boolean
   kernelStarted: boolean
+  initialKernelRefresh: Promise<InitialKernelRefreshResult> | undefined
+  initialKernelRefreshStarted: Promise<void>
+  signalInitialKernelRefreshStarted: () => void
+  initialKernelRefreshResult: InitialKernelRefreshResult
+}
+
+/** Initial host-owned Kernel refresh outcome. This is adapter-test-only
+ * readiness evidence, not a plugin capability or a Kernel control surface. */
+export interface InitialKernelRefreshResult {
+  readonly status: 'pending' | 'completed' | 'failed' | 'skipped'
+  readonly error?: string
 }
 
 
@@ -808,6 +855,36 @@ export interface HostAdmissionForTest extends HostAdmission {
     source: string,
     options?: { source?: string; activationId?: string },
   ): VerifiedComponentIdentity
+}
+
+/** Adapter-test-only readiness accessor. It exposes only the host-owned
+ * initial refresh promise/result; callers cannot inspect or control KernelRuntime. */
+export interface HostInitialKernelRefreshForTest {
+  result(): InitialKernelRefreshResult | undefined
+  awaitResult(): Promise<InitialKernelRefreshResult>
+}
+
+export function getHostInitialKernelRefreshForTest(
+  runtime: TuiPluginHost | TuiPluginHostRuntime | undefined,
+): HostInitialKernelRefreshForTest | undefined {
+  if (runtime === undefined) return undefined
+  try {
+    const concrete = concreteService(runtime) as TuiPluginHostRuntime
+    return Object.freeze({
+      result: () => hostStateFor(concrete).initialKernelRefreshResult,
+      awaitResult: async () => {
+        const state = hostStateFor(concrete)
+        await state.initialKernelRefreshStarted
+        const refresh = state.initialKernelRefresh
+        if (refresh === undefined) {
+          throw new Error('dsh-tui: host initial kernel refresh was not started')
+        }
+        return refresh
+      },
+    })
+  } catch {
+    return undefined
+  }
 }
 
 export function getHostAdmissionForTest(
