@@ -1,5 +1,5 @@
 # dsh-TUI Deslop 判据与最小清理协议
-仅降已证仓库熵，不猜作者、不包装审美。下称“红线”指 /mnt/shared/_Projects/DSH-TUI/review/references/redlines.md，“行为/流程”指 /mnt/shared/_Projects/DSH-TUI/review/references/evidence-base.md，“验证映射”指 /mnt/shared/_Projects/DSH-TUI/review/references/verification-map.md。
+仅降已证仓库熵，不猜作者、不包装审美。下称“红线”指 references/redlines.md，“行为/流程”指 references/evidence-base.md，“验证映射”指 references/verification-map.md。
 
 ## 优先级
 冲突依次：保行为/数据/API → 当前契约/所有权 → 最小 diff、无关格式化不入 → 优先删已证多余项而非造抽象 → 不添依赖/框架/统一层 → 保非显然不变量注释与回归保护。
@@ -27,7 +27,7 @@ finding 外还须删除/合并证明及可信工作树前后验证；缺证据�
 删除前通查仓库引用、动态注册/字符串查找、公共 exports、副作用、生成来源、测试/夹具、平台分支；任一未知不得自动删除。再按类别补证：
 
 ### 死代码 / 未使用导出
-至少查静态 imports/calls/constructors/re-exports；/mnt/shared/_Projects/DSH-TUI/repo/package.json 的 exports/bin/imports；字符串注册/动态 import/Cordis service/command/event；JSX/React 动态映射；测试/夹具/脚本/文档示例/下游插件契约；模块求值/注册/polyfill/环境初始化副作用。grep 零命中不足以删公共/注册式代码。
+至少查静态 imports/calls/constructors/re-exports；package.json 的 exports/bin/imports；字符串注册/动态 import/Cordis service/command/event；JSX/React 动态映射；测试/夹具/脚本/文档示例/下游插件契约；模块求值/注册/polyfill/环境初始化副作用。grep 零命中不足以删公共/注册式代码。
 
 ### 重复 helper / 平行实现
 证输入规范化/边界值、错误/fallback、owner/副作用/生命周期、平台、返回类型/API、测试判定依据等价；指明当前权威接口及合并迁移调用者，文本相似不等于重复。
@@ -50,15 +50,15 @@ finding 外还须删除/合并证明及可信工作树前后验证；缺证据�
 ## dsh-TUI Golden Principles
 优先检查点按以下唯一真源核验，不另造规则副本：
 - 会话事实、职责/owner、终端安静/净化/单元上限、可审/可回滚范围 → 红线 2、3/12、5/7、13；增量：screen/component 不另建平行兼容层，不以两个布尔量镜像同模式，不混并行方案。
-- 当前 exports/features/plugin-host 全集提取 → /mnt/shared/_Projects/DSH-TUI/review/references/contract-gates.md 门 1/5；事件全集 → 验证映射“独立 oracle”，不长期手抄计数。
-- 测试/快照/gate 不与实现共用错误来源 → /mnt/shared/_Projects/DSH-TUI/review/SKILL.md 阶段 2 三分查及验证映射“反假绿检查”。
+- 当前 exports/features/plugin-host 全集提取 → references/contract-gates.md 门 1/5；事件全集 → 验证映射“独立 oracle”，不长期手抄计数。
+- 测试/快照/gate 不与实现共用错误来源 → SKILL.md 阶段 2 三分查及验证映射“反假绿检查”。
 - 不吞错/未持久化伪称成功/兜底藏上游漂移 → 本文件 fallback 证明及行为/流程 A3；Windows/POSIX、真终端、socket/路径字节 → 行为/流程 A5；可选 UI/生态优先插件、核心不引大块无增量源码 → 行为/流程 D1。
 
 ## 候选扫描器的边界
-/mnt/shared/_Projects/DSH-TUI/review/scripts/scan-diff-hygiene.mjs 仅读 unified diff 新增行，输出文件/head 行号/类别/置信提示/上下文要求；不判可达性/动态注册/API、catch 故意忽略、TODO 已归 issue、必要第三方 `any`、注释过时，不自动改文件。完成本文件证明前，扫描器 `high` 不得写成高置信 finding。
+scripts/scan-diff-hygiene.mjs 仅读 unified diff 新增行，输出文件/head 行号/类别/置信提示/上下文要求；不判可达性/动态注册/API、catch 故意忽略、TODO 已归 issue、必要第三方 `any`、注释过时，不自动改文件。完成本文件证明前，扫描器 `high` 不得写成高置信 finding。
 
 ## Apply 协议
-清理编排唯一真源为 /mnt/shared/_Projects/DSH-TUI/review/SKILL.md 阶段 6，不在此复写。
+清理编排唯一真源为 SKILL.md 阶段 6，不在此复写。
 
 ## Finding 写法
 E 轴 finding 须答双处维护动作/被藏错误、当前 head 证据、非架构/兼容边界或必要注释的理由、最小安全变化、引用/副作用/API/测试的删并证明；缺一转澄清，不建议自动修复。

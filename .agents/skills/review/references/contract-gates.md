@@ -1,8 +1,8 @@
 # dsh-TUI 契约门禁
-真源为当前目标分支的 /mnt/shared/_Projects/DSH-TUI/repo/package.json、/mnt/shared/_Projects/DSH-TUI/repo/ADAPTER.md、/mnt/shared/_Projects/DSH-TUI/repo/src/dsh-adapter/contract.ts、/mnt/shared/_Projects/DSH-TUI/repo/src/plugin-host.ts、/mnt/shared/_Projects/DSH-TUI/repo/cordis.patch.yml、/mnt/shared/_Projects/DSH-TUI/repo/patch-surface.snapshot.json、/mnt/shared/_Projects/DSH-TUI/repo/dsh-ecosystem-spec/protocols/tui-channel.js、CI 及 /mnt/shared/_Projects/DSH-TUI/repo/docs/contributing.md。本文件仅检查顺序，不存日期化常量；契约变更缺兼容策略/迁移/验证默认阻断，新增公共面也须显审。
+真源为当前目标分支的 package.json、ADAPTER.md、src/dsh-adapter/contract.ts、src/plugin-host.ts、cordis.patch.yml、patch-surface.snapshot.json、dsh-ecosystem-spec/protocols/tui-channel.js、CI 及 docs/contributing.md。本文件仅检查顺序，不存日期化常量；契约变更缺兼容策略/迁移/验证默认阻断，新增公共面也须显审。
 
 ## 先生成结构化快照
-执行顺序及命令以 /mnt/shared/_Projects/DSH-TUI/review/SKILL.md 阶段 0 为唯一真源。快照比较包清单的 version/packageManager/engines/imports/bin/exports/dependencies/peerDependencies/devDependencies/scripts，adapter contract、plugin-host shim、patch/snapshot、tui-channel、CI/治理文档摘要，shim exports 及可稳定提取的 apiVersion/wireRevision/features；只定位、不替代语义审查，动态写法解析不到须直接读源。
+执行顺序及命令以 SKILL.md 阶段 0 为唯一真源。快照比较包清单的 version/packageManager/engines/imports/bin/exports/dependencies/peerDependencies/devDependencies/scripts，adapter contract、plugin-host shim、patch/snapshot、tui-channel、CI/治理文档摘要，shim exports 及可稳定提取的 apiVersion/wireRevision/features；只定位、不替代语义审查，动态写法解析不到须直接读源。
 
 ## 门 1｜npm 公共面与依赖身份
 对照最新目标分支/head：exports 全 key 的 types/import/default/字符串目标、bin 名/入口、imports 别名、version/engines/packageManager、三类依赖的身份/范围。
@@ -24,14 +24,14 @@
 **plugin-host**：公共 re-export shim，逐次提取最新目标分支/head 的全部类型 exports/签名来源、运行 exports、常量值/限额/超时/错误码、admission/extension/permission 坐标，不手抄固定数量。删除/改名/改签名或常量语义默认阻断，直到补版本、迁移、文档、契约测试。
 
 ## 门 6｜CLI、环境变量与脚本消费面
-触及 /mnt/shared/_Projects/DSH-TUI/repo/bin/、环境变量、错误输出、退出码或非交互入口，逐路查 stdout/stderr 归属、机器格式、非交互默认值、flag/参数范围、退出码、脚本匹配的稳定错误文本、Windows/POSIX 实际入口与 quoting、launcher/TUI 参数职责重叠；任何变更均搜仓库脚本/文档/下游调用者，文案也可能是契约。
+触及 bin/、环境变量、错误输出、退出码或非交互入口，逐路查 stdout/stderr 归属、机器格式、非交互默认值、flag/参数范围、退出码、脚本匹配的稳定错误文本、Windows/POSIX 实际入口与 quoting、launcher/TUI 参数职责重叠；任何变更均搜仓库脚本/文档/下游调用者，文案也可能是契约。
 
 ## 门 7｜特殊区域与验证门禁
-- /mnt/shared/_Projects/DSH-TUI/repo/src/ink/、/mnt/shared/_Projects/DSH-TUI/repo/src/native-ts/：敏感移植设施，聚焦修改、专用渲染/终端回归，不批量格式化。
-- /mnt/shared/_Projects/DSH-TUI/repo/vendor/：依当前子模块/vendored 规则，不混无出处手改。
-- /mnt/shared/_Projects/DSH-TUI/repo/lib/：当前为生成物，出现 diff 先对照真源/贡献指南，不手改当源码。
-- /mnt/shared/_Projects/DSH-TUI/repo/dsh-ecosystem-spec/：遵守自身治理。
-- /mnt/shared/_Projects/DSH-TUI/repo/.github/workflows/、/mnt/shared/_Projects/DSH-TUI/repo/scripts/verify-*：查 permissions、不可信 PR 执行、fail-open、路径过滤、挂载链、坏基线。
+- src/ink/、src/native-ts/：敏感移植设施，聚焦修改、专用渲染/终端回归，不批量格式化。
+- vendor/：依当前子模块/vendored 规则，不混无出处手改。
+- lib/：当前为生成物，出现 diff 先对照真源/贡献指南，不手改当源码。
+- dsh-ecosystem-spec/：遵守自身治理。
+- .github/workflows/、scripts/verify-*：查 permissions、不可信 PR 执行、fail-open、路径过滤、挂载链、坏基线。
 
 ## 门禁自修改的证明义务
 实现及保护 gate 同改须列旧 gate 对坏实现结果、新 gate 扩大/收窄精确集合，以独立 oracle（判定依据）证未开后门、证 CI/聚合链实执行；fork 执行须无 secrets/写凭据、最小权限、隔离。脚本存在、名字进 `verify:build` 或 CI 绿均不足。
