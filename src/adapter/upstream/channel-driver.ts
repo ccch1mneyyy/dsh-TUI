@@ -19,6 +19,10 @@ import type { CapabilityLifecycle } from '../kernel/lifecycle.js'
 import { lifecycleFromDetection } from '../kernel/lifecycle.js'
 import type { Detection, DetectionEvidence } from './detection.js'
 import type { UpstreamDriver, UpstreamDriverMount } from './driver.js'
+import { createChannelUi, createChannelUiLease } from '../channel/ui.js'
+import type { ChannelPreferences } from '../channel/ui-policy.js'
+import { adapterRuntimeFor } from '../kernel/runtime-context.js'
+import { onTuiChannelRegistered } from '../channel/host-registry.js'
 import type { Channel } from '../../dsh-adapter/channel.js'
 import {
   createChannelActions,
@@ -233,8 +237,26 @@ function requireChannel(ctx: unknown): Channel {
   return channel
 }
 
-function createProjectionPort(ctx: unknown): HostChannelProjectionPort {
+function createProjectionPort(ctx: unknown, own: (dispose: () => void) => void, isActive: () => boolean): HostChannelProjectionPort {
+  let cachedChannel: Channel | undefined
+  let cachedUi: ReturnType<typeof createChannelUi> | undefined
+  let releaseCurrent = () => undefined
+  own(() => releaseCurrent())
   return Object.freeze({
+    ui() {
+      if (!isActive()) throw new Error('dsh-tui: Channel driver has been disposed')
+      const channel = requireChannel(ctx) as Channel & ChannelPreferences
+      if (cachedChannel === channel && cachedUi !== undefined) return cachedUi
+      const lease = createChannelUiLease(() => isActive() && channelFor(ctx) === channel)
+      const unsubscribe = onTuiChannelRegistered(ctx, next => {
+        if (next !== channel) lease.dispose()
+      })
+      releaseCurrent()
+      releaseCurrent = () => { unsubscribe(); lease.dispose() }
+      cachedChannel = channel
+      cachedUi = createChannelUi(channel, adapterRuntimeFor(ctx as never).mode, lease)
+      return cachedUi
+    },
     snapshot() {
       return projectChannelSnapshot(requireChannel(ctx))
     },
@@ -293,9 +315,9 @@ function createTranscriptPort(ctx: unknown): HostChannelTranscriptPort {
   })
 }
 
-function createChannelPort(ctx: unknown): HostChannelPort {
+function createChannelPort(ctx: unknown, own: (dispose: () => void) => void, isActive: () => boolean): HostChannelPort {
   return Object.freeze({
-    projection: createProjectionPort(ctx),
+    projection: createProjectionPort(ctx, own, isActive),
     actions: createActionsPort(ctx),
     state: createStatePort(ctx),
     plugins: createPluginsPort(ctx),
@@ -311,9 +333,11 @@ export const channelDriver: UpstreamDriver = {
   detect: detectChannelCapability,
   verifyLive: verifyChannelLive,
   async mount(context: unknown): Promise<UpstreamDriverMount> {
+    const disposers = new Set<() => void>()
+    let active = true
     return {
-      disposer: () => undefined,
-      ports: { channel: createChannelPort(context) },
+      disposer: () => { active = false; for (const dispose of disposers) dispose(); disposers.clear() },
+      ports: { channel: createChannelPort(context, dispose => { disposers.add(dispose) }, () => active) },
     }
   },
 }

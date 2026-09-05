@@ -1,3 +1,5 @@
+import type { TuiSettingsSection, TuiSettingsGroup, TuiSettingsField, TuiSettingsFieldKind, TuiSettingsFieldOption, TuiSettingsFieldWrite } from '../adapter/ports/channel-settings.js'
+export type { TuiSettingsSection, TuiSettingsGroup, TuiSettingsField, TuiSettingsFieldKind, TuiSettingsFieldOption, TuiSettingsFieldWrite } from '../adapter/ports/channel-settings.js'
 /**
  * Plugin settings-section extension seam for terminal front doors.
  *
@@ -20,100 +22,6 @@ import {
   type AdapterRuntimeOptions,
 } from '../adapter/kernel/runtime.js'
 import { adapterRuntimeFor } from '../adapter/kernel/runtime-context.js'
-
-/** Control kinds the TUI settings screen knows how to render. */
-export type TuiSettingsFieldKind = 'text' | 'number' | 'boolean' | 'select'
-
-export interface TuiSettingsFieldOption {
-  /** Stored value. */
-  value: string
-  /** Display label (English; also the fallback). */
-  label: string
-  /** Provider-owned translations for the label. */
-  descriptions?: LocalizedDescriptions
-}
-
-/** Optional navigation group inside one settings section. */
-export interface TuiSettingsGroup {
-  /** Stable identifier, unique inside the section. */
-  id: string
-  /** Group title (English; also the fallback). */
-  title: string
-  /** Provider-owned translations for the title. */
-  descriptions?: LocalizedDescriptions
-}
-
-/** The write one field's draft stages when the section is saved. */
-export type TuiSettingsFieldWrite =
-  | { kind: 'set'; value: unknown }
-  | { kind: 'clear' }
-
-export interface TuiSettingsField {
-  /**
-   * Key path from the section root, in the settings service's `mutate` path
-   * vocabulary (object keys; dict keys name their entry directly).
-   */
-  path: readonly string[]
-  /** Short field label (English; also the fallback). */
-  label: string
-  /** Provider-owned translations for the label. */
-  descriptions?: LocalizedDescriptions
-  /** Optional one-line help rendered under the field. */
-  hint?: string
-  /** Provider-owned translations for the hint. */
-  hintDescriptions?: LocalizedDescriptions
-  /** Optional group id; grouped fields render on that group's subpage. */
-  group?: string
-  kind: TuiSettingsFieldKind
-  /**
-   * Choices for `kind: 'select'`; any options-bearing field (text hybrids
-   * included — e.g. the page-margin presets) also cycles via ←/→ in the
-   * settings list while Enter keeps the kind's own action (select cycles,
-   * text opens the editor for a custom value).
-   */
-  options?: readonly TuiSettingsFieldOption[]
-  /** Input placeholder for `kind: 'text' | 'number'`. */
-  placeholder?: string
-  /**
-   * Credential control (mirrors the web cards' CardSecretSpec): the literal
-   * never rides the settings document — the draft starts blank on every
-   * open, a blank draft writes nothing, and a typed draft writes through the
-   * credentials seam under `ref`. The screen shows only whether a value is
-   * configured.
-   */
-  secret?: { ref: string }
-  /**
-   * Render a stored value as draft text. Defaults to the kind's conversion
-   * (strings verbatim, numbers via `String`, booleans/selects by value).
-   */
-  format?(value: unknown): string
-  /**
-   * The write this draft text stages, or `undefined` when the text is not a
-   * value this field accepts — an invalid draft blocks the save rather than
-   * being discarded. Defaults to the kind's conversion (an empty text/number
-   * draft stages a clear, letting the field re-inherit the composition
-   * layer).
-   */
-  parse?(text: string): TuiSettingsFieldWrite | undefined
-}
-
-/** One plugin's section inside the TUI settings screen. */
-export interface TuiSettingsSection {
-  /**
-   * Settings namespace this section edits. Should match a namespace the
-   * plugin registers on the dsh settings service; the screen marks the
-   * section unavailable when the composition serves no such namespace.
-   */
-  ns: string
-  /** Section title (English; also the fallback). */
-  title: string
-  /** Provider-owned translations for the title. */
-  descriptions?: LocalizedDescriptions
-  /** Optional navigation groups, in display order. */
-  groups?: readonly TuiSettingsGroup[]
-  /** Editable fields, in display order. */
-  fields: readonly TuiSettingsField[]
-}
 
 /** Host-only settings-section controls used by the TUI bootstrap/channel. */
 export interface TuiSettingsSectionsHost {

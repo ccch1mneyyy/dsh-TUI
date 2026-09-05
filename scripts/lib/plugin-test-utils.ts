@@ -66,7 +66,10 @@ export async function mountAdmitted(
       context = candidate
     },
   }) as unknown as { dispose(): unknown }
-  await sleep(30)
+  // Activation is asynchronous; a fixed 30 ms sleep races compilation/CI
+  // load. Wait for the same readiness condition with a finite failure bound.
+  const deadline = Date.now() + 2000
+  while (context === undefined && Date.now() < deadline) await sleep(10)
   if (context === undefined || fiber === undefined) {
     await Promise.resolve(fiber?.dispose())
     throw new Error(`Component activation ${name} did not admit`)

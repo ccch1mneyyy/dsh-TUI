@@ -1,3 +1,5 @@
+import type { RecapOutcome } from '../adapter/ports/channel-catalog.js'
+export type { RecapOutcome } from '../adapter/ports/channel-catalog.js'
 /**
  * Session recap (`/recap`, pi-recap semantics): a single TOOL-LESS LLM
  * call that summarizes the session's RECENT activity into one line and
@@ -123,14 +125,4 @@ export function parseRecapResponse(raw: string): { summary: string; title?: stri
     }
   }
   return { summary: raw.trim() }
-}
-
-/** Outcome of one recap call, as surfaced on the Channel. */
-export interface RecapOutcome {
-  /** The one-line summary, or null when the call failed. */
-  summary: string | null
-  /** Proposed session title, when the model offered one. */
-  title?: string
-  /** Human-readable failure reason (llm missing, stream error, …). */
-  error?: string
 }

@@ -265,7 +265,7 @@ const check1 = (name: string, ok: boolean, detail?: string) => {
   // one particular expression layout: the channel intentionally stores the
   // definition before resolving its owner so the same value is passed to
   // `execute`'s agent-scoped lookup checks.
-  const definitionLookup = channel.indexOf('const definition = commandService.find(commandAgent, name)')
+  const definitionLookup = channel.indexOf('const definition = commandService.find(binding.agent, name)')
   const ownerLookup = channel.indexOf('const owner = commandOwner(ctx, definition)', definitionLookup)
   const imagePreparation = channel.indexOf('const batch = await registryCommandImages(', definitionLookup)
   const rootGrantCheckpoint = channel.indexOf("if (!currentGrantStore().allows(", imagePreparation)

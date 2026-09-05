@@ -48,11 +48,17 @@ web-app patch 按 include 语义合成一遍,直接拦截 loader entry id 复用
 
 - **P4 Channel Port/投影层**:新增 `projection / actions / state /
   plugins / transcript` 五个 Host Port 与 `src/adapter/channel/*` 拆分模块;
-  生产 `channel.ts` 本体尚未物理拆分,由 live Channel 作为实现来源;
-  T1 核心迁移:plugin.ts 通知/初始提交已优先走 HostFacade.channel.actions,
-  非 shadow 下未 mount 才回退原生,passive/replay shadow 禁止回退/丢弃;
-  其余 UI/Channel 动作仍大部分直接调用原生 Channel,未完整迁移;
-  新增 `channel` KernelSlice、上游 driver 与 `verify:adapter-channel`。
+  live Channel 仍为实现真源。L4 已物理提取中性 types、唯一 live/replay projector、
+  input FIFO/staging、binding cell、session tree、notifications、emitter/settings 等模块,
+  生产根改供受保护的进程内 ChannelUi,
+  非 wire snapshot；kernel 未 mount 时使用同一 policy factory 的本地 capability,
+  已绑定 kernel 后禁止降级回退。新增 `verify:channel-ui` 验证嵌套句柄和生命周期。
+  ChannelUi 及可达数据契约由 `adapter/ports/channel-*.ts` 拥有，原位置 re-export；
+  ports 不依赖 adapter/React，上游事件经 RawTrajEvent 边界读取，scene 由 renderer outlet 注入。
+  只读数据为脱离后端的冻结投影，嵌套回调捕获生命周期；shadow renderer 使用本地观察订阅。
+  **尚未完成 L4**：原本体仍约 5,000 行；session/model/workspace actions 与 activity 装配待继续拆分，
+  旧 Port 生命周期及全部异步域操作尚未获得完整闭环证明。
+  详细完成项与阻塞项见 [L4/L5 路线图](docs/roadmap-adapter-channel-l4-l5.md)。
 - **P5 Channel Provider/Consumer**:实现 `tui.dsh/v1alpha1#Channel`
   协议包络与校验;`runChannelReplay` 支持录制 snapshots 与真实 DSH
   sessionEvents 的 **minimal transcript replay**(不宣称完整 RFC state);

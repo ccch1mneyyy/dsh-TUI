@@ -1,3 +1,5 @@
+import type { TuiRewindMode } from '../adapter/ports/channel-session.js'
+export type { TuiRewindMode } from '../adapter/ports/channel-session.js'
 /**
  * Decision-point events the TUI fires on the cordis bus so plugins can
  * intercept, cancel, or customize interactive flows — the `session_before_*`
@@ -273,16 +275,6 @@ export interface TuiRewindPromptEvent extends TuiDecisionContext {
   text: string
   /** Session event seq of the picked message. */
   seq: number
-}
-
-/** One extra rewind mode offered by a plugin (e.g. "also restore files"). */
-export interface TuiRewindMode {
-  /** Stable id reported back in `TuiRewindDoneEvent.mode`. */
-  id: string
-  /** One-line label shown in the confirm pane. */
-  label: string
-  /** Optional dimmed description under the label. */
-  description?: string
 }
 
 export type TuiRewindPromptDecision =

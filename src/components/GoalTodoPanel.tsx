@@ -1,6 +1,7 @@
 import React from 'react'
 import { Box, Text } from '../ui.js'
-import type { Channel, ChannelGoal, TodoPanelItem } from '../dsh-adapter/channel.js'
+import type { ChannelUi as Channel } from '../adapter/channel/ui-policy.js'
+import type { ChannelGoal, TodoPanelItem } from '../dsh-adapter/channel.js'
 import { t } from '../i18n.js'
 import { modLabel } from '../utils/modifiers.js'
 

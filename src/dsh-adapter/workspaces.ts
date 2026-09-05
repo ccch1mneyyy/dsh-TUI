@@ -1,3 +1,5 @@
+import type { TuiWorkspaceTarget, TuiWorkspaceKind, TuiWorkspaceCommand, TuiWorkspaceCommandResult, TuiWorkspaceChoice } from '../adapter/ports/channel-workspace.js'
+export type { TuiWorkspaceTarget, TuiWorkspaceKind, TuiWorkspaceCommand, TuiWorkspaceCommandResult, TuiWorkspaceChoice } from '../adapter/ports/channel-workspace.js'
 /**
  * Workspace-target extension seam for terminal front doors.
  *
@@ -14,47 +16,6 @@ import {
   type AdapterRuntimeOptions,
 } from '../adapter/kernel/runtime.js'
 import { adapterRuntimeFor } from '../adapter/kernel/runtime-context.js'
-
-export type TuiWorkspaceKind = 'local' | 'provider'
-
-export interface TuiWorkspaceTarget {
-  /** Stable, user-pasteable target identifier. */
-  uri: string
-  /** Host-side cwd recorded in the DSH session header. */
-  cwd: string
-  /** Compact picker/status label. */
-  label: string
-  /** Optional secondary picker copy. */
-  description?: string
-  kind: TuiWorkspaceKind
-  /** Provider-owned compact badge; the TUI does not interpret it. */
-  badge: string
-}
-
-export interface TuiWorkspaceChoice {
-  id: string
-  label: string
-  description?: string
-  badge?: string
-  choose(signal?: AbortSignal): Promise<TuiWorkspaceCommandResult> | TuiWorkspaceCommandResult
-  /** Optional inline editor entered with Tab while this choice is focused. */
-  input?: {
-    initialValue?: string
-    placeholder?: string
-    submit(value: string, signal?: AbortSignal): Promise<TuiWorkspaceCommandResult> | TuiWorkspaceCommandResult
-  }
-}
-
-export type TuiWorkspaceCommandResult =
-  | { kind: 'choices'; title: string; choices: readonly TuiWorkspaceChoice[] }
-  | { kind: 'target'; target: TuiWorkspaceTarget }
-
-export interface TuiWorkspaceCommand {
-  name: string
-  aliases?: readonly string[]
-  description: string
-  run(input: string, context: { cwd: string }, signal?: AbortSignal): Promise<TuiWorkspaceCommandResult> | TuiWorkspaceCommandResult
-}
 
 export interface TuiCommandShell {
   resolve(request: {

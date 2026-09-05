@@ -9,6 +9,9 @@ import type { SettingsNamespace } from '@deepseek-ai/dsh-settings'
 import Schema from '@deepseek-ai/schemastery'
 import { Config } from './index.js'
 import { createChannel } from './channel.js'
+import { createChannelSceneOutlet } from './channel-scene-outlet.js'
+import { mountChannelUi } from './channel-ui.js'
+import { bindChannelCommands } from './channel/commands.js'
 import { registerTuiChannel } from '../adapter/channel/host-registry.js'
 import { createChildStderrReporter, installChildStderrGuard } from './childStderr.js'
 import { removeClipboardImageDir } from '../utils/clipboard.js'
@@ -54,7 +57,6 @@ import { getHostThemes, type TuiThemeRuntime } from './themes.js'
 import { attachSessionToWorkspace } from './workspace.js'
 import { createLocalWorkspaceRuntime, getHostWorkspaceRuntime } from './workspaces.js'
 import { getHostSettingsSections, getLocalSettingsSectionsHost, type TuiSettingsField, type TuiSettingsSectionsRuntime } from './settings-sections.js'
-import { notifyViaChannelFacade, submitViaChannelFacade } from './channel-facade-actions.js'
 import { compositionRoot, withHostRootCapability } from './host-access.js'
 import { render, ThemeProvider, AlternateScreen } from '../ui.js'
 import { PageMargin } from '../components/PageMargin.js'
@@ -479,7 +481,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   // validated startup resolution, on resume the route the target session's
   // own records carry (a complete cordis.yml pin wins over them).
   const displayRoute = createdRoute ?? startupRoute
-  const channel = createChannel(ctx, agent, {
+  const rawChannel = createChannel(ctx, agent, {
     model: displayRoute.model,
     // A RESUMED session keeps its persisted header cwd (issue #96 review):
     // pre-upgrade sessions recorded the launch directory, and re-resolving
@@ -525,30 +527,43 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     statusBar: config.statusBar,
     handle,
   })
-  // Root page-margin store: the PageMargin inset box sits ABOVE Chat, so
-  // the channel version bump (which re-renders everything below Chat)
-  // cannot drive it. Seed the store from config before the tree mounts;
-  // applyDisplay below mirrors every settings change into it live.
-  applyPageMargin(config.pageMargin)
   // Register the live Channel for the adapter Kernel. The Channel driver
   // resolves it lazily from the composition root, so this can be called after
   // the plugin-host Kernel started without requiring a re-mount.
   // Normalize to the composition root: the Kernel and its Channel driver
   // query the registry through the root context, never through this plugin's
   // child activation context.
-  const unregisterTuiChannel = registerTuiChannel(compositionRoot(ctx), channel)
+  const unregisterTuiChannel = registerTuiChannel(compositionRoot(ctx), rawChannel)
   ctx.effect(() => () => { unregisterTuiChannel() })
   const pluginHost = ctx.get('tuiPluginHost')
   const adapterRuntime = adapterRuntimeFor(ctx)
+  const uiMount = mountChannelUi(ctx, rawChannel, pluginHost, adapterRuntime.mode)
+  const channel = uiMount.channel
+  bindChannelCommands(rawChannel, channel)
+  const shadow = adapterRuntime.mode === 'passive-shadow' || adapterRuntime.mode === 'replay-shadow'
+  // Bootstrap notices/prompts are deliberately dropped in observational mode;
+  // interactive commands retain rejection semantics through the UI capability.
+  const notifyChannel: typeof channel.notify = (text, options) => {
+    if (shadow) return () => undefined
+    return channel.notify(text, options)
+  }
+  const submitChannel: typeof channel.submit = text => {
+    if (!shadow) channel.submit(text)
+  }
+  ctx.effect(() => () => { uiMount.dispose() })
+  // Root page-margin store: the PageMargin inset box sits ABOVE Chat, so
+  // the channel version bump (which re-renders everything below Chat)
+  // cannot drive it. Seed the store from config before the tree mounts;
+  // applyDisplay below mirrors every settings change into it live.
+  applyPageMargin(config.pageMargin)
   // Plugin toasts ride the channel's own notification surface: the runtime
   // already sanitized/rate-limited the delivery, the sink only forwards.
   // Without the extensions row (tuiToast absent) plugin toasts are dropped
   // by the runtime itself — same soft-degrade contract as the other seams.
-  // T1 partial migration: when the production Kernel facade has a Channel
-  // Port, route through the shadow-guarded `HostFacade.channel.actions`.
+  // Delivery uses the same owner-bound UI capability as all renderer actions.
   const toastStore = getHostToastStore(ctx.get('tuiToast') as TuiToastRuntime | undefined)
   toastStore?.setSink(delivery => {
-    notifyViaChannelFacade(pluginHost, channel, adapterRuntime, delivery.text, { color: delivery.color, timeoutMs: delivery.timeoutMs })
+    notifyChannel(delivery.text, { color: delivery.color, timeoutMs: delivery.timeoutMs })
   })
   if (questionAnswererRegistration.kind === 'waterfall') {
     // Ownership follows the mutable channel; registration cleanup belongs to
@@ -687,9 +702,10 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
       shortcuts?: Partial<Record<ShortcutActionId, string>>
     }
     const applyLayout = (value: SettingsValue): void => {
-      channel.setDiffLayout(value.diffLayout ?? config.diffLayout ?? 'auto')
+      if (!shadow) channel.setDiffLayout(value.diffLayout ?? config.diffLayout ?? 'auto')
     }
     const applyWhale = (value: { whale?: boolean }): void => {
+      if (shadow) return
       channel.setWhale(value.whale ?? true)
     }
     /** Apply the idle-whale-behavior setting: live-toggle the channel flag. */
@@ -697,6 +713,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
       channel.setWhaleIdle(value.whaleIdle ?? true)
     }
     const applyMinimal = (value: { minimal?: boolean }): void => {
+      if (shadow) return
       channel.setMinimal(value.minimal ?? false)
     }
     // Renderer settings are resolved before mount; later edits wait for restart.
@@ -721,6 +738,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     // Display preferences ride the same namespace: /settings writes them
     // live and future render consumers observe the channel version bump.
     const applyDisplay = (value: SettingsValue): void => {
+      if (shadow) return
       channel.setThinkingFold(value.thinkingFold ?? config.thinkingFold ?? 'preview')
       channel.setToolBackground(normalizeToolBackground(value.toolBackground ?? config.toolBackground))
       channel.setScrollGutter(normalizeScrollGutter(value.scrollGutter ?? config.scrollGutter))
@@ -794,7 +812,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
       unset: () => settingsCtx.settings.mutate(tuiSettingsNs, [{ op: 'unset', path: ['fullscreen'] }]),
     })
     if (fullscreenMigration === 'unset') {
-      notifyViaChannelFacade(pluginHost, channel, adapterRuntime, t('settings-fullscreen-migrated'), { color: 'warning' })
+      notifyChannel(t('settings-fullscreen-migrated'), { color: 'warning' })
     }
     const { fullscreen: staleFullscreen, ...migratedSettings } = bootSettings
     apply(fullscreenMigration === 'unset' ? migratedSettings : bootSettings)
@@ -802,7 +820,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     scope.watch(next => {
       apply(next)
       if (typeof next.fullscreen === 'boolean' && next.fullscreen !== bootedFullscreen) {
-        notifyViaChannelFacade(pluginHost, channel, adapterRuntime, t('settings-fullscreen-restart'), { color: 'warning' })
+        notifyChannel(t('settings-fullscreen-restart'), { color: 'warning' })
       }
       const terminalImages = next.terminalImages ?? config.terminalImages ?? true
       if (terminalImages !== lastTerminalImages && terminalImages !== bootedTerminalImages) {
@@ -1356,7 +1374,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     ctx.effect(() => () => approvalStore.settleAll('cancelled'))
   }
   // The agent view reads parked ask ids for its "needs input" state.
-  channel.bindApprovalStore(approvalStore)
+  rawChannel.bindApprovalStore(approvalStore)
   const herdr = attachHerdrIntegration({
     channel,
     questions: questionStore,
@@ -1375,14 +1393,14 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   const cmdline = (ctx as { cmdlineArgs?: { get?: () => readonly string[]; args?: readonly string[] } }).cmdlineArgs
   const cmdlineArgs = cmdline?.get?.() ?? cmdline?.args
   const initialPrompt = initialPromptFromCmdlineArgs(cmdlineArgs)
-  if (initialPrompt) submitViaChannelFacade(pluginHost, channel, adapterRuntime, initialPrompt)
+  if (initialPrompt) submitChannel(initialPrompt)
   // Attach the stderr reporter to the live channel and flush anything a
   // startup-spawned server produced while the channel didn't exist yet.
-  notifyStderr = (text, options) => notifyViaChannelFacade(pluginHost, channel, adapterRuntime, text, options)
+  notifyStderr = (text, options) => notifyChannel(text, options)
   // The question-seat alert was raised before the channel existed; flush it
   // now so it lands as an in-UI notice, not only in the log file.
   if (questionSeatNotice !== undefined) {
-    notifyViaChannelFacade(pluginHost, channel, adapterRuntime, questionSeatNotice, { color: 'error' })
+    notifyChannel(questionSeatNotice, { color: 'error' })
     questionSeatNotice = undefined
   }
   for (const [text, options] of stderrBacklog.splice(0)) {
@@ -1523,6 +1541,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   await settingsReady
   const chat = React.createElement(Chat, {
     channel,
+    renderScene: createChannelSceneOutlet(() => rawChannel.pluginScene),
     questionStore,
     approvalStore,
     injectControllerRef,
@@ -1543,7 +1562,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
       if (exited || restartRequested) return
       restartRequested = true
       logRestartEvent('command: /restart accepted')
-      notifyViaChannelFacade(pluginHost, channel, adapterRuntime, t('restart-starting'))
+      notifyChannel(t('restart-starting'))
       handleExit()
     },
     // Only a `dsh --profile <name>` launch has a profile installation for
@@ -1557,11 +1576,11 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
       void resolveTuiUpdateTarget().then((target) => {
         if (exited || updateRequested) return
         if (target.kind === 'latest') {
-          notifyViaChannelFacade(pluginHost, channel, adapterRuntime, t('update-already-latest', { current: target.current }), { color: 'warning' })
+          notifyChannel(t('update-already-latest', { current: target.current }), { color: 'warning' })
           return
         }
         if (target.kind === 'unknown') {
-          notifyViaChannelFacade(pluginHost, channel, adapterRuntime, t('update-check-failed'))
+          notifyChannel(t('update-check-failed'))
         } else {
           // 0.7.0/0.7.1 hard-inject tuiWorkspaces at the code level; under
           // an older global launcher patch (no service row) that is a
@@ -1569,21 +1588,21 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
           // "pending (waiting for service: tuiWorkspaces)"). A stale mirror
           // pinning /update onto that range must be refused, not installed.
           if (isBootDeadlockTarget(target.latest)) {
-            notifyViaChannelFacade(pluginHost, channel, adapterRuntime, t('update-refused-deadlock', {
+            notifyChannel(t('update-refused-deadlock', {
               latest: target.latest,
               authoritative: target.authoritative ?? target.latest,
             }), { color: 'warning' })
             return
           }
           if (target.authoritative !== undefined) {
-            notifyViaChannelFacade(pluginHost, channel, adapterRuntime, t('update-mirror-lag', { latest: target.latest, authoritative: target.authoritative }))
+            notifyChannel(t('update-mirror-lag', { latest: target.latest, authoritative: target.authoritative }))
           }
           updateTargetVersion = target.latest
         }
         if (isStandaloneRuntime()) {
-          notifyViaChannelFacade(pluginHost, channel, adapterRuntime, t('update-standalone-starting'))
+          notifyChannel(t('update-standalone-starting'))
         } else {
-          notifyViaChannelFacade(pluginHost, channel, adapterRuntime, t('update-starting'))
+          notifyChannel(t('update-starting'))
         }
         updateRequested = true
         handleExit()
@@ -1661,10 +1680,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     const suffix = update.isStandalone && update.checksumUrl === undefined
       ? ` ${t('update-standalone-no-checksum')}`
       : ''
-    notifyViaChannelFacade(
-      pluginHost,
-      channel,
-      adapterRuntime,
+    notifyChannel(
       `${t(key, { current: update.current, latest: update.latest })}${suffix}`,
       { color: 'warning', timeoutMs: 12000 },
     )
@@ -1681,7 +1697,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   ctx.effect(() => () => {
     logMouseDebug('apply teardown')
     funnel.markTeardown()
-    channel.releaseContributions()
+    rawChannel.releaseContributions()
     instance?.unmount()
   })
 

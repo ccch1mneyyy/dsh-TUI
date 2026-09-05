@@ -88,6 +88,7 @@ export const ADAPTER_CAPABILITY_EFFECT_CLASSES: Readonly<Record<string, HostEffe
   'host.workspaces.rename': 'mutate',
   'host.workspaces.commands': 'read-only',
   'host.workspaces.runCommand': 'mutate',
+  'host.channel.projection.ui': 'read-only',
   'host.channel.projection.snapshot': 'read-only',
   'host.channel.projection.subscribe': 'subscribe',
   'host.channel.state.snapshot': 'read-only',

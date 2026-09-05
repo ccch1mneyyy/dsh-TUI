@@ -1,3 +1,5 @@
+import type { SessionModeSpec } from './adapter/ports/channel-display.js'
+export type { SessionModeSpec } from './adapter/ports/channel-display.js'
 /**
  * Configurable Shift+Tab session modes (the `modes` dsh-tui plugin config):
  * each mode is a named bundle of optional DSH plane switches — plan mode
@@ -8,22 +10,6 @@
  * `plan`, but not with `sandbox` or `approval`.
  */
 import { t } from './i18n.js'
-
-export interface SessionModeSpec {
-  /** Stable id; also the display name unless `label` is set or the id is a
-   *  localized built-in (`default`/`plan`/`full`). */
-  id: string
-  /** Optional display label; wins over the built-in i18n name. */
-  label?: string
-  /** Plan mode on/off (dsh-plan-mode `/plan`). */
-  plan?: boolean
-  /** Sandbox mode override (dsh-sandbox-policy `sandbox/mode`). */
-  sandbox?: 'read-only' | 'workspace-write' | 'danger-full-access'
-  /** Approval policy override (dsh-user-approval `approval/policy`). */
-  approval?: 'ask' | 'never'
-  /** Durable DSH permission preset identity (`permission/preset`). */
-  permission?: string
-}
 
 /** The shipped cycle when cordis.yml pins no `modes` — array order IS the
  *  Shift+Tab cycle order; index 0 is the unmarked base mode. */

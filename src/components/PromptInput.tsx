@@ -24,8 +24,8 @@ import { formatClipboardInsert, readClipboard } from '../utils/clipboard.js'
 import { imagePathMediaType, parsePastedImagePath, stageClipboardFilePaths } from '../utils/pastedImagePath.js'
 import { editInExternalEditor } from '../utils/externalEditor.js'
 import { setPromptEditorNode, EditorButton } from './PromptEditor.js'
+import type { ChannelUi as Channel } from '../adapter/channel/ui-policy.js'
 import type {
-  Channel,
   ComposerImageRef,
   ComposerSubmission,
   StagedImageHandle,

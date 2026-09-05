@@ -350,7 +350,7 @@ const overview = () => pluginsInfoLines('', { grants, host })
   check1("Chat.tsx dispatches case 'plugins' to channel.pluginsInfo(rawInput)",
     chat.includes("case 'plugins':") && chat.includes('channel.pluginsInfo(rawInput)'))
   const channel = readFileSync(join(root, 'src/dsh-adapter/channel.ts'), 'utf8')
-  check1('channel interface declares pluginsInfo(args)', channel.includes('pluginsInfo(args: string): string[]'))
+  check1('channel interface declares pluginsInfo(args)', readFileSync(join(root, 'src/adapter/ports/channel-ui.ts'), 'utf8').includes('pluginsInfo(args: string): string[]'))
   check1('channel implementation soft-probes tuiPluginHost for pluginsInfo',
     /pluginsInfo\(args: string\) \{[\s\S]{0,300}ctx\.get\('tuiPluginHost'\)/.test(channel))
   check1('doctorInfo adds the generation line', channel.includes("t('doctor-plugin-generation'"))

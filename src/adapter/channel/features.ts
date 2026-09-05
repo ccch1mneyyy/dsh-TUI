@@ -9,6 +9,7 @@
 
 export const CHANNEL_PORT_METHOD_CAPABILITIES: Readonly<Record<string, Readonly<Record<string, string>>>> = Object.freeze({
   projection: Object.freeze({
+    ui: 'host.channel.projection.ui',
     snapshot: 'host.channel.projection.snapshot',
     subscribe: 'host.channel.projection.subscribe',
   }),

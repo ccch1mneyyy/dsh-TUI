@@ -1,57 +1,6 @@
-/** Unified subagent activity domain model used by the adapter and every view. */
+import type { SubagentState, SubagentStatus, SubagentOutputLine, SubagentOutputKind, SubagentToolCall, SubagentTokenUsage } from '../adapter/ports/channel-view.js'
+export type { SubagentState, SubagentStatus, SubagentOutputLine, SubagentOutputKind, SubagentToolCall, SubagentTokenUsage } from '../adapter/ports/channel-view.js'
 
-export type SubagentStatus = 'starting' | 'running' | 'completed' | 'failed' | 'cancelled' | 'unknown'
-export type SubagentOutputKind = 'text' | 'thinking' | 'tool' | 'error' | 'system'
-
-export interface SubagentOutputLine {
-  kind: SubagentOutputKind
-  text: string
-  at: number
-  /** False while the line is still absorbing streaming deltas. */
-  settled?: boolean
-}
-
-export interface SubagentToolCall {
-  id?: string
-  name: string
-  status: 'running' | 'completed' | 'failed'
-  startedAt: number
-  endedAt?: number
-  argsPreview?: string
-  resultPreview?: string
-  error?: string
-}
-
-export interface SubagentTokenUsage {
-  input?: number
-  output?: number
-  total?: number
-  context?: number
-}
-
-export interface SubagentState {
-  agentId: string
-  runId?: string
-  description: string
-  provider?: string
-  model?: string
-  effort?: string
-  status: SubagentStatus
-  startedAt: number
-  completedAt?: number
-  endedAt?: number
-  local?: boolean
-  parentSessionId?: string
-  sessionId?: string
-  stopReason?: string
-  error?: string
-  /** Compatibility projection for older consumers. */
-  output: string[]
-  outputEvents: SubagentOutputLine[]
-  toolCalls: SubagentToolCall[]
-  tokens?: SubagentTokenUsage
-  summary?: string
-}
 
 const MAX_OUTPUT_EVENTS = 160
 const MAX_OUTPUT_LINES = 160

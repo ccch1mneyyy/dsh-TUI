@@ -448,7 +448,7 @@ passive.dispose()
 // Production wiring: the TUI plugin registers the live Channel normalized to
 // the composition root for the adapter Kernel.
 const pluginSource = readFileSync(resolve(ROOT, 'src/dsh-adapter/plugin.ts'), 'utf8')
-assert.ok(pluginSource.includes('registerTuiChannel(compositionRoot(ctx), channel)'),
+assert.ok(pluginSource.includes('registerTuiChannel(compositionRoot(ctx), rawChannel)'),
   'production plugin.ts must register the live Channel through the composition root')
 const registrySource = readFileSync(resolve(ROOT, 'src/adapter/channel/host-registry.ts'), 'utf8')
 assert.ok(registrySource.includes("compositionRoot(ctx as never)"),

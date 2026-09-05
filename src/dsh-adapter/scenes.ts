@@ -2,7 +2,7 @@
 
 import type React from 'react'
 import { Context, Service } from '@deepseek-ai/cordis'
-import type { Channel } from './channel.js'
+import type { ChannelUi as Channel } from '../adapter/channel/ui-policy.js'
 import { activationFiber, bindCallerEffect, compositionRoot, concreteService, requirePluginCaller } from './host-access.js'
 import { componentIdentityOf } from './component-identity.js'
 import {
