@@ -253,8 +253,10 @@ class FakeStdout extends Writable {
   rows = ROWS
   isTTY = true
   fd = cleanupFd
+  output = ''
   constructor(private readonly terminal: InstanceType<typeof XTerm>) { super() }
   _write(chunk: unknown, _encoding: BufferEncoding, callback: () => void): void {
+    this.output += String(chunk)
     this.terminal.write(String(chunk), callback)
   }
 }
@@ -276,6 +278,7 @@ async function withTerminal(
   check: (
     screen: () => string,
     rerender: (tree: React.ReactElement) => void,
+    rawOutput: () => string,
   ) => Promise<void>,
 ): Promise<void> {
   const terminal = new XTerm({ cols: COLS, rows: ROWS, scrollback: 0, allowProposedApi: true })
@@ -292,7 +295,7 @@ async function withTerminal(
     (_, y) => terminal.buffer.active.getLine(y)?.translateToString(true) ?? '',
   ).join('\n')
   try {
-    await check(screen, next => { app.rerender(next) })
+    await check(screen, next => { app.rerender(next) }, () => stdout.output)
   } finally {
     await app.unmount()
     terminal.dispose()
@@ -543,12 +546,30 @@ await withTerminal(
 clearTranscriptImageCacheForTests()
 await withTerminal(
   <TranscriptImages images={[image('failed-image', '\u001b[31mbad.png\u001b[0m', true)]} indent={0} />,
-  async screen => {
+  async (screen, _rerender, rawOutput) => {
     assert.equal(
       await settled(() => screen().includes('Cannot preview bad.png')),
       true,
       'failed attachment reads use a text alternative with a sanitized image name',
     )
+    assert.ok(!rawOutput().includes('\u001b[31mbad.png\u001b[0m'), 'injected label ANSI never reaches the terminal')
+  },
+)
+
+await withTerminal(
+  <TranscriptImages images={[image('unnamed-failed-image', '', true)]} indent={0} />,
+  async screen => {
+    assert.equal(await settled(() => screen().includes('Cannot preview Image')), true)
+    try {
+      setLang('zh')
+      assert.equal(
+        await settled(() => screen().includes('无法预览 图片')),
+        true,
+        'a mounted gallery refreshes its status and unnamed-image label on language changes',
+      )
+    } finally {
+      setLang('en')
+    }
   },
 )
 

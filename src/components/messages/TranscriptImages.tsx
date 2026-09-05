@@ -4,7 +4,7 @@ import type { TerminalImageSource } from '../../ink/terminal-image.js'
 import type { TranscriptImage } from '../../dsh-adapter/transcript-images.js'
 import { loadSharp } from '../../dsh-adapter/sharp.js'
 import { cleanRenderText } from '../../dsh-adapter/sanitize.js'
-import { t } from '../../i18n.js'
+import { getLang, subscribeLang, t } from '../../i18n.js'
 
 const PREVIEW_PIXELS = 384
 const DECODED_CACHE_LIMIT = 24
@@ -19,6 +19,7 @@ export function TranscriptImages({
   readonly indent?: number
 }): React.ReactNode {
   const { columns } = useTerminalSize()
+  React.useSyncExternalStore(subscribeLang, getLang)
   if (images.length === 0) return null
   const available = Math.max(1, columns - indent - 3)
   return (
