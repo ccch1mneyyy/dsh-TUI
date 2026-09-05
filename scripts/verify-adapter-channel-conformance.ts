@@ -124,6 +124,35 @@ await assert.rejects(
 )
 checks += 1
 
+// Inherited Object.prototype functions are not declared replay methods.
+for (const methods of [undefined, {}]) {
+  const provider = createReplayChannelProvider({ snapshots: [snapshot1], methods })
+  await provider.open({})
+  for (const method of ['toString', 'constructor', 'hasOwnProperty', '__proto__']) {
+    await assert.rejects(
+      withReplayIsolation(() => provider.invoke(snapshot1.channelId, method, [])),
+      /FEATURE_UNAVAILABLE/u,
+      `inherited ${method} must never execute as a replay handler`,
+    )
+  }
+  checks += 1
+}
+for (const methods of [Object.create({ inherited: () => 'unsafe' }), [], new Date()]) {
+  assert.throws(
+    () => createReplayChannelProvider({ snapshots: [snapshot1], methods }),
+    /methods must be a plain object map/u,
+  )
+  checks += 1
+}
+// Own declarations (including prototype-like names) work on both map forms.
+for (const methods of [{ toString: () => 'declared' }, Object.assign(Object.create(null), { toString: () => 'declared' })]) {
+  const provider = createReplayChannelProvider({ snapshots: [snapshot1], methods })
+  await provider.open({})
+  const output = await withReplayIsolation(() => provider.invoke(snapshot1.channelId, 'toString', []))
+  assert.equal(output.value, 'declared')
+  checks += 1
+}
+
 // ── subscribe >= afterVersion, including version 0 ─────────────────────────
 const received: number[] = []
 const subscriptionConsumer = createChannelConsumer(realMethodsProvider)

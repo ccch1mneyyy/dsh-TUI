@@ -209,12 +209,17 @@ export function effectClassFor(capability: string): HostEffectClass | undefined 
 export function parseAdapterMode(value: string | undefined): AdapterMode {
   const normalized = value?.trim().toLowerCase()
   switch (normalized) {
+    case undefined:
+      return DEFAULT_ADAPTER_MODE
+    case 'legacy':
     case 'passive-shadow':
     case 'replay-shadow':
     case 'new':
       return normalized
     default:
-      return DEFAULT_ADAPTER_MODE
+      throw new Error(
+        `dsh-tui: unknown DSH_TUI_ADAPTER_MODE ${JSON.stringify(value)}; valid modes: legacy, passive-shadow, replay-shadow, new`,
+      )
   }
 }
 

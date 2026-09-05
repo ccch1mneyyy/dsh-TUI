@@ -124,7 +124,13 @@ hostCtx.logger.warn = (format: unknown, ...params: unknown[]) => {
   hostWarnings.push([format, ...params].map(String).join(' '))
 }
 hostCtx.plugin({ name: pluginHostRow.name, apply: pluginHostRow.apply })
-await sleep(50)
+// New-mode admission must wait for real live evidence, not depend on a 50ms
+// timer or the removed pending-Kernel legacy fallback (slow disk/CI hosts).
+const descriptorDeadline = Date.now() + 5000
+while (!hostCtx.get('tuiPluginHost')?.hostDescriptor().contracts.some(contract => contract.kind === 'LocalStorage')) {
+  if (Date.now() >= descriptorDeadline) throw new Error(`storage live verification timed out: ${hostWarnings.join(' | ')}`)
+  await sleep(10)
+}
 check1('storage live probe is not exposed on the plugin-visible service',
   typeof (hostCtx.get('tuiPluginStorage') as { probeReversible?: unknown } | undefined)?.probeReversible === 'undefined')
 

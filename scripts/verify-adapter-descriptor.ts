@@ -305,4 +305,86 @@ await (async () => {
   }
 })()
 
+// Full production composition must not publish legacy contracts in a shadow
+// mode, or while a new-mode refresh is pending/failed. Inject only the refresh
+// boundary for the two new-mode failure scenarios; all services are real.
+{
+  const { Context } = await import('@deepseek-ai/cordis')
+  const { default: CommandRuntime } = await import('@deepseek-ai/dsh-commands')
+  const pluginHostRow = await import('../src/dsh-adapter/plugin-host.js')
+  const { KernelRuntime } = await import('../src/adapter/kernel/kernel-runtime.js')
+  const { hostDescriptorDriver } = await import('../src/adapter/upstream/host-descriptor-driver.js')
+  const previousMode = process.env.DSH_TUI_ADAPTER_MODE
+  const originalRefresh = KernelRuntime.prototype.refresh
+  const originalVerifier = hostDescriptorDriver.verifyLive
+  for (const scenario of ['passive-shadow', 'replay-shadow', 'new-pending', 'new-failed', 'new-completed']) {
+    const root = new Context()
+    root.logger.warn = () => undefined
+    let releaseRefresh: (() => void) | undefined
+    let kernel: InstanceType<typeof KernelRuntime> | undefined
+    const fibers: { dispose(): unknown }[] = []
+    try {
+      process.env.DSH_TUI_ADAPTER_MODE = scenario.startsWith('new-') ? 'new' : scenario
+      const pending = scenario === 'new-pending'
+        ? new Promise<void>(resolve => { releaseRefresh = resolve })
+        : Promise.resolve()
+      KernelRuntime.prototype.refresh = async function (options) {
+        kernel = this
+        await pending
+        return originalRefresh.call(this, options)
+      }
+      if (scenario === 'new-failed') {
+        hostDescriptorDriver.verifyLive = async () => { throw new Error('injected verifier failure') }
+      }
+      fibers.push(root.plugin(CommandRuntime))
+      await new Promise(resolve => setTimeout(resolve, 30))
+      const fiber = root.plugin({ name: pluginHostRow.name, apply: pluginHostRow.apply })
+      fibers.push(fiber)
+      await new Promise(resolve => setTimeout(resolve, 50))
+      assert.ok(root.get('commands') && root.get('tuiPluginStorage') && root.get('tuiMessageObserver'),
+        `${scenario}: full legacy-capable topology must be mounted`)
+      const host = root.get('tuiPluginHost')!
+      const assertNoLegacy = () => {
+        const build = host.describe()
+        assert.deepEqual(build.descriptor.contracts, [], `${scenario}: no unprobed contracts`)
+        assert.deepEqual(host.hostDescriptor().contracts, [])
+        assert.ok(!build.warnings.some(warning => warning.includes('legacy compatibility descriptor')),
+          `${scenario}: must not enter the legacy publication path`)
+      }
+      if (scenario === 'new-failed' || scenario === 'new-completed') {
+        const expected = scenario === 'new-failed' ? 'failed' : 'completed'
+        const deadline = Date.now() + 5000
+        while (kernel?.refreshStatus() !== expected && Date.now() < deadline) {
+          await new Promise(resolve => setTimeout(resolve, 10))
+        }
+        assert.equal(kernel?.refreshStatus(), expected, `${scenario}: exercise real refresh state`)
+      }
+      if (scenario === 'new-completed') {
+        assert.ok(host.describe().descriptor.contracts.some(contract => contract.kind === 'LocalStorage'),
+          'completed live verification must publish before disposal')
+      } else {
+        assertNoLegacy()
+        // Changing process env later cannot relax the captured composition mode.
+        process.env.DSH_TUI_ADAPTER_MODE = 'legacy'
+        assertNoLegacy()
+      }
+      await Promise.resolve(fiber.dispose())
+      // A retained service reference after Kernel disposal stays fail-closed,
+      // even if it previously published or an in-flight refresh later resumes.
+      assertNoLegacy()
+      releaseRefresh?.()
+      await new Promise(resolve => setTimeout(resolve, 10))
+      assertNoLegacy()
+      checks += 1
+    } finally {
+      releaseRefresh?.()
+      KernelRuntime.prototype.refresh = originalRefresh
+      hostDescriptorDriver.verifyLive = originalVerifier
+      for (const fiber of fibers.reverse()) await Promise.resolve(fiber.dispose())
+      if (previousMode === undefined) delete process.env.DSH_TUI_ADAPTER_MODE
+      else process.env.DSH_TUI_ADAPTER_MODE = previousMode
+    }
+  }
+}
+
 console.log(`verify:adapter-descriptor OK (${checks} runtime checks)`)
