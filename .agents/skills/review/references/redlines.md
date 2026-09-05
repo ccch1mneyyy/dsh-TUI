@@ -1,8 +1,8 @@
 # dsh-TUI 仓库红线
-真源为当前目标分支的 /mnt/shared/_Projects/DSH-TUI/repo/AGENTS.md、/mnt/shared/_Projects/DSH-TUI/repo/ADAPTER.md、/mnt/shared/_Projects/DSH-TUI/repo/docs/contributing.md 全文；本表非穷举。严重度属本技能政策，仓库文本仅定义义务。
+真源为当前目标分支的 AGENTS.md、ADAPTER.md、docs/contributing.md 全文；本表非穷举。严重度属本技能政策，仓库文本仅定义义务。
 
 ## 1. 源码与生成物分离｜❌
-只改真源、不手改 /mnt/shared/_Projects/DSH-TUI/repo/lib/ 等生成物；构建生成物是否进 diff 依当前贡献指南。删/改名源码后须干净构建证无残留；查改动清单、/mnt/shared/_Projects/DSH-TUI/repo/.gitignore、package files、clean/compile/verify:package。
+只改真源、不手改 lib/ 等生成物；构建生成物是否进 diff 依当前贡献指南。删/改名源码后须干净构建证无残留；查改动清单、.gitignore、package files、clean/compile/verify:package。
 
 ## 2. transcript 与会话事实只有一个真源｜❌
 transcript 事实仅来自持久化 DSH 会话事件，UI 不乐观拼造助手/工具/状态事实而分叉日志；保事件顺序、seq 锚点、call ID、恢复/rewind/fork 及未知事件 fail-closed。查生产者、投影、持久化白名单、恢复及 toggle 后 resume 回归。
@@ -38,4 +38,4 @@ transcript 事实仅来自持久化 DSH 会话事件，UI 不乐观拼造助手/
 共享模式记开启来源，off 只撤自身状态；renderer/context 可变状态归实例，不让多 Ink root 共享模块全局；跨会话/进程文件原子写、互斥、陈旧锁查 pid 存活；外连限消息/缓冲并统一销毁；read-only/mutate 分类符真实副作用，误标绕策略按 ❌。
 
 ## 13. 仓库范围与移植区纪律｜⚠️/❌
-一 PR 一主题，拆出无关配置、上游同步树、在途实验、顺手修复；/mnt/shared/_Projects/DSH-TUI/repo/src/ink/、/mnt/shared/_Projects/DSH-TUI/repo/src/native-ts/、/mnt/shared/_Projects/DSH-TUI/repo/vendor/ 改动须聚焦、保来源、专用回归。纯 UI 装饰/外部插件/host API/协议先满足准入/spec，不因实现完成即入核心。越界到不可可靠审查/回滚按 ❌，少量可独立剔除 churn 按 ⚠️。
+一 PR 一主题，拆出无关配置、上游同步树、在途实验、顺手修复；src/ink/、src/native-ts/、vendor/ 改动须聚焦、保来源、专用回归。纯 UI 装饰/外部插件/host API/协议先满足准入/spec，不因实现完成即入核心。越界到不可可靠审查/回滚按 ❌，少量可独立剔除 churn 按 ⚠️。

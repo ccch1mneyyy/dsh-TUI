@@ -18,16 +18,16 @@ description: "Review or de-slop concrete changes in ccch1mneyyy/dsh-TUI at maint
 - **merge-base 定改动范围，目标分支最新提交定契约真源**，旧 merge-base 不作 API/peer/版本线/协议基线。本地未限范围时并查分支差异、提交区间、已暂存、未暂存、未跟踪五类。
 - 共享工作树不切分支、stash、改子模块或清理；优先读 git 对象，检出须许可并隔离。来源标为 `trusted-maintainer`、`trusted-local` 或 `untrusted-fork`，供阶段 5 执行门使用。
 - 无 diff 的 Deslop report 记起点 SHA、目录、排除区；过大按风险热点分批，不暗示全仓完成。
-- 本地仓库可用时运行 `node /mnt/shared/_Projects/DSH-TUI/review/scripts/contract-snapshot.mjs --repo /mnt/shared/_Projects/DSH-TUI/repo --compare <latest-base-sha> <head-sha>`；输出只作索引，仍解释语义；不可用则逐 git 对象对照同一真源。
+- 本地仓库可用时在仓库根运行 `node .agents/skills/review/scripts/contract-snapshot.mjs --repo . --compare <latest-base-sha> <head-sha>`；输出只作索引，仍解释语义；不可用则逐 git 对象对照同一真源。
 **账本**：模式、范围、base/head SHA、merge-base、信任级别、契约差异表、缺失材料。
 
 ## 阶段 1｜先加载规则
-细读 diff 前全文读目标分支的 /mnt/shared/_Projects/DSH-TUI/repo/AGENTS.md、/mnt/shared/_Projects/DSH-TUI/repo/ADAPTER.md、/mnt/shared/_Projects/DSH-TUI/repo/docs/contributing.md，以及改动目录更近的规则、README、协议/治理文档；/mnt/shared/_Projects/DSH-TUI/repo/CLAUDE.md 只核对仍指向首个规则真源。按需加载：
-- 公共面、依赖、协议、门禁：/mnt/shared/_Projects/DSH-TUI/review/references/contract-gates.md。
-- 仓库硬规则：/mnt/shared/_Projects/DSH-TUI/review/references/redlines.md。
-- 行为/流程风险：/mnt/shared/_Projects/DSH-TUI/review/references/evidence-base.md。
-- 熵、删除证明与最小清理：/mnt/shared/_Projects/DSH-TUI/review/references/deslop-gates.md。
-- 命令与测试：/mnt/shared/_Projects/DSH-TUI/review/references/verification-map.md。
+细读 diff 前全文读目标分支的 AGENTS.md、ADAPTER.md、docs/contributing.md，以及改动目录更近的规则、README、协议/治理文档；CLAUDE.md 只核对仍指向首个规则真源。按需加载：
+- 公共面、依赖、协议、门禁：references/contract-gates.md。
+- 仓库硬规则：references/redlines.md。
+- 行为/流程风险：references/evidence-base.md。
+- 熵、删除证明与最小清理：references/deslop-gates.md。
+- 命令与测试：references/verification-map.md。
 参考仅为索引，漂移以当前仓库真源为准并记报告；规则账本未齐已产 finding，立即回炉。
 **账本**：已读文件、适用章节、规则漂移。
 
@@ -35,7 +35,7 @@ description: "Review or de-slop concrete changes in ccch1mneyyy/dsh-TUI at maint
 在 PR 叙事前：读每个改动文件完整上下文（仅 patch 须声明视野）；映射生产者 → 消费者 → 持久化 → 协议镜像 → 文档 → 验证判定器，新增/删除/重命名/收紧同等检查。
 - 仓库级搜索导出符号、事件类型、配置/持久化键、环境变量、CLI 参数、错误码、公开文本；越界 import、平行 helper、重复真源或状态所有权异常须横扫同目录/同型调用点。
 - **三分查**：同 PR 改实现及验证逻辑、白名单或豁免时，①验证/白名单独立证明未放宽，不靠新豁免自证；②生成快照可同步，但须由真实输入再生而非手拼；③回归夹具断言须与实现不同源且坏基线失败。
-- 仅删除、回退、改写约定或文码冲突时查相关历史，不漫游历史。可将 unified diff 输入 /mnt/shared/_Projects/DSH-TUI/review/scripts/scan-diff-hygiene.mjs；按阶段 1 的熵参考补齐引用、可达性、副作用、公共面与测试证据才形成 finding。
+- 仅删除、回退、改写约定或文码冲突时查相关历史，不漫游历史。可将 unified diff 输入 scripts/scan-diff-hygiene.mjs；按阶段 1 的熵参考补齐引用、可达性、副作用、公共面与测试证据才形成 finding。
 **账本**：变更面映射、横向扫描、门禁三分查、候选处置表（finding / 非问题 / 待补证）。
 
 ## 阶段 3｜对账叙事
@@ -74,7 +74,7 @@ description: "Review or de-slop concrete changes in ccch1mneyyy/dsh-TUI at maint
 **账本**：每项删除证明、前后验证、实际 diff、保留的未处理项。
 
 ## 阶段 7｜报告
-固定结构、Verdict、finding 字段/排序、零发现要求与禁止章节，唯一真源为 /mnt/shared/_Projects/DSH-TUI/review/references/report-contract.md。阶段 0–6 每条分歧、失败、确认事实须归入 finding、澄清问题或附证据的不适用结论，不得静默消失。
+固定结构、Verdict、finding 字段/排序、零发现要求与禁止章节，唯一真源为 references/report-contract.md。阶段 0–6 每条分歧、失败、确认事实须归入 finding、澄清问题或附证据的不适用结论，不得静默消失。
 **账本**：报告 SHA、findings/问题/不适用计数、覆盖面、验证表、Merge Conditions。
 
 ## 阶段 8｜发布

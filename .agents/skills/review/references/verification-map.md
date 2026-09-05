@@ -1,8 +1,8 @@
 # dsh-TUI 验证映射
-先读当前 /mnt/shared/_Projects/DSH-TUI/repo/package.json 的 scripts、/mnt/shared/_Projects/DSH-TUI/repo/.github/workflows/ci.yml、脚本头部、/mnt/shared/_Projects/DSH-TUI/repo/docs/contributing.md；本表仅选择方法，漂移依仓库真源并记报告。
+先读当前 package.json 的 scripts、.github/workflows/ci.yml、脚本头部、docs/contributing.md；本表仅选择方法，漂移依仓库真源并记报告。
 
 ## 禁止虚构
-根级 test/lint 禁令以 /mnt/shared/_Projects/DSH-TUI/review/SKILL.md “全局不变量与模式”为唯一真源。/mnt/shared/_Projects/DSH-TUI/repo/scripts/ 混有回归/复现/探针/迁移/取证，不全目录当测试跑；跑前读头部辨 import /mnt/shared/_Projects/DSH-TUI/repo/src/ 或 /mnt/shared/_Projects/DSH-TUI/repo/lib/types/、普通 `node` 或 `node --import tsx/esm`；只记实跑命令/退出码/SHA/关键输出，不将应通过写成已通过。
+根级 test/lint 禁令以 SKILL.md “全局不变量与模式”为唯一真源。scripts/ 混有回归/复现/探针/迁移/取证，不全目录当测试跑；跑前读头部辨 import src/ 或 lib/types/、普通 `node` 或 `node --import tsx/esm`；只记实跑命令/退出码/SHA/关键输出，不将应通过写成已通过。
 
 ## 最小通用关口
 源码改动先从当前 scripts 核 `pnpm compile`、`pnpm verify:build`、`pnpm verify:package`、`pnpm verify:bun-package`（仅 scripts/CI 仍定义时）的存在及真实组成，不机械全跑；纯文档/workflow/YAML 依贡献指南分流，verify:build 按编译依赖链顺序。`pnpm build` 通常聚合 compile/门禁，须展开真实结果、不重复计独立证据；required checks/平台 job 从当前 CI 提取，不手抄旧表。
@@ -12,7 +12,7 @@
 |---|---|
 | package exports/bin/dependencies | manifest gate、clean compile、package tarball、入口 smoke、Bun 目标（若适用） |
 | adapter import 或上游版本 | boundary、contract、manifest-deps、alpha/source/patch/web coexistence 等当前镜像门禁 |
-| /mnt/shared/_Projects/DSH-TUI/repo/cordis.patch.yml | patch-surface 复算、真实上游应用语义 |
+| cordis.patch.yml | patch-surface 复算、真实上游应用语义 |
 | session/channel submit/steer/pending | 对应 channel 聚焦脚本、恢复/rewind/fork 与事件白名单 |
 | compaction/transcript folding | compact、session switch、resume 与行投影回归 |
 | Chat/按键/模态优先级 | keymap、受影响 modal、输入草稿、help/overlay 让位与泄漏 |
@@ -24,7 +24,7 @@
 | update/download/archive | checksum、redirect/DNS、检查与使用间竞态、symlink、原子替换、平台资产 |
 | plugin/extension/admission | spec、grants、storage、messages、ledger、commands、negotiation、lifecycle 当前门禁 |
 | workflow/CI gate | actionlint/zizmor（若仓库采用）、permissions、fork trust、fail-open、路径过滤、required-check 聚合 |
-| 维护技能 /mnt/shared/_Projects/DSH-TUI/repo/.agents/skills/ | frontmatter、相对引用、脚本 self-test、不入 npm package files |
+| 维护技能 .agents/skills/ | frontmatter、相对引用、脚本 self-test、不入 npm package files |
 
 具体脚本名从上列当前包清单/贡献指南搜索，不按表猜。
 
@@ -48,7 +48,7 @@ oracle（判定依据）不以实现同 helper 算 expected、不复制实现或
 脚本存在不证保护：须 package script/workflow 实引、路径过滤不误跳、上游 failed/cancelled/空输出时聚合 fail-closed、最新 head checks 非空且符当前 SHA。
 
 ## Deslop apply 验证
-前后验证编排唯一真源为 /mnt/shared/_Projects/DSH-TUI/review/SKILL.md 阶段 6，命令仍依本表；删除测试/门禁不算清理，须先证独立覆盖仍在。
+前后验证编排唯一真源为 SKILL.md 阶段 6，命令仍依本表；删除测试/门禁不算清理，须先证独立覆盖仍在。
 
 ## 报告记录模板
 | 命令/核验 | 类型 | SHA | 结果 | 说明 |

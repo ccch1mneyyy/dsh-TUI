@@ -42,7 +42,7 @@
 按影响非发现顺序，先 defect 后 slop；同根因同修法才合并且列全位置，症状似不足。严重度依规则/实际影响，不依扫描置信提示/评论语气/作者身份；低置信入澄清而非 Findings；❌ 须当前 head 完整因果链，不能仅“可能/建议检查”。引用当前真源绝对路径/章节，参考仅索引；每个数字/状态/定性标当前 SHA/核验法，不可核则标估计。
 
 ## Slop 规则
-作者来源禁猜及候选/可删分离依 /mnt/shared/_Projects/DSH-TUI/review/SKILL.md 全局及反制表；不写“AI-generated/bot-like”，单调用者/grep 零命中/unused/正则不等于可删。defect/slop 分类以 /mnt/shared/_Projects/DSH-TUI/review/references/deslop-gates.md “严重度与熵类型”为唯一真源；纯命名/排序/空行/审美仅违反仓规或造成大 churn 才报。缺删除证明只能写“核实 X 后删除/合并”，不写 auto-fix。
+作者来源禁猜及候选/可删分离依 SKILL.md 全局及反制表；不写“AI-generated/bot-like”，单调用者/grep 零命中/unused/正则不等于可删。defect/slop 分类以 references/deslop-gates.md “严重度与熵类型”为唯一真源；纯命名/排序/空行/审美仅违反仓规或造成大 churn 才报。缺删除证明只能写“核实 X 后删除/合并”，不写 auto-fix。
 
 ## 零 finding
 仍输出 `Findings: none found in reviewed scope`、Validation record、Coverage and residual risk、Merge Conditions/Cleanup conditions；仅表示声明范围/证据下无可报告问题。

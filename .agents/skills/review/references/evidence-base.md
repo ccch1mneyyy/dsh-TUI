@@ -1,5 +1,5 @@
 # 证据化行为与流程判据
-历史维护者审查归纳仅供发现成文红线外的重复缺陷，不是永久真源；每次核当前代码、依赖源码、目标 head 及 /mnt/shared/_Projects/DSH-TUI/repo/AGENTS.md、/mnt/shared/_Projects/DSH-TUI/repo/ADAPTER.md、/mnt/shared/_Projects/DSH-TUI/repo/docs/contributing.md。下称“红线”均指 /mnt/shared/_Projects/DSH-TUI/review/references/redlines.md，“验证映射”均指 /mnt/shared/_Projects/DSH-TUI/review/references/verification-map.md；行为为 A 轴，契约/安全为 B/C 轴，流程为 D 轴。
+历史维护者审查归纳仅供发现成文红线外的重复缺陷，不是永久真源；每次核当前代码、依赖源码、目标 head 及 AGENTS.md、ADAPTER.md、docs/contributing.md。下称“红线”均指 references/redlines.md，“验证映射”均指 references/verification-map.md；行为为 A 轴，契约/安全为 B/C 轴，流程为 D 轴。
 
 ## A1｜退出、清理与资源生命周期｜❌
 资源 owner、幂等清理、成功/错误/信号/超时覆盖、退出/teardown 区分、拆树 ref 与退出闩锁以红线 4 为唯一真源；另核光标单一 owner、disposer 的 token-safe（旧清理不得误销新资源）、跨 agent 资源仅真正会话释放时关闭、临时敏感文件消费后删或明生命周期。可选链静默漏清理、单 agent 销共享资源、teardown 触发进程退出均阻断。
@@ -26,10 +26,10 @@ renderer/context 实例归属及禁止模块全局共享以红线 12 为唯一�
 共享模式开启/撤销归属以红线 12 为唯一真源；分类核 read-only/mutate 与 rows/version/listeners 副作用一致；多进程 JSON/账本用文件锁/原子写/陈旧检测；通道限每连接消息/缓冲，shutdown 销全部连接；清理/退出优先显式 handle、不猜当前实例；上游 status/model/persistence 形状逐环核依赖源码、不凭本仓类型名猜。策略绕过/数据丢失/跨实例污染 ❌，owner 不清但无失效机制 ⚠️。
 
 ## B/C 补充｜门禁、事件兼容与模型可控副作用｜❌
-除 /mnt/shared/_Projects/DSH-TUI/review/references/contract-gates.md 与红线外，查同 PR 改白名单/扫描目录/预期结果自放行；聚合 gate 对上游 failed/cancelled/空输出是否 fail-open；执行 fork 或处理 PR body/diff 的 job 是否持 secrets/写凭据；自定义 session event 是否在当前官方/legacy 白名单，严格读是否拒整日志；白名单测试直比上游全集、不手抄或只扫单个类型声明；模型可控路径/URL/截图/文件是否越工作区/网络/外服边界。
+除 references/contract-gates.md 与红线外，查同 PR 改白名单/扫描目录/预期结果自放行；聚合 gate 对上游 failed/cancelled/空输出是否 fail-open；执行 fork 或处理 PR body/diff 的 job 是否持 secrets/写凭据；自定义 session event 是否在当前官方/legacy 白名单，严格读是否拒整日志；白名单测试直比上游全集、不手抄或只扫单个类型声明；模型可控路径/URL/截图/文件是否越工作区/网络/外服边界。
 
 ## D1｜核心仓库准入与 spec 先行｜❌
-先判是否应入核心：host API/协议坐标/双端传输语义先走 /mnt/shared/_Projects/DSH-TUI/repo/dsh-ecosystem-spec/ 当前提案/征求意见流程；外部插件正式准入并查安装/权限/网络/凭据/外传/真实组合测试；装饰/动效优先插件、核心仅最小接口；引入第三方源码须证相对零依赖/现有实现增量价值及长期维护；视觉标识/治理裁量须仓库 owner 明确拍板。
+先判是否应入核心：host API/协议坐标/双端传输语义先走 dsh-ecosystem-spec/ 当前提案/征求意见流程；外部插件正式准入并查安装/权限/网络/凭据/外传/真实组合测试；装饰/动效优先插件、核心仅最小接口；引入第三方源码须证相对零依赖/现有实现增量价值及长期维护；视觉标识/治理裁量须仓库 owner 明确拍板。
 
 ## D2｜PR 原子性、查重与并行协调｜❌/⚠️
 一 PR 一主题，剔本地配置/上游同步树/在途实验/顺手修复/无关格式化；与 main、open PR、已合入方案查重，明确重复方案被谁取代；同区域并行 PR 明合并顺序及 rebase/cherry-pick 归属；堆叠 PR 明各修复所属层。混杂 diff 严重度唯一真源为红线 13。
