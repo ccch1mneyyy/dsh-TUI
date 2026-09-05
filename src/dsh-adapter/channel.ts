@@ -256,6 +256,41 @@ export function createChannel(
 ): ChannelState {
   const owner = createChannelOwner()
   const binding = createChannelBinding(initialAgent, options.handle, owner)
+  // Detached work (/fork and agent-view dispatch) must be cancellable by the
+  // channel owner without pretending its temporary handle is a foreground
+  // binding candidate. A successful caller explicitly transfers it instead.
+  const createDetachedHandle = async (create: () => Promise<AgentHandle>): Promise<{
+    handle: AgentHandle
+    transfer(): void
+    release(): Promise<void>
+  }> => {
+    owner.assertActive()
+    let handle: AgentHandle | undefined
+    let transferred = false
+    let disposePromise: Promise<void> | undefined
+    const release = (): Promise<void> => {
+      if (transferred || handle === undefined) return Promise.resolve()
+      disposePromise ??= handle.dispose().catch(() => undefined)
+      return disposePromise
+    }
+    const unregister = owner.own(() => { void release() })
+    try {
+      handle = await create()
+      if (!owner.current()) {
+        await release()
+        throw new Error('dsh-tui: Channel lifetime has ended')
+      }
+      return {
+        handle,
+        transfer() { transferred = true; unregister() },
+        async release() { unregister(); await release() },
+      }
+    } catch (error) {
+      unregister()
+      await release()
+      throw error
+    }
+  }
   const adapterRuntime = adapterRuntimeFor(ctx)
   const themeHost = getHostThemes(ctx.get('tuiThemes') as TuiThemeRuntime | undefined)
 
@@ -760,10 +795,14 @@ export function createChannel(
    */
   const adoptForkedAgent = (
     handle: AgentHandle,
+    capture: ReturnType<typeof binding.capture>,
     seed: readonly SessionEvent[],
     agentPreset: string | undefined,
     childId: SessionId,
-  ): string => {
+  ): string => binding.adopt(handle, capture, (previous, disposePrevious) => {
+    // This is the one authority handoff. No projection is reset until the
+    // prepared handle has won the binding race and subscriptions moved with it.
+    const sourceSessionId = String(previous.agent.session.id)
     // Replay the forked history into a fresh transcript (tokens/spinner
     // counters land back at the rewind point, matching the fork).
     projector.reset()
@@ -817,9 +856,6 @@ export function createChannel(
     // agent re-asserts on its next event).
     state.working = handle.agent.status === 'running'
     // Rebind subscriptions to the new agent, then free the old one.
-    const oldHandle = binding.handle
-    const sourceSessionId = String(binding.agent.session.id)
-    binding.replace(handle.agent, handle)
     bindAgent()
     // bindAgent is synchronous and quiet; revoke OLD-session capabilities
     // before refreshCommandList exposes the replacement to subscribers.
@@ -830,9 +866,14 @@ export function createChannel(
     // The forked session (rewind) becomes the most recently used.
     touchSession(childId)
     state.emit()
-    void oldHandle?.dispose().catch(() => {})
+    disposePrevious('dispose')
+    // The staged-image map is session-scoped (the same contract the
+    // resumeTo/newSession tails enforce): tokens typed against the rewound
+    // conversation must not ride into the fork's next send, and the epoch
+    // bump fences saves still in flight for the old session.
+    clearStagedImages()
     return sourceSessionId
-  }
+  })
   /** Monotonic token: only the latest `interruptAndDeliver` re-queues, so a
    *  second interrupt while the abort settles cannot double-deliver. */
   const inputConvergence: InputConvergence = { interruptSeq: 0, cancelInFlight: false }
@@ -1789,8 +1830,13 @@ export function createChannel(
    * as a background session (backgroundHandles), and an empty one is freed.
    */
   const adoptLiveAgent = async (target: Agent): Promise<ResumeResult> => {
-    const previousHandle = binding.handle
-    const previousSessionId = String(binding.agent.session.id)
+    // Agent-view adoption is already live, so it skips preparation but still
+    // crosses the same synchronous binding authority point before resetting
+    // any session projection.
+    return binding.switchTo(target, backgroundHandles.get(String(target.id)), (committed, disposePrevious) => {
+    const previousHandle = committed.handle
+    const previousSessionId = String(committed.agent.session.id)
+    backgroundHandles.delete(String(target.id))
     // Same reset shape as resumeTo (no history replay sources differ — the
     // target's own events are replayed below).
     projector.reset()
@@ -1842,8 +1888,6 @@ export function createChannel(
     projector.replayEvents(target.session.events)
     projector.settleStreaming()
     state.working = target.status === 'running'
-    binding.replace(target, backgroundHandles.get(String(target.id)))
-    backgroundHandles.delete(String(target.id))
     bindAgent()
     clearStagedImages()
     refreshCommandList()
@@ -1857,8 +1901,12 @@ export function createChannel(
       && previousHandle.agent !== target
       && (previousHandle.agent.status === 'running' || agentViewHasTurns(snapshotLiveSessionEvents(previousHandle.agent.session)))
     if (previousHandle !== undefined && previousHandle.agent !== target) {
-      if (keepPrevious) backgroundHandles.set(previousSessionId, previousHandle)
-      else void previousHandle.dispose().catch(() => {})
+      if (keepPrevious) {
+        backgroundHandles.set(previousSessionId, previousHandle)
+        disposePrevious('park')
+      } else {
+        disposePrevious('dispose')
+      }
     }
     // Both sessions are now part of the view's working set: the adopted one
     // and the one the terminal detached from.
@@ -1867,6 +1915,7 @@ export function createChannel(
     notifySessionSwitched('agent-view', String(target.id), previousSessionId)
     notifyAgentView()
     return { ok: true }
+    })
   }
 
   /**
@@ -1925,7 +1974,7 @@ export function createChannel(
     const recordedRoute = await resolvePersistedRoute(ctx, SessionId(sessionId))
     let handle: AgentHandle
     try {
-      handle = await binding.prepare(() => agents.resume({
+      handle = await binding.prepare(adoption, () => agents.resume({
         resumeSessionId: SessionId(sessionId),
         agentOptions: {
           provider: resumeRoute?.provider ?? recordedRoute?.provider,
@@ -1938,7 +1987,7 @@ export function createChannel(
       notify(t('resume-failed', { err: message }), { color: 'error', timeoutMs: 8000 })
       return { ok: false, reason: 'failed', error: message }
     }
-    if (!owner.current()) { void handle.dispose(); return { ok: false, reason: 'cancelled' } }
+    if (!binding.isCurrent(adoption)) { await binding.abandon(handle); return { ok: false, reason: 'cancelled' } }
     try {
       // Adopting this persisted conversation; this also repairs sessions
       // created by TUI versions that predate the workspace ownership ledger.
@@ -1951,7 +2000,7 @@ export function createChannel(
     }
     // Replay the persisted history into a fresh transcript (same reset as
     // rewindTo, plus the context window which the replay re-derives).
-    binding.assertPrepared(handle, adoption)
+    return binding.adopt(handle, adoption, (committed, disposePrevious) => {
       projector.reset()
 
 
@@ -2001,9 +2050,8 @@ export function createChannel(
     projector.replayEvents(handle.agent.session.events)
     projector.settleStreaming()
     state.working = handle.agent.status === 'running'
-    const oldHandle = binding.handle
-    const previousSessionId = String(binding.agent.session.id)
-    binding.replace(handle.agent, handle)
+    const oldHandle = committed.handle
+    const previousSessionId = String(committed.agent.session.id)
     bindAgent()
     clearStagedImages()
     refreshCommandList()
@@ -2017,8 +2065,12 @@ export function createChannel(
       && oldHandle !== undefined
       && (oldHandle.agent.status === 'running' || agentViewHasTurns(snapshotLiveSessionEvents(oldHandle.agent.session)))
     if (oldHandle !== undefined) {
-      if (keepPrevious) backgroundHandles.set(previousSessionId, oldHandle)
-      else void oldHandle.dispose().catch(() => {})
+      if (keepPrevious) {
+        backgroundHandles.set(previousSessionId, oldHandle)
+        disposePrevious('park')
+      } else {
+        disposePrevious('dispose')
+      }
     }
     // Attaching FROM the agent view makes both sides view sessions; the
     // plain /resume path keeps its history out of the view's ledger.
@@ -2028,6 +2080,7 @@ export function createChannel(
     }
     notifySessionSwitched(kind, sessionId, previousSessionId)
     return { ok: true }
+    })
   }
   const state: ChannelState = {
     ...createInputActions(() => state, () => binding.agent, inputConvergence,
@@ -2324,6 +2377,10 @@ export function createChannel(
     },
     async rewindTo(row: ChatRow, mode: string | null = null): Promise<string | null> {
       if (row.seq === undefined) return null
+      const adoption = binding.capture()
+      const sessions = ctx.get('sessions') as
+        | { fork(source: unknown, boundary?: number): { events: readonly SessionEvent[] } }
+        | undefined
       const agents = ctx.get('agents') as
         | { create(options: CreateAgentOptions): Promise<AgentHandle> }
         | undefined
@@ -2389,7 +2446,7 @@ export function createChannel(
       // conversation, so a `/model` switch must survive it (issue #30).
       const rewindComposed = await composePreset(ctx, runningPresetOf(binding.agent.session))
       try {
-        handle = await binding.prepare(() => agents.create({
+        handle = await binding.prepare(adoption, () => agents.create({
           sessionId: childId,
           seed,
           meta: {
@@ -2407,6 +2464,7 @@ export function createChannel(
         notify(t('rewind-create-failed'), { color: 'error' })
         return null
       }
+      if (!binding.isCurrent(adoption)) { await binding.abandon(handle); return null }
       try {
         await attachSessionToWorkspace(ctx, state.cwd, childId)
       } catch (error) {
@@ -2417,7 +2475,7 @@ export function createChannel(
       }
       // Swap the live agent for the fork (shared with rewindToNode): replay
       // the seed, rebind, and free the replaced handle.
-      const sourceSessionId = adoptForkedAgent(handle, seed, rewindComposed.agentPreset, childId)
+      const sourceSessionId = adoptForkedAgent(handle, adoption, seed, rewindComposed.agentPreset, childId)
       // Decision-event pair around the completed rewind: `tui/rewind-done`
       // (the first non-empty string is toasted as the post-rewind summary,
       // e.g. a plugin reporting restored files) and the generic
@@ -2457,6 +2515,7 @@ export function createChannel(
     },
     buildSessionTree: createSessionTreeReader(ctx, binding, () => state.cwd, (...args) => notify(...args), owner),
     async rewindToNode(sessionId: string, seq: number, mode: 'rewind' | 'fork' = 'rewind'): Promise<string | null> {
+      const adoption = binding.capture()
       const agents = ctx.get('agents') as
         | { create(options: CreateAgentOptions): Promise<AgentHandle> }
         | undefined
@@ -2590,7 +2649,7 @@ export function createChannel(
       }
       let handle: AgentHandle
       try {
-        handle = await binding.prepare(() => agents.create({
+        handle = await binding.prepare(adoption, () => agents.create({
           sessionId: childId,
           seed,
           runtimeSession: entrySession,
@@ -2605,6 +2664,7 @@ export function createChannel(
         notify(t('rewind-create-failed'), { color: 'error' })
         return null
       }
+      if (!binding.isCurrent(adoption)) { await binding.abandon(handle); return null }
       try {
         await attachSessionToWorkspace(ctx, sourceCwd, childId)
       } catch (error) {
@@ -2616,13 +2676,13 @@ export function createChannel(
       // The create await was another swap window: adopting now would dispose
       // the NEW session's agent. Free the fork we just made and bail.
       if (!owner.current() || binding.agent.session !== entrySession) {
-        void handle.dispose().catch(() => {})
+        await binding.abandon(handle)
         notify(t('rewind-session-changed'), { color: 'error' })
         return null
       }
       // Replay the forked history into a fresh transcript (the same swap
       // tail rewindTo runs), then announce the session switch.
-      const sourceSessionId = adoptForkedAgent(handle, seed, rewindComposed.agentPreset, childId)
+      const sourceSessionId = adoptForkedAgent(handle, adoption, seed, rewindComposed.agentPreset, childId)
       notifySessionSwitched(mode === 'fork' ? 'fork' : 'rewind', String(childId), sourceSessionId)
       return restoredText
     },
@@ -2661,9 +2721,9 @@ export function createChannel(
       // Same preset/route rule as a rewind fork: the source log's own
       // composition, the live route (a /model switch survives forking).
       const forkComposed = await composePreset(ctx, runningPresetOf(source))
-      let handle: AgentHandle
+      let detached: Awaited<ReturnType<typeof createDetachedHandle>>
       try {
-        handle = await binding.prepare(() => agents.create({
+        detached = await createDetachedHandle(() => agents.create({
           sessionId: childId,
           seed,
           runtimeSession: source,
@@ -2682,6 +2742,8 @@ export function createChannel(
         notify(t('fork-create-failed'), { color: 'error' })
         return false
       }
+      const handle = detached.handle
+      if (!owner.current()) { await detached.release(); return false }
       // STAY in the source session: adopting the fork would dispose the live
       // agent (killing its in-flight turn and background tasks) — the fork is
       // an independent copy the user enters via /resume or the printed resume
@@ -2701,8 +2763,9 @@ export function createChannel(
           { color: 'warning', timeoutMs: 8000 },
         )
       }
+      if (!owner.current()) { await detached.release(); return false }
       try {
-        await handle.dispose()
+        await detached.release()
       } catch (error: unknown) {
         ctx.logger.warn('dsh-tui: forked session dispose failed: %o', error)
       }
@@ -2787,7 +2850,7 @@ export function createChannel(
       // `parent.options.model`).
       const recordedRoute = await resolvePersistedRoute(ctx, SessionId(sessionId))
       try {
-        handle = await binding.prepare(() => agents.resume({
+        handle = await binding.prepare(adoption, () => agents.resume({
           resumeSessionId: SessionId(sessionId),
           agentOptions: {
             provider: resumeRoute?.provider ?? recordedRoute?.provider,
@@ -2800,6 +2863,7 @@ export function createChannel(
         notify(t('resume-failed', { err: message }), { color: 'error', timeoutMs: 8000 })
         return { ok: false, reason: 'failed', error: message }
       }
+      if (!binding.isCurrent(adoption)) { await binding.abandon(handle); return { ok: false, reason: 'failed', error: 'Channel lifetime ended' } }
       try {
         // `/resume` is an explicit adoption of this persisted conversation.
         // This also repairs sessions created by TUI versions that predate the
@@ -2818,13 +2882,13 @@ export function createChannel(
       // handle and bail — the live session stays exactly as the rival left
       // it, and the persisted target simply stays in /resume.
       if (!owner.current() || binding.agent.session !== entrySession) {
-        void handle.dispose().catch(() => {})
+        await binding.abandon(handle)
         notify(t('resume-session-changed'), { color: 'error' })
         return { ok: false, reason: 'failed', error: 'live session changed during resume' }
       }
       // Replay the persisted history into a fresh transcript (same reset as
       // rewindTo, plus the context window which the replay re-derives).
-      binding.assertPrepared(handle, adoption)
+      return binding.adopt(handle, adoption, (committed, disposePrevious) => {
       projector.reset()
 
       // Stale sealed/thinking bookkeeping belongs to the OLD agent's rows;
@@ -2899,9 +2963,8 @@ export function createChannel(
       // re-asserts on its next event).
       state.working = handle.agent.status === 'running'
       // Rebind subscriptions to the resumed agent, then free the old one.
-      const oldHandle = binding.handle
-      const previousSessionId = String(binding.agent.session.id)
-      binding.replace(handle.agent, handle)
+      const oldHandle = committed.handle
+      const previousSessionId = String(committed.agent.session.id)
       bindAgent()
       clearStagedImages()
       refreshCommandList()
@@ -2912,9 +2975,11 @@ export function createChannel(
       // The resumed session is now the most recently used.
       touchSession(sessionId)
       state.emit()
-      void oldHandle?.dispose().catch(() => {})
+      disposePrevious('dispose')
+      clearStagedImages()
       notifySessionSwitched('resume', sessionId, previousSessionId)
       return { ok: true }
+      })
     },
     async newSession(): Promise<boolean> {
       const adoption = binding.capture()
@@ -2985,7 +3050,7 @@ export function createChannel(
         )
       }
       try {
-        handle = await binding.prepare(() => agents.create({
+        handle = await binding.prepare(adoption, () => agents.create({
           sessionId,
           meta: {
             cwd: state.cwd,
@@ -3004,6 +3069,7 @@ export function createChannel(
         })
         return false
       }
+      if (!binding.isCurrent(adoption)) { await binding.abandon(handle); return false }
       try {
         await attachSessionToWorkspace(ctx, state.cwd, sessionId)
       } catch (error) {
@@ -3012,7 +3078,8 @@ export function createChannel(
           { color: 'warning', timeoutMs: 8000 },
         )
       }
-      binding.assertPrepared(handle, adoption)
+      if (!owner.current()) { await binding.abandon(handle); return false }
+      return binding.adopt(handle, adoption, (committed, disposePrevious) => {
       projector.reset()
 
       // Stale sealed/thinking bookkeeping belongs to the OLD agent's rows;
@@ -3070,9 +3137,8 @@ export function createChannel(
         thinking: 0,
         tools: 0,
       }
-      const oldHandle = binding.handle
-      const previousSessionId = String(binding.agent.session.id)
-      binding.replace(handle.agent, handle)
+      const oldHandle = committed.handle
+      const previousSessionId = String(committed.agent.session.id)
       bindAgent()
       clearStagedImages()
       refreshCommandList()
@@ -3081,9 +3147,11 @@ export function createChannel(
       clearResumeTarget()
       // The brand-new session becomes the most recently used.
       touchSession(handle.agent.id)
-      void oldHandle?.dispose().catch(() => {})
+      disposePrevious('dispose')
+      clearStagedImages()
       notifySessionSwitched('new', String(handle.agent.id), previousSessionId)
       return true
+      })
     },
     listWorkspaces() {
       return workspaceService.list(state.cwd)
@@ -3184,7 +3252,7 @@ export function createChannel(
       // request route changes (same rule as rewindTo).
       const modelComposed = await composePreset(ctx, runningPresetOf(binding.agent.session))
       try {
-        handle = await binding.prepare(() => agents.create({
+        handle = await binding.prepare(adoption, () => agents.create({
           sessionId: childId,
           seed,
           meta: {
@@ -3211,7 +3279,8 @@ export function createChannel(
           { color: 'warning', timeoutMs: 8000 },
         )
       }
-      binding.assertPrepared(handle, adoption)
+      if (!binding.isCurrent(adoption)) { await binding.abandon(handle); return false }
+      return binding.adopt(handle, adoption, (committed, disposePrevious) => {
       projector.reset()
 
       // Stale sealed/thinking bookkeeping belongs to the OLD agent's rows;
@@ -3271,8 +3340,7 @@ export function createChannel(
       projector.settleStreaming()
       // Same mid-turn-seed spinner reset as resume above.
       state.working = handle.agent.status === 'running'
-      const oldHandle = binding.handle
-      binding.replace(handle.agent, handle)
+      const oldHandle = committed.handle
       bindAgent()
       clearStagedImages()
       // Model-switch quip rides the fresh tracker.
@@ -3283,7 +3351,10 @@ export function createChannel(
       // The model-switched fork becomes the most recently used.
       touchSession(childId)
       state.emit()
-      void oldHandle?.dispose().catch(() => {})
+      disposePrevious('dispose')
+      // Staged image tokens were typed against the pre-switch conversation;
+      // resumeTo/newSession already drop theirs on the swap — same contract.
+      clearStagedImages()
       // Persist the choice so the next boot and `/new` start on it (same
       // contract as /preset and /effort; issues #14/#30). A failed
       // write keeps the live switch but warns it will not survive a restart.
@@ -3293,6 +3364,7 @@ export function createChannel(
         })
       }
       return true
+      })
     },
     listEfforts,
     setEffort,
@@ -3734,7 +3806,9 @@ export function createChannel(
       // screen shows the error, and a silent rejection would look like a
       // "missing" session.
       let handle: AgentHandle
+      let detached: Awaited<ReturnType<typeof createDetachedHandle>>
       try {
+        owner.assertActive()
         const composed = await composePreset(ctx, options.configuredPreset ?? readPresetPref())
         const resolved = resolveModelRoute(
           { provider: options.configuredProvider, model: options.configuredModel },
@@ -3748,7 +3822,8 @@ export function createChannel(
           provider: options.provider,
           model: options.model,
         })
-        handle = await binding.prepare(() => agentsService.create({
+        owner.assertActive()
+        detached = await createDetachedHandle(() => agentsService.create({
           sessionId,
           meta: {
             cwd: state.cwd,
@@ -3757,24 +3832,31 @@ export function createChannel(
           agentOptions: route,
           ...(composed.setup === undefined ? {} : { setup: composed.setup }),
         }))
+        handle = detached.handle
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error)
         notify(t('agentview-dispatch-failed', { err: message }), { color: 'error', timeoutMs: 8000 })
         return { ok: false, reason: 'failed', error: message }
       }
-      if (!owner.current()) { void handle.dispose(); return { ok: false, reason: 'failed', error: 'Channel lifetime ended' } }
-      backgroundHandles.set(String(sessionId), handle)
-      // Record ownership BEFORE delivery: even a delivery failure must not
-      // silently drop the session from the view.
-      touchAgentViewSession(String(sessionId))
-      touchSession(sessionId)
+      if (!owner.current()) { await detached.release(); return { ok: false, reason: 'failed', error: 'Channel lifetime ended' } }
       try {
         await attachSessionToWorkspace(ctx, state.cwd, sessionId)
       } catch {
         // The workspace ledger is optional bookkeeping; the session runs
         // without it and the next resume repairs the entry.
       }
-      if (!owner.current()) { backgroundHandles.delete(String(sessionId)); void handle.dispose(); return { ok: false, reason: 'failed', error: 'Channel lifetime ended' } }
+      if (!owner.current()) {
+        await detached.release()
+        return { ok: false, reason: 'failed', error: 'Channel lifetime ended' }
+      }
+      // The independent background lifecycle owns the handle only after all
+      // owner-scoped preparation and attachment awaits have passed.
+      detached.transfer()
+      backgroundHandles.set(String(sessionId), handle)
+      // Record ownership BEFORE delivery: even a delivery failure must not
+      // silently drop the session from the view.
+      touchAgentViewSession(String(sessionId))
+      touchSession(sessionId)
       // Deliver the prompt as a user message; the agent loop picks it up and
       // the session keeps running unattended until its turn ends. A failure
       // here must be loud — a silent rejection would leave an empty row and
@@ -3883,7 +3965,7 @@ export function createChannel(
       })
       let handle: AgentHandle
       try {
-        handle = await binding.prepare(() => agentsService.create({
+        handle = await binding.prepare(adoption, () => agentsService.create({
           sessionId,
           meta: {
             cwd: state.cwd,
@@ -3897,19 +3979,26 @@ export function createChannel(
         notify(t('agentview-dispatch-failed', { err: message }), { color: 'error', timeoutMs: 8000 })
         return { ok: false }
       }
+      if (!binding.isCurrent(adoption)) { await binding.abandon(handle); return { ok: false } }
       try {
         await attachSessionToWorkspace(ctx, state.cwd, sessionId)
-      } catch {
-        // Optional ledger, same as dispatch.
+      } catch (error) {
+        // The workspace ledger is optional bookkeeping; retain the baseline
+        // warning-and-continue policy for the newly foregrounded session.
+        ctx.logger.warn('dsh-tui: background session attachment failed: %o', error)
       }
-      const previousHandle = binding.handle
-      const previousSessionId = String(binding.agent.session.id)
+      if (!owner.current()) { await binding.abandon(handle); return { ok: false, reason: 'failed', error: 'Channel lifetime ended' } }
+      // Fresh-session reset shape (mirrors /new; nothing to replay).
+      return binding.adopt(handle, adoption, (committed, disposePrevious) => {
+      const previousHandle = committed.handle
+      const previousSessionId = String(committed.agent.session.id)
       // CC parity: even an EMPTY session is backgrounded (it shows as a
       // "send a prompt to start" row; Esc in the view returns to it), so the
       // handle is always kept for stopping/adopting — never disposed here.
-      if (previousHandle !== undefined) backgroundHandles.set(previousSessionId, previousHandle)
-      // Fresh-session reset shape (mirrors /new; nothing to replay).
-      binding.assertPrepared(handle, adoption)
+      if (previousHandle !== undefined) {
+        backgroundHandles.set(previousSessionId, previousHandle)
+        disposePrevious('park')
+      }
       projector.reset()
 
 
@@ -3947,7 +4036,6 @@ export function createChannel(
         thinking: 0,
         tools: 0,
       }
-      binding.replace(handle.agent, handle)
       bindAgent()
       clearStagedImages()
       refreshCommandList()
@@ -3962,6 +4050,7 @@ export function createChannel(
       notifySessionSwitched('background', String(handle.agent.id), previousSessionId)
       notifyAgentView()
       return { ok: true, backgroundedSessionId: previousSessionId }
+      })
     },
     setResumeTarget(sessionId) {
       writeResumeTarget(sessionId)
@@ -5016,7 +5105,7 @@ ${output}
     projector.updateSpinnerMode()
   }
 
-  const bindAgent = (): void => {
+  const bindAgentUnsafe = (): void => {
     state.agentBindingGeneration = binding.bind()
     stopActivityTick()
     // Cancel state and deferred interrupt delivery belong to one bound agent.
@@ -5071,16 +5160,22 @@ ${output}
     void applyPreferredEffort()
     rebuildSessionModes(agent)
     refreshMode()
-    const subscriptions = [
-      installModelSelection(binding.agent.ctx, selection),
-      ctx.on('agent/status', ({ agent: subject, status }) => {
+    const register = <T extends () => void>(dispose: T): T => {
+      binding.subscribe(dispose)
+      return dispose
+    }
+    const on = (...args: Parameters<typeof ctx.on>): ReturnType<typeof ctx.on> =>
+      register(ctx.on(...args))
+    register(installModelSelection(binding.agent.ctx, selection))
+    void [
+      on('agent/status', ({ agent: subject, status }) => {
         if (subject !== binding.agent) return
         state.status = status
         updateWorkingActivity(`agent/status:${status}`, () => activityTracker.onAgentStatus(status))
         if (status === 'idle') reconcileRetiredProjection('idle')
         state.emit()
       }),
-      ctx.on('agent/disposed', ({ agent: subject }) => {
+      on('agent/disposed', ({ agent: subject }) => {
         if (subject !== binding.agent) return
         state.status = 'disposed'
         stopActivityTick()
@@ -5105,13 +5200,13 @@ ${output}
         }
         const disposers: Array<() => boolean> = []
         for (const event of ['agent/inbox/claimed', 'agent/inbox/discarded'] as const) {
-          disposers.push(ctx.on(event, retirePending))
+          disposers.push(on(event, retirePending))
         }
         return () => {
           for (const dispose of disposers) dispose()
         }
       })(),
-      ctx.on('session/event', (session, event) => {
+      on('session/event', (session, event) => {
         // The currently bound main session always wins. SubagentActivityStore
         // intentionally retains Session-object mappings for completed cards;
         // if one of those sessions is later adopted/resumed as the main agent,
@@ -5214,7 +5309,7 @@ ${output}
       // observe-only events as `subagent/start` and `subagent/end`; the parent
       // Agent is carried by Cordis scope dispatch, not included in the payload.
       (() => {
-        const disposeStart = ctx.on('subagent/start' as any, (info: { id: string; runId?: string; provider: string; local?: boolean }) => {
+        const disposeStart = on('subagent/start' as any, (info: { id: string; runId?: string; provider: string; local?: boolean }) => {
           if (!info?.id) return
           subagentStore.onSpawned(info.id, info.provider || 'subagent', info.provider, {
             runId: info.runId ?? info.id,
@@ -5241,7 +5336,7 @@ ${output}
           syncSubagentsNow()
           state.emit()
         })
-        const disposeEnd = ctx.on('subagent/end' as any, (info: { id: string; stopReason: string; lastAssistantMessage?: unknown[] }) => {
+        const disposeEnd = on('subagent/end' as any, (info: { id: string; stopReason: string; lastAssistantMessage?: unknown[] }) => {
           if (!info?.id) return
           const output = Array.isArray(info.lastAssistantMessage)
             ? info.lastAssistantMessage
@@ -5265,7 +5360,16 @@ ${output}
         }
       })(),
     ]
-    for (const dispose of subscriptions) binding.subscribe(dispose)
+  }
+  // A subscription/setup exception after commit must not strand a live-looking
+  // identity with only part of its channel plumbing installed.
+  const bindAgent = (): void => {
+    try {
+      bindAgentUnsafe()
+    } catch (error) {
+      owner.dispose()
+      throw error
+    }
   }
   // Subagents inherit provider/model from AgentOptions, but resumed TUI
   // agents can legitimately carry their route only in persisted request

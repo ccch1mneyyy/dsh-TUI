@@ -492,7 +492,7 @@ for (const method of ['writeProfile', 'mutateProfile', 'removeProfile'] as const
   const binding = createChannelBinding(agent as never, undefined, owner)
   let disposed = 0
   let finish!: (value: unknown) => void
-  const pending = binding.prepare(() => new Promise(resolve => { finish = resolve }))
+  const pending = binding.prepare(binding.capture(), () => new Promise(resolve => { finish = resolve }))
   owner.dispose()
   finish({ agent, dispose: async () => { disposed += 1 } })
   await assert.rejects(pending, /binding changed/)
@@ -501,7 +501,7 @@ for (const method of ['writeProfile', 'mutateProfile', 'removeProfile'] as const
   const next = createChannelBinding(agent as never, undefined, active)
   let subscriptions = 0
   next.subscribe(() => { subscriptions += 1 })
-  next.replace({ ...agent, id: 'replacement' } as never, undefined)
+  next.switchTo({ ...agent, id: 'replacement' } as never, undefined, () => undefined)
   next.bind()
   assert.equal(subscriptions, 1)
   active.dispose()
