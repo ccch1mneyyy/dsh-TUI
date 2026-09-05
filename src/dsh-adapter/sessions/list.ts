@@ -227,7 +227,14 @@ export async function listSummaries(
                   ? undefined
                   : { text: previous.title, source: previous.titleSource }
               }
-              hasPrompt = previous.hasPrompt
+              // The log GREW since that previous verdict; the digest above was
+              // computed on the current file, so its prompt answer is the more
+              // honest one, and a log past its head window is counted as having
+              // a conversation by construction. A verdict across an append only
+              // strengthens: carrying hasPrompt=false forward here hid real
+              // sessions from /resume as "empty" when an early listing caught
+              // the log before its first human prompt.
+              hasPrompt = previous.hasPrompt || digest.hasPrompt
               titleComplete = true
             }
           }
