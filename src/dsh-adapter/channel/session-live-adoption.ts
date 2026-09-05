@@ -43,7 +43,6 @@ export function createLiveAgentAdoption(
     settleReplay(): void
     describeWorkspace(cwd: string): { description?: string }
     refreshGitBranch(): void
-    refreshEffortLevels(): void
     bindAgent(): void
     refreshCommands(): void
     refreshLoadedContext(): Promise<void>
@@ -76,7 +75,6 @@ export function createLiveAgentAdoption(
       state.contextWindow = undefined
       state.effortLevels = undefined
       state.reasoningEffort = undefined
-      deps.refreshEffortLevels()
       deps.replay(target.session.events)
       deps.settleReplay()
       state.working = target.status === 'running'

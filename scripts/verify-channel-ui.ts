@@ -17,6 +17,7 @@ import { createChannelEmitter } from '../src/dsh-adapter/channel/emitter.js'
 const tick = () => new Promise(resolve => setTimeout(resolve, 40))
 function fixture() {
   const writes: string[] = []
+  let creates = 0
   const listeners = new Map<string, (...args: unknown[]) => void>()
   const services: Record<string, unknown> = {
     settings: {
@@ -30,6 +31,17 @@ function fixture() {
       unset: async () => { writes.push('credential-remove') },
     },
     llm: { listConfigurableProviders: () => [], discoverModels: async () => [] },
+    agents: {
+      create: async (options: { sessionId?: string; meta?: { cwd?: string }; agentOptions?: unknown }) => {
+        creates += 1
+        const created = {
+          id: `created-${creates}`, status: 'idle', options: options.agentOptions,
+          session: { id: options.sessionId ?? `created-session-${creates}`, seq: 0, events: [], header: { cwd: options.meta?.cwd } },
+          ctx: { on: () => () => undefined }, followup() {}, steer() {}, cancel() {}, inbox: { remove: () => true },
+        }
+        return { agent: created, dispose: async () => undefined }
+      },
+    },
     dshAuth: { api: {
       providers: async () => [], login: async () => { writes.push('login') },
       logout: async () => { writes.push('logout'); return true },
@@ -53,7 +65,7 @@ function fixture() {
     inbox: { remove: () => true },
   }
   const raw = createChannel(ctx as never, agent as never, { model: 'model', provider: 'provider', cwd: '/tmp', activity: false })
-  return { ctx, raw, writes, services, agent }
+  return { ctx, raw, writes, services, agent, get creates() { return creates } }
 }
 
 // Real bare production startup, not raw createChannel passed to a renderer.
@@ -87,7 +99,7 @@ function fixture() {
 
 // All explicit effectful UI commands and nested handles refuse in both shadows.
 for (const mode of ['passive-shadow', 'replay-shadow'] as const) {
-  const { ctx, raw, writes } = fixture()
+  const { ctx, raw, writes, creates } = fixture()
   const unregister = registerTuiChannel(ctx, raw)
   const mount = mountChannelUi(ctx, raw, undefined, mode)
   for (const [name, effect] of Object.entries(CHANNEL_UI_EFFECTS)) {
@@ -97,6 +109,11 @@ for (const mode of ['passive-shadow', 'replay-shadow'] as const) {
   assert.ok(Array.isArray(mount.channel.commandCompletions('/')))
   assert.deepEqual(await mount.channel.listEfforts(), { efforts: [], defaultEffort: undefined })
   assert.equal(mount.channel.model, 'model')
+  assert.throws(
+    () => mount.channel.switchWorkspace({ kind: 'remote', cwd: '/shadow', uri: 'shadow:', label: 'shadow' } as never),
+    /shadow policy/,
+  )
+  assert.equal(creates, 0, 'shadow UI refuses the internal workspace-target /new seam before Agent creation')
   const settings = mount.channel.settingsHost()!
   const provider = mount.channel.providerSetup()!
   assert.throws(() => settings.write('x', []), /shadow policy/)
@@ -109,6 +126,37 @@ for (const mode of ['passive-shadow', 'replay-shadow'] as const) {
   unregister()
   mount.dispose()
   raw.releaseContributions()
+}
+
+// A real plugin-host shadow composition never exposes the workspace-target
+// helper as a raw escape hatch. The Kernel has no mutable Channel port in
+// shadow mode, so this is specifically the production local fallback path.
+for (const mode of ['passive-shadow', 'replay-shadow'] as const) {
+  const oldMode = process.env.DSH_TUI_ADAPTER_MODE
+  const oldSlices = process.env.DSH_TUI_ADAPTER_SLICES
+  process.env.DSH_TUI_ADAPTER_MODE = mode
+  process.env.DSH_TUI_ADAPTER_SLICES = 'channel'
+  try {
+    const ctx = new Context()
+    ctx.logger.warn = () => undefined
+    const fiber = ctx.plugin({ name: `channel-ui-${mode}-host`, apply(child: Context) { new TuiPluginHostRuntime(child) } })
+    const live = fixture()
+    const unregister = registerTuiChannel(ctx, live.raw)
+    await tick()
+    const mount = mountChannelUi(ctx, live.raw, ctx.get('tuiPluginHost'), mode)
+    assert.throws(
+      () => mount.channel.switchWorkspace({ kind: 'remote', cwd: '/production-shadow', uri: 'production-shadow:', label: 'production shadow' } as never),
+      /shadow policy/,
+    )
+    assert.equal(live.creates, 0, `production ${mode} workspace target cannot create an Agent`)
+    mount.dispose(); unregister(); live.raw.releaseContributions()
+    await fiber.dispose()
+  } finally {
+    if (oldMode === undefined) delete process.env.DSH_TUI_ADAPTER_MODE
+    else process.env.DSH_TUI_ADAPTER_MODE = oldMode
+    if (oldSlices === undefined) delete process.env.DSH_TUI_ADAPTER_SLICES
+    else process.env.DSH_TUI_ADAPTER_SLICES = oldSlices
+  }
 }
 
 // Driver caches one view per channel; retained handles cannot borrow replacements.
@@ -144,7 +192,8 @@ for (const mode of ['passive-shadow', 'replay-shadow'] as const) {
     const ctx = new Context()
     ctx.logger.warn = () => undefined
     const fiber = ctx.plugin({ name: 'channel-ui-host', apply(child: Context) { new TuiPluginHostRuntime(child) } })
-    const { raw } = fixture()
+    const live = fixture()
+    const { raw } = live
     const unregister = registerTuiChannel(ctx, raw)
     await tick()
     const host = ctx.get('tuiPluginHost')
@@ -241,13 +290,28 @@ for (const mode of ['passive-shadow', 'replay-shadow'] as const) {
     assert.throws(() => field.format?.('x'), /lifetime/)
     assert.throws(() => field.parse?.('x'), /lifetime/)
     assert.equal(nestedCalls, 1, 'outer disposal prevents all retained nested callbacks')
+    unregister()
+    // Mount a fresh production UI while the kernel is still present, then
+    // remove only the kernel. This separates HostFacade loss from ordinary
+    // UI-owner revocation: the retained UI lease must not fall back to raw
+    // channel workspace creation after its authoritative host disappears.
+    const kernelLoss = fixture()
+    const unregisterKernelLoss = registerTuiChannel(ctx, kernelLoss.raw)
+    await tick()
+    const lossMount = mountChannelUi(ctx, kernelLoss.raw, host, 'new')
+    assert.equal(lossMount.channel.agentId, 'ui-agent', 'fresh production mount binds the real HostFacade before kernel loss')
     await fiber.dispose()
     assert.throws(() => mount.channel.setWhale(false), /lost Channel UI|disposed|lifetime/)
+    assert.throws(
+      () => lossMount.channel.switchWorkspace({ kind: 'remote', cwd: '/lost-kernel', uri: 'lost-kernel:', label: 'lost kernel' } as never),
+      /lost Channel UI|disposed|lifetime/,
+    )
+    assert.equal(kernelLoss.creates, 0, 'lost HostFacade cannot fall back to the raw workspace-target /new path')
     assert.equal(raw.whale, true, 'kernel loss must not downgrade to the local writer')
     assert.throws(() => settings.write('x', []), /lifetime/)
     assert.throws(() => earlySettings.write('x', []), /lost Channel UI|disposed|lifetime/)
-    mount.dispose()
-    unregister(); raw.releaseContributions()
+    lossMount.dispose(); unregisterKernelLoss(); kernelLoss.raw.releaseContributions()
+    mount.dispose(); raw.releaseContributions()
   } finally {
     if (oldMode === undefined) delete process.env.DSH_TUI_ADAPTER_MODE
     else process.env.DSH_TUI_ADAPTER_MODE = oldMode

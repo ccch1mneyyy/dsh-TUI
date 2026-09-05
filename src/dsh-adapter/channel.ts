@@ -10,6 +10,10 @@ import { createRewindToAction } from './channel/session-rewind.js'
 import { createLiveAgentAdoption } from './channel/session-live-adoption.js'
 import { createSessionResumeActions } from './channel/session-resume.js'
 import { createTreeRewindAction } from './channel/session-tree-actions.js'
+import { createModelActions } from './channel/model-actions.js'
+import { createWorkspaceActions } from './channel/workspace-actions.js'
+import { createModelSwitchAction } from './channel/model-switch.js'
+import { createModeActions } from './channel/mode-actions.js'
 import { markChannelReadDirty } from '../adapter/channel/read-view.js'
 import { createChannelNotifications } from './channel/notifications.js'
 import type { Context } from '@deepseek-ai/cordis'
@@ -30,7 +34,7 @@ import { randomUUID } from 'node:crypto'
 import { featureOn } from 'dsh-working-activity/config'
 import type { TrackerConfig } from 'dsh-working-activity/status'
 import { ActivityTracker } from 'dsh-working-activity/status'
-import { existsSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { readActivityConfig, writeActivityFrames } from '../activityPrefs.js'
 import { collectAdapterDiagnostics } from '../adapter/kernel/diagnostics.js'
@@ -44,13 +48,12 @@ import { completeCommands, HIDDEN_COMMAND_NAMES, isCommandCompletionToken, isLoc
 import { isPresetName, PRESET_NAMES } from '../components/activityFrames.js'
 import { fetchBalance } from '../deepseekBalance.js'
 import { isPeakHour } from '../deepseekPricing.js'
-import { readEffortPref, writeEffortPref } from '../effortPrefs.js'
 import { getLang, LANGS, t, tOr, type Lang } from '../i18n.js'
-import { readModelPref, writeModelPref } from '../modelPrefs.js'
+import { readModelPref } from '../modelPrefs.js'
 import { resolveModelRoute, validateModelRoute } from '../modelRoute.js'
-import { migratePresetPref, readPresetPref, writePresetPref } from '../presetPrefs.js'
+import { readPresetPref } from '../presetPrefs.js'
 import { clearResumeTarget, forgetAgentViewSession, forgetSession, readAgentViewSessions, readResumeTarget, touchAgentViewSession, touchSession, writeResumeTarget } from '../sessionHistory.js'
-import { modeDisplayName, resolveSessionModes, type SessionModeSpec } from '../sessionModes.js'
+import { resolveSessionModes, type SessionModeSpec } from '../sessionModes.js'
 import { AUTO_THEME_NAME } from '../theme.js'
 import { listThemeCatalog } from '../themeCatalog.js'
 import { normalizePageMargin, normalizeScrollGutter, normalizeStatusBar, normalizeToolBackground, type PageMarginSetting, type ScrollGutterMode, type StatusBarConfig, type ToolBackground } from '../tuiDisplayPrefs.js'
@@ -95,7 +98,6 @@ import { BackgroundJobStore, formatJobDuration, type JobsRuntime } from './jobs.
 import { getHostMessageObserver, type TuiMessageObserverRuntime } from './message-observer.js'
 import { getHostFacade } from './plugin-host.js'
 import { pluginsInfoLines } from './plugins-info.js'
-import { resolveCompatiblePreset, rosterOf, type AgentPresetInfo } from './preset-resolution.js'
 import { composePreset, runningPresetOf, serviceForAgent } from './presets.js'
 import { collectRecentActivity, parseRecapResponse, RECAP_RECENT_CHARS, wrapRecapPrompt } from './recap.js'
 import { getHostRenderers, type TuiRendererRuntime } from './renderers.js'
@@ -796,173 +798,9 @@ export function createChannel(
   // replacement work queued by interruptAndDeliver and leave the UI gated on
   // a working flag that has not observed turn/end yet.
 
-  /** The llm runtime seam (dsh-llm LlmRuntime): route metadata resolution. */
-  const llmRuntime = ctx.get('llm') as
-    | {
-        resolveModelInfo(
-          provider: string,
-          model: string,
-        ): Promise<{
-          reasoning?: {
-            efforts: ReadonlyArray<{ id: string; name: string; description?: string }>
-            defaultEffort?: string
-          }
-        }>
-      }
-    | undefined
-
-  /** Mutable per-agent model selection (dsh-agent's routing override seam).
-   *  `current` stays undefined until the user explicitly cycles effort, so
-   *  default routing (agentOptions on create/fork) is untouched; bindAgent
-   *  re-couples it to each new agent's prompt assembly + request config. */
+  // Model selection is installed by bindAgent; route/effort state is owned by model-actions.
   const selection: ModelSelectionRef = { current: undefined, assembled: undefined }
-  /** The effort chosen this run (or persisted from a previous one); applied
-   *  to every newly bound agent once validated against its adapter's list.
-   *  Chain: settings user layer (applied later via setDefaultEffort) →
-   *  cordis.yml `effort` → the persisted /effort choice → adapter default. */
-  let preferredEffort: string | undefined = resolveEffortDefault(undefined, options.effort, readEffortPref())
-
-  /** Pin `preferredEffort` on the live agent when its route offers it;
-   *  silent no-op otherwise (the next request/header corrects the display). */
-  const applyPreferredEffort = async (): Promise<void> => {
-    if (preferredEffort === undefined || llmRuntime === undefined) return
-    try {
-      const info = await llmRuntime.resolveModelInfo(state.provider, state.model)
-      state.effortLevels = (info.reasoning?.efforts ?? []).map(level => level.id)
-      if (!info.reasoning?.efforts.some(effort => effort.id === preferredEffort)) return
-      selection.current = {
-        provider: state.provider,
-        model: state.model,
-        reasoningEffort: ReasoningEffortId(preferredEffort),
-      }
-    } catch {
-      // Route metadata resolution is best-effort; a failure just leaves the
-      // provider default in effect.
-    }
-  }
-
-  /** Best-effort refresh of the live route's effort-level table for
-   *  top-tier-triggered UI (effort ignition): fire-and-forget on route
-   *  changes (bind/model switch/resume); the /effort paths refresh it
-   *  authoritatively via resolveEfforts. */
-  let effortLevelsGeneration = 0
-  const refreshEffortLevels = (): void => {
-    if (llmRuntime === undefined || typeof llmRuntime.resolveModelInfo !== 'function') return
-    // 代际保护：快速连续切路由时并发的 resolveModelInfo 可能乱序返回，
-    // 只有最新一代的解析才允许落表；落表后 emit 让 useSyncExternalStore
-    // 消费者立刻可见（否则要等下一次无关 emit）。
-    const generation = ++effortLevelsGeneration
-    void llmRuntime
-      .resolveModelInfo(state.provider, state.model)
-      .then(info => {
-        if (generation !== effortLevelsGeneration) return
-        state.effortLevels = (info.reasoning?.efforts ?? []).map(level => level.id)
-        state.emit()
-      })
-      .catch(() => {
-        // Route metadata resolution is best-effort; a failure keeps the
-        // previous table until the next /effort interaction clears it.
-      })
-  }
-
-  /** Resolve the live route's effort levels + adapter default through the
-   *  llm runtime; 'unavailable' when the service is unmounted, 'error' when
-   *  resolution throws (notified here). */
-  const resolveEfforts = async (): Promise<
-    | {
-        efforts: ReadonlyArray<{ id: string; name: string; description?: string }>
-        defaultEffort: string | undefined
-      }
-    | 'unavailable'
-    | 'error'
-  > => {
-    if (llmRuntime === undefined) return 'unavailable'
-    try {
-      const info = await llmRuntime.resolveModelInfo(state.provider, state.model)
-      state.effortLevels = (info.reasoning?.efforts ?? []).map(level => level.id)
-      return {
-        efforts: info.reasoning?.efforts ?? [],
-        defaultEffort: info.reasoning?.defaultEffort,
-      }
-    } catch (error) {
-      notify(t('effort-read-failed', { error: error instanceof Error ? error.message : String(error) }), {
-        color: 'error',
-        timeoutMs: 8000,
-      })
-      return 'error'
-    }
-  }
-
-  /** Pin one validated effort level on the live route: reroutes the next
-   *  request, persists the choice, and refreshes the StatusLine segment. */
-  const applyEffort = (effort: { id: string; name: string }): void => {
-    selection.current = {
-      provider: state.provider,
-      model: state.model,
-      reasoningEffort: ReasoningEffortId(effort.id),
-    }
-    preferredEffort = effort.id
-    state.reasoningEffort = effort.id
-    writeEffortPref(effort.id)
-    notify(t('effort-switched', { name: effort.name }))
-    state.emit()
-  }
-
-  /** The live route's effort levels for the `/effort` slider; empty after
-   *  notifying when the route is unsupported/unavailable/single-tier. */
-  const listEfforts = async (): Promise<{ efforts: readonly EffortOption[]; defaultEffort: string | undefined }> => {
-    const resolved = await resolveEfforts()
-    if (resolved === 'unavailable') {
-      notify(t('effort-unavailable'), { color: 'error' })
-      return { efforts: [], defaultEffort: undefined }
-    }
-    if (resolved === 'error') return { efforts: [], defaultEffort: undefined }
-    if (resolved.efforts.length === 0) {
-      notify(t('effort-unsupported'), { color: 'warning' })
-    } else if (resolved.efforts.length === 1) {
-      notify(t('effort-single-tier', { name: resolved.efforts[0]!.name }), { color: 'warning' })
-    }
-    return resolved
-  }
-
-  /** Set one effort level by id (`/effort <id>` and the slider's live
-   *  apply); false + a notify when the id is not offered by the route. */
-  const setEffort = async (id: string): Promise<boolean> => {
-    const resolved = await resolveEfforts()
-    if (resolved === 'unavailable') {
-      notify(t('effort-unavailable'), { color: 'error' })
-      return false
-    }
-    if (resolved === 'error') return false
-    if (resolved.efforts.length === 0) {
-      notify(t('effort-unsupported'), { color: 'warning' })
-      return false
-    }
-    const found = resolved.efforts.find(effort => effort.id === id)
-    if (!found) {
-      notify(
-        t('effort-invalid', { id, ids: resolved.efforts.map(effort => effort.id).join(', ') }),
-        { color: 'warning' },
-      )
-      return false
-    }
-    applyEffort(found)
-    return true
-  }
-
-  /** The /settings “default reasoning effort” (see the public Channel
-   *  type): re-seat the future-sessions default without touching effort.json
-   *  (the settings user layer outranks that file); an absent level re-derives
-   *  the boot chain (cordis `effort` → the persisted /effort choice). Also
-   *  re-pins the live agent when its route offers the level, so the change
-   *  lands on the next request. No-op when the effective level is unchanged. */
-  const setDefaultEffort = (id: string | undefined): void => {
-    const resolved = resolveEffortDefault(id, options.effort, readEffortPref())
-    if (resolved === preferredEffort) return
-    preferredEffort = resolved
-    void applyPreferredEffort()
-  }
-
+  // Model/effort/preset actions are composed after state construction.
   /** One composer image accompanying a registry-command line: structural
    *  mirror of rc.8's `EncodedImageAttachment` (`@deepseek-ai/dsh-attachment/
    *  types`). Kept local so older installs never resolve rc.8-only types. */
@@ -1162,542 +1000,11 @@ export function createChannel(
     }
   }
 
-  // Session-mode folds: last-wins projections over the session log. The
-  // event types are registered by dsh-plan-mode / dsh-sandbox-policy /
-  // dsh-user-approval and are NOT in this package's typed SessionEvent
-  // union, so they are matched by name through casts — the same pattern as
-  // `agent-preset/selected` in renderEvent and the goal projection above.
-  const foldPlanActive = (events: readonly SessionEvent[]): boolean => {
-    let active = false
-    for (const event of events) {
-      if ((event as { type: string }).type === 'plan/mode') {
-        active = (event.data as unknown as { active?: boolean }).active === true
-      }
-    }
-    return active
-  }
-  const foldSandboxMode = (events: readonly SessionEvent[]): string | undefined => {
-    let mode: string | undefined
-    for (const event of events) {
-      if ((event as { type: string }).type === 'sandbox/mode') {
-        const value = (event.data as unknown as { mode?: string }).mode
-        if (typeof value === 'string') mode = value
-      }
-    }
-    return mode
-  }
-  const foldApprovalPolicy = (events: readonly SessionEvent[]): string | undefined => {
-    let policy: string | undefined
-    for (const event of events) {
-      if ((event as { type: string }).type === 'approval/policy') {
-        const value = (event.data as unknown as { policy?: string }).policy
-        if (typeof value === 'string') policy = value
-      }
-    }
-    return policy
-  }
-  /** Last durable permission preset identity (`permission/preset`), if any.
-   *  Registered by the harness permission preset service, never manufactured
-   *  by the TUI. */
-  const foldPermissionPreset = (events: readonly SessionEvent[]): string | undefined => {
-    let preset: string | undefined
-    for (const event of events) {
-      if ((event as { type: string }).type === 'permission/preset') {
-        const value = (event.data as unknown as { preset?: string }).preset
-        if (typeof value === 'string') preset = value
-      }
-    }
-    return preset
-  }
+  // Durable mode folds/transitions are composed after state construction.
+  // Model/preset completion caches are owned by model-actions.ts.
 
-  /** First configured mode whose declared atoms all match the folds;
-   *  undeclared atoms are wildcards; no match → index 0 (the base mode).
-   *  Matching is exact: a fresh session has no `approval/policy` event, so
-   *  a mode declaring `approval: 'ask'` never falsely matches it. */
-  const deriveModeIndex = (events: readonly SessionEvent[]): number => {
-    // A durable permission identity is stronger than the derived sandbox /
-    // approval atoms. This keeps a runtime preset (including one that maps
-    // to the same atoms as a static mode) selected after resume or manual
-    // commands instead of snapping to a look-alike static mode.
-    const permission = foldPermissionPreset(events)
-    if (permission !== undefined) {
-      const permissionIndex = sessionModes.findIndex(
-        spec =>
-          spec.permission === permission
-          && (spec.plan === undefined || foldPlanActive(events) === spec.plan),
-      )
-      if (permissionIndex >= 0) return permissionIndex
-    }
-    // Atom fallback: permission-only (dynamic) specs declare no atoms and
-    // would wildcard-match ANY session state, stealing the indicator on
-    // sessions that never held a durable identity. They can only be
-    // selected through the permission branch above.
-    const index = sessionModes.findIndex(
-      spec =>
-        spec.permission === undefined
-        && (spec.plan === undefined || foldPlanActive(events) === spec.plan)
-        && (spec.sandbox === undefined || foldSandboxMode(events) === spec.sandbox)
-        && (spec.approval === undefined || foldApprovalPolicy(events) === spec.approval),
-    )
-    return index >= 0 ? index : 0
-  }
-
-  /** Re-derive the current mode from the live session log (boot, every
-   *  agent re-bind, and after mode-affecting session events). */
-  const refreshMode = (): void => {
-    state.modeIndex = deriveModeIndex(binding.agent.session.events)
-    state.mode = sessionModes[state.modeIndex]!
-  }
-
-  // Session.append rejects observer reentry; restore after publication unwinds.
-  const pendingPlanExitRestores = new Map<object, SessionModeSpec>()
-  const prePlanModes = new WeakMap<object, SessionModeSpec>()
-  /** Durable preset identity captured when plan mode starts; an implicit plan
-   *  exit (approval / manual `/plan off`) prefers returning to it over the
-   *  canonical bundle of the restored atoms, so the user lands back on their
-   *  own preset (e.g. a third-party `auto`), not on a look-alike static mode. */
-  const prePlanPermissionIdentity = new WeakMap<object, string>()
-  // An in-turn /plan off commits at pre-step, after the command has returned.
-  const explicitPlanExits = new WeakSet<object>()
-
-  const modePermissions = (events: readonly SessionEvent[]): SessionModeSpec => {
-    const sandbox = foldSandboxMode(events)
-    const approval = foldApprovalPolicy(events)
-    return {
-      id: 'restore',
-      ...(sandbox === 'read-only' || sandbox === 'workspace-write' || sandbox === 'danger-full-access'
-        ? { sandbox } : {}),
-      ...(approval === 'ask' || approval === 'never' ? { approval } : {}),
-    }
-  }
-
-  /** Recover a resumed plan's snapshot before /plan ran, not before its
-   *  deferred plan/mode event. Unknown historical atoms stay untouched. */
-  const prePlanModeSpec = (log: readonly SessionEvent[]): SessionModeSpec | undefined => {
-    let active = false
-    let start = -1
-    let command: { index: number; id: unknown } | undefined
-    for (let index = 0; index < log.length - 1; index += 1) {
-      const event = log[index]!
-      const type = (event as { type: string }).type
-      const data = event.data as unknown as Record<string, unknown>
-      if (!active && type === 'command/run' && data.name === 'plan' && typeof data.args === 'string') {
-        if (data.args.trim() === 'off') command = undefined
-        else command ??= { index, id: data.commandId }
-      }
-      if (type === 'command/done' && data.commandId === command?.id && data.kind !== 'success') {
-        command = undefined
-      }
-      if (type === 'plan/mode') {
-        if (data.active === true && !active) start = command?.index ?? index
-        active = data.active === true
-        command = undefined
-      }
-    }
-    return active && start >= 0 ? modePermissions(log.slice(0, start)) : undefined
-  }
-
-  const applyModeAtoms = (spec: SessionModeSpec): void => {
-    // The durable sandbox override is one session event (dsh-sandbox-policy's
-    // own write path); the session/event arm picks it up immediately.
-    if (spec.sandbox !== undefined && foldSandboxMode(binding.agent.session.events) !== spec.sandbox) {
-      ;(binding.agent.session as unknown as { append(type: string, data: Record<string, unknown>): unknown }).append(
-        'sandbox/mode',
-        { mode: spec.sandbox },
-      )
-    }
-    // Prefer the approval service (it narrates the switch to the model);
-    // the raw durable event is the fallback when it is unmounted.
-    if (spec.approval !== undefined && foldApprovalPolicy(binding.agent.session.events) !== spec.approval) {
-      const approval = ctx.get('approval') as
-        | { setPolicy(a: Agent, policy: 'ask' | 'never'): void }
-        | undefined
-      approval?.setPolicy(binding.agent, spec.approval)
-      // The service may no-op when its configured default already matches.
-      if (foldApprovalPolicy(binding.agent.session.events) !== spec.approval) {
-        ;(binding.agent.session as unknown as { append(type: string, data: Record<string, unknown>): unknown }).append(
-          'approval/policy',
-          { policy: spec.approval },
-        )
-      }
-    }
-  }
-
-  /** Effective sandbox of a mode target: its explicit atom, else the folded
-   *  session value, else the sandbox-policy service default. Unknown means
-   *  the bundle is not safely mappable. */
-  const effectiveSandboxForMode = (spec: SessionModeSpec): SessionModeSpec['sandbox'] | undefined => {
-    if (spec.sandbox !== undefined) return spec.sandbox
-    const folded = foldSandboxMode(snapshotLiveSessionEvents(agent.session))
-    if (folded === 'read-only' || folded === 'workspace-write' || folded === 'danger-full-access') return folded
-    try {
-      const sandbox = ctx.get('sandboxPolicy') as { defaultMode?: unknown } | undefined
-      const value = sandbox?.defaultMode
-      if (value === 'read-only' || value === 'workspace-write' || value === 'danger-full-access') return value
-    } catch {
-      // Optional service; an unknown default means the target is not safely
-      // mappable.
-    }
-    return undefined
-  }
-
-  /** Effective approval policy of a mode target: its explicit atom, else the
-   *  folded session value, else the approval service configuration. */
-  const effectiveApprovalForMode = (spec: SessionModeSpec): SessionModeSpec['approval'] | undefined => {
-    if (spec.approval !== undefined) return spec.approval
-    const folded = foldApprovalPolicy(snapshotLiveSessionEvents(agent.session))
-    if (folded === 'ask' || folded === 'never') return folded
-    try {
-      const approval = ctx.get('approval') as
-        | { effectivePolicy?(session: Agent['session']): unknown; config?: { policy?: unknown } }
-        | undefined
-      const value = approval?.effectivePolicy?.(agent.session) ?? approval?.config?.policy
-      if (value === 'ask' || value === 'never') return value
-    } catch {
-      // Optional service; an unknown default means the target is not safely
-      // mappable.
-    }
-    return undefined
-  }
-
-  /** Canonical preset for an effective sandbox/approval bundle, when one
-   *  exists among the deployment's runtime table (or the stock built-ins
-   *  when the service does not resolve atoms). Undefined means no visible
-   *  preset matches the bundle. */
-  const canonicalPermissionForMode = (
-    spec: SessionModeSpec,
-  ): string | undefined => {
-    const sandbox = effectiveSandboxForMode(spec)
-    const approval = effectiveApprovalForMode(spec)
-    if (sandbox === undefined || approval === undefined) return undefined
-    let service: unknown
-    try {
-      service = ctx.get('permissionPresets')
-    } catch {
-      service = undefined
-    }
-    const bundles = service === undefined ? undefined : permissionBundlesFromService(service)
-    return canonicalPresetFor(sandbox, approval, bundles)
-  }
-
-  /** The durable permission identity reports the target: either the folded
-   *  `permission/preset` session event or a runtime registry readback. */
-  const permissionTargetConfirmed = (target: string): boolean => {
-    if (foldPermissionPreset(snapshotLiveSessionEvents(agent.session)) === target) return true
-    try {
-      const snapshot = state.permissionPresets()
-      if (
-        snapshot.availability === 'runtime'
-        && snapshot.current?.kind === 'preset'
-        && snapshot.current.value === target
-      ) {
-        return true
-      }
-    } catch {
-      // The registry may be unmounted mid-switch; the fold check above
-      // remains authoritative for the durable identity.
-    }
-    return false
-  }
-
-  /** Poll fold/registry readback for the target within a grace window; a
-   *  runtime registry may confirm asynchronously (approval step, event
-   *  batching), while without one only a short fold-based grace makes sense
-   *  before failing closed. */
-  const confirmPermissionTarget = async (target: string, session: Agent['session'], timeoutMs: number): Promise<boolean> => {
-    const deadline = Date.now() + timeoutMs
-    while (Date.now() < deadline) {
-      if (session !== agent.session) return false
-      if (permissionTargetConfirmed(target)) return true
-      await new Promise(resolve => setTimeout(resolve, 50))
-    }
-    ctx.logger.warn(`dsh-tui: permission mode "${target}" was not confirmed by permissionPresets.current()/permission/preset`)
-    state.notify(t('mode-permission-unconfirmed'), { color: 'warning' })
-    return false
-  }
-
-  /** Official `/permission <preset>` switch, then confirmation. The TUI
-   *  never fabricates permission events: success requires the durable
-   *  `permission/preset` event or a runtime registry readback to report the
-   *  target within a short grace window (the external command may append its
-   *  event asynchronously or behind an approval step). Already being on the
-   *  target is a no-op — no redundant command, no approval prompt.
-   *  When the /permission COMMAND is not registered, falls back to the
-   *  permission-presets service's own write path — the same handler the
-   *  command drives. */
-  const applyPermissionIdentity = async (target: string): Promise<boolean> => {
-    if (!isCommandCompletionToken(target)) {
-      ctx.logger.warn(`dsh-tui: permission mode "${target}" skipped because its identity is not a safe command token`)
-      return false
-    }
-    if (permissionTargetConfirmed(target)) return true
-    let registered = false
-    try {
-      registered = commandService?.find(agent, 'permission') !== undefined
-    } catch {
-      registered = false
-    }
-    const session = agent.session
-    if (!registered) {
-      let service: unknown
-      try {
-        service = ctx.get('permissionPresets')
-      } catch {
-        service = undefined
-      }
-      const runtime = service as PermissionPresetService | undefined
-      if (runtime !== undefined && typeof runtime.set === 'function') {
-        try {
-          runtime.set(session, target)
-        } catch (error) {
-          ctx.logger.warn(
-            `dsh-tui: permission mode "${target}" could not be applied by the permissionPresets service: ${error instanceof Error ? error.message : String(error)}`,
-          )
-          state.notify(t('mode-permission-invoke-failed'), { color: 'warning' })
-          return false
-        }
-        return await confirmPermissionTarget(target, session, 2000)
-      }
-      ctx.logger.warn(`dsh-tui: permission mode "${target}" skipped because /permission is not registered`)
-      state.notify(t('mode-permission-unregistered'), { color: 'warning' })
-      return false
-    }
-    const result = await executeRegistryCommand('permission', ` ${target}`)
-    if (session !== agent.session) return false
-    if (result === undefined) {
-      ctx.logger.warn(`dsh-tui: permission mode "${target}" could not invoke /permission`)
-      state.notify(t('mode-permission-invoke-failed'), { color: 'warning' })
-      return false
-    }
-    let availability: PermissionPresetAvailability = 'unavailable'
-    try {
-      availability = state.permissionPresets().availability
-    } catch {
-      // keep the default
-    }
-    return await confirmPermissionTarget(target, session, availability === 'runtime' ? 2000 : 300)
-  }
-
-  /** Durable identity to restore after an implicit plan exit: the preset the
-   *  user was on when plan mode ran, provided the runtime registry still
-   *  recognizes it as current (a drifted knob combination reads back as
-   *  custom and must fall back to the canonical bundle of the atoms). */
-  const rememberPrePlanIdentity = (session: Agent['session']): string | undefined => {
-    const identity = foldPermissionPreset(snapshotLiveSessionEvents(session))
-    if (identity === undefined || identity === PERMISSION_PRESET_CUSTOM) return undefined
-    try {
-      const snapshot = state.permissionPresets()
-      if (snapshot.availability !== 'runtime') return undefined
-      if (snapshot.current?.kind !== 'preset' || snapshot.current.value !== identity) return undefined
-      if (!snapshot.options.some(option => option.value === identity)) return undefined
-      return identity
-    } catch {
-      return undefined
-    }
-  }
-
-  /** Apply the configured atoms; an explicit exit owns its target mode. */
-  const applyMode = async (spec: SessionModeSpec): Promise<void> => {
-    const session = binding.agent.session
-    pendingPlanExitRestores.delete(session)
-    const planMode = ctx.get('planMode') as
-      | { get?(a: Agent): { active: boolean; pending?: boolean } }
-      | undefined
-    const planActive = foldPlanActive(snapshotLiveSessionEvents(session))
-    const planChange = spec.plan !== undefined && (planMode?.get?.(agent).pending ?? planActive) !== spec.plan
-    if (planChange && commandService?.find(agent, 'plan') === undefined) {
-      state.notify(t('mode-plan-unavailable'), { color: 'warning' })
-      return
-    }
-    // Capture the pre-plan sandbox/approval bundle (and the durable preset
-    // identity, when authoritative) BEFORE any permission canonicalization
-    // can append replacement events.
-    if (planChange && spec.plan && !planActive && !prePlanModes.has(session)) {
-      const previous = modePermissions(snapshotLiveSessionEvents(session))
-      const sandbox = ctx.get('sandboxPolicy') as { defaultMode?: SessionModeSpec['sandbox'] } | undefined
-      const approval = ctx.get('approval') as { effectivePolicy?(session: Agent['session']): SessionModeSpec['approval'] } | undefined
-      const base = previous.sandbox === undefined && previous.approval === undefined ? sessionModes[0] : undefined
-      previous.sandbox ??= sandbox?.defaultMode ?? base?.sandbox
-      previous.approval ??= approval?.effectivePolicy?.(session) ?? base?.approval
-      prePlanModes.set(session, previous)
-      const remembered = rememberPrePlanIdentity(session)
-      if (remembered !== undefined) prePlanPermissionIdentity.set(session, remembered)
-      else prePlanPermissionIdentity.delete(session)
-      // Persist missing defaults before /plan, so resume can recover them.
-      applyModeAtoms(previous)
-    }
-    // Permission identity is applied before plan and atom changes. Dynamic
-    // presets use the official command path (or the service write fallback)
-    // and are confirmed by event / registry readback; the TUI never
-    // manufactures permission events.
-    if (spec.permission !== undefined) {
-      if (!(await applyPermissionIdentity(spec.permission))) return
-    } else {
-      // Static modes own a canonical permission identity. Leaving any OTHER
-      // durable identity behind (third-party preset OR a stale canonical,
-      // e.g. plan left `read-only` while atoms were restored to
-      // workspace-write) would make a static mode appear selected only
-      // because its sandbox/approval bundle happens to match, and would let
-      // the durable identity lie about the real policy. Canonicalize BEFORE
-      // applying atoms; when no canonical preset exists for the target
-      // bundle, fail closed with a visible notice.
-      const currentPermission = foldPermissionPreset(snapshotLiveSessionEvents(session))
-      if (currentPermission !== undefined && currentPermission !== PERMISSION_PRESET_CUSTOM) {
-        const canonical = canonicalPermissionForMode(spec)
-        if (canonical === undefined) {
-          ctx.logger.warn(`dsh-tui: static mode "${spec.id}" cannot safely clear permission identity "${currentPermission}"`)
-          state.notify(t('mode-permission-no-canonical', { name: modeDisplayName(spec) }), { color: 'warning' })
-          return
-        }
-        if (canonical !== currentPermission) {
-          if (!(await applyPermissionIdentity(canonical))) return
-        }
-      }
-    }
-    // Reconcile a stale explicit-exit marker before acting. The marker only
-    // legitimately survives while a deferred exit awaits its plan/mode:false
-    // (foldPlanActive && pending === false). If plan is still logged active
-    // with no pending intent, that awaited event was abandoned (e.g. an
-    // aborted pre-step) — drop the orphan so it cannot suppress a later restore
-    // such as an approved exit_plan_mode.
-    if (planActive && planMode?.get?.(binding.agent).pending === undefined) {
-      explicitPlanExits.delete(session)
-    }
-    if (spec.plan !== undefined && (planMode?.get?.(binding.agent).pending ?? planActive) !== spec.plan) {
-      if (commandService?.find(binding.agent, 'plan') === undefined) {
-        notify(t('mode-plan-unavailable'), { color: 'warning' })
-        return
-      }
-      try {
-        const text = await executeRegistryCommand('plan', spec.plan ? '' : ' off')
-        if (session !== binding.agent.session) return
-        if (text === undefined) {
-          notify(t('mode-plan-unavailable'), { color: 'warning' })
-          return
-        }
-        if (execution.kind === 'error') {
-          if (execution.text !== '') state.notify(execution.text, { color: 'error' })
-          return
-        }
-      } finally {
-        if (session === binding.agent.session) {
-          const pending = planMode?.get?.(binding.agent).pending
-          if (!foldPlanActive(session.events) || pending !== false) explicitPlanExits.delete(session)
-          if (!foldPlanActive(session.events) && pending !== true) prePlanModes.delete(session)
-        }
-      }
-    }
-    applyModeAtoms(spec)
-    refreshMode()
-    notify(t('mode-switched', { name: modeDisplayName(state.mode) }))
-    state.emit()
-  }
-
-  /** Shift+Tab: advance to the next configured session mode. Cycling starts
-   *  from the mode DERIVED from the session log (never a stored index), so
-   *  manual `/plan` use can never desync the cycle. */
-  const cycleMode = async (): Promise<void> => {
-    const index = deriveModeIndex(binding.agent.session.events)
-    await applyMode(sessionModes[(index + 1) % sessionModes.length]!)
-  }
-
-  // Session-lifetime candidate pool for non-path queries. The load promise is
-  // shared so concurrent first keystrokes cannot kick off duplicate scans, and
-  // it is keyed by cwd so a /workspace switch or resumed session never reuses
-  // another directory's listing.
+  // Session-lifetime cache for non-path file completion, keyed by workspace cwd.
   const fileCandidateCache = { cwd: '', load: undefined as Promise<readonly FileCandidate[]> | undefined }
-
-  // `/model <provider/id>` completion: the model catalog is async (one llm
-  // listModels per provider), so the first keystrokes that could be heading
-  // for /model warm a session-lifetime cache — the shared promise dedupes
-  // concurrent triggers, children() synchronously serves whatever has landed,
-  // and the arrival state.emit() reopens the menu mid-typing. switchModel's
-  // success path drops the cache so the [current] tag re-resolves against
-  // the new route.
-  const modelNodeCache = {
-    nodes: undefined as readonly CommandCompletionNode[] | undefined,
-    load: undefined as Promise<void> | undefined,
-    // Monotonic load generation. dropModelNodeCache bumps it so a warm that
-    // was already in flight when the cache was dropped cannot publish its
-    // stale catalog on resolve — only the newest load may write nodes.
-    generation: 0,
-  }
-  const warmModelNodes = (): void => {
-    if (modelNodeCache.load !== undefined) return
-    const generation = modelNodeCache.generation
-    modelNodeCache.load = state.listModels().then((list) => {
-      if (!owner.current() || generation !== modelNodeCache.generation) return
-      modelNodeCache.nodes = list.map((model) => ({
-        name: `${model.provider}/${model.id}`,
-        description: model.name,
-        ...(state.provider === model.provider && state.model === model.id
-          ? { tag: 'current' }
-          : {}),
-      }))
-      state.emit()
-    }).catch(() => {
-      if (!owner.current() || generation !== modelNodeCache.generation) return
-      // listModels already swallows per-provider failures; this only fires
-      // when the llm service shape itself is missing — settle on an empty
-      // menu rather than retrying on every keystroke.
-      modelNodeCache.nodes = []
-    })
-  }
-
-  /** Drop the `/model <provider/id>` completion cache so the next `/model `
-   *  keystroke refetches a fresh catalog. Model switches (the [current] tag
-   *  re-resolves against the new route) and every `/provider` catalog change
-   *  (add / edit / delete / OAuth sign-in-out) invalidate it, so completion
-   *  always matches what the picker would list. */
-  const dropModelNodeCache = (): void => {
-    modelNodeCache.generation += 1
-    modelNodeCache.nodes = undefined
-    modelNodeCache.load = undefined
-  }
-
-  // `/preset <id>` completion: same warm-cache pattern as models. The
-  // current/default tags resolve at children() time (sync state reads), so
-  // no cache invalidation is needed on switch. The localized display text,
-  // however, resolves at listPresets() call time — a mid-session /lang
-  // switch invalidates lazily here (lang-keyed warm) so completion hints
-  // never serve the previous language.
-  const presetOptionCache = {
-    lang: undefined as Lang | undefined,
-    list: undefined as readonly PresetOption[] | undefined,
-    load: undefined as Promise<void> | undefined,
-  }
-  /** Warm the `/preset <id>` completion roster once per UI language; a
-   *  language change since the last warm drops the stale localized copy. */
-  const warmPresetOptions = (): void => {
-    const lang = getLang()
-    if (presetOptionCache.lang !== undefined && presetOptionCache.lang !== lang) {
-      presetOptionCache.list = undefined
-      presetOptionCache.load = undefined
-    }
-    if (presetOptionCache.load !== undefined) return
-    presetOptionCache.lang = lang
-    presetOptionCache.load = state.listPresets().then((list) => {
-      presetOptionCache.list = list
-      state.emit()
-    }).catch(() => {
-      presetOptionCache.list = []
-    })
-  }
-
-  // `/effort <id>` completion: state.effortLevels is the sync vocabulary
-  // (populated on route changes); when still unknown, one best-effort
-  // resolveEfforts warms it. `tried` caps the retry — resolveEfforts
-  // notifies on hard errors, so keystroke-time retries would spam.
-  const effortWarm = { tried: false }
-  const warmEffortLevels = (): void => {
-    if (state.effortLevels !== undefined || effortWarm.tried) return
-    effortWarm.tried = true
-    void resolveEfforts().then((resolved) => {
-      if (resolved === 'unavailable' || resolved === 'error') return
-      effortWarm.tried = false
-      state.emit()
-    }).catch(() => {})
-  }
 
   // Session actions close over these inert placeholders. They are explicitly
   // installed after ChannelState initialization below.
@@ -1710,6 +1017,14 @@ export function createChannel(
   let newSessionAction: () => Promise<boolean> = async () => false
   let resumeInto: (sessionId: string, kind: 'resume' | 'agent-view', keepCurrent: boolean) => Promise<ResumeResult> = async () => ({ ok: false, reason: 'unavailable' })
   let adoptLiveAgent: (target: Agent) => Promise<ResumeResult> = async () => ({ ok: false, reason: 'unavailable' })
+
+  // This is the one necessary cyclic seam: mode actions need the completed
+  // state, while the state exposes their command surface. It is assigned before
+  // the channel starts binding/session observation.
+  let modeActions: ReturnType<typeof createModeActions>
+  let modelActions: ReturnType<typeof createModelActions>
+  let workspaceActions: ReturnType<typeof createWorkspaceActions>
+  let switchModelAction: (provider: string, model: string) => Promise<boolean>
 
   const state: ChannelState = {
     ...createInputActions(() => state, () => binding.agent, inputConvergence,
@@ -1756,7 +1071,7 @@ export function createChannel(
     contextWindow: undefined,
     // Explicit cordis.yml `effort` wins; otherwise the persisted /effort
     // choice; the first request/header event re-asserts the adapter's truth.
-    reasoningEffort: options.effort ?? readEffortPref(),
+    reasoningEffort: options.effort,
     // Session-mode seed; the first refreshMode() (bindAgent) re-derives it
     // from the session log, so a resumed session lands on its recorded mode.
     mode: sessionModes[0]!,
@@ -1795,15 +1110,15 @@ export function createChannel(
       // asks children() for nodes, the fetch has usually landed.
       const head = input.slice(1).split(/[\t ]/)[0]?.toLowerCase() ?? ''
       if (head !== '') {
-        if ('model'.startsWith(head)) warmModelNodes()
-        if ('preset'.startsWith(head)) warmPresetOptions()
-        if ('effort'.startsWith(head)) warmEffortLevels()
+        if ('model'.startsWith(head)) modelActions.warmModelNodes()
+        if ('preset'.startsWith(head)) modelActions.warmPresetOptions()
+        if ('effort'.startsWith(head)) modelActions.warmEffortLevels()
       }
       return completeCommands(input, state.commandList, (path) => {
         if (path.length === 1 && path[0] === 'model') {
           // provider/id specs, current model tagged; see modelNodeCache.
-          warmModelNodes()
-          return modelNodeCache.nodes ?? []
+          modelActions.warmModelNodes()
+          return modelActions.modelNodes()
         }
         if (path.length === 1 && path[0] === 'lang') {
           return [
@@ -1860,7 +1175,7 @@ export function createChannel(
           ]
         }
         if (path.length === 1 && path[0] === 'effort') {
-          warmEffortLevels()
+          modelActions.warmEffortLevels()
           return [
             { name: 'status', description: 'Show the current reasoning effort', descriptionKey: 'sugg-status-desc' },
             ...(state.effortLevels ?? []).map((id) => ({
@@ -1872,10 +1187,10 @@ export function createChannel(
           ]
         }
         if (path.length === 1 && path[0] === 'preset') {
-          warmPresetOptions()
+          modelActions.warmPresetOptions()
           return [
             { name: 'status', description: 'Show the current agent preset', descriptionKey: 'sugg-status-desc' },
-            ...(presetOptionCache.list ?? []).map((preset) => ({
+            ...(modelActions.presetOptions()).map((preset) => ({
               name: preset.id,
               description: preset.description ?? preset.name ?? preset.id,
               ...(preset.id === state.agentPreset
@@ -2000,223 +1315,18 @@ export function createChannel(
     newSession(): Promise<boolean> {
       return newSessionAction()
     },
-    listWorkspaces() {
-      return workspaceService.list(state.cwd)
+    listWorkspaces() { return workspaceActions.listWorkspaces() },
+    resolveWorkspace(uri: string) { return workspaceActions.resolveWorkspace(uri) },
+    switchWorkspace(target: TuiWorkspaceTarget) { return workspaceActions.switchWorkspace(target) },
+    renameWorkspace(title: string) { return workspaceActions.renameWorkspace(title) },
+    workspaceCommands() { return workspaceActions.workspaceCommands() },
+    runWorkspaceCommand(name: string, input: string) { return workspaceActions.runWorkspaceCommand(name, input) },
+    switchModel(provider: string, model: string) { return switchModelAction(provider, model) },
+    listEfforts() { return modelActions.listEfforts() },
+    setEffort(id) { return modelActions.setEffort(id) },
+    cycleMode() {
+      return modeActions.cycleMode()
     },
-    resolveWorkspace(uri: string) {
-      return workspaceService.resolve(uri, state.cwd)
-    },
-    async switchWorkspace(target: TuiWorkspaceTarget): Promise<boolean> {
-      if (state.working) {
-        notify(t('workspace-switch-working'), { color: 'warning' })
-        return false
-      }
-      // Local targets must exist and be directories — creating a session in
-      // a typo'd cwd "succeeds" and then every file tool errors per call.
-      if (target.kind === 'local') {
-        try {
-          if (!statSync(target.cwd).isDirectory()) throw new Error('not a directory')
-        } catch {
-          notify(t('workspace-open-invalid', { target: target.label }), { color: 'error', timeoutMs: 8000 })
-          return false
-        }
-      }
-      const previousCwd = state.cwd
-      const previousDisplay = state.displayCwd
-      state.cwd = target.cwd
-      state.displayCwd = target.description ?? target.uri
-      const switched = await channelCommands(state).newSession()
-      if (!switched) {
-        state.cwd = previousCwd
-        state.displayCwd = previousDisplay
-        return false
-      }
-      // The breadcrumb follows the adopted cwd, same as /resume (#96).
-      refreshGitBranch()
-      notify(t('workspace-switched', { target: target.label }))
-      state.emit()
-      return true
-    },
-    async renameWorkspace(title: string): Promise<boolean> {
-      try {
-        const renamed = await workspaceService.rename(state.cwd, title)
-        state.displayCwd = renamed.description ?? renamed.uri
-        notify(t('workspace-renamed', { title: renamed.label }))
-        state.emit()
-        return true
-      } catch (error) {
-        notify(
-          t('workspace-rename-failed', { err: error instanceof Error ? error.message : String(error) }),
-          { color: 'error', timeoutMs: 8000 },
-        )
-        return false
-      }
-    },
-    workspaceCommands() {
-      return workspaceService.commands()
-    },
-    runWorkspaceCommand(name: string, input: string) {
-      return workspaceService.runCommand(name, input, state.cwd)
-    },
-    async switchModel(provider: string, model: string): Promise<boolean> {
-      const adoption = binding.capture()
-      // `/model` picker Enter — switch the live model by forking the
-      // conversation at its current end and continuing with a new agent
-      // routed to the chosen model. Same reset shape as rewindTo/resumeTo;
-      // the history replays unchanged, only the request model changes.
-      if (state.working) {
-        notify(t('model-switch-while-working'), {
-          color: 'warning',
-        })
-        return false
-      }
-      const agents = ctx.get('agents') as
-        | { create(options: CreateAgentOptions): Promise<AgentHandle> }
-        | undefined
-      if (!sessions || !agents) {
-        notify(t('model-switch-unavailable'), {
-          color: 'error',
-        })
-        return false
-      }
-      let seed: readonly SessionEvent[]
-      try {
-        // An in-flight manual compaction must not straddle the fork: cancel
-        // it first, or its checkpoint can commit right after this snapshot —
-        // the model-switched child would start from the summary alone while
-        // the user believes the full history carried over ("context lost").
-        await settleManualCompaction()
-        // No boundary = fork the whole log (continue the conversation).
-        seed = sessions.fork(binding.agent.session).events
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error)
-        notify(t('model-switch-fork-failed', { err: message }), { color: 'error' })
-        return false
-      }
-      const childId = SessionId(randomUUID())
-      let handle: AgentHandle
-      // The forked conversation keeps the session's own preset — only the
-      // request route changes (same rule as rewindTo).
-      const modelComposed = await composePreset(ctx, runningPresetOf(binding.agent.session))
-      try {
-        handle = await binding.prepare(adoption, () => agents.create({
-          sessionId: childId,
-          seed,
-          meta: {
-            cwd: state.cwd,
-            parentSession: binding.agent.session.id,
-            seedLength: seed.length,
-            ...(modelComposed.agentPreset === undefined
-              ? {}
-              : { agentPreset: modelComposed.agentPreset }),
-          },
-          agentOptions: { provider, model },
-          ...(modelComposed.setup === undefined ? {} : { setup: modelComposed.setup }),
-        }))
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error)
-        notify(t('model-switch-failed', { err: message }), { color: 'error', timeoutMs: 8000 })
-        return false
-      }
-      try {
-        await attachSessionToWorkspace(ctx, state.cwd, childId)
-      } catch (error) {
-        notify(
-          t('model-switch-attach-failed', { err: error instanceof Error ? error.message : String(error) }),
-          { color: 'warning', timeoutMs: 8000 },
-        )
-      }
-      if (!binding.isCurrent(adoption)) { await binding.abandon(handle); return false }
-      return binding.adopt(handle, adoption, (committed, disposePrevious) => {
-      projector.reset()
-
-      // Stale sealed/thinking bookkeeping belongs to the OLD agent's rows;
-      // keep it out of the next turn's settle logs and revive cache.
-
-
-      rowIds.value = 0
-      state.rows.length = 0
-      markChannelReadDirty(state.rows)
-      resetSubagentProjection()
-      resetJobProjection()
-      // Goal/todo/title are session-scoped; the replay re-derives them for
-      // the session being entered (or leaves them empty).
-      state.todos = []
-      // Queued-but-undelivered messages live in the OLD agent's inbox; the
-      // swap must drop their previews or they linger forever (unretirable —
-      // retire events are filtered to the new agent, unwithdrawable — the
-      // new inbox never heard of them).
-      state.pending = []
-      state.goal = undefined
-      state.sessionTitle = ''
-      state.sessionColor = ''
-      state.tokens = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, peak: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, idle: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } }
-      state.responseChars = 0
-      state.activeToolCount = 0
-      state.lastUserText = ''
-      state.working = false
-      state.cancelPending = false
-      state.spinnerMode = 'requesting'
-      state.status = handle.agent.status
-      state.agentId = handle.agent.id
-      state.agentPreset = modelComposed.agentPreset
-      state.model = model
-      state.provider = provider
-      // /model completion cache: the [current] tag was resolved at fetch
-      // time — drop the cache so the next `/model ` refetches for the new
-      // route.
-      dropModelNodeCache()
-      state.tps = undefined
-      state.tpsSamples = []
-      state.lastUsage = undefined
-      state.workingActivity = undefined
-      state.contextWindow = undefined
-      // Route changed: a stale tier table would let top-tier UI fire on the
-      // wrong level (or never fire on the real one); clear and re-resolve.
-      state.effortLevels = undefined
-      state.reasoningEffort = undefined
-      refreshEffortLevels()
-      state.contextSegments = {
-        system: 0,
-        prompt: 0,
-        assistant: 0,
-        thinking: 0,
-        tools: 0,
-      }
-      projector.replayEvents(seed)
-      projector.settleStreaming()
-      // Same mid-turn-seed spinner reset as resume above.
-      state.working = handle.agent.status === 'running'
-      const oldHandle = committed.handle
-      bindAgent()
-      clearStagedImages()
-      // Model-switch quip rides the fresh tracker.
-      updateWorkingActivity('model switch', () => activityTracker.onModelSwitch(model))
-      refreshCommandList()
-      void refreshLoadedContext()
-      void refreshSkillCommands()
-      // The model-switched fork becomes the most recently used.
-      touchSession(childId)
-      state.emit()
-      disposePrevious('dispose')
-      // Staged image tokens were typed against the pre-switch conversation;
-      // resumeTo/newSession already drop theirs on the swap — same contract.
-      clearStagedImages()
-      // Persist the choice so the next boot and `/new` start on it (same
-      // contract as /preset and /effort; issues #14/#30). A failed
-      // write keeps the live switch but warns it will not survive a restart.
-      if (!writeModelPref(provider, model)) {
-        notify(t('model-pref-write-failed'), {
-          color: 'warning',
-        })
-      }
-      return true
-      })
-    },
-    listEfforts,
-    setEffort,
-    setDefaultEffort,
-    cycleMode,
     clear() {
       state.rows.length = 0
       markChannelReadDirty(state.rows)
@@ -2273,136 +1383,11 @@ export function createChannel(
       if (service === undefined) return legacyPermissionPresetSnapshot(state.mode.sandbox)
       return permissionPresetSnapshotFromService(service, binding.agent.session.events)
     },
-    /** Localized roster projection for the /preset picker — resolves
-     *  built-in display text through the dictionary under `en`; the
-     *  Channel.listPresets contract comment carries the full doc. */
-    async listPresets() {
-      const presets = rosterOf(ctx)
-      if (presets === undefined) return []
-      // The roster copies `name`/`description` verbatim from each preset.yml,
-      // and the stock yml files are written in Chinese — the /preset picker
-      // showed them under `en` too. Built-in ids have dictionary surfaces
-      // (preset-name-* / preset-desc-*); under `en` they win via tOr, while
-      // unknown (user-authored) ids fall through to the roster text. Under
-      // `zh` the roster text is kept as-is so a user-edited or upstream-
-      // reworded preset.yml is never shadowed by a stale dictionary copy.
-      const localized = getLang() === 'en'
-      try {
-        const list = await presets.list()
-        return list.map(preset => ({
-          id: preset.id,
-          ...(preset.name === undefined
-            ? {}
-            : { name: localized ? tOr(`preset-name-${preset.id}`, preset.name) : preset.name }),
-          ...(preset.description === undefined
-            ? {}
-            : { description: localized ? tOr(`preset-desc-${preset.id}`, preset.description) : preset.description }),
-          ...(preset.broken === undefined ? {} : { broken: preset.broken }),
-          isDefault: preset.id === presets.defaultId,
-        }))
-      } catch {
-        return []
-      }
-    },
-    async switchPreset(presetId) {
-      const presets = rosterOf(ctx)
-      if (presets === undefined) {
-        notify(t('preset-unavailable'), { color: 'error' })
-        return false
-      }
-      if (state.working) {
-        notify(t('preset-agent-running'), { color: 'warning' })
-        return false
-      }
-      let target: AgentPresetInfo
-      try {
-        target = await resolveCompatiblePreset(presets, presetId)
-      } catch (error) {
-        notify(
-          t('preset-not-found', { id: presetId, err: error instanceof Error ? error.message : String(error) }),
-          { color: 'error', timeoutMs: 8000 },
-        )
-        return false
-      }
-      if (target.broken !== undefined) {
-        notify(t('preset-load-failed', { id: target.id, broken: target.broken }), { color: 'error', timeoutMs: 8000 })
-        return false
-      }
-      if (target.id === state.agentPreset) {
-        if (!migratePresetPref(presetId, target.id)) {
-          notify(t('preset-switched-pref-failed', { id: target.id }), { color: 'warning' })
-          return true
-        }
-        notify(t('preset-already-current', { id: target.id }), { color: 'success' })
-        return true
-      }
-      // Official rule (dsh-agent-presets): only a session that has produced
-      // nothing may swap compositions — a started session's logged tool calls
-      // would strand under a different tool set. Blank = no turn ever ran.
-      const blank = !binding.agent.session.events.some(event => event.type === 'turn/start')
-      if (!blank) {
-        // Persist as the default for future sessions instead of failing.
-        if (!writePresetPref(target.id)) {
-          notify(t('preset-pref-write-failed'), { color: 'error' })
-          return false
-        }
-        notify(
-          t('preset-locked-saved-default', { current: state.agentPreset ?? 'host', id: target.id }),
-          { color: 'warning', timeoutMs: 8000 },
-        )
-        return true
-      }
-      try {
-        const preset = await presets.recompose(binding.agent.ctx, target.id)
-        // The switch is a logged session fact (model-visible ⟺ logged):
-        // resumes/forks of this session resolve the NEW composition. The
-        // type is runtime-registered in dsh-session's known-event set but
-        // not yet in its typed SessionEventMap — cast the SESSION (never
-        // extract the method: `append` reads the private `this.log`, so an
-        // unbound call throws "Cannot read properties of undefined").
-        const session = binding.agent.session as unknown as { append(type: string, data: unknown): void }
-        session.append('agent-preset/selected', { agentPreset: preset.id })
-        state.agentPreset = preset.id
-      } catch (error) {
-        notify(
-          t('preset-switch-failed', { err: error instanceof Error ? error.message : String(error) }),
-          { color: 'error', timeoutMs: 8000 },
-        )
-        return false
-      }
-      state.emit()
-      if (!writePresetPref(target.id)) {
-        notify(t('preset-switched-pref-failed', { id: target.id }), { color: 'warning' })
-        return true
-      }
-      notify(t('preset-switched-saved', { id: target.id }), { color: 'success' })
-      return true
-    },
-    listModels() {
-      const llm = ctx.get('llm') as
-        | {
-          listProviders(): readonly { id: string }[]
-          listModels(provider: string): Promise<readonly LlmModelInfo[]>
-        }
-        | undefined
-      if (!llm) return Promise.resolve([])
-      const providers = llm.listProviders()
-      return Promise.all(providers.map(provider => llm.listModels(provider.id).catch(() => [])))
-        .then(lists => lists.flat())
-    },
-    listProviders() {
-      // Group labels for the two-level /model picker: the registry's own
-      // display names, detached so a registry swap cannot leak through.
-      const llm = ctx.get('llm') as
-        | { listProviders(): readonly { id: string; name: string }[] }
-        | undefined
-      return Promise.resolve(llm === undefined ? [] : llm.listProviders().map(info => ({ ...info })))
-    },
-    invalidateModelCompletion() {
-      // `/provider` changed the catalog (add/edit/delete/OAuth): the next
-      // `/model <provider/id>` keystroke must not serve the stale snapshot.
-      dropModelNodeCache()
-    },
+    listPresets() { return modelActions.listPresets() },
+    switchPreset(presetId) { return modelActions.switchPreset(presetId) },
+    listModels() { return modelActions.listModels() },
+    listProviders() { return modelActions.listProviders() },
+    invalidateModelCompletion() { modelActions.dropModelNodeCache() },
     async listSkills() {
       // snapshot() over list(): only a COMPLETE observation is authoritative
       // (same contract as the skill-command merge above) — a partial catalog
@@ -2875,7 +1860,7 @@ export function createChannel(
       state.contextWindow = undefined
       state.effortLevels = undefined
       state.reasoningEffort = undefined
-      refreshEffortLevels()
+      modelActions.refreshEffortLevels()
       state.contextSegments = {
         system: 0,
         prompt: 0,
@@ -3797,6 +2782,55 @@ ${output}
     activityTickTimer = undefined
   }
 
+
+  modelActions = createModelActions(ctx, state, {
+    owner,
+    binding,
+    selection,
+    initialEffort: options.effort,
+    agent: () => binding.agent,
+    notify,
+  })
+
+  switchModelAction = createModelSwitchAction(ctx, state, {
+    owner,
+    binding,
+    rowIds,
+    // Compaction is installed below before the channel binds or exposes input.
+    settleCompaction: () => settleManualCompaction(),
+    resetProjector: () => projector.reset(),
+    resetSubagents: resetSubagentProjection,
+    resetJobs: resetJobProjection,
+    replay: events => projector.replayEvents(events),
+    settleReplay: projector.settleStreaming,
+    bindAgent: () => bindAgent(),
+    refreshCommands: refreshCommandList,
+    refreshLoadedContext,
+    refreshSkillCommands,
+    clearStagedImages,
+    dropModelCompletion: () => modelActions.dropModelNodeCache(),
+    onModelSwitch: model => updateWorkingActivity('model switch', () => activityTracker.onModelSwitch(model)),
+    notify,
+  })
+
+  workspaceActions = createWorkspaceActions(state, {
+    owner,
+    service: workspaceService,
+    // This reference is intentionally lazy: session construction is installed
+    // later, before any UI action can invoke workspace switching.
+    newSession: target => resumeActions.newSessionWithTarget(target),
+    refreshGitBranch: () => refreshGitBranch(),
+    notify,
+  })
+
+  modeActions = createModeActions(ctx, state, {
+    binding,
+    sessionModes,
+    commandService,
+    executeRegistryCommand,
+    notify,
+  })
+
   /** Render the current tracker into the TUI-only projection. */
   const renderWorkingActivity = (): ActivityStatus | undefined => {
     if (options.activity === false) {
@@ -3884,8 +2918,8 @@ ${output}
     // Re-couple the channel-owned model selection to the new agent's
     // assembly/request waterfalls, then re-apply the persisted effort when
     // this agent's route offers it (dsh-agent installModelSelection).
-    selection.current = undefined
-    selection.assembled = undefined
+    modelActions.selection.current = undefined
+    modelActions.selection.assembled = undefined
     // {{model}} backfill (issue #155): a resumed agent's route lives only in
     // its session's request/header records — agentOptions.model stays
     // undefined unless cordis.yml pins a COMPLETE provider+model pair — so
@@ -3899,18 +2933,17 @@ ${output}
     // did not ask for; applyPreferredEffort below still upgrades the seed
     // when the user has a persisted preference the route offers.
     if (binding.agent.options?.model === undefined && state.provider !== '' && state.model !== '') {
-      selection.current = { provider: state.provider, model: state.model }
+      modelActions.selection.current = { provider: state.provider, model: state.model }
     }
-    void applyPreferredEffort()
-    rebuildSessionModes(agent)
-    refreshMode()
+    void modelActions.applyPreferredEffort()
+    modeActions.refreshMode()
     const register = <T extends () => void>(dispose: T): T => {
       binding.subscribe(dispose)
       return dispose
     }
     const on = (...args: Parameters<typeof ctx.on>): ReturnType<typeof ctx.on> =>
       register(ctx.on(...args))
-    register(installModelSelection(binding.agent.ctx, selection))
+    register(installModelSelection(binding.agent.ctx, modelActions.selection))
     void [
       on('agent/status', ({ agent: subject, status }) => {
         if (subject !== binding.agent) return
@@ -3998,51 +3031,7 @@ ${output}
             }
           }
         })
-        // Mode-affecting atoms fold into the Shift+Tab mode indicator the
-        // moment they land (whether appended by cycleMode or by hand).
-        const eventType = (event as { type: string }).type
-        if (
-          eventType === 'plan/mode'
-          || eventType === 'sandbox/mode'
-          || eventType === 'approval/policy'
-          || eventType === 'permission/preset'
-        ) {
-          refreshMode()
-        }
-        if (eventType === 'plan/mode' && (event.data as unknown as { active?: boolean }).active === false) {
-          const target = prePlanModes.get(session) ?? prePlanModeSpec(snapshotLiveSessionEvents(session))
-          prePlanModes.delete(session)
-          if (!explicitPlanExits.delete(session) && target !== undefined) {
-            const queued = pendingPlanExitRestores.has(session)
-            pendingPlanExitRestores.set(session, target)
-            if (!queued) queueMicrotask(() => {
-              const restore = pendingPlanExitRestores.get(session)
-              pendingPlanExitRestores.delete(session)
-              // Rebinding, reentry, or an explicit switch supersedes this restore.
-              if (restore === undefined || session !== binding.agent.session || foldPlanActive(session.events)) return
-              applyMode(restore).catch(error => {
-                ctx.logger.warn(
-                  `dsh-tui: plan-exit mode restore failed: ${error instanceof Error ? error.message : String(error)}`,
-                )
-              }).finally(() => {
-                // Return the user to the preset they were on before plan mode
-                // (when the runtime registry still offers it) instead of
-                // parking them on the canonical bundle of the restored atoms.
-                const remembered = prePlanPermissionIdentity.get(session)
-                prePlanPermissionIdentity.delete(session)
-                if (remembered === undefined || session !== agent.session) return
-                applyPermissionIdentity(remembered).then((ok) => {
-                  if (!ok || session !== agent.session) return
-                  refreshMode()
-                  state.notify(t('mode-switched', { name: modeDisplayName(state.mode) }))
-                }).catch(() => {
-                  // The identity restore is best-effort; failures already
-                  // surfaced through applyPermissionIdentity's own notices.
-                })
-              })
-            })
-          }
-        }
+        modeActions.onSessionEvent(session, event)
         projector.renderEvent(event)
         // Streaming deltas (one event per token) take the frame-aligned
         // path; every other event keeps synchronous notification.
@@ -4143,7 +3132,6 @@ ${output}
     settleReplay: projector.settleStreaming,
     describeWorkspace: cwd => workspaceService.describe(cwd),
     refreshGitBranch: () => refreshGitBranch(),
-    refreshEffortLevels,
     bindAgent,
     refreshCommands: refreshCommandList,
     refreshLoadedContext,
@@ -4171,7 +3159,6 @@ ${output}
     settleReplay: projector.settleStreaming,
     describeWorkspace: cwd => workspaceService.describe(cwd),
     refreshGitBranch: () => refreshGitBranch(),
-    refreshEffortLevels,
     bindAgent,
     refreshCommands: refreshCommandList,
     refreshLoadedContext,
@@ -4181,6 +3168,7 @@ ${output}
     sessionSwitchVetoed,
     notify,
     notifySessionSwitched,
+    runtime: adapterRuntime,
   })
   resumeInto = resumeActions.resumeInto
   resumeToAction = resumeActions.resumeTo
