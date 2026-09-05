@@ -67,3 +67,14 @@ export async function resolveCompatiblePreset(
   if (roster.some(preset => preset.id === fallback)) return presets.resolve(fallback)
   return presets.resolve(requested)
 }
+
+/**
+ * The i18n dictionary id a roster preset's localized display text resolves
+ * under. The 0.1.2 line renamed the official PTC preset `code` → `ptc`, but
+ * the dictionary keys still use the legacy `code` id (`preset-name-code` /
+ * `preset-desc-code`), so the `/preset` picker's display lookup must bridge
+ * the roster id back. User-authored ids pass through untouched.
+ */
+export function presetDisplayId(id: string): string {
+  return id === 'ptc' ? 'code' : id
+}
