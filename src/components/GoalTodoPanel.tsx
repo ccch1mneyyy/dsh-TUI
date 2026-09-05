@@ -166,8 +166,12 @@ export function GoalTodoPanel({
   return (
     <Box flexDirection="column" paddingLeft={2} paddingRight={2} paddingTop={1}>
       {goal !== undefined && (
-        <Box flexDirection="column" marginBottom={showTodoSection ? 1 : 0}>
-          <Box flexDirection="row" width="100%">
+        <Box flexDirection="column">
+          {/* 行盒显式 height={1}：窄屏下与截断文本同行的布局会被量出虚高
+              （行内出现幽灵空行，实测窄终端里 🎯 行与折叠头之间多出空行），
+              钉死单行高度可消除；本面板各行本就设计为单行（内容均
+              truncate）。 */}
+          <Box flexDirection="row" width="100%" height={1}>
             <Text color="suggestion">🎯 </Text>
             <Box flexGrow={1} flexShrink={1}>
               <Text bold wrap="truncate">
@@ -184,7 +188,7 @@ export function GoalTodoPanel({
             </Box>
           </Box>
           {goal.phase === 'blocked' && goal.blockedReason !== undefined && (
-            <Box flexDirection="row" marginTop={1}>
+            <Box flexDirection="row" marginTop={1} height={1}>
               <Text dimColor>│ </Text>
               <Text color="error" wrap="truncate">
                 {goal.blockedReason.message}
@@ -199,6 +203,7 @@ export function GoalTodoPanel({
               collapsed line (with the live-task preview). */}
           <Box
             flexDirection="row"
+            height={1}
             onClick={onToggle}
             onMouseEnter={() => setHeaderHovered(true)}
             onMouseLeave={() => setHeaderHovered(false)}
@@ -226,7 +231,7 @@ export function GoalTodoPanel({
               {visible.map((todo, index) => {
                 const last = index === visible.length - 1 && hidden === 0
                 return (
-                  <Box key={index} flexDirection="row">
+                  <Box key={index} flexDirection="row" height={1}>
                     <BranchPrefix last={last} />
                     <TodoGlyph status={todo.status} />
                     <Text wrap="truncate" dimColor={todo.status === 'completed'}>
@@ -236,7 +241,7 @@ export function GoalTodoPanel({
                 )
               })}
               {hidden > 0 && (
-                <Box flexDirection="row">
+                <Box flexDirection="row" height={1}>
                   <BranchPrefix last />
                   <Text dimColor>… {hidden} more</Text>
                 </Box>

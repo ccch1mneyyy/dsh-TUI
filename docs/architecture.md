@@ -119,11 +119,21 @@ answerer（`approval/request` waterfall），仅允许一次/拒绝两种决定�
 - MCP、Shell、文件工具和自定义 preset 都会扩展模型可见能力，应当视为同一权限域
   内的代码执行入口。
 - `/permission` 的可切换名册由已挂载的 DSH `permissionPresets` registry 提供，
-  保持 registry 声明顺序；第三方预设会自动进入 picker，只有符合既有命令 token
-  语法的 ID 进入 Tab 补全。`custom` 只作为 registry 投影出的当前态，不是目标。
+  保持 registry 声明顺序；第三方预设自动进入 picker、Tab 补全与 `Shift+Tab`
+  循环（排除 `custom`/`status`、canonical 预设、重复 identity 与不安全 token），
+  首次观察遵循 registry 顺序，后续刷新保留已见 identity 的相对顺序。
+  `custom` 只作为 registry 投影出的当前态，不是目标。
+- 服务快照可用时 `/permission` 由 TUI 本地接管（菜单常驻项）：切换**优先**
+  调用官方 `/permission <preset>` 命令；命令行未暴露给本 agent（组合相关）时，
+  **回退**到 permissionPresets 服务的官方写路径 `set(session, preset)` —— 与
+  命令 handler 同一实现，写真实 `permission/preset`/`sandbox/mode`/
+  `approval/policy` 事件，TUI 绝不伪造事件，随后按事件/读回确认；两条路都
+  不可用时显式 toast + 日志，**绝不**把命令当普通消息发给模型。退出计划模式
+  先恢复进入前的 atom，再还原进入前的持久预设身份（registry 仍提供该身份时）。
 - TUI 将服务状态区分为 runtime、legacy、unavailable：只有服务确实缺失时才保留
   旧三项 legacy 兼容；服务已挂载但损坏、空或数据不一致时 fail closed，不从
-  sandbox/approval 组合猜测当前预设。所有切换仍调用官方 `/permission <preset>`。
+  sandbox/approval 组合猜测当前预设。适配器按真实服务契约读取
+  `current(session)`（session-projection），并兼容旧的事件日志形态。
 
 在不可信仓库中运行前，检查实际 profile patch，而不是只看 TUI 的视觉界面。
 

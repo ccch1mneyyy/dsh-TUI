@@ -1306,19 +1306,25 @@ export function PromptInput({
       event.stopImmediatePropagation()
       return
     }
-    // Expanded editor: Tab is indentation, Shift+Tab a silent swallow —
-    // neither command completion nor session-mode cycling makes sense on
-    // the fullscreen editor, and both would fire invisibly behind it.
-    if (expandedRef.current && key.tab) {
-      if (!key.shift) insertAtCaret('    ')
+    // Completion menus own Backtab just like plain Tab; do not mutate the
+    // background session mode while the user is choosing a candidate.
+    if (key.tab && key.shift && (fileOverlayOpen || overlayOpen)) {
+      event.stopImmediatePropagation()
       return
     }
     // Shift+Tab cycles the configured session modes (default: 默认 →
     // 计划模式 → 完全访问; each mode bundles plan/sandbox/approval atoms —
-    // see the `modes` config). Must precede the plain-Tab arms — the parser
-    // reports backtab as key.tab + key.shift.
+    // see the `modes` config). Must precede the fullscreen editor's Tab
+    // indentation arm so the expanded editor participates in the cycle too —
+    // the parser reports backtab as key.tab + key.shift.
     if (key.tab && key.shift) {
       void channel.cycleMode()
+      return
+    }
+    // Expanded editor: plain Tab inserts indentation; Shift+Tab was handled
+    // above and therefore never disappears behind the fullscreen cover.
+    if (expandedRef.current && key.tab) {
+      if (!key.shift) insertAtCaret('    ')
       return
     }
     if (key.tab && fileOverlayOpen) {

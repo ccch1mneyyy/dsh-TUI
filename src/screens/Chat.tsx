@@ -1059,10 +1059,18 @@ export function Chat({
    * result text lands as a notification. `rawInput` carries the text after
    * the command name (`/plan off` → ` off`).
    */
-  /** Route every permission switch through the official command path. */
+  /** Route every permission switch through the official command path when it
+   *  is registered; otherwise fall back to the permission-presets service's
+   *  own write path (the same handler the command drives) so the picker and
+   *  typed `/permission <preset>` keep working on compositions where the
+   *  command row never reaches this agent's registry. */
   const runPermissionCommand = (rawInput: string): void => {
     const originAgentBinding = channel.agentBindingGeneration
-    void channel.runExternalCommand('permission', rawInput).then((text) => {
+    const mounted = channel.commandList.some(command => command.external && command.name === 'permission')
+    const run = mounted
+      ? channel.runExternalCommand('permission', rawInput)
+      : channel.runPermissionPreset(rawInput.trim()).then(ok => (ok ? '' : undefined))
+    void run.then((text) => {
       if (channel.agentBindingGeneration !== originAgentBinding) return
       if (text === undefined) {
         channel.notify(t('command-not-found', { name: 'permission' }), { color: 'error' })
@@ -1818,18 +1826,24 @@ export function Chat({
         channel.notify(t('login-logout-hint'))
         return true
       case 'permission': {
-        // The command itself is registered by dsh-sandbox-policy (dsh-base
-        // permission-presets row): bare `/permission` opens the preset
-        // picker and
-        // Enter dispatches `/permission <preset>` through the same
-        // external-command path a hand-typed argument takes. `/permission
-        // status` prints the policy explainer; other arguments pass through
-        // verbatim.
-        // When the row is not mounted the default external path (or the
-        // model, when nothing is registered) wins.
+        // The command itself is registered by the permission-presets row
+        // (dsh-base): bare `/permission` opens the preset picker and Enter
+        // dispatches `/permission <preset>`; `/permission status` prints the
+        // policy explainer; other arguments pass through verbatim.
+        // The row may be mounted as a service without its command ever
+        // reaching this agent's registry (composition-dependent) — when the
+        // service snapshot is usable the TUI still owns the entry and
+        // switches through the service write path (never the model).
         const mounted = channel.commandList.some(command => command.external && command.name === 'permission')
+        let serviceUsable = false
+        try {
+          serviceUsable = channel.permissionPresets().availability === 'runtime'
+        } catch {
+          serviceUsable = false
+        }
+        const reachable = mounted || serviceUsable
         const parts = rawInput.trim().split(/\s+/).filter(Boolean)
-        if (mounted && parts[0] === 'status') {
+        if (reachable && parts[0] === 'status') {
           setHelpOpen(false)
           const snapshot = channel.permissionPresets()
           if (snapshot.options.some(option => option.value === 'status')) {
@@ -1848,7 +1862,7 @@ export function Chat({
           ])
           return true
         }
-        if (mounted && parts.length === 0) {
+        if (reachable && parts.length === 0) {
           setHelpOpen(false)
           const snapshot = channel.permissionPresets()
           if (snapshot.availability === 'unavailable' || snapshot.options.length === 0) {
@@ -1872,7 +1886,7 @@ export function Chat({
           })
           return true
         }
-        if (mounted) {
+        if (reachable) {
           setHelpOpen(false)
           runPermissionCommand(rawInput)
           return true
@@ -3417,6 +3431,8 @@ export function Chat({
           effort={channel.reasoningEffort}
           cwd={channel.displayCwd}
           whale={channel.whale}
+          whaleIdle={channel.whaleIdle}
+          working={channel.working}
           // Resuming a long session skips the ~3.4s opening animation: it
           // keeps firing low-frequency React commits that compete with the
           // transcript mount batches (and the first wheel events) for the
@@ -3576,6 +3592,11 @@ export function Chat({
             {statusEntries.map(entry => entry.text).join(' · ')}
           </Text>
         )}
+        {/* 输入簇：可替换输入行链 + 状态行 + 瞬态浮层。浮层锚点收窄到本簇
+            顶边（= 输入行顶边），picker 紧贴输入框向上展开，盖住其上
+            todo/spinner/转录尾部行（用户接受的取舍），自身零布局高度、
+            不推动帧布局。 */}
+        <Box flexDirection="column" flexShrink={0}>
         {approvalPanelNode !== null ? (
           approvalPanelNode
         ) : dialogSnapshot !== null ? (
@@ -3675,11 +3696,13 @@ export function Chat({
                 }
           }
         />
-        {/* 瞬态面板浮层：absolute + bottom:'100%' 钉在本 chrome Box 顶边，向上
-            覆盖转录尾部行，自身零布局高度。in-flow 挂载会让帧高随面板开关涨落，
-            把帧顶行滚进 scrollback 并在关闭重绘时二次写入（每切一次 /model 多
-            一份启动画的根因）。maxHeight 预留 prompt/statusline 行，防短会话
-            高列表探出帧顶。整体条件挂载：见 dialogOverlayOpen 注释。 */}
+        {/* 瞬态面板浮层：absolute + bottom:'100%' 钉在输入簇 Box 顶边（=
+            输入行顶边），紧贴输入框向上覆盖其上 todo/spinner/转录尾部行，
+            自身零布局高度。in-flow 挂载会让帧高随面板开关涨落，把帧顶行滚进
+            scrollback 并在关闭重绘时二次写入（每切一次 /model 多一份启动画
+            的根因）。浮层盖住 todo 是刻意取舍（贴输入框优先）；maxHeight
+            预留 prompt/statusline 行，防短会话高列表探出帧顶。整体条件
+            挂载：见 dialogOverlayOpen 注释。 */}
         {dialogOverlayOpen && (
         <OverlayAbove maxHeight={Math.max(terminalRows - 8, 1)}>
           {overlay.kind === 'thinking' && (
@@ -3997,6 +4020,7 @@ export function Chat({
           {overlay.kind === 'search' && <TranscriptSearchBar query={searchQuery} cursorOffset={searchCursor} count={searchCount} current={searchCurrent} />}
         </OverlayAbove>
         )}
+        </Box>
       </Box>
       {/* Tooltip 悬停浮层：absolute 零布局高度，挂在根 Box 最后确保盖在
           其余内容之上（yoga 的 absolute 相对父级，根 Box 原点即屏原点，

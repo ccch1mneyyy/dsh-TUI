@@ -377,6 +377,9 @@ const GROUPS = {
 // classic 仍捆绑眨眼+喷水+摆尾）、随机选取 API 覆盖/钳制/每次挂载
 // 独立重掷、LogoV2 渲染冒烟（粉爱心/灰 Z 上屏后落定消失）。
     ["verify-whale-intro", ['node', '--import', 'tsx/esm', 'scripts/verify-whale-intro.mjs']],
+// 开屏定格后的鲸鱼闲置行为（whaleIdle 设置，默认关）：纯规划器帧选
+// 择与节拍（闲置偶动/入睡/工作唤醒/点击爱心单向播完）、频道接线。
+    ["verify-whale-idle", ['node', '--import', 'tsx/esm', 'scripts/verify-whale-idle.mjs']],
 // 计划退出恢复进入前权限；覆盖延迟切换、会话恢复与未知权限不提权。
     ["verify-plan-exit-restore", ['node', 'scripts/verify-plan-exit-restore.mjs']],
 // 会话切换/清屏卫生：子代理投影（行 map/任务描述队列/仪表盘快照）随

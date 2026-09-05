@@ -48,6 +48,13 @@ the interface, and removing it leaves no core modifications behind.
   with a note), history
   search, message selection, inline or alternate-screen rendering, and `/lang`
   zh/en UI language switching.
+- **Pixel whale pet**: one of three randomized startup intros plays on every
+  launch; **clicking the whale pops a heart pass** any time, and with
+  `/settings → whaleIdle` enabled the settled whale keeps fluttering its fins
+  and thumping its tail, swims continuously while the agent works, falls
+  asleep with Z's after 10s of inactivity, and wakes on any work. The 22
+  hand-drawn frames and the idle behaviors are ported from
+  [dsh-ui-whale](https://github.com/lhh010/dsh-ui-whale) by [@lhh010](https://github.com/lhh010).
 - **Timeline navigation**: a Grok-style turn rail covering **every turn
   (folded ones included)** — even when the fold window only exposes the last
   few turns, the full history stays one click away (clicking a folded tick
@@ -263,7 +270,7 @@ so keep using `Ctrl`.
 |---|---|
 | Session | `/new` new session · `/resume` working-directory/session browser (visible directory scope, search, preview, cross-project, sub-agent runs folded) · `/agentview` agent view (all sessions) · `/bg` (alias `/background`) background this session and open the view · `/rename` rename session · `/recap` session recap (apply the suggested title in one key; `/settings` can enable an auto-summary on session open — on by default: a divider + `Recap:` line appears at the bottom of the transcript when resuming, and bows out once you send a new message) · `/workspace resume|rename|open` manage workspaces · `/clear` clear screen · `/compact` compact · `/export` export Markdown · `/trace` trace timeline (or `Ctrl+T`) · `/rewind` rewind picker (same as double-`Esc` on empty input) · `/tree` session family tree (every fork branch stitched together; hover previews a node, click opens a rewind/fork-here/adopt-branch menu) · `/fork` copy the current session into a resumable twin (the original is untouched) · `/btw <question>` side question (never interrupts the main turn, writes no history) |
 | Status | `/context` loaded-context details · `/status` session info · `/cost` token usage · `/doctor` environment self-check · `/config` configuration sources · `/init` create AGENTS.md · `/settings` settings panel (namespace read/edit) |
-| Model | `/model` two-level picker (a pinned **Recently used** group first — the last 10 switched models, persisted at `~/.dsh-tui/model-recents.json` — then provider groups; Enter drills into a group's models; a single provider with no recents skips straight to the list; **switching = fork continuation, history preserved**) · `/effort` reasoning effort (slider / `status` / `<id>`) · `/preset` agent preset (**cannot switch once the session has started** — blank-only) · `/thinking` thinking display · `/tokens` token details · `/activity` working animation (`frames <name>` / `status`) · `/theme` theme picker · `/color` (bare opens the palette picker; `<name>` sets directly; `status`/`reset`) session accent color (input border + session-name chip at the top-right, per-session; chip off by default, enable in `/settings`) · `/lang` zh/en UI switch (also selectable in `/settings`) |
+| Model | `/model` two-level picker (a pinned **Recently used** group first — the last 10 switched models, persisted at `~/.dsh-tui/model-recents.json` — then provider groups; Enter drills into a group's models; a single provider with no recents skips straight to the list; **switching = fork continuation, history preserved**) · `/effort` reasoning effort (slider / `status` / `<id>`; the default level new sessions start on is set in `/settings` → Default reasoning effort) · `/preset` agent preset (**cannot switch once the session has started** — blank-only) · `/thinking` thinking display · `/tokens` token details · `/activity` working animation (`frames <name>` / `status`) · `/theme` theme picker · `/color` (bare opens the palette picker; `<name>` sets directly; `status`/`reset`) session accent color (input border + session-name chip at the top-right, per-session; chip off by default, enable in `/settings`) · `/lang` zh/en UI switch (also selectable in `/settings`) |
 | Accounts/Policy | `/provider` manage model providers — add a provider, or edit an existing one via a menu (API key · model list · delete the provider; custom endpoints also get base URL · wire protocol; a targeted edit patches only that field, the rest of the profile survives untouched; the model list pre-checks what you already enabled; only user-layer providers are editable) (includes the bundled dsh-auth **subscription OAuth sign-in** branch — ChatGPT / Claude / Grok, no API key; same source as `/auth status\|login\|logout`) · `/login` credential & account status · `/logout` logout notes · `/permission` dynamic preset/status notes · `/add-dir` file-policy scope · `/hooks` · `/mcp` |
 | Skills | `/skills` lists skills discovered by DSH; user-invocable skills join the `/` menu as `/name` |
 | Other | `/agents` subagent list · `/plugins check <path>` plugin diagnostics · `/update` auto-update and restart · `/vim` vim editing mode toggle · `/terminal-setup` · `/connect` · `/help` · `/exit` (aliases `/quit` `/q`) |
@@ -495,9 +502,9 @@ responsible for their maintenance and security.
   [Contributor Covenant Code of Conduct](CODE_OF_CONDUCT.en.md) before taking
   part.
 
-| WeChat group | QQ group (ID 572549239) | WeChat group 4 |
-| :---: | :---: | :---: |
-| <img src="screenshots/wechat-group.jpg" alt="dsh-TUI community WeChat group QR code" width="200"> | <img src="screenshots/qq-group.png" alt="dsh-TUI community QQ group QR code" width="200"> | <img src="screenshots/wechat-group4.jpg" alt="dsh-TUI community WeChat group 4 QR code" width="200"> |
+| WeChat group (dsh-TUI community 4) | QQ group (ID 572549239) |
+| :---: | :---: |
+| <img src="screenshots/wechat-group.jpg" alt="dsh-TUI community WeChat group 4 QR code" width="200"> | <img src="screenshots/qq-group.png" alt="dsh-TUI community QQ group QR code" width="200"> |
 
 > The WeChat QR code expires roughly every 7 days; if it stops working, use
 > the QQ group (572549239) or open an issue to nudge us for a refresh.
@@ -509,14 +516,23 @@ responsible for their maintenance and security.
 `dsh-TUI` does not implement a separate sandbox. It uses the filesystem,
 shell, sandbox, and approval policies of the active DSH profile. Permission
 presets come from the mounted DSH `permissionPresets` registry: third-party
-presets appear automatically in the picker in registry order, while only IDs
-accepted by the existing command-token grammar enter completion. `custom` is a
-current-state label only, never a selectable target. Switching always uses the
-official `/permission <preset>` command.
+presets appear automatically in the picker, completion and the `Shift+Tab`
+cycle (excluding `custom`/`status`, canonical presets, duplicate identities
+and unsafe tokens), with the registry's declaration order kept stable across
+refreshes. `custom` is a current-state label only, never a selectable target.
+While the service snapshot is usable, `/permission` is surfaced as a first-class
+local command: switches prefer the official `/permission <preset>` command; when
+the command row never reaches the agent's registry, the TUI falls back to the
+permissionPresets service's own official write path (the same handler the
+command drives — real `permission/preset`/`sandbox/mode`/`approval/policy`
+events, never fabricated by the TUI) and confirms via event/readback; when
+neither path exists it fails loudly instead of silently falling through.
+Exiting plan mode restores the pre-plan atoms first, then returns the durable
+identity to the preset you were on before plan mode (while the registry still
+offers it).
 When the `permissionPresets` service is absent, TUI keeps its legacy three-row
 compatibility roster. A mounted but unusable service is marked unavailable and
-fails closed instead of inventing a roster. If the external `/permission` command
-is not registered, input follows the existing default/model dispatch path. Inspect
+fails closed instead of inventing a roster. Inspect
 the profile before starting it around sensitive credentials or an untrusted
 repository.
 
@@ -527,6 +543,14 @@ for details.
 
 The DeepSeek Harness official WeChat account featured this plugin among its
 early user-built extensions. [View the feature screenshot](screenshots/wechat-official.png).
+
+## Acknowledgments
+
+- The pixel whale's 22 hand-drawn frames (drawn cell by cell in Excel) and
+  its idle behaviors (fin flutters, tail thumps, sleep Z's, click hearts)
+  are ported from **[dsh-ui-whale](https://github.com/lhh010/dsh-ui-whale)**
+  (the DeepSeek Harness web whale-pet plugin, by [@lhh010](https://github.com/lhh010),
+  BSD-3-Clause) — thank you for the art and the inspiration 🐋💜
 
 ## Friends' Links
 

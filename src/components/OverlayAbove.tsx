@@ -13,6 +13,13 @@ import { Box } from '../ui.js'
  * 原样写回，全程无重复。
  *
  * 先例：PromptInput 通知行（position=absolute marginTop={-1}）。
+ *
+ * 锚点纪律（防止浮层漂到 todo 上方的回归）：底部 chrome 里，凡是瞬态面板
+ * 必须挂载在「输入簇」内——Chat 输入簇（可替换输入行链 + StatusLine +
+ * 本浮层，见 Chat.tsx 底部 chrome），或 PromptInput 自身的输入行容器。绝不
+ * 直接把 OverlayAbove 挂到包含 GoalTodoPanel 的外层 chrome Box 上：那里的
+ * bottom:'100%' 会把面板顶到 todo 之上，远离输入框。in-flow 面板（问卷/
+ * 对话框/提示等）走输入簇的替换链，天然落在输入行位置，同样不会越过 todo。
  */
 export function OverlayAbove({
   children,
