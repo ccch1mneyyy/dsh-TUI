@@ -5,11 +5,15 @@
  *
  * Run: node --import tsx/esm scripts/verify-image-preview.tsx
  */
+import { fileURLToPath } from 'node:url'
 process.env.DSH_TUI_LANG = 'en'
 process.env.FORCE_COLOR = '0'
 // The channel-level cases below drive a REAL `/new` session switch, which
 // persists resume/last-used markers — keep them out of the user's ~/.dsh-tui.
-process.env.HOME = new URL('../node_modules/.cache/dsh-tui-image-preview-home', import.meta.url).pathname
+// fileURLToPath (not URL.pathname) keeps the drive letter intact on Windows.
+const imagePreviewHome = fileURLToPath(new URL('../node_modules/.cache/dsh-tui-image-preview-home', import.meta.url))
+process.env.HOME = imagePreviewHome
+process.env.USERPROFILE = imagePreviewHome
 // Force the deterministic text fallback everywhere: Kitty transport has its
 // own regression (verify-terminal-images); THIS script pins interaction.
 process.env.DSH_TUI_DISABLE_TERMINAL_IMAGES = '1'
@@ -102,6 +106,10 @@ function check(name: string, ok: boolean, detail = ''): void {
     ['"/tmp/a\\ b.png"', null],
     ['"/tmp/a\\q.png"', null],
     ['~/pic.png', `${home}/pic.png`],
+    ['D:\\shots\\a.png', 'D:\\shots\\a.png'],
+    ['D:/shots/a.PNG', 'D:/shots/a.PNG'],
+    ['D:\\shots\\a b.png', null],
+    ['D:\\shots\\notes.txt', null],
     ['/tmp/a.png /tmp/b.png', null],
     ['see /tmp/a.png', null],
     ['/tmp/notes.txt', null],
@@ -1426,16 +1434,20 @@ for (const columns of [32, 80]) {
   const screen = screenOf(terminal, ROWS)
   await sleep(500)
 
+  // The prompt wraps long pasted paths across lines, and the expand glyph
+  // (⛶) can sit at the wrap point INSIDE the filename — assert on the
+  // whitespace- and glyph-free text so the wrapped fragments join back.
+  const flat = (text: string): string => text.replace(/⛶/gu, '').replace(/\s+/gu, '')
   stdin.write(`\x1b[200~${oversizedImagePath}\x1b[201~`)
   check('chat: oversized pasted paths never reach attachment staging',
-    await settled(() => screen.text().includes('oversized.png')) && stageCalls === 0,
+    await settled(() => flat(screen.text()).includes('oversized.png')) && stageCalls === 0,
     `calls=${stageCalls}\n${screen.text()}`)
   stdin.write('\x1b')
   await settled(() => !screen.text().includes('oversized.png'))
 
   stdin.write(`\x1b[200~${directoryImagePath}\x1b[201~`)
   check('chat: non-regular pasted paths never reach attachment staging',
-    await settled(() => screen.text().includes('not-a-file.png')) && stageCalls === 0,
+    await settled(() => flat(screen.text()).includes('not-a-file.png')) && stageCalls === 0,
     `calls=${stageCalls}\n${screen.text()}`)
   stdin.write('\x1b')
   await settled(() => !screen.text().includes('not-a-file.png'))

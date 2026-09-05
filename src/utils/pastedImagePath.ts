@@ -31,6 +31,10 @@ const MAX_PASTED_PATH_CHARS = 4096
  * - a wholly single- or double-quoted path: `'/a/b c.png'`, `"/a/b c.png"`
  * - one bare token with backslash-escaped separators (Ghostty's
  *   `Shell.escape`): `/a/b\ c.png`
+ * - a Windows drive-letter absolute path, quoted or bare: `D:\shots\a.png`,
+ *   `D:/shots/a.png` (the terminal text-paste shape of an Explorer file
+ *   copy — Warp and friends forward file copies as plain path text; the
+ *   backslash separators decode literally in the bare-token branch)
  *
  * The decoded path must be absolute (or `~/…`, expanded) and carry a
  * supported image extension. Everything else — multiple tokens, relative
@@ -51,18 +55,62 @@ export function parsePastedImagePath(text: string): string | null {
       // POSIX single quotes are wholly literal and cannot contain one.
       if (inner.includes(quote)) return null
       path = inner
+    } else if (isDriveLetterPath(inner)) {
+      // A quoted Windows path is already literal: backslashes are
+      // separators, not shell escapes (a quote itself cannot appear in a
+      // path, so nothing needs unescaping here).
+      path = inner
     } else {
       path = unescapeDoubleQuoted(inner)
     }
   } else {
-    path = unescapeBackslashes(trimmed)
+    path = isDriveLetterPath(trimmed)
+      ? unescapeWindowsPath(trimmed)
+      : unescapeBackslashes(trimmed)
   }
   if (path === null) return null
 
   if (path.startsWith('~/')) path = homedir() + path.slice(1)
-  if (!path.startsWith('/')) return null
+  if (!isAbsolutePath(path)) return null
   if (imagePathMediaType(path) === undefined) return null
   return path
+}
+
+/** True for `X:\…` / `X:/…` (Windows absolute, drive letter first). */
+function isDriveLetterPath(path: string): boolean {
+  return /^[A-Za-z]:[/\\]/u.test(path)
+}
+
+/** Absolute on POSIX (`/…`) and Windows (`X:\…` / `X:/…`). No platform
+ *  branch: a POSIX path never starts with a drive letter and a Windows
+ *  absolute path always does, so the forms are disjoint. Existence remains
+ *  the caller's async check. */
+function isAbsolutePath(path: string): boolean {
+  if (path.startsWith('/')) return true
+  return isDriveLetterPath(path)
+}
+
+/**
+ * Decode a bare Windows drive-letter token: backslashes are literal path
+ * separators, not shell escapes. A space/tab (multiple shell tokens), a
+ * double backslash (UNC-ish) or a dangling trailing backslash still fails
+ * closed and the paste stays verbatim.
+ */
+function unescapeWindowsPath(text: string): string | null {
+  let out = ''
+  for (let index = 0; index < text.length; index++) {
+    const char = text[index]!
+    if (char === '\\') {
+      const next = text[index + 1]
+      if (next === undefined) return null
+      if (next === ' ' || next === '\t' || next === '\\') return null
+      out += char
+      continue
+    }
+    if (char === ' ' || char === '\t') return null
+    out += char
+  }
+  return out
 }
 
 /** Decode only the two unambiguous escapes inside a shell double-quoted
