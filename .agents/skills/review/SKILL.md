@@ -1,25 +1,14 @@
 ---
 name: review
-description: Use when asked to review a codebase or a change, or when the /review command runs — assess design, correctness, maintainability, and test coverage with actionable feedback.
+description: Review a code change, pull request, or named area for correctness, maintainability, and unnecessary complexity. Use for review requests or /review; use audit for a repository-wide assessment.
 ---
 
-# Code Review
+Review the requested scope and report actionable findings. If the user also asked for fixes, implement and verify them after establishing the cause.
 
-Review the current project or the most recent change set and give feedback the author can act on.
+1. Identify the target and actual base. For a stacked PR, compare with its parent branch; for a local change, include the requested staged or unstaged work. Read changed code with its callers and relevant tests.
+2. Trace behavior across the affected boundaries: DSH event projection, channel actions, input precedence, or terminal lifecycle. Check failure paths and resource cleanup, and whether tests cover the changed behavior rather than mirror the implementation. Before calling code dead or an abstraction unnecessary, check exports, dynamic registration, compatibility requirements, and other consumers.
+3. Verify each suspected issue against the implementation and existing guards. Report its location, concrete trigger, impact, and smallest useful fix, ordered by severity. Separate demonstrated defects from optional simplifications.
+4. Use a short call tree or before/after diff when it explains an ownership or ordering problem more clearly than prose. Show only the affected path and use real symbols from the code.
+5. State what was reviewed and any verification limits. If there are no actionable findings, say so; do not manufacture nits or add a compulsory praise section.
 
-## Procedure
-
-1. Determine the review target: the whole project, the current branch diff (git diff against the base), or a specific area the user names.
-2. Read the code with these lenses:
-   - **设计**: does the structure match the problem? Clear ownership, sane seams, no over-engineering?
-   - **正确性**: boundary conditions, error handling, concurrency, resource lifetime.
-   - **可维护性**: naming, duplication, dead code, complexity hotspots, comment quality.
-   - **测试**: are the important behaviors covered? Are tests asserting behavior rather than implementation?
-3. For each finding: file/line, what's wrong, why it matters, concrete suggestion.
-4. Order feedback: blocking issues first, then nits. Distinguish "must fix" from "consider".
-5. End with what's good — reviews that only criticize are less useful.
-
-## Constraints
-
-- Do not modify code during the review.
-- If reviewing a diff, look at the diff in context (surrounding code), not just the changed lines.
+Choose validation from [the contributing guide](../../../docs/contributing.md) when implementing fixes. A review alone does not require running every regression.

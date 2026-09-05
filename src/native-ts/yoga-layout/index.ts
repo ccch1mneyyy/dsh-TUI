@@ -2021,7 +2021,7 @@ function layoutNode(
         lineCross = maxAscent + maxDescent
       }
     }
-    // layoutNode(c) at line ~1117 above already resolved c.layout.margin[] via
+    // The child layoutNode(c) pass already resolved c.layout.margin[] via
     // resolveEdges4Into with the same ownerW — read directly instead of
     // re-resolving through childMarginForAxis → 2× resolveEdge.
     const mainLead = leadingEdge(mainAxis)
@@ -2166,7 +2166,7 @@ function layoutNode(
     // Re-stretch children whose cross is auto and align is stretch, now that
     // the line cross size is known. Needed for multi-line wrap (line cross
     // wasn't known during initial measure) AND single-line when the container
-    // cross was not Exactly (initial stretch at ~line 1250 was skipped because
+    // cross was not Exactly (initial stretch was skipped because
     // innerCrossSize wasn't defined — the container sized to max child cross).
     if (isWrap || crossMode !== MeasureMode.Exactly) {
       for (const c of line) {
@@ -2885,10 +2885,9 @@ function zeroLayoutRecursive(node: Node): void {
     c.layout.width = 0
     c.layout.height = 0
     // Invalidate layout cache — without this, unhide → calculateLayout finds
-    // the child clean (!isDirty_) with _hasL intact, hits the cache at line
-    // ~1086, restores stale _lOutW/_lOutH, and returns early — skipping the
-    // child-positioning recursion. Grandchildren stay at (0,0,0,0) from the
-    // zeroing above and render invisible. isDirty_=true also gates _cN and
+    // the child clean (!isDirty_) with _hasL intact, restores cached
+    // _lOutW/_lOutH, and returns before positioning children. Grandchildren
+    // stay at (0,0,0,0) and render invisible. isDirty_=true also gates _cN and
     // _fbBasis via their (sameGen || !isDirty_) checks — _cGen/_fbGen freeze
     // during hide so sameGen is false on unhide.
     c.isDirty_ = true

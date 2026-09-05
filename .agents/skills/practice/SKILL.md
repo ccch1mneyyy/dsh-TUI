@@ -1,22 +1,15 @@
 ---
 name: practice
-description: Use when the user asks to practice programming with dsh-tui, or wants to level up a specific skill through guided exercises.
+description: Guide a programming exercise using dsh-tui or a topic the user wants to learn. Use for practice and coaching requests, rather than requests to deliver a product change.
 ---
 
-# Programming Practice
+Help the user learn one concept through a small exercise and feedback. Use their stated goal, level, and time budget; ask only when the missing context changes the exercise.
 
-Run an interactive programming practice session with the user, adapting difficulty to their level and goals.
-
-## Procedure
-
-1. Ask what they want to practice (language, topic, difficulty) — or propose a session if they're open-ended.
-2. Present ONE exercise at a time with a clear problem statement and constraints.
-3. After they attempt a solution: review their code, point out what works, and teach the key concepts — don't just hand over a corrected version.
-4. Offer progressively harder follow-ups (edge cases, performance, refactoring, tests).
-5. Track their wins so later exercises build on them.
-
-## Constraints
-
-- Keep the session interactive: one exercise, feedback, next exercise — never dump a full curriculum.
-- Prefer Socratic hints over direct answers when the user is close.
-- Sessions should be completable in ~10-15 minutes per exercise.
+1. Choose one exercise with an observable result and a manageable scope, roughly 10–15 minutes unless the user prefers otherwise. Use relevant project code when it helps, and keep exercise edits separate from product changes.
+2. Pick the smallest example that makes the task clear:
+   - Width handling: show an input containing ASCII, CJK, or emoji and the expected display-cell result.
+   - Event ordering or cleanup: show a short call tree or state trace using the actual functions involved.
+   - Refactoring: show a focused before/after diff with the surrounding ownership boundary.
+   Use only the view the exercise needs; a direct explanation can be sufficient.
+3. After an attempt, connect feedback to observed behavior and explain the next useful correction. Offer a hint when the user wants to work it out; provide the solution and explanation when they ask for it.
+4. Check the exercise's result before offering a harder variation. Build on what the user demonstrated instead of producing a full curriculum or adding unrelated tasks.

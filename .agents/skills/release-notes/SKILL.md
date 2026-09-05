@@ -1,25 +1,13 @@
 ---
 name: release-notes
-description: Use when asked to generate release notes, or when the /release-notes command runs — derive user-facing release notes from the change history since the last release.
+description: Draft user-facing release notes from a verified release range. Use for release-note or changelog requests and /release-notes; writing notes alone does not imply publishing a release.
 ---
 
-# Release Notes
+Explain what changes for users in the requested release, in their language.
 
-Generate user-facing release notes for the current project since the last release.
+1. Use the user's specified range. Otherwise identify the target version and the previous published release on the relevant stable or prerelease line; do not assume the newest Git tag is the right baseline. State any uncertainty before describing changes as released.
+2. Inspect the net diff and associated commits or PRs. Account for reverts and fixes folded into the same release; do not turn every commit into a separate feature.
+3. Lead with breaking changes, if any, and concrete migration steps. Group the remaining user-visible changes only where that helps scanning. Omit empty sections and internal churn with no user impact.
+4. Use verified PR links and contributor attribution following [the contributing guide](../../../docs/contributing.md). Keep benefits, limitations, and availability tied to the actual change; do not invent release status or migration instructions.
 
-## Procedure
-
-1. Determine the last release point (git tags) and collect the change set since then (git log / diff of user-facing surfaces).
-2. Classify changes:
-   - **新功能** (new features)
-   - **改进** (improvements / behavior changes)
-   - **修复** (bug fixes)
-   - **破坏性变更** (breaking changes — call these out first)
-   - **内部** (chore/refactor — omit from user-facing notes or fold into a footnote)
-3. Write notes in the user's language, focused on what changed for users — not implementation details.
-4. Reference issues/PRs where known, keep each bullet one line, group under the sections above.
-
-## Constraints
-
-- Do not fabricate changes — only what the history shows.
-- Breaking changes must be listed first, with migration hints.
+Deliver the notes as a draft unless publishing is part of the user's request. If it is, continue the authorized release workflow using the repository's version and tag rules.

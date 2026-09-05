@@ -21,8 +21,8 @@ development contract for humans and coding agents working on `@deepseek-harness-
   covers motivation, what changed, and how it was verified.
   **A pull request that changes code must link an issue**: add a `Closes #<issue>`
   line to the description, or link it through the Development sidebar. The
-  `issue-link` CI group checks this and fails without a link. Docs-only changes
-  are exempt (same routing as the build and regression groups); for a maintainer
+  `issue-link` CI group checks this and fails without a link. Changes classified
+  as docs-only by CI are exempt (see path routing under Verification); for a maintainer
   release, revert, or CI hotfix that genuinely has no issue to link, apply the
   `no-issue-needed` label.
 - **Run the verification matrix** below before requesting a review; CI runs
@@ -208,15 +208,16 @@ implicitly runs the root lifecycle.
 Rules for generated output:
 
 - Edit `src/`, never `lib/`, to implement behavior.
-- After any source change, run `pnpm build`, but do not commit generated files
+- After code or type changes, run `pnpm build`, but do not commit generated files
   from `lib/`.
 - Clean compilation removes the complete `lib/` first, so renamed or deleted
   source modules cannot leave stale output behind.
 - Run `pnpm verify:package` to ensure every `main`, `types`, `bin`, and `exports`
   target is present in the npm tarball and to smoke-import the main and
   invariant entries.
-- Documentation-only, workflow-only, and YAML-only changes do not require a
-  rebuild unless they also alter TypeScript inputs.
+- Documentation, ordinary comments, workflow-only, and YAML-only changes do not
+  require a local rebuild unless they affect code, types, or build inputs. See
+  Verification for the applicable checks.
 - Git URL installation with `--ignore-scripts` skips `prepare` and is therefore
   unsupported. Registry packages already contain compiled output and do not
   depend on lifecycle scripts running on the consumer's machine.
@@ -227,9 +228,24 @@ It is not the default build command for this standalone repository.
 
 ## Verification
 
-There is no root `test` or `lint` script. Do not claim that either ran. The
-TypeScript build is the universal static gate, followed by focused executable
-regressions.
+There is no root `test` or `lint` script. Do not claim that either ran. Code changes
+use the TypeScript build for static checks, followed by focused executable
+regressions selected for the affected behavior.
+
+Select local verification by actual impact. For documentation and skills, check
+facts, links, triggers, and conflicting instructions. For ordinary comments,
+check the explanation against the implementation and confirm that code and types
+are unchanged, for example with an AST comparison that ignores comments. Compiler
+directives, JSDoc type annotations, and build-tool annotations are not ordinary
+comments. For workflow and YAML changes, check syntax and affected configuration
+contracts. Do not add behavior tests for prose edits. Once required checks pass,
+broaden or repeat them only for new changes, failures, or unresolved risks.
+
+CI separately routes changes using the path allowlist in
+`.github/workflows/ci.yml`. `AGENTS.md`, `.agents/skills/`, and comments in source
+files are outside the docs-only exemption and still trigger code gates. A local
+rebuild exemption does not skip CI; preserve required gates and report the
+actual local verification scope.
 
 CI runs these commands after installation:
 
@@ -243,7 +259,7 @@ node --import tsx/esm scripts/verify-askpanel-layout.tsx
 node --import tsx/esm scripts/repro-toolcards.tsx
 ```
 
-Run all three CI regressions for changes to shared rendering, `Chat`, prompt or
+Run all three CI regressions for behavior changes to shared rendering, `Chat`, prompt or
 question layout, tool cards, theme primitives, or the Ink core. For a narrow
 change, also run the closest focused script:
 
@@ -307,12 +323,39 @@ the required credentials.
   values from components.
 - Keep exported APIs documented with concise JSDoc. Explain contracts and
   non-obvious invariants, not line-by-line mechanics.
+- Comments should explain current ownership, ordering, failure causes, or
+  compatibility constraints. Reference functions or modules rather than unstable
+  line numbers; keep issue or regression evidence that explains a tradeoff. Put
+  future ideas in TODOs with explicit conditions instead of describing them as
+  existing capabilities, and revisit related comments when behavior changes.
 - Avoid one-use abstractions and unrelated refactors. Inline a trivial helper
   when it has one call site and does not clarify a real invariant.
 - Preserve initialization ordering around environment-sensitive imports.
   `FORCE_COLOR`, `NODE_ENV`, and terminal capability flags are often read at
   module evaluation time; moving an import above their setup can change
   behavior without a type error.
+
+## Agent Instructions And Skills
+
+Keep common constraints and task-specific reading pointers in `AGENTS.md`; this
+guide owns detailed contracts such as the toolchain and verification matrix.
+`.agents/skills/` contains maintainer workflows and is excluded from npm.
+
+- A skill description should say when to use it and distinguish adjacent skills.
+  Keep the body focused on one outcome, the evidence needed to finish, and the
+  necessary steps. Link shared rules to their authoritative document to avoid drift.
+- Preserve the user's goal and existing authorization: review, repair, reporting,
+  and publishing are different tasks. Ask only for missing information that affects
+  the result. If external data is unavailable, state the gap instead of substituting
+  a different task.
+- Choose the smallest view that answers the current question: a short call tree
+  for ordering, a shallow module tree for ownership, or a focused diff for a change.
+  Plain prose can be sufficient. Use real names and only relevant boundaries;
+  diagrams are optional.
+- Use examples to clarify ambiguous choices, not to enumerate every case. Allow
+  no findings, unknowns, and short results; avoid mandatory praise, empty sections,
+  or fixed lengths. Check whether triggers hijack another task or steps stop
+  already-authorized work before it is complete.
 
 ## Architectural Invariants
 
@@ -433,7 +476,9 @@ the required credentials.
   session's work.
 - Stage explicit paths only; never use `git add .` or `git add -A` in a shared
   worktree.
-- Do not commit, tag, push, publish, or create a release unless the user asks.
+- Commit, tag, push, publish, and release actions require user authorization.
+  Authorization already given in the conversation remains valid; do not ask again
+  at every step. Authorization for one action does not extend to other release actions.
 - Publishing is tag-driven. `.github/workflows/publish.yml` requires a `v*`
   tag whose version exactly matches `package.json`, then builds, runs focused
   regressions, and publishes to npm. Treat version changes and tags as release

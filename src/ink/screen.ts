@@ -430,8 +430,7 @@ const EMPTY_CELL_VALUE = 0n
  *   word0: charId (full 32 bits — index into CharPool)
  *   word1: styleId[31:17] | hyperlinkId[16:2] | width[1:0]
  *
- * This layout halves memory accesses in diffEach (2 int loads vs 4) and
- * enables future SIMD comparison via Bun.indexOfFirstDifference.
+ * This layout halves memory accesses in diffEach (2 int loads vs 4).
  */
 export type Screen = Size & {
   // Packed cell data — 2 Int32s per cell: [charId, packed(styleId|hyperlinkId|width)]
@@ -798,14 +797,11 @@ export function charInCellAt(
  * 2. Second cell: Spacer cell with width = SpacerTail (empty, not rendered)
  *
  * If the cell has width = Wide, this function automatically creates the
- * corresponding SpacerTail in the next column. This two-cell model keeps
- * the buffer aligned to visual columns, making cursor positioning
- * straightforward.
+ * corresponding SpacerTail when the next column is in bounds. This two-cell
+ * model keeps the buffer aligned to visual columns for cursor positioning.
  *
- * TODO: When soft-wrapping is implemented, SpacerHead cells will be explicitly
- * placed by the wrapping logic at line-end positions where wide characters
- * wrap to the next line. This function doesn't need to handle SpacerHead
- * automatically - it will be set directly by the wrapping code.
+ * This function does not wrap across rows. output.ts explicitly writes a
+ * SpacerHead when a wide character cannot fit at the right edge.
  * @param screen - the screen to write into.
  * @param x - the cell column.
  * @param y - the cell row.
