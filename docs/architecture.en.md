@@ -176,9 +176,13 @@ visual TUI alone does not describe the effective policy.
   empty after retries), `osascript`/`pbpaste` on macOS, and the first usable of
   `wl-paste`/`xclip`/`xsel` on Linux/Unix (missing tools are skipped, an
   unreachable session falls through to the next candidate, and paste reports
-  no usable clipboard tool when all fail). Clipboard images are exported to
-  a temp file whose path is inserted (0700 private directory, 0600 file);
-  they are not embedded as image blocks.
+  no usable clipboard tool when all fail). Supported clipboard bitmaps are
+  exported through a 0600 temporary file in a 0700 private directory, stored
+  in the Harness attachment library, and shown as `[Image #N]`; the temporary
+  export is then deleted, so the prompt contains neither a path nor base64.
+  Unsupported bitmap formats warn and delete the export, while an unavailable
+  attachment service leaves the bitmap out of the draft. Image files copied
+  from a file manager can still fall back to an `@` reference when staging fails.
 - Exit restores the terminal and ends the process without waiting for the
   Agent's asynchronous flush; the persistence plugin is the fallback.
 - The tool-level approval panel is implemented (approval service + TUI

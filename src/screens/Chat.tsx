@@ -24,10 +24,11 @@ import {
   RECENTS_GROUP_PROVIDER,
 } from '../modelGroups.js'
 import { readModelRecents, recordModelUse, type ModelRecentsRef } from '../modelRecents.js'
-import { sessionCwdMatches, type Channel, type ChatRow, type EffortOption, type PermissionPresetSnapshot, type PresetOption, type SkillInfo } from '../dsh-adapter/channel.js'
+import { sessionCwdMatches, type Channel, type ChatRow, type ComposerImageRef, type EffortOption, type ExternalCommandOutcome, type PermissionPresetSnapshot, type PresetOption, type SkillInfo } from '../dsh-adapter/channel.js'
 import type { QuestionStore } from '../dsh-adapter/questions.js'
 import { TuiDialogStore } from '../dsh-adapter/dialogs.js'
 import { TuiStatusStore, type TuiStatusViewUi } from '../dsh-adapter/status.js'
+import type { TranscriptImage } from '../dsh-adapter/transcript-images.js'
 import type { TuiShortcutHost } from '../dsh-adapter/shortcuts.js'
 import type { TuiThemeHost } from '../dsh-adapter/themes.js'
 import type { TuiRewindMode } from '../dsh-adapter/extension-events.js'
@@ -52,7 +53,7 @@ import { OverlayAbove } from '../components/OverlayAbove.js'
 import { TooltipLayer } from '../components/Tooltip.js'
 import { PromptInput, type PromptController } from '../components/PromptInput.js'
 import type { InjectController } from '../dsh-adapter/inject-channel.js'
-import { PromptEditorLayer } from '../components/PromptEditor.js'
+import { PromptEditorLayer, usePromptEditorOpen } from '../components/PromptEditor.js'
 import { GoalTodoPanel } from '../components/GoalTodoPanel.js'
 import { AutoRecapRow } from '../components/AutoRecapRow.js'
 import { BalanceReportRow } from '../components/BalanceReportRow.js'
@@ -64,6 +65,7 @@ import { ActivityLine, contextPressurePct } from '../components/ActivityLine.js'
 import { ModelPicker } from '../components/ModelPicker.js'
 import { PluginSceneBoundary } from '../components/PluginSceneBoundary.js'
 import { PluginStatusViewBoundary } from '../components/PluginStatusViewBoundary.js'
+import { ImagePreviewOverlay } from '../components/ImagePreviewOverlay.js'
 import { SkillsPicker, SkillsPickerLoading } from '../components/SkillsPicker.js'
 import { SessionBrowser } from './SessionBrowser.js'
 import { SessionTree } from './SessionTree.js'
@@ -159,16 +161,16 @@ const STATUS_VIEW_UI = Object.freeze({
 /** Shared empty snapshot for hosts whose channel has no event log. */
 const NO_EVENTS: readonly SessionEvent[] = []
 
-const PERMISSION_RESULT_CELLS = 200
+const COMMAND_RESULT_CELLS = 200
 
-function cleanPermissionError(error: unknown): string {
+function cleanCommandError(error: unknown): string {
   try {
     if (error instanceof Error) {
       return typeof error.message === 'string'
-        ? cleanRenderText(error.message, PERMISSION_RESULT_CELLS)
+        ? cleanRenderText(error.message, COMMAND_RESULT_CELLS)
         : ''
     }
-    return cleanScalarText(error, PERMISSION_RESULT_CELLS)
+    return cleanScalarText(error, COMMAND_RESULT_CELLS)
   } catch {
     return ''
   }
@@ -251,6 +253,12 @@ let fallbackApprovalStore: ApprovalStore | undefined
 let fallbackDialogStore: TuiDialogStore | undefined
 let fallbackStatusStore: TuiStatusStore | undefined
 
+/** Identity of one caret-preview dismissal: the token (its title) on the
+ *  image, so the same image staged twice is dismissed per token. */
+function peekKey(image: TranscriptImage, title: string | undefined): string {
+  return `${title ?? ''} ${image.id}`
+}
+
 export function Chat({
   channel,
   questionStore,
@@ -329,6 +337,7 @@ export function Chat({
   useExternalVersion(channel.subscribe, () => channel.version)
   // Re-render on language switches so the whole UI hot-swaps its strings.
   React.useSyncExternalStore(subscribeLang, getLang)
+  const promptEditorOpen = usePromptEditorOpen()
   // The pending ask-user-question (DSH user-interaction seam): the model's
   // `ask_user_question` tool parks here until the panel is answered.
   const questionSnapshot = React.useSyncExternalStore(
@@ -791,6 +800,85 @@ export function Chat({
     else void setClipboard(path)
   }, [])
 
+  /** Shared open path for the modal image preview: composer `[Image #N]`
+   *  tokens and transcript thumbnails both land here. */
+  const openImagePreview = React.useCallback((image: TranscriptImage, title?: string): void => {
+    dispatchOverlay({
+      type: 'open',
+      overlay: { kind: 'image-preview', image, ...(title === undefined ? {} : { title }) },
+    })
+  }, [])
+  // Agent-binding generation is monotonic across every agent replacement
+  // and bumps before the replacement emit, closing the ABA hole where a
+  // resumed session reuses the same id. Partial test/embed channels fall
+  // back to staged-image generation.
+  const previewBindingGeneration = channel.agentBindingGeneration
+    ?? channel.stagedImageGeneration?.()
+    ?? 0
+  const previewGenerationRef = React.useRef(previewBindingGeneration)
+  const imagePreviewOwned = previewGenerationRef.current === previewBindingGeneration
+  React.useEffect(() => {
+    if (previewGenerationRef.current === previewBindingGeneration) return
+    previewGenerationRef.current = previewBindingGeneration
+    dispatchOverlay({ type: 'close-if', kind: 'image-preview' })
+  }, [previewBindingGeneration])
+  // A questionnaire/approval/plugin dialog owns the keyboard while pending
+  // (their guard runs BEFORE the overlay key chain), so a preview left open
+  // underneath would be visually on top yet key-dead. Close it instead.
+  const previewBlocked = questionSnapshot !== null || approvalSnapshot !== null || dialogSnapshot !== null
+  React.useEffect(() => {
+    if (
+      overlay.kind === 'image-preview' &&
+      previewBlocked
+    ) {
+      dispatchOverlay({ type: 'close-if', kind: 'image-preview' })
+    }
+  }, [overlay.kind, previewBlocked])
+  // Caret-driven preview (Grok Build's chip peek): while the composer caret
+  // sits on a staged `[Image #N]` — at its start, the token inverted — the
+  // same card shows over the transcript, and it goes away when the caret
+  // leaves (the cell just after the token is not "on" it). It is
+  // derived state, not an overlay: the prompt keeps the keyboard, so ←/→
+  // walk from image to image with the card following. Esc (or a click
+  // outside the card) dismisses it for THIS token until the caret leaves and
+  // comes back; a click on the token always shows it again.
+  const [caretPreview, setCaretPreview] = React.useState<
+    { image: TranscriptImage; title?: string } | null
+  >(null)
+  const [peekSuppressed, setPeekSuppressed] = React.useState<string | null>(null)
+  const handleCaretImage = React.useCallback((
+    image: TranscriptImage | undefined,
+    title: string | undefined,
+    reason: 'caret' | 'click',
+  ): void => {
+    if (image === undefined) {
+      setCaretPreview(null)
+      setPeekSuppressed(null)
+      return
+    }
+    setCaretPreview({ image, ...(title === undefined ? {} : { title }) })
+    const key = peekKey(image, title)
+    setPeekSuppressed(current => reason === 'click' || current !== key ? null : current)
+  }, [])
+  const peekPreview =
+    !previewBlocked && overlay.kind === 'none' && caretPreview !== null
+      && peekSuppressed !== peekKey(caretPreview.image, caretPreview.title)
+      ? caretPreview
+      : null
+  /** Esc / click-outside on the peek: dismissed for this token until the
+   *  caret leaves it. PromptInput's Esc arm calls this first — its listener
+   *  runs before Chat's and the prompt stays live under a peek. */
+  const dismissPeek = (): void => {
+    if (peekPreview !== null) setPeekSuppressed(peekKey(peekPreview.image, peekPreview.title))
+  }
+  /** The card on screen, if any: the modal overlay first, else the peek. */
+  const activePreview: { image: TranscriptImage; title?: string; peek: boolean } | null =
+    !previewBlocked && overlay.kind === 'image-preview'
+      ? { image: overlay.image, ...(overlay.title === undefined ? {} : { title: overlay.title }), peek: false }
+      : peekPreview !== null
+        ? { ...peekPreview, peek: true }
+        : null
+
   const handleOpenTarget = React.useCallback((url: string): void => {
     const classification = classifyOpenTarget(url)
     if (classification.kind === 'file-actions') {
@@ -1104,29 +1192,63 @@ export function Chat({
    * result text lands as a notification. `rawInput` carries the text after
    * the command name (`/plan off` → ` off`).
    */
+  const runExternalCommand = (
+    name: string,
+    rawInput: string,
+    images: readonly ComposerImageRef[] = [],
+  ): Promise<boolean> => {
+    const originAgentBinding = channel.agentBindingGeneration
+    return channel.runExternalCommandOutcome(name, rawInput, images).then((outcome) => {
+      if (channel.agentBindingGeneration !== originAgentBinding) return false
+      if (outcome === undefined) {
+        channel.notify(t('command-not-found', { name }), { color: 'error' })
+        return false
+      }
+      const cleaned = cleanRenderText(outcome.text, COMMAND_RESULT_CELLS)
+      if (cleaned !== '') {
+        channel.notify(cleaned, outcome.kind === 'error' ? { color: 'error' } : undefined)
+      }
+      return outcome.consumeDraft
+    }).catch((error: unknown) => {
+      if (channel.agentBindingGeneration !== originAgentBinding) return false
+      const detail = cleanCommandError(error)
+      if (detail !== '') channel.notify(detail, { color: 'error' })
+      return false
+    })
+  }
+
   /** Route every permission switch through the official command path when it
    *  is registered; otherwise fall back to the permission-presets service's
    *  own write path (the same handler the command drives) so the picker and
    *  typed `/permission <preset>` keep working on compositions where the
-   *  command row never reaches this agent's registry. */
-  const runPermissionCommand = (rawInput: string): void => {
+   *  command row never reaches this agent's registry. The fallback carries no
+   *  images: it is not a registry command and has no image grammar. */
+  const runPermissionCommand = (
+    rawInput: string,
+    images: readonly ComposerImageRef[] = [],
+  ): Promise<boolean> => {
     const originAgentBinding = channel.agentBindingGeneration
     const mounted = channel.commandList.some(command => command.external && command.name === 'permission')
-    const run = mounted
-      ? channel.runExternalCommand('permission', rawInput)
-      : channel.runPermissionPreset(rawInput.trim()).then(ok => (ok ? '' : undefined))
-    void run.then((text) => {
-      if (channel.agentBindingGeneration !== originAgentBinding) return
-      if (text === undefined) {
+    const run: Promise<ExternalCommandOutcome | undefined> = mounted
+      ? channel.runExternalCommandOutcome('permission', rawInput, images)
+      : channel.runPermissionPreset(rawInput.trim()).then(ok =>
+        ok ? { kind: 'success' as const, text: '', consumeDraft: true as const } : undefined)
+    return run.then((outcome) => {
+      if (channel.agentBindingGeneration !== originAgentBinding) return false
+      if (outcome === undefined) {
         channel.notify(t('command-not-found', { name: 'permission' }), { color: 'error' })
-        return
+        return false
       }
-      const cleaned = typeof text === 'string' ? cleanRenderText(text, PERMISSION_RESULT_CELLS) : ''
-      if (cleaned !== '') channel.notify(cleaned)
+      const cleaned = cleanRenderText(outcome.text, COMMAND_RESULT_CELLS)
+      if (cleaned !== '') {
+        channel.notify(cleaned, outcome.kind === 'error' ? { color: 'error' } : undefined)
+      }
+      return outcome.consumeDraft
     }).catch((error: unknown) => {
-      if (channel.agentBindingGeneration !== originAgentBinding) return
-      const detail = cleanPermissionError(error)
+      if (channel.agentBindingGeneration !== originAgentBinding) return false
+      const detail = cleanCommandError(error)
       if (detail !== '') channel.notify(detail, { color: 'error' })
+      return false
     })
   }
 
@@ -1160,7 +1282,11 @@ export function Chat({
     }
   }
 
-  const runCommand = (name: string, rawInput = ''): boolean => {
+  const runCommand = (
+    name: string,
+    rawInput = '',
+    images: readonly ComposerImageRef[] = [],
+  ): boolean | Promise<boolean> => {
     switch (name) {
       case 'activity': {
         // Ported from the pi working-activity extension: bare `/activity`
@@ -1892,8 +2018,7 @@ export function Chat({
           setHelpOpen(false)
           const snapshot = channel.permissionPresets()
           if (snapshot.options.some(option => option.value === 'status')) {
-            runPermissionCommand(rawInput)
-            return true
+            return runPermissionCommand(rawInput, images)
           }
           const currentName = snapshot.availability === 'unavailable'
             ? t('permission-roster-unavailable')
@@ -1911,8 +2036,7 @@ export function Chat({
           setHelpOpen(false)
           const snapshot = channel.permissionPresets()
           if (snapshot.availability === 'unavailable' || snapshot.options.length === 0) {
-            runPermissionCommand(rawInput)
-            return true
+            return runPermissionCommand(rawInput, images)
           }
           const currentValue = snapshot.current?.kind === 'preset' ? snapshot.current.value : undefined
           const currentIndex = currentValue === undefined
@@ -1933,8 +2057,7 @@ export function Chat({
         }
         if (reachable) {
           setHelpOpen(false)
-          runPermissionCommand(rawInput)
-          return true
+          return runPermissionCommand(rawInput, images)
         }
         return false
       }
@@ -1956,14 +2079,7 @@ export function Chat({
         }
         if (mounted) {
           setHelpOpen(false)
-          void channel.runExternalCommand('plan', rawInput).then((text) => {
-            if (text !== undefined && text !== '') {
-              channel.notify(text)
-            } else if (text === undefined) {
-              channel.notify(t('command-not-found', { name: 'plan' }), { color: 'error' })
-            }
-          })
-          return true
+          return runExternalCommand('plan', rawInput, images)
         }
         return false
       }
@@ -2183,14 +2299,7 @@ export function Chat({
         )
         if (external) {
           setHelpOpen(false)
-          void channel.runExternalCommand(name, rawInput).then((text) => {
-            if (text !== undefined && text !== '') {
-              channel.notify(text)
-            } else if (text === undefined) {
-              channel.notify(t('command-not-found', { name }), { color: 'error' })
-            }
-          })
-          return true
+          return runExternalCommand(name, rawInput, images)
         }
         return false
       }
@@ -2456,11 +2565,16 @@ export function Chat({
   const lastModalEnterAtRef = React.useRef(0)
 
   useInput((input, key, event) => {
-    // The /btw panel owns the keyboard while open (its own useInput handles
-    // Esc/Enter/Space close, ↑/↓ scroll, c copy; everything else is
-    // swallowed there). Chat registered first, so an early return here does
-    // not block the event from reaching the panel.
-    if (btw !== null) return
+    // Prompt-slot panels own the keyboard while visible. Their own useInput
+    // handles the relevant keys; Chat registered first, so yielding here
+    // still lets the panel receive them. PromptInput now stays mounted but
+    // suspended to preserve async command drafts, making this guard also
+    // essential for Ctrl+C: it must never clear the hidden composer.
+    if (
+      btw !== null
+      || overlay.kind === 'tips'
+      || (recap !== null && (!recap.auto || recap.expanded))
+    ) return
     // Same for the session browser: it renders instead of the conversation,
     // so every key belongs to it — including the plain letters that drive its
     // search box, which Chat would otherwise route into the prompt.
@@ -2518,15 +2632,35 @@ export function Chat({
     if (helpOpen) return
     // The questionnaire / approval panel / managed plugin dialog owns the
     // keyboard while one is pending (the panel's own useInput handles
-    // ↑/↓/Space/Tab/Enter/Esc; the prompt input is unmounted, so nothing
+    // ↑/↓/Space/Tab/Enter/Esc; the prompt input is suspended, so nothing
     // else should see these keys).
     if (questionSnapshot !== null || approvalSnapshot !== null || dialogSnapshot !== null) return
     const returnCandidate = isPlainReturnInput(input, key)
     const returnNow = Date.now()
     const plainReturn = returnCandidate && returnNow - lastModalEnterAtRef.current >= 80
     if (plainReturn) lastModalEnterAtRef.current = returnNow
-    // Esc clears a settled mouse selection first (CC precedence), ahead of
-    // every other Esc meaning below (close pickers, interrupt the turn).
+    if (overlay.kind === 'image-preview') {
+      // Modal like every picker: Esc/Ctrl+C/Enter close, everything else is
+      // swallowed (the prompt is inert via promptSelectionActive anyway).
+      if (key.escape || (key.ctrl && input === 'c') || plainReturn) {
+        dispatchOverlay({ type: 'close' })
+      }
+      event.stopImmediatePropagation()
+      return
+    }
+    if (peekPreview !== null && key.escape) {
+      // Caret-driven preview: Esc dismisses it until the caret leaves the
+      // token (PromptInput's own Esc arm normally gets there first; this is
+      // the fallback when the prompt is not listening). Every other key
+      // stays with the prompt, so the caret keeps moving (and the card
+      // follows it) while the preview is up.
+      dismissPeek()
+      event.stopImmediatePropagation()
+      return
+    }
+    // Esc clears a settled mouse selection before the ordinary chat meanings
+    // below, but never before a top-level modal. Otherwise a preview opened
+    // over selected transcript text needed two Esc presses to close.
     // hasSelection() is an imperative read — no subscription needed.
     if (key.escape && hasMouseSelection()) {
       clearMouseSelection()
@@ -2837,7 +2971,7 @@ export function Chat({
         const option = overlay.snapshot.options[currentIndex]
         permissionOverlayFocusRef.current = null
         dispatchOverlay({ type: 'close' })
-        if (option !== undefined) runPermissionCommand(` ${option.value}`)
+        if (option !== undefined) void runPermissionCommand(` ${option.value}`)
       } else if (key.escape) {
         permissionOverlayFocusRef.current = null
         dispatchOverlay({ type: 'close' })
@@ -2850,9 +2984,7 @@ export function Chat({
       } else if (plainReturn) {
         const on = overlay.index === 0
         dispatchOverlay({ type: 'close' })
-        void channel.runExternalCommand('plan', on ? '' : ' off').then((text) => {
-          if (text !== undefined && text !== '') channel.notify(text)
-        })
+        void runExternalCommand('plan', on ? '' : ' off')
       } else if (key.escape) {
         dispatchOverlay({ type: 'close' })
       }
@@ -3067,7 +3199,10 @@ export function Chat({
       // NORMAL, NORMAL = no-op/cancel pending d) and the prompt owns it;
       // interrupting still works via Ctrl+C / Ctrl+Enter.
       if (channel.pending.length > 0) {
-        const count = channel.interruptAndDeliver(channel.pending.map(item => item.text))
+        const count = channel.interruptAndDeliver(channel.pending.map(item => ({
+          text: item.text,
+          images: item.images ?? [],
+        })))
         if (count > 0) {
           channel.notify(t('interrupt-delivered', { n: count }), { timeoutMs: 2500 })
         }
@@ -3405,6 +3540,17 @@ export function Chat({
   const promptSelectionActive =
     selectionActive || overlay.kind !== 'none' || btw !== null
 
+  // These panels replace the visible composer, but PromptInput remains
+  // mounted (suspended) so an async registry command cannot lose its exact
+  // text/image draft while it waits for a user decision.
+  const promptReplacementOpen =
+    approvalPanelNode !== null
+    || dialogSnapshot !== null
+    || overlay.kind === 'tips'
+    || (recap !== null && (!recap.auto || recap.expanded))
+    || btw !== null
+    || questionPanelNode !== null
+
   // The trajectory scene replaces the conversation for as long as it is open.
   // Rendering it INSTEAD of (not above) the transcript is what makes it a
   // screen rather than an overlay: it owns the full viewport, and the
@@ -3440,6 +3586,31 @@ export function Chat({
     anchorUserRowId === null
       ? null
       : channel.rows.find(row => row.id === anchorUserRowId)?.text ?? null
+
+  // Modal image preview, shared by the composer's [Image #N] tokens and the
+  // transcript thumbnails. It normally lives INSIDE the transcript row, so
+  // the card centers over the conversation and the sticky header, prompt
+  // and status rows stay visible. While the fullscreen draft editor is open
+  // it moves to the root, after PromptEditorLayer, so it still paints above
+  // the editor (the editor state stays put; closing the preview restores it).
+  // The layer needs its region before its first paint (see the component):
+  // the transcript viewport height from the ScrollBox handle and the content
+  // column width. The full-screen (editor-open) placement uses the terminal.
+  const imagePreviewRegion = promptEditorOpen
+    ? { columns: terminalColumns, rows: terminalRows }
+    : { columns: terminalColumns, rows: handle?.getViewportHeight() ?? terminalRows }
+  const imagePreviewNode = activePreview !== null && (activePreview.peek || imagePreviewOwned)
+    ? (
+      <ImagePreviewOverlay
+        image={activePreview.image}
+        title={activePreview.title}
+        onClose={activePreview.peek
+          ? () => setPeekSuppressed(peekKey(activePreview.image, activePreview.title))
+          : () => dispatchOverlay({ type: 'close-if', kind: 'image-preview' })}
+        region={imagePreviewRegion}
+      />
+    )
+    : null
 
   return (
     <Box ref={wakeTickRef} flexDirection="column" flexGrow={1} width="100%">
@@ -3530,6 +3701,8 @@ export function Chat({
           onOpenSubagent={(agentId) => setSubagentDetailId(agentId)}
           onOpenJobs={() => setJobsPanelOpen(true)}
           onOpenFile={openFileActions}
+          onPreviewImage={openImagePreview}
+          suppressImageGraphics={activePreview !== null}
         />
         </ScrollBox>
         {(() => {
@@ -3556,6 +3729,7 @@ export function Chat({
             />
           )
         })()}
+        {!promptEditorOpen && imagePreviewNode}
       </Box>
       {/* Bottom chrome (pill, spinners, dialogs, prompt, statusline): never
           let flex shrink squeeze these fixed-height rows — the ScrollBox
@@ -3637,7 +3811,7 @@ export function Chat({
             {statusEntries.map(entry => entry.text).join(' · ')}
           </Text>
         )}
-        {statusViews.map(view => (
+        {activePreview === null && statusViews.map(view => (
           <PluginStatusViewBoundary
             key={`${view.key}:${view.registrationId}`}
             viewKey={view.key}
@@ -3721,33 +3895,37 @@ export function Chat({
           </Box>
         ) : questionPanelNode !== null ? (
           questionPanelNode
-        ) : (
-          <PromptInput
-            channel={channel}
-            helpOpen={helpOpen}
-            onToggleHelp={() =>{  setHelpOpen(previous => !previous) }}
-            onRunCommand={runCommand}
-            selectionActive={promptSelectionActive}
-            fillText={historyFill}
-            onFillConsumed={() =>{  setHistoryFill(null) }}
-            onRewindRequest={openRewind}
-            onBackgroundRequest={backgroundToAgentView}
-            backgroundAgentsNeedingInput={
-              // Only the real channel supplies the seam; pre-agent-view test
-              // stubs must not grow the footer row (layout-dependent
-              // regressions pin the visible row count). The footer only
-              // renders while some session actually waits (N > 0): a
-              // permanent idle row would steal a transcript row on every
-              // real channel — one row is enough to scroll the startup
-              // header fully off a short terminal, pausing its viewport
-              // clock and shifting every row-count layout invariant.
-              channel.agentViewRows !== undefined && backgroundAgentsNeedingInput > 0
-                ? backgroundAgentsNeedingInput
-                : undefined
-            }
-            controllerRef={promptControllerRef}
-          />
-        )}
+        ) : null}
+        <PromptInput
+          key="prompt-input"
+          channel={channel}
+          suspended={promptReplacementOpen}
+          helpOpen={helpOpen}
+          onToggleHelp={() =>{  setHelpOpen(previous => !previous) }}
+          onRunCommand={runCommand}
+          selectionActive={promptSelectionActive}
+          fillText={historyFill}
+          onFillConsumed={() =>{  setHistoryFill(null) }}
+          onRewindRequest={openRewind}
+          onBackgroundRequest={backgroundToAgentView}
+          backgroundAgentsNeedingInput={
+            // Only the real channel supplies the seam; pre-agent-view test
+            // stubs must not grow the footer row (layout-dependent
+            // regressions pin the visible row count). The footer only
+            // renders while some session actually waits (N > 0): a
+            // permanent idle row would steal a transcript row on every
+            // real channel — one row is enough to scroll the startup
+            // header fully off a short terminal, pausing its viewport
+            // clock and shifting every row-count layout invariant.
+            channel.agentViewRows !== undefined && backgroundAgentsNeedingInput > 0
+              ? backgroundAgentsNeedingInput
+              : undefined
+          }
+          controllerRef={promptControllerRef}
+          onCaretImage={handleCaretImage}
+          caretPreviewOpen={peekPreview !== null}
+          onDismissCaretPreview={dismissPeek}
+        />
         <StatusLine
           channel={channel}
           selectionActive={selectionActive}
@@ -3964,7 +4142,7 @@ export function Chat({
                   if (approvalSnapshot !== null || questionSnapshot !== null || dialogSnapshot !== null) return
                   const option = overlay.snapshot.options[index]
                   dispatchOverlay({ type: 'close' })
-                  if (option !== undefined) runPermissionCommand(` ${option.value}`)
+                  if (option !== undefined) void runPermissionCommand(` ${option.value}`)
                 }}
               />
             </Box>
@@ -3977,9 +4155,7 @@ export function Chat({
                 onPick={(index) => {
                   dispatchOverlay({ type: 'close' })
                   const on = index === 0
-                  void channel.runExternalCommand('plan', on ? '' : ' off').then((text) => {
-                    if (text !== undefined && text !== '') channel.notify(text)
-                  })
+                  void runExternalCommand('plan', on ? '' : ' off')
                 }}
               />
             </Box>
@@ -4097,10 +4273,15 @@ export function Chat({
         invalidationKey={`${overlay.kind}:${dialogOverlayOpen}:${btw !== null}`}
         subscribeInvalidation={subscribeTooltipInvalidation}
       />
-      {/* 全屏草稿编辑浮层：必须挂在 TooltipLayer 之后（树序最后），
-          才能盖住包括状态栏在内的全部后绘兄弟。内容由 PromptInput
-          经 module store 发布（见 PromptEditor.tsx）。 */}
+      {/* 全屏草稿编辑浮层：必须挂在 TooltipLayer 之后，才能盖住包括
+          状态栏在内的全部普通后绘兄弟。内容由 PromptInput 经 module
+          store 发布（见 PromptEditor.tsx）。图片预览是唯一有意后绘于它
+          的 top modal：这样编辑器状态留在原处，关闭预览即可原样恢复。 */}
       <PromptEditorLayer />
+      {/* 模态图片预览的全屏位：只在全屏草稿编辑器展开时用（编辑器盖住了
+          transcript 行，预览必须作为根的最后一个孩子才压得过它）；平时
+          预览挂在上面的 transcript 行内，见 imagePreviewNode。 */}
+      {promptEditorOpen && imagePreviewNode}
     </Box>
   )
 }

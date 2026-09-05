@@ -42,6 +42,15 @@ function snapshot(): EditorNode {
   return editorNode
 }
 
+function openSnapshot(): boolean {
+  return editorNode !== null
+}
+
+/** Whether the fullscreen draft editor is currently published (open). */
+export function usePromptEditorOpen(): boolean {
+  return React.useSyncExternalStore(subscribe, openSnapshot)
+}
+
 /**
  * The fullscreen sink, mounted once at the very end of Chat's root Box.
  * The absolute cover is `opaque` so its padding/blank cells never bleed

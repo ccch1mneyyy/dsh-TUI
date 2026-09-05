@@ -13,6 +13,10 @@ export const TERMINAL_IMAGE_MAX_FRAME_BYTES = 16 * 1024 * 1024
  */
 export const TERMINAL_IMAGE_MAX_CELLS = 128 * 128
 export const TERMINAL_IMAGE_MAX_PLACEMENTS = 64
+export const SIXEL_MAX_ENCODED_BYTES = 4 * 1024 * 1024
+export const SIXEL_THUMBNAIL_FRAME_BYTES = 1024 * 1024
+export const SIXEL_CACHE_BYTES = 16 * 1024 * 1024
+export const SIXEL_CACHE_ENTRIES = 64
 
 /** Pixel dimensions of one terminal cell. */
 export interface TerminalCellSize {
@@ -50,6 +54,14 @@ export interface TerminalImagePlacement {
   readonly columns: number
   readonly rows: number
   readonly source: TerminalImageSource
+  readonly presentation?: 'preview' | 'transcript'
+  /** Visible terminal cells, while x/y/columns/rows retain the full layout box. */
+  readonly clip?: { readonly x: number; readonly y: number; readonly columns: number; readonly rows: number }
+  readonly background?: string
+  /** False while a protocol-specific raster is pending or unavailable. */
+  readonly graphicsReady?: boolean
+  /** Later paint operations cover this backing, including blank overlays. */
+  readonly occluded?: boolean
 }
 
 /**

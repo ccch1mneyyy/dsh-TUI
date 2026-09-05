@@ -1,7 +1,6 @@
 import {
   type AnsiCode,
   ansiCodesToString,
-  diffAnsiCodes,
 } from '@alcalzone/ansi-tokenize'
 import { logForDebugging } from '../utils/debug.js'
 import type { Diff, FlickerReason, Frame } from './frame.js'
@@ -17,6 +16,7 @@ import {
   type Screen,
   type StylePool,
   shiftRows,
+  transitionAnsiCodes,
   visibleCellAtIndex,
 } from './screen.js'
 import {
@@ -137,7 +137,7 @@ export class LogUpdate {
             currentHyperlink = cell.hyperlink
           }
           const cellStyles = this.options.stylePool.get(cell.styleId)
-          const styleDiff = diffAnsiCodes(currentStyles, cellStyles)
+          const styleDiff = transitionAnsiCodes(currentStyles, cellStyles)
           if (styleDiff.length > 0) {
             line += ansiCodesToString(styleDiff)
             currentStyles = cellStyles
@@ -151,7 +151,7 @@ export class LogUpdate {
         currentHyperlink = undefined
       }
       // Reset styles at end of line so trimEnd doesn't leave dangling codes
-      const resetCodes = diffAnsiCodes(currentStyles, [])
+      const resetCodes = transitionAnsiCodes(currentStyles, [])
       if (resetCodes.length > 0) {
         line += ansiCodesToString(resetCodes)
         currentStyles = []

@@ -212,6 +212,18 @@ check(
 check('T9f close', reduce(fileActions(0), { type: 'close' }), { kind: 'none' })
 check('T9g overlay mounts by default (no data gate)', dialogOverlayVisible(fileActions(0), gates), true)
 
+// --- T10: image-preview — own layer, no OverlayAbove mount -----------------
+const fakeImage = { id: 'sha256:x', width: 8, height: 4, read: () => Promise.reject(new Error('unused')) } as never
+const imagePreview: ChatOverlay = { kind: 'image-preview', image: fakeImage }
+check('T10a open from none', reduce(NO_OVERLAY, { type: 'open', overlay: imagePreview }), imagePreview)
+check('T10b open replaces another picker (thumbnail click while /model up)',
+  reduce({ kind: 'model', index: 1 }, { type: 'open', overlay: imagePreview }), imagePreview)
+check('T10c close', reduce(imagePreview, { type: 'close' }), { kind: 'none' })
+check('T10d close-if own kind', reduce(imagePreview, { type: 'close-if', kind: 'image-preview' }), { kind: 'none' })
+check('T10e stale close-if is a no-op', reduce({ kind: 'tips' }, { type: 'close-if', kind: 'image-preview' }), { kind: 'tips' })
+check('T10f preview never mounts the OverlayAbove wrapper', dialogOverlayVisible(imagePreview, gates), false)
+check('T10g move is a no-op (no cursor)', reduce(imagePreview, { type: 'move', delta: 1, count: 3 }), imagePreview)
+
 if (failures > 0) {
   console.error(`\n${failures} failure(s)`)
   process.exit(1)

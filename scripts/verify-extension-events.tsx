@@ -174,6 +174,7 @@ function makeEvents() {
 const stubAgentCtx = { on: () => () => {} }
 
 let forkSeq = 0
+const followupContentsByAgent = new Map<string, Array<readonly { type?: string; text?: string }[]>>()
 
 function makeAgent(id: string, sessionEvents: readonly unknown[], captured: { followupTexts: string[]; cancelCalls: number }) {
   return {
@@ -182,7 +183,11 @@ function makeAgent(id: string, sessionEvents: readonly unknown[], captured: { fo
     session: { id: `s-${id}`, seq: sessionEvents.length, events: sessionEvents, header: {} },
     ctx: stubAgentCtx,
     followup(message: { content?: readonly { type?: string; text?: string }[] }) {
-      const text = (message.content ?? []).filter(block => block?.type === 'text').map(block => block.text ?? '').join('\n')
+      const content = message.content ?? []
+      const deliveries = followupContentsByAgent.get(id) ?? []
+      deliveries.push([...content])
+      followupContentsByAgent.set(id, deliveries)
+      const text = content.filter(block => block?.type === 'text').map(block => block.text ?? '').join('\n')
       captured.followupTexts.push(text)
     },
     steer() {},
@@ -225,6 +230,19 @@ function makeServices(
     llm: {
       listProviders: () => [{ id: 'fake-provider' }],
       listModels: async () => [{ provider: 'fake-provider', id: 'model-00', name: 'Model 00' }],
+    },
+    attachments: {
+      imageLimits: {
+        maxImageBytes: 1_000_000,
+        maxImagesPerMessage: 4,
+        maxMessageImageBytes: 4_000_000,
+        mediaTypes: ['image/png'],
+      },
+      saveImage: async (input: { data: Uint8Array; mediaType: string }) => ({
+        ref: `image-${input.data[0] ?? 0}`,
+        mediaType: input.mediaType,
+        bytes: input.data.byteLength,
+      }),
     },
     // serviceForAgent falls back to ctx.get when no preset roster exists, so
     // a root-provided fake compaction service reaches channel.compact().
@@ -742,7 +760,9 @@ await sleep(800)
   let release: (value: undefined) => void = () => {}
   const gate = new Promise<undefined>(resolve => { release = resolve })
   let parked = false
+  const seenInputs: string[] = []
   const dispose = decisionCtx.on('tui/input', async event => {
+    seenInputs.push(event.text)
     if (event.text === '旧会话首条') {
       parked = true
       await gate
@@ -764,6 +784,65 @@ await sleep(800)
     JSON.stringify(captured.followupTexts.slice(before)))
   check('enqueue-time origin: the queued follower never reaches the new session',
     captured.followupTexts.length === before, JSON.stringify(captured.followupTexts.slice(before)))
+  check('enqueue-time origin: a stale queued follower is not exposed to plugins',
+    JSON.stringify(seenInputs) === JSON.stringify(['旧会话首条']), JSON.stringify(seenInputs))
+  dispose()
+}
+
+// ── 9bb. A sticky tui/input pending indicator belongs to its origin session:
+// /new dismisses one already shown, and the eventual old handled result may
+// not toast into the replacement session. ─────────────────────────────────
+{
+  let release: (value: { handled: true; notice: string }) => void = () => {}
+  const gate = new Promise<{ handled: true; notice: string }>(resolve => { release = resolve })
+  const staged = await channel.stageComposerImage(
+    { data: new Uint8Array([9]), mediaType: 'image/png' },
+    channel.stagedImageGeneration(),
+  )
+  const stagedToken = '[Image #1]'
+  const generationBeforeSwitch = channel.stagedImageGeneration()
+  let parked = false
+  const dispose = decisionCtx.on('tui/input', event => {
+    if (event.text !== '旧会话挂起通知') return undefined
+    parked = true
+    return gate
+  })
+  channel.submit('旧会话挂起通知')
+  await settle(() => parked)
+  check('pending session ownership: old indicator became visible',
+    await settled(() => notified('正在等待插件决定（tui/input）')))
+  const oldAgentId = channel.agentId
+  const probeText = '新会话订阅窗口图片探针'
+  let replacementAgentId = ''
+  let replacementGeneration = generationBeforeSwitch
+  let subscriberSubmitted = false
+  const unsubscribe = channel.subscribe(() => {
+    if (channel.agentId === oldAgentId || subscriberSubmitted) return
+    subscriberSubmitted = true
+    replacementAgentId = channel.agentId
+    replacementGeneration = channel.stagedImageGeneration()
+    channel.submit(`${probeText} ${stagedToken}`, [{ token: stagedToken, stageId: staged.stageId }])
+  })
+  const switched = await channel.newSession()
+  check('pending session ownership: /new succeeded while input decision parked', switched === true)
+  check('pending session ownership: first new-agent snapshot has a revoked image generation',
+    subscriberSubmitted && replacementGeneration > generationBeforeSwitch,
+    JSON.stringify({ subscriberSubmitted, generationBeforeSwitch, replacementGeneration }))
+  const probeDelivered = await settled(() => (followupContentsByAgent.get(replacementAgentId) ?? [])
+    .some(content => content.some(block => block.type === 'text' && block.text?.includes(probeText))))
+  const probeContent = (followupContentsByAgent.get(replacementAgentId) ?? [])
+    .find(content => content.some(block => block.type === 'text' && block.text?.includes(probeText)))
+  check('pending session ownership: synchronous subscriber cannot send the old image to the replacement',
+    probeDelivered && probeContent?.every(block => block.type !== 'image') === true,
+    JSON.stringify(probeContent))
+  check('pending session ownership: session swap dismissed the old sticky indicator',
+    await settled(() => !(channel as unknown as { notifications: readonly { text: string }[] }).notifications
+      .some(item => item.text.includes('正在等待插件决定（tui/input）'))))
+  release({ handled: true, notice: '旧会话插件结果不应出现' })
+  await sleep(150)
+  check('pending session ownership: stale handled result did not toast into the new session',
+    !notified('旧会话插件结果不应出现'))
+  unsubscribe()
   dispose()
 }
 
