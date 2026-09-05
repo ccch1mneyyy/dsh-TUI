@@ -1,8 +1,9 @@
 import React, { useState } from 'react'
-import { t } from '../i18n.js'
+import { getLang, subscribeLang, t, type Lang } from '../i18n.js'
 import { Box, Text, useTerminalSize, type ScrollBoxHandle } from '../ui.js'
 import type { ClickEvent } from '../ink/events/click-event.js'
 import type { ChatRow, ToolRow, ToolCallView, ToolResultView, SubagentRow, JobRow } from '../dsh-adapter/channel.js'
+import type { TranscriptImage } from '../dsh-adapter/transcript-images.js'
 import type { DOMElement } from '../ink/dom.js'
 import { Divider } from './design-system/Divider.js'
 import { UserPromptMessage } from './messages/UserPromptMessage.js'
@@ -25,6 +26,7 @@ import { clipPreview, type TimelineSnapshot, type TimelineTurn } from '../ink/ti
 import type { ToolBackground } from '../tuiDisplayPrefs.js'
 import { getRevealVersion, revealLengthOf, revealTextOf } from './smoothReveal.js'
 import { useRevealVersion } from '../hooks/useRevealVersion.js'
+import { TranscriptImages } from './messages/TranscriptImages.js'
 
 /**
  * Transcript rows rendered in the Claude Code visual language: user prompts
@@ -142,6 +144,11 @@ function signatureParts(
   // REVEALED length while smooth streaming is painting (the height follows
   // what is on screen, not what has arrived).
   signatureScratch.push(columns, row.kind, displayTextLen)
+  const images = row.images
+  signatureScratch.push(images?.length ?? 0)
+  if (images?.length === 1) {
+    signatureScratch.push(images[0]!.width, images[0]!.height)
+  }
   switch (row.kind) {
     case 'assistant':
       // Streaming vs settled swaps renderers; Ctrl+O/per-row expand adds the
@@ -315,6 +322,7 @@ export function MessageList({
   /** 点击工具卡内的文件路径（打开文件操作菜单）。 */
   onOpenFile?: (path: string) => void
 }) {
+  const lang = React.useSyncExternalStore(subscribeLang, getLang)
   const hiddenCount = rows.length - MAX_RENDERED_ROWS
   // The thinking filter runs BEFORE virtualization so window indices line up.
   //
@@ -380,7 +388,10 @@ export function MessageList({
     // text but RENDERS as that same lone `●`. Test the stripped text, or
     // the raw-text check lets the dot through forever.
     const rendersEmptyAssistant = (row: ChatRow): boolean =>
-      row.kind === 'assistant' && row.streaming !== true && stripNarration(row.text ?? '').trim() === ''
+      row.kind === 'assistant' &&
+      row.streaming !== true &&
+      stripNarration(row.text ?? '').trim() === '' &&
+      (row.images?.length ?? 0) === 0
     let hasEmptyAssistant = false
     for (const row of sliced) {
       if (rendersEmptyAssistant(row)) {
@@ -595,7 +606,7 @@ export function MessageList({
 
   // Cached rail/header preview per user row (see the timeline block for why
   // the length guard exists alongside the id key).
-  const previewCacheRef = React.useRef(new Map<number, { len: number; preview: string }>())
+  const previewCacheRef = React.useRef(new Map<number, { len: number; imageCount: number; lang: Lang; preview: string }>())
 
   const heightOf = (row: ChatRow): number =>
     heightsRef.current.get(row.id) ?? DEFAULT_ROW_HEIGHT
@@ -878,9 +889,9 @@ export function MessageList({
     // (heightsVersion — bumped at every heightsRef mutation), the visible
     // window's content (visGen — bumped when the visibleRows cache
     // rebuilds), the measured header base, or the rows array growing. Key
-    // on those; previews stay in their own id-keyed cache.
+    // on those and the language used by image-only previews.
     const memo = timelineMemoRef.current
-    const memoKey = `${visGenRef.current}:${heightsVersionRef.current}:${base}:${rows.length}:${columns}`
+    const memoKey = `${visGenRef.current}:${heightsVersionRef.current}:${base}:${rows.length}:${columns}:${lang}`
     if (memo === null || memo.key !== memoKey) {
       const previewCache = previewCacheRef.current
       if (previewCache.size > 2000) previewCache.clear()
@@ -904,8 +915,16 @@ export function MessageList({
       for (const row of rows) {
         if (row.kind !== 'user') continue
         let cached = previewCache.get(row.id)
-        if (cached === undefined || cached.len !== row.text.length) {
-          cached = { len: row.text.length, preview: clipPreview(row.text) }
+        const imageCount = row.images?.length ?? 0
+        if (cached === undefined || cached.len !== row.text.length || cached.imageCount !== imageCount || cached.lang !== lang) {
+          cached = {
+            len: row.text.length,
+            imageCount,
+            lang,
+            preview: row.text === '' && imageCount > 0
+              ? t('transcript-image-message', { count: imageCount })
+              : clipPreview(row.text),
+          }
           previewCache.set(row.id, cached)
         }
         const textTop = measuredTops.get(row.id)
@@ -1119,6 +1138,7 @@ export function MessageList({
               rowId={row.id}
               kind={row.kind}
               text={displayText}
+              images={row.images}
               textFull={row.kind === 'reasoning' ? row.text : undefined}
               executionTarget={row.executionTarget}
               streaming={displayStreaming}
@@ -1181,6 +1201,7 @@ type MemoRowProps = {
   rowId: number
   kind: ChatRow['kind']
   text: string
+  images: readonly TranscriptImage[] | undefined
   /** Reasoning rows: the FULL un-revealed text — the live three-line preview
    *  ticker follows the newest arrived content (never the reveal), while the
    *  expanded body shows the revealed slice in `text`. */
@@ -1264,6 +1285,7 @@ function TranscriptRow({
   rowId,
   kind,
   text,
+  images,
   textFull,
   executionTarget,
   streaming,
@@ -1337,11 +1359,18 @@ function TranscriptRow({
     case 'user':
       return (
         <Box flexDirection="column" ref={ref}>
-          <UserPromptMessage
-            text={text}
-            addMargin={addMargin}
-            isSelected={isSelected}
-          />
+          {text !== '' && (
+            <UserPromptMessage
+              text={text}
+              addMargin={addMargin}
+              isSelected={isSelected}
+            />
+          )}
+          {images !== undefined && (
+            <Box marginTop={text === '' && addMargin ? 1 : 0}>
+              <TranscriptImages images={images} />
+            </Box>
+          )}
         </Box>
       )
     case 'assistant':
@@ -1362,6 +1391,7 @@ function TranscriptRow({
               is stripped here: the live working line on the status bar
               already shows it. */}
             <StreamingMarkdown>{stripNarration(text)}</StreamingMarkdown>
+            {images !== undefined && <TranscriptImages images={images} indent={0} />}
           </Box>
         </Box>
       ) : (
@@ -1387,6 +1417,7 @@ function TranscriptRow({
             isSelected={isSelected}
             isExpanded={isExpanded}
           />
+          {images !== undefined && <TranscriptImages images={images} />}
         </Box>
       )
     case 'reasoning': {
@@ -1456,6 +1487,7 @@ function TranscriptRow({
             onClick={foldOnClick}
             onOpenFile={onOpenFile}
           />
+          {images !== undefined && <TranscriptImages images={images} indent={4} />}
         </Box>
       )
     }
