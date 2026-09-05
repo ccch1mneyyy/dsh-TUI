@@ -11,7 +11,7 @@ import { SessionPreview } from '../components/sessions/SessionPreview.js'
 import { WorkspaceListRow } from '../components/sessions/WorkspaceListRow.js'
 import { useTerminalFocus } from '../ink/hooks/use-terminal-focus.js'
 import { isMod, isPlainReturn, modLabel } from '../utils/modifiers.js'
-import { formatProject, projectName, spreadRow, tailWidth, truncateWidth } from '../sessions/format.js'
+import { formatProject, projectName, spreadRow, tailWidth, truncateWidth, wrapWidth } from '../sessions/format.js'
 import { stringWidth } from '../ink/stringWidth.js'
 import { TICK, MULTIPLICATION_X } from '../cc/figures.js'
 import {
@@ -1063,9 +1063,25 @@ export function SessionBrowser({
           delete/rename report must never shift the list by arriving. */}
       <Box flexShrink={0}>
         <Text color={notice?.tone === 'error' ? 'error' : 'success'}>
-          {notice === undefined
-            ? ' '
-            : ` ${notice.tone === 'error' ? MULTIPLICATION_X : TICK} ${truncateWidth(notice.text, Math.max(0, columns - 4))}`}
+          {notice === undefined ? ' ' : (() => {
+            // Error notices carry the harness's whole failure sentence (type
+            // name, seq, raw log path — e.g. the session/color rejection,
+            // #746); a single truncated line hid everything after "contains
+            // even…". Wrap to 3 lines CJK-aware, ellipsize only the 3rd.
+            const prefix = ` ${notice.tone === 'error' ? MULTIPLICATION_X : TICK} `
+            if (notice.tone !== 'error') {
+              return prefix + truncateWidth(notice.text, Math.max(0, columns - 4))
+            }
+            const width = Math.max(8, columns - 2)
+            const lines = wrapWidth(prefix + notice.text, width)
+            const shown = lines.slice(0, 3)
+            if (lines.length > 3 && shown.length > 0) {
+              shown[shown.length - 1] = truncateWidth(
+                (shown[shown.length - 1] + ' ' + (lines[3] ?? '')).trimEnd(), width,
+              )
+            }
+            return shown.length > 0 ? shown.join('\n') : prefix
+          })()}
         </Text>
       </Box>
       {mode === 'confirm-delete' && focused !== undefined && (
