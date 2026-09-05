@@ -9,8 +9,9 @@
 import assert from 'node:assert/strict'
 import { PassThrough, Writable } from 'node:stream'
 import React, { useEffect } from 'react'
-import { AlternateScreen, render, Text, useInput, useStdin } from '../src/ui.js'
-import { oscColor } from '../src/ink/terminal-querier.js'
+import { AlternateScreen, render, renderSync, Text, useInput, useStdin } from '../src/ui.js'
+import instances from '../src/ink/instances.js'
+import { oscColor, TerminalQuerier } from '../src/ink/terminal-querier.js'
 import { supportsDecrqmProbe } from '../src/ink/terminal.js'
 import { settled, sleep } from './lib/term-test.mjs'
 
@@ -123,6 +124,85 @@ function ProbeKeyConsumer(): React.ReactNode {
   useInput(() => {})
   return <Text>decrqm gate</Text>
 }
+
+const suspendedStdout = new FakeStdout()
+let rawModeBorrowCount = 0
+const suspendedQuerier = new TerminalQuerier(suspendedStdout, enabled => {
+  rawModeBorrowCount += enabled ? 1 : -1
+})
+suspendedQuerier.suspend()
+await Promise.all([
+  suspendedQuerier.send(oscColor(11)),
+  suspendedQuerier.flush(),
+])
+assert.equal(suspendedStdout.output, '')
+assert.equal(rawModeBorrowCount, 0)
+suspendedQuerier.resume()
+const resumedQuery = suspendedQuerier.send(oscColor(11))
+const resumedFlush = suspendedQuerier.flush()
+assert.equal(rawModeBorrowCount, 2)
+suspendedQuerier.onResponse({ type: 'osc', code: 11, data: 'rgb:0000/0000/0000' })
+suspendedQuerier.onResponse({ type: 'da1', params: [61, 4] })
+assert.ok(await resumedQuery)
+await resumedFlush
+assert.equal(rawModeBorrowCount, 0)
+suspendedQuerier.dispose()
+
+const handoffStdin = new FakeStdin()
+const handoffStdout = new FakeStdout()
+const handoffInstance = renderSync(
+  <AlternateScreen>
+    <ProbeKeyConsumer />
+  </AlternateScreen>,
+  {
+    stdin: handoffStdin,
+    stdout: handoffStdout,
+    stderr: new FakeStderr(),
+    exitOnCtrlC: false,
+    patchConsole: false,
+  },
+)
+const handoffInk = instances.get(handoffStdout)
+assert.ok(handoffInk)
+assert.equal(handoffStdout.output.includes('\x1b[>0q'), false)
+handoffInk.enterAlternateScreen()
+await new Promise<void>(resolve => setImmediate(resolve))
+assert.equal(
+  handoffStdout.output.includes('\x1b[>0q') ||
+    handoffStdout.output.includes('\x1b[c'),
+  false,
+  'a deferred XTVERSION batch must not write while an external process owns the terminal',
+)
+handoffInk.exitAlternateScreen()
+await sleep(20)
+assert.equal(
+  handoffStdout.output.includes('\x1b[>0q') ||
+    handoffStdout.output.includes('\x1b[c'),
+  false,
+  'the XTVERSION retry must wait for the reply quarantine',
+)
+assert.ok(
+  await settled(
+    () =>
+      handoffStdout.output.includes('\x1b[>0q') &&
+      handoffStdout.output.includes('\x1b[c'),
+  ),
+  'the interrupted XTVERSION probe must retry after the reply quarantine',
+)
+handoffStdin.write('\x1bP>|ghostty(1.2.3)\x1b\\\x1b[?61;4c')
+await new Promise<void>(resolve => setImmediate(resolve))
+const completedXtversionCount =
+  handoffStdout.output.split('\x1b[>0q').length - 1
+handoffInk.enterAlternateScreen()
+handoffInk.exitAlternateScreen()
+await sleep(160)
+assert.equal(
+  handoffStdout.output.split('\x1b[>0q').length - 1,
+  completedXtversionCount,
+  'a completed XTVERSION probe must not repeat after later handoffs',
+)
+handoffInstance.unmount()
+console.log('PASS: handoff suspends terminal queries and retries deferred XTVERSION')
 
 process.env.TERM_PROGRAM = 'Apple_Terminal'
 assert.equal(
