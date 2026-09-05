@@ -126,9 +126,7 @@ export async function runPrGate({ github, context, core, workspace = process.env
 
   if (pr.state === 'closed') return
 
-  if (CI_ONLY_PR_AUTHOR_IDS.has(pr.user.id)
-    || pr.user.type === 'Bot'
-    || prAuthor.endsWith('[bot]')) {
+  if (CI_ONLY_PR_AUTHOR_IDS.has(pr.user.id)) {
     core.info(`Leaving CI-only bot PR open: ${prAuthor}`)
     return
   }
