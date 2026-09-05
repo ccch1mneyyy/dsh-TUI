@@ -1,5 +1,5 @@
 import React from 'react'
-import { Box, Image, Text, useTerminalSize } from '../../ui.js'
+import { Box, Image, Text, useTerminalImages, useTerminalSize } from '../../ui.js'
 import type { TerminalImageSource } from '../../ink/terminal-image.js'
 import type { TranscriptImage } from '../../dsh-adapter/transcript-images.js'
 import { loadSharp } from '../../dsh-adapter/sharp.js'
@@ -19,6 +19,7 @@ export function TranscriptImages({
   readonly indent?: number
 }): React.ReactNode {
   const { columns } = useTerminalSize()
+  const graphicsAvailable = useTerminalImages(images.length > 0)
   React.useSyncExternalStore(subscribeLang, getLang)
   if (images.length === 0) return null
   const available = Math.max(1, columns - indent - 3)
@@ -38,6 +39,7 @@ export function TranscriptImages({
             image={image}
             width={width}
             height={height}
+            graphicsAvailable={graphicsAvailable}
           />
         )
       })}
@@ -49,10 +51,12 @@ function TranscriptImagePreview({
   image,
   width,
   height,
+  graphicsAvailable,
 }: {
   readonly image: TranscriptImage
   readonly width: number
   readonly height: number
+  readonly graphicsAvailable: boolean
 }): React.ReactNode {
   const [state, setState] = React.useState<
     | { readonly kind: 'loading' }
@@ -61,6 +65,7 @@ function TranscriptImagePreview({
   >({ kind: 'loading' })
 
   React.useEffect(() => {
+    if (!graphicsAvailable) return
     let live = true
     setState({ kind: 'loading' })
     void loadDecodedImage(image).then(
@@ -68,17 +73,19 @@ function TranscriptImagePreview({
       () => { if (live) setState({ kind: 'failed' }) },
     )
     return () => { live = false }
-  }, [image])
+  }, [image, graphicsAvailable])
 
   const label = cleanRenderText(image.name ?? '', 80) || t('transcript-image')
-  const fallback = state.kind === 'failed'
-    ? t('transcript-image-unavailable', { name: label })
-    : state.kind === 'loading'
-      ? t('transcript-image-loading', { name: label })
-      : t('transcript-image-ready', { name: label })
+  const fallback = !graphicsAvailable
+    ? t('transcript-image-ready', { name: label })
+    : state.kind === 'failed'
+      ? t('transcript-image-unavailable', { name: label })
+      : state.kind === 'loading'
+        ? t('transcript-image-loading', { name: label })
+        : t('transcript-image-ready', { name: label })
   return (
     <Image
-      source={state.kind === 'ready' ? state.source : undefined}
+      source={graphicsAvailable && state.kind === 'ready' ? state.source : undefined}
       width={width}
       height={height}
       alt={label}
