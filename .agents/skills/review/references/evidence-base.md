@@ -1,0 +1,47 @@
+# 证据化行为与流程判据
+历史维护者审查归纳仅供发现成文红线外的重复缺陷，不是永久真源；每次核当前代码、依赖源码、目标 head 及 /mnt/shared/_Projects/DSH-TUI/repo/AGENTS.md、/mnt/shared/_Projects/DSH-TUI/repo/ADAPTER.md、/mnt/shared/_Projects/DSH-TUI/repo/docs/contributing.md。下称“红线”均指 /mnt/shared/_Projects/DSH-TUI/review/references/redlines.md，“验证映射”均指 /mnt/shared/_Projects/DSH-TUI/review/references/verification-map.md；行为为 A 轴，契约/安全为 B/C 轴，流程为 D 轴。
+
+## A1｜退出、清理与资源生命周期｜❌
+资源 owner、幂等清理、成功/错误/信号/超时覆盖、退出/teardown 区分、拆树 ref 与退出闩锁以红线 4 为唯一真源；另核光标单一 owner、disposer 的 token-safe（旧清理不得误销新资源）、跨 agent 资源仅真正会话释放时关闭、临时敏感文件消费后删或明生命周期。可选链静默漏清理、单 agent 销共享资源、teardown 触发进程退出均阻断。
+
+## A2｜异步时序与迟到事件｜❌
+入队即快照 selection/cwd/model/route，不于异步消费读现在值；dial/open/refresh 用代次或取消机制，stop 后迟到 onopen 不复活；改模式经上游公共状态机、不直写事件绕待处理意图；readiness/探针完成重试依赖准入/加载，不留先加载后探针窗口；断连清缓存并通知 UI，原子锁验 pid/陈旧记录。
+
+## A3｜失败路径与真实结果一致｜❌
+逐任务隔离 rejection 防 pending 链毒化；去重/已处理标记仅真实成功后提交，失败/超时可重试；可选能力先 `typeof`，`.catch` 拦不住 promise 创建前同步 throw；不空 catch/空 `.catch`/宽 fallback 伪成功；UI 保存/更新/发送声称符真实副作用；慢消费者限在途并合并更新；计费/审计/清理覆失败中断；降级给可执行替代方案，不静默消失。
+
+## A4｜文本、输入、路径与媒体边界｜❌
+光标/退格/列号吸附 Unicode 码点/字素边界，不产孤立代理字符；外部文本先净化控制字符再按终端单元截断；路径按分隔符边界，覆 POSIX 根/Windows 盘符/大小写/尾斜杠；自动附文件/选区统一限大小并显截断标记；图片转码/降采样后按实际类型/大小重新准入；消歧循环须收敛。
+
+## A5｜跨平台与真实终端｜❌/⚠️
+Windows 含空格的 `process.execPath` 等不用 shell 拆词；POSIX 权限/根/socket 长度/信号断言加平台条件；路径预算用 UTF-8 字节非 JS 字符数；考虑 Windows timer 粒度，Linux/macOS 绿不证 Windows；按改动面验终端协议、Windows 伪控制台 ConPTY、tmux、inline/fullscreen、窄宽、真实终端 TTY。已证跨平台崩溃/不可启动 ❌，应补真机但机制未证伪 ⚠️。
+
+## A6｜测试与回归保护有效性｜❌
+测试证据的坏基线失败、驱动/判定依据独立、结构断言、真实链挂载以验证映射“反假绿检查”为唯一真源；另须真实源码/产物的 open→subscribe→effect 路径、fixture 真实类型必填项/隔离临时目录/恢复环境、UI 边框变化同步判定边界且排随机区域、flaky 以候选机制回退及干净 main 多轮对照归因。不以名称、断言数或“全绿”代证，不靠重跑碰运气。
+
+## A7｜React/Ink 渲染与挂载语义｜⚠️/❌
+renderer/context 实例归属及禁止模块全局共享以红线 12 为唯一真源。保当前 getSnapshot/notification 语义，重构前跑对应 repro；同树位置换元素类型会重挂/清 PromptInput 等本地状态；渲染期不写影响后续 render 的共享 ref/store；memo/cache key 覆布局/语言/主题/行高/折叠全部维度；调度修复覆全部唤醒链。崩溃/丢状态/多实例串扰 ❌，维护性/潜在重挂风险 ⚠️。
+
+## A8｜共享状态与多实例所有权｜⚠️/❌
+共享模式开启/撤销归属以红线 12 为唯一真源；分类核 read-only/mutate 与 rows/version/listeners 副作用一致；多进程 JSON/账本用文件锁/原子写/陈旧检测；通道限每连接消息/缓冲，shutdown 销全部连接；清理/退出优先显式 handle、不猜当前实例；上游 status/model/persistence 形状逐环核依赖源码、不凭本仓类型名猜。策略绕过/数据丢失/跨实例污染 ❌，owner 不清但无失效机制 ⚠️。
+
+## B/C 补充｜门禁、事件兼容与模型可控副作用｜❌
+除 /mnt/shared/_Projects/DSH-TUI/review/references/contract-gates.md 与红线外，查同 PR 改白名单/扫描目录/预期结果自放行；聚合 gate 对上游 failed/cancelled/空输出是否 fail-open；执行 fork 或处理 PR body/diff 的 job 是否持 secrets/写凭据；自定义 session event 是否在当前官方/legacy 白名单，严格读是否拒整日志；白名单测试直比上游全集、不手抄或只扫单个类型声明；模型可控路径/URL/截图/文件是否越工作区/网络/外服边界。
+
+## D1｜核心仓库准入与 spec 先行｜❌
+先判是否应入核心：host API/协议坐标/双端传输语义先走 /mnt/shared/_Projects/DSH-TUI/repo/dsh-ecosystem-spec/ 当前提案/征求意见流程；外部插件正式准入并查安装/权限/网络/凭据/外传/真实组合测试；装饰/动效优先插件、核心仅最小接口；引入第三方源码须证相对零依赖/现有实现增量价值及长期维护；视觉标识/治理裁量须仓库 owner 明确拍板。
+
+## D2｜PR 原子性、查重与并行协调｜❌/⚠️
+一 PR 一主题，剔本地配置/上游同步树/在途实验/顺手修复/无关格式化；与 main、open PR、已合入方案查重，明确重复方案被谁取代；同区域并行 PR 明合并顺序及 rebase/cherry-pick 归属；堆叠 PR 明各修复所属层。混杂 diff 严重度唯一真源为红线 13。
+
+## D3｜最新 head 的 CI 与验证链｜❌
+只接受最新目标分支合入/rebase 后当前 head 非空、实执行的 required checks；旧 SHA 绿/空 checks/事件丢失/仅汇总绿不算。CI 红先归因，“main 也红”须同环境基线/失败集合证据；终端可见变化补 inline/fullscreen/窄终端或真实探针；新/大改 verify 自动执行路径以验证映射“CI 挂载”为唯一真源。
+
+## D4｜文档、治理与贡献者历史｜⚠️/❌
+流程规则写入中英文贡献指南并建真实 label/config，不留关键规则于评论；新规明生效时间/追溯范围/维护者响应期限；代码 PR 依当前流程关联认可 issue，不以 Discussion 冒充 issue-link；逐字审治理惩戒裁量/举报渠道/可用性；干净环境逐步复现安装/贡献命令；整合前协商，尽量保原 PR merged 记录/提交历史。
+
+## D5｜叙事、注释与源码实证一致｜⚠️/❌
+PR 描述/commit/JSDoc/README/发布说明的机制/数字/路径/旧行为逐核；“已移除/已清理/仅存在性检查/性能提升 N”须当前 head 证据；静默降级改 throw 等同步旧注释/用户文档；截图占位/失效链接/错路径/残留强转合并前处理或明留债原因。错误叙事误导诊断，即使代码正确也至少 ⚠️ 修正，掩盖破坏性/安全影响 ❌。
+
+## 使用方式
+按改动面选类别、不机械抄全表；各适用类别记核验内容/证据位置/结论；历史模式仅搜索方向，不自动定当前缺陷；冲突从当前真源并记参考漂移。
