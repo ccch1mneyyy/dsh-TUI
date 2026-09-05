@@ -200,6 +200,11 @@ export function LogoV2({
       idleStateRef.current = step.state
       setIdlePose(step.pose)
       timer = setTimeout(tick, step.delayMs)
+      // The planner reschedules forever while mounted — unref so the chain
+      // never holds the process alive on its own. The interactive TUI stays
+      // up on its TTY/stdin handles; probe hosts that mount the header
+      // without unmounting get a clean event-loop drain instead of a hang.
+      ;(timer as { unref?: () => void }).unref?.()
     }
     tickRef.current = tick
     tick()
