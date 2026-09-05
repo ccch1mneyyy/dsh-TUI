@@ -5,7 +5,8 @@ import type { ChannelState } from './types.js'
 
 export function createChannelEmitter(
   getState: () => Pick<ChannelState, 'rows' | 'version'>,
-  beforeStream: () => void,
+  /** Returns true when the deferred projector changed renderer-visible data. */
+  beforeStream: () => boolean,
 ) {
   const listeners = new Set<() => void>()
   const foldCursor = { rows: undefined as unknown, index: 0 }
@@ -13,7 +14,10 @@ export function createChannelEmitter(
   let disposed = false
   const wake = (source: string) => {
     const state = getState()
-    foldRows(state.rows, MAX_ROWS, foldCursor)
+    // Folding mutates retained transcript rows after a reader may have
+    // cached the ingress revision. Publish that completed fold separately so
+    // listeners cannot observe a stale or mixed same-version snapshot.
+    if (foldRows(state.rows, MAX_ROWS, foldCursor) > 0) state.version += 1
     for (const listener of listeners) {
       try { listener() } catch (error) {
         if (!swallowNestedUpdateOverflow(error, source)) throw error
@@ -38,7 +42,11 @@ export function createChannelEmitter(
       timer = setTimeout(() => {
         timer = undefined
         if (disposed) return
-        beforeStream()
+        // emitStream bumps on ingress so ordinary stream state is observable
+        // immediately. A deferred projector can then publish its completed
+        // snapshot as a distinct revision, preventing a pre-flush read from
+        // surviving the wakeup with stale rows.
+        if (beforeStream()) getState().version += 1
         wake('channel.emitStream')
       }, 16)
       timer.unref()

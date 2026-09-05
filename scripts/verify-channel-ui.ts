@@ -156,6 +156,91 @@ for (const mode of ['passive-shadow', 'replay-shadow'] as const) {
     mount.channel.setWhale(true)
     assert.equal(raw.whale, true)
     const settings = mount.channel.settingsHost()!
+    let nestedCalls = 0
+    const continuation = () => { nestedCalls += 1; return { kind: 'clear' as const } }
+    raw.runWorkspaceCommand = async () => ({
+      kind: 'choices' as const, title: 'outer lifetime',
+      choices: [{ id: 'x', label: 'x', choose: continuation, input: { submit: continuation } }],
+    })
+    raw.settingsSections = () => [{
+      ns: 'outer-lifetime', title: 'outer lifetime', fields: [{
+        path: ['x'], kind: 'text', label: 'x', format: () => 'formatted', parse: continuation,
+      }],
+    }]
+    raw.buildSessionTree = async () => ({
+      roots: [], activePath: new Set(['tip']), activeLeafId: 'tip',
+      sessions: new Map([['session', { title: 'hello', createdAt: 0, live: true, unreadable: false, unloaded: false }]]),
+      rewindFacts: new Map(), truncated: false, sessionCount: 1,
+    })
+    // This crosses the real Kernel projection and the production mount. Map
+    // and Set must retain their whole Readonly collection contract after both
+    // capability layers, not merely get()/has().
+    const tree = await mount.channel.buildSessionTree()
+    assert.equal(tree?.sessions.get('session')?.title, 'hello')
+    assert.equal(tree?.activePath.has('tip'), true)
+    assert.deepEqual([...tree!.sessions], [['session', tree!.sessions.get('session')]])
+    assert.deepEqual([...tree!.sessions.entries()], [['session', tree!.sessions.get('session')]])
+    assert.deepEqual([...tree!.sessions.keys()], ['session'])
+    assert.deepEqual([...tree!.sessions.values()].map(item => item.title), ['hello'])
+    assert.deepEqual([...tree!.activePath], ['tip'])
+    assert.deepEqual([...tree!.activePath.entries()], [['tip', 'tip']])
+    assert.deepEqual([...tree!.activePath.keys()], ['tip'])
+    assert.deepEqual([...tree!.activePath.values()], ['tip'])
+    const seen: string[] = []
+    tree!.sessions.forEach((value, key, receiver) => { assert.equal(receiver, tree!.sessions); seen.push(`${key}:${value.title}`) })
+    tree!.activePath.forEach((value, key, receiver) => { assert.equal(receiver, tree!.activePath); seen.push(`${key}:${value}`) })
+    assert.deepEqual(seen, ['session:hello', 'tip:tip'])
+    // Retain nested callbacks from the real kernel + production composition,
+    // then dispose only the outer mount. The kernel remains live: each leaf
+    // must nevertheless retain the outer lease, including read-only settings
+    // conversions as well as workspace executable choices/input.
+    const choices = await mount.channel.runWorkspaceCommand('outer-lifetime', '')
+    const field = mount.channel.settingsSections()[0]!.fields[0]!
+    assert.equal(field.format?.('x'), 'formatted')
+    assert.equal(field.parse?.('x')?.kind, 'clear')
+    assert.equal(nestedCalls, 1)
+    // A production subscriber may read the ingress revision before the
+    // deferred frame fold. Once the real 601-row tool transcript folds, it
+    // must receive one complete new revision: no full tool payload survives,
+    // while the already-read immutable snapshot stays intact.
+    for (let index = 0; index < 601; index++) {
+      raw.rows.push({
+        id: 10_000 + index, kind: 'tool', text: `tool ${index}`,
+        tool: {
+          callId: `fold-${index}`, name: 'Read', argsText: '{}', argsFull: 'FULL', status: 'ok',
+          resultText: 'RESULT', resultFull: 'RESULT-FULL', resultView: { card: 'terminal', output: 'RESULT-VIEW' }, startedAt: 0,
+        },
+      })
+    }
+    raw.emitStream()
+    const beforeFold = mount.channel.rows
+    const beforeTool = beforeFold[0]!.tool!
+    let notifiedRows: readonly typeof beforeFold[number][] | undefined
+    const stopFoldRead = mount.channel.subscribe(() => { notifiedRows = mount.channel.rows })
+    await tick()
+    stopFoldRead()
+    const afterFold = mount.channel.rows
+    assert.equal(raw.rows[0]!.folded, true)
+    assert.equal(raw.rows[0]!.tool!.argsFull, undefined)
+    assert.notEqual(afterFold, beforeFold, 'completed fold publishes a distinct revision')
+    assert.equal(notifiedRows, afterFold, 'subscriber reads the completed fold revision')
+    assert.equal(afterFold[0]!.folded, true)
+    assert.equal(afterFold[0]!.tool!.argsFull, undefined)
+    assert.equal(afterFold[0]!.tool!.resultFull, undefined)
+    assert.equal(afterFold[0]!.tool!.resultView, undefined)
+    assert.equal(beforeTool.argsFull, 'FULL', 'old snapshot retains its complete immutable tool payload')
+    assert.equal(beforeTool.resultFull, 'RESULT-FULL')
+    assert.equal(beforeTool.resultView?.card, 'terminal')
+    assert.throws(() => { (beforeTool as { argsFull?: string }).argsFull = 'mutate' }, TypeError)
+    mount.dispose()
+    assert.throws(() => mount.channel.version, /lifetime/)
+    if (choices?.kind === 'choices') {
+      assert.throws(() => choices.choices[0]!.choose(), /lifetime/)
+      assert.throws(() => choices.choices[0]!.input!.submit('x'), /lifetime/)
+    }
+    assert.throws(() => field.format?.('x'), /lifetime/)
+    assert.throws(() => field.parse?.('x'), /lifetime/)
+    assert.equal(nestedCalls, 1, 'outer disposal prevents all retained nested callbacks')
     await fiber.dispose()
     assert.throws(() => mount.channel.setWhale(false), /lost Channel UI|disposed|lifetime/)
     assert.equal(raw.whale, true, 'kernel loss must not downgrade to the local writer')
@@ -318,6 +403,41 @@ for (const method of ['writeProfile', 'mutateProfile', 'removeProfile'] as const
   assert.equal(calls, 0)
   assert.equal(backend.nested.value, 1)
   unregister(); raw.releaseContributions()
+}
+
+// Long transcript reads retain detached historical row identities. Activity-only
+// stream wakeups must not revisit history; a tail update may touch at most its
+// newly-crossed fold boundary, never clone the whole transcript again.
+{
+  const { ctx, raw } = fixture()
+  let historicalReads = 0
+  for (let i = 0; i < 3_200; i++) {
+    let text = `history ${i}`
+    const row = { id: i + 1, kind: 'assistant' as const, get text() { historicalReads += 1; return text }, set text(value: string) { text = value } }
+    raw.rows.push(row)
+  }
+  const unregister = registerTuiChannel(ctx, raw)
+  const mount = mountChannelUi(ctx, raw, undefined, 'new')
+  raw.emit() // folds once before the first detached snapshot
+  const initial = mount.channel.rows
+  const first = initial[0]!
+  historicalReads = 0
+  for (let i = 0; i < 8; i++) {
+    raw.workingActivity = { phase: 'thinking', text: `activity ${i}` } as never
+    raw.emitStream()
+    await tick()
+    assert.equal(mount.channel.rows[0], first, 'activity stream retains unchanged historical row')
+  }
+  assert.equal(historicalReads, 0, 'activity versions allocate/read no historical rows')
+  raw.rows.push({ id: 3_201, kind: 'assistant', text: 'tail' })
+  raw.emitStream()
+  await tick()
+  const tailed = mount.channel.rows
+  assert.equal(tailed[0], first, 'tail stream retains unchanged historical row')
+  assert.ok(historicalReads <= 3, `tail stream read ${historicalReads} fold-boundary fields, not the full history`)
+  assert.throws(() => { (initial[0] as { text: string }).text = 'mutate old snapshot' }, TypeError)
+  assert.equal(initial[0]?.text, 'history 0', 'old detached snapshot remains immutable after later versions')
+  mount.dispose(); unregister(); raw.releaseContributions()
 }
 
 // Actual Chat mounts against the production shadow capability, with resumed rows.

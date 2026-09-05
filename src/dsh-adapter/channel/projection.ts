@@ -13,6 +13,7 @@ import { t } from '../../i18n.js'
 import { logForDebugging } from '../../utils/debug.js'
 import { cleanRenderText } from '../sanitize.js'
 import { NOTICE_CELLS } from './decisions.js'
+import { markChannelReadDirty } from '../../adapter/channel/read-view.js'
 
 type ProjectionState = Pick<ChannelState, 'rows' | 'thinkingFold' | 'activeToolCount' | 'spinnerMode' | 'goal' | 'contextSegments' | 'tokens' | 'lastUsage' | 'lastUserText' | 'responseChars' | 'tps' | 'cancelPending' | 'working' | 'turnStart' | 'tpsSamples' | 'contextWindow' | 'reasoningEffort' | 'sessionTitle' | 'todos' | 'agentPreset' | 'sessionColor' | 'status' | 'emit'>
 interface ProjectionDependencies {
@@ -68,6 +69,8 @@ export function createChannelProjection(state: ProjectionState, deps: Projection
   const assistantRowsByStep = new Map<string, ChatRow>()
   const lastTextDelta = new Map<ChatRow, string>()
   const stepKey = (turn: number, step: number): string => `${turn}:${step}`
+  const touchRow = (row: ChatRow): void => { markChannelReadDirty(row); markChannelReadDirty(state.rows) }
+  const appendRow = (row: ChatRow): void => { state.rows.push(row); markChannelReadDirty(state.rows) }
 
   /** Append a stream delta idempotently. Providers normally send a pure
    * delta, but reconnect/proxy paths can resend a cumulative prefix or a
@@ -79,16 +82,19 @@ export function createChannelProjection(state: ProjectionState, deps: Projection
     lastTextDelta.set(row, delta)
     if (delta.startsWith(row.text)) {
       row.text = delta
+      touchRow(row)
       return
     }
     const maxOverlap = Math.min(row.text.length, delta.length, 4096)
     for (let size = maxOverlap; size > 0; size--) {
       if (row.text.endsWith(delta.slice(0, size))) {
         row.text += delta.slice(size)
+        touchRow(row)
         return
       }
     }
     row.text += delta
+    touchRow(row)
   }
 
   /** The host-plane tools registry (dsh-tools). Resolved once; absent in
@@ -157,12 +163,13 @@ export function createChannelProjection(state: ProjectionState, deps: Projection
       : [...state.rows].reverse().find(row => row.kind === 'assistant' && row.seq === seq)
     if (existing !== undefined) {
       existing.streaming = true
+      touchRow(existing)
       streaming = existing
       return existing
     }
     streaming = { id: deps.rowIds.value, kind: 'assistant', text: '', streaming: true, fresh: true, ...seq !== undefined ? { seq } : {} }
     deps.rowIds.value += 1
-    state.rows.push(streaming)
+    appendRow(streaming)
     return streaming
   }
 
@@ -185,6 +192,7 @@ export function createChannelProjection(state: ProjectionState, deps: Projection
       ) {
         reasoning = lastReasoningRow.row
         reasoning.streaming = true
+        touchRow(reasoning)
         const sealedIdx = sealedReasoning.indexOf(reasoning)
         if (sealedIdx !== -1) sealedReasoning.splice(sealedIdx, 1)
         reasoningStart = Date.now() - (reasoning.durationMs ?? 0)
@@ -194,7 +202,7 @@ export function createChannelProjection(state: ProjectionState, deps: Projection
       reasoningStart = Date.now()
       reasoning = { id: deps.rowIds.value, kind: 'reasoning', text: '', streaming: true, ...seq !== undefined ? { seq } : {} }
       deps.rowIds.value += 1
-      state.rows.push(reasoning)
+      appendRow(reasoning)
       logForDebugging('thinking: reasoning row open (expanded)')
     }
     if (turn !== undefined && step !== undefined) {
@@ -218,20 +226,22 @@ export function createChannelProjection(state: ProjectionState, deps: Projection
     const duration = Math.max(0, Date.now() - reasoningStart)
     reasoning.durationMs = duration
     reasoning.streaming = false
+    touchRow(reasoning)
     sealedReasoning.push(reasoning)
     reasoning = undefined
     logForDebugging(`thinking: folded at ${where} (${duration}ms)`)
   }
 
   const settleStreaming = (): void => {
-    if (streaming !== undefined) streaming.streaming = false
+    if (streaming !== undefined) { streaming.streaming = false; touchRow(streaming) }
     streaming = undefined
     const folded = sealedReasoning.length + (reasoning !== undefined ? 1 : 0)
-    for (const row of sealedReasoning) row.streaming = false
+    for (const row of sealedReasoning) { row.streaming = false; touchRow(row) }
     sealedReasoning.length = 0
     if (reasoning !== undefined) {
       reasoning.streaming = false
       reasoning.durationMs = Math.max(0, Date.now() - reasoningStart)
+      touchRow(reasoning)
     }
     reasoning = undefined
     if (folded > 0) logForDebugging(`thinking: folded ${folded} reasoning row(s) at turn settle`)
@@ -359,10 +369,10 @@ export function createChannelProjection(state: ProjectionState, deps: Projection
           event.data.source.plugin === 'compact'
         ) {
           const summary = textOf(event.data.content)
-          state.rows.push({ id: deps.rowIds.value, kind: 'notice', text: 'Conversation compacted' })
+          appendRow({ id: deps.rowIds.value, kind: 'notice', text: 'Conversation compacted' })
           deps.rowIds.value += 1
           if (summary) {
-            state.rows.push({ id: deps.rowIds.value, kind: 'compact', text: summary })
+            appendRow({ id: deps.rowIds.value, kind: 'compact', text: summary })
             deps.rowIds.value += 1
           }
           // The surface replace drops the whole pre-compact history: reset
@@ -408,7 +418,7 @@ export function createChannelProjection(state: ProjectionState, deps: Projection
         if (event.data.source.kind !== 'user') break
         const text = firstTextOf(event.data.content)
         if (text) {
-          state.rows.push({ id: deps.rowIds.value, kind: 'user', text, seq: event.seq })
+          appendRow({ id: deps.rowIds.value, kind: 'user', text, seq: event.seq })
           state.lastUserText = text
           // The context estimate counts everything sent to the model —
           // typed text AND the `@`-mention attachment blocks.
@@ -443,6 +453,7 @@ export function createChannelProjection(state: ProjectionState, deps: Projection
             assistantRowsByStep.set(key, row)
             streaming = row
             row.streaming = true
+            touchRow(row)
             const before = row.text.length
             appendTextDelta(row, chunk.text)
             state.responseChars += Math.max(0, row.text.length - before)
@@ -491,7 +502,7 @@ export function createChannelProjection(state: ProjectionState, deps: Projection
             .map(block => (block.type === 'reasoning' ? block.text : ''))
             .join('')
           if (reasoningText !== '') {
-            state.rows.push({
+            appendRow({
               id: deps.rowIds.value,
               kind: 'reasoning',
               text: reasoningText,
@@ -528,6 +539,7 @@ export function createChannelProjection(state: ProjectionState, deps: Projection
           // non-streaming delivery still paints as a flow); replayed
           // settles must not — the transcript would typewrite on open.
           if (!replaying && text) row.fresh = true
+          touchRow(row)
         }
         streaming = undefined
         if (reasoning !== undefined) {
@@ -540,6 +552,7 @@ export function createChannelProjection(state: ProjectionState, deps: Projection
           // — settleStreaming folds the sealed rows then.
           reasoning.durationMs = Math.max(0, Date.now() - reasoningStart)
           if (state.thinkingFold === 'preview') reasoning.streaming = false
+          touchRow(reasoning)
           sealedReasoning.push(reasoning)
           logForDebugging(`thinking: step sealed (${reasoning.durationMs}ms), expanded until turn/end`)
         }
@@ -665,7 +678,7 @@ export function createChannelProjection(state: ProjectionState, deps: Projection
         }
         deps.rowIds.value += 1
         toolCards.set(event.data.callId, card)
-        state.rows.push(card)
+        appendRow(card)
         state.activeToolCount += 1
         state.contextSegments.assistant += estimateTokens(
           `${event.data.name}${event.data.arguments}`,
@@ -718,6 +731,7 @@ export function createChannelProjection(state: ProjectionState, deps: Projection
           // (bounded by MAX_ROWS + foldRows, which also drops the full
           // args/result payloads of folded cards).
           toolCards.delete(event.data.message.source.callId)
+          touchRow(card)
           updateSpinnerMode()
         }
         break
@@ -781,7 +795,7 @@ export function createChannelProjection(state: ProjectionState, deps: Projection
           // `Agent.cancel()` closes the turn as `aborted`; `interrupted`
           // only appears for crash-orphaned turns. Claude Code renders both
           // user-interruption paths as a distinct dim row.
-          state.rows.push({
+          appendRow({
             id: deps.rowIds.value,
             kind: 'interrupt',
             text: t('interrupted-by-user') + t('interrupted-ask-next'),
@@ -794,7 +808,7 @@ export function createChannelProjection(state: ProjectionState, deps: Projection
         // rule across rows. cleanRenderText is the render-path single-line
         // contract (sessionTree's preview() folds likewise for the tree).
         const detail = reason.kind === 'error' ? cleanRenderText(reason.error.message, NOTICE_CELLS) : ''
-        state.rows.push({ id: deps.rowIds.value, kind: 'notice', text: `turn ${reason.kind}${detail ? ` · ${detail}` : ''}` })
+        appendRow({ id: deps.rowIds.value, kind: 'notice', text: `turn ${reason.kind}${detail ? ` · ${detail}` : ''}` })
         deps.rowIds.value += 1
         deps.notify(
           t('turn-failed', { detail: detail ? ` · ${detail}` : '' }),
@@ -847,7 +861,7 @@ export function createChannelProjection(state: ProjectionState, deps: Projection
           const preset = renamedOfficialPreset && state.agentPreset !== undefined
             ? state.agentPreset
             : recordedPreset ?? 'unknown'
-          state.rows.push({
+          appendRow({
             id: deps.rowIds.value,
             kind: 'notice',
             text: t('agent-preset-switched', { preset }),
@@ -875,11 +889,11 @@ export function createChannelProjection(state: ProjectionState, deps: Projection
           )
           if (rendered !== undefined) {
             if (rendered.title !== undefined && rendered.title !== '') {
-              state.rows.push({ id: deps.rowIds.value, kind: 'local', text: rendered.title })
+              appendRow({ id: deps.rowIds.value, kind: 'local', text: rendered.title })
               deps.rowIds.value += 1
             }
             for (const line of rendered.lines) {
-              state.rows.push({
+              appendRow({
                 id: deps.rowIds.value,
                 kind: 'local-output',
                 text: preview(String(line), LOCAL_OUTPUT_LIMIT),

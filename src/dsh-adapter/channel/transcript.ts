@@ -1,5 +1,6 @@
 import { type SessionEvent } from '@deepseek-ai/dsh-session'
 import type { ChatRow, ToolResultView, ToolViewPresenter } from './types.js'
+import { markChannelReadDirty } from '../../adapter/channel/read-view.js'
 
 export const ARGS_PREVIEW_LIMIT = 160
 
@@ -70,6 +71,8 @@ export function foldRows(
       // text lives in the session log and is restored by loadOlder().
       row.text = preview(row.text, 200)
     }
+    markChannelReadDirty(row)
+    markChannelReadDirty(rows)
   }
   if (cursor !== undefined) cursor.index = excess
   return folded
@@ -113,6 +116,8 @@ export function foldBack(rows: ChatRow[], events: readonly SessionEvent[], views
         ? views?.result(call.data.name, call.data.arguments, result.data)
         : undefined
       row.folded = false
+      markChannelReadDirty(row)
+      markChannelReadDirty(rows)
       restored += 1
       continue
     }
@@ -122,6 +127,8 @@ export function foldBack(rows: ChatRow[], events: readonly SessionEvent[], views
     if (message === undefined) continue
     restoreRowFromEvent(row, message)
     row.folded = false
+    markChannelReadDirty(row)
+    markChannelReadDirty(rows)
     restored += 1
   }
   return restored
