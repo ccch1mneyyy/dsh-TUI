@@ -278,6 +278,12 @@ const channel = createChannel(ctx as never, liveAgent as never, {
   // 探针确定性：鲸鱼欢迎期闲置动画不进本探针的测量窗口。
   whaleIdle: false,
 })
+// No settings row means there is nothing to opt into: auto recap stays off.
+// This fixture intentionally provides a partial llm catalog without stream;
+// direct recap must degrade rather than binding a missing method.
+check('absent settings defaults auto recap off', channel.autoRecapOnOpen === false)
+const unavailableRecap = await channel.recapRecent()
+check('partial llm recap degrades without throwing', unavailableRecap.summary === null && unavailableRecap.error?.includes('不可用') === true)
 
 const admitted = await mountAdmitted(ctx, 'event-export-name', testManifest({
   id: 'event-probe',

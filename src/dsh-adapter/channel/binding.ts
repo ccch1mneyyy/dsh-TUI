@@ -228,3 +228,5 @@ export function createChannelBinding(initial: Agent, handle: AgentHandle | undef
     clearSubscriptions,
   }
 }
+
+export type ChannelBinding = ReturnType<typeof createChannelBinding>

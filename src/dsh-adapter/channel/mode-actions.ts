@@ -14,14 +14,18 @@ export function createModeActions(
   ctx: Context,
   state: ModeState,
   deps: {
-    binding: Pick<Binding, 'agent'>
+    owner: { current(): boolean }
+    binding: Pick<Binding, 'agent' | 'capture' | 'isCurrent'>
     sessionModes: readonly SessionModeSpec[]
     commandService?: { find(agent: Agent, name: string): unknown }
     executeRegistryCommand(name: string, input: string): Promise<string | undefined>
     notify: ChannelState['notify']
   },
 ) {
-  const { binding, sessionModes, commandService, executeRegistryCommand, notify } = deps
+  const { owner, binding, sessionModes, commandService, executeRegistryCommand, notify } = deps
+  type ModeCapture = ReturnType<Binding['capture']>
+  const current = (capture: ModeCapture): boolean => { const value = owner.current() && binding.isCurrent(capture); if (!value) console.error('DEBUG MODE NOT CURRENT', owner.current(), binding.agent === capture.agent, (binding as any).generation, capture.generation); return value }
+  const capturedSession = (capture: ModeCapture) => capture.agent.session
 // Session-mode folds: last-wins projections over the session log. The
 // event types are registered by dsh-plan-mode / dsh-sandbox-policy /
 // dsh-user-approval and are NOT in this package's typed SessionEvent
@@ -78,11 +82,13 @@ const refreshMode = (): void => {
   state.mode = sessionModes[state.modeIndex]!
 }
 
-// Session.append rejects observer reentry; restore after publication unwinds.
-const pendingPlanExitRestores = new Map<object, SessionModeSpec>()
-const prePlanModes = new WeakMap<object, SessionModeSpec>()
-// An in-turn /plan off commits at pre-step, after the command has returned.
-const explicitPlanExits = new WeakSet<object>()
+  // Session.append rejects observer reentry; restore after publication
+  // unwinds. These are channel-scoped so a disposed/recreated Channel cannot
+  // inherit deferred work from a former owner.
+  const pendingPlanExitRestores = new Map<object, { capture: ModeCapture; target: SessionModeSpec }>()
+  const prePlanModes = new WeakMap<object, SessionModeSpec>()
+  // An in-turn /plan off commits at pre-step, after the command has returned.
+  const explicitPlanExits = new WeakSet<object>()
 
 const modePermissions = (events: readonly SessionEvent[]): SessionModeSpec => {
   const sandbox = foldSandboxMode(events)
@@ -121,36 +127,41 @@ const prePlanModeSpec = (log: readonly SessionEvent[]): SessionModeSpec | undefi
   return active && start >= 0 ? modePermissions(log.slice(0, start)) : undefined
 }
 
-const applyModeAtoms = (spec: SessionModeSpec): void => {
-  // The durable sandbox override is one session event (dsh-sandbox-policy's
-  // own write path); the session/event arm picks it up immediately.
-  if (spec.sandbox !== undefined && foldSandboxMode(binding.agent.session.events) !== spec.sandbox) {
-    ;(binding.agent.session as unknown as { append(type: string, data: Record<string, unknown>): unknown }).append(
-      'sandbox/mode',
-      { mode: spec.sandbox },
-    )
-  }
-  // Prefer the approval service (it narrates the switch to the model);
-  // the raw durable event is the fallback when it is unmounted.
-  if (spec.approval !== undefined && foldApprovalPolicy(binding.agent.session.events) !== spec.approval) {
-    const approval = ctx.get('approval') as
-      | { setPolicy(a: Agent, policy: 'ask' | 'never'): void }
-      | undefined
-    approval?.setPolicy(binding.agent, spec.approval)
-    // The service may no-op when its configured default already matches.
-    if (foldApprovalPolicy(binding.agent.session.events) !== spec.approval) {
-      ;(binding.agent.session as unknown as { append(type: string, data: Record<string, unknown>): unknown }).append(
-        'approval/policy',
-        { policy: spec.approval },
+  const applyModeAtoms = (spec: SessionModeSpec, capture: ModeCapture): void => {
+    if (!current(capture)) return
+    const agent = capture.agent
+    const session = capturedSession(capture)
+    // The durable sandbox override is one session event (dsh-sandbox-policy's
+    // own write path); the session/event arm picks it up immediately.
+    if (spec.sandbox !== undefined && foldSandboxMode(session.events) !== spec.sandbox) {
+      ;(session as unknown as { append(type: string, data: Record<string, unknown>): unknown }).append(
+        'sandbox/mode', { mode: spec.sandbox },
       )
     }
+    if (!current(capture)) return
+    // Prefer the approval service (it narrates the switch to the model);
+    // the raw durable event is the fallback when it is unmounted.
+    if (spec.approval !== undefined && foldApprovalPolicy(session.events) !== spec.approval) {
+      const approval = ctx.get('approval') as
+        | { setPolicy(a: Agent, policy: 'ask' | 'never'): void }
+        | undefined
+      approval?.setPolicy(agent, spec.approval)
+      if (!current(capture)) return
+      // The service may no-op when its configured default already matches.
+      if (foldApprovalPolicy(session.events) !== spec.approval) {
+        ;(session as unknown as { append(type: string, data: Record<string, unknown>): unknown }).append(
+          'approval/policy', { policy: spec.approval },
+        )
+      }
+    }
   }
-}
 
 /** Apply the configured atoms; an explicit exit owns its target mode. */
-const applyMode = async (spec: SessionModeSpec): Promise<void> => {
-  const session = binding.agent.session
-  pendingPlanExitRestores.delete(session)
+  const applyMode = async (spec: SessionModeSpec, capture = binding.capture()): Promise<void> => {
+    if (!current(capture)) return
+    const agent = capture.agent
+    const session = capturedSession(capture)
+    pendingPlanExitRestores.delete(session)
   const planMode = ctx.get('planMode') as
     | { get?(a: Agent): { active: boolean; pending?: boolean } }
     | undefined
@@ -161,11 +172,11 @@ const applyMode = async (spec: SessionModeSpec): Promise<void> => {
   // with no pending intent, that awaited event was abandoned (e.g. an
   // aborted pre-step) — drop the orphan so it cannot suppress a later restore
   // such as an approved exit_plan_mode.
-  if (planActive && planMode?.get?.(binding.agent).pending === undefined) {
+  if (planActive && planMode?.get?.(agent).pending === undefined) {
     explicitPlanExits.delete(session)
   }
-  if (spec.plan !== undefined && (planMode?.get?.(binding.agent).pending ?? planActive) !== spec.plan) {
-    if (commandService?.find(binding.agent, 'plan') === undefined) {
+  if (spec.plan !== undefined && (planMode?.get?.(agent).pending ?? planActive) !== spec.plan) {
+    if (commandService?.find(agent, 'plan') === undefined) {
       notify(t('mode-plan-unavailable'), { color: 'warning' })
       return
     }
@@ -178,26 +189,29 @@ const applyMode = async (spec: SessionModeSpec): Promise<void> => {
       previous.approval ??= approval?.effectivePolicy?.(session) ?? base?.approval
       prePlanModes.set(session, previous)
       // Persist missing defaults before /plan, so resume can recover them.
-      applyModeAtoms(previous)
+      applyModeAtoms(previous, capture)
     }
     if (!spec.plan) explicitPlanExits.add(session)
     try {
       const text = await executeRegistryCommand('plan', spec.plan ? '' : ' off')
-      if (session !== binding.agent.session) return
+      if (!current(capture) || session !== capturedSession(capture)) return
       if (text === undefined) {
         notify(t('mode-plan-unavailable'), { color: 'warning' })
         return
       }
     } finally {
-      if (session === binding.agent.session) {
-        const pending = planMode?.get?.(binding.agent).pending
+      if (current(capture) && session === capturedSession(capture)) {
+        const pending = planMode?.get?.(agent).pending
         if (!foldPlanActive(session.events) || pending !== false) explicitPlanExits.delete(session)
         if (!foldPlanActive(session.events) && pending !== true) prePlanModes.delete(session)
       }
     }
   }
-  applyModeAtoms(spec)
+  if (!current(capture)) return
+  applyModeAtoms(spec, capture)
+  if (!current(capture)) return
   refreshMode()
+  if (!current(capture)) return
   notify(t('mode-switched', { name: modeDisplayName(state.mode) }))
   state.emit()
 }
@@ -205,12 +219,16 @@ const applyMode = async (spec: SessionModeSpec): Promise<void> => {
 /** Shift+Tab: advance to the next configured session mode. Cycling starts
  *  from the mode DERIVED from the session log (never a stored index), so
  *  manual `/plan` use can never desync the cycle. */
-const cycleMode = async (): Promise<void> => {
-  const index = deriveModeIndex(binding.agent.session.events)
-  await applyMode(sessionModes[(index + 1) % sessionModes.length]!)
-}
+  const cycleMode = async (): Promise<void> => {
+    const capture = binding.capture()
+    if (!current(capture)) return
+    const index = deriveModeIndex(capturedSession(capture).events)
+    await applyMode(sessionModes[(index + 1) % sessionModes.length]!, capture)
+  }
 
   const onSessionEvent = (session: Agent['session'], event: SessionEvent): void => {
+    const capture = binding.capture()
+    if (!current(capture) || session !== capturedSession(capture)) return
     const eventType = (event as { type: string }).type
     if (eventType === 'plan/mode' || eventType === 'sandbox/mode' || eventType === 'approval/policy') {
       refreshMode()
@@ -220,13 +238,13 @@ const cycleMode = async (): Promise<void> => {
     prePlanModes.delete(session)
     if (explicitPlanExits.delete(session) || target === undefined) return
     const queued = pendingPlanExitRestores.has(session)
-    pendingPlanExitRestores.set(session, target)
+    pendingPlanExitRestores.set(session, { capture, target })
     if (queued) return
     queueMicrotask(() => {
       const restore = pendingPlanExitRestores.get(session)
       pendingPlanExitRestores.delete(session)
-      if (restore === undefined || session !== binding.agent.session || foldPlanActive(session.events)) return
-      applyMode(restore).catch(error => {
+      if (restore === undefined || !current(restore.capture) || session !== capturedSession(restore.capture) || foldPlanActive(session.events)) return
+      applyMode(restore.target, restore.capture).catch(error => {
         ctx.logger.warn(`dsh-tui: plan-exit mode restore failed: ${error instanceof Error ? error.message : String(error)}`)
       })
     })

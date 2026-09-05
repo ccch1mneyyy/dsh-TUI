@@ -1,6 +1,9 @@
 import { createSessionTreeReader } from './channel/session-tree.js'
 import { createInputDelivery } from './channel/input-delivery.js'
 import { createChannelBinding } from './channel/binding.js'
+import { createChannelActivity } from './channel/activity.js'
+import { createBindingEvents } from './channel/binding-events.js'
+import { createInitialChannelView, type ChannelLaunchOptions } from './channel/state.js'
 import { createChannelProjection } from './channel/projection.js'
 import { createManualCompaction } from './channel/compaction.js'
 import { createSessionAdoption } from './channel/session-adoption.js'
@@ -35,10 +38,7 @@ import {
 } from '@deepseek-ai/dsh-llm'
 import { SessionId, type SessionEvent } from '@deepseek-ai/dsh-session'
 import { randomUUID } from 'node:crypto'
-import { featureOn } from 'dsh-working-activity/config'
-import type { TrackerConfig } from 'dsh-working-activity/status'
-import { ActivityTracker } from 'dsh-working-activity/status'
-import { readActivityConfig, writeActivityFrames } from '../activityPrefs.js'
+import { writeActivityFrames } from '../activityPrefs.js'
 import { adapterRuntimeFor } from '../adapter/kernel/runtime-context.js'
 import {
   assertCapabilityShadowPolicy,
@@ -55,7 +55,6 @@ import { readAgentViewSessions, touchAgentViewSession, touchSession } from '../s
 import { resolveSessionModes, type SessionModeSpec } from '../sessionModes.js'
 import { AUTO_THEME_NAME } from '../theme.js'
 import { listThemeCatalog } from '../themeCatalog.js'
-import { normalizePageMargin, normalizeScrollGutter, normalizeStatusBar, normalizeToolBackground, type PageMarginSetting, type ScrollGutterMode, type StatusBarConfig, type ToolBackground } from '../tuiDisplayPrefs.js'
 import { resolveDshProfileName } from '../update.js'
 import { logForDebugging } from '../utils/debug.js'
 import { channelCommands } from './channel/commands.js'
@@ -133,79 +132,7 @@ async function listSessionsSnapshot(ctx: Context): Promise<readonly SessionSumma
 export function createChannel(
   ctx: Context,
   initialAgent: Agent,
-  options: {
-    model: string
-    cwd: string
-    provider: string
-    /** Configured reasoning effort: applied to the agent's requests when the
-     *  live route offers it (silently ignored otherwise), and shown from
-     *  startup until the first request/header event reports the adapter's
-     *  live value. */
-    effort?: string
-    /** Derive the working line from base session events; default on. */
-    activity?: boolean
-    /** Indicator preset for the working-activity line (`moon8`/`moon`/
-     *  `comet`/`dots`/… or `random`); default `moon8`. */
-    activityFrames?: string
-    /** Edit/Write diff presentation; default `auto` (side-by-side ≥110
-     *  columns, unified below). */
-    diffLayout?: 'auto' | 'split' | 'unified'
-    /** Thinking-block display; default `preview` (2-3 line live preview,
-     *  fold per step) — `full` keeps thinking expanded until turn end. */
-    thinkingFold?: 'preview' | 'full'
-    /** Tool-card background treatment; default `none`. */
-    toolBackground?: ToolBackground
-    /** Transcript gutter mode; default `timeline` (settings `dsh-tui.scrollGutter`). */
-    scrollGutter?: ScrollGutterMode
-    /** Root page inset setting; default `normal` (settings `dsh-tui.pageMargin`). */
-    pageMargin?: PageMarginSetting
-    /** Terminal-card header folding; default off (settings
-     *  `dsh-tui.foldTerminalCommand`). */
-    foldTerminalCommand?: boolean
-    /** Session-name chip on the prompt top border; default off (settings
-     *  `dsh-tui.promptSessionLabel`). */
-    promptSessionLabel?: boolean
-    /** Fullscreen draft editor entry points; default on (settings
-     *  `dsh-tui.expandEditor`). */
-    expandEditor?: boolean
-    /** Smooth streaming reveal; default on (settings
-     *  `dsh-tui.smoothStreaming`). */
-    smoothStreaming?: boolean
-    /** Status-footer field visibility and compactness. */
-    statusBar?: Partial<StatusBarConfig>
-    /** Show the header's pixel whale art; default on. */
-    whale?: boolean
-    /** Idle whale behaviors (fin/tail/sleep) after the intro settles;
-     * default off (click-hearts are always available). */
-    whaleIdle?: boolean
-    /** Minimal mode; default off (settings `dsh-tui.minimal`). */
-    minimal?: boolean
-    /** Show the segmented context bar row in the status footer; default on
-     *  (cordis.yml `contextBar: false` hides it, issue #29). */
-    contextBar?: boolean
-    /** cordis.yml's static preset choice (`preset` key): wins over the
-     *  persisted `/preset` preference for NEW sessions this channel starts. */
-    configuredPreset?: string
-    /** cordis.yml's static route (`provider`/`model` keys), undefined when
-     *  unset: wins over the persisted `/model` preference for NEW sessions
-     *  only when BOTH halves are pinned (atomic rule, issue #67), and is the
-     *  only route a resume overrides the target's own record with. */
-    configuredProvider?: string
-    configuredModel?: string
-    /** cordis.yml's raw `lang` key, undefined when unset: `/reload` consults
-     *  it so a static deployment choice is never overridden by lang.json. */
-    configuredLang?: string
-    /** cordis.yml's raw `activityFrames` key, undefined when unset: the
-     *  static choice `/reload` must not override. */
-    configuredActivityFrames?: string
-    /** The preset the initial agent's session runs under (from resolveAgent). */
-    agentPreset?: string
-    /** Shift+Tab session-mode cycle from cordis.yml `modes`; undefined →
-     *  the built-in default/plan/full cycle (sessionModes.ts). */
-    modes?: readonly SessionModeSpec[]
-    /** Handle of the initial agent; disposed when a rewind replaces it. */
-    handle?: AgentHandle
-  },
+  options: ChannelLaunchOptions,
 ): ChannelState {
   const owner = createChannelOwner()
   const rowIds = { value: 0 }
@@ -274,6 +201,9 @@ export function createChannel(
   // live feature) from "events can actually be dispatched here". The
   // returned disposer is owned by this channel's Cordis lifecycle below.
   const unmarkDecisionTopology = markDecisionDispatchTopology(ctx)
+  // This marker is effectful topology state, so own it at acquisition. A
+  // later setup failure must roll it back without waiting for final wiring.
+  owner.own(unmarkDecisionTopology)
   // Subagent projection owns the child store, transcript row identity and
   // stream batching. Transport subscriptions below only route scoped events.
   const subagentProjection = createSubagentProjection(() => state, {
@@ -525,16 +455,7 @@ export function createChannel(
     emitStream: emitter.emitStream,
     ...createSettingsHosts(ctx, owner.assertActive),
     ...createPreferences(() => state),
-    effortLevels: undefined,
-    version: 0,
-    rows: [],
-    status: 'starting',
-    sessionTitle: '',
-    sessionColor: '',
     get autoRecapOnOpen(): boolean {
-      // Live read (not a boot snapshot): a /settings change applies on the
-      // next session switch. No settings service → off (framework absent,
-      // e.g. headless fixtures — nothing to configure and no llm route).
       const settings = ctx.get('settings') as
         | { describe(options?: { redactSecrets?: boolean }): readonly { ns: string; value: unknown }[] }
         | undefined
@@ -542,57 +463,11 @@ export function createChannel(
       const ns = settings.describe({ redactSecrets: true }).find(entry => entry.ns === 'dsh-tui')
       return (ns?.value as Record<string, unknown> | undefined)?.recapOnOpen !== false
     },
-    agentId: binding.agent.id,
-    agentBindingGeneration: 0,
-    model: options.model,
-    provider: options.provider,
-    tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, peak: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, idle: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } },
-    cwd: options.cwd,
-    displayCwd: workspaceService.describe(options.cwd).description ?? options.cwd,
-    gitBranch: undefined,
-    working: false,
-    cancelPending: false,
-    spinnerMode: 'requesting',
-    responseChars: 0,
-    activeToolCount: 0,
-    turnStart: 0,
-    lastUserText: '',
-    notifications: [],
-    contextWindow: undefined,
-    // Explicit cordis.yml `effort` wins; otherwise the persisted /effort
-    // choice; the first request/header event re-asserts the adapter's truth.
-    reasoningEffort: options.effort,
-    // Session-mode seed; the first refreshMode() (bindAgent) re-derives it
-    // from the session log, so a resumed session lands on its recorded mode.
-    mode: sessionModes[0]!,
-    modeIndex: 0,
-    workingActivity: undefined,
-    activityFrames: normalizeActivityPreset(options.activityFrames),
-    configuredProvider: options.configuredProvider,
-    configuredModel: options.configuredModel,
-    configuredPreset: options.configuredPreset,
-    configuredActivityFrames: options.configuredActivityFrames,
-    configuredLang: options.configuredLang,
-    diffLayout: options.diffLayout ?? 'auto',
-    thinkingFold: options.thinkingFold ?? 'preview',
-    toolBackground: normalizeToolBackground(options.toolBackground),
-    scrollGutter: normalizeScrollGutter(options.scrollGutter),
-    pageMargin: normalizePageMargin(options.pageMargin),
-    foldTerminalCommand: options.foldTerminalCommand === true,
-    promptSessionLabel: options.promptSessionLabel === true,
-    expandEditor: options.expandEditor !== false,
-    smoothStreaming: options.smoothStreaming !== false,
-    statusBar: normalizeStatusBar(options.statusBar),
-    whale: options.whale !== false,
-    whaleIdle: options.whaleIdle !== false,
-    minimal: options.minimal === true,
-    activityEnabled: options.activity !== false,
-    contextBarEnabled: options.contextBar !== false,
-    agentPreset: options.agentPreset,
-    goal: undefined,
-    todos: [],
-    loadedContext: undefined,
-    pending: [],
+    ...createInitialChannelView(options, {
+      agentId: binding.agent.id,
+      mode: sessionModes[0]!,
+      cwdDescription: workspaceService.describe(options.cwd).description ?? options.cwd,
+    }),
     commandList: LOCAL_COMMANDS,
     commandCompletions(input: string) {
       // Warm the async vocabularies as soon as the input could be heading
@@ -751,19 +626,7 @@ export function createChannel(
         return commandTrees?.children(path) ?? []
       })
     },
-    lastUsage: undefined,
-    tps: undefined,
-    tpsSamples: [],
-    contextSegments: {
-      system: 0,
-      prompt: 0,
-      assistant: 0,
-      thinking: 0,
-      tools: 0,
-    },
-    subagents: [],
     subagentControl,
-    backgroundJobs: [],
     jobControl,
     loadOlder() {
       // Restore folded-away full text from the session log, newest folded
@@ -979,7 +842,7 @@ export function createChannel(
     releaseContributions() {
       owner.dispose()
       binding.clearSubscriptions()
-      stopActivityTick()
+      activity.stop()
       emitter.dispose()
       releaseSkillCommands()
       unsubscribeScenes?.()
@@ -1178,49 +1041,8 @@ ${output}
   state.status = binding.agent.status
   state.emit()
 
-  // Live subscription list and activity timer, rebound to every replacement
-  // agent so no status from the previous session can leak across a swap.
-  /** Tracker knobs + custom actions from the persisted pi-style config
-   *  (`~/.dsh-tui/working-activity.json`); a missing file means lively
-   *  defaults (all eggs on). */
-  const activityPrefsSnapshot = (): {
-    config: TrackerConfig
-    customActions?: Readonly<Record<string, readonly string[]>>
-  } => {
-    const cfg = readActivityConfig()
-    if (cfg === undefined) {
-      return { config: { phrases: true, detailLimit: 40, showIdle: false } }
-    }
-    return {
-      config: {
-        phrases: featureOn(cfg, 'phrases'),
-        detailLimit: 40,
-        showIdle: false,
-        features: {
-          rareEggs: featureOn(cfg, 'rareEggs'),
-          weekend: featureOn(cfg, 'weekend'),
-          holidays: featureOn(cfg, 'holidays'),
-          nightPhrases: featureOn(cfg, 'nightPhrases'),
-        },
-        customPhrases: cfg.customPhrases,
-        showTokPerSec: cfg.showTokPerSec,
-        workRemindAt: cfg.workRemindAt,
-      },
-      customActions: cfg.customActions,
-    }
-  }
-  let activityTracker = (() => {
-    const prefs = activityPrefsSnapshot()
-    return new ActivityTracker(prefs.config, Date.now, prefs.customActions)
-  })()
-  let activityTickTimer: NodeJS.Timeout | undefined
-
-  const stopActivityTick = (): void => {
-    if (activityTickTimer === undefined) return
-    clearInterval(activityTickTimer)
-    activityTickTimer = undefined
-  }
-
+  // The activity sidecar owns its tracker and interval; it never projects transcript facts.
+  const activity = createChannelActivity(ctx, state, owner, options.activity !== false)
 
   modelActions = createModelActions(ctx, state, {
     owner,
@@ -1248,7 +1070,7 @@ ${output}
     refreshSkillCommands,
     clearStagedImages,
     dropModelCompletion: () => modelActions.dropModelNodeCache(),
-    onModelSwitch: model => updateWorkingActivity('model switch', () => activityTracker.onModelSwitch(model)),
+    onModelSwitch: model => activity.onModelSwitch(model),
     notify,
   })
 
@@ -1263,6 +1085,7 @@ ${output}
   })
 
   modeActions = createModeActions(ctx, state, {
+    owner,
     binding,
     sessionModes,
     commandService,
@@ -1270,217 +1093,25 @@ ${output}
     notify,
   })
 
-  /** Render the current tracker into the TUI-only projection. */
-  const renderWorkingActivity = (): ActivityStatus | undefined => {
-    if (options.activity === false) {
-      state.workingActivity = undefined
-      return undefined
-    }
-    const rendered = activityTracker.render()
-    state.workingActivity = rendered
-    return rendered
-  }
+  // Event subscription routing is a distinct binding owner. It captures the
+  // live binding generation through binding.subscribe and refuses retained
+  // callbacks after owner revocation; projection remains single-writer.
+  const bindingEvents = createBindingEvents(ctx, {
+    owner,
+    binding,
+    state,
+    activity,
+    inputConvergence,
+    selection,
+    modelActions,
+    modeActions,
+    projector,
+    subagents: subagentProjection,
+    agentView,
+    messageObserver,
+  })
+  const bindAgent = bindingEvents.bind
 
-  // Working Activity is an optional presentation sidecar. A malformed durable
-  // event must never let it abort the authoritative channel projection (Cordis
-  // contains the listener throw, but the rest of THIS callback would otherwise
-  // be skipped — including turn/end and inbox retirement).
-  let activityFailureReported = false
-  const updateWorkingActivity = (
-    source: string,
-    update?: () => void,
-  ): ActivityStatus | undefined => {
-    try {
-      update?.()
-      return renderWorkingActivity()
-    } catch (error: unknown) {
-      if (!activityFailureReported) {
-        activityFailureReported = true
-        const detail = error instanceof Error ? error.message : String(error)
-        ctx.logger.warn(`dsh-tui: working-activity ignored ${source} after a projection error: ${detail}`)
-      }
-      return undefined
-    }
-  }
-
-  /**
-   * Release volatile UI gates when the bound driver is definitively quiescent
-   * but its terminal session event did not reach this projection. This does not
-   * invent a turn/end or any transcript fact; it only reconciles live controls
-   * to the authoritative Agent status so Enter/Esc cannot remain latched.
-   */
-  const reconcileRetiredProjection = (status: 'idle' | 'disposed'): void => {
-    if (!state.working) return
-    ctx.logger.warn(
-      `dsh-tui: agent became ${status} while the channel still projected an open turn; releasing volatile UI gates`,
-    )
-    inputConvergence.cancelInFlight = false
-    state.cancelPending = false
-    state.working = false
-    state.activeToolCount = 0
-    projector.settleStreaming()
-    projector.updateSpinnerMode()
-  }
-
-  const bindAgentUnsafe = (): void => {
-    state.agentBindingGeneration = binding.bind()
-    stopActivityTick()
-    // Cancel state and deferred interrupt delivery belong to one bound agent.
-    // A replacement must neither inherit the old latch nor receive its queued
-    // microtask after the session identity changes.
-    inputConvergence.cancelInFlight = false
-    inputConvergence.interruptSeq += 1
-    const prefs = activityPrefsSnapshot()
-    activityTracker = new ActivityTracker(prefs.config, Date.now, prefs.customActions)
-    activityFailureReported = false
-    updateWorkingActivity('agent bind', () => activityTracker.onAgentStatus(binding.agent.status))
-    activityTickTimer = setInterval(() => {
-      if (!owner.current()) { stopActivityTick(); return }
-      const previous = state.workingActivity
-      const rendered = updateWorkingActivity('activity tick')
-      if (rendered === undefined) return
-      // Live phases deliberately wake at 500 ms even when the formatted line
-      // has not crossed its next whole-second boundary: turnElapsedMs remains
-      // a current state value, while line changes cover phrase rotation and
-      // the short-lived completed-tool summary.
-      if (
-        rendered.phase === 'waiting' ||
-        rendered.phase === 'thinking' ||
-        rendered.phase === 'tool' ||
-        previous?.phase !== rendered.phase ||
-        previous.line !== rendered.line
-      ) {
-        state.emit()
-      }
-    }, 500)
-    activityTickTimer.unref()
-    // Re-couple the channel-owned model selection to the new agent's
-    // assembly/request waterfalls, then re-apply the persisted effort when
-    // this agent's route offers it (dsh-agent installModelSelection).
-    modelActions.selection.current = undefined
-    modelActions.selection.assembled = undefined
-    // {{model}} backfill (issue #155): a resumed agent's route lives only in
-    // its session's request/header records — agentOptions.model stays
-    // undefined unless cordis.yml pins a COMPLETE provider+model pair — so
-    // the assemble-time persona variable `{{model}}` was registered but
-    // valueless, and dsh-system-prompt's interpolate() throws before any
-    // model call. Seed the selection from the channel's display route (on
-    // resume it already carries the session's recorded route; on create it
-    // matches the route the agent was created with). Per
-    // installModelSelection's contract an absent effort restores the
-    // provider/default behavior, so seeding never pins an effort the route
-    // did not ask for; applyPreferredEffort below still upgrades the seed
-    // when the user has a persisted preference the route offers.
-    if (binding.agent.options?.model === undefined && state.provider !== '' && state.model !== '') {
-      modelActions.selection.current = { provider: state.provider, model: state.model }
-    }
-    void modelActions.applyPreferredEffort()
-    modeActions.refreshMode()
-    const register = <T extends () => void>(dispose: T): T => {
-      binding.subscribe(dispose)
-      return dispose
-    }
-    const on = (...args: Parameters<typeof ctx.on>): ReturnType<typeof ctx.on> =>
-      register(ctx.on(...args))
-    register(installModelSelection(binding.agent.ctx, modelActions.selection))
-    void [
-      on('agent/status', ({ agent: subject, status }) => {
-        if (subject !== binding.agent) return
-        state.status = status
-        updateWorkingActivity(`agent/status:${status}`, () => activityTracker.onAgentStatus(status))
-        if (status === 'idle') reconcileRetiredProjection('idle')
-        state.emit()
-      }),
-      on('agent/disposed', ({ agent: subject }) => {
-        if (subject !== binding.agent) return
-        state.status = 'disposed'
-        stopActivityTick()
-        reconcileRetiredProjection('disposed')
-        state.emit()
-      }),
-      // Pending delivery is driven by the agent inbox: a claimed message
-      // has landed in a turn (steer → step boundary, followup → next turn);
-      // a discarded one was dropped by a cancel or withdrawn via Alt+Up.
-      // Retire it from the preview. Official dsh-agent rc.6 emits these as
-      // single-payload notifications `{ agent, message }`; `inserted` is not
-      // handled here because trackPending already registered the preview
-      // synchronously at submit time.
-      (() => {
-        const retirePending = (payload: { agent: unknown; message: { id?: unknown } }): void => {
-          if (payload.agent !== binding.agent) return
-          const messageId = payload.message?.id
-          if (typeof messageId !== 'string') return
-          const before = state.pending.length
-          state.pending = state.pending.filter(item => item.id !== messageId)
-          if (state.pending.length !== before) state.emit()
-        }
-        const disposers: Array<() => boolean> = []
-        for (const event of ['agent/inbox/claimed', 'agent/inbox/discarded'] as const) {
-          disposers.push(on(event, retirePending))
-        }
-        return () => {
-          for (const dispose of disposers) dispose()
-        }
-      })(),
-      on('session/event', (session, event) => {
-        // The currently bound main session always wins. SubagentActivityStore
-        // intentionally retains Session-object mappings for completed cards;
-        // if one of those sessions is later adopted/resumed as the main agent,
-        // checking the stale child mapping first would swallow every main event
-        // (including turn/end) and leave working/cancelPending latched forever.
-        const isMainSession = session === binding.agent.session
-        if (!isMainSession && subagentProjection.onSessionEvent(session, event)) return
-        // Otherwise handle the bound main-agent session.
-        if (!isMainSession) return
-        if (session !== binding.agent.session) {
-          // A background (agent view) session is active: refresh the rows
-          // so its summary/status follows the live output, throttled.
-          agentView.schedule()
-          return
-        }
-        // Observation broker (C-042): maps user/message + assistant/message
-        // into grant-gated envelopes; every other event type is a no-op, and
-        // publish never throws into this arm.
-        messageObserver?.publish(session, event)
-        updateWorkingActivity(`session/event:${event.type}`, () => {
-          activityTracker.onSessionEvent(event)
-          // Interrupt quip: an aborted/interrupted turn ends the round; the
-          // comeback copy shows on the next thinking rotation.
-          if ((event as { type: string }).type === 'turn/end') {
-            const reason = (event.data as { reason?: { kind?: string } }).reason
-            if (reason?.kind === 'aborted' || reason?.kind === 'interrupted') {
-              activityTracker.onInterrupted()
-            }
-          }
-        })
-        modeActions.onSessionEvent(session, event)
-        projector.renderEvent(event)
-        // Streaming deltas (one event per token) take the frame-aligned
-        // path; every other event keeps synchronous notification.
-        if (event.type === 'assistant/chunk') state.emitStream()
-        else state.emit()
-      }),
-      // Child lifecycle remains an observe-only transport; the projection
-      // performs synchronous settlement and frame-batched streaming itself.
-      (() => {
-        const disposeStart = on('subagent/start' as any, (info: { id: string; runId?: string; provider: string; local?: boolean }) => {
-          subagentProjection.onStart(info)
-        })
-        const disposeEnd = on('subagent/end' as any, (info: { id: string; stopReason: string; lastAssistantMessage?: unknown[] }) => subagentProjection.onEnd(info))
-        return () => { disposeStart(); disposeEnd() }
-      })(),
-    ]
-  }
-  // A subscription/setup exception after commit must not strand a live-looking
-  // identity with only part of its channel plumbing installed.
-  const bindAgent = (): void => {
-    try {
-      bindAgentUnsafe()
-    } catch (error) {
-      owner.dispose()
-      throw error
-    }
-  }
   const sessionAdoption = createSessionAdoption(state, {
     binding,
     rowIds,
@@ -1582,7 +1213,7 @@ ${output}
     agent: () => binding.agent,
     withDecisionPending,
     notify,
-    onComplete: () => updateWorkingActivity('compaction', () => activityTracker.onCompact('done')),
+    onComplete: () => activity.onCompact(),
   })
   settleManualCompaction = manualCompaction.settle
   compactManualSession = manualCompaction.compact
@@ -1616,22 +1247,33 @@ ${output}
   // headers. Their child scopes do not share this channel's per-agent
   // ModelSelectionRef, so fill an otherwise incomplete first request from
   // the active route. Keep complete child-specific routes authoritative.
-  ctx.on('agent/request', async (_payload, next) => {
+  const disposeInheritedChildRoute = ctx.on('agent/request', async (_payload, next) => {
+    // This listener intentionally serves child scopes, not the bound agent's
+    // selection pipeline. Capture the foreground route before awaiting so an
+    // old child waterfall cannot borrow a later binding's model (A→B→A safe).
+    const capture = binding.capture()
+    const provider = state.provider
+    const model = state.model
     const resolved = await next()
-    if (!owner.current()) return resolved
+    if (!owner.current() || !binding.isCurrent(capture)) return resolved
     if (
       typeof resolved.provider === 'string' && resolved.provider.length > 0 &&
       typeof resolved.model === 'string' && resolved.model.length > 0
     ) {
       return resolved
     }
-    return {
-      ...resolved,
-      provider: state.provider,
-      model: state.model,
-    }
+    return { ...resolved, provider, model }
   })
-  bindAgent()
+  owner.own(disposeInheritedChildRoute)
+  try {
+    bindAgent()
+  } catch (error) {
+    // bindAgent acquires listeners/timers synchronously; owner teardown now
+    // includes every immediately-owned root resource and rolls all of them
+    // back before this constructor exposes any partial channel.
+    owner.dispose()
+    throw error
+  }
   // Cordis owns the Channel lifetime. Rebinding handles the common case;
   // this effect closes the final timer and releases the DecisionEvents
   // dispatch-topology marker when the Channel's context unloads.
@@ -1639,8 +1281,6 @@ ${output}
     effect?: (setup: () => () => void, label?: string) => void
   }).effect
   const releaseLifecycle = owner.own(() => {
-    stopActivityTick()
-    unmarkDecisionTopology()
     releaseSkillCommands()
     unsubscribeScenes?.()
   })
@@ -1674,7 +1314,7 @@ ${output}
           // is exactly what the column claims.
           noteBranch(binding.agent.session.id, branch)
           // Feed the working line so git tools can show ` · git <branch>`.
-          updateWorkingActivity('git branch', () => activityTracker.onGitBranch(branch))
+          activity.onGitBranch(branch)
           state.emit()
         }
       })
@@ -1690,6 +1330,7 @@ ${output}
   return state
 }
 
+export type { ChannelLaunchOptions } from './channel/state.js'
 export { expandMentions } from './channel/mentions.js'
 export { sessionCwdMatches } from './channel/paths.js'
 export type { ActivityStatus, AgentViewDispatchResult, AgentViewRow, AgentViewStatus, BackgroundResult, Channel, ChannelGoal, ChannelState, ChatRow, CredentialStatus, EffortOption, JobControl, JobRow, LoadedContext, LoadedContextEntry, LoadedContextFile, LoadedContextSkill, LoadedContextTool, MentionAttachments, MentionExpansion, MentionFs, NotificationItem, PendingMessage, PermissionPresetAvailability, PermissionPresetCurrent, PermissionPresetOption, PermissionPresetSnapshot, PresetOption, ResumeResult, SkillInfo, StagedImageInput, SubagentControl, SubagentRow, TodoPanelItem, TokenBucket, TokenUsage, ToolCallView, ToolFileDiff, ToolResultView, ToolRow, ToolViewPresenter } from './channel/types.js'

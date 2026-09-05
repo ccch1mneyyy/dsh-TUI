@@ -135,8 +135,11 @@ export function createSessionMetadataActions(ctx: Context, deps: {
 
   const recapRecent = async (options?: { signal?: AbortSignal; onText?: (delta: string) => void }) => {
     const capture = deps.binding.capture()
-    const llm = ctx.get('llm') as SideQuestionLlm | undefined
-    if (!llm) return { summary: null, error: t('recap-llm-unavailable') }
+    const llm = ctx.get('llm') as Partial<SideQuestionLlm> | undefined
+    // Optional host services can be partially mounted while startup is still
+    // composing. A present service without its streaming capability is just
+    // as unavailable as an absent service; do not throw from an auto recap.
+    if (typeof llm?.stream !== 'function') return { summary: null, error: t('recap-llm-unavailable') }
     const activity = collectRecentActivity(capture.agent.session.events, RECAP_RECENT_CHARS)
     if (activity === '') return { summary: null, error: t('recap-no-activity') }
     const signal = withOwnerSignal(options?.signal)

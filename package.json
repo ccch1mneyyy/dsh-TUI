@@ -213,7 +213,8 @@
     "verify:selection-resize": "node --import tsx/esm scripts/verify-selection-viewport-resize.ts",
     "verify:inject-channel": "node --import tsx/esm scripts/verify-inject-channel.mjs",
     "verify:background-extraction": "node --import tsx/esm scripts/verify-background-extraction.ts",
-    "verify:plugin-catalog-extraction": "node --import tsx/esm scripts/verify-plugin-catalog-extraction.ts"
+    "verify:plugin-catalog-extraction": "node --import tsx/esm scripts/verify-plugin-catalog-extraction.ts",
+    "verify:channel-composition": "node --import tsx/esm scripts/verify-channel-composition.ts"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.1",

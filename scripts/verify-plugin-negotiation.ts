@@ -40,6 +40,7 @@ const { parseManifest } = await import('@dsh-std/manifest')
 const { loadSpecData } = await import('../src/adapter/standard/registry.js')
 const { createContractIndex, validatePlugin } = await import('../src/adapter/standard/validate.js')
 const { negotiate } = await import('../src/adapter/standard/negotiate.js')
+const { createReportActions } = await import('../src/dsh-adapter/channel/reports.js')
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 const fixture = (name: string) => join(root, 'dsh-ecosystem-spec', 'conformance', 'fixtures', name)
@@ -349,12 +350,39 @@ const overview = () => pluginsInfoLines('', { grants, host })
   const chat = readFileSync(join(root, 'src/screens/Chat.tsx'), 'utf8')
   check1("Chat.tsx dispatches case 'plugins' to channel.pluginsInfo(rawInput)",
     chat.includes("case 'plugins':") && chat.includes('channel.pluginsInfo(rawInput)'))
-  const channel = readFileSync(join(root, 'src/dsh-adapter/channel.ts'), 'utf8')
   check1('channel interface declares pluginsInfo(args)', readFileSync(join(root, 'src/adapter/ports/channel-ui.ts'), 'utf8').includes('pluginsInfo(args: string): string[]'))
-  check1('channel implementation soft-probes tuiPluginHost for pluginsInfo',
-    /pluginsInfo\(args: string\) \{[\s\S]{0,300}ctx\.get\('tuiPluginHost'\)/.test(channel))
-  check1('doctorInfo adds the generation line', channel.includes("t('doctor-plugin-generation'"))
-  check1('doctorInfo adds the registry self-check line', channel.includes("t('doctor-plugin-registry'"))
+  // Reports were extracted from channel.ts. Exercise their live ctx lookup
+  // instead of pinning an implementation location with root-source regexes.
+  let reportHost: { generationId: string; selfCheck(): readonly string[]; describe(): ReturnType<typeof liveHostDescriptor> } | undefined
+  const reportActions = createReportActions({
+    get(name: string) { return name === 'tuiPluginHost' ? reportHost : undefined },
+  } as never, {
+    owner: { current: () => true },
+    capture: () => ({ agent: { id: 'report-agent', session: { events: [] } } as never, generation: 1 }),
+    current: () => true,
+    cwd: () => fakeHome,
+    model: () => 'report-model',
+    provider: () => 'report-provider',
+    contextWindow: () => undefined,
+    sessionTitle: () => '',
+    runtime: {} as never,
+    grantStore: () => grants,
+  })
+  const missingDoctor = reportActions.doctorInfo()
+  check1('reports handles a missing plugin host',
+    missingDoctor.some(line => line.includes('未挂载')))
+  check1('reports handles a missing plugin host for /plugins',
+    reportActions.pluginsInfo('').some(line => line.includes('plugin-host 行未挂载')))
+  reportHost = { generationId: 'late-host-generation', selfCheck: () => [], describe: () => host }
+  const liveDoctor = reportActions.doctorInfo()
+  check1('reports observes a host mounted after action construction',
+    liveDoctor.some(line => line.includes('late-host-generation')) &&
+    reportActions.pluginsInfo('').some(line => line.includes('generation negotiation-battery')))
+  check1('reports exposes a clean live registry self-check',
+    liveDoctor.some(line => line.includes('自检') && line.includes('✓')))
+  reportHost = { ...reportHost, selfCheck: () => ['late registry violation'] }
+  check1('reports exposes live registry violations',
+    reportActions.doctorInfo().some(line => line.includes('自检') && line.includes('✗ 1')))
   const i18n = readFileSync(join(root, 'src/i18n.ts'), 'utf8')
   check1('trust banner exists in both languages',
     i18n.includes("'plugins-trust-banner'") && i18n.includes('同进程运行') && i18n.includes('in-process with the host'))
