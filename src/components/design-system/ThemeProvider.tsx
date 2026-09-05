@@ -14,6 +14,7 @@ import type { TuiThemeHost } from '../../dsh-adapter/themes.js'
 import { useRuntimeThemeSnapshot } from '../../hooks/useRuntimeThemeSnapshot.js'
 import { readThemePref, writeThemePref } from '../../themePrefs.js'
 import useStdin from '../../ink/hooks/use-stdin.js'
+import useApp from '../../ink/hooks/use-app.js'
 import { oscColor } from '../../ink/terminal-querier.js'
 import { parseOscColor } from '../../ink/termio/osc.js'
 import { logForDebugging } from '../../utils/debug.js'
@@ -131,6 +132,7 @@ export function ThemeProvider({
   // the persisted preference remains untouched.
   const requestedThemeRef = React.useRef<string | undefined>(forced)
   const { internal_querier, isRawModeSupported } = useStdin()
+  const { stdout } = useApp()
   /**
    * The terminal background OSC 11 reported, if any. It is the colour a
    * backdrop shade fades explicit colours toward (see StylePool.withDim);
@@ -290,13 +292,13 @@ export function ThemeProvider({
   // is a dependency because `auto` resolves through it.
   useEffect(() => {
     if (active === null) return
-    const ink = instances.get(process.stdout)
+    const ink = instances.get(stdout)
     if (ink === undefined) return
     ink.setShadeTarget(
       detectedBackground
         ?? (isLightThemeActive(renderedTheme) ? { r: 255, g: 255, b: 255 } : { r: 0, g: 0, b: 0 }),
     )
-  }, [active, renderedTheme, autoBase, detectedBackground])
+  }, [active, renderedTheme, autoBase, detectedBackground, stdout])
 
   if (active === null) return null
   return <ThemeContext.Provider value={value}>{children}</ThemeContext.Provider>

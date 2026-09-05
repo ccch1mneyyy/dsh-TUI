@@ -161,16 +161,16 @@ const STATUS_VIEW_UI = Object.freeze({
 /** Shared empty snapshot for hosts whose channel has no event log. */
 const NO_EVENTS: readonly SessionEvent[] = []
 
-const PERMISSION_RESULT_CELLS = 200
+const COMMAND_RESULT_CELLS = 200
 
-function cleanPermissionError(error: unknown): string {
+function cleanCommandError(error: unknown): string {
   try {
     if (error instanceof Error) {
       return typeof error.message === 'string'
-        ? cleanRenderText(error.message, PERMISSION_RESULT_CELLS)
+        ? cleanRenderText(error.message, COMMAND_RESULT_CELLS)
         : ''
     }
-    return cleanScalarText(error, PERMISSION_RESULT_CELLS)
+    return cleanScalarText(error, COMMAND_RESULT_CELLS)
   } catch {
     return ''
   }
@@ -1203,13 +1203,14 @@ export function Chat({
         channel.notify(t('command-not-found', { name }), { color: 'error' })
         return false
       }
-      if (outcome.text !== '') {
-        channel.notify(outcome.text, outcome.kind === 'error' ? { color: 'error' } : undefined)
+      const cleaned = cleanRenderText(outcome.text, COMMAND_RESULT_CELLS)
+      if (cleaned !== '') {
+        channel.notify(cleaned, outcome.kind === 'error' ? { color: 'error' } : undefined)
       }
       return outcome.consumeDraft
     }).catch((error: unknown) => {
       if (channel.agentBindingGeneration !== originAgentBinding) return false
-      const detail = cleanPermissionError(error)
+      const detail = cleanCommandError(error)
       if (detail !== '') channel.notify(detail, { color: 'error' })
       return false
     })
@@ -1237,14 +1238,14 @@ export function Chat({
         channel.notify(t('command-not-found', { name: 'permission' }), { color: 'error' })
         return false
       }
-      const cleaned = cleanRenderText(outcome.text, PERMISSION_RESULT_CELLS)
+      const cleaned = cleanRenderText(outcome.text, COMMAND_RESULT_CELLS)
       if (cleaned !== '') {
         channel.notify(cleaned, outcome.kind === 'error' ? { color: 'error' } : undefined)
       }
       return outcome.consumeDraft
     }).catch((error: unknown) => {
       if (channel.agentBindingGeneration !== originAgentBinding) return false
-      const detail = cleanPermissionError(error)
+      const detail = cleanCommandError(error)
       if (detail !== '') channel.notify(detail, { color: 'error' })
       return false
     })

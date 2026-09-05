@@ -223,6 +223,15 @@ async function run() {
       channel.steered.length === 0 && channel.submitted.length === 0,
       JSON.stringify({ steered: channel.steered, submitted: channel.submitted }),
     )
+    stdin.write('next')
+    await sleep(100)
+    stdin.write('\r')
+    await sleep(300)
+    check(
+      'Enter after Ctrl+J delivers both draft lines with the inserted newline',
+      channel.steered.length === 1 && channel.steered[0] === 'piped\nnext' && channel.submitted.length === 0,
+      JSON.stringify({ steered: channel.steered, submitted: channel.submitted }),
+    )
     instance.unmount()
   }
 

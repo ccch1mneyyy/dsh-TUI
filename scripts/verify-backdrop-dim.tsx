@@ -28,10 +28,9 @@ import xterm from '@xterm/headless'
 import { settled, sleep } from './lib/term-test.mjs'
 
 const { Terminal: XTerm } = xterm
-const [{ render, Box, Text }, { StylePool, transitionAnsiCodes }, { default: instances }] = await Promise.all([
+const [{ render, Box, Text, ThemeProvider }, { StylePool, transitionAnsiCodes }] = await Promise.all([
   import('../src/ui.js'),
   import('../src/ink/screen.js'),
-  import('../src/ink/instances.js'),
 ])
 
 let failures = 0
@@ -151,17 +150,13 @@ function Harness(): React.ReactNode {
 
 const terminal = new XTerm({ cols: COLS, rows: ROWS, scrollback: 0, allowProposedApi: true })
 const stdout = new FakeStdout(terminal)
-const app = await render(<Harness />, {
+const app = await render(<ThemeProvider theme="dark"><Harness /></ThemeProvider>, {
   stdin: new FakeStdin() as never,
   stdout: stdout as never,
   stderr: new FakeStderr() as never,
   exitOnCtrlC: false,
   patchConsole: false,
 })
-// The shade target ThemeProvider would set from OSC 11 (black: a dark
-// terminal). Explicit colours fade halfway toward it; default text takes
-// faint.
-instances.get(stdout as never)!.setShadeTarget({ r: 0, g: 0, b: 0 })
 
 const line = (y: number): string => terminal.buffer.active.getLine(y)?.translateToString(true) ?? ''
 const text = (): string => Array.from({ length: ROWS }, (_, y) => line(y)).join('\n')
@@ -191,7 +186,7 @@ const bgOf = (x: number, y: number): number => cell(x, y)?.getBgColor() ?? -1
 const packed = (r: number, g: number, b: number): number => (r << 16) | (g << 8) | b
 const PIXEL_ROW = 8
 
-await settled(() => text().includes('filler 4'))
+await settled(() => text().includes('filler 2'))
 // Row 4 is excluded from the "plain" checks: `dimColor` is the theme's own
 // business (it may be a colour rather than SGR 2); the shade must still
 // leave it faint while open and touch nothing else when closed.
@@ -277,6 +272,15 @@ check('closed again: the pixel colours are restored exactly',
 check('closed again: colliding colours return to their independent sources',
   fgOf(0, 9) === packed(200, 200, 200) && bgOf(0, 9) === packed(200, 200, 200)
     && fgOf(1, 9) === packed(100, 100, 100) && bgOf(1, 9) === packed(100, 100, 100), line(9))
+
+app.rerender(<ThemeProvider key="light" theme="light"><Harness /></ThemeProvider>)
+await settled(() => text().includes('stream: first'))
+setState({ open: true, stream: 'light', backdropRows: '100%' })
+check('theme: a custom output stream receives the light backdrop target',
+  await settled(() =>
+    fgOf(0, PIXEL_ROW) === packed(228, 178, 153)
+    && bgOf(0, PIXEL_ROW) === packed(138, 148, 158)),
+  text())
 
 await app.unmount()
 terminal.dispose()

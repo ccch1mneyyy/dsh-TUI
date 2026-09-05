@@ -20,7 +20,8 @@ import { PassThrough, Writable } from 'node:stream'
 mkdirSync(process.env.HOME!, { recursive: true })
 import React from 'react'
 import xterm from '@xterm/headless'
-import sharp from 'sharp'
+import { loadSharp } from '../src/dsh-adapter/sharp.js'
+import { stringWidth } from '../src/ink/stringWidth.js'
 import type { ChatRow } from '../src/dsh-adapter/channel.js'
 import type { PromptController } from '../src/components/PromptInput.js'
 import type { InjectController } from '../src/dsh-adapter/inject-channel.js'
@@ -35,7 +36,7 @@ const [
   { QuestionStore },
   { TuiDialogStore },
   { ImagePreviewOverlay },
-  { clearTranscriptImageCacheForTests, TranscriptImages },
+  { clearTranscriptImageCacheForTests, TranscriptImages, transcriptImageLabel },
   { parsePastedImagePath, stageClipboardFilePaths },
   { PromptInput },
   { TuiStatusStore },
@@ -56,6 +57,12 @@ const [
   import('../src/dsh-adapter/channel.js'),
   import('../src/dsh-adapter/transcript-images.js'),
 ])
+
+const sharp = await loadSharp()
+if (sharp === undefined) {
+  console.log('SKIP interactive image regression: optional sharp decoder is unavailable')
+  process.exit(0)
+}
 
 let failures = 0
 function check(name: string, ok: boolean, detail = ''): void {
@@ -452,6 +459,15 @@ function fakeImage(id: string, name: string, fail = false): TranscriptImage {
   }
 }
 
+{
+  const image = fakeImage('sha256:label', '\u001b[31msafe\u001b[0m\n🌈\u001b]0;hidden\u0007')
+  check('image label: ANSI sequences are removed and whitespace is folded',
+    transcriptImageLabel(image) === 'safe 🌈')
+  const longLabel = transcriptImageLabel({ ...image, name: `${'a'.repeat(79)}🌈.png` })
+  check('image label: truncation respects terminal cells and preserves Unicode',
+    stringWidth(longLabel) <= 80 && longLabel.isWellFormed() && longLabel.endsWith('…'), longLabel)
+}
+
 const COLS = 80
 const ROWS = 30
 // CSI-u: Ctrl+Shift+E (E=69, modifier 6 = ctrl+shift).
@@ -525,6 +541,16 @@ function screenOf(terminal: InstanceType<typeof XTerm>, rows: number): Screen {
     !screen.text().includes('[Loading'))
   check('overlay: the metadata-only card never reads pixels',
     (readCounts.get('sha256:narrow') ?? 0) === 0)
+  app.rerender(
+    <Box width={1} height={10}>
+      <ImagePreviewOverlay image={fakeImage('sha256:one-column', 'tiny.png')} onClose={() => {}} />
+    </Box>,
+  )
+  check('overlay: a one-column region retains a single border corner without overflow',
+    await settled(() => screen.text().split('\n').some(line => line.trimEnd() === '╭')),
+    screen.text())
+  check('overlay: a one-column region never reads pixels',
+    (readCounts.get('sha256:one-column') ?? 0) === 0)
   await app.unmount()
   terminal.dispose()
 }
@@ -1011,6 +1037,7 @@ function makeChannel() {
   const submitted: string[] = []
   let commandCalls = 0
   let commandImageCount = 0
+  const commandNotices: Array<{ text: string; color?: string }> = []
   const channel = {
     ...makeChannel(),
     commandList: [
@@ -1023,6 +1050,9 @@ function makeChannel() {
       },
     ],
     submit(text: string) { submitted.push(text) },
+    notify(text: string, options?: { color?: string }) {
+      commandNotices.push({ text, color: options?.color })
+    },
     discardStagedImage(stageId: string) { discarded.push(stageId) },
     runExternalCommandOutcome(
       _name: string,
@@ -1036,7 +1066,11 @@ function makeChannel() {
         title: 'DRAFT-LEASE-DIALOG',
         confirmLabel: 'Continue',
         cancelLabel: 'Cancel',
-      }).then(() => ({ kind: 'error' as const, text: '', consumeDraft: false }))
+      }).then(() => ({
+        kind: 'error' as const,
+        text: `\u001b[31mPlugin result\u001b[0m\n${'🌈'.repeat(150)}`,
+        consumeDraft: false,
+      }))
     },
   }
   const dialogImagePath = `${process.env.HOME}/dialog-command.png`
@@ -1098,6 +1132,14 @@ function makeChannel() {
       && !discarded.includes('stage-1')
       && channel.hasStagedImage('stage-1'),
     `${JSON.stringify(discarded)}\n${screen.text()}`)
+  const commandNotice = commandNotices.at(-1)
+  check('chat command: result notices are bounded single-line text and retain error styling',
+    commandNotice?.text.startsWith('Plugin result 🌈') === true
+      && commandNotice.text.endsWith('…')
+      && !/[\u0000-\u001f\u007f-\u009f]/u.test(commandNotice.text)
+      && stringWidth(commandNotice.text) <= 200
+      && commandNotice.color === 'error',
+    JSON.stringify(commandNotice))
   injector?.append(' POST-DIALOG')
   check('chat dialog: external injection resumes only after the dialog closes',
     await settled(() => screen.text().includes('POST-DIALOG')),

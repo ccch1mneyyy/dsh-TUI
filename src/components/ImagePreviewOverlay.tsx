@@ -301,6 +301,7 @@ function truncateEnd(text: string, maxWidth: number): string {
  * dash on each side of the corners so the row still reads as a border.
  */
 function borderTitleRow(title: string, cardColumns: number): string {
+  if (cardColumns < 2) return cardColumns === 1 ? '╭' : ''
   const inner = Math.max(0, cardColumns - 2)
   const text = truncateEnd(title, Math.max(0, inner - 4))
   const labelled = text === '' ? '' : ` ${text} `

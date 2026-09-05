@@ -1,9 +1,11 @@
 import { createContext } from 'react'
 
 /**
- * The `AppContext` value: a function to manually exit (unmount) the Ink app.
+ * The Ink app's exit handler and output stream.
  */
 export type Props = {
+  /** The output stream supplied to this app's render call. */
+  readonly stdout: NodeJS.WriteStream
   /**
    * Exit (unmount) the whole Ink app.
    */
@@ -11,10 +13,11 @@ export type Props = {
 }
 
 /**
- * `AppContext` is a React context, which exposes a method to manually exit the app (unmount).
+ * App-scoped services shared by the renderer and its descendants.
  */
 // eslint-disable-next-line @typescript-eslint/naming-convention
 const AppContext = createContext<Props>({
+  stdout: process.stdout,
   exit() {},
 })
 
