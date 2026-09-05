@@ -638,9 +638,10 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
         }).default({ ...DEFAULT_STATUS_BAR }),
         // Header pixel whale art; on unless settings.yaml says otherwise.
         whale: Schema.boolean().default(true),
-        // Idle whale behaviors after the intro settles; off by default —
-        // the settled header otherwise holds zero timers (idle-wakeup gate).
-        whaleIdle: Schema.boolean().default(false),
+        // Idle whale behaviors after the intro settles; on by default —
+        // the idle-wakeup gate stays: an explicit `false` keeps the settled
+        // header timer-free.
+        whaleIdle: Schema.boolean().default(true),
         // Minimal mode: strips the header splash, emoji glyphs, and
         // decorative colors; code highlight and tool colors stay.
         minimal: Schema.boolean().default(false),
@@ -685,7 +686,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     }
     /** Apply the idle-whale-behavior setting: live-toggle the channel flag. */
     const applyWhaleIdle = (value: { whaleIdle?: boolean }): void => {
-      channel.setWhaleIdle(value.whaleIdle ?? false)
+      channel.setWhaleIdle(value.whaleIdle ?? true)
     }
     const applyMinimal = (value: { minimal?: boolean }): void => {
       channel.setMinimal(value.minimal ?? false)

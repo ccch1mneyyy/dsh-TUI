@@ -978,8 +978,8 @@ export interface Channel {
   /** Whether the header's pixel whale art shows (settings `dsh-tui.whale`). */
   readonly whale: boolean
   /** Whether the settled header whale keeps behaving — fin flutters, tail
-   * thumps, sleep after inactivity (settings `dsh-tui.whaleIdle`; off by
-   * default so the settled header holds zero timers). */
+   * thumps, sleep after inactivity (settings `dsh-tui.whaleIdle`; on by
+   * default — an explicit false keeps the settled header timer-free). */
   readonly whaleIdle: boolean
   /** Minimal mode (settings `dsh-tui.minimal`): no header splash, no emoji
    *  glyphs, no decorative colors; code highlight and tool colors stay. */
@@ -4153,7 +4153,7 @@ export function createChannel(
     smoothStreaming: options.smoothStreaming !== false,
     statusBar: normalizeStatusBar(options.statusBar),
     whale: options.whale !== false,
-    whaleIdle: options.whaleIdle === true,
+    whaleIdle: options.whaleIdle !== false,
     minimal: options.minimal === true,
     activityEnabled: options.activity !== false,
     contextBarEnabled: options.contextBar !== false,

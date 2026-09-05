@@ -28,12 +28,20 @@ const PALETTE: Record<string, Rgb | undefined> = {
 const fg = (rgb: Rgb): string => `\x1b[38;2;${rgb[0]};${rgb[1]};${rgb[2]}m`
 const bg = (rgb: Rgb): string => `\x1b[48;2;${rgb[0]};${rgb[1]};${rgb[2]}m`
 const RESET = '\x1b[0m'
+/** Erase from the cursor to the end of the physical line (default colors). */
+const ERASE_TO_EOL = '\x1b[K'
+/** Reset the background plane to the terminal default (fg keeps its SGR). */
+const BG_DEFAULT = '\x1b[49m'
 
 /**
  * Render one frame to ANSI rows (one per sprite row pair) under its own
- * palette. Consecutive cells sharing one style are run-length encoded;
- * trailing transparent cells are dropped so the rows measure exactly the
- * sprite's bounding box.
+ * palette. Consecutive cells sharing one style are run-length encoded; every
+ * row spans the full sprite width (transparent cells write plain spaces, so
+ * the blank cells of a diff region are re-output and overwrite whatever the
+ * previous frame painted there), and each row closes with an erase-to-EOL:
+ * the text pipeline may trim trailing whitespace, and the erase guarantees
+ * the terminal itself clears every cell past the row's last glyph — no
+ * ghost pixels can survive a frame switch.
  */
 export function renderSpriteRows(sprite: readonly string[], palette: Record<string, Rgb | undefined>): string[] {
   const rows: string[] = []
@@ -51,10 +59,14 @@ export function renderSpriteRows(sprite: readonly string[], palette: Record<stri
         seq = fg(up) + bg(lo)
         ch = '▀'
       } else if (up !== undefined) {
-        seq = fg(up)
+        // Half-filled cell: the empty half must show the terminal's default
+        // background, and SGR persists across cells — a bg left over from
+        // the previous cell would paint a phantom pixel into the empty half
+        // (the contour noise of the sprite). Reset it explicitly.
+        seq = fg(up) + BG_DEFAULT
         ch = '▀'
       } else if (lo !== undefined) {
-        seq = fg(lo)
+        seq = fg(lo) + BG_DEFAULT
         ch = '▄'
       } else {
         seq = ''
@@ -66,12 +78,12 @@ export function renderSpriteRows(sprite: readonly string[], palette: Record<stri
       }
       out += ch
     }
-    // Drop the transparent tail (plain spaces paint nothing), then always
-    // close the row's style — a row ending on a colored cell would
-    // otherwise leak its SGR into the line's remaining padding.
-    let row = out.replace(/[ ]+$/, '')
+    // Always close the row's style — a row ending on a colored cell would
+    // otherwise leak its SGR into the line's remaining padding — then append
+    // the erase pass (see the doc above).
+    let row = out
     if (!row.endsWith(RESET)) row += RESET
-    rows.push(row)
+    rows.push(row + ERASE_TO_EOL)
   }
   return rows
 }

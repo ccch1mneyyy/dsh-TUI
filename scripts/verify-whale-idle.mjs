@@ -15,12 +15,14 @@ process.env.DSH_TUI_LANG = 'en'
 const [
   { strict: assert },
   { createChannel },
+  { createHash },
   whaleFrames,
   whaleLayers,
   whaleIdle,
 ] = await Promise.all([
   import('node:assert'),
   import('../src/dsh-adapter/channel.js'),
+  import('node:crypto'),
   import('../src/components/whaleFrames.js'),
   import('../src/components/whaleLayers.js'),
   import('../src/components/whaleIdle.js'),
@@ -61,31 +63,43 @@ function gridRows(pose) {
   return composeWhaleGrid(pose).map(row => row.join(''))
 }
 
-// ── 0. Frame-data parity against the source art (whale_frames) ────────────
-// The tail2 frame once drifted 23 cells from the source (shifted spout
-// pixels); these digests pin the corrected data.
+// ── 0. Frame-data parity against the dsh-ui-whale source art ──────────────
+// Full 22-frame digest parity (palette-mapped 1→D 2→B 3→L 4→W 5→H 6→Z).
+// Drift has happened twice on tail2 — shifted spout pixels, then a
+// truncated tail tip (six cells in rows 8-9) — and excerpt pins missed the
+// second one, so every frame is pinned by digest now.
 {
-  const webTail2Rows = [
-    '...........................D............',
-    '..........................DBD.......D...',
-    '..........................DBBD.....DBD..',
-    '..........................DBBD....DBBD..',
-    '..........................DBBBD.DDBBBD..',
-    '.......DDDDDDDDD..........DBBBBDBBBBD...',
-  ]
-  check('tail2 frame matches the source art (drift regression)', () => {
-    assert.deepEqual(WHALE_FRAMES[F.tail2].rows.slice(2, 8), webTail2Rows)
-  })
-  const webHeart3Rows = [
-    '..HH.HH.................................',
-    '.HHHHHHH................D...............',
-    '.HHHHHHH...............DBD.......D......',
-    '..HHHHH................DBBD.....DBD.....',
-    '...HHH.................DBBBD..DDBBD.....',
-    '....H..................DBBBBDDBBBBD.....',
-  ]
-  check('heart3 frame matches the source art', () => {
-    assert.deepEqual(WHALE_FRAMES[F.heart3].rows.slice(1, 7), webHeart3Rows)
+  const SOURCE_DIGESTS = {
+    standard: '7b7e840dc5b9c2c7',
+    blink: '451d41a8ad50fe18',
+    fin1: 'a03b3c0140edd615',
+    fin2: 'fbcfd7b84348f665',
+    spout1: 'cf3b5c7ef4cae869',
+    spout2: '02592ebd76d47f45',
+    spout3: '98040a21b9d2d400',
+    spout4: 'f2a579f496086b4a',
+    spout5: '9e1c6507d13a137d',
+    spout6: 'ead4d3fe989a186f',
+    tail1: 'a8d8f65a1c9ba4fe',
+    tail2: '57f869902e655ec2',
+    tail3: '4c49eaff3068bb00',
+    tail4: '866f954f839372af',
+    heart1: 'f56d9c5b42d76b82',
+    heart2: '5371998d8c01ff02',
+    heart3: 'a2913a9fbb4f2562',
+    sleep1: '0c41d1ac7f748905',
+    sleep2: '02be017baeb8268a',
+    sleep3: 'e4f2be9fe1575cd7',
+    sleep4: 'ea7a607138765ef6',
+    sleep5: 'ee94fef9112fcd21',
+  }
+  const digestOf = (rows) => createHash('sha256').update(rows.join('\n')).digest('hex').slice(0, 16)
+  check('all 22 frames match the dsh-ui-whale source art (digest parity)', () => {
+    for (const [key, digest] of Object.entries(SOURCE_DIGESTS)) {
+      const frame = WHALE_FRAMES[F[key]]
+      assert.ok(frame !== undefined, 'frame ' + key + ' missing from WHALE_FRAMES')
+      assert.equal(digestOf([...frame.rows]), digest, 'frame ' + key + ' drifted from the source art')
+    }
   })
 }
 
@@ -138,7 +152,7 @@ function gridRows(pose) {
   // mid-pass (pose.tail > 0) exactly when the blink fires.
   let state = initialWhaleIdleState(0)
   // The first working blink is due at 1680ms (14 ticks); the tail pass holds
-  // 360ms per frame, so somewhere before 1680ms the tail is mid-wag.
+  // 240ms per frame, so somewhere before 1680ms the tail is mid-wag.
   let now = 0
   let seen = null
   for (let i = 0; i < 60 && seen === null; i++) {
@@ -222,7 +236,9 @@ function gridRows(pose) {
     const step = nextWhaleIdleStep(state, { working: false, heart: false }, now)
     state = step.state
     now += step.delayMs
-    if (state.asleep && now >= state.thumpAt) {
+    // Sample only once the Z is actually cycling (the settle frame plays
+    // without a Z by design, so a thump coinciding there is legitimate).
+    if (state.asleep && state.sleepStep >= 1 && now >= state.thumpAt) {
       // Drive into the thump pass: the next steps must show tail > 0 while
       // the sleep layer keeps cycling.
       const during = nextWhaleIdleStep(state, { working: false, heart: false }, now)
@@ -271,7 +287,9 @@ function gridRows(pose) {
   check('work wakes the whale into continuous motion', () => {
     assert.equal(woken.state.asleep, false)
     assert.equal(woken.state.sleepStep, -1, 'the Z is cleared')
-    assert.equal(woken.pose.tail, 1, 'wakes straight into the wag pass')
+    // A pass may already be in flight when work lands (asleep whales keep
+    // thumping on the idle cadence) — waking continues it, never restarts.
+    assert.ok(woken.pose.tail >= 1, 'the tail is animating on the wake tick')
   })
 }
 
@@ -286,7 +304,7 @@ function gridRows(pose) {
   })
 }
 
-// ── 11. Channel wiring: whaleIdle defaults off and toggles live ────────────
+// ── 11. Channel wiring: whaleIdle defaults on and toggles live ─────────────
 {
   const handlers = new Map()
   const ctx = {
@@ -313,8 +331,8 @@ function gridRows(pose) {
     provider: 'deepseek',
     activity: false,
   })
-  check('channel whaleIdle defaults to off', () => {
-    assert.equal(channel.whaleIdle, false)
+  check('channel whaleIdle defaults to on', () => {
+    assert.equal(channel.whaleIdle, true)
   })
   check('setWhaleIdle toggles the flag', () => {
     channel.setWhaleIdle(true)

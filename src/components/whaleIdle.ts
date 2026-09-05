@@ -22,15 +22,18 @@ const TICK_MS = 120 // the web plugin's animation tick
 
 // Web-faithful cadences: animation.ts WAG_HOLD / FIN_HOLD / BLINK_GAP /
 // SLEEP_HOLD / HEART_HOLD, in ticks, converted to ms.
-const WAG_HOLD_WORKING_MS = 3 * TICK_MS
-const WAG_HOLD_IDLE_MS = 6 * TICK_MS
+// Idle gaps and idle holds are TIGHTENED from the web values (thump 90
+// ticks, flutter 60, holds 6/5): at web cadence the settled terminal whale
+// visibly stalls between moves, so it moves ~3x as often here.
+const WAG_HOLD_WORKING_MS = 2 * TICK_MS
+const WAG_HOLD_IDLE_MS = 3 * TICK_MS
 const FIN_HOLD_WORKING_MS = 2 * TICK_MS
-const FIN_HOLD_IDLE_MS = 5 * TICK_MS
+const FIN_HOLD_IDLE_MS = 2 * TICK_MS
 const BLINK_HOLD_MS = 1 * TICK_MS
 const BLINK_GAP_WORKING_MS = 14 * TICK_MS
 const BLINK_GAP_IDLE_MS = 42 * TICK_MS
-const IDLE_THUMP_GAP_MS = 90 * TICK_MS
-const IDLE_FLUTTER_GAP_MS = 60 * TICK_MS
+const IDLE_THUMP_GAP_MS = 25 * TICK_MS
+const IDLE_FLUTTER_GAP_MS = 16 * TICK_MS
 const SLEEP_HOLD_MS = 3 * TICK_MS
 /** How long each heart size is held (web HEART_HOLD = 3 ticks). */
 export const HEART_HOLD_MS = 3 * TICK_MS

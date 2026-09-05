@@ -92,7 +92,7 @@ export function LogoV2({
   intro,
   tip,
   whale = true,
-  whaleIdle = false,
+  whaleIdle = true,
   working = false,
   drift,
 }: {
@@ -108,8 +108,9 @@ export function LogoV2({
   /** Show the pixel whale art (settings `dsh-tui.whale`); off → text-only header. */
   whale?: boolean
   /** Idle whale behaviors — fin flutters, tail thumps, sleep after
-   * inactivity (settings `dsh-tui.whaleIdle`; off by default: the settled
-   * header otherwise holds zero timers). Click-hearts work regardless. */
+   * inactivity (settings `dsh-tui.whaleIdle`; on by default — an explicit
+   * `false` keeps the settled header timer-free). Click-hearts work
+   * regardless. */
   whaleIdle?: boolean
   /** Whether an agent turn is active: working wakes the whale and keeps
    * it moving; sustained !working lets it fall asleep. */
