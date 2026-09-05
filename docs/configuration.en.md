@@ -66,6 +66,8 @@ Without a saved choice, the configuration value applies and defaults to on. Enab
 still requires Kitty graphics support and a display mode that allows image rendering.
 `DSH_TUI_DISABLE_TERMINAL_IMAGES=1` always forces previews off. Disabled previews do not read
 or decode image data or send image rendering commands; sending images to the model is unaffected.
+The checkbox edits the preview preference; an environment override is shown separately as
+“Image previews (forced off)” in the settings list.
 
 This switch is read at startup. Use `/restart` after changing it to automatically restart the
 TUI and resume the current session; `/reload` does not apply it. If a turn is running, wait for

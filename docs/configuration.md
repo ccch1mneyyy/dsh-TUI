@@ -63,6 +63,7 @@ Profile 启动按顺序叠加 `dsh-base`、已安装 bundle、`@deepseek-harness
 默认开启。开启仍需终端支持 Kitty graphics 且处于允许图片渲染的显示模式。
 `DSH_TUI_DISABLE_TERMINAL_IMAGES=1` 始终强制关闭预览。关闭后不为预览读取或解码图片，
 也不发送图片渲染指令；向模型发送图片不受影响。
+勾选框编辑的是预览偏好；环境变量强制关闭时，设置行会单独标明「环境强制关闭」。
 
 这个开关在启动时读取。修改后使用 `/restart` 自动重新启动 TUI 并恢复当前会话；
 `/reload` 不应用此开关。回合运行中需先等待结束或用 `Ctrl+C` 停止，再重启。

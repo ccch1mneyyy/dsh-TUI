@@ -973,18 +973,19 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
         },
         {
           path: ['terminalImages'],
-          label: 'Terminal image previews',
-          descriptions: { zh: '终端图片预览' },
+          label: terminalImagesDisabledByEnv ? 'Image previews (forced off)' : 'Terminal image previews',
+          descriptions: { zh: terminalImagesDisabledByEnv ? '图片预览（环境强制关闭）' : '终端图片预览' },
           hint: terminalImagesDisabledByEnv
-            ? 'Disabled by DSH_TUI_DISABLE_TERMINAL_IMAGES. Relaunch without it to enable previews.'
+            ? 'Checkbox saves your preference. Relaunch without DSH_TUI_DISABLE_TERMINAL_IMAGES to enable previews.'
             : 'Preview images in supported terminals. Use /restart to apply. Sending images is unaffected.',
           hintDescriptions: {
             zh: terminalImagesDisabledByEnv
-              ? 'DSH_TUI_DISABLE_TERMINAL_IMAGES 已强制关闭预览；移除该环境变量后重新启动才能开启。'
+              ? '勾选框保存预览偏好；移除 DSH_TUI_DISABLE_TERMINAL_IMAGES 后重新启动才能显示图片。'
               : '在支持的终端中预览图片。修改后用 /restart 生效；不影响向模型发送图片。',
           },
           kind: 'boolean',
           format(value: unknown): string {
+            // The editor toggles this value; runtime overrides must not replace the preference.
             return String(value ?? config.terminalImages ?? true)
           },
         },
