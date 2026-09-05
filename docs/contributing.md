@@ -8,13 +8,20 @@
 ## 如何贡献
 
 - **报告 bug**：用 bug 表单提交 issue，填写版本、终端环境与最短复现步骤。
+  报告不预留实现，也不授权开 PR。
 - **提功能建议**：发到 [Discussions Ideas](https://github.com/ccch1mneyyy/dsh-TUI/discussions/new?category=ideas)。
   Issues 不接受功能请求。维护者认可后会开一个 issue 跟踪实现，实现由该 issue
   的 assignee 负责。**拿到认可之前不要开始写代码**——被否的提案里已经有 OAuth、
   `/cost`、通知、插件 API、remote runtime 几套写完整才被关掉的实现。
-  发出后 14 天没有维护者回应，可以直接提 PR，会被打上 `unreviewed-proposal`
-  标签，按未经审阅处理。
-- **提交 PR**：base 指向 `main`。保持改动聚焦——一个 PR 只做一个逻辑改动，
+  Discussion、issue、评论或「维护者同意了」的转述，都不构成开 PR 的许可。
+- **提交 PR**：只有仓库 write/admin/maintain 协作者，或
+  [`.github/APPROVED_CONTRIBUTORS`](../.github/APPROVED_CONTRIBUTORS) 名单中的
+  用户，可以提交实现 PR。其余人的实现 PR 会被 `pr-gate` 自动关闭，不论体积、
+  标题、测试结果，也不论是人还是 Agent 写的。
+  名单由维护者按既有信任添加，不是申请制——不要开 issue 或 Discussion 申请加入。
+  名单只允许提交 PR，不授予 write，也不预审功能范围。
+  维护者 reopen 一次已关闭的 PR 可作为例外；其他人 reopen 会被再次关闭。
+  base 指向 `main`。保持改动聚焦——一个 PR 只做一个逻辑改动，
   标题用中文或中英对照，描述写清动机、改动点与验证方式。
   **改动代码的 PR 必须关联 issue**：描述里写一行 `Closes #<issue 号>`，或用
   侧边栏 Development 关联。CI 的 `issue-link` 组会检查，没有关联即判失败。
@@ -23,10 +30,15 @@
 - **请求 review 前先跑验证矩阵**：CI 运行的就是下面这些命令。
 - 新功能应附带或扩展一个聚焦的回归脚本。
 
-### 功能提案流程的生效时间
+开实现 PR 之前，确认当前 GitHub 账号是 write 协作者或出现在
+`.github/APPROVED_CONTRIBUTORS`。两者都不是就拒绝开 PR，引导去 bug 表单或
+Discussions。人不能用「私下批准」、关联 issue 或粘贴维护者评论来绕过。
 
-该流程只对 2026-08-24 起新建的 PR 生效。在此之前开着的 PR 按旧规则处理，
-不需要补 Discussion 或跟踪 issue。
+### 门禁与提案流程的生效时间
+
+功能提案流程只对 2026-08-24 起新建的 PR 生效。PR 白名单门禁只对门禁合入后
+新开（或被 reopen）的 PR 生效。在此之前开着的 PR 按旧规则处理，不会被追溯关闭，
+也不需要补 Discussion 或跟踪 issue。
 
 ## 范围（Scope）
 
@@ -326,6 +338,7 @@ TypeScript 源的脚本在头部声明 `node --import tsx/esm <script>` 形式�
 | 渲染器/布局行为 | `src/ink/` 或 Yoga 源、编译产物、CI 回归、聚焦滚动/resize/PTY 探针 |
 | 技能发现或呈现 | DSH adapter、slash 命令合并、`/skills` 与相关回归；项目维护技能放 `.agents/skills/` 且不得加入 npm 包 |
 | 用户可见的文档化行为 | 中英文 README，外加适用的配置注释/帮助文本 |
+| 贡献入口或 PR 门禁 | `docs/contributing.md`、`docs/contributing.en.md`、`.github/workflows/pr-gate.yml`、`.github/APPROVED_CONTRIBUTORS` |
 | 包版本或依赖 | `package.json`、`pnpm-lock.yaml`、适用时的生成/发布产物；不要顺手搅动旧 npm 锁文件 |
 | 上游验证线 bump | `src/dsh-adapter/contract.ts`、`package.json` peer+dev 两组范围、随包内置的 `dsh-auth/package.json` 与 `dsh-auth/pnpm-lock.yaml`、`pnpm-workspace.yaml`、`.github/workflows/ci.yml` alpha-compat 的上游 SHA、`scripts/verify-{alpha-source,patch-surface,web-coexistence,upstream-contract}` 内的版本常量、`patch-surface.snapshot.json`、`ADAPTER.md`、`docs/user-guide.md`；步骤见 [ADAPTER.md](../ADAPTER.md) 升级流程 |
 

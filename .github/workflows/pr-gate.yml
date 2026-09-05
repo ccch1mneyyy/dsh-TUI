@@ -1,0 +1,204 @@
+# PR 白名单门禁——docs/contributing.md「如何贡献」的 CI 落地。
+# 模型抄 Herdr 的 pr-gate：默认分支上的名单 + 协作者权限，未列入者关 PR。
+# 用 pull_request_target 才能关别人仓库推过来的 PR；只经 API 读默认分支上的
+# 名单，不 checkout PR 头，避免在可信上下文里跑 fork 代码。
+#
+# 不追溯：只监听 opened / reopened。门禁合入前已经开着的 PR 不会收到 opened，
+# 因而不会被关掉。维护者 reopen 视为一次性放行；其他人 reopen 再关一次。
+name: PR Gate
+
+on:
+  pull_request_target:
+    types: [opened, reopened]
+
+concurrency:
+  group: pr-gate-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  check-contributor:
+    if: github.repository == 'ccch1mneyyy/dsh-TUI'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+    steps:
+      - name: Check pull request intake policy
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const GITHUB_ACTIONS_BOT_ID = 41898282
+            const CI_ONLY_PR_AUTHOR_IDS = new Set([
+              49699333, // dependabot[bot]
+              41898282, // github-actions[bot]
+            ])
+            const COMMENT_MARKER = '<!-- dsh-tui-pr-gate -->'
+
+            const pullNumber = context.payload.pull_request.number
+            const defaultBranch = context.payload.repository.default_branch
+
+            const { data: pr } = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: pullNumber,
+            })
+            const prAuthor = pr.user.login
+
+            async function getPermission(username) {
+              try {
+                const { data } = await github.rest.repos.getCollaboratorPermissionLevel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  username,
+                })
+                return data.permission
+              } catch {
+                return null
+              }
+            }
+
+            async function getTextFile(path) {
+              try {
+                const { data } = await github.rest.repos.getContent({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  path,
+                  ref: defaultBranch,
+                })
+                if (!('content' in data) || typeof data.content !== 'string') {
+                  throw new Error(`Expected file content for ${path}`)
+                }
+                return Buffer.from(data.content, 'base64').toString('utf8')
+              } catch (error) {
+                if (error.status === 404) return ''
+                throw error
+              }
+            }
+
+            function parseUserList(content) {
+              return new Set(content
+                .split('\n')
+                .map(line => line.trim().toLowerCase())
+                .filter(line => line && !line.startsWith('#')))
+            }
+
+            async function hasWriteAccess(username) {
+              if (!username) return false
+              return ['admin', 'maintain', 'write'].includes(await getPermission(username))
+            }
+
+            async function hasVerifiedRecovery() {
+              const events = await github.paginate(github.rest.issues.listEventsForTimeline, {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: pullNumber,
+                per_page: 100,
+              })
+              const latestStateEvent = events.findLast(event =>
+                ['closed', 'reopened'].includes(event.event))
+              return latestStateEvent?.event === 'reopened'
+                && await hasWriteAccess(latestStateEvent.actor?.login)
+            }
+
+            async function upsertGateComment(message) {
+              const comments = await github.paginate(github.rest.issues.listComments, {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: pullNumber,
+                per_page: 100,
+              })
+              const existing = comments.find(comment =>
+                comment.user?.id === GITHUB_ACTIONS_BOT_ID
+                && comment.body?.includes(COMMENT_MARKER))
+              const body = `${COMMENT_MARKER}\n${message}`
+              if (existing?.body === body) return
+              if (existing) {
+                await github.rest.issues.updateComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  comment_id: existing.id,
+                  body,
+                })
+                return
+              }
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: pullNumber,
+                body,
+              })
+            }
+
+            async function closePullRequest() {
+              if (await hasVerifiedRecovery()) {
+                core.info(`PR #${pullNumber} was recovered by a write collaborator; leaving it open`)
+                return
+              }
+              const message = [
+                `Hi @${prAuthor}，感谢你愿意贡献。`,
+                '',
+                'dsh-TUI 不接受未列入 [`.github/APPROVED_CONTRIBUTORS`]('
+                  + `https://github.com/${context.repo.owner}/${context.repo.repo}/blob/${defaultBranch}/.github/APPROVED_CONTRIBUTORS)`
+                  + ' 的实现 PR。仓库 write/admin/maintain 协作者也不在此限。',
+                '',
+                '作者不在白名单里，所以这个 PR 会被关闭。',
+                '',
+                '可复现的 bug 请走 bug issue 表单。报告不预留实现，也不授权开 PR。',
+                '功能建议、行为变更与其它提案请发 GitHub Discussions。不要为已经写好的实现再开一个 issue 当通行证。',
+                '',
+                '维护者如果明确要这份实现，可以 reopen；其他人 reopen 会被再次关闭。',
+                '不要开 issue 或 Discussion 申请加入白名单。',
+                '',
+                `政策见 https://github.com/${context.repo.owner}/${context.repo.repo}/blob/${defaultBranch}/docs/contributing.md`,
+                '',
+                '---',
+                '',
+                `Hi @${prAuthor}, thanks for your interest in contributing.`,
+                '',
+                'dsh-TUI does not accept unsolicited implementation pull requests from people who are not listed in `.github/APPROVED_CONTRIBUTORS` or who do not already have write/admin/maintain on this repository.',
+                '',
+                'Report a reproducible bug through the bug issue template. A report does not reserve the work or authorize a pull request.',
+                'Feature requests and other proposals belong in GitHub Discussions. Do not open an issue merely to justify an implementation that was already written.',
+                '',
+                'If a maintainer explicitly wants this implementation, they can reopen the pull request. Reopening by anyone else will be closed again automatically.',
+                'Do not open an issue or discussion asking to be added to the list.',
+                '',
+                `See https://github.com/${context.repo.owner}/${context.repo.repo}/blob/${defaultBranch}/docs/contributing.en.md`,
+              ].join('\n')
+              await upsertGateComment(message)
+              if (await hasVerifiedRecovery()) {
+                core.info(`PR #${pullNumber} was recovered while the gate was running; leaving it open`)
+                return
+              }
+              await github.rest.pulls.update({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: pullNumber,
+                state: 'closed',
+              })
+            }
+
+            if (pr.state === 'closed') return
+
+            if (CI_ONLY_PR_AUTHOR_IDS.has(pr.user.id)
+              || pr.user.type === 'Bot'
+              || prAuthor.endsWith('[bot]')) {
+              core.info(`Leaving CI-only bot PR open: ${prAuthor}`)
+              return
+            }
+
+            if (await hasWriteAccess(prAuthor)) {
+              core.info(`${prAuthor} has write/admin/maintain`)
+              return
+            }
+
+            const approvedContributors = parseUserList(
+              await getTextFile('.github/APPROVED_CONTRIBUTORS'),
+            )
+            if (approvedContributors.has(prAuthor.toLowerCase())) {
+              core.info(`${prAuthor} is in the approved contributors list`)
+              return
+            }
+
+            await closePullRequest()
