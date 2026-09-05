@@ -519,7 +519,7 @@ function screenOf(terminal: InstanceType<typeof XTerm>, rows: number): Screen {
   }
 }
 
-// --- overlay component: metadata, narrow fallback, failed read -------------
+// --- overlay component: metadata fallback without attachment reads --------
 {
   clearTranscriptImageCacheForTests()
   const terminal = new XTerm({ cols: 30, rows: 10, scrollback: 0, allowProposedApi: true })
@@ -568,11 +568,13 @@ function screenOf(terminal: InstanceType<typeof XTerm>, rows: number): Screen {
     { stdin: new FakeStdin() as never, stdout: stdout as never, stderr: new FakeStderr() as never, exitOnCtrlC: false, patchConsole: false },
   )
   const screen = screenOf(terminal, ROWS)
-  check('overlay: graphics-disabled wide fallback reaches the ready state',
+  check('overlay: graphics-disabled wide fallback shows metadata immediately',
     await settled(() =>
       screen.text().includes('[Image · ready.png]') &&
       !screen.text().includes('[Loading ready.png]')),
     screen.text())
+  check('overlay: graphics-disabled wide preview never reads pixels',
+    (readCounts.get('sha256:ready') ?? 0) === 0)
   await app.unmount()
   terminal.dispose()
 }
@@ -587,10 +589,12 @@ function screenOf(terminal: InstanceType<typeof XTerm>, rows: number): Screen {
     { stdin: new FakeStdin() as never, stdout: stdout as never, stderr: new FakeStderr() as never, exitOnCtrlC: false, patchConsole: false },
   )
   const screen = screenOf(terminal, ROWS)
-  check('overlay: failed read degrades to the unavailable text state',
-    await settled(() => screen.text().includes('Cannot preview bad.png')),
+  check('overlay: an unreadable attachment still has a metadata fallback',
+    await settled(() => screen.text().includes('[Image · bad.png]')),
     screen.text())
-  check('overlay: header metadata still renders on failure',
+  check('overlay: the metadata fallback never attempts the failing read',
+    (readCounts.get('sha256:bad') ?? 0) === 0)
+  check('overlay: header metadata does not depend on attachment reads',
     screen.text().includes('— PNG · 16×8'))
   await app.unmount()
   terminal.dispose()
@@ -724,8 +728,7 @@ function screenOf(terminal: InstanceType<typeof XTerm>, rows: number): Screen {
   terminal.dispose()
 }
 
-// Background galleries must stop decoding/placing graphics while the modal
-// owns the renderer's global byte + placement budget, then recover normally.
+// Modal suppression must preserve lazy metadata fallback when lifted.
 {
   clearTranscriptImageCacheForTests()
   const image = fakeImage('sha256:suppressed', 'suppressed.png')
@@ -741,8 +744,9 @@ function screenOf(terminal: InstanceType<typeof XTerm>, rows: number): Screen {
     (readCounts.get(image.id) ?? 0) === 0,
     `reads=${readCounts.get(image.id) ?? 0}`)
   app.rerender(<TranscriptImages images={[image]} />)
-  check('transcript: thumbnails resume after modal suppression ends',
-    await settled(() => (readCounts.get(image.id) ?? 0) === 1),
+  await sleep(100)
+  check('transcript: graphics-disabled thumbnails stay lazy after suppression ends',
+    (readCounts.get(image.id) ?? 0) === 0,
     `reads=${readCounts.get(image.id) ?? 0}`)
   await app.unmount()
   terminal.dispose()
@@ -976,8 +980,8 @@ for (const columns of [32, 80]) {
   click(0, 0)
   check('chat: click outside the card closes the preview',
     await settled(() => !screen.text().includes(OVERLAY_HINT)), screen.text())
-  check('chat: reopening decodes from the LRU — no extra attachment read',
-    readsAfterFirstOpen > 0 && (readCounts.get('sha256:sent') ?? 0) === readsAfterFirstOpen,
+  check('chat: opening and reopening a graphics-disabled preview never reads pixels',
+    readsAfterFirstOpen === 0 && (readCounts.get('sha256:sent') ?? 0) === 0,
     `reads=${readCounts.get('sha256:sent')}`)
 
   // A raw history/rewind-looking token has no capability. Leave it in the
