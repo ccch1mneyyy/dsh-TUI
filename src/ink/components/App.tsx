@@ -398,6 +398,7 @@ export default class App extends PureComponent<Props, State> {
 				<AppContext.Provider
 					value={{
 						exit: this.handleExit,
+						stdout: this.props.stdout,
 					}}
 				>
 					<StdinContext.Provider

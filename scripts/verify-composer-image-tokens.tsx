@@ -26,12 +26,18 @@ import { mkdirSync, writeFileSync } from 'node:fs'
 import { PassThrough, Writable } from 'node:stream'
 import React from 'react'
 import xterm from '@xterm/headless'
-import sharp from 'sharp'
+import { loadSharp } from '../src/dsh-adapter/sharp.js'
 import type { ChatRow, ComposerImageRef } from '../src/dsh-adapter/channel.js'
 import type { TranscriptImage } from '../src/dsh-adapter/transcript-images.js'
 import { settled, sleep } from './lib/term-test.mjs'
 
 mkdirSync(process.env.HOME, { recursive: true })
+
+const sharp = await loadSharp()
+if (sharp === undefined) {
+  console.log('SKIP composer image token regression: optional sharp decoder is unavailable')
+  process.exit(0)
+}
 
 const { Terminal: XTerm } = xterm
 const [
@@ -336,15 +342,19 @@ await settled(() => !previewOpen())
 // A raw token with no capability is ordinary text: ← steps inside it and
 // it takes the text colour.
 stdin.write(END)
-stdin.write('[Image #9]')
+stdin.write(' plain [Image #9]')
 await settled(() => find('[Image #9]') !== null)
 stdin.write(LEFT)
 const raw = find('[Image #9]')!
 check('raw: a token without a capability is ordinary text (caret steps inside it)',
   await settled(() => inverseAt(raw.col + '[Image #9]'.length - 1, raw.row) && !inverseAt(raw.col, raw.row)),
   text())
+const rawTextReference = find('plain ')
 check('raw: a token without a capability takes the text colour',
-  cellAt(raw.col, raw.row)?.getFgColor() === cellAt(p5.col - 2, p5.row)?.getFgColor(), text())
+  rawTextReference !== null
+    && cellAt(rawTextReference.col, rawTextReference.row)?.getChars() === 'p'
+    && cellAt(raw.col, raw.row)?.getFgColor() === cellAt(rawTextReference.col, rawTextReference.row)?.getFgColor(),
+  text())
 
 // Vim edits must carry the same atomic spans as ordinary deletion. Check
 // the submitted capability after undo, not just the restored token's text.

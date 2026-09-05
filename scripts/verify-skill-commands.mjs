@@ -310,6 +310,7 @@ fire('skills/change')
     }
     const decisionRegistry = decisionRegistryOf(ctx)
     const originalGrants = decisionRegistry.grants
+    const originalInputHandlers = decisionRegistry.handlers.get('tui/input')
     const seenSkillInputs = []
     decisionRegistry.grants = { ...originalGrants, allows: () => true }
     decisionRegistry.handlers.set('tui/input', new Map([[
@@ -372,7 +373,8 @@ fire('skills/change')
       injected?.source?.kind === 'skill-invocation' && injected.source.name === 'i-h',
       JSON.stringify(injected?.source),
     )
-    decisionRegistry.handlers.delete('tui/input')
+    if (originalInputHandlers === undefined) decisionRegistry.handlers.delete('tui/input')
+    else decisionRegistry.handlers.set('tui/input', originalInputHandlers)
     decisionRegistry.grants = originalGrants
   }
 
