@@ -16,3 +16,4 @@ HANDOVER.md
 .local/
 .claude/
 .upstream/
+.pnpm-store/
