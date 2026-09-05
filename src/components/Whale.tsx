@@ -1,6 +1,7 @@
 import React from 'react'
 import { Box, Text } from '../ui.js'
 import { WHALE_FRAMES, type WhaleFrame } from './whaleFrames.js'
+import { composeWhaleGrid, poseKey, type WhaleLayerPose } from './whaleLayers.js'
 
 /**
  * The DeepSeek pixel whale from the hand-drawn Excel art (whale_frames.zip):
@@ -27,15 +28,22 @@ const PALETTE: Record<string, Rgb | undefined> = {
 const fg = (rgb: Rgb): string => `\x1b[38;2;${rgb[0]};${rgb[1]};${rgb[2]}m`
 const bg = (rgb: Rgb): string => `\x1b[48;2;${rgb[0]};${rgb[1]};${rgb[2]}m`
 const RESET = '\x1b[0m'
+/** Erase from the cursor to the end of the physical line (default colors). */
+const ERASE_TO_EOL = '\x1b[K'
+/** Reset the background plane to the terminal default (fg keeps its SGR). */
+const BG_DEFAULT = '\x1b[49m'
 
 /**
  * Render one frame to ANSI rows (one per sprite row pair) under its own
- * palette. Consecutive cells sharing one style are run-length encoded;
- * trailing transparent cells are dropped so the rows measure exactly the
- * sprite's bounding box.
+ * palette. Consecutive cells sharing one style are run-length encoded; every
+ * row spans the full sprite width (transparent cells write plain spaces, so
+ * the blank cells of a diff region are re-output and overwrite whatever the
+ * previous frame painted there), and each row closes with an erase-to-EOL:
+ * the text pipeline may trim trailing whitespace, and the erase guarantees
+ * the terminal itself clears every cell past the row's last glyph — no
+ * ghost pixels can survive a frame switch.
  */
-export function renderSpriteRows(frame: WhaleFrame, palette: Record<string, Rgb | undefined>): string[] {
-  const sprite = frame.rows
+export function renderSpriteRows(sprite: readonly string[], palette: Record<string, Rgb | undefined>): string[] {
   const rows: string[] = []
   for (let r = 0; r < sprite.length; r += 2) {
     const upper = sprite[r]
@@ -51,10 +59,14 @@ export function renderSpriteRows(frame: WhaleFrame, palette: Record<string, Rgb 
         seq = fg(up) + bg(lo)
         ch = '▀'
       } else if (up !== undefined) {
-        seq = fg(up)
+        // Half-filled cell: the empty half must show the terminal's default
+        // background, and SGR persists across cells — a bg left over from
+        // the previous cell would paint a phantom pixel into the empty half
+        // (the contour noise of the sprite). Reset it explicitly.
+        seq = fg(up) + BG_DEFAULT
         ch = '▀'
       } else if (lo !== undefined) {
-        seq = fg(lo)
+        seq = fg(lo) + BG_DEFAULT
         ch = '▄'
       } else {
         seq = ''
@@ -66,18 +78,34 @@ export function renderSpriteRows(frame: WhaleFrame, palette: Record<string, Rgb 
       }
       out += ch
     }
-    // Drop the transparent tail (plain spaces paint nothing), then always
-    // close the row's style — a row ending on a colored cell would
-    // otherwise leak its SGR into the line's remaining padding.
-    let row = out.replace(/[ ]+$/, '')
+    // Always close the row's style — a row ending on a colored cell would
+    // otherwise leak its SGR into the line's remaining padding — then append
+    // the erase pass (see the doc above).
+    let row = out
     if (!row.endsWith(RESET)) row += RESET
-    rows.push(row)
+    rows.push(row + ERASE_TO_EOL)
   }
   return rows
 }
 
 /** Pre-rendered ANSI rows for every whale frame, computed once at module load. */
-const RENDERED: readonly string[][] = WHALE_FRAMES.map(frame => renderSpriteRows(frame, PALETTE))
+const RENDERED: readonly string[][] = WHALE_FRAMES.map(frame => renderSpriteRows(frame.rows, PALETTE))
+
+/**
+ * Layered-pose render cache: composed grids are pure functions of the pose,
+ * and idle ticks repaint the same handful of poses thousands of times.
+ */
+const LAYERED_CACHE = new Map<string, string[]>()
+
+/** Render one composed pose (body + action layers) to ANSI rows, cached. */
+export function layeredWhaleRows(pose: WhaleLayerPose): string[] {
+  const key = poseKey(pose)
+  const cached = LAYERED_CACHE.get(key)
+  if (cached !== undefined) return cached
+  const rows = renderSpriteRows(composeWhaleGrid(pose).map(row => row.join('')), PALETTE)
+  LAYERED_CACHE.set(key, rows)
+  return rows
+}
 
 
 /** Index of the `standard` frame — the settled header's static pose. */
@@ -92,12 +120,15 @@ export const STANDARD_FRAME_INDEX = 0
  */
 export function WhaleArt({
   frameIndex = STANDARD_FRAME_INDEX,
+  pose,
   width,
 }: {
   frameIndex?: number
+  /** Layered pose (parallel actions composited); wins over `frameIndex`. */
+  pose?: WhaleLayerPose
   width?: number
 }): React.ReactNode {
-  const rows = RENDERED[frameIndex] ?? RENDERED[STANDARD_FRAME_INDEX]
+  const rows = pose !== undefined ? layeredWhaleRows(pose) : RENDERED[frameIndex] ?? RENDERED[STANDARD_FRAME_INDEX]
   return (
     <Box flexDirection="column" flexShrink={0} width={width}>
       {rows.map((row, index) => (

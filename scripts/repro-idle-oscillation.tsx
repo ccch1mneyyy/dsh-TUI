@@ -97,6 +97,8 @@ const channel: any = {
   model: 'deepseek-v4-flash', reasoningEffort: 'max',
   tokens: { input: 100, output: 40 }, cwd: '/tmp/demo', displayCwd: '/tmp/demo',
   gitBranch: 'main', working: false, spinnerMode: 'requesting', responseChars: 0,
+  // 鲸鱼欢迎期闲置动画（默认开）与本探针无关——逐字节稳定断言不得被其 tick 干扰。
+  whaleIdle: false,
   activeToolCount: 0, turnStart: 0, lastUserText: rows[rows.length - 4].text,
   pending: [], commandList: [], notifications: [],
   mode: { plan: false }, effortLevels: undefined,

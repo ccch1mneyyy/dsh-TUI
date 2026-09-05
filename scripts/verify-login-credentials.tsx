@@ -55,6 +55,7 @@ const SECRET_SENTINEL = 'test-secret-must-not-appear'
 function makeChannel(status: unknown) {
   return {
     version: 0,
+    whaleIdle: false, // 探针确定性：鲸鱼闲置动画不进测量窗口
     rows: [],
     status: 'idle' as const,
     sessionTitle: 'login-probe',

@@ -257,6 +257,8 @@ const liveAgent = makeAgent('a1', makeEvents(), captured)
 agentsById.set(liveAgent.id, liveAgent)
 const channel = createChannel(ctx as never, liveAgent as never, {
   model: 'model-00', cwd: '/tmp/demo', provider: 'fake-provider', activity: false,
+  // 探针确定性：鲸鱼欢迎期闲置动画不进本探针的测量窗口。
+  whaleIdle: false,
 })
 
 const admitted = await mountAdmitted(ctx, 'event-export-name', testManifest({

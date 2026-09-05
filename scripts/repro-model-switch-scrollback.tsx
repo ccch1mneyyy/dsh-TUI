@@ -160,6 +160,7 @@ const ctx = {
 
 // ---- 真实 channel + 真实 Chat ---------------------------------------------------
 const channel = createChannel(ctx as never, makeAgent('a1', events) as never, {
+  whaleIdle: false, // 探针确定性：鲸鱼欢迎期闲置动画不进本探针的测量窗口。
   model: 'deepseek-v4-flash',
   cwd: '/tmp/demo',
   provider: 'fake-provider',

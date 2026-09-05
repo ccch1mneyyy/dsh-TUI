@@ -69,6 +69,8 @@ function makeChannel() {
   const listeners = new Set<() => void>()
   let _version = 0
   const channel: any = {
+  // 探针确定性：鲸鱼欢迎期闲置动画（默认开）不进本探针的测量窗口。
+  whaleIdle: false,
     get version() { return _version },
     set version(v: number) { _version = v },
     rows: [] as any[],

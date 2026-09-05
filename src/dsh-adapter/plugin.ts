@@ -643,9 +643,10 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
         }).default({ ...DEFAULT_STATUS_BAR }),
         // Header pixel whale art; on unless settings.yaml says otherwise.
         whale: Schema.boolean().default(true),
-        // Idle whale behaviors after the intro settles; off by default —
-        // the settled header otherwise holds zero timers (idle-wakeup gate).
-        whaleIdle: Schema.boolean().default(false),
+        // Idle whale behaviors after the intro settles; on by default —
+        // the idle-wakeup gate stays: an explicit `false` keeps the settled
+        // header timer-free.
+        whaleIdle: Schema.boolean().default(true),
         // Minimal mode: strips the header splash, emoji glyphs, and
         // decorative colors; code highlight and tool colors stay.
         minimal: Schema.boolean().default(false),
@@ -691,7 +692,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     }
     /** Apply the idle-whale-behavior setting: live-toggle the channel flag. */
     const applyWhaleIdle = (value: { whaleIdle?: boolean }): void => {
-      channel.setWhaleIdle(value.whaleIdle ?? false)
+      channel.setWhaleIdle(value.whaleIdle ?? true)
     }
     const applyMinimal = (value: { minimal?: boolean }): void => {
       channel.setMinimal(value.minimal ?? false)
@@ -1287,10 +1288,10 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
         },
         {
           path: ['whaleIdle'],
-          label: 'Idle whale behaviors',
-          descriptions: { zh: '鲸鱼娘闲置动画' },
-          hint: 'After the intro, the whale keeps fluttering its fins, thumping its tail, and falls asleep when idle; clicking it always pops a heart. Adds repaints while idle.',
-          hintDescriptions: { zh: '开屏之后鲸鱼娘继续摆动鱼鳍、偶尔拍尾巴，长时间空闲会睡觉；点击冒爱心始终可用。空闲时会增加少量重绘。' },
+          label: 'Welcome whale idle',
+          descriptions: { zh: '鲸鱼娘闲置动画（欢迎期）' },
+          hint: 'Welcome-phase idle behaviors: after the intro the whale flutters its fins, thumps its tail, and dozes off when idle; clicking pops a heart. The first agent turn freezes it to the static standard frame.',
+          hintDescriptions: { zh: '欢迎期闲置行为：开屏后鲸鱼娘摆鱼鳍、偶尔拍尾巴，空闲会睡着冒 Z；点击冒爱心。开始第一个任务后定格为静态标准帧。' },
           kind: 'boolean',
         },
         {

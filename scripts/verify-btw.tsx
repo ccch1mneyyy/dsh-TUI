@@ -64,6 +64,7 @@ const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
 function makeChannel() {
   return {
     version: 0,
+    whaleIdle: false, // 探针确定性：鲸鱼闲置动画不进测量窗口
     rows: [],
     status: 'idle' as const,
     sessionTitle: 'probe',

@@ -79,6 +79,7 @@ function makeChannel(rows: any[]) {
   const listeners = new Set<() => void>()
   return {
     version: 0,
+    whaleIdle: false, // 探针确定性：鲸鱼闲置动画不进测量窗口
     rows,
     status: 'idle',
     sessionTitle: 'selection-wheel-probe',

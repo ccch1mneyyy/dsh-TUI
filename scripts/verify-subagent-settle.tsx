@@ -86,6 +86,8 @@ const channel: any = {
   model: 'deepseek-v4-flash', reasoningEffort: 'max',
   tokens: { input: 100, output: 40 }, cwd: '/tmp/demo', displayCwd: '/tmp/demo',
   gitBranch: 'main', working: false, spinnerMode: 'requesting', responseChars: 0,
+  // 鲸鱼欢迎期闲置动画（默认开）与本探针无关——帧计数窗口不得被其 tick 干扰。
+  whaleIdle: false,
   activeToolCount: 0, turnStart: 0, lastUserText: '开始并行子任务分析',
   pending: [], commandList: [], notifications: [],
   mode: { plan: false }, effortLevels: undefined,
@@ -135,6 +137,18 @@ bump()
 // 过渡帧吸收窗：completed 重排的收尾帧无可轮询的完成条件，保留固定窗口
 // （countIdleFrames 自带的 300ms 预滚同理）。
 await sleep(300)
+// 静默排空：开屏动画的收尾帧与定格重绘在慢机上会越过固定预滚——连续
+// 500ms 无帧（最长单步 dwell 450ms）才视为完全定格，随后的「零帧」
+// 计量窗口保持严格。真回归（时钟未退出）时静默永不到来，10s 上限
+ // 兜底让窗口如实计帧判负，而不是把 CI 挂死。
+let quiet = 0
+let waited = 0
+while (quiet < 500 && waited < 10_000) {
+  const before = frameCount
+  await sleep(100)
+  waited += 100
+  quiet = frameCount === before ? quiet + 100 : 0
+}
 
 const settledFrames = await countIdleFrames(1000)
 check('settled 后空闲帧归零（clock 完全退出）', settledFrames === 0, 'frames=' + settledFrames)
