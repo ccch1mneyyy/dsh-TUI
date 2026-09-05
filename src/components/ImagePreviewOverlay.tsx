@@ -1,5 +1,5 @@
 import React from 'react'
-import { Box, Image, Text, useTerminalSize } from '../ui.js'
+import { Box, Image, Text, useTerminalImages, useTerminalSize } from '../ui.js'
 import measureElement from '../ink/measure-element.js'
 import useApp from '../ink/hooks/use-app.js'
 import { stringWidth } from '../ink/stringWidth.js'
@@ -125,6 +125,7 @@ export function ImagePreviewOverlay({
   const columns = bounds.columns
   const rows = bounds.rows
   const graphicsFit = columns >= MIN_GRAPHICS_COLUMNS && rows >= MIN_GRAPHICS_ROWS
+  const graphicsAvailable = useTerminalImages(graphicsFit)
   const [state, setState] = React.useState<
     | { readonly kind: 'loading' }
     | { readonly kind: 'ready'; readonly source: TerminalImageSource }
@@ -132,9 +133,7 @@ export function ImagePreviewOverlay({
   >({ kind: 'loading' })
 
   React.useEffect(() => {
-    // The metadata-only narrow card never draws pixels — decoding for it
-    // would only fill the full-tier cache with bytes nobody paints.
-    if (!graphicsFit) return
+    if (!graphicsAvailable) return
     let live = true
     setState({ kind: 'loading' })
     void loadTranscriptImageFull(image).then(
@@ -142,7 +141,7 @@ export function ImagePreviewOverlay({
       () => { if (live) setState({ kind: 'failed' }) },
     )
     return () => { live = false }
-  }, [image, graphicsFit])
+  }, [image, graphicsAvailable])
 
   // Title: `Image #N — PNG · 361×379 · 19.0 KB · name.png`, fitted to the
   // widest card the region allows. The attachment id is a content hash from
@@ -164,10 +163,10 @@ export function ImagePreviewOverlay({
     image.name,
     Math.max(0, maxCardColumns - CARD_CHROME_COLS),
   )
-  const stateLine = state.kind === 'failed'
-    ? t('transcript-image-unavailable', { name: label })
-    : state.kind === 'ready'
-      ? t('transcript-image-ready', { name: label })
+  const stateLine = !graphicsAvailable || state.kind === 'ready'
+    ? t('transcript-image-ready', { name: label })
+    : state.kind === 'failed'
+      ? t('transcript-image-unavailable', { name: label })
       : t('transcript-image-loading', { name: label })
 
   const [imageWidth, imageHeight] = graphicsFit
@@ -259,7 +258,7 @@ export function ImagePreviewOverlay({
           <Box flexGrow={1} alignItems="center" justifyContent="center">
             {graphicsFit ? (
               <Image
-                source={state.kind === 'ready' ? state.source : undefined}
+                source={graphicsAvailable && state.kind === 'ready' ? state.source : undefined}
                 width={imageWidth}
                 height={imageHeight}
                 alt={label}
