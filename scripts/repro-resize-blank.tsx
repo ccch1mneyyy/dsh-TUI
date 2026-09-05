@@ -84,6 +84,8 @@ for (let t = 0; t < 200; t++) {
   rows.push({ id: id++, kind: 'assistant', text: '回答 ' + t + '：\n\n- 因子 IC 稳定\n- 回撤可控\n- 与动量低相关', streaming: false })
 }
 const channel: any = {
+  // 探针确定性：鲸鱼欢迎期闲置动画（默认开）不进本探针的测量窗口。
+  whaleIdle: false,
   version: 0, rows, status: 'idle', sessionTitle: 'resize-stress', agentId: 'x',
   model: 'deepseek-v4-flash', reasoningEffort: 'max',
   tokens: { input: 100, output: 40 }, cwd: '/tmp/demo', displayCwd: '/tmp/demo',

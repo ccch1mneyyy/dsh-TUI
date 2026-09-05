@@ -49,10 +49,12 @@ the interface, and removing it leaves no core modifications behind.
   search, message selection, inline or alternate-screen rendering, and `/lang`
   zh/en UI language switching.
 - **Pixel whale pet**: one of three randomized startup intros plays on every
-  launch; **clicking the whale pops a heart pass** any time, and with
-  `/settings → whaleIdle` enabled the settled whale keeps fluttering its fins
-  and thumping its tail, swims continuously while the agent works, falls
-  asleep with Z's after 10s of inactivity, and wakes on any work. The 22
+  launch. During the welcome phase (before the first task), **clicking the
+  whale pops a heart pass and wakes it from a doze**, it flutters its fins
+  and thumps its tail while
+  idle (`/settings → whaleIdle` turns this off), and dozes off with Z's
+  after 10s of inactivity. **The first agent task freezes it to the static
+  standard frame for good** — zero ongoing cost. The 22
   hand-drawn frames and the idle behaviors are ported from
   [dsh-ui-whale](https://github.com/lhh010/dsh-ui-whale) by [@lhh010](https://github.com/lhh010).
 - **Timeline navigation**: a Grok-style turn rail covering **every turn

@@ -217,6 +217,10 @@ const panelHeader = (text: string): string =>
   check('Ctrl+T opens the trajectory even before the first message', await settled(() => isScene(harness.screen())),
     harness.screen().split('\n')[0]?.trim())
 
+  // 场景可见与场景按键处理器挂载之间没有可观测完成条件——'q' 可能在
+  // 处理器挂上前的第一帧到达而落空（CI 高负载下放大，repro-pill 组
+  // 的 sleep pacing 同款）。保留固定窗口。
+  await sleep(120)
   harness.stdin.write('q')
   check('q returns to the context summary', await settled(() => /已加载上下文/.test(harness.screen())))
 
@@ -250,6 +254,8 @@ const panelHeader = (text: string): string =>
   harness.stdin.write(CTRL_T)
   check('Ctrl+T opens the trajectory scene', await settled(() => isScene(harness.screen())), harness.screen().split('\n')[0]?.trim())
 
+  // 同上：场景按键挂载窗口 pacing。
+  await sleep(120)
   harness.stdin.write('q')
   check('q returns to the conversation', await settled(() => !isScene(harness.screen())))
 
