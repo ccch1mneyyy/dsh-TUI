@@ -301,8 +301,8 @@ that stays must carry a machine-readable tag, `固定窗:探针` / `固定窗:�
 `固定窗:pacing` (defined in that file's header), in a trailing comment on the
 same line or in the comment block directly above. The `verify:fixed-window`
 gate scans every script registered in `scripts/run-ci-group.mjs` and fails on
-an untagged call. `固定窗:待迁移` marks pre-existing debt (burn-down tracked in
-#791), pinned per file in `scripts/fixed-window.baseline.json`: any file going
+an untagged call. `固定窗:待迁移` marks pre-existing debt (burn-down tracked
+in issue #791), pinned per file in `scripts/fixed-window.baseline.json`: any file going
 up fails, and old debt going down never offsets it. After clearing a site, run
 `--write-baseline` and commit the rewritten baseline alongside. It must not
 appear in new code.
