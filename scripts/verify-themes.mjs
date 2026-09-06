@@ -107,6 +107,16 @@ const check = (name, fn) => {
   }
 }
 
+check('palette: light panels are white without changing accent or dark surfaces', () => {
+  const light = getTheme('light')
+  assert.equal(light.toolCardBackground, 'rgb(255,255,255)')
+  assert.equal(light.toolCardBackgroundDim, 'rgb(255,255,255)')
+  assert.notEqual(light.text, light.toolCardBackground, 'body text stays readable on white')
+  assert.notEqual(light.background, light.toolCardBackground, 'badge accent remains distinct from panel fill')
+  assert.equal(getTheme('dark').toolCardBackground, 'rgb(36,43,58)')
+  assert.equal(getTheme('dark-ansi').toolCardBackground, 'ansi:blackBright')
+})
+
 // --- parsing / validation --------------------------------------------------
 const goodText = FIXTURES['good.json']
 check('parse: valid theme fields', () => {

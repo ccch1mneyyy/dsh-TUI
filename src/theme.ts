@@ -2,8 +2,8 @@
  * dsh-tui color themes — Gentle Mist Blue (雾蓝) family.
  *
  * Two truecolor palettes share one identity: mist blues carry brand, focus,
- * and interaction; body text stays neutral. `light` is the strict Gentle
- * Mist Blue card (warm off-white background #F6F3ED, ink text #343945) for
+ * and interaction; body text stays neutral. `light` uses white panel
+ * surfaces (#FFFFFF) and ink text (#343945) for
  * light terminals; `dark` is its dark-terminal adaptation (warm off-white
  * text, accent-soft blues). `dark-ansi` is the 16-color fallback for
  * terminals without truecolor. The active palette is chosen at startup by
@@ -318,8 +318,8 @@ const lightTheme: Theme = {
   diffRemovedDimmed: rgb('#F5E6E4'),
   diffAddedWord: rgb('#A9D3B4'),
   diffRemovedWord: rgb('#E5B3AE'),
-  toolCardBackground: rgb('#E9EFF9'), // cool light blue card
-  toolCardBackgroundDim: rgb('#DEE7F4'), // deeper blue-tinted substrate
+  toolCardBackground: rgb('#FFFFFF'), // neutral white panel surface
+  toolCardBackgroundDim: rgb('#FFFFFF'), // white tool-card substrate
   toolDotExec: rgb('#4E7A4E'),
   toolDotRead: rgb('#3F7E8F'),
   toolDotWrite: rgb('#7A5CA8'),

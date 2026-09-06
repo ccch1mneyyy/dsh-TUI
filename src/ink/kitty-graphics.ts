@@ -220,6 +220,7 @@ export class KittyGraphicsManager {
       placement.rows,
       this.cellSize.width,
       this.cellSize.height,
+      placement.presentation,
     ].join(':')
     const existing = this.images.get(key)
     if (existing !== undefined) return existing
@@ -229,6 +230,7 @@ export class KittyGraphicsManager {
       placement.columns,
       placement.rows,
       this.cellSize,
+      placement.presentation,
     )
     const image: ImageState = {
       imageId: this.allocateImageId(),

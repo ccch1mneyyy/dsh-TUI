@@ -47,7 +47,47 @@ the interface, and removing it leaves no core modifications behind.
   requested lines, clamping past-EOF ranges or falling back to the whole file
   with a note), history
   search, message selection, inline or alternate-screen rendering, and `/lang`
-  zh/en UI language switching.
+  zh/en UI language switching. Durable image blocks from user attachments and
+  assistant/tool output render as in-transcript previews through Kitty graphics or Sixel,
+  with a same-size text fallback when graphics are unavailable. In fullscreen,
+  clicking a staged `[Image #N]` token or a transcript thumbnail opens one
+  shared preview centered over the transcript, dimming the conversation around
+  it and leaving the prompt visible (Esc or click outside closes); its title reads `Image #N — format · size · bytes ·
+  file name` and images staged in this session show their source path on the
+  card's bottom row. Finder-copied
+  image files paste straight into the attachment store as `[Image #N]`; in the
+  composer a staged `[Image #N]` is one unit — the caret steps over it, deletes
+  remove it whole, and while the caret sits on it the token inverts and its
+  preview opens, closing again when the caret leaves. Vim `x`/`X`/`d…` also
+  delete whole attachments, and `u` restores both text and attachment bindings;
+  undo stays within the current draft.
+  Terminal image previews default to on. Disable them in `/settings → Terminal image previews`
+  or set `terminalImages: false`, then use `/restart` to apply. A saved `/settings` choice takes
+  precedence over Cordis configuration; if it was saved as enabled, turn it off in `/settings`
+  before restarting. Disabled previews keep text
+  metadata and skip preview decoding; sending images to the model is unaffected.
+  `DSH_TUI_DISABLE_TERMINAL_IMAGES=1` always forces previews off.
+  Windows Terminal with Sixel support displays embedded transcript thumbnails
+  and the fullscreen preview card. Non-fullscreen inline mode stays text-only.
+  Sixel uses a bounded 256-color adaptive palette and background-composited
+  transparency. A worker caches quantized pixels and encodes only the visible
+  crop while scrolling; removed or covered images are erased. Attachment reads
+  and decodes share two execution slots and cancel when their last consumer leaves.
+  Queues, caches and frame transfers are bounded, with text fallback on overflow.
+  Detection prefers Kitty, then Sixel advertised by DA1.
+  `DSH_TUI_IMAGE_PROTOCOL=auto|kitty|sixel|none` overrides protocol selection;
+  `DSH_TUI_DISABLE_TERMINAL_IMAGES=1`, accessibility mode, non-TTY output and
+  tmux/screen still disable graphics. Missing image dependencies or an encoding
+  failure preserve the text fallback. The override does not enable inline Sixel.
+  Light-theme panels and image previews use white surfaces with neutral preview borders.
+  Large previews target about 95% of the transcript area, with up to a 2048-pixel edge
+  and a bounded total pixel budget; thumbnail sizing is unchanged.
+  Fit, actual pixels (100%), and 200%/400%/800% zoom are available, with drag,
+  wheel, or arrow-button panning. Actual pixels requires reported terminal cell metrics.
+  The bottom Open original link launches the system image viewer with the unchanged
+  attachment bytes, including images restored from history.
+  In a modal, Left/Right or the bottom ‹/› controls switch images with an index
+  indicator, without wrapping at the ends. Each new image starts in Fit mode.
 - **Pixel whale pet**: one of three randomized startup intros plays on every
   launch. During the welcome phase (before the first task), **clicking the
   whale pops a heart pass and wakes it from a doze**, it flutters its fins
@@ -207,7 +247,7 @@ For migration from the former `dsh-cc-tui` package and `cc-tui` profile, see
 | `Alt+Up` | Pull the last unhandled message back into the input for editing (without interrupting the turn) |
 | `Tab` | Complete `/` commands or `@` files (keep drilling into directories); **while the model is working = follow-up** (queued after the current turn) |
 | `Ctrl+C` | Interrupt the current turn; press again while the interrupt is still settling to force-exit; press twice while idle to exit; **with an active mouse selection in the prompt, copies it to the clipboard and keeps it** |
-| `Esc` | Close the command/file menu; **with an active selection in the prompt: only clears the selection**; double-press while idle clears the input; **double-press on empty input = time rewind** |
+| `Esc` | Close an open image preview; close the command/file menu; **with an active selection in the prompt: only clears the selection**; double-press while idle clears the input; **double-press on empty input = time rewind** |
 | `←` (empty input) | **Background this session and open the agent view** (CC agent view; with text, ← moves the caret as usual) |
 | `Ctrl+O` | Expand/collapse details (full thinking text, tool arguments and output) |
 | `Ctrl+Shift+E` | Expand the fullscreen draft editor (Enter = newline, `Ctrl+Enter` = send, `Esc` = collapse keeping the draft; line numbers, wheel scrolling, click/drag selection) |
@@ -221,6 +261,7 @@ For migration from the former `dsh-cc-tui` package and `cc-tui` profile, see
 | `Ctrl+P` | Toggle the startup loaded-context panel while it is on screen; inside `/resume`, pin/unpin the selected session |
 | `Home` / `End`, `Ctrl+A` / `Ctrl+E` | `Ctrl+A` opens the subagent dashboard (in-editor `Mod+A` still moves to line start); `Ctrl+E` is dual-purpose: line end in the input, expand/collapse hidden older messages during transcription |
 | `Ctrl+←` / `Ctrl+→` (⌘←/→) | Jump by word |
+| `←` / `→` (image modal) | Previous / next image; caret peeks retain prompt editing |
 | `Ctrl+U` / `Ctrl+K` | Delete before the cursor (to line start) / after the cursor (to line end) |
 | `Ctrl+W` | Delete the previous word |
 
@@ -250,6 +291,7 @@ so keep using `Ctrl`.
 | Click a timeline-rail tick | Jump to that turn — the rail covers every turn (folded ones included); a folded tick reveals its turn first, then scrolls it into place |
 | `Esc` | Cancel an in-progress drag selection (no copy) |
 | Single-click a message line | Expand/collapse that line |
+| Click a staged `[Image #N]` token / a transcript thumbnail | Open the centered image preview (metadata fallback without Kitty/Sixel graphics); click outside the preview to close it |
 | Click "load earlier messages" / "ctrl+e show previous N" | Load earlier messages / expand all |
 | Click the StickyHeader / "↓ N new messages" | Jump back to the pinned message / scroll to the bottom |
 | Click a hyperlink | Open it in your browser |
@@ -393,9 +435,9 @@ chat / tool base events ──> persisted Session log ──> TUI / Web
   deriving it in-process from base session events without writing UI state into the shared log.
 - **Terminal paste**: in raw mode `Ctrl+V` is handled by the app and reads the system
   clipboard per platform — PowerShell `Get-Clipboard` on Windows, `osascript`/`pbpaste`
-  on macOS, and auto-detected `wl-paste`/`xclip`/`xsel` on Linux; regular files insert
-  their path, image files generate an `@` reference, clipboard bitmaps are written to
-  the attachment library and shown in the input as `[Image #N]`, and plain text is
+  on macOS, and auto-detected `wl-paste`/`xclip`/`xsel` on Linux; regular non-image
+  files insert their path, while copied image files and clipboard bitmaps are written
+  to the attachment library and shown in the input as `[Image #N]`; plain text is
   inserted at the cursor.
 
 ## Known Limitations
@@ -412,8 +454,10 @@ chat / tool base events ──> persisted Session log ──> TUI / Web
   on macOS (multi-file copies in Finder have no stable AppleScript read path, falling
   back to text/images); Linux needs one of `wl-paste`/`xclip`/`xsel` and a connectable
   session (a missing tool or unreachable session shows a "no clipboard tool available"
-  notice). Unsupported image formats or an unavailable attachment service keep a
-  temporary file reference as a degraded fallback.
+  notice). Unsupported clipboard-bitmap formats are rejected with a warning and
+  their private temporary export is deleted; an unavailable attachment service
+  likewise leaves the bitmap out of the draft. Copied image files can still fall
+  back to an `@` reference when direct staging fails.
 - Exit finishes with a process exit and does not wait for the agent's async disk writes
   (persistence is covered by the persistence plugin as a backstop).
 - **Agent view background sessions live inside this process**: they all stop when the

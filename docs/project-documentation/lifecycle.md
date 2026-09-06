@@ -181,7 +181,9 @@ src/components/PromptInput.tsx useInput 捕获键入（src/components/PromptInpu
 | 技能命令 | 发送 SKILL_PROMPTS 激活提示（src/screens/Chat.tsx:672-685） |
 
 default 分支只对 `command.external` 的注册表命令走
-`channel.runExternalCommand`（src/screens/Chat.tsx:691-704），未知名返回 false 放行给模型。
+`channel.runExternalCommand` 为公开 scene 保留原有的文本结果；Chat 使用 additive 的
+`channel.runExternalCommandOutcome` 读取成功/错误与草稿消费决定。未知命令返回
+`undefined`，由 Chat 显式报错并保留输入，不会静默放行给模型。
 外部命令执行（`src/channel.ts:1962-1976`）：`commandService.execute(agent, "/" + name + rawInput, signal)`，
 结果文本落为通知；`commandService` 是可选服务 `ctx.get('commands')`
 （src/channel.ts:879，dsh-commands 注册表）。channel 注释（:874-878）：execute

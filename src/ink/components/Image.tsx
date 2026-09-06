@@ -18,6 +18,8 @@ export interface ImageProps {
   readonly height: number
   /** Text alternative. Use an empty string for a decorative image. */
   readonly alt: string
+  /** Opt into Sixel for a modal or scrollable transcript. Default keeps Kitty only. */
+  readonly presentation?: 'preview' | 'transcript'
   /** Same-size terminal-cell fallback rendered when graphics are unavailable. */
   readonly children?: ReactNode
 }
@@ -34,10 +36,11 @@ export default function Image({
   width,
   height,
   alt,
+  presentation,
   children,
 }: ImageProps): React.ReactNode {
   const [columns, rows] = normalizeSize(width, height)
-  const image = isTerminalImageSource(source) ? source : undefined
+  const image = isTerminalImageSource(source, presentation) ? source : undefined
   const alternative = cleanAlternative(alt)
 
   return (
@@ -46,6 +49,7 @@ export default function Image({
       imageWidth={image?.width}
       imageHeight={image?.height}
       imageAlt={alternative}
+      imagePresentation={presentation}
       style={{
         width: columns,
         height: rows,

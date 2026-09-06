@@ -4,6 +4,7 @@ import type { Frame } from './frame.js'
 import { invalidateNoInterestRect } from './hit-test.js'
 import { consumeAbsoluteRemovedFlag } from './node-cache.js'
 import Output from './output.js'
+import type { TerminalImagePlacement } from './terminal-image.js'
 import renderNodeToOutput, {
   getScrollDrainNode,
   getScrollHint,
@@ -24,6 +25,7 @@ export type RenderOptions = {
   altScreen: boolean
   /** Whether terminal graphics are active for this paint pass. */
   terminalImages?: boolean
+  imageReady?: (placement: TerminalImagePlacement) => boolean
   // True when the previous frame's screen buffer was mutated post-render
   // (selection overlay), reset to blank (alt-screen enter/resize/SIGCONT),
   // or reset to 0×0 (forceRedraw). Blitting from such a prevScreen would
@@ -131,6 +133,7 @@ export default function createRenderer(
         screen,
         options.terminalImages,
         frontFrame.images,
+        options.imageReady,
       )
     } else {
       output = new Output({
@@ -140,6 +143,7 @@ export default function createRenderer(
         screen,
         terminalImages: options.terminalImages,
         previousImages: frontFrame.images,
+        imageReady: options.imageReady,
       })
     }
 

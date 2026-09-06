@@ -9,13 +9,17 @@ dsh-TUI provides three Gentle Mist Blue palettes, plus an `auto` pseudo-theme:
 | Name | Purpose |
 | --- | --- |
 | `auto` | Pseudo-theme: follows the system/terminal background, resolving to `light` or `dark` |
-| `light` | Warm-white surfaces, ink body text, and mist-blue interaction color |
+| `light` | White panels, ink body text, and mist-blue interaction color |
 | `dark` | Dark-terminal adaptation with warm-gray text and soft blue accents |
 | `dark-ansi` | Compatibility fallback using only the 16 ANSI colors |
 
 Without an explicit choice, the TUI queries the terminal background with OSC
 11 and selects `light` or `dark`. It falls back to `dark` when the terminal does
 not answer.
+
+Light-theme panels, tool cards, and image previews use white (`#FFFFFF`) surfaces by
+default; image previews use neutral borders. Dark palettes and accent colors are
+unchanged. This does not modify the terminal's own background or wallpaper.
 
 `auto` turns that one-shot startup detection into a standing choice: it is a
 valid value for `/theme`, `DSH_TUI_THEME`, and `~/.dsh-tui/theme.json`. Selecting

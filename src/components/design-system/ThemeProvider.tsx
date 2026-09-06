@@ -1,17 +1,20 @@
 import React, { createContext, useContext, useEffect, useState } from 'react'
 import {
   isThemeAvailable,
+  isLightThemeActive,
   registerCustomThemeResolver,
   setActiveThemeName,
   setAutoThemeBase,
   getAutoThemeBase,
   AUTO_THEME_NAME,
 } from '../../theme.js'
+import instances from '../../ink/instances.js'
 import { resolveCustomTheme } from '../../customTheme.js'
 import type { TuiThemeHost } from '../../dsh-adapter/themes.js'
 import { useRuntimeThemeSnapshot } from '../../hooks/useRuntimeThemeSnapshot.js'
 import { readThemePref, writeThemePref } from '../../themePrefs.js'
 import useStdin from '../../ink/hooks/use-stdin.js'
+import useApp from '../../ink/hooks/use-app.js'
 import { oscColor } from '../../ink/terminal-querier.js'
 import { parseOscColor } from '../../ink/termio/osc.js'
 import { logForDebugging } from '../../utils/debug.js'
@@ -129,6 +132,15 @@ export function ThemeProvider({
   // the persisted preference remains untouched.
   const requestedThemeRef = React.useRef<string | undefined>(forced)
   const { internal_querier, isRawModeSupported } = useStdin()
+  const { stdout } = useApp()
+  /**
+   * The terminal background OSC 11 reported, if any. It is the colour a
+   * backdrop shade fades explicit colours toward (see StylePool.withDim);
+   * without it the shade falls back to black/white by theme lightness.
+   */
+  const [detectedBackground, setDetectedBackground] = useState<
+    { r: number; g: number; b: number } | null
+  >(null)
 
   /**
    * The palette `auto` resolves to, as React state so a flip re-renders
@@ -179,6 +191,7 @@ export function ThemeProvider({
       if (color === null || color.type !== 'rgb') {
         finish('dark', 'no OSC 11 reply')
       } else {
+        setDetectedBackground({ r: color.r, g: color.g, b: color.b })
         finish(
           isLightBackground(color.r, color.g, color.b) ? 'light' : 'dark',
           `OSC 11 bg rgb(${color.r},${color.g},${color.b})`,
@@ -206,6 +219,7 @@ export function ThemeProvider({
     void Promise.all([querier.send(oscColor(11)), querier.flush()]).then(([r]) => {
       const color = r ? parseOscColor(r.data) : null
       if (color === null || color.type !== 'rgb') return
+      setDetectedBackground({ r: color.r, g: color.g, b: color.b })
       const base = isLightBackground(color.r, color.g, color.b) ? 'light' : 'dark'
       logForDebugging(`theme: auto base ${base} (OSC 11 bg rgb(${color.r},${color.g},${color.b}))`)
       applyAutoBase(base)
@@ -272,6 +286,19 @@ export function ThemeProvider({
   useEffect(() => {
     if (active !== null) setActiveThemeName(renderedTheme)
   }, [active, renderedTheme])
+
+  // Backdrop shade target: the detected terminal background when OSC 11
+  // answered, else black/white by the rendered theme's lightness. `autoBase`
+  // is a dependency because `auto` resolves through it.
+  useEffect(() => {
+    if (active === null) return
+    const ink = instances.get(stdout)
+    if (ink === undefined) return
+    ink.setShadeTarget(
+      detectedBackground
+        ?? (isLightThemeActive(renderedTheme) ? { r: 255, g: 255, b: 255 } : { r: 0, g: 0, b: 0 }),
+    )
+  }, [active, renderedTheme, autoBase, detectedBackground, stdout])
 
   if (active === null) return null
   return <ThemeContext.Provider value={value}>{children}</ThemeContext.Provider>

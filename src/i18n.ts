@@ -91,6 +91,27 @@ const dict = {
   'export-dir': { zh: '- 目录: {{cwd}}', en: '- Directory: {{cwd}}' },
   'mentions-attached': { zh: '已附加 {{count}} 个文件引用', en: { one: 'Attached {{count}} file reference', other: 'Attached {{count}} file references' } },
   'mentions-missing': { zh: '未找到引用: {{paths}}', en: 'References not found: {{paths}}' },
+  'transcript-image': { zh: '图片', en: 'Image' },
+  'image-preview-previous': { zh: '上一张', en: 'Previous image' },
+  'image-preview-next': { zh: '下一张', en: 'Next image' },
+  'image-preview-open-original': { zh: '打开原图', en: 'Open original' },
+  'image-preview-opening': { zh: '正在打开原图…', en: 'Opening original...' },
+  'image-preview-open-failed': { zh: '原图打开失败，点击重试', en: 'Could not open original; retry' },
+  'image-preview-fit': { zh: '适应', en: 'Fit' },
+  'image-preview-actual': { zh: '100% 原像素', en: 'Actual pixels (100%)' },
+  'image-preview-no-metrics': { zh: '终端未报告字符格像素尺寸', en: 'Terminal cell pixel size unavailable' },
+  'image-preview-zoom-in': { zh: '放大', en: 'Zoom in' },
+  'image-preview-zoom-out': { zh: '缩小', en: 'Zoom out' },
+  'image-preview-left': { zh: '向左平移', en: 'Pan left' },
+  'image-preview-right': { zh: '向右平移', en: 'Pan right' },
+  'image-preview-up': { zh: '向上平移', en: 'Pan up' },
+  'image-preview-down': { zh: '向下平移', en: 'Pan down' },
+  'transcript-image-loading': { zh: '正在加载 {{name}}', en: 'Loading {{name}}' },
+  'transcript-image-ready': { zh: '图片 · {{name}}', en: 'Image · {{name}}' },
+  'transcript-image-unavailable': { zh: '无法预览 {{name}}', en: 'Cannot preview {{name}}' },
+  'transcript-image-message': { zh: '{{count}} 张图片', en: { one: '{{count}} image', other: '{{count}} images' } },
+  'input-image-token-stale': { zh: '{{token}} 已失效，发送时不会附带图片', en: '{{token}} is no longer staged; no image will attach' },
+  'input-images-staged': { zh: '已附加 {{count}} 张图片', en: { one: 'Attached {{count}} image', other: 'Attached {{count}} images' } },
   'send-failed': { zh: '发送失败 · {{err}}', en: 'Send failed · {{err}}' },
   'export-user-section': { zh: '## 用户', en: '## User' },
   'export-thinking-section': { zh: '## 思考', en: '## Thinking' },
@@ -454,6 +475,34 @@ const dict = {
   'esc-again-clear': { zh: '再次按 Esc 清空', en: 'Press Esc again to clear' },
   'new-session-started': { zh: '已新建会话', en: 'New session started' },
   'command-not-found': { zh: '/{{name}}：没有这个命令', en: '/{{name}}: no such command' },
+  'command-images-unsupported': {
+    zh: '/{{name}} 不接受图片；草稿已保留',
+    en: '/{{name}} does not accept images; the draft was preserved',
+  },
+  'command-images-runtime-unsupported': {
+    zh: '/{{name}}：当前命令运行时不支持图片；草稿已保留',
+    en: '/{{name}}: this command runtime cannot accept images; the draft was preserved',
+  },
+  'command-images-limit': {
+    zh: '/{{name}}：图片数量或总大小超过当前 profile 限制；草稿已保留',
+    en: '/{{name}}: the image batch exceeds this profile\'s limits; the draft was preserved',
+  },
+  'command-images-missing': {
+    zh: '/{{name}}：图片已失效或不可读取（{{paths}}）；草稿已保留',
+    en: '/{{name}}: images are stale or unreadable ({{paths}}); the draft was preserved',
+  },
+  'command-running': {
+    zh: '命令仍在执行，请等待本次结果',
+    en: 'The command is still running; wait for this attempt to settle',
+  },
+  'command-changed': {
+    zh: '/{{name}} 在图片准备期间发生变化；未执行，草稿已保留',
+    en: '/{{name}} changed while its images were prepared; it was not run and the draft was preserved',
+  },
+  'shell-images-unsupported': {
+    zh: 'Shell 命令不接受图片；草稿已保留',
+    en: 'Shell commands do not accept images; the draft was preserved',
+  },
   'thinking-toggled': { zh: '思考过程：{{state}}', en: 'Thinking display: {{state}}' },
   'thinking-on': { zh: '显示', en: 'shown' },
   'thinking-off': { zh: '隐藏', en: 'hidden' },
@@ -548,6 +597,8 @@ const dict = {
   'input-clipboard-unavailable': { zh: '无法读取剪贴板：没有可用的 wl-paste / xclip / xsel（未安装或会话不可连接）', en: 'Cannot read clipboard: no usable wl-paste / xclip / xsel (not installed or session unreachable)' },
   'input-image-pasted': { zh: '已粘贴图片 {{token}}', en: 'Pasted image {{token}}' },
   'input-image-paste-failed': { zh: '粘贴图片失败：{{err}}', en: 'Could not paste image: {{err}}' },
+  'input-image-paste-limit': { zh: '图片数量超过当前配置的单条消息上限', en: 'Image count exceeds the per-message limit for this profile' },
+  'input-image-format-unsupported': { zh: '剪贴板图片格式不受支持；请使用 PNG、JPEG、WebP 或 GIF', en: 'Clipboard image format is unsupported; use PNG, JPEG, WebP, or GIF' },
   'input-pending-steer-label': { zh: '插话 · 下一步送达', en: 'Steer · delivered next' },
   'input-pending-queue-label': { zh: '排队 · 回合结束后送达', en: 'Queued · delivered after the turn' },
   'input-pending-actions-hint': { zh: '撤回 · Esc 打断并立即发送', en: 'Retract · Esc interrupts and sends immediately' },
@@ -594,8 +645,9 @@ const dict = {
   'sugg-color-reset-desc': { zh: '清除会话颜色，恢复主题默认', en: 'Clear the session color' },
   'sugg-color-name-desc': { zh: '会话强调色', en: 'Session accent color' },
 
-  // ── dsh-adapter/plugin.ts（/settings 全屏设置）───────────────────────
+  // ── dsh-adapter/plugin.ts（/settings 渲染设置）───────────────────────
   'settings-fullscreen-restart': { zh: '全屏设置已保存，重启 dsh-tui 后生效', en: 'Fullscreen preference saved — restart dsh-tui to apply' },
+  'settings-terminal-images-restart': { zh: '图片预览设置已保存，使用 /restart 重启 TUI 后生效', en: 'Image preview preference saved — use /restart to apply' },
   'settings-fullscreen-migrated': { zh: '全屏已是出厂默认（已清除更新前的 inline 选择）；偏好 inline 可在 /settings 改回', en: 'Fullscreen is now the factory default (pre-update inline choice cleared); prefer inline? Switch back in /settings' },
 
   // ── components/HelpMenu.tsx ─────────────────────────────────────────

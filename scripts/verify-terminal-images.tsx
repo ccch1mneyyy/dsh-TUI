@@ -10,7 +10,7 @@ import {
   PromptEditorLayer,
   setPromptEditorNode,
 } from '../src/components/PromptEditor.js'
-import { AlternateScreen, Box, Image, render, Text } from '../src/ui.js'
+import { AlternateScreen, Box, createRoot, Image, render, Text } from '../src/ui.js'
 import { createNode } from '../src/ink/dom.js'
 import instances from '../src/ink/instances.js'
 import {
@@ -39,6 +39,7 @@ import {
 import {
   fitTerminalImageSource,
   isTerminalImageSource,
+  terminalImageSourceFromAttributes,
   resolveTerminalCellSize,
   TERMINAL_IMAGE_MAX_FRAME_BYTES,
   type TerminalImagePlacement,
@@ -78,6 +79,19 @@ function rgbaFromTransmission(transmission: string): {
 }
 
 assert.equal(isTerminalImageSource(source), true)
+const largePreviewSource: TerminalImageSource = {
+  width: 2048, height: 1024, data: new Uint8Array(2048 * 1024 * 4),
+}
+assert.equal(isTerminalImageSource(largePreviewSource), false, 'default plugin image bounds remain unchanged')
+assert.equal(isTerminalImageSource(largePreviewSource, 'transcript'), false, 'transcripts do not inherit the preview budget')
+assert.equal(isTerminalImageSource(largePreviewSource, 'preview'), true, 'explicit previews allow a 2048 edge within 8 MiB')
+assert.equal(isTerminalImageSource({ width: 2049, height: 1, data: new Uint8Array(2049 * 4) }, 'preview'), false)
+assert.equal(isTerminalImageSource({ width: 2048, height: 1025, data: new Uint8Array(2048 * 1025 * 4) }, 'preview'), false,
+  'preview pixel area remains capped even when each edge is valid')
+assert.equal(terminalImageSourceFromAttributes({
+  imageData: largePreviewSource.data, imageWidth: 2048, imageHeight: 1024, imagePresentation: 'preview',
+})?.data, largePreviewSource.data, 'host attributes preserve preview-only admission')
+assert.equal(TERMINAL_IMAGE_MAX_FRAME_BYTES, 16 * 1024 * 1024, 'larger previews do not raise the total frame budget')
 assert.equal(
   isTerminalImageSource({ ...source, data: source.data.subarray(1) }),
   false,
@@ -564,6 +578,40 @@ const imageTree = (
     </Box>
   </AlternateScreen>
 )
+
+for (const entrypoint of ['render', 'createRoot'] as const) {
+  for (const forcedByEnv of [false, true]) {
+    if (forcedByEnv) process.env.DSH_TUI_DISABLE_TERMINAL_IMAGES = '1'
+    const disabledStdout = new FakeStdout()
+    const options = {
+      stdin: new FakeStdin(),
+      stdout: disabledStdout,
+      stderr: new FakeStderr(),
+      exitOnCtrlC: false,
+      patchConsole: false,
+      terminalImages: forcedByEnv,
+    }
+    const disabledInstance = entrypoint === 'render'
+      ? await render(imageTree(false), options)
+      : await createRoot(options)
+    try {
+      if ('render' in disabledInstance) disabledInstance.render(imageTree(false))
+      assert.ok(
+        await settled(() => disabledStdout.output.includes('▓')),
+        `${entrypoint} must render text fallback when previews are disabled`,
+      )
+      assert.doesNotMatch(
+        disabledStdout.output,
+        /\x1b_G/u,
+        `${entrypoint} must respect both the image option and the forced environment override`,
+      )
+    } finally {
+      disabledStdout.isTTY = false
+      disabledInstance.unmount()
+      delete process.env.DSH_TUI_DISABLE_TERMINAL_IMAGES
+    }
+  }
+}
 
 const interruptedStdin = new FakeStdin()
 const interruptedStdout = new FakeStdout()

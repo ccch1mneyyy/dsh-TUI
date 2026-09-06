@@ -3,6 +3,9 @@ import type { DOMElement } from './dom.js'
 /** Hard bounds for one decoded image admitted to the terminal renderer. */
 export const TERMINAL_IMAGE_MAX_EDGE = 1024
 export const TERMINAL_IMAGE_MAX_BYTES = 4 * 1024 * 1024
+/** Explicit large previews may use a longer edge, but not an unbounded square. */
+export const TERMINAL_IMAGE_PREVIEW_MAX_EDGE = 2048
+export const TERMINAL_IMAGE_PREVIEW_MAX_BYTES = 8 * 1024 * 1024
 /** Maximum decoded RGBA bytes represented by placements in one frame. */
 export const TERMINAL_IMAGE_MAX_FRAME_BYTES = 16 * 1024 * 1024
 /**
@@ -13,6 +16,10 @@ export const TERMINAL_IMAGE_MAX_FRAME_BYTES = 16 * 1024 * 1024
  */
 export const TERMINAL_IMAGE_MAX_CELLS = 128 * 128
 export const TERMINAL_IMAGE_MAX_PLACEMENTS = 64
+export const SIXEL_MAX_ENCODED_BYTES = 4 * 1024 * 1024
+export const SIXEL_THUMBNAIL_FRAME_BYTES = 1024 * 1024
+export const SIXEL_CACHE_BYTES = 16 * 1024 * 1024
+export const SIXEL_CACHE_ENTRIES = 64
 
 /** Pixel dimensions of one terminal cell. */
 export interface TerminalCellSize {
@@ -50,6 +57,14 @@ export interface TerminalImagePlacement {
   readonly columns: number
   readonly rows: number
   readonly source: TerminalImageSource
+  readonly presentation?: 'preview' | 'transcript'
+  /** Visible terminal cells, while x/y/columns/rows retain the full layout box. */
+  readonly clip?: { readonly x: number; readonly y: number; readonly columns: number; readonly rows: number }
+  readonly background?: string
+  /** False while a protocol-specific raster is pending or unavailable. */
+  readonly graphicsReady?: boolean
+  /** Later paint operations cover this backing, including blank overlays. */
+  readonly occluded?: boolean
 }
 
 /**
@@ -115,6 +130,7 @@ export function fitTerminalImageSource(
   columns: number,
   rows: number,
   cellSize: TerminalCellSize = DEFAULT_TERMINAL_CELL_SIZE,
+  presentation?: TerminalImagePlacement['presentation'],
 ): TerminalImageSource {
   const cell = normalizeTerminalCellSize(cellSize)
   const safeColumns = Math.max(1, Math.floor(columns))
@@ -122,6 +138,7 @@ export function fitTerminalImageSource(
   const [boxWidth, boxHeight] = boundedPixelBox(
     safeColumns * cell.width,
     safeRows * cell.height,
+    presentation === 'preview' ? TERMINAL_IMAGE_PREVIEW_MAX_BYTES : TERMINAL_IMAGE_MAX_BYTES,
   )
 
   // Kitty scales the raster to the requested cell rectangle, so its canvas
@@ -210,8 +227,8 @@ function greatestCommonDivisor(left: number, right: number): number {
   return left
 }
 
-function boundedPixelBox(width: number, height: number): readonly [number, number] {
-  const maxPixels = TERMINAL_IMAGE_MAX_BYTES / 4
+function boundedPixelBox(width: number, height: number, maxBytes: number): readonly [number, number] {
+  const maxPixels = maxBytes / 4
   const scale = Math.min(
     1,
     Math.sqrt(maxPixels / (width * height)),
@@ -294,24 +311,27 @@ function resizeRgba(
 /** Validate an untrusted decoded source without copying its pixel buffer. */
 export function isTerminalImageSource(
   value: unknown,
+  presentation?: TerminalImagePlacement['presentation'],
 ): value is TerminalImageSource {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
     return false
   }
   const source = value as Partial<TerminalImageSource>
+  const maxEdge = presentation === 'preview' ? TERMINAL_IMAGE_PREVIEW_MAX_EDGE : TERMINAL_IMAGE_MAX_EDGE
+  const maxBytes = presentation === 'preview' ? TERMINAL_IMAGE_PREVIEW_MAX_BYTES : TERMINAL_IMAGE_MAX_BYTES
   if (
     !(source.data instanceof Uint8Array) ||
     !Number.isSafeInteger(source.width) ||
     !Number.isSafeInteger(source.height) ||
     source.width! <= 0 ||
     source.height! <= 0 ||
-    source.width! > TERMINAL_IMAGE_MAX_EDGE ||
-    source.height! > TERMINAL_IMAGE_MAX_EDGE
+    source.width! > maxEdge ||
+    source.height! > maxEdge
   ) {
     return false
   }
   const bytes = source.width! * source.height! * 4
-  return bytes <= TERMINAL_IMAGE_MAX_BYTES && source.data.byteLength === bytes
+  return bytes <= maxBytes && source.data.byteLength === bytes
 }
 
 /** Recover and validate a source stored as primitive Ink host attributes. */
@@ -323,5 +343,6 @@ export function terminalImageSourceFromAttributes(
     width: attributes['imageWidth'],
     height: attributes['imageHeight'],
   }
-  return isTerminalImageSource(source) ? source : undefined
+  const presentation = attributes['imagePresentation'] === 'preview' ? 'preview' : undefined
+  return isTerminalImageSource(source, presentation) ? source : undefined
 }
