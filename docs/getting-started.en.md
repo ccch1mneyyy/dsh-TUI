@@ -211,6 +211,17 @@ After each source change, build, pack, install in isolation, and launch with:
 pnpm dev
 ```
 
+`pnpm dev` uses content fingerprints to skip the layers whose inputs did not
+change (dependency install, vendor/dsh-auth builds, pack + isolated install);
+on a full cache hit it runs only a fast incremental typecheck, while `src/`
+edits still get a full compile (without cleaning `lib/`). Pass `--force` to
+rerun every layer once. The build gates are not part of the daily loop; for
+the complete pipeline (before releases, or when the cache looks suspect), run:
+
+```sh
+pnpm dev:full
+```
+
 `pnpm dev:copy-config` copies only `~/.dsh/settings.yaml` and
 `~/.dsh/.credentials.yaml`. Files are set to mode `0600` on Unix; Windows uses
 the OS-managed file ACL. `pnpm dev` uses isolated `HOME`, `DSH_HOME`, and session
@@ -219,7 +230,8 @@ sessions untouched. The test root defaults to
 `$XDG_CACHE_HOME/dsh-tui-dev` on Unix (`~/.cache/dsh-tui-dev` when unset) and
 `%LOCALAPPDATA%\dsh-tui-dev` on Windows. Override it with `DSH_TUI_DEV_ROOT`.
 
-To verify only the build, pack, and install path without launching the TUI, run:
+To verify only the full build, pack, and install path (including all build
+gates) without launching the TUI, run:
 
 ```sh
 pnpm dev:test

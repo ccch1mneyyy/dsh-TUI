@@ -40,6 +40,9 @@ pnpm build                      # compile + 全部构建门禁
 pnpm verify:build               # 构建门禁（边界/契约/patch surface/plugin 系列等），不重复编译
 pnpm verify:package             # npm tarball 目标完整 + 入口 smoke import
 pnpm smoke                      # 通用无头屏幕组装冒烟
+pnpm dev                        # 快速开发循环：内容指纹跳过未变层，保留类型检查/编译；--force 全量一次
+pnpm dev:full                   # 完整 dev 流水线：install + compile + 全部构建门禁 + 打包 + 隔离安装
+pnpm dev:test                   # 不启动 TUI，验证完整构建/打包/安装链路
 ```
 
 仓库**没有根级 `test` 或 `lint` 脚本**——不要声称跑过它们。静态关口是 TypeScript 构建；行为验证靠聚焦回归脚本与复现环境。多数用普通 `node` 调用的脚本 import `lib/types/`，先 `pnpm build`；import TypeScript 源的脚本在头部声明 `node --import tsx/esm <script>`。不要凭扩展名推断输入层（`verify-themes.mjs` 实际经 tsx import `src/`）。`scripts/` 还含取证/交互工具（堆分析、PTY 探针、回放捕获、性能探针），不是有界测试，不要当套件全跑。
