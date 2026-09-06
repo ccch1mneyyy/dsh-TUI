@@ -56,9 +56,13 @@ web-app patch 按 include 语义合成一遍,直接拦截 loader entry id 复用
   ChannelUi 及可达数据契约由 `adapter/ports/channel-*.ts` 拥有，原位置 re-export；
   ports 不依赖 adapter/React，上游事件经 RawTrajEvent 边界读取，scene 由 renderer outlet 注入。
   只读数据为脱离后端的冻结投影，嵌套回调捕获生命周期；shadow renderer 使用本地观察订阅。
-  **尚未完成 L4**：原本体仍约 5,000 行；session/model/workspace actions 与 activity 装配待继续拆分，
-  旧 Port 生命周期及全部异步域操作尚未获得完整闭环证明。
-  详细完成项与阻塞项见 [L4/L5 路线图](docs/roadmap-adapter-channel-l4-l5.md)。
+  当前 L4 本轮将 composition root 收敛为约 1,000 行：typed readiness cell 一次性安装完整
+  action surface，未安装或 owner 已释放时明确抛错；detached handles 与 context-warning/
+  pending bookkeeping 分别归属内聚模块。owner 从最早资源获取进入统一撤销漏斗，清理逐项
+  尝试并保留清理失败；Host Port 以 registration identity 固定一次注册，同对象重注册、owner
+  release 与 A → B → A 都会撤销 retained authority。L4 已完成独立集中审查、定向修复和
+  本地自动化验收（build/package、Channel UI 58/58、CI3）；真实 TTY 与长期压力基准未测。
+  L5 Deferred，未宣称完整 RFC state。完成项与限制见 [L4/L5 路线图](docs/roadmap-adapter-channel-l4-l5.md)。
 - **P5 Channel Provider/Consumer**:实现 `tui.dsh/v1alpha1#Channel`
   协议包络与校验;`runChannelReplay` 支持录制 snapshots 与真实 DSH
   sessionEvents 的 **minimal transcript replay**(不宣称完整 RFC state);

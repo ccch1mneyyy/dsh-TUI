@@ -8,12 +8,14 @@ export interface InputConvergence { cancelInFlight: boolean; interruptSeq: numbe
 export function createInputActions(
   getState: () => Pick<ChannelState, 'agentId' | 'pending' | 'cancelPending' | 'emit'>,
   getAgent: () => Agent,
+  owner: { assertActive(): void },
   input: InputConvergence,
   dispatchUserText: (text: string, placement: 'steer' | 'followup') => void,
   runLocalCommand: (command: string, includeInContext: boolean) => Promise<void>,
 ): Pick<ChannelState, 'submit' | 'steer' | 'removePending' | 'cancel' | 'interruptAndDeliver'> {
   return {
     submit(text) {
+      owner.assertActive()
       const state = getState()
       const agent = getAgent()
       const trimmed = text.trim()
@@ -39,6 +41,7 @@ export function createInputActions(
      *  injected at the next step boundary of the current turn and the agent
      *  continues without stopping — faster than followup, never an abort. */
     steer(text) {
+      owner.assertActive()
       const state = getState()
       const agent = getAgent()
       const trimmed = text.trim()
@@ -56,6 +59,7 @@ export function createInputActions(
     /** Pull a pending message back out of the inbox (Alt+Up): it returns to
      *  the input for editing instead of being delivered. */
     removePending(id: string): boolean {
+      owner.assertActive()
       const state = getState()
       const agent = getAgent()
       const index = state.pending.findIndex(item => item.id === id)
@@ -73,6 +77,7 @@ export function createInputActions(
     },
 
     cancel() {
+      owner.assertActive()
       const state = getState()
       const agent = getAgent()
       // Keep the staged queue: an interrupt aborts the running turn but the
@@ -87,6 +92,7 @@ export function createInputActions(
     },
 
     interruptAndDeliver(texts: readonly string[]): number {
+      owner.assertActive()
       const state = getState()
       const agent = getAgent()
       const queued = texts.map(text => text.trim()).filter(text => text !== '')

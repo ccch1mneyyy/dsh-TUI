@@ -24,7 +24,7 @@ Cordis profile
 | `src/index.ts` | Cordis plugin name, injection declaration, config interface, and Schema; keep the entry small and lazy |
 | `src/dsh-adapter/plugin.ts` | TTY guard, service assembly, Agent create/resume, React mount, and the single cleanup funnel |
 | `src/dsh-adapter/questions-answerer.ts` / `preset-resolution.ts` | Prerelease dispatch for user questions and agent presets; consumers stay unaware of upstream version branches |
-| `src/dsh-adapter/channel.ts` | Composes Channel services, constructors, explicit start/release, and compatibility exports; initial observable fields live in `channel/state.ts`, the activity clock in `channel/activity.ts`, binding event routing in `channel/binding-events.ts`, and the sole projector remains `channel/projection.ts` |
+| `src/dsh-adapter/channel.ts` | Channel composition root: options/services, owner/binding, specialist wiring, one install, final start/release, and compatibility exports. Typed action forwarding/readiness lives in `channel/action-readiness.ts`, detached handles in `channel/lifetime-resources.ts`, and context-warning/pending bookkeeping in `channel/context-bookkeeping.ts` (including the warning cell shared with compaction reset). Neutral initial fields live in `channel/state.ts`, completion in `channel/command-completions.ts`, local transcript/shell/subagent-report actions in `channel/local-actions.ts`, the activity clock in `channel/activity.ts`, binding event routing in `channel/binding-events.ts`, and the sole projector remains `channel/projection.ts`. An uninstalled or released action fails explicitly; it never pretends success with a no-op. |
 | `src/workspaces.ts` | Local-path fallback and generic workspace-provider registry; it must contain no provider protocol, copy, or dependency |
 | `src/screens/Chat.tsx` | Modal precedence, global keys, scroll/search/selection state, and slash dispatch |
 | `src/components/` | User views and design-system primitives; no Agent or session source of truth |
@@ -193,8 +193,13 @@ visual TUI alone does not describe the effective policy.
 - `/vim`, `/connect`, and `/hooks` are compatibility placeholders,
   not evidence that those DSH capabilities are mounted.
 - There is no automated full-flow suite that requires real model credentials;
-  CI uses headless rendering and fake services, while live model integration
-  still needs a manual check in the target terminal.
+  CI uses headless rendering and fake services. This L4 batch has **not**
+  manually exercised a real TTY in inline/fullscreen mode, at narrow width, or
+  on Windows ConPTY; live model integration still needs a target-terminal
+  check. Full RFC state (L5) is deferred from this batch.
+- L4 has completed one independent local review and targeted fixes. Final
+  compile, build/package gates, all 58 channel-ui checks, and the three CI
+  renderer regressions passed; this is not real-TTY or long-term memory stress evidence.
 
 ## Debugging and verification
 

@@ -234,7 +234,9 @@ assert.equal(facade.channel.projection.snapshot().rows.length, 2)
 assert.equal(facade.channel.state.snapshot().agentId, 'session-1')
 assert.equal(facade.channel.transcript.rows().length, 2)
 facade.channel.actions.submit('guarded submit in new mode')
-assert.equal(typeof facade.channel.plugins.runExternalCommand('name', 'raw').then, 'function')
+const commandResult = facade.channel.plugins.runExternalCommand('name', 'raw')
+assert.equal(typeof commandResult.then, 'function')
+await commandResult
 kernel.dispose()
 
 // Shadow policy: passive-shadow allows read-only channel reads, denies mutate.

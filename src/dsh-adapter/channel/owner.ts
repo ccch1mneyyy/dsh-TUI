@@ -32,7 +32,14 @@ export function createChannelOwner() {
       if (!active) return
       active = false
       controller.abort()
-      for (const cleanup of [...cleanups]) cleanup()
+      const failures: unknown[] = []
+      // Every registered resource gets one cleanup attempt. A throwing
+      // external disposer must not strand later subscriptions or handles.
+      for (const cleanup of [...cleanups]) {
+        try { cleanup() } catch (error) { failures.push(error) }
+      }
+      if (failures.length === 1) throw failures[0]
+      if (failures.length > 1) throw new AggregateError(failures, 'dsh-tui: Channel cleanup failed')
     },
   }
 }
@@ -40,4 +47,10 @@ export type ChannelOwner = ReturnType<typeof createChannelOwner>
 const owners = new WeakMap<object, ChannelOwner>()
 export function registerChannelOwner(channel: object, owner: ChannelOwner): void { owners.set(channel, owner) }
 export function bindChannelOwner(channel: object, check: () => boolean): void { owners.get(channel)?.bind(check) }
+export function channelOwnerCurrent(channel: object): boolean { return owners.get(channel)?.current() ?? false }
+/** Register work that must be revoked whenever this Channel owner releases. */
+export function onChannelOwnerDispose(channel: object, cleanup: () => void): () => void {
+  const owner = owners.get(channel)
+  return owner === undefined ? (() => undefined) : owner.own(cleanup)
+}
 export function disposeChannelOwner(channel: object): void { owners.get(channel)?.dispose() }

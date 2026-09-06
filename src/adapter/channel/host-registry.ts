@@ -16,8 +16,11 @@
 
 import { compositionRoot } from '../../dsh-adapter/host-access.js'
 
-const channels = new WeakMap<object, unknown>()
-const registrationListeners = new WeakMap<object, Set<(channel: unknown) => void>>()
+export type TuiChannelRegistration = Readonly<{ channel: unknown; token: symbol }>
+
+const channels = new WeakMap<object, TuiChannelRegistration>()
+const channelListeners = new WeakMap<object, Set<(channel: unknown) => void>>()
+const registrationListeners = new WeakMap<object, Set<(registration: TuiChannelRegistration | undefined) => void>>()
 
 function rootKey(ctx: unknown): object | undefined {
   if (ctx === null || (typeof ctx !== 'object' && typeof ctx !== 'function')) return undefined
@@ -30,42 +33,57 @@ function rootKey(ctx: unknown): object | undefined {
 }
 
 /** Register the live Channel for a composition root.
- * @returns A token-safe disposer. Calling it removes this Channel only when
- * the registry entry still points to the exact Channel instance that was
- * registered, so a later replacement cannot be accidentally unregistered by an
- * earlier owner's cleanup.
+ * @returns A token-safe disposer. Registrations have identity independent of
+ * their Channel object: A → B → A and repeated registration of the same
+ * Channel cannot let an older disposer erase or revive the current entry.
  */
 export function registerTuiChannel(ctx: unknown, channel: unknown): () => boolean {
   const key = rootKey(ctx)
   if (key === undefined) return () => false
-  channels.set(key, channel)
-  notifyChannelListeners(key, channel)
+  const registration: TuiChannelRegistration = Object.freeze({ channel, token: Symbol('tui-channel-registration') })
+  channels.set(key, registration)
+  notifyChannelListeners(key, registration)
   let disposed = false
   return () => {
     if (disposed) return false
     disposed = true
-    if (channels.get(key) !== channel) return false
+    if (channels.get(key)?.token !== registration.token) return false
     channels.delete(key)
     notifyChannelListeners(key, undefined)
     return true
   }
 }
 
-function notifyChannelListeners(key: object, channel: unknown): void {
-  const listeners = registrationListeners.get(key)
-  if (listeners === undefined) return
-  for (const listener of [...listeners]) {
+function notifyChannelListeners(key: object, registration: TuiChannelRegistration | undefined): void {
+  const listeners = channelListeners.get(key)
+  if (listeners !== undefined) {
+    for (const listener of [...listeners]) {
+      try {
+        listener(registration?.channel)
+      } catch {
+        // A registration notification is advisory; one faulty listener must not
+        // prevent the Channel from being stored.
+      }
+    }
+  }
+  const identityListeners = registrationListeners.get(key)
+  if (identityListeners === undefined) return
+  for (const listener of [...identityListeners]) {
     try {
-      listener(channel)
+      listener(registration)
     } catch {
-      // A registration notification is advisory; one faulty listener must not
-      // prevent the Channel from being stored.
+      // Identity notifications have the same advisory, fan-out semantics.
     }
   }
 }
 
 /** Resolve the live Channel for a composition root. */
 export function getRegisteredTuiChannel(ctx: unknown): unknown | undefined {
+  return getTuiChannelRegistration(ctx)?.channel
+}
+
+/** Return the current registration identity, not only its Channel object. */
+export function getTuiChannelRegistration(ctx: unknown): TuiChannelRegistration | undefined {
   const key = rootKey(ctx)
   return key === undefined ? undefined : channels.get(key)
 }
@@ -83,13 +101,27 @@ export function onTuiChannelRegistered(
 ): () => void {
   const key = rootKey(ctx)
   if (key === undefined) return () => undefined
+  let listeners = channelListeners.get(key)
+  if (listeners === undefined) {
+    listeners = new Set()
+    channelListeners.set(key, listeners)
+  }
+  listeners.add(listener)
+  return () => { listeners?.delete(listener) }
+}
+
+/** Subscribe to registration identities for consumers that own capabilities. */
+export function onTuiChannelRegistration(
+  ctx: unknown,
+  listener: (registration: TuiChannelRegistration | undefined) => void,
+): () => void {
+  const key = rootKey(ctx)
+  if (key === undefined) return () => undefined
   let listeners = registrationListeners.get(key)
   if (listeners === undefined) {
     listeners = new Set()
     registrationListeners.set(key, listeners)
   }
   listeners.add(listener)
-  return () => {
-    listeners?.delete(listener)
-  }
+  return () => { listeners?.delete(listener) }
 }

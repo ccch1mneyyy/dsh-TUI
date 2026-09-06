@@ -2,6 +2,11 @@ import { createSessionTreeReader } from './channel/session-tree.js'
 import { createInputDelivery } from './channel/input-delivery.js'
 import { createChannelBinding } from './channel/binding.js'
 import { createChannelActivity } from './channel/activity.js'
+import { createCommandCompletions } from './channel/command-completions.js'
+import { createLocalActions } from './channel/local-actions.js'
+import { createDetachedHandleFactory } from './channel/lifetime-resources.js'
+import { createContextBookkeeping } from './channel/context-bookkeeping.js'
+import { createChannelActionMethods, createChannelActionReadiness, type ChannelActionDelegates } from './channel/action-readiness.js'
 import { createBindingEvents } from './channel/binding-events.js'
 import { createInitialChannelView, type ChannelLaunchOptions } from './channel/state.js'
 import { createChannelProjection } from './channel/projection.js'
@@ -44,17 +49,14 @@ import {
   assertCapabilityShadowPolicy,
 } from '../adapter/kernel/runtime.js'
 import { readGrantStore } from '../adapter/standard/grants.js'
-import { SESSION_COLOR_NAMES } from '../cc/sessionColors.js'
-import { completeCommands, HIDDEN_COMMAND_NAMES, isCommandCompletionToken, isLocalCommandName, LOCAL_COMMANDS, parseCommandName, type CommandCompletionNode, type LocalCommand } from '../commands.js'
-import { isPresetName, PRESET_NAMES } from '../components/activityFrames.js'
-import { getLang, LANGS, t, tOr, type Lang } from '../i18n.js'
+import { HIDDEN_COMMAND_NAMES, isLocalCommandName, LOCAL_COMMANDS, parseCommandName, type LocalCommand } from '../commands.js'
+import { isPresetName } from '../components/activityFrames.js'
+import { t, tOr, type Lang } from '../i18n.js'
 import { readModelPref } from '../modelPrefs.js'
 import { resolveModelRoute, validateModelRoute } from '../modelRoute.js'
 import { readPresetPref } from '../presetPrefs.js'
 import { readAgentViewSessions, touchAgentViewSession, touchSession } from '../sessionHistory.js'
 import { resolveSessionModes, type SessionModeSpec } from '../sessionModes.js'
-import { AUTO_THEME_NAME } from '../theme.js'
-import { listThemeCatalog } from '../themeCatalog.js'
 import { resolveDshProfileName } from '../update.js'
 import { logForDebugging } from '../utils/debug.js'
 import { channelCommands } from './channel/commands.js'
@@ -135,50 +137,34 @@ export function createChannel(
   options: ChannelLaunchOptions,
 ): ChannelState {
   const owner = createChannelOwner()
+  try {
+    return createChannelWithOwner(ctx, initialAgent, options, owner)
+  } catch (error) {
+    // Setup is one transaction from the first acquired resource. Preserve the
+    // construction failure while still attempting every registered rollback.
+    try { owner.dispose() } catch { /* primary setup error remains authoritative */ }
+    throw error
+  }
+}
+
+function createChannelWithOwner(
+  ctx: Context,
+  initialAgent: Agent,
+  options: ChannelLaunchOptions,
+  owner: ReturnType<typeof createChannelOwner>,
+): ChannelState {
   const rowIds = { value: 0 }
   const binding = createChannelBinding(initialAgent, options.handle, owner)
-  // Detached work (/fork and agent-view dispatch) must be cancellable by the
-  // channel owner without pretending its temporary handle is a foreground
-  // binding candidate. A successful caller explicitly transfers it instead.
-  const createDetachedHandle = async (create: () => Promise<AgentHandle>): Promise<{
-    handle: AgentHandle
-    transfer(): void
-    release(): Promise<void>
-  }> => {
-    owner.assertActive()
-    let handle: AgentHandle | undefined
-    let transferred = false
-    let disposePromise: Promise<void> | undefined
-    const release = (): Promise<void> => {
-      if (transferred || handle === undefined) return Promise.resolve()
-      disposePromise ??= handle.dispose().catch(() => undefined)
-      return disposePromise
-    }
-    const unregister = owner.own(() => { void release() })
-    try {
-      handle = await create()
-      if (!owner.current()) {
-        await release()
-        throw new Error('dsh-tui: Channel lifetime has ended')
-      }
-      return {
-        handle,
-        transfer() { transferred = true; unregister() },
-        async release() { unregister(); await release() },
-      }
-    } catch (error) {
-      unregister()
-      await release()
-      throw error
-    }
-  }
+  // Detached work (/fork and agent-view dispatch) is owned until a caller
+  // explicitly transfers the temporary handle to its destination ledger.
+  const createDetachedHandle = createDetachedHandleFactory(owner)
   const adapterRuntime = adapterRuntimeFor(ctx)
   const themeHost = getHostThemes(ctx.get('tuiThemes') as TuiThemeRuntime | undefined)
 
   // Detached handles are a stable ledger shared with adoption actions. The
   // agent-view factory itself starts only after the full state surface exists.
   const backgroundHandles = new Map<string, AgentHandle>()
-  let backgroundCurrentAction: () => Promise<import('./channel/types.js').BackgroundResult> = async () => ({ ok: false })
+  let backgroundCurrentAction!: () => Promise<import('./channel/types.js').BackgroundResult>
   let agentView!: ReturnType<typeof createAgentViewProjection>
   let unsubscribeScenes: (() => void) | undefined
 
@@ -286,49 +272,24 @@ export function createChannel(
     )
   }
   const emitter = createChannelEmitter(() => state, () => subagentProjection.flush())
-  if (typeof ctx.effect === 'function') ctx.effect(() => () => { owner.dispose(); emitter.dispose() })
+  // The emitter is created before the complete state surface exists. Put it
+  // in the construction rollback funnel immediately; normal release remains
+  // idempotent through the same disposer.
+  owner.own(() => emitter.dispose())
   // foldRows incremental cursor (see foldRows): rows only append past the
   // fold line, so each pass touches only newly-eligible rows.
   const foldCursor: { rows: unknown; index: number } = { rows: null, index: 0 }
-  /** One-shot context-low warning per session (CC's TokenWarning). */
-  const contextWarning = { value: false }
-  const checkContextWarning = (): void => {
-    if (contextWarning.value || state.contextWindow === undefined) return
-    const remaining = state.contextWindow - state.tokens.input
-    if (remaining >= CONTEXT_WARNING_BUFFER_TOKENS) return
-    contextWarning.value = true
-    const percentLeft = Math.max(
-      0,
-      Math.round((remaining / state.contextWindow) * 100),
-    )
-    notify(
-      t('context-low-warning', { percent: percentLeft }),
-      { color: 'warning', timeoutMs: 8000 },
-    )
-  }
-  /**
-   * Register a submitted message as pending and notify the UI. The inbox
-   * events (claimed/discarded) retire it; nothing here guesses timing.
-   */
-  const trackPending = (
-    message: { id: string; text: string },
-    placement: PendingMessage['placement'],
-    images: readonly ComposerImageRef[],
-  ): void => {
-    state.pending = [...state.pending, { id: message.id, text: message.text, images: [...images], placement }]
-    state.emit()
-  }
-  /** Remove one pending entry (rollback on a refused send, steering
-   *  rejection, or delivery races) and notify only when it existed. */
-  const untrackPending = (messageId: string): void => {
-    const before = state.pending.length
-    state.pending = state.pending.filter(item => item.id !== messageId)
-    if (state.pending.length !== before) state.emit()
-  }
   const notify: ChannelState['notify'] = (...args) => {
     if (!owner.current()) return () => undefined
     return channelCommands(state).notify(...args)
   }
+  const bookkeeping = createContextBookkeeping(
+    () => state,
+    (text, options) => notify(text, options),
+    percent => t('context-low-warning', { percent }),
+    CONTEXT_WARNING_BUFFER_TOKENS,
+  )
+  const { warning: contextWarning, resetContextWarning, checkContextWarning, trackPending, untrackPending } = bookkeeping
   const inputDelivery = createInputDelivery(ctx, owner, binding, () => state,
     (...args) => notify(...args), trackPending, untrackPending)
   const { dispatchUserText, deliverUserText, withDecisionPending, clearStagedImages } = inputDelivery
@@ -387,13 +348,13 @@ export function createChannel(
   // Installed after ChannelState initialization. The action surface is inert
   // during construction, then delegates its synchronous adoption tail to the
   // binding-owned session-adoption module.
-  let adoptForkedAgent: (
+  let adoptForkedAgent!: (
     handle: AgentHandle,
     capture: ReturnType<typeof binding.capture>,
     seed: readonly SessionEvent[],
     agentPreset: string | undefined,
     childId: SessionId,
-  ) => string = () => { throw new Error('dsh-tui: session adoption is not initialized') }
+  ) => string
   /** Monotonic token: only the latest `interruptAndDeliver` re-queues, so a
    *  second interrupt while the abort settles cannot double-deliver. */
   const inputConvergence: InputConvergence = { interruptSeq: 0, cancelInFlight: false }
@@ -425,15 +386,15 @@ export function createChannel(
 
   // Session actions close over these inert placeholders. They are explicitly
   // installed after ChannelState initialization below.
-  let settleManualCompaction: () => Promise<void> = async () => undefined
-  let compactManualSession: () => void = () => undefined
-  let forkSessionAction: () => Promise<boolean> = async () => false
-  let rewindToAction: (row: ChatRow, mode?: string | null) => Promise<string | null> = async () => null
-  let rewindToNodeAction: (sessionId: string, seq: number, mode?: 'rewind' | 'fork') => Promise<string | null> = async () => null
-  let resumeToAction: (sessionId: string) => Promise<ResumeResult> = async () => ({ ok: false, reason: 'unavailable' })
-  let newSessionAction: () => Promise<boolean> = async () => false
-  let resumeInto: (sessionId: string, kind: 'resume' | 'agent-view', keepCurrent: boolean) => Promise<ResumeResult> = async () => ({ ok: false, reason: 'unavailable' })
-  let adoptLiveAgent: (target: Agent) => Promise<ResumeResult> = async () => ({ ok: false, reason: 'unavailable' })
+  let settleManualCompaction!: () => Promise<void>
+  let compactManualSession!: () => void
+  let forkSessionAction!: () => Promise<boolean>
+  let rewindToAction!: (row: ChatRow, mode?: string | null) => Promise<string | null>
+  let rewindToNodeAction!: (sessionId: string, seq: number, mode?: 'rewind' | 'fork') => Promise<string | null>
+  let resumeToAction!: (sessionId: string) => Promise<ResumeResult>
+  let newSessionAction!: () => Promise<boolean>
+  let resumeInto!: (sessionId: string, kind: 'resume' | 'agent-view', keepCurrent: boolean) => Promise<ResumeResult>
+  let adoptLiveAgent!: (target: Agent) => Promise<ResumeResult>
 
   // This is the one necessary cyclic seam: mode actions need the completed
   // state, while the state exposes their command surface. It is assigned before
@@ -445,11 +406,19 @@ export function createChannel(
   let fileActions: ReturnType<typeof createFileActions>
   let reportActions: ReturnType<typeof createReportActions>
   let sessionMetadataActions: ReturnType<typeof createSessionMetadataActions>
+  let localActions!: ReturnType<typeof createLocalActions>
+  let commandCompletions!: (input: string) => readonly import('../commands.js').CommandCompletion[]
+  const actionReadiness = createChannelActionReadiness()
+  const getReadyActions = (): ChannelActionDelegates => {
+    owner.assertActive()
+    return actionReadiness.getReadyActions()
+  }
+  const actionMethods = createChannelActionMethods(getReadyActions)
 
   const state: ChannelState = {
-    ...createInputActions(() => state, () => binding.agent, inputConvergence,
+    ...createInputActions(() => state, () => binding.agent, owner, inputConvergence,
       (text, placement) => dispatchUserText(text, placement),
-      (command, includeInContext) => runLocalCommand(command, includeInContext)),
+      (command, includeInContext) => getReadyActions().runLocalCommand(command, includeInContext)),
     subscribe: emitter.subscribe,
     emit: emitter.emit,
     emitStream: emitter.emitStream,
@@ -469,174 +438,9 @@ export function createChannel(
       cwdDescription: workspaceService.describe(options.cwd).description ?? options.cwd,
     }),
     commandList: LOCAL_COMMANDS,
-    commandCompletions(input: string) {
-      // Warm the async vocabularies as soon as the input could be heading
-      // for their commands (`/m`, `/pre`, …) — by the time a trailing space
-      // asks children() for nodes, the fetch has usually landed.
-      const head = input.slice(1).split(/[\t ]/)[0]?.toLowerCase() ?? ''
-      if (head !== '') {
-        if ('model'.startsWith(head)) modelActions.warmModelNodes()
-        if ('preset'.startsWith(head)) modelActions.warmPresetOptions()
-        if ('effort'.startsWith(head)) modelActions.warmEffortLevels()
-      }
-      return completeCommands(input, state.commandList, (path) => {
-        if (path.length === 1 && path[0] === 'model') {
-          // provider/id specs, current model tagged; see modelNodeCache.
-          modelActions.warmModelNodes()
-          return modelActions.modelNodes()
-        }
-        if (path.length === 1 && path[0] === 'lang') {
-          return [
-            { name: 'status', description: 'Show the current UI language', descriptionKey: 'sugg-status-desc' },
-            ...LANGS.map((lang) => ({
-              name: lang,
-              description: `Switch the UI language to ${lang}`,
-              descriptionKey: lang === 'zh' ? 'sugg-lang-zh-desc' : 'sugg-lang-en-desc',
-              ...(getLang() === lang ? { tag: 'current' } : {}),
-            })),
-          ]
-        }
-        if (path.length === 1 && path[0] === 'theme') {
-          const themeEntries = listThemeCatalog(themeHost)
-          return [
-            { name: 'status', description: 'Show the current theme', descriptionKey: 'sugg-status-desc' },
-            { name: AUTO_THEME_NAME, description: 'Follow the terminal background', descriptionKey: 'sugg-theme-auto-desc' },
-            ...themeEntries
-              .filter((entry) => entry.name !== AUTO_THEME_NAME)
-              .map((entry) => {
-                const base = entry.base ?? 'dark'
-                if (entry.source === 'builtin') {
-                  return {
-                    name: entry.name,
-                    description: `Built-in theme ${entry.name}`,
-                    descriptionKey: 'sugg-theme-builtin-desc',
-                  }
-                }
-                if (entry.source === 'runtime') {
-                  return {
-                    name: entry.name,
-                    description: `Plugin theme (${base} base)`,
-                    descriptionKey: 'sugg-theme-plugin-desc',
-                  }
-                }
-                return {
-                  name: entry.name,
-                  description: `User theme (${base} base)`,
-                  descriptionKey: 'sugg-theme-user-desc',
-                }
-              }),
-          ]
-        }
-        if (path.length === 1 && path[0] === 'color') {
-          return [
-            { name: 'status', description: 'Show the current session color', descriptionKey: 'sugg-status-desc' },
-            { name: 'reset', description: 'Clear the session color', descriptionKey: 'sugg-color-reset-desc' },
-            ...SESSION_COLOR_NAMES.map((name) => ({
-              name,
-              description: 'Session accent color',
-              descriptionKey: 'sugg-color-name-desc',
-              ...(state.sessionColor === name ? { tag: 'current' } : {}),
-            })),
-          ]
-        }
-        if (path.length === 1 && path[0] === 'effort') {
-          modelActions.warmEffortLevels()
-          return [
-            { name: 'status', description: 'Show the current reasoning effort', descriptionKey: 'sugg-status-desc' },
-            ...(state.effortLevels ?? []).map((id) => ({
-              name: id,
-              description: 'Reasoning effort level',
-              descriptionKey: 'sugg-effort-level-desc',
-              ...(state.reasoningEffort === id ? { tag: 'current' } : {}),
-            })),
-          ]
-        }
-        if (path.length === 1 && path[0] === 'preset') {
-          modelActions.warmPresetOptions()
-          return [
-            { name: 'status', description: 'Show the current agent preset', descriptionKey: 'sugg-status-desc' },
-            ...(modelActions.presetOptions()).map((preset) => ({
-              name: preset.id,
-              description: preset.description ?? preset.name ?? preset.id,
-              ...(preset.id === state.agentPreset
-                ? { tag: 'current' }
-                : preset.isDefault
-                  ? { tag: 'default' }
-                  : {}),
-            })),
-          ]
-        }
-        if (path.length === 1 && path[0] === 'activity') {
-          return [
-            { name: 'status', description: 'Show the current activity preset', descriptionKey: 'sugg-status-desc' },
-            { name: 'frames', description: 'List or switch frame presets', descriptionKey: 'sugg-activity-frames-desc' },
-          ]
-        }
-        if (path.length === 2 && path[0] === 'activity' && path[1] === 'frames') {
-          return PRESET_NAMES.map((name) => ({
-            name,
-            description: 'Animation frame preset',
-            descriptionKey: 'sugg-activity-frame-desc',
-            ...(state.activityFrames === name ? { tag: 'current' } : {}),
-          }))
-        }
-        if (path.length === 1 && path[0] === 'workspace') {
-          const builtins: CommandCompletionNode[] = [
-            { name: 'resume', description: 'Switch to another workspace', descriptionKey: 'cmd-desc-workspace-resume' },
-            { name: 'rename', description: 'Rename the current workspace', descriptionKey: 'cmd-desc-workspace-rename' },
-            { name: 'open', description: 'Open a path or workspace URI', descriptionKey: 'cmd-desc-workspace-open' },
-          ]
-          const reserved = new Set(builtins.map(command => command.name))
-          return [
-            ...builtins,
-            ...workspaceService.commands()
-              .filter(command => !reserved.has(command.name.toLowerCase()))
-              .map(command => ({
-                name: command.name,
-                aliases: command.aliases,
-                description: command.description,
-              })),
-          ]
-        }
-        if (path.length === 1 && path[0] === 'permission') {
-          const snapshot = state.permissionPresets()
-          return snapshot.options
-            .filter(option => isCommandCompletionToken(option.value) && !RESERVED_PERMISSION_PRESETS.has(option.value))
-            .map(option => ({
-              name: option.value,
-              description: option.description ?? option.name,
-              ...(option.value === 'read-only'
-                ? { descriptionKey: 'permission-preset-readonly-desc' }
-                : option.value === 'workspace-write'
-                  ? { descriptionKey: 'permission-preset-workspace-write-desc' }
-                  : option.value === 'danger-full-access'
-                    ? { descriptionKey: 'permission-preset-full-access-desc' }
-                    : {}),
-              ...(snapshot.current?.kind === 'preset' && snapshot.current.value === option.value
-                ? { tag: 'current' }
-                : {}),
-            }))
-        }
-        if (path.length === 1 && path[0] === 'plan') {
-          return [
-            { name: 'on', description: 'Enter plan mode: read-only, plan before acting', descriptionKey: 'plan-mode-on-desc' },
-            { name: 'off', description: 'Exit plan mode, back to normal execution', descriptionKey: 'plan-mode-off-desc' },
-          ]
-        }
-        return commandTrees?.children(path) ?? []
-      })
-    },
+    ...actionMethods,
     subagentControl,
     jobControl,
-    loadOlder() {
-      // Restore folded-away full text from the session log, newest folded
-      // batch first, clearing the folded marks. The log is the authoritative
-      // source, so restored rows match a fresh replay; live streaming rows
-      // are never folded, so nothing here races a running turn.
-      const restored = foldBack(state.rows, binding.agent.session.events, { call: projector.presentCallView, result: projector.presentResultView })
-      if (restored > 0) state.emit()
-      return restored
-    },
     stageImage: inputDelivery.stageImage,
     /**
      * The `tui/rewind-prompt` decision event (pi's `session_before_fork`):
@@ -652,80 +456,8 @@ export function createChannel(
       withDecisionPending,
       notify,
     }),
-    rewindTo(row: ChatRow, mode: string | null = null) {
-      return rewindToAction(row, mode)
-    },
     buildSessionTree: createSessionTreeReader(ctx, binding, () => state.cwd, (...args) => notify(...args), owner),
-    rewindToNode(sessionId: string, seq: number, mode: 'rewind' | 'fork' = 'rewind'): Promise<string | null> {
-      return rewindToNodeAction(sessionId, seq, mode)
-    },
-    forkSession() {
-      return forkSessionAction()
-    },
-    resumeTo(sessionId: string): Promise<ResumeResult> {
-      return resumeToAction(sessionId)
-    },
-    newSession(): Promise<boolean> {
-      return newSessionAction()
-    },
-    listWorkspaces() { return workspaceActions.listWorkspaces() },
-    resolveWorkspace(uri: string) { return workspaceActions.resolveWorkspace(uri) },
-    switchWorkspace(target: TuiWorkspaceTarget) { return workspaceActions.switchWorkspace(target) },
-    renameWorkspace(title: string) { return workspaceActions.renameWorkspace(title) },
-    workspaceCommands() { return workspaceActions.workspaceCommands() },
-    runWorkspaceCommand(name: string, input: string) { return workspaceActions.runWorkspaceCommand(name, input) },
-    switchModel(provider: string, model: string) { return switchModelAction(provider, model) },
-    listEfforts() { return modelActions.listEfforts() },
-    setEffort(id) { return modelActions.setEffort(id) },
-    cycleMode() {
-      return modeActions.cycleMode()
-    },
-    clear() {
-      state.rows.length = 0
-      markChannelReadDirty(state.rows)
-      rowIds.value = 0
-      projector.reset()
-
-      // In-flight subagents keep streaming after the wipe; clearing the row
-      // map lets their next event re-create the card as a fresh row instead
-      // of feeding a row object no transcript holds (the store keeps live
-      // tracking for the dashboard — same session, still running).
-      subagentProjection.dropRows()
-      // Live jobs keep running across the wipe too (same session): clear the
-      // row map so their next commit re-creates the card as a fresh row.
-      jobProjection.dropRows()
-      state.activeToolCount = 0
-      state.responseChars = 0
-      state.rows.push({
-        id: rowIds.value,
-        kind: 'notice',
-        text: 'Session cleared',
-      })
-      rowIds.value += 1
-      state.emit()
-    },
     notify: createChannelNotifications(() => state, owner),
-    setActivityFrames(name) {
-      name = normalizeActivityPreset(name) ?? 'moon8'
-      if (!isPresetName(name)) {
-        notify(t('unknown-activity-preset', { name }), { color: 'error' })
-        return false
-      }
-      if (name === state.activityFrames) {
-        notify(t('activity-indicator-already', { name }), { color: 'success' })
-        return true
-      }
-      // Persist first (pi behavior: a failed write refuses the switch) so a
-      // preference that cannot be saved never silently disappears.
-      if (!writeActivityFrames(name)) {
-        notify(t('activity-pref-write-failed'), { color: 'error' })
-        return false
-      }
-      state.activityFrames = name
-      state.emit()
-      notify(t('activity-indicator-switched', { name }))
-      return true
-    },
     permissionPresets() {
       let service: unknown
       try {
@@ -736,53 +468,11 @@ export function createChannel(
       if (service === undefined) return legacyPermissionPresetSnapshot(state.mode.sandbox)
       return permissionPresetSnapshotFromService(service, binding.agent.session.events)
     },
-    listPresets() { return modelActions.listPresets() },
-    switchPreset(presetId) { return modelActions.switchPreset(presetId) },
-    listModels() { return modelActions.listModels() },
-    listProviders() { return modelActions.listProviders() },
-    invalidateModelCompletion() { modelActions.dropModelNodeCache() },
-    listSkills() { return sessionMetadataActions.listSkills() },
-    describeCredential(ref) { return sessionMetadataActions.describeCredential(ref) },
-    balanceInfo() { return reportActions.balanceInfo() },
     settingsSections(): readonly TuiSettingsSection[] {
       return settingsSectionsRuntime?.list() ?? []
     },
     subscribeSettingsSections(listener: () => void): () => void {
       return emitter.subscribe(listener)
-    },
-    sideQuestion(question, options) { return sessionMetadataActions.sideQuestion(question, options) },
-    listFileCandidates(query, options) { return fileActions.listFileCandidates(query, options) },
-    listFiles() { return fileActions.listFiles() },
-    listSessions() { return sessionMetadataActions.listSessions() },
-    previewSession(sessionId) { return sessionMetadataActions.previewSession(sessionId) },
-    // ── agent view (CC's `claude agents`) ───────────────────────────────────
-    bindApprovalStore(store) { agentView.bindApprovalStore(store) },
-    agentViewRows() { return agentView.rows() },
-    subscribeAgentView(listener) { return agentView.subscribe(listener) },
-    dispatchBackgroundAgent(prompt) { return agentView.dispatch(prompt) },
-    stopBackgroundAgent(sessionId) { return agentView.stop(sessionId) },
-    attachToAgent(sessionId) { return agentView.attach(sessionId) },
-    peekAgentSession(sessionId) { return agentView.peek(sessionId) },
-    replyToAgent(sessionId, text) { return agentView.reply(sessionId, text) },
-    backgroundCurrent() { return agentView.backgroundCurrent() },
-    setResumeTarget(sessionId) { sessionMetadataActions.setResumeTarget(sessionId) },
-    renameSession(title) { sessionMetadataActions.renameSession(title) },
-    setSessionColor(color) { sessionMetadataActions.setSessionColor(color) },
-    recapRecent(options) { return sessionMetadataActions.recapRecent(options) },
-    deleteSession(sessionId) { return sessionMetadataActions.deleteSession(sessionId) },
-    renameSessionTo(sessionId, title) { return sessionMetadataActions.renameSessionTo(sessionId, title) },
-    compact() {
-      compactManualSession()
-    },
-    runExternalCommand(name, rawInput, images = []) {
-      return executeRegistryCommand(name, rawInput, images).then(outcome => outcome?.text)
-    },
-    runExternalCommandOutcome(name, rawInput, images = []) {
-      return executeRegistryCommand(name, rawInput, images)
-    },
-    /** TUI-side permission switch (see the public Channel type). */
-    runPermissionPreset(name) {
-      return applyPermissionIdentity(name.trim())
     },
     pluginScene: sceneRuntime?.active,
     openPluginScene(id: string) {
@@ -791,61 +481,10 @@ export function createChannel(
     closePluginScene() {
       sceneRuntime?.close()
     },
-    pushLocal(title, lines) {
-      state.rows.push({ id: rowIds.value++, kind: 'local', text: title })
-      for (const line of lines) {
-        state.rows.push({
-          id: rowIds.value++,
-          kind: 'local-output',
-          text: preview(line, LOCAL_OUTPUT_LIMIT),
-        })
-      }
-      state.emit()
-    },
-    mcpStatus() { return reportActions.mcpStatus() },
-    exportSession() { return reportActions.exportSession() },
-    initWorkspace() { return reportActions.initWorkspace() },
-    doctorInfo() { return reportActions.doctorInfo() },
-    pluginsInfo(args: string) { return reportActions.pluginsInfo(args) },
-    async listSubagents() {
-      const subagents = ctx.get('subagents') as
-        | {
-          listChildren(
-            sessionId: unknown,
-            signal?: AbortSignal,
-          ): Promise<
-            Array<{
-              kind: string
-              mode: string
-              label?: string
-              activity: string
-              id: string | { value?: string }
-            }>
-          >
-        }
-        | undefined
-      if (!subagents) return [t('subagent-not-mounted')]
-      try {
-        const children = await subagents.listChildren(binding.agent.session.id)
-        if (children.length === 0) return [t('subagent-none')]
-        return children.map((child) => {
-          const id =
-            typeof child.id === 'string' ? child.id : (child.id.value ?? '')
-          const label = child.label ? `「${child.label}」` : ''
-          const mode = child.mode === 'continuable' ? t('subagent-resumable') : t('subagent-oneshot')
-          return `${t('subagent-row', { mode, label, activity: child.activity === 'running' ? t('subagent-running') : t('subagent-archived'), id: id.slice(0, 8) })}`
-        })
-      } catch (error) {
-        return [t('subagent-query-failed', { err: error instanceof Error ? error.message : String(error) })]
-      }
-    },
     releaseContributions() {
-      owner.dispose()
-      binding.clearSubscriptions()
-      activity.stop()
-      emitter.dispose()
-      releaseSkillCommands()
-      unsubscribeScenes?.()
+      // Owner cleanup is exhaustive, but it can report an external cleanup
+      // failure. The local emitter is outside that owner and must still stop.
+      try { owner.dispose() } finally { emitter.dispose() }
     },
     traceEvents() {
       // Immutable per-append snapshot (dsh-session caches the frozen array);
@@ -853,6 +492,11 @@ export function createChannel(
       return binding.agent.session.events
     },
   }
+
+  // Register the raw state before any specialist can synchronously publish a
+  // callback. The renderer lease binds its external authority later, but this
+  // owner already makes teardown and construction failure fail closed.
+  registerChannelOwner(state, owner)
 
   // Agent-view is activated after the complete state/action surface exists:
   // no roster callback or persistence continuation can observe an unbound UI.
@@ -872,14 +516,16 @@ export function createChannel(
     backgroundHandles,
   })
 
-  // Attach optional jobs only after the state exists; an inject callback may
-  // synchronously publish its initial list.
-  if (typeof (ctx as { inject?: unknown }).inject === 'function') {
-    ctx.inject(['jobs'], jobsCtx => {
-      attachJobs((jobsCtx as { jobs?: JobsRuntime }).jobs, dispose => jobsCtx.effect(() => dispose))
-    })
-  } else {
-    attachJobs((ctx as { get?: (name: string) => unknown }).get?.('jobs') as JobsRuntime | undefined)
+  // The injection callback may synchronously publish its initial list, so it
+  // is installed only after the full action surface is ready below.
+  const startJobs = (): void => {
+    if (typeof (ctx as { inject?: unknown }).inject === 'function') {
+      ctx.inject(['jobs'], jobsCtx => {
+        attachJobs((jobsCtx as { jobs?: JobsRuntime }).jobs, dispose => jobsCtx.effect(() => dispose))
+      })
+    } else {
+      attachJobs((ctx as { get?: (name: string) => unknown }).get?.('jobs') as JobsRuntime | undefined)
+    }
   }
 
   // Catalog/context services own their caches, registrations and async origin fences.
@@ -941,96 +587,47 @@ export function createChannel(
     publish(context) { state.loadedContext = context; state.emit() },
   })
   const refreshLoadedContext = loadedContext.refresh
-  owner.own(settingsSectionsRuntime?.subscribe(() => { if (owner.current()) state.emit() }) ?? (() => undefined))
-  unsubscribeScenes = sceneRuntime?.subscribe(() => {
-    if (state.pluginScene === sceneRuntime.active) return
-    state.pluginScene = sceneRuntime.active
-    state.emit()
-  })
-  skillCatalog.start()
-  void refreshLoadedContext()
-
-  /** The leaf's bash executor (dsh-bash-local in the example leaf) — the DSH
- *  execution seam for local `!` commands and the git status breadcrumb. The
- *  service registers under `ctx.shell` (ShellExecutor; dsh-bash-local and
- *  dsh-pwsh-local are the providers). */
-  const bash = ctx.get('shell') as
-    | {
-      resolve(request: {
-        command: string
-        workdir?: string
-        timeoutMs?: number
-      }): { command: string; timeoutMs: number }
-      run(spec: { command: string; timeoutMs: number }): Promise<{
-        exitCode: number | null
-        stdout: { text: string }
-        stderr: { text: string }
-        timedOut: boolean
-      }>
-    }
-    | undefined
-
-  /** Local `!` mode: execute in the current workspace provider and
-   *  render local-only transcript rows (never sent to the model). */
-  const runLocalCommand = async (
-    command: string,
-    includeInContext: boolean,
-  ): Promise<void> => {
-    const capture = binding.capture()
-    const cwd = state.cwd
-    const workspace = workspaceService.describe(cwd)
-    state.rows.push({
-      id: rowIds.value++,
-      kind: 'local',
-      text: command,
-      executionTarget: workspace.kind === 'local' ? workspace.badge : `${workspace.badge} · ${workspace.label}`,
+  const startRuntimeSubscriptions = (): void => {
+    owner.own(settingsSectionsRuntime?.subscribe(() => { if (owner.current()) state.emit() }) ?? (() => undefined))
+    const disposeScenes = sceneRuntime?.subscribe(() => {
+      if (state.pluginScene === sceneRuntime.active) return
+      state.pluginScene = sceneRuntime.active
+      state.emit()
     })
-    state.emit()
-    let output = '(no output)'
-    const executionShell = await workspaceService.commandShell(cwd) ?? bash
-    if (!binding.isCurrent(capture)) return
-    if (executionShell) {
-      try {
-        const spec = executionShell.resolve({
-          command,
-          workdir: state.cwd,
-          timeoutMs: 30000,
-        })
-        const result = await executionShell.run(spec)
-        output =
-          result.stdout.text.trim() ||
-          result.stderr.text.trim() ||
-          (result.timedOut ? '(timed out)' : '(no output)')
-      } catch (error) {
-        output = error instanceof Error ? error.message : String(error)
-      }
-    }
-    if (!binding.isCurrent(capture)) return
-    state.rows.push({
-      id: rowIds.value++,
-      kind: 'local-output',
-      text: preview(output, LOCAL_OUTPUT_LIMIT),
-    })
-    state.emit()
-    if (includeInContext) {
-      // The <local-command-output> envelope tells the model that this is the
-      // result of a local command the user just ran.
-      binding.agent.followup(createUserMessage({
-        content: [{
-          type: 'text',
-          text: `<local-command-output>
-${output}
-</local-command-output>`,
-        }],
-        source: { kind: 'user' },
-      }))
+    if (disposeScenes !== undefined) {
+      unsubscribeScenes = disposeScenes
+      owner.own(() => {
+        if (unsubscribeScenes !== disposeScenes) return
+        unsubscribeScenes = undefined
+        disposeScenes()
+      })
     }
   }
+  const bash = ctx.get('shell') as {
+    resolve(request: { command: string; workdir?: string; timeoutMs: number }): { command: string; timeoutMs: number }
+    run(spec: { command: string; timeoutMs: number }): Promise<{ stdout: { text: string }; stderr: { text: string }; timedOut: boolean }>
+  } | undefined
+
   const projector = createChannelProjection(state, {
-    agent: () => binding.agent, rowIds, contextWarning, pendingTaskDescriptions, jobs: jobStore, inputConvergence,
+    agent: () => binding.agent, rowIds, resetContextWarning, pendingTaskDescriptions, jobs: jobStore, inputConvergence,
     checkContextWarning, notify: (...args) => notify(...args),
     tools: ctx.get('tools') as ToolsRegistryLike | undefined, renderer: rendererRuntime,
   })
+  localActions = createLocalActions({
+    ctx,
+    owner,
+    binding,
+    state,
+    rowIds,
+    projector,
+    subagents: subagentProjection,
+    jobs: jobProjection,
+    foldBack,
+    workspace: workspaceService,
+    shell: bash,
+    notify,
+  })
+
   // Replay the durable transcript first, then follow live events.
   projector.replayEvents(binding.agent.session.events)
   projector.settleStreaming()
@@ -1051,6 +648,14 @@ ${output}
     initialEffort: options.effort,
     agent: () => binding.agent,
     notify,
+  })
+
+  commandCompletions = createCommandCompletions({
+    state: () => state,
+    themeHost,
+    commandTrees,
+    workspaceCommands: () => workspaceService.commands(),
+    model: modelActions,
   })
 
   switchModelAction = createModelSwitchAction(ctx, state, {
@@ -1086,6 +691,7 @@ ${output}
 
   modeActions = createModeActions(ctx, state, {
     owner,
+    runtime: adapterRuntime,
     binding,
     sessionModes,
     commandService,
@@ -1242,6 +848,70 @@ ${output}
     notifyAgentView: agentView.notify,
   })
 
+  // Complete the entire public action surface before any callback, catalog,
+  // registry, binding, or timer can run. The state methods above are typed,
+  // pure delegates through this one readiness cell; no successful-looking
+  // construction placeholder remains callable.
+  actionReadiness.install({
+    commandCompletions,
+    runLocalCommand: localActions.runLocalCommand,
+    loadOlder: localActions.loadOlder,
+    rewindTo: rewindToAction,
+    rewindToNode: rewindToNodeAction,
+    forkSession: forkSessionAction,
+    resumeTo: resumeToAction,
+    newSession: newSessionAction,
+    listWorkspaces: workspaceActions.listWorkspaces,
+    resolveWorkspace: workspaceActions.resolveWorkspace,
+    switchWorkspace: workspaceActions.switchWorkspace,
+    renameWorkspace: workspaceActions.renameWorkspace,
+    workspaceCommands: workspaceActions.workspaceCommands,
+    runWorkspaceCommand: workspaceActions.runWorkspaceCommand,
+    switchModel: switchModelAction,
+    listEfforts: modelActions.listEfforts,
+    setEffort: modelActions.setEffort,
+    cycleMode: modeActions.cycleMode,
+    clear: localActions.clear,
+    setActivityFrames: localActions.setActivityFrames,
+    listPresets: modelActions.listPresets,
+    switchPreset: modelActions.switchPreset,
+    listModels: modelActions.listModels,
+    listProviders: modelActions.listProviders,
+    invalidateModelCompletion: modelActions.dropModelNodeCache,
+    listSkills: sessionMetadataActions.listSkills,
+    describeCredential: sessionMetadataActions.describeCredential,
+    balanceInfo: reportActions.balanceInfo,
+    sideQuestion: sessionMetadataActions.sideQuestion,
+    listFileCandidates: fileActions.listFileCandidates,
+    listFiles: fileActions.listFiles,
+    listSessions: sessionMetadataActions.listSessions,
+    previewSession: sessionMetadataActions.previewSession,
+    bindApprovalStore: agentView.bindApprovalStore,
+    agentViewRows: agentView.rows,
+    subscribeAgentView: agentView.subscribe,
+    dispatchBackgroundAgent: agentView.dispatch,
+    stopBackgroundAgent: agentView.stop,
+    attachToAgent: agentView.attach,
+    peekAgentSession: agentView.peek,
+    replyToAgent: agentView.reply,
+    backgroundCurrent: agentView.backgroundCurrent,
+    setResumeTarget: sessionMetadataActions.setResumeTarget,
+    renameSession: sessionMetadataActions.renameSession,
+    setSessionColor: sessionMetadataActions.setSessionColor,
+    recapRecent: sessionMetadataActions.recapRecent,
+    deleteSession: sessionMetadataActions.deleteSession,
+    renameSessionTo: sessionMetadataActions.renameSessionTo,
+    compact: compactManualSession,
+    runExternalCommand: executeRegistryCommand,
+    pushLocal: localActions.pushLocal,
+    mcpStatus: reportActions.mcpStatus,
+    exportSession: reportActions.exportSession,
+    initWorkspace: reportActions.initWorkspace,
+    doctorInfo: reportActions.doctorInfo,
+    pluginsInfo: reportActions.pluginsInfo,
+    listSubagents: localActions.listSubagents,
+  })
+
   // Subagents inherit provider/model from AgentOptions, but resumed TUI
   // agents can legitimately carry their route only in persisted request
   // headers. Their child scopes do not share this channel's per-agent
@@ -1266,12 +936,18 @@ ${output}
   })
   owner.own(disposeInheritedChildRoute)
   try {
+    // Everything below can synchronously invoke external callbacks. It runs
+    // only after the owner is registered and the complete delegate surface is
+    // installed; the outer construction transaction rolls every step back.
+    agentView.start()
+    startRuntimeSubscriptions()
+    startJobs()
+    skillCatalog.start()
+    void refreshLoadedContext()
     bindAgent()
   } catch (error) {
-    // bindAgent acquires listeners/timers synchronously; owner teardown now
-    // includes every immediately-owned root resource and rolls all of them
-    // back before this constructor exposes any partial channel.
-    owner.dispose()
+    // Keep the setup failure primary. The outer construction funnel attempts
+    // every cleanup, including partial subscriptions from this exact step.
     throw error
   }
   // Cordis owns the Channel lifetime. Rebinding handles the common case;
@@ -1280,11 +956,11 @@ ${output}
   const effect = (ctx as Context & {
     effect?: (setup: () => () => void, label?: string) => void
   }).effect
-  const releaseLifecycle = owner.own(() => {
-    releaseSkillCommands()
-    unsubscribeScenes?.()
-  })
-  effect?.call(ctx, () => releaseLifecycle, 'dsh-tui channel lifecycle')
+  effect?.call(ctx, () => () => {
+    // The context owns the complete Channel lifetime, not merely the skill
+    // command contribution. Keep emitter teardown in the same finally funnel.
+    state.releaseContributions()
+  }, 'dsh-tui channel lifecycle')
   // Statusline breadcrumb: current git branch of the session cwd (best-effort).
   // Re-run when an agent swap adopts a different persisted cwd (/resume,
   // issue #96) so the breadcrumb never shows the previous workspace's branch.
@@ -1326,7 +1002,6 @@ ${output}
   }
   refreshGitBranch()
 
-  registerChannelOwner(state, owner)
   return state
 }
 

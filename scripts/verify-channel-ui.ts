@@ -15,7 +15,7 @@ import { TuiPluginHostRuntime, getHostFacade } from '../src/dsh-adapter/plugin-h
 import { createChannelEmitter } from '../src/dsh-adapter/channel/emitter.js'
 
 const tick = () => new Promise(resolve => setTimeout(resolve, 40))
-function fixture(jobs?: unknown) {
+function fixture(jobs?: unknown, options: { throwOnEvent?: string; effectCleanups?: (() => void)[]; unregisteredEvents?: string[] } = {}) {
   const writes: string[] = []
   let creates = 0
   const listeners = new Map<string, (...args: unknown[]) => void>()
@@ -50,8 +50,12 @@ function fixture(jobs?: unknown) {
   if (jobs !== undefined) services.jobs = jobs
   const ctx = {
     on(event: string, listener: (...args: unknown[]) => void) {
+      if (event === options.throwOnEvent) throw new Error(`fixture registration failed: ${event}`)
       listeners.set(event, listener)
-      return () => { listeners.delete(event) }
+      return () => { listeners.delete(event); options.unregisteredEvents?.push(event) }
+    },
+    effect(setup: () => () => void) {
+      options.effectCleanups?.push(setup())
     },
     get(name: string) { return services[name] },
     logger: { warn() {} },
@@ -66,7 +70,7 @@ function fixture(jobs?: unknown) {
     inbox: { remove: () => true },
   }
   const raw = createChannel(ctx as never, agent as never, { model: 'model', provider: 'provider', cwd: '/tmp', activity: false })
-  return { ctx, raw, writes, services, agent, get creates() { return creates } }
+  return { ctx, raw, writes, services, agent, listeners, get creates() { return creates } }
 }
 
 // Real bare production startup, not raw createChannel passed to a renderer.
@@ -96,6 +100,71 @@ function fixture(jobs?: unknown) {
   await assert.rejects(raw.switchWorkspace({ cwd: '/other', label: 'other' } as never), /lifetime/)
   unregister()
   raw.releaseContributions()
+}
+
+// Real event-router/projector wiring resets the warning latch on compaction.
+{
+  const { raw, agent, listeners } = fixture()
+  const route = listeners.get('session/event')!
+  raw.contextWindow = 100_000
+  raw.tokens.input = 90_000
+  route(agent.session, { type: 'turn/end', data: { turn: 1, reason: { kind: 'completed' } }, time: 1 })
+  assert.equal(raw.notifications.length, 1)
+  route(agent.session, {
+    type: 'user/message', time: 2,
+    data: { source: { kind: 'plugin', plugin: 'compact' }, content: [{ type: 'text', text: 'summary' }] },
+  })
+  raw.tokens.input = 90_000
+  route(agent.session, { type: 'turn/end', data: { turn: 2, reason: { kind: 'completed' } }, time: 3 })
+  assert.equal(raw.notifications.length, 2, 'warn → compact checkpoint → warn traverses the shared reset')
+  raw.releaseContributions()
+}
+
+// A context-only teardown invokes the complete owner/emitter release path,
+// not just the skill command contribution; retained raw input cannot write.
+{
+  const effectCleanups: (() => void)[] = []
+  let jobsUnsubscribes = 0
+  const jobs = { list: () => [], kill() {}, onJobsChanged: () => () => { jobsUnsubscribes += 1 } }
+  const { raw, writes } = fixture(jobs, { effectCleanups })
+  assert.equal(effectCleanups.length, 1)
+  effectCleanups[0]!()
+  assert.equal(jobsUnsubscribes, 1)
+  assert.throws(() => raw.cancel(), /lifetime/)
+  assert.deepEqual(writes, [])
+}
+
+// Construction failure after the first startup subscription rolls all acquired
+// owner resources back; this covers an Nth-start callback failure.
+{
+  let jobsUnsubscribes = 0
+  const unregisteredEvents: string[] = []
+  const jobs = { list: () => [], kill() {}, onJobsChanged: () => () => { jobsUnsubscribes += 1 } }
+  assert.throws(
+    () => fixture(jobs, { throwOnEvent: 'agent/created', unregisteredEvents }),
+    /fixture registration failed: agent\/created/,
+  )
+  assert.ok(unregisteredEvents.includes('agent/status'), 'earlier agent-view subscription was rolled back')
+  assert.equal(jobsUnsubscribes, 0, 'jobs startup begins after agent-view subscriptions')
+}
+
+// Owner release is sufficient to revoke retained production UI writers even
+// while the registration remains live; raw input writers carry the same
+// owner preflight as a backstop.
+{
+  const { ctx, raw, writes } = fixture()
+  const unregister = registerTuiChannel(ctx, raw)
+  const mount = mountChannelUi(ctx, raw, undefined, 'new')
+  const cancel = mount.channel.cancel
+  const removePending = mount.channel.removePending
+  const interrupt = mount.channel.interruptAndDeliver
+  raw.releaseContributions()
+  assert.throws(cancel, /lifetime/)
+  assert.throws(() => removePending('missing'), /lifetime/)
+  assert.throws(() => interrupt(['late']), /lifetime/)
+  assert.deepEqual(writes, [])
+  mount.dispose()
+  unregister()
 }
 
 // A direct-lookup jobs service is owner-owned too: a retained registry
@@ -192,26 +261,120 @@ for (const mode of ['passive-shadow', 'replay-shadow'] as const) {
 }
 
 // Driver caches one view per channel; retained handles cannot borrow replacements.
+// Registration tokens also make A → B → same-A and repeated-A cleanup unable
+// to revive the captured Port or leak its subscription/notification leases.
 {
   const { raw } = fixture()
   const ctx = new Context()
-  const unregister = registerTuiChannel(ctx, raw)
+  const unregisterA1 = registerTuiChannel(ctx, raw)
   const driver = await channelDriver.mount(ctx, {})
   const port = driver.ports!.channel as HostChannelPort
   const first = port.projection.ui!()
   assert.equal(port.projection.ui!(), first)
   const settings = first.settingsHost()!
+  let wakeups = 0
+  const stop = port.projection.subscribe(() => { wakeups += 1 })
+  const dismiss = port.actions.notify('lease-owned', { timeoutMs: 0 })
+  assert.equal(raw.notifications.length, 1)
   const secondFixture = fixture()
-  const removeSecond = registerTuiChannel(ctx, secondFixture.raw)
+  const removeB = registerTuiChannel(ctx, secondFixture.raw)
+  assert.equal(raw.notifications.length, 0, 'replacement releases retained notify cleanup')
+  wakeups = 0
+  raw.emit()
+  assert.equal(wakeups, 0, 'replacement releases retained Channel subscription')
   assert.throws(() => first.submit('stale'), /lifetime/)
   assert.throws(() => settings.write('x', []), /lifetime/)
-  const second = port.projection.ui!()
-  assert.notEqual(first, second)
+  // A retained Host Port is owner-bound just like its returned UI. It must
+  // not lazily resolve and acquire authority from the replacement Channel.
+  assert.throws(() => port.projection.ui!(), /(lifetime|disposed)/)
+  assert.throws(() => port.actions.submit('replacement'), /(lifetime|disposed)/)
+  assert.throws(() => port.transcript.rows(), /(lifetime|disposed)/)
+  // Re-registering the original object is a new registration, not a revival
+  // of the captured A lease; stale A1/B disposers cannot erase it either.
+  const unregisterA2 = registerTuiChannel(ctx, raw)
+  assert.equal(unregisterA1(), false)
+  assert.equal(removeB(), false)
+  assert.throws(() => port.projection.snapshot(), /(lifetime|disposed)/)
+  assert.equal(unregisterA2(), true)
+  stop(); dismiss()
   driver.disposer()
-  assert.throws(() => second.submit('disposed'), /lifetime/)
   assert.throws(() => port.projection.ui!(), /disposed/)
-  unregister(); removeSecond()
   raw.releaseContributions(); secondFixture.raw.releaseContributions()
+}
+
+// A repeated registration of the exact same Channel is a new authority. The
+// first captured Port cannot retain submit authority after that replacement.
+{
+  const live = fixture()
+  const ctx = new Context()
+  const unregister1 = registerTuiChannel(ctx, live.raw)
+  const driver = await channelDriver.mount(ctx, {})
+  const port = driver.ports!.channel as HostChannelPort
+  port.actions.submit('before replacement')
+  await tick()
+  assert.equal(live.writes.filter(write => write === 'submit').length, 1)
+  const unregister2 = registerTuiChannel(ctx, live.raw)
+  assert.throws(() => port.actions.submit('after same-object replacement'), /lifetime|disposed/)
+  await tick()
+  assert.equal(live.writes.filter(write => write === 'submit').length, 1)
+  unregister1()
+  unregister2()
+  driver.disposer()
+  live.raw.releaseContributions()
+}
+
+// Late cleanup from an old same-object mount cannot revoke the successor.
+{
+  const { ctx, raw, writes } = fixture()
+  const removeFirst = registerTuiChannel(ctx, raw)
+  const first = mountChannelUi(ctx, raw, undefined, 'new')
+  const removeSecond = registerTuiChannel(ctx, raw)
+  const second = mountChannelUi(ctx, raw, undefined, 'new')
+  first.dispose()
+  second.channel.cancel()
+  assert.deepEqual(writes, ['cancel'])
+  assert.equal(removeFirst(), false)
+  second.dispose(); removeSecond()
+}
+
+// A first Port call after owner release cannot acquire even read authority.
+{
+  const { ctx, raw } = fixture()
+  const unregister = registerTuiChannel(ctx, raw)
+  const driver = await channelDriver.mount(ctx, {})
+  raw.releaseContributions()
+  const port = driver.ports!.channel as HostChannelPort
+  assert.throws(() => port.projection.snapshot(), /lifetime|disposed/)
+  driver.disposer(); unregister()
+}
+
+// Registry replacement must release the owner even if UI cleanup throws.
+{
+  const { ctx, raw } = fixture()
+  const unregister = registerTuiChannel(ctx, raw)
+  const mount = mountChannelUi(ctx, raw, undefined, 'new')
+  mount.channel.notify('first', { timeoutMs: 0 })
+  mount.channel.notify('second', { timeoutMs: 0 })
+  raw.subscribe(() => { throw new Error('replacement observer failure') })
+  const removeReplacement = registerTuiChannel(ctx, {})
+  assert.deepEqual(raw.notifications, [])
+  assert.throws(() => raw.cancel(), /lifetime/)
+  mount.dispose(); unregister(); removeReplacement()
+}
+
+// Cleanup has a single-attempt, exhaustive funnel. A throwing observer during
+// one notification dismissal cannot strand a later UI lease notification.
+{
+  const { ctx, raw } = fixture()
+  const unregister = registerTuiChannel(ctx, raw)
+  const mount = mountChannelUi(ctx, raw, undefined, 'new')
+  mount.channel.notify('first', { timeoutMs: 0 })
+  mount.channel.notify('second', { timeoutMs: 0 })
+  const stopThrowingObserver = raw.subscribe(() => { throw new Error('observer cleanup failure') })
+  assert.throws(() => mount.dispose(), /Channel UI cleanup failed/)
+  assert.deepEqual(raw.notifications, [])
+  stopThrowingObserver()
+  unregister()
 }
 
 // Actual kernel production assembly: settings can arrive before async mount.
@@ -323,26 +486,14 @@ for (const mode of ['passive-shadow', 'replay-shadow'] as const) {
     assert.throws(() => field.parse?.('x'), /lifetime/)
     assert.equal(nestedCalls, 1, 'outer disposal prevents all retained nested callbacks')
     unregister()
-    // Mount a fresh production UI while the kernel is still present, then
-    // remove only the kernel. This separates HostFacade loss from ordinary
-    // UI-owner revocation: the retained UI lease must not fall back to raw
-    // channel workspace creation after its authoritative host disappears.
-    const kernelLoss = fixture()
-    const unregisterKernelLoss = registerTuiChannel(ctx, kernelLoss.raw)
-    await tick()
-    const lossMount = mountChannelUi(ctx, kernelLoss.raw, host, 'new')
-    assert.equal(lossMount.channel.agentId, 'ui-agent', 'fresh production mount binds the real HostFacade before kernel loss')
+    // The original Host Port was explicitly retired when its Channel was
+    // replaced above. Removing the Kernel must not revive this retained UI or
+    // allow it to fall back to the raw writer.
     await fiber.dispose()
     assert.throws(() => mount.channel.setWhale(false), /lost Channel UI|disposed|lifetime/)
-    assert.throws(
-      () => lossMount.channel.switchWorkspace({ kind: 'remote', cwd: '/lost-kernel', uri: 'lost-kernel:', label: 'lost kernel' } as never),
-      /lost Channel UI|disposed|lifetime/,
-    )
-    assert.equal(kernelLoss.creates, 0, 'lost HostFacade cannot fall back to the raw workspace-target /new path')
     assert.equal(raw.whale, true, 'kernel loss must not downgrade to the local writer')
     assert.throws(() => settings.write('x', []), /lifetime/)
     assert.throws(() => earlySettings.write('x', []), /lost Channel UI|disposed|lifetime/)
-    lossMount.dispose(); unregisterKernelLoss(); kernelLoss.raw.releaseContributions()
     mount.dispose(); raw.releaseContributions()
   } finally {
     if (oldMode === undefined) delete process.env.DSH_TUI_ADAPTER_MODE

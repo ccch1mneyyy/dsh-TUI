@@ -12,7 +12,9 @@ assert.match(root, /createBindingEvents\(ctx, \{/, 'binding events own subscript
 assert.doesNotMatch(root, /new ActivityTracker\(/, 'root does not own an activity tracker')
 assert.doesNotMatch(root, /setInterval\(/, 'root does not own activity ticks')
 assert.doesNotMatch(root, /on\('session\/event'/, 'root does not directly route session events')
-assert.match(root, /activity\.stop\(\)/, 'explicit release stops activity lifecycle')
+const activity = readFileSync(new URL('../src/dsh-adapter/channel/activity.ts', import.meta.url), 'utf8')
+assert.match(activity, /owner\.own\(stop\)/, 'activity registers cleanup immediately with the channel owner')
+assert.match(root, /releaseContributions\(\)[\s\S]*?owner\.dispose\(\)/, 'explicit release revokes the activity owner')
 
 const events = readFileSync(new URL('../src/dsh-adapter/channel/binding-events.ts', import.meta.url), 'utf8')
 assert.match(events, /binding\.subscribe/, 'binding owns incremental subscription teardown')

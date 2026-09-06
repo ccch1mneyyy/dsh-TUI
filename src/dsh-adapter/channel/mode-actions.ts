@@ -3,6 +3,7 @@ import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import { t } from '../../i18n.js'
 import { modeDisplayName, type SessionModeSpec } from '../../sessionModes.js'
+import { assertShadowPolicy, type AdapterRuntimeOptions } from '../../adapter/kernel/runtime.js'
 import type { ChannelState } from './types.js'
 import type { createChannelBinding } from './binding.js'
 
@@ -15,6 +16,7 @@ export function createModeActions(
   state: ModeState,
   deps: {
     owner: { current(): boolean }
+    runtime: AdapterRuntimeOptions
     binding: Pick<Binding, 'agent' | 'capture' | 'isCurrent'>
     sessionModes: readonly SessionModeSpec[]
     commandService?: { find(agent: Agent, name: string): unknown }
@@ -22,9 +24,9 @@ export function createModeActions(
     notify: ChannelState['notify']
   },
 ) {
-  const { owner, binding, sessionModes, commandService, executeRegistryCommand, notify } = deps
+  const { owner, runtime, binding, sessionModes, commandService, executeRegistryCommand, notify } = deps
   type ModeCapture = ReturnType<Binding['capture']>
-  const current = (capture: ModeCapture): boolean => { const value = owner.current() && binding.isCurrent(capture); if (!value) console.error('DEBUG MODE NOT CURRENT', owner.current(), binding.agent === capture.agent, (binding as any).generation, capture.generation); return value }
+  const current = (capture: ModeCapture): boolean => owner.current() && binding.isCurrent(capture)
   const capturedSession = (capture: ModeCapture) => capture.agent.session
 // Session-mode folds: last-wins projections over the session log. The
 // event types are registered by dsh-plan-mode / dsh-sandbox-policy /
@@ -159,6 +161,10 @@ const prePlanModeSpec = (log: readonly SessionEvent[]): SessionModeSpec | undefi
 /** Apply the configured atoms; an explicit exit owns its target mode. */
   const applyMode = async (spec: SessionModeSpec, capture = binding.capture()): Promise<void> => {
     if (!current(capture)) return
+    // This action writes durable session policy. The runtime snapshot comes
+    // from composition and is immutable for this Channel lifetime, so an
+    // observed plan exit cannot bypass the renderer/Port shadow guard.
+    assertShadowPolicy('mutate', runtime.mode)
     const agent = capture.agent
     const session = capturedSession(capture)
     pendingPlanExitRestores.delete(session)
@@ -244,6 +250,9 @@ const prePlanModeSpec = (log: readonly SessionEvent[]): SessionModeSpec | undefi
       const restore = pendingPlanExitRestores.get(session)
       pendingPlanExitRestores.delete(session)
       if (restore === undefined || !current(restore.capture) || session !== capturedSession(restore.capture) || foldPlanActive(session.events)) return
+      // Shadow still projects the observed plan/mode event above, but never
+      // schedules a compensating sandbox/approval write into the real log.
+      if (runtime.mode === 'passive-shadow' || runtime.mode === 'replay-shadow') return
       applyMode(restore.target, restore.capture).catch(error => {
         ctx.logger.warn(`dsh-tui: plan-exit mode restore failed: ${error instanceof Error ? error.message : String(error)}`)
       })

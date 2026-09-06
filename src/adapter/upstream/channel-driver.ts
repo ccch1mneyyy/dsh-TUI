@@ -22,7 +22,7 @@ import type { UpstreamDriver, UpstreamDriverMount } from './driver.js'
 import { createChannelUi, createChannelUiLease } from '../channel/ui.js'
 import type { ChannelPreferences } from '../channel/ui-policy.js'
 import { adapterRuntimeFor } from '../kernel/runtime-context.js'
-import { onTuiChannelRegistered } from '../channel/host-registry.js'
+import { getTuiChannelRegistration, onTuiChannelRegistration, type TuiChannelRegistration } from '../channel/host-registry.js'
 import type { Channel } from '../../dsh-adapter/channel.js'
 import {
   createChannelActions,
@@ -40,6 +40,7 @@ import { getRegisteredTuiChannel } from '../channel/host-registry.js'
 import { CHANNEL_FEATURES } from '../channel/features.js'
 import { CHANNEL_SPLIT_TOKEN } from '../channel/internal-token.js'
 import { withReplayIsolation } from '../kernel/replay-isolation.js'
+import { onChannelOwnerDispose } from '../../dsh-adapter/channel/owner.js'
 
 const CAPABILITY = 'host.channel'
 
@@ -237,50 +238,127 @@ function requireChannel(ctx: unknown): Channel {
   return channel
 }
 
-function createProjectionPort(ctx: unknown, own: (dispose: () => void) => void, isActive: () => boolean): HostChannelProjectionPort {
-  let cachedChannel: Channel | undefined
+/**
+ * Captures exactly one registered Channel for one mounted Host Port.  A port
+ * may wait until its first use because the Kernel can mount before React
+ * creates the channel, but it must never silently borrow a later replacement.
+ * Registration replacement and driver disposal revoke subscriptions, returned
+ * notification handles, and nested renderer capabilities together.
+ */
+function throwCleanupFailures(failures: unknown[], message: string): void {
+  if (failures.length === 1) throw failures[0]
+  if (failures.length > 1) throw new AggregateError(failures, message)
+}
+
+function createChannelPortLease(
+  ctx: unknown,
+  ownDriver: (dispose: () => void) => void,
+  isDriverActive: () => boolean,
+) {
+  let active = true
+  let captured: TuiChannelRegistration | undefined
+  let releaseOwnerLease: (() => void) | undefined
+  const cleanups = new Set<() => void>()
+  const assertActive = (): void => {
+    if (!active || !isDriverActive()) throw new Error('dsh-tui: Channel driver has been disposed')
+    if (captured !== undefined && getTuiChannelRegistration(ctx) !== captured) {
+      dispose()
+      throw new Error('dsh-tui: Channel port lifetime has ended')
+    }
+  }
+  const dispose = (): void => {
+    if (!active) return
+    active = false
+    const failures: unknown[] = []
+    for (const cleanup of [...cleanups]) {
+      try { cleanup() } catch (error) { failures.push(error) }
+    }
+    throwCleanupFailures(failures, 'dsh-tui: Channel port cleanup failed')
+  }
+  const own = (cleanup: () => void): (() => void) => {
+    let released = false
+    const release = (): void => {
+      if (released) return
+      released = true
+      cleanups.delete(release)
+      cleanup()
+    }
+    if (active) cleanups.add(release)
+    else release()
+    return release
+  }
+  const channel = (): Channel => {
+    assertActive()
+    const current = getTuiChannelRegistration(ctx)
+    if (current === undefined || current.channel === null || typeof current.channel !== 'object') {
+      throw new Error('dsh-tui: live TUI Channel is not registered for this composition root')
+    }
+    if (captured === undefined) {
+      captured = current
+      // Registry authority alone is insufficient: a retained Port must also
+      // stop immediately when its live Channel owner releases.
+      releaseOwnerLease = onChannelOwnerDispose(current.channel as object, dispose)
+      own(() => { releaseOwnerLease?.(); releaseOwnerLease = undefined })
+    }
+    if (captured !== current) {
+      dispose()
+      throw new Error('dsh-tui: Channel port lifetime has ended')
+    }
+    // Registering with an already released owner revokes synchronously.
+    assertActive()
+    return current.channel as Channel
+  }
+  const unsubscribe = onTuiChannelRegistration(ctx, next => {
+    if (captured !== undefined && next !== captured) {
+      try { dispose() } catch { /* notification is advisory; stale lease is still revoked */ }
+    }
+  })
+  ownDriver(() => {
+    const failures: unknown[] = []
+    for (const cleanup of [unsubscribe, dispose]) {
+      try { cleanup() } catch (error) { failures.push(error) }
+    }
+    throwCleanupFailures(failures, 'dsh-tui: Channel driver cleanup failed')
+  })
+  return { assertActive, channel, own, dispose }
+}
+
+type ChannelPortLease = ReturnType<typeof createChannelPortLease>
+
+function createProjectionPort(ctx: unknown, lease: ChannelPortLease): HostChannelProjectionPort {
   let cachedUi: ReturnType<typeof createChannelUi> | undefined
-  let releaseCurrent = () => undefined
-  own(() => releaseCurrent())
   return Object.freeze({
     ui() {
-      if (!isActive()) throw new Error('dsh-tui: Channel driver has been disposed')
-      const channel = requireChannel(ctx) as Channel & ChannelPreferences
-      if (cachedChannel === channel && cachedUi !== undefined) return cachedUi
-      const lease = createChannelUiLease(() => isActive() && channelFor(ctx) === channel)
-      const unsubscribe = onTuiChannelRegistered(ctx, next => {
-        if (next !== channel) lease.dispose()
-      })
-      releaseCurrent()
-      releaseCurrent = () => { unsubscribe(); lease.dispose() }
-      cachedChannel = channel
-      cachedUi = createChannelUi(channel, adapterRuntimeFor(ctx as never).mode, lease)
+      const channel = lease.channel() as Channel & ChannelPreferences
+      if (cachedUi === undefined) {
+        const uiLease = createChannelUiLease(() => {
+          lease.assertActive()
+          return true
+        })
+        lease.own(() => uiLease.dispose())
+        cachedUi = createChannelUi(channel, adapterRuntimeFor(ctx as never).mode, uiLease)
+      }
       return cachedUi
     },
-    snapshot() {
-      return projectChannelSnapshot(requireChannel(ctx))
-    },
+    snapshot() { return projectChannelSnapshot(lease.channel()) },
     subscribe(listener) {
-      return requireChannel(ctx).subscribe(listener)
+      const channel = lease.channel()
+      const unsubscribe = channel.subscribe(() => { if (leaseIsActive(lease)) listener() })
+      return lease.own(unsubscribe)
     },
   })
 }
 
-function createStatePort(ctx: unknown): HostChannelStatePort {
-  return Object.freeze({
-    snapshot() {
-      return projectChannelState(requireChannel(ctx))
-    },
-  })
+function leaseIsActive(lease: ChannelPortLease): boolean {
+  try { lease.assertActive(); return true } catch { return false }
 }
 
-function createActionsPort(ctx: unknown): HostChannelActionsPort {
-  // All mutable Channel operations are delegated lazily to the split actions
-  // module: mounting without a registered Channel stays a no-op, while any
-  // actual call through the HostFacade shadow gate resolves the Channel and
-  // then executes the split builder.
-  const actions = (): HostChannelActionsPort =>
-    createChannelActions(requireChannel(ctx), CHANNEL_SPLIT_TOKEN)
+function createStatePort(lease: ChannelPortLease): HostChannelStatePort {
+  return Object.freeze({ snapshot: () => projectChannelState(lease.channel()) })
+}
+
+function createActionsPort(lease: ChannelPortLease): HostChannelActionsPort {
+  const actions = (): HostChannelActionsPort => createChannelActions(lease.channel(), CHANNEL_SPLIT_TOKEN)
   return Object.freeze({
     submit: text => actions().submit(text),
     steer: text => actions().steer(text),
@@ -288,40 +366,41 @@ function createActionsPort(ctx: unknown): HostChannelActionsPort {
     interruptAndDeliver: texts => actions().interruptAndDeliver(texts),
     clear: () => actions().clear(),
     loadOlder: () => actions().loadOlder(),
-    notify: (text, options) => actions().notify(text, options),
+    notify: (text, options) => lease.own(actions().notify(text, options)),
   })
 }
 
-function createPluginsPort(ctx: unknown): HostChannelPluginsPort {
-  // Plugin-visible Channel seams are projected lazily through the split
-  // plugins module; same no-op-at-mount contract as the actions port.
-  const plugins = (): HostChannelPluginsPort =>
-    createChannelPlugins(requireChannel(ctx), CHANNEL_SPLIT_TOKEN)
+function createPluginsPort(lease: ChannelPortLease): HostChannelPluginsPort {
+  const plugins = (): HostChannelPluginsPort => createChannelPlugins(lease.channel(), CHANNEL_SPLIT_TOKEN)
   return Object.freeze({
-    runExternalCommand: (name, rawInput) => plugins().runExternalCommand(name, rawInput),
+    async runExternalCommand(name, rawInput) {
+      const result = await plugins().runExternalCommand(name, rawInput)
+      lease.assertActive()
+      return result
+    },
     openPluginScene: id => plugins().openPluginScene(id),
     closePluginScene: () => plugins().closePluginScene(),
     settingsSections: () => plugins().settingsSections(),
-    subscribeSettingsSections: listener => plugins().subscribeSettingsSections(listener),
+    subscribeSettingsSections(listener) {
+      const unsubscribe = plugins().subscribeSettingsSections(() => { if (leaseIsActive(lease)) listener() })
+      return lease.own(unsubscribe)
+    },
   })
 }
 
-function createTranscriptPort(ctx: unknown): HostChannelTranscriptPort {
-  const transcript = (): HostChannelTranscriptPort =>
-    createChannelTranscript(requireChannel(ctx), CHANNEL_SPLIT_TOKEN)
-  return Object.freeze({
-    rows: () => transcript().rows(),
-    traceEvents: () => transcript().traceEvents(),
-  })
+function createTranscriptPort(lease: ChannelPortLease): HostChannelTranscriptPort {
+  const transcript = (): HostChannelTranscriptPort => createChannelTranscript(lease.channel(), CHANNEL_SPLIT_TOKEN)
+  return Object.freeze({ rows: () => transcript().rows(), traceEvents: () => transcript().traceEvents() })
 }
 
 function createChannelPort(ctx: unknown, own: (dispose: () => void) => void, isActive: () => boolean): HostChannelPort {
+  const lease = createChannelPortLease(ctx, own, isActive)
   return Object.freeze({
-    projection: createProjectionPort(ctx, own, isActive),
-    actions: createActionsPort(ctx),
-    state: createStatePort(ctx),
-    plugins: createPluginsPort(ctx),
-    transcript: createTranscriptPort(ctx),
+    projection: createProjectionPort(ctx, lease),
+    actions: createActionsPort(lease),
+    state: createStatePort(lease),
+    plugins: createPluginsPort(lease),
+    transcript: createTranscriptPort(lease),
   })
 }
 
@@ -336,7 +415,15 @@ export const channelDriver: UpstreamDriver = {
     const disposers = new Set<() => void>()
     let active = true
     return {
-      disposer: () => { active = false; for (const dispose of disposers) dispose(); disposers.clear() },
+      disposer: () => {
+        active = false
+        const failures: unknown[] = []
+        for (const dispose of [...disposers]) {
+          try { dispose() } catch (error) { failures.push(error) }
+        }
+        disposers.clear()
+        throwCleanupFailures(failures, 'dsh-tui: Channel driver cleanup failed')
+      },
       ports: { channel: createChannelPort(context, dispose => { disposers.add(dispose) }, () => active) },
     }
   },

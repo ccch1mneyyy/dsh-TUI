@@ -105,17 +105,24 @@ export function createAgentViewProjection(
   const agents = (): { list?(): readonly Agent[]; get(id: SessionId): Agent | undefined; create(options: CreateAgentOptions): Promise<AgentHandle> } | undefined =>
     ctx.get('agents') as ReturnType<typeof agents>
 
-  // These process-wide roster observations still belong to this channel
-  // owner. Revoke them so a retained Context cannot wake a dead projection.
-  const disposeStatus = ctx.on('agent/status', () => schedule())
-  const disposeCreated = ctx.on('agent/created', () => notify())
-  const disposeDisposed = ctx.on('agent/disposed', ({ agent }: { agent: { id?: unknown } }) => {
-    folds.delete(String(agent.id ?? ''))
-    backgroundHandles.delete(String(agent.id ?? ''))
-    notify()
-  })
-  deps.owner.own(() => { disposeStatus(); disposeCreated(); disposeDisposed() })
-  refreshPersisted()
+  let started = false
+  let disposeStatus: (() => void) | undefined
+  let disposeCreated: (() => void) | undefined
+  let disposeDisposed: (() => void) | undefined
+  const start = (): void => {
+    if (started || disposed) return
+    started = true
+    // These process-wide roster observations still belong to this channel
+    // owner. Revoke them so a retained Context cannot wake a dead projection.
+    disposeStatus = ctx.on('agent/status', () => schedule())
+    disposeCreated = ctx.on('agent/created', () => notify())
+    disposeDisposed = ctx.on('agent/disposed', ({ agent }: { agent: { id?: unknown } }) => {
+      folds.delete(String(agent.id ?? ''))
+      backgroundHandles.delete(String(agent.id ?? ''))
+      notify()
+    })
+    refreshPersisted()
+  }
 
   const rows = (): readonly AgentViewRow[] => {
     if (rowsCache !== undefined) return rowsCache
@@ -268,15 +275,28 @@ export function createAgentViewProjection(
   }
   const dispose = (): void => {
     disposed = true
+    const failures: unknown[] = []
+    for (const cleanup of [disposeStatus, disposeCreated, disposeDisposed]) {
+      try { cleanup?.() } catch (error) { failures.push(error) }
+    }
+    disposeStatus = undefined
+    disposeCreated = undefined
+    disposeDisposed = undefined
     if (refreshTimer !== undefined) clearTimeout(refreshTimer)
     refreshTimer = undefined
     listeners.clear()
-    for (const handle of backgroundHandles.values()) void handle.dispose().catch(() => undefined)
+    for (const handle of backgroundHandles.values()) {
+      // Handle disposal is asynchronous by contract; initiate every release
+      // even if a subscription disposer above fails.
+      void handle.dispose().catch(() => undefined)
+    }
     backgroundHandles.clear()
+    if (failures.length === 1) throw failures[0]
+    if (failures.length > 1) throw new AggregateError(failures, 'dsh-tui: agent-view cleanup failed')
   }
   deps.owner.own(dispose)
   return {
-    backgroundHandles, notify, schedule, refreshPersisted, bindApprovalStore, rows,
+    start, backgroundHandles, notify, schedule, refreshPersisted, bindApprovalStore, rows,
     subscribe(listener: () => void) { listeners.add(listener); return () => listeners.delete(listener) },
     dispatch, stop, attach, peek, reply,
     backgroundCurrent: () => deps.backgroundCurrent?.() ?? Promise.resolve({ ok: false }),

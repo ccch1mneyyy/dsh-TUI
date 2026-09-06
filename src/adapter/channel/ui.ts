@@ -14,6 +14,11 @@ export interface ChannelUiLease {
   own(dispose: () => void): () => void
 }
 
+function throwCleanupFailures(failures: unknown[], message: string): void {
+  if (failures.length === 1) throw failures[0]
+  if (failures.length > 1) throw new AggregateError(failures, message)
+}
+
 export function createChannelUiLease(isCurrent: () => boolean): ChannelUiLease & { dispose(): void } {
   let active = true
   const disposers = new Set<() => void>()
@@ -36,7 +41,11 @@ export function createChannelUiLease(isCurrent: () => boolean): ChannelUiLease &
     dispose() {
       if (!active) return
       active = false
-      for (const dispose of [...disposers]) dispose()
+      const failures: unknown[] = []
+      for (const dispose of [...disposers]) {
+        try { dispose() } catch (error) { failures.push(error) }
+      }
+      throwCleanupFailures(failures, 'dsh-tui: Channel UI cleanup failed')
     },
   }
 }

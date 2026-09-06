@@ -19,7 +19,7 @@ type ProjectionState = Pick<ChannelState, 'rows' | 'thinkingFold' | 'activeToolC
 interface ProjectionDependencies {
  agent(): Agent
  rowIds: { value: number }
- contextWarning: { value: boolean }
+ resetContextWarning(): void
  pendingTaskDescriptions: string[]
  jobs: Pick<BackgroundJobStore, 'onOutputSeen' | 'onStarted'>
  inputConvergence: Pick<InputConvergence, 'cancelInFlight'>
@@ -399,7 +399,7 @@ export function createChannelProjection(state: ProjectionState, deps: Projection
             cacheRead: 0,
             cacheWrite: 0,
           }
-          deps.contextWarning.value = false
+          deps.resetContextWarning()
           break
         }
         // Same-session goal domain: goal-sourced messages are the round

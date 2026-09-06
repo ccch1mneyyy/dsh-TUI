@@ -664,8 +664,10 @@ assert.ok(KNOWN_GATE_BOUNDARIES.length >= 2, 'known gate boundary list must be e
 
 // ── Production integration claims (AST-verified call sites) ────────────────
 const integrationClaimChecks: ReadonlyArray<{ file: string; label: string; check: () => boolean }> = Object.freeze([
-  { file: 'dsh-adapter/channel.ts', label: 'getHostFacade(...)', check: () => fileHasNamedCall('dsh-adapter/channel.ts', 'getHostFacade') },
-  { file: 'dsh-adapter/channel.ts', label: 'collectAdapterDiagnostics(...)', check: () => fileHasNamedCall('dsh-adapter/channel.ts', 'collectAdapterDiagnostics') },
+  // Diagnostics/report behavior is owned by the extracted report specialist,
+  // not the composition root; keep the AST proof at its real ownership seam.
+  { file: 'dsh-adapter/channel/reports.ts', label: 'getHostFacade(...)', check: () => fileHasNamedCall('dsh-adapter/channel/reports.ts', 'getHostFacade') },
+  { file: 'dsh-adapter/channel/reports.ts', label: 'collectAdapterDiagnostics(...)', check: () => fileHasNamedCall('dsh-adapter/channel/reports.ts', 'collectAdapterDiagnostics') },
   { file: 'dsh-adapter/channel.ts', label: 'markDecisionDispatchTopology(...)', check: () => fileHasNamedCall('dsh-adapter/channel.ts', 'markDecisionDispatchTopology') },
   { file: 'dsh-adapter/effect-ledger.ts', label: 'createKernelLedger(...)', check: () => fileHasNamedCall('dsh-adapter/effect-ledger.ts', 'createKernelLedger') },
   { file: 'adapter/upstream/host-descriptor-driver.ts', label: 'commands.list(undefined)', check: () => fileHasMethodCallNamedWithUndefinedArg('adapter/upstream/host-descriptor-driver.ts', 'list') },
