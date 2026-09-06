@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 import assert from 'node:assert/strict'
-import { spawnSync } from 'node:child_process'
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs'
+import { spawn, spawnSync } from 'node:child_process'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, win32 } from 'node:path'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { commandInvocation } from './dev-command.mjs'
 import { copyDevConfig, resolveDevPaths } from './dev-copy-config.mjs'
 import { computeDevFingerprints, readDevLoopCache, writeDevLoopCache } from './dev-fingerprint.mjs'
@@ -141,7 +142,8 @@ try {
   }
 }
 
-// --- dev-lock: mutex acquisition, contention timeout, stale-owner recovery
+// --- dev-lock: mutex acquisition, contention timeout, stale-owner recovery,
+// --- no live-owner eviction, ownership-checked release, contention soak
 {
   const fixture = mkdtempSync(join(tmpdir(), 'dsh-tui-dev-lock-'))
   try {
@@ -151,7 +153,7 @@ try {
     assert.throws(
       () => acquireDevLoopLock(fixture, { waitMs: 400 }),
       /holds the dev-loop lock/u,
-      'live owner must block a second acquisition'
+      'live owner must block a second acquisition',
     )
     release()
     acquireDevLoopLock(fixture, { waitMs: 400 })()
@@ -159,7 +161,7 @@ try {
     // dead owner pid → stale lock broken and reacquired
     const { pid: deadPid } = spawnSync(process.execPath, ['-e', ''])
     mkdirSync(lockDir)
-    writeFileSync(join(lockDir, 'pid'), String(deadPid))
+    writeFileSync(join(lockDir, 'pid'), `${deadPid}:gone`)
     acquireDevLoopLock(fixture, { waitMs: 400 })()
 
     // fresh lock without a pid file (creator mid-write) must not be broken
@@ -167,9 +169,49 @@ try {
     assert.throws(
       () => acquireDevLoopLock(fixture, { waitMs: 400 }),
       /holds the dev-loop lock/u,
-      'pid-less fresh lock must be given the grace window'
+      'pid-less fresh lock must be given the grace window',
     )
     rmSync(lockDir, { recursive: true, force: true })
+
+    // live owner past any age bound must NOT be evicted: waiter times out
+    mkdirSync(lockDir)
+    writeFileSync(join(lockDir, 'pid'), `${process.pid}:ancient`)
+    const ancient = new Date(Date.now() - 3 * 60 * 60_000)
+    utimesSync(lockDir, ancient, ancient)
+    assert.throws(
+      () => acquireDevLoopLock(fixture, { waitMs: 400 }),
+      /holds the dev-loop lock/u,
+      'a live owner must never be evicted by lock age',
+    )
+    rmSync(lockDir, { recursive: true, force: true })
+
+    // ownership-checked release: a run whose lock was taken over must not
+    // remove the new owner's lock
+    const releaseA = acquireDevLoopLock(fixture)
+    rmSync(lockDir, { recursive: true, force: true })
+    const releaseB = acquireDevLoopLock(fixture)
+    releaseA()
+    assert.ok(existsSync(lockDir), 'mis-release must leave the current lock in place')
+    releaseB()
+    assert.ok(!existsSync(lockDir), 'rightful release removes the lock')
+
+    // contention soak: concurrent workers exercise the EEXIST→statSync
+    // retry window; all must exit cleanly and leave no lock behind
+    const workerModule = `${pathToFileURL(join(dirname(fileURLToPath(import.meta.url)), 'dev-lock.mjs')).href}`
+    const worker = `
+      const { acquireDevLoopLock } = await import(${JSON.stringify(workerModule)})
+      for (let i = 0; i < 10; i += 1) {
+        const release = acquireDevLoopLock(${JSON.stringify(fixture)}, { waitMs: 30_000 })
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, i % 4)
+        release()
+      }
+    `
+    await Promise.all(Array.from({ length: 6 }, () => new Promise((resolvePromise, rejectPromise) => {
+      const child = spawn(process.execPath, ['--input-type=module', '--eval', worker], { stdio: 'inherit' })
+      child.on('exit', code => (code === 0 ? resolvePromise() : rejectPromise(new Error(`lock worker exited ${code}`))))
+      child.on('error', rejectPromise)
+    })))
+    assert.ok(!existsSync(lockDir), 'lock released after contention soak')
   } finally {
     rmSync(fixture, { recursive: true, force: true })
   }
