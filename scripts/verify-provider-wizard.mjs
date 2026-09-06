@@ -15,7 +15,9 @@
  * 5. writeProfile failure with no prior credential unsets the new one.
  * 6. env shadow: credential write skipped, profile still references the ref.
  * 7. user cancel (Esc) mid-wizard: zero side effects, outcome 'cancelled'.
- * 8. invalid route id is rejected and re-asked before proceeding.
+ * 8. invalid route id is rejected and re-asked before proceeding (catalog
+ *    "other route" path — the custom path now takes a free-form NAME and
+ *    derives the route id from it, so it has no invalid names, only empty).
  * 9. deriveKeyRef matches the web UI's convention.
  * 10. overwrite rollback RESTORES the previous credential value instead of
  *    deleting it (regression: unconditional unset destroyed the old key).
@@ -62,6 +64,16 @@
  * 32. a targeted edit of a stored profile that carries unknown fields:
  *    mutateProfile receives only the changed path — the untouched fields
  *    never enter the op list (#1).
+ * 36. custom path, Chinese name: displayName written verbatim, route id is
+ *    the deterministic gw-<fnv1a8> fallback, credential ref derived from it.
+ * 37. custom path, mixed-case/spaced name: the ASCII slug becomes the route,
+ *    the verbatim name rides as displayName.
+ * 38. custom path, empty name: warned and re-asked; an ASCII-valid name then
+ *    keeps the verbatim route and writes NO displayName (backward-compat).
+ * 39. edit display name via the edit menu: single-field path patch sets
+ *    `displayName`, empty input is a no-op.
+ * 40. edit-picker labels speak the display name (route id moves into the
+ *    description); duplicate display names get a (route) suffix.
  *
  * Run with plain node against the compiled lib (after `pnpm build`):
  * `node scripts/verify-provider-wizard.mjs`
@@ -69,6 +81,7 @@
 import { UserQuestionError } from '@deepseek-ai/dsh-user-questions'
 import {
   deriveKeyRef,
+  routeFromName,
   runProviderWizard,
 } from '../lib/types/dsh-adapter/providerWizard.js'
 import { t } from '../lib/types/i18n.js'
@@ -218,6 +231,7 @@ const ACTION_ADD = { selected: [t('provider-opt-action-add')] }
 const ACTION_EDIT = { selected: [t('provider-opt-action-edit')] }
 // Edit-menu picks (asked exactly once per edit session).
 const MENU_KEY = { selected: [t('provider-opt-edit-key')] }
+const MENU_NAME = { selected: [t('provider-opt-edit-name')] }
 const MENU_BASEURL = { selected: [t('provider-opt-edit-baseurl')] }
 const MENU_PROTOCOL = { selected: [t('provider-opt-edit-protocol')] }
 const MENU_MODELS = { selected: [t('provider-opt-edit-models')] }
@@ -280,7 +294,7 @@ const MENU_DELETE = { selected: [t('provider-opt-edit-delete')] }
 {
   const { deps, calls } = makeDeps({
     'mode': MODE_CUSTOM,
-    'route-id': { custom: 'acme-gateway' },
+    'provider-name': { custom: 'acme-gateway' },
     'apikey': { custom: 'acme-key' },
     'baseurl': { custom: 'https://gw.example/v1' },
     'protocol': { selected: ['openai-completions'] },
@@ -309,7 +323,7 @@ const MENU_DELETE = { selected: [t('provider-opt-edit-delete')] }
 {
   const { deps, calls } = makeDeps({
     'mode': MODE_CUSTOM,
-    'route-id': { custom: 'local-llm' },
+    'provider-name': { custom: 'local-llm' },
     'apikey': { custom: 'no-key-needed-but-required' },
     'baseurl': { custom: 'http://127.0.0.1:11434/v1' },
     'protocol': { selected: ['openai-completions'] },
@@ -416,18 +430,20 @@ const MENU_DELETE = { selected: [t('provider-opt-edit-delete')] }
     eq(calls.credentials, []) && eq(calls.profiles, []) && eq(calls.removed, []))
 }
 
-// 8. invalid route id is rejected, then re-asked (scripted via ask wrapper).
+// 8. invalid route id is rejected, then re-asked (scripted via ask wrapper)
+// — catalog "other route" path (promptRouteId); the custom path's
+// provider-name has no invalid names, only empty ones (scenario 38).
 {
   const { deps, calls } = makeDeps({
-    'mode': MODE_CUSTOM,
+    'mode': MODE_CATALOG,
+    'catalog': { selected: [t('provider-opt-other-route')] },
     'route-id': { custom: 'BAD ROUTE' },
     'apikey': { custom: 'k' },
-    'baseurl': { custom: 'https://gw.example/v1' },
-    'protocol': { selected: ['openai-completions'] },
-    'models-fallback': { custom: 'm1' },
+    'baseurl-choice': SKIP_BASEURL,
+    'models': { selected: ['deepseek-chat'] },
     'confirm': CONFIRM_WRITE,
     'switch': KEEP_MODEL,
-  }, { discoverThrows: true })
+  }, { discovered: [{ id: 'deepseek-chat' }] })
   let routeIdAsks = 0
   const innerAsk = deps.ask
   deps.ask = async request => {
@@ -485,7 +501,7 @@ const MENU_DELETE = { selected: [t('provider-opt-edit-delete')] }
 
   const custom = makeDeps({
     'mode': MODE_CUSTOM,
-    'route-id': { custom: 'flag-route' },
+    'provider-name': { custom: 'flag-route' },
     'apikey': { custom: 'k' },
     'baseurl': { custom: 'https://gw.example/v1' },
     'protocol': { selected: ['openai-completions'] },
@@ -498,7 +514,7 @@ const MENU_DELETE = { selected: [t('provider-opt-edit-delete')] }
     eq(custom.calls.hideFlags, {
       'action': true,
       'mode': true,
-      'route-id': false,
+      'provider-name': false,
       'apikey': false,
       'baseurl': false,
       'protocol': true,
@@ -850,8 +866,9 @@ function oauthStub(behavior = {}) {
     eq(calls.profiles, []) && eq(calls.credentials, []))
 }
 
-// 28. menu shape: built-in routes offer key/models/delete only; custom routes
-// also offer base URL and wire protocol.
+// 28. menu shape: built-in routes offer key/name/models/delete; custom routes
+// also offer base URL and wire protocol. (The display-name row is for every
+// route — it patches the user-layer profile regardless of catalog membership.)
 {
   const { deps: depsCatalog, calls: callsCatalog } = makeDeps({
     'action': ACTION_EDIT,
@@ -863,10 +880,11 @@ function oauthStub(behavior = {}) {
   })
   const outcomeCatalog = await runProviderWizard(depsCatalog)
   const catalogLabels = Object.keys(callsCatalog.optionDescriptions['edit-menu'] ?? {})
-  check('28 menu shape: built-in route offers key/models/delete only',
+  check('28 menu shape: built-in route offers key/name/models/delete',
     outcomeCatalog === 'updated'
       && eq(catalogLabels, [
         t('provider-opt-edit-key'),
+        t('provider-opt-edit-name'),
         t('provider-opt-edit-models'),
         t('provider-opt-edit-delete'),
       ]),
@@ -886,6 +904,7 @@ function oauthStub(behavior = {}) {
     outcomeCustom === 'updated'
       && eq(customLabels, [
         t('provider-opt-edit-key'),
+        t('provider-opt-edit-name'),
         t('provider-opt-edit-baseurl'),
         t('provider-opt-edit-protocol'),
         t('provider-opt-edit-models'),
@@ -911,6 +930,7 @@ function oauthStub(behavior = {}) {
     outcome === 'updated'
       && eq(labels, [
         t('provider-opt-edit-key'),
+        t('provider-opt-edit-name'),
         t('provider-opt-edit-models'),
         t('provider-opt-edit-delete'),
       ]),
@@ -1224,6 +1244,249 @@ function oauthStub(behavior = {}) {
   const op = calls.mutations[0][1][0]
   check('28b patch shape: single op, path is exactly [baseURL]',
     calls.mutations[0][1].length === 1 && eq(op.path, ['baseURL']) && op.op === 'set',
+    JSON.stringify(calls.mutations))
+}
+
+// 36. custom path, Chinese name: displayName written verbatim, the route id
+// is the deterministic gw-<fnv1a8> fallback, the credential ref is derived
+// from that route, and the summary/toast speak the display name.
+{
+  const { deps, calls } = makeDeps({
+    'mode': MODE_CUSTOM,
+    'provider-name': { custom: '予之网关' },
+    'apikey': { custom: 'k' },
+    'baseurl': { custom: 'https://gw.example/v1' },
+    'protocol': { selected: ['openai-completions'] },
+    'models-fallback': { custom: 'm1' },
+    'confirm': CONFIRM_WRITE,
+    'switch': KEEP_MODEL,
+  }, { discoverThrows: true })
+  const outcome = await runProviderWizard(deps)
+  const [route, profile] = calls.profiles[0] ?? []
+  check('36 chinese name: outcome added', outcome === 'added', outcome)
+  check('36 chinese name: route is the hash fallback',
+    typeof route === 'string' && /^gw-[0-9a-f]{8}$/.test(route), String(route))
+  check('36 chinese name: routeFromName is deterministic',
+    eq(routeFromName('予之网关'), routeFromName('予之网关')))
+  check('36 chinese name: profile carries the Chinese displayName',
+    profile?.displayName === '予之网关', JSON.stringify(profile))
+  check('36 chinese name: credential ref derived from the route',
+    eq(calls.credentials, [[deriveKeyRef(route), 'k']]), JSON.stringify(calls.credentials))
+  check('36 chinese name: summary shows both route and display name',
+    calls.pushed[0]?.lines.some(line => line.includes('予之网关')) === true
+      && calls.pushed[0]?.lines.some(line => line.includes(route)) === true,
+    JSON.stringify(calls.pushed[0]?.lines))
+  check('36 chinese name: success toast speaks the display name',
+    calls.notifications.some(n => n.color === 'success' && n.text.includes('予之网关')),
+    JSON.stringify(calls.notifications))
+}
+
+// 37. custom path, mixed-case/spaced name: the ASCII slug becomes the route,
+// the verbatim name rides as displayName.
+{
+  const { deps, calls } = makeDeps({
+    'mode': MODE_CUSTOM,
+    'provider-name': { custom: 'My Gateway' },
+    'apikey': { custom: 'k' },
+    'baseurl': { custom: 'https://gw.example/v1' },
+    'protocol': { selected: ['openai-completions'] },
+    'models-fallback': { custom: 'm1' },
+    'confirm': CONFIRM_WRITE,
+    'switch': KEEP_MODEL,
+  }, { discoverThrows: true })
+  const outcome = await runProviderWizard(deps)
+  check('37 mixed-case: outcome added', outcome === 'added', outcome)
+  check('37 mixed-case: route is the slug',
+    calls.profiles[0]?.[0] === 'my-gateway', String(calls.profiles[0]?.[0]))
+  check('37 mixed-case: displayName kept verbatim',
+    calls.profiles[0]?.[1]?.displayName === 'My Gateway', JSON.stringify(calls.profiles[0]?.[1]))
+}
+
+// 38. custom path, empty name: warned and re-asked; an ASCII-valid name then
+// keeps the verbatim route and writes NO displayName (backward-compatible
+// profile shape).
+{
+  const { deps, calls } = makeDeps({
+    'mode': MODE_CUSTOM,
+    'provider-name': { custom: '' },
+    'apikey': { custom: 'k' },
+    'baseurl': { custom: 'https://gw.example/v1' },
+    'protocol': { selected: ['openai-completions'] },
+    'models-fallback': { custom: 'm1' },
+    'confirm': CONFIRM_WRITE,
+    'switch': KEEP_MODEL,
+  }, { discoverThrows: true })
+  let nameAsks = 0
+  const innerAsk = deps.ask
+  deps.ask = async request => {
+    if (request.questions.some(q => q.id === 'provider-name')) {
+      nameAsks += 1
+      if (nameAsks === 2) {
+        return { answers: [{ id: 'provider-name', selected: [], custom: 'acme' }] }
+      }
+    }
+    return innerAsk(request)
+  }
+  const outcome = await runProviderWizard(deps)
+  check('38 empty name: re-asked then proceeded',
+    nameAsks === 2 && outcome === 'added', `asks=${nameAsks} outcome=${outcome}`)
+  check('38 empty name: warning notified',
+    calls.notifications.some(n => n.color === 'warning'))
+  check('38 empty name: ascii name keeps verbatim route, no displayName key',
+    calls.profiles[0]?.[0] === 'acme'
+      && !('displayName' in (calls.profiles[0]?.[1] ?? {})),
+    JSON.stringify(calls.profiles[0]))
+}
+
+// 39. edit display name via the edit menu: a single-field path patch sets
+// `displayName` (works on catalog routes too — the user-layer profile
+// overrides the catalog name); empty input is a no-op; the question detail
+// shows the current label (route as fallback).
+{
+  const { deps, calls } = makeDeps({
+    'action': ACTION_EDIT,
+    'edit-provider': { selected: ['acme-gateway'] },
+    'edit-menu': MENU_NAME,
+    'display-name': { custom: '我的网关' },
+  }, {
+    configured: [{ route: 'acme-gateway', ref: 'ACME_GATEWAY_API_KEY', shadowed: false, isCatalog: false, baseURL: 'https://gw.example/v1', api: 'openai-completions', models: ['acme-large'] }],
+  })
+  const outcome = await runProviderWizard(deps)
+  check('39 edit name: outcome updated', outcome === 'updated', outcome)
+  check('39 edit name: only the displayName path is patched',
+    eq(calls.mutations, [['acme-gateway', [{ op: 'set', path: ['displayName'], value: '我的网关' }]]]),
+    JSON.stringify(calls.mutations))
+  check('39 edit name: no whole-profile write, no credential write',
+    eq(calls.profiles, []) && eq(calls.credentials, []))
+  check('39 edit name: question detail shows the current label',
+    (calls.details['display-name'] ?? '').includes('acme-gateway'),
+    String(calls.details['display-name']))
+  check('39 edit name: summary shows the new display name',
+    calls.pushed[0]?.lines.some(line => line.includes('我的网关')) === true,
+    JSON.stringify(calls.pushed[0]?.lines))
+
+  const { deps: depsEmpty, calls: callsEmpty } = makeDeps({
+    'action': ACTION_EDIT,
+    'edit-provider': { selected: ['acme-gateway'] },
+    'edit-menu': MENU_NAME,
+    'display-name': { custom: '' },
+  }, {
+    configured: [{ route: 'acme-gateway', ref: 'ACME_GATEWAY_API_KEY', shadowed: false, isCatalog: false, baseURL: 'https://gw.example/v1', api: 'openai-completions', models: ['acme-large'] }],
+  })
+  const outcomeEmpty = await runProviderWizard(depsEmpty)
+  check('39 edit name empty: no-op cancelled, nothing written',
+    outcomeEmpty === 'cancelled' && eq(callsEmpty.mutations, []),
+    `${outcomeEmpty} ${JSON.stringify(callsEmpty.mutations)}`)
+}
+
+// 40. edit-picker labels speak the display name: a route with displayName is
+// listed and selectable BY the display name (the route id moves into the row
+// description); duplicate display names get a (route) suffix so labels stay
+// unique.
+{
+  const { deps, calls } = makeDeps({
+    'action': ACTION_EDIT,
+    'edit-provider': { selected: ['予之网关'] },
+    'edit-menu': MENU_NAME,
+    'display-name': { custom: '备用网关' },
+  }, {
+    configured: [
+      { route: 'gw-aaa', ref: 'GW_AAA_API_KEY', shadowed: false, isCatalog: false, displayName: '予之网关', baseURL: 'https://a.example/v1', api: 'openai-completions', models: ['m1'] },
+      { route: 'plain', ref: 'PLAIN_API_KEY', shadowed: false, isCatalog: false, baseURL: 'https://b.example/v1', api: 'openai-completions', models: ['m2'] },
+    ],
+  })
+  const outcome = await runProviderWizard(deps)
+  const labels = Object.keys(calls.optionDescriptions['edit-provider'] ?? {})
+  check('40 picker label: display name is the row label',
+    labels.includes('予之网关') && !labels.includes('gw-aaa'), JSON.stringify(labels))
+  check('40 picker label: route id moved into the description',
+    (calls.optionDescriptions['edit-provider']?.['予之网关'] ?? '').includes('gw-aaa'),
+    JSON.stringify(calls.optionDescriptions['edit-provider']))
+  check('40 picker label: selecting by display name edits that route',
+    outcome === 'updated'
+      && eq(calls.mutations, [['gw-aaa', [{ op: 'set', path: ['displayName'], value: '备用网关' }]]]),
+    JSON.stringify(calls.mutations))
+
+  const { deps: dupDeps, calls: dupCalls } = makeDeps({
+    'action': ACTION_EDIT,
+    'edit-provider': { selected: ['网关 (gw-bbb)'] },
+    'edit-menu': MENU_NAME,
+    'display-name': { custom: '改名' },
+  }, {
+    configured: [
+      { route: 'gw-aaa', ref: 'A_API_KEY', shadowed: false, isCatalog: false, displayName: '网关', models: ['m1'] },
+      { route: 'gw-bbb', ref: 'B_API_KEY', shadowed: false, isCatalog: false, displayName: '网关', models: ['m2'] },
+    ],
+  })
+  const dupOutcome = await runProviderWizard(dupDeps)
+  const dupLabels = Object.keys(dupCalls.optionDescriptions['edit-provider'] ?? {})
+  check('40 picker label: duplicate display names get a route suffix',
+    dupLabels.includes('网关 (gw-aaa)') && dupLabels.includes('网关 (gw-bbb)'),
+    JSON.stringify(dupLabels))
+  check('40 picker label: suffixed label edits the right route',
+    dupOutcome === 'updated'
+      && eq(dupCalls.mutations, [['gw-bbb', [{ op: 'set', path: ['displayName'], value: '改名' }]]]),
+    JSON.stringify(dupCalls.mutations))
+
+  // Pathological: a display name that LITERALLY equals another row's
+  // suffixed label — the uniqueness pass re-suffixes until global.
+  const { deps: pathDeps, calls: pathCalls } = makeDeps({
+    'action': ACTION_EDIT,
+    'edit-provider': { selected: ['网关 (gw-bbb) (gw-ccc)'] },
+    'edit-menu': MENU_NAME,
+    'display-name': { custom: '再改' },
+  }, {
+    configured: [
+      { route: 'gw-aaa', ref: 'A_API_KEY', shadowed: false, isCatalog: false, displayName: '网关', models: ['m1'] },
+      { route: 'gw-bbb', ref: 'B_API_KEY', shadowed: false, isCatalog: false, displayName: '网关', models: ['m2'] },
+      { route: 'gw-ccc', ref: 'C_API_KEY', shadowed: false, isCatalog: false, displayName: '网关 (gw-bbb)', models: ['m3'] },
+    ],
+  })
+  const pathOutcome = await runProviderWizard(pathDeps)
+  const pathLabels = Object.keys(pathCalls.optionDescriptions['edit-provider'] ?? {})
+  check('40 picker label: literal suffix-lookalike name re-suffixed to unique',
+    pathLabels.length === 3
+      && pathLabels.includes('网关 (gw-aaa)')
+      && pathLabels.includes('网关 (gw-bbb) (gw-bbb)')
+      && pathLabels.includes('网关 (gw-bbb) (gw-ccc)'),
+    JSON.stringify(pathLabels))
+  check('40 picker label: pathological label edits the right route',
+    pathOutcome === 'updated'
+      && eq(pathCalls.mutations, [['gw-ccc', [{ op: 'set', path: ['displayName'], value: '再改' }]]]),
+    JSON.stringify(pathCalls.mutations))
+}
+
+// 41. disambiguation has no fixed pass cap: a five-row lookalike chain needs
+// FOUR suffix passes (each pass resolves one chain level), and every row must
+// still resolve to its own route afterwards.
+{
+  const { deps, calls } = makeDeps({
+    'action': ACTION_EDIT,
+    'edit-provider': { selected: ['网 (gw-2) (gw-3) (gw-4) (gw-5)'] },
+    'edit-menu': MENU_NAME,
+    'display-name': { custom: '链尾' },
+  }, {
+    configured: [
+      { route: 'gw-1', ref: 'G1_API_KEY', shadowed: false, isCatalog: false, displayName: '网', models: ['m1'] },
+      { route: 'gw-2', ref: 'G2_API_KEY', shadowed: false, isCatalog: false, displayName: '网', models: ['m2'] },
+      { route: 'gw-3', ref: 'G3_API_KEY', shadowed: false, isCatalog: false, displayName: '网 (gw-2)', models: ['m3'] },
+      { route: 'gw-4', ref: 'G4_API_KEY', shadowed: false, isCatalog: false, displayName: '网 (gw-2) (gw-3)', models: ['m4'] },
+      { route: 'gw-5', ref: 'G5_API_KEY', shadowed: false, isCatalog: false, displayName: '网 (gw-2) (gw-3) (gw-4)', models: ['m5'] },
+    ],
+  })
+  const outcome = await runProviderWizard(deps)
+  const chainLabels = Object.keys(calls.optionDescriptions['edit-provider'] ?? {})
+  check('41 picker label: five-row chain fully disambiguated (4 passes)',
+    chainLabels.length === 5
+      && chainLabels.includes('网 (gw-1)')
+      && chainLabels.includes('网 (gw-2) (gw-2)')
+      && chainLabels.includes('网 (gw-2) (gw-3) (gw-3)')
+      && chainLabels.includes('网 (gw-2) (gw-3) (gw-4) (gw-4)')
+      && chainLabels.includes('网 (gw-2) (gw-3) (gw-4) (gw-5)'),
+    JSON.stringify(chainLabels))
+  check('41 picker label: chain-tail selection edits the right route',
+    outcome === 'updated'
+      && eq(calls.mutations, [['gw-5', [{ op: 'set', path: ['displayName'], value: '链尾' }]]]),
     JSON.stringify(calls.mutations))
 }
 

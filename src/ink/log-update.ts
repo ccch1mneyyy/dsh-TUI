@@ -1190,9 +1190,18 @@ function moveCursorTo(screen: VirtualScreen, targetX: number, targetY: number) {
 function needsWidthCompensation(char: string): boolean {
   const cp = char.codePointAt(0)
   if (cp === undefined) return false
-  // U+1FA70-U+1FAFF: Symbols and Pictographs Extended-A (Unicode 12.0-15.0)
+  // All Supplementary Multilingual Plane emoji / pictographs (Unicode 6.0+)
+  // that legacy / basic wcwidth tables (e.g. headless xterm, older libc)
+  // treat as narrow (width 1):
+  if (cp >= 0x1f000 && cp <= 0x1faff) {
+    return true
+  }
   // U+1FB00-U+1FBFF: Symbols for Legacy Computing (Unicode 13.0)
-  if ((cp >= 0x1fa70 && cp <= 0x1faff) || (cp >= 0x1fb00 && cp <= 0x1fbff)) {
+  if (cp >= 0x1fb00 && cp <= 0x1fbff) {
+    return true
+  }
+  // Miscellaneous Symbols & Dingbats that render as wide emoji (0x2300-0x27BF, 0x2B00-0x2BFF)
+  if ((cp >= 0x2300 && cp <= 0x27bf) || (cp >= 0x2b00 && cp <= 0x2bff)) {
     return true
   }
   // Text-by-default emoji with VS16: scan for U+FE0F in multi-codepoint
