@@ -226,9 +226,10 @@ TypeScript 源的脚本在头部声明 `node --import tsx/esm <script>` 形式�
 `settled`，「等待后操作」用 `settle`。保留的固定 `sleep(` 必须带机读标签
 `固定窗:探针` / `固定窗:墙钟` / `固定窗:pacing`（定义见该文件头部），写在
 sleep 同行尾注释或紧贴上方的注释里。`verify:fixed-window` 门禁扫描
-`scripts/run-ci-group.mjs` 登记的脚本，无标签即失败；`固定窗:待迁移` 是登记
-在 `scripts/fixed-window.baseline.json` 里的存量技术债，只降不升，新代码不得
-使用。
+`scripts/run-ci-group.mjs` 登记的脚本，无标签即失败；`固定窗:待迁移` 是存量技术
+债（清零跟踪 #791），按文件计数锁在 `scripts/fixed-window.baseline.json`：任一
+文件增加即失败，旧债减少不能抵消；清掉一处后用 `--write-baseline` 重写基线并
+一起提交。新代码不得使用。
 
 部分脚本是取证/交互工具而非有界测试：堆/泄漏脚本、PTY 探针、回放捕获、
 性能探针与 `scripts/run.ts` 可能依赖特定 OS、终端、原生依赖、DSH 检出或长时

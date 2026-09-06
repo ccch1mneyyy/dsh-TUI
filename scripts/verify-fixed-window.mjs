@@ -9,18 +9,20 @@
  *   - 紧贴上方的注释块：`// 固定窗:探针 空提交不得发出请求` 后紧跟 sleep 行
  *     （多行注释块任一行含标签即可，块与 sleep 之间不能有空行/代码）
  *
- * `固定窗:待迁移` 是显式登记的技术债：数量必须与
- * scripts/fixed-window.baseline.json 完全一致——只降不升，降了就更新基线。
+ * `固定窗:待迁移` 是显式登记的技术债（跟踪 issue #791）：按文件计数，必须与
+ * scripts/fixed-window.baseline.json 逐文件完全一致——任一文件增加即失败
+ * （旧债不能抵消新债），减少则用 --write-baseline 重写基线一起提交。
  *
  * 用法：
- *   node scripts/verify-fixed-window.mjs            # 门禁模式，全部登记脚本
- *   node scripts/verify-fixed-window.mjs a.tsx b.mjs # 只检查指定文件（打标时自查）
- *   node scripts/verify-fixed-window.mjs --list      # 列出每个标签的现场（不判失败）
+ *   node scripts/verify-fixed-window.mjs                  # 门禁模式，全部登记脚本
+ *   node scripts/verify-fixed-window.mjs a.tsx b.mjs       # 只检查指定文件（打标时自查）
+ *   node scripts/verify-fixed-window.mjs --list            # 列出每个标签的现场（不判失败）
+ *   node scripts/verify-fixed-window.mjs --write-baseline  # 按当前待迁移分布重写基线
  *
  * 只做文本匹配：跳过 sleep 的定义/导入行与注释行，不跳过任何调用。
  * 轮询循环里的 sleep 也要求处理——应改用 term-test 的 settle/settled。
  */
-import { readFileSync } from 'node:fs'
+import { readFileSync, writeFileSync } from 'node:fs'
 import { resolve, relative } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -36,6 +38,7 @@ const COMMENT_LINE_RE = /^\s*(?:\/\/|\/\*|\*)/
 
 const argv = process.argv.slice(2)
 const listMode = argv.includes('--list')
+const writeBaseline = argv.includes('--write-baseline')
 const explicit = argv.filter(a => !a.startsWith('--'))
 
 function registeredScripts() {
@@ -89,6 +92,8 @@ const missing = []
 const unknown = []
 const counts = Object.fromEntries(TAGS.map(t => [t, 0]))
 const byTag = Object.fromEntries(TAGS.map(t => [t, []]))
+/** @type {Record<string, number>} 待迁移按文件计数（相对路径，排序后写入基线） */
+const pendingByFile = {}
 let total = 0
 
 for (const file of files) {
@@ -106,6 +111,7 @@ for (const file of files) {
       if (!TAGS.includes(tag)) { unknown.push(`${loc} 固定窗:${tag}`); continue }
       counts[tag]++
       byTag[tag].push(loc)
+      if (tag === '待迁移') pendingByFile[rel] = (pendingByFile[rel] ?? 0) + 1
     }
   }
 }
@@ -132,24 +138,43 @@ if (unknown.length) {
   for (const loc of unknown) console.error(`  ${loc}`)
 }
 
-if (!explicit.length) {
-  let baseline
-  try { baseline = JSON.parse(readFileSync(BASELINE, 'utf8')) } catch (err) {
-    console.error(`verify-fixed-window: 无法读取基线 ${relative(ROOT, BASELINE)}: ${err.message}`)
+const sortedPending = Object.fromEntries(Object.keys(pendingByFile).sort().map(k => [k, pendingByFile[k]]))
+const baselineRel = relative(ROOT, BASELINE)
+
+if (writeBaseline) {
+  if (explicit.length) {
+    console.error('verify-fixed-window: --write-baseline 必须对全部登记脚本运行，不能带文件参数')
     process.exit(1)
   }
-  const expected = baseline['固定窗:待迁移']
-  const actual = counts['待迁移']
-  if (typeof expected !== 'number') {
+  writeFileSync(BASELINE, JSON.stringify(sortedPending, null, 2) + '\n')
+  console.log(`verify-fixed-window: 基线已重写 ${baselineRel}（${Object.keys(sortedPending).length} 个文件，${counts['待迁移']} 处待迁移）`)
+} else if (!explicit.length) {
+  let baseline
+  try { baseline = JSON.parse(readFileSync(BASELINE, 'utf8')) } catch (err) {
+    console.error(`verify-fixed-window: 无法读取基线 ${baselineRel}: ${err.message}`)
+    process.exit(1)
+  }
+  const grew = []
+  const shrank = []
+  for (const file of new Set([...Object.keys(baseline), ...Object.keys(sortedPending)])) {
+    const expected = baseline[file] ?? 0
+    const actual = sortedPending[file] ?? 0
+    if (actual > expected) grew.push(`${file}: 基线 ${expected} → 实际 ${actual}`)
+    else if (actual < expected) shrank.push(`${file}: 基线 ${expected} → 实际 ${actual}`)
+  }
+  if (grew.length) {
     failed = true
-    console.error(`verify-fixed-window: 基线缺少 "固定窗:待迁移" 数字字段`)
-  } else if (actual > expected) {
+    console.error('verify-fixed-window: 固定窗:待迁移 超出基线——新代码不得新增待迁移，改用 settled（旧债减少不能抵消）：')
+    for (const line of grew) console.error(`  ${line}`)
+    const grownFiles = new Set(grew.map(line => line.slice(0, line.indexOf(':'))))
+    for (const loc of byTag['待迁移']) {
+      if (grownFiles.has(loc.slice(0, loc.lastIndexOf(':')))) console.error(`    ${loc}`)
+    }
+  }
+  if (shrank.length) {
     failed = true
-    console.error(`verify-fixed-window: 固定窗:待迁移 从基线 ${expected} 升到 ${actual}——新代码不得新增待迁移，改用 settled。`)
-    for (const loc of byTag['待迁移']) console.error(`  ${loc}`)
-  } else if (actual < expected) {
-    failed = true
-    console.error(`verify-fixed-window: 固定窗:待迁移 从基线 ${expected} 降到 ${actual}——请把 ${relative(ROOT, BASELINE)} 更新为 ${actual}。`)
+    console.error(`verify-fixed-window: 固定窗:待迁移 少于基线——请运行 --write-baseline 重写 ${baselineRel} 并一起提交（跟踪 issue #791）：`)
+    for (const line of shrank) console.error(`  ${line}`)
   }
 }
 
