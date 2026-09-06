@@ -858,9 +858,11 @@ export function Chat({
       if (!handle) return true
       // A transcript that fits the viewport always shows the header.
       if (handle.getScrollHeight() <= handle.getViewportHeight()) return true
-      // Sticky means pinned to the newest rows — the header is above the
-      // fold. Otherwise it is visible while the art block intersects.
-      return !handle.isSticky() && handle.getScrollTop() < WHALE_ART_CUTOFF_ROWS
+      // Visible while the art block intersects the viewport. A sticky bottom
+      // pin with an overflow smaller than the art's height still leaves the
+      // art on screen — visibility, not pin state, decides whether the idle
+      // planner earns its keep.
+      return handle.getScrollTop() < WHALE_ART_CUTOFF_ROWS
     },
   )
   const subscribeTooltipInvalidation = React.useCallback(

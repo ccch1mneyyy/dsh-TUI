@@ -232,26 +232,25 @@ function gridRows(pose) {
 {
   let state = initialWhaleIdleState(0)
   let now = 0
-  for (let i = 0; i < 200; i++) {
+  let during = null
+  for (let i = 0; i < 200 && during === null; i++) {
     const step = nextWhaleIdleStep(state, { working: false, heart: false }, now)
     state = step.state
     now += step.delayMs
     // Sample only once the Z is actually cycling (the settle frame plays
     // without a Z by design, so a thump coinciding there is legitimate).
     if (state.asleep && state.sleepStep >= 1 && now >= state.thumpAt) {
-      // Drive into the thump pass: the next steps must show tail > 0 while
+      // Drive into the thump pass: the next step must show tail > 0 while
       // the sleep layer keeps cycling.
-      const during = nextWhaleIdleStep(state, { working: false, heart: false }, now)
-      if (during.pose.tail > 0) {
-        check('PARALLEL: asleep tail thump plays under the sleep-Z', () => {
-          assert.equal(during.state.asleep, true)
-          assert.ok(during.pose.sleep >= 1, 'sleep-Z stays up under the pass')
-        })
-        break
-      }
+      const probe = nextWhaleIdleStep(state, { working: false, heart: false }, now)
+      if (probe.pose.tail > 0) during = probe
     }
-    now += step.delayMs
   }
+  check('PARALLEL: asleep tail thump plays under the sleep-Z', () => {
+    assert.ok(during !== null, 'a tail thump never coincided with a cycling Z')
+    assert.equal(during.state.asleep, true)
+    assert.ok(during.pose.sleep >= 1, 'sleep-Z stays up under the pass')
+  })
 }
 
 // ── 8. Click wakes the sleeping whale (heart plays, Z cleared) ────────────

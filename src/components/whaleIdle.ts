@@ -172,12 +172,14 @@ export function nextWhaleIdleStep(
 
   // Sleep plane — sticky while idle: work or a click clears it (a click
   // wakes the whale AND plays the heart pass), and both re-arm the sleep
-  // delay so it dozes off again only after a fresh idle stretch.
+  // delay so it dozes off again only after a fresh idle stretch. A click
+  // counts as activity even when the whale is awake: it must not fall
+  // asleep mid-heart-pass (a click at sleepAt - 500ms would otherwise).
   let asleep = prev.asleep
   let sleepStep = prev.sleepStep
   let sleepHoldUntil = prev.sleepHoldUntil
   let sleepAt = prev.sleepAt
-  if (input.working || (input.heart && asleep)) {
+  if (input.working || input.heart) {
     if (asleep || sleepStep >= 0) {
       asleep = false
       sleepStep = -1
