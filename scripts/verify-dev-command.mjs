@@ -1,11 +1,13 @@
 #!/usr/bin/env node
 import assert from 'node:assert/strict'
+import { spawnSync } from 'node:child_process'
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, win32 } from 'node:path'
 import { commandInvocation } from './dev-command.mjs'
 import { copyDevConfig, resolveDevPaths } from './dev-copy-config.mjs'
 import { computeDevFingerprints, readDevLoopCache, writeDevLoopCache } from './dev-fingerprint.mjs'
+import { acquireDevLoopLock } from './dev-lock.mjs'
 
 const unixArgs = ['--profile', 'dsh-tui', '/tmp/work tree']
 assert.deepEqual(commandInvocation('dsh', unixArgs, 'linux'), ['dsh', unixArgs])
@@ -134,6 +136,40 @@ try {
     assert.deepEqual(readDevLoopCache(devRoot, fixture), { ...binEdit, installed: binEdit.pkg })
     assert.equal(readDevLoopCache(devRoot, join(fixture, 'other-worktree')), null)
     assert.equal(readDevLoopCache(join(fixture, 'no-such-root'), fixture), null)
+  } finally {
+    rmSync(fixture, { recursive: true, force: true })
+  }
+}
+
+// --- dev-lock: mutex acquisition, contention timeout, stale-owner recovery
+{
+  const fixture = mkdtempSync(join(tmpdir(), 'dsh-tui-dev-lock-'))
+  try {
+    const lockDir = join(fixture, 'dev-loop.lock')
+
+    const release = acquireDevLoopLock(fixture)
+    assert.throws(
+      () => acquireDevLoopLock(fixture, { waitMs: 400 }),
+      /holds the dev-loop lock/u,
+      'live owner must block a second acquisition'
+    )
+    release()
+    acquireDevLoopLock(fixture, { waitMs: 400 })()
+
+    // dead owner pid → stale lock broken and reacquired
+    const { pid: deadPid } = spawnSync(process.execPath, ['-e', ''])
+    mkdirSync(lockDir)
+    writeFileSync(join(lockDir, 'pid'), String(deadPid))
+    acquireDevLoopLock(fixture, { waitMs: 400 })()
+
+    // fresh lock without a pid file (creator mid-write) must not be broken
+    mkdirSync(lockDir)
+    assert.throws(
+      () => acquireDevLoopLock(fixture, { waitMs: 400 }),
+      /holds the dev-loop lock/u,
+      'pid-less fresh lock must be given the grace window'
+    )
+    rmSync(lockDir, { recursive: true, force: true })
   } finally {
     rmSync(fixture, { recursive: true, force: true })
   }
