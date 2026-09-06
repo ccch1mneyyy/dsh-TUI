@@ -10,6 +10,19 @@
  * appends into that input row (single-select also attaches the option's
  * label, so the answer can carry both `selected` and `custom`); focusing
  * the input row itself and typing gives a pure custom answer.
+ *
+ * Paste works on the input row like the composer: Ctrl+V/Alt+V (the keymap
+ * `paste` binding, remappable in /settings) reads the system clipboard,
+ * and a terminal bracketed paste (Ctrl+Shift+V / right-click / terminals
+ * that intercept Ctrl+V) inserts its chunk — newlines and control chars are
+ * flattened to spaces, pasted content never submits the panel. Editing
+ * state (value + caret) lives in refs mutated synchronously per event: a
+ * terminal delivers one stdin chunk as several key events inside a single
+ * React batch, and the clipboard read resolves asynchronously — state
+ * queued by one event is invisible to the next, and a paste must land at
+ * the caret the user actually sees. The caret counts CODE POINTS (`[...s]`
+ * iteration, same contract as the plugin InputDialog), so an emoji can
+ * never be split into a lone surrogate by ←/→/⌫/Del or a paste boundary.
  */
 
 import React from 'react'
@@ -21,11 +34,25 @@ import { POINTER } from '../../cc/figures.js'
 import type { QuestionDraft, QuestionSelection } from '../../dsh-adapter/questions.js'
 import { PlanReviewPanel } from './PlanReviewPanel.js'
 import { isPlainReturnInput } from '../../utils/modifiers.js'
+import { actionMatches } from '../../utils/keymap.js'
+import { flattenPasteInline } from '../../dsh-adapter/sanitize.js'
+import { readClipboard, type ClipboardRead } from '../../utils/clipboard.js'
 import { listWindow } from '../listWindow.js'
 
 const CHECKED = '◉'
 const UNCHECKED = '○'
 const PENCIL = '✎'
+
+/**
+ * Paste cap for one answer field, in code points. Typing is naturally
+ * bounded (humans cannot type unboundedly) and the protocol places no
+ * limit on `custom`, but a stray Ctrl+V of a file/log must not inflate the
+ * panel to hundreds of wrapped rows (every keystroke then re-lays them
+ * out) or ship a megabyte answer. Deliberately generous — anything past it
+ * is an accident, and the inline error says exactly that. Twin constant in
+ * PlanReviewPanel (the two panels share the same input contract).
+ */
+const ANSWER_PASTE_MAX_POINTS = 8000
 
 export type AskUserQuestionPanelProps = {
   /** The question to render (from the QuestionStore snapshot). */
@@ -60,6 +87,12 @@ export type AskUserQuestionPanelProps = {
   readonly onCancel: () => void
   /** Esc on later questions — navigates to the previous question. */
   readonly onBack?: (draft: QuestionDraft) => void
+  /**
+   * Test seam: clipboard reader for the Ctrl+V paste arm. Defaults to the
+   * real cross-platform reader (PowerShell/pbpaste/wl-paste…); headless
+   * verification injects a fake so paste outcomes are deterministic.
+   */
+  readonly readClipboardOverride?: () => Promise<ClipboardRead>
 }
 
 export function AskUserQuestionPanel({
@@ -71,12 +104,18 @@ export function AskUserQuestionPanel({
   onAnswer,
   onCancel,
   onBack,
+  readClipboardOverride,
 }: AskUserQuestionPanelProps): React.ReactNode {
   // Plan-mode's exit_plan_mode ask carries a presentation intent: render
   // the CC-style decision card instead of the generic questionnaire. The
   // branch precedes every hook so hook order stays stable per remount key.
   if (question.intent?.kind === 'plan-review') {
-    return <PlanReviewPanel question={question} onAnswer={onAnswer} onCancel={onCancel} />
+    return <PlanReviewPanel
+      question={question}
+      onAnswer={onAnswer}
+      onCancel={onCancel}
+      readClipboardOverride={readClipboardOverride}
+    />
   }
   const options = question.options ?? []
   const multiSelect = question.multiSelect === true
@@ -102,7 +141,28 @@ export function AskUserQuestionPanel({
     () => new Set(multiSelect ? selectedIndices : []),
   )
   const [customText, setCustomText] = React.useState(initialCustom)
-  const [customCursor, setCustomCursor] = React.useState(initialCustom.length)
+  const [customCursor, setCustomCursor] = React.useState(() => [...initialCustom].length)
+  // Synchronous source of truth for the handlers (see the module header):
+  // keys of one stdin batch share a single React update, and the clipboard
+  // read resolves asynchronously — the state mirrors exist only to re-render.
+  const textRef = React.useRef(initialCustom)
+  const cursorRef = React.useRef([...initialCustom].length)
+  /** Single choke point for every text/caret mutation: refs first, then the
+   *  state mirrors so the render sees the committed value. */
+  const applyText = (nextText: string, nextCursor: number): void => {
+    textRef.current = nextText
+    cursorRef.current = nextCursor
+    setCustomText(nextText)
+    setCustomCursor(nextCursor)
+  }
+  /** True while the component is mounted (async clipboard continuation
+   *  guard: the panel can unmount when the user answers before the read
+   *  resolves). */
+  const mountedRef = React.useRef(true)
+  React.useEffect(() => () => { mountedRef.current = false }, [])
+  /** True while a clipboard read is in flight (ignore repeat Ctrl+V). */
+  const pasteBusyRef = React.useRef(false)
+  const clipboardReader = readClipboardOverride ?? readClipboard
   /** Single-select label captured by typing on a focused option — submitted
    *  together with the custom text when the input row itself is Entered. */
   const [attached, setAttached] = React.useState<string | null>(
@@ -150,20 +210,81 @@ export function AskUserQuestionPanel({
 
   /** Append at the text tail (option-row typing has no visible cursor). */
   const appendText = (text: string): void => {
-    setCustomText(previous => previous + text)
-    setCustomCursor(previous => previous + text.length)
+    applyText(textRef.current + text, cursorRef.current + [...text].length)
     setError(null)
   }
 
-  /** Drop the character before the cursor; empty text drops the attach. */
+  /** Drop the character before the caret; empty text drops the attach. */
   const backspaceText = (): void => {
-    if (customCursor <= 0) return
-    setCustomText(previous => {
-      const next = previous.slice(0, customCursor - 1) + previous.slice(customCursor)
-      if (next === '') setAttached(null)
-      return next
-    })
-    setCustomCursor(cursor => cursor - 1)
+    const points = [...textRef.current]
+    const at = cursorRef.current
+    if (at <= 0) return
+    points.splice(at - 1, 1)
+    const next = points.join('')
+    if (next === '') setAttached(null)
+    applyText(next, at - 1)
+  }
+
+  /**
+   * Paste-path entry shared by both transports (bracketed-paste chunk and
+   * the async clipboard read). Single-line field: newlines and control
+   * chars flatten to spaces; a chunk with nothing visible (blank lines or
+   * stray controls only) inserts nothing, and one past the cap is refused
+   * (never truncated — the user must see that text was dropped). Where the
+   * text lands mirrors plain typing — at the caret while the input row is
+   * focused, appended at the tail (and the option's label attached,
+   * single-select) when typing on an option row would append.
+   * @returns 'ok' | 'empty' (nothing visible to insert) | 'too-long'
+   */
+  const insertPastedText = (raw: string, atCaret: boolean): 'ok' | 'empty' | 'too-long' => {
+    const text = flattenPasteInline(raw)
+    if (text.trim() === '') return 'empty'
+    if ([...text].length > ANSWER_PASTE_MAX_POINTS) return 'too-long'
+    const points = [...textRef.current]
+    const at = atCaret ? cursorRef.current : points.length
+    points.splice(at, 0, ...text)
+    applyText(points.join(''), at + [...text].length)
+    if (!atCaret && !multiSelect) setAttached(options[focusIndex]?.label ?? null)
+    return 'ok'
+  }
+
+  /** Inline error for an over-cap paste (shared by both transports). */
+  const pasteTooLongError = (): string =>
+    t('question-paste-too-long', { n: ANSWER_PASTE_MAX_POINTS })
+
+  /** Ctrl+V/Alt+V arm: read the system clipboard and insert its text. */
+  const pasteFromClipboard = (): void => {
+    if (pasteBusyRef.current) return
+    pasteBusyRef.current = true
+    // Option-row typing appends at the tail; capture which semantics the
+    // keypress asked for — the read resolves later, after the user may
+    // have moved focus or typed (the refs make either safe).
+    const atCaret = inputFocused
+    void clipboardReader()
+      .then(content => {
+        if (!mountedRef.current) return
+        if (content === null || content.kind === 'unavailable') {
+          setError(t(content === null ? 'input-clipboard-empty' : 'input-clipboard-unavailable'))
+          return
+        }
+        if (content.kind !== 'text') {
+          // File/image offers have no text form in an answer field.
+          setError(t('question-paste-not-text'))
+          return
+        }
+        if (content.text === '') {
+          setError(t('input-clipboard-empty'))
+          return
+        }
+        const result = insertPastedText(content.text, atCaret)
+        setError(result === 'too-long' ? pasteTooLongError() : null)
+      })
+      .catch(() => {
+        if (mountedRef.current) setError(t('input-clipboard-read-failed'))
+      })
+      .finally(() => {
+        pasteBusyRef.current = false
+      })
   }
 
   const checkedLabels = (): string[] =>
@@ -172,7 +293,7 @@ export function AskUserQuestionPanel({
 
   /** Enter on a real option: the option(s) plus whatever the input row holds. */
   const submitOptions = (): void => {
-    const text = customText.trim()
+    const text = textRef.current.trim()
     if (multiSelect) {
       const selected = checkedLabels()
       if (selected.length === 0 && text === '') {
@@ -193,7 +314,7 @@ export function AskUserQuestionPanel({
   /** Enter on the input row itself: the text, plus the attached label (or
    *  the checked labels for multi-select) when there is one. */
   const submitInput = (): void => {
-    const text = customText.trim()
+    const text = textRef.current.trim()
     if (multiSelect) {
       const selected = checkedLabels()
       if (selected.length === 0 && text === '') {
@@ -222,7 +343,7 @@ export function AskUserQuestionPanel({
           })()
     return {
       selected,
-      ...(customText !== '' ? { custom: customText } : {}),
+      ...(textRef.current !== '' ? { custom: textRef.current } : {}),
     }
   }
 
@@ -234,6 +355,29 @@ export function AskUserQuestionPanel({
     if (key.escape) {
       if (onBack !== undefined) onBack(currentDraft())
       else onCancel()
+      return
+    }
+
+    // ── Paste ─────────────────────────────────────────────────────────
+    // A bracketed paste (terminal Ctrl+Shift+V / right-click / a terminal
+    // that intercepts Ctrl+V) arrives as ONE chunk flagged isPasted. Where
+    // it lands mirrors plain typing: on an option row it appends at the
+    // tail (and attaches the option's label, single-select), on the input
+    // row it inserts at the caret. It never submits — a chunk that is all
+    // line breaks is text, not an Enter press (isPlainReturnInput refuses
+    // pastes; the flattened text may also be empty → nothing to insert).
+    if (key.isPasted === true) {
+      if (!hideCustomInput && input !== '') {
+        const result = insertPastedText(input, inputFocused)
+        setError(result === 'too-long' ? pasteTooLongError() : null)
+      }
+      return
+    }
+    // Clipboard paste (default Ctrl+V / Alt+V — the keymap `paste`
+    // binding, remappable in /settings): raw mode hands the key to the
+    // app, so the clipboard is read here (mirrors the composer's arm).
+    if (actionMatches('paste', input, key)) {
+      if (!hideCustomInput) pasteFromClipboard()
       return
     }
 
@@ -255,34 +399,39 @@ export function AskUserQuestionPanel({
         return
       }
       if (key.delete) {
-        if (customCursor < customText.length) {
-          setCustomText(text => {
-            const next = text.slice(0, customCursor) + text.slice(customCursor + 1)
-            if (next === '') setAttached(null)
-            return next
-          })
+        const points = [...textRef.current]
+        const at = cursorRef.current
+        if (at < points.length) {
+          points.splice(at, 1)
+          const next = points.join('')
+          if (next === '') setAttached(null)
+          applyText(next, at)
         }
         return
       }
       if (key.leftArrow) {
-        setCustomCursor(cursor => Math.max(0, cursor - 1))
+        applyText(textRef.current, Math.max(0, cursorRef.current - 1))
         return
       }
       if (key.rightArrow) {
-        setCustomCursor(cursor => Math.min(customText.length, cursor + 1))
+        applyText(textRef.current, Math.min([...textRef.current].length, cursorRef.current + 1))
         return
       }
       if (key.home) {
-        setCustomCursor(0)
+        applyText(textRef.current, 0)
         return
       }
       if (key.end) {
-        setCustomCursor(customText.length)
+        applyText(textRef.current, [...textRef.current].length)
         return
       }
       if (!key.ctrl && !key.meta && !key.super && input) {
-        setCustomText(text => text.slice(0, customCursor) + input + text.slice(customCursor))
-        setCustomCursor(cursor => cursor + input.length)
+        // Ordinary typing at the live caret (a text run may carry several
+        // characters in one event — e.g. an unbracketed terminal paste).
+        const points = [...textRef.current]
+        const at = cursorRef.current
+        points.splice(at, 0, ...input)
+        applyText(points.join(''), at + [...input].length)
         setError(null)
       }
       return
@@ -317,7 +466,7 @@ export function AskUserQuestionPanel({
     }
     if (key.backspace) {
       // Edit the input row without leaving the option list.
-      if (!hideCustomInput && customText !== '') backspaceText()
+      if (!hideCustomInput && textRef.current !== '') backspaceText()
       return
     }
     // Typing on an option appends into the input row; single-select also
@@ -331,7 +480,11 @@ export function AskUserQuestionPanel({
   const remaining = total - answered
   const headerTitle = ` ${t('question-header-progress', { position, total, remaining: remaining > 1 ? t('question-remaining-more', { n: remaining }) : '' })} `
 
-  const cursorChar = customCursor < customText.length ? customText[customCursor] : ' '
+  // The caret counts code points (see the module header), so the caret
+  // char and the visual split index into the point array — never raw
+  // UTF-16 offsets, which could land inside a surrogate pair.
+  const textPoints = [...customText]
+  const cursorChar = customCursor < textPoints.length ? textPoints[customCursor] : ' '
   /** Mouse: click the input row to focus it (same as Tab). */
   const focusInputRow = (): void => {
     if (hideCustomInput) return
@@ -356,7 +509,7 @@ export function AskUserQuestionPanel({
     }
     const label = options[index]?.label
     if (label === undefined) return
-    const text = customText.trim()
+    const text = textRef.current.trim()
     onAnswer({ selected: [label], ...(text !== '' ? { custom: text } : {}) })
   }
   const [hoverIndex, setHoverIndex] = React.useState(-1)
@@ -389,11 +542,11 @@ export function AskUserQuestionPanel({
           <Text ref={caretRef} dimColor>{t('question-direct-input')}</Text>
         ) : (
           <>
-            <Text wrap="wrap">{customText.slice(0, customCursor)}</Text>
+            <Text wrap="wrap">{textPoints.slice(0, customCursor).join('')}</Text>
             {inputFocused
               ? <Text ref={caretRef} inverse>{cursorChar}</Text>
               : <Text ref={caretRef} color="suggestion">▏</Text>}
-            <Text wrap="wrap">{customText.slice(inputFocused ? customCursor + 1 : customCursor)}</Text>
+            <Text wrap="wrap">{textPoints.slice(inputFocused ? customCursor + 1 : customCursor).join('')}</Text>
           </>
         )}
       </Box>
@@ -461,6 +614,7 @@ export function AskUserQuestionPanel({
   const hintParts = inputFocused
     ? [
         t('question-hint-type'),
+        t('question-hint-paste'),
         t('question-hint-enter'),
         ...(options.length > 0 ? [t('question-hint-back')] : []),
         onBack === undefined ? t('question-hint-esc') : t('question-hint-previous'),
@@ -470,7 +624,7 @@ export function AskUserQuestionPanel({
     : [
         t('question-hint-select'),
         ...(multiSelect ? [t('question-hint-multi')] : []),
-        ...(hideCustomInput ? [] : [t('question-hint-attach')]),
+        ...(hideCustomInput ? [] : [t('question-hint-paste'), t('question-hint-attach')]),
         t('question-hint-enter'),
         onBack === undefined ? t('question-hint-esc') : t('question-hint-previous'),
         ...(onBack === undefined ? [] : [t('question-hint-cancel')]),

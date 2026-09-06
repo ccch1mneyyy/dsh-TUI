@@ -846,8 +846,8 @@ const screen = (back = 30) => plainText(stdout.frames.slice(-back))
 }
 
 // Bracketed paste: a chunk that is all line breaks is TEXT, not an Enter
-// press (isPasted lives on the InputEvent, not the key) — the confirm must
-// survive it, on its default Yes focus.
+// press (the parsed key carries isPasted; modal confirms must survive it) —
+// the confirm must not fire on its default Yes focus.
 {
   const pending = plugin.tuiDialogs.confirm({ title: '粘贴确认' })
   await settle(() => screen().includes('粘贴确认'))
