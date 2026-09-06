@@ -30,7 +30,7 @@ const BASELINE = resolve(ROOT, 'scripts/fixed-window.baseline.json')
 
 const TAGS = ['探针', '墙钟', 'pacing', '待迁移']
 const TAG_RE = /固定窗:([^\s,，。;；)）]+)/g
-const CALL_RE = /\bsleep\s*\(/
+const CALL_RE = /\bsleep\s*\(/g
 const DEF_RE = /(?:\b(?:const|let|var|function)\s+sleep\b|\bsleep\s*=\s*(?:\(|async|\w+\s*=>)|\bimport\b[^\n]*\bsleep\b|^\s*sleep\s*,?\s*$)/
 const COMMENT_LINE_RE = /^\s*(?:\/\/|\/\*|\*)/
 
@@ -64,7 +64,8 @@ function scan(file) {
     }
     if (trimmed.startsWith('/*') && !trimmed.includes('*/')) { inBlock = true; continue }
     if (COMMENT_LINE_RE.test(line)) continue
-    if (!CALL_RE.test(line)) continue
+    const calls = line.match(CALL_RE)?.length ?? 0
+    if (calls === 0) continue
     if (DEF_RE.test(line)) continue
     // 排除字符串/注释里的伪调用不做——出现即视为调用点，宁严勿漏。
     // 同行标签：尾部 // 或 /* */ 都算，整行扫描即可。
@@ -76,7 +77,8 @@ function scan(file) {
       if (lines[j].trim().startsWith('/*')) break
       j--
     }
-    sites.push({ line: i + 1, tags })
+    // 同一行多个 sleep( 调用共用该行的标签，但按调用点各记一处。
+    for (let k = 0; k < calls; k++) sites.push({ line: i + 1, tags })
   }
   return sites
 }
