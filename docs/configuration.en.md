@@ -50,7 +50,7 @@ A complete common override looks like this:
 | `model` | Harness `agentDefaultModel`; bare compositions fall back to `deepseek-v4-flash` | Startup model; `/model` can switch through a session fork |
 | `cwd` | git worktree root containing the launch directory (`process.cwd()` when outside any worktree; a dotfiles repo at `$HOME` does not count) | TUI-side session workspace: agent meta, `@` completion/mention expansion, /resume filtering, statusline; resuming an existing session adopts that session's persisted cwd. Note the bash/fs-policy/sandbox roots are still owned by the composition layer's cordis config (default: the launch directory, governed by dsh-base) and may differ from this session-side cwd |
 | `workspace` | unset | Startup workspace target: a local path, `file://` URL, or plugin-provided URI; takes precedence over `cwd` |
-| `effort` | normally `max` in the bundle | Reasoning effort applied to every request (validated against the runtime model's levels; invalid levels silently fall back to the adapter default and the configured value wins over the persisted `/effort` choice), also shown in the header at startup |
+| `effort` | normally `max` in the bundle | Reasoning effort applied to every request (validated against the runtime model's levels; invalid levels silently fall back to the adapter default), also shown in the header at startup. Precedence: /settings default reasoning effort `effortDefault` (settings.yaml user layer; `auto` defers) > this field > the persisted `/effort` choice (`~/.dsh-tui/effort.json`) > the model default |
 | `modes` | built-in trio | Shift+Tab session-mode cycle (plan/sandbox/approval atom bundles); defaults to default → plan → full-access |
 | `activity` | `true` | Show the live activity row |
 | `activityFrames` | persisted choice or `claude` | Activity animation preset; `/activity` changes it at runtime |
@@ -168,6 +168,7 @@ for the complete field reference.
 | `DSH_TUI_PRESET` | Override the default Agent preset for new sessions |
 | `DSH_TUI_THEME` | Pin a built-in (`auto`/`light`/`dark`/`dark-ansi`), static theme, or registered plugin theme ahead of persisted selection |
 | `DSH_TUI_DISABLE_MOUSE` | Temporarily disable mouse handling in fullscreen mode |
+| `DSH_TUI_DISABLE_TERMINAL_IMAGES` | Disable the Kitty graphics probe and terminal image rendering; images show only their same-size text fallback |
 | `DSH_TUI_RESUME_SESSION` | Resume a session at startup, normally set by a launcher |
 | `DSH_TUI_WORKSPACE_TARGET` | Workspace path or URI resolved at startup, normally set by `dsh-tui <target>` |
 | `DSH_TUI_SESSION_ROOT` | Override the JSONL session root; profile default `$DSH_HOME/sessions`, bare `cordis.yml` default `~/.dsh-tui/sessions` |

@@ -50,7 +50,6 @@ function snapshot(): EditorNode {
  */
 export function PromptEditorLayer(): React.ReactNode {
   const node = React.useSyncExternalStore(subscribe, snapshot)
-  if (node === null) return null
   // Full-bleed cover: under PageMargin the Chat root box starts at the
   // content origin, so the editor must extend into the page margins up to
   // the terminal edges — the editor is a whole-screen surface, and the
@@ -58,6 +57,7 @@ export function PromptEditorLayer(): React.ReactNode {
   // bleed through.
   const inset = usePageInset()
   const size = useTerminalSize()
+  if (node === null) return null
   return (
     <Box
       position="absolute"
@@ -68,6 +68,7 @@ export function PromptEditorLayer(): React.ReactNode {
       flexDirection="column"
       flexShrink={0}
       overflow="hidden"
+      backgroundColor="clawd_background"
       opaque
       onClick={(event) => {
         event.stopImmediatePropagation()

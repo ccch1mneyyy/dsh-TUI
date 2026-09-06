@@ -22,6 +22,8 @@ export type RenderOptions = {
   terminalWidth: number
   terminalRows: number
   altScreen: boolean
+  /** Whether terminal graphics are active for this paint pass. */
+  terminalImages?: boolean
   // True when the previous frame's screen buffer was mutated post-render
   // (selection overlay), reset to blank (alt-screen enter/resize/SIGCONT),
   // or reset to 0×0 (forceRedraw). Blitting from such a prevScreen would
@@ -123,9 +125,22 @@ export default function createRenderer(
       backScreen ??
       createScreen(width, height, stylePool, charPool, hyperlinkPool)
     if (output) {
-      output.reset(width, height, screen)
+      output.reset(
+        width,
+        height,
+        screen,
+        options.terminalImages,
+        frontFrame.images,
+      )
     } else {
-      output = new Output({ width, height, stylePool, screen })
+      output = new Output({
+        width,
+        height,
+        stylePool,
+        screen,
+        terminalImages: options.terminalImages,
+        previousImages: frontFrame.images,
+      })
     }
 
     resetLayoutShifted()
@@ -181,6 +196,7 @@ export default function createRenderer(
           : null,
       scrollDrainPending: drainNode !== null,
       poisonNextFrame: overlayVacated,
+      images: output.getImages(),
       screen: renderedScreen,
       viewport: {
         width: terminalWidth,

@@ -247,6 +247,12 @@ const fileA = join(fakeHome, 'ledger-a.jsonl')
   const disposeStatus = status.set('alpha-line', 'v1', alpha)
   status.set('alpha-line', 'v2', alpha)
   disposeStatus() // v1 的 disposer 已被 v2 取代 → 不得再落 release
+  const disposeStatusView = status.registerView({
+    key: 'alpha-rich',
+    maxRows: 2,
+    component: () => null,
+  }, alpha)
+  disposeStatusView?.()
 
   new TuiThemeRuntime(ctx)
   const themes = alpha.get('tuiThemes') as InstanceType<typeof TuiThemeRuntime>
@@ -282,6 +288,10 @@ const fileA = join(fakeHome, 'ledger-a.jsonl')
   const replace = statusRecords.find(r => r.operation === 'replace')
   check1('status overwrite records replace with replaces.resourceId', replace?.replaces?.resourceId === 'alpha-line')
   check1('stale status disposer records nothing', !statusRecords.some(r => r.operation === 'release'))
+  const statusViewRecords = byKind('status', 'alpha-rich')
+  check1('rich status registration records bind + release',
+    statusViewRecords.some(r => r.operation === 'bind' && r.result === 'applied')
+    && statusViewRecords.some(r => r.operation === 'release' && r.result === 'applied'))
 
   const themeRecords = byKind('theme', 'alpha:theme')
   check1('runtime theme register records create with the plugin identity',
@@ -353,6 +363,8 @@ const fileA = join(fakeHome, 'ledger-a.jsonl')
     identityParam('src/dsh-adapter/scenes.ts', 'descriptor: TuiSceneDescriptor'))
   check1('tuiStatus.set takes the optional identity param',
     identityParam('src/dsh-adapter/status.ts', "text: string | number | boolean | undefined"))
+  check1('tuiStatus.registerView takes the optional identity param',
+    identityParam('src/dsh-adapter/status.ts', 'descriptor: TuiStatusViewDescriptor'))
   check1('tuiRenderers.register takes the optional identity param',
     identityParam('src/dsh-adapter/renderers.ts', 'renderer: TuiEntryRenderer'))
   check1('tuiThemes.register takes the optional identity param',

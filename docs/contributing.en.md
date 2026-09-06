@@ -256,6 +256,7 @@ change, also run the closest focused script:
 | Compaction and folded transcript rows | `node scripts/verify-compact.mjs` |
 | Compaction × session-switch lifecycle (cancel before the fork snapshot, persistence-classified toast) | `node --import tsx/esm scripts/verify-compact-switch.tsx` |
 | Theme loading, persistence, and runtime plugin seam | `node --import tsx/esm scripts/verify-themes.mjs`, `node --import tsx/esm scripts/verify-runtime-themes.ts` |
+| Default-reasoning-effort and similar preference chains (effortPrefs / settings defaults) | `node --import tsx/esm scripts/verify-effort-default.ts` |
 | Scrolling/sticky-bottom behavior | `node scripts/verify-scroll.mjs`, `node scripts/verify-resticky.mjs`, and the matching `repro-*` harness |
 | Long plan-review body (`exit_plan_mode` windowing + wheel) | `node --import tsx/esm scripts/verify-plan-review-scroll.tsx` |
 | Fullscreen copy-on-select | `node scripts/verify-copy-on-select.mjs` |

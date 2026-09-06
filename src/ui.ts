@@ -14,6 +14,8 @@ export { default as Text } from './components/design-system/ThemedText.js'
 export { default as Spacer } from './ink/components/Spacer.js'
 export { default as Newline, type Props as NewlineProps } from './ink/components/Newline.js'
 export { NoSelect } from './ink/components/NoSelect.js'
+export { default as Image, type ImageProps } from './ink/components/Image.js'
+export type { TerminalImageSource } from './ink/terminal-image.js'
 export { AlternateScreen } from './ink/components/AlternateScreen.js'
 export {
   default as ScrollBox,

@@ -24,6 +24,7 @@ declare module 'react' {
       'ink-box': unknown
       'ink-text': unknown
       'ink-link': unknown
+      'ink-image': unknown
       'ink-raw': unknown
       'ink-raw-ansi': unknown
     }

@@ -31,6 +31,26 @@ export function readEffortPref(dir: string = PREFS_DIR): string | undefined {
 }
 
 /**
+ * Default reasoning-effort precedence for sessions that do not carry their
+ * own choice: the /settings 默认推理强度 user layer (`settings.yaml
+ * dsh-tui.effortDefault`; the plugin folds the `auto` option to undefined
+ * before calling), then the cordis.yml `effort` pin, then this persisted
+ * `/effort` file, then the adapter/model default (undefined). Mirrors the
+ * lang chain (settings user layer > cordis.yml > lang.json).
+ * @param settingsDefault - settings user-layer level (undefined = auto).
+ * @param configured - cordis.yml `effort` value, if any.
+ * @param persisted - The /effort choice, if any.
+ * @returns The winning level id, or undefined for the adapter default.
+ */
+export function resolveEffortDefault(
+  settingsDefault: string | undefined,
+  configured: string | undefined,
+  persisted: string | undefined,
+): string | undefined {
+  return settingsDefault ?? configured ?? persisted
+}
+
+/**
  * Persist the chosen reasoning-effort id (best effort).
  * @param effort - Adapter-owned effort id to persist.
  * @param dir - Prefs directory (injectable for tests).
