@@ -66,7 +66,7 @@ const bufferLines = (): string[] => {
 const waitFor = async (what: string, pred: () => boolean): Promise<void> => {
   for (let attempt = 0; attempt < 100; attempt++) {
     if (pred()) return
-    await sleep(30)
+    await sleep(30) // 固定窗:pacing 轮询步长，条件见循环（超时响亮 FAIL，语义与 lib settle 不同）
   }
   check(`settle: ${what}`, false, 'never appeared within 3s')
 }

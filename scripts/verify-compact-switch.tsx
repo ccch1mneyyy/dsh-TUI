@@ -25,8 +25,9 @@ const reproHome = mkdtempSync(join(tmpdir(), 'dshtui-compact-switch-'))
 process.env.HOME = reproHome
 process.env.USERPROFILE = reproHome
 
-const [{ createChannel }] = await Promise.all([
+const [{ createChannel }, { settled }] = await Promise.all([
   import('../src/dsh-adapter/channel.js'),
+  import('./lib/term-test.mjs'),
 ])
 
 let failed = 0
@@ -35,13 +36,9 @@ function check(name: string, ok: boolean, extra = '') {
   if (!ok) failed += 1
 }
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
-async function settle(cond: () => boolean, ms = 3000): Promise<boolean> {
-  const deadline = Date.now() + ms
-  while (Date.now() < deadline) {
-    if (cond()) return true
-    await sleep(25)
-  }
-  return cond()
+// 轮询到条件成立后返回终值（term-test 的 settled 就是这条语义）。
+function settle(cond: () => boolean, ms = 3000): Promise<boolean> {
+  return settled(cond, { timeoutMs: ms })
 }
 
 // ---- 事件与 agent 桩 --------------------------------------------------------
@@ -95,11 +92,11 @@ function makeCompaction(script: Script) {
       const call = { agentId: agent.id, abortedAt: undefined as number | undefined }
       calls.push(call)
       if (script.kind === 'resolve') {
-        await sleep(30)
+        await sleep(30) // 固定窗:pacing 桩内模拟压缩耗时，不是在等可观测状态
         return { shadowedSeqs: [1, 2] }
       }
       if (script.kind === 'reject') {
-        await sleep(30)
+        await sleep(30) // 固定窗:pacing 桩内模拟压缩耗时，不是在等可观测状态
         throw Object.assign(new Error(script.message), script.code === undefined ? {} : { code: script.code })
       }
       // hang-until-abort：模拟慢摘要流——仅在 abort 后以 abort 原因拒绝
@@ -190,7 +187,7 @@ const toasts = (channel: { notifications: readonly { text: string }[] }) =>
 
   // toast：取消提示出现；随后不追加通用「压缩失败」（抑制闩）。
   await settle(() => channel.notifications.length >= 2)
-  await sleep(150)
+  await sleep(150) // 固定窗:探针 抑制闩：观察窗内不得再追加通用「压缩失败」提示
   const text = toasts(channel)
   check('scene1: cancel toast shown', text.includes('已取消并切换'), text)
   check('scene1: no misleading generic failure toast', !/压缩失败 ·/.test(text), text)
@@ -203,7 +200,7 @@ const toasts = (channel: { notifications: readonly { text: string }[] }) =>
   const { channel } = assemble({ kind: 'reject', code: 'persistence', message: 'flush io error' })
   channel.compact()
   await settle(() => channel.notifications.length >= 2)
-  await sleep(150)
+  await sleep(150) // 固定窗:探针 抑制闩：观察窗内不得再追加通用「压缩失败」提示
   const text = toasts(channel)
   check('scene2: flush-failed toast distinguishes committed state', text.includes('压缩已生效') && text.includes('落盘'), text)
   check('scene2: not the generic failure line', !/压缩失败 ·/.test(text), text)
@@ -214,7 +211,7 @@ const toasts = (channel: { notifications: readonly { text: string }[] }) =>
   const { channel } = assemble({ kind: 'reject', message: 'Codex error: usage limit' })
   channel.compact()
   await settle(() => channel.notifications.length >= 2)
-  await sleep(150)
+  await sleep(150) // 固定窗:探针 观察窗内提示不得被后续通用失败覆盖
   const text = toasts(channel)
   check('scene3: generic failure toast keeps the error', /压缩失败 ·.*usage limit/.test(text), text)
 }

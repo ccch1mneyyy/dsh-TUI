@@ -212,7 +212,7 @@ function dump(label: string, shot: string) {
 
   await app.unmount()
   term.dispose()
-  await sleep(50)
+  await sleep(50) // 固定窗:pacing 段落间收尾节奏——卸载/dispose 无可观测完成条件
 }
 
 // ── 2. Short terminal: omit the body before hiding the decisions ────
@@ -254,7 +254,7 @@ function dump(label: string, shot: string) {
 
   await app.unmount()
   term.dispose()
-  await sleep(50)
+  await sleep(50) // 固定窗:pacing 段落间收尾节奏——卸载/dispose 无可观测完成条件
 }
 
 // ── 3. Same payload inside Chat (prompt-slot layout) ────────────────

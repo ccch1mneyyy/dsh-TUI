@@ -227,8 +227,8 @@ fire('skills/change')
   })
   check('superseding read repopulates the menu', await settled(() => channel.commandList.some(command => command.name === 'live')))
   pending[0].reject(new Error('stale scan failed'))
-  // Stability probe (nothing may change, nothing may warn): a settle over an
-  // already-true condition returns immediately — keep the fixed window.
+  // 固定窗:探针 the stale read must change nothing — no warning, no menu edit;
+  // a settle over an already-true condition returns immediately.
   await sleep(20)
   check('stale read failure logs no warning', staleWarned === 0, `warned=${staleWarned}`)
   check(

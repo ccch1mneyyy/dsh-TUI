@@ -70,7 +70,7 @@ check('initial focus label is visible', initial.includes('● provider-00'))
 check('initial viewport has exactly one selected/focused row', selectedRows(initial) === 1)
 for (let index = 0; index < 25; index += 1) {
   stdin.write('\x1b[B')
-  // 键间固定 pacing：逐项下移无需逐帧断言，保留小窗口保证按键不粘连。
+  // 固定窗:pacing 键间节奏——逐项下移无需逐帧断言，小窗口保证按键不粘连。
   await sleep(20)
 }
 let moved = ''

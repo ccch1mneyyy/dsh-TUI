@@ -313,12 +313,12 @@ const decisionCtx = { on: subscribe }
   let secondStartedBeforeFirstDone = false
   let secondDone = false
   const disposeFirst = decisionCtx.on('tui/session-switched', async () => {
-    await sleep(120)
+    await sleep(120) // 固定窗:墙钟 模拟慢监听器的耗时窗口（对比下面 10ms 才能测出并行）
     firstDone = true
   })
   const disposeSecond = decisionCtx.on('tui/session-switched', async () => {
     secondStartedBeforeFirstDone = !firstDone
-    await sleep(10)
+    await sleep(10) // 固定窗:墙钟 第二个监听器的短耗时窗口，须在第一个 120ms 内跑完
     secondDone = true
   })
   await dispatchTuiNotification(ctx, 'tui/session-switched', {
@@ -336,7 +336,7 @@ const instance = await render(
   <Chat channel={channel as never} questionStore={new QuestionStore()} onExit={() => {}} />,
   { stdout, stdin, stderr: new FakeStderr(), exitOnCtrlC: false, patchConsole: false },
 )
-// 首帧挂载 pacing：等 React 树完成首次渲染与输入监听挂接，无单一可观测条件。
+// 固定窗:pacing 等 React 树完成首帧渲染与输入监听挂接，无单一可观测条件。
 await sleep(800)
 
 // ── 0. D-7 backstop: NO extensions row is mounted in this battery, yet an
@@ -349,8 +349,8 @@ await sleep(800)
       c.on('tui/input', () => ({ cancel: true }))
     },
   })
-  // 等未授权插件的订阅尝试注册完成：拒绝是静默的，没有可轮询的外部状态，
-  // 不给这段时间订阅根本没发生、探针会空过——保留固定窗口。
+  // 固定窗:pacing 等未授权插件的订阅尝试注册完成：拒绝是静默的，没有可轮询
+  // 的外部状态，不给这段时间订阅根本没发生、探针会空过。
   await sleep(150)
   channel.submit('穿透检查')
   check('decision guard (no extensions row): ungranted plugin subscription denied',
@@ -402,7 +402,7 @@ await sleep(800)
   // The listener resolves at ~600ms — deterministically beyond the threshold.
   const disposeSlow = decisionCtx.on('tui/input', async event => {
     if (event.text !== '慢决定') return undefined
-    await sleep(600)
+    await sleep(600) // 固定窗:墙钟 故意跨过 400ms parked 指示阈值的决定耗时
     return { cancel: true, reason: '慢否决落地' } as const
   })
   channel.submit('慢决定')
@@ -440,6 +440,7 @@ await sleep(800)
 // ── 2d. decision+delivery FIFO: a slow A never lets B overtake ──────────
 {
   const dispose = decisionCtx.on('tui/input', async event => {
+    // 固定窗:墙钟 模拟 400ms 慢决定，给后一条超车的机会（FIFO 才有得测）
     if (event.text === '慢条甲') await sleep(400)
     return undefined
   })
@@ -588,8 +589,8 @@ await sleep(800)
 
   // Double-Esc on the empty input opens the picker (3s arming window).
   stdin.write('\x1b')
-  // 两次 Esc 之间的按键 pacing：连写会被终端输入解析吞成转义序列前缀，
-  // 无可观测条件——保留固定窗口。
+  // 固定窗:pacing 两次 Esc 之间的按键步间：连写会被终端输入解析吞成转义
+  // 序列前缀，无可观测条件。
   await sleep(120)
   stdin.write('\x1b')
   const listShown = await settled(() => plainText(stdout.frames.slice(-30)).includes('消息 09'))
@@ -609,7 +610,7 @@ await sleep(800)
 
   // ↓ once moves to the first plugin mode; Enter rewinds with it.
   stdin.write('\x1b[B')
-  // 选中态是颜色高亮，ANSI 洗净后不可观测——按键间保留固定 pacing。
+  // 固定窗:pacing 按键步间：选中态是颜色高亮，ANSI 洗净后不可观测。
   await sleep(150)
   stdin.write('\r')
   check('picked mode id threaded to tui/rewind-done',
@@ -629,23 +630,23 @@ await sleep(800)
   // The section-4 rewind restored the picked message into the input for
   // re-editing: the first Esc clears it, then the double-Esc opens the
   // picker on the now-empty input.
-  // 连续 Esc 间的按键 pacing（清输入 → 武装 → 开列表）：连写会被吞成转义
+  // 连续 Esc 间的按键步间（清输入 → 武装 → 开列表）：连写会被吞成转义
   // 序列前缀；第三次 Esc 后开列表的可观测文本「消息 09」也在恢复的输入行里，
-  // 无法区分——保留固定窗口。
+  // 无法区分。
   stdin.write('\x1b')
-  await sleep(150)
+  await sleep(150) // 固定窗:pacing Esc 步间
   stdin.write('\x1b')
-  await sleep(120)
+  await sleep(120) // 固定窗:pacing Esc 步间
   stdin.write('\x1b')
-  await sleep(400)
+  await sleep(400) // 固定窗:pacing Esc 步间（等列表铺开，无可区分锚点）
   stdin.write('\r') // Enter on the newest message → veto
   check('tui/rewind-prompt cancel: reason toasted', await settled(() => notified('该消息不可回退')))
   const tail = plainText(stdout.frames.slice(-40))
   check('tui/rewind-prompt cancel: picker still open (list visible)', tail.includes('消息 09'))
   check('tui/rewind-prompt cancel: no delivery side effects', captured.followupTexts.length === forkCountBefore)
   stdin.write('\x1b') // close the picker
-  // 等收起重绘：帧是增量 diff，「列表已不可见」没有稳定的负向可观测条件
-  // ——保留固定窗口。
+  // 固定窗:pacing 等收起重绘：帧是增量 diff，「列表已不可见」没有稳定的
+  // 负向可观测条件。
   await sleep(200)
   disposePrompt()
 }
@@ -722,8 +723,8 @@ await sleep(800)
   const resumed = await channel.resumeTo('s-a1')
   check('compact ABA setup: /resume back to the origin session succeeded', resumed.ok === true)
   release(undefined)
-  // 稳定性探针（陈旧压缩不得复活）：条件在 release 前就成立，轮询会立即
-  // 返回，测不到「没有跑」——保留固定窗口。
+  // 固定窗:探针 陈旧压缩不得复活：条件在 release 前就成立，轮询会立即返回，
+  // 测不到「没有跑」。
   await sleep(400)
   check('compact ABA: id reuse does NOT revive the stale compaction',
     captured.compactCalls.length === 1, JSON.stringify(captured.compactCalls))
@@ -778,8 +779,8 @@ await sleep(800)
   const switched = await channel.newSession()
   check('enqueue origin setup: /new succeeded while the predecessor parked', switched === true)
   release(undefined)
-  // 稳定性探针（两条都不得投递）：条件在 release 前就成立，轮询会立即
-  // 返回，测不到「没被投递」——保留固定窗口。
+  // 固定窗:探针 两条都不得投递：条件在 release 前就成立，轮询会立即返回，
+  // 测不到「没被投递」。
   await sleep(500)
   check('enqueue-time origin: the parked predecessor is dropped as stale',
     !captured.followupTexts.some(text => text.includes('旧会话首条')),
@@ -841,7 +842,7 @@ await sleep(800)
     await settled(() => !(channel as unknown as { notifications: readonly { text: string }[] }).notifications
       .some(item => item.text.includes('正在等待插件决定（tui/input）'))))
   release({ handled: true, notice: '旧会话插件结果不应出现' })
-  await sleep(150)
+  await sleep(150) // 固定窗:探针 陈旧 handled 结果不得吐进新会话，给它一个现身窗
   check('pending session ownership: stale handled result did not toast into the new session',
     !notified('旧会话插件结果不应出现'))
   unsubscribe()
@@ -888,7 +889,7 @@ await sleep(800)
     switchedKinds.push(event.kind)
   })
   const rewindPromise = channel.rewindTo({ seq: 4, text: '回退恢复文本' } as never, null)
-  // sleep 是超时兜底（挂死检测的墙钟上界），不是等待条件——保留。
+  // 固定窗:墙钟 Promise.race 的超时兜底（挂死检测的墙钟上界），不是等待条件
   const text = await Promise.race([rewindPromise, sleep(900).then(() => 'TIMEOUT' as const)])
   check('rewind-done decoupled: rewindTo returns the picked text without waiting for the listener',
     text === '回退恢复文本', String(text))
@@ -914,8 +915,8 @@ await sleep(800)
   // The standard single-handler deadline is 1s. The indicator must remain
   // visible until that deadline resolves the never-settling callback; it is
   // not allowed to disappear on the ordinary 4s notification timer first.
-  // 稳定性探针（指示条必须还挂着）：条件此刻已成立，轮询会立即返回，
-  // 测不到「保持」——保留固定窗口。
+  // 固定窗:探针 指示条必须还挂着（1s handler 期限内不得被 4s 通知定时器提前
+  // 收走）：条件此刻已成立，轮询会立即返回，测不到「保持」。
   await sleep(250)
   check('pending indicator: still up while the bounded decision is parked',
     notified('正在等待插件决定（tui/input）'))

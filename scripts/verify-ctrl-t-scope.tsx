@@ -217,9 +217,8 @@ const panelHeader = (text: string): string =>
   check('Ctrl+T opens the trajectory even before the first message', await settled(() => isScene(harness.screen())),
     harness.screen().split('\n')[0]?.trim())
 
-  // 场景可见与场景按键处理器挂载之间没有可观测完成条件——'q' 可能在
-  // 处理器挂上前的第一帧到达而落空（CI 高负载下放大，repro-pill 组
-  // 的 sleep pacing 同款）。保留固定窗口。
+  // 固定窗:pacing 场景可见与场景按键处理器挂载之间没有可观测完成条件——'q'
+  // 可能在处理器挂上前的第一帧到达而落空（CI 高负载下放大）。
   await sleep(120)
   harness.stdin.write('q')
   check('q returns to the context summary', await settled(() => /已加载上下文/.test(harness.screen())))
@@ -233,7 +232,7 @@ const panelHeader = (text: string): string =>
   instance.unmount()
   instances.delete(process.stdout)
   harness.term.dispose()
-  // 卸载/dispose 的收尾 pacing：无可观测完成条件，保留固定小窗口。
+  // 固定窗:pacing 卸载/dispose 收尾，无可观测完成条件
   await sleep(40)
 }
 
@@ -244,8 +243,8 @@ const panelHeader = (text: string): string =>
     harness,
     makeChannel({ rows: [{ id: 1, kind: 'user', text: '第一条消息' }] }),
   )
-  // 稳定性探针（面板不得出现）：条件从挂载起就成立，轮询会立即返回，
-  // 测不到「不再出现」——保留固定窗口。
+  // 固定窗:探针 面板不得出现——条件从挂载起就成立，轮询会立即返回，
+  // 测不到「不再出现」。
   await sleep(500)
 
   const before = harness.screen()
@@ -254,7 +253,7 @@ const panelHeader = (text: string): string =>
   harness.stdin.write(CTRL_T)
   check('Ctrl+T opens the trajectory scene', await settled(() => isScene(harness.screen())), harness.screen().split('\n')[0]?.trim())
 
-  // 同上：场景按键挂载窗口 pacing。
+  // 固定窗:pacing 同上，等场景按键处理器挂上
   await sleep(120)
   harness.stdin.write('q')
   check('q returns to the conversation', await settled(() => !isScene(harness.screen())))

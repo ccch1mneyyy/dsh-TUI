@@ -92,9 +92,9 @@ assert.ok(
   await settled(() => stdout.output.includes('\x1b]11;?') && stdout.output.includes('\x1b[>0q')),
   'timed out waiting for the OSC 11 / XTVERSION queries to be written',
 )
-// Stability probe (must NOT change): raw mode is already true here and must
-// stay true while the replies are late — a settle on the already-true
-// condition would return immediately, so keep a fixed delay window.
+// 固定窗:探针 raw mode is already true here and must STAY true while the
+// replies are late — a settle on the already-true condition would return
+// immediately, so the delay window is the measurement.
 await sleep(450)
 assert.equal(stdin.isRaw, true, 'late terminal replies must remain protected by raw mode')
 
@@ -174,6 +174,8 @@ assert.equal(
   'a deferred XTVERSION batch must not write while an external process owns the terminal',
 )
 handoffInk.exitAlternateScreen()
+// 固定窗:探针 retry 不得在隔离期内发生——20ms 落在 120ms 的
+// TERMINAL_REPLY_QUARANTINE_MS 之内，取样点必须早于 resume 定时器。
 await sleep(20)
 assert.equal(
   handoffStdout.output.includes('\x1b[>0q') ||
@@ -195,6 +197,8 @@ const completedXtversionCount =
   handoffStdout.output.split('\x1b[>0q').length - 1
 handoffInk.enterAlternateScreen()
 handoffInk.exitAlternateScreen()
+// 固定窗:探针 已完成的 XTVERSION 不得重复——160ms 越过 120ms 的
+// TERMINAL_REPLY_QUARANTINE_MS，让潜在的重发有时间显形。
 await sleep(160)
 assert.equal(
   handoffStdout.output.split('\x1b[>0q').length - 1,
@@ -253,8 +257,9 @@ async function decrqmProbeBytes(termProgram: string): Promise<string> {
   const beforeKeypress = probeStdout.output.length
   probeStdin.write('a')
   probeStdin.write('\x7f')
-  // Negative-assertion observation window: the leak (if any) is written
-  // asynchronously after dispatch, so the slice must span a fixed delay.
+  // 固定窗:探针 negative assertion — the leak (if any) is written
+  // asynchronously after dispatch, so the slice must span an observation
+  // window rather than settle on an already-true condition.
   await sleep(120)
   const emitted = probeStdout.output.slice(beforeKeypress)
   probeInstance.unmount()

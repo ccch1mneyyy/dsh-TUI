@@ -118,8 +118,8 @@ await render(
 const ink: any = instances.get(stdout)
 if (!ink) { console.log('FAIL 未找到 Ink 实例'); process.exit(1) }
 ink.setAltScreenActive(true, true)
-// 基线必须取自不再重绘的稳态帧：「内容非空」不等于「已定格」，无可轮询的
-// 完成条件——保留固定稳定窗。
+// 固定窗:pacing 基线必须取自不再重绘的稳态帧——「内容非空」不等于「已定格」，
+// 没有可轮询的完成条件。
 await sleep(1500)
 await lastFlushed
 
@@ -131,16 +131,15 @@ check('落定后画面非空', baseline.trim().length > 200, 'bytes=' + baseline
 const baselineTraceLines = readFileSync(TRACE_PATH, 'utf8').trim().split('\n').length
 let screenDriftFrames = 0
 const seenScreens = new Set<string>()
-// 30ms 间隔本身是被测驱动源（#433 的均匀 30ms 帧源），墙钟语义保留。
 for (let i = 0; i < 100; i++) {
   bump()
-  await sleep(30)
+  await sleep(30) // 固定窗:墙钟 30ms 间隔本身是被测驱动源（#433 的均匀 30ms 帧源）
   await lastFlushed
   const shot = screenText()
   seenScreens.add(shot)
   if (shot !== baseline) screenDriftFrames++
 }
-// 风暴收尾稳定窗：断言「画面回到基线且不再漂移」是稳定性探针，保留固定窗口。
+// 固定窗:探针 风暴收尾观察窗——断言画面回到基线且不再漂移
 await sleep(200)
 await lastFlushed
 

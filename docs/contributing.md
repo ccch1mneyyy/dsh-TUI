@@ -222,6 +222,14 @@ CI 回归都要跑。窄改动还要跑最近的聚焦脚本：
 TypeScript 源的脚本在头部声明 `node --import tsx/esm <script>` 形式。不要凭
 扩展名推断输入层：例如 `verify-themes.mjs` 其实通过 tsx import `src/`。
 
+写回归脚本时，等待原语用 `scripts/lib/term-test.mjs`：「等待后断言」用
+`settled`，「等待后操作」用 `settle`。保留的固定 `sleep(` 必须带机读标签
+`固定窗:探针` / `固定窗:墙钟` / `固定窗:pacing`（定义见该文件头部），写在
+sleep 同行尾注释或紧贴上方的注释里。`verify:fixed-window` 门禁扫描
+`scripts/run-ci-group.mjs` 登记的脚本，无标签即失败；`固定窗:待迁移` 是登记
+在 `scripts/fixed-window.baseline.json` 里的存量技术债，只降不升，新代码不得
+使用。
+
 部分脚本是取证/交互工具而非有界测试：堆/泄漏脚本、PTY 探针、回放捕获、
 性能探针与 `scripts/run.ts` 可能依赖特定 OS、终端、原生依赖、DSH 检出或长时
 进程。读头部与前置条件，不要把 `scripts/` 当套件全跑。

@@ -217,7 +217,7 @@ const subagentRows = (channel: { rows: Array<{ kind: string }> }) => channel.row
   })
 
   const pending = channel.resumeTo('sess-target')
-  await sleep(30) // resume 体停在 agents.resume
+  await sleep(30) // 固定窗:pacing 等 resume 体停在 agents.resume 的 await，无可观测锚点
   check('5a. /new 在 resume 的 await 窗口内抢先提交', (await channel.newSession()) === true)
   check('5b. 此刻活跃会话是 /new 的', (channel as unknown as { agentId: string }).agentId === 'agent-e3')
   resolveResume(makeHandle(resumed))

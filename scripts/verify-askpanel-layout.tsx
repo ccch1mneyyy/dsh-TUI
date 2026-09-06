@@ -156,7 +156,7 @@ for (const [name, rows] of [['短会话', shortRows], ['长高录', tallRows]] a
   await settled(() => { shot = screen(); return REQUIRED.every(t => shot.includes(t)) })
   check(`静态渲染（${name}）`, shot)
   app.unmount()
-  // unmount 后输出 flush 无可观测条件，保留固定 pacing。
+  // 固定窗:pacing unmount 后输出 flush 无可观测完成条件。
   await sleep(100)
 }
 
@@ -182,7 +182,7 @@ for (const [name, rows] of [['短会话', shortRows], ['长高录', tallRows]] a
     channel.responseChars += 1
     channel.version += 1
     for (const l of [...listeners]) l()
-    // 差分重绘的帧采样 pacing（取最坏帧），无可轮询的完成条件——保留固定间隔。
+    // 固定窗:pacing 差分重绘的帧采样间隔（取最坏帧），无可轮询的完成条件。
     await sleep(120)
     const s = screen()
     const missing = REQUIRED.filter(t => !s.includes(t)).length
@@ -193,7 +193,7 @@ for (const [name, rows] of [['短会话', shortRows], ['长高录', tallRows]] a
   }
   check('activity tick 差分重绘（20 次取最坏帧）', worst)
   app.unmount()
-  // unmount 后输出 flush 无可观测条件，保留固定 pacing。
+  // 固定窗:pacing unmount 后输出 flush 无可观测完成条件。
   await sleep(100)
 }
 
@@ -213,7 +213,8 @@ for (const [name, rows] of [['短会话', shortRows], ['长高录', tallRows]] a
     stdout.rows = r
     term.resize(c, r)
     stdout.emit('resize')
-    // resize 风暴的抖动节奏本身是被测对象（快速连续 resize），保留固定 pacing。
+    // 固定窗:pacing resize 事件步间——抖动节奏本身是被测对象（快速连续
+    // resize），每步没有可观测完成条件。
     await sleep(90)
   }
   // 断言在 settle 捕获的同一快照上求值——等待条件与 check 的缺行计算共用 shot，无分叉。
@@ -221,7 +222,7 @@ for (const [name, rows] of [['短会话', shortRows], ['长高录', tallRows]] a
   await settled(() => { shot = screen(); return REQUIRED.every(t => shot.includes(t)) })
   check('resize 风暴后（130x42）', shot)
   app.unmount()
-  // unmount 后输出 flush 无可观测条件，保留固定 pacing。
+  // 固定窗:pacing unmount 后输出 flush 无可观测完成条件。
   await sleep(100)
 }
 

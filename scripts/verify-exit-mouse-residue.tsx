@@ -87,7 +87,7 @@ const ink = instances.get(stdout) as unknown as InkDriver | undefined
 check('Ink 实例存在（挂载成功）', ink !== undefined)
 if (!ink) process.exit(1)
 await flush()
-await sleep(50)
+await sleep(50) // 固定窗:pacing 挂载首帧收尾，无可轮询锚点
 
 // ── 模拟退出漏斗 finishExit（src/dsh-adapter/plugin.ts）：先 detach（置
 // isUnmounted），cleanup 序列随后写出——与真实退出同序。detach 置位后，
@@ -100,11 +100,11 @@ const cut = bytes.length
 const cleanupTail = bytes.slice(0, cut).join('')
 check('退出清理序列已写出（DISABLE 到达终端）', MOUSE_DISABLE.test(cleanupTail))
 
-// ── 250ms 节流窗过去，退出前窗口期的输入派发触发健康探针。
+// 固定窗:墙钟 等 250ms alt-screen 健康探针节流窗过去，退出前窗口期的输入派发触发探针。
 await sleep(300)
 ink.probeAltScreenHealth()
 await flush()
-await sleep(50)
+await sleep(50) // 固定窗:探针 观察窗内不得出现任何鼠标 ENABLE 残留
 
 const tail = bytes.slice(cut).join('')
 check('清理之后无任何鼠标 ENABLE 残留（probe 尊重 isUnmounted）', !MOUSE_ENABLE.test(tail),
@@ -115,7 +115,7 @@ check('清理之后无任何鼠标 ENABLE 残留（probe 尊重 isUnmounted）',
 const cut2 = bytes.length
 ink.reassertTerminalModes(true)
 await flush()
-await sleep(50)
+await sleep(50) // 固定窗:探针 观察窗内必须零字节写出（不得重开 kitty keyboard）
 const tail2 = bytes.slice(cut2).join('')
 check('退出后 reassertTerminalModes 零字节写出（kitty keyboard 不重开）', tail2 === '',
   tail2 ? `写出了 ${JSON.stringify(tail2.slice(0, 40))}` : '')
@@ -131,7 +131,7 @@ if (querier) {
   void querier.send(decrqm(1049))
   void querier.flush()
   await flush()
-  await sleep(50)
+  await sleep(50) // 固定窗:探针 观察窗内 querier 不得写出任何查询字节
   const tail3 = bytes.slice(cut3).join('')
   const QUERY_BYTES = /\x1b\[\?1049\$p|\x1b\[c|\x1b\[\?2004h/
   check('dispose 后 querier 零查询字节 / 不拉回 raw mode', !QUERY_BYTES.test(tail3),

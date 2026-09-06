@@ -295,6 +295,16 @@ Most focused scripts invoked with plain `node` import `lib/types/`; run
 layer from the file extension: `verify-themes.mjs`, for example, imports
 `src/` through `tsx`.
 
+Regression scripts take their wait primitives from `scripts/lib/term-test.mjs`:
+`settled` for wait-then-assert, `settle` for wait-then-act. Any fixed `sleep(`
+that stays must carry a machine-readable tag, `固定窗:探针` / `固定窗:墙钟` /
+`固定窗:pacing` (defined in that file's header), in a trailing comment on the
+same line or in the comment block directly above. The `verify:fixed-window`
+gate scans every script registered in `scripts/run-ci-group.mjs` and fails on
+an untagged call; `固定窗:待迁移` marks pre-existing debt, its count is pinned
+in `scripts/fixed-window.baseline.json`, may only go down, and must not appear
+in new code.
+
 Some scripts are forensic or interactive tools, not bounded tests. In
 particular, heap/leak scripts, PTY probes, replay capture, performance probes,
 and `scripts/run.ts` can require a specific OS, terminal, native dependency,

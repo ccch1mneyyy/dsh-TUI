@@ -65,9 +65,8 @@ async function renderAt(cols, tool, diffLayout = 'auto', toolBackground = 'none'
     React.createElement(AssistantToolUseMessage, { tool, addMargin: false, verbose: false, diffLayout, toolBackground }),
     { stdout: new FakeStdout(), debug: true, exitOnCtrlC: false },
   )
-  // cli-highlight loads lazily on first use; give it room to land so the
-  // syntax-color assertions see the settled frame.（懒加载后的补色重绘无
-  // 调用方无关的可观测条件，保留固定窗口。）
+  // 固定窗:pacing cli-highlight 首次使用才懒加载，其后的补色重绘没有
+  // 调用方可观测的完成条件，只能留出落地时间再读色。
   await sleep(900)
   const buf = term.buffer.active
   const lines = []

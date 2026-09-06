@@ -454,10 +454,11 @@ const slider = pos.slider
   motion(inert.col + 0, inert.row)
   const first = await settled(() => getHitTestWithOverlaysCount() === 1)
   check('I5 首次 motion 全树 hit-test 并缓存', first)
-  await sleep(80)
+  await sleep(80) // 固定窗:pacing motion 步间
   motion(inert.col + 2, inert.row)
-  await sleep(80)
+  await sleep(80) // 固定窗:pacing motion 步间
   motion(inert.col + 4, inert.row)
+  // 固定窗:探针 后两次 motion 不得再触发全树 hit-test，等一个观察窗再断言计数不变
   await sleep(80)
   check('I5 无 handler 区域 3 次 motion 只 1 次 hit-test（其余跳过）',
     getHitTestWithOverlaysCount() === 1, `count=${getHitTestWithOverlaysCount()}`)

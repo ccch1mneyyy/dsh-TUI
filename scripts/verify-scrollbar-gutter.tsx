@@ -128,7 +128,7 @@ function gutterSnapshot(): { thumbs: number[]; ticks: number[]; chevrons: number
 const wheel = async (up: boolean, times: number) => {
   for (let i = 0; i < times; i++) {
     stdin.write(`\x1b[<${up ? 64 : 65};90;30M`)
-    await sleep(150)
+    await sleep(150) // 固定窗:pacing 滚轮事件步间，无可区分新旧帧的屏幕条件
   }
 }
 const clickAt = (col: number, row: number) => {
