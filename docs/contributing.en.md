@@ -349,7 +349,11 @@ the required credentials.
 - Preserve initialization ordering around environment-sensitive imports.
   `FORCE_COLOR`, `NODE_ENV`, and terminal capability flags are often read at
   module evaluation time; moving an import above their setup can change
-  behavior without a type error.
+  behavior without a type error. Regression scripts that import `lib/types/`
+  directly bypass the package entry, so React loads its dev build and
+  structured-clones every component's props on each commit; a script that
+  passes large image buffers as props must make
+  `lib/types/force-production-react.js` its first import.
 
 ## Architectural Invariants
 

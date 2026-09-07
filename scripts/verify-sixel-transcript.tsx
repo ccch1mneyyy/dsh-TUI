@@ -2,6 +2,8 @@
  * Uses xterm's parser plus a pixel plane for Sixel/ECH/ED. This checks emitted
  * positions and residue, not native Windows Terminal rendering performance.
  */
+// First import on purpose: production React, see verify-terminal-images-sixel.tsx.
+import '../lib/types/force-production-react.js'
 import assert from 'node:assert/strict'
 import { PassThrough, Writable } from 'node:stream'
 import { setTimeout as delay } from 'node:timers/promises'

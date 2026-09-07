@@ -261,6 +261,9 @@ sleep 同行尾注释或紧贴上方的注释里。`verify:fixed-window` 门禁�
   就地内联。
 - 保护环境敏感 import 的初始化顺序。`FORCE_COLOR`、`NODE_ENV`、终端能力标志
   常在模块求值时读取；把 import 移到它们初始化之前会无类型错误地改变行为。
+  直接 import `lib/types/` 的回归脚本绕过了包入口，React 会按 dev 构建加载，
+  每次 commit 都把组件 props 整份 structured-clone 一遍；把大图 buffer 当
+  props 传递的脚本要把 `lib/types/force-production-react.js` 放在第一个 import。
 
 ## 架构不变量（Architectural Invariants）
 

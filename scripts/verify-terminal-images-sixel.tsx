@@ -2,6 +2,11 @@
  * Uses built modules so Worker entry resolution matches the published package.
  * Headless text/byte assertions are not native terminal visual acceptance.
  */
+// First import on purpose: the dev react-reconciler records a
+// performance.measure() per commit whose detail structured-clones the 8 MiB
+// `source` prop of every <Image>. The large preview below then needs seconds
+// and misses the 10 s deadline on CI runners. Launchers force production too.
+import '../lib/types/force-production-react.js'
 import assert from 'node:assert/strict'
 import { PassThrough, Writable } from 'node:stream'
 import { setTimeout as delay } from 'node:timers/promises'
