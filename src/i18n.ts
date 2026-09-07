@@ -1065,9 +1065,13 @@ const dict = {
 
   // ── components/questions/PlanReviewPanel.tsx ────────────────────────
   'plan-review-fallback-header': { zh: '计划评审', en: 'Plan review' },
+  'plan-review-exit-label': { zh: '退出规划', en: 'Exit planning' },
+  'plan-review-exit-description': { zh: '退出 plan mode（不批准当前计划）', en: 'Leave plan mode without approving this plan.' },
   'plan-review-feedback-placeholder': { zh: '输入反馈，告诉模型要改什么…', en: 'Tell the model what to change…' },
   'plan-review-approve-needs-empty': { zh: '请先清空反馈再批准（或在输入行回车提交反馈）', en: 'Clear the feedback to approve (or press Enter on the input row to send it)' },
+  'plan-review-exit-needs-empty': { zh: '请先清空反馈再退出规划（或在输入行回车提交反馈）', en: 'Clear the feedback to exit planning (or press Enter on the input row to send it)' },
   'plan-review-hint': { zh: '↑/↓ 选择 · 1/2 快选 · 打字输入反馈 · Ctrl+V 粘贴 · Enter 提交 · Esc 打断评审', en: '↑/↓ select · 1/2 quick-pick · type feedback · Ctrl+V paste · Enter submit · Esc dismiss' },
+  'plan-review-exit-hint': { zh: '↑/↓ 选择 · 1 批准 / 2 退出规划 · 打字输入反馈 · Ctrl+V 粘贴 · Enter 提交 · Esc 打断评审', en: '↑/↓ select · 1 approve / 2 exit planning · type feedback · Ctrl+V paste · Enter submit · Esc dismiss' },
 
   // ── providerWizard.ts ────────────────────────────────────────────────
   'provider-unavailable': { zh: '/provider 需要经 dsh profile 启动（settings / credentials / llm-pi-ai 服务未挂载）', en: '/provider requires starting through a dsh profile (settings / credentials / llm-pi-ai services not mounted)' },

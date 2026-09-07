@@ -27,7 +27,7 @@ import { renderContextSections, renderPrompt } from '@deepseek-ai/dsh-system-pro
 import { loadBaselineInstructions } from '@deepseek-ai/dsh-agent-instructions'
 import type { Context } from '@deepseek-ai/cordis'
 import { extname, isAbsolute, join } from 'node:path'
-import { completeCommands, HIDDEN_COMMAND_NAMES, isCommandCompletionToken, isLocalCommandName, LOCAL_COMMANDS, parseCommandName, type CommandCompletion, type CommandCompletionNode, type LocalCommand } from '../commands.js'
+import { completeCommands, HIDDEN_COMMAND_NAMES, isCommandCompletionToken, isHiddenCommandName, isLocalCommandName, LOCAL_COMMANDS, parseCommandName, type CommandCompletion, type CommandCompletionNode, type LocalCommand } from '../commands.js'
 import { clearResumeTarget, forgetAgentViewSession, forgetSession, readAgentViewSessions, readResumeTarget, touchAgentViewSession, touchSession, writeResumeTarget } from '../sessionHistory.js'
 import {
   appendSessionTitle,
@@ -1269,8 +1269,15 @@ export interface Channel {
   readonly mode: SessionModeSpec
   /** Index of `mode` in the configured cycle; 0 is the unmarked base mode. */
   readonly modeIndex: number
-  /** Shift+Tab: advance to the next configured session mode. */
+  /** Shift+Tab: advance to the next configured session mode. Concurrent
+   *  invocations are serialized, so rapid presses advance once per press. */
   cycleMode(): Promise<void>
+  /**
+   * Whether real plan mode is in force, including a switch queued for the
+   * next step boundary (dsh-plan-mode's pending intent) — the same truth the
+   * model-facing plan section uses.
+   */
+  planModeEnabled(): boolean
   /** Read the official permission preset roster and current identity. */
   permissionPresets(): PermissionPresetSnapshot
   /** The preset the CURRENT session runs under (issue #8), resolved from its
@@ -1732,6 +1739,8 @@ export interface ChannelState {
   modeIndex: number
   /** Shift+Tab session-mode advance (see the public Channel type). */
   cycleMode(): Promise<void>
+  /** Real plan-mode state (see the public Channel type). */
+  planModeEnabled(): boolean
   /** Read the official permission preset roster and current identity. */
   permissionPresets(): PermissionPresetSnapshot
   /** The preset the current session runs under (see the public Channel type). */
@@ -2694,6 +2703,14 @@ export function createChannel(
     ctx.logger.warn(`dsh-tui: permission preset "${value}" skipped from Shift+Tab (${reason})`)
   }
   rebuildSessionModes(agent)
+  /**
+   * Serializes Shift+Tab cycles. `applyMode` awaits the `/plan` registry
+   * command, so without a tail each overlapping call re-derives the same
+   * pre-switch index and two quick presses land on the SAME mode instead of
+   * advancing twice. The tail swallows failures for queueing purposes; the
+   * caller receives the original rejection.
+   */
+  let modeCycleTail: Promise<void> = Promise.resolve()
   const listeners = new Set<() => void>()
   /** True while a frame-aligned stream notification is pending (emitStream). */
   let streamNotifyScheduled = false
@@ -3660,10 +3677,13 @@ export function createChannel(
     }
   }
 
-  // Session-mode folds: last-wins projections over the session log. The
-  // event types are registered by dsh-plan-mode / dsh-sandbox-policy /
-  // dsh-user-approval and are NOT in this package's typed SessionEvent
-  // union, so they are matched by name through casts — the same pattern as
+  // Session-mode folds: last-wins projections over the session log.
+  // `approval/policy` IS in this package's typed SessionEvent union (the
+  // adapter's type imports from @deepseek-ai/dsh-user-approval bring the
+  // upstream module augmentation), so that fold narrows on `event.type`
+  // without casts. `plan/mode` and `sandbox/mode` belong to plugins this
+  // channel does not import (dsh-plan-mode / dsh-sandbox-policy), so their
+  // folds keep the name-match casts — the same pattern as
   // `agent-preset/selected` in renderEvent and the goal projection above.
   const foldPlanActive = (events: readonly SessionEvent[]): boolean => {
     let active = false
@@ -3673,6 +3693,34 @@ export function createChannel(
       }
     }
     return active
+  }
+  /**
+   * Effective plan-mode truth: dsh-plan-mode's pending intent (a switch
+   * queued for the next step boundary) wins over the logged fold, exactly
+   * like the controller's own model-facing section and the plan-aware
+   * persona gate. Falls back to the raw log fold when the controller is
+   * not resolvable (bare embeds, rosterless leafs).
+   */
+  const planModeState = (): { active: boolean; pending?: boolean } => {
+    try {
+      const planMode = serviceForAgent<{
+        get?(agent: Agent): { active: boolean; pending?: boolean }
+      }>(ctx, agent, 'planMode')
+      const value = planMode?.get?.(agent)
+      if (value !== undefined && typeof value.active === 'boolean') {
+        return {
+          active: value.active,
+          pending: typeof value.pending === 'boolean' ? value.pending : undefined,
+        }
+      }
+    } catch {
+      // Roster/service resolution is best-effort; the log fold is authoritative alone.
+    }
+    return { active: foldPlanActive(snapshotLiveSessionEvents(agent.session)) }
+  }
+  const planModeEnabled = (): boolean => {
+    const plan = planModeState()
+    return plan.pending ?? plan.active
   }
   const foldSandboxMode = (events: readonly SessionEvent[]): string | undefined => {
     let mode: string | undefined
@@ -3687,8 +3735,8 @@ export function createChannel(
   const foldApprovalPolicy = (events: readonly SessionEvent[]): string | undefined => {
     let policy: string | undefined
     for (const event of events) {
-      if ((event as { type: string }).type === 'approval/policy') {
-        const value = (event.data as unknown as { policy?: string }).policy
+      if (event.type === 'approval/policy') {
+        const value = event.data.policy
         if (typeof value === 'string') policy = value
       }
     }
@@ -3799,6 +3847,12 @@ export function createChannel(
     // The durable sandbox override is one session event (dsh-sandbox-policy's
     // own write path); the session/event arm picks it up immediately.
     if (spec.sandbox !== undefined && foldSandboxMode(snapshotLiveSessionEvents(agent.session)) !== spec.sandbox) {
+      // sandbox/mode stays a widened append: the event type belongs to
+      // dsh-sandbox-policy, which this channel deliberately does not import
+      // (not a peer/blessed dependency), so the key is absent from this
+      // program's typed SessionEventMap. The runtime write is byte-identical
+      // to upstream's own setSandboxMode — session.append('sandbox/mode',
+      // { mode }); plugin-load registration covers the strict resume read.
       ;(agent.session as unknown as { append(type: string, data: Record<string, unknown>): unknown }).append(
         'sandbox/mode',
         { mode: spec.sandbox },
@@ -3811,7 +3865,13 @@ export function createChannel(
         | { setPolicy(a: Agent, policy: 'ask' | 'never'): void }
         | undefined
       approval?.setPolicy(agent, spec.approval)
-      // The service may no-op when its configured default already matches.
+      // dsh-user-approval.setPolicy is a deliberate no-op when the target
+      // already equals the configured default, so no `approval/policy`
+      // event lands. Mode derivation reads the log only, so without the
+      // explicit event a mode whose approval atom equals that default
+      // (the built-in plan mode's `ask`) can never match and Shift+Tab
+      // gets stuck re-applying the same mode. Log the explicit override
+      // only if the service still left the fold short of the target policy.
       if (foldApprovalPolicy(snapshotLiveSessionEvents(agent.session)) !== spec.approval) {
         ;(agent.session as unknown as { append(type: string, data: Record<string, unknown>): unknown }).append(
           'approval/policy',
@@ -4095,10 +4155,17 @@ export function createChannel(
 
   /** Shift+Tab: advance to the next configured session mode. Cycling starts
    *  from the mode DERIVED from the session log (never a stored index), so
-   *  manual `/plan` use can never desync the cycle. */
-  const cycleMode = async (): Promise<void> => {
-    const index = deriveModeIndex(snapshotLiveSessionEvents(agent.session))
-    await applyMode(sessionModes[(index + 1) % sessionModes.length]!)
+   *  manual `/plan` use can never desync the cycle. Calls are serialized on
+   *  {@link modeCycleTail}; the index is re-derived only when the previous
+   *  switch has fully settled, so rapid consecutive presses advance once per
+   *  press instead of racing on the same pre-switch snapshot. */
+  const cycleMode = (): Promise<void> => {
+    const run = modeCycleTail.then(async () => {
+      const index = deriveModeIndex(snapshotLiveSessionEvents(agent.session))
+      await applyMode(sessionModes[(index + 1) % sessionModes.length]!)
+    })
+    modeCycleTail = run.catch(() => {})
+    return run
   }
 
   // Session-lifetime candidate pool for non-path queries. The load promise is
@@ -4198,7 +4265,6 @@ export function createChannel(
       state.emit()
     }).catch(() => {})
   }
-
   // --- Manual-compaction lifecycle ---------------------------------------
   // The in-flight /compact transaction: its abort hook plus the settled
   // promise. Every path that replaces `agent` (rewind / rewind-node /
@@ -5847,12 +5913,12 @@ export function createChannel(
       // swap in that window.
       const entrySession = agent.session
       let handle: AgentHandle
-      // Compat boundary: register vouched-for legacy event types (e.g.
-      // activity/status from pre-#143 logs) in every reachable dsh-session
-      // copy before ANY strict read path (preset lookup below, then the
-      // harness seed validation) loads the target — the plugin's #119
-      // registration never ran in processes where it is unmounted (issue
-      // #153). In-process only: the shared log is never rewritten.
+      // Compat boundary: the plugin-load registration normally already
+      // covered this process; re-ensure before ANY strict read path (preset
+      // lookup below, then the harness seed validation) as defense in depth
+      // — the plugin's #119 registration never ran in processes where it is
+      // unmounted (issue #153). Idempotent, in-process only: the shared log
+      // is never rewritten.
       ensureLegacySessionEventTypes()
       // The target session's own preset (from its persisted log) — never the
       // current preference: a resume re-enters the composition its history
@@ -6384,6 +6450,7 @@ export function createChannel(
     setEffort,
     setDefaultEffort,
     cycleMode,
+    planModeEnabled,
     clear() {
       state.rows.length = 0
       nextRowId = 0
@@ -6635,6 +6702,9 @@ export function createChannel(
         )
         return false
       }
+      // Recomposition already fires `commands/change` for registry rows, but
+      // the local half must be re-merged for the NEW preset as well.
+      refreshCommandList()
       state.emit()
       if (!writePresetPref(target.id)) {
         state.notify(t('preset-switched-pref-failed', { id: target.id }), { color: 'warning' })
@@ -7972,8 +8042,9 @@ export function createChannel(
     if (commandService) {
       for (const descriptor of commandService.list(target)) {
         // Hidden TUI commands (e.g. /deepseek) stay out of the public
-        // command catalog even if a plugin/skill happens to share the name.
-        if (HIDDEN_COMMAND_NAMES.has(descriptor.name)) continue
+        // command catalog even if a plugin/skill shares the name with a
+        // different casing.
+        if (isHiddenCommandName(descriptor.name)) continue
         if (merged.some(command => command.name === descriptor.name)) continue
         const descriptions = commandTrees?.descriptions(descriptor.name)
         merged.push({
@@ -9497,38 +9568,41 @@ ${output}
         ) {
           refreshMode()
         }
-        if (eventType === 'plan/mode' && (event.data as unknown as { active?: boolean }).active === false) {
-          const target = prePlanModes.get(session) ?? prePlanModeSpec(snapshotLiveSessionEvents(session))
-          prePlanModes.delete(session)
-          if (!explicitPlanExits.delete(session) && target !== undefined) {
-            const queued = pendingPlanExitRestores.has(session)
-            pendingPlanExitRestores.set(session, target)
-            if (!queued) queueMicrotask(() => {
-              const restore = pendingPlanExitRestores.get(session)
-              pendingPlanExitRestores.delete(session)
-              // Rebinding, reentry, or an explicit switch supersedes this restore.
-              if (restore === undefined || session !== agent.session || foldPlanActive(snapshotLiveSessionEvents(session))) return
-              applyMode(restore).catch(error => {
-                ctx.logger.warn(
-                  `dsh-tui: plan-exit mode restore failed: ${error instanceof Error ? error.message : String(error)}`,
-                )
-              }).finally(() => {
-                // Return the user to the preset they were on before plan mode
-                // (when the runtime registry still offers it) instead of
-                // parking them on the canonical bundle of the restored atoms.
-                const remembered = prePlanPermissionIdentity.get(session)
-                prePlanPermissionIdentity.delete(session)
-                if (remembered === undefined || session !== agent.session) return
-                applyPermissionIdentity(remembered).then((ok) => {
-                  if (!ok || session !== agent.session) return
-                  refreshMode()
-                  state.notify(t('mode-switched', { name: modeDisplayName(state.mode) }))
-                }).catch(() => {
-                  // The identity restore is best-effort; failures already
-                  // surfaced through applyPermissionIdentity's own notices.
+        if (eventType === 'plan/mode') {
+          const planEventActive = (event.data as unknown as { active?: boolean }).active
+          if (planEventActive === false) {
+            const target = prePlanModes.get(session) ?? prePlanModeSpec(snapshotLiveSessionEvents(session))
+            prePlanModes.delete(session)
+            if (!explicitPlanExits.delete(session) && target !== undefined) {
+              const queued = pendingPlanExitRestores.has(session)
+              pendingPlanExitRestores.set(session, target)
+              if (!queued) queueMicrotask(() => {
+                const restore = pendingPlanExitRestores.get(session)
+                pendingPlanExitRestores.delete(session)
+                // Rebinding, reentry, or an explicit switch supersedes this restore.
+                if (restore === undefined || session !== agent.session || foldPlanActive(snapshotLiveSessionEvents(session))) return
+                applyMode(restore).catch(error => {
+                  ctx.logger.warn(
+                    `dsh-tui: plan-exit mode restore failed: ${error instanceof Error ? error.message : String(error)}`,
+                  )
+                }).finally(() => {
+                  // Return the user to the preset they were on before plan mode
+                  // (when the runtime registry still offers it) instead of
+                  // parking them on the canonical bundle of the restored atoms.
+                  const remembered = prePlanPermissionIdentity.get(session)
+                  prePlanPermissionIdentity.delete(session)
+                  if (remembered === undefined || session !== agent.session) return
+                  applyPermissionIdentity(remembered).then((ok) => {
+                    if (!ok || session !== agent.session) return
+                    refreshMode()
+                    state.notify(t('mode-switched', { name: modeDisplayName(state.mode) }))
+                  }).catch(() => {
+                    // The identity restore is best-effort; failures already
+                    // surfaced through applyPermissionIdentity's own notices.
+                  })
                 })
               })
-            })
+            }
           }
         }
         renderEvent(event)

@@ -87,6 +87,13 @@ export type AskUserQuestionPanelProps = {
   readonly onCancel: () => void
   /** Esc on later questions — navigates to the previous question. */
   readonly onBack?: (draft: QuestionDraft) => void
+  /** Plan-review Exit planning row; defaults to onCancel for non-Chat
+   *  callers that render a plan-review question without the store hook. */
+  readonly onExitPlanning?: () => void
+  /** Enable the plan-review Exit planning row (Liangshen preset in plan
+   *  mode). When false (the default), the panel shows the asker's own
+   *  decline option verbatim with keep-planning semantics. */
+  readonly exitPlanning?: boolean
   /**
    * Test seam: clipboard reader for the Ctrl+V paste arm. Defaults to the
    * real cross-platform reader (PowerShell/pbpaste/wl-paste…); headless
@@ -104,18 +111,24 @@ export function AskUserQuestionPanel({
   onAnswer,
   onCancel,
   onBack,
+  onExitPlanning,
+  exitPlanning,
   readClipboardOverride,
 }: AskUserQuestionPanelProps): React.ReactNode {
   // Plan-mode's exit_plan_mode ask carries a presentation intent: render
   // the CC-style decision card instead of the generic questionnaire. The
   // branch precedes every hook so hook order stays stable per remount key.
   if (question.intent?.kind === 'plan-review') {
-    return <PlanReviewPanel
-      question={question}
-      onAnswer={onAnswer}
-      onCancel={onCancel}
-      readClipboardOverride={readClipboardOverride}
-    />
+    return (
+      <PlanReviewPanel
+        question={question}
+        onAnswer={onAnswer}
+        onCancel={onCancel}
+        onExitPlanning={onExitPlanning ?? onCancel}
+        exitPlanning={exitPlanning}
+        readClipboardOverride={readClipboardOverride}
+      />
+    )
   }
   const options = question.options ?? []
   const multiSelect = question.multiSelect === true

@@ -31,7 +31,7 @@ import type {
   StagedImageHandle,
 } from '../dsh-adapter/channel.js'
 import type { TranscriptImage } from '../dsh-adapter/transcript-images.js'
-import { isHiddenCommandName, parseCommandName } from '../commands.js'
+import { isHiddenCommandName, normalizeLocalCommandName, parseCommandName } from '../commands.js'
 import { appendHistory } from '../history.js'
 import { mentionAtCaret } from '../utils/mentions.js'
 import { preserveSelection, type FileCandidate } from '../utils/fileSuggestions.js'
@@ -1270,8 +1270,11 @@ export function PromptInput({
     if (!text.startsWith('/')) return false
     const parsed = parseCommandName(text)
     if (parsed === undefined) return false
-    const command = channel.commandList.find(entry => entry.name === parsed.name)
-    const known = command !== undefined || isHiddenCommandName(parsed.name)
+    const commandName = normalizeLocalCommandName(parsed.name, channel.commandList)
+    const command = commandName === undefined
+      ? undefined
+      : channel.commandList.find(entry => entry.name === commandName)
+    const known = commandName !== undefined
     if (!known) return false
     const generation = syncImageGeneration()
     const revision = draftRevisionRef.current
@@ -1381,11 +1384,10 @@ export function PromptInput({
       // streaming. Every other input keeps the steer behavior so /new
       // /model etc. stay idle-only.
       const parsed = value.startsWith('/') ? parseCommandName(value) : undefined
-      if (parsed !== undefined && (
-        ((parsed.name === 'btw' || parsed.name === 'skills')
-          && channel.commandList.some(c => c.name === parsed.name))
-        || isHiddenCommandName(parsed.name)
-      )) {
+      const name = parsed === undefined
+        ? undefined
+        : normalizeLocalCommandName(parsed.name, channel.commandList)
+      if (name === 'btw' || name === 'skills' || (name !== undefined && isHiddenCommandName(name))) {
         if (tryRunCommand(value)) return
       }
       steerSend(value)

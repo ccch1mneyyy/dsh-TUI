@@ -1,16 +1,16 @@
 #!/usr/bin/env node
 /**
- * Regression: resume-seam legacy event-type registration
+ * Regression: resume-seam event-type registration
  * (src/dsh-adapter/compat/sessionLog.ts, issue #153).
  *
  * Part 1 boots the REAL upstream storage stack (SessionStore + the jsonl
- * persistence backend) against a temp root with hand-crafted pre-#143 logs
- * (activity/status present, no ignorable marker — the shape that made
- * resume reject whole sessions), and asserts through the backend's own
- * strict read path:
- *   1. before registration, load() rejects with SessionFormatUnsupportedError
- *      ("not marked ignorable") — the exact failure from issue #153;
- *   2. ensureLegacySessionEventTypes() flips the SAME load() to success via
+ * persistence backend) against a temp root. A tainted log carries the
+ * pre-#143 `activity/status` residue (no ignorable marker — the shape that
+ * makes resume reject whole sessions), and asserts through the backend's
+ * own strict read path:
+ *   1. before registration, the tainted load() rejects with
+ *      SessionFormatUnsupportedError ("not marked ignorable");
+ *   2. ensureLegacySessionEventTypes() flips the SAME load to success via
  *      the validator's own dsh-session copy (anchor coverage is e2e-proven,
  *      not assumed);
  *   3. the log file stays byte-identical and keeps its 0600 mode —
@@ -33,7 +33,7 @@
  */
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
-import { chmodSync, cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -48,10 +48,10 @@ const {
   LEGACY_SESSION_EVENT_TYPES,
 } = await import('../lib/types/dsh-adapter/compat/sessionLog.js')
 
-/** Hand-craft one pre-#143 shaped log: header frame + one event frame. */
-function writeTaintedLog(id, eventType) {
+/** Hand-craft one tainted log: header frame + one event frame. */
+function writeTaintedLog(id, eventType, data = {}) {
   const header = { type: 'session', version: SESSION_FORMAT_VERSION, id, createdAt: 1, cwd: '/tmp/verify', delegationDepth: 0 }
-  const event = { type: eventType, seq: 0, time: 2, data: {} }
+  const event = { type: eventType, seq: 0, time: 2, data }
   const dir = join(root, '--tmp-verify--', id)
   mkdirSync(dir, { recursive: true })
   const file = join(dir, 'session.jsonl.zstd')
@@ -66,44 +66,56 @@ function writeTaintedLog(id, eventType) {
   return file
 }
 
-const ctx = new Context()
-await ctx.plugin(SessionStore)
-const fork = ctx.plugin(Jsonl, { root })
-if (fork && typeof fork.await === 'function') await fork.await()
-else await fork
-const persistence = ctx.get('sessionPersistence')
-assert.ok(persistence, 'sessionPersistence service mounted')
+/** Await a Jsonl plugin mount across the fork shapes cordis emits. */
+async function mountJsonl(target, storeRoot) {
+  const fork = target.plugin(Jsonl, { root: storeRoot })
+  if (fork && typeof fork.await === 'function') await fork.await()
+  else await fork
+}
 
 const legacyId = '00000000-1111-2222-3333-444444444444'
 const futureId = '55555555-6666-7777-8888-999999999999'
 const legacyFile = writeTaintedLog(legacyId, 'activity/status')
 writeTaintedLog(futureId, 'acme/required-policy') // non-whitelisted unknown
 
-// 1. The exact issue #153 failure, through the real validator.
-await assert.rejects(
-  () => persistence.load(legacyId),
-  (error) => {
-    assert.equal(error.name, 'SessionFormatUnsupportedError')
-    assert.match(error.message, /not marked ignorable/)
-    return true
-  },
-  'tainted log must reject before registration',
-)
+// Fresh runtime on the same root = the resume process.
+const ctx = new Context()
+await ctx.plugin(SessionStore)
+await mountJsonl(ctx, root)
+const persistence = ctx.get('sessionPersistence')
+assert.ok(persistence, 'sessionPersistence service mounted')
 
-const bytesBefore = readFileSync(legacyFile)
-const modeBefore = statSync(legacyFile).mode & 0o777
+const tainted = [{ id: legacyId, file: legacyFile }]
 
-// 2. Registration flips the same load to success.
+// 1. Every tainted log rejects through the real validator.
+for (const { id } of tainted) {
+  await assert.rejects(
+    () => persistence.load(id),
+    (error) => {
+      assert.equal(error.name, 'SessionFormatUnsupportedError', `${id} rejection name`)
+      assert.match(error.message, /not marked ignorable/, `${id} rejection message`)
+      return true
+    },
+    `${id} must reject before registration`,
+  )
+}
+
+const bytesBefore = new Map(tainted.map(({ id, file }) => [id, readFileSync(file)]))
+const modeBefore = new Map(tainted.map(({ id, file }) => [id, statSync(file).mode & 0o777]))
+
+// 2. Registration flips the same loads to success.
 ensureLegacySessionEventTypes()
-const loaded = await persistence.load(legacyId)
-assert.equal(loaded.events.length, 1, 'legacy session loads after registration')
-assert.equal(loaded.events[0].type, 'activity/status')
+const loadedLegacy = await persistence.load(legacyId)
+assert.equal(loadedLegacy.events.length, 1, 'legacy session loads after registration')
+assert.equal(loadedLegacy.events[0].type, 'activity/status')
 
 // 3. The shared store was never rewritten.
-assert.equal(Buffer.compare(readFileSync(legacyFile), bytesBefore), 0, 'log bytes untouched')
-assert.equal(statSync(legacyFile).mode & 0o777, modeBefore, 'log mode untouched')
-if (process.platform !== 'win32') {
-  assert.equal(modeBefore, 0o600, 'fixture really exercised the 0600 contract')
+for (const { id, file } of tainted) {
+  assert.equal(Buffer.compare(readFileSync(file), bytesBefore.get(id)), 0, `${id} log bytes untouched`)
+  assert.equal(statSync(file).mode & 0o777, modeBefore.get(id), `${id} log mode untouched`)
+  if (process.platform !== 'win32') {
+    assert.equal(modeBefore.get(id), 0o600, `${id} fixture really exercised the 0600 contract`)
+  }
 }
 
 // 4. Fail-closed preserved: the non-whitelisted unknown still rejects.
@@ -119,7 +131,7 @@ for (const type of LEGACY_SESSION_EVENT_TYPES) {
 }
 assert.ok(!KNOWN_SESSION_EVENT_TYPES.has('acme/required-policy'), 'unknown stays unknown')
 ensureLegacySessionEventTypes() // second call: no-op, never throws
-assert.equal((await persistence.load(legacyId)).events.length, 1, 'still loads after re-ensure')
+assert.equal((await persistence.load(legacyId)).events.length, 1, 'legacy still loads after re-ensure')
 
 // --- part 2: split CLI/profile trees ---------------------------------------
 // Three PHYSICAL dsh-session copies (stub packages — anchor coverage is
@@ -203,15 +215,13 @@ const launched = spawnSync(process.execPath, [launcherPath], {
 assert.equal(launched.status, 0, `split fixture child failed:\n${launched.stderr}`)
 const coverage = JSON.parse(launched.stdout.trim().split('\n').at(-1))
 assert.equal(coverage.distinctCopies, true, 'fixture must hold three distinct dsh-session instances')
-assert.deepEqual(
-  {
-    profileRegistered: coverage.profileRegistered,
-    cliRegistered: coverage.cliRegistered,
-    validatorRegistered: coverage.validatorRegistered,
-  },
-  { profileRegistered: true, cliRegistered: true, validatorRegistered: true },
-  'registration must reach the profile tree, the CLI tree, AND the validator-own copy',
-)
+for (const prefix of ['profile', 'cli', 'validator']) {
+  assert.equal(
+    coverage[`${prefix}Registered`],
+    true,
+    `registration must reach the ${prefix} copy with the whitelisted type`,
+  )
+}
 
 rmSync(fixture, { recursive: true, force: true })
 rmSync(root, { recursive: true, force: true })

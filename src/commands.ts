@@ -141,24 +141,29 @@ export const LOCAL_COMMANDS: LocalCommand[] = [
  * Hidden slash commands: intentionally not exposed in the `/` suggestion
  * menu or Help, but still recognized as local commands when typed. They are
  * kept out of `LOCAL_COMMANDS` so `filterCommands`/`completeCommands` never
- * surface them; dispatch recognizes them via {@link HIDDEN_COMMAND_NAMES}.
+ * surface them; dispatch recognizes them via {@link isHiddenCommandName}.
  */
 export const HIDDEN_COMMANDS: readonly LocalCommand[] = [
   { name: 'deepseek', description: 'Hidden DeepSeek easter egg' },
 ]
 
-/** Names of hidden commands, for fast dispatch/lookup. */
+/** Canonical names of hidden commands, for callers that need the raw set. */
 export const HIDDEN_COMMAND_NAMES: ReadonlySet<string> = new Set(
   HIDDEN_COMMANDS.map(command => command.name),
 )
 
+/** Slash-optional, whitespace-trimmed, case-folded command name. */
+function foldedCommandName(input: string): string {
+  return input.replace(/^\//, '').trim().toLowerCase()
+}
+
 /**
- * Whether the input names a hidden command (same slash-optional trimming
- * rules as {@link isLocalCommandName}).
+ * Whether the input names a hidden command (same slash-optional trimming and
+ * case-insensitive matching rules as {@link isLocalCommandName}).
  */
 export function isHiddenCommandName(input: string): boolean {
-  const name = input.replace(/^\//, '').trim()
-  return HIDDEN_COMMAND_NAMES.has(name)
+  const name = foldedCommandName(input)
+  return HIDDEN_COMMANDS.some(command => command.name.toLowerCase() === name)
 }
 
 /**
@@ -178,7 +183,10 @@ export function localizedDescription(command: LocalCommand & { descriptionKey?: 
 /**
  * Parse a slash-command line into its name and the verbatim input following
  * the name (separator whitespace included) — the same split the DSH command
- * registry uses, so `/plan off` dispatches `plan` with ` off`.
+ * registry uses, so `/plan off` dispatches `plan` with ` off`. Local
+ * commands match case-insensitively; the typed name is preserved and
+ * dispatch then folds it back to the catalog spelling via
+ * {@link normalizeLocalCommandName}.
  *
  * @param line - Complete candidate command line.
  * @returns The parsed name and raw input, or `undefined` when the line is
@@ -187,14 +195,35 @@ export function localizedDescription(command: LocalCommand & { descriptionKey?: 
 export function parseCommandName(
   line: string,
 ): { name: string; rawInput: string } | undefined {
-  const match = /^\/([a-z][a-z0-9_-]*)(?=$|[\t\n\r ])/.exec(line)
+  const match = /^\/([a-z][a-z0-9_-]*)(?=$|[\t\n\r ])/iu.exec(line)
   if (match === null) return undefined
   return { name: match[1], rawInput: line.slice(match[0].length) }
 }
 
 /**
+ * Resolve an input to the catalog spelling of a local command, matching
+ * case-insensitively — `/Lang`, `/lang`, and `/LANG ` all resolve to
+ * `lang`. The slash is optional and trailing whitespace is legal (Tab
+ * completion leaves a space after the name). Hidden commands resolve even
+ * when `list` intentionally excludes them.
+ * @param input - Candidate command line (slash optional).
+ * @param list - Command list to match against; defaults to LOCAL_COMMANDS.
+ * @returns The catalog command name, or `undefined` when nothing matches.
+ */
+export function normalizeLocalCommandName(
+  input: string,
+  list: readonly LocalCommand[] = LOCAL_COMMANDS,
+): string | undefined {
+  const name = foldedCommandName(input)
+  const hidden = HIDDEN_COMMANDS.find(command => command.name.toLowerCase() === name)
+  if (hidden !== undefined) return hidden.name
+  return list.find(command => command.name.toLowerCase() === name)?.name
+}
+
+/**
  * Whether the input names a local command. Local commands must never be sent
- * to the model when typed alone; trailing whitespace is legal.
+ * to the model when typed alone; trailing whitespace is legal. Matching is
+ * case-insensitive, like slash-command dispatch.
  * @param input - Candidate command line (slash optional).
  * @param list - Command list to match against; defaults to LOCAL_COMMANDS.
  * @returns True when the trimmed input names a command in `list`.
@@ -203,10 +232,7 @@ export function isLocalCommandName(
   input: string,
   list: readonly LocalCommand[] = LOCAL_COMMANDS,
 ): boolean {
-  // Trailing whitespace is legal (Tab completion leaves a space after the
-  // name so the user can type arguments).
-  const name = input.replace(/^\//, '').trim()
-  return HIDDEN_COMMAND_NAMES.has(name) || list.some(command => command.name === name)
+  return normalizeLocalCommandName(input, list) !== undefined
 }
 
 /**

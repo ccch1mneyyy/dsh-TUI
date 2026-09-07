@@ -24,8 +24,8 @@ import { CharPool, HyperlinkPool, StylePool, createScreen, setCellAt } from '../
 import type { TerminalImagePlacement, TerminalImageSource } from '../lib/types/ink/terminal-image.js'
 import type { SixelEncodeRequest, SixelRaster } from '../lib/types/ink/sixel-codec.js'
 
-async function until(check: () => boolean, message: string): Promise<void> {
-  const deadline = Date.now() + 10_000
+async function until(check: () => boolean, message: string, timeoutMs = 10_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs
   while (!check() && Date.now() < deadline) await delay(20)
   assert.ok(check(), message)
 }
@@ -364,7 +364,11 @@ const largeTree = (show: boolean) => <AlternateScreen><Box width={240} height={9
 </Box></AlternateScreen>
 const largeApp = await render(largeTree(true), { stdin: largeInput, stdout: largeOutput, stderr, exitOnCtrlC: false, patchConsole: false })
 try {
-  await until(() => largeOutput.data.includes('\x1bP0;1;q'), 'large preview is encoded by the compiled worker')
+  // The 2048×1024 worker encode includes native palette quantization and
+  // sixel packing; loaded CI runners have exceeded the default 10s budget
+  // here, which only proves the test budget is tighter than the worker's
+  // own 30s guard. Give the worker its full budget before failing.
+  await until(() => largeOutput.data.includes('\x1bP0;1;q'), 'large preview is encoded by the compiled worker', 30_000)
   const sequence = /\x1bP0;1;q[\s\S]*?\x1b\\/u.exec(largeOutput.data)?.[0]
   assert.ok(sequence)
   const image = decodeRaster(sequence)

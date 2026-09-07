@@ -129,6 +129,10 @@ Usage rules:
   Set `DSH_TUI_LIANGSHEN_BASH_PATH` to an absolute `bash.exe` path to pin it
   explicitly (the pin is the only candidate; a miss warns and skips
   registration, exposing the full tool catalog on the first round).
+- Liangshen mode's system prompt keeps the Minimal text outside plan mode;
+  entering plan mode (`/plan`, `Shift+Tab`, or resuming a session) injects the
+  plan-mode plan prompt into the current session's system prompt, and leaving
+  plan mode removes it.
 
 Place a custom preset at `$DSH_HOME/.agent-presets/<name>/` with an
 `agent.cordis.yml` file. Under the default DSH home this is

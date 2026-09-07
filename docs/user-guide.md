@@ -199,7 +199,7 @@ dsh-tui
 
 ## 3. 命令全集
 
-命令菜单 = 内置命令（50 条） + DSH 注册表命令（`/plan` `/goal` 等） + 技能目录
+命令菜单 = 内置命令 + DSH 注册表命令（`/plan` `/goal` 等） + 技能目录
 （仅补全，`/help` 菜单隐藏）。`/lang` 可切换中英文界面与命令描述。
 
 ### 3.1 会话
@@ -281,7 +281,7 @@ dsh-TUI 不预装通用技能。`/skills` 浏览 DSH 从当前 profile、用户�
 
 | 命令 | 作用 |
 |---|---|
-| `/plan` | `[off\|message]` 计划模式；`/plan off` 退出 |
+| `/plan` | `[off\|message]` 计划模式；`/plan off` 退出。**梁神模式下进入 plan mode（`/plan`、`Shift+Tab` 或恢复会话）即注入 plan 提示词，退出即移除** |
 | `/goal` | 设置/查看会话目标 |
 | `/feedback` | 提交使用反馈 |
 | `/permission` | 查看/切换 DSH `permissionPresets` registry 的预设；第三方预设按 registry 顺序显示，`custom` 只作为当前态，不是选择目标；服务缺失时使用 legacy 三项名册，服务已挂载但损坏时标记 unavailable；外部命令未注册时沿用默认命令/model dispatch |
