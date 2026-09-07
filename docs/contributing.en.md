@@ -312,6 +312,7 @@ change, also run the closest focused script:
 | Mouse pointer event pipeline (wheel coords/modifier bits, click/hover dispatch, out-of-bounds clamping, pointer-state reset) | `node --import tsx/esm scripts/verify-pointer-events.ts` |
 | Hover event performance (complete interest boundaries, no-interest rect fast path, frame/multi-root invalidation) | `node --import tsx/esm scripts/verify-hover-coalesce.tsx` |
 | Prompt-input mouse selection editing (drag/Shift+click/double-click word select, delete/replace, layered Esc, Ctrl+C copy, CJK wide cells, fold-side clamping) | `node --import tsx/esm scripts/verify-input-selection.tsx` |
+| Sixel encoding, worker cache, thumbnail/preview lifecycle | `node --import tsx/esm scripts/verify-terminal-images-sixel.tsx`, `node --import tsx/esm scripts/verify-sixel-transcript.tsx`; timing comparison `node --import tsx/esm scripts/bench-sixel-encode.tsx` |
 
 Most focused scripts invoked with plain `node` import `lib/types/`; run
 `pnpm build` first. Scripts that import TypeScript sources declare the
