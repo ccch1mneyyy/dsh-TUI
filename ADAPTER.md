@@ -3,7 +3,7 @@
 ## 边界规则
 
 官方 `@deepseek-ai/*` 包只允许在 `src/dsh-adapter/` 内被 import。
-UI 层(`screens/`、`components/`、`ink/`、`hooks/`、`utils/`、`cc/`)
+UI 层(`screens/`、`components/`、`ink/`、`hooks/`、`utils/`、`terminal-utils/`)
 一律通过 adapter 的 facade(`src/dsh-adapter/types.ts` 的类型 re-export、
 `channel.ts`/`plugin.ts` 等运行期服务)间接接触上游。
 

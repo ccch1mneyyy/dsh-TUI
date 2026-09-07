@@ -8,7 +8,7 @@ delete process.env.DSH_TUI_DISABLE_TERMINAL_IMAGES
 delete process.env.DSH_TUI_IMAGE_PROTOCOL
 delete process.env.TMUX
 delete process.env.STY
-delete process.env.CLAUDE_CODE_ACCESSIBILITY
+delete process.env.DSH_TUI_ACCESSIBILITY
 
 import assert from 'node:assert/strict'
 import { readFile, unlink } from 'node:fs/promises'

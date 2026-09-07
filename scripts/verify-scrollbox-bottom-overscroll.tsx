@@ -96,7 +96,7 @@ function makeChannel(rows: any[]) {
     commandList: LOCAL_COMMANDS,
     notifications: [],
     mode: { plan: false, sandbox: undefined },
-    activityFrames: 'claude',
+    activityFrames: 'moon8',
     agentPreset: undefined,
     subagents: [],
     subscribe(cb: () => void) { listeners.add(cb); return () => listeners.delete(cb) },

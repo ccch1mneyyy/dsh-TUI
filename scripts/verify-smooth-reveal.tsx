@@ -262,7 +262,7 @@ console.log('--- C: component contracts ---')
   const slice = full.slice(0, 40)
   await withTerminal(
     () => (
-      <AssistantThinkingMessage thinking={slice} textFull={full} addMargin={false} verbose={false} preview streaming />
+      <AssistantThinkingMessage thinking={slice} textFull={full} marginTopOnTurn={false} verbose={false} preview streaming />
     ),
     async screen => {
       // 固定窗:探针 预览 ticker 不得被揭示节流：settled 等到揭完也判过，
@@ -274,7 +274,7 @@ console.log('--- C: component contracts ---')
   )
   await withTerminal(
     () => (
-      <AssistantThinkingMessage thinking={slice} textFull={full} addMargin={false} verbose streaming />
+      <AssistantThinkingMessage thinking={slice} textFull={full} marginTopOnTurn={false} verbose streaming />
     ),
     async screen => {
       // 固定窗:探针 展开体不得越过已揭示切片（断言 think line 11 不出现）
@@ -314,7 +314,7 @@ console.log('--- C: component contracts ---')
     resultView: { card: 'generic', title: 'Edited', content: [{ type: 'text', text: 'settled-result-marker' }] },
   }
   await withTerminal(
-    () => <AssistantToolUseMessage tool={runningTool} addMargin={false} verbose={false} smoothReveal fresh />,
+    () => <AssistantToolUseMessage tool={runningTool} marginTopOnTurn={false} verbose={false} smoothReveal fresh />,
     async (screen, rerender) => {
       // 固定窗:墙钟 采样逐行揭示的动画早期（60ms 内还没揭到被折叠的尾行）
       await sleep(60)
@@ -324,7 +324,7 @@ console.log('--- C: component contracts ---')
       await sleep(2200) // 固定窗:墙钟 等逐行揭示动画把整张卡片追平
       check(screen().includes('lines (ctrl+o to expand)'), 'C2 running card: body complete after catch-up')
       // C3: result arriving mid/after reveal snaps complete.
-      rerender(<AssistantToolUseMessage tool={doneTool} addMargin={false} verbose={false} smoothReveal fresh />)
+      rerender(<AssistantToolUseMessage tool={doneTool} marginTopOnTurn={false} verbose={false} smoothReveal fresh />)
       // 固定窗:探针 结果视图不得走揭示动画：settled 等到揭完也判过，遮蔽 bug
       await sleep(80)
       check(screen().includes('settled-result-marker'), 'C3 settled result paints complete (no reveal)')

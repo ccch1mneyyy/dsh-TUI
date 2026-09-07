@@ -380,11 +380,11 @@ if (failed > 0) {
     console.log(`${String(y - scrollbackRows).padStart(3)}|${lines[y]}`)
   }
 }
-// 完整 buffer 落盘（DSH_CC_REPRO_DUMP 指定路径时），供离线分析残留分布。
-if (process.env.DSH_CC_REPRO_DUMP) {
+// 完整 buffer 落盘（DSH_TUI_REPRO_DUMP 指定路径时），供离线分析残留分布。
+if (process.env.DSH_TUI_REPRO_DUMP) {
   const fs = await import('node:fs')
-  fs.writeFileSync(process.env.DSH_CC_REPRO_DUMP, lines.map((l, i) => `${String(i).padStart(4)}|${l}`).join('\n'))
-  console.log(`buffer 已落盘: ${process.env.DSH_CC_REPRO_DUMP}`)
+  fs.writeFileSync(process.env.DSH_TUI_REPRO_DUMP, lines.map((l, i) => `${String(i).padStart(4)}|${l}`).join('\n'))
+  console.log(`buffer 已落盘: ${process.env.DSH_TUI_REPRO_DUMP}`)
   // 附带解剖三个稳态帧的原始序列（escape 可见化），核对光标记账。
   const vis = (s: string) => s
     .replace(/\x1b/g, '⎋')
@@ -395,8 +395,8 @@ if (process.env.DSH_CC_REPRO_DUMP) {
   const bigIdx = frames.map((f, i) => ({ i, n: f.length })).filter(x => x.n > 600 && x.n < 900).map(x => x.i)
   const picks = bigIdx.slice(Math.floor(bigIdx.length / 2), Math.floor(bigIdx.length / 2) + 2)
   const dump2 = picks.map(i => `━━━ 稳态帧 #${i}（${frames[i].length}B） ━━━\n      ${vis(frames[i])}`).join('\n')
-  fs.writeFileSync(process.env.DSH_CC_REPRO_DUMP + '.frames', dump2)
-  console.log(`稳态帧序列已落盘: ${process.env.DSH_CC_REPRO_DUMP}.frames`)
+  fs.writeFileSync(process.env.DSH_TUI_REPRO_DUMP + '.frames', dump2)
+  console.log(`稳态帧序列已落盘: ${process.env.DSH_TUI_REPRO_DUMP}.frames`)
 }
 console.log(failed === 0 ? '\nALL PASS' : `\n${failed} 项失败`)
 await instance.unmount()

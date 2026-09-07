@@ -143,17 +143,16 @@ export async function tmuxLoadBuffer(text: string): Promise<boolean> {
  * detach/reattach, immune to stale env vars. The -w flag (tmux 3.2+) tells
  * tmux to also propagate to the outer terminal via its own OSC 52 path,
  * which tmux wraps correctly for the attached client. On older tmux, -w is
- * ignored and the buffer is still loaded. -w is dropped for iTerm2 (#22432)
+ * ignored and the buffer is still loaded. -w is dropped for iTerm2
  * because tmux's own OSC 52 emission (empty selection param: ESC]52;;b64)
  * crashes iTerm2 over SSH.
  *
  * After load-buffer succeeds, we ALSO return a DCS-passthrough-wrapped
  * OSC 52 for the caller to write to stdout. Our sequence uses explicit `c`
- * (not tmux's crashy empty-param variant), so it sidesteps the #22432 path.
+ * (not tmux's crashy empty-param variant), so it sidesteps the empty-selector path.
  * With `allow-passthrough on` + an OSC-52-capable outer terminal, selection
  * reaches the system clipboard; with either off, tmux silently drops the
- * DCS and prefix+] still works. See Greg Smith's "free pony" in
- * https://anthropic.slack.com/archives/C07VBSHV7EV/p1773177228548119.
+ * DCS and prefix+] still works.
  *
  * If load-buffer fails entirely, fall through to raw OSC 52.
  *
@@ -176,8 +175,7 @@ export async function setClipboard(text: string): Promise<string> {
   // Native safety net — fire FIRST, before the tmux await, so a quick
   // focus-switch after selecting doesn't race pbcopy. Previously this ran
   // AFTER awaiting tmux load-buffer, adding ~50-100ms of subprocess latency
-  // before pbcopy even started — fast cmd+tab → paste would beat it
-  // (https://anthropic.slack.com/archives/C07VBSHV7EV/p1773943921788829).
+  // before pbcopy even started — fast cmd+tab → paste would beat it.
   // Gated on SSH_CONNECTION (not SSH_TTY) since tmux panes inherit SSH_TTY
   // forever but SSH_CONNECTION is in tmux's default update-environment and
   // clears on local attach. Fire-and-forget.
@@ -507,19 +505,9 @@ export const CLEAR_TAB_STATUS = osc(
   'indicator=;status=;status-color=',
 )
 
-/**
- * Gate for emitting OSC 21337 (tab-status indicator). Ant-only while the
- * spec is unstable. Terminals that don't recognize it discard silently, so
- * emission is safe unconditionally — we don't gate on terminal detection
- * since support is expected across several terminals.
- *
- * Callers must wrap output with wrapForMultiplexer() so tmux/screen
- * DCS-passthrough carries the sequence to the outer terminal.
- * @returns true when the current user is Ant, the only environment emitting
- *   OSC 21337 today.
- */
+/** Enable experimental tab status only when explicitly requested by the terminal owner. */
 export function supportsTabStatus(): boolean {
-  return process.env.USER_TYPE === 'ant'
+  return process.env.DSH_TUI_TAB_STATUS === '1'
 }
 
 /**

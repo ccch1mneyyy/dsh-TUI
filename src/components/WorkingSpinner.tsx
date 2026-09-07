@@ -3,14 +3,14 @@ import { useTerminalSize } from '../ink/hooks/use-terminal-size.js'
 import { Box } from '../ui.js'
 import type { SpinnerMode } from './Spinner/spinnerMode.js'
 import { SpinnerAnimationRow } from './Spinner/SpinnerAnimationRow.js'
-import { SPINNER_VERBS } from '../cc/spinnerVerbs.js'
+import { SPINNER_VERBS } from '../terminal-utils/spinnerVerbs.js'
+import { tOr } from '../i18n.js'
 import { sample } from 'lodash-es'
 
 /**
  * The working spinner block shown between the transcript and the prompt
- * input while a turn is in flight. Mirrors Claude Code's `Spinner.tsx`
- * (SpinnerWithVerb path) with the swarm/teammate/effort/tips branches
- * removed; the channel feeds the mode, token count and thinking status.
+ * input while a turn is in flight. The channel feeds the mode, token count,
+ * and thinking status while this component owns the compact presentation.
  *
  * Random verb is picked once per turn (per mount of the spinner).
  */
@@ -38,7 +38,7 @@ export function WorkingSpinner({
 
   // Pick a random verb once per spinner mount (per turn).
   const [randomVerb] = useState(() => sample(SPINNER_VERBS) ?? 'Working')
-  const message = `${randomVerb}…`
+  const message = `${tOr(`spinner-verb-${randomVerb.toLowerCase()}`, randomVerb)}…`
 
   return (
     <Box flexDirection="column" width="100%" alignItems="flex-start">
@@ -49,8 +49,8 @@ export function WorkingSpinner({
         responseLengthRef={responseLengthRef}
         uploadTokensRef={uploadTokensRef}
         message={message}
-        messageColor="claude"
-        shimmerColor="claudeShimmer"
+        messageColor="accent"
+        shimmerColor="accentShimmer"
         loadingStartTimeRef={loadingStartTimeRef}
         totalPausedMsRef={totalPausedMsRef}
         pauseStartTimeRef={pauseStartTimeRef}
@@ -65,8 +65,7 @@ export function WorkingSpinner({
 
 /**
  * Tracks thinking status: 'thinking' while the model is streaming reasoning,
- * then the duration in ms for a minimum 2s display (avoids UI jank). Ported
- * from Claude Code's SpinnerWithVerb effect.
+ * then the duration in ms for a minimum 2s display (avoids UI jank).
  */
 export function useThinkingStatus(
   isThinking: boolean,

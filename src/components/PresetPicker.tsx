@@ -7,8 +7,8 @@ import { HintLine } from './design-system/HintLine.js'
 import type { PresetOption } from '../dsh-adapter/channel.js'
 
 /**
- * Agent-preset picker (issue #8) in the CC ModelPicker style — same chrome
- * as the ActivityPicker: a permission-colored Pane listing every roster
+ * Agent-preset picker (issue #8) using the ActivityPicker layout: a
+ * permission-colored Pane listing every roster
  * preset with its display name and description, `❯` focus pointer and `✓`
  * on the preset the current session runs. Enter applies through
  * `channel.switchPreset`, Esc cancels. Broken presets are listed (the

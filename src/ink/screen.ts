@@ -580,7 +580,8 @@ const EMPTY_CELL_VALUE = 0n
  *   word0: charId (full 32 bits — index into CharPool)
  *   word1: styleId[31:17] | hyperlinkId[16:2] | width[1:0]
  *
- * This layout halves memory accesses in diffEach (2 int loads vs 4).
+ * This layout halves memory accesses in diffEach (2 int loads vs 4) and
+ * enables future SIMD comparison via a vectorized comparison.
  */
 export type Screen = Size & {
   // Packed cell data — 2 Int32s per cell: [charId, packed(styleId|hyperlinkId|width)]

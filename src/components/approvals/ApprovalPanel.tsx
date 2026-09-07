@@ -1,14 +1,14 @@
 /**
- * The approval panel — Claude Code style permission prompt for the DSH
+ * The approval panel — permission prompt for the DSH
  * approval seam (`ctx.approval`). One ask per panel: a permission-colored
  * divider header naming the tool, the gated command recovered from the
- * paired tool call (CC verbose full-command semantics), the asker's reason,
- * "Do you want to proceed?", and a numbered Yes/No list.
+ * paired tool call, the asker's reason,
+ * "Allow this operation?", and a numbered Yes/No list.
  *
  * The protocol's outcome set is closed (allowed-once / rejected /
  * cancelled / unavailable) with no allow-always or feedback channel, so
  * the panel deliberately offers exactly two rows; Esc and Ctrl+C reject
- * (fail closed, CC's "Esc to cancel" semantics).
+ * (fail closed; Esc cancels the request).
  */
 
 import React from 'react'
@@ -16,7 +16,7 @@ import { t } from '../../i18n.js'
 import { Box, Text, useInput } from '../../ui.js'
 import { isPlainReturnInput } from '../../utils/modifiers.js'
 import { Divider } from '../design-system/Divider.js'
-import { POINTER } from '../../cc/figures.js'
+import { POINTER } from '../../terminal-utils/figures.js'
 import type { ApprovalSnapshot } from '../../dsh-adapter/approvals.js'
 
 export type ApprovalPanelProps = {
@@ -101,11 +101,11 @@ export function ApprovalPanel({ approval, background = false, onDecide }: Approv
               backgroundColor={hovered && !focused ? 'userMessageBackgroundHover' : undefined}
             >
               <Box width={1} flexShrink={0}>
-                <Text color={focused ? 'claude' : undefined} bold={focused}>
+                <Text color={focused ? 'accent' : undefined} bold={focused}>
                   {focused ? POINTER : ' '}
                 </Text>
               </Box>
-              <Text bold={focused} color={focused ? 'claude' : undefined} wrap="wrap">
+              <Text bold={focused} color={focused ? 'accent' : undefined} wrap="wrap">
                 {index + 1}. {label}
               </Text>
             </Box>

@@ -184,7 +184,7 @@ export function planReload(input: ReloadInput): ReloadPlan {
   } else if (input.activityPref === input.currentActivity) {
     unchanged.push('activity')
   } else {
-    apply.push({ kind: 'activity', from: input.currentActivity ?? 'claude', to: input.activityPref })
+    apply.push({ kind: 'activity', from: input.currentActivity ?? 'moon8', to: input.activityPref })
   }
 
   return { apply, unchanged, skipped }

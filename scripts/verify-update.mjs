@@ -81,7 +81,7 @@ check(
 const scratch = mkdtempSync(join(tmpdir(), 'verify-update-'))
 try {
   // The copied module imports `semver`; point its root at this repo's deps.
-  symlinkSync(join(repoRoot, 'node_modules'), join(scratch, 'node_modules'))
+  symlinkSync(join(repoRoot, 'node_modules'), join(scratch, 'node_modules'), process.platform === 'win32' ? 'junction' : 'dir')
 
   // Source-checkout layout: <root>/package.json + module under <root>/src/.
   // ../../package.json lands above the root (missing) → ../package.json hits.
@@ -646,7 +646,7 @@ check(
   const scratch3 = mkdtempSync(join(tmpdir(), 'verify-update-cli-'))
   const ENV_BACKUP = { reg: process.env.NPM_CONFIG_REGISTRY, regL: process.env.npm_config_registry, path: process.env.PATH }
   try {
-    symlinkSync(join(repoRoot, 'node_modules'), join(scratch3, 'node_modules'))
+    symlinkSync(join(repoRoot, 'node_modules'), join(scratch3, 'node_modules'), process.platform === 'win32' ? 'junction' : 'dir')
     const pkgRoot = join(scratch3, 'pkg')
     copyUpdateModule(join(pkgRoot, 'lib', 'types'))
     writeFileSync(join(pkgRoot, 'package.json'), JSON.stringify({ name: '@deepseek-harness-tui/dsh-tui', version: '2.0.0', type: 'module' }))
@@ -738,4 +738,3 @@ if (failed > 0) {
   process.exit(1)
 }
 console.log('\nall checks passed')
-

@@ -37,7 +37,7 @@ const IDLE_FLUTTER_GAP_MS = 16 * TICK_MS
 const SLEEP_HOLD_MS = 3 * TICK_MS
 /** How long each heart size is held (web HEART_HOLD = 3 ticks). */
 export const HEART_HOLD_MS = 3 * TICK_MS
-/** Continuous inactivity before the whale falls asleep (web parity: 10s). */
+/** Continuous inactivity before the whale falls asleep (10 seconds). */
 export const SLEEP_DELAY_MS = 10_000
 
 // Pose sequences — layer indices, straight from the web plugin:

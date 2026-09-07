@@ -46,19 +46,19 @@ const FIXTURES = {
     name: 'sakura',
     displayName: '樱花粉',
     base: 'dark',
-    colors: { claude: '#FF9EC7', text: '#E8E6E0' },
+    colors: { accent: '#FF9EC7', text: '#E8E6E0' },
   }),
   // name/displayName omitted -> file name / name
   'unnamed.json': JSON.stringify({
     base: 'light',
-    colors: { claude: '#3F6CC4' },
+    colors: { accent: '#3F6CC4' },
   }),
   // every accepted color form
   'format.json': JSON.stringify({
     name: 'format',
     base: 'dark-ansi',
     colors: {
-      claude: '#abc',
+      accent: '#abc',
       text: '#aabbcc',
       subtle: '#aabbccdd',
       success: 'rgb(130,184,157)',
@@ -69,20 +69,20 @@ const FIXTURES = {
   // unknown key skipped, known key kept
   'unknown-key.json': JSON.stringify({
     base: 'dark',
-    colors: { claude: '#123456', noSuchKey: '#000000' },
+    colors: { accent: '#123456', noSuchKey: '#000000' },
   }),
   // invalid value skipped, valid sibling kept
   'bad-color.json': JSON.stringify({
     base: 'dark',
-    colors: { claude: 'hotpink', text: '#E8E6E0' },
+    colors: { accent: 'hotpink', text: '#E8E6E0' },
   }),
   // invalid base -> whole file skipped
   'bad-base.json': JSON.stringify({
     base: 'neon',
-    colors: { claude: '#FF0000' },
+    colors: { accent: '#FF0000' },
   }),
   // broken JSON -> whole file skipped, no crash
-  'broken.json': '{ "base": "dark", "colors": { "claude": ',
+  'broken.json': '{ "base": "dark", "colors": { "accent": ',
 }
 for (const [file, contents] of Object.entries(FIXTURES)) {
   writeFileSync(join(themesDir, file), contents)
@@ -125,7 +125,7 @@ check('parse: valid theme fields', () => {
   assert.equal(spec.name, 'sakura')
   assert.equal(spec.displayName, '樱花粉')
   assert.equal(spec.base, 'dark')
-  assert.deepEqual(spec.colors, { claude: '#FF9EC7', text: '#E8E6E0' })
+  assert.deepEqual(spec.colors, { accent: '#FF9EC7', text: '#E8E6E0' })
 })
 
 check('parse: name/displayName default to file name', () => {
@@ -166,8 +166,8 @@ check('parse: bad base rejects the whole file', () => {
 check('parse: unknown key skipped, valid sibling kept', () => {
   const spec = parseCustomTheme(FIXTURES['unknown-key.json'], 'unknown-key.json')
   assert.ok(spec)
-  assert.deepEqual(Object.keys(spec.colors), ['claude'])
-  assert.equal(spec.colors.claude, '#123456')
+  assert.deepEqual(Object.keys(spec.colors), ['accent'])
+  assert.equal(spec.colors.accent, '#123456')
 })
 
 check('parse: invalid color skipped, valid sibling kept', () => {
@@ -222,7 +222,7 @@ check('list: valid + salvageable files only, sorted by theme name', () => {
 // --- composition -----------------------------------------------------------
 check('build: overrides land on the base palette', () => {
   const theme = buildTheme(parseCustomTheme(goodText, 'good.json'))
-  assert.equal(theme.claude, '#FF9EC7')
+  assert.equal(theme.accent, '#FF9EC7')
   assert.equal(theme.text, '#E8E6E0')
   // untouched keys come from the dark base
   assert.equal(theme.success, getTheme('dark').success)
@@ -233,7 +233,7 @@ check('resolve: cached full palette via the name', () => {
   clearCustomThemeCache()
   const theme = resolveCustomTheme('good')
   assert.ok(theme)
-  assert.equal(theme.claude, '#FF9EC7')
+  assert.equal(theme.accent, '#FF9EC7')
   assert.equal(theme.success, getTheme('dark').success)
   assert.equal(resolveCustomTheme('good'), theme) // cached identity
   assert.equal(resolveCustomTheme('nope'), undefined)
@@ -244,7 +244,7 @@ check('resolve: a name field differing from the file name still resolves', () =>
   // sakura.json does not exist on disk — good.json declares name: sakura.
   const theme = resolveCustomTheme('sakura')
   assert.ok(theme)
-  assert.equal(theme.claude, '#FF9EC7')
+  assert.equal(theme.accent, '#FF9EC7')
   assert.equal(resolveCustomTheme('sakura'), theme)
 })
 
@@ -262,10 +262,34 @@ check('isThemeAvailable: built-ins and valid user themes, not the rest', () => {
 
 check('getTheme: registry resolves user themes, built-ins untouched', () => {
   registerCustomThemeResolver(resolveCustomTheme)
-  assert.equal(getTheme('sakura').claude, '#FF9EC7') // display name via index
-  assert.equal(getTheme('good').claude, '#FF9EC7') // file name alias
+  assert.equal(getTheme('sakura').accent, '#FF9EC7') // display name via index
+  assert.equal(getTheme('good').accent, '#FF9EC7') // file name alias
   assert.equal(getTheme('dark'), getTheme('dark')) // built-in identity preserved
-  assert.equal(getTheme('nope').claude, getTheme('dark').claude) // unknown -> dark
+  assert.equal(getTheme('nope').accent, getTheme('dark').accent) // unknown -> dark
+})
+
+check('parse: legacy keys normalize to semantic keys', () => {
+  const spec = parseCustomTheme(JSON.stringify({
+    base: 'dark',
+    colors: {
+      claude: '#112233',
+      claudeShimmer: '#223344',
+      claudeBlue_FOR_SYSTEM_SPINNER: '#334455',
+      claudeBlueShimmer_FOR_SYSTEM_SPINNER: '#445566',
+      clawd_body: '#556677',
+      clawd_background: '#667788',
+    },
+  }), 'legacy.json')
+  assert.ok(spec)
+  assert.deepEqual(spec.colors, {
+    accent: '#112233',
+    accentShimmer: '#223344',
+    activity: '#334455',
+    activityShimmer: '#445566',
+    mascotBody: '#556677',
+    inputBackground: '#667788',
+  })
+  assert.equal(Object.hasOwn(spec.colors, 'claude'), false)
 })
 
 // --- the auto pseudo-theme -------------------------------------------------
@@ -279,7 +303,7 @@ check('auto: available, resolves to the detected base, shadows user themes', () 
   assert.equal(getTheme('auto'), getTheme('light'))
   setAutoThemeBase('dark')
   // a user theme named auto can never shadow the built-in pseudo-theme
-  writeFileSync(join(themesDir, 'auto.json'), JSON.stringify({ base: 'light', colors: { claude: '#123456' } }))
+  writeFileSync(join(themesDir, 'auto.json'), JSON.stringify({ base: 'light', colors: { accent: '#123456' } }))
   clearCustomThemeCache()
   assert.equal(getTheme('auto'), getTheme('dark'))
 })
@@ -315,7 +339,7 @@ check('warnings: each failure mode warns once with a distinct message', () => {
   assert.match(joined, /not valid JSON/)
   assert.match(joined, /invalid or missing "base"/)
   assert.match(joined, /unknown color key "noSuchKey"/)
-  assert.match(joined, /invalid color value for "claude"/)
+  assert.match(joined, /invalid color value for "accent"/)
 })
 
 console.warn = originalWarn

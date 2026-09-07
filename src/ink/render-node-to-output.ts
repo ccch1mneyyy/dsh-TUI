@@ -1813,7 +1813,7 @@ function siblingSharesY(node: DOMElement, yogaNode: LayoutNode): boolean {
 // the node's layout bounds are NOT covered by the blit (which only copies
 // the node's own rect). If a dirty sibling re-rendered and overwrote those
 // cells, we must re-blit them from prevScreen so the overlays survive.
-// Example: PromptInputFooter's slash menu uses position='absolute' bottom='100%'
+// Example: CommandSuggestions' slash menu uses position='absolute' bottom='100%'
 // to float above the prompt; a spinner tick in the ScrollBox above re-renders
 // and overwrites those cells. Without this, the menu vanishes on the next frame.
 function blitEscapingAbsoluteDescendants(

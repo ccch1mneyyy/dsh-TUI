@@ -22,7 +22,7 @@ const [{ Writable }, React, { Terminal: XTerm }, { render }, { AssistantToolUseM
   import('@xterm/headless'),
   import('../src/ui.js'),
   import('../src/components/messages/AssistantToolUseMessage.js'),
-  import('../src/cc/cliHighlight.js'),
+  import('../src/terminal-utils/cliHighlight.js'),
   import('../src/components/SplitDiffView.js'),
   import('./lib/term-test.mjs'),
 ])
@@ -62,7 +62,7 @@ async function renderAt(cols, tool, diffLayout = 'auto', toolBackground = 'none'
     _write(chunk, _e, cb) { term.write(String(chunk), cb) }
   }
   const app = await render(
-    React.createElement(AssistantToolUseMessage, { tool, addMargin: false, verbose: false, diffLayout, toolBackground }),
+    React.createElement(AssistantToolUseMessage, { tool, marginTopOnTurn: false, verbose: false, diffLayout, toolBackground }),
     { stdout: new FakeStdout(), debug: true, exitOnCtrlC: false },
   )
   // 固定窗:pacing cli-highlight 首次使用才懒加载，其后的补色重绘没有

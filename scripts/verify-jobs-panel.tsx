@@ -360,7 +360,7 @@ const runningJob = {
   startedAt: Date.now() - 65_000, outputLines: ['build step 1 ok', 'build step 2 ok'],
 }
 await withTerminal(
-  () => React.createElement(JobCard, { job: runningJob, addMargin: false }),
+  () => React.createElement(JobCard, { job: runningJob, marginTopOnTurn: false }),
   async screen => {
     // 固定窗:待迁移 一个 sleep 服务同一快照上的多条正/负混合断言，
     // 迁移需把全部条件合进一个 settled 谓词并在其中捕获快照，非平凡改写。
@@ -373,7 +373,7 @@ await withTerminal(
 await withTerminal(
   () => React.createElement(JobCard, {
     job: { ...runningJob, outputLines: [] },
-    addMargin: false,
+    marginTopOnTurn: false,
   }),
   async screen => {
     // 固定窗:待迁移 一个 sleep 服务同一快照上的多条正/负混合断言，
@@ -390,7 +390,7 @@ await withTerminal(
 await withTerminal(
   () => React.createElement(JobCard, {
     job: { ...runningJob, status: 'completed' as const, detail: 'exit code: 0', finishedAt: Date.now() },
-    addMargin: false,
+    marginTopOnTurn: false,
   }),
   async screen => {
     // 固定窗:待迁移 一个 sleep 服务同一快照上的多条正/负混合断言，

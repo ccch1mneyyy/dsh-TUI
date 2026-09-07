@@ -77,7 +77,7 @@ export type ChatOverlay =
     }
   // `/` transcript search: only the open/closed mode lives here. The query,
   // cursor and match counters stay in Chat.tsx — they survive the bar
-  // closing so n/N keep walking the matches (CC semantics).
+  // closing so n/N keep walking the matches.
   | { kind: 'search' }
   | { kind: 'tips' }
   /**

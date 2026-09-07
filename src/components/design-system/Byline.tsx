@@ -1,5 +1,5 @@
 import React, { Children, isValidElement } from 'react'
-import Text from '../../ink/components/Text.js'
+import Text from './ThemedText.js'
 
 type Props = {
   /** The items to join with a middot separator */
@@ -8,7 +8,7 @@ type Props = {
 
 /**
  * Joins children with a middot separator (" · ") for inline metadata display
- * (in the Claude Code visual language). Automatically filters out
+ * (in the dsh-TUI visual language). Automatically filters out
  * null/undefined/false children and only renders separators between valid
  * elements.
  */

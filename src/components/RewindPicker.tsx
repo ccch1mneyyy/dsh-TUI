@@ -9,8 +9,8 @@ import { HintLine } from './design-system/HintLine.js'
 import { listWindow } from './listWindow.js'
 
 /**
- * Double-Esc rewind picker (CC's "Double-tap esc to rewind the code and/or
- * conversation to a previous point in time"): lists the user's past messages
+ * Double-Esc rewind picker (double-tap Esc rewinds the selected message and/or
+ * conversation to a previous point in time: lists the user's past messages
  * newest-first; selecting one and confirming rewinds the conversation to
  * that point (the message comes back into the input for re-editing).
  *

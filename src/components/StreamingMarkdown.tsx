@@ -1,15 +1,14 @@
 import React from 'react'
 import { marked, type Token } from 'marked'
 import Box from '../ink/components/Box.js'
-import { formatToken, stripPromptXMLTags } from '../cc/markdown.js'
+import { formatToken, stripPromptXMLTags } from '../terminal-utils/markdown.js'
 import { t } from '../i18n.js'
 import { Markdown } from './Markdown.js'
 
 /**
  * Renders markdown during streaming by splitting at the last top-level block
  * boundary: everything before is stable (memoized, never re-parsed), only the
- * final block is re-parsed per delta, mirroring Claude Code's
- * `StreamingMarkdown.tsx`). marked.lexer() correctly handles unclosed code
+ * final block is re-parsed per delta. marked.lexer() correctly handles unclosed code
  * fences as a single token, so block boundaries are always safe.
  */
 /**
@@ -69,7 +68,7 @@ const UNSAFE_BOUNDARY: StableBoundary = {
 
 /**
  * Token types whose formatted output is provably blank, taken from
- * `cc/markdown.ts`'s dispatcher table: `space`/`br` emit a single newline,
+ * the markdown dispatcher's table: `space`/`br` emit a single newline,
  * `def`/`del`/`html` emit nothing. Kept in step with `analyzeSuffixStart`,
  * which splits the same set into "newline" and "empty" halves.
  */

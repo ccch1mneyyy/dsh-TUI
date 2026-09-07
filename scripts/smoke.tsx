@@ -1,5 +1,5 @@
 /**
- * Headless smoke test for the ported Ink core + CC-style UI: renders the Chat
+ * Headless smoke test for the renderer and terminal UI: renders the Chat
  * screen (with markdown, tool card, reasoning row) into in-memory terminal
  * streams. Run with:
  *   pnpm --filter @deepseek-harness-tui/dsh-tui run smoke
@@ -449,7 +449,7 @@ const channel = {
       },
     },
     { id: 3, kind: 'reasoning', text: 'the user said hello, I should greet back', streaming: false },
-    { id: 4, kind: 'interrupt', text: 'Interrupted · What should Claude do instead?' },
+    { id: 4, kind: 'interrupt', text: 'Interrupted · What would you like to do next?' },
   ],
   status: 'idle',
   sessionTitle: 'probe',

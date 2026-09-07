@@ -23,7 +23,7 @@ const { Terminal } = xterm
 const sharp = await loadSharp()
 if (!sharp) { console.log('SKIP Sixel transcript: optional sharp unavailable'); process.exit(0) }
 const oldEnv = { ...process.env }
-for (const key of ['TMUX', 'STY', 'CLAUDE_CODE_ACCESSIBILITY', 'DSH_TUI_DISABLE_TERMINAL_IMAGES', 'DSH_TUI_IMAGE_PROTOCOL']) delete process.env[key]
+for (const key of ['TMUX', 'STY', 'DSH_TUI_ACCESSIBILITY', 'DSH_TUI_DISABLE_TERMINAL_IMAGES', 'DSH_TUI_IMAGE_PROTOCOL']) delete process.env[key]
 
 async function until(check: () => boolean, message: string): Promise<void> {
   const deadline = Date.now() + 15_000

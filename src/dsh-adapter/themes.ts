@@ -17,12 +17,15 @@ import {
   concreteService,
   requirePluginCaller,
 } from './host-access.js'
-import { isThemeBase, isThemeKey, isValidThemeColor } from '../customTheme.js'
+import { isThemeBase, isValidThemeColor } from '../customTheme.js'
 import {
   AUTO_THEME_NAME,
   getTheme,
+  normalizeThemeKey,
+  isRetiredThemeKey,
   registerRuntimeThemeResolver,
   THEME_NAMES,
+  type ThemeColorKey,
   type Theme,
 } from '../theme.js'
 
@@ -34,7 +37,7 @@ export interface TuiThemeDescriptor {
   readonly name: string
   readonly displayName?: string
   readonly base: TuiThemeBase
-  readonly colors?: Readonly<Partial<Theme>>
+  readonly colors?: Readonly<Partial<Record<ThemeColorKey, string>>>
 }
 
 /** A validated, immutable contribution visible to host catalog consumers. */
@@ -137,8 +140,12 @@ function validateDescriptor(value: unknown): ValidatedTheme | undefined {
   if (colorsRaw !== undefined) {
     if (colorsRaw === null || typeof colorsRaw !== 'object' || Array.isArray(colorsRaw)) return undefined
     for (const [key, color] of Object.entries(colorsRaw)) {
-      if (!isThemeKey(key) || !isValidThemeColor(color)) return undefined
-      colors[key] = color
+      if (isRetiredThemeKey(key)) continue
+      const normalizedKey = normalizeThemeKey(key)
+      if (normalizedKey === undefined || !isValidThemeColor(color)) return undefined
+      // Canonical names win over aliases regardless of object insertion order.
+      if (normalizedKey !== key && Object.prototype.hasOwnProperty.call(colors, normalizedKey)) continue
+      colors[normalizedKey] = color
     }
   }
 

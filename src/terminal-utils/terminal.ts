@@ -80,7 +80,7 @@ export function ctrlOToExpand(): string {
  *                             suffix from the overflow hint.
  * @returns The truncated text, or `''` when `content` is blank after trimming.
  */
-export function renderTruncatedContent(
+export function renderClippedLines(
   content: string,
   terminalWidth: number,
   suppressExpandHint = false,

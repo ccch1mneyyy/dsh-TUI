@@ -60,7 +60,7 @@ export default function Image({
     >
       {children ??
         (alternative === '' ? null : (
-          <Text dimColor wrap="truncate">
+          <Text dim wrap="truncate">
             {alternative}
           </Text>
         ))}

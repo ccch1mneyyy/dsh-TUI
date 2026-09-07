@@ -65,7 +65,7 @@ contract for humans and coding agents working on `@deepseek-harness-tui/dsh-tui`
 
 `@deepseek-harness-tui/dsh-tui` is a single-package, ESM-only TypeScript project. It provides a
 React terminal UI front door for DeepSeek Harness through Cordis. The package
-owns the TUI, its local command surface, and a ported Ink/Yoga renderer.
+owns the TUI, its local command surface, and an Ink/Yoga renderer.
 DeepSeek Harness owns the agent, session, model, tool, skill, persistence,
 and policy domains that the TUI consumes.
 
@@ -108,12 +108,11 @@ boundaries and helpers over introducing parallel abstractions.
   `components/questions/` contains the `ask_user_question` UI.
 - `src/ui.ts`: preferred facade for the local renderer, themed `Box`/`Text`,
   hooks, and public TUI primitives.
-- `src/ink/`: ported, low-level Ink renderer and terminal implementation.
+- `src/ink/`: low-level Ink-based renderer and terminal implementation.
   Treat it as sensitive infrastructure: keep changes focused and accompany
   them with renderer-specific regression coverage.
 - `src/native-ts/yoga-layout/`: ported layout engine used by the renderer.
-- `src/cc/`: terminal formatting and presentation helpers adapted for the
-  Claude Code-style UI.
+- `src/terminal-utils/`: terminal formatting and presentation helpers.
 - `src/*Prefs.ts`, `src/customTheme.ts`, and `src/sessionHistory.ts`: persisted
   user preferences and local session metadata under `~/.dsh-tui`.
 - `.agents/skills/*/SKILL.md`: project skills for repository maintainers,
@@ -189,12 +188,13 @@ seam.
 - When intentionally changing dependencies, update `pnpm-lock.yaml` with
   `pnpm add`, inspect the full lockfile diff, and avoid unrelated upgrades.
 - Every `@deepseek-ai/*` framework package this package references at runtime
-  or from its published types (mirroring `UPSTREAM_BLESSED_PACKAGES`, including
+  or from its published types (following `UPSTREAM_BLESSED_PACKAGES`, including
   `@deepseek-ai/schemastery`) is both a peer and a dev dependency: framework
   packages are host-provided and resolve at runtime to the host's own instance
   through the `$DSH_HOME/profiles/node_modules` fallback tree (see #198 —
-  declaring them as runtime dependencies lands real copies inside the profile
-  and splits module identity from the host). The dev declarations exist only
+  declaring them as
+  runtime dependencies lands real copies inside the profile and splits module
+  identity from the host. The dev declarations exist only
   so the package can type-check locally. Add new references of this kind to
   both sections at matching ranges (the verify:manifest-deps gate enforces
   it). Framework packages used only by tests/scripts (e.g. dsh-settings,
@@ -274,6 +274,11 @@ files are outside the docs-only exemption and still trigger code gates. A local
 rebuild exemption does not skip CI; preserve required gates and report the
 actual local verification scope.
 
+`verify:build` also checks source hygiene, renderer primitives, theme and activity
+preference migrations, status animations, table layout, and side-question behavior.
+Source hygiene rejects the listed naming and compiled-input regressions; it is
+not a source-provenance or license audit.
+
 CI runs these commands after installation:
 
 ```sh
@@ -351,11 +356,11 @@ the required credentials.
   for example `import { Chat } from './screens/Chat.js'`. Preserve this rule.
 - In repository-authored TypeScript, follow the prevailing style: two-space
   indentation, single quotes, no semicolons, and trailing commas in multiline
-  constructs. The ported Ink files may retain their upstream tabs or quoting;
-  do not mass-format them.
+  constructs. The Ink-based renderer files under `src/ink` may retain their
+  upstream tabs or quoting; do not mass-format them.
 - Prefer `import type` for type-only dependencies.
 - Do not introduce `any` merely because `tsconfig.json` relaxes
-  `noImplicitAny`. Those relaxations exist to compile the ported Ink core and
+  `noImplicitAny`. Those relaxations exist to compile the Ink-based renderer and
   must not become the quality bar for new application code. Use `unknown` and
   narrow it, or define a small structural interface at an external seam.
 - Preserve readonly data where the surrounding API uses it. Keep state

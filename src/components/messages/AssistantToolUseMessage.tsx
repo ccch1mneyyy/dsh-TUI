@@ -8,7 +8,7 @@ import { ToolUseLoader } from '../ToolUseLoader.js'
 import { SplitDiffView } from '../SplitDiffView.js'
 import { SyntaxText } from '../SyntaxText.js'
 import { useTooltip } from '../Tooltip.js'
-import { formatDuration } from '../../cc/format.js'
+import { formatDuration } from '../../terminal-utils/format.js'
 import { formatClock } from '../../trajectory/format.js'
 import { t } from '../../i18n.js'
 import type { ToolBackground } from '../../tuiDisplayPrefs.js'
@@ -19,13 +19,13 @@ import { useRevealVersion } from '../../hooks/useRevealVersion.js'
 
 type Props = {
   tool: ToolRow
-  /** Adds the top margin between messages (CC: addMargin). */
-  addMargin: boolean
+  /** Adds the top margin between messages. */
+  marginTopOnTurn: boolean
   /** Ctrl+O verbose: show full args/result instead of previews. */
   verbose: boolean
   /** Message-selection mode highlight. */
   isSelected?: boolean
-  /** Row expanded on its own (persistent hover-grey background, CC). */
+  /** Row expanded on its own (persistent hover-grey background). */
   isExpanded?: boolean
   /**
    * Mouse click (fullscreen): toggles the row's expansion — same action as
@@ -75,9 +75,9 @@ type Props = {
   revealVersion?: number
 }
 
-/** Tool display names: DSH emits lowercase tool ids (`bash`); Claude Code
- *  shows capitalized names (`Bash`). Map the common ones, fall back to the
- *  id with its first letter uppercased. */
+/** Tool display names: DSH emits lowercase tool ids (`bash`); display common
+ *  names with an initial capital and fall back to the id with its first letter
+ *  uppercased. */
 function displayName(name: string): string {
   const KNOWN: Record<string, string> = {
     bash: 'Bash',
@@ -122,7 +122,7 @@ function languageFromPath(path: string | undefined): string | undefined {
 
 // --- structured body lines --------------------------------------------------
 // The tool's presentation view (dsh-tools presentCall/presentResult, captured
-// by the channel) becomes per-line render intents here. CC convention: the
+// by the channel) becomes per-line render intents here. The convention is:
 // body hangs under a `  ⎿  ` gutter (first line) / blank continuation, so
 // tool output is visually nested under its header instead of flush-left.
 
@@ -136,7 +136,7 @@ type BodyLine = {
   readonly revealOnHover?: boolean
 }
 
-/** CC's collapsed text body keeps 3 lines (renderTruncatedContent). */
+/** The collapsed text body keeps three lines. */
 const TEXT_BODY_MAX_LINES = 3
 /** Diff bodies cap at the upstream chat row's 8 (dsh-client-ui-tool's
  *  CHAT_DIFF_MAX_LINES) — denser information than log output. */
@@ -163,7 +163,7 @@ export function toolNameColor(raw: string): keyof Theme {
   const n = raw.toLowerCase()
   if (TOOL_NAME_MUTATE.has(n)) return 'toolNameMutate'
   if (TOOL_NAME_EXEC.has(n)) return 'toolNameExec'
-  return 'claude'
+  return 'accent'
 }
 
 /** One side's text → display lines (upstream contentLines rule: empty text
@@ -469,12 +469,12 @@ function HeaderTitle({ name, title, isTerminal, folded, displayArgs, argsLanguag
 /**
  * Tool-call card: `● Edit /path` header with a blinking status dot, then the
  * structured body under a `  ⎿  ` gutter — diff hunks in red/green, terminal
- * output, read content — instead of the raw result dump (mirroring Claude Code's `AssistantToolUseMessage.tsx` + the dsh-tools presentation views the
- * channel captures per call).
+ * output, read content — instead of the raw result dump. The channel captures
+ * the structured views per call.
  */
 export function AssistantToolUseMessage({
   tool,
-  addMargin,
+  marginTopOnTurn,
   verbose,
   isSelected = false,
   isExpanded = false,
@@ -502,7 +502,7 @@ export function AssistantToolUseMessage({
   const name = displayName(tool.name)
   const minWidth = stringWidth(name) + 2
   // The settled view carries the applied diff / actual output; while running,
-  // the call view already shows the pending change (CC's pending Edit diff).
+  // the call view already shows the pending change.
   const view = tool.resultView ?? tool.callView
   const filePath = filePathFromTool(tool, view)
   const syntaxLanguage = view?.card === 'read' || view?.card === 'generic' || view === undefined
@@ -524,7 +524,7 @@ export function AssistantToolUseMessage({
     [headerIsTerminal, foldTerminalCommand, verbose, headerTitle],
   )
 
-  // Live elapsed clock while the call runs (CC's bash elapsed timer): the
+  // Live elapsed clock while the call runs: the
   // 1s tick re-renders the card; elapsed derives from wall-clock refs.
   const [viewportRef] = useAnimationFrame(isRunning ? 1000 : null)
   const elapsedMs = isRunning
@@ -617,7 +617,7 @@ export function AssistantToolUseMessage({
       ref={viewportRef}
       flexDirection="row"
       justifyContent="space-between"
-      marginTop={addMargin ? 1 : 0}
+      marginTop={marginTopOnTurn ? 1 : 0}
       width="100%"
       onClick={onClick}
       // Only selection paints a highlight; the configured treatment applies

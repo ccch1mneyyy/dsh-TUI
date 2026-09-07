@@ -211,9 +211,6 @@ const GROUPS = {
     ["repro-paste-fold", ['node', '--import', 'tsx/esm', 'scripts/repro-paste-fold.tsx']],
 // 图片附件回归：剪贴板位图占位符与图片文件 @ 引用进附件库（#152）。
     ["verify-clipboard-image", ['node', '--import', 'tsx/esm', 'scripts/verify-clipboard-image.ts']],
-// 换名迁移回归（issue #120）：~/.dsh-cc → ~/.dsh-tui 首启复制迁移、
-// resume.txt 双写契约、旧 env 名检测（DSH_CC_RESUME_SESSION 双读不算废弃）。
-    ["verify-legacy-rename", ['node', 'scripts/verify-legacy-rename.mjs']],
 // 拖选复制端到端回归（用户报告：全屏下拖选"只能复制一个字符，只有
 // 输入框文字能复制"）：右侧 gutter 误用 NoSelect fromLeftEdge 把整行
 // 转录拉进不可选取区。真实 Chat 树 + SGR 拖选注入，静息/上滚阅读+
@@ -469,7 +466,7 @@ const GROUPS = {
     ["verify-loaded-context-width", ['node', '--import', 'tsx/esm', 'scripts/verify-loaded-context-width.tsx']],
 // Divider 可用宽度回归：横线按 Yoga 实际授予的宽度渲染（测量撑满
 // Box），嵌套在更窄容器里（transcript 旁 2 列 timeline rail 排水沟）
-// 不再按整终端宽度换行到第二行——「Conversation compacted」窄窗劈裂。
+// 不再按整终端宽度换行到第二行——「Session summary is ready」窄窗劈裂。
     ["verify-divider-width", ['node', '--import', 'tsx/esm', 'scripts/verify-divider-width.tsx']],
 // Divider 测量循环回归（React #185 启动即崩）：横线宽度会反馈进 Box 的
 // 实际授予宽度，内容定宽上下文（或同模式测量的兄弟元素）里测量值漂移

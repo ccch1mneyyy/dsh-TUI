@@ -10,8 +10,7 @@ import { listWindow } from './listWindow.js'
 import { historyEntryId, type HistoryEntry } from '../history.js'
 
 /**
- * The ctrl+r history search dialog, in the shape of Claude Code's
- * HistorySearchDialog/FuzzyPicker: a permission-colored Pane with a bold
+ * The ctrl+r history search dialog: a permission-colored Pane with a bold
  * title, the ⌕ SearchBox, the filtered history as ListItem rows (newest
  * first), and the ↑/↓ · Enter · Esc hint line. Keyboard handling lives in
  * the caller (Chat).
@@ -88,7 +87,7 @@ export function HistorySearchDialog({
   )
 }
 
-/** Relative age like CC's formatRelativeTimeAgo ("now" / "5m ago" / …), localized. */
+/** Localized relative-age labels such as "now" and "5m ago". */
 function formatRelativeAge(ts: number): string {
   const elapsed = Date.now() - ts
   if (elapsed < 60_000) return t('time-now')

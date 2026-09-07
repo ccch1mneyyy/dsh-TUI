@@ -1,7 +1,7 @@
 /**
  * Package-owned invariant companion for `@deepseek-harness-tui/dsh-tui`.
  *
- * The vendored Ink core under `src/ink` is third-party code written against
+ * The vendored renderer core is third-party code written against
  * looser compiler flags; the relaxed `tsconfig` options exist only for that
  * subtree and must not spread to new code.
  * @module @deepseek-harness-tui/dsh-tui/invariant

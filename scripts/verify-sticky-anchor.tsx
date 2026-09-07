@@ -2,7 +2,7 @@
  * verify-sticky-anchor — 置顶 prompt 头跟随视口（“翻到哪条置顶哪条”）。
  *
  * 用户报告：滚动到倒数第二条消息时，置顶头仍显示最后一条消息。修复后
- * StickyPromptHeader 不再读 `channel.lastUserText`，而是钉住时间线 active
+ * PinnedTurnHeader 不再读 `channel.lastUserText`，而是钉住时间线 active
  * 轮：占据视口顶行的轮次（顶部锚定，Grok timeline 语义 —— prompt 顶在
  * 视口顶之上/恰在顶行的最后一轮；logo 等前置内容占顶时取第一轮）。
  * 与时间线 rail 的 ━━ 高亮同源（同一个 MessageList 上报），两者永不分歧。
@@ -97,7 +97,7 @@ const channel: any = {
   commandList: LOCAL_COMMANDS,
   notifications: [],
   mode: { plan: false, sandbox: undefined },
-  activityFrames: 'claude',
+  activityFrames: 'moon8',
   agentPreset: undefined,
   subagents: [],
   // 故意的“错误真源”：修复前置顶头读它 → 永远显示问题 8；修复后必须

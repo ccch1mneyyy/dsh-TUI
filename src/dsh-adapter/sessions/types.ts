@@ -60,7 +60,7 @@ export type TitleSource =
  *
  * The source travels with the text because the UI consumes it: a `fallback`
  * title is dimmed rather than presented as if the session were named that, and
- * a reader who wonders why a row says `dsh-cc-tui` can be told. A source that
+ * a reader who wonders why a row carries a fallback label can be told. A source that
  * nothing consumed would be decoration; this one changes what is rendered.
  */
 export interface SessionTitle {

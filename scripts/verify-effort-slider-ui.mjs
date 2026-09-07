@@ -166,7 +166,7 @@ function makeChannel(options = {}) {
     listSessions: async () => [],
     setResumeTarget() {},
     setActivityFrames: () => true,
-    activityFrames: 'claude',
+    activityFrames: 'moon8',
     runExternalCommand: async () => '',
     mcpStatus: () => [],
     exportSession: () => null,

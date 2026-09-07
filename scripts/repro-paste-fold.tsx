@@ -5,7 +5,7 @@
  * 2. hovering over the chip pops a bordered peek CARD (input stays one
  *    row); clicking a card row expands the block for editing
  * 3. `▾` prefix folds the whole input; chip click expands again
- * 4. typing NEVER expands the block (CC behavior) — the caret edits the
+ * 4. typing NEVER expands the block  — the caret edits the
  *    text around it; Esc expands; Enter submits head+block+tail
  * 5. text typed BEFORE the block stays visible and is submitted with it
  * 6. Backspace at the block's tail deletes the WHOLE block in one key
@@ -189,7 +189,7 @@ try {
     check('▾ prefix folds again', await settled(() => screenHas('▸ 12 lines')))
   }
 
-  // 4. Typing NEVER expands the block (CC behavior): the char lands after
+  // 4. Typing NEVER expands the block : the char lands after
   //    the chip and the block stays folded; Backspace removes it. Use
   //    unique markers: 'tail' also matches startup tips containing 'details'.
   //    Esc expands; Enter submits. Batch Backspace (several keys in one stdin read)

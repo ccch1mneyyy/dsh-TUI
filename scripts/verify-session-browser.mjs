@@ -232,7 +232,7 @@ function makeChannel() {
     listFiles: async () => [],
     setResumeTarget() {},
     setActivityFrames: () => true,
-    activityFrames: 'claude',
+    activityFrames: 'moon8',
     runExternalCommand: async () => '',
     mcpStatus: () => [],
     exportSession: () => null,

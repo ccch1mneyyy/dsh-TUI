@@ -98,14 +98,13 @@ stdout 打印诊断；使用 stderr 的 `DSH_TUI_DEBUG` 或 `DSH_TUI_RENDER_LOG`
 `cordis.yml` 时默认使用 `~/.dsh-tui/sessions/`。偏好文件是可选状态：损坏或
 缺失时回退，不应阻止 TUI 启动。
 
-数据目录已从 `~/.dsh-cc` 更名为 `~/.dsh-tui`：首次启动时若旧目录存在而新目录
-不存在，会整体复制（不移动）到新目录并提示一行，旧目录保留由用户自行删除。
-`resume.txt` 例外：同时双写到新旧两个路径，因为旧版启动器只读旧路径。
+数据目录为 `~/.dsh-tui`（早期版本曾用 `~/.dsh-cc`，自更名版本起新代码只读写
+`~/.dsh-tui`，不自动迁移旧目录）。
 
 ## 权限与安全边界
 
 `dsh-TUI` 本身不提供独立沙箱；实际能力由 `cordis.patch.yml` 挂载的 DSH 服务
-决定。审批走 `ctx.approval` seam：策略为 `ask` 时 TUI 以 CC 式审批面板作为
+决定。审批走 `ctx.approval` seam：策略为 `ask` 时 TUI 以本地审批面板作为
 answerer（`approval/request` waterfall），仅允许一次/拒绝两种决定——协议没有
 "总是允许"与反馈通道；`/permission` 预设切换来自 dsh-base 的
 `permission-presets` 服务行：

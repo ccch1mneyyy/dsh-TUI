@@ -40,7 +40,7 @@ function check(name: string, ok: boolean, extra = '') {
   if (!ok) failed += 1
 }
 
-const mouseLogPath = join(homedir(), '.dsh-cc', 'mouse-debug.log')
+const mouseLogPath = join(homedir(), '.dsh-tui', 'mouse-debug.log')
 const mouseLogSizeBefore = (() => { try { return statSync(mouseLogPath).size } catch { return 0 } })()
 
 function makeTerm() {
@@ -103,7 +103,7 @@ const channel: any = {
   commandList: LOCAL_COMMANDS,
   notifications: [],
   mode: { plan: false, sandbox: undefined },
-  activityFrames: 'claude',
+  activityFrames: 'moon8',
   agentPreset: undefined,
   subscribe(cb: () => void) { listeners.add(cb); return () => listeners.delete(cb) },
   submit: () => {},

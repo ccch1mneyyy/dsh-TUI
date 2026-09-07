@@ -6,12 +6,12 @@ import type { Color } from '../ink/styles.js'
 import type { Theme } from '../theme.js'
 import type { FileCandidate } from '../utils/fileSuggestions.js'
 import { t } from '../i18n.js'
-import { POINTER } from '../cc/figures.js'
+import { POINTER } from '../terminal-utils/figures.js'
 import { SuggestionCard, cardContentWidth, splitQueryMatch } from './SuggestionCard.js'
 import { useTooltip } from './Tooltip.js'
 
 /**
- * The `@` file-completion overlay in CC's suggestion style, wrapped in the
+ * The `@` file-completion overlay, wrapped in the
  * shared rounded `SuggestionCard` (与 `/` 命令菜单同一视觉语言):
  *
  *   ╭─ 文件 · 共 12 项 ──────────────────────╮

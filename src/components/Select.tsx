@@ -11,7 +11,7 @@ export type SelectOption = {
 }
 
 /**
- * A single-choice select list in the CC CustomSelect style (ported visual:
+ * A single-choice select list with the standard dsh-TUI visual treatment:
  * ListItem rows with ❯ focus pointer, ✓ selected checkmark, descriptions,
  * scroll arrows). Keyboard navigation is owned by the parent dialog, which
  * passes focus/selection indices back in.
@@ -36,7 +36,7 @@ export function Select({
    */
   onPick?: (index: number, value: string, event: ClickEvent) => void
 }): React.ReactNode {
-  // Window around the focus row, with scroll hints at the edges (CC style).
+  // Window around the focus row, with scroll hints at the edges.
   const startIndex = Math.max(
     0,
     Math.min(

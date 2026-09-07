@@ -92,7 +92,7 @@ const channel: any = {
   commandList: LOCAL_COMMANDS,
   notifications: [],
   mode: { plan: false, sandbox: undefined },
-  activityFrames: 'claude',
+  activityFrames: 'moon8',
   agentPreset: undefined,
   subagents: [],
   lastUserText: '问题 8',

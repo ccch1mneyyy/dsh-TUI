@@ -9,6 +9,7 @@
 import {
   AUTO_THEME_NAME,
   getTheme,
+  normalizeThemePalette,
   THEME_NAMES,
   type Theme,
 } from './theme.js'
@@ -112,7 +113,7 @@ function runtimeEntries(
     if (seen.has(key)) continue
     let palette: Theme | undefined
     try {
-      palette = host.resolve(registration.name)
+      palette = normalizeThemePalette(host.resolve(registration.name))
     } catch {
       palette = undefined
     }
@@ -120,8 +121,9 @@ function runtimeEntries(
       // A structural host supplied by an embedder may expose metadata before
       // its resolver is wired; still provide a safe, deterministic palette.
       if (registration.base !== 'light' && registration.base !== 'dark' && registration.base !== 'dark-ansi') continue
-      palette = { ...getTheme(registration.base), ...registration.colors }
+      palette = normalizeThemePalette({ ...getTheme(registration.base), ...registration.colors })
     }
+    if (palette === undefined) continue
     entries.push(entry(
       registration.name,
       registration.displayName || registration.name,
@@ -174,7 +176,7 @@ export function resolveThemeEntry(name: string, host?: TuiThemeHost): ThemeCatal
     if (registration !== undefined) {
       let palette: Theme | undefined
       try {
-        palette = host.resolve(registration.name)
+        palette = normalizeThemePalette(host.resolve(registration.name))
       } catch {
         palette = undefined
       }

@@ -34,7 +34,7 @@ Profile 启动按顺序叠加 `dsh-base`、已安装 bundle、`@deepseek-harness
     # `!!js process.cwd()`（那会把工作区钉死在启动子目录上，issue #96）。
     effort: max
     activity: true
-    activityFrames: claude
+    activityFrames: moon8
     contextBar: true
     fullscreen: false
     terminalImages: true
@@ -52,7 +52,7 @@ Profile 启动按顺序叠加 `dsh-base`、已安装 bundle、`@deepseek-harness
 | `effort` | 配置层通常为 `max` | 每个请求实际生效的推理等级（按运行时模型档位校验，非法档位静默回落默认；兼作顶栏启动显示）。优先级：/settings 的默认推理强度 `effortDefault`（settings.yaml 用户层，`auto` 时让位）> 本字段 > `/effort` 持久化选择（`~/.dsh-tui/effort.json`）> 模型默认 |
 | `modes` | 内置三档 | Shift+Tab 会话模式循环（plan/sandbox/approval 原子组合）；缺省为 默认 → 计划 → 完全访问 |
 | `activity` | `true` | 是否显示实时工作状态行 |
-| `activityFrames` | 持久化选择或 `claude` | 工作状态动画预设；也可通过 `/activity` 修改 |
+| `activityFrames` | `moon8` | 工作状态动画预设；也可通过 `/activity` 修改。旧配置值 `claude` 读取时映射为 `moon8`，选择器不再显示该旧预设 |
 | `contextBar` | `true` | 输入框下方的分段上下文进度条；`false` 隐藏该行 |
 | `fullscreen` | `true`（0.9.0 起出厂默认） | `true` 使用 alternate screen、应用内滚动和鼠标选区；`false` 使用 inline 模式 |
 | `terminalImages` | `true` | 允许在支持的终端预览图片；`false` 保留文字信息，跳过图片探测与预览解码。修改后重启生效 |
@@ -67,6 +67,20 @@ Profile 启动按顺序叠加 `dsh-base`、已安装 bundle、`@deepseek-harness
 
 这个开关在启动时读取。修改后使用 `/restart` 自动重新启动 TUI 并恢复当前会话；
 `/reload` 不应用此开关。回合运行中需先等待结束或用 `Ctrl+C` 停止，再重启。
+
+## 诊断环境变量
+
+以下变量用于诊断或实验性终端集成，默认均关闭；只有显式设置时才生效：
+
+| 变量 | 作用 |
+| --- | --- |
+| `DSH_TUI_DEBUG_REPAINTS=1` | 记录重绘诊断信息 |
+| `DSH_TUI_COMMIT_LOG=1` | 记录渲染提交诊断信息 |
+| `DSH_TUI_ACCESSIBILITY=1` | 启用无障碍相关显示路径 |
+| `DSH_TUI_TMUX_TRUECOLOR=1` | 在 tmux 中启用 truecolor 探测路径 |
+| `DSH_TUI_TAB_STATUS=1` | 实验性终端 tab 状态 opt-in；默认关闭，不保证任意终端支持 |
+
+诊断输出不会改变会话事件或模型路由；遇到终端兼容问题时，只按需启用相关变量。
 
 ## 工作状态行
 
@@ -175,10 +189,9 @@ Profile 模式不再使用旧的 `DSH_TUI_COMPACT_RATIO`、
 | `DSH_TUI_DEBUG` | 启用写往 stderr 的 dsh-tui 调试日志 |
 | `DSH_TUI_RENDER_LOG` | 指定文件路径，记录原始 ANSI 渲染帧用于取证 |
 
-旧名 `CC_TUI_*` 与 `DSH_CC_*` 自本版本起不再生效；启动时检测到旧名仍被设置会
-打印一行警告（只要还设着，每次启动都会提示）。唯一例外是
-`DSH_TUI_RESUME_SESSION`：读端优先取新名、同时仍读取旧名
-`DSH_CC_RESUME_SESSION`，写端两个变量都会设置，供旧版启动器过渡。
+旧名 `CC_TUI_*` 与 `DSH_CC_*`（以及早期数据目录 `~/.dsh-cc`）来自早期版本命名，
+自本版本起不再被读取；环境变量一律使用 `DSH_TUI_*` 前缀，数据目录为
+`~/.dsh-tui`。
 
 `DSH_TUI_RENDER_LOG` 可能捕获屏幕上可见的提示词、工具参数和输出，不应上传到
 公开 issue，除非已经检查并脱敏。

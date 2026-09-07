@@ -7,16 +7,15 @@ import type { Theme } from '../theme.js'
 import type { LocalCommand } from '../commands.js'
 import { localizedDescription } from '../commands.js'
 import { t } from '../i18n.js'
-import { POINTER } from '../cc/figures.js'
+import { POINTER } from '../terminal-utils/figures.js'
 import { SuggestionCard, cardContentWidth, splitQueryMatch } from './SuggestionCard.js'
 
 /**
- * The slash-command suggestion overlay, mirroring Claude Code's
- * `PromptInputFooterSuggestions.tsx` (command layout only) wrapped in the
- * shared rounded `SuggestionCard`:
+ * The slash-command suggestion overlay, using the shared rounded
+ * `SuggestionCard` for the command list:
  *
  *   ╭─ 命令 · 共 12 项 ──────────────────────╮
- *   │ ❯ compact  Compact the conversation …  │   ← 选中：❯ + 加粗 + suggestion 色
+ *   │ ❯ compact  Summarize earlier turns…  │   ← 选中：❯ + 加粗 + suggestion 色
  *   │   compare  Compare selected messages … │   ← 名字里命中输入的段提亮
  *   │ ↑2 · ↓3                                 │   ← 仅当列表被窗口裁剪
  *   ╰─────────────────────────────────────────╯
@@ -49,7 +48,7 @@ export function CommandSuggestions({
   if (commands.length === 0) return null
 
   // Cap the command name column at 40% of the card's content width to ensure
-  // the description has space (same ratio as Claude Code).
+  // the description has enough space.
   const usable = cardContentWidth(columns)
   const maxNameWidth = Math.floor(usable * 0.4)
   const nameWidth = Math.min(

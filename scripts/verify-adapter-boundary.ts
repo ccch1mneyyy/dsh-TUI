@@ -1,7 +1,7 @@
 /**
  * Enforce the adapter boundary: official `@deepseek-ai/*` imports are only
  * allowed inside src/dsh-adapter/. UI layers (screens/, components/, ink/,
- * hooks/, utils/, cc/, types/) talk to upstream exclusively through the
+ * hooks/, utils/, terminal-utils/, types/) talk to upstream exclusively through the
  * adapter tree, so an upstream prerelease bump breaks one module, not the UI.
  *
  * Run via `node --import tsx/esm scripts/verify-adapter-boundary.ts`.

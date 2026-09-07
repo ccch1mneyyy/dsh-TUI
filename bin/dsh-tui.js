@@ -14,7 +14,7 @@
  *   profile 内副本（被委托执行，或 junction/源码目录里直接运行）→ 完整
  *   启动逻辑（与 0.8.6 及之前一致）：
  *     dsh 预检 / profile 版本核对 / --resume 与工作区目标拦截 /
- *     旧环境变量警告 / `dsh --profile dsh-tui` 启动与退出码透传。
+ *     `dsh --profile dsh-tui` 启动与退出码透传。
  *
  * 自举角色判定用 realpath：Windows Junction 轨（profile 指回仓库）与
  * `pnpm run dev` 源码运行都会折叠成同一物理目录 → 走完整逻辑，不会
@@ -120,7 +120,7 @@ const isVersionNewer = (a, b) => {
   return false
 }
 
-const lang = (process.env.DSH_TUI_LANG ?? process.env.CC_TUI_LANG) === 'en' ? 'en' : 'zh'
+const lang = process.env.DSH_TUI_LANG === 'en' ? 'en' : 'zh'
 const MSG = {
   noDsh: {
     en: '[dsh-tui] dsh CLI not found. Install the official client first:\n  npm install -g @deepseek-ai/dsh',
@@ -169,10 +169,6 @@ const MSG = {
   profileExited: {
     en: code => `[dsh-tui] dsh profile exited with code ${code}. Run it directly for diagnostics:\n  dsh --profile ${PROFILE}`,
     zh: code => `[dsh-tui] dsh profile 已退出（退出码 ${code}）。可直接运行以下命令查看诊断：\n  dsh --profile ${PROFILE}`,
-  },
-  legacyEnv: {
-    en: (oldName, newName) => `[dsh-tui] note: env ${oldName} was renamed to ${newName}; the old name no longer takes effect.`,
-    zh: (oldName, newName) => `[dsh-tui] 提示：环境变量 ${oldName} 已更名为 ${newName}，旧名不再生效。`,
   },
   notInstalled: {
     en: '(not installed)',
@@ -498,19 +494,15 @@ if (!runningInsideProfile && ownVersion !== undefined && process.env.DSH_TUI_NO_
     }
   }
 
-  // --resume / 工作区目标拦截（issue #120/#53 的启动器契约）。
+  // --resume / 工作区目标拦截（launcher 契约，见 src/sessionHistory.ts）。
   const setResumeEnv = sessionId => {
     process.env.DSH_TUI_RESUME_SESSION = sessionId
-    process.env.DSH_CC_RESUME_SESSION = sessionId
   }
   const readLastResumeTarget = () => {
-    for (const dir of ['.dsh-tui', '.dsh-cc']) {
-      try {
-        const sessionId = readFileSync(join(homedir(), dir, 'resume.txt'), 'utf8').trim()
-        if (sessionId) return sessionId
-      } catch {
-        // 没有历史会话可恢复——静默忽略，正常冷启动。
-      }
+    try {
+      return readFileSync(join(homedir(), '.dsh-tui', 'resume.txt'), 'utf8').trim()
+    } catch {
+      // 没有历史会话可恢复——静默忽略，正常冷启动。
     }
     return ''
   }
@@ -535,28 +527,6 @@ if (!runningInsideProfile && ownVersion !== undefined && process.env.DSH_TUI_NO_
       process.env.DSH_TUI_WORKSPACE_TARGET = a
     } else {
       args.push(a)
-    }
-  }
-
-  // 旧环境变量警告（必须在 TUI 渲染前输出，fullscreen 下写 stderr 会破坏
-  // 界面）。与 utils/paths 的 RENAMED_ENV 同表，内联以维持零 lib 依赖。
-  const RENAMED_ENV = {
-    CC_TUI_THEME: 'DSH_TUI_THEME',
-    CC_TUI_LANG: 'DSH_TUI_LANG',
-    CC_TUI_PERSONA: 'DSH_TUI_PERSONA',
-    CC_TUI_PRESET: 'DSH_TUI_PRESET',
-    CC_TUI_DISABLE_MOUSE: 'DSH_TUI_DISABLE_MOUSE',
-    CC_TUI_DEBUG: 'DSH_TUI_DEBUG',
-    CC_TUI_COMPACT_RATIO: 'DSH_TUI_COMPACT_RATIO',
-    CC_TUI_COMPACT_RETAIN: 'DSH_TUI_COMPACT_RETAIN',
-    DSH_CC_UPDATED_FROM: 'DSH_TUI_UPDATED_FROM',
-    DSH_CC_RENDER_LOG: 'DSH_TUI_RENDER_LOG',
-    DSH_CC_SESSION_ROOT: 'DSH_TUI_SESSION_ROOT',
-    DSH_CC_WORKSPACE: 'DSH_TUI_WORKSPACE',
-  }
-  for (const oldName of Object.keys(RENAMED_ENV)) {
-    if (process.env[oldName] !== undefined) {
-      console.error(msg('legacyEnv')(oldName, RENAMED_ENV[oldName]))
     }
   }
 

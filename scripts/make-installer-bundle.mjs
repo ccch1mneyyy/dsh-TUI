@@ -270,7 +270,7 @@ const README_TXT = `dsh-TUI 一键安装整合包（dsh-tui-setup）
 ====================================
 
 这是什么？
-  dsh-TUI 是 DeepSeek Harness 的终端界面插件（Claude Code 风格全屏 TUI）。
+  dsh-TUI 是 DeepSeek Harness 的交互式终端界面插件，支持全屏会话。
   本整合包把"装 Node、装 pnpm、装 dsh CLI 和 dsh-TUI、配 API Key"全部自动化，
   解压后一条命令即可完成安装，无需手动敲多行命令。
 

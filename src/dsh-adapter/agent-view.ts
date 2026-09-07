@@ -1,5 +1,5 @@
 /**
- * Agent view (CC `claude agents`) derivation helpers — pure functions over
+ * Agent view derivation helpers — pure functions over
  * session events that the channel folds into {@link AgentViewRow}s. Kept in
  * their own module so the focused regression (`scripts/verify-agent-view.mjs`)
  * can import them without spinning up a composition.
@@ -20,7 +20,7 @@ export const AGENT_VIEW_STATUS_ORDER: readonly AgentViewStatus[] = [
 export const AGENT_VIEW_SUMMARY_LIMIT = 160
 
 /** The row name's budget: the fallback name is the first prompt compressed
- *  to this many cells (CC's auto-name is a short label, not a prompt dump). */
+ *  to this many cells, keeping the session list compact. */
 export const AGENT_VIEW_NAME_LIMIT = 28
 
 /** Collapse every whitespace run (including newlines) into one space so a

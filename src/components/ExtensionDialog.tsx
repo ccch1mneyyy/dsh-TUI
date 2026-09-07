@@ -345,8 +345,8 @@ function InputDialog({
           </Text>
         </Box>
         <Text>
-          {/* The caret is the inverted cell under the cursor (CC's block
-              cursor); at end of line it inverts the trailing space. Splits
+          {/* The caret is the inverted cell under the cursor.
+              At end of line it inverts the trailing space. Splits
               are code-point safe — the caret never lands inside a surrogate
               pair. */}
           <Text dimColor={value === ''}>{shownPoints.slice(0, cursor).join('')}</Text>

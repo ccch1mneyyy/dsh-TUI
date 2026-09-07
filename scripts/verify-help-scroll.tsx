@@ -212,7 +212,7 @@ try {
 
 // Full Chat routing regression: Ctrl+O used while Help is visible must not
 // toggle the hidden transcript-search mode. Otherwise the next `/` after
-// closing Help opens TranscriptSearchBar (a second input-looking row with
+// closing Help opens TranscriptSearch (a second input-looking row with
 // "no matches") and slash commands appear to be wedged.
 stdout.rows = INITIAL_ROWS
 stdout.columns = COLS

@@ -59,8 +59,12 @@ palette and overrides a subset of its colors:
   "displayName": "Sakura",
   "base": "dark",
   "colors": {
-    "claude": "#FF9EC7",
-    "claudeShimmer": "#FFC0D5",
+    "accent": "#FF9EC7",
+    "accentShimmer": "#FFC0D5",
+    "activity": "#7DA1DE",
+    "activityShimmer": "#ABC2EC",
+    "mascotBody": "#D98A63",
+    "inputBackground": "#000000",
     "permission": "#FFB3CC",
     "promptBorder": "#B08B99",
     "text": "#E8E6E0",
@@ -101,7 +105,7 @@ export function apply(ctx: Context): void {
     name: 'my-plugin:night',
     displayName: 'Night',
     base: 'dark',
-    colors: { claude: '#88AAFF', selectionBg: '#334466' },
+    colors: { accent: '#88AAFF', selectionBg: '#334466' },
   }, ctx)
 }
 ```
@@ -127,6 +131,17 @@ Common override groups:
 
 Diff semantics outrank syntax colors: changed words always render in
 `diffAddedWord` / `diffRemovedWord`; syntax colors apply to unchanged text only.
+
+`accent`, `accentShimmer`, `activity`, `activityShimmer`, `mascotBody`, and
+`inputBackground` are the current semantic keys. Older theme files and plugin
+descriptors using `claude`, `claudeShimmer`,
+`claudeBlue_FOR_SYSTEM_SPINNER`, `claudeBlueShimmer_FOR_SYSTEM_SPINNER`,
+`clawd_body`, or `clawd_background` are still accepted and mapped to the
+corresponding semantic key. Resolved themes expose semantic keys only; new
+themes should use the current names.
+
+The former `briefLabelYou` key maps to `userPromptLabel`. Unused palette slots
+from older releases are ignored; the remaining valid color overrides still apply.
 
 ## Color formats
 

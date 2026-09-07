@@ -3,8 +3,8 @@
  * (`ctx.approval`). The harness's permission layer asks
  * `ApprovalService.request()`, which dispatches an `approval/request`
  * waterfall; the listener registered in plugin.ts parks the request here,
- * surfaces one ask at a time to the TUI (Claude Code style permission
- * prompt), and settles the harness promise when the user decides, the
+ * surfaces one ask at a time to the TUI permission prompt, and settles the
+ * harness promise when the user decides, the
  * asker's abort signal fires, or the plugin tears down.
  *
  * Queue semantics mirror QuestionStore: parallel tool calls can trigger

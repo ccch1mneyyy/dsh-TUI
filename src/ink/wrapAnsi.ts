@@ -6,11 +6,6 @@ type WrapAnsiOptions = {
   trim?: boolean
 }
 
-const wrapAnsiBun =
-  typeof Bun !== 'undefined' && typeof Bun.wrapAnsi === 'function'
-    ? Bun.wrapAnsi
-    : null
-
 /**
  * Single-slot incremental wrap for the one over-long input that grows every
  * frame during streaming (a tool command's args, a long answer line).
@@ -65,8 +60,7 @@ function wrapAnsiNpmIncremental(
 /**
  * Wrap a string to a maximum column width, preserving ANSI escape sequences.
  *
- * Uses Bun.wrapAnsi when available; otherwise falls back to the wrap-ansi
- * package (with the incremental fast path for growing streaming inputs).
+ * Uses wrap-ansi (with the incremental fast path for growing streaming inputs).
  * @param input - the string to wrap.
  * @param columns - the maximum width in columns.
  * @param options - wrap options: hard breaks long words, wordWrap splits on word boundaries, trim strips trailing whitespace.
@@ -77,7 +71,6 @@ const wrapAnsi: (
   columns: number,
   options?: WrapAnsiOptions,
 ) => string =
-  wrapAnsiBun ??
   wrapAnsiNpmIncremental
 
 export { wrapAnsi }

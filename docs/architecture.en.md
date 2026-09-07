@@ -31,7 +31,7 @@ Cordis profile
 | `src/ui.ts` | Themed `Box`/`Text`, render, selection, scroll, and other public TUI primitives |
 | `src/theme.ts`, `src/themeCatalog.ts` | Built-in, static JSON, and runtime plugin theme resolution and catalog ordering |
 | `src/dsh-adapter/themes.ts` | The `ctx.tuiThemes` theme seam, registration lifecycle, and private host facade |
-| `src/ink/` | Ported Ink renderer, terminal protocol, events, selection, and Yoga bridge; sensitive infrastructure |
+| `src/ink/` | Ink-based renderer, terminal protocol, events, selection, and Yoga bridge; sensitive infrastructure |
 | `src/native-ts/yoga-layout/` | Pure JS/TS layout implementation |
 | `cordis.patch.yml` | Profile bundle layer, service rows, overrides, and mount ordering |
 
@@ -113,16 +113,14 @@ direct `cordis.yml` runs default to `~/.dsh-tui/sessions/`. Preference files
 are optional state: malformed or missing files fall back silently rather than
 preventing startup.
 
-The data directory was renamed from `~/.dsh-cc` to `~/.dsh-tui`: on first
-launch, if the old directory exists and the new one does not, it is copied
-(not moved) to the new location with one notice line; the old directory stays
-in place for the user to remove. `resume.txt` is an exception: it is
-dual-written to both paths because older launchers only read the old one.
+The data directory is `~/.dsh-tui` (early releases used `~/.dsh-cc`; code
+since the rename reads and writes only `~/.dsh-tui` and does not migrate the
+old directory automatically).
 
 ## Permissions and security boundary
 
 `dsh-TUI` does not provide a separate sandbox; it implements the tool-level
-approval UI (a CC-style panel answering the `approval/request` waterfall),
+approval UI (a local panel answering the `approval/request` waterfall),
 while `/permission` preset switching comes from the dsh-base
 `permission-presets` row. Effective capability comes from the DSH services
 mounted by `cordis.patch.yml`:

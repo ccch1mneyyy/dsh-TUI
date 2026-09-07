@@ -15,7 +15,9 @@ the `.en.md` suffix.
 | 键盘、鼠标与命令 / Keyboard, mouse, and commands | [交互与命令](interaction.md) | [Interaction and commands](interaction.en.md) |
 | 日常使用手册（中文，英文待补）/ Daily user guide (Chinese; English pending) | [使用说明](user-guide.md) | — |
 | 运行链路、性能、安全与限制 / Runtime, performance, security, and limitations | [架构与限制](architecture.md) | [Architecture and limitations](architecture.en.md) |
-| VS Code：集成终端与 companion 扩展（Claude Code 一致体验）/ VS Code: integrated terminal and companion extension (Claude-Code-identical experience) | [VS Code 使用指南](vscode.md) | [VS Code guide](vscode.en.md) |
+| 社区管理与协作流程 / Community management and collaboration | [社区管理框架](community-management.md) | [Community Management](community-management.en.md) |
+| 项目路线图 / Project roadmap | [路线图](roadmap.md) | [Roadmap](roadmap.en.md) |
+| VS Code：集成终端与 companion 扩展 / VS Code: integrated terminal and companion extension | [VS Code 使用指南](vscode.md) | [VS Code guide](vscode.en.md) |
 | 贡献与开发约定 / Contributing and development rules | [贡献指南](contributing.md) | [Contributing](contributing.en.md) |
 | 社区行为准则 / Code of conduct | [行为准则](../CODE_OF_CONDUCT.md) | [Code of Conduct](../CODE_OF_CONDUCT.en.md) |
 | 插件准入与开发 / Plugin admission & development | [插件准入与开发指南](https://github.com/T-Auto/dsh-ecosystem-spec/blob/main/docs/plugin-admission-and-development.md) | [Plugin admission & development](https://github.com/T-Auto/dsh-ecosystem-spec/blob/main/docs/plugin-admission-and-development.md) |

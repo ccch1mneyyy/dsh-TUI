@@ -47,7 +47,7 @@ Discussions。人不能用「私下批准」、关联 issue 或粘贴维护者�
 
 `@deepseek-harness-tui/dsh-tui` 是单包、纯 ESM 的 TypeScript 项目：为 DeepSeek Harness 提供
 React 终端 UI 前门（通过 Cordis 挂载）。包内拥有 TUI、本地命令面
-以及移植的 Ink/Yoga 渲染器；Agent、会话、模型、工具、技能、持久化与策略域由
+以及 Ink/Yoga 渲染器；Agent、会话、模型、工具、技能、持久化与策略域由
 DeepSeek Harness 拥有，TUI 只消费它们。
 
 做大改动前，先读 `package.json`、相关 README 章节和你将要编辑的每个源文件。
@@ -81,10 +81,10 @@ DeepSeek Harness 拥有，TUI 只消费它们。
   `ask_user_question` 的 UI。
 - `src/ui.ts`：本地渲染器、主题化 `Box`/`Text`、hooks 与公共 TUI 原语的
   首选门面。
-- `src/ink/`：移植的低层 Ink 渲染器与终端实现。**敏感基础设施**：改动要聚焦，
+- `src/ink/`：低层 Ink 系渲染器与终端实现。**敏感基础设施**：改动要聚焦，
   并附渲染器专用回归覆盖。
 - `src/native-ts/yoga-layout/`：渲染器使用的移植布局引擎。
-- `src/cc/`：为 Claude Code 风格 UI 适配的终端格式化与呈现辅助。
+- `src/terminal-utils/`：终端格式化与呈现辅助。
 - `src/*Prefs.ts`、`src/customTheme.ts`、`src/sessionHistory.ts`：持久化的
   用户偏好与 `~/.dsh-tui` 下的本地会话元数据。
 - `.agents/skills/*/SKILL.md`：仅供仓库维护者使用的项目技能，由 DSH 文件系统 provider 发现，不随 npm 包分发。
@@ -197,6 +197,10 @@ CI 另按 `.github/workflows/ci.yml` 的 `changes` 路径白名单分流：`AGEN
 `.agents/skills/` 和源码中的注释不在文档豁免内，仍会触发代码门禁。本地无需
 重建不代表 CI 会跳过；提交时保留所需门禁并如实说明本地验证范围。
 
+`verify:build` 也检查源码输入卫生、渲染原语、主题与活动偏好迁移、状态动画、
+表格布局和侧问行为。源码卫生检查只拦截已列明的命名与编译产物回归，不替代
+来源或许可证审计。
+
 CI 在安装后运行：
 
 ```sh
@@ -261,10 +265,10 @@ sleep 同行尾注释或紧贴上方的注释里。`verify:fixed-window` 门禁�
 - 包是 ESM。TypeScript 相对导入用 `.js` 后缀（如
   `import { Chat } from './screens/Chat.js'`）。保持此规则。
 - 仓库自写 TypeScript 遵循现有风格：两空格缩进、单引号、无分号、多行结构
-  尾逗号。移植的 Ink 文件可保留上游的 tab 或引号风格，不要批量格式化。
+  尾逗号。Ink 系渲染器文件（`src/ink`）可保留上游的 tab 或引号风格，不要批量格式化。
 - 纯类型依赖优先 `import type`。
 - 不要因为 `tsconfig.json` 放宽了 `noImplicitAny` 就引入 `any`。那些放宽是
-  为了编译移植的 Ink core，不能成为新应用代码的质量基准。用 `unknown` 并收窄，
+  为了编译 Ink 系渲染器，不能成为新应用代码的质量基准。用 `unknown` 并收窄，
   或在外部缝隙定义小型结构化接口。
 - 周边 API 用只读数据的地方保持只读。状态变更放在 channel/store 实现内，
   不要在组件里改值。

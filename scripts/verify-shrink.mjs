@@ -16,7 +16,7 @@
  * Checks:
  *  1. the shrink frame emits NO scroll-up clear (CSI n S) — no scrollback
  *     deposit — and NO ESC[2J/ESC[3J (those snap the Windows Terminal
- *     viewport to the top inside DEC 2026 sync blocks, claude-code #35580);
+ *     viewport to the top inside DEC 2026 sync blocks, Windows Terminal synchronized-output viewport regression);
  *  2. after the shrink the viewport shows the tail of the 40-line content
  *     with the bottom-pinned marker on its last content row;
  *  3. no stale rows: lines 40..59 from the pre-shrink frame are gone from

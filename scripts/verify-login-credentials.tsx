@@ -81,7 +81,7 @@ function makeChannel(status: unknown) {
     tps: undefined,
     tpsSamples: [],
     workingActivity: undefined,
-    activityFrames: 'claude',
+    activityFrames: 'moon8',
     activityEnabled: false,
     contextBarEnabled: true,
     agentPreset: 'standard',

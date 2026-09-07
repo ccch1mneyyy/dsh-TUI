@@ -7,26 +7,19 @@
  * processes. It also keeps a small `last-used.json` of session-id → epoch-ms
  * touches so `/resume` can sort most-recently-used first (DSH session
  * headers carry only `createdAt`).
- *
- * Rename transition (issue #120): the global bin and the profile's TUI
- * package may run different versions, so `resume.txt` is DUAL-WRITTEN to the
- * legacy `~/.dsh-cc/resume.txt` as well (old launchers read only that path)
- * and reads fall back to it. TODO: drop the legacy path once pre-rename
- * launchers have aged out.
  */
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { DATA_DIR, LEGACY_DATA_DIR } from './utils/paths.js'
+import { DATA_DIR } from './utils/paths.js'
 
 const DIR = DATA_DIR
 const RESUME_FILE = join(DIR, 'resume.txt')
-const LEGACY_RESUME_FILE = join(LEGACY_DATA_DIR, 'resume.txt')
 const LAST_USED_FILE = join(DIR, 'last-used.json')
 /**
  * The agent view's OWN ledger: session-id → epoch-ms of the moments this TUI
  * dispatched, backgrounded, or attached to a session FROM the agent view.
  * Unlike last-used.json (every /resume touch), this is the "background
- * session" record CC's `claude agents` shows — ordinary history never lands
+ * session" record used by the session overview — ordinary history never lands
  * here, so the view lists only sessions it actually manages.
  */
 const AGENT_VIEW_SESSIONS_FILE = join(DIR, 'agent-view-sessions.json')
@@ -37,46 +30,33 @@ function ensureDir(): void {
 
 /**
  * Store the session to resume and report the launcher invocation.
- * Dual-writes the legacy path for pre-rename launchers (see header).
  * @param sessionId - Session id for `dsh-tui --resume` on the next launch.
  */
 export function writeResumeTarget(sessionId: string): void {
   ensureDir()
   writeFileSync(RESUME_FILE, sessionId)
-  try {
-    mkdirSync(LEGACY_DATA_DIR, { recursive: true })
-    writeFileSync(LEGACY_RESUME_FILE, sessionId)
-  } catch {
-    // Best effort — the legacy mirror only serves old launchers.
-  }
 }
 
 /** Forget the resume marker (`/new` starts a fresh conversation). */
 export function clearResumeTarget(): void {
-  for (const file of [RESUME_FILE, LEGACY_RESUME_FILE]) {
-    try {
-      writeFileSync(file, '')
-    } catch {
-      // Best effort — the marker is a launcher nicety.
-    }
+  try {
+    writeFileSync(RESUME_FILE, '')
+  } catch {
+    // Best effort — the marker is a launcher nicety.
   }
 }
 
 /**
- * The session id requested by `dsh-tui --resume`, if any. The new path
- * wins; the legacy path is the fallback for pre-rename launchers.
+ * The session id requested by `dsh-tui --resume`, if any.
  * @returns The stored session id, or undefined when none is set.
  */
 export function readResumeTarget(): string | undefined {
-  for (const file of [RESUME_FILE, LEGACY_RESUME_FILE]) {
-    try {
-      const value = readFileSync(file, 'utf8').trim()
-      if (value) return value
-    } catch {
-      // Try the next candidate.
-    }
+  try {
+    const value = readFileSync(RESUME_FILE, 'utf8').trim()
+    return value || undefined
+  } catch {
+    return undefined
   }
-  return undefined
 }
 
 /**

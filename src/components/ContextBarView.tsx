@@ -11,7 +11,7 @@ import {
   type ContextSegments,
 } from '../screens/StatusMetrics.js'
 
-/** Free-segment colors, mirroring StatusMetrics' dark-theme defaults. */
+/** Free-segment colors matching StatusMetrics' dark-theme defaults. */
 const FREE_FILL: Color = '#E8E8E8'
 const FREE_TEXT: Color = '#4A4A4A'
 const USED_TEXT: Color = '#FFFFFF'
@@ -24,7 +24,7 @@ const USED_TEXT: Color = '#FFFFFF'
  * `free`) upward through `onHover`; the footer turns that into a detail
  * readout on its supplemental row.
  *
- * Pixel parity with the ANSI path is the contract: this exists so the bar
+ * The component path follows the ANSI path's geometry: this exists so the bar
  * can react to the pointer, not to restyle it.
  */
 export function ContextBarView({

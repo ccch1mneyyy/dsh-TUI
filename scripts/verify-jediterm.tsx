@@ -15,8 +15,7 @@
  *  - JediTerm's DECSTBM (scroll region) + CSI S/T semantics deviate from
  *    xterm; per-frame hardware scrolling with them corrupts the screen as
  *    content scrolls. The diff engine must repaint shifted rows cell-by-cell
- *    there instead (same gate as upstream Claude Code, which hard-disables
- *    DECSTBM on JetBrains terminals).
+ *    there instead, disabling DECSTBM on JetBrains terminals.
  *
  * Asserts:
  *  1. isJetBrainsIdeTerminal() reads TERMINAL_EMULATOR.
