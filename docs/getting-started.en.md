@@ -216,8 +216,9 @@ change (dependency install, vendor/dsh-auth builds, pack + isolated install);
 on a full cache hit it runs only a fast incremental typecheck, while `src/`
 edits still get a full compile that cleans `lib/` first, so deleted sources
 never linger in the packed tarball. Pass `--force` to rerun every layer once.
-The build gates are not part of the daily loop; for the complete pipeline
-(before releases, or when the cache looks suspect), run:
+Do not run concurrent `pnpm dev` instances against the same dev root
+(`DSH_TUI_DEV_ROOT`). The build gates are not part of the daily loop; for the
+complete pipeline (before releases, or when the cache looks suspect), run:
 
 ```sh
 pnpm dev:full

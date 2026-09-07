@@ -40,7 +40,7 @@ pnpm build                      # compile + 全部构建门禁
 pnpm verify:build               # 构建门禁（边界/契约/patch surface/plugin 系列等），不重复编译
 pnpm verify:package             # npm tarball 目标完整 + 入口 smoke import
 pnpm smoke                      # 通用无头屏幕组装冒烟
-pnpm dev                        # 快速开发循环：内容指纹跳过未变层，保留类型检查/编译；--force 全量一次
+pnpm dev                        # 快速开发循环：内容指纹跳过未变层，保留类型检查/编译；--force 全量一次；勿对同一 dev root 并发运行
 pnpm dev:full                   # 完整 dev 流水线：install + compile + 全部构建门禁 + 打包 + 隔离安装
 pnpm dev:test                   # 不启动 TUI，验证完整构建/打包/安装链路
 ```
@@ -49,6 +49,7 @@ pnpm dev:test                   # 不启动 TUI，验证完整构建/打包/安�
 
 - 按改动面选验证：共享渲染、`Chat`、提示/问卷布局、工具卡、主题原语或 `ink/` core 的改动必须跑 CI 回归；窄改动跑对应聚焦脚本，对照表见 [docs/contributing.md](docs/contributing.md)。终端可见改动在无头断言之外，环境可用时在 inline 与 fullscreen 两种模式、窄终端宽度下手动演练受影响流程。
 - 纯文档、纯 workflow、纯 YAML 改动不需要重建（除非同时改了 TypeScript 输入）。
+- **dev 指纹清单**：构建结构变动（如 vendor 包增减、打包输入、tsconfig 布局等）必须同步 `scripts/dev-fingerprint.mjs` 的输入清单，否则 `pnpm dev` 会静默跳过本该重建的层。
 
 ## 上游边界与契约
 

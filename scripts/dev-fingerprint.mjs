@@ -18,6 +18,10 @@
  *
  * The cache lives under the dev root (resolveDevPaths), keyed by repo path, so
  * worktrees never pollute the repository and --force can simply ignore it.
+ *
+ * Build-structure changes (vendor package additions, new packaged inputs,
+ * tsconfig layout) must update the layer input lists below — a stale list
+ * makes the fast loop silently skip a layer that should have rerun.
  */
 import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
