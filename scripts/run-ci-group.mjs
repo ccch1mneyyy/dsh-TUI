@@ -9,8 +9,10 @@
  * 用法（ci.yml 中每个测试组一条）：
  *   - run: node scripts/run-ci-group.mjs render-scroll
  *
- * 组定义在下方 GROUPS 表：名称 + 完整 argv + 可选附加 env（例如
- * measure-depth 需要 NODE_ENV=production）。新增测试时在此表登记——
+ * 组定义在下方 GROUPS 表：名称 + 完整 argv + 可选附加 env。所有条目默认
+ * NODE_ENV=production：产品入口本就强制生产版 React，dev 版 reconciler 每次
+ * commit 都 performance.measure 并 structured-clone 组件 props，慢一倍以上且
+ * 让时序断言在 CI 上贴线抖动（#805）。显式设置的 NODE_ENV 优先。新增测试时在此表登记——
  * 每条的注释即原 ci.yml 里该 step 上方的说明（迁移时保留）。
  *
  * 行为：
@@ -20,7 +22,7 @@
  */
 import { spawnSync } from 'node:child_process'
 
-const env = { ...process.env }
+const env = { NODE_ENV: 'production', ...process.env }
 
 const GROUPS = {
   'render-scroll': [
@@ -90,7 +92,7 @@ const GROUPS = {
     ["verify-subagent-stream-batching", ['node', '--import', 'tsx/esm', 'scripts/verify-subagent-stream-batching.tsx']],
 // 消息列表虚拟化回归：连续高度校正的嵌套更新上限（#129, React #185）、
 // 滚动窗口与 shrink 边界。measure-depth 需生产模式（minified #185）。
-    ["verify-message-measure-depth", ['node', '--import', 'tsx/esm', 'scripts/verify-message-measure-depth.tsx'], { NODE_ENV: 'production' }],
+    ["verify-message-measure-depth", ['node', '--import', 'tsx/esm', 'scripts/verify-message-measure-depth.tsx']],
     ["verify-scroll", ['node', 'scripts/verify-scroll.mjs']],
 // Windows Terminal 全屏拖选+滚轮回归：长 User 气泡的 selection overlay
 // 会污染上一帧；污染帧不得进入 DECSTBM/shiftRows 硬件滚动，否则带背景
@@ -104,7 +106,7 @@ const GROUPS = {
 // unseen-count 上报契约回归：同值重复上报会在密集流式 commit 下把
 // setState 派发进 commit 内，嵌套更新计数连涨越过 React #185 上限
 // （#146 之后残留的活链）。只在计数变化时才允许上报。
-    ["verify-unseen-report-once", ['node', '--import', 'tsx/esm', 'scripts/verify-unseen-report-once.tsx'], { NODE_ENV: 'production' }],
+    ["verify-unseen-report-once", ['node', '--import', 'tsx/esm', 'scripts/verify-unseen-report-once.tsx']],
 // /model 切换 scrollback 重复沉积回归：瞬态面板（补全/picker）必须
 // 走零高度浮层，帧高不随开关涨落——否则帧顶行滚进 scrollback 后被
 // 关闭重绘二次写入，每切一次 /model 多一份启动画。

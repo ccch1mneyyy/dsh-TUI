@@ -136,7 +136,12 @@ jobs:
           test -f lib/types/index.js
           test -f lib/types/dsh-adapter/invariant.js
 
+      # 回归脚本直接 import lib/types，绕过包入口的 force-production-react；
+      # 与产品和 run-ci-group 一致跑生产版 React（#805）。只加在脚本步骤上：
+      # NODE_ENV=production 会让 pnpm install 跳过 devDependencies。
       - run: pnpm verify:build
+        env:
+          NODE_ENV: production
 
       # Keep every main/types/bin/exports target inside the published tarball
       # and smoke-import the two runtime entry points.
@@ -211,6 +216,8 @@ jobs:
       # build keeps the installed rc.2 regression line green and, with the
       # required source env above, must also compose the rc.1 base/web patch.
       - run: pnpm build
+        env:
+          NODE_ENV: production
 
       - run: pnpm verify:alpha-source
 
