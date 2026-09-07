@@ -225,7 +225,7 @@ check('screen: hint line', text.includes('Space') || text.includes('预览'))
 // more than one distinct glyph in that exact cell.
 await new Promise(resolve => setTimeout(resolve, 500))
 const spinnerGlyphs = new Set()
-for (const match of stripAnsi(stdout.frames).matchAll(/([·✢*✶✻✽]) Login fix/gu)) spinnerGlyphs.add(match[1])
+for (const match of stripAnsi(stdout.frames).matchAll(/([·•●]) Login fix/gu)) spinnerGlyphs.add(match[1])
 check('screen: working row glyph animates', spinnerGlyphs.size >= 2, JSON.stringify([...spinnerGlyphs]))
 
 // Per-keystroke rendering: every typed character must appear in the frames
