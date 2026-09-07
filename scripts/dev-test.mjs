@@ -13,10 +13,8 @@
  *                   fast incremental no-emit typecheck still guards the tree.
  *                   The verify:* build gates are NOT part of this loop — pnpm
  *                   build, pnpm dev:full and CI still run them. --force
- *                   invalidates all fingerprints for one run. Concurrent runs
- *                   sharing DSH_TUI_DEV_ROOT are serialized by
- *                   scripts/dev-lock.mjs; the lock is released before the TUI
- *                   launches so it never waits on an interactive session.
+ *                   invalidates all fingerprints for one run. Do not run
+ *                   concurrent instances against the same DSH_TUI_DEV_ROOT.
  *
  *   --full          The original pipeline, unchanged: pnpm install (prepare
  *                   compiles), pnpm build (clean compile + every build gate),
@@ -42,7 +40,6 @@ import {
   readDevLoopCache,
   writeDevLoopCache,
 } from './dev-fingerprint.mjs'
-import { acquireDevLoopLock } from './dev-lock.mjs'
 
 const isWindows = process.platform === 'win32'
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
@@ -128,12 +125,6 @@ try {
     secureDirectory(directory)
   }
 
-  // Serialize the build/pack/install phase against other dev runs sharing
-  // this dev root. Released before the TUI launches; the exit listener is the
-  // backstop for process.exit and crash paths (release is idempotent).
-  const releaseLock = acquireDevLoopLock(devRoot)
-  process.on('exit', () => releaseLock())
-
   const installed = join(
     dshHome,
     'profiles',
@@ -175,8 +166,6 @@ try {
 
     // Keep the current file dependency available, but cap the script-owned cache
     // so repeated same-version development runs do not accumulate tarballs.
-    // Serialized by the dev-loop lock: no concurrent run can be mid-pack in a
-    // directory this cleanup removes.
     for (const entry of readdirSync(packageRoot, { withFileTypes: true })) {
       if (
         entry.isDirectory()
@@ -254,8 +243,6 @@ try {
   if (timings.length > 0) {
     console.log(`dev: layer timings — ${timings.map(([label, secs]) => `${label} ${secs.toFixed(1)}s`).join(' | ')}`)
   }
-
-  releaseLock()
 
   console.log(tarball ? 'dev-test: installed current worktree' : 'dev-test: cached install up to date')
   console.log(`  package:  ${tarball ?? 'unchanged (cache hit)'}`)
