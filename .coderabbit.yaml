@@ -3,11 +3,12 @@
 # 仓库自己的规则在 AGENTS.md / ADAPTER.md / docs/contributing.md，下面的
 # path_instructions 只是把那些规则里「机器能核对」的部分复述给它。
 
-language: zh-CN
-
+# 不钉死 language：PR 标题与正文用什么语言，评论就用什么语言（与 PR 入口
+# 门禁的回复语言规则一致）。
 tone_instructions: >-
-  用中文。只报会导致错误行为、回归或让测试假通过/假失败的问题，说明触发路径。
-  不评论格式、命名、注释措辞，不提超出本 PR 范围的重构或架构建议。不确定就不说。
+  Reply in the language of the PR title and body. Report only behavior bugs, regressions,
+  or tests that would pass/fail falsely, with the trigger path. No style, naming, or wording
+  comments; no refactors beyond this PR's scope. If unsure, say nothing.
 
 reviews:
   profile: chill
