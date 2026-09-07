@@ -56,6 +56,8 @@ for (let turn = 1; turn <= 8; turn++) {
 }
 const listeners = new Set<() => void>()
 const channel: any = {
+  // 探针确定性：鲸鱼欢迎期闲置动画（默认开）不进本探针的测量窗口。
+  whaleIdle: false,
   version: 0, rows, status: 'idle', sessionTitle: 'probe', agentId: 'probe',
   model: 'deepseek-v4-flash', provider: 'deepseek', reasoningEffort: 'max', effortLevels: [],
   tokens: { input: 0, output: 0 }, cwd: '/tmp/demo', displayCwd: '/tmp/demo', gitBranch: 'main',
@@ -126,7 +128,7 @@ function gutterSnapshot(): { thumbs: number[]; ticks: number[]; chevrons: number
 const wheel = async (up: boolean, times: number) => {
   for (let i = 0; i < times; i++) {
     stdin.write(`\x1b[<${up ? 64 : 65};90;30M`)
-    await sleep(150)
+    await sleep(150) // 固定窗:pacing 滚轮事件步间，无可区分新旧帧的屏幕条件
   }
 }
 const clickAt = (col: number, row: number) => {

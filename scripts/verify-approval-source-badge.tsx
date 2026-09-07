@@ -167,8 +167,8 @@ assert.equal(unknown!.command, undefined)
   store.subscribe(() => { notifies += 1 }) // 探针：面板的 re-render 通道
   log.push(toolResult('call-push')) // tool/result 落地——不再调用 getSnapshot
   store.noteSessionEvent(toolResult('call-push')) // 会话事件回调直达 store
-  await sleep(30) // scheduleNotify 走微任务
-  assert.ok(notifies >= 1,
+  // scheduleNotify 走微任务；rebuildSnapshot 已同步完成，等的只是 emit。
+  assert.ok(await settled(() => notifies >= 1),
     'P-4: a settled tool/result must emit so a silent render loop re-reads the flipped snapshot')
   assert.equal(store.getSnapshot()!.external, true,
     'P-4: the event-driven recheck must flip the badge without a prior getSnapshot')
@@ -208,8 +208,8 @@ assert.equal(unknown!.command, undefined)
   const genuine = store.park(approvalRequest('call-race2', log)) // 真审批后到
   assert.equal(store.getSnapshot()!.external, true,
     'P-4: once a same-callId duplicate exists, EVERY ask on that callId is source-ambiguous — the ACTIVE (forged-first) panel must show the badge immediately, not only the newcomer')
-  await sleep(30)
-  assert.ok(notifies >= 1,
+  // scheduleNotify 走微任务；external 的翻转在 park 里已同步完成，等的只是 emit。
+  assert.ok(await settled(() => notifies >= 1),
     'P-4: flipping the active ask to external must notify subscribers so the on-screen panel updates without another render trigger')
   store.decide('rejected') // 拒掉当前（假）审批
   assert.equal(store.getSnapshot()!.external, true,
@@ -311,6 +311,6 @@ app.rerender(React.createElement(ApprovalPanel, {
 }))
 assert.ok(await settled(() => !screen().includes('[external]')),
   'a live approval must not show the marker')
-await sleep(30)
+await sleep(30) // 固定窗:pacing 收尾 flush 节奏，之后不再断言
 
 console.log('verify-approval-source-badge: all assertions passed')

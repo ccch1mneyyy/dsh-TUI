@@ -10,6 +10,7 @@ import { flushInteractionTime } from '../bootstrap/state.js';
 import { getYogaCounters } from '../native-ts/yoga-layout/index.js';
 import { logForDebugging } from '../utils/debug.js';
 import { logError } from '../utils/log.js';
+import { isEnvTruthy } from '../utils/envUtils.js';
 import { format } from 'util';
 import { colorize } from './colorize.js';
 import App from './components/App.js';
@@ -28,6 +29,9 @@ import { noteTerminalFlush } from './flush-tick.js';
 import instances from './instances.js';
 import { suppressInputFor } from './input-suppression.js';
 import { LogUpdate } from './log-update.js';
+import { KittyGraphicsManager } from './kitty-graphics.js';
+import { SixelGraphicsManager } from './sixel-graphics.js';
+import { selectTerminalImageProtocol } from './terminal-image-protocol.js';
 import { nodeCache } from './node-cache.js';
 import { optimize } from './optimizer.js';
 import Output from './output.js';
@@ -43,8 +47,10 @@ import { isDecstbmSafe, SYNC_OUTPUT_SUPPORTED, serializeDiff, supportsDecrqmProb
 import { CURSOR_HOME, cursorMove, cursorPosition, DISABLE_KITTY_KEYBOARD, DISABLE_MODIFY_OTHER_KEYS, DISABLE_WIN32_INPUT_MODE, ENABLE_KITTY_KEYBOARD, ENABLE_MODIFY_OTHER_KEYS, ENABLE_WIN32_INPUT_MODE, ERASE_SCREEN, ERASE_SCROLLBACK, SGR_RESET } from './termio/csi.js';
 import { DBP, DFE, DISABLE_MOUSE_TRACKING, ENABLE_MOUSE_TRACKING, ENTER_ALT_SCREEN, EXIT_ALT_SCREEN, SHOW_CURSOR } from './termio/dec.js';
 import { CLEAR_ITERM2_PROGRESS, CLEAR_TAB_STATUS, setClipboard, supportsTabStatus, wrapForMultiplexer } from './termio/osc.js';
-import { decrqm } from './terminal-querier.js';
+import { decrqm, kittyGraphics, terminalCellSizePixels, terminalWindowSizePixels } from './terminal-querier.js';
 import { TerminalWriteProvider } from './useTerminalNotification.js';
+import { TerminalImagesContext } from './hooks/use-terminal-images.js';
+import { DEFAULT_TERMINAL_CELL_SIZE, resolveTerminalCellSize, type TerminalImagePlacement } from './terminal-image.js';
 
 // Alt-screen: renderer.ts sets cursor.visible = !isTTY || screen.height===0,
 // which is always false in alt-screen (TTY + content fills screen).
@@ -62,6 +68,7 @@ const ERASE_THEN_HOME_PATCH = Object.freeze({
   type: 'stdout' as const,
   content: ERASE_SCREEN + CURSOR_HOME
 });
+const TERMINAL_REPLY_QUARANTINE_MS = 120;
 
 // Cached per-Ink-instance, invalidated on resize. frame.cursor.y for
 // alt-screen is always terminalRows - 1 (renderer.ts).
@@ -71,18 +78,50 @@ function makeAltScreenParkPatch(terminalRows: number) {
     content: cursorPosition(terminalRows, 1)
   });
 }
+
 export type Options = {
   stdout: NodeJS.WriteStream;
   stdin: NodeJS.ReadStream;
   stderr: NodeJS.WriteStream;
   exitOnCtrlC: boolean;
   patchConsole: boolean;
+  terminalImages?: boolean;
   waitUntilExit?: () => Promise<void>;
   onFrame?: (event: FrameEvent) => void;
 };
 export default class Ink {
   private readonly log: LogUpdate;
   private readonly terminal: Terminal;
+  private readonly kittyGraphicsManager = new KittyGraphicsManager();
+  private readonly sixelGraphicsManager = new SixelGraphicsManager(() => {
+    if (this.isUnmounted || this.isPaused || this.terminalQueriesSuspended || !this.altScreenActive) return;
+    dom.markTreeDirty(this.rootNode);
+    this.scheduleRender();
+  });
+  private sixelGraphicsSupported = false;
+  private kittyGraphicsSupported = false;
+  private kittyGraphicsProbeStarted = false;
+  private terminalImageRequests = 0;
+  private measuredImageCellSize: ReturnType<typeof resolveTerminalCellSize>;
+  private readonly terminalImageListeners = new Set<() => void>();
+  private readonly terminalImages = {
+    subscribe: (listener: () => void): (() => void) => {
+      this.terminalImageListeners.add(listener);
+      return () => { this.terminalImageListeners.delete(listener); };
+    },
+    getSnapshot: (): boolean => this.altScreenActive && (this.kittyGraphicsSupported || this.sixelGraphicsSupported) &&
+      !this.isPaused && !this.terminalQueriesSuspended && !this.isUnmounted,
+    getCellSize: () => this.measuredImageCellSize,
+    request: (): (() => void) => {
+      if (this.isUnmounted) return noop;
+      this.terminalImageRequests += 1;
+      this.maybeProbeKittyGraphics([]);
+      return () => { this.terminalImageRequests -= 1; };
+    },
+  };
+  private terminalCellMetricsInFlight = false;
+  private terminalCellMetricsRefreshPending = false;
+  private terminalQueryResumeTimer: ReturnType<typeof setTimeout> | null = null;
   private app: App | null = null;
   private scheduleRender: (() => void) & {
     cancel?: () => void;
@@ -367,10 +406,16 @@ export default class Ink {
     // Terminals often emit 2+ resize events for one user action (window
     // settling). Same-dimension events are no-ops; skip to avoid redundant
     // frame resets and renders.
-    if (cols === this.terminalColumns && rows === this.terminalRows) return;
+    if (cols === this.terminalColumns && rows === this.terminalRows) {
+      // A font zoom or DPI move can change cell pixels without changing the
+      // row/column grid. The in-flight guard coalesces duplicate events.
+      this.refreshTerminalCellMetrics();
+      return;
+    }
     noteFrameCause('resize');
     this.terminalColumns = cols;
     this.terminalRows = rows;
+    this.refreshTerminalCellMetrics();
     this.altScreenParkPatch = makeAltScreenParkPatch(this.terminalRows);
     // Reflow moved every rect the pointer state was tracking: hover sets
     // and the multi-click chain reference pre-resize geometry. Fire the
@@ -450,8 +495,25 @@ export default class Ink {
    */
   enterAlternateScreen(): void {
     this.pause();
+    this.app?.querier.suspend();
+    if (this.terminalQueryResumeTimer !== null) {
+      clearTimeout(this.terminalQueryResumeTimer);
+      this.terminalQueryResumeTimer = null;
+    }
+    // Replies cannot be routed while the child owns stdin. Release every
+    // query hold before cooked mode is restored; an interrupted first Kitty
+    // probe may be attempted again after the handoff.
+    if (!this.kittyGraphicsSupported && !this.sixelGraphicsSupported) this.kittyGraphicsProbeStarted = false;
     this.suspendStdin();
+    // Kitty placements are independent of the terminal cell grid: clearing
+    // the screen for an external editor does not remove them. Delete every
+    // renderer-owned image before handing the buffer over, otherwise a
+    // negative-z preview can remain visible through the editor's default-
+    // background cells. deleteAll() also forgets the ids so the restore pass
+    // uploads fresh data after resetFramesForAltScreen().
+    const deleteImages = this.kittyGraphicsManager.deleteAll() + this.sixelGraphicsManager.clear();
     this.options.stdout.write(
+    deleteImages +
     // Disable extended key reporting first — editors that don't speak
     // CSI-u (e.g. nano) show "Unknown sequence" for every Ctrl-<key> if
     // kitty/modifyOtherKeys stays active. exitAlternateScreen re-enables.
@@ -506,7 +568,7 @@ export default class Ink {
       // replies, mouse fragments): resumeStdin's drain only covers bytes
       // already buffered, and a stray ESC would clear a non-empty prompt
       // (issue #123 field report).
-      suppressInputFor(120);
+      suppressInputFor(TERMINAL_REPLY_QUARANTINE_MS);
       this.resetFramesForAltScreen();
       this.resume();
     } else {
@@ -525,7 +587,7 @@ export default class Ink {
       '\x1b[?25l' // hide cursor (Ink manages)
       );
       this.resumeStdin();
-      suppressInputFor(120);
+      suppressInputFor(TERMINAL_REPLY_QUARANTINE_MS);
       this.repaint();
       // repaint()'s fresh empty frontFrame would let the blit fast path
       // copy blanks and diff to nothing — same flag forceRedraw() sets.
@@ -539,6 +601,7 @@ export default class Ink {
     // Kitty stack balanced (a well-behaved editor restores our entry, so
     // without the pop we'd accumulate depth on each editor round-trip).
     this.options.stdout.write('\x1b[?1004h' + (supportsWin32InputMode() ? ENABLE_WIN32_INPUT_MODE : supportsExtendedKeys() ? DISABLE_KITTY_KEYBOARD + ENABLE_KITTY_KEYBOARD + ENABLE_MODIFY_OTHER_KEYS : ''));
+    this.resumeTerminalQueriesAfterHandoff();
   }
   /**
    * One-shot viewport re-anchor for the NEXT main-screen frame: repaint the
@@ -648,6 +711,8 @@ export default class Ink {
     const renderStart = performance.now();
     const terminalWidth = this.terminalColumns;
     const terminalRows = this.terminalRows;
+    const sixelActive = this.altScreenActive && this.sixelGraphicsSupported;
+    this.sixelGraphicsManager.beginFrame(terminalWidth, terminalRows);
     const frame = this.renderer({
       frontFrame: this.frontFrame,
       backFrame: this.backFrame,
@@ -655,9 +720,12 @@ export default class Ink {
       terminalWidth,
       terminalRows,
       altScreen: this.altScreenActive,
+      terminalImages: this.altScreenActive && (this.kittyGraphicsSupported || this.sixelGraphicsSupported),
+      imageReady: sixelActive ? this.sixelGraphicsManager.prepare : undefined,
       prevFrameContaminated: this.prevFrameContaminated
     });
     const rendererMs = performance.now() - renderStart;
+    this.maybeProbeKittyGraphics(frame.images ?? []);
 
     // Viewport-shrink translation (companion to the follow block below):
     // chrome mounting around a ScrollBox (the new-messages pill, the sticky
@@ -872,9 +940,13 @@ export default class Ink {
     // The CSI H write is deferred until after the diff is computed so we
     // can skip it for empty diffs (no writes → physical cursor unused).
     let prevFrame = this.frontFrame;
+    const sixelFrame = sixelActive
+      ? this.sixelGraphicsManager.reconcile(frame.screen, prevFrame.screen, frame.images)
+      : { erase: '', baseline: prevFrame.screen };
+    if (sixelFrame.baseline !== prevFrame.screen) prevFrame = { ...prevFrame, screen: sixelFrame.baseline };
     if (this.altScreenActive) {
       prevFrame = {
-        ...this.frontFrame,
+        ...prevFrame,
         cursor: ALT_SCREEN_ANCHOR_CURSOR
       };
     }
@@ -886,7 +958,7 @@ export default class Ink {
     // doesn't implement DEC 2026, so SYNC_OUTPUT_SUPPORTED is false).
     // JediTerm is separately excluded in isDecstbmSafe(): its DECSTBM
     // implementation deviates from xterm and garbles scrolling content.
-    isDecstbmSafe());
+    isDecstbmSafe() && !(sixelActive && (this.sixelGraphicsManager.hasImage || sixelFrame.erase !== '')));
     const diffMs = performance.now() - tDiff;
     // Swap buffers
     this.backFrame = this.frontFrame;
@@ -916,9 +988,17 @@ export default class Ink {
       }
     }
     const tOptimize = performance.now();
+    if (flickers.length > 0 || this.needsEraseBeforePaint) {
+      this.kittyGraphicsManager.invalidateAll();
+      this.sixelGraphicsManager.invalidateAll();
+    }
     const optimized = optimize(diff);
     const optimizeMs = performance.now() - tOptimize;
-    const hasDiff = optimized.length > 0;
+    const graphicsOutput =
+      this.altScreenActive && this.kittyGraphicsSupported
+        ? this.kittyGraphicsManager.reconcile(frame.images ?? [])
+        : sixelActive ? this.sixelGraphicsManager.paint(optimized) : '';
+    const hasDiff = optimized.length > 0 || graphicsOutput !== '' || sixelFrame.erase !== '';
     if (this.altScreenActive && hasDiff) {
       // Prepend CSI H to anchor the physical cursor to (0,0) so
       // log-update's relative moves compute from a known spot (self-healing
@@ -944,6 +1024,10 @@ export default class Ink {
         optimized.unshift(ERASE_THEN_HOME_PATCH);
       } else {
         optimized.unshift(CURSOR_HOME_PATCH);
+      }
+      if (sixelFrame.erase !== '') optimized.unshift({ type: 'stdout', content: sixelFrame.erase });
+      if (graphicsOutput !== '') {
+        optimized.push({ type: 'stdout', content: graphicsOutput });
       }
       optimized.push(this.altScreenParkPatch);
     }
@@ -1108,10 +1192,20 @@ export default class Ink {
     reconciler.flushSyncFromReconciler();
     this.renderNow();
     this.isPaused = true;
+    this.notifyTerminalImagesChange();
   }
   resume(): void {
     this.isPaused = false;
+    this.notifyTerminalImagesChange();
     this.renderNow();
+    if (
+      this.terminalCellMetricsRefreshPending &&
+      !this.terminalCellMetricsInFlight &&
+      !this.terminalQueriesSuspended
+    ) {
+      this.terminalCellMetricsRefreshPending = false;
+      this.refreshTerminalCellMetrics();
+    }
   }
 
   /**
@@ -1213,8 +1307,13 @@ export default class Ink {
     };
     // Leaving must settle dragend WHILE the dispatch gate is still active;
     // flipping altScreenActive first would silently drop the cleanup event.
-    if (!active) resetOldPointerContext();
+    if (!active) {
+      resetOldPointerContext();
+      const deleteImages = this.kittyGraphicsManager.deleteAll() + this.sixelGraphicsManager.clear();
+      if (deleteImages !== '') this.options.stdout.write(deleteImages);
+    }
     this.altScreenActive = active;
+    this.notifyTerminalImagesChange();
     this.altScreenMouseTracking = active && mouseTracking;
     // Entering has no old alt-screen drag to notify, but the main-screen
     // hover/click geometry still needs to be cleared after the gate flips.
@@ -1336,12 +1435,24 @@ export default class Ink {
    */
   detachForShutdown(): void {
     this.isUnmounted = true;
+    this.terminalImageListeners.clear();
     // Cancel any pending throttled render so it doesn't fire between
     // cleanupTerminalModes() and process.exit() and write to main screen.
     this.scheduleRender.cancel?.();
     if (this.drainTimer !== null) {
       clearTimeout(this.drainTimer);
       this.drainTimer = null;
+    }
+    if (this.terminalQueryResumeTimer !== null) {
+      clearTimeout(this.terminalQueryResumeTimer);
+      this.terminalQueryResumeTimer = null;
+    }
+    // Delete Kitty placements before terminal mode cleanup. This write uses
+    // the renderer's own ordered stream, matching the rest of this shutdown
+    // path and leaving unmount's synchronous cleanup safely idempotent.
+    const deleteImages = this.kittyGraphicsManager.deleteAll() + this.sixelGraphicsManager.dispose();
+    if (deleteImages !== '' && this.options.stdout.isTTY) {
+      this.options.stdout.write(deleteImages);
     }
     this.app?.detachForShutdown();
     // Shutdown bypasses the normal unmount path, so release the process and
@@ -1584,6 +1695,7 @@ export default class Ink {
     // is skipped, which costs nothing: Terminal.app never answered it.
     if (!supportsDecrqmProbe()) return;
     void Promise.all([querier.send(decrqm(1049)), querier.flush()]).then(([reply]) => {
+      if (this.isUnmounted || this.isPaused || this.terminalQueriesSuspended) return;
       // DECRPM status: 1/3 = set, 2/4 = reset, 0/undefined = unknown.
       // Heal only on a POSITIVE reset — an unanswered probe must not
       // trigger the destructive re-entry.
@@ -1617,6 +1729,196 @@ export default class Ink {
       this.drainAltScreenReentry();
     }
   };
+
+  private notifyTerminalImagesChange(): void {
+    // AlternateScreen changes modes in an insertion effect. Notify React
+    // after that commit, when scheduling a subscriber update is safe.
+    queueMicrotask(() => {
+      for (const listener of this.terminalImageListeners) listener();
+    });
+  }
+
+  /** Probe on image demand, before lazy consumers need to decode a source. */
+  private maybeProbeKittyGraphics(
+    placements: readonly TerminalImagePlacement[],
+  ): void {
+    if (
+      (placements.length === 0 && this.terminalImageRequests === 0) ||
+      this.isUnmounted ||
+      this.kittyGraphicsProbeStarted ||
+      this.options.terminalImages === false ||
+      !this.altScreenActive ||
+      this.isPaused ||
+      this.terminalQueriesSuspended ||
+      !this.options.stdout.isTTY ||
+      process.env.TMUX !== undefined ||
+      process.env.STY !== undefined ||
+      isEnvTruthy(process.env.CLAUDE_CODE_ACCESSIBILITY) ||
+      isEnvTruthy(process.env.DSH_TUI_DISABLE_TERMINAL_IMAGES)
+      || process.env.DSH_TUI_IMAGE_PROTOCOL === 'none'
+    ) {
+      return;
+    }
+    const querier = this.app?.querier;
+    if (querier === undefined) return;
+    this.kittyGraphicsProbeStarted = true;
+    const queryId = 31;
+    const columns = this.terminalColumns;
+    const rows = this.terminalRows;
+    void Promise.all([
+      querier.send(kittyGraphics(queryId)),
+      querier.send(terminalCellSizePixels()),
+      querier.send(terminalWindowSizePixels()),
+      querier.flush({ attributes: true }),
+    ])
+      .then(async ([reply, cellPixels, windowPixels, attributes]) => {
+        if (this.isUnmounted || this.isPaused || this.terminalQueriesSuspended) {
+          return;
+        }
+        const protocol = selectTerminalImageProtocol(reply?.status, attributes?.params, process.env.DSH_TUI_IMAGE_PROTOCOL);
+        if (protocol === 'none') return;
+        if (protocol === 'sixel') {
+          const [mode] = await Promise.all([querier.send(decrqm(80)), querier.flush()]);
+          if (this.isUnmounted || this.isPaused || this.terminalQueriesSuspended) return;
+          // A permanently set display mode cannot place a preview at CUP.
+          if (mode?.status === 3) return;
+          this.sixelGraphicsManager.setDisplayMode(mode?.status === 1);
+        }
+        this.kittyGraphicsSupported = protocol === 'kitty';
+        this.sixelGraphicsSupported = protocol === 'sixel';
+        this.notifyTerminalImagesChange();
+        if (
+          columns === this.terminalColumns &&
+          rows === this.terminalRows
+        ) {
+          this.measuredImageCellSize = resolveTerminalCellSize(cellPixels, windowPixels, columns, rows);
+          this.kittyGraphicsManager.setCellSize(
+            this.measuredImageCellSize ??
+              DEFAULT_TERMINAL_CELL_SIZE,
+          );
+          this.sixelGraphicsManager.setCellSize(
+            this.measuredImageCellSize ?? DEFAULT_TERMINAL_CELL_SIZE,
+          );
+        } else {
+          // The capability result is still valid, but its geometry snapshot
+          // is not. Start one fresh metrics batch after this sentinel.
+          this.refreshTerminalCellMetrics();
+        }
+        if (!this.altScreenActive) return;
+        // The preceding frame painted text fallback cells. Force one complete
+        // paint so image nodes replace those cells with blank backing before
+        // their graphics placements are uploaded.
+        dom.markTreeDirty(this.rootNode);
+        this.prevFrameContaminated = true;
+        this.scheduleRender();
+      })
+      .catch(() => {
+        /* Capability detection is best-effort; fallback remains visible. */
+      });
+  }
+
+  /** Refresh image pixel geometry after a resize, coalescing resize bursts. */
+  private refreshTerminalCellMetrics(): void {
+    if (
+      (!this.kittyGraphicsSupported && !this.sixelGraphicsSupported) ||
+      this.isUnmounted ||
+      !this.options.stdout.isTTY
+    ) {
+      return;
+    }
+    if (this.isPaused || this.terminalQueriesSuspended) {
+      this.terminalCellMetricsRefreshPending = true;
+      return;
+    }
+    const querier = this.app?.querier;
+    if (querier === undefined) return;
+    if (this.terminalCellMetricsInFlight) {
+      this.terminalCellMetricsRefreshPending = true;
+      return;
+    }
+
+    this.terminalCellMetricsInFlight = true;
+    this.terminalCellMetricsRefreshPending = false;
+    const columns = this.terminalColumns;
+    const rows = this.terminalRows;
+    void Promise.all([
+      querier.send(terminalCellSizePixels()),
+      querier.send(terminalWindowSizePixels()),
+      querier.flush(),
+    ])
+      .then(([cellPixels, windowPixels]) => {
+        if (this.isUnmounted) return;
+        if (this.isPaused || this.terminalQueriesSuspended) {
+          this.terminalCellMetricsRefreshPending = true;
+          return;
+        }
+        if (
+          columns !== this.terminalColumns ||
+          rows !== this.terminalRows
+        ) {
+          this.terminalCellMetricsRefreshPending = true;
+          return;
+        }
+        const cellSize = resolveTerminalCellSize(
+          cellPixels,
+          windowPixels,
+          columns,
+          rows,
+        );
+        if (cellSize === undefined) return;
+        if (this.measuredImageCellSize?.width !== cellSize.width || this.measuredImageCellSize?.height !== cellSize.height) {
+          this.measuredImageCellSize = cellSize;
+          this.notifyTerminalImagesChange();
+        }
+        const changed = this.kittyGraphicsManager.setCellSize(cellSize);
+        const sixelChanged = this.sixelGraphicsManager.setCellSize(cellSize);
+        if ((changed || sixelChanged) && this.altScreenActive) {
+          dom.markTreeDirty(this.rootNode);
+          this.scheduleRender();
+        }
+      })
+      .catch(() => {
+        /* Pixel geometry is best-effort; retain the last known value. */
+      })
+      .finally(() => {
+        this.terminalCellMetricsInFlight = false;
+        if (
+          this.terminalCellMetricsRefreshPending &&
+          !this.isPaused &&
+          !this.terminalQueriesSuspended
+        ) {
+          this.terminalCellMetricsRefreshPending = false;
+          this.refreshTerminalCellMetrics();
+        }
+      });
+  }
+
+  /** Reopen terminal queries only after late handoff replies are quarantined. */
+  private resumeTerminalQueriesAfterHandoff(): void {
+    if (this.terminalQueryResumeTimer !== null) {
+      clearTimeout(this.terminalQueryResumeTimer);
+    }
+    this.terminalQueryResumeTimer = setTimeout(() => {
+      this.terminalQueryResumeTimer = null;
+      if (this.isUnmounted) return;
+      this.app?.querier.resume();
+      this.notifyTerminalImagesChange();
+      this.app?.scheduleXtversionProbe();
+      if (
+        this.terminalCellMetricsRefreshPending &&
+        !this.terminalCellMetricsInFlight
+      ) {
+        this.terminalCellMetricsRefreshPending = false;
+        this.refreshTerminalCellMetrics();
+      } else if (!this.kittyGraphicsSupported && !this.sixelGraphicsSupported) {
+        this.scheduleRender();
+      }
+    }, TERMINAL_REPLY_QUARANTINE_MS);
+  }
+
+  private get terminalQueriesSuspended(): boolean {
+    return this.app?.querier.isSuspended ?? false;
+  }
 
   /**
    * Re-enter alt-screen, clear, home, re-enable mouse tracking, and reset
@@ -1668,6 +1970,8 @@ export default class Ink {
     this.frontFrame = blank();
     this.backFrame = blank();
     this.log.reset();
+    this.kittyGraphicsManager.invalidateAll();
+    this.sixelGraphicsManager.invalidateAll();
     // Defense-in-depth: alt-screen skips the cursor preamble anyway (CSI H
     // resets), but a stale displayCursor would be misleading if we later
     // exit to main-screen without an intervening render.
@@ -1797,6 +2101,15 @@ export default class Ink {
    * frame; the effect fires before any mouse input so the fallback is
    * unobservable in practice.
    */
+  /**
+   * The colour a backdrop shade (`<Box backdrop="dim">`) fades explicit
+   * colours toward — the terminal background from OSC 11, or black/white
+   * by theme lightness when unknown. See StylePool.setShadeTarget.
+   */
+  setShadeTarget(rgb: { r: number; g: number; b: number } | null): void {
+    this.stylePool.setShadeTarget(rgb);
+  }
+
   setSelectionBgColor(color: string): void {
     // Wrap a NUL marker, then split on it to extract the open/close SGR.
     // colorize returns the input unchanged if the color string is bad —
@@ -2248,7 +2561,9 @@ export default class Ink {
     this.currentNode = node;
     const tree = <App ref={this.setAppRef} stdin={this.options.stdin} stdout={this.options.stdout} stderr={this.options.stderr} exitOnCtrlC={this.options.exitOnCtrlC} onExit={this.unmount} terminalColumns={this.terminalColumns} terminalRows={this.terminalRows} selection={this.selection} onSelectionChange={this.notifySelectionChange} onClickAt={this.dispatchClick} onContextMenuAt={this.dispatchContextMenu} onHoverAt={this.dispatchHover} onWheelAt={this.dispatchWheelAt} getHyperlinkAt={this.getHyperlinkAt} onOpenHyperlink={this.openHyperlink} onMultiClick={this.handleMultiClick} onSelectionDrag={this.handleSelectionDrag} onDragTargetAt={this.findDragTargetAt} onDragDispatch={this.dispatchDrag} onPointerGestureChange={this.setPointerGestureActive} onProtocolCandidateChange={this.setProtocolCandidateActive} onReleaseTail={this.drainReleaseTail} onClickProbe={this.clickProbeAtBatchTail} onStdinResume={this.reassertTerminalModes} onTerminalFocus={this.handleTerminalFocusProbe} onCursorDeclaration={this.setCursorDeclaration} dispatchKeyboardEvent={this.dispatchKeyboardEvent}>
         <TerminalWriteProvider value={this.writeRaw}>
-          {node}
+          <TerminalImagesContext.Provider value={this.terminalImages}>
+            {node}
+          </TerminalImagesContext.Provider>
         </TerminalWriteProvider>
       </App>;
 
@@ -2282,6 +2597,7 @@ export default class Ink {
     // only render last frame of non-static output
     const diff = this.log.renderPreviousOutput_DEPRECATED(this.frontFrame);
     const lastFrame = serializeDiff(this.terminal, optimize(diff));
+    const sixelCleanup = this.sixelGraphicsManager.dispose();
 
     // Clean up terminal modes synchronously before process exit.
     // React's componentWillUnmount won't run in time when process.exit() is called,
@@ -2305,6 +2621,10 @@ export default class Ink {
       // shell (issue #522).
       if (lastFrame !== '') {
         writeSync(stdoutFd, lastFrame);
+      }
+      const deleteImages = this.kittyGraphicsManager.deleteAll() + sixelCleanup;
+      if (deleteImages !== '') {
+        writeSync(stdoutFd, deleteImages);
       }
       if (this.altScreenActive) {
         // <AlternateScreen>'s unmount effect won't run during signal-exit.
@@ -2337,11 +2657,17 @@ export default class Ink {
 
     this.isUnmounted = true;
 
+    this.terminalImageListeners.clear();
+
     // Cancel any pending throttled renders to prevent accessing freed Yoga nodes
     this.scheduleRender.cancel?.();
     if (this.drainTimer !== null) {
       clearTimeout(this.drainTimer);
       this.drainTimer = null;
+    }
+    if (this.terminalQueryResumeTimer !== null) {
+      clearTimeout(this.terminalQueryResumeTimer);
+      this.terminalQueryResumeTimer = null;
     }
 
     // @ts-ignore -- ported CC build; type drift tolerated updateContainerSync exists in react-reconciler but not in @types/react-reconciler

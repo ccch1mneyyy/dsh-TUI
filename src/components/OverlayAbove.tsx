@@ -38,6 +38,10 @@ export function OverlayAbove({
       flexDirection="column"
       justifyContent="flex-end"
       overflow="hidden"
+      // Kitty graphics below text still show through terminal-default
+      // background cells. A real surface color makes the negative-z image
+      // placement obey this overlay's visual bounds without deleting it.
+      backgroundColor="toolCardBackground"
       opaque
       {...(maxHeight === undefined ? {} : { maxHeight })}
     >

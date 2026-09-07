@@ -160,6 +160,7 @@ const ctx = {
 
 // ---- 真实 channel + 真实 Chat ---------------------------------------------------
 const channel = createChannel(ctx as never, makeAgent('a1', events) as never, {
+  whaleIdle: false, // 探针确定性：鲸鱼欢迎期闲置动画不进本探针的测量窗口。
   model: 'deepseek-v4-flash',
   cwd: '/tmp/demo',
   provider: 'fake-provider',
@@ -188,26 +189,25 @@ console.log(`boot: buffer=${term.buffer.active.length} 行 (视口 ${ROWS})`)
 const bufLen = (tag: string) =>
   console.log(`  [${tag}] buffer=${term.buffer.active.length} scrollback=${term.buffer.active.baseY}`)
 // 逐键 40ms 与各步 200/600ms 均为按键序列的 ordering pacing：补全浮层/
-// picker 的 key-ready 状态无法用纯文本屏幕内容观测（同 repro-settings），
-// 保留固定窗口。
+// picker 的 key-ready 状态无法用纯文本屏幕内容观测（同 repro-settings）。
 const typeKeys = async (keys: string) => {
   for (const ch of keys) {
     stdin.write(ch)
-    await sleep(40)
+    await sleep(40) // 固定窗:pacing 逐键步间
   }
 }
 bufLen('boot')
 await typeKeys('/model')
-await sleep(200)
+await sleep(200) // 固定窗:pacing 等补全浮层收键就绪
 bufLen('typed /model')
 stdin.write('\r')            // 打开 picker（slash 命令派发）
-await sleep(600)
+await sleep(600) // 固定窗:pacing 等 picker 收键就绪
 bufLen('picker open')
 stdin.write('\x1b[B')        // ↓ 选中下一个模型
-await sleep(200)
+await sleep(200) // 固定窗:pacing 按键步间
 stdin.write('\r')            // 确认 → fork + replay
-// 稳定性探针保留固定窗口：「恰好一份」断言防的是切换后追加帧的多余沉积，
-// 对已成立条件（count===1）轮询立即返回等于没测。
+// 固定窗:探针 「恰好一份」断言防的是切换后追加帧的多余沉积，对已成立条件
+// （count===1）轮询立即返回等于没测。
 await sleep(1500)
 bufLen('switched')
 
@@ -222,13 +222,13 @@ check('历史片段 0-8 恰好一份', countMarker('第 0-8 条历史回答要�
 
 // ---- 再切一次：确认沉积随切换次数线性增长 --------------------------------------
 await typeKeys('/model')
-await sleep(200)
+await sleep(200) // 固定窗:pacing 等补全浮层收键就绪
 stdin.write('\r')
-await sleep(600)
+await sleep(600) // 固定窗:pacing 等 picker 收键就绪
 stdin.write('\x1b[B')
-await sleep(200)
+await sleep(200) // 固定窗:pacing 按键步间
 stdin.write('\r')
-// 同上：沉积探针保留固定窗口。
+// 固定窗:探针 同上，沉积「恰好一份」是不得改变的断言。
 await sleep(1500)
 check('二次切换后 splash 恰好一份', countMarker(SPLASH) === 1, `实际 ${countMarker(SPLASH)}`)
 
@@ -241,7 +241,7 @@ const waitQuiet = async () => {
   const deadline = Date.now() + 20_000
   let last = rawChunks.length
   while (Date.now() < deadline) {
-    await sleep(600)
+    await sleep(600) // 固定窗:pacing 轮询步长，条件见循环（600ms 内无新帧即视为静息）
     if (rawChunks.length === last) return
     last = rawChunks.length
   }
@@ -251,12 +251,12 @@ await waitQuiet()
 const modelBeforeEsc = channel.model
 const bufBeforeEsc = term.buffer.active.length
 await typeKeys('/model')
-await sleep(200)
+await sleep(200) // 固定窗:pacing 等补全浮层收键就绪
 stdin.write('\r')            // 打开 picker
-await sleep(600)
+await sleep(600) // 固定窗:pacing 等 picker 收键就绪
 stdin.write('\x1b')          // Esc：只关闭，不切换
-// 稳定性探针保留固定窗口：Esc 不切换/历史仍在/缓冲区零增长都是「状态不得
-// 改变」断言，轮询已成立条件立即返回等于没测。
+// 固定窗:探针 Esc 不切换/历史仍在/缓冲区零增长都是「状态不得改变」断言，
+// 轮询已成立条件立即返回等于没测。
 await sleep(600)
 check('Esc 不改动模型', channel.model === modelBeforeEsc, `实际 ${channel.model}`)
 check('Esc 关闭后被覆盖历史行仍在',

@@ -364,8 +364,13 @@ const reconciler = createReconciler<
     hostContext: HostContext,
     internalHandle?: unknown,
   ): DOMElement {
-    if (hostContext.isInsideText && originalType === 'ink-box') {
-      throw new Error(`<Box> can't be nested inside <Text> component`)
+    if (
+      hostContext.isInsideText &&
+      (originalType === 'ink-box' || originalType === 'ink-image')
+    ) {
+      throw new Error(
+        `<${originalType === 'ink-image' ? 'Image' : 'Box'}> can't be nested inside <Text> component`,
+      )
     }
 
     const type =

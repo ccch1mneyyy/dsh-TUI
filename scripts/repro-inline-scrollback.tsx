@@ -102,6 +102,8 @@ function check(name: string, ok: boolean, extra = '') {
 // ---- channel stub（与 repro-long-output 同款） ------------------------------
 const listeners = new Set<() => void>()
 const channel: any = {
+  // 探针确定性：鲸鱼欢迎期闲置动画（默认开）不进本探针的测量窗口。
+  whaleIdle: false,
   version: 0,
   rows: [] as any[],
   status: 'idle',
@@ -164,12 +166,12 @@ const instance = await render(
 )
 
 const ticker = setInterval(() => { channel.responseChars += 7; bump() }, 100)
-await sleep(800)
+await sleep(800) // 固定窗:pacing 等首帧铺满，无单一可轮询锚点
 
 // ---- 现场回合：user → Read → reasoning ticker → settle → tool → 长流式回复 ----
 const add = (row: any) => { channel.rows.push({ id: id++, ...row }); bump() }
 add({ kind: 'user', text: '看看这个项目，给个概览' })
-await sleep(120)
+await sleep(120) // 固定窗:pacing 回放回合步间
 
 // Real report shape: a completed Read row sits immediately above the live
 // thinking ticker. When the ticker settles from four rows to one, an incorrect
@@ -183,7 +185,7 @@ add({
     startedAt: Date.now() - 80, durationMs: 80,
   },
 })
-await sleep(150)
+await sleep(150) // 固定窗:pacing 回放回合步间
 
 const think1 = { id: id++, kind: 'reasoning', text: '', streaming: true, durationMs: undefined as number | undefined }
 channel.rows.push(think1); bump()
@@ -194,10 +196,10 @@ for (const chunk of [
   '\n对照现有回归',
   '\n然后汇总。',
 ]) {
-  think1.text += chunk; bump(); await sleep(140)
+  think1.text += chunk; bump(); await sleep(140) // 固定窗:pacing 流式分块步间
 }
 think1.streaming = false; think1.durationMs = 1000; bump()
-await sleep(150)
+await sleep(150) // 固定窗:pacing 思考收拢后的回放步间
 
 const tool1 = {
   id: id++, kind: 'tool', text: '',
@@ -208,12 +210,12 @@ const tool1 = {
     status: 'running' as string, resultText: undefined as string | undefined, startedAt: Date.now(), durationMs: undefined as number | undefined,
   },
 }
-channel.rows.push(tool1); bump(); await sleep(400)
+channel.rows.push(tool1); bump(); await sleep(400) // 固定窗:pacing 工具 running 态的回放时长
 tool1.tool.status = 'ok'
 tool1.tool.durationMs = 42
 tool1.tool.resultText = Array.from({ length: 20 }, (_, i) => `工具结果行 ${i}`).join('\n')
 channel.activeToolCount = 0
-bump(); await sleep(200)
+bump(); await sleep(200) // 固定窗:pacing 工具完成后的回放步间
 
 // 长流式回复：9 大节 × 每节 11 条，60 字符一个 chunk（照 issue #39 的量级）。
 const finalMsg = { id: id++, kind: 'assistant', text: '', streaming: true }
@@ -235,20 +237,20 @@ if (acc) doc.push(acc)
 for (const chunk of doc) {
   finalMsg.text += chunk
   bump()
-  await sleep(90)
+  await sleep(90) // 固定窗:pacing 流式分块步间
 }
 finalMsg.streaming = false
 channel.working = false
 channel.status = 'idle'
 bump()
-await sleep(800)
+await sleep(800) // 固定窗:pacing 等收尾帧铺完，无单一可轮询锚点
 clearInterval(ticker)
-await sleep(300)
+await sleep(300) // 固定窗:pacing 停掉 ticker 后的静默步间
 
 // 闲置后在真实 PromptInput 输入短标记：caret 的反色格和 xterm 硬件
 // cursor 必须重合。此时整帧远高于小视口，覆盖 native cursor 的长帧坐标路径。
 stdin.write(INPUT_MARKER)
-await sleep(500)
+await sleep(500) // 固定窗:pacing 等输入后整帧重绘，字节取证无单一锚点
 
 // ---- 字节取证：erase/清屏/滚动序列统计（定位残留的发生机制） ----------------
 const allRaw = rawChunks.join('')

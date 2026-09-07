@@ -301,7 +301,7 @@ await show('fold-single', {
 check('单行命令折叠开启时不加提示', await settled(() => screen().includes('Bash(seq 6)') && !screen().includes('… +1 lines')))
 
 app.unmount()
-// unmount 后输出 flush 无可观测条件，保留固定 pacing。
+// 固定窗:pacing unmount 后输出 flush 无可观测条件。
 await sleep(100)
 console.log(results.join('\n'))
 console.log(failures === 0 ? '\nALL PASS' : `\n${failures} FAILURES`)

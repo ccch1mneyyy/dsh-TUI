@@ -19,6 +19,7 @@ import {
   filterOutHyperlinkStyles,
   markNoSelectRegion,
   OSC8_PREFIX,
+  shadeRegion,
   recordCellRunEntry,
   recordSpacerRunEntry,
   replayCellRun,
@@ -30,6 +31,14 @@ import {
   type CellRun,
 } from './screen.js'
 import { stringWidth } from './stringWidth.js'
+import type { DOMElement } from './dom.js'
+import {
+  TERMINAL_IMAGE_MAX_CELLS,
+  TERMINAL_IMAGE_MAX_FRAME_BYTES,
+  TERMINAL_IMAGE_MAX_PLACEMENTS,
+  type TerminalImagePlacement,
+  type TerminalImageSource,
+} from './terminal-image.js'
 import { widestLine } from './widest-line.js'
 
 /**
@@ -174,17 +183,34 @@ type Options = {
    * For double-buffering, pass a reusable screen. Otherwise create a new one.
    */
   screen: Screen
+  /** Paint image fallbacks as blank backing cells and collect placements. */
+  terminalImages?: boolean
+  imageReady?: (placement: TerminalImagePlacement) => boolean
+  /** Image requests from the diff baseline, reused by clean subtree blits. */
+  previousImages?: readonly TerminalImagePlacement[]
 }
 
-/** A queued paint operation: write, clip, unclip, blit, clear, noSelect, or shift. */
+/** A queued paint operation: write, clip, unclip, blit, clear, shade, noSelect, or shift. */
 export type Operation =
   | WriteOperation
   | ClipOperation
   | UnclipOperation
   | BlitOperation
   | ClearOperation
+  | ShadeOperation
   | NoSelectOperation
   | ShiftOperation
+
+/**
+ * Restyle the cells already in the region at this point of the paint
+ * order: a modal layer's backdrop. Applied in sequence like a write, so
+ * everything painted earlier (the transcript beneath) is shaded and
+ * everything painted later (the card on top) is not.
+ */
+type ShadeOperation = {
+  type: 'shade'
+  region: Rectangle
+}
 
 type WriteOperation = {
   type: 'write'
@@ -246,6 +272,15 @@ function minDefined(
   if (a === undefined) return b
   if (b === undefined) return a
   return Math.min(a, b)
+}
+
+function isNodeInSubtree(node: DOMElement, root: DOMElement): boolean {
+  let current: DOMElement | undefined = node
+  while (current !== undefined) {
+    if (current === root) return true
+    current = current.parentNode
+  }
+  return false
 }
 
 type UnclipOperation = {
@@ -458,8 +493,16 @@ export default class Output {
   height: number
   private readonly stylePool: StylePool
   private screen: Screen
+  terminalImagesEnabled: boolean
+  private imageReady: ((placement: TerminalImagePlacement) => boolean) | undefined
 
   private readonly operations: Operation[] = []
+  private readonly imagePlacements: TerminalImagePlacement[] = []
+  private readonly imageNodes = new Set<DOMElement>()
+  private readonly imageBackingEnds = new Map<DOMElement, number>()
+  private readonly imageClips: Clip[] = []
+  private imageDecodedBytes = 0
+  private previousImages: readonly TerminalImagePlacement[]
 
   private charCache = new CharCache()
 
@@ -516,6 +559,9 @@ export default class Output {
     this.height = height
     this.stylePool = stylePool
     this.screen = screen
+    this.terminalImagesEnabled = options.terminalImages ?? false
+    this.imageReady = options.imageReady
+    this.previousImages = options.previousImages ?? []
 
     resetScreen(screen, width, height)
   }
@@ -530,11 +576,26 @@ export default class Output {
    * @param height - the new screen height in rows.
    * @param screen - the screen buffer to render into.
    */
-  reset(width: number, height: number, screen: Screen): void {
+  reset(
+    width: number,
+    height: number,
+    screen: Screen,
+    terminalImages = false,
+    previousImages: readonly TerminalImagePlacement[] = [],
+    imageReady?: (placement: TerminalImagePlacement) => boolean,
+  ): void {
     this.width = width
     this.height = height
     this.screen = screen
+    this.terminalImagesEnabled = terminalImages
+    this.imageReady = imageReady
+    this.previousImages = previousImages
     this.operations.length = 0
+    this.imagePlacements.length = 0
+    this.imageNodes.clear()
+    this.imageBackingEnds.clear()
+    this.imageClips.length = 0
+    this.imageDecodedBytes = 0
     resetScreen(screen, width, height)
     // Bounds are enforced at insertion time (CharCache.set); nothing to
     // do here. The cache intentionally survives frames — most lines don't
@@ -576,6 +637,16 @@ export default class Output {
   }
 
   /**
+   * Shade the cells painted so far inside `region` (see ShadeOperation).
+   * Idempotent per cell, so a clean subtree blitted back from prevScreen
+   * with last frame's shade is not shaded twice.
+   * @param region - the backdrop node's rect.
+   */
+  shade(region: Rectangle): void {
+    this.operations.push({ type: 'shade', region })
+  }
+
+  /**
    * Mark a region as non-selectable (excluded from fullscreen text
    * selection copy + highlight). Used by <NoSelect> to fence off
    * gutters (line numbers, diff sigils). Applied AFTER blit/write so
@@ -584,6 +655,168 @@ export default class Output {
    */
   noSelect(region: Rectangle): void {
     this.operations.push({ type: 'noSelect', region })
+  }
+
+  /**
+   * Record a fully visible, frame-budgeted image request. Rejected placements
+   * keep their cell fallback, so terminal graphics never escape a clip or
+   * create an unbounded decoded-data upload burst.
+   */
+  image(
+    node: DOMElement,
+    x: number,
+    y: number,
+    columns: number,
+    rows: number,
+    source: TerminalImageSource,
+    background?: string,
+  ): boolean {
+    if (this.imageNodes.has(node)) return this.imagePlacements.find(p => p.node === node)?.graphicsReady !== false
+    if (this.imagePlacements.length >= TERMINAL_IMAGE_MAX_PLACEMENTS) return false
+    const left = Math.floor(x)
+    const top = Math.floor(y)
+    const width = Math.floor(columns)
+    const height = Math.floor(rows)
+    if (
+      width <= 0 ||
+      height <= 0 ||
+      width * height > TERMINAL_IMAGE_MAX_CELLS
+    ) {
+      return false
+    }
+    const presentation = node.attributes.imagePresentation
+    const canCrop = this.imageReady !== undefined && (presentation === 'preview' || presentation === 'transcript')
+    if (!canCrop && (
+      left < 0 ||
+      top < 0 ||
+      left + width > this.width ||
+      top + height > this.height
+    )) {
+      return false
+    }
+    const clip = this.imageClips.at(-1)
+    if (!canCrop && (
+      clip !== undefined &&
+      ((clip.x1 !== undefined && left < clip.x1) ||
+        (clip.x2 !== undefined && left + width > clip.x2) ||
+        (clip.y1 !== undefined && top < clip.y1) ||
+        (clip.y2 !== undefined && top + height > clip.y2))
+    )) {
+      return false
+    }
+    const visibleLeft = Math.max(0, left, Math.ceil(clip?.x1 ?? 0))
+    const visibleTop = Math.max(0, top, Math.ceil(clip?.y1 ?? 0))
+    const visibleRight = Math.min(this.width, left + width, Math.floor(clip?.x2 ?? this.width))
+    const visibleBottom = Math.min(this.height, top + height, Math.floor(clip?.y2 ?? this.height))
+    if (visibleRight <= visibleLeft || visibleBottom <= visibleTop) return false
+    const decodedBytes = source.data.byteLength
+    if (
+      this.imageDecodedBytes + decodedBytes >
+      TERMINAL_IMAGE_MAX_FRAME_BYTES
+    ) {
+      return false
+    }
+    const placement: TerminalImagePlacement = {
+      node,
+      x: left,
+      y: top,
+      columns: width,
+      rows: height,
+      source,
+      ...(presentation === 'preview' || presentation === 'transcript' ? { presentation } : {}),
+      ...(canCrop ? { clip: { x: visibleLeft, y: visibleTop, columns: visibleRight - visibleLeft, rows: visibleBottom - visibleTop } } : {}),
+      ...(background !== undefined ? { background } : {}),
+    }
+    const graphicsReady = this.imageReady?.(placement)
+    this.imagePlacements.push(graphicsReady === undefined ? placement : { ...placement, graphicsReady })
+    this.imageNodes.add(node)
+    this.imageDecodedBytes += decodedBytes
+    return graphicsReady !== false
+  }
+
+  /**
+   * Reuse images inside a clean subtree whose cells came from prevScreen.
+   * Returns false when any former placement no longer fits this frame, so
+   * the painter can descend and restore that image's text fallback instead
+   * of blitting its old blank backing cells.
+   */
+  reuseImages(node: DOMElement): boolean {
+    // A scrollable image's current clip is only known inside its ScrollBox.
+    // Descend first rather than admitting stale placements from an ancestor blit.
+    if (this.imageReady && this.previousImages.some(p => isNodeInSubtree(p.node, node))) return false
+    let reusedAll = true
+    for (const placement of this.previousImages) {
+      if (!isNodeInSubtree(placement.node, node)) continue
+      const ready = this.image(
+        placement.node,
+        placement.x,
+        placement.y,
+        placement.columns,
+        placement.rows,
+        placement.source,
+        placement.background,
+      )
+      if (!ready || ready !== (placement.graphicsReady !== false)) {
+        reusedAll = false
+      }
+    }
+    return reusedAll
+  }
+
+  /** Whether this node owned a terminal placement in the previous frame. */
+  hadPreviousImage(node: DOMElement): boolean {
+    return this.previousImages.some(placement => placement.node === node && placement.graphicsReady !== false)
+  }
+
+  /** Whether a baseline placement overlaps a screen region. */
+  hasPreviousImageInRegion(
+    x: number,
+    y: number,
+    width: number,
+    height: number,
+  ): boolean {
+    if (!this.terminalImagesEnabled) return false
+    const right = x + width
+    const bottom = y + height
+    return this.previousImages.some(
+      placement =>
+        placement.graphicsReady !== false &&
+        placement.x < right &&
+        placement.x + placement.columns > x &&
+        placement.y < bottom &&
+        placement.y + placement.rows > y,
+    )
+  }
+
+  /** Current frame's immutable-by-convention terminal image requests. */
+  getImages(): readonly TerminalImagePlacement[] {
+    return this.imagePlacements.map(placement => {
+      const end = this.imageBackingEnds.get(placement.node)
+      if (end === undefined) return placement
+      const visible = placement.clip ?? placement
+      const overlaps = (rect: Rectangle): boolean => rect.x < visible.x + visible.columns &&
+        rect.x + rect.width > visible.x && rect.y < visible.y + visible.rows &&
+        rect.y + rect.height > visible.y
+      const occluded = this.operations.slice(end).some(op => {
+        if (op.type === 'write') return overlaps({ x: op.x, y: op.y,
+          width: widestLine(op.text), height: op.text.split('\n').length })
+        if (op.type === 'blit') return overlaps(op)
+        if (op.type === 'clear' || op.type === 'shade') return overlaps(op.region)
+        if (op.type === 'shift') return overlaps({ x: 0, y: op.top, width: this.width, height: op.bottom - op.top + 1 })
+        return false
+      })
+      return { ...placement, occluded }
+    })
+  }
+
+  /** Pixel ownership is determined by paint order, not just final text values. */
+  imageBacking(node: DOMElement): void {
+    const placement = this.imagePlacements.find(image => image.node === node)
+    if (placement) {
+      const visible = placement.clip ?? placement
+      this.noSelect({ x: visible.x, y: visible.y, width: visible.columns, height: visible.rows })
+    }
+    if (this.imageReady) this.imageBackingEnds.set(node, this.operations.length)
   }
 
   /**
@@ -612,6 +845,7 @@ export default class Output {
    * @param clip - the clip region to apply.
    */
   clip(clip: Clip): void {
+    this.imageClips.push(intersectClip(this.imageClips.at(-1), clip))
     this.operations.push({
       type: 'clip',
       clip,
@@ -620,6 +854,7 @@ export default class Output {
 
   /** Pop the most recent clip region. */
   unclip(): void {
+    this.imageClips.pop()
     this.operations.push({
       type: 'unclip',
     })
@@ -755,6 +990,20 @@ export default class Output {
 
         case 'shift': {
           shiftRows(screen, operation.top, operation.bottom, operation.n)
+          continue
+        }
+
+        case 'shade': {
+          // Honour the active clip like a write: a backdrop inside an
+          // overflow-hidden ancestor must not shade cells outside it.
+          const { x, y, width, height } = operation.region
+          const clip = clips.at(-1)
+          const startX = Math.max(x, clip?.x1 ?? 0)
+          const startY = Math.max(y, clip?.y1 ?? 0)
+          const maxX = Math.min(x + width, clip?.x2 ?? Infinity)
+          const maxY = Math.min(y + height, clip?.y2 ?? Infinity)
+          if (startX >= maxX || startY >= maxY) continue
+          shadeRegion(screen, this.stylePool, startX, startY, maxX - startX, maxY - startY)
           continue
         }
 

@@ -27,7 +27,7 @@ import { render, ThemeProvider, AlternateScreen } from '../lib/types/ui.js'
 import { SessionBrowser } from '../lib/types/screens/SessionBrowser.js'
 import { setLang } from '../lib/types/i18n.js'
 import { stringWidth } from '../lib/types/ink/stringWidth.js'
-import { sleep } from './lib/term-test.mjs'
+import { settle, settled, sleep } from './lib/term-test.mjs'
 
 const { Terminal } = xtermPkg
 
@@ -162,7 +162,7 @@ for (const lang of ['zh', 'en']) {
       ),
       { stdout, stderr, stdin, exitOnCtrlC: false, patchConsole: false },
     )
-    // 固定窗口（原因见下方 "Fixed sleeps kept on purpose" 注释）：断言是
+    // 固定窗:探针 （原因详见下方 "Fixed sleeps kept on purpose" 注释）断言是
     // 布局不变量，空帧/旧帧上也成立，轮询会立即返回、测不到新帧。
     await sleep(620)
 
@@ -204,7 +204,7 @@ for (const lang of ['zh', 'en']) {
     inspect('initial')
     for (const [keys, label] of KEYS) {
       stdin.write(keys)
-      await sleep(150)
+      await sleep(150) // 固定窗:探针 布局不变量在按键前的旧帧上也成立，轮询会立即返回
       inspect(label)
     }
 
@@ -216,7 +216,7 @@ for (const lang of ['zh', 'en']) {
     stdout.columns = wide[0]
     stdout.rows = wide[1]
     stdout.emit('resize')
-    // 固定窗口（同上）：resize 重绘前后不变量都成立，无可轮询的转变条件。
+    // 固定窗:探针 （同上）resize 重绘前后不变量都成立，无可轮询的转变条件。
     await sleep(260)
     inspect(`resized to ${wide[0]}x${wide[1]}`)
 
@@ -236,13 +236,12 @@ for (const lang of ['zh', 'en']) {
       // (which hold on the stale frame too, which is why their sleeps are
       // fine), the menu exists only on the NEW frame — a slow CI would
       // assert on a pre-menu frame and fail spuriously.
-      let lines = frame(term)
-      let openIdx = lines.findIndex(l => l.text.includes('Open') || l.text.includes('打开'))
-      for (let attempt = 0; attempt < 40 && openIdx < 0; attempt++) {
-        await sleep(25)
-        lines = frame(term)
-        openIdx = lines.findIndex(l => l.text.includes('Open') || l.text.includes('打开'))
-      }
+      await settle(
+        () => frame(term).some(l => l.text.includes('Open') || l.text.includes('打开')),
+        { timeoutMs: 1000 },
+      )
+      const lines = frame(term)
+      const openIdx = lines.findIndex(l => l.text.includes('Open') || l.text.includes('打开'))
       check(
         `${lang} ${cols}x${rows} menu: right-click opens the popup at the pointer`,
         openIdx >= 0,
@@ -272,11 +271,10 @@ for (const lang of ['zh', 'en']) {
         const foreignRow = frame(term).findIndex(l => l.text.includes('other'))
         if (foreignRow >= 0) {
           stdin.write(`\x1b[<0;15;${foreignRow + 1}M\x1b[<0;15;${foreignRow + 1}m`)
-          let gone = false
-          for (let attempt = 0; attempt < 40 && !gone; attempt++) {
-            await sleep(25)
-            gone = !frame(term).some(l => l.text.includes('Open') || l.text.includes('打开'))
-          }
+          const gone = await settled(
+            () => !frame(term).some(l => l.text.includes('Open') || l.text.includes('打开')),
+            { timeoutMs: 1000 },
+          )
           check(
             `${lang} ${cols}x${rows} menu: switching directory dismisses a menu whose session left`,
             gone,
@@ -285,12 +283,12 @@ for (const lang of ['zh', 'en']) {
         }
       }
       stdin.write('\x1b') // dismiss so the next geometry starts clean
-      await sleep(100)
+      await sleep(100) // 固定窗:pacing 关菜单过渡，下一轮几何开始前留出重绘时间
     }
 
     instance.unmount()
     term.dispose()
-    // 卸载收尾 pacing：让 unmount 的异步清理在下一轮挂载前排空。
+    // 固定窗:pacing 卸载收尾：让 unmount 的异步清理在下一轮挂载前排空。
     await sleep(20)
   }
 }

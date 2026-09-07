@@ -64,6 +64,7 @@ function makeChannel(): any {
   const listeners = new Set<() => void>()
   return {
     version: 0, rows: [] as any[], status: 'idle', sessionTitle: 'probe', agentId: 'probe',
+    whaleIdle: false, // 探针确定性：鲸鱼闲置动画不进测量窗口
     model: 'deepseek-v4-flash',
     mode: { plan: false }, reasoningEffort: 'max', tokens: { input: 120, output: 45 },
     cwd: '/tmp/demo', displayCwd: '/tmp/demo', gitBranch: 'main', working: false, spinnerMode: 'requesting',

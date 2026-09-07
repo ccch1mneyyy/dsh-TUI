@@ -99,7 +99,7 @@ try {
     </AlternateScreen>,
     { stdout: rig.stdout, stdin: rig.stdin, exitOnCtrlC: false, patchConsole: false },
   )
-  await sleep(600)
+  await sleep(600) // 固定窗:pacing 等首帧上屏，无单一可轮询锚点
   check('场景 F 就绪：长路径行已截断（尾段不在屏）', await settled(() => !screenHas(term, 'DeepLongFileName.tsx')))
   hoverText(stdin, term, 'src/components/messages')
   check('F 截断路径悬停后弹出完整路径', await settled(() => screenHas(term, 'DeepLongFileName.tsx')))
@@ -109,7 +109,7 @@ try {
   // 短路径行：名字完整可见 → 悬停不弹浮层（直查 tooltip store，排除
   // 「卡片内容恰好与可见文本同字」的歧义）。
   hoverText(stdin, term, 'README.md')
-  await sleep(900)
+  await sleep(900) // 固定窗:探针 完整可见路径不得弹浮层；条件本就成立，轮询立即返回等于没测
   check('F 完整可见路径悬停不弹浮层', tooltip.getTooltipSnapshot() === null,
     `snapshot=${JSON.stringify(tooltip.getTooltipSnapshot()?.content ?? null)}`)
 
@@ -214,7 +214,7 @@ try {
   hover(stdin, 1, 1)
 
   instance.unmount()
-  await sleep(100)
+  await sleep(100) // 固定窗:pacing unmount 收尾输出 flush，无可观测完成条件
   console.log(failed === 0 ? '\nALL PASS' : `\n${failed} FAILURES`)
   process.exit(failed === 0 ? 0 : 1)
 } catch (err) {

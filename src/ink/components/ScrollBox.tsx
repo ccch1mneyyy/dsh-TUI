@@ -190,13 +190,54 @@ function ScrollBox({
     scrollBy(dy: number) {
       const el = domRef.current;
       if (!el) return;
+      const dyFloor = Math.floor(dy);
+      // Wheel-down / scroll-down while the view is already AT the bottom is
+      // pure overscroll: nothing left to reveal. Ignore it entirely — no
+      // sticky clear, no pending delta, no dirty mark, no subscriber
+      // notify. The old path ran every notch through sticky-break → drain →
+      // re-pin, which (with streaming content) flip-flopped the sticky flag
+      // frame by frame, remounted the virtualization window (isSticky is
+      // React state), flashed the "↓ back to bottom" pill while the user
+      // WAS at the bottom, let the drain overshoot past maxScroll on
+      // measure frames, and repainted the transcript per notch (flicker).
+      // Gate:
+      //  - sticky === true: the renderer keeps scrollTop pinned at
+      //    maxScroll each frame — a wheel-down must never unpin it
+      //    (leaving the bottom is wheel-UP's job).
+      //  - else positionally at the bottom or past it (a shrink-frozen
+      //    scrollTop can sit above the cached maxScroll): scrollTop >=
+      //    maxScroll with no in-flight scroll-UP (pending >= 0).
+      //    pending < 0 means an earlier wheel-up hasn't drained yet: a
+      //    down-notch must land so the accumulator cancels (scroll-up
+      //    followed by scroll-down naturally cancels — see the
+      //    accumulation comment below).
+      //  - Notches from ABOVE (scrollTop < maxScroll) are NOT gated —
+      //    including the landing notch that would finish the final row:
+      //    ±1-row callers (panel ↑/↓ keys) and scrollTo/seek landings can
+      //    rest at maxScroll - 1, and gating there would leave the last
+      //    row unreachable and never trigger the renderer's at-bottom
+      //    re-pin (which requires scrollTop >= maxScroll). The landing
+      //    notch drains to the bottom and the re-pin restores sticky /
+      //    clears the new-messages pill on that frame. No epsilon is
+      //    needed — the whole chain is integer rows.
+      if (dyFloor > 0) {
+        const sticky = el.stickyScroll ?? Boolean(el.attributes['stickyScroll']);
+        const pending = el.pendingScrollDelta ?? 0;
+        const maxScroll = Math.max(
+          0,
+          (el.scrollHeight ?? 0) - (el.scrollViewportHeight ?? 0),
+        );
+        if (sticky || ((el.scrollTop ?? 0) >= maxScroll && pending >= 0)) {
+          return;
+        }
+      }
       el.stickyScroll = false;
       // Wheel input cancels any in-flight anchor seek — user override.
       el.scrollAnchor = undefined;
       // Accumulate in pendingScrollDelta; renderer drains it at a capped
       // rate so fast flicks show intermediate frames. Pure accumulator:
       // scroll-up followed by scroll-down naturally cancels.
-      el.pendingScrollDelta = (el.pendingScrollDelta ?? 0) + Math.floor(dy);
+      el.pendingScrollDelta = (el.pendingScrollDelta ?? 0) + dyFloor;
       scrollMutated(el);
     },
     scrollToBottom() {

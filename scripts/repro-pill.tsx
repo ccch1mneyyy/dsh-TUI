@@ -51,6 +51,8 @@ function pillText(): string {
 
 const listeners = new Set<() => void>()
 const channel: any = {
+  // 探针确定性：鲸鱼欢迎期闲置动画（默认开）不进本探针的测量窗口。
+  whaleIdle: false,
   version: 0,
   rows: [] as any[],
   status: 'idle',
@@ -95,9 +97,9 @@ const instance = await render(
   </AlternateScreen>,
   { stdout: new FakeStdout(), stdin: stdinObj, stderr: new FakeStderr(), exitOnCtrlC: false, patchConsole: false },
 )
-// Startup wait stays a fixed window: the first assertion is a negative probe
-// (no pill may exist) — settling on an already-true condition would return on
-// a blank screen and test nothing.
+// 固定窗:探针 the first assertion is a negative probe (no pill may exist) —
+// settling on an already-true condition would return on a blank screen and
+// test nothing.
 await sleep(600)
 
 // SGR mouse: 64=wheel up, 65=wheel down; position inside the scroll area.
@@ -121,15 +123,15 @@ addRows(8)
 check('pill appears with the new-message count', await settled(() => /8 new messages/.test(pillText())), pillText())
 
 // wheel down in small steps: the count must DECREASE monotonically.
-// The per-step sleeps stay fixed: this loop SAMPLES the pill after each step
-// (there is no target state to settle on — the samples themselves are the
-// data the monotonicity assertions consume).
+// The per-step sleeps SAMPLE the pill after each step (there is no target
+// state to settle on — the samples themselves are the data the monotonicity
+// assertions consume).
 const seen: string[] = []
 let prev = 8
 let monotonic = true
 for (let step = 0; step < 12; step++) {
   wheel('down', 2)
-  await sleep(300)
+  await sleep(300) // 固定窗:pacing 采样步间，无目标状态可轮询（样本本身即断言数据）
   const t = pillText()
   seen.push(t === '' ? 'gone' : t.match(/(\d+) new/)?.[1] ?? '?')
   const n = t === '' ? 0 : parseInt(t.match(/(\d+) new/)?.[1] ?? '99', 10)

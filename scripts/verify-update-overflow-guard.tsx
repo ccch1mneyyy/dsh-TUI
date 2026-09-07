@@ -53,6 +53,7 @@ function check(name: string, ok: boolean, extra = ''): void {
   if (!ok) failed += 1
 }
 const sleep = (ms: number): Promise<void> => new Promise(r => setTimeout(r, ms))
+const { settled } = await import('./lib/term-test.mjs')
 
 const COLS = 80, ROWS = 12
 class FakeStdout extends Writable {
@@ -125,6 +126,8 @@ console.log('--- B: hotspots ---')
   const unsubscribeA = clock.subscribe(() => { threw = true; throw prodErr }, true)
   const unsubscribeB = clock.subscribe(() => { bTicks++ }, true)
   let survived = true
+  // 固定窗:待迁移 断言 bTicks>0 是正向变化，但 sleep 同时被 try/catch 包着
+  // 承担「异常不得逃逸」语义，改成 settled 需重排 survived 的捕获点
   try { await sleep(40) } catch { survived = false }
   check('B1 clock.tick 吞 #185 且进程存活', survived && threw && bTicks > 0, `bTicks=${bTicks}`)
   unsubscribeA()
@@ -138,8 +141,9 @@ console.log('--- B: hotspots ---')
   const clock = createClock(5)
   let calls = 0
   const unsubscribe = clock.subscribe(() => { calls++; throw prodErr }, true)
-  await sleep(200) // 5ms tick：~5 次吞后熔断 → suspend 5s
+  await sleep(200) // 固定窗:墙钟 5ms tick 跑满熔断阈值（~5 次吞）→ suspend 5s
   const atTrip = calls
+  // 固定窗:探针 熔断退避窗口内 tick 不得继续（断言 calls 基本不变）
   await sleep(300)
   check('B5 熔断暂停共享时钟', calls - atTrip <= 1, `calls ${atTrip}→${calls}`)
   unsubscribe()
@@ -157,6 +161,8 @@ console.log('--- B: hotspots ---')
   revealTextOf(key, 'x'.repeat(24), { enabled: true, active: true })
   const v0 = getRevealVersion()
   let survived = true
+  // 固定窗:待迁移 断言游标推进是正向变化，但重新求值要调用有副作用的
+  // revealTextOf（读即创建/推进游标），轮询会改被测行为
   try { await sleep(1200) } catch { survived = false }
   const settled = revealTextOf(key, 'x'.repeat(24), { enabled: true, active: true })
   check('B2 reveal.tick 吞 #185 且游标推进', survived && getRevealVersion() > v0 && settled.length === 24,
@@ -184,6 +190,8 @@ console.log('--- B: hotspots ---')
   let detail = ''
   try { channel.notify('guard probe') } catch (err) { survived = false; detail = `notify: ${(err as Error).message}` }
   try { channel.pushLocal('guard probe', ['guard probe row']) } catch (err) { survived = false; detail += ` pushLocal: ${(err as Error).message}` }
+  // 固定窗:探针 goodWakeups 在 notify 时已同步递增，这个窗口测的是被吞的
+  // #185 不得异步逃逸炸掉进程
   try { await sleep(30) } catch (err) { survived = false; detail += ` sleep: ${(err as Error).message}` }
   check('B3 channel.emit 吞 #185', survived && goodWakeups > 0, `wakeup=${goodWakeups} ${detail}`)
   unsub()
@@ -207,8 +215,7 @@ console.log('--- B: hotspots ---')
     stdout, stdin: new FakeInput() as unknown as NodeJS.ReadStream,
     exitOnCtrlC: false, patchConsole: false,
   })
-  await sleep(300)
-  const alive = frames > 3
+  const alive = await settled(() => frames > 3)
   await instance.unmount()
   term.dispose()
   check('B4 真实渲染零干扰（守卫不破坏正常动画）', alive, `frames=${frames}`)

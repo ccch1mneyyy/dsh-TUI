@@ -89,6 +89,8 @@ function assertScreenCoherent(tag: string, lines: string[]) {
 function makeChannel(rows: any[]) {
   const listeners = new Set<() => void>()
   const channel: any = {
+  // 探针确定性：鲸鱼欢迎期闲置动画（默认开）不进本探针的测量窗口。
+  whaleIdle: false,
     version: 0,
     rows,
     status: 'idle',

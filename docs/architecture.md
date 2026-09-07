@@ -145,8 +145,11 @@ answerer（`approval/request` waterfall），仅允许一次/拒绝两种决定�
 - `Ctrl+V` 读剪贴板按平台分派：Windows 用 PowerShell `Get-Clipboard`（剪贴板被
   其他程序锁定时重试后可能静默失败并显示为空）；macOS 用 `osascript`/`pbpaste`；
   Linux/Unix 按会话顺序尝试 `wl-paste`/`xclip`/`xsel`（工具缺失跳过、会话
-  不可连接回退下一个，全部不可用时粘贴报"无可用剪贴板工具"）。剪贴板图片
-  导出为临时文件插入路径（0700 私有目录、0600 文件），不内嵌图片块。
+  不可连接回退下一个，全部不可用时粘贴报"无可用剪贴板工具"）。受支持的剪贴板
+  图片会先导出到 0700 私有目录中的 0600 临时文件，再写入 Harness 附件库并在输入框
+  显示 `[Image #N]`；临时导出随后删除，输入文本不含路径或 base64。不支持的位图格式
+  会明确警告并删除临时文件；附件服务不可用时不把位图插入草稿。文件管理器复制的
+  图片文件若直接暂存失败，仍可退回 `@` 引用。
 - 退出路径优先恢复终端并结束进程，不等待 Agent 异步落盘；持久化插件负责兜底。
 - 工具级审批面板已实现（approval 服务 + TUI answerer）；`/permission` 的预设
   切换由 dsh-base 的 `permission-presets` 插件提供。registry 服务缺失时使用三项

@@ -96,7 +96,7 @@ app.rerender(
 await settle(() => screen().includes('还有别的要说吗？'))
 stdin.write('[B') // ↓
 stdin.write('[B') // ↓ → input row
-// 焦点移动无可观测的纯文本条件（高亮为颜色，已被裁剪），保留固定 pacing。
+// 固定窗:pacing 焦点移动无可观测的纯文本条件（高亮为颜色，已被裁剪）
 await sleep(200)
 stdin.write('随便说说')
 check('输入行内联编辑（视图仍不跳转）', await settled(() => screen().includes('随便说说') && screen().includes('没有')))
@@ -122,7 +122,7 @@ app.rerender(
 )
 await settle(() => screen().includes('要哪些口味？'))
 stdin.write(' ') // check 甜
-// 勾选状态无可观测的纯文本条件（勾选标记依赖样式渲染），保留固定 pacing。
+// 固定窗:pacing 勾选状态无可观测的纯文本条件（勾选标记依赖样式渲染）
 await sleep(150)
 stdin.write('少放糖')
 await settle(() => screen().includes('少放糖'))
@@ -133,7 +133,7 @@ check('多选：勾选 + 文本一起提交', await settled(() => {
 }))
 
 app.unmount()
-// unmount 后输出 flush 无可观测条件，保留固定 pacing。
+// 固定窗:pacing unmount 后输出 flush 无可观测条件
 await sleep(100)
 console.log(results.join('\n'))
 console.log(failures === 0 ? '\nALL PASS' : `\n${failures} FAILURES`)

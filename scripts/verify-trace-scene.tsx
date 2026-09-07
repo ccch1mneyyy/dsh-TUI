@@ -281,21 +281,17 @@ function makeChannel(overrides: Record<string, unknown> = {}): Record<string, un
   )
 
   // Jump to the next failure, then confirm the inspector explains it.
-  // Fixed window kept: the assertion's condition ALREADY holds before the
-  // seek (the retry row prints RATE_LIMIT in the ledger), so a settle on it
-  // returns instantly — and the next `/` write then coalesces into the same
-  // stdin chunk as `]`, reaching useInput as one `']/'` string that matches
-  // neither key. The delay both lets the seek process and keeps the
-  // keystrokes in separate chunks.
   stdin.write(']')
+  // 固定窗:待迁移 断言条件在 seek 前就已成立（retry 行本来就打印 RATE_LIMIT），
+  // settled 会在旧屏立即返回；且这段延迟同时负责让下一次 `/` 写入不与 `]`
+  // 合并进同一个 stdin chunk（合并后 useInput 收到 `']/'`，两个键都不匹配）。
   await sleep(140)
   const atFailure = screen()
   check('] seeks to a failure', atFailure.includes('ENOENT') || atFailure.includes('RATE_LIMIT'), '')
 
   // Query mode filters the whole session.
   stdin.write('/')
-  // Fixed pacing kept: same stdin-chunk coalescing hazard as `]` above — the
-  // query text must not arrive in the same chunk as the `/` keystroke.
+  // 固定窗:pacing 同上的 stdin chunk 合并风险——查询文本不能与 `/` 同批到达
   await sleep(80)
   stdin.write('tool:read_file')
   check('query narrows the ledger', await settled(() => {
@@ -383,9 +379,8 @@ function makeChannel(overrides: Record<string, unknown> = {}): Record<string, un
     stdin.write('q')
     await settle(() => term.buffer.active.type === 'normal')
   }
-  // Fixed window kept: this is also the quiescence window for the scrollback
-  // accounting below — settling on the restored conversation would sample
-  // rowsOf() before the post-restore repaint lands and undercount per-trip.
+  // 固定窗:pacing 下面 scrollback 计量的静置窗——settle 到「对话已恢复」会在
+  // 恢复后的重绘落地前采样 rowsOf()，把 per-trip 算少；无可轮询的完成条件。
   await sleep(200)
 
   const mainRestored = await settled(() => screen().includes('conversation line'))
@@ -405,19 +400,18 @@ function makeChannel(overrides: Record<string, unknown> = {}): Record<string, un
 
   // Navigating inside the scene is the common case by far, and it must be free.
   stdin.write('\x14')
-  // Fixed window kept: beforeNav is the baseline of a "must not grow" probe —
-  // it has to be sampled after the open+first paint fully lands (settling on
-  // the alt buffer alone would sample mid-paint).
+  // 固定窗:pacing beforeNav 是「不得增长」探针的基线，必须等开屏首绘完全落地
+  // 后再采样（只 settle alt buffer 会采到半绘状态）；无可轮询的完成条件。
   await sleep(240)
   const beforeNav = rowsOf()
   for (let i = 0; i < 40; i++) {
     stdin.write(i % 2 === 0 ? '\x1b[A' : '\x1b[B')
-    await sleep(12) // fixed pacing kept: keystrokes must arrive in separate stdin chunks
+    await sleep(12) // 固定窗:pacing 按键必须落在各自独立的 stdin chunk 里
   }
   stdin.write('\x1b[C')
-  await sleep(120) // fixed window kept: stability probe — growth needs wall time to show up
+  await sleep(120) // 固定窗:探针 scrollback 不得增长，需要墙上时间让错误增长浮现
   stdin.write('\x1b[D')
-  await sleep(200) // fixed window kept: same stability probe
+  await sleep(200) // 固定窗:探针 同上，scrollback 不得增长
   check('navigating inside the scene adds no scrollback at all', rowsOf() === beforeNav,
     `${beforeNav} → ${rowsOf()} over 42 keystrokes`)
   stdin.write('q')
@@ -425,12 +419,11 @@ function makeChannel(overrides: Record<string, unknown> = {}): Record<string, un
 
   // Idle animation must patch, never repaint.
   stdin.write('\x14')
-  // Fixed window kept: the write stream must be quiescent (open paint done)
-  // before it is cleared — clearing too early counts the initial paint's tail
-  // as an "idle" repaint and fails the negative probe below.
+  // 固定窗:pacing 清空前 write 流必须静默（开屏绘制已完成）——清早了会把首绘
+  // 的尾巴算成「空闲重绘」；无可轮询的完成条件。
   await sleep(200)
   writes.length = 0
-  await sleep(1200) // fixed observation window kept: negative probe (no repaint escapes while idle)
+  await sleep(1200) // 固定窗:探针 空闲观察窗，窗内不得有任何重绘逃逸
   const stream = writes.join('')
   const repaints = [
     ['erase line', /\x1b\[[0-2]?K/],
@@ -481,9 +474,8 @@ function makeChannel(overrides: Record<string, unknown> = {}): Record<string, un
     { stdout: stdout as never, stdin: stdin as never, stderr: stdout as never, exitOnCtrlC: false, patchConsole: false },
   )
   for (const value of instances.values()) instances.set(process.stdout, value)
-  // Fixed window kept: the write stream must be quiescent (first paint done)
-  // before it is cleared — the "no repaint after DEC 1049 restore" negative
-  // probe below needs a clean baseline.
+  // 固定窗:pacing 清空前 write 流必须静默（首绘已完成），下面的「DEC 1049 恢复
+  // 后不得重绘」探针需要干净基线；无可轮询的完成条件。
   await sleep(500)
   writes.length = 0
 
@@ -491,9 +483,8 @@ function makeChannel(overrides: Record<string, unknown> = {}): Record<string, un
   check('frame-restore probe enters the alternate screen', await settled(() => term.buffer.active.type === 'alternate'))
   instances.get(process.stdout)?.resetPools()
   stdin.write('q')
-  // Fixed window kept (negative probe): the assertion below is that NOTHING
-  // repaints the marker after DEC 1049 restores the main screen — a wrong
-  // repaint needs this window to show up in the captured writes.
+  // 固定窗:探针 DEC 1049 恢复主屏后不得有任何东西重绘 marker——错误的重绘
+  // 需要这个观察窗才会落进捕获的 writes 里。
   await sleep(500)
 
   const roundTrip = writes.join('')
@@ -511,11 +502,10 @@ function makeChannel(overrides: Record<string, unknown> = {}): Record<string, un
   const reasoning = Array.from({ length: 80 }, (_, index) =>
     `reasoning line ${String(index).padStart(2, '0')}`,
   ).join('\n')
-  // The publish sequence below is a scripted streaming timeline: the fixed
-  // sleeps are pacing (thinking → open scene → stream on → close → stream on),
-  // reproducing the real cadence the settle-paint race needs; there is no
-  // per-step pollable completion condition, and the final layout is asserted
-  // by the settled() poll after the sequence.
+  // 固定窗:pacing 下面是脚本化的流式时间线（thinking → 开场景 → 继续流 →
+  // 关场景 → 继续流），逐个 sleep 复现 settle-paint 竞态所需的真实节奏；每步
+  // 都没有可轮询的完成条件，最终布局由序列之后的 settled() 断言。
+  // （以下每处 sleep 同属这一段 pacing。）
   publish({
     working: true,
     spinnerMode: 'thinking',
@@ -525,16 +515,16 @@ function makeChannel(overrides: Record<string, unknown> = {}): Record<string, un
     ],
     lastUserText: 'investigate the rendering issue',
   })
-  await sleep(500)
+  await sleep(500) // 固定窗:pacing 流式时间线步间（见上方说明）
   stdin.write('\x14')
-  await sleep(250)
+  await sleep(250) // 固定窗:pacing 流式时间线步间（见上方说明）
   publish({
     rows: [
       { id: 1, kind: 'user', text: 'investigate the rendering issue' },
       { id: 2, kind: 'reasoning', text: reasoning, streaming: true },
     ],
   })
-  await sleep(250)
+  await sleep(250) // 固定窗:pacing 流式时间线步间（见上方说明）
   publish({
     spinnerMode: 'requesting',
     rows: [
@@ -543,9 +533,9 @@ function makeChannel(overrides: Record<string, unknown> = {}): Record<string, un
       { id: 3, kind: 'assistant', text: 'FIRST RESPONSE SECTION', streaming: true },
     ],
   })
-  await sleep(250)
+  await sleep(250) // 固定窗:pacing 流式时间线步间（见上方说明）
   stdin.write('q')
-  await sleep(400)
+  await sleep(400) // 固定窗:pacing 流式时间线步间（见上方说明）
   publish({
     rows: [
       { id: 1, kind: 'user', text: 'investigate the rendering issue' },
@@ -553,7 +543,7 @@ function makeChannel(overrides: Record<string, unknown> = {}): Record<string, un
       { id: 3, kind: 'assistant', text: 'FIRST RESPONSE SECTION\n\nSECOND RESPONSE SECTION', streaming: true },
     ],
   })
-  await sleep(400)
+  await sleep(400) // 固定窗:pacing 流式时间线步间（见上方说明）
 
   // The settle paint is throttled behind the ink frame clock — poll for the
   // markers instead of racing a fixed sleep. The ceiling is generous (~15s)
@@ -780,7 +770,7 @@ function makeChannel(overrides: Record<string, unknown> = {}): Record<string, un
     instance.unmount()
     instances.delete(process.stdout)
     term.dispose()
-    await sleep(30) // fixed pacing kept: teardown gap between mounts, no pollable condition
+    await sleep(30) // 固定窗:pacing 两次挂载之间的收尾间隔，无可轮询条件
   }
 }
 

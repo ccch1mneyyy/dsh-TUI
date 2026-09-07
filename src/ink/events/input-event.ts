@@ -35,6 +35,16 @@ export type Key = {
   mouseCol?: number
   /** Pointer row (0-indexed) when the key is a wheel event. See mouseCol. */
   mouseRow?: number
+  /**
+   * True when this input arrived as a bracketed paste (terminal paste —
+   * Ctrl+Shift+V / right-click / a terminal that intercepts Ctrl+V) rather
+   * than typed characters. Mirrors `InputEvent.isPasted` so modal handlers
+   * can treat a paste chunk as text without reaching for the third callback
+   * argument: pasted content — even a chunk that is all line breaks — is
+   * never an Enter/submit press. Optional so hand-built key literals (tests,
+   * synthetic dispatches) keep compiling; the live pipeline always sets it.
+   */
+  isPasted?: boolean
 }
 
 function parseKey(keypress: ParsedKey): [Key, string] {
@@ -68,6 +78,7 @@ function parseKey(keypress: ParsedKey): [Key, string] {
     // protocol CSI u sequences. Distinct from meta (Alt/Option) so
     // bindings like cmd+c can be expressed separately from opt+c.
     super: keypress.super,
+    isPasted: keypress.isPasted === true,
     mouseCol: keypress.mouseCol,
     mouseRow: keypress.mouseRow,
   }

@@ -24,6 +24,9 @@ const env = { ...process.env }
 
 const GROUPS = {
   'render-scroll': [
+    ['verify-image-inspection', ['node', '--import', 'tsx/esm', 'scripts/verify-image-inspection.tsx']],
+    ['verify-terminal-images-sixel', ['node', '--import', 'tsx/esm', 'scripts/verify-terminal-images-sixel.tsx']],
+    ['verify-sixel-transcript', ['node', '--import', 'tsx/esm', 'scripts/verify-sixel-transcript.tsx']],
 // 带断言的回归：提问面板内联输入（issue #9）+ 工具卡排版
 // （⎿ 缩进、diff 红绿行、信封剥离），失败即非零退出。
     ["repro-askpanel", ['node', '--import', 'tsx/esm', 'scripts/repro-askpanel.tsx']],
@@ -120,6 +123,11 @@ const GROUPS = {
 // 一键回底回归：pill 常驻显示、End/Enter 回底、远距回底不触发空白
 // 死锁（大偏移一步到位后首帧即有内容）。
     ["verify-back-to-bottom", ['node', '--import', 'tsx/esm', 'scripts/verify-back-to-bottom.tsx']],
+// 底部超滚门控回归：已贴底时 wheel-down 必须是完全惰性的 no-op（不清
+// sticky、不积 delta、不重绘）——修复前每格 sticky flip-flop + pill 闪现
+// + 整屏重绘（流式下可感知为"强拖+闪烁"）；且滚上再滚回仍须正常（着陆
+// 格放行、at-bottom re-pin 恢复 sticky）。
+    ["verify-scrollbox-bottom-overscroll", ['node', '--import', 'tsx/esm', 'scripts/verify-scrollbox-bottom-overscroll.tsx']],
 // 时间线 rail 回归：rail 覆盖全部轮次（含折叠轮），高亮锚定视口顶、
 // ▲/▼ 目标不越过 maxScroll。
     ["verify-timeline-rail", ['node', '--import', 'tsx/esm', 'scripts/verify-timeline-rail.tsx']],
@@ -377,7 +385,7 @@ const GROUPS = {
 // classic 仍捆绑眨眼+喷水+摆尾）、随机选取 API 覆盖/钳制/每次挂载
 // 独立重掷、LogoV2 渲染冒烟（粉爱心/灰 Z 上屏后落定消失）。
     ["verify-whale-intro", ['node', '--import', 'tsx/esm', 'scripts/verify-whale-intro.mjs']],
-// 开屏定格后的鲸鱼闲置行为（whaleIdle 设置，默认关）：纯规划器帧选
+// 开屏定格后的鲸鱼闲置行为（whaleIdle 设置，默认开）：纯规划器帧选
 // 择与节拍（闲置偶动/入睡/工作唤醒/点击爱心单向播完）、频道接线。
     ["verify-whale-idle", ['node', '--import', 'tsx/esm', 'scripts/verify-whale-idle.mjs']],
 // 计划退出恢复进入前权限；覆盖延迟切换、会话恢复与未知权限不提权。
@@ -532,6 +540,12 @@ const GROUPS = {
 // 提问面板 hideCustomInput 行为回归：纯选择题隐藏输入行且 Tab/打字
 // 不劫持焦点，纯文本题忽略 hide 标记，多选题默认行为不回退。
     ["verify-askpanel-hide-custom-input", ['node', '--import', 'tsx/esm', 'scripts/verify-askpanel-hide-custom-input.tsx']],
+// 问卷面板粘贴回归：bracketed paste 压平插入（纯换行块不得提交、ANSI/
+// OSC 剥净）、Ctrl+V/Alt+V 异步剪贴板插入到实时光标（读期间打字真竞态
+// 臂、busy 去重）、选项行粘贴追加+附加标签、plan-review 粘贴绝不快选/
+// 批准、隐藏输入题粘贴惰性、超长粘贴上限报错、同 chunk 批量按键经同步
+// ref 依序编辑、emoji 码点步进。
+    ["verify-question-paste", ['node', '--import', 'tsx/esm', 'scripts/verify-question-paste.tsx']],
 // 长问卷列表回归：24 行终端中的 36 个两行 provider 选项必须围绕
 // focusIndex 窗口化，初始和深度导航后焦点 label/单选标记始终可见。
     ["verify-askpanel-long-list", ['node', '--import', 'tsx/esm', 'scripts/verify-askpanel-long-list.tsx']],
