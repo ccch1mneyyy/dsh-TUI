@@ -198,7 +198,7 @@ const listProps = (expanded) => ({
   // 空帧守卫：渲染崩溃时两条 hides 断言会空洞通过（本文件曾因 MessageList
   // 新增必需 prop 而空帧,只有 shows 报警）。先证明画面存在。
   await settled(() => frame().includes('Session summary is ready') && frame().includes('摘要已折叠'))
-  // 负向断言观察窗保留：完整摘要若在正向落定之后迟到出现，落定瞬间检查会漏掉。
+  // 固定窗:探针 负向断言观察窗：完整摘要若在正向落定之后迟到出现，落定瞬间检查会漏掉。
   await sleep(200)
   const shot = frame()
   check('compact scenario renders at all', shot.includes('Session summary is ready'), '')
