@@ -165,7 +165,7 @@ async function runScenario(tag: string, burstDown: number, seekUpThenDown: boole
   })
   instances.set(process.stdout, instances.get(stdout)!)
   instance.rerender(tree)
-  await sleep(900)
+  await sleep(900) // 固定窗:探针 等界面真正就绪的观察窗——S0 基线要求完整首屏，轮询空屏会得到假基线
 
   const wheel = (dir: 'up' | 'down', ticks: number): void => {
     const button = dir === 'up' ? 64 : 65
@@ -179,9 +179,9 @@ async function runScenario(tag: string, burstDown: number, seekUpThenDown: boole
   while (!atBottom() && seek < 120) {
     wheel('down', 1)
     seek++
-    await sleep(16)
+    await sleep(16) // 固定窗:pacing 滚轮事件步间（seek 逐格）
   }
-  await sleep(400)
+  await sleep(400) // 固定窗:pacing 静置窗——S0 基线帧取样前等残余渲染落定，无可轮询条件
   if (!atBottom()) throw new Error(`${tag}: setup failed — never reached the bottom`)
   const S0 = frames[frames.length - 1]!
   const s0Row = markerRow(S0)
@@ -192,7 +192,7 @@ async function runScenario(tag: string, burstDown: number, seekUpThenDown: boole
     // 着陆格/贴底帧必须放行并恢复 sticky（marker 重现 = 回底成功）。
     const beforeUp = frames.length
     wheel('up', 5)
-    await sleep(320)
+    await sleep(320) // 固定窗:pacing 收集 wheel-up 中间帧的观察窗——滚出证据在中间帧，轮询终态会丢取证帧
     const afterUp = frames.slice(beforeUp).find(lines => markerRow(lines) < 0)
     check(`${tag}: wheel-up 离开底部正常滚动`, afterUp !== undefined, `marker 已滚出视口`)
     const beforeDown = frames.length
@@ -200,9 +200,9 @@ async function runScenario(tag: string, burstDown: number, seekUpThenDown: boole
     while (downTicks < 40 && !frames.slice(beforeDown).some(lines => markerRow(lines) >= 0)) {
       wheel('down', 1)
       downTicks++
-      await sleep(34)
+      await sleep(34) // 固定窗:pacing 滚轮事件步间（downTicks 循环步长）
     }
-    await sleep(400)
+    await sleep(400) // 固定窗:pacing 静置窗——滚回底部的渲染帧收集完毕后再扫描 backFrames
     const backFrames = frames.slice(beforeDown)
     const back = backFrames.find(lines => markerRow(lines) >= 0)
     check(`${tag}: wheel-down 能滚回底部（着陆格未被门控吞掉）`, back !== undefined, `downTicks=${downTicks}`)
@@ -211,7 +211,7 @@ async function runScenario(tag: string, burstDown: number, seekUpThenDown: boole
       console.log(`--- B 诊断: down ${downTicks} 格后尾部 8 行 ---`)
       console.log(last.slice(Math.max(0, ROWS - 8)).map((l, i) => `${String(i + Math.max(0, ROWS - 8)).padStart(2)}|${l}`).join('\n'))
     }
-    await sleep(200)
+    await sleep(200) // 固定窗:pacing 场景 B 收尾静置窗——卸载前残余渲染落定
   } else {
     // A: 底部连续 wheel-down —— 修复前的每格 sticky flip-flop / pill 闪现 /
     // 整屏重绘帧在这里会表现为画面帧变化；修复后必须零帧、零内容写。
@@ -219,9 +219,9 @@ async function runScenario(tag: string, burstDown: number, seekUpThenDown: boole
     const burstStart = frames.length
     for (let i = 0; i < burstDown; i++) {
       wheel('down', 1)
-      await sleep(30)
+      await sleep(30) // 固定窗:pacing 滚轮事件步间（burst 逐格）
     }
-    await sleep(500) // 等任何残余 drain 落定
+    await sleep(500) // 固定窗:探针 残余 drain 静置窗——随后断言零帧变化/零写入是「不得改变」不变式，轮询无意义
 
     const burstFrames = frames.slice(burstStart)
     const changed = burstFrames.filter(lines => lines.some((l, r) => l !== S0[r]!))
@@ -280,7 +280,7 @@ async function runUnitScenario(tag: string): Promise<void> {
   })
   instances.set(process.stdout, instances.get(stdout)!)
   instance.rerender(tree)
-  await sleep(500)
+  await sleep(500) // 固定窗:pacing 等单元树挂载渲染落定（无单一可轮询锚点）
   const h = handleRef.current
   if (!h) throw new Error(`${tag}: ScrollBox handle not mounted`)
 
@@ -289,16 +289,16 @@ async function runUnitScenario(tag: string): Promise<void> {
   // 1. 跳到真底（scrollTo 越过 maxScroll，渲染帧 clamp 落底；restore 帧
   //    会恢复 sticky——先确认工具路径本身工作）。
   h.scrollTo(1e9)
-  await sleep(200)
+  await sleep(200) // 固定窗:pacing 静置窗——scrollTo 越界钳制的渲染帧应用后再断言落底
   check(`${tag}: scrollTo 落底（scrollTop == maxScroll）`, h.getScrollTop() === maxScrollOf(), `top=${h.getScrollTop()} max=${maxScrollOf()}`)
   // 2. 打破 sticky 并停到 maxScroll - 1（差 1 行）：-1 格上滚。
   h.scrollBy(-1)
-  await sleep(250)
+  await sleep(250) // 固定窗:pacing 静置窗——scrollBy(-1) 渲染帧应用后断言停在 maxScroll-1
   check(`${tag}: 静止于 maxScroll - 1（sticky 已破）`, h.getScrollTop() === maxScrollOf() - 1 && !h.isSticky(), `top=${h.getScrollTop()} max=${maxScrollOf()} sticky=${h.isSticky()}`)
   // 3. 死区核心：+1 必须放行落底并恢复 sticky（门控若含 epsilon 则在此
   //    吞掉——最后一行永不可达）。
   h.scrollBy(1)
-  await sleep(300)
+  await sleep(300) // 固定窗:pacing 静置窗——scrollBy(+1) 渲染帧应用后断言落底与 sticky 恢复
   check(`${tag}: maxScroll-1 的 +1 能落底`, h.getScrollTop() === maxScrollOf(), `top=${h.getScrollTop()} max=${maxScrollOf()}`)
   check(`${tag}: 落底后 sticky 恢复`, h.isSticky() === true, `sticky=${h.isSticky()}`)
 
