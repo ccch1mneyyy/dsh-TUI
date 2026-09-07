@@ -97,7 +97,7 @@ const pendingByFile = {}
 let total = 0
 
 for (const file of files) {
-  const rel = relative(ROOT, file)
+  const rel = relative(ROOT, file).replaceAll('\\', '/')
   let sites
   try { sites = scan(file) } catch (err) {
     console.error(`verify-fixed-window: 无法读取 ${rel}: ${err.message}`)
