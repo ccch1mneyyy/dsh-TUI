@@ -314,6 +314,16 @@ jobs:
       # scripts/run-ci-group.mjs 的 GROUPS 表（新增测试时同步登记）。
       - run: node scripts/run-ci-group.mjs render-scroll --shard ${{ matrix.shard }}/2
 
+      # 失败脚本的原始帧字节（run-ci-group 只保留失败条目的 DSH_TUI_RENDER_LOG）：
+      # 时序 flake 本地复现不出来，这份日志是唯一现场。
+      - uses: actions/upload-artifact@v7
+        if: failure()
+        with:
+          name: render-logs-render-scroll-${{ matrix.shard }}
+          path: ci-render-logs/
+          if-no-files-found: ignore
+          retention-days: 7
+
   # 输入 · 终端协议 · 退出漏斗 · 系统集成——与其余组并行；失败互不遮蔽。
   # needs: build：编译只在 build job 发生一次，本组经 artifact 复用产物。
   input-terminal:
@@ -346,6 +356,16 @@ jobs:
       # 跑完后统一 ✓/✗ 汇总，任一失败 exit 1。测试清单与逐条说明在
       # scripts/run-ci-group.mjs 的 GROUPS 表（新增测试时同步登记）。
       - run: node scripts/run-ci-group.mjs input-terminal
+
+      # 失败脚本的原始帧字节（run-ci-group 只保留失败条目的 DSH_TUI_RENDER_LOG）：
+      # 时序 flake 本地复现不出来，这份日志是唯一现场。
+      - uses: actions/upload-artifact@v7
+        if: failure()
+        with:
+          name: render-logs-input-terminal
+          path: ci-render-logs/
+          if-no-files-found: ignore
+          retention-days: 7
 
   # 会话 · 工作区 · 插件扩展 · resume——与其余组并行；失败互不遮蔽。
   # needs: build：编译只在 build job 发生一次，本组经 artifact 复用产物。
@@ -388,6 +408,16 @@ jobs:
       # scripts/run-ci-group.mjs 的 GROUPS 表（新增测试时同步登记）。
       - run: node scripts/run-ci-group.mjs session-workspace --shard ${{ matrix.shard }}/2
 
+      # 失败脚本的原始帧字节（run-ci-group 只保留失败条目的 DSH_TUI_RENDER_LOG）：
+      # 时序 flake 本地复现不出来，这份日志是唯一现场。
+      - uses: actions/upload-artifact@v7
+        if: failure()
+        with:
+          name: render-logs-session-workspace-${{ matrix.shard }}
+          path: ci-render-logs/
+          if-no-files-found: ignore
+          retention-days: 7
+
   # channel · 界面应用回归——与其余组并行；失败互不遮蔽。
   # needs: build：编译只在 build job 发生一次，本组经 artifact 复用产物。
   channel-ui:
@@ -429,6 +459,16 @@ jobs:
       # scripts/run-ci-group.mjs 的 GROUPS 表（新增测试时同步登记）。
       - run: node scripts/run-ci-group.mjs channel-ui --shard ${{ matrix.shard }}/2
 
+      # 失败脚本的原始帧字节（run-ci-group 只保留失败条目的 DSH_TUI_RENDER_LOG）：
+      # 时序 flake 本地复现不出来，这份日志是唯一现场。
+      - uses: actions/upload-artifact@v7
+        if: failure()
+        with:
+          name: render-logs-channel-ui-${{ matrix.shard }}
+          path: ci-render-logs/
+          if-no-files-found: ignore
+          retention-days: 7
+
   # 已知时序 flaky 隔离区：照常运行、照常红，但不接进 ci-gate、不阻塞
   # 合并。两个成员都有 CI 环境间歇失败记录（Linux runner 负载高时触发，
   # 本地同内容通过）：
@@ -468,6 +508,16 @@ jobs:
       # 跑完后统一 ✓/✗ 汇总，任一失败 exit 1。测试清单与逐条说明在
       # scripts/run-ci-group.mjs 的 GROUPS 表（新增测试时同步登记）。
       - run: node scripts/run-ci-group.mjs flaky-observation
+
+      # 失败脚本的原始帧字节（run-ci-group 只保留失败条目的 DSH_TUI_RENDER_LOG）：
+      # 时序 flake 本地复现不出来，这份日志是唯一现场。
+      - uses: actions/upload-artifact@v7
+        if: failure()
+        with:
+          name: render-logs-flaky-observation
+          path: ci-render-logs/
+          if-no-files-found: ignore
+          retention-days: 7
 
   # 平台冒烟（non-blocking 观察档）：Windows（ConPTY/路径/行尾）与
   # macOS（PTY/clang 工具链）上只有真实平台才能暴露的安装与编译差异。

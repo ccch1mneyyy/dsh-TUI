@@ -26,9 +26,14 @@
  *   - 结束时汇总 ✓/✗ 清单（附每条耗时，按登记顺序），任一失败 exit 1 并给
  *     失败条目打 ::error；在 GitHub Actions 里再往 step summary 写一张按
  *     耗时降序的表——分片与拆组按这张表的数据来，不靠日志时间戳反推。
+ *   - 每条脚本带 DSH_TUI_RENDER_LOG=ci-render-logs/<名>.log 跑（显式设置优先）：
+ *     通过即删，失败保留，ci.yml 在 job 失败时把目录传成 artifact。时序
+ *     flake（#513/#734 一类"退出备用屏后主屏错一行"）本地复现不出来，只有
+ *     CI 那一次失败的原始帧字节才是证据。
  */
 import { spawnSync } from 'node:child_process'
-import { appendFileSync } from 'node:fs'
+import { appendFileSync, mkdirSync, rmSync, statSync } from 'node:fs'
+import { join } from 'node:path'
 
 const env = { NODE_ENV: 'production', ...process.env }
 
@@ -647,21 +652,33 @@ if (listOnly) {
   process.exit(0)
 }
 
+const RENDER_LOG_DIR = 'ci-render-logs'
+mkdirSync(RENDER_LOG_DIR, { recursive: true })
+
 console.log('::group::' + label + '（' + group.length + ' 项，失败不中断）')
 const results = []
 for (const entry of group) {
   const [name, argv, extraEnv] = entry
   console.log('\n===== ' + name + ' =====')
+  const renderLog = join(RENDER_LOG_DIR, name + '.log')
+  rmSync(renderLog, { force: true })
   const startedAt = performance.now()
   const r = spawnSync(argv[0], argv.slice(1), {
-    env: extraEnv ? { ...env, ...extraEnv } : env,
+    env: { DSH_TUI_RENDER_LOG: renderLog, ...env, ...(extraEnv ?? {}) },
     stdio: 'inherit',
     shell: false,
   })
   const seconds = (performance.now() - startedAt) / 1000
   const failed = r.status !== 0
   results.push({ name, failed, status: r.status, seconds })
-  if (failed) console.log('::error title=' + label + '::测试 ' + name + ' 失败（exit ' + r.status + '）——已记录，继续跑同组其余测试')
+  if (failed) {
+    console.log('::error title=' + label + '::测试 ' + name + ' 失败（exit ' + r.status + '）——已记录，继续跑同组其余测试')
+    let bytes = 0
+    try { bytes = statSync(renderLog).size } catch { /* 脚本没画帧（纯逻辑测试）：无日志可留 */ }
+    if (bytes > 0) console.log('[run-ci-group] 帧日志已保留: ' + renderLog + '（' + bytes + ' 字节）')
+  } else {
+    rmSync(renderLog, { force: true })
+  }
 }
 console.log('::endgroup::')
 
