@@ -7,7 +7,7 @@ import { readGrantStore } from '../../adapter/standard/grants.js'
 import type { AdapterRuntimeOptions } from '../../adapter/kernel/runtime.js'
 import { fetchBalance } from '../../deepseekBalance.js'
 import { t } from '../../i18n.js'
-import { LEGACY_DATA_DIR, homeDir } from '../../utils/paths.js'
+import { homeDir } from '../../utils/paths.js'
 import { sessionsRoots } from '../compat/index.js'
 import { getHostGrantStore } from '../host-grants.js'
 import { getHostFacade } from '../plugin-host.js'
@@ -137,7 +137,6 @@ export function createReportActions(ctx: Context, deps: {
       lines.push(t('doctor-config', { candidate, state: existsSync(candidate) ? '✓' : t('doctor-config-missing') }))
     }
     for (const dir of sessionsRoots()) lines.push(t('doctor-storage', { dir, state: existsSync(dir) ? '✓' : t('doctor-storage-uninit') }))
-    if (existsSync(LEGACY_DATA_DIR)) lines.push(t('doctor-legacy-dir'))
     const pluginHost = ctx.get('tuiPluginHost')
     lines.push(t('doctor-plugin-generation', { id: pluginHost?.generationId ?? t('doctor-plugin-host-missing') }))
     const violations = pluginHost?.selfCheck()

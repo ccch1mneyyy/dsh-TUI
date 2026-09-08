@@ -262,14 +262,22 @@ const check1 = (name: string, ok: boolean, detail?: string) => {
 {
   const channel = readFileSync(join(root, 'src/dsh-adapter/channel.ts'), 'utf8')
   const invoker = readFileSync(join(root, 'src/dsh-adapter/channel/external-commands.ts'), 'utf8')
-  const definitionLookup = invoker.indexOf('const definition = service.find(deps.agent(), name)')
+  const definitionLookup = invoker.indexOf('const definition = service.find(commandAgent, name)')
   const ownerLookup = invoker.indexOf('const owner = commandOwner(ctx, definition)')
-  const checkpoint = invoker.indexOf('const initialDenied = authorize(definition, name)', definitionLookup)
+  const imagePreparation = invoker.indexOf('const batch = await registryCommandImages(', definitionLookup)
+  const checkpoint = invoker.indexOf('const denied = authorize(definition, name)', definitionLookup)
   check1('owner-scoped invoke checkpoint is extracted into external-commands.ts', checkpoint !== -1)
   check1('owner lookup uses the effective definition', ownerLookup !== -1 && ownerLookup < checkpoint)
   const executeAfter = invoker.indexOf('service.execute', checkpoint)
   check1('owner checkpoint runs BEFORE service.execute', executeAfter > checkpoint)
-  check1("owner deny path returns t('command-invoke-denied-owner')", invoker.includes("return t('command-invoke-denied-owner'"))
+  check1('image preparation runs before the live grant checkpoint',
+    imagePreparation > definitionLookup && checkpoint > imagePreparation)
+  check1('the live grant checkpoint re-reads the grant store per invocation',
+    invoker.includes("if (!deps.allows({ componentId: 'root' }, 'commands.invoke', rootScope))"))
+  check1('the live grant checkpoint immediately precedes command execution',
+    executeAfter > checkpoint)
+  check1('owner deny keeps the structured draft-preserving error outcome',
+    invoker.includes("return t('command-invoke-denied-owner'") && invoker.includes('consumeDraft: false'))
   check1('owner invoke deny records a scoped permission id', invoker.includes('resource: { kind: \'permission\', id: `${owner.componentId}:commands.invoke:${owner.commandId}` }'))
   check1('channel composes external invocation instead of retaining policy', channel.includes('createExternalCommandInvoker(') && !channel.includes('commandOwner(ctx, definition)'))
   const skills = readFileSync(join(root, 'src/dsh-adapter/channel/skill-catalog.ts'), 'utf8')
@@ -290,6 +298,12 @@ const check1 = (name: string, ok: boolean, detail?: string) => {
     invoker.includes('supportsImages(')
     && invoker.includes("installedMeetsVersion('@deepseek-ai/dsh-commands', '0.1.0-rc.8')")
     && invoker.includes('ImagesExecute'))
+  check1('command discovery mirrors the upstream input.images admission flag',
+    readFileSync(join(root, 'src/dsh-adapter/channel/skill-catalog.ts'), 'utf8')
+      .includes('acceptsImages: descriptor.input?.images === true'))
+  check1('draft-aware command outcome is additive',
+    invoker.includes('Promise<ExternalCommandOutcome | undefined>')
+      && channel.includes('runExternalCommandOutcome'))
   const pluginHost = readFileSync(join(root, 'src/dsh-adapter/plugin-host.ts'), 'utf8')
   check1('the plugin-host row exposes the mediated registerCommand',
     pluginHost.includes('registerCommand(pluginCtx: Context'))

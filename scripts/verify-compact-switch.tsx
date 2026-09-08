@@ -117,6 +117,10 @@ function makeCompaction(script: Script) {
 
 // ---- 组装 ctx：source snapshot / agents.create 记录调用顺序 -----------------
 function assemble(script: Script) {
+  // Each assembly is an independent session: restart the event sequence so the
+  // log's `seq` stays index-aligned (makeAgent publishes `seq: events.length`)
+  // and rewind boundaries computed from a row's `seq` resolve inside it.
+  seq = 0
   const order: string[] = []
   const stamps = new Map<string, number>()
   const mark = (name: string) => {
@@ -202,14 +206,17 @@ const toasts = (channel: { notifications: readonly { text: string }[] }) =>
   channel.compact()
   const started = await settle(() => compaction.calls.length === 1)
   check('scene2: compactNow invoked before /fork', started)
+  // createChannel 的启动回放也读取一次日志；只观测本次 /fork 的 source
+  // snapshot，且保留该窗口内第一次读取的时间戳。
+  stamps.delete('snapshot')
   const forked = await channel.forkSession()
   check('scene2: /fork succeeds', forked === true, JSON.stringify(order))
   const abortedAt = compaction.calls[0]?.abortedAt
-  const forkAt = stamps.get('fork')
+  const snapshotAt = stamps.get('snapshot')
   check(
     'scene2: /fork abort strictly precedes snapshot',
-    abortedAt !== undefined && forkAt !== undefined && abortedAt <= forkAt,
-    `abortedAt=${String(abortedAt)} forkAt=${String(forkAt)}`,
+    abortedAt !== undefined && snapshotAt !== undefined && abortedAt <= snapshotAt,
+    `abortedAt=${String(abortedAt)} snapshotAt=${String(snapshotAt)}`,
   )
 }
 
@@ -219,14 +226,16 @@ const toasts = (channel: { notifications: readonly { text: string }[] }) =>
   channel.compact()
   const started = await settle(() => compaction.calls.length === 1)
   check('scene3: compactNow invoked before row rewind', started)
+  // 同上：只观测本次逐行 rewind 的 source snapshot。
+  stamps.delete('snapshot')
   const restored = await channel.rewindTo({ seq: 5, text: '回答 1' })
   check('scene3: row rewind succeeds', restored === '回答 1', JSON.stringify(order))
   const abortedAt = compaction.calls[0]?.abortedAt
-  const forkAt = stamps.get('fork')
+  const snapshotAt = stamps.get('snapshot')
   check(
     'scene3: row rewind abort strictly precedes snapshot',
-    abortedAt !== undefined && forkAt !== undefined && abortedAt <= forkAt,
-    `abortedAt=${String(abortedAt)} forkAt=${String(forkAt)}`,
+    abortedAt !== undefined && snapshotAt !== undefined && abortedAt <= snapshotAt,
+    `abortedAt=${String(abortedAt)} snapshotAt=${String(snapshotAt)}`,
   )
 }
 
@@ -261,7 +270,7 @@ const toasts = (channel: { notifications: readonly { text: string }[] }) =>
   const afterDispose = channel.notifications.length
   const aborted = await settle(() => compaction.calls[0]?.abortedAt !== undefined)
   check('scene6: owner disposal aborts in-flight compaction', aborted)
-  await sleep(100)
+  await sleep(100) // 固定窗:探针 抑制闩：观察窗内不得再追加通知
   check('scene6: aborted completion adds no notification', channel.notifications.length === afterDispose, toasts(channel))
 }
 

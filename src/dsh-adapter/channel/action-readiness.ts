@@ -22,7 +22,9 @@ export type ChannelActionDelegates = Pick<ChannelState,
   | 'switchModel'
   | 'listEfforts'
   | 'setEffort'
+  | 'setDefaultEffort'
   | 'cycleMode'
+  | 'runPermissionPreset'
   | 'clear'
   | 'setActivityFrames'
   | 'listPresets'
@@ -55,6 +57,7 @@ export type ChannelActionDelegates = Pick<ChannelState,
   | 'renameSessionTo'
   | 'compact'
   | 'runExternalCommand'
+  | 'runExternalCommandOutcome'
   | 'pushLocal'
   | 'mcpStatus'
   | 'exportSession'
@@ -94,7 +97,9 @@ export function createChannelActionMethods(
     switchModel: (provider, model) => getReadyActions().switchModel(provider, model),
     listEfforts: () => getReadyActions().listEfforts(),
     setEffort: id => getReadyActions().setEffort(id),
+    setDefaultEffort: id => getReadyActions().setDefaultEffort(id),
     cycleMode: () => getReadyActions().cycleMode(),
+    runPermissionPreset: name => getReadyActions().runPermissionPreset(name),
     clear: () => getReadyActions().clear(),
     setActivityFrames: name => getReadyActions().setActivityFrames(name),
     listPresets: () => getReadyActions().listPresets(),
@@ -127,6 +132,7 @@ export function createChannelActionMethods(
     renameSessionTo: (sessionId, title) => getReadyActions().renameSessionTo(sessionId, title),
     compact: () => getReadyActions().compact(),
     runExternalCommand: (name, rawInput) => getReadyActions().runExternalCommand(name, rawInput),
+    runExternalCommandOutcome: (name, rawInput, images) => getReadyActions().runExternalCommandOutcome(name, rawInput, images),
     pushLocal: (title, lines) => getReadyActions().pushLocal(title, lines),
     mcpStatus: () => getReadyActions().mcpStatus(),
     exportSession: () => getReadyActions().exportSession(),

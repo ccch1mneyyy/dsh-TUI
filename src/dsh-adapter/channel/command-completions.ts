@@ -1,5 +1,5 @@
 import { completeCommands, isCommandCompletionToken, type CommandCompletionNode } from '../../commands.js'
-import { SESSION_COLOR_NAMES } from '../../cc/sessionColors.js'
+import { SESSION_COLOR_NAMES } from '../../terminal-utils/sessionColors.js'
 import { getLang, LANGS } from '../../i18n.js'
 import { AUTO_THEME_NAME } from '../../theme.js'
 import { listThemeCatalog } from '../../themeCatalog.js'

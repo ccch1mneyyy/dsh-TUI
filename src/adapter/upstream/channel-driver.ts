@@ -390,7 +390,7 @@ function createPluginsPort(lease: ChannelPortLease): HostChannelPluginsPort {
 
 function createTranscriptPort(lease: ChannelPortLease): HostChannelTranscriptPort {
   const transcript = (): HostChannelTranscriptPort => createChannelTranscript(lease.channel(), CHANNEL_SPLIT_TOKEN)
-  return Object.freeze({ rows: () => transcript().rows(), traceEvents: () => transcript().traceEvents() })
+  return Object.freeze({ rows: () => transcript().rows(), traceEvents: () => transcript().traceEvents(), loadOlder: () => transcript().loadOlder() })
 }
 
 function createChannelPort(ctx: unknown, own: (dispose: () => void) => void, isActive: () => boolean): HostChannelPort {

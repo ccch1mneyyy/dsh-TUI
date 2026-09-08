@@ -1,5 +1,5 @@
 /** Host-owned in-process Channel contract. No runtime or upstream imports. */
-import type { ChatRow, AgentStatus, TokenUsage, NotificationItem, ActivityStatus, ChannelGoal, TodoPanelItem, LoadedContext, PendingMessage, ChannelSceneMetadata, SubagentState, SubagentControl, BackgroundJobState, JobControl, StagedImageInput, ResumeResult, EffortOption, PermissionPresetSnapshot, PresetOption, LlmModelInfo, LlmProviderInfo, SkillInfo, CredentialStatus, AgentViewRow, AgentViewDispatchResult, BackgroundResult, RawTrajEvent } from './channel-view.js'
+import type { ChatRow, AgentStatus, TokenUsage, NotificationItem, ActivityStatus, ChannelGoal, TodoPanelItem, LoadedContext, PendingMessage, ChannelSceneMetadata, SubagentState, SubagentControl, BackgroundJobState, JobControl, StagedImageInput, StagedImageHandle, ComposerImageRef, ComposerSubmission, ExternalCommandOutcome, TranscriptImage, ResumeResult, EffortOption, PermissionPresetSnapshot, PresetOption, LlmModelInfo, LlmProviderInfo, SkillInfo, CredentialStatus, AgentViewRow, AgentViewDispatchResult, BackgroundResult, RawTrajEvent } from './channel-view.js'
 import type { SpinnerMode, ToolBackground, ScrollGutterMode, PageMarginSetting, StatusBarConfig, SessionModeSpec } from './channel-display.js'
 import type { LocalCommand, CommandCompletion, BalanceResult, FileCandidate, RecapOutcome } from './channel-catalog.js'
 import type { TuiRewindMode, SessionTreeData, SessionSummary, PreviewEntry } from './channel-session.js'
@@ -129,6 +129,10 @@ export interface ChannelUi {
   readonly statusBar: Readonly<StatusBarConfig>
   /** Whether the header's pixel whale art shows (settings `dsh-tui.whale`). */
   readonly whale: boolean
+  /** Idle whale behaviors switch (settings `dsh-tui.whaleIdle`). */
+  readonly whaleIdle: boolean
+  /** Apply an idle-whale-behavior change (see the public Channel type). */
+  setWhaleIdle(enabled: boolean): void
   /** Minimal mode (settings `dsh-tui.minimal`): no header splash, no emoji
    *  glyphs, no decorative colors; code highlight and tool colors stay. */
   readonly minimal: boolean
@@ -181,7 +185,14 @@ export interface ChannelUi {
    * `undefined` when the registry has no such command (the caller falls
    * back to sending the line to the model).
    */
-  runExternalCommand(name: string, rawInput: string): Promise<string | undefined>
+  runExternalCommand(name: string, rawInput: string, images?: readonly ComposerImageRef[]): Promise<string | undefined>
+  /** Detailed companion used by draft-owning composers. `undefined` means
+   * the registry no longer has the command, so the draft stays untouched. */
+  runExternalCommandOutcome(
+    name: string,
+    rawInput: string,
+    images?: readonly ComposerImageRef[],
+  ): Promise<ExternalCommandOutcome | undefined>
   /**
    * Plugin-registered full-screen scene currently replacing the conversation
    * (the `dsh-tui-scenes` runtime), if any. The chat screen renders its
@@ -225,14 +236,33 @@ export interface ChannelUi {
   /** Cancellation of a background job with the owning agent's authority. */
   readonly jobControl: JobControl
   subscribe: (listener: () => void) => () => void
+  /** Current composer generation. Async paste continuations capture this
+   *  before I/O and must not mutate a different session's draft. */
+  stagedImageGeneration(): number
   /** Validate and persist a pasted image, returning its prompt placeholder. */
   stageImage(input: StagedImageInput): Promise<string>
-  submit(text: string): void
+  /** Draft-safe composer companion: bind persistence to one session epoch
+   * and return an opaque capability whose visible label belongs to Prompt. */
+  stageComposerImage(input: StagedImageInput, generation: number): Promise<StagedImageHandle>
+  /** Whether a capability is still live in the current composer session. */
+  hasStagedImage(stageId: string): boolean
+  /** Revoke a capability that was staged for a draft which no longer exists.
+   * Durable attachment storage remains content-addressed; this only releases
+   * the editable-composer lookup and its preview facade. */
+  discardStagedImage(stageId: string): void
+  /** The staged image behind one opaque capability, as the same lazily-read
+   *  facade transcript rows use; undefined once evicted or cleared. */
+  stagedImage(stageId: string): TranscriptImage | undefined
+  /** The profile's image-paste limits, for callers that must bound work
+   *  BEFORE reading bytes (a Finder path is untrusted input). Undefined
+   *  when the composition has no attachment service. */
+  stagedImageLimits(): { readonly maxImageBytes: number; readonly maxImagesPerMessage: number } | undefined
+  submit(text: string, images?: readonly ComposerImageRef[]): void
   /**
    * Steer a message into the running turn (Codex/pi semantics): injected at
    * the next step boundary, the agent continues without aborting.
    */
-  steer(text: string): void
+  steer(text: string, images?: readonly ComposerImageRef[]): void
   /** Pull a pending message back out of the inbox (Alt+Up) for re-editing. */
   removePending(id: string): boolean
   /** Abort the in-flight turn (`Ctrl+C` while working). While `cancelPending`
@@ -242,7 +272,7 @@ export interface ChannelUi {
   /** Abort the in-flight turn and process `texts` right away (Esc/Ctrl+Enter
    *  with queued input): each text is re-queued as a followup once the abort
    *  settles, so the new turn starts immediately. Returns the count queued. */
-  interruptAndDeliver(texts: readonly string[]): number
+  interruptAndDeliver(inputs: readonly (string | ComposerSubmission)[]): number
   /** Rewind the conversation to a past user message (CC's double-Esc rewind):
    *  forks the session through that message, swaps in a fresh agent, and
    *  returns the message text for re-editing — or `null` when unwritable.
@@ -302,6 +332,11 @@ export interface ChannelUi {
    *  false + a notify when the id is not offered. Persists like the old
    *  Shift+Tab cycle (~/.dsh-tui/effort.json). */
   setEffort(id: string): Promise<boolean>
+  /** Re-seat the future-sessions default reasoning effort (cordis.yml
+   *  `effort` → persisted /effort choice → adapter default). The live agent
+   *  is re-pinned too when its route offers the level, so a change lands on
+   *  its next request. */
+  setDefaultEffort(id: string | undefined): void
   /** The session mode currently in force (matched from the session log, or
    *  the last one Shift+Tab applied). */
   readonly mode: SessionModeSpec
@@ -311,6 +346,12 @@ export interface ChannelUi {
   cycleMode(): Promise<void>
   /** Read the official permission preset roster and current identity. */
   permissionPresets(): PermissionPresetSnapshot
+  /**
+   * TUI-side permission preset switch: drives the durable `permission/preset`
+   * path (the same handler the command drives). Resolves true when the
+   * durable identity confirms the target. Never falls through to the model.
+   */
+  runPermissionPreset(name: string): Promise<boolean>
   /** The preset the CURRENT session runs under (issue #8), resolved from its
    *  log at create/resume time; undefined when no roster is mounted. */
   readonly agentPreset: string | undefined

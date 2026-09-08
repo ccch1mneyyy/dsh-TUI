@@ -7,10 +7,13 @@
  *   3. /clear 只清行 map——同会话在途子代理的下一个事件重建卡片，仪表盘继续跟踪；
  *   4. staged image token 是会话作用域——switchModel 的同步订阅窗口也不能把旧图送入新 agent；
  *   5. resumeTo 的竞争切换守卫——await 期间被 /new 抢先提交时，恢复放弃且不动新会话；
- *   6. `@` 展开期间切换会话——旧输入不得投递到旧/新任一 agent；
- *   7. staged image 按 token 文本顺序附图，重复 token 只附一次；
- *   8. 图片 capability 防 ABA——新会话重用 `[Image #1]` 时，旧裸文本不绑定新图；
- *   9. recap 预算从新到旧收容——超长旧消息不再饿死最新交互（collectRecentActivity 单元断言）。
+ *   6. /new 的 deferred attachment 阶段被 owner teardown 抢先——立即回收 prepared handle，
+ *      且 /new 不得完成为成功切换；
+ *   7. /new post-commit 订阅注册抛错必须 fail-close——错误照常传播并拆掉新 live handle；
+ *   8. `@` 展开期间切换会话——旧输入不得投递到旧/新任一 agent；
+ *   9. staged image 按 token 文本顺序附图，重复 token 只附一次；
+ *  10. 图片 capability 防 ABA——新会话重用 `[Image #1]` 时，旧裸文本不绑定新图；
+ *  11. recap 预算从新到旧收容——超长旧消息不再饿死最新交互（collectRecentActivity 单元断言）。
  *
  * 运行：node --import tsx/esm scripts/verify-session-reset-hygiene.tsx
  */
@@ -242,9 +245,9 @@ const subagentRows = (channel: { rows: Array<{ kind: string }> }) => channel.row
     model: 'm0', cwd: '/tmp/demo', provider: 'p0', activity: false,
   })
   const pending = channel.newSession()
-  await sleep(30)
+  await sleep(30) // 固定窗:pacing 等 /new 停在 resolveByPath 的 await，无可观测锚点
   channel.releaseContributions()
-  await sleep(0)
+  await sleep(0) // 固定窗:pacing 让 teardown 的同步回收跑完（微任务，无可观测锚点）
   check('6a. /new attachment 阻塞时 owner teardown 立即回收 prepared handle', disposed === 1, String(disposed))
   unblockAttachment()
   check('6b. teardown 后 /new 不会完成为成功切换', (await pending) === false)
@@ -266,12 +269,152 @@ const subagentRows = (channel: { rows: Array<{ kind: string }> }) => channel.row
   })
   let rejected = false
   try { await channel.newSession() } catch (error) { rejected = error instanceof Error && /subscription boom/u.test(error.message) }
-  await sleep(0)
+  await sleep(0) // 固定窗:pacing 让 post-commit 回滚的微任务跑完，无可观测锚点
   check('7a. /new post-commit subscription throw propagates', rejected)
   check('7b. /new post-commit subscription throw tears down new live handle', disposed === 1, String(disposed))
 }
 
-// ── 场景 8：recap 预算从新到旧收容（N1 单元断言） ────────────────────────
+// ── 场景 8：`@` 展开期间 /new 不得把旧输入投递到任何 agent ───────────────
+{
+  const ctx = new Context()
+  const provide = (ctx as unknown as { provide(name: string, value: unknown): void }).provide.bind(ctx)
+  const initial = makeAgent('agent-f', 'sess-f')
+  const switched = makeAgent('agent-f2', 'sess-f2')
+  const oldInbox: unknown[] = []
+  const newInbox: unknown[] = []
+  initial.followup = message => oldInbox.push(message)
+  switched.followup = message => newInbox.push(message)
+
+  let resolveRead!: (body: string) => void
+  let readStarted = false
+  provide('fs', {
+    resolve: (path: string) => Promise.resolve({ displayPath: path }),
+    stat: () => Promise.resolve({ type: 'file' as const }),
+    readText: () => new Promise<string>(resolve => {
+      readStarted = true
+      resolveRead = resolve
+    }),
+    listDir: () => Promise.resolve([]),
+  })
+  provide('agents', { create: () => Promise.resolve(makeHandle(switched)) })
+  const channel = createChannel(ctx as never, initial as never, {
+    model: 'm0', cwd: '/tmp/demo', provider: 'p0', activity: false,
+  })
+
+  channel.submit('inspect @slow.txt')
+  check('8a. 旧输入已停在 @ 文件读取', await settled(() => readStarted))
+  check('8b. @ 展开未完成时 /new 成功', (await channel.newSession()) === true)
+  channel.submit('fresh session input')
+  check('8c. 新会话输入不被旧会话的慢读取阻塞',
+    await settled(() => newInbox.length === 1), `sent=${newInbox.length}`)
+  resolveRead('old session file contents')
+  // Cross one event-loop turn after releasing the exact barrier: all promise
+  // continuations from expand → deliver have either sent or stale-dropped.
+  await new Promise<void>(resolve => setImmediate(resolve))
+  check('8d. 旧输入没有回投旧 agent', oldInbox.length === 0, `sent=${oldInbox.length}`)
+  check('8e. 旧输入没有错投新 agent', newInbox.length === 1, `sent=${newInbox.length}`)
+}
+
+// ── 场景 9：staged image 按占位符文本顺序附图，重复引用去重 ─────────────
+{
+  const ctx = new Context()
+  const provide = (ctx as unknown as { provide(name: string, value: unknown): void }).provide.bind(ctx)
+  const initial = makeAgent('agent-g', 'sess-g')
+  const sent: unknown[][] = []
+  initial.followup = message => sent.push((message as { content: unknown[] }).content)
+  provide('attachments', {
+    imageLimits: {
+      maxImageBytes: 1_000_000,
+      maxImagesPerMessage: 4,
+      maxMessageImageBytes: 4_000_000,
+      mediaTypes: ['image/png'],
+    },
+    saveImage: (input: { data: Uint8Array }) => Promise.resolve({
+      ref: `img-${input.data[0]}`,
+      mediaType: 'image/png',
+      bytes: input.data.byteLength,
+    }),
+  })
+  const channel = createChannel(ctx as never, initial as never, {
+    model: 'm0', cwd: '/tmp/demo', provider: 'p0', activity: false,
+  })
+
+  const first = await channel.stageComposerImage(
+    { data: new Uint8Array([1]), mediaType: 'image/png' },
+    channel.stagedImageGeneration(),
+  )
+  const second = await channel.stageComposerImage(
+    { data: new Uint8Array([2]), mediaType: 'image/png' },
+    channel.stagedImageGeneration(),
+  )
+  const firstToken = '[Image #1]'
+  const secondToken = '[Image #2]'
+  channel.submit(`${secondToken} before ${firstToken}; ${secondToken} repeated`, [
+    { token: firstToken, stageId: first.stageId },
+    { token: secondToken, stageId: second.stageId },
+  ])
+  check('9a. staged image 消息已投递', await settled(() => sent.length === 1))
+  const images = (sent[0] as Array<{ type: string; attachment?: { ref?: string } }>)
+    .filter(block => block.type === 'image')
+  check('9b. staged image 按 token 文本出现顺序附加',
+    images.map(block => block.attachment?.ref).join(',') === 'img-2,img-1',
+    images.map(block => block.attachment?.ref).join(','))
+  check('9c. 重复 token 只附同一张图一次', images.length === 2, `count=${images.length}`)
+}
+
+// ── 场景 10：图片 capability 防止跨会话 token ABA ───────────────────────
+{
+  const ctx = new Context()
+  const provide = (ctx as unknown as { provide(name: string, value: unknown): void }).provide.bind(ctx)
+  const initial = makeAgent('agent-h', 'sess-h')
+  const switched = makeAgent('agent-h2', 'sess-h2')
+  const sent: unknown[][] = []
+  switched.followup = message => sent.push((message as { content: unknown[] }).content)
+  provide('agents', { create: () => Promise.resolve(makeHandle(switched)) })
+  provide('attachments', {
+    imageLimits: {
+      maxImageBytes: 1_000_000,
+      maxImagesPerMessage: 4,
+      maxMessageImageBytes: 4_000_000,
+      mediaTypes: ['image/png'],
+    },
+    saveImage: (input: { data: Uint8Array }) => Promise.resolve({
+      ref: `img-${input.data[0]}`,
+      mediaType: 'image/png',
+      bytes: input.data.byteLength,
+    }),
+  })
+  const channel = createChannel(ctx as never, initial as never, {
+    model: 'm0', cwd: '/tmp/demo', provider: 'p0', activity: false,
+  })
+
+  await channel.stageComposerImage(
+    { data: new Uint8Array([1]), mediaType: 'image/png' },
+    channel.stagedImageGeneration(),
+  )
+  check('10a. /new 清除旧会话 capability', (await channel.newSession()) === true)
+  const fresh = await channel.stageComposerImage(
+    { data: new Uint8Array([2]), mediaType: 'image/png' },
+    channel.stagedImageGeneration(),
+  )
+  const reusedToken = '[Image #1]'
+
+  // 模拟历史/rewind 只恢复可见文本：没有 capability，绝不能因新草稿
+  // 恰好也编号 #1 而错绑到新会话图片。
+  channel.submit(`restored ${reusedToken}`)
+  check('10b. 裸历史 token 已作为纯文本投递', await settled(() => sent.length === 1))
+  const bareImages = (sent[0] as Array<{ type: string }>).filter(block => block.type === 'image')
+  check('10c. 裸历史 token 不绑定新会话同号图片', bareImages.length === 0, `count=${bareImages.length}`)
+
+  channel.submit(`live ${reusedToken}`, [{ token: reusedToken, stageId: fresh.stageId }])
+  check('10d. 显式 capability 的当前草稿已投递', await settled(() => sent.length === 2))
+  const liveRefs = (sent[1] as Array<{ type: string; attachment?: { ref?: string } }>)
+    .filter(block => block.type === 'image')
+    .map(block => block.attachment?.ref)
+  check('10e. 显式 capability 正确绑定当前图片', liveRefs.join(',') === 'img-2', liveRefs.join(','))
+}
+
+// ── 场景 11：recap 预算从新到旧收容（N1 单元断言） ───────────────────────
 {
   const message = (role: 'user' | 'assistant', text: string) => ({
     type: role === 'user' ? 'user/message' : 'assistant/message',
@@ -283,16 +426,16 @@ const subagentRows = (channel: { rows: Array<{ kind: string }> }) => channel.row
   })
   const events = [1, 2, 3, 4, 5, 6].map(n => message(n % 2 === 0 ? 'assistant' : 'user', `msg${n}-`.repeat(1500)))
   const payload = collectRecentActivity(events as never, 6000)
-  check('8a. 最新交互进入 payload', payload.includes('msg6-'), `len=${payload.length}`)
-  check('8b. 吞预算的旧消息不再独占 payload', !payload.includes('msg1-'), payload.slice(0, 40))
+  check('11a. 最新交互进入 payload', payload.includes('msg6-'), `len=${payload.length}`)
+  check('11b. 吞预算的旧消息不再独占 payload', !payload.includes('msg1-'), payload.slice(0, 40))
   const mixed = [
     message('user', 'old-short'),
     message('assistant', 'x'.repeat(5800)),
     message('user', 'newest-question'),
   ]
   const mixedPayload = collectRecentActivity(mixed as never, 6000)
-  check('8c. 混合预算下最新短消息完整保留', mixedPayload.includes('newest-question'))
-  check('8d. 输出保持时间顺序（旧→新）', mixedPayload.indexOf('x'.repeat(20)) < mixedPayload.indexOf('newest-question'))
+  check('11c. 混合预算下最新短消息完整保留', mixedPayload.includes('newest-question'))
+  check('11d. 输出保持时间顺序（旧→新）', mixedPayload.indexOf('x'.repeat(20)) < mixedPayload.indexOf('newest-question'))
 }
 
 console.log(failed === 0 ? '\nALL PASS' : `\n${failed} 项失败`)

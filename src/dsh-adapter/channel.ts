@@ -49,20 +49,24 @@ import {
   assertCapabilityShadowPolicy,
 } from '../adapter/kernel/runtime.js'
 import { readGrantStore } from '../adapter/standard/grants.js'
-import { HIDDEN_COMMAND_NAMES, isLocalCommandName, LOCAL_COMMANDS, parseCommandName, type LocalCommand } from '../commands.js'
+import { HIDDEN_COMMAND_NAMES, isCommandCompletionToken, isLocalCommandName, LOCAL_COMMANDS, parseCommandName, type LocalCommand } from '../commands.js'
 import { isPresetName } from '../components/activityFrames.js'
 import { t, tOr, type Lang } from '../i18n.js'
 import { readModelPref } from '../modelPrefs.js'
 import { resolveModelRoute, validateModelRoute } from '../modelRoute.js'
 import { readPresetPref } from '../presetPrefs.js'
 import { readAgentViewSessions, touchAgentViewSession, touchSession } from '../sessionHistory.js'
-import { resolveSessionModes, type SessionModeSpec } from '../sessionModes.js'
+import { DEFAULT_SESSION_MODES, resolveSessionModes, type SessionModeSpec } from '../sessionModes.js'
 import { resolveDshProfileName } from '../update.js'
 import { logForDebugging } from '../utils/debug.js'
 import { channelCommands } from './channel/commands.js'
 import { normalizeInputDecision, normalizeRewindDoneSummary, normalizeRewindPromptDecision, NOTICE_CELLS } from './channel/decisions.js'
 import { createChannelEmitter } from './channel/emitter.js'
 import { createInputActions, type InputConvergence } from './channel/input-actions.js'
+import { createComposerImages } from './channel/composer-images.js'
+import { snapshotLiveSessionEvents } from './compat/liveSession.js'
+import { createPermissionModeRoster } from './channel/mode-roster.js'
+import { createPermissionModeActions } from './channel/mode-permission-actions.js'
 import { expandMentions, mentionAttachments, mentionFs } from './channel/mentions.js'
 import { sessionCwdMatches } from './channel/paths.js'
 import { legacyPermissionPresetSnapshot, permissionPresetSnapshotFromService, unavailablePermissionPresetSnapshot } from './channel/permissions.js'
@@ -271,6 +275,14 @@ function createChannelWithOwner(
       `dsh-tui: session modes ${droppedModeIds.map(id => `"${id}"`).join(', ')} declare no plan/sandbox/approval/permission atom; dropped from the Shift+Tab cycle`,
     )
   }
+  // Runtime permission roster: third-party presets enter the Shift+Tab cycle
+  // after the configured/default modes, rebuilt from the live service snapshot.
+  const permissionRoster = createPermissionModeRoster(ctx, {
+    configuredModes: configuredSessionModes,
+    agent: () => binding.agent,
+    warn: message => ctx.logger.warn(message),
+  })
+  const sessionModes = permissionRoster.modes
   const emitter = createChannelEmitter(() => state, () => subagentProjection.flush())
   // The emitter is created before the complete state surface exists. Put it
   // in the construction rollback funnel immediately; normal release remains
@@ -290,8 +302,9 @@ function createChannelWithOwner(
     CONTEXT_WARNING_BUFFER_TOKENS,
   )
   const { warning: contextWarning, resetContextWarning, checkContextWarning, trackPending, untrackPending } = bookkeeping
+  const composer = createComposerImages(ctx, owner, { generation: () => state.agentBindingGeneration })
   const inputDelivery = createInputDelivery(ctx, owner, binding, () => state,
-    (...args) => notify(...args), trackPending, untrackPending)
+    (...args) => notify(...args), trackPending, untrackPending, composer)
   const { dispatchUserText, deliverUserText, withDecisionPending, clearStagedImages } = inputDelivery
   /**
    * The `tui/session-switch` decision event (pi's `session_before_switch`),
@@ -375,11 +388,11 @@ function createChannelWithOwner(
     capture: () => binding.capture(),
     bindingCurrent: capture => binding.isCurrent(capture as ReturnType<typeof binding.capture>),
     allows: (subject, permission, scope) => currentGrantStore().allows(subject, permission, scope),
-    stagedImages: inputDelivery.stagedImages,
-    attachments: () => mentionAttachments(ctx) as never,
+    composer,
+    attachments: () => mentionAttachments(ctx),
     notify: (...args) => notify(...args),
   })
-  const executeRegistryCommand = externalCommands.invoke
+  const executeRegistryCommand = externalCommands.invokeText
 
   // Durable mode folds/transitions are composed after state construction.
   // Model/preset completion caches are owned by model-actions.ts.
@@ -399,7 +412,7 @@ function createChannelWithOwner(
   // This is the one necessary cyclic seam: mode actions need the completed
   // state, while the state exposes their command surface. It is assigned before
   // the channel starts binding/session observation.
-  let modeActions: ReturnType<typeof createModeActions>
+  let modeActions: ReturnType<typeof createPermissionModeActions>
   let modelActions: ReturnType<typeof createModelActions>
   let workspaceActions: ReturnType<typeof createWorkspaceActions>
   let switchModelAction: (provider: string, model: string) => Promise<boolean>
@@ -417,7 +430,8 @@ function createChannelWithOwner(
 
   const state: ChannelState = {
     ...createInputActions(() => state, () => binding.agent, owner, inputConvergence,
-      (text, placement) => dispatchUserText(text, placement),
+      composer,
+      (text, placement, images) => dispatchUserText(text, placement, images),
       (command, includeInContext) => getReadyActions().runLocalCommand(command, includeInContext)),
     subscribe: emitter.subscribe,
     emit: emitter.emit,
@@ -441,7 +455,13 @@ function createChannelWithOwner(
     ...actionMethods,
     subagentControl,
     jobControl,
-    stageImage: inputDelivery.stageImage,
+    stagedImageGeneration: composer.stagedImageGeneration,
+    stageImage: composer.stageImage,
+    stageComposerImage: composer.stageComposerImage,
+    hasStagedImage: composer.hasStagedImage,
+    discardStagedImage: composer.discardStagedImage,
+    stagedImage: composer.stagedImage,
+    stagedImageLimits: composer.stagedImageLimits,
     /**
      * The `tui/rewind-prompt` decision event (pi's `session_before_fork`):
      * fired when the rewind picker confirms a message, before any fork
@@ -466,7 +486,7 @@ function createChannelWithOwner(
         return unavailablePermissionPresetSnapshot()
       }
       if (service === undefined) return legacyPermissionPresetSnapshot(state.mode.sandbox)
-      return permissionPresetSnapshotFromService(service, binding.agent.session.events)
+      return permissionPresetSnapshotFromService(service, binding.agent.session)
     },
     settingsSections(): readonly TuiSettingsSection[] {
       return settingsSectionsRuntime?.list() ?? []
@@ -588,6 +608,7 @@ function createChannelWithOwner(
   })
   const refreshLoadedContext = loadedContext.refresh
   const startRuntimeSubscriptions = (): void => {
+    owner.own(ctx.on('commands/change', () => { if (owner.current()) modeActions.refreshMode() }))
     owner.own(settingsSectionsRuntime?.subscribe(() => { if (owner.current()) state.emit() }) ?? (() => undefined))
     const disposeScenes = sceneRuntime?.subscribe(() => {
       if (state.pluginScene === sceneRuntime.active) return
@@ -629,7 +650,7 @@ function createChannelWithOwner(
   })
 
   // Replay the durable transcript first, then follow live events.
-  projector.replayEvents(binding.agent.session.events)
+  projector.replayEvents(snapshotLiveSessionEvents(binding.agent.session))
   projector.settleStreaming()
   // Attached to an idle agent: any replayed turn/start belongs to a previous
   // session run, so the spinner must not come up on boot.
@@ -689,11 +710,12 @@ function createChannelWithOwner(
     notify,
   })
 
-  modeActions = createModeActions(ctx, state, {
+  modeActions = createPermissionModeActions(ctx, state, {
     owner,
     runtime: adapterRuntime,
     binding,
     sessionModes,
+    roster: permissionRoster,
     commandService,
     executeRegistryCommand,
     notify,
@@ -855,6 +877,7 @@ function createChannelWithOwner(
   actionReadiness.install({
     commandCompletions,
     runLocalCommand: localActions.runLocalCommand,
+    runPermissionPreset: modeActions.runPermissionPreset,
     loadOlder: localActions.loadOlder,
     rewindTo: rewindToAction,
     rewindToNode: rewindToNodeAction,
@@ -870,6 +893,7 @@ function createChannelWithOwner(
     switchModel: switchModelAction,
     listEfforts: modelActions.listEfforts,
     setEffort: modelActions.setEffort,
+    setDefaultEffort: modelActions.setDefaultEffort,
     cycleMode: modeActions.cycleMode,
     clear: localActions.clear,
     setActivityFrames: localActions.setActivityFrames,
@@ -902,7 +926,8 @@ function createChannelWithOwner(
     deleteSession: sessionMetadataActions.deleteSession,
     renameSessionTo: sessionMetadataActions.renameSessionTo,
     compact: compactManualSession,
-    runExternalCommand: executeRegistryCommand,
+    runExternalCommand: externalCommands.invokeText,
+    runExternalCommandOutcome: externalCommands.invoke,
     pushLocal: localActions.pushLocal,
     mcpStatus: reportActions.mcpStatus,
     exportSession: reportActions.exportSession,
@@ -1008,5 +1033,5 @@ function createChannelWithOwner(
 export type { ChannelLaunchOptions } from './channel/state.js'
 export { expandMentions } from './channel/mentions.js'
 export { sessionCwdMatches } from './channel/paths.js'
-export type { ActivityStatus, AgentViewDispatchResult, AgentViewRow, AgentViewStatus, BackgroundResult, Channel, ChannelGoal, ChannelState, ChatRow, CredentialStatus, EffortOption, JobControl, JobRow, LoadedContext, LoadedContextEntry, LoadedContextFile, LoadedContextSkill, LoadedContextTool, MentionAttachments, MentionExpansion, MentionFs, NotificationItem, PendingMessage, PermissionPresetAvailability, PermissionPresetCurrent, PermissionPresetOption, PermissionPresetSnapshot, PresetOption, ResumeResult, SkillInfo, StagedImageInput, SubagentControl, SubagentRow, TodoPanelItem, TokenBucket, TokenUsage, ToolCallView, ToolFileDiff, ToolResultView, ToolRow, ToolViewPresenter } from './channel/types.js'
+export type { ActivityStatus, AgentViewDispatchResult, AgentViewRow, AgentViewStatus, BackgroundResult, Channel, ChannelGoal, ChannelState, ChatRow, ComposerImageRef, ComposerSubmission, CredentialStatus, EffortOption, ExternalCommandOutcome, JobControl, JobRow, LoadedContext, LoadedContextEntry, LoadedContextFile, LoadedContextSkill, LoadedContextTool, MentionAttachments, MentionExpansion, MentionFs, NotificationItem, PendingMessage, PermissionPresetAvailability, PermissionPresetCurrent, PermissionPresetOption, PermissionPresetSnapshot, PresetOption, ResumeResult, SkillInfo, StagedImageHandle, StagedImageInput, SubagentControl, SubagentRow, TodoPanelItem, TokenBucket, TokenUsage, ToolCallView, ToolFileDiff, ToolResultView, ToolRow, ToolViewPresenter, TranscriptImage } from './channel/types.js'
 export { emptyTokenUsage } from './channel/usage.js'

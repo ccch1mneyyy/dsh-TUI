@@ -4,85 +4,132 @@ import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { t } from '../../i18n.js'
 import { logForDebugging } from '../../utils/debug.js'
 import { dispatchTuiDecision } from '../extension-events.js'
+import {
+  firstStaleComposerToken,
+  formatMissingReference,
+  orderedComposerImages,
+  type ComposerImages,
+} from './composer-images.js'
+import { expandComposerMentions } from './composer-mentions.js'
 import { normalizeInputDecision } from './decisions.js'
-import { expandMentions, mentionFs, mentionAttachments } from './mentions.js'
+import { mentionAttachments, mentionFs } from './mentions.js'
 import type { ChannelOwner } from './owner.js'
-import type { ChannelState, ChannelImageBlock, PendingMessage, StagedImageInput } from './types.js'
+import type {
+  ChannelImageBlock,
+  ChannelState,
+  ComposerImageRef,
+  MentionAttachments,
+  MentionFs,
+  PendingMessage,
+  StagedImageInput,
+} from './types.js'
+
+/** One submission's enqueue-time world: the session it was typed in, the
+ *  services that resolve its references, and the capabilities live then. */
+interface UserTextOrigin {
+  readonly agent: Agent
+  readonly agentId: string
+  readonly generation: number
+  readonly cwd: string
+  readonly fs: MentionFs | undefined
+  readonly attachments: MentionAttachments | undefined
+  readonly stagedImages: ReadonlyMap<string, ChannelImageBlock['attachment']>
+}
 
 /** Input FIFO, staged attachments and decision notice timers share one lifetime. */
 export function createInputDelivery(
  ctx: Context, owner: ChannelOwner, binding: { readonly agent: Agent },
  state: () => Pick<ChannelState, 'cwd' | 'agentId' | 'agentBindingGeneration'>,
  notify: ChannelState['notify'],
- trackPending: (message: { id: string; text: string }, placement: PendingMessage['placement']) => void,
+ trackPending: (message: { id: string; text: string; images?: readonly ComposerImageRef[] }, placement: PendingMessage['placement']) => void,
  untrackPending: (id: string) => void,
+ composer: ComposerImages,
 ) {
   /**
    * `@` file mentions (issue #15): expansion reads files asynchronously, so
    * every user-text delivery (submit / steer / interrupt-requeue) funnels
    * through this chain to keep the send order FIFO.
    */
-  let sendChain: Promise<void> = Promise.resolve()
-  let stagedImageSequence = 0
-  const stagedImages = new Map<string, ChannelImageBlock['attachment']>()
-  const clearStagedImages = (): void => {
-    stagedImages.clear()
-    stagedImageSequence = 0
-  }
+  let inputChain: Promise<void> = Promise.resolve()
+
+  /** D-6 fence: the submission belongs to the session it was typed in. */
+  const current = (origin: UserTextOrigin): boolean =>
+    owner.current() && binding.agent === origin.agent && state().agentBindingGeneration === origin.generation
+
+  /** D-6: bind the submission to the session it was typed in AT ENQUEUE
+   *  TIME. The FIFO chain may park this task behind a slow predecessor
+   *  while the user /new's away — capturing the agent at run time would
+   *  adopt the NEW session as this text's origin and deliver the old
+   *  conversation's words into it. */
+  const captureOrigin = (): UserTextOrigin => ({
+    agent: binding.agent,
+    agentId: state().agentId,
+    generation: state().agentBindingGeneration,
+    cwd: state().cwd,
+    fs: mentionFs(ctx),
+    attachments: mentionAttachments(ctx),
+    stagedImages: composer.snapshot(),
+  })
+
   /**
    * Expand the text's `@` mentions and deliver ONE user message: the typed
    * text stays the first content block (the transcript bubble renders it —
    * never the file dump) and each resolved reference appends a model-facing
    * attachment block. The pending preview tracks the typed text.
    */
-  const deliverUserText = (text: string, placement: PendingMessage['placement']): void => {
-    const origin = binding.agent
-    const generation = state().agentBindingGeneration
-    const cwd = state().cwd
-    const images = new Map(stagedImages)
-    const current = () => owner.current() && binding.agent === origin && state().agentBindingGeneration === generation
-    sendChain = sendChain.then(async () => {
-      if (!current()) return
-      const expansion = await expandMentions(
-        mentionFs(ctx),
-        cwd,
-        text,
-        mentionAttachments(ctx),
-        images,
-      )
-      if (!current()) return
-      const message = createUserMessage({
-        content: expansion.blocks,
-        source: { kind: 'user' },
-      })
-      // Track BEFORE the agent call: a synchronous throw inside
-      // followup/steer rolls the preview back; otherwise the inbox events
-      // retire it once the message is claimed or discarded.
-      trackPending({ id: message.id, text }, placement)
-      try {
-        if (placement === 'steer') origin.steer(message)
-        else origin.followup(message)
-      } catch (error) {
-        untrackPending(message.id)
-        throw error
-      }
-      if (expansion.attached.length > 0) {
-        notify(t('mentions-attached', { count: expansion.attached.length }), { timeoutMs: 2500 })
-      }
-      if (expansion.missing.length > 0) {
-        notify(t('mentions-missing', { paths: expansion.missing.map(path => `@${path}`).join(' ') }), {
-          color: 'warning',
-          timeoutMs: 4000,
-        })
-      }
-    }).catch((error: unknown) => {
-      if (!current()) return
-      // The chain must survive a failed send: log and notify, then continue
-      // with the next queued delivery.
-      const message = error instanceof Error ? error.message : String(error)
-      logForDebugging(`submit: delivery failed (${message})`)
-      notify(t('send-failed', { err: message }), { color: 'error' })
+  const deliverUserText = async (
+    text: string,
+    placement: PendingMessage['placement'],
+    images: readonly ComposerImageRef[],
+    origin: UserTextOrigin,
+  ): Promise<void> => {
+    const orderedImages = orderedComposerImages(text, images, origin.stagedImages)
+    // A `[Image #N]` placeholder whose staging was evicted (FIFO cap) or
+    // whose draft capability was lost (history/rewind/session switch) would
+    // otherwise ship as plain text with no image attached — warn loudly,
+    // deliver unchanged (the text is the user's; rewriting is worse).
+    const stale = firstStaleComposerToken(text, orderedImages)
+    if (stale !== undefined) {
+      notify(t('input-image-token-stale', { token: stale }), { color: 'warning', timeoutMs: 5000 })
+    }
+    const expansion = await expandComposerMentions(
+      origin.fs,
+      origin.cwd,
+      text,
+      origin.attachments,
+      orderedImages,
+    )
+    // Mention reads can park for arbitrary I/O. A session switch during that
+    // await invalidates the whole submission; neither the old nor the new
+    // agent may receive a message assembled for a different conversation.
+    if (!current(origin)) {
+      notify(t('ext-stale-dropped'), { color: 'warning', timeoutMs: 4000 })
+      return
+    }
+    const message = createUserMessage({
+      content: expansion.blocks,
+      source: { kind: 'user' },
     })
+    // Track BEFORE the agent call: a synchronous throw inside
+    // followup/steer rolls the preview back; otherwise the inbox events
+    // retire it once the message is claimed or discarded.
+    trackPending({ id: message.id, text, images }, placement)
+    try {
+      if (placement === 'steer') origin.agent.steer(message)
+      else origin.agent.followup(message)
+    } catch (error) {
+      untrackPending(message.id)
+      throw error
+    }
+    if (expansion.attached.length > 0) {
+      notify(t('mentions-attached', { count: expansion.attached.length }), { timeoutMs: 2500 })
+    }
+    if (expansion.missing.length > 0) {
+      notify(t('mentions-missing', { paths: expansion.missing.map(formatMissingReference).join(' ') }), {
+        color: 'warning',
+        timeoutMs: 4000,
+      })
+    }
   }
   /**
    * RFC 0005 D-8: a flow parked on a plugin decision must be user-observable.
@@ -127,30 +174,35 @@ export function createInputDelivery(
    * stale text with a notice instead of sending the old conversation's
    * words to the new session.
    */
-  let inputChain: Promise<void> = Promise.resolve()
   const runUserTextDecision = async (
     text: string,
     placement: PendingMessage['placement'],
-    originAgent: Agent,
-    originAgentId: string,
-    generation: number,
-    cwd: string,
+    images: readonly ComposerImageRef[],
+    origin: UserTextOrigin,
   ): Promise<void> => {
-    const current = () => owner.current() && binding.agent === originAgent && state().agentBindingGeneration === generation
-    if (!current()) return
     // Stale detection compares the AGENT REFERENCE, not the id: session ids
     // are reusable (A → /new → /resume A lands back on the same id with a
     // fresh agent), so an id check has an ABA hole. Both origin values are
     // ENQUEUE-time captures (see dispatchUserText): a decision parked behind
     // a slow predecessor must still be judged against the session its text
     // was typed in, not whichever session is live when it finally runs.
+    const dropIfStale = (): boolean => {
+      if (current(origin)) return false
+      notify(t('ext-stale-dropped'), { color: 'warning', timeoutMs: 4000 })
+      return true
+    }
+    // A follower can wait behind an older slow decision while /new replaces
+    // the session. Do not even expose that stale text to plugins.
+    if (dropIfStale()) return
     const decision = await withDecisionPending('tui/input', dispatchTuiDecision(ctx, 'tui/input', {
       text,
       delivery: placement === 'steer' ? 'steer' : 'followup',
-      sessionId: originAgentId,
-      cwd,
+      sessionId: origin.agentId,
+      cwd: origin.cwd,
     }, normalizeInputDecision))
-    if (!current()) return
+    // Staleness wins over cancel/handled: an old plugin result must neither
+    // toast into nor claim input from the replacement session.
+    if (dropIfStale()) return
     if (decision !== undefined) {
       // Both intercepts toast — a bare {cancel}/{handled} must not make the
       // typed line vanish silently (the host-localized fallback mirrors the
@@ -165,58 +217,50 @@ export function createInputDelivery(
       }
       text = decision.text.trim()
     }
-    if (binding.agent !== originAgent) {
-      notify(t('ext-stale-dropped'), { color: 'warning', timeoutMs: 4000 })
-      return
+    try {
+      await deliverUserText(text, placement, images, origin)
+    } catch (error: unknown) {
+      // The FIFO must survive a failed expansion/send: surface it, then let
+      // the next input proceed through the settled inputChain.
+      const message = error instanceof Error ? error.message : String(error)
+      logForDebugging(`submit: delivery failed (${message})`)
+      notify(t('send-failed', { err: message }), { color: 'error' })
     }
-    deliverUserText(text, placement)
   }
-  const dispatchUserText = (text: string, placement: PendingMessage['placement']): void => {
-    // D-6: bind the submission to the session it was typed in AT ENQUEUE
-    // TIME. The FIFO chain may park this task behind a slow predecessor
-    // while the user /new's away — capturing the agent at run time would
-    // adopt the NEW session as this text's origin and deliver the old
-    // conversation's words into it.
-    const originAgent = binding.agent
-    const originAgentId = state().agentId
-    const generation = state().agentBindingGeneration
-    const cwd = state().cwd
-    inputChain = inputChain.then(() => runUserTextDecision(text, placement, originAgent, originAgentId, generation, cwd)).catch((error: unknown) => {
+  const dispatchUserText = (
+    text: string,
+    placement: PendingMessage['placement'],
+    images: readonly ComposerImageRef[] = [],
+  ): void => {
+    const origin = captureOrigin()
+    const capturedImages = composer.captureDraftImages(text, images)
+    inputChain = inputChain.then(() => runUserTextDecision(text, placement, capturedImages, origin)).catch((error: unknown) => {
       // The chain must survive a failed decision: log, then continue with
       // the next queued submission.
       ctx.logger.warn('dsh-tui: tui/input dispatch failed: %o', error)
     })
   }
+  /** Public companion for callers that own a line but not a draft (skill
+   *  registrations): same decision pass and FIFO as a typed submit. */
+  const deliverUserTextNow = (
+    text: string,
+    placement: PendingMessage['placement'],
+    images: readonly ComposerImageRef[] = [],
+  ): void => dispatchUserText(text, placement, images)
+  /** Main's `clearStagedImages`: revoke capabilities AND release the FIFO so
+   *  a task parked on the replaced session cannot wedge the new one. */
+  const clearStagedImages = (): void => {
+    composer.clearStagedImages()
+    inputChain = Promise.resolve()
+  }
 
-  async function stageImage(input: StagedImageInput): Promise<string> {
-      owner.assertActive()
-      const origin = binding.agent
-      const generation = state().agentBindingGeneration
-      const attachments = mentionAttachments(ctx)
-      if (attachments === undefined) throw new Error('image attachments are unavailable in this profile')
-      if (!attachments.imageLimits.mediaTypes.includes(input.mediaType)) {
-        throw new Error(`${input.mediaType} images are not accepted by this profile`)
-      }
-      if (input.data.byteLength > attachments.imageLimits.maxImageBytes) {
-        throw new Error(`image exceeds this profile's per-image size limit`)
-      }
-      const attachment = await attachments.saveImage(input)
-      owner.assertActive()
-      if (binding.agent !== origin || state().agentBindingGeneration !== generation) throw new Error('dsh-tui: stale image staging')
-      stagedImageSequence += 1
-      const token = `[Image #${stagedImageSequence}]`
-      stagedImages.set(token, attachment)
-      // References are content-addressed and durable. This map only connects
-      // editable prompt placeholders to them; cap it to bound a long TUI run.
-      while (stagedImages.size > 128) {
-        const oldest = stagedImages.keys().next().value as string | undefined
-        if (oldest === undefined) break
-        stagedImages.delete(oldest)
-      }
-      return token
-    }
   return {
-    dispatchUserText, deliverUserText, withDecisionPending, stageImage, clearStagedImages,
-    stagedImages: (): ReadonlyMap<string, ChannelImageBlock['attachment']> => new Map(stagedImages),
+    dispatchUserText,
+    deliverUserText: deliverUserTextNow,
+    withDecisionPending,
+    clearStagedImages,
+    stageImage: (input: StagedImageInput): Promise<string> => composer.stageImage(input),
+    stagedImages: (): ReadonlyMap<string, ChannelImageBlock['attachment']> => composer.snapshot(),
+    composer,
   }
 }

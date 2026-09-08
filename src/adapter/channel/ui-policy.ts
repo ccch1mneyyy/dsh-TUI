@@ -9,7 +9,7 @@ type MethodKeys<T> = { [K in keyof T]: T[K] extends (...args: never[]) => unknow
 export type ChannelPreferences = Pick<ChannelUi,
   | 'setDiffLayout' | 'setThinkingFold' | 'setToolBackground' | 'setScrollGutter'
   | 'setPageMargin' | 'setFoldTerminalCommand' | 'setPromptSessionLabel'
-  | 'setExpandEditor' | 'setSmoothStreaming' | 'setStatusBar' | 'setWhale' | 'setMinimal'
+  | 'setExpandEditor' | 'setSmoothStreaming' | 'setStatusBar' | 'setWhale' | 'setWhaleIdle' | 'setMinimal'
 >
 export const CHANNEL_UI_EFFECTS = Object.freeze({
   'setDiffLayout': 'mutate',
@@ -23,13 +23,21 @@ export const CHANNEL_UI_EFFECTS = Object.freeze({
   'setSmoothStreaming': 'mutate',
   'setStatusBar': 'mutate',
   'setWhale': 'mutate',
+  'setWhaleIdle': 'mutate',
   'setMinimal': 'mutate',
   'commandCompletions': 'mutate',
   'runExternalCommand': 'mutate',
+  'runExternalCommandOutcome': 'mutate',
   'openPluginScene': 'mutate',
   'closePluginScene': 'mutate',
   'sideQuestion': 'mutate',
+  'stagedImageGeneration': 'read-only',
   'stageImage': 'mutate',
+  'stageComposerImage': 'mutate',
+  'hasStagedImage': 'read-only',
+  'discardStagedImage': 'mutate',
+  'stagedImage': 'read-only',
+  'stagedImageLimits': 'read-only',
   'submit': 'mutate',
   'steer': 'mutate',
   'removePending': 'mutate',
@@ -51,8 +59,10 @@ export const CHANNEL_UI_EFFECTS = Object.freeze({
   'switchModel': 'mutate',
   'listEfforts': 'mutate',
   'setEffort': 'mutate',
+  'setDefaultEffort': 'mutate',
   'cycleMode': 'mutate',
   'permissionPresets': 'read-only',
+  'runPermissionPreset': 'mutate',
   'listPresets': 'read-only',
   'switchPreset': 'mutate',
   'clear': 'mutate',
@@ -147,6 +157,7 @@ export const CHANNEL_UI_PROPERTIES = [
   'smoothStreaming',
   'statusBar',
   'whale',
+  'whaleIdle',
   'minimal',
   'activityEnabled',
   'contextBarEnabled',

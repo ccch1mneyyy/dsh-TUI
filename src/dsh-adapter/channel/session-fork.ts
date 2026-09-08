@@ -1,10 +1,10 @@
 import type { AgentHandle, CreateAgentOptions } from '@deepseek-ai/dsh-agent'
 import type { Context } from '@deepseek-ai/cordis'
-import { SessionId, type SessionEvent } from '@deepseek-ai/dsh-session'
+import { SessionId, type Session, type SessionEvent } from '@deepseek-ai/dsh-session'
 import { randomUUID } from 'node:crypto'
 import { t } from '../../i18n.js'
 import { resolveDshProfileName } from '../../update.js'
-import { appendSessionTitle } from '../compat/index.js'
+import { appendSessionTitle, liveSessionCreateOptions, sliceLiveSessionSeed } from '../compat/index.js'
 import { composePreset, runningPresetOf } from '../presets.js'
 import { attachSessionToWorkspace } from '../workspace.js'
 import type { ChannelOwner } from './owner.js'
@@ -20,18 +20,15 @@ export function createForkSessionAction(
     owner: Pick<ChannelOwner, 'current'>
     settleCompaction(): Promise<void>
     notify: ChannelState['notify']
-    source(): { id: SessionId; events: readonly SessionEvent[] }
+    source(): Session
     createDetachedHandle(create: () => Promise<AgentHandle>): Promise<{ handle: AgentHandle; release(): Promise<void> }>
   },
 ) {
   return async (): Promise<boolean> => {
-    const sessions = ctx.get('sessions') as
-      | { fork(source: unknown, boundary?: number): { events: readonly SessionEvent[] } }
-      | undefined
     const agents = ctx.get('agents') as
       | { create(options: CreateAgentOptions): Promise<AgentHandle> }
       | undefined
-    if (!sessions || !agents) {
+    if (!agents) {
       deps.notify(t('fork-unavailable'), { color: 'error' })
       return false
     }
@@ -44,25 +41,30 @@ export function createForkSessionAction(
     const childId = SessionId(randomUUID())
     let seed: readonly SessionEvent[]
     try {
-      seed = sessions.fork(source).events
+      // No boundary: the whole (turn-closed) source log. Slice the SOURCE
+      // snapshot — sessions.fork() would register a child and append
+      // session/end-seed, so snapshot.length is not a lineage cut.
+      seed = sliceLiveSessionSeed(source)
     } catch (error) {
       deps.notify(t('fork-failed', { err: error instanceof Error ? error.message : String(error) }), { color: 'error' })
       return false
     }
-    const forkComposed = await composePreset(ctx, runningPresetOf(source as never))
+    const forkComposed = await composePreset(ctx, runningPresetOf(source))
     let detached: { handle: AgentHandle; release(): Promise<void> }
     try {
-      detached = await deps.createDetachedHandle(() => agents.create({
+      detached = await deps.createDetachedHandle(() => agents.create(liveSessionCreateOptions({
         sessionId: childId,
         seed,
-        meta: {
-          cwd: state.cwd,
-          seedLength: seed.length,
-          ...(forkComposed.agentPreset === undefined ? {} : { agentPreset: forkComposed.agentPreset }),
-        },
+        runtimeSession: source,
+        inheritedCount: seed.length,
+        cwd: state.cwd,
+        // NO parentSession: a /fork copy is an independent conversation
+        // (kimi-code semantics), not a rewind branch — recording lineage
+        // would fold it into the source's family in /resume.
+        agentPreset: forkComposed.agentPreset,
         agentOptions: { provider: state.provider, model: state.model },
-        ...(forkComposed.setup === undefined ? {} : { setup: forkComposed.setup }),
-      }))
+        setup: forkComposed.setup,
+      })))
     } catch {
       deps.notify(t('fork-create-failed'), { color: 'error' })
       return false

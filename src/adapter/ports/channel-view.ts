@@ -14,6 +14,8 @@ export interface ChatRow {
   /** Actual execution location for `!command` rows. */
   executionTarget?: string
   text: string
+  /** Durable session image blocks, loaded lazily through the attachment store. */
+  images?: readonly TranscriptImage[]
   /** True while an assistant step is still streaming chunks. */
   streaming?: boolean
   /** Present on `tool` rows; the card model. */
@@ -333,6 +335,7 @@ export interface LoadedContextTool {
 export interface PendingMessage {
   id: string
   text: string
+  images: readonly ComposerImageRef[]
   placement: 'steer' | 'followup'
 }
 
@@ -377,7 +380,56 @@ export interface StagedImageInput {
   data: Uint8Array
   mediaType: ChannelImageMediaType
   name?: string
+  /** Absolute local path the bytes were read from, for the preview card's
+   *  path row. Not handed to the attachment store and never persisted. */
+  path?: string
 }
+
+/** UI-safe facade for one durable image block in the session transcript. */
+export interface TranscriptImage {
+  readonly id: string
+  readonly width: number
+  readonly height: number
+  readonly name?: string
+  /** Verified media type, when the durable reference carries one. */
+  readonly mediaType?: string
+  /** Stored byte size, when the durable reference carries one. */
+  readonly bytes?: number
+  /**
+   * Absolute local path the bytes were staged from in THIS process: a pasted
+   * or dropped file, or the clipboard bitmap's temp export. Display-only and
+   * never persisted — the durable event carries a content hash, so images
+   * restored from the session log have none.
+   */
+  readonly path?: string
+  read(signal?: AbortSignal): Promise<Uint8Array>
+}
+
+/** Opaque capability returned for one staged composer image. The visible
+ * `[Image #N]` label is deliberately absent: PromptInput owns presentation
+ * numbering while this id is the non-reusable attachment identity. */
+export interface StagedImageHandle {
+  readonly stageId: string
+}
+
+/** One visible composer token bound to its opaque staged-image capability. */
+export interface ComposerImageRef {
+  readonly token: string
+  readonly stageId: string
+}
+
+/** Text plus the image capabilities that belong to that exact draft. */
+export interface ComposerSubmission {
+  readonly text: string
+  readonly images?: readonly ComposerImageRef[]
+}
+
+/** UI-safe projection of one settled DSH registry command. Keeping the
+ * result kind across the adapter boundary lets the composer retain a
+ * rejected image draft instead of treating the error text as success. */
+export type ExternalCommandOutcome =
+  | { readonly kind: 'success'; readonly text: string; readonly consumeDraft: true }
+  | { readonly kind: 'error'; readonly text: string; readonly consumeDraft: boolean }
 
 /** The observable outcome of adopting a persisted session. */
 export type ResumeResult =

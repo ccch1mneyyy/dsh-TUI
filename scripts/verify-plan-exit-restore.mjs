@@ -61,11 +61,11 @@ function makeEnv({ withApproval = true, noopApproval = false, deferredPlan = fal
       // CommandRuntime.find returns the stable definition stored in its scoped
       // layer. Keep the fixture faithful: command dispatch re-checks this
       // exact effective definition after async image preparation.
-      planDefinition: { name: 'plan', description: 'Toggle plan mode', handler() {} },
+      planDefinition: planCommand,
       find(_agent, name) {
         return name === 'plan' ? this.planDefinition : undefined
       },
-      execute: async (agent, line, _signal) => {
+      execute: async (agent, line, _images, _signal) => {
         commands.push(line)
         if (line.startsWith('/plan')) {
           const active = !line.startsWith('/plan off')

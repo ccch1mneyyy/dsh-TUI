@@ -2,7 +2,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import { ReasoningEffortId, type LlmModelInfo } from '@deepseek-ai/dsh-llm'
 import type { Agent, ModelSelectionRef } from '@deepseek-ai/dsh-agent'
 import type { CommandCompletionNode } from '../../commands.js'
-import { readEffortPref, writeEffortPref } from '../../effortPrefs.js'
+import { readEffortPref, resolveEffortDefault, writeEffortPref } from '../../effortPrefs.js'
 import { getLang, t, tOr, type Lang } from '../../i18n.js'
 import { migratePresetPref, writePresetPref } from '../../presetPrefs.js'
 import { resolveCompatiblePreset, rosterOf, type AgentPresetInfo } from '../preset-resolution.js'
@@ -124,6 +124,19 @@ export function createModelActions(
     applyEffort(found, capture)
     return effortCurrent(capture)
   }
+  /**
+   * Re-seat the future-sessions default reasoning effort. `id` is the settings
+   * user layer (the settings user layer outranks the cordis.yml `effort` pin);
+   * an absent level re-derives the boot chain (cordis `effort` → the persisted
+   * /effort choice). Also re-pins the live agent when its route offers the
+   * level, so the change lands on the next request. No-op when unchanged.
+   */
+  const setDefaultEffort = (id: string | undefined): void => {
+    const resolved = resolveEffortDefault(id, deps.initialEffort, readEffortPref())
+    if (resolved === preferredEffort) return
+    preferredEffort = resolved
+    void applyPreferredEffort()
+  }
   const warmEffortLevels = (): void => {
     if (state.effortLevels !== undefined || effortWarm.tried) return
     effortWarm.tried = true
@@ -202,5 +215,5 @@ export function createModelActions(
     if (!writePresetPref(target.id)) { notify(t('preset-switched-pref-failed', { id: target.id }), { color: 'warning' }); return true }
     notify(t('preset-switched-saved', { id: target.id }), { color: 'success' }); return true
   }
-  return { selection, applyPreferredEffort, refreshEffortLevels, listEfforts, setEffort, warmEffortLevels, listModels, listProviders, dropModelNodeCache, warmModelNodes, modelNodes: () => modelNodeCache.nodes ?? [], warmPresetOptions, presetOptions: () => presetOptionCache.list ?? [], listPresets, switchPreset }
+  return { selection, applyPreferredEffort, refreshEffortLevels, listEfforts, setEffort, setDefaultEffort, warmEffortLevels, listModels, listProviders, dropModelNodeCache, warmModelNodes, modelNodes: () => modelNodeCache.nodes ?? [], warmPresetOptions, presetOptions: () => presetOptionCache.list ?? [], listPresets, switchPreset }
 }

@@ -1,25 +1,34 @@
 /** Input actions own cancellation/requeue convergence, not session binding. */
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import { MessageId } from '@deepseek-ai/dsh-llm'
+import { t } from '../../i18n.js'
 import { touchSession } from '../../sessionHistory.js'
-import type { ChannelState } from './types.js'
+import type { ChannelState, ComposerImageRef, ComposerSubmission } from './types.js'
 
 export interface InputConvergence { cancelInFlight: boolean; interruptSeq: number }
 export function createInputActions(
-  getState: () => Pick<ChannelState, 'agentId' | 'pending' | 'cancelPending' | 'emit'>,
+  getState: () => Pick<ChannelState, 'agentId' | 'pending' | 'cancelPending' | 'emit' | 'notify'>,
   getAgent: () => Agent,
   owner: { assertActive(): void },
   input: InputConvergence,
-  dispatchUserText: (text: string, placement: 'steer' | 'followup') => void,
+  composer: { includeLegacyImageRefs(text: string, images: readonly ComposerImageRef[]): readonly ComposerImageRef[] },
+  dispatchUserText: (text: string, placement: 'steer' | 'followup', images?: readonly ComposerImageRef[]) => void,
   runLocalCommand: (command: string, includeInContext: boolean) => Promise<void>,
 ): Pick<ChannelState, 'submit' | 'steer' | 'removePending' | 'cancel' | 'interruptAndDeliver'> {
   return {
-    submit(text) {
+    submit(text, images = []) {
       owner.assertActive()
       const state = getState()
-      const agent = getAgent()
       const trimmed = text.trim()
       if (!trimmed) return
+      const submittedImages = composer.includeLegacyImageRefs(trimmed, images)
+      // Non-UI callers do not pass through PromptInput's admission guard.
+      // Shell routes have no image grammar: reject loudly before spawning
+      // anything rather than silently ignoring the supplied capabilities.
+      if (submittedImages.length > 0 && trimmed.startsWith('!')) {
+        state.notify(t('shell-images-unsupported'), { color: 'warning', timeoutMs: 4000 })
+        return
+      }
       // Claude Code's `!` mode: `!cmd` runs locally and only shows the
       // output; `!!cmd` additionally sends the output to the model as a
       // user message (CC's <bash-stdout> convention).
@@ -34,16 +43,15 @@ export function createInputActions(
       // The current session is being used — move it to the MRU front
       // (/resume sorts by last-used).
       touchSession(state.agentId)
-      void dispatchUserText(trimmed, 'followup')
+      dispatchUserText(trimmed, 'followup', submittedImages)
     },
 
     /** Steer a message into the RUNNING turn (Codex/pi semantics): it is
      *  injected at the next step boundary of the current turn and the agent
      *  continues without stopping — faster than followup, never an abort. */
-    steer(text) {
+    steer(text, images = []) {
       owner.assertActive()
       const state = getState()
-      const agent = getAgent()
       const trimmed = text.trim()
       if (!trimmed) return
       touchSession(state.agentId)
@@ -53,7 +61,7 @@ export function createInputActions(
       // rejected step leaves it parked for the next wake, and the inbox
       // events retire the preview (claimed → turn boundary, discarded →
       // cancel).
-      void dispatchUserText(trimmed, 'steer')
+      dispatchUserText(trimmed, 'steer', images)
     },
 
     /** Pull a pending message back out of the inbox (Alt+Up): it returns to
@@ -91,14 +99,18 @@ export function createInputActions(
       agent.cancel({ kind: 'user' }, { keepInbox: true })
     },
 
-    interruptAndDeliver(texts: readonly string[]): number {
+    interruptAndDeliver(inputs: readonly (string | ComposerSubmission)[]): number {
       owner.assertActive()
       const state = getState()
       const agent = getAgent()
-      const queued = texts.map(text => text.trim()).filter(text => text !== '')
+      const queued = inputs
+        .map(input => typeof input === 'string'
+          ? { text: input.trim(), images: [] as readonly ComposerImageRef[] }
+          : { text: input.text.trim(), images: [...(input.images ?? [])] })
+        .filter(input => input.text !== '')
       if (queued.length === 0) return 0
       // No keepInbox: the parked copies are dropped (their discard events
-      // retire the preview), then each text is re-queued as a fresh
+      // retire the preview), then each message is re-queued as a fresh
       // followup. dsh-agent's cancel-convergence wake latch accepts this
       // wake immediately after cancel and starts it once the aborted turn
       // retires; waiting for whenIdle is unsafe because it also follows
@@ -115,12 +127,12 @@ export function createInputActions(
         // A second interrupt while the abort is still settling must not
         // double-deliver: only the latest request's re-queue runs.
         if (input.interruptSeq !== token) return
-        for (const text of queued) {
+        for (const entry of queued) {
           touchSession(state.agentId)
           // Same tui/input decision pass as a typed submit: Ctrl+Enter must
           // not bypass a plugin's cancel/transform policy, and re-queued
           // texts keep submission order through the one FIFO chain.
-          dispatchUserText(text, 'followup')
+          dispatchUserText(entry.text, 'followup', entry.images)
         }
       }
       // Let cancel finish its synchronous inbox bookkeeping before waking.

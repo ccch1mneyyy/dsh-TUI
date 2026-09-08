@@ -3,6 +3,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import { SessionId, type SessionEvent } from '@deepseek-ai/dsh-session'
 import { randomUUID } from 'node:crypto'
 import { t } from '../../i18n.js'
+import { liveSessionCreateOptions, liveSessionOffset, sliceLiveSessionSeed, snapshotLiveSessionEvents } from '../compat/index.js'
 import { dispatchTuiDecision } from '../extension-events.js'
 import { normalizeRewindDoneSummary } from './decisions.js'
 import { composePreset, runningPresetOf } from '../presets.js'
@@ -15,13 +16,13 @@ type Binding = ReturnType<typeof createChannelBinding>
 type RewindState = Pick<ChannelState, 'working' | 'cwd' | 'provider' | 'model'>
 
 async function waitForTurnEnd(
-  session: { seq: number; events: readonly SessionEvent[] },
+  session: unknown,
   fromSeq: number,
   timeoutMs: number,
 ): Promise<boolean> {
   const deadline = Date.now() + timeoutMs
   while (Date.now() < deadline) {
-    const last = session.events.at(-1)
+    const last = snapshotLiveSessionEvents(session).at(-1)
     if (last !== undefined && last.type === 'turn/end' && last.seq >= fromSeq) return true
     await new Promise(resolve => setTimeout(resolve, 200))
   }
@@ -44,14 +45,13 @@ export function createRewindToAction(
   return async (row: ChatRow, mode: string | null = null): Promise<string | null> => {
     if (row.seq === undefined) return null
     const adoption = deps.binding.capture()
-    const sessions = ctx.get('sessions') as { fork(source: unknown, boundary?: number): { events: readonly SessionEvent[] } } | undefined
     const agents = ctx.get('agents') as { create(options: CreateAgentOptions): Promise<AgentHandle> } | undefined
-    if (!sessions || !agents) {
+    if (!agents) {
       deps.notify(t('rewind-unavailable'), { color: 'error' })
       return null
     }
     const wasWorking = state.working
-    const cancelSeq = deps.binding.agent.session.seq
+    const cancelSeq = liveSessionOffset(deps.binding.agent.session)
     if (wasWorking) deps.binding.agent.cancel({ kind: 'user' })
     if (wasWorking && !await waitForTurnEnd(deps.binding.agent.session, cancelSeq, 30000)) {
       deps.notify(t('rewind-settling'), { color: 'error' })
@@ -59,7 +59,7 @@ export function createRewindToAction(
     }
     await deps.settleCompaction()
     const childId = SessionId(randomUUID())
-    const events = deps.binding.agent.session.events
+    const events = snapshotLiveSessionEvents(deps.binding.agent.session)
     let boundary = row.seq
     for (let i = row.seq; i >= 0; i--) {
       const event = events[i]
@@ -70,7 +70,11 @@ export function createRewindToAction(
     let seed: readonly SessionEvent[]
     try {
       if (boundary < 0) throw new Error('cannot rewind to the very first message')
-      seed = sessions.fork(deps.binding.agent.session, boundary).events
+      // Slice the SOURCE snapshot through an inclusive seq. Never
+      // sessions.fork(): that registers a real child whose snapshot includes
+      // child-owned session/end-seed, so snapshot.length is not the inherited
+      // cut. agents.create owns the new session id.
+      seed = sliceLiveSessionSeed(deps.binding.agent.session, boundary)
     } catch (error) {
       deps.notify(t('rewind-fork-failed', { err: error instanceof Error ? error.message : String(error) }), { color: 'error' })
       return null
@@ -78,18 +82,17 @@ export function createRewindToAction(
     const composed = await composePreset(ctx, runningPresetOf(deps.binding.agent.session))
     let handle: AgentHandle
     try {
-      handle = await deps.binding.prepare(adoption, () => agents.create({
+      handle = await deps.binding.prepare(adoption, () => agents.create(liveSessionCreateOptions({
         sessionId: childId,
         seed,
-        meta: {
-          cwd: state.cwd,
-          parentSession: deps.binding.agent.session.id,
-          seedLength: seed.length,
-          ...(composed.agentPreset === undefined ? {} : { agentPreset: composed.agentPreset }),
-        },
+        runtimeSession: deps.binding.agent.session,
+        inheritedCount: seed.length,
+        cwd: state.cwd,
+        parentSession: deps.binding.agent.session.id,
+        agentPreset: composed.agentPreset,
         agentOptions: { provider: state.provider, model: state.model },
-        ...(composed.setup === undefined ? {} : { setup: composed.setup }),
-      }))
+        setup: composed.setup,
+      })))
     } catch {
       deps.notify(t('rewind-create-failed'), { color: 'error' })
       return null

@@ -120,7 +120,7 @@ let subscriberOutput = ''
 const stopRead = mount.channel.subscribe(() => {
   subscriberOutput = mount.channel.rows.find(row => row.kind === 'subagent')?.subagent?.outputLines.join('') ?? ''
 })
-await sleep(40)
+await sleep(40) // 固定窗:墙钟 等帧对齐 flush 落定（16ms 窗口本身是被测语义）
 const afterFlush = mount.channel.rows.find(row => row.kind === 'subagent')?.subagent?.outputLines.join('')
 check('deferred read-before-flush receives a fresh production snapshot', beforeFlush !== `${expected}${deferredText}` && afterFlush === `${expected}${deferredText}` && subscriberOutput === `${expected}${deferredText}`)
 stopRead()

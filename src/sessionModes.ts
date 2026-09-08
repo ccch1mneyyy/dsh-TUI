@@ -155,3 +155,15 @@ export function modeDisplayName(spec: SessionModeSpec): string {
   if (spec.id === 'full') return t('mode-full')
   return spec.id
 }
+
+/**
+ * One dynamic Shift+Tab entry for a runtime permission preset. The id is
+ * namespaced so it can never collide with a configured mode id, the label
+ * carries the registry's display name, and the entry declares NO atoms: a
+ * dynamic preset is selected through its durable `permission/preset`
+ * identity only, never by an atom wildcard match (which would steal the
+ * indicator on sessions that never held that identity).
+ */
+export function permissionModeSpec(option: PermissionRosterOptionLike): SessionModeSpec {
+  return { id: `permission:${option.value}`, label: option.name, permission: option.value }
+}
