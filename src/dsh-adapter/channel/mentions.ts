@@ -2,6 +2,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import { extname, isAbsolute, join } from 'node:path'
 import { extractMentions } from '../../utils/mentions.js'
 import { basename } from './paths.js'
+import { COMPOSER_IMAGE_TOKEN } from './composer-images.js'
 import type { MentionAttachments, MentionExpansion, MentionFs, MentionImageBlock, MentionImageMediaType, ResolvedMention } from './types.js'
 
 /** One attached file's contribution is capped so an absent-minded `@` of a
@@ -72,11 +73,65 @@ export async function expandMentions(
   let budget = MENTION_MAX_TOTAL_CHARS
   let imageCount = 0
   let imageBytes = 0
-  if (fs !== undefined) {
-    for (const mention of mentions) {
+  type ExpansionReference =
+    | { kind: 'mention'; start: number; mention: (typeof mentions)[number] }
+    | { kind: 'staged-image'; start: number; token: string; attachment: MentionImageBlock['attachment'] }
+  const references: ExpansionReference[] = fs === undefined
+    ? []
+    : mentions.map(mention => ({ kind: 'mention', start: mention.start, mention }))
+  if (stagedImages !== undefined) {
+    const seen = new Set<string>()
+    for (const match of text.matchAll(COMPOSER_IMAGE_TOKEN)) {
+      const token = match[0]
+      if (seen.has(token)) continue
+      seen.add(token)
+      const attachment = stagedImages.get(token)
+      if (attachment === undefined) continue
+      references.push({
+        kind: 'staged-image',
+        start: match.index,
+        token,
+        attachment,
+      })
+    }
+  }
+  references.sort((a, b) => a.start - b.start)
+
+  // `@image` files and staged `[Image #N]` capabilities share one admission
+  // queue. The earliest reference in the user's text wins both the per-
+  // message count and byte budgets, and image blocks preserve that order.
+  for (const reference of references) {
+    if (reference.kind === 'staged-image') {
+      const { attachment, token } = reference
+      // A referenced-but-dropped staged image must be loud: silently sending
+      // the bare token would leave the user believing the image reached the
+      // model. Reuse the missing-mention warning channel.
+      if (attachments === undefined) {
+        missing.push(token)
+        continue
+      }
+      const limits = attachments.imageLimits
+      if (
+        imageCount >= limits.maxImagesPerMessage
+        || imageBytes + attachment.bytes > limits.maxMessageImageBytes
+        || !limits.mediaTypes.includes(attachment.mediaType)
+      ) {
+        missing.push(token)
+        continue
+      }
+      blocks.push({ type: 'image', attachment })
+      imageCount += 1
+      imageBytes += attachment.bytes
+      continue
+    }
+
+    if (fs === undefined) continue
+    const { mention } = reference
     const display = mention.literal ?? mention.path
     const imageMediaType = mentionImageMediaType(mention.path)
-    if (budget <= 0 && imageMediaType === undefined) break
+    // A depleted text budget must not hide a later image reference: image
+    // admission has independent limits and still follows source order.
+    if (budget <= 0 && imageMediaType === undefined) continue
     // Mentions resolve against the session cwd, same as the model-facing fs
     // tools; absolute paths pass through untouched. A `#L12-14` line suffix
     // (issue #359) is stripped before resolution; when the stripped path
@@ -189,27 +244,6 @@ export async function expandMentions(
     }
     // Absent (stat → undefined) or a special file.
     missing.push(display)
-    }
-  }
-  if (attachments !== undefined && stagedImages !== undefined) {
-    const limits = attachments.imageLimits
-    for (const [token, attachment] of stagedImages) {
-      if (!text.includes(token)) continue
-      // A referenced-but-dropped staged image must be loud: silently sending
-      // the bare token would leave the user believing the image reached the
-      // model. Reuse the missing-mention warning channel.
-      if (
-        imageCount >= limits.maxImagesPerMessage
-        || imageBytes + attachment.bytes > limits.maxMessageImageBytes
-        || !limits.mediaTypes.includes(attachment.mediaType)
-      ) {
-        missing.push(token)
-        continue
-      }
-      blocks.push({ type: 'image', attachment })
-      imageCount += 1
-      imageBytes += attachment.bytes
-    }
   }
   return { blocks, attached, missing }
 }
