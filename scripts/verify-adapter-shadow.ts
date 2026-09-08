@@ -755,6 +755,7 @@ try {
   } = await import('../src/dsh-adapter/command-trees.js')
   const {
     TuiWorkspaceRuntime,
+    getHostWorkspaceRuntime,
   } = await import('../src/dsh-adapter/workspaces.js')
   const {
     TuiDialogRuntime,
@@ -787,6 +788,23 @@ try {
   assert.throws(() => p3Toast.show('x'), /shadow policy denies/)
   assert.throws(() => p3CommandTrees.register({ root: 'x', children: () => [] } as never), /shadow policy denies/)
   await assert.rejects(p3Workspaces.rename('x', 'y'), /shadow policy denies/)
+  // The Channel mutates workspaces through the host facade, not through the
+  // guarded public service surface, so the facade must enforce the same
+  // policy (review finding: workspace host facade bypassed shadow policy).
+  const workspaceHost = getHostWorkspaceRuntime(p3Workspaces)
+  assert.ok(workspaceHost !== undefined, 'passive root must expose the workspace host facade')
+  const denied = async (label: string, run: () => unknown): Promise<void> => {
+    let message = ''
+    try {
+      await run()
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error)
+    }
+    assert.match(message, /shadow policy denies/, `${label} must be denied by shadow policy`)
+  }
+  await denied('facade commandShell', () => workspaceHost!.commandShell(process.cwd()))
+  await denied('facade rename', () => workspaceHost!.rename(process.cwd(), 'x'))
+  await denied('facade runCommand', () => workspaceHost!.runCommand('x', '', process.cwd()))
   assert.throws(() => p3Dialogs.select({ title: 'x', options: [] } as never), /shadow policy denies/)
   assert.throws(() => p3Questions.ask({ questions: [] } as never), /shadow policy denies/)
   assert.throws(() => p3Approvals.park({ toolName: 'x' } as never), /shadow policy denies/)
@@ -897,6 +915,7 @@ try {
   } = await import('../src/dsh-adapter/command-trees.js')
   const {
     TuiWorkspaceRuntime,
+    getHostWorkspaceRuntime,
   } = await import('../src/dsh-adapter/workspaces.js')
   const {
     TuiDialogRuntime,
@@ -929,6 +948,23 @@ try {
   assert.throws(() => p3Toast.show('x'), /shadow policy denies/)
   assert.throws(() => p3CommandTrees.register({ root: 'x', children: () => [] } as never), /shadow policy denies/)
   await assert.rejects(p3Workspaces.rename('x', 'y'), /shadow policy denies/)
+  // The Channel mutates workspaces through the host facade, not through the
+  // guarded public service surface, so the facade must enforce the same
+  // policy (review finding: workspace host facade bypassed shadow policy).
+  const workspaceHost = getHostWorkspaceRuntime(p3Workspaces)
+  assert.ok(workspaceHost !== undefined, 'passive root must expose the workspace host facade')
+  const denied = async (label: string, run: () => unknown): Promise<void> => {
+    let message = ''
+    try {
+      await run()
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error)
+    }
+    assert.match(message, /shadow policy denies/, `${label} must be denied by shadow policy`)
+  }
+  await denied('facade commandShell', () => workspaceHost!.commandShell(process.cwd()))
+  await denied('facade rename', () => workspaceHost!.rename(process.cwd(), 'x'))
+  await denied('facade runCommand', () => workspaceHost!.runCommand('x', '', process.cwd()))
   assert.throws(() => p3Dialogs.select({ title: 'x', options: [] } as never), /shadow policy denies/)
   assert.throws(() => p3Questions.ask({ questions: [] } as never), /shadow policy denies/)
   assert.throws(() => p3Approvals.park({ toolName: 'x' } as never), /shadow policy denies/)
