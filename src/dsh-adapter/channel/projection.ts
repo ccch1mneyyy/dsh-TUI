@@ -8,6 +8,7 @@ import type { TuiRendererHost } from '../renderers.js'
 import { isSubagentToolName, parseJobOutputId, toolCommandOf, BACKGROUND_START_ACK, todoPanelItems } from './projection-helpers.js'
 import { ARGS_PREVIEW_LIMIT, harnessToolResultView, LOCAL_OUTPUT_LIMIT, prepareReplayEvents, preview, RESULT_PREVIEW_LIMIT, toolErrorText } from './transcript.js'
 import { estimateTokens, isTokenDelta, tokenDeltaChars, usageOutputTokens } from './usage.js'
+import { transcriptImagesOf, type TranscriptImage } from '../transcript-images.js'
 import { isPeakHour } from '../../deepseekPricing.js'
 import { t } from '../../i18n.js'
 import { logForDebugging } from '../../utils/debug.js'
@@ -27,6 +28,9 @@ interface ProjectionDependencies {
  notify: ChannelState['notify']
  tools?: ToolsRegistryLike
  renderer?: TuiRendererHost
+ /** DSH attachment service, resolved at call time (a late-mounted provider
+  *  must still serve images for rows projected earlier). */
+ attachments(): unknown
 }
 /** One authoritative reducer for both durable replay and live session events. */
 export function createChannelProjection(state: ProjectionState, deps: ProjectionDependencies) {
@@ -71,6 +75,11 @@ export function createChannelProjection(state: ProjectionState, deps: Projection
   const stepKey = (turn: number, step: number): string => `${turn}:${step}`
   const touchRow = (row: ChatRow): void => { markChannelReadDirty(row); markChannelReadDirty(state.rows) }
   const appendRow = (row: ChatRow): void => { state.rows.push(row); markChannelReadDirty(state.rows) }
+
+  /** Durable session image blocks, loaded lazily through the attachment
+   *  store. Projection never reads pixels; the UI decodes on demand. */
+  const transcriptImages = (content: readonly ContentBlock[] | undefined): readonly TranscriptImage[] =>
+    transcriptImagesOf(content, deps.attachments)
 
   /** Append a stream delta idempotently. Providers normally send a pure
    * delta, but reconnect/proxy paths can resend a cumulative prefix or a
@@ -417,9 +426,16 @@ export function createChannelProjection(state: ProjectionState, deps: Projection
         // renders direct human prompts only.
         if (event.data.source.kind !== 'user') break
         const text = firstTextOf(event.data.content)
-        if (text) {
-          appendRow({ id: deps.rowIds.value, kind: 'user', text, seq: event.seq })
-          state.lastUserText = text
+        const images = transcriptImages(event.data.content)
+        if (text || images.length > 0) {
+          appendRow({
+            id: deps.rowIds.value,
+            kind: 'user',
+            text,
+            ...(images.length === 0 ? {} : { images }),
+            seq: event.seq,
+          })
+          state.lastUserText = text || t('transcript-image-message', { count: images.length })
           // The context estimate counts everything sent to the model —
           // typed text AND the `@`-mention attachment blocks.
           state.contextSegments.prompt += estimateTokens(textOf(event.data.content))
@@ -487,6 +503,7 @@ export function createChannelProjection(state: ProjectionState, deps: Projection
         if (handledAssistantMessages.has(event.seq)) break
         handledAssistantMessages.add(event.seq)
         const text = textOf(event.data.message.content)
+        const images = transcriptImages(event.data.message.content)
         // Replay without chunk deltas (prepareReplayEvents drops settled
         // ones): rebuild the reasoning row from the sealed message's
         // reasoning blocks. Replay-only — gated on the `replaying` flag,
@@ -525,7 +542,7 @@ export function createChannelProjection(state: ProjectionState, deps: Projection
           ? stepKey(msgTurn, msgStep)
           : undefined
         const row = (msgKey !== undefined ? assistantRowsByStep.get(msgKey) : undefined) ?? streaming ??
-          (text
+          (text || images.length > 0
             ? ([...state.rows].reverse().find(candidate =>
                 candidate.kind === 'assistant' && candidate.seq === event.seq,
               ) ?? ensureStreaming(event.seq))
@@ -534,6 +551,7 @@ export function createChannelProjection(state: ProjectionState, deps: Projection
           if (msgKey !== undefined) assistantRowsByStep.set(msgKey, row)
           row.time = event.time
           if (text) row.text = text
+          row.images = images.length === 0 ? undefined : images
           row.streaming = false
           // Live settles keep the smooth-reveal cursor alive (a one-shot
           // non-streaming delivery still paints as a flow); replayed
@@ -689,6 +707,8 @@ export function createChannelProjection(state: ProjectionState, deps: Projection
       case 'tool/result': {
         const card = toolCards.get(event.data.message.source.callId)
         if (card !== undefined && card.tool !== undefined) {
+          const images = transcriptImages(event.data.message.content)
+          card.images = images.length === 0 ? undefined : images
           card.tool.durationMs = Math.max(0, Date.now() - card.tool.startedAt)
           const failure = event.data.error
           if (failure !== undefined) {

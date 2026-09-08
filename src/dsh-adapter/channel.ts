@@ -633,6 +633,7 @@ function createChannelWithOwner(
     agent: () => binding.agent, rowIds, resetContextWarning, pendingTaskDescriptions, jobs: jobStore, inputConvergence,
     checkContextWarning, notify: (...args) => notify(...args),
     tools: ctx.get('tools') as ToolsRegistryLike | undefined, renderer: rendererRuntime,
+    attachments: () => ctx.get('attachments'),
   })
   localActions = createLocalActions({
     ctx,
