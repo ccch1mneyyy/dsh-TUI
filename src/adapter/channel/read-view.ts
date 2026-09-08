@@ -44,6 +44,19 @@ export function createChannelReadView(check: (mutation: boolean) => void) {
       return result
     }
     if (value === null || typeof value !== 'object') return value
+    // Structural containers are detached below. Every other object is a leaf
+    // with its own identity and semantics — binary buffers, Date, Error, class
+    // instances, promises — and copying one key by key silently hollows it
+    // out: a projected transcript image reached sharp as a plain object and
+    // decoded as "Input file is missing" (rendered 无法预览). Date and RegExp
+    // get a faithful detached copy; everything else is shared as-is, because
+    // no copy preserves an opaque value and a hollow one is strictly worse.
+    if (!Array.isArray(value) && !(value instanceof Map) && !(value instanceof Set)) {
+      if (value instanceof Date) return new Date(value.getTime()) as T
+      if (value instanceof RegExp) return new RegExp(value.source, value.flags) as T
+      const proto = Object.getPrototypeOf(value)
+      if (proto !== Object.prototype && proto !== null) return value
+    }
     // An inner ChannelUi projection is safe immutable data, but an outer
     // production mount must still capture its own lifetime around nested
     // callbacks. Reuse purely structural data; walk callable graphs again.

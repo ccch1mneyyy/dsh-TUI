@@ -9,6 +9,7 @@ import { bindChannelCommands } from '../src/dsh-adapter/channel/commands.js'
 import { mountChannelUi } from '../src/dsh-adapter/channel-ui.js'
 import { registerTuiChannel } from '../src/adapter/channel/host-registry.js'
 import { CHANNEL_UI_EFFECTS } from '../src/adapter/channel/ui-policy.js'
+import { createChannelReadView } from '../src/adapter/channel/read-view.js'
 import { channelDriver } from '../src/adapter/upstream/channel-driver.js'
 import type { HostChannelPort } from '../src/adapter/ports/channel.js'
 import { TuiPluginHostRuntime, getHostFacade } from '../src/dsh-adapter/plugin-host.js'
@@ -684,6 +685,69 @@ for (const method of ['writeProfile', 'mutateProfile', 'removeProfile'] as const
   assert.ok(historicalReads <= 3, `tail stream read ${historicalReads} fold-boundary fields, not the full history`)
   assert.throws(() => { (initial[0] as { text: string }).text = 'mutate old snapshot' }, TypeError)
   assert.equal(initial[0]?.text, 'history 0', 'old detached snapshot remains immutable after later versions')
+  mount.dispose(); unregister(); raw.releaseContributions()
+}
+
+// The detached projection owns structural containers only. Every other leaf
+// keeps its own semantics: a key-by-key copy of a Uint8Array loses its type
+// (sharp then rejects it — "Input file is missing" — and every transcript
+// thumbnail renders 无法预览), and Date/Error/class instances would hollow out
+// to empty objects the same way.
+{
+  const read = createChannelReadView(() => {})
+  class Handle {
+    constructor(readonly tag: string) {}
+    greet(): string { return `hi ${this.tag}` }
+  }
+  const bytes = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10])
+  const date = new Date(1_700_000_000_000)
+  const source = {
+    bytes,
+    view: new DataView(new ArrayBuffer(4)),
+    date,
+    pattern: /ab+c/giu,
+    error: new Error('boom'),
+    handle: new Handle('x'),
+    map: new Map<string, number>([['k', 1]]),
+    set: new Set<number>([1, 2]),
+    plain: { a: 1 },
+    list: [1, 2],
+  }
+  const projected = read(source, 1)
+  assert.ok(projected.bytes instanceof Uint8Array, 'binary keeps its type through the projection')
+  assert.equal(projected.bytes.byteLength, bytes.byteLength, 'binary byteLength survives the projection')
+  assert.equal(projected.bytes[0], 137, 'binary bytes survive the projection')
+  assert.ok(projected.view instanceof DataView, 'DataView keeps its type')
+  assert.ok(projected.date instanceof Date && projected.date.getTime() === date.getTime(), 'Date keeps its type and time')
+  assert.ok(projected.pattern instanceof RegExp && projected.pattern.source === 'ab+c' && projected.pattern.flags === 'giu', 'RegExp keeps source and flags')
+  assert.ok(projected.error instanceof Error && projected.error.message === 'boom', 'Error keeps its message')
+  assert.ok(projected.handle instanceof Handle && projected.handle.greet() === 'hi x', 'class instance keeps its prototype methods')
+  assert.equal(projected.map.get('k'), 1, 'Map stays readable')
+  assert.equal(projected.set.has(2), true, 'Set stays readable')
+  assert.equal(projected.plain.a, 1, 'plain records still project')
+  assert.notEqual(projected.plain, source.plain, 'plain records stay detached')
+  assert.equal(projected.list[1], 2, 'arrays still project')
+  assert.notEqual(projected.list, source.list, 'arrays stay detached')
+}
+
+// The same preservation holds on the production mount path: rows keep working
+// image facades so thumbnails can decode.
+{
+  const { ctx, raw } = fixture()
+  const unregister = registerTuiChannel(ctx, raw)
+  const mount = mountChannelUi(ctx, raw, undefined, 'new')
+  const bytes = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10])
+  raw.rows.push({
+    id: 1, kind: 'user', text: '[Image #1]',
+    images: [{ id: 'img-1', width: 8, height: 8, name: 'paste-6.png', read: async () => bytes }],
+  })
+  raw.emit()
+  const image = mount.channel.rows[0]?.images?.[0]
+  assert.ok(image !== undefined, 'projected user row keeps its image facade')
+  const data = await image.read()
+  assert.ok(data instanceof Uint8Array, 'read() keeps the binary type through the detached projection')
+  assert.equal(data.byteLength, bytes.byteLength, 'read() byteLength survives the projection')
+  assert.equal(data[0], 137, 'read() bytes survive the projection')
   mount.dispose(); unregister(); raw.releaseContributions()
 }
 
