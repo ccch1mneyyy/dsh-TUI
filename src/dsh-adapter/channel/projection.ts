@@ -378,7 +378,7 @@ export function createChannelProjection(state: ProjectionState, deps: Projection
           event.data.source.plugin === 'compact'
         ) {
           const summary = textOf(event.data.content)
-          appendRow({ id: deps.rowIds.value, kind: 'notice', text: 'Conversation compacted' })
+          appendRow({ id: deps.rowIds.value, kind: 'notice', text: 'Session summary is ready' })
           deps.rowIds.value += 1
           if (summary) {
             appendRow({ id: deps.rowIds.value, kind: 'compact', text: summary })
