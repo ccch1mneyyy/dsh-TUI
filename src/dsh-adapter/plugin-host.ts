@@ -448,8 +448,17 @@ export class TuiPluginHostRuntime extends Service implements TuiPluginHost {
     // required against Command/LocalStorage/MessageObserver are not rejected
     // simply because the default mode does not start the new Kernel.
     const state = hostStateFor(this)
-    const admissionHost = state.kernelRuntime !== undefined
-      ? state.kernelRuntime.descriptorBuild().descriptor
+    // Only use the Kernel descriptor after the Kernel has actually started
+    // and completed its initial live refresh. Before that point the Kernel's
+    // descriptor is intentionally empty (lifecycle probes have not run yet);
+    // using it would falsely reject plugins that require Command/
+    // LocalStorage/MessageObserver. Fall back to the legacy mounted-service
+    // descriptor until the first refresh has completed.
+    const kernelReady = state.kernelRuntime !== undefined
+      && state.kernelStarted
+      && state.kernelRuntime.isRefreshCompleted()
+    const admissionHost = kernelReady
+      ? state.kernelRuntime!.descriptorBuild().descriptor
       : this.build().descriptor
     const decision = negotiate(index, manifest, admissionHost, grants)
     if (decision.decision !== 'compatible' && decision.decision !== 'compatible_degraded') {

@@ -29,11 +29,29 @@ function rootKey(ctx: unknown): object | undefined {
   }
 }
 
-/** Register the live Channel for a composition root. */
-export function registerTuiChannel(ctx: unknown, channel: unknown): void {
+/** Register the live Channel for a composition root.
+ * @returns A token-safe disposer. Calling it removes this Channel only when
+ * the registry entry still points to the exact Channel instance that was
+ * registered, so a later replacement cannot be accidentally unregistered by an
+ * earlier owner's cleanup.
+ */
+export function registerTuiChannel(ctx: unknown, channel: unknown): () => boolean {
   const key = rootKey(ctx)
-  if (key === undefined) return
+  if (key === undefined) return () => false
   channels.set(key, channel)
+  notifyChannelListeners(key, channel)
+  let disposed = false
+  return () => {
+    if (disposed) return false
+    disposed = true
+    if (channels.get(key) !== channel) return false
+    channels.delete(key)
+    notifyChannelListeners(key, undefined)
+    return true
+  }
+}
+
+function notifyChannelListeners(key: object, channel: unknown): void {
   const listeners = registrationListeners.get(key)
   if (listeners === undefined) return
   for (const listener of [...listeners]) {

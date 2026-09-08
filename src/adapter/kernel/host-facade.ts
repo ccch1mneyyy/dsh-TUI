@@ -186,10 +186,13 @@ function wrapPort<T extends object>(port: T, portName: string, mode: AdapterMode
 
 function wrapChannelPort(port: HostChannelPort, mode: AdapterMode): HostChannelPort {
   const wrapped: Record<string, unknown> = {}
-  for (const subName of Object.keys(CHANNEL_PORT_CAPABILITIES)) {
+  for (const subName of Object.keys(port)) {
     const subPort = (port as unknown as Record<string, Record<string, unknown>>)[subName]
     if (subPort === undefined) continue
-    const capabilities = CHANNEL_PORT_CAPABILITIES[subName]!
+    const capabilities = CHANNEL_PORT_CAPABILITIES[subName]
+    if (capabilities === undefined) {
+      throw new Error(`dsh-tui: Host Channel sub-port "${subName}" is missing from the shadow-policy map`)
+    }
     const subWrapped: Record<string, unknown> = {}
     for (const key of Object.keys(subPort)) {
       const capability = capabilities[key]

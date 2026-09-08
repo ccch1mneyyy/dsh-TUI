@@ -199,7 +199,11 @@ assert.notEqual(failed.currentLifecycles().find(lifecycle => lifecycle.capabilit
     drivers: [mountEffectDriver],
   })
   checks += 1
-  await assert.rejects(passiveMount.mount(), /shadow policy denies/)
+  // Shadow mode skips disallowed drivers instead of aborting the whole mount
+  // transaction, so read-only/replay-safe slices can still mount alongside
+  // them. A single disallowed driver therefore mounts nothing but does not
+  // reject.
+  await passiveMount.mount()
   assert.equal(mountCalls, 0, 'mount driver must not run when shadow policy denies its effect class')
 
   const newMount = new KernelRuntime({

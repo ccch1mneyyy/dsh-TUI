@@ -159,11 +159,19 @@ export class TuiWorkspaceRuntime extends Service {
       resolve: (reference: string, currentCwd?: string, signal?: AbortSignal) =>
         resolveWorkspace(runtime, reference, currentCwd ?? process.cwd(), signal, undefined),
       describe: (cwd: string) => describeWorkspace(runtime, cwd, undefined),
-      commandShell: (cwd: string) => commandShellFor(runtime, cwd, undefined),
-      rename: (cwd: string, title: string) => renameWorkspace(runtime, cwd, title, undefined),
+      commandShell: (cwd: string) => {
+        assertCapabilityShadowPolicy('host.workspaces.commandShell', state.runtime.mode, state.runtime.slices)
+        return commandShellFor(runtime, cwd, undefined)
+      },
+      rename: (cwd: string, title: string) => {
+        assertCapabilityShadowPolicy('host.workspaces.rename', state.runtime.mode, state.runtime.slices)
+        return renameWorkspace(runtime, cwd, title, undefined)
+      },
       commands: () => workspaceCommands(runtime, undefined),
-      runCommand: (name: string, input: string, cwd: string, signal?: AbortSignal) =>
-        runWorkspaceCommand(runtime, name, input, cwd, signal, undefined),
+      runCommand: (name: string, input: string, cwd: string, signal?: AbortSignal) => {
+        assertCapabilityShadowPolicy('host.workspaces.runCommand', state.runtime.mode, state.runtime.slices)
+        return runWorkspaceCommand(runtime, name, input, cwd, signal, undefined)
+      },
     })
     workspaceStates.set(this, state)
   }

@@ -30,6 +30,7 @@ import {
   projectChannelSnapshot,
   projectChannelState,
   TUI_CHANNEL_WIRE_REVISION,
+  type TuiChannelSnapshot,
 } from '../channel/index.js'
 import { getRegisteredTuiChannel } from '../channel/host-registry.js'
 import { CHANNEL_FEATURES } from '../channel/features.js'
@@ -109,7 +110,7 @@ async function verifyChannelLiveAsync(ctx: unknown): Promise<CapabilityLifecycle
         ...projection,
         ...state,
       }),
-    } as unknown as import('../spec/index.js').TuiChannelSnapshot
+    } as unknown as TuiChannelSnapshot
     // Exercise the full protocol envelope (open/subscribe/invoke/close) using
     // the same Provider/Consumer pair as the replay harness. The only method
     // exposed here is the read-only traceEvents projection, and it runs under
@@ -289,7 +290,6 @@ function createTranscriptPort(ctx: unknown): HostChannelTranscriptPort {
   return Object.freeze({
     rows: () => transcript().rows(),
     traceEvents: () => transcript().traceEvents(),
-    loadOlder: () => transcript().loadOlder(),
   })
 }
 

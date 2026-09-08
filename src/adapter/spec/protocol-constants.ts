@@ -36,24 +36,28 @@ export const EXPECTED_PERMISSIONS: readonly PermissionRow[] = (() => {
     // type/build safe for environments without the submodule.
     return Object.freeze([])
   }
-  const raw = JSON.parse(readFileSync(join(dir, 'registry', 'permissions-0.1.json'), 'utf8')) as {
-    permissions?: unknown
+  try {
+    const raw = JSON.parse(readFileSync(join(dir, 'registry', 'permissions-0.1.json'), 'utf8')) as {
+      permissions?: unknown
+    }
+    const rows = Array.isArray(raw.permissions)
+      ? raw.permissions.filter((row): row is PermissionRow =>
+          row !== null
+          && typeof row === 'object'
+          && typeof (row as { name?: unknown }).name === 'string'
+          && ((row as { default?: unknown }).default === 'allow' || (row as { default?: unknown }).default === 'deny')
+          && typeof (row as { revocable?: unknown }).revocable === 'boolean'
+          && typeof (row as { scope?: unknown }).scope === 'string')
+      : []
+    return Object.freeze(rows.map(row => Object.freeze({
+      name: row.name,
+      default: row.default,
+      revocable: row.revocable,
+      scope: row.scope,
+    } as PermissionRow)))
+  } catch {
+    return Object.freeze([])
   }
-  const rows = Array.isArray(raw.permissions)
-    ? raw.permissions.filter((row): row is PermissionRow =>
-        row !== null
-        && typeof row === 'object'
-        && typeof (row as { name?: unknown }).name === 'string'
-        && ((row as { default?: unknown }).default === 'allow' || (row as { default?: unknown }).default === 'deny')
-        && typeof (row as { revocable?: unknown }).revocable === 'boolean'
-        && typeof (row as { scope?: unknown }).scope === 'string')
-    : []
-  return Object.freeze(rows.map(row => Object.freeze({
-    name: row.name,
-    default: row.default,
-    revocable: row.revocable,
-    scope: row.scope,
-  } as PermissionRow)))
 })()
 
 /**

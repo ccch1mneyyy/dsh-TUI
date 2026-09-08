@@ -45,8 +45,9 @@ export function createChannelConsumer(
   let last: TuiChannelSnapshot | undefined
   const continuityErrors: string[] = []
 
-  function accept(snapshotValue: unknown, allowEqualInvokeEcho = false): TuiChannelSnapshot {
+  function accept(snapshotValue: unknown, allowEqual = false): TuiChannelSnapshot {
     const snapshot = validateTuiChannelSnapshot(snapshotValue)
+    const errorCountBefore = continuityErrors.length
     if (last !== undefined) {
       if (snapshot.channelId !== last.channelId) {
         continuityErrors.push(`channel id changed: ${last.channelId} -> ${snapshot.channelId}`)
@@ -54,18 +55,19 @@ export function createChannelConsumer(
         continuityErrors.push(`wire revision changed: ${last.wireRevision} -> ${snapshot.wireRevision}`)
       } else if (snapshot.version < last.version) {
         continuityErrors.push(`version went backwards: ${last.version} -> ${snapshot.version}`)
-      } else if (snapshot.version === last.version && !allowEqualInvokeEcho) {
+      } else if (snapshot.version === last.version && !allowEqual) {
         continuityErrors.push(`version did not advance: ${last.version} -> ${snapshot.version}`)
       } else if (snapshot.version > last.version && snapshot.version !== last.version + 1) {
         continuityErrors.push(`version gap: expected ${last.version + 1}, got ${snapshot.version}`)
       }
     }
-    if (continuityErrors.length > 0) {
-      if (failClosed) {
-        throw new Error(`dsh-tui: Channel continuity violation: ${continuityErrors[continuityErrors.length - 1]}`)
-      }
-      return snapshot
+    const hasNewError = continuityErrors.length > errorCountBefore
+    if (hasNewError && failClosed) {
+      throw new Error(`dsh-tui: Channel continuity violation: ${continuityErrors[continuityErrors.length - 1]}`)
     }
+    // When not fail-closed, keep advancing `last` to the snapshot that was
+    // actually observed so later continuity messages describe the real
+    // sequence rather than a stale pre-violation baseline.
     if (last === undefined || snapshot.version >= last.version) {
       last = snapshot
     }
@@ -80,8 +82,14 @@ export function createChannelConsumer(
       return accept(snapshot)
     },
     async subscribe(channelId, afterVersion, listener) {
+      let firstReplay = true
       return provider.subscribe(channelId, afterVersion, value => {
-        listener(accept(value))
+        // Provider semantics are "not earlier than afterVersion": an equal
+        // version echo after `open()` is the first snapshot of a subscription
+        // and must be accepted, while later equal-version duplicates still
+        // violate continuity.
+        listener(accept(value, firstReplay))
+        firstReplay = false
       })
     },
     async invoke(channelId, method, args) {

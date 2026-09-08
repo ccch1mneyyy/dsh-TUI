@@ -141,7 +141,6 @@ export interface HostChannelPluginsPort {
 export interface HostChannelTranscriptPort {
   rows(): readonly HostChannelRowProjection[]
   traceEvents(): readonly unknown[]
-  loadOlder(): number
 }
 
 // ── aggregate channel port ────────────────────────────────────────────────

@@ -368,7 +368,7 @@ export async function runChannelReplay(input: ReplayChannelInput): Promise<Repla
     const provider = createReplayChannelProvider(replaySource)
     const versions: number[] = []
     const subscriptionSnapshots: TuiChannelSnapshot[] = []
-    const subscriptionConsumer = createChannelConsumer(provider)
+    const subscriptionConsumer = createChannelConsumer(provider, { failClosed: false })
     const first = snapshots[0]!
     // Subscribe first on an independent consumer so version continuity is
     // observed over the recorded stream without conflating it with `open`
@@ -418,7 +418,7 @@ export async function runChannelReplay(input: ReplayChannelInput): Promise<Repla
       }
     }
 
-    const consumer = createChannelConsumer(provider)
+    const consumer = createChannelConsumer(provider, { failClosed: false })
     const opened = await consumer.open({})
     let invokeValueDefined = false
     if (input.invokeMethod !== undefined) {

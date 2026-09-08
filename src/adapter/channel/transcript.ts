@@ -22,6 +22,5 @@ export function createChannelTranscript(channel: Channel, token: symbol): HostCh
   return Object.freeze({
     rows: () => projectChannelRows(channel.rows),
     traceEvents: () => channel.traceEvents(),
-    loadOlder: () => channel.loadOlder(),
   })
 }

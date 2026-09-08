@@ -107,9 +107,10 @@ async function verifyWorkspaceLive(ctx: unknown): Promise<CapabilityLifecycle[]>
   }
   const out: CapabilityLifecycle[] = []
   const cwd = process.cwd()
+  const probeSignal = (): AbortSignal => AbortSignal.timeout(2_000)
 
   try {
-    const list = await host.list(cwd)
+    const list = await host.list(cwd, probeSignal())
     if (Array.isArray(list)) {
       out.push(liveFeature('host.workspaces.list', [
         serviceEvidence('tuiWorkspaces'),
@@ -124,7 +125,7 @@ async function verifyWorkspaceLive(ctx: unknown): Promise<CapabilityLifecycle[]>
   }
 
   try {
-    const resolved = await host.resolve(cwd)
+    const resolved = await host.resolve(cwd, cwd, probeSignal())
     if (resolved !== undefined && typeof resolved.cwd === 'string') {
       out.push(liveFeature('host.workspaces.resolve', [
         serviceEvidence('tuiWorkspaces'),

@@ -32,7 +32,7 @@ function collectFiles(dir: string): string[] {
     const path = join(dir, entry)
     const stat = statSync(path)
     if (stat.isDirectory()) out.push(...collectFiles(path))
-    else if (entry.endsWith('.ts')) out.push(path)
+    else if (entry.endsWith('.ts') || entry.endsWith('.tsx') || entry.endsWith('.mts') || entry.endsWith('.cts')) out.push(path)
   }
   return out
 }
@@ -150,8 +150,13 @@ if (specData === undefined) {
       failures.push(`permission ${permission.name} metadata differs from spec-derived EXPECTED_PERMISSIONS`)
     }
   }
-  const adapterNote = readFileSync(join(specData.dir, 'adapters', 'dsh-tui-v0.15.md'), 'utf8')
-  const eventLine = adapterNote.split(String.fromCharCode(10)).find(line => line.includes('事件名')) ?? ''
+  let adapterNote: string | undefined
+  try {
+    adapterNote = readFileSync(join(specData.dir, 'adapters', 'dsh-tui-v0.15.md'), 'utf8')
+  } catch (error) {
+    failures.push(`cannot read the committed adapter note: ${error instanceof Error ? error.message : String(error)}`)
+  }
+  const eventLine = adapterNote?.split(String.fromCharCode(10)).find(line => line.includes('事件名')) ?? ''
   const committedEvents = [...eventLine.matchAll(/`(tui\/[a-z0-9-]+)`/gu)].map(match => match[1]!).sort()
   const eventNamesMatch = JSON.stringify([...TUI_DECISION_EVENT_NAMES].sort()) === JSON.stringify(committedEvents)
   if (!eventNamesMatch) {
@@ -181,8 +186,9 @@ if (specData === undefined) {
     { apiVersion: 'messages.dsh/v1alpha1', kind: 'MessageObserver' },
     { apiVersion: 'tui.dsh/v1alpha1', kind: 'DecisionEvents' },
   ]
-  const hostContractsMatch = JSON.stringify([...HOST_SUPPORTED_CONTRACTS].sort()) === JSON.stringify(
-    [...expectedHostContracts].sort(),
+  const hostContractsKey = (contract: { apiVersion: string; kind: string }): string => `${contract.apiVersion}#${contract.kind}`
+  const hostContractsMatch = JSON.stringify([...HOST_SUPPORTED_CONTRACTS].map(hostContractsKey).sort()) === JSON.stringify(
+    [...expectedHostContracts].map(hostContractsKey).sort(),
   )
   if (!hostContractsMatch) {
     failures.push(`HOST_SUPPORTED_CONTRACTS drifted from the spec-derived host driver set: ${JSON.stringify(HOST_SUPPORTED_CONTRACTS)}`)

@@ -84,6 +84,24 @@ function memberName(member: ts.TypeElement): string | undefined {
   return undefined
 }
 
+/** Extract parameters from a method-like declaration, including property
+ * signatures whose value is a function type or a callable type literal. */
+function parametersOf(member: ts.TypeElement): readonly ts.ParameterDeclaration[] {
+  if (ts.isMethodSignature(member)) return member.parameters
+  if (!ts.isPropertySignature(member) || member.type === undefined) return []
+  if (ts.isFunctionTypeNode(member.type)) return member.type.parameters
+  if (ts.isTypeLiteralNode(member.type)) {
+    const parameters: ts.ParameterDeclaration[] = []
+    for (const child of member.type.members) {
+      if (ts.isCallSignatureDeclaration(child) || ts.isConstructSignatureDeclaration(child)) {
+        parameters.push(...child.parameters)
+      }
+    }
+    return parameters
+  }
+  return []
+}
+
 const failures: string[] = []
 
 for (const file of collectFiles(PORTS)) {
@@ -130,9 +148,7 @@ for (const file of collectFiles(PORTS)) {
         if (name && FORBIDDEN_MEMBER_NAMES.has(name)) {
           failures.push(`${rel}: Host Port method "${name}" carries host/protocol/permission semantics`)
         }
-        for (const parameter of 'parameters' in member && Array.isArray(member.parameters)
-          ? member.parameters
-          : []) {
+        for (const parameter of parametersOf(member)) {
           if (ts.isIdentifier(parameter.name) && FORBIDDEN_PARAMETER_NAMES.has(parameter.name.text)) {
             failures.push(`${rel}: Host Port method "${name}" accepts caller-supplied ${parameter.name.text}`)
           }
@@ -158,9 +174,7 @@ for (const file of collectFiles(KERNEL)) {
       for (const member of node.members) {
         if (!isMethodLike(member)) continue
         const name = memberName(member)
-        for (const parameter of 'parameters' in member && Array.isArray(member.parameters)
-          ? member.parameters
-          : []) {
+        for (const parameter of parametersOf(member)) {
           if (ts.isIdentifier(parameter.name) && FORBIDDEN_PARAMETER_NAMES.has(parameter.name.text)) {
             failures.push(`${rel}: Kernel interface "${name}" accepts caller-supplied ${parameter.name.text}`)
           }

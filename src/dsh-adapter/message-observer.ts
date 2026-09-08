@@ -363,7 +363,7 @@ hostContext: compositionRoot(ctx),
     }
     const self = concreteService(this) as TuiMessageObserverRuntime
     const received: MessagesObserveEnvelope[] = []
-    const release = self.registerSubscription(
+    const release = self.#registerSubscription(
       state.hostContext,
       identity,
       '__dsh_tui_live_probe__',
@@ -391,6 +391,12 @@ hostContext: compositionRoot(ctx),
         true,
       )
       await state.buildChain
+      // The broker-wide build chain only waits for the envelope to be queued
+      // to each subscription's serial delivery chain. Wait for the temporary
+      // probe subscription's own chain so deferred/delayed listeners have
+      // actually run before asserting delivery.
+      const probeSubscription = [...state.subscriptions].find(subscription => subscription.probe === true)
+      if (probeSubscription !== undefined) await probeSubscription.chain
       if (received.length !== 1 || received[0]?.payload.kind !== 'message.received') {
         throw new Error(`temporary subscription did not receive one delivered envelope (got ${received.length})`)
       }
@@ -448,7 +454,8 @@ hostContext: compositionRoot(ctx),
       )
       return () => false
     }
-    return this.registerSubscription(
+    const self = concreteService(this) as TuiMessageObserverRuntime
+    return self.#registerSubscription(
       caller,
       identity,
       plugin,
@@ -466,7 +473,7 @@ hostContext: compositionRoot(ctx),
    * an internal temporary identity and marks the subscription as `probe` so
    * delivery can bypass the caller grant re-check.
    */
-  private registerSubscription(
+  #registerSubscription(
     ownerContext: Context,
     identity: VerifiedComponentIdentity,
     plugin: string,

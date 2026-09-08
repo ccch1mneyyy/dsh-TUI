@@ -536,7 +536,8 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   // Normalize to the composition root: the Kernel and its Channel driver
   // query the registry through the root context, never through this plugin's
   // child activation context.
-  registerTuiChannel(compositionRoot(ctx), channel)
+  const unregisterTuiChannel = registerTuiChannel(compositionRoot(ctx), channel)
+  ctx.effect(() => () => { unregisterTuiChannel() })
   const pluginHost = ctx.get('tuiPluginHost')
   const adapterRuntime = adapterRuntimeFor(ctx)
   // Plugin toasts ride the channel's own notification surface: the runtime

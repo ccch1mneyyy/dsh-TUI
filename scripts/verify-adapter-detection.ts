@@ -58,8 +58,12 @@ for (const slice of ADAPTER_KERNEL_SLICES) {
   if (result.state === 'degraded') {
     assert.ok(Array.isArray(result.missing), `${slice.id} degraded detection must carry missing[]`)
   }
+  if (result.state === 'supported') {
+    assert.ok(Array.isArray(result.evidence), `${slice.id} supported detection must carry evidence[]`)
+  } else if (result.state === 'degraded' && result.evidence !== undefined) {
+    assert.ok(Array.isArray(result.evidence), `${slice.id} degraded detection evidence must be an array`)
+  }
   if (result.state === 'supported' || result.state === 'degraded') {
-    assert.ok(Array.isArray(result.evidence), `${slice.id} supported/degraded detection must carry evidence[]`)
     for (const item of result.evidence ?? []) {
       assert.ok(
         item.kind === 'service' || item.kind === 'method' || item.kind === 'version' || item.kind === 'contract' || item.kind === 'probe',

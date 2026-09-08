@@ -20,7 +20,7 @@ import type { HostDescriptorPort, HostDescriptorSnapshot } from '../ports/descri
 import type { CapabilityLifecycle } from './lifecycle.js'
 import { verifyAndPromote } from './lifecycle.js'
 import { isReplayIsolationActive } from './replay-isolation.js'
-import { assertShadowPolicy, normalizeAdapterSliceList, sliceForCapability, type AdapterMode } from './runtime.js'
+import { normalizeAdapterSliceList, shadowPolicyAllowed, sliceForCapability, type AdapterMode } from './runtime.js'
 import type { UpstreamDriver, UpstreamDriverMount } from '../upstream/driver.js'
 import type { Detection } from '../upstream/detection.js'
 import type { HostDescriptorBuild } from '../standard/descriptor.js'
@@ -104,7 +104,7 @@ export class KernelRuntime {
   private lastRefreshAt: number | undefined
   private refreshState: 'pending' | 'completed' | 'failed' | 'skipped' = 'pending'
   private refreshError: string | undefined
-  private refreshTimer: ReturnType<typeof setInterval> | undefined
+  private refreshTimer: ReturnType<typeof setTimeout> | undefined
   private refreshInFlight: Promise<readonly CapabilityLifecycle[]> | undefined
   private refreshRerunRequested = false
   private mountPromise: Promise<void> | undefined
@@ -509,7 +509,10 @@ export class KernelRuntime {
         if (driver.mountEffectClass === undefined) {
           throw new Error(`dsh-tui: driver "${driver.id}" must declare mountEffectClass`)
         }
-        assertShadowPolicy(driver.mountEffectClass, this.mode)
+        // Shadow modes must not abort the whole mount transaction because the
+        // first selected driver is non-read-only. Skip disallowed drivers and
+        // continue mounting the read-only/replay-safe slices that remain.
+        if (!shadowPolicyAllowed(driver.mountEffectClass, this.mode)) continue
         const mount = await driver.mount(this.context, ports)
         if (this.disposed) {
           // The whole runtime was disposed while this asynchronous mount was
@@ -555,7 +558,10 @@ export class KernelRuntime {
 
   private needsAutoRefresh(): boolean {
     if (this.disposed || this.mode !== 'new') return false
-    if (this.refreshState === 'failed') return true
+    if (this.refreshState === 'failed') {
+      return this.lastRefreshAt === undefined
+        || (Date.now() - this.lastRefreshAt) >= this.refreshTtlMs
+    }
     return this.refreshState === 'completed'
       && this.lastRefreshAt !== undefined
       && (Date.now() - this.lastRefreshAt) >= this.refreshTtlMs
@@ -563,8 +569,14 @@ export class KernelRuntime {
 
   private startAutoRefreshTimer(): void {
     if (this.disposed || this.mode !== 'new' || this.refreshTimer !== undefined) return
-    this.refreshTimer = setInterval(() => {
-      void this.refresh().catch(() => undefined)
+    this.refreshTimer = setTimeout(() => {
+      this.refreshTimer = undefined
+      if (this.disposed || this.mode !== 'new') return
+      void this.refresh()
+        .catch(() => undefined)
+        .finally(() => {
+          if (!this.disposed && this.mode === 'new') this.startAutoRefreshTimer()
+        })
     }, Math.max(this.refreshTtlMs, 1_000))
     if (typeof this.refreshTimer.unref === 'function') this.refreshTimer.unref()
   }
@@ -572,7 +584,7 @@ export class KernelRuntime {
   dispose(): void {
     this.disposed = true
     if (this.refreshTimer !== undefined) {
-      clearInterval(this.refreshTimer)
+      clearTimeout(this.refreshTimer)
       this.refreshTimer = undefined
     }
     if (this.unsubscribeChannelListener !== undefined) {

@@ -20,8 +20,11 @@ src/adapter/standard/*
 ## 补丁内容摘要
 
 1. `docs/plugin-admission-and-development.md`
-   - `- `src/plugin-spec/` — 校验/协商纯库...`
-   - `+ `src/adapter/standard/` — 校验/协商纯库...`
+
+```diff
+- `src/plugin-spec/` — 校验/协商纯库...
++ `src/adapter/standard/` — 校验/协商纯库...
+```
 
 2. `adapters/dsh-tui-v0.15.md`
    - 仓库路径标注从 `src/dsh-adapter/`、`src/plugin-spec/`

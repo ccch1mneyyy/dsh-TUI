@@ -214,9 +214,11 @@ if (!existsSync(publicSurfacePath)) {
   for (const target of exportTargets) {
     if (typeof target !== 'string') continue
     const path = join(ROOT, target.replace(/^\.\//u, ''))
-    if (existsSync(path) && statSync(path).isFile()) {
-      visitRelativeImportGraph(path, seen, failures)
+    if (!existsSync(path) || !statSync(path).isFile()) {
+      failures.push(`package entry target does not exist: ${target}`)
+      continue
     }
+    visitRelativeImportGraph(path, seen, failures)
   }
 }
 

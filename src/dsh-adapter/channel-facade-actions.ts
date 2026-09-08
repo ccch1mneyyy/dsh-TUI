@@ -8,6 +8,7 @@
  * is dropped instead of bypassing the guard.
  */
 
+import type { AdapterRuntimeOptions } from '../adapter/kernel/runtime.js'
 import { getHostFacade } from './plugin-host.js'
 
 export interface ChannelFacadeNotifyOptions {
@@ -15,10 +16,7 @@ export interface ChannelFacadeNotifyOptions {
   readonly timeoutMs?: number
 }
 
-export interface ChannelFacadeRuntime {
-  readonly mode: 'legacy' | 'passive-shadow' | 'replay-shadow' | 'new'
-  readonly slices: readonly string[]
-}
+export type ChannelFacadeRuntime = AdapterRuntimeOptions
 
 export type ChannelFacadeActionOutcome = 'facade' | 'native' | 'dropped'
 

@@ -18,7 +18,7 @@ export const CHANNEL_PORT_METHOD_CAPABILITIES: Readonly<Record<string, Readonly<
     cancel: 'host.channel.actions.cancel',
     interruptAndDeliver: 'host.channel.actions.interruptAndDeliver',
     clear: 'host.channel.actions.clear',
-    loadOlder: 'host.channel.transcript.loadOlder',
+    loadOlder: 'host.channel.actions.loadOlder',
     notify: 'host.channel.actions.notify',
   }),
   state: Object.freeze({
@@ -34,7 +34,6 @@ export const CHANNEL_PORT_METHOD_CAPABILITIES: Readonly<Record<string, Readonly<
   transcript: Object.freeze({
     rows: 'host.channel.transcript.rows',
     traceEvents: 'host.channel.transcript.trace-events',
-    loadOlder: 'host.channel.transcript.loadOlder',
   }),
 })
 
