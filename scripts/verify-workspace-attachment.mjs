@@ -127,6 +127,8 @@ const channel = [
   'channel/session-fork.ts',
   'channel/session-tree-actions.ts',
   'channel/session-live-adoption.ts',
+  'channel/background-action.ts',
+  'channel/agent-view-projection.ts',
 ].map(path => readFileSync(new URL(`../src/dsh-adapter/${path}`, import.meta.url), 'utf8')).join('\n')
 const patch = readFileSync(new URL('../cordis.patch.yml', import.meta.url), 'utf8')
 assert.match(
@@ -136,7 +138,7 @@ assert.match(
 )
 assert.doesNotMatch(plugin, /if \(created\)/, 'startup attachment must not skip resumed legacy sessions')
 assert.equal(
-  [...channel.matchAll(/await attachSessionToWorkspace\(ctx, (?:state\.cwd|targetCwd|handle\.agent\.session\.header\.cwd \?\? state\.cwd|sourceCwd), (?:SessionId\(sessionId\)|childId|sessionId)\)/g)].length,
+  [...channel.matchAll(/await attachSessionToWorkspace\(ctx, (?:state\.cwd|targetCwd|deps\.cwd\(\)|handle\.agent\.session\.header\.cwd \?\? state\.cwd|sourceCwd), (?:SessionId\(sessionId\)|childId|sessionId)\)/g)].length,
   8,
   'rewind, /resume, /new, model-switch, tree rewindToNode, /fork, and agent-view background paths all attach ownership across extracted actions',
 )
