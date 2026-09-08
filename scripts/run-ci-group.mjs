@@ -8,6 +8,11 @@
  *
  * 用法（ci.yml 中每个测试组一条）：
  *   - run: node scripts/run-ci-group.mjs render-scroll
+ *   - run: node scripts/run-ci-group.mjs render-scroll --shard 1/2
+ *
+ * --shard i/n：只跑本组按登记顺序 round-robin 取到第 i 片的条目（第 i、
+ * i+n、i+2n… 项），ci.yml 用 matrix 把大组拆成并行 job；不带 --shard 即整组。
+ * 新增测试只登记 GROUPS，不必改分片。--list 只打印本片条目不运行。
  *
  * 组定义在下方 GROUPS 表：名称 + 完整 argv + 可选附加 env。所有条目默认
  * NODE_ENV=production：产品入口本就强制生产版 React，dev 版 reconciler 每次
@@ -18,9 +23,12 @@
  * 行为：
  *   - 逐条运行，实时透传 stdout/stderr（日志仍是每条测试的原始输出）；
  *   - 失败不中断，记录后继续；
- *   - 结束时汇总 ✓/✗ 清单，任一失败 exit 1 并给失败条目打 ::error。
+ *   - 结束时汇总 ✓/✗ 清单（附每条耗时，按登记顺序），任一失败 exit 1 并给
+ *     失败条目打 ::error；在 GitHub Actions 里再往 step summary 写一张按
+ *     耗时降序的表——分片与拆组按这张表的数据来，不靠日志时间戳反推。
  */
 import { spawnSync } from 'node:child_process'
+import { appendFileSync } from 'node:fs'
 
 const env = { NODE_ENV: 'production', ...process.env }
 
@@ -604,36 +612,82 @@ const GROUPS = {
 }
 
 const groupName = process.argv[2]
-const group = GROUPS[groupName]
-if (!group) {
+const wholeGroup = GROUPS[groupName]
+if (!wholeGroup) {
   console.error('[run-ci-group] 未知组名: ' + groupName)
   console.error('可用组: ' + Object.keys(GROUPS).join(', '))
   process.exit(2)
 }
 
-console.log('::group::' + groupName + '（' + group.length + ' 项，失败不中断）')
+/** 解析 --shard i/n（缺省 1/1）与 --list。参数非法一律 exit 2，不能静默跑整组。 */
+const flags = process.argv.slice(3)
+let shard = { index: 1, count: 1 }
+let listOnly = false
+for (let i = 0; i < flags.length; i++) {
+  const flag = flags[i]
+  if (flag === '--list') { listOnly = true; continue }
+  const value = flag === '--shard' ? flags[++i] : flag.startsWith('--shard=') ? flag.slice('--shard='.length) : undefined
+  const m = value === undefined ? null : /^([1-9]\d*)\/([1-9]\d*)$/.exec(value)
+  if (flag !== '--shard' && !flag.startsWith('--shard=')) {
+    console.error('[run-ci-group] 未知参数: ' + flag)
+    process.exit(2)
+  }
+  if (!m || Number(m[1]) > Number(m[2])) {
+    console.error('[run-ci-group] --shard 须为 i/n 且 1 ≤ i ≤ n，收到: ' + String(value))
+    process.exit(2)
+  }
+  shard = { index: Number(m[1]), count: Number(m[2]) }
+}
+const group = wholeGroup.filter((_, i) => i % shard.count === shard.index - 1)
+const label = shard.count === 1 ? groupName : groupName + ' ' + shard.index + '/' + shard.count
+
+if (listOnly) {
+  console.log(label + '（' + group.length + '/' + wholeGroup.length + ' 项）')
+  for (const [name] of group) console.log('  ' + name)
+  process.exit(0)
+}
+
+console.log('::group::' + label + '（' + group.length + ' 项，失败不中断）')
 const results = []
 for (const entry of group) {
   const [name, argv, extraEnv] = entry
   console.log('\n===== ' + name + ' =====')
+  const startedAt = performance.now()
   const r = spawnSync(argv[0], argv.slice(1), {
     env: extraEnv ? { ...env, ...extraEnv } : env,
     stdio: 'inherit',
     shell: false,
   })
+  const seconds = (performance.now() - startedAt) / 1000
   const failed = r.status !== 0
-  results.push({ name, failed, status: r.status })
-  if (failed) console.log('::error title=' + groupName + '::测试 ' + name + ' 失败（exit ' + r.status + '）——已记录，继续跑同组其余测试')
+  results.push({ name, failed, status: r.status, seconds })
+  if (failed) console.log('::error title=' + label + '::测试 ' + name + ' 失败（exit ' + r.status + '）——已记录，继续跑同组其余测试')
 }
 console.log('::endgroup::')
 
-console.log('\n' + groupName + ' 汇总：')
-for (const { name, failed, status } of results) {
-  console.log('  ' + (failed ? '✗' : '✓') + ' ' + name + (failed ? '（exit ' + status + '）' : ''))
+const fmt = seconds => seconds.toFixed(1) + 's'
+const total = results.reduce((sum, r) => sum + r.seconds, 0)
+console.log('\n' + label + ' 汇总（共 ' + fmt(total) + '）：')
+for (const { name, failed, status, seconds } of results) {
+  console.log('  ' + (failed ? '✗' : '✓') + ' ' + name + '  ' + fmt(seconds) + (failed ? '（exit ' + status + '）' : ''))
 }
+
+// GitHub Actions step summary：按耗时降序，给分片/拆组提供数据。
+if (process.env.GITHUB_STEP_SUMMARY) {
+  const rows = [...results].sort((a, b) => b.seconds - a.seconds)
+  appendFileSync(process.env.GITHUB_STEP_SUMMARY, [
+    '### ' + label + '：' + results.length + ' 项，共 ' + fmt(total),
+    '',
+    '| 结果 | 测试 | 耗时 |',
+    '| --- | --- | ---: |',
+    ...rows.map(r => '| ' + (r.failed ? '✗ exit ' + r.status : '✓') + ' | ' + r.name + ' | ' + fmt(r.seconds) + ' |'),
+    '',
+  ].join('\n'))
+}
+
 const failedList = results.filter(r => r.failed)
 if (failedList.length > 0) {
-  console.error('\n' + groupName + '：' + failedList.length + '/' + results.length + ' 项失败——' + failedList.map(f => f.name).join(', '))
+  console.error('\n' + label + '：' + failedList.length + '/' + results.length + ' 项失败——' + failedList.map(f => f.name).join(', '))
   process.exit(1)
 }
-console.log('\n' + groupName + '：全部 ' + results.length + ' 项通过')
+console.log('\n' + label + '：全部 ' + results.length + ' 项通过')
