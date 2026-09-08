@@ -596,7 +596,7 @@ for (const deferred of [false, true]) {
   const pending = mount.channel.stageImage({ data: new Uint8Array([1]), mediaType: 'image/png' })
   raw.agentBindingGeneration += 1
   save({ id: 'saved', mediaType: 'image/png' })
-  await assert.rejects(pending, /stale image/)
+  await assert.rejects(pending, /session changed while the image was being staged/)
   mount.dispose(); unregister(); raw.releaseContributions()
 }
 
