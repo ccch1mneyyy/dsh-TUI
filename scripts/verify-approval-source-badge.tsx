@@ -167,8 +167,8 @@ assert.equal(unknown!.command, undefined)
   store.subscribe(() => { notifies += 1 }) // 探针：面板的 re-render 通道
   log.push(toolResult('call-push')) // tool/result 落地——不再调用 getSnapshot
   store.noteSessionEvent('agent-1', toolResult('call-push')) // 会话事件回调直达 store
-  await sleep(30) // scheduleNotify 走微任务
-  assert.ok(notifies >= 1,
+  // scheduleNotify 走微任务；rebuildSnapshot 已同步完成，等的只是 emit。
+  assert.ok(await settled(() => notifies >= 1),
     'P-4: a settled tool/result must emit so a silent render loop re-reads the flipped snapshot')
   assert.equal(store.getSnapshot()!.external, true,
     'P-4: the event-driven recheck must flip the badge without a prior getSnapshot')

@@ -117,7 +117,7 @@ function assertJsonSize(value: unknown, label: string): void {
     throw new TypeError(`${label}: value is not JSON-serializable`)
   }
   if (json === undefined) throw new TypeError(`${label}: value is not JSON-serializable`)
-  if (json.length > REPLAY_JSON_MAX_BYTES) {
+  if (Buffer.byteLength(json, 'utf8') > REPLAY_JSON_MAX_BYTES) {
     throw new TypeError(`${label}: JSON payload exceeds ${REPLAY_JSON_MAX_BYTES} bytes`)
   }
 }
@@ -163,9 +163,14 @@ export function createReplayChannelProvider(source: ReplayChannelSnapshotSource)
     }
   }
   let currentIndex = snapshots.length - 1
+  let closed = false
 
   function latest(): TuiChannelSnapshot {
     return snapshots[currentIndex]!
+  }
+
+  function assertOpen(): void {
+    if (closed) throw new Error('CHANNEL_CLOSED')
   }
 
   return Object.freeze({
@@ -191,6 +196,7 @@ export function createReplayChannelProvider(source: ReplayChannelSnapshotSource)
       listener: (snapshot: TuiChannelSnapshot) => void,
     ): Promise<() => void> {
       validateTuiChannelInput('subscribe', { channelId, afterVersion })
+      assertOpen()
       const channel = latest()
       if (channel.channelId !== channelId) {
         throw new Error('CHANNEL_NOT_FOUND')
@@ -216,6 +222,7 @@ export function createReplayChannelProvider(source: ReplayChannelSnapshotSource)
       validateTuiChannelInput('invoke', { channelId, method, arguments: args as never })
       assertBoundedJson(args, 'Channel.invoke arguments')
       assertJsonSize(args, 'Channel.invoke arguments')
+      assertOpen()
       const channel = latest()
       if (channel.channelId !== channelId) {
         throw new Error('CHANNEL_NOT_FOUND')
@@ -249,6 +256,7 @@ export function createReplayChannelProvider(source: ReplayChannelSnapshotSource)
       if (channel.channelId !== channelId) {
         throw new Error('CHANNEL_NOT_FOUND')
       }
+      closed = true
       return { closed: true }
     },
   })

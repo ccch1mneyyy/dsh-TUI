@@ -414,6 +414,11 @@ export class TuiStatusRuntime extends Service {
    * same attribution-only meaning as `set()`.
    */
   registerView(descriptor: TuiStatusViewDescriptor, identity?: Context): TuiStatusViewDisposer | undefined {
+    assertCapabilityShadowPolicy(
+      'host.status.register-view',
+      statusStateFor(this).runtime.mode,
+      statusStateFor(this).runtime.slices,
+    )
     let caller: Context
     try {
       caller = requirePluginCaller(this.ctx, 'tuiStatus.registerView', this)
