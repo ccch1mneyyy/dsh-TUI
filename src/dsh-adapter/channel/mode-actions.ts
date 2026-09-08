@@ -136,7 +136,7 @@ const prePlanModeSpec = (log: readonly SessionEvent[]): SessionModeSpec | undefi
     const session = capturedSession(capture)
     // The durable sandbox override is one session event (dsh-sandbox-policy's
     // own write path); the session/event arm picks it up immediately.
-    if (spec.sandbox !== undefined && foldSandboxMode(session.events) !== spec.sandbox) {
+    if (spec.sandbox !== undefined && foldSandboxMode(snapshotLiveSessionEvents(session)) !== spec.sandbox) {
       ;(session as unknown as { append(type: string, data: Record<string, unknown>): unknown }).append(
         'sandbox/mode', { mode: spec.sandbox },
       )
@@ -144,14 +144,14 @@ const prePlanModeSpec = (log: readonly SessionEvent[]): SessionModeSpec | undefi
     if (!current(capture)) return
     // Prefer the approval service (it narrates the switch to the model);
     // the raw durable event is the fallback when it is unmounted.
-    if (spec.approval !== undefined && foldApprovalPolicy(session.events) !== spec.approval) {
+    if (spec.approval !== undefined && foldApprovalPolicy(snapshotLiveSessionEvents(session)) !== spec.approval) {
       const approval = ctx.get('approval') as
         | { setPolicy(a: Agent, policy: 'ask' | 'never'): void }
         | undefined
       approval?.setPolicy(agent, spec.approval)
       if (!current(capture)) return
       // The service may no-op when its configured default already matches.
-      if (foldApprovalPolicy(session.events) !== spec.approval) {
+      if (foldApprovalPolicy(snapshotLiveSessionEvents(session)) !== spec.approval) {
         ;(session as unknown as { append(type: string, data: Record<string, unknown>): unknown }).append(
           'approval/policy', { policy: spec.approval },
         )
@@ -172,7 +172,7 @@ const prePlanModeSpec = (log: readonly SessionEvent[]): SessionModeSpec | undefi
   const planMode = ctx.get('planMode') as
     | { get?(a: Agent): { active: boolean; pending?: boolean } }
     | undefined
-  const planActive = foldPlanActive(session.events)
+  const planActive = foldPlanActive(snapshotLiveSessionEvents(session))
   // Reconcile a stale explicit-exit marker before acting. The marker only
   // legitimately survives while a deferred exit awaits its plan/mode:false
   // (foldPlanActive && pending === false). If plan is still logged active
@@ -188,7 +188,7 @@ const prePlanModeSpec = (log: readonly SessionEvent[]): SessionModeSpec | undefi
       return
     }
     if (spec.plan && !planActive && !prePlanModes.has(session)) {
-      const previous = modePermissions(session.events)
+      const previous = modePermissions(snapshotLiveSessionEvents(session))
       const sandbox = ctx.get('sandboxPolicy') as { defaultMode?: SessionModeSpec['sandbox'] } | undefined
       const approval = ctx.get('approval') as { effectivePolicy?(session: Agent['session']): SessionModeSpec['approval'] } | undefined
       const base = previous.sandbox === undefined && previous.approval === undefined ? sessionModes[0] : undefined
@@ -209,8 +209,8 @@ const prePlanModeSpec = (log: readonly SessionEvent[]): SessionModeSpec | undefi
     } finally {
       if (current(capture) && session === capturedSession(capture)) {
         const pending = planMode?.get?.(agent).pending
-        if (!foldPlanActive(session.events) || pending !== false) explicitPlanExits.delete(session)
-        if (!foldPlanActive(session.events) && pending !== true) prePlanModes.delete(session)
+        if (!foldPlanActive(snapshotLiveSessionEvents(session)) || pending !== false) explicitPlanExits.delete(session)
+        if (!foldPlanActive(snapshotLiveSessionEvents(session)) && pending !== true) prePlanModes.delete(session)
       }
     }
   }
@@ -229,7 +229,7 @@ const prePlanModeSpec = (log: readonly SessionEvent[]): SessionModeSpec | undefi
   const cycleMode = async (): Promise<void> => {
     const capture = binding.capture()
     if (!current(capture)) return
-    const index = deriveModeIndex(capturedSession(capture).events)
+    const index = deriveModeIndex(snapshotLiveSessionEvents(capturedSession(capture)))
     await applyMode(sessionModes[(index + 1) % sessionModes.length]!, capture)
   }
 
@@ -241,7 +241,7 @@ const prePlanModeSpec = (log: readonly SessionEvent[]): SessionModeSpec | undefi
       refreshMode()
     }
     if (eventType !== 'plan/mode' || (event.data as unknown as { active?: boolean }).active !== false) return
-    const target = prePlanModes.get(session) ?? prePlanModeSpec(session.events)
+    const target = prePlanModes.get(session) ?? prePlanModeSpec(snapshotLiveSessionEvents(session))
     prePlanModes.delete(session)
     if (explicitPlanExits.delete(session) || target === undefined) return
     const queued = pendingPlanExitRestores.has(session)
@@ -250,7 +250,7 @@ const prePlanModeSpec = (log: readonly SessionEvent[]): SessionModeSpec | undefi
     queueMicrotask(() => {
       const restore = pendingPlanExitRestores.get(session)
       pendingPlanExitRestores.delete(session)
-      if (restore === undefined || !current(restore.capture) || session !== capturedSession(restore.capture) || foldPlanActive(session.events)) return
+      if (restore === undefined || !current(restore.capture) || session !== capturedSession(restore.capture) || foldPlanActive(snapshotLiveSessionEvents(session))) return
       // Shadow still projects the observed plan/mode event above, but never
       // schedules a compensating sandbox/approval write into the real log.
       if (runtime.mode === 'passive-shadow' || runtime.mode === 'replay-shadow') return

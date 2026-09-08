@@ -152,7 +152,7 @@ export function createPermissionModeActions(
     const planMode = ctx.get('planMode') as
       | { get?(a: Agent): { active: boolean; pending?: boolean } }
       | undefined
-    const planActive = foldPlanActive(session.events)
+    const planActive = foldPlanActive(snapshotLiveSessionEvents(session))
     const planChange = spec.plan !== undefined && (planMode?.get?.(agent).pending ?? planActive) !== spec.plan
     if (planActive && planMode?.get?.(agent).pending === undefined) {
       explicitPlanExits.delete(session)
@@ -206,7 +206,7 @@ export function createPermissionModeActions(
     // identity restore runs after it and re-seats the user on their own
     // preset. Both write the same atom values, so the order cannot diverge.
     queueMicrotask(() => {
-      if (subject !== binding.agent.session || foldPlanActive(subject.events)) return
+      if (subject !== binding.agent.session || foldPlanActive(snapshotLiveSessionEvents(subject))) return
       void permission.applyPermissionIdentity(remembered).then((ok) => {
         if (!ok || subject !== binding.agent.session) return
         refreshMode()

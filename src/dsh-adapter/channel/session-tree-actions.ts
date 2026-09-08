@@ -3,7 +3,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import { SessionId, type SessionEvent, type SessionHeader } from '@deepseek-ai/dsh-session'
 import { randomUUID } from 'node:crypto'
 import { t } from '../../i18n.js'
-import { ensureLegacySessionEventTypes } from '../compat/index.js'
+import { appendInterruptedTurnEnd, ensureLegacySessionEventTypes, liveSessionCreateOptions, liveSessionOffset, snapshotLiveSessionEvents } from '../compat/index.js'
 import { composePreset, resolvePersistedPreset, runningPresetOf } from '../presets.js'
 import { attachSessionToWorkspace } from '../workspace.js'
 import { forkTarget, rewindTarget, turnUserText } from '../sessionTree.js'
@@ -14,10 +14,10 @@ import type { ChannelState } from './types.js'
 type Binding = ReturnType<typeof createChannelBinding>
 type TreeRewindState = Pick<ChannelState, 'working' | 'cwd' | 'provider' | 'model'>
 
-async function waitForTurnEnd(session: { seq: number; events: readonly SessionEvent[] }, fromSeq: number, timeoutMs: number): Promise<boolean> {
+async function waitForTurnEnd(session: unknown, fromSeq: number, timeoutMs: number): Promise<boolean> {
   const deadline = Date.now() + timeoutMs
   while (Date.now() < deadline) {
-    const last = session.events.at(-1)
+    const last = snapshotLiveSessionEvents(session).at(-1)
     if (last !== undefined && last.type === 'turn/end' && last.seq >= fromSeq) return true
     await new Promise(resolve => setTimeout(resolve, 200))
   }
@@ -52,7 +52,7 @@ export function createTreeRewindAction(
     let sourceCwd = state.cwd
     let forkFromLive = true
     if (sessionId === currentId) {
-      sourceEvents = entrySession.events
+      sourceEvents = snapshotLiveSessionEvents(entrySession)
     } else {
       forkFromLive = false
       const persistence = ctx.get('sessionPersistence') as { load(id: SessionId): Promise<{ meta: SessionHeader; events: readonly SessionEvent[] }> } | undefined
@@ -91,29 +91,30 @@ export function createTreeRewindAction(
       return null
     }
     const wasWorking = state.working
-    const cancelSeq = deps.binding.agent.session.seq
+    const cancelSeq = liveSessionOffset(deps.binding.agent.session)
     if (wasWorking) deps.binding.agent.cancel({ kind: 'user' })
     if (wasWorking && !await waitForTurnEnd(deps.binding.agent.session, cancelSeq, 30000)) {
       deps.notify(t('rewind-settling'), { color: 'error' })
       return null
     }
     const seed = sourceEvents.filter(event => event.seq <= target.boundary)
+    const inheritedCount = seed.length
     if (target.closeTurn !== undefined) {
-      const last = seed.at(-1)
-      if (last !== undefined) seed.push({
-        type: 'turn/end', seq: last.seq + 1, time: last.time + 1,
-        data: { turn: target.closeTurn, reason: { kind: 'aborted', reason: { kind: 'user' } } },
-      })
+      appendInterruptedTurnEnd(seed, target.closeTurn)
     }
     let handle: AgentHandle
     try {
-      handle = await deps.binding.prepare(adoption, () => agents.create({
+      handle = await deps.binding.prepare(adoption, () => agents.create(liveSessionCreateOptions({
         sessionId: childId,
         seed,
-        meta: { cwd: sourceCwd, parentSession: SessionId(sessionId), seedLength: seed.length, ...(composed.agentPreset === undefined ? {} : { agentPreset: composed.agentPreset }) },
+        runtimeSession: entrySession,
+        inheritedCount,
+        cwd: sourceCwd,
+        parentSession: SessionId(sessionId),
+        agentPreset: composed.agentPreset,
         agentOptions: { provider: state.provider, model: state.model },
-        ...(composed.setup === undefined ? {} : { setup: composed.setup }),
-      }))
+        setup: composed.setup,
+      })))
     } catch {
       deps.notify(t('rewind-create-failed'), { color: 'error' })
       return null

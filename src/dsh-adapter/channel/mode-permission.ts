@@ -2,6 +2,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import { isCommandCompletionToken } from '../../commands.js'
+import { snapshotLiveSessionEvents } from '../compat/liveSession.js'
 import { t } from '../../i18n.js'
 import { modeDisplayName, type SessionModeSpec } from '../../sessionModes.js'
 import { PERMISSION_PRESET_CUSTOM, permissionPresetRuntime } from './permissions.js'
@@ -58,7 +59,7 @@ export function effectiveApprovalForMode(
 ): SessionModeSpec['approval'] | undefined {
   if (spec.approval !== undefined) return spec.approval
   let folded: unknown
-  for (const event of session.events) {
+  for (const event of snapshotLiveSessionEvents(session)) {
     if ((event as { type: string }).type === 'approval/policy') {
       folded = (event.data as unknown as { policy?: unknown }).policy
     }
@@ -125,13 +126,13 @@ export function createPermissionIdentity(
    *  `auto`), not on a look-alike static mode. */
   const prePlanIdentity = new WeakMap<object, string>()
 
-  const fold = (session: Agent['session']): string | undefined => foldPermissionPreset(session.events)
+  const fold = (session: Agent['session']): string | undefined => foldPermissionPreset(snapshotLiveSessionEvents(session))
 
   const canonicalForMode = (
     spec: SessionModeSpec,
     session: Agent['session'],
   ): string | undefined => {
-    const sandbox = effectiveSandboxForMode(ctx, spec, session.events)
+    const sandbox = effectiveSandboxForMode(ctx, spec, snapshotLiveSessionEvents(session))
     const approval = effectiveApprovalForMode(ctx, spec, session)
     if (sandbox === undefined || approval === undefined) return undefined
     return deps.roster.canonicalFor(sandbox, approval)

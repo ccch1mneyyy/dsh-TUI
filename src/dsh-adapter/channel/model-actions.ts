@@ -3,6 +3,7 @@ import { ReasoningEffortId, type LlmModelInfo } from '@deepseek-ai/dsh-llm'
 import type { Agent, ModelSelectionRef } from '@deepseek-ai/dsh-agent'
 import type { CommandCompletionNode } from '../../commands.js'
 import { readEffortPref, resolveEffortDefault, writeEffortPref } from '../../effortPrefs.js'
+import { snapshotLiveSessionEvents } from '../compat/liveSession.js'
 import { getLang, t, tOr, type Lang } from '../../i18n.js'
 import { migratePresetPref, writePresetPref } from '../../presetPrefs.js'
 import { resolveCompatiblePreset, rosterOf, type AgentPresetInfo } from '../preset-resolution.js'
@@ -199,7 +200,7 @@ export function createModelActions(
       if (!migratePresetPref(presetId, target.id)) { notify(t('preset-switched-pref-failed', { id: target.id }), { color: 'warning' }); return true }
       notify(t('preset-already-current', { id: target.id }), { color: 'success' }); return true
     }
-    if (targetSession.events.some(event => event.type === 'turn/start')) {
+    if (snapshotLiveSessionEvents(targetSession).some(event => event.type === 'turn/start')) {
       if (!current()) return false
       if (!writePresetPref(target.id)) { notify(t('preset-pref-write-failed'), { color: 'error' }); return false }
       notify(t('preset-locked-saved-default', { current: state.agentPreset ?? 'host', id: target.id }), { color: 'warning', timeoutMs: 8000 }); return true

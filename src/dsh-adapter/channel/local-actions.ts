@@ -20,7 +20,7 @@ export function createLocalActions(deps: {
   binding: {
     capture(): unknown
     isCurrent(capture: unknown): boolean
-    readonly agent: { session: { id: unknown; events: readonly SessionEvent[] }; followup(message: unknown): void }
+    readonly agent: { session: unknown; followup(message: unknown): void }
   }
   state: ChannelState
   rowIds: { value: number }
@@ -73,7 +73,7 @@ export function createLocalActions(deps: {
       if (!service) return [t('subagent-not-mounted')]
       const capture = binding.capture()
       try {
-        const children = await service.listChildren(binding.agent.session.id)
+        const children = await service.listChildren((binding.agent.session as { id?: unknown }).id)
         if (!current(capture)) throw new Error('dsh-tui: Channel lifetime has ended')
         if (children.length === 0) return [t('subagent-none')]
         return children.map(child => {
