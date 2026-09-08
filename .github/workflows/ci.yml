@@ -9,6 +9,12 @@ concurrency:
   group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
+# 默认最小权限：所有 job 只读 contents。需要更多的（changes / issue-link 读
+# PR 与 issue）在 job 内自行声明；artifact 上传/下载走 runtime token，不依赖
+# GITHUB_TOKEN 的 scope。
+permissions:
+  contents: read
+
 jobs:
   # 变更分流：纯文档 / issue 模板改动不需要编译与回归——docs/contributing.md
   # 已经写了「纯文档、纯 workflow、纯 YAML 改动不需要重建」，这里是它的 CI 落地。
@@ -19,6 +25,7 @@ jobs:
   # workflow 不运行就永远不上报，文档 PR 会卡在 pending 无法合并。
   changes:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     permissions:
       contents: read
       pull-requests: read
@@ -75,6 +82,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     permissions:
       contents: read
       pull-requests: read
@@ -92,10 +100,15 @@ jobs:
             )).href)
             await runIssueLink({ github, context, core })
 
+  # 编译 job 只做 install → compile → 上传产物，是所有测试组的关键路径前置：
+  # 构建门禁（verify:build/package）搬去并行的 gates job，测试组不再等它
+  # 跑完 100 s 才开始。timeout 兜住挂死的 PTY 探针：默认 6 小时会占住
+  # runner 并卡住 concurrency 组。
   build:
     needs: changes
     if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     env:
       # Keep UI language deterministic for the repro/verify scripts: zh is the
       # historical script-context default; scripts asserting English copy pin
@@ -117,10 +130,6 @@ jobs:
           node-version: 24
           cache: pnpm
 
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: 1.3.14
-
       # install 只装依赖：prepare 钩子里的 compile 由下面的显式步骤替代，
       # 全 workflow 只编译这一次，产物经 artifact 供下游测试组复用。
       # （--ignore-scripts 对依赖无影响：pnpm-workspace.yaml 的 allowBuilds
@@ -136,14 +145,7 @@ jobs:
           test -f lib/types/index.js
           test -f lib/types/dsh-adapter/invariant.js
 
-      - run: pnpm verify:build
-
-      # Keep every main/types/bin/exports target inside the published tarball
-      # and smoke-import the two runtime entry points.
-      - run: pnpm verify:package
-      - run: pnpm verify:bun-package
-
-      # 编译产物交给下游测试组（needs: build 的 job 下载复用，不再各自
+      # 编译产物交给下游（gates 与各测试组经 needs: build 下载复用，不再各自
       # prepare-compile）。@dsh-std 运行时依赖只有 workspace 内部链接，
       # 根 node_modules 的符号链接即完成解析，无需携带 vendor 的构建
       # 工具链；.tsx 脚本走的 src/ 由各组自己的 checkout 提供。
@@ -164,6 +166,51 @@ jobs:
             vendor/dsh-std/packages/storage/lib/
             vendor/dsh-std/packages/messages/lib/
 
+  # 构建门禁：verify:build 聚合链（边界/契约/patch surface/plugin 系列等
+  # 40 余项）+ 包内容与入口 smoke。与测试组并行，复用 build 的产物；此前
+  # 串在 build job 里，测试组要多等约 100 s 才能开始。
+  gates:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      DSH_TUI_LANG: zh
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+
+      # 版本来自 package.json 的 packageManager 字段，不在此内联 pin。
+      - uses: pnpm/action-setup@v6
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+
+      - run: pnpm install --frozen-lockfile --ignore-scripts
+
+      - name: Restore compiled output
+        uses: actions/download-artifact@v8
+        with:
+          name: ci-build-${{ github.run_id }}
+
+      # 回归脚本直接 import lib/types，绕过包入口的 force-production-react；
+      # 与产品和 run-ci-group 一致跑生产版 React（#805）。只加在脚本步骤上：
+      # NODE_ENV=production 会让 pnpm install 跳过 devDependencies。
+      - run: pnpm verify:build
+        env:
+          NODE_ENV: production
+
+      # Keep every main/types/bin/exports target inside the published tarball
+      # and smoke-import the two runtime entry points.
+      - run: pnpm verify:package
+      - run: pnpm verify:bun-package
+
   # The newest prerelease is source-checked while CI keeps rc.2 as the installed
   # compatibility baseline. Type-check the adapter and compose both patches
   # against the immutable upstream rc.1 source SHA. Missing source
@@ -172,8 +219,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
+    timeout-minutes: 20
     env:
       DSH_TUI_LANG: zh
       DSH_HARNESS_SOURCE_ROOT: ${{ github.workspace }}/.upstream/deepseek-harness
@@ -211,6 +257,8 @@ jobs:
       # build keeps the installed rc.2 regression line green and, with the
       # required source env above, must also compose the rc.1 base/web patch.
       - run: pnpm build
+        env:
+          NODE_ENV: production
 
       - run: pnpm verify:alpha-source
 
@@ -230,6 +278,15 @@ jobs:
   render-scroll:
     needs: build
     runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # 组内脚本串行，按实测耗时分 2 片并行（run-ci-group --shard 按登记顺序
+    # round-robin 取项，新增测试无需改这里）；fail-fast: false 让每片都跑完，
+    # 与「失败互不遮蔽」一致。
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
+    name: render-scroll ${{ matrix.shard }}/2
     env:
       DSH_TUI_LANG: zh
     steps:
@@ -255,13 +312,24 @@ jobs:
       # 组内失败聚合（#466 收尾）：单条失败不再遮蔽同组后续测试——全部
       # 跑完后统一 ✓/✗ 汇总，任一失败 exit 1。测试清单与逐条说明在
       # scripts/run-ci-group.mjs 的 GROUPS 表（新增测试时同步登记）。
-      - run: node scripts/run-ci-group.mjs render-scroll
+      - run: node scripts/run-ci-group.mjs render-scroll --shard ${{ matrix.shard }}/2
+
+      # 失败脚本的原始帧字节（run-ci-group 只保留失败条目的 DSH_TUI_RENDER_LOG）：
+      # 时序 flake 本地复现不出来，这份日志是唯一现场。
+      - uses: actions/upload-artifact@v7
+        if: failure()
+        with:
+          name: render-logs-render-scroll-${{ matrix.shard }}
+          path: ci-render-logs/
+          if-no-files-found: ignore
+          retention-days: 7
 
   # 输入 · 终端协议 · 退出漏斗 · 系统集成——与其余组并行；失败互不遮蔽。
   # needs: build：编译只在 build job 发生一次，本组经 artifact 复用产物。
   input-terminal:
     needs: build
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     env:
       DSH_TUI_LANG: zh
     steps:
@@ -289,11 +357,30 @@ jobs:
       # scripts/run-ci-group.mjs 的 GROUPS 表（新增测试时同步登记）。
       - run: node scripts/run-ci-group.mjs input-terminal
 
+      # 失败脚本的原始帧字节（run-ci-group 只保留失败条目的 DSH_TUI_RENDER_LOG）：
+      # 时序 flake 本地复现不出来，这份日志是唯一现场。
+      - uses: actions/upload-artifact@v7
+        if: failure()
+        with:
+          name: render-logs-input-terminal
+          path: ci-render-logs/
+          if-no-files-found: ignore
+          retention-days: 7
+
   # 会话 · 工作区 · 插件扩展 · resume——与其余组并行；失败互不遮蔽。
   # needs: build：编译只在 build job 发生一次，本组经 artifact 复用产物。
   session-workspace:
     needs: build
     runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # 组内脚本串行，按实测耗时分 2 片并行（run-ci-group --shard 按登记顺序
+    # round-robin 取项，新增测试无需改这里）；fail-fast: false 让每片都跑完，
+    # 与「失败互不遮蔽」一致。
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
+    name: session-workspace ${{ matrix.shard }}/2
     env:
       DSH_TUI_LANG: zh
     steps:
@@ -319,13 +406,32 @@ jobs:
       # 组内失败聚合（#466 收尾）：单条失败不再遮蔽同组后续测试——全部
       # 跑完后统一 ✓/✗ 汇总，任一失败 exit 1。测试清单与逐条说明在
       # scripts/run-ci-group.mjs 的 GROUPS 表（新增测试时同步登记）。
-      - run: node scripts/run-ci-group.mjs session-workspace
+      - run: node scripts/run-ci-group.mjs session-workspace --shard ${{ matrix.shard }}/2
+
+      # 失败脚本的原始帧字节（run-ci-group 只保留失败条目的 DSH_TUI_RENDER_LOG）：
+      # 时序 flake 本地复现不出来，这份日志是唯一现场。
+      - uses: actions/upload-artifact@v7
+        if: failure()
+        with:
+          name: render-logs-session-workspace-${{ matrix.shard }}
+          path: ci-render-logs/
+          if-no-files-found: ignore
+          retention-days: 7
 
   # channel · 界面应用回归——与其余组并行；失败互不遮蔽。
   # needs: build：编译只在 build job 发生一次，本组经 artifact 复用产物。
   channel-ui:
     needs: build
     runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # 组内脚本串行，按实测耗时分 2 片并行（run-ci-group --shard 按登记顺序
+    # round-robin 取项，新增测试无需改这里）；fail-fast: false 让每片都跑完，
+    # 与「失败互不遮蔽」一致。
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
+    name: channel-ui ${{ matrix.shard }}/2
     env:
       DSH_TUI_LANG: zh
     steps:
@@ -351,7 +457,17 @@ jobs:
       # 组内失败聚合（#466 收尾）：单条失败不再遮蔽同组后续测试——全部
       # 跑完后统一 ✓/✗ 汇总，任一失败 exit 1。测试清单与逐条说明在
       # scripts/run-ci-group.mjs 的 GROUPS 表（新增测试时同步登记）。
-      - run: node scripts/run-ci-group.mjs channel-ui
+      - run: node scripts/run-ci-group.mjs channel-ui --shard ${{ matrix.shard }}/2
+
+      # 失败脚本的原始帧字节（run-ci-group 只保留失败条目的 DSH_TUI_RENDER_LOG）：
+      # 时序 flake 本地复现不出来，这份日志是唯一现场。
+      - uses: actions/upload-artifact@v7
+        if: failure()
+        with:
+          name: render-logs-channel-ui-${{ matrix.shard }}
+          path: ci-render-logs/
+          if-no-files-found: ignore
+          retention-days: 7
 
   # 已知时序 flaky 隔离区：照常运行、照常红，但不接进 ci-gate、不阻塞
   # 合并。两个成员都有 CI 环境间歇失败记录（Linux runner 负载高时触发，
@@ -364,6 +480,7 @@ jobs:
   flaky-observation:
     needs: build
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     env:
       DSH_TUI_LANG: zh
     steps:
@@ -392,6 +509,16 @@ jobs:
       # scripts/run-ci-group.mjs 的 GROUPS 表（新增测试时同步登记）。
       - run: node scripts/run-ci-group.mjs flaky-observation
 
+      # 失败脚本的原始帧字节（run-ci-group 只保留失败条目的 DSH_TUI_RENDER_LOG）：
+      # 时序 flake 本地复现不出来，这份日志是唯一现场。
+      - uses: actions/upload-artifact@v7
+        if: failure()
+        with:
+          name: render-logs-flaky-observation
+          path: ci-render-logs/
+          if-no-files-found: ignore
+          retention-days: 7
+
   # 平台冒烟（non-blocking 观察档）：Windows（ConPTY/路径/行尾）与
   # macOS（PTY/clang 工具链）上只有真实平台才能暴露的安装与编译差异。
   # 最小链路：install → compile → 入口导入。结果只做观察（不接
@@ -405,6 +532,7 @@ jobs:
       matrix:
         os: [windows-latest, macos-latest]
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
     env:
       DSH_TUI_LANG: zh
     defaults:
@@ -441,9 +569,10 @@ jobs:
   # gate 仍然运行（被跳过的 check 不会阻塞合并，失败才会）；后续 CI 内部
   # 再拆组、改名、加 matrix，branch protection 只需盯住这一个稳定名字。
   ci-gate:
-    needs: [changes, issue-link, build, alpha-compat, render-scroll, input-terminal, session-workspace, channel-ui]
+    needs: [changes, issue-link, build, gates, alpha-compat, render-scroll, input-terminal, session-workspace, channel-ui]
     if: always()
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - name: Require every group to have succeeded
         env:
@@ -451,6 +580,7 @@ jobs:
           CODE: ${{ needs.changes.outputs.code }}
           ISSUE_LINK: ${{ needs.issue-link.result }}
           BUILD: ${{ needs.build.result }}
+          GATES: ${{ needs.gates.result }}
           ALPHA_COMPAT: ${{ needs.alpha-compat.result }}
           RENDER_SCROLL: ${{ needs.render-scroll.result }}
           INPUT_TERMINAL: ${{ needs.input-terminal.result }}
@@ -472,6 +602,7 @@ jobs:
           fi
           for pair in "issue-link:${ISSUE_LINK}" \
                       "build:${BUILD}" \
+                      "gates:${GATES}" \
                       "alpha-compat:${ALPHA_COMPAT}" \
                       "render-scroll:${RENDER_SCROLL}" \
                       "input-terminal:${INPUT_TERMINAL}" \

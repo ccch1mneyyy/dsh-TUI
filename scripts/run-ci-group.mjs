@@ -8,19 +8,34 @@
  *
  * 用法（ci.yml 中每个测试组一条）：
  *   - run: node scripts/run-ci-group.mjs render-scroll
+ *   - run: node scripts/run-ci-group.mjs render-scroll --shard 1/2
  *
- * 组定义在下方 GROUPS 表：名称 + 完整 argv + 可选附加 env（例如
- * measure-depth 需要 NODE_ENV=production）。新增测试时在此表登记——
+ * --shard i/n：只跑本组按登记顺序 round-robin 取到第 i 片的条目（第 i、
+ * i+n、i+2n… 项），ci.yml 用 matrix 把大组拆成并行 job；不带 --shard 即整组。
+ * 新增测试只登记 GROUPS，不必改分片。--list 只打印本片条目不运行。
+ *
+ * 组定义在下方 GROUPS 表：名称 + 完整 argv + 可选附加 env。所有条目默认
+ * NODE_ENV=production：产品入口本就强制生产版 React，dev 版 reconciler 每次
+ * commit 都 performance.measure 并 structured-clone 组件 props，慢一倍以上且
+ * 让时序断言在 CI 上贴线抖动（#805）。显式设置的 NODE_ENV 优先。新增测试时在此表登记——
  * 每条的注释即原 ci.yml 里该 step 上方的说明（迁移时保留）。
  *
  * 行为：
  *   - 逐条运行，实时透传 stdout/stderr（日志仍是每条测试的原始输出）；
  *   - 失败不中断，记录后继续；
- *   - 结束时汇总 ✓/✗ 清单，任一失败 exit 1 并给失败条目打 ::error。
+ *   - 结束时汇总 ✓/✗ 清单（附每条耗时，按登记顺序），任一失败 exit 1 并给
+ *     失败条目打 ::error；在 GitHub Actions 里再往 step summary 写一张按
+ *     耗时降序的表——分片与拆组按这张表的数据来，不靠日志时间戳反推。
+ *   - 每条脚本带 DSH_TUI_RENDER_LOG=ci-render-logs/<名>.log 跑（显式设置优先）：
+ *     通过即删，失败保留，ci.yml 在 job 失败时把目录传成 artifact。时序
+ *     flake（#513/#734 一类"退出备用屏后主屏错一行"）本地复现不出来，只有
+ *     CI 那一次失败的原始帧字节才是证据。
  */
 import { spawnSync } from 'node:child_process'
+import { appendFileSync, mkdirSync, rmSync, statSync } from 'node:fs'
+import { join } from 'node:path'
 
-const env = { ...process.env }
+const env = { NODE_ENV: 'production', ...process.env }
 
 const GROUPS = {
   'render-scroll': [
@@ -90,7 +105,7 @@ const GROUPS = {
     ["verify-subagent-stream-batching", ['node', '--import', 'tsx/esm', 'scripts/verify-subagent-stream-batching.tsx']],
 // 消息列表虚拟化回归：连续高度校正的嵌套更新上限（#129, React #185）、
 // 滚动窗口与 shrink 边界。measure-depth 需生产模式（minified #185）。
-    ["verify-message-measure-depth", ['node', '--import', 'tsx/esm', 'scripts/verify-message-measure-depth.tsx'], { NODE_ENV: 'production' }],
+    ["verify-message-measure-depth", ['node', '--import', 'tsx/esm', 'scripts/verify-message-measure-depth.tsx']],
     ["verify-scroll", ['node', 'scripts/verify-scroll.mjs']],
 // Windows Terminal 全屏拖选+滚轮回归：长 User 气泡的 selection overlay
 // 会污染上一帧；污染帧不得进入 DECSTBM/shiftRows 硬件滚动，否则带背景
@@ -104,7 +119,7 @@ const GROUPS = {
 // unseen-count 上报契约回归：同值重复上报会在密集流式 commit 下把
 // setState 派发进 commit 内，嵌套更新计数连涨越过 React #185 上限
 // （#146 之后残留的活链）。只在计数变化时才允许上报。
-    ["verify-unseen-report-once", ['node', '--import', 'tsx/esm', 'scripts/verify-unseen-report-once.tsx'], { NODE_ENV: 'production' }],
+    ["verify-unseen-report-once", ['node', '--import', 'tsx/esm', 'scripts/verify-unseen-report-once.tsx']],
 // /model 切换 scrollback 重复沉积回归：瞬态面板（补全/picker）必须
 // 走零高度浮层，帧高不随开关涨落——否则帧顶行滚进 scrollback 后被
 // 关闭重绘二次写入，每切一次 /model 多一份启动画。
@@ -607,36 +622,94 @@ const GROUPS = {
 }
 
 const groupName = process.argv[2]
-const group = GROUPS[groupName]
-if (!group) {
+const wholeGroup = GROUPS[groupName]
+if (!wholeGroup) {
   console.error('[run-ci-group] 未知组名: ' + groupName)
   console.error('可用组: ' + Object.keys(GROUPS).join(', '))
   process.exit(2)
 }
 
-console.log('::group::' + groupName + '（' + group.length + ' 项，失败不中断）')
+/** 解析 --shard i/n（缺省 1/1）与 --list。参数非法一律 exit 2，不能静默跑整组。 */
+const flags = process.argv.slice(3)
+let shard = { index: 1, count: 1 }
+let listOnly = false
+for (let i = 0; i < flags.length; i++) {
+  const flag = flags[i]
+  if (flag === '--list') { listOnly = true; continue }
+  const value = flag === '--shard' ? flags[++i] : flag.startsWith('--shard=') ? flag.slice('--shard='.length) : undefined
+  const m = value === undefined ? null : /^([1-9]\d*)\/([1-9]\d*)$/.exec(value)
+  if (flag !== '--shard' && !flag.startsWith('--shard=')) {
+    console.error('[run-ci-group] 未知参数: ' + flag)
+    process.exit(2)
+  }
+  if (!m || Number(m[1]) > Number(m[2])) {
+    console.error('[run-ci-group] --shard 须为 i/n 且 1 ≤ i ≤ n，收到: ' + String(value))
+    process.exit(2)
+  }
+  shard = { index: Number(m[1]), count: Number(m[2]) }
+}
+const group = wholeGroup.filter((_, i) => i % shard.count === shard.index - 1)
+const label = shard.count === 1 ? groupName : groupName + ' ' + shard.index + '/' + shard.count
+
+if (listOnly) {
+  console.log(label + '（' + group.length + '/' + wholeGroup.length + ' 项）')
+  for (const [name] of group) console.log('  ' + name)
+  process.exit(0)
+}
+
+const RENDER_LOG_DIR = 'ci-render-logs'
+mkdirSync(RENDER_LOG_DIR, { recursive: true })
+
+console.log('::group::' + label + '（' + group.length + ' 项，失败不中断）')
 const results = []
 for (const entry of group) {
   const [name, argv, extraEnv] = entry
   console.log('\n===== ' + name + ' =====')
+  const renderLog = join(RENDER_LOG_DIR, name + '.log')
+  rmSync(renderLog, { force: true })
+  const startedAt = performance.now()
   const r = spawnSync(argv[0], argv.slice(1), {
-    env: extraEnv ? { ...env, ...extraEnv } : env,
+    env: { DSH_TUI_RENDER_LOG: renderLog, ...env, ...(extraEnv ?? {}) },
     stdio: 'inherit',
     shell: false,
   })
+  const seconds = (performance.now() - startedAt) / 1000
   const failed = r.status !== 0
-  results.push({ name, failed, status: r.status })
-  if (failed) console.log('::error title=' + groupName + '::测试 ' + name + ' 失败（exit ' + r.status + '）——已记录，继续跑同组其余测试')
+  results.push({ name, failed, status: r.status, seconds })
+  if (failed) {
+    console.log('::error title=' + label + '::测试 ' + name + ' 失败（exit ' + r.status + '）——已记录，继续跑同组其余测试')
+    let bytes = 0
+    try { bytes = statSync(renderLog).size } catch { /* 脚本没画帧（纯逻辑测试）：无日志可留 */ }
+    if (bytes > 0) console.log('[run-ci-group] 帧日志已保留: ' + renderLog + '（' + bytes + ' 字节）')
+  } else {
+    rmSync(renderLog, { force: true })
+  }
 }
 console.log('::endgroup::')
 
-console.log('\n' + groupName + ' 汇总：')
-for (const { name, failed, status } of results) {
-  console.log('  ' + (failed ? '✗' : '✓') + ' ' + name + (failed ? '（exit ' + status + '）' : ''))
+const fmt = seconds => seconds.toFixed(1) + 's'
+const total = results.reduce((sum, r) => sum + r.seconds, 0)
+console.log('\n' + label + ' 汇总（共 ' + fmt(total) + '）：')
+for (const { name, failed, status, seconds } of results) {
+  console.log('  ' + (failed ? '✗' : '✓') + ' ' + name + '  ' + fmt(seconds) + (failed ? '（exit ' + status + '）' : ''))
 }
+
+// GitHub Actions step summary：按耗时降序，给分片/拆组提供数据。
+if (process.env.GITHUB_STEP_SUMMARY) {
+  const rows = [...results].sort((a, b) => b.seconds - a.seconds)
+  appendFileSync(process.env.GITHUB_STEP_SUMMARY, [
+    '### ' + label + '：' + results.length + ' 项，共 ' + fmt(total),
+    '',
+    '| 结果 | 测试 | 耗时 |',
+    '| --- | --- | ---: |',
+    ...rows.map(r => '| ' + (r.failed ? '✗ exit ' + r.status : '✓') + ' | ' + r.name + ' | ' + fmt(r.seconds) + ' |'),
+    '',
+  ].join('\n'))
+}
+
 const failedList = results.filter(r => r.failed)
 if (failedList.length > 0) {
-  console.error('\n' + groupName + '：' + failedList.length + '/' + results.length + ' 项失败——' + failedList.map(f => f.name).join(', '))
+  console.error('\n' + label + '：' + failedList.length + '/' + results.length + ' 项失败——' + failedList.map(f => f.name).join(', '))
   process.exit(1)
 }
-console.log('\n' + groupName + '：全部 ' + results.length + ' 项通过')
+console.log('\n' + label + '：全部 ' + results.length + ' 项通过')

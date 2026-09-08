@@ -1,6 +1,6 @@
 {
   "name": "@deepseek-harness-tui/dsh-tui",
-  "version": "0.10.0-beta.5",
+  "version": "0.10.0",
   "description": "Interactive terminal interface for DeepSeek Harness agents, sessions and tools.",
   "keywords": [
     "dsh",
