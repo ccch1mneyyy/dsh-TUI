@@ -1,8 +1,7 @@
 /**
  * One-shot migration (#24): copy sessions out of the retired cc-tui SQLite
- * store (`~/.dsh-tui/sessions.sqlite` — the pre-#120 `~/.dsh-cc` copy is
- * migrated there on first launch) into the shared JSONL store
- * (`$DSH_HOME/sessions`, i.e. what dsh web and post-#24 cc-tui both use).
+ * store (`~/.dsh-tui/sessions.sqlite`) into the shared JSONL store
+ * (`$DSH_HOME/sessions`).
  *
  * Both sides are written/read through the official persistence backends — the
  * sqlite backend decodes its rows (torn-tail repair included), the jsonl

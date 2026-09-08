@@ -59,9 +59,9 @@ function JobRowLine({ job, focused }: { job: BackgroundJobState; focused: boolea
   return (
     <Box flexDirection="column">
       <Box flexDirection="row" gap={1}>
-        <Text color={focused ? 'claude' : undefined}>{focused ? '❯' : ' '}</Text>
+        <Text color={focused ? 'accent' : undefined}>{focused ? '❯' : ' '}</Text>
         <Text color={info.color}>{info.glyph}</Text>
-        <Text bold={focused} color={focused ? 'claude' : undefined}>{job.id}</Text>
+        <Text bold={focused} color={focused ? 'accent' : undefined}>{job.id}</Text>
         <Text dimColor>·</Text>
         <Text dimColor>{job.kind}</Text>
         <Text dimColor>·</Text>
@@ -169,11 +169,11 @@ export function JobsPanel({ jobs, onClose, onKill }: JobsPanelProps): React.Reac
 
   return (
     <Box flexDirection="column" paddingX={2} paddingY={1} ref={clockRef}>
-      <Divider color="claude" title={t('jobs-panel-title')} />
+      <Divider color="accent" title={t('jobs-panel-title')} />
 
       <Box flexDirection="row" gap={3} marginTop={1} marginBottom={1}>
         <Text>
-          <Text color="claude">{running}</Text>
+          <Text color="accent">{running}</Text>
           <Text dimColor> {t('jobs-panel-count-running')}</Text>
         </Text>
         <Text>

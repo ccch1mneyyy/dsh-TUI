@@ -403,7 +403,7 @@ export function TrajectoryScene({
           内容下有歧义，会把末段 ✕ 挤出 100% 行宽被裁——显式 width 钉死。 */}
       <Box flexShrink={0} width={bandWidth - CLOSE_WIDTH}>
         <Text>
-          <Text color="claude" bold>{`\u2726 ${t('traj-title')}`}</Text>
+          <Text color="accent" bold>{`\u2726 ${t('traj-title')}`}</Text>
           <Text color="subtle">{headerLine.left.slice((`\u2726 ${t('traj-title')}`).length)}</Text>
           <Text>{headerLine.gap}</Text>
           <Text color={totals.errors > 0 ? 'error' : 'subtle'}>{headerLine.right}</Text>

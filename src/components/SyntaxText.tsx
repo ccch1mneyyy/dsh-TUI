@@ -1,8 +1,8 @@
 import React from 'react'
 import { Text } from '../ui.js'
 import type { Color } from '../ink/styles.js'
-import { getCliHighlightPromise, type CliHighlight } from '../cc/cliHighlight.js'
-import { highlightLines, syntaxThemeSignature, type SyntaxLines } from '../cc/syntaxRuns.js'
+import { getCliHighlightPromise, type CliHighlight } from '../terminal-utils/cliHighlight.js'
+import { highlightLines, syntaxThemeSignature, type SyntaxLines } from '../terminal-utils/syntaxRuns.js'
 import { getTheme } from '../theme.js'
 import { useTheme } from './design-system/ThemeProvider.js'
 

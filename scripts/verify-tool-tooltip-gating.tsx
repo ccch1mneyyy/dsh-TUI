@@ -116,7 +116,7 @@ function cardTree(key: string, tool: Record<string, unknown>, foldTerminalComman
         <AssistantToolUseMessage
           key={key}
           tool={{ ...base, ...tool }}
-          addMargin={false}
+          marginTopOnTurn={false}
           verbose={false}
           foldTerminalCommand={foldTerminalCommand}
           onClick={onClick}

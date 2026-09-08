@@ -46,6 +46,27 @@ export type I18nText = string | { one: string; other: string }
 
 const dict = {
   // ── channel.ts ───────────────────────────────────────────────────────
+  // Working spinner labels. WorkingSpinner resolves these through the
+  // `spinner-verb-*` dynamic family so the status stays localized after a
+  // runtime language switch.
+  'spinner-verb-analyzing': { zh: '分析中', en: 'Analyzing' },
+  'spinner-verb-thinking': { zh: '思考中', en: 'Thinking' },
+  'spinner-verb-working': { zh: '工作中', en: 'Working' },
+  'spinner-verb-considering': { zh: '斟酌中', en: 'Considering' },
+  'spinner-verb-reviewing': { zh: '审阅中', en: 'Reviewing' },
+  'spinner-verb-planning': { zh: '规划中', en: 'Planning' },
+  'spinner-verb-checking': { zh: '检查中', en: 'Checking' },
+  'spinner-verb-reading': { zh: '读取中', en: 'Reading' },
+  'spinner-verb-searching': { zh: '检索中', en: 'Searching' },
+  'spinner-verb-building': { zh: '构建中', en: 'Building' },
+  'spinner-verb-testing': { zh: '测试中', en: 'Testing' },
+  'spinner-verb-connecting': { zh: '连接中', en: 'Connecting' },
+  'spinner-verb-preparing': { zh: '准备中', en: 'Preparing' },
+  'spinner-verb-exploring': { zh: '探索中', en: 'Exploring' },
+  'spinner-verb-reasoning': { zh: '推理中', en: 'Reasoning' },
+  'spinner-verb-summarizing': { zh: '总结中', en: 'Summarizing' },
+  'spinner-verb-resolving': { zh: '解析中', en: 'Resolving' },
+  'spinner-verb-responding': { zh: '回应中', en: 'Responding' },
   'activity-indicator-already': { zh: '指示器已是：{{name}}', en: 'Indicator already set: {{name}}' },
   'activity-indicator-switched': { zh: '指示器已切换：{{name}}（已保存）', en: 'Indicator switched: {{name}} (saved)' },
   'activity-pref-write-failed': { zh: '无法写入 ~/.dsh-tui/working-activity.json，切换未保存', en: 'Cannot write ~/.dsh-tui/working-activity.json, switch not saved' },
@@ -135,7 +156,6 @@ const dict = {
   'doctor-config-missing': { zh: '（不存在）', en: '(missing)' },
   'doctor-storage': { zh: '会话存储: {{dir}} {{state}}', en: 'Session storage: {{dir}} {{state}}' },
   'doctor-storage-uninit': { zh: '（未初始化）', en: '(not initialized)' },
-  'doctor-legacy-dir': { zh: '旧数据目录: ~/.dsh-cc 仍存在（已迁移到 ~/.dsh-tui，确认无误后可自行删除）', en: 'Legacy data directory: ~/.dsh-cc still exists (migrated to ~/.dsh-tui; delete it yourself once satisfied)' },
   'subagent-not-mounted': { zh: '子代理服务未挂载（leaf 未启用 subagent）', en: 'Subagent service not mounted (leaf has no subagent)' },
   'subagent-none': { zh: '当前会话暂无子代理', en: 'No subagents in the current session' },
   'subagent-resumable': { zh: '可续', en: 'resumable' },
@@ -214,7 +234,7 @@ const dict = {
   'tree-hint-confirm': { zh: '**Enter** 确认 · Esc 取消', en: '**Enter** to confirm · Esc to cancel' },
   'tree-refused': { zh: '操作未执行（原因已记录到会话通知）', en: 'Not executed — the reason was notified to the conversation' },
   'tree-rewind-failed': { zh: '操作失败 · {{message}}', en: 'Action failed · {{message}}' },
-  'tree-rewound': { zh: '已回退——编辑后重新发送', en: 'Rewound — edit and resend' },
+  'tree-rewound': { zh: '已回退——编辑后重新发送', en: 'Earlier turn restored — edit your message to continue' },
   'tree-forked': { zh: '已从此处分叉', en: 'Forked from this point' },
   'tree-adopted': { zh: '已切换到该分支', en: 'Switched to that branch' },
   'tree-preview-title': { zh: '预览', en: 'Preview' },
@@ -237,8 +257,8 @@ const dict = {
   'model-unknown': { zh: '未知模型「{{spec}}」· /model 查看全部', en: 'Unknown model "{{spec}}" · /model to view all' },
   'compact-unavailable': { zh: '压缩不可用——当前 leaf 没有压缩服务', en: 'Compaction unavailable · no compaction service in this leaf' },
   'compact-while-working': { zh: '回合运行中，无法压缩会话', en: 'Cannot compact while a turn is running' },
-  'compact-working': { zh: '正在压缩会话…', en: 'Compacting conversation…' },
-  'compact-done': { zh: '会话已压缩', en: 'Conversation compacted' },
+  'compact-working': { zh: '正在压缩会话…', en: 'Summarizing earlier turns…' },
+  'compact-done': { zh: '会话已压缩', en: 'Session summary is ready' },
   'compact-nothing': { zh: '没有可压缩的内容', en: 'Nothing to compact' },
   'compact-failed': { zh: '压缩失败 · {{err}}', en: 'Compaction failed · {{err}}' },
   'compact-flush-failed': {
@@ -443,7 +463,7 @@ const dict = {
   'vim-off': { zh: 'vim 模式已关闭', en: 'vim mode off' },
   'terminal-setup-hint': { zh: '推荐 Windows Terminal（≥110 列、等宽字体、TrueColor）。', en: 'Recommended: Windows Terminal (≥110 columns, monospace, TrueColor).' },
   'terminal-paste-hint': { zh: '{{mod}}V 或 Alt+V 粘贴文本、文件路径或图片；Ctrl+Shift+V 终端原生粘贴；右键粘贴同样可用；快捷键可在 /settings 修改。', en: '{{mod}}V or Alt+V pastes text, file paths, or images; Ctrl+Shift+V is native terminal paste; right-click paste also works; remappable via /settings.' },
-  'connect-none': { zh: 'DSH 暂无远程连接机制（CC 的 /connect 对应能力未适配）。', en: 'DSH has no remote connection mechanism (CC\'s /connect equivalent is not adapted).' },
+  'connect-none': { zh: '当前环境未提供远程连接服务。', en: 'No remote connection service is available in this environment.' },
   'theme-switch-failed': { zh: '主题「{{name}}」切换失败（无法写入 ~/.dsh-tui/theme.json）', en: 'Theme "{{name}}" switch failed (cannot write ~/.dsh-tui/theme.json)' },
   'interrupt-delivered': { zh: '已打断当前回合，{{n}} 条消息立即处理', en: 'Interrupted current turn, {{n}} messages processed immediately' },
   'btw-usage': { zh: '用法：/btw <问题> —— 不打断当前对话的快速侧问', en: 'Usage: /btw <question> — quick side question without interrupting the conversation' },
@@ -508,10 +528,6 @@ const dict = {
   'thinking-off': { zh: '隐藏', en: 'hidden' },
   'tokens-usage': { zh: 'Tokens：{{in}} 输入 · {{out}} 输出', en: 'Tokens: {{in}} in · {{out}} out' },
   'tokens-usage-context': { zh: '{{usage}} · 上下文 {{percent}}%', en: '{{usage}} · {{percent}}% of context' },
-
-  // ── plugin.ts — boot-time rename notices (issue #120) ───────────────
-  'legacy-dir-migrated': { zh: '数据目录已从 ~/.dsh-cc 复制到 ~/.dsh-tui（旧目录保留，确认无误后可自行删除）', en: 'Data directory copied from ~/.dsh-cc to ~/.dsh-tui (the old directory is kept; delete it yourself once satisfied)' },
-  'legacy-env-renamed': { zh: '环境变量 {{old}} 已更名为 {{new}}，旧名不再生效', en: 'Environment variable {{old}} was renamed to {{new}}; the old name no longer takes effect' },
 
   // ── plugin.ts — /update flow ───────────────────────────────────────
   'update-aborted-no-profile': { zh: 'dsh-tui 更新中止：未解析到 dsh profile。', en: 'dsh-tui update aborted: no dsh profile resolved.' },
@@ -676,7 +692,7 @@ const dict = {
   'tips-title': { zh: '使用技巧（快捷键 · 命令 · 工作流 · 个性化 · 避坑）', en: 'Usage tips (shortcuts · commands · workflow · display · gotchas)' },
   'tips-hint': { zh: '↑/↓ 滚动 · Esc 关闭', en: '↑/↓ scroll · Esc to close' },
 
-  // ── components/InterruptedByUser.tsx ────────────────────────────────
+  // ── components/TurnInterruptedRow.tsx ────────────────────────────────
   'interrupted-by-user': { zh: '已打断 ', en: 'Interrupted ' },
   'interrupted-ask-next': { zh: '· 接下来想让 DeepSeek 做什么？', en: '· What should DeepSeek do instead?' },
 
@@ -696,8 +712,8 @@ const dict = {
   'resume-hint-rename': { zh: '**Enter** 保存 · Esc 取消', en: '**Enter** to save · Esc to cancel' },
   'resume-title': { zh: '恢复会话', en: 'Resume session' },
 
-  // ── screens/AgentView.tsx + channel.ts (agent view, CC `claude agents`) ─
-  'agentview-title': { zh: '会话总览', en: 'Agent view' },
+  // ── screens/AgentView.tsx + channel.ts (session overview) ─
+  'agentview-title': { zh: '会话总览', en: 'Session overview' },
   'agentview-count-awaited': { zh: '{{n}} 个等待输入', en: '{{n}} awaiting input' },
   'agentview-count-working': { zh: '{{n}} 个运行中', en: '{{n}} working' },
   'agentview-count-completed': { zh: '{{n}} 个已完成', en: '{{n}} completed' },
@@ -727,7 +743,7 @@ const dict = {
   'agentview-reply-failed': { zh: '回复发送失败 · {{err}}', en: 'Reply failed · {{err}}' },
   'agentview-reply-empty': { zh: '回复内容为空', en: 'Reply is empty' },
   'agentview-reply-stopped': { zh: '该会话未运行——回车切换进去后回复', en: 'This session is not running — press Enter to attach and reply' },
-  'agentview-help-title': { zh: '会话总览快捷键', en: 'Agent view shortcuts' },
+  'agentview-help-title': { zh: '会话总览快捷键', en: 'Session overview shortcuts' },
   'agentview-help': { zh: '↑/↓      移动 · PgUp/PgDn 翻页\nEnter/→  切换到选中会话（输入框有文字时：派发）；后台化打开时 **Enter** 打开当前会话\nShift+Enter  派发并立即切换\nSpace    打开/关闭预览 · 预览内可输入回复并 Enter 发送\nCtrl+X   停止会话 · 两秒内再次按下删除\nCtrl+R   重命名选中会话\nEsc      关闭预览 → 清空输入 → 退出；后台化打开时返回被转入后台的会话\nCtrl+C   清空输入 · 两次退出\n?        本帮助\n\n后台会话运行在本进程内：TUI 退出后停止，日志保留可 /resume 恢复。', en: '↑/↓      move · PgUp/PgDn page\nEnter/→  attach to the selected session (with input text: dispatch); after backgrounding, **Enter** opens the current session\nShift+Enter  dispatch and attach\nSpace    toggle the peek panel · type a reply inside and Enter to send\nCtrl+X   stop the session · press again within 2s to delete\nCtrl+R   rename the selected session\nEsc      close peek → clear input → exit; after backgrounding, returns to the backgrounded session\nCtrl+C   clear input · twice to exit\n?        this help\n\nBackground sessions run inside this process: they stop when the TUI exits; their logs survive for /resume.' },
   'agentview-rename-placeholder': { zh: '新的会话名称…', en: 'New session name…' },
   'agentview-renamed': { zh: '已重命名「{{title}}」', en: 'Renamed "{{title}}"' },
@@ -742,7 +758,7 @@ const dict = {
   'agentview-state-stopped': { zh: '已停止', en: 'Stopped' },
   // Approval panel annotation for a background session's ask.
   'approval-background-agent': { zh: '来自后台会话 {{id}} 的审批请求', en: 'Approval request from background session {{id}}' },
-  // Prompt footer (CC agent-view parity): the ← affordance's hint.
+  // Prompt footer session navigation: the ← affordance's hint.
   'input-background-hint-count': { zh: '← {{n}} 个会话等待输入', en: '← {{n}} agents' },
   'input-background-hint-idle': { zh: '← 会话总览', en: '← for agents' },
 
@@ -1008,7 +1024,7 @@ const dict = {
   // ── components/approvals/ApprovalPanel.tsx ──────────────────────────
   'approval-waiting': { zh: ' ⏳ 等待审批 · {{tool}} ', en: ' Awaiting approval · {{tool}} ' },
   'approval-external-hint': { zh: '外部来源：该审批未关联当前会话的活跃工具调用，命令文本可能被伪造，请核实后再决定', en: 'External origin: this approval is not tied to a live tool call of this session — the command text may be forged; verify before deciding' },
-  'approval-proceed': { zh: '要允许这次操作吗？', en: 'Do you want to proceed?' },
+  'approval-proceed': { zh: '要允许这次操作吗？', en: 'Allow this operation?' },
   'approval-yes': { zh: '允许（仅本次）', en: 'Yes, allow once' },
   'approval-no': { zh: '拒绝', en: 'No' },
   'approval-hint': { zh: '↑/↓ 选择 · Enter 确认 · Esc 拒绝', en: '↑/↓ select · Enter confirm · Esc reject' },
@@ -1195,7 +1211,7 @@ const dict = {
   'cmd-desc-clear': { zh: '清空当前会话' },
   'cmd-desc-compact': { zh: '压缩会话历史' },
   'cmd-desc-resume': { zh: '恢复历史会话' },
-  'cmd-desc-agentview': { zh: '打开会话总览（Agent View）' },
+  'cmd-desc-agentview': { zh: '打开会话总览' },
   'cmd-desc-bg': { zh: '当前会话转入后台并打开总览' },
   'cmd-desc-background': { zh: '当前会话转入后台并打开总览' },
   'cmd-desc-rename': { zh: '重命名当前会话' },

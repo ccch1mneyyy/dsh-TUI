@@ -27,7 +27,7 @@ export function contextPressurePct(
 
 /**
  * The working-activity line, rendered either in the spinner slot (while a
- * turn runs — replacing the CC random-verb spinner) or on the status bar
+ * turn runs — alongside the random-verb spinner) or on the status bar
  * (the turn-summary card once idle). pi working-activity style: an animated
  * indicator frame, an ice-blue shimmer sweep over the line, an amber/red
  * `⚠ ctx N%` pressure prefix, and a trailing token suffix for the spinner
@@ -59,12 +59,12 @@ export function ActivityLine({
   const frame = preset.frames[frameIndex] ?? '·'
   const color =
     activity.phase === 'done' || activity.phase === 'tool'
-      ? 'claude'
-      : 'claudeBlue_FOR_SYSTEM_SPINNER'
+      ? 'accent'
+      : 'activity'
   const baseRGB =
     activity.phase === 'tool'
-      ? (parseRGB(theme.claude) ?? BRAND)
-      : (parseRGB(theme.claudeBlue_FOR_SYSTEM_SPINNER) ?? ICE)
+      ? (parseRGB(theme.accent) ?? BRAND)
+      : (parseRGB(theme.activity) ?? ICE)
 
   return (
     <Text wrap="truncate">

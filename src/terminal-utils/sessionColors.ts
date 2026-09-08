@@ -1,13 +1,13 @@
 /**
- * Session accent colors for `/color` (CC's /color semantics): a small
+ * Session accent colors for `/color`: a small
  * named palette that overrides the prompt-input border (and its session
  * label chip) for ONE session, so side-by-side sessions can be told apart
  * at a glance. The name is persisted per session via a `session/color`
  * log event (channel.ts); these hex values are what the name resolves to
  * at render time.
  *
- * Values are mid-tone hues (Radix accent family, the same family CC's
- * /color palette comes from) chosen to stay readable as a border/accent
+ * Values are mid-tone hues from the Radix accent family,
+ * chosen to stay readable as a border/accent
  * on both light and dark terminals.
  */
 

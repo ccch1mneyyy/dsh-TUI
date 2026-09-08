@@ -1,29 +1,23 @@
 /**
- * Spinner 动画的通用工具集：平台相关的帧字符选择、RGB 颜色插值、
+ * Spinner 动画的通用工具集：固定单列宽的帧字符选择、RGB 颜色插值、
  * HSL 色相转 RGB，以及 `rgb(...)` 颜色字符串的解析与记忆化。
  * 这些纯函数被 Spinner 组件及若干加载/装饰元素复用。
  */
 
 export type RGBColor = { r: number; g: number; b: number }
 
-/** Ghostty 终端专属帧序列：星形符号逐帧放大，末帧为实心星。 */
-const GHOSTTY_FRAME_SET = ['·', '✢', '✳', '✶', '✻', '*']
-/** macOS 帧序列：末帧换成八芒星。 */
-const MACOS_FRAME_SET = ['·', '✢', '✳', '✶', '✻', '✽']
-/** 其余平台默认帧序列：第三帧用普通星号。 */
-const FALLBACK_FRAME_SET = ['·', '✢', '*', '✶', '✻', '✽']
+/**
+ * A calm breathing dot: every frame is one display cell, including in
+ * narrow CJK terminals, and no platform-specific glyph set is needed.
+ */
+const DEFAULT_FRAME_SET = ['·', '•', '●', '•']
 
 /**
- * 返回适合当前终端/平台的 spinner 帧字符序列。
+ * 返回 spinner 帧字符序列。
  * 每次调用都返回独立数组，调用方可以安全持有或改动，互不影响。
  */
 export function getDefaultCharacters(): string[] {
-  if (process.env.TERM === 'xterm-ghostty') {
-    return [...GHOSTTY_FRAME_SET]
-  }
-  return process.platform === 'darwin'
-    ? [...MACOS_FRAME_SET]
-    : [...FALLBACK_FRAME_SET]
+  return [...DEFAULT_FRAME_SET]
 }
 
 /**
@@ -47,7 +41,9 @@ export function interpolateColor(
 /**
  * 把 RGB 对象格式化为 `rgb(r,g,b)` 字符串，供 Ink 的 Text 组件使用。
  */
-export function toRGBColor(color: RGBColor): string {
+export function toRGBColor(
+  color: RGBColor,
+): `rgb(${number},${number},${number})` {
   return `rgb(${color.r},${color.g},${color.b})`
 }
 

@@ -10,10 +10,10 @@ import { planReload, type ReloadKind } from '../reload.js'
 import { AlternateScreen, Box, Image, Text, useInput, ScrollBox, type ScrollBoxHandle, useTheme, useTerminalSize } from '../ui.js'
 import * as tuiKit from '../ui.js'
 import { usePageInset } from '../components/PageMargin.js'
-import { POINTER } from '../cc/figures.js'
+import { POINTER } from '../terminal-utils/figures.js'
 import { isPlainReturnInput, modLabel } from '../utils/modifiers.js'
 import { actionMatches } from '../utils/keymap.js'
-import { formatTokens } from '../cc/format.js'
+import { formatTokens } from '../terminal-utils/format.js'
 import { homeDir } from '../utils/paths.js'
 import type { LlmModelInfo, LlmProviderInfo } from '../dsh-adapter/types.js'
 import { cleanRenderText, cleanScalarText } from '../dsh-adapter/sanitize.js'
@@ -89,7 +89,7 @@ import { HistorySearchDialog } from '../components/HistorySearchDialog.js'
 import { RewindPicker } from '../components/RewindPicker.js'
 import { BtwPanel } from '../components/BtwPanel.js'
 import { RecapPanel } from '../components/RecapPanel.js'
-import { isValidSessionColor, SESSION_COLOR_NAMES } from '../cc/sessionColors.js'
+import { isValidSessionColor, SESSION_COLOR_NAMES } from '../terminal-utils/sessionColors.js'
 import { TipsPanel } from '../components/TipsPanel.js'
 import { SubagentDashboard } from '../components/SubagentDashboard.js'
 import { JobsPanel } from '../components/JobsPanel.js'
@@ -205,10 +205,10 @@ function capitalize(text: string): string {
   return text.length === 0 ? text : text[0].toUpperCase() + text.slice(1)
 }
 
-/** Terminal-title spinner frames (CC's TITLE_ANIMATION_FRAMES). */
-const TITLE_ANIMATION_FRAMES = ['⠂', '⠐']
+/** Terminal-title spinner frames. */
+const TITLE_SPINNER_FRAMES = ['⠂', '⠐']
 
-/** Searchable transcript text for one row (`/` incsearch, CC semantics:
+/** Searchable transcript text for one row (`/` incsearch):
  *  user text, assistant text, thinking, tool args/results, local output). */
 function searchableText(row: ChatRow): string {
   switch (row.kind) {
@@ -222,7 +222,7 @@ function searchableText(row: ChatRow): string {
 }
 
 /**
- * Main chat screen in the Claude Code layout: a scrollable transcript
+ * Main chat screen: a scrollable transcript
  * (with the user message the viewport is showing pinned above the transcript
  * while scrolled up, and a 1-column minimap scrollbar with one node per
  * user message — the current message's node is highlighted, clicking a node
@@ -506,7 +506,7 @@ export function Chat({
   /** `/agentview` and `/bg` open the agent view — a screen like the browser:
    *  it owns selection, the dispatch input and every key while up. */
   const [agentViewOpen, setAgentViewOpen] = React.useState(false)
-  /** The session backgrounded when the view opened via ←/`/bg` (CC's "Esc
+  /** The session backgrounded when the view opened via ←/`/bg` (the "Esc
    *  returns to that conversation" return target), cleared on close. */
   const [agentViewReturnId, setAgentViewReturnId] = React.useState<string | undefined>(undefined)
   /** Live agent-view rows: the prompt footer's "← N agents" hint reads the
@@ -521,7 +521,7 @@ export function Chat({
   const backgroundAgentsNeedingInput = agentViewRows.filter(
     row => row.status === 'needs-input' && !row.current,
   ).length
-  /** CC parity: background the attached session and open the agent view
+  /** Background the attached session and open the agent view
    *  (`/bg`, `/background`, and ← on an empty prompt all land here). The
    *  backgrounded session becomes the view's return target (final Esc
    *  attaches back to it). */
@@ -558,7 +558,7 @@ export function Chat({
    *  plugin answering after the user moved on must not open a confirm for
    *  a row they are no longer looking at). */
   const rewindRequestRef = React.useRef(0)
-  /** /btw side-question overlay (CC): pure UI state — the answer never
+  /** /btw side-question overlay: pure UI state — the answer never
    *  enters the transcript or the session log. */
   const [btw, setBtw] = React.useState<{ question: string; answer: string; error?: string; done: boolean } | null>(null)
   const btwAbortRef = React.useRef<AbortController | null>(null)
@@ -910,7 +910,7 @@ export function Chat({
       if (current) current.onHyperlinkClick = undefined
     }
   }, [handleOpenTarget])
-  /** `/` transcript search (less-style incsearch, ported from CC's REPL).
+  /** `/` transcript search (less-style incsearch).
    *  Only the bar's open/closed mode lives in `overlay`; the query and match
    *  counters persist past the bar closing so n/N keep walking the matches. */
   const searchActive = overlay.kind === 'search'
@@ -987,8 +987,8 @@ export function Chat({
   // "return to bottom" affordance (Enter/End/click all land it).
   const showPill = !isSticky
 
-  // Idle Ctrl+C: first press arms an exit, second press exits (CC's
-  // double-press semantics, simplified). Under Windows ConPTY the key
+    // Idle Ctrl+C: first press arms an exit, second press exits. Under
+    // Windows ConPTY the key
   // arrives as stdin data (key.ctrl && input === 'c') — the useInput
   // branch below is the only path; SIGINT is not emitted.
   const exitPendingRef = React.useRef(false)
@@ -1073,13 +1073,13 @@ export function Chat({
   loadingStartTimeRef.current = channel.turnStart
   const thinkingStatus = useThinkingStatus(channel.spinnerMode === 'thinking')
 
-  // Terminal tab title (ported from CC's AnimatedTerminalTitle): the session
+  // Terminal tab title: the session
   // title when set, else "dsh-TUI"; a `⠂/⠐` spinner prefix while a turn is
   // working (960ms cadence, only while the terminal is focused), a static
   // `✦` otherwise. dsh-TUI brands the idle prefix with the DeepSeek whale.
   const [titleFrame, setTitleFrame] = React.useState(0)
   const terminalFocused = useTerminalFocus()
-  // Mouse text selection auto-copy (CC's copy-on-select): active only in
+  // Mouse text selection auto-copy: active only in
   // fullscreen (<AlternateScreen> supplies mouse tracking); a no-op
   // subscription in inline mode, where selection belongs to the terminal.
   // The copy clears the highlight and posts a transient notification.
@@ -1091,12 +1091,12 @@ export function Chat({
   React.useEffect(() => {
     if (!channel.working || !terminalFocused) return
     const interval = setInterval(() => {
-      setTitleFrame(f => (f + 1) % TITLE_ANIMATION_FRAMES.length)
+      setTitleFrame(f => (f + 1) % TITLE_SPINNER_FRAMES.length)
     }, 960)
     return () =>{  clearInterval(interval) }
   }, [channel.working, terminalFocused])
   const titlePrefix = channel.working
-    ? (TITLE_ANIMATION_FRAMES[titleFrame] ?? '✦')
+    ? (TITLE_SPINNER_FRAMES[titleFrame] ?? '✦')
     : '✦'
   useTerminalTitle(
     `${titlePrefix} 🐋 ${channel.sessionTitle}`,
@@ -1340,7 +1340,7 @@ export function Chat({
         if (parts[0] === 'status') {
           setHelpOpen(false)
           channel.pushLocal('/activity', [
-            t('activity-current-preset', { name: channel.activityFrames ?? 'claude' }),
+            t('activity-current-preset', { name: channel.activityFrames ?? 'moon8' }),
             t('activity-switch-hint'),
             t('activity-persist-hint'),
           ])
@@ -1354,7 +1354,7 @@ export function Chat({
           }
           const current = channel.activityFrames
           channel.pushLocal('/activity', [
-            t('activity-current-direct', { name: current ?? 'claude' }),
+            t('activity-current-direct', { name: current ?? 'moon8' }),
             ...PRESET_NAMES.map(name =>
               `${name.padEnd(10)} ${name === 'random' ? t('activity-random-each') : FRAME_PRESETS[name].frames.slice(0, 5).join(' ')}${name === current ? t('activity-current-marker') : ''}`,
             ),
@@ -1535,7 +1535,7 @@ export function Chat({
         return true
       }
       case 'color': {
-        // `/color`（CC accent，按会话持久化）：无参打开调色板选择器，
+        // `/color`（按会话持久化的 accent）：无参打开调色板选择器，
         // `/color <name>` 直接设置，`/color status` 显示当前，`/color
         // reset` 清除回主题默认。颜色经 `session/color` 事件按会话保存
         // ——resume/rewind 后仍是这个会话自己的颜色（见 channel.ts）。
@@ -1580,7 +1580,7 @@ export function Chat({
       case 'new': {
         // One-shot `/new` (issue #25): the old session stays persisted and
         // is recoverable via /resume, so discarding the live view is
-        // non-destructive — no CC-style "press /new again" confirmation.
+        // non-destructive — no second confirmation is required.
         setHelpOpen(false)
         void channel.newSession().then((ok) => {
           if (!ok) return
@@ -1796,7 +1796,7 @@ export function Chat({
         return true
       }
       case 'agentview': {
-        // CC's `claude agents`: one screen for every session. Opens
+        // The agent view shows one screen for every session. It opens
         // immediately; the view reads its own rows (live + persisted).
         setHelpOpen(false)
         agentViewOpenSessionRef.current = channel.agentId
@@ -1805,7 +1805,7 @@ export function Chat({
       }
       case 'bg':
       case 'background': {
-        // CC's `/background`: the attached session moves to the background
+        // `/background`: the attached session moves to the background
         // (it keeps running in this process), the terminal lands on a fresh
         // session, and the agent view opens on top.
         setHelpOpen(false)
@@ -1861,8 +1861,8 @@ export function Chat({
         return true
       }
       case 'rewind':
-        // Same picker as PromptInput's double-Esc on an empty input (CC
-        // rewind); `openRewind` notifies when there is nothing to rewind.
+        // Same picker as PromptInput's double-Esc on an empty input;
+        // `openRewind` notifies when there is nothing to rewind.
         setHelpOpen(false)
         openRewind()
         return true
@@ -2247,7 +2247,7 @@ export function Chat({
         }
         return true
       case 'vim': {
-        // `/vim`（CC vim 编辑模式）：切换输入框的 vim 编辑开关。状态在
+        // `/vim`：切换输入框的 vim 编辑开关。状态在
         // PromptInput 内部（controllerRef.toggleVim），每次切换落回 insert
         // 子模式；Esc 进 normal、i/a/o 回 insert。会话级、不持久化。
         setHelpOpen(false)
@@ -2289,7 +2289,7 @@ export function Chat({
         return true
       }
       case 'btw': {
-        // CC /btw：单轮无工具侧问，overlay 态纯 UI，不打断主回合、不写
+        // `/btw`：单轮无工具侧问，overlay 态纯 UI，不打断主回合、不写
         // 会话历史。空参数只提示用法。
         setHelpOpen(false)
         const question = rawInput.trim()
@@ -2348,7 +2348,7 @@ export function Chat({
     }
   }
 
-  // === Message-selection mode (CC's Shift+↑ message actions) ===
+  // === Message-selection mode (Shift+↑ message actions) ===
   // NOTE: rows is a live in-place array on the channel (no new reference per
   // update), so derived lists must be computed per render — a useMemo keyed
   // on `channel.rows` would freeze at the first empty snapshot forever.
@@ -2368,7 +2368,7 @@ export function Chat({
     return q ? historyEntries.filter(e => e.text.toLowerCase().includes(q)) : historyEntries
   }, [historyEntries, historyQuery])
 
-  // Double-Esc rewind: the user's own messages, newest first (CC lists the
+  // Double-Esc rewind: the user's own messages, newest first (the list shows
   // selectable user turns; steering side-questions are excluded). Computed
   // per render while the picker is open — `channel.rows` is a live in-place
   // array (see selectableRows).
@@ -2414,7 +2414,7 @@ export function Chat({
   const performRewind = async (row: ChatRow, mode: string | null = null) => {
     const text = await channel.rewindTo(row, mode)
     if (text !== null) {
-      // CC puts the restored message back in the prompt for re-editing.
+      // Put the restored message back in the prompt for re-editing.
       setHistoryFill(text)
       channel.notify(t('rewind-done'))
     }
@@ -2542,7 +2542,7 @@ export function Chat({
   })()
 
   // Incsearch: highlight all matches (screen-space overlay) and keep the
-  // current match row in view as the query changes (CC semantics).
+  // current match row in view as the query changes.
   React.useEffect(() => {
     if (!searchActive) return
     setHighlight(searchQuery)
@@ -2624,7 +2624,7 @@ export function Chat({
     // Same for the session tree: plain letters drive its search, clicks and
     // Enter drive its action menu.
     if (treeOpen) return
-    // The agent view (CC `claude agents`) is another whole-screen surface:
+    // The agent view is another whole-screen surface:
     // its dispatch input owns every printable key.
     if (agentViewOpen) return
     // Same for the settings screen: plain letters (s save / d discard) and
@@ -2719,7 +2719,7 @@ export function Chat({
         setHighlight('')
         handle?.scrollTo(searchAnchorRef.current)
       } else if (plainReturn) {
-        // Enter commits; 0-match junk queries don't persist (CC behavior).
+        // Enter commits; 0-match junk queries don't persist.
         if (searchCount === 0) setSearchQuery('')
         dispatchOverlay({ type: 'close' })
       } else if (key.backspace) {
@@ -2748,7 +2748,7 @@ export function Chat({
       return
     }
     // After Enter closed the search bar, n/N keep walking the matches
-    // (CC: "Query persists across bar open/close so n/N keep working").
+    // The query persists across bar open/close so n/N keep working.
     // Transcript mode only — in prompt mode n/N are ordinary input chars.
     if (expanded && input === 'n' && searchQuery && searchCount > 0 && !key.ctrl && !key.meta && !key.super) {
       setSearchCurrent(i => (i >= searchCount - 1 ? 0 : i + 1))
@@ -3070,7 +3070,7 @@ export function Chat({
       if (key.escape) {
         dispatchOverlay({ type: 'close' })
       } else if (key.ctrl && (input === 'c' || input === 'd')) {
-        // CC's history search cancels on ctrl+c/ctrl+d too.
+        // History search cancels on ctrl+c/ctrl+d too.
         dispatchOverlay({ type: 'close' })
       } else if (plainReturn) {
         const entry = historyMatches[focus]
@@ -3084,7 +3084,7 @@ export function Chat({
           dispatchOverlay({ type: 'move', delta: -1, count: historyMatches.length })
         }
       } else if (key.downArrow || actionMatches('history', input, key)) {
-        // CC's historySearch:next — ↓ and the history key (default Ctrl+R)
+        // History search next — ↓ and the history key (default Ctrl+R)
         // walk to the next match.
         if (historyMatches.length > 0) {
           dispatchOverlay({ type: 'move', delta: 1, count: historyMatches.length })
@@ -3235,7 +3235,7 @@ export function Chat({
         setSelectedId(null)
       }
     } else if (key.escape && channel.working && !helpOpen && !promptControllerRef.current?.vimActive()) {
-      // CC's chat:cancel — esc interrupts a running turn (the prompt input
+      // Esc interrupts a running turn (the prompt input
       // only sees esc when idle, where it has the double-tap-clear meaning).
       // With messages queued for delivery, interrupt-and-deliver them right
       // away (Codex behavior); otherwise a plain interrupt parks the queue.
@@ -3272,7 +3272,7 @@ export function Chat({
       const ink = instances.get(process.stdout) ?? instances.values().next().value
       ink?.reanchorViewport()
     } else if (input === '/' && !key.ctrl && !key.meta && !key.super && !helpOpen) {
-      // `/` in transcript mode (Ctrl+O expanded, CC's REPL semantics:
+      // `/` in transcript mode (Ctrl+O expanded):
       // search is active on the transcript screen where `/` isn't a command).
       if (expanded) {
         searchAnchorRef.current = handle?.getScrollTop() ?? 0
@@ -3284,7 +3284,7 @@ export function Chat({
         event.stopImmediatePropagation()
       }
     } else if (key.ctrl && (input === 'c' || input === 'd')) {
-      // CC's app:exit — ctrl+c interrupts a running turn; idle ctrl+c
+      // Ctrl+C interrupts a running turn; idle Ctrl+C
       // CLEARS a non-empty prompt (single press) and only arms the
       // double-press exit when the input is empty; ctrl+d keeps the
       // time-based double-press exit regardless.
@@ -3319,7 +3319,7 @@ export function Chat({
         requestExit()
       }
     } else if (actionMatches('redraw', input, key)) {
-      // CC's app:redraw (default Ctrl+L) — clear the physical terminal and
+      // Redraw (default Ctrl+L) — clear the physical terminal and
       // repaint.
       instances.get(process.stdout)?.forceRedraw()
       // Consume: same readline-shadowing rule as dashboard/showAll below.
@@ -3337,7 +3337,7 @@ export function Chat({
       // Consume: same readline-shadowing rule as dashboard/showAll above.
       event.stopImmediatePropagation()
     } else if (plainReturn && !isSticky) {
-      // Enter while scrolled up returns to the bottom (CC's pill: the
+      // Enter while scrolled up returns to the bottom: the
       // affordance now exists whenever the view is off the bottom, not
       // only with unseen rows).
       handle?.scrollToBottom()
@@ -3663,11 +3663,11 @@ export function Chat({
   return (
     <Box ref={wakeTickRef} flexDirection="column" flexGrow={1} width="100%">
       {!isSticky && anchorUserText && (
-        <StickyPromptHeader
+        <PinnedTurnHeader
           text={anchorUserText}
           onClick={() => {
-            // Click snaps the pinned prompt to the viewport top (CC's
-            // StickyPromptHeader). Jump by the SAME content coordinate the
+            // Click snaps the pinned prompt to the viewport top. Jump by the
+            // SAME content coordinate the
             // rail's tick uses (timeline turn top = the prompt TEXT top):
             // the element-based seek lands the row wrapper's margin at the
             // top instead — one row shy of the text top the anchor rule
@@ -3795,7 +3795,7 @@ export function Chat({
           channel.workingActivity !== undefined &&
           channel.workingActivity.line !== '' &&
           channel.workingActivity.phase !== 'idle' ? (
-            // The working-activity line REPLACES the CC random-verb spinner
+            // The working-activity line replaces the random-verb spinner
             // while a turn runs: the plugin's live line (thinking copy /
             // running tool / narration) is the status, with the spinner
             // slot's token counter preserved as a suffix. Only real activity
@@ -4307,7 +4307,7 @@ export function Chat({
               />
             </Box>
           )}
-          {overlay.kind === 'search' && <TranscriptSearchBar query={searchQuery} cursorOffset={searchCursor} count={searchCount} current={searchCurrent} />}
+          {overlay.kind === 'search' && <TranscriptSearch query={searchQuery} cursorOffset={searchCursor} count={searchCount} current={searchCurrent} />}
         </OverlayAbove>
         )}
         </Box>
@@ -4336,14 +4336,13 @@ export function Chat({
 
 /**
  * The pinned prompt header shown above the ScrollBox while the user has
- * scrolled up (mirroring Claude Code's FullscreenLayout.StickyPromptHeader).
- * Pins the user message the transcript viewport is currently showing — the
- * topmost visible user message, or the nearest one above when only assistant
+ * scrolled up. It pins the user message the transcript viewport is currently
+ * showing — the topmost visible user message, or the nearest one above when only assistant
  * content fills the view — so it tracks which turn the user is reading
  * instead of always carrying the latest prompt. Fixed at 1 row so the
  * ScrollBox never shifts when the text changes.
  */
-function StickyPromptHeader({
+function PinnedTurnHeader({
   text,
   onClick,
 }: {
@@ -4358,7 +4357,7 @@ function StickyPromptHeader({
       paddingRight={1}
       onClick={onClick}
     >
-      <Text color="briefLabelYou" bold wrap="truncate-end">
+      <Text color="userPromptLabel" bold wrap="truncate-end">
         {POINTER} {text}
       </Text>
     </Box>
@@ -4400,7 +4399,7 @@ function NewMessagesPill({
   )
 }
 
-/** /model while the provider catalog is still loading (CC's LoadingState). */
+/** /model while the provider catalog is still loading. */
 function ModelPickerLoading(): React.ReactNode {
   return (
     <Pane color="permission">
@@ -4419,10 +4418,10 @@ function ModelPickerLoading(): React.ReactNode {
 }
 
 /**
- * The `/` incsearch bar (ported from CC's REPL TranscriptSearchBar): a
+ * The `/` incsearch bar: a
  * single row above the prompt input with the query, a block cursor, and the
  * match counter (`current/count`) or a red `no matches` when nothing hits.
- */function TranscriptSearchBar({
+ */function TranscriptSearch({
   query,
   cursorOffset,
   count,
@@ -4436,7 +4435,7 @@ function ModelPickerLoading(): React.ReactNode {
   const cursorChar = cursorOffset < query.length ? query[cursorOffset] : ' '
   return (
     // noSelect: the bar's own text must not match the search query (the
-    // screen-space highlight would self-match, CC's searchHighlight.ts:76).
+    // screen-space highlight would self-match).
     <NoSelect
       borderTopDimColor
       borderBottom={false}

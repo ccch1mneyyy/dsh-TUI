@@ -1,6 +1,6 @@
 /**
- * Minimal semver `>=` comparison for the ported Ink core (ink/terminal.ts
- * gates hyperlink support on TERM_PROGRAM_VERSION).
+ * Minimal semver `>=` comparison used when terminal capabilities depend on
+ * `TERM_PROGRAM_VERSION`.
  * @param a - First version string (optional `v` prefix and pre-release suffix tolerated).
  * @param b - Second version string.
  * @returns True when `a` is greater than or equal to `b`.

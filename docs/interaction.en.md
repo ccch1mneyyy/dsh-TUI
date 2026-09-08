@@ -97,7 +97,7 @@ NORMAL with `Ctrl+C` or `dd`.
 
 Bracketed paste from right-click or the terminal's native paste command keeps
 ordinary text and newlines and is never mistaken for an Enter key. To keep
-rendering, click mapping, and selection geometry identical, terminal ANSI
+rendering, click mapping, and selection geometry consistent, terminal ANSI
 controls are stripped and tabs are expanded to spaces on entry.
 
 ### Fullscreen draft editor (`Ctrl+Shift+E` / `⛶`)
@@ -295,8 +295,7 @@ result against the persistence layer's own change token, so opening it costs
 the same regardless of how long the history is or how large a session got.
 
 On Windows, `dsh-tui.cmd --resume` uses the session ID last written to
-`~/.dsh-tui/resume.txt` (also dual-written to the old path
-`~/.dsh-cc/resume.txt` for older launchers that only read it).
+`~/.dsh-tui/resume.txt`.
 
 ### Agent view
 
@@ -558,11 +557,13 @@ composition own skill content and discovery.
 Additional forms:
 
 - `/activity` opens the animation picker; `/activity frames <name>` selects
-  directly (30 frame names: `random` + `claude` `star2` `sand` `triangle`
-  `box` `box2` `corners` `point` `layer` `flip` `aesthetic` `hamburger`
-  `moon` `moon8` `comet` `breathe` `dots` `arrow` `spark` `bar` `braille`
-  `arc` `circle` `grow` `noise` `bounce` `rainbow` `dqpb` `toggle`; default
-  `moon8`); `/activity status` reports the current choice.
+  directly (current names: `random`, `star2`, `sand`, `triangle`, `box`, `box2`,
+  `corners`, `point`, `layer`, `flip`, `aesthetic`, `hamburger`, `moon`, `moon8`,
+  `whale-spout`, `whale-spin`, `whale-bubbles`, `clock`, `traffic_lights`, `comet`,
+  `breathe`, `dots`, `arrow`, `spark`, `bar`, `braille`, `arc`, `circle`, `grow`,
+  `noise`, `bounce`, `rainbow`, `bar2`, `dqpb`, `toggle`; default `moon8`). A
+  legacy local `claude` setting is read as `moon8`, and the picker does not show
+  that legacy preset; `/activity status` reports the current choice.
 - `/preset <id>` and `/preset status` are described in the configuration guide.
 - `/effort` opens the reasoning-effort slider (←/→ adjusts live);
   `/effort <id>` sets a level directly; `/effort status` reports the current one.

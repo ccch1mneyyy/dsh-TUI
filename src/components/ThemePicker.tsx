@@ -14,7 +14,7 @@ import type { Color } from '../ink/styles.js'
 const SWATCH = '██'
 
 /** Theme keys previewed in the picker, chosen for visual contrast. */
-const SWATCH_KEYS = ['claude', 'text', 'success'] as const
+const SWATCH_KEYS = ['accent', 'text', 'success'] as const
 
 function swatches(theme: Theme): React.ReactNode {
   return (

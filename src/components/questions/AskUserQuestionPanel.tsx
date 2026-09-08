@@ -1,5 +1,5 @@
 /**
- * The questionnaire panel — Claude Code style ask-user-question UI for the
+ * The questionnaire panel — ask-user-question UI for the
  * DSH user-interaction seam. One question per panel (progress header, header
  * chip, wrapped question text, optional detail, option list with focus
  * pointer and multi-select checkmarks), styled in the dsh-tui mist-blue
@@ -30,7 +30,7 @@ import { t } from '../../i18n.js'
 import { Box, Text, useInput, useTerminalSize } from '../../ui.js'
 import { useDeclaredCursor } from '../../ink/hooks/use-declared-cursor.js'
 import { Divider } from '../design-system/Divider.js'
-import { POINTER } from '../../cc/figures.js'
+import { POINTER } from '../../terminal-utils/figures.js'
 import type { QuestionDraft, QuestionSelection } from '../../dsh-adapter/questions.js'
 import { PlanReviewPanel } from './PlanReviewPanel.js'
 import { isPlainReturnInput } from '../../utils/modifiers.js'
@@ -107,7 +107,7 @@ export function AskUserQuestionPanel({
   readClipboardOverride,
 }: AskUserQuestionPanelProps): React.ReactNode {
   // Plan-mode's exit_plan_mode ask carries a presentation intent: render
-  // the CC-style decision card instead of the generic questionnaire. The
+  // the plan decision card instead of the generic questionnaire. The
   // branch precedes every hook so hook order stays stable per remount key.
   if (question.intent?.kind === 'plan-review') {
     return <PlanReviewPanel
@@ -523,15 +523,15 @@ export function AskUserQuestionPanel({
       backgroundColor={hoverIndex === options.length && !inputFocused ? 'userMessageBackgroundHover' : undefined}
     >
       <Box width={1} flexShrink={0}>
-        <Text color={inputFocused ? 'claude' : undefined} bold={inputFocused}>
+        <Text color={inputFocused ? 'accent' : undefined} bold={inputFocused}>
           {inputFocused ? POINTER : ' '}
         </Text>
       </Box>
       <Box width={1} flexShrink={0}>
-        <Text color={inputFocused ? 'claude' : 'suggestion'}>{PENCIL}</Text>
+        <Text color={inputFocused ? 'accent' : 'suggestion'}>{PENCIL}</Text>
       </Box>
       <Box flexDirection="row" marginLeft={1}>
-        <Text bold={inputFocused} color={inputFocused ? 'claude' : 'suggestion'}>
+        <Text bold={inputFocused} color={inputFocused ? 'accent' : 'suggestion'}>
           {t('question-custom-tab')}
         </Text>
         {attached !== null && (
@@ -581,19 +581,19 @@ export function AskUserQuestionPanel({
             backgroundColor={hoverIndex === absoluteIndex && !focused ? 'userMessageBackgroundHover' : undefined}
           >
             <Box width={1} flexShrink={0}>
-              <Text color={focused ? 'claude' : undefined} bold={focused}>
+              <Text color={focused ? 'accent' : undefined} bold={focused}>
                 {pointer}
               </Text>
             </Box>
             <Box width={1} flexShrink={0}>
-              <Text color={focused ? 'claude' : undefined} bold={selected}>
+              <Text color={focused ? 'accent' : undefined} bold={selected}>
                 {selected ? (multiSelect ? CHECKED : '●') : UNCHECKED}
               </Text>
             </Box>
             <Box flexDirection="column" marginLeft={1}>
               <Text
                 bold={focused || selected}
-                color={focused ? 'claude' : undefined}
+                color={focused ? 'accent' : undefined}
                 wrap={windowedOptions ? 'truncate' : 'wrap'}
               >
                 {label}

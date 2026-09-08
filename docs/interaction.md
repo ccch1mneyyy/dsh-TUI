@@ -223,8 +223,7 @@ Sixel 的 256 色量化依然存在，100% 指空间像素比例，不代表无�
 列表只读取会话日志两端的定界窗口，并按持久层自己的变更令牌缓存结果，因此打开
 速度与历史长度、单个会话大小都无关。
 
-Windows `dsh-tui.cmd --resume` 使用 `~/.dsh-tui/resume.txt` 中最后选择的会话 ID
-（该文件同时双写到旧路径 `~/.dsh-cc/resume.txt`，供只读旧路径的旧版启动器过渡）。
+Windows `dsh-tui.cmd --resume` 使用 `~/.dsh-tui/resume.txt` 中最后选择的会话 ID。
 
 ### 会话总览（Agent View）
 
@@ -458,11 +457,13 @@ dsh-TUI 不预装通用技能；技能内容与发现规则由 DSH 及当前组�
 
 补充语法：
 
-- `/activity` 打开动画选择器；`/activity frames <name>` 直接设置（帧名
-  30 个：`random` 随机 + `claude` `star2` `sand` `triangle` `box` `box2`
-  `corners` `point` `layer` `flip` `aesthetic` `hamburger` `moon` `moon8`
-  `comet` `breathe` `dots` `arrow` `spark` `bar` `braille` `arc` `circle`
-  `grow` `noise` `bounce` `rainbow` `dqpb` `toggle`，默认 `moon8`）；
+- `/activity` 打开动画选择器；`/activity frames <name>` 直接设置（当前可选
+  `random`、`star2`、`sand`、`triangle`、`box`、`box2`、`corners`、`point`、
+  `layer`、`flip`、`aesthetic`、`hamburger`、`moon`、`moon8`、`whale-spout`、
+  `whale-spin`、`whale-bubbles`、`clock`、`traffic_lights`、`comet`、`breathe`、
+  `dots`、`arrow`、`spark`、`bar`、`braille`、`arc`、`circle`、`grow`、`noise`、
+  `bounce`、`rainbow`、`bar2`、`dqpb`、`toggle`，默认 `moon8`）。旧本地配置值
+  `claude` 读取时映射为 `moon8`，选择器不显示该旧预设；
   `/activity status` 查看当前选择。
 - `/preset <id>` 与 `/preset status` 见配置文档。
 - `/effort` 打开推理强度滑杆（←/→ 实时调整）；`/effort <id>` 直接设定，

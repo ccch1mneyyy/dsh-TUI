@@ -6,10 +6,8 @@ dsh-TUI 是终端程序：它把 ANSI 写进 PTY、从 PTY 读按键，因此任
 承载它，包括 **VS Code 集成终端**（xterm.js）。本页介绍两种使用方式：
 
 1. **companion 扩展 `dsh-tui-vscode`（推荐）** —— 会话跑在 VS Code **真实的
-   集成终端**里（编辑器区另一侧新开一列），体验与 **Claude Code 官方 VS Code
-   扩展几乎一致**：多会话并存、侧边栏会话历史、一键启动/恢复/指定会话恢复。
-   这是 [issue #161](https://github.com/ccch1mneyyy/dsh-TUI/issues/161) 的完整
-   实现，扩展已上架 VS Code Marketplace。
+   集成终端**里（编辑器区另一侧新开一列），支持多会话并存、侧边栏会话历史、
+   一键启动、恢复上次会话和恢复指定会话。扩展已上架 VS Code Marketplace。
 2. **内置集成终端直接运行** —— 零安装，秒级可用，适合不想装扩展的场景。
 
 > 版本说明：本页中的 `dsh-tui` 指本仓库（TUI 插件，当前 **0.9.0**，建议
@@ -21,22 +19,18 @@ dsh-TUI 是终端程序：它把 ANSI 写进 PTY、从 PTY 读按键，因此任
 ## 方式一：companion 扩展 dsh-tui-vscode（推荐）
 
 [`baobaolaodie/dsh-tui-vscode`](https://github.com/baobaolaodie/dsh-tui-vscode)
-把 dsh-tui 跑进 VS Code **真实的集成终端**——**与 Claude Code 官方扩展的终端
-模式同构**（`createTerminal` + 在终端内运行 CLI），没有 webview、没有 xterm
-模拟层。它不改动 TUI 核心渲染链路，只负责**承载与编辑器加成**。
+把 dsh-tui 跑进 VS Code **真实的集成终端**（通过 `createTerminal` 在终端内运行
+CLI），没有 webview 或 xterm 模拟层。它不改动 TUI 核心渲染链路，只负责**承载与
+编辑器集成**。
 
-### 与 Claude Code 官方扩展的体验对照
+### 扩展提供的功能
 
-| 能力 | Claude Code 官方扩展 | dsh-tui-vscode |
-| --- | --- | --- |
-| 入口 | 活动栏图标 + 编辑器标签栏按钮 + 命令面板 | 同（DeepSeek 鲸鱼图标） |
-| 会话位置 | 编辑器区**另一侧**新开一列（`ViewColumn.Beside`） | 同，不占当前列 |
-| 终端标签 | `Claude Code` + logo 图标 | `DeepSeek` + 鲸鱼图标 |
-| 会话承载 | 真实集成终端（默认 shell：Windows = PowerShell） | 同 |
-| 多会话 | 每次点击新开一个会话终端 | 同，旧会话继续运行 |
-| 侧边栏 | sessions 会话列表 | 会话历史（按项目分组树，更强） |
-| 自动启停 | 打开 = 启动；关闭终端 = 结束 | 同 |
-| 环境注入 | — | `DSH_TUI_LANG` / `$VISUAL` / `$DSH_HOME` / 指定会话 id |
+- 编辑器标签栏按钮、活动栏鲸鱼图标和命令面板入口；
+- 在编辑器区旁边创建名为 `DeepSeek` 的集成终端；
+- 每次启动创建独立会话，已有会话继续在各自终端运行；
+- 侧边栏按项目分组显示会话历史，并支持刷新和恢复指定会话；
+- 注入 `DSH_TUI_LANG`、`$VISUAL`、`$DSH_HOME` 和指定会话 id 等环境变量；
+- 关闭终端结束对应会话，TUI 内双击 `Ctrl+C` 也可退出。
 
 ### 前置条件
 
@@ -84,7 +78,7 @@ npm run package && code --install-extension dsh-tui-vscode-0.5.1.vsix --force
 
 | 命令 ID | 标题 | 作用 |
 | --- | --- | --- |
-| `dsh-tui-vscode.open` | Open panel / 打开会话面板 | 启动新会话（编辑器标签栏按钮同款） |
+| `dsh-tui-vscode.open` | Open panel / 打开会话面板 | 启动新会话（编辑器标签栏按钮的同一入口） |
 | `dsh-tui-vscode.start` | Start new session / 启动新会话 | 启动新会话 |
 | `dsh-tui-vscode.resume` | Resume last session / 恢复上次会话 | `--resume` 恢复最近会话 |
 | `dsh-tui-vscode.focus` | Focus session panel / 聚焦会话面板 | 聚焦最近终端，无则新开 |
@@ -95,7 +89,7 @@ npm run package && code --install-extension dsh-tui-vscode-0.5.1.vsix --force
 
 ### 架构与机制
 
-**会话启动**（与官方扩展同构）：
+**会话启动**：
 
 ```ts
 createTerminal({
@@ -117,18 +111,16 @@ terminal.show()
 
 **环境注入**：`DSH_TUI_LANG`（界面语言）、`$DSH_HOME`（可选覆盖）、
 `$VISUAL`（两者均未设置时导出 `code -w`）通过 `createTerminal` 的 env 传入；
-恢复指定会话时额外注入 `DSH_TUI_RESUME_SESSION`（同时兼容写入
-`DSH_CC_RESUME_SESSION`）。
+恢复指定会话时额外注入 `DSH_TUI_RESUME_SESSION`。
 
 **多会话并存**：每次「启动新会话」都新建终端与进程，旧会话在自己的终端里
-继续运行（与官方一致）；「聚焦」与「终止」作用于**最近创建**的终端；关闭
+继续运行；「聚焦」与「终止」作用于**最近创建**的终端；关闭
 任一终端只结束那一个会话。
 
 **指定会话恢复机制**：点击侧边栏会话条目时，扩展把目标会话 id 通过
 `DSH_TUI_RESUME_SESSION` 环境变量注入终端环境，并**刻意不传 `--resume`**：
 本 profile 的 `cordis.patch.yml` 在启动时读取该 env（`sessionId: !!js
-process.env.DSH_TUI_RESUME_SESSION ?? process.env.DSH_CC_RESUME_SESSION ??
-undefined`，读端优先新名、兼容旧名），TUI 随即恢复该会话。若传裸 `--resume`
+process.env.DSH_TUI_RESUME_SESSION ?? undefined`），TUI 随即恢复该会话。若传裸 `--resume`
 （或 `-c`/`--continue`），启动器（`bin/dsh-tui.js`）会用
 `~/.dsh-tui/resume.txt` 覆盖 env——那是"恢复上次会话"的路径，两者互不干扰
 （已读启动器源码确认）。CLI 用户也可直接用 **`dsh-tui --resume <id>`** 或
@@ -180,7 +172,7 @@ commit-msg）由仓库 `.githooks/` 分发。
 
 ### 已知限制
 
-- 会话内容即终端内容：滚动历史由 VS Code 终端管理（同 Claude Code 终端模式）；
+- 会话内容即终端内容：滚动历史由 VS Code 集成终端管理；
 - 指定会话恢复依赖 dsh-tui profile 的 `cordis.patch.yml`（dsh-tui 0.7.0+）；
 - 无 `session` 头日志的项目名来自组目录解码，含连字符的项目名解码有损
   （如 `flow-comet` → `flow\comet`）——此类会话的 cwd 仍可在悬浮提示中查看。
@@ -246,7 +238,7 @@ WezTerm / iTerm2 / tmux）。
 
 | 场景 | 选择 |
 | --- | --- |
-| 想要 Claude Code 官方扩展同款体验（Beside 分栏、多会话、会话历史侧边栏、指定会话恢复） | 方式一：companion 扩展 |
+| 需要多会话、会话历史和指定会话恢复 | 方式一：companion 扩展 |
 | 偶尔用、不想装扩展 | 方式二：内置终端 |
 | 需要完全独立终端的协议行为（复杂鼠标语义等） | 独立终端窗口 |
 

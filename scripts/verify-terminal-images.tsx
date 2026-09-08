@@ -542,12 +542,12 @@ class FakeStdin extends PassThrough {
 const previousEnv = {
   tmux: process.env.TMUX,
   sty: process.env.STY,
-  accessibility: process.env.CLAUDE_CODE_ACCESSIBILITY,
+  accessibility: process.env.DSH_TUI_ACCESSIBILITY,
   disabled: process.env.DSH_TUI_DISABLE_TERMINAL_IMAGES,
 }
 delete process.env.TMUX
 delete process.env.STY
-delete process.env.CLAUDE_CODE_ACCESSIBILITY
+delete process.env.DSH_TUI_ACCESSIBILITY
 delete process.env.DSH_TUI_DISABLE_TERMINAL_IMAGES
 
 const stdin = new FakeStdin()
@@ -1019,7 +1019,7 @@ for (const [key, value] of Object.entries(previousEnv)) {
       : key === 'sty'
         ? 'STY'
         : key === 'accessibility'
-          ? 'CLAUDE_CODE_ACCESSIBILITY'
+          ? 'DSH_TUI_ACCESSIBILITY'
           : 'DSH_TUI_DISABLE_TERMINAL_IMAGES'
   if (value === undefined) delete process.env[envKey]
   else process.env[envKey] = value

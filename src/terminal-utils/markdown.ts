@@ -310,7 +310,7 @@ function renderHeading(token: Tokens.Heading, state: RenderState): string {
   const theme = getActiveTheme()
   const styled =
     token.depth === 1
-      ? chalk.bold.underline(colorize(text, theme.claude, 'foreground'))
+      ? chalk.bold.underline(colorize(text, theme.accent, 'foreground'))
       : token.depth === 2
         ? chalk.bold(colorize(text, theme.permission, 'foreground'))
         : chalk.bold(text)

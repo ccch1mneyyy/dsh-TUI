@@ -340,6 +340,9 @@
     # Product providers are host-plane singletons. Copy this preset, then
     # remove `disabled` from either ordinary tool row to expose that product
     # only to agents composed from the copy.
+    # `claude-code`/`subagent_claude_code` are upstream dsh-tool-subagent
+    # contract names (the provider route and its configurable toolName);
+    # kept disabled for host-plane parity, not as a shipped product.
     - id: tool-subagent-codex
       name: '@deepseek-ai/dsh-tool-subagent'
       disabled: true

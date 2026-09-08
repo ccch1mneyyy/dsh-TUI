@@ -2,7 +2,7 @@ import React, { type ReactNode, useState } from 'react'
 import { Box, Text } from '../../ui.js'
 import { useDeclaredCursor } from '../../ink/hooks/use-declared-cursor.js'
 import type { ClickEvent } from '../../ink/events/click-event.js'
-import { POINTER, DOWN_ARROW, UP_ARROW, TICK } from '../../cc/figures.js'
+import { POINTER, DOWN_ARROW, UP_ARROW, TICK } from '../../terminal-utils/figures.js'
 
 export type ListItemProps = {
   /** Whether this item is currently focused (keyboard selection).
@@ -38,10 +38,9 @@ export type ListItemProps = {
 }
 
 /**
- * A list item for selection UIs, mirroring Claude Code's
- * design-system/ListItem.tsx: `❯` pointer for the focused row, `✓`
+ * A list item for selection UIs: `❯` marks the focused row, `✓`
  * checkmark for the selected row, description on an indented second line,
- * and CC's color states (focused = suggestion blue, selected = success
+ * and its color states (focused = suggestion blue, selected = success
  * green).
  */
 export function ListItem({
@@ -57,7 +56,7 @@ export function ListItem({
   onClick,
 }: ListItemProps): React.ReactNode {
   // Park the native terminal cursor on the pointer indicator so screen
-  // readers / magnifiers track the focused item (CC behavior). (0,0) is the
+  // readers / magnifiers track the focused item. (0,0) is the
   // top-left of this Box, where the pointer renders.
   const cursorRef = useDeclaredCursor({
     line: 0,

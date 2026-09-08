@@ -167,7 +167,7 @@ export function getScrollHint(): ScrollHint | null {
 // The ScrollBox DOM node (if any) with pendingScrollDelta left after this
 // frame's drain. renderer.ts calls markDirty(it) post-render so the NEXT
 // frame's root blit check fails and we descend to continue draining.
-// Without this, after the scrollbox's dirty flag is cleared (line ~721),
+// Without this, after the render pass clears the scrollbox's dirty flag,
 // the next frame blits root and never reaches the scrollbox — drain stalls.
 let scrollDrainNode: DOMElement | null = null
 
@@ -625,7 +625,7 @@ function renderNodeToOutput(
           // Drop descendants' cache too — hideInstance's markDirty walks UP
           // only, so descendants' .dirty stays false. Their nodeCache entries
           // survive with pre-hide rects. On unhide, if position didn't shift,
-          // the blit check at line ~432 passes and copies EMPTY cells from
+          // the clean-subtree blit check passes and copies EMPTY cells from
           // prevScreen (cleared here) → content vanishes.
           dropSubtreeCache(node)
           layoutShifted = true
@@ -902,10 +902,8 @@ function renderNodeToOutput(
       // Mark this box's region as non-selectable (fullscreen text
       // selection). noSelect ops are applied AFTER blits/writes in
       // output.get(), so this wins regardless of what's rendered into
-      // the region — including blits from prevScreen when the box is
-      // clean (the op is emitted on both the dirty-render path here
-      // AND on the blit fast-path at line ~235 since blitRegion copies
-      // the noSelect bitmap alongside cells).
+      // the region. On the clean-subtree path, blitRegion preserves the
+      // noSelect bitmap alongside cells copied from prevScreen.
       //
       // 'from-left-edge' extends the exclusion from col 0 so any
       // upstream indentation (tool prefix, tree lines) is covered too
@@ -1815,7 +1813,7 @@ function siblingSharesY(node: DOMElement, yogaNode: LayoutNode): boolean {
 // the node's layout bounds are NOT covered by the blit (which only copies
 // the node's own rect). If a dirty sibling re-rendered and overwrote those
 // cells, we must re-blit them from prevScreen so the overlays survive.
-// Example: PromptInputFooter's slash menu uses position='absolute' bottom='100%'
+// Example: CommandSuggestions' slash menu uses position='absolute' bottom='100%'
 // to float above the prompt; a spinner tick in the ScrollBox above re-renders
 // and overwrites those cells. Without this, the menu vanishes on the next frame.
 function blitEscapingAbsoluteDescendants(

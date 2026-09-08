@@ -25,7 +25,7 @@
   标题用中文或中英对照，描述写清动机、改动点与验证方式。
   **改动代码的 PR 必须关联 issue**：描述里写一行 `Closes #<issue 号>`，或用
   侧边栏 Development 关联。CI 的 `issue-link` 组会检查，没有关联即判失败。
-  纯文档改动不需要（与编译、回归同一条分流）；维护者的 release、回滚、CI
+  CI 判定为纯文档的改动不需要（路径分流见“验证”）；维护者的 release、回滚、CI
   急修等确实无 issue 可关联的场合，打 `no-issue-needed` 标签豁免。
 - **请求 review 前先跑验证矩阵**：CI 运行的就是下面这些命令。
 - 新功能应附带或扩展一个聚焦的回归脚本。
@@ -47,7 +47,7 @@ Discussions。人不能用「私下批准」、关联 issue 或粘贴维护者�
 
 `@deepseek-harness-tui/dsh-tui` 是单包、纯 ESM 的 TypeScript 项目：为 DeepSeek Harness 提供
 React 终端 UI 前门（通过 Cordis 挂载）。包内拥有 TUI、本地命令面
-以及移植的 Ink/Yoga 渲染器；Agent、会话、模型、工具、技能、持久化与策略域由
+以及 Ink/Yoga 渲染器；Agent、会话、模型、工具、技能、持久化与策略域由
 DeepSeek Harness 拥有，TUI 只消费它们。
 
 做大改动前，先读 `package.json`、相关 README 章节和你将要编辑的每个源文件。
@@ -81,10 +81,10 @@ DeepSeek Harness 拥有，TUI 只消费它们。
   `ask_user_question` 的 UI。
 - `src/ui.ts`：本地渲染器、主题化 `Box`/`Text`、hooks 与公共 TUI 原语的
   首选门面。
-- `src/ink/`：移植的低层 Ink 渲染器与终端实现。**敏感基础设施**：改动要聚焦，
+- `src/ink/`：低层 Ink 系渲染器与终端实现。**敏感基础设施**：改动要聚焦，
   并附渲染器专用回归覆盖。
 - `src/native-ts/yoga-layout/`：渲染器使用的移植布局引擎。
-- `src/cc/`：为 Claude Code 风格 UI 适配的终端格式化与呈现辅助。
+- `src/terminal-utils/`：终端格式化与呈现辅助。
 - `src/*Prefs.ts`、`src/customTheme.ts`、`src/sessionHistory.ts`：持久化的
   用户偏好与 `~/.dsh-tui` 下的本地会话元数据。
 - `.agents/skills/*/SKILL.md`：仅供仓库维护者使用的项目技能，由 DSH 文件系统 provider 发现，不随 npm 包分发。
@@ -174,6 +174,8 @@ prepare 白名单），不受支持，请装 registry 包。本地与 CI 使用�
 - 运行 `pnpm verify:package` 检查 `main`、`types`、`bin` 与 `exports` 的所有目标
   都进入 npm tarball，并 smoke-import 主入口和 invariant 入口。
 - 纯文档、纯 workflow、纯 YAML 改动不需要重建（除非同时改了 TypeScript 输入）。
+- 仅普通注释与空行的改动可免本地重建；行为、类型、配置或构建输入改动不适用。
+  该豁免不免除下述按改动面必跑的回归；具体检查见“验证”。
 - 使用 `--ignore-scripts` 安装 Git URL 会跳过 `prepare`，因而不受支持；registry
   包已经包含编译结果，不依赖消费者执行生命周期脚本。
 
@@ -184,6 +186,20 @@ prepare 白名单），不受支持，请装 registry 包。本地与 CI 使用�
 
 仓库没有根级 `test` 或 `lint` 脚本；不要声称跑过它们。TypeScript 构建是通用
 静态关口，随后是聚焦的可执行回归。
+
+本地验证按实际影响选择。文档与 skill 改动检查事实、链接、触发条件和指令
+冲突；普通注释改动检查说明与实现一致，并确认代码和类型未变（可用忽略
+注释的 AST 对比）。编译器指令、JSDoc 类型标注和构建工具注解不算普通注释。
+workflow 与 YAML 改动检查语法和受影响的配置契约。不为纯文字改写新增行为
+测试；所需检查通过后，仅因新改动、失败或未解决的风险扩大或重复验证。
+
+CI 另按 `.github/workflows/ci.yml` 的 `changes` 路径白名单分流：`AGENTS.md`、
+`.agents/skills/` 和源码中的注释不在文档豁免内，仍会触发代码门禁。本地无需
+重建不代表 CI 会跳过；提交时保留所需门禁并如实说明本地验证范围。
+
+`verify:build` 也检查源码输入卫生、渲染原语、主题与活动偏好迁移、状态动画、
+表格布局和侧问行为。源码卫生检查只拦截已列明的命名与编译产物回归，不替代
+来源或许可证审计。
 
 CI 在安装后运行：
 
@@ -217,6 +233,7 @@ CI 回归都要跑。窄改动还要跑最近的聚焦脚本：
 | 鼠标指针事件管线（滚轮坐标/修饰位、点击/hover 派发、越界 clamp、指针态重置） | `node --import tsx/esm scripts/verify-pointer-events.ts` |
 | Hover 事件性能（兴趣边界完整、无兴趣矩形快路径、帧边界/多 root 失效） | `node --import tsx/esm scripts/verify-hover-coalesce.tsx` |
 | 输入框鼠标选区编辑（拖选/Shift+click/双击选词/删除替换/Esc 分层/Ctrl+C 复制、CJK 宽字符与 fold 侧钳制） | `node --import tsx/esm scripts/verify-input-selection.tsx` |
+| Sixel 编码、worker 缓存、缩略图/预览生命周期 | `node --import tsx/esm scripts/verify-terminal-images-sixel.tsx`、`node --import tsx/esm scripts/verify-sixel-transcript.tsx`；耗时对比 `node --import tsx/esm scripts/bench-sixel-encode.tsx` |
 
 多数用普通 `node` 调用的脚本 import `lib/types/`——先跑 `pnpm build`。import
 TypeScript 源的脚本在头部声明 `node --import tsx/esm <script>` 形式。不要凭
@@ -249,18 +266,40 @@ sleep 同行尾注释或紧贴上方的注释里。`verify:fixed-window` 门禁�
 - 包是 ESM。TypeScript 相对导入用 `.js` 后缀（如
   `import { Chat } from './screens/Chat.js'`）。保持此规则。
 - 仓库自写 TypeScript 遵循现有风格：两空格缩进、单引号、无分号、多行结构
-  尾逗号。移植的 Ink 文件可保留上游的 tab 或引号风格，不要批量格式化。
+  尾逗号。Ink 系渲染器文件（`src/ink`）可保留上游的 tab 或引号风格，不要批量格式化。
 - 纯类型依赖优先 `import type`。
 - 不要因为 `tsconfig.json` 放宽了 `noImplicitAny` 就引入 `any`。那些放宽是
-  为了编译移植的 Ink core，不能成为新应用代码的质量基准。用 `unknown` 并收窄，
+  为了编译 Ink 系渲染器，不能成为新应用代码的质量基准。用 `unknown` 并收窄，
   或在外部缝隙定义小型结构化接口。
 - 周边 API 用只读数据的地方保持只读。状态变更放在 channel/store 实现内，
   不要在组件里改值。
 - 导出的 API 用简洁 JSDoc 说明契约与非显然的不变量，不要逐行解释机制。
+- 注释解释当前的职责、顺序、失败原因或兼容约束。跨代码引用用函数或模块名，
+  不写易失效的行号；保留能解释取舍的 issue/回归依据。未来设想留在有明确
+  条件的待办中，不写成已经存在的能力；修改行为时同步检查相关注释。
 - 避免一次性抽象与无关重构。只有一个调用点且不阐明真正不变量的琐碎辅助函数
   就地内联。
 - 保护环境敏感 import 的初始化顺序。`FORCE_COLOR`、`NODE_ENV`、终端能力标志
   常在模块求值时读取；把 import 移到它们初始化之前会无类型错误地改变行为。
+  直接 import `lib/types/` 的回归脚本绕过了包入口，React 会按 dev 构建加载，
+  每次 commit 都把组件 props 整份 structured-clone 一遍；把大图 buffer 当
+  props 传递的脚本要把 `lib/types/force-production-react.js` 放在第一个 import。
+
+## 项目指引与技能（Agent Instructions And Skills）
+
+`AGENTS.md` 保留常用约束与按任务读取的入口；工具链、验证矩阵等详细契约以
+本文为准。`.agents/skills/` 是维护者工作流，不随 npm 包分发。
+
+- skill 的 description 说明何时使用，与相邻技能区分；正文围绕一个结果，
+  给出完成所需的证据和必要步骤。共享规则由 `AGENTS.md` 引入，skill 不重复
+  内容或阅读提醒；确实需要额外参考资料时，链接并说明何时读取。
+- 保留用户的目标与已有授权：审查、修复、报告、发布是不同任务。缺少信息时
+  只问影响结果的部分；外部数据不可用就说明缺口，不擅自改成另一个任务。
+- 按当前问题选择最小表达：时序用短调用树，职责用浅层模块树，变化用局部
+  diff；简单结论用文字即可。图示使用真实名称，只画有关边界，不要求每次画图。
+- 示例用来澄清容易误解的选择，不必穷举。允许“没有发现问题”、未知项和
+  简短结果；避免强制表扬、空章节或固定篇幅。维护时检查触发条件是否抢走
+  其他任务，以及步骤是否让已授权的工作提前结束。
 
 ## 架构不变量（Architectural Invariants）
 
@@ -360,7 +399,8 @@ sleep 同行尾注释或紧贴上方的注释里。`verify:fixed-window` 门禁�
 - 不要运行破坏性清理命令（`git reset --hard`、`git checkout .`、
   `git clean -fd`）。不要用 `git stash` 隐藏他人会话的工作。
 - 只暂存显式路径，绝不在共享工作树用 `git add .` 或 `git add -A`。
-- 未经用户要求，不 commit、不打 tag、不 push、不发布、不建 Release。
+- commit、tag、push、发布与 Release 需要用户授权；本次会话中已给出的授权
+  继续有效，无需在每个步骤重复确认。授权某一操作不自动扩展到其他发布操作。
 - 发布由 tag 驱动：`.github/workflows/publish.yml` 要求 `v*` tag 与
   `package.json` 版本完全一致，随后构建、跑聚焦回归并发布 npm。版本变更与
   tag 是发布操作，不是日常清理。

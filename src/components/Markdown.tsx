@@ -1,8 +1,8 @@
 import React from 'react'
 import { marked, type Token, type Tokens } from 'marked'
 import { Box, Text } from '../ui.js'
-import { configureMarked, formatToken, stripPromptXMLTags } from '../cc/markdown.js'
-import { getCliHighlightPromise, type CliHighlight } from '../cc/cliHighlight.js'
+import { configureMarked, formatToken, stripPromptXMLTags } from '../terminal-utils/markdown.js'
+import { getCliHighlightPromise, type CliHighlight } from '../terminal-utils/cliHighlight.js'
 import { MarkdownTable } from './MarkdownTable.js'
 
 /**

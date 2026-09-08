@@ -1,10 +1,8 @@
 /**
- * Public surface of the ported Ink core, themed for dsh-tui.
+ * Public rendering surface, themed for dsh-tui.
  *
- * The original Claude Code source wrapped the Ink core in a themed facade
- * (`src/ink.ts` + design-system ThemedBox/ThemedText). dsh-tui does the same:
- * `Box`/`Text` here are the theme-aware versions, so every ported CC
- * component can use `color="subtle"`-style theme keys unchanged.
+ * `Box` and `Text` are theme-aware wrappers around the local renderer, so
+ * components can use `color="subtle"`-style semantic theme keys consistently.
  */
 export { default as render, renderSync, createRoot } from './ink/root.js'
 export type { RenderOptions, Instance, Root } from './ink/root.js'

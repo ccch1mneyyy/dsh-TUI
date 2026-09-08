@@ -10,7 +10,7 @@
 
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { isPresetName } from './components/activityFrames.js'
+import { isPresetName, normalizeActivityPreset } from './components/activityFrames.js'
 import { parseWorkingActivityConfig, type WorkingActivityConfig } from 'dsh-working-activity/config'
 import { DATA_DIR } from './utils/paths.js'
 
@@ -26,7 +26,7 @@ export function parseActivityFrames(text: string): string | undefined {
     const parsed: unknown = JSON.parse(text)
     if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return undefined
     const frames = (parsed as Record<string, unknown>).frames
-    return typeof frames === 'string' && isPresetName(frames) ? frames : undefined
+    return typeof frames === 'string' && isPresetName(frames) ? normalizeActivityPreset(frames) : undefined
   } catch {
     return undefined
   }
@@ -70,7 +70,7 @@ export function readActivityConfig(dir: string = PREFS_DIR): WorkingActivityConf
 export function writeActivityFrames(name: string, dir: string = PREFS_DIR): boolean {
   try {
     mkdirSync(dir, { recursive: true })
-    writeFileSync(join(dir, 'working-activity.json'), JSON.stringify({ frames: name }, null, 2))
+    writeFileSync(join(dir, 'working-activity.json'), JSON.stringify({ frames: normalizeActivityPreset(name) }, null, 2))
     return true
   } catch {
     return false

@@ -5,8 +5,7 @@ import { useTerminalFocus } from '../ink/hooks/use-terminal-focus.js'
 const BLINK_INTERVAL_MS = 600
 
 /**
- * Hook for synchronized blinking animations that pause when offscreen
- * (mirroring Claude Code's `src/hooks/useBlink.ts`).
+ * Hook for synchronized blinking animations that pause when offscreen.
  *
  * @param enabled - Whether blinking is active
  * @param intervalMs - Blink cycle length in ms; defaults to 600.

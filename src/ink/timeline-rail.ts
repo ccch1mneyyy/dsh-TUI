@@ -1,7 +1,6 @@
 /**
  * Timeline rail — the pure geometry model behind the fullscreen
- * transcript's turn navigator (a port of Grok Build's timeline sidebar
- * semantics onto the dsh Ink tree).
+ * transcript's turn navigator.
  *
  * The rail is a 2-column gutter REPLACING the classic scrollbar: one tick
  * per user turn, where tick position encodes CONVERSATION ORDER, not
@@ -9,8 +8,7 @@
  * consumed by both the renderer and mouse hit-testing, so what you see is
  * always what you can click ("看得到但点不中" impossible by construction).
  *
- * Viewport semantics (all derived from the same turn-top list, mirroring
- * grok-pager's ScrollbackState):
+ * Viewport semantics, derived from one shared turn-top list:
  *
  *  - active: the LAST turn whose prompt top is at-or-above the viewport
  *    top (the turn whose content owns the top row — "the turn being
@@ -26,8 +24,6 @@
  *    scrollTop to maxScroll, so a turn below it could never own the top
  *    row; naming it would make ▼ repeat itself forever).
  *
- * Not ported (deliberately): ratatui Buffer drawing and Rust state
- * organization — algorithms only, per the reference report.
  */
 
 import { stringWidth } from './stringWidth.js'
@@ -56,7 +52,7 @@ export interface TimelineTurn {
   preview: string
   /**
    * True while the row sits BEFORE the fold window (older than the most
-   * recent MAX_RENDERED_ROWS rows): its top is unknown (unmounted since
+   * recent RENDERED_ROW_CAP rows): its top is unknown (unmounted since
    * before the fold; `top` carries −1) and clicking the tick must first
    * reveal the folded history (Chat: showAll + force-mount + seek) rather
    * than scrollTo(−1). Rendering a tick for it is still correct — the

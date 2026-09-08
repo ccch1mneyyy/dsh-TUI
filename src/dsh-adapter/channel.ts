@@ -15,7 +15,7 @@ import { runSideQuestion, wrapSideQuestion } from './sideQuestion.js'
 import { isReservedCredentialRef } from './credentialRefGuard.js'
 import { collectRecentActivity, parseRecapResponse, RECAP_RECENT_CHARS, wrapRecapPrompt, type RecapOutcome } from './recap.js'
 import { swallowNestedUpdateOverflow } from '../ink/update-overflow-guard.js'
-import { SESSION_COLOR_NAMES } from '../cc/sessionColors.js'
+import { SESSION_COLOR_NAMES } from '../terminal-utils/sessionColors.js'
 import { fetchBalance, type BalanceResult } from '../deepseekBalance.js'
 import { isPeakHour } from '../deepseekPricing.js'
 /** dsh-llm LlmRuntime as the side-question needs it: one streaming call. */
@@ -87,10 +87,10 @@ import type { OAuthProviderStatus, OAuthSetupHost, ProfilePathOp, ProviderSetupH
 import { migratePresetPref, readPresetPref, writePresetPref } from '../presetPrefs.js'
 import { composePreset, resolvePersistedPreset, resolvePersistedRoute, runningPresetOf, serviceForAgent } from './presets.js'
 import { resolveCompatiblePreset, rosterOf, type AgentPresetInfo } from './preset-resolution.js'
-import { isPresetName, PRESET_NAMES } from '../components/activityFrames.js'
+import { isPresetName, normalizeActivityPreset, PRESET_NAMES } from '../components/activityFrames.js'
 import { existsSync, statSync, writeFileSync } from 'node:fs'
 import { logForDebugging } from '../utils/debug.js'
-import { homeDir, LEGACY_DATA_DIR } from '../utils/paths.js'
+import { homeDir } from '../utils/paths.js'
 import { extractMentions } from '../utils/mentions.js'
 import { getLang, LANGS, t, tOr, type Lang } from '../i18n.js'
 import { AUTO_THEME_NAME } from '../theme.js'
@@ -487,7 +487,7 @@ function orderedComposerImages<T>(
   return ordered
 }
 
-/** Tool-call card state, mirroring the Claude Code tool-use presentation. */
+/** Tool-call card state used by the transcript renderer. */
 export interface ToolRow {
   readonly callId: string
   readonly name: string
@@ -713,7 +713,10 @@ export interface NotificationItem {
 
 /** Names the subagent delegation tools ship under (preset `toolName` values
  *  plus the CLI default); each renders as a live subagent card, never a plain
- *  tool card. */
+ *  tool card. `subagent_claude_code` is kept deliberately: the liangshen
+ *  preset (presets/liangshen/agent.cordis.yml) still mounts a delegation tool
+ *  under that name (disabled by default), and historical transcripts may
+ *  reference it. */
 const SUBAGENT_TOOL_NAMES = new Set([
   'task',
   'subagent',
@@ -785,8 +788,8 @@ export type ResumeResult =
   | { readonly ok: false; readonly reason: 'failed'; readonly error: string }
 
 /**
- * One session's state in the agent view (CC's `claude agents` screen).
- * States mirror Claude Code's vocabulary:
+ * One session's state in the agent view.
+ * States describe the session's current lifecycle:
  * `working` — a turn is running; `needs-input` — an approval request is
  * parked for this agent; `idle` — live and waiting for the next prompt;
  * `completed` — a live agent whose last turn ended (task finished, waiting);
@@ -932,7 +935,7 @@ export interface Channel {
   readonly sessionTitle: string
   /** Per-session accent color name (`/color`), '' when unset — persisted via
    *  a `session/color` log event so it survives resume/rewind. Renders as
-   *  the prompt-input border + session label chip accent (cc/sessionColors). */
+   *  the prompt-input border + session label chip accent. */
   readonly sessionColor: string
   readonly agentId: string
   /** TUI-owned generation that changes on every live Agent rebind. */
@@ -1002,7 +1005,7 @@ export interface Channel {
   readonly tpsSamples: readonly { tps: number; at: number }[]
   /** Latest in-process working-activity snapshot. */
   readonly workingActivity: ActivityStatus | undefined
-  /** Working-activity indicator preset name (`claude`/`moon`/…/`random`). */
+  /** Working-activity indicator preset name (`moon8`/`moon`/…/`random`). */
   readonly activityFrames: string | undefined
   /** Edit/Write diff presentation preference (`auto`/`split`/`unified`). */
   readonly diffLayout: 'auto' | 'split' | 'unified'
@@ -1131,7 +1134,7 @@ export interface Channel {
   openPluginScene(id: string): boolean
   /** Close the open plugin scene, if any (a no-op otherwise). */
   closePluginScene(): void
-  /** 侧问（CC /btw）：无工具单轮 LLM 调用，复用当前会话上下文；结果不落 session log。 */
+  /** 侧问（/btw）：无工具单轮 LLM 调用，复用当前会话上下文；结果不落 session log。 */
   sideQuestion(
     question: string,
     options?: { signal?: AbortSignal; onText?: (delta: string) => void },
@@ -1197,7 +1200,7 @@ export interface Channel {
    *  settles, so the new turn starts immediately. Plain strings remain the
    *  compatibility form for non-composer callers. Returns the count queued. */
   interruptAndDeliver(inputs: readonly (string | ComposerSubmission)[]): number
-  /** Rewind the conversation to a past user message (CC's double-Esc rewind):
+  /** Rewind the conversation to a past user message (double-Esc rewind):
    *  forks the session through that message, swaps in a fresh agent, and
    *  returns the message text for re-editing — or `null` when unwritable.
    *  `mode` is the plugin-offered rewind mode the user picked (the
@@ -1352,7 +1355,7 @@ export interface Channel {
   previewSession(sessionId: string): Promise<readonly PreviewEntry[]>
   /** Mark a session for `dsh-tui --resume` on the next launch. */
   setResumeTarget(sessionId: string): void
-  /** Rename the current session (CC's /rename): appends a `session/title`
+  /** Rename the current session (/rename): appends a `session/title`
    *  event, which the status line and the /resume picker both read. */
   renameSession(title: string): void
   /** Set the current session's accent color (`/color <name>`): appends a
@@ -1371,7 +1374,7 @@ export interface Channel {
    *  `session/title` event to its log (live sessions go through the normal
    *  rename path). False when the log is absent or undecodable. */
   renameSessionTo(sessionId: string, title: string): Promise<boolean>
-  /** Manually compact the session history (CC's /compact); no-op notify when the leaf lacks a compaction service. */
+  /** Manually compact the session history (/compact); no-op notify when the leaf lacks a compaction service. */
   compact(): void
   /** Render a multi-line local report in the transcript (`/status`,
    *  `/doctor`, …): a `local` row plus one `local-output` row per line. */
@@ -1393,7 +1396,7 @@ export interface Channel {
    *  the service is absent). */
   listSubagents(): Promise<string[]>
   /**
-   * The agent view (CC's `claude agents`) row snapshot: every live agent in
+   * The agent view row snapshot: every live agent in
    * this process plus every persisted session that no live agent owns,
    * ordered needs-input/working first, then most recently active. Reading it
    * is cheap; subscribe for changes.
@@ -1428,7 +1431,7 @@ export interface Channel {
   /** `/bg` — background the attached session: swap the TUI to a fresh agent
    *  while the current one keeps running. The agent view lists it as a
    *  background session; `backgroundedSessionId` is the move's return target
-   *  (CC's "Esc returns to that conversation"). */
+   *  (Esc returns to that conversation). */
   backgroundCurrent(): Promise<BackgroundResult>
   /** Send a follow-up user message to a session from the agent view's peek
    *  panel. Live sessions receive it directly; a session no live agent owns
@@ -1779,21 +1782,21 @@ export interface ChannelState {
   deleteSession(sessionId: string): Promise<boolean>
   /** Rename any persisted session (see the public Channel type). */
   renameSessionTo(sessionId: string, title: string): Promise<boolean>
-  /** Manually compact the session history (CC's /compact). */
+  /** Manually compact the session history (/compact). */
   compact(): void
   /** Multi-line local report (`/status`, `/doctor`, …). */
   pushLocal(title: string, lines: readonly string[]): void
   /** MCP server/tool status for /mcp: one line per server, or setup guidance. */
   mcpStatus(): string[]
-  /** Export the transcript to a markdown file (CC's /export). */
+  /** Export the transcript to a markdown file (/export). */
   exportSession(): string | null
-  /** Create `AGENTS.md` in the session cwd (CC's /init). */
+  /** Create `AGENTS.md` in the session cwd (/init). */
   initWorkspace(): string | null
-  /** Environment diagnostics (CC's /doctor). */
+  /** Environment diagnostics (/doctor). */
   doctorInfo(): string[]
   /** Plugin diagnostics (/plugins); see the public Channel type. */
   pluginsInfo(args: string): string[]
-  /** Subagent rows (CC's /agents). */
+  /** Subagent rows (/agents). */
   listSubagents(): Promise<string[]>
   /** See {@link Channel.agentViewRows}. */
   agentViewRows(): readonly AgentViewRow[]
@@ -2123,7 +2126,7 @@ function prepareReplayEvents(events: readonly SessionEvent[]): SessionEvent[] {
   })
 }
 
-/** Buffer below the context window at which CC warns (autoCompact.ts). */
+/** Buffer below the context window at which the TUI warns. */
 const CONTEXT_WARNING_BUFFER_TOKENS = 20_000
 
 /** How many trailing exchanges the browser's preview pane asks for. */
@@ -2186,8 +2189,8 @@ export function createChannel(
     effort?: string
     /** Derive the working line from base session events; default on. */
     activity?: boolean
-    /** Indicator preset for the working-activity line (`claude`/`moon`/
-     *  `comet`/`dots`/… or `random`); default `claude`. */
+    /** Indicator preset for the working-activity line (`moon8`/`moon`/
+     *  `comet`/`dots`/… or `random`); default `moon8`. */
     activityFrames?: string
     /** Edit/Write diff presentation; default `auto` (side-by-side ≥110
      *  columns, unified below). */
@@ -2253,7 +2256,7 @@ export function createChannel(
   let currentHandle: AgentHandle | undefined = options.handle
   const themeHost = getHostThemes(ctx.get('tuiThemes') as TuiThemeRuntime | undefined)
 
-  // ── agent view (CC's `claude agents`) internal state ──────────────────────
+  // ── agent view internal state ─────────────────────────────────────────────
   // Handles of background sessions this channel dispatched or backgrounded.
   // The agents themselves live in the host registry (ctx.agents) and die with
   // this process's tree; the handles are what stopping one needs to dispose.
@@ -2753,7 +2756,7 @@ export function createChannel(
   // fold line, so each pass touches only newly-eligible rows.
   const foldCursor: { rows: unknown; index: number } = { rows: null, index: 0 }
   let nextNotificationId = 1
-  /** One-shot context-low warning per session (CC's TokenWarning). */
+  /** One-shot context-low warning per session. */
   let contextWarned = false
   const checkContextWarning = (): void => {
     if (contextWarned || state.contextWindow === undefined) return
@@ -4529,7 +4532,7 @@ export function createChannel(
     mode: sessionModes[0]!,
     modeIndex: 0,
     workingActivity: undefined,
-    activityFrames: options.activityFrames,
+    activityFrames: normalizeActivityPreset(options.activityFrames),
     configuredProvider: options.configuredProvider,
     configuredModel: options.configuredModel,
     configuredPreset: options.configuredPreset,
@@ -4827,9 +4830,9 @@ export function createChannel(
         state.notify(t('shell-images-unsupported'), { color: 'warning', timeoutMs: 4000 })
         return
       }
-      // Claude Code's `!` mode: `!cmd` runs locally and only shows the
+      // Local `!` mode: `!cmd` runs locally and only shows the
       // output; `!!cmd` additionally sends the output to the model as a
-      // user message (CC's <bash-stdout> convention).
+      // user message (the local-command-output convention).
       if (trimmed.startsWith('!!')) {
         void runLocalCommand(trimmed.slice(2).trim(), true)
         return
@@ -4876,7 +4879,7 @@ export function createChannel(
     },
     cancel() {
       // Keep the staged queue: an interrupt aborts the running turn but the
-      // queued/steered messages are delivered as the next turn (web parity).
+      // queued/steered messages are delivered as the next turn.
       // Cancellation converges asynchronously; ignore a repeated Esc/Ctrl+C
       // until the aborted turn has produced its terminal event. `cancelPending`
       // mirrors that window for the UI, where a repeated press force-exits.
@@ -4989,7 +4992,7 @@ export function createChannel(
       // message's own seq always sits inside its turn — forking there would
       // hit OPEN_TURN. Rewind to just BEFORE the message's turn/start: the
       // conversation restarts at that point and the message itself comes
-      // back into the input for re-editing (CC's rewind semantics).
+      // back into the input for re-editing (the rewind behavior).
       const events = snapshotLiveSessionEvents(agent.session)
       let boundary = row.seq
       for (let i = row.seq; i >= 0; i--) {
@@ -5136,7 +5139,7 @@ export function createChannel(
       } catch {
         // A listing failure degrades the tree to the live session only.
       }
-      // Same cwd scoping as /resume (Claude Code's project dimension): forks
+      // Same cwd scoping as /resume (the project dimension): forks
       // inherit cwd, so the family never crosses projects — and the match is
       // the project-aware one /resume uses, so a pre-upgrade subdirectory
       // path, Windows separators, or a case variant on one header cannot
@@ -6361,7 +6364,7 @@ export function createChannel(
       currentHandle = handle
       bindAgent()
       clearStagedImages()
-      // Model-switch quip rides the fresh tracker (pi parity).
+      // Model-switch quip rides the fresh tracker.
       updateWorkingActivity('model switch', () => activityTracker.onModelSwitch(model))
       refreshCommandList()
       void refreshLoadedContext()
@@ -6509,6 +6512,7 @@ export function createChannel(
       state.emit()
     },
     setActivityFrames(name) {
+      name = normalizeActivityPreset(name) ?? 'moon8'
       if (!isPresetName(name)) {
         state.notify(t('unknown-activity-preset', { name }), { color: 'error' })
         return false
@@ -7021,7 +7025,7 @@ export function createChannel(
       question: string,
       options?: { signal?: AbortSignal; onText?: (delta: string) => void },
     ): Promise<{ answer: string | null; error?: string }> {
-      // CC /btw：无工具单轮辅助调用，重放 deriveMessages() 前缀 + 一条
+      // /btw：无工具单轮辅助调用，重放 deriveMessages() 前缀 + 一条
       // 包装问题。tools 永不传（侧问无工具是核心语义）；usage 不回收
       // （skipCacheWrite 同义——答案不进主上下文也不进 token 计数）。
       const llm = ctx.get('llm') as SideQuestionLlm | undefined
@@ -7032,7 +7036,7 @@ export function createChannel(
         ...agent.session.deriveMessages(),
         createUserMessage({
           content: [{ type: 'text', text: wrapSideQuestion(question) }],
-          source: { kind: 'plugin', plugin: 'dsh-tui/btw' },
+          source: { kind: 'plugin', plugin: 'dsh-tui/side-question' },
         }),
       ]
       const request: Record<string, unknown> = {
@@ -7095,7 +7099,7 @@ export function createChannel(
       const path = await locateSession(persistence, sessionId)
       return path === undefined ? [] : previewSession(path, PREVIEW_ENTRIES)
     },
-    // ── agent view (CC's `claude agents`) ───────────────────────────────────
+    // ── agent view ──────────────────────────────────────────────────────────
     bindApprovalStore(store) {
       approvalStore = store
       ctx.effect(() => store.subscribe(notifyAgentView))
@@ -7115,7 +7119,7 @@ export function createChannel(
         // (create-only); an empty roster is the honest projection there.
         const roster = typeof agentsService.list === 'function' ? agentsService.list() : []
         for (const liveAgent of roster) {
-          // Subagent children are not agent-view rows (CC parity): they
+          // Subagent children are not agent-view rows: they
           // belong to their parent's conversation.
           if (liveAgent.session.header.origin === 'subagent') continue
           const fold = foldOf(liveAgent)
@@ -7127,7 +7131,7 @@ export function createChannel(
           if (!fold.hasTurns && !isCurrent) continue
           const needsInput = pendingIds.has(id)
           const status = agentViewStatusOf(liveAgent.status, fold, needsInput)
-          // CC parity: a blocked row's summary is the question it is
+          // A blocked row's summary is the question it is
           // waiting on (the parked approval's reason/gated command).
           const ask = needsInput ? approvalStore?.pendingAgentDetail(id) : undefined
           // A prompt-kind summary is the session's own prompt echoed back —
@@ -7153,8 +7157,8 @@ export function createChannel(
       // holds sessions other front doors (web, other profiles) created and
       // the ordinary /resume history. The agent-view ledger is the exact
       // ownership record: only sessions this TUI dispatched, backgrounded,
-      // or attached to FROM the view appear here (CC `claude agents`
-      // semantics — background sessions, not the whole history).
+      // or attached to FROM the view appear here (background sessions, not the
+      // whole history).
       const agentViewSessions = readAgentViewSessions()
       const persisted: AgentViewRow[] = persistedRowsCache
         .filter(summary =>
@@ -7380,7 +7384,7 @@ export function createChannel(
       }
       const previousHandle = currentHandle
       const previousSessionId = String(agent.session.id)
-      // CC parity: even an EMPTY session is backgrounded (it shows as a
+      // Even an EMPTY session is backgrounded (it shows as a
       // "send a prompt to start" row; Esc in the view returns to it), so the
       // handle is always kept for stopping/adopting — never disposed here.
       if (previousHandle !== undefined) backgroundHandles.set(previousSessionId, previousHandle)
@@ -7600,7 +7604,7 @@ export function createChannel(
           try {
             const result = await compactService.compactNow(agent, controller.signal)
             state.notify(result ? t('compact-done') : t('compact-nothing'))
-            // Compaction quip rides the next thinking rotation (pi parity).
+      // Compaction quip rides the next thinking rotation.
             if (result) updateWorkingActivity('compaction', () => activityTracker.onCompact('done'))
           } catch (error: unknown) {
             // ManualCompactionError('persistence'): the replacement checkpoint
@@ -7802,9 +7806,6 @@ export function createChannel(
       // candidate with its own state instead of hardcoding one.
       for (const dir of sessionsRoots()) {
         lines.push(`${t('doctor-storage', { dir, state: existsSync(dir) ? '✓' : t('doctor-storage-uninit') })}`)
-      }
-      if (existsSync(LEGACY_DATA_DIR)) {
-        lines.push(t('doctor-legacy-dir'))
       }
       // Plugin-spec diagnostics (v0.15): the runtime generation and the
       // vendored registry self-check, both soft-probed (#183 discipline).
@@ -8307,7 +8308,7 @@ export function createChannel(
     }
     | undefined
 
-  /** Claude Code's `!` mode: execute in the current workspace provider and
+  /** Local `!` mode: execute in the current workspace provider and
    *  render local-only transcript rows (never sent to the model). */
   const runLocalCommand = async (
     command: string,
@@ -8346,14 +8347,14 @@ export function createChannel(
     })
     state.emit()
     if (includeInContext) {
-      // CC's <bash-stdout> envelope: the model treats the output as the
+      // The <local-command-output> envelope tells the model that this is the
       // result of a local command the user just ran.
       agent.followup(createUserMessage({
         content: [{
           type: 'text',
-          text: `<bash-stdout>
+          text: `<local-command-output>
 ${output}
-</bash-stdout>`,
+</local-command-output>`,
         }],
         source: { kind: 'user' },
       }))
@@ -8365,8 +8366,8 @@ ${output}
   let reasoning: ChatRow | undefined
   /** Reasoning rows sealed by an assistant/message this turn. They stay
    *  `streaming: true` — expanded in the transcript — until turn/end folds
-   *  them (WebUI AssistantMarkdown keepOpen parity: thinking holds open
-   *  through the whole in-flight turn, tool-call steps included). */
+   *  them: thinking stays open through the whole in-flight turn, including
+   *  tool-call steps. */
   const sealedReasoning: ChatRow[] = []
   /** Wall-clock start of the current reasoning row (durationMs on settle). */
   let reasoningStart = 0
@@ -8683,7 +8684,7 @@ ${output}
     switch (event.type) {
       case 'user/message': {
         // Compaction checkpoint: `source = { kind: 'plugin', plugin:
-        // 'compact' }` (dsh-compact's COMPACT_CHECKPOINT_SOURCE). CC shows
+        // 'compact' }` (dsh-compact's COMPACT_CHECKPOINT_SOURCE). The TUI shows
         // the framed summary after /compact; render it as a Divider title +
         // a summary row that defaults folded (`compact` kind) instead of
         // skipping it like other injected context.
@@ -8692,7 +8693,7 @@ ${output}
           event.data.source.plugin === 'compact'
         ) {
           const summary = textOf(event.data.content)
-          state.rows.push({ id: nextRowId, kind: 'notice', text: 'Conversation compacted' })
+          state.rows.push({ id: nextRowId, kind: 'notice', text: 'Session summary is ready' })
           nextRowId += 1
           if (summary) {
             state.rows.push({ id: nextRowId, kind: 'compact', text: summary })
@@ -9123,7 +9124,7 @@ ${output}
         }
         if (reason.kind === 'aborted' || reason.kind === 'interrupted') {
           // `Agent.cancel()` closes the turn as `aborted`; `interrupted`
-          // only appears for crash-orphaned turns. Claude Code renders both
+          // only appears for crash-orphaned turns. The renderer presents both
           // user-interruption paths as a distinct dim row.
           state.rows.push({
             id: nextRowId,
@@ -9148,7 +9149,7 @@ ${output}
       }
       case 'request/context':
         // Adapter-advertised context capacity; drives the context-low
-        // warning (CC's TokenWarning) when the route reports one.
+        // warning when the route reports one.
         if (event.data.contextWindow !== undefined) {
           state.contextWindow = event.data.contextWindow
         }
@@ -9478,7 +9479,7 @@ ${output}
         updateWorkingActivity(`session/event:${event.type}`, () => {
           activityTracker.onSessionEvent(event)
           // Interrupt quip: an aborted/interrupted turn ends the round; the
-          // comeback copy shows on the next thinking rotation (pi parity).
+          // comeback copy shows on the next thinking rotation.
           if ((event as { type: string }).type === 'turn/end') {
             const reason = (event.data as { reason?: { kind?: string } }).reason
             if (reason?.kind === 'aborted' || reason?.kind === 'interrupted') {
@@ -9813,7 +9814,7 @@ async function listFilesDeepCandidates(fs: FileSuggestionFs | undefined, root: s
   let dirCount = 0
   // Round-robin: each directory yields ONE non-skipped entry per visit before
   // it re-queues, so a large early sibling (e.g. `generated/` with 120 files)
-  // cannot starve `src/` out of the per-kind budgets. This is the regression
+  // cannot starve an early sibling directory out of the per-kind budgets. This is the regression
   // contract pinned by scripts/verify-file-completion.mjs.
   while (queue.length && fileCount < maxFiles && dirCount < maxDirectories) {
     if (signal?.aborted) return []
@@ -9852,7 +9853,7 @@ async function listFilesDeepCandidates(fs: FileSuggestionFs | undefined, root: s
 }
 
 /** One attached file's contribution is capped so an absent-minded `@` of a
- *  huge file cannot blow the context window (CC caps @-attachments too). */
+ *  huge file cannot blow the context window. */
 const MENTION_MAX_FILE_CHARS = 50_000
 /** Total budget across all attachments in one message. */
 const MENTION_MAX_TOTAL_CHARS = 200_000

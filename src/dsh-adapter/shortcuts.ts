@@ -57,8 +57,7 @@ export interface TuiShortcutHost {
 }
 
 export interface TuiShortcutOptions {
-  /** One-line description (shown by future /help surfaces; required so
-   *  every binding is discoverable). */
+  /** Required one-line label returned by list() for diagnostics. */
   description: string
   handler: () => void | Promise<void>
 }
@@ -213,7 +212,7 @@ export class TuiShortcutRuntime extends Service {
     return dispose
   }
 
-  /** Registered combos with descriptions (diagnostics / future /help). */
+  /** Combos and descriptions owned by the calling plugin activation. */
   list(): readonly { combo: string; description: string }[] {
     const caller = requirePluginCaller(this.ctx, 'tuiShortcuts.list', this)
     const owner = activationFiber(caller)

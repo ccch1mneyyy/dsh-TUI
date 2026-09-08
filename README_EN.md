@@ -21,9 +21,9 @@
 
 # dsh-TUI
 
-`dsh-TUI` is an interactive terminal front door for DeepSeek Harness. It is
-mounted as a Cordis plugin and provides a Claude Code-style conversation, tool,
-session, and fullscreen terminal experience while continuing to use the
+`dsh-TUI` is an interactive terminal UI for DeepSeek Harness. It is mounted as
+a Cordis plugin and provides conversation, tool, session, and fullscreen
+terminal views while continuing to use the
 official DSH agent, model, tool, session, and persistence services.
 
 The project does not patch DeepSeek Harness core. Installing the plugin enables
@@ -108,6 +108,8 @@ the interface, and removing it leaves no core modifications behind.
   hit rate, reasoning effort, input/output tokens, and Git/session metadata.
   In fullscreen, hovering a truncated tool header, wrapped user prompt, or
   session title for ~600ms opens a tooltip with the full content.
+- **Activity animation**: `moon8` is the default. A legacy local `claude`
+  setting is read as `moon8`, and the picker lists current presets only.
 - **Complete session workflow**: `/resume` groups history by working directory
   with search and preview (left-click resumes, right-click opens an action
   menu; pin frequent sessions — a `Pinned` group floats them to the top, the
@@ -141,10 +143,6 @@ the interface, and removing it leaves no core modifications behind.
 </p>
 
 Live activity, goal/todo state, and context metrics:
-
-<p align="center">
-  <img src="screenshots/working-line.png" alt="dsh-TUI live activity and context metrics" width="100%">
-</p>
 
 ## Quick Start
 
@@ -210,8 +208,8 @@ panes already retain, reconnect, and expose their live state.
 
 For running dsh-TUI inside VS Code — directly in the integrated terminal or
 via the `dsh-tui-vscode` companion extension (real-integrated-terminal
-sessions, an experience almost identical to the official Claude Code
-extension; available on the VS Code Marketplace) — see
+sessions, and specific-session resume; the extension is available on the VS Code
+Marketplace) — see
 [Running dsh-TUI in VS Code](docs/vscode.en.md).
 
 See [Getting started](docs/getting-started.en.md) for profile composition,
@@ -248,7 +246,7 @@ For migration from the former `dsh-cc-tui` package and `cc-tui` profile, see
 | `Tab` | Complete `/` commands or `@` files (keep drilling into directories); **while the model is working = follow-up** (queued after the current turn) |
 | `Ctrl+C` | Interrupt the current turn; press again while the interrupt is still settling to force-exit; press twice while idle to exit; **with an active mouse selection in the prompt, copies it to the clipboard and keeps it** |
 | `Esc` | Close an open image preview; close the command/file menu; **with an active selection in the prompt: only clears the selection**; double-press while idle clears the input; **double-press on empty input = time rewind** |
-| `←` (empty input) | **Background this session and open the agent view** (CC agent view; with text, ← moves the caret as usual) |
+| `←` (empty input) | **Background this session and open the agent view** (with text, ← moves the caret as usual) |
 | `Ctrl+O` | Expand/collapse details (full thinking text, tool arguments and output) |
 | `Ctrl+Shift+E` | Expand the fullscreen draft editor (Enter = newline, `Ctrl+Enter` = send, `Esc` = collapse keeping the draft; line numbers, wheel scrolling, click/drag selection) |
 | `Ctrl+R` | History search |
@@ -308,7 +306,7 @@ so keep using `Ctrl`.
 | `Esc` (from question 2 onward) | Return to the previous question and keep the current draft |
 | `Esc` (from question 1) / `Ctrl+C` | Cancel the whole question batch (the model receives ASK_CANCELLED and can continue the conversation) |
 
-**Local commands** (a full replica of the CC command set, all routed through the official DSH pipeline)
+**Built-in commands** (routed through the official DSH pipeline)
 
 | Group | Commands |
 |---|---|
@@ -324,7 +322,7 @@ so keep using `Ctrl`.
 
 **Agent view** (`/agentview`)
 
-One full-screen surface for every session in this process: the attached conversation, the background sessions dispatched here, and the stopped TUI sessions persisted on disk. The header shows CC-style "model · directory" plus state counts (awaiting input · working · completed); rows are grouped by state (needs input > working > failed > completed > idle > stopped), **working rows animate their glyph with CC's `·✢*✶✻✽` frame cycle**, each with a one-line activity summary derived from the session's own output (no extra model calls) — a row waiting on input shows the question it is blocked on. **Only sessions this TUI dispatched, backgrounded, or attached to from the view are listed** — the ordinary `/resume` history and sessions created by other front doors (e.g. web) never appear.
+One full-screen surface lists every session in this process: the attached conversation, background sessions dispatched here, and stopped TUI sessions persisted on disk. The header shows `model · directory` and state counts (awaiting input · working · completed); rows are grouped by state (needs input > working > failed > completed > idle > stopped), and working rows animate their glyph. Each row includes a one-line activity summary derived from the session's own output (no extra model calls); a row waiting on input shows the question it is blocked on. **Only sessions this TUI dispatched, backgrounded, or attached to from the view are listed** — the ordinary `/resume` history and sessions created by other front doors (e.g. web) never appear.
 
 | Key | Action |
 |---|---|
@@ -354,7 +352,9 @@ One full-screen surface for every session in this process: the attached conversa
 | [Themes](docs/themes.en.md) | Built-in themes, background detection, static JSON and npm plugin themes, validation |
 | [Interaction and commands](docs/interaction.en.md) | Keyboard, mouse, questionnaires, slash commands, session workflows |
 | [Architecture and limitations](docs/architecture.en.md) | Runtime path, rendering, persistence, security boundary, known limitations |
-| [VS Code guide](docs/vscode.en.md) | Running dsh-tui in the VS Code integrated terminal; the `dsh-tui-vscode` companion extension offers an experience almost identical to the official Claude Code extension (on the Marketplace) |
+| [Community Management](docs/community-management.en.md) | Community entry points, roles, proposal flow, roadmap rules, and maintenance cadence |
+| [Project Roadmap](docs/roadmap.en.md) | Public goals, phases, task status, exit criteria, and Future Work |
+| [VS Code guide](docs/vscode.en.md) | Running dsh-tui in the VS Code integrated terminal; the `dsh-tui-vscode` companion extension offers multiple sessions, session history, and specific-session resume (on the Marketplace) |
 | [Contributing](docs/contributing.en.md) | Contribution workflow, repository map, build artifacts, verification matrix, change rules |
 | [Plugin admission & development](https://github.com/T-Auto/dsh-ecosystem-spec/blob/main/docs/plugin-admission-and-development.md) | Interface & compatibility agreement / plugin admission spec / seams / contracts / verification checklist (merged into dsh-ecosystem-spec) |
 
@@ -390,7 +390,7 @@ dsh profile
   -> session/event
   -> Channel projection
   -> React components
-  -> ported Ink/Yoga renderer
+  -> Ink/Yoga renderer
   -> terminal
 ```
 
@@ -461,11 +461,11 @@ chat / tool base events ──> persisted Session log ──> TUI / Web
 - Exit finishes with a process exit and does not wait for the agent's async disk writes
   (persistence is covered by the persistence plugin as a backstop).
 - **Agent view background sessions live inside this process**: they all stop when the
-  TUI exits (CC's supervisor process and survival across restarts are out of v1 scope);
+  TUI exits (a supervisor process and survival across restarts are out of v1 scope);
   row summaries come from the session's own output with no extra summary-model calls;
   worktree isolation, pinning, directory grouping, and shell background jobs are not
   shipped yet.
-- Tool-level approval is implemented: the approval service + TUI answerer (CC-style
+- Tool-level approval is implemented: the approval service + TUI answerer (local
   approval panel) consumes the approval stream, and privilege-escalation commands pop
   an approval bar. `/permission` preset switching comes from dsh-base's
   `permission-presets` plugin and is available in the profile composition by default.
@@ -473,7 +473,7 @@ chat / tool base events ──> persisted Session log ──> TUI / Web
   roster; a malformed mounted service is unavailable and fails closed. If the
   external `/permission` command is not registered, input keeps the existing
   default/model dispatch behavior.
-- `/connect` `/hooks` are CC-named placeholders: the corresponding
+- `/connect` `/hooks` are reserved placeholders: the corresponding
   capabilities have no equivalent mechanism on the DSH side, and the commands give an
   explicit explanation rather than staying silent.
 - The `/thinking` display toggle is **not persisted**; restarts and new sessions fall

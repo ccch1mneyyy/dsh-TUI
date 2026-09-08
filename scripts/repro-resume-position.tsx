@@ -121,7 +121,7 @@ function makeChannel(initialRows: any[]) {
     tokens: { input: 0, output: 0 }, cwd: '/tmp/demo', displayCwd: '/tmp/demo', gitBranch: 'main',
     working: false, spinnerMode: 'requesting', responseChars: 0, activeToolCount: 0, turnStart: 0,
     pending: [], commandList: LOCAL_COMMANDS, notifications: [], mode: { plan: false, sandbox: undefined },
-    activityFrames: 'claude', agentPreset: undefined, subagents: [], lastUserText: '',
+    activityFrames: 'moon8', agentPreset: undefined, subagents: [], lastUserText: '',
     scrollGutter: 'timeline', whale: true,
     subscribe(cb: () => void) { listeners.add(cb); return () => listeners.delete(cb) },
     emit() { channel.version++; for (const cb of listeners) cb() },

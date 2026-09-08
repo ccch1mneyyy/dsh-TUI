@@ -185,9 +185,9 @@ export function LogoV2({
   const theme = getTheme(themeName)
   const { columns } = useTerminalSize()
 
-  const wordmarkRGB = parseRGB(theme.claude) ?? BRAND
-  const wordmarkShimmerRGB = parseRGB(theme.claudeShimmer) ?? ICE
-  const taglineRGB = parseRGB(theme.claudeBlue_FOR_SYSTEM_SPINNER) ?? ICE
+  const wordmarkRGB = parseRGB(theme.accent) ?? BRAND
+  const wordmarkShimmerRGB = parseRGB(theme.accentShimmer) ?? ICE
+  const taglineRGB = parseRGB(theme.activity) ?? ICE
 
   const showWhale = whale && columns >= WHALE_MIN_COLUMNS
 

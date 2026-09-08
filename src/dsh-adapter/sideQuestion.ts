@@ -1,6 +1,5 @@
 /**
- * Side Question (`/btw`) — CC's btw.tsx/sideQuestion.ts semantics on the
- * dsh call primitives: a single-turn, TOOL-LESS LLM call replaying the
+ * Side Question (`/btw`): a single-turn call without tools, replaying the
  * live session's derived history (prompt-cache reuse, compaction-style
  * auxiliary call) plus one wrapped user message. The answer never enters
  * the session log — it is pure UI state in the Chat screen.
@@ -11,27 +10,18 @@
 import { BlockAssembler, type StreamChunk } from '@deepseek-ai/dsh-llm'
 
 /**
- * Wrap a side question with the single-response, no-tools contract (CC's
- * wording): a lightweight instance sharing the conversation context, the
- * main agent uninterrupted, no promises of action, no looking things up.
+ * Describe the auxiliary call's scope: one answer from existing context,
+ * with no tools, follow-up actions, or interruption of the main session.
  */
 export function wrapSideQuestion(question: string): string {
-  return `<system-reminder>This is a side question from the user. You must answer this question directly in a single response.
-
-IMPORTANT CONTEXT:
-- You are a separate, lightweight agent spawned to answer this one question
-- The main agent is NOT interrupted - it continues working independently in the background
-- You share the conversation context but are a completely separate instance
-- Do NOT reference being interrupted or what you were "previously doing" - that framing is incorrect
-
-CRITICAL CONSTRAINTS:
-- You have NO tools available - you cannot read files, run commands, search, or take any actions
-- This is a one-off response - there will be no follow-up turns
-- You can ONLY provide information based on what you already know from the conversation context
-- NEVER say things like "Let me try...", "I'll now...", "Let me check...", or promise to take any action
-- If you don't know the answer, say so - do not offer to look it up or investigate
-
-Simply answer the question with the information you have.</system-reminder>
+  return `<side-question-context>
+Give one concise answer to the question below using the conversation already provided.
+This auxiliary call runs alongside the main session. The main task continues independently;
+do not describe it as interrupted, resumed, or as work performed by this call.
+No tools are available here: do not claim to inspect files, execute commands, browse,
+or carry out future actions. There will be no follow-up turn for this call.
+When the available context is insufficient, state what is unknown without promising research.
+</side-question-context>
 
 ${question}`
 }

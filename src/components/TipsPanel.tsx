@@ -48,7 +48,7 @@ export function TipsPanel({ onClose }: { onClose: () => void }): React.ReactNode
           <ScrollBox ref={scrollRef} flexDirection="column" flexGrow={1}>
             {GROUP_ORDER.map(group => (
               <Box key={group} flexDirection="column" marginBottom={1}>
-                <Text bold color="claude">
+                <Text bold color="accent">
                   {lang === 'zh' ? TIP_GROUP_LABELS[group].zh : TIP_GROUP_LABELS[group].en}
                 </Text>
                 {TIPS.filter(tip => tip.group === group).map(tip => (

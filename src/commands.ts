@@ -1,7 +1,6 @@
 /**
- * Local slash commands for the dsh-tui TUI. Claude Code's command system is
- * deeply wired into its engine; dsh-tui ships a small built-in set with the
- * same `/name — description` suggestion chrome, and merges plugin-registered
+ * Local slash commands for dsh-tui, presented as `/name — description`.
+ * The built-in set is merged with plugin-registered
  * commands (plan/goal/…) from the DSH command registry (`dsh-commands`) —
  * `runCommand` in the Chat screen dispatches either kind, with the registry
  * handler winning for names both sides declare.
@@ -76,14 +75,14 @@ export const LOCAL_COMMANDS: LocalCommand[] = [
   // Conversation
   { name: 'new', description: 'Start a new conversation' },
   { name: 'clear', description: 'Clear the conversation' },
-  { name: 'compact', description: 'Compact the conversation history' },
-  { name: 'resume', description: 'Resume a previous session' },
+  { name: 'compact', description: 'Summarize earlier turns to free context space' },
+  { name: 'resume', description: 'Continue a saved session' },
   { name: 'rename', description: 'Rename the current session' },
   { name: 'recap', description: 'Generate a recap of recent session activity' },
-  { name: 'rewind', description: 'Rewind the conversation to a previous message' },
+  { name: 'rewind', description: 'Return the session to an earlier message' },
   { name: 'tree', description: 'Browse the session family tree (rewind / fork / adopt)' },
   { name: 'fork', description: 'Fork the current session into a resumable copy' },
-  { name: 'export', description: 'Export the conversation to a markdown file' },
+  { name: 'export', description: 'Save the session as a Markdown file' },
   { name: 'btw', description: 'Ask a quick side question without interrupting the conversation' },
   { name: 'trace', description: 'Show the session event trace timeline' },
   { name: 'agentview', description: 'Open the agent view (all sessions)' },
@@ -124,7 +123,7 @@ export const LOCAL_COMMANDS: LocalCommand[] = [
   // Skills are discovered through the DSH registry and added at runtime.
   // A local entry of the same name would win the collision filter.
   // Misc / not applicable on this leaf
-  { name: 'vim', description: 'Toggle vim mode' },
+  { name: 'vim', description: 'Turn Vim keybindings on or off' },
   { name: 'terminal-setup', description: 'Show terminal setup instructions' },
   { name: 'connect', description: 'Connect to a remote machine' },
   { name: 'workspace', description: 'Resume, rename, or open a workspace' },
@@ -210,7 +209,7 @@ export function isLocalCommandName(
 }
 
 /**
- * Filter commands by a `/…` input prefix (matches the CC overlay behavior).
+ * Filter commands by a `/…` input prefix.
  * The prefix is the whole input after the slash, so `/plan off` matches
  * nothing and the overlay stays closed — Enter still dispatches through
  * `parseCommandName`.

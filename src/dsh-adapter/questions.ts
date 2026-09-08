@@ -3,8 +3,8 @@
  * seam (`ctx.userQuestions`). The harness's model-facing
  * `ask_user_question` tool calls `UserQuestionService.ask()`, which
  * forwards to the provider registered here; this store parks the request,
- * surfaces one question at a time to the TUI (Claude Code style
- * questionnaire), and settles the harness promise when the user answers,
+ * surfaces one question at a time to the TUI questionnaire, and settles the
+ * harness promise when the user answers,
  * cancels, or the owning tool's abort signal fires.
  *
  * Queue semantics mirror the official dsh-tui chat/questions machine: asks

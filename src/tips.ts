@@ -733,12 +733,6 @@ export const TIPS: readonly Tip[] = [
     en: 'Main-chat mouse needs fullscreen; full-page screens (trajectory, /resume) have it in both modes',
   },
   {
-    id: 'pit-env-rename',
-    group: 'pitfalls',
-    zh: '旧 CC_TUI_*/DSH_CC_* 环境变量已改名 DSH_TUI_*',
-    en: 'Legacy CC_TUI_*/DSH_CC_* env vars are now DSH_TUI_*',
-  },
-  {
     id: 'pit-pnpm',
     group: 'pitfalls',
     zh: '需要 pnpm 10+（pnpm 9 会启动失败）',

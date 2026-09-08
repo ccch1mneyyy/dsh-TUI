@@ -1,6 +1,6 @@
 # AGENTS.md
 
-dsh-TUI 是 DeepSeek Harness 的终端界面插件：零核心改动、纯插件挂载的 Claude Code 风格 TUI（`@deepseek-harness-tui/dsh-tui`）。Agent、会话、模型、工具、持久化与策略域由 DeepSeek Harness 拥有，本包只消费它们。改动前先读 [docs/contributing.md](docs/contributing.md)（本仓库共享开发契约的权威文本）与 [ADAPTER.md](ADAPTER.md)（上游边界与契约）；整体结构见 [docs/architecture.md](docs/architecture.md)。
+dsh-TUI 是 DeepSeek Harness 的终端界面插件：零核心改动、纯插件挂载的交互式 TUI（`@deepseek-harness-tui/dsh-tui`）。Agent、会话、模型、工具、持久化与策略域由 DeepSeek Harness 拥有，本包只消费它们。改动前先读 [docs/contributing.md](docs/contributing.md)（本仓库共享开发契约的权威文本）与 [ADAPTER.md](ADAPTER.md)（上游边界与契约）；整体结构见 [docs/architecture.md](docs/architecture.md)。
 
 ## 仓库布局
 
@@ -12,9 +12,9 @@ src/screens/        Chat.tsx 交互协调器与状态栏呈现
 src/components/     功能组件；design-system/ 是主题感知原语
 src/themeCatalog.ts  内置、静态 JSON 与运行时插件主题的统一列表/解析
 src/ui.ts           本地渲染器、主题化 Box/Text 与公共 TUI 原语的首选门面
-src/ink/            移植的 Ink 渲染器与终端实现——敏感基础设施，改动聚焦并附专用回归
-src/native-ts/      渲染器使用的移植 Yoga 布局引擎
-src/cc/             Claude Code 风格的终端格式化与呈现辅助
+src/ink/            Ink 系渲染器与终端实现——敏感基础设施，改动聚焦并附专用回归
+src/native-ts/      渲染器使用的 Yoga 布局引擎
+src/terminal-utils/ 终端格式化与呈现辅助
 src/dsh-adapter/    唯一允许 import 官方 @deepseek-ai/* 的位置；themes.ts 提供 tuiThemes 插件接缝
 src/*Prefs.ts 等    ~/.dsh-tui 下的持久化用户偏好与会话元数据
 .agents/skills/     仅供仓库维护者使用的项目技能，不随 npm 包分发
@@ -49,7 +49,7 @@ pnpm smoke                      # 通用无头屏幕组装冒烟
 
 ## 上游边界与契约
 
-- 官方 `@deepseek-ai/*` 包只允许在 `src/dsh-adapter/` 内 import；UI 层（`screens/`、`components/`、`ink/`、`hooks/`、`utils/`、`cc/`）一律通过 adapter facade 间接接触上游。`pnpm run verify:boundary` 扫描全部源码，发现越界即失败。
+- 官方 `@deepseek-ai/*` 包只允许在 `src/dsh-adapter/` 内 import；UI 层（`screens/`、`components/`、`ink/`、`hooks/`、`utils/`、`terminal-utils/`）一律通过 adapter facade 间接接触上游。`pnpm run verify:boundary` 扫描全部源码，发现越界即失败。
 - 校验版本线、peer 范围与 blessed 包清单在 `src/dsh-adapter/contract.ts`；本地检测到 drift 打警告，CI 上 `verify:contract` 直接失败。
 - 运行时或发布类型引用的 `@deepseek-ai/*` 框架包必须同时是 peer 与 dev 依赖（`verify:manifest-deps` 门禁）；仅测试/脚本使用的框架包只进 dev 依赖。
 - `cordis.patch.yml` 对官方行的干预已快照到 `patch-surface.snapshot.json`，改动需保持同步（`verify:patch-surface` 门禁）。
@@ -61,7 +61,7 @@ pnpm smoke                      # 通用无头屏幕组装冒烟
 - **职责分层**：投影与 TUI 动作属于 `channel.ts`，交互模式与按键优先级属于 `Chat.tsx`，终端协议、布局与帧差分属于 `ink/`。不要为界面好写而在 TUI 里重实现 DSH 域服务——经 channel 或既有注册表缝隙适配。
 - **注册即效应**：资源经 Cordis 注册，用 `ctx.effect` 或既有单一退出漏斗清理。渲染失败必须响亮且非零退出；正常退出前恢复终端状态（raw 模式、光标、alt-screen、同步输出、鼠标、焦点）。
 - **渲染安静**：TUI 活动期间不加 `console.log` 或 stdout 诊断；用 opt-in 的 stderr/调试路径（`DSH_TUI_DEBUG`、`DSH_TUI_RENDER_LOG`）。
-- **TypeScript**：纯 ESM，相对导入用 `.js` 后缀；纯类型依赖优先 `import type`；不因移植 Ink core 的放宽而引入 `any`，用 `unknown` 收窄；遵循现有两空格、单引号、无分号风格，不批量格式化移植文件。
+- **TypeScript**：纯 ESM，相对导入用 `.js` 后缀；纯类型依赖优先 `import type`；不因 Ink 系渲染器的放宽而引入 `any`，用 `unknown` 收窄；遵循现有两空格、单引号、无分号风格，不批量格式化渲染器文件。
 - **终端宽度是显示单元宽度**，不是 JS 字符串长度；考虑 ANSI 转义、组合字符、emoji 与东亚宽字符，用仓库的宽度/切片/换行辅助函数。
 - **双语文档同步**：行为、配置、快捷键与限制在 `README.md` 与 `README_EN.md` 两版同步。插件配置、slash 命令、主题、渲染器、技能发现的跨文件同步清单见 [docs/contributing.md](docs/contributing.md)。
 - **密钥**：交互启动读取 `DEEPSEEK_API_KEY`；诊断只能报告是否已设置，绝不泄露完整值。

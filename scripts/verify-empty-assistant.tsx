@@ -82,7 +82,7 @@ const channel: any = {
   tokens: { input: 0, output: 0 }, cwd: '/tmp/demo', displayCwd: '/tmp/demo', gitBranch: 'main',
   working: true, spinnerMode: 'requesting', responseChars: 0, activeToolCount: 1, turnStart: Date.now(),
   pending: [], commandList: LOCAL_COMMANDS, notifications: [], mode: { plan: false, sandbox: undefined },
-  activityFrames: 'claude', agentPreset: undefined, subagents: [], lastUserText: '帮我跑一下测试',
+  activityFrames: 'moon8', agentPreset: undefined, subagents: [], lastUserText: '帮我跑一下测试',
   scrollGutter: 'timeline', whale: true,
   subscribe(cb: () => void) { listeners.add(cb); return () => listeners.delete(cb) },
   emit() { channel.version++; for (const cb of listeners) cb() },

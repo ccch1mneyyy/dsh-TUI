@@ -40,7 +40,6 @@ import {
   SHORTCUT_ACTIONS,
   type ShortcutActionId,
 } from '../utils/keymap.js'
-import { detectLegacyEnv, migrateLegacyDataDir, RENAMED_ENV } from '../utils/paths.js'
 import { attachHerdrIntegration } from '../herdr.js'
 import { logMouseDebug } from '../utils/debug.js'
 import { Chat } from '../screens/Chat.js'
@@ -62,7 +61,7 @@ import { DBP, DFE, DISABLE_MOUSE_TRACKING, EXIT_ALT_SCREEN, SHOW_CURSOR } from '
 import { CLEAR_ITERM2_PROGRESS, CLEAR_TAB_STATUS, supportsTabStatus, wrapForMultiplexer } from '../ink/termio/osc.js'
 
 /**
- * Claude Code style interactive TUI front door for DeepSeek Harness agents.
+ * Interactive TUI front door for DeepSeek Harness agents.
  *
  * The plugin attaches to (or creates) one agent, renders a chat transcript
  * from the agent's session log and live `session/event` records, and submits
@@ -228,12 +227,6 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     ctx.logger.warn(`dsh-tui: unable to install packaged presets (${error instanceof Error ? error.message : String(error)})`)
   }
 
-  // Data-directory rename (~/.dsh-cc → ~/.dsh-tui, issue #120): copy the
-  // legacy directory before ANY preference read below (resolveStartupLang
-  // already touches lang.json). Copy, not move — old launchers keep working
-  // and the user deletes the legacy directory themselves.
-  const migrated = migrateLegacyDataDir()
-
   // UI language resolution: DSH_TUI_LANG env var wins, then the
   // settings.yaml `dsh-tui.lang` user layer (applied once the settings
   // namespace registers below), then cordis.yml `lang`, then the
@@ -241,22 +234,6 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   // render so every module resolves strings in the same language.
   const envLang = process.env.DSH_TUI_LANG
   setLang(isLang(envLang) ? envLang : isLang(config.lang) ? config.lang : resolveStartupLang())
-
-  // Rename notices must land before the first render — stderr writes break
-  // the fullscreen UI once it is up. The bin launcher prints the same
-  // warnings; this covers direct `dsh --profile dsh-tui` boots.
-  if (migrated) {
-    ctx.logger.warn('dsh-tui: data directory copied from ~/.dsh-cc to ~/.dsh-tui (legacy kept)')
-    if (process.stderr.isTTY) {
-      process.stderr.write(`\n[dsh-tui] ${t('legacy-dir-migrated')}\n`)
-    }
-  }
-  for (const oldName of detectLegacyEnv()) {
-    ctx.logger.warn(`dsh-tui: env ${oldName} renamed to ${RENAMED_ENV[oldName]}; the old name no longer takes effect`)
-    if (process.stderr.isTTY) {
-      process.stderr.write(`\n[dsh-tui] ${t('legacy-env-renamed', { old: oldName, new: RENAMED_ENV[oldName] })}\n`)
-    }
-  }
 
   // /update restart verification: the pre-update process stamps the version
   // it was leaving behind; if the freshly loaded one is not newer, the
@@ -465,7 +442,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   const meta = { cwd: sessionCwd }
   // Launch-time resume target: the env handoff (launchers like naive-dsh) wins;
   // `dsh --profile tui` forwards `--resume` verbatim instead, so fall back to
-  // parsing the forwarded app args (parity with the standalone bin).
+  // parsing the forwarded app args (matching the standalone bin).
   const launchSessionId = config.sessionId ?? resumeTargetFromArgv(process.argv.slice(2))
   const { agent, handle, agentPreset, route: createdRoute } = await resolveAgent(
     ctx,
@@ -520,7 +497,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     activity: config.activity,
     // Explicit cordis.yml value (static deployment choice) wins over the
     // runtime `/activity` preference, which wins over the default.
-    activityFrames: config.activityFrames ?? readActivityFrames() ?? 'claude',
+    activityFrames: config.activityFrames ?? readActivityFrames() ?? 'moon8',
     // Static footer preference: cordis.yml `contextBar` (schema default on).
     contextBar: config.contextBar,
     // Same precedence for the agent preset: cordis.yml `preset` over the
@@ -666,7 +643,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
         // Unset inherits cordis.yml; a saved choice takes effect after restart.
         terminalImages: Schema.boolean(),
         // Built-in action-shortcut overrides, one optional combo string per
-        // action (see src/utils/keymap.ts). Unset keeps the default binding
+        // action (see the keymap utility). Unset keeps the default binding
         // and the section's format() shows the effective combos.
         shortcuts: Schema.object(
           Object.fromEntries(SHORTCUT_ACTIONS.map(action => [action.id, Schema.string().required(false)])),
@@ -2127,7 +2104,7 @@ function disposeRootAndExit(ctx: Context, code: number): void {
  * The real way back into a session after the TUI process is gone. The
  * package ships no `dsh-tui` bin — resuming means feeding the session id
  * through `DSH_TUI_RESUME_SESSION` (what cordis.patch.yml's `sessionId`
- * reads; the pre-rename DSH_CC_ spelling still works, issue #120) and
+ * reads) and
  * booting the same profile; on Windows the repo's dsh-tui.cmd wrapper
  * does this via --resume + ~/.dsh-tui/resume.txt.
  */

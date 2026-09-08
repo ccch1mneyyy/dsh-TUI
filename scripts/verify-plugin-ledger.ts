@@ -257,11 +257,11 @@ const fileA = join(fakeHome, 'ledger-a.jsonl')
   new TuiThemeRuntime(ctx)
   const themes = alpha.get('tuiThemes') as InstanceType<typeof TuiThemeRuntime>
   const disposeTheme = themes.register(
-    { name: 'alpha:theme', base: 'dark', colors: { claude: '#123456' } },
+    { name: 'alpha:theme', base: 'dark', colors: { accent: '#123456' } },
     alpha,
   )
   themes.register(
-    { name: 'alpha:theme', base: 'dark', colors: { claude: '#654321' } },
+    { name: 'alpha:theme', base: 'dark', colors: { accent: '#654321' } },
     alpha,
   )
   disposeTheme()

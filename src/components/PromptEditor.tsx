@@ -77,7 +77,7 @@ export function PromptEditorLayer(): React.ReactNode {
       flexDirection="column"
       flexShrink={0}
       overflow="hidden"
-      backgroundColor="clawd_background"
+      backgroundColor="inputBackground"
       opaque
       onClick={(event) => {
         event.stopImmediatePropagation()
@@ -120,7 +120,7 @@ export function EditorButton({
         primary
           ? hovered
             ? 'userMessageBackgroundHover'
-            : (accent ?? 'claude')
+            : (accent ?? 'accent')
           : hovered
             ? 'userMessageBackgroundHover'
             : undefined

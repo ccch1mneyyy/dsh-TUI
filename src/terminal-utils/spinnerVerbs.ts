@@ -1,0 +1,21 @@
+/** Status words shown while a DSH turn is running. */
+export const SPINNER_VERBS = [
+  'Analyzing',
+  'Thinking',
+  'Working',
+  'Considering',
+  'Reviewing',
+  'Planning',
+  'Checking',
+  'Reading',
+  'Searching',
+  'Building',
+  'Testing',
+  'Connecting',
+  'Preparing',
+  'Exploring',
+  'Reasoning',
+  'Summarizing',
+  'Resolving',
+  'Responding',
+]
