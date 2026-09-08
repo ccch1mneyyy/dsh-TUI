@@ -4,6 +4,7 @@ import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import { assertShadowPolicy } from '../../adapter/kernel/runtime.js'
 import { t } from '../../i18n.js'
 import { modeDisplayName, type SessionModeSpec } from '../../sessionModes.js'
+import { snapshotLiveSessionEvents } from '../compat/liveSession.js'
 import type { createChannelBinding } from './binding.js'
 import { createModeActions } from './mode-actions.js'
 import { createPermissionIdentity, foldPermissionPreset, type PermissionIdentity } from './mode-permission.js'
@@ -131,7 +132,7 @@ export function createPermissionModeActions(
    *  every refresh: a registry mount/unmount and a re-bind both land here. */
   const refreshMode = (): void => {
     roster.rebuild(binding.agent)
-    const index = derivePermissionModeIndex(sessionModes, binding.agent.session.events)
+    const index = derivePermissionModeIndex(sessionModes, snapshotLiveSessionEvents(binding.agent.session))
     state.modeIndex = index
     state.mode = sessionModes[index]!
   }
@@ -185,7 +186,7 @@ export function createPermissionModeActions(
   const cycleMode = async (): Promise<void> => {
     const capture = binding.capture()
     if (!owner.current() || !binding.isCurrent(capture)) return
-    const index = derivePermissionModeIndex(sessionModes, capture.agent.session.events)
+    const index = derivePermissionModeIndex(sessionModes, snapshotLiveSessionEvents(capture.agent.session))
     await applyMode(sessionModes[(index + 1) % sessionModes.length]!, capture)
   }
 

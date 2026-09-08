@@ -509,7 +509,7 @@ function createChannelWithOwner(
     traceEvents() {
       // Immutable per-append snapshot (dsh-session caches the frozen array);
       // reads follow agent swaps (/resume /rewind /new) automatically.
-      return binding.agent.session.events
+      return snapshotLiveSessionEvents(binding.agent.session)
     },
   }
 

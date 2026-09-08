@@ -2,6 +2,7 @@ import type { Agent, AgentHandle } from '@deepseek-ai/dsh-agent'
 import { recordedModelRoute } from '../../modelRoute.js'
 import { touchAgentViewSession, touchSession, writeResumeTarget } from '../../sessionHistory.js'
 import { agentViewHasTurns } from '../agent-view.js'
+import { snapshotLiveSessionEvents } from '../compat/liveSession.js'
 import { runningPresetOf } from '../presets.js'
 import { resetSessionProjection } from './session-reset.js'
 import type { createChannelBinding } from './binding.js'
@@ -66,7 +67,7 @@ export function createLiveAgentAdoption(
       state.displayCwd = deps.describeWorkspace(state.cwd).description ?? state.cwd
       deps.refreshGitBranch()
       state.agentPreset = runningPresetOf(target.session)
-      const route = recordedModelRoute(target.session.events)
+      const route = recordedModelRoute(snapshotLiveSessionEvents(target.session))
       if (route !== undefined) {
         state.provider = route.provider
         state.model = route.model
@@ -75,7 +76,7 @@ export function createLiveAgentAdoption(
       state.contextWindow = undefined
       state.effortLevels = undefined
       state.reasoningEffort = undefined
-      deps.replay(target.session.events)
+      deps.replay(snapshotLiveSessionEvents(target.session))
       deps.settleReplay()
       state.working = target.status === 'running'
       deps.bindAgent()
@@ -87,7 +88,7 @@ export function createLiveAgentAdoption(
       state.emit()
       const keepPrevious = previousHandle !== undefined
         && previousHandle.agent !== target
-        && (previousHandle.agent.status === 'running' || agentViewHasTurns(previousHandle.agent.session.events))
+        && (previousHandle.agent.status === 'running' || agentViewHasTurns(snapshotLiveSessionEvents(previousHandle.agent.session)))
       if (previousHandle !== undefined && previousHandle.agent !== target) {
         if (keepPrevious) {
           deps.backgroundHandles.set(previousSessionId, previousHandle)

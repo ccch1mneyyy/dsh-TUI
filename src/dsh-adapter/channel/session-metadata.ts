@@ -4,6 +4,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import { clearResumeTarget, forgetSession, readResumeTarget, touchSession, writeResumeTarget } from '../../sessionHistory.js'
 import { t } from '../../i18n.js'
 import { appendSessionTitle, deleteSessionLog } from '../compat/index.js'
+import { snapshotLiveSessionEvents } from '../compat/liveSession.js'
 import { collectRecentActivity, parseRecapResponse, RECAP_RECENT_CHARS, wrapRecapPrompt } from '../recap.js'
 import { listSummaries, locateSession, previewSession, type SessionSource, type SessionSummary } from '../sessions/index.js'
 import { runSideQuestion, wrapSideQuestion } from '../sideQuestion.js'
@@ -140,7 +141,7 @@ export function createSessionMetadataActions(ctx: Context, deps: {
     // composing. A present service without its streaming capability is just
     // as unavailable as an absent service; do not throw from an auto recap.
     if (typeof llm?.stream !== 'function') return { summary: null, error: t('recap-llm-unavailable') }
-    const activity = collectRecentActivity(capture.agent.session.events, RECAP_RECENT_CHARS)
+    const activity = collectRecentActivity(snapshotLiveSessionEvents(capture.agent.session), RECAP_RECENT_CHARS)
     if (activity === '') return { summary: null, error: t('recap-no-activity') }
     const signal = withOwnerSignal(options?.signal)
     const outcome = await runSideQuestion({

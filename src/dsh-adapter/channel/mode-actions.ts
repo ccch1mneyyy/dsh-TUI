@@ -5,6 +5,7 @@ import { t } from '../../i18n.js'
 import { modeDisplayName, type SessionModeSpec } from '../../sessionModes.js'
 import { assertShadowPolicy, type AdapterRuntimeOptions } from '../../adapter/kernel/runtime.js'
 import type { ChannelState } from './types.js'
+import { snapshotLiveSessionEvents } from '../compat/liveSession.js'
 import type { createChannelBinding } from './binding.js'
 
 type Binding = ReturnType<typeof createChannelBinding>
@@ -80,7 +81,7 @@ const deriveModeIndex = (events: readonly SessionEvent[]): number => {
 /** Re-derive the current mode from the live session log (boot, every
  *  agent re-bind, and after mode-affecting session events). */
 const refreshMode = (): void => {
-  state.modeIndex = deriveModeIndex(binding.agent.session.events)
+  state.modeIndex = deriveModeIndex(snapshotLiveSessionEvents(binding.agent.session))
   state.mode = sessionModes[state.modeIndex]!
 }
 

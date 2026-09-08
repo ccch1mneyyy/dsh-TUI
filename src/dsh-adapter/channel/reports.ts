@@ -9,6 +9,7 @@ import { fetchBalance } from '../../deepseekBalance.js'
 import { t } from '../../i18n.js'
 import { homeDir } from '../../utils/paths.js'
 import { sessionsRoots } from '../compat/index.js'
+import { snapshotLiveSessionEvents } from '../compat/liveSession.js'
 import { getHostGrantStore } from '../host-grants.js'
 import { getHostFacade } from '../plugin-host.js'
 import { pluginsInfoLines } from '../plugins-info.js'
@@ -79,7 +80,7 @@ export function createReportActions(ctx: Context, deps: {
     const agent = capture.agent
     const parts = [t('export-title'), '', t('export-time', { time: new Date().toLocaleString() }),
       t('export-model', { model: deps.model() }), t('export-session', { id: agent.id }), t('export-dir', { cwd: deps.cwd() }), '']
-    for (const event of agent.session.events) {
+    for (const event of snapshotLiveSessionEvents(agent.session)) {
       switch (event.type) {
         case 'user/message': {
           if (event.data.source.kind !== 'user') break

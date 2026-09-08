@@ -17,6 +17,7 @@ import {
   sessionTitleFallback,
   type AgentViewFold,
 } from '../agent-view.js'
+import { snapshotLiveSessionEvents } from '../compat/liveSession.js'
 import { composePreset } from '../presets.js'
 import { locateSession, previewSession, type SessionSource, type SessionSummary } from '../sessions/index.js'
 import { attachSessionToWorkspace } from '../workspace.js'
@@ -86,7 +87,7 @@ export function createAgentViewProjection(
     }).catch(() => undefined)
   }
   const foldOf = (agent: Agent): AgentViewFold => {
-    const events = agent.session.events
+    const events = snapshotLiveSessionEvents(agent.session)
     const cached = folds.get(String(agent.id))
     const base: AgentViewFold = {
       hasTurns: false, firstPrompt: '', summary: '', summaryKind: 'none', title: '',
@@ -245,7 +246,7 @@ export function createAgentViewProjection(
   }
   const peek = async (sessionId: string): Promise<PreviewEntry[]> => {
     const live = agents()?.get(SessionId(sessionId))
-    if (live !== undefined) return agentViewLivePreview(live.session.events, 8)
+    if (live !== undefined) return agentViewLivePreview(snapshotLiveSessionEvents(live.session), 8)
     const persistence = ctx.get('sessionPersistence') as SessionSource | undefined
     if (!persistence) return []
     const path = await locateSession(persistence, sessionId)

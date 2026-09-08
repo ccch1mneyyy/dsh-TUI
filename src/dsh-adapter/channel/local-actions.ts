@@ -4,6 +4,7 @@ import { markChannelReadDirty } from '../../adapter/channel/read-view.js'
 import { writeActivityFrames } from '../../activityPrefs.js'
 import { isPresetName } from '../../components/activityFrames.js'
 import { t } from '../../i18n.js'
+import { snapshotLiveSessionEvents } from '../compat/liveSession.js'
 import { LOCAL_OUTPUT_LIMIT, preview, type foldBack as FoldBack } from './transcript.js'
 import type { ChannelState, ToolViewPresenter } from './types.js'
 
@@ -35,7 +36,7 @@ export function createLocalActions(deps: {
   const current = (capture: unknown): boolean => owner.current() && binding.isCurrent(capture)
   return {
     loadOlder(): number {
-      const restored = foldBack(state.rows, binding.agent.session.events, { call: projector.presentCallView, result: projector.presentResultView })
+      const restored = foldBack(state.rows, snapshotLiveSessionEvents(binding.agent.session), { call: projector.presentCallView, result: projector.presentResultView })
       if (restored > 0) state.emit()
       return restored
     },

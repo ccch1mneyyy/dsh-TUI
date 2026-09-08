@@ -9,6 +9,7 @@ import { readModelPref } from '../../modelPrefs.js'
 import { migratePresetPref, readPresetPref } from '../../presetPrefs.js'
 import { agentViewHasTurns } from '../agent-view.js'
 import { ensureLegacySessionEventTypes } from '../compat/index.js'
+import { snapshotLiveSessionEvents } from '../compat/liveSession.js'
 import { composePreset, resolvePersistedPreset, resolvePersistedRoute } from '../presets.js'
 import { attachSessionToWorkspace } from '../workspace.js'
 import { resetSessionProjection } from './session-reset.js'
@@ -104,7 +105,7 @@ export function createSessionResumeActions(
     state.effortLevels = undefined
     state.reasoningEffort = undefined
     if (replay) {
-      deps.replay(handle.agent.session.events)
+      deps.replay(snapshotLiveSessionEvents(handle.agent.session))
       deps.settleReplay()
       // A resumed log can end mid-turn; mirror boot's post-replay status.
       state.working = handle.agent.status === 'running'
@@ -166,12 +167,12 @@ export function createSessionResumeActions(
       state.cwd = handle.agent.session.header.cwd ?? state.cwd
       state.displayCwd = deps.describeWorkspace(state.cwd).description ?? state.cwd
       deps.refreshGitBranch()
-      resetAndBind(handle, composed.agentPreset, explicitRoute ?? recordedModelRoute(handle.agent.session.events), true)
+      resetAndBind(handle, composed.agentPreset, explicitRoute ?? recordedModelRoute(snapshotLiveSessionEvents(handle.agent.session)), true)
       writeResumeTarget(sessionId)
       touchSession(sessionId)
       state.emit()
       const keepPrevious = keepCurrent && committed.handle !== undefined
-        && (committed.handle.agent.status === 'running' || agentViewHasTurns(committed.handle.agent.session.events))
+        && (committed.handle.agent.status === 'running' || agentViewHasTurns(snapshotLiveSessionEvents(committed.handle.agent.session)))
       if (committed.handle !== undefined) {
         if (keepPrevious) {
           deps.backgroundHandles.set(previousSessionId, committed.handle)
