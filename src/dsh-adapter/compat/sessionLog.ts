@@ -69,8 +69,19 @@ import { homeDir } from '../../utils/paths.js'
  * UI frames — safe for the strict read path to accept and skip. Exported
  * for the regression verifier; grow it only with proof the type was always
  * inert (never load-bearing for session reconstruction).
+ *
+ * Registration discipline: every event type this TUI persists through
+ * `session.append` MUST be listed here (or already be in dsh-session's
+ * KNOWN_SESSION_EVENT_TYPES) — the upstream append API exposes no
+ * `ignorable` flag, so an unlisted own type makes every strict read
+ * (/resume, rewind, fork, --resume) reject the whole log with
+ * SessionFormatUnsupportedError. `session/color` was written since /color
+ * shipped but unlisted, so any colored session became un-resumable
+ * (user-reported, root-caused end-to-end 2026-09-04): payload is a bare
+ * `{ color: string }`, folded last-write-wins by the projection, never
+ * load-bearing for session reconstruction.
  */
-export const LEGACY_SESSION_EVENT_TYPES: readonly string[] = ['activity/status']
+export const LEGACY_SESSION_EVENT_TYPES: readonly string[] = ['activity/status', 'session/color']
 
 /** Zstd frame magic number, little-endian (0xFD2FB528). */
 const ZSTD_MAGIC = 0xfd2fb528
