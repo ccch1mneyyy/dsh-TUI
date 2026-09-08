@@ -374,7 +374,7 @@
     "wrap-ansi": "^10.0.1"
   },
   "optionalDependencies": {
-    "sharp": "0.35.3"
+    "sharp": "0.35.4"
   },
   "bundledDependencies": [
     "@dsh-std/command",
