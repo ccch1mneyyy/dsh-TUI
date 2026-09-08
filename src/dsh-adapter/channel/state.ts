@@ -1,6 +1,7 @@
 import type { AgentHandle } from '@deepseek-ai/dsh-agent'
 import type { SessionModeSpec } from '../../sessionModes.js'
 import { normalizePageMargin, normalizeScrollGutter, normalizeStatusBar, normalizeToolBackground, type PageMarginSetting, type ScrollGutterMode, type StatusBarConfig, type ToolBackground } from '../../tuiDisplayPrefs.js'
+import { normalizeActivityPreset } from '../../components/activityFrames.js'
 import type { ChannelState } from './types.js'
 
 /** Launch configuration belongs to channel construction, not the composition root. */
@@ -65,7 +66,7 @@ export function createInitialChannelView(
     cancelPending: false, spinnerMode: 'requesting', responseChars: 0, activeToolCount: 0,
     turnStart: 0, lastUserText: '', notifications: [], contextWindow: undefined,
     reasoningEffort: options.effort, mode: input.mode, modeIndex: 0, workingActivity: undefined,
-    activityFrames: options.activityFrames, configuredProvider: options.configuredProvider,
+    activityFrames: normalizeActivityPreset(options.activityFrames), configuredProvider: options.configuredProvider,
     configuredModel: options.configuredModel, configuredPreset: options.configuredPreset,
     configuredActivityFrames: options.configuredActivityFrames, configuredLang: options.configuredLang,
     diffLayout: options.diffLayout ?? 'auto', thinkingFold: options.thinkingFold ?? 'preview',

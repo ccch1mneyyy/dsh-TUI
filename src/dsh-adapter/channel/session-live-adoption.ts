@@ -79,6 +79,11 @@ export function createLiveAgentAdoption(
       deps.replay(snapshotLiveSessionEvents(target.session))
       deps.settleReplay()
       state.working = target.status === 'running'
+      // Reset the input FIFO and pending-decision indicators BEFORE the first
+      // emit: a submit from a session-changed subscriber must not chain onto
+      // the replaced session's parked promise (main's bind → clear → refresh
+      // order).
+      deps.clearStagedImages()
       deps.bindAgent()
       deps.refreshCommands()
       void deps.refreshLoadedContext()
@@ -99,7 +104,6 @@ export function createLiveAgentAdoption(
       }
       touchAgentViewSession(String(target.id))
       touchAgentViewSession(previousSessionId)
-      deps.clearStagedImages()
       deps.notifySessionSwitched('agent-view', String(target.id), previousSessionId)
       deps.notifyAgentView()
       return { ok: true }

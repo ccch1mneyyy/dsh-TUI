@@ -167,6 +167,9 @@ export function createSessionResumeActions(
       state.cwd = handle.agent.session.header.cwd ?? state.cwd
       state.displayCwd = deps.describeWorkspace(state.cwd).description ?? state.cwd
       deps.refreshGitBranch()
+      // Reset the input FIFO and pending-decision indicators BEFORE the first
+      // emit (main's bind → clear → refresh order); see the /new tail.
+      deps.clearStagedImages()
       resetAndBind(handle, composed.agentPreset, explicitRoute ?? recordedModelRoute(snapshotLiveSessionEvents(handle.agent.session)), true)
       writeResumeTarget(sessionId)
       touchSession(sessionId)
@@ -185,7 +188,6 @@ export function createSessionResumeActions(
         touchAgentViewSession(sessionId)
         touchAgentViewSession(previousSessionId)
       }
-      deps.clearStagedImages()
       deps.notifySessionSwitched(kind, sessionId, previousSessionId)
       return { ok: true }
     })
@@ -294,11 +296,15 @@ export function createSessionResumeActions(
       // roll back another workspace's cwd.
       state.cwd = targetCwd
       state.displayCwd = targetDisplayCwd ?? deps.describeWorkspace(targetCwd).description ?? targetCwd
+      // Reset the input FIFO and the pending-decision indicators BEFORE the
+      // first emit: a submit enqueued from a session-changed subscriber must
+      // land on a fresh chain instead of behind the replaced session's parked
+      // promise (main's bind → clear → refresh order).
+      deps.clearStagedImages()
       resetAndBind(handle, composed.agentPreset, route, false)
       clearResumeTarget()
       touchSession(handle.agent.id)
       disposePrevious('dispose')
-      deps.clearStagedImages()
       deps.notifySessionSwitched('new', String(handle.agent.id), previousSessionId)
       return true
     })

@@ -94,6 +94,9 @@ export function createBackgroundCurrentAction(
         state.effortLevels = undefined
         state.reasoningEffort = undefined
         deps.refreshEffortLevels()
+        // Reset the input FIFO and pending-decision indicators BEFORE the first
+        // emit (main's bind → clear → refresh order).
+        deps.clearStagedImages()
         deps.bindAgent()
         deps.refreshCommands()
         void deps.refreshLoadedContext()
@@ -102,7 +105,6 @@ export function createBackgroundCurrentAction(
         touchSession(handle.agent.id)
         touchAgentViewSession(previousSessionId)
         touchAgentViewSession(String(handle.agent.id))
-        deps.clearStagedImages()
         deps.notifySessionSwitched('background', String(handle.agent.id), previousSessionId)
         deps.notifyAgentView()
         return { ok: true, backgroundedSessionId: previousSessionId }

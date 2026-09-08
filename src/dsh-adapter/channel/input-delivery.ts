@@ -139,9 +139,27 @@ export function createInputDelivery(
    * ate the input.
    */
   const DECISION_PENDING_MS = 400
-  const withDecisionPending = <T>(name: string, pending: Promise<T>): Promise<T> => {
+  /**
+   * Session-scoped ledger of live pending-decision indicators. A session
+   * replacement must cancel the notice timer and dismiss an already-visible
+   * sticky notice even when the plugin's decision promise never settles; the
+   * owner-scoped release alone would keep it up until channel teardown, and a
+   * timer firing after the switch would raise the notice into the session that
+   * replaced the one which parked the input (review finding: stale decision
+   * notices were no longer dismissed or suppressed on session change).
+   */
+  const pendingDecisionCleanups = new Set<() => void>()
+  const withDecisionPending = <T>(name: string, pending: Promise<T>, origin?: UserTextOrigin): Promise<T> => {
     let dismiss: (() => void) | undefined
-    const timer = setTimeout(() => {
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const cleanup = (): void => {
+      if (timer !== undefined) { clearTimeout(timer); timer = undefined }
+      const raised = dismiss
+      dismiss = undefined
+      raised?.()
+      pendingDecisionCleanups.delete(cleanup)
+    }
+    timer = setTimeout(() => {
       // Sticky (timeoutMs 0), D-8: the indicator must cover the WHOLE wait —
       // an auto-expiring notice would vanish after ~4s while the decision,
       // the delivery and every queued FIFO task behind them stay parked,
@@ -149,12 +167,18 @@ export function createInputDelivery(
       // down only when the decision settles (finally below); a decision
       // that never settles keeps its indicator up, which is the truthful
       // state.
+      // A notice must never be raised for a session that has already been
+      // replaced: the switch drains this ledger, and the origin fence covers
+      // a timer that fires before that drain lands.
+      if (origin !== undefined && !current(origin)) { cleanup(); return }
       if (!owner.current()) return
       dismiss = notify(t('ext-decision-pending', { event: name }), { timeoutMs: 0 })
     }, DECISION_PENDING_MS)
+    pendingDecisionCleanups.add(cleanup)
     // Both exits are covered: a fast decision clears the timer before it
-    // fires; a slow one dismisses the indicator it raised.
-    const release = owner.own(() => { clearTimeout(timer); dismiss?.() })
+    // fires; a slow one dismisses the indicator it raised. The owner release
+    // keeps the channel-teardown path working on top of the session drain.
+    const release = owner.own(cleanup)
     return pending.finally(release)
   }
   /**
@@ -199,7 +223,7 @@ export function createInputDelivery(
       delivery: placement === 'steer' ? 'steer' : 'followup',
       sessionId: origin.agentId,
       cwd: origin.cwd,
-    }, normalizeInputDecision))
+    }, normalizeInputDecision), origin)
     // Staleness wins over cancel/handled: an old plugin result must neither
     // toast into nor claim input from the replacement session.
     if (dropIfStale()) return
@@ -248,10 +272,12 @@ export function createInputDelivery(
     images: readonly ComposerImageRef[] = [],
   ): void => dispatchUserText(text, placement, images)
   /** Main's `clearStagedImages`: revoke capabilities AND release the FIFO so
-   *  a task parked on the replaced session cannot wedge the new one. */
+   *  a task parked on the replaced session cannot wedge the new one, and drop
+   *  every pending-decision indicator owned by the session being replaced. */
   const clearStagedImages = (): void => {
     composer.clearStagedImages()
     inputChain = Promise.resolve()
+    for (const cleanup of [...pendingDecisionCleanups]) cleanup()
   }
 
   return {
