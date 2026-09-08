@@ -855,7 +855,7 @@ await sleep(800)
     const deadline = Date.now() + 800
     while (Date.now() < deadline) {
       if (!decisionNoticeVisible()) return true
-      await sleep(20)
+      await sleep(20) // 固定窗:pacing 轮询间隔
     }
     return false
   })()
@@ -881,14 +881,14 @@ await sleep(800)
     return lateGate
   })
   channel.submit('切换前挂起')
-  await sleep(50) // well under DECISION_PENDING_MS (400 ms)
+  await sleep(50) // 固定窗:pacing 让 400ms 阈值计时器仍处于等待中
   await channel.newSession()
-  await sleep(600) // past the threshold, inside the replacement session
+  await sleep(600) // 固定窗:探针 越过 400ms 阈值，断言替换会话不冒出提示
   const lateVisible = (channel as unknown as { notifications: readonly { text: string }[] }).notifications
     .some(item => item.text.includes('正在等待插件决定（tui/input）'))
   check('pending session ownership: replaced session never raises a late indicator', !lateVisible)
   releaseLate({ handled: true, notice: '迟到的结果不应出现' })
-  await sleep(100)
+  await sleep(100) // 固定窗:pacing 给陈旧结果一个现身窗再清理监听
   disposeLate()
 }
 
