@@ -54,11 +54,13 @@ export function RewindPicker({
 }): React.ReactNode {
   // 两个列表的行预算都来自最近一层 OverlayAbove 的有效高度（已钳到输入簇
   // 上方的真实空间，#493/#698）。hook 不进条件分支：无论当前画的是模式列
-  // 表、纯确认页还是消息列表，调用顺序都一致。
-  // 模式列表框架行 Pane 2（标题/页脚计入 rowCosts 首项与 slack）；
-  // 消息列表框架行 Pane 2 + 标题块 3 + 页脚 1 = 6。
-  const modeListRows = useOverlayListRows(2)
-  const listRows = useOverlayListRows(6)
+  // 表、纯确认页还是消息列表，调用顺序都一致。框架行按实际渲染数：
+  // 模式列表：挂载包裹 marginTop 1 + Pane 2 + 标题/预览同一行 1 + marginBottom 1
+  //   + 页脚 1 = 6（rowCosts 只算选项行，首项是带描述的"仅对话"选项）；
+  // 消息列表：挂载包裹 marginTop 1 + Pane 2 + 标题+副标题 2 + marginBottom 1
+  //   + 页脚 1 = 7。
+  const modeListRows = useOverlayListRows(6)
+  const listRows = useOverlayListRows(7)
   if (confirmRow !== null) {
     if (modes !== null) {
       // Plugin modes: a described choice list (one extra row per

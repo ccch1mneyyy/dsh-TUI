@@ -35,9 +35,10 @@ export function HistorySearchDialog({
   // 焦点窗口化按行预算：每项恒 2 行（命令 + age 描述，ListItem 保证单行
   // 截断），容器 gap={1} 项间再空 1 行。只数项数会把焦点裁出浮层（二次
   // 审查实证）。
-  // 预算来自最近一层 OverlayAbove 的有效高度，减去框架行：Pane 2 + 标题 1
-  // + gap 1 + SearchBox 3（圆角边框）+ gap 1 + gap 1 + 页脚 1 = 10。
-  const listRows = useOverlayListRows(10)
+  // 预算来自最近一层 OverlayAbove 的有效高度，减去框架行（按实际渲染数）：
+  // 挂载包裹 marginTop 1 + Pane 2 + 标题 1 + gap 1 + SearchBox 3（圆角边框）
+  // + gap 1 + gap 1 + 页脚 1 = 11。
+  const listRows = useOverlayListRows(11)
   const { start, end } = listWindow(
     matches.map(() => 2),
     focusIndex,
