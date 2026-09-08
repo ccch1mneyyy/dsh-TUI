@@ -310,7 +310,7 @@ hostContext: compositionRoot(ctx),
    * Host-internal reversible live probe.
    *
    * This runs through the same production storage handle path as plugin
-   * storage (`openInternal`), using a random temporary namespace. It writes a
+   * storage (`#openInternal`), using a random temporary namespace. It writes a
    * tiny JSON document, reads it back, deletes it, and guarantees the file is
    * removed in a `finally`. The probe deliberately bypasses only the
    * caller-facing grant/lifecycle bookkeeping; key validation, exact-JSON
@@ -343,7 +343,7 @@ hostContext: compositionRoot(ctx),
       manifest: { id: tempNamespace } as never,
       projection: { id: tempNamespace } as never,
     }
-    const handle = this.openInternal(state.hostContext, identity, tempNamespace, {
+    const handle = concreteService(this).#openInternal(state.hostContext, identity, tempNamespace, {
       enforceGrants: false,
       bindLifecycle: false,
       recordLedger: false,
@@ -407,7 +407,10 @@ hostContext: compositionRoot(ctx),
         'storage.local requires the storage.dsh/v1alpha1#LocalStorage contract in the admitted manifest',
       )
     }
-    return this.openInternal(caller, identity, identity.componentId, {
+    // Cordis hands the service out through a Proxy, so `this` is not branded:
+    // unwrap to the concrete instance before calling the `#private` member
+    // (same pattern as message-observer's `#registerSubscription`).
+    return concreteService(this).#openInternal(caller, identity, identity.componentId, {
       enforceGrants: true,
       bindLifecycle: true,
       recordLedger: true,
@@ -421,8 +424,14 @@ hostContext: compositionRoot(ctx),
    * authorization/lifecycle bookkeeping; all key validation, exact-JSON
    * validation, namespace file handling, quota checks and read/write/delete
    * operations are exactly the production handle code.
+   *
+   * A true `#private` member, not TS `private`: the latter still compiles to a
+   * prototype method, so a plugin holding `ctx.tuiPluginStorage` could call it
+   * through `as any` with `enforceGrants: false` and a forged namespace and
+   * read another component's storage with no grant, ledger entry or unload
+   * cleanup. Only the two in-class call sites above may reach it.
    */
-  private openInternal(
+  #openInternal(
     caller: Context,
     identity: VerifiedComponentIdentity,
     plugin: string,

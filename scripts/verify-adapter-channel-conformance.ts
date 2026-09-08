@@ -160,6 +160,38 @@ await subscriptionConsumer.subscribe(official.snapshot.channelId, 1, value => re
 assert.deepEqual(received, [1, 2], 'subscription must deliver snapshots not earlier than afterVersion')
 checks += 1
 
+// open() → subscribe(opened.version): the provider sends `>= afterVersion`, so
+// the equal-version echo is the FIRST snapshot of that subscription and must be
+// accepted; a later duplicate version inside the same subscription still fails
+// closed (review finding: provider/consumer equal-version semantics).
+{
+  const equalConsumer = createChannelConsumer(realMethodsProvider)
+  const equalOpened = await equalConsumer.open({})
+  const echoed: number[] = []
+  await equalConsumer.subscribe(equalOpened.channelId, equalOpened.version, value => echoed.push(value.version))
+  assert.deepEqual(echoed, [equalOpened.version], 'first equal-version replay after open must be accepted')
+  checks += 1
+
+  const duplicateProvider = {
+    async open() { return snapshot1 },
+    async subscribe(_channelId: string, _afterVersion: number, listener: (snapshot: typeof snapshot1) => void) {
+      listener(snapshot1)
+      listener(snapshot1)
+      return () => undefined
+    },
+    async invoke() { throw new Error('unused') },
+    async close() { return { closed: true as const } },
+  }
+  const duplicateConsumer = createChannelConsumer(duplicateProvider)
+  await duplicateConsumer.open({})
+  await assert.rejects(
+    duplicateConsumer.subscribe(snapshot1.channelId, snapshot1.version, () => {}),
+    /version did not advance/u,
+    'a repeated version inside one subscription must still fail closed',
+  )
+  checks += 1
+}
+
 const zeroSnapshots = [
   Object.freeze({ ...snapshot1, version: 0, state: Object.freeze({ ...snapshot1.state, status: 'idle' }) }),
   Object.freeze({ ...snapshot1, version: 1, state: Object.freeze({ ...snapshot1.state, status: 'working' }) }),

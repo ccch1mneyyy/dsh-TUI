@@ -217,6 +217,25 @@ assert.notEqual(failed.currentLifecycles().find(lifecycle => lifecycle.capabilit
   assert.equal(mountCalls, 1, 'non-shadow mode may mount an effectful driver')
 }
 
+// The default production slice set (no explicit `slices` filter) must still
+// mount under passive shadow: disallowed drivers are skipped and the read-only
+// ones mount, instead of aborting the whole mount transaction (review finding:
+// the first mutate slice used to abort every later read-only slice).
+{
+  const kernel = new KernelRuntime({
+    context: {},
+    mode: 'passive-shadow',
+    generationId: 'kernel-default-slices-passive-battery',
+    kernelSlices: ADAPTER_KERNEL_SLICES,
+  })
+  await kernel.mount()
+  const drivers = kernel.diagnosticSnapshot().drivers
+  const driver = (id: string) => drivers.find(entry => entry.id === id)
+  assert.equal(driver('dsh-tui-presentation')?.mounted, false, 'mutate slice must be skipped under passive shadow')
+  assert.equal(driver('dsh-tui-channel')?.mounted, true, 'read-only slice must still mount under passive shadow')
+  checks += 1
+}
+
 // Mount is transactional: a later driver failure must roll back every
 // driver successfully mounted by the same call, in reverse order.
 {

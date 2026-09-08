@@ -133,6 +133,15 @@ while (!hostCtx.get('tuiPluginHost')?.hostDescriptor().contracts.some(contract =
 }
 check1('storage live probe is not exposed on the plugin-visible service',
   typeof (hostCtx.get('tuiPluginStorage') as { probeReversible?: unknown } | undefined)?.probeReversible === 'undefined')
+// The internal open path keeps the grant/ledger/lifecycle switches; a TS
+// `private` would still be a prototype method a plugin could reach through a
+// cast. It must be a true `#private`, i.e. absent from the service AND its
+// prototype (review finding: storage authorization bypass).
+const pluginStorageService = hostCtx.get('tuiPluginStorage') as { openInternal?: unknown } | undefined
+check1('internal storage open is unreachable on the plugin-visible service',
+  typeof pluginStorageService?.openInternal === 'undefined')
+check1('internal storage open is absent from the service prototype',
+  !Object.getOwnPropertyNames(Object.getPrototypeOf(pluginStorageService as object) ?? {}).includes('openInternal'))
 
 const handles = new Map<string, TuiPluginStorage>()
 const activations = new Map<string, { context: InstanceType<typeof Context>; fiber: { dispose(): unknown } }>()
