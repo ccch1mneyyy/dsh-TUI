@@ -3,8 +3,16 @@ import type { Agent } from '@deepseek-ai/dsh-agent'
 import { sessionCwdMatches } from './paths.js'
 import { SessionId, type SessionEvent, type SessionHeader } from '@deepseek-ai/dsh-session'
 import { t } from '../../i18n.js'
-import { defaultMaxScanned, readSessionEventsFromFile, readSessionEventsFromLog } from '../compat/index.js'
-import { readHeader, type SessionSource, type RawSessionHeader } from '../sessions/index.js'
+import {
+  defaultMaxScanned,
+  liveSessionListingFields,
+  readPhysicalHeaderSeedLength,
+  readPhysicalHeaderSeedLengthForSession,
+  readSessionEventsFromFile,
+  readSessionEventsFromLog,
+} from '../compat/index.js'
+import { snapshotLiveSessionEvents } from '../compat/liveSession.js'
+import { readHeader, readInheritedCut, type SessionSource, type RawSessionHeader } from '../sessions/index.js'
 import { buildSessionTree, liveTailWindow, type FamilySession, type SessionTreeData } from '../sessionTree.js'
 import type { ChannelUi } from '../../adapter/ports/channel-ui.js'
 import type { ChannelOwner } from './owner.js'
@@ -72,9 +80,22 @@ async function readTree(): Promise<SessionTreeData | null> {
       // The live session's header may not be materialized in list() yet
       // (the jsonl backend writes on first append) — overlay the in-memory
       // header so the ancestor walk below still finds a fresh fork's parent.
+      const liveListed = liveSessionListingFields(liveSession)
       const liveMeta = (liveSession as { header?: SessionHeader }).header
-      if (!headerById.has(currentId) && liveMeta !== undefined) {
-        headerById.set(currentId, { header: readHeader(liveMeta) ?? { id: currentId, cwd: undefined, createdAt: undefined, parentSession: undefined, origin: undefined, delegationDepth: undefined, seedLength: undefined, agentPreset: undefined }, raw: liveMeta })
+      if (!headerById.has(currentId) && liveListed.id !== undefined) {
+        headerById.set(currentId, {
+          header: {
+            id: liveListed.id,
+            cwd: liveListed.cwd,
+            createdAt: liveListed.createdAt,
+            parentSession: liveListed.parentSession,
+            origin: liveListed.origin,
+            delegationDepth: liveListed.delegationDepth,
+            seedLength: liveListed.seedLength,
+            agentPreset: liveListed.agentPreset,
+          },
+          raw: liveMeta,
+        })
       }
       // Family = the live session's ancestor chain PLUS every descendant of
       // its topmost known ancestor (siblings and cousins included).
@@ -210,12 +231,9 @@ async function readTree(): Promise<SessionTreeData | null> {
         if (!selected.has(id)) continue
         const entry = headerById.get(id)
         if (id === currentId) {
-          const liveParentId = liveHeader?.header.parentSession ?? liveMeta?.parentSession
+          const liveParentId = liveHeader?.header.parentSession ?? liveListed.parentSession
           const liveParent = liveParentId !== undefined ? String(liveParentId) : undefined
-          const parentCovered = liveParent !== undefined
-            ? (coveredThrough.get(liveParent) ?? -1)
-            : -1
-          const liveEvents = liveSession.events
+          const liveEvents = snapshotLiveSessionEvents(liveSession)
           const remaining = Math.max(0, MAX_TREE_EVENTS - eventBudget)
           // The live session's in-memory log is SELF-CONTAINED: a fork's
           // events still carry the inherited seed prefix, which the parent's
@@ -223,12 +241,20 @@ async function readTree(): Promise<SessionTreeData | null> {
           // Skipping it exactly like the non-live reads do keeps a live fork
           // of a huge parent from spending the whole family budget on
           // duplicated history and evicting its own siblings.
-          const liveSeed = liveHeader?.header.seedLength ?? liveMeta?.seedLength
+          const liveSeed = liveHeader?.header.seedLength ?? liveListed.seedLength
+          // A recorded parent without an exact cut is not a usable coverage
+          // edge: the pure tree detaches it, so forwarding the parent's range
+          // here would let descendants skip history no root displays.
+          const parentCovered = liveParent !== undefined && liveSeed !== undefined
+            ? (coveredThrough.get(liveParent) ?? -1)
+            : -1
           const skipBelow =
             liveParent !== undefined && liveSeed !== undefined
               ? Math.min(liveSeed, parentCovered + 1)
               : 0
-          const own = skipBelow > 0 ? liveEvents.filter(event => event.seq >= skipBelow) : liveEvents
+          const own = skipBelow > 0
+            ? liveEvents.filter(event => event.seq >= skipBelow || event.type === 'session/title')
+            : liveEvents
           // A live session larger than the remaining budget keeps its TAIL,
           // aligned to whole turns (sessionTree.liveTailWindow): leftover
           // entries of a turn whose turn/start was cut away render as
@@ -246,10 +272,10 @@ async function readTree(): Promise<SessionTreeData | null> {
           if (events.length !== own.length) truncated = true
           familySessions.push({
             id,
-            createdAt: liveHeader?.header.createdAt ?? liveMeta?.createdAt ?? Date.now(),
+            createdAt: liveHeader?.header.createdAt ?? liveListed.createdAt ?? Date.now(),
             ...(liveParent !== undefined ? { parentSession: liveParent } : {}),
-            ...(liveHeader?.header.seedLength !== undefined || liveMeta?.seedLength !== undefined
-              ? { seedLength: liveHeader?.header.seedLength ?? liveMeta!.seedLength }
+            ...(liveHeader?.header.seedLength !== undefined || liveListed.seedLength !== undefined
+              ? { seedLength: liveHeader?.header.seedLength ?? liveListed.seedLength }
               : {}),
             events,
             live: true,
@@ -270,19 +296,59 @@ async function readTree(): Promise<SessionTreeData | null> {
         }
         const header = entry?.header
         const parentId = header?.parentSession
-        const parentCovered = parentId !== undefined ? (coveredThrough.get(parentId) ?? -1) : -1
+        const structuralParentCovered = parentId !== undefined ? (coveredThrough.get(parentId) ?? -1) : -1
+        const locate = persistence.locate
+        const hasLocate = typeof locate === 'function'
+        let locatedPath: string | undefined
+        if (hasLocate && entry !== undefined) {
+          try {
+            const location: unknown = locate.call(persistence, entry.raw)
+            // Only the jsonl kind enters the compat file layer — a foreign
+            // kind's artifact is the backend's own format (inspect below).
+            if (location !== null && typeof location === 'object') {
+              const record = location as { kind?: unknown; path?: unknown }
+              if (record.kind === 'jsonl' && typeof record.path === 'string') {
+                locatedPath = record.path
+              }
+            }
+          } catch {
+            // Best effort — a locate hiccup falls through to inspect.
+          }
+        }
+        // Alpha.4 deliberately omits the inherited cut from logical list
+        // headers. Resolve it only for the SELECTED family node currently
+        // being read: JSONL keeps the exact physical `seedLength`; non-file
+        // backends expose the cut on inspect below. Never scan every listed
+        // session and never infer it from an end-seed marker or log length.
+        let inheritedCut = parentId === undefined ? undefined : readInheritedCut(entry?.raw)
+        if (parentId !== undefined && inheritedCut === undefined) {
+          inheritedCut = locatedPath !== undefined
+            ? readPhysicalHeaderSeedLength(locatedPath)
+            : !hasLocate
+                ? readPhysicalHeaderSeedLengthForSession(id)
+                : undefined
+        }
+        // Keep structural ancestry separate from proven dedup coverage. The
+        // model layer detaches a parent edge whose exact cut is unavailable;
+        // treating that edge as covered here would hide a child's prefix
+        // under a parent root that no longer owns it.
+        let parentCovered = parentId !== undefined && inheritedCut !== undefined
+          ? structuralParentCovered
+          : -1
         // Never skip past the seed prefix: events beyond it are this
         // session's OWN — no ancestor can show them. A parent that was never
         // read (evicted, or outside the family) covers nothing (skip 0).
-        const skipBelow =
-          parentId !== undefined && header?.seedLength !== undefined
-            ? Math.min(header.seedLength, parentCovered + 1)
+        let skipBelow =
+          parentId !== undefined && inheritedCut !== undefined
+            ? Math.min(inheritedCut, parentCovered + 1)
             : 0
-        const facts = {
+        let facts: FamilySession = {
           id,
           createdAt: header?.createdAt ?? 0,
+          events: [],
+          live: false,
           ...(parentId !== undefined ? { parentSession: parentId } : {}),
-          ...(header?.seedLength !== undefined ? { seedLength: header.seedLength } : {}),
+          ...(inheritedCut !== undefined ? { seedLength: inheritedCut } : {}),
         }
         if (eventBudget >= MAX_TREE_EVENTS || scanBudget <= 0) {
           // Budget spent: keep the STRUCTURE — the session degrades to an
@@ -326,23 +392,7 @@ async function readTree(): Promise<SessionTreeData | null> {
         // Per-log scan allowance: the usual 4×-of-remaining derivation,
         // clamped to what the tree-level scan budget still has.
         const scanAllowance = Math.min(defaultMaxScanned(remaining), scanBudget)
-        const locate = persistence.locate
-        const hasLocate = typeof locate === 'function'
-        if (hasLocate && entry !== undefined) {
-          let locatedPath: string | undefined
-          try {
-            const location: unknown = locate.call(persistence, entry.raw)
-            // Only the jsonl kind enters the compat file layer — a foreign
-            // kind's artifact is the backend's own format (inspect below).
-            if (location !== null && typeof location === 'object') {
-              const record = location as { kind?: unknown; path?: unknown }
-              if (record.kind === 'jsonl' && typeof record.path === 'string') {
-                locatedPath = record.path
-              }
-            }
-          } catch {
-            // Best effort — a locate hiccup falls through to inspect.
-          }
+        if (hasLocate) {
           if (locatedPath !== undefined) {
             const viaPath = readSessionEventsFromFile(locatedPath, remaining, scanAllowance, skipBelow)
             if (viaPath !== undefined) {
@@ -370,6 +420,15 @@ async function readTree(): Promise<SessionTreeData | null> {
         if (!failed && events === undefined && typeof persistence.inspect === 'function') {
           try {
             const inspection = await persistence.inspect(SessionId(id))
+            const inspectedCut = readInheritedCut(inspection)
+            if (parentId !== undefined && inheritedCut === undefined && inspectedCut !== undefined) {
+              inheritedCut = inspectedCut
+              parentCovered = structuralParentCovered
+              skipBelow = parentId !== undefined
+                ? Math.min(inheritedCut, parentCovered + 1)
+                : 0
+              facts = { ...facts, seedLength: inheritedCut }
+            }
             // inspect parses the WHOLE log up front: charge the full length
             // to the scan budget (may overdraw; the next iterations skip).
             scanBudget -= inspection.events.length
@@ -377,7 +436,9 @@ async function readTree(): Promise<SessionTreeData | null> {
             // the inherited-prefix skip the file readers got must apply here
             // too, or a long prefix would fill the slice and the branch's OWN
             // events — the only ones nobody else displays — would be cut.
-            const all = skipBelow > 0 ? inspection.events.filter(event => event.seq >= skipBelow) : inspection.events
+            const all = skipBelow > 0
+              ? inspection.events.filter(event => event.seq >= skipBelow || event.type === 'session/title')
+              : inspection.events
             readFrom = skipBelow
             events = all
             if (events.length > remaining) {
