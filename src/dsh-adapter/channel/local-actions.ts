@@ -2,7 +2,7 @@ import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import { markChannelReadDirty } from '../../adapter/channel/read-view.js'
 import { writeActivityFrames } from '../../activityPrefs.js'
-import { isPresetName } from '../../components/activityFrames.js'
+import { isPresetName, normalizeActivityPreset } from '../../components/activityFrames.js'
 import { t } from '../../i18n.js'
 import { snapshotLiveSessionEvents } from '../compat/liveSession.js'
 import { LOCAL_OUTPUT_LIMIT, preview, type foldBack as FoldBack } from './transcript.js'
@@ -58,12 +58,16 @@ export function createLocalActions(deps: {
       state.emit()
     },
     setActivityFrames(name: string): boolean {
-      if (!isPresetName(name)) { notify(t('unknown-activity-preset', { name }), { color: 'error' }); return false }
-      if (name === state.activityFrames) { notify(t('activity-indicator-already', { name }), { color: 'success' }); return true }
-      if (!writeActivityFrames(name)) { notify(t('activity-pref-write-failed'), { color: 'error' }); return false }
-      state.activityFrames = name
+      // A retired id (e.g. `claude`) normalizes to the current default, so the
+      // in-memory state, the persisted preference and the toast agree instead
+      // of diverging until restart.
+      const preset = normalizeActivityPreset(name) ?? name
+      if (!isPresetName(preset)) { notify(t('unknown-activity-preset', { name }), { color: 'error' }); return false }
+      if (preset === state.activityFrames) { notify(t('activity-indicator-already', { name: preset }), { color: 'success' }); return true }
+      if (!writeActivityFrames(preset)) { notify(t('activity-pref-write-failed'), { color: 'error' }); return false }
+      state.activityFrames = preset
       state.emit()
-      notify(t('activity-indicator-switched', { name }))
+      notify(t('activity-indicator-switched', { name: preset }))
       return true
     },
     async listSubagents(): Promise<string[]> {

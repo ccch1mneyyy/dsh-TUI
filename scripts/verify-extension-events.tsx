@@ -62,7 +62,7 @@ process.env.DSH_TUI_LANG = 'zh'
 // 家目录隔离：touchSession/clearResumeTarget（/new 与 rewind 都会走）写
 // ~/.dsh-tui 的真实文件，必须先切到临时目录再 import src。HOME 与
 // USERPROFILE 必须成对设置（POSIX 读 HOME、Windows 读 USERPROFILE）。
-const { mkdtempSync, mkdirSync, writeFileSync } = await import('node:fs')
+const { mkdtempSync, mkdirSync, readFileSync, writeFileSync } = await import('node:fs')
 const { tmpdir } = await import('node:os')
 const { join: joinPath } = await import('node:path')
 const isolatedHome = mkdtempSync(joinPath(tmpdir(), 'dshtui-ext-events-home-'))
@@ -846,15 +846,86 @@ await sleep(800)
   check('pending session ownership: synchronous subscriber cannot send the old image to the replacement',
     probeDelivered && probeContent?.every(block => block.type !== 'image') === true,
     JSON.stringify(probeContent))
-  check('pending session ownership: session swap dismissed the old sticky indicator',
-    await settled(() => !(channel as unknown as { notifications: readonly { text: string }[] }).notifications
-      .some(item => item.text.includes('正在等待插件决定（tui/input）'))))
+  const decisionNoticeVisible = (): boolean =>
+    (channel as unknown as { notifications: readonly { text: string }[] }).notifications
+      .some(item => item.text.includes('正在等待插件决定（tui/input）'))
+  // The switch drains the session-scoped decision ledger; waiting for the
+  // decision's own deadline would make this pass without any dismissal.
+  const noticeGonePromptly = await (async () => {
+    const deadline = Date.now() + 800
+    while (Date.now() < deadline) {
+      if (!decisionNoticeVisible()) return true
+      await sleep(20) // 固定窗:pacing 轮询间隔
+    }
+    return false
+  })()
+  check('pending session ownership: session swap dismissed the old sticky indicator before its deadline',
+    noticeGonePromptly, JSON.stringify({ stillVisible: decisionNoticeVisible() }))
   release({ handled: true, notice: '旧会话插件结果不应出现' })
   await sleep(150) // 固定窗:探针 陈旧 handled 结果不得吐进新会话，给它一个现身窗
   check('pending session ownership: stale handled result did not toast into the new session',
     !notified('旧会话插件结果不应出现'))
   unsubscribe()
   dispose()
+}
+
+// ── 9bb2. A notice must never be raised for a session that has already been
+// replaced: park a decision, switch sessions before the 400 ms threshold, then
+// assert no indicator appears afterwards (the switch cancels the replaced
+// session's timer instead of letting it flash into the new session). ──────
+{
+  let releaseLate: (value: { handled: true; notice: string }) => void = () => {}
+  const lateGate = new Promise<{ handled: true; notice: string }>(resolve => { releaseLate = resolve })
+  const disposeLate = decisionCtx.on('tui/input', event => {
+    if (event.text !== '切换前挂起') return undefined
+    return lateGate
+  })
+  channel.submit('切换前挂起')
+  await sleep(50) // 固定窗:pacing 让 400ms 阈值计时器仍处于等待中
+  await channel.newSession()
+  await sleep(600) // 固定窗:探针 越过 400ms 阈值，断言替换会话不冒出提示
+  const lateVisible = (channel as unknown as { notifications: readonly { text: string }[] }).notifications
+    .some(item => item.text.includes('正在等待插件决定（tui/input）'))
+  check('pending session ownership: replaced session never raises a late indicator', !lateVisible)
+  releaseLate({ handled: true, notice: '迟到的结果不应出现' })
+  await sleep(100) // 固定窗:pacing 给陈旧结果一个现身窗再清理监听
+  disposeLate()
+}
+
+// ── 9bb3. A retired activity preset id normalizes in the channel state too
+// (main's normalizeActivityPreset parity): the in-memory value must agree with
+// the persisted preference instead of diverging until restart. ────────────
+{
+  const state = channel as unknown as { activityFrames?: string; setActivityFrames(name: string): boolean }
+  const before = state.activityFrames
+  const applied = state.setActivityFrames('claude')
+  check('activity preset: retired id normalizes to the current default',
+    applied === true && state.activityFrames === 'moon8',
+    JSON.stringify({ before, applied, after: state.activityFrames }))
+  state.setActivityFrames(before ?? 'moon8')
+}
+
+// ── 9bb4. Every adoption tail must reset the input FIFO BEFORE its first emit
+// (main's bind → clear → refresh order): a subscriber that submits during the
+// session-changed emit must not chain onto the replaced session's parked
+// promise. Ordering is asserted on the source, because the emit/submit timing
+// inside the real channel makes a runtime probe non-discriminating. ────────
+{
+  const tails: readonly (readonly [string, string])[] = [
+    ['session-resume.ts', 'resetAndBind('],
+    ['session-adoption.ts', 'deps.bindAgent()'],
+    ['session-live-adoption.ts', 'deps.bindAgent()'],
+    ['model-switch.ts', 'deps.bindAgent()'],
+    ['background-action.ts', 'deps.bindAgent()'],
+  ]
+  const misplaced = tails.filter(([file, marker]) => {
+    const source = readFileSync(joinPath(import.meta.dirname, '..', 'src', 'dsh-adapter', 'channel', file), 'utf8')
+    const clear = source.indexOf('deps.clearStagedImages()')
+    const first = source.indexOf(marker)
+    return clear === -1 || first === -1 || clear > first
+  })
+  check('pending session ownership: every adoption tail resets the FIFO before its first emit',
+    misplaced.length === 0, JSON.stringify(misplaced))
 }
 
 // ── 9c. rewind-prompt stale-drop: a parked rewind decision cancels when the

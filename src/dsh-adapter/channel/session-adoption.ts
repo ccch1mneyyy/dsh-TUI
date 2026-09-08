@@ -56,6 +56,10 @@ export function createSessionAdoption(
     deps.replay(seed)
     deps.settleReplay()
     state.working = handle.agent.status === 'running'
+    // Reset the input FIFO and pending-decision indicators BEFORE the first
+    // emit: a submit from a session-changed subscriber must not chain onto the
+    // replaced session's parked promise (main's bind → clear → refresh order).
+    deps.clearStagedImages()
     deps.bindAgent()
     deps.refreshCommands()
     void deps.refreshLoadedContext()
@@ -63,7 +67,6 @@ export function createSessionAdoption(
     deps.touchSession(childId)
     state.emit()
     disposePrevious('dispose')
-    deps.clearStagedImages()
     return sourceSessionId
   })
 
