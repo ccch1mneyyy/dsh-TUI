@@ -1,3 +1,4 @@
+import type { AssistantStreamFrame } from '@deepseek-ai/dsh-agent'
 import type { SubagentState, SubagentStatus, SubagentOutputLine, SubagentOutputKind, SubagentToolCall, SubagentTokenUsage } from '../adapter/ports/channel-view.js'
 export type { SubagentState, SubagentStatus, SubagentOutputLine, SubagentOutputKind, SubagentToolCall, SubagentTokenUsage } from '../adapter/ports/channel-view.js'
 
@@ -91,6 +92,16 @@ export class SubagentActivityStore {
       last.settled = true
       this.notify()
     }
+  }
+
+  /** 0.1.5 live stream: transient attempt frames replace `assistant/chunk`
+   *  session events (the durable settlement keeps flowing as session events). */
+  onStreamFrame(agentId: string, frame: AssistantStreamFrame): void {
+    if (frame.type !== 'chunk') return
+    const chunk = frame.chunk
+    if (chunk.type === 'text-delta' && chunk.text) this.appendOutput(agentId, chunk.text, 'text')
+    else if (chunk.type === 'reasoning-delta' && chunk.text) this.appendOutput(agentId, chunk.text, 'thinking')
+    else if (chunk.type === 'usage' && chunk.usage) this.setTokens(agentId, chunk.usage)
   }
 
   onSessionEvent(agentId: string, event: unknown): void {

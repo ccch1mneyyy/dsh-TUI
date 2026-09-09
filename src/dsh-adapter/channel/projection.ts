@@ -1,6 +1,6 @@
-import type { Agent } from '@deepseek-ai/dsh-agent'
+import type { Agent, AssistantStreamFrame } from '@deepseek-ai/dsh-agent'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
-import type { ContentBlock } from '@deepseek-ai/dsh-llm'
+import type { ContentBlock, StreamChunk } from '@deepseek-ai/dsh-llm'
 import type { ChannelState, ChannelGoal, ChatRow, ToolCallView, ToolResultView, ToolsRegistryLike } from './types.js'
 import type { InputConvergence } from './input-actions.js'
 import type { BackgroundJobStore } from '../jobs.js'
@@ -70,6 +70,9 @@ export function createChannelProjection(state: ProjectionState, deps: Projection
    */
   const handledAssistantMessages = new Set<number>()
   const handledAssistantChunks = new Set<number>()
+  /** Live attemptId → (turn, step): 0.1.5 `agent/assistant-stream` chunk
+   *  frames carry no turn/step — the attempt's start frame owns them. */
+  const attemptSteps = new Map<string, { turn: number; step: number }>()
   const assistantRowsByStep = new Map<string, ChatRow>()
   const lastTextDelta = new Map<ChatRow, string>()
   const stepKey = (turn: number, step: number): string => `${turn}:${step}`
@@ -346,6 +349,7 @@ export function createChannelProjection(state: ProjectionState, deps: Projection
     // legitimate message in the new transcript.
     handledAssistantMessages.clear()
     handledAssistantChunks.clear()
+    attemptSteps.clear()
     assistantRowsByStep.clear()
     lastTextDelta.clear()
     replaying = true
@@ -356,6 +360,74 @@ export function createChannelProjection(state: ProjectionState, deps: Projection
     }
   }
 
+  /**
+   * One live stream delta, from a 0.1.5 `agent/assistant-stream` chunk frame
+   * or a legacy `assistant/chunk` session event (pre-0.1.5 hosts and raw
+   * pre-V3 logs). `seq` exists only on the durable-event path.
+   */
+  const renderStreamChunk = (turn: number, step: number, chunk: StreamChunk, time: number, seq?: number): void => {
+    if (chunk.type === 'text-delta') {
+      if (chunk.text) {
+        // Fold the thinking preview while it is still in the live
+        // window (see foldLiveReasoning) — before this text grows the
+        // transcript and pushes the block into scrollback.
+        foldLiveReasoning('first text token')
+        const key = stepKey(turn, step)
+        const row = assistantRowsByStep.get(key) ?? ensureStreaming(seq)
+        assistantRowsByStep.set(key, row)
+        streaming = row
+        row.streaming = true
+        touchRow(row)
+        const before = row.text.length
+        appendTextDelta(row, chunk.text)
+        state.responseChars += Math.max(0, row.text.length - before)
+      }
+    } else if (chunk.type === 'reasoning-delta') {
+      if (chunk.text) {
+        const row = ensureReasoning(seq, turn, step)
+        appendTextDelta(row, chunk.text)
+      }
+    }
+    const tps = tpsStep
+    if (
+      tps !== undefined &&
+      tps.turn === turn &&
+      tps.step === step &&
+      isTokenDelta(chunk)
+    ) {
+      tps.firstTokenTime ??= time
+      tps.outputChars += tokenDeltaChars(chunk)
+      const elapsedMs = Math.max(0, time - tps.firstTokenTime)
+      if (elapsedMs > 500) {
+        const decodeMs = tpsTurnDecodeMs + elapsedMs
+        const outputTokens = tpsTurnDecodeTokens + Math.ceil(tps.outputChars / 4)
+        state.tps = outputTokens / (decodeMs / 1000)
+      }
+    }
+    updateSpinnerMode()
+  }
+
+  /**
+   * Live assistant stream frame (0.1.5+): the transient per-token counterpart
+   * of the durable `assistant/message`/`assistant/attempt` settlement. Start
+   * frames own the attempt's (turn, step); chunk frames inherit them; end
+   * frames only retire the ledger — the durable event that settles the
+   * attempt arrives through `session/event` and seals the rows.
+   */
+  const renderStreamFrame = (frame: AssistantStreamFrame): void => {
+    if (frame.type === 'start') {
+      attemptSteps.set(frame.attemptId, { turn: frame.turn, step: frame.step })
+      return
+    }
+    if (frame.type === 'end') {
+      attemptSteps.delete(frame.attemptId)
+      return
+    }
+    const where = attemptSteps.get(frame.attemptId)
+    if (where === undefined) return
+    renderStreamChunk(where.turn, where.step, frame.chunk, frame.time)
+  }
+
   const renderEvent = (event: SessionEvent): void => {
     // Top-level `goal/change` events are how the goal service actually
     // records durable goal mutations (create/edit/pause/resume/complete/
@@ -363,7 +435,7 @@ export function createChannelProjection(state: ProjectionState, deps: Projection
     // SessionEvent union predates the type, so admit it structurally: the
     // goal chip and panel stay dark without this fold.
     if ((event as { type: string }).type === 'goal/change') {
-      applyGoalChange((event as { data: GoalChangePayload }).data)
+      applyGoalChange((event as unknown as { data: GoalChangePayload }).data)
       return
     }
     switch (event.type) {
@@ -452,51 +524,6 @@ export function createChannelProjection(state: ProjectionState, deps: Projection
             outputChars: 0,
           }
         }
-        break
-      }
-      case 'assistant/chunk': {
-        if (handledAssistantChunks.has(event.seq)) break
-        handledAssistantChunks.add(event.seq)
-        const chunk = event.data.chunk
-        if (chunk.type === 'text-delta') {
-          if (chunk.text) {
-            // Fold the thinking preview while it is still in the live
-            // window (see foldLiveReasoning) — before this text grows the
-            // transcript and pushes the block into scrollback.
-            foldLiveReasoning('first text token')
-            const key = stepKey(event.data.turn, event.data.step)
-            const row = assistantRowsByStep.get(key) ?? ensureStreaming(event.seq)
-            assistantRowsByStep.set(key, row)
-            streaming = row
-            row.streaming = true
-            touchRow(row)
-            const before = row.text.length
-            appendTextDelta(row, chunk.text)
-            state.responseChars += Math.max(0, row.text.length - before)
-          }
-        } else if (chunk.type === 'reasoning-delta') {
-          if (chunk.text) {
-            const row = ensureReasoning(event.seq, event.data.turn, event.data.step)
-            appendTextDelta(row, chunk.text)
-          }
-        }
-        const step = tpsStep
-        if (
-          step !== undefined &&
-          step.turn === event.data.turn &&
-          step.step === event.data.step &&
-          isTokenDelta(chunk)
-        ) {
-          step.firstTokenTime ??= event.time
-          step.outputChars += tokenDeltaChars(chunk)
-          const elapsedMs = Math.max(0, event.time - step.firstTokenTime)
-          if (elapsedMs > 500) {
-            const decodeMs = tpsTurnDecodeMs + elapsedMs
-            const outputTokens = tpsTurnDecodeTokens + Math.ceil(step.outputChars / 4)
-            state.tps = outputTokens / (decodeMs / 1000)
-          }
-        }
-        updateSpinnerMode()
         break
       }
       case 'assistant/message': {
@@ -843,17 +870,26 @@ export function createChannelProjection(state: ProjectionState, deps: Projection
           state.contextWindow = event.data.contextWindow
         }
         break
+      case 'system/message': {
+        // V3 system prompts are surface nodes, not header fields: the latest
+        // node holds the active instructions (an empty render clears them).
+        // The context bar's system segment tracks that live text.
+        state.contextSegments.system = estimateTokens(textOf(event.data.message.content))
+        break
+      }
       case 'request/header': {
         // Reasoning effort readout (status line): the header carries the
         // conversation's call config (provider/model/effort/sampling). The
-        // system prompt text seeds the context bar's system segment.
+        // system prompt moved out of the header at V3 (see system/message);
+        // pre-V3 logs still carry it, admitted structurally below.
         // oxlint-disable-next-line typescript/no-unnecessary-condition -- durable session data may lack header config
         const effort = event.data.header.config?.reasoningEffort
         if (typeof effort === 'string') {
           state.reasoningEffort = effort
         }
-        if (typeof event.data.header.system === 'string') {
-          state.contextSegments.system = estimateTokens(event.data.header.system)
+        const legacySystem = (event.data.header as { system?: unknown }).system
+        if (typeof legacySystem === 'string') {
+          state.contextSegments.system = estimateTokens(legacySystem)
         }
         break
       }
@@ -861,6 +897,18 @@ export function createChannelProjection(state: ProjectionState, deps: Projection
         state.sessionTitle = event.data.title
         break
       default:
+        // Pre-0.1.5 live streams and raw pre-V3 logs carry per-token chunks
+        // as durable session events; 0.1.5 moved live chunks to transient
+        // `agent/assistant-stream` frames (renderStreamFrame) and compacts the
+        // durable record into `assistant/message.stream`. Match by name so the
+        // current union (which no longer lists the type) stays compile-clean.
+        if ((event as { type: string }).type === 'assistant/chunk') {
+          if (handledAssistantChunks.has(event.seq)) break
+          handledAssistantChunks.add(event.seq)
+          const data = (event as unknown as { data: { turn: number; step: number; chunk: StreamChunk } }).data
+          renderStreamChunk(data.turn, data.step, data.chunk, (event as { time: number }).time, event.seq)
+          break
+        }
         // dsh-tool-todo owns this optional module augmentation in alpha.2.
         // Match by name so the TUI remains loadable without that plugin.
         if ((event as { type: string }).type === 'todo/write') {
@@ -935,6 +983,7 @@ export function createChannelProjection(state: ProjectionState, deps: Projection
     toolCards.clear()
     handledAssistantMessages.clear()
     handledAssistantChunks.clear()
+    attemptSteps.clear()
     assistantRowsByStep.clear()
     lastTextDelta.clear()
     tpsTurn = undefined
@@ -943,5 +992,5 @@ export function createChannelProjection(state: ProjectionState, deps: Projection
     tpsTurnDecodeTokens = 0
     tpsTurnSampled = false
   }
-  return { reset, replayEvents, renderEvent, settleStreaming, updateSpinnerMode, presentCallView, presentResultView, textOf, firstTextOf }
+  return { reset, replayEvents, renderEvent, renderStreamFrame, settleStreaming, updateSpinnerMode, presentCallView, presentResultView, textOf, firstTextOf }
 }

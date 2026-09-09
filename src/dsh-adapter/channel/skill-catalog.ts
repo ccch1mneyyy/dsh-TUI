@@ -44,7 +44,10 @@ export function createSkillCatalog(
         if (!deps.owner.current()) return
         if (HIDDEN_COMMAND_NAMES.has(descriptor.name) || merged.some(command => command.name === descriptor.name)) continue
         const descriptions = deps.commandDescriptions(descriptor.name)
-        merged.push({ name: descriptor.name, description: descriptor.description, ...(descriptions === undefined ? {} : { descriptions }), tag: descriptor.input?.hint, external: true, acceptsImages: descriptor.input?.images === true, ...(registrations.has(descriptor.name) ? { skill: true } : {}) })
+        // `images` became `attachments` upstream (composer attachment
+        // admission); read both so older cohorts keep their image commands.
+        const input = descriptor.input as { hint?: string; attachments?: boolean; images?: boolean } | undefined
+        merged.push({ name: descriptor.name, description: descriptor.description, ...(descriptions === undefined ? {} : { descriptions }), tag: input?.hint, external: true, acceptsImages: input?.attachments ?? input?.images === true, ...(registrations.has(descriptor.name) ? { skill: true } : {}) })
       }
     }
     if (!deps.owner.current() || target !== deps.agent()) return

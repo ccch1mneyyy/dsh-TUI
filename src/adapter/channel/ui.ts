@@ -56,12 +56,29 @@ export function createChannelUi(channel: ChannelUi, mode: AdapterMode, lease: Ch
     lease.assertActive()
     assertShadowPolicy(effect, mode)
   }
+  /**
+   * Lease liveness probe for async continuations. A promise that settles
+   * after the channel's teardown is unobservable by definition — the
+   * caller's tree is already gone — so converting it into a rejection only
+   * manufactures an unhandled rejection that kills the process mid-exit
+   * (autoRecap's aborted side question resolving during /quit crashed every
+   * resumed-session exit with code 7). The synchronous entry check stays the
+   * loud use-after-teardown guard; the late completion goes quiet.
+   */
+  const alive = (): boolean => {
+    try {
+      lease.assertActive()
+      return true
+    } catch {
+      return false
+    }
+  }
   const read = createChannelReadView(mutation => check(mutation ? 'mutate' : 'read-only'))
   const project = <T>(value: T): T => read(value, channel.version)
   const trace = createChannelReadView(mutation => check(mutation ? 'mutate' : 'read-only'))
   const query = <T>(value: T): T => createChannelReadView(mutation => check(mutation ? 'mutate' : 'read-only'))(value, 0)
   const settle = <T>(value: T): T => {
-    if (value instanceof Promise) return value.then(result => { check('read-only'); return query(result) }) as T
+    if (value instanceof Promise) return value.then(result => (alive() ? (check('read-only'), query(result)) : result)) as T
     return query(value)
   }
   function methods<T extends object>(target: T, effects: Readonly<Record<keyof T, HostEffectClass>>): T {

@@ -9,6 +9,17 @@
  * layout). Sessions already present in the target are skipped, so the script
  * is safe to re-run. The source file is never modified or deleted.
  *
+ * The sqlite backend was retired upstream at 0.1.2-alpha.3 and its rc.2 build
+ * cannot link against the primary 0.1.5 tree (removed persistence exports),
+ * so it is imported through the private wrapper in vendor/sqlite-island,
+ * whose pnpm-workspace overrides pin a coherent 0.1.1-rc.2 peer closure —
+ * by relative path, keeping the wrapper out of the published manifest.
+ * NOTE: the copy path was built for the V2 event vocabulary on both sides;
+ * whether a real rc.2-decoded session survives the 0.1.5 jsonl writer's V3
+ * validation is not covered by the verify gate (which only exercises the
+ * missing-source path) and needs a live fixture before any real migration
+ * run.
+ *
  *   pnpm tsx scripts/migrate-sessions-to-jsonl.mts [--from <sqlite>] [--to <root>] [--dry-run]
  *
  * Defaults: --from $DSH_TUI_SESSION_ROOT ?? ~/.dsh-tui/sessions.sqlite
@@ -19,7 +30,12 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
 import SessionStore from '@deepseek-ai/dsh-session'
-import SqliteSessionPersistence from '@deepseek-ai/dsh-session-persistence-sqlite'
+// Relative import, not a manifest dependency: a `workspace:*` devDependency
+// would ship verbatim in the npm tarball (this package publishes via npm,
+// which rewrites no workspace protocols) and break `dsh plugin add` in the
+// profile workspace. The island stays a workspace package; its rc.2 peer
+// closure is pinned by the pnpm-workspace overrides either way.
+import SqliteSessionPersistence from '../vendor/sqlite-island/index.js'
 import JsonlSessionPersistence from '@deepseek-ai/dsh-session-persistence-jsonl'
 
 function argValue(flag: string): string | undefined {

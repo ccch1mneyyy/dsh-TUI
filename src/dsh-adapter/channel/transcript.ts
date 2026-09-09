@@ -285,14 +285,17 @@ export function prepareReplayEvents(events: readonly SessionEvent[]): SessionEve
   }
   return events.filter(event => {
     if (event.type === 'assistant/message') return true
-    if (event.type === 'assistant/chunk') {
+    // Pre-V3 chunk events and storage-level packed rows are not in the
+    // current SessionEvent union (0.1.5 embeds the stream inside
+    // `assistant/message`), so compare through a widened view — the filters
+    // below exist exactly for data the static type doesn't know.
+    const packedType = (event as { type: string }).type
+    if (packedType === 'assistant/chunk') {
       // Keep only the in-flight tail (no message sealed after it).
       return lastMessageSeq < 0 || event.seq > lastMessageSeq
     }
-    // Storage-level packed rows: not in the SessionEvent union (they exist
-    // only in the durable JSON), so compare through a widened view — the
-    // defensive drop is exactly for data the static type doesn't know.
-    const packedType = (event as { type: string }).type
+    // Storage-level packed rows: the jsonl reader expands them, but a future
+    // direct-pass path must not resurrect them.
     if (
       packedType === 'text-chunks' ||
       packedType === 'reasoning-chunks' ||

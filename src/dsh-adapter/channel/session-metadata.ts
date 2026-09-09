@@ -90,8 +90,7 @@ export function createSessionMetadataActions(ctx: Context, deps: {
     try {
       const result = await credentials.describe(ref)
       return current(capture) ? result : undefined
-    } catch (error) {
-      // `undefined` means the optional service is absent. Keep a live
+    } catch (error) {      // `undefined` means the optional service is absent. Keep a live
       // credential service's read failure observable; only suppress it once
       // this Channel binding has been replaced or disposed.
       if (!current(capture)) return undefined
@@ -99,14 +98,43 @@ export function createSessionMetadataActions(ctx: Context, deps: {
     }
   }
 
+  /**
+   * The session's active system prompt text: the latest non-empty
+   * `system/message` surface node (V3 moved prompts out of the request
+   * header). Side questions are tool-less one-shot calls that should still
+   * honor the deployment persona; sessions without a prompt yield undefined.
+   */
+  const currentSystemText = (capture: Capture): string | undefined => {
+    try {
+      const events = snapshotLiveSessionEvents(capture.agent.session)
+      for (let index = events.length - 1; index >= 0; index -= 1) {
+        const event = events[index]!
+        if ((event as { type: string }).type !== 'system/message') continue
+        const data = (event as { data?: { message?: { content?: readonly { type: string; text?: string }[] } } }).data
+        const text = (data?.message?.content ?? [])
+          .map(block => (block.type === 'text' ? block.text ?? '' : ''))
+          .join('')
+          .trim()
+        if (text !== '') return text
+      }
+    } catch {
+      // A session without the live-snapshot seam has no prompt to lend.
+    }
+    return undefined
+  }
+
   const llmRequest = (capture: Capture, messages: Message[], signal?: AbortSignal): Record<string, unknown> => {
     const header = capture.agent.session.requestHeader()
     const config = header?.config
+    // Pre-V3 headers carried the system prompt inline; V3 moved it to
+    // `system/message` surface nodes (see currentSystemText).
+    const legacySystem = (header as { system?: unknown } | undefined)?.system
+    const system = typeof legacySystem === 'string' ? legacySystem : currentSystemText(capture)
     return {
       provider: config?.provider ?? deps.provider(),
       model: config?.model ?? deps.model(),
       messages,
-      ...(header?.system !== undefined && { system: header.system }),
+      ...(system !== undefined && { system }),
       ...(config?.reasoningEffort !== undefined && { reasoningEffort: config.reasoningEffort }),
       ...(config?.temperature !== undefined && { temperature: config.temperature }),
       ...(config?.maxTokens !== undefined && { maxTokens: config.maxTokens }),

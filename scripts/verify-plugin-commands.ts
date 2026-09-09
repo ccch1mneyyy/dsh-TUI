@@ -298,9 +298,8 @@ const check1 = (name: string, ok: boolean, detail?: string) => {
     invoker.includes('supportsImages(')
     && invoker.includes("installedMeetsVersion('@deepseek-ai/dsh-commands', '0.1.0-rc.8')")
     && invoker.includes('ImagesExecute'))
-  check1('command discovery mirrors the upstream input.images admission flag',
-    readFileSync(join(root, 'src/dsh-adapter/channel/skill-catalog.ts'), 'utf8')
-      .includes('acceptsImages: descriptor.input?.images === true'))
+  check1('command discovery mirrors the upstream input admission flag (0.1.5 `attachments`, legacy `images` fallback)',
+    /acceptsImages:[^\n]*\battachments\b[^\n]*\bimages\b/.test(skills))
   check1('draft-aware command outcome is additive',
     invoker.includes('Promise<ExternalCommandOutcome | undefined>')
       && channel.includes('runExternalCommandOutcome'))
