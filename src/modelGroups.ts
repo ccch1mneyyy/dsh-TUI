@@ -9,7 +9,7 @@
  * @module dsh-tui/modelGroups
  */
 
-import type { LlmModelInfo, LlmProviderInfo } from './dsh-adapter/types.js'
+import type { LlmModelInfo, LlmProviderInfo } from './adapter/ports/channel-view.js'
 
 /**
  * The pseudo provider key of the pinned "recently used" group. Provider

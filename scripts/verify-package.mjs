@@ -49,6 +49,13 @@ for (const presetFile of [
 ]) {
   if (!packed.has(presetFile)) throw new Error(`packaged preset file missing from tarball: ${presetFile}`)
 }
+for (const path of packed) {
+  const lower = path.toLowerCase()
+  if (lower.includes('plugin-spec/')
+    || /dsh-adapter\/(?:grants|host-descriptor)(?:\.|$)/u.test(lower)) {
+    throw new Error(`npm package contains legacy compat shim (case-insensitive): ${path}`)
+  }
+}
 if ([...packed].some(path => path.startsWith('src/'))) {
   throw new Error('npm package unexpectedly contains TypeScript sources')
 }

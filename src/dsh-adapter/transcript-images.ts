@@ -1,27 +1,10 @@
 import type { ContentBlock } from '@deepseek-ai/dsh-llm'
+import type { TranscriptImage } from '../adapter/ports/channel-view.js'
 
 type ImageBlock = Extract<ContentBlock, { type: 'image' }>
 type ImageAttachment = ImageBlock['attachment']
 
-/** UI-safe facade for one durable image block in the session transcript. */
-export interface TranscriptImage {
-  readonly id: string
-  readonly width: number
-  readonly height: number
-  readonly name?: string
-  /** Verified media type, when the durable reference carries one. */
-  readonly mediaType?: string
-  /** Stored byte size, when the durable reference carries one. */
-  readonly bytes?: number
-  /**
-   * Absolute local path the bytes were staged from in THIS process: a pasted
-   * or dropped file, or the clipboard bitmap's temp export. Display-only and
-   * never persisted — the durable event carries a content hash, so images
-   * restored from the session log have none.
-   */
-  readonly path?: string
-  read(signal?: AbortSignal): Promise<Uint8Array>
-}
+export type { TranscriptImage }
 
 /**
  * Source paths of images staged in this process, by attachment id, so the

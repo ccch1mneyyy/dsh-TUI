@@ -33,6 +33,7 @@ const fakeHome = mkdtempSync(join(tmpdir(), 'dsh-plugin-messages-home-'))
 process.env.HOME = fakeHome
 process.env.USERPROFILE = fakeHome
 process.env.DSH_TUI_LANG = 'zh'
+process.env.DSH_TUI_ADAPTER_MODE = 'new'
 
 const { Context, Service } = await import('@deepseek-ai/cordis')
 const pluginHostRow = await import('../src/dsh-adapter/plugin-host.js')
@@ -42,10 +43,11 @@ const {
   OBSERVE_SCOPE_MAX_CHARS,
   OBSERVE_SUMMARY_CELLS,
 } = await import('../src/dsh-adapter/message-observer.js')
-const { loadSpecData } = await import('../src/plugin-spec/registry.js')
-const { check } = await import('../src/plugin-spec/schema-check.js')
+const { runMessageLiveProbe } = await import('../src/adapter/kernel/host-probe-access.js')
+const { loadSpecData } = await import('../src/adapter/standard/registry.js')
+const { check } = await import('../src/adapter/standard/schema-check.js')
 const { DATA_DIR } = await import('../src/utils/paths.js')
-const { mountAdmitted, testManifest, MESSAGE_COORDINATE } = await import('../src/dsh-adapter/plugin-test-utils.js')
+const { mountAdmitted, testManifest, MESSAGE_COORDINATE } = await import('../scripts/lib/plugin-test-utils.js')
 const { validateMessageEvent } = await import('@dsh-std/messages')
 import type { MessagesObserveEnvelope } from '../src/dsh-adapter/message-observer.js'
 
@@ -97,6 +99,8 @@ const publish = (runtime: InstanceType<typeof TuiMessageObserverRuntime>, sessio
 }
 check1('host-only publish ingress is absent from the plugin-visible broker',
   !('publish' in (broker as object)) && !('publishGuarded' in (broker as object)))
+check1('live probe method is not exposed on the plugin-visible broker',
+  !('probeReversible' in (broker as object)))
 
 const received = new Map<string, MessagesObserveEnvelope[]>()
 const admittedContexts = new Map<string, InstanceType<typeof Context>>()
@@ -285,6 +289,18 @@ await subscribeAs('alpha')
   check1('overlong session scope produces no envelope', (received.get('beta') ?? []).length === before)
   check1('overlong session scope is warned without logging the id',
     hostWarnings.slice(warningsBefore).some(line => line.includes('session scope exceeds')))
+}
+
+// ── E4. 宿主 live probe 只走 probe-only 通道，真实 session:* 订阅者零投递 ──
+{
+  await subscribeAs('beta', undefined, 'session:*', { declaredScope: 'session:*' })
+  const beforeWildcard = (received.get('beta') ?? []).length
+  const probeResult = await runMessageLiveProbe(broker)
+  await sleep(20)
+  const wildcardCount = (received.get('beta') ?? []).length - beforeWildcard
+  check1('host live probe reports one internal delivery', probeResult.delivered === 1)
+  check1('probe-only synthetic event is invisible to real session:* subscribers', wildcardCount === 0,
+    `wildcard got ${wildcardCount}`)
 }
 
 // ── F. listener 抛错被隔离，续投不断 ──────────────────────────────────────

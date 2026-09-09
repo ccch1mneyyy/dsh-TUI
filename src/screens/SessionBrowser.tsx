@@ -29,7 +29,7 @@ import {
 } from '../sessions/view.js'
 import { t, type I18nKey } from '../i18n.js'
 import { readSessionPins, setSessionPinned } from '../sessionPins.js'
-import type { Channel } from '../dsh-adapter/channel.js'
+import type { ChannelUi as Channel } from '../adapter/channel/ui-policy.js'
 import type { PreviewEntry, SessionSummary } from '../dsh-adapter/sessions/index.js'
 
 /** What the browser is doing with the focused row. */

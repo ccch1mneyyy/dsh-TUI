@@ -27,19 +27,15 @@
  * here, so a future harness that starts emitting it is picked up for free.
  */
 
-import type { SessionEvent } from '@deepseek-ai/dsh-session'
+import type { RawTrajEvent } from '../../adapter/ports/channel-view.js'
+export type { RawTrajEvent } from '../../adapter/ports/channel-view.js'
 
 /**
  * A session event reduced to the envelope the projection relies on. Only
  * `type`, `seq` and `time` are contractual across every event; `data` is
  * deliberately `unknown` so nothing downstream can read it without a guard.
  */
-export interface RawTrajEvent {
-  readonly type: string
-  readonly seq: number
-  readonly time: number
-  readonly data: unknown
-}
+
 
 /**
  * The single widening point for the whole trajectory feature.
@@ -54,7 +50,7 @@ export interface RawTrajEvent {
  * @param events - The session's immutable event snapshot.
  * @returns The same array, typed for guard-mediated access.
  */
-export function asRawEvents(events: readonly SessionEvent[]): readonly RawTrajEvent[] {
+export function asRawEvents(events: readonly RawTrajEvent[]): readonly RawTrajEvent[] {
   return events as readonly RawTrajEvent[]
 }
 

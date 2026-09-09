@@ -10,7 +10,7 @@ import { spreadRow, tailWidth, truncateWidth, wrapWidth } from '../sessions/form
 import { stringWidth } from '../ink/stringWidth.js'
 import { TICK, MULTIPLICATION_X } from '../terminal-utils/figures.js'
 import { t } from '../i18n.js'
-import type { Channel } from '../dsh-adapter/channel.js'
+import type { ChannelUi as Channel } from '../adapter/channel/ui-policy.js'
 import {
   droppedTurnInfo,
   filterTree,

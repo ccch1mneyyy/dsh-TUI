@@ -1,7 +1,7 @@
 import React from 'react'
 import { t } from '../i18n.js'
 import { Box, Text, useTerminalSize } from '../ui.js'
-import type { LlmModelInfo } from '../dsh-adapter/types.js'
+import type { LlmModelInfo } from '../adapter/ports/channel-view.js'
 import type { ModelGroupRow } from '../modelGroups.js'
 import { RECENTS_GROUP_PROVIDER, RECENTS_LABEL_PLACEHOLDER } from '../modelGroups.js'
 import { Pane } from './design-system/Pane.js'

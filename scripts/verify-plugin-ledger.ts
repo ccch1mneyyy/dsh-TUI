@@ -32,6 +32,7 @@ const fakeHome = mkdtempSync(join(tmpdir(), 'dsh-plugin-ledger-home-'))
 process.env.HOME = fakeHome
 process.env.USERPROFILE = fakeHome
 process.env.DSH_TUI_LANG = 'zh'
+process.env.DSH_TUI_ADAPTER_MODE = 'new'
 
 const { Context } = await import('@deepseek-ai/cordis')
 const pluginHostRow = await import('../src/dsh-adapter/plugin-host.js')
@@ -39,10 +40,10 @@ const { TuiEffectLedgerRuntime, EFFECT_LEDGER_FILE } = await import('../src/dsh-
 const { TuiStatusRuntime } = await import('../src/dsh-adapter/status.js')
 const { default: TuiShortcutRuntime } = await import('../src/dsh-adapter/shortcuts.js')
 const { default: TuiThemeRuntime } = await import('../src/dsh-adapter/themes.js')
-const { loadSpecData } = await import('../src/plugin-spec/registry.js')
-const { check: schemaCheck } = await import('../src/plugin-spec/schema-check.js')
+const { loadSpecData } = await import('../src/adapter/standard/registry.js')
+const { check: schemaCheck } = await import('../src/adapter/standard/schema-check.js')
 const { DATA_DIR } = await import('../src/utils/paths.js')
-const { mountAdmitted, testManifest, STORAGE_COORDINATE } = await import('../src/dsh-adapter/plugin-test-utils.js')
+const { mountAdmitted, testManifest, STORAGE_COORDINATE } = await import('../scripts/lib/plugin-test-utils.js')
 import type { LedgerEntry } from '../src/dsh-adapter/effect-ledger.js'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')

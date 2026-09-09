@@ -19,11 +19,11 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-const { check } = await import('../src/plugin-spec/schema-check.js')
-const { loadSpecData, verifyRegistry, verifyContractProfiles } = await import('../src/plugin-spec/registry.js')
-const { createContractIndex, validatePlugin, validateHost } = await import('../src/plugin-spec/validate.js')
-const { negotiate } = await import('../src/plugin-spec/negotiate.js')
-const { NEGOTIATION_ERROR_CODES } = await import('../src/plugin-spec/types.js')
+const { check } = await import('../src/adapter/standard/schema-check.js')
+const { loadSpecData, verifyRegistry, verifyContractProfiles } = await import('../src/adapter/standard/registry.js')
+const { createContractIndex, validatePlugin, validateHost } = await import('../src/adapter/standard/validate.js')
+const { negotiate } = await import('../src/adapter/standard/negotiate.js')
+const { NEGOTIATION_ERROR_CODES } = await import('../src/adapter/standard/types.js')
 const { parseManifest } = await import('@dsh-std/manifest')
 const { validateMessageEvent } = await import('@dsh-std/messages')
 

@@ -12,7 +12,7 @@ import { formatJobDuration, type BackgroundJobState } from '../dsh-adapter/jobs.
 /** Stable fallback for stubbed channels: verify/repro harnesses render the
  *  real Chat with partial channel literals that predate the jobs field. */
 const NO_BACKGROUND_JOBS: readonly BackgroundJobState[] = []
-import type { Channel } from '../dsh-adapter/channel.js'
+import type { ChannelUi as Channel } from '../adapter/channel/ui-policy.js'
 import { modeDisplayName } from '../sessionModes.js'
 import { MiniWake } from '../components/trajectory/MiniWake.js'
 import { ContextBarView } from '../components/ContextBarView.js'

@@ -1,3 +1,5 @@
+import type { TuiSettingsSection, TuiSettingsGroup, TuiSettingsField, TuiSettingsFieldKind, TuiSettingsFieldOption, TuiSettingsFieldWrite } from '../adapter/ports/channel-settings.js'
+export type { TuiSettingsSection, TuiSettingsGroup, TuiSettingsField, TuiSettingsFieldKind, TuiSettingsFieldOption, TuiSettingsFieldWrite } from '../adapter/ports/channel-settings.js'
 /**
  * Plugin settings-section extension seam for terminal front doors.
  *
@@ -14,105 +16,18 @@ import { Context, Service } from '@deepseek-ai/cordis'
 import type { LocalizedDescriptions } from '../commands.js'
 import { activationFiber, bindCallerEffect, compositionRoot, concreteService, requirePluginCaller } from './host-access.js'
 import { vetSectionSecretRefs } from './credentialRefGuard.js'
-
-/** Control kinds the TUI settings screen knows how to render. */
-export type TuiSettingsFieldKind = 'text' | 'number' | 'boolean' | 'select'
-
-export interface TuiSettingsFieldOption {
-  /** Stored value. */
-  value: string
-  /** Display label (English; also the fallback). */
-  label: string
-  /** Provider-owned translations for the label. */
-  descriptions?: LocalizedDescriptions
-}
-
-/** Optional navigation group inside one settings section. */
-export interface TuiSettingsGroup {
-  /** Stable identifier, unique inside the section. */
-  id: string
-  /** Group title (English; also the fallback). */
-  title: string
-  /** Provider-owned translations for the title. */
-  descriptions?: LocalizedDescriptions
-}
-
-/** The write one field's draft stages when the section is saved. */
-export type TuiSettingsFieldWrite =
-  | { kind: 'set'; value: unknown }
-  | { kind: 'clear' }
-
-export interface TuiSettingsField {
-  /**
-   * Key path from the section root, in the settings service's `mutate` path
-   * vocabulary (object keys; dict keys name their entry directly).
-   */
-  path: readonly string[]
-  /** Short field label (English; also the fallback). */
-  label: string
-  /** Provider-owned translations for the label. */
-  descriptions?: LocalizedDescriptions
-  /** Optional one-line help rendered under the field. */
-  hint?: string
-  /** Provider-owned translations for the hint. */
-  hintDescriptions?: LocalizedDescriptions
-  /** Optional group id; grouped fields render on that group's subpage. */
-  group?: string
-  kind: TuiSettingsFieldKind
-  /**
-   * Choices for `kind: 'select'`; any options-bearing field (text hybrids
-   * included — e.g. the page-margin presets) also cycles via ←/→ in the
-   * settings list while Enter keeps the kind's own action (select cycles,
-   * text opens the editor for a custom value).
-   */
-  options?: readonly TuiSettingsFieldOption[]
-  /** Input placeholder for `kind: 'text' | 'number'`. */
-  placeholder?: string
-  /**
-   * Credential control (mirrors the web cards' CardSecretSpec): the literal
-   * never rides the settings document — the draft starts blank on every
-   * open, a blank draft writes nothing, and a typed draft writes through the
-   * credentials seam under `ref`. The screen shows only whether a value is
-   * configured.
-   */
-  secret?: { ref: string }
-  /**
-   * Render a stored value as draft text. Defaults to the kind's conversion
-   * (strings verbatim, numbers via `String`, booleans/selects by value).
-   */
-  format?(value: unknown): string
-  /**
-   * The write this draft text stages, or `undefined` when the text is not a
-   * value this field accepts — an invalid draft blocks the save rather than
-   * being discarded. Defaults to the kind's conversion (an empty text/number
-   * draft stages a clear, letting the field re-inherit the composition
-   * layer).
-   */
-  parse?(text: string): TuiSettingsFieldWrite | undefined
-}
-
-/** One plugin's section inside the TUI settings screen. */
-export interface TuiSettingsSection {
-  /**
-   * Settings namespace this section edits. Should match a namespace the
-   * plugin registers on the dsh settings service; the screen marks the
-   * section unavailable when the composition serves no such namespace.
-   */
-  ns: string
-  /** Section title (English; also the fallback). */
-  title: string
-  /** Provider-owned translations for the title. */
-  descriptions?: LocalizedDescriptions
-  /** Optional navigation groups, in display order. */
-  groups?: readonly TuiSettingsGroup[]
-  /** Editable fields, in display order. */
-  fields: readonly TuiSettingsField[]
-}
+import {
+  assertCapabilityShadowPolicy,
+  defaultAdapterRuntime,
+  type AdapterRuntimeOptions,
+} from '../adapter/kernel/runtime.js'
+import { adapterRuntimeFor } from '../adapter/kernel/runtime-context.js'
 
 /** Host-only settings-section controls used by the TUI bootstrap/channel. */
 export interface TuiSettingsSectionsHost {
   register(section: TuiSettingsSection): () => void
   list(): readonly TuiSettingsSection[]
+  section(ns: string): TuiSettingsSection | undefined
   subscribe(listener: () => void): () => void
 }
 
@@ -133,13 +48,16 @@ export class TuiSettingsSectionsRuntime extends Service {
     super(ctx, 'tuiSettingsSections')
     compositionRoot(ctx)
     const runtime = this
-    const state: SettingsSectionState = { sections: new Map(), owners: new Map(), listeners: new Set(), host: undefined }
+    const state: SettingsSectionState = { sections: new Map(), owners: new Map(), listeners: new Set(), host: undefined, runtime: adapterRuntimeFor(ctx) }
     state.host = Object.freeze({
       register(section: TuiSettingsSection) {
         return registerSection(runtime, section)
       },
       list() {
         return [...settingsSectionStateFor(runtime).sections.values()]
+      },
+      section(ns: string) {
+        return settingsSectionStateFor(runtime).sections.get(ns.trim())
       },
       subscribe(listener: () => void) {
         return subscribeSections(runtime, listener)
@@ -149,6 +67,7 @@ export class TuiSettingsSectionsRuntime extends Service {
   }
 
   register(section: TuiSettingsSection): () => void {
+    assertCapabilityShadowPolicy('host.settings.register', settingsSectionStateFor(this).runtime.mode, settingsSectionStateFor(this).runtime.slices)
     const caller = requirePluginCaller(this.ctx, 'tuiSettingsSections.register', this)
     const owner = activationFiber(caller)
     if (owner === undefined) throw new Error('dsh-tui: tuiSettingsSections.register requires a live activation')
@@ -172,6 +91,7 @@ export class TuiSettingsSectionsRuntime extends Service {
 
   /** Registered sections in registration order. */
   list(): readonly TuiSettingsSection[] {
+    assertCapabilityShadowPolicy('host.settings.list', settingsSectionStateFor(this).runtime.mode, settingsSectionStateFor(this).runtime.slices)
     const caller = requirePluginCaller(this.ctx, 'tuiSettingsSections.list', this)
     const owner = activationFiber(caller)
     return owner === undefined ? [] : [...settingsSectionStateFor(this).sections.entries()]
@@ -181,6 +101,7 @@ export class TuiSettingsSectionsRuntime extends Service {
 
   /** The section registered for a namespace, if any. */
   section(ns: string): TuiSettingsSection | undefined {
+    assertCapabilityShadowPolicy('host.settings.section', settingsSectionStateFor(this).runtime.mode, settingsSectionStateFor(this).runtime.slices)
     const caller = requirePluginCaller(this.ctx, 'tuiSettingsSections.section', this)
     const owner = activationFiber(caller)
     const state = settingsSectionStateFor(this)
@@ -193,6 +114,7 @@ export class TuiSettingsSectionsRuntime extends Service {
    * re-read the section list (a plugin (un)loading mid-session changes it).
    */
   subscribe(listener: () => void): () => void {
+    assertCapabilityShadowPolicy('host.settings.subscribe', settingsSectionStateFor(this).runtime.mode, settingsSectionStateFor(this).runtime.slices)
     const caller = requirePluginCaller(this.ctx, 'tuiSettingsSections.subscribe', this)
     const owner = activationFiber(caller)
     if (owner === undefined) return () => {}
@@ -204,6 +126,7 @@ export class TuiSettingsSectionsRuntime extends Service {
 }
 
 interface SettingsSectionState {
+  readonly runtime: AdapterRuntimeOptions
   readonly sections: Map<string, TuiSettingsSection>
   readonly owners: Map<string, object>
   readonly listeners: Set<{ owner: object | undefined; listener: () => void }>
@@ -312,26 +235,56 @@ function isSectionState(value: object): value is SettingsSectionState {
  * service is unavailable. Third-party sections still require the service
  * row; the local host only carries the TUI's own section.
  */
-const localSectionsState: SettingsSectionState = {
-  sections: new Map(),
-  owners: new Map(),
-  listeners: new Set(),
-  host: undefined,
+let defaultLocalSectionsState: SettingsSectionState | undefined
+
+const localSectionsStates = new WeakMap<object, SettingsSectionState>()
+
+function localSectionsStateFor(ctx?: Context): SettingsSectionState {
+  if (ctx === undefined) {
+    // The no-context fallback is captured lazily on first use so importing
+    // this module never freezes an env-dependent policy before the embedding
+    // process has a chance to configure adapter mode.
+    defaultLocalSectionsState ??= {
+      runtime: defaultAdapterRuntime(),
+      sections: new Map(),
+      owners: new Map(),
+      listeners: new Set(),
+      host: undefined,
+    }
+    return defaultLocalSectionsState
+  }
+  const root = compositionRoot(ctx) as unknown as object
+  let state = localSectionsStates.get(root)
+  if (state === undefined) {
+    state = {
+      runtime: adapterRuntimeFor(ctx),
+      sections: new Map(),
+      owners: new Map(),
+      listeners: new Set(),
+      host: undefined,
+    }
+    localSectionsStates.set(root, state)
+  }
+  return state
 }
 
-export function getLocalSettingsSectionsHost(): TuiSettingsSectionsHost {
-  localSectionsState.host ??= Object.freeze({
+export function getLocalSettingsSectionsHost(ctx?: Context): TuiSettingsSectionsHost {
+  const state = localSectionsStateFor(ctx)
+  state.host ??= Object.freeze({
     register(section: TuiSettingsSection) {
-      return registerSection(localSectionsState, section)
+      return registerSection(state, section)
     },
     list() {
-      return [...localSectionsState.sections.values()]
+      return [...state.sections.values()]
+    },
+    section(ns: string) {
+      return state.sections.get(ns.trim())
     },
     subscribe(listener: () => void) {
-      return subscribeSections(localSectionsState, listener)
+      return subscribeSections(state, listener)
     },
   })
-  return localSectionsState.host
+  return state.host
 }
 
 export default TuiSettingsSectionsRuntime
