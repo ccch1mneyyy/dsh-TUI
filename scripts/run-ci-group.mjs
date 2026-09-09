@@ -132,6 +132,10 @@ const GROUPS = {
 // 预算、行恒 1 不换行——断言零 wrapped 行、Pane 内无幽灵空行、翻页
 // 后标题/页脚/焦点仍在屏。
     ["verify-picker-edge", ['node', '--import', 'tsx/esm', 'scripts/verify-picker-edge.tsx']],
+// 浮层锚点空间预算回归（#493/#698）：OverlayAbove 把 maxHeight 钳到输入簇
+// 上方真实可画行数并把预算交给 picker 窗口化——短会话 + 高终端下标题/
+// 焦点/页脚全部在屏、页脚紧贴输入行；长会话不过度钳制。
+    ["verify-overlay-anchor-budget", ['node', '--import', 'tsx/esm', 'scripts/verify-overlay-anchor-budget.tsx']],
 // 滚动条 gutter 三态回归：rail 悬停/滚动/常驻三模式下 gutter 占位
 // 与内容宽度协商，切换不闪烁、不塌行。
     ["verify-scrollbar-gutter", ['node', '--import', 'tsx/esm', 'scripts/verify-scrollbar-gutter.tsx']],
@@ -650,6 +654,12 @@ for (let i = 0; i < flags.length; i++) {
 }
 const group = wholeGroup.filter((_, i) => i % shard.count === shard.index - 1)
 const label = shard.count === 1 ? groupName : groupName + ' ' + shard.index + '/' + shard.count
+// 分片数超过组内条目数时后面的片是空的：exit 0 会报"全部 0 项通过"，ci.yml 里
+// 一个写错的 matrix 就能让整片静默变绿。空片判配置错误，与非法参数同级。
+if (group.length === 0) {
+  console.error('[run-ci-group] ' + label + ' 没有任何条目（组内共 ' + wholeGroup.length + ' 项）——分片数超过条目数')
+  process.exit(2)
+}
 
 if (listOnly) {
   console.log(label + '（' + group.length + '/' + wholeGroup.length + ' 项）')
