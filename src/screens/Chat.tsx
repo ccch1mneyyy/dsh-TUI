@@ -15,7 +15,7 @@ import { isPlainReturnInput, modLabel } from '../utils/modifiers.js'
 import { actionMatches } from '../utils/keymap.js'
 import { formatTokens } from '../terminal-utils/format.js'
 import { homeDir } from '../utils/paths.js'
-import type { LlmModelInfo, LlmProviderInfo } from '../dsh-adapter/types.js'
+import type { LlmModelInfo, LlmProviderInfo } from '../adapter/ports/channel-view.js'
 import { cleanRenderText, cleanScalarText } from '../dsh-adapter/sanitize.js'
 import {
   deriveModelGroups,
@@ -24,7 +24,8 @@ import {
   RECENTS_GROUP_PROVIDER,
 } from '../modelGroups.js'
 import { readModelRecents, recordModelUse, type ModelRecentsRef } from '../modelRecents.js'
-import { sessionCwdMatches, type Channel, type ChatRow, type ComposerImageRef, type EffortOption, type ExternalCommandOutcome, type PermissionPresetSnapshot, type PresetOption, type SkillInfo } from '../dsh-adapter/channel.js'
+import type { ChannelUi as Channel } from '../adapter/channel/ui-policy.js'
+import { sessionCwdMatches, type ChatRow, type ComposerImageRef, type EffortOption, type ExternalCommandOutcome, type PermissionPresetSnapshot, type PresetOption, type SkillInfo } from '../dsh-adapter/channel.js'
 import type { QuestionStore } from '../dsh-adapter/questions.js'
 import { TuiDialogStore } from '../dsh-adapter/dialogs.js'
 import { TuiStatusStore, type TuiStatusViewUi } from '../dsh-adapter/status.js'
@@ -109,7 +110,7 @@ import { AgentView } from './AgentView.js'
 import { extendTrajectory, projectWave, type TrajBuild } from '../dsh-adapter/trajectory/index.js'
 import { miniWakeWidth } from '../components/trajectory/MiniWake.js'
 import { readTrajectorySeen, writeTrajectorySeen } from '../trajectoryPrefs.js'
-import type { SessionEvent } from '../dsh-adapter/types.js'
+import type { RawTrajEvent as SessionEvent } from '../adapter/ports/channel-view.js'
 import { LoadingState } from '../components/design-system/LoadingState.js'
 import { Pane } from '../components/design-system/Pane.js'
 import { loadHistory, type HistoryEntry } from '../history.js'
@@ -273,8 +274,10 @@ export function Chat({
   fullscreen = false,
   trajectorySeen: trajectorySeenProp,
   injectControllerRef,
+  renderScene,
 }: {
   channel: Channel
+  renderScene?: (id: string, channel: Channel) => React.ReactNode
   questionStore: QuestionStore
   /**
    * The approval seam's UI store. Optional: hosts without an approval
@@ -610,8 +613,19 @@ export function Chat({
   }, [channel])
   const balanceSessionId = channel.agentId
   React.useEffect(() => {
+    // Retire every in-flight /balance completion from the previous binding;
+    // the balance seam has no UI session id in its readonly DTO.
+    balanceSeqRef.current += 1
     setBalance(null)
   }, [balanceSessionId])
+  // A side question belongs to its captured session just like a recap. Chat
+  // remains mounted across /resume, so explicitly retire its request/UI when
+  // the binding changes instead of allowing a former conversation to finish.
+  React.useEffect(() => {
+    btwAbortRef.current?.abort()
+    btwAbortRef.current = null
+    setBtw(null)
+  }, [channel.agentId])
   // Auto-recap (`dsh-tui.recapOnOpen`): every time the session switches
   // (mount = open/resume, rewind/fork included), summarize its tail into
   // the dim AutoRecapRow. Failures stay silent in auto mode — `/recap`
@@ -3433,12 +3447,7 @@ export function Chat({
           channel.closePluginScene()
         }}
       >
-        {React.createElement(pluginScene.component, {
-          React,
-          ui: tuiKit,
-          channel,
-          close: () => channel.closePluginScene(),
-        })}
+        {renderScene ? renderScene(pluginScene.id, channel) : <Text>Scene unavailable: {pluginScene.id}</Text>}
       </PluginSceneBoundary>
     )
     return fullscreen ? node : <AlternateScreen>{node}</AlternateScreen>

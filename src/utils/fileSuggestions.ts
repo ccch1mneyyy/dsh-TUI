@@ -1,13 +1,6 @@
-export type FileCandidateKind = 'file' | 'directory'
+import type { FileCandidate, FileCandidateKind } from '../adapter/ports/channel-catalog.js'
+export type { FileCandidate, FileCandidateKind } from '../adapter/ports/channel-catalog.js'
 
-export interface FileCandidate {
-  id: string
-  path: string
-  displayPath: string
-  name: string
-  kind: FileCandidateKind
-  score: number
-}
 
 export interface FileSuggestionOptions {
   topK?: number

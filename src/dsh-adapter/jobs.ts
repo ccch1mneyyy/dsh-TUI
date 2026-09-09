@@ -1,31 +1,6 @@
-/**
- * Background-job projection for the UI (`/jobs` panel, transcript cards,
- * status-line chip, completion toasts).
- *
- * The domain model sits on top of the harness job registry (`ctx.jobs`,
- * `@deepseek-ai/dsh-jobs`). The registry is an optional service the TUI
- * never hard-depends on: channel.ts reaches it through a local structural
- * type ({@link JobsRuntime}), so compositions without the jobs plugin load
- * the UI unchanged with the feature silently off.
- *
- * Two registry rules shape everything here:
- *
- * - `read()` is CONSUMING (one cursor per job) and a terminal read marks the
- *   job reported, which would eat the owning agent's `job_output` delta and
- *   suppress its completion notice. The UI therefore NEVER reads: the
- *   three-line output waterfall on a card is mirrored from the agent's own
- *   `job_output` tool results as they stream through the session event log
- *   ({@link BackgroundJobStore.onOutputSeen}), not polled.
- * - Jobs are process-local and owner-fenced. `list(agent)` returns exactly
- *   the jobs the current conversation owns (plus unowned ones); a job that
- *   disappears while live was teardown-cancelled (owner disposal / session
- *   swap) and is frozen as `killed` so no transcript card ticks forever.
- *
- * @module jobs
- */
+import type { BackgroundJobStatus, BackgroundJobState } from '../adapter/ports/channel-view.js'
+export type { BackgroundJobStatus, BackgroundJobState } from '../adapter/ports/channel-view.js'
 
-/** Terminal / live lifecycle states, mirrored from the registry contract. */
-export type BackgroundJobStatus = 'running' | 'stopping' | 'completed' | 'killed' | 'failed'
 
 /**
  * Structural mirror of the registry's `JobSnapshot` — only the fields the
@@ -62,26 +37,6 @@ export interface JobsRuntime {
   onJobsChanged?(listener: (owner: unknown) => void): () => void
   /** Fires on every settlement with the terminal snapshot + owner. */
   onJobDone?(listener: (snapshot: BackgroundJobSnapshot, owner: unknown) => void): () => void
-}
-
-/** One tracked job as the UI renders it. */
-export interface BackgroundJobState {
-  id: string
-  kind: string
-  label: string
-  /** The full command that started the job, captured from the originating
-   *  tool call's args (`command`/`text`); the registry label is the friendly
-   *  description. Absent when the start ack never streamed through (replay
-   *  without the tool card, subagent one-shot jobs, …). */
-  command?: string
-  status: BackgroundJobStatus
-  detail?: string
-  startedAt: number
-  finishedAt?: number
-  /** Last-seen output tail (mirrored `job_output` text), newest last. */
-  outputLines: string[]
-  /** Epoch ms of the last mirrored `job_output` read (receipt time). */
-  lastOutputAt?: number
 }
 
 /** Store event hooks the channel injects (toast on settle, emit on change). */

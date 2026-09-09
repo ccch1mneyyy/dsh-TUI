@@ -22,7 +22,7 @@ import {
   type TrajBuild,
 } from '../dsh-adapter/trajectory/index.js'
 import { HOTSPOT_SORTS, WAVE_PROJECTIONS } from '../dsh-adapter/trajectory/index.js'
-import type { Channel } from '../dsh-adapter/channel.js'
+import type { ChannelUi as Channel } from '../adapter/channel/ui-policy.js'
 import type { HotspotRow, HotspotSort, WaveProjection } from '../dsh-adapter/types.js'
 
 /**

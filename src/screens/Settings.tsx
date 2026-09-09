@@ -12,7 +12,7 @@ import { getLang, t } from '../i18n.js'
 import { SettingsForm } from '../dsh-adapter/settingsEditor.js'
 import type { TuiSettingsField, TuiSettingsFieldKind, TuiSettingsGroup, TuiSettingsSection } from '../dsh-adapter/settings-sections.js'
 import type { LocalizedDescriptions } from '../commands.js'
-import type { Channel } from '../dsh-adapter/channel.js'
+import type { ChannelUi as Channel } from '../adapter/channel/ui-policy.js'
 
 /** What the screen is doing with the focused field. */
 type SettingsMode = 'list' | 'edit'

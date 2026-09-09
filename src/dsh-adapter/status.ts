@@ -16,6 +16,11 @@ import { Context, Service } from '@deepseek-ai/cordis'
 import { cleanScalarText } from './sanitize.js'
 import { activationFiber, assertCallerContext, bindCallerEffect, compositionRoot, concreteService, requirePluginCaller } from './host-access.js'
 import { componentIdentityOf } from './component-identity.js'
+import {
+  assertCapabilityShadowPolicy,
+  type AdapterRuntimeOptions,
+} from '../adapter/kernel/runtime.js'
+import { adapterRuntimeFor } from '../adapter/kernel/runtime-context.js'
 
 /** One rendered contribution. */
 export interface TuiStatusEntry {
@@ -264,6 +269,7 @@ export class TuiStatusRuntime extends Service {
         ctx.logger.warn(`dsh-tui: status view "${key}" crashed and was hidden: %o`, error)
       }),
       nextToken: 1,
+      runtime: adapterRuntimeFor(ctx),
     }
     hostStatusStores.set(this, state)
     ctx.effect(() => () => state.store.clear())
@@ -289,6 +295,7 @@ export class TuiStatusRuntime extends Service {
    * guess (C-060 honest identity).
    */
   set(key: string, text: string | number | boolean | undefined, identity?: Context): () => void {
+    assertCapabilityShadowPolicy('host.status.set', statusStateFor(this).runtime.mode, statusStateFor(this).runtime.slices)
     const noop = (): void => {}
     let caller: Context
     try {
@@ -407,6 +414,11 @@ export class TuiStatusRuntime extends Service {
    * same attribution-only meaning as `set()`.
    */
   registerView(descriptor: TuiStatusViewDescriptor, identity?: Context): TuiStatusViewDisposer | undefined {
+    assertCapabilityShadowPolicy(
+      'host.status.register-view',
+      statusStateFor(this).runtime.mode,
+      statusStateFor(this).runtime.slices,
+    )
     let caller: Context
     try {
       caller = requirePluginCaller(this.ctx, 'tuiStatus.registerView', this)
@@ -514,12 +526,35 @@ export class TuiStatusRuntime extends Service {
     ledgerApplied = true
     return dispose
   }
+
+  /**
+   * Subscribe to status-line changes. Kept on the plugin-visible service so
+   * the shadow-policy gate covers this subscription effect too.
+   */
+  subscribe(listener: () => void): () => void {
+    assertCapabilityShadowPolicy('host.status.subscribe', statusStateFor(this).runtime.mode, statusStateFor(this).runtime.slices)
+    const caller = requirePluginCaller(this.ctx, 'tuiStatus.subscribe', this)
+    const owner = activationFiber(caller)
+    if (owner === undefined) return () => {}
+    if (typeof listener !== 'function') return () => {}
+    const wrapped = () => {
+      try {
+        listener()
+      } catch (error) {
+        caller.logger.warn(`dsh-tui: tuiStatus listener failed: ${error instanceof Error ? error.message : String(error)}`)
+      }
+    }
+    const dispose = statusStateFor(this).store.subscribe(wrapped)
+    bindCallerEffect(caller, dispose)
+    return dispose
+  }
 }
 
 /** Host-only status store accessor; not part of the package export map. */
 interface StatusState {
   readonly store: TuiStatusStore
   nextToken: number
+  readonly runtime: AdapterRuntimeOptions
 }
 
 const hostStatusStores = new WeakMap<TuiStatusRuntime, StatusState>()
