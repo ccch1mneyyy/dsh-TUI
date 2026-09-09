@@ -58,9 +58,9 @@ export function RewindPicker({
   // 模式列表：挂载包裹 marginTop 1 + Pane 2 + 标题/预览同一行 1 + marginBottom 1
   //   + 页脚 1 = 6（rowCosts 只算选项行，首项是带描述的"仅对话"选项）；
   // 消息列表：挂载包裹 marginTop 1 + Pane 2 + 标题+副标题 2 + marginBottom 1
-  //   + 页脚 1 = 7。
+  //   + 页脚 1 = 7，插件决策在途时再多一行「等待插件」状态行（busy）。
   const modeListRows = useOverlayListRows(6)
-  const listRows = useOverlayListRows(7)
+  const listRows = useOverlayListRows(confirmRow === null && busy ? 8 : 7)
   if (confirmRow !== null) {
     if (modes !== null) {
       // Plugin modes: a described choice list (one extra row per
