@@ -654,6 +654,12 @@ for (let i = 0; i < flags.length; i++) {
 }
 const group = wholeGroup.filter((_, i) => i % shard.count === shard.index - 1)
 const label = shard.count === 1 ? groupName : groupName + ' ' + shard.index + '/' + shard.count
+// 分片数超过组内条目数时后面的片是空的：exit 0 会报"全部 0 项通过"，ci.yml 里
+// 一个写错的 matrix 就能让整片静默变绿。空片判配置错误，与非法参数同级。
+if (group.length === 0) {
+  console.error('[run-ci-group] ' + label + ' 没有任何条目（组内共 ' + wholeGroup.length + ' 项）——分片数超过条目数')
+  process.exit(2)
+}
 
 if (listOnly) {
   console.log(label + '（' + group.length + '/' + wholeGroup.length + ' 项）')
