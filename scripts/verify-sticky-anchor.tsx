@@ -7,7 +7,7 @@
  * 视口顶之上/恰在顶行的最后一轮；logo 等前置内容占顶时取第一轮）。
  * 与时间线 rail 的 ━━ 高亮同源（同一个 MessageList 上报），两者永不分歧。
  *
- * 断言（全屏 headless xterm，100×40）：
+ * 断言（全屏 headless xterm，默认 100×40；DSH_TEST_COLUMNS=60 验证窄终端）：
  *   1. 初始钉底：无置顶头（第 0 行不以 ❯ 开头）；
  *   2. 上滚后：置顶头 = 顶部锚定轮 —— 视口首内容为 回复 k 时恰为 问题 k；
  *      首内容为 问题 M 时为 M-1 或 M（prompt 自身顶到视口顶行 = M，
@@ -15,10 +15,12 @@
  *   3. 继续上滚：跟随变化，且永不为屏幕上看不到的“最后一条”；
  *   4. 逐格下滚：每步都与顶部锚定轮一致；
  *   5. 点击置顶头：被钉消息跳到视口顶部（转译区首行附近出现该消息）；
- *   6. 滚回底部：重新钉底，置顶头消失。
+ *   6. 滚回底部：重新钉底，置顶头消失；
+ *   7. 多行 user 的置顶摘要压成一行并截断，不向左侧出血，原文保留换行。
  *
  * 运行：node --import tsx/esm scripts/verify-sticky-anchor.tsx
  */
+process.env.NODE_ENV = 'production'
 process.env.FORCE_COLOR = '3'
 process.env.DSH_TUI_THEME = 'dark'
 process.env.DSH_TUI_LANG = 'zh'
@@ -33,8 +35,8 @@ const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render, Alternat
   import('../src/commands.js'),
 ])
 
-const COLS = 100, ROWS = 40
-const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
+const COLS = Number(process.env.DSH_TEST_COLUMNS ?? 100), ROWS = 40
+const { sleep, settled } = await import('./lib/term-test.mjs')
 let failed = 0
 function check(name: string, ok: boolean, extra = '') {
   console.log(`${ok ? 'PASS' : 'FAIL'}: ${name}${extra ? `  (${extra})` : ''}`)
@@ -59,11 +61,13 @@ class FakeStdin extends PassThrough {
 }
 const stdin = new FakeStdin(), stdout = new FakeStdout(), stderr = new FakeStderr()
 
-// 8 轮对话：user 消息各 1 行（问题 1..8），assistant 回复各 8 行。
-// 内容总高 ≈ 14（LogoHeader）+ 8×9 = 86 行 ≫ 视口，可滚动。
+// 多行 user + CJK/emoji/长行：置顶摘要只能占一行，正文必须保留换行。
+// assistant 各 8 行，保证上滚时 user 正文退出视口后仍可检查左侧出血。
+const promptDetails = ['学业信息', '所在学校', '所在学院', '成绩排名', '奖励情况', '社会实践']
+const promptText = (turn: number) => `问题 ${turn}\r\n${promptDetails.join('\n')}\n附注\t中文👩‍💻${'宽字符测试'.repeat(30)}`
 const rows: any[] = []
 for (let turn = 1; turn <= 8; turn++) {
-  rows.push({ id: turn * 2 - 1, kind: 'user', text: `问题 ${turn}` })
+  rows.push({ id: turn * 2 - 1, kind: 'user', text: promptText(turn) })
   rows.push({
     id: turn * 2,
     kind: 'assistant',
@@ -125,7 +129,7 @@ const inst = await render(
   </AlternateScreen>,
   { stdout: stdout as any, stdin: stdin as any, stderr: stderr as any, exitOnCtrlC: false, patchConsole: false },
 )
-await sleep(700)
+check('初始渲染完成', await settled(() => screenLines().some(line => line.includes('回复 8 第 8 行'))))
 
 function screenLines(): string[] {
   const buf = term.buffer.active
@@ -148,13 +152,13 @@ function firstContentTurn(): { turn: number; isPrompt: boolean } | null {
 const wheel = async (up: boolean, times: number) => {
   for (let i = 0; i < times; i++) {
     stdin.write(`\x1b[<${up ? 64 : 65};50;30M`)
-    await sleep(180)
+    await sleep(180) // 固定窗:pacing 逐格滚动并采样当前视口
   }
 }
 const clickHeader = async () => {
   stdin.write('\x1b[<0;5;1M')
   stdin.write('\x1b[<0;5;1m')
-  await sleep(400)
+  await sleep(400) // 固定窗:pacing 点击 seek 的布局与帧排空
 }
 /** 内容末行（最后一轮最后 1 行回复）是否已出现在 prompt 框正上方 —— 真·钉底。 */
 function atBottomEnd(): boolean {
@@ -180,6 +184,14 @@ function atBottomEnd(): boolean {
 function assertHeaderFollowsViewport(label: string): number | null {
   const first = firstContentTurn()
   const header = headerText()
+  // 正常 user 续行有两格悬挂缩进；漏出的 header 续行从第 0 列开始，
+  // 还可能只剩首字（其余列被 assistant 覆盖），所以检查首字而非整句。
+  const leaked = screenLines().slice(1).filter(line => /^[学所成奖社附]/u.test(line))
+  check(`${label}: 多行置顶头不向左侧出血`, leaked.length === 0, JSON.stringify(leaked))
+  if (header !== null) {
+    check(`${label}: 置顶摘要折叠换行`, header.includes('学业信息 所在学校'), header)
+    check(`${label}: 长摘要截断带省略号`, header.endsWith('…'), header)
+  }
   if (first === null) {
     check(`${label}: 无内容可推断（跳过）`, true)
     return null
@@ -250,6 +262,7 @@ const headerAfterBottom = headerText()
 check('滚回底部后置顶头消失', headerAfterBottom === null, `line0=${JSON.stringify(screenLines()[0]!.trimEnd().slice(0, 20))}`)
 check('滚回底部后末尾消息可见', screenLines().some(l => l.includes('问题 8')))
 
+check('原始 user 消息换行保持不变', rows.every(row => row.kind !== 'user' || row.text === promptText((row.id + 1) / 2)))
 await inst.unmount()
 console.log(failed === 0 ? '\nALL PASS' : `\n${failed} 项失败`)
 process.exit(failed === 0 ? 0 : 1)

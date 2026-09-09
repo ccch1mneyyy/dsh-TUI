@@ -4358,16 +4358,21 @@ function PinnedTurnHeader({
   text: string
   onClick: () => void
 }): React.ReactNode {
+  const { columns } = useTerminalSize()
+  // A one-row Box does not clip its children. Flatten hard line breaks before
+  // truncating, otherwise later prompt lines paint down the transcript gutter.
+  const label = cleanRenderText(`${POINTER} ${text}`, Math.max(1, columns - 1))
   return (
     <Box
       flexShrink={0}
       width="100%"
       height={1}
+      overflow="hidden"
       paddingRight={1}
       onClick={onClick}
     >
       <Text color="userPromptLabel" bold wrap="truncate-end">
-        {POINTER} {text}
+        {label}
       </Text>
     </Box>
   )

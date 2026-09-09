@@ -150,6 +150,9 @@ const GROUPS = {
 // 时间线 rail 回归：rail 覆盖全部轮次（含折叠轮），高亮锚定视口顶、
 // ▲/▼ 目标不越过 maxScroll。
     ["verify-timeline-rail", ['node', '--import', 'tsx/esm', 'scripts/verify-timeline-rail.tsx']],
+// 多行 user 的置顶摘要不得向转录左侧出血；宽/窄终端均保留滚动锚定。
+    ['verify-sticky-anchor', ['node', '--import', 'tsx/esm', 'scripts/verify-sticky-anchor.tsx']],
+    ['verify-sticky-anchor-narrow', ['node', '--import', 'tsx/esm', 'scripts/verify-sticky-anchor.tsx'], { DSH_TEST_COLUMNS: '60' }],
 // 恢复历史会话落点回归：/resume 后最新消息末行必须可见且可达
 // （scrollToBottom 补画完成后的锚定终态），不再落屏外。
     ["repro-resume-position", ['node', '--import', 'tsx/esm', 'scripts/repro-resume-position.tsx']],
