@@ -17,6 +17,7 @@ import {
 import type { Color } from './styles.js'
 import { isXtermJs } from './terminal.js'
 import { terminalImageSourceFromAttributes } from './terminal-image.js'
+import type { TerminalImagePlacement } from './terminal-image.js'
 import { widestLine } from './widest-line.js'
 import wrapText from './wrap-text.js'
 
@@ -82,6 +83,26 @@ let absoluteRectsCur: CachedLayout[] = []
 export type AbsoluteHitEntry = { node: DOMElement; rect: Rectangle }
 let absoluteHitList: AbsoluteHitEntry[] = []
 
+// Occlusion-eligible surfaces (occlusionColor set, backgroundColor unset)
+// with the cover decision made the last time each surface was WALKED. A
+// surface skipped by a clean-subtree blit — or painted before an image
+// that registers later in walk order — keeps a decision made against an
+// older placement set, so its cover lags behind images appearing, moving,
+// or disappearing behind it. getOcclusionMismatchNodes() re-checks every
+// recorded surface against the frame-end placement set so renderer.ts can
+// re-walk stale surfaces on a frame it schedules itself (no React commit
+// needed to correct the cover).
+export type OcclusionSurface = {
+  node: DOMElement
+  x: number
+  y: number
+  width: number
+  height: number
+  filled: boolean
+}
+let occlusionSurfacesPrev: OcclusionSurface[] = []
+let occlusionSurfacesCur: OcclusionSurface[] = []
+
 /**
  * The current frame's absolute-positioned nodes in paint order.
  * @returns read-only list; reverse-iterate for topmost-first hit-testing.
@@ -90,12 +111,14 @@ export function getAbsoluteHitList(): readonly AbsoluteHitEntry[] {
   return absoluteHitList
 }
 
-/** Reset the scroll hint for the next frame and rotate the absolute-rect buffers. */
+/** Reset the scroll hint for the next frame and rotate the per-frame buffers. */
 export function resetScrollHint(): void {
   scrollHint = null
   absoluteRectsPrev = absoluteRectsCur
   absoluteRectsCur = []
   absoluteHitList = []
+  occlusionSurfacesPrev = occlusionSurfacesCur
+  occlusionSurfacesCur = []
 }
 
 /** A node fills every cell of its rect when it has its own background or
@@ -104,8 +127,66 @@ function paintsOwnRect(node: DOMElement): boolean {
   return node.style.opaque === true || node.style.backgroundColor !== undefined
 }
 
+/** Whether a ready terminal-image placement overlaps the given screen rect
+ *  — the paint condition for `occlusionColor`. Consults the previous
+ *  frame's placements (the overlay may cover an image rendered in an
+ *  earlier tree position that has not painted yet this frame) and the
+ *  current frame's (an image may appear behind an already-open overlay);
+ *  same intersection and graphicsReady semantics as
+ *  Output.hasPreviousImageInRegion. */
+function terminalImageBehindRect(
+  output: Output,
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+): boolean {
+  const left = Math.floor(x)
+  const top = Math.floor(y)
+  const occlusionWidth = Math.floor(width)
+  const occlusionHeight = Math.floor(height)
+  if (output.hasPreviousImageInRegion(left, top, occlusionWidth, occlusionHeight)) {
+    return true
+  }
+  const right = left + occlusionWidth
+  const bottom = top + occlusionHeight
+  return output.getImages().some(
+    placement =>
+      placement.graphicsReady !== false &&
+      placement.x < right &&
+      placement.x + placement.columns > left &&
+      placement.y < bottom &&
+      placement.y + placement.rows > top,
+  )
+}
+
 function sameRect(a: CachedLayout, b: CachedLayout): boolean {
   return a.x === b.x && a.y === b.y && a.width === b.width && a.height === b.height
+}
+
+/** Whether a READY placement from the CURRENT frame's registrations overlaps
+ *  the rect — the frame-end truth for getOcclusionMismatchNodes. Unlike the
+ *  walk-time check it does not consult the previous frame: a cover that
+ *  outlived its image must be corrected, and reuseImages keeps every
+ *  still-valid placement in the current set even under clean-subtree blits.
+ *  Coordinates are pre-floored (OcclusionSurface records). */
+function currentImageBehindRect(
+  images: readonly TerminalImagePlacement[],
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+): boolean {
+  const right = x + width
+  const bottom = y + height
+  return images.some(
+    placement =>
+      placement.graphicsReady !== false &&
+      placement.x < right &&
+      placement.x + placement.columns > x &&
+      placement.y < bottom &&
+      placement.y + placement.rows > y,
+  )
 }
 
 /**
@@ -154,6 +235,47 @@ export function hasOverlayVacatedCells(): boolean {
     return true
   }
   return false
+}
+
+/**
+ * Frame-end check: occlusion surfaces whose recorded cover decision no
+ * longer matches the frame's terminal-image placements.
+ *
+ * Two paths leave a surface stale: (1) it painted before a same-frame
+ * image that registers later in walk order — output.getImages() had not
+ * admitted the placement yet and the previous frame had none; (2) a
+ * clean-subtree blit skipped the surface entirely, restoring its old
+ * cells while an image behind it appeared, moved, or was removed. The
+ * caller re-walks each stale surface (markDirty) and schedules a frame
+ * so the cover follows image changes even with no pending React commit.
+ * @param output - the output whose previous/current placements re-decide.
+ * @returns surfaces (nodes) whose recorded decision mismatches; may be empty.
+ */
+export function getOcclusionMismatchNodes(output: Output): DOMElement[] {
+  const stale: DOMElement[] = []
+  const walked = new Set<DOMElement>()
+  // One snapshot for every surface: getImages() rescans the operation
+  // stream per placement, so calling it per surface would be quadratic.
+  const images = output.getImages()
+  for (const surface of occlusionSurfacesCur) {
+    walked.add(surface.node)
+    if (
+      currentImageBehindRect(images, surface.x, surface.y, surface.width, surface.height) !==
+      surface.filled
+    ) {
+      stale.push(surface.node)
+    }
+  }
+  for (const surface of occlusionSurfacesPrev) {
+    if (walked.has(surface.node)) continue
+    if (
+      currentImageBehindRect(images, surface.x, surface.y, surface.width, surface.height) !==
+      surface.filled
+    ) {
+      stale.push(surface.node)
+    }
+  }
+  return stale
 }
 
 /**
@@ -676,7 +798,31 @@ function renderNodeToOutput(
     // diff finds nothing, and the highlight never clears). Compare against
     // the value recorded at the previous render and refuse the blit when it
     // moved.
-    const effectiveBg = node.style.backgroundColor ?? inheritedBackgroundColor
+    // `occlusionColor` promotes to a real background only while a
+    // terminal image sits behind this node's rect (see the Styles doc):
+    // transparent overlay surfaces in the common frame, covered image
+    // placements otherwise.
+    const occlusionBackground =
+      node.style.backgroundColor === undefined &&
+      node.style.occlusionColor !== undefined &&
+      terminalImageBehindRect(output, x, y, width, height)
+        ? node.style.occlusionColor
+        : undefined
+    if (
+      node.style.occlusionColor !== undefined &&
+      node.style.backgroundColor === undefined
+    ) {
+      occlusionSurfacesCur.push({
+        node,
+        x: Math.floor(x),
+        y: Math.floor(y),
+        width: Math.floor(width),
+        height: Math.floor(height),
+        filled: occlusionBackground !== undefined,
+      })
+    }
+    const effectiveBg =
+      node.style.backgroundColor ?? occlusionBackground ?? inheritedBackgroundColor
     const bgChanged = cached?.bg !== effectiveBg
     const imageBackingChanged =
       node.nodeName === 'ink-image' &&
@@ -897,7 +1043,7 @@ function renderNodeToOutput(
       }
     } else if (node.nodeName === 'ink-box' || node.nodeName === 'ink-image') {
       const boxBackgroundColor =
-        node.style.backgroundColor ?? inheritedBackgroundColor
+        node.style.backgroundColor ?? occlusionBackground ?? inheritedBackgroundColor
 
       // Mark this box's region as non-selectable (fullscreen text
       // selection). noSelect ops are applied AFTER blits/writes in
@@ -1626,7 +1772,8 @@ function renderNodeToOutput(
             { x: Math.floor(x), y: Math.floor(y), width: Math.floor(width), height: Math.floor(height) },
           )
         }
-        const ownBackgroundColor = node.style.backgroundColor
+        const ownBackgroundColor =
+          node.style.backgroundColor ?? occlusionBackground
         if (ownBackgroundColor || node.style.opaque) {
           const borderLeft = yogaNode.getComputedBorder(LayoutEdge.Left)
           const borderRight = yogaNode.getComputedBorder(LayoutEdge.Right)
