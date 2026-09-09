@@ -184,6 +184,8 @@ assert.equal(channel.workingActivity?.line, '')
 // The pi-style config file drives the tracker: `mode: minimal` renders plain
 // functional labels instead of the playful pool (issue parity with pi).
 mkdirSync(join(testHome, '.dsh-tui'), { recursive: true })
+// Legacy persisted choice: 'claude' is a pre-rename preset id that the
+// current code normalizes to the moon8 default (see activityFrames.ts).
 writeFileSync(join(testHome, '.dsh-tui', 'working-activity.json'), JSON.stringify({ frames: 'claude', mode: 'minimal' }))
 const minimalChannel = createChannel(ctx, agent, {
   model: 'test-model', provider: 'test-provider', cwd: testHome, activity: true,

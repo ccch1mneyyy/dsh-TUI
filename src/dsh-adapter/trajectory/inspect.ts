@@ -14,7 +14,7 @@
 
 import { asRawEvents, readRetry, type RawTrajEvent } from './guards.js'
 import type { TrajNode } from './types.js'
-import type { SessionEvent } from '@deepseek-ai/dsh-session'
+
 
 /** One titled block of full content. */
 export interface InspectSection {
@@ -79,7 +79,7 @@ function allText(content: unknown): string {
  * @returns Display-ready sections. Always succeeds: a row whose owning event
  *   has been compacted away still yields its header facts.
  */
-export function inspectNode(node: TrajNode, events: readonly SessionEvent[]): InspectDetail {
+export function inspectNode(node: TrajNode, events: readonly RawTrajEvent[]): InspectDetail {
   const raw = asRawEvents(events)
   const open = findBySeq(raw, node.seq)
   const close = node.endSeq === undefined ? undefined : findBySeq(raw, node.endSeq)

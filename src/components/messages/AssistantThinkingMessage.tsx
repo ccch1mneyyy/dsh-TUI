@@ -3,12 +3,12 @@ import chalk from 'chalk'
 import { Box, Text } from '../../ui.js'
 import { t } from '../../i18n.js'
 import { StreamingMarkdown } from '../StreamingMarkdown.js'
-import { formatDuration } from '../../cc/format.js'
+import { formatDuration } from '../../terminal-utils/format.js'
 import {
   THINKING_SPINNER_FRAMES,
   THINKING_SPINNER_INTERVAL_MS,
   THINKING_SETTLED_MARKER,
-} from '../../cc/figures.js'
+} from '../../terminal-utils/figures.js'
 import { BRAND, ICE } from '../shimmer.js'
 import { interpolateColor } from '../Spinner/spinnerUtils.js'
 import { isMinimalMode } from '../../minimalMode.js'
@@ -29,8 +29,8 @@ type Props = {
    *  the live preview ticker must follow the newest ARRIVED content — never
    *  a lagging reveal. Falls back to `thinking`. */
   textFull?: string
-  /** Adds the top margin between messages (CC: addMargin). */
-  addMargin: boolean
+  /** Adds the top margin between messages. */
+  marginTopOnTurn: boolean
   /** Show the full text (Ctrl+O, per-row expansion, or live click toggle). */
   verbose: boolean
   /** True while the reasoning block is still streaming — the leading anchor
@@ -60,7 +60,7 @@ type Props = {
 export function AssistantThinkingMessage({
   thinking,
   textFull,
-  addMargin,
+  marginTopOnTurn,
   verbose,
   streaming = false,
   preview = false,
@@ -135,7 +135,7 @@ export function AssistantThinkingMessage({
     return (
       <Box
         flexDirection="column"
-        marginTop={addMargin ? 1 : 0}
+        marginTop={marginTopOnTurn ? 1 : 0}
         backgroundColor={isSelected ? 'messageActionsBackground' : undefined}
         onClick={onClick}
         {...hoverProps}
@@ -173,7 +173,7 @@ export function AssistantThinkingMessage({
   if (!verbose) {
     return (
       <Box
-        marginTop={addMargin ? 1 : 0}
+        marginTop={marginTopOnTurn ? 1 : 0}
         backgroundColor={isSelected ? 'messageActionsBackground' : undefined}
         onClick={onClick}
         {...hoverProps}
@@ -187,7 +187,7 @@ export function AssistantThinkingMessage({
     <Box
       flexDirection="column"
       gap={1}
-      marginTop={addMargin ? 1 : 0}
+      marginTop={marginTopOnTurn ? 1 : 0}
       width="100%"
       backgroundColor={isSelected ? 'messageActionsBackground' : undefined}
       onClick={onClick}

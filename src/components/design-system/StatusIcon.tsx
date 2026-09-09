@@ -1,6 +1,6 @@
 import figures from 'figures'
 import React from 'react'
-import Text from '../../ink/components/Text.js'
+import Text from './ThemedText.js'
 
 type Status = 'success' | 'error' | 'warning' | 'info' | 'pending' | 'loading'
 
@@ -17,8 +17,8 @@ const STATUS_CONFIG: Record<
 }
 
 /**
- * A status indicator icon with the CC color mapping, mirroring Claude Code's
- * design-system/StatusIcon.tsx: ✓ green / ✗ red / ⚠ amber / ℹ blue /
+ * A status indicator icon with the dsh-TUI color mapping: ✓ green / ✗ red /
+ * ⚠ amber / ℹ blue /
  * ○ dim / … dim.
  */
 export function StatusIcon({

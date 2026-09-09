@@ -232,7 +232,7 @@ function makeChannel() {
     listFiles: async () => [],
     setResumeTarget() {},
     setActivityFrames: () => true,
-    activityFrames: 'claude',
+    activityFrames: 'moon8',
     runExternalCommand: async () => '',
     mcpStatus: () => [],
     exportSession: () => null,
@@ -294,10 +294,12 @@ const screen = () => {
     .join('\n')
 }
 
+/** 稳定性探针的观察窗：全部调用点断言的都是「不得改变」，对已成立条件
+ *  轮询会立即返回等于没测。 */
 async function windowed(action, settleMs = 300) {
   stdout.frames.length = 0
   action()
-  await sleep(settleMs)
+  await sleep(settleMs) // 固定窗:探针 观察窗，窗内不得出现错误重绘/副作用
   return toPlain(stdout.frames.join(''))
 }
 
@@ -430,7 +432,7 @@ check('left-clicking a menu item runs it (delete → confirmation)',
   await settled(() => /Delete "gamma"/.test(flat(screen()))), flat(screen()).slice(-220))
 // While a confirmation is up, right-click must not open a menu.
 stdin.write(menuSgr(30, gammaLine + 1))
-await sleep(250)
+await sleep(250) // 固定窗:探针 确认框在场时右键不得开出菜单
 check('a right-click during the delete confirmation opens no menu',
   !/Open/.test(screen()) && /Delete "gamma"/.test(flat(screen())), flat(screen()).slice(-220))
 stdin.write('\x1b') // cancel the confirmation
@@ -439,7 +441,7 @@ await settle(() => !/Delete "gamma"/.test(flat(screen())))
 stdin.write(menuSgr(30, gammaLine + 1))
 await settle(() => /Open/.test(screen()))
 stdin.write(`\x1b[<0;5;${ROWS}M\x1b[<0;5;${ROWS}m`) // hint row: no handler
-await sleep(250)
+await sleep(250) // 固定窗:探针 菜单外点击不得 resume 任何会话、不得移动光标
 check('a left-click outside the menu dismisses it and resumes nothing',
   !/Open/.test(screen()) && channel.calls.resume.length === 0 && /❯\s*[★☆]\s*gamma/.test(screen()),
   flat(screen()).slice(0, 240))
@@ -450,7 +452,7 @@ stdin.write(menuSgr(30, gammaLine + 1))
 await settle(() => /Open/.test(screen()))
 const betaLine = screen().split('\n').findIndex(l => /^\s*beta\b/.test(l))
 stdin.write(`\x1b[<0;6;${betaLine + 1}M\x1b[<0;6;${betaLine + 1}m`)
-await sleep(250)
+await sleep(250) // 固定窗:探针 菜单开着时点别的行不得 resume、光标不得移动
 check('left-clicking another row while the menu is open only dismisses it',
   !/Open/.test(screen()) && channel.calls.resume.length === 0 && /❯\s*[★☆]\s*gamma/.test(screen()),
   flat(screen()).slice(0, 240))
@@ -468,7 +470,7 @@ stdin.write('\x1b') // dismiss
 await settle(() => !/Open/.test(screen()))
 // Right-click on chrome with no handler opens nothing.
 stdin.write(menuSgr(5, ROWS))
-await sleep(250)
+await sleep(250) // 固定窗:探针 无处理器的空白 chrome 上右键不得开出菜单
 check('a right-click on empty chrome opens no menu',
   !/Open/.test(screen()) && !/Rename/.test(screen()), flat(screen()).slice(0, 200))
 
@@ -510,7 +512,7 @@ check('rename prefills the editor with the focused title',
   flat(toPlain(stdout.frames.join(''))).slice(-160))
 const renameForeignRow = screen().split('\n').findIndex(line => line.includes('gamma')) + 1
 stdin.write(`\x1b[<0;6;${renameForeignRow}M\x1b[<0;6;${renameForeignRow}m`)
-await sleep(250)
+await sleep(250) // 固定窗:探针 重命名态下点别的行不得 resume、不得移动光标
 check(
   'rename mode makes other session rows inert to mouse clicks',
   channel.calls.resume.length === 0 && /✎\s*beta/.test(flat(screen())) && /❯\s*[★☆]\s*beta/.test(screen()),
@@ -542,14 +544,14 @@ check('the confirmation names the focused session',
   await settled(() => /Delete "betarenamed"/.test(flat(screen()))), flat(screen()).slice(-220))
 const deleteForeignRow = screen().split('\n').findIndex(line => line.includes('alpha')) + 1
 stdin.write(`\x1b[<0;6;${deleteForeignRow}M\x1b[<0;6;${deleteForeignRow}m`)
-await sleep(250)
+await sleep(250) // 固定窗:探针 确认框在场时点别的行不得 resume、不得移动光标
 check(
   'delete confirmation makes other session rows inert to mouse clicks',
   channel.calls.resume.length === 0 && /Delete "betarenamed"/.test(flat(screen())) && /❯\s*[★☆]\s*betarenamed/.test(screen()),
   JSON.stringify({ resume: channel.calls.resume, confirmation: flat(screen()).slice(-180) }),
 )
 // Negative probe (Ctrl+Enter must NOT confirm): nothing is supposed to
-// change, so a settle would return immediately — keep the fixed window.
+// change, so a settle would return immediately.
 await windowed(() => stdin.write('\x1b[13;5u'), 400) // Ctrl+Enter must not confirm
 check('Ctrl+Enter does not confirm an irreversible delete', channel.calls.delete.length === 0, JSON.stringify(channel.calls.delete))
 stdin.write('\x1b') // Esc cancels
@@ -611,6 +613,8 @@ check('same-chunk Down + ctrl+p follows the moved focus',
   check('clicking the star unpins without resuming',
     await settled(() => /☆\s*alpha/.test(screen()) && channel.calls.resume.length === 0),
     JSON.stringify({ resume: channel.calls.resume }))
+  // 固定窗:墙钟 跨过 App.tsx 的 MULTI_CLICK_TIMEOUT_MS=500，否则同格第二次点击
+  // 会被判成双击走词选路径而不是 onClickAt。
   await sleep(550)
   const alphaRowAgain = screen().split('\n').findIndex(l => /☆\s*alpha/.test(l)) + 1
   stdin.write(`\x1b[<0;3;${alphaRowAgain}M\x1b[<0;3;${alphaRowAgain}m`)

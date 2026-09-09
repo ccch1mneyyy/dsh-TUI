@@ -136,7 +136,7 @@ try {
       _write(_c: unknown, _e: BufferEncoding, cb: () => void) { cb() }
     })(), exitOnCtrlC: false, patchConsole: false },
   )
-  await sleep(600)
+  await sleep(600) // 固定窗:pacing 等首帧上屏，无单一可轮询锚点
 
   const { term, stdout, stdin } = { term: rig.term, stdout: rig.stdout, stdin: rig.stdin }
   const topRow = findText(term, 'ROW-TOP')?.row ?? -1
@@ -149,7 +149,7 @@ try {
   // 1+7. Anchor at the very top: no room above → the card must appear
   // BELOW the anchor, and only after the dwell.
   hover(stdin, 3, topRow + 1)
-  await sleep(300)
+  await sleep(300) // 固定窗:探针 dwell 未到期时不得出卡片；条件本就成立，轮询等于没测
   check('no tooltip before the dwell elapses', !screenHas(term, 'TIP-TOP-MARKER'))
   check('tooltip appears after the dwell', await settled(() => screenHas(term, 'TIP-TOP-MARKER')))
   const tipTopRow = findText(term, 'TIP-TOP-MARKER')?.row ?? -1
@@ -162,23 +162,23 @@ try {
 
   // 4. Leaving before the dwell cancels the pending tooltip.
   hover(stdin, 3, oneRow + 1)
-  await sleep(300)
+  await sleep(300) // 固定窗:墙钟 只停留 300ms（短于默认 dwell）再移开
   hover(stdin, COLS - 1, ROWS - 1)
-  await sleep(800)
+  await sleep(800) // 固定窗:探针 移开后过完 dwell 仍不得出卡片
   check('leaving before the dwell cancels the tooltip', !screenHas(term, 'TIP-ONE-FULL-MARKER'))
 
   // Global geometry invalidation (scroll/modal/focus-out) must cancel a
   // PENDING dwell too, not only an already shown tooltip.
   hover(stdin, 3, oneRow + 1)
-  await sleep(300)
+  await sleep(300) // 固定窗:墙钟 只停留 300ms（短于默认 dwell）再触发几何失效
   tooltip.clearTooltip()
-  await sleep(500)
+  await sleep(500) // 固定窗:探针 几何失效后过完 dwell 仍不得出卡片
   check('geometry invalidation cancels a pending tooltip', !screenHas(term, 'TIP-ONE-FULL-MARKER'))
   hover(stdin, COLS - 1, ROWS - 1)
 
   // 5. Custom delayMs shortens the dwell.
   hover(stdin, 3, fastRow + 1)
-  await sleep(350)
+  await sleep(350) // 固定窗:墙钟 等自定义 delayMs（短于默认 dwell）到期
   check('a custom delayMs shows the tooltip sooner', await settled(() => screenHas(term, 'TIP-FAST-MARKER')))
   hover(stdin, COLS - 1, ROWS - 1)
   await settle(() => !screenHas(term, 'TIP-FAST-MARKER'))
@@ -213,7 +213,7 @@ try {
       _write(_c: unknown, _e: BufferEncoding, cb: () => void) { cb() }
     })(), exitOnCtrlC: false, patchConsole: false },
   )
-  await sleep(600)
+  await sleep(600) // 固定窗:pacing 等首帧上屏，无单一可轮询锚点
   const oneRow2 = findText(rig2.term, 'ROW-ONE')?.row ?? -1
   hover(rig2.stdin, NARROW - 1, oneRow2 + 1) // pointer at the right edge
   const narrowShown = await settled(() => viewportLines(rig2.term).some(line => line.includes('CCCC')))
@@ -241,7 +241,7 @@ try {
       _write(_c: unknown, _e: BufferEncoding, cb: () => void) { cb() }
     })(), exitOnCtrlC: false, patchConsole: false },
   )
-  await sleep(300)
+  await sleep(300) // 固定窗:pacing 等首帧上屏，无单一可轮询锚点
   const tinyTarget = findText(rig3.term, 'T')
   if (tinyTarget !== null) hover(rig3.stdin, tinyTarget.col + 1, tinyTarget.row + 1)
   const tinyShown = await settled(() => viewportLines(rig3.term).some(line => line.includes('W')))

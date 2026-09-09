@@ -158,7 +158,7 @@ export function isSynchronizedOutputSupported(): boolean {
 // -- XTVERSION-detected terminal name (populated async at startup) --
 //
 // TERM_PROGRAM is not forwarded over SSH by default, so env-based detection
-// fails when claude runs remotely inside a VS Code integrated terminal.
+// fails when dsh-tui runs remotely inside a VS Code integrated terminal.
 // XTVERSION (CSI > 0 q → DCS > | name ST) goes through the pty — the query
 // reaches the *client* terminal and the reply comes back through stdin.
 // App.tsx fires the query when raw mode enables; setXtversionName() is called
@@ -317,8 +317,7 @@ export const SYNC_OUTPUT_SUPPORTED = isSynchronizedOutputSupported()
  * driven per-frame by a diffing renderer, corrupts the screen progressively
  * as content scrolls (the "JetBrains terminal slowly garbles" bug class).
  * The diff engine falls back to repainting the shifted rows cell-by-cell,
- * which every terminal renders identically. Same gate as upstream Claude
- * Code, which hard-disables DECSTBM on JetBrains terminals.
+ * which every terminal renders identically. Disable DECSTBM on JetBrains terminals.
  * @returns true when DECSTBM scroll optimization is safe on this terminal.
  */
 export function isDecstbmSafe(): boolean {
@@ -411,7 +410,7 @@ export function serializeDiff(
         // Hard clear of screen + scrollback. MUST run OUTSIDE the BSU/ESU
         // sync block: Windows Terminal snaps the viewport back to the top
         // when 2J/3J execute inside a synchronized-update block
-        // (claude-code#35580) — the reason the scrollUp-based "soft" clear
+        // — the reason the scrollUp-based "soft" clear
         // existed at all. Close the block, clear, reopen. Everything stays
         // in the SAME write, so the terminal processes it with no
         // intermediate paint. The hard clear actually removes the UI's
@@ -426,7 +425,7 @@ export function serializeDiff(
         // the repaint while everything above the viewport survives.
         // Executed OUTSIDE the DEC 2026 sync block (split begin/end): WT
         // yanks the viewport to top when 2J runs inside a synchronized
-        // update (claude-code#35580).
+        // update.
         buffer +=
           (useSync ? ESU : '') +
           SGR_RESET +

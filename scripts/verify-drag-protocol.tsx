@@ -814,17 +814,17 @@ check('场景渲染：DRAGPAD/PLAIN 标记定位', padPos.col >= 0 && plainPos.c
   // 窗口在 release 写入【之前】截断：release 处理后闩解除，此后 probe 在
   // 安全边界恢复属正确行为（I6b 专门验证），不能计入禁止窗口——否则修复
   // 在 release 后立即做安全 probe 的正确实现反而会被判 FAIL。
-  await sleep(300) // 让 250ms 探测节流彻底冷却
+  await sleep(300) // 固定窗:墙钟 冷却 250ms 探测节流，让 press 时探测必发
   dragEvents.length = 0; dragEventSeqs.length = 0
   const gestureStart = stdoutWrites.length
   press(padPos.col + 2, padPos.row)
-  await sleep(30)
+  await sleep(30) // 固定窗:pacing 鼠标事件步间
   stdin.write('\x1b[I') // FOCUS_IN：平时必触发探测；按住期间必须被闩挡住
-  await sleep(30)
+  await sleep(30) // 固定窗:pacing 鼠标/焦点事件步间
   motion(padPos.col + 5, padPos.row)
-  await sleep(30)
+  await sleep(30) // 固定窗:pacing 鼠标事件步间
   motion(padPos.col + 8, padPos.row)
-  await sleep(30)
+  await sleep(30) // 固定窗:pacing 鼠标事件步间
   const beforeRelease = stdoutWrites.length
   release(padPos.col + 8, padPos.row)
   check(
@@ -848,7 +848,7 @@ check('场景渲染：DRAGPAD/PLAIN 标记定位', padPos.col >= 0 && plainPos.c
 {
   // I6b: 松手后闩解除——FOCUS_IN 探测恢复盲写（证明闩不是永久禁用探测，
   // conpty 自愈路径仍然可用）。
-  await sleep(300) // 再次冷却节流，确保本次 focus 必触发
+  await sleep(300) // 固定窗:墙钟 再次冷却 250ms 探测节流，确保本次 focus 必触发
   const mark = stdoutWrites.length
   stdin.write('\x1b[I')
   await settled(() => /\[\?1006h|\[\?1049\$p/.test(stdoutWrites.slice(mark).join('')))
@@ -868,16 +868,16 @@ check('场景渲染：DRAGPAD/PLAIN 标记定位', padPos.col >= 0 && plainPos.c
   // 批次解析之后，此时闩已上锁，probe 被挡住。lastStdinTime 是 public
   // 字段，直接戳回 6s 前，省一次真实的 5s 睡眠。
   drainQuerier()
-  await sleep(300) // 节流冷却：resume 若没被闩挡住，probe 必发
+  await sleep(300) // 固定窗:墙钟 冷却 250ms 探测节流：resume 若没被闩挡住，probe 必发
   appInternals().lastStdinTime = Date.now() - 6000
   dragEvents.length = 0; dragEventSeqs.length = 0
   const gapStart = stdoutWrites.length
   press(padPos.col + 2, padPos.row)
-  await sleep(30)
+  await sleep(30) // 固定窗:pacing 鼠标事件步间
   motion(padPos.col + 5, padPos.row)
-  await sleep(30)
+  await sleep(30) // 固定窗:pacing 鼠标事件步间
   motion(padPos.col + 8, padPos.row)
-  await sleep(30)
+  await sleep(30) // 固定窗:pacing 鼠标事件步间
   const gapBeforeRelease = stdoutWrites.length
   release(padPos.col + 8, padPos.row)
   check(
@@ -902,7 +902,7 @@ check('场景渲染：DRAGPAD/PLAIN 标记定位', padPos.col >= 0 && plainPos.c
   // 尚未形成完整 press，但 P1-1 修复在 parser 捕获 SGR 前缀时即上闩。
   // 旧代码 resume probe 在未上闩状态写入，motion 流死在拖拽中。
   drainQuerier()
-  await sleep(300)
+  await sleep(300) // 固定窗:墙钟 冷却 250ms 探测节流，确保 resume probe 必发
   appInternals().lastStdinTime = Date.now() - 6000
   dragEvents.length = 0; dragEventSeqs.length = 0
   const splitStart = stdoutWrites.length
@@ -913,13 +913,13 @@ check('场景渲染：DRAGPAD/PLAIN 标记定位', padPos.col >= 0 && plainPos.c
   const pressSeq = `\x1b[<0;${pressCol};${pressRow}M`
   const cut = Math.floor(pressSeq.length / 2)
   stdin.write(pressSeq.slice(0, cut)) // 首段：ESC[<0;18（未形成 ParsedMouse）
-  await sleep(120) // >50ms flush 窗口，hold 捕获
+  await sleep(120) // 固定窗:墙钟 越过 >50ms 的分段 flush 窗口，hold 捕获
   stdin.write(pressSeq.slice(cut)) // 尾段：;34M → 完整 press
-  await sleep(30)
+  await sleep(30) // 固定窗:pacing 鼠标事件步间
   motion(padPos.col + 5, padPos.row)
-  await sleep(30)
+  await sleep(30) // 固定窗:pacing 鼠标事件步间
   motion(padPos.col + 8, padPos.row)
-  await sleep(30)
+  await sleep(30) // 固定窗:pacing 鼠标事件步间
   const splitBeforeRelease = stdoutWrites.length
   release(padPos.col + 8, padPos.row)
   check(
@@ -948,7 +948,7 @@ check('场景渲染：DRAGPAD/PLAIN 标记定位', padPos.col >= 0 && plainPos.c
   // 在安全边界补做。drainQuerier 先清掉历史 probe 的在途 query（headless
   // xterm 不应答查询，它们会按 FIFO 抢走本用例注入的回包）。
   drainQuerier()
-  await sleep(300) // 节流冷却，确保 FOCUS_IN 必发 probe
+  await sleep(300) // 固定窗:墙钟 冷却 250ms 探测节流，确保 FOCUS_IN 必发 probe
   const probeStart = stdoutWrites.length
   stdin.write('\x1b[I')
   check(
@@ -958,11 +958,11 @@ check('场景渲染：DRAGPAD/PLAIN 标记定位', padPos.col >= 0 && plainPos.c
   )
   dragEvents.length = 0; dragEventSeqs.length = 0
   press(padPos.col + 2, padPos.row)
-  await sleep(30)
+  await sleep(30) // 固定窗:pacing 鼠标事件步间
   const replyStart = stdoutWrites.length
   stdin.write('\x1b[?1049;2$y') // DECRPM 回包：1049 = reset
   stdin.write('\x1b[?1;2c') // DA1 哨兵应答：让 probe 的 flush() 完成
-  await sleep(60) // 给 promise 回调（微任务+settled）落的时间
+  await sleep(60) // 固定窗:探针 给 promise 回调（微任务）落的时间，之后断言手势中不得重入
   const midGesture = stdoutWrites.slice(replyStart).join('')
   check(
     'I9 手势中收到 reset 回包不重入（无 ?1049h / 2J / 鼠标重断言）',
@@ -972,10 +972,10 @@ check('场景渲染：DRAGPAD/PLAIN 标记定位', padPos.col >= 0 && plainPos.c
     JSON.stringify(midGesture.match(/\[\?\d+[$hl][a-z]?|\[2J/g) ?? []),
   )
   motion(padPos.col + 5, padPos.row)
-  await sleep(30)
+  await sleep(30) // 固定窗:pacing 鼠标事件步间
   motion(padPos.col + 8, padPos.row)
   release(padPos.col + 8, padPos.row)
-  await sleep(100) // 给 release 尾部的 drainReleaseTail 落的时间
+  await sleep(100) // 固定窗:pacing 等 release 尾部 drainReleaseTail 落地，无可观测完成条件
   check(
     'I9 松手后在安全边界补做延期重入（?1049h + 清屏）',
     await settled(() => {
@@ -996,18 +996,20 @@ check('场景渲染：DRAGPAD/PLAIN 标记定位', padPos.col >= 0 && plainPos.c
   // 必须在 dispatchClick 之后执行——reenterAltScreen 同步清空 frontFrame，
   // 若提前执行，dispatchClick 的 cellIsBlank / getHyperlinkAt 读到空帧。
   drainQuerier()
-  await sleep(300)
+  await sleep(300) // 固定窗:墙钟 冷却 250ms 探测节流，确保 FOCUS_IN 必发 probe
   const clickProbeStart = stdoutWrites.length
   stdin.write('\x1b[I')
   await settled(() => stdoutWrites.slice(clickProbeStart).join('').includes('[?1049$p'))
   dragEvents.length = 0; dragEventSeqs.length = 0
   press(padPos.col + 2, padPos.row)
-  await sleep(30)
+  await sleep(30) // 固定窗:pacing 鼠标事件步间
   const clickReplyStart = stdoutWrites.length
   stdin.write('\x1b[?1049;2$y') // DECRPM: 1049 = reset
   stdin.write('\x1b[?1;2c') // DA1 哨兵
-  await sleep(60)
+  await sleep(60) // 固定窗:pacing 等 promise 回调落地再 release，无可观测完成条件
   release(padPos.col + 2, padPos.row) // 无 motion → dormant → click 路径
+  // 固定窗:待迁移 一个 sleep 服务 clickHeal 快照派生的三条断言
+  // （含 stdout 序号索引运算），迁移需把条件合进单个 settled 谓词，非平凡改写。
   await sleep(100)
   // re-entry 必须在 click 之后发生（统一 timeline：click 事件的 stdout 序号
   // 必须小于 re-entry 的 stdout 序号——若 re-entry 先执行，frontFrame 被清空，
@@ -1043,16 +1045,16 @@ check('场景渲染：DRAGPAD/PLAIN 标记定位', padPos.col >= 0 && plainPos.c
   // 旧代码 resetPointerState 顺带解闩，同一 handleResize 尾部的 probe
   // 立刻漏写。
   drainQuerier()
-  await sleep(300)
+  await sleep(300) // 固定窗:墙钟 冷却 250ms 探测节流，确保后续 probe 不被吞
   dragEvents.length = 0; dragEventSeqs.length = 0
   press(padPos.col + 2, padPos.row)
-  await sleep(30)
+  await sleep(30) // 固定窗:pacing 鼠标事件步间
   motion(padPos.col + 5, padPos.row)
   await settled(() => dragEvents.some((e) => e.type === 'dragmove'))
   const resizeStart = stdoutWrites.length
   stdout.columns = COLS + 12
   stdout.emit('resize')
-  await sleep(100)
+  await sleep(100) // 固定窗:探针 观察窗内 resize 不得写出任何探测序列
   const duringResize = stdoutWrites.slice(resizeStart).join('')
   check(
     'I10 resize 期间零探测写入（闩不因几何重置解除）',
@@ -1076,6 +1078,7 @@ check('场景渲染：DRAGPAD/PLAIN 标记定位', padPos.col >= 0 && plainPos.c
   // drainPendingProbe 可能被 250ms 节流（release 后 renderer 帧完成触发的
   // dispatchKeyboardEvent probe 更新了 lastHealthProbeAt），setTimeout 安排
   // 冷却重试。等重试窗口过完再断言 pendingProbeRequest 排空。
+  // 固定窗:墙钟 等 250ms 节流的 setTimeout 冷却重试窗口过完。
   await sleep(300)
   // I10c: release 尾部排空被 gesture 挡住的 resize probe —— P1-3 修复。
   // resize 在按住期间被闩挡住并记入 pendingProbeRequest；release 后
@@ -1111,7 +1114,7 @@ check('场景渲染：DRAGPAD/PLAIN 标记定位', padPos.col >= 0 && plainPos.c
   // 查询、不盲写鼠标 DECSET（事件本身已证明 tracking 存活，
   // skipMouseReassert）。无按钮 motion 在 dispatch 前已解闩，不在手势内。
   drainQuerier()
-  await sleep(400) // 冷却 250ms 节流：I10c 的 probe 在 release 后发出，
+  await sleep(400) // 固定窗:墙钟 冷却 250ms 探测节流：I10c 的 probe 在 release 后发出，
   // 需要确保 hover 的 probe 不在同一节流窗口内被吞
   const hoverStart = stdoutWrites.length
   stdin.write(`\x1b[<35;${padPos.col + 4};${padPos.row + 1}M`)
@@ -1132,7 +1135,7 @@ check('场景渲染：DRAGPAD/PLAIN 标记定位', padPos.col >= 0 && plainPos.c
   // I11b: wheel 是同类安全边界，且是 1002-only 终端（无 hover motion）上
   // 纯鼠标用户的唯一恢复入口：SGR wheel 报告不携带按住状态、从不上闩。
   drainQuerier()
-  await sleep(300)
+  await sleep(300) // 固定窗:墙钟 冷却 250ms 探测节流，确保 wheel 必发 probe
   const wheelStart = stdoutWrites.length
   stdin.write(`\x1b[<64;${padPos.col + 4};${padPos.row + 1}M`)
   check(
@@ -1153,7 +1156,7 @@ check('场景渲染：DRAGPAD/PLAIN 标记定位', padPos.col >= 0 && plainPos.c
   // handleResize 尾部的 health probe 必须写，否则 P1-1 的"resize 不解闩"
   // 修复会把 resize 自愈也禁掉）。
   drainQuerier()
-  await sleep(300)
+  await sleep(300) // 固定窗:墙钟 冷却 250ms 探测节流，确保 resize probe 必发
   const idleResizeStart = stdoutWrites.length
   stdout.columns = COLS + 8
   stdout.emit('resize')
@@ -1180,7 +1183,7 @@ check('场景渲染：DRAGPAD/PLAIN 标记定位', padPos.col >= 0 && plainPos.c
   // 活着（skipMouseReassert 不重写 DECSET），但 1049 查询发现 alt-screen 丢失，
   // 必须补做 re-entry。
   drainQuerier()
-  await sleep(300)
+  await sleep(300) // 固定窗:墙钟 冷却 250ms 探测节流，确保 hover 必发 probe
   const hoverHealStart = stdoutWrites.length
   stdin.write(`\x1b[<35;${padPos.col + 4};${padPos.row + 1}M`)
   await settled(() => stdoutWrites.slice(hoverHealStart).join('').includes('[?1049$p'))
@@ -1206,7 +1209,7 @@ check('场景渲染：DRAGPAD/PLAIN 标记定位', padPos.col >= 0 && plainPos.c
 {
   // I11d: wheel 安全边界喂入 reset 回包 —— 同类闭环，wheel 路径。
   drainQuerier()
-  await sleep(300)
+  await sleep(300) // 固定窗:墙钟 冷却 250ms 探测节流，确保 wheel 必发 probe
   const wheelHealStart = stdoutWrites.length
   stdin.write(`\x1b[<64;${padPos.col + 4};${padPos.row + 1}M`)
   await settled(() => stdoutWrites.slice(wheelHealStart).join('').includes('[?1049$p'))
@@ -1234,17 +1237,17 @@ check('场景渲染：DRAGPAD/PLAIN 标记定位', padPos.col >= 0 && plainPos.c
   // 在 next press 已上闩后执行，probe/re-entry 被闩挡住（不写入）。旧代码在
   // release 的单事件 finally 里 drain，probe 字节落进下一次手势的开口窗口。
   drainQuerier()
-  await sleep(400) // 节流冷却
+  await sleep(400) // 固定窗:墙钟 冷却 250ms 探测节流
   dragEvents.length = 0; dragEventSeqs.length = 0
   // 第一次手势：press → motion → release
   press(padPos.col + 2, padPos.row)
-  await sleep(30)
+  await sleep(30) // 固定窗:pacing 鼠标事件步间
   motion(padPos.col + 5, padPos.row)
   await settled(() => dragEvents.some((e) => e.type === 'dragmove'))
   // 同一 batch：release + 立即 next press（一个 stdin write 携带两个事件）
   const batchStart = stdoutWrites.length
   stdin.write(`\x1b[<0;${padPos.col + 5 + 1};${padPos.row + 1}m\x1b[<0;${padPos.col + 2 + 1};${padPos.row + 1}M`)
-  await sleep(50)
+  await sleep(50) // 固定窗:探针 观察窗内同 batch 的 release→press 不得写出 probe
   // next press 已上闩，批次尾 drain 被挡住——窗口内零 probe 写入
   const batchWindow = stdoutWrites.slice(batchStart).join('')
   check(
@@ -1257,9 +1260,9 @@ check('场景渲染：DRAGPAD/PLAIN 标记定位', padPos.col >= 0 && plainPos.c
   )
   // 第二次手势完成
   motion(padPos.col + 5, padPos.row)
-  await sleep(30)
+  await sleep(30) // 固定窗:pacing 鼠标事件步间
   motion(padPos.col + 8, padPos.row)
-  await sleep(30)
+  await sleep(30) // 固定窗:pacing 鼠标事件步间
   release(padPos.col + 8, padPos.row)
   check(
     'I12 两次手势的 drag 事件流完整',
@@ -1276,11 +1279,11 @@ check('场景渲染：DRAGPAD/PLAIN 标记定位', padPos.col >= 0 && plainPos.c
   // I12b: 同一 stdin batch 的 FOCUS_IN → press —— focus probe 延迟到批次尾，
   // 此时 press 闩已建立，probe 被挡住。
   drainQuerier()
-  await sleep(400)
+  await sleep(400) // 固定窗:墙钟 冷却 250ms 探测节流
   dragEvents.length = 0; dragEventSeqs.length = 0
   const focusBatchStart = stdoutWrites.length
   stdin.write(`\x1b[I\x1b[<0;${padPos.col + 2 + 1};${padPos.row + 1}M`)
-  await sleep(50)
+  await sleep(50) // 固定窗:探针 观察窗内同 batch 的 FOCUS_IN→press 不得写出 probe
   const focusBatchWindow = stdoutWrites.slice(focusBatchStart).join('')
   check(
     'I12b 同 batch FOCUS_IN→press：focus probe 被 press 闩挡住',
@@ -1289,7 +1292,7 @@ check('场景渲染：DRAGPAD/PLAIN 标记定位', padPos.col >= 0 && plainPos.c
     JSON.stringify(focusBatchWindow.match(/\[\?\d+[$hl][a-z]?/g) ?? []),
   )
   motion(padPos.col + 5, padPos.row)
-  await sleep(30)
+  await sleep(30) // 固定窗:pacing 鼠标事件步间
   release(padPos.col + 5, padPos.row)
   check(
     'I12b 手势 drag 事件流完整',
@@ -1304,18 +1307,18 @@ check('场景渲染：DRAGPAD/PLAIN 标记定位', padPos.col >= 0 && plainPos.c
   // I12c: X10 多按钮重叠——左键按住时右键 press + generic release（X10 不携带
   // 按钮身份），probe 必须保持 blocked（ambiguous-held）直到可靠的终止信号。
   drainQuerier()
-  await sleep(400)
+  await sleep(400) // 固定窗:墙钟 冷却 250ms 探测节流
   dragEvents.length = 0; dragEventSeqs.length = 0
   // X10 press（ESC M + 3字节）：左键
   stdin.write(`\x1b[M${String.fromCharCode(32 + 0)}${String.fromCharCode(32 + padPos.col + 3)}${String.fromCharCode(32 + padPos.row + 1)}`)
-  await sleep(30)
+  await sleep(30) // 固定窗:pacing X10 鼠标事件步间
   const x10PressStart = stdoutWrites.length
   // X10 press：右键（button=2）
   stdin.write(`\x1b[M${String.fromCharCode(32 + 2)}${String.fromCharCode(32 + padPos.col + 4)}${String.fromCharCode(32 + padPos.row + 1)}`)
-  await sleep(30)
+  await sleep(30) // 固定窗:pacing X10 鼠标事件步间
   // X10 generic release（button=3）——不携带按钮身份
   stdin.write(`\x1b[M${String.fromCharCode(32 + 3)}${String.fromCharCode(32 + padPos.col + 4)}${String.fromCharCode(32 + padPos.row + 1)}`)
-  await sleep(50)
+  await sleep(50) // 固定窗:探针 观察窗内 X10 generic release 后 probe 必须保持 blocked
   const x10Window = stdoutWrites.slice(x10PressStart).join('')
   check(
     'I12c X10 generic release 后 probe 保持 blocked（ambiguous-held）',
@@ -1326,7 +1329,7 @@ check('场景渲染：DRAGPAD/PLAIN 标记定位', padPos.col >= 0 && plainPos.c
   )
   // 可靠终止：no-button motion 清除 ambiguous-held
   stdin.write(`\x1b[<35;${padPos.col + 4};${padPos.row + 1}M`)
-  await sleep(50)
+  await sleep(50) // 固定窗:pacing 用例收尾节奏，之后不再断言
 }
 
 {

@@ -55,7 +55,7 @@ import {
   type RawTrajEvent,
 } from './guards.js'
 import { BURST_MIN, type TrajKind, type TrajNode, type TrajTokens } from './types.js'
-import type { SessionEvent } from '@deepseek-ai/dsh-session'
+
 
 /** Per-step streaming timestamps, the source of TTFT and decode duration. */
 export interface StepTiming {
@@ -733,7 +733,7 @@ export function emptyTrajectory(): TrajBuild {
  */
 export function extendTrajectory(
   previous: TrajBuild | null,
-  events: readonly SessionEvent[],
+  events: readonly RawTrajEvent[],
 ): TrajBuild {
   const raw = asRawEvents(events)
   if (
@@ -764,6 +764,6 @@ export function extendTrajectory(
  * Fold from scratch — the one-shot form used by tests and by consumers that
  * hold no previous build.
  */
-export function buildTrajectory(events: readonly SessionEvent[]): TrajBuild {
+export function buildTrajectory(events: readonly RawTrajEvent[]): TrajBuild {
   return extendTrajectory(null, events)
 }

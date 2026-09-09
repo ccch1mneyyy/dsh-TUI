@@ -29,6 +29,7 @@
  *      exactly as before.
  */
 import type { ChatRow, PermissionPresetSnapshot } from '../dsh-adapter/channel.js'
+import type { TranscriptImage } from '../dsh-adapter/transcript-images.js'
 import type { TuiRewindMode } from '../dsh-adapter/extension-events.js'
 import type { TuiWorkspaceCommandResult } from '../workspaces.js'
 
@@ -76,7 +77,7 @@ export type ChatOverlay =
     }
   // `/` transcript search: only the open/closed mode lives here. The query,
   // cursor and match counters stay in Chat.tsx — they survive the bar
-  // closing so n/N keep walking the matches (CC semantics).
+  // closing so n/N keep walking the matches.
   | { kind: 'search' }
   | { kind: 'tips' }
   /**
@@ -87,6 +88,16 @@ export type ChatOverlay =
    * the target is a directory (first row reads "open folder").
    */
   | { kind: 'file-actions'; path: string; index: number; isDir: boolean }
+  /**
+   * Modal image preview: opened by clicking a transcript thumbnail. Renders
+   * as its own centered layer (not inside `<OverlayAbove>`); Esc /
+   * click-outside closes. The composer's caret-driven preview (the caret on
+   * a staged `[Image #N]`) is NOT an overlay: it is derived state in Chat,
+   * shows only while this union is `none`, and leaves the keyboard with the
+   * prompt.
+   */
+  | { kind: 'image-preview'; image: TranscriptImage; title?: string;
+      gallery?: readonly { image: TranscriptImage; title?: string }[]; index?: number }
 
 export const NO_OVERLAY: ChatOverlay = { kind: 'none' }
 
@@ -95,6 +106,8 @@ export type ChatOverlayAction =
   | { type: 'open'; overlay: ChatOverlay }
   /** Close unconditionally (only dispatched from the open overlay's own keys). */
   | { type: 'close' }
+  /** Navigate the frozen gallery without wrapping or changing another modal. */
+  | { type: 'image-step'; delta: 1 | -1 }
   /** Close only if the given kind is still up — the safe form for async
    *  callbacks (a loader failing after the user already moved on). */
   | { type: 'close-if'; kind: ChatOverlay['kind'] }
@@ -152,6 +165,13 @@ export function chatOverlayReducer(state: ChatOverlay, action: ChatOverlayAction
       return action.overlay
     case 'close':
       return NO_OVERLAY
+    case 'image-step': {
+      if (state.kind !== 'image-preview' || !state.gallery?.length) return state
+      const index = Math.max(0, Math.min(state.gallery.length - 1, (state.index ?? 0) + action.delta))
+      if (index === state.index) return state
+      const entry = state.gallery[index]!
+      return { kind: 'image-preview', image: entry.image, title: entry.title, gallery: state.gallery, index }
+    }
     case 'close-if':
       return state.kind === action.kind ? NO_OVERLAY : state
     case 'open-if':
@@ -249,6 +269,10 @@ export function dialogOverlayVisible(
 ): boolean {
   switch (overlay.kind) {
     case 'none':
+      return false
+    // The preview paints its own absolute layer; mounting the empty
+    // `<OverlayAbove>` wrapper for it would only churn the prompt area.
+    case 'image-preview':
       return false
     case 'workspace-picker':
       return gates.workspaceTargetCount > 0

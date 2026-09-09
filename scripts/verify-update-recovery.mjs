@@ -37,7 +37,6 @@ if (process.env.DSH_TUI_UPDATED_FROM !== undefined) {
     writeFileSync(out, JSON.stringify({
       updatedFrom: process.env.DSH_TUI_UPDATED_FROM,
       resumeSession: process.env.DSH_TUI_RESUME_SESSION,
-      legacyResume: process.env.DSH_CC_RESUME_SESSION,
     }))
   }
   process.exit(0)
@@ -183,7 +182,7 @@ try {
     check('A: exactly two dsh calls (fail + recovery rerun), no wasted plain retry', calls === 2, `calls=${calls}`)
     assertCleaned('A', scenario)
     // The hardened restart tail: the replacement received the stamp and the
-    // dual-written resume contract, and exited 0 through the parent's wait.
+    // resume contract, and exited 0 through the parent's wait.
     let child = undefined
     try {
       child = JSON.parse(readFileSync(childMarker, 'utf8'))
@@ -191,7 +190,7 @@ try {
     check(
       'A: replacement received DSH_TUI_UPDATED_FROM + resume contract',
       child !== undefined && child.updatedFrom === repoVersion
-        && child.resumeSession === 'session-a' && child.legacyResume === 'session-a',
+        && child.resumeSession === 'session-a',
       `child=${JSON.stringify(child)}`,
     )
   }

@@ -68,7 +68,8 @@ sh install.sh
 
 ## 从旧包迁移
 
-旧版安装使用无 scope 包 `dsh-cc-tui` 和 `cc-tui` profile。新版本改为组织包
+早期版本使用无 scope 包 `dsh-cc-tui` 和 `cc-tui` profile，环境变量前缀为
+`CC_TUI_*`/`DSH_CC_*`、数据目录为 `~/.dsh-cc`。新版本统一为组织包
 `@deepseek-harness-tui/dsh-tui` 与 `dsh-tui` profile；执行以下命令创建新 profile：
 
 ```sh
@@ -76,23 +77,11 @@ dsh plugin --profile dsh-tui add @deepseek-harness-tui/dsh-tui
 dsh --profile dsh-tui
 ```
 
-本版本起，环境变量与数据目录完成更名：`CC_TUI_*` 与 `DSH_CC_*` 统一改为
-`DSH_TUI_*`（如 `CC_TUI_THEME` → `DSH_TUI_THEME`），数据目录从 `~/.dsh-cc` 改为
-`~/.dsh-tui`。行为要点：
-
-- 旧名环境变量不再生效；启动时若检测到旧名仍被设置，会打印一行警告提示改用新名
-  （只要还设着，每次启动都会提示）。
-- 唯一例外是恢复契约：`DSH_TUI_RESUME_SESSION` 为新名，读端优先取新名、同时仍
-  读取旧名 `DSH_CC_RESUME_SESSION`；写端两个变量都会设置，旧版启动器仍可用旧名
-  完成过渡。
-- 数据目录自动迁移：首次启动时若 `~/.dsh-cc` 存在而 `~/.dsh-tui` 不存在，会整体
-  **复制**（不移动）到新目录并提示一行；主题、模型、preset 和输入历史随之生效。
-  旧目录保留在原处，确认新目录正常后由你自行删除。
-- `resume.txt` 例外：会同时写入新旧两个路径，保证只读旧路径的旧版启动器仍能
-  找到最近会话。
-
-确认新 profile 正常后，旧 `$DSH_HOME/profiles/cc-tui` 仅作为旧安装残留，可按需
-删除；不要把旧包和新包同时添加到同一个 profile。
+新版本只使用 `DSH_TUI_*` 环境变量与 `~/.dsh-tui` 数据目录，旧名不再被读取，
+也不自动迁移数据。首次启动后，请把旧数据目录（`~/.dsh-cc` 等）中的主题、
+配置与历史文件自行复制到 `~/.dsh-tui`。确认新 profile 正常后，旧的
+`$DSH_HOME/profiles/cc-tui` 与旧数据目录残留可按需删除；不要把旧包和新包
+同时添加到同一个 profile。
 
 ## 安装命令做了什么
 
@@ -133,8 +122,7 @@ dsh-tui.cmd --resume
 ```
 
 `--resume` 会读取 `%USERPROFILE%\.dsh-tui\resume.txt`，恢复 TUI 最近选择的
-会话。该文件同时双写到旧路径 `%USERPROFILE%\.dsh-cc\resume.txt`，供只读旧路径的
-旧版启动器过渡使用。设置 `DSH_TUI_WORKSPACE` 可以覆盖批处理启动器采用的工作目录。
+会话。设置 `DSH_TUI_WORKSPACE` 可以覆盖批处理启动器采用的工作目录。
 
 ## 更新到最新版本
 

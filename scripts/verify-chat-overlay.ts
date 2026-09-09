@@ -212,6 +212,29 @@ check(
 check('T9f close', reduce(fileActions(0), { type: 'close' }), { kind: 'none' })
 check('T9g overlay mounts by default (no data gate)', dialogOverlayVisible(fileActions(0), gates), true)
 
+// --- T10: image-preview — own layer, no OverlayAbove mount -----------------
+const fakeImage = { id: 'sha256:x', width: 8, height: 4, read: () => Promise.reject(new Error('unused')) } as never
+const imagePreview: ChatOverlay = { kind: 'image-preview', image: fakeImage }
+check('T10a open from none', reduce(NO_OVERLAY, { type: 'open', overlay: imagePreview }), imagePreview)
+check('T10b open replaces another picker (thumbnail click while /model up)',
+  reduce({ kind: 'model', index: 1 }, { type: 'open', overlay: imagePreview }), imagePreview)
+check('T10c close', reduce(imagePreview, { type: 'close' }), { kind: 'none' })
+check('T10d close-if own kind', reduce(imagePreview, { type: 'close-if', kind: 'image-preview' }), { kind: 'none' })
+check('T10e stale close-if is a no-op', reduce({ kind: 'tips' }, { type: 'close-if', kind: 'image-preview' }), { kind: 'tips' })
+check('T10f preview never mounts the OverlayAbove wrapper', dialogOverlayVisible(imagePreview, gates), false)
+check('T10g move is a no-op (no cursor)', reduce(imagePreview, { type: 'move', delta: 1, count: 3 }), imagePreview)
+const gallery = [{ image: fakeImage, title: 'first' }, { image: fakeImage, title: 'second' }]
+const galleryFirst: ChatOverlay = { kind: 'image-preview', ...gallery[0]!, gallery, index: 0 }
+const galleryLast: ChatOverlay = { kind: 'image-preview', ...gallery[1]!, gallery, index: 1 }
+check('T10h next retains duplicate image occurrences', reduce(galleryFirst, { type: 'image-step', delta: 1 }), galleryLast)
+check('T10i gallery clamps at both ends', [
+  reduce(galleryFirst, { type: 'image-step', delta: -1 }),
+  reduce(galleryLast, { type: 'image-step', delta: 1 }),
+], [galleryFirst, galleryLast])
+check('T10j rapid next/previous actions use reducer state', reduce(galleryFirst,
+  { type: 'image-step', delta: 1 }, { type: 'image-step', delta: -1 }), galleryFirst)
+check('T10k stale gallery actions leave another overlay intact', reduce({ kind: 'tips' }, { type: 'image-step', delta: 1 }), { kind: 'tips' })
+
 if (failures > 0) {
   console.error(`\n${failures} failure(s)`)
   process.exit(1)

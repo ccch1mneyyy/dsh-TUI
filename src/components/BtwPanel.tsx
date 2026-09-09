@@ -6,8 +6,8 @@ import { t } from '../i18n.js'
 import { isPlainReturnInput } from '../utils/modifiers.js'
 
 /**
- * /btw side-question panel (CC's btw.tsx, inline-pane form like the local
- * pickers): title line with the question, a scrollable answer body (error /
+ * /btw side-question panel, an inline-pane form like the local pickers:
+ * title line with the question, a scrollable answer body (error /
  * markdown answer / answering spinner), and a hint line. Owns the keyboard
  * while open — every key it sees is consumed here.
  */

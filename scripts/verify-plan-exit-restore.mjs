@@ -50,14 +50,22 @@ function makeEnv({ withApproval = true, noopApproval = false, deferredPlan = fal
   let pendingPlan
   let publishing = false
   let reentrantAppends = 0
+  // CommandRuntime.find() returns the registered immutable definition by
+  // identity; keep this seam faithful so the adapter's rebind guard can
+  // distinguish an actual replacement from an ordinary second lookup.
+  const planCommand = Object.freeze({ name: 'plan', description: 'Toggle plan mode', handler() {} })
   const services = {
     planMode: { get: () => ({ pending: pendingPlan }) },
     commands: {
       list: () => [],
-      find: (_agent, name) => name === 'plan'
-        ? { name: 'plan', description: 'Toggle plan mode', handler() {} }
-        : undefined,
-      execute: async (agent, line, _signal) => {
+      // CommandRuntime.find returns the stable definition stored in its scoped
+      // layer. Keep the fixture faithful: command dispatch re-checks this
+      // exact effective definition after async image preparation.
+      planDefinition: planCommand,
+      find(_agent, name) {
+        return name === 'plan' ? this.planDefinition : undefined
+      },
+      execute: async (agent, line, _images, _signal) => {
         commands.push(line)
         if (line.startsWith('/plan')) {
           const active = !line.startsWith('/plan off')
@@ -66,7 +74,7 @@ function makeEnv({ withApproval = true, noopApproval = false, deferredPlan = fal
           if (deferredPlan) pendingPlan = active
           else agent.session.append('plan/mode', { active })
           agent.session.append('command/done', { commandId, kind: 'success' })
-          return { result: { text: 'ok' } }
+          return { result: { kind: 'success', text: 'ok' } }
         }
         return undefined
       },
@@ -443,6 +451,31 @@ for (const resume of [false, true]) {
     fold(env.events, 'sandbox/mode', 'mode'),
   )
   check('reconciled session leaves the plan indicator', channel.mode.id !== 'plan', channel.mode.id)
+}
+
+// Observed plan exits in shadow mode remain a projection only. This uses the
+// real Channel/session-event router rather than a direct mode-actions unit.
+{
+  const previousMode = process.env.DSH_TUI_ADAPTER_MODE
+  process.env.DSH_TUI_ADAPTER_MODE = 'passive-shadow'
+  try {
+    const env = makeEnv({ history: [
+      { type: 'sandbox/mode', data: { mode: 'danger-full-access' }, seq: 1 },
+      { type: 'approval/policy', data: { policy: 'never' }, seq: 2 },
+      { type: 'plan/mode', data: { active: true }, seq: 3 },
+    ] })
+    const channel = createChannel(env.ctx, env.agent, { ...baseOptions, modes: FULL_PLAN_MODES })
+    env.agent.session.append('plan/mode', { active: false })
+    await settleMicrotasks()
+    check(
+      'passive shadow observed plan exit does not restore sandbox or approval writes',
+      env.appended.length === 1 && channel.mode.id === 'full',
+      JSON.stringify(env.appended),
+    )
+  } finally {
+    if (previousMode === undefined) delete process.env.DSH_TUI_ADAPTER_MODE
+    else process.env.DSH_TUI_ADAPTER_MODE = previousMode
+  }
 }
 
 process.exit(failed)

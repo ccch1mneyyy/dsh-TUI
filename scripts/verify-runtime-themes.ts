@@ -22,7 +22,7 @@ writeFileSync(
     name: 'shared',
     displayName: 'Static Shared',
     base: 'dark',
-    colors: { claude: '#abcdef' },
+    colors: { accent: '#abcdef' },
   }),
 )
 
@@ -95,7 +95,7 @@ const validDisposer = pluginContext.tuiThemes.register({
   name: 'probe:valid',
   displayName: 'Valid\nRuntime Theme',
   base: 'dark',
-  colors: { claude: '#123456', text: 'rgb(232,230,224)' },
+  colors: { accent: '#123456', text: 'rgb(232,230,224)' },
 }, pluginContext)
 const firstSnapshot = host.getSnapshot()
 const firstEntry = firstSnapshot.find(entry => entry.name === 'probe:valid')
@@ -105,13 +105,37 @@ check('registration normalizes and sanitizes display metadata',
 check('registration snapshot and colors are frozen',
   firstEntry !== undefined && Object.isFrozen(firstEntry) && Object.isFrozen(firstEntry.colors))
 check('snapshot stays stable without a mutation', host.getSnapshot() === firstSnapshot)
-check('host resolver returns the registered palette', host.resolve('probe:valid')?.claude === '#123456')
-check('getTheme consults the runtime resolver', getTheme('probe:valid').claude === '#123456')
+check('host resolver returns the registered palette', host.resolve('probe:valid')?.accent === '#123456')
+check('getTheme consults the runtime resolver', getTheme('probe:valid').accent === '#123456')
 check('runtime availability includes the registered name', isThemeAvailable('probe:valid'))
 check('static availability remains static-only', !isStaticThemeAvailable('probe:valid'))
 const stablePalette = host.resolve('probe:valid')
 check('host resolver returns a stable palette identity', stablePalette === host.resolve('probe:valid'))
 check('registration emits one host notification', notifications === 1)
+
+const legacyDisposer = pluginContext.tuiThemes.register({
+  name: 'probe:legacy',
+  base: 'dark',
+  colors: {
+    claude: '#112233',
+    claudeShimmer: '#223344',
+    claudeBlue_FOR_SYSTEM_SPINNER: '#334455',
+    claudeBlueShimmer_FOR_SYSTEM_SPINNER: '#445566',
+    clawd_body: '#556677',
+    clawd_background: '#667788',
+  },
+})
+const legacyPalette = host.resolve('probe:legacy')
+check('legacy runtime keys normalize before base overlay',
+  legacyPalette !== undefined
+  && legacyPalette.accent === '#112233'
+  && legacyPalette.accentShimmer === '#223344'
+  && legacyPalette.activity === '#334455'
+  && legacyPalette.activityShimmer === '#445566'
+  && legacyPalette.mascotBody === '#556677'
+  && legacyPalette.inputBackground === '#667788'
+  && !Object.hasOwn(legacyPalette, 'claude'))
+legacyDisposer()
 
 const longNameDisposer = pluginContext.tuiThemes.register({
   name: `probe:${'x'.repeat(120)}`,
@@ -130,7 +154,7 @@ const invalidDescriptors: unknown[] = [
   { name: 'bad\u0000name', base: 'dark' },
   { name: 'too:many:segments', base: 'dark' },
   { name: 'probe:bad-base', base: 'neon' },
-  { name: 'probe:bad-color', base: 'dark', colors: { claude: 'hotpink' } },
+  { name: 'probe:bad-color', base: 'dark', colors: { accent: 'hotpink' } },
   { name: 'probe:bad-key', base: 'dark', colors: { notAThemeKey: '#fff' } },
   { name: 'probe:bad-colors', base: 'dark', colors: [] },
 ]
@@ -149,10 +173,10 @@ const beforeDuplicate = host.getSnapshot()
 const duplicateDisposer = pluginContext.tuiThemes.register({
   name: 'PROBE:VALID',
   base: 'light',
-  colors: { claude: '#ffffff' },
+  colors: { accent: '#ffffff' },
 })
 check('duplicate ids are rejected case-insensitively',
-  host.getSnapshot() === beforeDuplicate && host.resolve('probe:valid')?.claude === '#123456')
+  host.getSnapshot() === beforeDuplicate && host.resolve('probe:valid')?.accent === '#123456')
 duplicateDisposer()
 check('duplicate registration returns an inert disposer', host.getSnapshot() === beforeDuplicate)
 check('duplicate registration warns', warnings.some(warning => warning.includes('already registered')))
@@ -160,7 +184,7 @@ check('duplicate registration warns', warnings.some(warning => warning.includes(
 const ownedDisposer = pluginContext.tuiThemes.register({
   name: 'probe:owned',
   base: 'light',
-  colors: { claude: '#654321' },
+  colors: { accent: '#654321' },
 })
 let foreignContext: Context | undefined
 const foreignFiber = root.plugin({
@@ -175,12 +199,12 @@ if (foreignContext === undefined) throw new Error('foreign theme activation did 
 const foreignDisposer = foreignContext.tuiThemes.register({
   name: 'probe:owned',
   base: 'dark',
-  colors: { claude: '#ffffff' },
+  colors: { accent: '#ffffff' },
 })
 check('a foreign activation cannot replace another owner',
-  host.resolve('probe:owned')?.claude === '#654321')
+  host.resolve('probe:owned')?.accent === '#654321')
 foreignDisposer()
-check('a foreign inert disposer cannot release another owner', host.resolve('probe:owned')?.claude === '#654321')
+check('a foreign inert disposer cannot release another owner', host.resolve('probe:owned')?.accent === '#654321')
 ownedDisposer()
 check('the owning disposer releases only its own entry', host.resolve('probe:owned') === undefined)
 await foreignFiber.dispose()
@@ -188,9 +212,9 @@ await foreignFiber.dispose()
 const cleanupDisposer = pluginContext.tuiThemes.register({
   name: 'probe:cleanup',
   base: 'dark',
-  colors: { claude: '#0f0f0f' },
+  colors: { accent: '#0f0f0f' },
 })
-check('activation-owned registration is visible before dispose', host.resolve('probe:cleanup')?.claude === '#0f0f0f')
+check('activation-owned registration is visible before dispose', host.resolve('probe:cleanup')?.accent === '#0f0f0f')
 await pluginFiber.dispose()
 check('activation cleanup releases every runtime registration', host.getSnapshot().length === 0)
 check('activation cleanup removes the global runtime resolution',
@@ -215,24 +239,24 @@ const staticDisposer = staticPluginContext.tuiThemes.register({
   name: 'shared',
   displayName: 'Runtime Shared',
   base: 'light',
-  colors: { claude: '#112233' },
+  colors: { accent: '#112233' },
 })
 const runtimeOnlyDisposer = staticPluginContext.tuiThemes.register({
   name: 'runtime-only',
   displayName: 'Runtime Only',
   base: 'dark',
-  colors: { claude: '#445566' },
+  colors: { accent: '#445566' },
 })
 const earlySortDisposer = staticPluginContext.tuiThemes.register({
   name: 'aaa:theme',
   displayName: 'Early Sort',
   base: 'dark',
-  colors: { claude: '#778899' },
+  colors: { accent: '#778899' },
 })
 check('static resolver keeps priority over a same-name runtime theme',
-  getTheme('shared').claude === '#abcdef' && host.resolve('shared')?.claude === '#112233')
+  getTheme('shared').accent === '#abcdef' && host.resolve('shared')?.accent === '#112233')
 check('runtime palette is not mixed into static custom-theme cache',
-  resolveCustomTheme('shared') === staticPalette && resolveCustomTheme('shared')?.claude === '#abcdef')
+  resolveCustomTheme('shared') === staticPalette && resolveCustomTheme('shared')?.accent === '#abcdef')
 const catalog = listThemeCatalog(host)
 const sharedEntries = catalog.filter(entry => entry.name === 'shared')
 check('catalog orders auto, built-ins, static, then runtime',
@@ -248,22 +272,48 @@ check('runtime catalog entries sort by stable theme id',
   catalog.filter(entry => entry.source === 'runtime').map(entry => entry.name).join(',') === 'aaa:theme,runtime-only')
 check('catalog resolves a distinct runtime name',
   resolveThemeEntry('runtime-only', host)?.source === 'runtime'
-  && resolveThemeEntry('runtime-only', host)?.theme.claude === '#445566')
+  && resolveThemeEntry('runtime-only', host)?.theme.accent === '#445566')
 earlySortDisposer()
 runtimeOnlyDisposer()
 staticDisposer()
 await staticFiber.dispose()
 
+// Legacy resolver compatibility is cached by source object and refreshed when
+// that object changes, so redraws do not allocate a new palette every frame.
+const mutableLegacyPalette: Record<string, unknown> = { ...getTheme('dark') }
+for (const key of ['accent', 'accentShimmer', 'activity', 'activityShimmer', 'mascotBody', 'inputBackground']) {
+  delete mutableLegacyPalette[key]
+}
+mutableLegacyPalette.claude = '#111111'
+mutableLegacyPalette.claudeShimmer = '#222222'
+mutableLegacyPalette.claudeBlue_FOR_SYSTEM_SPINNER = '#333333'
+mutableLegacyPalette.claudeBlueShimmer_FOR_SYSTEM_SPINNER = '#444444'
+mutableLegacyPalette.clawd_body = '#555555'
+mutableLegacyPalette.clawd_background = '#666666'
+const legacyResolverCleanup = registerRuntimeThemeResolver(() => mutableLegacyPalette as never)
+const legacyResolvedFirst = getTheme('legacy-resolver-probe')
+const legacyResolvedSecond = getTheme('legacy-resolver-probe')
+check('legacy resolver normalization reuses a stable palette identity',
+  legacyResolvedFirst === legacyResolvedSecond && legacyResolvedFirst.accent === '#111111')
+mutableLegacyPalette.claude = '#777777'
+const legacyResolvedChanged = getTheme('legacy-resolver-probe')
+const legacyResolvedChangedAgain = getTheme('legacy-resolver-probe')
+check('legacy resolver normalization refreshes after source mutation',
+  legacyResolvedChanged !== legacyResolvedFirst
+  && legacyResolvedChanged.accent === '#777777'
+  && legacyResolvedChanged === legacyResolvedChangedAgain)
+legacyResolverCleanup()
+
 // Token-safe resolver cleanup: an old disposer cannot clear a newer resolver.
-const firstCleanup = registerRuntimeThemeResolver(() => ({ ...getTheme('dark'), claude: '#111111' }))
-const secondCleanup = registerRuntimeThemeResolver(() => ({ ...getTheme('dark'), claude: '#222222' }))
+const firstCleanup = registerRuntimeThemeResolver(() => ({ ...getTheme('dark'), accent: '#111111' }))
+const secondCleanup = registerRuntimeThemeResolver(() => ({ ...getTheme('dark'), accent: '#222222' }))
 firstCleanup()
-check('stale runtime resolver cleanup is token-safe', getTheme('token-probe').claude === '#222222')
+check('stale runtime resolver cleanup is token-safe', getTheme('token-probe').accent === '#222222')
 secondCleanup()
-const baseCleanup = registerRuntimeThemeResolver(() => ({ ...getTheme('dark'), claude: '#333333' }))
-const nestedCleanup = registerRuntimeThemeResolver(() => ({ ...getTheme('dark'), claude: '#444444' }))
+const baseCleanup = registerRuntimeThemeResolver(() => ({ ...getTheme('dark'), accent: '#333333' }))
+const nestedCleanup = registerRuntimeThemeResolver(() => ({ ...getTheme('dark'), accent: '#444444' }))
 nestedCleanup()
-check('nested resolver cleanup restores the previous resolver', getTheme('token-probe').claude === '#333333')
+check('nested resolver cleanup restores the previous resolver', getTheme('token-probe').accent === '#333333')
 baseCleanup()
 clearRuntimeThemeResolver()
 check('latest runtime resolver cleanup restores dark fallback', getTheme('token-probe') === getTheme('dark'))

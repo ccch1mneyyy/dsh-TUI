@@ -15,8 +15,7 @@
  *  - JediTerm's DECSTBM (scroll region) + CSI S/T semantics deviate from
  *    xterm; per-frame hardware scrolling with them corrupts the screen as
  *    content scrolls. The diff engine must repaint shifted rows cell-by-cell
- *    there instead (same gate as upstream Claude Code, which hard-disables
- *    DECSTBM on JetBrains terminals).
+ *    there instead, disabling DECSTBM on JetBrains terminals.
  *
  * Asserts:
  *  1. isJetBrainsIdeTerminal() reads TERMINAL_EMULATOR.
@@ -120,6 +119,8 @@ class FakeStdin extends PassThrough {
 
 const listeners = new Set<() => void>()
 const channel: any = {
+  // 探针确定性：鲸鱼欢迎期闲置动画（默认开）不进本探针的测量窗口。
+  whaleIdle: false,
   version: 0,
   rows: [
     { id: 1, kind: 'user', text: '看看这个项目' },

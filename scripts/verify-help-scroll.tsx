@@ -119,6 +119,7 @@ function Fixture(): React.ReactNode {
 
 const write = async (input: string): Promise<void> => {
   stdin.write(input)
+  // 固定窗:pacing 逐键输入步间——补全菜单重排时提示回显没有稳定锚点可轮询。
   await sleep(180)
 }
 
@@ -184,23 +185,20 @@ try {
   check(await settled(() => screenText().includes('/new —')), 'reopening help resets the viewport to the top')
   check(await settled(() => !screenText().includes('PENDING_SENTINEL')), 'reopened help remains visually exclusive')
 
-  // Stability probe across a resize (the hint must REMAIN visible): the
-  // condition is already true before the repaint, so a settle would return
-  // immediately — keep the fixed window for a wrong reflow to surface.
+  // resize 后滚动提示必须 REMAIN visible——条件在重绘前已成立，settle 会
+  // 立即返回；留一个观察窗让错误 reflow 暴露出来。
   stdout.rows = 18
   term.resize(COLS, 18)
   stdout.emit('resize')
-  await sleep(300)
+  await sleep(300) // 固定窗:探针 观察窗内滚动提示不得消失
   check(screenText().includes('↑/↓'), 'scroll hint remains visible after resize')
   stdin.write('\x1b[F')
   check(await settled(() => screenText().includes('/q —')), 'resized help can still reach the tail')
 
-  // Ordering sleep kept: the narrow reflow has no single anchored condition
-  // to poll before the next keypress.
   stdout.columns = 60
   term.resize(60, 18)
   stdout.emit('resize')
-  await sleep(300)
+  await sleep(300) // 固定窗:pacing 窄屏 reflow 与下一次按键之间的排序等待，reflow 无单一可轮询锚点
   stdin.write('\x1b[H')
   check(await settled(() => screenText().includes('/ for commands')), 'narrow Help stacks shortcuts into the scroll viewport')
   stdin.write('\x1b[F')
@@ -214,7 +212,7 @@ try {
 
 // Full Chat routing regression: Ctrl+O used while Help is visible must not
 // toggle the hidden transcript-search mode. Otherwise the next `/` after
-// closing Help opens TranscriptSearchBar (a second input-looking row with
+// closing Help opens TranscriptSearch (a second input-looking row with
 // "no matches") and slash commands appear to be wedged.
 stdout.rows = INITIAL_ROWS
 stdout.columns = COLS
@@ -283,8 +281,7 @@ const chat = await render(
 )
 
 try {
-  // Startup and per-key typing keep fixed sleeps: the prompt echo has no
-  // single stable anchor to poll while the completion menu reshuffles.
+  // 固定窗:pacing 等首帧——提示回显在补全菜单重排时没有单一稳定锚点可轮询。
   await sleep(500)
   for (const key of '/help') await write(key)
   stdin.write('\r')

@@ -1,10 +1,2 @@
-/**
- * Spinner presentation phase: the stage of the current turn the spinner
- * should convey.
- */
-export type SpinnerMode =
-  | 'requesting'
-  | 'thinking'
-  | 'responding'
-  | 'tool-use'
-  | 'tool-input'
+import type { SpinnerMode } from '../../adapter/ports/channel-display.js'
+export type { SpinnerMode } from '../../adapter/ports/channel-display.js'

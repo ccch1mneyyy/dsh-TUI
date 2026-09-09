@@ -3,7 +3,7 @@
 ## 边界规则
 
 官方 `@deepseek-ai/*` 包只允许在 `src/dsh-adapter/` 内被 import。
-UI 层(`screens/`、`components/`、`ink/`、`hooks/`、`utils/`、`cc/`)
+UI 层(`screens/`、`components/`、`ink/`、`hooks/`、`utils/`、`terminal-utils/`)
 一律通过 adapter 的 facade(`src/dsh-adapter/types.ts` 的类型 re-export、
 `channel.ts`/`plugin.ts` 等运行期服务)间接接触上游。
 
@@ -43,6 +43,39 @@ UI 层(`screens/`、`components/`、`ink/`、`hooks/`、`utils/`、`cc/`)
 重新生成快照。`pnpm run verify:web-coexistence` 会把 dsh-tui patch 与官方
 web-app patch 按 include 语义合成一遍,直接拦截 loader entry id 复用;
 当相邻 `deepseek-harness` 源码存在时还会额外校验其 base + web patch。
+
+## Adapter-v2 P4-P6（本地分支状态）
+
+- **P4 Channel Port/投影层**:新增 `projection / actions / state /
+  plugins / transcript` 五个 Host Port 与 `src/adapter/channel/*` 拆分模块;
+  live Channel 仍为实现真源。L4 已物理提取中性 types、唯一 live/replay projector、
+  input FIFO/staging、binding cell、session tree、notifications、emitter/settings 等模块,
+  生产根改供受保护的进程内 ChannelUi,
+  非 wire snapshot；kernel 未 mount 时使用同一 policy factory 的本地 capability,
+  已绑定 kernel 后禁止降级回退。新增 `verify:channel-ui` 验证嵌套句柄和生命周期。
+  ChannelUi 及可达数据契约由 `adapter/ports/channel-*.ts` 拥有，原位置 re-export；
+  ports 不依赖 adapter/React，上游事件经 RawTrajEvent 边界读取，scene 由 renderer outlet 注入。
+  只读数据为脱离后端的冻结投影，嵌套回调捕获生命周期；shadow renderer 使用本地观察订阅。
+  当前 L4 本轮将 composition root 收敛为约 1,000 行：typed readiness cell 一次性安装完整
+  action surface，未安装或 owner 已释放时明确抛错；detached handles 与 context-warning/
+  pending bookkeeping 分别归属内聚模块。owner 从最早资源获取进入统一撤销漏斗，清理逐项
+  尝试并保留清理失败；Host Port 以 registration identity 固定一次注册，同对象重注册、owner
+  release 与 A → B → A 都会撤销 retained authority。L4 已完成独立集中审查、定向修复和
+  本地自动化验收（build/package、Channel UI 58/58、CI3）；真实 TTY 与长期压力基准未测。
+  L5 Deferred，未宣称完整 RFC state。完成项与限制见 [L4/L5 路线图](docs/roadmap-adapter-channel-l4-l5.md)。
+- **P5 Channel Provider/Consumer**:实现 `tui.dsh/v1alpha1#Channel`
+  协议包络与校验;`runChannelReplay` 支持录制 snapshots 与真实 DSH
+  sessionEvents 的 **minimal transcript replay**(不宣称完整 RFC state);
+  未知 method 失败、features 必须显式声明且有证据、重复 features 先拒、
+  未知非 ignorable event fail-closed、method handler 仅在 replay isolation 内执行,
+  replay provider 不解析 selector(显式 unsupported);生产 driver 已真正跑
+  open/subscribe/invoke/close;新增 `verify:adapter-channel-conformance`。
+- **P6 compat 清理**:删除 `src/plugin-spec/*`、`src/dsh-adapter/{grants,
+  host-descriptor}.ts` shim;彻底移除 `admissionCompat` 与
+  `mountedAdmissionCoordinates`;`src/plugin-host.ts` 保留为规范化公开面;
+  `verify:compat-removal` 扫描 `src/`/`scripts/`/`bin/`/生成 `lib/` 与
+  package export 图,`verify:package` 拒绝 tarball 旧 shim;长期兼容别名已标注。
+- 所有 adapter 门禁已并入 `npm run verify:build`。
 
 ## 升级流程
 

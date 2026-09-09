@@ -166,7 +166,7 @@ function makeChannel(options = {}) {
     listSessions: async () => [],
     setResumeTarget() {},
     setActivityFrames: () => true,
-    activityFrames: 'claude',
+    activityFrames: 'moon8',
     runExternalCommand: async () => '',
     mcpStatus: () => [],
     exportSession: () => null,
@@ -205,7 +205,7 @@ const instance = await render(
   }),
   { stdout, stderr, stdin, exitOnCtrlC: false, patchConsole: false },
 )
-// 启动固定窗保留：等 Chat 首帧与快捷键安装完成，无单一可轮询锚点。
+// 固定窗:pacing 等 Chat 首帧与快捷键安装完成，无单一可轮询锚点
 await sleep(700)
 
 // inline 模式下有 scrollback 时 getLine(0..rows) 直扫读的是缓冲区开头；

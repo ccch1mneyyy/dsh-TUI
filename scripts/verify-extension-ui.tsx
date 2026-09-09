@@ -4,14 +4,16 @@
  *
  * Three layers, one file:
  *  A. Store units (cordis-free): FIFO queueing, decide/cancel, AbortSignal,
- *     timeout, settleAll, keyed status semantics.
+ *     timeout, settleAll, keyed text + rich status semantics.
  *  B. Runtime units over a REAL cordis context: input validation (warn,
  *     never throw), sanitization, shortcut parse/match/register/dispatch,
  *     renderer registration refusals + sticky failure logging.
  *  C. Chat UI integration (fake channel, REAL stores/runtimes): select /
  *     confirm / input dialogs render and settle from the keyboard, FIFO
  *     drain, Esc cancel, the status line appears/clears, and a plugin
- *     shortcut consumes its keypress through Chat's dispatch chain.
+ *     shortcut consumes its keypress through Chat's dispatch chain; rich
+ *     status views receive only the bounded host-render kit (including local
+ *     captured drag) and isolate a throwing component.
  *
  * Run: node --import tsx/esm scripts/verify-extension-ui.tsx
  */
@@ -39,7 +41,7 @@ const [
   { TuiStatusStore, TuiStatusRuntime, getHostStatusStore },
   { TuiShortcutRuntime, getHostShortcuts, parseShortcutCombo, matchShortcut },
   { TuiRendererRuntime, getHostRenderers },
-  { parseExtensionGrants },
+  { parseExtensionGrants, markDecisionDispatchTopology },
   { dispatchTuiDecision, normalizeCancelDecision },
   { stringWidth },
   { KNOWN_SESSION_EVENT_TYPES },
@@ -61,7 +63,7 @@ const [
   import('@deepseek-ai/dsh-session'),
   import('./lib/term-test.mjs'),
 ])
-const { mountAdmitted, testManifest, DECISION_COORDINATE } = await import('../src/dsh-adapter/plugin-test-utils.js')
+const { mountAdmitted, testManifest, DECISION_COORDINATE } = await import('../scripts/lib/plugin-test-utils.js')
 const pluginHostRow = await import('../src/dsh-adapter/plugin-host.js')
 const { DATA_DIR } = await import('../src/utils/paths.js')
 
@@ -322,6 +324,25 @@ const plugin = pluginCtx
 }
 
 {
+  const statusEffectBaseline = pluginFiber.getEffects().length
+  const disposeMissingClear = plugin.tuiStatus.set('missing-clear', undefined)
+  const disposeEmptyClear = plugin.tuiStatus.set('empty-clear', '')
+  check('tuiStatus.set: empty and missing clears do not register caller effects',
+    pluginFiber.getEffects().length === statusEffectBaseline,
+    `${pluginFiber.getEffects().length} !== ${statusEffectBaseline}`)
+  disposeMissingClear()
+  disposeEmptyClear()
+
+  let repeatedSetDisposers = true
+  for (let i = 0; i < 24; i++) {
+    const dispose = plugin.tuiStatus.set('effect-bounded-text', `pass-${i}`)
+    dispose()
+    repeatedSetDisposers &&= statusStore.getSnapshot().every(entry => entry.key !== 'effect-bounded-text')
+  }
+  check('tuiStatus.set: repeated register + dispose keeps caller effects bounded',
+    repeatedSetDisposers && pluginFiber.getEffects().length === statusEffectBaseline,
+    `${pluginFiber.getEffects().length} !== ${statusEffectBaseline}`)
+
   plugin.tuiStatus.set('Bad Key!', 'nope')
   check('tuiStatus: invalid key refused + warn', statusStore.getSnapshot().length === 0 && warnCount('tuiStatus.set rejected an invalid key') === 1)
   // P2-9：文档的 plugin:sub-item 冒号命名约定合法（逐段 slug 校验）。
@@ -388,6 +409,79 @@ const plugin = pluginCtx
   disposeSecond()
   check('tuiStatus: the owning disposer clears the same-value write',
     !statusStore.getSnapshot().some(e => e.key === 'aba'))
+
+  const EmptyView = () => null
+  check('tuiStatus.registerView: public method is feature-detectable',
+    typeof plugin.tuiStatus.registerView === 'function')
+  const invalidKeyView = plugin.tuiStatus.registerView({ key: 'Bad Key!', component: EmptyView })
+  check('tuiStatus.registerView: invalid key refused + warn',
+    statusStore.getViewSnapshot().length === 0
+    && warnCount('tuiStatus.registerView rejected an invalid key') === 1
+    && invalidKeyView === undefined)
+  const invalidRowsView = plugin.tuiStatus.registerView({ key: 'bad-rows', maxRows: 4 as 3, component: EmptyView })
+  check('tuiStatus.registerView: maxRows above three refused',
+    statusStore.getViewSnapshot().length === 0
+    && warnCount('maxRows must be an integer from 1 to 3') === 1
+    && invalidRowsView === undefined)
+  const invalidComponentView = plugin.tuiStatus.registerView({ key: 'bad-component', component: 42 as never })
+  check('tuiStatus.registerView: non-function component refused',
+    statusStore.getViewSnapshot().length === 0
+    && warnCount('component must be a function') === 1
+    && invalidComponentView === undefined)
+
+  const missingCallerView = ctx.tuiStatus.registerView({ key: 'missing-caller-view', component: EmptyView })
+  check('tuiStatus.registerView: a missing plugin caller returns undefined',
+    missingCallerView === undefined
+    && statusStore.getViewSnapshot().length === 0)
+
+  plugin.tuiStatus.set('text-seat', 'text owns this key')
+  const duplicateTextSeatView = plugin.tuiStatus.registerView({ key: 'text-seat', component: EmptyView })
+  check('tuiStatus.registerView: text and rich views share one key namespace',
+    statusStore.getViewSnapshot().length === 0
+    && warnCount('the key is already registered') === 1
+    && duplicateTextSeatView === undefined)
+  plugin.tuiStatus.set('text-seat', undefined)
+
+  const disposeViewSeat = plugin.tuiStatus.registerView({
+    key: 'view-seat',
+    maxRows: 2,
+    component: EmptyView,
+  })
+  plugin.tuiStatus.set('view-seat', 'must not duplicate')
+  check('tuiStatus.set: a rich view blocks a same-key text duplicate',
+    statusStore.getViewSnapshot()[0]?.key === 'view-seat'
+    && !statusStore.getSnapshot().some(entry => entry.key === 'view-seat')
+    && warnCount('the key already owns a rich view') === 1)
+  disposeViewSeat?.()
+  check('tuiStatus.registerView: disposer removes its own view',
+    statusStore.getViewSnapshot().length === 0)
+
+  const disposeBudgetA = plugin.tuiStatus.registerView({ key: 'budget-a', maxRows: 3, component: EmptyView })
+  const disposeBudgetB = plugin.tuiStatus.registerView({ key: 'budget-b', maxRows: 3, component: EmptyView })
+  const budgetOverflowView = plugin.tuiStatus.registerView({ key: 'budget-overflow', component: EmptyView })
+  check('tuiStatus.registerView: aggregate declared height is capped at six rows',
+    statusStore.getViewSnapshot().map(view => `${view.key}:${view.maxRows}`).join(',') === 'budget-a:3,budget-b:3'
+    && warnCount('rich status views are limited to 6 rows total') === 1
+    && budgetOverflowView === undefined)
+  disposeBudgetA?.()
+  disposeBudgetB?.()
+  check('tuiStatus.registerView: budget is released with its registrations',
+    statusStore.getViewSnapshot().length === 0)
+
+  const viewEffectBaseline = pluginFiber.getEffects().length
+  let repeatedViewRegistrations = true
+  for (let i = 0; i < 24; i++) {
+    const dispose = plugin.tuiStatus.registerView({ key: 'effect-bounded-view', component: EmptyView })
+    if (dispose === undefined) {
+      repeatedViewRegistrations = false
+      break
+    }
+    dispose()
+    repeatedViewRegistrations &&= statusStore.getViewSnapshot().every(view => view.key !== 'effect-bounded-view')
+  }
+  check('tuiStatus.registerView: repeated register + dispose keeps caller effects bounded',
+    repeatedViewRegistrations && pluginFiber.getEffects().length === viewEffectBaseline,
+    `${pluginFiber.getEffects().length} !== ${viewEffectBaseline}`)
 }
 
 {
@@ -466,10 +560,11 @@ const plugin = pluginCtx
     plugin.tuiShortcuts.list().length === 0 && warnCount('need ctrl/alt plus one key') === 1)
   plugin.tuiShortcuts.register('not-a-combo', { description: 'x', handler: noop })
   check('tuiShortcuts: malformed combo refused', warnCount('need ctrl/alt plus one key') === 2)
+  const duplicateBefore = warnCount('already registered')
   plugin.tuiShortcuts.register('ctrl+b', { description: 'first', handler: noop })
   plugin.tuiShortcuts.register('ctrl+b', { description: 'second', handler: noop })
   check('tuiShortcuts: duplicate refused',
-    plugin.tuiShortcuts.list().length === 1 && warnCount('already registered') === 1)
+    plugin.tuiShortcuts.list().length === 1 && warnCount('already registered') === duplicateBefore + 1)
   plugin.tuiShortcuts.register('ctrl+h', { description: '  ', handler: noop })
   check('tuiShortcuts: empty description refused', plugin.tuiShortcuts.list().length === 1)
 
@@ -575,6 +670,9 @@ const plugin = pluginCtx
   }))
   guardCtx.plugin({ name: pluginHostRow.name, apply: pluginHostRow.apply })
   await settle(() => guardCtx.get('tuiPluginHost') !== undefined)
+  // This battery dispatches DecisionEvents directly without a full channel;
+  // mark the real dispatch topology so admission sees a live-like channel.
+  markDecisionDispatchTopology(guardCtx)
   const admitted = await mountAdmitted(guardCtx, 'my-guard-export', testManifest({
     id: 'my-guard',
     requires: [DECISION_COORDINATE],
@@ -690,7 +788,7 @@ const instance = await render(
   />,
   { stdout, stdin, stderr: new FakeStderr(), exitOnCtrlC: false, patchConsole: false },
 )
-// 首帧挂载 pacing：等 React 树完成首次渲染与输入监听挂接，无单一可观测条件。
+// 固定窗:pacing 首帧挂载：等 React 树完成首次渲染与输入监听挂接，无单一可观测条件。
 await sleep(600)
 const screen = (back = 30) => plainText(stdout.frames.slice(-back))
 
@@ -706,7 +804,7 @@ const screen = (back = 30) => plainText(stdout.frames.slice(-back))
   check('ui: select dialog renders title + options',
     await settled(() => screen().includes('挑一个') && screen().includes('第二项')), screen().slice(-200))
   stdin.write('\x1b[B')
-  // 按键间 pacing：等上一键的编辑/选中态落地再发下一键，选中高亮是颜色，
+  // 固定窗:pacing 按键间：等上一键的编辑/选中态落地再发下一键，选中高亮是颜色，
   // ANSI 洗净后无可观测条件（本文件后续同类 sleep 同理）。
   await sleep(150)
   stdin.write('\r')
@@ -733,7 +831,7 @@ const screen = (back = 30) => plainText(stdout.frames.slice(-back))
 {
   const pending = plugin.tuiDialogs.input({ title: '说点什么', placeholder: '占位提示', initial: '' })
   check('ui: input dialog renders placeholder', await settled(() => screen().includes('占位提示')), screen().slice(-200))
-  // 逐字符按键间 pacing（同上，无可观测条件）。
+  // 固定窗:pacing 逐字符按键间（同上，无可观测条件）。
   for (const ch of '你好') { stdin.write(ch); await sleep(60) }
   stdin.write('\r')
   check('ui: input Enter resolves the typed text', (await pending) === '你好')
@@ -744,21 +842,21 @@ const screen = (back = 30) => plainText(stdout.frames.slice(-back))
   const pending = plugin.tuiDialogs.input({ title: '改改', initial: '原文' })
   await settle(() => screen().includes('原文'))
   stdin.write('\x7f') // backspace removes 文
-  // 按键间 pacing（同上）。
+  // 固定窗:pacing 按键间（同上）。
   await sleep(150)
   stdin.write('\r')
   check('ui: input initial pre-fills and edits', (await pending) === '原')
 }
 
 // Bracketed paste: a chunk that is all line breaks is TEXT, not an Enter
-// press (isPasted lives on the InputEvent, not the key) — the confirm must
-// survive it, on its default Yes focus.
+// press (the parsed key carries isPasted; modal confirms must survive it) —
+// the confirm must not fire on its default Yes focus.
 {
   const pending = plugin.tuiDialogs.confirm({ title: '粘贴确认' })
   await settle(() => screen().includes('粘贴确认'))
   stdin.write('\x1b[200~\r\n\r\n\x1b[201~')
-  // 稳定性探针（对话框不得被粘贴确认掉）：条件在粘贴前就成立，轮询会
-  // 立即返回，测不到「没被误触」——保留固定窗口。
+  // 固定窗:探针 对话框不得被粘贴确认掉：条件在粘贴前就成立，轮询会
+  // 立即返回，测不到「没被误触」。
   await sleep(250)
   check('ui: pure-newline paste does NOT confirm the dialog',
     dialogStore.getSnapshot()?.kind === 'confirm')
@@ -772,12 +870,12 @@ const screen = (back = 30) => plainText(stdout.frames.slice(-back))
 // resolved answer keeps the documented ≤500-cell bound.
 {
   const pending = plugin.tuiDialogs.input({ title: '粘贴输入', initial: '' })
-  // 排序等待：增量渲染只重绘变化单元格（标题与上一面板共享 '粘贴' 两格），
-  // 帧窗里凑不出完整标题可供 settle——保留固定窗口。
+  // 固定窗:pacing 排序等待：增量渲染只重绘变化单元格（标题与上一面板共享 '粘贴' 两格），
+  // 帧窗里凑不出完整标题可供 settle。
   await sleep(300)
   const chunk = '多行\n粘贴\x07' + '长'.repeat(600)
   stdin.write(`\x1b[200~${chunk}\x1b[201~`)
-  // 粘贴解析 pacing：等整段粘贴落入输入值再发 Enter（同上，无可观测条件）。
+  // 固定窗:pacing 粘贴解析：等整段粘贴落入输入值再发 Enter（同上，无可观测条件）。
   await sleep(250)
   stdin.write('\r')
   const resolved = await pending
@@ -793,11 +891,11 @@ const screen = (back = 30) => plainText(stdout.frames.slice(-back))
 {
   const nearCap = '字'.repeat(250) // 500 cells exactly (wide chars)
   const pending = plugin.tuiDialogs.input({ title: '顶格输入', initial: nearCap })
-  // 排序等待：同上，增量重绘下标题片段化，无可靠的屏幕观察点——保留。
+  // 固定窗:pacing 排序等待：同上，增量重绘下标题片段化，无可靠的屏幕观察点。
   await sleep(300)
   stdin.write('x')
-  // 稳定性探针（超上限按键必须被忽略）：值不得变化，轮询等于没测——
-  // 保留固定窗口让误收的 x 有时间落地。
+  // 固定窗:探针 超上限按键必须被忽略：值不得变化，轮询等于没测——
+  // 观察窗让误收的 x 有时间落地。
   await sleep(150)
   stdin.write('\r')
   check('ui: typing past the cell cap is ignored',
@@ -820,7 +918,7 @@ const screen = (back = 30) => plainText(stdout.frames.slice(-back))
   stdin.write('\x1b[B\r') // Down + Enter in one chunk
   check('ui: batched ↓+Enter settles the NEW focus, not the stale one',
     (await pending) === 'second')
-  // 面板收起重绘 pacing：下一面板标题在增量重绘下会片段化，无可靠观察点。
+  // 固定窗:pacing 面板收起重绘：下一面板标题在增量重绘下会片段化，无可靠观察点。
   await sleep(200)
 }
 {
@@ -828,7 +926,7 @@ const screen = (back = 30) => plainText(stdout.frames.slice(-back))
   await settle(() => screen().includes('同批确认'))
   stdin.write('\x1b[C\r') // Right + Enter in one chunk → focus 否 → false
   check('ui: batched →+Enter settles the moved focus', (await pending) === false)
-  // 面板收起重绘 pacing（同上）。
+  // 固定窗:pacing 面板收起重绘（同上）。
   await sleep(200)
 }
 // Two Backspaces in one chunk must BOTH delete (each seeing the other's
@@ -837,7 +935,7 @@ const screen = (back = 30) => plainText(stdout.frames.slice(-back))
   const pending = plugin.tuiDialogs.input({ title: '同批退格', initial: 'abcd' })
   await settle(() => screen().includes('同批退格'))
   stdin.write('\x7f\x7f')
-  // 按键间 pacing（同上）。
+  // 固定窗:pacing 按键间（同上）。
   await sleep(150)
   stdin.write('\r')
   check('ui: batched Backspace×2 deletes both characters', (await pending) === 'ab')
@@ -848,35 +946,35 @@ const screen = (back = 30) => plainText(stdout.frames.slice(-back))
 // inside a pair.
 {
   const pending = plugin.tuiDialogs.input({ title: '表情退格', initial: 'a😊b' })
-  // 排序等待：同上，增量重绘下标题片段化，无可靠的屏幕观察点——保留。
+  // 固定窗:pacing 排序等待：同上，增量重绘下标题片段化，无可靠的屏幕观察点。
   await sleep(300)
   stdin.write('\x1b[D') // left: cursor between 😊 and b
-  await sleep(120) // 按键间 pacing（同上）
+  await sleep(120) // 固定窗:pacing 按键间（同上）
   stdin.write('\x7f') // backspace deletes the whole emoji
-  await sleep(120) // 按键间 pacing（同上）
+  await sleep(120) // 固定窗:pacing 按键间（同上）
   stdin.write('\r')
   check('ui: Backspace deletes a whole emoji (no lone surrogate)',
     (await pending) === 'ab')
 }
 {
   const pending = plugin.tuiDialogs.input({ title: '表情清空', initial: '😊' })
-  // 排序等待：同上，增量重绘下标题片段化，无可靠的屏幕观察点——保留。
+  // 固定窗:pacing 排序等待：同上，增量重绘下标题片段化，无可靠的屏幕观察点。
   await sleep(300)
   stdin.write('\x7f') // single backspace at end of the sole emoji
-  await sleep(150) // 按键间 pacing（同上）
+  await sleep(150) // 固定窗:pacing 按键间（同上）
   stdin.write('\r')
   check('ui: Backspace on the sole emoji empties the value', (await pending) === '')
 }
 {
   const pending = plugin.tuiDialogs.input({ title: '表情步进', initial: '😊x' })
-  // 排序等待：同上，增量重绘下标题片段化，无可靠的屏幕观察点——保留。
+  // 固定窗:pacing 排序等待：同上，增量重绘下标题片段化，无可靠的屏幕观察点。
   await sleep(300)
   // Left ×2 from the end: code-point steps land BEFORE the emoji (a UTF-16
   // step would park the cursor mid-surrogate and split the pair on insert).
   stdin.write('\x1b[D\x1b[D')
-  await sleep(120) // 按键间 pacing（同上）
+  await sleep(120) // 固定窗:pacing 按键间（同上）
   stdin.write('z')
-  await sleep(120) // 按键间 pacing（同上）
+  await sleep(120) // 固定窗:pacing 按键间（同上）
   stdin.write('\r')
   check('ui: arrow keys step by code point (insert never splits a pair)',
     (await pending) === 'z😊x')
@@ -892,10 +990,104 @@ const screen = (back = 30) => plainText(stdout.frames.slice(-back))
   // contain the set text.
   const mark = stdout.frames.length
   plugin.tuiStatus.set('demo-plugin', undefined)
-  // 稳定性探针（清除后的重绘不得再含该文案）：mark 之后暂无新帧时条件
-  // 空洞成立，轮询会立即返回——保留固定窗口等待重绘发生。
+  // 固定窗:探针 清除后的重绘不得再含该文案：mark 之后暂无新帧时条件
+  // 空洞成立，轮询会立即返回，需要一个观察窗等重绘发生。
   await sleep(300)
   check('ui: status line clears', !plainText(stdout.frames.slice(mark)).includes('构建中'))
+}
+
+// Rich status view: host React + a deliberately restricted render kit,
+// external-store updates, host height clipping, disposer cleanup.
+{
+  let value = '播放中 · 第一首'
+  const listeners = new Set<() => void>()
+  const subscribe = (listener: () => void) => {
+    listeners.add(listener)
+    return () => listeners.delete(listener)
+  }
+  const getSnapshot = () => value
+  let receivedKit = ''
+  let leakedKeyEvents = 0
+  const RichStatus = ({ React: HostReact, ui }: import('../src/dsh-adapter/status.js').TuiStatusViewProps) => {
+    receivedKit = Object.keys(ui).sort().join(',')
+    const current = HostReact.useSyncExternalStore(subscribe, getSnapshot)
+    const { columns } = ui.useTerminalSize()
+    return HostReact.createElement(
+      ui.Box,
+      {
+        flexDirection: 'column',
+        onClick: () => {},
+        onDragStart: () => {},
+        onDragMove: () => {},
+        onDragEnd: () => {},
+        onMouseEnter: () => {},
+        onMouseLeave: () => {},
+        // Untyped plugins can still send unsupported props. The host wrapper
+        // must discard them at runtime, not rely on the public type alone.
+        autoFocus: true,
+        tabIndex: 0,
+        onKeyDown: () => { leakedKeyEvents += 1 },
+      } as never,
+      HostReact.createElement(ui.Text, { key: 'title', color: 'rgb(80,180,255)' }, current),
+      HostReact.createElement(ui.Text, { key: 'progress' }, `━━━━━━ 01:23 / 03:45 · ${columns} cols`),
+      HostReact.createElement(ui.Text, { key: 'artist', dimColor: true }, '歌手 · 专辑'),
+      HostReact.createElement(ui.Text, { key: 'overflow' }, 'THIS-ROW-MUST-BE-CLIPPED'),
+    )
+  }
+  const disposeRich = plugin.tuiStatus.registerView({
+    key: 'demo-plugin:rich',
+    maxRows: 3,
+    component: RichStatus,
+  })
+  const richMark = stdout.frames.length
+  check('ui: rich status view renders above the prompt',
+    await settled(() => {
+      const output = plainText(stdout.frames.slice(richMark))
+      return output.includes('播放中 · 第一首') && output.includes('歌手 · 专辑')
+    }), plainText(stdout.frames.slice(richMark)).slice(-500))
+  check('ui: rich status view receives only Box/Image/Text/useTerminalSize',
+    receivedKit === 'Box,Image,Text,useTerminalSize', receivedKit)
+  check('ui: rich status view is clipped to its declared maxRows',
+    !plainText(stdout.frames.slice(richMark)).includes('THIS-ROW-MUST-BE-CLIPPED'),
+    plainText(stdout.frames.slice(richMark)).slice(-500))
+
+  stdin.write('x')
+  // 固定窗:探针 negative stability probe: waiting for leakedKeyEvents === 0 would pass
+  // immediately and never exercise the input dispatch.
+  await sleep(200)
+  check('ui: rich status Box strips focus and keyboard props at runtime',
+    leakedKeyEvents === 0, String(leakedKeyEvents))
+  stdin.write('\x7f')
+
+  const updateMark = stdout.frames.length
+  value = '暂停 · 第二首'
+  for (const listener of listeners) listener()
+  check('ui: rich status view updates through the plugin external store',
+    await settled(() => plainText(stdout.frames.slice(updateMark)).includes('暂停 · 第二首')),
+    plainText(stdout.frames.slice(updateMark)).slice(-500))
+
+  disposeRich?.()
+  check('ui: rich status disposer removes the registered view',
+    await settled(() => statusStore.getViewSnapshot().length === 0))
+}
+
+// A third-party render crash is contained to that view. Prove Chat is still
+// live by rendering a normal status contribution after the boundary fires.
+{
+  const before = warnCount('status view "demo-plugin:crash" crashed and was hidden')
+  const disposeCrash = plugin.tuiStatus.registerView({
+    key: 'demo-plugin:crash',
+    component: () => {
+      throw new Error('intentional rich status crash')
+    },
+  })
+  check('ui: rich status render failure is reported once',
+    await settled(() => warnCount('status view "demo-plugin:crash" crashed and was hidden') === before + 1))
+  plugin.tuiStatus.set('after-rich-crash', '主界面仍然存活')
+  check('ui: one crashing rich view does not take down Chat',
+    await settled(() => screen().includes('主界面仍然存活')), screen().slice(-500))
+  plugin.tuiStatus.set('after-rich-crash', undefined)
+  disposeCrash?.()
 }
 
 // Shortcut through Chat: the keypress is consumed, the handler runs; the
@@ -919,8 +1111,8 @@ const screen = (back = 30) => plainText(stdout.frames.slice(-back))
   const pending = plugin.tuiDialogs.confirm({ title: '占键盘中' })
   await settle(() => screen().includes('占键盘中'))
   stdin.write('\x1bb') // alt+b — must not reach shortcuts while the dialog is open
-  // 稳定性探针（快捷键不得触发）：fired 本就为 0，轮询会立即返回，
-  // 测不到「没被触发」——保留固定窗口。
+  // 固定窗:探针 快捷键不得触发：fired 本就为 0，轮询会立即返回，
+  // 测不到「没被触发」。
   await sleep(200)
   check('ui: open dialog gates plugin shortcuts', fired === 0)
   stdin.write('\x1b')

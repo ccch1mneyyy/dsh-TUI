@@ -29,7 +29,7 @@ import { IGNITION_TIMELINE, ignitionLineColors } from '../trajectory/effortIgnit
 
 type Overlay = { label: string; startedAtMs: number }
 
-/** A static chip on the top border row (the session label, CC-style). */
+/** A static chip on the top border row used for the session label. */
 export interface InputBorderLabel {
   /** Visible text (already width-truncated by the caller). */
   text: string

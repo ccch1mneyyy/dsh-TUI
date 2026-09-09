@@ -65,6 +65,8 @@ function check(name: string, ok: boolean, extra = '') {
 
 const listeners = new Set<() => void>()
 const channel: any = {
+  // 探针确定性：鲸鱼欢迎期闲置动画（默认开）不进本探针的测量窗口。
+  whaleIdle: false,
   version: 0, rows: [] as any[], status: 'idle', sessionTitle: 'probe', agentId: 'probe',
   model: 'deepseek-v4-flash',
   mode: { plan: false }, reasoningEffort: 'max', tokens: { input: 120, output: 45 },
@@ -86,23 +88,23 @@ const instance = await render(
   <Chat channel={channel} questionStore={new QuestionStore()} />,
   { stdout: stdoutObj as any, stdin: new FakeStdin() as any, stderr: new FakeStderr() as any, exitOnCtrlC: false, patchConsole: false },
 )
-// 等鲸鱼启动动画播完定格（眨眼→喷水→摆尾后静态不再重绘）——golden 与
+// 固定窗:墙钟 等鲸鱼启动动画播完定格（眨眼→喷水→摆尾后静态不再重绘）——golden 与
 // 自愈后快照相隔约 1 秒，动画未定格会造成时间敏感的假差异。
 await sleep(3500)
 
 // 流式短回复并定格（保持帧高 < 视口，隔离"第三方输出"变量）。
-// 80ms 为模拟流式的 chunk 节拍（时间线本身是场景），保留固定 pacing。
+// 80ms 为模拟流式的 chunk 节拍，时间线本身是场景。
 const msg = { id: id++, kind: 'assistant', text: '', streaming: true }
 channel.rows.push(msg); bump()
 for (let i = 0; i < 12; i++) {
   msg.text += `- 概览要点第 ${i + 1} 条：模块划分与构建流程说明\n`
-  bump(); await sleep(80)
+  bump(); await sleep(80) // 固定窗:pacing 模拟流式 chunk 节拍
 }
 msg.streaming = false
 channel.working = false
 bump()
-// 定格稳定窗：golden 必须取自不再重绘的稳态帧，「内容可见」不等于「不再
-// 重绘」，无可轮询的完成条件——保留固定窗口。
+// 固定窗:pacing 定格稳定窗：golden 必须取自不再重绘的稳态帧，「内容可见」不等于「不再
+// 重绘」，无可轮询的完成条件。
 await sleep(600)
 
 // 对照基准：定格后的干净视口。
@@ -113,11 +115,11 @@ const golden = viewportLines()
 await writeParsed(term, '\r\n[5764] Error: Non-HTTPS URLs are only allowed for localhost\r\n[35540] Usage: npx tsx proxy.ts <https://server-url>\r\n')
 
 // 之后只有轻微 UI 活动（通知/指标 tick 级别的小 diff）——真实空闲场景。
-// 固定窗口是场景语义：断言污染在轻微活动后仍存留（稳定性探针），不可轮询。
+// 观察窗是场景语义：断言污染在轻微活动后仍存留，不可轮询。
 channel.responseChars += 7; bump()
-await sleep(300)
+await sleep(300) // 固定窗:探针 轻微活动后污染仍须存留，不得自愈
 channel.responseChars += 7; bump()
-await sleep(500)
+await sleep(500) // 固定窗:探针 同上，第二段轻微活动后的不变量观察窗
 
 const after = viewportLines()
 // 前置条件：污染必须实际发生（错误行留在视口）——否则场景没搭对，

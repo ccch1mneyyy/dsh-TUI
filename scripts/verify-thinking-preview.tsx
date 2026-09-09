@@ -45,7 +45,7 @@ async function renderCase(thinking: string): Promise<string[]> {
 
   const app = await render(
     <Box flexDirection="column" width={COLS}>
-      <AssistantThinkingMessage thinking={thinking} addMargin={false} verbose={false} preview />
+      <AssistantThinkingMessage thinking={thinking} marginTopOnTurn={false} verbose={false} preview />
       <Box height={1}>
         <Text>preview-sentinel</Text>
       </Box>

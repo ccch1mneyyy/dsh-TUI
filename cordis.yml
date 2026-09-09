@@ -57,10 +57,12 @@
   inject: [agents, tuiWorkspaces, tuiScenes, tuiDialogs, tuiStatus, tuiShortcuts, tuiRenderers, tuiThemes]
   config:
     provider: deepseek-official
-    # Alt-screen fullscreen (CC 同款): 应用内鼠标选区（选择即复制, OSC 52 +
+    # Alt-screen fullscreen 布局: 应用内鼠标选区（选择即复制, OSC 52 +
     # wl-copy/xclip/xsel 兜底）、滚轮滚动、双击选词/三击选行。false 则退回
     # inline 渲染, 鼠标交给终端模拟器原生选择。
     fullscreen: true
+    # 在支持的终端预览图片；/settings 可关闭，重启生效。
+    terminalImages: true
     # Reasoning effort applied to every request, validated against the live
     # route's adapter levels. An unlisted level falls back to the adapter
     # default; this wins over the persisted /effort choice and seeds the
@@ -83,9 +85,9 @@
     #     plan: false
     #     sandbox: danger-full-access
     #     approval: never
-    #  feeds the chosen session id through this env var (DSH_TUI_ name; the
-    #  pre-rename DSH_CC_ spelling is still honored, issue #120).
-    sessionId: !!js process.env.DSH_TUI_RESUME_SESSION ?? process.env.DSH_CC_RESUME_SESSION ?? undefined
+    #  feeds the chosen session id through this env var (see
+    #  src/sessionHistory.ts for the launcher contract).
+    sessionId: !!js process.env.DSH_TUI_RESUME_SESSION ?? undefined
     workspace: !!js process.env.DSH_TUI_WORKSPACE_TARGET ?? undefined
 
 # The DeepSeek adapter. Shipped default: full thinking at max effort.

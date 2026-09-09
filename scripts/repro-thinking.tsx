@@ -124,8 +124,8 @@ const instance = await render(
   },
 )
 
-// 启动稳定：让 spinner 先空转若干 50ms 动画帧——动画重绘本身是被测对象，
-// 固定墙钟 pacing 是场景的一部分，无可轮询的完成条件。
+// 固定窗:墙钟 启动稳定：让 spinner 先空转若干 50ms 动画帧——动画重绘本身是被测对象，
+// 这段时间线是场景的一部分，无可轮询的完成条件。
 await sleep(500)
 
 // 流式灌文本 ~6 秒（thinking 状态保持）。内容刻意全为中文、不含 'thinking'
@@ -140,12 +140,12 @@ const CHUNKS = [
 ]
 for (const chunk of CHUNKS) {
   pushChunk(chunk)
-  // 120ms 是场景 pacing：流式增长与 50ms 动画帧交错才能诱发残影，
+  // 固定窗:pacing 120ms 是场景节拍：流式增长与 50ms 动画帧交错才能诱发残影，
   // 不是在等某个可观测状态。
   await sleep(120)
 }
 
-// 再让 spinner 空转几帧（墙钟 pacing：残影需要多帧重绘才会显形）
+// 固定窗:墙钟 再让 spinner 空转几个 50ms 动画帧：残影需要多帧重绘才会显形
 await sleep(800)
 
 const byteStream = stdout.frames.join('')

@@ -42,6 +42,15 @@ function snapshot(): EditorNode {
   return editorNode
 }
 
+function openSnapshot(): boolean {
+  return editorNode !== null
+}
+
+/** Whether the fullscreen draft editor is currently published (open). */
+export function usePromptEditorOpen(): boolean {
+  return React.useSyncExternalStore(subscribe, openSnapshot)
+}
+
 /**
  * The fullscreen sink, mounted once at the very end of Chat's root Box.
  * The absolute cover is `opaque` so its padding/blank cells never bleed
@@ -50,7 +59,6 @@ function snapshot(): EditorNode {
  */
 export function PromptEditorLayer(): React.ReactNode {
   const node = React.useSyncExternalStore(subscribe, snapshot)
-  if (node === null) return null
   // Full-bleed cover: under PageMargin the Chat root box starts at the
   // content origin, so the editor must extend into the page margins up to
   // the terminal edges — the editor is a whole-screen surface, and the
@@ -58,6 +66,7 @@ export function PromptEditorLayer(): React.ReactNode {
   // bleed through.
   const inset = usePageInset()
   const size = useTerminalSize()
+  if (node === null) return null
   return (
     <Box
       position="absolute"
@@ -68,6 +77,7 @@ export function PromptEditorLayer(): React.ReactNode {
       flexDirection="column"
       flexShrink={0}
       overflow="hidden"
+      backgroundColor="inputBackground"
       opaque
       onClick={(event) => {
         event.stopImmediatePropagation()
@@ -110,7 +120,7 @@ export function EditorButton({
         primary
           ? hovered
             ? 'userMessageBackgroundHover'
-            : (accent ?? 'claude')
+            : (accent ?? 'accent')
           : hovered
             ? 'userMessageBackgroundHover'
             : undefined

@@ -256,7 +256,7 @@ const NOW = Date.now()
   ))
 
   check('B5 jobControl.kill 调用注册表并带 owner', channel.jobControl.kill('pwsh-1') === true && fake.kills.join(',') === 'pwsh-1', fake.kills.join(','))
-  await sleep(150)
+  await sleep(150) // 固定窗:探针 终态任务 kill 后观察窗内不得发出 steer
   check('B5 终态任务 kill 不触发 steer', initial.steered.length === 0, initial.steered.join('|'))
 
   // 存活任务被用户 kill → steer 通知模型（kill 会抑制 harness 完成通知）。
@@ -306,7 +306,7 @@ const NOW = Date.now()
   const channel = createChannel(ctx as never, makeAgent('agent-a', 'sess-a') as never, {
     model: 'm0', cwd: '/tmp/demo', provider: 'p0', activity: false,
   })
-  await sleep(50)
+  await sleep(50) // 固定窗:探针 无 jobs 服务时快照必须始终为空（轮询空条件会立即返回）
   check('B7 无 jobs 服务：快照为空', channel.backgroundJobs.length === 0)
   check('B7 无 jobs 服务：kill 安全返回 false', channel.jobControl.kill('pwsh-9') === false)
 }
@@ -360,8 +360,10 @@ const runningJob = {
   startedAt: Date.now() - 65_000, outputLines: ['build step 1 ok', 'build step 2 ok'],
 }
 await withTerminal(
-  () => React.createElement(JobCard, { job: runningJob, addMargin: false }),
+  () => React.createElement(JobCard, { job: runningJob, marginTopOnTurn: false }),
   async screen => {
+    // 固定窗:待迁移 一个 sleep 服务同一快照上的多条正/负混合断言，
+    // 迁移需把全部条件合进一个 settled 谓词并在其中捕获快照，非平凡改写。
     await sleep(150)
     const text = screen()
     check('C1 运行卡头含 id/label', text.includes('pwsh-1') && text.includes('gh run watch 42'))
@@ -371,9 +373,11 @@ await withTerminal(
 await withTerminal(
   () => React.createElement(JobCard, {
     job: { ...runningJob, outputLines: [] },
-    addMargin: false,
+    marginTopOnTurn: false,
   }),
   async screen => {
+    // 固定窗:待迁移 一个 sleep 服务同一快照上的多条正/负混合断言，
+    // 迁移需把全部条件合进一个 settled 谓词并在其中捕获快照，非平凡改写。
     await sleep(150)
     const text = screen()
     check(
@@ -386,9 +390,11 @@ await withTerminal(
 await withTerminal(
   () => React.createElement(JobCard, {
     job: { ...runningJob, status: 'completed' as const, detail: 'exit code: 0', finishedAt: Date.now() },
-    addMargin: false,
+    marginTopOnTurn: false,
   }),
   async screen => {
+    // 固定窗:待迁移 一个 sleep 服务同一快照上的多条正/负混合断言，
+    // 迁移需把全部条件合进一个 settled 谓词并在其中捕获快照，非平凡改写。
     await sleep(150)
     const text = screen()
     check('C2 落定卡折叠（无瀑布行）', !text.includes('│ build step 1 ok'))
@@ -405,6 +411,8 @@ await withTerminal(
     onKill: () => {},
   }),
   async screen => {
+    // 固定窗:待迁移 一个 sleep 服务同一快照上的多条正/负混合断言，
+    // 迁移需把全部条件合进一个 settled 谓词并在其中捕获快照，非平凡改写。
     await sleep(150)
     const text = screen()
     check('C3 面板标题与两行任务', text.includes('Background Jobs') && text.includes('pwsh-1') && text.includes('bash-2'))

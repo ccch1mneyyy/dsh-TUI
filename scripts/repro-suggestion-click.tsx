@@ -40,7 +40,7 @@ function check(name: string, ok: boolean, extra = '') {
   if (!ok) failed += 1
 }
 
-const mouseLogPath = join(homedir(), '.dsh-cc', 'mouse-debug.log')
+const mouseLogPath = join(homedir(), '.dsh-tui', 'mouse-debug.log')
 const mouseLogSizeBefore = (() => { try { return statSync(mouseLogPath).size } catch { return 0 } })()
 
 function makeTerm() {
@@ -79,6 +79,8 @@ const s = makeStreams(term)
 let clearCalls = 0
 const listeners = new Set<() => void>()
 const channel: any = {
+  // 探针确定性：鲸鱼欢迎期闲置动画（默认开）不进本探针的测量窗口。
+  whaleIdle: false,
   version: 0,
   rows: [],
   status: 'idle',
@@ -101,7 +103,7 @@ const channel: any = {
   commandList: LOCAL_COMMANDS,
   notifications: [],
   mode: { plan: false, sandbox: undefined },
-  activityFrames: 'claude',
+  activityFrames: 'moon8',
   agentPreset: undefined,
   subscribe(cb: () => void) { listeners.add(cb); return () => listeners.delete(cb) },
   submit: () => {},

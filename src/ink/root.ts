@@ -38,6 +38,9 @@ export type RenderOptions = {
    */
   patchConsole?: boolean
 
+  /** Allow image probing and rendering. Fixed for this root's lifetime; defaults to true. */
+  terminalImages?: boolean
+
   /**
    * Called after each frame render with timing and flicker information.
    */
@@ -169,6 +172,7 @@ export async function createRoot(
     stderr = process.stderr,
     exitOnCtrlC = true,
     patchConsole = true,
+    terminalImages = true,
     onFrame,
   } = options
   // See wrappedRender — preserve microtask boundary from the old WASM await.
@@ -179,6 +183,7 @@ export async function createRoot(
     stderr,
     exitOnCtrlC,
     patchConsole,
+    terminalImages,
     onFrame,
   })
 

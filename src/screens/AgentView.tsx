@@ -10,7 +10,7 @@ import { isMod, isPlainReturn } from '../utils/modifiers.js'
 import { formatProject, formatWhen, spreadRow, tailWidth, truncateWidth } from '../sessions/format.js'
 import { stringWidth } from '../ink/stringWidth.js'
 import { t } from '../i18n.js'
-import type { Channel } from '../dsh-adapter/channel.js'
+import type { ChannelUi as Channel } from '../adapter/channel/ui-policy.js'
 import type { AgentViewRow, AgentViewStatus } from '../dsh-adapter/channel.js'
 import type { PreviewEntry, SessionSummary } from '../dsh-adapter/sessions/index.js'
 import type { ApprovalSnapshot } from '../dsh-adapter/approvals.js'
@@ -18,7 +18,7 @@ import { ApprovalPanel } from '../components/approvals/ApprovalPanel.js'
 import { SpinnerGlyph } from '../components/Spinner/SpinnerGlyph.js'
 
 /**
- * The agent view (CC's `claude agents`, dsh-tui edition): one screen for
+ * The agent view: one screen for
  * every session in this process — the attached conversation, the background
  * sessions dispatched here, and the stopped sessions persisted on disk.
  * Rows are grouped by state (needs input first), each carrying a one-line
@@ -38,7 +38,7 @@ type AgentViewMode = 'list' | 'rename' | 'confirm-stop'
 const MANDATORY_LINES = 4
 /** Terminal width below which the peek panel replaces the list. */
 const SPLIT_MIN_COLUMNS = 100
-/** How long the second Ctrl+X stays armed as "delete" (CC parity). */
+/** How long the second Ctrl+X stays armed as "delete". */
 const STOP_DELETE_WINDOW_MS = 2000
 
 /** State presentation: the glyph and theme color per status. */
@@ -107,8 +107,8 @@ function summaryForRow(row: AgentViewRow): SessionSummary {
 }
 
 /**
- * One row line: a state glyph (ANIMATED spinner for working sessions, CC's
- * `·✢*✶✻✽` cycle), a SHORT name, then the session's reply/activity
+ * One row line: a state glyph (an animated spinner for working sessions), a
+ * SHORT name, then the session's reply/activity
  * compressed to ONE line at the right of the name, and the age at the far
  * right. The fold already flattens whitespace, so a multi-paragraph reply
  * can never wrap the row; a summary that merely repeats the name (an
@@ -132,7 +132,7 @@ function AgentViewRowLine({
   spinnerTime: number
 }): React.ReactNode {
   const presentation = STATUS_PRESENTATION[row.status]
-  // CC parity: the attached session with no title shows as "current
+  // The attached session with no title shows as "current
   // session", and a session that never did anything shows
   // "send a prompt to start" instead of a dash.
   const untitled = row.title === 'untitled'
@@ -194,7 +194,7 @@ export function AgentView({
   approval: ApprovalSnapshot | null
   onApprove: (outcome: 'allowed-once' | 'rejected') => void
   /** Set when the view was opened by backgrounding the attached session
-   *  (← / `/bg`): the view shows CC's "conversation moved to the
+   *  (← / `/bg`): the view shows a "conversation moved to the
    *  background" notice and the final Esc RETURNS to that conversation
    *  instead of merely closing. */
   returnSessionId?: string
@@ -238,7 +238,7 @@ export function AgentView({
     return () => clearInterval(timer)
   }, [])
 
-  // CC parity: working rows animate their glyph (the `·✢*✶✻✽` cycle). The
+  // Working rows animate their glyph. The
   // shared clock only runs while at least one row is working and pauses
   // otherwise, so an idle view costs no extra ticks.
   const workingCount = agentRows.filter(row => row.status === 'working').length
@@ -503,7 +503,7 @@ export function AgentView({
       if (focused !== undefined) attach(focused)
     } else if (input === ' ' && dispatchText.length === 0) {
       // Space opens the peek panel for the focused row; with text in the
-      // input it types a space (CC parity).
+      // input it types a space.
       setPeekOpen(true)
     } else if (key.ctrl && input === 'x') {
       if (focused !== undefined) stop(focused)
@@ -511,7 +511,7 @@ export function AgentView({
       setRenameText(focused.title)
       setMode('rename')
     } else if (key.ctrl && input === 'c') {
-      // CC parity: Ctrl+C clears the dispatch input, twice exits.
+      // Ctrl+C clears the dispatch input, twice exits.
       if (dispatchText.length > 0) setDispatchText('')
       else onClose()
     } else if (input === '?') {
@@ -519,7 +519,7 @@ export function AgentView({
     } else if (key.escape) {
       if (dispatchText.length > 0) setDispatchText('')
       else if (returnSessionId !== undefined) {
-        // CC parity: the final Esc returns to the conversation that was
+        // The final Esc returns to the conversation that was
         // backgrounded (the view's return target), not just closes.
         runAction(async () => {
           await channel.attachToAgent(returnSessionId)
@@ -549,7 +549,7 @@ export function AgentView({
   const previewWidth = splitPreview ? Math.min(56, Math.floor(columns * 0.42)) : columns
   const listWidth = Math.max(20, columns - (splitPreview ? previewWidth : 0))
 
-  // CC-style header: title line, then "model · cwd", then the state counts.
+  // Header: title line, then "model · cwd", then the state counts.
   const counts = [t('agentview-count-awaited', { n: agentRows.filter(row => row.status === 'needs-input').length })]
   counts.push(t('agentview-count-working', { n: agentRows.filter(row => row.status === 'working').length }))
   counts.push(t('agentview-count-completed', { n: agentRows.filter(row => row.status === 'completed').length }))

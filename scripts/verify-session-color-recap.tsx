@@ -191,7 +191,7 @@ function makeChannel() {
     listSessions: async () => [],
     setResumeTarget() {},
     setActivityFrames: () => true,
-    activityFrames: 'claude',
+    activityFrames: 'moon8',
     runExternalCommand: async () => '',
     mcpStatus: () => [],
     exportSession: () => null,
@@ -300,6 +300,7 @@ check('无参 /color 打开调色板选择器', await settled(() => screenText()
 check('选择器聚焦当前色（reset 后无当前色 → 首行 red）', await settled(() => /❯[^\n]*● red/u.test(screenText())), screenText().split('\n').find(l => l.includes('●')) ?? '')
 stdin.write('\x1b[B') // ↓：red → orange
 check('方向键移动焦点到 orange', await settled(() => /❯[^\n]*● orange/u.test(screenText()), { timeoutMs: 10000 }))
+// 固定窗:墙钟 等 Chat 模态 Enter 的 80ms 去重窗口（lastModalEnterAtRef）过期。
 // Chat 对模态 Enter 有 80ms 去重（lastModalEnterAtRef，防 \r\n 双事件）：
 // 本 harness 处理快时，打开 picker 的 Enter 与应用 Enter 落在同一窗口内，
 // 第二个 \r 会被吞掉（Esc 不受影响，实测 picker 活着但不应用）。留出

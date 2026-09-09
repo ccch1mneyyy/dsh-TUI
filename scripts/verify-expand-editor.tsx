@@ -208,7 +208,7 @@ const dragRange = (from: number, to: number, row: number) => {
 }
 
 try {
-  await sleep(400)
+  await sleep(400) // 固定窗:pacing 等首帧上屏，无单一可轮询锚点
   stdin.write('hello draft')
   check('A0 输入渲染', await settled(() => screenHas('hello draft')))
   check('A0 ⛶ 按钮在输入行', screenHas('⛶'))
@@ -449,23 +449,19 @@ try {
     },
   )
   try {
-    await sleep(400)
+    await sleep(400) // 固定窗:pacing 等首帧上屏，无单一可轮询锚点
     stdin2.write('plain text')
     check('B0 关闭态输入正常', await settled2(() => screenHas2('plain text')))
     check('B1 ⛶ 入口不渲染', !screenHas2('⛶'))
     stdin2.write(CTRL_SHIFT_E)
-    await sleep(500)
+    await sleep(500) // 固定窗:探针 关闭态下快捷键不得展开；条件本就成立，轮询立即返回等于没测
     check('B1 快捷键不展开', !screenHas2('Draft editor'))
     check('B1 文本未被误动', screenHas2('plain text'))
   } finally {
     app2.unmount()
   }
-  async function settled2(cond: () => boolean): Promise<boolean> {
-    for (let i = 0; i < 40; i++) {
-      if (cond()) return true
-      await sleep(50)
-    }
-    return cond()
+  function settled2(cond: () => boolean): Promise<boolean> {
+    return settled(cond, { timeoutMs: 2000 })
   }
 }
 

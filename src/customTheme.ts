@@ -5,7 +5,7 @@
  *
  * ```json
  * { "name": "sakura", "displayName": "Sakura Pink", "base": "dark",
- *   "colors": { "claude": "#FF9EC7", "text": "#E8E6E0" } }
+ *   "colors": { "accent": "#FF9EC7", "text": "#E8E6E0" } }
  * ```
  *
  * `base` is required (`light`/`dark`/`dark-ansi`) and selects the built-in
@@ -22,7 +22,15 @@
 
 import { readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { getTheme, AUTO_THEME_NAME, type Theme } from './theme.js'
+import {
+  getTheme,
+  AUTO_THEME_NAME,
+  isThemeColorKey,
+  normalizeThemeKey,
+  isRetiredThemeKey,
+  type Theme,
+  type ThemeColorKey,
+} from './theme.js'
 import { DATA_DIR } from './utils/paths.js'
 
 /** The base palettes a user theme may overlay. */
@@ -88,9 +96,9 @@ export function isThemeBase(value: unknown): value is ThemeBase {
   return typeof value === 'string' && THEME_BASE_NAMES.includes(value as ThemeBase)
 }
 
-/** Whether a value is an own key of the complete Theme contract. */
-export function isThemeKey(value: unknown): value is keyof Theme {
-  return typeof value === 'string' && Object.prototype.hasOwnProperty.call(getTheme('dark'), value)
+/** Whether a value is a canonical or deprecated Theme input key. */
+export function isThemeKey(value: unknown): value is ThemeColorKey {
+  return isThemeColorKey(value)
 }
 
 /**
@@ -198,7 +206,9 @@ export function parseCustomTheme(
   // values are skipped per key (warned) instead of killing the theme.
   const colors: Partial<Theme> = {}
   for (const [key, value] of Object.entries(colorsRaw)) {
-    if (!isThemeKey(key)) {
+    if (isRetiredThemeKey(key)) continue
+    const normalizedKey = isThemeKey(key) ? normalizeThemeKey(key) : undefined
+    if (normalizedKey === undefined) {
       warn(`theme "${fileName}": unknown color key "${key}" skipped`)
       continue
     }
@@ -208,7 +218,9 @@ export function parseCustomTheme(
       )
       continue
     }
-    colors[key as keyof Theme] = value
+    // Canonical names win over aliases regardless of JSON property order.
+    if (normalizedKey !== key && Object.prototype.hasOwnProperty.call(colors, normalizedKey)) continue
+    colors[normalizedKey] = value
   }
   return { name, displayName, base, colors, file: fileKey }
 }

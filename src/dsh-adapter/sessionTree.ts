@@ -1,3 +1,5 @@
+import type { SessionTreeData, TreeNode, TreeEntry, TreeEntryKind, SessionTreeMeta, SessionRewindFacts, TurnRange } from '../adapter/ports/channel-session.js'
+export type { SessionTreeData, TreeNode, TreeEntry, TreeEntryKind, SessionTreeMeta, SessionRewindFacts, TurnRange } from '../adapter/ports/channel-session.js'
 /**
  * Session family tree — the model behind the /tree screen
  * (pi's Session Tree ported to DSH's cross-session fork model).
@@ -16,39 +18,9 @@
  */
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
 
-/** Displayable entry kinds (a subset of ChatRow kinds, plus fork structure). */
-export type TreeEntryKind = 'user' | 'assistant' | 'tool' | 'compact' | 'interrupt' | 'notice'
-
 /** Filter modes cycled in the tree screen (pi parity, minus labels). */
 export type TreeFilter = 'default' | 'no-tools' | 'user-only' | 'all'
 export const TREE_FILTERS: readonly TreeFilter[] = ['default', 'no-tools', 'user-only', 'all']
-
-/** One displayable log entry; identity = (sessionId, seq). */
-export interface TreeEntry {
-  readonly sessionId: string
-  /** Source event seq inside that session's log (the fork anchor). */
-  readonly seq: number
-  readonly kind: TreeEntryKind
-  /** One-line preview (whitespace folded, capped). */
-  readonly text: string
-  /** Uncapped searchable text (kind + tool name + content). */
-  readonly searchText: string
-  /** Event wall-clock time. */
-  readonly time: number
-  /** Tool outcome for kind 'tool' (settled by tool/result during extraction). */
-  readonly toolStatus?: 'running' | 'ok' | 'error'
-  /** Extra marker (e.g. `aborted` for chunk-only assistant text). */
-  readonly label?: string
-  /** True on entries of the log's OWN first turn (a complete log's turn 0).
-   *  Only USER entries among them are unrewindable (dropping turn 0 needs
-   *  boundary -1, "cannot rewind to the very first message"), so the screen
-   *  refuses those up front instead of failing at confirm time; non-user
-   *  turn-0 entries rewind fine (a mid-turn cut at their step's step/end, or
-   *  turn 0's closing turn/end). Never set on a truncated tail: its first
-   *  VISIBLE turn rewinds fine against the full log, which is where
-   *  rewindToNode computes boundaries. */
-  readonly firstTurn?: boolean
-}
 
 /** One family member's log, as channel.buildSessionTree gathered it. */
 export interface FamilySession {
@@ -78,62 +50,6 @@ export interface FamilySession {
   readonly tailComplete?: boolean
 }
 
-export interface TreeNode {
-  /** `${sessionId}:${seq}`, or `${sessionId}:head` for a placeholder. */
-  readonly id: string
-  /** Null only on a session's placeholder node (empty fork / unreadable log). */
-  readonly entry: TreeEntry | null
-  /** Session whose chain this node belongs to. */
-  readonly sessionId: string
-  /** True on a session chain's first node (renders the fork/session marker). */
-  branchHead: boolean
-  children: TreeNode[]
-}
-
-export interface SessionTreeData {
-  readonly roots: readonly TreeNode[]
-  /** Node ids on the path from the family root to the live tip (`•` marker). */
-  readonly activePath: ReadonlySet<string>
-  /** Live session's last node (initial cursor target). */
-  readonly activeLeafId: string | null
-  /** Per-session display facts (branch-head labels in the screen). */
-  readonly sessions: ReadonlyMap<string, SessionTreeMeta>
-  /** Per-session rewind UX facts (drop-turn warning, branch-adopt target). */
-  readonly rewindFacts: ReadonlyMap<string, SessionRewindFacts>
-  /** True when the family exceeded a cap and distant branches were dropped. */
-  readonly truncated: boolean
-  readonly sessionCount: number
-}
-
-/** One own turn of a session, as far as the loaded events show it. */
-export interface TurnRange {
-  /** turn/start seq. */
-  readonly start: number
-  /** turn/end seq, or the last loaded event's seq while the turn is open. */
-  readonly end: number
-  /** Displayable own entries inside (start, end]. */
-  readonly entries: number
-  /** The turn/end was seen (an open turn's end is only the loaded tail). */
-  readonly closed: boolean
-}
-
-/** Per-session rewind UX facts, derived from the loaded events at build time. */
-export interface SessionRewindFacts {
-  /** Own turns in seq order. A turn whose start was trimmed away (coverage /
-   *  budget head cut) has no range — its entries find no match and the
-   *  confirm UX stays silent rather than guessing. */
-  readonly turns: readonly TurnRange[]
-  /** Own entries displayed for this session. */
-  readonly ownEntries: number
-  /** The loaded events reach the log tip (see FamilySession.tailComplete). */
-  readonly tailComplete: boolean
-  /** Adopt-this-branch fork target: the log's last turn/end seq. Only set
-   *  when tailComplete holds and a closed turn exists — a tail-cut read's
-   *  last turn/end is NOT the branch tip, and forking there would silently
-   *  drop the unseen tail the user means to keep. */
-  readonly tipBoundary?: number
-}
-
 /** What dropping a user-message pick's turn removes (the confirm warning). */
 export interface DropTurnInfo {
   /** Own entries of the session inside the dropped turn. */
@@ -160,15 +76,6 @@ export function droppedTurnInfo(data: SessionTreeData, entry: TreeEntry): DropTu
     droppedEntries: turn.entries,
     coversBranch: facts.tailComplete && facts.ownEntries > 0 && turn.entries === facts.ownEntries,
   }
-}
-
-export interface SessionTreeMeta {
-  readonly title?: string
-  readonly createdAt: number
-  readonly live: boolean
-  readonly unreadable: boolean
-  /** Log unread because the browse budget was spent (placeholder node). */
-  readonly unloaded: boolean
 }
 
 /** One flattened, render-ready row with its tree-drawing geometry. */

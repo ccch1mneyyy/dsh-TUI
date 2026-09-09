@@ -6,7 +6,7 @@ import { Divider } from './design-system/Divider.js'
 import { ExitButton } from './SubagentDashboard.js'
 import { isPlainReturnInput } from '../utils/modifiers.js'
 import { toolNameColor } from './messages/AssistantToolUseMessage.js'
-import { getCliHighlightPromise } from '../cc/cliHighlight.js'
+import { getCliHighlightPromise } from '../terminal-utils/cliHighlight.js'
 import { isMinimalMode } from '../minimalMode.js'
 import type { Theme } from '../theme.js'
 
@@ -193,7 +193,7 @@ export function SubagentDetailScene({
           onClick={() => setPage(name)}
           backgroundColor={!active ? 'userMessageBackgroundHover' : undefined}
         >
-          <Text color={active ? 'claude' : undefined} bold={active} inverse={active}>
+          <Text color={active ? 'accent' : undefined} bold={active} inverse={active}>
             {` ${label} `}
           </Text>
         </Box>

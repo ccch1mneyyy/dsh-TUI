@@ -96,13 +96,13 @@ const instance = await render(
   }),
   { stdout, stderr, stdin, exitOnCtrlC: false, patchConsole: false },
 )
-// 首帧挂载 pacing：等 React 树完成首次渲染与输入监听挂接，无单一可观测条件。
+// 固定窗:pacing 等首帧——React 树首次渲染与输入监听挂接无单一可观测条件。
 await sleep(600)
 
-// 按键间 pacing：每步移动/插入后的光标位置对外不可观测（stdout 被丢弃），
-// 只有最终 submit 可断言——步间保留固定窗口。
 const feed = async seq => {
   stdin.write(seq)
+  // 固定窗:pacing 按键步间——每步移动/插入后的光标位置对外不可观测
+  // （stdout 被丢弃），只有最终 submit 可断言。
   await sleep(250)
 }
 

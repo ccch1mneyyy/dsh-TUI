@@ -166,7 +166,7 @@ const stdoutB = new (class extends Writable {
 })()
 const stdinB = new FakeStdin(), stderrB = new FakeStderr()
 inst.unmount()
-await sleep(150)
+await sleep(150) // 固定窗:pacing 卸载与下一个实例挂载之间的步间，无可观测完成条件
 const instB = await render(
   <AlternateScreen>
     <PageMargin>
@@ -203,12 +203,14 @@ for (let turn = 1; turn <= 8; turn++) {
 }
 const chatListeners = new Set<() => void>()
 const channel: any = {
+  // 探针确定性：鲸鱼欢迎期闲置动画（默认开）不进本探针的测量窗口。
+  whaleIdle: false,
   version: 0, rows: chatRows, status: 'idle', sessionTitle: 'probe', agentId: 'probe',
   model: 'deepseek-v4-flash', provider: 'deepseek', reasoningEffort: 'max', effortLevels: [],
   tokens: { input: 0, output: 0 }, cwd: '/tmp/demo', displayCwd: '/tmp/demo', gitBranch: 'main',
   working: false, spinnerMode: 'requesting', responseChars: 0, activeToolCount: 0, turnStart: 0,
   pending: [], commandList: LOCAL_COMMANDS, notifications: [], mode: { plan: false, sandbox: undefined },
-  activityFrames: 'claude', agentPreset: undefined, subagents: [], lastUserText: '问题 8',
+  activityFrames: 'moon8', agentPreset: undefined, subagents: [], lastUserText: '问题 8',
   scrollGutter: 'timeline',
   subscribe(cb: () => void) { chatListeners.add(cb); return () => chatListeners.delete(cb) as unknown as void },
   submit: () => {}, cancel: () => {}, clear: () => {}, notify: () => {},
@@ -218,7 +220,7 @@ const channel: any = {
   commandCompletions: (input: string) => completeCommands(input),
 }
 instB.unmount()
-await sleep(150)
+await sleep(150) // 固定窗:pacing 卸载与下一个实例挂载之间的步间，无可观测完成条件
 const instC = await render(
   <AlternateScreen>
     <PageMargin>
@@ -235,6 +237,8 @@ function linesC(): string[] {
   return Array.from({ length: CHAT_ROWS }, (_, y) => termC.buffer.active.getLine(termC.buffer.active.baseY + y)?.translateToString(true) ?? '')
 }
 await settle(() => linesC().some(l => l.trimStart().startsWith('❯')))
+// 固定窗:待迁移 等整帧（含滚动轨）画完；同一个窗口服务下面 4 条断言与
+// railRows 快照，拆成单条 settled 会改语义
 await sleep(250)
 const railRows = Array.from({ length: CHAT_ROWS }, (_, y) => cellAtC(y, 98) !== '' || cellAtC(y, 99) !== '')
 const promptRow = linesC().findIndex(l => l.trimStart().startsWith('❯'))
@@ -251,7 +255,7 @@ check('Chat：左缘 0/1 列恒空白（文本不越界）',
 // 的 alt-screen 状态探测（instances.size !== 1）落空、按 inline 路径写帧
 // 会丢首行——真机只有一个实例，测试里先后串行即可。
 instC.unmount()
-await sleep(150)
+await sleep(150) // 固定窗:pacing 卸载与对照组挂载之间的步间，无可观测完成条件
 const term2 = new XTerm({ cols: COLS, rows: ROWS, scrollback: 0, allowProposedApi: true })
 const stdout2 = new (class extends Writable {
   columns = COLS; rows = ROWS; isTTY = true

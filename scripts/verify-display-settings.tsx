@@ -388,7 +388,7 @@ async function renderToolBackground(toolBackground: 'none' | 'subtle' | 'strong'
     <ThemeProvider theme="dark">
       <AssistantToolUseMessage
         tool={tool as never}
-        addMargin={false}
+        marginTopOnTurn={false}
         verbose={false}
         toolBackground={toolBackground}
       />

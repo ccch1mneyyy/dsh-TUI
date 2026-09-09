@@ -9,13 +9,17 @@ dsh-TUI provides three Gentle Mist Blue palettes, plus an `auto` pseudo-theme:
 | Name | Purpose |
 | --- | --- |
 | `auto` | Pseudo-theme: follows the system/terminal background, resolving to `light` or `dark` |
-| `light` | Warm-white surfaces, ink body text, and mist-blue interaction color |
+| `light` | White panels, ink body text, and mist-blue interaction color |
 | `dark` | Dark-terminal adaptation with warm-gray text and soft blue accents |
 | `dark-ansi` | Compatibility fallback using only the 16 ANSI colors |
 
 Without an explicit choice, the TUI queries the terminal background with OSC
 11 and selects `light` or `dark`. It falls back to `dark` when the terminal does
 not answer.
+
+Light-theme panels, tool cards, and image previews use white (`#FFFFFF`) surfaces by
+default; image previews use neutral borders. Dark palettes and accent colors are
+unchanged. This does not modify the terminal's own background or wallpaper.
 
 `auto` turns that one-shot startup detection into a standing choice: it is a
 valid value for `/theme`, `DSH_TUI_THEME`, and `~/.dsh-tui/theme.json`. Selecting
@@ -55,8 +59,12 @@ palette and overrides a subset of its colors:
   "displayName": "Sakura",
   "base": "dark",
   "colors": {
-    "claude": "#FF9EC7",
-    "claudeShimmer": "#FFC0D5",
+    "accent": "#FF9EC7",
+    "accentShimmer": "#FFC0D5",
+    "activity": "#7DA1DE",
+    "activityShimmer": "#ABC2EC",
+    "mascotBody": "#D98A63",
+    "inputBackground": "#000000",
     "permission": "#FFB3CC",
     "promptBorder": "#B08B99",
     "text": "#E8E6E0",
@@ -97,7 +105,7 @@ export function apply(ctx: Context): void {
     name: 'my-plugin:night',
     displayName: 'Night',
     base: 'dark',
-    colors: { claude: '#88AAFF', selectionBg: '#334466' },
+    colors: { accent: '#88AAFF', selectionBg: '#334466' },
   }, ctx)
 }
 ```
@@ -123,6 +131,17 @@ Common override groups:
 
 Diff semantics outrank syntax colors: changed words always render in
 `diffAddedWord` / `diffRemovedWord`; syntax colors apply to unchanged text only.
+
+`accent`, `accentShimmer`, `activity`, `activityShimmer`, `mascotBody`, and
+`inputBackground` are the current semantic keys. Older theme files and plugin
+descriptors using `claude`, `claudeShimmer`,
+`claudeBlue_FOR_SYSTEM_SPINNER`, `claudeBlueShimmer_FOR_SYSTEM_SPINNER`,
+`clawd_body`, or `clawd_background` are still accepted and mapped to the
+corresponding semantic key. Resolved themes expose semantic keys only; new
+themes should use the current names.
+
+The former `briefLabelYou` key maps to `userPromptLabel`. Unused palette slots
+from older releases are ignored; the remaining valid color overrides still apply.
 
 ## Color formats
 

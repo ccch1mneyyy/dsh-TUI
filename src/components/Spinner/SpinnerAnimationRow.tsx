@@ -2,26 +2,36 @@ import figures from 'figures'
 import React, { useMemo, useRef } from 'react'
 import { useAnimationFrame } from '../../ink/hooks/use-animation-frame.js'
 import Box from '../../ink/components/Box.js'
-import Text from '../../ink/components/Text.js'
+import Text from '../design-system/ThemedText.js'
 import { stringWidth } from '../../ink/stringWidth.js'
-import { formatDuration, formatNumber } from '../../cc/format.js'
-import type { Theme } from '../../theme.js'
+import { formatDuration, formatNumber } from '../../terminal-utils/format.js'
+import { getTheme, type Theme } from '../../theme.js'
 import { Byline } from '../design-system/Byline.js'
 import { GlimmerMessage } from './GlimmerMessage.js'
 import { SpinnerGlyph } from './SpinnerGlyph.js'
 import type { SpinnerMode } from './spinnerMode.js'
 import { useStalledAnimation } from './useStalledAnimation.js'
-import { interpolateColor, toRGBColor } from './spinnerUtils.js'
+import { interpolateColor, parseRGB, toRGBColor } from './spinnerUtils.js'
+import { useTheme } from '../design-system/ThemeProvider.js'
 
 const SEP_WIDTH = stringWidth(' · ')
 const THINKING_BARE_WIDTH = stringWidth('thinking')
 const SHOW_TOKENS_AFTER_MS = 30_000
+const THINKING_DELAY_MS = 2800
+const THINKING_PULSE_MS = 1800
+const TOKEN_RESPONSE_MS = 220
 
-// Thinking shimmer constants (same as Claude Code).
-const THINKING_INACTIVE = { r: 153, g: 153, b: 153 }
-const THINKING_INACTIVE_SHIMMER = { r: 185, g: 185, b: 185 }
-const THINKING_DELAY_MS = 3000
-const THINKING_GLOW_PERIOD_S = 2
+function trianglePulse(time: number, period: number): number {
+  if (period <= 0) return 0
+  const phase = ((time % period) + period) % period / period
+  return phase < 0.5 ? phase * 2 : 2 - phase * 2
+}
+
+function easeToward(current: number, target: number, elapsedMs: number, responseMs: number): number {
+  if (elapsedMs <= 0) return current
+  const amount = 1 - Math.exp(-elapsedMs / responseMs)
+  return current + (target - current) * amount
+}
 
 export type SpinnerAnimationRowProps = {
   mode: SpinnerMode
@@ -47,9 +57,8 @@ export type SpinnerAnimationRowProps = {
 }
 
 /**
- * The 50ms-animated portion of the working spinner, mirroring Claude Code's
- * `Spinner/SpinnerAnimationRow.tsx` with the swarm/teammate/effort branches
- * removed. Owns `useAnimationFrame(50)` and all values derived from the
+ * The 50ms-animated portion of the working spinner. It owns
+ * `useAnimationFrame(50)` and all values derived from the
  * animation clock (frame, glimmer, token counter animation, elapsed time,
  * stalled intensity, thinking shimmer).
  */
@@ -90,47 +99,41 @@ export function SpinnerAnimationRow({
     hasActiveTools,
     reducedMotion,
   )
-  const frame = reducedMotion ? 0 : Math.floor(time / 120)
-  const glimmerSpeed = mode === 'requesting' ? 50 : 200
+  const [themeName] = useTheme()
+  const theme = getTheme(themeName)
+  const frame = reducedMotion ? 0 : Math.floor(time / 140)
+  const glimmerPeriod = mode === 'requesting' ? 1600 : 2200
   const glimmerMessageWidth = useMemo(() => stringWidth(message), [message])
-  const cycleLength = glimmerMessageWidth + 20
-  const cyclePosition = Math.floor(time / glimmerSpeed)
+  const glimmerTravel = glimmerMessageWidth + 8
+  const glimmerProgress = trianglePulse(time, glimmerPeriod)
+  const leftToRight = mode === 'requesting'
   const glimmerIndex = reducedMotion
     ? -100
     : isStalled
       ? -100
-      : mode === 'requesting'
-        ? (cyclePosition % cycleLength) - 10
-        : glimmerMessageWidth + 10 - (cyclePosition % cycleLength)
+      : leftToRight
+        ? glimmerProgress * glimmerTravel - 4
+        : (1 - glimmerProgress) * glimmerTravel - 4
   const flashOpacity =
     reducedMotion
       ? 0
       : mode === 'tool-use'
-        ? (Math.sin((time / 1000) * Math.PI) + 1) / 2
+        ? trianglePulse(time, 720)
         : 0
 
   // === Token counter animation (smooth increment, driven by 50ms clock) ===
-  const tokenCounterRef = useRef(currentResponseLength)
-  if (reducedMotion) {
-    tokenCounterRef.current = currentResponseLength
-  } else {
-    const gap = currentResponseLength - tokenCounterRef.current
-    if (gap > 0) {
-      let increment: number
-      if (gap < 70) {
-        increment = 3
-      } else if (gap < 200) {
-        increment = Math.max(8, Math.ceil(gap * 0.15))
-      } else {
-        increment = 50
-      }
-      tokenCounterRef.current = Math.min(
-        tokenCounterRef.current + increment,
+  const tokenCounterRef = useRef({ value: currentResponseLength, time })
+  const tokenElapsed = Math.max(0, time - tokenCounterRef.current.time)
+  tokenCounterRef.current.time = time
+  tokenCounterRef.current.value = reducedMotion
+    ? currentResponseLength
+    : easeToward(
+        tokenCounterRef.current.value,
         currentResponseLength,
+        tokenElapsed,
+        TOKEN_RESPONSE_MS,
       )
-    }
-  }
-  const displayedResponseLength = tokenCounterRef.current
+  const displayedResponseLength = Math.round(tokenCounterRef.current.value)
   const leaderTokens = Math.round(displayedResponseLength / 4)
   const timerText = formatDuration(elapsedTimeMs)
   const timerWidth = stringWidth(timerText)
@@ -184,16 +187,16 @@ export function SpinnerAnimationRow({
     !showTokens
 
   // === Thinking shimmer color ===
-  const thinkingElapsedSec = (time - THINKING_DELAY_MS) / 1000
   const thinkingOpacity =
     time < THINKING_DELAY_MS
       ? 0
-      : (Math.sin((thinkingElapsedSec * Math.PI * 2) / THINKING_GLOW_PERIOD_S) +
-          1) /
-        2
-  const thinkingShimmerColor = toRGBColor(
-    interpolateColor(THINKING_INACTIVE, THINKING_INACTIVE_SHIMMER, thinkingOpacity),
-  )
+      : trianglePulse(time - THINKING_DELAY_MS, THINKING_PULSE_MS)
+  const thinkingBase = parseRGB(theme[messageColor])
+  const thinkingHighlight = parseRGB(theme[shimmerColor])
+  const thinkingShimmerColor =
+    thinkingBase && thinkingHighlight
+      ? toRGBColor(interpolateColor(thinkingBase, thinkingHighlight, thinkingOpacity))
+      : shimmerColor
 
   // === Build status parts ===
   const parts = [

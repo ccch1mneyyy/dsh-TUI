@@ -75,12 +75,14 @@ const rows: any[] = [
 
 const listeners = new Set<() => void>()
 const channel: any = {
+  // 探针确定性：鲸鱼欢迎期闲置动画（默认开）不进本探针的测量窗口。
+  whaleIdle: false,
   version: 0, rows, status: 'idle', sessionTitle: 'probe', agentId: 'probe',
   model: 'deepseek-v4-flash', provider: 'deepseek', reasoningEffort: 'max', effortLevels: [],
   tokens: { input: 0, output: 0 }, cwd: '/tmp/demo', displayCwd: '/tmp/demo', gitBranch: 'main',
   working: true, spinnerMode: 'requesting', responseChars: 0, activeToolCount: 1, turnStart: Date.now(),
   pending: [], commandList: LOCAL_COMMANDS, notifications: [], mode: { plan: false, sandbox: undefined },
-  activityFrames: 'claude', agentPreset: undefined, subagents: [], lastUserText: '帮我跑一下测试',
+  activityFrames: 'moon8', agentPreset: undefined, subagents: [], lastUserText: '帮我跑一下测试',
   scrollGutter: 'timeline', whale: true,
   subscribe(cb: () => void) { listeners.add(cb); return () => listeners.delete(cb) },
   emit() { channel.version++; for (const cb of listeners) cb() },
@@ -130,8 +132,8 @@ channel.emit()
 // 用户空文本行不受影响（kind 限定）：一个空 user 行仍渲染其气泡形状
 rows.push({ id: 5, kind: 'user', text: '' })
 channel.emit()
-// 稳定性探针（界面必须仍存活）：❯ 在 emit 前就在屏上，轮询会立即返回，
-// 测不到「没有崩掉」——保留固定窗口让潜在崩溃有时间显形。
+// 固定窗:探针 断言界面仍存活；❯ 在 emit 前就在屏上，轮询会立即返回，
+// 测不到「没有崩掉」——留一个观察窗让潜在崩溃显形。
 await sleep(400)
 check('空 user 行不受 assistant 过滤影响（无崩溃、界面存活）', screenLines().some(l => l.includes('❯')))
 

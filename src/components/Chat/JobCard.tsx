@@ -66,9 +66,9 @@ function clipLine(text: string, maxWidth: number): string {
  * tail of the agent's own job_output results as they stream through the
  * transcript.
  */
-export function JobCard({ job, addMargin, onClick }: {
+export function JobCard({ job, marginTopOnTurn, onClick }: {
   job: JobRow
-  addMargin: boolean
+  marginTopOnTurn: boolean
   onClick?(): void
 }): React.ReactNode {
   const settled = job.status === 'completed' || job.status === 'failed' || job.status === 'killed'
@@ -92,15 +92,15 @@ export function JobCard({ job, addMargin, onClick }: {
   // 的 `  ⎿ ` 槽位一致。
   return <Box
     flexDirection="column"
-    marginTop={addMargin ? 1 : 0}
+    marginTop={marginTopOnTurn ? 1 : 0}
     ref={viewportRef}
     onClick={onClick}
     onMouseEnter={clickable ? () => setHovered(true) : undefined}
     onMouseLeave={clickable ? () => setHovered(false) : undefined}
   >
     <Box flexDirection="row" gap={1}>
-      <Text color={hovered && clickable ? 'claude' : info.color}>{info.glyph}</Text>
-      <Text bold color={hovered && clickable ? 'claude' : undefined}>
+      <Text color={hovered && clickable ? 'accent' : info.color}>{info.glyph}</Text>
+      <Text bold color={hovered && clickable ? 'accent' : undefined}>
         {`${t('jobs-card-prefix')}${job.id}`}
       </Text>
       <Text dimColor>·</Text>

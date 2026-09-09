@@ -5,7 +5,7 @@
  * 2. hovering over the chip pops a bordered peek CARD (input stays one
  *    row); clicking a card row expands the block for editing
  * 3. `▾` prefix folds the whole input; chip click expands again
- * 4. typing NEVER expands the block (CC behavior) — the caret edits the
+ * 4. typing NEVER expands the block  — the caret edits the
  *    text around it; Esc expands; Enter submits head+block+tail
  * 5. text typed BEFORE the block stays visible and is submitted with it
  * 6. Backspace at the block's tail deletes the WHOLE block in one key
@@ -71,6 +71,8 @@ const findText = (s: string): { col: number; row: number } | null => termTest.fi
 const listeners = new Set<() => void>()
 let submitted = ''
 const channel: any = {
+  // 探针确定性：鲸鱼欢迎期闲置动画（默认开）不进本探针的测量窗口。
+  whaleIdle: false,
   version: 0,
   rows: [],
   status: 'idle',
@@ -108,7 +110,7 @@ const instance = await render(
   </AlternateScreen>,
   { stdout: new FakeStdout(), stdin: stdinObj, stderr: new FakeStderr(), exitOnCtrlC: false, patchConsole: false },
 )
-// 首帧挂载 pacing：等 React 树完成首次渲染与输入监听挂接，无单一可观测条件。
+// 固定窗:pacing 等首帧——React 树首次渲染 + 输入监听挂接，无单一可观测锚点。
 await sleep(600)
 
 let failed = 0
@@ -152,9 +154,9 @@ try {
   if (cardPos) click(cardPos.col + 1, cardPos.row + 1)
   check('card click expands the block for editing', await settled(() => screenHas('EIGHTH_MARKER')))
   // Stability probe (must NOT change): a settle would return immediately,
-  // so give any wrong repaint a fixed window to show up instead.
+  // so give any wrong repaint a window to show up instead.
   hover(1, 1)
-  await sleep(400)
+  await sleep(400) // 固定窗:探针 鼠标离开后展开状态不得塌回
   check('expansion stays after the mouse leaves', screenHas('EIGHTH_MARKER'))
 
   // 3. Fold the whole input again via the ▾ prefix (Up arrow ×11 walks the
@@ -173,9 +175,9 @@ try {
   // input shows the TAIL window (EIGHTH_MARKER) — and no chip.
   check('chip click expands the block', await settled(() => screenHas('EIGHTH_MARKER') && !screenHas('▸ 12 lines')))
   // Stability probe (must NOT change): a settle would return immediately —
-  // keep a fixed window for a wrong repaint to surface.
+  // the window is what lets a wrong repaint surface.
   hover(1, 1)
-  await sleep(300)
+  await sleep(300) // 固定窗:探针 鼠标离开后 chip 展开状态不得塌回
   check('chip-expanded stays after the mouse leaves', screenHas('EIGHTH_MARKER'))
   // Fold back for the typing test below (Up ×11 walks the caret to line 0
   // where the ▾ prefix is visible again).
@@ -187,11 +189,10 @@ try {
     check('▾ prefix folds again', await settled(() => screenHas('▸ 12 lines')))
   }
 
-  // 4. Typing NEVER expands the block (CC behavior): the char lands after
-  //    the chip and the block stays folded; Backspace removes it ('tail' /
-  //    'zzctrl' are markers unique to typed text — 'x'/'ab' would
-  //    false-positive on the splash logo / leftover text); Esc expands;
-  //    Enter submits. Batch Backspace (several keys in one stdin read)
+  // 4. Typing NEVER expands the block : the char lands after
+  //    the chip and the block stays folded; Backspace removes it. Use
+  //    unique markers: 'tail' also matches startup tips containing 'details'.
+  //    Esc expands; Enter submits. Batch Backspace (several keys in one stdin read)
   //    must delete one char per key even with a block present.
   stdinObj.write('zzctrl')
   await settle(() => screenHas('zzctrl'))
@@ -200,11 +201,12 @@ try {
     await settled(() => screenHas('zzc') && !screenHas('zzctrl') && screenHas('▸ 12 lines')))
   stdinObj.write('\x7f'.repeat(3))
   await settle(() => !screenHas('zzc'))
-  stdinObj.write('tail')
-  check('typing keeps the block folded', await settled(() => screenHas('▸ 12 lines') && screenHas('tail')))
-  stdinObj.write('\x7f'.repeat(4))
-  check('Backspace removes the typed char, block stays folded',
-    await settled(() => screenHas('▸ 12 lines') && !screenHas('tail')))
+  const typedTail = 'TYPED_TAIL_MARKER'
+  stdinObj.write(typedTail)
+  check('typing keeps the block folded', await settled(() => screenHas('▸ 12 lines') && screenHas(typedTail)))
+  stdinObj.write('\x7f'.repeat(typedTail.length))
+  check('Backspace removes the typed text, block stays folded',
+    await settled(() => screenHas('▸ 12 lines') && !screenHas(typedTail)))
   stdinObj.write('\x1b')
   check('Esc expands the block (does not clear)', await settled(() => screenHas('EIGHTH_MARKER') && !screenHas('▸ 12 lines')))
   // Esc on the EXPANDED big input folds it back into a block — the toggle
@@ -235,9 +237,9 @@ try {
   check('Backspace deletes the whole block',
     await settled(() => !screenHas('▸ 12 lines') && !screenHas('fold-line-0')))
   // Negative probe (nothing may be submitted): a settle has no state change
-  // to wait for — keep a fixed window for a wrong submit to surface.
+  // to wait for — the window is what lets a wrong submit surface.
   stdinObj.write('\r')
-  await sleep(400)
+  await sleep(400) // 固定窗:探针 块删除后 Enter 不得提交
   check('Enter after block delete submits nothing', submitted === 'sentinel')
 
   // 7. Small (non-foldable) inputs keep the classic Esc = clear behavior.

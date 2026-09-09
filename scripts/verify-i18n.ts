@@ -10,24 +10,31 @@
  *      前缀家族的条目。拼接家族（tOr(`cmd-desc-${name}`) 等）按前缀放行。
  * 运行：node --import tsx/esm scripts/verify-i18n.ts
  */
-import { execSync } from 'node:child_process'
-import { readFileSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
+import { existsSync, readFileSync } from 'node:fs'
 import { i18nDict, type I18nText } from '../src/i18n.js'
+import { SPINNER_VERBS } from '../src/terminal-utils/spinnerVerbs.js'
 
 // 运行时拼接的 key 前缀（新增拼接家族时在此登记，并附拼接点）：
 //   cmd-desc-*    src/commands.ts        tOr(`cmd-desc-${command.name}`)
 //   traj-sort-*   src/screens/TrajectoryScene.tsx  t(`traj-sort-${sort}`)
 //   traj-proj-*   src/screens/TrajectoryScene.tsx  t(`traj-proj-${projection}`)
 //   logo-drift-*  src/components/LogoV2.tsx        tOr(`logo-drift-${kind}`)
+//   spinner-verb-* src/components/WorkingSpinner.tsx tOr(`spinner-verb-${verb}`)
 //   tree-filter-* src/screens/SessionTree.tsx      t(`tree-filter-${filter}`)
 //   tree-kind-*   src/screens/SessionTree.tsx      t(`tree-kind-${entry.kind}`)
 //   preset-name-* / preset-desc-*   src/dsh-adapter/channel.ts   tOr(`preset-name-${preset.id}`) — built-in preset display text
-const DYNAMIC_PREFIXES = ['cmd-desc-', 'traj-sort-', 'traj-proj-', 'logo-drift-', 'tree-filter-', 'tree-kind-', 'preset-name-', 'preset-desc-']
+const DYNAMIC_PREFIXES = ['cmd-desc-', 'traj-sort-', 'traj-proj-', 'logo-drift-', 'spinner-verb-', 'tree-filter-', 'tree-kind-', 'preset-name-', 'preset-desc-']
 
 let failures = 0
 function fail(msg: string) {
   failures++
   console.error(`  ✗ ${msg}`)
+}
+
+for (const verb of SPINNER_VERBS) {
+  const key = `spinner-verb-${verb.toLowerCase()}`
+  if (i18nDict[key] === undefined) fail(`${key}: spinner verb 缺少中英文映射`)
 }
 
 function forms(text: I18nText | undefined): string[] {
@@ -67,12 +74,18 @@ for (const [key, entry] of Object.entries(i18nDict)) {
 }
 
 // ── 3：死 key（src/ 与 scripts/ 全量字面扫描 + 拼接前缀放行）──────────
-const files = execSync('git ls-files src scripts', { encoding: 'utf8' })
-  .trim().split('\n')
+const files = [...new Set(execFileSync('git', ['ls-files', '-z', '--cached', '--others', '--exclude-standard', '--', 'src', 'scripts'], { encoding: 'utf8' })
+  .split('\0'))]
   .filter(f => /\.(ts|tsx|mjs|cjs|js)$/.test(f))
+  .filter(f => existsSync(f))
   .filter(f => f !== 'src/i18n.ts' && f !== 'scripts/verify-i18n.ts')
 let corpus = ''
-for (const f of files) corpus += readFileSync(f, 'utf8')
+for (const f of files) {
+  // Worktrees may have deleted tracked files before a later commit; a missing
+  // source file cannot contribute dead-key corpus and should not fail this gate.
+  if (!existsSync(f)) continue
+  corpus += readFileSync(f, 'utf8')
+}
 for (const key of Object.keys(i18nDict)) {
   if (DYNAMIC_PREFIXES.some(p => key.startsWith(p))) continue
   if (!corpus.includes(`'${key}'`) && !corpus.includes(`"${key}"`) && !corpus.includes(`\`${key}\``)) {

@@ -1,7 +1,7 @@
 import { Event } from './event.js'
 
 /**
- * Terminal resize event. Not yet dispatched by the ported core; declared for
+ * Terminal resize event. Not yet dispatched by the renderer; declared for
  * the event-handler props surface.
  */
 export class ResizeEvent extends Event {

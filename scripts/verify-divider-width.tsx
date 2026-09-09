@@ -2,7 +2,7 @@
  * Divider available-width regression: the rule must fill the width Yoga
  * grants it instead of assuming full terminal width — nested in a narrower
  * container (the transcript beside the 2-column timeline-rail gutter) a
- * full-width rule wrapped onto a second row ("Conversation compacted"
+ * full-width rule wrapped onto a second row ("Session summary is ready"
  * notice splitting in narrow windows). Asserts a single row at the exact
  * available width, with and without the gutter, and that an explicit
  * \`width\` prop still wins.
@@ -53,7 +53,7 @@ const ruleRows = lines => lines.filter(l => l.includes('─'))
 
 // 1. Beside the 2-col gutter the titled rule fits ONE row at exactly the
 //    available width (terminal minus gutter), title centered in it.
-const guttered = await renderDivider(true, <Divider title=" Conversation compacted " />)
+const guttered = await renderDivider(true, <Divider title=" Session summary is ready " />)
 const gutteredRules = ruleRows(guttered)
 if (gutteredRules.length !== 1) {
   throw new Error('Divider wrapped onto ' + gutteredRules.length + ' rows beside the gutter:\n' + guttered.join('\n'))
@@ -61,12 +61,12 @@ if (gutteredRules.length !== 1) {
 if ([...gutteredRules[0]].length !== COLS - 2) {
   throw new Error('Divider width ' + [...gutteredRules[0]].length + ' != available ' + (COLS - 2) + ':\n' + guttered.join('\n'))
 }
-if (!gutteredRules[0].includes('Conversation compacted')) {
+if (!gutteredRules[0].includes('Session summary is ready')) {
   throw new Error('Divider lost its title when truncated to the available width:\n' + guttered.join('\n'))
 }
 
 // 2. Without the gutter the rule spans the full terminal width.
-const full = await renderDivider(false, <Divider title=" Conversation compacted " />)
+const full = await renderDivider(false, <Divider title=" Session summary is ready " />)
 const fullRules = ruleRows(full)
 if (fullRules.length !== 1 || [...fullRules[0]].length !== COLS) {
   throw new Error('Full-width divider rendered ' + fullRules.length + ' rows at width ' + (fullRules[0] ? [...fullRules[0]].length : 0) + ':\n' + full.join('\n'))

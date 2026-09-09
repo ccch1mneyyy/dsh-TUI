@@ -1,7 +1,7 @@
 import React from 'react'
 import { t } from '../i18n.js'
 import { Box, Text, useTerminalSize } from '../ui.js'
-import type { LlmModelInfo } from '../dsh-adapter/types.js'
+import type { LlmModelInfo } from '../adapter/ports/channel-view.js'
 import type { ModelGroupRow } from '../modelGroups.js'
 import { RECENTS_GROUP_PROVIDER, RECENTS_LABEL_PLACEHOLDER } from '../modelGroups.js'
 import { Pane } from './design-system/Pane.js'
@@ -10,7 +10,7 @@ import { HintLine } from './design-system/HintLine.js'
 import { listWindow } from './listWindow.js'
 
 /**
- * Model picker in the CC ModelPicker style: a permission-colored Pane with
+ * Model picker: a permission-colored Pane with
  * the rows as Select entries (❯ focus pointer, ✓ on the active row,
  * descriptions), plus the Enter/Esc hint line. The DSH agent's model is
  * fixed at creation time, so a selection notifies "restart to apply".

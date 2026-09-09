@@ -13,7 +13,7 @@
     "types": ["node"],
     "rootDir": "src",
     "outDir": "lib/types",
-    // The ported Ink core is third-party code written against looser flags;
+    // The Ink-based renderer is third-party code written against looser flags;
     // keep the vendored renderer compiling without a rewrite.
     "noUnusedLocals": false,
     "noUnusedParameters": false,

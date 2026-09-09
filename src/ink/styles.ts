@@ -375,6 +375,17 @@ export type Styles = {
   readonly opaque?: boolean
 
   /**
+   * Shade the cells already painted beneath this box before it paints:
+   * the backdrop of a modal layer. `'dim'` adds the terminal's faint
+   * attribute to every glyph under the rect, so the conversation stays
+   * legible but recedes behind a card painted later. Meant for an
+   * absolute-positioned, transparent click-catcher spanning the region a
+   * modal floats over; the modal itself is a later sibling and is not
+   * shaded. Idempotent across frames and clean-subtree blits.
+   */
+  readonly backdrop?: 'dim'
+
+  /**
    * Behavior for an element's overflow in both directions.
    * 'scroll' constrains the container's size (children do not expand it)
    * and enables scrollTop-based virtualized scrolling at render time.

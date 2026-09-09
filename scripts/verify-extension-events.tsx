@@ -62,7 +62,7 @@ process.env.DSH_TUI_LANG = 'zh'
 // 家目录隔离：touchSession/clearResumeTarget（/new 与 rewind 都会走）写
 // ~/.dsh-tui 的真实文件，必须先切到临时目录再 import src。HOME 与
 // USERPROFILE 必须成对设置（POSIX 读 HOME、Windows 读 USERPROFILE）。
-const { mkdtempSync, mkdirSync, writeFileSync } = await import('node:fs')
+const { mkdtempSync, mkdirSync, readFileSync, writeFileSync } = await import('node:fs')
 const { tmpdir } = await import('node:os')
 const { join: joinPath } = await import('node:path')
 const isolatedHome = mkdtempSync(joinPath(tmpdir(), 'dshtui-ext-events-home-'))
@@ -104,7 +104,7 @@ const [
   import('../src/dsh-adapter/channel.js'),
   import('./lib/term-test.mjs'),
 ])
-const { mountAdmitted, testManifest, DECISION_COORDINATE } = await import('../src/dsh-adapter/plugin-test-utils.js')
+const { mountAdmitted, testManifest, DECISION_COORDINATE } = await import('../scripts/lib/plugin-test-utils.js')
 const pluginHostRow = await import('../src/dsh-adapter/plugin-host.js')
 
 class FakeStdout extends Writable {
@@ -174,6 +174,7 @@ function makeEvents() {
 const stubAgentCtx = { on: () => () => {} }
 
 let forkSeq = 0
+const followupContentsByAgent = new Map<string, Array<readonly { type?: string; text?: string }[]>>()
 
 function makeAgent(id: string, sessionEvents: readonly unknown[], captured: { followupTexts: string[]; cancelCalls: number }) {
   return {
@@ -182,7 +183,11 @@ function makeAgent(id: string, sessionEvents: readonly unknown[], captured: { fo
     session: { id: `s-${id}`, seq: sessionEvents.length, events: sessionEvents, header: {} },
     ctx: stubAgentCtx,
     followup(message: { content?: readonly { type?: string; text?: string }[] }) {
-      const text = (message.content ?? []).filter(block => block?.type === 'text').map(block => block.text ?? '').join('\n')
+      const content = message.content ?? []
+      const deliveries = followupContentsByAgent.get(id) ?? []
+      deliveries.push([...content])
+      followupContentsByAgent.set(id, deliveries)
+      const text = content.filter(block => block?.type === 'text').map(block => block.text ?? '').join('\n')
       captured.followupTexts.push(text)
     },
     steer() {},
@@ -226,6 +231,19 @@ function makeServices(
       listProviders: () => [{ id: 'fake-provider' }],
       listModels: async () => [{ provider: 'fake-provider', id: 'model-00', name: 'Model 00' }],
     },
+    attachments: {
+      imageLimits: {
+        maxImageBytes: 1_000_000,
+        maxImagesPerMessage: 4,
+        maxMessageImageBytes: 4_000_000,
+        mediaTypes: ['image/png'],
+      },
+      saveImage: async (input: { data: Uint8Array; mediaType: string }) => ({
+        ref: `image-${input.data[0] ?? 0}`,
+        mediaType: input.mediaType,
+        bytes: input.data.byteLength,
+      }),
+    },
     // serviceForAgent falls back to ctx.get when no preset roster exists, so
     // a root-provided fake compaction service reaches channel.compact().
     compaction: {
@@ -257,7 +275,15 @@ const liveAgent = makeAgent('a1', makeEvents(), captured)
 agentsById.set(liveAgent.id, liveAgent)
 const channel = createChannel(ctx as never, liveAgent as never, {
   model: 'model-00', cwd: '/tmp/demo', provider: 'fake-provider', activity: false,
+  // 探针确定性：鲸鱼欢迎期闲置动画不进本探针的测量窗口。
+  whaleIdle: false,
 })
+// No settings row means there is nothing to opt into: auto recap stays off.
+// This fixture intentionally provides a partial llm catalog without stream;
+// direct recap must degrade rather than binding a missing method.
+check('absent settings defaults auto recap off', channel.autoRecapOnOpen === false)
+const unavailableRecap = await channel.recapRecent()
+check('partial llm recap degrades without throwing', unavailableRecap.summary === null && unavailableRecap.error?.includes('不可用') === true)
 
 const admitted = await mountAdmitted(ctx, 'event-export-name', testManifest({
   id: 'event-probe',
@@ -293,12 +319,12 @@ const decisionCtx = { on: subscribe }
   let secondStartedBeforeFirstDone = false
   let secondDone = false
   const disposeFirst = decisionCtx.on('tui/session-switched', async () => {
-    await sleep(120)
+    await sleep(120) // 固定窗:墙钟 模拟慢监听器的耗时窗口（对比下面 10ms 才能测出并行）
     firstDone = true
   })
   const disposeSecond = decisionCtx.on('tui/session-switched', async () => {
     secondStartedBeforeFirstDone = !firstDone
-    await sleep(10)
+    await sleep(10) // 固定窗:墙钟 第二个监听器的短耗时窗口，须在第一个 120ms 内跑完
     secondDone = true
   })
   await dispatchTuiNotification(ctx, 'tui/session-switched', {
@@ -316,7 +342,7 @@ const instance = await render(
   <Chat channel={channel as never} questionStore={new QuestionStore()} onExit={() => {}} />,
   { stdout, stdin, stderr: new FakeStderr(), exitOnCtrlC: false, patchConsole: false },
 )
-// 首帧挂载 pacing：等 React 树完成首次渲染与输入监听挂接，无单一可观测条件。
+// 固定窗:pacing 等 React 树完成首帧渲染与输入监听挂接，无单一可观测条件。
 await sleep(800)
 
 // ── 0. D-7 backstop: NO extensions row is mounted in this battery, yet an
@@ -329,8 +355,8 @@ await sleep(800)
       c.on('tui/input', () => ({ cancel: true }))
     },
   })
-  // 等未授权插件的订阅尝试注册完成：拒绝是静默的，没有可轮询的外部状态，
-  // 不给这段时间订阅根本没发生、探针会空过——保留固定窗口。
+  // 固定窗:pacing 等未授权插件的订阅尝试注册完成：拒绝是静默的，没有可轮询
+  // 的外部状态，不给这段时间订阅根本没发生、探针会空过。
   await sleep(150)
   channel.submit('穿透检查')
   check('decision guard (no extensions row): ungranted plugin subscription denied',
@@ -382,7 +408,7 @@ await sleep(800)
   // The listener resolves at ~600ms — deterministically beyond the threshold.
   const disposeSlow = decisionCtx.on('tui/input', async event => {
     if (event.text !== '慢决定') return undefined
-    await sleep(600)
+    await sleep(600) // 固定窗:墙钟 故意跨过 400ms parked 指示阈值的决定耗时
     return { cancel: true, reason: '慢否决落地' } as const
   })
   channel.submit('慢决定')
@@ -420,6 +446,7 @@ await sleep(800)
 // ── 2d. decision+delivery FIFO: a slow A never lets B overtake ──────────
 {
   const dispose = decisionCtx.on('tui/input', async event => {
+    // 固定窗:墙钟 模拟 400ms 慢决定，给后一条超车的机会（FIFO 才有得测）
     if (event.text === '慢条甲') await sleep(400)
     return undefined
   })
@@ -568,8 +595,8 @@ await sleep(800)
 
   // Double-Esc on the empty input opens the picker (3s arming window).
   stdin.write('\x1b')
-  // 两次 Esc 之间的按键 pacing：连写会被终端输入解析吞成转义序列前缀，
-  // 无可观测条件——保留固定窗口。
+  // 固定窗:pacing 两次 Esc 之间的按键步间：连写会被终端输入解析吞成转义
+  // 序列前缀，无可观测条件。
   await sleep(120)
   stdin.write('\x1b')
   const listShown = await settled(() => plainText(stdout.frames.slice(-30)).includes('消息 09'))
@@ -589,7 +616,7 @@ await sleep(800)
 
   // ↓ once moves to the first plugin mode; Enter rewinds with it.
   stdin.write('\x1b[B')
-  // 选中态是颜色高亮，ANSI 洗净后不可观测——按键间保留固定 pacing。
+  // 固定窗:pacing 按键步间：选中态是颜色高亮，ANSI 洗净后不可观测。
   await sleep(150)
   stdin.write('\r')
   check('picked mode id threaded to tui/rewind-done',
@@ -609,23 +636,23 @@ await sleep(800)
   // The section-4 rewind restored the picked message into the input for
   // re-editing: the first Esc clears it, then the double-Esc opens the
   // picker on the now-empty input.
-  // 连续 Esc 间的按键 pacing（清输入 → 武装 → 开列表）：连写会被吞成转义
+  // 连续 Esc 间的按键步间（清输入 → 武装 → 开列表）：连写会被吞成转义
   // 序列前缀；第三次 Esc 后开列表的可观测文本「消息 09」也在恢复的输入行里，
-  // 无法区分——保留固定窗口。
+  // 无法区分。
   stdin.write('\x1b')
-  await sleep(150)
+  await sleep(150) // 固定窗:pacing Esc 步间
   stdin.write('\x1b')
-  await sleep(120)
+  await sleep(120) // 固定窗:pacing Esc 步间
   stdin.write('\x1b')
-  await sleep(400)
+  await sleep(400) // 固定窗:pacing Esc 步间（等列表铺开，无可区分锚点）
   stdin.write('\r') // Enter on the newest message → veto
   check('tui/rewind-prompt cancel: reason toasted', await settled(() => notified('该消息不可回退')))
   const tail = plainText(stdout.frames.slice(-40))
   check('tui/rewind-prompt cancel: picker still open (list visible)', tail.includes('消息 09'))
   check('tui/rewind-prompt cancel: no delivery side effects', captured.followupTexts.length === forkCountBefore)
   stdin.write('\x1b') // close the picker
-  // 等收起重绘：帧是增量 diff，「列表已不可见」没有稳定的负向可观测条件
-  // ——保留固定窗口。
+  // 固定窗:pacing 等收起重绘：帧是增量 diff，「列表已不可见」没有稳定的
+  // 负向可观测条件。
   await sleep(200)
   disposePrompt()
 }
@@ -675,12 +702,14 @@ await sleep(800)
   channel.compact()
   await settle(() => parked) // the compact decision is parked on the gate
   const switched = await channel.newSession()
-  check('compact stale-drop setup: /new succeeded mid-await', switched === true)
+  check('compact phase cancellation: /new succeeded mid-decision', switched === true)
+  check('compact phase cancellation: switch immediately toasts cancellation before decision release',
+    notified('压缩进行中，已取消并切换会话'))
   release(undefined)
-  const staleToasted = await settled(() => notified('压缩已取消'))
-  check('compact stale-drop: the old session’s compaction never ran',
+  // The actively settled transaction exits silently after its cancellation;
+  // ext-compact-stale remains covered by live, non-cancelled stale paths.
+  check('compact phase cancellation: the old session’s compaction never ran',
     captured.compactCalls.length === 1, JSON.stringify(captured.compactCalls))
-  check('compact stale-drop: stale notice toasted', staleToasted)
   dispose()
 }
 
@@ -702,8 +731,8 @@ await sleep(800)
   const resumed = await channel.resumeTo('s-a1')
   check('compact ABA setup: /resume back to the origin session succeeded', resumed.ok === true)
   release(undefined)
-  // 稳定性探针（陈旧压缩不得复活）：条件在 release 前就成立，轮询会立即
-  // 返回，测不到「没有跑」——保留固定窗口。
+  // 固定窗:探针 陈旧压缩不得复活：条件在 release 前就成立，轮询会立即返回，
+  // 测不到「没有跑」。
   await sleep(400)
   check('compact ABA: id reuse does NOT revive the stale compaction',
     captured.compactCalls.length === 1, JSON.stringify(captured.compactCalls))
@@ -742,7 +771,9 @@ await sleep(800)
   let release: (value: undefined) => void = () => {}
   const gate = new Promise<undefined>(resolve => { release = resolve })
   let parked = false
+  const seenInputs: string[] = []
   const dispose = decisionCtx.on('tui/input', async event => {
+    seenInputs.push(event.text)
     if (event.text === '旧会话首条') {
       parked = true
       await gate
@@ -756,15 +787,145 @@ await sleep(800)
   const switched = await channel.newSession()
   check('enqueue origin setup: /new succeeded while the predecessor parked', switched === true)
   release(undefined)
-  // 稳定性探针（两条都不得投递）：条件在 release 前就成立，轮询会立即
-  // 返回，测不到「没被投递」——保留固定窗口。
+  // 固定窗:探针 两条都不得投递：条件在 release 前就成立，轮询会立即返回，
+  // 测不到「没被投递」。
   await sleep(500)
   check('enqueue-time origin: the parked predecessor is dropped as stale',
     !captured.followupTexts.some(text => text.includes('旧会话首条')),
     JSON.stringify(captured.followupTexts.slice(before)))
   check('enqueue-time origin: the queued follower never reaches the new session',
     captured.followupTexts.length === before, JSON.stringify(captured.followupTexts.slice(before)))
+  check('enqueue-time origin: a stale queued follower is not exposed to plugins',
+    JSON.stringify(seenInputs) === JSON.stringify(['旧会话首条']), JSON.stringify(seenInputs))
   dispose()
+}
+
+// ── 9bb. A sticky tui/input pending indicator belongs to its origin session:
+// /new dismisses one already shown, and the eventual old handled result may
+// not toast into the replacement session. ─────────────────────────────────
+{
+  let release: (value: { handled: true; notice: string }) => void = () => {}
+  const gate = new Promise<{ handled: true; notice: string }>(resolve => { release = resolve })
+  const staged = await channel.stageComposerImage(
+    { data: new Uint8Array([9]), mediaType: 'image/png' },
+    channel.stagedImageGeneration(),
+  )
+  const stagedToken = '[Image #1]'
+  const generationBeforeSwitch = channel.stagedImageGeneration()
+  let parked = false
+  const dispose = decisionCtx.on('tui/input', event => {
+    if (event.text !== '旧会话挂起通知') return undefined
+    parked = true
+    return gate
+  })
+  channel.submit('旧会话挂起通知')
+  await settle(() => parked)
+  check('pending session ownership: old indicator became visible',
+    await settled(() => notified('正在等待插件决定（tui/input）')))
+  const oldAgentId = channel.agentId
+  const probeText = '新会话订阅窗口图片探针'
+  let replacementAgentId = ''
+  let replacementGeneration = generationBeforeSwitch
+  let subscriberSubmitted = false
+  const unsubscribe = channel.subscribe(() => {
+    if (channel.agentId === oldAgentId || subscriberSubmitted) return
+    subscriberSubmitted = true
+    replacementAgentId = channel.agentId
+    replacementGeneration = channel.stagedImageGeneration()
+    channel.submit(`${probeText} ${stagedToken}`, [{ token: stagedToken, stageId: staged.stageId }])
+  })
+  const switched = await channel.newSession()
+  check('pending session ownership: /new succeeded while input decision parked', switched === true)
+  check('pending session ownership: first new-agent snapshot has a revoked image generation',
+    subscriberSubmitted && replacementGeneration > generationBeforeSwitch,
+    JSON.stringify({ subscriberSubmitted, generationBeforeSwitch, replacementGeneration }))
+  const probeDelivered = await settled(() => (followupContentsByAgent.get(replacementAgentId) ?? [])
+    .some(content => content.some(block => block.type === 'text' && block.text?.includes(probeText))))
+  const probeContent = (followupContentsByAgent.get(replacementAgentId) ?? [])
+    .find(content => content.some(block => block.type === 'text' && block.text?.includes(probeText)))
+  check('pending session ownership: synchronous subscriber cannot send the old image to the replacement',
+    probeDelivered && probeContent?.every(block => block.type !== 'image') === true,
+    JSON.stringify(probeContent))
+  const decisionNoticeVisible = (): boolean =>
+    (channel as unknown as { notifications: readonly { text: string }[] }).notifications
+      .some(item => item.text.includes('正在等待插件决定（tui/input）'))
+  // The switch drains the session-scoped decision ledger; waiting for the
+  // decision's own deadline would make this pass without any dismissal.
+  const noticeGonePromptly = await (async () => {
+    const deadline = Date.now() + 800
+    while (Date.now() < deadline) {
+      if (!decisionNoticeVisible()) return true
+      await sleep(20) // 固定窗:pacing 轮询间隔
+    }
+    return false
+  })()
+  check('pending session ownership: session swap dismissed the old sticky indicator before its deadline',
+    noticeGonePromptly, JSON.stringify({ stillVisible: decisionNoticeVisible() }))
+  release({ handled: true, notice: '旧会话插件结果不应出现' })
+  await sleep(150) // 固定窗:探针 陈旧 handled 结果不得吐进新会话，给它一个现身窗
+  check('pending session ownership: stale handled result did not toast into the new session',
+    !notified('旧会话插件结果不应出现'))
+  unsubscribe()
+  dispose()
+}
+
+// ── 9bb2. A notice must never be raised for a session that has already been
+// replaced: park a decision, switch sessions before the 400 ms threshold, then
+// assert no indicator appears afterwards (the switch cancels the replaced
+// session's timer instead of letting it flash into the new session). ──────
+{
+  let releaseLate: (value: { handled: true; notice: string }) => void = () => {}
+  const lateGate = new Promise<{ handled: true; notice: string }>(resolve => { releaseLate = resolve })
+  const disposeLate = decisionCtx.on('tui/input', event => {
+    if (event.text !== '切换前挂起') return undefined
+    return lateGate
+  })
+  channel.submit('切换前挂起')
+  await sleep(50) // 固定窗:pacing 让 400ms 阈值计时器仍处于等待中
+  await channel.newSession()
+  await sleep(600) // 固定窗:探针 越过 400ms 阈值，断言替换会话不冒出提示
+  const lateVisible = (channel as unknown as { notifications: readonly { text: string }[] }).notifications
+    .some(item => item.text.includes('正在等待插件决定（tui/input）'))
+  check('pending session ownership: replaced session never raises a late indicator', !lateVisible)
+  releaseLate({ handled: true, notice: '迟到的结果不应出现' })
+  await sleep(100) // 固定窗:pacing 给陈旧结果一个现身窗再清理监听
+  disposeLate()
+}
+
+// ── 9bb3. A retired activity preset id normalizes in the channel state too
+// (main's normalizeActivityPreset parity): the in-memory value must agree with
+// the persisted preference instead of diverging until restart. ────────────
+{
+  const state = channel as unknown as { activityFrames?: string; setActivityFrames(name: string): boolean }
+  const before = state.activityFrames
+  const applied = state.setActivityFrames('claude')
+  check('activity preset: retired id normalizes to the current default',
+    applied === true && state.activityFrames === 'moon8',
+    JSON.stringify({ before, applied, after: state.activityFrames }))
+  state.setActivityFrames(before ?? 'moon8')
+}
+
+// ── 9bb4. Every adoption tail must reset the input FIFO BEFORE its first emit
+// (main's bind → clear → refresh order): a subscriber that submits during the
+// session-changed emit must not chain onto the replaced session's parked
+// promise. Ordering is asserted on the source, because the emit/submit timing
+// inside the real channel makes a runtime probe non-discriminating. ────────
+{
+  const tails: readonly (readonly [string, string])[] = [
+    ['session-resume.ts', 'resetAndBind('],
+    ['session-adoption.ts', 'deps.bindAgent()'],
+    ['session-live-adoption.ts', 'deps.bindAgent()'],
+    ['model-switch.ts', 'deps.bindAgent()'],
+    ['background-action.ts', 'deps.bindAgent()'],
+  ]
+  const misplaced = tails.filter(([file, marker]) => {
+    const source = readFileSync(joinPath(import.meta.dirname, '..', 'src', 'dsh-adapter', 'channel', file), 'utf8')
+    const clear = source.indexOf('deps.clearStagedImages()')
+    const first = source.indexOf(marker)
+    return clear === -1 || first === -1 || clear > first
+  })
+  check('pending session ownership: every adoption tail resets the FIFO before its first emit',
+    misplaced.length === 0, JSON.stringify(misplaced))
 }
 
 // ── 9c. rewind-prompt stale-drop: a parked rewind decision cancels when the
@@ -807,7 +968,7 @@ await sleep(800)
     switchedKinds.push(event.kind)
   })
   const rewindPromise = channel.rewindTo({ seq: 4, text: '回退恢复文本' } as never, null)
-  // sleep 是超时兜底（挂死检测的墙钟上界），不是等待条件——保留。
+  // 固定窗:墙钟 Promise.race 的超时兜底（挂死检测的墙钟上界），不是等待条件
   const text = await Promise.race([rewindPromise, sleep(900).then(() => 'TIMEOUT' as const)])
   check('rewind-done decoupled: rewindTo returns the picked text without waiting for the listener',
     text === '回退恢复文本', String(text))
@@ -833,8 +994,8 @@ await sleep(800)
   // The standard single-handler deadline is 1s. The indicator must remain
   // visible until that deadline resolves the never-settling callback; it is
   // not allowed to disappear on the ordinary 4s notification timer first.
-  // 稳定性探针（指示条必须还挂着）：条件此刻已成立，轮询会立即返回，
-  // 测不到「保持」——保留固定窗口。
+  // 固定窗:探针 指示条必须还挂着（1s handler 期限内不得被 4s 通知定时器提前
+  // 收走）：条件此刻已成立，轮询会立即返回，测不到「保持」。
   await sleep(250)
   check('pending indicator: still up while the bounded decision is parked',
     notified('正在等待插件决定（tui/input）'))

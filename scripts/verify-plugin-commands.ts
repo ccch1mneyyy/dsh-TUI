@@ -30,6 +30,7 @@ const fakeHome = mkdtempSync(join(tmpdir(), 'dsh-plugin-commands-home-'))
 process.env.HOME = fakeHome
 process.env.USERPROFILE = fakeHome
 process.env.DSH_TUI_LANG = 'zh'
+process.env.DSH_TUI_ADAPTER_MODE = 'new'
 
 const { Context } = await import('@deepseek-ai/cordis')
 const { default: CommandRuntime } = await import('@deepseek-ai/dsh-commands')
@@ -40,12 +41,12 @@ const {
   mapCommandError,
   withCommandErrorMapping,
 } = await import('../src/dsh-adapter/command-errors.js')
-const { parseGrantStore } = await import('../src/dsh-adapter/grants.js')
+const { parseGrantStore } = await import('../src/adapter/standard/grants.js')
 const { TuiStatusRuntime } = await import('../src/dsh-adapter/status.js')
 const { default: TuiShortcutRuntime } = await import('../src/dsh-adapter/shortcuts.js')
 const { TuiSceneRuntime } = await import('../src/dsh-adapter/scenes.js')
 const { TuiRendererRuntime } = await import('../src/dsh-adapter/renderers.js')
-const { mountAdmitted, testManifest, COMMAND_COORDINATE } = await import('../src/dsh-adapter/plugin-test-utils.js')
+const { mountAdmitted, testManifest, COMMAND_COORDINATE } = await import('../scripts/lib/plugin-test-utils.js')
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
@@ -176,6 +177,8 @@ const check1 = (name: string, ok: boolean, detail?: string) => {
   attrCtx.plugin({ name: pluginHostRow.name, apply: pluginHostRow.apply })
   await sleep(50)
   const host = attrCtx.get('tuiPluginHost')
+  check1('command live probe is not exposed on the plugin-visible host service',
+    typeof (host as { probeCommandReversible?: unknown } | undefined)?.probeCommandReversible === 'undefined')
   const commands = attrCtx.get('commands')
   const globalAgent = {}
   const resolved = (agent: object, name: string) => commands?.find(agent as never, name)
@@ -258,40 +261,49 @@ const check1 = (name: string, ok: boolean, detail?: string) => {
 // ── G. channel 接线断言 ───────────────────────────────────────────────────
 {
   const channel = readFileSync(join(root, 'src/dsh-adapter/channel.ts'), 'utf8')
-  // Keep this assertion tied to the effective-definition lookup rather than
-  // one particular expression layout: the channel intentionally stores the
-  // definition before resolving its owner so the same value is passed to
-  // `execute`'s agent-scoped lookup checks.
-  const definitionLookup = channel.indexOf('const definition = commandService.find(agent, name)')
-  const ownerLookup = channel.indexOf('const owner = commandOwner(ctx, definition)', definitionLookup)
-  const checkpoint = definitionLookup
-  check1('owner-scoped invoke checkpoint present in channel.ts', checkpoint !== -1)
-  check1('owner lookup uses the effective definition', ownerLookup > definitionLookup)
-  // The invocation is version-gated (rc.8 composer images vs the legacy
-  // 3-arg call), so match the `commandService.execute` identifier rather
-  // than one particular call shape — the ordering guarantee under test is
-  // that the owner checkpoint precedes the invocation.
-  const executeAfter = channel.indexOf('commandService.execute', checkpoint)
-  check1('owner checkpoint runs BEFORE commandService.execute', executeAfter > checkpoint)
-  check1("owner deny path returns t('command-invoke-denied-owner')", channel.includes("return t('command-invoke-denied-owner'"))
-  check1('owner invoke deny records a scoped permission id', channel.includes('resource: { kind: \'permission\', id: `${owner.componentId}:commands.invoke:${owner.commandId}` }'))
-  check1('skill register catch maps through mapCommandError', /catch \(error\) \{[\s\S]{0,400}mapCommandError\(error\)/.test(channel))
+  const invoker = readFileSync(join(root, 'src/dsh-adapter/channel/external-commands.ts'), 'utf8')
+  const definitionLookup = invoker.indexOf('const definition = service.find(commandAgent, name)')
+  const ownerLookup = invoker.indexOf('const owner = commandOwner(ctx, definition)')
+  const imagePreparation = invoker.indexOf('const batch = await registryCommandImages(', definitionLookup)
+  const checkpoint = invoker.indexOf('const denied = authorize(definition, name)', definitionLookup)
+  check1('owner-scoped invoke checkpoint is extracted into external-commands.ts', checkpoint !== -1)
+  check1('owner lookup uses the effective definition', ownerLookup !== -1 && ownerLookup < checkpoint)
+  const executeAfter = invoker.indexOf('service.execute', checkpoint)
+  check1('owner checkpoint runs BEFORE service.execute', executeAfter > checkpoint)
+  check1('image preparation runs before the live grant checkpoint',
+    imagePreparation > definitionLookup && checkpoint > imagePreparation)
+  check1('the live grant checkpoint re-reads the grant store per invocation',
+    invoker.includes("if (!deps.allows({ componentId: 'root' }, 'commands.invoke', rootScope))"))
+  check1('the live grant checkpoint immediately precedes command execution',
+    executeAfter > checkpoint)
+  check1('owner deny keeps the structured draft-preserving error outcome',
+    invoker.includes("return t('command-invoke-denied-owner'") && invoker.includes('consumeDraft: false'))
+  check1('owner invoke deny records a scoped permission id', invoker.includes('resource: { kind: \'permission\', id: `${owner.componentId}:commands.invoke:${owner.commandId}` }'))
+  check1('channel composes external invocation instead of retaining policy', channel.includes('createExternalCommandInvoker(') && !channel.includes('commandOwner(ctx, definition)'))
+  const skills = readFileSync(join(root, 'src/dsh-adapter/channel/skill-catalog.ts'), 'utf8')
+  check1('skill register catch maps through mapCommandError', /catch \(error\) \{[\s\S]{0,400}mapCommandError\(error\)/.test(skills))
   check1("skill success recorded as command create applied",
-    channel.includes("{ operation: 'create', resource: { kind: 'command', id: name }, result: 'applied' }"))
+    skills.includes("{ operation: 'create', resource: { kind: 'command', id: name }, result: 'applied' }"))
   check1('skill failure recorded with DUPLICATE_CONTRIBUTION_ID or COMMAND_FAILED',
-    channel.includes("? 'DUPLICATE_CONTRIBUTION_ID' : 'COMMAND_FAILED'"))
-  check1('command-errors imported by channel.ts',
-    channel.includes("import { hasCommandErrorCode, mapCommandError } from './command-errors.js'"))
-  check1('command-attribution imported by channel.ts',
-    channel.includes("import { commandOwner } from './command-attribution.js'"))
+    skills.includes("? 'DUPLICATE_CONTRIBUTION_ID' : 'COMMAND_FAILED'"))
+  check1('command-errors imported by skill-catalog.ts',
+    skills.includes("import { hasCommandErrorCode, mapCommandError } from '../command-errors.js'"))
+  check1('command-attribution imported by external-commands.ts',
+    invoker.includes("import { commandOwner } from '../command-attribution.js'"))
   const ownerCheckpoint = checkpoint
   check1('per-owner checkpoint present', ownerCheckpoint !== -1)
-  check1('per-owner checkpoint runs BEFORE commandService.execute',
-    channel.indexOf('commandService.execute', ownerCheckpoint) > ownerCheckpoint)
+  check1('per-owner checkpoint runs BEFORE service.execute',
+    invoker.indexOf('service.execute', ownerCheckpoint) > ownerCheckpoint)
   check1('composer-images invocation is version-gated (0.1.0-rc.8 threshold + 4-param shape present)',
-    channel.includes('commandServiceSupportsImages(')
-    && channel.includes("installedMeetsVersion('@deepseek-ai/dsh-commands', '0.1.0-rc.8')")
-    && channel.includes('CommandExecuteWithImages'))
+    invoker.includes('supportsImages(')
+    && invoker.includes("installedMeetsVersion('@deepseek-ai/dsh-commands', '0.1.0-rc.8')")
+    && invoker.includes('ImagesExecute'))
+  check1('command discovery mirrors the upstream input.images admission flag',
+    readFileSync(join(root, 'src/dsh-adapter/channel/skill-catalog.ts'), 'utf8')
+      .includes('acceptsImages: descriptor.input?.images === true'))
+  check1('draft-aware command outcome is additive',
+    invoker.includes('Promise<ExternalCommandOutcome | undefined>')
+      && channel.includes('runExternalCommandOutcome'))
   const pluginHost = readFileSync(join(root, 'src/dsh-adapter/plugin-host.ts'), 'utf8')
   check1('the plugin-host row exposes the mediated registerCommand',
     pluginHost.includes('registerCommand(pluginCtx: Context'))
@@ -311,6 +323,8 @@ const check1 = (name: string, ok: boolean, detail?: string) => {
   const ownerEntry = i18n.slice(ownerIdx, ownerIdx + 500)
   check1('owner deny zh translation names the owner', ownerEntry.includes('{{owner}}'))
   check1('owner deny en translation present', /en:\s*'[^']*owner plugin[^']*'/.test(ownerEntry))
+  const imageAdmissionIdx = i18n.indexOf("'command-images-unsupported'")
+  check1("i18n key 'command-images-unsupported' exists", imageAdmissionIdx !== -1)
 }
 
 // ── H. 非破坏签名（不传 identity 照旧可用）──────────────────────────────────

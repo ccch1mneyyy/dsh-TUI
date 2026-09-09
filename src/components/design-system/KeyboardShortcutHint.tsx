@@ -1,5 +1,5 @@
 import React from 'react'
-import Text from '../../ink/components/Text.js'
+import Text from './ThemedText.js'
 
 type Props = {
   /** The key or chord to display (e.g., "ctrl+o", "Enter", "↑/↓") */
@@ -14,7 +14,7 @@ type Props = {
 
 /**
  * Renders a keyboard shortcut hint like "ctrl+o to expand" or "(tab to toggle)"
- * (in the Claude Code visual language). Wrap in `<Text dimColor>` for the
+ * in the dsh-TUI visual language. Wrap in `<Text dimColor>` for the
  * common dim styling.
  */
 export function KeyboardShortcutHint({

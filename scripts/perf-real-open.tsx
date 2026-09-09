@@ -78,12 +78,14 @@ console.log(`fixture: ${rows.length} 行（thinking 2KB / tool result 4KB / assi
 
 const listeners = new Set<() => void>()
 const channel: any = {
+  // 探针确定性：鲸鱼欢迎期闲置动画（默认开）不进本探针的测量窗口。
+  whaleIdle: false,
   version: 0, rows, status: 'idle', sessionTitle: 'probe', agentId: 'probe',
   model: 'deepseek-v4-flash', provider: 'deepseek', reasoningEffort: 'max', effortLevels: [],
   tokens: { input: 0, output: 0 }, cwd: '/tmp/demo', displayCwd: '/tmp/demo', gitBranch: 'main',
   working: false, spinnerMode: 'requesting', responseChars: 0, activeToolCount: 0, turnStart: 0,
   pending: [], commandList: LOCAL_COMMANDS, notifications: [], mode: { plan: false, sandbox: undefined },
-  activityFrames: 'claude', agentPreset: undefined, subagents: [], lastUserText: '问题 160',
+  activityFrames: 'moon8', agentPreset: undefined, subagents: [], lastUserText: '问题 160',
   scrollGutter: 'timeline', whale: true,
   subscribe(cb: () => void) { listeners.add(cb); return () => listeners.delete(cb) },
   submit: () => {}, cancel: () => {}, clear: () => {}, notify: () => {},

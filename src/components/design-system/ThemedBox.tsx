@@ -89,7 +89,7 @@ function resolveColor(
 
 /**
  * Theme-aware Box component that resolves theme color keys to raw colors
- * (in the Claude Code visual language).
+ * in the dsh-TUI visual language.
  */
 function ThemedBox({
   borderColor,

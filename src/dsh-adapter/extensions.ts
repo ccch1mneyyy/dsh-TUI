@@ -7,7 +7,8 @@
  * Services mounted here (each documented in its own module):
  *
  * - `ctx.tuiDialogs`   — managed select/confirm/input dialogs
- * - `ctx.tuiStatus`    — keyed status-line contributions
+ * - `ctx.tuiStatus`    — keyed text and bounded rich status contributions;
+ *   `registerView()` returns `undefined` on refusal, otherwise its disposer
  * - `ctx.tuiShortcuts` — keyboard shortcut registry
  * - `ctx.tuiRenderers` — custom session-entry text renderers
  * - `ctx.tuiToast`     — transient fire-and-forget notifications
@@ -38,12 +39,13 @@ import TuiRendererRuntime from './renderers.js'
 import TuiToastRuntime from './toast.js'
 import TuiThemeRuntime from './themes.js'
 import { installDecisionGuard } from './decision-guard.js'
-import { readGrantStore } from './grants.js'
+import { readGrantStore } from '../adapter/standard/grants.js'
+import { adapterRuntimeFor } from '../adapter/kernel/runtime-context.js'
 
 export const name = 'dsh-tui-extensions'
 
 export function apply(ctx: Context): void {
-  installDecisionGuard(ctx, readGrantStore())
+  installDecisionGuard(ctx, readGrantStore(undefined, undefined, adapterRuntimeFor(ctx)))
   ctx.plugin(TuiDialogRuntime)
   ctx.plugin(TuiStatusRuntime)
   ctx.plugin(TuiShortcutRuntime)

@@ -1,5 +1,5 @@
 /**
- * Monotonic terminal-flush counter for the ported Ink core.
+ * Monotonic terminal-flush counter for the Ink-based renderer.
  *
  * React commits and terminal writes are decoupled: `scheduleRender`
  * throttles `onRender` to the frame budget with a deferred leading edge, so

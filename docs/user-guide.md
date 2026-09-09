@@ -233,7 +233,7 @@ dsh-tui
 | `/agents` | 无 | 本会话子代理列表 |
 | `/jobs` | 无 | 本会话后台任务面板（`run_in_background` 启动的命令）：状态/运行时长/退出码实时跟踪，`↑/↓` 选择、`k` 停止选中任务；转录流内嵌任务卡（有输出时显示最多三行瀑布、无输出时仅头行，点击进面板），状态栏有运行数角标，任务落定弹 toast。输出来自 agent `job_output` 读取的镜像，非实时 tail |
 | `/settings` | 无 | 打开插件设置编辑器（命名空间读取/编辑） |
-| `/help` | 无 | 快捷键 + 命令帮助菜单（`?` 同款） |
+| `/help` | 无 | 快捷键 + 命令帮助菜单（`?` 入口） |
 
 ### 3.3 模型 / 显示
 
@@ -243,7 +243,7 @@ dsh-tui
 | `/effort` | `status` / `<id>` | 推理强度：无参滑杆（←/→ 实时调整）；`status` 当前档位；`<id>` 直接设定。持久化 `~/.dsh-tui/effort.json`（作为后续会话的次级默认；新会话起始档优先看 /settings 的默认推理强度 `effortDefault`，见 §5.3） |
 | `/thinking` | 无 | 扩展思考显示开关（流式时思考逐条展开） |
 | `/tokens` | 无 | token 用量 + 上下文百分比 |
-| `/activity` | `frames <名>` / `status` | 工作状态行动画：无参选择器；`frames` 列全部预设；`frames <名>` 直接设置。帧名 30 个（`random` 随机 + `claude/star2/sand/triangle/box/box2/corners/point/layer/flip/aesthetic/hamburger/moon/moon8/comet/breathe/dots/arrow/spark/bar/braille/arc/circle/grow/noise/bounce/rainbow/dqpb/toggle`，默认 `moon8`）。持久化 `~/.dsh-tui/working-activity.json` |
+| `/activity` | `frames <名>` / `status` | 工作状态行动画：无参选择器；`frames` 列当前预设；`frames <名>` 直接设置。当前可选 `random/star2/sand/triangle/box/box2/corners/point/layer/flip/aesthetic/hamburger/moon/moon8/whale-spout/whale-spin/whale-bubbles/clock/traffic_lights/comet/breathe/dots/arrow/spark/bar/braille/arc/circle/grow/noise/bounce/rainbow/bar2/dqpb/toggle`，默认 `moon8`。旧本地配置值 `claude` 读取时映射为 `moon8`，选择器不显示该旧预设。持久化 `~/.dsh-tui/working-activity.json` |
 | `/preset` | `<id>` / `status` | Agent 预设切换：官方 `standard` / `ptc`（0.1.2；旧 0.1.1 名为 `code`）/ `minimal` / `cordis` + TUI 打包**梁神模式 `liangshen`** + 用户自定义；`ptc` / `code` 可跨版本兼容解析；**已开始的会话不可切换**（blank-only 锁定）。持久化 `~/.dsh-tui/agent-preset.json` |
 | `/theme` | `<名字>` / `status` | 主题：无参选择器；`<名字>` 直接切换；`status` 当前主题（auto 时附 OSC 11 解析结果）。持久化 `~/.dsh-tui/theme.json` |
 | `/color` | 无参 / `<名>` / `status` / `reset` | 会话强调色：**无参打开调色板选择器**（8 色 + 色点预览，`↑/↓` 选择、`Enter` 应用）；`<名>` 直接设置；`status` 当前；`reset` 恢复主题默认。输入框边框 + 会话名标签变色（标签显示在输入框顶边框**右上角**，**默认关闭**，`/settings` 的「会话名标签」可开启；`red/orange/yellow/green/blue/purple/pink/cyan`）。按会话经 `session/color` 事件保存，resume/rewind 后仍在 |
@@ -391,8 +391,9 @@ dsh-TUI 不预装通用技能。`/skills` 浏览 DSH 从当前 profile、用户�
 
 空会话顶部是鲸鱼 Logo 区（随对话滚动消失）：
 
-- **开场动画**（约 3.4 秒，只播一次）：眨眼 → 喷水花 ×6 → 摇尾，之后定格为静态鲸鱼。
-- **闲置动画**（`whaleIdle`，默认关）：开屏定格后鲸鱼继续摆鱼鳍、偶尔拍尾巴，agent 回合运行中持续游动，连续空闲 10 秒后睡着冒 Z；任何工作会立即唤醒。**点击鲸鱼冒爱心**始终可用（事件驱动，零空闲开销），与该设置无关。
+- **开场动画**（约 3.4 秒，每次启动三选一，`/deepseek` 彩蛋重掷）：经典（眨眼 → 喷水花 ×6 → 摇尾）/ 爱心 / 睡觉。
+- **欢迎期闲置动画**（`whaleIdle`，默认开）：定格后鲸鱼摆鱼鳍、偶尔拍尾巴、眨眼，连续空闲 10 秒入睡冒 Z；**点击鲸鱼冒爱心并唤醒它**（事件驱动，零空闲开销）。所有动作为**独立图层并行合成**（tail/fin/heart/sleep/blink 各自驱动）——爱心会叠加在摆尾或睡觉动作之上同时显示，而不是打断它们。
+- **任务冻结**：开始第一个 agent 任务后，鲸鱼**永久定格为静态标准帧**——不再动画、点击无效，零持续开销；滚出视口后连重绘都不参与。`/new` 新会话重新进入欢迎期。
 - 鲸鱼右侧文字列：`✦ dsh-TUI v版本号` → 5 行块体大字 `DEEPSEEK / HARNESS`（品牌蓝渐变）
   → 当前模型 + effort → 工作目录 → **启动提示行**（`/model` 切换模型 · `/help` 查看命令 · `Tab` 自动补全）。
   若 dsh 引擎版本不在验证范围内，提示行下方会多出一行 **⚠ 版本漂移警告**
@@ -428,13 +429,15 @@ dsh-TUI 不预装通用技能。`/skills` 浏览 DSH 从当前 profile、用户�
 ### 5.3 /settings 设置编辑器
 
 `/settings` 打开插件设置编辑器；**改动自动保存**，`Esc` 直接退出。
-dsh-tui 自身区块（写入 settings.yaml 用户层，实时生效）字段很多（下表为常用项；完整列表见 /settings 屏）：
+dsh-tui 自身区块写入 settings.yaml 用户层，多数设置实时生效；全屏和图片预览开关需 `/restart`。下表为常用项，完整列表见 /settings 屏：
 
 | 字段 | 说明 |
 |---|---|
 | lang | 界面语言 zh/en（DSH_TUI_LANG 钉死时不可改） |
+| fullscreen | 全屏模式（默认开）；保存后用 `/restart` 生效 |
+| terminalImages | 终端图片预览（默认开，需终端支持）；保存后用 `/restart` 生效。关闭后只显示文字信息并跳过预览解码，不影响向模型发送图片 |
 | whale | 开屏头部像素鲸鱼娘（默认开）；每次启动随机三选一开屏动画：经典组合开场（眨眼+喷水+摆尾）/ 爱心 / 睡觉，`/deepseek` 彩蛋每次重掷 |
-| whaleIdle | 鲸鱼娘闲置动画（默认关）：开屏后继续摆鱼鳍/拍尾巴，空闲 10 秒入睡冒 Z，工作中持续游动；点击冒爱心不依赖此设置。空闲时增加少量重绘，故默认关闭 |
+| whaleIdle | 鲸鱼娘欢迎期闲置动画（默认开）：定格后摆鱼鳍/拍尾巴/眨眼，空闲 10 秒入睡冒 Z；点击冒爱心不依赖此设置。开始第一个任务后永久定格为静态标准帧 |
 | diffLayout | Edit/Write diff 布局：auto（≥110 列双栏）/ split / unified |
 | thinkingFold | 思考块：preview（流式 2-3 行预览 + 落定折叠）/ full（展开到轮末） |
 | effortDefault | 默认推理强度：auto / off / low / high / max。新会话的起始档位（模型提供该档时当前会话下一请求同样生效，否则静默回落模型默认）；优先级 settings 用户层 > cordis `effort` > 上次 `/effort`（effort.json）> 模型默认 |
@@ -443,7 +446,7 @@ dsh-tui 自身区块（写入 settings.yaml 用户层，实时生效）字段很
 | statusBar.* | 上表全部状态栏开关（compact/model/thinking/cwd/contextUsage/cache/tokens/cost/tps/gitBranch/sessionTitle/sessionId/mode/contextBar/activity/trajectory；statusBar.sessionId 是底栏显示开关，与 cordis 的启动 sessionId 无关） |
 
 未声明 TUI 区块的命名空间以只读形式列出，需手工编辑 `~/.dsh/settings.yaml`。
-provider / model / cwd / fullscreen / preset / workspace / sessionId / modes
+provider / model / cwd / preset / workspace / sessionId / modes
 **不在 /settings 内**，要改 `$DSH_HOME/profiles/dsh-tui/cordis.patch.yml`；其中启动级
 `effort` 键也在此改，/settings 里对应的是会话默认档 `effortDefault`（见上表）。
 
@@ -466,7 +469,7 @@ provider / model / cwd / fullscreen / preset / workspace / sessionId / modes
 | 主题 | `/theme` | `auto`（OSC 11 跟随终端背景）/ `light` / `dark` / `dark-ansi`；`/theme <名>` 直接切；`/theme status` 看解析结果 |
 | 自定义主题 | 手动 | `~/.dsh-tui/themes/<名>.json`，`{base, colors}` 格式，选中即热切换；命名为 `auto` 会被内置遮蔽 |
 | 语言 | `/lang` | `en` / `zh` 热切换；优先级 `DSH_TUI_LANG` > settings.yaml > cordis.yml > 持久化 |
-| 状态行动画 | `/activity` | 选择器或 `/activity frames <名>`；帧名 30 个（默认 `moon8`，`random` 随机） |
+| 状态行动画 | `/activity` | 选择器或 `/activity frames <名>`；当前预设默认 `moon8`，`random` 随机；旧本地配置值 `claude` 读取时映射为 `moon8` |
 
 **主题优先级**：`DSH_TUI_THEME` > `~/.dsh-tui/theme.json` > OSC 11 终端背景检测 > dark 回退。
 
@@ -475,9 +478,9 @@ provider / model / cwd / fullscreen / preset / workspace / sessionId / modes
 `resume.txt` / `last-used.json`（会话恢复）、`themes/<名>.json`（自定义主题）。
 
 **常用环境变量**：`DSH_TUI_LANG`、`DSH_TUI_THEME`、`DSH_TUI_PRESET`、`DSH_TUI_PERSONA`、
-`DSH_TUI_DISABLE_MOUSE`、`DSH_TUI_RESUME_SESSION`、`DSH_TUI_WORKSPACE_TARGET`、`DSH_TUI_SESSION_ROOT`、
+`DSH_TUI_DISABLE_MOUSE`、`DSH_TUI_DISABLE_TERMINAL_IMAGES`、`DSH_TUI_RESUME_SESSION`、`DSH_TUI_WORKSPACE_TARGET`、`DSH_TUI_SESSION_ROOT`、
 `DSH_TUI_DEBUG`、`DSH_TUI_RENDER_LOG`（帧取证，可能含敏感内容）、`DEEPSEEK_API_KEY`、`DEEPSEEK_BASE_URL`、
-`VISUAL`/`EDITOR`（`Ctrl+G` 外部编辑器）、`DSH_PERMISSION_MODE`。旧名 `CC_TUI_*` / `DSH_CC_*` 已改名（启动会警告）。
+`VISUAL`/`EDITOR`（`Ctrl+G` 外部编辑器）、`DSH_PERMISSION_MODE`。
 
 ---
 
@@ -495,13 +498,13 @@ provider / model / cwd / fullscreen / preset / workspace / sessionId / modes
    `Ctrl+Enter` 打断立即发——不用傻等回合结束。
 5. `Alt+Up` 把最后一条未处理消息取回输入框修改，不用重打。
 6. 想快速问个事又不想打断主回合、不想留历史：`/btw <问题>`。
-7. 打错了想重来：**空输入双击 Esc 时间回溯**，选你的消息改完重发；`/rewind` 同款。
+7. 打错了想重来：**空输入双击 Esc 时间回溯**，选你的消息改完重发；也可使用 `/rewind`。
 8. 长输入用 `Ctrl+G` 拉起 `$VISUAL` 编辑器写，保存即回填。
 9. `@` 在消息任意位置补全文件：普通片段**模糊匹配**（`@ink` 也能命中 `src/ink/Box.js`），
    路径形输入（`@src/` `@./` `@~/`）**直达该目录**；目录可继续深入；图片自动变 `[Image #N]` 附件。
 10. 只想引用文件的某几行：`@src/a.ts#L12` 或 `@src/a.ts#L12-14` 精确带上行区间。
 11. 想盯着子代理干活：**`Ctrl+A` 打开子代理面板**，`Enter` 看详情、`X` 中断运行中的子代理；
-   同款命令 `/agents`。
+   对应命令 `/agents`。
 12. **全屏模式下点击转录里的文件路径**（工具卡、代码、`file://` 链接）会弹出操作菜单：
    打开 / 在文件管理器中定位 / 复制绝对路径。
 
@@ -541,7 +544,7 @@ provider / model / cwd / fullscreen / preset / workspace / sessionId / modes
 31. `/update` 只更新 profile runtime 不动全局安装；提示版本错位时按提示执行
     `npm install -g @deepseek-harness-tui/dsh-tui@<版本>` 对齐启动器。
 32. `/reload` 重读偏好文件（主题/语言/预设/模型/动画），但**不重读** `cordis.yml` 根配置与
-    全屏布局，也不加载新构建的代码——改这些用 `/restart`（回合运行中 `/restart` 会被拒绝，先 `Ctrl+C`）。
+    全屏布局、图片预览开关，也不加载新构建的代码——改这些用 `/restart`（回合运行中 `/restart` 会被拒绝，先 `Ctrl+C`）。
 33. macOS 的 ⌘ 键需要 iTerm2/kitty/WezTerm/ghostty/tmux；Terminal.app 用 Ctrl 即可。
 34. 鼠标拖选即复制（fullscreen 模式）；`DSH_TUI_DISABLE_MOUSE=1` 可临时关闭鼠标。
 35. logo 页出现 **⚠ 版本漂移警告**时按提示对齐 dsh 引擎：

@@ -7,15 +7,15 @@ import { readActivityFrames } from '../activityPrefs.js'
 import { envThemeOverride } from '../components/design-system/ThemeProvider.js'
 import { hasPath } from '../dsh-adapter/settingsEditor.js'
 import { planReload, type ReloadKind } from '../reload.js'
-import { AlternateScreen, Box, Text, useInput, ScrollBox, type ScrollBoxHandle, useTheme, useTerminalSize } from '../ui.js'
+import { AlternateScreen, Box, Image, Text, useInput, ScrollBox, type ScrollBoxHandle, useTheme, useTerminalSize } from '../ui.js'
 import * as tuiKit from '../ui.js'
 import { usePageInset } from '../components/PageMargin.js'
-import { POINTER } from '../cc/figures.js'
+import { POINTER } from '../terminal-utils/figures.js'
 import { isPlainReturnInput, modLabel } from '../utils/modifiers.js'
 import { actionMatches } from '../utils/keymap.js'
-import { formatTokens } from '../cc/format.js'
+import { formatTokens } from '../terminal-utils/format.js'
 import { homeDir } from '../utils/paths.js'
-import type { LlmModelInfo, LlmProviderInfo } from '../dsh-adapter/types.js'
+import type { LlmModelInfo, LlmProviderInfo } from '../adapter/ports/channel-view.js'
 import { cleanRenderText, cleanScalarText } from '../dsh-adapter/sanitize.js'
 import {
   deriveModelGroups,
@@ -24,10 +24,12 @@ import {
   RECENTS_GROUP_PROVIDER,
 } from '../modelGroups.js'
 import { readModelRecents, recordModelUse, type ModelRecentsRef } from '../modelRecents.js'
-import { sessionCwdMatches, type Channel, type ChatRow, type EffortOption, type PermissionPresetSnapshot, type PresetOption, type SkillInfo } from '../dsh-adapter/channel.js'
+import type { ChannelUi as Channel } from '../adapter/channel/ui-policy.js'
+import { sessionCwdMatches, type ChatRow, type ComposerImageRef, type EffortOption, type ExternalCommandOutcome, type PermissionPresetSnapshot, type PresetOption, type SkillInfo } from '../dsh-adapter/channel.js'
 import type { QuestionStore } from '../dsh-adapter/questions.js'
 import { TuiDialogStore } from '../dsh-adapter/dialogs.js'
-import { TuiStatusStore } from '../dsh-adapter/status.js'
+import { TuiStatusStore, type TuiStatusViewUi } from '../dsh-adapter/status.js'
+import type { TranscriptImage } from '../dsh-adapter/transcript-images.js'
 import type { TuiShortcutHost } from '../dsh-adapter/shortcuts.js'
 import type { TuiThemeHost } from '../dsh-adapter/themes.js'
 import type { TuiRewindMode } from '../dsh-adapter/extension-events.js'
@@ -52,7 +54,7 @@ import { OverlayAbove } from '../components/OverlayAbove.js'
 import { TooltipLayer } from '../components/Tooltip.js'
 import { PromptInput, type PromptController } from '../components/PromptInput.js'
 import type { InjectController } from '../dsh-adapter/inject-channel.js'
-import { PromptEditorLayer } from '../components/PromptEditor.js'
+import { PromptEditorLayer, usePromptEditorOpen } from '../components/PromptEditor.js'
 import { GoalTodoPanel } from '../components/GoalTodoPanel.js'
 import { AutoRecapRow } from '../components/AutoRecapRow.js'
 import { BalanceReportRow } from '../components/BalanceReportRow.js'
@@ -63,6 +65,8 @@ import { WorkingSpinner, useThinkingStatus } from '../components/WorkingSpinner.
 import { ActivityLine, contextPressurePct } from '../components/ActivityLine.js'
 import { ModelPicker } from '../components/ModelPicker.js'
 import { PluginSceneBoundary } from '../components/PluginSceneBoundary.js'
+import { PluginStatusViewBoundary } from '../components/PluginStatusViewBoundary.js'
+import { ImagePreviewOverlay } from '../components/ImagePreviewOverlay.js'
 import { SkillsPicker, SkillsPickerLoading } from '../components/SkillsPicker.js'
 import { SessionBrowser } from './SessionBrowser.js'
 import { SessionTree } from './SessionTree.js'
@@ -86,7 +90,7 @@ import { HistorySearchDialog } from '../components/HistorySearchDialog.js'
 import { RewindPicker } from '../components/RewindPicker.js'
 import { BtwPanel } from '../components/BtwPanel.js'
 import { RecapPanel } from '../components/RecapPanel.js'
-import { isValidSessionColor, SESSION_COLOR_NAMES } from '../cc/sessionColors.js'
+import { isValidSessionColor, SESSION_COLOR_NAMES } from '../terminal-utils/sessionColors.js'
 import { TipsPanel } from '../components/TipsPanel.js'
 import { SubagentDashboard } from '../components/SubagentDashboard.js'
 import { JobsPanel } from '../components/JobsPanel.js'
@@ -106,7 +110,7 @@ import { AgentView } from './AgentView.js'
 import { extendTrajectory, projectWave, type TrajBuild } from '../dsh-adapter/trajectory/index.js'
 import { miniWakeWidth } from '../components/trajectory/MiniWake.js'
 import { readTrajectorySeen, writeTrajectorySeen } from '../trajectoryPrefs.js'
-import type { SessionEvent } from '../dsh-adapter/types.js'
+import type { RawTrajEvent as SessionEvent } from '../adapter/ports/channel-view.js'
 import { LoadingState } from '../components/design-system/LoadingState.js'
 import { Pane } from '../components/design-system/Pane.js'
 import { loadHistory, type HistoryEntry } from '../history.js'
@@ -119,19 +123,55 @@ import {
   type WorkspaceFlowInput,
 } from './chatOverlay.js'
 
+/** Strip the focus/global-input surface even from untyped plugins. Local
+ * click, hover, and captured drag stay inside the view and are kept. */
+function StatusViewBox({
+  ref: _ref,
+  tabIndex: _tabIndex,
+  autoFocus: _autoFocus,
+  onContextMenu: _onContextMenu,
+  onFocus: _onFocus,
+  onFocusCapture: _onFocusCapture,
+  onBlur: _onBlur,
+  onBlurCapture: _onBlurCapture,
+  onKeyDown: _onKeyDown,
+  onKeyDownCapture: _onKeyDownCapture,
+  onWheel: _onWheel,
+  ...props
+}: React.ComponentProps<typeof Box>): React.ReactNode {
+  return <Box {...props} />
+}
+
+/** Text refs would expose the host DOM node; status text is presentation. */
+function StatusViewText({
+  ref: _ref,
+  ...props
+}: React.ComponentProps<typeof Text>): React.ReactNode {
+  return <Text {...props} />
+}
+
+/** Rich status views receive pointer-only layout/text primitives, never the
+ * input, channel, raw-ANSI, or terminal-write parts of the full UI kit. */
+const STATUS_VIEW_UI = Object.freeze({
+  Box: StatusViewBox,
+  Image,
+  Text: StatusViewText,
+  useTerminalSize,
+}) satisfies TuiStatusViewUi
+
 /** Shared empty snapshot for hosts whose channel has no event log. */
 const NO_EVENTS: readonly SessionEvent[] = []
 
-const PERMISSION_RESULT_CELLS = 200
+const COMMAND_RESULT_CELLS = 200
 
-function cleanPermissionError(error: unknown): string {
+function cleanCommandError(error: unknown): string {
   try {
     if (error instanceof Error) {
       return typeof error.message === 'string'
-        ? cleanRenderText(error.message, PERMISSION_RESULT_CELLS)
+        ? cleanRenderText(error.message, COMMAND_RESULT_CELLS)
         : ''
     }
-    return cleanScalarText(error, PERMISSION_RESULT_CELLS)
+    return cleanScalarText(error, COMMAND_RESULT_CELLS)
   } catch {
     return ''
   }
@@ -166,10 +206,10 @@ function capitalize(text: string): string {
   return text.length === 0 ? text : text[0].toUpperCase() + text.slice(1)
 }
 
-/** Terminal-title spinner frames (CC's TITLE_ANIMATION_FRAMES). */
-const TITLE_ANIMATION_FRAMES = ['⠂', '⠐']
+/** Terminal-title spinner frames. */
+const TITLE_SPINNER_FRAMES = ['⠂', '⠐']
 
-/** Searchable transcript text for one row (`/` incsearch, CC semantics:
+/** Searchable transcript text for one row (`/` incsearch):
  *  user text, assistant text, thinking, tool args/results, local output). */
 function searchableText(row: ChatRow): string {
   switch (row.kind) {
@@ -183,7 +223,7 @@ function searchableText(row: ChatRow): string {
 }
 
 /**
- * Main chat screen in the Claude Code layout: a scrollable transcript
+ * Main chat screen: a scrollable transcript
  * (with the user message the viewport is showing pinned above the transcript
  * while scrolled up, and a 1-column minimap scrollbar with one node per
  * user message — the current message's node is highlighted, clicking a node
@@ -208,11 +248,17 @@ let fallbackApprovalStore: ApprovalStore | undefined
 /**
  * Shared inert extension stores for hosts that render Chat without the
  * dsh-tui-extensions row (headless verify scripts, bare embeds). Never
- * written, so the dialog panel and the plugin status line never mount and
+ * written, so plugin dialogs/status contributions never mount and
  * no shortcut ever matches.
  */
 let fallbackDialogStore: TuiDialogStore | undefined
 let fallbackStatusStore: TuiStatusStore | undefined
+
+/** Identity of one caret-preview dismissal: the token (its title) on the
+ *  image, so the same image staged twice is dismissed per token. */
+function peekKey(image: TranscriptImage, title: string | undefined): string {
+  return `${title ?? ''} ${image.id}`
+}
 
 export function Chat({
   channel,
@@ -228,8 +274,10 @@ export function Chat({
   fullscreen = false,
   trajectorySeen: trajectorySeenProp,
   injectControllerRef,
+  renderScene,
 }: {
   channel: Channel
+  renderScene?: (id: string, channel: Channel) => React.ReactNode
   questionStore: QuestionStore
   /**
    * The approval seam's UI store. Optional: hosts without an approval
@@ -243,7 +291,7 @@ export function Chat({
    * park unanswered (their `timeoutMs` is the plugin's guard).
    */
   extensionDialogs?: TuiDialogStore
-  /** Plugin status-line contributions (tuiStatus service's store). */
+  /** Plugin text and bounded rich status contributions. */
   extensionStatus?: TuiStatusStore
   /** Host-only keyboard shortcut dispatch path. */
   extensionShortcuts?: TuiShortcutHost
@@ -292,6 +340,7 @@ export function Chat({
   useExternalVersion(channel.subscribe, () => channel.version)
   // Re-render on language switches so the whole UI hot-swaps its strings.
   React.useSyncExternalStore(subscribeLang, getLang)
+  const promptEditorOpen = usePromptEditorOpen()
   // The pending ask-user-question (DSH user-interaction seam): the model's
   // `ask_user_question` tool parks here until the panel is answered.
   const questionSnapshot = React.useSyncExternalStore(
@@ -317,12 +366,20 @@ export function Chat({
     listener => dialogs.subscribe(listener),
     () => dialogs.getSnapshot(),
   )
-  // Plugin status-line contributions (tuiStatus seam): keyed texts joined
-  // into one line above the prompt.
+  // Plugin status contributions: text keys join into one line; bounded rich
+  // views keep their own rows immediately above the prompt.
   const statusContributions = extensionStatus ?? (fallbackStatusStore ??= new TuiStatusStore())
+  const subscribeStatus = React.useCallback(
+    (listener: () => void) => statusContributions.subscribe(listener),
+    [statusContributions],
+  )
   const statusEntries = React.useSyncExternalStore(
-    listener => statusContributions.subscribe(listener),
+    subscribeStatus,
     () => statusContributions.getSnapshot(),
+  )
+  const statusViews = React.useSyncExternalStore(
+    subscribeStatus,
+    () => statusContributions.getViewSnapshot(),
   )
   // Shortcut handler failures surface as toasts (the registry also logs
   // them); the hook is re-pointed on every mount so a stale closure never
@@ -452,7 +509,7 @@ export function Chat({
   /** `/agentview` and `/bg` open the agent view — a screen like the browser:
    *  it owns selection, the dispatch input and every key while up. */
   const [agentViewOpen, setAgentViewOpen] = React.useState(false)
-  /** The session backgrounded when the view opened via ←/`/bg` (CC's "Esc
+  /** The session backgrounded when the view opened via ←/`/bg` (the "Esc
    *  returns to that conversation" return target), cleared on close. */
   const [agentViewReturnId, setAgentViewReturnId] = React.useState<string | undefined>(undefined)
   /** Live agent-view rows: the prompt footer's "← N agents" hint reads the
@@ -467,7 +524,7 @@ export function Chat({
   const backgroundAgentsNeedingInput = agentViewRows.filter(
     row => row.status === 'needs-input' && !row.current,
   ).length
-  /** CC parity: background the attached session and open the agent view
+  /** Background the attached session and open the agent view
    *  (`/bg`, `/background`, and ← on an empty prompt all land here). The
    *  backgrounded session becomes the view's return target (final Esc
    *  attaches back to it). */
@@ -504,7 +561,7 @@ export function Chat({
    *  plugin answering after the user moved on must not open a confirm for
    *  a row they are no longer looking at). */
   const rewindRequestRef = React.useRef(0)
-  /** /btw side-question overlay (CC): pure UI state — the answer never
+  /** /btw side-question overlay: pure UI state — the answer never
    *  enters the transcript or the session log. */
   const [btw, setBtw] = React.useState<{ question: string; answer: string; error?: string; done: boolean } | null>(null)
   const btwAbortRef = React.useRef<AbortController | null>(null)
@@ -556,8 +613,19 @@ export function Chat({
   }, [channel])
   const balanceSessionId = channel.agentId
   React.useEffect(() => {
+    // Retire every in-flight /balance completion from the previous binding;
+    // the balance seam has no UI session id in its readonly DTO.
+    balanceSeqRef.current += 1
     setBalance(null)
   }, [balanceSessionId])
+  // A side question belongs to its captured session just like a recap. Chat
+  // remains mounted across /resume, so explicitly retire its request/UI when
+  // the binding changes instead of allowing a former conversation to finish.
+  React.useEffect(() => {
+    btwAbortRef.current?.abort()
+    btwAbortRef.current = null
+    setBtw(null)
+  }, [channel.agentId])
   // Auto-recap (`dsh-tui.recapOnOpen`): every time the session switches
   // (mount = open/resume, rewind/fork included), summarize its tail into
   // the dim AutoRecapRow. Failures stay silent in auto mode — `/recap`
@@ -746,6 +814,90 @@ export function Chat({
     else void setClipboard(path)
   }, [])
 
+  /** Shared open path for the modal image preview: composer `[Image #N]`
+   *  tokens and transcript thumbnails both land here. */
+  const openImagePreview = React.useCallback((image: TranscriptImage, title?: string): void => {
+    // Snapshot only metadata/facades on an explicit open, not on every streamed
+    // token. Unvisited attachments stay lazy and duplicate image occurrences stay distinct.
+    const gallery: { image: TranscriptImage; title?: string }[] = channel.rows.flatMap(row => (row.images ?? []).map(image => ({ image })))
+    let index = gallery.findIndex(entry => entry.image === image)
+    if (index < 0) { index = gallery.length; gallery.push({ image, title }) }
+    dispatchOverlay({
+      type: 'open',
+      overlay: { kind: 'image-preview', image, gallery, index, ...(title === undefined ? {} : { title }) },
+    })
+  }, [channel])
+  // Agent-binding generation is monotonic across every agent replacement
+  // and bumps before the replacement emit, closing the ABA hole where a
+  // resumed session reuses the same id. Partial test/embed channels fall
+  // back to staged-image generation.
+  const previewBindingGeneration = channel.agentBindingGeneration
+    ?? channel.stagedImageGeneration?.()
+    ?? 0
+  const previewGenerationRef = React.useRef(previewBindingGeneration)
+  const imagePreviewOwned = previewGenerationRef.current === previewBindingGeneration
+  React.useEffect(() => {
+    if (previewGenerationRef.current === previewBindingGeneration) return
+    previewGenerationRef.current = previewBindingGeneration
+    dispatchOverlay({ type: 'close-if', kind: 'image-preview' })
+  }, [previewBindingGeneration])
+  // A questionnaire/approval/plugin dialog owns the keyboard while pending
+  // (their guard runs BEFORE the overlay key chain), so a preview left open
+  // underneath would be visually on top yet key-dead. Close it instead.
+  const previewBlocked = questionSnapshot !== null || approvalSnapshot !== null || dialogSnapshot !== null
+  React.useEffect(() => {
+    if (
+      overlay.kind === 'image-preview' &&
+      previewBlocked
+    ) {
+      dispatchOverlay({ type: 'close-if', kind: 'image-preview' })
+    }
+  }, [overlay.kind, previewBlocked])
+  // Caret-driven preview (Grok Build's chip peek): while the composer caret
+  // sits on a staged `[Image #N]` — at its start, the token inverted — the
+  // same card shows over the transcript, and it goes away when the caret
+  // leaves (the cell just after the token is not "on" it). It is
+  // derived state, not an overlay: the prompt keeps the keyboard, so ←/→
+  // walk from image to image with the card following. Esc (or a click
+  // outside the card) dismisses it for THIS token until the caret leaves and
+  // comes back; a click on the token always shows it again.
+  const [caretPreview, setCaretPreview] = React.useState<
+    { image: TranscriptImage; title?: string } | null
+  >(null)
+  const [peekSuppressed, setPeekSuppressed] = React.useState<string | null>(null)
+  const handleCaretImage = React.useCallback((
+    image: TranscriptImage | undefined,
+    title: string | undefined,
+    reason: 'caret' | 'click',
+  ): void => {
+    if (image === undefined) {
+      setCaretPreview(null)
+      setPeekSuppressed(null)
+      return
+    }
+    setCaretPreview({ image, ...(title === undefined ? {} : { title }) })
+    const key = peekKey(image, title)
+    setPeekSuppressed(current => reason === 'click' || current !== key ? null : current)
+  }, [])
+  const peekPreview =
+    !previewBlocked && overlay.kind === 'none' && caretPreview !== null
+      && peekSuppressed !== peekKey(caretPreview.image, caretPreview.title)
+      ? caretPreview
+      : null
+  /** Esc / click-outside on the peek: dismissed for this token until the
+   *  caret leaves it. PromptInput's Esc arm calls this first — its listener
+   *  runs before Chat's and the prompt stays live under a peek. */
+  const dismissPeek = (): void => {
+    if (peekPreview !== null) setPeekSuppressed(peekKey(peekPreview.image, peekPreview.title))
+  }
+  /** The card on screen, if any: the modal overlay first, else the peek. */
+  const activePreview: { image: TranscriptImage; title?: string; peek: boolean } | null =
+    !previewBlocked && overlay.kind === 'image-preview'
+      ? { image: overlay.image, ...(overlay.title === undefined ? {} : { title: overlay.title }), peek: false }
+      : peekPreview !== null
+        ? { ...peekPreview, peek: true }
+        : null
+
   const handleOpenTarget = React.useCallback((url: string): void => {
     const classification = classifyOpenTarget(url)
     if (classification.kind === 'file-actions') {
@@ -772,7 +924,7 @@ export function Chat({
       if (current) current.onHyperlinkClick = undefined
     }
   }, [handleOpenTarget])
-  /** `/` transcript search (less-style incsearch, ported from CC's REPL).
+  /** `/` transcript search (less-style incsearch).
    *  Only the bar's open/closed mode lives in `overlay`; the query and match
    *  counters persist past the bar closing so n/N keep walking the matches. */
   const searchActive = overlay.kind === 'search'
@@ -798,6 +950,27 @@ export function Chat({
   const isSticky = React.useSyncExternalStore(
     cb => (handle ? handle.subscribe(cb) : () => {}),
     () => (handle ? handle.isSticky() : true),
+  )
+  // Whale idle gate: the settled header scrolls away with the transcript,
+  // and the idle planner is worth nothing the moment its art leaves the
+  // viewport — pause it there (timers cleared, the resting pose's cached
+  // rows stay painted so scroll geometry never shifts) and re-arm a fresh
+  // cycle when the user scrolls back to the top. Same uSES rationale as
+  // isSticky above: the renderer's sticky re-pin doesn't fire scroll
+  // subscribers, only the every-render snapshot check picks it up.
+  const WHALE_ART_CUTOFF_ROWS = 16 // marginTop + the 13-row whale art
+  const whaleArtVisible = React.useSyncExternalStore(
+    cb => (handle ? handle.subscribe(cb) : () => {}),
+    () => {
+      if (!handle) return true
+      // A transcript that fits the viewport always shows the header.
+      if (handle.getScrollHeight() <= handle.getViewportHeight()) return true
+      // Visible while the art block intersects the viewport. A sticky bottom
+      // pin with an overflow smaller than the art's height still leaves the
+      // art on screen — visibility, not pin state, decides whether the idle
+      // planner earns its keep.
+      return handle.getScrollTop() < WHALE_ART_CUTOFF_ROWS
+    },
   )
   const subscribeTooltipInvalidation = React.useCallback(
     (listener: () => void) => (handle ? handle.subscribe(listener) : () => {}),
@@ -828,8 +1001,8 @@ export function Chat({
   // "return to bottom" affordance (Enter/End/click all land it).
   const showPill = !isSticky
 
-  // Idle Ctrl+C: first press arms an exit, second press exits (CC's
-  // double-press semantics, simplified). Under Windows ConPTY the key
+    // Idle Ctrl+C: first press arms an exit, second press exits. Under
+    // Windows ConPTY the key
   // arrives as stdin data (key.ctrl && input === 'c') — the useInput
   // branch below is the only path; SIGINT is not emitted.
   const exitPendingRef = React.useRef(false)
@@ -837,6 +1010,22 @@ export function Chat({
   // Live view into the prompt's text for the Ctrl+C rule (clears text when
   // non-empty; the double-press exit only arms on an empty input).
   const promptControllerRef = React.useRef<PromptController | null>(null)
+  const previewGallery = activePreview === null ? [] : activePreview.peek
+    ? promptControllerRef.current?.previewImages?.() ?? [activePreview]
+    : overlay.kind === 'image-preview' ? overlay.gallery ?? [activePreview] : []
+  const previewIndex = activePreview?.peek
+    ? previewGallery.findIndex(entry => entry.image === activePreview.image && entry.title === activePreview.title)
+    : overlay.kind === 'image-preview' ? overlay.index ?? 0 : -1
+  const stepPreview = (delta: 1 | -1): void => {
+    if (!activePreview?.peek) { dispatchOverlay({ type: 'image-step', delta }); return }
+    const index = previewIndex + delta
+    const entry = previewGallery[index]
+    if (!entry) return
+    // A gallery click promotes the caret peek to a modal without moving or
+    // editing the draft. Suppress the original peek so Esc really closes it.
+    setPeekSuppressed(peekKey(activePreview.image, activePreview.title))
+    dispatchOverlay({ type: 'open', overlay: { kind: 'image-preview', ...entry, gallery: previewGallery, index } })
+  }
   // Publish the external-injection controller (dsh.nvim etc.) every render so
   // the adapter-owned socket can append to the prompt and submit. `submit`
   // mirrors an Enter press: `channel.submit` routes through the DSH inbox
@@ -898,13 +1087,13 @@ export function Chat({
   loadingStartTimeRef.current = channel.turnStart
   const thinkingStatus = useThinkingStatus(channel.spinnerMode === 'thinking')
 
-  // Terminal tab title (ported from CC's AnimatedTerminalTitle): the session
+  // Terminal tab title: the session
   // title when set, else "dsh-TUI"; a `⠂/⠐` spinner prefix while a turn is
   // working (960ms cadence, only while the terminal is focused), a static
   // `✦` otherwise. dsh-TUI brands the idle prefix with the DeepSeek whale.
   const [titleFrame, setTitleFrame] = React.useState(0)
   const terminalFocused = useTerminalFocus()
-  // Mouse text selection auto-copy (CC's copy-on-select): active only in
+  // Mouse text selection auto-copy: active only in
   // fullscreen (<AlternateScreen> supplies mouse tracking); a no-op
   // subscription in inline mode, where selection belongs to the terminal.
   // The copy clears the highlight and posts a transient notification.
@@ -916,12 +1105,12 @@ export function Chat({
   React.useEffect(() => {
     if (!channel.working || !terminalFocused) return
     const interval = setInterval(() => {
-      setTitleFrame(f => (f + 1) % TITLE_ANIMATION_FRAMES.length)
+      setTitleFrame(f => (f + 1) % TITLE_SPINNER_FRAMES.length)
     }, 960)
     return () =>{  clearInterval(interval) }
   }, [channel.working, terminalFocused])
   const titlePrefix = channel.working
-    ? (TITLE_ANIMATION_FRAMES[titleFrame] ?? '✦')
+    ? (TITLE_SPINNER_FRAMES[titleFrame] ?? '✦')
     : '✦'
   useTerminalTitle(
     `${titlePrefix} 🐋 ${channel.sessionTitle}`,
@@ -1059,29 +1248,63 @@ export function Chat({
    * result text lands as a notification. `rawInput` carries the text after
    * the command name (`/plan off` → ` off`).
    */
+  const runExternalCommand = (
+    name: string,
+    rawInput: string,
+    images: readonly ComposerImageRef[] = [],
+  ): Promise<boolean> => {
+    const originAgentBinding = channel.agentBindingGeneration
+    return channel.runExternalCommandOutcome(name, rawInput, images).then((outcome) => {
+      if (channel.agentBindingGeneration !== originAgentBinding) return false
+      if (outcome === undefined) {
+        channel.notify(t('command-not-found', { name }), { color: 'error' })
+        return false
+      }
+      const cleaned = cleanRenderText(outcome.text, COMMAND_RESULT_CELLS)
+      if (cleaned !== '') {
+        channel.notify(cleaned, outcome.kind === 'error' ? { color: 'error' } : undefined)
+      }
+      return outcome.consumeDraft
+    }).catch((error: unknown) => {
+      if (channel.agentBindingGeneration !== originAgentBinding) return false
+      const detail = cleanCommandError(error)
+      if (detail !== '') channel.notify(detail, { color: 'error' })
+      return false
+    })
+  }
+
   /** Route every permission switch through the official command path when it
    *  is registered; otherwise fall back to the permission-presets service's
    *  own write path (the same handler the command drives) so the picker and
    *  typed `/permission <preset>` keep working on compositions where the
-   *  command row never reaches this agent's registry. */
-  const runPermissionCommand = (rawInput: string): void => {
+   *  command row never reaches this agent's registry. The fallback carries no
+   *  images: it is not a registry command and has no image grammar. */
+  const runPermissionCommand = (
+    rawInput: string,
+    images: readonly ComposerImageRef[] = [],
+  ): Promise<boolean> => {
     const originAgentBinding = channel.agentBindingGeneration
     const mounted = channel.commandList.some(command => command.external && command.name === 'permission')
-    const run = mounted
-      ? channel.runExternalCommand('permission', rawInput)
-      : channel.runPermissionPreset(rawInput.trim()).then(ok => (ok ? '' : undefined))
-    void run.then((text) => {
-      if (channel.agentBindingGeneration !== originAgentBinding) return
-      if (text === undefined) {
+    const run: Promise<ExternalCommandOutcome | undefined> = mounted
+      ? channel.runExternalCommandOutcome('permission', rawInput, images)
+      : channel.runPermissionPreset(rawInput.trim()).then(ok =>
+        ok ? { kind: 'success' as const, text: '', consumeDraft: true as const } : undefined)
+    return run.then((outcome) => {
+      if (channel.agentBindingGeneration !== originAgentBinding) return false
+      if (outcome === undefined) {
         channel.notify(t('command-not-found', { name: 'permission' }), { color: 'error' })
-        return
+        return false
       }
-      const cleaned = typeof text === 'string' ? cleanRenderText(text, PERMISSION_RESULT_CELLS) : ''
-      if (cleaned !== '') channel.notify(cleaned)
+      const cleaned = cleanRenderText(outcome.text, COMMAND_RESULT_CELLS)
+      if (cleaned !== '') {
+        channel.notify(cleaned, outcome.kind === 'error' ? { color: 'error' } : undefined)
+      }
+      return outcome.consumeDraft
     }).catch((error: unknown) => {
-      if (channel.agentBindingGeneration !== originAgentBinding) return
-      const detail = cleanPermissionError(error)
+      if (channel.agentBindingGeneration !== originAgentBinding) return false
+      const detail = cleanCommandError(error)
       if (detail !== '') channel.notify(detail, { color: 'error' })
+      return false
     })
   }
 
@@ -1115,7 +1338,11 @@ export function Chat({
     }
   }
 
-  const runCommand = (name: string, rawInput = ''): boolean => {
+  const runCommand = (
+    name: string,
+    rawInput = '',
+    images: readonly ComposerImageRef[] = [],
+  ): boolean | Promise<boolean> => {
     switch (name) {
       case 'activity': {
         // Ported from the pi working-activity extension: bare `/activity`
@@ -1127,7 +1354,7 @@ export function Chat({
         if (parts[0] === 'status') {
           setHelpOpen(false)
           channel.pushLocal('/activity', [
-            t('activity-current-preset', { name: channel.activityFrames ?? 'claude' }),
+            t('activity-current-preset', { name: channel.activityFrames ?? 'moon8' }),
             t('activity-switch-hint'),
             t('activity-persist-hint'),
           ])
@@ -1141,7 +1368,7 @@ export function Chat({
           }
           const current = channel.activityFrames
           channel.pushLocal('/activity', [
-            t('activity-current-direct', { name: current ?? 'claude' }),
+            t('activity-current-direct', { name: current ?? 'moon8' }),
             ...PRESET_NAMES.map(name =>
               `${name.padEnd(10)} ${name === 'random' ? t('activity-random-each') : FRAME_PRESETS[name].frames.slice(0, 5).join(' ')}${name === current ? t('activity-current-marker') : ''}`,
             ),
@@ -1322,7 +1549,7 @@ export function Chat({
         return true
       }
       case 'color': {
-        // `/color`（CC accent，按会话持久化）：无参打开调色板选择器，
+        // `/color`（按会话持久化的 accent）：无参打开调色板选择器，
         // `/color <name>` 直接设置，`/color status` 显示当前，`/color
         // reset` 清除回主题默认。颜色经 `session/color` 事件按会话保存
         // ——resume/rewind 后仍是这个会话自己的颜色（见 channel.ts）。
@@ -1367,7 +1594,7 @@ export function Chat({
       case 'new': {
         // One-shot `/new` (issue #25): the old session stays persisted and
         // is recoverable via /resume, so discarding the live view is
-        // non-destructive — no CC-style "press /new again" confirmation.
+        // non-destructive — no second confirmation is required.
         setHelpOpen(false)
         void channel.newSession().then((ok) => {
           if (!ok) return
@@ -1583,7 +1810,7 @@ export function Chat({
         return true
       }
       case 'agentview': {
-        // CC's `claude agents`: one screen for every session. Opens
+        // The agent view shows one screen for every session. It opens
         // immediately; the view reads its own rows (live + persisted).
         setHelpOpen(false)
         agentViewOpenSessionRef.current = channel.agentId
@@ -1592,7 +1819,7 @@ export function Chat({
       }
       case 'bg':
       case 'background': {
-        // CC's `/background`: the attached session moves to the background
+        // `/background`: the attached session moves to the background
         // (it keeps running in this process), the terminal lands on a fresh
         // session, and the agent view opens on top.
         setHelpOpen(false)
@@ -1648,8 +1875,8 @@ export function Chat({
         return true
       }
       case 'rewind':
-        // Same picker as PromptInput's double-Esc on an empty input (CC
-        // rewind); `openRewind` notifies when there is nothing to rewind.
+        // Same picker as PromptInput's double-Esc on an empty input;
+        // `openRewind` notifies when there is nothing to rewind.
         setHelpOpen(false)
         openRewind()
         return true
@@ -1847,8 +2074,7 @@ export function Chat({
           setHelpOpen(false)
           const snapshot = channel.permissionPresets()
           if (snapshot.options.some(option => option.value === 'status')) {
-            runPermissionCommand(rawInput)
-            return true
+            return runPermissionCommand(rawInput, images)
           }
           const currentName = snapshot.availability === 'unavailable'
             ? t('permission-roster-unavailable')
@@ -1866,8 +2092,7 @@ export function Chat({
           setHelpOpen(false)
           const snapshot = channel.permissionPresets()
           if (snapshot.availability === 'unavailable' || snapshot.options.length === 0) {
-            runPermissionCommand(rawInput)
-            return true
+            return runPermissionCommand(rawInput, images)
           }
           const currentValue = snapshot.current?.kind === 'preset' ? snapshot.current.value : undefined
           const currentIndex = currentValue === undefined
@@ -1888,8 +2113,7 @@ export function Chat({
         }
         if (reachable) {
           setHelpOpen(false)
-          runPermissionCommand(rawInput)
-          return true
+          return runPermissionCommand(rawInput, images)
         }
         return false
       }
@@ -1911,14 +2135,7 @@ export function Chat({
         }
         if (mounted) {
           setHelpOpen(false)
-          void channel.runExternalCommand('plan', rawInput).then((text) => {
-            if (text !== undefined && text !== '') {
-              channel.notify(text)
-            } else if (text === undefined) {
-              channel.notify(t('command-not-found', { name: 'plan' }), { color: 'error' })
-            }
-          })
-          return true
+          return runExternalCommand('plan', rawInput, images)
         }
         return false
       }
@@ -2044,7 +2261,7 @@ export function Chat({
         }
         return true
       case 'vim': {
-        // `/vim`（CC vim 编辑模式）：切换输入框的 vim 编辑开关。状态在
+        // `/vim`：切换输入框的 vim 编辑开关。状态在
         // PromptInput 内部（controllerRef.toggleVim），每次切换落回 insert
         // 子模式；Esc 进 normal、i/a/o 回 insert。会话级、不持久化。
         setHelpOpen(false)
@@ -2086,7 +2303,7 @@ export function Chat({
         return true
       }
       case 'btw': {
-        // CC /btw：单轮无工具侧问，overlay 态纯 UI，不打断主回合、不写
+        // `/btw`：单轮无工具侧问，overlay 态纯 UI，不打断主回合、不写
         // 会话历史。空参数只提示用法。
         setHelpOpen(false)
         const question = rawInput.trim()
@@ -2138,21 +2355,14 @@ export function Chat({
         )
         if (external) {
           setHelpOpen(false)
-          void channel.runExternalCommand(name, rawInput).then((text) => {
-            if (text !== undefined && text !== '') {
-              channel.notify(text)
-            } else if (text === undefined) {
-              channel.notify(t('command-not-found', { name }), { color: 'error' })
-            }
-          })
-          return true
+          return runExternalCommand(name, rawInput, images)
         }
         return false
       }
     }
   }
 
-  // === Message-selection mode (CC's Shift+↑ message actions) ===
+  // === Message-selection mode (Shift+↑ message actions) ===
   // NOTE: rows is a live in-place array on the channel (no new reference per
   // update), so derived lists must be computed per render — a useMemo keyed
   // on `channel.rows` would freeze at the first empty snapshot forever.
@@ -2172,7 +2382,7 @@ export function Chat({
     return q ? historyEntries.filter(e => e.text.toLowerCase().includes(q)) : historyEntries
   }, [historyEntries, historyQuery])
 
-  // Double-Esc rewind: the user's own messages, newest first (CC lists the
+  // Double-Esc rewind: the user's own messages, newest first (the list shows
   // selectable user turns; steering side-questions are excluded). Computed
   // per render while the picker is open — `channel.rows` is a live in-place
   // array (see selectableRows).
@@ -2218,7 +2428,7 @@ export function Chat({
   const performRewind = async (row: ChatRow, mode: string | null = null) => {
     const text = await channel.rewindTo(row, mode)
     if (text !== null) {
-      // CC puts the restored message back in the prompt for re-editing.
+      // Put the restored message back in the prompt for re-editing.
       setHistoryFill(text)
       channel.notify(t('rewind-done'))
     }
@@ -2346,7 +2556,7 @@ export function Chat({
   })()
 
   // Incsearch: highlight all matches (screen-space overlay) and keep the
-  // current match row in view as the query changes (CC semantics).
+  // current match row in view as the query changes.
   React.useEffect(() => {
     if (!searchActive) return
     setHighlight(searchQuery)
@@ -2411,11 +2621,16 @@ export function Chat({
   const lastModalEnterAtRef = React.useRef(0)
 
   useInput((input, key, event) => {
-    // The /btw panel owns the keyboard while open (its own useInput handles
-    // Esc/Enter/Space close, ↑/↓ scroll, c copy; everything else is
-    // swallowed there). Chat registered first, so an early return here does
-    // not block the event from reaching the panel.
-    if (btw !== null) return
+    // Prompt-slot panels own the keyboard while visible. Their own useInput
+    // handles the relevant keys; Chat registered first, so yielding here
+    // still lets the panel receive them. PromptInput now stays mounted but
+    // suspended to preserve async command drafts, making this guard also
+    // essential for Ctrl+C: it must never clear the hidden composer.
+    if (
+      btw !== null
+      || overlay.kind === 'tips'
+      || (recap !== null && (!recap.auto || recap.expanded))
+    ) return
     // Same for the session browser: it renders instead of the conversation,
     // so every key belongs to it — including the plain letters that drive its
     // search box, which Chat would otherwise route into the prompt.
@@ -2423,7 +2638,7 @@ export function Chat({
     // Same for the session tree: plain letters drive its search, clicks and
     // Enter drive its action menu.
     if (treeOpen) return
-    // The agent view (CC `claude agents`) is another whole-screen surface:
+    // The agent view is another whole-screen surface:
     // its dispatch input owns every printable key.
     if (agentViewOpen) return
     // Same for the settings screen: plain letters (s save / d discard) and
@@ -2514,15 +2729,37 @@ export function Chat({
     if (helpOpen) return
     // The questionnaire / approval panel / managed plugin dialog owns the
     // keyboard while one is pending (the panel's own useInput handles
-    // ↑/↓/Space/Tab/Enter/Esc; the prompt input is unmounted, so nothing
+    // ↑/↓/Space/Tab/Enter/Esc; the prompt input is suspended, so nothing
     // else should see these keys).
     if (questionSnapshot !== null || approvalSnapshot !== null || dialogSnapshot !== null) return
     const returnCandidate = isPlainReturnInput(input, key)
     const returnNow = Date.now()
     const plainReturn = returnCandidate && returnNow - lastModalEnterAtRef.current >= 80
     if (plainReturn) lastModalEnterAtRef.current = returnNow
-    // Esc clears a settled mouse selection first (CC precedence), ahead of
-    // every other Esc meaning below (close pickers, interrupt the turn).
+    if (overlay.kind === 'image-preview') {
+      // Modal gallery owns plain left/right. Caret peeks below still leave
+      // navigation with PromptInput. Esc/Ctrl+C/Enter keep their close semantics.
+      if (key.escape || (key.ctrl && input === 'c') || plainReturn) {
+        dispatchOverlay({ type: 'close' })
+      } else if (!key.ctrl && !key.meta && !key.shift && (key.leftArrow || key.rightArrow)) {
+        dispatchOverlay({ type: 'image-step', delta: key.leftArrow ? -1 : 1 })
+      }
+      event.stopImmediatePropagation()
+      return
+    }
+    if (peekPreview !== null && key.escape) {
+      // Caret-driven preview: Esc dismisses it until the caret leaves the
+      // token (PromptInput's own Esc arm normally gets there first; this is
+      // the fallback when the prompt is not listening). Every other key
+      // stays with the prompt, so the caret keeps moving (and the card
+      // follows it) while the preview is up.
+      dismissPeek()
+      event.stopImmediatePropagation()
+      return
+    }
+    // Esc clears a settled mouse selection before the ordinary chat meanings
+    // below, but never before a top-level modal. Otherwise a preview opened
+    // over selected transcript text needed two Esc presses to close.
     // hasSelection() is an imperative read — no subscription needed.
     if (key.escape && hasMouseSelection()) {
       clearMouseSelection()
@@ -2537,7 +2774,7 @@ export function Chat({
         setHighlight('')
         handle?.scrollTo(searchAnchorRef.current)
       } else if (plainReturn) {
-        // Enter commits; 0-match junk queries don't persist (CC behavior).
+        // Enter commits; 0-match junk queries don't persist.
         if (searchCount === 0) setSearchQuery('')
         dispatchOverlay({ type: 'close' })
       } else if (key.backspace) {
@@ -2566,7 +2803,7 @@ export function Chat({
       return
     }
     // After Enter closed the search bar, n/N keep walking the matches
-    // (CC: "Query persists across bar open/close so n/N keep working").
+    // The query persists across bar open/close so n/N keep working.
     // Transcript mode only — in prompt mode n/N are ordinary input chars.
     if (expanded && input === 'n' && searchQuery && searchCount > 0 && !key.ctrl && !key.meta && !key.super) {
       setSearchCurrent(i => (i >= searchCount - 1 ? 0 : i + 1))
@@ -2833,7 +3070,7 @@ export function Chat({
         const option = overlay.snapshot.options[currentIndex]
         permissionOverlayFocusRef.current = null
         dispatchOverlay({ type: 'close' })
-        if (option !== undefined) runPermissionCommand(` ${option.value}`)
+        if (option !== undefined) void runPermissionCommand(` ${option.value}`)
       } else if (key.escape) {
         permissionOverlayFocusRef.current = null
         dispatchOverlay({ type: 'close' })
@@ -2846,9 +3083,7 @@ export function Chat({
       } else if (plainReturn) {
         const on = overlay.index === 0
         dispatchOverlay({ type: 'close' })
-        void channel.runExternalCommand('plan', on ? '' : ' off').then((text) => {
-          if (text !== undefined && text !== '') channel.notify(text)
-        })
+        void runExternalCommand('plan', on ? '' : ' off')
       } else if (key.escape) {
         dispatchOverlay({ type: 'close' })
       }
@@ -2890,7 +3125,7 @@ export function Chat({
       if (key.escape) {
         dispatchOverlay({ type: 'close' })
       } else if (key.ctrl && (input === 'c' || input === 'd')) {
-        // CC's history search cancels on ctrl+c/ctrl+d too.
+        // History search cancels on ctrl+c/ctrl+d too.
         dispatchOverlay({ type: 'close' })
       } else if (plainReturn) {
         const entry = historyMatches[focus]
@@ -2904,7 +3139,7 @@ export function Chat({
           dispatchOverlay({ type: 'move', delta: -1, count: historyMatches.length })
         }
       } else if (key.downArrow || actionMatches('history', input, key)) {
-        // CC's historySearch:next — ↓ and the history key (default Ctrl+R)
+        // History search next — ↓ and the history key (default Ctrl+R)
         // walk to the next match.
         if (historyMatches.length > 0) {
           dispatchOverlay({ type: 'move', delta: 1, count: historyMatches.length })
@@ -3055,7 +3290,7 @@ export function Chat({
         setSelectedId(null)
       }
     } else if (key.escape && channel.working && !helpOpen && !promptControllerRef.current?.vimActive()) {
-      // CC's chat:cancel — esc interrupts a running turn (the prompt input
+      // Esc interrupts a running turn (the prompt input
       // only sees esc when idle, where it has the double-tap-clear meaning).
       // With messages queued for delivery, interrupt-and-deliver them right
       // away (Codex behavior); otherwise a plain interrupt parks the queue.
@@ -3063,7 +3298,10 @@ export function Chat({
       // NORMAL, NORMAL = no-op/cancel pending d) and the prompt owns it;
       // interrupting still works via Ctrl+C / Ctrl+Enter.
       if (channel.pending.length > 0) {
-        const count = channel.interruptAndDeliver(channel.pending.map(item => item.text))
+        const count = channel.interruptAndDeliver(channel.pending.map(item => ({
+          text: item.text,
+          images: item.images ?? [],
+        })))
         if (count > 0) {
           channel.notify(t('interrupt-delivered', { n: count }), { timeoutMs: 2500 })
         }
@@ -3089,7 +3327,7 @@ export function Chat({
       const ink = instances.get(process.stdout) ?? instances.values().next().value
       ink?.reanchorViewport()
     } else if (input === '/' && !key.ctrl && !key.meta && !key.super && !helpOpen) {
-      // `/` in transcript mode (Ctrl+O expanded, CC's REPL semantics:
+      // `/` in transcript mode (Ctrl+O expanded):
       // search is active on the transcript screen where `/` isn't a command).
       if (expanded) {
         searchAnchorRef.current = handle?.getScrollTop() ?? 0
@@ -3101,7 +3339,7 @@ export function Chat({
         event.stopImmediatePropagation()
       }
     } else if (key.ctrl && (input === 'c' || input === 'd')) {
-      // CC's app:exit — ctrl+c interrupts a running turn; idle ctrl+c
+      // Ctrl+C interrupts a running turn; idle Ctrl+C
       // CLEARS a non-empty prompt (single press) and only arms the
       // double-press exit when the input is empty; ctrl+d keeps the
       // time-based double-press exit regardless.
@@ -3136,7 +3374,7 @@ export function Chat({
         requestExit()
       }
     } else if (actionMatches('redraw', input, key)) {
-      // CC's app:redraw (default Ctrl+L) — clear the physical terminal and
+      // Redraw (default Ctrl+L) — clear the physical terminal and
       // repaint.
       instances.get(process.stdout)?.forceRedraw()
       // Consume: same readline-shadowing rule as dashboard/showAll below.
@@ -3154,7 +3392,7 @@ export function Chat({
       // Consume: same readline-shadowing rule as dashboard/showAll above.
       event.stopImmediatePropagation()
     } else if (plainReturn && !isSticky) {
-      // Enter while scrolled up returns to the bottom (CC's pill: the
+      // Enter while scrolled up returns to the bottom: the
       // affordance now exists whenever the view is off the bottom, not
       // only with unseen rows).
       handle?.scrollToBottom()
@@ -3250,12 +3488,7 @@ export function Chat({
           channel.closePluginScene()
         }}
       >
-        {React.createElement(pluginScene.component, {
-          React,
-          ui: tuiKit,
-          channel,
-          close: () => channel.closePluginScene(),
-        })}
+        {renderScene ? renderScene(pluginScene.id, channel) : <Text>Scene unavailable: {pluginScene.id}</Text>}
       </PluginSceneBoundary>
     )
     return fullscreen ? node : <AlternateScreen>{node}</AlternateScreen>
@@ -3401,6 +3634,17 @@ export function Chat({
   const promptSelectionActive =
     selectionActive || overlay.kind !== 'none' || btw !== null
 
+  // These panels replace the visible composer, but PromptInput remains
+  // mounted (suspended) so an async registry command cannot lose its exact
+  // text/image draft while it waits for a user decision.
+  const promptReplacementOpen =
+    approvalPanelNode !== null
+    || dialogSnapshot !== null
+    || overlay.kind === 'tips'
+    || (recap !== null && (!recap.auto || recap.expanded))
+    || btw !== null
+    || questionPanelNode !== null
+
   // The trajectory scene replaces the conversation for as long as it is open.
   // Rendering it INSTEAD of (not above) the transcript is what makes it a
   // screen rather than an overlay: it owns the full viewport, and the
@@ -3437,14 +3681,43 @@ export function Chat({
       ? null
       : channel.rows.find(row => row.id === anchorUserRowId)?.text ?? null
 
+  // Modal image preview, shared by the composer's [Image #N] tokens and the
+  // transcript thumbnails. It normally lives INSIDE the transcript row, so
+  // the card centers over the conversation and the sticky header, prompt
+  // and status rows stay visible. While the fullscreen draft editor is open
+  // it moves to the root, after PromptEditorLayer, so it still paints above
+  // the editor (the editor state stays put; closing the preview restores it).
+  // The layer needs its region before its first paint (see the component):
+  // the transcript viewport height from the ScrollBox handle and the content
+  // column width. The full-screen (editor-open) placement uses the terminal.
+  const imagePreviewRegion = promptEditorOpen
+    ? { columns: terminalColumns, rows: terminalRows }
+    : { columns: terminalColumns, rows: handle?.getViewportHeight() ?? terminalRows }
+  const imagePreviewNode = activePreview !== null && (activePreview.peek || imagePreviewOwned)
+    ? (
+      <ImagePreviewOverlay
+        image={activePreview.image}
+        title={activePreview.title}
+        navigation={previewGallery.length > 1 && previewIndex >= 0 ? {
+          index: previewIndex, total: previewGallery.length,
+          onPrevious: () => stepPreview(-1), onNext: () => stepPreview(1),
+        } : undefined}
+        onClose={activePreview.peek
+          ? () => setPeekSuppressed(peekKey(activePreview.image, activePreview.title))
+          : () => dispatchOverlay({ type: 'close-if', kind: 'image-preview' })}
+        region={imagePreviewRegion}
+      />
+    )
+    : null
+
   return (
     <Box ref={wakeTickRef} flexDirection="column" flexGrow={1} width="100%">
       {!isSticky && anchorUserText && (
-        <StickyPromptHeader
+        <PinnedTurnHeader
           text={anchorUserText}
           onClick={() => {
-            // Click snaps the pinned prompt to the viewport top (CC's
-            // StickyPromptHeader). Jump by the SAME content coordinate the
+            // Click snaps the pinned prompt to the viewport top. Jump by the
+            // SAME content coordinate the
             // rail's tick uses (timeline turn top = the prompt TEXT top):
             // the element-based seek lands the row wrapper's margin at the
             // top instead — one row shy of the text top the anchor rule
@@ -3472,7 +3745,7 @@ export function Chat({
           effort={channel.reasoningEffort}
           cwd={channel.displayCwd}
           whale={channel.whale}
-          whaleIdle={channel.whaleIdle}
+          whaleIdle={channel.whaleIdle && whaleArtVisible}
           working={channel.working}
           // Resuming a long session skips the ~3.4s opening animation: it
           // keeps firing low-frequency React commits that compete with the
@@ -3526,6 +3799,8 @@ export function Chat({
           onOpenSubagent={(agentId) => setSubagentDetailId(agentId)}
           onOpenJobs={() => setJobsPanelOpen(true)}
           onOpenFile={openFileActions}
+          onPreviewImage={openImagePreview}
+          suppressImageGraphics={activePreview !== null}
         />
         </ScrollBox>
         {(() => {
@@ -3552,6 +3827,7 @@ export function Chat({
             />
           )
         })()}
+        {!promptEditorOpen && imagePreviewNode}
       </Box>
       {/* Bottom chrome (pill, spinners, dialogs, prompt, statusline): never
           let flex shrink squeeze these fixed-height rows — the ScrollBox
@@ -3569,7 +3845,7 @@ export function Chat({
           channel.workingActivity !== undefined &&
           channel.workingActivity.line !== '' &&
           channel.workingActivity.phase !== 'idle' ? (
-            // The working-activity line REPLACES the CC random-verb spinner
+            // The working-activity line replaces the random-verb spinner
             // while a turn runs: the plugin's live line (thinking copy /
             // running tool / narration) is the status, with the spinner
             // slot's token counter preserved as a suffix. Only real activity
@@ -3633,6 +3909,27 @@ export function Chat({
             {statusEntries.map(entry => entry.text).join(' · ')}
           </Text>
         )}
+        {activePreview === null && statusViews.map(view => (
+          <PluginStatusViewBoundary
+            key={`${view.key}:${view.registrationId}`}
+            viewKey={view.key}
+            onError={(key, error) => statusContributions.reportViewError(key, error)}
+          >
+            <Box
+              flexDirection="column"
+              flexShrink={0}
+              maxHeight={view.maxRows}
+              overflow="hidden"
+            >
+              <Box flexDirection="column" flexShrink={0}>
+                {React.createElement(view.component, {
+                  React,
+                  ui: STATUS_VIEW_UI,
+                })}
+              </Box>
+            </Box>
+          </PluginStatusViewBoundary>
+        ))}
         {/* 输入簇：可替换输入行链 + 状态行 + 瞬态浮层。浮层锚点收窄到本簇
             顶边（= 输入行顶边），picker 紧贴输入框向上展开，盖住其上
             todo/spinner/转录尾部行（用户接受的取舍），自身零布局高度、
@@ -3696,33 +3993,37 @@ export function Chat({
           </Box>
         ) : questionPanelNode !== null ? (
           questionPanelNode
-        ) : (
-          <PromptInput
-            channel={channel}
-            helpOpen={helpOpen}
-            onToggleHelp={() =>{  setHelpOpen(previous => !previous) }}
-            onRunCommand={runCommand}
-            selectionActive={promptSelectionActive}
-            fillText={historyFill}
-            onFillConsumed={() =>{  setHistoryFill(null) }}
-            onRewindRequest={openRewind}
-            onBackgroundRequest={backgroundToAgentView}
-            backgroundAgentsNeedingInput={
-              // Only the real channel supplies the seam; pre-agent-view test
-              // stubs must not grow the footer row (layout-dependent
-              // regressions pin the visible row count). The footer only
-              // renders while some session actually waits (N > 0): a
-              // permanent idle row would steal a transcript row on every
-              // real channel — one row is enough to scroll the startup
-              // header fully off a short terminal, pausing its viewport
-              // clock and shifting every row-count layout invariant.
-              channel.agentViewRows !== undefined && backgroundAgentsNeedingInput > 0
-                ? backgroundAgentsNeedingInput
-                : undefined
-            }
-            controllerRef={promptControllerRef}
-          />
-        )}
+        ) : null}
+        <PromptInput
+          key="prompt-input"
+          channel={channel}
+          suspended={promptReplacementOpen}
+          helpOpen={helpOpen}
+          onToggleHelp={() =>{  setHelpOpen(previous => !previous) }}
+          onRunCommand={runCommand}
+          selectionActive={promptSelectionActive}
+          fillText={historyFill}
+          onFillConsumed={() =>{  setHistoryFill(null) }}
+          onRewindRequest={openRewind}
+          onBackgroundRequest={backgroundToAgentView}
+          backgroundAgentsNeedingInput={
+            // Only the real channel supplies the seam; pre-agent-view test
+            // stubs must not grow the footer row (layout-dependent
+            // regressions pin the visible row count). The footer only
+            // renders while some session actually waits (N > 0): a
+            // permanent idle row would steal a transcript row on every
+            // real channel — one row is enough to scroll the startup
+            // header fully off a short terminal, pausing its viewport
+            // clock and shifting every row-count layout invariant.
+            channel.agentViewRows !== undefined && backgroundAgentsNeedingInput > 0
+              ? backgroundAgentsNeedingInput
+              : undefined
+          }
+          controllerRef={promptControllerRef}
+          onCaretImage={handleCaretImage}
+          caretPreviewOpen={peekPreview !== null}
+          onDismissCaretPreview={dismissPeek}
+        />
         <StatusLine
           channel={channel}
           selectionActive={selectionActive}
@@ -3939,7 +4240,7 @@ export function Chat({
                   if (approvalSnapshot !== null || questionSnapshot !== null || dialogSnapshot !== null) return
                   const option = overlay.snapshot.options[index]
                   dispatchOverlay({ type: 'close' })
-                  if (option !== undefined) runPermissionCommand(` ${option.value}`)
+                  if (option !== undefined) void runPermissionCommand(` ${option.value}`)
                 }}
               />
             </Box>
@@ -3952,9 +4253,7 @@ export function Chat({
                 onPick={(index) => {
                   dispatchOverlay({ type: 'close' })
                   const on = index === 0
-                  void channel.runExternalCommand('plan', on ? '' : ' off').then((text) => {
-                    if (text !== undefined && text !== '') channel.notify(text)
-                  })
+                  void runExternalCommand('plan', on ? '' : ' off')
                 }}
               />
             </Box>
@@ -4058,7 +4357,7 @@ export function Chat({
               />
             </Box>
           )}
-          {overlay.kind === 'search' && <TranscriptSearchBar query={searchQuery} cursorOffset={searchCursor} count={searchCount} current={searchCurrent} />}
+          {overlay.kind === 'search' && <TranscriptSearch query={searchQuery} cursorOffset={searchCursor} count={searchCount} current={searchCurrent} />}
         </OverlayAbove>
         )}
         </Box>
@@ -4072,24 +4371,28 @@ export function Chat({
         invalidationKey={`${overlay.kind}:${dialogOverlayOpen}:${btw !== null}`}
         subscribeInvalidation={subscribeTooltipInvalidation}
       />
-      {/* 全屏草稿编辑浮层：必须挂在 TooltipLayer 之后（树序最后），
-          才能盖住包括状态栏在内的全部后绘兄弟。内容由 PromptInput
-          经 module store 发布（见 PromptEditor.tsx）。 */}
+      {/* 全屏草稿编辑浮层：必须挂在 TooltipLayer 之后，才能盖住包括
+          状态栏在内的全部普通后绘兄弟。内容由 PromptInput 经 module
+          store 发布（见 PromptEditor.tsx）。图片预览是唯一有意后绘于它
+          的 top modal：这样编辑器状态留在原处，关闭预览即可原样恢复。 */}
       <PromptEditorLayer />
+      {/* 模态图片预览的全屏位：只在全屏草稿编辑器展开时用（编辑器盖住了
+          transcript 行，预览必须作为根的最后一个孩子才压得过它）；平时
+          预览挂在上面的 transcript 行内，见 imagePreviewNode。 */}
+      {promptEditorOpen && imagePreviewNode}
     </Box>
   )
 }
 
 /**
  * The pinned prompt header shown above the ScrollBox while the user has
- * scrolled up (mirroring Claude Code's FullscreenLayout.StickyPromptHeader).
- * Pins the user message the transcript viewport is currently showing — the
- * topmost visible user message, or the nearest one above when only assistant
+ * scrolled up. It pins the user message the transcript viewport is currently
+ * showing — the topmost visible user message, or the nearest one above when only assistant
  * content fills the view — so it tracks which turn the user is reading
  * instead of always carrying the latest prompt. Fixed at 1 row so the
  * ScrollBox never shifts when the text changes.
  */
-function StickyPromptHeader({
+function PinnedTurnHeader({
   text,
   onClick,
 }: {
@@ -4104,7 +4407,7 @@ function StickyPromptHeader({
       paddingRight={1}
       onClick={onClick}
     >
-      <Text color="briefLabelYou" bold wrap="truncate-end">
+      <Text color="userPromptLabel" bold wrap="truncate-end">
         {POINTER} {text}
       </Text>
     </Box>
@@ -4146,7 +4449,7 @@ function NewMessagesPill({
   )
 }
 
-/** /model while the provider catalog is still loading (CC's LoadingState). */
+/** /model while the provider catalog is still loading. */
 function ModelPickerLoading(): React.ReactNode {
   return (
     <Pane color="permission">
@@ -4165,10 +4468,10 @@ function ModelPickerLoading(): React.ReactNode {
 }
 
 /**
- * The `/` incsearch bar (ported from CC's REPL TranscriptSearchBar): a
+ * The `/` incsearch bar: a
  * single row above the prompt input with the query, a block cursor, and the
  * match counter (`current/count`) or a red `no matches` when nothing hits.
- */function TranscriptSearchBar({
+ */function TranscriptSearch({
   query,
   cursorOffset,
   count,
@@ -4182,7 +4485,7 @@ function ModelPickerLoading(): React.ReactNode {
   const cursorChar = cursorOffset < query.length ? query[cursorOffset] : ' '
   return (
     // noSelect: the bar's own text must not match the search query (the
-    // screen-space highlight would self-match, CC's searchHighlight.ts:76).
+    // screen-space highlight would self-match).
     <NoSelect
       borderTopDimColor
       borderBottom={false}

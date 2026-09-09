@@ -7,7 +7,7 @@
  */
 import { createRequire } from 'node:module'
 const require = createRequire(import.meta.url)
-const PTY = process.env.DSH_CC_NODE_PTY ?? 'node-pty'
+const PTY = process.env.DSH_TUI_NODE_PTY ?? 'node-pty'
 const pty = require(PTY)
 const { Terminal } = require('@xterm/headless')
 
