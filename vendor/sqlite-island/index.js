@@ -5,3 +5,5 @@
  * `SqliteSessionPersistence` default export with a coherent rc.2 closure.
  */
 export { default } from '@deepseek-ai/dsh-session-persistence-sqlite'
+export { Context } from '@deepseek-ai/cordis'
+export { default as SessionStore, Session } from '@deepseek-ai/dsh-session'

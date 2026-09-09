@@ -148,6 +148,7 @@ export function createBindingEvents(ctx: Context, deps: {
         }
         deps.projector.renderStreamFrame(frame)
         if (frame.type === 'chunk') deps.state.emitStream()
+        else if (frame.type === 'end') deps.state.emit()
       })
       on('subagent/start' as never, (info: { id: string; runId?: string; provider: string; local?: boolean }) => {
         if (current()) deps.subagents.onStart(info)

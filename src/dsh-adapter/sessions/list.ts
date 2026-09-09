@@ -18,7 +18,6 @@
  *
  * @module @deepseek-harness-tui/dsh-tui/sessions/list
  */
-import { existsSync } from 'node:fs'
 import { basename } from 'node:path'
 import {
   digestSession,
@@ -28,7 +27,7 @@ import {
 } from './digest.js'
 import { fileFacts } from './frames.js'
 import { classify, readHeader, type RawSessionHeader } from './header.js'
-import { findSessionLogFile } from '../compat/sessionLog.js'
+import { findSessionLogFile, resolveLocatedPath } from '../compat/sessionLog.js'
 import { readIndex, writeIndex, type DerivedEntry, type SessionIndex } from './store.js'
 import type { SessionSummary } from './types.js'
 import { readLastUsed } from '../../sessionHistory.js'
@@ -84,7 +83,7 @@ function readSnapshot(value: unknown): Listed | undefined {
  * returns bare headers — so each element is tried as a snapshot first and
  * then as a bare header.
  */
-async function enumerate(source: SessionSource, signal?: AbortSignal): Promise<Listed[]> {
+export async function enumerateSessions(source: SessionSource, signal?: AbortSignal): Promise<Listed[]> {
   if (typeof source.listSnapshots === 'function') {
     const snapshots = await source.listSnapshots(signal)
     return snapshots.map(readSnapshot).filter((entry): entry is Listed => entry !== undefined)
@@ -110,8 +109,8 @@ function bareListed(raw: unknown): Listed | undefined {
  * The backend's own `locate()` is authoritative and is asked first — but
  * since 0.1.5 it answers the CURRENT generation's path without touching the
  * filesystem, which does not exist for a session still stored as an older
- * generation; an answer is therefore trusted only when it names an existing
- * file. The fallback scans the session roots for the id, which is what the
+ * generation; resolve older generations inside that same directory. Only
+ * backends without a location fall back to scanning session roots, as the
  * compat layer has always done (generation-aware there) and is deliberately
  * independent of the backend's workspace-key scheme — so a runtime whose
  * persistence service predates `locate`, whose key sanitization changes, or
@@ -130,7 +129,7 @@ function locate(source: SessionSource, raw: unknown, sessionId: string): string 
     }
     if (location !== null && typeof location === 'object') {
       const path = (location as Record<string, unknown>)['path']
-      if (typeof path === 'string' && path.length > 0 && existsSync(path)) return path
+      if (typeof path === 'string' && path.length > 0) return resolveLocatedPath(path)?.path
     }
   }
   return findSessionLogFile(sessionId)
@@ -151,7 +150,7 @@ export async function listSummaries(
 ): Promise<readonly SessionSummary[]> {
   let listed: Listed[]
   try {
-    listed = await enumerate(source, signal)
+    listed = await enumerateSessions(source, signal)
   } catch {
     return []
   }
@@ -383,7 +382,7 @@ export async function locateSession(
 ): Promise<string | undefined> {
   let listed: Listed[]
   try {
-    listed = await enumerate(source, signal)
+    listed = await enumerateSessions(source, signal)
   } catch {
     return undefined
   }

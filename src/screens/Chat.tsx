@@ -654,6 +654,8 @@ export function Chat({
         if (result.summary === null) return null
         return { ...prev, summary: result.summary, title: result.title, error: result.error, done: true }
       })
+    }).catch(() => {
+      if (!controller.signal.aborted) setRecap(null)
     })
     return () => controller.abort()
   }, [autoRecapSessionId])
@@ -2299,6 +2301,9 @@ export function Chat({
                 done: true,
               }
             : prev))
+        }).catch(error => {
+          if (controller.signal.aborted) return
+          setRecap(prev => prev ? { ...prev, error: error instanceof Error ? error.message : String(error), done: true } : prev)
         })
         return true
       }
@@ -2321,6 +2326,9 @@ export function Chat({
         }).then(result => {
           if (controller.signal.aborted) return
           setBtw(prev => (prev ? { ...prev, answer: result.answer ?? prev.answer, error: result.error, done: true } : prev))
+        }).catch(error => {
+          if (controller.signal.aborted) return
+          setBtw(prev => prev ? { ...prev, error: error instanceof Error ? error.message : String(error), done: true } : prev)
         })
         return true
       }

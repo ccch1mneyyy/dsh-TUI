@@ -12,7 +12,7 @@ import {
   readSessionEventsFromLog,
 } from '../compat/index.js'
 import { snapshotLiveSessionEvents } from '../compat/liveSession.js'
-import { readHeader, readInheritedCut, type SessionSource, type RawSessionHeader } from '../sessions/index.js'
+import { enumerateSessions, readInheritedCut, type SessionSource, type RawSessionHeader } from '../sessions/index.js'
 import { buildSessionTree, liveTailWindow, type FamilySession, type SessionTreeData } from '../sessionTree.js'
 import type { ChannelUi } from '../../adapter/ports/channel-ui.js'
 import type { ChannelOwner } from './owner.js'
@@ -47,20 +47,7 @@ async function readTree(): Promise<SessionTreeData | null> {
       // object for locate() below.
       let listed: { header: RawSessionHeader; raw: unknown }[] = []
       try {
-        if (typeof persistence.listSnapshots === 'function') {
-          const snapshots = await persistence.listSnapshots()
-          listed = snapshots.flatMap(snapshot => {
-            const raw = (snapshot as { header?: unknown } | null)?.header
-            const header = readHeader(raw)
-            return header === undefined ? [] : [{ header, raw }]
-          })
-        } else if (typeof persistence.list === 'function') {
-          const headers = await persistence.list()
-          listed = headers.flatMap(raw => {
-            const header = readHeader(raw)
-            return header === undefined ? [] : [{ header, raw }]
-          })
-        }
+        listed = await enumerateSessions(persistence)
       } catch {
         // A listing failure degrades the tree to the live session only.
       }

@@ -747,7 +747,7 @@ function sniffLogFile(path: string): SessionLogFile | undefined {
  * @param hint - Absolute path from SessionPersistence.locate().
  * @returns The readable log, or undefined when nothing materialized there.
  */
-function resolveLocatedPath(hint: string): SessionLogFile | undefined {
+export function resolveLocatedPath(hint: string): SessionLogFile | undefined {
   const direct = existsSync(hint) ? sniffLogFile(hint) : undefined
   if (direct !== undefined) return direct
   const twin = `${hint}.zstd`
@@ -965,7 +965,7 @@ function isSeededPhysicalHeader(record: unknown): boolean {
 }
 
 /**
- * The inherited cut recorded by a `session/end-seed` marker: seq of the
+ * The inherited cut recorded by a `session/end-seed` marker: seq of the last
  * marker whose data carries `inherited: true` (the V2/V3 contract — the
  * marker closes the inherited prefix, so its seq IS the prefix length).
  */
@@ -984,9 +984,9 @@ function inheritedMarkerCut(record: unknown): number | undefined {
 
 /**
  * Envelope ceiling for the seeded-header marker scan: a fork's marker closes
- * its inherited prefix, so finding it costs one decode of that prefix —
- * bounded here so a pathological seed degrades to "cut unknown" (the tree
- * detaches the parent edge) instead of an unbounded read.
+ * its inherited prefix, but earlier markers can belong to an ancestor. Scan
+ * the log to find the last one, bounded so a huge log degrades to "cut unknown"
+ * (the tree detaches the parent edge) instead of an unbounded read.
  */
 const INHERITED_CUT_SCAN_LIMIT = 2_000_000
 
@@ -1008,6 +1008,7 @@ export function readPhysicalHeaderSeedLength(path: string): number | undefined {
     let first = true
     let seeded = false
     let scanned = 0
+    let inheritedCut: number | undefined
     for (const record of logRecords(fd, file.compressed)) {
       if (first) {
         first = false
@@ -1021,9 +1022,9 @@ export function readPhysicalHeaderSeedLength(path: string): number | undefined {
       scanned += 1
       if (scanned > INHERITED_CUT_SCAN_LIMIT) return undefined
       const cut = inheritedMarkerCut(record)
-      if (cut !== undefined) return cut
+      if (cut !== undefined) inheritedCut = cut
     }
-    return undefined
+    return inheritedCut
   } catch {
     return undefined
   } finally {

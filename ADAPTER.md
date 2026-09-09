@@ -79,9 +79,9 @@ web-app patch 按 include 语义合成一遍,直接拦截 loader entry id 复用
 
 ## 升级流程
 
-- 安装基线与验证线分离:dev 树由 `pnpm-workspace.yaml` 的 overrides 钉在
-  0.1.1-rc.2,最新 0.1.2 预发布不装进来,而是由 CI `alpha-compat` lane 对上游 tag 的源码做
-  类型与 patch 合成校验。bump 不是 `pnpm add`,是改契约声明。
+- dev 树由 `pnpm-workspace.yaml` 的 overrides 钉在 `0.1.5-alpha.2`,
+  CI `alpha-compat` lane 还对同版上游 tag 的固定 SHA 做源码类型与 patch 合成校验。
+  旧 SQLite 迁移工具的依赖闭包单独锁在 `vendor/sqlite-island`。
 - `contract.ts` 是唯一真源:主验证线原地替换、不累积;`package.json` 的
   peer/dev 范围、CI 钉住的上游 SHA、校验脚本里的版本常量都只是它的镜像,
   必须同一次改齐(位置见 [docs/contributing.md](docs/contributing.md) 跨文件清单)。
