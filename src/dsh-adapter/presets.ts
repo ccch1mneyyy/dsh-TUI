@@ -22,6 +22,7 @@ import type { SessionId } from '@deepseek-ai/dsh-session'
 import type { PromptAssembly } from '@deepseek-ai/dsh-system-prompt'
 import { recordedModelRoute, type ModelRoute } from '../modelRoute.js'
 import { snapshotLiveSessionEvents } from './compat/liveSession.js'
+import { readPersistedSession, type SessionReader } from './compat/persistence.js'
 import {
   resolveCompatiblePreset,
   resolveRecordedPreset,
@@ -83,17 +84,10 @@ export async function composePreset(ctx: Context, requested?: string): Promise<P
  * @returns The running preset id, or undefined when unrecorded/unreadable.
  */
 export async function resolvePersistedPreset(ctx: Context, sessionId: SessionId): Promise<string | undefined> {
-  const persistence = ctx.get('sessionPersistence') as
-    | {
-        load(id: SessionId): Promise<{
-          meta: { agentPreset?: string }
-          events: readonly { type: string; data: unknown }[]
-        }>
-      }
-    | undefined
+  const persistence = ctx.get('sessionPersistence') as SessionReader | undefined
   if (persistence === undefined) return undefined
   try {
-    const { meta, events } = await persistence.load(sessionId)
+    const { meta, events } = await readPersistedSession(persistence, sessionId)
     return resolveRecordedPreset({ header: meta, events })
   } catch {
     // A missing/corrupt artifact leaves resume itself to report the failure;
@@ -132,17 +126,10 @@ export function runningPresetOf(session: unknown): string | undefined {
  * @returns The recorded model route, or undefined when unrecorded/unreadable.
  */
 export async function resolvePersistedRoute(ctx: Context, sessionId: SessionId): Promise<ModelRoute | undefined> {
-  const persistence = ctx.get('sessionPersistence') as
-    | {
-        load(id: SessionId): Promise<{
-          meta: unknown
-          events: readonly { type: string; data?: unknown }[]
-        }>
-      }
-    | undefined
+  const persistence = ctx.get('sessionPersistence') as SessionReader | undefined
   if (persistence === undefined) return undefined
   try {
-    const { events } = await persistence.load(sessionId)
+    const { events } = await readPersistedSession(persistence, sessionId)
     return recordedModelRoute(events)
   } catch {
     // A missing/corrupt artifact leaves resume itself to report the failure;

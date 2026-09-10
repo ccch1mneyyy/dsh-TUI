@@ -12,7 +12,8 @@ import {
   readSessionEventsFromLog,
 } from '../compat/index.js'
 import { snapshotLiveSessionEvents } from '../compat/liveSession.js'
-import { readHeader, readInheritedCut, type SessionSource, type RawSessionHeader } from '../sessions/index.js'
+import { readPersistedSession, type SessionReader } from '../compat/persistence.js'
+import { enumerateSessions, readInheritedCut, type SessionSource, type RawSessionHeader } from '../sessions/index.js'
 import { buildSessionTree, liveTailWindow, type FamilySession, type SessionTreeData } from '../sessionTree.js'
 import type { ChannelUi } from '../../adapter/ports/channel-ui.js'
 import type { ChannelOwner } from './owner.js'
@@ -21,7 +22,7 @@ import type { ChannelOwner } from './owner.js'
 export function createSessionTreeReader(ctx: Context, binding: { readonly agent: Agent }, cwd: () => string, notify: ChannelUi['notify'], owner: ChannelOwner) {
 async function readTree(): Promise<SessionTreeData | null> {
       const persistence = ctx.get('sessionPersistence') as
-        | (SessionSource & {
+        | (SessionSource & SessionReader & {
           // Optional at runtime: fakes and third-party backends may not
           // implement the full coordinator surface.
           inspect?(id: SessionId, signal?: AbortSignal): Promise<{ events: readonly SessionEvent[] }>
@@ -47,20 +48,7 @@ async function readTree(): Promise<SessionTreeData | null> {
       // object for locate() below.
       let listed: { header: RawSessionHeader; raw: unknown }[] = []
       try {
-        if (typeof persistence.listSnapshots === 'function') {
-          const snapshots = await persistence.listSnapshots()
-          listed = snapshots.flatMap(snapshot => {
-            const raw = (snapshot as { header?: unknown } | null)?.header
-            const header = readHeader(raw)
-            return header === undefined ? [] : [{ header, raw }]
-          })
-        } else if (typeof persistence.list === 'function') {
-          const headers = await persistence.list()
-          listed = headers.flatMap(raw => {
-            const header = readHeader(raw)
-            return header === undefined ? [] : [{ header, raw }]
-          })
-        }
+        listed = await enumerateSessions(persistence)
       } catch {
         // A listing failure degrades the tree to the live session only.
       }
@@ -384,6 +372,7 @@ async function readTree(): Promise<SessionTreeData | null> {
         //     bound (64 MiB frames, decode bombs) — degrade to a placeholder
         //     instead.
         let events: readonly SessionEvent[] | undefined
+        let physicalVersion: number | undefined
         let complete = true
         let failed = false
         // First seq the chosen source actually covers: the file readers start
@@ -396,6 +385,7 @@ async function readTree(): Promise<SessionTreeData | null> {
           if (locatedPath !== undefined) {
             const viaPath = readSessionEventsFromFile(locatedPath, remaining, scanAllowance, skipBelow)
             if (viaPath !== undefined) {
+              physicalVersion = viaPath.formatVersion
               scanBudget -= viaPath.scanned
               if (viaPath.failed === true) failed = true
               else {
@@ -408,6 +398,7 @@ async function readTree(): Promise<SessionTreeData | null> {
         } else if (!hasLocate) {
           const read = readSessionEventsFromLog(id, remaining, scanAllowance, skipBelow)
           if (read !== undefined) {
+            physicalVersion = read.formatVersion
             scanBudget -= read.scanned
             if (read.failed === true) failed = true
             else {
@@ -416,6 +407,40 @@ async function readTree(): Promise<SessionTreeData | null> {
               readFrom = skipBelow
             }
           }
+        }
+        // Raw historical files use pre-migration seq coordinates. Normalize
+        // only a fully budget-checked file through the same read handle used
+        // by rewind/fork. Failed or truncated reads never escalate to a full
+        // backend parse, and cannot lend old coordinates to a V3 child.
+        const needsMigration = typeof persistence.open === 'function'
+          && physicalVersion !== liveSession.header.version
+        if (needsMigration && !complete) {
+          failed = true
+          truncated = true
+        }
+        if (!failed && typeof persistence.open === 'function' && (events === undefined || needsMigration)) {
+          try {
+            const inspection = await readPersistedSession(persistence, SessionId(id))
+            if (inspection.meta.version !== liveSession.header.version) throw new Error('session tree generation mismatch')
+            inheritedCut = parentId === undefined ? undefined : readInheritedCut(inspection)
+            parentCovered = inheritedCut === undefined ? -1 : structuralParentCovered
+            skipBelow = inheritedCut === undefined ? 0 : Math.min(inheritedCut, parentCovered + 1)
+            facts = { ...facts, seedLength: inheritedCut }
+            scanBudget -= inspection.events.length
+            const all = inspection.events.filter(event => event.seq >= skipBelow || event.type === 'session/title')
+            events = all.slice(0, remaining)
+            complete = all.length <= remaining
+            readFrom = skipBelow
+          } catch {
+            failed = true
+          }
+        }
+        if (needsMigration && failed) {
+          // Preserve the branch as a non-actionable placeholder. Its original
+          // inherited cut is not comparable to normalized family coordinates.
+          inheritedCut = undefined
+          parentCovered = -1
+          facts = { ...facts, seedLength: undefined }
         }
         if (!failed && events === undefined && typeof persistence.inspect === 'function') {
           try {

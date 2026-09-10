@@ -46,7 +46,7 @@ service、registry 或 channel seam 接入。
 
 ## Session 是真源
 
-`channel.ts` 不把 React 本地数组当作对话真相。DSH `session/event` 日志负责：
+`dsh-adapter/channel.ts` 不把 React 本地数组当作对话真相。DSH `session/event` 日志负责：
 
 - 初始历史回放与增量流式事件；
 - assistant/reasoning/tool 行的关联与 sequence anchor；

@@ -3,12 +3,17 @@
  *
  * ## What this is
  *
- * The DSH session log is an append-only stream of ~44 event types. This
- * module folds it into the flat, turn-annotated node list the trajectory
- * scene renders, pairing every bracket (`tool/call` ↔ `tool/result`,
+ * The DSH session log is an append-only stream of dozens of event types (the
+ * vocabulary grows by host generation; the fold matches exact names and lets
+ * everything else fall through). This module folds it into the flat,
+ * turn-annotated node list the trajectory scene renders, pairing every
+ * bracket (`tool/call` ↔ `tool/result`,
  * `step/start` ↔ `step/end`, `llm/retry` ↔ `llm/retry-started`,
  * `approval/asked` ↔ `approval/decided`, `compaction/start` ↔
- * `compaction/end`, `tool/code-dispatch-start` ↔ `tool/code-dispatch`) so a
+ * `compaction/end`, and the code runner's dispatch bracket —
+ * `tool/code-dispatch-start` ↔ `tool/code-dispatch` pre-0.1.5, renamed
+ * `tool/ptc-dispatch-start` ↔ `tool/ptc-dispatch` in 0.1.5 with an identical
+ * payload, so both names feed the same fold) so a
  * row can show its own wall-clock duration and outcome.
  *
  * ## Incrementality
@@ -30,11 +35,21 @@
  * {@link previewText}). Full content is not held at all — `seq`/`endSeq`
  * address the owning events for the inspector to re-read on demand.
  *
- * Storage-level chunk packing (`text-chunks`, `reasoning-chunks`,
- * `tool-call-chunks`) is a durable *encoding*, not an event vocabulary: the
+ * Stream timing reaches the fold in two generational shapes. Pre-0.1.5 logs
+ * pack chunks at the storage layer (`text-chunks`, `reasoning-chunks`,
+ * `tool-call-chunks`) — a durable *encoding*, not an event vocabulary: the
  * persistence reader expands those rows back into `assistant/chunk` events
- * before they reach the logical Session log, so this fold only ever sees the
- * expanded form.
+ * before they reach the logical Session log, and this fold reads their
+ * timestamps directly. 0.1.5 retires per-token events entirely: the compact
+ * `AssistantStreamRecord[]` travels embedded in the settling
+ * `assistant/message` (or in `assistant/attempt` for a failed/retried/
+ * cancelled attempt that committed no surface message), and the fold expands
+ * it through {@link readAssistantStream} into the same first/last-chunk
+ * timing slots. An attempt adds no ledger row — its failure already has one
+ * (`llm/retry`), a cancellation shows on the turn bracket, and the payload
+ * carries no reason to display — but its decode time is real wall-clock cost
+ * the step paid, so it feeds the timing slots exactly like a committed
+ * message.
  */
 
 import {
@@ -42,6 +57,7 @@ import {
   isApprovalDenied,
   readApprovalAsked,
   readApprovalDecided,
+  readAssistantStream,
   readCommandRun,
   readCompaction,
   readDispatch,
@@ -61,9 +77,13 @@ import { BURST_MIN, type TrajKind, type TrajNode, type TrajTokens } from './type
 export interface StepTiming {
   /** `step/start` time. */
   readonly startTime: number
-  /** First `assistant/chunk` time — the model's first observable output. */
+  /**
+   * First streamed model output — a pre-0.1.5 `assistant/chunk` time, or the
+   * head of the expanded V3 stream embedded in `assistant/message` /
+   * `assistant/attempt`.
+   */
   firstChunk?: number
-  /** Last `assistant/chunk` time. */
+  /** Last streamed model output, from the same two generational sources. */
   lastChunk?: number
   /** `step/end` time, when the step closed. */
   endTime?: number
@@ -224,6 +244,31 @@ function readTokens(usage: unknown): TrajTokens | undefined {
   return total > 0 ? tokens : undefined
 }
 
+/**
+ * Feed a V3 settlement event's embedded stream into the step's timing slot.
+ *
+ * Shared by `assistant/message` and `assistant/attempt`: both carry the exact
+ * timed stream their step produced, and both fold into the same
+ * first/last-chunk slots a pre-0.1.5 log's `assistant/chunk` events fill.
+ * First-wins on `firstChunk` keeps TTFT anchored to the step's first
+ * observable output even when a retried attempt streamed before the committed
+ * one; `lastChunk` tracks the latest stream record, so an abandoned attempt's
+ * decode time is counted in the step's cost rather than silently dropped.
+ */
+function feedStreamTiming(
+  timing: ReadonlyMap<string, StepTiming>,
+  turn: number,
+  step: number,
+  data: Record<string, unknown> | undefined,
+): void {
+  const stream = readAssistantStream(data)
+  if (stream === undefined) return
+  const slot = timing.get(`${turn}:${step}`)
+  if (slot === undefined) return
+  slot.firstChunk ??= stream[0]!.time
+  slot.lastChunk = stream[stream.length - 1]!.time
+}
+
 /** Close a bracket node with its own duration and outcome. */
 function close(
   state: FoldState,
@@ -361,8 +406,11 @@ function consume(state: FoldState, nodes: TrajNode[], timing: Map<string, StepTi
     }
 
     case 'assistant/chunk': {
-      // Chunks never become rows; they contribute only the two timestamps
-      // that separate time-to-first-token from decode throughput.
+      // Pre-0.1.5 per-token events (expanded from storage packing by the
+      // persistence reader). Chunks never become rows; they contribute only
+      // the two timestamps that separate time-to-first-token from decode
+      // throughput. 0.1.5 logs carry no such event — their stream timing
+      // arrives embedded in `assistant/message` / `assistant/attempt`.
       const turn = typeof data?.turn === 'number' ? data.turn : state.turn
       const step = typeof data?.step === 'number' ? data.step : (state.step ?? 0)
       const slot = timing.get(`${turn}:${step}`)
@@ -402,6 +450,7 @@ function consume(state: FoldState, nodes: TrajNode[], timing: Map<string, StepTi
     case 'assistant/message': {
       const turn = typeof data?.turn === 'number' ? data.turn : state.turn
       const step = typeof data?.step === 'number' ? data.step : state.step
+      feedStreamTiming(timing, turn, step ?? 0, data)
       const message = data?.message
       const content =
         typeof message === 'object' && message !== null
@@ -431,6 +480,19 @@ function consume(state: FoldState, nodes: TrajNode[], timing: Map<string, StepTi
           first = false
         }
       }
+      return
+    }
+
+    case 'assistant/attempt': {
+      // 0.1.5+: a failed, retried, or cancelled attempt that settled without
+      // committing a surface message. No ledger row — the retry bracket
+      // (`llm/retry`) and the turn's own outcome already carry the failure,
+      // and the payload holds no reason to display. Its embedded stream is
+      // real decode time the step paid, so it feeds the timing slots exactly
+      // like a committed message's stream.
+      const turn = typeof data?.turn === 'number' ? data.turn : state.turn
+      const step = typeof data?.step === 'number' ? data.step : (state.step ?? 0)
+      feedStreamTiming(timing, turn, step, data)
       return
     }
 
@@ -481,7 +543,10 @@ function consume(state: FoldState, nodes: TrajNode[], timing: Map<string, StepTi
       return
     }
 
-    case 'tool/code-dispatch-start': {
+    // The dispatch bracket kept its payload shape across its 0.1.5 rename,
+    // so both spellings pair through the same subtool bookkeeping.
+    case 'tool/code-dispatch-start':
+    case 'tool/ptc-dispatch-start': {
       const payload = readDispatch(event.data)
       if (payload === undefined) return
       const node: TrajNode = {
@@ -500,7 +565,8 @@ function consume(state: FoldState, nodes: TrajNode[], timing: Map<string, StepTi
       return
     }
 
-    case 'tool/code-dispatch': {
+    case 'tool/code-dispatch':
+    case 'tool/ptc-dispatch': {
       const payload = readDispatch(event.data)
       if (payload === undefined) return
       const open = state.subtools.get(payload.subCallId)
@@ -712,7 +778,8 @@ function consume(state: FoldState, nodes: TrajNode[], timing: Map<string, StepTi
 
     default:
       // Unknown or deliberately silent (request/context, session/title,
-      // agent/inbox/spliced, command/done, …): no ledger row. Forward
+      // agent/inbox/spliced, command/done, system/message, model/selection,
+      // deliverables/presented, subagent/catalog, …): no ledger row. Forward
       // compatibility is the default, not an error path.
       return
   }

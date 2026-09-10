@@ -90,8 +90,7 @@ export function createSessionMetadataActions(ctx: Context, deps: {
     try {
       const result = await credentials.describe(ref)
       return current(capture) ? result : undefined
-    } catch (error) {
-      // `undefined` means the optional service is absent. Keep a live
+    } catch (error) {      // `undefined` means the optional service is absent. Keep a live
       // credential service's read failure observable; only suppress it once
       // this Channel binding has been replaced or disposed.
       if (!current(capture)) return undefined
@@ -99,14 +98,36 @@ export function createSessionMetadataActions(ctx: Context, deps: {
     }
   }
 
-  const llmRequest = (capture: Capture, messages: Message[], signal?: AbortSignal): Record<string, unknown> => {
+  /**
+   * Recaps omit conversation history but borrow its effective system text.
+   * Derivation applies surface replacements and empty prompt tombstones;
+   * scanning the event log would revive superseded instructions.
+   */
+  const currentSystemText = (capture: Capture): string | undefined => {
+    try {
+      const system = capture.agent.session.deriveMessages().findLast(message => message.role === 'system')
+      const text = system?.content.map(block => block.type === 'text' ? block.text : '').join('') ?? ''
+      return text === '' ? undefined : text
+    } catch {
+      // A session without derived history has no surface prompt to lend.
+    }
+    return undefined
+  }
+
+  const llmRequest = (capture: Capture, messages: Message[], includesHistory: boolean, signal?: AbortSignal): Record<string, unknown> => {
     const header = capture.agent.session.requestHeader()
     const config = header?.config
+    // Pre-V3 headers carried the system prompt inline; V3 moved it to
+    // `system/message` surface nodes (see currentSystemText).
+    const legacySystem = (header as { system?: unknown } | undefined)?.system
+    const system = messages.some(message => message.role === 'system')
+      ? undefined
+      : typeof legacySystem === 'string' ? legacySystem : includesHistory ? undefined : currentSystemText(capture)
     return {
       provider: config?.provider ?? deps.provider(),
       model: config?.model ?? deps.model(),
       messages,
-      ...(header?.system !== undefined && { system: header.system }),
+      ...(system !== undefined && { system }),
       ...(config?.reasoningEffort !== undefined && { reasoningEffort: config.reasoningEffort }),
       ...(config?.temperature !== undefined && { temperature: config.temperature }),
       ...(config?.maxTokens !== undefined && { maxTokens: config.maxTokens }),
@@ -126,7 +147,7 @@ export function createSessionMetadataActions(ctx: Context, deps: {
       options: llmRequest(capture, [
         ...capture.agent.session.deriveMessages(),
         createUserMessage({ content: [{ type: 'text', text: wrapSideQuestion(question) }], source: { kind: 'plugin', plugin: 'dsh-tui/btw' } }),
-      ], signal),
+      ], true, signal),
       // Do not let an old session append streamed UI facts after a switch.
       onText: delta => { if (current(capture) && !options?.signal?.aborted) options?.onText?.(delta) },
       signal,
@@ -148,7 +169,7 @@ export function createSessionMetadataActions(ctx: Context, deps: {
       stream: llm.stream.bind(llm),
       options: llmRequest(capture, [
         createUserMessage({ content: [{ type: 'text', text: wrapRecapPrompt(activity) }], source: { kind: 'plugin', plugin: 'dsh-tui/recap' } }),
-      ], signal),
+      ], false, signal),
       onText: delta => { if (current(capture) && !options?.signal?.aborted) options?.onText?.(delta) },
       signal,
     })

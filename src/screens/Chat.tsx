@@ -654,6 +654,8 @@ export function Chat({
         if (result.summary === null) return null
         return { ...prev, summary: result.summary, title: result.title, error: result.error, done: true }
       })
+    }).catch(() => {
+      if (!controller.signal.aborted) setRecap(null)
     })
     return () => controller.abort()
   }, [autoRecapSessionId])
@@ -2299,6 +2301,9 @@ export function Chat({
                 done: true,
               }
             : prev))
+        }).catch(error => {
+          if (controller.signal.aborted) return
+          setRecap(prev => prev ? { ...prev, error: error instanceof Error ? error.message : String(error), done: true } : prev)
         })
         return true
       }
@@ -2321,6 +2326,9 @@ export function Chat({
         }).then(result => {
           if (controller.signal.aborted) return
           setBtw(prev => (prev ? { ...prev, answer: result.answer ?? prev.answer, error: result.error, done: true } : prev))
+        }).catch(error => {
+          if (controller.signal.aborted) return
+          setBtw(prev => prev ? { ...prev, error: error instanceof Error ? error.message : String(error), done: true } : prev)
         })
         return true
       }
@@ -2678,6 +2686,47 @@ export function Chat({
         (overlay.kind !== 'workspace-picker' || workspaceTargets.length > 0)
       if (overlayModal) return
       handle?.scrollBy(key.wheelUp ? -3 : 3)
+      event.stopImmediatePropagation()
+      return
+    }
+    // PgUp/PgDn page the transcript a full viewport at a time — the keyboard
+    // counterpart of the wheel branch above. Without it, a fullscreen session
+    // has no keyboard route to scrollback at all: the alt screen holds no
+    // native scrollback (see MessageList's historyPaint gate), so a mouse-less
+    // user cannot reach an earlier turn.
+    //
+    // Fullscreen only, on purpose. Inline mode paints committed history onto
+    // the main screen, so the terminal's OWN scrollback owns these keys there;
+    // claiming them would break paging that already works, exactly like the
+    // wheel branch above is a no-op inline.
+    //
+    // Routing mirrors the wheel branch: help stays yielded (PromptInput pages
+    // its help viewport with the same keys) and open pickers/dialogs are modal,
+    // so the transcript behind them must not move. Every guard above (session
+    // tree, settings, scenes, dashboards) already claimed the keyboard — those
+    // surfaces page their own lists with these keys.
+    //
+    // The question/approval/dialog panels deliberately do NOT yield: like the
+    // wheel branch above (whose comment spells this out), those panels mount
+    // BELOW the transcript — replacing the prompt, not covering it — so the
+    // transcript above them stays visible and scrollable while a decision is
+    // pending. The panels bind ↑/↓/Space/Tab/Enter/Esc and never these keys,
+    // so paging cannot steal anything from them.
+    if ((key.pageUp || key.pageDown) && fullscreen) {
+      if (helpOpen) return
+      const overlayModal =
+        overlay.kind !== 'none' &&
+        (overlay.kind !== 'workspace-picker' || workspaceTargets.length > 0)
+      if (overlayModal) return
+      // One less than the viewport keeps a row of context so a page never
+      // reads as a blank jump; a not-yet-measured handle falls back to a
+      // fixed page rather than paging by 0 (a dead key). The final page
+      // overshoots and the renderer clamps it exactly onto maxScroll, whose
+      // positional at-bottom restore re-pins sticky (the #421/#422 wheel
+      // contract) — so paging back home clears the new-messages pill too.
+      const viewport = handle?.getViewportHeight() ?? 0
+      const page = viewport > 1 ? viewport - 1 : 12
+      handle?.scrollBy(key.pageUp ? -page : page)
       event.stopImmediatePropagation()
       return
     }
@@ -4358,16 +4407,21 @@ function PinnedTurnHeader({
   text: string
   onClick: () => void
 }): React.ReactNode {
+  const { columns } = useTerminalSize()
+  // A one-row Box does not clip its children. Flatten hard line breaks before
+  // truncating, otherwise later prompt lines paint down the transcript gutter.
+  const label = cleanRenderText(`${POINTER} ${text}`, Math.max(1, columns - 1))
   return (
     <Box
       flexShrink={0}
       width="100%"
       height={1}
+      overflow="hidden"
       paddingRight={1}
       onClick={onClick}
     >
       <Text color="userPromptLabel" bold wrap="truncate-end">
-        {POINTER} {text}
+        {label}
       </Text>
     </Box>
   )

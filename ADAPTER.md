@@ -12,10 +12,10 @@ UI 层(`screens/`、`components/`、`ink/`、`hooks/`、`utils/`、`terminal-uti
 
 ## 上游契约
 
-- 校验版本线:主 `0.1.2-rc.1`,兼容 `0.1.2-alpha.5` / `0.1.2-alpha.4` / `0.1.2-alpha.3` / `0.1.1-rc.2` / `0.1.1-rc.1` / `0.1.0-rc.8` / `0.1.0-rc.7` / `0.1.0-rc.6`
+- 校验版本线:主 `0.1.5-alpha.2`,兼容 `0.1.5-alpha.1` / `0.1.3-alpha.2` / `0.1.2-rc.1` / `0.1.2-alpha.5` / `0.1.2-alpha.4` / `0.1.2-alpha.3` / `0.1.1-rc.2` / `0.1.1-rc.1` / `0.1.0-rc.8` / `0.1.0-rc.7` / `0.1.0-rc.6`
   (`src/dsh-adapter/contract.ts` 的 `UPSTREAM_VALIDATED_VERSIONS`;特性门控用
   `installedMeetsVersion(pkg, 'x.y.z-<alpha|beta|rc>.n')` 跨家族、跨预发布通道比较,老安装上优雅降级)
-- peer 范围:`^0.1.0-rc.6 || ^0.1.1-rc.1 || 0.1.2-alpha.3 || 0.1.2-alpha.4 || 0.1.2-alpha.5 || 0.1.2-rc.1`(契约外版本启动时打 drift 警告;0.1.2 预发布用精确 OR,不用 caret)
+- peer 范围:`^0.1.0-rc.6 || ^0.1.1-rc.1 || 0.1.2-alpha.3 || 0.1.2-alpha.4 || 0.1.2-alpha.5 || 0.1.2-rc.1 || 0.1.3-alpha.2 || 0.1.5-alpha.1 || 0.1.5-alpha.2`(契约外版本启动时打 drift 警告;预发布一律用精确 OR,不用 caret)
 - 白名单包:blessed list(harness 包按完整版本号校验,框架包 cordis/schemastery 按 major 校验)
 - 启动时:检测到 drift 打 warning;CI 上 `pnpm run verify:contract` 直接失败
 
@@ -79,9 +79,9 @@ web-app patch 按 include 语义合成一遍,直接拦截 loader entry id 复用
 
 ## 升级流程
 
-- 安装基线与验证线分离:dev 树由 `pnpm-workspace.yaml` 的 overrides 钉在
-  0.1.1-rc.2,最新 0.1.2 预发布不装进来,而是由 CI `alpha-compat` lane 对上游 tag 的源码做
-  类型与 patch 合成校验。bump 不是 `pnpm add`,是改契约声明。
+- dev 树由 `pnpm-workspace.yaml` 的 overrides 钉在 `0.1.5-alpha.2`,
+  CI `alpha-compat` lane 还对同版上游 tag 的固定 SHA 做源码类型与 patch 合成校验。
+  旧 SQLite 迁移工具的依赖闭包单独锁在 `vendor/sqlite-island`。
 - `contract.ts` 是唯一真源:主验证线原地替换、不累积;`package.json` 的
   peer/dev 范围、CI 钉住的上游 SHA、校验脚本里的版本常量都只是它的镜像,
   必须同一次改齐(位置见 [docs/contributing.md](docs/contributing.md) 跨文件清单)。

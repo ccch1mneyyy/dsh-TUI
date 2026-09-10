@@ -1,4 +1,4 @@
-import type { ModelSelectionRef } from '@deepseek-ai/dsh-agent'
+import type { AssistantStreamFrame, ModelSelectionRef } from '@deepseek-ai/dsh-agent'
 import type { Context } from '@deepseek-ai/cordis'
 import type { InputConvergence } from './input-actions.js'
 import type { ChannelBinding } from './binding.js'
@@ -28,7 +28,7 @@ export function createBindingEvents(ctx: Context, deps: {
   modelActions: { applyPreferredEffort(): Promise<void>; selection: ModelSelectionRef }
   modeActions: { refreshMode(): void; onSessionEvent(session: unknown, event: unknown): void }
   projector: ReturnType<typeof createChannelProjection>
-  subagents: { onSessionEvent(session: unknown, event: unknown): boolean; onStart(info: { id: string; runId?: string; provider: string; local?: boolean }): void; onEnd(info: { id: string; stopReason: string; lastAssistantMessage?: unknown[] }): void }
+  subagents: { onSessionEvent(session: unknown, event: unknown): boolean; onStreamFrame?(agent: unknown, frame: AssistantStreamFrame): boolean; onStart(info: { id: string; runId?: string; provider: string; local?: boolean }): void; onEnd(info: { id: string; stopReason: string; lastAssistantMessage?: unknown[] }): void }
   agentView: { schedule(): void }
   messageObserver?: { publish(session: unknown, event: unknown): void }
 }) {
@@ -134,6 +134,21 @@ export function createBindingEvents(ctx: Context, deps: {
         deps.projector.renderEvent(event)
         if (event.type === 'assistant/chunk') deps.state.emitStream()
         else deps.state.emit()
+      })
+      // 0.1.5 live streaming: per-token chunks are transient attempt frames
+      // on this agent-scoped channel; the durable settlement still arrives
+      // through `session/event` above. Pre-0.1.5 hosts never emit it — the
+      // subscription simply stays silent there and chunks keep arriving as
+      // `assistant/chunk` session events.
+      on('agent/assistant-stream', ({ agent: subject, frame }) => {
+        if (!current()) return
+        if (subject !== capture.agent) {
+          deps.subagents.onStreamFrame?.(subject, frame)
+          return
+        }
+        deps.projector.renderStreamFrame(frame)
+        if (frame.type === 'chunk') deps.state.emitStream()
+        else if (frame.type === 'end') deps.state.emit()
       })
       on('subagent/start' as never, (info: { id: string; runId?: string; provider: string; local?: boolean }) => {
         if (current()) deps.subagents.onStart(info)

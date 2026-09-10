@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import { apply } from '../presets/liangshen/tool-bootstrap.mjs'
+import { Session, SessionId } from '@deepseek-ai/dsh-session'
 
 const listeners = {}
 const ctx = {
@@ -70,5 +71,17 @@ listeners['session/event'](
   { type: 'tool/call', seq: 3, data: { name: 'str_replace_editor' } },
 )
 assert.equal((await assemble('compacted', compactedEvents)).tools, tools)
+
+const modern = Session.create(SessionId('bootstrap-v3'))
+const assembleModern = () => listeners['system-prompt/assemble'](
+  undefined,
+  { agent: { session: modern } },
+  async () => ({ sections: [], contexts: [], tools, variables: {} }),
+)
+assert.equal(modern.events, undefined)
+assert.deepEqual((await assembleModern()).tools.map(tool => tool.name), ['bash', 'str_replace_editor'])
+const promotedEvent = modern.append('tool/call', { turn: 1, step: 1, callId: 'call', name: 'bash', arguments: '{}' })
+listeners['session/event'](modern, promotedEvent)
+assert.equal((await assembleModern()).tools, tools)
 
 console.log('liangshen bootstrap verified (root/subagent anchors, tool-call promotion, full catalog, compaction re-anchor)')

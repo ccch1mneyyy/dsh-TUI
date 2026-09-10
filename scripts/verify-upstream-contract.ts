@@ -27,7 +27,7 @@ assert.deepEqual(parseUpstreamVersion('0.1.2-alpha.3'), [0, 1, 2, 'alpha', 3])
 assert.ok(compareVersions(alpha, beta) < 0 && compareVersions(beta, rc) < 0)
 assert.ok(compareVersions(rc, parseUpstreamVersion('0.1.1-rc.2')!) > 0)
 assert.equal(parseUpstreamVersion('0.1.2'), undefined)
-assert.match(UPSTREAM_VALIDATED_LABEL, /^0\.1\.2-rc\.1/u)
+assert.match(UPSTREAM_VALIDATED_LABEL, /^0\.1\.5-alpha\.2/u)
 
 const mixedVersions = Object.fromEntries(UPSTREAM_BLESSED_PACKAGES.map(packageName => [
   packageName,
