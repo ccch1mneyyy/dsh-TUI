@@ -12,6 +12,9 @@ function throwCleanupFailures(failures: unknown[], message: string): void {
   if (failures.length > 1) throw new AggregateError(failures, message)
 }
 
+/** Re-probe interval while the kernel's channel slice is still absent. */
+const FACADE_PROBE_MS = 250
+
 export function mountChannelUi(
   ctx: unknown,
   channel: ChannelState,
@@ -47,9 +50,29 @@ export function mountChannelUi(
   // the identical guarded local capability. Never downgrade after binding.
   let mounted: ChannelUi | undefined
   let mountedView: ChannelUi | undefined
+  // `getHostFacade()` builds a fresh facade graph on every call (KernelRuntime
+  // facade() allocates a new descriptor port + shadow-guarded wrapper), and
+  // `resolve()` runs on EVERY `channel.X` read — Chat reads ~70-90 properties
+  // per render, so re-resolving per read cost ~2.3us each (~0.2-0.4ms/frame)
+  // for a value that only ever changes when the kernel mounts the channel
+  // slice. Probe at most every FACADE_PROBE_MS while the slice is absent;
+  // once the facade exposes the channel UI, it stays that way for the
+  // kernel's lifetime (a re-registration disposes this mount's lease).
+  let facadeProbe: ReturnType<typeof getHostFacade>
+  let facadeProbeAt = 0
+  let facadeProbeLocked = false
+  const facadeNow = (): ReturnType<typeof getHostFacade> => {
+    if (facadeProbeLocked) return facadeProbe
+    const now = Date.now()
+    if (facadeProbe !== undefined && now - facadeProbeAt < FACADE_PROBE_MS) return facadeProbe
+    facadeProbeAt = now
+    facadeProbe = getHostFacade(pluginHost as never)
+    if (facadeProbe?.channel !== undefined) facadeProbeLocked = true
+    return facadeProbe
+  }
   const resolve = (): ChannelUi => {
     lease.assertActive()
-    const facade = getHostFacade(pluginHost as never)
+    const facade = facadeNow()
     const ui = facade?.channel?.projection.ui
     if (ui === undefined) {
       if (mounted !== undefined) throw new Error('dsh-tui: mounted HostFacade lost Channel UI')
