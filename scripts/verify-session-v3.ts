@@ -33,6 +33,7 @@ const { readPhysicalHeaderSeedLength } = await import('../src/dsh-adapter/compat
 const { resolvePersistedPreset, resolvePersistedRoute } = await import('../src/dsh-adapter/presets.js')
 const { enumerateSessions, locateSession } = await import('../src/dsh-adapter/sessions/list.js')
 const { flattenTree } = await import('../src/dsh-adapter/sessionTree.js')
+const { SubagentActivityStore } = await import('../src/dsh-adapter/subagents.js')
 
 function session(id: string, parent?: Session) {
   const seed = parent?.snapshotEvents() ?? []
@@ -78,6 +79,18 @@ function projection(s: Session) {
 }
 
 try {
+  for (const kind of ['text-delta', 'reasoning-delta'] as const) {
+    const p = projection(session(`repeated-${kind}`))
+    p.start()
+    const deltas = ['ha', 'ha', ' ', ' ', 'echo', 'echo again', '\n', '\n']
+    for (const delta of deltas) p.chunk(kind, delta)
+    assert.equal(p.state.rows[0]?.text, deltas.join(''), 'distinct V3 frames preserve repeated tokens and whitespace')
+    const duplicate = { type: 'chunk', attemptId: 'attempt', revision: 20, index: 10, time: 2000,
+      chunk: { type: kind, text: 'tail', index: 0 } } as never
+    p.projector.renderStreamFrame(duplicate)
+    p.projector.renderStreamFrame(duplicate)
+    assert.equal(p.state.rows[0]?.text, deltas.join('') + 'tail', 'duplicate V3 frames deduplicate by revision, not text')
+  }
   for (const thinkingFold of ['preview', 'full'] as const) {
     const s = session(`anchors-${thinkingFold}`)
     const p = projection(s)
@@ -95,6 +108,15 @@ try {
     assert.equal(p.state.rows[0]!.text.length, 201)
     assert.equal(foldBack(p.state.rows, s.snapshotEvents()), 2)
     assert.ok(p.state.rows.every(row => row.text.length === 450), 'both folded bodies restore fully')
+  }
+  {
+    const s = session('canonical-empty')
+    const p = projection(s)
+    p.start()
+    p.chunk('reasoning-delta', 'provisional thinking')
+    p.chunk('text-delta', 'provisional text')
+    p.projector.renderEvent(answer(s, ''))
+    assert.equal(p.state.rows.length, 0, 'V3 settlement removes provisional content omitted from the canonical message')
   }
   for (const abandonment of [false, true]) {
     const s = session(`failure-${abandonment}`)
@@ -141,6 +163,47 @@ try {
     ])
   }
   console.log('PASS V3 anchors, failed attempts, reattachment and canonical settlement')
+
+  {
+    const s = session('child-stream')
+    const store = new SubagentActivityStore()
+    const id = 'child'
+    store.onSpawned(id)
+    store.appendOutput(id, 'previous output')
+    store.flushOutput(id)
+    let revision = 0
+    const start = (attemptId: string) => store.onStreamFrame(id, { type: 'start', attemptId, revision: ++revision, turn: 1, step: 1 } as never)
+    const chunk = (attemptId: string, text: string) => {
+      const frame = { type: 'chunk', attemptId, revision: ++revision, index: revision, time: revision, chunk: { type: 'text-delta', text, index: 0 } } as never
+      store.onStreamFrame(id, frame)
+      return frame
+    }
+    start('failed')
+    for (let i = 0; i < 170; i++) chunk('failed', `failed-${i}\n`)
+    store.onSessionEvent(id, s.append('assistant/attempt', { turn: 1, step: 1, stream: [] }))
+    assert.deepEqual(store.get(id)?.output, ['previous output'], 'failed child attempt restores the bounded pre-attempt tail')
+    start('retry')
+    const delta = chunk('retry', 'partial')
+    store.onStreamFrame(id, delta)
+    assert.deepEqual(store.get(id)?.output, ['previous output', 'partial'], 'child frame revision rejects redelivery')
+    store.onSessionEvent(id, answer(s, 'canonical child reply', 'canonical child thinking'))
+    const settledOutput = ['previous output', 'canonical child thinking', 'canonical child reply']
+    assert.deepEqual(store.get(id)?.output, settledOutput, 'child settlement replaces provisional output with canonical blocks')
+    start('abandoned')
+    chunk('abandoned', 'abandoned output')
+    store.onStreamFrame(id, { type: 'end', attemptId: 'abandoned', revision: ++revision, index: 1, outcome: { kind: 'abandoned' } } as never)
+    assert.deepEqual(store.get(id)?.output, settledOutput)
+    assert.ok(store.get(id)?.outputEvents.every(line => line.settled), 'child attempts do not merge across settlements')
+    start('cancelled')
+    chunk('cancelled', 'uncommitted')
+    store.onCancelled(id)
+    assert.deepEqual(store.get(id)?.output, settledOutput)
+    store.reset()
+    store.onSpawned(id)
+    store.onStreamFrame(id, { type: 'chunk', attemptId: 'new', revision: 1, index: 0, time: 1, chunk: { type: 'text-delta', text: 'new session', index: 0 } } as never)
+    assert.deepEqual(store.get(id)?.output, ['new session'], 'child reset clears attempt revisions')
+  }
+  console.log('PASS child V3 failed attempts, canonical settlement, redelivery and lifecycle cleanup')
 
   const ctx = new Context()
   const plugin = ctx.plugin(JsonlSessionPersistence, { root: join(root, 'jsonl'), compression: 'none' })

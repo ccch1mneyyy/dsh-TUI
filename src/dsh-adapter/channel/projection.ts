@@ -118,12 +118,15 @@ export function createChannelProjection(state: ProjectionState, deps: Projection
   const transcriptImages = (content: readonly ContentBlock[] | undefined): readonly TranscriptImage[] =>
     transcriptImagesOf(content, deps.attachments)
 
-  /** Append a stream delta idempotently. Providers normally send a pure
-   * delta, but reconnect/proxy paths can resend a cumulative prefix or a
-   * delta whose beginning overlaps the previous tail. Merge the overlap
-   * instead of blindly concatenating it into the visible transcript. */
-  const appendTextDelta = (row: ChatRow, delta: string): void => {
+  /** V3 deltas are ordered by frame revision and must stay byte-exact.
+   * Legacy reconnect/proxy events may instead repeat a cumulative prefix. */
+  const appendTextDelta = (row: ChatRow, delta: string, legacy: boolean): void => {
     if (delta === '') return
+    if (!legacy) {
+      row.text += delta
+      touchRow(row)
+      return
+    }
     if (lastTextDelta.get(row) === delta) return
     lastTextDelta.set(row, delta)
     if (delta.startsWith(row.text)) {
@@ -409,13 +412,13 @@ export function createChannelProjection(state: ProjectionState, deps: Projection
         row.streaming = true
         touchRow(row)
         const before = row.text.length
-        appendTextDelta(row, chunk.text)
+        appendTextDelta(row, chunk.text, seq !== undefined)
         state.responseChars += Math.max(0, row.text.length - before)
       }
     } else if (chunk.type === 'reasoning-delta') {
       if (chunk.text) {
         const row = ensureReasoning(seq, turn, step)
-        appendTextDelta(row, chunk.text)
+        appendTextDelta(row, chunk.text, seq !== undefined)
       }
     }
     const tps = tpsStep
@@ -574,6 +577,9 @@ export function createChannelProjection(state: ProjectionState, deps: Projection
       case 'assistant/message': {
         if (handledAssistantMessages.has(event.seq)) break
         handledAssistantMessages.add(event.seq)
+        // V3 embeds its complete attempt stream; older settlements may omit
+        // reasoning that is still durably recorded in assistant/chunk events.
+        const canonical = Array.isArray((event.data as { stream?: unknown }).stream)
         const text = textOf(event.data.message.content)
         const images = transcriptImages(event.data.message.content)
         const reasoningText = event.data.message.content
@@ -582,8 +588,9 @@ export function createChannelProjection(state: ProjectionState, deps: Projection
         const settledReasoning = lastReasoningRow !== undefined && lastReasoningRow.turn === event.data.turn && lastReasoningRow.step === event.data.step
           ? lastReasoningRow.row : reasoning
         if (settledReasoning !== undefined) {
-          if (reasoningText === '') removeRow(settledReasoning)
-          else {
+          if (reasoningText === '') {
+            if (canonical) removeRow(settledReasoning)
+          } else {
             settledReasoning.text = reasoningText
             settledReasoning.seq ??= event.seq
             touchRow(settledReasoning)
@@ -622,14 +629,14 @@ export function createChannelProjection(state: ProjectionState, deps: Projection
                 candidate.kind === 'assistant' && candidate.seq === event.seq,
               ) ?? ensureStreaming(event.seq))
             : undefined)
-        if (row !== undefined && !text && images.length === 0) {
+        if (row !== undefined && canonical && !text && images.length === 0) {
           removeRow(row)
           if (msgKey !== undefined) assistantRowsByStep.delete(msgKey)
         } else if (row !== undefined) {
           if (msgKey !== undefined) assistantRowsByStep.set(msgKey, row)
           row.seq ??= event.seq
           row.time = event.time
-          if (text) row.text = text
+          if (text || canonical) row.text = text
           row.images = images.length === 0 ? undefined : images
           row.streaming = false
           // Live settles keep the smooth-reveal cursor alive (a one-shot

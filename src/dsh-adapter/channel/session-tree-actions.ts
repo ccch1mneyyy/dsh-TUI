@@ -5,6 +5,7 @@ import { randomUUID } from 'node:crypto'
 import { t } from '../../i18n.js'
 import { appendInterruptedTurnEnd, liveSessionCreateOptions, liveSessionOffset, snapshotLiveSessionEvents } from '../compat/index.js'
 import { readPersistedSession, type SessionReader } from '../compat/persistence.js'
+import { closeLiveForkTurn } from '../compat/liveSession.js'
 import { composePreset, resolvePersistedPreset, runningPresetOf } from '../presets.js'
 import { attachSessionToWorkspace } from '../workspace.js'
 import { forkTarget, rewindTarget, turnUserText } from '../sessionTree.js'
@@ -99,7 +100,8 @@ export function createTreeRewindAction(
     }
     const seed = sourceEvents.filter(event => event.seq <= target.boundary)
     const inheritedCount = seed.length
-    if (target.closeTurn !== undefined) {
+    const closeAfterCreate = target.closeTurn !== undefined && entrySession.header?.version >= 3
+    if (target.closeTurn !== undefined && !closeAfterCreate) {
       appendInterruptedTurnEnd(seed, target.closeTurn)
     }
     let handle: AgentHandle
@@ -113,7 +115,13 @@ export function createTreeRewindAction(
         parentSession: SessionId(sessionId),
         agentPreset: composed.agentPreset,
         agentOptions: { provider: state.provider, model: state.model },
-        setup: composed.setup,
+        setup: closeAfterCreate ? async (agentCtx, agent) => {
+          // V3 requires seed.length === inheritedEventCount. The constructor
+          // inserts the inherited marker, then these closers belong to the
+          // child and persist before publication, without falsifying the cut.
+          closeLiveForkTurn(agent.session, target.closeTurn!)
+          return composed.setup?.(agentCtx, agent)
+        } : composed.setup,
       })))
     } catch {
       deps.notify(t('rewind-create-failed'), { color: 'error' })
@@ -130,7 +138,8 @@ export function createTreeRewindAction(
       deps.notify(t('rewind-session-changed'), { color: 'error' })
       return null
     }
-    const sourceSessionId = deps.adoptForkedAgent(handle, adoption, seed, composed.agentPreset, childId)
+    const replay = closeAfterCreate ? snapshotLiveSessionEvents(handle.agent.session) : seed
+    const sourceSessionId = deps.adoptForkedAgent(handle, adoption, replay, composed.agentPreset, childId)
     deps.notifySessionSwitched(mode === 'fork' ? 'fork' : 'rewind', String(childId), sourceSessionId)
     return restoredText
   }

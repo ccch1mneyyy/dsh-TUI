@@ -765,6 +765,8 @@ export function resolveLocatedPath(hint: string): SessionLogFile | undefined {
 /** Outcome of reading an EXISTING log through the bounded reader. */
 export interface SessionLogRead {
   readonly events: readonly SessionEvent[]
+  /** Physical generation of these sequence coordinates, read from the header. */
+  readonly formatVersion?: number
   /** False when the read stopped early (event/scan budget) — a plain
    *  truncation; the collected prefix is fully usable. */
   readonly complete: boolean
@@ -799,9 +801,14 @@ function readEvents(
     return undefined
   }
   let scanned = 0
+  let formatVersion: number | undefined
   const events: SessionEvent[] = []
+  const result = (complete: boolean, failed?: true): SessionLogRead => ({ events, complete, scanned, formatVersion, ...(failed ? { failed } : {}) })
   try {
     for (const record of logRecords(fd, file.compressed)) {
+      if (scanned === 0 && isRecordValue(record) && record['type'] === 'session' && Number.isSafeInteger(record['version'])) {
+        formatVersion = record['version'] as number
+      }
       for (const event of decodeStorageRecord(record)) {
         // The SCAN budget bounds the real cost drivers — I/O, decompression,
         // JSON.parse — which are paid for EVERY envelope, collected or not.
@@ -809,7 +816,7 @@ function readEvents(
         // (ignorable-marked activity frames) forces a full parse just
         // to collect a handful of events, blocking the TUI on panel open.
         scanned += 1
-        if (scanned > maxScanned) return { events, complete: false, scanned }
+        if (scanned > maxScanned) return result(false)
         const envelope = event as Record<string, unknown>
         if (typeof envelope['seq'] !== 'number' || envelope['ignorable'] === true) continue
         // Inherited-prefix skip (session-tree dedup): seqs an ancestor
@@ -822,16 +829,16 @@ function readEvents(
         if ((envelope['seq'] as number) < skipBelowSeq && envelope['type'] !== 'session/title') continue
         // Budget check BEFORE the push: an exact-fit log reports complete,
         // and only a surviving (maxEvents+1)-th event marks truncation.
-        if (events.length >= maxEvents) return { events, complete: false, scanned }
+        if (events.length >= maxEvents) return result(false)
         events.push(event)
       }
     }
-    return { events, complete: true, scanned }
+    return result(true)
   } catch {
     // An EXISTING but undecodable log (corruption, over-cap frame, decode
     // bomb): fail closed — never silently empty, never eligible for an
     // unbounded fallback re-read.
-    return { events, complete: false, scanned, failed: true }
+    return result(false, true)
   } finally {
     try {
       closeSync(fd)
