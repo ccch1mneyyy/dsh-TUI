@@ -215,7 +215,8 @@
     "verify:inject-channel": "node --import tsx/esm scripts/verify-inject-channel.mjs",
     "verify:background-extraction": "node --import tsx/esm scripts/verify-background-extraction.ts",
     "verify:plugin-catalog-extraction": "node --import tsx/esm scripts/verify-plugin-catalog-extraction.ts",
-    "verify:channel-composition": "node --import tsx/esm scripts/verify-channel-composition.ts"
+    "verify:channel-composition": "node --import tsx/esm scripts/verify-channel-composition.ts",
+    "verify:channel-trace-read": "node --import tsx/esm scripts/verify-channel-trace-read.ts"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.1",

@@ -400,6 +400,11 @@ const GROUPS = {
     ["verify-channel-owner-lifecycle", ['node', '--import', 'tsx/esm', 'scripts/verify-channel-owner-lifecycle.ts']],
     ["verify-channel-router-lifecycle", ['node', '--import', 'tsx/esm', 'scripts/verify-channel-router-lifecycle.ts']],
     ["verify-reports-metadata",  ['node', '--import', 'tsx/esm', 'scripts/verify-reports-metadata.ts']],
+// ChannelUi 读投影边界：会话事件日志（traceEvents）必须零拷贝直通——它每次
+// append 都换新的快照数组，走 detached 投影会 O(events) 重建整条数组，而
+// Chat 每次渲染都读它（长会话 44 万事件实测每帧上百毫秒）。同时钉住 rows
+// 仍然是被投影的冻结副本，修复不得拆掉 detached 契约。
+    ["verify-channel-trace-read", ['node', '--import', 'tsx/esm', 'scripts/verify-channel-trace-read.ts']],
 // channel 层回归：发送链（submit/steer/撤回/打断重投）、compact 折叠、
 // goal/todo 事件回放。曾因不在 CI 而随接口演进静默失效（0.3.6 的
 // installModelSelection、#34 的投递异步化都没被它们拦下），挂进来
