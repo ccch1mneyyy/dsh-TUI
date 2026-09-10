@@ -1,12 +1,13 @@
 import React from 'react'
 import { t } from '../i18n.js'
-import { Box, Text, useTerminalSize } from '../ui.js'
+import { Box, Text } from '../ui.js'
 import { useTerminalFocus } from '../ink/hooks/use-terminal-focus.js'
 import { Pane } from './design-system/Pane.js'
 import { ListItem } from './design-system/ListItem.js'
 import { HintLine } from './design-system/HintLine.js'
 import { SearchBox } from './SearchBox.js'
 import { listWindow } from './listWindow.js'
+import { useOverlayListRows } from './OverlayAbove.js'
 import { historyEntryId, type HistoryEntry } from '../history.js'
 
 /**
@@ -31,16 +32,17 @@ export function HistorySearchDialog({
   onPick?: (index: number) => void
 }): React.ReactNode {
   const isTerminalFocused = useTerminalFocus()
-  const { rows: terminalRows } = useTerminalSize()
   // 焦点窗口化按行预算：每项恒 2 行（命令 + age 描述，ListItem 保证单行
   // 截断），容器 gap={1} 项间再空 1 行。只数项数会把焦点裁出浮层（二次
   // 审查实证）。
-  // 框架行：浮层预留 8 + Pane 2 + 标题 1 + gap 1 + SearchBox 3（圆角边框）
-  // + gap 1 + gap 1 + 页脚 1 = 18。
+  // 预算来自最近一层 OverlayAbove 的有效高度，减去框架行（按实际渲染数）：
+  // 挂载包裹 marginTop 1 + Pane 2 + 标题 1 + gap 1 + SearchBox 3（圆角边框）
+  // + gap 1 + gap 1 + 页脚 1 = 11。
+  const listRows = useOverlayListRows(11)
   const { start, end } = listWindow(
     matches.map(() => 2),
     focusIndex,
-    Math.max(terminalRows - 18, 2),
+    listRows,
     1,
   )
   return (

@@ -1,6 +1,6 @@
 import React from 'react'
 import { t } from '../i18n.js'
-import { Box, Text, useTerminalSize } from '../ui.js'
+import { Box, Text } from '../ui.js'
 import type { LlmModelInfo } from '../adapter/ports/channel-view.js'
 import type { ModelGroupRow } from '../modelGroups.js'
 import { RECENTS_GROUP_PROVIDER, RECENTS_LABEL_PLACEHOLDER } from '../modelGroups.js'
@@ -8,6 +8,7 @@ import { Pane } from './design-system/Pane.js'
 import { ListItem } from './design-system/ListItem.js'
 import { HintLine } from './design-system/HintLine.js'
 import { listWindow } from './listWindow.js'
+import { useOverlayListRows } from './OverlayAbove.js'
 
 /**
  * Model picker: a permission-colored Pane with
@@ -50,17 +51,20 @@ export function ModelPicker(props:
     onPick?: (index: number) => void
   }): React.ReactNode {
   const inGroups = 'groups' in props
-  const { rows: terminalRows } = useTerminalSize()
   // Captured before the map: union narrowing does not survive into closures.
   const onPick = props.onPick
   // 焦点窗口化按行预算：ListItem 带 description 时占 2 行（正文+描述，均
   // truncate 成单行），只数项数会把焦点裁出浮层（二次审查实证）。
-  // 框架行：浮层预留 8 + Pane 2 + 标题 2 + 页脚 1 + 挂载包裹 marginTop 1 = 14。
+  // 预算来自最近一层 OverlayAbove 的有效高度（已钳到输入簇上方的真实空间——
+  // 按 terminalRows 预算在短会话 + 高终端下窗口高过浮层、顶部整行被裁、
+  // 焦点行不可见，#493/#698），减去本面板框架行：Pane 2 + 标题 2 + 页脚 1
+  // + 挂载包裹 marginTop 1 = 6。
   const rowHeights = inGroups
     ? props.groups.map(() => 2)
     : props.models.map(m => (m.description ? 2 : 1))
   const rows = inGroups ? props.groups : props.models
-  const { start, end } = listWindow(rowHeights, props.focusIndex, Math.max(terminalRows - 14, 2))
+  const listRows = useOverlayListRows(6)
+  const { start, end } = listWindow(rowHeights, props.focusIndex, listRows)
   const hint = inGroups
     ? t('hint-model-groups')
     : props.showBack ? t('hint-model-back') : t('hint-confirm-exit')

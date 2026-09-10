@@ -1,12 +1,13 @@
 import React from 'react'
 import { t } from '../i18n.js'
-import { Box, Text, useTerminalSize } from '../ui.js'
+import { Box, Text } from '../ui.js'
 import type { ChatRow } from '../dsh-adapter/channel.js'
 import type { TuiRewindMode } from '../dsh-adapter/extension-events.js'
 import { Pane } from './design-system/Pane.js'
 import { ListItem } from './design-system/ListItem.js'
 import { HintLine } from './design-system/HintLine.js'
 import { listWindow } from './listWindow.js'
+import { useOverlayListRows } from './OverlayAbove.js'
 
 /**
  * Double-Esc rewind picker (double-tap Esc rewinds the selected message and/or
@@ -51,13 +52,21 @@ export function RewindPicker({
   /** Mouse pick on a modes-list option: executes that mode directly. */
   onPickMode?: (index: number) => void
 }): React.ReactNode {
+  // 两个列表的行预算都来自最近一层 OverlayAbove 的有效高度（已钳到输入簇
+  // 上方的真实空间，#493/#698）。hook 不进条件分支：无论当前画的是模式列
+  // 表、纯确认页还是消息列表，调用顺序都一致。框架行按实际渲染数：
+  // 模式列表：挂载包裹 marginTop 1 + Pane 2 + 标题/预览同一行 1 + marginBottom 1
+  //   + 页脚 1 = 6（rowCosts 只算选项行，首项是带描述的"仅对话"选项）；
+  // 消息列表：挂载包裹 marginTop 1 + Pane 2 + 标题+副标题 2 + marginBottom 1
+  //   + 页脚 1 = 7，插件决策在途时再多一行「等待插件」状态行（busy）。
+  const modeListRows = useOverlayListRows(6)
+  const listRows = useOverlayListRows(confirmRow === null && busy ? 8 : 7)
   if (confirmRow !== null) {
     if (modes !== null) {
       // Plugin modes: a described choice list (one extra row per
       // description), windowed like the message list below.
-      const { rows: terminalRows } = useTerminalSize()
       const rowCosts = [2, ...modes.map(mode => (mode.description === undefined ? 1 : 2))]
-      const { start, end } = listWindow(rowCosts, modeIndex, Math.max(terminalRows - 10, 2))
+      const { start, end } = listWindow(rowCosts, modeIndex, modeListRows)
       const options: readonly { key: string; label: string; description?: string }[] = [
         { key: 'conversation', label: t('rewind-mode-default'), description: t('rewind-confirm-desc') },
         ...modes.map(mode => ({
@@ -116,14 +125,13 @@ export function RewindPicker({
     )
   }
 
-  const { rows: terminalRows } = useTerminalSize()
   // 焦点窗口化按行预算：首项带 'last message' 描述占 2 行、其余 1 行
   //（ListItem 保证单行截断）。rewind 是不可见确认的高危操作，焦点必须
-  // 始终在屏。框架行：浮层预留 8 + Pane 2 + 标题块 3 + 页脚 1 = 14。
+  // 始终在屏。
   const { start, end } = listWindow(
     rows.map((_, i) => (i === 0 ? 2 : 1)),
     focusIndex,
-    Math.max(terminalRows - 14, 2),
+    listRows,
   )
   return (
     <Pane color="permission">
