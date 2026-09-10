@@ -24,13 +24,18 @@ import { registerTuiChannel } from '../src/adapter/channel/host-registry.js'
 
 const tick = () => new Promise(resolve => setTimeout(resolve, 40))
 
-/** Append-only live session: snapshotEvents() hands back a NEW array each call. */
+/**
+ * Append-only live session: snapshotEvents() hands back a NEW array each call.
+ * Upstream caches a FROZEN snapshot per append, so the fixture freezes too —
+ * otherwise this script would pass even if traceEvents started handing out a
+ * mutable session-owned array.
+ */
 function sessionWith(events: readonly unknown[]) {
   return {
     id: 'trace-read-session',
     seq: events.length,
     events,
-    snapshotEvents: () => events.slice(),
+    snapshotEvents: () => Object.freeze(events.slice()),
     requestHeader: () => undefined,
   }
 }
@@ -75,6 +80,7 @@ function fixture(eventCount: number) {
 
   assert.equal(first.length, events.length, 'traceEvents keeps the whole log')
   assert.notEqual(first, second, 'each call sees the session’s own fresh snapshot array')
+  assert.equal(Object.isFrozen(first), true, 'traceEvents preserves the frozen session snapshot')
   assert.equal(first[0], events[0], 'event objects are handed through, not detached copies')
   assert.equal(first[events.length - 1], events[events.length - 1], 'tail event identity survives')
   assert.equal((first[0] as { data: unknown }).data, (events[0] as { data: unknown }).data, 'nested event data is not re-copied')
