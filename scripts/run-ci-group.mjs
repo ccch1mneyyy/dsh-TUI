@@ -156,6 +156,10 @@ const GROUPS = {
 // 恢复历史会话落点回归：/resume 后最新消息末行必须可见且可达
 // （scrollToBottom 补画完成后的锚定终态），不再落屏外。
     ["repro-resume-position", ['node', '--import', 'tsx/esm', 'scripts/repro-resume-position.tsx']],
+// 全屏转录键盘翻页回归：PgUp/PgDn 一次一页、到底按 at-bottom 契约重粘；
+// help 浮层让位、问询面板不让位（面板在转录下方且不消费这对键）、inline
+// 模式不接管（历史在终端原生 scrollback）、窄终端行为一致。
+    ["verify-transcript-paging", ['node', 'scripts/verify-transcript-paging.mjs']],
   ],
   'input-terminal': [
 // 按键解析回归（issue #110）：Option+Enter（ESC CR）精确/合并/分块

@@ -220,8 +220,8 @@ async function mount(fullscreen, cols = TERM_COLS, rows = TERM_ROWS) {
       : React.createElement(PageMargin, null, chat),
   })
   const instance = await render(tree, { stdout, stderr, stdin, exitOnCtrlC: false, patchConsole: false })
-  // Fixed wait: the first frame carries a random tip, so there is no stable
-  // content anchor to poll for (same compromise as verify-keymap.mjs).
+  // 固定窗:pacing 启动首帧带随机 tip，没有稳定的轮询锚点
+  // （同 verify-keymap.mjs 的取舍）。
   await sleep(700)
   return { term, stdin, instance, channel, questionStore }
 }
@@ -250,8 +250,7 @@ check('fullscreen: pinned to the bottom before any key', tailBefore)
 check('fullscreen: the first row is off-screen before paging', !screenHas(full.term, marker(FIRST)))
 
 full.stdin.write(PGUP)
-await sleep(400)
-const pagedUp = !screenHas(full.term, marker(LAST))
+const pagedUp = await settled(() => !screenHas(full.term, marker(LAST)))
 check('fullscreen: PgUp moves the tail row out of the viewport', pagedUp)
 // Paging must land somewhere in the middle, not teleport to the top: the row
 // just above the first page boundary is expected while the topmost is not.
@@ -281,10 +280,12 @@ check('fullscreen: ? opens the help overlay', helpShown)
 if (helpShown) {
   const tail = screenHas(full.term, marker(LAST))
   full.stdin.write(PGUP)
+  // 固定窗:探针 断言的是「转录纹丝不动」这个不变量——对已成立的条件轮询会
+  // 立即返回，等于没测，只能等一个观察窗再断言。
   await sleep(400)
   check('fullscreen: help open yields PgUp to the help viewport', screenHas(full.term, marker(LAST)) === tail)
   full.stdin.write('\x1b')
-  await sleep(300)
+  await settle(() => !screenHas(full.term, 'PgUp/PgDn page'))
 }
 
 // The question panel must NOT take these keys away: it mounts BELOW the
@@ -298,8 +299,8 @@ check('fullscreen: question panel opens through the store', panelShown)
 if (panelShown) {
   const panelVisible = screenHas(full.term, 'PICK-ONE-ANCHOR')
   full.stdin.write(PGUP)
-  await sleep(400)
-  check('fullscreen: question panel open — PgUp still pages the transcript', !screenHas(full.term, marker(LAST)))
+  const pagedWithPanel = await settled(() => !screenHas(full.term, marker(LAST)))
+  check('fullscreen: question panel open — PgUp still pages the transcript', pagedWithPanel)
   check('fullscreen: question panel open — the panel is undisturbed', screenHas(full.term, 'PICK-ONE-ANCHOR') === panelVisible)
 }
 // Return to the tail before closing: the panel scenario left the view one
@@ -322,6 +323,8 @@ const inline = await mount(false)
 check('inline: pinned to the bottom', screenHas(inline.term, marker(LAST)))
 inline.stdin.write(PGUP)
 inline.stdin.write(PGUP)
+// 固定窗:探针 断言 inline 视口「不得改变」：轮询已成立的 screenHas(LAST)
+// 只会立即返回，等于没测。
 await sleep(500)
 check('inline: PgUp leaves the TUI viewport alone (terminal scrollback owns it)', screenHas(inline.term, marker(LAST)))
 await inline.instance.unmount()
@@ -334,8 +337,7 @@ await inline.instance.unmount()
 const narrow = await mount(true, 70, 24)
 check('narrow 70x24: pinned to the bottom', screenHas(narrow.term, marker(LAST)))
 narrow.stdin.write(PGUP)
-await sleep(400)
-check('narrow 70x24: PgUp pages away from the tail', !screenHas(narrow.term, marker(LAST)))
+check('narrow 70x24: PgUp pages away from the tail', await settled(() => !screenHas(narrow.term, marker(LAST))))
 const narrowDown = await pageUntil(narrow.term, narrow.stdin, PGDN, () => screenHas(narrow.term, marker(LAST)), 3)
 check('narrow 70x24: PgDn returns to the tail', narrowDown > 0 && screenHas(narrow.term, marker(LAST)), `${narrowDown} presses`)
 await narrow.instance.unmount()
