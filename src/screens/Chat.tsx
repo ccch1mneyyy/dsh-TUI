@@ -2654,6 +2654,11 @@ export function Chat({
     if (settingsOpen) return
     // Subagent dashboard or detail scene: it owns the keyboard while open.
     if (subagentDashboardOpen || subagentDetailId !== null) return
+    // The `/jobs` panel replaces the conversation too, so it owns Esc (close)
+    // and k (kill) while open. Unguarded, Esc meant to CLOSE the panel also
+    // reached the chat:cancel branch below whenever a turn was in flight —
+    // dismissing the panel and killing the turn with one key.
+    if (jobsPanelOpen) return
     // A plugin scene (dsh-tui-scenes) or the trajectory scene owns the whole
     // screen while open: every key belongs to it. Unguarded, an Esc meant to
     // CLOSE the scene also reached the chat:cancel branch below whenever a
