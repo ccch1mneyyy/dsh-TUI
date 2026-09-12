@@ -180,6 +180,7 @@ export type ShortcutActionId =
   | 'dashboard'
   | 'contextPanel'
   | 'showAll'
+  | 'questionFold'
   | 'redraw'
   | 'todoFold'
   | 'expandEditor'
@@ -207,6 +208,7 @@ export const SHORTCUT_ACTIONS: readonly ShortcutActionSpec[] = [
   { id: 'showAll', defaults: ['ctrl+e'] },
   { id: 'redraw', defaults: ['ctrl+l'] },
   { id: 'todoFold', defaults: ['ctrl+q'] },
+  { id: 'questionFold', defaults: ['ctrl+k'] },
   { id: 'expandEditor', defaults: ['ctrl+shift+e'] },
 ]
 
@@ -252,6 +254,30 @@ export function effectiveCombos(action: ShortcutActionId): readonly ParsedCombo[
 /** Effective combos as display strings (`ctrl+v, alt+v`). */
 export function effectiveComboString(action: ShortcutActionId): string {
   return effectiveCombos(action).map(combo => combo.raw).join(', ')
+}
+
+/** Modifier token → display label ('ctrl' → 'Ctrl'). */
+const COMBO_MODIFIER_LABELS: Readonly<Record<string, string>> = {
+  ctrl: 'Ctrl',
+  shift: 'Shift',
+  alt: 'Alt',
+  meta: 'Meta',
+  super: 'Super',
+}
+
+/** One combo in display capitalization ('ctrl+k' → 'Ctrl+K'). */
+export function comboDisplay(raw: string): string {
+  return raw.split('+').map(token => {
+    const lower = token.toLowerCase()
+    const mod = COMBO_MODIFIER_LABELS[lower]
+    if (mod !== undefined) return mod
+    return token.length === 1 ? token.toUpperCase() : token[0].toUpperCase() + token.slice(1)
+  }).join('+')
+}
+
+/** Effective combos as display strings ('Ctrl+K, Alt+V'). */
+export function effectiveComboDisplay(action: ShortcutActionId): string {
+  return effectiveCombos(action).map(combo => comboDisplay(combo.raw)).join(', ')
 }
 
 /** Match a keypress against an action's EFFECTIVE combos (platform alias
