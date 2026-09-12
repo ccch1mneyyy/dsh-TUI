@@ -48,6 +48,10 @@ const {
   removeStalePackageInstall,
   ensureProfileAllowBuilds,
   ensureProfileReleaseAgeExclude,
+  sharpCurrentSuffix,
+  ignoredSharpOptionalPatterns,
+  ensureProfileSharpPlatformFilter,
+  detectLibc,
   profileWorkspaceYamlPath,
   isStandaloneRuntime,
   getStandaloneBinaryPath,
@@ -730,6 +734,51 @@ check(
     else process.env.DSH_TUI_STANDALONE_BINARY = origEnv.binary
     if (origEnv.dshHome === undefined) delete process.env.DSH_HOME
     else process.env.DSH_HOME = origEnv.dshHome
+  }
+}
+
+// --- sharp 异平台 optional 过滤（维护群 2026-09-11 反馈：更新时下载全平台
+// --- @img/sharp-*，~90MB 下载量换不来任何运行时价值）----------------------------
+{
+  check('sharp 后缀: glibc linux x64', sharpCurrentSuffix('linux', 'x64', 'glibc') === 'linux-x64')
+  check('sharp 后缀: musl linux arm64', sharpCurrentSuffix('linux', 'arm64', 'musl') === 'linuxmusl-arm64')
+  check('sharp 后缀: win32 x64 直拼', sharpCurrentSuffix('win32', 'x64', 'glibc') === 'win32-x64')
+  const onLinuxX64 = ignoredSharpOptionalPatterns('linux', 'x64', 'glibc')
+  check('忽略清单: 排除本平台 wrapper 与 libvips', !onLinuxX64.includes('@img/sharp-linux-x64') && !onLinuxX64.includes('@img/sharp-libvips-linux-x64'))
+  check('忽略清单: 含异平台代表项', onLinuxX64.includes('@img/sharp-win32-x64') && onLinuxX64.includes('@img/sharp-darwin-arm64') && onLinuxX64.includes('@img/sharp-libvips-linuxmusl-x64'))
+  check('忽略清单: 与 registry 矩阵对齐（不列不存在的包）', !onLinuxX64.includes('@img/sharp-libvips-win32-x64') && !onLinuxX64.includes('@img/sharp-linuxmusl-arm') && !onLinuxX64.includes('@img/sharp-linux-ia32'))
+  check('忽略清单: 显式保留无平台归属的 wasm 回退包', !onLinuxX64.includes('@img/sharp-wasm32') && !onLinuxX64.includes('@img/sharp-webcontainers-wasm32') && onLinuxX64.includes('@img/sharp-freebsd-wasm32'))
+  const onMusl = ignoredSharpOptionalPatterns('linux', 'x64', 'musl')
+  check('忽略清单: musl 环境排除 linuxmusl-x64 而保留 linux-x64', !onMusl.includes('@img/sharp-linuxmusl-x64') && onMusl.includes('@img/sharp-linux-x64'))
+  check('忽略清单: 不含非平台的纯 JS 包', !onMusl.some(p => p.includes('colour')))
+  check('libc 判定: report 的 glibc 标记优先于 musl loader 存在', detectLibc({ header: { glibcVersionRuntime: '2.36' } }, true) === 'glibc')
+  check('libc 判定: 无 report 时 loader 探测兜底', detectLibc(undefined, true) === 'musl' && detectLibc(undefined, false) === 'glibc')
+
+  const sharpScratch = mkdtempSync(join(tmpdir(), 'verify-sharp-filter-'))
+  const prevDshHome = process.env.DSH_HOME
+  try {
+    process.env.DSH_HOME = join(sharpScratch, 'dsh-home')
+    const profDir = join(process.env.DSH_HOME, 'profiles', 'dsh-tui')
+    mkdirSync(profDir, { recursive: true })
+    writeFileSync(join(profDir, 'pnpm-workspace.yaml'), 'packages:\n  - .\nnodeLinker: hoisted\n')
+    const first = ensureProfileSharpPlatformFilter('dsh-tui')
+    const yamlText = readFileSync(profileWorkspaceYamlPath('dsh-tui'), 'utf8')
+    check('workspace 预种: 块落盘且带模式行', first !== undefined && yamlText.includes('ignoredOptionalDependencies:') && yamlText.includes(`- '@img/sharp-win32-x64'`))
+    check('workspace 预种: 既有内容保留', yamlText.includes('nodeLinker: hoisted'))
+    const loaderPresent = existsSync('/lib/ld-musl-x86_64.so.1') || existsSync('/lib/ld-musl-aarch64.so.1') || existsSync('/etc/alpine-release')
+    check('workspace 预种: 不忽略本机平台', !yamlText.includes(`- '@img/sharp-${sharpCurrentSuffix(process.platform, process.arch, detectLibc(undefined, loaderPresent) === 'musl' ? 'musl' : 'glibc')}'`))
+    const second = ensureProfileSharpPlatformFilter('dsh-tui')
+    const afterText = readFileSync(profileWorkspaceYamlPath('dsh-tui'), 'utf8')
+    check('workspace 预种: 幂等（不重复块）', afterText.match(/ignoredOptionalDependencies:/gu)?.length === 1 && second !== undefined)
+    // 用户显式决策优先：已有块不被改写（对齐 allowBuilds 语义）。
+    writeFileSync(join(profDir, 'pnpm-workspace.yaml'), 'ignoredOptionalDependencies:\n  - fsevents\n')
+    const third = ensureProfileSharpPlatformFilter('dsh-tui')
+    check('workspace 预种: 已有块不覆盖', third !== undefined && readFileSync(profileWorkspaceYamlPath('dsh-tui'), 'utf8') === 'ignoredOptionalDependencies:\n  - fsevents\n')
+    check('workspace 预种: profile 目录缺失返回 undefined', ensureProfileSharpPlatformFilter('absent') === undefined)
+  } finally {
+    if (prevDshHome === undefined) delete process.env.DSH_HOME
+    else process.env.DSH_HOME = prevDshHome
+    rmSync(sharpScratch, { recursive: true, force: true })
   }
 }
 
