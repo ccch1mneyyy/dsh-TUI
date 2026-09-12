@@ -9,13 +9,15 @@
  *   2. readEffortPref / writeEffortPref 的 best-effort 文件语义：写入回读、
  *      缺文件、坏 JSON、结构不符（非对象 / effort 非字符串 / 空串）均回落
  *      undefined。
+ *   3.（组合节）优先级链与文件链的交叉。
+ *   4. nearestLowerEffort 向下就近降档矩阵（只降不升；未知 id 双向不参与）。
  *
  * 运行：node --import tsx/esm scripts/verify-effort-default.ts
  */
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { readEffortPref, resolveEffortDefault, writeEffortPref } from '../src/effortPrefs.js'
+import { nearestLowerEffort, readEffortPref, resolveEffortDefault, writeEffortPref } from '../src/effortPrefs.js'
 
 let failures = 0
 function check(name: string, ok: boolean, extra = ''): void {
@@ -100,6 +102,23 @@ try {
   )
 } finally {
   rmSync(dir2, { recursive: true, force: true })
+}
+
+// ── 4. 偏好档不被路由支持时的向下就近降档 ────────────────────────────────
+// 只降不升：偏好 max 在 [off, high] 上落 high；偏好 low 在 [off, high] 上落
+// off（更低可用档存在）；偏好 off 无更低档 → undefined（保持默认，绝不升档）。
+// 未知档 id 不参与排序（偏好未知 → 不降；候选未知 → 跳过），避免错误比较。
+{
+  check('降档: max 在 [off,high,max] 命中自身', nearestLowerEffort('max', ['off', 'high', 'max']) === 'max')
+  check('降档: max 在 [off,high] 落最近更低档 high', nearestLowerEffort('max', ['off', 'high']) === 'high')
+  check('降档: high 在 [off,low] 落 low', nearestLowerEffort('high', ['off', 'low']) === 'low')
+  check('降档: low 在 [off,high] 落 off', nearestLowerEffort('low', ['off', 'high']) === 'off')
+  check('降档: off 在候选内为 exact 命中', nearestLowerEffort('off', ['off', 'low', 'high']) === 'off')
+  check('降档: off 不在候选且无更低档 → undefined（不升档）', nearestLowerEffort('off', ['low', 'high']) === undefined)
+  check('降档: 偏好未知 id → undefined', nearestLowerEffort('turbo', ['off', 'high']) === undefined)
+  check('降档: 候选未知 id 被跳过', nearestLowerEffort('max', ['off', 'turbo', 'high']) === 'high')
+  check('降档: 空候选 → undefined', nearestLowerEffort('max', []) === undefined)
+  check('降档: medium 在 [off,high,max] 落 off（只降不升）', nearestLowerEffort('medium', ['off', 'high', 'max']) === 'off')
 }
 
 if (failures > 0) {
