@@ -18,7 +18,7 @@ process.env.FORCE_COLOR = '3'
 // locale, none of which a runner is obliged to agree with.
 process.env.DSH_TUI_LANG = 'zh'
 
-const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render }, { Chat }, { QuestionStore }, { settled, sleep }] =
+const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render }, { Chat }, { QuestionStore }, { settled, sleep, viewportLines }] =
   await Promise.all([
     import('node:stream'),
     import('react'),
@@ -193,13 +193,25 @@ const panelHeader = (text: string): string =>
 
 // ── empty transcript: the panel is collapsed; Ctrl+P toggles it, Ctrl+T
 //    still opens the trajectory ────────────────────────────────────────────
-{
+for (const pendingFrame of [false, true]) {
+  console.log(`\nEmpty transcript: ${pendingFrame ? 'pending paint during collapse' : 'normal scheduling'}`)
   const harness = makeHarness(100, 30)
   const localReports: Array<{ title: string; lines: readonly string[] }> = []
   const instance = await mount(harness, makeChannel({
     rows: [],
     pushLocal: (title: string, lines: readonly string[]) => { localReports.push({ title, lines }) },
   }))
+  if (pendingFrame) {
+    const ink = instances.get(harness.stdout as never)!
+    const reanchor = ink.reanchorViewport.bind(ink)
+    let reanchors = 0
+    ink.reanchorViewport = () => {
+      reanchor()
+      // Reproduce a queued animation paint consuming the collapse request
+      // before React commits. Reanchoring must observe the new layout.
+      if (++reanchors === 2) ink.onRender()
+    }
+  }
   check('the startup context panel is on screen', await settled(() => /已加载上下文/.test(harness.screen())))
   check('the collapsed panel claims Ctrl+P', await settled(() => panelHeader(harness.screen()).includes('Ctrl+P')), panelHeader(harness.screen()).trim())
 
@@ -210,8 +222,11 @@ const panelHeader = (text: string): string =>
     harness.screen().split('\n').filter(line => line.includes('/context')).join(' | '))
 
   harness.stdin.write(CTRL_P)
-  check('Ctrl+P collapses the panel again', await settled(() => !harness.screen().includes('你是 dsh')),
-    panelHeader(harness.screen()).trim())
+  check('Ctrl+P collapses the panel again', await settled(() => {
+    const text = viewportLines(harness.term).join('\n')
+    return panelHeader(text).includes('Ctrl+P') && !text.includes('你是 dsh')
+  }),
+    panelHeader(viewportLines(harness.term).join('\n')).trim())
 
   harness.stdin.write(CTRL_T)
   check('Ctrl+T opens the trajectory even before the first message', await settled(() => isScene(harness.screen())),

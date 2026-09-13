@@ -6,10 +6,10 @@ import { t } from '../i18n.js'
 import { Markdown } from './Markdown.js'
 
 /**
- * Renders markdown during streaming by splitting at the last top-level block
- * boundary: everything before is stable (memoized, never re-parsed), only the
- * final block is re-parsed per delta. marked.lexer() correctly handles unclosed code
- * fences as a single token, so block boundaries are always safe.
+ * Renders streaming markdown in sealed groups of completed top-level blocks.
+ * Only the unsealed group and growing final block change as text arrives.
+ * marked.lexer() keeps unclosed fences inside one token, and the boundary
+ * analysis below preserves the whole-document formatter's row spacing.
  */
 /**
  * Tail budget for the unstable suffix during streaming. The sticky view only
@@ -28,6 +28,7 @@ import { Markdown } from './Markdown.js'
 const SUFFIX_TAIL_BUDGET = 3584
 const SUFFIX_BOUNDARY_LOOKBACK = 2048
 const SUFFIX_CUT_STEP = 1024
+const STABLE_BLOCK_BUDGET = 8192
 
 function clipSuffixTail(suffix: string, cut: { current: number }): string {
   const total = suffix.length
@@ -176,6 +177,24 @@ function analyzeSuffixStart(tokens: readonly Token[], startIndex: number): Suffi
   return { kind: undefined, leadingNewlines }
 }
 
+function gapBetween(boundary: StableBoundary, start: SuffixStart): number {
+  if (start.kind === undefined) return 0
+  if (boundary.endsWithTable) {
+    return start.kind === 'table' && (boundary.trailingEmptyTextNode || start.leadingNewlines > 0) ? 2 : 1
+  }
+  return start.kind === 'table' ? 1 : boundary.gap + start.leadingNewlines
+}
+
+type StableBlocks = {
+  blocks: Array<{ text: string; gap: number }>
+  end: number
+  tokens: Token[]
+  tail: string
+  tailGap: number
+  boundary: StableBoundary | undefined
+  definitions: boolean
+}
+
 export function StreamingMarkdown({
   children,
   dimColor = false,
@@ -183,11 +202,13 @@ export function StreamingMarkdown({
   children: string
   dimColor?: boolean
 }): React.ReactNode {
-  // The stable prefix is kept as ONE string identity across renders: a
-  // fresh substring per render would break Markdown's React.memo and
-  // re-layout the entire finished transcript tail on every token. The
-  // identity only changes when a new block boundary advances the prefix.
+  // The prefix tracks source offsets; its rendered blocks are sealed once
+  // so an advancing boundary never reparses the entire accumulated answer.
   const prefixRef = React.useRef('')
+  const blocksRef = React.useRef<StableBlocks>({
+    blocks: [], end: 0, tokens: [], tail: '', tailGap: 0,
+    boundary: undefined, definitions: false,
+  })
   const cutRef = React.useRef(0)
   const boundaryGapRef = React.useRef(0)
   const prefixVisibleRef = React.useRef(false)
@@ -204,11 +225,25 @@ export function StreamingMarkdown({
     prefixVisibleRef.current = false
     prefixEndsWithTableRef.current = false
     prefixTrailingEmptyTextRef.current = false
+    blocksRef.current = {
+      blocks: [], end: 0, tokens: [], tail: '', tailGap: 0,
+      boundary: undefined, definitions: false,
+    }
   }
 
   // Lex only from current boundary — O(unstable length), not O(full text)
   const boundary = prefixRef.current.length
   const tokens = marked.lexer(stripped.substring(boundary))
+  const blocks = blocksRef.current
+  // Reference definitions have document-wide scope, including references
+  // in the growing suffix. These documents cannot use independent parsers.
+  if (!blocks.definitions && Object.keys(tokens.links).length > 0) {
+    blocks.definitions = true
+    blocks.blocks = []
+    blocks.tokens = []
+    blocks.end = 0
+    blocks.boundary = undefined
+  }
 
   // Last non-space token is the growing block; everything before is final
   let lastContentIdx = tokens.length - 1
@@ -223,6 +258,27 @@ export function StreamingMarkdown({
   if (advance > 0) {
     const stableBoundary = analyzeStableBoundary(tokens, lastContentIdx)
     if (stableBoundary.safe) {
+      if (!blocks.definitions) {
+        let end = boundary
+        for (let index = 0; index < lastContentIdx; index++) {
+          const token = tokens[index]!
+          blocks.tokens.push(token)
+          end += token.raw.length
+          if (end - blocks.end < STABLE_BLOCK_BUDGET) continue
+          const blockBoundary = analyzeStableBoundary(blocks.tokens, blocks.tokens.length)
+          if (!blockBoundary.safe) continue
+          const gap = blocks.boundary === undefined ? 0 : gapBetween(blocks.boundary, analyzeSuffixStart(blocks.tokens, 0))
+          // Detach the sealed slice from the growing source buffer, preserving
+          // UTF-16 code units rather than pinning every historical full reply.
+          const text = Buffer.from(stripped.substring(blocks.end, end), 'utf16le').toString('utf16le')
+          blocks.blocks.push({ text, gap })
+          blocks.end = end
+          blocks.boundary = blockBoundary
+          blocks.tokens = []
+        }
+        blocks.tail = stripped.substring(blocks.end, boundary + advance)
+        blocks.tailGap = blocks.boundary === undefined ? 0 : gapBetween(blocks.boundary, analyzeSuffixStart(blocks.tokens, 0))
+      }
       prefixRef.current = stripped.substring(0, boundary + advance)
       boundaryGapRef.current = stableBoundary.gap
       prefixVisibleRef.current = true
@@ -232,7 +288,12 @@ export function StreamingMarkdown({
     }
   }
 
+  if (blocks.definitions) {
+    return <Markdown dimColor={dimColor} cacheTokens={false}>{stripped}</Markdown>
+  }
+
   const stablePrefix = prefixRef.current
+  const prefixTail = blocks.tail
   const suffixSource = stripped.substring(stablePrefix.length)
   const unstableSuffix = clipSuffixTail(suffixSource, cutRef)
   const suffixStart = cutRef.current > 0
@@ -259,9 +320,22 @@ export function StreamingMarkdown({
     (stablePrefix === '' || !unstableSuffix.startsWith(stablePrefix))
 
   return (
-    <Box flexDirection="column" gap={boundaryGap}>
-      {stablePrefix && <Markdown dimColor={dimColor}>{stablePrefix}</Markdown>}
-      {hasDistinctSuffix && <Markdown dimColor={dimColor} cacheTokens={false}>{unstableSuffix}</Markdown>}
+    <Box flexDirection="column">
+      {blocks.blocks.map((block, index) => (
+        <Box key={index} flexDirection="column" marginTop={block.gap}>
+          <Markdown dimColor={dimColor}>{block.text}</Markdown>
+        </Box>
+      ))}
+      {prefixTail && (
+        <Box key="prefix" flexDirection="column" marginTop={blocks.tailGap}>
+          <Markdown dimColor={dimColor}>{prefixTail}</Markdown>
+        </Box>
+      )}
+      {hasDistinctSuffix && (
+        <Box key="suffix" flexDirection="column" marginTop={boundaryGap}>
+          <Markdown dimColor={dimColor} cacheTokens={false}>{unstableSuffix}</Markdown>
+        </Box>
+      )}
     </Box>
   )
 }

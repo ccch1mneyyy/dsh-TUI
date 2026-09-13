@@ -416,34 +416,20 @@ export const createTextNode = (text: string): TextNode => {
   return node
 }
 
-/**
- * Per-node incremental wrap cache for measureTextNode. A streaming text
- * node grows by append every chunk; without a cache each yoga pass re-wraps
- * the full text (wrapAnsi tokenizes + measures every word — the dominant
- * SLOW_YOGA cost at 20ms+ per frame on long code blocks).
- *
- * Greedy wrapping has no cross-line state, so a text's wrapped height equals
- * the sum of its logical lines' wrapped heights. We therefore commit
- * completed logical lines (everything before the last '\n') into `headHeight`
- * and only re-wrap the growing tail line each pass — O(current line) instead
- * of O(whole text). Cache validity requires same width/wrap mode and the
- * cached text to be a pure prefix of the new text.
- */
-type MeasureWrapCache = {
-  /** Full text as measured last time (post tab-expansion). */
+type TextMeasureCache = {
+  rawText: string
   text: string
-  width: number
   wrap: NonNullable<Styles['textWrap']>
-  /** Wrapped height of text.slice(0, tailStart) — the committed head. */
-  headHeight: number
-  /** Start offset of the uncommitted tail (just past the last '\n'). */
-  tailStart: number
-  /** Wrapped height of text.slice(tailStart). */
-  tailHeight: number
-  /** Last returned dimensions. */
-  result: { width: number; height: number }
+  entries: Array<{
+    width: number
+    widthMode: LayoutMeasureMode
+    result: { width: number; height: number }
+  }>
 }
-const measureWrapCache = new WeakMap<DOMNode, MeasureWrapCache>()
+const textMeasureCache = new WeakMap<DOMNode, TextMeasureCache>()
+// Yoga probes several widths/modes repeatedly in one layout. Retain only
+// the current text's results so streaming cannot accumulate old snapshots.
+const TEXT_MEASURE_CACHE_SIZE = 8
 
 const measureTextNode = function (
   node: DOMNode,
@@ -453,10 +439,30 @@ const measureTextNode = function (
   const rawText =
     node.nodeName === '#text' ? node.nodeValue : squashTextNodes(node)
 
-  // Expand tabs for measurement (worst case: 8 spaces each).
-  // Actual tab expansion happens in output.ts based on screen position.
-  const text = expandTabs(rawText)
+  const textWrap = node.style.textWrap ?? 'wrap'
+  let cache = textMeasureCache.get(node)
+  if (cache === undefined || cache.rawText !== rawText || cache.wrap !== textWrap) {
+    // Tabs use the same measurement expansion as the uncached path.
+    cache = { rawText, text: expandTabs(rawText), wrap: textWrap, entries: [] }
+    textMeasureCache.set(node, cache)
+  }
+  for (const entry of cache.entries) {
+    if (Object.is(entry.width, width) && entry.widthMode === widthMode) return entry.result
+  }
 
+  // Check above before measureText walks every line, even on a wrap-cache hit.
+  const result = measureTextDimensions(cache.text, width, widthMode, textWrap)
+  if (cache.entries.length === TEXT_MEASURE_CACHE_SIZE) cache.entries.shift()
+  cache.entries.push({ width, widthMode, result })
+  return result
+}
+
+function measureTextDimensions(
+  text: string,
+  width: number,
+  widthMode: LayoutMeasureMode,
+  textWrap: NonNullable<Styles['textWrap']>,
+): { width: number; height: number } {
   const dimensions = measureText(text, width)
 
   // Text fits into container, no need to wrap
@@ -483,70 +489,10 @@ const measureTextNode = function (
     return measureText(text, effectiveWidth)
   }
 
-  const textWrap = node.style.textWrap ?? 'wrap'
-
-  // Incremental path: same node, same width/wrap, text grew by append.
-  const cached = measureWrapCache.get(node)
-  if (cached !== undefined && cached.width === width && cached.wrap === textWrap) {
-    if (cached.text === text) {
-      // Same-frame repeat measure (yoga min/max probing) — free.
-      return cached.result
-    }
-    if (text.startsWith(cached.text)) {
-      const tail = text.slice(cached.tailStart)
-      const tailWrapped = wrapText(tail, width, textWrap)
-      const tailDim = measureText(tailWrapped, width)
-      // Commit fully-terminated logical lines into the head so the tail
-      // stays bounded at one line of source text.
-      const lastNewline = tail.lastIndexOf('\n')
-      let { headHeight, tailStart } = cached
-      let tailHeight = tailDim.height
-      if (lastNewline > 0) {
-        const committed = wrapText(tail.slice(0, lastNewline + 1), width, textWrap)
-        headHeight += measureText(committed, width).height
-        tailStart += lastNewline + 1
-        tailHeight = measureText(wrapText(tail.slice(lastNewline + 1), width, textWrap), width).height
-      }
-      const result = {
-        width: Math.max(cached.result.width, tailDim.width),
-        height: headHeight + tailHeight,
-      }
-      measureWrapCache.set(node, {
-        text,
-        width,
-        wrap: textWrap,
-        headHeight,
-        tailStart,
-        tailHeight,
-        result,
-      })
-      return result
-    }
-    // Text replaced or shrunk (node reuse for a different message): fall
-    // through to the full path and overwrite the cache below.
-  }
-
   const wrappedText = wrapText(text, width, textWrap)
-  const fullResult = measureText(wrappedText, width)
-
-  // Seed the incremental cache: commit everything before the last newline.
-  const lastNewline = text.lastIndexOf('\n')
-  const tailStart = lastNewline === -1 ? 0 : lastNewline + 1
-  const headHeight =
-    tailStart === 0
-      ? 0
-      : measureText(wrapText(text.slice(0, tailStart), width, textWrap), width).height
-  measureWrapCache.set(node, {
-    text,
-    width,
-    wrap: textWrap,
-    headHeight,
-    tailStart,
-    tailHeight: fullResult.height - headHeight,
-    result: fullResult,
-  })
-
-  return fullResult
+  // The wrapper has already chosen physical rows. Reapplying width-based
+  // row counting here double-counts trailing spaces at fractional widths.
+  return measureText(wrappedText, Infinity)
 }
 
 // ink-raw-ansi nodes hold pre-rendered ANSI strings with known dimensions.

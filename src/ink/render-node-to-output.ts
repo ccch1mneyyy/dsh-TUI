@@ -932,6 +932,14 @@ function renderNodeToOutput(
       return
     }
 
+    // Text is a paint leaf: unlike boxes, it cannot own an escaping overlay.
+    // Keep the old-position cleanup above, but cull before squash/wrap/style.
+    if (node.nodeName === 'ink-text' && width > 0 && height > 0 && !output.isRectVisible(x, y, width, height)) {
+      nodeCache.delete(node)
+      node.dirty = false
+      return
+    }
+
     if (node.nodeName === 'ink-raw-ansi') {
       // Pre-rendered ANSI content. The producer already wrapped to width and
       // emitted terminal-ready escape codes. Skip squash, measure, wrap, and
@@ -952,13 +960,8 @@ function renderNodeToOutput(
       const plainText = segments.map(s => s.text).join('')
 
       if (plainText.length > 0) {
-        // Upstream Ink uses getMaxWidth(yogaNode) unclamped here. That
-        // width comes from Yoga's AtMost pass and can exceed the actual
-        // screen space (see getMaxWidth docstring). Yoga's height for this
-        // node already reflects the constrained Exactly pass, so clamping
-        // the wrap width here keeps line count consistent with layout.
-        // Without this, characters past the screen edge are dropped by
-        // setCellAt's bounds check.
+        // Use the same content constraint as measurement, not the rounded
+        // pixel-grid box. Offscreen overflow still clips at the terminal edge.
         const maxWidth = Math.min(getMaxWidth(yogaNode), output.width - x)
         const textWrap = node.style.textWrap ?? 'wrap'
 
@@ -1643,11 +1646,12 @@ function renderNodeToOutput(
                   Math.floor(contentY + childBottom),
                   Math.floor((y1 ?? y) + padTop + innerHeight),
                 )
-                if (screenY < screenBottom) {
-                  const fill = Array(screenBottom - screenY)
+                const fillTop = Math.max(screenY, top)
+                if (fillTop < screenBottom) {
+                  const fill = Array(screenBottom - fillTop)
                     .fill(spaces)
                     .join('\n')
-                  output.write(Math.floor(x), screenY, fill)
+                  output.write(Math.floor(x), fillTop, fill)
                   output.clip({
                     x1: undefined,
                     x2: undefined,

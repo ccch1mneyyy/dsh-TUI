@@ -104,14 +104,14 @@ export function normalizePermissionPresetOption(value: unknown): PermissionPrese
  *  bundles (see `canonicalPresetFor`). */
 export function permissionBundlesFromService(service: unknown): readonly PermissionPresetBundle[] {
   const runtime = permissionPresetRuntime(service)
-  const resolve = runtime?.resolve
-  if (typeof resolve !== 'function') return []
-  const names: readonly unknown[] = Array.isArray(runtime?.names) ? runtime.names : []
+  if (runtime === undefined || typeof runtime.resolve !== 'function') return []
+  const names: readonly unknown[] = Array.isArray(runtime.names) ? runtime.names : []
   const bundles: PermissionPresetBundle[] = []
   for (const name of names) {
     if (typeof name !== 'string') continue
     try {
-      const spec = resolve(name)
+      // The registry resolves atoms on instance state; never detach `resolve`.
+      const spec = runtime.resolve(name)
       if (!isRecord(spec)) continue
       const sandbox = spec.sandbox
       const approval = spec.approval
@@ -140,10 +140,14 @@ export function permissionPresetSnapshotFromService(
   if (runtime === undefined) return unavailablePermissionPresetSnapshot()
   try {
     const capturedNames: readonly unknown[] = Array.isArray(runtime.names) ? runtime.names : []
-    const current = runtime.current as ((subject: unknown) => unknown) | undefined
-    const optionOf = runtime.optionOf
     if (capturedNames.length === 0) return unavailablePermissionPresetSnapshot()
-    if (typeof current !== 'function' || typeof optionOf !== 'function') return unavailablePermissionPresetSnapshot()
+    if (typeof runtime.current !== 'function' || typeof runtime.optionOf !== 'function') {
+      return unavailablePermissionPresetSnapshot()
+    }
+    // Readback lives on the registry instance; bind so the calls below keep
+    // reaching it through the same object instead of a detached reference.
+    const current = runtime.current.bind(runtime) as (subject: unknown) => unknown
+    const optionOf = runtime.optionOf.bind(runtime)
 
     const names: string[] = []
     for (const name of capturedNames) {

@@ -840,6 +840,15 @@ export default class Output {
     })
   }
 
+  /** Whether a rectangle can contribute cells under the current paint clip. */
+  isRectVisible(x: number, y: number, width: number, height: number): boolean {
+    const clip = this.imageClips.at(-1)
+    return x < Math.min(this.width, clip?.x2 ?? this.width) &&
+      x + width > Math.max(0, clip?.x1 ?? 0) &&
+      y < Math.min(this.height, clip?.y2 ?? this.height) &&
+      y + height > Math.max(0, clip?.y1 ?? 0)
+  }
+
   /**
    * Push a clip region; subsequent writes are restricted to it.
    * @param clip - the clip region to apply.

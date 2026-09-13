@@ -117,12 +117,19 @@ function doResize(app: { stdout: any; term: typeof XTerm.prototype }, w: number,
 const app = await mountChat(makeRows())
 const composerY = (lines: string[]) => lines.findIndex(l => l.includes('╭'))
 const sentinelY = (lines: string[]) => lines.findIndex(l => l.includes('SENTINEL-TAIL'))
-// 基线就绪 = composer 与 transcript 最后一行（sentinel）都已上屏，且右缘
-// 滚动条（▴）已画上——滚动条在首个内容帧之后的一帧才出现，只等内容会把
-// 无滚动条的早帧当基线，导致回基线比对必挂。
+// 时间线高亮晚于首帧和行高校正到达；整屏稳定后再取基线，避免把
+// 尚未收敛的高亮拿去与 resize 后的稳定画面对比。
+let initialScreen = ''
+let initialScreenChangedAt = Date.now()
 const baselineReady = await settled(() => {
   const lines = screenLines(app.term)
+  const snapshot = lines.join('\n')
+  if (snapshot !== initialScreen) {
+    initialScreen = snapshot
+    initialScreenChangedAt = Date.now()
+  }
   return composerY(lines) >= 0 && sentinelY(lines) >= 0 && lines.some(l => l.endsWith('▴'))
+    && Date.now() - initialScreenChangedAt >= 100
 })
 await app.flush()
 const baseline = screenLines(app.term)
