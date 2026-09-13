@@ -1,6 +1,6 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
-import { createUserMessage } from '@deepseek-ai/dsh-llm'
+import { createUserMessage, type UserMessage } from '@deepseek-ai/dsh-llm'
 import { t } from '../../i18n.js'
 import { logForDebugging } from '../../utils/debug.js'
 import { dispatchTuiDecision } from '../extension-events.js'
@@ -52,6 +52,58 @@ export function createInputDelivery(
    */
   let inputChain: Promise<void> = Promise.resolve()
 
+  /**
+   * Attached-context registry (issue #842): `deliverUserText(..., attach)`
+   * records the model-facing companion message under the DELIVERED user
+   * message's id. The resident `agent/pre-step` listener below claims an entry
+   * exactly once — on the step that admits its user message — and appends it
+   * AFTER `next()`'s batch, the same shape and order as dsh-tool-skill's
+   * gesture boundary. The map is emptied on claim, on inbox discard and on
+   * channel release (owner.own below).
+   */
+  const attachedByMessageId = new Map<string, UserMessage>()
+
+  /** Claim the batch's registered attachments, deleting each entry so a later
+   *  step can never append it a second time. */
+  const claimAttachments = (messages: readonly UserMessage[]): UserMessage[] => {
+    if (attachedByMessageId.size === 0) return []
+    const attached: UserMessage[] = []
+    for (const message of messages) {
+      const context = attachedByMessageId.get(message.id)
+      if (context === undefined) continue
+      attachedByMessageId.delete(message.id)
+      attached.push(context)
+    }
+    return attached
+  }
+
+  /** Drop an attachment whose user message will never be claimed (inbox discard). */
+  const retireAttachment = (messageId: string): void => {
+    attachedByMessageId.delete(messageId)
+  }
+
+  /**
+   * Resident `agent/pre-step` listener (D3/D4): `await next()` lets every
+   * later transform run first; the waterfall applies AFTER-next transforms in
+   * registration order, so registering at channel construction keeps this
+   * append LAST (范例: presets/liangshen/instruction-hint.mjs). A rejected
+   * step never claims — no context message without its admitted user line —
+   * and a released owner returns the decision untouched. One `owner.own`
+   * lifetime covers both the subscription and the whole registry (D5).
+   */
+  const disposePreStep = ctx.on('agent/pre-step', async (_payload, next) => {
+    const decision = await next()
+    if (decision.kind === 'reject') return decision
+    if (!owner.current()) return decision
+    const attached = claimAttachments(decision.messages)
+    if (attached.length === 0) return decision
+    return { ...decision, messages: [...decision.messages, ...attached] }
+  })
+  owner.own(() => {
+    disposePreStep()
+    attachedByMessageId.clear()
+  })
+
   /** D-6 fence: the submission belongs to the session it was typed in. */
   const current = (origin: UserTextOrigin): boolean =>
     owner.current() && binding.agent === origin.agent && state().agentBindingGeneration === origin.generation
@@ -82,6 +134,7 @@ export function createInputDelivery(
     placement: PendingMessage['placement'],
     images: readonly ComposerImageRef[],
     origin: UserTextOrigin,
+    attach?: UserMessage,
   ): Promise<void> => {
     const orderedImages = orderedComposerImages(text, images, origin.stagedImages)
     // A `[Image #N]` placeholder whose staging was evicted (FIFO cap) or
@@ -110,6 +163,10 @@ export function createInputDelivery(
       content: expansion.blocks,
       source: { kind: 'user' },
     })
+    // The message is real from here on: remember its attached context BEFORE
+    // the agent call so the pre-step listener can find it (D6). A throwing
+    // followup/steer rolls both the pending preview and this entry back.
+    if (attach !== undefined) attachedByMessageId.set(message.id, attach)
     // Track BEFORE the agent call: a synchronous throw inside
     // followup/steer rolls the preview back; otherwise the inbox events
     // retire it once the message is claimed or discarded.
@@ -118,6 +175,7 @@ export function createInputDelivery(
       if (placement === 'steer') origin.agent.steer(message)
       else origin.agent.followup(message)
     } catch (error) {
+      if (attach !== undefined) attachedByMessageId.delete(message.id)
       untrackPending(message.id)
       throw error
     }
@@ -203,6 +261,7 @@ export function createInputDelivery(
     placement: PendingMessage['placement'],
     images: readonly ComposerImageRef[],
     origin: UserTextOrigin,
+    attach?: UserMessage,
   ): Promise<void> => {
     // Stale detection compares the AGENT REFERENCE, not the id: session ids
     // are reusable (A → /new → /resume A lands back on the same id with a
@@ -242,7 +301,7 @@ export function createInputDelivery(
       text = decision.text.trim()
     }
     try {
-      await deliverUserText(text, placement, images, origin)
+      await deliverUserText(text, placement, images, origin, attach)
     } catch (error: unknown) {
       // The FIFO must survive a failed expansion/send: surface it, then let
       // the next input proceed through the settled inputChain.
@@ -255,22 +314,26 @@ export function createInputDelivery(
     text: string,
     placement: PendingMessage['placement'],
     images: readonly ComposerImageRef[] = [],
+    attach?: UserMessage,
   ): void => {
     const origin = captureOrigin()
     const capturedImages = composer.captureDraftImages(text, images)
-    inputChain = inputChain.then(() => runUserTextDecision(text, placement, capturedImages, origin)).catch((error: unknown) => {
+    inputChain = inputChain.then(() => runUserTextDecision(text, placement, capturedImages, origin, attach)).catch((error: unknown) => {
       // The chain must survive a failed decision: log, then continue with
       // the next queued submission.
       ctx.logger.warn('dsh-tui: tui/input dispatch failed: %o', error)
     })
   }
   /** Public companion for callers that own a line but not a draft (skill
-   *  registrations): same decision pass and FIFO as a typed submit. */
+   *  registrations): same decision pass and FIFO as a typed submit. The
+   *  optional `attach` is registered by `deliverUserText` only once its user
+   *  message is real, then appended at the end of that message's step batch. */
   const deliverUserTextNow = (
     text: string,
     placement: PendingMessage['placement'],
     images: readonly ComposerImageRef[] = [],
-  ): void => dispatchUserText(text, placement, images)
+    attach?: UserMessage,
+  ): void => dispatchUserText(text, placement, images, attach)
   /** Main's `clearStagedImages`: revoke capabilities AND release the FIFO so
    *  a task parked on the replaced session cannot wedge the new one, and drop
    *  every pending-decision indicator owned by the session being replaced. */
@@ -283,6 +346,8 @@ export function createInputDelivery(
   return {
     dispatchUserText,
     deliverUserText: deliverUserTextNow,
+    claimAttachments,
+    retireAttachment,
     withDecisionPending,
     clearStagedImages,
     stageImage: (input: StagedImageInput): Promise<string> => composer.stageImage(input),

@@ -81,6 +81,13 @@ const agent = {
   /** Messages the skill handler injected. */
   followups: [],
   followup(message) { this.followups.push(message) },
+  // R3 guard (#842): the fallback must never deliver the skill body through
+  // the inbox inject/steer lane — those land in the RUNNING turn, ahead of the
+  // user line. Recording stubs make a regression observable instead of silent.
+  injects: [],
+  inject(message) { this.injects.push(message) },
+  steers: [],
+  steer(message) { this.steers.push(message) },
 }
 
 const channel = createChannel(ctx, agent, {
@@ -313,22 +320,20 @@ fire('skills/change')
     const originalInputHandlers = decisionRegistry.handlers.get('tui/input')
     const seenSkillInputs = []
     decisionRegistry.grants = { ...originalGrants, allows: () => true }
-    decisionRegistry.handlers.set('tui/input', new Map([[
-      'verify-skill-command',
-      {
-        event: 'tui/input',
-        scope: 'tui/input',
-        componentId: 'verify-skill-command',
-        activationId: 'verify-skill-command',
-        order: 'verify-skill-command',
-        identity: {},
-        ownerContext: ctx,
-        listener(payload) {
-          seenSkillInputs.push(payload)
-          return undefined
-        },
+    const inputRecorder = {
+      event: 'tui/input',
+      scope: 'tui/input',
+      componentId: 'verify-skill-command',
+      activationId: 'verify-skill-command',
+      order: 'verify-skill-command',
+      identity: {},
+      ownerContext: ctx,
+      listener(payload) {
+        seenSkillInputs.push(payload)
+        return undefined
       },
-    ]]))
+    }
+    decisionRegistry.handlers.set('tui/input', new Map([['verify-skill-command', inputRecorder]]))
     agent.followups.length = 0
     const outcome = await descriptor.handler({ agent, rawInput: ' 做年终总结', signal: undefined })
     check('kernel path reports success', outcome?.kind === 'success', JSON.stringify(outcome))
@@ -347,32 +352,206 @@ fire('skills/change')
       JSON.stringify({ source: gesture?.source, text: gesture?.content?.[0]?.text }),
     )
 
-    // Fallback path: no `skill` tool (e.g. the minimal preset) → the
-    // handler injects the rendered body directly, as before.
+    // Fallback path: no `skill` tool (e.g. the minimal preset) → the handler
+    // must ride the SAME delivery pipeline as the kernel path: submit
+    // `/name rawInput` as a plain user message and attach the rendered skill
+    // body, which the channel's resident `agent/pre-step` listener appends at
+    // the END of that message's admitted batch (#842). The old shape — the
+    // body as its own `followup` — is exactly the bug, so its assertions are
+    // rewritten below rather than dropped.
     ctx.get = name => {
       if (name === 'commands') return commandService
       if (name === 'skills') return skillsService
       return undefined
     }
+    const preStepHandlers = handlers.get('agent/pre-step') ?? []
+    check('the channel registered an agent/pre-step listener', preStepHandlers.length >= 1, `handlers=${preStepHandlers.length}`)
+    // Replay the REAL `agent/pre-step` waterfall instead of calling the last
+    // listener alone (CodeRabbit on PR #849): every registered listener runs in
+    // registration order and each one's `next()` continues into the next
+    // listener, so an earlier listener's after-`next()` transform unwinds LAST
+    // — that reverse-order unwind is exactly what puts the channel's append at
+    // the end of the batch. The base continuation returns the admitted batch,
+    // matching the loop's default decision.
+    const preStepPayload = messages => ({ agent, messages, turn: 1, step: 1, signal: new AbortController().signal })
+    const runPreStepChain = async (payload, index) => {
+      if (index === preStepHandlers.length) return { kind: 'enter', messages: payload.messages }
+      return preStepHandlers[index](payload, () => runPreStepChain(payload, index + 1))
+    }
+    const firePreStep = messages => runPreStepChain(preStepPayload(messages), 0)
+
+    // AC-1: the fallback delivers the user's line, args preserved, as exactly
+    // ONE followup — the body must not become a turn of its own.
     agent.followups.length = 0
-    const fallbackOutcome = await descriptor.handler({ agent, rawInput: '', signal: undefined })
+    const fallbackOutcome = await descriptor.handler({ agent, rawInput: ' 我的参数', signal: undefined })
     check('fallback reports success', fallbackOutcome?.kind === 'success', JSON.stringify(fallbackOutcome))
+    check('fallback delivers exactly one followup', await settled(() => agent.followups.length === 1))
     check(
-      'fallback host injection does not cross tui/input',
-      seenSkillInputs.length === 1,
+      'fallback rides the delivery pipeline (tui/input crossed once with the args)',
+      seenSkillInputs.length === 2
+        && seenSkillInputs[1]?.text === '/i-h 我的参数'
+        && seenSkillInputs[1]?.delivery === 'followup',
       JSON.stringify(seenSkillInputs),
     )
-    const injected = agent.followups[0]
-    check('fallback injects exactly one message', agent.followups.length === 1)
+    const delivered = agent.followups[0]
     check(
-      'fallback message carries the rendered skill body',
-      typeof injected?.content?.[0]?.text === 'string' && injected.content[0].text.includes('HELP BODY'),
+      'AC-1: the delivery is a plain user message carrying `/i-h 我的参数`',
+      delivered?.source?.kind === 'user' && delivered.content?.[0]?.text === '/i-h 我的参数',
+      JSON.stringify({ source: delivered?.source, text: delivered?.content?.[0]?.text }),
+    )
+
+    // AC-2: the body rides the SAME batch, appended after the user line, and
+    // the injection opens no second turn.
+    const admitted = await firePreStep([delivered])
+    const appended = admitted?.messages?.at(-1)
+    check(
+      'AC-2: body is appended at the END of the batch',
+      admitted?.messages?.length === 2
+        && admitted.messages[0] === delivered
+        && appended?.source?.kind === 'skill-invocation'
+        && appended.source.name === 'i-h'
+        && appended.source.form === 'instructions'
+        && typeof appended.content?.[0]?.text === 'string'
+        && appended.content[0].text.includes('HELP BODY'),
+      JSON.stringify({ source: appended?.source, text: appended?.content?.[0]?.text }),
+    )
+    check('AC-2: injection creates no second followup/turn', agent.followups.length === 1)
+
+    // AC-3: empty rawInput still delivers the bare `/i-h` line and the body is
+    // injected exactly once through the same pre-step path.
+    const emptyOutcome = await descriptor.handler({ agent, rawInput: '', signal: undefined })
+    check('fallback without args reports success', emptyOutcome?.kind === 'success', JSON.stringify(emptyOutcome))
+    check('fallback without args delivers exactly one more followup', await settled(() => agent.followups.length === 2))
+    const bare = agent.followups[1]
+    check(
+      'AC-3: the delivery is a plain user message carrying `/i-h`',
+      bare?.source?.kind === 'user' && bare.content?.[0]?.text === '/i-h',
+      JSON.stringify({ source: bare?.source, text: bare?.content?.[0]?.text }),
+    )
+    const admittedBare = await firePreStep([bare])
+    check(
+      'AC-3: body is appended once, after the bare user line',
+      admittedBare?.messages?.length === 2
+        && admittedBare.messages[0] === bare
+        && admittedBare.messages.at(-1)?.source?.kind === 'skill-invocation'
+        && admittedBare.messages.at(-1).content?.[0]?.text.includes('HELP BODY'),
+    )
+    const replayed = await firePreStep([bare])
+    check(
+      'AC-3: a claimed attachment is never injected twice',
+      replayed?.messages?.length === 1 && replayed.messages[0] === bare,
+    )
+    check('AC-2/AC-3: injection creates no additional followup/turn', agent.followups.length === 2)
+
+    // AC-4: a `tui/input` cancel drops the submission before a message exists
+    // — no followup, and a later step has nothing to inject.
+    decisionRegistry.handlers.set('tui/input', new Map([
+      ['verify-skill-command', inputRecorder],
+      ['verify-skill-command-cancel', {
+        event: 'tui/input',
+        scope: 'tui/input',
+        componentId: 'verify-skill-command-cancel',
+        activationId: 'verify-skill-command-cancel',
+        order: 'verify-skill-command-cancel',
+        identity: {},
+        ownerContext: ctx,
+        listener() { return { cancel: true, reason: 'verify cancel' } },
+      }],
+    ]))
+    const cancelledOutcome = await descriptor.handler({ agent, rawInput: ' 我的参数', signal: undefined })
+    check(
+      'cancelled fallback reports success (the decision owns the pipeline)',
+      cancelledOutcome?.kind === 'success',
+      JSON.stringify(cancelledOutcome),
     )
     check(
-      'fallback message is marked as a user skill invocation',
-      injected?.source?.kind === 'skill-invocation' && injected.source.name === 'i-h',
-      JSON.stringify(injected?.source),
+      'AC-4: the cancelled line reached the tui/input decision',
+      await settled(() => seenSkillInputs.length === 4 && seenSkillInputs[3]?.text === '/i-h 我的参数'),
+      JSON.stringify(seenSkillInputs),
     )
+    check('AC-4: cancel delivers no followup', agent.followups.length === 2, `followups=${agent.followups.length}`)
+    const neverDelivered = { id: 'verify-never-delivered', content: [{ type: 'text', text: '/i-h 我的参数' }], source: { kind: 'user' } }
+    const cancelledStep = await firePreStep([neverDelivered])
+    check(
+      'AC-4: a cancelled submission leaves no skill-invocation injection',
+      cancelledStep?.messages?.length === 1
+        && cancelledStep.messages[0] === neverDelivered
+        && !cancelledStep.messages.some(message => message.source?.kind === 'skill-invocation'),
+    )
+
+    // REQUIREMENT AC-3 · mid-turn delivery: while the agent is running the
+    // user line is queued for the NEXT turn (fake agent: one more followup),
+    // and the in-flight turn's batch must NOT receive the body — only the
+    // batch that claims the queued line does. This is the R3-protection
+    // regression for "never inject into the running turn".
+    decisionRegistry.handlers.set('tui/input', new Map([['verify-skill-command', inputRecorder]]))
+    agent.status = 'running'
+    const runningOutcome = await descriptor.handler({ agent, rawInput: ' 运行中', signal: undefined })
+    check('running fallback reports success', runningOutcome?.kind === 'success', JSON.stringify(runningOutcome))
+    check('running fallback queues exactly one followup', await settled(() => agent.followups.length === 3))
+    const queued = agent.followups[2]
+    const inFlight = { id: 'verify-in-flight', content: [{ type: 'text', text: 'in-flight turn step' }], source: { kind: 'user' } }
+    const inFlightStep = await firePreStep([inFlight])
+    check(
+      'AC-3(running): the in-flight batch receives no skill body',
+      inFlightStep?.messages?.length === 1
+        && inFlightStep.messages[0] === inFlight
+        && !inFlightStep.messages.some(message => message.source?.kind === 'skill-invocation'),
+    )
+    const queuedStep = await firePreStep([queued])
+    check(
+      'AC-3(running): the body follows the queued line in its own batch',
+      queuedStep?.messages?.length === 2
+        && queuedStep.messages[0] === queued
+        && queuedStep.messages.at(-1)?.source?.kind === 'skill-invocation'
+        && queuedStep.messages.at(-1).content?.[0]?.text.includes('HELP BODY'),
+    )
+    agent.status = 'idle'
+
+    // CodeRabbit (PR #849): a competing after-`next()` transform registered
+    // AFTER the channel's listener unwinds BEFORE it, so the body must still be
+    // the LAST message of the final batch; a later listener that rejects the
+    // batch must stop the append entirely.
+    const competingOutcome = await descriptor.handler({ agent, rawInput: ' 竞争', signal: undefined })
+    check('waterfall: competing case reports success', competingOutcome?.kind === 'success', JSON.stringify(competingOutcome))
+    check('waterfall: competing case queues one more followup', await settled(() => agent.followups.length === 4))
+    const competingLine = agent.followups[3]
+    const competitorListener = async (payload, next) => {
+      const decision = await next()
+      if (decision.kind === 'reject') return decision
+      return {
+        ...decision,
+        messages: [...decision.messages, { id: 'verify-competing-context', role: 'user', content: [{ type: 'text', text: 'COMPETING-CONTEXT' }], source: { kind: 'plugin', plugin: 'verify-competitor' } }],
+      }
+    }
+    preStepHandlers.push(competitorListener)
+    const competingStep = await firePreStep([competingLine])
+    check(
+      'waterfall: a competing after-next transform cannot push the body off the end',
+      competingStep?.messages?.length === 3
+        && competingStep.messages[0] === competingLine
+        && competingStep.messages[1]?.content?.[0]?.text === 'COMPETING-CONTEXT'
+        && competingStep.messages.at(-1)?.source?.kind === 'skill-invocation'
+        && competingStep.messages.at(-1).content?.[0]?.text.includes('HELP BODY'),
+      JSON.stringify(competingStep?.messages?.map(message => message.source?.kind ?? message.content?.[0]?.text)),
+    )
+    const rejectingListener = async (payload, next) => {
+      await next()
+      return { kind: 'reject' }
+    }
+    preStepHandlers.push(rejectingListener)
+    const rejectingOutcome = await descriptor.handler({ agent, rawInput: ' 拒绝', signal: undefined })
+    check('waterfall: reject case reports success', rejectingOutcome?.kind === 'success', JSON.stringify(rejectingOutcome))
+    check('waterfall: reject case queues one more followup', await settled(() => agent.followups.length === 5))
+    const rejectedStep = await firePreStep([agent.followups[4]])
+    check('waterfall: a rejected batch never receives the appended body', rejectedStep?.kind === 'reject', JSON.stringify(rejectedStep))
+    preStepHandlers.pop()
+    preStepHandlers.pop()
+
+    // R3 guard: the fallback must never use the inbox inject/steer lane.
+    check('R3: fallback never calls agent.inject', agent.injects.length === 0, `injects=${agent.injects.length}`)
+    check('R3: fallback never calls agent.steer', agent.steers.length === 0, `steers=${agent.steers.length}`)
+
     if (originalInputHandlers === undefined) decisionRegistry.handlers.delete('tui/input')
     else decisionRegistry.handlers.set('tui/input', originalInputHandlers)
     decisionRegistry.grants = originalGrants
