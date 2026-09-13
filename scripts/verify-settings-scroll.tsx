@@ -95,7 +95,7 @@ async function arrow(stdin: FakeStdin, direction: 'down' | 'up', times: number):
   const key = direction === 'down' ? '\x1b[B' : '\x1b[A'
   for (let i = 0; i < times; i++) {
     stdin.write(key)
-    await sleep(120)
+    await sleep(120) // 固定窗:pacing 焦点步进只改颜色无文本锚点，无可 settle 条件
   }
 }
 
