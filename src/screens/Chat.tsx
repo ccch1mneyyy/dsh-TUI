@@ -53,6 +53,7 @@ import { normalizeScrollGutter } from '../tuiDisplayPrefs.js'
 import { OverlayAbove } from '../components/OverlayAbove.js'
 import { TooltipLayer } from '../components/Tooltip.js'
 import { PromptInput, type PromptController } from '../components/PromptInput.js'
+import { resolveBindingGeneration, type PromptDraftSnapshot } from '../components/promptDraftCache.js'
 import type { InjectController } from '../dsh-adapter/inject-channel.js'
 import { PromptEditorLayer, usePromptEditorOpen } from '../components/PromptEditor.js'
 import { GoalTodoPanel } from '../components/GoalTodoPanel.js'
@@ -834,10 +835,9 @@ export function Chat({
   // Agent-binding generation is monotonic across every agent replacement
   // and bumps before the replacement emit, closing the ABA hole where a
   // resumed session reuses the same id. Partial test/embed channels fall
-  // back to staged-image generation.
-  const previewBindingGeneration = channel.agentBindingGeneration
-    ?? channel.stagedImageGeneration?.()
-    ?? 0
+  // back to staged-image generation. Shared with the draft snapshot fence
+  // (F-2) so the fallback order cannot drift between the two callers.
+  const previewBindingGeneration = resolveBindingGeneration(channel)
   const previewGenerationRef = React.useRef(previewBindingGeneration)
   const imagePreviewOwned = previewGenerationRef.current === previewBindingGeneration
   React.useEffect(() => {
@@ -1014,6 +1014,35 @@ export function Chat({
   // Live view into the prompt's text for the Ctrl+C rule (clears text when
   // non-empty; the double-press exit only arms on an empty input).
   const promptControllerRef = React.useRef<PromptController | null>(null)
+  // Single-slot draft snapshot owned by Chat so it outlives the PromptInput
+  // unmount inside the early-return full-screen views (DESIGN D6); the
+  // composer re-consumes it by generation when the main view remounts.
+  // Chat stays mounted across those view switches, so a plain ref is enough.
+  const promptDraftCacheRef = React.useRef<PromptDraftSnapshot | null>(null)
+  // Latest channel for the unmount cleanup below: that effect must not re-run
+  // on a channel identity change, yet its cleanup must release against the
+  // channel of the last render (same mirror pattern as PromptInput's
+  // channelRef).
+  const channelRef = React.useRef(channel)
+  channelRef.current = channel
+  // Unmount cleanup (F-4): while a snapshot waits for the composer to remount,
+  // the cache is the only owner of the staged capabilities it captured. If
+  // Chat goes away first (exit from an early-return screen), release them
+  // instead of leaving them to the session's 128-FIFO eviction. Guarded by
+  // `hasStagedImage` so a capability the channel already recycled stays a
+  // no-op (both calls are idempotent).
+  React.useEffect(() => {
+    return () => {
+      const snapshot = promptDraftCacheRef.current
+      promptDraftCacheRef.current = null
+      if (snapshot === null) return
+      for (const [, stageId] of snapshot.images) {
+        if (channelRef.current.hasStagedImage?.(stageId) === true) {
+          channelRef.current.discardStagedImage(stageId)
+        }
+      }
+    }
+  }, [])
   const previewGallery = activePreview === null ? [] : activePreview.peek
     ? promptControllerRef.current?.previewImages?.() ?? [activePreview]
     : overlay.kind === 'image-preview' ? overlay.gallery ?? [activePreview] : []
@@ -4013,6 +4042,7 @@ export function Chat({
           key="prompt-input"
           channel={channel}
           suspended={promptReplacementOpen}
+          draftCacheRef={promptDraftCacheRef}
           helpOpen={helpOpen}
           onToggleHelp={() =>{  setHelpOpen(previous => !previous) }}
           onRunCommand={runCommand}

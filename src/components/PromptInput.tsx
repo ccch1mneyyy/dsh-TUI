@@ -41,6 +41,12 @@ import { CommandSuggestions } from './CommandSuggestions.js'
 import { FileSuggestions } from './FileSuggestions.js'
 import { HelpMenu } from './HelpMenu.js'
 import { OverlayAbove } from './OverlayAbove.js'
+import {
+  filterLiveImageBindings,
+  isUsableDraftSnapshot,
+  resolveBindingGeneration,
+  type PromptDraftSnapshot,
+} from './promptDraftCache.js'
 import { SuggestionCard, cardContentWidth } from './SuggestionCard.js'
 
 const HISTORY_LIMIT = 50
@@ -437,6 +443,15 @@ export interface PromptInputProps {
   /** Filled with the live controller each render (see PromptController). */
   controllerRef?: React.RefObject<PromptController | null>
   /**
+   * Caller-owned single-slot draft cache (Chat's ref stays alive across the
+   * early-return screens that unmount this composer). On mount a snapshot
+   * whose binding generation still matches is restored into this instance's
+   * local editing state and then consumed; on unmount the live draft is
+   * written back for the next mount. Omitted (single-component tests and
+   * embedded renders) → nothing is read or written, behavior unchanged.
+   */
+  draftCacheRef?: React.RefObject<PromptDraftSnapshot | null>
+  /**
    * The staged image the caret is on — at a token's start, where the whole
    * token inverts — or undefined once it leaves; reported whenever that changes (`'caret'`),
    * and again on every click on a token (`'click'`, even when unchanged) so
@@ -498,6 +513,7 @@ export function PromptInput({
   onBackgroundRequest,
   backgroundAgentsNeedingInput,
   controllerRef,
+  draftCacheRef,
   onCaretImage,
   caretPreviewOpen = false,
   onDismissCaretPreview,
@@ -506,8 +522,23 @@ export function PromptInput({
   // Raw stdout writer for OSC 52 clipboard writes (selection copy) — must
   // bypass the frame pipeline; null outside a mounted Ink App.
   const writeRaw = React.useContext(TerminalWriteContext)
-  const [value, setValue] = React.useState('')
-  const [cursor, setCursor] = React.useState(0)
+  /**
+   * Draft restored by this mount (DESIGN D1): read the caller's single-slot
+   * cache exactly once and keep it only when its binding generation still
+   * matches the channel — a session switch while the composer was unmounted
+   * must not leak the old draft into the new session. Lazy state so the
+   * snapshot is read before the first value/cursor state is created.
+   */
+  const [restoredDraft] = React.useState(() => {
+    const snapshot = draftCacheRef?.current ?? null
+    return isUsableDraftSnapshot(snapshot, resolveBindingGeneration(channel)) ? snapshot : null
+  })
+  const [value, setValue] = React.useState(restoredDraft?.value ?? '')
+  // Normalize the restored caret against the restored text: a garbled or
+  // stale offset must never park the caret past the draft or mid-grapheme.
+  const [cursor, setCursor] = React.useState(
+    restoredDraft === null ? 0 : normalizeCursorOffset(restoredDraft.value, restoredDraft.cursor),
+  )
   /**
    * Mouse text selection: UTF-16 offsets [start, end) in `value`, snapped
    * to grapheme boundaries, start ≤ end. Null = no selection. Created by
@@ -530,11 +561,11 @@ export function PromptInput({
    * i/a/o (…) return to INSERT. Enabled in insert mode so the transition
    * is seamless; the mode is session-scoped (not persisted).
    */
-  const [vimEnabled, setVimEnabled] = React.useState(false)
+  const [vimEnabled, setVimEnabled] = React.useState(restoredDraft?.vimEnabled ?? false)
   /** Insert submode (false = vim NORMAL). */
-  const [vimInsert, setVimInsert] = React.useState(true)
-  const vimEnabledRef = React.useRef(false)
-  const vimInsertRef = React.useRef(true)
+  const [vimInsert, setVimInsert] = React.useState(restoredDraft?.vimInsert ?? true)
+  const vimEnabledRef = React.useRef(restoredDraft?.vimEnabled ?? false)
+  const vimInsertRef = React.useRef(restoredDraft?.vimInsert ?? true)
   vimEnabledRef.current = vimEnabled
   vimInsertRef.current = vimInsert
   /** Undo owns the draft's image bindings as well as its text and caret. */
@@ -547,9 +578,13 @@ export function PromptInput({
    * by a big paste; only an EXPLICIT expand (chip/card click, Esc) or
    * delete removes it — typing NEVER unfolds the block.
    */
-  const [foldBlock, setFoldBlock] = React.useState<{ start: number; end: number } | null>(null)
+  const [foldBlock, setFoldBlock] = React.useState<{ start: number; end: number } | null>(
+    restoredDraft?.foldBlock ?? null,
+  )
   /** Synchronous mirror used by batched keys, controller clear, and mouse drag. */
-  const foldBlockRef = React.useRef<{ start: number; end: number } | null>(null)
+  const foldBlockRef = React.useRef<{ start: number; end: number } | null>(
+    restoredDraft?.foldBlock ?? null,
+  )
   /**
    * Fullscreen draft editor (`expandEditor`, default Ctrl+Shift+E, or the
    * ⛶ affordance at the end of the input row). While expanded the SAME
@@ -557,8 +592,8 @@ export function PromptInput({
    * setPromptEditorNode each render): Enter inserts a newline, Ctrl+Enter
    * submits, Esc collapses. The fold chip is bypassed (full text shown).
    */
-  const [expanded, setExpanded] = React.useState(false)
-  const expandedRef = React.useRef(false)
+  const [expanded, setExpanded] = React.useState(restoredDraft?.expanded ?? false)
+  const expandedRef = React.useRef(restoredDraft?.expanded ?? false)
   /** First visible row of the expanded viewport (merged with caret-follow
    *  during render; wheel events advance it and tick a re-render). */
   const expandedScrollRef = React.useRef(0)
@@ -599,13 +634,44 @@ export function PromptInput({
   }, [])
   const valueRef = React.useRef(value)
   const cursorRef = React.useRef(cursor)
+  /**
+   * Channel mirror for the unmount snapshot effect: that effect keeps `[]`
+   * deps (it must never re-run mid-mount, or it would fence live image
+   * leases), so it reads the live channel through this ref instead.
+   */
+  const channelRef = React.useRef(channel)
+  channelRef.current = channel
   const history = React.useRef<PromptHistoryEntry[]>([])
   const historyIndex = React.useRef(-1)
   const historyDraft = React.useRef<PromptHistoryEntry>({ text: '', images: [] })
   /** Visible `[Image #N]` labels are presentation only; this sidecar carries
    * the non-reusable capability for the current draft. History/rewind text
    * restored without this map can never bind to a later image by accident. */
-  const draftImagesRef = React.useRef(new Map<string, string>())
+  /**
+   * Lazy init (F-3): evaluated once per mount instead of on every render, so
+   * an idle re-render never re-runs `filterLiveImageBindings` /
+   * `channel.hasStagedImage` (the latter also syncs the channel session).
+   *
+   * Render-phase ref read (F-7) invariant for `draftCacheRef`: it has a single
+   * writer (the caller Chat), which writes a snapshot before this component
+   * mounts and again on its unmount; this mount consumes it right after mount
+   * (the layout effect below nulls the ref), and the mount layout cleanup
+   * re-writes it on unmount. By the time any re-render can run the cache is
+   * null, so this initializer is the only render-time reader and cannot
+   * observe a concurrent mutation.
+   */
+  const [restoredImageBindings] = React.useState(() => new Map<string, string>(
+    restoredDraft === null
+      ? []
+      : filterLiveImageBindings(
+        restoredDraft.images,
+        // #823: a capability the channel already cleared must not be
+        // resurrected as an attachable binding; the visible token text stays
+        // behind as an explicit stale placeholder.
+        stageId => channel.hasStagedImage?.(stageId) === true,
+      ),
+  ))
+  const draftImagesRef = React.useRef(restoredImageBindings)
   const draftImagesGenerationRef = React.useRef(channel.stagedImageGeneration?.() ?? 0)
   /** Session generation fences one agent transcript; revision fences one
    * logical composer draft inside that session. Ordinary typing deliberately
@@ -638,15 +704,31 @@ export function PromptInput({
     draftImagesRef.current.clear()
     clearVimUndo()
   }
-  const stageIdIsRetained = (stageId: string): boolean => {
-    for (const current of draftImagesRef.current.values()) {
-      if (current === stageId) return true
-    }
-    return vimUndoRef.current.some(entry => entry.images.some(image => image.stageId === stageId))
-      || history.current.some(entry => entry.images.some(image => image.stageId === stageId))
-      || historyDraft.current.images.some(image => image.stageId === stageId)
-      || channel.pending.some(item => item.images?.some(image => image.stageId === stageId) === true)
-  }
+  /**
+   * Named retention owners (F-6): a staged capability may still be shown by
+   * more than the live draft, so every owner must be asked before the
+   * capability is revoked. An explicit list keeps the six clauses traceable
+   * (and a future v2 multi-slot owner is a one-line addition).
+   */
+  const stageIdRetainers: ReadonlyArray<(candidate: string) => boolean> = [
+    candidate => {
+      for (const stageIdInDraft of draftImagesRef.current.values()) {
+        if (stageIdInDraft === candidate) return true
+      }
+      return false
+    },
+    candidate => vimUndoRef.current.some(entry => entry.images.some(image => image.stageId === candidate)),
+    candidate => history.current.some(entry => entry.images.some(image => image.stageId === candidate)),
+    candidate => historyDraft.current.images.some(image => image.stageId === candidate),
+    candidate => channel.pending.some(item => item.images?.some(image => image.stageId === candidate) === true),
+    // A snapshotted draft is a retention owner like history/vim undo: the
+    // unmount cleanup must NOT revoke capabilities the next mount is about
+    // to restore from the cache. While mounted the cache is consumed
+    // (null), so this entry never changes live-draft behavior.
+    candidate => draftCacheRef?.current?.images.some(([, stageIdOfPair]) => stageIdOfPair === candidate) === true,
+  ]
+  const stageIdIsRetained = (stageId: string): boolean =>
+    stageIdRetainers.some(retain => retain(stageId))
   const discardUnretainedImages = (stageIds: Iterable<string>): void => {
     for (const stageId of new Set(stageIds)) {
       if (!stageIdIsRetained(stageId)) channel.discardStagedImage(stageId)
@@ -702,6 +784,38 @@ export function PromptInput({
   syncImageGeneration()
   valueRef.current = value
   cursorRef.current = cursor
+  // Consume the caller's draft cache in the first commit (DESIGN D7): the
+  // snapshot has served this mount, so it must never be restored twice —
+  // including when it was unusable because the generation had changed.
+  React.useLayoutEffect(() => {
+    if (draftCacheRef !== undefined) draftCacheRef.current = null
+  }, [])
+  // Unmount snapshot (DESIGN D1/D5): copy the live refs into the caller's
+  // cache synchronously (a layout cleanup runs before the passive image
+  // cleanup), then fence in-flight image staging — a continuation that
+  // settles after this commit must not bind into a draft that no longer
+  // exists. `draftImagesRef` is deliberately NOT cleared here: the snapshot
+  // owns the bindings now, and the caller-side #823 check decides later
+  // whether they are still live. `[]` deps: this effect must never re-run
+  // mid-mount, or it would bump the revision and revoke live image leases.
+  React.useLayoutEffect(() => {
+    return () => {
+      if (draftCacheRef !== undefined) {
+        draftCacheRef.current = {
+          bindingGeneration: resolveBindingGeneration(channelRef.current),
+          value: valueRef.current,
+          cursor: cursorRef.current,
+          foldBlock: foldBlockRef.current,
+          expanded: expandedRef.current,
+          vimEnabled: vimEnabledRef.current,
+          vimInsert: vimInsertRef.current,
+          images: [...draftImagesRef.current],
+        }
+      }
+      draftRevisionRef.current += 1
+      imageStageChainRef.current = Promise.resolve()
+    }
+  }, [])
   // Publish the live controller (fresh closure over `value` every render).
   // A prompt-slot panel withdraws the handle in the same commit: external
   // injection must not append/submit a hidden command draft while it waits
@@ -804,6 +918,17 @@ export function PromptInput({
     return () => {
       if (escTimerRef.current) clearTimeout(escTimerRef.current)
       if (hoverLeaveTimerRef.current) clearTimeout(hoverLeaveTimerRef.current)
+      // The layout cleanup above runs first and copies the live image map
+      // into `draftCacheRef`; React StrictMode's simulated remount replays
+      // this same instance's effects, so clearing the map here would strand
+      // the restored bindings (the re-run layout effect consumes the cache).
+      // Fence in-flight stages and release vim-only capabilities, but keep
+      // the live map while the layout snapshot owns it.
+      if (draftCacheRef !== undefined && draftCacheRef.current !== null) {
+        advanceDraftRevision()
+        clearVimUndo()
+        return
+      }
       // An async image read/stage may outlive this component. Revoke its
       // draft lease so it cannot bind an invisible capability after unmount.
       discardDraftImages()

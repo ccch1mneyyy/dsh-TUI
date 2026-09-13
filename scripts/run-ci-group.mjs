@@ -246,6 +246,10 @@ const GROUPS = {
 // 转录拉进不可选取区。真实 Chat 树 + SGR 拖选注入，静息/上滚阅读+
 // 流式并发/流式结束后三场景断言 OSC 52 携带完整选中文本。
     ["repro-drag-select-streaming", ['node', '--import', 'tsx/esm', 'scripts/repro-drag-select-streaming.tsx']],
+// 整屏视图往返草稿保留回归：Ctrl+A 仪表盘 / Ctrl+T 轨迹 / /jobs 等入口
+// 往返后草稿文本、光标、暂存图片与折叠块逐字段保留，空草稿与主动清空
+// 语义不变（AC-1~AC-7 聚焦脚本）。
+    ["verify-composer-draft-screen-switch", ['node', '--import', 'tsx/esm', 'scripts/verify-composer-draft-screen-switch.tsx']],
   ],
   'session-workspace': [
 // 审批服务配置回归（issue #49 尾巴）：裸组合 cordis.yml 必须挂载
