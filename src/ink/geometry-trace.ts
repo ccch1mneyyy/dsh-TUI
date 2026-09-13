@@ -23,11 +23,11 @@ export type FrameCause =
   | 'animation'
   | 'scroll'
   | 'scroll-drain'
+  | 'overlay-shrink'
   | 'measure'
   | 'resize'
   | 'reanchor'
   | 'immediate'
-  | 'backpressure'
 
 export const GEOMETRY_TRACE_ENABLED = process.env.DSH_TUI_GEOMETRY_TRACE !== undefined &&
   process.env.DSH_TUI_GEOMETRY_TRACE !== ''

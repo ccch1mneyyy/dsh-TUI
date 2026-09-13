@@ -127,13 +127,13 @@ export type LayoutNode = {
   setMeasureFunc(fn: LayoutMeasureFunc): void
   unsetMeasureFunc(): void
   markDirty(): void
-  /** Whether this node or its subtree needs re-layout (clean-tree fast path). */
-  isDirty(): boolean
 
   // Layout reading (post-layout)
   getComputedLeft(): number
   getComputedTop(): number
   getComputedWidth(): number
+  /** Text's content constraint before layout rounds its painted box. */
+  getComputedMeasureWidth(): number
   getComputedHeight(): number
   getComputedBorder(edge: LayoutEdge): number
   getComputedPadding(edge: LayoutEdge): number

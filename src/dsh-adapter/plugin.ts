@@ -1,5 +1,4 @@
 import { randomUUID } from 'node:crypto'
-import { writeSync } from 'node:fs'
 import React from 'react'
 import { SessionId } from '@deepseek-ai/dsh-session'
 import type { Agent, AgentHandle } from '@deepseek-ai/dsh-agent'
@@ -10,11 +9,18 @@ import type { SettingsNamespace } from '@deepseek-ai/dsh-settings'
 import Schema from '@deepseek-ai/schemastery'
 import { Config } from './index.js'
 import { createChannel } from './channel.js'
+import { createChannelSceneOutlet } from './channel-scene-outlet.js'
+import { mountChannelUi } from './channel-ui.js'
+import { bindChannelCommands } from './channel/commands.js'
+import { registerTuiChannel } from '../adapter/channel/host-registry.js'
 import { createChildStderrReporter, installChildStderrGuard } from './childStderr.js'
+import { removeClipboardImageDir } from '../utils/clipboard.js'
 import { logForDebugging } from '../utils/debug.js'
-import { QuestionStore } from './questions.js'
+import { isEnvTruthy } from '../utils/envUtils.js'
+import { QuestionStore, bindQuestionStore } from './questions.js'
 import { prepareQuestionAnswerer } from './questions-answerer.js'
-import { ApprovalStore } from './approvals.js'
+import { adapterRuntimeFor } from '../adapter/kernel/runtime-context.js'
+import { ApprovalStore, bindApprovalStore } from './approvals.js'
 import { registerPromptDebug } from './promptDebug.js'
 import { readActivityFrames } from '../activityPrefs.js'
 import { commitFullscreenFactoryMigration, planFullscreenFactoryMigration, readAppliedMigrations } from '../migrationPrefs.js'
@@ -22,9 +28,10 @@ import { readModelPref } from '../modelPrefs.js'
 import { explicitModelRoute, recordedModelRoute, resolveModelRoute, validateModelRoute } from '../modelRoute.js'
 import type { ModelRoute } from '../modelRoute.js'
 import { migratePresetPref, readPresetPref } from '../presetPrefs.js'
+import { readEffortPref } from '../effortPrefs.js'
 import { composePreset, filterMinimalPresetTools, resolvePersistedPreset, resolvePersistedRoute, runningPresetOf } from './presets.js'
 import { ensurePackagedPresets } from './packaged-presets.js'
-import { ensureLegacySessionEventTypes } from './compat/index.js'
+import { ensureLegacySessionEventTypes, snapshotLiveSessionEvents } from './compat/index.js'
 import { clearResumeTarget, resumeTargetFromArgv, writeResumeTarget } from '../sessionHistory.js'
 import { resolveSessionCwd } from '../utils/workspaceRoot.js'
 import { beginRestartAttempt, checkForTuiUpdate, installedTuiVersion, isBootDeadlockTarget, isStandaloneRuntime, isVersionNewer, logRestartEvent, resolveDshProfileName, resolveTuiUpdateTarget, restartTui, updateTuiAndRestart, writeHandoffNotice } from '../update.js'
@@ -38,7 +45,6 @@ import {
   SHORTCUT_ACTIONS,
   type ShortcutActionId,
 } from '../utils/keymap.js'
-import { detectLegacyEnv, migrateLegacyDataDir, RENAMED_ENV } from '../utils/paths.js'
 import { attachHerdrIntegration } from '../herdr.js'
 import { logMouseDebug } from '../utils/debug.js'
 import { Chat } from '../screens/Chat.js'
@@ -51,7 +57,7 @@ import { getHostThemes, type TuiThemeRuntime } from './themes.js'
 import { attachSessionToWorkspace } from './workspace.js'
 import { createLocalWorkspaceRuntime, getHostWorkspaceRuntime } from './workspaces.js'
 import { getHostSettingsSections, getLocalSettingsSectionsHost, type TuiSettingsField, type TuiSettingsSectionsRuntime } from './settings-sections.js'
-import { withHostRootCapability } from './host-access.js'
+import { compositionRoot, withHostRootCapability } from './host-access.js'
 import { render, ThemeProvider, AlternateScreen } from '../ui.js'
 import { PageMargin } from '../components/PageMargin.js'
 import instances from '../ink/instances.js'
@@ -60,7 +66,7 @@ import { DBP, DFE, DISABLE_MOUSE_TRACKING, EXIT_ALT_SCREEN, SHOW_CURSOR } from '
 import { CLEAR_ITERM2_PROGRESS, CLEAR_TAB_STATUS, supportsTabStatus, wrapForMultiplexer } from '../ink/termio/osc.js'
 
 /**
- * Claude Code style interactive TUI front door for DeepSeek Harness agents.
+ * Interactive TUI front door for DeepSeek Harness agents.
  *
  * The plugin attaches to (or creates) one agent, renders a chat transcript
  * from the agent's session log and live `session/event` records, and submits
@@ -74,13 +80,15 @@ import { CLEAR_ITERM2_PROGRESS, CLEAR_TAB_STATUS, supportsTabStatus, wrapForMult
  * apply() re-resolves `bootedFullscreen` from cordis config, and the
  * settings user layer (settings.yaml) can arrive after the 300ms
  * `settingsReady` bound when the recompose is also re-mounting the settings
- * service. The tree would then mount INLINE and `fullscreenFrozen` would
+ * service. The tree would then mount INLINE and `rendererSettingsFrozen` would
  * swallow the late application — the app lands on the main screen
  * ("exited fullscreen", dead mouse, unpinned input) until restart. A
  * session that already mounted fullscreen must never regress on a
  * recompose: latch the decision.
  */
 let lastBootedFullscreen: boolean | undefined
+// Image preferences also stay fixed across host recomposes until /restart.
+let lastBootedTerminalImages: boolean | undefined
 
 /**
  * Extract the startup prompt from raw app argv. `--resume <session>` selects
@@ -224,12 +232,6 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     ctx.logger.warn(`dsh-tui: unable to install packaged presets (${error instanceof Error ? error.message : String(error)})`)
   }
 
-  // Data-directory rename (~/.dsh-cc → ~/.dsh-tui, issue #120): copy the
-  // legacy directory before ANY preference read below (resolveStartupLang
-  // already touches lang.json). Copy, not move — old launchers keep working
-  // and the user deletes the legacy directory themselves.
-  const migrated = migrateLegacyDataDir()
-
   // UI language resolution: DSH_TUI_LANG env var wins, then the
   // settings.yaml `dsh-tui.lang` user layer (applied once the settings
   // namespace registers below), then cordis.yml `lang`, then the
@@ -237,22 +239,6 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   // render so every module resolves strings in the same language.
   const envLang = process.env.DSH_TUI_LANG
   setLang(isLang(envLang) ? envLang : isLang(config.lang) ? config.lang : resolveStartupLang())
-
-  // Rename notices must land before the first render — stderr writes break
-  // the fullscreen UI once it is up. The bin launcher prints the same
-  // warnings; this covers direct `dsh --profile dsh-tui` boots.
-  if (migrated) {
-    ctx.logger.warn('dsh-tui: data directory copied from ~/.dsh-cc to ~/.dsh-tui (legacy kept)')
-    if (process.stderr.isTTY) {
-      process.stderr.write(`\n[dsh-tui] ${t('legacy-dir-migrated')}\n`)
-    }
-  }
-  for (const oldName of detectLegacyEnv()) {
-    ctx.logger.warn(`dsh-tui: env ${oldName} renamed to ${RENAMED_ENV[oldName]}; the old name no longer takes effect`)
-    if (process.stderr.isTTY) {
-      process.stderr.write(`\n[dsh-tui] ${t('legacy-env-renamed', { old: oldName, new: RENAMED_ENV[oldName] })}\n`)
-    }
-  }
 
   // /update restart verification: the pre-update process stamps the version
   // it was leaving behind; if the freshly loaded one is not newer, the
@@ -303,7 +289,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   // user-interaction config row does; a bare plugin mount creates it on
   // this context), then expose the model-facing tool before resolving the
   // agent so per-step assembly includes ask_user_question. rc.2's provider
-  // seat is registered below; alpha.2's agent-aware waterfall needs the
+  // seat is registered below; the 0.1.2 line's agent-aware waterfall needs the
   // channel owner and is therefore registered immediately after the channel
   // is created. Optional-service access goes through `ctx.get`, not the
   // inject proxy.
@@ -319,7 +305,8 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     const presetId = context.agent === undefined ? undefined : runningPresetOf(context.agent.session)
     return filterMinimalPresetTools(assembled, presetId)
   })
-  const questionStore = new QuestionStore()
+  const questionStore = new QuestionStore(adapterRuntimeFor(ctx))
+  bindQuestionStore(ctx, questionStore)
   // One store, one teardown effect on both API lines. The compatibility
   // adapter binds either registration to this Cordis fiber; this separate
   // effect rejects asks still parked in the UI during teardown.
@@ -461,7 +448,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   const meta = { cwd: sessionCwd }
   // Launch-time resume target: the env handoff (launchers like naive-dsh) wins;
   // `dsh --profile tui` forwards `--resume` verbatim instead, so fall back to
-  // parsing the forwarded app args (parity with the standalone bin).
+  // parsing the forwarded app args (matching the standalone bin).
   const launchSessionId = config.sessionId ?? resumeTargetFromArgv(process.argv.slice(2))
   const { agent, handle, agentPreset, route: createdRoute } = await resolveAgent(
     ctx,
@@ -494,7 +481,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   // validated startup resolution, on resume the route the target session's
   // own records carry (a complete cordis.yml pin wins over them).
   const displayRoute = createdRoute ?? startupRoute
-  const channel = createChannel(ctx, agent, {
+  const rawChannel = createChannel(ctx, agent, {
     model: displayRoute.model,
     // A RESUMED session keeps its persisted header cwd (issue #96 review):
     // pre-upgrade sessions recorded the launch directory, and re-resolving
@@ -516,7 +503,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     activity: config.activity,
     // Explicit cordis.yml value (static deployment choice) wins over the
     // runtime `/activity` preference, which wins over the default.
-    activityFrames: config.activityFrames ?? readActivityFrames() ?? 'claude',
+    activityFrames: config.activityFrames ?? readActivityFrames() ?? 'moon8',
     // Static footer preference: cordis.yml `contextBar` (schema default on).
     contextBar: config.contextBar,
     // Same precedence for the agent preset: cordis.yml `preset` over the
@@ -540,6 +527,30 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     statusBar: config.statusBar,
     handle,
   })
+  // Register the live Channel for the adapter Kernel. The Channel driver
+  // resolves it lazily from the composition root, so this can be called after
+  // the plugin-host Kernel started without requiring a re-mount.
+  // Normalize to the composition root: the Kernel and its Channel driver
+  // query the registry through the root context, never through this plugin's
+  // child activation context.
+  const unregisterTuiChannel = registerTuiChannel(compositionRoot(ctx), rawChannel)
+  ctx.effect(() => () => { unregisterTuiChannel() })
+  const pluginHost = ctx.get('tuiPluginHost')
+  const adapterRuntime = adapterRuntimeFor(ctx)
+  const uiMount = mountChannelUi(ctx, rawChannel, pluginHost, adapterRuntime.mode)
+  const channel = uiMount.channel
+  bindChannelCommands(rawChannel, channel)
+  const shadow = adapterRuntime.mode === 'passive-shadow' || adapterRuntime.mode === 'replay-shadow'
+  // Bootstrap notices/prompts are deliberately dropped in observational mode;
+  // interactive commands retain rejection semantics through the UI capability.
+  const notifyChannel: typeof channel.notify = (text, options) => {
+    if (shadow) return () => undefined
+    return channel.notify(text, options)
+  }
+  const submitChannel: typeof channel.submit = text => {
+    if (!shadow) channel.submit(text)
+  }
+  ctx.effect(() => () => { uiMount.dispose() })
   // Root page-margin store: the PageMargin inset box sits ABOVE Chat, so
   // the channel version bump (which re-renders everything below Chat)
   // cannot drive it. Seed the store from config before the tree mounts;
@@ -549,9 +560,10 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   // already sanitized/rate-limited the delivery, the sink only forwards.
   // Without the extensions row (tuiToast absent) plugin toasts are dropped
   // by the runtime itself — same soft-degrade contract as the other seams.
+  // Delivery uses the same owner-bound UI capability as all renderer actions.
   const toastStore = getHostToastStore(ctx.get('tuiToast') as TuiToastRuntime | undefined)
   toastStore?.setSink(delivery => {
-    channel.notify(delivery.text, { color: delivery.color, timeoutMs: delivery.timeoutMs })
+    notifyChannel(delivery.text, { color: delivery.color, timeoutMs: delivery.timeoutMs })
   })
   if (questionAnswererRegistration.kind === 'waterfall') {
     // Ownership follows the mutable channel; registration cleanup belongs to
@@ -561,12 +573,14 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   // Fullscreen layout decision: the settings user layer (edited through the
   // /settings screen) overrides cordis.yml when set. The settings injection
   // below resolves it synchronously when the host settings service is up —
-  // i.e. before the tree mounts. `fullscreenFrozen` latches at mount: the
+  // i.e. before the tree mounts. `rendererSettingsFrozen` latches at mount: the
   // exit funnel and the AlternateScreen wrap must keep reading the mode this
   // session ACTUALLY runs, never a mid-session edit meant for the next boot
   // (swapping layouts requires re-mounting the whole tree).
   let bootedFullscreen = config.fullscreen === true
-  let fullscreenFrozen = false
+  let bootedTerminalImages = lastBootedTerminalImages ?? config.terminalImages ?? true
+  let rendererSettingsFrozen = false
+  const terminalImagesDisabledByEnv = isEnvTruthy(process.env.DSH_TUI_DISABLE_TERMINAL_IMAGES)
   // The settings service may come up AFTER this plugin's apply: the cordis
   // inject callback defers until the service registers, so the first
   // `apply(scope.get())` below can land after the mount (field report: the
@@ -618,6 +632,10 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
         expandEditor: Schema.boolean(),
         // Same no-default rule: applyDisplay resolves `?? config.smoothStreaming ?? true`.
         smoothStreaming: Schema.boolean(),
+        // No default on purpose: unset keeps the boot chain decisive
+        // (applyEffortDefault hands `undefined` to channel.setDefaultEffort,
+        // which resolves cordis.yml `effort` → effort.json → adapter default).
+        effortDefault: Schema.string(),
         statusBar: Schema.object({
           compact: Schema.boolean().default(DEFAULT_STATUS_BAR.compact),
           model: Schema.boolean().default(DEFAULT_STATUS_BAR.model),
@@ -639,6 +657,10 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
         }).default({ ...DEFAULT_STATUS_BAR }),
         // Header pixel whale art; on unless settings.yaml says otherwise.
         whale: Schema.boolean().default(true),
+        // Idle whale behaviors after the intro settles; on by default —
+        // the idle-wakeup gate stays: an explicit `false` keeps the settled
+        // header timer-free.
+        whaleIdle: Schema.boolean().default(true),
         // Minimal mode: strips the header splash, emoji glyphs, and
         // decorative colors; code highlight and tool colors stay.
         minimal: Schema.boolean().default(false),
@@ -649,8 +671,10 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
         // Same no-default rule: unset keeps cordis.yml's `fullscreen`
         // decisive; set overrides it from the next boot on.
         fullscreen: Schema.boolean(),
+        // Unset inherits cordis.yml; a saved choice takes effect after restart.
+        terminalImages: Schema.boolean(),
         // Built-in action-shortcut overrides, one optional combo string per
-        // action (see src/utils/keymap.ts). Unset keeps the default binding
+        // action (see the keymap utility). Unset keeps the default binding
         // and the section's format() shows the effective combos.
         shortcuts: Schema.object(
           Object.fromEntries(SHORTCUT_ACTIONS.map(action => [action.id, Schema.string().required(false)])),
@@ -661,9 +685,12 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
       diffLayout?: 'auto' | 'split' | 'unified'
       lang?: 'zh' | 'en'
       whale?: boolean
+      whaleIdle?: boolean
       minimal?: boolean
       fullscreen?: boolean
+      terminalImages?: boolean
       thinkingFold?: 'preview' | 'full'
+      effortDefault?: string
       toolBackground?: ToolBackground
       scrollGutter?: ScrollGutterMode
       pageMargin?: PageMarginSetting
@@ -675,22 +702,27 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
       shortcuts?: Partial<Record<ShortcutActionId, string>>
     }
     const applyLayout = (value: SettingsValue): void => {
-      channel.setDiffLayout(value.diffLayout ?? config.diffLayout ?? 'auto')
+      if (!shadow) channel.setDiffLayout(value.diffLayout ?? config.diffLayout ?? 'auto')
     }
     const applyWhale = (value: { whale?: boolean }): void => {
+      if (shadow) return
       channel.setWhale(value.whale ?? true)
     }
+    /** Apply the idle-whale-behavior setting: live-toggle the channel flag. */
+    const applyWhaleIdle = (value: { whaleIdle?: boolean }): void => {
+      channel.setWhaleIdle(value.whaleIdle ?? true)
+    }
     const applyMinimal = (value: { minimal?: boolean }): void => {
+      if (shadow) return
       channel.setMinimal(value.minimal ?? false)
     }
-    // Fullscreen: only meaningful before the tree mounts (the freeze latch
-    // above). A later doc change (mid-session /settings edit) is persisted
-    // by the service and picked up on the next boot; the watch below says
-    // so with a notify.
-    const applyFullscreen = (value: SettingsValue): void => {
-      if (!fullscreenFrozen && typeof value.fullscreen === 'boolean') {
+    // Renderer settings are resolved before mount; later edits wait for restart.
+    const applyRendererSettings = (value: SettingsValue): void => {
+      if (rendererSettingsFrozen) return
+      if (typeof value.fullscreen === 'boolean') {
         bootedFullscreen = value.fullscreen
       }
+      bootedTerminalImages = lastBootedTerminalImages ?? value.terminalImages ?? config.terminalImages ?? true
     }
     // The /settings language field writes `lang` through the settings
     // service (user layer): apply it live and mirror it to lang.json so
@@ -706,6 +738,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     // Display preferences ride the same namespace: /settings writes them
     // live and future render consumers observe the channel version bump.
     const applyDisplay = (value: SettingsValue): void => {
+      if (shadow) return
       channel.setThinkingFold(value.thinkingFold ?? config.thinkingFold ?? 'preview')
       channel.setToolBackground(normalizeToolBackground(value.toolBackground ?? config.toolBackground))
       channel.setScrollGutter(normalizeScrollGutter(value.scrollGutter ?? config.scrollGutter))
@@ -739,14 +772,29 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
       }
       setKeymapOverrides(merged)
     }
+    // The /settings default-reasoning-effort field (effortDefault): re-seat
+    // the channel's future-sessions default without touching effort.json
+    // (the user layer outranks that file). Only the field's own changes
+    // re-apply — unrelated settings edits must not disturb a live /effort
+    // choice mid-session.
+    let lastEffortDefault: string | null | undefined = undefined
+    const applyEffortDefault = (value: SettingsValue): void => {
+      const next = value.effortDefault ?? null
+      if (next === lastEffortDefault) return
+      lastEffortDefault = next
+      const level = next === null || next === 'auto' ? undefined : next
+      channel.setDefaultEffort(level)
+    }
     const apply = (next: SettingsValue): void => {
       applyLayout(next)
       applyWhale(next)
+      applyWhaleIdle(next)
       applyMinimal(next)
       applyLang(next)
       applyDisplay(next)
+      applyEffortDefault(next)
       applyShortcuts(next)
-      applyFullscreen(next)
+      applyRendererSettings(next)
     }
     // One-time fullscreen factory-default migration (companion to the
     // schema + cordis.patch.yml flip false→true): a `fullscreen: false`
@@ -757,22 +805,28 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     // boot decision cannot wait for the async doc write — the stale value
     // is shadowed out of the first apply below (destructuring omission,
     // not an explicit undefined), and the later watch commit (fullscreen
-    // back to undefined) is a no-op for applyFullscreen.
+    // back to undefined) leaves the fullscreen decision unchanged.
     const bootSettings = scope.get()
     const fullscreenMigration = planFullscreenFactoryMigration(bootSettings.fullscreen, readAppliedMigrations())
     void commitFullscreenFactoryMigration(fullscreenMigration, {
       unset: () => settingsCtx.settings.mutate(tuiSettingsNs, [{ op: 'unset', path: ['fullscreen'] }]),
     })
     if (fullscreenMigration === 'unset') {
-      channel.notify(t('settings-fullscreen-migrated'), { color: 'warning' })
+      notifyChannel(t('settings-fullscreen-migrated'), { color: 'warning' })
     }
     const { fullscreen: staleFullscreen, ...migratedSettings } = bootSettings
     apply(fullscreenMigration === 'unset' ? migratedSettings : bootSettings)
+    let lastTerminalImages = bootSettings.terminalImages ?? config.terminalImages ?? true
     scope.watch(next => {
       apply(next)
       if (typeof next.fullscreen === 'boolean' && next.fullscreen !== bootedFullscreen) {
-        channel.notify(t('settings-fullscreen-restart'), { color: 'warning' })
+        notifyChannel(t('settings-fullscreen-restart'), { color: 'warning' })
       }
+      const terminalImages = next.terminalImages ?? config.terminalImages ?? true
+      if (terminalImages !== lastTerminalImages && terminalImages !== bootedTerminalImages) {
+        channel.notify(t('settings-terminal-images-restart'), { color: 'warning' })
+      }
+      lastTerminalImages = terminalImages
     })
     resolveSettingsReady?.()
   })
@@ -885,7 +939,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   {
     const settingsSections = getHostSettingsSections(
       ctx.get('tuiSettingsSections') as TuiSettingsSectionsRuntime | undefined,
-    ) ?? getLocalSettingsSectionsHost()
+    ) ?? getLocalSettingsSectionsHost(ctx)
     const unregister = settingsSections.register({
       ns: 'dsh-tui',
       title: 'dsh-tui',
@@ -927,6 +981,24 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
             // Unset in settings.yaml: show what THIS session booted with
             // (the cordis.yml resolution) instead of a misleading false.
             return value === undefined || value === null ? String(bootedFullscreen) : String(value)
+          },
+        },
+        {
+          path: ['terminalImages'],
+          label: terminalImagesDisabledByEnv ? 'Image previews (forced off)' : 'Terminal image previews',
+          descriptions: { zh: terminalImagesDisabledByEnv ? '图片预览（环境强制关闭）' : '终端图片预览' },
+          hint: terminalImagesDisabledByEnv
+            ? 'Checkbox saves your preference. Relaunch without DSH_TUI_DISABLE_TERMINAL_IMAGES to enable previews.'
+            : 'Preview images in supported terminals. Use /restart to apply. Sending images is unaffected.',
+          hintDescriptions: {
+            zh: terminalImagesDisabledByEnv
+              ? '勾选框保存预览偏好；移除 DSH_TUI_DISABLE_TERMINAL_IMAGES 后重新启动才能显示图片。'
+              : '在支持的终端中预览图片。修改后用 /restart 生效；不影响向模型发送图片。',
+          },
+          kind: 'boolean',
+          format(value: unknown): string {
+            // The editor toggles this value; runtime overrides must not replace the preference.
+            return String(value ?? config.terminalImages ?? true)
           },
         },
         {
@@ -984,10 +1056,16 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
           path: ['pageMargin'],
           label: 'Page margin',
           descriptions: { zh: '页边距' },
-          hint: 'Inset the whole UI from the terminal edges. Type a preset (none / slim / normal / roomy) or a custom spec `NxM`: N columns per side, M rows top/bottom (e.g. 3x1, max 8x4; a bare `N` keeps rows at 1). Empty resets to the default `normal`. Applies immediately.',
-          hintDescriptions: { zh: '让整个界面相对终端四边内缩。输入预设名（none / slim / normal / roomy）或自定义 `NxM`：左右各 N 列、上下各 M 行（如 3x1，上限 8x4；只填 N 则上下保持 1 行）。清空恢复默认 normal。立即生效。' },
+          hint: 'Inset the whole UI from the terminal edges. ←/→ cycles presets (none / slim / normal / roomy); Enter types a custom spec `NxM`: N columns per side, M rows top/bottom (e.g. 3x1, max 8x4; a bare `N` keeps rows at 1). Empty resets to the default `normal`. Applies immediately.',
+          hintDescriptions: { zh: '让整个界面相对终端四边内缩。←/→ 循环预设（none / slim / normal / roomy）；Enter 输入自定义 `NxM`：左右各 N 列、上下各 M 行（如 3x1，上限 8x4；只填 N 则上下保持 1 行）。清空恢复默认 normal。立即生效。' },
           kind: 'text',
           placeholder: 'normal',
+          options: [
+            { value: 'none', label: 'None', descriptions: { zh: '无' } },
+            { value: 'slim', label: 'Slim', descriptions: { zh: '窄' } },
+            { value: 'normal', label: 'Normal', descriptions: { zh: '常规' } },
+            { value: 'roomy', label: 'Roomy', descriptions: { zh: '宽' } },
+          ],
           format(value: unknown): string {
             return String(value ?? config.pageMargin ?? DEFAULT_PAGE_MARGIN)
           },
@@ -1054,6 +1132,30 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
           format(value: unknown): string {
             // Unset in settings.yaml: the default is on.
             return value === undefined || value === null ? 'true' : String(value)
+          },
+        },
+        {
+          path: ['effortDefault'],
+          label: 'Default reasoning effort',
+          descriptions: { zh: '默认推理强度' },
+          hint: 'Reasoning-effort level new sessions start on; the current session applies it to its next request too, when the model offers the tier (an unlisted level falls back to the model default). Auto = follow the cordis.yml `effort` pin, then the persisted /effort choice, then the model default.',
+          hintDescriptions: { zh: '新会话起始的推理强度档位；模型提供该档位时，当前会话的下一请求也会应用（模型不提供的档位会静默回落到模型默认）。自动 = 依次跟随 cordis.yml 的 effort 配置、持久化的 /effort 选择、模型默认档。' },
+          kind: 'select',
+          options: [
+            { value: 'auto', label: 'Auto (model default)', descriptions: { zh: '自动（模型默认）' } },
+            { value: 'off', label: 'Off', descriptions: { zh: '关闭' } },
+            { value: 'low', label: 'Low', descriptions: { zh: '低' } },
+            { value: 'high', label: 'High', descriptions: { zh: '高' } },
+            { value: 'max', label: 'Max', descriptions: { zh: '最高' } },
+          ],
+          format(value: unknown): string {
+            // Unset in settings.yaml: show what a boot would actually start
+            // on (the cordis effort pin → the persisted /effort choice)
+            // instead of a misleading blank.
+            if (value === undefined || value === null || value === 'auto') {
+              return config.effort ?? readEffortPref() ?? 'auto'
+            }
+            return String(value)
           },
         },
         ...shortcutFields,
@@ -1228,6 +1330,14 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
           kind: 'boolean',
         },
         {
+          path: ['whaleIdle'],
+          label: 'Welcome whale idle',
+          descriptions: { zh: '鲸鱼娘闲置动画（欢迎期）' },
+          hint: 'Welcome-phase idle behaviors: after the intro the whale flutters its fins, thumps its tail, and dozes off when idle; clicking wakes a dozing whale and pops a heart. The first agent turn freezes it to the static standard frame.',
+          hintDescriptions: { zh: '欢迎期闲置行为：开屏后鲸鱼娘摆鱼鳍、偶尔拍尾巴，空闲会睡着冒 Z；点击唤醒睡着的鲸鱼娘并冒爱心。开始第一个任务后定格为静态标准帧。' },
+          kind: 'boolean',
+        },
+        {
           path: ['minimal'],
           label: 'Minimal mode',
           descriptions: { zh: '极简模式' },
@@ -1242,13 +1352,13 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   // DSH approval seam: the permission layer asks ApprovalService.request(),
   // which dispatches an `approval/request` waterfall. With no answerer the
   // chain falls through to the fail-closed 'unavailable', so register this
-  // TUI as the interactive answerer for EVERY agent in this process — the
-  // attached session's asks and any background (agent view) session's asks
-  // alike, so an unattended session surfaces as "needs input" instead of
-  // failing closed. One ask is shown at a time, whichever agent asked.
-  // Guarded on the service being mounted — a bare composition without the
-  // dsh-base approval row has nothing to answer into.
-  const approvalStore = new ApprovalStore()
+  // TUI as the interactive answerer for the agent it owns; requests for
+  // other agents delegate down the chain (next()). Guarded on the service
+  // being mounted — a bare composition without the dsh-base approval row
+  // has nothing to answer into. channel.agentId tracks agent swaps
+  // (/new, /resume, rewind), so ownership is re-evaluated per request.
+  const approvalStore = new ApprovalStore(adapterRuntimeFor(ctx))
+  bindApprovalStore(ctx, approvalStore)
   if (ctx.get('approval') !== undefined) {
     ctx.on('approval/request', (req, next) =>
       approvalStore.park(req).catch(() => next()))
@@ -1260,11 +1370,11 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     // session other than the active ask's, so no agent filtering is needed
     // here. The firehose fires post-commit, after the event entered
     // session.events, so the recheck sees the settled result.
-    ctx.on('session/event', (_session, event) => approvalStore.noteSessionEvent(event))
+    ctx.on('session/event', (session, event) => approvalStore.noteSessionEvent(session.id, event))
     ctx.effect(() => () => approvalStore.settleAll('cancelled'))
   }
   // The agent view reads parked ask ids for its "needs input" state.
-  channel.bindApprovalStore(approvalStore)
+  rawChannel.bindApprovalStore(approvalStore)
   const herdr = attachHerdrIntegration({
     channel,
     questions: questionStore,
@@ -1283,14 +1393,14 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   const cmdline = (ctx as { cmdlineArgs?: { get?: () => readonly string[]; args?: readonly string[] } }).cmdlineArgs
   const cmdlineArgs = cmdline?.get?.() ?? cmdline?.args
   const initialPrompt = initialPromptFromCmdlineArgs(cmdlineArgs)
-  if (initialPrompt) channel.submit(initialPrompt)
+  if (initialPrompt) submitChannel(initialPrompt)
   // Attach the stderr reporter to the live channel and flush anything a
   // startup-spawned server produced while the channel didn't exist yet.
-  notifyStderr = (text, options) => channel.notify(text, options)
+  notifyStderr = (text, options) => notifyChannel(text, options)
   // The question-seat alert was raised before the channel existed; flush it
   // now so it lands as an in-UI notice, not only in the log file.
   if (questionSeatNotice !== undefined) {
-    channel.notify(questionSeatNotice, { color: 'error' })
+    notifyChannel(questionSeatNotice, { color: 'error' })
     questionSeatNotice = undefined
   }
   for (const [text, options] of stderrBacklog.splice(0)) {
@@ -1431,6 +1541,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   await settingsReady
   const chat = React.createElement(Chat, {
     channel,
+    renderScene: createChannelSceneOutlet(() => rawChannel.pluginScene),
     questionStore,
     approvalStore,
     injectControllerRef,
@@ -1451,7 +1562,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
       if (exited || restartRequested) return
       restartRequested = true
       logRestartEvent('command: /restart accepted')
-      channel.notify(t('restart-starting'))
+      notifyChannel(t('restart-starting'))
       handleExit()
     },
     // Only a `dsh --profile <name>` launch has a profile installation for
@@ -1465,11 +1576,11 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
       void resolveTuiUpdateTarget().then((target) => {
         if (exited || updateRequested) return
         if (target.kind === 'latest') {
-          channel.notify(t('update-already-latest', { current: target.current }), { color: 'warning' })
+          notifyChannel(t('update-already-latest', { current: target.current }), { color: 'warning' })
           return
         }
         if (target.kind === 'unknown') {
-          channel.notify(t('update-check-failed'))
+          notifyChannel(t('update-check-failed'))
         } else {
           // 0.7.0/0.7.1 hard-inject tuiWorkspaces at the code level; under
           // an older global launcher patch (no service row) that is a
@@ -1477,21 +1588,21 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
           // "pending (waiting for service: tuiWorkspaces)"). A stale mirror
           // pinning /update onto that range must be refused, not installed.
           if (isBootDeadlockTarget(target.latest)) {
-            channel.notify(t('update-refused-deadlock', {
+            notifyChannel(t('update-refused-deadlock', {
               latest: target.latest,
               authoritative: target.authoritative ?? target.latest,
             }), { color: 'warning' })
             return
           }
           if (target.authoritative !== undefined) {
-            channel.notify(t('update-mirror-lag', { latest: target.latest, authoritative: target.authoritative }))
+            notifyChannel(t('update-mirror-lag', { latest: target.latest, authoritative: target.authoritative }))
           }
           updateTargetVersion = target.latest
         }
         if (isStandaloneRuntime()) {
-          channel.notify(t('update-standalone-starting'))
+          notifyChannel(t('update-standalone-starting'))
         } else {
-          channel.notify(t('update-starting'))
+          notifyChannel(t('update-starting'))
         }
         updateRequested = true
         handleExit()
@@ -1510,7 +1621,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   if (bootedFullscreen === false && lastBootedFullscreen === true) {
     bootedFullscreen = true
   }
-  fullscreenFrozen = true
+  rendererSettingsFrozen = true
   // fullscreen: wrap the tree in <AlternateScreen> (DEC 1049 + SGR mouse
   // tracking), which turns on in-app text selection (copy-on-select via
   // useCopyOnSelect), wheel scroll, and click/hover hit-testing. Inline
@@ -1527,9 +1638,10 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     themeHost,
     children: marginChildren,
   })
-  instance = await render(tree, { exitOnCtrlC: false })
+  instance = await render(tree, { exitOnCtrlC: false, terminalImages: bootedTerminalImages })
   const isRecompose = lastBootedFullscreen !== undefined
   lastBootedFullscreen = bootedFullscreen
+  lastBootedTerminalImages = bootedTerminalImages
   logMouseDebug('apply mount', { bootedFullscreen, isRecompose })
   // /restart handoff diagnosis: the replacement got all the way to a mounted
   // UI, so any later death is post-boot (and its stderr keeps flowing to the
@@ -1568,7 +1680,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     const suffix = update.isStandalone && update.checksumUrl === undefined
       ? ` ${t('update-standalone-no-checksum')}`
       : ''
-    channel.notify(
+    notifyChannel(
       `${t(key, { current: update.current, latest: update.latest })}${suffix}`,
       { color: 'warning', timeoutMs: 12000 },
     )
@@ -1585,18 +1697,8 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   ctx.effect(() => () => {
     logMouseDebug('apply teardown')
     funnel.markTeardown()
-    channel.releaseContributions()
+    rawChannel.releaseContributions()
     instance?.unmount()
-    // Safety net for the crash-then-teardown race: an app-driven unmount
-    // DEFERS the cooked-mode restore to finishExit, but markTeardown makes
-    // the funnel swallow that exit — without this, raw mode would leak on
-    // the live process. Idempotent (shutdownPhase guard); a plain teardown
-    // already concluded inside unmount().
-    try {
-      instance?.concludeShutdown?.()
-    } catch {
-      ctx.logger.debug('dsh-tui: teardown conclude failed; terminal may be left raw')
-    }
   })
 
   // The TUI is the front door: when the user unmounts it (Ctrl+C), dispose
@@ -1677,7 +1779,7 @@ async function resolveAgent(
         agent: resumed.agent,
         handle: resumed,
         agentPreset: composed.agentPreset,
-        route: resumeRoute ?? recordedModelRoute(resumed.agent.session.events),
+        route: resumeRoute ?? recordedModelRoute(snapshotLiveSessionEvents(resumed.agent.session)),
       }
     } catch (error) {
       // A launch-time --resume is an explicit request: silently substituting a
@@ -1690,6 +1792,7 @@ async function resolveAgent(
         `dsh-tui: cannot resume session "${requestedSessionId}": ${reason} — ` +
         'the stored log is unreadable or corrupt; no fresh session was started instead. ' +
         'Drop --resume to start fresh, or repair the session log first.',
+        { cause: error },
       )
     }
   }
@@ -1730,6 +1833,7 @@ async function resolveAgent(
     const message = error instanceof Error ? error.message : String(error)
     throw new Error(
       `dsh-tui: failed to create agent (provider=${route.provider}, model=${route.model}): ${message}`,
+      { cause: error },
     )
   })
   return { agent: created.agent, handle: created, agentPreset: composed.agentPreset, route }
@@ -1787,7 +1891,7 @@ export function isExitResumable(deps: {
   const agent = deps.liveAgent ?? deps.startupAgent
   return (
     deps.pendingCount > 0 ||
-    agent.session.events.some(
+    snapshotLiveSessionEvents(agent.session).some(
       event => event.type === 'user/message' && event.data.source.kind === 'user',
     )
   )
@@ -1796,19 +1900,6 @@ export function isExitResumable(deps: {
 type InkShutdownState = {
   detachForShutdown?: () => void
   /**
-   * Phase 1 of the shutdown split: latch isUnmounted and stop every output
-   * producer while raw mode is STILL held, so the exit sequence below is
-   * consumed by the remote terminal during the raw-mode settle window
-   * instead of being echoed as caret garbage after cooked returns (#522).
-   */
-  beginShutdown?: () => void
-  /**
-   * Phase 2 of the shutdown split: restore cooked mode and drain stdin.
-   * finishExit runs it from a finally, so even a failed exit write cannot
-   * skip the raw-mode restore.
-   */
-  concludeShutdown?: () => void
-  /**
    * Full stdin detach for the /update child handoff (issues #284/#307):
    * removes the readable/data listeners and pauses the pump so the
    * lingering parent stops racing the restarted TUI for keypresses.
@@ -1816,52 +1907,9 @@ type InkShutdownState = {
   detachStdinForHandoff?: () => void
   /** Drain pending stdin bytes; the exit funnel re-drains after cleanup. */
   drainStdin?: () => void
-  /**
-   * The stream this runtime renders to. The barrier and every exit write
-   * must target THIS object — not whatever process.stdout points at during
-   * shutdown: the instances-map lookup missed precisely because the host
-   * replaced process.stdout, so writing the cleanup to the CURRENT
-   * process.stdout would leave the runtime's own stream (its queued frames,
-   * its mouse state) unhandled (stdout identity drift, #522).
-   */
-  stdout?: NodeJS.WriteStream
-  /**
-   * True after Ink.unmount wrote the terminal cleanup block itself (React
-   * error-boundary / signal-exit path); finishExit then skips re-writing
-   * the mode resets and only parks the cursor and prints the notice.
-   */
-  hasWrittenExitCleanup?: boolean
   frontFrame?: { cursor?: { x: number; y: number } }
   displayCursor?: { x: number; y: number } | null
 }
-
-/**
- * In-flight guard for finishExit: the exit funnel serializes USER exits, but
- * finishExit is exported and process-level — concurrent callers (racing exit
- * actions, embedder helpers) must not re-run the cleanup/handoff. A second
- * call while one is running simply awaits the first; its done() is
- * deliberately NOT invoked — the process-level exit action belongs to the
- * exit that actually ran the terminal cleanup.
- *
- * INVARIANT (process-owning runtime uniqueness): dsh-tui creates exactly ONE
- * process-owning TUI runtime per process — plugin apply() renders a single
- * Ink root (the single `render(tree)` call), and /restart + /update hand the
- * terminal to CHILD processes rather than mounting a second in-process
- * runtime. Under that invariant this module-global guard is sound: any two
- * concurrent finishExit calls necessarily target the same (or an already
- * dead) runtime, so exactly-once terminal cleanup and exactly-one final
- * process action is the required semantics — a /exit vs error-boundary vs
- * /restart vs /update race must never double-run terminal cleanup nor fire
- * two process actions. If that invariant ever changes (multiple independent
- * Ink roots in one process), this guard must move per-runtime: the terminal
- * cleanup serialization keyed by the runtime (or its stdout), with only the
- * process-level exit action arbiter staying global.
- *
- * Regression: scripts/verify-shutdown-fallback.tsx exercises the concurrent
- * calls; scripts/verify-exit-runtime-selection.tsx additionally proves a
- * map-vs-handle drift cannot latch the wrong runtime.
- */
-let activeFinishExit: Promise<void> | undefined
 
 /**
  * Finish terminal I/O before handing control to a process-level exit action.
@@ -1875,51 +1923,23 @@ export async function finishExit(
   stderrNotice: string | undefined,
   done: () => void,
 ): Promise<void> {
-  if (activeFinishExit !== undefined) {
-    ctx.logger.debug('dsh-tui: exit already in flight; awaiting it instead of re-running terminal cleanup')
-    return activeFinishExit
-  }
-  const run = finishExitOnce(ctx, instance, fullscreen, notice, stderrNotice, done)
-  activeFinishExit = run
   try {
-    await run
-  } finally {
-    if (activeFinishExit === run) activeFinishExit = undefined
-  }
-}
-
-async function finishExitOnce(
-  ctx: Context,
-  instance: Awaited<ReturnType<typeof render>> | undefined,
-  fullscreen: boolean,
-  notice: string | undefined,
-  stderrNotice: string | undefined,
-  done: () => void,
-): Promise<void> {
-  let runtime: InkShutdownState | undefined
-  try {
-    // Resolve the Ink runtime. HANDLE-FIRST: the explicitly passed render
-    // handle is the runtime THIS exit call actually corresponds to — when it
-    // is a valid Ink runtime (exposes any shutdown hook), it wins. The
-    // instances map is only a fallback for callers without a handle. The
-    // previous map-first order could clean up the WRONG runtime in
-    // multi-instance / custom-stdout / process.stdout-identity-drift setups:
-    // finishExit(..., instanceA) with instances.get(process.stdout) === B
-    // latched B (begin/conclude + cleanup bytes on B's stream) while A —
-    // the runtime actually exiting — kept its pump, TTY handlers and mouse
-    // state (issue #522's residue through a second door).
+    // Resolve the Ink runtime twice: the instances map is keyed by stdout
+    // identity, so a replaced/overridden stdout misses it; the render()
+    // handle is the caller's own instance and always matches (issue #522 —
+    // a missed lookup skipped detachForShutdown, leaving the stdin pump,
+    // TTY handlers and querier alive so the self-heal probe re-wrote
+    // ENABLE_MOUSE_TRACKING after DISABLE_MOUSE_TRACKING had been sent).
     const fromMap = readInkShutdownState(instances.get(process.stdout))
     const fromHandle = instance === undefined ? undefined : readInkShutdownState(instance)
-    // A handle that exposes no shutdown hook at all is not an Ink runtime we
-    // can latch (e.g. the fake render handles in shutdown regressions) —
-    // treat it as a lookup miss so the full-unmount fallback below can run.
-    const handleIsRuntime =
-      fromHandle !== undefined && (
-        fromHandle.detachForShutdown !== undefined ||
-        fromHandle.beginShutdown !== undefined ||
-        fromHandle.detachStdinForHandoff !== undefined
-      )
-    runtime = handleIsRuntime ? fromHandle : fromMap
+    // A handle that exposes neither detach hook is not an Ink runtime we can
+    // latch (e.g. the fake render handles in shutdown regressions) — treat it
+    // as a lookup miss so the full-unmount fallback below can still run.
+    const runtime = fromMap ?? (
+      fromHandle?.detachForShutdown === undefined && fromHandle?.detachStdinForHandoff === undefined
+        ? undefined
+        : fromHandle
+    )
     if (runtime === undefined) {
       ctx.logger.debug('dsh-tui: Ink runtime unavailable during shutdown; using generic terminal cleanup')
       if (instance !== undefined) {
@@ -1935,302 +1955,67 @@ async function finishExitOnce(
           ctx.logger.debug('dsh-tui: Ink shutdown unmount fallback failed; continuing with generic terminal cleanup')
         }
       }
-    } else if (!handleIsRuntime) {
-      ctx.logger.debug('dsh-tui: Ink runtime resolved from the instances map (no usable render handle); detaching')
+    } else if (fromMap === undefined) {
+      ctx.logger.debug('dsh-tui: Ink runtime resolved from the render handle (instances map missed); detaching')
     }
     const cursor = fullscreen ? '' : cursorMoveToFrameEnd(runtime)
-    // Every byte below targets the runtime's OWN stream. The instances map
-    // is keyed by stdout identity, so a missed lookup means the host
-    // replaced process.stdout after render — writing the cleanup to the
-    // CURRENT process.stdout would latch one stream's runtime while the
-    // bytes land on another (stdout identity drift, #522). Only the
-    // runtime-less fallback keeps the historical process.stdout target.
-    const target = runtime?.stdout ?? process.stdout
 
-    // Phase 1 latch, taken while raw mode is STILL HELD: stop every output
-    // producer (render, alt-screen health probe, mode re-assert) so nothing
-    // can re-write ENABLE_MOUSE_TRACKING or queue a frame while the disable
-    // bytes below are in flight. Raw mode must survive until the settle
-    // window below has elapsed: writeSync only proves the bytes reached the
-    // kernel tty buffer, not that the remote terminal consumed them — on a
-    // slow/stalled link (ssh is #522's environment) the terminal keeps
-    // sending SGR mouse reports for a while, and only raw mode keeps the
-    // kernel line discipline from echoing them as caret-notation
-    // `^[[<35;130;47M` garbage over the frozen UI. Compat: pre-split
-    // runtimes expose only the composite detachForShutdown, which already
-    // latches first (its cooked restore then happens here, same as before).
-    const latch = runtime?.beginShutdown ?? runtime?.detachForShutdown
     try {
-      latch?.call(runtime)
-    } catch {
-      ctx.logger.debug('dsh-tui: Ink shutdown latch failed; continuing with generic terminal cleanup')
-    }
-    // Queue barrier between the latch and the exit writes: queued Ink frames
-    // or a last-moment ENABLE_MOUSE_TRACKING can still sit in Node's
-    // user-space buffer, and a direct-fd writeSync would overtake them —
-    // landing ENABLE after DISABLE (mouse tracking back on at the shell) or
-    // a frame after EXIT_ALT_SCREEN (garbage on the main screen). Everything
-    // after the latch is gated by isUnmounted, so nothing new queues. On
-    // timeout the queue is still draining (stalled link): the writer then
-    // stays in ORDERED stream mode — late bytes land BEFORE the exit
-    // sequence, never interleaved after it.
-    const queueDrained = await flushExitWriteBarrier(target)
-    if (!queueDrained) {
-      ctx.logger.debug('dsh-tui: stdout queue still draining after 1s; exit sequence switches to ordered queued writes')
-    }
-    const writer = createExitWriter(target, queueDrained)
-    const suffix = notice === undefined ? '' : `${notice}\n`
-    if (runtime?.hasWrittenExitCleanup === true) {
-      // React error-boundary / signal-exit path: Ink.unmount already wrote
-      // the mode resets (with raw mode still held — the cooked restore is
-      // deferred to the concludeShutdown in this funnel's finally).
-      // Re-writing DISABLE_MOUSE_TRACKING / EXIT_ALT_SCREEN here would
-      // double-reset the terminal; only the cursor park and notice remain.
-      writer.write(`${cursor}\r\n${suffix}`)
-    } else {
-      writer.write(DISABLE_MOUSE_TRACKING)
-      const cleanup = [
-        fullscreen ? EXIT_ALT_SCREEN : '',
-        cursor,
-        DISABLE_MODIFY_OTHER_KEYS,
-        DISABLE_KITTY_KEYBOARD,
-        DISABLE_WIN32_INPUT_MODE,
-        DFE,
-        DBP,
-        SHOW_CURSOR,
-        CLEAR_ITERM2_PROGRESS,
-        supportsTabStatus() ? wrapForMultiplexer(CLEAR_TAB_STATUS) : '',
-      ].join('')
-      writer.write(`${cleanup}\r\n${suffix}`)
-    }
-    // Ordered completion wait: queued writes must be acknowledged before
-    // the settle window (and before process.exit after done()), otherwise
-    // the disable bytes can still be truncated from Node's user-space
-    // buffer (#522 through a different door). A false result means the
-    // stream is wedged — the bytes remain queued IN ORDER, so the worst
-    // case is truncation at process exit, never an ENABLE-after-DISABLE
-    // scramble.
-    await writer.flush()
-    // Settle window spent in RAW mode (#507 + #522): terminal replies and
-    // mouse packets already in flight when the exit started keep arriving
-    // while cleanup is being written — the latch-time drain cannot see
-    // them. Held raw, the bytes sit in the tty input buffer unread instead
-    // of being echoed by the kernel; the drain below then empties the
-    // buffer so nothing leaks into the shell's input queue (DECRPM/DA1/
-    // XTVERSION garbage pasted into the prompt). 150ms covers reply RTT on
-    // slow links (ssh/ghostty is #522's environment; 50ms proved too tight
-    // there) while staying well inside the exit window the user already
-    // waits through.
-    await new Promise<void>(resolve => setTimeout(resolve, 150))
-    runtime?.drainStdin?.()
-  } catch {
-    ctx.logger.debug('dsh-tui: terminal cleanup failed; continuing with process shutdown')
-  } finally {
-    // Phase 2, unconditionally: only NOW restore cooked+echo (the remote
-    // terminal has had the full settle window to consume the disable
-    // bytes). Each release is isolated: concludeShutdown can throw on a
-    // revoked tty (its handleSetRawMode writes) and must NOT skip the
-    // stdin handoff — the /update child would otherwise race the lingering
-    // readable pump (issues #284/#307; harmless on plain exits).
-    try {
-      runtime?.concludeShutdown?.()
-    } catch {
-      ctx.logger.debug('dsh-tui: Ink shutdown conclude failed; continuing with generic terminal cleanup')
-    }
-    try {
+      runtime?.detachForShutdown?.()
+      // The /update continuation spawns children that inherit this stdin;
+      // strip the readable pump so the parent cannot swallow their input
+      // (issues #284/#307). Harmless on plain exits — the process exits
+      // right after this cleanup anyway.
       runtime?.detachStdinForHandoff?.()
     } catch {
-      ctx.logger.debug('dsh-tui: Ink stdin handoff detach failed; continuing with process shutdown')
+      ctx.logger.debug('dsh-tui: Ink shutdown detach failed; continuing with generic terminal cleanup')
     }
+    const cleanup = [
+      fullscreen ? EXIT_ALT_SCREEN : '',
+      cursor,
+      DISABLE_MOUSE_TRACKING,
+      DISABLE_MODIFY_OTHER_KEYS,
+      DISABLE_KITTY_KEYBOARD,
+      DISABLE_WIN32_INPUT_MODE,
+      DFE,
+      DBP,
+      SHOW_CURSOR,
+      CLEAR_ITERM2_PROGRESS,
+      supportsTabStatus() ? wrapForMultiplexer(CLEAR_TAB_STATUS) : '',
+    ].join('')
+    const suffix = notice === undefined ? '' : `${notice}\n`
+    await writeStream(process.stdout, `${cleanup}\r\n${suffix}`)
+    // Re-drain AFTER the cleanup sequences have landed (#507): terminal
+    // replies and mouse packets already in flight when the exit started
+    // keep arriving while cleanup is being written — the detach-time drain
+    // cannot see them. Unconsumed at process exit they land in the shell's
+    // input queue (DECRPM/DA1/XTVERSION garbage pasted into the prompt).
+    // 150ms settle covers reply RTT on slow links (ssh/ghostty is #522's
+    // environment; 50ms proved too tight there) while staying well inside
+    // the exit window the user already waits through.
+    await new Promise<void>(resolve => setTimeout(resolve, 150))
+    runtime?.drainStdin?.()
     if (stderrNotice !== undefined) {
       await writeStream(process.stderr, `\n${stderrNotice}\n`)
     }
+  } catch {
+    ctx.logger.debug('dsh-tui: terminal cleanup failed; continuing with process shutdown')
   }
+  // Filesystem-only: the exported clipboard images live in a per-process
+  // temp directory that nothing else removes.
+  removeClipboardImageDir()
   done()
-}
-
-/**
- * Exit-write barrier: flush whatever Node's user-space queue still holds
- * (queued Ink frames, a re-asserted ENABLE_MOUSE_TRACKING) BEFORE the
- * direct-fd writeSync calls of the exit sequence. writeSync overtakes any
- * queued bytes — without the barrier, a pre-queued ENABLE would land after
- * DISABLE (mouse tracking back on at the shell) and a queued frame after
- * EXIT_ALT_SCREEN (garbage painted on the main screen). `write('', cb)` is
- * NOT usable as the barrier — the empty chunk's callback fires out of
- * order — so poll writableLength on a short interval (writableLength covers
- * both queued AND in-flight chunks: Node decrements it only when the
- * chunk's _write callback fires). Returns whether the queue drained: on
- * timeout (stalled link) the caller must NOT fall through to direct-fd
- * writes — createExitWriter then stays in ordered stream mode instead. The
- * poll timer is REF'd on purpose: the barrier is an intentional bounded
- * wait inside the exit window (exactly like the 150ms settle) — unref'd,
- * it would let the process exit from under finishExit the moment the queue
- * drains and the loop has nothing else to keep it alive.
- */
-function flushExitWriteBarrier(stdout: NodeJS.WriteStream): Promise<boolean> {
-  if (typeof stdout.writableLength !== 'number' || stdout.writableLength === 0) {
-    return Promise.resolve(true)
-  }
-  return new Promise(resolve => {
-    const started = Date.now()
-    let timer: ReturnType<typeof setTimeout> | undefined
-    const finish = (drained: boolean): void => {
-      if (timer !== undefined) clearTimeout(timer)
-      resolve(drained)
-    }
-    const poll = (): void => {
-      if (stdout.writableLength === 0) {
-        finish(true)
-        return
-      }
-      if (Date.now() - started >= 1000) {
-        finish(false)
-        return
-      }
-      timer = setTimeout(poll, 5)
-    }
-    poll()
-  })
-}
-
-/**
- * Spin bed for the EAGAIN retry below: Atomics.wait blocks the main thread
- * for ~10ms per retry — acceptable inside the exit window, and the only
- * synchronous sleep available here.
- */
-const exitWriteRetryBed = new Int32Array(new SharedArrayBuffer(4))
-
-/**
- * Ordered writer for the exit sequence. Two disciplines, never mixed:
- *
- * - FAST PATH (fd known, queue drained by the barrier): writeSync straight
- *   to the stream's own fd (never a hard-coded 1, issue #522), looping on
- *   short writes and retrying EINTR / bounded EAGAIN. Bytes reach the
- *   kernel tty buffer before process.exit instead of sitting in Node's
- *   user-space buffer where exit would truncate them.
- * - ORDERED PATH (no fd, barrier timed out, or any sync write failed /
- *   short-wrote): plain stream.write, which queues BEHIND whatever is
- *   still in flight — a pre-queued ENABLE lands before DISABLE, a late
- *   frame before EXIT_ALT_SCREEN. STICKY: once any byte goes through the
- *   queue, every later write queues too, because a direct-fd write would
- *   overtake the queued remainder and scramble the sequence. flush() then
- *   waits (bounded 1s) for the last chunk's callback — write callbacks
- *   fire in order, so it acknowledges everything queued before it. On a
- *   wedged stream the bytes stay queued IN ORDER: worst case is ordered
- *   truncation at process exit, never interleaving.
- *
- * Residual: a blocking fd with a full kernel buffer (wedged pty) can still
- * park writeSync — no synchronous API can bound the syscall itself. The
- * barrier makes it vanishingly unlikely: the link demonstrably moved just
- * before. NEVER THROWS either way: finishExit's finally must reach the
- * cooked-mode restore even when the terminal is already gone (revoked tty,
- * closed fd, EIO).
- */
-function createExitWriter(
-  stdout: NodeJS.WriteStream,
-  queueDrained: boolean,
-): { write: (text: string) => void; flush: () => Promise<boolean> } {
-  const stdoutWithFd = stdout as NodeJS.WriteStream & { fd?: number | null }
-  const fd = queueDrained && typeof stdoutWithFd.fd === 'number' ? stdoutWithFd.fd : undefined
-  let streamMode = fd === undefined
-  let completion: Promise<void> | undefined
-
-  const queueWrite = (chunk: string | Uint8Array): void => {
-    // Never rejects, never throws — finishExit's finally must run even when
-    // the stream is destroyed underneath us.
-    completion = new Promise<void>(resolve => {
-      try {
-        stdout.write(chunk, () => resolve())
-      } catch {
-        resolve()
-      }
-    })
-  }
-
-  const write = (text: string): void => {
-    if (text === '') return
-    if (streamMode) {
-      queueWrite(text)
-      return
-    }
-    const bytes = Buffer.from(text)
-    let offset = 0
-    let eagainBudget = 3
-    let eintrBudget = 3
-    while (offset < bytes.length) {
-      let written = 0
-      try {
-        // eslint-disable-next-line custom-rules/no-sync-fs -- process exiting; async writes would be dropped
-        written = writeSync(fd as number, bytes, offset, bytes.length - offset, null)
-      } catch (error) {
-        const code = (error as NodeJS.ErrnoException).code
-        // Interrupted syscall: retry immediately, on its own budget.
-        if (code === 'EINTR' && eintrBudget > 0) {
-          eintrBudget -= 1
-          continue
-        }
-        // Non-blocking fd, full kernel buffer (stalled link): bounded spin.
-        if ((code === 'EAGAIN' || code === 'EWOULDBLOCK') && eagainBudget > 0) {
-          eagainBudget -= 1
-          Atomics.wait(exitWriteRetryBed, 0, 0, 10)
-          continue
-        }
-        break
-      }
-      if (written <= 0) {
-        // Zero progress on a live fd: same treatment as EAGAIN, bounded.
-        if (eagainBudget > 0) {
-          eagainBudget -= 1
-          Atomics.wait(exitWriteRetryBed, 0, 0, 10)
-          continue
-        }
-        break
-      }
-      offset += written
-    }
-    if (offset >= bytes.length) return
-    // Partial/failed sync write: queue ONLY the remainder and stay in
-    // stream mode for the rest of the sequence.
-    streamMode = true
-    queueWrite(bytes.subarray(offset))
-  }
-
-  const flush = (): Promise<boolean> => {
-    if (completion === undefined) return Promise.resolve(true)
-    const pending = completion
-    return new Promise(resolve => {
-      const timer = setTimeout(() => resolve(false), 1000)
-      void pending.then(() => {
-        clearTimeout(timer)
-        resolve(true)
-      })
-    })
-  }
-
-  return { write, flush }
 }
 
 function readInkShutdownState(value: unknown): InkShutdownState | undefined {
   if (value === null || typeof value !== 'object') return undefined
   const candidate = value as Record<string, unknown>
   if (candidate.detachForShutdown !== undefined && typeof candidate.detachForShutdown !== 'function') return undefined
-  if (candidate.beginShutdown !== undefined && typeof candidate.beginShutdown !== 'function') return undefined
-  if (candidate.concludeShutdown !== undefined && typeof candidate.concludeShutdown !== 'function') return undefined
   if (candidate.detachStdinForHandoff !== undefined && typeof candidate.detachStdinForHandoff !== 'function') return undefined
   if (candidate.drainStdin !== undefined && typeof candidate.drainStdin !== 'function') return undefined
-  if (candidate.stdout !== undefined && !isWritableLike(candidate.stdout)) return undefined
-  if (candidate.hasWrittenExitCleanup !== undefined && typeof candidate.hasWrittenExitCleanup !== 'boolean') return undefined
   if (candidate.frontFrame !== undefined && !isFrameState(candidate.frontFrame)) return undefined
   if (candidate.displayCursor !== undefined && candidate.displayCursor !== null && !isCursorState(candidate.displayCursor)) return undefined
   return value as InkShutdownState
-}
-
-function isWritableLike(value: unknown): value is NodeJS.WriteStream {
-  return (
-    value !== null &&
-    typeof value === 'object' &&
-    typeof (value as Record<string, unknown>).write === 'function'
-  )
 }
 
 function isFrameState(value: unknown): value is { cursor?: { x: number; y: number } } {
@@ -2356,7 +2141,7 @@ function disposeRootAndExit(ctx: Context, code: number): void {
  * The real way back into a session after the TUI process is gone. The
  * package ships no `dsh-tui` bin — resuming means feeding the session id
  * through `DSH_TUI_RESUME_SESSION` (what cordis.patch.yml's `sessionId`
- * reads; the pre-rename DSH_CC_ spelling still works, issue #120) and
+ * reads) and
  * booting the same profile; on Windows the repo's dsh-tui.cmd wrapper
  * does this via --resume + ~/.dsh-tui/resume.txt.
  */

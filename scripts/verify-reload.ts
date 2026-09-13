@@ -50,8 +50,8 @@ const BASE = {
   modelPref: { provider: 'deepseek-official', model: 'deepseek-v4-flash' },
   currentModel: { provider: 'deepseek-official', model: 'deepseek-v4-flash' },
   configuredActivity: undefined,
-  activityPref: 'claude',
-  currentActivity: 'claude',
+  activityPref: 'moon8',
+  currentActivity: 'moon8',
 }
 
 // ── 1. 全部无变化 → 全 unchanged，零 apply/skip ─────────────────────────
@@ -111,7 +111,7 @@ const BASE = {
   check('preset 变化 → apply', presetApply.apply.some(a => a.kind === 'preset' && a.to === 'ptc'))
   const presetNoFile = planReload({ ...BASE, presetPref: undefined })
   check('preset 无文件 → skip invalid', presetNoFile.skipped.some(s => s.kind === 'preset' && s.reason === 'invalid'))
-  const activity = planReload({ ...BASE, configuredActivity: 'moon', activityPref: 'claude' })
+  const activity = planReload({ ...BASE, configuredActivity: 'moon', activityPref: 'moon8' })
   check('activity cordis.yml → skip config-wins', activity.skipped.some(s => s.kind === 'activity' && s.reason === 'config-wins'))
   const activityApply = planReload({ ...BASE, activityPref: 'moon' })
   check('activity 变化 → apply', activityApply.apply.some(a => a.kind === 'activity' && a.to === 'moon'))
@@ -149,7 +149,7 @@ const BASE = {
     check('无名册时旧 preset JSON 保持 code', parsePresetPref(readFileSync(file, 'utf8')) === 'code')
     check('无名册时读取旧 preset 保持 code', readPresetPref(dir) === 'code')
     check('读取本身不做不可逆改写', JSON.parse(readFileSync(file, 'utf8')).preset === 'code')
-    check('alpha 名册解析后迁移为 ptc', migratePresetPref('code', 'ptc', dir) && JSON.parse(readFileSync(file, 'utf8')).preset === 'ptc')
+    check('0.1.2 名册解析后迁移为 ptc', migratePresetPref('code', 'ptc', dir) && JSON.parse(readFileSync(file, 'utf8')).preset === 'ptc')
     check('rc 写入 code 仍保存 code', writePresetPref('code', dir) && JSON.parse(readFileSync(file, 'utf8')).preset === 'code')
     check('自定义 preset id 保持不变', parsePresetPref(JSON.stringify({ preset: 'liangshen' })) === 'liangshen')
   } finally {

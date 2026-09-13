@@ -1,20 +1,12 @@
 ---
 name: pr-comments
-description: Use when the user asks to review pull request comments, or when the /pr-comments command runs — fetch and analyze PR review comments on the current branch and summarize actionable items.
+description: Read and triage existing pull request review comments, or address them when requested. Use for PR comment requests or /pr-comments; use review to inspect code without existing reviewer feedback.
 ---
 
-# Pull Request Comments Review
+Turn the requested PR's review feedback into concrete next steps, using the current code to assess each concern.
 
-Review the pull request comments associated with the current branch and turn them into an actionable summary.
-
-## Procedure
-
-1. Identify the PR for the current branch (git remote, branch name → PR). If no PR is found or git hosting tools are unavailable, say so and fall back to reviewing local uncommitted changes.
-2. Gather review comments (inline + general) and group them by theme: blocking changes, open questions, nits.
-3. For each actionable comment: restate the concern in your own words, locate the affected code, and propose a concrete change.
-4. Produce a summary: what the reviewers want changed, what's already addressed, and a suggested order of work.
-
-## Constraints
-
-- Never invent comments — summarize only what is actually there.
-- Mark unresolved vs resolved comments explicitly.
+1. Identify the requested PR, repository, head, and base; use the current branch when no PR is specified. If no matching PR exists or access fails, report that limitation. Do not substitute a local code review for unavailable comments.
+2. Fetch inline threads, review summaries, and general comments, including pagination. Preserve comment links and thread resolution state. If resolution metadata is unavailable, mark it unknown.
+3. Read the affected code at the current PR head. Distinguish still-applicable concerns, already addressed feedback, and questions requiring a reply. A thread's resolved status and whether the code addresses it are separate facts.
+4. Group related feedback without losing distinct requests. Summarize each actionable concern, its evidence, and the smallest useful change; order by impact. If the user requested fixes, implement and validate them.
+5. Report what remains and link to the original comments. Reply, resolve threads, or post other messages only when the user has authorized those actions; summarize or draft otherwise.

@@ -155,7 +155,7 @@ export const KIND_FG: Record<TrajKind, keyof Theme> = {
   turn: 'text',
   step: 'subtle',
   user: 'suggestion',
-  assistant: 'claude',
+  assistant: 'accent',
   // Reasoning is ambient: it is the most numerous row kind and the least
   // often the thing you came to find, so it recedes rather than competing
   // with tool names for the eye.

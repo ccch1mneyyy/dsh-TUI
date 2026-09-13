@@ -5,9 +5,9 @@
  */
 import { createRequire } from 'node:module'
 const require = createRequire(import.meta.url)
-// node-pty 是原生模块，不进本仓库依赖：DSH_CC_NODE_PTY 指向已构建的
+// node-pty 是原生模块，不进本仓库依赖：DSH_TUI_NODE_PTY 指向已构建的
 // node-pty 目录（含 package.json 的那层），否则尝试常规 require。
-const PTY = process.env.DSH_CC_NODE_PTY ?? 'node-pty'
+const PTY = process.env.DSH_TUI_NODE_PTY ?? 'node-pty'
 const pty = require(PTY)
 const { Terminal } = require('@xterm/headless')
 

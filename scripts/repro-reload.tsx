@@ -146,7 +146,7 @@ const channel = {
   commandCompletions: () => [],
   settingsHost: () => undefined,
   agentPreset: 'standard',
-  activityFrames: 'claude',
+  activityFrames: 'moon8',
   setActivityFrames(name: string) { activityCalls.push(name); return true },
   switchPreset(id: string) { presetCalls.push(id); return Promise.resolve(true) },
   switchModel(provider: string, model: string) { modelCalls.push(`${provider}/${model}`); return Promise.resolve(true) },

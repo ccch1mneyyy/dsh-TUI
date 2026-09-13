@@ -57,9 +57,9 @@ function clipLine(text: string, maxWidth: number): string {
  * working-activity preset (`/activity`), so the indicator follows the same
  * setting as the main spinner.
  */
-export function SubagentMessage({ subagent, addMargin, activityFrames, onClick }: {
+export function SubagentMessage({ subagent, marginTopOnTurn, activityFrames, onClick }: {
   subagent: SubagentRow
-  addMargin: boolean
+  marginTopOnTurn: boolean
   activityFrames?: string
   isExpanded: boolean
   onClick?(event: ClickEvent): void
@@ -88,7 +88,7 @@ export function SubagentMessage({ subagent, addMargin, activityFrames, onClick }
   // glyph 提亮为品牌色作为可点指示。
   return <Box
     flexDirection="column"
-    marginTop={addMargin ? 1 : 0}
+    marginTop={marginTopOnTurn ? 1 : 0}
     paddingLeft={2}
     ref={viewportRef}
     onClick={onClick}
@@ -96,8 +96,8 @@ export function SubagentMessage({ subagent, addMargin, activityFrames, onClick }
     onMouseLeave={clickable ? () => setHovered(false) : undefined}
   >
     <Box flexDirection="row" gap={1}>
-      <Text color={hovered && clickable ? 'claude' : info.color}>{settled ? info.glyph : ` ${runningGlyph}`}</Text>
-      <Text bold color={hovered && clickable ? 'claude' : undefined}>{`${t('subagent-card-prefix')}${subagent.description}`}</Text>
+      <Text color={hovered && clickable ? 'accent' : info.color}>{settled ? info.glyph : ` ${runningGlyph}`}</Text>
+      <Text bold color={hovered && clickable ? 'accent' : undefined}>{`${t('subagent-card-prefix')}${subagent.description}`}</Text>
       <Text dimColor>·</Text><Text>{subagent.model ?? subagent.provider ?? 'default'}</Text>
       {subagent.effort && <><Text dimColor>·</Text><Text dimColor>{subagent.effort}</Text></>}
       <Text dimColor>·</Text><Text dimColor>{duration(elapsed)}</Text>

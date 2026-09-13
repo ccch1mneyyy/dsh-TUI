@@ -24,7 +24,7 @@ Cordis profile
 | `src/index.ts` | Cordis 插件名称、注入声明、配置接口与 Schema；保持入口轻量并延迟加载 runtime |
 | `src/dsh-adapter/plugin.ts` | TTY 检查、服务装配、Agent 创建/恢复、React 挂载、统一退出清理 |
 | `src/dsh-adapter/questions-answerer.ts` / `preset-resolution.ts` | user-questions 与 agent-preset 的预发布兼容分派；调用方不感知上游版本分支 |
-| `src/dsh-adapter/channel.ts` | 将 DSH 持久化事件投影为 transcript；提供 submit、steer、resume、rewind、model/preset 等动作 |
+| `src/dsh-adapter/channel.ts` | Channel 组合根：options/services、owner/binding、specialist 接线、一次安装、最后启动/释放与兼容导出；typed action forwarding/readiness 在 `channel/action-readiness.ts`，detached handles 在 `channel/lifetime-resources.ts`，context warning/pending 在 `channel/context-bookkeeping.ts`（包含压缩复位共用的 warning cell）。中性初始字段在 `channel/state.ts`，补全在 `channel/command-completions.ts`，本地 transcript/shell/子代理报告动作在 `channel/local-actions.ts`，工作状态时钟在 `channel/activity.ts`，绑定事件路由在 `channel/binding-events.ts`，唯一 projector 仍在 `channel/projection.ts`。未安装或已释放的动作明确失败，不伪装为成功 no-op。 |
 | `src/workspaces.ts` | 本地路径 fallback 与通用工作区 provider registry；不得包含任何 provider 的协议、文案或依赖 |
 | `src/screens/Chat.tsx` | modal 优先级、全局按键、滚动/搜索/选择状态、slash command 分发 |
 | `src/components/` | 用户界面和 design-system；不直接拥有 Agent 或 session 真相 |
@@ -46,7 +46,7 @@ service、registry 或 channel seam 接入。
 
 ## Session 是真源
 
-`channel.ts` 不把 React 本地数组当作对话真相。DSH `session/event` 日志负责：
+`dsh-adapter/channel.ts` 不把 React 本地数组当作对话真相。DSH `session/event` 日志负责：
 
 - 初始历史回放与增量流式事件；
 - assistant/reasoning/tool 行的关联与 sequence anchor；
@@ -73,7 +73,7 @@ stdout 打印诊断；使用 stderr 的 `DSH_TUI_DEBUG` 或 `DSH_TUI_RENDER_LOG`
 
 ## Inline 与 fullscreen
 
-- **Inline（默认）**：内容留在主屏，终端模拟器管理 scrollback 和原生文本选区。
+- **Inline**：内容留在主屏，终端模拟器管理 scrollback 和原生文本选区（出厂默认是 fullscreen，见下）。
 - **Fullscreen**：`AlternateScreen` 切换到备用屏，TUI 自己管理滚动、鼠标选区、OSC 52
   复制和退出时的屏幕恢复。
 
@@ -98,14 +98,13 @@ stdout 打印诊断；使用 stderr 的 `DSH_TUI_DEBUG` 或 `DSH_TUI_RENDER_LOG`
 `cordis.yml` 时默认使用 `~/.dsh-tui/sessions/`。偏好文件是可选状态：损坏或
 缺失时回退，不应阻止 TUI 启动。
 
-数据目录已从 `~/.dsh-cc` 更名为 `~/.dsh-tui`：首次启动时若旧目录存在而新目录
-不存在，会整体复制（不移动）到新目录并提示一行，旧目录保留由用户自行删除。
-`resume.txt` 例外：同时双写到新旧两个路径，因为旧版启动器只读旧路径。
+数据目录为 `~/.dsh-tui`（早期版本曾用 `~/.dsh-cc`，自更名版本起新代码只读写
+`~/.dsh-tui`，不自动迁移旧目录）。
 
 ## 权限与安全边界
 
 `dsh-TUI` 本身不提供独立沙箱；实际能力由 `cordis.patch.yml` 挂载的 DSH 服务
-决定。审批走 `ctx.approval` seam：策略为 `ask` 时 TUI 以 CC 式审批面板作为
+决定。审批走 `ctx.approval` seam：策略为 `ask` 时 TUI 以本地审批面板作为
 answerer（`approval/request` waterfall），仅允许一次/拒绝两种决定——协议没有
 "总是允许"与反馈通道；`/permission` 预设切换来自 dsh-base 的
 `permission-presets` 服务行：
@@ -119,11 +118,21 @@ answerer（`approval/request` waterfall），仅允许一次/拒绝两种决定�
 - MCP、Shell、文件工具和自定义 preset 都会扩展模型可见能力，应当视为同一权限域
   内的代码执行入口。
 - `/permission` 的可切换名册由已挂载的 DSH `permissionPresets` registry 提供，
-  保持 registry 声明顺序；第三方预设会自动进入 picker，只有符合既有命令 token
-  语法的 ID 进入 Tab 补全。`custom` 只作为 registry 投影出的当前态，不是目标。
+  保持 registry 声明顺序；第三方预设自动进入 picker、Tab 补全与 `Shift+Tab`
+  循环（排除 `custom`/`status`、canonical 预设、重复 identity 与不安全 token），
+  首次观察遵循 registry 顺序，后续刷新保留已见 identity 的相对顺序。
+  `custom` 只作为 registry 投影出的当前态，不是目标。
+- 服务快照可用时 `/permission` 由 TUI 本地接管（菜单常驻项）：切换**优先**
+  调用官方 `/permission <preset>` 命令；命令行未暴露给本 agent（组合相关）时，
+  **回退**到 permissionPresets 服务的官方写路径 `set(session, preset)` —— 与
+  命令 handler 同一实现，写真实 `permission/preset`/`sandbox/mode`/
+  `approval/policy` 事件，TUI 绝不伪造事件，随后按事件/读回确认；两条路都
+  不可用时显式 toast + 日志，**绝不**把命令当普通消息发给模型。退出计划模式
+  先恢复进入前的 atom，再还原进入前的持久预设身份（registry 仍提供该身份时）。
 - TUI 将服务状态区分为 runtime、legacy、unavailable：只有服务确实缺失时才保留
   旧三项 legacy 兼容；服务已挂载但损坏、空或数据不一致时 fail closed，不从
-  sandbox/approval 组合猜测当前预设。所有切换仍调用官方 `/permission <preset>`。
+  sandbox/approval 组合猜测当前预设。适配器按真实服务契约读取
+  `current(session)`（session-projection），并兼容旧的事件日志形态。
 
 在不可信仓库中运行前，检查实际 profile patch，而不是只看 TUI 的视觉界面。
 
@@ -135,16 +144,22 @@ answerer（`approval/request` waterfall），仅允许一次/拒绝两种决定�
 - `Ctrl+V` 读剪贴板按平台分派：Windows 用 PowerShell `Get-Clipboard`（剪贴板被
   其他程序锁定时重试后可能静默失败并显示为空）；macOS 用 `osascript`/`pbpaste`；
   Linux/Unix 按会话顺序尝试 `wl-paste`/`xclip`/`xsel`（工具缺失跳过、会话
-  不可连接回退下一个，全部不可用时粘贴报"无可用剪贴板工具"）。剪贴板图片
-  导出为临时文件插入路径（0700 私有目录、0600 文件），不内嵌图片块。
+  不可连接回退下一个，全部不可用时粘贴报"无可用剪贴板工具"）。受支持的剪贴板
+  图片会先导出到 0700 私有目录中的 0600 临时文件，再写入 Harness 附件库并在输入框
+  显示 `[Image #N]`；临时导出随后删除，输入文本不含路径或 base64。不支持的位图格式
+  会明确警告并删除临时文件；附件服务不可用时不把位图插入草稿。文件管理器复制的
+  图片文件若直接暂存失败，仍可退回 `@` 引用。
 - 退出路径优先恢复终端并结束进程，不等待 Agent 异步落盘；持久化插件负责兜底。
 - 工具级审批面板已实现（approval 服务 + TUI answerer）；`/permission` 的预设
   切换由 dsh-base 的 `permission-presets` 插件提供。registry 服务缺失时使用三项
   legacy 兼容名册；服务已挂载但空、损坏或不一致时标记 unavailable 并 fail closed，
   不伪造旧名册。若外部 `/permission` 命令未注册，输入沿用现有默认命令/model dispatch。
 - `/vim`、`/connect`、`/hooks` 是兼容占位命令，不代表对应 DSH 能力已挂载。
-- 没有一套需要真实模型凭证的自动化全流程测试；CI 使用 headless renderer 与假服务，
-  真实模型集成仍需要在目标终端手动验证。
+- 没有一套需要真实模型凭证的自动化全流程测试；CI 使用 headless renderer 与假服务。
+  本 L4 批次也**尚未**在真实 TTY 的 inline/fullscreen、窄终端或 Windows ConPTY 手动演练；
+  真实模型集成仍需要在目标终端手动验证。L5 完整 RFC state 本轮 Deferred。
+- L4 已完成本地独立集中审查与定向修复；最终 compile、build/package 门禁、Channel UI
+  58/58 和 CI3 通过。这些结果不代表真实 TTY 或长期内存压力测试通过。
 
 ## 调试与验证
 

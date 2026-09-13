@@ -1,17 +1,17 @@
 import React from 'react'
 import { t } from '../i18n.js'
-import { Box, Text, useTerminalSize } from '../ui.js'
+import { Box, Text } from '../ui.js'
 import { useTerminalFocus } from '../ink/hooks/use-terminal-focus.js'
 import { Pane } from './design-system/Pane.js'
 import { ListItem } from './design-system/ListItem.js'
 import { HintLine } from './design-system/HintLine.js'
 import { SearchBox } from './SearchBox.js'
 import { listWindow } from './listWindow.js'
+import { useOverlayListRows } from './OverlayAbove.js'
 import { historyEntryId, type HistoryEntry } from '../history.js'
 
 /**
- * The ctrl+r history search dialog, in the shape of Claude Code's
- * HistorySearchDialog/FuzzyPicker: a permission-colored Pane with a bold
+ * The ctrl+r history search dialog: a permission-colored Pane with a bold
  * title, the ⌕ SearchBox, the filtered history as ListItem rows (newest
  * first), and the ↑/↓ · Enter · Esc hint line. Keyboard handling lives in
  * the caller (Chat).
@@ -32,16 +32,17 @@ export function HistorySearchDialog({
   onPick?: (index: number) => void
 }): React.ReactNode {
   const isTerminalFocused = useTerminalFocus()
-  const { rows: terminalRows } = useTerminalSize()
   // 焦点窗口化按行预算：每项恒 2 行（命令 + age 描述，ListItem 保证单行
   // 截断），容器 gap={1} 项间再空 1 行。只数项数会把焦点裁出浮层（二次
   // 审查实证）。
-  // 框架行：浮层预留 8 + Pane 2 + 标题 1 + gap 1 + SearchBox 3（圆角边框）
-  // + gap 1 + gap 1 + 页脚 1 = 18。
+  // 预算来自最近一层 OverlayAbove 的有效高度，减去框架行（按实际渲染数）：
+  // 挂载包裹 marginTop 1 + Pane 2 + 标题 1 + gap 1 + SearchBox 3（圆角边框）
+  // + gap 1 + gap 1 + 页脚 1 = 11。
+  const listRows = useOverlayListRows(11)
   const { start, end } = listWindow(
     matches.map(() => 2),
     focusIndex,
-    Math.max(terminalRows - 18, 2),
+    listRows,
     1,
   )
   return (
@@ -88,7 +89,7 @@ export function HistorySearchDialog({
   )
 }
 
-/** Relative age like CC's formatRelativeTimeAgo ("now" / "5m ago" / …), localized. */
+/** Localized relative-age labels such as "now" and "5m ago". */
 function formatRelativeAge(ts: number): string {
   const elapsed = Date.now() - ts
   if (elapsed < 60_000) return t('time-now')

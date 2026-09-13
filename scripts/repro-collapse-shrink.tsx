@@ -129,7 +129,7 @@ async function run(): Promise<void> {
   const collapsed = live.screen()
   liveInstance.unmount()
   live.term.dispose()
-  // 卸载/dispose 的收尾 pacing：无可观测完成条件，保留固定小窗口。
+  // 固定窗:pacing 卸载/dispose 的收尾等待，无可观测完成条件。
   await sleep(40)
 
   // ── the same short state, built fresh ────────────────────────────────────

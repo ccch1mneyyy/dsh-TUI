@@ -66,9 +66,9 @@ function clipLine(text: string, maxWidth: number): string {
  * tail of the agent's own job_output results as they stream through the
  * transcript.
  */
-export function JobCard({ job, addMargin, onClick }: {
+export function JobCard({ job, marginTopOnTurn, onClick }: {
   job: JobRow
-  addMargin: boolean
+  marginTopOnTurn: boolean
   onClick?(): void
 }): React.ReactNode {
   const settled = job.status === 'completed' || job.status === 'failed' || job.status === 'killed'
@@ -84,6 +84,13 @@ export function JobCard({ job, addMargin, onClick }: {
   // A settled job's terminal detail ('exit code: 0') rides the header; a
   // failed/killed one also keeps it as the explanatory tail line.
   const headerDetail = job.detail !== undefined && job.detail !== '' ? job.detail : undefined
+  const headerName = `${t('jobs-card-prefix')}${job.id}`
+  const duration = formatJobDuration(job)
+  const fixedHeader = [
+    info.glyph, headerName, '·', job.kind, '·', '', '·', duration,
+    ...(headerDetail === undefined ? [] : ['·', headerDetail]), '·', info.label,
+  ].join(' ')
+  const labelWidth = Math.max(0, (columns ?? 80) - stringWidth(fixedHeader))
 
   // 点击打开 /jobs 面板；hover 不刷整行背景（转录视觉保持安静），只把
   // 状态 glyph 提亮为品牌色作为可点指示。无外层缩进：任务卡是上方工具
@@ -92,23 +99,23 @@ export function JobCard({ job, addMargin, onClick }: {
   // 的 `  ⎿ ` 槽位一致。
   return <Box
     flexDirection="column"
-    marginTop={addMargin ? 1 : 0}
+    marginTop={marginTopOnTurn ? 1 : 0}
     ref={viewportRef}
     onClick={onClick}
     onMouseEnter={clickable ? () => setHovered(true) : undefined}
     onMouseLeave={clickable ? () => setHovered(false) : undefined}
   >
     <Box flexDirection="row" gap={1}>
-      <Text color={hovered && clickable ? 'claude' : info.color}>{info.glyph}</Text>
-      <Text bold color={hovered && clickable ? 'claude' : undefined}>
-        {`${t('jobs-card-prefix')}${job.id}`}
+      <Text color={hovered && clickable ? 'accent' : info.color}>{info.glyph}</Text>
+      <Text bold color={hovered && clickable ? 'accent' : undefined}>
+        {headerName}
       </Text>
       <Text dimColor>·</Text>
       <Text dimColor>{job.kind}</Text>
       <Text dimColor>·</Text>
-      <Text>{clipLine(job.label, Math.max(10, rowWidth - 30))}</Text>
+      <Text>{clipLine(job.label, labelWidth)}</Text>
       <Text dimColor>·</Text>
-      <Text dimColor>{formatJobDuration(job)}</Text>
+      <Text dimColor>{duration}</Text>
       {headerDetail !== undefined && <><Text dimColor>·</Text><Text dimColor>{headerDetail}</Text></>}
       <Text dimColor>·</Text>
       <Text color={info.color}>{info.label}</Text>

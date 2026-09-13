@@ -34,12 +34,14 @@ import { t } from '../i18n.js'
 import { Box, Text, useInput, useTerminalSize } from '../ui.js'
 import { stringWidth } from '../ink/stringWidth.js'
 import { isPlainReturnInput } from '../utils/modifiers.js'
+import { actionMatches } from '../utils/keymap.js'
+import { readClipboard } from '../utils/clipboard.js'
 import { Pane } from './design-system/Pane.js'
 import { ListItem } from './design-system/ListItem.js'
 import { HintLine } from './design-system/HintLine.js'
 import { listWindow } from './listWindow.js'
 import { INPUT_CELLS, type TuiDialogAnswer, type TuiDialogSnapshot } from '../dsh-adapter/dialogs.js'
-import { capCells, flattenInline } from '../dsh-adapter/sanitize.js'
+import { capCells, flattenPasteInline } from '../dsh-adapter/sanitize.js'
 
 export type ExtensionDialogProps = {
   /** The pending dialog (TuiDialogStore snapshot; `key` remounts per dialog). */
@@ -79,7 +81,7 @@ function SelectDialog({
   }
   const { rows: terminalRows } = useTerminalSize()
 
-  useInput((input, key, event) => {
+  useInput((input, key) => {
     if (key.escape || (key.ctrl && input === 'c')) {
       onCancel()
       return
@@ -92,9 +94,10 @@ function SelectDialog({
       moveFocus(1)
       return
     }
-    // isPasted lives on the InputEvent, not the key: a bracketed paste that
-    // is all line breaks is pasted content, never an Enter press.
-    if (isPlainReturnInput(input, { ...key, isPasted: event.isPasted })) {
+    // A bracketed paste that is all line breaks is pasted content, never an
+    // Enter press — the key carries isPasted, and isPlainReturnInput
+    // refuses pastes before the plain-return test.
+    if (isPlainReturnInput(input, key)) {
       const option = dialog.options[focusRef.current]
       if (option !== undefined) onDecide(option.id)
     }
@@ -162,7 +165,7 @@ function ConfirmDialog({
     setFocusIndex(next)
   }
 
-  useInput((input, key, event) => {
+  useInput((input, key) => {
     if (key.escape || (key.ctrl && input === 'c')) {
       onCancel()
       return
@@ -175,9 +178,10 @@ function ConfirmDialog({
       moveFocus(1)
       return
     }
-    // isPasted lives on the InputEvent, not the key: a bracketed paste that
-    // is all line breaks must not confirm on the default focus.
-    if (isPlainReturnInput(input, { ...key, isPasted: event.isPasted })) {
+    // A bracketed paste that is all line breaks is pasted content, never an
+    // Enter press — the key carries isPasted, and isPlainReturnInput
+    // refuses pastes before the plain-return test.
+    if (isPlainReturnInput(input, key)) {
       onDecide(focusRef.current === 0)
     }
   }, { isActive: true })
@@ -232,15 +236,39 @@ function InputDialog({
     setValue(nextValue)
     setCursor(nextCursor)
   }
+  /** True while the component is mounted (async clipboard continuation
+   *  guard: the dialog can close before the read resolves). */
+  const mountedRef = React.useRef(true)
+  React.useEffect(() => () => { mountedRef.current = false }, [])
+  /** True while a clipboard read is in flight (ignore repeat Ctrl+V). */
+  const pasteBusyRef = React.useRef(false)
+
+  /** Insert one chunk under the single-line + cell-cap contract: content
+   *  that fits lands at the caret; oversized PASTE content is truncated
+   *  (mayCap) while oversized typing stays ignored — the value never
+   *  exceeds INPUT_CELLS cells either way. */
+  const insertChunk = (chunk: string, mayCap: boolean): void => {
+    const points = [...valueRef.current]
+    const at = cursorRef.current
+    const chunkPoints = [...chunk].length
+    const candidate = points.slice(0, at).join('') + chunk + points.slice(at).join('')
+    if (stringWidth(candidate) <= INPUT_CELLS) {
+      applyEdit(candidate, at + chunkPoints)
+    } else if (mayCap) {
+      const capped = capCells(candidate, INPUT_CELLS)
+      applyEdit(capped, Math.min(at + chunkPoints, [...capped].length))
+    }
+  }
 
   useInput((input, key, event) => {
     if (key.escape || (key.ctrl && input === 'c')) {
       onCancel()
       return
     }
-    // isPasted lives on the InputEvent, not the key: a bracketed paste that
-    // is all line breaks is inserted as text, not submitted.
-    if (isPlainReturnInput(input, { ...key, isPasted: event.isPasted })) {
+    // A bracketed paste that is all line breaks is inserted as text, never
+    // submitted — the key carries isPasted, and isPlainReturnInput refuses
+    // pastes before the plain-return test.
+    if (isPlainReturnInput(input, key)) {
       onDecide(valueRef.current)
       return
     }
@@ -277,21 +305,32 @@ function InputDialog({
       applyEdit(valueRef.current, points.length)
       return
     }
+    // Clipboard paste (default Ctrl+V / Alt+V — the keymap `paste`
+    // binding): raw mode hands the key to the app, so the clipboard is
+    // read here. Only text offers insert — files/images have no text form
+    // in a single-line value, and read failures are silently ignored (the
+    // dialog has no notice channel; repeat keys while a read is in flight
+    // are dropped by the busy guard).
+    if (actionMatches('paste', input, key)) {
+      if (!pasteBusyRef.current) {
+        pasteBusyRef.current = true
+        void readClipboard()
+          .then(content => {
+            if (!mountedRef.current) return
+            if (content?.kind === 'text' && content.text !== '') {
+              insertChunk(flattenPasteInline(content.text), true)
+            }
+          })
+          .finally(() => { pasteBusyRef.current = false })
+      }
+      return
+    }
     if (input && !key.ctrl && !key.meta && !key.super && !key.tab && !key.escape) {
       // A bracketed paste arrives as one chunk and may carry newlines/control
-      // chars — this is a single-line panel, so flatten them to spaces. Every
-      // edit path holds the value at INPUT_CELLS cells so the resolved answer
-      // keeps the documented bound: typing past the cap is ignored, an
-      // oversized paste is truncated (never silently unbounded).
-      const chunk = event.isPasted ? flattenInline(input) : input
-      const chunkPoints = [...chunk].length
-      const candidate = points.slice(0, at).join('') + chunk + points.slice(at).join('')
-      if (stringWidth(candidate) <= INPUT_CELLS) {
-        applyEdit(candidate, at + chunkPoints)
-      } else if (event.isPasted) {
-        const capped = capCells(candidate, INPUT_CELLS)
-        applyEdit(capped, Math.min(at + chunkPoints, [...capped].length))
-      }
+      // chars (even complete ANSI sequences) — this is a single-line panel,
+      // so strip ANSI and flatten controls to spaces (typed text is already
+      // control-free; mayCap only applies to paste).
+      insertChunk(event.isPasted ? flattenPasteInline(input) : input, event.isPasted === true)
     }
   }, { isActive: true })
 
@@ -306,8 +345,8 @@ function InputDialog({
           </Text>
         </Box>
         <Text>
-          {/* The caret is the inverted cell under the cursor (CC's block
-              cursor); at end of line it inverts the trailing space. Splits
+          {/* The caret is the inverted cell under the cursor.
+              At end of line it inverts the trailing space. Splits
               are code-point safe — the caret never lands inside a surrogate
               pair. */}
           <Text dimColor={value === ''}>{shownPoints.slice(0, cursor).join('')}</Text>

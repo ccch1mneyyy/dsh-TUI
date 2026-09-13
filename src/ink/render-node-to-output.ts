@@ -4,6 +4,7 @@ import type { DOMElement } from './dom.js'
 import { GEOMETRY_TRACE_ENABLED, noteScrollGeometry } from './geometry-trace.js'
 import getMaxWidth from './get-max-width.js'
 import type { Rectangle } from './layout/geometry.js'
+import type { CachedLayout } from './node-cache.js'
 import { LayoutDisplay, LayoutEdge, type LayoutNode } from './layout/node.js'
 import { nodeCache, pendingClears } from './node-cache.js'
 import type Output from './output.js'
@@ -15,6 +16,8 @@ import {
 } from './squash-text-nodes.js'
 import type { Color } from './styles.js'
 import { isXtermJs } from './terminal.js'
+import { terminalImageSourceFromAttributes } from './terminal-image.js'
+import type { TerminalImagePlacement } from './terminal-image.js'
 import { widestLine } from './widest-line.js'
 import wrapText from './wrap-text.js'
 
@@ -67,8 +70,8 @@ let scrollHint: ScrollHint | null = null
 // three paths — full-render nodeCache.set, node-level blit early-return,
 // blitEscapingAbsoluteDescendants — so clean-overlay consecutive scrolls
 // still have the rect.
-let absoluteRectsPrev: Rectangle[] = []
-let absoluteRectsCur: Rectangle[] = []
+let absoluteRectsPrev: CachedLayout[] = []
+let absoluteRectsCur: CachedLayout[] = []
 
 // position:absolute nodes of the CURRENT frame with their paint rects, for
 // pointer hit-testing. hitTest's containment recursion cannot reach an
@@ -80,6 +83,26 @@ let absoluteRectsCur: Rectangle[] = []
 export type AbsoluteHitEntry = { node: DOMElement; rect: Rectangle }
 let absoluteHitList: AbsoluteHitEntry[] = []
 
+// Occlusion-eligible surfaces (occlusionColor set, backgroundColor unset)
+// with the cover decision made the last time each surface was WALKED. A
+// surface skipped by a clean-subtree blit — or painted before an image
+// that registers later in walk order — keeps a decision made against an
+// older placement set, so its cover lags behind images appearing, moving,
+// or disappearing behind it. getOcclusionMismatchNodes() re-checks every
+// recorded surface against the frame-end placement set so renderer.ts can
+// re-walk stale surfaces on a frame it schedules itself (no React commit
+// needed to correct the cover).
+export type OcclusionSurface = {
+  node: DOMElement
+  x: number
+  y: number
+  width: number
+  height: number
+  filled: boolean
+}
+let occlusionSurfacesPrev: OcclusionSurface[] = []
+let occlusionSurfacesCur: OcclusionSurface[] = []
+
 /**
  * The current frame's absolute-positioned nodes in paint order.
  * @returns read-only list; reverse-iterate for topmost-first hit-testing.
@@ -88,12 +111,171 @@ export function getAbsoluteHitList(): readonly AbsoluteHitEntry[] {
   return absoluteHitList
 }
 
-/** Reset the scroll hint for the next frame and rotate the absolute-rect buffers. */
+/** Reset the scroll hint for the next frame and rotate the per-frame buffers. */
 export function resetScrollHint(): void {
   scrollHint = null
   absoluteRectsPrev = absoluteRectsCur
   absoluteRectsCur = []
   absoluteHitList = []
+  occlusionSurfacesPrev = occlusionSurfacesCur
+  occlusionSurfacesCur = []
+}
+
+/** A node fills every cell of its rect when it has its own background or
+ *  is declared `opaque`; anything else leaves gaps to the layer below. */
+function paintsOwnRect(node: DOMElement): boolean {
+  return node.style.opaque === true || node.style.backgroundColor !== undefined
+}
+
+/** Whether a ready terminal-image placement overlaps the given screen rect
+ *  — the paint condition for `occlusionColor`. Consults the previous
+ *  frame's placements (the overlay may cover an image rendered in an
+ *  earlier tree position that has not painted yet this frame) and the
+ *  current frame's (an image may appear behind an already-open overlay);
+ *  same intersection and graphicsReady semantics as
+ *  Output.hasPreviousImageInRegion. */
+function terminalImageBehindRect(
+  output: Output,
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+): boolean {
+  const left = Math.floor(x)
+  const top = Math.floor(y)
+  const occlusionWidth = Math.floor(width)
+  const occlusionHeight = Math.floor(height)
+  if (output.hasPreviousImageInRegion(left, top, occlusionWidth, occlusionHeight)) {
+    return true
+  }
+  const right = left + occlusionWidth
+  const bottom = top + occlusionHeight
+  return output.getImages().some(
+    placement =>
+      placement.graphicsReady !== false &&
+      placement.x < right &&
+      placement.x + placement.columns > left &&
+      placement.y < bottom &&
+      placement.y + placement.rows > top,
+  )
+}
+
+function sameRect(a: CachedLayout, b: CachedLayout): boolean {
+  return a.x === b.x && a.y === b.y && a.width === b.width && a.height === b.height
+}
+
+/** Whether a READY placement from the CURRENT frame's registrations overlaps
+ *  the rect — the frame-end truth for getOcclusionMismatchNodes. Unlike the
+ *  walk-time check it does not consult the previous frame: a cover that
+ *  outlived its image must be corrected, and reuseImages keeps every
+ *  still-valid placement in the current set even under clean-subtree blits.
+ *  Coordinates are pre-floored (OcclusionSurface records). */
+function currentImageBehindRect(
+  images: readonly TerminalImagePlacement[],
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+): boolean {
+  const right = x + width
+  const bottom = y + height
+  return images.some(
+    placement =>
+      placement.graphicsReady !== false &&
+      placement.x < right &&
+      placement.x + placement.columns > x &&
+      placement.y < bottom &&
+      placement.y + placement.rows > y,
+  )
+}
+
+/**
+ * Frame-end check: did any PREVIOUS frame's absolute overlay vacate cells
+ * that no CURRENT overlay rect covers (the overlay shrank or moved)?
+ *
+ * Opaque/filled absolute overlays (OverlayAbove pickers above the input,
+ * tooltips) paint over non-sibling subtrees (e.g. the transcript ScrollBox,
+ * which rendered EARLIER in tree order). When such a rect shrinks, the cells
+ * it vacated exist in prevScreen only as the overlay's own pixels; the
+ * underlying subtree is clean, so its blit would restore those stale pixels
+ * and the diff never clears them (real-machine report: the slash menu keeps
+ * its old rows after a filter narrows it, until any unrelated repaint).
+ * DOM removal covers the CLOSE case (consumeAbsoluteRemovedFlag); this check
+ * covers shrink/move: the caller poisons the NEXT frame (renders without
+ * prevScreen) so the vacated cells are re-derived from the real tree.
+ * Growth is fine — a current rect that fully contains the previous rect
+ * repaints the whole area itself this frame — but only when that current
+ * node is opaque (own background or `opaque`). A transparent absolute node
+ * (a click-catcher spanning the transcript) paints nothing of its own, so
+ * it cannot stand in for the cells an opaque sibling card vacated when it
+ * shrank: the clean subtree underneath would blit the old card's pixels
+ * back from prevScreen (real-machine report: switching the image preview to
+ * a smaller image left the wider card's borders and title on screen).
+ */
+export function hasOverlayVacatedCells(): boolean {
+  if (absoluteRectsPrev.length === 0) return false
+  outer: for (const prev of absoluteRectsPrev) {
+    if (prev.width <= 0 || prev.height <= 0) continue
+    for (const cur of absoluteRectsCur) {
+      // A node that kept its exact rect vacated nothing, opaque or not.
+      // Without this the transparent click-catcher spanning the transcript
+      // was never "covered" and poisoned every frame while a preview was
+      // open (full re-render instead of the blit fast path).
+      if (cur.opaque !== true && !sameRect(cur, prev)) continue
+      if (
+        cur.x <= prev.x &&
+        cur.y <= prev.y &&
+        cur.x + cur.width >= prev.x + prev.width &&
+        cur.y + cur.height >= prev.y + prev.height
+      ) {
+        // A current overlay still covers this previous rect completely.
+        continue outer
+      }
+    }
+    return true
+  }
+  return false
+}
+
+/**
+ * Frame-end check: occlusion surfaces whose recorded cover decision no
+ * longer matches the frame's terminal-image placements.
+ *
+ * Two paths leave a surface stale: (1) it painted before a same-frame
+ * image that registers later in walk order — output.getImages() had not
+ * admitted the placement yet and the previous frame had none; (2) a
+ * clean-subtree blit skipped the surface entirely, restoring its old
+ * cells while an image behind it appeared, moved, or was removed. The
+ * caller re-walks each stale surface (markDirty) and schedules a frame
+ * so the cover follows image changes even with no pending React commit.
+ * @param output - the output whose previous/current placements re-decide.
+ * @returns surfaces (nodes) whose recorded decision mismatches; may be empty.
+ */
+export function getOcclusionMismatchNodes(output: Output): DOMElement[] {
+  const stale: DOMElement[] = []
+  const walked = new Set<DOMElement>()
+  // One snapshot for every surface: getImages() rescans the operation
+  // stream per placement, so calling it per surface would be quadratic.
+  const images = output.getImages()
+  for (const surface of occlusionSurfacesCur) {
+    walked.add(surface.node)
+    if (
+      currentImageBehindRect(images, surface.x, surface.y, surface.width, surface.height) !==
+      surface.filled
+    ) {
+      stale.push(surface.node)
+    }
+  }
+  for (const surface of occlusionSurfacesPrev) {
+    if (walked.has(surface.node)) continue
+    if (
+      currentImageBehindRect(images, surface.x, surface.y, surface.width, surface.height) !==
+      surface.filled
+    ) {
+      stale.push(surface.node)
+    }
+  }
+  return stale
 }
 
 /**
@@ -107,7 +289,7 @@ export function getScrollHint(): ScrollHint | null {
 // The ScrollBox DOM node (if any) with pendingScrollDelta left after this
 // frame's drain. renderer.ts calls markDirty(it) post-render so the NEXT
 // frame's root blit check fails and we descend to continue draining.
-// Without this, after the scrollbox's dirty flag is cleared (line ~721),
+// Without this, after the render pass clears the scrollbox's dirty flag,
 // the next frame blits root and never reaches the scrollbox — drain stalls.
 let scrollDrainNode: DOMElement | null = null
 
@@ -565,7 +747,7 @@ function renderNodeToOutput(
           // Drop descendants' cache too — hideInstance's markDirty walks UP
           // only, so descendants' .dirty stays false. Their nodeCache entries
           // survive with pre-hide rects. On unhide, if position didn't shift,
-          // the blit check at line ~432 passes and copies EMPTY cells from
+          // the clean-subtree blit check passes and copies EMPTY cells from
           // prevScreen (cleared here) → content vanishes.
           dropSubtreeCache(node)
           layoutShifted = true
@@ -580,6 +762,14 @@ function renderNodeToOutput(
     let y = offsetY + yogaTop
     const width = yogaNode.getComputedWidth()
     const height = yogaNode.getComputedHeight()
+    const imageSource =
+      node.nodeName === 'ink-image'
+        ? terminalImageSourceFromAttributes(node.attributes)
+        : undefined
+    const imageAdmitted =
+      imageSource === undefined
+        ? false
+        : output.image(node, x, y, width, height, imageSource, node.style.backgroundColor ?? inheritedBackgroundColor)
 
     // Absolute-positioned overlays anchored above their parent
     // (bottom='100%') compute negative screen y when their content is
@@ -608,11 +798,44 @@ function renderNodeToOutput(
     // diff finds nothing, and the highlight never clears). Compare against
     // the value recorded at the previous render and refuse the blit when it
     // moved.
-    const effectiveBg = node.style.backgroundColor ?? inheritedBackgroundColor
+    // `occlusionColor` promotes to a real background only while a
+    // terminal image sits behind this node's rect (see the Styles doc):
+    // transparent overlay surfaces in the common frame, covered image
+    // placements otherwise.
+    const occlusionBackground =
+      node.style.backgroundColor === undefined &&
+      node.style.occlusionColor !== undefined &&
+      terminalImageBehindRect(output, x, y, width, height)
+        ? node.style.occlusionColor
+        : undefined
+    if (
+      node.style.occlusionColor !== undefined &&
+      node.style.backgroundColor === undefined
+    ) {
+      occlusionSurfacesCur.push({
+        node,
+        x: Math.floor(x),
+        y: Math.floor(y),
+        width: Math.floor(width),
+        height: Math.floor(height),
+        filled: occlusionBackground !== undefined,
+      })
+    }
+    const effectiveBg =
+      node.style.backgroundColor ?? occlusionBackground ?? inheritedBackgroundColor
     const bgChanged = cached?.bg !== effectiveBg
+    const imageBackingChanged =
+      node.nodeName === 'ink-image' &&
+      output.terminalImagesEnabled &&
+      imageAdmitted !== output.hadPreviousImage(node)
     if (
       !node.dirty &&
       !skipSelfBlit &&
+      // A backdrop node re-emits its shade every frame: the cells beneath it
+      // may have been rewritten by an earlier sibling (streaming text), and
+      // only a shade placed at this node's point in the paint order dims
+      // them without touching the card painted after it.
+      node.style.backdrop === undefined &&
       node.pendingScrollDelta === undefined &&
       cached &&
       cached.x === x &&
@@ -620,25 +843,36 @@ function renderNodeToOutput(
       cached.width === width &&
       cached.height === height &&
       !bgChanged &&
+      !imageBackingChanged &&
       prevScreen
     ) {
       const fx = Math.floor(x)
       const fy = Math.floor(y)
       const fw = Math.floor(width)
       const fh = Math.floor(height)
-      output.blit(prevScreen, fx, fy, fw, fh)
-      if (node.style.position === 'absolute') {
-        absoluteRectsCur.push(cached)
-        absoluteHitList.push({ node, rect: cached })
+      if (output.reuseImages(node)) {
+        output.blit(prevScreen, fx, fy, fw, fh)
+        if (node.style.position === 'absolute') {
+          absoluteRectsCur.push(cached)
+          absoluteHitList.push({ node, rect: cached })
+        }
+        // Absolute descendants can paint outside this node's layout bounds
+        // (e.g. a slash menu with position='absolute' bottom='100%' floats
+        // above). If a dirty clipped sibling re-rendered and overwrote those
+        // cells, the blit above only restored this node's own rect — the
+        // absolute descendants' cells are lost. Re-blit them from prevScreen
+        // so the overlays survive.
+        blitEscapingAbsoluteDescendants(
+          node,
+          output,
+          prevScreen,
+          fx,
+          fy,
+          fw,
+          fh,
+        )
+        return
       }
-      // Absolute descendants can paint outside this node's layout bounds
-      // (e.g. a slash menu with position='absolute' bottom='100%' floats
-      // above). If a dirty clipped sibling re-rendered and overwrote those
-      // cells, the blit above only restored this node's own rect — the
-      // absolute descendants' cells are lost. Re-blit them from prevScreen
-      // so the overlays survive.
-      blitEscapingAbsoluteDescendants(node, output, prevScreen, fx, fy, fw, fh)
-      return
     }
 
     // Clear stale content from the old position when re-rendering.
@@ -693,7 +927,15 @@ function renderNodeToOutput(
     // y+1, not y). HelpV2's third shortcuts column hits this — skipping
     // unconditionally drops "ctrl + z to suspend" from /help output.
     if (height === 0 && siblingSharesY(node, yogaNode)) {
-      nodeCache.set(node, { x, y, width, height, top: yogaTop })
+      nodeCache.set(node, { x, y, width, height, top: yogaTop, opaque: paintsOwnRect(node) })
+      node.dirty = false
+      return
+    }
+
+    // Text is a paint leaf: unlike boxes, it cannot own an escaping overlay.
+    // Keep the old-position cleanup above, but cull before squash/wrap/style.
+    if (node.nodeName === 'ink-text' && width > 0 && height > 0 && !output.isRectVisible(x, y, width, height)) {
+      nodeCache.delete(node)
       node.dirty = false
       return
     }
@@ -718,13 +960,8 @@ function renderNodeToOutput(
       const plainText = segments.map(s => s.text).join('')
 
       if (plainText.length > 0) {
-        // Upstream Ink uses getMaxWidth(yogaNode) unclamped here. That
-        // width comes from Yoga's AtMost pass and can exceed the actual
-        // screen space (see getMaxWidth docstring). Yoga's height for this
-        // node already reflects the constrained Exactly pass, so clamping
-        // the wrap width here keeps line count consistent with layout.
-        // Without this, characters past the screen edge are dropped by
-        // setCellAt's bounds check.
+        // Use the same content constraint as measurement, not the rounded
+        // pixel-grid box. Offscreen overflow still clips at the terminal edge.
         const maxWidth = Math.min(getMaxWidth(yogaNode), output.width - x)
         const textWrap = node.style.textWrap ?? 'wrap'
 
@@ -785,17 +1022,37 @@ function renderNodeToOutput(
 
         output.write(x, y, text, softWrap)
       }
-    } else if (node.nodeName === 'ink-box') {
+    } else if (
+      node.nodeName === 'ink-image' &&
+      imageAdmitted &&
+      output.terminalImagesEnabled
+    ) {
+      // Kitty placements use an extreme negative z-index so later terminal
+      // cells can cover them. A colored ancestor has already filled this
+      // rect, though, and those non-default-background cells would also hide
+      // the image itself. Replace only the image-owned cells with default-
+      // background spaces; layout and surrounding inherited color stay intact.
+      const imageWidth = Math.floor(width)
+      const imageHeight = Math.floor(height)
+      const imageLine = ' '.repeat(imageWidth)
+      output.write(
+        Math.floor(x),
+        Math.floor(y),
+        Array(imageHeight).fill(imageLine).join('\n'),
+      )
+      output.imageBacking(node)
+      for (const child of node.childNodes) {
+        if (child.nodeName !== '#text') dropSubtreeCache(child as DOMElement)
+      }
+    } else if (node.nodeName === 'ink-box' || node.nodeName === 'ink-image') {
       const boxBackgroundColor =
-        node.style.backgroundColor ?? inheritedBackgroundColor
+        node.style.backgroundColor ?? occlusionBackground ?? inheritedBackgroundColor
 
       // Mark this box's region as non-selectable (fullscreen text
       // selection). noSelect ops are applied AFTER blits/writes in
       // output.get(), so this wins regardless of what's rendered into
-      // the region — including blits from prevScreen when the box is
-      // clean (the op is emitted on both the dirty-render path here
-      // AND on the blit fast-path at line ~235 since blitRegion copies
-      // the noSelect bitmap alongside cells).
+      // the region. On the clean-subtree path, blitRegion preserves the
+      // noSelect bitmap alongside cells copied from prevScreen.
       //
       // 'from-left-edge' extends the exclusion from col 0 so any
       // upstream indentation (tool prefix, tree lines) is covered too
@@ -1247,12 +1504,25 @@ function renderNodeToOutput(
             !hint ||
             heightDelta === 0 ||
             (hint.delta > 0 && heightDelta === hint.delta)
+          const graphicsInScrollRegion =
+            hint !== null &&
+            output.hasPreviousImageInRegion(
+              Math.floor(x),
+              hint.top,
+              Math.floor(width),
+              hint.bottom - hint.top + 1,
+            )
           // scrollHint is set above when hint is captured. If safeForFastPath
           // is false the full path renders a next.screen that doesn't match
           // the DECSTBM shift — emitting DECSTBM leaves stale rows (seen as
           // content bleeding through during scroll-up + streaming). Clear it.
-          if (!safeForFastPath) scrollHint = null
-          if (hint && prevScreen && safeForFastPath) {
+          if (!safeForFastPath || graphicsInScrollRegion) scrollHint = null
+          if (
+            hint &&
+            prevScreen &&
+            safeForFastPath &&
+            !graphicsInScrollRegion
+          ) {
             const { top, bottom, delta } = hint
             const w = Math.floor(width)
             output.blit(prevScreen, Math.floor(x), top, w, bottom - top + 1)
@@ -1376,11 +1646,12 @@ function renderNodeToOutput(
                   Math.floor(contentY + childBottom),
                   Math.floor((y1 ?? y) + padTop + innerHeight),
                 )
-                if (screenY < screenBottom) {
-                  const fill = Array(screenBottom - screenY)
+                const fillTop = Math.max(screenY, top)
+                if (fillTop < screenBottom) {
+                  const fill = Array(screenBottom - fillTop)
                     .fill(spaces)
                     .join('\n')
-                  output.write(Math.floor(x), screenY, fill)
+                  output.write(Math.floor(x), fillTop, fill)
                   output.clip({
                     x1: undefined,
                     x2: undefined,
@@ -1498,7 +1769,15 @@ function renderNodeToOutput(
         // Disable prevScreen for children: the fill overwrites the entire
         // interior each render, so child blits from prevScreen would restore
         // stale cells (wrong bg if it changed) on top of the fresh fill.
-        const ownBackgroundColor = node.style.backgroundColor
+        // Backdrop: shade whatever earlier nodes painted under this rect
+        // before this node's own fill and children go on top.
+        if (node.style.backdrop !== undefined) {
+          output.shade(
+            { x: Math.floor(x), y: Math.floor(y), width: Math.floor(width), height: Math.floor(height) },
+          )
+        }
+        const ownBackgroundColor =
+          node.style.backgroundColor ?? occlusionBackground
         if (ownBackgroundColor || node.style.opaque) {
           const borderLeft = yogaNode.getComputedBorder(LayoutEdge.Left)
           const borderRight = yogaNode.getComputedBorder(LayoutEdge.Right)
@@ -1530,7 +1809,12 @@ function renderNodeToOutput(
           // same reason: the old fill lives in prevScreen and the children's
           // blits would resurrect it — the frame then equals prevScreen and
           // the diff never clears the stale highlight.
-          ownBackgroundColor || node.style.opaque || bgChanged ? undefined : prevScreen,
+          node.nodeName === 'ink-image' ||
+            ownBackgroundColor ||
+            node.style.opaque ||
+            bgChanged
+            ? undefined
+            : prevScreen,
           boxBackgroundColor,
         )
       }
@@ -1556,7 +1840,15 @@ function renderNodeToOutput(
     }
 
     // Cache layout bounds for dirty tracking
-    const rect = { x, y, width, height, top: yogaTop, bg: effectiveBg }
+    const rect: CachedLayout = {
+      x,
+      y,
+      width,
+      height,
+      top: yogaTop,
+      bg: effectiveBg,
+      opaque: paintsOwnRect(node),
+    }
     nodeCache.set(node, rect)
     if (node.style.position === 'absolute') {
       absoluteRectsCur.push(rect)
@@ -1570,7 +1862,8 @@ function renderNodeToOutput(
 // AFTER a dirty/removed sibling can contain stale overflow in prevScreen.
 // Disable blit for siblings after a dirty child — but still pass prevScreen
 // TO the dirty child itself so its clean descendants can blit. The dirty
-// child's own blit check already fails (node.dirty=true at line 216), so
+// child's own blit check already fails (node.dirty=true, set by markDirty
+// in dom.ts), so
 // passing prevScreen only benefits its subtree.
 // For removed children we don't know their original position, so
 // conservatively disable blit for all.
@@ -1671,7 +1964,7 @@ function siblingSharesY(node: DOMElement, yogaNode: LayoutNode): boolean {
 // the node's layout bounds are NOT covered by the blit (which only copies
 // the node's own rect). If a dirty sibling re-rendered and overwrote those
 // cells, we must re-blit them from prevScreen so the overlays survive.
-// Example: PromptInputFooter's slash menu uses position='absolute' bottom='100%'
+// Example: CommandSuggestions' slash menu uses position='absolute' bottom='100%'
 // to float above the prompt; a spinner tick in the ScrollBox above re-renders
 // and overwrites those cells. Without this, the menu vanishes on the next frame.
 function blitEscapingAbsoluteDescendants(

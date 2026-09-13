@@ -38,6 +38,11 @@ type DecrpmResponse = Extract<TerminalResponse, { type: 'decrpm' }>
 type Da1Response = Extract<TerminalResponse, { type: 'da1' }>
 type Da2Response = Extract<TerminalResponse, { type: 'da2' }>
 type KittyResponse = Extract<TerminalResponse, { type: 'kittyKeyboard' }>
+type KittyGraphicsResponse = Extract<TerminalResponse, { type: 'kittyGraphics' }>
+type TerminalPixelSizeResponse = Extract<
+  TerminalResponse,
+  { type: 'terminalPixelSize' }
+>
 type CursorPosResponse = Extract<TerminalResponse, { type: 'cursorPosition' }>
 type OscResponse = Extract<TerminalResponse, { type: 'osc' }>
 type XtversionResponse = Extract<TerminalResponse, { type: 'xtversion' }>
@@ -90,6 +95,41 @@ export function kittyKeyboard(): TerminalQuery<KittyResponse> {
   return {
     request: csi('?u'),
     match: (r): r is KittyResponse => r.type === 'kittyKeyboard',
+  }
+}
+
+/**
+ * Query direct-data and zlib support for the Kitty graphics protocol with one
+ * transparent 1×1 RGBA pixel. The terminal echoes the image id in its reply.
+ */
+export function kittyGraphics(
+  imageId: number,
+): TerminalQuery<KittyGraphicsResponse> {
+  const id = Number.isSafeInteger(imageId) && imageId > 0 ? imageId : 31
+  return {
+    // One transparent RGBA pixel compressed with RFC 1950 zlib. Probe the
+    // same direct-data + compression path used by real renderer uploads.
+    request: `\u001b_Gi=${id},s=1,v=1,a=q,t=d,f=32,o=z;eAFjYGBgAAAABAAB\u001b\\`,
+    match: (r): r is KittyGraphicsResponse =>
+      r.type === 'kittyGraphics' && r.imageId === id,
+  }
+}
+
+/** XTWINOPS: query the physical pixel dimensions of one terminal cell. */
+export function terminalCellSizePixels(): TerminalQuery<TerminalPixelSizeResponse> {
+  return {
+    request: csi('16t'),
+    match: (r): r is TerminalPixelSizeResponse =>
+      r.type === 'terminalPixelSize' && r.scope === 'cell',
+  }
+}
+
+/** XTWINOPS: query the terminal text area's physical pixel dimensions. */
+export function terminalWindowSizePixels(): TerminalQuery<TerminalPixelSizeResponse> {
+  return {
+    request: csi('14t'),
+    match: (r): r is TerminalPixelSizeResponse =>
+      r.type === 'terminalPixelSize' && r.scope === 'window',
   }
 }
 
@@ -147,7 +187,7 @@ type Pending =
       resolve: (r: TerminalResponse | undefined) => void
       releaseRawMode: () => void
     }
-  | { kind: 'sentinel'; resolve: () => void; releaseRawMode: () => void }
+  | { kind: 'sentinel'; resolve: (attributes?: Da1Response) => void; releaseRawMode: () => void }
 
 /**
  * Sends terminal queries to stdout and resolves their responses, using a
@@ -169,11 +209,17 @@ export class TerminalQuerier {
    * "no answer" keeps callers' .then() chains inert instead of pending.
    */
   private disposed = false
+  private suspended = false
 
   constructor(
     private stdout: NodeJS.WriteStream,
     private setRawMode?: (enabled: boolean) => void,
   ) {}
+
+  /** Whether terminal query I/O is paused for an external process handoff. */
+  get isSuspended(): boolean {
+    return this.suspended
+  }
 
   private holdRawMode(): () => void {
     this.setRawMode?.(true)
@@ -196,7 +242,7 @@ export class TerminalQuerier {
   send<T extends TerminalResponse>(
     query: TerminalQuery<T>,
   ): Promise<T | undefined> {
-    if (this.disposed) return Promise.resolve(undefined)
+    if (this.disposed || this.suspended) return Promise.resolve(undefined)
     return new Promise(resolve => {
       this.queue.push({
         kind: 'query',
@@ -217,12 +263,14 @@ export class TerminalQuerier {
    *
    * Safe to call with no pending queries — still waits for a round-trip.
    */
-  flush(): Promise<void> {
-    if (this.disposed) return Promise.resolve()
+  flush(): Promise<void>
+  flush(options: { attributes: true }): Promise<Da1Response | undefined>
+  flush(options?: { attributes: true }): Promise<void | Da1Response> {
+    if (this.disposed || this.suspended) return Promise.resolve()
     return new Promise(resolve => {
       this.queue.push({
         kind: 'sentinel',
-        resolve,
+        resolve: attributes => resolve(options?.attributes ? attributes : undefined),
         releaseRawMode: this.holdRawMode(),
       })
       this.stdout.write(SENTINEL)
@@ -232,11 +280,8 @@ export class TerminalQuerier {
   /** Resolve and release all pending queries when their owning app unmounts. */
   dispose(): void {
     this.disposed = true
-    for (const pending of this.queue.splice(0)) {
-      if (pending.kind === 'query') pending.resolve(undefined)
-      else pending.resolve()
-      pending.releaseRawMode()
-    }
+    this.suspended = true
+    this.drainPending()
   }
 
   /**
@@ -259,6 +304,7 @@ export class TerminalQuerier {
    * @param r - the response parsed from stdin.
    */
   onResponse(r: TerminalResponse): void {
+    if (this.suspended) return
     const idx = this.queue.findIndex(p => p.kind === 'query' && p.match(r))
     if (idx !== -1) {
       const [q] = this.queue.splice(idx, 1)
@@ -274,9 +320,33 @@ export class TerminalQuerier {
       if (s === -1) return
       for (const p of this.queue.splice(0, s + 1)) {
         if (p.kind === 'query') p.resolve(undefined)
-        else p.resolve()
+        else p.resolve(r)
         p.releaseRawMode()
       }
+    }
+  }
+
+  /**
+   * Resolve outstanding queries before stdin is handed to another process.
+   * Their replies can no longer be routed reliably once the child owns the
+   * terminal; later queries remain available after the handoff.
+   */
+  suspend(): void {
+    if (this.disposed) return
+    this.suspended = true
+    this.drainPending()
+  }
+
+  /** Resume queries after the caller's terminal-reply quarantine has ended. */
+  resume(): void {
+    if (!this.disposed) this.suspended = false
+  }
+
+  private drainPending(): void {
+    for (const pending of this.queue.splice(0)) {
+      if (pending.kind === 'query') pending.resolve(undefined)
+      else pending.resolve()
+      pending.releaseRawMode()
     }
   }
 }

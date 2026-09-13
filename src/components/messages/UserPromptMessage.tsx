@@ -1,6 +1,6 @@
 import React from 'react'
 import { Box, Text, useTerminalSize } from '../../ui.js'
-import { POINTER } from '../../cc/figures.js'
+import { POINTER } from '../../terminal-utils/figures.js'
 import { stringWidth } from '../../ink/stringWidth.js'
 import { wrapWidth } from '../../sessions/format.js'
 import { useTooltip } from '../Tooltip.js'
@@ -8,21 +8,21 @@ import type { ClickEvent } from '../../ink/events/click-event.js'
 
 type Props = {
   text: string
-  /** Adds the top margin between turns (CC: addMargin). */
-  addMargin: boolean
+  /** Adds the top margin between turns. */
+  marginTopOnTurn: boolean
   /** Message-selection mode highlight. */
   isSelected?: boolean
   onClick?(event: ClickEvent): void
 }
 
 /**
- * User prompt bubble: `❯ text` in bold briefLabelYou gold with no background
+ * User prompt bubble: `❯ text` in bold userPromptLabel gold with no background
  * fill (Kimi Code style: the user turn gets a distinct bold tint so it reads
  * apart from assistant text; only selection mode paints a highlight).
  */
 export function UserPromptMessage({
   text,
-  addMargin,
+  marginTopOnTurn,
   isSelected = false,
   onClick,
 }: Props): React.ReactNode {
@@ -46,14 +46,14 @@ export function UserPromptMessage({
   return (
     <Box
       flexDirection="column"
-      marginTop={addMargin ? 1 : 0}
+      marginTop={marginTopOnTurn ? 1 : 0}
       backgroundColor={isSelected ? 'messageActionsBackground' : undefined}
       paddingRight={1}
       onClick={onClick}
       {...(tooltipActive ? promptTooltip : {})}
     >
       {lines.map((line, index) => (
-        <Text key={index} color="briefLabelYou" bold wrap="truncate-end">
+        <Text key={index} color="userPromptLabel" bold wrap="truncate-end">
           {index === 0 ? `${POINTER} ` : continuationIndent}
           {line}
         </Text>

@@ -1,6 +1,7 @@
 import type { Cursor } from './cursor.js'
 import type { Size } from './layout/geometry.js'
 import type { ScrollHint } from './render-node-to-output.js'
+import type { TerminalImagePlacement } from './terminal-image.js'
 import {
   type CharPool,
   createScreen,
@@ -17,10 +18,18 @@ export type Frame = {
   readonly screen: Screen
   readonly viewport: Size
   readonly cursor: Cursor
+  /** Terminal graphics requested by laid-out image nodes in this frame. */
+  readonly images?: readonly TerminalImagePlacement[]
   /** DECSTBM scroll optimization hint (alt-screen only, null otherwise). */
   readonly scrollHint?: ScrollHint | null
   /** A ScrollBox has remaining pendingScrollDelta — schedule another frame. */
   readonly scrollDrainPending?: boolean
+  /**
+   * An absolute overlay shrank/moved this frame and vacated cells were
+   * blitted stale from prevScreen: the NEXT frame must render without
+   * prevScreen (full re-derive) and be scheduled explicitly.
+   */
+  readonly poisonNextFrame?: boolean
 }
 
 /**

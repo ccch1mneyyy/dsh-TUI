@@ -55,6 +55,7 @@ const SECRET_SENTINEL = 'test-secret-must-not-appear'
 function makeChannel(status: unknown) {
   return {
     version: 0,
+    whaleIdle: false, // 探针确定性：鲸鱼闲置动画不进测量窗口
     rows: [],
     status: 'idle' as const,
     sessionTitle: 'login-probe',
@@ -80,7 +81,7 @@ function makeChannel(status: unknown) {
     tps: undefined,
     tpsSamples: [],
     workingActivity: undefined,
-    activityFrames: 'claude',
+    activityFrames: 'moon8',
     activityEnabled: false,
     contextBarEnabled: true,
     agentPreset: 'standard',
@@ -153,7 +154,7 @@ async function runLogin(status: unknown) {
       patchConsole: false,
     },
   )
-  // 启动等待保留固定 sleep：假 stdout 丢弃全部帧，没有可轮询的观察点。
+  // 固定窗:pacing 等启动首帧——假 stdout 丢弃全部帧，没有可轮询的观察点
   await sleep(500)
   stdin.write('/login\r')
   const reported = await settled(() => channel.localCalls.length === 1)

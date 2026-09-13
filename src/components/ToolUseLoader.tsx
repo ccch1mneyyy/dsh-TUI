@@ -2,7 +2,7 @@ import React from 'react'
 import Box from '../ink/components/Box.js'
 import { Text } from '../ui.js'
 import { useBlink } from '../hooks/useBlink.js'
-import { BLACK_CIRCLE, BULLET, MULTIPLICATION_X } from '../cc/figures.js'
+import { BLACK_CIRCLE, BULLET, MULTIPLICATION_X } from '../terminal-utils/figures.js'
 import type { Theme } from '../theme.js'
 
 type Props = {

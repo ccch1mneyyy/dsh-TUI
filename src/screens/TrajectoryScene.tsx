@@ -22,7 +22,7 @@ import {
   type TrajBuild,
 } from '../dsh-adapter/trajectory/index.js'
 import { HOTSPOT_SORTS, WAVE_PROJECTIONS } from '../dsh-adapter/trajectory/index.js'
-import type { Channel } from '../dsh-adapter/channel.js'
+import type { ChannelUi as Channel } from '../adapter/channel/ui-policy.js'
 import type { HotspotRow, HotspotSort, WaveProjection } from '../dsh-adapter/types.js'
 
 /**
@@ -106,17 +106,15 @@ export function TrajectoryScene({
   const { rows: filtered, indexes } = React.useMemo(
     () => applyQuery(nodes, query),
     // `nodes` is mutated in place by the incremental fold, so its length is
-    // NOT an honest dependency alone — an in-place close (tool/result,
-    // step/end) changes status/duration without touching length. The
-    // build's monotonic revision covers every consumed event.
+    // the honest dependency — the array identity never changes.
     // oxlint-disable-next-line react-hooks/exhaustive-deps
-    [nodes, nodes.length, build.revision, query],
+    [nodes, nodes.length, query],
   )
 
   const agg = React.useMemo(
     // oxlint-disable-next-line react-hooks/exhaustive-deps
     () => aggregate(build, sort),
-    [build, nodes.length, build.revision, sort],
+    [build, nodes.length, sort],
   )
 
   // ── arrival + alert detection ────────────────────────────────────────────
@@ -149,7 +147,7 @@ export function TrajectoryScene({
   const band = React.useMemo(
     // oxlint-disable-next-line react-hooks/exhaustive-deps
     () => projectWave(nodes, bandWidth, projection),
-    [nodes, nodes.length, build.revision, bandWidth, projection],
+    [nodes, nodes.length, bandWidth, projection],
   )
   const matchColumns = React.useMemo(() => {
     if (query.empty) return undefined
@@ -405,7 +403,7 @@ export function TrajectoryScene({
           内容下有歧义，会把末段 ✕ 挤出 100% 行宽被裁——显式 width 钉死。 */}
       <Box flexShrink={0} width={bandWidth - CLOSE_WIDTH}>
         <Text>
-          <Text color="claude" bold>{`\u2726 ${t('traj-title')}`}</Text>
+          <Text color="accent" bold>{`\u2726 ${t('traj-title')}`}</Text>
           <Text color="subtle">{headerLine.left.slice((`\u2726 ${t('traj-title')}`).length)}</Text>
           <Text>{headerLine.gap}</Text>
           <Text color={totals.errors > 0 ? 'error' : 'subtle'}>{headerLine.right}</Text>

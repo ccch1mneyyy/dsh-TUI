@@ -1,6 +1,6 @@
 import React, { useLayoutEffect, useRef, useState } from 'react'
 import Box from '../../ink/components/Box.js'
-import Text from '../../ink/components/Text.js'
+import Text from './ThemedText.js'
 import type { DOMElement } from '../../ink/dom.js'
 import measureElement from '../../ink/measure-element.js'
 import { stringWidth } from '../../ink/stringWidth.js'
@@ -58,7 +58,7 @@ const MAX_APPLIED_MEASUREMENTS = 8
 
 /**
  * A horizontal divider line, optionally with a title in the middle
- * (in the Claude Code visual language).
+ * in the dsh-TUI visual language.
  *
  * The rule fills the width Yoga actually grants it: the Box is measured
  * after layout (SearchBox pattern — a resize re-layouts without any prop

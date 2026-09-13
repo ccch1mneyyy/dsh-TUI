@@ -1,6 +1,8 @@
 /**
  * Pixel-whale animation frames for the startup splash, converted from
- * the hand-drawn Excel art (the `dsh-ui-whale` frame set, 25x40 cells,
+ * the hand-drawn Excel art (the `dsh-ui-whale` frame set by @lhh010,
+ * https://github.com/lhh010/dsh-ui-whale — see also whaleIdle.ts for the
+ * ported settled-header behaviors; 25x40 cells,
  * palette alphabet shared with Whale.tsx: D outline, B body, L belly,
  * W mouth, H heart, Z sleep-Z, `.` transparent). All 22 source frames
  * are here; `OPENING_SEQUENCES` packs them into three startup intros —
@@ -355,14 +357,14 @@ export const WHALE_FRAMES: readonly WhaleFrame[] = [
     rows: [
       '........................................',
       '........................................',
-      '..........................D.............',
-      '.........................DBD........DD..',
-      '.........................DBBD......DBD..',
-      '.........................DBBBD....DBBD..',
-      '..........................DBBBD.DDBBD...',
-      '.......DDDDDDDDD...........DBBBDBBBBD...',
-      '......DBBBBBBBBBDD.........DBBBBBBBD....',
-      '.....DBBBBBBBBBBBBDD........DBBBBBD.....',
+      '...........................D............',
+      '..........................DBD.......D...',
+      '..........................DBBD.....DBD..',
+      '..........................DBBD....DBBD..',
+      '..........................DBBBD.DDBBBD..',
+      '.......DDDDDDDDD..........DBBBBDBBBBD...',
+      '......DBBBBBBBBBDD.........DBBBBBBBBD...',
+      '.....DBBBBBBBBBBBBDD.......DBBBBBBBD....',
       '....DBBBBBBBBBBBBBBBDD......DBBBBBD.....',
       '...DDBBBBBBBBBBBBBBBBBD..DDDBBBBDD......',
       '...DBBBBBBBBBBBBBBBBBBBDDBBBBBBBD.......',
@@ -691,7 +693,7 @@ export interface OpeningStep {
 }
 
 /** Named indices into WHALE_FRAMES (the order matches the source art). */
-const F = {
+export const WHALE_FRAME_INDEX = {
   standard: 0,
   blink: 1,
   fin1: 2,
@@ -715,6 +717,9 @@ const F = {
   sleep4: 20,
   sleep5: 21,
 } as const
+
+/** Backwards-compat local alias for the frame-index table above. */
+const F = WHALE_FRAME_INDEX
 
 /**
  * The three intro animations; each one ends back on the standard pose.

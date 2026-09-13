@@ -1,43 +1,6 @@
-/**
- * DeepSeek 官方账户余额查询（`GET /user/balance`）。
- *
- * 纯函数模块：只负责"用 key 换余额"，密钥由调用方（channel 的 credentials
- * seam → 环境变量兜底）解析，绝不在此打印或持久化。查询接口本身是只读的，
- * 不消耗 API 额度（社区插件均按秒/分钟级轮询使用）。
- *
- * 响应结构（官方文档）：
- *   { "is_available": true, "balance_infos": [
- *       { "currency": "CNY", "total_balance": "110.00",
- *         "granted_balance": "10.00", "topped_up_balance": "100.00" } ] }
- * 余额字段是字符串数字；`granted` 为赠送余额，`topped_up` 为充值余额，
- * 扣费优先扣赠送余额。
- */
+import type { BalanceResult, BalanceInfo } from './adapter/ports/channel-catalog.js'
+export type { BalanceResult, BalanceInfo } from './adapter/ports/channel-catalog.js'
 
-/** 单个币种的余额快照（元）。 */
-export interface BalanceInfo {
-  currency: string
-  /** 总余额 = granted + toppedUp。 */
-  total: number
-  /** 赠送余额。 */
-  granted: number
-  /** 充值余额。 */
-  toppedUp: number
-}
-
-export type BalanceResult =
-  | {
-    readonly ok: true
-    /** 账户是否可用（是否有可用额度）。 */
-    readonly isAvailable: boolean
-    readonly balances: readonly BalanceInfo[]
-  }
-  | {
-    readonly ok: false
-    /** 失败分类：无 key / 网络或超时 / 认证失败 / 非 2xx / 响应结构非法。 */
-    readonly reason: 'no-key' | 'network' | 'unauthorized' | 'http' | 'invalid'
-    /** 非 2xx 时的 HTTP 状态码（其余分类无）。 */
-    readonly status?: number
-  }
 
 /** 查询选项；fetchImpl 供无头回归注入。 */
 export interface BalanceQueryOptions {

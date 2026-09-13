@@ -1,7 +1,8 @@
 /**
  * DeepSeek 官方定价与"本会话花费"估算（人民币口径）。
  *
- * 数据来源：DeepSeek 官方文档「模型 & 价格」页（2026-08 快照），单位为人民
+ * 数据来源：DeepSeek 官方文档「模型 & 价格」页（2026-09 快照，含
+ * V4.1-Flash 发布调价），单位为人民
  * 币/百万 tokens。DeepSeek 官方 API 只返回 token 用量、不返回金额，本模块按
  * 官方公开单价把会话累计 token 换算成金额 —— 这是**估算**，不是账单：
  * 定价可能变动，且余额扣费发生在 DeepSeek 侧（以平台账单为准）。
@@ -32,6 +33,12 @@ export interface DeepSeekModelPrice {
  * token 用量），不会给出错误数字。
  */
 export const DEEPSEEK_MODEL_PRICES: Readonly<Record<string, DeepSeekModelPrice>> = {
+  // DeepSeek-V41-Flash（2026-09-10 发布并取代 V4-Pro 后的下调价目）。
+  'deepseek-flash': {
+    inputMiss: [1.0, 2.0],
+    inputHit: [0.02, 0.04],
+    output: [4.0, 8.0],
+  },
   'deepseek-v4-flash': {
     inputMiss: [1.5, 3.0],
     inputHit: [0.05, 0.10],

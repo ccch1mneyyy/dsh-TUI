@@ -1,5 +1,5 @@
 /**
- * Focused regression for the agent view (CC `claude agents`):
+ * Focused regression for the session overview:
  *
  *  1. Pure derivation helpers over synthetic session events — the fold
  *     (summary/title/turn-failure/updatedAt), live preview extraction, the
@@ -216,16 +216,16 @@ check('screen: summaries rendered', text.includes('patching the auth flow'))
 check('screen: current marker on the attached row', text.includes('当前'))
 check('screen: header shows model · cwd', text.includes('deepseek-v4-flash') && text.includes('/work/repo'))
 check('screen: header counts', text.includes('1 个等待输入') && text.includes('1 个运行中') && text.includes('0 个已完成'))
-check('screen: empty row shows the CC hint', text.includes('输入提示词开始') && text.includes('未命名'))
+check('screen: empty row shows the empty-session hint', text.includes('输入提示词开始') && text.includes('未命名'))
 check('screen: dispatch input placeholder', text.includes('输入任务并回车'))
 check('screen: hint line', text.includes('Space') || text.includes('预览'))
 
 // Working-row animation: the glyph in front of the working row cycles
-// through CC's spinner family over time — the accumulated frames must show
+// through the shared spinner frames over time — the accumulated frames must show
 // more than one distinct glyph in that exact cell.
 await new Promise(resolve => setTimeout(resolve, 500))
 const spinnerGlyphs = new Set()
-for (const match of stripAnsi(stdout.frames).matchAll(/([·✢*✶✻✽]) Login fix/gu)) spinnerGlyphs.add(match[1])
+for (const match of stripAnsi(stdout.frames).matchAll(/([·•●]) Login fix/gu)) spinnerGlyphs.add(match[1])
 check('screen: working row glyph animates', spinnerGlyphs.size >= 2, JSON.stringify([...spinnerGlyphs]))
 
 // Per-keystroke rendering: every typed character must appear in the frames
@@ -464,7 +464,7 @@ text = stripAnsi(chatStdout.frames)
 check('chat: footer counts needs-input background sessions', text.includes('← 1 个会话等待输入'), JSON.stringify(text.slice(-200)))
 check('chat: footer hint renders before any ← press', backgroundRequests === 0)
 
-// A bare left arrow on the empty prompt = CC's background-and-open flow.
+// A bare left arrow on the empty prompt = the background-and-open flow.
 chatStdin.write('\u001b[D')
 await new Promise(resolve => setTimeout(resolve, 400))
 check('chat: ← on empty prompt requests background+agent view', backgroundRequests === 1, String(backgroundRequests))

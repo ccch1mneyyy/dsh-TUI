@@ -38,6 +38,9 @@ export type RenderOptions = {
    */
   patchConsole?: boolean
 
+  /** Allow image probing and rendering. Fixed for this root's lifetime; defaults to true. */
+  terminalImages?: boolean
+
   /**
    * Called after each frame render with timing and flicker information.
    */
@@ -48,19 +51,6 @@ export type RenderOptions = {
  * The handle returned by renderSync for an actively rendering Ink app.
  */
 export type Instance = {
-  /**
-   * The output stream this instance renders to. finishExit must target THIS
-   * stream for its barrier/cleanup/notice writes — not whatever
-   * process.stdout happens to point at during shutdown (stdout identity
-   * drift, issue #522).
-   */
-  stdout: NodeJS.WriteStream
-  /**
-   * Whether unmount() already wrote the terminal cleanup block itself
-   * (React error-boundary / signal-exit path); finishExit then skips
-   * re-writing the mode resets.
-   */
-  hasWrittenExitCleanup: boolean
   /**
    * Replace previous root node with a new one or update props of the current root node.
    */
@@ -83,20 +73,6 @@ export type Instance = {
    * tracking after DISABLE_MOUSE_TRACKING has already been written.
    */
   detachForShutdown: Ink['detachForShutdown']
-  /**
-   * First half of the shutdown split: latch isUnmounted and stop every
-   * output producer while raw mode is STILL held. finishExit calls this
-   * before writing the exit sequence so the remote terminal consumes the
-   * mouse-disable bytes during the raw-mode settle window instead of
-   * echoing them as caret garbage after cooked mode returns (#522).
-   */
-  beginShutdown: Ink['beginShutdown']
-  /**
-   * Second half of the shutdown split: release raw mode and drain stdin.
-   * finishExit calls this in a finally after the settle window, so the
-   * cooked-mode restore happens even when the exit write fails.
-   */
-  concludeShutdown: Ink['concludeShutdown']
   /**
    * Fully detach stdin before handing the terminal to a child process that
    * inherits it (the /update and /restart handoffs). See Ink's own method
@@ -145,18 +121,12 @@ export const renderSync = (
   instance.render(node)
 
   return {
-    stdout: inkOptions.stdout,
-    get hasWrittenExitCleanup() {
-      return instance.hasWrittenExitCleanup
-    },
     rerender: instance.render,
     unmount() {
       instance.unmount()
     },
     waitUntilExit: instance.waitUntilExit,
     detachForShutdown: () => instance.detachForShutdown(),
-    beginShutdown: () => instance.beginShutdown(),
-    concludeShutdown: () => instance.concludeShutdown(),
     detachStdinForHandoff: () => instance.detachStdinForHandoff(),
     cleanup: () => instances.delete(inkOptions.stdout),
   }
@@ -202,6 +172,7 @@ export async function createRoot(
     stderr = process.stderr,
     exitOnCtrlC = true,
     patchConsole = true,
+    terminalImages = true,
     onFrame,
   } = options
   // See wrappedRender — preserve microtask boundary from the old WASM await.
@@ -212,6 +183,7 @@ export async function createRoot(
     stderr,
     exitOnCtrlC,
     patchConsole,
+    terminalImages,
     onFrame,
   })
 

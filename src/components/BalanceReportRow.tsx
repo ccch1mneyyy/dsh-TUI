@@ -5,7 +5,7 @@ import { t } from '../i18n.js'
 import type { BalanceResult } from '../deepseekBalance.js'
 import { estimateSessionCostSplitCny, isPeakHour, priceForModel } from '../deepseekPricing.js'
 import type { TokenUsage } from '../dsh-adapter/channel.js'
-import { formatTokens } from '../cc/format.js'
+import { formatTokens } from '../terminal-utils/format.js'
 
 /**
  * `/balance` 余额报告行：Divider + 一行安静摘要，hover 展开明细

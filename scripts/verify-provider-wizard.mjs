@@ -376,7 +376,7 @@ const MENU_DELETE = { selected: [t('provider-opt-edit-delete')] }
 {
   const { readFileSync } = await import('node:fs')
   const source = readFileSync(
-    new URL('../lib/types/dsh-adapter/channel.js', import.meta.url), 'utf8')
+    new URL('../lib/types/dsh-adapter/channel/settings-host.js', import.meta.url), 'utf8')
   check('11 channel: no listModelDiscoveryNamespaces call (absent in rc.6)',
     !source.includes('.listModelDiscoveryNamespaces('))
   check('11 channel: availability guard uses the settings descriptor',

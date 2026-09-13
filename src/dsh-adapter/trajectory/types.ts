@@ -116,7 +116,7 @@ export interface TrajNode {
   tokens?: TrajTokens
   /** Tool-call identity, used for `tool/call` ↔ `tool/result` pairing. */
   readonly callId?: string
-  /** Code-runner sub-call identity (`tool/code-dispatch*` pairing). */
+  /** Code-runner sub-call identity (`tool/code-dispatch*` pre-0.1.5, `tool/ptc-dispatch*` since). */
   readonly subCallId?: string
   /** Failure identity when `status === 'error'` (e.g. `RATE_LIMIT`). */
   errorCode?: string

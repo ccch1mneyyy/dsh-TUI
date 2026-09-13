@@ -10,11 +10,16 @@
  * @module @deepseek-harness-tui/dsh-tui/sessions
  */
 
-export { classify, readHeader, type RawSessionHeader } from './header.js'
+export {
+  classify,
+  readHeader,
+  readInheritedCut,
+  type RawSessionHeader,
+} from './header.js'
 
 export { digestSession, previewSession } from './digest.js'
 
-export { listSummaries, locateSession, type SessionSource } from './list.js'
+export { enumerateSessions, listSummaries, locateSession, type SessionSource } from './list.js'
 
 export { noteBranch, readIndex, writeIndex, type IndexEntry, type SessionIndex } from './store.js'
 

@@ -87,10 +87,6 @@ export class YogaLayoutNode implements LayoutNode {
 
   // Layout
 
-  isDirty(): boolean {
-    return this.yoga.isDirty()
-  }
-
   calculateLayout(width?: number, _height?: number): void {
     this.yoga.calculateLayout(width, undefined, Direction.LTR)
   }
@@ -127,6 +123,10 @@ export class YogaLayoutNode implements LayoutNode {
 
   getComputedWidth(): number {
     return this.yoga.getComputedWidth()
+  }
+
+  getComputedMeasureWidth(): number {
+    return this.yoga.getComputedMeasureWidth()
   }
 
   getComputedHeight(): number {

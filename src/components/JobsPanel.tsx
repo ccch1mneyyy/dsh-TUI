@@ -59,9 +59,9 @@ function JobRowLine({ job, focused }: { job: BackgroundJobState; focused: boolea
   return (
     <Box flexDirection="column">
       <Box flexDirection="row" gap={1}>
-        <Text color={focused ? 'claude' : undefined}>{focused ? '❯' : ' '}</Text>
+        <Text color={focused ? 'accent' : undefined}>{focused ? '❯' : ' '}</Text>
         <Text color={info.color}>{info.glyph}</Text>
-        <Text bold={focused} color={focused ? 'claude' : undefined}>{job.id}</Text>
+        <Text bold={focused} color={focused ? 'accent' : undefined}>{job.id}</Text>
         <Text dimColor>·</Text>
         <Text dimColor>{job.kind}</Text>
         <Text dimColor>·</Text>
@@ -123,14 +123,8 @@ export function JobsPanel({ jobs, onClose, onKill }: JobsPanelProps): React.Reac
   const [focusIndex, setFocusIndex] = React.useState(0)
   const scrollRef = React.useRef<ScrollBoxHandle | null>(null)
   const { rows } = useTerminalSize()
-  // 1s tick keeps live durations counting while the panel is open — but only
-  // while a live job exists to count: an empty or all-settled panel is a
-  // static render and must not hold a clock subscription.
-  const liveCount = jobs.reduce(
-    (count, job) => count + (job.status === 'running' || job.status === 'stopping' ? 1 : 0),
-    0,
-  )
-  const [clockRef] = useAnimationFrame(liveCount > 0 ? 1000 : null)
+  // 1s tick keeps live durations counting while the panel is open.
+  const [clockRef] = useAnimationFrame(1000)
 
   const focus = Math.min(focusIndex, Math.max(0, jobs.length - 1))
 
@@ -175,11 +169,11 @@ export function JobsPanel({ jobs, onClose, onKill }: JobsPanelProps): React.Reac
 
   return (
     <Box flexDirection="column" paddingX={2} paddingY={1} ref={clockRef}>
-      <Divider color="claude" title={t('jobs-panel-title')} />
+      <Divider color="accent" title={t('jobs-panel-title')} />
 
       <Box flexDirection="row" gap={3} marginTop={1} marginBottom={1}>
         <Text>
-          <Text color="claude">{running}</Text>
+          <Text color="accent">{running}</Text>
           <Text dimColor> {t('jobs-panel-count-running')}</Text>
         </Text>
         <Text>

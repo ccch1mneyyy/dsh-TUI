@@ -376,7 +376,7 @@ function makeChannel() {
     listSessions: async () => [],
     setResumeTarget() {},
     setActivityFrames: () => true,
-    activityFrames: 'claude',
+    activityFrames: 'moon8',
     runExternalCommand: async () => '',
     mcpStatus: () => [],
     exportSession: () => null,
@@ -500,7 +500,7 @@ check('刷新后摘要仍在', screenHas(term, 'DeepSeek 余额 ¥110.00'))
     // stale-hover 抑制：鼠标停在同一位置时新状态不触发 onMouseEnter，
     // 先移开再移回（verify-auto-recap 同款解药）。
     hover(1, 1)
-    await sleep(100)
+    await sleep(100) // 固定窗:pacing 移开与移回两次 hover 事件之间的步间等待
     hover(cell.col + 1, cell.row + 1)
     await settle(() => screenHas(term, '认证失败'))
     check('失败态 hover 显示原因', screenHas(term, '认证失败'))

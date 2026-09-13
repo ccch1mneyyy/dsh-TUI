@@ -9,12 +9,15 @@ dsh-TUI 提供三套 Gentle Mist Blue 色板，外加一个 `auto` 伪主题：
 | 名称 | 用途 |
 | --- | --- |
 | `auto` | 伪主题：跟随系统/终端背景，自动解析为 `light` 或 `dark` |
-| `light` | 暖白背景、墨色正文、雾蓝交互色 |
+| `light` | 白色面板、墨色正文、雾蓝交互色 |
 | `dark` | 深色终端适配，暖灰正文与柔雾蓝强调色 |
 | `dark-ansi` | 只依赖 16 色 ANSI 的兼容回退 |
 
 未明确指定主题时，TUI 会通过 OSC 11 查询终端背景并在 `light` 与 `dark` 之间
 选择；终端不响应时回退到 `dark`。
+
+浅色主题的面板、工具卡和图片预览默认使用纯白底色（`#FFFFFF`）；图片预览使用中性边框。
+深色主题及强调色保持原样。此设置不修改终端自身的背景色或壁纸。
 
 `auto` 把这次性启动检测变成常驻选择：它在 `/theme`、`DSH_TUI_THEME`、
 `~/.dsh-tui/theme.json` 中都是合法值。选中 `auto` 时立即应用上次检测结果，并
@@ -52,8 +55,12 @@ DSH_TUI_THEME
   "displayName": "樱花粉",
   "base": "dark",
   "colors": {
-    "claude": "#FF9EC7",
-    "claudeShimmer": "#FFC0D5",
+    "accent": "#FF9EC7",
+    "accentShimmer": "#FFC0D5",
+    "activity": "#7DA1DE",
+    "activityShimmer": "#ABC2EC",
+    "mascotBody": "#D98A63",
+    "inputBackground": "#000000",
     "permission": "#FFB3CC",
     "promptBorder": "#B08B99",
     "text": "#E8E6E0",
@@ -94,7 +101,7 @@ export function apply(ctx: Context): void {
     name: 'my-plugin:night',
     displayName: 'Night',
     base: 'dark',
-    colors: { claude: '#88AAFF', selectionBg: '#334466' },
+    colors: { accent: '#88AAFF', selectionBg: '#334466' },
   }, ctx)
 }
 ```
@@ -117,6 +124,14 @@ export function apply(ctx: Context): void {
 
 diff 语义优先于语法色：改动词组总是使用 `diffAddedWord` / `diffRemovedWord`，
 语法色只作用于未变更的文本。
+
+`accent`、`accentShimmer`、`activity`、`activityShimmer`、`mascotBody` 和
+`inputBackground` 是当前语义键。旧主题文件或插件描述中的
+`claude`、`claudeShimmer`、`claudeBlue_FOR_SYSTEM_SPINNER`、
+`claudeBlueShimmer_FOR_SYSTEM_SPINNER`、`clawd_body`、`clawd_background`
+仍会被读取并映射到对应语义键；解析后的主题只暴露语义键。新主题应使用当前键。
+
+`briefLabelYou` 会映射为 `userPromptLabel`。已经不再使用的旧色板槽位会被忽略，其他有效配色仍然生效。
 
 ## 颜色格式
 

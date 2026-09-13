@@ -198,7 +198,7 @@ export function clearSelection(s: SelectionState): void {
 // Unicode-aware word character matcher: letters (any script), digits,
 // and the punctuation set iTerm2 treats as word-part by default.
 // Matching iTerm2's default means double-clicking a path like
-// `/usr/bin/bash` or `~/.claude/config.json` selects the whole thing,
+// `/usr/bin/bash` or `~/.accent/config.json` selects the whole thing,
 // which is the muscle memory most macOS terminal users have.
 // iTerm2 default "characters considered part of a word": /-+\~_.
 const WORD_CHAR = /[\p{L}\p{N}_/.\-+~\\]/u
@@ -696,8 +696,8 @@ export function shiftAnchor(
  * Whether both ends of the selection are strictly past the SAME edge of
  * [minRow, maxRow] — the fully-off-screen condition. Rows are read through
  * the virtual (pre-clamp) trackers so a clamped-then-reversed scroll
- * evaluates at the TRUE position. Shared by shiftSelectionForFollow's
- * immediate clear and finishSelection's deferred commit-time check.
+ * evaluates at the TRUE position. Called by finishSelection's deferred
+ * commit-time check (shiftSelectionForFollow keeps its own inline copy).
  */
 export function selectionFullyOffEdge(
   s: SelectionState,

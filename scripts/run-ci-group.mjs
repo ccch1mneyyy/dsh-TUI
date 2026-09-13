@@ -8,22 +8,40 @@
  *
  * 用法（ci.yml 中每个测试组一条）：
  *   - run: node scripts/run-ci-group.mjs render-scroll
+ *   - run: node scripts/run-ci-group.mjs render-scroll --shard 1/2
  *
- * 组定义在下方 GROUPS 表：名称 + 完整 argv + 可选附加 env（例如
- * measure-depth 需要 NODE_ENV=production）。新增测试时在此表登记——
+ * --shard i/n：只跑本组按登记顺序 round-robin 取到第 i 片的条目（第 i、
+ * i+n、i+2n… 项），ci.yml 用 matrix 把大组拆成并行 job；不带 --shard 即整组。
+ * 新增测试只登记 GROUPS，不必改分片。--list 只打印本片条目不运行。
+ *
+ * 组定义在下方 GROUPS 表：名称 + 完整 argv + 可选附加 env。所有条目默认
+ * NODE_ENV=production：产品入口本就强制生产版 React，dev 版 reconciler 每次
+ * commit 都 performance.measure 并 structured-clone 组件 props，慢一倍以上且
+ * 让时序断言在 CI 上贴线抖动（#805）。显式设置的 NODE_ENV 优先。新增测试时在此表登记——
  * 每条的注释即原 ci.yml 里该 step 上方的说明（迁移时保留）。
  *
  * 行为：
  *   - 逐条运行，实时透传 stdout/stderr（日志仍是每条测试的原始输出）；
  *   - 失败不中断，记录后继续；
- *   - 结束时汇总 ✓/✗ 清单，任一失败 exit 1 并给失败条目打 ::error。
+ *   - 结束时汇总 ✓/✗ 清单（附每条耗时，按登记顺序），任一失败 exit 1 并给
+ *     失败条目打 ::error；在 GitHub Actions 里再往 step summary 写一张按
+ *     耗时降序的表——分片与拆组按这张表的数据来，不靠日志时间戳反推。
+ *   - 每条脚本带 DSH_TUI_RENDER_LOG=ci-render-logs/<名>.log 跑（显式设置优先）：
+ *     通过即删，失败保留，ci.yml 在 job 失败时把目录传成 artifact。时序
+ *     flake（#513/#734 一类"退出备用屏后主屏错一行"）本地复现不出来，只有
+ *     CI 那一次失败的原始帧字节才是证据。
  */
 import { spawnSync } from 'node:child_process'
+import { appendFileSync, mkdirSync, rmSync, statSync } from 'node:fs'
+import { join } from 'node:path'
 
-const env = { ...process.env }
+const env = { NODE_ENV: 'production', ...process.env }
 
 const GROUPS = {
   'render-scroll': [
+    ['verify-image-inspection', ['node', '--import', 'tsx/esm', 'scripts/verify-image-inspection.tsx']],
+    ['verify-terminal-images-sixel', ['node', '--import', 'tsx/esm', 'scripts/verify-terminal-images-sixel.tsx']],
+    ['verify-sixel-transcript', ['node', '--import', 'tsx/esm', 'scripts/verify-sixel-transcript.tsx']],
 // 带断言的回归：提问面板内联输入（issue #9）+ 工具卡排版
 // （⎿ 缩进、diff 红绿行、信封剥离），失败即非零退出。
     ["repro-askpanel", ['node', '--import', 'tsx/esm', 'scripts/repro-askpanel.tsx']],
@@ -42,6 +60,10 @@ const GROUPS = {
     ["verify-thinking-preview", ['node', '--import', 'tsx/esm', 'scripts/verify-thinking-preview.tsx']],
     ["repro-thinking-stream-fold", ['node', '--import', 'tsx/esm', 'scripts/repro-thinking-stream-fold.tsx']],
     ["verify-streaming-markdown-spacing", ['node', '--import', 'tsx/esm', 'scripts/verify-streaming-markdown-spacing.tsx']],
+    ['verify-text-measure-cache', ['node', '--import', 'tsx/esm', 'scripts/verify-text-measure-cache.ts']],
+    ['verify-text-wrap-geometry', ['node', '--import', 'tsx/esm', 'scripts/verify-text-wrap-geometry.tsx']],
+    ['verify-streaming-markdown-blocks', ['node', '--import', 'tsx/esm', 'scripts/verify-streaming-markdown-blocks.tsx']],
+    ['verify-text-paint-budget', ['node', '--import', 'tsx/esm', 'scripts/verify-text-paint-budget.tsx']],
 // 流式平滑揭示回归（dsh-tui.smoothStreaming）：调度器步进/游标生命周期
 // （追加保游标、替换 snap、追平不再重打）+ MessageList 集成（流式行/
 // 非流式 fresh 行渐进揭示、回放行直出、开关关闭直出）+ 组件契约
@@ -91,7 +113,7 @@ const GROUPS = {
     ["verify-subagent-stream-batching", ['node', '--import', 'tsx/esm', 'scripts/verify-subagent-stream-batching.tsx']],
 // 消息列表虚拟化回归：连续高度校正的嵌套更新上限（#129, React #185）、
 // 滚动窗口与 shrink 边界。measure-depth 需生产模式（minified #185）。
-    ["verify-message-measure-depth", ['node', '--import', 'tsx/esm', 'scripts/verify-message-measure-depth.tsx'], { NODE_ENV: 'production' }],
+    ["verify-message-measure-depth", ['node', '--import', 'tsx/esm', 'scripts/verify-message-measure-depth.tsx']],
     ["verify-scroll", ['node', 'scripts/verify-scroll.mjs']],
 // Windows Terminal 全屏拖选+滚轮回归：长 User 气泡的 selection overlay
 // 会污染上一帧；污染帧不得进入 DECSTBM/shiftRows 硬件滚动，否则带背景
@@ -105,7 +127,7 @@ const GROUPS = {
 // unseen-count 上报契约回归：同值重复上报会在密集流式 commit 下把
 // setState 派发进 commit 内，嵌套更新计数连涨越过 React #185 上限
 // （#146 之后残留的活链）。只在计数变化时才允许上报。
-    ["verify-unseen-report-once", ['node', '--import', 'tsx/esm', 'scripts/verify-unseen-report-once.tsx'], { NODE_ENV: 'production' }],
+    ["verify-unseen-report-once", ['node', '--import', 'tsx/esm', 'scripts/verify-unseen-report-once.tsx']],
 // /model 切换 scrollback 重复沉积回归：瞬态面板（补全/picker）必须
 // 走零高度浮层，帧高不随开关涨落——否则帧顶行滚进 scrollback 后被
 // 关闭重绘二次写入，每切一次 /model 多一份启动画。
@@ -118,37 +140,34 @@ const GROUPS = {
 // 预算、行恒 1 不换行——断言零 wrapped 行、Pane 内无幽灵空行、翻页
 // 后标题/页脚/焦点仍在屏。
     ["verify-picker-edge", ['node', '--import', 'tsx/esm', 'scripts/verify-picker-edge.tsx']],
+// 浮层锚点空间预算回归（#493/#698）：OverlayAbove 把 maxHeight 钳到输入簇
+// 上方真实可画行数并把预算交给 picker 窗口化——短会话 + 高终端下标题/
+// 焦点/页脚全部在屏、页脚紧贴输入行；长会话不过度钳制。
+    ["verify-overlay-anchor-budget", ['node', '--import', 'tsx/esm', 'scripts/verify-overlay-anchor-budget.tsx']],
 // 滚动条 gutter 三态回归：rail 悬停/滚动/常驻三模式下 gutter 占位
 // 与内容宽度协商，切换不闪烁、不塌行。
     ["verify-scrollbar-gutter", ['node', '--import', 'tsx/esm', 'scripts/verify-scrollbar-gutter.tsx']],
 // 一键回底回归：pill 常驻显示、End/Enter 回底、远距回底不触发空白
 // 死锁（大偏移一步到位后首帧即有内容）。
     ["verify-back-to-bottom", ['node', '--import', 'tsx/esm', 'scripts/verify-back-to-bottom.tsx']],
+// 底部超滚门控回归：已贴底时 wheel-down 必须是完全惰性的 no-op（不清
+// sticky、不积 delta、不重绘）——修复前每格 sticky flip-flop + pill 闪现
+// + 整屏重绘（流式下可感知为"强拖+闪烁"）；且滚上再滚回仍须正常（着陆
+// 格放行、at-bottom re-pin 恢复 sticky）。
+    ["verify-scrollbox-bottom-overscroll", ['node', '--import', 'tsx/esm', 'scripts/verify-scrollbox-bottom-overscroll.tsx']],
 // 时间线 rail 回归：rail 覆盖全部轮次（含折叠轮），高亮锚定视口顶、
 // ▲/▼ 目标不越过 maxScroll。
     ["verify-timeline-rail", ['node', '--import', 'tsx/esm', 'scripts/verify-timeline-rail.tsx']],
+// 多行 user 的置顶摘要不得向转录左侧出血；宽/窄终端均保留滚动锚定。
+    ['verify-sticky-anchor', ['node', '--import', 'tsx/esm', 'scripts/verify-sticky-anchor.tsx']],
+    ['verify-sticky-anchor-narrow', ['node', '--import', 'tsx/esm', 'scripts/verify-sticky-anchor.tsx'], { DSH_TEST_COLUMNS: '60' }],
 // 恢复历史会话落点回归：/resume 后最新消息末行必须可见且可达
 // （scrollToBottom 补画完成后的锚定终态），不再落屏外。
     ["repro-resume-position", ['node', '--import', 'tsx/esm', 'scripts/repro-resume-position.tsx']],
-// rowsGeneration 缓存身份回归（#713 整合审 blocker 1-3）：/clear 复用
-// row id（同一 live 数组、同长度、同 streaming bits、不同 generation）
-// 后——MessageList 可见行缓存渲染新行；failureHint 不钉在新行上；
-// lastUserRowId 重跟新 transcript 且 auto recap 在新 generation 的首条
-// user 消息即退场。
-    ["verify-rows-generation", ['node', '--import', 'tsx/esm', 'scripts/verify-rows-generation.tsx']],
-// formatWhen 边界确定性回归（#713 整合审 blocker 6）：now→minutes、
-// 分钟内、分钟→小时、小时→天、day 7→绝对日期的精确翻转时刻（嵌套
-// round 语义、oracle 二分），绝对日期后 Infinity（零 wake）。
-    ["verify-format-when-boundary", ['node', '--import', 'tsx/esm', 'scripts/verify-format-when-boundary.ts']],
-// GoalTodoPanel elapsed 基线回归（#713 整合审 blocker 5）：active 推进、
-// paused 冻结零 timer、resume 以已提交 transition 重定基线（标签从 ~0s
-// 重新计）、新 goal id 换新基线——transition 只落在 commit 后的 effect。
-    ["verify-goal-todo-baseline", ['node', '--import', 'tsx/esm', 'scripts/verify-goal-todo-baseline.tsx']],
-// 静态 UI 零空闲唤醒回归（#713）：Chat idle / JobsPanel settled /
-// GoalTodo paused / AgentView 静态列表在静默窗口零 frame，对应活跃态
-// 有 frame；trajectory seam 渲染零 getter 调用（含 mount 时）。
-    ["verify-idle-wakeups", ['node', '--import', 'tsx/esm', 'scripts/verify-idle-wakeups.tsx']],
-    ["verify-trajectory-cache", ['node', '--import', 'tsx/esm', 'scripts/verify-trajectory-cache.tsx']],
+// 全屏转录键盘翻页回归：PgUp/PgDn 一次一页、到底按 at-bottom 契约重粘；
+// help 浮层让位、问询面板不让位（面板在转录下方且不消费这对键）、inline
+// 模式不接管（历史在终端原生 scrollback）、窄终端行为一致。
+    ["verify-transcript-paging", ['node', 'scripts/verify-transcript-paging.mjs']],
   ],
   'input-terminal': [
 // 按键解析回归（issue #110）：Option+Enter（ESC CR）精确/合并/分块
@@ -185,28 +204,6 @@ const GROUPS = {
 // 字节、不得拉回 raw mode——在途回复与鼠标事件由清理后的 re-drain
 // 吞掉，不再落入 shell。
     ["verify-exit-mouse-residue", ['node', '--import', 'tsx/esm', 'scripts/verify-exit-mouse-residue.tsx']],
-// 退出回显窗口回归（#522 的 SSH 慢链路门）：DISABLE_MOUSE 同步写在 raw
-// mode 仍持有时落盘，settle 窗也在 raw 态度过（cooked 恢复只在最后的
-// concludeShutdown）；写前 stdout 队列 barrier 排空预排队帧/ENABLE；
-// 写入失败（fd 与 stream 都抛）仍必进 conclude/handoff/done。
-    ["verify-exit-mouse-disable-order", ['node', '--import', 'tsx/esm', 'scripts/verify-exit-mouse-disable-order.tsx']],
-// finishExit runtime 选择回归（#701 整合审）：显式传入的 render handle 优先
-// 于 instances map——map/process.stdout 指向 B 时 finishExit(...,A) 只
-// begin/conclude A、清理字节只落 A 的流，B 零 latch 零清理；无 handle 时
-// map 兜底仍可用。
-    ["verify-exit-runtime-selection", ['node', '--import', 'tsx/esm', 'scripts/verify-exit-runtime-selection.tsx']],
-// #711（手势/协议闩锁）× #701（两相 shutdown）交叉回归：Case A 手势
-// active 时退出零 probe/ENABLE/DECRQM 且 DISABLE→EXIT_ALT 保序；Case B
-// 分片 SGR candidate active 时退出不等待补全、shutdown 后输入 drain-only；
-// Case C pendingAltScreenReentry/pendingProbe 被 beginShutdown 永久取消；
-// Case D 正常手势的 release→batch-tail→probe 恢复不被 shutdown gate 破坏；
-// 各 Case 均断言 teardown 后 stdin readable listener === 0。
-    ["verify-exit-gesture-protocol", ['node', '--import', 'tsx/esm', 'scripts/verify-exit-gesture-protocol.tsx']],
-// #713（stdout 背压）× #701（shutdown 漏斗）交叉回归（整合审 §8）：饱和
-// stdout + drain listener/fallback 在挂时执行 finishExit——shutdown 窗口
-// 内 emit drain 不得触发普通 frame；DISABLE→EXIT_ALT 保序；结束后
-// drain listener 与 fallback timer 均为 0、stdin readable 为 0。
-    ["verify-exit-backpressure", ['node', '--import', 'tsx/esm', 'scripts/verify-exit-backpressure.tsx']],
 // 组件级拖拽协议回归：无修饰左键 press 捕获 drag target，首动 dragstart、
 // 连续 dragmove、release/focus-out/reset 收尾 dragend；未移动仍走 click，
 // 无 handler 与修饰键区域保留基线文本选择；真实 SGR 管线 + 最小滑块消费者。
@@ -248,18 +245,11 @@ const GROUPS = {
     ["repro-paste-fold", ['node', '--import', 'tsx/esm', 'scripts/repro-paste-fold.tsx']],
 // 图片附件回归：剪贴板位图占位符与图片文件 @ 引用进附件库（#152）。
     ["verify-clipboard-image", ['node', '--import', 'tsx/esm', 'scripts/verify-clipboard-image.ts']],
-// 换名迁移回归（issue #120）：~/.dsh-cc → ~/.dsh-tui 首启复制迁移、
-// resume.txt 双写契约、旧 env 名检测（DSH_CC_RESUME_SESSION 双读不算废弃）。
-    ["verify-legacy-rename", ['node', 'scripts/verify-legacy-rename.mjs']],
 // 拖选复制端到端回归（用户报告：全屏下拖选"只能复制一个字符，只有
 // 输入框文字能复制"）：右侧 gutter 误用 NoSelect fromLeftEdge 把整行
 // 转录拉进不可选取区。真实 Chat 树 + SGR 拖选注入，静息/上滚阅读+
 // 流式并发/流式结束后三场景断言 OSC 52 携带完整选中文本。
     ["repro-drag-select-streaming", ['node', '--import', 'tsx/esm', 'scripts/repro-drag-select-streaming.tsx']],
-// grants 文件 watcher 回归（#713）：目录 watcher 事件驱动通知（原子
-// rename/delete-recreate 均覆盖）、退订即停、父目录不存在时经 2s 轮询
-// fallback 拾取新建（真 fallback 路径——目录本身不存在时 fs.watch 才失败）。
-    ["verify-grants-watch", ['node', '--import', 'tsx/esm', 'scripts/verify-grants-watch.ts']],
   ],
   'session-workspace': [
 // 审批服务配置回归（issue #49 尾巴）：裸组合 cordis.yml 必须挂载
@@ -413,6 +403,16 @@ const GROUPS = {
     ["verify-session-browser-searchbox", ['node', '--import', 'tsx/esm', 'scripts/verify-session-browser-searchbox.tsx']],
   ],
   'channel-ui': [
+// L4 composition boundary plus report/metadata lifetime fences.
+    ["verify-channel-composition", ['node', '--import', 'tsx/esm', 'scripts/verify-channel-composition.ts']],
+    ["verify-channel-owner-lifecycle", ['node', '--import', 'tsx/esm', 'scripts/verify-channel-owner-lifecycle.ts']],
+    ["verify-channel-router-lifecycle", ['node', '--import', 'tsx/esm', 'scripts/verify-channel-router-lifecycle.ts']],
+    ["verify-reports-metadata",  ['node', '--import', 'tsx/esm', 'scripts/verify-reports-metadata.ts']],
+// ChannelUi 读投影边界：会话事件日志（traceEvents）必须零拷贝直通——它每次
+// append 都换新的快照数组，走 detached 投影会 O(events) 重建整条数组，而
+// Chat 每次渲染都读它（长会话 44 万事件实测每帧上百毫秒）。同时钉住 rows
+// 仍然是被投影的冻结副本，修复不得拆掉 detached 契约。
+    ["verify-channel-trace-read", ['node', '--import', 'tsx/esm', 'scripts/verify-channel-trace-read.ts']],
 // channel 层回归：发送链（submit/steer/撤回/打断重投）、compact 折叠、
 // goal/todo 事件回放。曾因不在 CI 而随接口演进静默失效（0.3.6 的
 // installModelSelection、#34 的投递异步化都没被它们拦下），挂进来
@@ -426,6 +426,9 @@ const GROUPS = {
 // classic 仍捆绑眨眼+喷水+摆尾）、随机选取 API 覆盖/钳制/每次挂载
 // 独立重掷、LogoV2 渲染冒烟（粉爱心/灰 Z 上屏后落定消失）。
     ["verify-whale-intro", ['node', '--import', 'tsx/esm', 'scripts/verify-whale-intro.mjs']],
+// 开屏定格后的鲸鱼闲置行为（whaleIdle 设置，默认开）：纯规划器帧选
+// 择与节拍（闲置偶动/入睡/工作唤醒/点击爱心单向播完）、频道接线。
+    ["verify-whale-idle", ['node', '--import', 'tsx/esm', 'scripts/verify-whale-idle.mjs']],
 // 计划退出恢复进入前权限；覆盖延迟切换、会话恢复与未知权限不提权。
     ["verify-plan-exit-restore", ['node', 'scripts/verify-plan-exit-restore.mjs']],
 // 会话切换/清屏卫生：子代理投影（行 map/任务描述队列/仪表盘快照）随
@@ -455,6 +458,9 @@ const GROUPS = {
 // abort 并等压缩落定再 fork 快照（后台提交 checkpoint = "压缩失败后换模型
 // 丢上下文"事故根因）；persistence 类失败与通用失败分开提示。
     ["verify-compact-switch", ['node', '--import', 'tsx/esm', 'scripts/verify-compact-switch.tsx']],
+    ["verify-live-session", ['node', '--import', 'tsx/esm', 'scripts/verify-live-session.ts']],
+    ["verify-session-v3", ['node', '--import', 'tsx/esm', 'scripts/verify-session-v3.ts']],
+    ["verify-session-tree-generations", ['node', '--import', 'tsx/esm', 'scripts/verify-session-tree-generations.ts']],
 // 裸 ● 空行回归：纯思考/纯工具步骤（无文本块）的 assistant/message
 // 不得创建空 assistant 行，否则思考块折叠后转录里多出一个只有
 // ● 前缀、内容为空的行。
@@ -506,7 +512,7 @@ const GROUPS = {
     ["verify-loaded-context-width", ['node', '--import', 'tsx/esm', 'scripts/verify-loaded-context-width.tsx']],
 // Divider 可用宽度回归：横线按 Yoga 实际授予的宽度渲染（测量撑满
 // Box），嵌套在更窄容器里（transcript 旁 2 列 timeline rail 排水沟）
-// 不再按整终端宽度换行到第二行——「Conversation compacted」窄窗劈裂。
+// 不再按整终端宽度换行到第二行——「Session summary is ready」窄窗劈裂。
     ["verify-divider-width", ['node', '--import', 'tsx/esm', 'scripts/verify-divider-width.tsx']],
 // Divider 测量循环回归（React #185 启动即崩）：横线宽度会反馈进 Box 的
 // 实际授予宽度，内容定宽上下文（或同模式测量的兄弟元素）里测量值漂移
@@ -577,6 +583,12 @@ const GROUPS = {
 // 提问面板 hideCustomInput 行为回归：纯选择题隐藏输入行且 Tab/打字
 // 不劫持焦点，纯文本题忽略 hide 标记，多选题默认行为不回退。
     ["verify-askpanel-hide-custom-input", ['node', '--import', 'tsx/esm', 'scripts/verify-askpanel-hide-custom-input.tsx']],
+// 问卷面板粘贴回归：bracketed paste 压平插入（纯换行块不得提交、ANSI/
+// OSC 剥净）、Ctrl+V/Alt+V 异步剪贴板插入到实时光标（读期间打字真竞态
+// 臂、busy 去重）、选项行粘贴追加+附加标签、plan-review 粘贴绝不快选/
+// 批准、隐藏输入题粘贴惰性、超长粘贴上限报错、同 chunk 批量按键经同步
+// ref 依序编辑、emoji 码点步进。
+    ["verify-question-paste", ['node', '--import', 'tsx/esm', 'scripts/verify-question-paste.tsx']],
 // 长问卷列表回归：24 行终端中的 36 个两行 provider 选项必须围绕
 // focusIndex 窗口化，初始和深度导航后焦点 label/单选标记始终可见。
     ["verify-askpanel-long-list", ['node', '--import', 'tsx/esm', 'scripts/verify-askpanel-long-list.tsx']],
@@ -622,6 +634,12 @@ const GROUPS = {
 // 允许、tool/result 落定后孪生弹出/渲染时徽标必须补上（弹出时 + 读取
 // 当前条时重跑活跃判定）。
     ["verify-approval-source-badge", ['node', '--import', 'tsx/esm', 'scripts/verify-approval-source-badge.tsx']],
+// 单行超长文本折叠回归（用户反馈：单行超长文本默认整行渲染，铺成上千视觉
+// 行拖慢转录）：折叠阈值常量 1000 字符、行边界不被改写、短文本零分配快路径；
+// 真实 MessageList 下 user 消息 / assistant 正文 / 工具卡标题（单行超长命令）
+// 与正文都出折叠标记且裁掉的尾巴不在屏上；Ctrl+O 逃生门恢复原文；
+// reasoning 行不折叠（自带三行预览）。
+    ["verify-long-line-fold", ['node', '--import', 'tsx/esm', 'scripts/verify-long-line-fold.tsx']],
   ],
   'flaky-observation': [
 // resize 时间稳定性（借鉴 Codex 的 resize 漂移维度）：落定后不得
@@ -636,36 +654,100 @@ const GROUPS = {
 }
 
 const groupName = process.argv[2]
-const group = GROUPS[groupName]
-if (!group) {
+const wholeGroup = GROUPS[groupName]
+if (!wholeGroup) {
   console.error('[run-ci-group] 未知组名: ' + groupName)
   console.error('可用组: ' + Object.keys(GROUPS).join(', '))
   process.exit(2)
 }
 
-console.log('::group::' + groupName + '（' + group.length + ' 项，失败不中断）')
+/** 解析 --shard i/n（缺省 1/1）与 --list。参数非法一律 exit 2，不能静默跑整组。 */
+const flags = process.argv.slice(3)
+let shard = { index: 1, count: 1 }
+let listOnly = false
+for (let i = 0; i < flags.length; i++) {
+  const flag = flags[i]
+  if (flag === '--list') { listOnly = true; continue }
+  const value = flag === '--shard' ? flags[++i] : flag.startsWith('--shard=') ? flag.slice('--shard='.length) : undefined
+  const m = value === undefined ? null : /^([1-9]\d*)\/([1-9]\d*)$/.exec(value)
+  if (flag !== '--shard' && !flag.startsWith('--shard=')) {
+    console.error('[run-ci-group] 未知参数: ' + flag)
+    process.exit(2)
+  }
+  if (!m || Number(m[1]) > Number(m[2])) {
+    console.error('[run-ci-group] --shard 须为 i/n 且 1 ≤ i ≤ n，收到: ' + String(value))
+    process.exit(2)
+  }
+  shard = { index: Number(m[1]), count: Number(m[2]) }
+}
+const group = wholeGroup.filter((_, i) => i % shard.count === shard.index - 1)
+const label = shard.count === 1 ? groupName : groupName + ' ' + shard.index + '/' + shard.count
+// 分片数超过组内条目数时后面的片是空的：exit 0 会报"全部 0 项通过"，ci.yml 里
+// 一个写错的 matrix 就能让整片静默变绿。空片判配置错误，与非法参数同级。
+if (group.length === 0) {
+  console.error('[run-ci-group] ' + label + ' 没有任何条目（组内共 ' + wholeGroup.length + ' 项）——分片数超过条目数')
+  process.exit(2)
+}
+
+if (listOnly) {
+  console.log(label + '（' + group.length + '/' + wholeGroup.length + ' 项）')
+  for (const [name] of group) console.log('  ' + name)
+  process.exit(0)
+}
+
+const RENDER_LOG_DIR = 'ci-render-logs'
+mkdirSync(RENDER_LOG_DIR, { recursive: true })
+
+console.log('::group::' + label + '（' + group.length + ' 项，失败不中断）')
 const results = []
 for (const entry of group) {
   const [name, argv, extraEnv] = entry
   console.log('\n===== ' + name + ' =====')
+  const renderLog = join(RENDER_LOG_DIR, name + '.log')
+  rmSync(renderLog, { force: true })
+  const startedAt = performance.now()
   const r = spawnSync(argv[0], argv.slice(1), {
-    env: extraEnv ? { ...env, ...extraEnv } : env,
+    env: { DSH_TUI_RENDER_LOG: renderLog, ...env, ...(extraEnv ?? {}) },
     stdio: 'inherit',
     shell: false,
   })
+  const seconds = (performance.now() - startedAt) / 1000
   const failed = r.status !== 0
-  results.push({ name, failed, status: r.status })
-  if (failed) console.log('::error title=' + groupName + '::测试 ' + name + ' 失败（exit ' + r.status + '）——已记录，继续跑同组其余测试')
+  results.push({ name, failed, status: r.status, seconds })
+  if (failed) {
+    console.log('::error title=' + label + '::测试 ' + name + ' 失败（exit ' + r.status + '）——已记录，继续跑同组其余测试')
+    let bytes = 0
+    try { bytes = statSync(renderLog).size } catch { /* 脚本没画帧（纯逻辑测试）：无日志可留 */ }
+    if (bytes > 0) console.log('[run-ci-group] 帧日志已保留: ' + renderLog + '（' + bytes + ' 字节）')
+  } else {
+    rmSync(renderLog, { force: true })
+  }
 }
 console.log('::endgroup::')
 
-console.log('\n' + groupName + ' 汇总：')
-for (const { name, failed, status } of results) {
-  console.log('  ' + (failed ? '✗' : '✓') + ' ' + name + (failed ? '（exit ' + status + '）' : ''))
+const fmt = seconds => seconds.toFixed(1) + 's'
+const total = results.reduce((sum, r) => sum + r.seconds, 0)
+console.log('\n' + label + ' 汇总（共 ' + fmt(total) + '）：')
+for (const { name, failed, status, seconds } of results) {
+  console.log('  ' + (failed ? '✗' : '✓') + ' ' + name + '  ' + fmt(seconds) + (failed ? '（exit ' + status + '）' : ''))
 }
+
+// GitHub Actions step summary：按耗时降序，给分片/拆组提供数据。
+if (process.env.GITHUB_STEP_SUMMARY) {
+  const rows = [...results].sort((a, b) => b.seconds - a.seconds)
+  appendFileSync(process.env.GITHUB_STEP_SUMMARY, [
+    '### ' + label + '：' + results.length + ' 项，共 ' + fmt(total),
+    '',
+    '| 结果 | 测试 | 耗时 |',
+    '| --- | --- | ---: |',
+    ...rows.map(r => '| ' + (r.failed ? '✗ exit ' + r.status : '✓') + ' | ' + r.name + ' | ' + fmt(r.seconds) + ' |'),
+    '',
+  ].join('\n'))
+}
+
 const failedList = results.filter(r => r.failed)
 if (failedList.length > 0) {
-  console.error('\n' + groupName + '：' + failedList.length + '/' + results.length + ' 项失败——' + failedList.map(f => f.name).join(', '))
+  console.error('\n' + label + '：' + failedList.length + '/' + results.length + ' 项失败——' + failedList.map(f => f.name).join(', '))
   process.exit(1)
 }
-console.log('\n' + groupName + '：全部 ' + results.length + ' 项通过')
+console.log('\n' + label + '：全部 ' + results.length + ' 项通过')

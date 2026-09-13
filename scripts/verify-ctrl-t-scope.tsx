@@ -18,7 +18,7 @@ process.env.FORCE_COLOR = '3'
 // locale, none of which a runner is obliged to agree with.
 process.env.DSH_TUI_LANG = 'zh'
 
-const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render }, { Chat }, { QuestionStore }, { settled, sleep }] =
+const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render }, { Chat }, { QuestionStore }, { settled, sleep, viewportLines }] =
   await Promise.all([
     import('node:stream'),
     import('react'),
@@ -193,13 +193,25 @@ const panelHeader = (text: string): string =>
 
 // ── empty transcript: the panel is collapsed; Ctrl+P toggles it, Ctrl+T
 //    still opens the trajectory ────────────────────────────────────────────
-{
+for (const pendingFrame of [false, true]) {
+  console.log(`\nEmpty transcript: ${pendingFrame ? 'pending paint during collapse' : 'normal scheduling'}`)
   const harness = makeHarness(100, 30)
   const localReports: Array<{ title: string; lines: readonly string[] }> = []
   const instance = await mount(harness, makeChannel({
     rows: [],
     pushLocal: (title: string, lines: readonly string[]) => { localReports.push({ title, lines }) },
   }))
+  if (pendingFrame) {
+    const ink = instances.get(harness.stdout as never)!
+    const reanchor = ink.reanchorViewport.bind(ink)
+    let reanchors = 0
+    ink.reanchorViewport = () => {
+      reanchor()
+      // Reproduce a queued animation paint consuming the collapse request
+      // before React commits. Reanchoring must observe the new layout.
+      if (++reanchors === 2) ink.onRender()
+    }
+  }
   check('the startup context panel is on screen', await settled(() => /已加载上下文/.test(harness.screen())))
   check('the collapsed panel claims Ctrl+P', await settled(() => panelHeader(harness.screen()).includes('Ctrl+P')), panelHeader(harness.screen()).trim())
 
@@ -210,13 +222,19 @@ const panelHeader = (text: string): string =>
     harness.screen().split('\n').filter(line => line.includes('/context')).join(' | '))
 
   harness.stdin.write(CTRL_P)
-  check('Ctrl+P collapses the panel again', await settled(() => !harness.screen().includes('你是 dsh')),
-    panelHeader(harness.screen()).trim())
+  check('Ctrl+P collapses the panel again', await settled(() => {
+    const text = viewportLines(harness.term).join('\n')
+    return panelHeader(text).includes('Ctrl+P') && !text.includes('你是 dsh')
+  }),
+    panelHeader(viewportLines(harness.term).join('\n')).trim())
 
   harness.stdin.write(CTRL_T)
   check('Ctrl+T opens the trajectory even before the first message', await settled(() => isScene(harness.screen())),
     harness.screen().split('\n')[0]?.trim())
 
+  // 固定窗:pacing 场景可见与场景按键处理器挂载之间没有可观测完成条件——'q'
+  // 可能在处理器挂上前的第一帧到达而落空（CI 高负载下放大）。
+  await sleep(120)
   harness.stdin.write('q')
   check('q returns to the context summary', await settled(() => /已加载上下文/.test(harness.screen())))
 
@@ -229,7 +247,7 @@ const panelHeader = (text: string): string =>
   instance.unmount()
   instances.delete(process.stdout)
   harness.term.dispose()
-  // 卸载/dispose 的收尾 pacing：无可观测完成条件，保留固定小窗口。
+  // 固定窗:pacing 卸载/dispose 收尾，无可观测完成条件
   await sleep(40)
 }
 
@@ -240,8 +258,8 @@ const panelHeader = (text: string): string =>
     harness,
     makeChannel({ rows: [{ id: 1, kind: 'user', text: '第一条消息' }] }),
   )
-  // 稳定性探针（面板不得出现）：条件从挂载起就成立，轮询会立即返回，
-  // 测不到「不再出现」——保留固定窗口。
+  // 固定窗:探针 面板不得出现——条件从挂载起就成立，轮询会立即返回，
+  // 测不到「不再出现」。
   await sleep(500)
 
   const before = harness.screen()
@@ -250,6 +268,8 @@ const panelHeader = (text: string): string =>
   harness.stdin.write(CTRL_T)
   check('Ctrl+T opens the trajectory scene', await settled(() => isScene(harness.screen())), harness.screen().split('\n')[0]?.trim())
 
+  // 固定窗:pacing 同上，等场景按键处理器挂上
+  await sleep(120)
   harness.stdin.write('q')
   check('q returns to the conversation', await settled(() => !isScene(harness.screen())))
 

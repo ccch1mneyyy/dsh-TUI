@@ -2,8 +2,8 @@
  * dsh-tui color themes — Gentle Mist Blue (雾蓝) family.
  *
  * Two truecolor palettes share one identity: mist blues carry brand, focus,
- * and interaction; body text stays neutral. `light` is the strict Gentle
- * Mist Blue card (warm off-white background #F6F3ED, ink text #343945) for
+ * and interaction; body text stays neutral. `light` uses white panel
+ * surfaces (#FFFFFF) and ink text (#343945) for
  * light terminals; `dark` is its dark-terminal adaptation (warm off-white
  * text, accent-soft blues). `dark-ansi` is the 16-color fallback for
  * terminals without truecolor. The active palette is chosen at startup by
@@ -19,12 +19,16 @@
 export type Theme = {
   autoAccept: string
   bashBorder: string
-  claude: string
+  /** Primary brand/focus color. */
+  accent: string
   toolNameMutate: string
   toolNameExec: string
-  claudeShimmer: string
-  claudeBlue_FOR_SYSTEM_SPINNER: string
-  claudeBlueShimmer_FOR_SYSTEM_SPINNER: string
+  /** Primary brand/focus shimmer color. */
+  accentShimmer: string
+  /** Working activity indicator color. */
+  activity: string
+  /** Working activity indicator shimmer color. */
+  activityShimmer: string
   permission: string
   permissionShimmer: string
   planMode: string
@@ -74,21 +78,15 @@ export type Theme = {
   syntaxPunctuation: string
   syntaxConstant: string
   // Agent colors
-  red_FOR_SUBAGENTS_ONLY: string
-  blue_FOR_SUBAGENTS_ONLY: string
-  green_FOR_SUBAGENTS_ONLY: string
-  yellow_FOR_SUBAGENTS_ONLY: string
-  purple_FOR_SUBAGENTS_ONLY: string
-  orange_FOR_SUBAGENTS_ONLY: string
-  pink_FOR_SUBAGENTS_ONLY: string
-  cyan_FOR_SUBAGENTS_ONLY: string
   // Grove colors
   professionalBlue: string
   // Chrome colors
   chromeYellow: string
   // TUI V2 colors
-  clawd_body: string
-  clawd_background: string
+  /** Mascot body color. */
+  mascotBody: string
+  /** Input/editor background color. */
+  inputBackground: string
   userMessageBackground: string
   userMessageBackgroundHover: string
   messageActionsBackground: string
@@ -99,22 +97,7 @@ export type Theme = {
   rate_limit_empty: string
   fastMode: string
   fastModeShimmer: string
-  briefLabelYou: string
-  briefLabelClaude: string
-  rainbow_red: string
-  rainbow_orange: string
-  rainbow_yellow: string
-  rainbow_green: string
-  rainbow_blue: string
-  rainbow_indigo: string
-  rainbow_violet: string
-  rainbow_red_shimmer: string
-  rainbow_orange_shimmer: string
-  rainbow_yellow_shimmer: string
-  rainbow_green_shimmer: string
-  rainbow_blue_shimmer: string
-  rainbow_indigo_shimmer: string
-  rainbow_violet_shimmer: string
+  userPromptLabel: string
   // Subagent message colors
   subagentBullet: string
   subagentDescription: string
@@ -124,6 +107,80 @@ export type Theme = {
   subagentStatusRunning: string
   subagentStatusCompleted: string
   subagentStatusFailed: string
+}
+
+/**
+ * Theme keys used by pre-semantic theme files and plugin descriptors.
+ * Keep this input compatibility surface separate from the resolved Theme
+ * contract: palettes exposed to consumers contain semantic keys only.
+ */
+export type DeprecatedThemeKey =
+  | 'claude'
+  | 'claudeShimmer'
+  | 'claudeBlue_FOR_SYSTEM_SPINNER'
+  | 'claudeBlueShimmer_FOR_SYSTEM_SPINNER'
+  | 'clawd_body'
+  | 'clawd_background'
+  | 'briefLabelYou'
+
+const RETIRED_THEME_KEYS = [
+  "briefLabelClaude",
+  "red_FOR_SUBAGENTS_ONLY",
+  "blue_FOR_SUBAGENTS_ONLY",
+  "green_FOR_SUBAGENTS_ONLY",
+  "yellow_FOR_SUBAGENTS_ONLY",
+  "purple_FOR_SUBAGENTS_ONLY",
+  "orange_FOR_SUBAGENTS_ONLY",
+  "pink_FOR_SUBAGENTS_ONLY",
+  "cyan_FOR_SUBAGENTS_ONLY",
+  "rainbow_red",
+  "rainbow_red_shimmer",
+  "rainbow_orange",
+  "rainbow_orange_shimmer",
+  "rainbow_yellow",
+  "rainbow_yellow_shimmer",
+  "rainbow_green",
+  "rainbow_green_shimmer",
+  "rainbow_blue",
+  "rainbow_blue_shimmer",
+  "rainbow_indigo",
+  "rainbow_indigo_shimmer",
+  "rainbow_violet",
+  "rainbow_violet_shimmer"
+] as const
+export type RetiredThemeKey = (typeof RETIRED_THEME_KEYS)[number]
+const retiredThemeKeys: ReadonlySet<string> = new Set(RETIRED_THEME_KEYS)
+
+/** Obsolete, unused palette slots are accepted only at input boundaries. */
+export function isRetiredThemeKey(value: string): value is RetiredThemeKey {
+  return retiredThemeKeys.has(value)
+}
+
+export type ThemeColorKey = keyof Theme | DeprecatedThemeKey | RetiredThemeKey
+
+export const DEPRECATED_THEME_KEY_ALIASES: Readonly<Record<DeprecatedThemeKey, keyof Theme>> = Object.freeze({
+  claude: 'accent',
+  claudeShimmer: 'accentShimmer',
+  claudeBlue_FOR_SYSTEM_SPINNER: 'activity',
+  claudeBlueShimmer_FOR_SYSTEM_SPINNER: 'activityShimmer',
+  clawd_body: 'mascotBody',
+  clawd_background: 'inputBackground',
+  briefLabelYou: 'userPromptLabel',
+})
+
+/** Convert a legacy persisted/plugin key to its semantic key. */
+export function normalizeThemeKey(value: string): keyof Theme | undefined {
+  if (Object.prototype.hasOwnProperty.call(DEPRECATED_THEME_KEY_ALIASES, value)) {
+    return DEPRECATED_THEME_KEY_ALIASES[value as DeprecatedThemeKey]
+  }
+  return Object.prototype.hasOwnProperty.call(darkTheme, value)
+    ? value as keyof Theme
+    : undefined
+}
+
+/** Whether a key is accepted at a theme input boundary, including aliases. */
+export function isThemeColorKey(value: unknown): value is ThemeColorKey {
+  return typeof value === 'string' && normalizeThemeKey(value) !== undefined
 }
 
 /** The built-in theme names, in display order. */
@@ -182,12 +239,12 @@ const rgb = (hex: string): string => {
 const darkTheme: Theme = {
   autoAccept: rgb('#B3A0D4'), // Soft violet
   bashBorder: rgb('#D194AE'), // Mist rose
-  claude: rgb('#7DA1DE'), // Accent Soft — mist brand blue
+  accent: rgb('#7DA1DE'), // Accent Soft — mist brand blue
   toolNameMutate: rgb('#E5C07B'), // soft gold — Edit/Write (warm accent)
   toolNameExec: rgb('#56B6C2'), // mist cyan — Bash/exec tools
-  claudeShimmer: rgb('#ABC2EC'), // Border Blue for shimmer effect
-  claudeBlue_FOR_SYSTEM_SPINNER: rgb('#7DA1DE'),
-  claudeBlueShimmer_FOR_SYSTEM_SPINNER: rgb('#ABC2EC'),
+  accentShimmer: rgb('#ABC2EC'), // Border Blue for shimmer effect
+  activity: rgb('#7DA1DE'),
+  activityShimmer: rgb('#ABC2EC'),
   permission: rgb('#ABC2EC'), // Border Blue — pane/dialog accent
   permissionShimmer: rgb('#C9D7F2'),
   planMode: rgb('#7FAE99'), // Muted sage green
@@ -230,18 +287,10 @@ const darkTheme: Theme = {
   syntaxOperator: rgb('#93A1B0'), // blue grey
   syntaxPunctuation: rgb('#7A8694'), // dim blue grey
   syntaxConstant: rgb('#C98291'), // softened rose
-  red_FOR_SUBAGENTS_ONLY: rgb('#D4685E'),
-  blue_FOR_SUBAGENTS_ONLY: rgb('#7496D6'),
-  green_FOR_SUBAGENTS_ONLY: rgb('#66B285'),
-  yellow_FOR_SUBAGENTS_ONLY: rgb('#D1A94E'),
-  purple_FOR_SUBAGENTS_ONLY: rgb('#AC8CD2'),
-  orange_FOR_SUBAGENTS_ONLY: rgb('#DB8C50'),
-  pink_FOR_SUBAGENTS_ONLY: rgb('#D384A8'),
-  cyan_FOR_SUBAGENTS_ONLY: rgb('#6FAFB4'),
   professionalBlue: rgb('#7DA1DE'),
   chromeYellow: rgb('#D8B270'),
-  clawd_body: rgb('#D98A63'), // Warm mascot orange
-  clawd_background: rgb('#000000'),
+  mascotBody: rgb('#D98A63'), // Warm mascot orange
+  inputBackground: rgb('#000000'),
   userMessageBackground: '', // user turn: no fill, gold bold text only (Kimi style)
   userMessageBackgroundHover: rgb('#3B5BDB'), // hover/expand: blue block with gold text
   messageActionsBackground: rgb('#2E333D'),
@@ -252,22 +301,7 @@ const darkTheme: Theme = {
   rate_limit_empty: rgb('#3C414B'),
   fastMode: rgb('#E09A58'),
   fastModeShimmer: rgb('#EAB478'),
-  briefLabelYou: rgb('#FFDF80'),
-  briefLabelClaude: rgb('#7DA1DE'),
-  rainbow_red: rgb('#D98F8A'),
-  rainbow_orange: rgb('#D9A97E'),
-  rainbow_yellow: rgb('#D6BE78'),
-  rainbow_green: rgb('#93BBA0'),
-  rainbow_blue: rgb('#8FA9D6'),
-  rainbow_indigo: rgb('#A89CD4'),
-  rainbow_violet: rgb('#C29CC0'),
-  rainbow_red_shimmer: rgb('#E4AAAA'),
-  rainbow_orange_shimmer: rgb('#E4C09C'),
-  rainbow_yellow_shimmer: rgb('#E2D29C'),
-  rainbow_green_shimmer: rgb('#B0CEBA'),
-  rainbow_blue_shimmer: rgb('#AFBFE2'),
-  rainbow_indigo_shimmer: rgb('#BFB4DE'),
-  rainbow_violet_shimmer: rgb('#D1B4D1'),
+  userPromptLabel: rgb('#FFDF80'),
   subagentBullet: rgb('#D194AE'),
   subagentDescription: rgb('#E8E6E0'),
   subagentModel: rgb('#8D95A6'),
@@ -287,12 +321,12 @@ const darkTheme: Theme = {
 const lightTheme: Theme = {
   autoAccept: rgb('#9B86B8'), // Muted violet (from surface-alt pink-mist)
   bashBorder: rgb('#C07A93'), // Muted rose (from surface-alt pink-mist)
-  claude: rgb('#3F6CC4'), // Primary Blue — brand
+  accent: rgb('#3F6CC4'), // Primary Blue — brand
   toolNameMutate: rgb('#8A6A00'), // deep gold - Edit/Write (warm accent)
   toolNameExec: rgb('#0F7A8A'), // deep cyan - Bash/exec tools
-  claudeShimmer: rgb('#5E88CC'), // Accent Blue for shimmer effect
-  claudeBlue_FOR_SYSTEM_SPINNER: rgb('#3F6CC4'),
-  claudeBlueShimmer_FOR_SYSTEM_SPINNER: rgb('#5E88CC'),
+  accentShimmer: rgb('#5E88CC'), // Accent Blue for shimmer effect
+  activity: rgb('#3F6CC4'),
+  activityShimmer: rgb('#5E88CC'),
   permission: rgb('#3F6CC4'), // Primary Blue — pane/dialog accent
   permissionShimmer: rgb('#5E88CC'),
   planMode: rgb('#4E9675'), // Sage green
@@ -318,8 +352,8 @@ const lightTheme: Theme = {
   diffRemovedDimmed: rgb('#F5E6E4'),
   diffAddedWord: rgb('#A9D3B4'),
   diffRemovedWord: rgb('#E5B3AE'),
-  toolCardBackground: rgb('#E9EFF9'), // cool light blue card
-  toolCardBackgroundDim: rgb('#DEE7F4'), // deeper blue-tinted substrate
+  toolCardBackground: rgb('#FFFFFF'), // neutral white panel surface
+  toolCardBackgroundDim: rgb('#FFFFFF'), // white tool-card substrate
   toolDotExec: rgb('#4E7A4E'),
   toolDotRead: rgb('#3F7E8F'),
   toolDotWrite: rgb('#7A5CA8'),
@@ -335,18 +369,10 @@ const lightTheme: Theme = {
   syntaxOperator: rgb('#5B6672'),
   syntaxPunctuation: rgb('#9AA0A8'),
   syntaxConstant: rgb('#A84472'), // muted rose accent
-  red_FOR_SUBAGENTS_ONLY: rgb('#BE5A52'),
-  blue_FOR_SUBAGENTS_ONLY: rgb('#3F6CC4'),
-  green_FOR_SUBAGENTS_ONLY: rgb('#4E9675'),
-  yellow_FOR_SUBAGENTS_ONLY: rgb('#B98A34'),
-  purple_FOR_SUBAGENTS_ONLY: rgb('#9678B4'),
-  orange_FOR_SUBAGENTS_ONLY: rgb('#C97F4A'),
-  pink_FOR_SUBAGENTS_ONLY: rgb('#C06E97'),
-  cyan_FOR_SUBAGENTS_ONLY: rgb('#5698A0'),
   professionalBlue: rgb('#5E88CC'),
   chromeYellow: rgb('#C99A3F'),
-  clawd_body: rgb('#D98A63'), // Warm mascot orange
-  clawd_background: rgb('#F6F3ED'),
+  mascotBody: rgb('#D98A63'), // Warm mascot orange
+  inputBackground: rgb('#F6F3ED'),
   userMessageBackground: '', // user turn: no fill in light mode, gold text only
   userMessageBackgroundHover: rgb('#DCE4FB'), // subtle blue tint on hover/expand
   messageActionsBackground: rgb('#E4D9E5'),
@@ -357,22 +383,7 @@ const lightTheme: Theme = {
   rate_limit_empty: rgb('#DDD5C7'),
   fastMode: rgb('#D98E4A'),
   fastModeShimmer: rgb('#E2A465'),
-  briefLabelYou: rgb('#A67600'),
-  briefLabelClaude: rgb('#3F6CC4'),
-  rainbow_red: rgb('#D98888'),
-  rainbow_orange: rgb('#D9A276'),
-  rainbow_yellow: rgb('#CEB264'),
-  rainbow_green: rgb('#8AB392'),
-  rainbow_blue: rgb('#87A3D3'),
-  rainbow_indigo: rgb('#9C92C8'),
-  rainbow_violet: rgb('#BB92B8'),
-  rainbow_red_shimmer: rgb('#E4A6A6'),
-  rainbow_orange_shimmer: rgb('#E4BB96'),
-  rainbow_yellow_shimmer: rgb('#DEC988'),
-  rainbow_green_shimmer: rgb('#A9C8AF'),
-  rainbow_blue_shimmer: rgb('#A9BCE0'),
-  rainbow_indigo_shimmer: rgb('#B7AFD8'),
-  rainbow_violet_shimmer: rgb('#CFB0CC'),
+  userPromptLabel: rgb('#A67600'),
   subagentBullet: rgb('#C07A93'),
   subagentDescription: rgb('#343945'),
   subagentModel: rgb('#8991A0'),
@@ -385,7 +396,7 @@ const lightTheme: Theme = {
 
 /**
  * Dark ANSI theme using only the 16 standard ANSI colors, for terminals
- * without true color support (verbatim from Claude Code).
+ * without true color support.
  *
  * User themes (JSON files in ~/.dsh-tui/themes/) and host runtime themes
  * overlay one of these three bases — see customTheme.ts and the adapter seam.
@@ -395,12 +406,12 @@ const lightTheme: Theme = {
 const darkAnsiTheme: Theme = {
   autoAccept: 'ansi:magentaBright',
   bashBorder: 'ansi:magentaBright',
-  claude: 'ansi:blueBright',
+  accent: 'ansi:blueBright',
   toolNameMutate: 'ansi:yellowBright',
   toolNameExec: 'ansi:cyanBright',
-  claudeShimmer: 'ansi:blueBright',
-  claudeBlue_FOR_SYSTEM_SPINNER: 'ansi:blueBright',
-  claudeBlueShimmer_FOR_SYSTEM_SPINNER: 'ansi:blueBright',
+  accentShimmer: 'ansi:cyanBright',
+  activity: 'ansi:blueBright',
+  activityShimmer: 'ansi:cyanBright',
   permission: 'ansi:blueBright',
   permissionShimmer: 'ansi:blueBright',
   planMode: 'ansi:cyanBright',
@@ -443,18 +454,10 @@ const darkAnsiTheme: Theme = {
   syntaxOperator: 'ansi:white',
   syntaxPunctuation: 'ansi:blackBright',
   syntaxConstant: 'ansi:redBright',
-  red_FOR_SUBAGENTS_ONLY: 'ansi:redBright',
-  blue_FOR_SUBAGENTS_ONLY: 'ansi:blueBright',
-  green_FOR_SUBAGENTS_ONLY: 'ansi:greenBright',
-  yellow_FOR_SUBAGENTS_ONLY: 'ansi:yellowBright',
-  purple_FOR_SUBAGENTS_ONLY: 'ansi:magentaBright',
-  orange_FOR_SUBAGENTS_ONLY: 'ansi:redBright',
-  pink_FOR_SUBAGENTS_ONLY: 'ansi:magentaBright',
-  cyan_FOR_SUBAGENTS_ONLY: 'ansi:cyanBright',
   professionalBlue: 'ansi:blueBright',
   chromeYellow: 'ansi:yellowBright',
-  clawd_body: 'ansi:redBright',
-  clawd_background: 'ansi:black',
+  mascotBody: 'ansi:yellowBright',
+  inputBackground: 'ansi:black',
   userMessageBackground: '',
   userMessageBackgroundHover: 'ansi:blue',
   messageActionsBackground: 'ansi:blackBright',
@@ -465,22 +468,7 @@ const darkAnsiTheme: Theme = {
   rate_limit_empty: 'ansi:white',
   fastMode: 'ansi:redBright',
   fastModeShimmer: 'ansi:redBright',
-  briefLabelYou: 'ansi:yellowBright',
-  briefLabelClaude: 'ansi:blueBright',
-  rainbow_red: 'ansi:red',
-  rainbow_orange: 'ansi:redBright',
-  rainbow_yellow: 'ansi:yellow',
-  rainbow_green: 'ansi:green',
-  rainbow_blue: 'ansi:cyan',
-  rainbow_indigo: 'ansi:blue',
-  rainbow_violet: 'ansi:magenta',
-  rainbow_red_shimmer: 'ansi:redBright',
-  rainbow_orange_shimmer: 'ansi:yellow',
-  rainbow_yellow_shimmer: 'ansi:yellowBright',
-  rainbow_green_shimmer: 'ansi:greenBright',
-  rainbow_blue_shimmer: 'ansi:cyanBright',
-  rainbow_indigo_shimmer: 'ansi:blueBright',
-  rainbow_violet_shimmer: 'ansi:magentaBright',
+  userPromptLabel: 'ansi:yellowBright',
   subagentBullet: 'ansi:magentaBright',
   subagentDescription: 'ansi:whiteBright',
   subagentModel: 'ansi:white',
@@ -489,6 +477,50 @@ const darkAnsiTheme: Theme = {
   subagentStatusRunning: 'ansi:blueBright',
   subagentStatusCompleted: 'ansi:greenBright',
   subagentStatusFailed: 'ansi:redBright',
+}
+
+interface NormalizedThemeCacheEntry {
+  readonly signature: string
+  readonly palette: Theme
+}
+
+const normalizedThemeCache = new WeakMap<object, NormalizedThemeCacheEntry>()
+
+/** Include every own value so a mutable legacy resolver cannot serve stale data. */
+function themeObjectSignature(raw: Record<string, unknown>): string {
+  return Object.keys(raw)
+    .sort()
+    .map(key => `${key.length}:${key}=${typeof raw[key]}:${String(raw[key])}`)
+    .join('|')
+}
+
+/**
+ * Normalize a palette returned by an older resolver or plugin. Resolvers are
+ * process-local extension points, so an already loaded plugin may still
+ * return the pre-semantic keys after this package has been upgraded. Canonical
+ * keys win when both forms are present; aliases are removed from the resolved
+ * palette so every consumer sees one stable Theme shape.
+ */
+export function normalizeThemePalette(value: unknown): Theme | undefined {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return undefined
+  const raw = value as Record<string, unknown>
+  const hasDeprecatedKey = (Object.keys(DEPRECATED_THEME_KEY_ALIASES) as DeprecatedThemeKey[])
+    .some(key => Object.prototype.hasOwnProperty.call(raw, key))
+  if (!hasDeprecatedKey && !Object.keys(raw).some(isRetiredThemeKey)) return value as Theme
+  const signature = themeObjectSignature(raw)
+  const cached = normalizedThemeCache.get(raw)
+  if (cached?.signature === signature) return cached.palette
+  const normalized = { ...raw }
+  for (const key of RETIRED_THEME_KEYS) delete normalized[key]
+  for (const [deprecated, canonical] of Object.entries(DEPRECATED_THEME_KEY_ALIASES) as [DeprecatedThemeKey, keyof Theme][]) {
+    if (normalized[canonical] === undefined && typeof normalized[deprecated] === 'string') {
+      normalized[canonical] = normalized[deprecated]
+    }
+    delete normalized[deprecated]
+  }
+  const palette = Object.freeze(normalized as Theme)
+  normalizedThemeCache.set(raw, { signature, palette })
+  return palette
 }
 
 /**
@@ -517,7 +549,9 @@ export function getTheme(themeName: ThemeName): Theme {
       // resolver that returns undefined declines the name and lets the next
       // layer try; both layers still fall back to the dark identity below.
       const custom = customThemeResolver?.(themeName)
-      return custom ?? runtimeThemeResolver?.(themeName) ?? darkTheme
+      if (custom !== undefined) return normalizeThemePalette(custom) ?? darkTheme
+      const runtime = runtimeThemeResolver?.(themeName)
+      return normalizeThemePalette(runtime) ?? darkTheme
     }
   }
 }
@@ -618,7 +652,7 @@ export function isThemeAvailable(themeName: ThemeName): boolean {
 
 /**
  * The theme chosen at startup, mirrored module-level so non-React rendering
- * (markdown inline code in cc/markdown.ts) can resolve palette colors
+ * (markdown inline code in terminal-utils/markdown.ts) can resolve palette colors
  * without a context. ThemeProvider sets this once detection settles.
  */
 let activeThemeName: ThemeName = 'dark'

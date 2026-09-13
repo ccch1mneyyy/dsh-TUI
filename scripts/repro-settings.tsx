@@ -184,11 +184,10 @@ const instance = await render(
 await settle(() => screenText().includes('Explore the uncharted'))
 
 // 1. /settings opens the screen with the section and its seeded values.
-// The 200ms below stays a fixed ordering sleep: the Enter that follows needs
-// the slash-completion overlay to be key-ready, which is not observable as
-// screen content.
+// The Enter that follows needs the slash-completion overlay to be key-ready,
+// which is not observable as screen content.
 stdin.write('/settings')
-await sleep(200)
+await sleep(200) // 固定窗:pacing 等补全浮层收键就绪，无可观测锚点
 stdin.write('\r')
 assert(await settled(() => screenText().includes('Plugin settings')), 'screen opens with the title')
 assert(await settled(() => screenText().includes('Demo settings') && screenText().includes('(demo-plugin)')), 'section header renders')
@@ -209,15 +208,15 @@ assert(docs['demo-plugin']?.value.enabled === false, 'host document reflects the
 // 3. Number field: ↓ focus, Enter edit (the draft seeds from the current
 // value), backspace the old digit away, type, Enter confirms AND auto-saves.
 // 下面的逐键 200ms 均为编辑器模式切换的 pacing：焦点/编辑态只体现为颜色与
-// 光标，无可观测的纯文本条件，保留固定窗口。
+// 光标，无可观测的纯文本条件。
 stdin.write('\x1b[B') // ↓
-await sleep(200)
+await sleep(200) // 固定窗:pacing 焦点移动步间，焦点态不可观测
 stdin.write('\r')
-await sleep(200)
+await sleep(200) // 固定窗:pacing 进入编辑态步间，编辑态不可观测
 stdin.write('\x7f') // backspace the seeded '3'
-await sleep(200)
+await sleep(200) // 固定窗:pacing 逐键步间
 stdin.write('10')
-await sleep(200)
+await sleep(200) // 固定窗:pacing 逐键步间
 stdin.write('\r')
 assert(await settled(() => mutations.length === 2), 'confirmed number draft auto-saved')
 const secondOps = mutations[1]?.ops as { op: string; path: readonly string[]; value?: unknown }[]
@@ -228,10 +227,10 @@ assert(secondOps?.[0]?.op === 'set' && secondOps[0].path.join('.') === 'limit' &
 // (unstable host identity re-firing host-keyed effects) shows up as
 // unbounded growth; a settled screen makes no calls at all. The bound is
 // generous — a real loop runs thousands of renders in this window.
-// Stability probe (calls must NOT grow): polling an already-true condition
-// would return immediately and test nothing — keep the fixed window.
+// Stability probe: settingsHost() calls must NOT grow — polling an
+// already-true condition would return immediately and test nothing.
 const quietCalls = settingsHostCalls
-await sleep(600)
+await sleep(600) // 固定窗:探针 空闲观察窗内 settingsHost() 调用数不得增长
 assert(settingsHostCalls - quietCalls < 50, 'idle screen settles (no render loop through the host)')
 
 // 5. Esc just leaves — auto-save means there is never anything to discard,
@@ -285,23 +284,23 @@ const groupInstance = await render(
 )
 assert(await settled(() => groupScreenText().includes('Name') && groupScreenText().includes('Advanced')), 'group root renders ungrouped fields and group entry', groupScreenText())
 assert(!groupScreenText().includes('Endpoint'), 'group root hides grouped fields', groupScreenText())
-// 焦点移动只体现为颜色高亮，无可观测的纯文本条件，保留固定 pacing。
+// 焦点移动只体现为颜色高亮，无可观测的纯文本条件。
 groupStdin.write('\x1b[B') // ↓ from Name to Advanced
-await sleep(200)
+await sleep(200) // 固定窗:pacing 焦点移动步间
 groupStdin.write('\r')
 // The headless renderer leaves the first row stale across in-place screen
 // transitions, so assert navigation through group-only content and its hint.
 assert(await settled(() => groupScreenText().includes('Endpoint') && groupScreenText().includes('Esc back')), 'Enter opens the group page', groupScreenText())
 assert(!groupScreenText().includes('Name'), 'group page shows only its fields', groupScreenText())
-// 编辑器模式切换与逐键退格的 pacing：编辑态无可观测的纯文本条件，保留固定窗口。
+// 编辑器模式切换与逐键退格的 pacing：编辑态无可观测的纯文本条件。
 groupStdin.write('\r')
-await sleep(150)
+await sleep(150) // 固定窗:pacing 进入编辑态步间
 for (let i = 0; i < 3; i++) {
   groupStdin.write('\x7f')
-  await sleep(50)
+  await sleep(50) // 固定窗:pacing 逐键退格步间
 }
 groupStdin.write('new')
-await sleep(150)
+await sleep(150) // 固定窗:pacing 键入与确认之间的步间
 groupStdin.write('\r')
 // 写入落地后 mutations[2] 即终态，后续为同步派生断言。
 const groupSaved = await settled(() => mutations.length === 3)
@@ -312,14 +311,14 @@ assert(groupOps?.[0]?.op === 'set' && groupOps[0].path.join('.') === 'advanced.e
 assert((docs['group-plugin']?.value.advanced as Record<string, unknown> | undefined)?.endpoint === 'new', 'nested group value reaches the host document')
 groupStdin.write('\x1b')
 assert(await settled(() => groupScreenText().includes('Advanced') && !groupScreenText().includes('Endpoint')), 'Esc returns to the root page', groupScreenText())
-// 焦点移动只体现为颜色高亮，无可观测的纯文本条件，保留固定 pacing。
+// 焦点移动只体现为颜色高亮，无可观测的纯文本条件。
 groupStdin.write('\x1b[B')
-await sleep(200)
+await sleep(200) // 固定窗:pacing 焦点移动步间
 groupStdin.write('\r')
 assert(await settled(() => groupScreenText().includes('new')), 're-entering the group shows the saved value', groupScreenText())
-// 两次 Esc 之间的处理顺序无可观测中间条件（第一次 Esc 不改变可断言的纯文本），保留固定 pacing。
+// 两次 Esc 之间的处理顺序无可观测中间条件（第一次 Esc 不改变可断言的纯文本）。
 groupStdin.write('\x1b')
-await sleep(200)
+await sleep(200) // 固定窗:pacing 两次 Esc 之间无可观测中间态
 groupStdin.write('\x1b')
 assert(await settled(() => groupClosed), 'clean group screen exits from the root page')
 await groupInstance.unmount()
@@ -365,7 +364,7 @@ assert(await settled(() => smallScreenText().includes('Field 0') && !smallScreen
 // 逐键 ↓ 的 pacing：中间焦点位置只体现为颜色，无可观测的纯文本条件。
 for (let i = 0; i < 15; i++) {
   smallStdin.write('\x1b[B')
-  await sleep(120)
+  await sleep(120) // 固定窗:pacing 逐键 ↓ 步间
 }
 assert(await settled(() => smallScreenText().includes('Field 15')), 'focus on the last field scrolls it into view', smallScreenText())
 assert(await settled(() => !smallScreenText().includes('Field 0')), 'scrolled-out fields leave the viewport', smallScreenText())
@@ -407,7 +406,7 @@ assert(await settled(() => groupedSmallScreenText().includes('Grouped field 0') 
 // 逐键 ↓ 的 pacing：中间焦点位置只体现为颜色，无可观测的纯文本条件。
 for (let i = 0; i < 15; i++) {
   groupedSmallStdin.write('\x1b[B')
-  await sleep(120)
+  await sleep(120) // 固定窗:pacing 逐键 ↓ 步间
 }
 assert(await settled(() => groupedSmallScreenText().includes('Grouped field 15')), 'short group page follows focus to its last field', groupedSmallScreenText())
 assert(await settled(() => !groupedSmallScreenText().includes('Grouped field 0')), 'short group page windows scrolled-out fields', groupedSmallScreenText())
@@ -490,7 +489,7 @@ assert(await settled(() => lineOf('Enabled') >= 0), 'stability harness opens', s
 const modeLineBefore = lineOf('Mode')
 const retryLineBefore = lineOf('Retry limit')
 stableStdin.write('\x1b[B')
-await sleep(200)
+await sleep(200) // 固定窗:探针 行位置不得因焦点移动而回流，是已成立的不变量
 assert(lineOf('Mode') === modeLineBefore && lineOf('Retry limit') === retryLineBefore, 'rows never reflow when focus moves', stableScreenText())
 assert(stableLines()[retryLineBefore]?.trimEnd().endsWith('3 │') === true, 'hinted row keeps its value flush right while focused', stableScreenText())
 // The hint may be truncated on a narrow terminal, but it renders on the left
@@ -499,6 +498,8 @@ assert(stableScreenText().includes('Attempts befor') && stableScreenText().inclu
 // ↓ to the unhinted "Mode": same guarantees, and the stale hint is gone. The
 // select renders the option's label as a ‹ chip › flush against the border.
 stableStdin.write('\x1b[B')
+// 固定窗:探针 值列不得移动、失焦后 hint 不得残留、上方行不得推挤下方行——
+// 三条都是不变量断言，轮询已成立条件立即返回等于没测。
 await sleep(200)
 assert(stableLines()[lineOf('Mode')]?.includes('Fast') === true && stableLines()[lineOf('Mode')]?.trimEnd().endsWith('› │') === true, 'select chip shows the option label flush right while focused', stableScreenText())
 assert(!stableScreenText().includes('Attempts before giving up'), 'hint leaves the help bar when its field loses focus', stableScreenText())
@@ -506,9 +507,9 @@ assert(stableLines()[retryLineBefore]?.trimEnd().endsWith('3 │') === true, 'a 
 // Toggle a boolean: the chip flips in place (value column never moves) and
 // the change auto-saves — the toast confirms and the flipped chip persists.
 stableStdin.write('\x1b[A')
-await sleep(150)
+await sleep(150) // 固定窗:pacing 焦点移动步间，焦点位置只体现为颜色
 stableStdin.write('\x1b[A')
-await sleep(150)
+await sleep(150) // 固定窗:pacing 焦点移动步间，焦点位置只体现为颜色
 assert(stableLines()[lineOf('Enabled')]?.includes('[✓') === true, 'boolean true renders as a checked chip', stableScreenText())
 stableStdin.write('\r')
 assert(await settled(() => stableLines()[lineOf('Enabled')]?.includes('[  ]') === true), 'toggled chip flips without moving the value column', stableScreenText())
@@ -517,7 +518,7 @@ assert(await settled(() => stableScreenText().includes('Saved demo-plugin')), 's
 // flight — the pending chain writes both in order instead of racing the
 // revision fence, and the last toggle wins the document.
 stableStdin.write('\r')
-await sleep(50)
+await sleep(50) // 固定窗:pacing 两次 Enter 分成两个 stdin 批次，第二次须在首次保存仍在途时到达
 stableStdin.write('\r')
 assert(await settled(() => stableWrites === 3), `rapid toggles serialize into ordered writes (writes=${stableWrites})`, stableScreenText())
 assert(stableDocs['demo-plugin']?.value.enabled === false, 'the last rapid toggle wins the document')

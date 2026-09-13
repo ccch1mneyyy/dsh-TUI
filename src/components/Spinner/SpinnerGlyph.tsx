@@ -1,6 +1,6 @@
 import React from 'react'
 import Box from '../../ink/components/Box.js'
-import Text from '../../ink/components/Text.js'
+import Text from '../design-system/ThemedText.js'
 import { getTheme, type Theme } from '../../theme.js'
 import { useTheme } from '../design-system/ThemeProvider.js'
 import { getDefaultCharacters, interpolateColor, parseRGB, toRGBColor } from './spinnerUtils.js'
@@ -20,8 +20,8 @@ type Props = {
 }
 
 /**
- * The animated spinner glyph (·✢*✶✻✽ cycle), mirroring Claude Code's
- * `Spinner/SpinnerGlyph.tsx`. Interpolates toward red when stalled.
+ * The animated breathing glyph. Its fixed two-column slot keeps the message
+ * aligned while it pulses and while reduced-motion mode is active.
  */
 export function SpinnerGlyph({
   frame,

@@ -33,8 +33,8 @@ function safeExportPath(packageRoot, target, label) {
 /**
  * Build a tiny package-resolution tree for source-only upstream checkouts.
  *
- * Alpha is not published to npm and its checkout does not contain generated
- * lib/. The production patch deliberately probes package exports with
+ * Source checkouts do not contain generated lib/. The production patch
+ * deliberately probes package exports with
  * require.resolve(), so the verifier materializes only the declared export
  * target after first checking that its TypeScript source exists. Preset files
  * are copied from the real checkout; no product code is replaced by a mock.

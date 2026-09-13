@@ -2,8 +2,8 @@
 
 import { randomUUID } from 'node:crypto'
 import type { Context } from '@deepseek-ai/cordis'
-import type { ComponentManifest, PluginManifest } from '@dsh-std/manifest'
-import { normalizePermissionScope, scopeCovers } from '../plugin-spec/permission-scope.js'
+import type { ComponentManifest, PluginManifest } from '../adapter/standard/types.js'
+import { normalizePermissionScope, scopeCovers } from '../adapter/standard/permission-scope.js'
 import { activationFiber, bindCallerEffect } from './host-access.js'
 
 export type ComponentIdentityErrorCode = 'COMPONENT_NOT_ADMITTED' | 'COMPONENT_ALREADY_ADMITTED'

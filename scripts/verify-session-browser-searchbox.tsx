@@ -32,6 +32,10 @@ process.env.FORCE_COLOR = '3'
 process.env.DSH_TUI_THEME = 'dark'
 process.env.DSH_TUI_LANG = 'zh'
 
+// 静态 import 会提升到上面的 env 钉死之前，但 term-test 只读 process.env.CI，
+// 与语言/主题无关，顺序安全。
+import { settle, settled } from './lib/term-test.mjs'
+
 const [
   { PassThrough, Writable },
   React,
@@ -164,7 +168,7 @@ function makeHarness(cols: number, rows: number) {
   const type = async (text: string, paceMs = 140): Promise<void> => {
     for (const ch of text) {
       stdin.write(ch)
-      await sleep(paceMs)
+      await sleep(paceMs) // 固定窗:pacing 逐键步间，保证每键各自成 chunk 与渲染帧
     }
   }
   return { term, stdout, stderr, stdin, lines, wrappedContinuations, searchRow, renameRow, type }
@@ -188,8 +192,7 @@ async function mountBrowser(cols = 120, rows = 30) {
   )
   // 等会话列表异步加载完成（s1 标题上屏）再发键。哨兵是 channel stub 的
   // 数据文案，不随界面语言变化。
-  const deadline = Date.now() + 4000
-  while (Date.now() < deadline && !h.lines().some(l => l.includes('全面分析'))) await sleep(30)
+  await settle(() => h.lines().some(l => l.includes('全面分析')), { timeoutMs: 4000 })
   return { h, instance }
 }
 
@@ -233,8 +236,7 @@ async function mountTree(cols = 120, rows = 30) {
   )
   // 语言无关哨兵：SearchBox 的 ⌕ 前缀恒渲染（不依赖本地化文案），出现即
   // 搜索框已挂载，可直接发键。
-  const deadline = Date.now() + 4000
-  while (Date.now() < deadline && !h.lines().some(l => l.includes('⌕'))) await sleep(30)
+  await settle(() => h.lines().some(l => l.includes('⌕')), { timeoutMs: 4000 })
   return { h, instance }
 }
 
@@ -255,27 +257,27 @@ async function mountTree(cols = 120, rows = 30) {
   )
   instance.unmount()
   h.term.dispose()
-  await sleep(20)
+  await sleep(20) // 固定窗:pacing 卸载/dispose 收尾
 }
 
 // ── 3+4：IME 整段上屏 + 退格 ────────────────────────────────────────────
 {
   const { h, instance } = await mountBrowser()
   h.stdin.write('深度')
-  await sleep(200)
   check(
     "首次上屏 '深度'：完整可见",
-    h.searchRow().includes('深度'),
+    await settled(() => h.searchRow().includes('深度')),
     `searchRow=${JSON.stringify(h.searchRow().slice(0, 40))}`,
   )
   h.stdin.write('思考')
-  await sleep(200)
   check(
     "二次上屏后 '深度思考' 完整可见",
-    h.searchRow().includes('深度思考'),
+    await settled(() => h.searchRow().includes('深度思考')),
     `searchRow=${JSON.stringify(h.searchRow().slice(0, 40))}`,
   )
   h.stdin.write('\x7f') // backspace
+  // 固定窗:待迁移 断言条件 '深度思' 在退格前就已成立（'深度思考' 含 '深度思'），
+  // settled 会在旧屏立即返回；要迁移得先换一个能区分新旧查询的谓词。
   await sleep(200)
   check(
     "退格后剩余查询 '深度思' 完整可见",
@@ -284,17 +286,16 @@ async function mountTree(cols = 120, rows = 30) {
   )
   instance.unmount()
   h.term.dispose()
-  await sleep(20)
+  await sleep(20) // 固定窗:pacing 卸载/dispose 收尾
 }
 
 // ── 5：rename 编辑器（预填标题 + 追加） ─────────────────────────────────
 {
   const { h, instance } = await mountBrowser()
   h.stdin.write('\x12') // ctrl+r → rename，预填 focused 标题
-  await sleep(200)
   check(
     'rename 预填标题完整可见',
-    h.renameRow().includes(S1_TITLE),
+    await settled(() => h.renameRow().includes(S1_TITLE)),
     `renameRow=${JSON.stringify(h.renameRow().slice(0, 60))}`,
   )
   await h.type('XX')
@@ -305,7 +306,7 @@ async function mountTree(cols = 120, rows = 30) {
   )
   instance.unmount()
   h.term.dispose()
-  await sleep(20)
+  await sleep(20) // 固定窗:pacing 卸载/dispose 收尾
 }
 
 // ── 6+7：/tree 搜索（同一前提违反，修复前必红） ─────────────────────────
@@ -319,6 +320,8 @@ async function mountTree(cols = 120, rows = 30) {
   )
   // 单 chunk 整段到达（等价粘贴）：查询一次到位，围绕 caret 只显示尾部窗口。
   h.stdin.write(`START${'x'.repeat(150)}END`)
+  // 固定窗:待迁移 同一个 sleep 服务下面三条断言（尾部可见 / 头部滚出 / 不折行），
+  // 不是「一个 sleep 一条断言」的平凡改写形态。
   await sleep(300)
   check(
     "/tree 超长查询：尾部 'END' 可见",
@@ -337,7 +340,7 @@ async function mountTree(cols = 120, rows = 30) {
   )
   instance.unmount()
   h.term.dispose()
-  await sleep(20)
+  await sleep(20) // 固定窗:pacing 卸载/dispose 收尾
 }
 
 if (failed > 0) {

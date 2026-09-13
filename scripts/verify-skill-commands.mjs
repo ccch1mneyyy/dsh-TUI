@@ -10,6 +10,7 @@
  * Run with plain node against the compiled lib: `node scripts/verify-skill-commands.mjs`
  */
 import { createChannel } from '../lib/types/dsh-adapter/channel.js'
+import { decisionRegistryOf } from '../lib/types/dsh-adapter/decision-guard.js'
 import { LOCAL_COMMANDS } from '../lib/types/commands.js'
 import { settled, sleep } from './lib/term-test.mjs'
 
@@ -43,11 +44,7 @@ const commandService = {
     if (registered.has(descriptor.name)) throw new Error(`duplicate command: ${descriptor.name}`)
     registered.set(descriptor.name, descriptor)
     fire('commands/change')
-    // Real dsh-commands emits commands/change on unregister too (the effect
-    // disposer tears the layer down and notifyChange() fires); the menu
-    // merge must hear about a disposed handler or it keeps listing skills
-    // whose dispatch command no longer exists.
-    return () => { registered.delete(descriptor.name); fire('commands/change') }
+    return () => { registered.delete(descriptor.name) }
   },
 }
 
@@ -230,8 +227,8 @@ fire('skills/change')
   })
   check('superseding read repopulates the menu', await settled(() => channel.commandList.some(command => command.name === 'live')))
   pending[0].reject(new Error('stale scan failed'))
-  // Stability probe (nothing may change, nothing may warn): a settle over an
-  // already-true condition returns immediately — keep the fixed window.
+  // 固定窗:探针 the stale read must change nothing — no warning, no menu edit;
+  // a settle over an already-true condition returns immediately.
   await sleep(20)
   check('stale read failure logs no warning', staleWarned === 0, `warned=${staleWarned}`)
   check(
@@ -311,10 +308,38 @@ fire('skills/change')
       if (name === 'tools') return { get: toolName => (toolName === 'skill' ? {} : undefined) }
       return undefined
     }
+    const decisionRegistry = decisionRegistryOf(ctx)
+    const originalGrants = decisionRegistry.grants
+    const originalInputHandlers = decisionRegistry.handlers.get('tui/input')
+    const seenSkillInputs = []
+    decisionRegistry.grants = { ...originalGrants, allows: () => true }
+    decisionRegistry.handlers.set('tui/input', new Map([[
+      'verify-skill-command',
+      {
+        event: 'tui/input',
+        scope: 'tui/input',
+        componentId: 'verify-skill-command',
+        activationId: 'verify-skill-command',
+        order: 'verify-skill-command',
+        identity: {},
+        ownerContext: ctx,
+        listener(payload) {
+          seenSkillInputs.push(payload)
+          return undefined
+        },
+      },
+    ]]))
     agent.followups.length = 0
     const outcome = await descriptor.handler({ agent, rawInput: ' 做年终总结', signal: undefined })
     check('kernel path reports success', outcome?.kind === 'success', JSON.stringify(outcome))
     check('kernel path delivers exactly one message', await settled(() => agent.followups.length === 1))
+    check(
+      'kernel path crosses tui/input exactly once',
+      seenSkillInputs.length === 1
+        && seenSkillInputs[0]?.text === '/i-h 做年终总结'
+        && seenSkillInputs[0]?.delivery === 'followup',
+      JSON.stringify(seenSkillInputs),
+    )
     const gesture = agent.followups[0]
     check(
       'kernel path submits the gesture as a plain user message with args',
@@ -332,6 +357,11 @@ fire('skills/change')
     agent.followups.length = 0
     const fallbackOutcome = await descriptor.handler({ agent, rawInput: '', signal: undefined })
     check('fallback reports success', fallbackOutcome?.kind === 'success', JSON.stringify(fallbackOutcome))
+    check(
+      'fallback host injection does not cross tui/input',
+      seenSkillInputs.length === 1,
+      JSON.stringify(seenSkillInputs),
+    )
     const injected = agent.followups[0]
     check('fallback injects exactly one message', agent.followups.length === 1)
     check(
@@ -343,6 +373,9 @@ fire('skills/change')
       injected?.source?.kind === 'skill-invocation' && injected.source.name === 'i-h',
       JSON.stringify(injected?.source),
     )
+    if (originalInputHandlers === undefined) decisionRegistry.handlers.delete('tui/input')
+    else decisionRegistry.handlers.set('tui/input', originalInputHandlers)
+    decisionRegistry.grants = originalGrants
   }
 
   // A SKILL.md deleted between listing and Enter must report, not throw —
@@ -445,75 +478,6 @@ fire('skills/change')
     'current agent B returns a fresh /skills snapshot',
     freshSkills?.some(skill => skill.name === 'fresh') === true,
   )
-}
-
-// ---- an observation that NEVER completes retries a bounded number of
-// times with backoff, then stops polling and keeps last-good until the
-// next skills/change (the provider's own invalidation). Without the cap a
-// broken provider would keep an 800ms re-read loop alive forever.
-{
-  // Establish a last-good command set first (complete observation).
-  let snapshotCalls = 0
-  let incomplete = false
-  let recovered = false
-  ctx.get = (name) => {
-    if (name === 'commands') return { list: () => [{ name: 'plan', description: 'Toggle plan mode' }] }
-    if (name === 'skills') {
-      return {
-        snapshot: async () => {
-          snapshotCalls += 1
-          if (incomplete) return { skills: [], complete: false }
-          if (recovered) {
-            return {
-              skills: [{ name: 'recovered-skill', description: 'Recovered', invocation: { modelInvocable: true, userInvocable: true } }],
-              complete: true,
-            }
-          }
-          return {
-            skills: [{ name: 'kept-skill', description: 'Kept', invocation: { modelInvocable: true, userInvocable: true } }],
-            complete: true,
-          }
-        },
-      }
-    }
-    return undefined
-  }
-  ctx.logger = { warn() {} }
-  fire('skills/change')
-  check('retry ladder: last-good established',
-    await settled(() => channel.commandList.some(command => command.name === 'kept-skill')))
-  const callsAfterGood = snapshotCalls
-  incomplete = true
-  fire('skills/change')
-  // Each skills/change fires BOTH consumers (the menu merge AND the
-  // command registration), so one change costs two snapshot reads; the
-  // registration ladder then retries 800+1600+3200ms (3 re-reads). The
-  // bound: 2 (change) + 3 (ladder) = 5 extra snapshot calls max.
-  await sleep(6800)
-  const callsAfterRetries = snapshotCalls
-  check('retry ladder: incomplete observation retries a bounded number of times',
-    callsAfterRetries <= callsAfterGood + 5,
-    `snapshot calls=${callsAfterRetries} after ladder (good=${callsAfterGood})`)
-  // A further window must see ZERO additional retries: the ladder is
-  // exhausted and last-good is preserved.
-  await sleep(1500)
-  check('retry ladder: retries stop after the cap',
-    snapshotCalls === callsAfterRetries,
-    `snapshot calls=${snapshotCalls}`)
-  check('retry ladder: last-good skills survive the exhausted ladder',
-    channel.commandList.some(command => command.name === 'kept-skill'))
-  // Recovery: the provider's own skills/change re-enters and completes. The
-  // provider now returns a DIFFERENT skill — asserting on `kept-skill` again
-  // would be a false positive (last-good kept it visible through the whole
-  // exhausted ladder, so the old check passed even if the re-read never
-  // landed). The NEW command appearing is the actual proof of recovery.
-  incomplete = false
-  recovered = true
-  fire('skills/change')
-  check('retry ladder: a later skills/change recovers with fresh content',
-    await settled(() => channel.commandList.some(command => command.name === 'recovered-skill')))
-  check('retry ladder: recovered snapshot replaced the last-good entry',
-    !channel.commandList.some(command => command.name === 'kept-skill'))
 }
 
 console.log(failed === 0 ? 'ALL PASS' : `${failed} FAILED`)

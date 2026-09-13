@@ -1,6 +1,7 @@
 import React from 'react'
 import { Box, Text } from '../ui.js'
-import type { Channel, ChannelGoal, TodoPanelItem } from '../dsh-adapter/channel.js'
+import type { ChannelUi as Channel } from '../adapter/channel/ui-policy.js'
+import type { ChannelGoal, TodoPanelItem } from '../dsh-adapter/channel.js'
 import { t } from '../i18n.js'
 import { modLabel } from '../utils/modifiers.js'
 
@@ -130,41 +131,20 @@ export function GoalTodoPanel({
     ? allTodos
     : allTodos.filter(todo => todo.status !== 'completed')
 
-  // Local goal timer: remember when this goal id first rendered AND when it
-  // last (re)entered the active phase. Both refs are written ONLY from the
-  // committed transition effect below — never during render: an abandoned
-  // concurrent render (StrictMode double render, interrupted render) must
-  // not pollute the elapsed baseline, or every later reading would count
-  // from a transition the user never saw commit.
+  // Local goal timer: remember when this goal id first rendered. Written in
+  // render (idempotent lazy ref init) so a fresh mount with a live goal
+  // starts counting immediately.
   const startRef = React.useRef<{ id: string; at: number } | undefined>(undefined)
-  const committedPhaseRef = React.useRef<ChannelGoal['phase'] | undefined>(undefined)
+  if (goal !== undefined && startRef.current?.id !== goal.id) {
+    startRef.current = { id: goal.id, at: Date.now() }
+  }
   const [now, setNow] = React.useState(() => Date.now())
   // Hover tint for the clickable todo fold header (mouse affordance).
   const [headerHovered, setHeaderHovered] = React.useState(false)
-  // Committed phase transitions (post-commit, so abandoned renders leave the
-  // refs untouched): a fresh goal id starts the clock, and a
-  // paused/blocked → active transition re-bases it so frozen time does not
-  // silently accrue while paused. setNow re-renders so the new baseline
-  // shows immediately instead of one tick late.
-  const goalId = goal?.id
-  const goalPhase = goal?.phase
   React.useEffect(() => {
-    if (goalId === undefined || goalPhase === undefined) return
-    const prevPhase = committedPhaseRef.current
-    const isNewGoal = startRef.current?.id !== goalId
-    const resumed = prevPhase !== undefined && prevPhase !== 'active' && goalPhase === 'active'
-    if (isNewGoal || resumed) {
-      startRef.current = { id: goalId, at: Date.now() }
-      setNow(Date.now())
-    }
-    committedPhaseRef.current = goalPhase
-  }, [goalId, goalPhase])
-  React.useEffect(() => {
-    // Tick only while the goal is actively running: a complete goal freezes
-    // the last elapsed reading instead of counting past the finish line, and
-    // paused/blocked goals are static — no periodic wakeup for a frozen
-    // timer (resume re-bases via the committed transition above).
-    if (goal === undefined || goal.phase !== 'active') return
+    // Tick only while the goal is open; a complete goal freezes the last
+    // elapsed reading instead of counting past the finish line.
+    if (goal === undefined || goal.phase === 'complete') return
     const timer = setInterval(() => setNow(Date.now()), 1000)
     return () => clearInterval(timer)
   }, [goal])
@@ -187,8 +167,12 @@ export function GoalTodoPanel({
   return (
     <Box flexDirection="column" paddingLeft={2} paddingRight={2} paddingTop={1}>
       {goal !== undefined && (
-        <Box flexDirection="column" marginBottom={showTodoSection ? 1 : 0}>
-          <Box flexDirection="row" width="100%">
+        <Box flexDirection="column">
+          {/* 行盒显式 height={1}：窄屏下与截断文本同行的布局会被量出虚高
+              （行内出现幽灵空行，实测窄终端里 🎯 行与折叠头之间多出空行），
+              钉死单行高度可消除；本面板各行本就设计为单行（内容均
+              truncate）。 */}
+          <Box flexDirection="row" width="100%" height={1}>
             <Text color="suggestion">🎯 </Text>
             <Box flexGrow={1} flexShrink={1}>
               <Text bold wrap="truncate">
@@ -205,7 +189,7 @@ export function GoalTodoPanel({
             </Box>
           </Box>
           {goal.phase === 'blocked' && goal.blockedReason !== undefined && (
-            <Box flexDirection="row" marginTop={1}>
+            <Box flexDirection="row" marginTop={1} height={1}>
               <Text dimColor>│ </Text>
               <Text color="error" wrap="truncate">
                 {goal.blockedReason.message}
@@ -220,6 +204,7 @@ export function GoalTodoPanel({
               collapsed line (with the live-task preview). */}
           <Box
             flexDirection="row"
+            height={1}
             onClick={onToggle}
             onMouseEnter={() => setHeaderHovered(true)}
             onMouseLeave={() => setHeaderHovered(false)}
@@ -247,7 +232,7 @@ export function GoalTodoPanel({
               {visible.map((todo, index) => {
                 const last = index === visible.length - 1 && hidden === 0
                 return (
-                  <Box key={index} flexDirection="row">
+                  <Box key={index} flexDirection="row" height={1}>
                     <BranchPrefix last={last} />
                     <TodoGlyph status={todo.status} />
                     <Text wrap="truncate" dimColor={todo.status === 'completed'}>
@@ -257,7 +242,7 @@ export function GoalTodoPanel({
                 )
               })}
               {hidden > 0 && (
-                <Box flexDirection="row">
+                <Box flexDirection="row" height={1}>
                   <BranchPrefix last />
                   <Text dimColor>… {hidden} more</Text>
                 </Box>

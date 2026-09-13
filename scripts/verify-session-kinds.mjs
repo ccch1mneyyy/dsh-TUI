@@ -62,6 +62,12 @@ check(
   readHeader({ id: 'x', createdAt: Infinity }).createdAt,
   undefined,
 )
+check('invalid inherited cut is not exposed', readHeader({ id: 'x', seedLength: -1 }).seedLength, undefined)
+check(
+  'alpha4 inspect cut narrows into the shared seedLength field',
+  readHeader({ id: 'x', inheritedEventCount: 7 }).seedLength,
+  7,
+)
 
 // ── 2. Classification truth table ───────────────────────────────────────
 const kindOf = (raw) => classify(readHeader({ id: 'x', ...raw }))

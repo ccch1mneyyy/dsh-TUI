@@ -114,12 +114,14 @@ function makeChannel(initialRows: any[]) {
   const listeners = new Set<() => void>()
   const rows = initialRows
   const channel: any = {
+  // 探针确定性：鲸鱼欢迎期闲置动画（默认开）不进本探针的测量窗口。
+  whaleIdle: false,
     version: 0, rows, status: 'idle', sessionTitle: 'probe', agentId: 'probe',
     model: 'deepseek-v4-flash', provider: 'deepseek', reasoningEffort: 'max', effortLevels: [],
     tokens: { input: 0, output: 0 }, cwd: '/tmp/demo', displayCwd: '/tmp/demo', gitBranch: 'main',
     working: false, spinnerMode: 'requesting', responseChars: 0, activeToolCount: 0, turnStart: 0,
     pending: [], commandList: LOCAL_COMMANDS, notifications: [], mode: { plan: false, sandbox: undefined },
-    activityFrames: 'claude', agentPreset: undefined, subagents: [], lastUserText: '',
+    activityFrames: 'moon8', agentPreset: undefined, subagents: [], lastUserText: '',
     scrollGutter: 'timeline', whale: true,
     subscribe(cb: () => void) { listeners.add(cb); return () => listeners.delete(cb) },
     emit() { channel.version++; for (const cb of listeners) cb() },
@@ -186,31 +188,31 @@ for (const [tag, scrollFirst] of [['S2 resume(at-bottom)', false], ['S3 resume(s
   await settle(() => screenLines().join('\n').includes('问题 15'))
   if (scrollFirst) {
     // 逐事件 pacing：滚轮事件逐个进入 scroll 路径。
-    for (let i = 0; i < 12; i++) { stdin.write('\x1b[<64;50;20M'); await sleep(16) }
+    for (let i = 0; i < 12; i++) { stdin.write('\x1b[<64;50;20M'); await sleep(16) } // 固定窗:pacing 滚轮事件步间
     check(`${tag}: 前置——上滚后视口离开底部`, await settled(() => !screenLines().join('\n').includes('问题 15')))
   }
   // /resume → 浏览器 → Enter 恢复聚焦会话
-  // 两处保留固定 sleep（排序用途）：紧随的 Enter 依赖补全浮层/浏览器的按键
-  // 就绪状态，这不是屏幕可观察内容——settle 到「历史会话」上屏就发 Enter
-  // 会被尚未就绪的浏览器吞掉（实测卡在浏览器不恢复）。
+  // 下面两处等的是「紧随的 Enter 能被收下」：补全浮层/浏览器的按键就绪
+  // 状态不是屏幕可观察内容——settle 到「历史会话」上屏就发 Enter 会被尚未
+  // 就绪的浏览器吞掉（实测卡在浏览器不恢复）。
   stdin.write('/resume')
-  await sleep(300)
+  await sleep(300) // 固定窗:pacing 等补全浮层收键就绪，无可观测锚点
   stdin.write('\r')
-  await sleep(500)
+  await sleep(500) // 固定窗:pacing 等浏览器收键就绪，无可观测锚点
   check(`${tag}: 浏览器打开`, await settled(() => screenLines().some(l => l.includes('历史会话'))), '')
   stdin.write('\r') // Enter → resumeTo → onClose
-  // 保留固定 sleep：紧随的「滚 1 上 2 下」自愈探针依赖行高测量已静息——
-  // settle 到 TAILMARK 首次上屏就开滚，滚回底部的格数会因高度仍在估算而
-  // 差出容差（实测探针失败）。
+  // assertLanded 的正向断言（TAILMARK 可见）本可 settled，但同一等待还要让
+  // 行高测量静息：settle 到 TAILMARK 首次上屏就开滚，紧随的「滚 1 上 2 下」
+  // 自愈探针会因高度仍在估算而差出容差（实测探针失败）。
   const t0 = performance.now()
-  await sleep(700)
+  await sleep(700) // 固定窗:待迁移 同一等待兼作行高静息，settled 会提前返回
   assertLanded(tag, performance.now() - t0)
   // 回到底部探针：滚 1 上再 2 下（pill 出现会使视口矮 2 行，等量滚回
   // 必然差 2 行——这是既有 pill 语义；多滚一下代表用户“回到底部”）。
   stdin.write('\x1b[<64;50;20M')
-  await sleep(200)
+  await sleep(200) // 固定窗:pacing 滚轮事件步间
   stdin.write('\x1b[<65;50;20M')
-  await sleep(120)
+  await sleep(120) // 固定窗:pacing 滚轮事件步间
   stdin.write('\x1b[<65;50;20M')
   const healed = await settled(() => screenLines().join('\n').includes('TAILMARK_Q7X'))
   check(`${tag}: 滚离后滚回底部，最新消息可见`, healed)

@@ -145,8 +145,8 @@ createChannel(root2 as never, agent2, {
   provider: 'deepseek-official',
   activity: false,
 })
-// 稳定性探针（状态不得改变）：断言的是「无配置 effort 时不安装选择」，
-// 无可轮询的完成条件（no-op 路径不留痕）——保留固定窗口让错误安装显形。
+// 固定窗:探针 断言「无配置 effort 时不安装选择」，no-op 路径不留痕、
+// 没有可轮询的完成条件——留一个观察窗让错误安装显形。
 await sleep(50)
 const seed2 = { provider: 'deepseek-official', model: 'deepseek-v4-flash' }
 const proposed2 = (await (agentCtx2 as Context).waterfall(

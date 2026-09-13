@@ -13,7 +13,18 @@ import { renderBigText } from './bigfont.js'
 import { stringWidth } from '../ink/stringWidth.js'
 import { BRAND, FLASH, ICE, PALE, sweep } from './shimmer.js'
 import { STANDARD_FRAME_INDEX, WhaleArt } from './Whale.js'
-import { OPENING_SEQUENCES, pickOpeningSequence, type OpeningStep, type WhaleIntroId } from './whaleFrames.js'
+import { OPENING_SEQUENCES, pickOpeningSequence, WHALE_FRAME_INDEX, type OpeningStep, type WhaleIntroId } from './whaleFrames.js'
+import { RESTING_POSE, type WhaleLayerPose } from './whaleLayers.js'
+import {
+  initialWhaleIdleState,
+  nextWhaleIdleStep,
+  type WhaleIdleState,
+} from './whaleIdle.js'
+
+/** Intro-phase heart pass (whole frames — the planner owns the settled phase). */
+const INTRO_HEART_PASS: readonly number[] = [
+  WHALE_FRAME_INDEX.heart1, WHALE_FRAME_INDEX.heart2, WHALE_FRAME_INDEX.heart3,
+]
 
 /**
  * Header badge version, read from the installed package.json so the display
@@ -81,6 +92,8 @@ export function LogoV2({
   intro,
   tip,
   whale = true,
+  whaleIdle = true,
+  working = false,
   drift,
 }: {
   model: string
@@ -94,6 +107,16 @@ export function LogoV2({
   tip?: Tip
   /** Show the pixel whale art (settings `dsh-tui.whale`); off → text-only header. */
   whale?: boolean
+  /** Welcome-phase idle whale behaviors — fin flutters, tail thumps,
+   * sleep after inactivity (settings `dsh-tui.whaleIdle`; on by default —
+   * an explicit `false` keeps the settled header timer-free). Click-hearts
+   * work regardless, until the freeze. */
+  whaleIdle?: boolean
+  /** Whether an agent turn is active. The FIRST active turn permanently
+   * freezes the whale to the static standard frame (the idle planner and
+   * click-hearts are welcome-phase features); sustained !working before
+   * that lets it fall asleep. */
+  working?: boolean
   /** Test seam: pin/suppress the upstream-drift notice (`null` forces it off;
    * `undefined` — the production default — auto-detects the install). */
   drift?: UpstreamDriftSummary | null
@@ -121,16 +144,111 @@ export function LogoV2({
     }
   }, [step, settled, sequence])
 
+  // First task latches the freeze: once an agent turn starts, the settled
+  // whale drops to the static standard frame for the rest of the session —
+  // idle motion and click-hearts are a welcome-phase feature, and a frozen
+  // logo costs nothing while the transcript scrolls it off-screen.
+  const [whaleFrozen, setWhaleFrozen] = React.useState(false)
+  React.useEffect(() => {
+    if (working) setWhaleFrozen(true)
+  }, [working])
+
+  // ── Whale behaviors (ported from the dsh-ui-whale pet) ─────────────────
+  // Intro-phase click → heart pass: whole heart frames over the opening
+  // animation (one-way heart1→heart2→heart3). Once the header settles, the
+  // layered planner below owns hearts as an overlay, so this state only
+  // matters before settle. heartKey restarts the pass on every click, even
+  // when heartSeq is already 0 (setHeartSeq(0) alone bails in React when the
+  // value is unchanged).
+  const [heartSeq, setHeartSeq] = React.useState(-1)
+  const [heartKey, setHeartKey] = React.useState(0)
+  React.useEffect(() => {
+    if (heartSeq < 0) return
+    // Once settled with the layered planner on, hearts are the planner's
+    // overlay — a whole-frame pass started during the intro ends here. The
+    // freeze (first task) tears interactions down the same way. A settled
+    // header with `whaleIdle` off has no planner, so the whole-frame pass
+    // keeps playing there (click-hearts don't depend on the setting).
+    if (settled && (whaleIdle || whaleFrozen)) {
+      setHeartSeq(-1)
+      return
+    }
+    const timer = setTimeout(() => {
+      setHeartSeq(s => (s >= INTRO_HEART_PASS.length - 1 ? -1 : s + 1))
+    }, 350)
+    return () => {
+      clearTimeout(timer)
+    }
+  }, [heartSeq, heartKey, settled, whaleIdle, whaleFrozen])
+
   const [themeName] = useTheme()
   const theme = getTheme(themeName)
   const { columns } = useTerminalSize()
 
-  const wordmarkRGB = parseRGB(theme.claude) ?? BRAND
-  const wordmarkShimmerRGB = parseRGB(theme.claudeShimmer) ?? ICE
-  const taglineRGB = parseRGB(theme.claudeBlue_FOR_SYSTEM_SPINNER) ?? ICE
+  const wordmarkRGB = parseRGB(theme.accent) ?? BRAND
+  const wordmarkShimmerRGB = parseRGB(theme.accentShimmer) ?? ICE
+  const taglineRGB = parseRGB(theme.activity) ?? ICE
 
   const showWhale = whale && columns >= WHALE_MIN_COLUMNS
-  const frameIndex = settled ? STANDARD_FRAME_INDEX : sequence[step].frame
+
+  // Welcome-phase idle behaviors (settings `dsh-tui.whaleIdle`): fin
+  // flutters, tail thumps and blinks while idle, and a sleep-Z loop after
+  // sustained inactivity — all as INDEPENDENT layers composed per tick
+  // (whaleLayers.ts), so a click heart plays over a mid-wag tail or the
+  // sleep-Z loop instead of replacing it. The planner is event-driven —
+  // while the whale rests, the ONLY pending timer is the one waiting for
+  // the next due event, and with the setting off there is no timer at all
+  // (the idle-wakeup contract keeps holding). The freeze latch above tears
+  // the whole thing down at the first agent turn; the planner's working
+  // branch only ever runs for the same-tick race before the latch renders.
+  const [idlePose, setIdlePose] = React.useState<WhaleLayerPose | null>(null)
+  const idleStateRef = React.useRef<WhaleIdleState>(initialWhaleIdleState(0))
+  const pendingHeartRef = React.useRef(false)
+  const tickRef = React.useRef<(() => void) | null>(null)
+  React.useEffect(() => {
+    if (!settled || !whaleIdle || !showWhale || whaleFrozen) {
+      setIdlePose(null)
+      tickRef.current = null
+      return
+    }
+    // A working flip restarts the loop: work wakes a sleeping whale and
+    // slides every idle deadline forward (see nextWhaleIdleStep).
+    idleStateRef.current = initialWhaleIdleState(Date.now())
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const tick = (): void => {
+      // A click can drive tick() directly (tickRef.current?.() in the click
+      // handler) while the timer armed by the previous tick is still pending —
+      // drop it first, or every click forks an extra rescheduling chain that
+      // outlives the effect cleanup (which only knows the latest timer).
+      if (timer !== undefined) clearTimeout(timer)
+      const heart = pendingHeartRef.current
+      pendingHeartRef.current = false
+      const step = nextWhaleIdleStep(idleStateRef.current, { working, heart }, Date.now())
+      idleStateRef.current = step.state
+      setIdlePose(step.pose)
+      timer = setTimeout(tick, step.delayMs)
+      // The planner reschedules forever while mounted — unref so the chain
+      // never holds the process alive on its own. The interactive TUI stays
+      // up on its TTY/stdin handles; probe hosts that mount the header
+      // without unmounting get a clean event-loop drain instead of a hang.
+      ;(timer as { unref?: () => void }).unref?.()
+    }
+    tickRef.current = tick
+    tick()
+    return () => {
+      tickRef.current = null
+      if (timer !== undefined) clearTimeout(timer)
+    }
+  }, [settled, whaleIdle, showWhale, working, whaleFrozen])
+  // Render priority: the layered planner pose owns the settled header while
+  // it runs (hearts and blinks compose over the body planes). Otherwise a
+  // click heart plays as whole heart frames over the intro — or over the
+  // settled standard pose when `whaleIdle` is off (no planner there).
+  const frameIndex = heartSeq >= 0
+    ? (INTRO_HEART_PASS[heartSeq] ?? STANDARD_FRAME_INDEX)
+    : !settled
+      ? sequence[step].frame
+      : STANDARD_FRAME_INDEX
   // Frozen clock for the settled header: t=0 parks every sweep highlight
   // off-screen, leaving the static gradient behind.
   const t = settled ? 0 : time
@@ -157,7 +275,32 @@ export function LogoV2({
   return (
     <Box ref={ref} flexDirection="column" marginTop={1}>
       <Box flexDirection="row" gap={2} width="100%" alignItems="center">
-        {showWhale && <WhaleArt frameIndex={frameIndex} width={FULL_WHALE_WIDTH} />}
+        {showWhale && (
+          <Box
+            flexShrink={0}
+            onClick={(): void => {
+              // Frozen (first task started): the whale is a static logo —
+              // clicks do nothing. Settled: the layered planner consumes the
+              // click on its next tick — run that tick immediately so the
+              // heart shows instantly instead of after the current delay.
+              // Intro: the whole-frame heart pass above.
+              if (whaleFrozen) return
+              if (settled && whaleIdle) {
+                pendingHeartRef.current = true
+                tickRef.current?.()
+              } else {
+                setHeartSeq(0)
+                setHeartKey(k => k + 1)
+              }
+            }}
+          >
+            <WhaleArt
+              frameIndex={frameIndex}
+              pose={settled && whaleIdle && !whaleFrozen ? (idlePose ?? RESTING_POSE) : undefined}
+              width={FULL_WHALE_WIDTH}
+            />
+          </Box>
+        )}
         <Box flexDirection="column" flexShrink={1}>
           <Text wrap="truncate-end">
             {sweep('✦ dsh-TUI', t, wordmarkRGB, wordmarkShimmerRGB, 60)}

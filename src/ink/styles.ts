@@ -375,6 +375,30 @@ export type Styles = {
   readonly opaque?: boolean
 
   /**
+   * Background painted ONLY while a terminal image placement sits behind
+   * this box's rect: negative-z Kitty graphics show through
+   * terminal-default cells, and a real surface is the only way to cover
+   * them without graphics-protocol churn. While no image is behind, the
+   * box stays terminal-transparent — unlike a permanent backgroundColor,
+   * which turns every overlay into a visible full-width block. When the
+   * occlusion fires, the color behaves exactly like backgroundColor
+   * (interior fill + child text inheritance + background-change blit
+   * refusal). Ignored when backgroundColor is set.
+   */
+  readonly occlusionColor?: Color
+
+  /**
+   * Shade the cells already painted beneath this box before it paints:
+   * the backdrop of a modal layer. `'dim'` adds the terminal's faint
+   * attribute to every glyph under the rect, so the conversation stays
+   * legible but recedes behind a card painted later. Meant for an
+   * absolute-positioned, transparent click-catcher spanning the region a
+   * modal floats over; the modal itself is a later sibling and is not
+   * shaded. Idempotent across frames and clean-subtree blits.
+   */
+  readonly backdrop?: 'dim'
+
+  /**
    * Behavior for an element's overflow in both directions.
    * 'scroll' constrains the container's size (children do not expand it)
    * and enables scrollTop-based virtualized scrolling at render time.

@@ -22,7 +22,7 @@ const [{ Writable }, React, { Terminal: XTerm }, { render }, { AssistantToolUseM
   import('@xterm/headless'),
   import('../src/ui.js'),
   import('../src/components/messages/AssistantToolUseMessage.js'),
-  import('../src/cc/cliHighlight.js'),
+  import('../src/terminal-utils/cliHighlight.js'),
   import('../src/components/SplitDiffView.js'),
   import('./lib/term-test.mjs'),
 ])
@@ -62,12 +62,11 @@ async function renderAt(cols, tool, diffLayout = 'auto', toolBackground = 'none'
     _write(chunk, _e, cb) { term.write(String(chunk), cb) }
   }
   const app = await render(
-    React.createElement(AssistantToolUseMessage, { tool, addMargin: false, verbose: false, diffLayout, toolBackground }),
+    React.createElement(AssistantToolUseMessage, { tool, marginTopOnTurn: false, verbose: false, diffLayout, toolBackground }),
     { stdout: new FakeStdout(), debug: true, exitOnCtrlC: false },
   )
-  // cli-highlight loads lazily on first use; give it room to land so the
-  // syntax-color assertions see the settled frame.（懒加载后的补色重绘无
-  // 调用方无关的可观测条件，保留固定窗口。）
+  // 固定窗:pacing cli-highlight 首次使用才懒加载，其后的补色重绘没有
+  // 调用方可观测的完成条件，只能留出落地时间再读色。
   await sleep(900)
   const buf = term.buffer.active
   const lines = []

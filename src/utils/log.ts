@@ -1,6 +1,6 @@
 /**
- * Error logger for the ported Ink core. Always writes to stderr (an Ink
- * renderer failure must never pass silently).
+ * Error logger for the renderer. Always writes to stderr so a render failure
+ * never passes silently.
  * @param error - The error to log; its stack trace when available.
  */
 export function logError(error: unknown): void {

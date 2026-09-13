@@ -1,12 +1,13 @@
 import React from 'react'
 import { t } from '../i18n.js'
-import { Box, Text, useTerminalSize } from '../ui.js'
+import { Box, Text } from '../ui.js'
 import type { SkillInfo } from '../dsh-adapter/channel.js'
 import { Pane } from './design-system/Pane.js'
 import { ListItem } from './design-system/ListItem.js'
 import { HintLine } from './design-system/HintLine.js'
 import { LoadingState } from './design-system/LoadingState.js'
 import { listWindow } from './listWindow.js'
+import { useOverlayListRows } from './OverlayAbove.js'
 
 /** 来源桶 → 本地化标签（未知桶原样显示，SkillSource 对自定义桶开放）。 */
 function sourceLabel(source: string): string {
@@ -48,13 +49,14 @@ export function SkillsPicker({
    *  the same code path as the keyboard Enter). */
   onPick?: (index: number) => void
 }): React.ReactNode {
-  const { rows: terminalRows } = useTerminalSize()
   // 每项恒占 2 行（正文 + 来源/简述描述行，均 truncate 成单行）。
-  // 框架行：浮层预留 8 + Pane 2 + 标题 2 + 页脚 1 + 挂载包裹 marginTop 1 = 14（ModelPicker 同款）。
+  // 预算来自最近一层 OverlayAbove 的有效高度（ModelPicker 同款），减去框架行：
+  // Pane 2 + 标题 2 + 页脚 1 + 挂载包裹 marginTop 1 = 6。
+  const listRows = useOverlayListRows(6)
   const { start, end } = listWindow(
     skills.map(() => 2),
     focusIndex,
-    Math.max(terminalRows - 14, 2),
+    listRows,
   )
   return (
     <Pane color="permission">

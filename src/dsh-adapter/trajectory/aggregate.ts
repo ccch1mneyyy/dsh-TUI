@@ -11,7 +11,8 @@
  *
  * - **Own duration only.** A turn's cost is its own bracket, never the sum of
  *   its children — summing both would double-count every tool inside it.
- * - **No fabricated spans.** A step that produced no `assistant/chunk` (the
+ * - **No fabricated spans.** A step that produced no stream output (no
+ *   `assistant/chunk` pre-0.1.5, no embedded settlement stream since — the
  *   request failed, or the log predates chunk capture) contributes no TTFT and
  *   no decode sample rather than a zero that would drag the average down.
  * - **Bursts expand.** A folded run is one ledger row but N calls; the counts

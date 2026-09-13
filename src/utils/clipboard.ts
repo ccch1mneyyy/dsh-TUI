@@ -35,7 +35,7 @@
  */
 
 import { execFile, spawn } from 'node:child_process'
-import { existsSync } from 'node:fs'
+import { existsSync, rmSync } from 'node:fs'
 import { chmod, mkdtemp, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -200,6 +200,23 @@ async function ensureImageDir(): Promise<string | null> {
   return dir
 }
 
+/**
+ * Remove the private image directory at process exit. Per-paste exports are
+ * unlinked once staged; this drops the directory itself (and any export a
+ * crash left behind). Synchronous and best-effort so the exit funnel can
+ * call it after terminal restore without waiting.
+ */
+export function removeClipboardImageDir(): void {
+  const dir = imageDir
+  if (dir === undefined) return
+  imageDir = undefined
+  try {
+    rmSync(dir, { recursive: true, force: true })
+  } catch {
+    // A leftover 0700 directory is not worth failing the exit.
+  }
+}
+
 /** Per-process counter keeping exported image names unique. */
 let imageCounter = 0
 
@@ -317,8 +334,7 @@ async function isPasteToolInstalled(tool: LinuxPasteTool): Promise<boolean> {
  * @returns True only for the tools' stable empty-selection phrasings.
  */
 function isKnownEmptySelection(tool: LinuxPasteTool, stderr: string): boolean {
-  // wl-paste with an empty clipboard: "Nothing is copied" (both the C
-  // original and wl-clipboard-rs phrase it this way).
+  // wl-paste with an empty clipboard: "Nothing is copied".
   if (tool === 'wl-paste') return /nothing is copied|clipboard is empty/i.test(stderr)
   // xclip with no selection owner: "Error: target TARGETS not available";
   // xsel: "xsel: No selection" on some builds.

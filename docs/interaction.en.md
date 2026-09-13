@@ -16,16 +16,19 @@
 | `Ctrl+V` / `Alt+V` | Insert clipboard text or files; images are sent as durable attachments. Use `Alt+V` when the terminal intercepts `Ctrl+V` |
 | `Ctrl+G` | Edit the current input in an external editor (`$VISUAL` → `$EDITOR`); saving and quitting fills it back, `:cq`/non-zero exit keeps the draft; with neither variable set the TUI asks you to configure one (no `vi` fallback) |
 | `Ctrl+Shift+E` | Expand the fullscreen draft editor (or click the `⛶` affordance at the end of the input row): line numbers + current-line highlight + live line/char stats, `Enter` inserts a newline, `Ctrl+Enter` or the Send button sends, `Esc` or the Collapse button keeps the draft and returns; wheel-scrolls freely, click/drag/double-click selection work as in the inline prompt; remappable via `/settings` |
-| `Esc` | Ladder: close help → close the command menu → close the file menu (only the current `@` token) → **with a selection in the prompt input: only clear it (text untouched)** → interrupt the turn and redeliver pending messages → clear non-empty input → double-tap on empty input = rewind; in fullscreen, an active mouse selection is cleared first (not copied) |
+| `Esc` | Ladder: close help → close the image preview → close the command menu → close the file menu (only the current `@` token) → **with a selection in the prompt input: only clear it (text untouched)** → interrupt the turn and redeliver pending messages → clear non-empty input → double-tap on empty input = rewind; in fullscreen, an active mouse selection is cleared first (not copied) |
+| `Esc` / `Ctrl+C` / `Enter` while an image preview is open | Close the preview and restore the surface underneath; other keys are not passed through |
+| `Left` / `Right` in the image modal | Previous / next image, no wrapping; caret peeks keep arrows with the prompt |
 | `Ctrl+C` | Interrupt while working; press again while the interrupt is still settling to force-exit; clear non-empty idle input; **while idle with a selection in the prompt input, copy it to the clipboard (selection kept for editing)**; press twice on empty input to exit |
 | `Ctrl+D` | Same ladder as `Ctrl+C`: interrupt while working (press again to force-exit if the interrupt stalls); press twice while idle to exit |
-| `Ctrl+O` | Toggle transcript/verbose detail, including full reasoning and tool arguments/output |
+| `Ctrl+O` | Toggle transcript/verbose detail, including full reasoning and tool arguments/output; also the escape hatch for the **long-line fold** (a single line over 1000 chars is clipped to 1000 with a `… N chars folded` marker — see the user guide §5). Clicking the folded row (or the tool card face) toggles it too |
 | `Ctrl+P` | Toggle the loaded-context panel shown at startup (while it is on screen) |
 | `Ctrl+T` | Open the trajectory scene (same as `/trace`); `q`/`Esc` returns to the conversation |
 | `Ctrl+R` | Open input-history search; repeat or press `Down` for the next result |
 | `Ctrl+L` | Clear and force a physical terminal redraw |
 | `?` | Open shortcut and command help when the input is empty |
 | In Help: `↑/↓`, `PgUp/PgDn`, `Home/End` | Scroll by line, page, or jump to either end; `Esc` closes |
+| Transcript: `PgUp` / `PgDn` | Page the fullscreen transcript (one viewport minus one row per press); yielded to Help and open overlays, which page their own lists; inline mode does not claim them — history lives in the terminal's native scrollback there, and paging belongs to the terminal |
 | `Shift+Up` | Enter message selection; arrows move, `Enter` expands one row, `Esc` exits |
 
 The action shortcuts (paste, history search, external editor, `Ctrl+O/T/P/R/L`, subagent dashboard, show-all, todo fold) are remappable in `/settings` → `dsh-tui` → `Shortcuts`: enter combos such as `alt+v`, comma-separate several, leave blank to restore defaults — saves apply live. Combos clashing with the fixed editing keys or another action are rejected. Deployments can also pin them via `shortcuts.<action>` in cordis.yml.
@@ -38,8 +41,19 @@ Plugins may register additional combos through the `tuiShortcuts` seam (they
 must carry Ctrl or Alt); built-in bindings always win and conflicting combos
 are refused at registration. A managed plugin dialog (select/confirm/input)
 owns the keyboard while open: `↑`/`↓` to move, `Enter` to confirm, `Esc` to
-cancel. Plugins may also contribute display-only text to the status line
-above the prompt.
+cancel. Plugins may also contribute one text line above the prompt, or a
+compact rich status view of up to three rows when the host exposes
+`tuiStatus.registerView`. Rich views receive only host `Box`, `Text`, `Image`,
+and terminal size; click/hover/drag work in fullscreen, and the view never owns
+the keyboard. `Image` takes decoded RGBA pixels plus a same-size cell fallback:
+after a successful Kitty probe, the host centers the image at its natural
+aspect ratio using terminal-reported cell geometry (or a conservative default),
+adding transparent letterboxing and downsampling when needed. Otherwise it renders
+the fallback (including inline, accessibility, and multiplexer sessions).
+Plugins provide the keyboard path for the same action through a
+slash command or `tuiShortcuts`. A refused rich registration returns
+`undefined`; an admitted registration returns a disposer that removes both
+the view and its Cordis effect.
 
 ## Editing keys
 
@@ -48,7 +62,7 @@ above the prompt.
 | `Left/Right` | Move by character; **with a selection, collapse to the corresponding edge** |
 | `Ctrl+Left/Right` | Move by word |
 | `Home/End` | Move to the start/end of the current logical line |
-| `Ctrl+A` / `Ctrl+E` | In the editor, move to the start/end of the current logical line; `Ctrl+E` also expands or folds hidden older rows in long transcripts |
+| `Ctrl+A` / `Ctrl+E` | `Ctrl+A` opens the subagent dashboard (`Mod+A` in the editor still moves to line start); `Ctrl+E` moves to line end and also expands or folds hidden older rows in long transcripts |
 | `Ctrl+U` | Delete before the caret |
 | `Ctrl+K` | Delete after the caret |
 | `Ctrl+W` | Delete the preceding word |
@@ -84,7 +98,7 @@ NORMAL with `Ctrl+C` or `dd`.
 
 Bracketed paste from right-click or the terminal's native paste command keeps
 ordinary text and newlines and is never mistaken for an Enter key. To keep
-rendering, click mapping, and selection geometry identical, terminal ANSI
+rendering, click mapping, and selection geometry consistent, terminal ANSI
 controls are stripped and tabs are expanded to spaces on entry.
 
 ### Fullscreen draft editor (`Ctrl+Shift+E` / `⛶`)
@@ -132,10 +146,85 @@ and directory listings are attached as text; PNG, JPEG, WebP,
 and GIF files are sent as durable Harness image blocks. Reads use the active
 workspace filesystem, including provider-owned workspaces.
 
-On `Ctrl+V`, files copied from a file manager (Windows Explorer, GNOME Files, KDE
-Dolphin, …) insert as paths, while image files become `@` references. Clipboard
-bitmaps are saved in the attachment store and appear as `[Image #N]`; submitting
-the prompt sends a real image block. The prompt never contains base64.
+On `Ctrl+V`, files copied from a file manager (Finder, Windows Explorer, GNOME
+Files, KDE Dolphin, …) insert as paths, while copied image files are staged into
+the attachment store exactly like clipboard bitmaps and appear as `[Image #N]`
+(falling back to an `@` reference when staging fails); submitting the prompt
+sends a real image block. The prompt never contains base64. When a terminal
+forwards a drop as pasted text (Ghostty sends a shell-escaped path through the
+PTY), the paste stages only when it is exactly one existing local image path —
+anything ambiguous stays verbatim text. A staged `[Image #N]` is one unit in the
+composer: the caret never rests inside it, ←/→ step over it, Backspace at its
+end, Delete at its start and Ctrl+W remove it whole, and a selection edge inside
+it grows to cover the token. It renders in the theme accent and inverts whole
+while the caret sits at its start; clicking it places the caret at its start and
+opens the preview. The preview opens by itself while the token is selected (the
+caret at its start) and closes when the caret leaves; the cell just after the
+token does not count. The keyboard stays with the
+prompt meanwhile, so ←/→ walk from image to image with the card following. Esc
+or a click outside the card dismisses only that token's preview until the caret
+leaves and returns; a click on the token always shows it. Look-alike text typed
+by hand or restored from history without an attachment capability stays ordinary
+text. In fullscreen, clicking a staged
+`[Image #N]` token or a transcript thumbnail opens one shared preview centered
+over the transcript area; the card targets about 95% of its width and height while
+preserving the image aspect ratio. The prompt, status rows and sticky header stay visible
+(Esc or a click outside the card closes it; narrow terminals get a
+metadata-only card). While the preview is open, the conversation outside the
+card fades: explicit foreground and background colours (pixel art, tool cards,
+syntax highlighting) blend halfway toward the terminal background (from OSC 11;
+black or white by theme lightness when unknown), and uncoloured text takes the
+terminal's faint attribute. The card, the prompt and the status rows are not
+touched, and closing restores everything. The card's title sits centered in its top border as
+`Image #N — format · width×height · size · file name`; the card is at least as
+wide as the title, so a small image never squeezes the file name, and a title
+wider than the transcript area shortens the file name in its middle first.
+Images staged from a file or the clipboard in this session show their source
+path on the card's bottom row (`Open original: …`, head and tail kept, middle elided);
+historical images use their file name. This link opens the unchanged attachment bytes
+in the system image viewer, independent of deleted or modified source paths. Only an
+explicit click exports a file to a private `dsh-tui-original-*` system temporary
+directory; it survives TUI exit for the external viewer and can later be removed
+with system temporary-file cleanup. A stale `[Image #N]` placeholder (evicted past 128
+staged images or cleared by a session switch) warns on click, on submit, and when
+it appears as a slash-command argument.
+After submission, user images are re-projected from durable session events into
+the transcript. Assistant messages and tool results use the same preview path
+whenever their content contains image blocks. Fullscreen sessions with a
+successful Kitty graphics or Sixel probe show bounded, aspect-preserving thumbnails;
+inline, accessibility, multiplexer, and read-failure paths reserve the same
+layout with a text fallback. Visible attachments are read and decoded only when
+graphics are available; other paths use metadata without loading the decoder.
+Resumed sessions do not depend on the original local path.
+
+Sixel thumbnails are cropped to the visible transcript while scrolling, without
+squeezing the whole image into the remaining rows or painting over the prompt.
+Opening a full preview withdraws background thumbnails; closing it restores them
+from cache. Unrelated text updates do not retransmit unchanged images. Decode and
+transport concurrency, queues and byte budgets are bounded, with text fallback
+on overflow or failure.
+
+Large previews allow a 2048-pixel edge with at most 2,097,152 pixels (8 MiB RGBA),
+so square previews are smaller than 2048 by 2048. Thumbnails still decode at 384;
+ordinary plugin images remain at 1024 / 4 MiB, frames at 16 MiB, and Sixel output at 4 MiB.
+Fit returns to the whole image. 100% displays original pixels; +/- selects 100%,
+200%, 400%, or 800%, shown in the title. Drag, wheel, or arrow buttons pan the image.
+Keyboard ownership and Escape remain unchanged. Actual pixels requires measured
+terminal cell dimensions. Cropping precedes nearest-neighbor zoom; budget limits
+reduce the viewport instead of scaling original pixels. Pan bursts coalesce and
+stale results are discarded. Each inspection retains one encoded original (up to
+64 MiB), with a 64-megapixel input limit and no full-size JS RGBA cache. Some formats
+still require scanning the original file. Sixel retains its 256-color quantization:
+100% describes spatial pixels, not lossless color. Open original preserves colors
+and animation in the system viewer.
+
+Modal previews use Left/Right or the bottom ‹/› controls for previous/next image,
+with a current/total counter and no end-to-start wrapping. Transcript galleries
+follow conversation message order and never prefetch unvisited images. Draft
+galleries follow capability-backed token order; clicking gallery navigation promotes
+the caret peek to a modal without editing the draft. A plain caret peek still
+leaves arrows with the input. Each image starts in Fit, stale image jobs cancel,
+and session changes or blocking dialogs close the modal.
 
 ## Interface language
 
@@ -207,8 +296,7 @@ result against the persistence layer's own change token, so opening it costs
 the same regardless of how long the history is or how large a session got.
 
 On Windows, `dsh-tui.cmd --resume` uses the session ID last written to
-`~/.dsh-tui/resume.txt` (also dual-written to the old path
-`~/.dsh-cc/resume.txt` for older launchers that only read it).
+`~/.dsh-tui/resume.txt`.
 
 ### Agent view
 
@@ -309,9 +397,9 @@ A full-screen scene (no scrollback pollution) over the whole session timeline:
 
 ### /settings editor
 
-`/settings` opens the plugin settings editor, read/edit by namespace. Editing
-is **staged**: `↑`/`↓` to move, `Enter` to expand/toggle/edit, `s` saves /
-`d` discards / `Esc` first drops dirty sections, then exits. Fields under the
+`/settings` opens the plugin settings editor, read/edit by namespace. Edits
+**auto-save**: `↑`/`↓` to move, `Enter` to expand/toggle/edit, booleans/selects
+write on the spot, text drafts confirm on Enter, `Esc` just exits. Fields under the
 dsh-tui namespace are written to the user layer of settings.yaml and take
 **effect immediately** (`lang`, `statusBar.*`, …); namespaces without a
 declared TUI section are listed read-only and need manual edits to
@@ -349,7 +437,7 @@ flows remain available.
 
 ## Fullscreen and mouse
 
-`fullscreen: false` is the default inline mode, where the terminal emulator
+`fullscreen: false` restores inline mode (fullscreen is the factory default since 0.9.0), where the terminal emulator
 owns native scrollback and selection.
 
 `fullscreen: true` uses the alternate screen and enables in-app mouse handling:
@@ -364,6 +452,7 @@ owns native scrollback and selection.
 | Single-click a tool card / thinking / compact summary | Expand / collapse (header brightens on hover; trailing blank cells do not trigger) |
 | Single-click a subagent card | Open that subagent's detail scene (status glyph brightens on hover) |
 | Single-click the input box | Place the text caret at the click (multi-line, wrapped rows and CJK all width-aligned) |
+| Click a `[Image #N]` token in the input box / a transcript thumbnail | Open the centered image preview (image metadata when Kitty/Sixel graphics is unavailable); clicking outside the preview closes it |
 | Drag inside the prompt input | Build an in-input selection (rendered highlight, caret rides the drag end): `Backspace`/`Delete` delete it, typing replaces it, `←/→` collapse it to the corresponding edge, `Esc` only clears it; drags map only visible rows (no edge auto-scroll yet); a folded paste block keeps the selection on the clicked side (never across the chip row) |
 | `Shift+click` in the prompt input | Extend the selection from its start edge (or the caret) to the clicked position |
 | Double-click a word in the prompt input | Select the whole word (detected in the component, 500 ms / 1 cell; paths and punctuation runs select as one) |
@@ -469,16 +558,18 @@ composition own skill content and discovery.
 Additional forms:
 
 - `/activity` opens the animation picker; `/activity frames <name>` selects
-  directly (30 frame names: `random` + `claude` `star2` `sand` `triangle`
-  `box` `box2` `corners` `point` `layer` `flip` `aesthetic` `hamburger`
-  `moon` `moon8` `comet` `breathe` `dots` `arrow` `spark` `bar` `braille`
-  `arc` `circle` `grow` `noise` `bounce` `rainbow` `dqpb` `toggle`; default
-  `moon8`); `/activity status` reports the current choice.
+  directly (current names: `random`, `star2`, `sand`, `triangle`, `box`, `box2`,
+  `corners`, `point`, `layer`, `flip`, `aesthetic`, `hamburger`, `moon`, `moon8`,
+  `whale-spout`, `whale-spin`, `whale-bubbles`, `clock`, `traffic_lights`, `comet`,
+  `breathe`, `dots`, `arrow`, `spark`, `bar`, `braille`, `arc`, `circle`, `grow`,
+  `noise`, `bounce`, `rainbow`, `bar2`, `dqpb`, `toggle`; default `moon8`). A
+  legacy local `claude` setting is read as `moon8`, and the picker does not show
+  that legacy preset; `/activity status` reports the current choice.
 - `/preset <id>` and `/preset status` are described in the configuration guide.
 - `/effort` opens the reasoning-effort slider (←/→ adjusts live);
   `/effort <id>` sets a level directly; `/effort status` reports the current one.
 - `/theme <name>` and `/theme status` are described in the theme guide.
-- `/permission` reads the DSH `permissionPresets` registry, preserving registry order for the picker and completion. Third-party presets need no TUI hard-coding; `custom` is a current-state label only, never a selectable target. When the registry service is absent, TUI uses its legacy three-row compatibility roster; a mounted but broken service is unavailable and fails closed. If the external `/permission` command is not registered, input follows the existing default/model dispatch path.
+- `/permission` reads the DSH `permissionPresets` registry, preserving registry order for the picker, completion and the `Shift+Tab` cycle. Third-party presets need no TUI hard-coding. While the service snapshot is usable the TUI owns `/permission` as a local command: bare run opens the picker, an argument switches directly, `status` prints the current preset and policy explainer. Switches prefer the official `/permission <preset>` command; when the command row never reaches this agent's registry the TUI falls back to the service's own official write path (the same handler, real events) and confirms via event/readback; when neither is available it fails loudly instead of sending the input to the model. Exiting plan mode restores the pre-plan atoms first, then the durable preset you were on before plan mode (while the registry still offers it). When the registry service is absent, TUI uses its legacy three-row compatibility roster; a mounted but broken service is unavailable and fails closed.
 - `/lang` toggles the interface language (see “Interface language”).
 - `/compact` compresses the session history; unavailable under the minimal
   preset (bash + editor only).

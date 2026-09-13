@@ -1,12 +1,15 @@
 import { logForDebugging } from '../utils/debug.js'
-import { type DOMElement, markDirty } from './dom.js'
+import { type DOMElement, markDirty, scheduleRenderFrom } from './dom.js'
 import type { Frame } from './frame.js'
 import { invalidateNoInterestRect } from './hit-test.js'
 import { consumeAbsoluteRemovedFlag } from './node-cache.js'
 import Output from './output.js'
+import type { TerminalImagePlacement } from './terminal-image.js'
 import renderNodeToOutput, {
+  getOcclusionMismatchNodes,
   getScrollDrainNode,
   getScrollHint,
+  hasOverlayVacatedCells,
   resetLayoutShifted,
   resetScrollDrainNode,
   resetScrollHint,
@@ -21,6 +24,9 @@ export type RenderOptions = {
   terminalWidth: number
   terminalRows: number
   altScreen: boolean
+  /** Whether terminal graphics are active for this paint pass. */
+  terminalImages?: boolean
+  imageReady?: (placement: TerminalImagePlacement) => boolean
   // True when the previous frame's screen buffer was mutated post-render
   // (selection overlay), reset to blank (alt-screen enter/resize/SIGCONT),
   // or reset to 0×0 (forceRedraw). Blitting from such a prevScreen would
@@ -122,9 +128,24 @@ export default function createRenderer(
       backScreen ??
       createScreen(width, height, stylePool, charPool, hyperlinkPool)
     if (output) {
-      output.reset(width, height, screen)
+      output.reset(
+        width,
+        height,
+        screen,
+        options.terminalImages,
+        frontFrame.images,
+        options.imageReady,
+      )
     } else {
-      output = new Output({ width, height, stylePool, screen })
+      output = new Output({
+        width,
+        height,
+        stylePool,
+        screen,
+        terminalImages: options.terminalImages,
+        previousImages: frontFrame.images,
+        imageReady: options.imageReady,
+      })
     }
 
     resetLayoutShifted()
@@ -152,12 +173,32 @@ export default function createRenderer(
 
     const renderedScreen = output.get()
 
+    // An absolute overlay shrank/moved this frame: its vacated cells were
+    // blitted from prevScreen (stale overlay pixels) because the underlying
+    // clean subtree never re-rendered. Flag the NEXT frame as contaminated
+    // so it renders without prevScreen and re-derives those cells from the
+    // tree (see hasOverlayVacatedCells). The current frame's diff is a
+    // no-op at those cells (output == prevScreen there), so nothing stale
+    // reaches the terminal; the poisoned frame writes the correction.
+    const overlayVacated = hasOverlayVacatedCells()
+
     // Drain continuation: render cleared scrollbox.dirty, so next frame's
     // root blit would skip the subtree. markDirty walks ancestors so the
     // next frame descends. Done AFTER render so the clear-dirty at the end
     // of renderNodeToOutput doesn't overwrite this.
     const drainNode = getScrollDrainNode()
     if (drainNode) markDirty(drainNode)
+
+    // Occlusion surfaces (occlusionColor) whose recorded cover decision is
+    // stale against this frame's image placements — the surface painted
+    // before a later-in-order image registered, or a clean-subtree blit
+    // skipped it while an image behind appeared, moved, or was removed.
+    // Re-walk the surface and schedule the frame now: the cover must follow
+    // image changes even when no React commit is pending (see
+    // getOcclusionMismatchNodes).
+    const occlusionStale = getOcclusionMismatchNodes(output)
+    for (const surface of occlusionStale) markDirty(surface)
+    if (occlusionStale.length > 0) scheduleRenderFrom(occlusionStale[0]!)
 
     return {
       // An invalid previous frame is unsafe for both blit and hardware
@@ -170,6 +211,8 @@ export default function createRenderer(
           ? getScrollHint()
           : null,
       scrollDrainPending: drainNode !== null,
+      poisonNextFrame: overlayVacated,
+      images: output.getImages(),
       screen: renderedScreen,
       viewport: {
         width: terminalWidth,

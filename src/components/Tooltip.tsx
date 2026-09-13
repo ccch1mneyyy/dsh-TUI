@@ -208,7 +208,7 @@ export function TooltipLayer({
   // terminal (Yoga would clip unpredictably on 1–2 column/row resize states).
   if (columns < 3 || rows < 3) return null
   const maxWidth = Math.max(3, columns - 4)
-  // Grapheme-aware wrap (parity with PromptInput's wrapToWidth): code-point
+  // Grapheme-aware wrap consistent with PromptInput's wrapToWidth: code-point
   // iteration splits ZWJ emoji and combining sequences across rows, leaving
   // broken halves at the row edges. Newlines are honoured like wrapWidth.
   let lines = wrapTooltipContent(tooltip.content, maxWidth - 2)

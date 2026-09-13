@@ -71,7 +71,7 @@ export function renderToScreen(
     stylePool = new StylePool()
     charPool = new CharPool()
     hyperlinkPool = new HyperlinkPool()
-    // @ts-ignore -- ported CC build; type drift tolerated react-reconciler 0.33 takes 10 args; @types says 11
+    // @ts-ignore -- runtime/type-definition mismatch: react-reconciler 0.33 takes 10 args; @types says 11
     container = reconciler.createContainer(
       root,
       LegacyRoot,
@@ -87,9 +87,9 @@ export function renderToScreen(
   }
 
   const t0 = performance.now()
-  // @ts-ignore -- ported CC build; type drift tolerated updateContainerSync exists but not in @types
+  // @ts-ignore -- runtime/type-definition mismatch: updateContainerSync exists but not in @types
   reconciler.updateContainerSync(el, container, null, noop)
-  // @ts-ignore -- ported CC build; type drift tolerated flushSyncWork exists but not in @types
+  // @ts-ignore -- runtime/type-definition mismatch: flushSyncWork exists but not in @types
   reconciler.flushSyncWork()
   const t1 = performance.now()
 
@@ -122,9 +122,9 @@ export function renderToScreen(
   const t3 = performance.now()
 
   // Unmount so next call gets a fresh tree. Leaves root/container/pools.
-  // @ts-ignore -- ported CC build; type drift tolerated updateContainerSync exists but not in @types
+  // @ts-ignore -- runtime/type-definition mismatch: updateContainerSync exists but not in @types
   reconciler.updateContainerSync(null, container, null, noop)
-  // @ts-ignore -- ported CC build; type drift tolerated flushSyncWork exists but not in @types
+  // @ts-ignore -- runtime/type-definition mismatch: flushSyncWork exists but not in @types
   reconciler.flushSyncWork()
 
   timing.reconcile += t1 - t0

@@ -8,9 +8,10 @@ import { ToolUseLoader } from '../ToolUseLoader.js'
 import { SplitDiffView } from '../SplitDiffView.js'
 import { SyntaxText } from '../SyntaxText.js'
 import { useTooltip } from '../Tooltip.js'
-import { formatDuration } from '../../cc/format.js'
+import { formatDuration } from '../../terminal-utils/format.js'
 import { formatClock } from '../../trajectory/format.js'
-import { t } from '../../i18n.js'
+import { foldLongLines } from '../../utils/fold-long-lines.js'
+import { getLang, t } from '../../i18n.js'
 import type { ToolBackground } from '../../tuiDisplayPrefs.js'
 import type { Theme } from '../../theme.js'
 import type { ClickEvent } from '../../ink/events/click-event.js'
@@ -19,13 +20,13 @@ import { useRevealVersion } from '../../hooks/useRevealVersion.js'
 
 type Props = {
   tool: ToolRow
-  /** Adds the top margin between messages (CC: addMargin). */
-  addMargin: boolean
+  /** Adds the top margin between messages. */
+  marginTopOnTurn: boolean
   /** Ctrl+O verbose: show full args/result instead of previews. */
   verbose: boolean
   /** Message-selection mode highlight. */
   isSelected?: boolean
-  /** Row expanded on its own (persistent hover-grey background, CC). */
+  /** Row expanded on its own (persistent hover-grey background). */
   isExpanded?: boolean
   /**
    * Mouse click (fullscreen): toggles the row's expansion — same action as
@@ -75,9 +76,9 @@ type Props = {
   revealVersion?: number
 }
 
-/** Tool display names: DSH emits lowercase tool ids (`bash`); Claude Code
- *  shows capitalized names (`Bash`). Map the common ones, fall back to the
- *  id with its first letter uppercased. */
+/** Tool display names: DSH emits lowercase tool ids (`bash`); display common
+ *  names with an initial capital and fall back to the id with its first letter
+ *  uppercased. */
 function displayName(name: string): string {
   const KNOWN: Record<string, string> = {
     bash: 'Bash',
@@ -122,7 +123,7 @@ function languageFromPath(path: string | undefined): string | undefined {
 
 // --- structured body lines --------------------------------------------------
 // The tool's presentation view (dsh-tools presentCall/presentResult, captured
-// by the channel) becomes per-line render intents here. CC convention: the
+// by the channel) becomes per-line render intents here. The convention is:
 // body hangs under a `  ⎿  ` gutter (first line) / blank continuation, so
 // tool output is visually nested under its header instead of flush-left.
 
@@ -136,7 +137,7 @@ type BodyLine = {
   readonly revealOnHover?: boolean
 }
 
-/** CC's collapsed text body keeps 3 lines (renderTruncatedContent). */
+/** The collapsed text body keeps three lines. */
 const TEXT_BODY_MAX_LINES = 3
 /** Diff bodies cap at the upstream chat row's 8 (dsh-client-ui-tool's
  *  CHAT_DIFF_MAX_LINES) — denser information than log output. */
@@ -163,7 +164,7 @@ export function toolNameColor(raw: string): keyof Theme {
   const n = raw.toLowerCase()
   if (TOOL_NAME_MUTATE.has(n)) return 'toolNameMutate'
   if (TOOL_NAME_EXEC.has(n)) return 'toolNameExec'
-  return 'claude'
+  return 'accent'
 }
 
 /** One side's text → display lines (upstream contentLines rule: empty text
@@ -258,6 +259,29 @@ function capLines(lines: BodyLine[], max: number, verbose: boolean): BodyLine[] 
   ]
 }
 
+/** Long-line clip for the body rows (utils/fold-long-lines.ts): the line cap
+ *  above bounds how MANY rows a card paints, this bounds how many rows ONE
+ *  row can paint. A `read` of a minified file, a terminal result whose last
+ *  line never broke, or a `write` payload is a single 100k-char line — under
+ *  `wrap="wrap"` the body would lay out thousands of visual rows per frame
+ *  no matter what the line budget says. Identity-preserving (same array, same
+ *  line objects) when every line fits, so the ordinary card allocates
+ *  nothing. */
+function foldBodyLines(lines: BodyLine[]): BodyLine[] {
+  let out: BodyLine[] | undefined
+  for (let index = 0; index < lines.length; index++) {
+    const line = lines[index]!
+    const folded = foldLongLines(line.text)
+    if (folded.hiddenChars === 0) {
+      out?.push(line)
+      continue
+    }
+    out ??= lines.slice(0, index)
+    out.push({ ...line, text: folded.text })
+  }
+  return out ?? lines
+}
+
 /** Header title from the presentation view: terminal cards keep the
  *  `Name(command)` shape; everything else renders the tool's own title
  *  (`Edit /path`, `Read /path (1 - 100)`) with the first word bold. The
@@ -275,9 +299,9 @@ function clipHeaderArgs(args: string): string {
   return `${args.slice(0, HEADER_ARGS_BUDGET)}…`
 }
 
-/** Terminal-card header folding shape: the first source line plus how many
- *  lines are hidden. */
-type FoldedTitle = { first: string; hidden: number }
+/** Terminal-card header folding shape: the line actually rendered, the source
+ *  lines the multi-line fold hid, and the characters the long-line clip hid. */
+type FoldedTitle = { first: string; hiddenLines: number; hiddenChars: number }
 
 /** Fold a multi-line terminal command title to its first SOURCE line.
  *  Counts '\n' separators in place instead of materializing a line array —
@@ -285,27 +309,45 @@ type FoldedTitle = { first: string; hidden: number }
  *  hundreds of KB, and the exact cost the HEADER_ARGS_BUDGET comment above
  *  keeps out of the header must not sneak back in through folding. (Lone-\r
  *  titles are not a thing presentCall produces; CRLF is normalized on the
- *  first line only.) Single-line titles return undefined: nothing to fold,
- *  rendering stays byte-identical to the unfolded card. */
-function foldTerminalTitle(title: string): FoldedTitle | undefined {
+ *  first line only.)
+ *
+ *  Two independent folds:
+ *   - `foldLines` (the `dsh-tui.foldTerminalCommand` setting): a multi-line
+ *     script collapses to its first source line, reported as `+N lines`.
+ *   - The long-line clip (always on — utils/fold-long-lines.ts): a command is
+ *     frequently ONE enormous line (`python -c …`, a minified blob, a pasted
+ *     `curl` body). This header Text WRAPS, so an unclipped 200k-char command
+ *     lays out thousands of rows on the card header itself — the same stall
+ *     HEADER_ARGS_BUDGET keeps out of the args half of the line.
+ *
+ *  Single short titles return undefined: nothing to fold, rendering stays
+ *  byte-identical to the unfolded card (and the header stays tooltip-silent). */
+function foldTerminalTitle(title: string, foldLines: boolean): FoldedTitle | undefined {
   const firstEnd = title.indexOf('\n')
-  if (firstEnd === -1) return undefined
-  let separators = 1
-  for (let at = title.indexOf('\n', firstEnd + 1); at !== -1; at = title.indexOf('\n', at + 1)) separators++
-  // Same trailing-newline rule as sideLines: a terminator is not a line.
-  const hidden = separators - (title.endsWith('\n') ? 1 : 0)
-  if (hidden <= 0) return undefined
-  const first = title.slice(0, title.charCodeAt(firstEnd - 1) === 13 ? firstEnd - 1 : firstEnd)
-  return { first, hidden }
+  let hiddenLines = 0
+  let body = title
+  if (firstEnd !== -1 && foldLines) {
+    let separators = 1
+    for (let at = title.indexOf('\n', firstEnd + 1); at !== -1; at = title.indexOf('\n', at + 1)) separators++
+    // Same trailing-newline rule as sideLines: a terminator is not a line.
+    hiddenLines = separators - (title.endsWith('\n') ? 1 : 0)
+    body = title.slice(0, title.charCodeAt(firstEnd - 1) === 13 ? firstEnd - 1 : firstEnd)
+  }
+  const clipped = foldLongLines(body)
+  if (hiddenLines <= 0 && clipped.hiddenChars === 0) return undefined
+  return { first: clipped.text, hiddenLines: Math.max(0, hiddenLines), hiddenChars: clipped.hiddenChars }
 }
 
-/** Metadata line for the header hover tooltip when the header itself is
- *  complete: start/finish wall-clock and the terminal result's exit code /
- *  signal — everything the header's relative `· 2m` chip and the body's
+/** Addendum line appended to the header hover tooltip when the header hides
+ *  content (folded script / clipped args / width-truncated title): start or
+ *  finish wall-clock and the terminal result's exit code / signal —
+ *  everything the header's relative `· 2m` chip and the body's
  *  `Running… (…)` line do NOT say. Durations stay out on purpose: showing
  *  a value twice, once on the card and once in the float, is exactly the
- *  noise class this tooltip exists to avoid. Returns '' when the row
- *  carries no timing data. */
+ *  noise class this tooltip exists to avoid. A fully visible header pops
+ *  NOTHING (meta included) — a float that repeats or annotates content
+ *  already on screen is noise, not detail. Returns '' when the row carries
+ *  no timing data. */
 function toolCardMetaTooltip(tool: ToolRow, isRunning: boolean, isError: boolean): string {
   const parts: string[] = []
   const startedAt = tool.startedAt
@@ -342,42 +384,44 @@ function HeaderTitle({ name, title, isTerminal, folded, displayArgs, argsLanguag
    *  segment renders underlined and clickable (opens the file menu). */
   filePath?: string
   onOpenFile?: (path: string) => void
-  /** Metadata line shown on hover when the header is complete: start/finish
-   *  wall-clock, terminal exit code/signal — everything the relative chip
-   *  and the body's Running… line do NOT say. Lazy getter, resolved at
-   *  show time so a running card's start stays fresh. '' = nothing. */
+  /** Addendum line for the header hover tooltip when the header HIDES
+   *  content (folded script / clipped args / width-truncated title):
+   *  start/finish wall-clock, terminal exit code/signal — everything the
+   *  relative chip and the body's Running… line do NOT say. Lazy getter,
+   *  resolved at show time so a running card's start stays fresh. '' =
+   *  nothing. A fully visible header pops no tooltip at all. */
   metaTooltip: () => string
   /**
-   * Column budget for `name + (title)` on the header line — what
+   * Column budget for the NON-terminal one-line title on the header line —
    * `useTerminalSize().columns` (already margin-adjusted) minus the fixed
-   * header chrome (loader, hover ▾ indicator, settled chip, gutter slack).
-   * When the wrapped text exceeds it, ink's truncate-end CUTS the title on
-   * the screen and the tooltip must prefer the complete text over the
-   * metadata; otherwise the metadata is everything the float adds.
+   * chrome of the row: loader dot 2 + hover ▾ indicator 2 (present while
+   * the pointer dwells) + the settled elapsed chip + slack for the
+   * transcript gutter. Only this title renders in a truncate-end Text, so
+   * only it can be cut by layout width (terminal titles wrap; args are
+   * clipped by the 480-char budget) — this budget gates just that cut.
    */
   headerTextBudget: number
 }): React.ReactNode {
-  // Hover tooltip priority: genuinely HIDDEN content first — a folded
-  // terminal script, args clipped past the 480-char budget, or a single-line
-  // title cut by layout width (truncate-end). Only a header that really
-  // fits its row offers just the metadata, and stays silent when the row
-  // has no timing data. Empty content is a no-op inside the hook.
+  // Hover tooltip rule: pop ONLY when the header genuinely hides content —
+  // a folded terminal script, args clipped past the 480-char budget, or a
+  // non-terminal one-line title cut by layout width (truncate-end). A header
+  // that fully fits its row stays silent: a float that repeats or annotates
+  // text already visible next to the pointer is noise, not detail. Empty
+  // content is a no-op inside the hook.
   const headerTooltip = useTooltip(() => {
     const meta = metaTooltip()
     const withMeta = (full: string): string => (meta === '' ? full : `${full}\n${meta}`)
     if (folded !== undefined) return withMeta(title ?? '')
     if (title === undefined && clipHeaderArgs(displayArgs) !== displayArgs) return withMeta(displayArgs)
-    // Width truncation: the truncate-end Text cuts long one-line titles by
-    // layout, not by a budget — same hidden-content rule as above.
-    const wrapped = title === undefined
-      ? `(${clipHeaderArgs(displayArgs)})`
-      : isTerminal
-        ? `(${title})`
-        : title.trim()
-    if (stringWidth(name) + stringWidth(wrapped) > headerTextBudget) {
-      return withMeta(title === undefined ? displayArgs : title.trim())
+    // Width truncation: only the non-terminal title Text is truncate-end —
+    // a long one-line title is really cut by layout when it overflows the
+    // row. Terminal titles WRAP instead (default Text wrap, nothing hidden)
+    // and args within the 480 budget wrap too; they never reach this gate.
+    if (title !== undefined && !isTerminal && stringWidth(title.trim()) > headerTextBudget) {
+      return withMeta(title.trim())
     }
-    return meta
+    // Header fully visible: nothing hidden, nothing to add — stay silent.
+    return ''
   })
   if (title === undefined) {
     return (
@@ -407,7 +451,9 @@ function HeaderTitle({ name, title, isTerminal, folded, displayArgs, argsLanguag
           ) : (
             <>
               <Text>({folded.first})</Text>
-              <Text dimColor>{` … +${folded.hidden} lines (ctrl+o to expand)`}</Text>
+              {folded.hiddenLines > 0 && (
+                <Text dimColor>{` … +${folded.hiddenLines} lines (ctrl+o to expand)`}</Text>
+              )}
             </>
           )}
         </Box>
@@ -464,12 +510,12 @@ function HeaderTitle({ name, title, isTerminal, folded, displayArgs, argsLanguag
 /**
  * Tool-call card: `● Edit /path` header with a blinking status dot, then the
  * structured body under a `  ⎿  ` gutter — diff hunks in red/green, terminal
- * output, read content — instead of the raw result dump (mirroring Claude Code's `AssistantToolUseMessage.tsx` + the dsh-tools presentation views the
- * channel captures per call).
+ * output, read content — instead of the raw result dump. The channel captures
+ * the structured views per call.
  */
 export function AssistantToolUseMessage({
   tool,
-  addMargin,
+  marginTopOnTurn,
   verbose,
   isSelected = false,
   isExpanded = false,
@@ -497,7 +543,7 @@ export function AssistantToolUseMessage({
   const name = displayName(tool.name)
   const minWidth = stringWidth(name) + 2
   // The settled view carries the applied diff / actual output; while running,
-  // the call view already shows the pending change (CC's pending Edit diff).
+  // the call view already shows the pending change.
   const view = tool.resultView ?? tool.callView
   const filePath = filePathFromTool(tool, view)
   const syntaxLanguage = view?.card === 'read' || view?.card === 'generic' || view === undefined
@@ -507,19 +553,22 @@ export function AssistantToolUseMessage({
   // command) — then the call view's title stands.
   const headerTitle = tool.resultView?.title ?? tool.callView?.title
   const headerIsTerminal = view?.card === 'terminal'
-  // Fold only the terminal header: multi-line command script, folding on,
-  // and the card not verbose/expanded (Ctrl+O and row click both land in
-  // `verbose`, so expansion reuses the existing state machine). Memoized on
-  // the title reference: settled titles never change, so the 1s
-  // useAnimationFrame tick of a running card re-renders without rescanning.
+  // Fold the terminal header: multi-line command script (setting-gated) plus
+  // the always-on long-line clip, both off once the card is verbose/expanded
+  // (Ctrl+O and the row click both land in `verbose`, so expansion reuses the
+  // existing state machine). Memoized on the title reference: settled titles
+  // never change, so the 1s useAnimationFrame tick of a running card
+  // re-renders without rescanning. `lang` joins the deps because the inline
+  // marker is localized.
+  const lang = getLang()
   const foldedHeader = React.useMemo(
-    () => headerIsTerminal && foldTerminalCommand && !verbose && headerTitle !== undefined
-      ? foldTerminalTitle(headerTitle)
+    () => headerIsTerminal && !verbose && headerTitle !== undefined
+      ? foldTerminalTitle(headerTitle, foldTerminalCommand)
       : undefined,
-    [headerIsTerminal, foldTerminalCommand, verbose, headerTitle],
+    [headerIsTerminal, foldTerminalCommand, verbose, headerTitle, lang],
   )
 
-  // Live elapsed clock while the call runs (CC's bash elapsed timer): the
+  // Live elapsed clock while the call runs: the
   // 1s tick re-renders the card; elapsed derives from wall-clock refs.
   const [viewportRef] = useAnimationFrame(isRunning ? 1000 : null)
   const elapsedMs = isRunning
@@ -535,16 +584,23 @@ export function AssistantToolUseMessage({
   // source line per terminal row (truncate) keeps the panes row-aligned,
   // which the flat add/del line model cannot express.
   const { columns } = useTerminalSize()
+  // Interactive rows grow a ▾/▴ disclose column while the pointer dwells
+  // (fixed, no layout shift elsewhere). The tooltip resolves at show time —
+  // i.e. exactly while that column is present — so the budget must reserve
+  // it for clickable cards only; non-interactive rows never render it.
+  const interactive = onClick !== undefined
   // Header-row budget for the title Text. useTerminalSize() already reports
   // the margin-adjusted content width, so this is the fixed chrome of the
-  // line only: loader dot 2 + hover ▾ indicator 2 (present while the pointer
-  // dwells) + the settled elapsed chip + slack for the transcript gutter.
-  // Over the budget ink's truncate-end cuts the title on screen (a *layout*
-  // truncation, not the 480-char budget) — HeaderTitle then prefers the
-  // complete text.
-  const headerTextBudget = Math.max(0, columns - 2 - 2 - stringWidth(name)
-    - (!isRunning && elapsedText !== '' ? stringWidth(elapsedText) : 0)
-    - 4)
+  // line only: loader dot 2 + hover ▾ indicator 2 (interactive rows, present
+  // while the pointer dwells) + the settled elapsed chip. Calibrated against
+  // the renderer (probe-tooltip-truncation): a truncate-end title whose
+  // width exceeds columns − loader − ▾ − chip is really cut on screen at
+  // tooltip time; anything at or under the budget fits fully and must NOT
+  // pop a tooltip. No extra slack, and the tool name is NOT deducted — a
+  // non-terminal title carries its own first word, so double-counting name
+  // pushed the gate ~10 cols too tight and floated fully visible titles.
+  const headerTextBudget = Math.max(0, columns - 2 - (interactive ? 2 : 0)
+    - (!isRunning && elapsedText !== '' ? stringWidth(elapsedText) : 0))
   const useSplitDiff = !isError && view?.card === 'diff' &&
     (diffLayout === 'split' || (diffLayout !== 'unified' && columns >= SPLIT_DIFF_MIN_COLS))
   let body: BodyLine[] = []
@@ -560,11 +616,15 @@ export function AssistantToolUseMessage({
     }
   }
   const cap = view?.card === 'diff' ? DIFF_BODY_MAX_LINES : TEXT_BODY_MAX_LINES
-  const bodySource = body.map(line => line.text).join('\n')
+  // Long-line clip before anything downstream reads the body: the syntax
+  // highlighter walks `bodySource` by line index, so the folded text must be
+  // the single source of truth for both.
+  const bodyLines = verbose ? body : foldBodyLines(body)
+  const bodySource = bodyLines.map(line => line.text).join('\n')
   const argsLanguage = jsonArgsLanguage(displayArgs)
   // The footnote rides OUTSIDE the cap: it is a pointer, not content, and a
   // long error body must not be the reason it disappears.
-  const lines = capLines(body, cap, verbose)
+  const lines = capLines(bodyLines, cap, verbose)
   const rendered: BodyLine[] =
     footnote === undefined ? lines : [...lines, { text: footnote, tone: 'hint' }]
   // Smooth reveal (line-unit, pending CALL body only): model-authored prose
@@ -598,7 +658,6 @@ export function AssistantToolUseMessage({
   // No layout change: the indicator is a fixed column on the header line, the
   // body never moves.
   const [hovered, setHovered] = React.useState(false)
-  const interactive = onClick !== undefined
   const hoverTint = interactive && hovered && !isSelected
 
   return (
@@ -606,7 +665,7 @@ export function AssistantToolUseMessage({
       ref={viewportRef}
       flexDirection="row"
       justifyContent="space-between"
-      marginTop={addMargin ? 1 : 0}
+      marginTop={marginTopOnTurn ? 1 : 0}
       width="100%"
       onClick={onClick}
       // Only selection paints a highlight; the configured treatment applies

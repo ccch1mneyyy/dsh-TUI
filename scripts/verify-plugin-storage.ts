@@ -31,6 +31,7 @@ const fakeHome = mkdtempSync(join(tmpdir(), 'dsh-plugin-storage-home-'))
 process.env.HOME = fakeHome
 process.env.USERPROFILE = fakeHome
 process.env.DSH_TUI_LANG = 'zh'
+process.env.DSH_TUI_ADAPTER_MODE = 'new'
 
 const { Context } = await import('@deepseek-ai/cordis')
 const pluginHostRow = await import('../src/dsh-adapter/plugin-host.js')
@@ -41,15 +42,43 @@ const {
   storageFileName,
   PLUGIN_STORAGE_DIR,
 } = await import('../src/dsh-adapter/plugin-storage.js')
-const { buildHostDescriptor } = await import('../src/dsh-adapter/host-descriptor.js')
-const { readGrantStore } = await import('../src/dsh-adapter/grants.js')
+const { buildHostDescriptorFromLifecycles, HOST_SUPPORTED_CONTRACTS } = await import('../src/adapter/standard/descriptor.js')
+const { lifecycleFromDetection, verifyAndPromote } = await import('../src/adapter/kernel/lifecycle.js')
+const { TUI_DECISION_EVENT_NAMES } = await import('../src/adapter/standard/tui-extension.js')
+const { readGrantStore } = await import('../src/adapter/standard/grants.js')
 const { TuiPluginStorageRuntime } = await import('../src/dsh-adapter/plugin-storage.js')
 const { DATA_DIR } = await import('../src/utils/paths.js')
-const { mountAdmitted, testManifest, STORAGE_COORDINATE } = await import('../src/dsh-adapter/plugin-test-utils.js')
+const { mountAdmitted, testManifest, STORAGE_COORDINATE } = await import('../scripts/lib/plugin-test-utils.js')
 import type { TuiPluginStorage } from '../src/dsh-adapter/plugin-storage.js'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
+function liveHostDescriptor(generationId: string) {
+  const lifecycles = HOST_SUPPORTED_CONTRACTS.map(contract => {
+    const key = `${contract.apiVersion}#${contract.kind}`
+    const lifecycle = verifyAndPromote(lifecycleFromDetection(
+      key,
+      {
+        state: 'supported',
+        evidence: [
+          { kind: 'service', id: key },
+          { kind: 'method', id: contract.kind === 'DecisionEvents' ? 'tuiPluginHost.subscribeDecision' : `${key}.verified` },
+          {
+            kind: 'probe',
+            id: contract.kind === 'Command' ? 'commands.execute(undefined)' : `${key}.probe`,
+            detail: 'read-only production probe succeeded',
+          },
+        ],
+      },
+      contract,
+    ))
+    if (contract.kind === 'DecisionEvents') {
+      return { ...lifecycle, liveFeatures: Object.freeze([...TUI_DECISION_EVENT_NAMES].sort()) }
+    }
+    return lifecycle
+  })
+  return buildHostDescriptorFromLifecycles(lifecycles, { generationId })
+}
 const cleanup: string[] = [fakeHome]
 
 let checks = 0
@@ -95,7 +124,24 @@ hostCtx.logger.warn = (format: unknown, ...params: unknown[]) => {
   hostWarnings.push([format, ...params].map(String).join(' '))
 }
 hostCtx.plugin({ name: pluginHostRow.name, apply: pluginHostRow.apply })
-await sleep(50)
+// New-mode admission must wait for real live evidence, not depend on a 50ms
+// timer or the removed pending-Kernel legacy fallback (slow disk/CI hosts).
+const descriptorDeadline = Date.now() + 5000
+while (!hostCtx.get('tuiPluginHost')?.hostDescriptor().contracts.some(contract => contract.kind === 'LocalStorage')) {
+  if (Date.now() >= descriptorDeadline) throw new Error(`storage live verification timed out: ${hostWarnings.join(' | ')}`)
+  await sleep(10)
+}
+check1('storage live probe is not exposed on the plugin-visible service',
+  typeof (hostCtx.get('tuiPluginStorage') as { probeReversible?: unknown } | undefined)?.probeReversible === 'undefined')
+// The internal open path keeps the grant/ledger/lifecycle switches; a TS
+// `private` would still be a prototype method a plugin could reach through a
+// cast. It must be a true `#private`, i.e. absent from the service AND its
+// prototype (review finding: storage authorization bypass).
+const pluginStorageService = hostCtx.get('tuiPluginStorage') as { openInternal?: unknown } | undefined
+check1('internal storage open is unreachable on the plugin-visible service',
+  typeof pluginStorageService?.openInternal === 'undefined')
+check1('internal storage open is absent from the service prototype',
+  !Object.getOwnPropertyNames(Object.getPrototypeOf(pluginStorageService as object) ?? {}).includes('openInternal'))
 
 const handles = new Map<string, TuiPluginStorage>()
 const activations = new Map<string, { context: InstanceType<typeof Context>; fiber: { dispose(): unknown } }>()
@@ -325,7 +371,7 @@ await openAs('gamma', [])
 
 // ── I. descriptor 现声明 LocalStorage ─────────────────────────────────────
 {
-  const { descriptor } = buildHostDescriptor({ generationId: 'storage-battery' })
+  const { descriptor } = liveHostDescriptor('storage-battery')
   const storage = descriptor.contracts.find(c => c.kind === 'LocalStorage')
   check1('descriptor advertises LocalStorage', storage !== undefined)
   check1('LocalStorage carries both permissions',

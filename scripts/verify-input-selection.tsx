@@ -164,6 +164,8 @@ function makeHarness(cols: number, rows: number): Harness {
   const { stdin, screenHas, findText, inverseAt, oscPayloads, press, motion, release, shiftPress, shiftRelease, click } = h
 
   const channel = {
+  // 探针确定性：鲸鱼欢迎期闲置动画（默认开）不进本探针的测量窗口。
+  whaleIdle: false,
     mode: { id: 'default', plan: false },
     modeIndex: 0,
     cycleMode() {},
@@ -230,7 +232,7 @@ function makeHarness(cols: number, rows: number): Harness {
   }
 
   try {
-    await sleep(500)
+    await sleep(500) // 固定窗:pacing 等首帧挂载 + 输入监听挂接，无单一可观测锚点
     stdin.write('hello world')
     check('A0 输入渲染', await settled(() => screenHas('hello world')))
     const p = findText('hello world')
@@ -362,10 +364,10 @@ function makeHarness(cols: number, rows: number): Harness {
     await settle(() => screenHas('alpha beta'))
     const shiftRow = findText('alpha beta')!
     click(shiftRow.col, shiftRow.row)
-    await sleep(550)
+    await sleep(550) // 固定窗:墙钟 越过 500ms 双击检测窗口，前一次 click 不得并入
     shiftPress(shiftRow.col + 5, shiftRow.row)
     shiftRelease(shiftRow.col + 5, shiftRow.row)
-    await sleep(50)
+    await sleep(50) // 固定窗:墙钟 两次 shift+click 的间隔须落在 500ms 双击窗口内
     shiftPress(shiftRow.col + 6, shiftRow.row)
     shiftRelease(shiftRow.col + 6, shiftRow.row)
     await settle(() => inverseAt(shiftRow.col + 6, shiftRow.row))
@@ -384,7 +386,7 @@ function makeHarness(cols: number, rows: number): Harness {
     stdin.write('foo-bar baz')
     await settle(() => screenHas('foo-bar baz'))
     click(c0 + 5, r0) // 'a'
-    await sleep(80)
+    await sleep(80) // 固定窗:墙钟 双击两击间隔，须落在 500ms 双击检测窗口内
     click(c0 + 5, r0)
     check(
       'A6 双击选词 [foo-bar]',
@@ -454,9 +456,9 @@ function makeHarness(cols: number, rows: number): Harness {
     stdin.write('甲乙')
     await settle(() => screenHas('甲乙'))
     const wide = findText('甲乙')!
-    await sleep(550)
+    await sleep(550) // 固定窗:墙钟 越过 500ms 双击检测窗口，与上一组点击断开
     click(wide.col + 3, wide.row)
-    await sleep(80)
+    await sleep(80) // 固定窗:墙钟 双击两击间隔，须落在 500ms 双击检测窗口内
     click(wide.col + 3, wide.row)
     await settle(() => inverseAt(wide.col, wide.row) && inverseAt(wide.col + 3, wide.row))
     const wideCopies = oscPayloads().length
@@ -556,6 +558,8 @@ function makeHarness(cols: number, rows: number): Harness {
       oscPayloads().at(-1) ?? 'no osc52',
     )
     stdin.write('\x1b') // clear the reverse selection
+    // 固定窗:待迁移 等 Esc 清掉选区（会变化的状态），但紧随的断言只能调
+    // consumeSelectionCopy()——它带消费副作用，不能拿来轮询。
     await sleep(200)
 
     // A10: 无选区 consumeSelectionCopy=false 且不写剪贴板
@@ -564,7 +568,7 @@ function makeHarness(cols: number, rows: number): Harness {
       'A10 无选区复制返回 false',
       controllerBox.current?.consumeSelectionCopy() === false,
     )
-    await sleep(200)
+    await sleep(200) // 固定窗:探针 无选区时不得有 OSC52 写入
     check('A10 无选区不写剪贴板', oscPayloads().length === idleCopies)
 
     // A11: controller clear (idle Ctrl+C path) must clear the fold model too,
@@ -692,7 +696,7 @@ function makeHarness(cols: number, rows: number): Harness {
   )
 
   try {
-    await sleep(600)
+    await sleep(600) // 固定窗:pacing 等 Chat 首帧挂载 + 输入监听挂接，无单一可观测锚点
     stdin.write('hello world')
     check('B1 Chat 输入渲染', await settled(() => screenHas('hello world')))
     const p = findText('hello world')!

@@ -2,7 +2,7 @@
  * Channel-level verification of the post-compaction behaviour (real Channel
  * via createChannel + fake ctx/agent, plain node against the compiled lib):
  *
- * - the compaction checkpoint renders a `Conversation compacted` Divider plus
+ * - the compaction checkpoint renders a `Session summary is ready` Divider plus
  *   a `compact` summary row (defaults FOLDED in the transcript)
  * - the context accounting (tokens.input, contextSegments, lastUsage) resets
  *   immediately, so the status bar drops without waiting for the next
@@ -110,7 +110,7 @@ emit({
 const rows = channel.rows
 const compactRow = rows[rows.length - 1]
 const noticeRow = rows[rows.length - 2]
-check('checkpoint renders notice row', noticeRow?.kind === 'notice' && noticeRow?.text === 'Conversation compacted', JSON.stringify(noticeRow))
+check('checkpoint renders notice row', noticeRow?.kind === 'notice' && noticeRow?.text === 'Session summary is ready', JSON.stringify(noticeRow))
 check('checkpoint renders compact row with full summary', compactRow?.kind === 'compact' && compactRow?.text === SUMMARY, JSON.stringify(compactRow))
 
 const summaryEst = est(SUMMARY)
@@ -175,7 +175,7 @@ function makeStreams() {
 
 const listProps = (expanded) => ({
   rows: [
-    { id: 1, kind: 'notice', text: 'Conversation compacted' },
+    { id: 1, kind: 'notice', text: 'Session summary is ready' },
     { id: 2, kind: 'compact', text: LONG_SUMMARY },
   ],
   expanded,
@@ -197,11 +197,11 @@ const listProps = (expanded) => ({
   const frame = () => toPlain(stdout.frames.at(-1) ?? '')
   // 空帧守卫：渲染崩溃时两条 hides 断言会空洞通过（本文件曾因 MessageList
   // 新增必需 prop 而空帧,只有 shows 报警）。先证明画面存在。
-  await settled(() => frame().includes('Conversation compacted') && frame().includes('摘要已折叠'))
-  // 负向断言观察窗保留：完整摘要若在正向落定之后迟到出现，落定瞬间检查会漏掉。
+  await settled(() => frame().includes('Session summary is ready') && frame().includes('摘要已折叠'))
+  // 固定窗:探针 负向断言观察窗：完整摘要若在正向落定之后迟到出现，落定瞬间检查会漏掉。
   await sleep(200)
   const shot = frame()
-  check('compact scenario renders at all', shot.includes('Conversation compacted'), '')
+  check('compact scenario renders at all', shot.includes('Session summary is ready'), '')
   check('folded summary shows the fold line', shot.includes('摘要已折叠'), '')
   check('folded summary hides the full text', !shot.includes(LONG_SUMMARY), '')
   instance.unmount()
@@ -216,7 +216,7 @@ const listProps = (expanded) => ({
   // Terminal wrap inserts newlines mid-string, so flatten before matching.
   const frame = () => toPlain(stdout.frames.at(-1) ?? '').replace(/\n/g, '')
   await settled(() => frame().includes('压缩摘要'))
-  // 负向断言观察窗保留：折叠行若迟到泄漏，落定瞬间检查会漏掉。
+  // 固定窗:探针 负向断言观察窗：折叠行若迟到泄漏，落定瞬间检查会漏掉。
   await sleep(200)
   const shot = frame()
   check('expanded summary shows the full text', shot.includes('压缩摘要'), '')

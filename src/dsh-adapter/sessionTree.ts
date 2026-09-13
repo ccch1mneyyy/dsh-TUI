@@ -1,3 +1,5 @@
+import type { SessionTreeData, TreeNode, TreeEntry, TreeEntryKind, SessionTreeMeta, SessionRewindFacts, TurnRange } from '../adapter/ports/channel-session.js'
+export type { SessionTreeData, TreeNode, TreeEntry, TreeEntryKind, SessionTreeMeta, SessionRewindFacts, TurnRange } from '../adapter/ports/channel-session.js'
 /**
  * Session family tree — the model behind the /tree screen
  * (pi's Session Tree ported to DSH's cross-session fork model).
@@ -16,39 +18,9 @@
  */
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
 
-/** Displayable entry kinds (a subset of ChatRow kinds, plus fork structure). */
-export type TreeEntryKind = 'user' | 'assistant' | 'tool' | 'compact' | 'interrupt' | 'notice'
-
 /** Filter modes cycled in the tree screen (pi parity, minus labels). */
 export type TreeFilter = 'default' | 'no-tools' | 'user-only' | 'all'
 export const TREE_FILTERS: readonly TreeFilter[] = ['default', 'no-tools', 'user-only', 'all']
-
-/** One displayable log entry; identity = (sessionId, seq). */
-export interface TreeEntry {
-  readonly sessionId: string
-  /** Source event seq inside that session's log (the fork anchor). */
-  readonly seq: number
-  readonly kind: TreeEntryKind
-  /** One-line preview (whitespace folded, capped). */
-  readonly text: string
-  /** Uncapped searchable text (kind + tool name + content). */
-  readonly searchText: string
-  /** Event wall-clock time. */
-  readonly time: number
-  /** Tool outcome for kind 'tool' (settled by tool/result during extraction). */
-  readonly toolStatus?: 'running' | 'ok' | 'error'
-  /** Extra marker (e.g. `aborted` for chunk-only assistant text). */
-  readonly label?: string
-  /** True on entries of the log's OWN first turn (a complete log's turn 0).
-   *  Only USER entries among them are unrewindable (dropping turn 0 needs
-   *  boundary -1, "cannot rewind to the very first message"), so the screen
-   *  refuses those up front instead of failing at confirm time; non-user
-   *  turn-0 entries rewind fine (a mid-turn cut at their step's step/end, or
-   *  turn 0's closing turn/end). Never set on a truncated tail: its first
-   *  VISIBLE turn rewinds fine against the full log, which is where
-   *  rewindToNode computes boundaries. */
-  readonly firstTurn?: boolean
-}
 
 /** One family member's log, as channel.buildSessionTree gathered it. */
 export interface FamilySession {
@@ -78,62 +50,6 @@ export interface FamilySession {
   readonly tailComplete?: boolean
 }
 
-export interface TreeNode {
-  /** `${sessionId}:${seq}`, or `${sessionId}:head` for a placeholder. */
-  readonly id: string
-  /** Null only on a session's placeholder node (empty fork / unreadable log). */
-  readonly entry: TreeEntry | null
-  /** Session whose chain this node belongs to. */
-  readonly sessionId: string
-  /** True on a session chain's first node (renders the fork/session marker). */
-  branchHead: boolean
-  children: TreeNode[]
-}
-
-export interface SessionTreeData {
-  readonly roots: readonly TreeNode[]
-  /** Node ids on the path from the family root to the live tip (`•` marker). */
-  readonly activePath: ReadonlySet<string>
-  /** Live session's last node (initial cursor target). */
-  readonly activeLeafId: string | null
-  /** Per-session display facts (branch-head labels in the screen). */
-  readonly sessions: ReadonlyMap<string, SessionTreeMeta>
-  /** Per-session rewind UX facts (drop-turn warning, branch-adopt target). */
-  readonly rewindFacts: ReadonlyMap<string, SessionRewindFacts>
-  /** True when the family exceeded a cap and distant branches were dropped. */
-  readonly truncated: boolean
-  readonly sessionCount: number
-}
-
-/** One own turn of a session, as far as the loaded events show it. */
-export interface TurnRange {
-  /** turn/start seq. */
-  readonly start: number
-  /** turn/end seq, or the last loaded event's seq while the turn is open. */
-  readonly end: number
-  /** Displayable own entries inside (start, end]. */
-  readonly entries: number
-  /** The turn/end was seen (an open turn's end is only the loaded tail). */
-  readonly closed: boolean
-}
-
-/** Per-session rewind UX facts, derived from the loaded events at build time. */
-export interface SessionRewindFacts {
-  /** Own turns in seq order. A turn whose start was trimmed away (coverage /
-   *  budget head cut) has no range — its entries find no match and the
-   *  confirm UX stays silent rather than guessing. */
-  readonly turns: readonly TurnRange[]
-  /** Own entries displayed for this session. */
-  readonly ownEntries: number
-  /** The loaded events reach the log tip (see FamilySession.tailComplete). */
-  readonly tailComplete: boolean
-  /** Adopt-this-branch fork target: the log's last turn/end seq. Only set
-   *  when tailComplete holds and a closed turn exists — a tail-cut read's
-   *  last turn/end is NOT the branch tip, and forking there would silently
-   *  drop the unseen tail the user means to keep. */
-  readonly tipBoundary?: number
-}
-
 /** What dropping a user-message pick's turn removes (the confirm warning). */
 export interface DropTurnInfo {
   /** Own entries of the session inside the dropped turn. */
@@ -160,15 +76,6 @@ export function droppedTurnInfo(data: SessionTreeData, entry: TreeEntry): DropTu
     droppedEntries: turn.entries,
     coversBranch: facts.tailComplete && facts.ownEntries > 0 && turn.entries === facts.ownEntries,
   }
-}
-
-export interface SessionTreeMeta {
-  readonly title?: string
-  readonly createdAt: number
-  readonly live: boolean
-  readonly unreadable: boolean
-  /** Log unread because the browse budget was spent (placeholder node). */
-  readonly unloaded: boolean
 }
 
 /** One flattened, render-ready row with its tree-drawing geometry. */
@@ -224,43 +131,51 @@ function firstTextOf(content: readonly Block[] | undefined): string {
 
 /**
  * Coalesce runs of same-type assistant/chunk deltas into single synthetic
- * events for REPLAY only. A streamed turn logs one event per token (~100k
- * events in long sessions); replaying them one at a time costs per-chunk
- * string growth on every row (quadratic in the turn's length). Merging is
- * outcome-identical: ensureStreaming/ensureReasoning only read chunk.type
- * and the concatenated text, and the row's seq comes from the run's FIRST
- * chunk (the fork boundary rewindToNode derives from it). Parts join once —
- * no quadratic concat. Live events never go through this.
+ * events for REPLAY only. A streamed pre-V3 turn logs one event per token
+ * (~100k events in long sessions); replaying them one at a time costs
+ * per-chunk string growth on every row (quadratic in the turn's length).
+ * Merging is outcome-identical: ensureStreaming/ensureReasoning only read
+ * chunk.type and the concatenated text, and the row's seq comes from the
+ * run's FIRST chunk (the fork boundary rewindToNode derives from it). Parts
+ * join once — no quadratic concat. Live events never go through this.
+ *
+ * Pre-V3 durable logs only: 0.1.5 removed `assistant/chunk` from the event
+ * union (V3 embeds the compacted stream in `assistant/message.stream`), so
+ * the merger works on the widened structural shape — runtime payloads from
+ * raw pre-V3 logs remain typed as SessionEvent by the reader.
  *
  * (Moved from channel.ts: the transcript replay and the tree extraction
  * share it.)
  */
 export function coalesceReplayEvents(events: readonly SessionEvent[]): SessionEvent[] {
-  type ChunkEvent = Extract<SessionEvent, { type: 'assistant/chunk' }>
+  type LegacyChunkData = { turn: number; step: number; chunk: { type: string; text?: string } }
+  const legacyChunkDataOf = (event: SessionEvent): LegacyChunkData | undefined => {
+    if ((event as { type: string }).type !== 'assistant/chunk') return undefined
+    const data = (event as unknown as { data: LegacyChunkData }).data
+    if (data.chunk?.type !== 'text-delta' && data.chunk?.type !== 'reasoning-delta') return undefined
+    return data
+  }
   const out: SessionEvent[] = []
-  let run: { event: ChunkEvent; type: string; parts: string[] } | null = null
+  let run: { event: SessionEvent; data: LegacyChunkData; parts: string[] } | null = null
   const flush = (): void => {
     if (run === null) return
-    const chunk = run.event.data.chunk
     out.push({
       ...run.event,
-      data: { ...run.event.data, chunk: { ...chunk, text: run.parts.join('') } },
-    } as ChunkEvent)
+      data: { ...run.data, chunk: { ...run.data.chunk, text: run.parts.join('') } },
+    } as unknown as SessionEvent)
     run = null
   }
   for (const event of events) {
-    if (
-      event.type === 'assistant/chunk' &&
-      (event.data.chunk.type === 'text-delta' || event.data.chunk.type === 'reasoning-delta')
-    ) {
-      if (run !== null && run.type === event.data.chunk.type) {
+    const data = legacyChunkDataOf(event)
+    if (data !== undefined) {
+      if (run !== null && run.data.chunk.type === data.chunk.type) {
         // oxlint-disable-next-line typescript/no-unnecessary-condition -- durable replay data may lack text
-        run.parts.push(event.data.chunk.text ?? '')
+        run.parts.push(data.chunk.text ?? '')
         continue
       }
       flush()
       // oxlint-disable-next-line typescript/no-unnecessary-condition -- durable replay data may lack text
-      run = { event, type: event.data.chunk.type, parts: [event.data.chunk.text ?? ''] }
+      run = { event, data, parts: [data.chunk.text ?? ''] }
       continue
     }
     flush()
@@ -298,8 +213,7 @@ export interface RewindTarget {
   /**
    * Set when the boundary cuts a turn in the middle: the fork must append a
    * synthetic turn/end for this turn number (the exact shape a real user
-   * interrupt writes — the persistence layer closes crash-orphaned turns the
-   * same way). Undefined when the seed already ends turn-closed.
+   * cancellation writes). Undefined when the seed already ends turn-closed.
    */
   readonly closeTurn?: number
 }
@@ -497,6 +411,29 @@ export function extractEntries(sessionId: string, events: readonly SessionEvent[
       inFirstTurn = markFirstTurn && turnsSeen === 1
       continue
     }
+    // Pre-V3 durable logs only: per-token chunk events predate the 0.1.5
+    // union (V3 embeds the stream in assistant/message.stream), so they are
+    // handled structurally outside the typed switch.
+    if ((event as { type: string }).type === 'assistant/chunk') {
+      const data = (event as unknown as { data: { turn: number; step: number; chunk: { type: string; text?: string } } }).data
+      if (data.chunk.type === 'text-delta') {
+        const text = data.chunk.text ?? ''
+        if (text.trim()) {
+          const key = `${data.turn}:${data.step}`
+          const index = push({
+            seq: event.seq,
+            kind: 'assistant',
+            text: preview(text),
+            searchText: `assistant ${text}`,
+            time: event.time,
+          })
+          const group = tentatives.get(key)
+          if (group === undefined) tentatives.set(key, [index])
+          else group.push(index)
+        }
+      }
+      continue
+    }
     switch (event.type) {
       case 'user/message': {
         const source = event.data.source as { kind: string; plugin?: string }
@@ -538,24 +475,6 @@ export function extractEntries(sessionId: string, events: readonly SessionEvent[
             time: event.time,
           })
         }
-        break
-      }
-      case 'assistant/chunk': {
-        const chunk = event.data.chunk
-        if (chunk.type !== 'text-delta') break
-        const text = 'text' in chunk ? (chunk.text ?? '') : ''
-        if (!text.trim()) break
-        const key = `${event.data.turn}:${event.data.step}`
-        const index = push({
-          seq: event.seq,
-          kind: 'assistant',
-          text: preview(text),
-          searchText: `assistant ${text}`,
-          time: event.time,
-        })
-        const group = tentatives.get(key)
-        if (group === undefined) tentatives.set(key, [index])
-        else group.push(index)
         break
       }
       case 'tool/call': {
@@ -665,8 +584,15 @@ export function buildSessionTree(
   // surviving root deterministic, and every structural read below goes
   // through parentOf so the cut is observed consistently.
   const cutEdges = new Set<string>()
-  const parentOf = (session: FamilySession): string | undefined =>
-    cutEdges.has(session.id) ? undefined : session.parentSession
+  const parentOf = (session: FamilySession): string | undefined => {
+    if (cutEdges.has(session.id)) return undefined
+    // A parent id without the exact inherited cut proves ancestry, but not
+    // where the fork belongs. Treat that unprovable edge as detached: the
+    // self-contained child remains visible as a root instead of silently
+    // inventing `seedLength = 0`, duplicating/anchoring the branch wrongly.
+    if (session.parentSession !== undefined && session.seedLength === undefined) return undefined
+    return session.parentSession
+  }
   for (const session of sessions) {
     const seen = new Set<string>([session.id])
     let cursor: FamilySession = session
@@ -736,8 +662,8 @@ export function buildSessionTree(
       unloaded: session.unloaded === true,
     })
     const parentId = parentOf(session)
-    const trimFrom = parentId !== undefined && byId.has(parentId)
-      ? Math.min(session.seedLength ?? 0, coverOf(parentId) + 1)
+    const trimFrom = parentId !== undefined && byId.has(parentId) && session.seedLength !== undefined
+      ? Math.min(session.seedLength, coverOf(parentId) + 1)
       : 0
     const own = session.unreadable === true ? [] : extractEntries(session.id, session.events).filter(entry => entry.seq >= trimFrom)
     // Rewind UX facts: own turn ranges (drop-turn confirm warning) and the
@@ -821,9 +747,10 @@ export function buildSessionTree(
   }
   /** Last displayed entry with seq <= boundary, walking up from the parent. */
   const findAnchor = (fork: FamilySession): TreeNode | undefined => {
-    const boundary = (fork.seedLength ?? 0) - 1
+    if (fork.seedLength === undefined) return undefined
+    const boundary = fork.seedLength - 1
     const visited = new Set<string>()
-    let cursorId = fork.parentSession
+    let cursorId = parentOf(fork)
     while (cursorId !== undefined && !visited.has(cursorId)) {
       visited.add(cursorId)
       const holder = byId.get(cursorId)
@@ -895,8 +822,9 @@ export function buildSessionTree(
       const parentId = parentOf(current)
       if (parentId === undefined || !byId.has(parentId)) break
       if (visited.has(parentId)) break
+      if (current.seedLength === undefined) break
       visited.add(parentId)
-      boundary = Math.min(boundary, (current.seedLength ?? 0) - 1)
+      boundary = Math.min(boundary, current.seedLength - 1)
       for (const node of chains.get(parentId)!) {
         if (node.entry !== null && node.entry.seq <= boundary) activePath.add(node.id)
       }

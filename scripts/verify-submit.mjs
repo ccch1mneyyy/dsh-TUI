@@ -178,8 +178,7 @@ const interruptChannel2 = createChannel(ctx, interruptAgent2, {
 interruptChannel2.interruptAndDeliver(['x'])
 interruptChannel2.interruptAndDeliver(['y'])
 resolveIdle2()
-// Stability probe (must NOT double-deliver): a settle would return as soon
-// as 'y' lands and could miss a late wrongful 'x' — keep the fixed window.
+// 固定窗:探针 断言不得二次投递——settle 在 'y' 落地即返回，会漏掉迟到的错误 'x'
 await sleep(10)
 check('double interrupt does not double-deliver', interruptFollowups.filter(m => m.content?.[0]?.text === 'x').length === 0 && interruptFollowups.filter(m => m.content?.[0]?.text === 'y').length === 1, JSON.stringify(interruptFollowups.map(m => m.content?.[0]?.text)))
 

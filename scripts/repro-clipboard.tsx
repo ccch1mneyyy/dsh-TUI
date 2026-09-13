@@ -78,6 +78,8 @@ const screenHas = (s: string): boolean => termTest.screenHas(term, s)
 
 const listeners = new Set<() => void>()
 const channel: any = {
+  // 探针确定性：鲸鱼欢迎期闲置动画（默认开）不进本探针的测量窗口。
+  whaleIdle: false,
   version: 0,
   rows: [],
   status: 'idle',
@@ -114,7 +116,7 @@ const instance = await render(
   </AlternateScreen>,
   { stdout: new FakeStdout(), stdin: stdinObj, stderr: new FakeStderr(), exitOnCtrlC: false, patchConsole: false },
 )
-// 首帧挂载 pacing：等 React 树完成首次渲染与输入监听挂接，无单一可观测条件。
+// 固定窗:pacing 等首帧——React 树首次渲染与输入监听挂接无单一可观测条件。
 await sleep(600)
 
 let failed = 0

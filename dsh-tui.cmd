@@ -1,11 +1,9 @@
 @echo off
 rem dsh-tui: launch dsh-TUI through the official dsh CLI profile boot.
 rem Equivalent to: dsh --profile dsh-tui <args>
-rem   --resume: read ~/.dsh-tui/resume.txt (legacy ~/.dsh-cc/resume.txt as
-rem             fallback) and feed it to the TUI as DSH_TUI_RESUME_SESSION —
-rem             dual-written as DSH_CC_RESUME_SESSION for pre-rename TUI
-rem             builds (the TUI writes the chosen session id there on
-rem             /resume; see src/sessionHistory.ts, issue #120).
+rem   --resume: read ~/.dsh-tui/resume.txt and feed it to the TUI as
+rem             DSH_TUI_RESUME_SESSION (the TUI writes the chosen session id
+rem             there on /resume; see src/sessionHistory.ts).
 rem Prereq: dsh CLI on PATH (npm install -g @deepseek-ai/dsh). The profile
 rem         is created by `dsh plugin --profile dsh-tui add @deepseek-harness-tui/dsh-tui`
 rem         under $DSH_HOME/profiles/dsh-tui (default ~/.dsh), so this
@@ -31,10 +29,7 @@ if "%~1"=="" goto :run
 if /i "%~1"=="--resume" (
   if exist "%USERPROFILE%\.dsh-tui\resume.txt" (
     set /p DSH_TUI_RESUME_SESSION=<"%USERPROFILE%\.dsh-tui\resume.txt"
-  ) else if exist "%USERPROFILE%\.dsh-cc\resume.txt" (
-    set /p DSH_TUI_RESUME_SESSION=<"%USERPROFILE%\.dsh-cc\resume.txt"
   )
-  if defined DSH_TUI_RESUME_SESSION set "DSH_CC_RESUME_SESSION=%DSH_TUI_RESUME_SESSION%"
 ) else (
   set "ARGS=%ARGS% "%~1""
 )

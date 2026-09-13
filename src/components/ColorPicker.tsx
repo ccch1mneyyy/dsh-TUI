@@ -4,7 +4,7 @@ import { Box, Text } from '../ui.js'
 import { Pane } from './design-system/Pane.js'
 import { Select } from './Select.js'
 import { HintLine } from './design-system/HintLine.js'
-import { SESSION_COLOR_NAMES, SESSION_COLORS } from '../cc/sessionColors.js'
+import { SESSION_COLOR_NAMES, SESSION_COLORS } from '../terminal-utils/sessionColors.js'
 
 /**
  * Session accent color picker (bare `/color`): a permission-colored Pane

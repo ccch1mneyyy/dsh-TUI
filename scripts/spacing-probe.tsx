@@ -1,9 +1,8 @@
 /**
  * Spacing/visual-distinction probe: renders a transcript with user prompt,
- * thinking, tool call and assistant text rows, then asserts the Claude Code
- * separations:
- *   1. Every block is separated by a blank line (CC addMargin on every row).
- *   2. User prompt carries the gold bold label (briefLabelYou, no background
+ * thinking, tool call and assistant text rows, then checks the transcript row spacing:
+ *   1. Every block is separated by a blank line (top margin on each new turn).
+ *   2. User prompt carries the gold bold label (userPromptLabel, no background
  *      fill since the Kimi-style restyle).
  *   3. Thinking label + body are dim+italic (grey).
  * Run: node --import tsx scripts/spacing-probe.tsx (Windows side)
@@ -17,7 +16,7 @@ const [{ PassThrough, Writable }, React, { render }, { Chat }, { QuestionStore }
     import('../src/ui.js'),
     import('../src/screens/Chat.js'),
     import('../src/dsh-adapter/questions.js'),
-    import('../src/cc/figures.js'),
+    import('../src/terminal-utils/figures.js'),
     import('../src/ink/stringWidth.js'),
   ])
 const { THINKING_SPINNER_FRAMES, THINKING_SETTLED_MARKER } = figures
@@ -57,6 +56,8 @@ class FakeStdin extends PassThrough {
 }
 
 const channel = {
+  // 探针确定性：鲸鱼欢迎期闲置动画（默认开）不进本探针的测量窗口。
+  whaleIdle: false,
   version: 0,
   rows: [
     { id: 0, kind: 'user', text: 'hello, list the files' },
@@ -74,7 +75,7 @@ const channel = {
   contextWindow: 1000000,
   reasoningEffort: 'max',
   workingActivity: { phase: 'tool', line: '正在查看 src/dsh-adapter/channel.ts · 总12s', toolCount: 2, turnElapsedMs: 12000 },
-  activityFrames: 'claude',
+  activityFrames: 'moon8',
   contextBarEnabled: true,
   lastUsage: { input: 12000, output: 356, cacheRead: 3400, cacheWrite: 1200 },
   tps: 42,
@@ -167,12 +168,12 @@ for (let i = 1; i < markerLines.length; i++) {
   )
 }
 
-// 2. User prompt carries the gold bold label (briefLabelYou #FFDF80 in the
+// 2. User prompt carries the gold bold label (userPromptLabel #FFDF80 in the
 //    dark theme) with no background fill since the Kimi-style restyle.
 check(
   'user prompt gold bold label',
   cursorMoved.includes('\x1b[38;2;255;223;128m'),
-  'briefLabelYou gold SGR present in user prompt region',
+  'userPromptLabel gold SGR present in user prompt region',
 )
 
 // 3. Thinking label is grey + italic (the theme's `inactive` grey is how
@@ -274,8 +275,8 @@ check(
 )
 check(
   'activity indicator frame',
-  contentLines.some(l => l.includes('正在查看 src/dsh-adapter/channel.ts') && /^[·✢*✶✻✽]/.test(l)),
-  'indicator frame leads the activity line (claude preset)',
+  contentLines.some(l => l.includes('正在查看 src/dsh-adapter/channel.ts') && /^[·•●]/.test(l)),
+  'indicator frame leads the activity line',
 )
 check(
   'activity no warn at low usage',

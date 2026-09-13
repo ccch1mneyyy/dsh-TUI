@@ -1,3 +1,5 @@
+import type { RecapOutcome } from '../adapter/ports/channel-catalog.js'
+export type { RecapOutcome } from '../adapter/ports/channel-catalog.js'
 /**
  * Session recap (`/recap`, pi-recap semantics): a single TOOL-LESS LLM
  * call that summarizes the session's RECENT activity into one line and
@@ -82,17 +84,15 @@ export function collectRecentActivity(events: readonly SessionEvent[], limitChar
  * the language of the activity (matching the user's own words).
  */
 export function wrapRecapPrompt(activity: string): string {
-  return `<system-reminder>You are a thoughtful assistant helping the user wrap up this session. Look at the recent activity below and give it a quick human review — like a colleague summarizing what the two of you just worked on.
+  return `Create a compact session recap from the activity excerpt below.
+Use the user's language and describe the work and its current outcome accurately.
+Return one JSON object with two string fields:
+- "title": a descriptive title of about 2-6 words.
+- "summary": one line of about 10-20 words covering the most recent progress.
+Do not include Markdown fences or any text outside the JSON object.
 
-TASK — do BOTH:
-1. Write ONE short line (about 10-20 words) recapping the RECENT ACTIVITY: what was being worked on and where things stand. Write it in the same language the user writes in. Sound natural and professional — a warm recap, not a dry log.
-2. Propose a short session title (about 2-6 words, same language) that captures what this session is about.
-
-Respond with ONLY a JSON object, no markdown fences, no extra text:
-{"title": "<short title>", "summary": "<one-line summary>"}
-
-RECENT ACTIVITY:
-${activity}</system-reminder>`
+Activity excerpt:
+${activity}`
 }
 
 /**
@@ -125,14 +125,4 @@ export function parseRecapResponse(raw: string): { summary: string; title?: stri
     }
   }
   return { summary: raw.trim() }
-}
-
-/** Outcome of one recap call, as surfaced on the Channel. */
-export interface RecapOutcome {
-  /** The one-line summary, or null when the call failed. */
-  summary: string | null
-  /** Proposed session title, when the model offered one. */
-  title?: string
-  /** Human-readable failure reason (llm missing, stream error, …). */
-  error?: string
 }

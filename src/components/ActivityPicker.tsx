@@ -7,8 +7,8 @@ import { HintLine } from './design-system/HintLine.js'
 import { FRAME_PRESETS, PRESET_NAMES } from './activityFrames.js'
 
 /**
- * Working-activity indicator picker in the CC ModelPicker style (ported
- * from the pi extension's `/activity` interactive select): a
+ * Working-activity indicator picker (ported from the pi extension's
+ * `/activity` interactive select): a
  * permission-colored Pane listing every preset (random first) with its
  * frame preview, `❯` focus pointer and `✓` on the active preset. Enter
  * applies through `channel.setActivityFrames`, Esc cancels.

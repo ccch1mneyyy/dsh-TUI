@@ -8,10 +8,11 @@
  * and `tui/compact` are NOT free-for-all `ctx.on` targets: the subscribing
  * plugin (identified by its verified Component identity) must hold the
  * matching `domain.resource.intercept` grant. Grant answers
- * come from the unified 8-permission GrantStore in ./grants.js (registry-
- * driven defaults, `grants`/`denies` sections, corrupt fail-closed) — this
- * module is only the subscribe-time CHECKPOINT: which event needs which
- * permission, and the cordis bail hook that enforces it.
+ * come from the unified 8-permission GrantStore in
+ * `../adapter/standard/grants.js` (registry-driven defaults,
+ * `grants`/`denies` sections, corrupt fail-closed) — this module is only the
+ * subscribe-time CHECKPOINT: which event needs which permission, and the
+ * cordis bail hook that enforces it.
  *
  * A denied subscription never enters the dispatch chain — it is "as if
  * unregistered" (D-7) and the caller gets a no-op disposer plus a logger
@@ -33,7 +34,7 @@ import {
   parseGrantStore,
   readGrantStore,
   type GrantStore,
-} from './grants.js'
+} from '../adapter/standard/grants.js'
 import {
   componentIdentityOf,
   requireComponentIdentity,
@@ -44,33 +45,39 @@ import {
   INTERCEPT_EVENT_SCOPE_BY_PERMISSION,
   normalizePermissionScope,
   permissionScopeCovers,
-} from '../plugin-spec/permission-scope.js'
-import { TUI_DECISION_EVENT_NAMES } from '../plugin-spec/tui-extension.js'
+} from '../adapter/standard/permission-scope.js'
+import { TUI_DECISION_EVENT_NAMES } from '../adapter/standard/tui-extension.js'
+import { DECISION_EVENT_PERMISSIONS } from '../adapter/spec/protocol-constants.js'
 import { bindCallerEffect, compositionRoot } from './host-access.js'
+import { adapterRuntimeFor } from '../adapter/kernel/runtime-context.js'
+import {
+  assertCapabilityShadowPolicy,
+  type AdapterRuntimeOptions,
+} from '../adapter/kernel/runtime.js'
 
-/** The intercept permission each decision event requires (D-7 naming:
- *  `domain.resource.intercept`). Observe-class events (tui/rewind-done,
- *  tui/session-switched) are deliberately absent. */
-export const DECISION_EVENT_PERMISSIONS: Readonly<Record<string, string>> = Object.freeze({
-  'tui/input': 'session.input.intercept',
-  'tui/rewind-prompt': 'session.rewind.intercept',
-  'tui/session-switch': 'session.switch.intercept',
-  'tui/compact': 'session.compact.intercept',
-})
+/** The intercept permission each decision event requires. The map is
+ * derived in src/adapter/spec/protocol-constants.ts and re-exported here for
+ * compatibility; product code must not declare a second copy. */
+export { DECISION_EVENT_PERMISSIONS }
+
 
 // ── Compatibility aliases (pre-GrantStore names) ────────────────────────────
-// The grant-file format and these entry points predate the unified store;
-// keep them working — verify batteries and any embedder code import them
-// from this module.
+// These aliases are intentionally outside the P6 removal scope: they are a
+// long-term compatibility surface for existing embedder/test code. They map
+// directly to the canonical `../adapter/standard/grants.js` implementation.
+// OWNER: dsh-tui adapter. UNTIL: no scheduled removal.
 export { EXTENSION_GRANTS_FILE }
 
-/** @deprecated Use GrantStore from ./grants.js (same shape, plus more). */
+/** @deprecated Use GrantStore from `../adapter/standard/grants.js` (same shape, plus more).
+ * Long-term compatibility alias; owner: dsh-tui adapter. */
 export type ExtensionGrants = GrantStore
 
-/** @deprecated Use parseGrantStore from ./grants.js. */
+/** @deprecated Use parseGrantStore from `../adapter/standard/grants.js`.
+ * Long-term compatibility alias; owner: dsh-tui adapter. */
 export const parseExtensionGrants: (text: string) => GrantStore = parseGrantStore
 
-/** @deprecated Use readGrantStore from ./grants.js. */
+/** @deprecated Use readGrantStore from `../adapter/standard/grants.js`.
+ * Long-term compatibility alias; owner: dsh-tui adapter. */
 export const readExtensionGrants: (dir?: string) => GrantStore = readGrantStore
 
 /**
@@ -87,6 +94,18 @@ export const readExtensionGrants: (dir?: string) => GrantStore = readGrantStore
  * lands first is unobservable.
  */
 const guardedRoots = new WeakSet<object>()
+/**
+ * Real DecisionEvents dispatch topology, keyed by Cordis composition root.
+ *
+ * The guard alone is NOT evidence that an event is actually dispatched:
+ * `installDecisionGuard()` only installs the subscribe-time gate. The actual
+ * dispatch paths live in the channel (`createChannel`), which calls
+ * `markDecisionDispatchTopology()` after it is composed. Until that marker is
+ * present, `probeDecisionEventFeatures()` returns no features — the public
+ * Host Descriptor must not publish DecisionEvents from a composition that only
+ * has a guard and no real channel/dispatch source.
+ */
+const decisionDispatchTopology = new WeakMap<object, Map<string, number>>()
 export interface DecisionHandlerMetadata {
   componentId: string
   activationId: string
@@ -120,6 +139,7 @@ export interface RegisteredDecisionHandler {
 }
 
 export interface DecisionRegistry {
+  runtime: AdapterRuntimeOptions
   grants: GrantStore
   handlers: Map<string, Map<string, RegisteredDecisionHandler>>
 }
@@ -132,9 +152,10 @@ function rootKey(ctx: Context): object {
 
 function registryFor(ctx: Context, grants?: GrantStore): DecisionRegistry {
   const key = rootKey(ctx)
+  const runtime = adapterRuntimeFor(ctx)
   let registry = registries.get(key)
   if (registry === undefined) {
-    registry = { grants: grants ?? readGrantStore(), handlers: new Map() }
+    registry = { grants: grants ?? readGrantStore(undefined, undefined, runtime), handlers: new Map(), runtime }
     registries.set(key, registry)
   } else if (grants !== undefined) {
     registry.grants = grants
@@ -227,6 +248,8 @@ export function registerDecisionHandler(
   options: DecisionRegistrationOptions = {},
   onRelease?: () => void,
 ): () => boolean {
+  const runtime = registryFor(pluginCtx).runtime
+  assertCapabilityShadowPolicy('host.decision.subscribe', runtime.mode, runtime.slices)
   if (componentIdentityOf(pluginCtx) !== identity) {
     throw new Error('DecisionEvents registration identity is not bound to the calling activation')
   }
@@ -347,6 +370,102 @@ export function withDecisionRegistration<T>(ctx: Context, callback: () => T): T 
 
 export function decisionHandlerMetadataOf(listener: Function): DecisionHandlerMetadata | undefined {
   return handlerMetadata.get(listener)
+}
+
+/** Return the event names for which a real dispatch topology is recorded in
+ * this composition. Empty means only a guard (or nothing) is mounted. */
+export function decisionDispatchEventNames(ctx: Context): readonly string[] {
+  const root = compositionRoot(ctx) as unknown as object
+  const counts = typeof root === 'object' && root !== null
+    ? decisionDispatchTopology.get(root)
+    : undefined
+  return counts === undefined
+    ? Object.freeze([])
+    : Object.freeze([...counts.keys()].sort())
+}
+
+/** True when this composition has at least one real DecisionEvents dispatch
+ * source (today: the live channel). Used by host descriptor/admission views. */
+export function hasDecisionDispatchTopology(ctx: Context): boolean {
+  return decisionDispatchEventNames(ctx).length > 0
+}
+
+/**
+ * Record that this composition contains a real DecisionEvents dispatch
+ * source for the supplied event names. Called by the channel after it mounts
+ * the dispatch path; never called by guard installation alone.
+ *
+ * Returns a disposer that decrements this source's contribution. Multiple
+ * dispatch sources in the same composition are reference-counted per event,
+ * so unloading one channel does not erase another live channel's topology.
+ *
+ * Lifecycle assumption: in the current TUI the channel is mounted by a
+ * Cordis plugin/context and `createChannel()` registers this disposer in that
+ * context's effect cleanup, so unloading the owning context unmarks the
+ * topology. If an embedder intentionally treats the channel as a
+ * process-level singleton and never disposes the owning context, the marker
+ * persists for the process lifetime — matching the singleton assumption and
+ * not leaking across unloaded channels. Tests can always call the disposer or
+ * `unmarkDecisionDispatchTopology()` explicitly to prove post-unload
+ * behavior.
+ */
+export function markDecisionDispatchTopology(
+  ctx: Context,
+  events: readonly string[] = TUI_DECISION_EVENT_NAMES,
+): () => void {
+  const root = compositionRoot(ctx) as unknown as object
+  if (typeof root !== 'object' || root === null) return () => undefined
+  const known = new Set(TUI_DECISION_EVENT_NAMES)
+  const added: string[] = []
+  let counts = decisionDispatchTopology.get(root)
+  if (counts === undefined) {
+    counts = new Map<string, number>()
+    decisionDispatchTopology.set(root, counts)
+  }
+  for (const event of events) {
+    if (!known.has(event as typeof TUI_DECISION_EVENT_NAMES[number])) continue
+    counts.set(event, (counts.get(event) ?? 0) + 1)
+    added.push(event)
+  }
+  let disposed = false
+  return () => {
+    if (disposed) return
+    disposed = true
+    unmarkDecisionDispatchTopology(ctx, added)
+  }
+}
+
+/**
+ * Remove this composition's DecisionEvents dispatch topology registration for
+ * the supplied events (defaults to all known events). Also available as the
+ * disposer returned by `markDecisionDispatchTopology()`; `createChannel()`
+ * calls it when the channel's Cordis effect/context is unloaded.
+ */
+export function unmarkDecisionDispatchTopology(
+  ctx: Context,
+  events: readonly string[] = TUI_DECISION_EVENT_NAMES,
+): void {
+  const root = compositionRoot(ctx) as unknown as object
+  if (typeof root !== 'object' || root === null) return
+  const counts = decisionDispatchTopology.get(root)
+  if (counts === undefined) return
+  const known = new Set(TUI_DECISION_EVENT_NAMES)
+  for (const event of events) {
+    if (!known.has(event as typeof TUI_DECISION_EVENT_NAMES[number])) continue
+    const remaining = (counts.get(event) ?? 0) - 1
+    if (remaining > 0) counts.set(event, remaining)
+    else counts.delete(event)
+  }
+  if (counts.size === 0) decisionDispatchTopology.delete(root)
+}
+
+/** Read-only DecisionEvents feature probe: reports only event names that have
+ * BOTH a guard and a real channel/dispatch topology in this composition. It
+ * creates no subscription and is used by the live-driver evidence path. */
+export function probeDecisionEventFeatures(ctx: Context): readonly string[] {
+  const root = compositionRoot(ctx) as unknown as object
+  if (typeof root !== 'object' || root === null || !guardedRoots.has(root)) return Object.freeze([])
+  return decisionDispatchEventNames(ctx)
 }
 
 export function installDecisionGuard(ctx: Context, grants: GrantStore): void {
