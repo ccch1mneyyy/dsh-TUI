@@ -156,6 +156,28 @@ try {
   check('top-of-screen anchor drops the tooltip below', tipTopRow > topRow,
     `anchor=${topRow} tip=${tipTopRow}`)
 
+  // The card's border ring belongs to the same surface as its interior. A ring
+  // left at the terminal default is the black frame around the popup — and on
+  // Windows Terminal it is what showed through the old Sixel preview card.
+  {
+    const borderRow = term.buffer.active.getLine(tipTopRow - 1)
+    const contentRow = term.buffer.active.getLine(tipTopRow)
+    const contentX = findText(term, 'TIP-TOP-MARKER')?.col ?? -1
+    const borderLeft = Array.from({ length: COLS }, (_, x) => x)
+      .find(x => borderRow?.getCell(x)?.getChars() === '╭')
+    const borderRight = Array.from({ length: COLS }, (_, x) => x)
+      .find(x => borderRow?.getCell(x)?.getChars() === '╮')
+    const surface = contentRow?.getCell(contentX)?.getBgColor()
+    check('tooltip interior paints a surface color', surface !== undefined && surface !== 0,
+      `bg=${surface?.toString(16)}`)
+    let ringOk = borderLeft !== undefined && borderRight !== undefined
+    for (let x = borderLeft ?? 0; ringOk && x <= (borderRight ?? -1); x++) {
+      if (borderRow?.getCell(x)?.getBgColor() !== surface) ringOk = false
+    }
+    check('tooltip border ring keeps the surface background', ringOk,
+      `border=${borderLeft}..${borderRight} surface=${surface?.toString(16)}`)
+  }
+
   // 3. Leaving hides it.
   hover(stdin, COLS - 1, ROWS - 1)
   check('leaving the target hides the tooltip', await settled(() => !screenHas(term, 'TIP-TOP-MARKER')))
