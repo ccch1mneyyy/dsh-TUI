@@ -62,7 +62,10 @@ import { createContextBookkeeping } from '../src/dsh-adapter/channel/context-boo
 // compaction checkpoint, crossing the high-water mark must warn again.
 {
   const warnings: string[] = []
-  const state = { contextWindow: 100, tokens: { input: 90 }, pending: [], emit() {} }
+  // The warning reads the last turn's billed usage (input + cache read +
+  // cache write), not the cumulative tokens counter — resumed sessions
+  // replay the counter at full size while the live turn stays small.
+  const state = { contextWindow: 100, tokens: { input: 90 }, lastUsage: { input: 90, cacheRead: 0, cacheWrite: 0 }, pending: [], emit() {} }
   const bookkeeping = createContextBookkeeping(
     () => state,
     text => { warnings.push(text) },
