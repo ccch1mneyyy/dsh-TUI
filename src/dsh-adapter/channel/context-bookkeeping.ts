@@ -5,6 +5,10 @@ export function createContextBookkeeping(
   state: () => {
     contextWindow: number | undefined
     tokens: { input: number }
+    /** Last turn's billed token shape; the honest numerator for the
+     * context-low warning (input alone misses cached reads/writes, which
+     * resumed sessions replay back at full size). */
+    lastUsage: { input: number; cacheRead: number; cacheWrite: number } | undefined
     pending: PendingMessage[]
     emit(): void
   },
@@ -15,8 +19,9 @@ export function createContextBookkeeping(
   const warning = { value: false }
   const checkContextWarning = (): void => {
     const channel = state()
-    if (warning.value || channel.contextWindow === undefined) return
-    const remaining = channel.contextWindow - channel.tokens.input
+    if (warning.value || channel.contextWindow === undefined || channel.lastUsage === undefined) return
+    const used = channel.lastUsage.input + channel.lastUsage.cacheRead + channel.lastUsage.cacheWrite
+    const remaining = channel.contextWindow - used
     if (remaining >= warningBufferTokens) return
     warning.value = true
     notify(lowContextText(Math.max(0, Math.round((remaining / channel.contextWindow) * 100))), {

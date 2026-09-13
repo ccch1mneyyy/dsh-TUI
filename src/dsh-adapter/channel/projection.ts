@@ -898,7 +898,9 @@ export function createChannelProjection(state: ProjectionState, deps: Projection
         }
         const reason = event.data.reason
         if (reason.kind === 'completed') {
-          deps.checkContextWarning()
+          // Replay drains a resumed session's history through the projector;
+          // its totals describe the past, not a live context-low state.
+          if (!replaying) deps.checkContextWarning()
           break
         }
         if (reason.kind === 'aborted' || reason.kind === 'interrupted') {
@@ -920,7 +922,10 @@ export function createChannelProjection(state: ProjectionState, deps: Projection
         const detail = reason.kind === 'error' ? cleanRenderText(reason.error.message, NOTICE_CELLS) : ''
         appendRow({ id: deps.rowIds.value, kind: 'notice', text: `turn ${reason.kind}${detail ? ` · ${detail}` : ''}` })
         deps.rowIds.value += 1
-        deps.notify(
+        // Historical failure notices belong to the transcript row above;
+        // re-raising them as a live toast on every /resume re-alarmes the
+        // user over a turn that already ended.
+        if (!replaying) deps.notify(
           t('turn-failed', { detail: detail ? ` · ${detail}` : '' }),
           { color: 'error', timeoutMs: 8000 },
         )
