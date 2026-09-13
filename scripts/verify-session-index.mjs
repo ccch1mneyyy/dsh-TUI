@@ -461,6 +461,81 @@ check(
 check('a backend that lists nothing yields nothing', (await listSummaries({})).length, 0)
 check('a backend that throws yields nothing rather than propagating', (await listSummaries({ list: async () => { throw new Error('boom') } })).length, 0)
 
+// ── 7. A wrong verdict already committed to the index must not be served ─
+// A session first listed before its first human prompt was written derives
+// honestly as "no conversation". Once it grew, a build that carried that
+// verdict across the append — or that read a recovered title without treating
+// it as evidence — committed `hasPrompt: false` alongside a revision the log
+// still reports. The entry and the log agree on the token precisely because
+// the log is no longer written, so the cache-hit path served the wrong verdict
+// forever and /resume counted a real conversation among its empties. The
+// re-derivation below is the whole repair: nothing rewrites the file.
+const staleRevision = 'rev:stale-verdict'
+const staleFile = seed('stale-verdict', [[userPrompt('the only thing ever asked')]])
+const staleSource = {
+  listSnapshots: async () => [{ header: { id: 'stale-verdict', cwd: '/proj', createdAt: 1000 }, revision: staleRevision }],
+  locate: () => ({ kind: 'jsonl', path: staleFile }),
+}
+
+// The entry has to exist before it can be poisoned, so the session is listed
+// once, and only then is the committed verdict overwritten with the wrong one.
+await listSummaries(staleSource)
+const staleIndex = JSON.parse(readFileSync(INDEX_FILE, 'utf8'))
+staleIndex.entries['stale-verdict'].derived.hasPrompt = false
+writeFileSync(INDEX_FILE, JSON.stringify(staleIndex))
+check(
+  'the fixture poisons the cached verdict the way an older build committed it',
+  readIndex().get('stale-verdict').derived.hasPrompt,
+  false,
+)
+
+const repaired = await listSummaries(staleSource)
+check('a cached "no conversation" is not served when a title says otherwise', repaired[0].hasPrompt, true)
+check('and the index is rewritten with the verdict the log supports', readIndex().get('stale-verdict').derived.hasPrompt, true)
+
+// The repaired entry is then reused rather than re-derived: an identical
+// boundary keeps the steady state at zero log reads per listing.
+const repairedAnchor = readIndex().get('stale-verdict').derived.anchor
+await listSummaries(staleSource)
+check(
+  'the repaired entry is reused rather than re-written on every open',
+  readIndex().get('stale-verdict').derived.anchor,
+  repairedAnchor,
+)
+
+// The same shape with no title evidence at all: a boot artifact that outgrew
+// the head window keeps its honest emptiness instead of being listed.
+const bootOverflow = seed('boot-overflow', [])
+appendFileSync(
+  bootOverflow,
+  encode(Array.from({ length: 60 }, (_, i) => [{ type: 'assistant/chunk', seq: 10 + i, time: 3000 + i, data: { text: filler(2000) } }])),
+)
+const bootOverflowSize = statSync(bootOverflow).size
+ok('the artifact fixture outgrows the head window', bootOverflowSize > 64 * 1024, `${bootOverflowSize} bytes`)
+const bootOverflowSource = {
+  listSnapshots: async () => [{ header: { id: 'boot-overflow', cwd: '/proj', createdAt: 1000 }, revision: 'rev:boot-overflow' }],
+  locate: () => ({ kind: 'jsonl', path: bootOverflow }),
+}
+await listSummaries(bootOverflowSource)
+check('a log with no conversation anywhere is still empty', (await listSummaries(bootOverflowSource))[0].hasPrompt, false)
+
+// Control: a small boot artifact carries no evidence against its own cached
+// "empty" verdict, so it must stay on the fast path — otherwise every boot
+// artifact in a long history would be re-read on every open.
+const bootTiny = seed('boot-tiny', [])
+const bootTinySource = {
+  listSnapshots: async () => [{ header: { id: 'boot-tiny', cwd: '/proj', createdAt: 1000 }, revision: 'rev:boot-tiny' }],
+  locate: () => ({ kind: 'jsonl', path: bootTiny }),
+}
+await listSummaries(bootTinySource)
+const bootTinyAnchor = readIndex().get('boot-tiny').derived.anchor
+check('a boot artifact small enough to judge keeps its cached verdict', (await listSummaries(bootTinySource))[0].hasPrompt, false)
+check(
+  'and is never re-derived once cached',
+  readIndex().get('boot-tiny').derived.anchor,
+  bootTinyAnchor,
+)
+
 rmSync(root, { recursive: true, force: true })
 rmSync(home, { recursive: true, force: true })
 console.log(`verify-session-index: OK (${checks} checks)`)

@@ -21,6 +21,7 @@
 import { basename } from 'node:path'
 import {
   digestSession,
+  HEAD_WINDOW_BYTES,
   recoverAppendedTitle,
   recoverSessionTitle,
   sessionTitleAnchor,
@@ -188,11 +189,26 @@ export async function listSummaries(
     const token = revision ?? (facts === undefined ? undefined : `${facts.bytes}:${facts.modifiedAt}`)
 
     let derived: DerivedEntry | undefined
+    // A cached entry claiming no conversation cannot be believed when the file
+    // itself carries evidence of one: a title that is not the log's own
+    // basename fallback, or a log too large for the head window to have judged
+    // empty (`digestSession` answers hasPrompt for anything past its window by
+    // construction). Such an entry was derived by a build whose verdict was
+    // wrong, and the cache-hit path below would serve it forever — entry and
+    // log agree on the revision precisely because the log is no longer being
+    // written, which is exactly the state a hidden session is in. A genuine
+    // boot artifact keeps its cached verdict here, so the steady state stays
+    // one read per listing.
+    const untrustworthy =
+      cached?.derived !== undefined &&
+      cached.derived.hasPrompt === false &&
+      (cached.derived.titleSource !== 'fallback' || (facts?.bytes ?? 0) > HEAD_WINDOW_BYTES)
     if (
       cached?.derived !== undefined &&
       token !== undefined &&
       cached.derived.revision === token &&
-      cached.derived.titleComplete
+      cached.derived.titleComplete &&
+      !untrustworthy
     ) {
       derived = cached.derived
     } else if (path !== undefined && token !== undefined) {
