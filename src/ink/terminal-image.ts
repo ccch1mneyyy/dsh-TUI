@@ -1,4 +1,5 @@
 import type { DOMElement } from './dom.js'
+import type { Rectangle } from './layout/geometry.js'
 
 /** Hard bounds for one decoded image admitted to the terminal renderer. */
 export const TERMINAL_IMAGE_MAX_EDGE = 1024
@@ -63,8 +64,24 @@ export interface TerminalImagePlacement {
   readonly background?: string
   /** False while a protocol-specific raster is pending or unavailable. */
   readonly graphicsReady?: boolean
-  /** Later paint operations cover this backing, including blank overlays. */
+  /** Later paint operations cover part of this raster's visible cells. */
   readonly occluded?: boolean
+  /**
+   * Later paint operations cover every visible cell of this raster, so it is
+   * unreachable and must be erased rather than kept (a blank `opaque` overlay
+   * would otherwise be pierced by the pixels beneath it). Partial coverage
+   * sets {@link occluded} only.
+   */
+  readonly occludedFully?: boolean
+  /**
+   * The later paint operations that cover PART of this raster, in absolute
+   * screen cells. A protocol whose pixels outlive cell writes must erase these
+   * rects itself: with Sixel, a background-only space cell over the raster has
+   * the same style as the image's own backing cell, so the frame diff emits no
+   * write for it and the old pixels keep showing through the overlay (the white
+   * block between "100%" and "原像素" in a preview tooltip).
+   */
+  readonly coveredRects?: readonly Rectangle[]
 }
 
 /**

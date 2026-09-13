@@ -1131,13 +1131,14 @@ export function SessionBrowser({
           the pointer, clamped so it never clips off the terminal. Its own
           clicks hit-test first (absolute hit list), and the root Box's
           onClick dismisses it on any outside click. 指针坐标是屏幕坐标，
-          而 absolute 盒相对内容区原点——有 PageMargin 页边距时需补回
-          inset（同 TooltipLayer 的补偿规则）。 */}
+          而 absolute 盒相对内容区原点、useTerminalSize() 报的已是内容区
+          尺寸——先把锚点换算到内容坐标（减去 inset）再夹取，否则有
+          PageMargin 时整块菜单会偏移一个页边距（同 TooltipLayer 的规则）。 */}
       {menu !== undefined && menuTarget !== undefined && (
         <Box
           position="absolute"
-          left={Math.max(inset.x, Math.min(menu.col + 1, inset.x + Math.max(0, columns - MENU_WIDTH)))}
-          top={Math.max(inset.y, Math.min(menu.row + 1, inset.y + Math.max(0, rows - MENU_HEIGHT)))}
+          left={Math.max(0, Math.min(menu.col + 1 - inset.x, Math.max(0, columns - MENU_WIDTH)))}
+          top={Math.max(0, Math.min(menu.row + 1 - inset.y, Math.max(0, rows - MENU_HEIGHT)))}
           width={MENU_WIDTH}
           height={MENU_HEIGHT}
           flexDirection="column"

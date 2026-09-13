@@ -27,6 +27,12 @@ export type RenderOptions = {
   /** Whether terminal graphics are active for this paint pass. */
   terminalImages?: boolean
   imageReady?: (placement: TerminalImagePlacement) => boolean
+  /**
+   * True when rasters paint over the cell grid (Sixel): image-owned cells
+   * carry the surface background instead of terminal-default blanks. See
+   * Output's `opaqueImageBacking`.
+   */
+  opaqueImageBacking?: boolean
   // True when the previous frame's screen buffer was mutated post-render
   // (selection overlay), reset to blank (alt-screen enter/resize/SIGCONT),
   // or reset to 0×0 (forceRedraw). Blitting from such a prevScreen would
@@ -135,6 +141,7 @@ export default function createRenderer(
         options.terminalImages,
         frontFrame.images,
         options.imageReady,
+        options.opaqueImageBacking ?? false,
       )
     } else {
       output = new Output({
@@ -145,6 +152,7 @@ export default function createRenderer(
         terminalImages: options.terminalImages,
         previousImages: frontFrame.images,
         imageReady: options.imageReady,
+        opaqueImageBacking: options.opaqueImageBacking ?? false,
       })
     }
 

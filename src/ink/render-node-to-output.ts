@@ -1032,13 +1032,26 @@ function renderNodeToOutput(
       // rect, though, and those non-default-background cells would also hide
       // the image itself. Replace only the image-owned cells with default-
       // background spaces; layout and surrounding inherited color stay intact.
+      //
+      // Sixel paints the raster OVER the cells instead, so its backing may
+      // (and must) carry the surface background: the raster covers those
+      // cells anyway, and terminal-default blanks would show as black holes
+      // wherever the raster misses a cell — aspect rounding at the right
+      // edge, or a suppressed placement whose cells the frame no longer
+      // repaints.
       const imageWidth = Math.floor(width)
       const imageHeight = Math.floor(height)
+      const backingColor = output.opaqueImageBacking
+        ? node.style.backgroundColor ?? inheritedBackgroundColor
+        : undefined
       const imageLine = ' '.repeat(imageWidth)
+      const fillLine = backingColor === undefined
+        ? imageLine
+        : applyTextStyles(imageLine, { backgroundColor: backingColor })
       output.write(
         Math.floor(x),
         Math.floor(y),
-        Array(imageHeight).fill(imageLine).join('\n'),
+        Array(imageHeight).fill(fillLine).join('\n'),
       )
       output.imageBacking(node)
       for (const child of node.childNodes) {
@@ -1778,7 +1791,18 @@ function renderNodeToOutput(
         }
         const ownBackgroundColor =
           node.style.backgroundColor ?? occlusionBackground
-        if (ownBackgroundColor || node.style.opaque) {
+        // A Sixel image node owns cells the raster normally paints over. When
+        // no placement is admitted — the modal suppressed graphics, the decode
+        // is still pending, or it failed — those cells must still read as the
+        // enclosing surface: the admitted branch above painted them with the
+        // same inherited color, so leaving them unwritten would diff them back
+        // to terminal-default blanks and punch black holes in the card.
+        const imageSurfaceColor =
+          output.opaqueImageBacking && node.nodeName === 'ink-image'
+            ? ownBackgroundColor ?? inheritedBackgroundColor
+            : undefined
+        const fillColor = ownBackgroundColor ?? imageSurfaceColor
+        if (fillColor || node.style.opaque) {
           const borderLeft = yogaNode.getComputedBorder(LayoutEdge.Left)
           const borderRight = yogaNode.getComputedBorder(LayoutEdge.Right)
           const borderTop = yogaNode.getComputedBorder(LayoutEdge.Top)
@@ -1787,8 +1811,8 @@ function renderNodeToOutput(
           const innerHeight = Math.floor(height) - borderTop - borderBottom
           if (innerWidth > 0 && innerHeight > 0) {
             const spaces = ' '.repeat(innerWidth)
-            const fillLine = ownBackgroundColor
-              ? applyTextStyles(spaces, { backgroundColor: ownBackgroundColor })
+            const fillLine = fillColor
+              ? applyTextStyles(spaces, { backgroundColor: fillColor })
               : spaces
             const fill = Array(innerHeight).fill(fillLine).join('\n')
             output.write(x + borderLeft, y + borderTop, fill)
@@ -1826,7 +1850,17 @@ function renderNodeToOutput(
       // Render border AFTER children to ensure it's not overwritten by child
       // clearing operations. When a child shrinks, it clears its old area,
       // which may overlap with where the parent's border now is.
-      renderBorder(x, y, node, output)
+      // A border's cells belong to the surface it frames: pass the node's
+      // effective background so they never fall back to the terminal default
+      // (a black frame around a colored surface, and a black hole where a
+      // Sixel raster is otherwise exposed by a border row or column).
+      renderBorder(
+        x,
+        y,
+        node,
+        output,
+        node.style.backgroundColor ?? occlusionBackground ?? inheritedBackgroundColor,
+      )
     } else if (node.nodeName === 'ink-root') {
       renderChildren(
         node,

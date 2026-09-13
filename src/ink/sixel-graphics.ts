@@ -10,6 +10,8 @@ import {
 import { cellAt, clearRegion, type Screen } from './screen.js'
 import type { Diff } from './frame.js'
 import { stringWidth } from './stringWidth.js'
+import { backgroundOpenCode } from './colorize.js'
+import type { Color } from './styles.js'
 
 type Rect = { x: number; y: number; columns: number; rows: number }
 type Variant = {
@@ -20,12 +22,31 @@ type Variant = {
   placement: TerminalImagePlacement
   ready: boolean
 }
-type Displayed = Rect & { key: string; raster: SixelRaster }
+type Displayed = Rect & {
+  key: string
+  raster: SixelRaster
+  /** Surface color these pixels sit on; restored when the rect is erased. */
+  background?: string
+  /** Kept on screen because its replacement is pending or it is covered. */
+  held?: boolean
+  /** Key of the covered rects already erased for this rect. */
+  covered?: string
+}
 type Encoder = (request: SixelEncodeRequest) => Promise<SixelRaster>
 
 function overlaps(a: Rect, b: Rect): boolean {
   return a.x < b.x + b.columns && a.x + a.columns > b.x &&
     a.y < b.y + b.rows && a.y + a.rows > b.y
+}
+
+/** Intersection of two cell rects, or undefined when they do not overlap. */
+function intersectRects(a: Rect, b: Rect): Rect | undefined {
+  const x = Math.max(a.x, b.x)
+  const y = Math.max(a.y, b.y)
+  const right = Math.min(a.x + a.columns, b.x + b.columns)
+  const bottom = Math.min(a.y + a.rows, b.y + b.rows)
+  if (right <= x || bottom <= y) return undefined
+  return { x, y, columns: right - x, rows: bottom - y }
 }
 
 /** Viewport-owned pixels. Encoding is shared; placement/erasure is per DOM node. */
@@ -42,6 +63,8 @@ export class SixelGraphicsManager {
   private desired = new Set<string>()
   private displayed = new Map<DOMElement, Displayed>()
   private nextDisplay = new Map<DOMElement, Displayed>()
+  /** Rects kept on screen this frame (replacement pending or covered). */
+  private readonly held = new Map<DOMElement, Displayed>()
   private readonly repaint = new Set<DOMElement>()
   private worker: Worker | undefined
   private workerKeys = new Set<string>()
@@ -140,21 +163,52 @@ export class SixelGraphicsManager {
     }
   }
 
-  /** Reconcile ALL old rectangles before diffing, with only one baseline copy. */
+  /**
+   * Reconcile ALL old rectangles before diffing, with only one baseline copy.
+   *
+   * A rect is erased only when this frame replaces it (a ready raster at a new
+   * key/geometry, erased and drawn in the same write) or drops it entirely.
+   * Rects whose replacement is still being encoded, or which a later paint
+   * covers, are held: erasing them without drawing a replacement in the same
+   * frame is exactly the black flash seen while scrolling and the vanishing
+   * image under an overlay. {@link paint} folds the held rects back into
+   * `displayed`, and the frame that finally replaces one forces a repaint
+   * through the `held` marker.
+   *
+   * A held rect that an overlay PARTLY covers still has to give up the covered
+   * cells: its pixels outlive cell writes (a background-only space cell diffs
+   * as unchanged, so the frame never rewrites it) and would show through the
+   * overlay. Those sub-rects are erased with the placement's surface color.
+   */
   reconcile(screen: Screen, previous: Screen, placements?: readonly TerminalImagePlacement[]): { erase: string; baseline: Screen } {
     const actual = placements ? new Map(placements.map(p => [p.node, p])) : undefined
     const visible: Variant[] = []
     this.desired = new Set()
     this.nextDisplay.clear()
+    this.held.clear()
     this.repaint.clear()
+    // Nodes whose raster this frame drops (the paint no longer registers an
+    // image, or a later paint covers every visible cell): their pixels must be
+    // erased, unlike the ones merely held below.
+    const dropped = new Set<DOMElement>()
     for (const [node, variant] of this.frame) {
       const placement = actual?.get(node)
-      if ((actual && !placement) || placement?.occluded) continue
+      if (actual && !placement) { dropped.add(node); continue }
+      if (placement?.occludedFully) { dropped.add(node); continue }
       visible.push(variant)
       this.desired.add(variant.key)
+      // Partially covered: drawing would pierce the overlay that covers it, so
+      // keep the pixels already on screen and wait for the cover to clear.
+      if (placement?.occluded) continue
       const raster = this.cache.get(variant.key)
       if (variant.ready && raster && placement?.graphicsReady !== false && this.isUncovered(variant.rect, screen)) {
-        this.nextDisplay.set(node, { ...variant.rect, key: variant.key, raster })
+        const background = variant.placement.background
+        this.nextDisplay.set(node, {
+          ...variant.rect,
+          key: variant.key,
+          raster,
+          ...(background === undefined ? {} : { background }),
+        })
       }
     }
     const unique = new Map<string, Variant>()
@@ -166,24 +220,62 @@ export class SixelGraphicsManager {
     this.drain()
 
     const erased: Displayed[] = []
+    let coverErase = ''
     for (const [node, old] of this.displayed) {
       const next = this.nextDisplay.get(node)
-      if (!next || this.dirty || old.key !== next.key || old.x !== next.x || old.y !== next.y) erased.push(old)
+      if (next !== undefined) {
+        if (this.dirty || old.key !== next.key || old.x !== next.x || old.y !== next.y) erased.push(old)
+        continue
+      }
+      // Still requested this frame, but its replacement raster is not ready
+      // (scrolling re-crops per row and the encoder is async) or a later paint
+      // covers it. Erasing here would leave a hole with no draw in the same
+      // frame — the black flash while scrolling and the vanishing image under
+      // a tooltip. Keep the pixels already on screen until a replacement can
+      // be drawn in the same write.
+      if (!this.dirty && this.frame.has(node) && !dropped.has(node)) {
+        const placement = actual?.get(node)
+        const coveredRects = placement?.coveredRects
+        const coveredKey = coveredRects === undefined || coveredRects.length === 0
+          ? undefined
+          : coveredRects.map(rect => `${rect.x},${rect.y},${rect.width},${rect.height}`).join(';')
+        if (coveredKey !== undefined && coveredKey !== old.covered) {
+          // The overlay paints these cells, but only the ones whose style
+          // changes get a write: an unchanged background-only space keeps the
+          // raster's pixels. Erase the covered cells (with the surface color,
+          // so they match the cell model) and leave the rest held.
+          const visibleRect: Rect = { x: old.x, y: old.y, columns: old.columns, rows: old.rows }
+          for (const rect of coveredRects!) {
+            const clipped = intersectRects(visibleRect, { x: rect.x, y: rect.y, columns: rect.width, rows: rect.height })
+            if (clipped !== undefined) coverErase += this.erase(clipped, old.background)
+          }
+        }
+        this.held.set(node, coveredKey === undefined
+          ? { ...old, held: true }
+          : { ...old, held: true, covered: coveredKey })
+        continue
+      }
+      erased.push(old)
     }
     for (const [node, next] of this.nextDisplay) {
       const old = this.displayed.get(node)
-      if (!old || this.dirty || old.key !== next.key || old.x !== next.x || old.y !== next.y ||
+      if (!old || this.dirty || old.held === true ||
+          old.key !== next.key || old.x !== next.x || old.y !== next.y ||
           erased.some(rect => overlaps(rect, next))) this.repaint.add(node)
     }
-    if (erased.length === 0) return { erase: '', baseline: previous }
+    if (erased.length === 0) {
+      return coverErase === ''
+        ? { erase: '', baseline: previous }
+        : { erase: coverErase + '\x1b[H', baseline: previous }
+    }
     const cells = previous.cells.slice()
     const baseline: Screen = { ...previous, cells, cells64: new BigInt64Array(cells.buffer), noSelect: previous.noSelect.slice() }
     let erase = ''
     for (const rect of erased) {
       clearRegion(baseline, rect.x, rect.y, rect.columns, rect.rows)
-      erase += this.erase(rect)
+      erase += this.erase(rect, rect.background)
     }
-    return { erase: erase + '\x1b[H', baseline }
+    return { erase: coverErase + erase + '\x1b[H', baseline }
   }
 
   /** Unchanged images have zero transport cost, including unrelated text ticks. */
@@ -198,6 +290,9 @@ export class SixelGraphicsManager {
       draw += `\x1b[${next.y + 1};${next.x + 1}H${next.raster.data}`
     }
     this.displayed = new Map(this.nextDisplay)
+    // Rects held this frame stay on screen: they were neither erased nor
+    // redrawn, so the terminal still shows them.
+    for (const [node, entry] of this.held) this.displayed.set(node, entry)
     this.dirty = false
     if (draw === '') return ''
     return this.displayModeSet ? `\x1b[?80l${draw}\x1b[?80h` : draw
@@ -209,6 +304,7 @@ export class SixelGraphicsManager {
     const output = [...this.displayed.values()].map(rect => this.erase(rect)).join('')
     this.displayed.clear()
     this.nextDisplay.clear()
+    this.held.clear()
     this.frame.clear()
     this.desired.clear()
     this.pending = []
@@ -228,20 +324,34 @@ export class SixelGraphicsManager {
     return output
   }
 
-  private erase(rect: Rect): string {
+  private erase(rect: Rect, background?: string): string {
     const columns = Math.min(rect.columns, this.columns - rect.x)
     const rows = Math.min(rect.rows, this.rows - rect.y)
     if (columns <= 0 || rows <= 0) return ''
-    let data = '\x1b[0m'
+    // Erase-Character fills with the cell's current background and is the only
+    // way to drop pixels a frame never rewrites. A rect the frame does rewrite
+    // (a placement whose replacement raster was drawn, or the image node's own
+    // opaque backing) would be repainted with the surface color anyway; a rect
+    // it leaves alone (the cells an overlay covers without changing their
+    // style) keeps whatever the erase filled in, so that has to be the
+    // placement's surface color rather than the terminal default.
+    // The placement carries the raw color string; Color is its renderer form.
+    const open = background === undefined ? '' : backgroundOpenCode(background as Color)
+    let data = `\x1b[0m${open}`
     for (let y = rect.y; y < rect.y + rows; y++) data += `\x1b[${y + 1};${rect.x + 1}H\x1b[${columns}X`
+    if (open !== '') data += '\x1b[0m'
     return data
   }
 
   private isUncovered(rect: Rect, screen: Screen): boolean {
+    // Any visible glyph under the raster blocks it; background-only cells do
+    // not. Image-owned cells carry the surface background in Sixel mode (an
+    // opaque backing is required there), and comparing against the empty
+    // style would reject the raster's own backing.
     for (let y = rect.y; y < rect.y + rect.rows; y++) {
       for (let x = rect.x; x < rect.x + rect.columns; x++) {
         const cell = cellAt(screen, x, y)
-        if (cell && (cell.char !== ' ' || cell.styleId !== screen.emptyStyleId)) return false
+        if (cell && cell.char !== ' ' && cell.char !== '') return false
       }
     }
     return true

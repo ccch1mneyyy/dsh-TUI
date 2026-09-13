@@ -706,6 +706,9 @@ export default class Ink {
       altScreen: this.altScreenActive,
       terminalImages: this.altScreenActive && (this.kittyGraphicsSupported || this.sixelGraphicsSupported),
       imageReady: sixelActive ? this.sixelGraphicsManager.prepare : undefined,
+      // Sixel paints rasters over the cells: an image's own cells must then
+      // carry the surface background instead of terminal-default blanks.
+      opaqueImageBacking: sixelActive,
       prevFrameContaminated: this.prevFrameContaminated
     });
     const rendererMs = performance.now() - renderStart;
