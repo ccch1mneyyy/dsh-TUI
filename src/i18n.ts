@@ -112,6 +112,12 @@ const dict = {
   'export-dir': { zh: '- 目录: {{cwd}}', en: '- Directory: {{cwd}}' },
   'mentions-attached': { zh: '已附加 {{count}} 个文件引用', en: { one: 'Attached {{count}} file reference', other: 'Attached {{count}} file references' } },
   'mentions-missing': { zh: '未找到引用: {{paths}}', en: 'References not found: {{paths}}' },
+  // T06 (PR-B · AC-5): transcript indicator above a user bubble whose send
+  // consumed the live IDE selection. The ⧉ glyph lives in MessageList, not here.
+  'selection-attached': {
+    zh: '已选中 {{lines}} 行 · {{path}}',
+    en: { one: 'Selected {{lines}} line from {{path}}', other: 'Selected {{lines}} lines from {{path}}' },
+  },
   'transcript-image': { zh: '图片', en: 'Image' },
   'image-preview-previous': { zh: '上一张', en: 'Previous image' },
   'image-preview-next': { zh: '下一张', en: 'Next image' },

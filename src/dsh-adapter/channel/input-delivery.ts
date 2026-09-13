@@ -12,8 +12,10 @@ import {
 } from './composer-images.js'
 import { expandComposerMentions } from './composer-mentions.js'
 import { normalizeInputDecision } from './decisions.js'
+import { attachIdeSelection } from './ide-selection.js'
 import { mentionAttachments, mentionFs } from './mentions.js'
 import type { ChannelOwner } from './owner.js'
+import type { ChannelSelection, SelectionAttachment } from '../../adapter/ports/channel-view.js'
 import type {
   ChannelImageBlock,
   ChannelState,
@@ -34,6 +36,10 @@ interface UserTextOrigin {
   readonly fs: MentionFs | undefined
   readonly attachments: MentionAttachments | undefined
   readonly stagedImages: ReadonlyMap<string, ChannelImageBlock['attachment']>
+  /** Live editor selection AT ENQUEUE (undefined = none). Captured here so a
+   *  selection made while the FIFO or mention expansion parks the delivery
+   *  can never attach to this message. */
+  readonly selection: ChannelSelection | undefined
 }
 
 /** Input FIFO, staged attachments and decision notice timers share one lifetime. */
@@ -44,6 +50,8 @@ export function createInputDelivery(
  trackPending: (message: { id: string; text: string; images?: readonly ComposerImageRef[] }, placement: PendingMessage['placement']) => void,
  untrackPending: (id: string) => void,
  composer: ComposerImages,
+ selection: () => ChannelSelection | undefined,
+ rememberSelection: (messageId: string, info: SelectionAttachment) => void,
 ) {
   /**
    * `@` file mentions (issue #15): expansion reads files asynchronously, so
@@ -69,6 +77,7 @@ export function createInputDelivery(
     fs: mentionFs(ctx),
     attachments: mentionAttachments(ctx),
     stagedImages: composer.snapshot(),
+    selection: selection(),
   })
 
   /**
@@ -106,10 +115,15 @@ export function createInputDelivery(
       notify(t('ext-stale-dropped'), { color: 'warning', timeoutMs: 4000 })
       return
     }
+    // IDE selection consumption: append the ENQUEUE-time selection as its own
+    // attached-file block — direct construction, never text parsing, failures
+    // silently skipped (an IDE-side extra must never block a send).
+    const selectionAttached = await attachIdeSelection(expansion.blocks, origin.cwd, origin.selection, origin.fs)
     const message = createUserMessage({
       content: expansion.blocks,
       source: { kind: 'user' },
     })
+    if (selectionAttached !== undefined) rememberSelection(message.id, selectionAttached)
     // Track BEFORE the agent call: a synchronous throw inside
     // followup/steer rolls the preview back; otherwise the inbox events
     // retire it once the message is claimed or discarded.

@@ -79,6 +79,9 @@ export function createSessionResumeActions(
     refreshLoadedContext(): Promise<void>
     refreshSkillCommands(): Promise<void>
     clearStagedImages(): void
+    /** Drop the live IDE selection: the adopted session's cwd differs from
+     *  the one the selection was made in. */
+    resetIdeSelection(): void
     settleCompaction(): Promise<void>
     sessionSwitchVetoed(kind: 'new' | 'resume' | 'agent-view', targetSessionId?: string): Promise<boolean>
     notify: ChannelState['notify']
@@ -166,6 +169,7 @@ export function createSessionResumeActions(
       const previousSessionId = String(committed.agent.session.id)
       state.cwd = handle.agent.session.header.cwd ?? state.cwd
       state.displayCwd = deps.describeWorkspace(state.cwd).description ?? state.cwd
+      deps.resetIdeSelection()
       deps.refreshGitBranch()
       // Reset the input FIFO and pending-decision indicators BEFORE the first
       // emit (main's bind → clear → refresh order); see the /new tail.
@@ -296,6 +300,7 @@ export function createSessionResumeActions(
       // roll back another workspace's cwd.
       state.cwd = targetCwd
       state.displayCwd = targetDisplayCwd ?? deps.describeWorkspace(targetCwd).description ?? targetCwd
+      deps.resetIdeSelection()
       // Reset the input FIFO and the pending-decision indicators BEFORE the
       // first emit: a submit enqueued from a session-changed subscriber must
       // land on a fresh chain instead of behind the replaced session's parked

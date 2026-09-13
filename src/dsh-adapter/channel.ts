@@ -34,6 +34,8 @@ import { createSkillCatalog } from './channel/skill-catalog.js'
 import { createBackgroundCurrentAction } from './channel/background-action.js'
 import { createSubagentProjection } from './channel/subagent-projection.js'
 import { createChannelNotifications } from './channel/notifications.js'
+import { createSelectionAttachments } from './channel/ide-selection.js'
+import { IdeChannel, ideLockDir, type SelectionSnapshot } from './ide-channel.js'
 import type { Context } from '@deepseek-ai/cordis'
 import { type Agent, type AgentHandle, type CreateAgentOptions, type ModelSelectionRef } from '@deepseek-ai/dsh-agent'
 import type { CommandRuntime } from '@deepseek-ai/dsh-commands'
@@ -302,9 +304,49 @@ function createChannelWithOwner(
     CONTEXT_WARNING_BUFFER_TOKENS,
   )
   const { warning: contextWarning, resetContextWarning, checkContextWarning, trackPending, untrackPending } = bookkeeping
+  // IDE selection channel (AC-5): one IdeChannel per channel factory, started
+  // in the background against the session cwd — lock discovery needs it, env
+  // direct-connect does not but tolerates the extra hint. start() is fully
+  // non-throwing and self-degrading, so a missing IDE costs nothing and
+  // startup never waits on the loopback dial.
+  const ideChannel = new IdeChannel()
+  void ideChannel.start(process.env, ideLockDir(), options.cwd).catch(() => {})
+  let currentSelection: SelectionSnapshot | undefined
+  ideChannel.onSelection(snapshot => {
+    // The channel already clears empty snapshots internally; mirror that here
+    // so consumption reads one consistent variable.
+    currentSelection = snapshot.isEmpty ? undefined : snapshot
+    // Live prompt-footer badge: the projection must reach the screen BEFORE
+    // the user submits — emit() bumps `version` so the useSyncExternalStore
+    // tree re-renders with the new badge immediately.
+    state.selection = currentSelection
+    state.emit()
+  })
+  /**
+   * Invalidate the live selection when the session's working directory
+   * changes (/resume adopts the persisted header cwd, /workspace switches to
+   * another directory, a background session is adopted): a selection made in
+   * the OLD workspace would otherwise stay projected — the badge shows it and
+   * the next submit resolves its RELATIVE path against the NEW cwd, attaching
+   * the wrong file.
+   *
+   * Deliberately does NOT stop()/start() the IdeChannel: its state machine is
+   * terminal-on-disconnect by design, so a stop-then-start can never
+   * reconnect and silently kills the whole channel. In the primary env-direct
+   * launch the same VS Code window keeps pushing snapshots after the switch,
+   * so clearing the value is enough — the next snapshot repopulates it for
+   * the new workspace.
+   */
+  const resetIdeSelection = (): void => {
+    currentSelection = undefined
+    state.selection = undefined
+    state.emit()
+  }
+  const selectionAttachments = createSelectionAttachments()
   const composer = createComposerImages(ctx, owner, { generation: () => state.agentBindingGeneration })
   const inputDelivery = createInputDelivery(ctx, owner, binding, () => state,
-    (...args) => notify(...args), trackPending, untrackPending, composer)
+    (...args) => notify(...args), trackPending, untrackPending, composer,
+    () => currentSelection, (messageId, info) => selectionAttachments.remember(messageId, info))
   const { dispatchUserText, deliverUserText, withDecisionPending, clearStagedImages } = inputDelivery
   /**
    * The `tui/session-switch` decision event (pi's `session_before_switch`),
@@ -505,6 +547,9 @@ function createChannelWithOwner(
       // Owner cleanup is exhaustive, but it can report an external cleanup
       // failure. The local emitter is outside that owner and must still stop.
       try { owner.dispose() } finally { emitter.dispose() }
+      // The IDE loopback link is outside the owner too: without this the
+      // socket outlives teardown and keeps delivering selection frames.
+      ideChannel.stop()
     },
     traceEvents() {
       // Immutable per-append snapshot (dsh-session caches the frozen array);
@@ -634,6 +679,7 @@ function createChannelWithOwner(
     checkContextWarning, notify: (...args) => notify(...args),
     tools: ctx.get('tools') as ToolsRegistryLike | undefined, renderer: rendererRuntime,
     attachments: () => ctx.get('attachments'),
+    selectionAttached: messageId => selectionAttachments.take(messageId),
   })
   localActions = createLocalActions({
     ctx,
@@ -774,6 +820,7 @@ function createChannelWithOwner(
     refreshLoadedContext,
     refreshSkillCommands,
     clearStagedImages,
+    resetIdeSelection,
     notifySessionSwitched,
     notifyAgentView: agentView.notify,
   })
@@ -801,6 +848,7 @@ function createChannelWithOwner(
     refreshLoadedContext,
     refreshSkillCommands,
     clearStagedImages,
+    resetIdeSelection,
     settleCompaction: () => settleManualCompaction(),
     sessionSwitchVetoed,
     notify,

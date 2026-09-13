@@ -1,6 +1,31 @@
 /** Host-owned in-process Channel contract. No runtime or upstream imports. */
 
 
+/** Live editor selection projection (IDE selection channel): coordinates
+ *  only — the TUI resolves and reads the file itself. Structurally mirrors
+ *  the adapter's SelectionSnapshot without importing from the adapter layer
+ *  (this port takes no runtime or upstream imports). */
+export interface ChannelSelection {
+  /** Workspace-relative or absolute file path, as the extension reports it. */
+  readonly path: string
+  /** First selected line, 0-based. */
+  readonly startLine: number
+  /** Last selected line, 0-based inclusive. */
+  readonly endLine: number
+  /** True when the editor selection collapsed to nothing. */
+  readonly isEmpty: boolean
+}
+
+/** What one consumed selection contributed to a submitted message, recorded
+ *  next to the user row so the transcript can render a "Selected N lines
+ *  from <file>" indicator. `lines` is the count actually attached after
+ *  clamping — the truth the model received, not the request. */
+export interface SelectionAttachment {
+  readonly lines: number
+  /** The path as the extension reported it (absolute or workspace-relative). */
+  readonly path: string
+}
+
 /**
  * One rendered transcript row. The DSH session log is the source of truth:
  * rows are derived from `session/event` records (and the initial
@@ -43,6 +68,9 @@ export interface ChatRow {
    *  content only; replayed history must paint complete. Set once at
    *  creation; never mutated afterwards. */
   fresh?: boolean
+  /** Present on user rows whose submit consumed a live IDE selection: the
+   *  transcript renders the "Selected N lines" indicator above the bubble. */
+  selectionAttached?: SelectionAttachment
 }
 
 /** Tool-call card state: the presentation of one tool invocation. */

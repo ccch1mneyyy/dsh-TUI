@@ -67,6 +67,7 @@ Sixel 使用最多 256 色的自适应调色板，透明像素与背景合成；
     用户附图及助手/工具结果中的持久图片块会直接显示在会话记录中；Kitty graphics 或 Sixel 可用时显示等比缩略图，否则保留同尺寸文字回退。全屏下点击输入框 `[Image #N]` 或 transcript 缩略图在对话区域居中打开大图预览，卡片外的对话文字变暗，不遮挡输入栏（Esc/点击外部关闭），标题为 `Image #N — 格式 · 尺寸 · 体积 · 文件名`，本会话暂存的图片在卡片底行显示来源路径；Finder 复制的图片文件粘贴时直接入附件库为 `[Image #N]`；输入框里的 `[Image #N]` 是一个整体，光标整体跳过、删除整体生效，光标落在其上时整块反显并自动打开预览、离开时关闭。Vim 的 `x`/`X`/`d…` 同样整张删除，`u` 同时恢复文字与附件；撤销仅限当前草稿。
     终端图片预览默认开启，可在 `/settings → 终端图片预览` 或配置 `terminalImages: false` 中关闭，使用 `/restart` 后生效。已保存的 `/settings` 选择优先于 Cordis 配置；若曾保存为开启，请在 `/settings` 中关闭后再 `/restart`。关闭时保留文字信息并跳过预览解码，不影响向模型发送图片；`DSH_TUI_DISABLE_TERMINAL_IMAGES=1` 始终强制关闭预览。
   - **功能全面**：`/resume` 按工作目录分类浏览、搜索与预览历史会话（左键恢复、右键弹出操作菜单；可固定常用会话——「已固定」分组置顶显示，行内 ★ 或 `Ctrl+P` 切换，持久化到 `~/.dsh-tui`），另有 `/agentview` 会话总览（空输入 `←` 一键后台化，后台会话派发、预览、回复与停止一站式管理）、`/new`、`/compact`、`/export`、`/btw`，模型热切换（新会话默认推理强度可在 /settings → 默认推理强度 预设），原生subagent，会话fork，自动更新，输入框 `/vim` vim 编辑模式、鼠标选区编辑（拖选高亮、Shift+click 扩展、双击选词、Ctrl+C 复制选区）与全屏草稿编辑（`Ctrl+Shift+E` 或输入行 `⛶` 按钮：行号 + 当前行高亮、Enter 换行、Ctrl+Enter 发送、滚轮滚动、点击/拖选，长草稿独占整屏；`/settings` 可关）；可在vs code中[以vscode插件形式启动](docs/vscode.md)，已上架 VS Code Marketplace。
+  - **IDE 选区通道**：搭配 VS Code 扩展启动时，编辑器选中代码后 prompt 下方实时显示 `⧉ N lines selected` 徽标，提交消息自动附加选中行内容（transcript 有「⧉ Selected N lines」指示行）；手动启动（tmux/SSH）通过 lock 自动发现本机 IDE，无 IDE 时静默降级零影响。详见 [vscode.md](docs/vscode.md)。
   - **扩展丰富**：原生浏览器交互，compter use等大量附属功能性扩展
   - **技能归 DSH 管理**：`/skills` 展示当前 profile、用户与项目发现的技能；dsh-TUI 不预装通用技能。
   - **工作状态动画**：默认使用 `moon8`；读取旧版本地配置中的 `claude` 值时自动映射为 `moon8`，选择器只显示当前预设。
