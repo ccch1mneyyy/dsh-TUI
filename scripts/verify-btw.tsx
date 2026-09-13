@@ -1,5 +1,5 @@
 /**
- * Headless verification for /btw (CC side question): renders the Chat screen
+ * Headless verification for /btw side-question overlay: renders the Chat screen
  * against a fake channel and exercises the five contracts —
  *  1. idle trigger opens the overlay and streams the answer in,
  *  2. a working channel still opens it (no steer into the running turn),
@@ -9,7 +9,10 @@
  *     (assembled answer + abort short-circuit).
  * Follows smoke.tsx: FakeStdout/FakeStderr/FakeStdin + plainText ANSI wash.
  */
+import assert from 'node:assert/strict'
+
 process.env.FORCE_COLOR = '3'
+process.env.DSH_TUI_LANG = 'zh'
 
 const [{ PassThrough, Writable }, React, { render }, { Chat }, { QuestionStore }, { LOCAL_COMMANDS }, { wrapSideQuestion, runSideQuestion }] = await Promise.all([
   import('node:stream'),
@@ -77,12 +80,14 @@ function makeChannel() {
     gitBranch: 'main',
     working: false,
     spinnerMode: 'requesting' as const,
+    mode: { plan: false },
     responseChars: 0,
     activeToolCount: 0,
     turnStart: 0,
     lastUserText: '',
     pending: [],
     commandList: LOCAL_COMMANDS,
+    commandCompletions: () => [],
     notifications: [],
     contextSegments: { system: 0, prompt: 0, assistant: 0, thinking: 0, tools: 0 },
     subscribe: () => () => {},
@@ -123,12 +128,15 @@ function makeChannel() {
     { stdout, stdin, stderr: new FakeStderr(), exitOnCtrlC: false, patchConsole: false },
   )
   await delay(400)
-  stdin.write('/btw what is the answer?\r')
+  stdin.write('/btw what is the answer?')
+  await delay(100)
+  stdin.write('\r')
   await delay(700)
   const openedMark = stdout.frames.length
   const opened = plainText(stdout.frames.slice(0, openedMark)).includes('what is the answer?')
   const streamed = plainText(stdout.frames.slice(0, openedMark)).includes('42')
   const noTranscript = channel.submitCalls.length === 0 && channel.steerCalls.length === 0
+  assert.ok(opened && streamed && noTranscript, 'side question must open, stream, and leave the transcript untouched')
   console.log('scenario1 idle trigger opens + streams + leaves transcript untouched:',
     opened, streamed, noTranscript)
 
@@ -141,11 +149,14 @@ function makeChannel() {
   const closedOk = !afterClose.includes('what is the answer?')
   channel.working = true
   const workingMark = stdout.frames.length
-  stdin.write('/btw again?\r')
+  stdin.write('/btw again?')
+  await delay(100)
+  stdin.write('\r')
   await delay(700)
   const working = plainText(stdout.frames.slice(workingMark))
   const workingOk = working.includes('again?') && working.includes('42')
   const notSteered = channel.steerCalls.length === 0
+  assert.ok(closedOk && workingOk && notSteered, 'side question must work while the main turn is running')
   console.log('scenario2 Space dismisses; working-channel opens without steering:',
     closedOk, workingOk, notSteered)
 
@@ -153,6 +164,7 @@ function makeChannel() {
   const closeMark = stdout.frames.length
   stdin.write(' ')
   await delay(250)
+  assert.ok(!plainText(stdout.frames.slice(closeMark)).includes('again?'), 'Space must dismiss the overlay')
   console.log('scenario3 Space dismisses overlay:', !plainText(stdout.frames.slice(closeMark)).includes('again?'))
 
   await instance.unmount()
@@ -167,9 +179,12 @@ function makeChannel() {
     { stdout, stdin, stderr: new FakeStderr(), exitOnCtrlC: false, patchConsole: false },
   )
   await delay(400)
-  stdin.write('/btw\r')
+  stdin.write('/btw')
+  await delay(100)
+  stdin.write('\r')
   await delay(300)
   const usageNotified = channel.notifyCalls.some(text => text.includes('用法：/btw'))
+  assert.ok(usageNotified, 'bare command must report usage')
   console.log('scenario4 bare /btw notifies usage:', usageNotified)
   await instance.unmount()
 }
@@ -177,7 +192,7 @@ function makeChannel() {
 // ── Scenario 5: wrapper + runner over a fake chunk stream ──────────────
 {
   const wrapped = wrapSideQuestion('what?')
-  const wrappedOk = wrapped.startsWith('<system-reminder>') && wrapped.includes('what?') && wrapped.includes('NO tools available')
+  const wrappedOk = wrapped.startsWith('<side-question-context>') && wrapped.includes('what?') && wrapped.includes('No tools are available')
   const chunks: unknown[] = [
     { type: 'block-start', index: 0, blockType: 'text' },
     { type: 'text-delta', index: 0, text: 'ok ' },
@@ -202,6 +217,7 @@ function makeChannel() {
     options: {},
     signal: controller.signal,
   })
+  assert.ok(wrappedOk && okAnswer && aborted.answer === null && aborted.error === undefined, 'auxiliary call contract, streaming and cancellation must hold')
   console.log('scenario5 wrapper + runner (answer/abort):', wrappedOk, okAnswer, aborted.answer === null && aborted.error === undefined)
 }
 

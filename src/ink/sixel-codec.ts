@@ -1,4 +1,3 @@
-import { applyPaletteSync, buildPaletteSync, utils } from 'image-q'
 import { FINALIZER, fromRGBA8888, introducer, PALETTE_ANSI_256, sixelEncode } from 'sixel'
 import { loadSharp } from '../dsh-adapter/sharp.js'
 import { isTerminalImageSource, TERMINAL_IMAGE_MAX_EDGE, TERMINAL_IMAGE_MAX_BYTES,
@@ -70,39 +69,33 @@ async function prepareSixel(request: SixelEncodeRequest): Promise<PreparedSixel>
   const sharp = await loadSharp()
   if (sharp === undefined) throw new Error('Image decoder unavailable')
   const fill = resolveBackground(background)
+  // The manager already fits the source aspect for large previews, so 'fill'
+  // avoids a one-pixel letterbox stripe there.
   const highResolution = width > TERMINAL_IMAGE_MAX_EDGE || height > TERMINAL_IMAGE_MAX_EDGE
-  const pipeline = sharp(source.data, {
+  // Native libimagequant for every size. A JS Wu quantizer pays a fixed 33³
+  // histogram-moment cost (about 250 ms even for a 384 px thumbnail) and builds
+  // millions of point objects for large previews; libvips does the same work
+  // in 11–133 ms. The indexed PNG round trip is how sharp exposes its palette.
+  // effort 1 keeps every colour within one level of the source, while effort
+  // 10 costs seconds on noisy images.
+  const indexed = await sharp(source.data, {
     raw: { width: source.width, height: source.height, channels: 4 },
   })
     .flatten({ background: fill })
     .resize({ width, height, fit: highResolution ? 'fill' : 'contain', background: fill })
     .toColourspace('srgb')
     .ensureAlpha()
-  if (highResolution) {
-    // The manager already fits the source aspect. Native palette conversion
-    // avoids allocating millions of JS Point objects for large previews.
-    const indexed = await pipeline.png({ palette: true, colours: 256, dither: 0, effort: 1, compressionLevel: 1 }).toBuffer()
-    const data = await sharp(indexed).ensureAlpha().raw().toBuffer()
-    if (data.byteLength !== width * height * 4) throw new Error('Invalid quantized raster size')
-    const palette = new Set<number>()
-    for (let index = 0; index < data.length; index += 4) {
-      palette.add((data[index]! << 16) | (data[index + 1]! << 8) | data[index + 2]!)
-    }
-    if (palette.size > 256) throw new Error('Native palette budget exceeded')
-    const colors = [...palette].map(color => [color >>> 16, (color >>> 8) & 255, color & 255] as [number, number, number])
-    return { width, height, data, colors }
+    .png({ palette: true, colours: 256, dither: 0, effort: 1, compressionLevel: 1 })
+    .toBuffer()
+  const data = await sharp(indexed).ensureAlpha().raw().toBuffer()
+  if (data.byteLength !== width * height * 4) throw new Error('Invalid quantized raster size')
+  const palette = new Set<number>()
+  for (let index = 0; index < data.length; index += 4) {
+    palette.add((data[index]! << 16) | (data[index + 1]! << 8) | data[index + 2]!)
   }
-  const rgba = await pipeline.raw().toBuffer()
-  const points = utils.PointContainer.fromUint8Array(rgba, width, height)
-  const palette = buildPaletteSync([points], {
-    paletteQuantization: 'wuquant', colors: 256,
-    colorDistanceFormula: 'euclidean-bt709-noalpha',
-  })
-  const quantized = applyPaletteSync(points, palette, {
-    imageQuantization: 'nearest', colorDistanceFormula: 'euclidean-bt709-noalpha',
-  })
-  const colors = palette.getPointContainer().getPointArray().map(p => [p.r, p.g, p.b] as [number, number, number])
-  return { width, height, data: quantized.toUint8Array(), colors }
+  if (palette.size > 256) throw new Error('Native palette budget exceeded')
+  const colors = [...palette].map(color => [color >>> 16, (color >>> 8) & 255, color & 255] as [number, number, number])
+  return { width, height, data, colors }
 }
 
 function encodeRegion(image: PreparedSixel, crop?: SixelCrop): SixelRaster {

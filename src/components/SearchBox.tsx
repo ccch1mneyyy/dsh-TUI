@@ -1,6 +1,6 @@
 import React, { useCallback, useLayoutEffect, useRef, useState } from 'react'
-import Box from '../ink/components/Box.js'
-import Text from '../ink/components/Text.js'
+import Box from './design-system/ThemedBox.js'
+import Text from './design-system/ThemedText.js'
 import type { DOMElement } from '../ink/dom.js'
 import measureElement from '../ink/measure-element.js'
 import { useDeclaredCursor } from '../ink/hooks/use-declared-cursor.js'
@@ -56,8 +56,8 @@ function windowQuery(
 }
 
 /**
- * A single-line search input in the round-bordered box of Claude Code's
- * SearchBox: `⌕ ` prefix, block cursor at `cursorOffset` (inverse cell).
+ * A single-line search input in a round-bordered box: `⌕ ` prefix, block
+ * cursor at `cursorOffset` (inverse cell).
  * When empty and focused, a solid block caret sits at the start and the
  * placeholder is right-aligned (dimmed) — kept off the caret's cell so the
  * terminal-painted IME preedit (pinyin) can never be overlaid on it during

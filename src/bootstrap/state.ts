@@ -1,8 +1,6 @@
 /**
- * Interaction-time telemetry stubs consumed by the ported Ink core
- * (ink/ink.tsx, ink/components/App.tsx, ink/components/ScrollBox.tsx). The
- * original functions fed Claude Code's session-activity tracking; dsh-tui
- * does not track interaction time.
+ * Interaction-time telemetry stubs used by the renderer's input and scroll
+ * paths. dsh-tui does not track interaction time, so these hooks are no-ops.
  */
 /** No-op interaction-time flush stub; dsh-tui does not track interaction time. */
 export function flushInteractionTime(): void {}

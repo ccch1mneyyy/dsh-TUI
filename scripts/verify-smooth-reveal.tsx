@@ -25,6 +25,7 @@ import { MessageList } from '../src/components/MessageList.js'
 import { AssistantThinkingMessage } from '../src/components/messages/AssistantThinkingMessage.js'
 import { AssistantToolUseMessage } from '../src/components/messages/AssistantToolUseMessage.js'
 import type { ChatRow, ToolRow } from '../src/dsh-adapter/channel.js'
+import { settled } from './lib/term-test.mjs'
 import {
   REVEAL_MIN_STEP,
   getRevealVersion,
@@ -68,11 +69,13 @@ check(revealStep(25) === 4, 'A1 revealStep(25) = 4')
     revealLengthOf('a1', grown, { enabled: true, active: true }) === 0,
     'A2 monotonic append keeps the cursor',
   )
+  // 固定窗:墙钟 采样 reveal 动画中途（每帧消化 ~1/8 backlog）：轮询会一路
+  // 推进游标直到揭完，测不到 mid-flight
   await sleep(120)
   const mid = revealLengthOf('a1', grown, { enabled: true, active: true })
   check(mid > 0 && mid < grown.length, 'A2 partial reveal mid-flight', `len=${mid}/${grown.length}`)
-  // Exponential decay over the backlog (~1/8 per frame) + MIN_STEP tail: a
-  // 1200-char target needs ~1.3s to fully land.
+  // 固定窗:墙钟 exponential decay over the backlog (~1/8 per frame) +
+  // MIN_STEP tail: a 1200-char target needs ~1.3s to fully land.
   await sleep(2200)
   check(
     revealLengthOf('a1', grown, { enabled: true, active: true }) === grown.length,
@@ -98,10 +101,9 @@ check(revealStep(25) === 4, 'A1 revealStep(25) = 4')
   const before = getRevealVersion()
   revealLengthOf('a4', text, { enabled: true, active: true })
   check(isRevealTimerRunning(), 'A3 cursor creation starts the shared timer')
-  await sleep(120)
-  check(getRevealVersion() > before, 'A3 ticks bump the version store')
-  await sleep(2600)
-  check(!isRevealTimerRunning(), 'A3 timer retires once every cursor caught up')
+  check(await settled(() => getRevealVersion() > before), 'A3 ticks bump the version store')
+  check(await settled(() => !isRevealTimerRunning(), { timeoutMs: 6000 }),
+    'A3 timer retires once every cursor caught up')
 }
 
 {
@@ -185,11 +187,12 @@ console.log('--- B: MessageList integration ---')
   await withTerminal(
     () => <MessageList rows={rows} smoothStreaming {...listProps} />,
     async screen => {
+      // 固定窗:墙钟 采样 reveal 动画早期（80ms 内尾巴还没揭到）
       await sleep(80)
       const early = screen()
       check(!early.includes('omega-end'), 'B1 streaming row: tail hidden early in the reveal')
       check(early.includes('alpha-start'), 'B1 streaming row: head visible early')
-      await sleep(2600)
+      await sleep(2600) // 固定窗:墙钟 等 reveal 动画把整段追平（指数衰减 + MIN_STEP 尾巴）
       check(screen().includes('omega-end'), 'B1 streaming row: tail visible after catch-up')
     },
   )
@@ -204,9 +207,10 @@ console.log('--- B: MessageList integration ---')
   await withTerminal(
     () => <MessageList rows={rows} smoothStreaming {...listProps} />,
     async screen => {
+      // 固定窗:墙钟 采样 reveal 动画早期（80ms 内尾巴还没揭到）
       await sleep(80)
       check(!screen().includes('omega-end'), 'B2 settled-fresh row: tail hidden early (non-streaming becomes smooth)')
-      await sleep(2600)
+      await sleep(2600) // 固定窗:墙钟 等 reveal 动画把整段追平
       check(screen().includes('omega-end'), 'B2 settled-fresh row: complete after catch-up')
     },
   )
@@ -221,6 +225,8 @@ console.log('--- B: MessageList integration ---')
   await withTerminal(
     () => <MessageList rows={rows} smoothStreaming {...listProps} />,
     async screen => {
+      // 固定窗:探针 重放行不得逐字揭示：settled 会一直等到揭完也判过，
+      // 遮蔽「开屏打字机」这个 bug；只能给一个短窗后断言已经完整
       await sleep(80)
       check(screen().includes('omega-end'), 'B3 replayed row: paints complete (no typewriting on open)')
     },
@@ -236,6 +242,8 @@ console.log('--- B: MessageList integration ---')
   await withTerminal(
     () => <MessageList rows={rows} {...listProps} />,
     async screen => {
+      // 固定窗:探针 关掉开关后不得有任何揭示动画：settled 等到揭完也判过，
+      // 遮蔽 bug；只能给一个短窗后断言已经完整
       await sleep(80)
       check(screen().includes('omega-end'), 'B4 smoothStreaming=false: full text paints immediately')
     },
@@ -254,9 +262,11 @@ console.log('--- C: component contracts ---')
   const slice = full.slice(0, 40)
   await withTerminal(
     () => (
-      <AssistantThinkingMessage thinking={slice} textFull={full} addMargin={false} verbose={false} preview streaming />
+      <AssistantThinkingMessage thinking={slice} textFull={full} marginTopOnTurn={false} verbose={false} preview streaming />
     ),
     async screen => {
+      // 固定窗:探针 预览 ticker 不得被揭示节流：settled 等到揭完也判过，
+      // 遮蔽「ticker 跟着 reveal 走」这个 bug
       await sleep(120)
       const text = screen()
       check(text.includes('think line 11'), 'C1 preview ticker follows the ARRIVED text (not the reveal)')
@@ -264,9 +274,10 @@ console.log('--- C: component contracts ---')
   )
   await withTerminal(
     () => (
-      <AssistantThinkingMessage thinking={slice} textFull={full} addMargin={false} verbose streaming />
+      <AssistantThinkingMessage thinking={slice} textFull={full} marginTopOnTurn={false} verbose streaming />
     ),
     async screen => {
+      // 固定窗:探针 展开体不得越过已揭示切片（断言 think line 11 不出现）
       await sleep(120)
       const text = screen()
       check(!text.includes('think line 11'), 'C1 expanded body paints only the revealed slice')
@@ -303,16 +314,18 @@ console.log('--- C: component contracts ---')
     resultView: { card: 'generic', title: 'Edited', content: [{ type: 'text', text: 'settled-result-marker' }] },
   }
   await withTerminal(
-    () => <AssistantToolUseMessage tool={runningTool} addMargin={false} verbose={false} smoothReveal fresh />,
+    () => <AssistantToolUseMessage tool={runningTool} marginTopOnTurn={false} verbose={false} smoothReveal fresh />,
     async (screen, rerender) => {
+      // 固定窗:墙钟 采样逐行揭示的动画早期（60ms 内还没揭到被折叠的尾行）
       await sleep(60)
       const early = screen()
       check(early.includes('old line 0'), 'C2 running card: body head visible early', early)
       check(!early.includes('lines (ctrl+o to expand)'), 'C2 running card: capped tail row hidden early in the reveal', early)
-      await sleep(2200)
+      await sleep(2200) // 固定窗:墙钟 等逐行揭示动画把整张卡片追平
       check(screen().includes('lines (ctrl+o to expand)'), 'C2 running card: body complete after catch-up')
       // C3: result arriving mid/after reveal snaps complete.
-      rerender(<AssistantToolUseMessage tool={doneTool} addMargin={false} verbose={false} smoothReveal fresh />)
+      rerender(<AssistantToolUseMessage tool={doneTool} marginTopOnTurn={false} verbose={false} smoothReveal fresh />)
+      // 固定窗:探针 结果视图不得走揭示动画：settled 等到揭完也判过，遮蔽 bug
       await sleep(80)
       check(screen().includes('settled-result-marker'), 'C3 settled result paints complete (no reveal)')
     },
@@ -367,9 +380,9 @@ console.log('--- D: long-session reveal subscriber fanout ---')
   await withTerminal(
     () => <MessageList rows={[...historyTools, activeTool]} smoothStreaming {...listProps} />,
     async screen => {
-      await sleep(120)
+      await sleep(120) // 固定窗:墙钟 采样揭示动画早期（活动卡头部已出现）
       check(screen().includes('old line 0'), 'D1 active tool remains visible with many history cards')
-      await sleep(2200)
+      await sleep(2200) // 固定窗:墙钟 等揭示动画把活动卡追平
       check(screen().includes('lines (ctrl+o to expand)'), 'D1 active tool reveal completes without nested store updates')
     },
   )

@@ -101,7 +101,7 @@ function makeChannel(rows: any[]) {
     commandList: LOCAL_COMMANDS,
     notifications: [],
     mode: { plan: false, sandbox: undefined },
-    activityFrames: 'claude',
+    activityFrames: 'moon8',
     agentPreset: undefined,
     subagents: [],
     subscribe(cb: () => void) { listeners.add(cb); return () => listeners.delete(cb) },
@@ -198,24 +198,24 @@ async function runScenario(withSelection: boolean, seekTicks?: number): Promise<
   })
   instances.set(process.stdout, instances.get(stdout)!)
   instance.rerender(tree)
-  await sleep(800)
+  await sleep(800) // 固定窗:pacing 等首帧铺满，无单一可轮询锚点
 
   let usedSeekTicks = 0
   if (seekTicks === undefined) {
     while (usedSeekTicks < 100 && !screenLines(term).some(line => line.includes(TARGET_MARKERS[4]!))) {
       wheel(stdin, 'up', 1)
       usedSeekTicks++
-      await sleep(18)
+      await sleep(18) // 固定窗:pacing 轮询步长，条件见循环（每步都要发一次滚轮）
     }
   } else {
     usedSeekTicks = seekTicks
     for (let i = 0; i < seekTicks; i++) {
       wheel(stdin, 'up', 1)
-      await sleep(18)
+      await sleep(18) // 固定窗:pacing 滚轮事件步间
     }
   }
   await settled(() => screenLines(term).some(line => line.includes(TARGET_MARKERS[4]!)))
-  await sleep(250)
+  await sleep(250) // 固定窗:pacing 等滚动落定后整帧稳定，无单一锚点
 
   const before = screenLines(term)
   const markerRow = before.findIndex(line => line.includes(TARGET_MARKERS[4]!))
@@ -227,10 +227,10 @@ async function runScenario(withSelection: boolean, seekTicks?: number): Promise<
   writes.length = 0
   if (withSelection) {
     stdin.write(`\x1b[<0;${markerCol + 2};${markerRow + 1}M`)
-    await sleep(40)
+    await sleep(40) // 固定窗:pacing press→motion 步间
     const focusRow = Math.min(ROWS - 6, markerRow + 2)
     stdin.write(`\x1b[<32;${Math.min(COLS - 2, markerCol + 28)};${focusRow + 1}M`)
-    await sleep(70)
+    await sleep(70) // 固定窗:pacing 拖动 motion 步间
   }
 
   const beforeWheelState = instances.get(process.stdout)?.selection
@@ -240,7 +240,7 @@ async function runScenario(withSelection: boolean, seekTicks?: number): Promise<
   }
 
   wheel(stdin, 'up', 7)
-  await sleep(180)
+  await sleep(180) // 固定窗:pacing 等 7 次滚轮批次被处理完，无可观测完成条件
   const afterWheelState = instances.get(process.stdout)?.selection
   const selectionAfterWheel = {
     anchor: afterWheelState?.anchor ? { ...afterWheelState.anchor } : null,
@@ -250,14 +250,14 @@ async function runScenario(withSelection: boolean, seekTicks?: number): Promise<
     stdin.write(`\x1b[<32;${Math.min(COLS - 2, markerCol + 34)};${Math.min(ROWS - 6, markerRow + 3) + 1}M`)
   }
   wheel(stdin, 'down', 4)
-  await sleep(220)
+  await sleep(220) // 固定窗:pacing 等 4 次滚轮批次被处理完，无可观测完成条件
 
   const activeRaw = writes.join('')
   const activeDecstbm = (activeRaw.match(/\x1b\[\d+;\d+r/g) ?? []).length
   if (withSelection) {
     stdin.write(`\x1b[<0;${Math.min(COLS - 2, markerCol + 34)};${Math.min(ROWS - 6, markerRow + 3) + 1}m`)
   }
-  await sleep(700)
+  await sleep(700) // 固定窗:pacing 松开后重绘收尾，无单一可轮询锚点
 
   const lines = screenLines(term)
   await instance.unmount()

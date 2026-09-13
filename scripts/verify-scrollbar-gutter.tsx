@@ -63,7 +63,7 @@ const channel: any = {
   tokens: { input: 0, output: 0 }, cwd: '/tmp/demo', displayCwd: '/tmp/demo', gitBranch: 'main',
   working: false, spinnerMode: 'requesting', responseChars: 0, activeToolCount: 0, turnStart: 0,
   pending: [], commandList: LOCAL_COMMANDS, notifications: [], mode: { plan: false, sandbox: undefined },
-  activityFrames: 'claude', agentPreset: undefined, subagents: [], lastUserText: '问题 8',
+  activityFrames: 'moon8', agentPreset: undefined, subagents: [], lastUserText: '问题 8',
   scrollGutter: 'timeline',
   subscribe(cb: () => void) { listeners.add(cb); return () => listeners.delete(cb) },
   submit: () => {}, cancel: () => {}, clear: () => {}, notify: () => {},
@@ -128,7 +128,7 @@ function gutterSnapshot(): { thumbs: number[]; ticks: number[]; chevrons: number
 const wheel = async (up: boolean, times: number) => {
   for (let i = 0; i < times; i++) {
     stdin.write(`\x1b[<${up ? 64 : 65};90;30M`)
-    await sleep(150)
+    await sleep(150) // 固定窗:pacing 滚轮事件步间，无可区分新旧帧的屏幕条件
   }
 }
 const clickAt = (col: number, row: number) => {

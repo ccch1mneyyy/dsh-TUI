@@ -1,5 +1,5 @@
 import React from 'react'
-import Text from '../../ink/components/Text.js'
+import Text from '../design-system/ThemedText.js'
 import { stringWidth } from '../../ink/stringWidth.js'
 import { getGraphemeSegmenter } from '../../utils/intl.js'
 import { getTheme, type Theme } from '../../theme.js'
@@ -17,11 +17,13 @@ type Props = {
   stalledIntensity?: number
 }
 
-const ERROR_RED = { r: 171, g: 43, b: 63 }
+const STALL_COLOR = { r: 198, g: 84, b: 101 }
 
-/**
- * The shimmering verb message next to the spinner glyph, mirroring Claude Code's `Spinner/GlimmerMessage.tsx`.
- */
+function clamp(value: number, min = 0, max = 1): number {
+  return Math.min(max, Math.max(min, value))
+}
+
+/** The status message with a grapheme-safe, theme-aware moving highlight. */
 export function GlimmerMessage({
   message,
   mode,
@@ -34,36 +36,29 @@ export function GlimmerMessage({
   const [themeName] = useTheme()
   const theme = getTheme(themeName)
 
-  // Precompute grapheme segmentation + widths once per message instead of
-  // per animation frame (the original component re-renders at ~20fps).
-  const { segments } = React.useMemo(() => {
-    const segs: { segment: string; width: number }[] = []
+  const segments = React.useMemo(() => {
+    let start = 0
+    const measured: { segment: string; width: number; start: number }[] = []
     for (const { segment } of getGraphemeSegmenter().segment(message)) {
-      segs.push({ segment, width: stringWidth(segment) })
+      const width = stringWidth(segment)
+      measured.push({ segment, width, start })
+      start += width
     }
-    return { segments: segs }
+    return measured
   }, [message])
 
   if (!message) return null
 
-  // When stalled, show text that smoothly transitions to red
-  if (stalledIntensity > 0) {
-    const baseColorStr = theme[messageColor]
-    const baseRGB = baseColorStr ? parseRGB(baseColorStr) : null
+  const baseRGB = parseRGB(theme[messageColor])
+  const shimmerRGB = parseRGB(theme[shimmerColor])
+  const intensity = clamp(stalledIntensity)
 
-    if (baseRGB) {
-      const interpolated = interpolateColor(baseRGB, ERROR_RED, stalledIntensity)
-      const color = toRGBColor(interpolated)
-      return (
-        <>
-          <Text color={color}>{message}</Text>
-          <Text color={color}> </Text>
-        </>
-      )
-    }
-
-    // Fallback for ANSI themes: use messageColor until fully stalled, then error
-    const color = stalledIntensity > 0.5 ? 'error' : messageColor
+  if (intensity > 0) {
+    const color = baseRGB
+      ? toRGBColor(interpolateColor(baseRGB, STALL_COLOR, intensity))
+      : intensity > 0.5
+        ? 'error'
+        : messageColor
     return (
       <>
         <Text color={color}>{message}</Text>
@@ -72,25 +67,7 @@ export function GlimmerMessage({
     )
   }
 
-  // tool-use mode: all chars flash with the same opacity, so render as a
-  // single <Text> instead of N individual FlashingChar components.
-  if (mode === 'tool-use') {
-    const baseColorStr = theme[messageColor]
-    const shimmerColorStr = theme[shimmerColor]
-    const baseRGB = baseColorStr ? parseRGB(baseColorStr) : null
-    const shimmerRGB = shimmerColorStr ? parseRGB(shimmerColorStr) : null
-
-    if (baseRGB && shimmerRGB) {
-      const interpolated = interpolateColor(baseRGB, shimmerRGB, flashOpacity)
-      const color = toRGBColor(interpolated)
-      return (
-        <>
-          <Text color={color}>{message}</Text>
-          <Text color={color}> </Text>
-        </>
-      )
-    }
-    // Fallback for ANSI themes: render without flash animation
+  if (!baseRGB || !shimmerRGB) {
     return (
       <>
         <Text color={messageColor}>{message}</Text>
@@ -99,40 +76,28 @@ export function GlimmerMessage({
     )
   }
 
-  // Shimmer: a highlight sweeps across the message text
-  const baseColorStr = theme[messageColor]
-  const shimmerColorStr = theme[shimmerColor]
-  const baseRGB = baseColorStr ? parseRGB(baseColorStr) : null
-  const shimmerRGB = shimmerColorStr ? parseRGB(shimmerColorStr) : null
-
-  if (!baseRGB || !shimmerRGB) {
-    // Fallback for ANSI themes: render without shimmer animation
+  // Tool feedback uses one gentle pulse. Other phases use a four-cell
+  // triangular highlight centered on glimmerIndex, so wide graphemes receive
+  // one color instead of being split in the middle of a display cell.
+  if (mode === 'tool-use') {
+    const color = toRGBColor(interpolateColor(baseRGB, shimmerRGB, clamp(flashOpacity)))
     return (
       <>
-        <Text color={messageColor}>{message}</Text>
-        <Text color={messageColor}> </Text>
+        <Text color={color}>{message}</Text>
+        <Text color={color}> </Text>
       </>
     )
   }
 
   return (
     <>
-      {segments.map(({ segment, width }, index) => {
-        let charStart = 0
-        for (let i = 0; i < index; i++) charStart += segments[i]!.width
-
-        // Character is highlighted if it falls within the glimmer window
-        const isHighlighted =
-          glimmerIndex >= 0 &&
-          charStart >= glimmerIndex &&
-          charStart + width <= glimmerIndex + 4
-
-        const color = isHighlighted
-          ? toRGBColor(interpolateColor(baseRGB, shimmerRGB, flashOpacity))
-          : messageColor
-
+      {segments.map(({ segment, width, start }) => {
+        const center = start + width / 2
+        const distance = Math.abs(center - (glimmerIndex + 2))
+        const highlight = clamp(1 - distance / 4)
+        const color = toRGBColor(interpolateColor(baseRGB, shimmerRGB, highlight * 0.85))
         return (
-          <Text key={index} color={color}>
+          <Text key={`${start}:${segment}`} color={color}>
             {segment}
           </Text>
         )

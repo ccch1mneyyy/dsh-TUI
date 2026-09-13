@@ -49,6 +49,13 @@ for (const presetFile of [
 ]) {
   if (!packed.has(presetFile)) throw new Error(`packaged preset file missing from tarball: ${presetFile}`)
 }
+for (const path of packed) {
+  const lower = path.toLowerCase()
+  if (lower.includes('plugin-spec/')
+    || /dsh-adapter\/(?:grants|host-descriptor)(?:\.|$)/u.test(lower)) {
+    throw new Error(`npm package contains legacy compat shim (case-insensitive): ${path}`)
+  }
+}
 if ([...packed].some(path => path.startsWith('src/'))) {
   throw new Error('npm package unexpectedly contains TypeScript sources')
 }
@@ -57,6 +64,22 @@ if ([...packed].some(path => path.startsWith('skills/') || path.startsWith('.age
 }
 if (packed.has('lib/invariant.js')) {
   throw new Error('npm package contains the obsolete hand-built invariant entry')
+}
+
+// The manifest ships verbatim (publish goes through npm, which rewrites no
+// workspace protocols), so a `workspace:` range on a NON-BUNDLED name lands
+// in the tarball and kills `dsh plugin add` in the profile workspace
+// (ERR_PNPM_WORKSPACE_PKG_NOT_FOUND). Bundled names are fine — npm packs
+// their physical copies into the tarball, so the range never resolves for a
+// consumer. Workspace helpers (e.g. vendor/sqlite-island) are reached by
+// relative import instead of a manifest entry.
+const bundled = new Set(manifest.bundledDependencies ?? manifest.bundleDependencies ?? [])
+for (const section of ['dependencies', 'optionalDependencies', 'devDependencies', 'peerDependencies']) {
+  for (const [name, range] of Object.entries(manifest[section] ?? {})) {
+    if (typeof range === 'string' && range.startsWith('workspace:') && !bundled.has(name)) {
+      throw new Error(`manifest ${section}.${name} uses the ${range} protocol on a non-bundled package, which must never ship (reach workspace helpers by relative import)`)
+    }
+  }
 }
 
 await import(new URL(`../${manifest.main}`, import.meta.url))

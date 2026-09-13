@@ -1,14 +1,14 @@
 import React from 'react'
-import Text from '../../ink/components/Text.js'
+import Text from './ThemedText.js'
 import type { Theme } from '../../theme.js'
 
 /**
- * A proportional progress bar drawn with block glyphs, mirroring Claude Code's design-system/ProgressBar.tsx: `█` fills whole cells, the partial
- * cell uses the `▏▎▍▌▋▊▉` ladder for sub-cell precision, and the empty
+ * A proportional progress bar drawn with block glyphs: `█` fills whole cells,
+ * the partial cell uses the `▏▎▍▌▋▊▉` ladder for sub-cell precision, and the empty
  * remainder is spaces with the empty color as background.
  *
  * @example
- * <ProgressBar ratio={0.42} width={20} fillColor="claude" emptyColor="inactive" />
+ * <ProgressBar ratio={0.42} width={20} fillColor='accent' emptyColor="inactive" />
  */
 export function ProgressBar({
   ratio: inputRatio,

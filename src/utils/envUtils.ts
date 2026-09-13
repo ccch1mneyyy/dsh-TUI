@@ -1,5 +1,5 @@
 /**
- * Environment truthiness check for the ported Ink core. Accepts the common
+ * Environment truthiness check used by terminal configuration. Accepts the common
  * shell truthy spellings (`1`, `true`, `yes`, `on`).
  * @param value - The environment value to interpret.
  * @returns True for booleans `true` and the truthy spellings, false otherwise.

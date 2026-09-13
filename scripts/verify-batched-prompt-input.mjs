@@ -93,11 +93,11 @@ const instance = await render(
   { stdout, stderr, stdin, exitOnCtrlC: false, patchConsole: false },
 )
 
-// 首帧挂载 pacing：等 React 树完成首次渲染与输入监听挂接，无单一可观测条件。
+// 固定窗:pacing 等 React 树首次渲染与输入监听挂接，无单一可观测条件
 await sleep(500)
 stdin.write('a\x1b[Db')
-// 批与 Enter 之间的 pacing：编辑态对外不可观测（stdout 被丢弃），只有
-// submit 可断言——保留固定窗口（本文件后续同类 sleep 同理）。
+// 固定窗:pacing 批与 Enter 之间——编辑态对外不可观测（stdout 被丢弃），
+// 只有 submit 可断言（本文件后续同类 sleep 同理）。
 await sleep(200)
 stdin.write('\r')
 
@@ -111,7 +111,7 @@ check(
 // Two IME commits in one read must compose instead of both reading the empty
 // render closure and leaving only the final character (issue #215).
 stdin.write('\x1b[65;30;20320;1;0;1_\x1b[65;30;22909;1;0;1_')
-await sleep(200)
+await sleep(200) // 固定窗:pacing 批与 Enter 之间，编辑态不可观测
 stdin.write('\r')
 
 check(
@@ -125,7 +125,7 @@ check(
 // records; each edit must compose before Enter steers the text (issue #219).
 channel.working = true
 stdin.write('\x1b[78;49;110;1;0;1_\x1b[80;25;112;1;0;1_\x1b[77;50;109;1;0;1_')
-await sleep(200)
+await sleep(200) // 固定窗:pacing 批与 Enter 之间，编辑态不可观测
 stdin.write('\r')
 
 check(
@@ -146,8 +146,8 @@ const batchedCommand = (letters) => [
   win32Record(13, 28, 13),
 ].join('')
 
-// Keep separate physical Enter presses outside PromptInput's 80ms CR/LF
-// dedupe window; each command itself still arrives as one atomic batch.
+// 固定窗:墙钟 跨过 PromptInput 的 80ms CR/LF Enter 去重窗（handleEnter），
+// 让相邻两次物理 Enter 各自生效；命令本身仍是一个原子批。
 await sleep(100)
 stdin.write(batchedCommand([
   [83, 31, 115],
@@ -164,7 +164,7 @@ check(
   `commands=${JSON.stringify(commands)} steered=${JSON.stringify(steered)}`,
 )
 
-await sleep(100)
+await sleep(100) // 固定窗:墙钟 同上，跨过 80ms Enter 去重窗
 stdin.write(batchedCommand([
   [77, 50, 109],
   [79, 24, 111],
@@ -181,7 +181,7 @@ check(
 
 // A registered local command may decline handling and explicitly ask the
 // input component to send the original text to the model instead.
-await sleep(100)
+await sleep(100) // 固定窗:墙钟 同上，跨过 80ms Enter 去重窗
 commandHandled = false
 stdin.write(batchedCommand([
   [83, 31, 115],
@@ -211,13 +211,13 @@ const multilineCases = [
   ['Shift+Enter', '\x1b[13;2u', 'shift'],
 ]
 for (const [index, [label, newlineKey, prefix]] of multilineCases.entries()) {
-  // 按键间 pacing（同上）：各段必须作为独立 chunk 依次落入编辑态。
+  // 各段必须作为独立 chunk 依次落入编辑态。
   stdin.write(`${prefix} first`)
-  await sleep(100)
+  await sleep(100) // 固定窗:pacing 按键分段步间
   stdin.write(newlineKey)
-  await sleep(100)
+  await sleep(100) // 固定窗:pacing 按键分段步间
   stdin.write(`${prefix} second`)
-  await sleep(100)
+  await sleep(100) // 固定窗:pacing 按键分段步间
   stdin.write('\r')
 
   check(
@@ -238,11 +238,11 @@ const modifiedCtrlJCases = [
 ]
 for (const [index, [label, newlineKey, prefix]] of modifiedCtrlJCases.entries()) {
   stdin.write(`${prefix} first`)
-  await sleep(100)
+  await sleep(100) // 固定窗:pacing 按键分段步间
   stdin.write(newlineKey)
-  await sleep(100)
+  await sleep(100) // 固定窗:pacing 按键分段步间
   stdin.write(`${prefix} second`)
-  await sleep(100)
+  await sleep(100) // 固定窗:pacing 按键分段步间
   stdin.write('\r')
 
   const submission = multilineCases.length + index + 2
@@ -255,11 +255,11 @@ for (const [index, [label, newlineKey, prefix]] of modifiedCtrlJCases.entries())
 }
 
 stdin.write('a')
-await sleep(100)
+await sleep(100) // 固定窗:pacing 按键分段步间
 stdin.write('\x1b\r')
-await sleep(100)
+await sleep(100) // 固定窗:pacing 两次 Option+Enter 必须各自成 chunk
 stdin.write('\x1b\r')
-await sleep(100)
+await sleep(100) // 固定窗:pacing 按键分段步间
 stdin.write('b')
 check(
   'consecutive Option+Enter keeps both blank prompt lines visible',

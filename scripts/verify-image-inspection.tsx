@@ -8,7 +8,7 @@ delete process.env.DSH_TUI_DISABLE_TERMINAL_IMAGES
 delete process.env.DSH_TUI_IMAGE_PROTOCOL
 delete process.env.TMUX
 delete process.env.STY
-delete process.env.CLAUDE_CODE_ACCESSIBILITY
+delete process.env.DSH_TUI_ACCESSIBILITY
 
 import assert from 'node:assert/strict'
 import { readFile, unlink } from 'node:fs/promises'
@@ -171,7 +171,7 @@ const click = async (label: string) => {
   }
   assert.ok(found, `control ${label} visible: ${text()}`)
   input.write(`\x1b[<0;${found.x + 1};${found.y + 1}M\x1b[<0;${found.x + 1};${found.y + 1}m`)
-  await sleep(40)
+  await sleep(40) // 固定窗:pacing 鼠标 press→release 后的步间等待，调用方各自用 settled 断言结果
 }
 try {
   assert.ok(await settled(() => output.data.includes('\x1bP0;1;q'), { timeoutMs: 15000 }), 'fit preview paints through compiled worker')

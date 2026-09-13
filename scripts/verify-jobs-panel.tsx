@@ -8,6 +8,8 @@
  *   jobControl.kill 权限传递、无 jobs 服务降级、/new 重置投影。
  * Group C — 渲染冒烟（headless xterm）：
  *   JobCard 运行态三行瀑布（有输出时）/仅头行（无输出时）、settled 折叠、JobsPanel 标题/行/提示。
+ * Group D — 按键归属（Chat 整屏 + 假 channel）：
+ *   面板打开时 Esc 关面板而非中断对话；面板关闭后 Esc 仍能中断（防假通过）。
  *
  * 运行：node --import tsx/esm scripts/verify-jobs-panel.tsx
  */
@@ -27,11 +29,13 @@ const [
   { Context },
   { createChannel },
   { BackgroundJobStore, formatJobDuration, JOBS_MAX_TRACKED, JOBS_MAX_OUTPUT_LINES },
-  { settled, sleep },
+  { settled, settle, sleep },
   React,
   { render },
   { JobCard },
   { JobsPanel },
+  { Chat },
+  { QuestionStore },
 ] = await Promise.all([
   import('@deepseek-ai/cordis'),
   import('../src/dsh-adapter/channel.js'),
@@ -41,6 +45,8 @@ const [
   import('../src/ui.js'),
   import('../src/components/Chat/JobCard.js'),
   import('../src/components/JobsPanel.js'),
+  import('../src/screens/Chat.js'),
+  import('../src/dsh-adapter/questions.js'),
 ])
 const { Writable, PassThrough } = await import('node:stream')
 const { Terminal: XTerm } = (await import('@xterm/headless')) as unknown as {
@@ -256,7 +262,7 @@ const NOW = Date.now()
   ))
 
   check('B5 jobControl.kill 调用注册表并带 owner', channel.jobControl.kill('pwsh-1') === true && fake.kills.join(',') === 'pwsh-1', fake.kills.join(','))
-  await sleep(150)
+  await sleep(150) // 固定窗:探针 终态任务 kill 后观察窗内不得发出 steer
   check('B5 终态任务 kill 不触发 steer', initial.steered.length === 0, initial.steered.join('|'))
 
   // 存活任务被用户 kill → steer 通知模型（kill 会抑制 harness 完成通知）。
@@ -306,7 +312,7 @@ const NOW = Date.now()
   const channel = createChannel(ctx as never, makeAgent('agent-a', 'sess-a') as never, {
     model: 'm0', cwd: '/tmp/demo', provider: 'p0', activity: false,
   })
-  await sleep(50)
+  await sleep(50) // 固定窗:探针 无 jobs 服务时快照必须始终为空（轮询空条件会立即返回）
   check('B7 无 jobs 服务：快照为空', channel.backgroundJobs.length === 0)
   check('B7 无 jobs 服务：kill 安全返回 false', channel.jobControl.kill('pwsh-9') === false)
 }
@@ -334,20 +340,21 @@ class Input extends PassThrough {
 }
 async function withTerminal(
   make: () => React.ReactNode,
-  run: (screen: () => string, rerender: (node: React.ReactNode) => void) => Promise<void>,
+  run: (screen: () => string, rerender: (node: React.ReactNode) => void, stdin: Input) => Promise<void>,
 ): Promise<void> {
   const term = new XTerm({ cols: COLS, rows: ROWS, scrollback: 0, allowProposedApi: true })
   const stdout = new FakeStdout(term) as unknown as NodeJS.WriteStream
+  const stdin = new Input()
   const instance = await render(make(), {
     stdout,
-    stdin: new Input() as unknown as NodeJS.ReadStream,
+    stdin: stdin as unknown as NodeJS.ReadStream,
     exitOnCtrlC: false,
     patchConsole: false,
   })
   const screen = (): string =>
     Array.from({ length: ROWS }, (_, y) => term.buffer.active.getLine(y)?.translateToString(true) ?? '').join('\n')
   try {
-    await run(screen, node => instance.rerender(node))
+    await run(screen, node => instance.rerender(node), stdin)
   } finally {
     await instance.unmount()
     term.dispose()
@@ -360,8 +367,10 @@ const runningJob = {
   startedAt: Date.now() - 65_000, outputLines: ['build step 1 ok', 'build step 2 ok'],
 }
 await withTerminal(
-  () => React.createElement(JobCard, { job: runningJob, addMargin: false }),
+  () => React.createElement(JobCard, { job: runningJob, marginTopOnTurn: false }),
   async screen => {
+    // 固定窗:待迁移 一个 sleep 服务同一快照上的多条正/负混合断言，
+    // 迁移需把全部条件合进一个 settled 谓词并在其中捕获快照，非平凡改写。
     await sleep(150)
     const text = screen()
     check('C1 运行卡头含 id/label', text.includes('pwsh-1') && text.includes('gh run watch 42'))
@@ -371,9 +380,11 @@ await withTerminal(
 await withTerminal(
   () => React.createElement(JobCard, {
     job: { ...runningJob, outputLines: [] },
-    addMargin: false,
+    marginTopOnTurn: false,
   }),
   async screen => {
+    // 固定窗:待迁移 一个 sleep 服务同一快照上的多条正/负混合断言，
+    // 迁移需把全部条件合进一个 settled 谓词并在其中捕获快照，非平凡改写。
     await sleep(150)
     const text = screen()
     check(
@@ -386,9 +397,11 @@ await withTerminal(
 await withTerminal(
   () => React.createElement(JobCard, {
     job: { ...runningJob, status: 'completed' as const, detail: 'exit code: 0', finishedAt: Date.now() },
-    addMargin: false,
+    marginTopOnTurn: false,
   }),
   async screen => {
+    // 固定窗:待迁移 一个 sleep 服务同一快照上的多条正/负混合断言，
+    // 迁移需把全部条件合进一个 settled 谓词并在其中捕获快照，非平凡改写。
     await sleep(150)
     const text = screen()
     check('C2 落定卡折叠（无瀑布行）', !text.includes('│ build step 1 ok'))
@@ -405,6 +418,8 @@ await withTerminal(
     onKill: () => {},
   }),
   async screen => {
+    // 固定窗:待迁移 一个 sleep 服务同一快照上的多条正/负混合断言，
+    // 迁移需把全部条件合进一个 settled 谓词并在其中捕获快照，非平凡改写。
     await sleep(150)
     const text = screen()
     check('C3 面板标题与两行任务', text.includes('Background Jobs') && text.includes('pwsh-1') && text.includes('bash-2'))
@@ -417,6 +432,102 @@ await withTerminal(
     check('C3 非聚焦行无详情块', !text.includes('no mirrored output yet'))
   },
 )
+
+// ---------------------------------------------------------------------------
+// Group D — 按键归属：/jobs 面板打开时 Esc 关面板，不得同时中断对话
+// ---------------------------------------------------------------------------
+console.log('--- D: /jobs panel owns Esc ---')
+{
+  const cancelled: string[] = []
+  const panelJob = {
+    id: 'pwsh-7', kind: 'pwsh', label: 'gh run watch 42', status: 'running' as const,
+    command: 'gh pr checks --watch 42', startedAt: NOW - 5_000, outputLines: [],
+  }
+  const channel: Record<string, unknown> = {
+    version: 0,
+    rows: [],
+    status: 'idle',
+    sessionTitle: 'jobs esc probe',
+    agentId: 'probe',
+    provider: 'deepseek',
+    model: 'deepseek-v4-pro',
+    tokens: { input: 0, output: 0 },
+    cwd: '/tmp/demo',
+    displayCwd: '/tmp/demo',
+    // /jobs 是 idle-only 的指挥行（working 时 Enter 走插话），所以初始为 idle：
+    // 面板先打开，再让回合变成在跑（点转录任务卡进面板、或面板开着时回合起跑），
+    // 这正是 bug 的现场——面板开着 + 回合在跑。
+    working: false,
+    spinnerMode: 'idle',
+    responseChars: 0,
+    activeToolCount: 0,
+    mode: { id: 'default', plan: false },
+    modeIndex: 0,
+    cycleMode(): void {},
+    turnStart: NOW,
+    lastUserText: '',
+    pending: [],
+    commandList: [{ name: 'jobs', description: 'Show background jobs of this session' }],
+    commandCompletions: () => [{
+      name: 'jobs',
+      description: 'Show background jobs of this session',
+      replacement: '/jobs',
+      commandLine: '/jobs',
+    }],
+    notifications: [],
+    activityEnabled: false,
+    activityFrames: [],
+    backgroundJobs: [panelJob],
+    jobControl: { kill: () => true },
+    subscribe: () => () => {},
+    submit: (): void => {},
+    cancel: (): void => { cancelled.push('cancel') },
+    clear: (): void => {},
+    notify: (): void => {},
+    listModels: () => Promise.resolve([]),
+    listSessions: () => [],
+    setResumeTarget: (): void => {},
+    stageImage: () => Promise.resolve(''),
+    listSubagents: () => Promise.resolve([]),
+    lastUsage: { input: 0, cacheRead: 0, cacheWrite: 0, output: 0 },
+    contextWindow: 1_000_000,
+    contextSegments: { system: 0, prompt: 0, assistant: 0, thinking: 0, tools: 0 },
+    tps: undefined,
+    tpsSamples: [],
+    reasoningEffort: 'high',
+    agentPreset: 'standard',
+  }
+
+  await withTerminal(
+    () => React.createElement(Chat, {
+      channel: channel as never,
+      questionStore: new QuestionStore() as never,
+      onExit: () => {},
+      fullscreen: true,
+      trajectorySeen: true,
+    }),
+    async (screen, _rerender, stdin) => {
+      // 等首帧上屏（等待后操作 → settle）再发键。
+      await settle(() => screen().includes('❯'))
+      // 打开面板：整行一次写入 → PromptInput 直接派发 /jobs。
+      stdin.write('/jobs\r')
+      check('D1 /jobs 打开后台任务面板', await settled(() => screen().includes('Background Jobs')), screen().split('\n')[0] ?? '')
+      // 面板开着时回合起跑（字段按 key 时实时读取，无需重渲染）。
+      channel.working = true
+      channel.status = 'working'
+      channel.spinnerMode = 'working'
+      check('D1 面板已打开时回合在跑且未被打断', cancelled.length === 0)
+      // Esc：面板拥有键盘 → 只关面板（等待后断言 → settled 把终值直接交给 check）。
+      stdin.write('\x1b')
+      check('D2 面板打开时 Esc 关闭面板', await settled(() => !screen().includes('Background Jobs')), screen().split('\n')[0] ?? '')
+      check('D2 同一次 Esc 不中断对话', cancelled.length === 0, JSON.stringify(cancelled))
+      // 反证：无面板时同一个 Esc 仍需中断，证明 D2 不是"Esc 根本没送达"。
+      const before = cancelled.length
+      stdin.write('\x1b')
+      check('D3 面板关闭后 Esc 恢复中断对话', await settled(() => cancelled.length === before + 1), JSON.stringify(cancelled))
+    },
+  )
+}
 
 if (failed > 0) {
   console.error(`\n${failed} check(s) failed`)

@@ -8,9 +8,9 @@ import { useTerminalFocus } from '../ink/hooks/use-terminal-focus.js'
 import { isMod, isPlainReturn, modLabel } from '../utils/modifiers.js'
 import { spreadRow, tailWidth, truncateWidth, wrapWidth } from '../sessions/format.js'
 import { stringWidth } from '../ink/stringWidth.js'
-import { TICK, MULTIPLICATION_X } from '../cc/figures.js'
+import { TICK, MULTIPLICATION_X } from '../terminal-utils/figures.js'
 import { t } from '../i18n.js'
-import type { Channel } from '../dsh-adapter/channel.js'
+import type { ChannelUi as Channel } from '../adapter/channel/ui-policy.js'
 import {
   droppedTurnInfo,
   filterTree,

@@ -42,8 +42,8 @@ const sourceBasePath = join(sourceRoot, 'packages/bundle/base/cordis.patch.yml')
 const requireSourceBaseline = process.env.DSH_REQUIRE_ALPHA_BASELINE === '1'
 if (existsSync(sourceWebPath) && existsSync(sourceWebManifest) && existsSync(sourceBasePath)) {
   const sourceWebVersion = JSON.parse(readFileSync(sourceWebManifest, 'utf8')).version
-  if (requireSourceBaseline && sourceWebVersion !== '0.1.2-rc.1') {
-    throw new Error(`required source baseline is 0.1.2-rc.1, got ${sourceWebVersion}`)
+  if (requireSourceBaseline && sourceWebVersion !== '0.1.5-rc.1') {
+    throw new Error(`required source baseline is 0.1.5-rc.1, got ${sourceWebVersion}`)
   }
   const resolver = prepareUpstreamSourceResolver(sourceRoot)
   baselines.push({

@@ -140,7 +140,7 @@ function makeChannel() {
     listSessions: async () => [],
     setResumeTarget() {},
     setActivityFrames: () => true,
-    activityFrames: 'claude',
+    activityFrames: 'moon8',
     runExternalCommand: async () => '',
     mcpStatus: () => [],
     exportSession: () => null,
@@ -195,7 +195,7 @@ check('对话框明确不改变模型思考行为', await settled(() => screenTe
 check('隐藏项说明模型仍会照常思考', await settled(() => screenText().includes('模型仍会照常思考')))
 
 stdin.write('\x1b[B')
-// 排序 sleep 保留：选中项移动只改高亮色，不改可见文本，屏上无可 settle 的内容。
+// 固定窗:pacing 按键步间：选中项移动只改高亮色，不改可见文本，屏上无可 settle 的内容。
 await sleep(120)
 stdin.write('\r')
 // 对话框盖住转录区时「思考行不可见」早已成立，settle 屏幕条件会提前返回；
@@ -217,7 +217,7 @@ check('English dialog says model behavior is unchanged', await settled(() => scr
 check('English shown option describes conversation visibility', await settled(() => screenText().includes("Show DeepSeek's reasoning")))
 
 stdin.write('\x1b[A')
-// 排序 sleep 保留：选中项移动只改高亮色，不改可见文本，屏上无可 settle 的内容。
+// 固定窗:pacing 按键步间：选中项移动只改高亮色，不改可见文本，屏上无可 settle 的内容。
 await sleep(120)
 stdin.write('\r')
 

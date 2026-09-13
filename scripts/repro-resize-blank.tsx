@@ -126,7 +126,7 @@ function doResize(w: number, h: number) {
 }
 
 // ---- 现场形态的 burst ----
-// 各落定/闲置等待保留固定 sleep：断言的 density>=3 平时恒真（空白才是
+// 各落定/闲置等待都是稳定性观察窗：断言的 density>=3 平时恒真（空白才是
 // 回归症状），对已成立条件轮询立即返回等于没测。
 const bursts: Array<Array<[number, number]>> = [
   [[231, 71], [232, 71]],
@@ -139,7 +139,7 @@ const bursts: Array<Array<[number, number]>> = [
 for (let b = 0; b < bursts.length; b++) {
   for (const [w, h] of bursts[b]) {
     doResize(w, h)
-    await sleep(8)
+    await sleep(8) // 固定窗:探针 resize 后 +8ms 不得出现空白帧（density>=3 恒真）
     await lastFlushed
     const d = density()
     if (d < 3) {
@@ -147,10 +147,10 @@ for (let b = 0; b < bursts.length; b++) {
       dump('burst#' + b + '-' + w + 'x' + h)
     }
   }
-  await sleep(150)
+  await sleep(150) // 固定窗:探针 burst 落定后内容不得塌缩
   await lastFlushed
   assertVisible('burst#' + b + ' 落定')
-  await sleep(500)
+  await sleep(500) // 固定窗:探针 闲置观察窗内内容不得塌缩
   await lastFlushed
   assertVisible('burst#' + b + ' 闲置后')
 }

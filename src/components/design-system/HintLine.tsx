@@ -1,5 +1,5 @@
 import React from 'react'
-import Text from '../../ink/components/Text.js'
+import Text from './ThemedText.js'
 
 /**
  * Localized shortcut-hint line: renders a `t('hint-*')` string, with the

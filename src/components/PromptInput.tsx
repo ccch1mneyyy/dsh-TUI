@@ -9,7 +9,7 @@ import { EffortChargeGlyph } from './EffortChargeGlyph.js'
 import { EffortInputBorder, type InputBorderLabel } from './EffortInputBorder.js'
 import { EffortTierBadge } from './EffortTierBadge.js'
 import { isLightThemeActive } from '../theme.js'
-import { sessionColorHex } from '../cc/sessionColors.js'
+import { sessionColorHex } from '../terminal-utils/sessionColors.js'
 import { useDeclaredCursor } from '../ink/hooks/use-declared-cursor.js'
 import type { ClickEvent } from '../ink/events/click-event.js'
 import type { DragEvent } from '../ink/events/drag-event.js'
@@ -24,8 +24,8 @@ import { formatClipboardInsert, readClipboard } from '../utils/clipboard.js'
 import { imagePathMediaType, parsePastedImagePath, stageClipboardFilePaths } from '../utils/pastedImagePath.js'
 import { editInExternalEditor } from '../utils/externalEditor.js'
 import { setPromptEditorNode, EditorButton } from './PromptEditor.js'
+import type { ChannelUi as Channel } from '../adapter/channel/ui-policy.js'
 import type {
-  Channel,
   ComposerImageRef,
   ComposerSubmission,
   StagedImageHandle,
@@ -60,7 +60,7 @@ interface DraftImageLease {
 }
 
 /**
- * Paste fold (CC-style collapse with a visible preview, no black box):
+ * Paste fold with a visible preview and no black box:
  * a paste that leaves the input this big folds into a one-line chip
  * showing the line/char count PLUS the first line of content. Hover peeks
  * at the full text (window pinned to the head); clicking the chip — or
@@ -345,8 +345,8 @@ function normalizeCursorOffset(text: string, offset: number): number {
  * blank while empty is what guarantees the preedit has nothing to overlay.
  */
 
-/** Max input rows before the visible viewport starts scrolling (CC's
- *  maxVisibleLines behavior — the box keeps a stable height). */
+/** Max input rows before the visible viewport starts scrolling; the box keeps
+ *  a stable height. */
 const MAX_VISIBLE_LINES = 5
 
 /**
@@ -421,16 +421,16 @@ export interface PromptInputProps {
    */
   fillText?: string | null
   onFillConsumed?(): void
-  /** Double-tap Esc with an empty input: open the rewind picker (CC rewind). */
+  /** Double-tap Esc with an empty input: open the rewind picker. */
   onRewindRequest?(): void
   /**
-   * CC agent-view parity: ← on an EMPTY prompt backgrounds this session and
+   * ← on an EMPTY prompt backgrounds this session and
    * opens the agent view (with text, ← moves the caret as usual).
    */
   onBackgroundRequest?(): void
   /**
    * Background sessions waiting on the user (agent view "needs input" rows
-   * excluding this session); the prompt footer shows the CC-style
+   * excluding this session); the prompt footer shows the
    * "← N agents" hint when provided (hidden when undefined).
    */
   backgroundAgentsNeedingInput?: number
@@ -456,12 +456,11 @@ export interface PromptInputProps {
 }
 
 /**
- * Claude Code style prompt input: rounded border box (top+bottom borders
+ * dsh-TUI prompt input: rounded border box (top+bottom borders
  * only), `❯ ` prompt char (dimmed while a turn is working), the text with a
  * block cursor at the cursor position, and above it the slash-command /
  * file-completion suggestion card (SuggestionCard: rounded panel with the
- * selected row behind a `❯` pointer in the theme's `suggestion` color,
- * mirroring Claude Code's PromptInputFooterSuggestions layout).
+ * selected row behind a `❯` pointer in the theme's `suggestion` color).
  *
  * Empty input: a solid block caret on a blank cell and nothing else — no
  * placeholder text, so the terminal-painted IME preedit (pinyin) at the
@@ -543,7 +542,7 @@ export function PromptInput({
   /** Pending vim operator: `d` pressed, awaiting its second key. */
   const vimPendingRef = React.useRef<'' | 'd'>('')
   /**
-   * CC-style fold block: the [start, end) span of `value` that renders as
+   * Fold block: the [start, end) span of `value` that renders as
    * a one-line chip while the text around it stays fully editable. Created
    * by a big paste; only an EXPLICIT expand (chip/card click, Esc) or
    * delete removes it — typing NEVER unfolds the block.
@@ -792,7 +791,7 @@ export function PromptInput({
       onFillConsumed?.()
     }
   }, [fillText, onFillConsumed])
-  // Double-tap Esc to clear (CC semantics).
+  // Double-tap Esc to clear.
   const escPendingRef = React.useRef(false)
   const escTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null)
   /** True while a clipboard paste read is in flight (ignore repeat keys). */
@@ -1375,7 +1374,7 @@ export function PromptInput({
       }
     }
     if (channel.working && value.trim() !== '') {
-      // CC's immediate-command semantics: /btw and /skills are exempt from
+      // Immediate-command semantics: /btw and /skills are exempt from
       // steering — neither command interrupts the running turn. Hidden
       // UI-only easter eggs (e.g. /deepseek) are also safe to run while
       // streaming. Every other input keeps the steer behavior so /new
@@ -1595,7 +1594,7 @@ export function PromptInput({
       return
     }
 
-    // Fold block (CC-style): Esc expands it — it must NEVER clear text
+    // Fold block: Esc expands it — it must NEVER clear text
     // that LOOKS like one line; Backspace at the block's tail / Delete at
     // its head deletes the WHOLE block in one key; ←/→ jump over the
     // atomic block. Typing NEVER expands it — the caret lives outside the
@@ -1685,7 +1684,7 @@ export function PromptInput({
         return
       }
       const at = insertAtCaret(text)
-      // A big paste becomes a CC-style fold block right away (hover peeks
+      // A big paste becomes a fold block right away (hover peeks
       // at it); an existing block is replaced by the new paste's span.
       // The EXPANDED editor never folds — pasting there is plain text
       // (fold semantics would clamp the caret out of the pasted span).
@@ -2204,7 +2203,7 @@ export function PromptInput({
       return
     }
     if (key.leftArrow) {
-      // CC agent-view parity: ← on an EMPTY prompt backgrounds this session
+      // ← on an EMPTY prompt backgrounds this session
       // and opens the agent view; with text it moves the caret as usual.
       // (The command/file overlays both imply non-empty text, so no extra
       // gate beyond the help menu is needed.)
@@ -2272,7 +2271,7 @@ export function PromptInput({
       return
     }
     if (isMod(key) && input === 'w') {
-      // Delete the word before the cursor (CC/readline behavior): skip
+      // Delete the word before the cursor: skip
       // trailing whitespace, then the whitespace-delimited word. The
       // deletion start never crosses into the block.
       const before = value.slice(0, cursor)
@@ -2539,7 +2538,7 @@ export function PromptInput({
         onToggleHelp()
         return
       }
-      // A single Esc closes the open command menu first (CC/pi behavior);
+      // A single Esc closes the open command menu first;
       // the double-tap-clear semantics only apply to ordinary input.
       if (overlayOpen) {
         syncImageGeneration()
@@ -2588,8 +2587,8 @@ export function PromptInput({
         return
       }
       // Double-tap Esc: clear the input when it has content; when empty,
-      // open the rewind picker (CC's "Double-tap esc to rewind the code
-      // and/or conversation to a previous point in time").
+      // open the rewind picker (double-tap Esc rewinds the selected message
+      // and/or conversation to a previous point in time).
       if (escPendingRef.current) {
         escPendingRef.current = false
         if (escTimerRef.current) clearTimeout(escTimerRef.current)
@@ -2616,7 +2615,7 @@ export function PromptInput({
       return
     }
     if (input && !key.ctrl && !key.meta && !key.super && !key.tab && !key.escape) {
-      // Typing anything else dismisses the help menu (CC behavior).
+      // Typing anything else dismisses the help menu.
       if (helpOpen) onToggleHelp()
       // An active selection is REPLACED by the typed text, caret after it.
       const sel = selectionRef.current
@@ -2631,8 +2630,7 @@ export function PromptInput({
   }, { isActive: !suspended })
 
   // === Render: hard-wrap every logical line at the input width, then show
-  // the window of visual lines with the caret row always visible (CC's
-  // maxVisibleLines behavior with automatic wrapping).
+  // the window of visual lines with the caret row always visible.
   // Narrow terminals: the usable width follows the real terminal down to a
   // single column — a fixed floor of 10 would wrap far too early and park
   // the declared cursor past the value box's actual width.
@@ -3002,7 +3000,7 @@ export function PromptInput({
     // Fold prefix (▾) row: the rendered first row is truncated by prefixCols,
     // so both the column and the wrap budget shift — without the correction
     // a drag starting on the first row lands prefixCols to the right of the
-    // pointer (parity with handleValueClick's click mapping). Presses ON the
+    // pointer (consistent with handleValueClick's click mapping). Presses ON the
     // prefix cells clamp to the row start (drag-from-0, like selecting the
     // whole first row backwards).
     const isPrefixRow = !block && clamped === 0 && prefixCols > 0
@@ -3201,7 +3199,7 @@ export function PromptInput({
     !suspended &&
     !expanded &&
     (helpOpen || channel.pending.length > 0 || fileOverlayOpen || overlayOpen || peekOpen)
-  // 顶边框右侧的会话名标签（CC 风格 chip）：色随强调色；超宽截断，宽度
+  // 顶边框右侧的会话名标签 chip：色随强调色；超宽截断，宽度
   // 随终端列数伸缩但不超过 28 显示单元。默认关闭——`/settings` 的
   // 「会话名标签」开关（dsh-tui.promptSessionLabel）开启后显示。
   const sessionTitle = channel.sessionTitle ?? ''
@@ -3209,7 +3207,7 @@ export function PromptInput({
     channel.promptSessionLabel === true && sessionTitle !== ''
       ? {
           text: truncateToWidth(sessionTitle, Math.max(8, Math.min(28, columns - 8))),
-          color: channel.mode.plan === true ? 'planMode' : (sessionAccent ?? 'claude'),
+          color: channel.mode.plan === true ? 'planMode' : (sessionAccent ?? 'accent'),
           ink: 'inverseText',
         }
       : undefined
@@ -3486,7 +3484,7 @@ export function PromptInput({
       {lastNotification && (
         // position=absolute takes zero layout height so the transcript never
         // shifts when a notification appears/disappears; the layer floats one
-        // row above the prompt border, right-aligned (CC's Notifications).
+        // row above the prompt border, right-aligned.
         <Box
           position="absolute"
           marginTop={-1}
@@ -3589,7 +3587,7 @@ export function PromptInput({
           )}
         </Box>
       </EffortInputBorder>
-      {/* CC agent-view footer: "← N agents" when background sessions are
+      {/* Agent-view footer: "← N agents" when background sessions are
           waiting on the user, "← for agents" otherwise — the ← affordance's
           discoverability hint. Only rendered when the Chat screen supplies
           the count. */}

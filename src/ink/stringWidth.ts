@@ -6,7 +6,7 @@ import { getGraphemeSegmenter } from '../utils/intl.js'
 const EMOJI_REGEX = emojiRegex()
 
 /**
- * Fallback JavaScript implementation of stringWidth when Bun.stringWidth is not available.
+ * Measure visible terminal cells using Unicode and ANSI rules.
  *
  * Get the display width of a string as it would appear in a terminal.
  *
@@ -262,30 +262,5 @@ function isZeroWidth(codePoint: number): boolean {
   return false
 }
 
-// Note: complex-script graphemes like Devanagari क्ष (ka+virama+ZWJ+ssa) render
-// as a single ligature glyph but occupy 2 terminal cells (wcwidth sums the base
-// consonants). Bun.stringWidth=2 matches terminal cell allocation, which is what
-// we need for cursor positioning — the JS fallback's grapheme-cluster width of 1
-// would desync Ink's layout from the terminal.
-//
-// Bun.stringWidth is resolved once at module scope rather than checked on every
-// call — typeof guards deopt property access and this is a hot path (~100k calls/frame).
-const bunStringWidth =
-  typeof Bun !== 'undefined' && typeof Bun.stringWidth === 'function'
-    ? Bun.stringWidth
-    : null
-
-const BUN_STRING_WIDTH_OPTS = { ambiguousIsNarrow: true } as const
-
-/**
- * Get the display width of a string as it would appear in a terminal.
- *
- * Uses Bun.stringWidth when available; otherwise falls back to the JS
- * implementation above, which strips ANSI codes and handles emoji, wide
- * characters, and zero-width combining marks.
- * @param str - the string to measure.
- * @returns the number of terminal cells the string occupies.
- */
-export const stringWidth: (str: string) => number = bunStringWidth
-  ? str => bunStringWidth(str, BUN_STRING_WIDTH_OPTS)
-  : stringWidthJavaScript
+/** Terminal display cells, including ANSI, emoji and combining marks. */
+export const stringWidth: (str: string) => number = stringWidthJavaScript

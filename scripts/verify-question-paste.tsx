@@ -122,7 +122,7 @@ lastAnswer = undefined
 await mount(optionQuestion)
 await settle(() => screen().includes('你有 API Key 吗？'))
 stdin.write('\t') // focus the custom input row
-await sleep(120)
+await sleep(120) // 固定窗:pacing 等焦点落到输入行再发粘贴块，焦点态无可轮询锚点
 stdin.write(CHUNK('地址：\n第二行\x07带\t制表符'))
 check('1a: chunk paste flattens newlines/tabs/control chars to spaces',
   await settled(() => screen().includes('地址： 第二行 带 制表符')), screen())
@@ -148,9 +148,9 @@ cancelCount = 0
 await mount(optionQuestion)
 await settle(() => screen().includes('你有 API Key 吗？'))
 stdin.write('\t')
-await sleep(120)
+await sleep(120) // 固定窗:pacing 等焦点落到输入行再发粘贴块，焦点态无可轮询锚点
 stdin.write(CHUNK('\r\n\r\n'))
-// 稳定性探针（不得被粘贴提交）：无可靠的可观察变化，保留固定窗口。
+// 固定窗:探针 纯换行粘贴不得提交——没有任何可观察的变化可等。
 await sleep(250)
 check('2a: pure-newline paste does NOT submit the question', lastAnswer === undefined)
 stdin.write('\r')
@@ -168,8 +168,8 @@ await mount(textQuestion, clipboard({ kind: 'text', text: 'B' }, 80))
 await settle(() => screen().includes('还有别的要说吗？'))
 stdin.write('ac') // text-only question: input row focused from the start
 await settle(() => screen().includes('ac'))
-stdin.write('\x1b[D') // ← caret between a and c (unobservable, keep pacing)
-await sleep(120)
+stdin.write('\x1b[D') // ← caret between a and c
+await sleep(120) // 固定窗:pacing 光标移动不可观测，仅为按键排序
 stdin.write('\x16') // Ctrl+V → async read of 'B'
 check('3a: idle paste lands at the caret',
   await settled(() => screen().includes('aBc'), { timeoutMs: 3000 }), screen())
@@ -183,7 +183,7 @@ await settle(() => screen().includes('还有别的要说吗？'))
 stdin.write('ac')
 await settle(() => screen().includes('ac'))
 stdin.write('\x1b[D')
-await sleep(120)
+await sleep(120) // 固定窗:pacing 光标移动不可观测，仅为按键排序
 stdin.write('\x16') // read starts; resolves ~400ms later
 stdin.write('tail') // typed BEFORE the read resolves (a|tail|c → 'atailc')
 check('3c: typing during the read lands first, paste follows at the LIVE caret',
@@ -298,7 +298,7 @@ cancelCount = 0
 await mount(planReviewQuestion)
 await settle(() => screen().includes('批准'))
 stdin.write(CHUNK('1')) // a pasted digit must NOT pick option 1 (批准)
-await sleep(250)
+await sleep(250) // 固定窗:探针 粘贴的数字不得选中选项/提交
 check('8a: pasted digit does NOT approve the plan', lastAnswer === undefined, JSON.stringify(lastAnswer))
 check('8b: pasted digit lands in the feedback row (focused)',
   await settled(() => feedbackRow().trimEnd().endsWith('1')), feedbackRow())
@@ -321,9 +321,9 @@ lastAnswer = undefined
 await mount({ ...optionQuestion, hideCustomInput: true }, clipboard({ kind: 'text', text: 'X' }))
 await settle(() => screen().includes('我有'))
 stdin.write(CHUNK('X'))
-await sleep(150)
+await sleep(150) // 固定窗:探针 hideCustomInput 下粘贴必须无效，屏上不得出现 X
 stdin.write('\x16')
-await sleep(150)
+await sleep(150) // 固定窗:探针 Ctrl+V 同样必须无效，屏上不得出现 X
 check('9a: paste into a hideCustomInput question types nothing', !screen().includes('X'), screen())
 check('9b: …and never submits', lastAnswer === undefined)
 
@@ -332,6 +332,8 @@ lastAnswer = undefined
 await mount(textQuestion, clipboard({ kind: 'text', text: 'X' }, 150))
 await settle(() => screen().includes('还有别的要说吗？'))
 stdin.write('\x16\x16') // two keys, one chunk — the busy guard drops the second
+// 固定窗:探针 第二次读取不得再插一份：settled 会在第一次插入（X 上屏）时
+// 就返回，错过随后可能到达的 XX（reader 延迟 150ms，窗口覆盖两轮）。
 await sleep(350)
 check('10a: double Ctrl+V inserts exactly once', screen().includes('X') && !screen().includes('XX'), screen())
 stdin.write('\r')
@@ -345,9 +347,9 @@ await settle(() => screen().includes('还有别的要说吗？'))
 stdin.write(CHUNK('a😀b'))
 await settled(() => screen().includes('a😀b'))
 stdin.write('\x1b[D') // ← (one code-point step)
-await sleep(120)
+await sleep(120) // 固定窗:pacing 光标移动不可观测，仅为按键排序
 stdin.write('\x7f') // backspace removes the WHOLE emoji
-await sleep(120)
+await sleep(120) // 固定窗:pacing 退格与回车分批送达，避免并入同一 stdin chunk
 stdin.write('\r')
 check('11a: backspace deletes the full emoji as one step (no lone surrogate)',
   await settled(() => answerCustom() === 'ab'), JSON.stringify(answerCustom()))
@@ -357,11 +359,10 @@ cancelCount = 0
 await mount(optionQuestion)
 await settle(() => screen().includes('我有'))
 stdin.write('\x1b')
-await sleep(150)
-check('12a: Esc cancels a fresh panel', cancelCount === 1)
+check('12a: Esc cancels a fresh panel', await settled(() => cancelCount === 1))
 
 app?.unmount()
-await sleep(100)
+await sleep(100) // 固定窗:pacing 等卸载收尾写完，无可观测完成条件
 console.log(results.join('\n'))
 console.log(failures === 0 ? '\nALL PASS' : `\n${failures} FAILURES`)
 process.exit(failures === 0 ? 0 : 1)

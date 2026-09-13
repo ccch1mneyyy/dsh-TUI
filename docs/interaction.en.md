@@ -21,13 +21,14 @@
 | `Left` / `Right` in the image modal | Previous / next image, no wrapping; caret peeks keep arrows with the prompt |
 | `Ctrl+C` | Interrupt while working; press again while the interrupt is still settling to force-exit; clear non-empty idle input; **while idle with a selection in the prompt input, copy it to the clipboard (selection kept for editing)**; press twice on empty input to exit |
 | `Ctrl+D` | Same ladder as `Ctrl+C`: interrupt while working (press again to force-exit if the interrupt stalls); press twice while idle to exit |
-| `Ctrl+O` | Toggle transcript/verbose detail, including full reasoning and tool arguments/output |
+| `Ctrl+O` | Toggle transcript/verbose detail, including full reasoning and tool arguments/output; also the escape hatch for the **long-line fold** (a single line over 1000 chars is clipped to 1000 with a `… N chars folded` marker — see the user guide §5). Clicking the folded row (or the tool card face) toggles it too |
 | `Ctrl+P` | Toggle the loaded-context panel shown at startup (while it is on screen) |
 | `Ctrl+T` | Open the trajectory scene (same as `/trace`); `q`/`Esc` returns to the conversation |
 | `Ctrl+R` | Open input-history search; repeat or press `Down` for the next result |
 | `Ctrl+L` | Clear and force a physical terminal redraw |
 | `?` | Open shortcut and command help when the input is empty |
 | In Help: `↑/↓`, `PgUp/PgDn`, `Home/End` | Scroll by line, page, or jump to either end; `Esc` closes |
+| Transcript: `PgUp` / `PgDn` | Page the fullscreen transcript (one viewport minus one row per press); yielded to Help and open overlays, which page their own lists; inline mode does not claim them — history lives in the terminal's native scrollback there, and paging belongs to the terminal |
 | `Shift+Up` | Enter message selection; arrows move, `Enter` expands one row, `Esc` exits |
 
 The action shortcuts (paste, history search, external editor, `Ctrl+O/T/P/R/L`, subagent dashboard, show-all, todo fold) are remappable in `/settings` → `dsh-tui` → `Shortcuts`: enter combos such as `alt+v`, comma-separate several, leave blank to restore defaults — saves apply live. Combos clashing with the fixed editing keys or another action are rejected. Deployments can also pin them via `shortcuts.<action>` in cordis.yml.
@@ -97,7 +98,7 @@ NORMAL with `Ctrl+C` or `dd`.
 
 Bracketed paste from right-click or the terminal's native paste command keeps
 ordinary text and newlines and is never mistaken for an Enter key. To keep
-rendering, click mapping, and selection geometry identical, terminal ANSI
+rendering, click mapping, and selection geometry consistent, terminal ANSI
 controls are stripped and tabs are expanded to spaces on entry.
 
 ### Fullscreen draft editor (`Ctrl+Shift+E` / `⛶`)
@@ -295,8 +296,7 @@ result against the persistence layer's own change token, so opening it costs
 the same regardless of how long the history is or how large a session got.
 
 On Windows, `dsh-tui.cmd --resume` uses the session ID last written to
-`~/.dsh-tui/resume.txt` (also dual-written to the old path
-`~/.dsh-cc/resume.txt` for older launchers that only read it).
+`~/.dsh-tui/resume.txt`.
 
 ### Agent view
 
@@ -558,11 +558,13 @@ composition own skill content and discovery.
 Additional forms:
 
 - `/activity` opens the animation picker; `/activity frames <name>` selects
-  directly (30 frame names: `random` + `claude` `star2` `sand` `triangle`
-  `box` `box2` `corners` `point` `layer` `flip` `aesthetic` `hamburger`
-  `moon` `moon8` `comet` `breathe` `dots` `arrow` `spark` `bar` `braille`
-  `arc` `circle` `grow` `noise` `bounce` `rainbow` `dqpb` `toggle`; default
-  `moon8`); `/activity status` reports the current choice.
+  directly (current names: `random`, `star2`, `sand`, `triangle`, `box`, `box2`,
+  `corners`, `point`, `layer`, `flip`, `aesthetic`, `hamburger`, `moon`, `moon8`,
+  `whale-spout`, `whale-spin`, `whale-bubbles`, `clock`, `traffic_lights`, `comet`,
+  `breathe`, `dots`, `arrow`, `spark`, `bar`, `braille`, `arc`, `circle`, `grow`,
+  `noise`, `bounce`, `rainbow`, `bar2`, `dqpb`, `toggle`; default `moon8`). A
+  legacy local `claude` setting is read as `moon8`, and the picker does not show
+  that legacy preset; `/activity status` reports the current choice.
 - `/preset <id>` and `/preset status` are described in the configuration guide.
 - `/effort` opens the reasoning-effort slider (←/→ adjusts live);
   `/effort <id>` sets a level directly; `/effort status` reports the current one.

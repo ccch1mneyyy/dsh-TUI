@@ -116,7 +116,7 @@ function cardTree(key: string, tool: Record<string, unknown>, foldTerminalComman
         <AssistantToolUseMessage
           key={key}
           tool={{ ...base, ...tool }}
-          addMargin={false}
+          marginTopOnTurn={false}
           verbose={false}
           foldTerminalCommand={foldTerminalCommand}
           onClick={onClick}
@@ -144,7 +144,7 @@ try {
       _write(_c: unknown, _e: BufferEncoding, cb: () => void) { cb() }
     })(), exitOnCtrlC: false, patchConsole: false },
   )
-  await sleep(600)
+  await sleep(600) // 固定窗:pacing 等首帧——React 树挂载与输入监听挂接无单一可观测条件
 
   const { term, stdin } = rig
 
@@ -152,11 +152,11 @@ try {
   const TITLE_A = 'Edit /tmp/a.ts (1 - 100)'
   check('场景 A 就绪：标题在屏', await settled(() => rowCount(term, TITLE_A) === 1))
   hoverText(stdin, term, TITLE_A)
-  await sleep(800) // 越过 600ms dwell：若会弹此刻已弹
+  await sleep(800) // 固定窗:探针 越过 600ms dwell 后浮层仍不得出现
   check('A 完整标题悬停后不弹浮层', tooltip.getTooltipSnapshot() === null)
   check('A 无时刻框上屏', !screenHas(term, '结束'))
   hover(stdin, 1, 1)
-  await sleep(100)
+  await sleep(100) // 固定窗:探针 移开后浮层不得出现
   check('A 移开后仍无浮层', tooltip.getTooltipSnapshot() === null)
 
   // --- B. 折叠的终端脚本：真隐藏内容 → 悬停弹出完整脚本 ------------------
@@ -201,11 +201,11 @@ try {
   }))
   check('场景 D 就绪：运行中卡片渲染', await settled(() => screenHas(term, 'sleep 300')))
   hoverText(stdin, term, 'sleep 300')
-  await sleep(800)
+  await sleep(800) // 固定窗:探针 越过 600ms dwell 后浮层仍不得出现
   check('D 完整可见运行中标题不弹浮层', tooltip.getTooltipSnapshot() === null)
   check('D 无开始时刻框上屏', !screenHas(term, '开始'))
   hover(stdin, 1, 1)
-  await sleep(100)
+  await sleep(100) // 固定窗:探针 移开后浮层不得出现
   check('D 移开后仍无浮层', tooltip.getTooltipSnapshot() === null)
 
   // --- E. 单行长标题被布局宽度截断：悬停弹完整标题（回归：宽截断是旧
@@ -255,7 +255,7 @@ try {
   check('F 移开即隐藏工具提示', await settled(() => !screenHas(term, '退出码 7')))
 
   instance.unmount()
-  await sleep(100)
+  await sleep(100) // 固定窗:pacing 收尾 flush 节奏，之后不再断言
   console.log(failed === 0 ? '\nALL PASS' : `\n${failed} FAILURES`)
   process.exit(failed === 0 ? 0 : 1)
 } catch (err) {

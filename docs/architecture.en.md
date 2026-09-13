@@ -24,14 +24,14 @@ Cordis profile
 | `src/index.ts` | Cordis plugin name, injection declaration, config interface, and Schema; keep the entry small and lazy |
 | `src/dsh-adapter/plugin.ts` | TTY guard, service assembly, Agent create/resume, React mount, and the single cleanup funnel |
 | `src/dsh-adapter/questions-answerer.ts` / `preset-resolution.ts` | Prerelease dispatch for user questions and agent presets; consumers stay unaware of upstream version branches |
-| `src/dsh-adapter/channel.ts` | DSH event projection plus submit, steer, resume, rewind, model, and preset actions |
+| `src/dsh-adapter/channel.ts` | Channel composition root: options/services, owner/binding, specialist wiring, one install, final start/release, and compatibility exports. Typed action forwarding/readiness lives in `channel/action-readiness.ts`, detached handles in `channel/lifetime-resources.ts`, and context-warning/pending bookkeeping in `channel/context-bookkeeping.ts` (including the warning cell shared with compaction reset). Neutral initial fields live in `channel/state.ts`, completion in `channel/command-completions.ts`, local transcript/shell/subagent-report actions in `channel/local-actions.ts`, the activity clock in `channel/activity.ts`, binding event routing in `channel/binding-events.ts`, and the sole projector remains `channel/projection.ts`. An uninstalled or released action fails explicitly; it never pretends success with a no-op. |
 | `src/workspaces.ts` | Local-path fallback and generic workspace-provider registry; it must contain no provider protocol, copy, or dependency |
 | `src/screens/Chat.tsx` | Modal precedence, global keys, scroll/search/selection state, and slash dispatch |
 | `src/components/` | User views and design-system primitives; no Agent or session source of truth |
 | `src/ui.ts` | Themed `Box`/`Text`, render, selection, scroll, and other public TUI primitives |
 | `src/theme.ts`, `src/themeCatalog.ts` | Built-in, static JSON, and runtime plugin theme resolution and catalog ordering |
 | `src/dsh-adapter/themes.ts` | The `ctx.tuiThemes` theme seam, registration lifecycle, and private host facade |
-| `src/ink/` | Ported Ink renderer, terminal protocol, events, selection, and Yoga bridge; sensitive infrastructure |
+| `src/ink/` | Ink-based renderer, terminal protocol, events, selection, and Yoga bridge; sensitive infrastructure |
 | `src/native-ts/yoga-layout/` | Pure JS/TS layout implementation |
 | `cordis.patch.yml` | Profile bundle layer, service rows, overrides, and mount ordering |
 
@@ -113,16 +113,14 @@ direct `cordis.yml` runs default to `~/.dsh-tui/sessions/`. Preference files
 are optional state: malformed or missing files fall back silently rather than
 preventing startup.
 
-The data directory was renamed from `~/.dsh-cc` to `~/.dsh-tui`: on first
-launch, if the old directory exists and the new one does not, it is copied
-(not moved) to the new location with one notice line; the old directory stays
-in place for the user to remove. `resume.txt` is an exception: it is
-dual-written to both paths because older launchers only read the old one.
+The data directory is `~/.dsh-tui` (early releases used `~/.dsh-cc`; code
+since the rename reads and writes only `~/.dsh-tui` and does not migrate the
+old directory automatically).
 
 ## Permissions and security boundary
 
 `dsh-TUI` does not provide a separate sandbox; it implements the tool-level
-approval UI (a CC-style panel answering the `approval/request` waterfall),
+approval UI (a local panel answering the `approval/request` waterfall),
 while `/permission` preset switching comes from the dsh-base
 `permission-presets` row. Effective capability comes from the DSH services
 mounted by `cordis.patch.yml`:
@@ -195,8 +193,13 @@ visual TUI alone does not describe the effective policy.
 - `/vim`, `/connect`, and `/hooks` are compatibility placeholders,
   not evidence that those DSH capabilities are mounted.
 - There is no automated full-flow suite that requires real model credentials;
-  CI uses headless rendering and fake services, while live model integration
-  still needs a manual check in the target terminal.
+  CI uses headless rendering and fake services. This L4 batch has **not**
+  manually exercised a real TTY in inline/fullscreen mode, at narrow width, or
+  on Windows ConPTY; live model integration still needs a target-terminal
+  check. Full RFC state (L5) is deferred from this batch.
+- L4 has completed one independent local review and targeted fixes. Final
+  compile, build/package gates, all 58 channel-ui checks, and the three CI
+  renderer regressions passed; this is not real-TTY or long-term memory stress evidence.
 
 ## Debugging and verification
 

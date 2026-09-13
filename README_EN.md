@@ -21,9 +21,9 @@
 
 # dsh-TUI
 
-`dsh-TUI` is an interactive terminal front door for DeepSeek Harness. It is
-mounted as a Cordis plugin and provides a Claude Code-style conversation, tool,
-session, and fullscreen terminal experience while continuing to use the
+`dsh-TUI` is an interactive terminal UI for DeepSeek Harness. It is mounted as
+a Cordis plugin and provides conversation, tool, session, and fullscreen
+terminal views while continuing to use the
 official DSH agent, model, tool, session, and persistence services.
 
 The project does not patch DeepSeek Harness core. Installing the plugin enables
@@ -108,6 +108,8 @@ the interface, and removing it leaves no core modifications behind.
   hit rate, reasoning effort, input/output tokens, and Git/session metadata.
   In fullscreen, hovering a truncated tool header, wrapped user prompt, or
   session title for ~600ms opens a tooltip with the full content.
+- **Activity animation**: `moon8` is the default. A legacy local `claude`
+  setting is read as `moon8`, and the picker lists current presets only.
 - **Complete session workflow**: `/resume` groups history by working directory
   with search and preview (left-click resumes, right-click opens an action
   menu; pin frequent sessions — a `Pinned` group floats them to the top, the
@@ -141,10 +143,6 @@ the interface, and removing it leaves no core modifications behind.
 </p>
 
 Live activity, goal/todo state, and context metrics:
-
-<p align="center">
-  <img src="screenshots/working-line.png" alt="dsh-TUI live activity and context metrics" width="100%">
-</p>
 
 ## Quick Start
 
@@ -210,8 +208,8 @@ panes already retain, reconnect, and expose their live state.
 
 For running dsh-TUI inside VS Code — directly in the integrated terminal or
 via the `dsh-tui-vscode` companion extension (real-integrated-terminal
-sessions, an experience almost identical to the official Claude Code
-extension; available on the VS Code Marketplace) — see
+sessions, and specific-session resume; the extension is available on the VS Code
+Marketplace) — see
 [Running dsh-TUI in VS Code](docs/vscode.en.md).
 
 See [Getting started](docs/getting-started.en.md) for profile composition,
@@ -245,10 +243,11 @@ For migration from the former `dsh-cc-tui` package and `cc-tui` profile, see
 | `Enter` | Idle = send (`Shift+Enter` for a newline, or `Ctrl+J` when the terminal cannot report modified Enter; `Option+Enter` is the fallback on macOS Terminal.app, issue #110); **while the model is working = steer** (inject a next-step boundary without interrupting); executes the selected item when a command menu is open |
 | `Ctrl+Enter` (⌘Enter) | **Interrupt the current turn and send immediately** (interrupt) |
 | `Alt+Up` | Pull the last unhandled message back into the input for editing (without interrupting the turn) |
+| `PgUp` / `PgDn` | Page the fullscreen transcript (one viewport minus one row; Help and paging overlays keep them and page their own lists; the question panel leaves them for the transcript); inline mode leaves them to the terminal's native scrollback |
 | `Tab` | Complete `/` commands or `@` files (keep drilling into directories); **while the model is working = follow-up** (queued after the current turn) |
 | `Ctrl+C` | Interrupt the current turn; press again while the interrupt is still settling to force-exit; press twice while idle to exit; **with an active mouse selection in the prompt, copies it to the clipboard and keeps it** |
 | `Esc` | Close an open image preview; close the command/file menu; **with an active selection in the prompt: only clears the selection**; double-press while idle clears the input; **double-press on empty input = time rewind** |
-| `←` (empty input) | **Background this session and open the agent view** (CC agent view; with text, ← moves the caret as usual) |
+| `←` (empty input) | **Background this session and open the agent view** (with text, ← moves the caret as usual) |
 | `Ctrl+O` | Expand/collapse details (full thinking text, tool arguments and output) |
 | `Ctrl+Shift+E` | Expand the fullscreen draft editor (Enter = newline, `Ctrl+Enter` = send, `Esc` = collapse keeping the draft; line numbers, wheel scrolling, click/drag selection) |
 | `Ctrl+R` | History search |
@@ -308,11 +307,11 @@ so keep using `Ctrl`.
 | `Esc` (from question 2 onward) | Return to the previous question and keep the current draft |
 | `Esc` (from question 1) / `Ctrl+C` | Cancel the whole question batch (the model receives ASK_CANCELLED and can continue the conversation) |
 
-**Local commands** (a full replica of the CC command set, all routed through the official DSH pipeline)
+**Built-in commands** (routed through the official DSH pipeline)
 
 | Group | Commands |
 |---|---|
-| Session | `/new` new session · `/resume` working-directory/session browser (visible directory scope, search, preview, cross-project, sub-agent runs folded) · `/agentview` agent view (all sessions) · `/bg` (alias `/background`) background this session and open the view · `/rename` rename session · `/recap` session recap (apply the suggested title in one key; `/settings` can enable an auto-summary on session open — on by default: a divider + `Recap:` line appears at the bottom of the transcript when resuming, and bows out once you send a new message) · `/workspace resume|rename|open` manage workspaces · `/clear` clear screen · `/compact` compact · `/export` export Markdown · `/trace` trace timeline (or `Ctrl+T`) · `/rewind` rewind picker (same as double-`Esc` on empty input) · `/tree` session family tree (every fork branch stitched together; hover previews a node, click opens a rewind/fork-here/adopt-branch menu) · `/fork` copy the current session into a resumable twin (the original is untouched) · `/btw <question>` side question (never interrupts the main turn, writes no history) |
+| Session | `/new` new session · `/resume` working-directory/session browser (visible directory scope, search, preview, cross-project, sub-agent runs folded) · `/agentview` agent view (all sessions) · `/bg` (alias `/background`) background this session and open the view · `/rename` rename session · `/recap` session recap (apply the suggested title in one key; `/settings` can enable an auto-summary on session open — on by default: a divider + `Recap:` line appears at the bottom of the transcript when resuming, and bows out once you send a new message) · `/workspace resume\|rename\|open` manage workspaces · `/clear` clear screen · `/compact` compact · `/export` export Markdown · `/trace` trace timeline (or `Ctrl+T`) · `/rewind` rewind picker (same as double-`Esc` on empty input) · `/tree` session family tree (every fork branch stitched together; hover previews a node, click opens a rewind/fork-here/adopt-branch menu) · `/fork` copy the current session into a resumable twin (the original is untouched) · `/btw <question>` side question (never interrupts the main turn, writes no history) |
 | Status | `/context` loaded-context details · `/status` session info · `/cost` token usage · `/doctor` environment self-check · `/config` configuration sources · `/init` create AGENTS.md · `/settings` settings panel (namespace read/edit) |
 | Model | `/model` two-level picker (a pinned **Recently used** group first — the last 10 switched models, persisted at `~/.dsh-tui/model-recents.json` — then provider groups; Enter drills into a group's models; a single provider with no recents skips straight to the list; **switching = fork continuation, history preserved**) · `/effort` reasoning effort (slider / `status` / `<id>`; the default level new sessions start on is set in `/settings` → Default reasoning effort) · `/preset` agent preset (**cannot switch once the session has started** — blank-only) · `/thinking` thinking display · `/tokens` token details · `/activity` working animation (`frames <name>` / `status`) · `/theme` theme picker · `/color` (bare opens the palette picker; `<name>` sets directly; `status`/`reset`) session accent color (input border + session-name chip at the top-right, per-session; chip off by default, enable in `/settings`) · `/lang` zh/en UI switch (also selectable in `/settings`) |
 | Accounts/Policy | `/provider` manage model providers — add a provider, or edit an existing one via a menu (API key · model list · delete the provider; custom endpoints also get base URL · wire protocol; a targeted edit patches only that field, the rest of the profile survives untouched; the model list pre-checks what you already enabled; only user-layer providers are editable) (includes the bundled dsh-auth **subscription OAuth sign-in** branch — ChatGPT / Claude / Grok, no API key; same source as `/auth status\|login\|logout`) · `/login` credential & account status · `/logout` logout notes · `/permission` dynamic preset/status notes · `/add-dir` file-policy scope · `/hooks` · `/mcp` |
@@ -324,7 +323,7 @@ so keep using `Ctrl`.
 
 **Agent view** (`/agentview`)
 
-One full-screen surface for every session in this process: the attached conversation, the background sessions dispatched here, and the stopped TUI sessions persisted on disk. The header shows CC-style "model · directory" plus state counts (awaiting input · working · completed); rows are grouped by state (needs input > working > failed > completed > idle > stopped), **working rows animate their glyph with CC's `·✢*✶✻✽` frame cycle**, each with a one-line activity summary derived from the session's own output (no extra model calls) — a row waiting on input shows the question it is blocked on. **Only sessions this TUI dispatched, backgrounded, or attached to from the view are listed** — the ordinary `/resume` history and sessions created by other front doors (e.g. web) never appear.
+One full-screen surface lists every session in this process: the attached conversation, background sessions dispatched here, and stopped TUI sessions persisted on disk. The header shows `model · directory` and state counts (awaiting input · working · completed); rows are grouped by state (needs input > working > failed > completed > idle > stopped), and working rows animate their glyph. Each row includes a one-line activity summary derived from the session's own output (no extra model calls); a row waiting on input shows the question it is blocked on. **Only sessions this TUI dispatched, backgrounded, or attached to from the view are listed** — the ordinary `/resume` history and sessions created by other front doors (e.g. web) never appear.
 
 | Key | Action |
 |---|---|
@@ -354,7 +353,9 @@ One full-screen surface for every session in this process: the attached conversa
 | [Themes](docs/themes.en.md) | Built-in themes, background detection, static JSON and npm plugin themes, validation |
 | [Interaction and commands](docs/interaction.en.md) | Keyboard, mouse, questionnaires, slash commands, session workflows |
 | [Architecture and limitations](docs/architecture.en.md) | Runtime path, rendering, persistence, security boundary, known limitations |
-| [VS Code guide](docs/vscode.en.md) | Running dsh-tui in the VS Code integrated terminal; the `dsh-tui-vscode` companion extension offers an experience almost identical to the official Claude Code extension (on the Marketplace) |
+| [Community Management](docs/community-management.en.md) | Community entry points, roles, proposal flow, roadmap rules, and maintenance cadence |
+| [Project Roadmap](docs/roadmap.en.md) | Public goals, phases, task status, exit criteria, and Future Work |
+| [VS Code guide](docs/vscode.en.md) | Running dsh-tui in the VS Code integrated terminal; the `dsh-tui-vscode` companion extension offers multiple sessions, session history, and specific-session resume (on the Marketplace) |
 | [Contributing](docs/contributing.en.md) | Contribution workflow, repository map, build artifacts, verification matrix, change rules |
 | [Plugin admission & development](https://github.com/T-Auto/dsh-ecosystem-spec/blob/main/docs/plugin-admission-and-development.md) | Interface & compatibility agreement / plugin admission spec / seams / contracts / verification checklist (merged into dsh-ecosystem-spec) |
 
@@ -390,7 +391,7 @@ dsh profile
   -> session/event
   -> Channel projection
   -> React components
-  -> ported Ink/Yoga renderer
+  -> Ink/Yoga renderer
   -> terminal
 ```
 
@@ -461,11 +462,11 @@ chat / tool base events ──> persisted Session log ──> TUI / Web
 - Exit finishes with a process exit and does not wait for the agent's async disk writes
   (persistence is covered by the persistence plugin as a backstop).
 - **Agent view background sessions live inside this process**: they all stop when the
-  TUI exits (CC's supervisor process and survival across restarts are out of v1 scope);
+  TUI exits (a supervisor process and survival across restarts are out of v1 scope);
   row summaries come from the session's own output with no extra summary-model calls;
   worktree isolation, pinning, directory grouping, and shell background jobs are not
   shipped yet.
-- Tool-level approval is implemented: the approval service + TUI answerer (CC-style
+- Tool-level approval is implemented: the approval service + TUI answerer (local
   approval panel) consumes the approval stream, and privilege-escalation commands pop
   an approval bar. `/permission` preset switching comes from dsh-base's
   `permission-presets` plugin and is available in the profile composition by default.
@@ -473,7 +474,7 @@ chat / tool base events ──> persisted Session log ──> TUI / Web
   roster; a malformed mounted service is unavailable and fails closed. If the
   external `/permission` command is not registered, input keeps the existing
   default/model dispatch behavior.
-- `/connect` `/hooks` are CC-named placeholders: the corresponding
+- `/connect` `/hooks` are reserved placeholders: the corresponding
   capabilities have no equivalent mechanism on the DSH side, and the commands give an
   explicit explanation rather than staying silent.
 - The `/thinking` display toggle is **not persisted**; restarts and new sessions fall
@@ -527,9 +528,213 @@ the authoritative status and compatibility agreement live in the
 | Experimental (may still shift with dsh-std / admission-spec evolution) | IX decision events · toast notifications (`ctx.tuiToast`, new) |
 | Upstream-tracked (stability owned by the cordis / dsh mechanisms underneath) | I session events · II official prompt slots · III bundled skills · IV themes · V system-prompt sections · VII profile composition |
 
-Also experimental public surfaces: `@deepseek-harness-tui/dsh-tui/test-utils`
-(headless admission/mounting test helpers) and `@deepseek-harness-tui/dsh-tui/api`
-(types-only entry).
+Also experimental public surface: `@deepseek-harness-tui/dsh-tui/api`
+(types-only entry). The `@deepseek-harness-tui/dsh-tui/test-utils` subpath has
+been removed — it exposed helpers that could inject a real activationId and is
+not suitable as a production public API. For headless tests, copy the approach
+from `scripts/lib/plugin-test-utils.ts` in this repository and run through the
+normal admission flow in your own test environment.
+
+Public API migration notes:
+- **`ctx.tuiPluginHost.grants.corrupt` no longer exists.** The new caller-safe
+  `HostGrantFacade` exposes only `allows(pluginCtx, permission, scope)`,
+  `defaultOf`, `knownPermissions`, and `onChange(pluginCtx, listener)`; a
+  corrupt grants file is no longer surfaced as a boolean field on the
+  plugin-facing object. `onChange` is a subscribe-class mediated capability:
+  it requires the calling activation, is shadow-guarded, and its returned
+  cancellation is bound to that activation so the file poller/listener cannot
+  leak on unload. Use `ctx.tuiPluginHost.selfCheck()`, `/doctor`, or explicit
+  host-side diagnostic queries to inspect grant-file health.
+- `createAdmissionCatalog` is no longer exported from `./plugin-host`; use
+  `ctx.tuiPluginHost.selfCheck()` and `/doctor` for diagnostics.
+- `ctx.tuiPluginHost.grants` is now the caller-safe `HostGrantFacade`:
+  `grants.allows(pluginCtx, permission, scope)` derives the principal from the
+  current activation and no longer accepts an arbitrary `GrantPrincipal`
+  / full `GrantStore`.
+- `GrantStore` and `GrantPrincipal` are no longer public plugin APIs; they
+  remain internal host types in `src/adapter/standard/grants.ts`. Host-side
+  embedders should use repository-internal paths rather than depending on
+  these types from the public package.
+- `@deepseek-harness-tui/dsh-tui/test-utils` has been removed; the
+  repository-internal `scripts/lib/plugin-test-utils.ts` is only for this
+  repo's headless verification and is not part of the public contract.
+  Ecosystem plugin tests should reproduce the flow through normal admission
+  in their own test environment.
+- The reversible live-probe methods (`probeReversible` on storage/message
+  services and `probeCommandReversible` on the host service) are no longer
+  part of the plugin-visible service surface. They are host-only internals
+  invoked through a guarded accessor; plugins should not call or rely on them.
+
+### Known platform boundaries (not covered by the shadow gate)
+
+The TUI shadow gate only covers seams owned by the TUI host. The following are
+explicitly recorded platform boundaries and are not claimed as fully mediated:
+
+- direct `ctx.get('commands').register` / `ctx.get('commands').execute` (C-070);
+- `ctx.plugin()` / `candidate.plugin()` sub-plugin installation (Cordis platform);
+- agent preset roster / recompose registration (`@deepseek-ai/dsh-agent-presets`);
+- system prompt section registration (`@deepseek-ai/dsh-system-prompt`);
+- skill registry registration/invocation (`@deepseek-ai/dsh-skill`).
+
+These are listed as `platform-known boundary` in `verify-adapter-shadow`.
+In addition, `verify-adapter-shadow` explicitly records two known gate
+boundaries: internal TUI state/view helper classes not listed in
+`NON_SERVICE_POLICY`, and React UI state/event handlers under
+`src/screens` / `src/components`. They are not adapter capability entry
+points and are not claimed as covered by the shadow gate.
+
+
+### Adapter live-probe honesty and P2 boundary
+
+This round moves `Command` / `LocalStorage` / `MessageObserver` from
+"staged without a real probe" to "live with reversible probes" (run asynchronously
+in legacy/new modes), and adds a minimal `KernelRuntime` plus passive/replay
+harness:
+
+- **Command live probe**: temporarily registers a unique no-op command on the
+  real commands service, verifies it through `find` / `list`, executes it once
+  against an in-memory fake agent session, and unregisters in `finally`. It
+  writes no durable DSH session log; the only transient observable is one
+  in-process `commands/change` notification while the probe is registered.
+- **LocalStorage live probe**: creates a random temporary namespace file in the
+  real storage directory, performs write/read/delete, and removes the file in
+  `finally`. It never touches a real plugin namespace and leaves no probe data.
+- **MessageObserver live probe**: uses the broker's internal probe-only
+  publication channel so the synthetic event is delivered only to the temporary
+  probe subscription. Real plugin `session:*` wildcard subscribers receive zero
+  probe messages, and the subscription count returns to the original value.
+  These live-probe methods are not plugin-visible public service methods; the
+  kernel reaches them only through an internal host-only accessor.
+- **Default legacy compatibility publication**: `DSH_TUI_ADAPTER_MODE` defaults
+  to `legacy`; that mode does not load the new Kernel or run reversible live
+  probes. It keeps the old publication semantics through a separate
+  `buildLegacyHostDescriptor` path: as long as the existing Command /
+  LocalStorage / MessageObserver service rows are mounted,
+  `describe()` / `hostDescriptor()` publish those contracts for plugin
+  admission. The build result explicitly labels this as a legacy compatibility
+  declaration in warnings, separate from new-mode live-only descriptors.
+- **Fail-closed mode configuration**: only an unset `DSH_TUI_ADAPTER_MODE`
+  defaults to `legacy`. Explicit values must be `legacy`, `passive-shadow`,
+  `replay-shadow`, or `new` (case-insensitive, with surrounding whitespace
+  ignored); empty or unknown values raise an error and refuse startup.
+  Non-legacy compositions return an empty-contract descriptor while the Kernel
+  is not ready, refresh is skipped/failed, or the Kernel is disposed; they never
+  fall back to compatibility publication.
+- **Host probe access boundary**: the `host-probe-access` token is a
+  module-local non-exported symbol and the normal package `exports` map rejects
+  deep imports. Because plugins and the host share a process, absolute-path
+  loading of the compiled internal file cannot be blocked by `exports`; this is
+  a **trusted-in-process boundary, not a security sandbox**, and the host does
+  not claim “plugins cannot call it” unconditionally. The internal registration
+  functions will not replace an already-bootstrapped host probe runner.
+- **Passive Shadow**: deliberately does not run these reversible probes; it only
+  performs read-only detect/descriptor snapshots. **Replay Shadow**: production
+  replay does not connect to a real DSH host; use
+  `scripts/verify-adapter-replay-harness.ts` or `src/adapter/kernel/replay.ts`
+  with an isolated replay context. Otherwise it fails closed with an explicit
+  message.
+- Replay harness usage: run the gate with
+  `node --import tsx/esm scripts/verify-adapter-replay-harness.ts`, or call
+  `runReplayShadow({ schemaVersion: 'tui-adapter-replay/v1', ... })` in code to
+  get a comparison report containing `kernelContracts`, `legacyContracts`,
+  `missing`, `extra`, and `lifecycles`. From P5 the harness also supports real
+  DSH session snapshot/transcript replay through
+  `runChannelReplay(...)` / `verify:adapter-channel-conformance`, following the
+  `tui.dsh/v1alpha1#Channel` Provider/Consumer envelope and validators.
+- The public Host Descriptor still publishes only live lifecycles carrying real
+  probe evidence; before live refresh completes (or in passive/replay modes)
+  `Command` / `LocalStorage` / `MessageObserver` remain staged/degraded and are
+  not claimed as fully supported. `DecisionEvents` keeps its per-feature probe +
+  real channel/dispatch topology publication rule.
+- P6 removes the internal `admissionCompat` parallel view and deletes the
+  `src/plugin-spec/*` and `src/dsh-adapter/{grants,host-descriptor}.ts` compat
+  shims. Production code imports `src/adapter/standard/*` directly;
+  `verify:compat-removal` now scans `src/`, `scripts/`, `bin/`, generated
+  `lib/` (when present), and the package export graph;
+  `verify:package` rejects old shims in the npm tarball. Retained compatibility
+  aliases (`ExtensionGrants`, `envelopeSchema`, `createAdmissionCatalog`,
+  `facadeFromLegacy`, etc.) are explicitly marked as outside P6 / long-term.
+- The new kernel is no longer a P1 shell: `KernelRuntime` owns driver
+  registration/mount, detection, `declared → staged → live`, cleanup, and a
+  diagnostic snapshot. Production Host Descriptor, `getHostFacade()`, `/doctor`,
+  and `/plugins` all use this runtime.
+- **P3 feature-level live publication**: `Workspace` / `Scenes` / `Settings` /
+  `Extensions` no longer pretend that “register + list + dispose” means the
+  whole capability is live. Only methods actually verified by a read-only or
+  reversible probe are promoted to live (for example `host.workspaces.list`,
+  `host.workspaces.resolve`, `host.scenes.register`, `host.settings.register`,
+  `host.status.set`, `host.command-trees.children`);
+  `host.toast.show` remains degraded because the real production delivery path
+  is not yet verified;
+  unverified methods such as `rename`, `runCommand`, `commandShell`,
+  `scenes.open`, `settings.subscribe`, shortcut dispatch, and command-tree
+  descriptions stay degraded/staged. Interactive `presentation.ask` is bridged
+  to the real `QuestionStore`; `presentation.approve` is explicitly staged in P3.
+- **Production P3 slices are loaded**: non-`legacy` `TuiPluginHostRuntime` now
+  passes `ADAPTER_KERNEL_SLICES` into the production `KernelRuntime`, so P3
+  slices enter mount/refresh/descriptor flows. Missing host services degrade
+  the corresponding slice instead of crashing. `DSH_TUI_ADAPTER_SLICES` also
+  filters kernel slices by slice id / capability / effect matrix instead of
+  being a dead option.
+- **Host-initialization runtime snapshot**: all adapter/host services
+  (storage/message/plugin-host and the P3 status/workspaces/scenes/settings/
+  toast/dialogs/command-trees/questions/approvals seams) capture an immutable
+  `AdapterRuntimeOptions` snapshot at initialization. Changing
+  `DSH_TUI_ADAPTER_MODE` or `DSH_TUI_ADAPTER_SLICES` later in the same process
+  cannot unlock passive/replay services into `new`; capability entry points no
+  longer read `process.env` on every call.
+- **Slice ownership and boundaries**: `DSH_TUI_ADAPTER_SLICES` is now normalized
+  for case/whitespace, accepts common aliases (for example `dialogs` →
+  `presentation`, `decisions` → `decisions`), and rejects unknown slice ids
+  fail-closed. `toast` is no longer implicitly loaded by `presentation`, and
+  `decisions` is no longer implicitly loaded by `messages`.
+- **P4 Channel Port/projection layer (honest wording)**: new
+  `projection / actions / state / plugins / transcript` Host Ports and
+  `src/adapter/channel/*` split modules, mounted as a `channel` KernelSlice and
+  consumed by the production driver. The production
+  `src/dsh-adapter/channel.ts` implementation itself is **not yet physically
+  split**; it remains the live Channel implementation source. **T1 core
+  migration is partial: production `plugin.ts` notifications/initial submit
+  now prefer `HostFacade.channel.actions`; in non-shadow modes a not-yet-mounted
+  facade can fall back to the native Channel, but passive/replay shadow never
+  falls back (missing/denied calls are dropped); most remaining UI/Channel
+  actions still call the native Channel directly.**
+  HostFacade guards each method with the shadow policy, so passive/replay allows
+  read-only projections while denying mutations.
+- **P5 Channel Provider/Consumer**: new local Provider/Consumer implement the
+  `tui.dsh/v1alpha1#Channel` open/subscribe/invoke/close envelope and validation.
+  `runChannelReplay` accepts recorded snapshot arrays and also projects real
+  DSH `agent.session.events`-shaped records into monotonic
+  `TuiChannelSnapshot`s. This is explicitly a **minimal transcript replay**:
+  it covers transcript/status/basic session fields and, when metadata is
+  supplied, carries RFC-adjacent fields such as model/mode/preset/settings/scene/
+  diagnostic/trace/context/pending/usage; it still does **not** claim full
+  RFC 0007 Channel state/conformance. Unknown methods fail per protocol,
+  features must be explicitly declared and each must have observable
+  state/method evidence, duplicate features are rejected first, unknown
+  non-ignorable DSH events fail closed, method handlers only run inside replay
+  isolation, and the replay provider explicitly does not resolve
+  workspace/sessionId selectors. Continuity violations fail closed.
+- **P3 feature lifecycle stability**: after `refresh`, subsequent
+  `mount()` / `descriptorBuild()` / `diagnosticSnapshot()` calls that rerun
+  synchronous `detect()` do not clear the probed P3 features. These features are
+  internal Kernel/Port facts and are not entered into the public Host
+  Descriptor.
+- **Settings section live honesty**: `host.settings.section` is live only when
+  the probe actually calls `section()` to resolve the temporary namespace;
+  missing/failed resolution degrades the feature instead of claiming live from
+  register/list alone.
+- **Per-method Host Port shadow guards**: every Port method returned by
+  `KernelRuntime.facade()` runs the unified effect-class check first. In
+  passive/replay production modes, `rename`, `runCommand`, `commandShell`,
+  `scenes.open`, `settings.subscribe`, and register-class methods are denied;
+  read-only methods remain available for diagnostics.
+- **Toast live probe** uses an independent probe-only sink pipeline and never
+  replaces or swallows concurrent production toasts. **Status live probe**
+  degrades when `clearIf` fails or leaves residue, rather than claiming live.
+- `verify:adapter-slices` / `verify:adapter-detection` now also assert that the
+  production plugin-host actually passes `ADAPTER_KERNEL_SLICES`, preventing a
+  gate that only tests a directly constructed `KernelRuntime`.
 
 The core repository remains independent; community plugins live in their own
 repos. The organization only maintains the listing and admission rules — it

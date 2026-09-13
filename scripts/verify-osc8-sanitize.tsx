@@ -217,7 +217,7 @@ if (isRelevant('replay-variant')) {
 if (isRelevant('scheme-gate')) {
   console.log('scheme 门禁（入口降级 + 点击面拦截）')
 
-  const { createHyperlink } = await import('../src/cc/hyperlink.js')
+  const { createHyperlink } = await import('../src/terminal-utils/hyperlink.js')
   const { classifyOpenTarget } = await import('../src/utils/urlGuard.js')
 
   check('createHyperlink 拒绝 javascript: scheme（降级纯文本）', () => {
@@ -306,8 +306,9 @@ if (isRelevant('scheme-gate')) {
   check('classifyOpenTarget 放行 http/https 与文件链接', () => {
     assert.equal(classifyOpenTarget('https://ok.example').kind, 'external')
     assert.equal(classifyOpenTarget('http://ok.example').kind, 'external')
-    assert.equal(classifyOpenTarget('dsh-file:///a/b.ts#L1').kind, 'file-actions')
-    assert.equal(classifyOpenTarget('file:///tmp/x').kind, 'file-actions')
+    const root = process.platform === 'win32' ? '/C:/' : '/'
+    assert.equal(classifyOpenTarget(`dsh-file://${root}a/b.ts#L1`).kind, 'file-actions')
+    assert.equal(classifyOpenTarget(`file://${root}tmp/x`).kind, 'file-actions')
   })
 }
 

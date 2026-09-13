@@ -1,3 +1,5 @@
+import type { SessionModeSpec } from './adapter/ports/channel-display.js'
+export type { SessionModeSpec } from './adapter/ports/channel-display.js'
 /**
  * Configurable Shift+Tab session modes (the `modes` dsh-tui plugin config):
  * each mode is a named bundle of optional DSH plane switches — plan mode
@@ -8,22 +10,6 @@
  * `plan`, but not with `sandbox` or `approval`.
  */
 import { t } from './i18n.js'
-
-export interface SessionModeSpec {
-  /** Stable id; also the display name unless `label` is set or the id is a
-   *  localized built-in (`default`/`plan`/`full`). */
-  id: string
-  /** Optional display label; wins over the built-in i18n name. */
-  label?: string
-  /** Plan mode on/off (dsh-plan-mode `/plan`). */
-  plan?: boolean
-  /** Sandbox mode override (dsh-sandbox-policy `sandbox/mode`). */
-  sandbox?: 'read-only' | 'workspace-write' | 'danger-full-access'
-  /** Approval policy override (dsh-user-approval `approval/policy`). */
-  approval?: 'ask' | 'never'
-  /** Durable DSH permission preset identity (`permission/preset`). */
-  permission?: string
-}
 
 /** The shipped cycle when cordis.yml pins no `modes` — array order IS the
  *  Shift+Tab cycle order; index 0 is the unmarked base mode. */
@@ -168,4 +154,16 @@ export function modeDisplayName(spec: SessionModeSpec): string {
   if (spec.id === 'plan') return t('mode-plan')
   if (spec.id === 'full') return t('mode-full')
   return spec.id
+}
+
+/**
+ * One dynamic Shift+Tab entry for a runtime permission preset. The id is
+ * namespaced so it can never collide with a configured mode id, the label
+ * carries the registry's display name, and the entry declares NO atoms: a
+ * dynamic preset is selected through its durable `permission/preset`
+ * identity only, never by an atom wildcard match (which would steal the
+ * indicator on sessions that never held that identity).
+ */
+export function permissionModeSpec(option: PermissionRosterOptionLike): SessionModeSpec {
+  return { id: `permission:${option.value}`, label: option.name, permission: option.value }
 }

@@ -548,11 +548,9 @@ function family() {
   {
     const wheelRow = screen().findIndex(line => line.includes('❯')) + 1 // SGR 1-indexed
     stdin.write(`\x1b[<65;10;${wheelRow}M`)
-    await sleep(200)
-    check('screen: 鼠标滚轮下移光标一行', screen().findIndex(line => line.includes('❯')) === wheelRow, screen().filter(line => line.includes('❯')).join('|'))
+    check('screen: 鼠标滚轮下移光标一行', await settled(() => screen().findIndex(line => line.includes('❯')) === wheelRow), screen().filter(line => line.includes('❯')).join('|'))
     stdin.write(`\x1b[<64;10;${wheelRow}M`)
-    await sleep(200)
-    check('screen: 鼠标滚轮上移回去', screen().findIndex(line => line.includes('❯')) === wheelRow - 1, screen().filter(line => line.includes('❯')).join('|'))
+    check('screen: 鼠标滚轮上移回去', await settled(() => screen().findIndex(line => line.includes('❯')) === wheelRow - 1), screen().filter(line => line.includes('❯')).join('|'))
   }
 
   // Enter 打开操作菜单（焦点在活动叶 = live 会话，无切换选项）
@@ -563,8 +561,8 @@ function family() {
   stdin.write('\x1b')
   await settle(() => !text().includes('回退到这里'))
   stdin.write('\x1b[B\x1b[B\x1b[B')
-  // 焦点移动只改高亮样式，translateToString 读不到——无可观测文本条件，
-  // 保留固定 pacing 等按键被处理。
+  // 固定窗:pacing 等三次 ↓ 被处理——焦点移动只改高亮样式，
+  // translateToString 读不到，无可观测文本条件。
   await sleep(200)
   stdin.write('\r')
   check('screen: 死分支提供切换选项', await settled(() => text().includes('切换到该分支')))

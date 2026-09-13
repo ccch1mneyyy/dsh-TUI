@@ -14,6 +14,9 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 
 // Pin DSH_HOME before any import that reads it. The cmd launcher's
 // `set DSH_HOME=...` does not reliably survive PowerShell → cmd → tsx.cmd.
+// NOTE: ~/.dsh-cc is this install's DSH_HOME directory (an early-release
+// name kept as the harness home). If the harness home is ever migrated to
+// the default ~/.dsh, update this pin together with sync-profile.mjs.
 if (!process.env.DSH_HOME?.endsWith('.dsh-cc')) {
   process.env.DSH_HOME = resolve(homedir(), '.dsh-cc')
 }
@@ -54,8 +57,8 @@ const diagFile = join(dshHome, 'last-boot-diagnostic.txt')
 // caches are bounded now, but something else still grows. This sampler logs
 // heapUsed/rss every 30s to ~/.dsh-cc/heap-watch.log and writes a full
 // heapsnapshot when crossing 3GB, so the next crash brings its own evidence.
-// Disable with DSH_CC_HEAP_WATCH=0.
-if (process.env.DSH_CC_HEAP_WATCH !== '0') {
+// Disable with DSH_TUI_HEAP_WATCH=0.
+if (process.env.DSH_TUI_HEAP_WATCH !== '0') {
   const { appendFileSync, mkdirSync } = await import('node:fs')
   const v8 = await import('node:v8')
   const logFile = join(dshHome, 'heap-watch.log')

@@ -1,5 +1,5 @@
 /**
- * The plan-review panel — Claude Code style exit-plan-mode decision card
+ * The plan-review panel — exit-plan-mode decision card
  * for the DSH user-interaction seam. plan-mode's `exit_plan_mode` tool asks
  * through `ctx.userQuestions` with `intent: { kind: 'plan-review',
  * approve }`: the plan markdown arrives in `detail`, the approve/decline
@@ -31,7 +31,7 @@ import { Box, Text, useInput, ScrollBox, useTerminalSize, type ScrollBoxHandle }
 import { useDeclaredCursor } from '../../ink/hooks/use-declared-cursor.js'
 import { Divider } from '../design-system/Divider.js'
 import { Markdown } from '../Markdown.js'
-import { POINTER } from '../../cc/figures.js'
+import { POINTER } from '../../terminal-utils/figures.js'
 import type { QuestionSelection } from '../../dsh-adapter/questions.js'
 import { isPlainReturnInput } from '../../utils/modifiers.js'
 import { actionMatches } from '../../utils/keymap.js'
@@ -414,14 +414,14 @@ export function PlanReviewPanel({
               backgroundColor={hoverIndex === index && !focused ? 'userMessageBackgroundHover' : undefined}
             >
               <Box width={1} flexShrink={0}>
-                <Text color={focused ? 'claude' : undefined} bold={focused}>
+                <Text color={focused ? 'accent' : undefined} bold={focused}>
                   {focused ? POINTER : ' '}
                 </Text>
               </Box>
               <Box flexDirection="column" marginLeft={1}>
                 <Text
                   bold={focused}
-                  color={focused || isApprove ? 'claude' : undefined}
+                  color={focused || isApprove ? 'accent' : undefined}
                   wrap="wrap"
                 >
                   {index + 1}. {option.label}
@@ -444,12 +444,12 @@ export function PlanReviewPanel({
           backgroundColor={hoverIndex === options.length && !inputFocused ? 'userMessageBackgroundHover' : undefined}
         >
           <Box width={1} flexShrink={0}>
-            <Text color={inputFocused ? 'claude' : undefined} bold={inputFocused}>
+            <Text color={inputFocused ? 'accent' : undefined} bold={inputFocused}>
               {inputFocused ? POINTER : ' '}
             </Text>
           </Box>
           <Box width={1} flexShrink={0}>
-            <Text color={inputFocused ? 'claude' : 'suggestion'}>{PENCIL}</Text>
+            <Text color={inputFocused ? 'accent' : 'suggestion'}>{PENCIL}</Text>
           </Box>
           <Box flexDirection="row" marginLeft={1}>
             {feedback === '' && !inputFocused ? (

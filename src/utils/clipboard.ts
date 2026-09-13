@@ -334,8 +334,7 @@ async function isPasteToolInstalled(tool: LinuxPasteTool): Promise<boolean> {
  * @returns True only for the tools' stable empty-selection phrasings.
  */
 function isKnownEmptySelection(tool: LinuxPasteTool, stderr: string): boolean {
-  // wl-paste with an empty clipboard: "Nothing is copied" (both the C
-  // original and wl-clipboard-rs phrase it this way).
+  // wl-paste with an empty clipboard: "Nothing is copied".
   if (tool === 'wl-paste') return /nothing is copied|clipboard is empty/i.test(stderr)
   // xclip with no selection owner: "Error: target TARGETS not available";
   // xsel: "xsel: No selection" on some builds.

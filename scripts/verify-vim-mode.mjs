@@ -98,7 +98,7 @@ const channel = {
   sessionColor: '',
   promptSessionLabel: false,
   cycleMode() {},
-  commandList: [{ name: 'vim', description: 'Toggle vim mode' }],
+  commandList: [{ name: 'vim', description: 'Turn Vim keybindings on or off' }],
   commandCompletions: () => [],
   contextSegments: { system: 0, prompt: 0, assistant: 0, thinking: 0, tools: 0 },
   notify(text, options) { notifications.push({ text: String(text), options }) },
@@ -118,7 +118,7 @@ const channel = {
   listSessions: async () => [],
   setResumeTarget() {},
   setActivityFrames: () => true,
-  activityFrames: 'claude',
+  activityFrames: 'moon8',
   runExternalCommand: async () => '',
   mcpStatus: () => [],
   exportSession: () => null,
@@ -143,7 +143,8 @@ const instance = await render(
   }),
   { stdout, stderr, stdin, exitOnCtrlC: false, patchConsole: false },
 )
-// Startup wait: first-frame content (random tip) has no stable poll anchor.
+// 固定窗:pacing startup — first-frame content (random tip) has no stable
+// poll anchor.
 await sleep(700)
 setLang('en')
 
@@ -233,7 +234,7 @@ stdin.write('\x1b') // INSERT → NORMAL
 await settle(() => badge() === 'NORMAL')
 check('working: esc in vim insert does not interrupt', channel.cancelCalls === cancelsBefore, `cancel=${channel.cancelCalls}`)
 stdin.write('\x1b') // NORMAL: no-op, still no interrupt
-await sleep(120)
+await sleep(120) // 固定窗:探针 cancelCalls 不得增加（Esc 归 vim，不打断）
 check('working: esc in vim normal does not interrupt', channel.cancelCalls === cancelsBefore, `cancel=${channel.cancelCalls}`)
 channel.working = false
 
@@ -241,7 +242,7 @@ channel.working = false
 // Cursor sits after '> ' on line 2; `d` arms, Esc cancels, then `x` must
 // delete the character at the caret instead of acting as d's second key.
 stdin.write('d\x1b')
-await sleep(120)
+await sleep(120) // 固定窗:pacing 分开 stdin 批次，operator 取消不留可观测痕迹
 stdin.write('x')
 check('esc cancels pending d; x deletes normally', await settled(() => screen().includes('> cond')), JSON.stringify(screen()))
 stdin.write('u')
@@ -281,7 +282,7 @@ await settle(() => draft() === 'cd')
 stdin.write('\x1b')
 await settle(() => badge() === 'NORMAL')
 stdin.write('u') // stack was cleared by the toggles: must be a no-op
-await sleep(150)
+await sleep(150) // 固定窗:探针 draft 不得被 undo 改动（栈已清空）
 check('re-enabled vim: undo cannot reach pre-toggle edits', draft() === 'cd', JSON.stringify(draft()))
 stdin.write('x') // delete 'd' → 'c' (pushes a fresh snapshot)
 await settled(() => draft() === 'c')

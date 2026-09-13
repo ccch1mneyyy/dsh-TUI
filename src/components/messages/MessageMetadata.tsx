@@ -1,6 +1,6 @@
 import React from 'react'
 import Box from '../../ink/components/Box.js'
-import Text from '../../ink/components/Text.js'
+import Text from '../design-system/ThemedText.js'
 import { stringWidth } from '../../ink/stringWidth.js'
 
 type Props = {
@@ -12,8 +12,7 @@ type Props = {
 
 /**
  * Transcript-mode metadata row: `HH:MM · model`, right-aligned above the
- * assistant text, mirroring Claude Code's MessageTimestamp + MessageModel,
- * collapsed into one row).
+ * assistant text, collapsed into one row.
  */
 export function MessageMetadata({
   timestamp,

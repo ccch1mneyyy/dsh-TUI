@@ -9,13 +9,18 @@ import type { SettingsNamespace } from '@deepseek-ai/dsh-settings'
 import Schema from '@deepseek-ai/schemastery'
 import { Config } from './index.js'
 import { createChannel } from './channel.js'
+import { createChannelSceneOutlet } from './channel-scene-outlet.js'
+import { mountChannelUi } from './channel-ui.js'
+import { bindChannelCommands } from './channel/commands.js'
+import { registerTuiChannel } from '../adapter/channel/host-registry.js'
 import { createChildStderrReporter, installChildStderrGuard } from './childStderr.js'
 import { removeClipboardImageDir } from '../utils/clipboard.js'
 import { logForDebugging } from '../utils/debug.js'
 import { isEnvTruthy } from '../utils/envUtils.js'
-import { QuestionStore } from './questions.js'
+import { QuestionStore, bindQuestionStore } from './questions.js'
 import { prepareQuestionAnswerer } from './questions-answerer.js'
-import { ApprovalStore } from './approvals.js'
+import { adapterRuntimeFor } from '../adapter/kernel/runtime-context.js'
+import { ApprovalStore, bindApprovalStore } from './approvals.js'
 import { registerPromptDebug } from './promptDebug.js'
 import { readActivityFrames } from '../activityPrefs.js'
 import { commitFullscreenFactoryMigration, planFullscreenFactoryMigration, readAppliedMigrations } from '../migrationPrefs.js'
@@ -40,7 +45,6 @@ import {
   SHORTCUT_ACTIONS,
   type ShortcutActionId,
 } from '../utils/keymap.js'
-import { detectLegacyEnv, migrateLegacyDataDir, RENAMED_ENV } from '../utils/paths.js'
 import { attachHerdrIntegration } from '../herdr.js'
 import { logMouseDebug } from '../utils/debug.js'
 import { Chat } from '../screens/Chat.js'
@@ -53,7 +57,7 @@ import { getHostThemes, type TuiThemeRuntime } from './themes.js'
 import { attachSessionToWorkspace } from './workspace.js'
 import { createLocalWorkspaceRuntime, getHostWorkspaceRuntime } from './workspaces.js'
 import { getHostSettingsSections, getLocalSettingsSectionsHost, type TuiSettingsField, type TuiSettingsSectionsRuntime } from './settings-sections.js'
-import { withHostRootCapability } from './host-access.js'
+import { compositionRoot, withHostRootCapability } from './host-access.js'
 import { render, ThemeProvider, AlternateScreen } from '../ui.js'
 import { PageMargin } from '../components/PageMargin.js'
 import instances from '../ink/instances.js'
@@ -62,7 +66,7 @@ import { DBP, DFE, DISABLE_MOUSE_TRACKING, EXIT_ALT_SCREEN, SHOW_CURSOR } from '
 import { CLEAR_ITERM2_PROGRESS, CLEAR_TAB_STATUS, supportsTabStatus, wrapForMultiplexer } from '../ink/termio/osc.js'
 
 /**
- * Claude Code style interactive TUI front door for DeepSeek Harness agents.
+ * Interactive TUI front door for DeepSeek Harness agents.
  *
  * The plugin attaches to (or creates) one agent, renders a chat transcript
  * from the agent's session log and live `session/event` records, and submits
@@ -228,12 +232,6 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     ctx.logger.warn(`dsh-tui: unable to install packaged presets (${error instanceof Error ? error.message : String(error)})`)
   }
 
-  // Data-directory rename (~/.dsh-cc → ~/.dsh-tui, issue #120): copy the
-  // legacy directory before ANY preference read below (resolveStartupLang
-  // already touches lang.json). Copy, not move — old launchers keep working
-  // and the user deletes the legacy directory themselves.
-  const migrated = migrateLegacyDataDir()
-
   // UI language resolution: DSH_TUI_LANG env var wins, then the
   // settings.yaml `dsh-tui.lang` user layer (applied once the settings
   // namespace registers below), then cordis.yml `lang`, then the
@@ -241,22 +239,6 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   // render so every module resolves strings in the same language.
   const envLang = process.env.DSH_TUI_LANG
   setLang(isLang(envLang) ? envLang : isLang(config.lang) ? config.lang : resolveStartupLang())
-
-  // Rename notices must land before the first render — stderr writes break
-  // the fullscreen UI once it is up. The bin launcher prints the same
-  // warnings; this covers direct `dsh --profile dsh-tui` boots.
-  if (migrated) {
-    ctx.logger.warn('dsh-tui: data directory copied from ~/.dsh-cc to ~/.dsh-tui (legacy kept)')
-    if (process.stderr.isTTY) {
-      process.stderr.write(`\n[dsh-tui] ${t('legacy-dir-migrated')}\n`)
-    }
-  }
-  for (const oldName of detectLegacyEnv()) {
-    ctx.logger.warn(`dsh-tui: env ${oldName} renamed to ${RENAMED_ENV[oldName]}; the old name no longer takes effect`)
-    if (process.stderr.isTTY) {
-      process.stderr.write(`\n[dsh-tui] ${t('legacy-env-renamed', { old: oldName, new: RENAMED_ENV[oldName] })}\n`)
-    }
-  }
 
   // /update restart verification: the pre-update process stamps the version
   // it was leaving behind; if the freshly loaded one is not newer, the
@@ -323,7 +305,8 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     const presetId = context.agent === undefined ? undefined : runningPresetOf(context.agent.session)
     return filterMinimalPresetTools(assembled, presetId)
   })
-  const questionStore = new QuestionStore()
+  const questionStore = new QuestionStore(adapterRuntimeFor(ctx))
+  bindQuestionStore(ctx, questionStore)
   // One store, one teardown effect on both API lines. The compatibility
   // adapter binds either registration to this Cordis fiber; this separate
   // effect rejects asks still parked in the UI during teardown.
@@ -465,7 +448,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   const meta = { cwd: sessionCwd }
   // Launch-time resume target: the env handoff (launchers like naive-dsh) wins;
   // `dsh --profile tui` forwards `--resume` verbatim instead, so fall back to
-  // parsing the forwarded app args (parity with the standalone bin).
+  // parsing the forwarded app args (matching the standalone bin).
   const launchSessionId = config.sessionId ?? resumeTargetFromArgv(process.argv.slice(2))
   const { agent, handle, agentPreset, route: createdRoute } = await resolveAgent(
     ctx,
@@ -498,7 +481,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   // validated startup resolution, on resume the route the target session's
   // own records carry (a complete cordis.yml pin wins over them).
   const displayRoute = createdRoute ?? startupRoute
-  const channel = createChannel(ctx, agent, {
+  const rawChannel = createChannel(ctx, agent, {
     model: displayRoute.model,
     // A RESUMED session keeps its persisted header cwd (issue #96 review):
     // pre-upgrade sessions recorded the launch directory, and re-resolving
@@ -520,7 +503,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     activity: config.activity,
     // Explicit cordis.yml value (static deployment choice) wins over the
     // runtime `/activity` preference, which wins over the default.
-    activityFrames: config.activityFrames ?? readActivityFrames() ?? 'claude',
+    activityFrames: config.activityFrames ?? readActivityFrames() ?? 'moon8',
     // Static footer preference: cordis.yml `contextBar` (schema default on).
     contextBar: config.contextBar,
     // Same precedence for the agent preset: cordis.yml `preset` over the
@@ -544,6 +527,30 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     statusBar: config.statusBar,
     handle,
   })
+  // Register the live Channel for the adapter Kernel. The Channel driver
+  // resolves it lazily from the composition root, so this can be called after
+  // the plugin-host Kernel started without requiring a re-mount.
+  // Normalize to the composition root: the Kernel and its Channel driver
+  // query the registry through the root context, never through this plugin's
+  // child activation context.
+  const unregisterTuiChannel = registerTuiChannel(compositionRoot(ctx), rawChannel)
+  ctx.effect(() => () => { unregisterTuiChannel() })
+  const pluginHost = ctx.get('tuiPluginHost')
+  const adapterRuntime = adapterRuntimeFor(ctx)
+  const uiMount = mountChannelUi(ctx, rawChannel, pluginHost, adapterRuntime.mode)
+  const channel = uiMount.channel
+  bindChannelCommands(rawChannel, channel)
+  const shadow = adapterRuntime.mode === 'passive-shadow' || adapterRuntime.mode === 'replay-shadow'
+  // Bootstrap notices/prompts are deliberately dropped in observational mode;
+  // interactive commands retain rejection semantics through the UI capability.
+  const notifyChannel: typeof channel.notify = (text, options) => {
+    if (shadow) return () => undefined
+    return channel.notify(text, options)
+  }
+  const submitChannel: typeof channel.submit = text => {
+    if (!shadow) channel.submit(text)
+  }
+  ctx.effect(() => () => { uiMount.dispose() })
   // Root page-margin store: the PageMargin inset box sits ABOVE Chat, so
   // the channel version bump (which re-renders everything below Chat)
   // cannot drive it. Seed the store from config before the tree mounts;
@@ -553,9 +560,10 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   // already sanitized/rate-limited the delivery, the sink only forwards.
   // Without the extensions row (tuiToast absent) plugin toasts are dropped
   // by the runtime itself — same soft-degrade contract as the other seams.
+  // Delivery uses the same owner-bound UI capability as all renderer actions.
   const toastStore = getHostToastStore(ctx.get('tuiToast') as TuiToastRuntime | undefined)
   toastStore?.setSink(delivery => {
-    channel.notify(delivery.text, { color: delivery.color, timeoutMs: delivery.timeoutMs })
+    notifyChannel(delivery.text, { color: delivery.color, timeoutMs: delivery.timeoutMs })
   })
   if (questionAnswererRegistration.kind === 'waterfall') {
     // Ownership follows the mutable channel; registration cleanup belongs to
@@ -666,7 +674,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
         // Unset inherits cordis.yml; a saved choice takes effect after restart.
         terminalImages: Schema.boolean(),
         // Built-in action-shortcut overrides, one optional combo string per
-        // action (see src/utils/keymap.ts). Unset keeps the default binding
+        // action (see the keymap utility). Unset keeps the default binding
         // and the section's format() shows the effective combos.
         shortcuts: Schema.object(
           Object.fromEntries(SHORTCUT_ACTIONS.map(action => [action.id, Schema.string().required(false)])),
@@ -694,9 +702,10 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
       shortcuts?: Partial<Record<ShortcutActionId, string>>
     }
     const applyLayout = (value: SettingsValue): void => {
-      channel.setDiffLayout(value.diffLayout ?? config.diffLayout ?? 'auto')
+      if (!shadow) channel.setDiffLayout(value.diffLayout ?? config.diffLayout ?? 'auto')
     }
     const applyWhale = (value: { whale?: boolean }): void => {
+      if (shadow) return
       channel.setWhale(value.whale ?? true)
     }
     /** Apply the idle-whale-behavior setting: live-toggle the channel flag. */
@@ -704,6 +713,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
       channel.setWhaleIdle(value.whaleIdle ?? true)
     }
     const applyMinimal = (value: { minimal?: boolean }): void => {
+      if (shadow) return
       channel.setMinimal(value.minimal ?? false)
     }
     // Renderer settings are resolved before mount; later edits wait for restart.
@@ -728,6 +738,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     // Display preferences ride the same namespace: /settings writes them
     // live and future render consumers observe the channel version bump.
     const applyDisplay = (value: SettingsValue): void => {
+      if (shadow) return
       channel.setThinkingFold(value.thinkingFold ?? config.thinkingFold ?? 'preview')
       channel.setToolBackground(normalizeToolBackground(value.toolBackground ?? config.toolBackground))
       channel.setScrollGutter(normalizeScrollGutter(value.scrollGutter ?? config.scrollGutter))
@@ -801,7 +812,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
       unset: () => settingsCtx.settings.mutate(tuiSettingsNs, [{ op: 'unset', path: ['fullscreen'] }]),
     })
     if (fullscreenMigration === 'unset') {
-      channel.notify(t('settings-fullscreen-migrated'), { color: 'warning' })
+      notifyChannel(t('settings-fullscreen-migrated'), { color: 'warning' })
     }
     const { fullscreen: staleFullscreen, ...migratedSettings } = bootSettings
     apply(fullscreenMigration === 'unset' ? migratedSettings : bootSettings)
@@ -809,7 +820,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     scope.watch(next => {
       apply(next)
       if (typeof next.fullscreen === 'boolean' && next.fullscreen !== bootedFullscreen) {
-        channel.notify(t('settings-fullscreen-restart'), { color: 'warning' })
+        notifyChannel(t('settings-fullscreen-restart'), { color: 'warning' })
       }
       const terminalImages = next.terminalImages ?? config.terminalImages ?? true
       if (terminalImages !== lastTerminalImages && terminalImages !== bootedTerminalImages) {
@@ -928,7 +939,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   {
     const settingsSections = getHostSettingsSections(
       ctx.get('tuiSettingsSections') as TuiSettingsSectionsRuntime | undefined,
-    ) ?? getLocalSettingsSectionsHost()
+    ) ?? getLocalSettingsSectionsHost(ctx)
     const unregister = settingsSections.register({
       ns: 'dsh-tui',
       title: 'dsh-tui',
@@ -1341,13 +1352,13 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   // DSH approval seam: the permission layer asks ApprovalService.request(),
   // which dispatches an `approval/request` waterfall. With no answerer the
   // chain falls through to the fail-closed 'unavailable', so register this
-  // TUI as the interactive answerer for EVERY agent in this process — the
-  // attached session's asks and any background (agent view) session's asks
-  // alike, so an unattended session surfaces as "needs input" instead of
-  // failing closed. One ask is shown at a time, whichever agent asked.
-  // Guarded on the service being mounted — a bare composition without the
-  // dsh-base approval row has nothing to answer into.
-  const approvalStore = new ApprovalStore()
+  // TUI as the interactive answerer for the agent it owns; requests for
+  // other agents delegate down the chain (next()). Guarded on the service
+  // being mounted — a bare composition without the dsh-base approval row
+  // has nothing to answer into. channel.agentId tracks agent swaps
+  // (/new, /resume, rewind), so ownership is re-evaluated per request.
+  const approvalStore = new ApprovalStore(adapterRuntimeFor(ctx))
+  bindApprovalStore(ctx, approvalStore)
   if (ctx.get('approval') !== undefined) {
     ctx.on('approval/request', (req, next) =>
       approvalStore.park(req).catch(() => next()))
@@ -1358,12 +1369,12 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     // event type), and its internal log-length memo skips appends from any
     // session other than the active ask's, so no agent filtering is needed
     // here. The firehose fires post-commit, after the event entered
-    // the live session log, so the recheck sees the settled result.
-    ctx.on('session/event', (_session, event) => approvalStore.noteSessionEvent(event))
+    // session.events, so the recheck sees the settled result.
+    ctx.on('session/event', (session, event) => approvalStore.noteSessionEvent(session.id, event))
     ctx.effect(() => () => approvalStore.settleAll('cancelled'))
   }
   // The agent view reads parked ask ids for its "needs input" state.
-  channel.bindApprovalStore(approvalStore)
+  rawChannel.bindApprovalStore(approvalStore)
   const herdr = attachHerdrIntegration({
     channel,
     questions: questionStore,
@@ -1382,14 +1393,14 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   const cmdline = (ctx as { cmdlineArgs?: { get?: () => readonly string[]; args?: readonly string[] } }).cmdlineArgs
   const cmdlineArgs = cmdline?.get?.() ?? cmdline?.args
   const initialPrompt = initialPromptFromCmdlineArgs(cmdlineArgs)
-  if (initialPrompt) channel.submit(initialPrompt)
+  if (initialPrompt) submitChannel(initialPrompt)
   // Attach the stderr reporter to the live channel and flush anything a
   // startup-spawned server produced while the channel didn't exist yet.
-  notifyStderr = (text, options) => channel.notify(text, options)
+  notifyStderr = (text, options) => notifyChannel(text, options)
   // The question-seat alert was raised before the channel existed; flush it
   // now so it lands as an in-UI notice, not only in the log file.
   if (questionSeatNotice !== undefined) {
-    channel.notify(questionSeatNotice, { color: 'error' })
+    notifyChannel(questionSeatNotice, { color: 'error' })
     questionSeatNotice = undefined
   }
   for (const [text, options] of stderrBacklog.splice(0)) {
@@ -1530,6 +1541,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   await settingsReady
   const chat = React.createElement(Chat, {
     channel,
+    renderScene: createChannelSceneOutlet(() => rawChannel.pluginScene),
     questionStore,
     approvalStore,
     injectControllerRef,
@@ -1550,7 +1562,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
       if (exited || restartRequested) return
       restartRequested = true
       logRestartEvent('command: /restart accepted')
-      channel.notify(t('restart-starting'))
+      notifyChannel(t('restart-starting'))
       handleExit()
     },
     // Only a `dsh --profile <name>` launch has a profile installation for
@@ -1564,11 +1576,11 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
       void resolveTuiUpdateTarget().then((target) => {
         if (exited || updateRequested) return
         if (target.kind === 'latest') {
-          channel.notify(t('update-already-latest', { current: target.current }), { color: 'warning' })
+          notifyChannel(t('update-already-latest', { current: target.current }), { color: 'warning' })
           return
         }
         if (target.kind === 'unknown') {
-          channel.notify(t('update-check-failed'))
+          notifyChannel(t('update-check-failed'))
         } else {
           // 0.7.0/0.7.1 hard-inject tuiWorkspaces at the code level; under
           // an older global launcher patch (no service row) that is a
@@ -1576,21 +1588,21 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
           // "pending (waiting for service: tuiWorkspaces)"). A stale mirror
           // pinning /update onto that range must be refused, not installed.
           if (isBootDeadlockTarget(target.latest)) {
-            channel.notify(t('update-refused-deadlock', {
+            notifyChannel(t('update-refused-deadlock', {
               latest: target.latest,
               authoritative: target.authoritative ?? target.latest,
             }), { color: 'warning' })
             return
           }
           if (target.authoritative !== undefined) {
-            channel.notify(t('update-mirror-lag', { latest: target.latest, authoritative: target.authoritative }))
+            notifyChannel(t('update-mirror-lag', { latest: target.latest, authoritative: target.authoritative }))
           }
           updateTargetVersion = target.latest
         }
         if (isStandaloneRuntime()) {
-          channel.notify(t('update-standalone-starting'))
+          notifyChannel(t('update-standalone-starting'))
         } else {
-          channel.notify(t('update-starting'))
+          notifyChannel(t('update-starting'))
         }
         updateRequested = true
         handleExit()
@@ -1668,7 +1680,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     const suffix = update.isStandalone && update.checksumUrl === undefined
       ? ` ${t('update-standalone-no-checksum')}`
       : ''
-    channel.notify(
+    notifyChannel(
       `${t(key, { current: update.current, latest: update.latest })}${suffix}`,
       { color: 'warning', timeoutMs: 12000 },
     )
@@ -1685,7 +1697,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   ctx.effect(() => () => {
     logMouseDebug('apply teardown')
     funnel.markTeardown()
-    channel.releaseContributions()
+    rawChannel.releaseContributions()
     instance?.unmount()
   })
 
@@ -1780,6 +1792,7 @@ async function resolveAgent(
         `dsh-tui: cannot resume session "${requestedSessionId}": ${reason} — ` +
         'the stored log is unreadable or corrupt; no fresh session was started instead. ' +
         'Drop --resume to start fresh, or repair the session log first.',
+        { cause: error },
       )
     }
   }
@@ -1820,6 +1833,7 @@ async function resolveAgent(
     const message = error instanceof Error ? error.message : String(error)
     throw new Error(
       `dsh-tui: failed to create agent (provider=${route.provider}, model=${route.model}): ${message}`,
+      { cause: error },
     )
   })
   return { agent: created.agent, handle: created, agentPreset: composed.agentPreset, route }
@@ -2127,7 +2141,7 @@ function disposeRootAndExit(ctx: Context, code: number): void {
  * The real way back into a session after the TUI process is gone. The
  * package ships no `dsh-tui` bin — resuming means feeding the session id
  * through `DSH_TUI_RESUME_SESSION` (what cordis.patch.yml's `sessionId`
- * reads; the pre-rename DSH_CC_ spelling still works, issue #120) and
+ * reads) and
  * booting the same profile; on Windows the repo's dsh-tui.cmd wrapper
  * does this via --resume + ~/.dsh-tui/resume.txt.
  */

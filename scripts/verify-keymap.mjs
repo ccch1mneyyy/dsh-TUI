@@ -201,7 +201,7 @@ const channel = {
   listSessions: async () => [],
   setResumeTarget() {},
   setActivityFrames: () => true,
-  activityFrames: 'claude',
+  activityFrames: 'moon8',
   runExternalCommand: async () => '',
   mcpStatus: () => [],
   exportSession: () => null,
@@ -226,7 +226,7 @@ const instance = await render(
   }),
   { stdout, stderr, stdin, exitOnCtrlC: false, patchConsole: false },
 )
-// 启动等待保留固定 sleep：首帧内容（含随机 tip）没有稳定的轮询锚点。
+// 固定窗:pacing 启动首帧内容（含随机 tip）没有稳定的轮询锚点。
 await sleep(700)
 setLang('en')
 

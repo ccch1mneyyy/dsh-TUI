@@ -24,7 +24,7 @@ Cordis profile
 | `src/index.ts` | Cordis 插件名称、注入声明、配置接口与 Schema；保持入口轻量并延迟加载 runtime |
 | `src/dsh-adapter/plugin.ts` | TTY 检查、服务装配、Agent 创建/恢复、React 挂载、统一退出清理 |
 | `src/dsh-adapter/questions-answerer.ts` / `preset-resolution.ts` | user-questions 与 agent-preset 的预发布兼容分派；调用方不感知上游版本分支 |
-| `src/dsh-adapter/channel.ts` | 将 DSH 持久化事件投影为 transcript；提供 submit、steer、resume、rewind、model/preset 等动作 |
+| `src/dsh-adapter/channel.ts` | Channel 组合根：options/services、owner/binding、specialist 接线、一次安装、最后启动/释放与兼容导出；typed action forwarding/readiness 在 `channel/action-readiness.ts`，detached handles 在 `channel/lifetime-resources.ts`，context warning/pending 在 `channel/context-bookkeeping.ts`（包含压缩复位共用的 warning cell）。中性初始字段在 `channel/state.ts`，补全在 `channel/command-completions.ts`，本地 transcript/shell/子代理报告动作在 `channel/local-actions.ts`，工作状态时钟在 `channel/activity.ts`，绑定事件路由在 `channel/binding-events.ts`，唯一 projector 仍在 `channel/projection.ts`。未安装或已释放的动作明确失败，不伪装为成功 no-op。 |
 | `src/workspaces.ts` | 本地路径 fallback 与通用工作区 provider registry；不得包含任何 provider 的协议、文案或依赖 |
 | `src/screens/Chat.tsx` | modal 优先级、全局按键、滚动/搜索/选择状态、slash command 分发 |
 | `src/components/` | 用户界面和 design-system；不直接拥有 Agent 或 session 真相 |
@@ -46,7 +46,7 @@ service、registry 或 channel seam 接入。
 
 ## Session 是真源
 
-`channel.ts` 不把 React 本地数组当作对话真相。DSH `session/event` 日志负责：
+`dsh-adapter/channel.ts` 不把 React 本地数组当作对话真相。DSH `session/event` 日志负责：
 
 - 初始历史回放与增量流式事件；
 - assistant/reasoning/tool 行的关联与 sequence anchor；
@@ -98,14 +98,13 @@ stdout 打印诊断；使用 stderr 的 `DSH_TUI_DEBUG` 或 `DSH_TUI_RENDER_LOG`
 `cordis.yml` 时默认使用 `~/.dsh-tui/sessions/`。偏好文件是可选状态：损坏或
 缺失时回退，不应阻止 TUI 启动。
 
-数据目录已从 `~/.dsh-cc` 更名为 `~/.dsh-tui`：首次启动时若旧目录存在而新目录
-不存在，会整体复制（不移动）到新目录并提示一行，旧目录保留由用户自行删除。
-`resume.txt` 例外：同时双写到新旧两个路径，因为旧版启动器只读旧路径。
+数据目录为 `~/.dsh-tui`（早期版本曾用 `~/.dsh-cc`，自更名版本起新代码只读写
+`~/.dsh-tui`，不自动迁移旧目录）。
 
 ## 权限与安全边界
 
 `dsh-TUI` 本身不提供独立沙箱；实际能力由 `cordis.patch.yml` 挂载的 DSH 服务
-决定。审批走 `ctx.approval` seam：策略为 `ask` 时 TUI 以 CC 式审批面板作为
+决定。审批走 `ctx.approval` seam：策略为 `ask` 时 TUI 以本地审批面板作为
 answerer（`approval/request` waterfall），仅允许一次/拒绝两种决定——协议没有
 "总是允许"与反馈通道；`/permission` 预设切换来自 dsh-base 的
 `permission-presets` 服务行：
@@ -156,8 +155,11 @@ answerer（`approval/request` waterfall），仅允许一次/拒绝两种决定�
   legacy 兼容名册；服务已挂载但空、损坏或不一致时标记 unavailable 并 fail closed，
   不伪造旧名册。若外部 `/permission` 命令未注册，输入沿用现有默认命令/model dispatch。
 - `/vim`、`/connect`、`/hooks` 是兼容占位命令，不代表对应 DSH 能力已挂载。
-- 没有一套需要真实模型凭证的自动化全流程测试；CI 使用 headless renderer 与假服务，
-  真实模型集成仍需要在目标终端手动验证。
+- 没有一套需要真实模型凭证的自动化全流程测试；CI 使用 headless renderer 与假服务。
+  本 L4 批次也**尚未**在真实 TTY 的 inline/fullscreen、窄终端或 Windows ConPTY 手动演练；
+  真实模型集成仍需要在目标终端手动验证。L5 完整 RFC state 本轮 Deferred。
+- L4 已完成本地独立集中审查与定向修复；最终 compile、build/package 门禁、Channel UI
+  58/58 和 CI3 通过。这些结果不代表真实 TTY 或长期内存压力测试通过。
 
 ## 调试与验证
 

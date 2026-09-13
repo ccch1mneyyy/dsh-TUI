@@ -98,13 +98,12 @@ const channel: any = {
 }
 const bump = () => { channel.version++; for (const cb of listeners) (cb as () => void)() }
 
-/** 固定窗口刻意保留（不换 settle）：帧计数窗口本身就是被测对象——
- *  「settled 后空闲帧数 = 0」是不得发生渲染的稳定性探针，对已成立
- *  条件轮询会立即返回，等于没测。 */
+/** 帧计数窗口本身就是被测对象——「settled 后空闲帧数 = 0」是不得发生
+ *  渲染的稳定性探针，对已成立条件轮询会立即返回，等于没测。 */
 async function countIdleFrames(windowMs: number): Promise<number> {
-  await sleep(300)
+  await sleep(300) // 固定窗:pacing 计量前预滚，吸收前置动作的过渡帧，无可观测完成条件
   const before = frameCount
-  await sleep(windowMs)
+  await sleep(windowMs) // 固定窗:探针 帧计数观察窗，窗内不得（或必须）出现渲染
   return frameCount - before
 }
 
@@ -115,8 +114,8 @@ await render(
   { stdout, stdin, stderr, exitOnCtrlC: false, patchConsole: false, onFrame: () => { frameCount++ } },
 )
 
-// 开机动画（LogoV2 splash）落定后再测——动画时长是墙钟语义，无可轮询的
-// 定格条件，保留固定窗口。
+// 固定窗:墙钟 等开机动画（LogoV2 splash）走完——动画时长本身是墙钟语义，
+// 没有可轮询的定格条件。
 await sleep(1800)
 
 // ---- 控制组：2 张 running 卡片 → 空闲窗口内必须有帧 ----
@@ -134,8 +133,8 @@ channelRows.forEach(row => {
   sub.stopReason = 'completed'
 })
 bump()
-// 过渡帧吸收窗：completed 重排的收尾帧无可轮询的完成条件，保留固定窗口
-// （countIdleFrames 自带的 300ms 预滚同理）。
+// 固定窗:pacing completed 重排的收尾帧无可轮询的完成条件（countIdleFrames
+// 自带的 300ms 预滚同理）。
 await sleep(300)
 // 静默排空：开屏动画的收尾帧与定格重绘在慢机上会越过固定预滚——连续
 // 500ms 无帧（最长单步 dwell 450ms）才视为完全定格，随后的「零帧」
@@ -145,7 +144,7 @@ let quiet = 0
 let waited = 0
 while (quiet < 500 && waited < 10_000) {
   const before = frameCount
-  await sleep(100)
+  await sleep(100) // 固定窗:pacing 轮询步长（500ms 静默阈值按 100ms 计），条件见循环
   waited += 100
   quiet = frameCount === before ? quiet + 100 : 0
 }

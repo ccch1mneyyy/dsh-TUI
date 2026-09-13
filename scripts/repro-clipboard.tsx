@@ -116,7 +116,7 @@ const instance = await render(
   </AlternateScreen>,
   { stdout: new FakeStdout(), stdin: stdinObj, stderr: new FakeStderr(), exitOnCtrlC: false, patchConsole: false },
 )
-// 首帧挂载 pacing：等 React 树完成首次渲染与输入监听挂接，无单一可观测条件。
+// 固定窗:pacing 等首帧——React 树首次渲染与输入监听挂接无单一可观测条件。
 await sleep(600)
 
 let failed = 0

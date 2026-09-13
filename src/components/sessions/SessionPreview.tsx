@@ -7,7 +7,7 @@ import type { PreviewEntry, SessionSummary } from '../../dsh-adapter/sessions/in
 /** Role marker and colour for a preview entry. */
 const ROLE = {
   user: { glyph: '❯', color: 'suggestion' as const },
-  assistant: { glyph: '✦', color: 'claude' as const },
+  assistant: { glyph: '✦', color: 'accent' as const },
 }
 
 /**

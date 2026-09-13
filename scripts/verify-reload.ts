@@ -50,8 +50,8 @@ const BASE = {
   modelPref: { provider: 'deepseek-official', model: 'deepseek-v4-flash' },
   currentModel: { provider: 'deepseek-official', model: 'deepseek-v4-flash' },
   configuredActivity: undefined,
-  activityPref: 'claude',
-  currentActivity: 'claude',
+  activityPref: 'moon8',
+  currentActivity: 'moon8',
 }
 
 // ── 1. 全部无变化 → 全 unchanged，零 apply/skip ─────────────────────────
@@ -111,7 +111,7 @@ const BASE = {
   check('preset 变化 → apply', presetApply.apply.some(a => a.kind === 'preset' && a.to === 'ptc'))
   const presetNoFile = planReload({ ...BASE, presetPref: undefined })
   check('preset 无文件 → skip invalid', presetNoFile.skipped.some(s => s.kind === 'preset' && s.reason === 'invalid'))
-  const activity = planReload({ ...BASE, configuredActivity: 'moon', activityPref: 'claude' })
+  const activity = planReload({ ...BASE, configuredActivity: 'moon', activityPref: 'moon8' })
   check('activity cordis.yml → skip config-wins', activity.skipped.some(s => s.kind === 'activity' && s.reason === 'config-wins'))
   const activityApply = planReload({ ...BASE, activityPref: 'moon' })
   check('activity 变化 → apply', activityApply.apply.some(a => a.kind === 'activity' && a.to === 'moon'))

@@ -34,8 +34,8 @@ development contract for humans and coding agents working on `@deepseek-harness-
   covers motivation, what changed, and how it was verified.
   **A pull request that changes code must link an issue**: add a `Closes #<issue>`
   line to the description, or link it through the Development sidebar. The
-  `issue-link` CI group checks this and fails without a link. Docs-only changes
-  are exempt (same routing as the build and regression groups); for a maintainer
+  `issue-link` CI group checks this and fails without a link. Changes classified
+  as docs-only by CI are exempt (see path routing under Verification); for a maintainer
   release, revert, or CI hotfix that genuinely has no issue to link, apply the
   `no-issue-needed` label.
 - **Run the verification matrix** below before requesting a review; CI runs
@@ -65,7 +65,7 @@ contract for humans and coding agents working on `@deepseek-harness-tui/dsh-tui`
 
 `@deepseek-harness-tui/dsh-tui` is a single-package, ESM-only TypeScript project. It provides a
 React terminal UI front door for DeepSeek Harness through Cordis. The package
-owns the TUI, its local command surface, and a ported Ink/Yoga renderer.
+owns the TUI, its local command surface, and an Ink/Yoga renderer.
 DeepSeek Harness owns the agent, session, model, tool, skill, persistence,
 and policy domains that the TUI consumes.
 
@@ -108,12 +108,11 @@ boundaries and helpers over introducing parallel abstractions.
   `components/questions/` contains the `ask_user_question` UI.
 - `src/ui.ts`: preferred facade for the local renderer, themed `Box`/`Text`,
   hooks, and public TUI primitives.
-- `src/ink/`: ported, low-level Ink renderer and terminal implementation.
+- `src/ink/`: low-level Ink-based renderer and terminal implementation.
   Treat it as sensitive infrastructure: keep changes focused and accompany
   them with renderer-specific regression coverage.
 - `src/native-ts/yoga-layout/`: ported layout engine used by the renderer.
-- `src/cc/`: terminal formatting and presentation helpers adapted for the
-  Claude Code-style UI.
+- `src/terminal-utils/`: terminal formatting and presentation helpers.
 - `src/*Prefs.ts`, `src/customTheme.ts`, and `src/sessionHistory.ts`: persisted
   user preferences and local session metadata under `~/.dsh-tui`.
 - `.agents/skills/*/SKILL.md`: project skills for repository maintainers,
@@ -153,7 +152,7 @@ Cordis config
 Keep ownership in the layer where it belongs:
 
 - Agent/session/tool facts come from DSH services and durable session events.
-- Projection and TUI actions belong in `channel.ts`, not in presentation
+- Projection and TUI actions belong in `dsh-adapter/channel.ts`, not in presentation
   components.
 - Interaction modes and key precedence belong in `Chat.tsx` or the focused
   modal/input component.
@@ -189,12 +188,13 @@ seam.
 - When intentionally changing dependencies, update `pnpm-lock.yaml` with
   `pnpm add`, inspect the full lockfile diff, and avoid unrelated upgrades.
 - Every `@deepseek-ai/*` framework package this package references at runtime
-  or from its published types (mirroring `UPSTREAM_BLESSED_PACKAGES`, including
+  or from its published types (following `UPSTREAM_BLESSED_PACKAGES`, including
   `@deepseek-ai/schemastery`) is both a peer and a dev dependency: framework
   packages are host-provided and resolve at runtime to the host's own instance
   through the `$DSH_HOME/profiles/node_modules` fallback tree (see #198 —
-  declaring them as runtime dependencies lands real copies inside the profile
-  and splits module identity from the host). The dev declarations exist only
+  declaring them as
+  runtime dependencies lands real copies inside the profile and splits module
+  identity from the host. The dev declarations exist only
   so the package can type-check locally. Add new references of this kind to
   both sections at matching ranges (the verify:manifest-deps gate enforces
   it). Framework packages used only by tests/scripts (e.g. dsh-settings,
@@ -241,6 +241,10 @@ Rules for generated output:
   invariant entries.
 - Documentation-only, workflow-only, and YAML-only changes do not require a
   rebuild unless they also alter TypeScript inputs.
+- Changes limited to ordinary comments and blank lines may skip the local rebuild;
+  behavior, type, configuration, or build-input changes are not exempt. This does
+  not waive the regressions required below for the changed area; see Verification
+  for the applicable checks.
 - Git URL installation with `--ignore-scripts` skips `prepare` and is therefore
   unsupported. Registry packages already contain compiled output and do not
   depend on lifecycle scripts running on the consumer's machine.
@@ -254,6 +258,26 @@ It is not the default build command for this standalone repository.
 There is no root `test` or `lint` script. Do not claim that either ran. The
 TypeScript build is the universal static gate, followed by focused executable
 regressions.
+
+Select local verification by actual impact. For documentation and skills, check
+facts, links, triggers, and conflicting instructions. For ordinary comments,
+check the explanation against the implementation and confirm that code and types
+are unchanged, for example with an AST comparison that ignores comments. Compiler
+directives, JSDoc type annotations, and build-tool annotations are not ordinary
+comments. For workflow and YAML changes, check syntax and affected configuration
+contracts. Do not add behavior tests for prose edits. Once required checks pass,
+broaden or repeat them only for new changes, failures, or unresolved risks.
+
+CI separately routes changes using the path allowlist in
+`.github/workflows/ci.yml`. `AGENTS.md`, `.agents/skills/`, and comments in source
+files are outside the docs-only exemption and still trigger code gates. A local
+rebuild exemption does not skip CI; preserve required gates and report the
+actual local verification scope.
+
+`verify:build` also checks source hygiene, renderer primitives, theme and activity
+preference migrations, status animations, table layout, and side-question behavior.
+Source hygiene rejects the listed naming and compiled-input regressions; it is
+not a source-provenance or license audit.
 
 CI runs these commands after installation:
 
@@ -288,12 +312,25 @@ change, also run the closest focused script:
 | Mouse pointer event pipeline (wheel coords/modifier bits, click/hover dispatch, out-of-bounds clamping, pointer-state reset) | `node --import tsx/esm scripts/verify-pointer-events.ts` |
 | Hover event performance (complete interest boundaries, no-interest rect fast path, frame/multi-root invalidation) | `node --import tsx/esm scripts/verify-hover-coalesce.tsx` |
 | Prompt-input mouse selection editing (drag/Shift+click/double-click word select, delete/replace, layered Esc, Ctrl+C copy, CJK wide cells, fold-side clamping) | `node --import tsx/esm scripts/verify-input-selection.tsx` |
+| Sixel encoding, worker cache, thumbnail/preview lifecycle | `node --import tsx/esm scripts/verify-terminal-images-sixel.tsx`, `node --import tsx/esm scripts/verify-sixel-transcript.tsx`; timing comparison `node --import tsx/esm scripts/bench-sixel-encode.tsx` |
 
 Most focused scripts invoked with plain `node` import `lib/types/`; run
 `pnpm build` first. Scripts that import TypeScript sources declare the
 `node --import tsx/esm <script>` form in their header. Do not infer the input
 layer from the file extension: `verify-themes.mjs`, for example, imports
 `src/` through `tsx`.
+
+Regression scripts take their wait primitives from `scripts/lib/term-test.mjs`:
+`settled` for wait-then-assert, `settle` for wait-then-act. Any fixed `sleep(`
+that stays must carry a machine-readable tag, `固定窗:探针` / `固定窗:墙钟` /
+`固定窗:pacing` (defined in that file's header), in a trailing comment on the
+same line or in the comment block directly above. The `verify:fixed-window`
+gate scans every script registered in `scripts/run-ci-group.mjs` and fails on
+an untagged call. `固定窗:待迁移` marks pre-existing debt (burn-down tracked
+in issue #791), pinned per file in `scripts/fixed-window.baseline.json`: any file going
+up fails, and old debt going down never offsets it. After clearing a site, run
+`--write-baseline` and commit the rewritten baseline alongside. It must not
+appear in new code.
 
 Some scripts are forensic or interactive tools, not bounded tests. In
 particular, heap/leak scripts, PTY probes, replay capture, performance probes,
@@ -320,11 +357,11 @@ the required credentials.
   for example `import { Chat } from './screens/Chat.js'`. Preserve this rule.
 - In repository-authored TypeScript, follow the prevailing style: two-space
   indentation, single quotes, no semicolons, and trailing commas in multiline
-  constructs. The ported Ink files may retain their upstream tabs or quoting;
-  do not mass-format them.
+  constructs. The Ink-based renderer files under `src/ink` may retain their
+  upstream tabs or quoting; do not mass-format them.
 - Prefer `import type` for type-only dependencies.
 - Do not introduce `any` merely because `tsconfig.json` relaxes
-  `noImplicitAny`. Those relaxations exist to compile the ported Ink core and
+  `noImplicitAny`. Those relaxations exist to compile the Ink-based renderer and
   must not become the quality bar for new application code. Use `unknown` and
   narrow it, or define a small structural interface at an external seam.
 - Preserve readonly data where the surrounding API uses it. Keep state
@@ -332,12 +369,45 @@ the required credentials.
   values from components.
 - Keep exported APIs documented with concise JSDoc. Explain contracts and
   non-obvious invariants, not line-by-line mechanics.
+- Comments should explain current ownership, ordering, failure causes, or
+  compatibility constraints. Reference functions or modules rather than unstable
+  line numbers; keep issue or regression evidence that explains a tradeoff. Put
+  future ideas in TODOs with explicit conditions instead of describing them as
+  existing capabilities, and revisit related comments when behavior changes.
 - Avoid one-use abstractions and unrelated refactors. Inline a trivial helper
   when it has one call site and does not clarify a real invariant.
 - Preserve initialization ordering around environment-sensitive imports.
   `FORCE_COLOR`, `NODE_ENV`, and terminal capability flags are often read at
   module evaluation time; moving an import above their setup can change
-  behavior without a type error.
+  behavior without a type error. Regression scripts that import `lib/types/`
+  directly bypass the package entry, so React loads its dev build and
+  structured-clones every component's props on each commit; a script that
+  passes large image buffers as props must make
+  `lib/types/force-production-react.js` its first import.
+
+## Agent Instructions And Skills
+
+Keep common constraints and task-specific reading pointers in `AGENTS.md`; this
+guide owns detailed contracts such as the toolchain and verification matrix.
+`.agents/skills/` contains maintainer workflows and is excluded from npm.
+
+- A skill description should say when to use it and distinguish adjacent skills.
+  Keep the body focused on one outcome, the evidence needed to finish, and the
+  necessary steps. `AGENTS.md` introduces shared rules; skills should not repeat
+  their content or reading reminders. Link additional references only when the
+  task needs them, and say when to read them.
+- Preserve the user's goal and existing authorization: review, repair, reporting,
+  and publishing are different tasks. Ask only for missing information that affects
+  the result. If external data is unavailable, state the gap instead of substituting
+  a different task.
+- Choose the smallest view that answers the current question: a short call tree
+  for ordering, a shallow module tree for ownership, or a focused diff for a change.
+  Plain prose can be sufficient. Use real names and only relevant boundaries;
+  diagrams are optional.
+- Use examples to clarify ambiguous choices, not to enumerate every case. Allow
+  no findings, unknowns, and short results; avoid mandatory praise, empty sections,
+  or fixed lengths. Check whether triggers hijack another task or steps stop
+  already-authorized work before it is complete.
 
 ## Architectural Invariants
 
@@ -459,7 +529,9 @@ the required credentials.
   session's work.
 - Stage explicit paths only; never use `git add .` or `git add -A` in a shared
   worktree.
-- Do not commit, tag, push, publish, or create a release unless the user asks.
+- Commit, tag, push, publish, and release actions require user authorization.
+  Authorization already given in the conversation remains valid; do not ask again
+  at every step. Authorization for one action does not extend to other release actions.
 - Publishing is tag-driven. `.github/workflows/publish.yml` requires a `v*`
   tag whose version exactly matches `package.json`, then builds, runs focused
   regressions, and publishes to npm. Treat version changes and tags as release

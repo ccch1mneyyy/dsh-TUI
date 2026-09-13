@@ -1,0 +1,116 @@
+# CodeRabbit 配置。目标：把它当成只报正确性问题的第二双眼睛，而不是风格 lint。
+# Schema: https://storage.googleapis.com/coderabbit_public_assets/schema.v2.json
+# 仓库自己的规则在 AGENTS.md / ADAPTER.md / docs/contributing.md，下面的
+# path_instructions 只是把那些规则里「机器能核对」的部分复述给它。
+
+# 不钉死 language：PR 标题与正文用什么语言，评论就用什么语言（与 PR 入口
+# 门禁的回复语言规则一致）。
+tone_instructions: >-
+  Reply in the language of the PR title and body. Report only behavior bugs, regressions,
+  or tests that would pass/fail falsely, with the trigger path. No style, naming, or wording
+  comments; no refactors beyond this PR's scope. If unsure, say nothing.
+
+reviews:
+  profile: chill
+  request_changes_workflow: false
+
+  # 摘要留在 walkthrough 评论里，不改写作者写的 PR 正文
+  # （PR 入口门禁按正文判断语言与关联 issue，正文被改写会干扰它）。
+  high_level_summary: true
+  high_level_summary_in_walkthrough: true
+  collapse_walkthrough: true
+  review_status: true
+  poem: false
+  in_progress_fortune: false
+  sequence_diagrams: false
+  suggested_labels: false
+  suggested_reviewers: false
+  related_issues: true
+  related_prs: false
+
+  auto_review:
+    enabled: true
+    drafts: false
+    # 默认只 review 目标为默认分支的 PR；stacked PR 的上层目标是下层分支，
+    # 也要 review。
+    base_branches:
+      - ".*"
+    ignore_usernames:
+      - "dependabot[bot]"
+    ignore_title_keywords:
+      - "WIP"
+
+  # 生成产物、vendored 依赖与锁文件不 review。
+  path_filters:
+    - "!lib/**"
+    - "!vendor/**"
+    - "!**/pnpm-lock.yaml"
+    - "!**/*.snapshot.json"
+    - "!docs/assets/**"
+
+  path_instructions:
+    - path: "src/dsh-adapter/**"
+      instructions: >-
+        这是唯一允许 import @deepseek-ai/* 的位置。重点核对：transcript 投影只来自
+        持久化会话事件，不插入乐观的助手/工具事实；事件顺序、seq 锚点与 call-ID
+        匹配不被打乱；注册的资源经 ctx.effect 或既有退出漏斗清理。不要建议 adapter
+        分层或 API 重构。
+    - path: "src/{screens,components,hooks,utils,cc}/**"
+      instructions: >-
+        UI 层禁止 import @deepseek-ai/*，出现即指出。终端宽度必须用仓库的显示宽度/
+        切片/换行辅助函数，直接用 .length 算宽度是 bug。TUI 活动期间不得有
+        console.log 或 stdout 诊断。相对导入必须带 .js 后缀，不引入 any。
+        不要评论格式、命名、注释语言与长度。
+    - path: "src/{ink,native-ts}/**"
+      instructions: >-
+        移植的 Ink 渲染器与 Yoga 布局引擎。只关注行为回归、帧差分正确性与终端
+        状态恢复（raw 模式、光标、alt-screen、同步输出、鼠标、焦点）。不要提类型
+        收紧、风格统一或批量重构建议。
+    - path: "scripts/**"
+      instructions: >-
+        无头回归与取证脚本。带 `固定窗:` 标签的 sleep 是有意保留的固定窗口，
+        不要建议改成轮询；term-test 的 settle 超时静默返回是既定设计，不要建议
+        改抛出。只指出会让断言假通过或假失败的问题（等待条件与断言条件分叉、
+        对已成立条件轮询、读到过期屏幕）。
+    - path: "{docs/**/*.md,README.md,README_EN.md}"
+      instructions: >-
+        只检查中文版与 .en.md/README_EN 是否同步：行为、配置项、快捷键、限制
+        必须两版一致。不做 markdown 风格、标点与语法润色。
+    - path: "{cordis.patch.yml,cordis.yml}"
+      instructions: >-
+        行序、行 ID 与 insert/override 语义关键。对官方行的改动必须同步
+        patch-surface.snapshot.json。
+    - path: ".github/**"
+      instructions: >-
+        重点看 pull_request_target 下的 checkout 与 secrets 暴露、以及门禁脚本
+        对权限判断的绕过路径。
+
+  tools:
+    markdownlint:
+      enabled: false
+    languagetool:
+      enabled: false
+
+  finishing_touches:
+    docstrings:
+      enabled: false
+    unit_tests:
+      enabled: false
+
+  pre_merge_checks:
+    docstrings:
+      mode: "off"
+    title:
+      mode: "off"
+    description:
+      mode: "off"
+    issue_assessment:
+      mode: warning
+
+knowledge_base:
+  code_guidelines:
+    enabled: true
+    filePatterns:
+      - "AGENTS.md"
+      - "ADAPTER.md"
+      - "docs/contributing.md"

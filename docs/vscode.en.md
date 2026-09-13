@@ -7,13 +7,10 @@ from the PTY, so any compatible terminal can host it — including the **VS Code
 integrated terminal** (xterm.js). This page covers two ways to use it:
 
 1. **The `dsh-tui-vscode` companion extension (recommended)** — sessions run
-   in a REAL VS Code integrated terminal (a new column beside the editor),
-   with an experience **almost identical to the official Claude Code VS Code
-   extension**: multiple concurrent sessions, a sidebar session history, and
-   one-click start/resume / specific-session resume. This is the full
-   implementation of
-   [issue #161](https://github.com/ccch1mneyyy/dsh-TUI/issues/161), and the
-   extension is published on the VS Code Marketplace.
+   in a real VS Code integrated terminal (a new column beside the editor), with
+   multiple concurrent sessions, a sidebar session history, one-click start,
+   resume-last, and specific-session resume. The extension is published on the
+   VS Code Marketplace.
 2. **Run directly in the built-in terminal** — zero install, seconds to
    start; for when you do not want the extension.
 
@@ -27,23 +24,23 @@ integrated terminal** (xterm.js). This page covers two ways to use it:
 ## Option 1: the dsh-tui-vscode companion extension (recommended)
 
 [`baobaolaodie/dsh-tui-vscode`](https://github.com/baobaolaodie/dsh-tui-vscode)
-runs dsh-tui inside a REAL VS Code integrated terminal — the same shape as the
-official Claude Code extension's terminal mode (`createTerminal` + run the CLI
-inside it), with no webview and no xterm emulation. It does not touch the
-TUI's rendering core — it only **hosts** it and adds editor integration.
+runs dsh-tui inside a real VS Code integrated terminal (`createTerminal` plus
+the CLI running inside it), with no webview and no xterm emulation. It does not
+touch the TUI's rendering core — it only **hosts** it and adds editor
+integration.
 
-### Experience comparison with the official Claude Code extension
+### Extension features
 
-| Capability | Official Claude Code extension | dsh-tui-vscode |
-| --- | --- | --- |
-| Entry points | Activity-bar icon + editor-title button + command palette | Same (DeepSeek whale icon) |
-| Session position | NEW column beside the active one (`ViewColumn.Beside`) | Same — never takes the current column |
-| Terminal tab | `Claude Code` + logo icon | `DeepSeek` + whale icon |
-| Session host | Real integrated terminal (default shell — PowerShell on Windows) | Same |
-| Multiple sessions | Every click opens a new session terminal | Same; old sessions keep running |
-| Sidebar | Sessions list | Session history (grouped by project — stronger) |
-| Auto start/stop | Open = start; closing the terminal = end | Same |
-| Env injection | — | `DSH_TUI_LANG` / `$VISUAL` / `$DSH_HOME` / session id |
+- Editor-title button, activity-bar whale icon, and command-palette entries;
+- a `DeepSeek` integrated terminal in a column beside the editor;
+- one independent terminal and process for each session, with existing sessions
+  continuing in their own terminals;
+- a sidebar session history grouped by project, with refresh and specific-session
+  resume;
+- environment injection for `DSH_TUI_LANG`, `$VISUAL`, `$DSH_HOME`, and a target
+  session id;
+- per-session termination when its terminal closes, or when `Ctrl+C` is pressed
+  twice inside the TUI.
 
 ### Prerequisites
 
@@ -100,7 +97,7 @@ appears; clicking it starts a new session (`dsh-tui-vscode.open`).
 
 | Command ID | Title | Action |
 | --- | --- | --- |
-| `dsh-tui-vscode.open` | Open panel / 打开会话面板 | Start a new session (same as the editor-title button) |
+| `dsh-tui-vscode.open` | Open panel / 打开会话面板 | Start a new session (the editor-title button uses this entry point too) |
 | `dsh-tui-vscode.start` | Start new session / 启动新会话 | Start a new session |
 | `dsh-tui-vscode.resume` | Resume last session / 恢复上次会话 | Resume via `--resume` |
 | `dsh-tui-vscode.focus` | Focus session panel / 聚焦会话面板 | Focus the most recent terminal, else start one |
@@ -111,7 +108,7 @@ appears; clicking it starts a new session (`dsh-tui-vscode.open`).
 
 ### Architecture
 
-**Session launch** (same shape as the official extension):
+**Session launch**:
 
 ```ts
 createTerminal({
@@ -137,19 +134,18 @@ the end when resuming the last session.
 **Env injection**: `DSH_TUI_LANG`, `$DSH_HOME` (optional override) and
 `$VISUAL` (`code -w` when neither is set) are passed through
 `createTerminal`'s env; resuming a specific session additionally injects
-`DSH_TUI_RESUME_SESSION` (and compatibly `DSH_CC_RESUME_SESSION`).
+`DSH_TUI_RESUME_SESSION`.
 
 **Multiple concurrent sessions**: every "Start new session" click creates a
 new terminal and process; older sessions keep running in their own terminals
-(same as the official extension). "Focus" and "Terminate" act on the most
+(older sessions keep running in their own terminals). "Focus" and "Terminate" act on the most
 recently created terminal; closing a terminal ends only that session.
 
 **Specific-session resume**: clicking a sidebar entry injects the target
 session id into the terminal env via `DSH_TUI_RESUME_SESSION` and deliberately
 does NOT pass `--resume`: this profile's `cordis.patch.yml` reads that env at
-boot (`sessionId: !!js process.env.DSH_TUI_RESUME_SESSION ??
-process.env.DSH_CC_RESUME_SESSION ?? undefined` — the reader prefers the new
-name and still accepts the old one) and the TUI resumes the session. Passing a
+boot (`sessionId: !!js process.env.DSH_TUI_RESUME_SESSION ?? undefined`) and
+the TUI resumes the session. Passing a
 bare `--resume` (or `-c`/`--continue`) would make the launcher
 (`bin/dsh-tui.js`) overwrite the env from `~/.dsh-tui/resume.txt` — that is
 the "resume last session" path; the two do not interfere (verified in the
@@ -214,7 +210,7 @@ shipped in the repository's `.githooks/`.
 ### Known limitations
 
 - Session content is terminal content: scrollback is managed by the VS Code
-  terminal (same as Claude Code's terminal mode);
+  integrated terminal;
 - Specific-session resume requires this profile's `cordis.patch.yml`
   (dsh-tui 0.7.0+);
 - For logs without a `session` header, the project name comes from decoding
@@ -249,7 +245,7 @@ code-server): truecolor, OSC 8 links (rendered clickable by VS Code itself),
 OSC 52 clipboard (VS Code prompts for permission on first use), synchronized
 output and smooth draining — handled in `src/ink/` under the
 `TERM_PROGRAM=vscode` detection branches. Streaming Markdown, tool cards,
-scrolling, and double-Esc time travel behave the same as in a standalone
+scrolling, and double-Esc time travel use the same dsh-TUI behavior as in a standalone
 terminal.
 
 ### Make `Ctrl+G` edit the current input in VS Code
@@ -282,7 +278,7 @@ The TUI's `Ctrl+G` uses `$VISUAL`/`$EDITOR`. To edit in VS Code, export
 | Extended keyboard protocol | modifyOtherKeys / win32-input-mode behavior is decided by xterm.js and may differ from kitty / WezTerm |
 | OSC 52 clipboard | First use triggers VS Code's own permission prompt |
 
-For behavior identical to a standalone terminal (e.g. complex mouse
+For the full protocol behavior of a standalone terminal (e.g. complex mouse
 semantics), use an external terminal window (Windows Terminal / kitty /
 WezTerm / iTerm2 / tmux).
 
@@ -290,7 +286,7 @@ WezTerm / iTerm2 / tmux).
 
 | Scenario | Choice |
 | --- | --- |
-| Want the Claude Code extension-like experience (Beside column, multiple sessions, session-history sidebar, specific-session resume) | Option 1: companion extension |
+| Need multiple sessions, session history, and specific-session resume | Option 1: companion extension |
 | Occasional use, no extension wanted | Option 2: built-in terminal |
 | Need a standalone terminal's full protocol behavior (complex mouse semantics, etc.) | External terminal window |
 

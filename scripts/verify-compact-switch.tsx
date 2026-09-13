@@ -8,6 +8,7 @@
  *  2. persistence 分类——checkpoint 已提交但落盘失败（code:'persistence'）
  *     的拒绝必须与通用失败分开提示（含「压缩已生效」语义，不再裸报失败）。
  *  3. 已落定不阻塞——压缩正常完成后切换不再触发取消路径。
+ *  4. /fork 与逐行 rewind 也必须在快照前取消同一压缩事务。
  *
  * 背景：长会话 /compact 的摘要 LLM 很慢，用户等不及直接 /model；旧实现
  * fork 快照先走、旧压缩事务在后台照常提交 checkpoint，新会话从"只剩摘要"
@@ -25,8 +26,9 @@ const reproHome = mkdtempSync(join(tmpdir(), 'dshtui-compact-switch-'))
 process.env.HOME = reproHome
 process.env.USERPROFILE = reproHome
 
-const [{ createChannel }] = await Promise.all([
+const [{ createChannel }, { settled }] = await Promise.all([
   import('../src/dsh-adapter/channel.js'),
+  import('./lib/term-test.mjs'),
 ])
 
 let failed = 0
@@ -35,13 +37,9 @@ function check(name: string, ok: boolean, extra = '') {
   if (!ok) failed += 1
 }
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
-async function settle(cond: () => boolean, ms = 3000): Promise<boolean> {
-  const deadline = Date.now() + ms
-  while (Date.now() < deadline) {
-    if (cond()) return true
-    await sleep(25)
-  }
-  return cond()
+// 轮询到条件成立后返回终值（term-test 的 settled 就是这条语义）。
+function settle(cond: () => boolean, ms = 3000): Promise<boolean> {
+  return settled(cond, { timeoutMs: ms })
 }
 
 // ---- 事件与 agent 桩 --------------------------------------------------------
@@ -95,11 +93,11 @@ function makeCompaction(script: Script) {
       const call = { agentId: agent.id, abortedAt: undefined as number | undefined }
       calls.push(call)
       if (script.kind === 'resolve') {
-        await sleep(30)
+        await sleep(30) // 固定窗:pacing 桩内模拟压缩耗时，不是在等可观测状态
         return { shadowedSeqs: [1, 2] }
       }
       if (script.kind === 'reject') {
-        await sleep(30)
+        await sleep(30) // 固定窗:pacing 桩内模拟压缩耗时，不是在等可观测状态
         throw Object.assign(new Error(script.message), script.code === undefined ? {} : { code: script.code })
       }
       // hang-until-abort：模拟慢摘要流——仅在 abort 后以 abort 原因拒绝
@@ -119,6 +117,10 @@ function makeCompaction(script: Script) {
 
 // ---- 组装 ctx：source snapshot / agents.create 记录调用顺序 -----------------
 function assemble(script: Script) {
+  // Each assembly is an independent session: restart the event sequence so the
+  // log's `seq` stays index-aligned (makeAgent publishes `seq: events.length`)
+  // and rewind boundaries computed from a row's `seq` resolve inside it.
+  seq = 0
   const order: string[] = []
   const stamps = new Map<string, number>()
   const mark = (name: string) => {
@@ -159,7 +161,7 @@ function assemble(script: Script) {
     provider: 'fake-provider',
     activity: false,
   })
-  return { order, stamps, compaction, channel, agent }
+  return { order, stamps, compaction, channel, agent, handlers }
 }
 const toasts = (channel: { notifications: readonly { text: string }[] }) =>
   channel.notifications.map(item => item.text).join('\n')
@@ -190,7 +192,7 @@ const toasts = (channel: { notifications: readonly { text: string }[] }) =>
 
   // toast：取消提示出现；随后不追加通用「压缩失败」（抑制闩）。
   await settle(() => channel.notifications.length >= 2)
-  await sleep(150)
+  await sleep(150) // 固定窗:探针 抑制闩：观察窗内不得再追加通用「压缩失败」提示
   const text = toasts(channel)
   check('scene1: cancel toast shown', text.includes('已取消并切换'), text)
   check('scene1: no misleading generic failure toast', !/压缩失败 ·/.test(text), text)
@@ -198,38 +200,91 @@ const toasts = (channel: { notifications: readonly { text: string }[] }) =>
   check('scene1: create happened after cancel', order.includes('create'), JSON.stringify(order))
 }
 
-// ==== 场景 2：persistence 分类提示 ============================================
+// ==== 场景 2：/fork —— 取消必须先于快照 ======================================
+{
+  const { order, stamps, compaction, channel } = assemble({ kind: 'hang-until-abort' })
+  channel.compact()
+  const started = await settle(() => compaction.calls.length === 1)
+  check('scene2: compactNow invoked before /fork', started)
+  // createChannel 的启动回放也读取一次日志；只观测本次 /fork 的 source
+  // snapshot，且保留该窗口内第一次读取的时间戳。
+  stamps.delete('snapshot')
+  const forked = await channel.forkSession()
+  check('scene2: /fork succeeds', forked === true, JSON.stringify(order))
+  const abortedAt = compaction.calls[0]?.abortedAt
+  const snapshotAt = stamps.get('snapshot')
+  check(
+    'scene2: /fork abort strictly precedes snapshot',
+    abortedAt !== undefined && snapshotAt !== undefined && abortedAt <= snapshotAt,
+    `abortedAt=${String(abortedAt)} snapshotAt=${String(snapshotAt)}`,
+  )
+}
+
+// ==== 场景 3：逐行 rewind —— 取消必须先于快照 ================================
+{
+  const { order, stamps, compaction, channel } = assemble({ kind: 'hang-until-abort' })
+  channel.compact()
+  const started = await settle(() => compaction.calls.length === 1)
+  check('scene3: compactNow invoked before row rewind', started)
+  // 同上：只观测本次逐行 rewind 的 source snapshot。
+  stamps.delete('snapshot')
+  const restored = await channel.rewindTo({ seq: 5, text: '回答 1' })
+  check('scene3: row rewind succeeds', restored === '回答 1', JSON.stringify(order))
+  const abortedAt = compaction.calls[0]?.abortedAt
+  const snapshotAt = stamps.get('snapshot')
+  check(
+    'scene3: row rewind abort strictly precedes snapshot',
+    abortedAt !== undefined && snapshotAt !== undefined && abortedAt <= snapshotAt,
+    `abortedAt=${String(abortedAt)} snapshotAt=${String(snapshotAt)}`,
+  )
+}
+
+// ==== 场景 4：persistence 分类提示 ============================================
 {
   const { channel } = assemble({ kind: 'reject', code: 'persistence', message: 'flush io error' })
   channel.compact()
   await settle(() => channel.notifications.length >= 2)
-  await sleep(150)
+  await sleep(150) // 固定窗:探针 抑制闩：观察窗内不得再追加通用「压缩失败」提示
   const text = toasts(channel)
-  check('scene2: flush-failed toast distinguishes committed state', text.includes('压缩已生效') && text.includes('落盘'), text)
-  check('scene2: not the generic failure line', !/压缩失败 ·/.test(text), text)
+  check('scene4: flush-failed toast distinguishes committed state', text.includes('压缩已生效') && text.includes('落盘'), text)
+  check('scene4: not the generic failure line', !/压缩失败 ·/.test(text), text)
 }
 
-// ==== 场景 3：通用失败仍走原提示 ==============================================
+// ==== 场景 5：通用失败仍走原提示 ==============================================
 {
   const { channel } = assemble({ kind: 'reject', message: 'Codex error: usage limit' })
   channel.compact()
   await settle(() => channel.notifications.length >= 2)
-  await sleep(150)
+  await sleep(150) // 固定窗:探针 观察窗内提示不得被后续通用失败覆盖
   const text = toasts(channel)
-  check('scene3: generic failure toast keeps the error', /压缩失败 ·.*usage limit/.test(text), text)
+  check('scene5: generic failure toast keeps the error', /压缩失败 ·.*usage limit/.test(text), text)
 }
 
-// ==== 场景 4：压缩已落定后切换不触发取消 ======================================
+// ==== 场景 6：owner 回收中止压缩，晚完成不通知 =================================
+{
+  const { compaction, channel } = assemble({ kind: 'hang-until-abort' })
+  channel.compact()
+  const started = await settle(() => compaction.calls.length === 1)
+  check('scene6: compactNow invoked before owner disposal', started)
+  channel.releaseContributions()
+  const afterDispose = channel.notifications.length
+  const aborted = await settle(() => compaction.calls[0]?.abortedAt !== undefined)
+  check('scene6: owner disposal aborts in-flight compaction', aborted)
+  await sleep(100) // 固定窗:探针 抑制闩：观察窗内不得再追加通知
+  check('scene6: aborted completion adds no notification', channel.notifications.length === afterDispose, toasts(channel))
+}
+
+// ==== 场景 7：压缩已落定后切换不触发取消 ======================================
 {
   const { order, compaction, channel } = assemble({ kind: 'resolve' })
   channel.compact()
   const done = await settle(() => channel.notifications.some(item => item.text.includes('已压缩')))
-  check('scene4: compaction completed', done, toasts(channel))
+  check('scene7: compaction completed', done, toasts(channel))
   const switchResult = await channel.switchModel('fake-provider', 'model-b')
-  check('scene4: switch succeeds', switchResult === true, JSON.stringify(order))
+  check('scene7: switch succeeds', switchResult === true, JSON.stringify(order))
   const text = toasts(channel)
-  check('scene4: no cancel toast for a settled compaction', !text.includes('已取消并切换'), text)
-  check('scene4: compaction ran exactly once', compaction.calls.length === 1, String(compaction.calls.length))
+  check('scene7: no cancel toast for a settled compaction', !text.includes('已取消并切换'), text)
+  check('scene7: compaction ran exactly once', compaction.calls.length === 1, String(compaction.calls.length))
 }
 
 process.exit(failed)

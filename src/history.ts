@@ -96,7 +96,7 @@ async function persistEntry(trimmed: string): Promise<void> {
   try {
     await withHistoryLock(async () => {
       const entries = await loadRawAsync()
-      // Skip consecutive duplicates (CC behavior: repeated submits of the same
+      // Skip consecutive duplicates (repeated submits of the same
       // command only advance the existing entry's timestamp).
       const last = entries[entries.length - 1]
       if (last && last.text === trimmed) {

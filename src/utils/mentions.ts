@@ -6,8 +6,8 @@
  * either a run of non-whitespace characters (`@src/a.ts`) or a double-quoted
  * path (`@"my dir/a.ts"`, for paths containing spaces).
  *
- * A token may carry a trailing line-range suffix (issue #359, Claude Code
- * parity): `@src/a.ts#L12` / `@src/a.ts#L12-14` (also after a quoted body:
+ * A token may carry a trailing line-range suffix (issue #359):
+ * `@src/a.ts#L12` / `@src/a.ts#L12-14` (also after a quoted body:
  * `@"my dir/a.ts"#L3-5`). The suffix must anchor at the token END and match
  * `#L<digits>` / `#L<digits>-<digits>` exactly, so legal filenames that merely
  * contain `#` (`report#L12.md`) never trip it; a range like `#L14-12` is

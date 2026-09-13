@@ -29,14 +29,14 @@ A complete common override looks like this:
 - id: dsh-tui
   config:
     provider: deepseek-official
-    model: deepseek-v4-flash
+    model: deepseek-flash
     # Prefer leaving cwd unset — the default resolves to the git worktree
     # root containing the launch directory. To pin a fixed workspace, use an
     # absolute path (e.g. cwd: /repo/packages/app), NOT `!!js process.cwd()`
     # (that pins the workspace to the launch subdirectory, issue #96).
     effort: max
     activity: true
-    activityFrames: claude
+    activityFrames: moon8
     contextBar: true
     fullscreen: false
     terminalImages: true
@@ -48,14 +48,14 @@ A complete common override looks like this:
 | Field | Default/source | Meaning |
 | --- | --- | --- |
 | `provider` | Harness `agentDefaultModel`; bare compositions fall back to `deepseek-official` | DSH model route; provider and model must both be set to form an explicit route |
-| `model` | Harness `agentDefaultModel`; bare compositions fall back to `deepseek-v4-flash` | Startup model; `/model` can switch through a session fork |
+| `model` | Harness `agentDefaultModel`; bare compositions fall back to `deepseek-flash` | Startup model; `/model` can switch through a session fork |
 | `cwd` | git worktree root containing the launch directory (`process.cwd()` when outside any worktree; a dotfiles repo at `$HOME` does not count) | TUI-side session workspace: agent meta, `@` completion/mention expansion, /resume filtering, statusline; resuming an existing session adopts that session's persisted cwd. Note the bash/fs-policy/sandbox roots are still owned by the composition layer's cordis config (default: the launch directory, governed by dsh-base) and may differ from this session-side cwd |
 | `workspace` | unset | Startup workspace target: a local path, `file://` URL, or plugin-provided URI; takes precedence over `cwd` |
 | `effort` | normally `max` in the bundle | Reasoning effort applied to every request (validated against the runtime model's levels; invalid levels silently fall back to the adapter default), also shown in the header at startup. Precedence: /settings default reasoning effort `effortDefault` (settings.yaml user layer; `auto` defers) > this field > the persisted `/effort` choice (`~/.dsh-tui/effort.json`) > the model default |
 | `modes` | built-in trio | Shift+Tab session-mode cycle (plan/sandbox/approval atom bundles); defaults to default → plan → full-access |
 | `activity` | `true` | Show the live activity row |
-| `activityFrames` | persisted choice or `claude` | Activity animation preset; `/activity` changes it at runtime |
-| `contextBar` | `true` | Segmented context-usage bar below the input box; `false` hides the row |
+| `activityFrames` | `moon8` | Activity animation preset; `/activity` changes it at runtime. A legacy saved value of `claude` is read as `moon8`, and the picker no longer offers that legacy preset |
+| `contextBar` | `true` | Segmented context-usage bar below the input box; `false` hides the row. Both this and `/settings → statusBar.contextBar` (also on by default) must be on for it to render |
 | `fullscreen` | `true` (factory default since 0.9.0) | `true` uses the alternate screen, app scrolling, and mouse selection; `false` uses inline mode |
 | `terminalImages` | `true` | Allow previews in supported terminals; `false` keeps text metadata and skips image probing and preview decoding. Restart to apply changes |
 | `preset` | roster default `standard` | Agent preset for new sessions; explicit configuration wins over persisted preference |
@@ -72,6 +72,22 @@ The checkbox edits the preview preference; an environment override is shown sepa
 This switch is read at startup. Use `/restart` after changing it to automatically restart the
 TUI and resume the current session; `/reload` does not apply it. If a turn is running, wait for
 it to finish or stop it with `Ctrl+C` before restarting.
+
+## Diagnostic environment variables
+
+The following variables are for diagnostics or experimental terminal integration. They are all
+off by default and take effect only when explicitly set:
+
+| Variable | Purpose |
+| --- | --- |
+| `DSH_TUI_DEBUG_REPAINTS=1` | Record repaint diagnostics |
+| `DSH_TUI_COMMIT_LOG=1` | Record render-commit diagnostics |
+| `DSH_TUI_ACCESSIBILITY=1` | Enable accessibility related display paths |
+| `DSH_TUI_TMUX_TRUECOLOR=1` | Enable the truecolor detection path in tmux |
+| `DSH_TUI_TAB_STATUS=1` | Experimental terminal tab-status opt-in; off by default, with no guarantee of support in every terminal |
+
+Diagnostic output does not change session events or model routing. Enable only the variable
+needed for the terminal or rendering issue being investigated.
 
 ## Live activity row
 
@@ -192,12 +208,9 @@ for the complete field reference.
 | `DSH_TUI_DEBUG` | Enable dsh-tui diagnostics on stderr |
 | `DSH_TUI_RENDER_LOG` | File path for raw ANSI frame capture |
 
-The old `CC_TUI_*` and `DSH_CC_*` names no longer take effect as of this
-release; startup prints one warning line whenever a legacy name is still set
-(repeated on every launch while it remains set). The only exception is
-`DSH_TUI_RESUME_SESSION`: the reader prefers the new name but still accepts
-the old `DSH_CC_RESUME_SESSION`, and the writer sets both variables to ease
-the transition for older launchers.
+The old `CC_TUI_*` and `DSH_CC_*` names (and the early `~/.dsh-cc` data
+directory) come from earlier release naming and are no longer read as of this
+release; use the `DSH_TUI_*` prefix and the `~/.dsh-tui` data directory.
 
 `DSH_TUI_RENDER_LOG` may capture visible prompts, tool arguments, and output.
 Do not attach it to a public issue without reviewing and redacting it.

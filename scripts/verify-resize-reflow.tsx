@@ -278,7 +278,7 @@ async function equivalence(from: [number, number], to: [number, number]): Promis
 
   const live = makeHarness(fromCols, fromRows)
   const liveInstance = await mount(live)
-  // 挂载后固定静置窗保留：等价 oracle 的期望内容来自另一次渲染，本侧无可轮询谓词。
+  // 固定窗:pacing 等价 oracle 的期望内容来自另一次渲染，本侧无可轮询谓词
   await sleep(420)
 
   // The emulator reflows exactly as a real terminal does; the app learns about
@@ -287,21 +287,21 @@ async function equivalence(from: [number, number], to: [number, number]): Promis
   live.stdout.columns = toCols
   live.stdout.rows = toRows
   live.stdout.emit('resize')
-  await sleep(520)
+  await sleep(520) // 固定窗:pacing 等 reflow 落定，同上无可轮询谓词
   const resized = live.screen()
   liveInstance.unmount()
   instances.delete(process.stdout)
   live.term.dispose()
-  await sleep(40)
+  await sleep(40) // 固定窗:pacing 卸载/dispose 收尾
 
   const cold = makeHarness(toCols, toRows)
   const coldInstance = await mount(cold)
-  await sleep(420)
+  await sleep(420) // 固定窗:pacing 冷渲染侧同款静置窗
   const fresh = cold.screen()
   coldInstance.unmount()
   instances.delete(process.stdout)
   cold.term.dispose()
-  await sleep(40)
+  await sleep(40) // 固定窗:pacing 卸载/dispose 收尾
 
   check(
     `${fromCols}x${fromRows} → ${toCols}x${toRows} matches a fresh render`,

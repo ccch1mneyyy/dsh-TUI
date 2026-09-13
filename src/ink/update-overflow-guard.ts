@@ -11,8 +11,7 @@
  * at an innocent animation tick while the actual oscillating component is
  * someone else entirely (the upstream fork lineage hit this repeatedly:
  * Divider measure loops, MessageList streaming measure cascades, and the
- * sibling projects' identical fixes — Vercel ink's useBoxMetrics deferral
- * and claude-code's SyntaxHighlightedDiff loop).
+ * repeated layout measurements during streaming).
  *
  * The throw is SELF-HEALING BY CONTRACT: `getRootForUpdatedFiber` resets
  * `nestedUpdateCount` to 0 and clears `rootWithNestedUpdates` *before*

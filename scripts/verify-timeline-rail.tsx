@@ -92,7 +92,7 @@ const channel: any = {
   commandList: LOCAL_COMMANDS,
   notifications: [],
   mode: { plan: false, sandbox: undefined },
-  activityFrames: 'claude',
+  activityFrames: 'moon8',
   agentPreset: undefined,
   subagents: [],
   lastUserText: '问题 8',
@@ -179,22 +179,22 @@ function topOwningTurn(): number | null {
   }
   return null
 }
-// 逐事件 pacing sleep 保留：滚轮事件需要逐个进入 hover/scroll 路径，无可
-// 轮询的逐步条件；clickAt/hoverAt 的固定窗口同时是场景 5/6b「无操作/无卡」
-// 稳定性探针的现身时间，必须保留。
 const wheel = async (up: boolean, times: number) => {
   for (let i = 0; i < times; i++) {
     stdin.write(`\x1b[<${up ? 64 : 65};90;30M`)
+    // 固定窗:pacing 滚轮事件需逐个进入 hover/scroll 路径，无可轮询的逐步条件
     await sleep(180)
   }
 }
 const clickAt = async (col: number, row: number) => {
   stdin.write(`\x1b[<0;${col};${row}M`)
   stdin.write(`\x1b[<0;${col};${row}m`)
+  // 固定窗:探针 这个窗口同时是场景 5「点空白无操作」稳定性探针的现身时间
   await sleep(400)
 }
 const hoverAt = async (col: number, row: number) => {
   stdin.write(`\x1b[<35;${col};${row}M`)
+  // 固定窗:探针 这个窗口同时是场景 6b「移开后无卡」稳定性探针的现身时间
   await sleep(300)
 }
 
@@ -308,11 +308,11 @@ await wheel(false, 20)
   // 8ms 间隔连续扫过全部 tick 行（模拟快速划过）
   for (const row of snap.ticks) {
     stdin.write(`\x1b[<35;${COLS};${row + 1}M`)
-    await sleep(8)
+    await sleep(8) // 固定窗:pacing 快速划过的 motion 步间
     if (screenLines().some(l => l.slice(55, 97).includes('╭') || l.slice(55, 97).includes('╮'))) anyCard = true
   }
-  // 稳定性探针保留固定窗口：断言「卡不得出现」——settle 对已成立的
-  // 否定条件会立即返回，等于没给错误弹卡留出现身时间。
+  // 固定窗:探针 断言「卡不得出现」——settle 对已成立的否定条件会立即返回，
+  // 等于没给错误弹卡留出现身时间。
   await sleep(60)
   if (screenLines().some(l => l.slice(55, 97).includes('╭') || l.slice(55, 97).includes('╮'))) anyCard = true
   check('快速划过 tick 全程无预览卡（dwell 门）', !anyCard)
@@ -330,8 +330,8 @@ await wheel(false, 20)
   ;(stdout as any).columns = 59
   stdout.emit('resize')
   term.resize(59, ROWS)
-  // 固定窗口保留：断言是「rail 不存在」的否定条件，resize 回流的瞬态
-  // 屏幕可能提早满足它——settle 会在重绘完成前就返回。
+  // 固定窗:探针 断言是「rail 不存在」的否定条件，resize 回流的瞬态屏幕可能
+  // 提早满足它——settle 会在重绘完成前就返回。
   await sleep(500)
   const hidden = !screenLines().some((_, y) => {
     const two = cellAt(y, 57) + cellAt(y, 58)

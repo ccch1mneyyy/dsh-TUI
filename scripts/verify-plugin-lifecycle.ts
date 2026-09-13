@@ -215,7 +215,7 @@ const pluginFiber = root.inject(
     pluginCtx.tuiStatus.registerView({ key: 'lifecycle-view', maxRows: 2, component: () => null })
     pluginCtx.tuiShortcuts.register('alt+x', { description: 'lifecycle', handler: () => {} })
     pluginCtx.tuiRenderers.register('lifecycle/note', () => ({ lines: ['active'] }))
-    pluginCtx.tuiThemes.register({ name: 'lifecycle:theme', base: 'dark', colors: { claude: '#123456' } })
+    pluginCtx.tuiThemes.register({ name: 'lifecycle:theme', base: 'dark', colors: { accent: '#123456' } })
     pluginCtx.tuiScenes.register({ id: 'lifecycle', component: () => null })
     pluginCtx.tuiScenes.open('lifecycle')
     pluginCtx.tuiSettingsSections.register({ ns: 'lifecycle', title: 'Lifecycle', fields: [] })
@@ -238,7 +238,7 @@ check('live plugin effects are visible before dispose',
   && sections.list().some(section => section.ns === 'lifecycle')
   && shortcuts.dispatch('x', { meta: true })
   && renderers.render('lifecycle/note', {})?.lines[0] === 'active'
-  && themes.resolve('lifecycle:theme')?.claude === '#123456'
+  && themes.resolve('lifecycle:theme')?.accent === '#123456'
   && themes.getSnapshot().some(entry => entry.name === 'lifecycle:theme')
   && workspaces.commands().some(command => command.name === 'lifecycle') === true
   && commandTrees.children(['lifecycle']).length === 1

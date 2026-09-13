@@ -21,13 +21,14 @@
 | 图片弹窗中的 `←` / `→` | 上一张 / 下一张；首尾不循环，临时光标预览不抢输入框方向键 |
 | `Ctrl+C` | 工作时中断；中断迟迟不收敛时再按一次强制退出；空闲且有输入时清空；**空闲且输入框内有选区时复制选区到剪贴板（保留选区继续编辑）**；空输入时连续两次退出 |
 | `Ctrl+D` | 与 `Ctrl+C` 同阶梯：工作中=中断（未收敛时再按=强制退出）；空闲时连续两次退出 |
-| `Ctrl+O` | 切换 transcript/verbose 详情，展开思考与完整工具参数/输出 |
+| `Ctrl+O` | 切换 transcript/verbose 详情，展开思考与完整工具参数/输出；也是**超长单行折叠**（单行 > 1000 字符裁到 1000 + `… 已折叠 N 字符` 标记，见 user guide §5）的展开逃生门——鼠标点被折叠的那一行（或工具卡卡面）同样能展开/收起 |
 | `Ctrl+P` | 切换启动时加载的 loaded-context 面板（面板在屏时有效） |
 | `Ctrl+T` | 打开轨迹场景（等同 `/trace`）；场景内 `q`/`Esc` 返回对话 |
 | `Ctrl+R` | 打开输入历史搜索；重复按或 `Down` 移到下一项 |
 | `Ctrl+L` | 强制清理并重绘物理终端 |
 | `?` | 输入框为空时打开快捷键和命令帮助 |
 | Help 内 `↑/↓`、`PgUp/PgDn`、`Home/End` | 逐行滚动、翻页或跳到命令列表首尾；`Esc` 关闭 |
+| 转录内 `PgUp` / `PgDn` | 全屏模式按页翻动消息列表（每页一屏减一行）；Help 或浮层打开时让位（各滚各的）；inline 模式不接管——历史在终端原生 scrollback 里，翻页归终端 |
 | `Shift+Up` | 进入消息选择模式；方向键移动，`Enter` 展开单条，`Esc` 退出 |
 
 动作型快捷键（粘贴、历史搜索、外部编辑器、`Ctrl+O/T/P/R/L`、子代理面板、显示全部、待办折叠）支持在 `/settings` → `dsh-tui` → `Shortcuts` 中自定义：填写 `alt+v` 这类组合，多个用逗号分隔，留空恢复默认，保存即生效；与固定编辑键或其它动作冲突的组合会被拒绝。cordis.yml 亦可用 `shortcuts.<action>` 静态指定。
@@ -223,8 +224,7 @@ Sixel 的 256 色量化依然存在，100% 指空间像素比例，不代表无�
 列表只读取会话日志两端的定界窗口，并按持久层自己的变更令牌缓存结果，因此打开
 速度与历史长度、单个会话大小都无关。
 
-Windows `dsh-tui.cmd --resume` 使用 `~/.dsh-tui/resume.txt` 中最后选择的会话 ID
-（该文件同时双写到旧路径 `~/.dsh-cc/resume.txt`，供只读旧路径的旧版启动器过渡）。
+Windows `dsh-tui.cmd --resume` 使用 `~/.dsh-tui/resume.txt` 中最后选择的会话 ID。
 
 ### 会话总览（Agent View）
 
@@ -458,11 +458,13 @@ dsh-TUI 不预装通用技能；技能内容与发现规则由 DSH 及当前组�
 
 补充语法：
 
-- `/activity` 打开动画选择器；`/activity frames <name>` 直接设置（帧名
-  30 个：`random` 随机 + `claude` `star2` `sand` `triangle` `box` `box2`
-  `corners` `point` `layer` `flip` `aesthetic` `hamburger` `moon` `moon8`
-  `comet` `breathe` `dots` `arrow` `spark` `bar` `braille` `arc` `circle`
-  `grow` `noise` `bounce` `rainbow` `dqpb` `toggle`，默认 `moon8`）；
+- `/activity` 打开动画选择器；`/activity frames <name>` 直接设置（当前可选
+  `random`、`star2`、`sand`、`triangle`、`box`、`box2`、`corners`、`point`、
+  `layer`、`flip`、`aesthetic`、`hamburger`、`moon`、`moon8`、`whale-spout`、
+  `whale-spin`、`whale-bubbles`、`clock`、`traffic_lights`、`comet`、`breathe`、
+  `dots`、`arrow`、`spark`、`bar`、`braille`、`arc`、`circle`、`grow`、`noise`、
+  `bounce`、`rainbow`、`bar2`、`dqpb`、`toggle`，默认 `moon8`）。旧本地配置值
+  `claude` 读取时映射为 `moon8`，选择器不显示该旧预设；
   `/activity status` 查看当前选择。
 - `/preset <id>` 与 `/preset status` 见配置文档。
 - `/effort` 打开推理强度滑杆（←/→ 实时调整）；`/effort <id>` 直接设定，

@@ -2,6 +2,8 @@
  * Uses xterm's parser plus a pixel plane for Sixel/ECH/ED. This checks emitted
  * positions and residue, not native Windows Terminal rendering performance.
  */
+// First import on purpose: production React, see verify-terminal-images-sixel.tsx.
+import '../lib/types/force-production-react.js'
 import assert from 'node:assert/strict'
 import { PassThrough, Writable } from 'node:stream'
 import { setTimeout as delay } from 'node:timers/promises'
@@ -23,7 +25,7 @@ const { Terminal } = xterm
 const sharp = await loadSharp()
 if (!sharp) { console.log('SKIP Sixel transcript: optional sharp unavailable'); process.exit(0) }
 const oldEnv = { ...process.env }
-for (const key of ['TMUX', 'STY', 'CLAUDE_CODE_ACCESSIBILITY', 'DSH_TUI_DISABLE_TERMINAL_IMAGES', 'DSH_TUI_IMAGE_PROTOCOL']) delete process.env[key]
+for (const key of ['TMUX', 'STY', 'DSH_TUI_ACCESSIBILITY', 'DSH_TUI_DISABLE_TERMINAL_IMAGES', 'DSH_TUI_IMAGE_PROTOCOL']) delete process.env[key]
 
 async function until(check: () => boolean, message: string): Promise<void> {
   const deadline = Date.now() + 15_000

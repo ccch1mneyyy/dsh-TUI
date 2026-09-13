@@ -27,7 +27,7 @@ import {
 } from './digest.js'
 import { fileFacts } from './frames.js'
 import { classify, readHeader, type RawSessionHeader } from './header.js'
-import { findSessionLogFile } from '../compat/sessionLog.js'
+import { findSessionLogFile, resolveLocatedPath } from '../compat/sessionLog.js'
 import { readIndex, writeIndex, type DerivedEntry, type SessionIndex } from './store.js'
 import type { SessionSummary } from './types.js'
 import { readLastUsed } from '../../sessionHistory.js'
@@ -77,8 +77,13 @@ function readSnapshot(value: unknown): Listed | undefined {
  * service predates it — in which case the change token is derived from the
  * file's own size and mtime further down. Both are honest change tokens for an
  * append-only log; only the authority differs.
+ *
+ * `list()` itself is read dual-shape: 0.1.5 folded snapshots INTO it (each
+ * element is `{ header, revision, sizeBytes }`), while every older backend
+ * returns bare headers — so each element is tried as a snapshot first and
+ * then as a bare header.
  */
-async function enumerate(source: SessionSource, signal?: AbortSignal): Promise<Listed[]> {
+export async function enumerateSessions(source: SessionSource, signal?: AbortSignal): Promise<Listed[]> {
   if (typeof source.listSnapshots === 'function') {
     const snapshots = await source.listSnapshots(signal)
     return snapshots.map(readSnapshot).filter((entry): entry is Listed => entry !== undefined)
@@ -86,23 +91,30 @@ async function enumerate(source: SessionSource, signal?: AbortSignal): Promise<L
   if (typeof source.list === 'function') {
     const headers = await source.list(signal)
     return headers
-      .map((raw): Listed | undefined => {
-        const header = readHeader(raw)
-        return header === undefined ? undefined : { header, raw, revision: undefined }
-      })
+      .map((raw): Listed | undefined => readSnapshot(raw) ?? bareListed(raw))
       .filter((entry): entry is Listed => entry !== undefined)
   }
   return []
 }
 
+/** Pull a bare header out of one pre-0.1.5 `list()` element. */
+function bareListed(raw: unknown): Listed | undefined {
+  const header = readHeader(raw)
+  return header === undefined ? undefined : { header, raw, revision: undefined }
+}
+
 /**
  * Absolute artifact path for one session.
  *
- * The backend's own `locate()` is authoritative and is asked first. The
- * fallback scans the session roots for the id, which is what the compat layer
- * has always done and is deliberately independent of the backend's
- * workspace-key scheme — so a runtime whose persistence service predates
- * `locate`, or whose key sanitization changes, still resolves.
+ * The backend's own `locate()` is authoritative and is asked first — but
+ * since 0.1.5 it answers the CURRENT generation's path without touching the
+ * filesystem, which does not exist for a session still stored as an older
+ * generation; resolve older generations inside that same directory. Only
+ * backends without a location fall back to scanning session roots, as the
+ * compat layer has always done (generation-aware there) and is deliberately
+ * independent of the backend's workspace-key scheme — so a runtime whose
+ * persistence service predates `locate`, whose key sanitization changes, or
+ * whose current-generation path has not materialized yet still resolves.
  *
  * A backend that stores no per-session artifact (SQLite) answers neither, and
  * its sessions are summarized from their headers alone.
@@ -117,7 +129,7 @@ function locate(source: SessionSource, raw: unknown, sessionId: string): string 
     }
     if (location !== null && typeof location === 'object') {
       const path = (location as Record<string, unknown>)['path']
-      if (typeof path === 'string' && path.length > 0) return path
+      if (typeof path === 'string' && path.length > 0) return resolveLocatedPath(path)?.path
     }
   }
   return findSessionLogFile(sessionId)
@@ -138,7 +150,7 @@ export async function listSummaries(
 ): Promise<readonly SessionSummary[]> {
   let listed: Listed[]
   try {
-    listed = await enumerate(source, signal)
+    listed = await enumerateSessions(source, signal)
   } catch {
     return []
   }
@@ -370,7 +382,7 @@ export async function locateSession(
 ): Promise<string | undefined> {
   let listed: Listed[]
   try {
-    listed = await enumerate(source, signal)
+    listed = await enumerateSessions(source, signal)
   } catch {
     return undefined
   }

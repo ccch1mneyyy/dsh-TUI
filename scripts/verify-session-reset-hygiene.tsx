@@ -7,10 +7,13 @@
  *   3. /clear 只清行 map——同会话在途子代理的下一个事件重建卡片，仪表盘继续跟踪；
  *   4. staged image token 是会话作用域——switchModel 的同步订阅窗口也不能把旧图送入新 agent；
  *   5. resumeTo 的竞争切换守卫——await 期间被 /new 抢先提交时，恢复放弃且不动新会话；
- *   6. `@` 展开期间切换会话——旧输入不得投递到旧/新任一 agent；
- *   7. staged image 按 token 文本顺序附图，重复 token 只附一次；
- *   8. 图片 capability 防 ABA——新会话重用 `[Image #1]` 时，旧裸文本不绑定新图；
- *   9. recap 预算从新到旧收容——超长旧消息不再饿死最新交互（collectRecentActivity 单元断言）。
+ *   6. /new 的 deferred attachment 阶段被 owner teardown 抢先——立即回收 prepared handle，
+ *      且 /new 不得完成为成功切换；
+ *   7. /new post-commit 订阅注册抛错必须 fail-close——错误照常传播并拆掉新 live handle；
+ *   8. `@` 展开期间切换会话——旧输入不得投递到旧/新任一 agent；
+ *   9. staged image 按 token 文本顺序附图，重复 token 只附一次；
+ *  10. 图片 capability 防 ABA——新会话重用 `[Image #1]` 时，旧裸文本不绑定新图；
+ *  11. recap 预算从新到旧收容——超长旧消息不再饿死最新交互（collectRecentActivity 单元断言）。
  *
  * 运行：node --import tsx/esm scripts/verify-session-reset-hygiene.tsx
  */
@@ -66,7 +69,7 @@ function makeAgent(id: string, sessionId: string): FakeAgent {
     whenIdle: () => Promise.resolve(),
   } as FakeAgent
 }
-const makeHandle = (agent: FakeAgent) => ({ agent, dispose: () => Promise.resolve() })
+const makeHandle = (agent: FakeAgent, onDispose?: () => void) => ({ agent, dispose: () => { onDispose?.(); return Promise.resolve() } })
 
 const subagentRows = (channel: { rows: Array<{ kind: string }> }) => channel.rows.filter(row => row.kind === 'subagent')
 
@@ -217,7 +220,7 @@ const subagentRows = (channel: { rows: Array<{ kind: string }> }) => channel.row
   })
 
   const pending = channel.resumeTo('sess-target')
-  await sleep(30) // resume 体停在 agents.resume
+  await sleep(30) // 固定窗:pacing 等 resume 体停在 agents.resume 的 await，无可观测锚点
   check('5a. /new 在 resume 的 await 窗口内抢先提交', (await channel.newSession()) === true)
   check('5b. 此刻活跃会话是 /new 的', (channel as unknown as { agentId: string }).agentId === 'agent-e3')
   resolveResume(makeHandle(resumed))
@@ -226,7 +229,52 @@ const subagentRows = (channel: { rows: Array<{ kind: string }> }) => channel.row
   check('5d. 新会话未被踩踏（agentId 不变）', (channel as unknown as { agentId: string }).agentId === 'agent-e3')
 }
 
-// ── 场景 6：`@` 展开期间 /new 不得把旧输入投递到任何 agent ───────────────
+// ── 场景 6：真实 createChannel 的 deferred attachment/owner teardown ──
+{
+  const ctx = new Context()
+  const provide = (ctx as unknown as { provide(name: string, value: unknown): void }).provide.bind(ctx)
+  const initial = makeAgent('agent-f', 'sess-f')
+  const created = makeAgent('agent-f2', 'sess-f2')
+  let disposed = 0
+  let unblockAttachment!: () => void
+  provide('agents', { create: () => Promise.resolve(makeHandle(created, () => { disposed += 1 })) })
+  provide('workspaceRegistry', {
+    resolveByPath: async () => ({ attachSession: () => new Promise<void>(resolve => { unblockAttachment = resolve }) }),
+  })
+  const channel = createChannel(ctx as never, initial as never, {
+    model: 'm0', cwd: '/tmp/demo', provider: 'p0', activity: false,
+  })
+  const pending = channel.newSession()
+  await sleep(30) // 固定窗:pacing 等 /new 停在 resolveByPath 的 await，无可观测锚点
+  channel.releaseContributions()
+  await sleep(0) // 固定窗:pacing 让 teardown 的同步回收跑完（微任务，无可观测锚点）
+  check('6a. /new attachment 阻塞时 owner teardown 立即回收 prepared handle', disposed === 1, String(disposed))
+  unblockAttachment()
+  check('6b. teardown 后 /new 不会完成为成功切换', (await pending) === false)
+}
+
+// ── 场景 7：真实 createChannel 的 post-commit setup throw fail-closes ───
+{
+  const ctx = new Context()
+  const provide = (ctx as unknown as { provide(name: string, value: unknown): void }).provide.bind(ctx)
+  const initial = makeAgent('agent-g', 'sess-g')
+  const created = makeAgent('agent-g2', 'sess-g2')
+  // The agent-side setup begins before channel event listeners; make that
+  // registration fail and assert the enclosing synchronous adoption revokes.
+  created.ctx = { on: () => { throw new Error('new-agent subscription boom') } }
+  let disposed = 0
+  provide('agents', { create: () => Promise.resolve(makeHandle(created, () => { disposed += 1 })) })
+  const channel = createChannel(ctx as never, initial as never, {
+    model: 'm0', cwd: '/tmp/demo', provider: 'p0', activity: false,
+  })
+  let rejected = false
+  try { await channel.newSession() } catch (error) { rejected = error instanceof Error && /subscription boom/u.test(error.message) }
+  await sleep(0) // 固定窗:pacing 让 post-commit 回滚的微任务跑完，无可观测锚点
+  check('7a. /new post-commit subscription throw propagates', rejected)
+  check('7b. /new post-commit subscription throw tears down new live handle', disposed === 1, String(disposed))
+}
+
+// ── 场景 8：`@` 展开期间 /new 不得把旧输入投递到任何 agent ───────────────
 {
   const ctx = new Context()
   const provide = (ctx as unknown as { provide(name: string, value: unknown): void }).provide.bind(ctx)
@@ -254,20 +302,20 @@ const subagentRows = (channel: { rows: Array<{ kind: string }> }) => channel.row
   })
 
   channel.submit('inspect @slow.txt')
-  check('6a. 旧输入已停在 @ 文件读取', await settled(() => readStarted))
-  check('6b. @ 展开未完成时 /new 成功', (await channel.newSession()) === true)
+  check('8a. 旧输入已停在 @ 文件读取', await settled(() => readStarted))
+  check('8b. @ 展开未完成时 /new 成功', (await channel.newSession()) === true)
   channel.submit('fresh session input')
-  check('6c. 新会话输入不被旧会话的慢读取阻塞',
+  check('8c. 新会话输入不被旧会话的慢读取阻塞',
     await settled(() => newInbox.length === 1), `sent=${newInbox.length}`)
   resolveRead('old session file contents')
   // Cross one event-loop turn after releasing the exact barrier: all promise
   // continuations from expand → deliver have either sent or stale-dropped.
   await new Promise<void>(resolve => setImmediate(resolve))
-  check('6d. 旧输入没有回投旧 agent', oldInbox.length === 0, `sent=${oldInbox.length}`)
-  check('6e. 旧输入没有错投新 agent', newInbox.length === 1, `sent=${newInbox.length}`)
+  check('8d. 旧输入没有回投旧 agent', oldInbox.length === 0, `sent=${oldInbox.length}`)
+  check('8e. 旧输入没有错投新 agent', newInbox.length === 1, `sent=${newInbox.length}`)
 }
 
-// ── 场景 7：staged image 按占位符文本顺序附图，重复引用去重 ─────────────
+// ── 场景 9：staged image 按占位符文本顺序附图，重复引用去重 ─────────────
 {
   const ctx = new Context()
   const provide = (ctx as unknown as { provide(name: string, value: unknown): void }).provide.bind(ctx)
@@ -305,16 +353,16 @@ const subagentRows = (channel: { rows: Array<{ kind: string }> }) => channel.row
     { token: firstToken, stageId: first.stageId },
     { token: secondToken, stageId: second.stageId },
   ])
-  check('7a. staged image 消息已投递', await settled(() => sent.length === 1))
+  check('9a. staged image 消息已投递', await settled(() => sent.length === 1))
   const images = (sent[0] as Array<{ type: string; attachment?: { ref?: string } }>)
     .filter(block => block.type === 'image')
-  check('7b. staged image 按 token 文本出现顺序附加',
+  check('9b. staged image 按 token 文本出现顺序附加',
     images.map(block => block.attachment?.ref).join(',') === 'img-2,img-1',
     images.map(block => block.attachment?.ref).join(','))
-  check('7c. 重复 token 只附同一张图一次', images.length === 2, `count=${images.length}`)
+  check('9c. 重复 token 只附同一张图一次', images.length === 2, `count=${images.length}`)
 }
 
-// ── 场景 8：图片 capability 防止跨会话 token ABA ───────────────────────
+// ── 场景 10：图片 capability 防止跨会话 token ABA ───────────────────────
 {
   const ctx = new Context()
   const provide = (ctx as unknown as { provide(name: string, value: unknown): void }).provide.bind(ctx)
@@ -344,7 +392,7 @@ const subagentRows = (channel: { rows: Array<{ kind: string }> }) => channel.row
     { data: new Uint8Array([1]), mediaType: 'image/png' },
     channel.stagedImageGeneration(),
   )
-  check('8a. /new 清除旧会话 capability', (await channel.newSession()) === true)
+  check('10a. /new 清除旧会话 capability', (await channel.newSession()) === true)
   const fresh = await channel.stageComposerImage(
     { data: new Uint8Array([2]), mediaType: 'image/png' },
     channel.stagedImageGeneration(),
@@ -354,19 +402,19 @@ const subagentRows = (channel: { rows: Array<{ kind: string }> }) => channel.row
   // 模拟历史/rewind 只恢复可见文本：没有 capability，绝不能因新草稿
   // 恰好也编号 #1 而错绑到新会话图片。
   channel.submit(`restored ${reusedToken}`)
-  check('8b. 裸历史 token 已作为纯文本投递', await settled(() => sent.length === 1))
+  check('10b. 裸历史 token 已作为纯文本投递', await settled(() => sent.length === 1))
   const bareImages = (sent[0] as Array<{ type: string }>).filter(block => block.type === 'image')
-  check('8c. 裸历史 token 不绑定新会话同号图片', bareImages.length === 0, `count=${bareImages.length}`)
+  check('10c. 裸历史 token 不绑定新会话同号图片', bareImages.length === 0, `count=${bareImages.length}`)
 
   channel.submit(`live ${reusedToken}`, [{ token: reusedToken, stageId: fresh.stageId }])
-  check('8d. 显式 capability 的当前草稿已投递', await settled(() => sent.length === 2))
+  check('10d. 显式 capability 的当前草稿已投递', await settled(() => sent.length === 2))
   const liveRefs = (sent[1] as Array<{ type: string; attachment?: { ref?: string } }>)
     .filter(block => block.type === 'image')
     .map(block => block.attachment?.ref)
-  check('8e. 显式 capability 正确绑定当前图片', liveRefs.join(',') === 'img-2', liveRefs.join(','))
+  check('10e. 显式 capability 正确绑定当前图片', liveRefs.join(',') === 'img-2', liveRefs.join(','))
 }
 
-// ── 场景 9：recap 预算从新到旧收容（N1 单元断言） ────────────────────────
+// ── 场景 11：recap 预算从新到旧收容（N1 单元断言） ───────────────────────
 {
   const message = (role: 'user' | 'assistant', text: string) => ({
     type: role === 'user' ? 'user/message' : 'assistant/message',
@@ -378,16 +426,16 @@ const subagentRows = (channel: { rows: Array<{ kind: string }> }) => channel.row
   })
   const events = [1, 2, 3, 4, 5, 6].map(n => message(n % 2 === 0 ? 'assistant' : 'user', `msg${n}-`.repeat(1500)))
   const payload = collectRecentActivity(events as never, 6000)
-  check('9a. 最新交互进入 payload', payload.includes('msg6-'), `len=${payload.length}`)
-  check('9b. 吞预算的旧消息不再独占 payload', !payload.includes('msg1-'), payload.slice(0, 40))
+  check('11a. 最新交互进入 payload', payload.includes('msg6-'), `len=${payload.length}`)
+  check('11b. 吞预算的旧消息不再独占 payload', !payload.includes('msg1-'), payload.slice(0, 40))
   const mixed = [
     message('user', 'old-short'),
     message('assistant', 'x'.repeat(5800)),
     message('user', 'newest-question'),
   ]
   const mixedPayload = collectRecentActivity(mixed as never, 6000)
-  check('9c. 混合预算下最新短消息完整保留', mixedPayload.includes('newest-question'))
-  check('9d. 输出保持时间顺序（旧→新）', mixedPayload.indexOf('x'.repeat(20)) < mixedPayload.indexOf('newest-question'))
+  check('11c. 混合预算下最新短消息完整保留', mixedPayload.includes('newest-question'))
+  check('11d. 输出保持时间顺序（旧→新）', mixedPayload.indexOf('x'.repeat(20)) < mixedPayload.indexOf('newest-question'))
 }
 
 console.log(failed === 0 ? '\nALL PASS' : `\n${failed} 项失败`)

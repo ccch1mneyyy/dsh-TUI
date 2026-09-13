@@ -1,14 +1,33 @@
 import { useRef } from 'react'
 
+const QUIET_PERIOD_MS = 3000
+const COLOR_RAMP_MS = 2000
+const SMOOTHING_MS = 180
+
+export type StallState = {
+  isStalled: boolean
+  intensity: number
+}
+
+function clamp(value: number): number {
+  return Math.min(1, Math.max(0, value))
+}
+
+/** Derive the target stall state from elapsed output time and tool activity. */
+export function getStallState(timeSinceOutput: number, hasActiveTools = false): StallState {
+  if (hasActiveTools) return { isStalled: false, intensity: 0 }
+  const quietFor = Math.max(0, timeSinceOutput)
+  const isStalled = quietFor > QUIET_PERIOD_MS
+  const intensity = isStalled
+    ? clamp((quietFor - QUIET_PERIOD_MS) / COLOR_RAMP_MS)
+    : 0
+  return { isStalled, intensity }
+}
+
 /**
- * Tracks the transition to red when tokens stop flowing (mirroring Claude Code's `Spinner/useStalledAnimation.ts`). Driven by the parent's animation
- * clock time instead of independent intervals, so it slows down when the
- * terminal is blurred.
- * @param time - Parent animation clock time in ms.
- * @param currentResponseLength - Chars streamed this turn; growth resets the stall timer.
- * @param hasActiveTools - True while tools are running; tool activity never stalls.
- * @param reducedMotion - True to apply intensity changes instantly instead of smoothing.
- * @returns Whether the response is stalled, plus the 0–1 stalled intensity.
+ * Track output silence from the parent's animation clock. The target color
+ * changes linearly over the ramp, while the displayed value eases toward it
+ * with a time-based response that remains stable if a frame is delayed.
  */
 export function useStalledAnimation(
   time: number,
@@ -19,64 +38,34 @@ export function useStalledAnimation(
   isStalled: boolean
   stalledIntensity: number
 } {
-  const lastTokenTime = useRef(time)
+  const lastOutputTime = useRef(time)
   const lastResponseLength = useRef(currentResponseLength)
-  const mountTime = useRef(time)
-  const stalledIntensityRef = useRef(0)
-  const lastSmoothTime = useRef(time)
+  const mountedAt = useRef(time)
+  const displayedIntensity = useRef(0)
+  const previousTime = useRef(time)
 
-  // Reset timer when new tokens arrive (check actual length change)
   if (currentResponseLength > lastResponseLength.current) {
-    lastTokenTime.current = time
     lastResponseLength.current = currentResponseLength
-    stalledIntensityRef.current = 0
-    lastSmoothTime.current = time
+    lastOutputTime.current = time
   }
 
-  // Derive time since last token from animation clock
-  let timeSinceLastToken: number
-  if (hasActiveTools) {
-    timeSinceLastToken = 0
-    lastTokenTime.current = time
-  } else if (currentResponseLength > 0) {
-    timeSinceLastToken = time - lastTokenTime.current
+  const timeSinceOutput = currentResponseLength > 0
+    ? time - lastOutputTime.current
+    : time - mountedAt.current
+  const state = getStallState(timeSinceOutput, hasActiveTools)
+  const delta = Math.max(0, time - previousTime.current)
+  previousTime.current = time
+
+  if (reducedMotion || delta === 0) {
+    displayedIntensity.current = state.intensity
   } else {
-    timeSinceLastToken = time - mountTime.current
+    const response = 1 - Math.exp(-delta / SMOOTHING_MS)
+    displayedIntensity.current +=
+      (state.intensity - displayedIntensity.current) * response
   }
 
-  // Calculate stalled intensity based on time since last token
-  // Start showing red after 3 seconds of no new tokens (only when no tools are active)
-  const isStalled = timeSinceLastToken > 3000 && !hasActiveTools
-  const intensity = isStalled
-    ? Math.min((timeSinceLastToken - 3000) / 2000, 1) // Fade over 2 seconds
-    : 0
-
-  // Smooth intensity transition driven by animation frame ticks
-  if (!reducedMotion && (intensity > 0 || stalledIntensityRef.current > 0)) {
-    const dt = time - lastSmoothTime.current
-    if (dt >= 50) {
-      const steps = Math.floor(dt / 50)
-      let current = stalledIntensityRef.current
-      for (let i = 0; i < steps; i++) {
-        const diff = intensity - current
-        if (Math.abs(diff) < 0.01) {
-          current = intensity
-          break
-        }
-        current += diff * 0.1
-      }
-      stalledIntensityRef.current = current
-      lastSmoothTime.current = time
-    }
-  } else {
-    stalledIntensityRef.current = intensity
-    lastSmoothTime.current = time
+  return {
+    isStalled: state.isStalled,
+    stalledIntensity: displayedIntensity.current,
   }
-
-  // When reducedMotion is enabled, use instant intensity change
-  const effectiveIntensity = reducedMotion
-    ? intensity
-    : stalledIntensityRef.current
-
-  return { isStalled, stalledIntensity: effectiveIntensity }
 }

@@ -17,7 +17,7 @@ process.env.FORCE_COLOR = '3'
 process.env.DSH_TUI_THEME = 'dark'
 process.env.DSH_TUI_LANG = 'zh'
 
-const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render, AlternateScreen }, { Chat }, { QuestionStore }, { LOCAL_COMMANDS }] = await Promise.all([
+const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render, AlternateScreen }, { Chat }, { QuestionStore }, { LOCAL_COMMANDS }, { settled }] = await Promise.all([
   import('node:stream'),
   import('react'),
   import('@xterm/headless'),
@@ -25,6 +25,7 @@ const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render, Alternat
   import('../src/screens/Chat.js'),
   import('../src/dsh-adapter/questions.js'),
   import('../src/commands.js'),
+  import('./lib/term-test.mjs'),
 ])
 
 const COLS = 100, ROWS = 40
@@ -76,7 +77,7 @@ const channel: any = {
   commandList: LOCAL_COMMANDS,
   notifications: [],
   mode: { plan: false, sandbox: undefined },
-  activityFrames: 'claude',
+  activityFrames: 'moon8',
   agentPreset: undefined,
   thinkingFold: 'preview',
   subscribe(cb: () => void) { listeners.add(cb); return () => listeners.delete(cb) },
@@ -99,7 +100,7 @@ const inst = await render(
   </AlternateScreen>,
   { stdout: stdout as any, stdin: stdin as any, stderr: stderr as any, exitOnCtrlC: false, patchConsole: false },
 )
-await sleep(600)
+await sleep(600) // 固定窗:pacing 等首帧上屏，无单一可轮询锚点
 
 const lines = () => {
   const buf = term.buffer.active
@@ -108,15 +109,8 @@ const lines = () => {
 const bodyLines = (ls: string[]) => ls.filter(l => l.includes('推理第')).length
 const headerRow = (ls: string[]) => ls.findIndex(l => l.includes('Thinking') || l.includes('思考'))
 // 点击后的重绘在高负载（CI、并行回归）下可能晚于任何固定等待：按结果轮询，
-// 超时才判失败。
-const waitFor = async (pred: () => boolean, ms = 3000): Promise<boolean> => {
-  const deadline = Date.now() + ms
-  while (Date.now() < deadline) {
-    if (pred()) return true
-    await sleep(25)
-  }
-  return pred()
-}
+// 超时才判失败（term-test 的 settled 就是这条语义）。
+const waitFor = (pred: () => boolean, ms = 3000): Promise<boolean> => settled(pred, { timeoutMs: ms })
 
 await waitFor(() => headerRow(lines()) >= 0 && bodyLines(lines()) === 3)
 let ls = lines()
@@ -132,7 +126,7 @@ await waitFor(() => bodyLines(lines()) >= 10)
 ls = lines()
 check('点击后展开完整正文', bodyLines(ls) >= 10, `body=${bodyLines(ls)}`)
 
-// 再点同一行 → 收回三行预览。先等过 500ms 多击窗：同格快连两次会被判
+// 固定窗:墙钟 再点同一行 → 收回三行预览。先等过 500ms 多击窗：同格快连两次会被判
 // 双击选词，这是既有语义——快速连点归选区，不归折叠。
 await sleep(600)
 const headerIdx2 = headerRow(ls)
@@ -151,7 +145,7 @@ await waitFor(() => bodyLines(lines()) >= 10)
 ls = lines()
 check('full 设置默认展开全文', bodyLines(ls) >= 10, `body=${bodyLines(ls)}`)
 
-await sleep(600)
+await sleep(600) // 固定窗:墙钟 同上，等过 500ms 多击判定窗再点第二次
 const fullHeaderIdx = headerRow(ls)
 stdin.write(`\x1b[<0;6;${fullHeaderIdx + 1}M`)
 stdin.write(`\x1b[<0;6;${fullHeaderIdx + 1}m`)

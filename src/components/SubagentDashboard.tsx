@@ -78,14 +78,14 @@ export function SubagentDashboard({
 
   return (
     <Box flexDirection="column" paddingX={2} paddingY={1}>
-      <Divider 
-        color="claude" 
-        title={t('subagent-dashboard-title')} 
+      <Divider
+        color="accent"
+        title={t('subagent-dashboard-title')}
       />
-      
+
       <Box flexDirection="row" gap={3} marginTop={1} marginBottom={1}>
         <Text>
-          <Text color="claude">{running}</Text>
+          <Text color="accent">{running}</Text>
           <Text dimColor> {t('subagent-count-running')}</Text>
         </Text>
         <Text>

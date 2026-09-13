@@ -16,6 +16,8 @@ const {
   UPSTREAM_BLESSED_PACKAGES,
   UPSTREAM_FRAMEWORK_MAJORS,
   UPSTREAM_VALIDATED_LABEL,
+  UPSTREAM_VALIDATED_VERSION,
+  UPSTREAM_VALIDATED_VERSIONS,
 } = await import('../src/dsh-adapter/contract.js')
 
 const alpha = parseUpstreamVersion('0.1.2-alpha.5')!
@@ -27,7 +29,15 @@ assert.deepEqual(parseUpstreamVersion('0.1.2-alpha.3'), [0, 1, 2, 'alpha', 3])
 assert.ok(compareVersions(alpha, beta) < 0 && compareVersions(beta, rc) < 0)
 assert.ok(compareVersions(rc, parseUpstreamVersion('0.1.1-rc.2')!) > 0)
 assert.equal(parseUpstreamVersion('0.1.2'), undefined)
-assert.match(UPSTREAM_VALIDATED_LABEL, /^0\.1\.2-rc\.1/u)
+assert.match(UPSTREAM_VALIDATED_LABEL, /^0\.1\.5-rc\.1/u)
+// The primary line must itself be a validated line. Without this, dropping
+// the primary from UPSTREAM_VALIDATED_VERSIONS still passes the prefix match
+// and upstreamDrift() (which inspects the INSTALLED versions, not the
+// declaration), so the contract could declare a primary nobody validates.
+assert.ok(
+  UPSTREAM_VALIDATED_VERSIONS.includes(UPSTREAM_VALIDATED_VERSION),
+  `UPSTREAM_VALIDATED_VERSION ${UPSTREAM_VALIDATED_VERSION} must be listed in UPSTREAM_VALIDATED_VERSIONS`,
+)
 
 const mixedVersions = Object.fromEntries(UPSTREAM_BLESSED_PACKAGES.map(packageName => [
   packageName,

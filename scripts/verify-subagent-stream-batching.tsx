@@ -29,10 +29,12 @@ process.env.HOME = isolatedHome
 process.env.USERPROFILE = isolatedHome
 mkdirSync(joinPath(isolatedHome, '.dsh-tui'), { recursive: true })
 
-const [{ Context }, { createChannel }, { SubagentActivityStore }, { settled, sleep }] = await Promise.all([
+const [{ Context }, { createChannel }, { SubagentActivityStore }, { mountChannelUi }, { registerTuiChannel }, { settled, sleep }] = await Promise.all([
   import('@deepseek-ai/cordis'),
   import('../src/dsh-adapter/channel.js'),
   import('../src/dsh-adapter/subagents.js'),
+  import('../src/dsh-adapter/channel-ui.js'),
+  import('../src/adapter/channel/host-registry.js'),
   import('./lib/term-test.mjs'),
 ])
 
@@ -75,6 +77,8 @@ const parent = {
 const channel = createChannel(ctx as never, parent, {
   model: 'model-00', cwd: '/tmp/demo', provider: 'fake-provider', activity: false,
 })
+const unregister = registerTuiChannel(ctx, channel)
+const mount = mountChannelUi(ctx, channel, undefined, 'new')
 const emitSessionEvent = (event: unknown) =>
   (ctx as unknown as { emit(event: string, ...args: unknown[]): void }).emit('session/event', childSession, event)
 
@@ -98,7 +102,7 @@ for (let i = 0; i < BURST; i++) {
 // 同 tick 发完：此时投影应远少于 chunk 数（仅 start 路径与 store 内部，
 // channel 层的投影最多 0 次——全部延迟到 16ms flush）
 const syncProjections = snapshotCalls
-// 固定窗口保留：下方「flush 后投影次数受帧数约束」是不得超额的稳定性探针，
+// 固定窗:探针 下方「flush 后投影次数受帧数约束」是不得超额的稳定性断言，
 // settle 会在首次 flush（内容齐了）就返回，错过窗口后段的多余投影。
 await sleep(120) // 等 16ms flush 落定
 const subRow = channel.rows.find(r => r.kind === 'subagent')
@@ -106,6 +110,21 @@ const projected = (subRow?.subagent?.outputLines ?? []).join('')
 check('chunk 风暴同步投影被延迟（远少于 chunk 数）', syncProjections <= 2, `syncProjections=${syncProjections}/${BURST}`)
 check('chunk 内容完整投影（不丢字）', projected === expected, `len=${projected.length}/${expected.length}`)
 check('flush 后投影次数受帧数约束', snapshotCalls - syncProjections <= 3, `flushProjections=${snapshotCalls - syncProjections}`)
+
+// ── 1b. A production reader can cache before the deferred flush, then sees
+// the completed projection at the frame wakeup (not the stale cached copy). ──
+const deferredText = 'read-before-flush'
+emitSessionEvent(chunk(deferredText))
+const beforeFlush = mount.channel.rows.find(row => row.kind === 'subagent')?.subagent?.outputLines.join('')
+let subscriberOutput = ''
+const stopRead = mount.channel.subscribe(() => {
+  subscriberOutput = mount.channel.rows.find(row => row.kind === 'subagent')?.subagent?.outputLines.join('') ?? ''
+})
+await sleep(40) // 固定窗:墙钟 等帧对齐 flush 落定（16ms 窗口本身是被测语义）
+const afterFlush = mount.channel.rows.find(row => row.kind === 'subagent')?.subagent?.outputLines.join('')
+check('deferred read-before-flush receives a fresh production snapshot', beforeFlush !== `${expected}${deferredText}` && afterFlush === `${expected}${deferredText}` && subscriberOutput === `${expected}${deferredText}`)
+stopRead()
+expected += deferredText
 
 // ── 2. 非 chunk 事件立即投影 ──
 snapshotCalls = 0
@@ -123,11 +142,14 @@ const endedRow = channel.rows.find(r => r.kind === 'subagent')
 check('subagent/end 状态同步可见（completed）', endedRow?.subagent?.status === 'completed', 'status=' + String(endedRow?.subagent?.status))
 check('end 前最后一帧 chunk 已含在投影中', (endedRow?.subagent?.outputLines ?? []).join('') === expected, 'len=' + (endedRow?.subagent?.outputLines ?? []).length)
 check('final summary 不被延迟覆盖', endedRow?.subagent?.summary === '最终结论', 'summary=' + String(endedRow?.subagent?.summary))
-// 被取代的延迟 flush 不再重复投影。固定窗口保留：这是「不得发生」的稳定
-// 性探针，对已成立条件轮询会立即返回，等于没测。
+// 被取代的延迟 flush 不再重复投影：这是「不得发生」的断言，对已成立条件
+// 轮询会立即返回，等于没测。
 const afterEnd = snapshotCalls
-await sleep(80)
+await sleep(80) // 固定窗:探针 观察窗内不得出现多余投影
 check('被取代的延迟 flush 无多余投影', snapshotCalls - afterEnd <= 1, `extra=${snapshotCalls - afterEnd}`)
 
+mount.dispose()
+unregister()
+channel.releaseContributions()
 console.log(failed === 0 ? '\nALL PASS' : `\n${failed} 项失败`)
 process.exit(failed === 0 ? 0 : 1)

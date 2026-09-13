@@ -30,7 +30,7 @@ export const FLASH: Rgb = { r: 198, g: 216, b: 248 }
  * Paint `word` with a 10-column highlight window sweeping across it. The
  * window advances one column per `stepMs` and the brightness pulse follows
  * the same cadence (period 2π·stepMs·... — one full sine per ~6 steps).
- * CC's original cadence was 200ms/column; callers pass 60 for the lively
+ * The shimmer cadence is configurable; callers pass 60 for the lively
  * sweep.
  * @param word - Text to paint.
  * @param time - Elapsed time in milliseconds; drives the sweep position and the brightness pulse.

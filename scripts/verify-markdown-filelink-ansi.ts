@@ -15,8 +15,8 @@
 process.env.TERM_PROGRAM = 'kitty'
 
 const { default: chalk } = await import('chalk')
-const { applyMarkdown } = await import('../src/cc/markdown.js')
-const { createHyperlink } = await import('../src/cc/hyperlink.js')
+const { applyMarkdown } = await import('../src/terminal-utils/markdown.js')
+const { createHyperlink } = await import('../src/terminal-utils/hyperlink.js')
 
 let failures = 0
 let checks = 0
