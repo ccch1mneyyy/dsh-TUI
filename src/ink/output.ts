@@ -31,6 +31,7 @@ import {
   type CellRun,
 } from './screen.js'
 import { stringWidth } from './stringWidth.js'
+import { expandTabs } from './tabstops.js'
 import type { DOMElement } from './dom.js'
 import {
   TERMINAL_IMAGE_MAX_CELLS,
@@ -217,6 +218,8 @@ type WriteOperation = {
   x: number
   y: number
   text: string
+  /** Prepared physical lines, reused by unchanged Text nodes across scrolls. */
+  lines?: readonly string[]
   /**
    * Per-line soft-wrap flags, parallel to text.split('\n'). softWrap[i]=true
    * means line i is a continuation of line i-1 (the `\n` before it was
@@ -799,7 +802,7 @@ export default class Output {
         rect.y + rect.height > visible.y
       const occluded = this.operations.slice(end).some(op => {
         if (op.type === 'write') return overlaps({ x: op.x, y: op.y,
-          width: widestLine(op.text), height: op.text.split('\n').length })
+          width: widestLine(op.text), height: op.lines?.length ?? op.text.split('\n').length })
         if (op.type === 'blit') return overlaps(op)
         if (op.type === 'clear' || op.type === 'shade') return overlaps(op.region)
         if (op.type === 'shift') return overlaps({ x: 0, y: op.top, width: this.width, height: op.bottom - op.top + 1 })
@@ -825,8 +828,9 @@ export default class Output {
    * @param y - the top row.
    * @param text - the text to write.
    * @param softWrap - per-line soft-wrap flags parallel to text.split('\n').
+   * @param lines - optional pre-split physical lines, exactly text.split('\n').
    */
-  write(x: number, y: number, text: string, softWrap?: boolean[]): void {
+  write(x: number, y: number, text: string, softWrap?: boolean[], lines?: readonly string[]): void {
     if (!text) {
       return
     }
@@ -837,6 +841,7 @@ export default class Output {
       y,
       text,
       softWrap,
+      lines,
     })
   }
 
@@ -1019,86 +1024,45 @@ export default class Output {
         case 'write': {
           const { text, softWrap } = operation
           let { x, y } = operation
-          let lines = text.split('\n')
-          let swFrom = 0
+          let lines = operation.lines ?? text.split('\n')
           let prevContentEnd = 0
 
           const clip = clips.at(-1)
-
-          if (clip) {
-            const clipHorizontally =
-              typeof clip?.x1 === 'number' && typeof clip?.x2 === 'number'
-
-            const clipVertically =
-              typeof clip?.y1 === 'number' && typeof clip?.y2 === 'number'
-
-            // If text is positioned outside of clipping area altogether,
-            // skip to the next operation to avoid unnecessary calculations
-            if (clipHorizontally) {
-              const width = widestLine(text)
-
-              if (x + width <= clip.x1! || x >= clip.x2!) {
-                continue
-              }
-            }
-
-            if (clipVertically) {
-              const height = lines.length
-
-              if (y + height <= clip.y1! || y >= clip.y2!) {
-                continue
-              }
-            }
-
-            if (clipHorizontally) {
-              lines = lines.map(line => {
-                const from = x < clip.x1! ? clip.x1! - x : 0
-                const width = stringWidth(line)
-                const to = x + width > clip.x2! ? clip.x2! - x : width
-                // Fast path: the line sits entirely inside the clip — no
-                // slice needed. sliceAnsi re-tokenizes the line (the
-                // dominant per-frame cost of long sessions otherwise:
-                // every settled line, every frame).
-                if (from === 0 && to === width) return line
-                let sliced = sliceAnsi(line, from, to)
-                // Wide chars (CJK, emoji) occupy 2 cells. When `to` lands
-                // on the first cell of a wide char, sliceAnsi includes the
-                // entire glyph and the result overflows clip.x2 by one cell,
-                // writing a SpacerTail into the adjacent sibling. Re-slice
-                // one cell earlier; wide chars are exactly 2 cells, so a
-                // single retry always fits.
-                if (stringWidth(sliced) > to - from) {
-                  sliced = sliceAnsi(line, from, to - 1)
-                }
-                return sliced
-              })
-
-              if (x < clip.x1!) {
-                x = clip.x1!
-              }
-            }
-
-            if (clipVertically) {
-              const from = y < clip.y1! ? clip.y1! - y : 0
-              const height = lines.length
-              const to = y + height > clip.y2! ? clip.y2! - y : height
-
-              // If the first visible line is a soft-wrap continuation, we
-              // need the clipped previous line's content end so
-              // screen.softWrap[lineY] correctly records the join point
-              // even though that line's cells were never written.
-              if (softWrap && from > 0 && softWrap[from] === true) {
-                prevContentEnd = x + stringWidth(lines[from - 1]!)
-              }
-
-              lines = lines.slice(from, to)
-              swFrom = from
-
-              if (y < clip.y1!) {
-                y = clip.y1!
-              }
-            }
+          // Clip vertically BEFORE measuring or slicing ANSI lines. A long
+          // tool result/code block may intersect the viewport by one row;
+          // horizontal work over its entire history is still O(transcript).
+          // Screen bounds apply even without an explicit overflow clip.
+          const from = Math.max(0, Math.max(0, clip?.y1 ?? 0) - y)
+          const to = Math.min(lines.length, Math.min(screenHeight, clip?.y2 ?? screenHeight) - y)
+          if (from >= to) continue
+          const swFrom = from
+          const clipHorizontally = typeof clip?.x1 === 'number' && typeof clip?.x2 === 'number'
+          if (clipHorizontally && x >= clip.x2!) continue
+          const clipLine = (line: string): string => {
+            // Width/slicing treat raw tabs as zero cells. Expand at the
+            // ORIGINAL x before clipping, also for the soft-wrap predecessor.
+            line = expandTabs(line, undefined, x)
+            if (!clipHorizontally) return line
+            const start = Math.max(0, clip.x1! - x)
+            const width = stringWidth(line)
+            const end = Math.min(width, clip.x2! - x)
+            if (start >= end) return ''
+            if (start === 0 && end === width) return line
+            let sliced = sliceAnsi(line, start, end)
+            // Do not leave a wide glyph's SpacerTail outside the clip.
+            if (stringWidth(sliced) > end - start) sliced = sliceAnsi(line, start, end - 1)
+            return sliced
           }
+          const writeX = clipHorizontally ? Math.max(x, clip.x1!) : x
+          // Copy joins need only the preceding (horizontally clipped) line,
+          // not every discarded line. Preserve its content-end coordinate.
+          if (softWrap && from > 0 && softWrap[from] === true) {
+            prevContentEnd = writeX + stringWidth(clipLine(lines[from - 1]!))
+          }
+          lines = lines.slice(from, to)
+          if (clipHorizontally) lines = lines.map(clipLine)
+          x = writeX
+          y += from
 
           const swBits = screen.softWrap
           let offsetY = 0

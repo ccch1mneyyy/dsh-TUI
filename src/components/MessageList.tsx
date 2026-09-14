@@ -815,14 +815,10 @@ export function MessageList({
       end = Math.max(end, idx + 1)
     }
   }
-  // The newest failed tool call carries the trajectory footnote
-  // (failureHint). Virtualization must not unmount it: before the window
-  // clamp the row was always mounted, now keep mounting it explicitly while
-  // the hint is live (verify-trace-scene's footnote check).
-  if (failureHintRowId !== undefined && failureHintRowId !== null) {
-    const idx = visibleRows.findIndex(row => row.id === failureHintRowId)
-    if (idx !== -1) start = Math.min(start, idx)
-  }
+  // The failure footnote is row content, not a seek request. Pinning its
+  // row also mounted EVERY later tool card until the trajectory was opened,
+  // defeating virtualization for the rest of a tool-heavy conversation.
+  // It reappears when scrolled into view; only forceMountRowId widens for a seek.
   const topPad = offsets[start] ?? 0
   const mountedBottom = end < visibleRows.length ? offsets[end] : total
   const bottomPad = total - mountedBottom
