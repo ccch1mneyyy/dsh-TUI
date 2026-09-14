@@ -1040,6 +1040,7 @@ const dict = {
   'subagent-status-label': { zh: '状态', en: 'Status' },
   'subagent-status-cancelled': { zh: '已取消', en: 'Cancelled' },
   'subagent-count-running': { zh: '运行中', en: 'running' },
+  'status-subagents-label': { zh: '子代理', en: 'subagents' },
   'subagent-count-completed': { zh: '已完成', en: 'completed' },
   'subagent-count-failed': { zh: '失败', en: 'failed' },
   'subagent-started': { zh: '开始时间', en: 'Started' },

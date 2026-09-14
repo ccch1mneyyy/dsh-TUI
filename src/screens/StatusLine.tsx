@@ -331,22 +331,27 @@ export function StatusLine({
         ),
       }
 
-  // Subagent chip (channel.subagents; /agents, SubagentDashboard): live count
-  // of delegated runs still starting or running, shown only while non-zero —
-  // the same contract as the job chip above, since a silent zero is not
-  // information either. Marker is ▸ rather than ● so the two counters stay
-  // tellable apart at a glance. Hover lists the runs with elapsed times.
-  const liveSubagents = (channel.subagents ?? NO_SUBAGENTS).filter(
+  // Subagent chip (channel.subagents; /agents, SubagentDashboard): subagent runs
+  // are the other thing besides jobs that keeps a turn alive. While any run is
+  // starting/running the chip reports that count and says so; once every run has
+  // settled it stays — with the "running" word dropped — as the session's total
+  // created count, matching how the web UI keeps the roster visible. The roster
+  // keeps settled runs (subagents.ts snapshot()), so the total is the roster
+  // length, not a separate counter.
+  const subagents = channel.subagents ?? NO_SUBAGENTS
+  const liveSubagents = subagents.filter(
     sub => sub.status === 'starting' || sub.status === 'running',
   )
-  const subagentsPart: FieldPart | undefined = liveSubagents.length === 0
+  const subagentsPart: FieldPart | undefined = subagents.length === 0
     ? undefined
     : {
         key: 'subagents',
         id: 'subagents',
         node: (
           <Text color="toolDotTask">
-            {'▸ '}{liveSubagents.length}
+            {'▸ '}{liveSubagents.length > 0 ? liveSubagents.length : subagents.length}{' '}
+            {t('status-subagents-label')}
+            {liveSubagents.length > 0 ? ` ${t('subagent-count-running')}` : ''}
           </Text>
         ),
       }
@@ -725,15 +730,15 @@ function buildHoverDetail(
       )
     }
     case 'subagents': {
-      const live = (channel.subagents ?? NO_SUBAGENTS).filter(
-        sub => sub.status === 'starting' || sub.status === 'running',
-      )
-      if (live.length === 0) return null
+      const roster = channel.subagents ?? NO_SUBAGENTS
+      if (roster.length === 0) return null
+      const live = roster.filter(sub => sub.status === 'starting' || sub.status === 'running')
       const shown = live.slice(0, 3)
       const rest = live.length - shown.length
       return (
         <Text wrap="truncate">
-          {dim('subagents ')}
+          {dim(`${t('status-subagents-label')} `)}{live.length}/{roster.length}
+          {shown.length > 0 ? ' · ' : ''}
           {shown.map(sub => `${sub.agentId} ${sub.description} (${formatDuration(Date.now() - sub.startedAt)})`).join(' · ')}
           {rest > 0 ? ` · +${rest}` : ''}
         </Text>

@@ -343,15 +343,23 @@ const withSubagents = await renderStatus({
     probeSubagent('probe-c', 'completed'),
   ],
 })
-check('compact StatusLine renders a live subagent count chip', () => {
-  assert.ok(withSubagents.includes('▸ 2'), `missing subagent chip in:\n${withSubagents}`)
+check('compact StatusLine reports the live subagent count and says it is running', () => {
+  assert.ok(withSubagents.includes('▸ 2'), `missing live subagent count in:\n${withSubagents}`)
+  assert.ok(
+    withSubagents.includes('▸ 2 子代理 运行中') || withSubagents.includes('▸ 2 subagents running'),
+    `live subagent chip should name the runs as running:\n${withSubagents}`,
+  )
 })
 
 const withSubagentsSettled = await renderStatus({
   subagents: [probeSubagent('probe-c', 'completed')],
 })
-check('subagent chip hides once every run has settled', () => {
-  assert.ok(!/▸ \d/.test(withSubagentsSettled), `unexpected subagent chip in:\n${withSubagentsSettled}`)
+check('subagent chip keeps the created total once every run has settled', () => {
+  assert.ok(withSubagentsSettled.includes('▸ 1'), `missing settled subagent total in:\n${withSubagentsSettled}`)
+  assert.ok(
+    !withSubagentsSettled.includes('▸ 1 子代理 运行中') && !withSubagentsSettled.includes('▸ 1 subagents running'),
+    `settled subagent chip must drop the running word:\n${withSubagentsSettled}`,
+  )
 })
 
 const working = await renderStatus({ working: true })
