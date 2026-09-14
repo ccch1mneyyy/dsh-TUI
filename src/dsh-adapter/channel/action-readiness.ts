@@ -14,6 +14,10 @@ export type ChannelActionDelegates = Pick<ChannelState,
   | 'resumeTo'
   | 'newSession'
   | 'listWorkspaces'
+  | 'listWorkspaceRegistry'
+  | 'registerWorkspace'
+  | 'removeWorkspace'
+  | 'renameWorkspaceAt'
   | 'resolveWorkspace'
   | 'switchWorkspace'
   | 'renameWorkspace'
@@ -86,6 +90,10 @@ export function createChannelActionMethods(
     resumeTo: sessionId => getReadyActions().resumeTo(sessionId),
     newSession: () => getReadyActions().newSession(),
     listWorkspaces: () => getReadyActions().listWorkspaces(),
+    listWorkspaceRegistry: () => getReadyActions().listWorkspaceRegistry(),
+    registerWorkspace: (path, title) => getReadyActions().registerWorkspace(path, title),
+    removeWorkspace: path => getReadyActions().removeWorkspace(path),
+    renameWorkspaceAt: (path, title) => getReadyActions().renameWorkspaceAt(path, title),
     resolveWorkspace: uri => getReadyActions().resolveWorkspace(uri),
     // Preserve ChannelUi's promise rejection contract after release: a caller
     // which already received this async method must observe a rejected promise,

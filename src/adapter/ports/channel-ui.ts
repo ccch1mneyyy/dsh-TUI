@@ -3,7 +3,7 @@ import type { ChatRow, AgentStatus, TokenUsage, NotificationItem, ActivityStatus
 import type { SpinnerMode, ToolBackground, ScrollGutterMode, PageMarginSetting, StatusBarConfig, SessionModeSpec } from './channel-display.js'
 import type { LocalCommand, CommandCompletion, BalanceResult, FileCandidate, RecapOutcome } from './channel-catalog.js'
 import type { TuiRewindMode, SessionTreeData, SessionSummary, PreviewEntry } from './channel-session.js'
-import type { TuiWorkspaceTarget, TuiWorkspaceCommand, TuiWorkspaceCommandResult } from './channel-workspace.js'
+import type { TuiWorkspaceTarget, TuiWorkspaceCommand, TuiWorkspaceCommandResult, TuiWorkspaceEntry } from './channel-workspace.js'
 import type { ProviderSetupHost, OAuthProviderStatus, SettingsHost, TuiSettingsSection } from './channel-settings.js'
 
 /**
@@ -312,6 +312,29 @@ export interface ChannelUi {
   newSession(): Promise<boolean>
   /** Workspace targets contributed by the TUI and optional providers. */
   listWorkspaces(): Promise<readonly TuiWorkspaceTarget[]>
+  /**
+   * The durable workspace registry, in its own order.
+   *
+   * The workspace home screen's sidebar is built from this (not from
+   * `listWorkspaces`): it is the ledger the user actually registers into, so
+   * an entry exists for every workspace — including ones whose sessions are
+   * all gone, whose directory has been deleted, or that never had a session.
+   */
+  listWorkspaceRegistry(): Promise<readonly TuiWorkspaceEntry[]>
+  /**
+   * Register a directory as a durable workspace, without starting a session.
+   *
+   * @param path - Directory to register; the upstream registry canonicalizes
+   *   it (`fs.realpath`) and rejects when it does not exist.
+   * @param title - Optional display title; defaults to the path's last segment.
+   * @returns The registered workspace, or undefined when the ledger is
+   *   unavailable (bare compositions without the workspace stack).
+   */
+  registerWorkspace(path: string, title?: string): Promise<TuiWorkspaceEntry | undefined>
+  /** Drop a workspace registration; the directory and its session logs stay. */
+  removeWorkspace(path: string): Promise<boolean>
+  /** Rename the durable workspace owning `path` (title only; the path is immutable). */
+  renameWorkspaceAt(path: string, title: string): Promise<boolean>
   /** Resolve an absolute path, file URL, or provider URI. */
   resolveWorkspace(reference: string): Promise<TuiWorkspaceTarget | undefined>
   /** Start a fresh session in the selected workspace. */

@@ -11,6 +11,8 @@ export const workspaceSlice: KernelSlice = Object.freeze({
     'host.workspaces.describe',
     'host.workspaces.commandShell',
     'host.workspaces.rename',
+    'host.workspaces.create',
+    'host.workspaces.remove',
     'host.workspaces.commands',
     'host.workspaces.runCommand',
   ]),

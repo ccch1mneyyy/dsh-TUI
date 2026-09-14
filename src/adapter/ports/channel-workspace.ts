@@ -17,6 +17,30 @@ export interface TuiWorkspaceTarget {
 
 export type TuiWorkspaceKind = 'local' | 'provider'
 
+/**
+ * One durable workspace as the home screen's sidebar sees it.
+ *
+ * Distinct from {@link TuiWorkspaceTarget} on purpose: a target answers "where
+ * could a session run" (providers included, plus the live cwd), while an entry
+ * answers "what did the user register" — the ledger's own order, ids, titles,
+ * and how many sessions currently hang off it. A workspace with no sessions is
+ * a real row here (and invisible to every session-derived listing), and a
+ * registered directory that has since been deleted is still a row so the user
+ * can remove it.
+ */
+export interface TuiWorkspaceEntry {
+  /** Ledger record id (a uuid); stable across renames. */
+  id: string
+  /** Canonical directory path recorded at create time. */
+  path: string
+  /** Durable display title, already defaulted by the registry. */
+  title: string
+  /** False when the recorded directory no longer exists on disk. */
+  present: boolean
+  /** Sessions currently attached to this workspace. */
+  sessionCount: number
+}
+
 export interface TuiWorkspaceCommand {
   name: string
   aliases?: readonly string[]
