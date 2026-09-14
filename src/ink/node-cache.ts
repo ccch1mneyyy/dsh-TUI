@@ -28,6 +28,18 @@ export type CachedLayout = {
 /** Layout bounds cached per rendered node, used for blitting and clearing. */
 export const nodeCache = new WeakMap<DOMElement, CachedLayout>()
 
+/** Current prepared text only: scrolling changes its position, not its lines.
+ * Weak keys release unmounted nodes; mutations discard the previous version. */
+export const textPaintCache = new WeakMap<DOMElement, {
+  maxWidth: number
+  background: string | undefined
+  paddingLeft: number
+  paddingTop: number
+  text: string
+  lines: readonly string[]
+  softWrap: boolean[] | undefined
+}>()
+
 /** Rects of removed children that need clearing on next render */
 export const pendingClears = new WeakMap<DOMElement, Rectangle[]>()
 
