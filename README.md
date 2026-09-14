@@ -125,6 +125,8 @@ sh install.sh
 > ```
 >
 > `/update` 与 `dsh-tui update` 会自动写入这份配置，无需手工处理。
+>
+> 更新时还会自动写入 `ignoredOptionalDependencies`（忽略异平台的 `@img/sharp-*` 原生包）——sharp 以全平台可选依赖分发，过滤后只下载当前平台的二进制，更新体积从约 90MB 降回约 18MB（需 pnpm ≥10.17；更旧版本会静默忽略该键，仅失去过滤收益）。
 
 更面向零基础的安装流程、profile 叠加机制、源码构建与常见问题见[安装与快速开始](docs/getting-started.md)。
 
