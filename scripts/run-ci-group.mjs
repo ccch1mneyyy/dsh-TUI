@@ -226,6 +226,10 @@ const GROUPS = {
 // CLI 子命令回归（issue #509）：help/version 零环境应答（不触发自举
 // 与委托）、双语输出、profile 版本读取、只认第一个参数。
     ["verify-cli-subcommands", ['node', 'scripts/verify-cli-subcommands.mjs']],
+// 安全模式回归（PR① spec）：safe 子命令零环境可用与非 TTY 降级、
+// 控制面只读（文件系统快照）、插件清单解析矩阵、fallback 触发矩阵
+// （非 TTY）、doctor 提取行为等价（完整期望值 golden）。
+    ["verify-safe-mode", ['node', 'scripts/verify-safe-mode.mjs']],
 // 剪贴板回归：text/uri-list 严格 URL 解析（远程 authority 拒绝、
 // query/fragment 剥离、畸形转义保留）、image/text MIME 挑选、插入格式化；
 // stub PATH 假 wl-paste/xclip 集成——CJK 跨 chunk、gnome verb 行、

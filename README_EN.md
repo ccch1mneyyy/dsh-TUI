@@ -187,6 +187,7 @@ CLI subcommands (`dsh-tui help` or `dst help` prints the full usage; the `dst` a
 |---|---|
 | `dsh-tui update` | Update the profile to the latest release and align the launcher (same install logic as the in-TUI `/update`, without restarting into the TUI) |
 | `dsh-tui doctor` | Pre-flight environment checks: dsh/pnpm, profile install and version alignment, whether the API key is set (state only, never the value), config file presence; complements the in-TUI `/doctor` session diagnostics |
+| `dsh-tui safe` | Safe mode: read-only diagnostics, inventory, repair guidance |
 | `dsh-tui version` | Show the launcher and profile versions (`--version`/`-v` are equivalent) |
 | `dsh-tui help` | Show usage (`--help`/`-h` are equivalent) |
 
@@ -195,6 +196,37 @@ every other argument is still forwarded verbatim to `dsh --profile dsh-tui`.
 The repository-root `dsh-tui.cmd` is a launch wrapper that goes straight to
 `dsh --profile` and carries no subcommands — subcommands belong to the
 npm-installed `dsh-tui` command.
+
+### Safe mode (`dsh-tui safe`)
+
+When dsh exits unexpectedly, safe mode provides read-only environment
+diagnostics, a profile plugin inventory, and repair guidance.
+
+- **Two entries**: run `dsh-tui safe` manually; or accept the prompt offered
+  after dsh exits with a non-zero code. The prompt only appears in interactive
+  terminals — scripts and pipes just get a single appended hint line, and the
+  exit code is preserved. It covers only a non-zero exit of the final dsh
+  child process, not a startup hang (a spawn failure is treated as exit
+  code 1).
+- **Read-only boundary**: the safe-mode control plane is read-only (diagnostics,
+  inventory, and guidance never change state); the two exceptions are
+  "retry normal startup" and "create blank rescue profile" — the latter is an
+  explicit rescue action whose writes land only in a brand-new directory.
+- **Rescue profile (minimum-viable clean start)**: menu option 5 shows the
+  environment diagnostics first, then creates a blank `dsh-tui-safe` profile
+  (base + TUI only, no third-party plugins, pinned to the current version)
+  and starts it clean — the "use dsh to fix dsh" lane for a broken main
+  profile. When the rescue session ends you are back in the menu. If the
+  profile already exists it is started as-is, never re-installed over. Manual
+  equivalents are listed in the guidance (option 4).
+- **Outdated global launcher**: if the profile copy is unreadable or too old,
+  upgrade the launcher first:
+  `npm install -g --legacy-peer-deps @deepseek-harness-tui/dsh-tui@<version>`.
+- **Example repair commands** (safe mode only lists them — you run them
+  yourself): `dsh plugin --profile dsh-tui remove <third-party plugin>` to
+  remove suspects one by one,
+  `dsh plugin --profile dsh-tui add @deepseek-harness-tui/dsh-tui@<version>`
+  to reinstall/align, and `dsh-tui doctor` for environment diagnostics.
 
 ### Herdr
 
