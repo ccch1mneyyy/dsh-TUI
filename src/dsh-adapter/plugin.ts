@@ -33,6 +33,7 @@ import { composePreset, filterMinimalPresetTools, resolvePersistedPreset, resolv
 import { ensurePackagedPresets } from './packaged-presets.js'
 import { ensureLegacySessionEventTypes, snapshotLiveSessionEvents } from './compat/index.js'
 import { clearResumeTarget, resumeTargetFromArgv, writeResumeTarget } from '../sessionHistory.js'
+import { readHomePrefs } from '../homePrefs.js'
 import { resolveSessionCwd } from '../utils/workspaceRoot.js'
 import { beginRestartAttempt, checkForTuiUpdate, installedTuiVersion, isBootDeadlockTarget, isStandaloneRuntime, isVersionNewer, logRestartEvent, resolveDshProfileName, resolveTuiUpdateTarget, restartTui, updateTuiAndRestart, writeHandoffNotice } from '../update.js'
 import { getLang, isLang, resolveStartupLang, setLang, t, writeLangPref } from '../i18n.js'
@@ -49,6 +50,7 @@ import { attachHerdrIntegration } from '../herdr.js'
 import { logMouseDebug } from '../utils/debug.js'
 import { Chat } from '../screens/Chat.js'
 import { openInjectChannel, type InjectController } from './inject-channel.js'
+import { startSessionMountHeartbeat } from './session-mount-heartbeat.js'
 import { getHostDialogStore, type TuiDialogRuntime } from './dialogs.js'
 import { getHostStatusStore, type TuiStatusRuntime } from './status.js'
 import { getHostToastStore, type TuiToastRuntime } from './toast.js'
@@ -1564,12 +1566,28 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   // BEFORE creating Chat: the element must see the same bootedFullscreen the
   // root tree resolves after settingsReady below.
   await settingsReady
+  /**
+   * One-shot workspace-home landing.
+   *
+   * Only an ORDINARY launch is eligible: an explicit resume (`--resume` /
+   * `-c` / the launcher's remembered target), an explicit workspace target, and
+   * a first prompt all mean the user already said where they want to be, and
+   * covering that with a browser would be the TUI second-guessing them. The
+   * `seen` marker is written when the screen is dismissed (see `closeHome`),
+   * so a process that dies before the first frame does not consume it.
+   */
+  const homeSeen = readHomePrefs().seen === true
+  const openHomeOnBoot = !homeSeen
+    && launchSessionId === undefined
+    && requestedWorkspace === undefined
+    && initialPromptFromCmdlineArgs(process.argv.slice(2)) === ''
   const chat = React.createElement(Chat, {
     channel,
     renderScene: createChannelSceneOutlet(() => rawChannel.pluginScene),
     questionStore,
     approvalStore,
     injectControllerRef,
+    openHomeOnBoot,
     // The dsh-tui-extensions row's services (managed dialogs, status line,
     // shortcuts). Soft-consumed: absent the row (stale patch, bare embed),
     // Chat falls back to inert stores and no shortcut registry.
@@ -1691,6 +1709,16 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   if (injectChannel) {
     ctx.effect(() => () => injectChannel.close())
   }
+
+  // Cross-process session mounting: publish the sessions this process has
+  // mounted so another TUI (a different terminal process on the same machine)
+  // can see them as occupied and refuse to mount the same log. Two processes
+  // driving one session would interleave writes into a single append-only
+  // transcript, so this is the guard that makes multi-process TUI use safe.
+  // Registered on the same teardown funnel as everything else: the disposer
+  // stops the heartbeat and removes the claim, so a clean exit frees its
+  // sessions at once while a killed process is reclaimed by liveness.
+  ctx.effect(() => startSessionMountHeartbeat(ctx))
 
   // Check in the background so registry latency never delays the first frame.
   // A failed/offline check is intentionally silent; the manual `/update`

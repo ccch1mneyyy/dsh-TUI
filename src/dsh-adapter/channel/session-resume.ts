@@ -8,6 +8,7 @@ import { t } from '../../i18n.js'
 import { readModelPref } from '../../modelPrefs.js'
 import { migratePresetPref, readPresetPref } from '../../presetPrefs.js'
 import { agentViewHasTurns } from '../agent-view.js'
+import { occupancyOf, ownMounts, publishMounts, readSessionOwners } from '../../sessionMounts.js'
 import { ensureLegacySessionEventTypes } from '../compat/index.js'
 import { snapshotLiveSessionEvents } from '../compat/liveSession.js'
 import { composePreset, resolvePersistedPreset, resolvePersistedRoute } from '../presets.js'
@@ -49,6 +50,12 @@ type ResumeAgents = {
     agentOptions?: { provider?: string; model?: string }
     setup?: CreateAgentOptions['setup']
   }): Promise<AgentHandle>
+  /**
+   * The live agent for a session id, when this process already hosts one.
+   * Optional: a composition without the roster still resumes from disk, it
+   * just cannot tell "already mounted here" from "on disk" up front.
+   */
+  get?(id: SessionId): Agent | undefined
 }
 
 /** Persisted-session and fresh-session foreground actions. */
@@ -65,6 +72,12 @@ export function createSessionResumeActions(
   deps: {
     owner: Pick<ChannelOwner, 'current'>
     binding: Pick<Binding, 'agent' | 'capture' | 'isCurrent' | 'prepare' | 'abandon' | 'adopt'>
+    /**
+     * Adopt an agent this process already has live. `/resume` uses it so a
+     * target that is already running here is re-attached in place (parking the
+     * session left behind) instead of being resumed a second time from its log.
+     */
+    adoptLive(target: Agent): Promise<ResumeResult>
     backgroundHandles: Map<string, AgentHandle>
     rowIds: { value: number }
     resetProjector(): void
@@ -196,22 +209,67 @@ export function createSessionResumeActions(
   const resumeInto = (sessionId: string, kind: 'resume' | 'agent-view', keepCurrent: boolean): Promise<ResumeResult> =>
     resume(sessionId, kind, keepCurrent, deps.binding.capture())
 
-  /** `/resume` keeps the entry capture across its veto/compaction awaits, so a rival switch cannot adopt over newer state. */
+  /**
+   * `/resume` — mount a session on THIS terminal, the same non-destructive way
+   * `/agentview` does.
+   *
+   * There used to be two different mount models behind these two commands.
+   * `/agentview` parked the session it left behind (it kept running in this
+   * process and was reachable again from the view), while `/resume` DISPOSED
+   * it, and refused outright while a turn was running. That split was never a
+   * decision about resuming; it was an accident of the two commands growing
+   * separately, and it is what made `/resume` feel like a different product
+   * from the session overview sitting one command away.
+   *
+   * The unified model is the overview's, because it is the one that matches
+   * what a TUI terminal actually is: one process that can host several agent
+   * sessions at once. So:
+   *
+   * - Leaving a session parks it (`keepCurrent`), it does not end it, and the
+   *   parked handle is reachable from the session screen afterwards.
+   * - A running turn is not a refusal. The user is switching what they are
+   *   LOOKING at, not asking the model to stop; the turn keeps running in the
+   *   background and its row keeps reporting progress.
+   *
+   * The one thing that IS refused is a session another TUI process already has
+   * mounted: two processes driving one append-only log interleave its events.
+   * The occupancy check happens BEFORE the resume awaits (which yield), and
+   * the claim is published immediately after it so this process owns the
+   * session before any other process can pass the same check.
+   */
   const resumeTo = async (sessionId: string): Promise<ResumeResult> => {
     const adoption = deps.binding.capture()
-    if (state.working) {
-      deps.notify(t('resume-while-working'), { color: 'warning' })
-      return { ok: false, reason: 'working' }
-    }
     const agents = ctx.get('agents') as ResumeAgents | undefined
     if (!agents) {
       deps.notify(t('resume-unavailable'), { color: 'error' })
       return { ok: false, reason: 'unavailable' }
     }
+    // The attached session as of entry, so a rival switch that commits while
+    // the awaits below yield cannot be adopted over.
+    const entrySession = deps.binding.agent.session
+    // A live agent of this process is already mounted here; there is nothing
+    // to claim and nothing that can be occupied. Adoption takes the live
+    // handle (parking the current one) with no occupancy round-trip.
+    const live = agents.get?.(SessionId(sessionId))
+    if (live === undefined) {
+      const occupancy = occupancyOf(sessionId, readSessionOwners())
+      if (occupancy.kind === 'occupied') {
+        deps.notify(t('resume-session-occupied', { pid: occupancy.pid }), { color: 'error', timeoutMs: 8000 })
+        return { ok: false, reason: 'occupied', pid: occupancy.pid }
+      }
+      // Claim before yielding, so a rival TUI cannot pass the check above in
+      // the window between it and this session actually being mounted.
+      publishMounts([...ownMounts(), sessionId])
+    }
     if (await deps.sessionSwitchVetoed('resume', sessionId)) return { ok: false, reason: 'cancelled' }
     await deps.settleCompaction()
-    const entrySession = deps.binding.agent.session
-    return resume(sessionId, 'resume', false, adoption, entrySession)
+    if (!deps.binding.isCurrent(adoption) || deps.binding.agent.session !== entrySession) {
+      return { ok: false, reason: 'cancelled' }
+    }
+    // A live target is adopted in place — the same path `/agentview` uses, so
+    // the session being left is parked rather than disposed of. Only a target
+    // with no live agent here goes back to the persistence backend.
+    return live !== undefined ? deps.adoptLive(live) : resume(sessionId, 'agent-view', true, adoption, entrySession)
   }
 
   const newSessionWithTarget = async (target?: NewSessionTarget): Promise<boolean> => {
