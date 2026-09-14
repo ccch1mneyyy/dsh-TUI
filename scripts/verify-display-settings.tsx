@@ -322,6 +322,38 @@ check('goal chip respects the statusBar.goal switch', () => {
   assert.ok(!withGoalHidden.includes('2/5'), `unexpected goal chip in:\n${withGoalHidden}`)
 })
 
+// Subagent chip: the footer answers "is anything still running?" for delegated
+// runs the same way it does for background jobs — a count while live, nothing
+// once every run has settled.
+const probeSubagent = (agentId: string, status: 'starting' | 'running' | 'completed') => ({
+  agentId,
+  description: `probe ${agentId}`,
+  status,
+  startedAt: Date.now() - 5_000,
+  completedAt: status === 'completed' ? Date.now() : undefined,
+  output: [],
+  outputEvents: [],
+  toolCalls: [],
+})
+
+const withSubagents = await renderStatus({
+  subagents: [
+    probeSubagent('probe-a', 'running'),
+    probeSubagent('probe-b', 'starting'),
+    probeSubagent('probe-c', 'completed'),
+  ],
+})
+check('compact StatusLine renders a live subagent count chip', () => {
+  assert.ok(withSubagents.includes('▸ 2'), `missing subagent chip in:\n${withSubagents}`)
+})
+
+const withSubagentsSettled = await renderStatus({
+  subagents: [probeSubagent('probe-c', 'completed')],
+})
+check('subagent chip hides once every run has settled', () => {
+  assert.ok(!/▸ \d/.test(withSubagentsSettled), `unexpected subagent chip in:\n${withSubagentsSettled}`)
+})
+
 const working = await renderStatus({ working: true })
 check('working StatusLine always renders its Esc interrupt hint', () => {
   assert.equal((working.match(/esc to interrupt/g) ?? []).length, 1)
