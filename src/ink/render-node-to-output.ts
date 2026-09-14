@@ -6,7 +6,7 @@ import getMaxWidth from './get-max-width.js'
 import type { Rectangle } from './layout/geometry.js'
 import type { CachedLayout } from './node-cache.js'
 import { LayoutDisplay, LayoutEdge, type LayoutNode } from './layout/node.js'
-import { nodeCache, pendingClears } from './node-cache.js'
+import { nodeCache, pendingClears, textPaintCache } from './node-cache.js'
 import type Output from './output.js'
 import renderBorder from './render-border.js'
 import type { Screen } from './screen.js'
@@ -949,78 +949,101 @@ function renderNodeToOutput(
         output.write(x, y, text)
       }
     } else if (node.nodeName === 'ink-text') {
-      const segments = squashTextNodesToSegments(
-        node,
-        inheritedBackgroundColor
-          ? { backgroundColor: inheritedBackgroundColor }
-          : undefined,
-      )
+      // A partially visible long block moves on every scroll/stream frame.
+      // Node blits cannot reuse it at a new y, but its prepared lines can.
+      // Keep one current preparation, independent of the shared wrap LRU
+      // (a single large tool/code block can overflow that cache by itself).
+      const maxWidth = Math.min(getMaxWidth(yogaNode), output.width - x)
+      const paddingNode = node.childNodes[0]?.yogaNode
+      const paddingLeft = paddingNode?.getComputedLeft() ?? 0
+      const paddingTop = paddingNode?.getComputedTop() ?? 0
+      const prepared = textPaintCache.get(node)
+      if (
+        prepared !== undefined &&
+        prepared.maxWidth === maxWidth &&
+        prepared.background === inheritedBackgroundColor &&
+        prepared.paddingLeft === paddingLeft &&
+        prepared.paddingTop === paddingTop
+      ) {
+        output.write(x, y, prepared.text, prepared.softWrap, prepared.lines)
+      } else {
+        const segments = squashTextNodesToSegments(
+          node,
+          inheritedBackgroundColor
+            ? { backgroundColor: inheritedBackgroundColor }
+            : undefined,
+        )
 
-      // First, get plain text to check if wrapping is needed
-      const plainText = segments.map(s => s.text).join('')
+        // First, get plain text to check if wrapping is needed
+        const plainText = segments.map(s => s.text).join('')
 
-      if (plainText.length > 0) {
-        // Use the same content constraint as measurement, not the rounded
-        // pixel-grid box. Offscreen overflow still clips at the terminal edge.
-        const maxWidth = Math.min(getMaxWidth(yogaNode), output.width - x)
-        const textWrap = node.style.textWrap ?? 'wrap'
+        if (plainText.length > 0) {
+          // Use the same content constraint as measurement, not the rounded
+          // pixel-grid box. Offscreen overflow still clips at the terminal edge.
+          const textWrap = node.style.textWrap ?? 'wrap'
 
-        // Check if wrapping is needed
-        const needsWrapping = widestLine(plainText) > maxWidth
+          // Check if wrapping is needed
+          const needsWrapping = widestLine(plainText) > maxWidth
 
-        let text: string
-        let softWrap: boolean[] | undefined
-        if (needsWrapping && segments.length === 1) {
-          // Single segment: wrap plain text first, then apply styles to each line
-          const segment = segments[0]!
-          const w = wrapWithSoftWrap(plainText, maxWidth, textWrap)
-          softWrap = w.softWrap
-          text = w.wrapped
-            .split('\n')
-            .map(line => {
-              let styled = applyTextStyles(line, segment.styles)
-              // Apply OSC 8 hyperlink per-line so each line is independently
-              // clickable. output.ts splits on newlines and tokenizes each
-              // line separately, so a single wrapper around the whole block
-              // would only apply the hyperlink to the first line.
-              if (segment.hyperlink) {
-                styled = wrapWithOsc8Link(styled, segment.hyperlink)
-              }
-              return styled
-            })
-            .join('\n')
-        } else if (needsWrapping) {
-          // Multiple segments with wrapping: wrap plain text first, then re-apply
-          // each segment's styles based on character positions. This preserves
-          // per-segment styles even when text wraps across lines.
-          const w = wrapWithSoftWrap(plainText, maxWidth, textWrap)
-          softWrap = w.softWrap
-          const charToSegment = buildCharToSegmentMap(segments)
-          text = applyStylesToWrappedText(
-            w.wrapped,
-            segments,
-            charToSegment,
-            plainText,
-            textWrap === 'wrap-trim',
-          )
-          // Hyperlinks are handled per-run in applyStylesToWrappedText via
-          // wrapWithOsc8Link, similar to how styles are applied per-run.
-        } else {
-          // No wrapping needed: apply styles directly
-          text = segments
-            .map(segment => {
-              let styledText = applyTextStyles(segment.text, segment.styles)
-              if (segment.hyperlink) {
-                styledText = wrapWithOsc8Link(styledText, segment.hyperlink)
-              }
-              return styledText
-            })
-            .join('')
+          let text: string
+          let softWrap: boolean[] | undefined
+          if (needsWrapping && segments.length === 1) {
+            // Single segment: wrap plain text first, then apply styles to each line
+            const segment = segments[0]!
+            const w = wrapWithSoftWrap(plainText, maxWidth, textWrap)
+            softWrap = w.softWrap
+            text = w.wrapped
+              .split('\n')
+              .map(line => {
+                let styled = applyTextStyles(line, segment.styles)
+                // Apply OSC 8 hyperlink per-line so each line is independently
+                // clickable. output.ts splits on newlines and tokenizes each
+                // line separately, so a single wrapper around the whole block
+                // would only apply the hyperlink to the first line.
+                if (segment.hyperlink) {
+                  styled = wrapWithOsc8Link(styled, segment.hyperlink)
+                }
+                return styled
+              })
+              .join('\n')
+          } else if (needsWrapping) {
+            // Multiple segments with wrapping: wrap plain text first, then re-apply
+            // each segment's styles based on character positions. This preserves
+            // per-segment styles even when text wraps across lines.
+            const w = wrapWithSoftWrap(plainText, maxWidth, textWrap)
+            softWrap = w.softWrap
+            const charToSegment = buildCharToSegmentMap(segments)
+            text = applyStylesToWrappedText(
+              w.wrapped,
+              segments,
+              charToSegment,
+              plainText,
+              textWrap === 'wrap-trim',
+            )
+            // Hyperlinks are handled per-run in applyStylesToWrappedText via
+            // wrapWithOsc8Link, similar to how styles are applied per-run.
+          } else {
+            // No wrapping needed: apply styles directly
+            text = segments
+              .map(segment => {
+                let styledText = applyTextStyles(segment.text, segment.styles)
+                if (segment.hyperlink) {
+                  styledText = wrapWithOsc8Link(styledText, segment.hyperlink)
+                }
+                return styledText
+              })
+              .join('')
+          }
+
+          text = applyPaddingToText(node, text, softWrap)
+
+          const lines = text.split('\n')
+          textPaintCache.set(node, {
+            maxWidth, background: inheritedBackgroundColor, paddingLeft, paddingTop,
+            text, lines, softWrap,
+          })
+          output.write(x, y, text, softWrap, lines)
         }
-
-        text = applyPaddingToText(node, text, softWrap)
-
-        output.write(x, y, text, softWrap)
       }
     } else if (
       node.nodeName === 'ink-image' &&

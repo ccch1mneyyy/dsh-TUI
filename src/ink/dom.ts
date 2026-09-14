@@ -3,7 +3,7 @@ import { createLayoutNode } from './layout/engine.js'
 import type { LayoutNode } from './layout/node.js'
 import { LayoutDisplay, LayoutMeasureMode } from './layout/node.js'
 import measureText from './measure-text.js'
-import { addPendingClear, nodeCache } from './node-cache.js'
+import { addPendingClear, nodeCache, textPaintCache } from './node-cache.js'
 import squashTextNodes from './squash-text-nodes.js'
 import type { Styles, TextStyles } from './styles.js'
 import { expandTabs } from './tabstops.js'
@@ -520,6 +520,9 @@ export const markDirty = (node?: DOMNode): void => {
   while (current) {
     if (current.nodeName !== '#text') {
       ;(current).dirty = true
+      // Culling can clear the paint dirty bit without preparing changed text.
+      // Invalidate at mutation time so re-entry cannot reuse stale content.
+      textPaintCache.delete(current)
       // Only mark yoga dirty on leaf nodes that have measure functions
       if (
         !markedYoga &&
@@ -556,6 +559,7 @@ export const markTreeDirty = (node?: DOMNode): void => {
     if (current.nodeName === '#text') continue
     const element = current as DOMElement
     element.dirty = true
+    textPaintCache.delete(element)
     // markDirty() is only legal on yoga nodes that carry a measure function;
     // those are exactly the two text node kinds (see createNode).
     if (

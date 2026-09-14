@@ -728,6 +728,9 @@ export function Chat({
   /** Subagent dashboard (Ctrl+A): displays active/completed subagents. */
   const [subagentDashboardOpen, setSubagentDashboardOpen] = React.useState(false)
   const [jobsPanelOpen, setJobsPanelOpen] = React.useState(false)
+  // MessageList forwards these open handlers to every memoized row. Their
+  // identities must survive token/metrics updates, including for tool rows.
+  const openJobsPanel = React.useCallback(() => setJobsPanelOpen(true), [])
   /** Detail view for a specific subagent (opened from dashboard). */
   const [subagentDetailId, setSubagentDetailId] = React.useState<string | null>(null)
   /**
@@ -3811,8 +3814,8 @@ export function Chat({
           newSinceRowId={isSticky ? null : lastSeenRowIdRef.current}
           onUnseenCount={setUnseenCount}
           onTimeline={setTimeline}
-          onOpenSubagent={(agentId) => setSubagentDetailId(agentId)}
-          onOpenJobs={() => setJobsPanelOpen(true)}
+          onOpenSubagent={setSubagentDetailId}
+          onOpenJobs={openJobsPanel}
           onOpenFile={openFileActions}
           onPreviewImage={openImagePreview}
           suppressImageGraphics={activePreview !== null}
