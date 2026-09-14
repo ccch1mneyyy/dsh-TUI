@@ -284,6 +284,30 @@ check('ordinary append growth never drops an older real title', (await listSumma
   source: 'renamed',
 })
 
+// Regression (2026-09-05): a real conversation whose FIRST listing caught the
+// log before its first human prompt (a session's header and policy rows are
+// written first) had hasPrompt=false frozen into the index via the append
+// carry-forward, so /resume counted it among "N empty" and never listed it.
+// The append forward only grows a log, and the fresh digest errs toward
+// "has a conversation" for anything past its windows — the verdict must
+// strengthen across appends, never weaken.
+const growFile = seed('grow', [], { cwd: '/proj' })
+const growSource = {
+  list: async () => [{ header: { id: 'grow', cwd: '/proj', createdAt: 1000 } }],
+  locate: () => ({ kind: 'jsonl', path: growFile }),
+}
+rmSync(INDEX_FILE, { force: true })
+const bootSighting = await listSummaries(growSource)
+check('a boot artifact is honestly empty on its first sighting', bootSighting[0].hasPrompt, false)
+const growNoise = []
+for (let i = 0; i < 400; i++) {
+  growNoise.push([{ type: 'assistant/chunk', seq: 10 + i, time: 3000 + i, data: { text: filler(500) } }])
+}
+appendFileSync(growFile, encode([[userPrompt('the conversation arrives', 1)], ...growNoise]))
+const grownSighting = await listSummaries(growSource)
+check('the grown log is never reported empty again', grownSighting.find(s => s.id === 'grow').hasPrompt, true)
+
+
 check('a missing log degrades instead of throwing', digestSession(join(root, 'nope', 'x.zstd'), '/proj'), {
   title: undefined,
   hasPrompt: false,
@@ -456,6 +480,23 @@ const viaSnapshots = await listSummaries(snapshotSource)
 check(
   'the backend-token path resolves the same titles as the derived-token path',
   viaSnapshots.map(s => [s.id, s.title.text]).sort(),
+  fromCold.map(s => [s.id, s.title.text]).sort(),
+)
+// dsh 0.1.2+ has no listSnapshots(); it put {header, revision, sizeBytes} on
+// list() itself. Parsing those rows as bare headers drops every session.
+const listReturnsSnapshots = {
+  list: async () =>
+    allHeaders.map(header => ({
+      header,
+      revision: `rev:${header.id}:${statSync(join(root, '--proj--', header.id, 'session.jsonl.zstd')).size}`,
+      sizeBytes: 1,
+    })),
+}
+rmSync(INDEX_FILE, { force: true })
+const viaListSnapshotShape = await listSummaries(listReturnsSnapshots)
+check(
+  'list() that returns snapshots (dsh 0.1.2+) still resolves titles',
+  viaListSnapshotShape.map(s => [s.id, s.title.text]).sort(),
   fromCold.map(s => [s.id, s.title.text]).sort(),
 )
 check('a backend that lists nothing yields nothing', (await listSummaries({})).length, 0)
