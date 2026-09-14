@@ -1,6 +1,6 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
-import { createUserMessage } from '@deepseek-ai/dsh-llm'
+import { createUserMessage, type UserMessage } from '@deepseek-ai/dsh-llm'
 import type { CommandRuntime } from '@deepseek-ai/dsh-commands'
 import { isUserInvocable, renderSkillContent, type SkillSummary } from '@deepseek-ai/dsh-skill'
 import { HIDDEN_COMMAND_NAMES, isLocalCommandName, parseCommandName, LOCAL_COMMANDS, type LocalCommand, type LocalizedDescriptions } from '../../commands.js'
@@ -22,7 +22,12 @@ export function createSkillCatalog(
     cwd(): string
     setCommands(commands: LocalCommand[]): void
     commandDescriptions(name: string): LocalizedDescriptions | undefined
-    deliverUserText(text: string, placement: 'followup'): void
+    /** Submit a user line through the channel's delivery pipeline. The
+     *  fallback skill path rides this same entry point and attaches the
+     *  rendered body, so the line stays a plain user message (fence, pending
+     *  preview and `@` expansion included) and the body is appended to that
+     *  message's step batch — never a turn of its own. */
+    deliverUserText(text: string, placement: 'followup', attach?: UserMessage): void
   },
 ) {
   let commandListSeq = 0
@@ -126,7 +131,12 @@ export function createSkillCatalog(
             const skill = await registryFor(invoker)?.get(name, { ...viewOptions(invoker), signal })
             if (skill === undefined || !isUserInvocable(skill as SkillSummary)) return { kind: 'error', text: t('skill-unavailable', { name }) }
             if (!deps.owner.current() || invoker !== deps.agent()) return { kind: 'error', text: t('skill-unavailable', { name }) }
-            invoker.followup(createUserMessage({ content: [{ type: 'text', text: renderSkillContent(skill as never) }], source: { kind: 'skill-invocation', name, form: 'instructions' } }))
+            // No `skill` tool: deliver the gesture as the user's own line and
+            // attach the rendered body. The channel's resident pre-step
+            // listener appends the body AFTER the admitted batch — the same
+            // shape/order as dsh-tool-skill's gesture boundary (#842).
+            const bodyMessage = createUserMessage({ content: [{ type: 'text', text: renderSkillContent(skill as never) }], source: { kind: 'skill-invocation', name, form: 'instructions' } })
+            deps.deliverUserText(`/${name}${rawInput}`, 'followup', bodyMessage)
             return { kind: 'success' }
           },
         })
