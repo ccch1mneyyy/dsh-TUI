@@ -1,17 +1,21 @@
 import React from 'react'
 import { Box, Text, useTerminalSize, useTheme } from '../ui.js'
 import type { Color } from '../ink/styles.js'
-import { formatTokens } from '../terminal-utils/format.js'
+import { formatDuration, formatTokens } from '../terminal-utils/format.js'
 import { t } from '../i18n.js'
 import { formatContextUsage, DEFAULT_STATUS_BAR, normalizeStatusBar, type StatusBarConfig } from '../tuiDisplayPrefs.js'
 import { estimateSessionCostCny, estimateSessionCostSplitCny, isDeepSeekOfficialProvider, isPeakHour } from '../deepseekPricing.js'
 import { ActivityLine, contextPressurePct } from '../components/ActivityLine.js'
 import { GoalStatusChip } from '../components/GoalTodoPanel.js'
 import { formatJobDuration, type BackgroundJobState } from '../dsh-adapter/jobs.js'
+import type { SubagentState } from '../dsh-adapter/subagents.js'
 
 /** Stable fallback for stubbed channels: verify/repro harnesses render the
  *  real Chat with partial channel literals that predate the jobs field. */
 const NO_BACKGROUND_JOBS: readonly BackgroundJobState[] = []
+
+/** Same fallback contract as NO_BACKGROUND_JOBS, for the subagent roster. */
+const NO_SUBAGENTS: readonly SubagentState[] = []
 import type { ChannelUi as Channel } from '../adapter/channel/ui-policy.js'
 import { modeDisplayName } from '../sessionModes.js'
 import { MiniWake } from '../components/trajectory/MiniWake.js'
@@ -80,6 +84,7 @@ type HoverTarget =
   | 'cost'
   | 'goal'
   | 'jobs'
+  | 'subagents'
   | 'model'
   | 'git'
   | 'sessionId'
@@ -326,12 +331,33 @@ export function StatusLine({
         ),
       }
 
+  // Subagent chip (channel.subagents; /agents, SubagentDashboard): live count
+  // of delegated runs still starting or running, shown only while non-zero —
+  // the same contract as the job chip above, since a silent zero is not
+  // information either. Marker is ▸ rather than ● so the two counters stay
+  // tellable apart at a glance. Hover lists the runs with elapsed times.
+  const liveSubagents = (channel.subagents ?? NO_SUBAGENTS).filter(
+    sub => sub.status === 'starting' || sub.status === 'running',
+  )
+  const subagentsPart: FieldPart | undefined = liveSubagents.length === 0
+    ? undefined
+    : {
+        key: 'subagents',
+        id: 'subagents',
+        node: (
+          <Text color="toolDotTask">
+            {'▸ '}{liveSubagents.length}
+          </Text>
+        ),
+      }
+
   const leftFields: FieldPart[] = [
     ...(statusBar.model
       ? [{ key: 'model', id: 'model' as const, node: <Text color="inactiveShimmer">{channel.model}</Text> }]
       : []),
     ...(tpsPart !== undefined ? [tpsPart] : []),
     ...(jobsPart !== undefined ? [jobsPart] : []),
+    ...(subagentsPart !== undefined ? [subagentsPart] : []),
     ...contextParts,
     ...(statusBar.tokens
       ? [{
@@ -694,6 +720,21 @@ function buildHoverDetail(
         <Text wrap="truncate">
           {dim('jobs ')}
           {shown.map(job => `${job.id} ${job.label} (${formatJobDuration(job)})`).join(' · ')}
+          {rest > 0 ? ` · +${rest}` : ''}
+        </Text>
+      )
+    }
+    case 'subagents': {
+      const live = (channel.subagents ?? NO_SUBAGENTS).filter(
+        sub => sub.status === 'starting' || sub.status === 'running',
+      )
+      if (live.length === 0) return null
+      const shown = live.slice(0, 3)
+      const rest = live.length - shown.length
+      return (
+        <Text wrap="truncate">
+          {dim('subagents ')}
+          {shown.map(sub => `${sub.agentId} ${sub.description} (${formatDuration(Date.now() - sub.startedAt)})`).join(' · ')}
           {rest > 0 ? ` · +${rest}` : ''}
         </Text>
       )
