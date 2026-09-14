@@ -1711,8 +1711,40 @@ export default class Ink {
       // release first). Drain any deferred re-entry confirmed while the
       // window was unfocused.
       this.drainAltScreenReentry();
+      // The mode probe above only heals a *dropped* mode 1049, and its
+      // re-entry is gated on a positive DECRPM "reset" answer. That misses
+      // the other way a refocus loses paint: while another app owned the
+      // display (Alt+Tab to a fullscreen app), the terminal repainted,
+      // reflowed or dropped its own viewport — mode 1049 stayed set and our
+      // frame model stayed intact, so the diff finds nothing changed and
+      // never rewrites the cells the terminal lost. Static chrome (borders,
+      // status bar, transcript) then stays missing while only the animated
+      // rows keep painting, until the user presses Ctrl+L. Rebuild the
+      // surface on every refocus instead — see refreshAltScreenSurface.
+      this.refreshAltScreenSurface();
     }
   };
+
+  /**
+   * Repaint every cell of the alternate screen on the next frame, in place.
+   *
+   * `resetFramesForAltScreen` seeds blank frames and marks them contaminated,
+   * so the coming frame renders without the blit fast path (every cell
+   * re-derived from the tree), diffs against a blank front frame (every
+   * non-blank cell is damage) and reports no scrollHint (no DECSTBM region
+   * scroll can land on a screen whose contents we no longer trust). No
+   * ERASE_SCREEN is written: keeping the erase out means no blank flash on
+   * terminals without synchronized output (DEC 2026), and the per-frame
+   * CURSOR_HOME anchor already makes absolute positioning safe. Cost is one
+   * viewport of bytes per refocus — cheap, human-paced, and idempotent when
+   * nothing was actually lost.
+   */
+  private refreshAltScreenSurface(): void {
+    if (this.isUnmounted || this.isPaused || !this.altScreenActive) return;
+    if (!this.options.stdout.isTTY) return;
+    this.resetFramesForAltScreen();
+    this.renderNow();
+  }
 
   private notifyTerminalImagesChange(): void {
     // AlternateScreen changes modes in an insertion effect. Notify React

@@ -46,6 +46,15 @@ function check(name: string, ok: boolean, extra = '') {
   if (!ok) failed += 1
 }
 
+/** 可见屏幕里是否还能读到某段文本（静态内容是否还在物理屏上）。 */
+function screenHasText(needle: string): boolean {
+  const buf = term.buffer.active
+  for (let y = 0; y < ROWS; y++) {
+    if ((buf.getLine(y)?.translateToString(true) ?? '').includes(needle)) return true
+  }
+  return false
+}
+
 const term = new XTerm({ cols: COLS, rows: ROWS, scrollback: 0, allowProposedApi: true })
 const writes: string[] = []
 class FakeStdout extends Writable {
@@ -105,6 +114,30 @@ stdin.write('\x1b[?1049;1$y\x1b[?c\x1b[?c') // status 1 = set（双 DA1 同理�
 await sleep(400)
 check('应答 set 时不重进（无 2J）', !writes.some(w => w.includes('\x1b[2J')))
 check('buffer 保持 alternate', term.buffer.active.type === 'alternate')
+
+// ── 场景：1049 仍在，但可见内容被外部弄丢（Alt+Tab 切走再切回）─────────
+// conpty / 终端在别的应用占屏期间自己重绘、重排或丢帧，模式位仍如实报
+// "set"，所以上面的自愈链路整条空转：帧模型没变 → diff 认为无事可做 →
+// 静态内容（本用例的 "probe"）永远不回来，直到用户按 Ctrl+L。
+// 断言：回到前台必须把静态内容重画回来。
+await new Promise<void>(r => term.write('\x1b[2J', () => r()))
+check('外部清屏后静态内容确实丢失（复现前提成立）', !screenHasText('probe'))
+
+writes.length = 0
+stdin.write('\x1b[I') // FOCUS_IN：回到前台
+await sleep(150)
+stdin.write('\x1b[?1049;1$y\x1b[?c\x1b[?c') // 终端答 "set"（1049 仍在）
+await sleep(400)
+const refreshed = screenHasText('probe')
+if (process.env.SELFHEAL_DEBUG) {
+  console.log('--- phase5 screen ---')
+  for (let y = 0; y < ROWS; y++) {
+    const line = term.buffer.active.getLine(y)?.translateToString(true) ?? ''
+    if (line.trim() !== '') console.log(`    ${y}: ${JSON.stringify(line)}`)
+  }
+}
+check('FOCUS_IN 后静态内容被重画回来（不依赖 1049 应答）', refreshed)
+check('重画走全量帧、不擦屏（无 2J）', !writes.some(w => w.includes('\x1b[2J')))
 
 await inst.unmount()
 console.log(failed === 0 ? '\nALL PASS' : `\n${failed} 项失败`)
