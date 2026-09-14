@@ -225,6 +225,11 @@ const GROUPS = {
 // 直达启动器回归（issue #108）：参数透传、残骸 profile 重装、
 // 版本不一致提示、双语消息、shellQuote 转义规则。
     ["verify-launcher", ['node', 'scripts/verify-launcher.mjs']],
+// 跨代理会话迁移回归（claude-code/codex/omp → DSH sessions）：合成事件
+// 对齐真实 session 日志契约（上游 catalog readHeader 认可、surfaceOp
+// 信封层、turn/end completed、title seq 锚点）、uuid v5 幂等、三 adapter
+// fixture 解析、双帧 zstd 落盘往返。
+    ["verify-migrate", ['node', '--import', 'tsx/esm', 'scripts/verify-migrate.mjs']],
 // CLI 子命令回归（issue #509）：help/version 零环境应答（不触发自举
 // 与委托）、双语输出、profile 版本读取、只认第一个参数。
     ["verify-cli-subcommands", ['node', 'scripts/verify-cli-subcommands.mjs']],

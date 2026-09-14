@@ -216,6 +216,7 @@ const MSG = {
       `Commands:\n` +
       `  update                 Update the ${PROFILE} profile to the latest release\n` +
       `  doctor                 Pre-flight environment checks (dsh/pnpm/profile/key)\n` +
+      `  migrate [agent]        Import conversations from claude-code/codex/omp (--dry-run to preview)\n` +
       `  version                Show launcher and profile versions\n` +
       `  help                   Show this help\n\n` +
       `Options:\n` +
@@ -228,6 +229,7 @@ const MSG = {
       `命令：\n` +
       `  update                 将 ${PROFILE} profile 升级到最新版本\n` +
       `  doctor                 启动前环境诊断（dsh/pnpm/profile/密钥）\n` +
+      `  migrate [agent]        迁移 claude-code/codex/omp 的对话（--dry-run 预览）\n` +
       `  version                显示启动器与 profile 版本\n` +
       `  help                   显示本帮助\n\n` +
       `选项：\n` +
@@ -482,6 +484,26 @@ const checkProfileAlignment = installedVersion => {
 // 迁移契约不变。profile 未初始化时先走既有自举（dsh/pnpm 预检在其中）；
 // 编译产物缺失或没有 cliUpdate 导出（半更新的旧版）给手工升级指引退出 1。
 // 判定先于工作区目标嗅探：cwd 里名为 update 的文件不再被当成路径。
+if (subcommand === 'migrate') {
+  // 跨代理会话迁移（claude-code / codex / omp → DSH sessions）：与 update
+  // 同一条委托路径——zstd 压缩在编译产物里，瘦壳零 lib 依赖不变。profile
+  // 未初始化时同样先自举；产物缺失或旧版无 cliMigrate 导出时给指引退出 1。
+  if (!profileReady()) bootstrapProfile()
+  let cliMigrate
+  try {
+    ;({ cliMigrate } = await import(pathToFileURL(join(profilePkgDir, 'lib', 'types', 'migrate', 'cli.js')).href))
+  } catch {
+    cliMigrate = undefined
+  }
+  if (typeof cliMigrate !== 'function') {
+    console.error(lang === 'en'
+      ? `[dsh-tui] migrate needs the compiled package under the profile — run dsh-tui update first.`
+      : `[dsh-tui] migrate 需要 profile 内的编译产物——请先运行 dsh-tui update。`)
+    process.exit(1)
+  }
+  process.exit(await cliMigrate(process.argv.slice(3)))
+}
+
 if (subcommand === 'update') {
   if (!profileReady()) bootstrapProfile()
   {
