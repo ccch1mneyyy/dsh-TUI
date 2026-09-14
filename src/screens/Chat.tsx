@@ -68,7 +68,7 @@ import { PluginSceneBoundary } from '../components/PluginSceneBoundary.js'
 import { PluginStatusViewBoundary } from '../components/PluginStatusViewBoundary.js'
 import { ImagePreviewOverlay } from '../components/ImagePreviewOverlay.js'
 import { SkillsPicker, SkillsPickerLoading } from '../components/SkillsPicker.js'
-import { SessionBrowser } from './SessionBrowser.js'
+import { SessionSupervisor } from './SessionSupervisor.js'
 import { SessionTree } from './SessionTree.js'
 import { Settings } from './Settings.js'
 import { WorkspacePicker } from '../components/WorkspacePicker.js'
@@ -106,7 +106,9 @@ import instances from '../ink/instances.js'
 import { useAnimationFrame } from '../ink/hooks/use-animation-frame.js'
 import { useExternalVersion } from '../hooks/useExternalVersion.js'
 import { TrajectoryScene } from './TrajectoryScene.js'
-import { AgentView } from './AgentView.js'
+import { readSessionOwners } from '../sessionMounts.js'
+import { resumeFailureText } from '../sessions/resumeFailure.js'
+import { markHomeSeen } from '../homePrefs.js'
 import { extendTrajectory, projectWave, type TrajBuild } from '../dsh-adapter/trajectory/index.js'
 import { miniWakeWidth } from '../components/trajectory/MiniWake.js'
 import { readTrajectorySeen, writeTrajectorySeen } from '../trajectoryPrefs.js'
@@ -275,6 +277,7 @@ export function Chat({
   trajectorySeen: trajectorySeenProp,
   injectControllerRef,
   renderScene,
+  openHomeOnBoot,
 }: {
   channel: Channel
   renderScene?: (id: string, channel: Channel) => React.ReactNode
@@ -327,6 +330,15 @@ export function Chat({
    * open the channel (headless scripts, bare embeds).
    */
   injectControllerRef?: React.RefObject<InjectController | null>
+  /**
+   * Show the workspace home screen as this session's first frame.
+   *
+   * A prop rather than a filesystem read inside the component: the host knows
+   * whether this launch was an ordinary one (no `--resume`, no workspace
+   * target) and whether the home screen has already been shown on this
+   * installation, and tests need it deterministic.
+   */
+  openHomeOnBoot?: boolean
 }) {
   const writeRaw = React.useContext(TerminalWriteContext)
   // Re-render whenever the channel mutates; rows/status are read fresh below.
@@ -499,18 +511,33 @@ export function Chat({
   }
   /** `/skills` 技能目录（issue #204）：null = 注册表快照在途。 */
   const [skillsList, setSkillsList] = React.useState<readonly SkillInfo[] | null>(null)
-  /** `/resume` opens the session browser, a screen rather than a panel. It
-   *  owns its own selection, filters and keyboard — Chat only opens it. */
-  const [browserOpen, setBrowserOpen] = React.useState(false)
+  /**
+   * The session supervisor — the ONE screen behind `/resume`, `/agentview`,
+   * `/home`, `/bg` and the composer's 🏠 button.
+   *
+   * Those were three screens over one domain (a workspace rail here, a
+   * search surface there, a live-status overview somewhere else), which is why
+   * each new session feature needed patching into all three and why the
+   * three disagreed about what switching a session even does. There is now a
+   * single surface and a single runtime behind every entry point: this
+   * terminal hosts several sessions, leaving one parks it rather than ending
+   * it, and a session another terminal holds is visible but not enterable.
+   *
+   * Seeded from the host's one-shot landing decision (`openHomeOnBoot`): the
+   * first ordinary launch of an installation lands here instead of on a blank
+   * conversation, because that is the launch where "which project am I working
+   * on" has not been answered yet. Every later launch starts on the chat
+   * screen, and the screen stays reachable.
+   */
+  const [supervisorOpen, setSupervisorOpen] = React.useState(openHomeOnBoot === true)
   /** `/tree` opens the session family tree (pi's Session Tree): every rewind
    *  fork stitched back onto the message it diverged from, hover previews,
-   *  and per-node rewind/fork/adopt actions. Like the browser, a screen. */
+   *  and per-node rewind/fork/adopt actions. Like the supervisor, a screen. */
   const [treeOpen, setTreeOpen] = React.useState(false)
-  /** `/agentview` and `/bg` open the agent view — a screen like the browser:
-   *  it owns selection, the dispatch input and every key while up. */
-  const [agentViewOpen, setAgentViewOpen] = React.useState(false)
-  /** The session backgrounded when the view opened via ←/`/bg` (the "Esc
-   *  returns to that conversation" return target), cleared on close. */
+  /**
+   * The session backgrounded when the screen opened via ←/`/bg` (the "Esc
+   *  returns to that conversation" return target), cleared on close.
+   */
   const [agentViewReturnId, setAgentViewReturnId] = React.useState<string | undefined>(undefined)
   /** Live agent-view rows: the prompt footer's "← N agents" hint reads the
    *  needs-input count from here (cached snapshot in the channel). The
@@ -524,16 +551,16 @@ export function Chat({
   const backgroundAgentsNeedingInput = agentViewRows.filter(
     row => row.status === 'needs-input' && !row.current,
   ).length
-  /** Background the attached session and open the agent view
+  /** Background the attached session and open the supervisor
    *  (`/bg`, `/background`, and ← on an empty prompt all land here). The
-   *  backgrounded session becomes the view's return target (final Esc
+   *  backgrounded session becomes the screen's return target (final Esc
    *  attaches back to it). */
   const backgroundToAgentView = React.useCallback((): void => {
     void channel.backgroundCurrent().then((result) => {
       if (result.ok) {
         setAgentViewReturnId(result.backgroundedSessionId)
         agentViewOpenSessionRef.current = channel.agentId
-        setAgentViewOpen(true)
+        setSupervisorOpen(true)
       }
     })
   }, [channel])
@@ -772,6 +799,34 @@ export function Chat({
     })
     setSceneOpen(true)
   }, [])
+
+  /**
+   * Leave the session supervisor for the conversation.
+   *
+   * The one-shot landing preference is written here rather than at boot: a
+   * process that dies before the user ever sees the screen (a config error, a
+   * crash during the first render) must not burn the installation's only
+   * first-launch landing. Writing on the way OUT means "the user has seen it".
+   *
+   * Leaving also honours `/bg`'s return target. `/background` moved the
+   * session the user was in to the background and opened this screen; a plain
+   * Esc out of it re-attaches to that session instead of silently leaving them
+   * on the fresh one, which is what "go back to what I was doing" means. Any
+   * explicit mount inside the screen clears the target first, so this can
+   * never undo a choice the user just made.
+   */
+  const closeHome = React.useCallback(() => {
+    suppressLogoIntroRef.current = true
+    markHomeSeen()
+    const returnTo = agentViewReturnId
+    setAgentViewReturnId(undefined)
+    setSupervisorOpen(false)
+    if (returnTo !== undefined && returnTo !== channel.agentId) {
+      void channel.resumeTo(returnTo).then((result) => {
+        if (result.ok) repaintTranscript()
+      }).catch(() => undefined)
+    }
+  }, [agentViewReturnId, channel, repaintTranscript])
   /** The startup summary gives way to transcript rows after the first local command or message. */
   const loadedContextVisible = channel.rows.length === 0 && channel.loadedContext !== undefined
   /** Startup context panel: collapsed by default, toggled with Ctrl+P. */
@@ -1814,27 +1869,31 @@ export function Chat({
         }
         return true
       }
-      case 'resume': {
-        setHelpOpen(false)
-        // The browser opens immediately and loads its own list. Waiting for
-        // the listing here would make `/resume` feel slower the more history
-        // a project has, which is exactly backwards.
-        setBrowserOpen(true)
-        return true
-      }
+      case 'resume':
+      /**
+       * `/resume`, `/home` and `/agentview` are one screen.
+       *
+       * They were three implementations of one domain and drifted apart: the
+       * same session could be listed by all three, each with its own selection
+       * model and its own idea of what opening one does. Keeping the three
+       * commands is about muscle memory, not about three surfaces — every one
+       * of them lands here, on the same runtime.
+       */
+      case 'home':
       case 'agentview': {
-        // The agent view shows one screen for every session. It opens
-        // immediately; the view reads its own rows (live + persisted).
         setHelpOpen(false)
+        // The screen opens immediately and loads its own list. Waiting for the
+        // listing here would make it feel slower the more history a project
+        // has, which is exactly backwards.
         agentViewOpenSessionRef.current = channel.agentId
-        setAgentViewOpen(true)
+        setSupervisorOpen(true)
         return true
       }
       case 'bg':
       case 'background': {
         // `/background`: the attached session moves to the background
         // (it keeps running in this process), the terminal lands on a fresh
-        // session, and the agent view opens on top.
+        // session, and the supervisor opens on top.
         setHelpOpen(false)
         backgroundToAgentView()
         return true
@@ -2650,16 +2709,14 @@ export function Chat({
       || overlay.kind === 'tips'
       || (recap !== null && (!recap.auto || recap.expanded))
     ) return
-    // Same for the session browser: it renders instead of the conversation,
-    // so every key belongs to it — including the plain letters that drive its
-    // search box, which Chat would otherwise route into the prompt.
-    if (browserOpen) return
-    // Same for the session tree: plain letters drive its search, clicks and
-    // Enter drive its action menu.
+    // The session tree owns the whole terminal while it is up: plain letters
+    // drive its search, clicks and Enter drive its action menu.
     if (treeOpen) return
-    // The agent view is another whole-screen surface:
-    // its dispatch input owns every printable key.
-    if (agentViewOpen) return
+    // The session supervisor owns the whole terminal while it is up: its rail
+    // and session list bind ↑/↓/Enter/Tab/Esc, its filter box takes the plain
+    // letters that would otherwise reach the prompt, and the directory picker
+    // and menus it opens are its own modal layers.
+    if (supervisorOpen) return
     // Same for the settings screen: plain letters (s save / d discard) and
     // the field draft editor belong to it alone.
     if (settingsOpen) return
@@ -3492,7 +3549,7 @@ export function Chat({
     />
   ) : null
   const interruptPanel = approvalPanelNode ?? questionPanelNode
-  const screenOpen = channel.pluginScene !== undefined || browserOpen || settingsOpen
+  const screenOpen = channel.pluginScene !== undefined || supervisorOpen || settingsOpen
     || subagentDetailId !== null || subagentDashboardOpen || sceneOpen
   if (interruptPanel !== null && screenOpen) {
     const node = (
@@ -3532,54 +3589,83 @@ export function Chat({
     return fullscreen ? node : <AlternateScreen>{node}</AlternateScreen>
   }
 
-  // The agent view is a screen like the browser: it REPLACES the
-  // conversation. Every session keeps running behind it — including the
-  // attached one mid-turn.
-  if (agentViewOpen) {
-    const view = (
-      <AgentView
+  /**
+   * The session supervisor: a screen in the same sense as the tree — an early
+   * return after every hook above has run, so there is no transcript
+   * underneath to repaint or bled through.
+   *
+   * It sits ABOVE the session tree because it is the surface a launch can
+   * start on (`openHomeOnBoot`): a first launch has no conversation to come
+   * back to, and every action it offers either mounts a session (which closes
+   * it) or starts a new one.
+   *
+   * Behind it, every session this terminal hosts keeps running — that is the
+   * runtime the screen describes, not an implementation detail of it. A turn
+   * that was in flight when the user opened this screen is still in flight
+   * while they read the list, which is why closing the screen only repaints
+   * the transcript when the attached session actually changed.
+   */
+  if (supervisorOpen) {
+    /**
+     * Live state per session, from the channel's own agent-view projection.
+     * Reading the projection rather than a parallel source is what keeps this
+     * screen and the attention hints in the composer footer from disagreeing
+     * about which session is waiting for input.
+     */
+    const agentRowOf = (sessionId: string) => agentViewRows.find(row => row.id === sessionId)
+    /**
+     * Cross-process occupancy, read once per render from the mount ledger.
+     * A local process's own sessions resolve as `mine` and are never shown as
+     * occupied, so the map only ever carries genuine conflicts.
+     */
+    const foreignOwners = readSessionOwners()
+    const supervisorNode = (
+      <SessionSupervisor
         channel={channel}
         home={homeDir()}
+        onClose={closeHome}
         approval={approvalSnapshot}
         onApprove={outcome => approvals.decide(outcome)}
-        returnSessionId={agentViewReturnId}
-        onClose={() => {
-          // The transcript tree remounts on close: never replay the whale
-          // intro there, and when the session changed INSIDE the view
-          // (attach / backgrounded dispatch), repaint the fresh transcript
-          // from the top like `/new` does.
+        onOpenSession={async (sessionId) => {
+          const result = await channel.resumeTo(sessionId)
+          if (!result.ok) {
+            const text = resumeFailureText(result)
+            if (text !== undefined) channel.notify(text, { color: 'error', timeoutMs: 8000 })
+            return false
+          }
+          channel.notify(t('resume-resumed'))
           suppressLogoIntroRef.current = true
-          const switched =
-            agentViewOpenSessionRef.current !== undefined &&
-            agentViewOpenSessionRef.current !== channel.agentId
-          if (switched) repaintTranscript()
           setAgentViewReturnId(undefined)
-          setAgentViewOpen(false)
+          setSupervisorOpen(false)
+          repaintTranscript()
+          return true
         }}
-      />
-    )
-    return fullscreen ? view : <AlternateScreen>{view}</AlternateScreen>
-  }
-
-  // The browser is a screen, not an overlay: it REPLACES the conversation
-  // rather than floating above it. Rendering it as an early return (after
-  // every hook above has run) is what makes that literal — there is no
-  // transcript underneath to be repainted, scrolled, or bled through.
-  if (browserOpen) {
-    const browser = (
-      <SessionBrowser
-        channel={channel}
-        home={homeDir()}
-        sameProject={sessionCwdMatches}
-        onClose={() => {
-          suppressLogoIntroRef.current = true
-          setBrowserOpen(false)
+        onNewSession={async (target) => {
+          const ok = await channel.switchWorkspace(target)
+          if (ok) {
+            suppressLogoIntroRef.current = true
+            setAgentViewReturnId(undefined)
+            setSupervisorOpen(false)
+            repaintTranscript()
+          }
+          return ok
+        }}
+        onStopSession={async (sessionId) => channel.stopBackgroundAgent?.(sessionId) ?? false}
+        liveStateOf={(sessionId) => {
+          const row = agentRowOf(sessionId)
+          return row === undefined
+            ? undefined
+            : { status: row.status, live: row.live, current: row.current, summary: row.summary }
+        }}
+        occupancyOf={(sessionId) => {
+          const owner = foreignOwners.get(sessionId)
+          return owner === undefined || owner.pid === process.pid ? undefined : owner.pid
         }}
       />
     )
     // Inline hosts enter the alternate screen for the duration; full-screen
     // hosts are already in it and must not nest a second one.
-    return fullscreen ? browser : <AlternateScreen>{browser}</AlternateScreen>
+    return fullscreen ? supervisorNode : <AlternateScreen>{supervisorNode}</AlternateScreen>
   }
 
   // The session tree follows the browser's rule exactly: it REPLACES the
@@ -4044,6 +4130,15 @@ export function Chat({
           onFillConsumed={() =>{  setHistoryFill(null) }}
           onRewindRequest={openRewind}
           onBackgroundRequest={backgroundToAgentView}
+          // The 🏠 at the head of the input row opens the same session screen
+          // `/resume` and `/agentview` open — one surface, three doors. It is
+          // gated on this prop rather than a setting, so hosts that mount the
+          // prompt without a session screen (and the layout regressions that
+          // pin the row's column budget) keep the row they had.
+          onOpenSessions={() => {
+            agentViewOpenSessionRef.current = channel.agentId
+            setSupervisorOpen(true)
+          }}
           backgroundAgentsNeedingInput={
             // Only the real channel supplies the seam; pre-agent-view test
             // stubs must not grow the footer row (layout-dependent

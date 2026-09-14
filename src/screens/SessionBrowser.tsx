@@ -12,6 +12,7 @@ import { WorkspaceListRow } from '../components/sessions/WorkspaceListRow.js'
 import { useTerminalFocus } from '../ink/hooks/use-terminal-focus.js'
 import { isMod, isPlainReturn, modLabel } from '../utils/modifiers.js'
 import { formatProject, projectName, spreadRow, tailWidth, truncateWidth } from '../sessions/format.js'
+import { resumeFailureText } from '../sessions/resumeFailure.js'
 import { stringWidth } from '../ink/stringWidth.js'
 import { TICK, MULTIPLICATION_X } from '../terminal-utils/figures.js'
 import {
@@ -372,13 +373,11 @@ export function SessionBrowser({
           channel.notify(t('resume-resumed'))
           onClose()
         } else {
-          if (result.reason === 'cancelled') return
-          const text = result.reason === 'working'
-            ? t('resume-while-working')
-            : result.reason === 'unavailable'
-              ? t('resume-unavailable')
-              : t('session-resume-failed', { err: result.error })
-          setNotice({ text, tone: 'error' })
+          // One shared wording for every refusal, so this screen cannot
+          // disagree with the supervisor about the same outcome (including the
+          // cross-process occupancy case, whose holder pid it names).
+          const text = resumeFailureText(result)
+          if (text !== undefined) setNotice({ text, tone: 'error' })
         }
       } catch (error) {
         setNotice({ text: t('session-resume-failed', { err: message(error) }), tone: 'error' })
