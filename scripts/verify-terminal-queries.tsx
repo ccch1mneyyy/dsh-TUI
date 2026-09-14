@@ -11,6 +11,7 @@ import { PassThrough, Writable } from 'node:stream'
 import React, { useEffect } from 'react'
 import { AlternateScreen, render, renderSync, Text, useInput, useStdin } from '../src/ui.js'
 import instances from '../src/ink/instances.js'
+import { INITIAL_STATE, parseMultipleKeypresses } from '../src/ink/parse-keypress.js'
 import { oscColor, TerminalQuerier } from '../src/ink/terminal-querier.js'
 import { supportsDecrqmProbe } from '../src/ink/terminal.js'
 import { settled, sleep } from './lib/term-test.mjs'
@@ -280,6 +281,47 @@ assert.equal(
   true,
   'conforming terminals must keep the alt-screen DECRQM probe',
 )
+
+// Windows ConPTY can split a DA1 reply across a timeout boundary: the ESC
+// is flushed as a standalone key, and the remaining `[?61;...c` text must
+// still be recognized as the terminal response rather than leaking into the
+// prompt. This is the bug fixed in parse-keypress.ts.
+{
+  let state = INITIAL_STATE
+  let parsed
+  ;[parsed, state] = parseMultipleKeypresses(state, '\x1b')
+  assert.deepEqual(parsed, [], 'the leading ESC should stay pending until the flush')
+  ;[parsed, state] = parseMultipleKeypresses(state, null)
+  assert.equal(parsed[0]?.kind, 'key', 'the timeout flush should release a lone Escape key')
+  ;[parsed] = parseMultipleKeypresses(state, '[?61;4;6;7;14;21;22;23;24;28;32;42;52c')
+  assert.equal(parsed.length, 1, 'the late DA1 tail should stay a single parsed item')
+  assert.equal(parsed[0]?.kind, 'response', 'the late DA1 tail must stay a terminal response')
+  assert.equal(parsed[0]?.response.type, 'da1', 'the late DA1 tail must not leak as input text')
+}
+
+{
+  const [parsed] = parseMultipleKeypresses(
+    INITIAL_STATE,
+    '[?61;4;6;7;14;21;22;23;24;28;32;42;52c',
+  )
+  assert.equal(parsed.length, 1, 'literal DA1-shaped input should stay visible')
+  assert.equal(parsed[0]?.kind, 'key', 'literal DA1-shaped input must not be a terminal response')
+}
+
+{
+  let state = INITIAL_STATE
+  let parsed
+  ;[, state] = parseMultipleKeypresses(state, '\x1b')
+  ;[, state] = parseMultipleKeypresses(state, null)
+  ;[parsed] = parseMultipleKeypresses(
+    { ...state, terminalResponseTailAfterEscFlushAt: Date.now() - 2000 },
+    '[?61;4;6;7;14;21;22;23;24;28;32;42;52c',
+  )
+  assert.equal(parsed.length, 1, 'expired DA1-shaped input should stay visible')
+  assert.equal(parsed[0]?.kind, 'key', 'expired DA1-shaped input must not be a terminal response')
+}
+
+console.log('PASS: late DA1 tails stay in the terminal-response lane')
 
 if (realTermProgram === undefined) delete process.env.TERM_PROGRAM
 else process.env.TERM_PROGRAM = realTermProgram
