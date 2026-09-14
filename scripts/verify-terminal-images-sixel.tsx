@@ -36,6 +36,9 @@ async function until(check: () => boolean, message: string): Promise<void> {
 }
 const { Terminal } = xterm
 if (!await loadSharp()) { console.log('SKIP Sixel images: optional sharp unavailable'); process.exit(0) }
+// Erase output carries the surface background as an SGR sequence, and chalk
+// clamps to level 0 under a non-TTY stdout, which would strip it away.
+chalk.level = 3
 function decodeRaster(data: string) {
   const body = /^\x1bP0;1;q([\s\S]*)\x1b\\$/u.exec(data)?.[1]
   assert.ok(body, 'complete DCS introducer and terminator')
@@ -202,6 +205,68 @@ await delay(20)
 assert.equal(coalesced.length, 1, 'returning to the active request withdraws obsolete pending work')
 latest.dispose()
 
+// A scroll row moves the image's clip, so the raster it needs is a NEW crop
+// (left/top/cropWidth/cropHeight are part of the variant key) and the encoder
+// is asynchronous. Erasing the displayed rect in the frame that has no
+// replacement to draw is what flashed black while scrolling, and the same
+// skip made an image vanish under a tooltip that merely covered part of it.
+const scrollJobs: Array<{ request: SixelEncodeRequest; resolve: (value: SixelRaster) => void }> = []
+let scrollReady = 0
+const scroll = new SixelGraphicsManager(() => scrollReady++, request => new Promise(resolve => scrollJobs.push({ request, resolve })))
+scroll.setCellSize({ width: 10, height: 20 })
+scroll.beginFrame(40, 16)
+scroll.prepare(placement)
+scroll.reconcile(screen(), screen())
+scrollJobs[0].resolve(readyRaster)
+await until(() => scrollReady === 1, 'scroll fixture encodes the visible crop')
+scroll.beginFrame(40, 16)
+assert.equal(scroll.prepare(placement), true)
+assert.equal(scroll.reconcile(screen(), screen()).erase, '', 'the first display of a cached crop needs no erase')
+assert.match(scroll.paint([]), /^\x1b\[4;3H/u)
+const clipped: TerminalImagePlacement = { ...placement, clip: { x: 2, y: 5, columns: 8, rows: 2 } }
+scroll.beginFrame(40, 16)
+assert.equal(scroll.prepare(clipped), false, 'a scrolled crop starts unencoded')
+assert.equal(scroll.reconcile(screen(), screen()).erase, '', 'a pending replacement must not erase the displayed rect')
+assert.equal(scroll.paint([]), '', 'and must not redraw the stale raster')
+assert.equal(scrollJobs.length, 2, 'the scrolled crop is queued')
+scrollJobs[1].resolve(readyRaster)
+await until(() => scrollReady === 2, 'the replacement requests a repaint')
+scroll.beginFrame(40, 16)
+assert.equal(scroll.prepare(clipped), true)
+const swapped = scroll.reconcile(screen(), screen())
+assert.match(swapped.erase, /\x1b\[8X/u, 'the ready replacement erases the old rect')
+assert.ok(scroll.paint([]).includes('\x1b[6;3H'), 'and draws the replacement in the same frame')
+scroll.beginFrame(40, 16)
+scroll.prepare(clipped)
+scroll.reconcile(screen(), screen(), [{ ...clipped, occluded: true }])
+assert.equal(scroll.paint([]), '', 'an occluded rect is neither erased nor redrawn')
+// The cells an overlay covers must give up their pixels: their style does not
+// change, so the frame diff never rewrites them and the raster would show
+// through the overlay (the white block between "100%" and "原像素").
+scroll.beginFrame(40, 16)
+scroll.prepare(clipped)
+const partialCover = scroll.reconcile(screen(), screen(), [{
+  ...clipped,
+  occluded: true,
+  coveredRects: [{ x: 3, y: 5, width: 4, height: 1 }],
+}])
+assert.match(partialCover.erase, /\x1b\[0m\x1b\[48;2;255;255;255m\x1b\[6;4H\x1b\[4X/u,
+  'the covered cells are erased with the placement surface color')
+assert.ok(!/\x1b\[8X/u.test(partialCover.erase), 'only the covered cells are erased, not the whole raster')
+assert.equal(scroll.paint([]), '', 'the uncovered pixels stay on screen')
+scroll.beginFrame(40, 16)
+scroll.prepare(clipped)
+assert.equal(scroll.reconcile(screen(), screen(), [{
+  ...clipped,
+  occluded: true,
+  coveredRects: [{ x: 3, y: 5, width: 4, height: 1 }],
+}]).erase, '', 'an unchanged cover is erased once')
+scroll.beginFrame(40, 16)
+scroll.prepare(clipped)
+assert.equal(scroll.reconcile(screen(), screen(), [clipped]).erase, '', 'uncovering needs no erase of the rect own pixels')
+assert.ok(scroll.paint([]).includes('\x1b[6;3H'), 'an uncovered rect is redrawn after being held')
+scroll.dispose()
+
 class Input extends PassThrough {
   isTTY = true
   isRaw = false
@@ -232,12 +297,15 @@ delete process.env.STY
 delete process.env.DSH_TUI_ACCESSIBILITY
 delete process.env.DSH_TUI_DISABLE_TERMINAL_IMAGES
 delete process.env.DSH_TUI_IMAGE_PROTOCOL
-const imageTree = (show: boolean, counter = 0, preview = true, covered = false) => (
+const imageTree = (show: boolean, counter = 0, preview = true, covered = false, partial = false) => (
   <AlternateScreen>
     <Box width={50} height={17} flexDirection="column">
       <Text>PREVIEW HEADER</Text>
-      <Box height={7}>
+      <Box height={7} backgroundColor="toolCardBackground">
         {show ? <Image source={source} width={8} height={4} alt="test" presentation={preview ? 'preview' : undefined}><Text>FALLBACK</Text></Image> : null}
+        {/* A popup that covers only part of the raster: the same surface color,
+            so the covered cells keep the image's own backing style. */}
+        {partial ? <Box position="absolute" top={2} left={2} width={3} height={2} backgroundColor="toolCardBackground"><Text>{'   \n   '}</Text></Box> : null}
       </Box>
       <Text>AFTER {counter}</Text>
       {covered ? <Box position="absolute" top={1} left={0} width={8} height={4} opaque><Text>{'        \n        \n        \n        '}</Text></Box> : null}
@@ -266,6 +334,21 @@ try {
   const uncoverStart = stdout.data.length
   app.rerender(imageTree(true, 1))
   await until(() => stdout.data.slice(uncoverStart).includes('\x1bP0;1;q'), 'uncovering restores cached pixels')
+  // A popup covering only part of the raster: the cells it covers must be
+  // erased with the surface color (nothing else rewrites them — a
+  // background-only space cell diffs as unchanged), while the rest of the
+  // image stays on screen.
+  const partialStart = stdout.data.length
+  app.rerender(imageTree(true, 1, true, false, true))
+  await until(() => {
+    const covered = stdout.data.slice(partialStart)
+    return /\x1b\[0m\x1b\[48;2;\d+;\d+;\d+m(?:\x1b\[\d+;\d+H\x1b\[\d+X)+/u.test(covered)
+  }, 'a partial overlay erases its covered cells with the surface color')
+  assert.ok(!/\x1b\[8X/u.test(stdout.data.slice(partialStart)), 'a partial overlay must not erase the whole raster')
+  assert.ok(!stdout.data.slice(partialStart).includes('\x1bP0;1;q'), 'a covered raster is not redrawn over the overlay')
+  const partialUncover = stdout.data.length
+  app.rerender(imageTree(true, 1))
+  await until(() => stdout.data.slice(partialUncover).includes('\x1bP0;1;q'), 'the raster returns once the overlay closes')
   const closeStart = stdout.data.length
   app.rerender(imageTree(false))
   await until(() => stdout.data.slice(closeStart).includes('\x1b[8X'), 'closing a preview must erase actual pixels')
@@ -341,6 +424,25 @@ try {
     const right = Array.from({ length: 50 }, (_, x) => x).find(x => titleLine.getCell(x)?.getChars() === '╮')
     assert.ok(left !== undefined && right !== undefined && right > left)
     for (let x = left; x <= right; x++) assert.equal(titleLine.getCell(x)?.getBgColor(), 0xffffff, 'title background is white, not blue')
+    // The card owns its whole rect: the border ring and the image's own cells
+    // belong to the surface as well. Leaving any of them at the terminal
+    // default is the black frame around the card and the black strip beside
+    // the raster on Windows Terminal.
+    let cardX = 0
+    let cardY = 0
+    for (let ancestor: DOMElement | undefined = card; ancestor; ancestor = ancestor.parentNode) {
+      cardX += ancestor.yogaNode?.getComputedLeft() ?? 0
+      cardY += ancestor.yogaNode?.getComputedTop() ?? 0
+    }
+    const cardWidth = Math.floor(card!.yogaNode?.getComputedWidth() ?? 0)
+    const cardHeight = Math.floor(card!.yogaNode?.getComputedHeight() ?? 0)
+    assert.ok(cardWidth > 0 && cardHeight > 0, 'card rect is measurable')
+    for (let y = Math.floor(cardY); y < Math.floor(cardY) + cardHeight; y++) {
+      const line = cardTerminal.buffer.active.getLine(y)
+      for (let x = Math.floor(cardX); x < Math.floor(cardX) + cardWidth; x++) {
+        assert.equal(line?.getCell(x)?.getBgColor(), 0xffffff, `card cell ${x},${y} keeps the surface background`)
+      }
+    }
   } finally { cardTerminal.dispose() }
   const start = overlayOutput.data.length
   overlayApp.rerender(overlayTree(false))

@@ -186,6 +186,14 @@ type Options = {
   /** Paint image fallbacks as blank backing cells and collect placements. */
   terminalImages?: boolean
   imageReady?: (placement: TerminalImagePlacement) => boolean
+  /**
+   * True when the active protocol paints rasters OVER the cell grid (Sixel)
+   * instead of behind it (Kitty). Image-owned cells must then carry the
+   * surface background: the raster covers them anyway, and terminal-default
+   * blanks would show as black holes wherever a raster fails to cover a cell
+   * (aspect rounding, suppressed/occluded placements).
+   */
+  opaqueImageBacking?: boolean
   /** Image requests from the diff baseline, reused by clean subtree blits. */
   previousImages?: readonly TerminalImagePlacement[]
 }
@@ -482,6 +490,49 @@ function buildClusteredChars(
 }
 
 /**
+ * The screen rect a paint operation covers, when it can occlude a raster
+ * painted earlier in the same frame. `clip`/`unclip`/`noSelect` paint nothing.
+ */
+function imageOcclusionRect(op: Operation, width: number): Rectangle | undefined {
+  if (op.type === 'write') {
+    return { x: op.x, y: op.y, width: widestLine(op.text), height: op.text.split('\n').length }
+  }
+  if (op.type === 'blit') return op
+  if (op.type === 'clear' || op.type === 'shade') return op.region
+  if (op.type === 'shift') return { x: 0, y: op.top, width, height: op.bottom - op.top + 1 }
+  return undefined
+}
+
+/**
+ * Fold overlapping occluder rects into disjoint ones, so an image protocol that
+ * has to erase them (Sixel) does not repeat the same cells. One overlay usually
+ * contributes several rects for the same area (interior fill, border row, text
+ * row), and an overlay that covers several placements would otherwise erase the
+ * shared cells once per placement.
+ */
+function mergeOcclusionRects(rects: readonly Rectangle[]): Rectangle[] {
+  const merged: Rectangle[] = []
+  for (const rect of rects) {
+    let current = rect
+    let joined = true
+    while (joined) {
+      joined = false
+      for (let index = merged.length - 1; index >= 0; index--) {
+        const other = merged[index]!
+        const overlapsX = current.x < other.x + other.width && current.x + current.width > other.x
+        const overlapsY = current.y < other.y + other.height && current.y + current.height > other.y
+        if (!overlapsX || !overlapsY) continue
+        current = unionRect(current, other)
+        merged.splice(index, 1)
+        joined = true
+      }
+    }
+    merged.push(current)
+  }
+  return merged
+}
+
+/**
  * Collects write/blit/clear/clip operations from the render tree, then
  * applies them to a Screen buffer in get(). The Screen is what gets
  * diffed against the previous frame to produce terminal updates.
@@ -494,6 +545,7 @@ export default class Output {
   private readonly stylePool: StylePool
   private screen: Screen
   terminalImagesEnabled: boolean
+  opaqueImageBacking: boolean
   private imageReady: ((placement: TerminalImagePlacement) => boolean) | undefined
 
   private readonly operations: Operation[] = []
@@ -560,6 +612,7 @@ export default class Output {
     this.stylePool = stylePool
     this.screen = screen
     this.terminalImagesEnabled = options.terminalImages ?? false
+    this.opaqueImageBacking = options.opaqueImageBacking ?? false
     this.imageReady = options.imageReady
     this.previousImages = options.previousImages ?? []
 
@@ -583,11 +636,13 @@ export default class Output {
     terminalImages = false,
     previousImages: readonly TerminalImagePlacement[] = [],
     imageReady?: (placement: TerminalImagePlacement) => boolean,
+    opaqueImageBacking = false,
   ): void {
     this.width = width
     this.height = height
     this.screen = screen
     this.terminalImagesEnabled = terminalImages
+    this.opaqueImageBacking = opaqueImageBacking
     this.imageReady = imageReady
     this.previousImages = previousImages
     this.operations.length = 0
@@ -794,18 +849,34 @@ export default class Output {
       const end = this.imageBackingEnds.get(placement.node)
       if (end === undefined) return placement
       const visible = placement.clip ?? placement
-      const overlaps = (rect: Rectangle): boolean => rect.x < visible.x + visible.columns &&
-        rect.x + rect.width > visible.x && rect.y < visible.y + visible.rows &&
-        rect.y + rect.height > visible.y
-      const occluded = this.operations.slice(end).some(op => {
-        if (op.type === 'write') return overlaps({ x: op.x, y: op.y,
-          width: widestLine(op.text), height: op.text.split('\n').length })
-        if (op.type === 'blit') return overlaps(op)
-        if (op.type === 'clear' || op.type === 'shade') return overlaps(op.region)
-        if (op.type === 'shift') return overlaps({ x: 0, y: op.top, width: this.width, height: op.bottom - op.top + 1 })
-        return false
-      })
-      return { ...placement, occluded }
+      const right = visible.x + visible.columns
+      const bottom = visible.y + visible.rows
+      const overlaps = (rect: Rectangle): boolean => rect.x < right &&
+        rect.x + rect.width > visible.x && rect.y < bottom && rect.y + rect.height > visible.y
+      // A later paint that covers the whole visible rect makes the raster
+      // unreachable and erasing is the only correct outcome (a blank `opaque`
+      // overlay would otherwise be pierced by the pixels beneath it). A paint
+      // that covers only part of it must not take the rest of the raster down
+      // with it — SixelGraphicsManager keeps those pixels instead.
+      const covers = (rect: Rectangle): boolean =>
+        rect.x <= visible.x && rect.y <= visible.y &&
+        rect.x + rect.width >= right && rect.y + rect.height >= bottom
+      let occluded = false
+      let covered = false
+      const occluders: Rectangle[] = []
+      for (const op of this.operations.slice(end)) {
+        const rect = imageOcclusionRect(op, this.width)
+        if (rect === undefined || !overlaps(rect)) continue
+        occluded = true
+        if (covers(rect)) {
+          covered = true
+          break
+        }
+        occluders.push(rect)
+      }
+      if (!occluded) return placement
+      if (covered) return { ...placement, occluded, occludedFully: true }
+      return { ...placement, occluded, coveredRects: mergeOcclusionRects(occluders) }
     })
   }
 
