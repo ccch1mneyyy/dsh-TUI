@@ -558,6 +558,8 @@ const dict = {
   'effort-read-failed': { zh: '推理等级读取失败 · {{error}}', en: 'Failed to read reasoning efforts · {{error}}' },
   'effort-single-tier': { zh: '当前模型只有一档推理等级（{{name}}）', en: 'Current model has a single reasoning effort ({{name}})' },
   'effort-unsupported': { zh: '当前模型不支持推理等级切换', en: 'Current model does not support reasoning effort switching' },
+  'effort-preference-downgraded': { zh: '偏好推理强度 {{preferred}} 不被当前模型支持，已就近降档至 {{applied}}', en: 'Preferred reasoning effort {{preferred}} is unavailable on this model; fell back to the nearest lower tier {{applied}}' },
+  'effort-preference-unsupported': { zh: '偏好推理强度 {{preferred}} 不被当前模型支持，且无更低可用档，保持模型默认', en: 'Preferred reasoning effort {{preferred}} is unavailable on this model with no lower tier; keeping the model default' },
   'effort-switched': { zh: '推理强度 → {{name}}', en: 'Reasoning effort → {{name}}' },
   'effort-invalid': { zh: '未知推理等级 {{id}}（当前模型可选：{{ids}}）', en: 'Unknown reasoning effort {{id}} (this model offers: {{ids}})' },
   'effort-current': { zh: '当前推理强度 {{name}}', en: 'Current reasoning effort {{name}}' },
