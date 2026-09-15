@@ -79,7 +79,7 @@ try {
     const child = Session.create(options.sessionId, options.seed, {
       version: 3, id: options.sessionId, createdAt: 1, isSeeded: options.meta?.isSeeded ?? false, ...options.meta,
     }, options.inheritedEventCount)
-    const childAgent = { id: child.id, session: child, status: 'idle' }
+    const childAgent = { id: child.id, session: child, status: 'idle', inbox: { clear() {} } }
     const setup = await options.setup?.(ctx, childAgent as never)
     setup?.commit()
     created = child
