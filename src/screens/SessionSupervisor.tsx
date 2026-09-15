@@ -283,7 +283,18 @@ export function SessionSupervisor({
       && entries.some(entry => samePath(entry.path, selectedPath))
     ) return
     const here = entries.find(entry => samePath(entry.path, channel.cwd))
-    setSelectedPath((here ?? entries[0]!).path)
+    const next = here ?? entries[0]!
+    setSelectedPath(next.path)
+    // The cursor travels with an automatic selection. It starts at 0, so
+    // leaving it there while the selection lands elsewhere paints two green
+    // rows — `❯` on the first record and the marker on the selected one — until
+    // some input moves it. The two are one position on this screen, and the
+    // very first frame has to render that way. A pick the user made by hand is
+    // left alone (it already moved the cursor itself).
+    setRailFocus(current => {
+      const index = entries.findIndex(entry => samePath(entry.path, next.path))
+      return index < 0 || current === index ? current : index
+    })
   }, [entries, selectedPath, selectionManual, channel.cwd])
 
   // The cursor indexes the entry list directly (there is no `+` row in front of
@@ -887,19 +898,17 @@ export function SessionSupervisor({
  * window has to hold the focused row without re-shuffling under a stationary
  * cursor — the same anchoring rule the session list uses.
  *
- * `focus` keeps the rail's own cursor convention rather than a plain index:
- * the `+` row this rail used to lead with occupied cursor position 0, so the
- * first workspace was 1. The row is gone (a workspace joins the ledger by
- * being a terminal's launch directory), but the helper keeps its input
- * contract so the cursor and this window math cannot drift apart.
+ * `focus` is a plain entry index: the rail's rows ARE the ledger, so the cursor
+ * and the selection are one position and the window math takes that position
+ * directly. It used to be offset by the `+` row that led the rail, which is
+ * gone — a workspace joins the ledger by being a terminal's launch directory.
  */
 export function railWindowTop(focus: number, entryCount: number, railListHeight: number): number {
   const capacity = Math.max(1, railListHeight - 1)
-  const focusedEntry = focus - 1
-  if (focusedEntry < 0) return 0
-  let top = Math.max(0, focusedEntry - capacity + 1)
-  if (focusedEntry < top) top = focusedEntry
-  if (focusedEntry >= top + capacity) top = focusedEntry - capacity + 1
+  if (focus < 0) return 0
+  let top = Math.max(0, focus - capacity + 1)
+  if (focus < top) top = focus
+  if (focus >= top + capacity) top = focus - capacity + 1
   return Math.min(top, Math.max(0, entryCount - capacity))
 }
 

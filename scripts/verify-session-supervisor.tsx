@@ -220,7 +220,7 @@ check('title substring matches', sessionMatchesQuery(sessions[0] as never, 'free
 check('cwd substring matches', sessionMatchesQuery(sessions[0] as never, 'alpha'))
 check('branch substring matches', sessionMatchesQuery(sessions[0] as never, 'main'))
 check('non-match is rejected', !sessionMatchesQuery(sessions[0] as never, 'zzzz'))
-check('rail window keeps the focused entry visible', railWindowTop(5, 20, 6) <= 4)
+check('rail window keeps the focused entry visible', railWindowTop(4, 20, 6) <= 3)
 check('rail window clamps at zero', railWindowTop(0, 20, 6) === 0)
 
 console.log('one surface:')
@@ -231,6 +231,22 @@ check('session pane header renders', text().includes('Sessions in Alpha'))
 check(
   'the rail opens on the terminal own workspace, not the first ledger entry',
   text().includes('Sessions in Alpha') && !text().includes('Sessions in Beta'),
+)
+// The cursor and the selection are ONE position on this screen. The regression
+// is the untouched first frame: the cursor started at index 0 while the
+// selection landed on Alpha, so Beta and Alpha both looked selected.
+//
+// Both rows are located by the rail's own `▣`/`▢` marker — matching the bare
+// title would hit the sessions pane, whose path line also contains "alpha" —
+// and "the cursor is here" is read as the ❯ in the rail's own prefix. The rail
+// is a fraction of the frame, so leading cells are skipped rather than assuming
+// a fixed indent.
+const railCursor = (marker: string, title: string): boolean =>
+  viewportLines(terminal).some(raw => new RegExp(`^\\s*❯\\s+${marker} ${title}\\b`, 'u').test(raw))
+check(
+  'the cursor opens on the selected workspace, not on row 0',
+  railCursor('▣', 'Alpha') && !railCursor('▢', 'Beta'),
+  `alpha marked: ${railCursor('▣', 'Alpha')}, beta marked: ${railCursor('▢', 'Beta')}`,
 )
 check('the live-state counts render', /\d+ working · \d+ live · \d+ total/u.test(text()))
 check('a free session is listed', text().includes('free session'))
