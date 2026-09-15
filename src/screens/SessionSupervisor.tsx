@@ -2,6 +2,7 @@ import React, { useCallback, useMemo, useRef, useState } from 'react'
 import { Box, Text, useInput, useTerminalSize } from '../ui.js'
 import { t } from '../i18n.js'
 import type { ContextMenuEvent } from '../ink/events/context-menu-event.js'
+import type { ClickEvent } from '../ink/events/click-event.js'
 import type { WheelEvent } from '../ink/events/wheel-event.js'
 import { Divider } from '../components/design-system/Divider.js'
 import { HintLine } from '../components/design-system/HintLine.js'
@@ -588,6 +589,15 @@ export function SessionSupervisor({
       moveRail(key.pageDown ? 1 : -1)
       return
     }
+    // The filter is a LIVE query, not a mode you enter: this screen has no
+    // second cursor for a text seat, and the rail/list already own the arrows
+    // (a seat would have to relearn them). So printable input goes straight to
+    // the query — without this branch the box rendered, focused, and could never
+    // be typed into.
+    if (key.backspace || key.delete) {
+      setQuery(text => text.slice(0, -1))
+      return
+    }
     if (isMod(key) && input === 'n') {
       const entry = entries[railRef.current]
       if (entry !== undefined) newSessionIn(entry)
@@ -611,6 +621,14 @@ export function SessionSupervisor({
       const session = visibleSessions[sessionFocusRef.current]
       if (session !== undefined && selected !== undefined && samePath(entry.path, selected.path)) openSession(session)
       else newSessionIn(entry)
+      return
+    }
+    // Reached only when nothing above claimed the key: printable characters
+    // refine the filter. Control bytes are dropped so a terminal reporting an
+    // unknown key cannot type an invisible glyph into the query.
+    if (!isMod(key) && !key.meta && !key.super && input && !key.return) {
+      const typed = input.replace(/\p{Cc}/gu, '')
+      if (typed.length > 0) setQuery(text => text + typed)
     }
   })
 
@@ -721,18 +739,40 @@ export function SessionSupervisor({
 
         <Box flexDirection="column" width={sessionWidth} height="100%" flexShrink={0} overflow="hidden">
           <Box height={1} flexShrink={0} overflow="hidden">
-            <Text color="remember" bold>{truncateWidth(` ${t('home-sessions-title', { name: selected?.title ?? t('supervisor-title') })}`, Math.max(4, sessionWidth - 3))}</Text>
-            <Text dimColor>
-              {`  ${truncateWidth(
-                t('supervisor-counts', { working: workingCount, live: liveCount, total: visibleSessions.length }),
-                Math.max(4, sessionWidth - 3),
-              )}`}
-            </Text>
+            <Box flexShrink={1} overflow="hidden">
+              <Text color="remember" bold>{truncateWidth(` ${t('home-sessions-title', { name: selected?.title ?? t('supervisor-title') })}`, Math.max(4, sessionWidth - 14))}</Text>
+              <Text dimColor>
+                {`  ${truncateWidth(
+                  t('supervisor-counts', { working: workingCount, live: liveCount, total: visibleSessions.length }),
+                  Math.max(4, sessionWidth - 14),
+                )}`}
+              </Text>
+            </Box>
+            <Box flexGrow={1} />
+            {/* Start a session in the workspace the pane is showing. The
+                keyboard path is Ctrl+N / Enter on the rail row; this is the
+                pointer's, and it sits on the pane it acts on rather than on the
+                rail, because that is the list the user is reading. It is also
+                the affordance that reaches a fresh session when the pane is
+                EMPTY — which is exactly when a rail-only control is invisible. */}
+            <Box
+              flexShrink={0}
+              onClick={(event: ClickEvent): void => {
+                event.stopImmediatePropagation()
+                if (selected !== undefined) newSessionIn(selected)
+              }}
+            >
+              <Text color="success" bold>{`${t('supervisor-new-session')} `}</Text>
+            </Box>
           </Box>
           <Box height={1} flexShrink={0} paddingX={1}>
+            {/* Always live: the keyboard feeds this query on every printable
+                key (see useInput), so a box that is "unfocused" while the
+                cursor rests on the first rail entry would be a lie — and it is
+                exactly where the cursor starts. */}
             <SearchBox
               query={query}
-              isFocused={!railVisible || railFocus > 0}
+              isFocused
               isTerminalFocused={isTerminalFocused}
               placeholder={truncateWidth(t('supervisor-filter-placeholder'), Math.max(8, sessionWidth - 6))}
               prefix="/"

@@ -127,7 +127,11 @@ const channel = {
     calls.push(`resumeTo:${id}`)
     return { ok: true }
   },
-  switchWorkspace: async () => true,
+  switchWorkspace: async (target: { cwd: string }) => {
+    calls.push(`switchWorkspace:${target.cwd}`)
+    return true
+  },
+  resolveWorkspace: async (reference: string) => ({ cwd: reference, uri: reference, label: reference, kind: 'local', badge: 'LOCAL' }),
   stopBackgroundAgent: async (id: string) => {
     calls.push(`stop:${id}`)
     return true
@@ -156,7 +160,12 @@ const instance = await render(
           await (channel as unknown as { resumeTo(id: string): Promise<{ ok: boolean }> }).resumeTo(id)
           return true
         }}
-        onNewSession={async () => true}
+        // Same path Chat.tsx wires: the screen resolves the workspace target,
+        // the host switches to it and starts the session there.
+        onNewSession={async (target) => {
+          await (channel as unknown as { switchWorkspace(t: unknown): Promise<boolean> }).switchWorkspace(target)
+          return true
+        }}
         onStopSession={async (id) => {
           await (channel as unknown as { stopBackgroundAgent(id: string): Promise<boolean> }).stopBackgroundAgent(id)
           return true
@@ -253,6 +262,33 @@ check('a free session is listed', text().includes('free session'))
 check('the live session is listed', text().includes('live session'))
 check('the current session is marked', text().includes('current'))
 check('a free session carries no occupancy badge', rowOf('free session') >= 0 && !line(rowOf('free session')).includes('held'))
+
+// The pane's own new-session entry, next to the counts it acts within.
+check('the sessions pane offers a new-session entry', text().includes('+ New session'))
+check('the filter box is live', text().includes('Type to search sessions'))
+
+console.log('typing filters the session list (the box is LIVE, not a mode):')
+stdin.write('free')
+check(
+  'typing narrows the list to the matching session',
+  await settled(() => text().includes('free session') && !text().includes('live session')),
+  text(),
+)
+// Clear so the occupancy checks below see the full ledger again.
+stdin.write('\u007f\u007f\u007f\u007f')
+check(
+  'backspace restores the full list',
+  await settled(() => text().includes('live session') && text().includes('held session')),
+  text(),
+)
+
+console.log('the pane entry starts a session:')
+await clickText('+ New session', () => calls.some(call => call.startsWith('switchWorkspace:')))
+check(
+  'clicking the pane entry starts a session in the selected workspace',
+  calls.includes(`switchWorkspace:${alphaDir}`),
+  `calls: ${calls.join(', ')}`,
+)
 
 console.log('cross-process occupancy:')
 check('the occupied row is listed', text().includes('held session'))
