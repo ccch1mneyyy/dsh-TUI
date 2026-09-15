@@ -77,6 +77,11 @@ class FakeStdin extends PassThrough {
 const sandbox = mkdtempSync(join(tmpdir(), 'dsh-tui-supervisor-'))
 const alphaDir = join(sandbox, 'alpha')
 mkdirSync(alphaDir)
+// A SECOND workspace that sorts BEFORE the terminal's own directory. It exists
+// so "the rail opens on the workspace this terminal is in" is provable: a
+// first-entry default would select Beta and the pane header would name it.
+const betaDir = join(sandbox, 'beta')
+mkdirSync(betaDir)
 
 const now = Date.now()
 const session = (over: Record<string, unknown>): never => ({
@@ -97,6 +102,8 @@ const session = (over: Record<string, unknown>): never => ({
 }) as never
 
 const registry = [
+  // Beta first, on purpose: the ledger's order must not decide the selection.
+  { id: 'w-beta', path: betaDir, title: 'Beta', present: true, sessionCount: 0 },
   { id: 'w-alpha', path: alphaDir, title: 'Alpha', present: true, sessionCount: 0 },
 ]
 const sessions = [
@@ -170,9 +177,11 @@ const instance = await render(
   },
 )
 // Wait for the listing effect to land AND the frame to paint. The first
-// condition is what makes this robust: the screen shows the pane header only
-// after `listSessions()` resolved, so polling for it cannot pass early.
-await settled(() => viewportLines(terminal).join('\n').includes('Sessions in'))
+// condition is what makes this robust: the screen names the terminal's own
+// workspace in the pane header only after `listSessions()` resolved, so polling
+// for it cannot pass early. (Polling the bare word "Sessions" WOULD pass early —
+// the banner carries it from the first paint, before any row exists.)
+await settled(() => viewportLines(terminal).join('\n').includes('Sessions in Alpha'))
 
 const line = (y: number): string => viewportLines(terminal)[y] ?? ''
 const text = (): string => viewportLines(terminal).join('\n')
@@ -219,6 +228,10 @@ check('screen title renders', text().includes('Sessions'))
 check('workspace rail renders', text().includes('Workspaces'))
 check('the rail has no add-workspace row', !text().includes('Add workspace'))
 check('session pane header renders', text().includes('Sessions in Alpha'))
+check(
+  'the rail opens on the terminal own workspace, not the first ledger entry',
+  text().includes('Sessions in Alpha') && !text().includes('Sessions in Beta'),
+)
 check('the live-state counts render', /\d+ working · \d+ live · \d+ total/u.test(text()))
 check('a free session is listed', text().includes('free session'))
 check('the live session is listed', text().includes('live session'))

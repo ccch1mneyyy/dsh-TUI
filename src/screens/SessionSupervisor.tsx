@@ -193,6 +193,8 @@ export function SessionSupervisor({
 
   const [railFocus, setRailFocus] = useState(0)
   const [selectedPath, setSelectedPath] = useState<string | undefined>(undefined)
+  /** True once the user picked a rail row by hand; see the selection effect. */
+  const [selectionManual, setSelectionManual] = useState(false)
   const [sessionFocus, setSessionFocus] = useState(0)
   const [focusSessionId, setFocusSessionId] = useState<string | undefined>(undefined)
   const [pins, setPins] = useState<ReadonlySet<string>>(() => readSessionPins())
@@ -254,16 +256,35 @@ export function SessionSupervisor({
     void reload()
   }, [reload])
 
-  // Selection follows the ledger: a removed workspace (or a first load) falls
-  // back to the first entry, so the right pane is never pointing at nothing.
+  // Selection follows the terminal's own directory, then the ledger: the rail
+  // must open on the workspace this terminal is IN, not on whichever record
+  // sorts first — otherwise launching in a workspace you have never opened
+  // lands the marker on some unrelated project.
+  //
+  // It deliberately does NOT latch the first default it computes. The listing
+  // arrives asynchronously, so the very first pass runs against an EMPTY ledger;
+  // latching there would pin the rail to whatever record arrives first and never
+  // reconsider. While the selection is still ours to make, every ledger update
+  // re-derives it (`entries[0]` remains the fallback when the terminal's own
+  // directory is not registered); once the user picks a row by hand, that choice
+  // wins until its entry disappears.
+  //
+  // `channel.cwd` is a dependency, not just a first read: resuming a session
+  // from another workspace moves this terminal to that workspace, and the rail
+  // follows the session the pane is showing rather than the launch directory.
   React.useEffect(() => {
     if (entries.length === 0) {
-      if (selectedPath !== undefined) setSelectedPath(undefined)
+      if (selectedPath !== undefined && !selectionManual) setSelectedPath(undefined)
       return
     }
-    if (selectedPath !== undefined && entries.some(entry => samePath(entry.path, selectedPath))) return
-    setSelectedPath(entries[0]!.path)
-  }, [entries, selectedPath])
+    if (
+      selectionManual
+      && selectedPath !== undefined
+      && entries.some(entry => samePath(entry.path, selectedPath))
+    ) return
+    const here = entries.find(entry => samePath(entry.path, channel.cwd))
+    setSelectedPath((here ?? entries[0]!).path)
+  }, [entries, selectedPath, selectionManual, channel.cwd])
 
   // The cursor indexes the entry list directly (there is no `+` row in front of
   // it), so a shrinking ledger has to pull it back inside or the last row would
@@ -332,6 +353,7 @@ export function SessionSupervisor({
 
   const selectEntry = useCallback((path: string): void => {
     setSelectedPath(path)
+    setSelectionManual(true)
     setFocusSessionId(undefined)
     setSessionFocus(0)
     sessionFocusRef.current = 0
