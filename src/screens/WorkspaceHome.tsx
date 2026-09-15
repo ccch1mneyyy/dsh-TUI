@@ -26,16 +26,15 @@ const RAIL_MIN_TOTAL_COLUMNS = 84
 const RAIL_WIDTH_MIN = 24
 const RAIL_WIDTH_MAX = 38
 
-type MenuAction = 'open' | 'new' | 'current' | 'rename' | 'remove'
-const MENU_ACTIONS: readonly MenuAction[] = ['open', 'new', 'current', 'rename', 'remove']
+type MenuAction = 'edit' | 'new' | 'rename' | 'remove'
+const MENU_ACTIONS: readonly MenuAction[] = ['edit', 'new', 'rename', 'remove']
 const MENU_WIDTH = 30
 /** One confirm line + its explanation. */
 const MENU_HEIGHT = MENU_ACTIONS.length + 2
 
 const MENU_LABEL_KEYS = {
-  open: 'home-menu-open',
+  edit: 'home-menu-edit',
   new: 'home-menu-new',
-  current: 'home-menu-set-current',
   rename: 'home-menu-rename',
   remove: 'home-menu-remove',
 } as const
@@ -299,10 +298,9 @@ export function WorkspaceHome({
 
   const activateMenu = useCallback((entry: TuiWorkspaceEntry, item: number): void => {
     closeMenu()
-    const action: MenuAction = MENU_ACTIONS[item] ?? 'open'
-    if (action === 'open') selectEntry(entry.path)
+    const action: MenuAction = MENU_ACTIONS[item] ?? 'edit'
+    if (action === 'edit') selectEntry(entry.path)
     else if (action === 'new') newSessionIn(entry)
-    else if (action === 'current') selectEntry(entry.path)
     else if (action === 'rename') setRename({ path: entry.path, draft: entry.title })
     else setConfirmRemove(entry.path)
   }, [closeMenu, newSessionIn, selectEntry])

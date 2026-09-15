@@ -41,16 +41,15 @@ const SESSION_ROW_LINES = 2
 /** Chrome the right pane spends on banner, filter, notice and hints. */
 const SESSION_PANE_CHROME_ROWS = 6
 
-type MenuAction = 'open' | 'new' | 'current' | 'rename' | 'remove'
-const MENU_ACTIONS: readonly MenuAction[] = ['open', 'new', 'current', 'rename', 'remove']
+type MenuAction = 'edit' | 'new' | 'rename' | 'remove'
+const MENU_ACTIONS: readonly MenuAction[] = ['edit', 'new', 'rename', 'remove']
 const MENU_WIDTH = 30
 /** One confirm line + its explanation. */
 const MENU_HEIGHT = MENU_ACTIONS.length + 2
 
 const MENU_LABEL_KEYS = {
-  open: 'home-menu-open',
+  edit: 'home-menu-edit',
   new: 'home-menu-new',
-  current: 'home-menu-set-current',
   rename: 'home-menu-rename',
   remove: 'home-menu-remove',
 } as const
@@ -198,6 +197,12 @@ export function SessionSupervisor({
   const [selectionManual, setSelectionManual] = useState(false)
   const [sessionFocus, setSessionFocus] = useState(0)
   const [focusSessionId, setFocusSessionId] = useState<string | undefined>(undefined)
+  /**
+   * Which column owns the keyboard, and therefore which column draws the `❯`
+   * cursor. Exactly one at a time: two cursors mean "where does Enter go?" has
+   * no answer, and ←/→ is how this screen answers it.
+   */
+  const [activePane, setActivePane] = useState<'rail' | 'list'>('rail')
   const [pins, setPins] = useState<ReadonlySet<string>>(() => readSessionPins())
 
   const [menu, setMenu] = useState<{ path: string; col: number; row: number; item: number } | undefined>(undefined)
@@ -339,6 +344,29 @@ export function SessionSupervisor({
     return byId >= 0 ? byId : 0
   }, [visibleSessions, focusSessionId])
 
+  /**
+   * Enter the session column: land the cursor on the session this terminal is
+   * attached to (that is the one the user most likely means), else on the top
+   * row. A cursor that stayed on index 0 while the list scrolled elsewhere would
+   * act on a row the user never looked at.
+   */
+  const activateList = useCallback((): void => {
+    setActivePane('list')
+    const current = liveStateOf !== undefined
+      ? visibleSessions.findIndex(session => liveStateOf(session.id)?.current === true)
+      : -1
+    const land = current >= 0 ? current : sessionIndex
+    sessionFocusRef.current = land
+    setSessionFocus(land)
+    const session = visibleSessions[land]
+    if (session !== undefined) setFocusSessionId(session.id)
+  }, [liveStateOf, visibleSessions, sessionIndex])
+
+  /** Enter the workspace column. */
+  const activateRail = useCallback((): void => {
+    setActivePane('rail')
+  }, [])
+
   const railWidth = columns >= RAIL_MIN_TOTAL_COLUMNS
     ? Math.min(RAIL_WIDTH_MAX, Math.max(RAIL_WIDTH_MIN, Math.floor(columns * 0.3)))
     : columns
@@ -459,10 +487,9 @@ export function SessionSupervisor({
 
   const activateMenu = useCallback((entry: TuiWorkspaceEntry, item: number): void => {
     closeMenu()
-    const action: MenuAction = MENU_ACTIONS[item] ?? 'open'
-    if (action === 'open') selectEntry(entry.path)
+    const action: MenuAction = MENU_ACTIONS[item] ?? 'edit'
+    if (action === 'edit') selectEntry(entry.path)
     else if (action === 'new') newSessionIn(entry)
-    else if (action === 'current') selectEntry(entry.path)
     else if (action === 'rename') setRename({ path: entry.path, draft: entry.title })
     else setConfirmRemove(entry.path)
   }, [closeMenu, newSessionIn, selectEntry])
@@ -556,9 +583,10 @@ export function SessionSupervisor({
       return
     }
     if (key.tab) {
-      // Shift+Tab opens the focused workspace's action menu; plain Tab moves
-      // the focus between the panes (handled by the composer's keymap).
-      if (key.shift) {
+      // Shift+Tab keeps the keyboard route to the focused workspace's action
+      // menu. Plain Tab does nothing here: panes are chosen with ←/→ now, and
+      // Tab is the composer's business.
+      if (key.shift && activePane === 'rail') {
         const entry = entries[railRef.current]
         if (entry !== undefined) {
           const next = { path: entry.path, ...keyboardMenuAnchor, item: 0 }
@@ -568,25 +596,29 @@ export function SessionSupervisor({
       }
       return
     }
+    // ←/→ choose the column. There is exactly one `❯` on screen because exactly
+    // one column owns the keyboard, and this is what moves that ownership.
     if (key.leftArrow) {
-      const entry = entries[railRef.current]
-      if (entry !== undefined) {
-        const next = { path: entry.path, ...keyboardMenuAnchor, item: 0 }
-        menuRef.current = next
-        setMenu(next)
-      }
+      activateRail()
+      return
+    }
+    if (key.rightArrow) {
+      activateList()
       return
     }
     if (key.upArrow || key.wheelUp) {
-      moveRail(-1)
+      if (activePane === 'rail') moveRail(-1)
+      else moveSession(-1)
       return
     }
     if (key.downArrow || key.wheelDown) {
-      moveRail(1)
+      if (activePane === 'rail') moveRail(1)
+      else moveSession(1)
       return
     }
     if (key.pageUp || key.pageDown) {
-      moveRail(key.pageDown ? 1 : -1)
+      if (activePane === 'list') moveSession(key.pageDown ? 1 : -1)
+      else moveRail(key.pageDown ? 1 : -1)
       return
     }
     // The filter is a LIVE query, not a mode you enter: this screen has no
@@ -612,15 +644,23 @@ export function SessionSupervisor({
       return
     }
     if (isPlainReturn(key)) {
+      // Enter means "the thing the active column is showing": its action menu
+      // for a workspace, that session for the session list. Ctrl/Cmd+Enter keeps
+      // the old "start a session in this workspace" shortcut from either column.
+      if (activePane === 'list') {
+        const session = visibleSessions[sessionFocusRef.current]
+        if (session !== undefined) openSession(session)
+        return
+      }
       const entry = entries[railRef.current]
       if (entry === undefined) return
       if (key.ctrl || key.meta) {
         newSessionIn(entry)
         return
       }
-      const session = visibleSessions[sessionFocusRef.current]
-      if (session !== undefined && selected !== undefined && samePath(entry.path, selected.path)) openSession(session)
-      else newSessionIn(entry)
+      const next = { path: entry.path, ...keyboardMenuAnchor, item: 0 }
+      menuRef.current = next
+      setMenu(next)
       return
     }
     // Reached only when nothing above claimed the key: printable characters
@@ -646,7 +686,9 @@ export function SessionSupervisor({
       ? t('home-hint-confirm-remove')
       : menu !== undefined
         ? t('home-hint-menu')
-        : t('home-hint-list')
+        : activePane === 'rail'
+          ? t('home-hint-list')
+          : t('supervisor-hint-list')
 
   const railWindowTopIndex = railWindowTop(railFocus, entries.length, railListHeight)
   const visibleRailRows = entries.slice(railWindowTopIndex, railWindowTopIndex + Math.max(1, railListHeight - 1))
@@ -682,6 +724,8 @@ export function SessionSupervisor({
         {railVisible && (
           <ink-box
             style={{ flexDirection: 'column', width: railWidth, height: '100%', flexShrink: 0, overflow: 'hidden' }}
+            onClick={activateRail}
+            onMouseEnter={activateRail}
             onWheel={(event: WheelEvent): void => {
               moveRail(event.deltaY >= 0 ? 1 : -1)
             }}
@@ -705,7 +749,7 @@ export function SessionSupervisor({
                   sessionCount={listedSessions.filter(session => samePath(session.cwd, entry.path)).length}
                   present={entry.present}
                   selected={selected !== undefined && samePath(selected.path, entry.path)}
-                  focused={railFocus === absolute}
+                  focused={activePane === 'rail' && railFocus === absolute}
                   width={railWidth}
                   onSelect={(event): void => {
                     event.stopImmediatePropagation()
@@ -737,7 +781,15 @@ export function SessionSupervisor({
           </Box>
         )}
 
-        <Box flexDirection="column" width={sessionWidth} height="100%" flexShrink={0} overflow="hidden">
+        <Box
+          flexDirection="column"
+          width={sessionWidth}
+          height="100%"
+          flexShrink={0}
+          overflow="hidden"
+          onClick={activateList}
+          onMouseEnter={activateList}
+        >
           <Box height={1} flexShrink={0} overflow="hidden">
             <Box flexShrink={1} overflow="hidden">
               <Text color="remember" bold>{truncateWidth(` ${t('home-sessions-title', { name: selected?.title ?? t('supervisor-title') })}`, Math.max(4, sessionWidth - 14))}</Text>
@@ -772,7 +824,7 @@ export function SessionSupervisor({
                 exactly where the cursor starts. */}
             <SearchBox
               query={query}
-              isFocused
+              isFocused={activePane === 'list'}
               isTerminalFocused={isTerminalFocused}
               placeholder={truncateWidth(t('supervisor-filter-placeholder'), Math.max(8, sessionWidth - 6))}
               prefix="/"
@@ -801,7 +853,7 @@ export function SessionSupervisor({
                   session={session}
                   width={sessionWidth}
                   depth={0}
-                  focused={sessionTop + index === sessionIndex}
+                  focused={activePane === 'list' && sessionTop + index === sessionIndex}
                   pinned={pins.has(session.id)}
                   now={now}
                   liveStatus={state?.live === true ? state.status : undefined}

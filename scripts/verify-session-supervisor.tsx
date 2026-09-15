@@ -263,6 +263,31 @@ check('the live session is listed', text().includes('live session'))
 check('the current session is marked', text().includes('current'))
 check('a free session carries no occupancy badge', rowOf('free session') >= 0 && !line(rowOf('free session')).includes('held'))
 
+// ←/→ picks the column, and exactly one column shows the cursor. The rail's own
+// cursor is the unambiguous witness for which column owns the keyboard: it is
+// read as "the `❯` immediately before this workspace's `▣`/`▢` marker", a shape
+// no session row can produce. Asserting on it therefore proves the switch for
+// both directions without trying to locate the session cursor inside a line the
+// two panes share (the session half starts after the rail's column).
+console.log('←/→ picks the column, and only that column shows ❯:')
+check(
+  'the rail starts with the cursor on its selected workspace',
+  railCursor('▣', 'Alpha') && !railCursor('▢', 'Beta'),
+  `alpha=${railCursor('▣', 'Alpha')} beta=${railCursor('▢', 'Beta')}`,
+)
+stdin.write('\u001b[C')
+check(
+  '→ hands the cursor to the session column (the rail cursor clears)',
+  await settled(() => !railCursor('▣', 'Alpha') && !railCursor('▢', 'Beta')),
+  `alpha=${railCursor('▣', 'Alpha')} beta=${railCursor('▢', 'Beta')}`,
+)
+stdin.write('\u001b[D')
+check(
+  '← hands it back to the rail',
+  await settled(() => railCursor('▣', 'Alpha')),
+  `alpha=${railCursor('▣', 'Alpha')}`,
+)
+
 // The pane's own new-session entry, next to the counts it acts within.
 check('the sessions pane offers a new-session entry', text().includes('+ New session'))
 check('the filter box is live', text().includes('Type to search sessions'))
