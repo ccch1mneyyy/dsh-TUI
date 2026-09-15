@@ -142,7 +142,12 @@ async function verify(fullscreen: boolean, columns: number, entry: 'slash' | 'es
     exitOnCtrlC: false, patchConsole: false,
   })
   const shows = (text: string) => viewportLines(terminal).some(line => line.includes(text))
-  const promptShows = (text: string) => viewportLines(terminal).some(line => /^\s*❯/u.test(line) && line.includes(text))
+  // "On the prompt row" means the line carrying the composer's `❯` caret. The
+  // caret is NOT the first cell any more: the session-entry control (`⌸ `) sits
+  // at the head of the input row by design. Pinning this predicate to the line
+  // start therefore went red against a composer that was rendering the draft
+  // correctly (`⌸ ❯ hi`), so match the line that contains both.
+  const promptShows = (text: string) => viewportLines(terminal).some(line => line.includes('❯') && line.includes(text))
   const enter = async () => {
     await sleep(120) // 固定窗:墙钟 Enter deduplication is 80 ms in both Chat and PromptInput
     stdin.write('\r')

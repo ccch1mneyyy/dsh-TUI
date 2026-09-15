@@ -7,6 +7,9 @@ export {
   createLocalWorkspaceRuntime,
   localWorkspaceUri,
   parseLocalWorkspaceReference,
+  listRegistryWorkspaces,
+  createRegistryWorkspace,
+  removeRegistryWorkspace,
 } from './dsh-adapter/workspaces.js'
 export type {
   TuiWorkspaceKind,
@@ -17,4 +20,5 @@ export type {
   TuiCommandShell,
   TuiWorkspaceProvider,
 } from './dsh-adapter/workspaces.js'
+export type { TuiWorkspaceEntry } from './adapter/ports/channel-workspace.js'
 export { default } from './dsh-adapter/workspaces.js'

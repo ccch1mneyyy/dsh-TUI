@@ -45,6 +45,26 @@ import { SuggestionCard, cardContentWidth } from './SuggestionCard.js'
 
 const HISTORY_LIMIT = 50
 
+/**
+ * Visible text of the session-entry control at the head of the input row:
+ * U+2338 APL FUNCTIONAL SYMBOL QUAD COLON plus a separator space.
+ *
+ * The glyph is chosen for ONE property above all others: the layout model and
+ * the terminal cell table must agree on how many columns it occupies. `\u2338`
+ * is a plain single-cell symbol with no emoji presentation, so
+ * `stringWidth` and the terminal both say 1 + 1 = 2 and
+ * {@link HOME_BUTTON_COLS} can be derived rather than guessed.
+ *
+ * The emoji house (`U+1F3E0`) was tried and rejected on this exact ground: it
+ * costs the terminal ONE cell while `stringWidth` charges the row TWO, and
+ * appending VARIATION SELECTOR-15 (text presentation) does not change either
+ * number. That standing one-column disagreement put every caret-relative
+ * column in the composer off by one, so no offset compensation made it work.
+ */
+const HOME_BUTTON_TEXT = '⌸ '
+
+const HOME_BUTTON_COLS = stringWidth(HOME_BUTTON_TEXT)
+
 interface PromptHistoryEntry {
   readonly text: string
   readonly images: readonly ComposerImageRef[]
@@ -429,6 +449,16 @@ export interface PromptInputProps {
    */
   onBackgroundRequest?(): void
   /**
+   * Open the session screen (the one `/resume`, `/agentview` and `/home`
+   * share) from the `⌂` entry at the head of the input row.
+   *
+   * Optional on purpose: the entry is rendered ONLY when this is provided, so
+   * hosts that mount the prompt without a session screen — and the layout
+   * regressions that pin this row's column budget — keep exactly the row they
+   * had before.
+   */
+  onOpenSessions?(): void
+  /**
    * Background sessions waiting on the user (agent view "needs input" rows
    * excluding this session); the prompt footer shows the
    * "← N agents" hint when provided (hidden when undefined).
@@ -496,6 +526,7 @@ export function PromptInput({
   onFillConsumed,
   onRewindRequest,
   onBackgroundRequest,
+  onOpenSessions,
   backgroundAgentsNeedingInput,
   controllerRef,
   onCaretImage,
@@ -552,7 +583,7 @@ export function PromptInput({
   const foldBlockRef = React.useRef<{ start: number; end: number } | null>(null)
   /**
    * Fullscreen draft editor (`expandEditor`, default Ctrl+Shift+E, or the
-   * ⛶ affordance at the end of the input row). While expanded the SAME
+   * ✎ affordance at the end of the input row). While expanded the SAME
    * editing state renders into the PromptEditorLayer cover (published via
    * setPromptEditorNode each render): Enter inserts a newline, Ctrl+Enter
    * submits, Esc collapses. The fold chip is bypassed (full text shown).
@@ -573,14 +604,16 @@ export function PromptInput({
   const prevExpandedRef = React.useRef(false)
   /**
    * Feature gate (settings `dsh-tui.expandEditor`, on by default; a mock
-   * channel without the field also reads as on). Off hides the ⛶
+   * channel without the field also reads as on). Off hides the ✎
    * affordance and refuses the shortcut — the editor cannot open.
    */
   const expandEnabled = channel.expandEditor !== false
   /** Latest expanded viewport metrics for the useInput wheel branch. */
   const editorViewportRef = React.useRef<{ maxRows: number; total: number } | null>(null)
-  /** Hover state of the ⤢/⛶ expand affordance in the input row. */
+  /** Hover state of the ⤢/✎ expand affordance in the input row. */
   const [expandHovered, setExpandHovered] = React.useState(false)
+  /** Hover state of the ⌂ session-list affordance at the head of the row. */
+  const [homeHovered, setHomeHovered] = React.useState(false)
   /** Pointer over the input box (drives the hover peek card). */
   const [hovered, setHovered] = React.useState(false)
   /** 120ms grace so the pointer crossing the input border row from the
@@ -1393,7 +1426,7 @@ export function PromptInput({
     if (!tryRunCommand(value)) submitText(value)
   }
 
-  /** Expand/collapse the fullscreen editor (shortcut + ⛶ affordance).
+  /** Expand/collapse the fullscreen editor (shortcut + ✎ affordance).
    *  Expanding also DROPS any fold block: the fullscreen view shows and
    *  edits the full text, and the block's atomic-clamp semantics (caret
    *  pushed to its edges, selection clamped to one side) would contradict
@@ -1583,7 +1616,7 @@ export function PromptInput({
       return
     }
 
-    // ── 全屏草稿编辑（expandEditor，默认 Ctrl+Shift+E / 输入行 ⛶）─────
+    // ── 全屏草稿编辑（expandEditor，默认 Ctrl+Shift+E / 输入行 ✎）─────
     // 展开态拥有屏幕；Esc 收起（有选区时上面的 selection 分支已先行只清
     // 选区）。滚轮不经此——编辑区的 onWheel 位置路由直接驱动滚动窗口。
     if (key.escape && expandedRef.current) {
@@ -2638,6 +2671,11 @@ export function PromptInput({
   // the same row, so the wrap budget must shrink by its width or long lines
   // would be clipped at the value box's right edge.
   const vimBadgeCols = vimEnabled ? 7 : 0
+  // 行首会话入口占列：未传 onOpenSessions 时按钮整体不渲染，预算同步归还
+  // （既有调用方的可用列数逐列不变）。用实测常量而不是 stringWidth：该字符
+  // 是 U+1F3E0+VS15，stringWidth 按码点算 2（含 VS15 仍是 2），终端只给 1，
+  // 见 HOME_BUTTON_COLS 的说明。
+  const homeButtonCols = onOpenSessions === undefined ? 0 : HOME_BUTTON_COLS
   // 补全卡片边框与输入框 idle 边框同色（plan 模式下整套面板一起变 sage
   // 绿）。`/color` 会话强调色优先于主题 promptBorder（plan 模式仍整体走
   // sage 绿）。`?? ''` 防御最小 mock channel（只声明用到的字段的回归脚
@@ -2645,14 +2683,15 @@ export function PromptInput({
   const sessionAccent = sessionColorHex(channel.sessionColor ?? '')
   const promptAccent = channel.mode.plan === true ? 'planMode' : (sessionAccent ?? 'promptBorder')
   // 展开态布局参数：编辑器独占整屏 —— 行号槽（宽度随逻辑行数伸缩）+
-  // 圆角边框 2 + 两侧 padding 各 1 占列，❯ 前缀 / vim 徽标 / ⛶ 按钮
-  // 全部让位；收起态额外扣掉行尾 ⛶ 按钮的 2 列。
+  // 圆角边框 2 + 两侧 padding 各 1 占列，⌸ 入口 / ❯ 前缀 / vim 徽标 /
+  // ⛶ 按钮全部让位；收起态额外扣掉行首 ⌸ 入口（未渲染时 0 列）与行尾
+  // ⛶ 按钮的 2 列。
   const editorLogicalLines = expanded ? value.split('\n').length : 1
   const editorNoWidth = Math.max(2, String(editorLogicalLines).length)
   const editorGutterCols = editorNoWidth + 3
   const inputWidth = expanded
     ? Math.max(1, columns - 4 - editorGutterCols)
-    : Math.max(1, columns - 3 - vimBadgeCols - (expandEnabled ? 2 : 0))
+    : Math.max(1, columns - 3 - vimBadgeCols - homeButtonCols - (expandEnabled ? 2 : 0))
   // 展开态无视折叠块：全屏编辑就是为了看全文（foldBlock 状态保留，
   // 收起后折叠显示恢复）。
   const block = expanded ? null : foldBlock
@@ -2974,14 +3013,22 @@ export function PromptInput({
     // In the expanded editor the declared box starts at its outer edge
     // (padding + gutter included), so those columns ride along and the
     // clamp grows with them.
+    //
+    // The declared column is relative to the VALUE BOX, so every cell between
+    // the box's left edge and the text has to be added back: the session entry
+    // sits before the `❯ ` caret glyph and outside this box, so without
+    // `homeButtonCols` the physical caret would park that many columns left of
+    // the character it belongs to (visible as a misplaced caret, and as wrong
+    // hit-testing for every caret-relative gesture). `homeButtonCols` is a
+    // `stringWidth` value the terminal agrees with, so the cell it names is the
+    // cell the caret lands on; the composer regression pins that agreement.
     column: Math.min(
       caretVisualCol +
         (expanded
           ? editorGutterCols + 1
-          : caretVisualLine === 0 && prefixCols > 0
-            ? prefixCols
-            : 0),
-      expanded ? editorGutterCols + 1 + inputWidth : inputWidth,
+          : homeButtonCols
+            + (caretVisualLine === 0 && prefixCols > 0 ? prefixCols : 0)),
+      expanded ? editorGutterCols + 1 + inputWidth : inputWidth + homeButtonCols,
     ),
     active: !suspended && !selectionActive,
   })
@@ -3520,6 +3567,32 @@ export function PromptInput({
         topRightLabel={topRightLabel}
       >
         <Box flexDirection="row" alignItems="flex-start" width="100%">
+          {/* ⌂ 会话列表入口：点击打开会话浏览；hover 提亮为输入框强调色。
+              行首固定 2 列（`⌂` 1 列 + 分隔空格 1 列，见 homeButtonCols）；
+              未传 onOpenSessions 时整体不渲染（宽度预算同步归还）。 */}
+          {onOpenSessions !== undefined && (
+            <Box
+              flexShrink={0}
+              onClick={(event) => {
+                event.stopImmediatePropagation()
+                onOpenSessions?.()
+              }}
+              onMouseEnter={() => {
+                setHomeHovered(true)
+              }}
+              onMouseLeave={() => {
+                setHomeHovered(false)
+              }}
+            >
+              <Text
+                dimColor={!homeHovered}
+                bold={homeHovered}
+                color={homeHovered ? promptAccent : undefined}
+              >
+                {HOME_BUTTON_TEXT}
+              </Text>
+            </Box>
+          )}
           <EffortChargeGlyph
             effort={channel.reasoningEffort}
             levels={channel.effortLevels}
@@ -3546,13 +3619,14 @@ export function PromptInput({
                 <Text inverse> </Text>
                 {/* 三幕点焰第二幕：空输入行居中短暂浮现档名大写（纯文
                     本流自带偏移空格——不引入嵌套 Box，行数恒定；有文字
-                    时不显示）。 */}
+                    时不显示）。3 = 行内 `❯ `（2 列）+ 空输入块光标（1
+                    列）；行首 ⌂ 入口渲染时徽标之前还要多占它的列数。 */}
                 <EffortTierBadge
                   effort={channel.reasoningEffort}
                   levels={channel.effortLevels}
                   onLight={isLightThemeActive(themeName)}
                   columns={columns}
-                  leadingColumns={3}
+                  leadingColumns={3 + homeButtonCols}
                 />
               </>
             ) : (
