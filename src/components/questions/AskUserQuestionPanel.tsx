@@ -33,8 +33,9 @@ import { Divider } from '../design-system/Divider.js'
 import { POINTER } from '../../terminal-utils/figures.js'
 import type { QuestionDraft, QuestionSelection } from '../../dsh-adapter/questions.js'
 import { PlanReviewPanel } from './PlanReviewPanel.js'
+import { QuestionMinimizedBar } from './QuestionMinimizedBar.js'
 import { isPlainReturnInput } from '../../utils/modifiers.js'
-import { actionMatches } from '../../utils/keymap.js'
+import { actionMatches, effectiveComboDisplay } from '../../utils/keymap.js'
 import { flattenPasteInline } from '../../dsh-adapter/sanitize.js'
 import { readClipboard, type ClipboardRead } from '../../utils/clipboard.js'
 import { listWindow } from '../listWindow.js'
@@ -93,6 +94,22 @@ export type AskUserQuestionPanelProps = {
    * verification injects a fake so paste outcomes are deterministic.
    */
   readonly readClipboardOverride?: () => Promise<ClipboardRead>
+  /**
+   * Manual collapse (question panel fold, default Ctrl+K): while
+   * collapsed the panel STAYS MOUNTED — draft refs survive, the fold
+   * branch sits after every hook — and renders the two-line minimized
+   * bar instead, with its input/caret layers gated off. Esc/Ctrl+C then
+   * mean "expand", never cancel (Chat routes them while folded).
+   */
+  readonly collapsed?: boolean
+  /** Expand back from the minimized bar (fold key / Esc / mouse click). */
+  readonly onExpand?: () => void
+  /** Fold from the expanded panel (fold key / header-row click). */
+  readonly onToggleFold?: () => void
+  /** True when mouse tracking is on: mouse-only affordances (the
+   *  multi-select submit row) render only then — inline hosts have no
+   *  pointer, so an unclickable row would just eat a line. */
+  readonly fullscreen?: boolean
 }
 
 export function AskUserQuestionPanel({
@@ -105,6 +122,10 @@ export function AskUserQuestionPanel({
   onCancel,
   onBack,
   readClipboardOverride,
+  collapsed = false,
+  onExpand,
+  onToggleFold,
+  fullscreen = false,
 }: AskUserQuestionPanelProps): React.ReactNode {
   // Plan-mode's exit_plan_mode ask carries a presentation intent: render
   // the plan decision card instead of the generic questionnaire. The
@@ -200,7 +221,7 @@ export function AskUserQuestionPanel({
   // three visual variants): its nodeCache rect IS the caret cell, so (0, 0)
   // stays exact under CJK widths and line wrapping without any
   // layout-affecting wrapper Box.
-  const caretRef = useDeclaredCursor({ line: 0, column: 0, active: !hideCustomInput })
+  const caretRef = useDeclaredCursor({ line: 0, column: 0, active: !hideCustomInput && !collapsed })
 
   const moveFocus = (delta: 1 | -1): void => {
     if (rowCount <= 1) return
@@ -475,10 +496,15 @@ export function AskUserQuestionPanel({
       appendText(input)
       if (!multiSelect) setAttached(options[focusIndex]?.label ?? null)
     }
-  }, { isActive: true })
+  }, { isActive: !collapsed })
 
   const remaining = total - answered
+  /** Fold shortcut label for the hint row (follows /settings remaps). */
+  const foldCombo = effectiveComboDisplay('questionFold')
   const headerTitle = ` ${t('question-header-progress', { position, total, remaining: remaining > 1 ? t('question-remaining-more', { n: remaining }) : '' })} `
+  /** First line of the question body for the minimized bar (whitespace
+   *  flattened the same way windowedOptions flattens labels). */
+  const questionText = question.question.split('\n')[0]?.replace(/\s+/gu, ' ').trim() ?? ''
 
   // The caret counts code points (see the module header), so the caret
   // char and the visual split index into the point array — never raw
@@ -513,6 +539,10 @@ export function AskUserQuestionPanel({
     onAnswer({ selected: [label], ...(text !== '' ? { custom: text } : {}) })
   }
   const [hoverIndex, setHoverIndex] = React.useState(-1)
+  /** Header row hover — the row doubles as the mouse fold/unfold affordance. */
+  const [headerHovered, setHeaderHovered] = React.useState(false)
+  /** Mouse submit row hover (multi-select: clicking submits the checked set). */
+  const [submitHovered, setSubmitHovered] = React.useState(false)
   const renderInputRow = (): React.ReactNode => (
     <Box
       flexDirection="row"
@@ -608,6 +638,20 @@ export function AskUserQuestionPanel({
         )
       })}
       {hideCustomInput ? null : renderInputRow()}
+      {multiSelect && fullscreen && (checked.size > 0 || textRef.current !== '') && (
+        <Box
+          flexDirection="row"
+          height={1}
+          marginTop={1}
+          onClick={submitOptions}
+          onMouseEnter={() => setSubmitHovered(true)}
+          onMouseLeave={() => setSubmitHovered(false)}
+          backgroundColor={submitHovered ? 'userMessageBackgroundHover' : undefined}
+        >
+          <Text color="accent">✓ </Text>
+          <Text dimColor>{t('question-submit-selection')}</Text>
+        </Box>
+      )}
     </Box>
   )
 
@@ -620,6 +664,7 @@ export function AskUserQuestionPanel({
         onBack === undefined ? t('question-hint-esc') : t('question-hint-previous'),
         ...(onBack === undefined ? [] : [t('question-hint-cancel')]),
         ...(multiSelect && checked.size > 0 ? [t('question-hint-selected', { n: checked.size })] : []),
+        t('question-fold-hint', { combo: foldCombo }),
       ]
     : [
         t('question-hint-select'),
@@ -629,11 +674,27 @@ export function AskUserQuestionPanel({
         onBack === undefined ? t('question-hint-esc') : t('question-hint-previous'),
         ...(onBack === undefined ? [] : [t('question-hint-cancel')]),
         ...(multiSelect && checked.size > 0 ? [t('question-hint-selected', { n: checked.size })] : []),
+        t('question-fold-hint', { combo: foldCombo }),
       ]
+
+  // Folded: render only the minimized bar. This branch sits AFTER every
+  // hook (and after the intent early-return), so folding never reorders
+  // hooks and the draft refs above stay alive for the expand.
+  if (collapsed) {
+    return <QuestionMinimizedBar progress={headerTitle} questionText={questionText} onExpand={onExpand ?? (() => {})} />
+  }
 
   return (
     <Box flexDirection="column" marginTop={1} paddingLeft={2} paddingRight={2} width="100%">
-      <Divider color="permission" title={headerTitle} />
+      <Box
+        flexDirection="column"
+        onClick={onToggleFold}
+        onMouseEnter={() => setHeaderHovered(true)}
+        onMouseLeave={() => setHeaderHovered(false)}
+        backgroundColor={headerHovered ? 'userMessageBackgroundHover' : undefined}
+      >
+        <Divider color="permission" title={`▾${headerTitle}`} />
+      </Box>
       <Box flexDirection="column" marginTop={1}>
         {question.header !== undefined && (
           <Text color="suggestion" bold>

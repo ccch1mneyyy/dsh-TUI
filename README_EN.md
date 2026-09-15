@@ -306,6 +306,7 @@ so keep using `Ctrl`.
 | `Enter` | Submit the current selection |
 | `Esc` (from question 2 onward) | Return to the previous question and keep the current draft |
 | `Esc` (from question 1) / `Ctrl+C` | Cancel the whole question batch (the model receives ASK_CANCELLED and can continue the conversation) |
+| `Ctrl+K` | Fold/unfold the questionnaire panel (the ask keeps waiting; while folded, `Esc`/`Ctrl+C` expand first) |
 
 **Built-in commands** (routed through the official DSH pipeline)
 
