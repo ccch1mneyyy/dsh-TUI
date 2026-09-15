@@ -364,7 +364,7 @@ const dict = {
   'home-add-workspace': { zh: '添加工作区', en: 'Add workspace' },
   'home-add-hint': { zh: '选择目录并加入列表', en: 'Pick a directory and add it to the list' },
   'home-workspace-missing': { zh: '目录不存在', en: 'directory missing' },
-  'home-no-workspaces': { zh: '还没有工作区 · 按 + 添加一个目录', en: 'No workspaces yet · press + to add a directory' },
+  'home-no-workspaces': { zh: '还没有工作区 · 在任意目录启动 dsh-tui 即可自动加入', en: 'No workspaces yet · start dsh-tui in a directory to add it' },
   'home-sessions-title': { zh: '{{name}} 的会话', en: 'Sessions in {{name}}' },
   'home-sessions-count': { zh: '{{n}} 个会话', en: { one: '{{n}} session', other: '{{n}} sessions' } },
   'home-no-sessions': { zh: '这个工作区还没有会话 · Enter 新建一个', en: 'No sessions in this workspace yet · Enter starts one' },

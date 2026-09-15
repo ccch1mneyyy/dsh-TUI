@@ -7,8 +7,7 @@ import { Divider } from '../components/design-system/Divider.js'
 import { HintLine } from '../components/design-system/HintLine.js'
 import { SearchBox } from '../components/SearchBox.js'
 import { PageInsetContext } from '../components/PageMargin.js'
-import { HomeAddWorkspaceRow, HomeWorkspaceRow } from '../components/workspaces/HomeWorkspaceRow.js'
-import { NewWorkspaceDialog } from '../components/workspaces/NewWorkspaceDialog.js'
+import { HomeWorkspaceRow } from '../components/workspaces/HomeWorkspaceRow.js'
 import { SessionListRow } from '../components/sessions/SessionListRow.js'
 import { SpinnerGlyph } from '../components/Spinner/SpinnerGlyph.js'
 import { ApprovalPanel } from '../components/approvals/ApprovalPanel.js'
@@ -23,7 +22,14 @@ import type { SessionSummary } from '../dsh-adapter/sessions/index.js'
 import type { TuiWorkspaceEntry, TuiWorkspaceTarget } from '../workspaces.js'
 import type { ChannelUi as Channel } from '../adapter/channel/ui-policy.js'
 
-/** Rows the left rail always keeps: the header, the `+` row, the hints. */
+/**
+ * Rows the left rail always keeps: the section header, the hint line, and the
+ * blank rows around them.
+ *
+ * There is no `+` row any more. A workspace enters the ledger by being the
+ * directory a terminal started in (see the startup attach in `plugin.ts`), so
+ * the rail has no creation control to reserve a row for.
+ */
 const RAIL_CHROME_ROWS = 4
 /** Width the rail gets when the terminal is wide enough to show both panes. */
 const RAIL_MIN_TOTAL_COLUMNS = 84
@@ -191,7 +197,6 @@ export function SessionSupervisor({
   const [focusSessionId, setFocusSessionId] = useState<string | undefined>(undefined)
   const [pins, setPins] = useState<ReadonlySet<string>>(() => readSessionPins())
 
-  const [pickerOpen, setPickerOpen] = useState(false)
   const [menu, setMenu] = useState<{ path: string; col: number; row: number; item: number } | undefined>(undefined)
   const [rename, setRename] = useState<{ path: string; draft: string } | undefined>(undefined)
   const [confirmRemove, setConfirmRemove] = useState<string | undefined>(undefined)
@@ -259,6 +264,13 @@ export function SessionSupervisor({
     if (selectedPath !== undefined && entries.some(entry => samePath(entry.path, selectedPath))) return
     setSelectedPath(entries[0]!.path)
   }, [entries, selectedPath])
+
+  // The cursor indexes the entry list directly (there is no `+` row in front of
+  // it), so a shrinking ledger has to pull it back inside or the last row would
+  // highlight nothing.
+  React.useEffect(() => {
+    setRailFocus(current => Math.min(current, Math.max(0, entries.length - 1)))
+  }, [entries.length])
 
   const selected = useMemo(
     () => entries.find(entry => selectedPath !== undefined && samePath(entry.path, selectedPath)) ?? entries[0],
@@ -363,23 +375,6 @@ export function SessionSupervisor({
       .catch(error => report(t('new-session-failed', { err: message(error) }), 'error'))
   }, [channel, onNewSession, report])
 
-  const registerWorkspace = useCallback(async (path: string): Promise<boolean> => {
-    try {
-      const added = await channel.registerWorkspace(path)
-      if (added === undefined) {
-        report(t('workspace-open-invalid', { target: path }), 'error')
-        return false
-      }
-      await reload()
-      selectEntry(added.path)
-      report(t('workspace-added', { title: added.title }), 'info')
-      return true
-    } catch (error) {
-      report(t('workspace-open-invalid', { target: `${path} · ${message(error)}` }), 'error')
-      return false
-    }
-  }, [channel, reload, report, selectEntry])
-
   const renameEntry = useCallback((path: string, title: string): void => {
     const next = title.trim()
     if (next === '') {
@@ -439,15 +434,14 @@ export function SessionSupervisor({
   }, [closeMenu, newSessionIn, selectEntry])
 
   const moveRail = useCallback((by: 1 | -1): void => {
-    // Row 0 is the `+`; entries start at 1.
-    const total = entries.length + 1
+    // The rail is exactly the ledger: every row is a workspace, so the cursor
+    // is an entry index and the wrap is over that list alone.
+    const total = Math.max(1, entries.length)
     const next = (railRef.current + by + total) % total
     railRef.current = next
     setRailFocus(next)
-    if (next > 0) {
-      const entry = entries[next - 1]
-      if (entry !== undefined) selectEntry(entry.path)
-    }
+    const entry = entries[next]
+    if (entry !== undefined) selectEntry(entry.path)
   }, [entries, selectEntry])
 
   const moveSession = useCallback((by: 1 | -1): void => {
@@ -463,7 +457,6 @@ export function SessionSupervisor({
 
   useInput((input, key) => {
     // Modal layers own the keyboard, in the same order they render.
-    if (pickerOpen) return
     if (rename !== undefined) {
       if (key.escape) {
         setRename(undefined)
@@ -529,13 +522,10 @@ export function SessionSupervisor({
       return
     }
     if (key.tab) {
-      // Shift+Tab on the `+` row opens the directory picker, matching the rail.
-      if (railRef.current === 0 && key.shift) {
-        setPickerOpen(true)
-        return
-      }
+      // Shift+Tab opens the focused workspace's action menu; plain Tab moves
+      // the focus between the panes (handled by the composer's keymap).
       if (key.shift) {
-        const entry = entries[railRef.current - 1]
+        const entry = entries[railRef.current]
         if (entry !== undefined) {
           const next = { path: entry.path, ...keyboardMenuAnchor, item: 0 }
           menuRef.current = next
@@ -545,14 +535,11 @@ export function SessionSupervisor({
       return
     }
     if (key.leftArrow) {
-      if (railRef.current === 0) setPickerOpen(true)
-      else {
-        const entry = entries[railRef.current - 1]
-        if (entry !== undefined) {
-          const next = { path: entry.path, ...keyboardMenuAnchor, item: 0 }
-          menuRef.current = next
-          setMenu(next)
-        }
+      const entry = entries[railRef.current]
+      if (entry !== undefined) {
+        const next = { path: entry.path, ...keyboardMenuAnchor, item: 0 }
+        menuRef.current = next
+        setMenu(next)
       }
       return
     }
@@ -569,7 +556,7 @@ export function SessionSupervisor({
       return
     }
     if (isMod(key) && input === 'n') {
-      const entry = entries[Math.max(0, railRef.current - 1)]
+      const entry = entries[railRef.current]
       if (entry !== undefined) newSessionIn(entry)
       return
     }
@@ -582,11 +569,7 @@ export function SessionSupervisor({
       return
     }
     if (isPlainReturn(key)) {
-      if (railRef.current === 0) {
-        setPickerOpen(true)
-        return
-      }
-      const entry = entries[railRef.current - 1]
+      const entry = entries[railRef.current]
       if (entry === undefined) return
       if (key.ctrl || key.meta) {
         newSessionIn(entry)
@@ -655,16 +638,6 @@ export function SessionSupervisor({
             <Box height={1} flexShrink={0} overflow="hidden" paddingX={1}>
               <Text dimColor>{truncateWidth(t('home-section-workspaces', { n: entries.length }), railWidth - 2)}</Text>
             </Box>
-            <HomeAddWorkspaceRow
-              focused={railFocus === 0}
-              width={railWidth}
-              onOpen={(event): void => {
-                event.stopImmediatePropagation()
-                railRef.current = 0
-                setRailFocus(0)
-                setPickerOpen(true)
-              }}
-            />
             {!loading && entries.length === 0 && (
               <Box paddingX={1}>
                 <Text dimColor italic wrap="truncate-end">{truncateWidth(t('home-no-workspaces'), railWidth - 2)}</Text>
@@ -681,18 +654,18 @@ export function SessionSupervisor({
                   sessionCount={listedSessions.filter(session => samePath(session.cwd, entry.path)).length}
                   present={entry.present}
                   selected={selected !== undefined && samePath(selected.path, entry.path)}
-                  focused={railFocus === absolute + 1}
+                  focused={railFocus === absolute}
                   width={railWidth}
                   onSelect={(event): void => {
                     event.stopImmediatePropagation()
-                    railRef.current = absolute + 1
-                    setRailFocus(absolute + 1)
+                    railRef.current = absolute
+                    setRailFocus(absolute)
                     selectEntry(entry.path)
                   }}
                   onMenu={(event: ContextMenuEvent): void => {
                     event.stopImmediatePropagation()
-                    railRef.current = absolute + 1
-                    setRailFocus(absolute + 1)
+                    railRef.current = absolute
+                    setRailFocus(absolute)
                     const next = { path: entry.path, col: event.col, row: event.row, item: 0 }
                     menuRef.current = next
                     setMenu(next)
@@ -881,14 +854,6 @@ export function SessionSupervisor({
         </Box>
       )}
 
-      {pickerOpen && (
-        <NewWorkspaceDialog
-          startPath={selected?.path ?? channel.cwd}
-          onAdd={registerWorkspace}
-          onClose={(): void => setPickerOpen(false)}
-          onNotice={report}
-        />
-      )}
     </Box>
   )
 }
@@ -899,6 +864,12 @@ export function SessionSupervisor({
  * A pure helper (exported for the headless regression) because the rail's
  * window has to hold the focused row without re-shuffling under a stationary
  * cursor — the same anchoring rule the session list uses.
+ *
+ * `focus` keeps the rail's own cursor convention rather than a plain index:
+ * the `+` row this rail used to lead with occupied cursor position 0, so the
+ * first workspace was 1. The row is gone (a workspace joins the ledger by
+ * being a terminal's launch directory), but the helper keeps its input
+ * contract so the cursor and this window math cannot drift apart.
  */
 export function railWindowTop(focus: number, entryCount: number, railListHeight: number): number {
   const capacity = Math.max(1, railListHeight - 1)
