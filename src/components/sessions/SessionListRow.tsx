@@ -160,10 +160,14 @@ export function SessionListRow({
       onContextMenu={onContextMenu}
       onMouseEnter={onClick !== undefined || onContextMenu !== undefined ? () => setHovered(true) : undefined}
       onMouseLeave={onClick !== undefined || onContextMenu !== undefined ? () => setHovered(false) : undefined}
-      backgroundColor={focused || hovered ? 'userMessageBackgroundHover' : undefined}
+      // Hover is the BLUE prompt — pointer feedback and nothing else. Selection
+      // is green and never blue: a row the keyboard cursor is on must not look
+      // like a row the mouse happens to be over, so the two never share a
+      // background and a selected row keeps its own colour while hovered.
+      backgroundColor={hovered && !focused ? 'userMessageBackgroundHover' : undefined}
     >
       <Box>
-        <Text color={focused ? 'suggestion' : 'subtle'}>
+        <Text color={focused ? 'success' : 'subtle'}>
           {`${' '.repeat(indent)}${focused ? '❯ ' : '  '}`}
         </Text>
         {/* The pin slot is a FIXED two-column cell on every row — ★ for a
@@ -214,7 +218,11 @@ export function SessionListRow({
         {currentText !== '' && <Text color="success">{currentText}</Text>}
       </Box>
       <Box>
-        <Text dimColor>
+        {/* Selection is a GREEN foreground, never a background box: the second
+            line carries the same colour as the title so a selected row reads as
+            one green row, and `dimColor` stays off it or the green would wash
+            out to grey. */}
+        <Text color={focused ? 'success' : undefined} dimColor={!focused}>
           {`${' '.repeat(indent + 2)}${truncateWidth(facts.join(' · '), body)}`}
         </Text>
       </Box>

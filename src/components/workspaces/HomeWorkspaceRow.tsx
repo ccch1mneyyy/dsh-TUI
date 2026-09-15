@@ -59,6 +59,9 @@ export function HomeWorkspaceRow({
   const badge = present ? count : `${t('home-workspace-missing')} · ${count}`
   const heading = spreadRow(`${selected ? '▣' : '▢'} ${title}`, `${selected ? '✓ ' : ''}${badge}`, body)
   const detail = formatProject(path, home)
+  // The cursor (green) outranks the selection ring (green); both outrank the
+  // idle colour. Blue is not part of this ladder at all — see the background.
+  const headingColor = (focused || selected) ? 'success' : present ? 'text' : 'inactive'
 
   return (
     <Box
@@ -69,19 +72,19 @@ export function HomeWorkspaceRow({
       onContextMenu={onMenu}
       onMouseEnter={onSelect === undefined && onMenu === undefined ? undefined : () => setHovered(true)}
       onMouseLeave={onSelect === undefined && onMenu === undefined ? undefined : () => setHovered(false)}
-      backgroundColor={focused || hovered ? 'userMessageBackgroundHover' : undefined}
+      // Hover is the BLUE prompt — pointer feedback and nothing else, so it
+      // never marks the focused or the selected row. Selection itself is green
+      // in the text, which is why this row draws no box while selected.
+      backgroundColor={hovered && !focused ? 'userMessageBackgroundHover' : undefined}
     >
       <Box height={1} flexShrink={0} overflow="hidden">
-        <Text color={focused ? 'suggestion' : 'subtle'}>{focused ? '❯ ' : '  '}</Text>
-        <Text
-          color={focused ? 'suggestion' : selected ? 'success' : present ? 'text' : 'inactive'}
-          bold={focused || selected}
-        >
+        <Text color={focused ? 'success' : 'subtle'}>{focused ? '❯ ' : '  '}</Text>
+        <Text color={headingColor} bold={focused || selected}>
           {heading.left}
         </Text>
         <Text dimColor={!focused}>{`${' '.repeat(heading.gap)}${heading.right}`}</Text>
       </Box>
-      <Text dimColor wrap="truncate-end">{`  ${truncateWidth(detail, body - 2)}`}</Text>
+      <Text color={(focused || selected) ? 'success' : undefined} dimColor={!(focused || selected)} wrap="truncate-end">{`  ${truncateWidth(detail, body - 2)}`}</Text>
     </Box>
   )
 }
