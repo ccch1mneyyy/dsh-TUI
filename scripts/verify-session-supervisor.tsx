@@ -10,7 +10,10 @@
  *      current session marked;
  *   2. a session held by ANOTHER TUI terminal is shown as occupied and cannot
  *      be entered: clicking it must NOT reach the channel's resume path, which
- *      is what would interleave two processes into one append-only log.
+ *      is what would interleave two processes into one append-only log;
+ *   3. the rail is the ledger and nothing else — no `+` row, because a
+ *      workspace joins by being the directory a terminal started in (the
+ *      startup attach), not by an in-screen picker.
  *
  * Plus the pure behaviours the screen leans on: the search predicate, and the
  * rail's window math.
@@ -214,6 +217,7 @@ check('rail window clamps at zero', railWindowTop(0, 20, 6) === 0)
 console.log('one surface:')
 check('screen title renders', text().includes('Sessions'))
 check('workspace rail renders', text().includes('Workspaces'))
+check('the rail has no add-workspace row', !text().includes('Add workspace'))
 check('session pane header renders', text().includes('Sessions in Alpha'))
 check('the live-state counts render', /\d+ working · \d+ live · \d+ total/u.test(text()))
 check('a free session is listed', text().includes('free session'))

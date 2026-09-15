@@ -464,6 +464,14 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     // Opening a persisted TUI session is an explicit ownership action too.
     // Older TUI versions only wrote the Session log, so attaching on every
     // startup repairs those durable-but-ungrouped sessions idempotently.
+    //
+    // This is ALSO how a workspace enters the rail: `resolveByPath(cwd) ??
+    // create(cwd)` mints the durable record for the directory this terminal
+    // was launched in, so the session screen lists every directory a TUI has
+    // ever started in. The ledger is DSH's own workspace store, so the Web UI
+    // reads the same records. There is deliberately no rail-side "add a
+    // workspace" control any more: a terminal's launch directory is the whole
+    // registration story.
     const attached = await attachSessionToWorkspace(ctx, meta.cwd, agent.session.id)
     if (!attached) {
       ctx.logger.warn(
