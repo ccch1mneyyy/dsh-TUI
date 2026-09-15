@@ -372,11 +372,12 @@ export function SessionSupervisor({
   const activateList = useCallback((): void => {
     setActivePane('list')
     const current = visibleSessions.findIndex(session => liveStateOf(session.id)?.current === true)
+    // Row 0 is the card, so a session at list index `i` is cursor index `i + 1`.
+    const session = current >= 0 ? visibleSessions[current] : undefined
     const land = current >= 0 ? current + 1 : 0
     sessionFocusRef.current = land
     setSessionFocus(land)
-    const session = visibleSessions[current >= 0 ? current : 0]
-    if (session !== undefined) setFocusSessionId(session.id)
+    setFocusSessionId(session?.id)
   }, [liveStateOf, visibleSessions])
 
   /** Enter the workspace column. */
@@ -530,8 +531,12 @@ export function SessionSupervisor({
     const next = Math.min(total - 1, Math.max(0, sessionFocusRef.current + by))
     sessionFocusRef.current = next
     setSessionFocus(next)
+    // The id is what the render derives the cursor from, so landing on the card
+    // must CLEAR it: leaving the last session's id in place made `sessionIndex`
+    // resolve back to that session's row, which is what put `❯` on the first
+    // session while the user had selected the card.
     const landed = sessionAt(next)
-    if (landed !== undefined) setFocusSessionId(landed.id)
+    setFocusSessionId(landed === undefined ? undefined : landed.id)
   }, [visibleSessions, sessionAt])
 
   /** The session under the cursor, or undefined while the card (row 0) holds it. */
@@ -871,7 +876,7 @@ export function SessionSupervisor({
                 other card — and only while the cursor is actually on it. */}
             <Box height={1} flexShrink={0} overflow="hidden">
               <Text color={cardFocused ? 'success' : 'subtle'}>{cardFocused ? '❯ ' : '  '}</Text>
-              <Text color="success" bold>{t('supervisor-new-session')}</Text>
+              <Text color={cardFocused ? 'success' : undefined} bold={cardFocused}>{t('supervisor-new-session')}</Text>
             </Box>
             <Box height={1} flexShrink={0} overflow="hidden">
               <Text dimColor>{`  ${truncateWidth(t('supervisor-new-session-hint', { name: selected?.title ?? t('supervisor-title') }), Math.max(8, sessionWidth - 3))}`}</Text>

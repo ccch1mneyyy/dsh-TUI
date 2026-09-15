@@ -308,7 +308,11 @@ const focusedRowOf = (needle: string): boolean => {
   }
   return false
 }
-const cardFocus = (): boolean => focusedRowOf('＋ New session')
+// The script pins DSH_TUI_LANG=en, so the card's label is the ASCII `+ New
+// session` — looking for the Chinese one silently matched nothing and made every
+// "is the card focused" question unanswerable.
+const CARD_LABEL = '+ New session'
+const cardFocus = (): boolean => focusedRowOf(CARD_LABEL)
 const sessionRowFocus = (needle: string): boolean => focusedRowOf(needle)
 console.log('the new-session card is a row in the cursor model:')
 stdin.write('\u001b[C')
@@ -318,11 +322,21 @@ check(
   await settled(() => sessionRowFocus('live session') && !cardFocus()),
   `card=${cardFocus()} session=${sessionRowFocus('live session')}`,
 )
+stdin.write('\u001b[A')
+check(
+  '↑ puts the cursor on the card, and the first session stops being selected',
+  await settled(() => cardFocus() && !sessionRowFocus('live session')),
+  `card=${cardFocus()} session=${sessionRowFocus('live session')}`,
+)
+stdin.write('\u001b[B')
+check(
+  '↓ returns the cursor to the first session and the card goes quiet',
+  await settled(() => sessionRowFocus('live session') && !cardFocus()),
+  `card=${cardFocus()} session=${sessionRowFocus('live session')}`,
+)
 // The card is IN the list's cursor space (row 0), so it can be picked directly —
 // which is how a user reaches it when the list is empty, and what a fixed
-// outside-the-list row could never offer. The continuous ↑/↓ walk is left to the
-// manual pass: arrow delivery through this harness is not reliable enough to
-// assert key-by-key here.
+// outside-the-list row could never offer.
 stdin.write('\u001b[D')
 await settled(() => railCursor('▣', 'Alpha'))
 
