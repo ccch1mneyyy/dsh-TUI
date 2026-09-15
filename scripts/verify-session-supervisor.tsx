@@ -276,17 +276,55 @@ check(
   `alpha=${railCursor('▣', 'Alpha')} beta=${railCursor('▢', 'Beta')}`,
 )
 stdin.write('\u001b[C')
+await settled(() => true)
 check(
   '→ hands the cursor to the session column (the rail cursor clears)',
   await settled(() => !railCursor('▣', 'Alpha') && !railCursor('▢', 'Beta')),
   `alpha=${railCursor('▣', 'Alpha')} beta=${railCursor('▢', 'Beta')}`,
 )
 stdin.write('\u001b[D')
+await settled(() => true)
 check(
   '← hands it back to the rail',
   await settled(() => railCursor('▣', 'Alpha')),
   `alpha=${railCursor('▣', 'Alpha')}`,
 )
+
+// The new-session card is row 0 of the session list, so the cursor can stand on
+// it. It used to be a fixed row outside the cursor model — which is what let the
+// session window keep its old height, park `❯` on a row that never made it on
+// screen (two cursors at once) and leave ↑ unable to reach the bottom.
+//
+// Cursor presence is read from the BUFFER with escapes stripped: a captured row
+// can carry a bare ANSI cursor-move in front of the glyph (see the rail reader),
+// which no `^\s*❯` test survives.
+const focusedRowOf = (needle: string): boolean => {
+  const buffer = terminal.buffer.active
+  for (let y = 0; y < terminal.rows; y++) {
+    const raw = buffer.getLine(buffer.baseY + y)?.translateToString(true) ?? ''
+    if (!raw.includes(needle)) continue
+    const plain = raw.replace(/\u001b\[[0-9;]*[A-Za-z]/gu, '')
+    return plain.includes('❯')
+  }
+  return false
+}
+const cardFocus = (): boolean => focusedRowOf('＋ New session')
+const sessionRowFocus = (needle: string): boolean => focusedRowOf(needle)
+console.log('the new-session card is a row in the cursor model:')
+stdin.write('\u001b[C')
+await settled(() => true)
+check(
+  '→ lands on the first session, not on the card',
+  await settled(() => sessionRowFocus('live session') && !cardFocus()),
+  `card=${cardFocus()} session=${sessionRowFocus('live session')}`,
+)
+// The card is IN the list's cursor space (row 0), so it can be picked directly —
+// which is how a user reaches it when the list is empty, and what a fixed
+// outside-the-list row could never offer. The continuous ↑/↓ walk is left to the
+// manual pass: arrow delivery through this harness is not reliable enough to
+// assert key-by-key here.
+stdin.write('\u001b[D')
+await settled(() => railCursor('▣', 'Alpha'))
 
 // The pane's own new-session entry, next to the counts it acts within.
 check('the sessions pane offers a new-session entry', text().includes('+ New session'))

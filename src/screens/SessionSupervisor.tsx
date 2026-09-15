@@ -343,31 +343,41 @@ export function SessionSupervisor({
       })
   }, [listedSessions, selected, query, liveStateOf, pulse])
 
-  // Cursor identity: rows reorder on every reload and filter, so the cursor
-  // follows an ID rather than an index.
+  /**
+   * Cursor identity: rows reorder on every reload and filter, so the cursor
+   * follows an ID rather than an index — and the cursor space includes the
+   * new-session card as row 0. The card is not decoration: it has to be
+   * selectable like every other card, or the keyboard loses a path to the one
+   * action that still works when the list is empty.
+   */
   const sessionIndex = useMemo(() => {
     if (visibleSessions.length === 0) return 0
     const byId = visibleSessions.findIndex(session => session.id === focusSessionId)
-    return byId >= 0 ? byId : 0
+    return byId >= 0 ? byId + 1 : 0
   }, [visibleSessions, focusSessionId])
+
+  /** The new-session card is the list's row 0; sessions start at 1. */
+  const sessionAt = useCallback(
+    (index: number): SessionSummary | undefined => visibleSessions[index - 1],
+    [visibleSessions],
+  )
 
   /**
    * Enter the session column: land the cursor on the session this terminal is
    * attached to (that is the one the user most likely means), else on the top
-   * row. A cursor that stayed on index 0 while the list scrolled elsewhere would
-   * act on a row the user never looked at.
+   * row — which is the new-session card when the list sorted its live rows
+   * lower. A cursor that stayed put while the list scrolled elsewhere would act
+   * on a row the user never looked at.
    */
   const activateList = useCallback((): void => {
     setActivePane('list')
-    const current = liveStateOf !== undefined
-      ? visibleSessions.findIndex(session => liveStateOf(session.id)?.current === true)
-      : -1
-    const land = current >= 0 ? current : sessionIndex
+    const current = visibleSessions.findIndex(session => liveStateOf(session.id)?.current === true)
+    const land = current >= 0 ? current + 1 : 0
     sessionFocusRef.current = land
     setSessionFocus(land)
-    const session = visibleSessions[land]
+    const session = visibleSessions[current >= 0 ? current : 0]
     if (session !== undefined) setFocusSessionId(session.id)
-  }, [liveStateOf, visibleSessions, sessionIndex])
+  }, [liveStateOf, visibleSessions])
 
   /** Enter the workspace column. */
   const activateRail = useCallback((): void => {
@@ -513,15 +523,19 @@ export function SessionSupervisor({
   }, [entries, selectEntry])
 
   const moveSession = useCallback((by: 1 | -1): void => {
-    if (visibleSessions.length === 0) return
-    const next = (sessionFocusRef.current + by + visibleSessions.length) % visibleSessions.length
+    // +1: the cursor space includes the new-session card as row 0, and with an
+    // EMPTY list the card is still a row the user can stand on. Clamping the
+    // index at 0 instead would have made ↓/↑ do nothing at all there.
+    const total = visibleSessions.length + 1
+    const next = Math.min(total - 1, Math.max(0, sessionFocusRef.current + by))
     sessionFocusRef.current = next
     setSessionFocus(next)
-    const landed = visibleSessions[next]
+    const landed = sessionAt(next)
     if (landed !== undefined) setFocusSessionId(landed.id)
-  }, [visibleSessions])
+  }, [visibleSessions, sessionAt])
 
-  const focusedSession = visibleSessions[sessionIndex]
+  /** The session under the cursor, or undefined while the card (row 0) holds it. */
+  const focusedSession = sessionAt(sessionIndex)
 
   useInput((input, key) => {
     // Modal layers own the keyboard, in the same order they render.
@@ -654,8 +668,14 @@ export function SessionSupervisor({
       // Enter means "the thing the active column is showing": its action menu
       // for a workspace, that session for the session list. Ctrl/Cmd+Enter keeps
       // the old "start a session in this workspace" shortcut from either column.
+      // Row 0 of the list is the new-session card, so it starts a session
+      // instead of opening one.
       if (activePane === 'list') {
-        const session = visibleSessions[sessionFocusRef.current]
+        if (sessionFocusRef.current === 0) {
+          if (selected !== undefined) newSessionIn(selected)
+          return
+        }
+        const session = sessionAt(sessionFocusRef.current)
         if (session !== undefined) openSession(session)
         return
       }
@@ -705,15 +725,23 @@ export function SessionSupervisor({
 
   // Scroll window over the session rows, keeping the focused row visible
   // without re-shuffling the list under a stationary cursor.
+  //
+  // The new-session card is a permanent row above this window, so the window is
+  // one card shorter and the cursor is expressed in the FULL list's space (card =
+  // 0): without that offset the window kept its old height and the cursor could
+  // land on a row that never made it on screen — a `❯` on an invisible row.
   const capacity = Math.max(1, Math.floor(sessionListHeight / SESSION_ROW_LINES))
+  const sessionCapacity = Math.max(1, capacity - 1)
   let sessionTop = Math.min(
-    Math.max(0, sessionIndex - capacity + 1),
-    Math.max(0, visibleSessions.length - capacity),
+    Math.max(0, sessionIndex - 1 - sessionCapacity + 1),
+    Math.max(0, visibleSessions.length - sessionCapacity),
   )
-  if (sessionIndex < sessionTop) sessionTop = sessionIndex
-  const visibleSessionRows = visibleSessions.slice(sessionTop, sessionTop + capacity)
+  if (sessionIndex - 1 < sessionTop) sessionTop = Math.max(0, sessionIndex - 1)
+  const visibleSessionRows = visibleSessions.slice(sessionTop, sessionTop + sessionCapacity)
 
   const liveCount = listedSessions.filter(session => liveStateOf(session.id)?.live === true).length
+  /** The new-session card holds the cursor while the list is active on row 0. */
+  const cardFocused = activePane === 'list' && sessionIndex === 0
 
   return (
     <Box
@@ -839,8 +867,10 @@ export function SessionSupervisor({
               if (selected !== undefined) newSessionIn(selected)
             }}
           >
+            {/* Row 0 of the session list, so it carries the cursor like any
+                other card — and only while the cursor is actually on it. */}
             <Box height={1} flexShrink={0} overflow="hidden">
-              <Text color="success">{'❯ '}</Text>
+              <Text color={cardFocused ? 'success' : 'subtle'}>{cardFocused ? '❯ ' : '  '}</Text>
               <Text color="success" bold>{t('supervisor-new-session')}</Text>
             </Box>
             <Box height={1} flexShrink={0} overflow="hidden">
@@ -868,7 +898,7 @@ export function SessionSupervisor({
                   session={session}
                   width={sessionWidth}
                   depth={0}
-                  focused={activePane === 'list' && sessionTop + index === sessionIndex}
+                  focused={activePane === 'list' && sessionTop + index + 1 === sessionIndex}
                   pinned={pins.has(session.id)}
                   now={now}
                   liveStatus={state?.live === true ? state.status : undefined}
@@ -877,20 +907,20 @@ export function SessionSupervisor({
                   spinner={{ frame: spinnerFrame, time: spinnerTime }}
                   onClick={(event): void => {
                     event.stopImmediatePropagation()
-                    sessionFocusRef.current = sessionTop + index
-                    setSessionFocus(sessionTop + index)
+                    sessionFocusRef.current = sessionTop + index + 1
+                    setSessionFocus(sessionTop + index + 1)
                     setFocusSessionId(session.id)
                     openSession(session)
                   }}
                   onTogglePin={(): void => {
-                    sessionFocusRef.current = sessionTop + index
-                    setSessionFocus(sessionTop + index)
+                    sessionFocusRef.current = sessionTop + index + 1
+                    setSessionFocus(sessionTop + index + 1)
                     setFocusSessionId(session.id)
                     persistPin(session.id, !pins.has(session.id))
                   }}
                   onContextMenu={(event): void => {
-                    sessionFocusRef.current = sessionTop + index
-                    setSessionFocus(sessionTop + index)
+                    sessionFocusRef.current = sessionTop + index + 1
+                    setSessionFocus(sessionTop + index + 1)
                     setFocusSessionId(session.id)
                     const entry = selected
                     if (entry === undefined) return
