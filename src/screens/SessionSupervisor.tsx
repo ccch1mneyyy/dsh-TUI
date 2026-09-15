@@ -38,8 +38,8 @@ const RAIL_WIDTH_MIN = 24
 const RAIL_WIDTH_MAX = 38
 /** Two lines per session row (title + facts), plus the filter and notice rows. */
 const SESSION_ROW_LINES = 2
-/** Chrome the right pane spends on banner, filter, notice and hints. */
-const SESSION_PANE_CHROME_ROWS = 6
+/** Chrome the right pane spends on banner, filter, new-session card, notice and hints. */
+const SESSION_PANE_CHROME_ROWS = 8
 
 type MenuAction = 'edit' | 'new' | 'rename' | 'remove'
 const MENU_ACTIONS: readonly MenuAction[] = ['edit', 'new', 'rename', 'remove']
@@ -241,13 +241,20 @@ export function SessionSupervisor({
    * One `listSessions()` pass feeds every workspace: re-reading the whole
    * store per workspace click would be both slower and inconsistent between
    * the two panes.
+   *
+   * The ledger read degrades to an EMPTY rail when the host does not expose it,
+   * instead of failing the whole reload: `/bg` opens this screen, and a host
+   * written before the workspace ledger existed (the older in-repo regressions
+   * compose exactly that) would otherwise get "failed to read sessions" on
+   * screen and lose the session listing with it. The session list is the half
+   * this screen cannot work without, so it must survive a missing ledger.
    */
   const reload = useCallback(async (): Promise<void> => {
     try {
-      const [registry, listed] = await Promise.all([
-        channel.listWorkspaceRegistry(),
-        channel.listSessions(),
-      ])
+      const ledger = typeof channel.listWorkspaceRegistry === 'function'
+        ? channel.listWorkspaceRegistry()
+        : Promise.resolve([] as readonly TuiWorkspaceEntry[])
+      const [registry, listed] = await Promise.all([ledger, channel.listSessions()])
       setEntries(registry)
       setSessions(listed)
       setNotice((current) => (current?.tone === 'error' ? undefined : current))
@@ -792,29 +799,13 @@ export function SessionSupervisor({
         >
           <Box height={1} flexShrink={0} overflow="hidden">
             <Box flexShrink={1} overflow="hidden">
-              <Text color="remember" bold>{truncateWidth(` ${t('home-sessions-title', { name: selected?.title ?? t('supervisor-title') })}`, Math.max(4, sessionWidth - 14))}</Text>
+              <Text color="remember" bold>{truncateWidth(` ${t('home-sessions-title', { name: selected?.title ?? t('supervisor-title') })}`, Math.max(4, sessionWidth - 3))}</Text>
               <Text dimColor>
                 {`  ${truncateWidth(
                   t('supervisor-counts', { working: workingCount, live: liveCount, total: visibleSessions.length }),
-                  Math.max(4, sessionWidth - 14),
+                  Math.max(4, sessionWidth - 3),
                 )}`}
               </Text>
-            </Box>
-            <Box flexGrow={1} />
-            {/* Start a session in the workspace the pane is showing. The
-                keyboard path is Ctrl+N / Enter on the rail row; this is the
-                pointer's, and it sits on the pane it acts on rather than on the
-                rail, because that is the list the user is reading. It is also
-                the affordance that reaches a fresh session when the pane is
-                EMPTY — which is exactly when a rail-only control is invisible. */}
-            <Box
-              flexShrink={0}
-              onClick={(event: ClickEvent): void => {
-                event.stopImmediatePropagation()
-                if (selected !== undefined) newSessionIn(selected)
-              }}
-            >
-              <Text color="success" bold>{`${t('supervisor-new-session')} `}</Text>
             </Box>
           </Box>
           <Box height={1} flexShrink={0} paddingX={1}>
@@ -831,6 +822,30 @@ export function SessionSupervisor({
               borderless
               width={Math.max(8, sessionWidth - 2)}
             />
+          </Box>
+          {/* Start a session in the workspace this pane is showing.
+              It lives HERE — first thing under the filter, one session card
+              tall — rather than in the title row: as a right-aligned header
+              control it was too easy to miss, and this is the shape every other
+              row in the pane has. It is also the only affordance that works when
+              the pane is EMPTY, which is exactly when the list has nothing to
+              offer. It sits above the scroll window on purpose, so it never
+              scrolls away from the user who needs it. */}
+          <Box
+            flexDirection="column"
+            flexShrink={0}
+            onClick={(event: ClickEvent): void => {
+              event.stopImmediatePropagation()
+              if (selected !== undefined) newSessionIn(selected)
+            }}
+          >
+            <Box height={1} flexShrink={0} overflow="hidden">
+              <Text color="success">{'❯ '}</Text>
+              <Text color="success" bold>{t('supervisor-new-session')}</Text>
+            </Box>
+            <Box height={1} flexShrink={0} overflow="hidden">
+              <Text dimColor>{`  ${truncateWidth(t('supervisor-new-session-hint', { name: selected?.title ?? t('supervisor-title') }), Math.max(8, sessionWidth - 3))}`}</Text>
+            </Box>
           </Box>
           <ink-box
             style={{ flexDirection: 'column', flexGrow: 1, flexShrink: 1, overflow: 'hidden' }}

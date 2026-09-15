@@ -396,6 +396,7 @@ const dict = {
   'supervisor-current': { zh: '当前', en: 'current' },
   'supervisor-counts': { zh: '{{working}} 运行中 · {{live}} 个活跃 · 共 {{total}}', en: '{{working}} working · {{live}} live · {{total}} total' },
   'supervisor-new-session': { zh: '＋ 新建会话', en: '+ New session' },
+  'supervisor-new-session-hint': { zh: '在「{{name}}」新建一个会话', en: 'Start a session in "{{name}}"' },
   'supervisor-stopped': { zh: '已停止会话「{{name}}」', en: 'Stopped session {{name}}' },
   'supervisor-stop-failed': { zh: '无法停止该会话', en: 'Could not stop that session' },
   'supervisor-stop-current': { zh: '不能停止当前正在使用的会话', en: 'The session you are attached to cannot be stopped' },

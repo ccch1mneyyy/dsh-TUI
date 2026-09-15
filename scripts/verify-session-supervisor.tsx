@@ -308,6 +308,15 @@ check(
 )
 
 console.log('the pane entry starts a session:')
+// The entry is a full session-card row directly under the filter, so the
+// column-scan click lands on it rather than on a right-aligned header control.
+const entryRow = rowOf('+ New session')
+const hintRow = rowOf('Start a session in')
+check(
+  'the new-session card sits under the filter with a session card\'s height',
+  entryRow > rowOf('Type to search sessions') && hintRow === entryRow + 1,
+  `entry row=${entryRow} hint row=${hintRow}`,
+)
 await clickText('+ New session', () => calls.some(call => call.startsWith('switchWorkspace:')))
 check(
   'clicking the pane entry starts a session in the selected workspace',
