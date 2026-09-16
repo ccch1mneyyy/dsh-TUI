@@ -1137,6 +1137,123 @@ function existsSafe(path: string): boolean {
 }
 
 /**
+ * sharp distributes its native binaries as platform-specific optional
+ * dependencies (@img/sharp-<platform> wrappers plus @img/sharp-libvips-<platform>
+ * runtimes). pnpm's lockfile records EVERY platform's entry by design, and
+ * some pnpm update paths materialize all of them — maintainer-group report
+ * 2026-09-11: a 0.10.0 → 0.10.1 update downloaded ~90MB of win32/darwin/
+ * musl/riscv64/s390x/ppc64 binaries on a linux-x64 box. The fix pre-seeds
+ * `ignoredOptionalDependencies` patterns for every OTHER platform: pnpm skips
+ * ignored optionals entirely (no download, no node_modules entry), while the
+ * current platform's packages — the only ones sharp loads — stay untouched.
+ */
+const SHARP_WRAPPER_SUFFIXES = [
+  'darwin-arm64', 'darwin-x64', 'freebsd-wasm32', 'linux-arm', 'linux-arm64',
+  'linux-ppc64', 'linux-riscv64', 'linux-s390x', 'linux-x64',
+  'linuxmusl-arm64', 'linuxmusl-x64',
+  'win32-arm64', 'win32-ia32', 'win32-x64',
+] as const
+const SHARP_LIBVIPS_SUFFIXES = [
+  'darwin-arm64', 'darwin-x64', 'linux-arm', 'linux-arm64',
+  'linux-ppc64', 'linux-riscv64', 'linux-s390x', 'linux-x64',
+  'linuxmusl-arm64', 'linuxmusl-x64',
+] as const
+
+/** The @img suffix of the RUNNING platform (musl linux maps to linuxmusl). */
+export function sharpCurrentSuffix(platform: string, cpu: string, libc: string): string {
+  const os = platform === 'linux' && libc === 'musl' ? 'linuxmusl' : platform
+  return `${os}-${cpu}`
+}
+
+/**
+ * Deliberate omission: sharp's registry matrix (0.35.3) also carries the
+ * platform-agnostic `wasm32` fallback (~9MB unpacked) plus
+ * `webcontainers-wasm32`. They carry no os constraint, so they resolve on
+ * every platform — including architectures with no native @img build at all
+ * (loong64 etc.), where wasm is the only working form. They are therefore
+ * NOT ignored: updates keep downloading them, trading ~9MB for not breaking
+ * sharp on fallback-only architectures.
+ */
+
+/** Patterns for every @img platform package EXCEPT the running one. */
+export function ignoredSharpOptionalPatterns(platform: string, cpu: string, libc: string): string[] {
+  const current = sharpCurrentSuffix(platform, cpu, libc)
+  return [
+    ...SHARP_WRAPPER_SUFFIXES.filter(s => s !== current).map(s => `@img/sharp-${s}`),
+    ...SHARP_LIBVIPS_SUFFIXES.filter(s => s !== current).map(s => `@img/sharp-libvips-${s}`),
+  ]
+}
+
+/**
+ * Libc detection, parameterized for tests. Node's report wins when present:
+ * a stray musl loader (Debian's musl package, cross-compile toolchains) on a
+ * glibc system must NOT flip the verdict, or the current platform's own
+ * packages would land in the ignore list — and the never-touch-existing-block
+ * rule would keep that wrong list forever. The loader-path probe only
+ * answers when the report is unavailable (same fallback sharp's detect-libc
+ * uses).
+ */
+export function detectLibc(
+  report: { header?: { glibcVersionRuntime?: string } } | undefined,
+  muslLoaderPresent: boolean,
+): 'glibc' | 'musl' {
+  if (process.platform !== 'linux') return 'glibc'
+  if (report?.header?.glibcVersionRuntime !== undefined) return 'glibc'
+  return muslLoaderPresent ? 'musl' : 'glibc'
+}
+
+/** The running libc, via detectLibc's precedence (report first, paths last). */
+function isMuslRuntime(): boolean {
+  const report = (process.report as NodeJS.ProcessReport | undefined)?.getReport() as
+    | { header?: { glibcVersionRuntime?: string } }
+    | undefined
+  return detectLibc(
+    report,
+    existsSafe('/lib/ld-musl-x86_64.so.1') || existsSafe('/lib/ld-musl-aarch64.so.1') || existsSafe('/etc/alpine-release'),
+  ) === 'musl'
+}
+
+/** What ensureProfileSharpPlatformFilter wrote. */
+export interface SharpPlatformFilterOutcome {
+  /** Patterns appended this run (0 when the block already existed). */
+  added: string[]
+}
+
+/**
+ * Append an `ignoredOptionalDependencies:` block covering every non-current
+ * @img platform package to the profile's pnpm-workspace.yaml, so updates stop
+ * downloading ~90MB of foreign-platform sharp binaries. Best effort and
+ * idempotent, mirroring ensureProfileAllowBuilds: an existing block is an
+ * explicit user decision and is never touched; a missing file is created.
+ * Returns undefined when the profile directory is absent or the write failed —
+ * the update still runs, only the download-size win is lost.
+ */
+export function ensureProfileSharpPlatformFilter(profile: string): SharpPlatformFilterOutcome | undefined {
+  const yamlPath = profileWorkspaceYamlPath(profile)
+  try {
+    if (!existsSafe(dirname(yamlPath))) return undefined
+    let text = ''
+    try {
+      text = readFileSync(yamlPath, 'utf8')
+    } catch {
+      // Missing file — start from an empty document; writeFileSync creates it.
+    }
+    for (const line of text.split(/\r?\n/u)) {
+      if (line !== '' && line === line.trimStart() && /^ignoredOptionalDependencies:/u.test(line)) {
+        return { added: [] }
+      }
+    }
+    const patterns = ignoredSharpOptionalPatterns(process.platform, process.arch, isMuslRuntime() ? 'musl' : 'glibc')
+    const block = ['', 'ignoredOptionalDependencies:', ...patterns.map(p => `  - '${p}'`)]
+    const next = text === '' ? block.slice(1).join('\n') + '\n' : text.endsWith('\n') ? text + block.join('\n') + '\n' : text + '\n' + block.join('\n') + '\n'
+    writeFileSync(yamlPath, next, 'utf8')
+    return { added: patterns }
+  } catch {
+    return undefined
+  }
+}
+
+/**
  * The pnpm Windows tmp-rename race signature (issue #225): pnpm swaps a
  * package directory via a `<name>_tmp_<pid>` staging dir, and a file lock or
  * AV scan makes the scandir/rename fail with ENOENT/EPERM/EBUSY. The failure
@@ -1363,6 +1480,15 @@ export async function updateTui(
     process.stderr.write(
       `dsh-tui: pre-seeded profile pnpm allowBuilds (${allowBuilds.added.join(', ')}) — ` +
         'postinstall-only deps are explicitly ignored\n',
+    )
+  }
+  // Foreign-platform @img/sharp-* optionals are pure download waste (~90MB on
+  // the maintainer-group report); ignore them so pnpm never fetches them.
+  const sharpFilter = ensureProfileSharpPlatformFilter(profile)
+  if (sharpFilter !== undefined && sharpFilter.added.length > 0) {
+    process.stderr.write(
+      `dsh-tui: pre-seeded sharp platform filter (${sharpFilter.added.length} foreign-platform patterns ignored) — ` +
+        `only the current platform's binaries download (needs pnpm ≥10.17; older pnpm silently ignores the key)\n`,
     )
   }
   // pnpm ≥11's minimumReleaseAge (24h by default) refuses installs of
