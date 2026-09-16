@@ -81,6 +81,7 @@ const SGR_MOUSE_TAIL_PREFIX_RE = /^\[<\d+;\d+;\d+[Mm]/
 // the deadline bounds this ambiguity. It runs on every call so continuous
 // input cannot starve it into a de-facto immortal hold.
 const MOUSE_TAIL_HOLD_GRACE_MS = 1000
+const TERMINAL_RESPONSE_TAIL_GRACE_MS = 1000
 
 // dwControlKeyState modifier bits (others — NUMLOCK_ON 0x20, CAPSLOCK_ON
 // 0x80, ENHANCED_KEY 0x100 — are state indicators, not pressed modifiers)
@@ -825,6 +826,11 @@ export type KeyParseState = {
    * otherwise kill a slow split).
    */
   mouseTailHoldAt?: number
+  /**
+   * Date.now() of the flush that emitted a lone Escape key from an incomplete
+   * terminal sequence. The next text chunk may be that sequence's delayed tail.
+   */
+  terminalResponseTailAfterEscFlushAt?: number
   // Internal tokenizer instance
   _tokenizer?: Tokenizer
 }
@@ -908,6 +914,11 @@ export function parseMultipleKeypresses(
   // App's 50ms flush timer, so a per-call flag would still let the SECOND
   // quiet flush kill a press split by >~100ms (observed over SSH).
   let mouseTailHoldAt: number | undefined = prevState.mouseTailHoldAt
+  const terminalResponseTailAfterEscFlushAt =
+    prevState.terminalResponseTailAfterEscFlushAt
+  const mayRecoverTerminalResponseTail =
+    terminalResponseTailAfterEscFlushAt !== undefined &&
+    Date.now() - terminalResponseTailAfterEscFlushAt <= TERMINAL_RESPONSE_TAIL_GRACE_MS
 
   // Hard deadline, checked at the top of EVERY call — not only on flush.
   // Continuous input keeps cancelling and re-arming App's 50ms flush timer,
@@ -1112,11 +1123,17 @@ export function parseMultipleKeypresses(
       } else {
         // Ordinary typing while a hold is pending: text that can never
         // continue an SGR report proves the held report died. Discard the
-        // stale hold so it cannot merge the NEXT fragment into a phantom
-        // event, then pass the text through untouched.
+        // stale hold so it cannot merge the NEXT fragment into a phantom event.
         mouseTailHold = undefined
         mouseTailHoldAt = undefined
-        keys.push(parseKeypress(token.value))
+        const response = mayRecoverTerminalResponseTail
+          ? parseTerminalResponse('\x1b' + token.value)
+          : null
+        if (response) {
+          keys.push({ kind: 'response', sequence: '\x1b' + token.value, response })
+        } else {
+          keys.push(parseKeypress(token.value))
+        }
       }
     }
   }
@@ -1191,6 +1208,16 @@ export function parseMultipleKeypresses(
     win32Protocol,
     mouseTailHold,
     mouseTailHoldAt,
+    terminalResponseTailAfterEscFlushAt:
+      isFlush &&
+      keys.some(
+        key =>
+          key.kind === 'key' &&
+          key.name === 'escape' &&
+          key.sequence === '\x1b',
+      )
+        ? Date.now()
+        : undefined,
     _tokenizer: tokenizer,
   }
 
