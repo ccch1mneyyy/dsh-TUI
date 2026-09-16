@@ -400,6 +400,7 @@ const dict = {
   'supervisor-stopped': { zh: '已停止会话「{{name}}」', en: 'Stopped session {{name}}' },
   'supervisor-stop-failed': { zh: '无法停止该会话', en: 'Could not stop that session' },
   'supervisor-stop-current': { zh: '不能停止当前正在使用的会话', en: 'The session you are attached to cannot be stopped' },
+  'supervisor-open-failed': { zh: '无法进入会话「{{name}}」· 原因见下方通知', en: 'Could not enter {{name}} · the reason is in the notification below' },
   'home-picker-title': { zh: '添加工作区', en: 'Add workspace' },
   'home-picker-empty': { zh: '（没有子目录）', en: '(no subdirectories)' },
   'home-picker-loading': { zh: '正在读取目录…', en: 'Loading directories…' },

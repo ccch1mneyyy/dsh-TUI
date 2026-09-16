@@ -185,11 +185,35 @@ export function SessionSupervisor({
   /**
    * Sessions eligible for this screen, computed ONCE per listing so the rail's
    * per-workspace counts and the pane's rows always agree.
+   *
+   * Three things are hidden, and the third is the one that is easy to lose:
+   * a delegated run (its own row belongs to the agent-run folding, not to a
+   * workspace listing), a log holding no conversation, and the CURRENT
+   * session's fork ANCESTORS. The last one matters because a `/resume` fork
+   * records `parentSession` exactly like a delegated run does — listing the
+   * chain makes one conversation look like several, with no way to tell which
+   * row continues what the user is looking at.
+   *
+   * The current session itself stays listed (marked `current` by the live
+   * state): this screen exists to show what the terminal hosts, and "the one
+   * you are in" is the row the user is most likely looking for. Only the
+   * ancestors go — they are the same conversation at an earlier point, which
+   * the current row already represents. `buildView` hides the current id as
+   * well because its list has no live-state column to mark it with.
    */
-  const listedSessions = useMemo(
-    () => sessions.filter(session => session.hasPrompt && session.kind.kind !== 'subagent'),
-    [sessions],
-  )
+  const listedSessions = useMemo(() => {
+    const byId = new Map(sessions.map(session => [session.id, session]))
+    const ancestors = new Set<string>()
+    let cursor = byId.get(channel.agentId)
+    while (cursor?.kind.kind === 'fork') {
+      const parent = cursor.kind.parent
+      if (parent === undefined || ancestors.has(parent)) break
+      ancestors.add(parent)
+      cursor = byId.get(parent)
+    }
+    return sessions.filter(session =>
+      session.hasPrompt && session.kind.kind !== 'subagent' && !ancestors.has(session.id))
+  }, [sessions, channel.agentId])
 
   const [railFocus, setRailFocus] = useState(0)
   const [selectedPath, setSelectedPath] = useState<string | undefined>(undefined)
@@ -434,7 +458,12 @@ export function SessionSupervisor({
     setNotice(undefined)
     void onOpenSession(session.id)
       .then((ok) => {
-        if (!ok) report(t('session-resume-failed', { err: '' }), 'error')
+        // The host owns the REASON: it is the layer that saw the mount result
+        // (Chat renders the real refusal through `resumeFailureText` and a
+        // notification). This screen only names WHICH session could not be
+        // entered — a notice that restated the generic failure would compete
+        // with, and read worse than, the host's own sentence.
+        if (!ok) report(t('supervisor-open-failed', { name: session.title.text }), 'error')
       })
       .catch(error => report(t('session-resume-failed', { err: message(error) }), 'error'))
   }, [occupancyOf, onOpenSession, report])

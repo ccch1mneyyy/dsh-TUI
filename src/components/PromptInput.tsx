@@ -3017,21 +3017,17 @@ export function PromptInput({
     // (padding + gutter included), so those columns ride along and the
     // clamp grows with them.
     //
-    // The declared column is relative to the VALUE BOX, so every cell between
-    // the box's left edge and the text has to be added back: the session entry
-    // sits before the `❯ ` caret glyph and outside this box, so without
-    // `homeButtonCols` the physical caret would park that many columns left of
-    // the character it belongs to (visible as a misplaced caret, and as wrong
-    // hit-testing for every caret-relative gesture). `homeButtonCols` is a
-    // `stringWidth` value the terminal agrees with, so the cell it names is the
-    // cell the caret lands on; the composer regression pins that agreement.
+    // The declared column is relative to the VALUE BOX, and `caretVisualCol`
+    // is already measured in that box's cell space: the text box IS the text
+    // run, so nothing that renders before it — the session entry, the `❯ `
+    // glyph, the fold prefix — shifts a cell inside it. Adding any of those
+    // back double-counts them and parks the hardware cursor to the RIGHT of
+    // the inverted caret cell (a 2-column miss shows up as a displaced IME
+    // preedit target). Only the expanded editor declares against a wider box
+    // (gutter + padding), so only that branch adds columns.
     column: Math.min(
-      caretVisualCol +
-        (expanded
-          ? editorGutterCols + 1
-          : homeButtonCols
-            + (caretVisualLine === 0 && prefixCols > 0 ? prefixCols : 0)),
-      expanded ? editorGutterCols + 1 + inputWidth : inputWidth + homeButtonCols,
+      caretVisualCol + (expanded ? editorGutterCols + 1 : 0),
+      expanded ? editorGutterCols + 1 + inputWidth : inputWidth,
     ),
     active: !suspended && !selectionActive,
   })
