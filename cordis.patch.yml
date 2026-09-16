@@ -261,9 +261,20 @@
 
     # PTC presentation waits on this Host service. The scoped row supports a
     # TUI-only profile and yields to the official web-app row in mixed profiles.
+    # dsh 0.1.6 dropped the package (the official row became ptc-runtime), so
+    # resolve it first and self-disable when the installation no longer carries it.
     - id: dsh-tui-code-runtime
       name: '@deepseek-ai/dsh-code-runtime-worker-thread'
-      disabled: !!js "[...ctx.loader.entries()].some(entry => entry.options.id === 'code-runtime' && entry.options.name === '@deepseek-ai/dsh-code-runtime-worker-thread' && !entry.disabled)"
+      disabled: !!js >-
+        (() => {
+          const require = process.getBuiltinModule('node:module').createRequire(ctx.baseUrl)
+          try {
+            require.resolve('@deepseek-ai/dsh-code-runtime-worker-thread')
+          } catch {
+            return true
+          }
+          return [...ctx.loader.entries()].some(entry => entry.options.id === 'code-runtime' && entry.options.name === '@deepseek-ai/dsh-code-runtime-worker-thread' && !entry.disabled)
+        })()
 
     # 0.1.2 presets opt their delegation tool into Host-owned model-selection
     # settings. Without this service standard/ptc/cordis preset mounting fails.
