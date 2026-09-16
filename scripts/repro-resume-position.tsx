@@ -94,11 +94,21 @@ function buildHistory(turns: number, tailMark: string, midMark: string): any[] {
   return rows
 }
 
+/**
+ * The workspace the probe's sessions live in. `/resume` now lands on the
+ * unified session screen, and that screen lists the sessions OF THE SELECTED
+ * WORKSPACE — a stub that only exposes `listSessions` shows a session list for
+ * a workspace the ledger does not contain, i.e. an empty pane with nothing to
+ * enter. Both halves of the listing are therefore stubbed, and they agree on
+ * this path.
+ */
+const WORKSPACE_PATH = '/tmp/demo'
+
 const sessions: any[] = Array.from({ length: 4 }, (_, i) => ({
   id: `s${i}`,
   kind: { kind: 'root' },
   title: { text: `历史会话 ${i}`, source: 'auto' },
-  cwd: '/tmp/demo',
+  cwd: WORKSPACE_PATH,
   createdAt: T0 - i * 60_000,
   updatedAt: T0 + i * 60_000,
   bytes: 12_000 + i * 1000,
@@ -110,6 +120,10 @@ const sessions: any[] = Array.from({ length: 4 }, (_, i) => ({
   agentPreset: undefined,
 }))
 
+const workspaceRegistry = [
+  { id: 'w-demo', path: WORKSPACE_PATH, title: 'demo', present: true, sessionCount: sessions.length },
+]
+
 function makeChannel(initialRows: any[]) {
   const listeners = new Set<() => void>()
   const rows = initialRows
@@ -118,7 +132,7 @@ function makeChannel(initialRows: any[]) {
   whaleIdle: false,
     version: 0, rows, status: 'idle', sessionTitle: 'probe', agentId: 'probe',
     model: 'deepseek-v4-flash', provider: 'deepseek', reasoningEffort: 'max', effortLevels: [],
-    tokens: { input: 0, output: 0 }, cwd: '/tmp/demo', displayCwd: '/tmp/demo', gitBranch: 'main',
+    tokens: { input: 0, output: 0 }, cwd: WORKSPACE_PATH, displayCwd: WORKSPACE_PATH, gitBranch: 'main',
     working: false, spinnerMode: 'requesting', responseChars: 0, activeToolCount: 0, turnStart: 0,
     pending: [], commandList: LOCAL_COMMANDS, notifications: [], mode: { plan: false, sandbox: undefined },
     activityFrames: 'moon8', agentPreset: undefined, subagents: [], lastUserText: '',
@@ -128,6 +142,14 @@ function makeChannel(initialRows: any[]) {
     submit: () => {}, cancel: () => {}, clear: () => {}, notify: () => {},
     listModels: () => Promise.resolve([]),
     listSessions: () => Promise.resolve(sessions),
+    // 三合一会话界面（/resume · /agentview · /home）的两半读取面：左栏工作区
+    // 账本 + 右栏会话列表。缺了前者的宿主会退化成一个空左栏、并且右栏因为
+    // 选不中工作区而永远为空——正是本探针要复现的"没有会话可进"。
+    listWorkspaceRegistry: () => Promise.resolve(workspaceRegistry),
+    resolveWorkspace: (reference: string) =>
+      Promise.resolve({ cwd: reference, uri: reference, label: reference, kind: 'local', badge: 'LOCAL' }),
+    switchWorkspace: () => Promise.resolve(true),
+    stopBackgroundAgent: () => Promise.resolve(false),
     deleteSession: () => Promise.resolve(true),
     renameSessionTo: () => Promise.resolve(true),
     setResumeTarget: () => {}, loadOlder: () => {}, mcpStatus: () => [], pushLocal: () => {},
@@ -191,21 +213,43 @@ for (const [tag, scrollFirst] of [['S2 resume(at-bottom)', false], ['S3 resume(s
     for (let i = 0; i < 12; i++) { stdin.write('\x1b[<64;50;20M'); await sleep(16) } // 固定窗:pacing 滚轮事件步间
     check(`${tag}: 前置——上滚后视口离开底部`, await settled(() => !screenLines().join('\n').includes('问题 15')))
   }
-  // /resume → 浏览器 → Enter 恢复聚焦会话
-  // 下面两处等的是「紧随的 Enter 能被收下」：补全浮层/浏览器的按键就绪
-  // 状态不是屏幕可观察内容——settle 到「历史会话」上屏就发 Enter 会被尚未
-  // 就绪的浏览器吞掉（实测卡在浏览器不恢复）。
+  // /resume → 三合一会话界面 → 进右栏选会话 → Enter 恢复
+  //
+  // `/resume`, `/agentview` and `/home` are ONE screen now (a workspace rail
+  // plus the sessions of the selected workspace), and it opens with the
+  // keyboard on the RAIL: Enter there opens a workspace action menu, not a
+  // session. Entering a session is therefore two deliberate steps — `→` moves
+  // the cursor into the session pane (landing on the session this terminal is
+  // attached to), then Enter mounts it.
+  //
+  // The two fixed windows wait for key readiness that is not observable on
+  // screen: the completion overlay has to take the Enter that runs the command,
+  // and the screen has to have finished its own listing before it accepts the
+  // pane switch. Settling on "历史会话 visible" would fire `→` into a screen
+  // that has not mounted its key handler yet.
   stdin.write('/resume')
   await sleep(300) // 固定窗:pacing 等补全浮层收键就绪，无可观测锚点
   stdin.write('\r')
-  await sleep(500) // 固定窗:pacing 等浏览器收键就绪，无可观测锚点
-  check(`${tag}: 浏览器打开`, await settled(() => screenLines().some(l => l.includes('历史会话'))), '')
+  await sleep(500) // 固定窗:pacing 等会话界面收键就绪，无可观测锚点
+  check(`${tag}: 会话界面打开`, await settled(() => screenLines().some(l => l.includes('历史会话'))), '')
+  stdin.write('\x1b[C') // → 把光标移进右栏（落在"新建会话"卡片上）
+  await sleep(200) // 固定窗:pacing 切栏后等焦点重绘，无可观测锚点
+  stdin.write('\x1b[B') // ↓ 越过第 0 行的「＋ 新建会话」卡片，站到第一条会话
+  await sleep(120) // 固定窗:pacing 焦点行步间
   stdin.write('\r') // Enter → resumeTo → onClose
-  // assertLanded 的正向断言（TAILMARK 可见）本可 settled，但同一等待还要让
-  // 行高测量静息：settle 到 TAILMARK 首次上屏就开滚，紧随的「滚 1 上 2 下」
-  // 自愈探针会因高度仍在估算而差出容差（实测探针失败）。
+  // 等两个条件同时成立，而不是等一个固定窗口：恢复后的转录要先把 90 轮
+  // 行高量完（未量完时末尾标记可能在视口下方），并且落点要真的在底部。
+  // 固定窗口在慢 runner 上会撞上"内容已回放但量测未静息"的中间帧（实测
+  // 700ms 就在这个帧上断言，末行还是输入框下边框）。
+  //
+  // `settle` 而不是 `settled`：等待后要断言的是 assertLanded 的多条不变量，
+  // 这里只是先把状态推到可判定的位置。
   const t0 = performance.now()
-  await sleep(700) // 固定窗:待迁移 同一等待兼作行高静息，settled 会提前返回
+  await settle(
+    () => screenLines().join('\n').includes('TAILMARK_Q7X'),
+    { timeoutMs: 5000 },
+  )
+  await sleep(200) // 固定窗:pacing 行高量测静息步间，settled 会提前返回
   assertLanded(tag, performance.now() - t0)
   // 回到底部探针：滚 1 上再 2 下（pill 出现会使视口矮 2 行，等量滚回
   // 必然差 2 行——这是既有 pill 语义；多滚一下代表用户“回到底部”）。

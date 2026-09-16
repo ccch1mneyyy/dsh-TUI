@@ -148,15 +148,24 @@ function cellAt(y: number, col: number): string {
 function headerVisible(): boolean {
   return /^❯/.test(screenLines()[0]!.trimEnd())
 }
-/** rail 区域：置顶头之下、prompt 输入框 margin 之上。返回 [top, bottom)。 */
+/**
+ * rail 区域：置顶头之下、prompt 输入框 margin 之上。返回 [top, bottom)。
+ *
+ * The bottom anchor is the prompt BOX's top border (`╭`), not a `❯` row: the
+ * input row now leads with the session-entry affordance (`⌸ ❯ …`), and the
+ * transcript's own user rows (`❯ 问题 11`) match the caret glyph too, so a
+ * `❯` search finds the wrong row at both ends. The border is unambiguous and
+ * content-independent. Search from the END so the transcript's own top border,
+ * if the user pasted one, cannot win.
+ */
 function railRange(): [number, number] {
   const lines = screenLines()
   const top = headerVisible() ? 1 : 0
-  let promptRow = -1
+  let boxTop = -1
   for (let y = ROWS - 1; y >= 0; y--) {
-    if (lines[y]!.trimStart().startsWith('❯')) { promptRow = y; break }
+    if (lines[y]!.trimEnd().endsWith('╭') || lines[y]!.trimStart().startsWith('╭')) { boxTop = y; break }
   }
-  return [top, promptRow >= 0 ? promptRow - 2 : ROWS - 4]
+  return [top, boxTop >= 0 ? boxTop - 2 : ROWS - 4]
 }
 /** rail 快照：{ ticks: 各 tick 屏幕 0 基行序, activeRow: ━━ 行, upRow, downRow } */
 function railSnapshot(): { ticks: number[]; activeRow: number | null; upRow: number | null; downRow: number | null } {

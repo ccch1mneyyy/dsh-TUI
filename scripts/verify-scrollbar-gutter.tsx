@@ -115,14 +115,21 @@ function cellAt(y: number, col: number): string {
   const buf = term.buffer.active
   return buf.getLine(buf.baseY + y)?.getCell(col)?.getChars() ?? ''
 }
+/**
+ * gutter 区域：置顶头之下、prompt 输入框 margin 之上。返回 [top, bottom)。
+ *
+ * Anchored on the prompt BOX's top border (`╭`), not on a `❯` row: the input
+ * row now leads with the session-entry affordance (`⌸ ❯ …`) while transcript
+ * user rows start with `❯`, so that glyph identifies neither end reliably.
+ */
 function gutterRange(): [number, number] {
   const lines = screenLines()
   const top = /^❯/.test(lines[0]!.trimEnd()) ? 1 : 0
-  let promptRow = -1
+  let boxTop = -1
   for (let y = ROWS - 1; y >= 0; y--) {
-    if (lines[y]!.trimStart().startsWith('❯')) { promptRow = y; break }
+    if (lines[y]!.trimEnd().endsWith('╭') || lines[y]!.trimStart().startsWith('╭')) { boxTop = y; break }
   }
-  return [top, promptRow >= 0 ? promptRow - 2 : ROWS - 4]
+  return [top, boxTop >= 0 ? boxTop - 2 : ROWS - 4]
 }
 /** gutter 快照：{ thumbs: ██ 行, ticks: ─/━ 行, chevrons: ▴/▾ 行 }。
  *  whale 图案的 █ 会落在 gutter 列——只把「两列均 █ 且同行左侧 20 列
@@ -182,7 +189,19 @@ const dragRelease = (col: number, row: number) => stdin.write(`\x1b[<0;${col};${
 }
 
 // ── 2. 切 scrollbar：██ 贴底，无 chevron/tick ──
+// The transcript must actually overflow first: the gutter is permanent while
+// scrollable and absent when the content fits (`content <= viewport` returns
+// null), so a scrollbar assertion on a fitting transcript is asserting a
+// scrollbar that must not be there. One long assistant message pushes the
+// content past the viewport while leaving the terminal pinned to the bottom.
 setGutter('scrollbar')
+{
+  channel.rows.push({
+    id: 1000, kind: 'assistant',
+    text: Array.from({ length: 30 }, (_, i) => `滚条前置填充行 ${i}：滑块需要可滚内容才会出现`).join('\n'),
+  })
+  emitChannel()
+}
 {
   let snap = gutterSnapshot()
   let bottom = gutterRange()[1]

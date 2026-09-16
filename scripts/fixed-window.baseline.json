@@ -1,5 +1,4 @@
 {
-  "scripts/repro-resume-position.tsx": 1,
   "scripts/verify-drag-protocol.tsx": 1,
   "scripts/verify-input-selection.tsx": 1,
   "scripts/verify-jobs-panel.tsx": 4,
