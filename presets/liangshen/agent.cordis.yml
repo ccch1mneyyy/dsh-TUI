@@ -68,12 +68,28 @@
 # Harness identity and per-tool guidance from changing the system prompt, while
 # runtime-context suppression leaves task and repository rules to user messages
 # and explicit file reads. Tool schemas and their runtime enforcement remain.
+# dsh-persona renamed its text slot at 0.1.3-alpha.2 (`text` → `prefix`, with
+# `complete` now scoping the prefix as the whole prompt); older cohorts only
+# accept `text`, so the key follows the installed package version.
 - id: persona
   name: '@deepseek-ai/dsh-persona'
-  config:
-    text: You are a helpful software engineer assistant.
-    complete: true
-    includeRuntimeContext: false
+  config: !!js >-
+    (() => {
+      const shared = { complete: true, includeRuntimeContext: false }
+      const persona = 'You are a helpful software engineer assistant.'
+      try {
+        const require = process.getBuiltinModule('node:module').createRequire(ctx.baseUrl)
+        const fs = process.getBuiltinModule('node:fs')
+        const manifest = require.resolve('@deepseek-ai/dsh-persona/package.json')
+        const version = String(JSON.parse(fs.readFileSync(manifest, 'utf8')).version ?? '')
+        const match = /^(\d+)\.(\d+)\.(\d+)/u.exec(version)
+        const [major, minor, patch] = match === null ? [0, 0, 0] : [Number(match[1]), Number(match[2]), Number(match[3])]
+        if (major > 0 || minor > 1 || (minor === 1 && patch >= 3)) return { ...shared, prefix: persona }
+        return { ...shared, text: persona }
+      } catch {
+        return { ...shared, prefix: persona }
+      }
+    })()
 
 # Instruction FILES are NOT injected (replaces dsh-agent-instructions, local
 # addition): the full AGENTS.md/CLAUDE.md digest is a large injected block

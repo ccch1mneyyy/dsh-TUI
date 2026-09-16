@@ -145,8 +145,9 @@ const dict = {
   'agentsmd-convention-read': { zh: '- 改动前先阅读相关模块', en: '- Read the relevant modules before making changes' },
   'agentsmd-convention-style': { zh: '- 保持与现有代码风格一致', en: '- Keep consistent with the existing code style' },
   'doctor-api-key': { zh: 'API key: {{state}}', en: 'API key: {{state}}' },
-  'doctor-key-configured': { zh: '已配置', en: 'configured' },
-  'doctor-key-missing': { zh: '未配置（DEEPSEEK_API_KEY）', en: 'not configured (DEEPSEEK_API_KEY)' },
+  'doctor-key-configured-env': { zh: '已配置（环境变量）', en: 'configured (environment)' },
+  'doctor-key-configured-store': { zh: '已配置（DSH 凭据库）', en: 'configured (DSH credential store)' },
+  'doctor-key-missing': { zh: '未配置（环境变量与 DSH 凭据库中都没有 DEEPSEEK_API_KEY）', en: 'not configured (neither DEEPSEEK_API_KEY nor a DSH credential-store ref)' },
   'doctor-model': { zh: '模型: {{model}} · 提供方: {{provider}}', en: 'Model: {{model}} · Provider: {{provider}}' },
   'doctor-cwd': { zh: '工作目录: {{cwd}}', en: 'Working directory: {{cwd}}' },
   'doctor-context-window': { zh: '上下文窗口: {{window}} tokens', en: 'Context window: {{window}} tokens' },
@@ -253,7 +254,7 @@ const dict = {
   'model-switch-fork-failed': { zh: '无法切换模型 · {{err}}', en: 'Cannot switch models · {{err}}' },
   'model-switch-failed': { zh: '模型切换失败 · {{err}}', en: 'Model switch failed · {{err}}' },
   'model-switch-attach-failed': { zh: '模型已切换，但工作区挂载失败 · {{err}}', en: 'Model switched, but workspace attachment failed · {{err}}' },
-  'model-usage': { zh: '用法：/model <provider/model>（如 deepseek/deepseek-v4-flash）', en: 'Usage: /model <provider/model> (e.g. deepseek/deepseek-v4-flash)' },
+  'model-usage': { zh: '用法：/model <provider/model>（如 deepseek/deepseek-flash）', en: 'Usage: /model <provider/model> (e.g. deepseek/deepseek-flash)' },
   'model-unknown': { zh: '未知模型「{{spec}}」· /model 查看全部', en: 'Unknown model "{{spec}}" · /model to view all' },
   'compact-unavailable': { zh: '压缩不可用——当前 leaf 没有压缩服务', en: 'Compaction unavailable · no compaction service in this leaf' },
   'compact-while-working': { zh: '回合运行中，无法压缩会话', en: 'Cannot compact while a turn is running' },
@@ -856,6 +857,9 @@ const dict = {
   'hint-adjust-done': { zh: '**←/→** 调整 · Enter/Esc 完成', en: '**←/→** to adjust · Enter/Esc to done' },
   'hint-history-search': { zh: '↑/↓ 选择 · **Enter** 确认 · Esc 取消', en: '↑/↓ to navigate · **Enter** to select · Esc to cancel' },
   'hint-expand-ctrl-o': { zh: '（ctrl+o 展开）', en: '(ctrl+o to expand)' },
+  // 转录里的超长单行（utils/fold-long-lines.ts）：行尾内联标记。鼠标点整行
+  // （工具卡点卡面）即可展开/收起，键盘走 ctrl+o —— 两种都写进文案。
+  'long-line-folded': { zh: '… 已折叠 {{n}} 字符（点击或 ctrl+o 展开）', en: '… {{n}} chars folded (click or ctrl+o to expand)' },
 
   // ── components/FileActionsPanel.tsx（点击文件路径弹出的操作菜单）──
   'file-actions-title': { zh: '文件操作', en: 'File actions' },

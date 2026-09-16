@@ -10,12 +10,37 @@ import { mountChannelUi } from '../src/dsh-adapter/channel-ui.js'
 import { registerTuiChannel } from '../src/adapter/channel/host-registry.js'
 import { CHANNEL_UI_EFFECTS } from '../src/adapter/channel/ui-policy.js'
 import { createChannelReadView } from '../src/adapter/channel/read-view.js'
+import { createChannelUi, createChannelUiLease } from '../src/adapter/channel/ui.js'
 import { channelDriver } from '../src/adapter/upstream/channel-driver.js'
 import type { HostChannelPort } from '../src/adapter/ports/channel.js'
 import { TuiPluginHostRuntime, getHostFacade } from '../src/dsh-adapter/plugin-host.js'
 import { createChannelEmitter } from '../src/dsh-adapter/channel/emitter.js'
+import { settled } from './lib/term-test.mjs'
 
 const tick = () => new Promise(resolve => setTimeout(resolve, 40))
+
+// Deferred results cannot bypass immutable projection or carry authority
+// beyond their lease, even when a retained caller outlives the renderer.
+for (const retire of [false, true]) {
+  let finish!: (value: unknown) => void
+  let writes = 0
+  const lease = createChannelUiLease(() => true)
+  const backend = { choices: [{ choose: () => { writes++ } }] }
+  const channel = createChannelUi({ version: 0, runWorkspaceCommand: () => new Promise(resolve => { finish = resolve }) } as never, 'legacy', lease)
+  const pending = channel.runWorkspaceCommand('command')
+  if (retire) lease.dispose()
+  finish(backend)
+  if (retire) await assert.rejects(pending, /lifetime/)
+  else {
+    const result = await pending as unknown as typeof backend
+    assert.notEqual(result, backend)
+    assert.ok(Object.isFrozen(result.choices[0]))
+    lease.dispose()
+    assert.throws(() => result.choices[0]!.choose(), /lifetime/)
+  }
+  assert.equal(writes, 0)
+}
+
 function fixture(jobs?: unknown, options: { throwOnEvent?: string; effectCleanups?: (() => void)[]; unregisteredEvents?: string[] } = {}) {
   const writes: string[] = []
   let creates = 0
@@ -777,6 +802,41 @@ for (const method of ['writeProfile', 'mutateProfile', 'removeProfile'] as const
     await app.unmount()
     stop(); mount.dispose(); unregister(); raw.releaseContributions()
   }
+
+  // A live auto recap can settle after the renderer releases its lease.
+  // Chat owns the rejection, so teardown must not leak an unhandled promise.
+  const { ctx, raw, agent, services } = fixture()
+  let finish!: () => void
+  let started = false
+  let completed = false
+  const pending = new Promise<void>(resolve => { finish = resolve })
+  services.llm = { stream: async function * () {
+    started = true
+    try { await pending; yield { type: 'text-delta', index: 0, text: '{"summary":"late"}' } }
+    finally { completed = true }
+  } }
+  Object.assign(agent.session, {
+    events: [{ type: 'user/message', data: { content: [{ type: 'text', text: 'resumed conversation' }] } }],
+    requestHeader: () => undefined, deriveMessages: () => [],
+  })
+  raw.rows.push({ id: 1, kind: 'user', text: 'resumed conversation' })
+  const unregister = registerTuiChannel(ctx, raw)
+  const mount = mountChannelUi(ctx, raw, undefined, 'new')
+  const stdout = Object.assign(new Writable({ write(_chunk, _enc, done) { done() } }), { columns: 80, rows: 24, isTTY: true })
+  const stdin = Object.assign(new PassThrough(), { isTTY: true, setRawMode() { return this }, ref() { return this }, unref() { return this } })
+  const errors: unknown[] = []
+  const onError = (error: unknown) => { errors.push(error) }
+  process.on('unhandledRejection', onError)
+  try {
+    const app = await render(React.createElement(Chat, { channel: mount.channel, questionStore: new QuestionStore(), onExit() {}, trajectorySeen: true }), { stdout: stdout as never, stdin: stdin as never, patchConsole: false, exitOnCtrlC: false })
+    assert.ok(await settled(() => started))
+    await app.unmount()
+    mount.dispose(); unregister(); raw.releaseContributions()
+    finish()
+    assert.ok(await settled(() => completed))
+    await tick()
+    assert.deepEqual(errors, [], 'auto recap handles revoked async completion locally')
+  } finally { process.off('unhandledRejection', onError) }
 }
 
 // Notification expiry releases owner registrations rather than retaining one per toast.

@@ -29,9 +29,9 @@ export function createInputActions(
         state.notify(t('shell-images-unsupported'), { color: 'warning', timeoutMs: 4000 })
         return
       }
-      // Claude Code's `!` mode: `!cmd` runs locally and only shows the
-      // output; `!!cmd` additionally sends the output to the model as a
-      // user message (CC's <bash-stdout> convention).
+      // Local shell mode: `!cmd` runs locally and only shows the output;
+      // `!!cmd` additionally sends the output to the model as a user
+      // message wrapped in `<bash-stdout>`.
       if (trimmed.startsWith('!!')) {
         void runLocalCommand(trimmed.slice(2).trim(), true)
         return

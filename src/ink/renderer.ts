@@ -1,11 +1,12 @@
 import { logForDebugging } from '../utils/debug.js'
-import { type DOMElement, markDirty } from './dom.js'
+import { type DOMElement, markDirty, scheduleRenderFrom } from './dom.js'
 import type { Frame } from './frame.js'
 import { invalidateNoInterestRect } from './hit-test.js'
 import { consumeAbsoluteRemovedFlag } from './node-cache.js'
 import Output from './output.js'
 import type { TerminalImagePlacement } from './terminal-image.js'
 import renderNodeToOutput, {
+  getOcclusionMismatchNodes,
   getScrollDrainNode,
   getScrollHint,
   hasOverlayVacatedCells,
@@ -187,6 +188,17 @@ export default function createRenderer(
     // of renderNodeToOutput doesn't overwrite this.
     const drainNode = getScrollDrainNode()
     if (drainNode) markDirty(drainNode)
+
+    // Occlusion surfaces (occlusionColor) whose recorded cover decision is
+    // stale against this frame's image placements — the surface painted
+    // before a later-in-order image registered, or a clean-subtree blit
+    // skipped it while an image behind appeared, moved, or was removed.
+    // Re-walk the surface and schedule the frame now: the cover must follow
+    // image changes even when no React commit is pending (see
+    // getOcclusionMismatchNodes).
+    const occlusionStale = getOcclusionMismatchNodes(output)
+    for (const surface of occlusionStale) markDirty(surface)
+    if (occlusionStale.length > 0) scheduleRenderFrom(occlusionStale[0]!)
 
     return {
       // An invalid previous frame is unsafe for both blit and hardware

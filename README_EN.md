@@ -123,10 +123,18 @@ the interface, and removing it leaves no core modifications behind.
   numbers, current-line highlight, `Enter` = newline, `Ctrl+Enter` = send,
   wheel scrolling, click/drag selection — long drafts get the whole
   screen; disable it in `/settings`).
+  `/resume` classifies a log as empty only after a complete read confirms no
+  user messages; image-only input, incomplete reads, and parse failures never
+  make a session eligible for empty-session cleanup.
 - **Official DSH integrations**: agent presets, skills, MCP, goals, todos,
   subagents, and `ask_user_question` are connected through existing services
   and registries. `/skills` shows skills discovered from the active profile,
   user, and project; dsh-TUI does not preinstall general-purpose skills.
+  Incomplete skill catalogs preserve the last complete skill menu and command
+  registrations, with at most three retries after 800/1600/3200ms. Once exhausted,
+  recovery waits for DSH's `skills/change` notification or an explicit refresh
+  instead of polling indefinitely. Only complete observations remove absent
+  skills, including a complete empty catalog.
 - **Designed for long sessions**: event-driven projection, differential output,
   message virtualization, replay coalescing, and bounded caches prevent render
   cost and memory from growing without limit; fingerprint-memoized hot paths
@@ -243,6 +251,7 @@ For migration from the former `dsh-cc-tui` package and `cc-tui` profile, see
 | `Enter` | Idle = send (`Shift+Enter` for a newline, or `Ctrl+J` when the terminal cannot report modified Enter; `Option+Enter` is the fallback on macOS Terminal.app, issue #110); **while the model is working = steer** (inject a next-step boundary without interrupting); executes the selected item when a command menu is open |
 | `Ctrl+Enter` (⌘Enter) | **Interrupt the current turn and send immediately** (interrupt) |
 | `Alt+Up` | Pull the last unhandled message back into the input for editing (without interrupting the turn) |
+| `PgUp` / `PgDn` | Page the fullscreen transcript (one viewport minus one row; Help and paging overlays keep them and page their own lists; the question panel leaves them for the transcript); inline mode leaves them to the terminal's native scrollback |
 | `Tab` | Complete `/` commands or `@` files (keep drilling into directories); **while the model is working = follow-up** (queued after the current turn) |
 | `Ctrl+C` | Interrupt the current turn; press again while the interrupt is still settling to force-exit; press twice while idle to exit; **with an active mouse selection in the prompt, copies it to the clipboard and keeps it** |
 | `Esc` | Close an open image preview; close the command/file menu; **with an active selection in the prompt: only clears the selection**; double-press while idle clears the input; **double-press on empty input = time rewind** |

@@ -132,6 +132,8 @@ export type LayoutNode = {
   getComputedLeft(): number
   getComputedTop(): number
   getComputedWidth(): number
+  /** Text's content constraint before layout rounds its painted box. */
+  getComputedMeasureWidth(): number
   getComputedHeight(): number
   getComputedBorder(edge: LayoutEdge): number
   getComputedPadding(edge: LayoutEdge): number

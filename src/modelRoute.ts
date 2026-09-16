@@ -19,7 +19,7 @@ export interface ModelRoute {
 /** Harness default route: the final fallback when neither cordis.yml nor the persisted `/model` choice supplies one. */
 export const DEFAULT_MODEL_ROUTE: ModelRoute = {
   provider: 'deepseek-official',
-  model: 'deepseek-v4-flash',
+  model: 'deepseek-flash',
 }
 
 const nonEmpty = (value: string | undefined): value is string => value !== undefined && value !== ''

@@ -156,6 +156,9 @@ function ScrollBox({
     markDirty(el);
     markCommitStart();
     notifyCoalesced();
+    queueRender(el);
+  }
+  function queueRender(el: DOMElement): void {
     if (renderQueuedRef.current) return;
     renderQueuedRef.current = true;
     queueMicrotask(() => {
@@ -246,32 +249,13 @@ function ScrollBox({
       el.scrollAnchor = undefined;
       const viewportH = el.scrollViewportHeight ?? 0;
       const maxScroll = Math.max(0, (el.scrollHeight ?? 0) - viewportH);
-      const distance = maxScroll - (el.scrollTop ?? 0);
-      if (distance > viewportH && viewportH > 0) {
-        // FAR jump: drain instead of teleport. The viewport would land on
-        // rows that were never mounted — their spacer heights are
-        // DEFAULT_ROW_HEIGHT estimates, so the topPad swallows the view
-        // (blank transcript) AND it is a fixed point: unmounted rows never
-        // measure, nothing retried until the next wheel event. The drain
-        // walks the exact wheel path instead: proportional steps, the
-        // virtualization window follows per commit (it mounts the union of
-        // committed + pending), the visual clamp pins to the mounted edge
-        // while rows measure as they enter — no blank at any distance. The
-        // renderer's at-bottom re-pin restores sticky when it lands
-        // (stickyScroll=false + pending undefined + scrollTop >= maxScroll).
-        el.stickyScroll = false;
-        el.pendingScrollDelta = (el.pendingScrollDelta ?? 0) + distance;
-        scrollMutated(el);
-        return;
-      }
       el.pendingScrollDelta = undefined;
       el.stickyScroll = true;
-      // DOM-direct pre-write of the target (near jumps only): the notify
-      // below triggers MessageList's window recompute, and its React commit
-      // must read the NEW scrollTop — the old order (notify first, renderer
-      // moves scrollTop later) left the window one commit behind. The
-      // renderer's sticky branch re-pins scrollTop to the exact fresh
-      // maxScroll next frame, so a stale cached height costs one frame.
+      // Jump intent is not wheel debt: mounting the union of the current
+      // position and a far pending delta defeats virtualization. MessageList's
+      // sticky tail walk mounts the destination directly, even with estimated
+      // heights. Publish sticky + target before notifying; the renderer then
+      // pins to the fresh maxScroll as those tail rows are measured.
       el.scrollTop = maxScroll;
       scrollMutated(el);
       forceRender(n => n + 1);
@@ -310,8 +294,16 @@ function ScrollBox({
     setClampBounds(min, max) {
       const el = domRef.current;
       if (!el) return;
+      if (el.scrollClampMin === min && el.scrollClampMax === max) return;
       el.scrollClampMin = min;
       el.scrollClampMax = max;
+      // Layout effects publish the new mount window AFTER resetAfterCommit
+      // may have painted with the previous bounds. Warm rows need no measure
+      // tick, so that paint can otherwise remain on blank spacer indefinitely.
+      // Invalidate the blit and schedule a paint, without notifying React
+      // subscribers (the window is already committed).
+      markDirty(el);
+      queueRender(el);
     }
   };
   handleRef.current = handle;
@@ -330,6 +322,18 @@ function ScrollBox({
   const handleWheel = useCallback((e: WheelEvent) => {
     if (e.deltaY !== 0) handleRef.current?.scrollBy(e.deltaY);
   }, []);
+  // Keep the host ref attached across updates. A new callback would detach
+  // it before children's layout effects publish their clamp bounds, making
+  // setClampBounds silently miss the commit (child effects run first).
+  const attachNode = useCallback((el: DOMElement | null) => {
+    domRef.current = el;
+    if (el) {
+      el.scrollTop ??= 0;
+      el.onStickyRestore = notify;
+    }
+  // notify only closes over refs, like the imperative handle above.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Structure: outer viewport (overflow:scroll, constrained height) >
   // inner content (flexGrow:1, flexShrink:0 — fills at least the viewport
@@ -342,15 +346,7 @@ function ScrollBox({
   // stickyScroll is passed as a DOM attribute (via ink-box directly) so it's
   // available on the first render — ref callbacks fire after the initial
   // commit, which is too late for the first frame.
-  return <ink-box ref={el => {
-    domRef.current = el;
-    if (el) {
-      el.scrollTop ??= 0;
-      // Renderer-side sticky restores (positional re-pin at the bottom)
-      // must reach React subscribers too — see dom.ts onStickyRestore.
-      el.onStickyRestore = notify;
-    }
-  }} onWheel={handleWheel} style={{
+  return <ink-box ref={attachNode} onWheel={handleWheel} style={{
     flexWrap: 'nowrap',
     flexDirection: style.flexDirection ?? 'row',
     flexGrow: style.flexGrow ?? 0,

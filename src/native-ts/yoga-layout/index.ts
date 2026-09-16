@@ -126,6 +126,7 @@ type Layout = {
   top: number
   width: number
   height: number
+  measuredWidth: number
   // Computed per-edge values (resolved to physical edges)
   border: [number, number, number, number] // left, top, right, bottom
   padding: [number, number, number, number]
@@ -508,6 +509,7 @@ export class Node {
   _lOutW = NaN
   /** Cached layout-pass output height restored on a cache hit. */
   _lOutH = NaN
+  _lOutMeasuredWidth = NaN
   /** Whether the single-slot layout cache holds a valid entry. */
   _hasL = false
   /** Cached available width of the last measure call. */
@@ -526,6 +528,7 @@ export class Node {
   _mOutW = NaN
   /** Cached measure-pass output height restored on a cache hit. */
   _mOutH = NaN
+  _mOutMeasuredWidth = NaN
   /** Whether the single-slot measure cache holds a valid entry. */
   _hasM = false
   /**
@@ -563,11 +566,11 @@ export class Node {
    * w,h) so hits with different inputs than _hasL can restore the right
    * dimensions. Upstream yoga uses 16; 4 covers Ink's dirty-chain depth.
    * Packed as flat arrays to avoid per-entry object allocs. Slot i uses
-   * indices [i*8, i*8+8) in _cIn (aW,aH,wM,hM,oW,oH,fW,fH) and [i*2, i*2+2)
-   * in _cOut (w,h).
+   * indices [i*8, i*8+8) in _cIn (aW,aH,wM,hM,oW,oH,fW,fH) and [i*3, i*3+3)
+   * in _cOut (w,h,measuredWidth).
    */
   _cIn: Float64Array | null = null
-  /** Cached output width/height pairs, two slots per entry. */
+  /** Cached dimensions and the leaf width used to measure them. */
   _cOut: Float64Array | null = null
   /** Generation at which the multi-entry cache was last written. */
   _cGen = -1
@@ -594,6 +597,7 @@ export class Node {
       top: 0,
       width: 0,
       height: 0,
+      measuredWidth: NaN,
       border: [0, 0, 0, 0],
       padding: [0, 0, 0, 0],
       margin: [0, 0, 0, 0],
@@ -681,6 +685,7 @@ export class Node {
    */
   reset(): void {
     this.style = defaultStyle()
+    this.layout.measuredWidth = NaN
     this.children = []
     this.parent = null
     this.measureFunc = null
@@ -765,6 +770,10 @@ export class Node {
    */
   getComputedWidth(): number {
     return this.layout.width
+  }
+  /** Content width used by the leaf measure function, before pixel rounding. */
+  getComputedMeasureWidth(): number {
+    return this.layout.measuredWidth
   }
   /**
    * Get the computed height.
@@ -1451,7 +1460,7 @@ function cacheWrite(
 ): void {
   if (!node._cIn) {
     node._cIn = new Float64Array(CACHE_SLOTS * 8)
-    node._cOut = new Float64Array(CACHE_SLOTS * 2)
+    node._cOut = new Float64Array(CACHE_SLOTS * 3)
   }
   // First write after a dirty clears stale entries from before the dirty.
   // _cGen < _generation means entries are from a previous calculateLayout;
@@ -1477,8 +1486,9 @@ function cacheWrite(
   cIn[o + 5] = oH
   cIn[o + 6] = fW ? 1 : 0
   cIn[o + 7] = fH ? 1 : 0
-  node._cOut![i * 2] = node.layout.width
-  node._cOut![i * 2 + 1] = node.layout.height
+  node._cOut![i * 3] = node.layout.width
+  node._cOut![i * 3 + 1] = node.layout.height
+  node._cOut![i * 3 + 2] = node.layout.measuredWidth
   node._cGen = _generation
 }
 
@@ -1494,6 +1504,7 @@ function commitCacheOutputs(node: Node, performLayout: boolean): void {
   if (performLayout) {
     node._lOutW = node.layout.width
     node._lOutH = node.layout.height
+    node._lOutMeasuredWidth = node.layout.measuredWidth
     // A completed layout pass re-laid the whole subtree at the final
     // constraints — any measure-pass scratch below has been overwritten,
     // so this node may serve layout-cache hits again.
@@ -1501,6 +1512,7 @@ function commitCacheOutputs(node: Node, performLayout: boolean): void {
   } else {
     node._mOutW = node.layout.width
     node._mOutH = node.layout.height
+    node._mOutMeasuredWidth = node.layout.measuredWidth
     // This measure call actually computed: its recursion overwrote the
     // subtree's layout.* as scratch for the probed size. Until a layout
     // pass re-lays this subtree, layout-cache hits here must be refused
@@ -1589,6 +1601,7 @@ function layoutNode(
       _yogaCacheHits++
       layout.width = node._lOutW
       layout.height = node._lOutH
+      layout.measuredWidth = node._lOutMeasuredWidth
       return
     }
     // Multi-entry cache: scan for matching inputs, restore cached w/h on hit.
@@ -1620,8 +1633,9 @@ function layoutNode(
           sameFloat(cIn[o + 4]!, ownerWidth) &&
           sameFloat(cIn[o + 5]!, ownerHeight)
         ) {
-          layout.width = node._cOut![i * 2]!
-          layout.height = node._cOut![i * 2 + 1]!
+          layout.width = node._cOut![i * 3]!
+          layout.height = node._cOut![i * 3 + 1]!
+          layout.measuredWidth = node._cOut![i * 3 + 2]!
           _yogaCacheHits++
           return
         }
@@ -1640,6 +1654,7 @@ function layoutNode(
     ) {
       layout.width = node._mOutW
       layout.height = node._mOutH
+      layout.measuredWidth = node._mOutMeasuredWidth
       _yogaCacheHits++
       return
     }
@@ -1742,6 +1757,7 @@ function layoutNode(
         : Math.max(0, height - paddingBorderHeight)
     _yogaMeasureCalls++
     const measured = node.measureFunc(innerW, wMode, innerH, hMode)
+    node.layout.measuredWidth = wMode === MeasureMode.Undefined ? measured.width : innerW
     node.layout.width =
       wMode === MeasureMode.Exactly
         ? width

@@ -35,11 +35,12 @@ import { createBackgroundCurrentAction } from './channel/background-action.js'
 import { createSubagentProjection } from './channel/subagent-projection.js'
 import { createChannelNotifications } from './channel/notifications.js'
 import type { Context } from '@deepseek-ai/cordis'
-import { installModelSelection, type Agent, type AgentHandle, type CreateAgentOptions, type ModelSelectionRef } from '@deepseek-ai/dsh-agent'
+import { type Agent, type AgentHandle, type CreateAgentOptions, type ModelSelectionRef } from '@deepseek-ai/dsh-agent'
 import type { CommandRuntime } from '@deepseek-ai/dsh-commands'
 import {
   createUserMessage,
   ReasoningEffortId,
+  type UserMessage,
 } from '@deepseek-ai/dsh-llm'
 import { SessionId, type SessionEvent } from '@deepseek-ai/dsh-session'
 import { randomUUID } from 'node:crypto'
@@ -109,7 +110,7 @@ import { createLocalWorkspaceRuntime, getHostWorkspaceRuntime, type TuiWorkspace
 export type { SubagentState } from './subagents.js'
 
 import { isSubagentToolName, parseJobOutputId, toolCommandOf, BACKGROUND_START_ACK, todoPanelItems } from './channel/projection-helpers.js'
-/** Buffer below the context window at which CC warns (autoCompact.ts). */
+/** Token buffer below the context window at which the context-low warning fires. */
 const CONTEXT_WARNING_BUFFER_TOKENS = 20_000
 
 /**
@@ -305,7 +306,7 @@ function createChannelWithOwner(
   const composer = createComposerImages(ctx, owner, { generation: () => state.agentBindingGeneration })
   const inputDelivery = createInputDelivery(ctx, owner, binding, () => state,
     (...args) => notify(...args), trackPending, untrackPending, composer)
-  const { dispatchUserText, deliverUserText, withDecisionPending, clearStagedImages } = inputDelivery
+  const { dispatchUserText, deliverUserText, retireAttachment, withDecisionPending, clearStagedImages } = inputDelivery
   /**
    * The `tui/session-switch` decision event (pi's `session_before_switch`),
    * fired before `/new` or `/resume` replaces the live session (rewind has
@@ -556,7 +557,10 @@ function createChannelWithOwner(
     cwd: () => state.cwd,
     setCommands(commands) { state.commandList = commands; state.emit() },
     commandDescriptions: name => commandTrees?.descriptions(name),
-    deliverUserText,
+    // Attached-context pass-through (T03 consumes the third parameter in the
+    // fallback branch): the skill catalog never loses the FIFO/decision fence.
+    deliverUserText: (text: string, placement: 'followup', attach?: UserMessage) =>
+      deliverUserText(text, placement, [], attach),
   })
   const skillViewOptions = skillCatalog.viewOptions
   const skillRegistryFor = skillCatalog.registryFor
@@ -738,6 +742,7 @@ function createChannelWithOwner(
     subagents: subagentProjection,
     agentView,
     messageObserver,
+    retireAttachment,
   })
   const bindAgent = bindingEvents.bind
 

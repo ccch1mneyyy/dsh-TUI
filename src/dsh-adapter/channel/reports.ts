@@ -7,6 +7,7 @@ import { readGrantStore } from '../../adapter/standard/grants.js'
 import type { AdapterRuntimeOptions } from '../../adapter/kernel/runtime.js'
 import { fetchBalance } from '../../deepseekBalance.js'
 import { t } from '../../i18n.js'
+import { credentialRefDeclared } from '../../utils/credentials.js'
 import { homeDir } from '../../utils/paths.js'
 import { sessionsRoots } from '../compat/index.js'
 import { snapshotLiveSessionEvents } from '../compat/liveSession.js'
@@ -128,7 +129,16 @@ export function createReportActions(ctx: Context, deps: {
   const doctorInfo = (): string[] => {
     const lines = [
       `Node ${process.version} · ${process.platform} ${process.arch}`,
-      t('doctor-api-key', { state: process.env.DEEPSEEK_API_KEY ? t('doctor-key-configured') : t('doctor-key-missing') }),
+      // Same predicate as the launcher's doctor (bin/dsh-tui.js): dsh resolves
+      // credential-store refs into the session at launch, so an environment-only
+      // check reports a working key as missing. The two doctors must not diverge.
+      t('doctor-api-key', {
+        state: process.env.DEEPSEEK_API_KEY
+          ? t('doctor-key-configured-env')
+          : credentialRefDeclared('DEEPSEEK_API_KEY')
+            ? t('doctor-key-configured-store')
+            : t('doctor-key-missing'),
+      }),
       t('doctor-model', { model: deps.model(), provider: deps.provider() }),
       t('doctor-cwd', { cwd: deps.cwd() }),
       t('doctor-context-window', { window: deps.contextWindow() ?? t('doctor-unknown') }),

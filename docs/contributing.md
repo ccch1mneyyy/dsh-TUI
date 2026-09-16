@@ -119,7 +119,7 @@ Cordis config
 职责归属在各层，不要越权：
 
 - Agent/会话/工具事实来自 DSH 服务与持久化会话事件。
-- 投影与 TUI 动作属于 `channel.ts`，不属于呈现组件。
+- 投影与 TUI 动作属于 `dsh-adapter/channel.ts`，不属于呈现组件。
 - 交互模式与按键优先级属于 `Chat.tsx` 或当前聚焦的模态/输入组件。
 - 可复用的视觉行为属于 `components/` 与主题感知原语。
 - 终端协议、布局、命中测试、选区与帧差分行为属于 `ink/`。
@@ -220,6 +220,7 @@ CI 回归都要跑。窄改动还要跑最近的聚焦脚本：
 | --- | --- |
 | 通用无头屏幕组装 | `pnpm smoke` |
 | Channel submit/steer/pending 行为 | `node scripts/verify-submit.mjs` |
+| 回退后编辑重发与历史 Inbox 清理 | `pnpm verify:rewind-edit` |
 | 提示队列行为 | `node scripts/verify-queue.mjs` |
 | Goal/todo 投影与渲染 | `node scripts/verify-channel-goal-todo.mjs` + `node scripts/verify-goal-todo.mjs` |
 | Compaction 与折叠 transcript 行 | `node scripts/verify-compact.mjs` |

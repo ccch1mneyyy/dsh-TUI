@@ -6,8 +6,8 @@ dsh-TUI 是 DeepSeek Harness 的终端界面插件：零核心改动、纯插件
 
 ```
 src/index.ts        公共 Cordis 插件入口、配置 Schema、对运行时实现的惰性移交
-src/plugin.ts       运行时实现：TTY 校验、服务注册、Agent 创建/恢复、React 树挂载与收尾
-src/channel.ts      会话事件 → 视图投影 + 非 React 动作面（submit/steer/rewind/resume/切换）
+src/dsh-adapter/plugin.ts  运行时实现：TTY 校验、服务注册、Agent 创建/恢复、React 树挂载与收尾
+src/dsh-adapter/channel.ts  会话事件 → 视图投影 + 非 React 动作面（submit/steer/rewind/resume/切换）
 src/screens/        Chat.tsx 交互协调器与状态栏呈现
 src/components/     功能组件；design-system/ 是主题感知原语
 src/themeCatalog.ts  内置、静态 JSON 与运行时插件主题的统一列表/解析
@@ -58,7 +58,7 @@ pnpm smoke                      # 通用无头屏幕组装冒烟
 
 - **源码与产物分离**：改 `src/`，绝不直接改 `lib/`，不提交 `lib/` 下的生成结果。
 - **真源投影**：持久化的 DSH 会话事件日志是 transcript 真源；不要插入可能与持久化分歧的乐观助手/工具事实。保留事件顺序、序列锚点与 call-ID 匹配。
-- **职责分层**：投影与 TUI 动作属于 `channel.ts`，交互模式与按键优先级属于 `Chat.tsx`，终端协议、布局与帧差分属于 `ink/`。不要为界面好写而在 TUI 里重实现 DSH 域服务——经 channel 或既有注册表缝隙适配。
+- **职责分层**：投影与 TUI 动作属于 `dsh-adapter/channel.ts`，交互模式与按键优先级属于 `Chat.tsx`，终端协议、布局与帧差分属于 `ink/`。不要为界面好写而在 TUI 里重实现 DSH 域服务——经 channel 或既有注册表缝隙适配。
 - **注册即效应**：资源经 Cordis 注册，用 `ctx.effect` 或既有单一退出漏斗清理。渲染失败必须响亮且非零退出；正常退出前恢复终端状态（raw 模式、光标、alt-screen、同步输出、鼠标、焦点）。
 - **渲染安静**：TUI 活动期间不加 `console.log` 或 stdout 诊断；用 opt-in 的 stderr/调试路径（`DSH_TUI_DEBUG`、`DSH_TUI_RENDER_LOG`）。
 - **TypeScript**：纯 ESM，相对导入用 `.js` 后缀；纯类型依赖优先 `import type`；不因 Ink 系渲染器的放宽而引入 `any`，用 `unknown` 收窄；遵循现有两空格、单引号、无分号风格，不批量格式化渲染器文件。

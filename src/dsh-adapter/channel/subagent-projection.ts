@@ -1,4 +1,4 @@
-import type { Agent } from '@deepseek-ai/dsh-agent'
+import type { Agent, AssistantStreamFrame } from '@deepseek-ai/dsh-agent'
 import { markChannelReadDirty } from '../../adapter/channel/read-view.js'
 import { SubagentActivityStore, type SubagentState } from '../subagents.js'
 import type { ChannelState, ChatRow, SubagentControl, SubagentRow } from './types.js'
@@ -68,6 +68,22 @@ export function createSubagentProjection(
     }
     return true
   }
+  // 0.1.5 live stream frames for child agents: the payload carries the Agent
+  // (not its session), so resolve the subagent through its bound session.
+  const onStreamFrame = (agent: unknown, frame: AssistantStreamFrame): boolean => {
+    const session = (agent as { session?: unknown } | null | undefined)?.session
+    const id = session !== undefined && session !== null ? store.getSubagentIdBySession(session) : undefined
+    if (id === undefined) return false
+    store.onStreamFrame(id, frame)
+    if (frame.type === 'chunk') {
+      streamDirty = true
+      getState().emitStream()
+    } else {
+      syncNow()
+      getState().emit()
+    }
+    return true
+  }
   const onStart = (info: { id: string; runId?: string; provider: string; local?: boolean }): void => {
     if (!info?.id) return
     // The fact that the host spawned a child is authoritative even when its
@@ -117,5 +133,5 @@ export function createSubagentProjection(
   }
   const dropRows = (): void => { streamDirty = false; rowsByAgentId.clear() }
   const reset = (): void => { dropRows(); pendingTaskDescriptions.length = 0; store.reset(); getState().subagents = [] }
-  return { store, control, pendingTaskDescriptions, onSessionEvent, onStart, onEnd, syncNow, flush, dropRows, reset }
+  return { store, control, pendingTaskDescriptions, onSessionEvent, onStreamFrame, onStart, onEnd, syncNow, flush, dropRows, reset }
 }

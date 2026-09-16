@@ -22,7 +22,7 @@
  */
 import * as dshSession from '@deepseek-ai/dsh-session'
 import type { CreateAgentOptions } from '@deepseek-ai/dsh-agent'
-import type { SessionEvent, SessionId } from '@deepseek-ai/dsh-session'
+import type { Session, SessionEvent, SessionId } from '@deepseek-ai/dsh-session'
 
 interface LiveSessionShape {
   readonly seq?: unknown
@@ -187,9 +187,11 @@ export interface LiveSessionSeedMetadata {
  * Create-time seed ownership fields. Every copied source prefix is inherited
  * state for domain projections, even when `/fork` deliberately omits
  * `parentSession` so the copy is presented as an independent root. The exact
- * cut prevents schedule/inbox/subagent projections from replaying copied
- * history as child-owned events. A child snapshot length cannot reliably be
- * used as that cut because construction may append `session/end-seed`.
+ * cut distinguishes copied history from child-owned events. Not every
+ * projection skips inherited events: newer inbox folds restore pending input
+ * from them, so rewind must cancel that work through the child's Inbox API.
+ * A child snapshot length cannot reliably be used as the cut because
+ * construction may append `session/end-seed`.
  */
 export function liveSessionSeedMetadata(
   session: unknown,
@@ -214,6 +216,29 @@ export function appendInterruptedTurnEnd(seed: SessionEvent[], turn: number): vo
     time: last.time + 1,
     data: { turn, reason: { kind: 'aborted', reason: { kind: 'user' } } },
   } as SessionEvent)
+}
+
+/** Close a V3 fork's open inherited turn as child-owned events, after its marker. */
+export function closeLiveForkTurn(session: Session, turn: number): void {
+  for (const event of dshSession.interruptedTurnClosers(snapshotLiveSessionEvents(session))) {
+    switch (event.type) {
+      case 'tool/result':
+        session.append('tool/result', event.data, {
+          surfaceOp: event.surfaceOp,
+          ...(event.sourceEventSeqs === undefined ? {} : { sourceEventSeqs: event.sourceEventSeqs }),
+        })
+        break
+      case 'step/end':
+        session.append('step/end', event.data)
+        break
+      case 'turn/end':
+        if (event.data.turn !== turn) throw new Error('fork turn closure does not match its selected turn')
+        session.append('turn/end', { turn, reason: { kind: 'aborted', reason: { kind: 'user' } } })
+        break
+      default:
+        throw new Error(`unsupported fork closure event: ${event.type}`)
+    }
+  }
 }
 
 export interface LiveSessionCreateRequest {

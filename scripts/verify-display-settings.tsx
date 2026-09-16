@@ -161,6 +161,7 @@ check('DEFAULT_STATUS_BAR keeps the intended compact defaults', () => {
     cwd: true,
     contextUsage: true,
     cache: true,
+    cost: true,
     tokens: false,
     tps: false,
     gitBranch: false,
@@ -168,7 +169,7 @@ check('DEFAULT_STATUS_BAR keeps the intended compact defaults', () => {
     sessionId: false,
     goal: true,
     mode: false,
-    contextBar: false,
+    contextBar: true,
     activity: false,
     trajectory: false,
     shortcutHint: false,
@@ -260,10 +261,24 @@ check('full StatusLine preserves provider-owned display paths', () => {
 })
 
 check('compact StatusLine hides disabled optional fields', () => {
-  for (const marker of ['37 t/s', 'feat/display-settings-probe', 'display settings title probe', '#d5a3b7c9', '12.3k→6.8k', 'system', 'free']) {
+  for (const marker of ['37 t/s', 'feat/display-settings-probe', 'display settings title probe', '#d5a3b7c9', '12.3k→6.8k']) {
     assert.ok(!compact.includes(marker), `unexpected ${JSON.stringify(marker)} in:\n${compact}`)
   }
   assert.ok(!/[▁▂▃▄▅▆▇█▶]/.test(compact), `unexpected trajectory wake in:\n${compact}`)
+})
+
+check('compact StatusLine shows the context bar by default', () => {
+  // Defaults flipped on 2026-09-10: the bar renders without any /settings edit.
+  assert.ok(compact.includes('system'), `missing context-bar segment in:\n${compact}`)
+  assert.ok(compact.includes('77.4%'), `missing context-bar percentage in:\n${compact}`)
+})
+
+const minimalMode = await renderStatus({ minimal: true })
+check('minimal StatusLine stays free of the context bar', () => {
+  // Minimal mode pins its decoration switches OFF instead of inheriting them:
+  // the default flip above must not leak a bar row into the trimmed footer.
+  assert.ok(!minimalMode.includes('77.4%'), `unexpected context-bar readout in:\n${minimalMode}`)
+  assert.ok(!minimalMode.includes('system'), `unexpected context-bar segment in:\n${minimalMode}`)
 })
 
 const withSessionId = await renderStatus({

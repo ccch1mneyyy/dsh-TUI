@@ -183,7 +183,9 @@ const MSG = {
       profileNewer: v => `profile is newer — align the launcher:  npm install -g ${PACKAGE}@${v}`,
       profileOlder: v => `profile is older — align it:  dsh plugin --profile ${PROFILE} add ${PACKAGE}@${v}`,
       keySet: 'set',
-      keyMissing: 'not set — interactive launch reads DEEPSEEK_API_KEY',
+      keySetEnv: 'set (environment)',
+      keySetStore: 'set (DSH credential store)',
+      keyMissing: 'not set — neither DEEPSEEK_API_KEY nor a DSH credential-store ref',
       missing: 'missing',
     },
     zh: {
@@ -194,7 +196,9 @@ const MSG = {
       profileNewer: v => `profile 较新——对齐启动器：  npm install -g ${PACKAGE}@${v}`,
       profileOlder: v => `profile 较旧——对齐它：  dsh plugin --profile ${PROFILE} add ${PACKAGE}@${v}`,
       keySet: '已设置',
-      keyMissing: '未设置——交互启动读取 DEEPSEEK_API_KEY',
+      keySetEnv: '已设置（环境变量）',
+      keySetStore: '已设置（DSH 凭据库）',
+      keyMissing: '未设置——环境变量与 DSH 凭据库中都没有 DEEPSEEK_API_KEY',
       missing: '缺失',
     },
   },
@@ -271,6 +275,30 @@ if (subcommand === 'help' || subcommand === '--help' || subcommand === '-h') {
   console.log(msg('helpText'))
   process.exit(0)
 }
+/**
+ * Whether the DSH credential store declares a reference by this name.
+ *
+ * The launcher stays dependency-free, so the YAML is read as text: only the
+ * top-level `refs:` block maps reference names to stored secrets, and matching
+ * the bare name anywhere else (grants, payloads) would false-positive. Reports
+ * presence only — the value is never read, formatted, or printed. Mirrored by
+ * the in-TUI `/doctor` in src/utils/credentials.ts; the two must not diverge.
+ * @param home - The DSH home directory that holds `.credentials.yaml`.
+ * @param name - Reference name to look for (e.g. `DEEPSEEK_API_KEY`).
+ * @returns True when a `refs` entry with that name exists.
+ */
+const credentialRefDeclared = (home, name) => {
+  try {
+    const text = readFileSync(join(home, '.credentials.yaml'), 'utf8')
+    const block = /^refs:[ \t]*\r?\n((?:[ \t]+\S.*(?:\r?\n|$))*)/mu.exec(text)
+    if (block === null) return false
+    const escaped = name.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')
+    return new RegExp(`^[ \t]+${escaped}[ \t]*:`, 'mu').test(block[1])
+  } catch {
+    return false
+  }
+}
+
 // ─── 子命令：doctor ──────────────────────────────────────────────────────────
 // 启动前环境诊断——针对「TUI 起不来」的故障域（装不上、update 后版本不
 // 同步、密钥没配），与 TUI 内 /doctor 的会话内诊断互补。零 lib 依赖、
@@ -316,10 +344,17 @@ if (subcommand === 'doctor') {
       }
     }
   }
-  // truthiness 而非 !== undefined：空字符串的 key 同样发不了请求，且 TUI 内
-  // /doctor（channel.doctorInfo）按 truthiness 报告——两个 doctor 不许分叉。
-  const keySet = Boolean(process.env.DEEPSEEK_API_KEY)
-  report(keySet, 'DEEPSEEK_API_KEY', keySet ? L.keySet : L.keyMissing)
+  // truthiness 而非 !== undefined：空字符串的 key 同样发不了请求。TUI 内
+  // /doctor（channel.doctorInfo）用同一判定——两个 doctor 不许分叉。
+  // 只看环境变量会误报：dsh 在启动时才把凭据库里的 ref 解析进会话，而
+  // doctor 跑在 dsh 之前，此时环境变量通常仍是空的。
+  const keyFromEnv = Boolean(process.env.DEEPSEEK_API_KEY)
+  const keyFromStore = credentialRefDeclared(dshHome, 'DEEPSEEK_API_KEY')
+  report(
+    keyFromEnv || keyFromStore,
+    'DEEPSEEK_API_KEY',
+    keyFromEnv ? L.keySetEnv : keyFromStore ? L.keySetStore : L.keyMissing,
+  )
   for (const candidate of [join(homedir(), '.dsh-tui', 'cordis.yml'), join(profileDir, 'cordis.patch.yml')]) {
     report(existsSync(candidate), 'config', `${candidate}${existsSync(candidate) ? '' : `  ${L.missing}`}`)
   }
@@ -389,6 +424,55 @@ const bootstrapProfile = () => {
   }
 }
 
+/** Installed version of the profile copy, or undefined when it is absent/unreadable. */
+const profileVersion = () => {
+  try {
+    return JSON.parse(readFileSync(installedPkgPath, 'utf8')).version
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * Guard the launcher/profile version boundary. The two copies ship in the same
+ * npm package but are installed independently (`npm i -g` vs `dsh plugin add`),
+ * so one of them being upgraded alone is a normal state. It must be caught
+ * here: dsh composes the launcher's patch surface with the profile's packages,
+ * and a skew fails deep inside the dsh loader
+ * (`ERR_PACKAGE_PATH_NOT_EXPORTED` on a subpath the older copy does not
+ * export) instead of with a message the user can act on. Runs on the
+ * delegation path as well as the in-profile path, because the delegated child
+ * is itself the profile copy and can no longer see the outer launcher.
+ * @param installedVersion - The profile copy's version.
+ */
+const checkProfileAlignment = installedVersion => {
+  if (installedVersion === undefined || ownVersion === undefined || installedVersion === ownVersion) return
+  const majorMinor = v => v.split('-')[0].split('.').slice(0, 2).map(Number)
+  const [installedMajor, installedMinor] = majorMinor(installedVersion)
+  const [ownMajor, ownMinor] = majorMinor(ownVersion)
+  if (installedMajor < ownMajor || (installedMajor === ownMajor && installedMinor < ownMinor)) {
+    console.error(
+      `[dsh-tui] cannot start: the profile runs v${installedVersion} but this launcher is v${ownVersion}.\n` +
+        `  dsh plugin --profile ${PROFILE} add ${PACKAGE}@${ownVersion}`,
+    )
+    process.exit(1)
+  }
+  if (isVersionNewer(installedVersion, ownVersion)) {
+    console.error(
+      `[dsh-tui] note: the profile is already v${installedVersion}; this launcher copy is v${ownVersion}.\n` +
+        `  npm install -g --legacy-peer-deps ${PACKAGE}@${installedVersion}\n` +
+        `(--legacy-peer-deps avoids an npm 12 peer-resolution crash, see issue #459)`,
+    )
+  } else {
+    // profile 更旧但同 minor（patch 级错位）：允许启动，指引用 add 把
+    // profile 对齐到启动器版本（精确版本，@latest 可能越过对齐点）。
+    console.error(
+      `[dsh-tui] note: the profile is running v${installedVersion} but this launcher is v${ownVersion}.\n` +
+        `  dsh plugin --profile ${PROFILE} add ${PACKAGE}@${ownVersion}`,
+    )
+  }
+}
+
 // ─── 子命令：update ──────────────────────────────────────────────────────────
 // 顶层处理、两种角色同一条路径——不放进委托链。委托会把 update 交给
 // profile 内的旧 bin：旧副本不认识这个词，只会当参数透传，恰好是「profile
@@ -425,6 +509,10 @@ if (subcommand === 'update') {
 // 的沙箱用它直接驱动全量路径；现场排查委托链时同样可用）。
 if (!runningInsideProfile && ownVersion !== undefined && process.env.DSH_TUI_NO_DELEGATE !== '1') {
   if (!profileReady()) bootstrapProfile()
+  // Refuse to delegate into a profile from an older release line: the profile
+  // copy would launch `dsh --profile dsh-tui` against a composition built from
+  // this launcher's patch surface and fail inside the loader.
+  checkProfileAlignment(profileVersion())
   // 委托 profile 内副本执行全部启动逻辑。外层代际通过
   // DSH_TUI_LAUNCHER_VERSION 交代（/update 的对齐诊断沿用该契约）。
   try {
@@ -466,33 +554,11 @@ if (!runningInsideProfile && ownVersion !== undefined && process.env.DSH_TUI_NO_
       installedVersion = undefined
     }
   }
-  if (installedVersion !== undefined && ownVersion !== undefined && installedVersion !== ownVersion && !runningInsideProfile) {
-    const majorMinor = v => v.split('-')[0].split('.').slice(0, 2).map(Number)
-    const [installedMajor, installedMinor] = majorMinor(installedVersion)
-    const [ownMajor, ownMinor] = majorMinor(ownVersion)
-    if (installedMajor < ownMajor || (installedMajor === ownMajor && installedMinor < ownMinor)) {
-      console.error(
-        `[dsh-tui] cannot start: the profile runs v${installedVersion} but this launcher is v${ownVersion}.\n` +
-          `  dsh plugin --profile ${PROFILE} add ${PACKAGE}@${ownVersion}`,
-      )
-      process.exit(1)
-    }
-    const installedNewer = installedVersion !== undefined && ownVersion !== undefined && isVersionNewer(installedVersion, ownVersion)
-    if (installedNewer) {
-      console.error(
-        `[dsh-tui] note: the profile is already v${installedVersion}; this launcher copy is v${ownVersion}.\n` +
-          `  npm install -g --legacy-peer-deps ${PACKAGE}@${installedVersion}\n` +
-          `(--legacy-peer-deps avoids an npm 12 peer-resolution crash, see issue #459)`,
-      )
-    } else {
-      // profile 更旧但同 minor（patch 级错位）：允许启动，指引用 add 把
-      // profile 对齐到启动器版本（精确版本，@latest 可能越过对齐点）。
-      console.error(
-        `[dsh-tui] note: the profile is running v${installedVersion} but this launcher is v${ownVersion}.\n` +
-          `  dsh plugin --profile ${PROFILE} add ${PACKAGE}@${ownVersion}`,
-      )
-    }
-  }
+  // 版本错位诊断与瘦壳委托路径共用同一实现（见 checkProfileAlignment）。
+  // `!runningInsideProfile` 只在 DSH_TUI_NO_DELEGATE=1 的调试口下成立，因此
+  // 该判定不能只留在这里——委派出去的子进程就是 profile 副本，看不到外层
+  // 启动器版本。
+  if (!runningInsideProfile) checkProfileAlignment(installedVersion)
 
   // --resume / 工作区目标拦截（launcher 契约，见 src/sessionHistory.ts）。
   const setResumeEnv = sessionId => {

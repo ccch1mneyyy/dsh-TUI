@@ -18,7 +18,11 @@ export const DEFAULT_STATUS_BAR: Readonly<StatusBarConfig> = Object.freeze({
   sessionId: false,
   goal: true,
   mode: false,
-  contextBar: false,
+  // On by default (2026-09-10, user ask): the segmented bar is the only place
+  // the per-segment context breakdown shows, so users who never open
+  // /settings were missing it entirely. `/settings → statusBar.contextBar`
+  // (or cordis.yml `contextBar: false`) still turns it off.
+  contextBar: true,
   activity: false,
   trajectory: false,
   shortcutHint: false,

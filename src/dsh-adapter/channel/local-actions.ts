@@ -58,7 +58,7 @@ export function createLocalActions(deps: {
       state.emit()
     },
     setActivityFrames(name: string): boolean {
-      // A retired id (e.g. `claude`) normalizes to the current default, so the
+      // A retired preset id normalizes to the current default, so the
       // in-memory state, the persisted preference and the toast agree instead
       // of diverging until restart.
       const preset = normalizeActivityPreset(name) ?? name

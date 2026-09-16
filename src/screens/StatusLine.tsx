@@ -45,6 +45,31 @@ import type { WaveBand } from '../dsh-adapter/types.js'
  * change. Hovering a context-bar segment does the same for that segment.
  */
 
+/**
+ * Minimal mode's footer config. It ignores every SAVED preference (built from
+ * scratch rather than `normalizeStatusBar(channel.statusBar)`) and pins the
+ * DECORATION switches OFF — the shared defaults are free to change
+ * (`contextBar` became default-on in 2026-09) and minimal mode must not follow
+ * them into the footer.
+ *
+ * The metric fields keep their `DEFAULT_STATUS_BAR` values on purpose: minimal
+ * mode has ALWAYS shown the default-on metrics (thinking / contextUsage /
+ * cache / cost / goal) next to model + cwd — that predates the long-line fold
+ * and the context-bar flip, and trimming them further is a product decision,
+ * not a regression fix. Module scope: one frozen object, no per-render
+ * allocation.
+ */
+const MINIMAL_STATUS_BAR: StatusBarConfig = Object.freeze({
+  ...DEFAULT_STATUS_BAR,
+  compact: true,
+  model: true,
+  cwd: true,
+  contextBar: false,
+  activity: false,
+  trajectory: false,
+  shortcutHint: false,
+})
+
 /** Footer fields that answer a hover with a supplemental-row detail.
  *  Context-bar segments arrive as `segment:<key>` (see ContextBarView). */
 type HoverTarget =
@@ -151,7 +176,7 @@ export function StatusLine({
   const statusBar: StatusBarConfig = channel.minimal
     // Minimal mode overrides every field switch: model + cwd only, so the
     // footer can never grow decorations regardless of saved preferences.
-    ? { ...DEFAULT_STATUS_BAR, compact: true, model: true, cwd: true }
+    ? MINIMAL_STATUS_BAR
     : normalizeStatusBar(channel.statusBar)
   // Provider workspaces expose a remote display path alongside a host alias;
   // only the local target has identical cwd/displayCwd values to fold.

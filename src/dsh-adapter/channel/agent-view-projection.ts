@@ -34,7 +34,7 @@ type ApprovalStore = {
   subscribe(listener: () => void): () => void
 }
 
-/** Owns detached background handles and the CC agent-view projection. */
+/** Owns detached background handles and the agent-view projection. */
 export function createAgentViewProjection(
   ctx: Context,
   deps: {

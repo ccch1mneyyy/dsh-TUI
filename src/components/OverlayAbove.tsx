@@ -104,9 +104,15 @@ export function OverlayAbove({
       justifyContent="flex-end"
       overflow="hidden"
       // Kitty graphics below text still show through terminal-default
-      // background cells. A real surface color makes the negative-z image
-      // placement obey this overlay's visual bounds without deleting it.
-      backgroundColor="toolCardBackground"
+      // background cells, and a real surface color is the only way to make
+      // the negative-z placement obey this overlay's visual bounds without
+      // deleting it. But a PERMANENT surface paints every transient panel
+      // (/ menu、picker、对话框) a bright full-width block that reads as a
+      // spurious highlight (a regression introduced by 49f7166).
+      // occlusionColor keeps the overlay terminal-transparent in the
+      // common frame and only paints the surface while an image actually
+      // sits behind this rect — see Styles.occlusionColor.
+      occlusionColor="toolCardBackground"
       opaque
       {...(effectiveMaxHeight === undefined ? {} : { maxHeight: effectiveMaxHeight })}
     >

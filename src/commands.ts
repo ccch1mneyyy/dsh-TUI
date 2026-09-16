@@ -205,7 +205,7 @@ export function completeCommands(
   if (!input.startsWith('/') || /[\r\n]/u.test(input)) return []
   const body = input.slice(1)
   // Token charset includes `. : /` so provider/model specs (e.g.
-  // `deepseek/deepseek-v4-flash`, `openai/gpt-4.1`) survive as ONE token —
+  // `deepseek/deepseek-flash`, `openai/gpt-4.1`) survive as ONE token —
   // the /model completion matches its candidates against the whole spec.
   if (!body.split(/[\t ]+/u).every(token => token === '' || isCommandCompletionToken(token))) return []
   const trailingSeparator = /[\t ]$/u.test(body)

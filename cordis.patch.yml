@@ -12,10 +12,27 @@
 # ── surface-specific values over the dsh-base layer ─────────────────────────
 
 # The dsh-tui deployment persona; DSH_TUI_PERSONA overrides the coding-agent
-# default (the base persona is empty).
+# default (the base persona is empty). dsh-system-prompt renamed the slot at
+# 0.1.3-alpha.2 (`persona` → `personaPrefix`, with an optional suffix
+# counterpart); older cohorts only accept `persona`, so the key follows the
+# installed package version.
 - id: system-prompt
-  config:
-    persona: !!js process.env.DSH_TUI_PERSONA ?? 'You are a coding agent.'
+  config: !!js >-
+    (() => {
+      const persona = process.env.DSH_TUI_PERSONA ?? 'You are a coding agent.'
+      try {
+        const require = process.getBuiltinModule('node:module').createRequire(ctx.baseUrl)
+        const fs = process.getBuiltinModule('node:fs')
+        const manifest = require.resolve('@deepseek-ai/dsh-system-prompt/package.json')
+        const version = String(JSON.parse(fs.readFileSync(manifest, 'utf8')).version ?? '')
+        const match = /^(\d+)\.(\d+)\.(\d+)/u.exec(version)
+        const [major, minor, patch] = match === null ? [0, 0, 0] : [Number(match[1]), Number(match[2]), Number(match[3])]
+        if (major > 0 || minor > 1 || (minor === 1 && patch >= 3)) return { personaPrefix: persona }
+        return { persona }
+      } catch {
+        return { personaPrefix: persona }
+      }
+    })()
 
 # The native DeepSeek adapter, pinned to the harness defaults: full thinking
 # at max effort, key and base URL from the launching environment. The base
@@ -141,8 +158,11 @@
 - id: tool-skill
   disabled: true
 
-- id: tool-str-replace-editor
-  disabled: true
+# `tool-str-replace-editor` carries no disable row: dsh-base registered that
+# entry only up to the 0.1.2 line, and from 0.1.3-alpha.2 it is opt-in (see the
+# dsh-base README). A row here would target a missing id and log
+# `patch: entry "tool-str-replace-editor" not found` on every 0.1.3+ boot.
+# Presets that expose the tool re-add the entry themselves.
 
 # Delegation tools (subagent spawn/fork, controls, workflows) are preset rows
 # now; the preset's `delegation` group re-adds them with package defaults, so

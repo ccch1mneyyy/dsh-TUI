@@ -131,43 +131,51 @@ function firstTextOf(content: readonly Block[] | undefined): string {
 
 /**
  * Coalesce runs of same-type assistant/chunk deltas into single synthetic
- * events for REPLAY only. A streamed turn logs one event per token (~100k
- * events in long sessions); replaying them one at a time costs per-chunk
- * string growth on every row (quadratic in the turn's length). Merging is
- * outcome-identical: ensureStreaming/ensureReasoning only read chunk.type
- * and the concatenated text, and the row's seq comes from the run's FIRST
- * chunk (the fork boundary rewindToNode derives from it). Parts join once —
- * no quadratic concat. Live events never go through this.
+ * events for REPLAY only. A streamed pre-V3 turn logs one event per token
+ * (~100k events in long sessions); replaying them one at a time costs
+ * per-chunk string growth on every row (quadratic in the turn's length).
+ * Merging is outcome-identical: ensureStreaming/ensureReasoning only read
+ * chunk.type and the concatenated text, and the row's seq comes from the
+ * run's FIRST chunk (the fork boundary rewindToNode derives from it). Parts
+ * join once — no quadratic concat. Live events never go through this.
+ *
+ * Pre-V3 durable logs only: 0.1.5 removed `assistant/chunk` from the event
+ * union (V3 embeds the compacted stream in `assistant/message.stream`), so
+ * the merger works on the widened structural shape — runtime payloads from
+ * raw pre-V3 logs remain typed as SessionEvent by the reader.
  *
  * (Moved from channel.ts: the transcript replay and the tree extraction
  * share it.)
  */
 export function coalesceReplayEvents(events: readonly SessionEvent[]): SessionEvent[] {
-  type ChunkEvent = Extract<SessionEvent, { type: 'assistant/chunk' }>
+  type LegacyChunkData = { turn: number; step: number; chunk: { type: string; text?: string } }
+  const legacyChunkDataOf = (event: SessionEvent): LegacyChunkData | undefined => {
+    if ((event as { type: string }).type !== 'assistant/chunk') return undefined
+    const data = (event as unknown as { data: LegacyChunkData }).data
+    if (data.chunk?.type !== 'text-delta' && data.chunk?.type !== 'reasoning-delta') return undefined
+    return data
+  }
   const out: SessionEvent[] = []
-  let run: { event: ChunkEvent; type: string; parts: string[] } | null = null
+  let run: { event: SessionEvent; data: LegacyChunkData; parts: string[] } | null = null
   const flush = (): void => {
     if (run === null) return
-    const chunk = run.event.data.chunk
     out.push({
       ...run.event,
-      data: { ...run.event.data, chunk: { ...chunk, text: run.parts.join('') } },
-    } as ChunkEvent)
+      data: { ...run.data, chunk: { ...run.data.chunk, text: run.parts.join('') } },
+    } as unknown as SessionEvent)
     run = null
   }
   for (const event of events) {
-    if (
-      event.type === 'assistant/chunk' &&
-      (event.data.chunk.type === 'text-delta' || event.data.chunk.type === 'reasoning-delta')
-    ) {
-      if (run !== null && run.type === event.data.chunk.type) {
+    const data = legacyChunkDataOf(event)
+    if (data !== undefined) {
+      if (run !== null && run.data.chunk.type === data.chunk.type) {
         // oxlint-disable-next-line typescript/no-unnecessary-condition -- durable replay data may lack text
-        run.parts.push(event.data.chunk.text ?? '')
+        run.parts.push(data.chunk.text ?? '')
         continue
       }
       flush()
       // oxlint-disable-next-line typescript/no-unnecessary-condition -- durable replay data may lack text
-      run = { event, type: event.data.chunk.type, parts: [event.data.chunk.text ?? ''] }
+      run = { event, data, parts: [data.chunk.text ?? ''] }
       continue
     }
     flush()
@@ -403,6 +411,29 @@ export function extractEntries(sessionId: string, events: readonly SessionEvent[
       inFirstTurn = markFirstTurn && turnsSeen === 1
       continue
     }
+    // Pre-V3 durable logs only: per-token chunk events predate the 0.1.5
+    // union (V3 embeds the stream in assistant/message.stream), so they are
+    // handled structurally outside the typed switch.
+    if ((event as { type: string }).type === 'assistant/chunk') {
+      const data = (event as unknown as { data: { turn: number; step: number; chunk: { type: string; text?: string } } }).data
+      if (data.chunk.type === 'text-delta') {
+        const text = data.chunk.text ?? ''
+        if (text.trim()) {
+          const key = `${data.turn}:${data.step}`
+          const index = push({
+            seq: event.seq,
+            kind: 'assistant',
+            text: preview(text),
+            searchText: `assistant ${text}`,
+            time: event.time,
+          })
+          const group = tentatives.get(key)
+          if (group === undefined) tentatives.set(key, [index])
+          else group.push(index)
+        }
+      }
+      continue
+    }
     switch (event.type) {
       case 'user/message': {
         const source = event.data.source as { kind: string; plugin?: string }
@@ -444,24 +475,6 @@ export function extractEntries(sessionId: string, events: readonly SessionEvent[
             time: event.time,
           })
         }
-        break
-      }
-      case 'assistant/chunk': {
-        const chunk = event.data.chunk
-        if (chunk.type !== 'text-delta') break
-        const text = 'text' in chunk ? (chunk.text ?? '') : ''
-        if (!text.trim()) break
-        const key = `${event.data.turn}:${event.data.step}`
-        const index = push({
-          seq: event.seq,
-          kind: 'assistant',
-          text: preview(text),
-          searchText: `assistant ${text}`,
-          time: event.time,
-        })
-        const group = tentatives.get(key)
-        if (group === undefined) tentatives.set(key, [index])
-        else group.push(index)
         break
       }
       case 'tool/call': {

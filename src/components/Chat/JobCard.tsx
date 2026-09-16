@@ -84,6 +84,13 @@ export function JobCard({ job, marginTopOnTurn, onClick }: {
   // A settled job's terminal detail ('exit code: 0') rides the header; a
   // failed/killed one also keeps it as the explanatory tail line.
   const headerDetail = job.detail !== undefined && job.detail !== '' ? job.detail : undefined
+  const headerName = `${t('jobs-card-prefix')}${job.id}`
+  const duration = formatJobDuration(job)
+  const fixedHeader = [
+    info.glyph, headerName, '·', job.kind, '·', '', '·', duration,
+    ...(headerDetail === undefined ? [] : ['·', headerDetail]), '·', info.label,
+  ].join(' ')
+  const labelWidth = Math.max(0, (columns ?? 80) - stringWidth(fixedHeader))
 
   // 点击打开 /jobs 面板；hover 不刷整行背景（转录视觉保持安静），只把
   // 状态 glyph 提亮为品牌色作为可点指示。无外层缩进：任务卡是上方工具
@@ -101,14 +108,14 @@ export function JobCard({ job, marginTopOnTurn, onClick }: {
     <Box flexDirection="row" gap={1}>
       <Text color={hovered && clickable ? 'accent' : info.color}>{info.glyph}</Text>
       <Text bold color={hovered && clickable ? 'accent' : undefined}>
-        {`${t('jobs-card-prefix')}${job.id}`}
+        {headerName}
       </Text>
       <Text dimColor>·</Text>
       <Text dimColor>{job.kind}</Text>
       <Text dimColor>·</Text>
-      <Text>{clipLine(job.label, Math.max(10, rowWidth - 30))}</Text>
+      <Text>{clipLine(job.label, labelWidth)}</Text>
       <Text dimColor>·</Text>
-      <Text dimColor>{formatJobDuration(job)}</Text>
+      <Text dimColor>{duration}</Text>
       {headerDetail !== undefined && <><Text dimColor>·</Text><Text dimColor>{headerDetail}</Text></>}
       <Text dimColor>·</Text>
       <Text color={info.color}>{info.label}</Text>

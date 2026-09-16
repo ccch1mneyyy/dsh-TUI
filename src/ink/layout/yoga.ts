@@ -125,6 +125,10 @@ export class YogaLayoutNode implements LayoutNode {
     return this.yoga.getComputedWidth()
   }
 
+  getComputedMeasureWidth(): number {
+    return this.yoga.getComputedMeasureWidth()
+  }
+
   getComputedHeight(): number {
     return this.yoga.getComputedHeight()
   }

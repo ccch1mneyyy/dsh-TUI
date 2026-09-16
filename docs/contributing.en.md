@@ -152,7 +152,7 @@ Cordis config
 Keep ownership in the layer where it belongs:
 
 - Agent/session/tool facts come from DSH services and durable session events.
-- Projection and TUI actions belong in `channel.ts`, not in presentation
+- Projection and TUI actions belong in `dsh-adapter/channel.ts`, not in presentation
   components.
 - Interaction modes and key precedence belong in `Chat.tsx` or the focused
   modal/input component.
@@ -299,6 +299,7 @@ change, also run the closest focused script:
 | --- | --- |
 | General headless screen composition | `pnpm smoke` |
 | Channel submit/steer/pending behavior | `node scripts/verify-submit.mjs` |
+| Rewind/edit/resend and historical inbox cancellation | `pnpm verify:rewind-edit` |
 | Prompt queue behavior | `node scripts/verify-queue.mjs` |
 | Goal/todo projection and rendering | `node scripts/verify-channel-goal-todo.mjs` and `node scripts/verify-goal-todo.mjs` |
 | Compaction and folded transcript rows | `node scripts/verify-compact.mjs` |

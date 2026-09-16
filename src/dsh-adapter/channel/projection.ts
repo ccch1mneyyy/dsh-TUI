@@ -1,6 +1,6 @@
-import type { Agent } from '@deepseek-ai/dsh-agent'
+import type { Agent, AssistantStreamFrame } from '@deepseek-ai/dsh-agent'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
-import type { ContentBlock } from '@deepseek-ai/dsh-llm'
+import type { ContentBlock, StreamChunk } from '@deepseek-ai/dsh-llm'
 import type { ChannelState, ChannelGoal, ChatRow, ToolCallView, ToolResultView, ToolsRegistryLike } from './types.js'
 import type { InputConvergence } from './input-actions.js'
 import type { BackgroundJobStore } from '../jobs.js'
@@ -70,23 +70,63 @@ export function createChannelProjection(state: ProjectionState, deps: Projection
    */
   const handledAssistantMessages = new Set<number>()
   const handledAssistantChunks = new Set<number>()
+  /** One Agent runs one request at a time. Durable step boundaries also let
+   *  a freshly attached projector accept chunks whose start it missed. */
+  let openStep: { turn: number; step: number } | undefined
+  let activeAttempt: { attemptId: string; turn: number; step: number } | undefined
+  let lastStreamRevision = -1
   const assistantRowsByStep = new Map<string, ChatRow>()
   const lastTextDelta = new Map<ChatRow, string>()
   const stepKey = (turn: number, step: number): string => `${turn}:${step}`
   const touchRow = (row: ChatRow): void => { markChannelReadDirty(row); markChannelReadDirty(state.rows) }
   const appendRow = (row: ChatRow): void => { state.rows.push(row); markChannelReadDirty(state.rows) }
+  const removeRow = (row: ChatRow): void => {
+    const index = state.rows.indexOf(row)
+    if (index !== -1) {
+      state.rows.splice(index, 1)
+      markChannelReadDirty(state.rows)
+    }
+    if (streaming === row) streaming = undefined
+    if (reasoning === row) reasoning = undefined
+    if (lastReasoningRow?.row === row) lastReasoningRow = undefined
+    const sealedIndex = sealedReasoning.indexOf(row)
+    if (sealedIndex !== -1) sealedReasoning.splice(sealedIndex, 1)
+    lastTextDelta.delete(row)
+  }
+
+  const discardAttempt = (turn: number, step: number): void => {
+    const key = stepKey(turn, step)
+    const row = assistantRowsByStep.get(key)
+    if (row !== undefined && row.seq === undefined) {
+      state.responseChars = Math.max(0, state.responseChars - row.text.length)
+      removeRow(row)
+      assistantRowsByStep.delete(key)
+    }
+    if (lastReasoningRow !== undefined && lastReasoningRow.turn === turn && lastReasoningRow.step === step && lastReasoningRow.row.seq === undefined) {
+      removeRow(lastReasoningRow.row)
+    }
+    if (activeAttempt !== undefined && activeAttempt.turn === turn && activeAttempt.step === step) activeAttempt = undefined
+    if (tpsStep !== undefined && tpsStep.turn === turn && tpsStep.step === step) {
+      tpsStep.firstTokenTime = undefined
+      tpsStep.outputChars = 0
+    }
+    updateSpinnerMode()
+  }
 
   /** Durable session image blocks, loaded lazily through the attachment
    *  store. Projection never reads pixels; the UI decodes on demand. */
   const transcriptImages = (content: readonly ContentBlock[] | undefined): readonly TranscriptImage[] =>
     transcriptImagesOf(content, deps.attachments)
 
-  /** Append a stream delta idempotently. Providers normally send a pure
-   * delta, but reconnect/proxy paths can resend a cumulative prefix or a
-   * delta whose beginning overlaps the previous tail. Merge the overlap
-   * instead of blindly concatenating it into the visible transcript. */
-  const appendTextDelta = (row: ChatRow, delta: string): void => {
+  /** V3 deltas are ordered by frame revision and must stay byte-exact.
+   * Legacy reconnect/proxy events may instead repeat a cumulative prefix. */
+  const appendTextDelta = (row: ChatRow, delta: string, legacy: boolean): void => {
     if (delta === '') return
+    if (!legacy) {
+      row.text += delta
+      touchRow(row)
+      return
+    }
     if (lastTextDelta.get(row) === delta) return
     lastTextDelta.set(row, delta)
     if (delta.startsWith(row.text)) {
@@ -332,13 +372,7 @@ export function createChannelProjection(state: ProjectionState, deps: Projection
     applyGoalChange(change)
   }
 
-  /** True while the durable transcript is being replayed (boot /resume /
-   *  rewind / model-switch fork). The assistant/message reasoning-rebuild
-   *  branch below must run ONLY on this path: in a live stream the chunks
-   *  already created the reasoning row, and foldLiveReasoning clears the
-   *  `reasoning` handle before assistant/message arrives — so
-   *  `reasoning === undefined` alone cannot tell replay from live, and
-   *  using it would rebuild a second thinking block per step. */
+  /** Replay paints settled history without the live smooth-reveal animation. */
   let replaying = false
   const replayEvents = (events: readonly SessionEvent[]): void => {
     // Event sequence numbers restart with a replacement session; reset the
@@ -346,6 +380,9 @@ export function createChannelProjection(state: ProjectionState, deps: Projection
     // legitimate message in the new transcript.
     handledAssistantMessages.clear()
     handledAssistantChunks.clear()
+    openStep = undefined
+    activeAttempt = undefined
+    lastStreamRevision = -1
     assistantRowsByStep.clear()
     lastTextDelta.clear()
     replaying = true
@@ -356,6 +393,84 @@ export function createChannelProjection(state: ProjectionState, deps: Projection
     }
   }
 
+  /**
+   * One live stream delta, from a 0.1.5 `agent/assistant-stream` chunk frame
+   * or a legacy `assistant/chunk` session event (pre-0.1.5 hosts and raw
+   * pre-V3 logs). `seq` exists only on the durable-event path.
+   */
+  const renderStreamChunk = (turn: number, step: number, chunk: StreamChunk, time: number, seq?: number): void => {
+    if (chunk.type === 'text-delta') {
+      if (chunk.text) {
+        // Fold the thinking preview while it is still in the live
+        // window (see foldLiveReasoning) — before this text grows the
+        // transcript and pushes the block into scrollback.
+        foldLiveReasoning('first text token')
+        const key = stepKey(turn, step)
+        const row = assistantRowsByStep.get(key) ?? ensureStreaming(seq)
+        assistantRowsByStep.set(key, row)
+        streaming = row
+        row.streaming = true
+        touchRow(row)
+        const before = row.text.length
+        appendTextDelta(row, chunk.text, seq !== undefined)
+        state.responseChars += Math.max(0, row.text.length - before)
+      }
+    } else if (chunk.type === 'reasoning-delta') {
+      if (chunk.text) {
+        const row = ensureReasoning(seq, turn, step)
+        appendTextDelta(row, chunk.text, seq !== undefined)
+      }
+    }
+    const tps = tpsStep
+    if (
+      tps !== undefined &&
+      tps.turn === turn &&
+      tps.step === step &&
+      isTokenDelta(chunk)
+    ) {
+      tps.firstTokenTime ??= time
+      tps.outputChars += tokenDeltaChars(chunk)
+      const elapsedMs = Math.max(0, time - tps.firstTokenTime)
+      if (elapsedMs > 500) {
+        const decodeMs = tpsTurnDecodeMs + elapsedMs
+        const outputTokens = tpsTurnDecodeTokens + Math.ceil(tps.outputChars / 4)
+        state.tps = outputTokens / (decodeMs / 1000)
+      }
+    }
+    updateSpinnerMode()
+  }
+
+  /**
+   * Live assistant stream frame (0.1.5+): the transient per-token counterpart
+   * of the durable `assistant/message`/`assistant/attempt` settlement. Start
+   * frames own the attempt's (turn, step); a reattach rebuilds that pair
+   * from the open durable step. Settlement owns the text; an abandoned end
+   * must discard provisional rows even when no durable event was written.
+   */
+  const renderStreamFrame = (frame: AssistantStreamFrame): void => {
+    if (frame.revision <= lastStreamRevision) return
+    lastStreamRevision = frame.revision
+    if (frame.type === 'start') {
+      if (activeAttempt !== undefined) discardAttempt(activeAttempt.turn, activeAttempt.step)
+      activeAttempt = { attemptId: frame.attemptId, turn: frame.turn, step: frame.step }
+      return
+    }
+    if (frame.type === 'end') {
+      if (activeAttempt?.attemptId !== frame.attemptId) return
+      if (frame.outcome.kind === 'abandoned' || frame.outcome.eventType === 'assistant/attempt') {
+        discardAttempt(activeAttempt.turn, activeAttempt.step)
+      }
+      activeAttempt = undefined
+      return
+    }
+    if (activeAttempt === undefined && openStep !== undefined) {
+      activeAttempt = { attemptId: frame.attemptId, ...openStep }
+    }
+    const where = activeAttempt?.attemptId === frame.attemptId ? activeAttempt : undefined
+    if (where === undefined) return
+    renderStreamChunk(where.turn, where.step, frame.chunk, frame.time)
+  }
+
   const renderEvent = (event: SessionEvent): void => {
     // Top-level `goal/change` events are how the goal service actually
     // records durable goal mutations (create/edit/pause/resume/complete/
@@ -363,16 +478,16 @@ export function createChannelProjection(state: ProjectionState, deps: Projection
     // SessionEvent union predates the type, so admit it structurally: the
     // goal chip and panel stay dark without this fold.
     if ((event as { type: string }).type === 'goal/change') {
-      applyGoalChange((event as { data: GoalChangePayload }).data)
+      applyGoalChange((event as unknown as { data: GoalChangePayload }).data)
       return
     }
     switch (event.type) {
       case 'user/message': {
         // Compaction checkpoint: `source = { kind: 'plugin', plugin:
-        // 'compact' }` (dsh-compact's COMPACT_CHECKPOINT_SOURCE). CC shows
-        // the framed summary after /compact; render it as a Divider title +
-        // a summary row that defaults folded (`compact` kind) instead of
-        // skipping it like other injected context.
+        // 'compact' }` (dsh-compact's COMPACT_CHECKPOINT_SOURCE). Render the
+        // framed summary after /compact as a Divider title + a summary row
+        // that defaults folded (`compact` kind) instead of skipping it like
+        // other injected context.
         if (
           event.data.source.kind === 'plugin' &&
           event.data.source.plugin === 'compact'
@@ -444,6 +559,7 @@ export function createChannelProjection(state: ProjectionState, deps: Projection
         break
       }
       case 'step/start': {
+        openStep = { turn: event.data.turn, step: event.data.step }
         if (tpsTurn === event.data.turn) {
           tpsStep = {
             turn: event.data.turn,
@@ -454,79 +570,45 @@ export function createChannelProjection(state: ProjectionState, deps: Projection
         }
         break
       }
-      case 'assistant/chunk': {
-        if (handledAssistantChunks.has(event.seq)) break
-        handledAssistantChunks.add(event.seq)
-        const chunk = event.data.chunk
-        if (chunk.type === 'text-delta') {
-          if (chunk.text) {
-            // Fold the thinking preview while it is still in the live
-            // window (see foldLiveReasoning) — before this text grows the
-            // transcript and pushes the block into scrollback.
-            foldLiveReasoning('first text token')
-            const key = stepKey(event.data.turn, event.data.step)
-            const row = assistantRowsByStep.get(key) ?? ensureStreaming(event.seq)
-            assistantRowsByStep.set(key, row)
-            streaming = row
-            row.streaming = true
-            touchRow(row)
-            const before = row.text.length
-            appendTextDelta(row, chunk.text)
-            state.responseChars += Math.max(0, row.text.length - before)
-          }
-        } else if (chunk.type === 'reasoning-delta') {
-          if (chunk.text) {
-            const row = ensureReasoning(event.seq, event.data.turn, event.data.step)
-            appendTextDelta(row, chunk.text)
-          }
-        }
-        const step = tpsStep
-        if (
-          step !== undefined &&
-          step.turn === event.data.turn &&
-          step.step === event.data.step &&
-          isTokenDelta(chunk)
-        ) {
-          step.firstTokenTime ??= event.time
-          step.outputChars += tokenDeltaChars(chunk)
-          const elapsedMs = Math.max(0, event.time - step.firstTokenTime)
-          if (elapsedMs > 500) {
-            const decodeMs = tpsTurnDecodeMs + elapsedMs
-            const outputTokens = tpsTurnDecodeTokens + Math.ceil(step.outputChars / 4)
-            state.tps = outputTokens / (decodeMs / 1000)
-          }
-        }
-        updateSpinnerMode()
+      case 'assistant/attempt': {
+        discardAttempt(event.data.turn, event.data.step)
         break
       }
       case 'assistant/message': {
         if (handledAssistantMessages.has(event.seq)) break
         handledAssistantMessages.add(event.seq)
+        // V3 embeds its complete attempt stream; older settlements may omit
+        // reasoning that is still durably recorded in assistant/chunk events.
+        const canonical = Array.isArray((event.data as { stream?: unknown }).stream)
         const text = textOf(event.data.message.content)
         const images = transcriptImages(event.data.message.content)
-        // Replay without chunk deltas (prepareReplayEvents drops settled
-        // ones): rebuild the reasoning row from the sealed message's
-        // reasoning blocks. Replay-only — gated on the `replaying` flag,
-        // not on `reasoning === undefined`: a live stream's chunks already
-        // created the row, and foldLiveReasoning has cleared the `reasoning`
-        // handle by the time this event lands, so the undefined check alone
-        // would rebuild a duplicate thinking block per step. Pushed BEFORE
-        // the assistant row so the transcript order matches the live
-        // stream; settled (folded) immediately, durationMs unknown without
-        // a live clock.
-        if (replaying && reasoning === undefined) {
-          const reasoningText = event.data.message.content
-            .map(block => (block.type === 'reasoning' ? block.text : ''))
-            .join('')
-          if (reasoningText !== '') {
-            appendRow({
-              id: deps.rowIds.value,
-              kind: 'reasoning',
-              text: reasoningText,
-              seq: event.seq,
-            })
-            deps.rowIds.value += 1
+        const reasoningText = event.data.message.content
+          .map(block => (block.type === 'reasoning' ? block.text : ''))
+          .join('')
+        const settledReasoning = lastReasoningRow !== undefined && lastReasoningRow.turn === event.data.turn && lastReasoningRow.step === event.data.step
+          ? lastReasoningRow.row : reasoning
+        if (settledReasoning !== undefined) {
+          if (reasoningText === '') {
+            if (canonical) removeRow(settledReasoning)
+          } else {
+            settledReasoning.text = reasoningText
+            settledReasoning.seq ??= event.seq
+            touchRow(settledReasoning)
           }
+        } else if (reasoningText !== '') {
+          // Replays and reattachments may not have seen any reasoning delta.
+          // Insert before a live text row to preserve message block order.
+          const rebuilt: ChatRow = {
+            id: deps.rowIds.value,
+            kind: 'reasoning',
+            text: reasoningText,
+            seq: event.seq,
+          }
+          deps.rowIds.value += 1
+          const textRow = assistantRowsByStep.get(stepKey(event.data.turn, event.data.step))
+          const textIndex = textRow === undefined ? -1 : state.rows.indexOf(textRow)
+          if (textIndex === -1) appendRow(rebuilt)
+          else { state.rows.splice(textIndex, 0, rebuilt); markChannelReadDirty(state.rows) }
         }
         // Reasoning/tool-only steps emit no text: creating an assistant row
         // anyway leaves an empty `●` bullet in the transcript. A pre-existing
@@ -547,10 +629,14 @@ export function createChannelProjection(state: ProjectionState, deps: Projection
                 candidate.kind === 'assistant' && candidate.seq === event.seq,
               ) ?? ensureStreaming(event.seq))
             : undefined)
-        if (row !== undefined) {
+        if (row !== undefined && canonical && !text && images.length === 0) {
+          removeRow(row)
+          if (msgKey !== undefined) assistantRowsByStep.delete(msgKey)
+        } else if (row !== undefined) {
           if (msgKey !== undefined) assistantRowsByStep.set(msgKey, row)
+          row.seq ??= event.seq
           row.time = event.time
-          if (text) row.text = text
+          if (text || canonical) row.text = text
           row.images = images.length === 0 ? undefined : images
           row.streaming = false
           // Live settles keep the smooth-reveal cursor alive (a one-shot
@@ -575,6 +661,7 @@ export function createChannelProjection(state: ProjectionState, deps: Projection
           logForDebugging(`thinking: step sealed (${reasoning.durationMs}ms), expanded until turn/end`)
         }
         reasoning = undefined
+        if (activeAttempt !== undefined && activeAttempt.turn === event.data.turn && activeAttempt.step === event.data.step) activeAttempt = undefined
         updateSpinnerMode()
         const usage = event.data.usage
         if (usage !== undefined) {
@@ -757,6 +844,7 @@ export function createChannelProjection(state: ProjectionState, deps: Projection
         break
       }
       case 'step/end': {
+        if (openStep !== undefined && openStep.turn === event.data.turn && openStep.step === event.data.step) openStep = undefined
         if (
           tpsStep !== undefined &&
           tpsStep.turn === event.data.turn &&
@@ -784,6 +872,8 @@ export function createChannelProjection(state: ProjectionState, deps: Projection
         break
       }
       case 'turn/end': {
+        if (activeAttempt !== undefined) discardAttempt(activeAttempt.turn, activeAttempt.step)
+        openStep = undefined
         deps.inputConvergence.cancelInFlight = false
         state.cancelPending = false
         settleStreaming()
@@ -813,8 +903,8 @@ export function createChannelProjection(state: ProjectionState, deps: Projection
         }
         if (reason.kind === 'aborted' || reason.kind === 'interrupted') {
           // `Agent.cancel()` closes the turn as `aborted`; `interrupted`
-          // only appears for crash-orphaned turns. Claude Code renders both
-          // user-interruption paths as a distinct dim row.
+          // only appears for crash-orphaned turns. Both user-interruption
+          // paths render as a distinct dim row.
           appendRow({
             id: deps.rowIds.value,
             kind: 'interrupt',
@@ -838,22 +928,31 @@ export function createChannelProjection(state: ProjectionState, deps: Projection
       }
       case 'request/context':
         // Adapter-advertised context capacity; drives the context-low
-        // warning (CC's TokenWarning) when the route reports one.
+        // warning when the route reports one.
         if (event.data.contextWindow !== undefined) {
           state.contextWindow = event.data.contextWindow
         }
         break
+      case 'system/message': {
+        // V3 system prompts are surface nodes, not header fields: the latest
+        // node holds the active instructions (an empty render clears them).
+        // The context bar's system segment tracks that live text.
+        state.contextSegments.system = estimateTokens(textOf(event.data.message.content))
+        break
+      }
       case 'request/header': {
         // Reasoning effort readout (status line): the header carries the
         // conversation's call config (provider/model/effort/sampling). The
-        // system prompt text seeds the context bar's system segment.
+        // system prompt moved out of the header at V3 (see system/message);
+        // pre-V3 logs still carry it, admitted structurally below.
         // oxlint-disable-next-line typescript/no-unnecessary-condition -- durable session data may lack header config
         const effort = event.data.header.config?.reasoningEffort
         if (typeof effort === 'string') {
           state.reasoningEffort = effort
         }
-        if (typeof event.data.header.system === 'string') {
-          state.contextSegments.system = estimateTokens(event.data.header.system)
+        const legacySystem = (event.data.header as { system?: unknown }).system
+        if (typeof legacySystem === 'string') {
+          state.contextSegments.system = estimateTokens(legacySystem)
         }
         break
       }
@@ -861,6 +960,18 @@ export function createChannelProjection(state: ProjectionState, deps: Projection
         state.sessionTitle = event.data.title
         break
       default:
+        // Pre-0.1.5 live streams and raw pre-V3 logs carry per-token chunks
+        // as durable session events; 0.1.5 moved live chunks to transient
+        // `agent/assistant-stream` frames (renderStreamFrame) and compacts the
+        // durable record into `assistant/message.stream`. Match by name so the
+        // current union (which no longer lists the type) stays compile-clean.
+        if ((event as { type: string }).type === 'assistant/chunk') {
+          if (handledAssistantChunks.has(event.seq)) break
+          handledAssistantChunks.add(event.seq)
+          const data = (event as unknown as { data: { turn: number; step: number; chunk: StreamChunk } }).data
+          renderStreamChunk(data.turn, data.step, data.chunk, (event as { time: number }).time, event.seq)
+          break
+        }
         // dsh-tool-todo owns this optional module augmentation in alpha.2.
         // Match by name so the TUI remains loadable without that plugin.
         if ((event as { type: string }).type === 'todo/write') {
@@ -935,6 +1046,9 @@ export function createChannelProjection(state: ProjectionState, deps: Projection
     toolCards.clear()
     handledAssistantMessages.clear()
     handledAssistantChunks.clear()
+    openStep = undefined
+    activeAttempt = undefined
+    lastStreamRevision = -1
     assistantRowsByStep.clear()
     lastTextDelta.clear()
     tpsTurn = undefined
@@ -943,5 +1057,5 @@ export function createChannelProjection(state: ProjectionState, deps: Projection
     tpsTurnDecodeTokens = 0
     tpsTurnSampled = false
   }
-  return { reset, replayEvents, renderEvent, settleStreaming, updateSpinnerMode, presentCallView, presentResultView, textOf, firstTextOf }
+  return { reset, replayEvents, renderEvent, renderStreamFrame, settleStreaming, updateSpinnerMode, presentCallView, presentResultView, textOf, firstTextOf }
 }

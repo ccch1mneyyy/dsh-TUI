@@ -267,6 +267,22 @@ r = runBin(['foo', 'a b'], {}, { delegating: true })
 check('shim: delegates argv through to the profile copy', stubCalls().at(-1) === '<--profile><dsh-tui><foo><a b>')
 check('shim: silent + exit 0 when aligned', r.status === 0 && r.stderr.trim() === '')
 
+// 反向错位（profile 更旧，issue #183）必须在「瘦壳委托」路径上拦住：上面 3.5
+// 走的是 DSH_TUI_NO_DELEGATE=1 的完整逻辑路径，而真实用户命中的是这条委托
+// 路径（完整的 profile bin 已预放，委托本身可行）。不拦的话 dsh 会拿启动器
+// 拷贝的 bundle patch 配 profile 旧包，patch 引用旧包没有的子路径导出（例如
+// ./oauth）时以 ERR_PACKAGE_PATH_NOT_EXPORTED 崩溃。
+setProfileVersion('0.0.0')
+placeProfileBin()
+resetStubLog()
+r = runBin([], {}, { delegating: true })
+check(
+  'shim reverse skew: refuses to delegate',
+  r.status === 1 && !stubCalls().some(c => c.includes('<--profile>')),
+)
+check('shim reverse skew: names both versions', r.stderr.includes('v0.0.0') && r.stderr.includes(`v${ownVersion}`))
+check('shim reverse skew: prints the align command', r.stderr.includes(`add @deepseek-harness-tui/dsh-tui@${ownVersion}`))
+
 setProfileVersion(undefined)
 placeProfileBin() // add stub 只创建 package.json——bin 是预放好的“已安装”产物
 resetStubLog()

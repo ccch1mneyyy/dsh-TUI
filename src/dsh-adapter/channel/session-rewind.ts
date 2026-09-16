@@ -91,7 +91,14 @@ export function createRewindToAction(
         parentSession: deps.binding.agent.session.id,
         agentPreset: composed.agentPreset,
         agentOptions: { provider: state.provider, model: state.model },
-        setup: composed.setup,
+        setup: async (agentCtx, agent) => {
+          // The cut keeps pre-turn inbox insertions but drops their claims.
+          // Newer hosts replay those inherited splices, so cancel the restored
+          // queue durably in the CHILD before publication or preset setup.
+          // Clearing only state.pending would hide, not revoke, the old work.
+          agent.inbox.clear()
+          return composed.setup?.(agentCtx, agent)
+        },
       })))
     } catch {
       deps.notify(t('rewind-create-failed'), { color: 'error' })
@@ -104,7 +111,7 @@ export function createRewindToAction(
       deps.notify(t('rewind-attach-failed', { err: error instanceof Error ? error.message : String(error) }), { color: 'warning', timeoutMs: 8000 })
     }
     if (!deps.owner.current()) { await deps.binding.abandon(handle); return null }
-    const sourceSessionId = deps.adoptForkedAgent(handle, adoption, seed, composed.agentPreset, childId)
+    const sourceSessionId = deps.adoptForkedAgent(handle, adoption, snapshotLiveSessionEvents(handle.agent.session), composed.agentPreset, childId)
     try {
       void dispatchTuiDecision(ctx, 'tui/rewind-done', {
         text: row.text,

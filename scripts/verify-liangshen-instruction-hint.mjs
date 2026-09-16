@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import { apply } from '../presets/liangshen/instruction-hint.mjs'
+import { Session, SessionId } from '@deepseek-ai/dsh-session'
 
 function createHarness() {
   const listeners = {}
@@ -101,5 +102,19 @@ assert.deepEqual(first.warnings, [])
 assert.deepEqual(resumed.warnings, [])
 assert.deepEqual(unrelated.warnings, [])
 assert.deepEqual(reentry.warnings, [])
+
+const modernSession = Session.create(SessionId('hint-v3'), [], {
+  id: SessionId('hint-v3'), version: 3, isSeeded: false, createdAt: 1, cwd: '/workspace/project',
+})
+modernSession.append('tool/call', { turn: 1, step: 1, callId: 'call', name: 'bash', arguments: '{}' })
+const modern = createHarness()
+const modernDecision = await modern.preStep(modernSession)
+assert.equal(modernDecision.messages.length, 1)
+modernSession.append('user/message', modernDecision.messages[0], { surfaceOp: 'append' })
+const modernResumed = createHarness()
+assert.equal((await modernResumed.preStep(modernSession)).messages.length, 0)
+assert.equal(modernResumed.fs.probes, 0)
+assert.deepEqual(modern.warnings, [])
+assert.deepEqual(modernResumed.warnings, [])
 
 console.log('liangshen instruction hint verified (promotion, durable resume, unrelated messages, re-entry, scan failure)')

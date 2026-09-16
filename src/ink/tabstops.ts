@@ -8,14 +8,16 @@ const DEFAULT_TAB_INTERVAL = 8
 
 /**
  * Expand tab characters to spaces at fixed column intervals, preserving
- * escape sequences and resetting the column on newlines.
+ * escape sequences and resetting to the starting column on newlines.
  * @param text - the text to expand.
  * @param interval - the tab stop interval in columns; defaults to 8.
+ * @param startColumn - the original screen column of each line; defaults to 0.
  * @returns `text` with every tab replaced by the spaces needed to reach the next stop.
  */
 export function expandTabs(
   text: string,
   interval = DEFAULT_TAB_INTERVAL,
+  startColumn = 0,
 ): string {
   if (!text.includes('\t')) {
     return text
@@ -26,7 +28,7 @@ export function expandTabs(
   tokens.push(...tokenizer.flush())
 
   let result = ''
-  let column = 0
+  let column = startColumn
 
   for (const token of tokens) {
     if (token.type === 'sequence') {
@@ -40,7 +42,7 @@ export function expandTabs(
           column += spaces
         } else if (part === '\n') {
           result += part
-          column = 0
+          column = startColumn
         } else {
           result += part
           column += stringWidth(part)

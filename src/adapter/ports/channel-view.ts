@@ -45,7 +45,7 @@ export interface ChatRow {
   fresh?: boolean
 }
 
-/** Tool-call card state, mirroring the Claude Code tool-use presentation. */
+/** Tool-call card state: the presentation of one tool invocation. */
 export interface ToolRow {
   readonly callId: string
   readonly name: string
@@ -527,8 +527,8 @@ export interface AgentViewRow {
 }
 
 /**
- * One session's state in the agent view (CC's `claude agents` screen).
- * States mirror Claude Code's vocabulary:
+ * One session's state in the agent view.
+ * State vocabulary:
  * `working` — a turn is running; `needs-input` — an approval request is
  * parked for this agent; `idle` — live and waiting for the next prompt;
  * `completed` — a live agent whose last turn ended (task finished, waiting);

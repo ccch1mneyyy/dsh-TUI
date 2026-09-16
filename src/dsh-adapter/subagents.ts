@@ -1,3 +1,4 @@
+import type { AssistantStreamFrame } from '@deepseek-ai/dsh-agent'
 import type { SubagentState, SubagentStatus, SubagentOutputLine, SubagentOutputKind, SubagentToolCall, SubagentTokenUsage } from '../adapter/ports/channel-view.js'
 export type { SubagentState, SubagentStatus, SubagentOutputLine, SubagentOutputKind, SubagentToolCall, SubagentTokenUsage } from '../adapter/ports/channel-view.js'
 
@@ -5,10 +6,22 @@ export type { SubagentState, SubagentStatus, SubagentOutputLine, SubagentOutputK
 const MAX_OUTPUT_EVENTS = 160
 const MAX_OUTPUT_LINES = 160
 
+interface AssistantOutputStream {
+  revision: number
+  settledSeq?: number
+  attempt?: {
+    id: string
+    turn?: number
+    step?: number
+    before: SubagentOutputLine[]
+  }
+}
+
 export class SubagentActivityStore {
   private states = new Map<string, SubagentState>()
   private sessionToAgent = new Map<unknown, string>()
   private listeners = new Set<() => void>()
+  private streams = new Map<string, AssistantOutputStream>()
 
   private commitLine(agentId: string, kind: SubagentOutputKind, text: string): void {
     const state = this.states.get(agentId)
@@ -93,9 +106,76 @@ export class SubagentActivityStore {
     }
   }
 
+  /** 0.1.5 live stream: transient attempt frames replace `assistant/chunk`
+   *  session events (the durable settlement keeps flowing as session events). */
+  onStreamFrame(agentId: string, frame: AssistantStreamFrame): void {
+    const state = this.states.get(agentId)
+    if (!state || (state.status !== 'running' && state.status !== 'starting')) return
+    let stream = this.streams.get(agentId)
+    if (stream === undefined) {
+      stream = { revision: -1 }
+      this.streams.set(agentId, stream)
+    }
+    if (frame.revision <= stream.revision) return
+    stream.revision = frame.revision
+    if (frame.type === 'end') {
+      if (stream.attempt?.id === frame.attemptId) this.restoreAttempt(agentId, stream)
+      return
+    }
+    if (frame.type === 'start' || stream.attempt === undefined) {
+      this.restoreAttempt(agentId, stream)
+      this.flushOutput(agentId)
+      // Retain at most the existing 160-line window, never the chunk history.
+      stream.attempt = {
+        id: frame.attemptId,
+        ...(frame.type === 'start' ? { turn: frame.turn, step: frame.step } : {}),
+        before: state.outputEvents.map(line => ({ ...line })),
+      }
+    }
+    if (frame.type === 'start' || stream.attempt?.id !== frame.attemptId) return
+    const chunk = frame.chunk
+    if (chunk.type === 'text-delta' && chunk.text) this.appendOutput(agentId, chunk.text, 'text')
+    else if (chunk.type === 'reasoning-delta' && chunk.text) this.appendOutput(agentId, chunk.text, 'thinking')
+    else if (chunk.type === 'usage' && chunk.usage) this.setTokens(agentId, chunk.usage)
+  }
+
+  private restoreAttempt(agentId: string, stream: AssistantOutputStream): void {
+    const state = this.states.get(agentId)
+    if (!state || stream.attempt === undefined) return
+    state.outputEvents = stream.attempt.before
+    state.output = state.outputEvents.map(line => line.text)
+    stream.attempt = undefined
+    this.notify()
+  }
+
+  private settleAssistant(agentId: string, content: unknown, turn: unknown, step: unknown, seq: unknown): void {
+    if (!this.states.has(agentId) || !Array.isArray(content)) return
+    let stream = this.streams.get(agentId)
+    if (stream === undefined) {
+      stream = { revision: -1 }
+      this.streams.set(agentId, stream)
+    }
+    if (typeof seq === 'number') {
+      if (stream.settledSeq !== undefined && seq <= stream.settledSeq) return
+      stream.settledSeq = seq
+    }
+    const attempt = stream.attempt
+    if (attempt !== undefined && (attempt.turn === undefined || (attempt.turn === turn && attempt.step === step))) {
+      this.restoreAttempt(agentId, stream)
+    }
+    for (const block of content) {
+      if (block === null || typeof block !== 'object') continue
+      const value = block as { type?: unknown; text?: unknown }
+      if ((value.type !== 'text' && value.type !== 'reasoning') || typeof value.text !== 'string' || value.text === '') continue
+      const kind = value.type === 'text' ? 'text' : 'thinking'
+      for (const line of value.text.split('\n').slice(-MAX_OUTPUT_EVENTS)) this.commitLine(agentId, kind, line)
+    }
+    this.notify()
+  }
+
   onSessionEvent(agentId: string, event: unknown): void {
     if (!event || typeof event !== 'object') return
-    const ev = event as { type?: string; data?: any }
+    const ev = event as { type?: string; seq?: number; data?: any }
     const data = ev.data ?? {}
     switch (ev.type) {
       case 'assistant/chunk': {
@@ -106,7 +186,16 @@ export class SubagentActivityStore {
         break
       }
       case 'assistant/message': {
+        if (Array.isArray(data.stream)) this.settleAssistant(agentId, data.message?.content, data.turn, data.step, ev.seq)
         if (data.usage) this.setTokens(agentId, data.usage)
+        break
+      }
+      case 'assistant/attempt': {
+        const stream = this.streams.get(agentId)
+        const attempt = stream?.attempt
+        if (stream !== undefined && attempt !== undefined && (attempt.turn === undefined || (attempt.turn === data.turn && attempt.step === data.step))) {
+          this.restoreAttempt(agentId, stream)
+        }
         break
       }
       case 'tool/call': {
@@ -181,6 +270,8 @@ export class SubagentActivityStore {
   private finish(agentId: string, status: SubagentStatus, reason?: string, summary?: string): void {
     const state = this.states.get(agentId)
     if (!state || (state.status !== 'running' && state.status !== 'starting')) return
+    const stream = this.streams.get(agentId)
+    if (stream !== undefined) this.restoreAttempt(agentId, stream)
     state.status = status
     state.completedAt = Date.now()
     state.endedAt = state.completedAt
@@ -196,6 +287,7 @@ export class SubagentActivityStore {
   reset(): void {
     this.states.clear()
     this.sessionToAgent.clear()
+    this.streams.clear()
     this.notify()
   }
 

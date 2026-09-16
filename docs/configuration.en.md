@@ -29,7 +29,7 @@ A complete common override looks like this:
 - id: dsh-tui
   config:
     provider: deepseek-official
-    model: deepseek-v4-flash
+    model: deepseek-flash
     # Prefer leaving cwd unset — the default resolves to the git worktree
     # root containing the launch directory. To pin a fixed workspace, use an
     # absolute path (e.g. cwd: /repo/packages/app), NOT `!!js process.cwd()`
@@ -48,14 +48,14 @@ A complete common override looks like this:
 | Field | Default/source | Meaning |
 | --- | --- | --- |
 | `provider` | Harness `agentDefaultModel`; bare compositions fall back to `deepseek-official` | DSH model route; provider and model must both be set to form an explicit route |
-| `model` | Harness `agentDefaultModel`; bare compositions fall back to `deepseek-v4-flash` | Startup model; `/model` can switch through a session fork |
+| `model` | Harness `agentDefaultModel`; bare compositions fall back to `deepseek-flash` | Startup model; `/model` can switch through a session fork |
 | `cwd` | git worktree root containing the launch directory (`process.cwd()` when outside any worktree; a dotfiles repo at `$HOME` does not count) | TUI-side session workspace: agent meta, `@` completion/mention expansion, /resume filtering, statusline; resuming an existing session adopts that session's persisted cwd. Note the bash/fs-policy/sandbox roots are still owned by the composition layer's cordis config (default: the launch directory, governed by dsh-base) and may differ from this session-side cwd |
 | `workspace` | unset | Startup workspace target: a local path, `file://` URL, or plugin-provided URI; takes precedence over `cwd` |
 | `effort` | normally `max` in the bundle | Reasoning effort applied to every request (validated against the runtime model's levels; invalid levels silently fall back to the adapter default), also shown in the header at startup. Precedence: /settings default reasoning effort `effortDefault` (settings.yaml user layer; `auto` defers) > this field > the persisted `/effort` choice (`~/.dsh-tui/effort.json`) > the model default |
 | `modes` | built-in trio | Shift+Tab session-mode cycle (plan/sandbox/approval atom bundles); defaults to default → plan → full-access |
 | `activity` | `true` | Show the live activity row |
 | `activityFrames` | `moon8` | Activity animation preset; `/activity` changes it at runtime. A legacy saved value of `claude` is read as `moon8`, and the picker no longer offers that legacy preset |
-| `contextBar` | `true` | Segmented context-usage bar below the input box; `false` hides the row |
+| `contextBar` | `true` | Segmented context-usage bar below the input box; `false` hides the row. Both this and `/settings → statusBar.contextBar` (also on by default) must be on for it to render |
 | `fullscreen` | `true` (factory default since 0.9.0) | `true` uses the alternate screen, app scrolling, and mouse selection; `false` uses inline mode |
 | `terminalImages` | `true` | Allow previews in supported terminals; `false` keeps text metadata and skips image probing and preview decoding. Restart to apply changes |
 | `preset` | roster default `standard` | Agent preset for new sessions; explicit configuration wins over persisted preference |

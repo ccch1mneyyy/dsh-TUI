@@ -20,6 +20,7 @@ import { LogoV2 } from './LogoV2.js'
 import { StreamingMarkdown } from './StreamingMarkdown.js'
 import { MessageMetadata } from './messages/MessageMetadata.js'
 import { stripNarration } from '../utils/narration.js'
+import { foldLongLines } from '../utils/fold-long-lines.js'
 import { stringWidth } from '../ink/stringWidth.js'
 import { truncateToWidth } from '../ink/truncateToWidth.js'
 import { clipPreview, type TimelineSnapshot, type TimelineTurn } from '../ink/timeline-rail.js'
@@ -196,7 +197,13 @@ function signatureParts(
       break
     default:
       // user / notice / interrupt / local / local-output: height follows
-      // text + columns alone (selection/background never change height).
+      // text + columns alone (selection/background never change height) —
+      // EXCEPT the long-line fold: expanding a folded row swaps ~10 rows of
+      // folded text for the raw line (thousands), so both expansion switches
+      // are height inputs here too. Without them the stale cached height
+      // feeds topPad/bottomPad and the offsets scan, and the expanded tail
+      // can end up unreachable behind a wrong scroll range.
+      signatureScratch.push(expanded, expandedRows.has(row.id))
       break
   }
   return signatureScratch
@@ -641,6 +648,11 @@ export function MessageList({
   const relBottom = Math.max(scrollTop, scrollTop + pending) + viewport + OVERSCAN_LINES - base
   let start = 0
   while (start < visibleRows.length && offsets[start] + heightOf(visibleRows[start]) <= relTop) start++
+  // Resize invalidates cached heights, so a manual scrollTop can overshoot
+  // the entire estimated list. Keep its last row mounted to re-measure:
+  // an empty window has no measurement wakeup and collapses scrollHeight,
+  // leaving the transcript blank and the gutter believing nothing scrolls.
+  if (start === visibleRows.length && start > 0) start--
   let end = start
   while (end < visibleRows.length && offsets[end] < relBottom) end++
   if (sticky || !scrollHandle) end = visibleRows.length
@@ -808,14 +820,10 @@ export function MessageList({
       end = Math.max(end, idx + 1)
     }
   }
-  // The newest failed tool call carries the trajectory footnote
-  // (failureHint). Virtualization must not unmount it: before the window
-  // clamp the row was always mounted, now keep mounting it explicitly while
-  // the hint is live (verify-trace-scene's footnote check).
-  if (failureHintRowId !== undefined && failureHintRowId !== null) {
-    const idx = visibleRows.findIndex(row => row.id === failureHintRowId)
-    if (idx !== -1) start = Math.min(start, idx)
-  }
+  // The failure footnote is row content, not a seek request. Pinning its
+  // row also mounted EVERY later tool card until the trajectory was opened,
+  // defeating virtualization for the rest of a tool-heavy conversation.
+  // It reappears when scrolled into view; only forceMountRowId widens for a seek.
   const topPad = offsets[start] ?? 0
   const mountedBottom = end < visibleRows.length ? offsets[end] : total
   const bottomPad = total - mountedBottom
@@ -1349,7 +1357,8 @@ function TranscriptRow({
   // 可折叠行（工具卡/思考/compact 摘要）共用：点击切换展开，全宽行右侧
   // 空白（屏幕缓冲未写入单元格）不触发——点击空白想选字/拖拽时不再误触
   // 展开/收起（审计 C-03/cellIsBlank 零消费）。纯文本行（user/assistant）
-  // 保持不可点：转录是阅读区（用户反馈），折叠语义留给带视觉指示的行。
+  // 平时不可点：转录是阅读区（用户反馈），折叠语义留给带视觉指示的行——
+  // 唯一例外是**被折叠的超长单行**：那时整行就是展开开关（见 foldClickable）。
   const foldOnClick = React.useCallback((event: ClickEvent): void => {
     if (event.cellIsBlank) return
     onToggleRow(rowId)
@@ -1367,13 +1376,37 @@ function TranscriptRow({
   // compact 摘要折叠行 hover 轻指示（∴ 提亮，不刷背景）。
   const [compactHovered, setCompactHovered] = useState(false)
 
+  // Long single lines are clipped before layout (utils/fold-long-lines.ts):
+  // one 300k-char paste or minified-JS line otherwise wraps into thousands of
+  // visual rows and that per-frame wrap — not the row count — dominates the
+  // frame. Ctrl+O (global) AND a row click (per-row, the same `expandedRows`
+  // gesture message-selection mode uses) both paint the raw text again.
+  // Reasoning rows are deliberately excluded: their preview is already a fixed
+  // three-row ticker. Tool cards fold inside their own header/body
+  // (AssistantToolUseMessage), whose text never rides this prop.
+  // `lang` is a dependency because the fold marker is localized: a row that
+  // re-renders unchanged after /lang must not keep the previous language.
+  const lang = getLang()
+  const foldable = kind !== 'reasoning' && kind !== 'tool'
+  const folded = React.useMemo(
+    () => (foldable ? foldLongLines(text) : { text, hiddenChars: 0, foldedLines: 0 }),
+    [foldable, text, lang],
+  )
+  const displayText = expanded || isExpanded ? text : folded.text
+  // Mouse toggle: only a row that ACTUALLY hides something is clickable (an
+  // ordinary message stays inert so plain clicks and drag-selection keep
+  // working there). A streaming row is clickable too — the same contract the
+  // tool card has while running: the click paints the full ARRIVED text, and
+  // the reveal keeps growing it.
+  const foldClickable = foldable && folded.hiddenChars > 0
+
   switch (kind) {
     case 'user':
       return (
-        <Box flexDirection="column" ref={ref}>
+        <Box flexDirection="column" ref={ref} onClick={foldClickable ? foldOnClick : undefined}>
           {text !== '' && (
             <UserPromptMessage
-              text={text}
+              text={displayText}
               marginTopOnTurn={marginTopOnTurn}
               isSelected={isSelected}
             />
@@ -1394,6 +1427,7 @@ function TranscriptRow({
           width="100%"
           backgroundColor={background}
           ref={ref}
+          onClick={foldClickable ? foldOnClick : undefined}
         >
           <Box minWidth={2}>
             <Text color="text">●</Text>
@@ -1402,7 +1436,7 @@ function TranscriptRow({
             {/* The ⏵ self-narration line (working-activity narrate contract)
               is stripped here: the live working line on the status bar
               already shows it. */}
-            <StreamingMarkdown>{stripNarration(text)}</StreamingMarkdown>
+            <StreamingMarkdown>{stripNarration(displayText)}</StreamingMarkdown>
             {images !== undefined && <TranscriptImages images={images} indent={0} onPreview={onPreviewImage} suppressGraphics={suppressImageGraphics} />}
           </Box>
         </Box>
@@ -1412,6 +1446,7 @@ function TranscriptRow({
           flexDirection="column"
           backgroundColor={background}
           ref={ref}
+          onClick={foldClickable ? foldOnClick : undefined}
         >
           {expanded && (
             <Box
@@ -1424,7 +1459,7 @@ function TranscriptRow({
             </Box>
           )}
           <AssistantTextMessage
-            text={stripNarration(text)}
+            text={stripNarration(displayText)}
             marginTopOnTurn={marginTopOnTurn}
             isSelected={isSelected}
             isExpanded={isExpanded}
@@ -1505,8 +1540,8 @@ function TranscriptRow({
     }
     case 'notice':
       return (
-        <Box marginTop={1} ref={ref}>
-          <Divider title={` ${text} `} />
+        <Box marginTop={1} ref={ref} onClick={foldClickable ? foldOnClick : undefined}>
+          <Divider title={` ${displayText} `} />
         </Box>
       )
     case 'interrupt':
@@ -1518,14 +1553,14 @@ function TranscriptRow({
     case 'local':
       // `!` mode command echo.
       return (
-        <Box marginTop={1} backgroundColor={background} ref={ref}>
-          <Text color="bashBorder">!{executionTarget ? ` [${executionTarget}]` : ''} {text}</Text>
+        <Box marginTop={1} backgroundColor={background} ref={ref} onClick={foldClickable ? foldOnClick : undefined}>
+          <Text color="bashBorder">!{executionTarget ? ` [${executionTarget}]` : ''} {displayText}</Text>
         </Box>
       )
     case 'local-output':
       return (
-        <Box paddingLeft={2} backgroundColor={background} ref={ref}>
-          <Text dimColor>{text}</Text>
+        <Box paddingLeft={2} backgroundColor={background} ref={ref} onClick={foldClickable ? foldOnClick : undefined}>
+          <Text dimColor>{displayText}</Text>
         </Box>
       )
     case 'compact':
@@ -1547,7 +1582,7 @@ function TranscriptRow({
           ) : (
             <Text dimColor italic color={compactHovered ? 'text' : undefined}>
               <Text color={compactHovered ? 'text' : undefined}>∴</Text>
-              {' '}{t('compact-summary-folded')} · {compactPreview(text)}{' '}
+              {' '}{t('compact-summary-folded')} · {compactPreview(displayText)}{' '}
               {t('hint-expand-ctrl-o')}
             </Text>
           )}

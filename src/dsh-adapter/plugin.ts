@@ -1792,6 +1792,7 @@ async function resolveAgent(
         `dsh-tui: cannot resume session "${requestedSessionId}": ${reason} — ` +
         'the stored log is unreadable or corrupt; no fresh session was started instead. ' +
         'Drop --resume to start fresh, or repair the session log first.',
+        { cause: error },
       )
     }
   }
@@ -1832,6 +1833,7 @@ async function resolveAgent(
     const message = error instanceof Error ? error.message : String(error)
     throw new Error(
       `dsh-tui: failed to create agent (provider=${route.provider}, model=${route.model}): ${message}`,
+      { cause: error },
     )
   })
   return { agent: created.agent, handle: created, agentPreset: composed.agentPreset, route }

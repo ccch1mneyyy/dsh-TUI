@@ -20,6 +20,8 @@ type ThemedColorProps = {
   readonly borderLeftColor?: keyof Theme | Color
   readonly borderRightColor?: keyof Theme | Color
   readonly backgroundColor?: keyof Theme | Color
+  /** 条件表面色：仅当终端图像落在本 Box 后方时才涂底（见 ink Styles）。 */
+  readonly occlusionColor?: keyof Theme | Color
 }
 
 // Base Styles without color props (they'll be overridden)
@@ -32,6 +34,7 @@ type BaseStylesWithoutColors = Omit<
   | 'borderLeftColor'
   | 'borderRightColor'
   | 'backgroundColor'
+  | 'occlusionColor'
 >
 
 export type Props = BaseStylesWithoutColors &
@@ -98,6 +101,7 @@ function ThemedBox({
   borderLeftColor,
   borderRightColor,
   backgroundColor,
+  occlusionColor,
   ...rest
 }: PropsWithChildren<Props>): React.ReactNode {
   const [themeName] = useTheme()
@@ -111,6 +115,7 @@ function ThemedBox({
       borderLeftColor={resolveColor(borderLeftColor, theme)}
       borderRightColor={resolveColor(borderRightColor, theme)}
       backgroundColor={resolveColor(backgroundColor, theme)}
+      occlusionColor={resolveColor(occlusionColor, theme)}
     />
   )
 }

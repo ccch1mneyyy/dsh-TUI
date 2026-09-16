@@ -1,9 +1,11 @@
 import type { AgentHandle, CreateAgentOptions } from '@deepseek-ai/dsh-agent'
 import type { Context } from '@deepseek-ai/cordis'
-import { SessionId, type SessionEvent, type SessionHeader } from '@deepseek-ai/dsh-session'
+import { SessionId, type SessionEvent } from '@deepseek-ai/dsh-session'
 import { randomUUID } from 'node:crypto'
 import { t } from '../../i18n.js'
-import { appendInterruptedTurnEnd, ensureLegacySessionEventTypes, liveSessionCreateOptions, liveSessionOffset, snapshotLiveSessionEvents } from '../compat/index.js'
+import { appendInterruptedTurnEnd, liveSessionCreateOptions, liveSessionOffset, snapshotLiveSessionEvents } from '../compat/index.js'
+import { readPersistedSession, type SessionReader } from '../compat/persistence.js'
+import { closeLiveForkTurn } from '../compat/liveSession.js'
 import { composePreset, resolvePersistedPreset, runningPresetOf } from '../presets.js'
 import { attachSessionToWorkspace } from '../workspace.js'
 import { forkTarget, rewindTarget, turnUserText } from '../sessionTree.js'
@@ -55,14 +57,13 @@ export function createTreeRewindAction(
       sourceEvents = snapshotLiveSessionEvents(entrySession)
     } else {
       forkFromLive = false
-      const persistence = ctx.get('sessionPersistence') as { load(id: SessionId): Promise<{ meta: SessionHeader; events: readonly SessionEvent[] }> } | undefined
-      if (!persistence || typeof persistence.load !== 'function') {
+      const persistence = ctx.get('sessionPersistence') as SessionReader | undefined
+      if (!persistence || (typeof persistence.open !== 'function' && typeof persistence.load !== 'function')) {
         deps.notify(t('rewind-no-persistence'), { color: 'error' })
         return null
       }
       try {
-        ensureLegacySessionEventTypes()
-        const loaded = await persistence.load(SessionId(sessionId))
+        const loaded = await readPersistedSession(persistence, SessionId(sessionId))
         sourceEvents = loaded.events
         sourceCwd = loaded.meta.cwd ?? state.cwd
       } catch (error) {
@@ -99,7 +100,8 @@ export function createTreeRewindAction(
     }
     const seed = sourceEvents.filter(event => event.seq <= target.boundary)
     const inheritedCount = seed.length
-    if (target.closeTurn !== undefined) {
+    const closeAfterCreate = target.closeTurn !== undefined && entrySession.header?.version >= 3
+    if (target.closeTurn !== undefined && !closeAfterCreate) {
       appendInterruptedTurnEnd(seed, target.closeTurn)
     }
     let handle: AgentHandle
@@ -113,7 +115,17 @@ export function createTreeRewindAction(
         parentSession: SessionId(sessionId),
         agentPreset: composed.agentPreset,
         agentOptions: { provider: state.provider, model: state.model },
-        setup: composed.setup,
+        setup: closeAfterCreate || mode === 'rewind' ? async (agentCtx, agent) => {
+          // V3 requires seed.length === inheritedEventCount. The constructor
+          // inserts the inherited marker, then these closers belong to the
+          // child and persist before publication, without falsifying the cut.
+          if (closeAfterCreate) closeLiveForkTurn(agent.session, target.closeTurn!)
+          // Re-editing starts with no historical pending work. Cancel through
+          // the child's Inbox so a later resume cannot resurrect the queue.
+          // A plain fork deliberately keeps its separate semantics.
+          if (mode === 'rewind') agent.inbox.clear()
+          return composed.setup?.(agentCtx, agent)
+        } : composed.setup,
       })))
     } catch {
       deps.notify(t('rewind-create-failed'), { color: 'error' })
@@ -130,7 +142,8 @@ export function createTreeRewindAction(
       deps.notify(t('rewind-session-changed'), { color: 'error' })
       return null
     }
-    const sourceSessionId = deps.adoptForkedAgent(handle, adoption, seed, composed.agentPreset, childId)
+    const replay = closeAfterCreate || mode === 'rewind' ? snapshotLiveSessionEvents(handle.agent.session) : seed
+    const sourceSessionId = deps.adoptForkedAgent(handle, adoption, replay, composed.agentPreset, childId)
     deps.notifySessionSwitched(mode === 'fork' ? 'fork' : 'rewind', String(childId), sourceSessionId)
     return restoredText
   }

@@ -467,5 +467,63 @@ function burstEvents(count, { interleave = -1 } = {}) {
   check('events before the first turn fold under turn 0', noTurn.length === 1 && noTurn[0].turn === 0)
 }
 
+// ───────────────────────── 9 · 0.1.5 generation: V3 streams + PTC rename ────
+//
+// 0.1.5 retires per-token `assistant/chunk` events: settlement events embed
+// the compact `AssistantStreamRecord[]` instead (`assistant/message.stream`,
+// `assistant/attempt.stream` for failed/retried/cancelled attempts), and the
+// code-runner dispatch bracket is renamed `tool/ptc-dispatch(-start)`.
+
+{
+  seq = 0
+  const stepStart = T0 + (2 * 10) + 1 // ev() time of the step/start below (seq 2)
+  const attemptT0 = T0 + 100
+  const commitT0 = T0 + 200
+  const v3 = [
+    ev('turn/start', { turn: 1 }),
+    ev('step/start', { turn: 1, step: 1 }),
+    // A failed first attempt: embedded stream, no surface message, no row —
+    // but its decode time still feeds the step's timing slots.
+    ev('assistant/attempt', {
+      turn: 1, step: 1,
+      stream: [{ type: 'text-chunks', time0: attemptT0, index: 0, dt: [30], texts: ['par', 'tial'] }],
+    }),
+    // The renamed dispatch bracket pairs exactly like the old spelling.
+    ev('tool/ptc-dispatch-start', { rootCallId: 'root', parentCallId: 'root', subCallId: 'p1', name: 'run_js', arguments: { code: '1' } }),
+    ev('tool/ptc-dispatch', { rootCallId: 'root', parentCallId: 'root', subCallId: 'p1', name: 'run_js', arguments: { code: '1' } }),
+    // The committed retry's message carries its own stream; firstChunk stays
+    // anchored to the attempt (first-wins), lastChunk tracks the latest.
+    ev('assistant/message', {
+      turn: 1, step: 1,
+      message: { content: [{ type: 'text', text: 'final answer' }] },
+      stream: [{ type: 'text-chunks', time0: commitT0, index: 0, dt: [40], texts: ['final', ' answer'] }],
+    }),
+    // New 0.1.5 vocabulary stays silent rather than erroring.
+    ev('system/message', { turn: 1, step: 1, message: { content: 'sys' } }),
+    ev('deliverables/presented', { turn: 1, step: 1 }),
+    ev('subagent/catalog', { agents: [] }),
+    ev('step/end', { turn: 1, step: 1 }),
+    ev('turn/end', { turn: 1, reason: { kind: 'completed' } }),
+  ]
+  const build = buildTrajectory(v3)
+  const ptc = build.nodes.find(n => n.kind === 'subtool')
+  check('ptc-dispatch pairs by subCallId under the renamed bracket', ptc?.label === 'run_js' && ptc.status === 'ok' && typeof ptc.durationMs === 'number')
+  const assistantRows = build.nodes.filter(n => n.kind === 'assistant')
+  check('committed message folds its content row', assistantRows.length === 1 && assistantRows[0].detail === 'final answer')
+  check('abandoned attempt adds no ledger row', !build.nodes.some(n => n.detail === 'partial' || n.detail === 'par'))
+  check('system/message, deliverables and catalog stay silent', build.nodes.filter(n => n.kind === 'system').length === 0)
+  const slot = build.timing.get('1:1')
+  check('V3 stream feeds the step timing slots', slot?.firstChunk === attemptT0 && slot?.lastChunk === commitT0 + 40, JSON.stringify(slot))
+  const v3Totals = aggregate(build).totals
+  check('TTFT anchors to the first attempt, decode spans the retry', v3Totals.ttftSamples === 1 && v3Totals.ttftMs === attemptT0 - stepStart && v3Totals.decodeMs === (commitT0 + 40) - attemptT0, `ttft=${v3Totals.ttftMs} decode=${v3Totals.decodeMs}`)
+  // A malformed embedded stream degrades to no timing, never a throw.
+  seq = 0
+  const malformed = buildTrajectory([
+    ev('step/start', { turn: 1, step: 1 }),
+    ev('assistant/message', { turn: 1, step: 1, message: { content: [{ type: 'text', text: 'x' }] }, stream: [{ type: 'text-chunks', time0: -5, index: 0, dt: [1], texts: ['a'] }] }),
+  ])
+  check('malformed stream record folds without timing and without throwing', malformed.nodes.length === 2 && malformed.timing.get('1:1')?.firstChunk === undefined)
+}
+
 console.log(failed === 0 ? '\nAll trajectory projection checks passed.' : `\n${failed} check(s) failed.`)
 process.exit(failed === 0 ? 0 : 1)

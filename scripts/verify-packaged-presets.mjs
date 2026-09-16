@@ -22,7 +22,7 @@ try {
 
   const discovered = await discoverPresets([
     { path: join(dshHome, '.agent-presets'), trust: 'user' },
-  ])
+  ], workspace)
   const liangshen = discovered.find(preset => preset.id === 'liangshen')
   assert.equal(liangshen?.name, '梁神模式')
   assert.equal(liangshen?.broken, undefined)

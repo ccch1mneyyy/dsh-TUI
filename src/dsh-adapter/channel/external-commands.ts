@@ -9,7 +9,7 @@ import { firstStaleComposerToken, orderedComposerImages, type ComposerImages } f
 import type { ChannelImageBlock, ComposerImageRef, ExternalCommandOutcome, MentionAttachments } from './types.js'
 
 type ImageMediaType = 'image/png' | 'image/jpeg' | 'image/webp' | 'image/gif'
-type RegistryImage = { mediaType: ImageMediaType; data: string; name?: string }
+type RegistryImage = { type: 'image'; mediaType: ImageMediaType; data: string; name?: string }
 type LegacyExecute = (agent: Agent, line: string, signal: AbortSignal) => Promise<CommandExecution | undefined>
 type ImagesExecute = (agent: Agent, line: string, images: readonly RegistryImage[], signal: AbortSignal) => Promise<CommandExecution | undefined>
 /** One composer image accompanying a registry-command line: structural
@@ -148,6 +148,9 @@ export function createExternalCommandInvoker(
     return {
       kind: 'ready',
       images: loaded.map(({ attachment, data }) => ({
+        // Older image-only runtimes ignore the discriminator; 0.1.5 uses it
+        // to distinguish encoded images from stored file attachments.
+        type: 'image',
         mediaType: attachment.mediaType as ImageMediaType,
         data: Buffer.from(data).toString('base64'),
         name: attachment.name,

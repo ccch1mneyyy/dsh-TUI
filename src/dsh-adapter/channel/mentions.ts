@@ -6,7 +6,7 @@ import { COMPOSER_IMAGE_TOKEN } from './composer-images.js'
 import type { MentionAttachments, MentionExpansion, MentionFs, MentionImageBlock, MentionImageMediaType, ResolvedMention } from './types.js'
 
 /** One attached file's contribution is capped so an absent-minded `@` of a
- *  huge file cannot blow the context window (CC caps @-attachments too). */
+ *  huge file cannot blow the context window. */
 export const MENTION_MAX_FILE_CHARS = 50_000
 
 /** Total budget across all attachments in one message. */

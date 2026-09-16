@@ -33,8 +33,8 @@ dsh-tui
 - `dsh-tui --resume`：恢复上次会话；Windows 可用仓库里的 `dsh-tui.cmd`（等价）。
 - `dsh --profile dsh-tui`：与 `dsh-tui` 等价的手工启动方式（`/update` 仅此方式可用）。
 - 运行模型需要 `DEEPSEEK_API_KEY`；环境自检用 `/doctor`。
-- 已验证的 dsh 引擎版本：`0.1.2-rc.1`，以及 `0.1.2-alpha.3/4/5`、
-  `0.1.0-rc.6/7/8`、`0.1.1-rc.1/2` 兼容线。
+- 已验证的 dsh 引擎版本：`0.1.5-rc.1`，以及 `0.1.5-alpha.2`、`0.1.5-alpha.1`、`0.1.3-alpha.2`、
+  `0.1.2-rc.1`、`0.1.2-alpha.3/4/5`、`0.1.0-rc.6/7/8`、`0.1.1-rc.1/2` 兼容线。
   更老或更新的版本仍可启动，但 logo 页会提示版本漂移并给出对齐命令。
 
 ### 1.2 首次启动你会看到
@@ -402,9 +402,18 @@ dsh-TUI 不预装通用技能。`/skills` 浏览 DSH 从当前 profile、用户�
 - 终端宽度 **< 64 列时隐藏鲸鱼**，仅保留文字列。
 - 像素鲸鱼的 22 帧手绘原图与闲置行为移植自 [dsh-ui-whale](https://github.com/lhh010/dsh-ui-whale)（作者 [@lhh010](https://github.com/lhh010)），特此致谢。
 
+**超长单行折叠**（默认开）：粘贴的巨型单行、工具调用里的一行大命令、压缩后
+的 JS、单行日志——任何**单行超过 1000 字符**的转录文本（user 消息、assistant
+正文、工具卡标题与正文）都会在进入布局前裁到 1000 字符，行尾留下
+`… 已折叠 N 字符（点击或 ctrl+o 展开）` 标记；否则一行 20 万字符会铺成上千
+视觉行，每帧重排，正是转录卡顿的来源。**鼠标点这一行**（工具卡点卡面）即可
+展开，再点一次收起；键盘用 `Ctrl+O`。只有真被折叠的行可点，普通消息保持不可
+点（转录是阅读区，拖选复制不受影响）；流式中的行也能点开，看到的是已经到达
+的全文。思考（thinking）行不折叠——它本来就只有三行的预览瀑布。
+
 ### 5.2 底部状态栏（输入框下方三行）
 
-**Row 1 — 上下文分段进度条**（`/settings → statusBar.contextBar`，默认关）
+**Row 1 — 上下文分段进度条**（`/settings → statusBar.contextBar`，默认开）
 按内容类型分段着色：system 深蓝 / prompt 藏青 / assistant 靛蓝 / thinking 品牌蓝 / tools 浅蓝，
 右缘读数如 `ctx 12.3k/1.0M 1.2% 988.9k`（窄屏自动缩短）。
 
@@ -412,7 +421,7 @@ dsh-TUI 不预装通用技能。`/skills` 浏览 DSH 从当前 profile、用户�
 - 左组：模型 → TPS → thinking 推理等级 → mode 会话模式 → ctx 上下文占用 → cache 缓存命中率 → tokens（`1.2k→340` 输入→输出）→ cost 本会话花费估算（`≈¥0.05 谷`：`≈¥` + 当前计费时段短标记 峰/谷；仅 DeepSeek 官方 provider 且模型有已知单价时显示；hover 查看高峰/空闲拆分与输入/输出/缓存明细）。估算按每次请求的发生时刻分高峰/空闲桶、各按官方对应单价计（高峰期 = 梁文峰，低谷期 = 梁文谷），跨时段会话不会被整段按当前时段计价；估算非账单，以 DeepSeek 平台为准
 - 右组：git 分支 → 工作目录（紧凑模式仅 basename）→ 会话标题 → 短会话 ID（`#` + 前 8 位，与日志文件名对应，方便 `--resume` 定位）
 - `statusBar.compact` 时左右合并为单行。
-- 默认开：compact / model / thinking / cwd / contextUsage / cache / cost；默认关：tokens / tps / gitBranch / sessionTitle / sessionId / mode / contextBar / activity / trajectory。
+- 默认开：compact / model / thinking / cwd / contextUsage / cache / cost / goal / contextBar；默认关：tokens / tps / gitBranch / sessionTitle / sessionId / mode / activity / trajectory。
 
 **Row 3 — 提示 / 工作活动 + 迷你轨迹条**
 - 空闲显示 `? for shortcuts`，回合运行中显示 `esc to interrupt`，消息选择中显示 `esc to return to input`。
@@ -513,7 +522,7 @@ provider / model / cwd / preset / workspace / sessionId / modes
 14. `Ctrl+R` 搜输入历史（重复按跳下一匹配）；转录态 `/` 全文搜索 + `n`/`N` 跳转。
 15. `Ctrl+T` 看轨迹：`[`/`]` 跳失败点、`/` 字段查询（`tool:` `kind:` `err:` `>10s` `tok>1k`）。
 16. 状态栏上下文条、TPS、轨迹条、git 分支等都是 `/settings → statusBar.*` 开关——默认关的
-    `tps`/`trajectory`/`contextBar` 值得打开试试。
+    `tps`/`trajectory` 值得打开试试（上下文条默认开，不想要可在同一处关掉）。
 17. 上下文压力 ≥80% 时工作摘要行会变琥珀色预警，≥95% 转红——该 `/compact` 了。
     （minimal preset 下 /compact 不可用。）
 18. `/balance` 查 DeepSeek 官方余额（免费只读接口，点击行刷新）；状态栏

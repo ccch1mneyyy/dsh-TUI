@@ -68,8 +68,14 @@ export const KNOWN_DSH_EVENT_TYPES = new Set<string>([
   'step/start',
   'step/end',
   'user/message',
+  // Retired by 0.1.5 (stream timing moved into the settlement events) but
+  // still present in pre-V3 logs this projection must keep replaying.
   'assistant/chunk',
   'assistant/message',
+  // 0.1.5: abandoned attempt (failed/retried/cancelled, no surface message).
+  'assistant/attempt',
+  // 0.1.5: the system prompt became a surface node.
+  'system/message',
   'tool/call',
   'tool/result',
   'command/run',
@@ -81,6 +87,11 @@ export const KNOWN_DSH_EVENT_TYPES = new Set<string>([
   'request/header',
   'request/context',
   'session/end-seed',
+  // Not an appendable session event: 0.1.5 declares it in the same types file
+  // as a RemoteErrorDetailsMap key (SessionId resolution failure). Recognized
+  // here so the conformance sweep over that file stays total; it folds to no
+  // row like every other non-transcript type.
+  'session/not-found',
   // Known dsh-tui / ecosystem plugin event types (exact, not prefix-based)
   'session/created',
   'session/disposed',
@@ -106,16 +117,23 @@ export const KNOWN_DSH_EVENT_TYPES = new Set<string>([
   'permission/preset',
   'llm/retry',
   'llm/retry-started',
+  'model/selection',
   'compaction/start',
   'compaction/end',
   'compaction/prune',
   'compaction/summary',
+  'deliverables/presented',
   'feedback/record',
+  'feedback/message-put',
+  'feedback/message-delete',
   'schedule/change',
   'session-invariant',
+  'session-log-deepseek/delivery-accepted',
   'subagent/start',
   'subagent/end',
   'subagent/descriptor',
+  'subagent/catalog',
+  'subagent/model-selection-policy',
   'team/member',
   'team/message/delivered',
   'team/message/queued',
@@ -124,8 +142,12 @@ export const KNOWN_DSH_EVENT_TYPES = new Set<string>([
   'tool-workflow/agent-end',
   'tool-workflow/run-start',
   'tool-workflow/run-end',
+  // The code runner's dispatch bracket was renamed in 0.1.5; old logs still
+  // carry the `code-` spellings, so both generations stay recognized.
   'tool/code-dispatch',
   'tool/code-dispatch-start',
+  'tool/ptc-dispatch',
+  'tool/ptc-dispatch-start',
   'web/deepseek-search-llm-request',
   'dsh-tui/btw',
   'dsh-tui/recap',

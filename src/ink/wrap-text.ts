@@ -10,8 +10,8 @@ const ELLIPSIS = '…'
 // output string. Yet before this cache every consumer re-wrapped from
 // scratch:
 //
-//  - dom.ts measureTextNode seeds its per-NODE incremental cache on first
-//    measure; virtualization unmounts scrolled-away rows, so scrolling back
+//  - dom.ts measureTextNode caches dimensions per node; virtualization
+//    unmounts scrolled-away rows, so scrolling back
 //    re-mounts the row's Text nodes and re-runs the FULL wrap (wrap-ansi
 //    tokenizes + string-width-measures every word — 100-300ms single-frame
 //    yoga spikes when a row of large settled text scrolls in, the dominant

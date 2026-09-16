@@ -1,4 +1,4 @@
-import type { ModelSelectionRef } from '@deepseek-ai/dsh-agent'
+import type { AssistantStreamFrame, ModelSelectionRef } from '@deepseek-ai/dsh-agent'
 import type { Context } from '@deepseek-ai/cordis'
 import type { InputConvergence } from './input-actions.js'
 import type { ChannelBinding } from './binding.js'
@@ -28,9 +28,14 @@ export function createBindingEvents(ctx: Context, deps: {
   modelActions: { applyPreferredEffort(): Promise<void>; selection: ModelSelectionRef }
   modeActions: { refreshMode(): void; onSessionEvent(session: unknown, event: unknown): void }
   projector: ReturnType<typeof createChannelProjection>
-  subagents: { onSessionEvent(session: unknown, event: unknown): boolean; onStart(info: { id: string; runId?: string; provider: string; local?: boolean }): void; onEnd(info: { id: string; stopReason: string; lastAssistantMessage?: unknown[] }): void }
+  subagents: { onSessionEvent(session: unknown, event: unknown): boolean; onStreamFrame?(agent: unknown, frame: AssistantStreamFrame): boolean; onStart(info: { id: string; runId?: string; provider: string; local?: boolean }): void; onEnd(info: { id: string; stopReason: string; lastAssistantMessage?: unknown[] }): void }
   agentView: { schedule(): void }
   messageObserver?: { publish(session: unknown, event: unknown): void }
+  /** Drop a pre-step attachment registered by this channel for one message id
+   *  (input-delivery's `retireAttachment`); see the discard hook below.
+   *  Optional for direct/embed constructors that never emit inbox discards;
+   *  channel.ts always wires it. */
+  retireAttachment?(messageId: string): void
 }) {
   const reconcileRetiredProjection = (status: 'idle' | 'disposed'): void => {
     if (!deps.state.working) return
@@ -113,16 +118,25 @@ export function createBindingEvents(ctx: Context, deps: {
         reconcileRetiredProjection('disposed')
         deps.state.emit()
       })
-      const retirePending = (payload: { agent: unknown; message: { id?: unknown } }): void => {
+      /**
+       * The inbox removed one message. Both events retire the pending
+       * preview, but ONLY a discard retires an attached-context entry:
+       * `agent/inbox/claimed` fires while the loop claims the batch, BEFORE
+       * the resident `agent/pre-step` listener can append the attachment —
+       * retiring there would delete the context before it is ever injected
+       * (dsh-agent-loop: `inbox.claim()` → claimed event → `agent/pre-step`).
+       */
+      const retirePending = (payload: { agent: unknown; message: { id?: unknown } }, alsoRetireAttachment = false): void => {
         if (!current() || payload.agent !== capture.agent) return
         const messageId = payload.message?.id
         if (typeof messageId !== 'string') return
+        if (alsoRetireAttachment) deps.retireAttachment?.(messageId)
         const before = deps.state.pending.length
         deps.state.pending = deps.state.pending.filter(item => item.id !== messageId)
         if (deps.state.pending.length !== before) deps.state.emit()
       }
       on('agent/inbox/claimed', retirePending)
-      on('agent/inbox/discarded', retirePending)
+      on('agent/inbox/discarded', payload => retirePending(payload, true))
       on('session/event', (subject, event) => {
         if (!current()) return
         const isMainSession = subject === session
@@ -134,6 +148,21 @@ export function createBindingEvents(ctx: Context, deps: {
         deps.projector.renderEvent(event)
         if (event.type === 'assistant/chunk') deps.state.emitStream()
         else deps.state.emit()
+      })
+      // 0.1.5 live streaming: per-token chunks are transient attempt frames
+      // on this agent-scoped channel; the durable settlement still arrives
+      // through `session/event` above. Pre-0.1.5 hosts never emit it — the
+      // subscription simply stays silent there and chunks keep arriving as
+      // `assistant/chunk` session events.
+      on('agent/assistant-stream', ({ agent: subject, frame }) => {
+        if (!current()) return
+        if (subject !== capture.agent) {
+          deps.subagents.onStreamFrame?.(subject, frame)
+          return
+        }
+        deps.projector.renderStreamFrame(frame)
+        if (frame.type === 'chunk') deps.state.emitStream()
+        else if (frame.type === 'end') deps.state.emit()
       })
       on('subagent/start' as never, (info: { id: string; runId?: string; provider: string; local?: boolean }) => {
         if (current()) deps.subagents.onStart(info)

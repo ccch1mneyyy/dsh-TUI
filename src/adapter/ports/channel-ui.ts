@@ -209,7 +209,7 @@ export interface ChannelUi {
   openPluginScene(id: string): boolean
   /** Close the open plugin scene, if any (a no-op otherwise). */
   closePluginScene(): void
-  /** 侧问（CC /btw）：无工具单轮 LLM 调用，复用当前会话上下文；结果不落 session log。 */
+  /** 侧问：无工具单轮 LLM 调用，复用当前会话上下文；结果不落 session log。 */
   sideQuestion(
     question: string,
     options?: { signal?: AbortSignal; onText?: (delta: string) => void },
@@ -273,7 +273,7 @@ export interface ChannelUi {
    *  with queued input): each text is re-queued as a followup once the abort
    *  settles, so the new turn starts immediately. Returns the count queued. */
   interruptAndDeliver(inputs: readonly (string | ComposerSubmission)[]): number
-  /** Rewind the conversation to a past user message (CC's double-Esc rewind):
+  /** Rewind the conversation to a past user message (the double-Esc rewind):
    *  forks the session through that message, swaps in a fresh agent, and
    *  returns the message text for re-editing — or `null` when unwritable.
    *  `mode` is the plugin-offered rewind mode the user picked (the
@@ -431,7 +431,7 @@ export interface ChannelUi {
   previewSession(sessionId: string): Promise<readonly PreviewEntry[]>
   /** Mark a session for `dsh-tui --resume` on the next launch. */
   setResumeTarget(sessionId: string): void
-  /** Rename the current session (CC's /rename): appends a `session/title`
+  /** Rename the current session (`/rename`): appends a `session/title`
    *  event, which the status line and the /resume picker both read. */
   renameSession(title: string): void
   /** Set the current session's accent color (`/color <name>`): appends a
@@ -450,7 +450,7 @@ export interface ChannelUi {
    *  `session/title` event to its log (live sessions go through the normal
    *  rename path). False when the log is absent or undecodable. */
   renameSessionTo(sessionId: string, title: string): Promise<boolean>
-  /** Manually compact the session history (CC's /compact); no-op notify when the leaf lacks a compaction service. */
+  /** Manually compact the session history (`/compact`); no-op notify when the leaf lacks a compaction service. */
   compact(): void
   /** Render a multi-line local report in the transcript (`/status`,
    *  `/doctor`, …): a `local` row plus one `local-output` row per line. */
@@ -472,7 +472,7 @@ export interface ChannelUi {
    *  the service is absent). */
   listSubagents(): Promise<string[]>
   /**
-   * The agent view (CC's `claude agents`) row snapshot: every live agent in
+   * The agent view row snapshot: every live agent in
    * this process plus every persisted session that no live agent owns,
    * ordered needs-input/working first, then most recently active. Reading it
    * is cheap; subscribe for changes.
@@ -507,7 +507,7 @@ export interface ChannelUi {
   /** `/bg` — background the attached session: swap the TUI to a fresh agent
    *  while the current one keeps running. The agent view lists it as a
    *  background session; `backgroundedSessionId` is the move's return target
-   *  (CC's "Esc returns to that conversation"). */
+   *  ("Esc returns to that conversation"). */
   backgroundCurrent(): Promise<BackgroundResult>
   /** Send a follow-up user message to a session from the agent view's peek
    *  panel. Live sessions receive it directly; a session no live agent owns

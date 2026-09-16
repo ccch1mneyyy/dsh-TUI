@@ -31,6 +31,7 @@
  */
 
 import { createEpochPromotion } from './compaction-epoch.mjs'
+import { snapshotSessionEvents } from './session-events.mjs'
 
 /** Cordis plugin name used by loader diagnostics. */
 export const name = 'instruction-hint'
@@ -135,7 +136,7 @@ export function apply(ctx, config) {
       // event scan makes resume safe, but is not an atomic cross-process claim:
       // simultaneous writers can both observe no hint before either persists it.
       hinted.add(session.id)
-      if (session.events.some(
+      if (snapshotSessionEvents(session).some(
         event => event.type === 'user/message' && event.data?.source?.kind === 'instruction-hint',
       )) return decision
 

@@ -9,8 +9,8 @@ import { MarkdownTable } from './MarkdownTable.js'
  * Markdown 渲染组件：marked 分词 + ANSI 格式化。
  *
  * 表格 token 交给 MarkdownTable 渲染为带边框的 flexbox 布局；
- * 其余块级内容由 formatToken 转成 ANSI 字符串，合并后包进单个
- * Text（整段去首尾空白）。代码块高亮由 cli-highlight 异步提供，
+ * 其余块级内容由 formatToken 转成 ANSI 字符串，按块边界分批放进
+ * Text（只去整段首尾空白）。代码块高亮由 cli-highlight 异步提供，
  * 加载完成后自动触发一次重渲染。无 markdown 语法的纯文本走快速
  * 路径，直接合成段落 token，省掉 lexer 调用。
  */
@@ -36,6 +36,7 @@ type Props = {
 const TOKEN_CACHE_CAPACITY = 200
 const TOKEN_CACHE_CHAR_BUDGET = 200_000
 const TOKEN_CACHE_MAX_SOURCE_LENGTH = 20_000
+const TEXT_BLOCK_BUDGET = 8192
 const tokenCache = new Map<string, Token[]>()
 let tokenCacheChars = 0
 
@@ -98,7 +99,7 @@ function lexWithCache(content: string, allowCache: boolean): Token[] {
 
 /**
  * 把 lexer 产出的 token 列表转成 React 节点序列：table 独立渲染，
- * 其余 token 的 ANSI 文本先累积拼接，再统一包成 Text（去除首尾空白）。
+ * 其余 token 的 ANSI 文本按完整块分批拼接，只去整段首尾空白。
  */
 function renderTokensToNodes(
   tokens: Token[],
@@ -107,15 +108,32 @@ function renderTokensToNodes(
 ): React.ReactNode[] {
   const nodes: React.ReactNode[] = []
   let ansiText = ''
+  let textParts: string[] = []
 
   const flushAnsiText = (): void => {
-    if (!ansiText) return
-    nodes.push(
-      <Text key={nodes.length} dimColor={dimColor}>
-        {ansiText.trim()}
-      </Text>,
-    )
+    if (!ansiText && textParts.length === 0) return
+    if (textParts.length === 0) {
+      nodes.push(<Text key={nodes.length} dimColor={dimColor}>{ansiText.trim()}</Text>)
+    } else {
+      textParts.push(ansiText)
+      let first = 0
+      let last = textParts.length - 1
+      while (first < last && textParts[first]!.trimStart() === '') first++
+      while (last > first && textParts[last]!.trimEnd() === '') last--
+      textParts[first] = textParts[first]!.trimStart()
+      textParts[last] = textParts[last]!.trimEnd()
+      // Each internal boundary replaces exactly one source newline with a
+      // column-child boundary. Only the whole text span trims outer space.
+      nodes.push(
+        <Box key={nodes.length} flexDirection="column">
+          {textParts.slice(first, last + 1).map((part, index) => (
+            <Text key={index} dimColor={dimColor}>{index + first < last ? part.slice(0, -1) : part}</Text>
+          ))}
+        </Box>,
+      )
+    }
     ansiText = ''
+    textParts = []
   }
 
   for (const token of tokens) {
@@ -130,6 +148,12 @@ function renderTokensToNodes(
       )
     } else {
       ansiText += formatToken(token, 0, null, null, highlight)
+      // A top-level token boundary keeps inline formatting and code fences
+      // intact while letting the painter cull finished offscreen text blocks.
+      if (ansiText.length >= TEXT_BLOCK_BUDGET && ansiText.endsWith('\n')) {
+        textParts.push(ansiText)
+        ansiText = ''
+      }
     }
   }
 
