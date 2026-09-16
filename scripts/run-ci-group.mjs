@@ -350,6 +350,9 @@ const GROUPS = {
 // 日志、标题来源判定、revision 命中/失效（钉住 revision 改写日志作
 // 判据）、索引自愈与剪枝、**终态等价**（增量索引 == 全新构建）。
     ["verify-session-index", ['node', 'scripts/verify-session-index.mjs']],
+// 空会话须完整读取后才能判定：截断/损坏、帧数上限、纯图片输入与旧缓存
+// 不得隐藏真实历史或进入清理名单；真实 JSONL 重开验证落盘后的可见性。
+    ['verify-session-emptiness', ['node', '--import', 'tsx/esm', 'scripts/verify-session-emptiness.ts']],
 // /resume 会话浏览器按键流回归：子运行折叠/展开、空会话不列出、搜索、
 // Esc 先清查询再退出、rename 后光标按 id 跟随目标（不是按行号）、
 // confirm-delete 只认无修饰 Enter、Esc 取消。真实 Chat 渲染驱动。

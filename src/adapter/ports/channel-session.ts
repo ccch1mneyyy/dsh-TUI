@@ -137,7 +137,9 @@ export interface SessionSummary {
   /** Log size in bytes; undefined when the backend owns no per-session file. */
   readonly bytes: number | undefined
   /**
-   * Whether the log holds a user prompt at all.
+   * Whether the log holds a human message (including image-only input), or
+   * the read was inconclusive. False requires a complete successful scan;
+   * unknown logs must stay visible and out of empty-session cleanup.
    *
    * `list()` reports *materialized* sessions, not conversations: a session
    * that only ever recorded its own boot policy is a real stored session with

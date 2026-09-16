@@ -123,6 +123,9 @@ the interface, and removing it leaves no core modifications behind.
   numbers, current-line highlight, `Enter` = newline, `Ctrl+Enter` = send,
   wheel scrolling, click/drag selection — long drafts get the whole
   screen; disable it in `/settings`).
+  `/resume` classifies a log as empty only after a complete read confirms no
+  user messages; image-only input, incomplete reads, and parse failures never
+  make a session eligible for empty-session cleanup.
 - **Official DSH integrations**: agent presets, skills, MCP, goals, todos,
   subagents, and `ask_user_question` are connected through existing services
   and registries. `/skills` shows skills discovered from the active profile,
