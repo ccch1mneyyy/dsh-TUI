@@ -52,7 +52,7 @@ import type { TimelineSnapshot } from '../ink/timeline-rail.js'
 import { normalizeScrollGutter } from '../tuiDisplayPrefs.js'
 import { OverlayAbove } from '../components/OverlayAbove.js'
 import { TooltipLayer } from '../components/Tooltip.js'
-import { PromptInput, type PromptController } from '../components/PromptInput.js'
+import { PromptInput, type PromptController, type PromptDraftStore } from '../components/PromptInput.js'
 import type { InjectController } from '../dsh-adapter/inject-channel.js'
 import { PromptEditorLayer, usePromptEditorOpen } from '../components/PromptEditor.js'
 import { GoalTodoPanel } from '../components/GoalTodoPanel.js'
@@ -106,7 +106,6 @@ import instances from '../ink/instances.js'
 import { useAnimationFrame } from '../ink/hooks/use-animation-frame.js'
 import { useExternalVersion } from '../hooks/useExternalVersion.js'
 import { TrajectoryScene } from './TrajectoryScene.js'
-import { readSessionOwners } from '../sessionMounts.js'
 import { resumeFailureText } from '../sessions/resumeFailure.js'
 import { markHomeSeen } from '../homePrefs.js'
 import { extendTrajectory, projectWave, type TrajBuild } from '../dsh-adapter/trajectory/index.js'
@@ -276,6 +275,7 @@ export function Chat({
   fullscreen = false,
   trajectorySeen: trajectorySeenProp,
   injectControllerRef,
+  promptControllerRef: promptControllerRefProp,
   renderScene,
   openHomeOnBoot,
 }: {
@@ -339,6 +339,12 @@ export function Chat({
    * installation, and tests need it deterministic.
    */
   openHomeOnBoot?: boolean
+  /**
+   * The composer's live controller, published every render. Exposed as a prop
+   * so a regression can read the draft the composer HOLDS — the ownership
+   * question (does a screen swap lose it?) is about state, not about pixels.
+   */
+  promptControllerRef?: React.RefObject<PromptController | null>
 }) {
   const writeRaw = React.useContext(TerminalWriteContext)
   // Re-render whenever the channel mutates; rows/status are read fresh below.
@@ -1075,7 +1081,27 @@ export function Chat({
   const exitTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null)
   // Live view into the prompt's text for the Ctrl+C rule (clears text when
   // non-empty; the double-press exit only arms on an empty input).
-  const promptControllerRef = React.useRef<PromptController | null>(null)
+  const ownPromptControllerRef = React.useRef<PromptController | null>(null)
+  const promptControllerRef = promptControllerRefProp ?? ownPromptControllerRef
+  /**
+   * Owner of the unsent draft. Every screen this component renders INSTEAD of
+   * the conversation (the session screen, the tree, settings, the jobs and
+   * subagent panels, the trajectory scene) unmounts the composer, and the
+   * composer keeps its text in local state — so without this the half-written
+   * prompt died on the way in. The store lives here, outlives that unmount, and
+   * is dropped the moment the attached session changes so no draft can follow
+   * the user into a different conversation.
+   */
+  const promptDraftRef = React.useRef<PromptDraftStore>({ text: '', cursor: 0, sessionId: channel.agentId })
+  const draftSessionId = channel.agentId
+  React.useEffect(() => {
+    const store = promptDraftRef.current
+    if (store.sessionId === draftSessionId) return
+    // A different conversation: the draft belonged to the previous one.
+    store.sessionId = draftSessionId
+    store.text = ''
+    store.cursor = 0
+  }, [draftSessionId])
   const previewGallery = activePreview === null ? [] : activePreview.peek
     ? promptControllerRef.current?.previewImages?.() ?? [activePreview]
     : overlay.kind === 'image-preview' ? overlay.gallery ?? [activePreview] : []
@@ -3613,12 +3639,6 @@ export function Chat({
      * about which session is waiting for input.
      */
     const agentRowOf = (sessionId: string) => agentViewRows.find(row => row.id === sessionId)
-    /**
-     * Cross-process occupancy, read once per render from the mount ledger.
-     * A local process's own sessions resolve as `mine` and are never shown as
-     * occupied, so the map only ever carries genuine conflicts.
-     */
-    const foreignOwners = readSessionOwners()
     const supervisorNode = (
       <SessionSupervisor
         channel={channel}
@@ -3656,10 +3676,6 @@ export function Chat({
           return row === undefined
             ? undefined
             : { status: row.status, live: row.live, current: row.current, summary: row.summary }
-        }}
-        occupancyOf={(sessionId) => {
-          const owner = foreignOwners.get(sessionId)
-          return owner === undefined || owner.pid === process.pid ? undefined : owner.pid
         }}
       />
     )
@@ -4122,6 +4138,7 @@ export function Chat({
           key="prompt-input"
           channel={channel}
           suspended={promptReplacementOpen}
+          draftStore={promptDraftRef.current}
           helpOpen={helpOpen}
           onToggleHelp={() =>{  setHelpOpen(previous => !previous) }}
           onRunCommand={runCommand}

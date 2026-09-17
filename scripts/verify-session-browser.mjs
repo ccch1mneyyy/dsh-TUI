@@ -14,18 +14,22 @@
  *
  * So this file keeps ONE job: pin down the behaviours of the CURRENT screen
  * that `verify-session-supervisor.tsx` does not already own — the pin STORE
- * contract, and the two ends of entering a session (the pane's own rows, and
- * the failure path that must not be misreported).
+ * contract, the pin STAR input path (the affordance still exists), and the two
+ * ends of entering a session (the pane's own rows, and the failure path that
+ * must not be misreported).
  *
  * What is NO LONGER asserted here, and why (delete, do not resurrect):
  *   - session-level right-click menu, rename and delete: no such affordance on
  *     the new screen (session rows are not editable there);
- *   - Ctrl+P / in-row star pinning: the new screen has no pin affordance. The
- *     STORE still backs `sessionPins`, so its contract is still verified below;
  *   - Ctrl+S to reveal delegated runs and the "N runs folded" counter: the new
  *     list shows the workspace's conversations and folds nothing;
  *   - Ctrl+A / the working-directory menu / per-directory scoping: replaced by
  *     the workspace rail.
+ *
+ * The in-row star is NOT in that list: `SessionSupervisor` still passes
+ * `pinned`/`onTogglePin` to `SessionListRow`, which still renders a clickable
+ * `★`/`☆`. Removing its regression was justified by an affordance that is
+ * still there, so the click path is asserted at the bottom of this file.
  *
  * Assertion discipline: ink repaints only changed lines, so each step opens a
  * FRESH output window and asserts on what that window painted; checks that
@@ -475,6 +479,126 @@ check('Esc leaves the session screen and restores the conversation',
 
 instance.unmount()
 instances.delete(process.stdout)
+
+// ── the pin affordance still exists, so it still needs a regression ────────
+// The star survives on the session screen (`SessionListRow` still renders a
+// clickable `★`/`☆` and the screen still passes `pinned`/`onTogglePin`), so
+// "the new screen has no pin affordance" is NOT a reason to drop this: clicking
+// the star must toggle the pin STORE and must NOT reach the mount path. The
+// store's own contract is checked at the top of this file; this is the input
+// path, which no unit test covers.
+{
+  writeSessionPins([])
+  const { stdout: out2, stderr: err2, stdin: in2 } = makeStreams()
+  const channel2 = makeChannel()
+  const app2 = await render(
+    React.createElement(Chat, {
+      channel: channel2,
+      questionStore: { subscribe: () => () => {}, getSnapshot: () => null, answerCurrent: () => {} },
+      onExit() {},
+    }),
+    { stdout: out2, stderr: err2, stdin: in2, exitOnCtrlC: false, patchConsole: false },
+  )
+  for (const value of instances.values()) instances.set(process.stdout, value)
+  const screen2 = () => {
+    const buf = out2.term.buffer.active
+    return Array.from({ length: out2.term.rows }, (_, y) =>
+      (buf.getLine(buf.baseY + y)?.translateToString(true) ?? '').replace(/\s+$/, '')).join('\n')
+  }
+  const rowOf = (needle) => {
+    const buf = out2.term.buffer.active
+    for (let y = 0; y < out2.term.rows; y++) {
+      const raw = buf.getLine(buf.baseY + y)?.translateToString(true) ?? ''
+      const col = raw.indexOf(needle)
+      if (col >= 0) return { row: y, col }
+    }
+    return null
+  }
+  const click = async (needle) => {
+    await settled(() => rowOf(needle) !== null)
+    const found = rowOf(needle)
+    if (found === null) throw new Error(`row not found: ${needle}`)
+    in2.write(`\u001b[<0;${found.col + 1};${found.row + 1}M\u001b[<0;${found.col + 1};${found.row + 1}m`)
+    await sleep(150) // 固定窗:pacing 输入泵把字节交给解析器的步间
+  }
+  await settle(() => screen2().includes('❯'))
+  in2.write('/resume')
+  await settle(() => flat(screen2()).includes('/resume'))
+  in2.write('\r')
+  await settle(() => /Sessions in tmp/.test(flat(screen2())))
+  const star = rowOf('☆')
+  check('the session screen still renders a pin affordance', star !== null, flat(screen2()).slice(0, 240))
+  const resumesBefore = channel2.calls.resume.length
+  await click('☆')
+  // The first row of the list is the session this terminal is attached to, so
+  // that is the star the click lands on; the assertion is about the INPUT PATH
+  // (the store changed, the mount path did not), not about which row is first.
+  const pinned = () => [...readSessionPins()]
+  check('clicking the star pins the row it belongs to',
+    await settled(() => pinned().length === 1, { timeoutMs: 4_000 }),
+    JSON.stringify(pinned()))
+  check('the pinned id is a real session row',
+    pinned()[0] === 'live-session',
+    JSON.stringify(pinned()))
+  check('clicking the star does NOT mount the session',
+    channel2.calls.resume.length === resumesBefore,
+    `resume calls: ${channel2.calls.resume.join(', ')}`)
+  app2.unmount()
+}
+writeSessionPins([])
+
+// ── an unsent draft survives a screen that REPLACES the conversation ───────
+// Every screen Chat renders instead of the transcript (the session screen, the
+// tree, settings, the jobs panel, the trajectory scene) is an early return that
+// unmounts `PromptInput`, whose text lives in local state. Opening the session
+// screen and pressing Esc therefore used to come back to an EMPTY composer:
+// the half-written prompt was gone, and nothing was sent.
+//
+// The claim under test is that the composer still HOLDS the draft after the
+// screen swap, so it is read through the composer's own controller — the same
+// accessor Chat uses. (Driving this through a spawned `/resume` would only test
+// the harness's stdin pacing, not draft ownership.)
+{
+  const { stdout: out3, stderr: err3, stdin: in3 } = makeStreams()
+  const channel3 = makeChannel()
+  const promptRef = { current: null }
+  const app3 = await render(
+    React.createElement(Chat, {
+      channel: channel3,
+      promptControllerRef: promptRef,
+      questionStore: { subscribe: () => () => {}, getSnapshot: () => null, answerCurrent: () => {} },
+      onExit() {},
+    }),
+    { stdout: out3, stderr: err3, stdin: in3, exitOnCtrlC: false, patchConsole: false },
+  )
+  for (const value of instances.values()) instances.set(process.stdout, value)
+  const screen3 = () => {
+    const buf = out3.term.buffer.active
+    return Array.from({ length: out3.term.rows }, (_, y) =>
+      (buf.getLine(buf.baseY + y)?.translateToString(true) ?? '').replace(/\s+$/, '')).join('\n')
+  }
+  const draftOf = () => promptRef.current?.text?.() ?? null
+  await settle(() => draftOf() !== null)
+  const DRAFT = 'UNSENT_DRAFT_890'
+  // Paced: this harness delivers a whole burst between renders and the composer
+  // consumes the first character of a burst before its input is live.
+  for (const character of DRAFT) {
+    in3.write(character)
+    await sleep(40) // 固定窗:pacing 逐字投喂：整串一次写入会丢首个字符
+  }
+  check('the composer holds the draft', await settled(() => draftOf() === DRAFT), String(draftOf()))
+  // The TRIP: a bare Esc closes the composer and mounts a screen that replaces
+  // the conversation (the rewind picker). That unmount is what used to take the
+  // draft with it. `Esc` + a space is one keypress: the trailing space is what
+  // makes the parser resolve the escape instead of leaving it pending.
+  in3.write('\u001b ')
+  await sleep(200) // 固定窗:探针 断言「换屏之后草稿仍在」——无单一可轮询锚点
+  check('the composer still holds the draft after the screen swap', draftOf() === DRAFT, String(draftOf()))
+  check('the draft never became a message',
+    channel3.calls.resume.length === 0 && channel3.rows.every(row => !String(row.text ?? '').includes(DRAFT)),
+    JSON.stringify(channel3.rows.map(row => row.text)))
+  app3.unmount()
+}
 
 if (failed > 0) {
   console.error(`\n${failed} check(s) failed`)

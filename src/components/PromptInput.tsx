@@ -393,6 +393,8 @@ const DOUBLE_CLICK_MS = 500
  */
 export interface PromptController {
   hasText(): boolean
+  /** The draft text, for a caller that must not lose it (see {@link PromptDraftStore}). */
+  text(): string
   /** Current capability-backed draft images in token order, without reads. */
   previewImages?(): readonly { image: TranscriptImage; title: string }[]
   clear(): void
@@ -416,10 +418,38 @@ export interface PromptController {
    *  Chat's working-turn Esc interrupt must yield in BOTH submodes. */
   vimActive(): boolean}
 
+/**
+ * Owner-held storage for the composer draft, so a screen that unmounts the
+ * prompt (every early return in Chat) does not discard what the user typed.
+ *
+ * Only the FACTS the composer can resume from are stored: the raw text (staged
+ * `[Image #N]` tokens included, so the capability bindings come back with it)
+ * and the caret offset. Selection and the fold block are cover state for a
+ * visible composer, not content, and are rebuilt normally on the next edit.
+ */
+export interface PromptDraftStore {
+  text: string
+  cursor: number
+  /** Session id the stored draft belongs to; a mismatch means "not this one". */
+  sessionId?: string
+}
+
 export interface PromptInputProps {
   channel: Channel
   /** Keep the draft mounted while another prompt-slot panel owns the UI. */
   suspended?: boolean
+  /**
+   * Owner-held storage for the unsent draft.
+   *
+   * The prompt owns its text in local state, and several screens REPLACE the
+   * conversation (the session screen, the session tree, settings, the jobs and
+   * subagent panels, the trajectory scene) — early returns that unmount this
+   * component and would take a half-written prompt down with it. Chat owns the
+   * store, so the text, its caret and its image tokens survive that unmount and
+   * come back when the composer does. The owner also clears it on a session
+   * change, so a draft can never leak into a different conversation.
+   */
+  draftStore?: PromptDraftStore
   /** Whether the `?` help menu is open (state lives in the Chat screen). */
   helpOpen: boolean
   onToggleHelp(): void
@@ -518,6 +548,7 @@ export interface PromptInputProps {
 export function PromptInput({
   channel,
   suspended = false,
+  draftStore,
   helpOpen,
   onToggleHelp,
   onRunCommand,
@@ -537,8 +568,13 @@ export function PromptInput({
   // Raw stdout writer for OSC 52 clipboard writes (selection copy) — must
   // bypass the frame pipeline; null outside a mounted Ink App.
   const writeRaw = React.useContext(TerminalWriteContext)
-  const [value, setValue] = React.useState('')
-  const [cursor, setCursor] = React.useState(0)
+  // A remount caused by a screen swap (not a session change) resumes the draft
+  // the owner kept while this component was unmounted. Read once, as the initial
+  // state: the store already holds that same draft, so normal editing keeps it
+  // current from the first keystroke.
+  const [value, setValue] = React.useState(() => draftStore?.text ?? '')
+  const [cursor, setCursor] = React.useState(() =>
+    normalizeCursorOffset(draftStore?.text ?? '', draftStore?.cursor ?? 0))
   /**
    * Mouse text selection: UTF-16 offsets [start, end) in `value`, snapped
    * to grapheme boundaries, start ≤ end. Null = no selection. Created by
@@ -735,6 +771,14 @@ export function PromptInput({
   syncImageGeneration()
   valueRef.current = value
   cursorRef.current = cursor
+  // Keep the owner's draft current on every commit, so an unmount that happens
+  // in this same pass (a screen swap, or Chat replaced by its fallback) leaves
+  // the store holding exactly what the user last saw.
+  React.useLayoutEffect(() => {
+    if (draftStore === undefined) return
+    draftStore.text = value
+    draftStore.cursor = cursor
+  }, [draftStore, value, cursor])
   // Publish the live controller (fresh closure over `value` every render).
   // A prompt-slot panel withdraws the handle in the same commit: external
   // injection must not append/submit a hidden command draft while it waits
@@ -747,6 +791,7 @@ export function PromptInput({
     }
     controllerRef.current = {
       hasText: () => value.length > 0,
+      text: () => valueRef.current,
       previewImages: () => composerImageRefsForText(valueRef.current, draftImagesRef.current).flatMap(ref => {
         const image = channel.stagedImage(ref.stageId)
         return image === undefined ? [] : [{ image, title: ref.token.slice(1, -1) }]
