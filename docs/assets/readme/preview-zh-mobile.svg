@@ -84,15 +84,15 @@
       <g transform="translate(48 590)" clip-path="url(#answer-clip)"><text x="0" y="0" font-size="17" fill="#303743" font-weight="600">你好！我是你的终端开发搭档。</text></g>
       <g class="answer-two"><text x="48" y="622" font-size="17" fill="#303743" >可以写代码、修 bug、查资料或梳理文档。</text><text x="48" y="653" font-size="14" fill="#5d6674" >直接说需求就行。</text></g>
     </g>
-    <path d="M24 724H576" stroke="#7fa2d8" stroke-width="2"/>
-    <path d="M24 796H576" stroke="#7fa2d8" stroke-width="2"/>
-    <text x="26" y="767" font-size="25" fill="#303743" font-weight="700">›</text>
-    <rect class="empty-caret" x="54" y="744" width="10" height="29" fill="#303743"/>
-    <g class="draft" transform="translate(55 767)"><g clip-path="url(#draft-clip)"><text x="0" y="0" font-size="17" fill="#303743" >帮我看看这个项目从哪里开始</text></g><rect class="draft-caret" x="2" y="-23" width="9" height="28" fill="#416fcb"/></g>
-    <g class="pending"><text x="26" y="820" font-size="14" fill="#2f806f" >⚡ 插话 · 下一步送达</text><text x="576" y="820" font-size="13" fill="#7a8492" text-anchor="end">Esc 打断并立即发送</text></g>
-    <g class="busy-status"><text x="24" y="853" font-size="14" fill="#416fcb" font-weight="700">spat</text><text x="576" y="853" font-size="14" fill="#5d6674" text-anchor="end">ctx 6.9% · 22 tps</text></g>
-    <g class="idle-status"><text x="24" y="853" font-size="14" fill="#416fcb" font-weight="700">spat</text><text x="576" y="853" font-size="14" fill="#5d6674" text-anchor="end">ctx 7.2% · 0 tps</text></g>
-    <rect x="24" y="867" width="552" height="4" fill="#dce2ea"/><g transform="translate(24 867)"><rect class="activity" width="68" height="4" fill="#416fcb"/></g>
-    <text x="24" y="897" font-size="13" fill="#5d6674" >deepseek-v4-flash · max</text>
-    <text x="576" y="897" font-size="13" fill="#416fcb" text-anchor="end">main · ?</text>
+    <path d="M24 826H576" stroke="#7fa2d8" stroke-width="2"/>
+    <path d="M24 898H576" stroke="#7fa2d8" stroke-width="2"/>
+    <text x="26" y="869" font-size="25" fill="#303743" font-weight="700">›</text>
+    <rect class="empty-caret" x="54" y="846" width="10" height="29" fill="#303743"/>
+    <g class="draft" transform="translate(55 869)"><g clip-path="url(#draft-clip)"><text x="0" y="0" font-size="17" fill="#303743" >帮我看看这个项目从哪里开始</text></g><rect class="draft-caret" x="2" y="-23" width="9" height="28" fill="#416fcb"/></g>
+    <g class="pending"><text x="26" y="812" font-size="14" fill="#2f806f" >⚡ 插话 · 下一步送达</text><text x="576" y="812" font-size="13" fill="#7a8492" text-anchor="end">Esc 打断并立即发送</text></g>
+    <g class="busy-status"><text x="24" y="751" font-size="14" fill="#416fcb" font-weight="700">spat</text><text x="576" y="751" font-size="14" fill="#5d6674" text-anchor="end">ctx 6.9% · 22 tps</text></g>
+    <g class="idle-status"><text x="24" y="751" font-size="14" fill="#416fcb" font-weight="700">spat</text><text x="576" y="751" font-size="14" fill="#5d6674" text-anchor="end">ctx 7.2% · 0 tps</text></g>
+    <rect x="24" y="765" width="552" height="4" fill="#dce2ea"/><g transform="translate(24 765)"><rect class="activity" width="68" height="4" fill="#416fcb"/></g>
+    <text x="24" y="795" font-size="13" fill="#5d6674" >deepseek-v4-flash · max</text>
+    <text x="576" y="795" font-size="13" fill="#416fcb" text-anchor="end">main · ?</text>
 </svg>

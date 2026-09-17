@@ -69,8 +69,8 @@ function preview(language, mobile) {
   const inner = width - left * 2
   const headerBottom = mobile ? 270 : 258
   const transcriptTop = headerBottom + 18
-  const promptY = mobile ? 724 : 608
-  const statusY = promptY + 112
+  const statusY = mobile ? 734 : 612
+  const promptY = mobile ? 826 : 706
   const bodySize = mobile ? 20 : 19
   const userPrompt = 'hi'
   const response = en ? [
@@ -173,7 +173,7 @@ function preview(language, mobile) {
     ${text(left + 2, promptY + 43, '›', 25, '#303743', 'font-weight="700"')}
     <rect class="empty-caret" x="${left + 30}" y="${promptY + 20}" width="10" height="29" fill="#303743"/>
     <g class="draft" transform="translate(${left + 31} ${promptY + 43})"><g clip-path="url(#draft-clip)">${text(0, 0, draft, mobile ? 17 : 18, '#303743')}</g><rect class="draft-caret" x="2" y="-23" width="9" height="28" fill="#416fcb"/></g>
-    <g class="pending">${text(left + 2, promptY + 96, en ? '⚡ Steer · delivered next' : '⚡ 插话 · 下一步送达', 14, '#2f806f')}${text(width - left, promptY + 96, en ? 'Esc interrupts and sends immediately' : 'Esc 打断并立即发送', 13, '#7a8492', 'text-anchor="end"')}</g>
+    <g class="pending">${text(left + 2, promptY - 14, en ? '⚡ Steer · delivered next' : '⚡ 插话 · 下一步送达', 14, '#2f806f')}${text(width - left, promptY - 14, en ? 'Esc interrupts and sends immediately' : 'Esc 打断并立即发送', 13, '#7a8492', 'text-anchor="end"')}</g>
     <g class="busy-status">${text(left, statusY + 17, 'spat', 14, '#416fcb', 'font-weight="700"')}${mobile ? '' : text(width / 2, statusY + 17, en ? 'working' : '工作中', 14, '#5d6674', 'text-anchor="middle"')}${text(width - left, statusY + 17, mobile ? 'ctx 6.9% · 22 tps' : 'ctx 9.1k / 131k · 6.9% · 22 tps', 14, '#5d6674', 'text-anchor="end"')}</g>
     <g class="idle-status">${text(left, statusY + 17, 'spat', 14, '#416fcb', 'font-weight="700"')}${mobile ? '' : text(width / 2, statusY + 17, en ? 'free' : '空闲', 14, '#5d6674', 'text-anchor="middle"')}${text(width - left, statusY + 17, mobile ? 'ctx 7.2% · 0 tps' : 'ctx 9.4k / 131k · 7.2% · 0 tps', 14, '#5d6674', 'text-anchor="end"')}</g>
     <rect x="${left}" y="${statusY + 31}" width="${inner}" height="4" fill="#dce2ea"/><g transform="translate(${left} ${statusY + 31})"><rect class="activity" width="${mobile ? 68 : 104}" height="4" fill="#416fcb"/></g>

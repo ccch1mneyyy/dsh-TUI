@@ -86,15 +86,15 @@
       <g transform="translate(62 542)" clip-path="url(#answer-clip)"><text x="0" y="0" font-size="18" fill="#303743" font-weight="600">你好！我是你的终端开发搭档。</text></g>
       <g class="answer-two"><text x="62" y="574" font-size="18" fill="#303743" >可以写代码、修 bug、查资料或梳理文档。</text><text x="62" y="602" font-size="16" fill="#5d6674" >直接说需求就行。</text></g>
     </g>
-    <path d="M38 608H1162" stroke="#7fa2d8" stroke-width="2"/>
-    <path d="M38 680H1162" stroke="#7fa2d8" stroke-width="2"/>
-    <text x="40" y="651" font-size="25" fill="#303743" font-weight="700">›</text>
-    <rect class="empty-caret" x="68" y="628" width="10" height="29" fill="#303743"/>
-    <g class="draft" transform="translate(69 651)"><g clip-path="url(#draft-clip)"><text x="0" y="0" font-size="18" fill="#303743" >帮我看看这个项目从哪里开始</text></g><rect class="draft-caret" x="2" y="-23" width="9" height="28" fill="#416fcb"/></g>
-    <g class="pending"><text x="40" y="704" font-size="14" fill="#2f806f" >⚡ 插话 · 下一步送达</text><text x="1162" y="704" font-size="13" fill="#7a8492" text-anchor="end">Esc 打断并立即发送</text></g>
-    <g class="busy-status"><text x="38" y="737" font-size="14" fill="#416fcb" font-weight="700">spat</text><text x="600" y="737" font-size="14" fill="#5d6674" text-anchor="middle">工作中</text><text x="1162" y="737" font-size="14" fill="#5d6674" text-anchor="end">ctx 9.1k / 131k · 6.9% · 22 tps</text></g>
-    <g class="idle-status"><text x="38" y="737" font-size="14" fill="#416fcb" font-weight="700">spat</text><text x="600" y="737" font-size="14" fill="#5d6674" text-anchor="middle">空闲</text><text x="1162" y="737" font-size="14" fill="#5d6674" text-anchor="end">ctx 9.4k / 131k · 7.2% · 0 tps</text></g>
-    <rect x="38" y="751" width="1124" height="4" fill="#dce2ea"/><g transform="translate(38 751)"><rect class="activity" width="104" height="4" fill="#416fcb"/></g>
-    <text x="38" y="781" font-size="14" fill="#5d6674" >deepseek-v4-flash · max · 9.4k→386</text>
-    <text x="1162" y="781" font-size="14" fill="#416fcb" text-anchor="end">main · dsh-TUI-693 · ? 快捷键</text>
+    <path d="M38 706H1162" stroke="#7fa2d8" stroke-width="2"/>
+    <path d="M38 778H1162" stroke="#7fa2d8" stroke-width="2"/>
+    <text x="40" y="749" font-size="25" fill="#303743" font-weight="700">›</text>
+    <rect class="empty-caret" x="68" y="726" width="10" height="29" fill="#303743"/>
+    <g class="draft" transform="translate(69 749)"><g clip-path="url(#draft-clip)"><text x="0" y="0" font-size="18" fill="#303743" >帮我看看这个项目从哪里开始</text></g><rect class="draft-caret" x="2" y="-23" width="9" height="28" fill="#416fcb"/></g>
+    <g class="pending"><text x="40" y="692" font-size="14" fill="#2f806f" >⚡ 插话 · 下一步送达</text><text x="1162" y="692" font-size="13" fill="#7a8492" text-anchor="end">Esc 打断并立即发送</text></g>
+    <g class="busy-status"><text x="38" y="629" font-size="14" fill="#416fcb" font-weight="700">spat</text><text x="600" y="629" font-size="14" fill="#5d6674" text-anchor="middle">工作中</text><text x="1162" y="629" font-size="14" fill="#5d6674" text-anchor="end">ctx 9.1k / 131k · 6.9% · 22 tps</text></g>
+    <g class="idle-status"><text x="38" y="629" font-size="14" fill="#416fcb" font-weight="700">spat</text><text x="600" y="629" font-size="14" fill="#5d6674" text-anchor="middle">空闲</text><text x="1162" y="629" font-size="14" fill="#5d6674" text-anchor="end">ctx 9.4k / 131k · 7.2% · 0 tps</text></g>
+    <rect x="38" y="643" width="1124" height="4" fill="#dce2ea"/><g transform="translate(38 643)"><rect class="activity" width="104" height="4" fill="#416fcb"/></g>
+    <text x="38" y="673" font-size="14" fill="#5d6674" >deepseek-v4-flash · max · 9.4k→386</text>
+    <text x="1162" y="673" font-size="14" fill="#416fcb" text-anchor="end">main · dsh-TUI-693 · ? 快捷键</text>
 </svg>
