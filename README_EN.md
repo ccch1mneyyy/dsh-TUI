@@ -146,16 +146,16 @@ the interface, and removing it leaves no core modifications behind.
 
 ## Preview
 
-[Open the interactive web preview guide](docs/web-preview.en.md)
+<picture>
+  <source media="(prefers-reduced-motion: reduce) and (max-width: 640px)" srcset="docs/assets/readme/preview-en-mobile-still.svg">
+  <source media="(prefers-reduced-motion: reduce)" srcset="docs/assets/readme/preview-en-still.svg">
+  <source media="(max-width: 640px)" srcset="docs/assets/readme/preview-en-mobile.svg">
+  <img src="docs/assets/readme/preview-en.svg" alt="dsh-TUI animated preview: prompt, thinking, tool result and reply. Scripted animation, not an editable terminal." width="1200">
+</picture>
 
-After installing and compiling the source, run `pnpm preview:web` and open the
-local URL printed in the terminal. xterm.js connects to this repository's real
-`Chat` component and Ink renderer: type messages, inspect streamed thinking
-and tool cards, use theme/model menus, and try Vim editing.
-Responses and tool results are fixed demo data. No model API, shell, or API key
-is involved. GitHub README pages do not execute JavaScript; the preview runs in
-a separate page backed by a local Node service, not a deployed public demo.
-See the guide for supported interactions, setup, and tests.
+Scripted typing, thinking and replies in an animated SVG, respecting reduced motion.
+**The centered prompt is not editable**: GitHub README displays SVGs as images.
+Each SVG tile in [Documentation](#documentation) has its own clickable outer link.
 
 ## Quick Start
 
@@ -356,18 +356,22 @@ One full-screen surface lists every session in this process: the attached conver
 
 ## Documentation
 
-| Topic | Contents |
-| --- | --- |
-| [Getting started](docs/getting-started.en.md) | Prerequisites, installation, startup, profile lifecycle, source development |
-| [Configuration](docs/configuration.en.md) | Cordis overrides, fields, agent presets, MCP, environment variables |
-| [Themes](docs/themes.en.md) | Built-in themes, background detection, static JSON and npm plugin themes, validation |
-| [Interaction and commands](docs/interaction.en.md) | Keyboard, mouse, questionnaires, slash commands, session workflows |
-| [Architecture and limitations](docs/architecture.en.md) | Runtime path, rendering, persistence, security boundary, known limitations |
-| [Community Management](docs/community-management.en.md) | Community entry points, roles, proposal flow, roadmap rules, and maintenance cadence |
-| [Project Roadmap](docs/roadmap.en.md) | Public goals, phases, task status, exit criteria, and Future Work |
-| [VS Code guide](docs/vscode.en.md) | Running dsh-tui in the VS Code integrated terminal; the `dsh-tui-vscode` companion extension offers multiple sessions, session history, and specific-session resume (on the Marketplace) |
-| [Contributing](docs/contributing.en.md) | Contribution workflow, repository map, build artifacts, verification matrix, change rules |
-| [Plugin admission & development](https://github.com/T-Auto/dsh-ecosystem-spec/blob/main/docs/plugin-admission-and-development.md) | Interface & compatibility agreement / plugin admission spec / seams / contracts / verification checklist (merged into dsh-ecosystem-spec) |
+<!-- readme-svg-navigation:start -->
+<p align="center">
+  <a href="docs/getting-started.en.md"><img src="docs/assets/readme/nav-start-en.svg" width="440" alt="Getting started"></a>
+  <a href="docs/interaction.en.md"><img src="docs/assets/readme/nav-interaction-en.svg" width="440" alt="Interaction & commands"></a>
+  <a href="docs/configuration.en.md"><img src="docs/assets/readme/nav-configuration-en.svg" width="440" alt="Configuration"></a>
+  <a href="docs/themes.en.md"><img src="docs/assets/readme/nav-themes-en.svg" width="440" alt="Themes"></a>
+  <a href="docs/architecture.en.md"><img src="docs/assets/readme/nav-architecture-en.svg" width="440" alt="Architecture & limits"></a>
+  <a href="docs/vscode.en.md"><img src="docs/assets/readme/nav-vscode-en.svg" width="440" alt="VS Code guide"></a>
+  <a href="https://github.com/T-Auto/dsh-ecosystem-spec/blob/main/docs/plugin-admission-and-development.md"><img src="docs/assets/readme/nav-plugins-en.svg" width="440" alt="Plugin development"></a>
+  <a href="docs/contributing.en.md"><img src="docs/assets/readme/nav-contributing-en.svg" width="440" alt="Contributing"></a>
+  <a href="docs/community-management.en.md"><img src="docs/assets/readme/nav-community-en.svg" width="440" alt="Community management"></a>
+  <a href="docs/roadmap.en.md"><img src="docs/assets/readme/nav-roadmap-en.svg" width="440" alt="Project roadmap"></a>
+  <a href="docs/README.md"><img src="docs/assets/readme/nav-index-en.svg" width="440" alt="All documentation"></a>
+  <a href="docs/links.md"><img src="docs/assets/readme/nav-links-en.svg" width="440" alt="Related projects"></a>
+</p>
+<!-- readme-svg-navigation:end -->
 
 The complete bilingual index is [`docs/README.md`](docs/README.md).
 
@@ -563,7 +567,7 @@ responsible for their maintenance and security.
 
 | WeChat group (dsh-TUI community 4) | QQ group (ID 572549239) |
 | :---: | :---: |
-| <img src="screenshots/wechat-group.jpg" alt="dsh-TUI community WeChat group 4 QR code" width="200"> | <img src="screenshots/qq-group.png" alt="dsh-TUI community QQ group QR code" width="200"> |
+| <img src="screenshots/wechat-group.jpg" alt="dsh-TUI community WeChat group 4 QR code" width="200"> | <a href="screenshots/qq-group.jpg"><img src="screenshots/qq-group.jpg" alt="dsh-TUI community QQ group QR code, group 572549239. Open the original image." width="280"></a> |
 
 > The WeChat QR code expires roughly every 7 days; if it stops working, use
 > the QQ group (572549239) or open an issue to nudge us for a refresh.

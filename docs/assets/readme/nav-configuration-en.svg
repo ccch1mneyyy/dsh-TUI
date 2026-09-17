@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="560" height="106" viewBox="0 0 560 106" role="img" aria-labelledby="title desc">
+  <title id="title">Configuration</title>
+  <desc id="desc">Cordis, models, MCP, environment</desc>
+  <style>
+    text { font-family: "Cascadia Code","SFMono-Regular",Consolas,"Liberation Mono","Microsoft YaHei",monospace; letter-spacing: 0; }
+    a:hover .tile { fill: #1b2028; }
+    a:focus-visible .tile { stroke: #8bb6fb; stroke-width: 3; }
+    
+  </style>
+  
+    <a href="https://github.com/says693/dsh-TUI-693/blob/main/docs/configuration.en.md">
+      <rect class="tile" x="1" y="4" width="558" height="98" rx="6" fill="#111519" stroke="#303741"/>
+      <g transform="translate(22 26) scale(1.0416666666666667)" fill="none" stroke="#e5c07b" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M14 17H5"/><path d="M19 7h-9"/><circle cx="17" cy="17" r="3"/><circle cx="7" cy="7" r="3"/></g>
+      <text x="65" y="42" font-size="22" fill="#edf1f6" font-weight="600">Configuration</text>
+      <text x="65" y="75" font-size="16" fill="#aeb8c6" >Cordis, models, MCP, environment</text>
+      <g transform="translate(514 25) scale(0.9166666666666666)" fill="none" stroke="#e5c07b" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M7 7h10v10"/><path d="M7 17 17 7"/></g>
+    </a>
+</svg>
