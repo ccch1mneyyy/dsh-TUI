@@ -41,10 +41,10 @@ the interface, and removing it leaves no core modifications behind.
 
 <picture>
   <source media="(max-width: 640px)" srcset="docs/assets/readme/preview-en-mobile.svg">
-  <img src="docs/assets/readme/preview-en.svg" alt="dsh-TUI automatic animated preview: prompt, thinking, tool execution and streaming reply." width="1200">
+  <img src="docs/assets/readme/preview-en.svg" alt="dsh-TUI live runtime preview: logo header, transcript, thinking preview, tool card, composer, and status line." width="1200">
 </picture>
 
-This CSS-animated SVG starts automatically on the GitHub README itself: no script, iframe, or separate demo site is used. The centered prompt visualizes typing; GitHub removes real form controls from README content, so it remains a display rather than an editable terminal.
+This CSS-animated SVG follows the real TUI component hierarchy and starts directly on the GitHub README: `LogoV2` at the top, transcript, thinking and tool rows in the middle, with the composer and status line pinned below. GitHub removes real form controls from README content, so the typing sequence is a runtime presentation rather than an editable terminal.
 
 ## Documentation
 

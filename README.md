@@ -52,10 +52,10 @@
 
 <picture>
   <source media="(max-width: 640px)" srcset="docs/assets/readme/preview-zh-mobile.svg">
-  <img src="docs/assets/readme/preview-zh.svg" alt="dsh-TUI 自动动态预览：输入、思考、工具执行与流式回复。" width="1200">
+  <img src="docs/assets/readme/preview-zh.svg" alt="dsh-TUI 实际运行态预览：Logo 头部、消息流、思考预览、工具卡、输入框与状态栏。" width="1200">
 </picture>
 
-这个 CSS 动画 SVG 会在 GitHub README 原页面自动播放，不使用脚本、iframe 或独立演示网站。中部输入区展示打字过程；GitHub 会清洗 README 中的真实表单控件，因此它仍是动态展示，而不是可编辑终端。
+这个 CSS 动画 SVG 按真实 TUI 组件层级重构，会在 GitHub README 原页面自动播放：顶部是 `LogoV2`，中间是消息、思考与工具卡，底部固定输入框和状态栏。GitHub 会清洗 README 中的真实表单控件，因此输入过程属于运行态演示，而不是可编辑终端。
 
 ## 文档索引
 
