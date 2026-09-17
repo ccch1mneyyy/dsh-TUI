@@ -12,13 +12,12 @@ import { resolve, join, dirname } from 'node:path'
 import { homedir } from 'node:os'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
-// Pin DSH_HOME before any import that reads it. The cmd launcher's
-// `set DSH_HOME=...` does not reliably survive PowerShell → cmd → tsx.cmd.
-// NOTE: ~/.dsh-cc is this install's DSH_HOME directory (an early-release
-// name kept as the harness home). If the harness home is ever migrated to
-// the default ~/.dsh, update this pin together with sync-profile.mjs.
-if (!process.env.DSH_HOME?.endsWith('.dsh-cc')) {
-  process.env.DSH_HOME = resolve(homedir(), '.dsh-cc')
+// DSH_HOME must be set before any import that reads it, and this script
+// dereferences it directly below (`join(dshHome, ...)`), so fall back to the
+// upstream default (~/.dsh) when the environment does not provide one. An
+// explicit DSH_HOME always wins — the retired ~/.dsh-cc pin overrode it.
+if (!process.env.DSH_HOME) {
+  process.env.DSH_HOME = resolve(homedir(), '.dsh')
 }
 
 // Force React's production build BEFORE boot() pulls in the plugin tree.
@@ -53,9 +52,9 @@ const homePatch = join(dshHome, 'cordis.patch.yml')
 const diagFile = join(dshHome, 'last-boot-diagnostic.txt')
 
 // --- Heap watchtower (leak forensics) ---------------------------------------
-// dsh-cc OOM'd twice in real long sessions (~4GB in 19-42min). The render
+// Long sessions OOM'd twice in real use (~4GB in 19-42min). The render
 // caches are bounded now, but something else still grows. This sampler logs
-// heapUsed/rss every 30s to ~/.dsh-cc/heap-watch.log and writes a full
+// heapUsed/rss every 30s to $DSH_HOME/heap-watch.log and writes a full
 // heapsnapshot when crossing 3GB, so the next crash brings its own evidence.
 // Disable with DSH_TUI_HEAP_WATCH=0.
 if (process.env.DSH_TUI_HEAP_WATCH !== '0') {
