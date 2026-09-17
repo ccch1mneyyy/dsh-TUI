@@ -130,6 +130,21 @@ sh install.sh
 
 更面向零基础的安装流程、profile 叠加机制、源码构建与常见问题见[安装与快速开始](docs/getting-started.md)。
 
+### 迁移其他编程代理的对话（`dsh-tui migrate`）
+
+把 Claude Code、Codex、OMP 等编程代理的本地对话历史导入 DSH 会话库，之后用 `/resume` 按原工作目录浏览与恢复：
+
+```sh
+dsh-tui migrate                # 列出各代理可迁移的对话数量（不写入）
+dsh-tui migrate claude-code    # 导入 Claude Code 的全部对话（codex / omp 同理）
+dsh-tui migrate codex --dry-run  # 只预览将落盘的内容，不写入
+```
+
+- **只读源**：迁移只读取源代理的本地存储，绝不修改；产物写入 `$DSH_HOME/sessions`，遵循会话日志的格式契约（上游读取链可识别）
+- **幂等**：同一源对话重复迁移命中同一确定性 UUID 路径——已存在则跳过不重写，不会堆叠重复
+- **保留结构**：用户/助手消息、思考过程（reasoning）按轮次还原；工具调用流量不迁移（源格式不可忠实回放）
+- pi / opencode 等其他代理待有真实样本后扩展
+
 
 
 ## 插件扩展与开发指南

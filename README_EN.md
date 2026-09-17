@@ -223,6 +223,29 @@ Marketplace) — see
 See [Getting started](docs/getting-started.en.md) for profile composition,
 source builds, and troubleshooting.
 
+### Migrating conversations from other coding agents (`dsh-tui migrate`)
+
+Import local conversation histories from Claude Code, Codex, OMP and other
+coding agents into the DSH session store, then browse and resume them by
+their original working directories via `/resume`:
+
+```sh
+dsh-tui migrate                # list discoverable conversation counts per agent
+dsh-tui migrate claude-code    # import every Claude Code conversation (codex / omp likewise)
+dsh-tui migrate codex --dry-run  # preview what would land, write nothing
+```
+
+- **Read-only sources**: migration only reads the foreign agents' local
+  stores, never modifies them; output lands under `$DSH_HOME/sessions`,
+  honoring the session-log format contract (readable by the upstream chain)
+- **Idempotent**: re-importing the same conversation resolves to the same
+  deterministic UUID path — an existing copy is skipped, never rewritten, so
+  duplicates never stack
+- **Structure preserved**: user/assistant messages and reasoning traces are
+  rebuilt per turn; tool traffic is not migrated (source formats cannot be
+  replayed faithfully)
+- Further agents (pi, opencode) extend once real-world samples exist
+
 The TUI checks the configured registry for newer versions in the background
 after startup (the check never blocks the first frame and silently ignores
 offline or registry errors). When an update is available, just type `/update`
