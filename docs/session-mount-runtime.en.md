@@ -87,18 +87,32 @@ mounted:
 {
   "version": 1,
   "owners": [
-    { "pid": 12345, "heartbeatAt": 1789361335705, "startedAt": 1789361300000,
+    { "pid": 12345, "host": "<hostname>", "instance": "12345-9f3c…",
+      "heartbeatAt": 1789361335705, "startedAt": 1789361300000,
       "sessionIds": ["<sessionId>", "..."] }
   ]
 }
 ```
 
+`host` / `instance` are the source of truth for ownership: `instance` is a token
+minted at random on every process start, and `host` is the machine name. **Pid
+alone is not enough** — a home directory can be shared over a network, and two
+machines then hand out the SAME pid. Deciding by pid would read a remote record
+as "this process", skip the occupancy refusal, and delete that record on the next
+publish, letting both machines write one log. Records written by older versions
+carry neither field and are read as "same host, same process".
+
 Write discipline (the pattern already proven in `src/sessionPins.ts`):
 
 - **Cross-process lock**: `session-mounts.lock` (`wx` exclusive create; one
-  stale lock may be reclaimed after 30s).
+  stale lock may be reclaimed after 30s). The lock file holds the RANDOM TOKEN
+  of the acquisition, not a pid.
 - **Atomic replace**: `session-mounts.json.<pid>.<ts>.<seq>.tmp` + `rename`, so
   a reader never observes a half-written document.
+- **A reclaimed holder must not write**: a writer that exceeded
+  `STALE_LOCK_MS` and had its lock taken has to notice that the lock is no
+  longer its own, abandon the commit, and — on the way out — delete only its OWN
+  lock rather than the new holder's.
 - **Permissions**: directory `0700`, file `0600`.
 - **Total and best-effort**: any failure degrades to "no cross-process
   protection this beat". It never throws and never takes a session down.

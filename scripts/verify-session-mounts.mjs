@@ -39,9 +39,12 @@ process.env.USERPROFILE = tmpHome
 const mod = await import('../src/sessionMounts.ts')
 const {
   HEARTBEAT_TTL_MS,
+  HOST_IDENTITY,
+  PROCESS_INSTANCE,
   claimMount,
   clearOwnMounts,
   occupancyOf,
+  ownerIsSelf,
   ownMounts,
   pidAlive,
   publishMounts,
@@ -112,6 +115,34 @@ console.log('a foreign live claim:')
   check('occupancy names the holder pid', occupancy.kind === 'occupied' && occupancy.pid === foreignPid)
 }
 
+console.log('ownership is host + instance + pid, never pid alone:')
+{
+  // A home directory shared over a network can hand the same pid to two
+  // machines. Treating the remote record as "mine" would skip the occupancy
+  // refusal and let both write one log, so the identity has to be compared.
+  writeRaw([
+    { pid: process.pid, host: 'some-other-host', instance: PROCESS_INSTANCE, heartbeatAt: NOW, startedAt: NOW, sessionIds: ['remote-sess'] },
+  ])
+  check('a same-pid record from another HOST is not ours',
+    ownerIsSelf(readMountLedger()[0]) === false)
+  check('a same-pid record from another host reads as occupied',
+    occupancyOf('remote-sess', readSessionOwners(NOW)).kind === 'occupied')
+  writeRaw([
+    { pid: process.pid, host: HOST_IDENTITY, instance: 'another-run', heartbeatAt: NOW, startedAt: NOW, sessionIds: ['reused-sess'] },
+  ])
+  check('a same-pid record from another RUN is not ours',
+    ownerIsSelf(readMountLedger()[0]) === false)
+  check('a pid-reuse record reads as occupied, so we cannot claim over it',
+    claimMount('reused-sess').ok === false)
+  // Our own identity is still recognised, or nothing would ever read as `mine`.
+  writeRaw([
+    { pid: process.pid, host: HOST_IDENTITY, instance: PROCESS_INSTANCE, heartbeatAt: NOW, startedAt: NOW, sessionIds: ['self-sess'] },
+  ])
+  check('our own host+instance+pid reads as ours', ownerIsSelf(readMountLedger()[0]) === true)
+  check('and as mine for occupancy', occupancyOf('self-sess', readSessionOwners(NOW)).kind === 'mine')
+  clearOwnMounts()
+}
+
 console.log('a stale heartbeat is abandoned (pulled plug):')
 {
   const foreignPid = process.platform === 'win32' ? process.ppid : 1
@@ -137,6 +168,35 @@ console.log('a live claim survives a read (no over-eager pruning):')
   writeRaw([peer(foreignPid, ['keep-sess'], NOW)])
   check('live claim stays live', readLiveMounts(NOW).length === 1)
   check('live claim still in the file', readMountLedger().some(o => o.sessionIds.includes('keep-sess')))
+}
+
+console.log('the lock token is enforced, and a crashed lock is still reclaimable:')
+{
+  const lockPath = join(tmpHome, '.dsh-tui', 'session-mounts.lock')
+  mkdirSync(join(tmpHome, '.dsh-tui'), { recursive: true })
+  clearOwnMounts()
+  check('a normal publish takes and releases its own lock',
+    publishMounts(['locked-sess']) && !existsSync(lockPath))
+  // A writer that was reclaimed as stale must abandon the mutation instead of
+  // committing a snapshot that predates the new holder. Its token is not the
+  // one on disk, so `releaseLock` must also leave that file alone.
+  writeFileSync(lockPath, 'someone-else:deadbeef\n', 'utf8')
+  const before = readMountLedger()
+  check('a held lock makes a fresh publish fail instead of clobbering',
+    publishMounts(['must-not-land']) === false)
+  check('the refused publish wrote nothing',
+    JSON.stringify(readMountLedger()) === JSON.stringify(before))
+  check('the foreign lock is left in place for its owner',
+    readFileSync(lockPath, 'utf8').includes('someone-else'))
+  // The documented crash recovery: once the lock is older than STALE_LOCK_MS a
+  // writer may reclaim it (the test ages it instead of waiting 30s).
+  const old = new Date(Date.now() - 60_000)
+  const { utimesSync } = await import('node:fs')
+  utimesSync(lockPath, old, old)
+  check('a stale lock is reclaimed and the publish succeeds',
+    publishMounts(['reclaimed']) && ownMounts().includes('reclaimed'))
+  check('the reclaimed lock is gone after its holder released it', !existsSync(lockPath))
+  clearOwnMounts()
 }
 
 console.log('claiming is one atomic step, and a refusal writes nothing:')

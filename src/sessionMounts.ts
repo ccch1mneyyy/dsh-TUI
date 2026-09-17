@@ -60,11 +60,15 @@ import {
   mkdirSync,
   openSync,
   readFileSync,
+  readSync,
   renameSync,
   rmSync,
   statSync,
   writeFileSync,
+  writeSync,
 } from 'node:fs'
+import { randomBytes } from 'node:crypto'
+import { hostname } from 'node:os'
 import { join } from 'node:path'
 import { DATA_DIR } from './utils/paths.js'
 
@@ -111,6 +115,22 @@ export interface SessionMountOwner {
   /** Operating-system process id of the TUI holding these sessions. */
   readonly pid: number
   /**
+   * Host this record was published from. Absent on records written by older
+   * versions; an absent host counts as "same host".
+   *
+   * A home directory can be shared over a network, and two machines can then
+   * hand out the SAME pid. Pid alone would call a remote TUI this process, skip
+   * the occupancy refusal, and let both write one log — so ownership is decided
+   * by host + instance + pid, never by pid alone.
+   */
+  readonly host?: string
+  /**
+   * Random per-process-run identity. Absent on records written by older
+   * versions. This is what makes pid REUSE safe: a recycled pid is a different
+   * run, so the stale record is not this process's.
+   */
+  readonly instance?: string
+  /**
    * Epoch ms of the owner's last heartbeat. A record whose heartbeat is older
    * than {@link HEARTBEAT_TTL_MS} is treated as abandoned.
    */
@@ -119,6 +139,26 @@ export interface SessionMountOwner {
   readonly startedAt: number
   /** Session ids this process has mounted, in no significant order. */
   readonly sessionIds: readonly string[]
+}
+
+/**
+ * This process's stable identity: the host it runs on and a token minted once
+ * per process. Both are published with every record so another reader can tell
+ * "mine" from "a stranger that happens to share my pid".
+ */
+export const HOST_IDENTITY = hostname()
+export const PROCESS_INSTANCE = `${process.pid}-${randomBytes(8).toString('hex')}`
+
+/**
+ * Whether a published record was written by THIS process instance.
+ * @param owner - The record to test.
+ * @returns True when host, instance and pid all match this process.
+ */
+export function ownerIsSelf(owner: SessionMountOwner): boolean {
+  if (owner.pid !== process.pid) return false
+  if (owner.host !== undefined && owner.host !== HOST_IDENTITY) return false
+  if (owner.instance !== undefined && owner.instance !== PROCESS_INSTANCE) return false
+  return true
 }
 
 /** Why a session cannot be mounted by this process. */
@@ -174,13 +214,22 @@ export function ownerIsLive(owner: SessionMountOwner, now: number = Date.now()):
 function parseOwner(value: unknown): SessionMountOwner | undefined {
   if (typeof value !== 'object' || value === null) return undefined
   const record = value as Record<string, unknown>
-  const { pid, heartbeatAt, startedAt, sessionIds } = record
+  const { pid, heartbeatAt, startedAt, sessionIds, host, instance } = record
   if (typeof pid !== 'number' || !Number.isInteger(pid) || pid <= 0) return undefined
   if (typeof heartbeatAt !== 'number' || !Number.isFinite(heartbeatAt)) return undefined
   if (typeof startedAt !== 'number' || !Number.isFinite(startedAt)) return undefined
   if (!Array.isArray(sessionIds)) return undefined
   const ids = sessionIds.filter((id): id is string => typeof id === 'string' && id.length > 0)
-  return { pid, heartbeatAt, startedAt, sessionIds: ids }
+  return {
+    pid,
+    heartbeatAt,
+    startedAt,
+    sessionIds: ids,
+    // Identity fields are optional so a ledger written by an older version
+    // still reads; a wrong-typed one is dropped rather than trusted.
+    ...(typeof host === 'string' && host.length > 0 ? { host } : {}),
+    ...(typeof instance === 'string' && instance.length > 0 ? { instance } : {}),
+  }
 }
 
 /**
@@ -232,16 +281,18 @@ export function readMountLedger(): readonly SessionMountOwner[] {
  */
 export function readLiveMounts(now: number = Date.now()): readonly SessionMountOwner[] {
   const all = readMountLedger()
-  const live = all.filter(owner => owner.pid === process.pid || ownerIsLive(owner, now))
+  const live = all.filter(owner => ownerIsSelf(owner) || ownerIsLive(owner, now))
   if (live.length !== all.length) {
-    const fd = acquireLock()
-    if (fd !== null) {
+    const lock = acquireLock()
+    if (lock !== null) {
       try {
-        const pruned = readMountLedger().filter(owner => owner.pid === process.pid || ownerIsLive(owner, now))
-        writeLedger(pruned)
-        return pruned
+        if (lockIsHeld(lock)) {
+          const pruned = readMountLedger().filter(owner => ownerIsSelf(owner) || ownerIsLive(owner, now))
+          writeLedger(pruned)
+          return pruned
+        }
       } finally {
-        releaseLock(fd)
+        releaseLock(lock)
       }
     }
   }
@@ -282,12 +333,28 @@ export function occupancyOf(
 ): SessionOccupancy {
   const owner = owners.get(sessionId)
   if (owner === undefined) return EMPTY
-  if (owner.pid === process.pid) return { kind: 'mine' }
+  if (ownerIsSelf(owner)) return { kind: 'mine' }
   return { kind: 'occupied', pid: owner.pid, heartbeatAt: owner.heartbeatAt }
 }
 
+/**
+ * A held lock: the file descriptor, the path, and the unique token written into
+ * the lock file.
+ *
+ * The token is what makes a reclaimed lock safe. A writer that pauses for
+ * longer than {@link STALE_LOCK_MS} has its lock removed by a peer, and if it
+ * then wrote or released blindly it would clobber the peer's work — including
+ * deleting the PEER's lock on the way out. So every holder re-reads the file it
+ * is about to replace and abandons the mutation when the token is not its own.
+ */
+interface HeldLock {
+  readonly fd: number
+  readonly path: string
+  readonly token: string
+}
+
 /** Take the short cross-process lock, or null when another writer holds it. */
-function acquireLock(): number | null {
+function acquireLock(): HeldLock | null {
   try {
     mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 })
   } catch {
@@ -308,9 +375,12 @@ function acquireLock(): number | null {
       }
       continue
     }
+    const token = `${PROCESS_INSTANCE}:${randomBytes(6).toString('hex')}`
     try {
-      writeFileSync(fd, `${process.pid}\n`, 'utf8')
-      return fd
+      // `writeSync` on the descriptor (not `writeFileSync`) so the token lands
+      // in the file this fd owns, and flush before anyone can read it.
+      writeSync(fd, `${token}\n`)
+      return { fd, path: lockPath, token }
     } catch {
       try {
         closeSync(fd)
@@ -328,15 +398,36 @@ function acquireLock(): number | null {
   return null
 }
 
-/** Release the lock taken by {@link acquireLock}. */
-function releaseLock(fd: number): void {
+/**
+ * Whether this holder's lock is still the one on disk. False means the lock was
+ * reclaimed as stale (or replaced), so the holder must NOT write and must NOT
+ * delete the file — it belongs to somebody else now.
+ */
+function lockIsHeld(lock: HeldLock): boolean {
   try {
-    closeSync(fd)
+    const fd = openSync(lock.path, 'r')
+    try {
+      const buffer = Buffer.alloc(256)
+      const read = readSync(fd, buffer, 0, buffer.length, 0)
+      return buffer.subarray(0, read).toString('utf8').trim() === lock.token
+    } finally {
+      closeSync(fd)
+    }
+  } catch {
+    return false
+  }
+}
+
+/** Release the lock taken by {@link acquireLock}, if it is still ours. */
+function releaseLock(lock: HeldLock): void {
+  try {
+    closeSync(lock.fd)
   } catch {
     // Removing the name below is what actually frees the lock.
   }
+  if (!lockIsHeld(lock)) return
   try {
-    rmSync(join(DATA_DIR, LOCK_FILE), { force: true })
+    rmSync(lock.path, { force: true })
   } catch {
     // A stale lock is reclaimable after STALE_LOCK_MS.
   }
@@ -366,7 +457,7 @@ function writeLedger(owners: readonly SessionMountOwner[] | undefined, mine?: Se
   try {
     mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 })
     const records = owners ?? [
-      ...readMountLedger().filter(owner => owner.pid !== process.pid),
+      ...readMountLedger().filter(owner => !ownerIsSelf(owner)),
       ...(mine === undefined ? [] : [mine]),
     ]
     writeFileSync(
@@ -418,11 +509,16 @@ export function publishMounts(sessionIds: Iterable<string>): boolean {
   }
   if (ownStartedAt === undefined) ownStartedAt = now
 
-  const fd = acquireLock()
-  if (fd === null) return false
+  const lock = acquireLock()
+  if (lock === null) return false
   try {
+    // A lock reclaimed as stale belongs to somebody else now: this process's
+    // snapshot is older than theirs, so it must not be committed over it.
+    if (!lockIsHeld(lock)) return false
     const mine: SessionMountOwner = {
       pid: process.pid,
+      host: HOST_IDENTITY,
+      instance: PROCESS_INSTANCE,
       heartbeatAt: now,
       startedAt: ownStartedAt,
       sessionIds: [...ownSessionIds],
@@ -431,7 +527,7 @@ export function publishMounts(sessionIds: Iterable<string>): boolean {
     // file holds NOW: peers that published since our last read survive.
     return writeLedger(undefined, mine)
   } finally {
-    releaseLock(fd)
+    releaseLock(lock)
   }
 }
 
@@ -454,17 +550,20 @@ export function publishMounts(sessionIds: Iterable<string>): boolean {
  */
 export function claimMount(sessionId: string): MountClaim {
   const now = Date.now()
-  const fd = acquireLock()
-  if (fd === null) {
+  const lock = acquireLock()
+  if (lock === null) {
     // No claim without the lock: an unreadable ledger is a state we cannot
     // prove is safe, and interleaving two writers is the unrecoverable failure.
     return { ok: false, holders: [] }
   }
   try {
+    // Lost the lock (reclaimed as stale): the file on disk is no longer the one
+    // this claim was derived from, so refuse rather than write a stale merge.
+    if (!lockIsHeld(lock)) return { ok: false, holders: [] }
     const records = readMountLedger()
     const holders: number[] = []
     for (const owner of records) {
-      if (owner.pid === process.pid) continue
+      if (ownerIsSelf(owner)) continue
       if (!ownerIsLive(owner, now)) continue
       if (owner.sessionIds.includes(sessionId)) holders.push(owner.pid)
     }
@@ -473,6 +572,8 @@ export function claimMount(sessionId: string): MountClaim {
     if (ownStartedAt === undefined) ownStartedAt = now
     const mine: SessionMountOwner = {
       pid: process.pid,
+      host: HOST_IDENTITY,
+      instance: PROCESS_INSTANCE,
       heartbeatAt: now,
       startedAt: ownStartedAt,
       sessionIds: [...ownSessionIds],
@@ -486,7 +587,7 @@ export function claimMount(sessionId: string): MountClaim {
     }
     return { ok: true }
   } finally {
-    releaseLock(fd)
+    releaseLock(lock)
   }
 }
 
@@ -513,16 +614,17 @@ export function releaseMount(sessionId: string): boolean {
  * @returns True when the ledger was updated.
  */
 export function clearOwnMounts(): boolean {
-  const fd = acquireLock()
-  if (fd === null) return false
+  const lock = acquireLock()
+  if (lock === null) return false
   try {
+    if (!lockIsHeld(lock)) return false
     ownSessionIds.clear()
     ownStartedAt = undefined
     // Splice-free: an undefined `mine` removes our record and leaves every
     // record published since our last read alone.
     return writeLedger(undefined)
   } finally {
-    releaseLock(fd)
+    releaseLock(lock)
   }
 }
 
