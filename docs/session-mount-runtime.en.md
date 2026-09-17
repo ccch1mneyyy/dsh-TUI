@@ -249,17 +249,24 @@ even the session store root differs.
 3. **A claim must never be locked forever.** Every record must be reclaimable by
    either "pid gone" or "heartbeat expired" (both must hold for a claim to
    stand). A state that requires manual unlocking is forbidden.
-4. **The read path must not throw, and must not lose updates.** Missing file,
+4. **Ownership is never decided by pid alone.** A record carries `host` and
+   `instance` and is compared on all three: two machines sharing a home
+   directory hand out the same pid, and pid-only would read their claim as ours.
+5. **Only the holder writes or releases the lock.** Each acquisition writes a
+   random token into the lock file; a holder that lost the lock (reclaimed as
+   stale) must abandon its commit, and a release may delete only its own lock.
+6. **The read path must not throw, and must not lose updates.** Missing file,
    corrupt JSON, wrong version, wrong field types — all read as empty, and the
    next write repairs it; self-healing rewrites must re-read under the lock
    rather than committing a pre-lock snapshot.
-5. **A timer must never block exit.** `.unref()` plus funnel cleanup, both.
-6. **The screen must not disagree with the runtime.** Whether a session can be
+7. **A timer must never block exit.** `.unref()` plus funnel cleanup, both.
+8. **The screen must not disagree with the runtime.** Whether a session can be
    entered is the runtime's decision; the screen only explains the reason one
    step earlier. Both paths share one set of words via
    `src/sessions/resumeFailure.ts`.
-7. **The screen must not assume the registry is complete.** Sessions in an empty
-   registry or an unregistered directory stay visible and resumable, and
-   occupancy is re-read every tick instead of reusing a host render snapshot.
-8. **The focus is one fact.** The session list's cursor is keyed by **sessionId**
-   and every index is derived from it, so render, movement and Enter agree.
+9. **The screen must not assume the registry is complete.** Sessions in an empty
+   registry or an unregistered directory stay visible and resumable, a FAILING
+   registry read must not discard the session listing that already succeeded,
+   and occupancy is re-read every tick instead of reusing a host render snapshot.
+10. **The focus is one fact.** The session list's cursor is keyed by **sessionId**
+    and every index is derived from it, so render, movement and Enter agree.
