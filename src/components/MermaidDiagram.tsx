@@ -2,6 +2,7 @@ import React from 'react'
 import type { Tokens } from 'marked'
 import { Box, Text } from '../ui.js'
 import { useTerminalSize } from '../ink/hooks/use-terminal-size.js'
+import { stringWidth } from '../ink/stringWidth.js'
 import { getTheme } from '../theme.js'
 import { useTheme } from './design-system/ThemeProvider.js'
 import { formatToken } from '../terminal-utils/markdown.js'
@@ -31,6 +32,8 @@ import { t } from '../i18n.js'
 /** Same viewport slack MarkdownTable keeps for gutters and message insets. */
 const SAFETY_MARGIN = 4
 const INDENT = '  '
+/** Column budget the indent takes: display width, not string length. */
+const INDENT_WIDTH = stringWidth(INDENT)
 
 type Props = {
   token: Tokens.Code
@@ -73,7 +76,7 @@ export function MermaidDiagram({ token, highlight, dimColor, forceWidth }: Props
     [enabled, engine, token.text],
   )
 
-  if (art === null || art.width > width - INDENT.length - SAFETY_MARGIN) {
+  if (art === null || art.width > width - INDENT_WIDTH - SAFETY_MARGIN) {
     return (
       <Box flexDirection="column">
         <Text dimColor={dimColor}>{formatToken(token, 0, null, null, highlight).trimEnd()}</Text>

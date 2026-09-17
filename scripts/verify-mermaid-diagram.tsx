@@ -105,7 +105,7 @@ const wide = renderDiagram(FLOWCHART, 100)
 assert.ok(wide.some(line => BOX_DRAWING.test(line)), 'a fitting diagram renders as box art')
 assert.ok(!wide.some(line => line.includes('```')), 'the diagram carries no fence line')
 assert.ok(wide.some(line => line.includes('用户输入')), 'CJK labels survive')
-assert.ok(wide.every(line => line.length <= 100), 'the diagram stays inside the viewport')
+assert.ok(wide.every(line => stringWidth(line) <= 100), 'the diagram stays inside the viewport')
 assert.ok(wide.every(line => line === '' || line.startsWith('  ')), 'art rows carry the code-block indent')
 
 const narrow = renderDiagram(FLOWCHART, 40)
