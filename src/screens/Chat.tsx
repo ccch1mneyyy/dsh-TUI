@@ -1024,8 +1024,10 @@ export function Chat({
   const previewGallery = activePreview === null ? [] : activePreview.peek
     ? promptControllerRef.current?.previewImages?.() ?? [activePreview]
     : overlay.kind === 'image-preview' ? overlay.gallery ?? [activePreview] : []
+  // Peek entries are rebuilt from the prompt every render: match by
+  // attachment id + token title, not facade identity.
   const previewIndex = activePreview?.peek
-    ? previewGallery.findIndex(entry => entry.image === activePreview.image && entry.title === activePreview.title)
+    ? previewGallery.findIndex(entry => entry.image.id === activePreview.image.id && entry.title === activePreview.title)
     : overlay.kind === 'image-preview' ? overlay.index ?? 0 : -1
   const stepPreview = (delta: 1 | -1): void => {
     if (!activePreview?.peek) { dispatchOverlay({ type: 'image-step', delta }); return }
