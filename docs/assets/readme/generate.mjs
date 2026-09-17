@@ -172,19 +172,19 @@ function tile(entry, language) {
   const description = entry[en ? 6 : 5]
   const target = href(entry, language)
   const absolute = target.startsWith('https:') ? target : repository + target
-  return svg(560, 106, title, description, `
+  return svg(480, 96, title, description, `
     <a href="${xml(absolute)}">
-      <rect class="tile" x="1" y="4" width="558" height="98" rx="6" fill="#111519" stroke="#303741"/>
-      ${icon(entry[1], 22, 26, entry[7], 25)}
-      ${text(65, 42, title, 22, '#edf1f6', 'font-weight="600"')}
-      ${text(65, 75, description, 16, '#aeb8c6')}
-      ${icon('ArrowUpRight', 514, 25, entry[7], 22)}
+      <rect class="tile" x="1" y="4" width="478" height="88" rx="6" fill="#111519" stroke="#303741"/>
+      ${icon(entry[1], 20, 21, entry[7], 24)}
+      ${text(58, 38, title, 21, '#edf1f6', 'font-weight="600"')}
+      ${text(58, 68, description, 16, '#aeb8c6')}
+      ${icon('ArrowUpRight', 434, 20, entry[7], 22)}
     </a>`)
 }
 
 function navigation(language) {
   const links = docs.map(entry =>
-    `  <a href="${href(entry, language)}"><img src="docs/assets/readme/nav-${entry[0]}-${language}.svg" width="440" alt="${entry[language === 'en' ? 4 : 3]}"></a>`)
+    `  <a href="${href(entry, language)}"><img src="docs/assets/readme/nav-${entry[0]}-${language}.svg" width="390" alt="${entry[language === 'en' ? 4 : 3]}"></a>`)
   return `<p align="center">\n${links.join('\n')}\n</p>`
 }
 
