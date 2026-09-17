@@ -72,21 +72,18 @@
 
 ## 核心能力
 
-| 能力域 | 核心能力 | 关键入口与行为 |
-| --- | --- | --- |
-| 对话与工具 | 流式 Markdown、结构化工具卡、命令与文件补全、`@` 文件引用、多主题与实时状态 | 工具卡支持折叠/展开；状态栏显示工作状态、TPS、缓存、推理等级、token、Git 与会话信息 |
-| 会话工作流 | 会话恢复、总览、后台化、分支、压缩、导出、模型热切换 | `/resume`、`/agentview`、`/new`、`/workspace`、`/compact`、`/export`、`/btw` |
-| 编辑与导航 | Vim 输入、鼠标选区、全屏草稿编辑、双击 Esc 回溯、全历史时间轴 | `/vim`、`Ctrl+Shift+E`、`Ctrl+Enter`、`Ctrl+O`；折叠窗口外的历史轮次仍可直接跳转 |
-| 图片与附件 | PNG/JPEG/WebP/GIF 持久附件，Kitty/Sixel 内嵌缩略图，统一大图预览 | 支持适应窗口、100% 与 200%/400%/800% 缩放、平移、前后切图和打开原图；协议或解码失败时保留同尺寸文字回退 |
-| DSH 原生能力 | Agent preset、技能、MCP、目标、待办、subagent 与 `ask_user_question` | 全部通过 DSH 现有服务和 registry 接入；dsh-TUI 不复制 Agent、模型、工具或持久化域逻辑 |
-| 长会话性能 | 事件投影、差分输出、消息虚拟化、分帧绘制、全局 LRU 与有界缓存 | 图片读取/解码最多两路并发；不可见图像停止编码，队列与帧传输均有容量限制 |
-| 扩展与集成 | 浏览器交互、computer use、插件接缝、VS Code companion | 通过生态插件扩展；VS Code 支持多会话、历史与指定会话恢复 |
-| 动态界面 | 三组鲸鱼开场、欢迎期点击/闲置动画、`moon8` 工作状态动画 | 首个 Agent 任务开始后鲸鱼定格为标准帧，避免持续渲染开销 |
+<table>
+  <thead><tr><th width="112" align="left">能力</th><th align="left">亮点</th></tr></thead>
+  <tbody>
+    <tr><td><strong>对话工具</strong></td><td>流式回复、可折叠工具卡、文件引用与实时状态。</td></tr>
+    <tr><td><strong>会话管理</strong></td><td>恢复、分支、后台任务、压缩与导出；随时切换模型。</td></tr>
+    <tr><td><strong>编辑导航</strong></td><td>Vim 输入、全屏草稿、鼠标选区与历史回溯。</td></tr>
+    <tr><td><strong>视觉体验</strong></td><td>图片预览与缩放、多主题、欢迎动画。</td></tr>
+    <tr><td><strong>生态扩展</strong></td><td>接入 DSH 技能、MCP、子代理及 VS Code。</td></tr>
+  </tbody>
+</table>
 
-终端图片协议默认自动探测 Kitty，其次使用 DA1 声明的 Sixel；可将
-`DSH_TUI_IMAGE_PROTOCOL` 设置为 `auto`、`kitty`、`sixel` 或 `none`。完整行为、资源边界与
-权限模型见[架构与限制](docs/architecture.md)，快捷键和命令见[交互与命令](docs/interaction.md)。
-
+[交互与命令](docs/interaction.md) · [架构与限制](docs/architecture.md)
 
 ## 快速开始
 
@@ -190,17 +187,17 @@ TUI 启动失败时运行。子命令属于 npm 安装的启动器，仓库根�
 ## 权限与安全边界
 
 > [!WARNING]
-> **Windows 默认权限较高**
->
-> `danger-full-access` · 审批策略 `never`。工具可不经逐次确认访问文件与 Shell；处理敏感凭证或不可信仓库前，请先检查并收紧 profile 配置。
+> **Windows 默认高权限：** `danger-full-access`，审批 `never`。文件与 Shell 操作不逐次确认；处理敏感或不可信内容前，请收紧 profile。
 
-| 边界 | 实际行为 |
-| --- | --- |
-| **执行策略** | 沿用当前 DSH profile 的文件、Shell、沙箱和审批策略；TUI 不提供独立沙箱。 |
-| **权限切换** | 使用 `/permission` 或 `Shift+Tab` 选择可用预设；预设由 DSH registry 提供，`custom` 仅表示当前状态。 |
-| **状态确认** | 优先调用官方权限命令，必要时走同一服务的官方写路径；以真实事件或读回结果确认，不伪造切换成功。 |
-| **异常处理** | 服务缺失时保留旧版三项兼容名册；服务存在但异常时标记为不可用。没有可用写路径时明确报错。 |
-| **计划模式** | 退出时先恢复进入前的权限状态；原预设仍存在时，再恢复其身份。 |
+<table>
+  <thead><tr><th width="112" align="left">边界</th><th align="left">规则</th></tr></thead>
+  <tbody>
+    <tr><td><strong>执行策略</strong></td><td>沿用 DSH profile 的沙箱与审批策略；TUI 不另设沙箱。</td></tr>
+    <tr><td><strong>权限切换</strong></td><td><code>/permission</code> 或 <code>Shift+Tab</code> 选择 DSH 提供的预设。</td></tr>
+    <tr><td><strong>状态校验</strong></td><td>以真实事件或读回确认；服务异常或无写路径时明确报错。</td></tr>
+    <tr><td><strong>计划退出</strong></td><td>恢复进入前的权限；原预设仍可用时恢复其身份。</td></tr>
+  </tbody>
+</table>
 
 [查看完整权限规则与已知限制](docs/architecture.md#权限与安全边界)
 

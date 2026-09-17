@@ -61,22 +61,18 @@ the interface, and removing it leaves no core modifications behind.
 
 ## Core capabilities
 
-| Area | Core capability | Entry points and behavior |
-| --- | --- | --- |
-| Conversation and tools | Streaming Markdown, structured tool cards, command/file completion, `@` references, themes, and live status | Tool cards fold and expand; the status line exposes activity, TPS, cache, effort, tokens, Git, and session data |
-| Session workflow | Resume, overview, backgrounding, forks, compaction, export, and model switching | `/resume`, `/agentview`, `/new`, `/workspace`, `/compact`, `/export`, and `/btw` |
-| Editing and navigation | Vim input, mouse selection, fullscreen drafts, double-Esc rewind, and a full-history turn rail | `/vim`, `Ctrl+Shift+E`, `Ctrl+Enter`, and `Ctrl+O`; folded turns remain directly reachable |
-| Images and attachments | Durable PNG/JPEG/WebP/GIF blocks, Kitty/Sixel thumbnails, and one shared image viewer | Fit, 100%, 200%/400%/800% zoom, pan, previous/next, and Open original; protocol or decode failures preserve a same-size text fallback |
-| Native DSH services | Agent presets, skills, MCP, goals, todos, subagents, and `ask_user_question` | Connected through existing DSH services and registries; dsh-TUI does not duplicate agent, model, tool, or persistence domains |
-| Long-session performance | Event projection, differential output, message virtualization, framed painting, global LRUs, and bounded caches | Attachment reads/decodes use two slots; invisible images stop encoding and queues/frame transfers remain bounded |
-| Extensions and integrations | Browser interaction, computer use, plugin seams, and the VS Code companion | Ecosystem plugins extend the surface; VS Code adds multiple sessions, history, and targeted resume |
-| Motion system | Three whale intros, welcome click/idle motion, and the `moon8` activity animation | The whale freezes on its standard frame after the first agent task, eliminating ongoing animation cost |
+<table>
+  <thead><tr><th width="112" align="left">Area</th><th align="left">Highlights</th></tr></thead>
+  <tbody>
+    <tr><td><strong>Chat</strong></td><td>Streaming replies, folding tool cards, file references and live status.</td></tr>
+    <tr><td><strong>Sessions</strong></td><td>Resume, fork, background, compact and export; switch models.</td></tr>
+    <tr><td><strong>Editing</strong></td><td>Vim input, fullscreen drafts, mouse selection and history rewind.</td></tr>
+    <tr><td><strong>Visuals</strong></td><td>Image preview and zoom, themes and welcome animations.</td></tr>
+    <tr><td><strong>Extensions</strong></td><td>DSH skills, MCP, subagents and VS Code integration.</td></tr>
+  </tbody>
+</table>
 
-Terminal image detection prefers Kitty, then Sixel advertised by DA1. Set
-`DSH_TUI_IMAGE_PROTOCOL` to `auto`, `kitty`, `sixel`, or `none`. See
-[Architecture and limitations](docs/architecture.en.md) for resource and permission boundaries,
-and [Interaction and commands](docs/interaction.en.md) for the complete command surface.
-
+[Interaction and commands](docs/interaction.en.md) · [Architecture and limits](docs/architecture.en.md)
 
 ## Quick Start
 
@@ -475,17 +471,17 @@ responsible for their maintenance and security.
 ## Permissions and Security Boundary
 
 > [!WARNING]
-> **Elevated permissions by default on Windows**
->
-> `danger-full-access` · approval policy `never`. Tools can access files and the shell without per-action approval. Inspect and tighten the profile before working with sensitive credentials or untrusted repositories.
+> **Windows defaults to high privilege:** `danger-full-access`, approval `never`. File and shell actions need no per-action approval. Tighten the profile before handling sensitive or untrusted content.
 
-| Boundary | Actual behavior |
-| --- | --- |
-| **Execution policy** | Uses the active DSH profile's filesystem, shell, sandbox and approval policies. The TUI does not provide a separate sandbox. |
-| **Permission selection** | Choose available presets with `/permission` or `Shift+Tab`. DSH's registry supplies the presets; `custom` is a current-state label only. |
-| **State confirmation** | Uses the official permission command or the same service's official write path. Confirms real events or readback, never a fabricated success state. |
-| **Unavailable services** | A missing service retains the legacy three-entry roster; an unhealthy mounted service is unavailable. Missing write paths produce an explicit error. |
-| **Plan mode** | Restores pre-plan permission state first, then the original preset identity while that preset remains available. |
+<table>
+  <thead><tr><th width="112" align="left">Boundary</th><th align="left">Rule</th></tr></thead>
+  <tbody>
+    <tr><td><strong>Policy</strong></td><td>Uses DSH's sandbox and approval policies; no separate TUI sandbox.</td></tr>
+    <tr><td><strong>Presets</strong></td><td>Select DSH presets with <code>/permission</code> or <code>Shift+Tab</code>.</td></tr>
+    <tr><td><strong>Checks</strong></td><td>Confirms events or readback; unhealthy services or missing write paths report errors.</td></tr>
+    <tr><td><strong>Plan exit</strong></td><td>Restores prior permissions and the original preset when still available.</td></tr>
+  </tbody>
+</table>
 
 [Full permission rules and known limitations](docs/architecture.en.md#permissions-and-security-boundary)
 
