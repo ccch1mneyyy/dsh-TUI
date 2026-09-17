@@ -67,6 +67,13 @@ the interface, and removing it leaves no core modifications behind.
   before restarting. Disabled previews keep text
   metadata and skip preview decoding; sending images to the model is unaffected.
   `DSH_TUI_DISABLE_TERMINAL_IMAGES=1` always forces previews off.
+  ```` ```mermaid ```` fences in replies render as Unicode box-drawing diagrams
+  (flowchart / sequence / state / class / ER / pie / mindmap / timeline /
+  gitGraph), laid out in-process with no browser or image protocol, and take
+  shape progressively while streaming; a diagram wider than the terminal or of
+  an unsupported type keeps the fenced source with a note of the columns it
+  needs. On by default; turn it off in `/settings → Mermaid diagrams` or with
+  `mermaidDiagrams: false` — applies immediately.
   Windows Terminal with Sixel support displays embedded transcript thumbnails
   and the fullscreen preview card. Non-fullscreen inline mode stays text-only.
   Sixel uses a bounded 256-color adaptive palette and background-composited

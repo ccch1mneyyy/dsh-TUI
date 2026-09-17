@@ -121,6 +121,13 @@ export interface Config {
    *  a ~30fps reveal instead of jumping per provider burst — bursty or
    *  one-shot deliveries read as an even flow. On by default. */
   smoothStreaming?: boolean
+  /** Mermaid diagrams (settings `dsh-tui.mermaidDiagrams`): ```mermaid
+   *  fences in replies render as Unicode box-drawing art — flowcharts,
+   *  sequence/state/class/ER diagrams, pie, mindmap, timeline, gitGraph —
+   *  laid out in-process, no browser or image protocol. A diagram wider
+   *  than the viewport or of an unsupported type keeps the fenced source.
+   *  On by default; off always shows the source. */
+  mermaidDiagrams?: boolean
   /** Status-footer field visibility and compact presentation preferences. */
   statusBar?: Partial<StatusBarConfig>
   /** Built-in action-shortcut overrides (`paste: 'alt+v'`), keyed by action
@@ -169,6 +176,7 @@ export const Config: Schema<Config> = Schema.object({
   promptSessionLabel: Schema.boolean().default(false),
   expandEditor: Schema.boolean().default(true),
   smoothStreaming: Schema.boolean().default(true),
+  mermaidDiagrams: Schema.boolean().default(true),
   statusBar: Schema.object({
     compact: Schema.boolean().default(DEFAULT_STATUS_BAR.compact),
     model: Schema.boolean().default(DEFAULT_STATUS_BAR.model),

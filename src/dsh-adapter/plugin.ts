@@ -36,7 +36,7 @@ import { clearResumeTarget, resumeTargetFromArgv, writeResumeTarget } from '../s
 import { resolveSessionCwd } from '../utils/workspaceRoot.js'
 import { beginRestartAttempt, checkForTuiUpdate, installedTuiVersion, isBootDeadlockTarget, isStandaloneRuntime, isVersionNewer, logRestartEvent, resolveDshProfileName, resolveTuiUpdateTarget, restartTui, updateTuiAndRestart, writeHandoffNotice } from '../update.js'
 import { getLang, isLang, resolveStartupLang, setLang, t, writeLangPref } from '../i18n.js'
-import { DEFAULT_PAGE_MARGIN, DEFAULT_STATUS_BAR, applyPageMargin, isPageMarginMode, normalizePageMargin, normalizeScrollGutter, normalizeStatusBar, normalizeToolBackground, parsePageMarginSpec, type PageMarginSetting, type ScrollGutterMode, type StatusBarConfig, type ToolBackground } from '../tuiDisplayPrefs.js'
+import { DEFAULT_PAGE_MARGIN, DEFAULT_STATUS_BAR, applyMermaidDiagrams, applyPageMargin, isPageMarginMode, normalizePageMargin, normalizeScrollGutter, normalizeStatusBar, normalizeToolBackground, parsePageMarginSpec, type PageMarginSetting, type ScrollGutterMode, type StatusBarConfig, type ToolBackground } from '../tuiDisplayPrefs.js'
 import {
   draftComboConflicts,
   effectiveComboString,
@@ -554,8 +554,11 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   // Root page-margin store: the PageMargin inset box sits ABOVE Chat, so
   // the channel version bump (which re-renders everything below Chat)
   // cannot drive it. Seed the store from config before the tree mounts;
-  // applyDisplay below mirrors every settings change into it live.
+  // applyDisplay below mirrors every settings change into it live. The
+  // mermaid switch rides the same kind of store (Markdown is memoized by
+  // content, so no prop reaches the diagram component).
   applyPageMargin(config.pageMargin)
+  applyMermaidDiagrams(config.mermaidDiagrams)
   // Plugin toasts ride the channel's own notification surface: the runtime
   // already sanitized/rate-limited the delivery, the sink only forwards.
   // Without the extensions row (tuiToast absent) plugin toasts are dropped
@@ -632,6 +635,8 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
         expandEditor: Schema.boolean(),
         // Same no-default rule: applyDisplay resolves `?? config.smoothStreaming ?? true`.
         smoothStreaming: Schema.boolean(),
+        // Same no-default rule: applyDisplay resolves `?? config.mermaidDiagrams ?? true`.
+        mermaidDiagrams: Schema.boolean(),
         // No default on purpose: unset keeps the boot chain decisive
         // (applyEffortDefault hands `undefined` to channel.setDefaultEffort,
         // which resolves cordis.yml `effort` → effort.json → adapter default).
@@ -698,6 +703,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
       promptSessionLabel?: boolean
       expandEditor?: boolean
       smoothStreaming?: boolean
+      mermaidDiagrams?: boolean
       statusBar?: Partial<StatusBarConfig>
       shortcuts?: Partial<Record<ShortcutActionId, string>>
     }
@@ -752,6 +758,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
       channel.setPromptSessionLabel(value.promptSessionLabel ?? config.promptSessionLabel ?? false)
       channel.setExpandEditor(value.expandEditor ?? config.expandEditor ?? true)
       channel.setSmoothStreaming(value.smoothStreaming ?? config.smoothStreaming ?? true)
+      applyMermaidDiagrams(value.mermaidDiagrams ?? config.mermaidDiagrams)
       channel.setStatusBar(normalizeStatusBar(value.statusBar ?? config.statusBar))
     }
     // Shortcut overrides resolve per action: settings user layer wins over
@@ -1126,6 +1133,18 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
           format(value: unknown): string {
             // Unset in settings.yaml: the effective default is on.
             return String(typeof value === 'boolean' ? value : config.smoothStreaming !== false)
+          },
+        },
+        {
+          path: ['mermaidDiagrams'],
+          label: 'Mermaid diagrams',
+          descriptions: { zh: 'Mermaid 图表' },
+          hint: 'Render ```mermaid fences in replies as box-drawing diagrams (flowchart, sequence, state, class, ER, pie, mindmap, timeline, gitGraph). Diagrams wider than the terminal, or of an unsupported type, keep the fenced source. Applies immediately. On by default.',
+          hintDescriptions: { zh: '把回复中的 ```mermaid 代码块画成字符图（flowchart、sequence、state、class、ER、pie、mindmap、timeline、gitGraph）。比终端宽或类型不支持的图保留源码。立即生效。默认开启。' },
+          kind: 'boolean',
+          format(value: unknown): string {
+            // Unset in settings.yaml: the effective default is on.
+            return String(typeof value === 'boolean' ? value : config.mermaidDiagrams !== false)
           },
         },
         {

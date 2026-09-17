@@ -452,6 +452,7 @@ dsh-tui 自身区块写入 settings.yaml 用户层，多数设置实时生效；
 | effortDefault | 默认推理强度：auto / off / low / high / max。新会话的起始档位（模型提供该档时当前会话下一请求同样生效，否则静默回落模型默认）；优先级 settings 用户层 > cordis `effort` > 上次 `/effort`（effort.json）> 模型默认 |
 | smoothStreaming | 流式平滑输出（默认开）：实时回复/展开思考/工具卡正文按 ~30fps 匀速揭示，突发送达不再跳变，一次性到达的非流式回复也平滑打出；回放/历史始终完整直出 |
 | toolBackground | 工具卡背景强调：none / subtle / strong |
+| mermaidDiagrams | Mermaid 图表（默认开）：回复中的 ```` ```mermaid ```` 代码块画成字符图，流式期间逐步成形；比终端宽或类型不支持的图保留源码并注明所需列数。立即生效 |
 | statusBar.* | 上表全部状态栏开关（compact/model/thinking/cwd/contextUsage/cache/tokens/cost/tps/gitBranch/sessionTitle/sessionId/mode/contextBar/activity/trajectory；statusBar.sessionId 是底栏显示开关，与 cordis 的启动 sessionId 无关） |
 
 未声明 TUI 区块的命名空间以只读形式列出，需手工编辑 `~/.dsh/settings.yaml`。
