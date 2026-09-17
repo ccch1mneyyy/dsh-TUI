@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/assets/logo.svg" alt="dsh-TUI - DeepSeek Harness terminal interface" width="560">
+  <img src="docs/assets/logo.svg" alt="dsh-TUI - DeepSeek Harness terminal interface" width="480">
 </p>
 
 <p align="center">
@@ -11,31 +11,13 @@
   <a href="https://github.com/ccch1mneyyy/dsh-TUI/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/ccch1mneyyy/dsh-TUI/actions/workflows/ci.yml/badge.svg"></a>
   <a href="LICENSE"><img alt="MIT License" src="https://img.shields.io/badge/license-MIT-263146?style=flat-square"></a>
   <img alt="Public beta" src="https://img.shields.io/badge/status-public%20beta-7da1de?style=flat-square">
-  <a href="https://github.com/ccch1mneyyy/dsh-TUI/stargazers"><img alt="GitHub stars" src="https://img.shields.io/github/stars/ccch1mneyyy/dsh-TUI?style=flat-square&color=4b6fff"></a>
-  <a href="https://www.npmjs.com/package/@deepseek-harness-tui/dsh-tui"><img alt="npm downloads" src="https://img.shields.io/npm/dm/@deepseek-harness-tui/dsh-tui?style=flat-square&color=4b6fff"></a>
-</p>
-
-<p align="center">
-  <a href="https://trendshift.io/repositories/146168" title="GitHub Trending Daily #7 · TypeScript"><img alt="Trendshift" src="https://trendshift.io/api/badge/trendshift/repositories/146168/daily?language=TypeScript"></a>
 </p>
 
 # dsh-TUI
 
-`dsh-TUI` is an interactive terminal UI for DeepSeek Harness. It is mounted as
-a Cordis plugin and provides conversation, tool, session, and fullscreen
-terminal views while continuing to use the
-official DSH agent, model, tool, session, and persistence services.
+**An interactive terminal workspace for DeepSeek Harness.** Chat, use tools and manage sessions in one terminal.
 
-The project does not patch DeepSeek Harness core. Installing the plugin enables
-the interface, and removing it leaves no core modifications behind.
-
-> Status: public beta. It is suitable for daily use and extension work. Read
-> [Architecture and limitations](docs/architecture.en.md) before relying on its
-> permission model or terminal-specific behavior.
-
-<p align="center">
-  <a href="https://dshfind.com/en/plugins/ccch1mneyyy/dsh-TUI"><img src="https://dshfind.com/api/card/ccch1mneyyy/dsh-TUI?lang=en" alt="dsh-TUI on dshfind"></a>
-</p>
+Mounted as a plugin, without patching Harness core. Uninstalling leaves no core changes.
 
 ## Preview
 
@@ -61,37 +43,47 @@ the interface, and removing it leaves no core modifications behind.
 
 ## Core capabilities
 
-| Area | Core capability | Entry points and behavior |
-| --- | --- | --- |
-| Conversation and tools | Streaming Markdown, structured tool cards, command/file completion, `@` references, themes, and live status | Tool cards fold and expand; the status line exposes activity, TPS, cache, effort, tokens, Git, and session data |
-| Session workflow | Resume, overview, backgrounding, forks, compaction, export, and model switching | `/resume`, `/agentview`, `/new`, `/workspace`, `/compact`, `/export`, and `/btw` |
-| Editing and navigation | Vim input, mouse selection, fullscreen drafts, double-Esc rewind, and a full-history turn rail | `/vim`, `Ctrl+Shift+E`, `Ctrl+Enter`, and `Ctrl+O`; folded turns remain directly reachable |
-| Images and attachments | Durable PNG/JPEG/WebP/GIF blocks, Kitty/Sixel thumbnails, and one shared image viewer | Fit, 100%, 200%/400%/800% zoom, pan, previous/next, and Open original; protocol or decode failures preserve a same-size text fallback |
-| Native DSH services | Agent presets, skills, MCP, goals, todos, subagents, and `ask_user_question` | Connected through existing DSH services and registries; dsh-TUI does not duplicate agent, model, tool, or persistence domains |
-| Long-session performance | Event projection, differential output, message virtualization, framed painting, global LRUs, and bounded caches | Attachment reads/decodes use two slots; invisible images stop encoding and queues/frame transfers remain bounded |
-| Extensions and integrations | Browser interaction, computer use, plugin seams, and the VS Code companion | Ecosystem plugins extend the surface; VS Code adds multiple sessions, history, and targeted resume |
-| Motion system | Three whale intros, welcome click/idle motion, and the `moon8` activity animation | The whale freezes on its standard frame after the first agent task, eliminating ongoing animation cost |
+<table>
+  <thead><tr><th width="112" align="left">Area</th><th align="left">Highlights</th></tr></thead>
+  <tbody>
+    <tr><td><strong>Chat</strong></td><td>Streaming replies, folding tool cards, file references and live status.</td></tr>
+    <tr><td><strong>Sessions</strong></td><td>Resume, fork, background, compact and export; switch models.</td></tr>
+    <tr><td><strong>Editing</strong></td><td>Vim input, fullscreen drafts, mouse selection and history rewind.</td></tr>
+    <tr><td><strong>Visuals</strong></td><td>Image preview and zoom, themes and welcome animations.</td></tr>
+    <tr><td><strong>Extensions</strong></td><td>DSH skills, MCP, subagents and VS Code integration.</td></tr>
+  </tbody>
+</table>
 
-Terminal image detection prefers Kitty, then Sixel advertised by DA1. Set
-`DSH_TUI_IMAGE_PROTOCOL` to `auto`, `kitty`, `sixel`, or `none`. See
-[Architecture and limitations](docs/architecture.en.md) for resource and permission boundaries,
-and [Interaction and commands](docs/interaction.en.md) for the complete command surface.
-
+[Interaction and commands](docs/interaction.en.md) · [Architecture and limits](docs/architecture.en.md)
 
 ## Quick Start
 
-Prerequisites: an interactive terminal TTY, the official `dsh` CLI, and
-`pnpm` 10+. Model requests also require `DEEPSEEK_API_KEY`.
+Prepare Node.js, pnpm 10+ and an interactive terminal. Model requests require `DEEPSEEK_API_KEY`.
 
 ```sh
-# 1. Install the CLI and this plugin globally (ships the dsh-tui command)
 npm install -g @deepseek-ai/dsh @deepseek-harness-tui/dsh-tui
-
-# 2. Start it (first run auto-initializes the dsh-tui profile; needs pnpm)
 dsh-tui
-# Both `dsh-tui` and the short `dst` alias start the same TUI.
-dst
 ```
+
+The short alias `dst` starts the same interface. The first run initializes the profile; see [Getting started](docs/getting-started.en.md) for API key setup.
+
+### Updates and diagnostics
+
+Startup checks for updates but never installs them automatically. Use `/update` in a session to upgrade and resume.
+
+| Command | Purpose |
+| --- | --- |
+| `dsh-tui update` | Update the profile without starting the TUI |
+| `dsh-tui doctor` | Check environment, installation and credential setup; no key values |
+| `dsh-tui version` | Show launcher and profile versions |
+| `dsh-tui help` | Show command help |
+
+`dst` accepts the same subcommands. Follow the printed instructions for version mismatches; see [Updating](docs/getting-started.en.md#update-to-the-latest-version).
+
+<details>
+<summary>Installation troubleshooting and advanced reference</summary>
+
+The reference below covers manual setup, shortcuts, configuration, technical limits and source development.
 
 Manual alternative: `dsh plugin --profile dsh-tui add @deepseek-harness-tui/dsh-tui`
 (the repository's `sh install.sh` wraps this step and checks the required
@@ -418,19 +410,16 @@ git-hosted `prepare` scripts by default); install the registry package:
 `dsh plugin --profile dsh-tui add @deepseek-harness-tui/dsh-tui`. Rendering, questionnaire, or tool-card
 changes also require the relevant regression scripts.
 
+</details>
+
 ## Plugin Ecosystem
 
-Want to build a plugin or extension for dsh-TUI? Join the ecosystem:
+Extend the terminal through ecosystem interfaces. Plugins are maintained independently.
 
-- **Interface & compatibility agreement / Plugin development guide**: [Terminal Interactive Ecosystem Plugin Admission and Development Guide](https://github.com/T-Auto/dsh-ecosystem-spec/blob/main/docs/plugin-admission-and-development.md) (admission spec, seams, contracts, verification checklist)
-- **Organization**: [dsh-tui-ecosystem](https://github.com/dsh-tui-ecosystem)
-  (home of community plugins and templates)
-- **Template repository**: [plugin-template](https://github.com/dsh-tui-ecosystem/plugin-template)
-  (start from the template and ship a plugin in minutes)
-- **Reference implementation**: `dsh-working-activity` (live working-status
-  line with dual outlets: TUI prompt slot + `activity/status` session events)
+[Development guide](https://github.com/T-Auto/dsh-ecosystem-spec/blob/main/docs/plugin-admission-and-development.md) · [Plugin template](https://github.com/dsh-tui-ecosystem/plugin-template) · [Organization](https://github.com/dsh-tui-ecosystem)
 
-### Seam stability reference
+<details>
+<summary>Interface stability and migration reference</summary>
 
 An **informal** maturity grading to help plugin authors gauge investment;
 the authoritative status and compatibility agreement live in the
@@ -454,45 +443,52 @@ does not endorse or warrant the functionality, quality, or safety of community
 plugins. Plugin authors keep full ownership of their repositories and are
 responsible for their maintenance and security.
 
+</details>
+
 ## Community
 
-- **Ecosystem organization**: [dsh-tui-ecosystem](https://github.com/dsh-tui-ecosystem) —
-  the home of community plugins, templates, and the curated list. Come ship a
-  plugin, pitch an idea, or just hang out 🐋
-- **Chat groups** (Chinese-language): usage questions, plugin ideas, and
-  feature wishes are all welcome.
-- **Code of conduct**: please read the
-  [Contributor Covenant Code of Conduct](CODE_OF_CONDUCT.en.md) before taking
-  part.
+Join the Chinese-language groups for usage questions, plugin ideas and feature suggestions.
 
-| WeChat group (DSH-Plugins community 3) | QQ group (ID 572549239) |
-| :---: | :---: |
-| <img src="screenshots/wechat-group.jpg" alt="DSH-Plugins community WeChat group 3 QR code" width="200"> | <a href="screenshots/qq-group.jpg"><img src="screenshots/qq-group.jpg" alt="dsh-TUI community QQ group QR code, group 572549239. Open the original image." width="280"></a> |
+**WeChat: DSH-Plugins community 3** · **QQ: 572549239**
 
-> The WeChat QR code expires roughly every 7 days; if it stops working, use
-> the QQ group (572549239) or open an issue to nudge us for a refresh.
+<p align="center">
+  <a href="screenshots/wechat-group.jpg"><img src="screenshots/wechat-group.jpg" alt="WeChat: DSH-Plugins community 3" width="220"></a>
+  <a href="screenshots/qq-group.jpg"><img src="screenshots/qq-group.jpg" alt="QQ: 572549239. Open the original image." width="220"></a>
+</p>
+
+The WeChat QR code expires periodically. Use QQ or open an issue when it expires.
+
+[Code of conduct](CODE_OF_CONDUCT.en.md) · [Related projects](docs/links.md) · [Contributing](docs/contributing.en.md)
+
+<details>
+<summary>Featured by DeepSeek Harness</summary>
+
+The official DeepSeek Harness WeChat account featured this plugin.
+
+<p align="center">
+  <a href="screenshots/wechat-official.png"><img src="screenshots/wechat-official.png" alt="DeepSeek Harness official WeChat feature" width="480"></a>
+</p>
+
+[dshfind directory](https://dshfind.com/en/plugins/ccch1mneyyy/dsh-TUI) · [Trending record](https://trendshift.io/repositories/146168)
+
+</details>
 
 ## Permissions and Security Boundary
 
 > [!WARNING]
-> **Elevated permissions by default on Windows**
->
-> `danger-full-access` · approval policy `never`. Tools can access files and the shell without per-action approval. Inspect and tighten the profile before working with sensitive credentials or untrusted repositories.
+> **Windows defaults to high privilege:** `danger-full-access`, approval `never`. File and shell actions need no per-action approval. Tighten the profile before handling sensitive or untrusted content.
 
-| Boundary | Actual behavior |
-| --- | --- |
-| **Execution policy** | Uses the active DSH profile's filesystem, shell, sandbox and approval policies. The TUI does not provide a separate sandbox. |
-| **Permission selection** | Choose available presets with `/permission` or `Shift+Tab`. DSH's registry supplies the presets; `custom` is a current-state label only. |
-| **State confirmation** | Uses the official permission command or the same service's official write path. Confirms real events or readback, never a fabricated success state. |
-| **Unavailable services** | A missing service retains the legacy three-entry roster; an unhealthy mounted service is unavailable. Missing write paths produce an explicit error. |
-| **Plan mode** | Restores pre-plan permission state first, then the original preset identity while that preset remains available. |
+<table>
+  <thead><tr><th width="112" align="left">Boundary</th><th align="left">Rule</th></tr></thead>
+  <tbody>
+    <tr><td><strong>Policy</strong></td><td>Uses DSH's sandbox and approval policies; no separate TUI sandbox.</td></tr>
+    <tr><td><strong>Presets</strong></td><td>Select DSH presets with <code>/permission</code> or <code>Shift+Tab</code>.</td></tr>
+    <tr><td><strong>Checks</strong></td><td>Confirms events or readback; unhealthy services or missing write paths report errors.</td></tr>
+    <tr><td><strong>Plan exit</strong></td><td>Restores prior permissions and the original preset when still available.</td></tr>
+  </tbody>
+</table>
 
 [Full permission rules and known limitations](docs/architecture.en.md#permissions-and-security-boundary)
-
-## Featured by DeepSeek Harness
-
-The DeepSeek Harness official WeChat account featured this plugin among its
-early user-built extensions. [View the feature screenshot](screenshots/wechat-official.png).
 
 ## Acknowledgments
 
@@ -502,14 +498,12 @@ early user-built extensions. [View the feature screenshot](screenshots/wechat-of
   (the DeepSeek Harness web whale-pet plugin, by [@lhh010](https://github.com/lhh010),
   BSD-3-Clause) — thank you for the art and the inspiration 🐋💜
 
-## Friends' Links
-
-Community, related projects, and companion tools built by friends:
-[see the links page](docs/links.md)
-
-## Trend
+<details>
+<summary>Star History</summary>
 
 [![Star History](https://raw.githubusercontent.com/ccch1mneyyy/dsh-TUI/bot-star-history/assets/star-history/star-history.png)](https://star-history.com/#ccch1mneyyy/dsh-TUI&Date)
+
+</details>
 
 ## License
 
