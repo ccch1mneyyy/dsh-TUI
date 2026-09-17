@@ -41,31 +41,23 @@ the interface, and removing it leaves no core modifications behind.
 
 <picture>
   <source media="(max-width: 640px)" srcset="docs/assets/readme/preview-en-mobile.svg">
-  <img src="docs/assets/readme/preview-en.svg" alt="dsh-TUI live runtime preview: logo header, transcript, thinking preview, tool card, composer, and status line." width="1200">
+  <img src="docs/assets/readme/preview-en.svg" alt="Isolated dsh-TUI capture: welcome, completion, help and typing, with 22-frame pixel animation." width="1200">
 </picture>
-
-This CSS-animated SVG follows the real TUI component hierarchy and starts directly on the GitHub README: `LogoV2` at the top, transcript, thinking and tool rows in the middle, with the composer and status line pinned below. GitHub removes real form controls from README content, so the typing sequence is a runtime presentation rather than an editable terminal.
 
 ## Documentation
 
 <!-- readme-svg-navigation:start -->
 <p align="center">
   <a href="docs/getting-started.en.md"><img src="docs/assets/readme/nav-start-en.svg" width="390" alt="Getting started"></a>
-  <a href="docs/interaction.en.md"><img src="docs/assets/readme/nav-interaction-en.svg" width="390" alt="Interaction & commands"></a>
   <a href="docs/configuration.en.md"><img src="docs/assets/readme/nav-configuration-en.svg" width="390" alt="Configuration"></a>
+  <a href="docs/interaction.en.md"><img src="docs/assets/readme/nav-interaction-en.svg" width="390" alt="Interaction & commands"></a>
   <a href="docs/themes.en.md"><img src="docs/assets/readme/nav-themes-en.svg" width="390" alt="Themes"></a>
   <a href="docs/architecture.en.md"><img src="docs/assets/readme/nav-architecture-en.svg" width="390" alt="Architecture & limits"></a>
   <a href="docs/vscode.en.md"><img src="docs/assets/readme/nav-vscode-en.svg" width="390" alt="VS Code guide"></a>
   <a href="https://github.com/T-Auto/dsh-ecosystem-spec/blob/main/docs/plugin-admission-and-development.md"><img src="docs/assets/readme/nav-plugins-en.svg" width="390" alt="Plugin development"></a>
   <a href="docs/contributing.en.md"><img src="docs/assets/readme/nav-contributing-en.svg" width="390" alt="Contributing"></a>
-  <a href="docs/community-management.en.md"><img src="docs/assets/readme/nav-community-en.svg" width="390" alt="Community management"></a>
-  <a href="docs/roadmap.en.md"><img src="docs/assets/readme/nav-roadmap-en.svg" width="390" alt="Project roadmap"></a>
-  <a href="docs/README.md"><img src="docs/assets/readme/nav-index-en.svg" width="390" alt="All documentation"></a>
-  <a href="docs/links.md"><img src="docs/assets/readme/nav-links-en.svg" width="390" alt="Related projects"></a>
 </p>
 <!-- readme-svg-navigation:end -->
-
-The complete bilingual index is [`docs/README.md`](docs/README.md).
 
 ## Core capabilities
 
@@ -482,33 +474,20 @@ responsible for their maintenance and security.
 
 ## Permissions and Security Boundary
 
-> **Windows security warning:** The Windows profile defaults to `danger-full-access` with approval set to `never`. Tools therefore have unrestricted access; before starting in an environment with sensitive credentials or an untrusted repository, inspect and tighten the profile configuration.
+> [!WARNING]
+> **Elevated permissions by default on Windows**
+>
+> `danger-full-access` · approval policy `never`. Tools can access files and the shell without per-action approval. Inspect and tighten the profile before working with sensitive credentials or untrusted repositories.
 
-`dsh-TUI` does not implement a separate sandbox. It uses the filesystem,
-shell, sandbox, and approval policies of the active DSH profile. Permission
-presets come from the mounted DSH `permissionPresets` registry: third-party
-presets appear automatically in the picker, completion and the `Shift+Tab`
-cycle (excluding `custom`/`status`, canonical presets, duplicate identities
-and unsafe tokens), with the registry's declaration order kept stable across
-refreshes. `custom` is a current-state label only, never a selectable target.
-While the service snapshot is usable, `/permission` is surfaced as a first-class
-local command: switches prefer the official `/permission <preset>` command; when
-the command row never reaches the agent's registry, the TUI falls back to the
-permissionPresets service's own official write path (the same handler the
-command drives — real `permission/preset`/`sandbox/mode`/`approval/policy`
-events, never fabricated by the TUI) and confirms via event/readback; when
-neither path exists it fails loudly instead of silently falling through.
-Exiting plan mode restores the pre-plan atoms first, then returns the durable
-identity to the preset you were on before plan mode (while the registry still
-offers it).
-When the `permissionPresets` service is absent, TUI keeps its legacy three-row
-compatibility roster. A mounted but unusable service is marked unavailable and
-fails closed instead of inventing a roster. Inspect
-the profile before starting it around sensitive credentials or an untrusted
-repository.
+| Boundary | Actual behavior |
+| --- | --- |
+| **Execution policy** | Uses the active DSH profile's filesystem, shell, sandbox and approval policies. The TUI does not provide a separate sandbox. |
+| **Permission selection** | Choose available presets with `/permission` or `Shift+Tab`. DSH's registry supplies the presets; `custom` is a current-state label only. |
+| **State confirmation** | Uses the official permission command or the same service's official write path. Confirms real events or readback, never a fabricated success state. |
+| **Unavailable services** | A missing service retains the legacy three-entry roster; an unhealthy mounted service is unavailable. Missing write paths produce an explicit error. |
+| **Plan mode** | Restores pre-plan permission state first, then the original preset identity while that preset remains available. |
 
-See [Permissions and security boundary](docs/architecture.en.md#permissions-and-security-boundary)
-for details.
+[Full permission rules and known limitations](docs/architecture.en.md#permissions-and-security-boundary)
 
 ## Featured by DeepSeek Harness
 

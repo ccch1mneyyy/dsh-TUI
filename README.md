@@ -52,31 +52,23 @@
 
 <picture>
   <source media="(max-width: 640px)" srcset="docs/assets/readme/preview-zh-mobile.svg">
-  <img src="docs/assets/readme/preview-zh.svg" alt="dsh-TUI 实际运行态预览：Logo 头部、消息流、思考预览、工具卡、输入框与状态栏。" width="1200">
+  <img src="docs/assets/readme/preview-zh.svg" alt="dsh-TUI 隔离安装实机采集：欢迎页、命令补全、帮助与输入；22 帧像素动画。" width="1200">
 </picture>
-
-这个 CSS 动画 SVG 按真实 TUI 组件层级重构，会在 GitHub README 原页面自动播放：顶部是 `LogoV2`，中间是消息、思考与工具卡，底部固定输入框和状态栏。GitHub 会清洗 README 中的真实表单控件，因此输入过程属于运行态演示，而不是可编辑终端。
 
 ## 文档索引
 
 <!-- readme-svg-navigation:start -->
 <p align="center">
   <a href="docs/getting-started.md"><img src="docs/assets/readme/nav-start-zh.svg" width="390" alt="安装与快速开始"></a>
-  <a href="docs/interaction.md"><img src="docs/assets/readme/nav-interaction-zh.svg" width="390" alt="交互与命令"></a>
   <a href="docs/configuration.md"><img src="docs/assets/readme/nav-configuration-zh.svg" width="390" alt="配置参考"></a>
+  <a href="docs/interaction.md"><img src="docs/assets/readme/nav-interaction-zh.svg" width="390" alt="交互与命令"></a>
   <a href="docs/themes.md"><img src="docs/assets/readme/nav-themes-zh.svg" width="390" alt="主题系统"></a>
   <a href="docs/architecture.md"><img src="docs/assets/readme/nav-architecture-zh.svg" width="390" alt="架构与限制"></a>
   <a href="docs/vscode.md"><img src="docs/assets/readme/nav-vscode-zh.svg" width="390" alt="VS Code 使用指南"></a>
   <a href="https://github.com/T-Auto/dsh-ecosystem-spec/blob/main/docs/plugin-admission-and-development.md"><img src="docs/assets/readme/nav-plugins-zh.svg" width="390" alt="插件准入与开发"></a>
   <a href="docs/contributing.md"><img src="docs/assets/readme/nav-contributing-zh.svg" width="390" alt="贡献与开发约定"></a>
-  <a href="docs/community-management.md"><img src="docs/assets/readme/nav-community-zh.svg" width="390" alt="社区管理框架"></a>
-  <a href="docs/roadmap.md"><img src="docs/assets/readme/nav-roadmap-zh.svg" width="390" alt="项目路线图"></a>
-  <a href="docs/README.md"><img src="docs/assets/readme/nav-index-zh.svg" width="390" alt="完整文档索引"></a>
-  <a href="docs/links.md"><img src="docs/assets/readme/nav-links-zh.svg" width="390" alt="社区与相关项目"></a>
 </p>
 <!-- readme-svg-navigation:end -->
-
-完整的中英文索引见 [`docs/README.md`](docs/README.md)。
 
 ## 核心能力
 
@@ -197,11 +189,20 @@ TUI 启动失败时运行。子命令属于 npm 安装的启动器，仓库根�
 
 ## 权限与安全边界
 
-> **Windows 安全警告：** Windows profile 默认使用 `danger-full-access`，且 approval 默认是 `never`。这会授予工具不受限制的访问权限；在敏感凭证或不可信仓库环境中启动前，务必先检查并收紧 profile 配置。
+> [!WARNING]
+> **Windows 默认权限较高**
+>
+> `danger-full-access` · 审批策略 `never`。工具可不经逐次确认访问文件与 Shell；处理敏感凭证或不可信仓库前，请先检查并收紧 profile 配置。
 
-`dsh-TUI` 不实现独立沙箱，而是使用当前 DSH profile 的文件、Shell、sandbox 与 approval 策略。权限预设来自 DSH `permissionPresets` registry：服务缺失时使用 legacy 三项兼容名册；服务已挂载但为空、损坏或不一致时标记为 unavailable，TUI fail closed，不伪造名册。可用 registry 按声明顺序提供第三方预设并自动进入补全、picker 与 `Shift+Tab` 循环（排除 `custom`/`status`、canonical 预设、重复 identity 与不安全 token）；首次观察遵循 registry 顺序，后续刷新保留已见 identity 的相对顺序。服务可用时 `/permission` 以本地命令形式常驻菜单：切换优先调用官方 `/permission <preset>` 命令；命令行未暴露给本 agent 时，回退到 permissionPresets 服务自身的官方写路径（与命令 handler 同一实现，写真实 `permission/preset`/`sandbox/mode`/`approval/policy` 事件，绝不由 TUI 伪造），并以事件/读回确认；两条路都不可用时显式提示，绝不静默。计划模式退出先恢复进入前的 atom，再把权限身份还原到你进入前所在的预设（registry 仍提供时）。在包含敏感凭证或不可信仓库的环境中启动前，请先检查 profile 配置。
+| 边界 | 实际行为 |
+| --- | --- |
+| **执行策略** | 沿用当前 DSH profile 的文件、Shell、沙箱和审批策略；TUI 不提供独立沙箱。 |
+| **权限切换** | 使用 `/permission` 或 `Shift+Tab` 选择可用预设；预设由 DSH registry 提供，`custom` 仅表示当前状态。 |
+| **状态确认** | 优先调用官方权限命令，必要时走同一服务的官方写路径；以真实事件或读回结果确认，不伪造切换成功。 |
+| **异常处理** | 服务缺失时保留旧版三项兼容名册；服务存在但异常时标记为不可用。没有可用写路径时明确报错。 |
+| **计划模式** | 退出时先恢复进入前的权限状态；原预设仍存在时，再恢复其身份。 |
 
-详见[权限边界与已知限制](docs/architecture.md#权限与安全边界)。
+[查看完整权限规则与已知限制](docs/architecture.md#权限与安全边界)
 
 ### 致谢
 
