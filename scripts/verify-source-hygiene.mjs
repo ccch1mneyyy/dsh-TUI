@@ -26,8 +26,8 @@ const files = ['src', 'scripts', 'docs'].flatMap(name => collect(resolve(root, n
 files.push(...['README.md', 'README_EN.md', 'AGENTS.md', 'ADAPTER.md', 'package.json'].map(name => resolve(root, name)))
 // Retired env naming is code-only: launcher and config files are scanned
 // as code, while docs may still mention the old names in migration history.
-// (~/.dsh-cc as the *current* harness home is a functional pin in
-// scripts/run.ts and sync-profile.mjs, not a legacy reference.)
+// The harness home now follows the upstream default (~/.dsh), so run.ts and
+// sync-profile.mjs no longer pin the early ~/.dsh-cc directory.
 const codeFiles = ['src', 'scripts'].flatMap(name => collect(resolve(root, name)))
   .filter(path => /\.(?:[cm]?[jt]sx?)$/.test(path))
 codeFiles.push(...['bin/dsh-tui.js', 'dsh-tui.cmd', 'cordis.yml', 'cordis.patch.yml'].map(name => resolve(root, name)))
