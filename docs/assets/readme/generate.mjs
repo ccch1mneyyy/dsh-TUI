@@ -70,8 +70,22 @@ function navigation(language) {
   return `<p align="center">\n${links.join('\n')}\n</p>`
 }
 
+function securityLink(language) {
+  const en = language === 'en'
+  const title = en ? 'Permissions & limits' : '权限规则与已知限制'
+  const target = en ? 'docs/architecture.en.md#permissions-and-security-boundary' : 'docs/architecture.md#权限与安全边界'
+  return svg(288, 44, title, en ? 'Read the full permission rules and limitations' : '查看完整权限规则与已知限制', `
+    <a href="${xml(repository + target)}">
+      <rect class="tile" x="1" y="1" width="286" height="42" rx="6" fill="#111519" stroke="#526174"/>
+      ${icon('BookOpen', 14, 12, '#8bb6fb', 20)}
+      ${text(46, 28, title, 16, '#edf1f6', 'font-weight="600"')}
+      ${icon('ArrowUpRight', 252, 12, '#8bb6fb', 20)}
+    </a>`.trim())
+}
+
 await mkdir(directory, { recursive: true })
 for (const language of ['zh', 'en']) {
+  await writeFile(resolve(directory, `security-link-${language}.svg`), securityLink(language))
   for (const mobile of [false, true]) {
     const recording = JSON.parse(await readFile(resolve(directory, 'runtime', `${language}-${mobile ? 'mobile' : 'desktop'}.json`), 'utf8'))
     await writeFile(resolve(directory, `preview-${language}${mobile ? '-mobile' : ''}.svg`), renderRuntime(withWelcomeCopy(recording)))
@@ -91,4 +105,4 @@ for (const language of ['zh', 'en']) {
   const updated = source.slice(0, first + start.length) + '\n' + navigation(language) + '\n' + source.slice(last)
   if (source !== updated) await writeFile(filename, updated)
 }
-console.log('Generated 4 captured terminal previews and 16 documentation tiles.')
+console.log('Generated 4 captured terminal previews, 16 documentation tiles and 2 security links.')

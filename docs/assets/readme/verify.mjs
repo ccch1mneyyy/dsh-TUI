@@ -16,6 +16,12 @@ for (const language of ['zh', 'en']) {
   const previewHeading = language === 'zh' ? '## 界面预览' : '## Preview'
   const navigationHeading = language === 'zh' ? '## 文档索引' : '## Documentation'
   assert.match(readme.slice(readme.indexOf(previewHeading), readme.indexOf(navigationHeading)), /<\/picture>\s*$/)
+  const securityTarget = language === 'zh' ? 'docs/architecture.md#权限与安全边界' : 'docs/architecture.en.md#permissions-and-security-boundary'
+  assert.ok(readme.includes(`<a href="${securityTarget}"><img src="docs/assets/readme/security-link-${language}.svg"`))
+  const button = await readFile(new URL(`security-link-${language}.svg`, import.meta.url), 'utf8')
+  assert.ok(button.includes('viewBox="0 0 288 44"'))
+  assert.ok(button.includes(securityTarget))
+  assert.ok(!/<(?:script|foreignObject|image|iframe)\b/.test(button))
   for (const variant of ['desktop', 'mobile']) {
     const capture = JSON.parse(await readFile(new URL(`runtime/${language}-${variant}.json`, import.meta.url), 'utf8'))
     const original = JSON.stringify(capture)
