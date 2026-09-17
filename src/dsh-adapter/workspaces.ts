@@ -171,13 +171,44 @@ export async function createRegistryWorkspace(
 export async function removeRegistryWorkspace(
   runtime: TuiWorkspaceRuntime | undefined,
   cwd: string,
+  owner?: object,
 ): Promise<boolean> {
   if (runtime === undefined) return false
   const registry = workspaceRegistry(runtime)
   if (registry === undefined) return false
   const workspace = registry.list().find(candidate => sameCwd(candidate.path, cwd))
   if (workspace === undefined) return false
+  // The durable ledger is host-owned: a plugin may only drop a registration
+  // for a cwd one of ITS OWN providers still vouches for. `owner === undefined`
+  // is the host facade's own call (the sidebar's remove action).
+  if (owner !== undefined && !ownsWorkspace(runtime, owner, cwd)) {
+    throw new Error('workspace is not owned by the calling activation')
+  }
   return registry.delete(workspace.id as never)
+}
+
+/**
+ * Whether a calling activation's own providers still vouch for `cwd`.
+ *
+ * This is the same evidence `renameWorkspace` accepts, and the only ownership
+ * fact the local ledger records 鈥?the registry entry itself carries no creator.
+ * A provider `describe()` that returns a target means the cwd belongs to that
+ * provider's scheme, so the activation behind it is the one entitled to mutate
+ * the registration.
+ * @param runtime - The workspace service.
+ * @param owner - Live activation fiber of the caller.
+ * @param cwd - Directory to test.
+ * @returns True when one of the caller's providers owns `cwd`.
+ */
+function ownsWorkspace(runtime: TuiWorkspaceRuntime, owner: object, cwd: string): boolean {
+  for (const provider of providersFor(workspaceStateFor(runtime), owner)) {
+    try {
+      if (provider.describe(cwd) !== undefined) return true
+    } catch {
+      // A provider that throws on describe vouches for nothing.
+    }
+  }
+  return false
 }
 
 declare module '@deepseek-ai/cordis' {
@@ -307,23 +338,37 @@ export class TuiWorkspaceRuntime extends Service {
   /**
    * Register a directory as a durable workspace without starting a session.
    *
-   * Host-only (the sidebar's "+" action): providers own their own schemes, so
-   * a plugin calling this would mint a local record it does not own.
+   * The sidebar's "+" action reaches this through the host facade. A plugin
+   * may call it too, but only on its own behalf: the registration is a local
+   * ledger entry, not a provider-owned scheme, so the caller discipline here
+   * is the same live-activation check every other mutating method applies.
    */
   async create(path: string, title?: string): Promise<TuiWorkspaceTarget> {
     assertCapabilityShadowPolicy('host.workspaces.create', workspaceStateFor(this).runtime.mode, workspaceStateFor(this).runtime.slices)
+    workspaceCaller(this, 'tuiWorkspaces.create')
     return createWorkspace(this, path, title, undefined)
   }
 
-  /** Drop a workspace registration; the directory and session logs survive. */
+  /**
+   * Drop a workspace registration; the directory and session logs survive.
+   *
+   * Plugin-facing, and therefore bound by the SAME rule as {@link rename}: a
+   * live calling activation is required, and the target must be a cwd one of
+   * that activation's own providers vouches for. Without both, a plugin that
+   * never owned the workspace 鈥?including one whose fiber was already disposed
+   * and whose caller context is a retained handle 鈥?could delete a host
+   * registration. Shadow policy alone is not caller authentication.
+   */
   async remove(cwd: string): Promise<boolean> {
     assertCapabilityShadowPolicy('host.workspaces.remove', workspaceStateFor(this).runtime.mode, workspaceStateFor(this).runtime.slices)
-    return removeRegistryWorkspace(this, cwd)
+    const owner = workspaceCaller(this, 'tuiWorkspaces.remove')
+    return removeRegistryWorkspace(this, cwd, owner)
   }
 
   /** The durable ledger's own listing, in its own order. */
   async listRegistry(): Promise<readonly TuiWorkspaceEntry[]> {
     assertCapabilityShadowPolicy('host.workspaces.list', workspaceStateFor(this).runtime.mode, workspaceStateFor(this).runtime.slices)
+    workspaceCaller(this, 'tuiWorkspaces.listRegistry')
     return listRegistryWorkspaces(this)
   }
 
