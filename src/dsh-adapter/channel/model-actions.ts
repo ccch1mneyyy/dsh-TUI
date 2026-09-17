@@ -20,7 +20,7 @@ type Binding = ReturnType<typeof createChannelBinding>
  */
 export function createModelActions(
   ctx: Context,
-  state: Pick<ChannelState, 'provider' | 'model' | 'reasoningEffort' | 'effortLevels' | 'agentPreset' | 'working' | 'emit'>,
+  state: Pick<ChannelState, 'provider' | 'model' | 'reasoningEffort' | 'effortLevels' | 'agentPreset' | 'working' | 'contextWindow' | 'emit'>,
   deps: {
     owner: Pick<ChannelOwner, 'current'>
     binding: Pick<Binding, 'capture' | 'isCurrent'>
@@ -28,12 +28,15 @@ export function createModelActions(
     initialEffort?: string
     agent(): Agent
     notify: ChannelState['notify']
+    /** Re-check the context-low warning after a refreshed route metadata
+     * answer carries a newer contextWindow than the session started with. */
+    checkContextWarning(): void
   },
 ) {
   const { owner, selection, notify } = deps
   const llmRuntime = ctx.get('llm') as
     | {
-      resolveModelInfo(provider: string, model: string): Promise<{ reasoning?: { efforts: ReadonlyArray<{ id: string; name: string; description?: string }>; defaultEffort?: string } }>
+      resolveModelInfo(provider: string, model: string): Promise<{ context?: { contextWindow: number }; reasoning?: { efforts: ReadonlyArray<{ id: string; name: string; description?: string }>; defaultEffort?: string } }>
       listProviders(): readonly { id: string; name: string }[]
       listModels(provider: string): Promise<readonly LlmModelInfo[]>
     }
@@ -57,10 +60,22 @@ export function createModelActions(
   const effortCurrent = (capture: EffortCapture): boolean =>
     owner.current() && deps.binding.isCurrent(capture.binding) &&
     state.provider === capture.provider && state.model === capture.model && effortOperation === capture.operation
+  /** Route-level metadata shared by every resolveModelInfo consumer. The
+   * context window follows the route, not the binding: a resume rebuilds
+   * the binding (effortCurrent goes false) while the capacity answer for
+   * the same provider/model is still the live truth, so this runs before
+   * any effort freshness gate. */
+  const applyRouteMetadata = (capture: EffortCapture, info: { context?: { contextWindow: number } }): void => {
+    if (state.provider === capture.provider && state.model === capture.model && info.context !== undefined) {
+      state.contextWindow = info.context.contextWindow
+      deps.checkContextWarning()
+    }
+  }
   const resolveEfforts = async (capture: EffortCapture): Promise<EffortResult | 'unavailable' | 'error' | 'stale'> => {
     if (llmRuntime === undefined || typeof llmRuntime.resolveModelInfo !== 'function') return 'unavailable'
     try {
       const info = await llmRuntime.resolveModelInfo(capture.provider, capture.model)
+      applyRouteMetadata(capture, info)
       if (!effortCurrent(capture)) return 'stale'
       const efforts = info.reasoning?.efforts ?? []
       state.effortLevels = efforts.map(level => level.id)
@@ -87,7 +102,9 @@ export function createModelActions(
     const capture = captureEffort()
     const generation = ++effortLevelsGeneration
     void llmRuntime.resolveModelInfo(capture.provider, capture.model).then(info => {
-      if (!effortCurrent(capture) || generation !== effortLevelsGeneration) return
+      if (generation !== effortLevelsGeneration) return
+      applyRouteMetadata(capture, info)
+      if (!effortCurrent(capture)) return
       state.effortLevels = (info.reasoning?.efforts ?? []).map(level => level.id)
       state.emit()
     }).catch(() => undefined)

@@ -674,6 +674,7 @@ function createChannelWithOwner(
     initialEffort: options.effort,
     agent: () => binding.agent,
     notify,
+    checkContextWarning,
   })
 
   commandCompletions = createCommandCompletions({
