@@ -12,10 +12,9 @@ With Node.js 24 (no additional dependencies are required):
 node docs/assets/readme/generate.mjs
 ```
 
-The generator updates four responsive, bilingual animated previews, four matching
-reduced-motion still images, 24 navigation
-tiles and the marked navigation blocks in both READMEs. It verifies local link
-targets before writing the indexes. Do not edit generated SVG files by hand.
+The generator updates four responsive, bilingual automatic animated previews,
+24 navigation tiles and the marked navigation blocks in both READMEs. It verifies
+local link targets before writing the indexes. Do not edit generated SVG files by hand.
 
 Each navigation tile has an internal SVG link for standalone SVG viewers.
 GitHub's image embedding disables internal interaction, so the READMEs also wrap
@@ -23,11 +22,12 @@ each tile in a normal HTML anchor. The real clickable surface is that outer
 anchor, not the SVG's internal link. Input elements are not supported in GitHub
 README rendering; no hidden or nonfunctional input is inserted.
 
-The preview loops every 14 seconds. The README's `picture` selects a separate
-readable completed still image under `prefers-reduced-motion: reduce`, and the
-narrow composition at 640 CSS pixels. These queries belong to the containing
-page, not the embedded SVG document; this keeps media selection consistent in
-browsers that do not propagate emulated media preferences into image documents.
+The preview loops every 14 seconds. The README's `picture` selects the narrow
+animated composition at 640 CSS pixels; both sources remain animated. The live
+phase rail makes the input, thinking, tool and response states visible throughout
+the loop. This is intentional: an earlier version selected a still SVG when the
+page reported `prefers-reduced-motion: reduce`, which could make GitHub appear to
+have disabled animation even though the animated SVG itself was working.
 
 ## Attribution
 

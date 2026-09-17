@@ -37,125 +37,54 @@ the interface, and removing it leaves no core modifications behind.
   <a href="https://dshfind.com/en/plugins/ccch1mneyyy/dsh-TUI"><img src="https://dshfind.com/api/card/ccch1mneyyy/dsh-TUI?lang=en" alt="dsh-TUI on dshfind"></a>
 </p>
 
-## Highlights
-
-- **Terminal-native interaction**: streaming Markdown, structured tool cards
-  (terminal-card multi-line command headers fold to the first line plus a
-  count via `/settings`; Ctrl+O or a card click expands), command and file completion, `@` file references (complete anywhere; text
-  files attach content, directories attach listings, and PNG/JPEG/WebP/GIF are
-  sent as durable image blocks; `@path#L12-14` line ranges attach only the
-  requested lines, clamping past-EOF ranges or falling back to the whole file
-  with a note), history
-  search, message selection, inline or alternate-screen rendering, and `/lang`
-  zh/en UI language switching. Durable image blocks from user attachments and
-  assistant/tool output render as in-transcript previews through Kitty graphics or Sixel,
-  with a same-size text fallback when graphics are unavailable. In fullscreen,
-  clicking a staged `[Image #N]` token or a transcript thumbnail opens one
-  shared preview centered over the transcript, dimming the conversation around
-  it and leaving the prompt visible (Esc or click outside closes); its title reads `Image #N — format · size · bytes ·
-  file name` and images staged in this session show their source path on the
-  card's bottom row. Finder-copied
-  image files paste straight into the attachment store as `[Image #N]`; in the
-  composer a staged `[Image #N]` is one unit — the caret steps over it, deletes
-  remove it whole, and while the caret sits on it the token inverts and its
-  preview opens, closing again when the caret leaves. Vim `x`/`X`/`d…` also
-  delete whole attachments, and `u` restores both text and attachment bindings;
-  undo stays within the current draft.
-  Terminal image previews default to on. Disable them in `/settings → Terminal image previews`
-  or set `terminalImages: false`, then use `/restart` to apply. A saved `/settings` choice takes
-  precedence over Cordis configuration; if it was saved as enabled, turn it off in `/settings`
-  before restarting. Disabled previews keep text
-  metadata and skip preview decoding; sending images to the model is unaffected.
-  `DSH_TUI_DISABLE_TERMINAL_IMAGES=1` always forces previews off.
-  Windows Terminal with Sixel support displays embedded transcript thumbnails
-  and the fullscreen preview card. Non-fullscreen inline mode stays text-only.
-  Sixel uses a bounded 256-color adaptive palette and background-composited
-  transparency. A worker caches quantized pixels and encodes only the visible
-  crop while scrolling; removed or covered images are erased. Attachment reads
-  and decodes share two execution slots and cancel when their last consumer leaves.
-  Queues, caches and frame transfers are bounded, with text fallback on overflow.
-  Detection prefers Kitty, then Sixel advertised by DA1.
-  `DSH_TUI_IMAGE_PROTOCOL=auto|kitty|sixel|none` overrides protocol selection;
-  `DSH_TUI_DISABLE_TERMINAL_IMAGES=1`, accessibility mode, non-TTY output and
-  tmux/screen still disable graphics. Missing image dependencies or an encoding
-  failure preserve the text fallback. The override does not enable inline Sixel.
-  Light-theme panels and image previews use white surfaces with neutral preview borders.
-  Large previews target about 95% of the transcript area, with up to a 2048-pixel edge
-  and a bounded total pixel budget; thumbnail sizing is unchanged.
-  Fit, actual pixels (100%), and 200%/400%/800% zoom are available, with drag,
-  wheel, or arrow-button panning. Actual pixels requires reported terminal cell metrics.
-  The bottom Open original link launches the system image viewer with the unchanged
-  attachment bytes, including images restored from history.
-  In a modal, Left/Right or the bottom ‹/› controls switch images with an index
-  indicator, without wrapping at the ends. Each new image starts in Fit mode.
-- **Pixel whale pet**: one of three randomized startup intros plays on every
-  launch. During the welcome phase (before the first task), **clicking the
-  whale pops a heart pass and wakes it from a doze**, it flutters its fins
-  and thumps its tail while
-  idle (`/settings → whaleIdle` turns this off), and dozes off with Z's
-  after 10s of inactivity. **The first agent task freezes it to the static
-  standard frame for good** — zero ongoing cost. The 22
-  hand-drawn frames and the idle behaviors are ported from
-  [dsh-ui-whale](https://github.com/lhh010/dsh-ui-whale) by [@lhh010](https://github.com/lhh010).
-- **Timeline navigation**: a Grok-style turn rail covering **every turn
-  (folded ones included)** — even when the fold window only exposes the last
-  few turns, the full history stays one click away (clicking a folded tick
-  reveals that turn and scrolls to it). When not pinned to the bottom,
-  `Enter`/`End` jump back in one step (no blank flash from long distances)
-  and a clickable new-messages pill stays in view; the right gutter offers
-  timeline / scrollbar / hidden modes.
-- **Visible agent state**: live activity, segmented context usage, TPS, cache
-  hit rate, reasoning effort, input/output tokens, and Git/session metadata.
-  In fullscreen, hovering a truncated tool header, wrapped user prompt, or
-  session title for ~600ms opens a tooltip with the full content.
-- **Activity animation**: `moon8` is the default. A legacy local `claude`
-  setting is read as `moon8`, and the picker lists current presets only.
-- **Complete session workflow**: `/resume` groups history by working directory
-  with search and preview (left-click resumes, right-click opens an action
-  menu; pin frequent sessions — a `Pinned` group floats them to the top, the
-  in-row star or `Ctrl+P` toggles, pins persist in `~/.dsh-tui`), alongside
-  `/new`, `/workspace`, `/compact`, `/export`,
-  the `/btw` side question, model switching, double-`Esc` rewind through a
-  session fork, vim editing for the prompt (`/vim`), mouse selection
-  editing in the prompt (drag to select, Shift+click to extend,
-  double-click word select, `Ctrl+C` to copy the selection), and a
-  fullscreen draft editor (`Ctrl+Shift+E` or the `⛶` row button: line
-  numbers, current-line highlight, `Enter` = newline, `Ctrl+Enter` = send,
-  wheel scrolling, click/drag selection — long drafts get the whole
-  screen; disable it in `/settings`).
-  `/resume` classifies a log as empty only after a complete read confirms no
-  user messages; image-only input, incomplete reads, and parse failures never
-  make a session eligible for empty-session cleanup.
-- **Official DSH integrations**: agent presets, skills, MCP, goals, todos,
-  subagents, and `ask_user_question` are connected through existing services
-  and registries. `/skills` shows skills discovered from the active profile,
-  user, and project; dsh-TUI does not preinstall general-purpose skills.
-  Incomplete skill catalogs preserve the last complete skill menu and command
-  registrations, with at most three retries after 800/1600/3200ms. Once exhausted,
-  recovery waits for DSH's `skills/change` notification or an explicit refresh
-  instead of polling indefinitely. Only complete observations remove absent
-  skills, including a complete empty catalog.
-- **Designed for long sessions**: event-driven projection, differential output,
-  message virtualization, replay coalescing, and bounded caches prevent render
-  cost and memory from growing without limit; fingerprint-memoized hot paths
-  render with **zero per-frame allocations** (~200KB of GC churn saved every
-  16ms tick in a 3200-row session), wrapText and markdown tokens reuse global
-  LRU caches across mounts, the main screen paints in frames (fold window
-  300→120 rows), and long-session resume lands straight on content (splash
-  skipped, anchored to the newest message's last row).
-
 ## Preview
 
 <picture>
-  <source media="(prefers-reduced-motion: reduce) and (max-width: 640px)" srcset="docs/assets/readme/preview-en-mobile-still.svg">
-  <source media="(prefers-reduced-motion: reduce)" srcset="docs/assets/readme/preview-en-still.svg">
   <source media="(max-width: 640px)" srcset="docs/assets/readme/preview-en-mobile.svg">
-  <img src="docs/assets/readme/preview-en.svg" alt="dsh-TUI animated preview: prompt, thinking, tool result and reply. Scripted animation, not an editable terminal." width="1200">
+  <img src="docs/assets/readme/preview-en.svg" alt="dsh-TUI automatic animated preview: prompt, thinking, tool execution and streaming reply." width="1200">
 </picture>
 
-Scripted typing, thinking and replies in an animated SVG, respecting reduced motion.
-**The centered prompt is not editable**: GitHub README displays SVGs as images.
-Each SVG tile in [Documentation](#documentation) has its own clickable outer link.
+This CSS-animated SVG starts automatically on the GitHub README itself: no script, iframe, or separate demo site is used. The centered prompt visualizes typing; GitHub removes real form controls from README content, so it remains a display rather than an editable terminal.
+
+## Documentation
+
+<!-- readme-svg-navigation:start -->
+<p align="center">
+  <a href="docs/getting-started.en.md"><img src="docs/assets/readme/nav-start-en.svg" width="390" alt="Getting started"></a>
+  <a href="docs/interaction.en.md"><img src="docs/assets/readme/nav-interaction-en.svg" width="390" alt="Interaction & commands"></a>
+  <a href="docs/configuration.en.md"><img src="docs/assets/readme/nav-configuration-en.svg" width="390" alt="Configuration"></a>
+  <a href="docs/themes.en.md"><img src="docs/assets/readme/nav-themes-en.svg" width="390" alt="Themes"></a>
+  <a href="docs/architecture.en.md"><img src="docs/assets/readme/nav-architecture-en.svg" width="390" alt="Architecture & limits"></a>
+  <a href="docs/vscode.en.md"><img src="docs/assets/readme/nav-vscode-en.svg" width="390" alt="VS Code guide"></a>
+  <a href="https://github.com/T-Auto/dsh-ecosystem-spec/blob/main/docs/plugin-admission-and-development.md"><img src="docs/assets/readme/nav-plugins-en.svg" width="390" alt="Plugin development"></a>
+  <a href="docs/contributing.en.md"><img src="docs/assets/readme/nav-contributing-en.svg" width="390" alt="Contributing"></a>
+  <a href="docs/community-management.en.md"><img src="docs/assets/readme/nav-community-en.svg" width="390" alt="Community management"></a>
+  <a href="docs/roadmap.en.md"><img src="docs/assets/readme/nav-roadmap-en.svg" width="390" alt="Project roadmap"></a>
+  <a href="docs/README.md"><img src="docs/assets/readme/nav-index-en.svg" width="390" alt="All documentation"></a>
+  <a href="docs/links.md"><img src="docs/assets/readme/nav-links-en.svg" width="390" alt="Related projects"></a>
+</p>
+<!-- readme-svg-navigation:end -->
+
+The complete bilingual index is [`docs/README.md`](docs/README.md).
+
+## Core capabilities
+
+| Area | Core capability | Entry points and behavior |
+| --- | --- | --- |
+| Conversation and tools | Streaming Markdown, structured tool cards, command/file completion, `@` references, themes, and live status | Tool cards fold and expand; the status line exposes activity, TPS, cache, effort, tokens, Git, and session data |
+| Session workflow | Resume, overview, backgrounding, forks, compaction, export, and model switching | `/resume`, `/agentview`, `/new`, `/workspace`, `/compact`, `/export`, and `/btw` |
+| Editing and navigation | Vim input, mouse selection, fullscreen drafts, double-Esc rewind, and a full-history turn rail | `/vim`, `Ctrl+Shift+E`, `Ctrl+Enter`, and `Ctrl+O`; folded turns remain directly reachable |
+| Images and attachments | Durable PNG/JPEG/WebP/GIF blocks, Kitty/Sixel thumbnails, and one shared image viewer | Fit, 100%, 200%/400%/800% zoom, pan, previous/next, and Open original; protocol or decode failures preserve a same-size text fallback |
+| Native DSH services | Agent presets, skills, MCP, goals, todos, subagents, and `ask_user_question` | Connected through existing DSH services and registries; dsh-TUI does not duplicate agent, model, tool, or persistence domains |
+| Long-session performance | Event projection, differential output, message virtualization, framed painting, global LRUs, and bounded caches | Attachment reads/decodes use two slots; invisible images stop encoding and queues/frame transfers remain bounded |
+| Extensions and integrations | Browser interaction, computer use, plugin seams, and the VS Code companion | Ecosystem plugins extend the surface; VS Code adds multiple sessions, history, and targeted resume |
+| Motion system | Three whale intros, welcome click/idle motion, and the `moon8` activity animation | The whale freezes on its standard frame after the first agent task, eliminating ongoing animation cost |
+
+Terminal image detection prefers Kitty, then Sixel advertised by DA1. Set
+`DSH_TUI_IMAGE_PROTOCOL` to `auto`, `kitty`, `sixel`, or `none`. See
+[Architecture and limitations](docs/architecture.en.md) for resource and permission boundaries,
+and [Interaction and commands](docs/interaction.en.md) for the complete command surface.
+
 
 ## Quick Start
 
@@ -353,27 +282,6 @@ One full-screen surface lists every session in this process: the attached conver
 - `/bg` (alias `/background`) moves the attached session to the background — it keeps running — switches the terminal to a fresh session, and opens the view. `Enter` on any row switches back.
 - Peek and reply work live for running sessions; a stopped session needs an `Enter` attach before you can talk to it.
 - **Background sessions live inside this process**: they stop when the TUI exits (logs survive; `/resume` or `Enter` in the view brings them back). There is no supervisor process.
-
-## Documentation
-
-<!-- readme-svg-navigation:start -->
-<p align="center">
-  <a href="docs/getting-started.en.md"><img src="docs/assets/readme/nav-start-en.svg" width="390" alt="Getting started"></a>
-  <a href="docs/interaction.en.md"><img src="docs/assets/readme/nav-interaction-en.svg" width="390" alt="Interaction & commands"></a>
-  <a href="docs/configuration.en.md"><img src="docs/assets/readme/nav-configuration-en.svg" width="390" alt="Configuration"></a>
-  <a href="docs/themes.en.md"><img src="docs/assets/readme/nav-themes-en.svg" width="390" alt="Themes"></a>
-  <a href="docs/architecture.en.md"><img src="docs/assets/readme/nav-architecture-en.svg" width="390" alt="Architecture & limits"></a>
-  <a href="docs/vscode.en.md"><img src="docs/assets/readme/nav-vscode-en.svg" width="390" alt="VS Code guide"></a>
-  <a href="https://github.com/T-Auto/dsh-ecosystem-spec/blob/main/docs/plugin-admission-and-development.md"><img src="docs/assets/readme/nav-plugins-en.svg" width="390" alt="Plugin development"></a>
-  <a href="docs/contributing.en.md"><img src="docs/assets/readme/nav-contributing-en.svg" width="390" alt="Contributing"></a>
-  <a href="docs/community-management.en.md"><img src="docs/assets/readme/nav-community-en.svg" width="390" alt="Community management"></a>
-  <a href="docs/roadmap.en.md"><img src="docs/assets/readme/nav-roadmap-en.svg" width="390" alt="Project roadmap"></a>
-  <a href="docs/README.md"><img src="docs/assets/readme/nav-index-en.svg" width="390" alt="All documentation"></a>
-  <a href="docs/links.md"><img src="docs/assets/readme/nav-links-en.svg" width="390" alt="Related projects"></a>
-</p>
-<!-- readme-svg-navigation:end -->
-
-The complete bilingual index is [`docs/README.md`](docs/README.md).
 
 ## Configuration & Extensions
 

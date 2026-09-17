@@ -59,13 +59,14 @@ const svg = (width, height, title, description, content, styles = '') => `\
 </svg>
 `
 
-function preview(language, mobile, still = false) {
+function preview(language, mobile) {
   const en = language === 'en'
   const width = mobile ? 600 : 1200
-  const height = mobile ? 790 : 700
+  const height = mobile ? 850 : 760
   const left = mobile ? 24 : 40
   const inner = width - left * 2
-  const composerY = mobile ? 274 : 256
+  const phaseY = mobile ? 272 : 250
+  const composerY = phaseY + 76
   const transcriptY = composerY + 152
   const prompt = en ? 'Show me this example project' : '介绍一下这个示例项目'
   const draftWidth = en ? 327 : 220
@@ -73,6 +74,20 @@ function preview(language, mobile, still = false) {
   const titleX = mobile ? 211 : 334
   const titleSize = mobile ? 36 : 52
   const baseline = mobile ? 136 : 132
+  const stages = en ? ['TYPE', 'THINK', 'TOOL', 'ANSWER'] : ['输入', '思考', '工具', '回复']
+  const stageClasses = ['type', 'think', 'tooling', 'respond']
+  const stageGap = 8
+  const stageWidth = (inner - stageGap * 3) / 4
+  const stageMarkup = stages.map((label, index) => {
+    const x = left + index * (stageWidth + stageGap)
+    return `
+      <rect x="${x}" y="${phaseY}" width="${stageWidth}" height="38" rx="4" fill="#15191f" stroke="#303741"/>
+      ${text(x + stageWidth / 2, phaseY + 25, label, mobile ? 13 : 14, '#697586', 'text-anchor="middle" font-weight="700"')}
+      <g class="phase-${stageClasses[index]}">
+        <rect x="${x}" y="${phaseY}" width="${stageWidth}" height="38" rx="4" fill="#18222b" stroke="${['#8bb6fb', '#65d4bc', '#e5c07b', '#e697bc'][index]}"/>
+        ${text(x + stageWidth / 2, phaseY + 25, label, mobile ? 13 : 14, ['#8bb6fb', '#65d4bc', '#e5c07b', '#e697bc'][index], 'text-anchor="middle" font-weight="700"')}
+      </g>`
+  }).join('').trim()
   const response = en ? [
     'A terminal UI for DeepSeek Harness.',
     'Sessions, tools, themes. One workspace.',
@@ -91,6 +106,14 @@ function preview(language, mobile, still = false) {
     .complete { opacity: 1; animation: complete 14s step-end infinite; }
     .meter { transform-origin: 0 0; animation: meter 14s linear infinite; }
     .dot { animation: blink 1s step-end infinite; }
+    .phase-type,.phase-think,.phase-tooling,.phase-respond { opacity: 0; }
+    .phase-type { animation: phaseType 14s step-end infinite; }
+    .phase-think { animation: phaseThink 14s step-end infinite; }
+    .phase-tooling { animation: phaseTool 14s step-end infinite; }
+    .phase-respond { animation: phaseRespond 14s step-end infinite; }
+    .loop-meter { transform-origin: 0 0; animation: loopMeter 14s linear infinite; }
+    .live-dot { animation: livePulse 1.4s ease-in-out infinite; }
+    .whale-motion { animation: whaleMotion 14s ease-in-out infinite; }
     @keyframes draft { 0%,24% { opacity:1; } 25%,100% { opacity:0; } }
     @keyframes typing { 0%,4% { transform:scaleX(0); } 21%,100% { transform:scaleX(1); } }
     @keyframes cursorMove { 0%,4% { transform:translateX(0); } 21%,100% { transform:translateX(${draftWidth}px); } }
@@ -104,11 +127,14 @@ function preview(language, mobile, still = false) {
     @keyframes second { 0%,75% { opacity:0; } 76%,100% { opacity:1; } }
     @keyframes complete { 0%,82% { opacity:0; } 83%,100% { opacity:1; } }
     @keyframes meter { 0%,25% { transform:scaleX(.08); } 80%,100% { transform:scaleX(1); } }
-    ${still ? `
-      .draft,.mask,.caret,.placeholder,.sent,.thinking,.tool,.answer,.answer-mask,.answer-line-two,.complete,.meter,.dot { animation:none !important; }
-      .draft,.thinking { opacity:0; }
-      .placeholder,.sent,.tool,.answer,.answer-line-two,.complete { opacity:1; }
-    ` : ''}`
+    @keyframes phaseType { 0%,24% { opacity:1; } 25%,100% { opacity:0; } }
+    @keyframes phaseThink { 0%,24% { opacity:0; } 25%,43% { opacity:1; } 44%,100% { opacity:0; } }
+    @keyframes phaseTool { 0%,43% { opacity:0; } 44%,54% { opacity:1; } 55%,100% { opacity:0; } }
+    @keyframes phaseRespond { 0%,54% { opacity:0; } 55%,100% { opacity:1; } }
+    @keyframes loopMeter { from { transform:scaleX(0); } to { transform:scaleX(1); } }
+    @keyframes livePulse { 0%,100% { opacity:.35; } 50% { opacity:1; } }
+    @keyframes whaleMotion { 0%,24% { transform:translateY(0); } 6%,18% { transform:translateY(-4px); } 25%,100% { transform:translateY(0); } }
+  `
   const content = `
     <defs>
       <clipPath id="draft-clip"><rect class="mask" x="0" y="-25" width="${draftWidth}" height="34"/></clipPath>
@@ -118,16 +144,20 @@ function preview(language, mobile, still = false) {
     <path d="M1 48H${width - 1}" stroke="#303741"/>
     ${icon('Terminal', left, 15, '#8bb6fb', 20)}
     ${text(left + 32, 31, 'dsh-TUI', 17, '#f0f3f7', 'font-weight="700"')}
-    ${text(width - left, 31, en ? 'SVG DEMO / LOOP' : 'SVG 动画演示', 14, '#e5c07b', 'text-anchor="end"')}
-    <g transform="translate(${mobile ? 12 : 32} 69) scale(${mobile ? 4.8 : 6.5})" shape-rendering="crispEdges">${whale()}</g>
+    <circle class="live-dot" cx="${width - left - (mobile ? 94 : 132)}" cy="25" r="4" fill="#65d4bc"/>
+    ${text(width - left, 31, en ? 'LIVE · AUTO LOOP' : '实时 · 自动循环', 14, '#65d4bc', 'text-anchor="end"')}
+    <g class="whale-motion"><g transform="translate(${mobile ? 12 : 32} 69) scale(${mobile ? 4.8 : 6.5})" shape-rendering="crispEdges">${whale()}</g></g>
     ${text(titleX, baseline, 'DEEPSEEK', titleSize, '#8bb6fb', 'font-weight="700"')}
     ${text(titleX, baseline + titleSize + 4, 'HARNESS', titleSize, '#c5dafb', 'font-weight="700"')}
     ${text(titleX, baseline + titleSize + 39, 'deepseek-v4-flash', mobile ? 16 : 18, '#e5c07b')}
     ${mobile ? '' : text(794, 112, '/demo/dsh-tui', 17, '#99a5b5')}
     ${mobile ? '' : text(794, 146, en ? 'session  /  README' : '会话  /  README', 16, '#99a5b5')}
     ${mobile ? '' : text(794, 180, en ? 'high effort' : 'high 推理强度', 16, '#65d4bc')}
+    ${stageMarkup}
+    <rect x="${left}" y="${phaseY + 48}" width="${inner}" height="4" rx="2" fill="#242a33"/>
+    <g transform="translate(${left} ${phaseY + 48})"><rect class="loop-meter" width="${inner}" height="4" rx="2" fill="#8bb6fb"/></g>
     ${text(left, composerY - 14, en ? 'PROMPT' : '输入区', 15, '#99a5b5')}
-    ${text(width - left, composerY - 14, en ? 'ANIMATED, NOT EDITABLE' : '动画演示 · 非可编辑控件', 14, '#99a5b5', 'text-anchor="end"')}
+    ${text(width - left, composerY - 14, en ? 'ANIMATED PREVIEW' : '自动动态预览', 14, '#99a5b5', 'text-anchor="end"')}
     <rect x="${left}" y="${composerY}" width="${inner}" height="80" rx="6" fill="#15191f" stroke="#759fdf" stroke-width="1.5"/>
     ${text(left + 18, composerY + 47, '>', 25, '#8bb6fb')}
     <g class="draft" transform="translate(${left + 48} ${composerY + 46})">
@@ -162,8 +192,8 @@ function preview(language, mobile, still = false) {
     ${text(width - left, height - 30, en ? 'SCRIPTED DATA' : '预设演示数据', 13, '#99a5b5', 'text-anchor="end"')}
   `
   return svg(width, height, en ? 'dsh-TUI animated interface preview' : 'dsh-TUI 动态界面预览',
-    en ? 'A scripted prompt, thinking, file result and reply loop. This SVG is an image, not an editable terminal. Respects reduced motion.'
-      : '输入、思考、文件结果与回复的循环动画。此 SVG 是图片，不是可编辑终端；遵循系统减少动态效果设置。', content, styles)
+    en ? 'An automatic loop showing prompt typing, thinking, tool execution and a streaming reply. The SVG is a visual preview, not an editable terminal.'
+      : '自动循环展示输入、思考、工具执行与流式回复。此 SVG 是动态视觉预览，不是可编辑终端。', content.trim(), styles.trim())
 }
 
 function tile(entry, language) {
@@ -191,9 +221,7 @@ function navigation(language) {
 await mkdir(directory, { recursive: true })
 for (const language of ['zh', 'en']) {
   for (const mobile of [false, true]) {
-    for (const still of [false, true]) {
-      await writeFile(resolve(directory, `preview-${language}${mobile ? '-mobile' : ''}${still ? '-still' : ''}.svg`), preview(language, mobile, still))
-    }
+    await writeFile(resolve(directory, `preview-${language}${mobile ? '-mobile' : ''}.svg`), preview(language, mobile))
   }
   for (const entry of docs) {
     const target = href(entry, language)
@@ -210,4 +238,4 @@ for (const language of ['zh', 'en']) {
   const updated = source.slice(0, first + start.length) + '\n' + navigation(language) + '\n' + source.slice(last)
   if (source !== updated) await writeFile(filename, updated)
 }
-console.log('Generated 4 animated previews, 4 reduced-motion previews and 24 linked documentation tiles; updated both README indexes.')
+console.log('Generated 4 automatic animated previews and 24 linked documentation tiles; updated both README indexes.')

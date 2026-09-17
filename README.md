@@ -48,46 +48,52 @@
   </table>
 </div>
 
-## 核心能力
-
-Windows Terminal 支持 Sixel 时，全屏会话记录可直接显示内嵌缩略图，点击后打开大图预览；非全屏 inline 模式仍保留文字回退。
-Sixel 使用最多 256 色的自适应调色板，透明像素与背景合成；Worker 缓存量化结果，滚动时仅编码可见部分，移出视野或被浮层覆盖时擦除旧图。
-附件读取与解码最多两路并发；最后一个使用者离开后取消读取，未启动的解码不再执行。多图缓存、排队任务与单帧传输均有容量上限，超限时保留文字回退。
-自动探测优先 Kitty，其次使用 DA1 声明的 Sixel 能力。`DSH_TUI_IMAGE_PROTOCOL=auto|kitty|sixel|none` 可覆盖协议选择；
-`DSH_TUI_DISABLE_TERMINAL_IMAGES=1`、无障碍模式、非 TTY 输出以及 tmux/screen 仍禁用图形。
-缺少图片依赖或编码失败时保留文字回退；强制协议也不会启用 inline Sixel。
-浅色主题的面板和图片预览默认使用白底，图片预览边框使用中性色。
-大图预览以对话区约 95% 宽高为预算，最长边可达 2048 像素，仍限制总像素量和后台开销；缩略图大小不变。
-预览支持适应窗口、100% 原像素与 200%/400%/800% 放大，拖动、滚轮或方向按钮平移；100% 需终端报告字符格像素尺寸。
-底部「打开原图」链接直接调用系统看图程序，打开未经重编码的原始附件，包括从历史会话恢复的图片。
-大图弹窗用 `←`/`→` 或底部 `‹`/`›` 切换上一张、下一张，显示当前张数，首尾不循环；切图回到适应窗口。
-
-  - **终端交互**：低资源占用，长会话稳定可靠；多种主题切换，样式美观，实时显示工作状态、TPS、缓存命中率等
-    推理等级、输入/输出 token 与 Git/会话信息；终端卡多行命令可经 `/settings` 折叠为首行 + 计数提示（Ctrl+O 或点击卡片展开）；全屏模式下悬停在截断的工具卡标题、用户消息或会话标题上约 600ms，浮层显示完整内容。
-    用户附图及助手/工具结果中的持久图片块会直接显示在会话记录中；Kitty graphics 或 Sixel 可用时显示等比缩略图，否则保留同尺寸文字回退。全屏下点击输入框 `[Image #N]` 或 transcript 缩略图在对话区域居中打开大图预览，卡片外的对话文字变暗，不遮挡输入栏（Esc/点击外部关闭），标题为 `Image #N — 格式 · 尺寸 · 体积 · 文件名`，本会话暂存的图片在卡片底行显示来源路径；Finder 复制的图片文件粘贴时直接入附件库为 `[Image #N]`；输入框里的 `[Image #N]` 是一个整体，光标整体跳过、删除整体生效，光标落在其上时整块反显并自动打开预览、离开时关闭。Vim 的 `x`/`X`/`d…` 同样整张删除，`u` 同时恢复文字与附件；撤销仅限当前草稿。
-    终端图片预览默认开启，可在 `/settings → 终端图片预览` 或配置 `terminalImages: false` 中关闭，使用 `/restart` 后生效。已保存的 `/settings` 选择优先于 Cordis 配置；若曾保存为开启，请在 `/settings` 中关闭后再 `/restart`。关闭时保留文字信息并跳过预览解码，不影响向模型发送图片；`DSH_TUI_DISABLE_TERMINAL_IMAGES=1` 始终强制关闭预览。
-  - **功能全面**：`/resume` 按工作目录分类浏览、搜索与预览历史会话（左键恢复、右键弹出操作菜单；可固定常用会话——「已固定」分组置顶显示，行内 ★ 或 `Ctrl+P` 切换，持久化到 `~/.dsh-tui`），另有 `/agentview` 会话总览（空输入 `←` 一键后台化，后台会话派发、预览、回复与停止一站式管理）、`/new`、`/compact`、`/export`、`/btw`，模型热切换（新会话默认推理强度可在 /settings → 默认推理强度 预设），原生subagent，会话fork，自动检查更新与手动一键升级，输入框 `/vim` vim 编辑模式、鼠标选区编辑（拖选高亮、Shift+click 扩展、双击选词、Ctrl+C 复制选区）与全屏草稿编辑（`Ctrl+Shift+E` 或输入行 `⛶` 按钮：行号 + 当前行高亮、Enter 换行、Ctrl+Enter 发送、滚轮滚动、点击/拖选，长草稿独占整屏；`/settings` 可关）；可在vs code中[以vscode插件形式启动](docs/vscode.md)，已上架 VS Code Marketplace。
-    `/resume` 只将完整读取并确认没有用户消息的日志判为空会话；仅发图片、读取不完整或解析失败的会话不会被归入空会话清理。
-  - **扩展丰富**：原生浏览器交互，compter use等大量附属功能性扩展
-  - **技能归 DSH 管理**：`/skills` 展示当前 profile、用户与项目发现的技能；dsh-TUI 不预装通用技能。
-    技能目录暂时不完整时，保留最后一次完整观测的技能菜单与命令注册，并按 800/1600/3200ms 最多重试三次；耗尽后等待 DSH 的 `skills/change` 通知或显式刷新，不持续轮询。只有完整观测才能移除已消失的技能，包括完整空目录。
-  - **工作状态动画**：默认使用 `moon8`；读取旧版本地配置中的 `claude` 值时自动映射为 `moon8`，选择器只显示当前预设。
-  - **像素鲸鱼娘**：开屏随机三选一开场动画；欢迎期（开始第一个任务前）可**点击冒爱心并唤醒睡着的鲸鱼**，闲置时摆鱼鳍、拍尾巴、入睡冒 Z（`/settings → whaleIdle` 可关）。**开始第一个任务后永久定格为静态标准帧**，零持续开销。鲸鱼娘的 22 帧手绘原图与闲置行为移植自 [dsh-ui-whale](https://github.com/lhh010/dsh-ui-whale)（作者 [@lhh010](https://github.com/lhh010)），特此致谢。
-
-
-
 ## 界面预览
 
 <picture>
-  <source media="(prefers-reduced-motion: reduce) and (max-width: 640px)" srcset="docs/assets/readme/preview-zh-mobile-still.svg">
-  <source media="(prefers-reduced-motion: reduce)" srcset="docs/assets/readme/preview-zh-still.svg">
   <source media="(max-width: 640px)" srcset="docs/assets/readme/preview-zh-mobile.svg">
-  <img src="docs/assets/readme/preview-zh.svg" alt="dsh-TUI 动态预览：输入、思考、工具结果与回复。动画演示，非可编辑终端。" width="1200">
+  <img src="docs/assets/readme/preview-zh.svg" alt="dsh-TUI 自动动态预览：输入、思考、工具执行与流式回复。" width="1200">
 </picture>
 
-预设动画展示打字、思考与回复，遵循系统「减少动态效果」设置。
-**中部输入区是动画，不接收键盘输入**：GitHub README 将 SVG 作为图片显示。
-[文档索引](#文档索引)的 SVG 图块通过外层链接跳转，各自可点击。
+这个 CSS 动画 SVG 会在 GitHub README 原页面自动播放，不使用脚本、iframe 或独立演示网站。中部输入区展示打字过程；GitHub 会清洗 README 中的真实表单控件，因此它仍是动态展示，而不是可编辑终端。
+
+## 文档索引
+
+<!-- readme-svg-navigation:start -->
+<p align="center">
+  <a href="docs/getting-started.md"><img src="docs/assets/readme/nav-start-zh.svg" width="390" alt="安装与快速开始"></a>
+  <a href="docs/interaction.md"><img src="docs/assets/readme/nav-interaction-zh.svg" width="390" alt="交互与命令"></a>
+  <a href="docs/configuration.md"><img src="docs/assets/readme/nav-configuration-zh.svg" width="390" alt="配置参考"></a>
+  <a href="docs/themes.md"><img src="docs/assets/readme/nav-themes-zh.svg" width="390" alt="主题系统"></a>
+  <a href="docs/architecture.md"><img src="docs/assets/readme/nav-architecture-zh.svg" width="390" alt="架构与限制"></a>
+  <a href="docs/vscode.md"><img src="docs/assets/readme/nav-vscode-zh.svg" width="390" alt="VS Code 使用指南"></a>
+  <a href="https://github.com/T-Auto/dsh-ecosystem-spec/blob/main/docs/plugin-admission-and-development.md"><img src="docs/assets/readme/nav-plugins-zh.svg" width="390" alt="插件准入与开发"></a>
+  <a href="docs/contributing.md"><img src="docs/assets/readme/nav-contributing-zh.svg" width="390" alt="贡献与开发约定"></a>
+  <a href="docs/community-management.md"><img src="docs/assets/readme/nav-community-zh.svg" width="390" alt="社区管理框架"></a>
+  <a href="docs/roadmap.md"><img src="docs/assets/readme/nav-roadmap-zh.svg" width="390" alt="项目路线图"></a>
+  <a href="docs/README.md"><img src="docs/assets/readme/nav-index-zh.svg" width="390" alt="完整文档索引"></a>
+  <a href="docs/links.md"><img src="docs/assets/readme/nav-links-zh.svg" width="390" alt="社区与相关项目"></a>
+</p>
+<!-- readme-svg-navigation:end -->
+
+完整的中英文索引见 [`docs/README.md`](docs/README.md)。
+
+## 核心能力
+
+| 能力域 | 核心能力 | 关键入口与行为 |
+| --- | --- | --- |
+| 对话与工具 | 流式 Markdown、结构化工具卡、命令与文件补全、`@` 文件引用、多主题与实时状态 | 工具卡支持折叠/展开；状态栏显示工作状态、TPS、缓存、推理等级、token、Git 与会话信息 |
+| 会话工作流 | 会话恢复、总览、后台化、分支、压缩、导出、模型热切换 | `/resume`、`/agentview`、`/new`、`/workspace`、`/compact`、`/export`、`/btw` |
+| 编辑与导航 | Vim 输入、鼠标选区、全屏草稿编辑、双击 Esc 回溯、全历史时间轴 | `/vim`、`Ctrl+Shift+E`、`Ctrl+Enter`、`Ctrl+O`；折叠窗口外的历史轮次仍可直接跳转 |
+| 图片与附件 | PNG/JPEG/WebP/GIF 持久附件，Kitty/Sixel 内嵌缩略图，统一大图预览 | 支持适应窗口、100% 与 200%/400%/800% 缩放、平移、前后切图和打开原图；协议或解码失败时保留同尺寸文字回退 |
+| DSH 原生能力 | Agent preset、技能、MCP、目标、待办、subagent 与 `ask_user_question` | 全部通过 DSH 现有服务和 registry 接入；dsh-TUI 不复制 Agent、模型、工具或持久化域逻辑 |
+| 长会话性能 | 事件投影、差分输出、消息虚拟化、分帧绘制、全局 LRU 与有界缓存 | 图片读取/解码最多两路并发；不可见图像停止编码，队列与帧传输均有容量限制 |
+| 扩展与集成 | 浏览器交互、computer use、插件接缝、VS Code companion | 通过生态插件扩展；VS Code 支持多会话、历史与指定会话恢复 |
+| 动态界面 | 三组鲸鱼开场、欢迎期点击/闲置动画、`moon8` 工作状态动画 | 首个 Agent 任务开始后鲸鱼定格为标准帧，避免持续渲染开销 |
+
+终端图片协议默认自动探测 Kitty，其次使用 DA1 声明的 Sixel；可将
+`DSH_TUI_IMAGE_PROTOCOL` 设置为 `auto`、`kitty`、`sixel` 或 `none`。完整行为、资源边界与
+权限模型见[架构与限制](docs/architecture.md)，快捷键和命令见[交互与命令](docs/interaction.md)。
 
 
 ## 快速开始
@@ -174,29 +180,6 @@ TUI 启动失败时运行。子命令属于 npm 安装的启动器，仓库根�
 另：`@deepseek-harness-tui/dsh-tui/api`（纯类型入口）为实验性公开面；
 `@deepseek-harness-tui/dsh-tui/test-utils` 子路径与 `ctx.tuiPluginHost.grants.corrupt`
 已随 adapter 分层重构（#705）移除，`grants` 收窄为 `HostGrantFacade`，迁移细节见该 PR。
-
-
-
-## 文档索引
-
-<!-- readme-svg-navigation:start -->
-<p align="center">
-  <a href="docs/getting-started.md"><img src="docs/assets/readme/nav-start-zh.svg" width="390" alt="安装与快速开始"></a>
-  <a href="docs/interaction.md"><img src="docs/assets/readme/nav-interaction-zh.svg" width="390" alt="交互与命令"></a>
-  <a href="docs/configuration.md"><img src="docs/assets/readme/nav-configuration-zh.svg" width="390" alt="配置参考"></a>
-  <a href="docs/themes.md"><img src="docs/assets/readme/nav-themes-zh.svg" width="390" alt="主题系统"></a>
-  <a href="docs/architecture.md"><img src="docs/assets/readme/nav-architecture-zh.svg" width="390" alt="架构与限制"></a>
-  <a href="docs/vscode.md"><img src="docs/assets/readme/nav-vscode-zh.svg" width="390" alt="VS Code 使用指南"></a>
-  <a href="https://github.com/T-Auto/dsh-ecosystem-spec/blob/main/docs/plugin-admission-and-development.md"><img src="docs/assets/readme/nav-plugins-zh.svg" width="390" alt="插件准入与开发"></a>
-  <a href="docs/contributing.md"><img src="docs/assets/readme/nav-contributing-zh.svg" width="390" alt="贡献与开发约定"></a>
-  <a href="docs/community-management.md"><img src="docs/assets/readme/nav-community-zh.svg" width="390" alt="社区管理框架"></a>
-  <a href="docs/roadmap.md"><img src="docs/assets/readme/nav-roadmap-zh.svg" width="390" alt="项目路线图"></a>
-  <a href="docs/README.md"><img src="docs/assets/readme/nav-index-zh.svg" width="390" alt="完整文档索引"></a>
-  <a href="docs/links.md"><img src="docs/assets/readme/nav-links-zh.svg" width="390" alt="社区与相关项目"></a>
-</p>
-<!-- readme-svg-navigation:end -->
-
-完整的中英文索引见 [`docs/README.md`](docs/README.md)。
 
 
 
