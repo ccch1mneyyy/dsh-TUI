@@ -2,7 +2,7 @@
 
 The two root READMEs embed these self-contained SVG images. No JavaScript,
 foreignObject, remote fonts, runtime server, model requests or telemetry is used.
-The centered composer is explicitly labelled as an animation, not a working input.
+The composer is explicitly presented as an animation, not a working input.
 
 ## Regenerate
 
@@ -22,12 +22,13 @@ each tile in a normal HTML anchor. The real clickable surface is that outer
 anchor, not the SVG's internal link. Input elements are not supported in GitHub
 README rendering; no hidden or nonfunctional input is inserted.
 
-The preview loops every 14 seconds. The README's `picture` selects the narrow
-animated composition at 640 CSS pixels; both sources remain animated. The live
-phase rail makes the input, thinking, tool and response states visible throughout
-the loop. This is intentional: an earlier version selected a still SVG when the
-page reported `prefers-reduced-motion: reduce`, which could make GitHub appear to
-have disabled animation even though the animated SVG itself was working.
+The preview loops every 16 seconds. The README's `picture` selects the narrow
+animated composition at 640 CSS pixels; both sources remain animated. Its layout
+mirrors the production component tree: `LogoV2`, transcript rows, thinking preview,
+tool card, pinned composer and the two-line status area. The narrow source follows
+the runtime breakpoint and hides the whale while retaining the wordmark. An earlier
+version used a four-phase product-demo rail; the current assets instead reconstruct
+a running session from the actual screen hierarchy.
 
 ## Attribution
 
