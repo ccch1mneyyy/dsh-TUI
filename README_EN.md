@@ -146,16 +146,11 @@ the interface, and removing it leaves no core modifications behind.
 
 ## Preview
 
-[Open the interactive web preview guide](docs/web-preview.en.md)
+<p align="center">
+  <img src="screenshots/splash.png" alt="dsh-TUI conversation with the pixel-whale header" width="100%">
+</p>
 
-After installing and compiling the source, run `pnpm preview:web` and open the
-local URL printed in the terminal. xterm.js connects to this repository's real
-`Chat` component and Ink renderer: type messages, inspect streamed thinking
-and tool cards, use theme/model menus, and try Vim editing.
-Responses and tool results are fixed demo data. No model API, shell, or API key
-is involved. GitHub README pages do not execute JavaScript; the preview runs in
-a separate page backed by a local Node service, not a deployed public demo.
-See the guide for supported interactions, setup, and tests.
+Live activity, goal/todo state, and context metrics:
 
 ## Quick Start
 

@@ -78,14 +78,18 @@ Sixel 使用最多 256 色的自适应调色板，透明像素与背景合成；
 
 ## 界面预览
 
-[打开 Web 交互预览说明](docs/web-preview.md)
+<div align="center">
+  <table>
+    <tr>
+      <td align="center" valign="middle" width="50%">
+        <img src="screenshots/splash.png" alt="首屏：像素鲸鱼顶栏" width="480">
+        <br>
+        <strong>首屏：像素鲸鱼顶栏</strong>
+      </td>
+    </tr>
+  </table>
+</div>
 
-从源码安装并编译后，执行 `pnpm preview:web`，打开终端打印的本地网址。
-网页通过 xterm.js 接入本仓库真实的 `Chat` 组件与 Ink 渲染器，可输入消息、
-查看流式思考与工具卡、操作主题/模型菜单和 Vim 编辑。
-回复与工具结果为固定演示数据，不连接模型 API，不执行 Shell，不需要 API Key。
-GitHub README 本身不运行 JavaScript；交互预览在独立网页中运行，需要本地 Node 服务，
-不是已部署的公共在线服务。支持范围、启动步骤与测试命令见上述说明。
 
 ## 快速开始
 
