@@ -18,3 +18,4 @@ HANDOVER.md
 .upstream/
 # run-ci-group 保留的失败脚本帧日志（CI 传 artifact，本地随手跑也会生成）
 ci-render-logs/
+/.validation/web-preview/

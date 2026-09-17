@@ -66,7 +66,7 @@ Sixel 使用最多 256 色的自适应调色板，透明像素与背景合成；
     推理等级、输入/输出 token 与 Git/会话信息；终端卡多行命令可经 `/settings` 折叠为首行 + 计数提示（Ctrl+O 或点击卡片展开）；全屏模式下悬停在截断的工具卡标题、用户消息或会话标题上约 600ms，浮层显示完整内容。
     用户附图及助手/工具结果中的持久图片块会直接显示在会话记录中；Kitty graphics 或 Sixel 可用时显示等比缩略图，否则保留同尺寸文字回退。全屏下点击输入框 `[Image #N]` 或 transcript 缩略图在对话区域居中打开大图预览，卡片外的对话文字变暗，不遮挡输入栏（Esc/点击外部关闭），标题为 `Image #N — 格式 · 尺寸 · 体积 · 文件名`，本会话暂存的图片在卡片底行显示来源路径；Finder 复制的图片文件粘贴时直接入附件库为 `[Image #N]`；输入框里的 `[Image #N]` 是一个整体，光标整体跳过、删除整体生效，光标落在其上时整块反显并自动打开预览、离开时关闭。Vim 的 `x`/`X`/`d…` 同样整张删除，`u` 同时恢复文字与附件；撤销仅限当前草稿。
     终端图片预览默认开启，可在 `/settings → 终端图片预览` 或配置 `terminalImages: false` 中关闭，使用 `/restart` 后生效。已保存的 `/settings` 选择优先于 Cordis 配置；若曾保存为开启，请在 `/settings` 中关闭后再 `/restart`。关闭时保留文字信息并跳过预览解码，不影响向模型发送图片；`DSH_TUI_DISABLE_TERMINAL_IMAGES=1` 始终强制关闭预览。
-  - **功能全面**：`/resume` 按工作目录分类浏览、搜索与预览历史会话（左键恢复、右键弹出操作菜单；可固定常用会话——「已固定」分组置顶显示，行内 ★ 或 `Ctrl+P` 切换，持久化到 `~/.dsh-tui`），另有 `/agentview` 会话总览（空输入 `←` 一键后台化，后台会话派发、预览、回复与停止一站式管理）、`/new`、`/compact`、`/export`、`/btw`，模型热切换（新会话默认推理强度可在 /settings → 默认推理强度 预设），原生subagent，会话fork，自动更新，输入框 `/vim` vim 编辑模式、鼠标选区编辑（拖选高亮、Shift+click 扩展、双击选词、Ctrl+C 复制选区）与全屏草稿编辑（`Ctrl+Shift+E` 或输入行 `⛶` 按钮：行号 + 当前行高亮、Enter 换行、Ctrl+Enter 发送、滚轮滚动、点击/拖选，长草稿独占整屏；`/settings` 可关）；可在vs code中[以vscode插件形式启动](docs/vscode.md)，已上架 VS Code Marketplace。
+  - **功能全面**：`/resume` 按工作目录分类浏览、搜索与预览历史会话（左键恢复、右键弹出操作菜单；可固定常用会话——「已固定」分组置顶显示，行内 ★ 或 `Ctrl+P` 切换，持久化到 `~/.dsh-tui`），另有 `/agentview` 会话总览（空输入 `←` 一键后台化，后台会话派发、预览、回复与停止一站式管理）、`/new`、`/compact`、`/export`、`/btw`，模型热切换（新会话默认推理强度可在 /settings → 默认推理强度 预设），原生subagent，会话fork，自动检查更新与手动一键升级，输入框 `/vim` vim 编辑模式、鼠标选区编辑（拖选高亮、Shift+click 扩展、双击选词、Ctrl+C 复制选区）与全屏草稿编辑（`Ctrl+Shift+E` 或输入行 `⛶` 按钮：行号 + 当前行高亮、Enter 换行、Ctrl+Enter 发送、滚轮滚动、点击/拖选，长草稿独占整屏；`/settings` 可关）；可在vs code中[以vscode插件形式启动](docs/vscode.md)，已上架 VS Code Marketplace。
     `/resume` 只将完整读取并确认没有用户消息的日志判为空会话；仅发图片、读取不完整或解析失败的会话不会被归入空会话清理。
   - **扩展丰富**：原生浏览器交互，compter use等大量附属功能性扩展
   - **技能归 DSH 管理**：`/skills` 展示当前 profile、用户与项目发现的技能；dsh-TUI 不预装通用技能。
@@ -78,18 +78,14 @@ Sixel 使用最多 256 色的自适应调色板，透明像素与背景合成；
 
 ## 界面预览
 
-<div align="center">
-  <table>
-    <tr>
-      <td align="center" valign="middle" width="50%">
-        <img src="screenshots/splash.png" alt="首屏：像素鲸鱼顶栏" width="480">
-        <br>
-        <strong>首屏：像素鲸鱼顶栏</strong>
-      </td>
-    </tr>
-  </table>
-</div>
+[打开 Web 交互预览说明](docs/web-preview.md)
 
+从源码安装并编译后，执行 `pnpm preview:web`，打开终端打印的本地网址。
+网页通过 xterm.js 接入本仓库真实的 `Chat` 组件与 Ink 渲染器，可输入消息、
+查看流式思考与工具卡、操作主题/模型菜单和 Vim 编辑。
+回复与工具结果为固定演示数据，不连接模型 API，不执行 Shell，不需要 API Key。
+GitHub README 本身不运行 JavaScript；交互预览在独立网页中运行，需要本地 Node 服务，
+不是已部署的公共在线服务。支持范围、启动步骤与测试命令见上述说明。
 
 ## 快速开始
 
@@ -129,6 +125,26 @@ sh install.sh
 > `/update` 与 `dsh-tui update` 会自动写入这份配置，无需手工处理。
 
 更面向零基础的安装流程、profile 叠加机制、源码构建与常见问题见[安装与快速开始](docs/getting-started.md)。
+
+### 更新与启动前诊断
+
+启动后会在后台检查新版本，不会自动安装。空闲时执行 `/update`，更新成功后会
+重启并恢复当前会话；终端中的 `dsh-tui update` 使用同一更新流程，但不启动 TUI。
+
+| 命令 | 用途 |
+| --- | --- |
+| `dsh-tui update` | 更新当前 `dsh-tui` profile，并尝试对齐全局启动器 |
+| `dsh-tui doctor` | 检查 dsh、pnpm、profile、版本与凭证是否配置；不输出密钥值 |
+| `dsh-tui version` | 显示启动器与 profile 版本，等同于 `--version` / `-v` |
+| `dsh-tui help` | 显示命令帮助，等同于 `--help` / `-h` |
+
+`dst` 支持相同子命令。`help`、`version` 无需初始化 profile；`doctor` 可在
+TUI 启动失败时运行。子命令属于 npm 安装的启动器，仓库根目录的 `dsh-tui.cmd`
+只负责启动，不提供这些子命令。
+
+全局启动器的自动对齐取决于启动方式和目录写权限，并非保证成功；出现版本不一致
+提示时，按提示中的精确版本命令修复。日常更新与旧启动器修复步骤统一见
+[更新到最新版本](docs/getting-started.md#更新到最新版本)。
 
 
 

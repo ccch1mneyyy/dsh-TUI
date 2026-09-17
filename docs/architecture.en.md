@@ -190,7 +190,9 @@ visual TUI alone does not describe the effective policy.
   a malformed mounted service is unavailable and fails closed. If the external
   `/permission` command is not registered, input follows the existing
   default/model dispatch behavior.
-- `/vim`, `/connect`, and `/hooks` are compatibility placeholders,
+- `/vim` implements session-scoped Vim editing for the prompt; it is not a
+  placeholder. See [Interaction and commands](interaction.en.md) for keybindings.
+- `/connect` and `/hooks` are compatibility placeholders,
   not evidence that those DSH capabilities are mounted.
 - There is no automated full-flow suite that requires real model credentials;
   CI uses headless rendering and fake services. This L4 batch has **not**

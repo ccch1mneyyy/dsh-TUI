@@ -146,11 +146,16 @@ the interface, and removing it leaves no core modifications behind.
 
 ## Preview
 
-<p align="center">
-  <img src="screenshots/splash.png" alt="dsh-TUI conversation with the pixel-whale header" width="100%">
-</p>
+[Open the interactive web preview guide](docs/web-preview.en.md)
 
-Live activity, goal/todo state, and context metrics:
+After installing and compiling the source, run `pnpm preview:web` and open the
+local URL printed in the terminal. xterm.js connects to this repository's real
+`Chat` component and Ink renderer: type messages, inspect streamed thinking
+and tool cards, use theme/model menus, and try Vim editing.
+Responses and tool results are fixed demo data. No model API, shell, or API key
+is involved. GitHub README pages do not execute JavaScript; the preview runs in
+a separate page backed by a local Node service, not a deployed public demo.
+See the guide for supported interactions, setup, and tests.
 
 ## Quick Start
 
@@ -193,7 +198,7 @@ CLI subcommands (`dsh-tui help` or `dst help` prints the full usage; the `dst` a
 
 | Command | Purpose |
 |---|---|
-| `dsh-tui update` | Update the profile to the latest release and align the launcher (same install logic as the in-TUI `/update`, without restarting into the TUI) |
+| `dsh-tui update` | Update the profile and attempt to align the global launcher (same install logic as the in-TUI `/update`, without restarting into the TUI) |
 | `dsh-tui doctor` | Pre-flight environment checks: dsh/pnpm, profile install and version alignment, whether the API key is set (state only, never the value), config file presence; complements the in-TUI `/doctor` session diagnostics |
 | `dsh-tui version` | Show the launcher and profile versions (`--version`/`-v` are equivalent) |
 | `dsh-tui help` | Show usage (`--help`/`-h` are equivalent) |
@@ -225,21 +230,18 @@ source builds, and troubleshooting.
 
 The TUI checks the configured registry for newer versions in the background
 after startup (the check never blocks the first frame and silently ignores
-offline or registry errors). When an update is available, just type `/update`
+offline or registry errors); it does not install updates automatically.
+When an update is available, type `/update` while idle
 for a one-shot upgrade: it updates the runtime actually running in the current
 `dsh-tui` profile, verifies the install result, then restarts automatically and
 resumes the current session.
 
-When launched through the global `dsh-tui` command, newer versions
-automatically migrate/align the global entry to a delegating launcher: the
-global command only forwards to the copy inside the profile, so the startup
-logic always follows the profile version.
-
-Under normal circumstances no extra manual step is needed:
-
-```sh
-npm install -g @deepseek-harness-tui/dsh-tui
-```
+The updater attempts to migrate/align a discoverable global launcher to the
+delegating entry. This depends on the launch path and write permissions;
+source checkouts, direct profile launches, or locked/unwritable global files
+may require manual alignment. Follow the exact-version command printed by
+the launcher when versions disagree. The authoritative procedure is
+[Update to the latest version](docs/getting-started.en.md#update-to-the-latest-version).
 
 For migration from the former `dsh-cc-tui` package and `cc-tui` profile, see
 [Getting started](docs/getting-started.en.md#migrate-from-the-former-package).
@@ -324,7 +326,7 @@ so keep using `Ctrl`.
 | Model | `/model` two-level picker (a pinned **Recently used** group first — the last 10 switched models, persisted at `~/.dsh-tui/model-recents.json` — then provider groups; Enter drills into a group's models; a single provider with no recents skips straight to the list; **switching = fork continuation, history preserved**) · `/effort` reasoning effort (slider / `status` / `<id>`; the default level new sessions start on is set in `/settings` → Default reasoning effort) · `/preset` agent preset (**cannot switch once the session has started** — blank-only) · `/thinking` thinking display · `/tokens` token details · `/activity` working animation (`frames <name>` / `status`) · `/theme` theme picker · `/color` (bare opens the palette picker; `<name>` sets directly; `status`/`reset`) session accent color (input border + session-name chip at the top-right, per-session; chip off by default, enable in `/settings`) · `/lang` zh/en UI switch (also selectable in `/settings`) |
 | Accounts/Policy | `/provider` manage model providers — add a provider, or edit an existing one via a menu (API key · model list · delete the provider; custom endpoints also get base URL · wire protocol; a targeted edit patches only that field, the rest of the profile survives untouched; the model list pre-checks what you already enabled; only user-layer providers are editable) (includes the bundled dsh-auth **subscription OAuth sign-in** branch — ChatGPT / Claude / Grok, no API key; same source as `/auth status\|login\|logout`) · `/login` credential & account status · `/logout` logout notes · `/permission` dynamic preset/status notes · `/add-dir` file-policy scope · `/hooks` · `/mcp` |
 | Skills | `/skills` lists skills discovered by DSH; user-invocable skills join the `/` menu as `/name` |
-| Other | `/agents` subagent list · `/plugins check <path>` plugin diagnostics · `/update` auto-update and restart · `/vim` vim editing mode toggle · `/terminal-setup` · `/connect` · `/help` · `/exit` (aliases `/quit` `/q`) |
+| Other | `/agents` subagent list · `/plugins check <path>` plugin diagnostics · `/update` user-triggered upgrade and restart · `/vim` vim editing mode toggle · `/terminal-setup` · `/connect` · `/help` · `/exit` (aliases `/quit` `/q`) |
 | Registry | `/plan` `/goal` `/feedback` `/permission` (DSH command-registry plugins, merged into the `/` menu automatically with the plugin) |
 
 > Unknown commands are sent to the model as ordinary messages (e.g. in a composition where `/permission` is not mounted).
