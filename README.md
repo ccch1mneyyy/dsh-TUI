@@ -181,18 +181,18 @@ TUI 启动失败时运行。子命令属于 npm 安装的启动器，仓库根�
 
 <!-- readme-svg-navigation:start -->
 <p align="center">
-  <a href="docs/getting-started.md"><img src="docs/assets/readme/nav-start-zh.svg" width="440" alt="安装与快速开始"></a>
-  <a href="docs/interaction.md"><img src="docs/assets/readme/nav-interaction-zh.svg" width="440" alt="交互与命令"></a>
-  <a href="docs/configuration.md"><img src="docs/assets/readme/nav-configuration-zh.svg" width="440" alt="配置参考"></a>
-  <a href="docs/themes.md"><img src="docs/assets/readme/nav-themes-zh.svg" width="440" alt="主题系统"></a>
-  <a href="docs/architecture.md"><img src="docs/assets/readme/nav-architecture-zh.svg" width="440" alt="架构与限制"></a>
-  <a href="docs/vscode.md"><img src="docs/assets/readme/nav-vscode-zh.svg" width="440" alt="VS Code 使用指南"></a>
-  <a href="https://github.com/T-Auto/dsh-ecosystem-spec/blob/main/docs/plugin-admission-and-development.md"><img src="docs/assets/readme/nav-plugins-zh.svg" width="440" alt="插件准入与开发"></a>
-  <a href="docs/contributing.md"><img src="docs/assets/readme/nav-contributing-zh.svg" width="440" alt="贡献与开发约定"></a>
-  <a href="docs/community-management.md"><img src="docs/assets/readme/nav-community-zh.svg" width="440" alt="社区管理框架"></a>
-  <a href="docs/roadmap.md"><img src="docs/assets/readme/nav-roadmap-zh.svg" width="440" alt="项目路线图"></a>
-  <a href="docs/README.md"><img src="docs/assets/readme/nav-index-zh.svg" width="440" alt="完整文档索引"></a>
-  <a href="docs/links.md"><img src="docs/assets/readme/nav-links-zh.svg" width="440" alt="社区与相关项目"></a>
+  <a href="docs/getting-started.md"><img src="docs/assets/readme/nav-start-zh.svg" width="390" alt="安装与快速开始"></a>
+  <a href="docs/interaction.md"><img src="docs/assets/readme/nav-interaction-zh.svg" width="390" alt="交互与命令"></a>
+  <a href="docs/configuration.md"><img src="docs/assets/readme/nav-configuration-zh.svg" width="390" alt="配置参考"></a>
+  <a href="docs/themes.md"><img src="docs/assets/readme/nav-themes-zh.svg" width="390" alt="主题系统"></a>
+  <a href="docs/architecture.md"><img src="docs/assets/readme/nav-architecture-zh.svg" width="390" alt="架构与限制"></a>
+  <a href="docs/vscode.md"><img src="docs/assets/readme/nav-vscode-zh.svg" width="390" alt="VS Code 使用指南"></a>
+  <a href="https://github.com/T-Auto/dsh-ecosystem-spec/blob/main/docs/plugin-admission-and-development.md"><img src="docs/assets/readme/nav-plugins-zh.svg" width="390" alt="插件准入与开发"></a>
+  <a href="docs/contributing.md"><img src="docs/assets/readme/nav-contributing-zh.svg" width="390" alt="贡献与开发约定"></a>
+  <a href="docs/community-management.md"><img src="docs/assets/readme/nav-community-zh.svg" width="390" alt="社区管理框架"></a>
+  <a href="docs/roadmap.md"><img src="docs/assets/readme/nav-roadmap-zh.svg" width="390" alt="项目路线图"></a>
+  <a href="docs/README.md"><img src="docs/assets/readme/nav-index-zh.svg" width="390" alt="完整文档索引"></a>
+  <a href="docs/links.md"><img src="docs/assets/readme/nav-links-zh.svg" width="390" alt="社区与相关项目"></a>
 </p>
 <!-- readme-svg-navigation:end -->
 
@@ -206,9 +206,9 @@ TUI 启动失败时运行。子命令属于 npm 安装的启动器，仓库根�
 - **社区交流群**：使用问题、插件创意、功能许愿，都欢迎进来聊。
 - **行为准则**：参与前请读一遍[贡献者行为准则](CODE_OF_CONDUCT.md)。
 
-| 微信群（dsh-TUI 社区交流 4 群） | QQ 群（群号 572549239） |
+| 微信群（DSH-Plugins 社区交流 3 群） | QQ 群（群号 572549239） |
 | :---: | :---: |
-| <img src="screenshots/wechat-group.jpg" alt="dsh-TUI 社区交流 4 群微信群二维码" width="200"> | <a href="screenshots/qq-group.jpg"><img src="screenshots/qq-group.jpg" alt="dsh-TUI 社区交流群 QQ 群二维码，群号 572549239，点击查看原图" width="280"></a> |
+| <img src="screenshots/wechat-group.jpg" alt="DSH-Plugins 社区交流 3 群微信群二维码" width="200"> | <a href="screenshots/qq-group.jpg"><img src="screenshots/qq-group.jpg" alt="dsh-TUI 社区交流群 QQ 群二维码，群号 572549239，点击查看原图" width="280"></a> |
 
 > 微信群二维码约 7 天过期一次，如遇失效请走 QQ 群（572549239），或开个 issue 提醒我们更新。
 

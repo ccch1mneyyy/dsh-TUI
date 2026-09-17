@@ -358,18 +358,18 @@ One full-screen surface lists every session in this process: the attached conver
 
 <!-- readme-svg-navigation:start -->
 <p align="center">
-  <a href="docs/getting-started.en.md"><img src="docs/assets/readme/nav-start-en.svg" width="440" alt="Getting started"></a>
-  <a href="docs/interaction.en.md"><img src="docs/assets/readme/nav-interaction-en.svg" width="440" alt="Interaction & commands"></a>
-  <a href="docs/configuration.en.md"><img src="docs/assets/readme/nav-configuration-en.svg" width="440" alt="Configuration"></a>
-  <a href="docs/themes.en.md"><img src="docs/assets/readme/nav-themes-en.svg" width="440" alt="Themes"></a>
-  <a href="docs/architecture.en.md"><img src="docs/assets/readme/nav-architecture-en.svg" width="440" alt="Architecture & limits"></a>
-  <a href="docs/vscode.en.md"><img src="docs/assets/readme/nav-vscode-en.svg" width="440" alt="VS Code guide"></a>
-  <a href="https://github.com/T-Auto/dsh-ecosystem-spec/blob/main/docs/plugin-admission-and-development.md"><img src="docs/assets/readme/nav-plugins-en.svg" width="440" alt="Plugin development"></a>
-  <a href="docs/contributing.en.md"><img src="docs/assets/readme/nav-contributing-en.svg" width="440" alt="Contributing"></a>
-  <a href="docs/community-management.en.md"><img src="docs/assets/readme/nav-community-en.svg" width="440" alt="Community management"></a>
-  <a href="docs/roadmap.en.md"><img src="docs/assets/readme/nav-roadmap-en.svg" width="440" alt="Project roadmap"></a>
-  <a href="docs/README.md"><img src="docs/assets/readme/nav-index-en.svg" width="440" alt="All documentation"></a>
-  <a href="docs/links.md"><img src="docs/assets/readme/nav-links-en.svg" width="440" alt="Related projects"></a>
+  <a href="docs/getting-started.en.md"><img src="docs/assets/readme/nav-start-en.svg" width="390" alt="Getting started"></a>
+  <a href="docs/interaction.en.md"><img src="docs/assets/readme/nav-interaction-en.svg" width="390" alt="Interaction & commands"></a>
+  <a href="docs/configuration.en.md"><img src="docs/assets/readme/nav-configuration-en.svg" width="390" alt="Configuration"></a>
+  <a href="docs/themes.en.md"><img src="docs/assets/readme/nav-themes-en.svg" width="390" alt="Themes"></a>
+  <a href="docs/architecture.en.md"><img src="docs/assets/readme/nav-architecture-en.svg" width="390" alt="Architecture & limits"></a>
+  <a href="docs/vscode.en.md"><img src="docs/assets/readme/nav-vscode-en.svg" width="390" alt="VS Code guide"></a>
+  <a href="https://github.com/T-Auto/dsh-ecosystem-spec/blob/main/docs/plugin-admission-and-development.md"><img src="docs/assets/readme/nav-plugins-en.svg" width="390" alt="Plugin development"></a>
+  <a href="docs/contributing.en.md"><img src="docs/assets/readme/nav-contributing-en.svg" width="390" alt="Contributing"></a>
+  <a href="docs/community-management.en.md"><img src="docs/assets/readme/nav-community-en.svg" width="390" alt="Community management"></a>
+  <a href="docs/roadmap.en.md"><img src="docs/assets/readme/nav-roadmap-en.svg" width="390" alt="Project roadmap"></a>
+  <a href="docs/README.md"><img src="docs/assets/readme/nav-index-en.svg" width="390" alt="All documentation"></a>
+  <a href="docs/links.md"><img src="docs/assets/readme/nav-links-en.svg" width="390" alt="Related projects"></a>
 </p>
 <!-- readme-svg-navigation:end -->
 
@@ -565,9 +565,9 @@ responsible for their maintenance and security.
   [Contributor Covenant Code of Conduct](CODE_OF_CONDUCT.en.md) before taking
   part.
 
-| WeChat group (dsh-TUI community 4) | QQ group (ID 572549239) |
+| WeChat group (DSH-Plugins community 3) | QQ group (ID 572549239) |
 | :---: | :---: |
-| <img src="screenshots/wechat-group.jpg" alt="dsh-TUI community WeChat group 4 QR code" width="200"> | <a href="screenshots/qq-group.jpg"><img src="screenshots/qq-group.jpg" alt="dsh-TUI community QQ group QR code, group 572549239. Open the original image." width="280"></a> |
+| <img src="screenshots/wechat-group.jpg" alt="DSH-Plugins community WeChat group 3 QR code" width="200"> | <a href="screenshots/qq-group.jpg"><img src="screenshots/qq-group.jpg" alt="dsh-TUI community QQ group QR code, group 572549239. Open the original image." width="280"></a> |
 
 > The WeChat QR code expires roughly every 7 days; if it stops working, use
 > the QQ group (572549239) or open an issue to nudge us for a refresh.

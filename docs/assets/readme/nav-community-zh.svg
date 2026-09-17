@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="560" height="106" viewBox="0 0 560 106" role="img" aria-labelledby="title desc">
+<svg xmlns="http://www.w3.org/2000/svg" width="480" height="96" viewBox="0 0 480 96" role="img" aria-labelledby="title desc">
   <title id="title">社区管理框架</title>
   <desc id="desc">社区入口、角色与提案流程</desc>
   <style>
@@ -9,10 +9,10 @@
   </style>
   
     <a href="https://github.com/says693/dsh-TUI-693/blob/main/docs/community-management.md">
-      <rect class="tile" x="1" y="4" width="558" height="98" rx="6" fill="#111519" stroke="#303741"/>
-      <g transform="translate(22 26) scale(1.0416666666666667)" fill="none" stroke="#8bb6fb" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><path d="M16 3.128a4 4 0 0 1 0 7.744"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><circle cx="9" cy="7" r="4"/></g>
-      <text x="65" y="42" font-size="22" fill="#edf1f6" font-weight="600">社区管理框架</text>
-      <text x="65" y="75" font-size="16" fill="#aeb8c6" >社区入口、角色与提案流程</text>
-      <g transform="translate(514 25) scale(0.9166666666666666)" fill="none" stroke="#8bb6fb" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M7 7h10v10"/><path d="M7 17 17 7"/></g>
+      <rect class="tile" x="1" y="4" width="478" height="88" rx="6" fill="#111519" stroke="#303741"/>
+      <g transform="translate(20 21) scale(1)" fill="none" stroke="#8bb6fb" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><path d="M16 3.128a4 4 0 0 1 0 7.744"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><circle cx="9" cy="7" r="4"/></g>
+      <text x="58" y="38" font-size="21" fill="#edf1f6" font-weight="600">社区管理框架</text>
+      <text x="58" y="68" font-size="16" fill="#aeb8c6" >社区入口、角色与提案流程</text>
+      <g transform="translate(434 20) scale(0.9166666666666666)" fill="none" stroke="#8bb6fb" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M7 7h10v10"/><path d="M7 17 17 7"/></g>
     </a>
 </svg>
