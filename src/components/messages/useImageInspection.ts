@@ -12,8 +12,11 @@ import { loadTranscriptImageFull } from './TranscriptImages.js'
 export function useImageInspection(image: TranscriptImage, available: boolean, columns: number, rows: number,
   cell: TerminalCellSize | undefined, zoom: number) {
   const imageId = image.id
+  // Committed facade for the loaders below. Written in a layout effect, not
+  // during render: an interrupted render must not leak its facade into a
+  // timer that an earlier commit already scheduled.
   const latestImage = React.useRef(image)
-  latestImage.current = image
+  React.useLayoutEffect(() => { latestImage.current = image }, [image])
   const session = React.useRef<ImageInspectionSession | null>(null)
   const [position, setPosition] = React.useState<{ imageId: string; center: ImageCenter } | null>(null)
   const center = position?.imageId === imageId ? position.center : undefined
