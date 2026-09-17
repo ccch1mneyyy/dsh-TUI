@@ -14,7 +14,8 @@ node docs/assets/readme/verify.mjs
 ```
 
 The generator updates four responsive, bilingual automatic animated previews,
-16 navigation tiles and the marked navigation blocks in both READMEs. It verifies
+16 navigation tiles, two compact security-link buttons and the marked navigation
+blocks in both READMEs. It verifies
 local link targets before writing the indexes. Do not edit generated SVG files by hand.
 
 Each navigation tile has an internal SVG link for standalone SVG viewers.
