@@ -12,10 +12,7 @@
  *   node scripts/sync-profile.mjs            # 对比并同步（打印变更清单）
  *   node scripts/sync-profile.mjs --check    # 只对比，不改动（退出码 2 = 有差异）
  *
- * profile 定位：$DSH_HOME/profiles/dsh-tui（未设置时按平台默认：
- *   Windows %USERPROFILE%/.dsh-cc，其它 ~/.dsh）。
- *   NOTE: ~/.dsh-cc is this install's harness home (an early-release name);
- *   migrate to the default ~/.dsh together with run.ts if the home moves.
+ * profile 定位：$DSH_HOME/profiles/dsh-tui（未设置时按上游默认 ~/.dsh）。
  */
 import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync } from 'node:fs'
 import { createHash } from 'node:crypto'
@@ -52,9 +49,7 @@ function collectFiles(entry, base, out = []) {
 
 const dshHome = process.env.DSH_HOME
   ? resolve(process.env.DSH_HOME)
-  : process.platform === 'win32'
-    ? join(process.env.USERPROFILE ?? homedir(), '.dsh-cc')
-    : join(homedir(), '.dsh')
+  : join(homedir(), '.dsh')
 const profileDir = join(dshHome, 'profiles', PROFILE)
 const installed = join(profileDir, 'node_modules', PACKAGE)
 
