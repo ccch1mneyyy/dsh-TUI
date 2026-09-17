@@ -387,6 +387,7 @@ const dict = {
   'home-working': { zh: 'Agent 运行中，先结束或中断当前回合', en: 'The agent is working — finish or interrupt the turn first' },
   // ── screens/SessionSupervisor.tsx（三合一会话管理：/resume /agentview /home）─
   'supervisor-title': { zh: '会话管理', en: 'Sessions' },
+  'supervisor-unregistered': { zh: '未登记的工作区', en: 'Unregistered' },
   'supervisor-subtitle': { zh: '本终端托管多个会话 · 切换不中断', en: 'This terminal hosts several sessions · switching does not stop them' },
   'supervisor-filter-placeholder': { zh: '输入以搜索会话…', en: 'Type to search sessions…' },
   'supervisor-hint-list': { zh: '**←/→** 切换栏位 · **Enter** 进入会话 · Ctrl+N 新建 · Ctrl+X 停止 · Esc 返回', en: '**←/→** switch pane · **Enter** enter · Ctrl+N new · Ctrl+X stop · Esc back' },

@@ -27,13 +27,14 @@ process.env.FORCE_COLOR = '3'
 process.env.DSH_TUI_THEME = 'dark'
 process.env.DSH_TUI_LANG = 'en'
 
-import { mkdtempSync, mkdirSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { PassThrough, Writable } from 'node:stream'
 import React from 'react'
 import xterm from '@xterm/headless'
-import { findText, settled, viewportLines, writeParsed } from './lib/term-test.mjs'
+import fakeHome from './lib/fake-home.mjs'
+import { findText, settled, sleep, viewportLines, writeParsed } from './lib/term-test.mjs'
 
 const { Terminal: XTerm } = xterm
 const [{ render, ThemeProvider, AlternateScreen }, { SessionSupervisor, sessionMatchesQuery, railWindowTop }] =
@@ -53,6 +54,10 @@ function check(name: string, ok: boolean, detail = ''): void {
 
 const COLS = 120
 const ROWS = 28
+/** Workspaces in the long-rail case: comfortably more than the rail can show. */
+const RAIL_ENTRIES = 24
+/** The directory an unregistered-only listing falls back to; never created. */
+const GHOST_DIR = join(tmpdir(), 'dsh-tui-supervisor-ghost')
 
 class FakeStdout extends Writable {
   columns = COLS
@@ -105,6 +110,10 @@ const registry = [
   // Beta first, on purpose: the ledger's order must not decide the selection.
   { id: 'w-beta', path: betaDir, title: 'Beta', present: true, sessionCount: 0 },
   { id: 'w-alpha', path: alphaDir, title: 'Alpha', present: true, sessionCount: 0 },
+  // A workspace that exists ONLY in the ledger: no session ever ran in it. It
+  // is the control for "sessions are matched by directory", and it makes the
+  // registry longer than the set of directories the listing knows about.
+  { id: 'w-empty', path: join(sandbox, 'gamma'), title: 'Gamma', present: true, sessionCount: 0 },
 ]
 const sessions = [
   session({ id: 'free-one', title: { text: 'free session', source: 'prompt' }, updatedAt: now - 1_000 }),
@@ -112,8 +121,36 @@ const sessions = [
   session({ id: 'live-one', title: { text: 'live session', source: 'prompt' }, updatedAt: now - 3_000 }),
 ]
 
-/** The pid we pretend another terminal has; the screen must only show it. */
-const FOREIGN_PID = 424242
+/**
+ * A pid that is certainly alive so the ledger's liveness witness passes; the
+ * screen must only report it. `process.ppid` is a running process on every
+ * platform (pid 1 is not guaranteed to exist on Windows).
+ */
+const FOREIGN_PID = process.ppid
+/** The session another terminal has mounted, seeded into the REAL ledger. */
+const HELD_SESSION_ID = 'held-one'
+
+// Seed the cross-process ledger the screen reads for itself. It is a FILE in
+// `~/.dsh-tui` (fake-home pinned HOME before any lib import), so the regression
+// proves the live path — the screen reads the ledger on its own pulse — rather
+// than an injected occupancy callback that could hide a stale-snapshot bug.
+{
+  const dataDir = join(fakeHome, '.dsh-tui')
+  mkdirSync(dataDir, { recursive: true })
+  writeFileSync(
+    join(dataDir, 'session-mounts.json'),
+    JSON.stringify({
+      version: 1,
+      owners: [{
+        pid: FOREIGN_PID,
+        heartbeatAt: Date.now(),
+        startedAt: Date.now(),
+        sessionIds: [HELD_SESSION_ID],
+      }],
+    }, null, 2),
+    'utf8',
+  )
+}
 
 const calls: string[] = []
 const channel = {
@@ -173,7 +210,6 @@ const instance = await render(
         approval={null}
         onApprove={() => {}}
         liveStateOf={(id) => liveState[id as keyof typeof liveState]}
-        occupancyOf={(id) => (id === 'held-one' ? FOREIGN_PID : undefined)}
       />
     </AlternateScreen>
   </ThemeProvider>,
@@ -185,6 +221,74 @@ const instance = await render(
     patchConsole: false,
   },
 )
+
+/**
+ * A second, independent screen on the SAME fake home, for the cases whose
+ * assertions need a different registry (an empty one, and one longer than the
+ * rail can show). Separate terminals keep each case's frame independent — a
+ * shared window would carry the previous case's rows into the next.
+ */
+async function openSupervisor(
+  overrides: { registry: readonly unknown[]; cwd: string; sessions?: readonly unknown[] },
+): Promise<{ write: (data: string) => void; lines: () => string[]; calls: readonly string[]; close: () => void }> {
+  const screen = new XTerm({ cols: COLS, rows: ROWS, scrollback: 0, allowProposedApi: true })
+  const out = new FakeStdout(screen)
+  const input = new FakeStdin()
+  const ownCalls: string[] = []
+  const ownChannel = {
+    version: 0,
+    cwd: overrides.cwd,
+    working: false,
+    agentId: 'live-one',
+    listWorkspaceRegistry: async () => overrides.registry,
+    listSessions: async () => overrides.sessions ?? sessions,
+    resumeTo: async (id: string) => {
+      ownCalls.push(`resumeTo:${id}`)
+      return { ok: true }
+    },
+    switchWorkspace: async () => true,
+    resolveWorkspace: async (reference: string) => ({ cwd: reference, uri: reference, label: reference, kind: 'local', badge: 'LOCAL' }),
+    stopBackgroundAgent: async () => true,
+    notify: () => {},
+    subscribe: () => () => {},
+  } as never
+  const app = await render(
+    <ThemeProvider theme="dark">
+      <AlternateScreen>
+        <SessionSupervisor
+          channel={ownChannel}
+          home={sandbox}
+          onClose={() => {}}
+          onOpenSession={async (id) => {
+            // Same path Chat.tsx wires: the screen hands the row's id to the
+            // channel, which is where "did Enter open the RIGHT row" is
+            // observable.
+            await (ownChannel as unknown as { resumeTo(id: string): Promise<{ ok: boolean }> }).resumeTo(id)
+            return true
+          }}
+          onNewSession={async () => true}
+          onStopSession={async () => true}
+          approval={null}
+          onApprove={() => {}}
+          liveStateOf={(id) => liveState[id as keyof typeof liveState]}
+        />
+      </AlternateScreen>
+    </ThemeProvider>,
+    {
+      stdin: input as never,
+      stdout: out as never,
+      stderr: new FakeStderr() as never,
+      exitOnCtrlC: false,
+      patchConsole: false,
+    },
+  )
+  return {
+    write: (data: string) => { input.write(data) },
+    lines: () => viewportLines(screen),
+    calls: ownCalls,
+    close: () => { app.unmount() },
+  }
+}
 // Wait for the listing effect to land AND the frame to paint. The first
 // condition is what makes this robust: the screen names the terminal's own
 // workspace in the pane header only after `listSessions()` resolved, so polling
@@ -398,5 +502,143 @@ check(
 )
 
 instance.unmount()
+
+console.log('occupancy follows the LEDGER, not a snapshot taken at first render')
+{
+  // The screen polls on its own 2s clock and must re-read the ledger there. A
+  // snapshot captured by the host during ITS render stayed frozen: a foreign
+  // terminal that released the session left the row red and unclickable until
+  // some unrelated channel event happened to repaint the parent.
+  const ledgerPath = join(fakeHome, '.dsh-tui', 'session-mounts.json')
+  const owner = (sessionIds: readonly string[]): string => JSON.stringify({
+    version: 1,
+    owners: sessionIds.length === 0 ? [] : [{
+      pid: FOREIGN_PID,
+      heartbeatAt: Date.now(),
+      startedAt: Date.now(),
+      sessionIds,
+    }],
+  }, null, 2)
+  writeFileSync(ledgerPath, owner([HELD_SESSION_ID]), 'utf8')
+  const app = await openSupervisor({ registry, cwd: alphaDir })
+  await settled(() => app.lines().join('\n').includes('Sessions in Alpha'))
+  check(
+    'the ledger holder is shown while the peer is alive',
+    app.lines().some(line => line.includes('held session') && line.includes('held by pid')),
+    app.lines().join('\n'),
+  )
+  writeFileSync(ledgerPath, owner([]), 'utf8')
+  check(
+    'the row clears on the poll once the peer releases it',
+    await settled(
+      () => app.lines().some(line => line.includes('held session') && !line.includes('held by pid')),
+      { timeoutMs: 8_000 },
+    ),
+    app.lines().join('\n'),
+  )
+  app.close()
+  // Leave the ledger empty for any later case: the peer released it above.
+}
+
+// ── the rail shows whole rows, and Enter follows the VISIBLE cursor ────────
+//
+// Two regressions in one screen, both invisible to the older assertions:
+//
+//   * the rail's window was computed in TERMINAL ROWS while each workspace
+//     entry is two of them, so it rendered about twice as many entries as fit
+//     and `overflow="hidden"` clipped the focused one — the user was navigating
+//     workspaces that were not on screen;
+//   * `sessionFocusRef` was a second focus source beside `focusSessionId`: the
+//     render drew `❯` from the id while Enter read the ref, so after a filter
+//     moved the rows Enter acted on a row the user had never selected.
+console.log('long rail: the focused workspace is really on screen')
+{
+  const manyDir = join(sandbox, 'many')
+  const many = Array.from({ length: RAIL_ENTRIES }, (_, index) => {
+    const path = join(manyDir, `workspace-${String(index + 1).padStart(2, '0')}`)
+    return { id: `w-${index}`, path, title: `Workspace${index + 1}`, present: true, sessionCount: 0 }
+  })
+  // The terminal sits in the LAST workspace, so the rail opens at the bottom of
+  // a list that cannot fit — the exact shape the old row-count window clipped.
+  const app = await openSupervisor({ registry: many, cwd: many[many.length - 1]!.path, sessions: [] })
+  await settled(() => app.lines().join('\n').includes(`Workspace${RAIL_ENTRIES}`))
+  const lines = app.lines()
+  const focused = lines.findIndex(raw => /❯\s+▣\s+Workspace\d+/u.test(raw))
+  check(
+    'the focused rail entry is inside the viewport',
+    focused >= 0 && focused < ROWS,
+    `row ${focused} of ${ROWS}`,
+  )
+  check(
+    'the focused entry\'s SECOND line is on screen too',
+    focused >= 0 && lines[focused + 1] !== undefined && lines[focused + 1]!.includes('many'),
+    `next line: ${JSON.stringify(lines[focused + 1] ?? null)}`,
+  )
+  app.close()
+}
+
+console.log('Enter acts on the row the filter left under the cursor')
+{
+  const app = await openSupervisor({ registry, cwd: alphaDir })
+  await settled(() => app.lines().join('\n').includes('Sessions in Alpha'))
+  // → into the session column, where the cursor lands on the ATTACHED session
+  // (the second row), not on the first.
+  app.write('\u001b[C')
+  await settled(() => true)
+  const cursorOn = (title: string): boolean => app.lines().some(line =>
+    line.includes(title) && line.includes('❯'))
+  await settled(() => cursorOn('live session'))
+  check(
+    'the cursor starts on the attached session',
+    cursorOn('live session') && !cursorOn('free session'),
+    app.lines().join('\n'),
+  )
+  // The filter re-sorts: the row that WAS second becomes the first. The cursor
+  // has to follow the id it was on, not the index it used to occupy. Typing is
+  // paced because this harness delivers a whole burst between renders and the
+  // first character of a burst is consumed before the filter is live.
+  for (const character of 'free') {
+    app.write(character)
+    await sleep(60) // 固定窗:pacing 逐字投喂：整串一次写入时首字符会被当作导航键吞掉
+  }
+  await settled(() => app.lines().join('\n').includes('free session'))
+  check(
+    'the filter leaves the cursor on a real row',
+    cursorOn('free session'),
+    app.lines().join('\n'),
+  )
+  await sleep(120) // 固定窗:pacing Enter 处理步间，无可观测锚点
+  app.write('\r')
+  check(
+    'Enter opens the row the cursor is on',
+    await settled(() => app.calls.includes('resumeTo:free-one'), { timeoutMs: 4_000 }),
+    `calls: ${app.calls.join(', ')}`,
+  )
+  check(
+    'Enter opened exactly that row',
+    app.calls.filter(call => call.startsWith('resumeTo')).join(',') === 'resumeTo:free-one',
+    `calls: ${app.calls.join(', ')}`,
+  )
+  app.close()
+}
+
+console.log('an unregistered directory does not hide its sessions')
+{
+  // "No workspace registration" is not "no history": the group is the way back
+  // to sessions whose directory was never registered (or was removed).
+  const app = await openSupervisor({ registry: [], cwd: GHOST_DIR })
+  await settled(() => app.lines().join('\n').includes('Unregistered'))
+  check(
+    'the rail offers the unregistered group',
+    app.lines().join('\n').includes('Unregistered'),
+    app.lines().join('\n'),
+  )
+  check(
+    'the group lists the sessions the registry does not know',
+    app.lines().join('\n').includes('free session'),
+    app.lines().join('\n'),
+  )
+  app.close()
+}
 console.log(failures === 0 ? '\nAll session-supervisor checks passed.' : `\n${failures} check(s) failed.`)
 process.exit(failures === 0 ? 0 : 1)
