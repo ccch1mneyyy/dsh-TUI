@@ -28,7 +28,7 @@
  *
  * Run: node --import tsx/esm scripts/verify-session-mounts.mjs
  */
-import { mkdtempSync, readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs'
+import { mkdtempSync, readFileSync, writeFileSync, mkdirSync, existsSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -39,6 +39,7 @@ process.env.USERPROFILE = tmpHome
 const mod = await import('../src/sessionMounts.ts')
 const {
   HEARTBEAT_TTL_MS,
+  claimMount,
   clearOwnMounts,
   occupancyOf,
   ownMounts,
@@ -66,6 +67,11 @@ function check(name, cond) {
 function writeRaw(owners, version = 1) {
   mkdirSync(join(tmpHome, '.dsh-tui'), { recursive: true })
   writeFileSync(LEDGER, JSON.stringify({ version, owners }, null, 2), 'utf8')
+}
+
+/** The owners currently on disk, parsed directly (no module heuristics). */
+function rawOwners() {
+  return JSON.parse(readFileSync(LEDGER, 'utf8')).owners
 }
 
 /** A peer record shape with the fields the ledger validates. */
@@ -131,6 +137,92 @@ console.log('a live claim survives a read (no over-eager pruning):')
   writeRaw([peer(foreignPid, ['keep-sess'], NOW)])
   check('live claim stays live', readLiveMounts(NOW).length === 1)
   check('live claim still in the file', readMountLedger().some(o => o.sessionIds.includes('keep-sess')))
+}
+
+console.log('claiming is one atomic step, and a refusal writes nothing:')
+{
+  clearOwnMounts()
+  const foreignPid = process.platform === 'win32' ? process.ppid : 1
+  // The interleaving this replaces: two processes that each check occupancy and
+  // then publish both observe `free` and both claim. `claimMount` re-derives the
+  // conflict from the file while holding the same lock the write takes, so the
+  // second claim sees the first and is refused.
+  writeRaw([peer(foreignPid, ['contended'], NOW)])
+  const refused = claimMount('contended')
+  check('a live peer claim is refused', refused.ok === false)
+  check('the refusal names the holder', refused.ok === false && refused.holders.includes(foreignPid))
+  check('a refused claim is not written to the ledger', !ownMounts().includes('contended'))
+  check(
+    "the peer's record is left exactly as it was",
+    rawOwners().length === 1 && rawOwners()[0].sessionIds.join(',') === 'contended',
+    JSON.stringify(rawOwners()),
+  )
+
+  // A claim with nobody live on it succeeds, and replaces the dead record.
+  const dead = findDeadPid()
+  writeRaw([peer(dead, ['reclaimable'], NOW)])
+  const claimed = claimMount('reclaimable')
+  check('a claim over a dead owner succeeds', claimed.ok === true)
+  check('the new claim is ours and in the file', ownMounts().includes('reclaimable')
+    && rawOwners().some(o => o.pid === process.pid && o.sessionIds.includes('reclaimable')))
+  check('claiming twice from the same process is not a conflict', claimMount('reclaimable').ok === true)
+  releaseMount('reclaimable')
+
+  // An unreadable ledger must refuse rather than claim blind: without the lock
+  // there is no way to know whether a peer got there first.
+  const lockPath = join(tmpHome, '.dsh-tui', 'session-mounts.lock')
+  mkdirSync(join(tmpHome, '.dsh-tui'), { recursive: true })
+  writeFileSync(lockPath, `${process.pid}\n`, 'utf8')
+  const blocked = claimMount('unlocked')
+  check('a claim without the lock is refused', blocked.ok === false && blocked.holders.length === 0)
+  check('the refused claim is not remembered as ours', !ownMounts().includes('unlocked'))
+  rmSync(lockPath, { force: true })
+  clearOwnMounts()
+}
+
+console.log('pruning never drops a record published while we read:')
+{
+  clearOwnMounts()
+  const dead = findDeadPid()
+  writeRaw([peer(dead, ['dead-one'], NOW)])
+  // The prune path (a read that found something dead) re-reads under the lock
+  // and merges; a peer that published between the read and the replace must
+  // survive. Emulate the peer by publishing AFTER the stale file is on disk but
+  // BEFORE the pruning read: the record is in the file the prune re-reads.
+  const foreignPid = process.platform === 'win32' ? process.ppid : 1
+  writeRaw([peer(dead, ['dead-one'], NOW), peer(foreignPid, ['live-one'], NOW)])
+  const live = readLiveMounts(NOW)
+  check('the dead owner is pruned', !live.some(o => o.pid === dead))
+  check(
+    'the concurrent live owner survives the prune',
+    rawOwners().some(o => o.pid === foreignPid && o.sessionIds.includes('live-one')),
+    JSON.stringify(rawOwners()),
+  )
+  check(
+    "our own record survives a prune too (it is not 'dead' just because it is stale)",
+    (publishMounts(['mine-kept']), readLiveMounts(NOW + HEARTBEAT_TTL_MS + 1).some(o => o.pid === process.pid && o.sessionIds.includes('mine-kept'))),
+    JSON.stringify(rawOwners()),
+  )
+  clearOwnMounts()
+}
+
+console.log('TTL and pid are independent witnesses, and BOTH must fail:')
+{
+  clearOwnMounts()
+  const foreignPid = process.platform === 'win32' ? process.ppid : 1
+  // Alive + fresh heartbeat: authoritative, even at the edge of the window.
+  writeRaw([peer(foreignPid, ['alive-fresh'], NOW - HEARTBEAT_TTL_MS)])
+  check('alive within the TTL keeps its claim', readLiveMounts(NOW).some(o => o.pid === foreignPid))
+  // Alive but stale: the timer is not a write-lock revocation, but a heartbeat
+  // this old cannot be distinguished from a pid that was reused, so the claim
+  // is treated as abandoned (see the module header).
+  writeRaw([peer(foreignPid, ['alive-stale'], NOW - HEARTBEAT_TTL_MS - 1)])
+  check('alive past the TTL is abandoned', !readLiveMounts(NOW).some(o => o.pid === foreignPid))
+  // Dead: no heartbeat can save it.
+  const dead = findDeadPid()
+  writeRaw([peer(dead, ['dead-fresh'], NOW)])
+  check('a fresh heartbeat on a dead pid is abandoned', !readLiveMounts(NOW).some(o => o.pid === dead))
+  clearOwnMounts()
 }
 
 console.log('duplicate claims keep the most recent heartbeat:')

@@ -105,15 +105,19 @@ Write discipline (the pattern already proven in `src/sessionPins.ts`):
 
 ### 3.3 Liveness needs two witnesses
 
-A record's claim is released only when **both** witnesses agree the owner is
-gone:
+A record counts as live only while **both** witnesses hold, so **either**
+witness failing releases the claim:
 
 - **`process.kill(pid, 0)`**: a clean exit, a `kill -9`, or a forcefully closed
   terminal removes the pid. It cannot see **pid reuse**, nor a process on
   another machine sharing the home directory over a network.
 - **The `heartbeatAt` timestamp**: no refresh within `HEARTBEAT_TTL_MS` (45s)
-  means abandoned. It catches pid reuse (a recycled pid would have to also be
+  means abandoned. It catches pid reuse (a recycled pid would not happen to be
   refreshing this exact record) and a pulled plug.
+
+The two are **AND**ed: `pidAlive(pid) && (now - heartbeatAt) <= TTL`. An OR is
+deliberately avoided — it would let a dead record whose pid happens to be reused
+live forever, which is harder to recover from than the stale-owner case below.
 
 So:
 
@@ -122,30 +126,44 @@ So:
 | Clean exit (including `Ctrl+C`) | The teardown funnel calls `clearOwnMounts()`; the record is deleted and the sessions are mountable by another tui **immediately** |
 | `kill -9` / terminal force-closed | The heartbeat stops, so the claim expires within one TTL (≤45s); the pid probe usually decides sooner |
 | Power loss / unplug / suspend | The process is gone and the on-disk record expires — self-healing |
-| Owner alive but wedged (blocked event loop) | The claim **stands** (the safe direction: refusing one mount is recoverable, interleaving a log is not) |
+| Process alive but its heartbeat is stale (suspended past one TTL, long-blocked event loop) | The claim is **released**. This is the known cost of AND: a stale heartbeat cannot be told apart from a reused pid on disk, and this ledger is the cross-process **visibility** layer rather than the write authority — the host's own session write lock is what separates writers, so the choice here is to give up one layer of protection rather than leave a claim nothing can reclaim |
 | Pid reused | The stale heartbeat still expires, so nothing is locked forever |
 
-**Self-healing needs no reaper**: the read path (`readLiveMounts`) rewrites the
-file in place when it finds a dead record. Any screen poll cleans up as a side
-effect, so orphaned records need no separate scheduled task.
+> Historical note: the old text and the code contradicted each other here — the
+> comment promised a wedged-but-alive owner kept its claim while the code
+> reclaimed on the heartbeat. They now agree on the table above (the code keeps
+> its behaviour, the text states it).
 
-### 3.4 Check-then-claim is ordered
+**Self-healing needs no reaper**: the read path (`readLiveMounts`) takes the
+same cross-process lock and **re-reads the file before** rewriting it. Filtering
+a lock-free snapshot and writing it back drops any record a peer published in
+between — `rename` atomicity prevents half a file, not a lost update.
+
+### 3.4 Check and claim are one step
 
 Mounting a session with no live agent in this process must go:
 
-1. read the ledger (`readSessionOwners`) to find out whether another process
-   holds it;
-2. if free, publish **our own** claim (`publishMounts`) immediately;
+1. read the ledger (`readSessionOwners`) as a **pre-filter**, only so the user
+   can be told which pid holds the session;
+2. if free, call `claimMount(sessionId)`: inside the cross-process lock it
+   re-reads the file, re-derives the conflict, writes **nothing** on a conflict,
+   and on success splices its own fresh record into the current file;
 3. only then `await` the resume workflow.
 
-Step 2 precedes step 3 to close the race where two TUIs both pass step 1: the
-first to publish wins and the second is refused at step 1. Publishing is a
-lock-guarded read-modify-write, so concurrent publishes cannot lose each other.
+"Check, then publish" is **not atomic across processes**: two processes can each
+observe `free` at step 1 and then publish in turn, leaving two live holders of
+one session in the ledger. Step 2 is what makes the admission decision real.
 
-**A session with a live agent in this process skips the occupancy check**: it is
-already mounted here, there is no second claimant to race, and it goes straight
-through live adoption (the same path that parks the session being left). It must
-**never** be resumed from disk a second time, which would mount one log twice.
+A claim this call newly took is released (`releaseMount`) when the switch is
+vetoed, the binding went stale, or the resume threw — a reservation must never
+outlive the attempt that made it.
+
+**A session that already has a live agent in this process neither checks
+occupancy nor goes through live adoption**: it is the session currently
+attached, so entering it again is an idempotent success that keeps the same
+Agent handle. That short-circuit is load-bearing — handing `undefined` to the
+adoption transaction takes its default `dispose` path, which STOPS the running
+session and still reports success.
 
 ### 3.5 The screen contract
 
@@ -155,6 +173,15 @@ through live adoption (the same path that parks the session being left). It must
 - A session held by **this** process (parked) is not "occupied": it must be
   switchable back from this screen.
 - A free session that is not live here: enterable as normal.
+- Occupancy is re-read from the ledger on the screen's own **2s** tick; the host
+  must not capture a snapshot into a callback at render time, or a peer that
+  exited leaves the row red and unclickable until some unrelated channel event
+  happens to repaint.
+- The **registry is not the whole store**: it can legitimately be empty (a bare
+  composition mounts no workspace service, or a registration was removed while
+  its logs stayed on disk). The screen must fall back to a group derived from
+  the sessions' own `cwd`, so those sessions stay visible and resumable — "no
+  registration" is not "no history".
 
 ## 4. Refresh cost
 
@@ -198,18 +225,27 @@ even the session store root differs.
 
 ## 6. Invariants (keep these when changing this area)
 
-1. **One log is driven by one process at a time.** The occupancy check must
-   happen before any `await` that could start growing the log, and the claim
-   must be published immediately after the check.
+1. **One log is driven by one process at a time.** The admission decision must
+   be made inside the cross-process lock (`claimMount`: re-read + conflict
+   re-check + claim write in one step), never as a lock-free "check, then
+   publish". Re-entering a session this process already hosts must short-circuit
+   idempotently and must never take a path that disposes the handle.
 2. **Switching a session never destroys it.** Park, do not `dispose`; a running
    turn is not interrupted by a switch.
 3. **A claim must never be locked forever.** Every record must be reclaimable by
-   either "pid gone" or "heartbeat expired". A state that requires manual
-   unlocking is forbidden.
-4. **The read path must not throw.** Missing file, corrupt JSON, wrong version,
-   wrong field types — all read as empty, and the next write repairs it.
+   either "pid gone" or "heartbeat expired" (both must hold for a claim to
+   stand). A state that requires manual unlocking is forbidden.
+4. **The read path must not throw, and must not lose updates.** Missing file,
+   corrupt JSON, wrong version, wrong field types — all read as empty, and the
+   next write repairs it; self-healing rewrites must re-read under the lock
+   rather than committing a pre-lock snapshot.
 5. **A timer must never block exit.** `.unref()` plus funnel cleanup, both.
 6. **The screen must not disagree with the runtime.** Whether a session can be
    entered is the runtime's decision; the screen only explains the reason one
    step earlier. Both paths share one set of words via
    `src/sessions/resumeFailure.ts`.
+7. **The screen must not assume the registry is complete.** Sessions in an empty
+   registry or an unregistered directory stay visible and resumable, and
+   occupancy is re-read every tick instead of reusing a host render snapshot.
+8. **The focus is one fact.** The session list's cursor is keyed by **sessionId**
+   and every index is derived from it, so render, movement and Enter agree.
