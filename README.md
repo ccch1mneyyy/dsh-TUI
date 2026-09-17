@@ -78,17 +78,16 @@ Sixel 使用最多 256 色的自适应调色板，透明像素与背景合成；
 
 ## 界面预览
 
-<div align="center">
-  <table>
-    <tr>
-      <td align="center" valign="middle" width="50%">
-        <img src="screenshots/splash.png" alt="首屏：像素鲸鱼顶栏" width="480">
-        <br>
-        <strong>首屏：像素鲸鱼顶栏</strong>
-      </td>
-    </tr>
-  </table>
-</div>
+<picture>
+  <source media="(prefers-reduced-motion: reduce) and (max-width: 640px)" srcset="docs/assets/readme/preview-zh-mobile-still.svg">
+  <source media="(prefers-reduced-motion: reduce)" srcset="docs/assets/readme/preview-zh-still.svg">
+  <source media="(max-width: 640px)" srcset="docs/assets/readme/preview-zh-mobile.svg">
+  <img src="docs/assets/readme/preview-zh.svg" alt="dsh-TUI 动态预览：输入、思考、工具结果与回复。动画演示，非可编辑终端。" width="1200">
+</picture>
+
+预设动画展示打字、思考与回复，遵循系统「减少动态效果」设置。
+**中部输入区是动画，不接收键盘输入**：GitHub README 将 SVG 作为图片显示。
+[文档索引](#文档索引)的 SVG 图块通过外层链接跳转，各自可点击。
 
 
 ## 快速开始
@@ -180,18 +179,22 @@ TUI 启动失败时运行。子命令属于 npm 安装的启动器，仓库根�
 
 ## 文档索引
 
-| 主题 | 内容 |
-| --- | --- |
-| [安装与快速开始](docs/getting-started.md) | 前置条件、安装、启动、profile 生命周期、源码开发 |
-| [配置参考](docs/configuration.md) | Cordis 覆盖、配置字段、Agent preset、MCP、环境变量 |
-| [主题系统](docs/themes.md) | 内置主题、自动检测、静态 JSON 与 npm 插件主题、校验规则 |
-| [交互与命令](docs/interaction.md) | 快捷键、鼠标、问卷、slash command 与会话工作流 |
-| [架构与限制](docs/architecture.md) | 运行链路、渲染与持久化设计、安全边界、已知限制 |
-| [社区管理框架](docs/community-management.md) | 社区入口、角色、提案流程、roadmap 规则与维护节奏 |
-| [项目路线图](docs/roadmap.md) | 公开目标、阶段、任务状态、退出条件与 Future Work |
-| [VS Code 使用指南](docs/vscode.md) | 在 VS Code 集成终端运行 dsh-tui；companion 扩展 `dsh-tui-vscode` 提供多会话、会话历史与指定会话恢复（已上架 Marketplace） |
-| [贡献与开发约定](docs/contributing.md) | 贡献流程、仓库地图、构建产物、验证矩阵与修改规则 |
-| [插件准入与开发指南](https://github.com/T-Auto/dsh-ecosystem-spec/blob/main/docs/plugin-admission-and-development.md) | 接口与兼容性协定 / 插件准入规范 / 插件接缝 / 契约 / 验证清单（已并入 dsh-ecosystem-spec） |
+<!-- readme-svg-navigation:start -->
+<p align="center">
+  <a href="docs/getting-started.md"><img src="docs/assets/readme/nav-start-zh.svg" width="440" alt="安装与快速开始"></a>
+  <a href="docs/interaction.md"><img src="docs/assets/readme/nav-interaction-zh.svg" width="440" alt="交互与命令"></a>
+  <a href="docs/configuration.md"><img src="docs/assets/readme/nav-configuration-zh.svg" width="440" alt="配置参考"></a>
+  <a href="docs/themes.md"><img src="docs/assets/readme/nav-themes-zh.svg" width="440" alt="主题系统"></a>
+  <a href="docs/architecture.md"><img src="docs/assets/readme/nav-architecture-zh.svg" width="440" alt="架构与限制"></a>
+  <a href="docs/vscode.md"><img src="docs/assets/readme/nav-vscode-zh.svg" width="440" alt="VS Code 使用指南"></a>
+  <a href="https://github.com/T-Auto/dsh-ecosystem-spec/blob/main/docs/plugin-admission-and-development.md"><img src="docs/assets/readme/nav-plugins-zh.svg" width="440" alt="插件准入与开发"></a>
+  <a href="docs/contributing.md"><img src="docs/assets/readme/nav-contributing-zh.svg" width="440" alt="贡献与开发约定"></a>
+  <a href="docs/community-management.md"><img src="docs/assets/readme/nav-community-zh.svg" width="440" alt="社区管理框架"></a>
+  <a href="docs/roadmap.md"><img src="docs/assets/readme/nav-roadmap-zh.svg" width="440" alt="项目路线图"></a>
+  <a href="docs/README.md"><img src="docs/assets/readme/nav-index-zh.svg" width="440" alt="完整文档索引"></a>
+  <a href="docs/links.md"><img src="docs/assets/readme/nav-links-zh.svg" width="440" alt="社区与相关项目"></a>
+</p>
+<!-- readme-svg-navigation:end -->
 
 完整的中英文索引见 [`docs/README.md`](docs/README.md)。
 
@@ -205,7 +208,7 @@ TUI 启动失败时运行。子命令属于 npm 安装的启动器，仓库根�
 
 | 微信群（dsh-TUI 社区交流 4 群） | QQ 群（群号 572549239） |
 | :---: | :---: |
-| <img src="screenshots/wechat-group.jpg" alt="dsh-TUI 社区交流 4 群微信群二维码" width="200"> | <img src="screenshots/qq-group.png" alt="dsh-TUI 社区交流群 QQ 群二维码" width="200"> |
+| <img src="screenshots/wechat-group.jpg" alt="dsh-TUI 社区交流 4 群微信群二维码" width="200"> | <a href="screenshots/qq-group.jpg"><img src="screenshots/qq-group.jpg" alt="dsh-TUI 社区交流群 QQ 群二维码，群号 572549239，点击查看原图" width="280"></a> |
 
 > 微信群二维码约 7 天过期一次，如遇失效请走 QQ 群（572549239），或开个 issue 提醒我们更新。
 
