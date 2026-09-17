@@ -347,6 +347,20 @@ stdin.write('\r')
 check('the session screen opens as a screen',
   await settled(() => /Sessions in tmp/.test(flat(screen()))), flat(screen()).slice(0, 140))
 
+/**
+ * The rail's own rows, as the user scans them.
+ *
+ * "the rail lists workspace X" cannot be asked of the composed screen text: the
+ * pane header reads `Sessions in tmp`, so `/tmp/` matches even when the rail
+ * dropped the entry. A rail row is identified by its own `▣`/`▢` marker (the
+ * same witness the rail-cursor assertions use), and the entry's title follows
+ * that marker — the session pane can produce neither.
+ */
+const railRows = () => screen()
+  .split('\n')
+  .filter(line => /[▣▢]/u.test(line))
+  .join('\n')
+
 // ── the listing ────────────────────────────────────────────────────────────
 let s = screen()
 check('conversations are listed', /gamma/.test(s) && /beta/.test(s) && /alpha/.test(s))
@@ -362,7 +376,9 @@ check('delegated runs are NOT listed', !/delegated one/.test(s) && !/delegated t
 check('a session with no conversation is never a row', !/^\s*☆ ∙ tmp\b/m.test(s))
 check('a conversation from another workspace is not listed',
   !/delta other workspace/.test(s), flat(s).slice(0, 160))
-check('the workspace rail lists both ledger entries', /tmp/.test(s) && /other/.test(s))
+check('the workspace rail lists both ledger entries',
+  /[▣▢] tmp\b/u.test(railRows()) && /[▣▢] other\b/u.test(railRows()),
+  flat(railRows()).slice(0, 200))
 check('the filter box is live', /Type to search sessions/.test(flat(s)))
 check('the new-session card is the list\'s first row', /New session/.test(flat(s)))
 

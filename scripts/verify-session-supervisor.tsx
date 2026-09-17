@@ -229,7 +229,14 @@ const instance = await render(
  * shared window would carry the previous case's rows into the next.
  */
 async function openSupervisor(
-  overrides: { registry: readonly unknown[]; cwd: string; sessions?: readonly unknown[] },
+  overrides: {
+    registry: readonly unknown[]
+    cwd: string
+    sessions?: readonly unknown[]
+    /** True when the registry read itself fails (service missing / throwing). */
+    registryRejects?: boolean
+    registryAbsent?: boolean
+  },
 ): Promise<{ write: (data: string) => void; lines: () => string[]; calls: readonly string[]; close: () => void }> {
   const screen = new XTerm({ cols: COLS, rows: ROWS, scrollback: 0, allowProposedApi: true })
   const out = new FakeStdout(screen)
@@ -240,7 +247,12 @@ async function openSupervisor(
     cwd: overrides.cwd,
     working: false,
     agentId: 'live-one',
-    listWorkspaceRegistry: async () => overrides.registry,
+    ...(overrides.registryAbsent === true ? {} : {
+      listWorkspaceRegistry: async () => {
+        if (overrides.registryRejects === true) throw new Error('workspace service unavailable')
+        return overrides.registry
+      },
+    }),
     listSessions: async () => overrides.sessions ?? sessions,
     resumeTo: async (id: string) => {
       ownCalls.push(`resumeTo:${id}`)
@@ -624,20 +636,55 @@ console.log('Enter acts on the row the filter left under the cursor')
 
 console.log('an unregistered directory does not hide its sessions')
 {
-  // "No workspace registration" is not "no history": the group is the way back
-  // to sessions whose directory was never registered (or was removed).
+  // "No workspace registration" is not "no history": the fallback row is the
+  // way back to sessions whose directory was never registered (or was removed).
+  // It is titled by the directory itself, so the rail still says WHERE they ran
+  // rather than dumping every unregistered project into one anonymous group.
   const app = await openSupervisor({ registry: [], cwd: GHOST_DIR })
-  await settled(() => app.lines().join('\n').includes('Unregistered'))
+  const shown = () => app.lines().join('\n')
   check(
-    'the rail offers the unregistered group',
-    app.lines().join('\n').includes('Unregistered'),
+    'the rail offers a row for the unregistered directory',
+    await settled(() => /alpha/.test(shown()), { timeoutMs: 6_000 }),
+    shown(),
+  )
+  check(
+    'the row lists the sessions the registry does not know',
+    await settled(() => shown().includes('free session'), { timeoutMs: 6_000 }),
+    shown(),
+  )
+  check(
+    'the fallback row is not backed by a registration',
+    !/No workspaces yet/.test(shown()),
+    shown(),
+  )
+  app.close()
+}
+
+console.log('a registry that FAILS does not take the history with it')
+{
+  // The two reads are independent. `Promise.all` used to reject as a whole, so
+  // a throwing registry discarded the perfectly good `listSessions()` result
+  // and the screen rendered "no sessions" over a directory full of them.
+  const app = await openSupervisor({ registry: [], cwd: alphaDir, registryRejects: true })
+  check(
+    'the sessions are still listed when the registry throws',
+    await settled(() => app.lines().join('\n').includes('free session'), { timeoutMs: 6_000 }),
     app.lines().join('\n'),
   )
   check(
-    'the group lists the sessions the registry does not know',
-    app.lines().join('\n').includes('free session'),
+    'the rail names the directory the sessions came from',
+    app.lines().join('\n').includes('alpha'),
     app.lines().join('\n'),
   )
+  // Same screen, no registry service at all (bare composition): the sessions
+  // must not vanish just because the workspace stack is unmounted.
+  const absent = await openSupervisor({ registry: [], cwd: alphaDir, registryAbsent: true })
+  check(
+    'the sessions are still listed with no workspace service',
+    await settled(() => absent.lines().join('\n').includes('free session'), { timeoutMs: 6_000 }),
+    absent.lines().join('\n'),
+  )
+  absent.close()
   app.close()
 }
 console.log(failures === 0 ? '\nAll session-supervisor checks passed.' : `\n${failures} check(s) failed.`)

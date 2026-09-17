@@ -1,4 +1,5 @@
 import React, { useCallback, useMemo, useRef, useState } from 'react'
+import { basename } from 'node:path'
 import { Box, Text, useInput, useTerminalSize } from '../ui.js'
 import { t } from '../i18n.js'
 import type { ContextMenuEvent } from '../ink/events/context-menu-event.js'
@@ -253,43 +254,61 @@ export function SessionSupervisor({
   }, [sessions, channel.agentId])
 
   /**
-   * The rail's rows: the durable registry, plus one synthetic group when some
-   * listed session has no registration at all.
+   * The rail's rows: the durable registry, plus rows for sessions that live in
+   * a directory the registry does not know (or while it cannot be read at all).
    *
    * The registry is the sidebar's own ledger, and it is genuinely OPTIONAL:
    * `createLocalWorkspaceRuntime()` supports compositions with no workspace
-   * stack and returns an empty one, and a registration can be removed while its
-   * session logs stay on disk. Sessions in either case are still resumable —
-   * the persistence store, not the registry, is what holds them — so an empty
-   * registry must not render "no history" and leave those sessions
-   * unreachable. The group carries a synthetic id and is never persisted.
+   * stack and returns an empty one, a registration can be removed while its
+   * session logs stay on disk, and the service itself can reject. Sessions in
+   * every one of those cases are still resumable — the persistence store, not
+   * the registry, is what holds them — so an empty rail must not render "no
+   * history" and leave them unreachable.
+   *
+   * Each unregistered directory gets its OWN row (titled by its basename), so
+   * the rail keeps telling the user WHERE a session ran; when even the session
+   * paths are unavailable they all land in one synthetic group. These rows live
+   * only inside this screen and are never written back to the ledger.
    */
   const railEntries = useMemo<readonly RailEntry[]>(() => {
-    const registered = entries
     const orphans = listedSessions.filter(session =>
-      !registered.some(entry => samePath(entry.path, session.cwd)))
-    if (orphans.length === 0) return registered
-    return [...registered, {
-      id: UNREGISTERED_RAIL_ID,
-      path: UNREGISTERED_RAIL_ID,
-      title: t('supervisor-unregistered'),
+      !entries.some(entry => samePath(entry.path, session.cwd)))
+    if (orphans.length === 0) return entries
+    const byCwd = new Map<string, { path: string; count: number }>()
+    for (const session of orphans) {
+      const key = normalizeWorkspaceCwd(session.cwd)
+      const existing = byCwd.get(key)
+      if (existing === undefined) byCwd.set(key, { path: session.cwd, count: 1 })
+      else existing.count += 1
+    }
+    return [...entries, ...[...byCwd.entries()].map(([key, group]): RailEntry => ({
+      id: `${UNREGISTERED_RAIL_ID}:${key === '' ? 'unknown' : key}`,
+      path: group.path === '' ? UNREGISTERED_RAIL_ID : group.path,
+      title: basename(group.path) || t('supervisor-unregistered'),
       present: true,
-      sessionCount: orphans.length,
+      sessionCount: group.count,
       from: 'unregistered',
-    }]
+    }))]
   }, [entries, listedSessions])
 
   const groupedEntries = useMemo(() => {
     const groups = new Map<string, SessionSummary[]>()
     for (const session of listedSessions) {
       const path = railEntries.find(entry =>
-        entry.from === 'registry' && samePath(entry.path, session.cwd))?.path ?? UNREGISTERED_RAIL_ID
+        entry.from === 'registry' && samePath(entry.path, session.cwd))?.path
+        ?? (session.cwd === '' ? UNREGISTERED_RAIL_ID : session.cwd)
       const bucket = groups.get(path)
       if (bucket === undefined) groups.set(path, [session])
       else bucket.push(session)
     }
     return groups
   }, [listedSessions, railEntries])
+
+  /** Session count for one rail row, from the same grouping the pane uses. */
+  const countOf = useCallback(
+    (entry: RailEntry): number => (groupedEntries.get(entry.path) ?? []).length,
+    [groupedEntries],
+  )
 
   const [railFocus, setRailFocus] = useState(0)
   /**
@@ -375,19 +394,34 @@ export function SessionSupervisor({
    * this screen cannot work without, so it must survive a missing ledger.
    */
   const reload = useCallback(async (): Promise<void> => {
-    try {
-      const ledger = typeof channel.listWorkspaceRegistry === 'function'
-        ? channel.listWorkspaceRegistry()
-        : Promise.resolve([] as readonly TuiWorkspaceEntry[])
-      const [registry, listed] = await Promise.all([ledger, channel.listSessions()])
-      setEntries(registry.map(entry => ({ ...entry, from: 'registry' })))
-      setSessions(listed)
-      setNotice((current) => (current?.tone === 'error' ? undefined : current))
-    } catch (error) {
-      setNotice({ text: t('home-sessions-failed', { err: message(error) }), tone: 'error' })
-    } finally {
-      setLoading(false)
-    }
+    // The two reads are independent, and the session listing is the half this
+    // screen cannot work without: a registry that rejects (bare composition,
+    // unmounted service, a provider throwing) must not take the history down
+    // with it. So the listing is settled on its own, and a registry failure
+    // degrades to the empty rail the cwd-derived fallback groups already cover.
+    await Promise.all([
+      (async (): Promise<void> => {
+        try {
+          setSessions(await channel.listSessions())
+          setNotice(current => (current?.tone === 'error' ? undefined : current))
+        } catch (error) {
+          setNotice({ text: t('home-sessions-failed', { err: message(error) }), tone: 'error' })
+        }
+      })(),
+      (async (): Promise<void> => {
+        try {
+          const registry = typeof channel.listWorkspaceRegistry === 'function'
+            ? await channel.listWorkspaceRegistry()
+            : []
+          setEntries(registry.map(entry => ({ ...entry, from: 'registry' })))
+        } catch {
+          // An unreadable registry is not an empty history: the sessions stay
+          // listed (and resumable) under the cwd-derived fallback groups.
+          setEntries([])
+        }
+      })(),
+    ])
+    setLoading(false)
   }, [channel])
 
   React.useEffect(() => {
@@ -467,7 +501,7 @@ export function SessionSupervisor({
     if (selected === undefined) return []
     const needle = query.trim().toLowerCase()
     void pulse
-    return (groupedEntries.get(selected.from === 'registry' ? selected.path : UNREGISTERED_RAIL_ID) ?? [])
+    return (groupedEntries.get(selected.path) ?? [])
       .filter(session => sessionMatchesQuery(session, needle))
       .slice()
       .sort((left, right) => {
@@ -938,7 +972,7 @@ export function SessionSupervisor({
                   title={entry.title}
                   path={entry.path}
                   home={home}
-                  sessionCount={(groupedEntries.get(entry.from === 'registry' ? entry.path : UNREGISTERED_RAIL_ID) ?? []).length}
+                  sessionCount={countOf(entry)}
                   present={entry.present}
                   selected={selected !== undefined && selected.id === entry.id}
                   focused={activePane === 'rail' && railFocus === absolute}
@@ -1043,7 +1077,7 @@ export function SessionSupervisor({
             {loading && <Text dimColor italic>{` ${truncateWidth(t('home-sessions-loading'), sessionWidth - 2)}`}</Text>}
             {!loading && visibleSessions.length === 0 && (
               <Text dimColor italic>
-                {` ${truncateWidth(filtered ? t('home-no-sessions') : t('home-no-sessions'), sessionWidth - 2)}`}
+                {` ${truncateWidth(filtered ? t('supervisor-no-matches') : t('home-no-sessions'), sessionWidth - 2)}`}
               </Text>
             )}
             {visibleSessionRows.map((session, index) => {
