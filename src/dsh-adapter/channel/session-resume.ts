@@ -8,7 +8,7 @@ import { t } from '../../i18n.js'
 import { readModelPref } from '../../modelPrefs.js'
 import { migratePresetPref, readPresetPref } from '../../presetPrefs.js'
 import { agentViewHasTurns } from '../agent-view.js'
-import { occupancyOf, ownMounts, publishMounts, readSessionOwners } from '../../sessionMounts.js'
+import { claimMount, occupancyOf, readSessionOwners, releaseMount } from '../../sessionMounts.js'
 import { ensureLegacySessionEventTypes } from '../compat/index.js'
 import { snapshotLiveSessionEvents } from '../compat/liveSession.js'
 import { composePreset, resolvePersistedPreset, resolvePersistedRoute } from '../presets.js'
@@ -136,10 +136,18 @@ export function createSessionResumeActions(
     keepCurrent: boolean,
     adoption: ReturnType<Binding['capture']>,
     entrySession?: Agent['session'],
+    /**
+     * Undo a ledger claim this call's caller made for `sessionId`. Invoked on
+     * every path that ends WITHOUT a commit, so a reservation never outlives the
+     * attempt that made it — a claim left behind would make the session look
+     * occupied to every other terminal.
+     */
+    onAbandon?: () => void,
   ): Promise<ResumeResult> => {
     const agents = ctx.get('agents') as ResumeAgents | undefined
     if (!agents) {
       deps.notify(t('resume-unavailable'), { color: 'error' })
+      onAbandon?.()
       return { ok: false, reason: 'unavailable' }
     }
     ensureLegacySessionEventTypes()
@@ -159,10 +167,12 @@ export function createSessionResumeActions(
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
       deps.notify(t('resume-failed', { err: message }), { color: 'error', timeoutMs: 8000 })
+      onAbandon?.()
       return { ok: false, reason: 'failed', error: message }
     }
     if (!deps.binding.isCurrent(adoption)) {
       await deps.binding.abandon(handle)
+      onAbandon?.()
       return { ok: false, reason: 'cancelled' }
     }
     try {
@@ -173,6 +183,7 @@ export function createSessionResumeActions(
     if (entrySession !== undefined && (!deps.owner.current() || deps.binding.agent.session !== entrySession)) {
       await deps.binding.abandon(handle)
       deps.notify(t('resume-session-changed'), { color: 'error' })
+      onAbandon?.()
       return { ok: false, reason: 'failed', error: 'live session changed during resume' }
     }
     return deps.binding.adopt(handle, adoption, (committed, disposePrevious) => {
@@ -247,29 +258,65 @@ export function createSessionResumeActions(
     // The attached session as of entry, so a rival switch that commits while
     // the awaits below yield cannot be adopted over.
     const entrySession = deps.binding.agent.session
+    // Already attached: this is a no-op, not a switch.
+    //
+    // The live-adoption path below hands `backgroundHandles.get(targetId)` to
+    // `binding.switchTo()`, and a session this terminal is CURRENTLY attached
+    // to has no entry there — its handle is the binding's own `currentHandle`.
+    // Calling it with `undefined` therefore parks nothing, and the adoption's
+    // default disposition disposes the handle that IS running, so a second
+    // Enter on the `current` row stopped the live turn while reporting success.
+    // `attachToAgent()` has always short-circuited here; this is the same rule
+    // for the unified screen's `/resume` path.
+    if (String(sessionId) === String(entrySession.id)) return { ok: true }
     // A live agent of this process is already mounted here; there is nothing
     // to claim and nothing that can be occupied. Adoption takes the live
     // handle (parking the current one) with no occupancy round-trip.
     const live = agents.get?.(SessionId(sessionId))
+    let claimed = false
     if (live === undefined) {
       const occupancy = occupancyOf(sessionId, readSessionOwners())
       if (occupancy.kind === 'occupied') {
         deps.notify(t('resume-session-occupied', { pid: occupancy.pid }), { color: 'error', timeoutMs: 8000 })
         return { ok: false, reason: 'occupied', pid: occupancy.pid }
       }
-      // Claim before yielding, so a rival TUI cannot pass the check above in
-      // the window between it and this session actually being mounted.
-      publishMounts([...ownMounts(), sessionId])
+      // Claim INSIDE the ledger lock: the check above is only a pre-filter for
+      // the friendly toast. Two processes that each check and then publish can
+      // both pass it, so the authoritative conflict test has to run where the
+      // claim is written (claimMount re-derives it from the file under the
+      // lock). Nothing is claimed on refusal.
+      const claim = claimMount(sessionId)
+      if (!claim.ok) {
+        // An empty holder list means the ledger itself could not be read or
+        // written: a refusal, but not one that can name a peer. pid 0 is never a
+        // real process, so the surface says "held" without inventing a terminal.
+        const pid = claim.holders[0] ?? 0
+        if (pid !== 0) deps.notify(t('resume-session-occupied', { pid }), { color: 'error', timeoutMs: 8000 })
+        return { ok: false, reason: 'occupied', pid }
+      }
+      claimed = true
     }
-    if (await deps.sessionSwitchVetoed('resume', sessionId)) return { ok: false, reason: 'cancelled' }
+    /** Undo a claim this call made and did not end up using. */
+    const releaseClaim = (): void => {
+      if (!claimed) return
+      claimed = false
+      releaseMount(sessionId)
+    }
+    if (await deps.sessionSwitchVetoed('resume', sessionId)) {
+      releaseClaim()
+      return { ok: false, reason: 'cancelled' }
+    }
     await deps.settleCompaction()
     if (!deps.binding.isCurrent(adoption) || deps.binding.agent.session !== entrySession) {
+      releaseClaim()
       return { ok: false, reason: 'cancelled' }
     }
     // A live target is adopted in place — the same path `/agentview` uses, so
     // the session being left is parked rather than disposed of. Only a target
     // with no live agent here goes back to the persistence backend.
-    return live !== undefined ? deps.adoptLive(live) : resume(sessionId, 'agent-view', true, adoption, entrySession)
+    return live !== undefined
+      ? deps.adoptLive(live)
+      : resume(sessionId, 'agent-view', true, adoption, entrySession, releaseClaim)
   }
 
   const newSessionWithTarget = async (target?: NewSessionTarget): Promise<boolean> => {
