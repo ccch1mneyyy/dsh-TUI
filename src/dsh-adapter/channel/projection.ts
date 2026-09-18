@@ -2,6 +2,7 @@ import type { Agent, AssistantStreamFrame } from '@deepseek-ai/dsh-agent'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import type { ContentBlock, StreamChunk } from '@deepseek-ai/dsh-llm'
 import type { ChannelState, ChannelGoal, ChatRow, ToolCallView, ToolResultView, ToolsRegistryLike } from './types.js'
+import type { SelectionAttachment } from '../../adapter/ports/channel-view.js'
 import type { InputConvergence } from './input-actions.js'
 import type { BackgroundJobStore } from '../jobs.js'
 import type { TuiRendererHost } from '../renderers.js'
@@ -31,6 +32,9 @@ interface ProjectionDependencies {
  /** DSH attachment service, resolved at call time (a late-mounted provider
   *  must still serve images for rows projected earlier). */
  attachments(): unknown
+ /** What a submitted message's IDE selection attached (keyed by the message
+  *  id the durable event carries), for the user row's indicator line. */
+ selectionAttached(messageId: string): SelectionAttachment | undefined
 }
 /** One authoritative reducer for both durable replay and live session events. */
 export function createChannelProjection(state: ProjectionState, deps: ProjectionDependencies) {
@@ -543,11 +547,15 @@ export function createChannelProjection(state: ProjectionState, deps: Projection
         const text = firstTextOf(event.data.content)
         const images = transcriptImages(event.data.content)
         if (text || images.length > 0) {
+          // IDE selection indicator: the delivery path remembered what this
+          // message attached; the durable event carries the same message id.
+          const selectionAttached = deps.selectionAttached(event.data.id)
           appendRow({
             id: deps.rowIds.value,
             kind: 'user',
             text,
             ...(images.length === 0 ? {} : { images }),
+            ...(selectionAttached === undefined ? {} : { selectionAttached }),
             seq: event.seq,
           })
           state.lastUserText = text || t('transcript-image-message', { count: images.length })

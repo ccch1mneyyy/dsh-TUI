@@ -49,6 +49,9 @@ export function createLiveAgentAdoption(
     refreshLoadedContext(): Promise<void>
     refreshSkillCommands(): Promise<void>
     clearStagedImages(): void
+    /** Drop the live IDE selection: the adopted session's cwd differs from
+     *  the one the selection was made in. */
+    resetIdeSelection(): void
     notifySessionSwitched(kind: 'agent-view', sessionId: string, previousSessionId: string): void
     notifyAgentView(): void
   },
@@ -65,6 +68,7 @@ export function createLiveAgentAdoption(
       state.agentId = target.id
       state.cwd = target.session.header.cwd ?? state.cwd
       state.displayCwd = deps.describeWorkspace(state.cwd).description ?? state.cwd
+      deps.resetIdeSelection()
       deps.refreshGitBranch()
       state.agentPreset = runningPresetOf(target.session)
       const route = recordedModelRoute(snapshotLiveSessionEvents(target.session))

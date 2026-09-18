@@ -174,7 +174,8 @@ export const CHANNEL_UI_PROPERTIES = [
   'jobControl',
   'mode',
   'modeIndex',
-  'agentPreset'
+  'agentPreset',
+  'selection'
 ] as const satisfies readonly (keyof ChannelUi)[]
 
 // Both inventories are exhaustive: adding a public property is a compile error

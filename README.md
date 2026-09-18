@@ -68,6 +68,7 @@ Sixel 使用最多 256 色的自适应调色板，透明像素与背景合成；
     终端图片预览默认开启，可在 `/settings → 终端图片预览` 或配置 `terminalImages: false` 中关闭，使用 `/restart` 后生效。已保存的 `/settings` 选择优先于 Cordis 配置；若曾保存为开启，请在 `/settings` 中关闭后再 `/restart`。关闭时保留文字信息并跳过预览解码，不影响向模型发送图片；`DSH_TUI_DISABLE_TERMINAL_IMAGES=1` 始终强制关闭预览。
   - **功能全面**：`/resume` 按工作目录分类浏览、搜索与预览历史会话（左键恢复、右键弹出操作菜单；可固定常用会话——「已固定」分组置顶显示，行内 ★ 或 `Ctrl+P` 切换，持久化到 `~/.dsh-tui`），另有 `/agentview` 会话总览（空输入 `←` 一键后台化，后台会话派发、预览、回复与停止一站式管理）、`/new`、`/compact`、`/export`、`/btw`，模型热切换（新会话默认推理强度可在 /settings → 默认推理强度 预设），原生subagent，会话fork，自动更新，输入框 `/vim` vim 编辑模式、鼠标选区编辑（拖选高亮、Shift+click 扩展、双击选词、Ctrl+C 复制选区）与全屏草稿编辑（`Ctrl+Shift+E` 或输入行 `⛶` 按钮：行号 + 当前行高亮、Enter 换行、Ctrl+Enter 发送、滚轮滚动、点击/拖选，长草稿独占整屏；`/settings` 可关）；可在vs code中[以vscode插件形式启动](docs/vscode.md)，已上架 VS Code Marketplace。
     `/resume` 只将完整读取并确认没有用户消息的日志判为空会话；仅发图片、读取不完整或解析失败的会话不会被归入空会话清理。
+  - **IDE 选区通道**：搭配 VS Code 扩展启动时，编辑器选中代码后 prompt 下方实时显示 `⧉ N lines selected` 徽标，提交消息自动附加选中行内容（transcript 有「⧉ Selected N lines」指示行）；手动启动（tmux/SSH）通过 lock 自动发现本机 IDE，无 IDE 时静默降级零影响。详见 [vscode.md](docs/vscode.md)。
   - **扩展丰富**：原生浏览器交互，compter use等大量附属功能性扩展
   - **技能归 DSH 管理**：`/skills` 展示当前 profile、用户与项目发现的技能；dsh-TUI 不预装通用技能。
     技能目录暂时不完整时，保留最后一次完整观测的技能菜单与命令注册，并按 800/1600/3200ms 最多重试三次；耗尽后等待 DSH 的 `skills/change` 通知或显式刷新，不持续轮询。只有完整观测才能移除已消失的技能，包括完整空目录。

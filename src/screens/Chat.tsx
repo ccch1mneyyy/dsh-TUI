@@ -3835,6 +3835,7 @@ export function Chat({
           onOpenSubagent={setSubagentDetailId}
           onOpenJobs={openJobsPanel}
           onOpenFile={openFileActions}
+          sessionCwd={channel.cwd}
           onPreviewImage={openImagePreview}
           suppressImageGraphics={activePreview !== null}
         />
