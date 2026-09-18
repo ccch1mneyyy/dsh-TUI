@@ -77,35 +77,35 @@ const whaleLogo = language => {
       .logo-desire{animation:logoDesire 5200ms ease-in-out infinite}
       .logo-star-idle{animation:logoStarIdle 5200ms ease-in-out infinite}
       .logo-star-active{animation:logoStarActive 5200ms ease-in-out infinite}
-      .logo-particles{animation:logoParticles 5200ms ease-out infinite;transform-origin:92px 19px}
+      .logo-particles{animation:logoParticles 5200ms ease-out infinite;transform-origin:606px 87px}
       .logo-happy{animation:logoHappy 5200ms ease-in-out infinite}
-      @keyframes logoDesire{0%,8%{opacity:0;transform:translateY(7px)}14%,28%{opacity:1;transform:translateY(0)}36%,100%{opacity:0;transform:translateY(-4px)}}
-      @keyframes logoStarIdle{0%,28%{opacity:0;transform:translateY(7px) scale(.96)}36%,52%{opacity:1;transform:translateY(0) scale(1)}58%,100%{opacity:0}}
-      @keyframes logoStarActive{0%,50%{opacity:0;transform:translateY(5px) scale(.9)}58%,66%{opacity:1;transform:translateY(0) scale(.95)}70%,78%{opacity:1;transform:translateY(0) scale(1.14)}84%,96%{opacity:1;transform:translateY(0) scale(1)}100%{opacity:0}}
-      @keyframes logoParticles{0%,58%{opacity:0;transform:scale(.2)}68%,82%{opacity:1;transform:scale(1.08)}96%,100%{opacity:0;transform:scale(1.55)}}
-      @keyframes logoHappy{0%,60%{opacity:0}68%,94%{opacity:1}100%{opacity:0}}
+      @keyframes logoDesire{0%,8%{opacity:0;transform:translate(14px,2px) translateY(7px)}14%,28%{opacity:1;transform:translate(14px,2px) translateY(0)}36%,100%{opacity:0;transform:translate(14px,2px) translateY(-4px)}}
+      @keyframes logoStarIdle{0%,28%{opacity:0;transform:translate(548px,70px) translateY(7px) scale(.96)}36%,52%{opacity:1;transform:translate(548px,70px) translateY(0) scale(1)}58%,100%{opacity:0;transform:translate(548px,70px) scale(1)}}
+      @keyframes logoStarActive{0%,50%{opacity:0;transform:translate(548px,70px) translateY(5px) scale(.9)}58%,66%{opacity:1;transform:translate(548px,70px) translateY(0) scale(.95)}70%,78%{opacity:1;transform:translate(548px,70px) translateY(0) scale(1.14)}84%,96%{opacity:1;transform:translate(548px,70px) translateY(0) scale(1)}100%{opacity:0;transform:translate(548px,70px) scale(1)}}
+      @keyframes logoParticles{0%,58%{opacity:0;transform:translate(548px,70px) scale(.2)}68%,82%{opacity:1;transform:translate(548px,70px) scale(1.08)}96%,100%{opacity:0;transform:translate(548px,70px) scale(1.55)}}
+      @keyframes logoHappy{0%,60%{opacity:0;transform:translate(63px,78px)}68%,94%{opacity:1;transform:translate(63px,78px)}100%{opacity:0;transform:translate(63px,78px)}}
       .logo-wordmark{fill:#263146}.logo-descriptor{fill:#687386}.logo-rule{stroke:#abc2ec}
       @media (prefers-color-scheme: dark){.logo-wordmark{fill:#e8e6e0}.logo-descriptor{fill:#abc2ec}.logo-rule{stroke:#5e88cc}}
     </style>
     <g transform="translate(8 18) scale(4.15)" shape-rendering="crispEdges">${frames.map(frame => frame.svg).join('')}</g>
-    <g class="logo-desire" transform="translate(52 2)">
+    <g class="logo-desire" transform="translate(14 2)">
       <rect x="0" y="0" width="${en ? 86 : 78}" height="30" rx="8" fill="#263146"/>
       <path d="M16 30l7 7 7-7" fill="#263146"/>
       <text x="${en ? 43 : 39}" y="21" text-anchor="middle" font-size="15" font-weight="700" fill="#ffffff">${xml(en ? 'I desire' : '我想要')}</text>
     </g>
     <a href="https://github.com/says693/dsh-TUI-693/stargazers" aria-label="${xml(activeLabel)}">
-      <g class="logo-star-idle" transform="translate(38 2)">
-        <rect x="0" y="0" width="${en ? 110 : 102}" height="34" rx="7" fill="#f5f7fa" stroke="#c6d0dc" stroke-width="2"/>
+      <g class="logo-star-idle" transform="translate(548 70)">
+        <rect x="0" y="0" width="${en ? 110 : 112}" height="34" rx="7" fill="#f5f7fa" stroke="#c6d0dc" stroke-width="2"/>
         <path d="${star}" transform="translate(8 3) scale(.75)" fill="none" stroke="#65717f" stroke-width="2"/>
         <text x="47" y="23" font-size="15" font-weight="700" fill="#263146">${xml(idleLabel)}</text>
       </g>
-      <g class="logo-star-active" transform="translate(38 2)">
-        <rect x="0" y="0" width="${en ? 110 : 112}" height="34" rx="7" fill="#f5f7fa" stroke="#c6d0dc" stroke-width="2"/>
+      <g class="logo-star-active" transform="translate(548 70)">
+        <rect x="0" y="0" width="${en ? 110 : 112}" height="34" rx="7" fill="#fff8d9" stroke="#e1ad1b" stroke-width="2"/>
         <path d="${star}" transform="translate(8 3) scale(.75)" fill="#f2bf27" stroke="#e1ad1b" stroke-width="1"/>
         <text x="47" y="23" font-size="15" font-weight="700" fill="#263146">${xml(activeLabel)}</text>
       </g>
-      <g class="logo-particles" transform="translate(38 2)" fill="#f2bf27">
-        <circle cx="6" cy="9" r="2"/><circle cx="100" cy="8" r="2"/><circle cx="12" cy="30" r="1.7"/><circle cx="105" cy="29" r="1.7"/>
+      <g class="logo-particles" transform="translate(548 70)" fill="#f2bf27">
+        <circle cx="6" cy="9" r="2"/><circle cx="106" cy="8" r="2"/><circle cx="12" cy="30" r="1.7"/><circle cx="105" cy="29" r="1.7"/>
         <path d="M28 2l2 4-2 4-2-4zM82 1l2 4-2 4-2-4zM54 36l2 4-2 4-2-4z"/>
       </g>
       <g class="logo-happy" transform="translate(63 78)">
