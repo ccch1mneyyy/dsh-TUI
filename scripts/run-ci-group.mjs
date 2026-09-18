@@ -599,6 +599,9 @@ const GROUPS = {
 // 批准、隐藏输入题粘贴惰性、超长粘贴上限报错、同 chunk 批量按键经同步
 // ref 依序编辑、emoji 码点步进。
     ["verify-question-paste", ['node', '--import', 'tsx/esm', 'scripts/verify-question-paste.tsx']],
+// 问卷折叠：真实 Chat + stores 验证审批/对话框优先、整屏中断层恢复、
+// abort 后 FIFO 请求身份隔离，以及改键和草稿保持（inline/fullscreen）。
+    ["verify-question-fold", ['node', '--import', 'tsx/esm', 'scripts/verify-question-fold.tsx']],
 // 长问卷列表回归：24 行终端中的 36 个两行 provider 选项必须围绕
 // focusIndex 窗口化，初始和深度导航后焦点 label/单选标记始终可见。
     ["verify-askpanel-long-list", ['node', '--import', 'tsx/esm', 'scripts/verify-askpanel-long-list.tsx']],

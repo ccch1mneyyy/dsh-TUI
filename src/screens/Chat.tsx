@@ -551,6 +551,10 @@ export function Chat({
   const [themeName, setTheme] = useTheme()
   const { rows: terminalRows } = useTerminalSize()
   const [showAllMessages, setShowAllMessages] = React.useState(false)
+  /** Scope the fold to this question: an aborted ask can promote its queued
+   *  successor without ever publishing an idle (null) snapshot. */
+  const [minimizedQuestionKey, setMinimizedQuestionKey] = React.useState<string | null>(null)
+  const questionMinimized = questionSnapshot !== null && minimizedQuestionKey === questionSnapshot.key
   /** Fold state for the GoalTodoPanel todo section (ctrl/cmd+q or click). */
   const [todoCollapsed, setTodoCollapsed] = React.useState(false)
   const [thinkingVisible, setThinkingVisible] = React.useState(true)
@@ -2749,7 +2753,16 @@ export function Chat({
     // keyboard while one is pending (the panel's own useInput handles
     // ↑/↓/Space/Tab/Enter/Esc; the prompt input is suspended, so nothing
     // else should see these keys).
-    if (questionSnapshot !== null || approvalSnapshot !== null || dialogSnapshot !== null) return
+    if (approvalSnapshot !== null || dialogSnapshot !== null) return
+    if (questionSnapshot !== null) {
+      // Only transcript navigation belongs here. The mounted questionnaire
+      // owns fold/expand keys, including when it interrupts another screen.
+      if (questionMinimized && !isSticky && (isPlainReturnInput(input, key) || key.end)) {
+        handle?.scrollToBottom()
+        event.stopImmediatePropagation()
+      }
+      return
+    }
     const returnCandidate = isPlainReturnInput(input, key)
     const returnNow = Date.now()
     const plainReturn = returnCandidate && returnNow - lastModalEnterAtRef.current >= 80
@@ -3469,6 +3482,11 @@ export function Chat({
       onBack={questionSnapshot.canGoBack
         ? draft => questionStore.backCurrent(draft)
         : undefined}
+      collapsed={questionMinimized}
+      onExpand={() => setMinimizedQuestionKey(null)}
+      onToggleFold={() => setMinimizedQuestionKey(previous =>
+        previous === questionSnapshot.key ? null : questionSnapshot.key)}
+      fullscreen={fullscreen}
     />
   ) : null
   const interruptPanel = approvalPanelNode ?? questionPanelNode

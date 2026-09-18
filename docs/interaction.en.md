@@ -488,6 +488,7 @@ keyboard:
 | `Esc` (from question 2 onward) | Return to the previous question and keep the current draft |
 | `Esc` (from question 1) | Cancel the whole batch; the model receives `ASK_CANCELLED` |
 | `Ctrl+C` | Cancel the whole batch from any question; the model receives `ASK_CANCELLED` (a harness-side abort still reports `ASK_ABORTED`) |
+| `Ctrl+K` | Fold/unfold the ask_user_question questionnaire panel |
 
 The last row is a free-form input line: typing directly on an option row
 submits that option's label **plus** your custom text together (no need to
