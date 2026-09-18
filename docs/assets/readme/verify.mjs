@@ -29,7 +29,7 @@ for (const language of ['zh', 'en']) {
   assert.ok(logo.includes(language === 'zh' ? '已加星标' : 'Starred'))
   assert.ok(logo.includes('≧∀≦'))
   assert.ok(logo.includes('5200ms'))
-  assert.ok(logo.includes('logo-particles'))
+  assert.ok(!logo.includes('logo-particles') && !logo.includes('logoParticles'))
   assert.ok(logo.includes('data-pose="standard"'))
   assert.ok(!logo.includes('data-pose="sleep1"') && !logo.includes('data-pose="heart1"'))
   assert.ok(!logo.includes('data-pose="spout1"'))
