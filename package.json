@@ -365,7 +365,7 @@
     "lodash-es": "^4.17.0",
     "marked": "^18.0.7",
     "react": "^19.2.0",
-    "react-reconciler": "^0.33.0",
+    "react-reconciler": "^0.34.0",
     "semver": "^7.0.0",
     "signal-exit": "^4.0.0",
     "sixel": "0.16.0",
@@ -377,7 +377,7 @@
     "wrap-ansi": "^10.0.1"
   },
   "optionalDependencies": {
-    "sharp": "0.35.3"
+    "sharp": "0.35.4"
   },
   "bundledDependencies": [
     "@dsh-std/command",
