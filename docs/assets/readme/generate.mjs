@@ -86,12 +86,6 @@ const whaleLogo = language => {
       @keyframes logoStarActive{0%,75%{opacity:0;transform:translate(22px,28px) translateY(5px)}81%,94%{opacity:1;transform:translate(22px,28px) translateY(0)}100%{opacity:0;transform:translate(22px,28px)}}
       .logo-wordmark{fill:#263146}.logo-descriptor{fill:#687386}.logo-rule{stroke:#abc2ec}
       @media (prefers-color-scheme: dark){.logo-wordmark{fill:#e8e6e0}.logo-descriptor{fill:#abc2ec}.logo-rule{stroke:#5e88cc}}
-      @media (prefers-reduced-motion: reduce){
-        .logo-whale-frame{visibility:hidden;animation:none}
-        .logo-whale-0{visibility:visible}
-        .logo-desire,.logo-star-idle,.logo-thank,.logo-star-active{opacity:0;animation:none}
-        .logo-star-active{opacity:1}
-      }
     </style>
     <g transform="translate(8 48) scale(4.15)" shape-rendering="crispEdges">${frames.map(frame => frame.svg).join('')}</g>
     <g class="logo-desire" transform="translate(22 28)">

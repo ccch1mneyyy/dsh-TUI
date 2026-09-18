@@ -26,6 +26,7 @@ for (const language of ['zh', 'en']) {
   assert.equal((logo.match(/data-whale-frame="/g) || []).length, 8)
   assert.ok(logo.includes(language === 'zh' ? '我想要' : 'I want'))
   assert.ok(logo.includes(language === 'zh' ? '感谢' : 'Thank you'))
+  assert.ok(!logo.includes('prefers-reduced-motion'), 'Logo animation must play independently of the OS motion preference')
   assert.ok(logo.includes(language === 'zh' ? '星标' : 'Star'))
   assert.ok(logo.includes(language === 'zh' ? '已加星标' : 'Starred'))
   assert.ok(logo.includes('≧∀≦'))
