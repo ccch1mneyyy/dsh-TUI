@@ -22,6 +22,12 @@ for (const language of ['zh', 'en']) {
   assert.ok(button.includes('viewBox="0 0 288 44"'))
   assert.ok(button.includes(securityTarget))
   assert.ok(!/<(?:script|foreignObject|image|iframe)\b/.test(button))
+  const logo = await readFile(new URL(language === 'zh' ? 'logo.svg' : 'logo-en.svg', import.meta.url), 'utf8')
+  assert.equal((logo.match(/data-whale-frame="/g) || []).length, 14)
+  assert.ok(logo.includes(language === 'zh' ? '我想要' : 'I desire'))
+  assert.ok(logo.includes(language === 'zh' ? 'GitHub 星标' : 'GitHub star'))
+  assert.ok(logo.includes('data-pose="standard"'))
+  assert.ok(!logo.includes('data-pose="sleep1"') && !logo.includes('data-pose="heart1"'))
   for (const variant of ['desktop', 'mobile']) {
     const capture = JSON.parse(await readFile(new URL(`runtime/${language}-${variant}.json`, import.meta.url), 'utf8'))
     const original = JSON.stringify(capture)
