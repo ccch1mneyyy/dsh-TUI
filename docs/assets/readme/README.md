@@ -41,9 +41,9 @@ the preview's 22-frame, 1000 ms whale animation. Spout, heart and sleep overlays
 are omitted from the logo. OS reduced-motion preferences do not pause the logo.
 
 The 16 navigation tiles and two permission links use white text with dark
-outlines, plus white inner icon strokes over dark outer strokes. Light-mode
-surfaces follow `prefers-color-scheme`; the outlines remain visible on either
-surface. This media query follows the browser's exposed color preference, which
+outlines. Icons retain their original colored single strokes without added
+outlines. Light-mode surfaces follow `prefers-color-scheme`; text outlines remain
+visible on either surface. This media query follows the browser's exposed color preference, which
 may differ from a manually selected GitHub theme. Geometry and link targets are
 shared by the Chinese and English variants.
 The four files in `runtime/` preserve the original character cells, ANSI colors,
