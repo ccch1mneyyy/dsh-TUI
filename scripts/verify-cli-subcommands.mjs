@@ -235,6 +235,7 @@ for (const alias of ['version', '--version', '-v']) {
     ['后位 version', ['/no/such/path', 'version']],
     ['后位 update', ['/no/such/path', 'update']],
     ['后位 help', ['--resume', 'help']],
+    ['后位 safe', ['/no/such/path', 'safe']],
   ]) {
     const r = run(args, { DSH_HOME: freshHome })
     check(
