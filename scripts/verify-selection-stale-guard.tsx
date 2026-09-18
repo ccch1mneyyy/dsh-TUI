@@ -16,13 +16,14 @@
  *   F. startSelection/clearSelection 重置指纹与 stale；
  *   G. stale 拒绝后 getSelectedText 仍可读（守卫在提交层，不在读取层）；
  *   H. 几何变化（拖选 motion/键盘平移/多击）自动重基线，不判 stale；
- *   I. 列区间与 getSelectedText 一致：选区列之外的流式追加不误伤。
+ *   I. 列区间与 getSelectedText 一致：选区列之外的流式追加不误伤；
+ *   J. softWrap 位翻转（复制结果从两行变拼接）在 cell 不变时也锁存。
  *
  * 运行：node --import tsx/esm scripts/verify-selection-stale-guard.tsx
  */
 export {} // 模块边界：避免顶层 await/全局名与其他 verify 脚本冲突
 
-const { refreshSelectionFingerprint, startSelection, updateSelection, clearSelection } =
+const { refreshSelectionFingerprint, startSelection, updateSelection, clearSelection, selectionBounds } =
   await import('../src/ink/selection.js')
 import type { Screen, SelectionState } from '../src/ink/screen.js'
 import type { SelectionState as SelState } from '../src/ink/selection.js'
@@ -155,6 +156,20 @@ function putNarrow(s: Screen, col: number, row: number, charId: number): void {
   clearSelection(sel)
   check('F. clearSelection resets fingerprint and stale',
     sel.coveredFingerprint === null && sel.coveredGeometry === null && !sel.stale)
+  // A fresh startSelection must also reset both fields — not just rely on
+  // clearSelection having run first (CodeRabbit: the assertion would keep
+  // passing if startSelection silently stopped resetting). Re-latch stale
+  // on a rebuilt selection, then startSelection over it.
+  startSelection(sel, 0, 1)
+  updateSelection(sel, 9, 1)
+  refreshSelectionFingerprint(sel, screen, false)
+  putNarrow(screen, 0, 1, 703)
+  refreshSelectionFingerprint(sel, screen, false)
+  if (!sel.stale) check('F. precondition 2: stale re-latched', false)
+  startSelection(sel, 0, 2)
+  updateSelection(sel, 9, 2)
+  check('F2. startSelection resets fingerprint and stale',
+    sel.coveredFingerprint === null && sel.coveredGeometry === null && !sel.stale)
 }
 
 // ── G. stale 是提交层守卫，不改变读取层 ─────────────────────────────────
@@ -167,9 +182,13 @@ function putNarrow(s: Screen, col: number, row: number, charId: number): void {
   refreshSelectionFingerprint(sel, screen, false)
   putNarrow(screen, 0, 1, 801)
   refreshSelectionFingerprint(sel, screen, false)
-  // selectionBounds（读取层）在 stale 下仍工作——守卫只在 copySelectionNoClear
+  // selectionBounds（读取层）在 stale 下仍可读出同一几何——守卫只在
+  // copySelectionNoClear 的提交路径拦截（CodeRabbit: 直接调用要验证的
+  // API，而不是只看字段）。
+  const b = selectionBounds(sel)
   check('G. stale guards commit, not bounds reading',
-    sel.stale && sel.anchor !== null && sel.focus !== null)
+    sel.stale && b !== null && b.start.row === 1 && b.end.row === 1
+    && b.start.col === 0 && b.end.col === 9)
 }
 
 // ── H. 几何变化（拖选 motion）自动重基线 ─────────────────────────────────
@@ -190,6 +209,24 @@ function putNarrow(s: Screen, col: number, row: number, charId: number): void {
   putNarrow(screen, 0, 2, 999)
   const relapse = refreshSelectionFingerprint(sel, screen, false)
   check('H2. guard re-arms after re-baseline', relapse && sel.stale)
+}
+
+// ── J. softWrap 翻转改变复制结果 → 指纹必须感知 ─────────────────────────
+{
+  const screen = makeScreen(5, 10)
+  const sel = makeSel()
+  startSelection(sel, 0, 1)
+  updateSelection(sel, 9, 2)
+  putNarrow(screen, 0, 1, 1010)
+  putNarrow(screen, 0, 2, 1011)
+  refreshSelectionFingerprint(sel, screen, false)
+  // Same cells, but row 2 becomes a soft-wrap continuation of row 1: the
+  // copy changes from "two lines" to "one joined line" — a stale copy
+  // passing through would ship the OLD joining. The fingerprint must see
+  // the flip even though no cell content changed.
+  screen.softWrap[2] = 7
+  const changed = refreshSelectionFingerprint(sel, screen, false)
+  check('J. soft-wrap flip latches stale with unchanged cells', changed && sel.stale)
 }
 
 // ── I. 列区间与 getSelectedText 一致 ─────────────────────────────────────

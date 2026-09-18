@@ -1226,8 +1226,11 @@ export function refreshSelectionFingerprint(
       if (noSelect![rowOff + col] === 1) continue
       h = Math.imul(h ^ cells[(rowOff + col) * 2]!, 0x01000193)
     }
-    // Row separator so a pure row permutation cannot collide.
-    h = Math.imul(h ^ 0x9e3779b9, 0x85ebca6b)
+    // Row separator + the row's soft-wrap bit: getSelectedText joins a
+    // wrapped row onto the previous line with NO newline (softWrap[row]>0)
+    // but emits a real newline otherwise — identical cells with a flipped
+    // wrap bit produce a different copy, so the fingerprint must see it.
+    h = Math.imul(h ^ 0x9e3779b9 ^ (screen.softWrap[row]! > 0 ? 0x51ed270b : 0), 0x85ebca6b)
   }
   if (s.coveredFingerprint === null) {
     // First frame observing this selection: baseline, no verdict.
