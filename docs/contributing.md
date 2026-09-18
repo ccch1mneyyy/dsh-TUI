@@ -220,6 +220,7 @@ CI 回归都要跑。窄改动还要跑最近的聚焦脚本：
 | --- | --- |
 | 通用无头屏幕组装 | `pnpm smoke` |
 | Channel submit/steer/pending 行为 | `node scripts/verify-submit.mjs` |
+| 回退后编辑重发与历史 Inbox 清理 | `pnpm verify:rewind-edit` |
 | 提示队列行为 | `node scripts/verify-queue.mjs` |
 | Goal/todo 投影与渲染 | `node scripts/verify-channel-goal-todo.mjs` + `node scripts/verify-goal-todo.mjs` |
 | Compaction 与折叠 transcript 行 | `node scripts/verify-compact.mjs` |

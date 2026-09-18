@@ -44,7 +44,8 @@ const commandService = {
     if (registered.has(descriptor.name)) throw new Error(`duplicate command: ${descriptor.name}`)
     registered.set(descriptor.name, descriptor)
     fire('commands/change')
-    return () => { registered.delete(descriptor.name) }
+    // Match the real registry: unregistering also invalidates the menu.
+    return () => { registered.delete(descriptor.name); fire('commands/change') }
   },
 }
 
@@ -147,6 +148,11 @@ if (skillsChange === undefined || skillsChange.length === 0) {
 }
 
 // ---- skills/change with a failed read keeps the last-good skill list
+// Prime another complete observation after registration; last-good must not
+// become empty just because every skill is already present in commands.list().
+fire('skills/change')
+check('repeated complete observation keeps registered skills marked', await settled(() =>
+  ['i-h', 'newskill'].every(name => channel.commandList.some(command => command.name === name && command.skill))))
 ctx.get = (name) => {
   if (name === 'commands') return { list: () => [{ name: 'plan', description: 'Toggle plan mode' }] }
   if (name === 'skills') return { snapshot: async () => { throw new Error('scan blew up') } }
@@ -193,6 +199,8 @@ fire('skills/change')
     after.includes('i-h') && after.includes('newskill'),
     after.join(','),
   )
+  check('incomplete observation keeps callable skill handlers',
+    ['i-h', 'newskill'].every(name => typeof registered.get(name)?.handler === 'function'))
 }
 
 // ---- a COMPLETE empty observation IS authoritative: skills vanish for real
@@ -228,7 +236,9 @@ fire('skills/change')
   ctx.logger = { warn() { staleWarned += 1 } }
   fire('skills/change') // read A: pending, superseded by B below
   fire('skills/change') // read B: wins the token race
-  pending[1].resolve({
+  // Each event starts both a menu read and a registration read. Complete B's
+  // menu read, not A's registration read (which is now correctly superseded).
+  pending[2].resolve({
     skills: [{ name: 'live', description: 'Live skill', invocation: { modelInvocable: true, userInvocable: true } }],
     complete: true,
   })

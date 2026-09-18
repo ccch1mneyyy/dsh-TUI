@@ -115,11 +115,15 @@ export function createTreeRewindAction(
         parentSession: SessionId(sessionId),
         agentPreset: composed.agentPreset,
         agentOptions: { provider: state.provider, model: state.model },
-        setup: closeAfterCreate ? async (agentCtx, agent) => {
+        setup: closeAfterCreate || mode === 'rewind' ? async (agentCtx, agent) => {
           // V3 requires seed.length === inheritedEventCount. The constructor
           // inserts the inherited marker, then these closers belong to the
           // child and persist before publication, without falsifying the cut.
-          closeLiveForkTurn(agent.session, target.closeTurn!)
+          if (closeAfterCreate) closeLiveForkTurn(agent.session, target.closeTurn!)
+          // Re-editing starts with no historical pending work. Cancel through
+          // the child's Inbox so a later resume cannot resurrect the queue.
+          // A plain fork deliberately keeps its separate semantics.
+          if (mode === 'rewind') agent.inbox.clear()
           return composed.setup?.(agentCtx, agent)
         } : composed.setup,
       })))
@@ -138,7 +142,7 @@ export function createTreeRewindAction(
       deps.notify(t('rewind-session-changed'), { color: 'error' })
       return null
     }
-    const replay = closeAfterCreate ? snapshotLiveSessionEvents(handle.agent.session) : seed
+    const replay = closeAfterCreate || mode === 'rewind' ? snapshotLiveSessionEvents(handle.agent.session) : seed
     const sourceSessionId = deps.adoptForkedAgent(handle, adoption, replay, composed.agentPreset, childId)
     deps.notifySessionSwitched(mode === 'fork' ? 'fork' : 'rewind', String(childId), sourceSessionId)
     return restoredText

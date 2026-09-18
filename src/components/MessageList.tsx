@@ -648,6 +648,11 @@ export function MessageList({
   const relBottom = Math.max(scrollTop, scrollTop + pending) + viewport + OVERSCAN_LINES - base
   let start = 0
   while (start < visibleRows.length && offsets[start] + heightOf(visibleRows[start]) <= relTop) start++
+  // Resize invalidates cached heights, so a manual scrollTop can overshoot
+  // the entire estimated list. Keep its last row mounted to re-measure:
+  // an empty window has no measurement wakeup and collapses scrollHeight,
+  // leaving the transcript blank and the gutter believing nothing scrolls.
+  if (start === visibleRows.length && start > 0) start--
   let end = start
   while (end < visibleRows.length && offsets[end] < relBottom) end++
   if (sticky || !scrollHandle) end = visibleRows.length

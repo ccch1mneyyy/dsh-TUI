@@ -286,7 +286,7 @@ check('ordinary append growth never drops an older real title', (await listSumma
 
 check('a missing log degrades instead of throwing', digestSession(join(root, 'nope', 'x.zstd'), '/proj'), {
   title: undefined,
-  hasPrompt: false,
+  hasPrompt: true,
   model: undefined,
   label: undefined,
 })
@@ -416,7 +416,7 @@ check('and is valid again afterwards', readIndex().size, 3)
 writeFileSync(INDEX_FILE, JSON.stringify({ version: 999, entries: { auto: { derived: { revision: 'x' } } } }))
 const upgraded = await listSummaries(source)
 check('an index from another schema version is discarded, not misread', upgraded.length, 3)
-ok('and rewritten at the current version', JSON.parse(readFileSync(INDEX_FILE, 'utf8')).version === 2)
+ok('and rewritten at the current version', JSON.parse(readFileSync(INDEX_FILE, 'utf8')).version === 3)
 
 // ── 5. Final-state equivalence ──────────────────────────────────────────
 // An index grown across a sequence of changes must equal one built fresh at

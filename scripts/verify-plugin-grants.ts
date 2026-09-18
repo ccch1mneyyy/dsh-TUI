@@ -378,11 +378,12 @@ check1('decision permission map is immutable',
   hostCtx.logger.warn = (format: unknown, ...params: unknown[]) => {
     hostWarnings.push([format, ...params].map(String).join(' '))
   }
-  hostCtx.plugin({ name: pluginHostRow.name, apply: pluginHostRow.apply })
-  await sleep(50)
+  const hostFiber = hostCtx.plugin({ name: pluginHostRow.name, apply: pluginHostRow.apply }) as unknown as { await(): Promise<unknown> }
+  await hostFiber.await()
   const service = hostCtx.get('tuiPluginHost')
   check1('tuiPluginHost mounted', service !== undefined)
   if (service) {
+    await awaitInitialKernelReadiness(service, 'host descriptor fixture')
     check1('generationId matches the descriptor schema pattern', /^[A-Za-z0-9._:-]+$/.test(service.generationId))
     check1('generationId stable within the activation', service.generationId === service.generationId)
     check1('selfCheck clean on vendored data', service.selfCheck().length === 0, service.selfCheck().join(' | '))
@@ -448,9 +449,11 @@ check1('decision permission map is immutable',
       withCommandsWarnings.push([format, ...params].map(String).join(' '))
     }
     withCommands.plugin(FakeCommands)
-    withCommands.plugin({ name: pluginHostRow.name, apply: pluginHostRow.apply })
-    await sleep(50)
-    const descriptor = withCommands.get('tuiPluginHost')?.hostDescriptor()
+    const commandsHostFiber = withCommands.plugin({ name: pluginHostRow.name, apply: pluginHostRow.apply }) as unknown as { await(): Promise<unknown> }
+    await commandsHostFiber.await()
+    const commandsHost = withCommands.get('tuiPluginHost')
+    await awaitInitialKernelReadiness(commandsHost, 'commands descriptor fixture')
+    const descriptor = commandsHost?.hostDescriptor()
     check1('Command not advertised as full support without execution probe',
       descriptor?.contracts.some(contract => contract.kind === 'Command') === false,
       JSON.stringify(descriptor?.contracts.map(contract => contract.kind)))
@@ -677,9 +680,10 @@ check1('decision permission map is immutable',
   {
     const topologyCtx = new Context()
     topologyCtx.logger.warn = () => undefined
-    topologyCtx.plugin({ name: pluginHostRow.name, apply: pluginHostRow.apply })
-    await sleep(50)
+    const topologyHostFiber = topologyCtx.plugin({ name: pluginHostRow.name, apply: pluginHostRow.apply }) as unknown as { await(): Promise<unknown> }
+    await topologyHostFiber.await()
     const topologyHost = topologyCtx.get('tuiPluginHost')
+    await awaitInitialKernelReadiness(topologyHost, 'stale-topology fixture')
     const staleBuild = topologyHost?.describe()
     check1('stale-topology fixture starts without DecisionEvents',
       staleBuild !== undefined && !staleBuild.descriptor.contracts.some(contract => contract.kind === 'DecisionEvents'),

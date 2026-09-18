@@ -98,6 +98,9 @@ const GROUPS = {
 // shrunk 帧冻结的旧 scrollTop 与失准的 clamp 边界越过内容底，整屏裁剪
 // 成"只剩输入框"（Orca pane 宽度抖动的现场取证复现）。
     ["repro-resize-blank", ['node', '--import', 'tsx/esm', 'scripts/repro-resize-blank.tsx']],
+// Windows Terminal 最大化后的同尺寸 resize 必须修复丢失的静态格（#891），
+// 不提前擦屏、不打断外部编辑器；inline 与非 ConPTY 路径继续保持安静。
+    ['verify-conpty-surface-resize', ['node', '--import', 'tsx/esm', 'scripts/verify-conpty-surface-resize.tsx']],
 // 空转重渲染风暴回归（issue #433）：长历史 + 30ms 空转 commit 风暴下
 // renderScrollTop / 画面 / 输入框行数必须逐帧恒定，几何不震荡。
     ["repro-idle-oscillation", ['node', '--import', 'tsx/esm', 'scripts/repro-idle-oscillation.tsx']],
@@ -113,6 +116,9 @@ const GROUPS = {
 // 滚动窗口与 shrink 边界。measure-depth 需生产模式（minified #185）。
     ["verify-message-measure-depth", ['node', '--import', 'tsx/esm', 'scripts/verify-message-measure-depth.tsx']],
     ["verify-scroll", ['node', 'scripts/verify-scroll.mjs']],
+// 长会话冷/热窗口跳转、绘制边界发布与回底挂载预算（不能等滚轮救活）。
+    ['verify-scroll-jumps', ['node', '--import', 'tsx/esm', 'scripts/verify-scroll-jumps.tsx']],
+    ['verify-scroll-jumps-narrow', ['node', '--import', 'tsx/esm', 'scripts/verify-scroll-jumps.tsx'], { DSH_TEST_COLUMNS: '60' }],
 // Windows Terminal 全屏拖选+滚轮回归：长 User 气泡的 selection overlay
 // 会污染上一帧；污染帧不得进入 DECSTBM/shiftRows 硬件滚动，否则带背景
 // 的旧像素被物理搬移后偶发重复/错位。A/B 同轨迹断言终态画面一致。
@@ -344,6 +350,9 @@ const GROUPS = {
 // 日志、标题来源判定、revision 命中/失效（钉住 revision 改写日志作
 // 判据）、索引自愈与剪枝、**终态等价**（增量索引 == 全新构建）。
     ["verify-session-index", ['node', 'scripts/verify-session-index.mjs']],
+// 空会话须完整读取后才能判定：截断/损坏、帧数上限、纯图片输入与旧缓存
+// 不得隐藏真实历史或进入清理名单；真实 JSONL 重开验证落盘后的可见性。
+    ['verify-session-emptiness', ['node', '--import', 'tsx/esm', 'scripts/verify-session-emptiness.ts']],
 // /resume 会话浏览器按键流回归：子运行折叠/展开、空会话不列出、搜索、
 // Esc 先清查询再退出、rename 后光标按 id 跟随目标（不是按行号）、
 // confirm-delete 只认无修饰 Enter、Esc 取消。真实 Chat 渲染驱动。
@@ -471,6 +480,9 @@ const GROUPS = {
 // 菜单与 Tab 补全（skill 标记、与 locals/注册表撞名让位），
 // skills/change 实时增删，读取失败保留 last-good。
     ["verify-skill-commands", ['node', 'scripts/verify-skill-commands.mjs']],
+// 真实命令注册事件 + 虚拟时钟：完整技能缓存、不完整观测保留 handler、
+// 有界退避、恢复、异步代际与释放后不再排程。
+    ["verify-skill-catalog-recovery", ['node', 'scripts/verify-skill-catalog-recovery.mjs']],
 // 轨迹投影回归（issue #80 演进）：增量折叠与全量折叠在每个切分点终态
 // 等价（机械 oracle）、六类括号配对、增广事件守卫的全变异模糊测试、
 // 未知事件前向兼容、连发折叠边界、无 chunk 的步不伪造 TTFT。
@@ -587,6 +599,9 @@ const GROUPS = {
 // 批准、隐藏输入题粘贴惰性、超长粘贴上限报错、同 chunk 批量按键经同步
 // ref 依序编辑、emoji 码点步进。
     ["verify-question-paste", ['node', '--import', 'tsx/esm', 'scripts/verify-question-paste.tsx']],
+// 问卷折叠：真实 Chat + stores 验证审批/对话框优先、整屏中断层恢复、
+// abort 后 FIFO 请求身份隔离，以及改键和草稿保持（inline/fullscreen）。
+    ["verify-question-fold", ['node', '--import', 'tsx/esm', 'scripts/verify-question-fold.tsx']],
 // 长问卷列表回归：24 行终端中的 36 个两行 provider 选项必须围绕
 // focusIndex 窗口化，初始和深度导航后焦点 label/单选标记始终可见。
     ["verify-askpanel-long-list", ['node', '--import', 'tsx/esm', 'scripts/verify-askpanel-long-list.tsx']],

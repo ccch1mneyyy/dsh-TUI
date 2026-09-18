@@ -900,6 +900,12 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
       hintEn: d => `Fold/unfold the goal/todo panel. Default: ${d}.`,
       hintZh: d => `折叠/展开目标与待办面板。默认 ${d}。`,
     },
+    questionFold: {
+      label: 'Question panel fold shortcut',
+      zh: '提问面板折叠快捷键',
+      hintEn: d => `Fold/unfold the pending question panel. Default: ${d}.`,
+      hintZh: d => `折叠/展开等待回答的提问面板。默认 ${d}。`,
+    },
     expandEditor: {
       label: 'Fullscreen editor shortcut',
       zh: '全屏草稿编辑快捷键',
