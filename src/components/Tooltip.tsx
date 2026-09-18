@@ -2,7 +2,6 @@ import React from 'react'
 import stripAnsi from 'strip-ansi'
 import { Box, Text, useTerminalSize } from '../ui.js'
 import { useTerminalFocus } from '../ink/hooks/use-terminal-focus.js'
-import { getPointerGestureSnapshot, subscribePointerGesture } from '../ink/pointer-gesture.js'
 import { stringWidth } from '../ink/stringWidth.js'
 import { getGraphemeSegmenter } from '../utils/intl.js'
 import { PageInsetContext } from './PageMargin.js'
@@ -195,13 +194,6 @@ export function TooltipLayer({
     if (subscribeInvalidation === undefined) return
     return subscribeInvalidation(clearTooltip)
   }, [subscribeInvalidation])
-  // A held button (drag-select) stops hover dispatch — the card would freeze
-  // over the text being selected because its mouseleave never fires.
-  React.useEffect(() => {
-    return subscribePointerGesture(() => {
-      if (getPointerGestureSnapshot()) clearTooltip()
-    })
-  }, [])
   const prevSize = React.useRef({ columns, rows })
   React.useEffect(() => {
     if (prevSize.current.columns !== columns || prevSize.current.rows !== rows) {

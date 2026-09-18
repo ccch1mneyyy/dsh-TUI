@@ -299,7 +299,6 @@ const dict = {
   'context-panel-expand': { zh: ' 展开', en: ' to expand' },
   'context-panel-collapse': { zh: ' 折叠', en: ' to collapse' },
   'copied-chars': { zh: '已复制 {{n}} 个字符', en: 'Copied {{n}} characters' },
-  'copy-refused-stale': { zh: '选区内容已变化，已取消复制', en: 'Content under the selection changed; copy cancelled' },
   'activity-current-preset': { zh: '当前预设  {{name}}', en: 'Current preset  {{name}}' },
   'activity-switch-hint': { zh: '切换      /activity（选择器）或 /activity frames <名>', en: 'Switch      /activity (picker) or /activity frames <name>' },
   'activity-persist-hint': { zh: '持久化    ~/.dsh-tui/working-activity.json（重启后仍生效）', en: 'Persisted    ~/.dsh-tui/working-activity.json (survives restart)' },
@@ -620,10 +619,7 @@ const dict = {
   'input-pending-steer-label': { zh: '插话 · 下一步送达', en: 'Steer · delivered next' },
   'input-pending-queue-label': { zh: '排队 · 回合结束后送达', en: 'Queued · delivered after the turn' },
   'input-pending-actions-hint': { zh: '撤回 · Esc 打断并立即发送', en: 'Retract · Esc interrupts and sends immediately' },
-  // U+30FB (not U+00B7): the separator participates in the folded-chip
-  // width arithmetic; U+00B7 is EA-ambiguous and paints 2 cells on CJK
-  // terminal fonts while the model measures 1 (see PromptInput foldBadge).
-  'input-fold-stats': { zh: '{{lines}} 行・{{chars}} 字', en: '{{lines}} lines・{{chars}} chars' },
+  'input-fold-stats': { zh: '{{lines}} 行 · {{chars}} 字', en: '{{lines}} lines · {{chars}} chars' },
   'input-fold-hover': { zh: '悬停查看', en: 'hover to peek' },
   'input-fold-peek-footer': { zh: '… 共 {{lines}} 行 · 点击展开编辑', en: '… {{lines}} lines total · click to edit' },
 

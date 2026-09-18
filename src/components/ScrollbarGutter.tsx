@@ -1,6 +1,5 @@
 import React from 'react'
 import { Box, Text, NoSelect, type ScrollBoxHandle } from '../ui.js'
-import { getPointerGestureSnapshot, subscribePointerGesture } from '../ink/pointer-gesture.js'
 import { RAIL_MIN_TERMINAL_WIDTH, RAIL_WIDTH } from '../ink/timeline-rail.js'
 
 /** Thumb glyph across the 2-col gutter: solid, clearly positional —
@@ -63,14 +62,6 @@ export function ScrollbarGutter({
     if (!handle) return
     return handle.subscribe(() => setTick(t => t + 1))
   }, [handle])
-  // A held button (drag-select) stops hover dispatch, so an already-shown
-  // chip would never see its onMouseLeave and would stay frozen over the
-  // text being selected. Dismiss chip + pending dwell on the rising edge.
-  React.useEffect(() => {
-    return subscribePointerGesture(() => {
-      if (getPointerGestureSnapshot()) clearChip()
-    })
-  }, [])
 
   if (!handle) return null
   const viewport = handle.getViewportHeight()

@@ -199,7 +199,6 @@ for the complete field reference.
 | `DSH_TUI_PRESET` | Override the default Agent preset for new sessions |
 | `DSH_TUI_THEME` | Pin a built-in (`auto`/`light`/`dark`/`dark-ansi`), static theme, or registered plugin theme ahead of persisted selection |
 | `DSH_TUI_DISABLE_MOUSE` | Temporarily disable mouse handling in fullscreen mode |
-| `DSH_TUI_AMBIGUOUS_WIDE` | Set to `1` to measure East-Asian "ambiguous-width" characters (`·`, `▸`, `❯`, …) as 2 cells. The default measures 1 cell (the Unicode Western-context recommendation). CJK terminal fonts often paint these as 2 cells wide; when the model and the terminal disagree, glyphs overlap and rows drift — enable this to make the model agree with such a terminal |
 | `DSH_TUI_DISABLE_TERMINAL_IMAGES` | Set to `1` to force Kitty/Sixel probing, preview reads/decoding, and terminal image rendering off, overriding config and /settings; text metadata remains visible |
 | `DSH_TUI_IMAGE_PROTOCOL` | `auto` (default), `kitty`, `sixel`, or `none`; override protocol selection without bypassing the preview preference, disable switch, non-fullscreen, accessibility or multiplexer guards |
 | `DSH_TUI_RESUME_SESSION` | Resume a session at startup, normally set by a launcher |

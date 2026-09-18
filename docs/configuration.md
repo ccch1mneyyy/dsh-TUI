@@ -180,7 +180,6 @@ Profile 模式不再使用旧的 `DSH_TUI_COMPACT_RATIO`、
 | `DSH_TUI_PRESET` | 覆盖新会话默认 Agent preset |
 | `DSH_TUI_THEME` | 锁定内置（`auto`/`light`/`dark`/`dark-ansi`）、静态主题或已注册的插件主题，优先于持久化选择 |
 | `DSH_TUI_DISABLE_MOUSE` | 在 fullscreen 模式临时关闭鼠标处理 |
-| `DSH_TUI_AMBIGUOUS_WIDE` | 设为 `1` 时东亚"模糊宽度"字符（`·`、`▸`、`❯` 等）按 2 列计量。默认按 1 列（Unicode 西方语境推荐）。CJK 终端字体常把此类字符画成 2 列宽，与模型计量不一致会造成字符重叠/行错位——如果你的终端如此，开启它让模型与终端对齐 |
 | `DSH_TUI_DISABLE_TERMINAL_IMAGES` | 设为 `1` 时强制关闭 Kitty/Sixel 探测、预览读取/解码与终端图片渲染，优先于 config 和 /settings；保留文字信息 |
 | `DSH_TUI_IMAGE_PROTOCOL` | `auto`（默认）、`kitty`、`sixel` 或 `none`；覆盖协议选择，但不绕过图片预览偏好、禁用开关、非全屏、无障碍和多路复用器限制 |
 | `DSH_TUI_RESUME_SESSION` | 启动时恢复指定会话，通常由启动器设置 |
