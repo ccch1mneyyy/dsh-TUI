@@ -21,17 +21,34 @@ import { useSelection } from './use-selection.js'
  * @param onCopied - called with the copied text after each successful copy
  *   (e.g. to show a toast). Stored in a ref, so an inline closure is fine
  *   and never re-subscribes.
+ * @param onRefused - called when the selection was marked stale (its rows
+ *   were replaced in place while highlighted): the highlight is cleared
+ *   and NOTHING is copied — the caller should tell the user why (e.g.
+ *   "content changed, copy cancelled") instead of staying silent.
  */
-export function useCopyOnSelect(onCopied?: (text: string) => void): void {
+export function useCopyOnSelect(
+  onCopied?: (text: string) => void,
+  onRefused?: () => void,
+): void {
   const { subscribe, getState, copySelection } = useSelection()
   const onCopiedRef = useRef(onCopied)
   onCopiedRef.current = onCopied
+  const onRefusedRef = useRef(onRefused)
+  onRefusedRef.current = onRefused
   useEffect(() => {
     return subscribe(() => {
       const state = getState()
       // Mid-drag notifications (every motion event) skip the copy; the
       // release notification arrives with isDragging already cleared.
       if (state && !state.isDragging && hasSelection(state)) {
+        if (state.stale) {
+          // copySelection clears the stale highlight; its internal copy
+          // is refused (empty), so the only user-visible effect without
+          // this branch would be a highlight vanishing for no reason.
+          copySelection()
+          onRefusedRef.current?.()
+          return
+        }
         const text = copySelection()
         if (text) onCopiedRef.current?.(text)
       }

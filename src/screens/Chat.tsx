@@ -1110,8 +1110,12 @@ export function Chat({
   // fullscreen (<AlternateScreen> supplies mouse tracking); a no-op
   // subscription in inline mode, where selection belongs to the terminal.
   // The copy clears the highlight and posts a transient notification.
-  useCopyOnSelect(text =>
-    channel.notify(t('copied-chars', { n: text.length }), { timeoutMs: 1500 }),
+  useCopyOnSelect(
+    text => channel.notify(t('copied-chars', { n: text.length }), { timeoutMs: 1500 }),
+    // Stale-selection refusal: the highlighted rows were replaced in place
+    // (streaming overwrite), so nothing was copied — say why instead of
+    // letting the highlight vanish silently.
+    () => channel.notify(t('copy-refused-stale'), { timeoutMs: 2500 }),
   )
   const { clearSelection: clearMouseSelection, hasSelection: hasMouseSelection } =
     useSelection()
