@@ -395,6 +395,13 @@ export interface PromptController {
   hasText(): boolean
   /** The draft text, for a caller that must not lose it (see {@link PromptDraftStore}). */
   text(): string
+  /**
+   * How many times the draft has been written since mount. A caller that must
+   * tell "stale text left over from the previous conversation" apart from "text
+   * a command just restored into the new one" compares this across a session
+   * change: a bump means the composer was written for the new session.
+   */
+  editSequence(): number
   /** Current capability-backed draft images in token order, without reads. */
   previewImages?(): readonly { image: TranscriptImage; title: string }[]
   clear(): void
@@ -568,13 +575,42 @@ export function PromptInput({
   // Raw stdout writer for OSC 52 clipboard writes (selection copy) — must
   // bypass the frame pipeline; null outside a mounted Ink App.
   const writeRaw = React.useContext(TerminalWriteContext)
-  // A remount caused by a screen swap (not a session change) resumes the draft
-  // the owner kept while this component was unmounted. Read once, as the initial
-  // state: the store already holds that same draft, so normal editing keeps it
-  // current from the first keystroke.
-  const [value, setValue] = React.useState(() => draftStore?.text ?? '')
-  const [cursor, setCursor] = React.useState(() =>
-    normalizeCursorOffset(draftStore?.text ?? '', draftStore?.cursor ?? 0))
+  // The composer owns its text in local state, so it starts EMPTY and adopts
+  // whatever draft the owner stored in a MOUNT-TIME effect below. Reading the
+  // store in this initializer instead looks equivalent and is not: a non-empty
+  // first frame leaves `repro-resume-position` red — resuming a session parks
+  // the transcript mid-history instead of pinning it to the newest message.
+  // Adopting after mount keeps the first frame identical to a fresh composer
+  // while still handing the draft back.
+  const [value, setValue] = React.useState('')
+  const [cursor, setCursor] = React.useState(0)
+  /** Latest live draft, for the unmount hand-off back to the owner's store. */
+  const draftValueRef = React.useRef('')
+  const draftCursorRef = React.useRef(0)
+  /**
+   * Adopt the owner's draft ONCE, after mount.
+   *
+   * This is where a screen swap gives the text back: the store outlives this
+   * component, so a remount picks up what the user had written. It runs only
+   * while the store still holds something, and consumes it immediately, so it
+   * can never fight a later edit or re-apply itself on an unrelated re-render.
+   */
+  const adoptDraft = React.useRef(true)
+  /** Session id of the PREVIOUS render; a change means the conversation
+   *  underneath the composer was replaced. */
+  const sessionRef = React.useRef<string | undefined>(undefined)
+  React.useEffect(() => {
+    if (draftStore === undefined || !adoptDraft.current) return
+    adoptDraft.current = false
+    const text = draftStore.text
+    draftStore.text = ''
+    draftStore.cursor = 0
+    if (text === '') return
+    valueRef.current = text
+    cursorRef.current = normalizeCursorOffset(text, text.length)
+    setValue(text)
+    setCursor(normalizeCursorOffset(text, text.length))
+  }, [draftStore])
   /**
    * Mouse text selection: UTF-16 offsets [start, end) in `value`, snapped
    * to grapheme boundaries, start ≤ end. Null = no selection. Created by
@@ -771,14 +807,28 @@ export function PromptInput({
   syncImageGeneration()
   valueRef.current = value
   cursorRef.current = cursor
-  // Keep the owner's draft current on every commit, so an unmount that happens
-  // in this same pass (a screen swap, or Chat replaced by its fallback) leaves
-  // the store holding exactly what the user last saw.
-  React.useLayoutEffect(() => {
-    if (draftStore === undefined) return
+  /**
+   * Hand the draft to the owner's store on UNMOUNT, and drop it when the
+   * conversation underneath the composer was replaced.
+   *
+   * The hand-off deliberately does NOT write on every commit. Both shapes that
+   * do — a layout effect per commit, and a render-time assignment — leave
+   * `repro-resume-position` red: resuming a session parks the transcript
+   * mid-history instead of pinning it to the newest message. Recording the live
+   * value in refs during render and committing it in an unmount cleanup costs
+   * nothing while the composer is up and still holds the draft at the instant a
+   * screen swap replaces it.
+   *
+   * The switch check compares the id of the PREVIOUS render against this one.
+   * The store's own sessionId cannot drive it: that field is the verdict, not
+   * the fact, and it is written on every render anyway.
+   */
+  draftValueRef.current = value
+  draftCursorRef.current = cursor
+  if (draftStore !== undefined) {
     draftStore.text = value
     draftStore.cursor = cursor
-  }, [draftStore, value, cursor])
+  }
   // Publish the live controller (fresh closure over `value` every render).
   // A prompt-slot panel withdraws the handle in the same commit: external
   // injection must not append/submit a hidden command draft while it waits
@@ -792,6 +842,7 @@ export function PromptInput({
     controllerRef.current = {
       hasText: () => value.length > 0,
       text: () => valueRef.current,
+      editSequence: () => inputEditSequenceRef.current,
       previewImages: () => composerImageRefsForText(valueRef.current, draftImagesRef.current).flatMap(ref => {
         const image = channel.stagedImage(ref.stageId)
         return image === undefined ? [] : [{ image, title: ref.token.slice(1, -1) }]

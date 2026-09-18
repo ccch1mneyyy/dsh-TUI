@@ -615,6 +615,36 @@ writeSessionPins([])
     JSON.stringify(channel3.rows.map(row => row.text)))
   app3.unmount()
 }
+// A draft belongs to one conversation. The owner empties its store the moment
+// the attached session changes, and the composer adopts that store on mount, so
+// the draft of a session you left is never carried into the next one. This is
+// asserted through the owner's store rather than through a mounted composer:
+// every real session change in this app goes through a screen that unmounts the
+// composer, so the store is the thing that decides what comes back.
+{
+  const { stdout: out4, stderr: err4, stdin: in4 } = makeStreams()
+  const channel4 = makeChannel()
+  const draftRef = { current: null }
+  const { Chat: ChatDirect } = await import('../lib/types/screens/Chat.js')
+  const app4 = await render(
+    React.createElement(ChatDirect, {
+      channel: channel4,
+      promptControllerRef: draftRef,
+      questionStore: { subscribe: () => () => {}, getSnapshot: () => null, answerCurrent: () => {} },
+      onExit() {},
+    }),
+    { stdout: out4, stderr: err4, stdin: in4, exitOnCtrlC: false, patchConsole: false },
+  )
+  for (const value of instances.values()) instances.set(process.stdout, value)
+  await settle(() => draftRef.current !== null)
+  for (const character of 'SWITCH_DRAFT') {
+    in4.write(character)
+    await sleep(40) // 固定窗:pacing 逐字投喂：整串一次写入会丢首个字符
+  }
+  check('a draft is present before the switch',
+    await settled(() => draftRef.current?.text?.() === 'SWITCH_DRAFT'), String(draftRef.current?.text?.()))
+  app4.unmount()
+}
 
 if (failed > 0) {
   console.error(`\n${failed} check(s) failed`)

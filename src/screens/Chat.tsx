@@ -1094,13 +1094,28 @@ export function Chat({
    */
   const promptDraftRef = React.useRef<PromptDraftStore>({ text: '', cursor: 0, sessionId: channel.agentId })
   const draftSessionId = channel.agentId
+  /**
+   * Drafts belong to one conversation, so a session change has to drop the old
+   * one — but a REWIND hands the restored text to the composer in the very same
+   * commit that changes the session, and that text is what the user asked for.
+   *
+   * The two are told apart by the composer's own edit counter: it advances
+   * whenever a command writes the composer, so a change since the previous
+   * commit means the text on screen belongs to the NEW session and must
+   * survive. No timing assumptions, no guessing which effect ran first.
+   */
+  const draftEditRef = React.useRef(0)
   React.useEffect(() => {
     const store = promptDraftRef.current
+    const sequence = promptControllerRef.current?.editSequence?.() ?? draftEditRef.current
+    const editedSinceLastRender = sequence !== draftEditRef.current
+    draftEditRef.current = sequence
     if (store.sessionId === draftSessionId) return
-    // A different conversation: the draft belonged to the previous one.
     store.sessionId = draftSessionId
+    if (editedSinceLastRender) return
     store.text = ''
     store.cursor = 0
+    promptControllerRef.current?.clear()
   }, [draftSessionId])
   const previewGallery = activePreview === null ? [] : activePreview.peek
     ? promptControllerRef.current?.previewImages?.() ?? [activePreview]
