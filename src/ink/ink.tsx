@@ -2016,8 +2016,15 @@ export default class Ink {
     // without follow coordination during the selection's lifetime, so
     // these coordinates now hold text the user never highlighted.
     // Shipping it would copy visibly wrong content (the "mojibake-looking"
-    // paste of another line); refuse instead and let the caller surface it.
-    if (this.selection.stale) return '';
+    // paste of another line); refuse, clear the stale highlight, and let
+    // the caller surface it (React callers enter through copySelection /
+    // useCopyOnSelect's onRefused — the direct no-clear entry must not
+    // leave the misleading highlight up either).
+    if (this.selection.stale) {
+      clearSelection(this.selection);
+      this.notifySelectionChange();
+      return '';
+    }
     const text = getSelectedText(this.selection, this.frontFrame.screen);
     if (text) {
       // Raw OSC 52, or DCS-passthrough-wrapped OSC 52 inside tmux (tmux

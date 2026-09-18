@@ -80,6 +80,12 @@ export type SelectionState = {
    *  user highlighted. Null until the first frame observes the
    *  selection. */
   coveredFingerprint: number | null
+  /** Geometry key (start/end row:col) the fingerprint was taken at. Any
+   *  user-driven geometry change (drag motion, word/line extension,
+   *  keyboard pan, multi-click) re-baselines instead of judging — the
+   *  guard only ever indicts a STATIONARY highlight whose text was
+   *  swapped underneath. Owned by refreshSelectionFingerprint. */
+  coveredGeometry: string | null
   /** Sticky once the covered rows changed without follow coordination.
    *  Commit-time copy (copySelectionNoClear) refuses and clears instead
    *  of shipping the replaced text. Cleared on start/clear. */
@@ -102,6 +108,7 @@ export function createSelectionState(): SelectionState {
     scrolledOffBelowSW: [],
     lastPressHadAlt: false,
     coveredFingerprint: null,
+    coveredGeometry: null,
     stale: false,
   }
 }
@@ -135,6 +142,7 @@ export function startSelection(
   s.dragBounds = undefined
   s.lastPressHadAlt = false
   s.coveredFingerprint = null
+  s.coveredGeometry = null
   s.stale = false
 }
 
@@ -211,6 +219,7 @@ export function clearSelection(s: SelectionState): void {
   s.dragBounds = undefined
   s.lastPressHadAlt = false
   s.coveredFingerprint = null
+  s.coveredGeometry = null
   s.stale = false
 }
 
@@ -1186,17 +1195,34 @@ export function refreshSelectionFingerprint(
   const b = selectionBounds(s)
   if (!b) {
     s.coveredFingerprint = null
+    s.coveredGeometry = null
     return false
+  }
+  // Any geometry change re-baselines: drag motion, word/line extension,
+  // keyboard pan, multi-click — the user redefined what is highlighted, so
+  // the next copy legitimately reads the new band's CURRENT text. Only a
+  // stationary highlight can go stale.
+  const geometry = `${b.start.row}:${b.start.col}-${b.end.row}:${b.end.col}`
+  if (geometry !== s.coveredGeometry) {
+    s.coveredGeometry = geometry
+    s.coveredFingerprint = null
   }
   const { cells, noSelect, width, height } = screen
   let h = 0x811c9dc5
   for (let row = b.start.row; row <= b.end.row; row++) {
     if (row < 0 || row >= height) continue
     const rowOff = row * width
-    for (let col = 0; col < width; col++) {
-      // word1's low 2 bits are the cell width; SpacerTail/SpacerHead (2/3)
-      // carry no text of their own.
-      if ((cells[(rowOff + col) * 2 + 1]! & 3) >= 2) continue
+    // Column bounds mirror getSelectedText exactly: the boundary rows hash
+    // only from start.col / through end.col. Streaming text appended to a
+    // covered row OUTSIDE the selected column range (stable head selected,
+    // live tail still writing) must not latch stale — the copy would not
+    // read those columns anyway.
+    const colStart = row === b.start.row ? b.start.col : 0
+    const colEnd = row === b.end.row ? b.end.col : width - 1
+    for (let col = colStart; col <= colEnd; col++) {
+      // word1's low 2 bits are the cell width; SpacerTail/SpacerHead carry
+      // no text of their own.
+      if ((cells[(rowOff + col) * 2 + 1]! & 3) >= CellWidth.SpacerTail) continue
       if (noSelect![rowOff + col] === 1) continue
       h = Math.imul(h ^ cells[(rowOff + col) * 2]!, 0x01000193)
     }

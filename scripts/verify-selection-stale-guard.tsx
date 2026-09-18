@@ -5,16 +5,18 @@
  * （流式输出改写折叠行，视口无滚动 → 无 follow-shift 协调）时，高亮坐标
  * 读到的是替换后的另一段文本——用户贴出的「复制出乱码实为另一行内容」。
  * 守卫对选区覆盖行逐帧做指纹：未协调变化 → stale 锁存 → copySelectionNoClear
- * 拒绝（返回空），useCopyOnSelect 经 onRefused 提示。
+ * 拒绝（返回空并清选区），useCopyOnSelect 经 onRefused 提示。
  *
  * 覆盖：
  *   A. 首帧建立基线（不判 stale）；
  *   B. 覆盖行内容未协调替换 → stale=true（一次、幂等）；
  *   C. coordinated 帧（follow/resize 平移后的合法滚动）内容变化 → 不 stale；
  *   D. 选区外的行替换 → 不 stale；
- *   E. noSelect/spacer cell 不参与指纹（noSelect 开关翻转不改指纹）；
+ *   E. noSelect/spacer cell 不参与指纹（其内容变化不改指纹）；
  *   F. startSelection/clearSelection 重置指纹与 stale；
- *   G. stale 拒绝后 getSelectedText 仍可读（守卫在提交层，不在读取层）。
+ *   G. stale 拒绝后 getSelectedText 仍可读（守卫在提交层，不在读取层）；
+ *   H. 几何变化（拖选 motion/键盘平移/多击）自动重基线，不判 stale；
+ *   I. 列区间与 getSelectedText 一致：选区列之外的流式追加不误伤。
  *
  * 运行：node --import tsx/esm scripts/verify-selection-stale-guard.tsx
  */
@@ -22,7 +24,8 @@ export {} // 模块边界：避免顶层 await/全局名与其他 verify 脚本�
 
 const { refreshSelectionFingerprint, startSelection, updateSelection, clearSelection } =
   await import('../src/ink/selection.js')
-import type { Screen } from '../src/ink/screen.js'
+import type { Screen, SelectionState } from '../src/ink/screen.js'
+import type { SelectionState as SelState } from '../src/ink/selection.js'
 
 let failures = 0
 function check(name: string, ok: boolean, extra = ''): void {
@@ -41,6 +44,15 @@ function makeScreen(rows: number, cols: number): Screen {
   } as unknown as Screen
 }
 
+/** Fresh selection state（生产构造走 createSelectionState，此处等价字面量）。 */
+function makeSel(): SelState {
+  return {
+    anchor: null, focus: null, isDragging: false, anchorSpan: null,
+    scrolledOffAbove: [], scrolledOffBelow: [], scrolledOffAboveSW: [], scrolledOffBelowSW: [],
+    lastPressHadAlt: false, coveredFingerprint: null, coveredGeometry: null, stale: false,
+  } as unknown as SelState
+}
+
 /** 写一个窄字符（word0=charId 非零，word1 width=Narrow=0）。 */
 function putNarrow(s: Screen, col: number, row: number, charId: number): void {
   const ci = (row * s.width + col) * 2
@@ -51,9 +63,7 @@ function putNarrow(s: Screen, col: number, row: number, charId: number): void {
 // ── A. 首帧基线 ──────────────────────────────────────────────────────────
 {
   const screen = makeScreen(5, 10)
-  const sel = { anchor: null, focus: null, isDragging: false, anchorSpan: null,
-    scrolledOffAbove: [], scrolledOffBelow: [], scrolledOffAboveSW: [], scrolledOffBelowSW: [],
-    lastPressHadAlt: false, coveredFingerprint: null, stale: false } as never
+  const sel = makeSel()
   startSelection(sel, 0, 1)
   updateSelection(sel, 9, 3)
   putNarrow(screen, 0, 1, 100)
@@ -66,9 +76,7 @@ function putNarrow(s: Screen, col: number, row: number, charId: number): void {
 // ── B. 未协调替换 → stale ────────────────────────────────────────────────
 {
   const screen = makeScreen(5, 10)
-  const sel = { anchor: null, focus: null, isDragging: false, anchorSpan: null,
-    scrolledOffAbove: [], scrolledOffBelow: [], scrolledOffAboveSW: [], scrolledOffBelowSW: [],
-    lastPressHadAlt: false, coveredFingerprint: null, stale: false } as never
+  const sel = makeSel()
   startSelection(sel, 0, 1)
   updateSelection(sel, 9, 1)
   putNarrow(screen, 0, 1, 200)
@@ -85,9 +93,7 @@ function putNarrow(s: Screen, col: number, row: number, charId: number): void {
 // ── C. coordinated 帧的内容变化不判 stale ────────────────────────────────
 {
   const screen = makeScreen(5, 10)
-  const sel = { anchor: null, focus: null, isDragging: false, anchorSpan: null,
-    scrolledOffAbove: [], scrolledOffBelow: [], scrolledOffAboveSW: [], scrolledOffBelowSW: [],
-    lastPressHadAlt: false, coveredFingerprint: null, stale: false } as never
+  const sel = makeSel()
   startSelection(sel, 0, 1)
   updateSelection(sel, 9, 1)
   putNarrow(screen, 0, 1, 300)
@@ -103,9 +109,7 @@ function putNarrow(s: Screen, col: number, row: number, charId: number): void {
 // ── D. 选区外的行替换不判 stale ──────────────────────────────────────────
 {
   const screen = makeScreen(5, 10)
-  const sel = { anchor: null, focus: null, isDragging: false, anchorSpan: null,
-    scrolledOffAbove: [], scrolledOffBelow: [], scrolledOffAboveSW: [], scrolledOffBelowSW: [],
-    lastPressHadAlt: false, coveredFingerprint: null, stale: false } as never
+  const sel = makeSel()
   startSelection(sel, 0, 1)
   updateSelection(sel, 9, 1)
   putNarrow(screen, 0, 1, 400)
@@ -119,9 +123,7 @@ function putNarrow(s: Screen, col: number, row: number, charId: number): void {
 // ── E. 被 noSelect/spacer 跳过的 cell 内容变化不影响指纹 ────────────────
 {
   const screen = makeScreen(5, 10)
-  const sel = { anchor: null, focus: null, isDragging: false, anchorSpan: null,
-    scrolledOffAbove: [], scrolledOffBelow: [], scrolledOffAboveSW: [], scrolledOffBelowSW: [],
-    lastPressHadAlt: false, coveredFingerprint: null, stale: false } as never
+  const sel = makeSel()
   startSelection(sel, 0, 1)
   updateSelection(sel, 9, 1)
   putNarrow(screen, 0, 1, 600)
@@ -142,9 +144,7 @@ function putNarrow(s: Screen, col: number, row: number, charId: number): void {
 // ── F. start/clear 重置 ──────────────────────────────────────────────────
 {
   const screen = makeScreen(5, 10)
-  const sel = { anchor: null, focus: null, isDragging: false, anchorSpan: null,
-    scrolledOffAbove: [], scrolledOffBelow: [], scrolledOffAboveSW: [], scrolledOffBelowSW: [],
-    lastPressHadAlt: false, coveredFingerprint: null, stale: false } as never
+  const sel = makeSel()
   startSelection(sel, 0, 1)
   updateSelection(sel, 9, 1)
   putNarrow(screen, 0, 1, 700)
@@ -154,15 +154,13 @@ function putNarrow(s: Screen, col: number, row: number, charId: number): void {
   if (!sel.stale) check('F. precondition: stale latched', false)
   clearSelection(sel)
   check('F. clearSelection resets fingerprint and stale',
-    sel.coveredFingerprint === null && !sel.stale)
+    sel.coveredFingerprint === null && sel.coveredGeometry === null && !sel.stale)
 }
 
 // ── G. stale 是提交层守卫，不改变读取层 ─────────────────────────────────
 {
   const screen = makeScreen(5, 10)
-  const sel = { anchor: null, focus: null, isDragging: false, anchorSpan: null,
-    scrolledOffAbove: [], scrolledOffBelow: [], scrolledOffAboveSW: [], scrolledOffBelowSW: [],
-    lastPressHadAlt: false, coveredFingerprint: null, stale: false } as never
+  const sel = makeSel()
   startSelection(sel, 0, 1)
   updateSelection(sel, 9, 1)
   putNarrow(screen, 0, 1, 800)
@@ -172,6 +170,45 @@ function putNarrow(s: Screen, col: number, row: number, charId: number): void {
   // selectionBounds（读取层）在 stale 下仍工作——守卫只在 copySelectionNoClear
   check('G. stale guards commit, not bounds reading',
     sel.stale && sel.anchor !== null && sel.focus !== null)
+}
+
+// ── H. 几何变化（拖选 motion）自动重基线 ─────────────────────────────────
+{
+  const screen = makeScreen(5, 10)
+  const sel = makeSel()
+  startSelection(sel, 0, 1)
+  updateSelection(sel, 4, 1)
+  putNarrow(screen, 0, 1, 900)
+  refreshSelectionFingerprint(sel, screen, false)
+  // 拖选延伸到下一行（几何变化）+ 新行内容——不判 stale
+  updateSelection(sel, 9, 2)
+  putNarrow(screen, 0, 2, 901)
+  const changed = refreshSelectionFingerprint(sel, screen, false)
+  check('H. geometry change (drag extension) re-baselines, no stale',
+    !changed && !sel.stale)
+  // 几何稳定后再原地替换 → 恢复正常守卫
+  putNarrow(screen, 0, 2, 999)
+  const relapse = refreshSelectionFingerprint(sel, screen, false)
+  check('H2. guard re-arms after re-baseline', relapse && sel.stale)
+}
+
+// ── I. 列区间与 getSelectedText 一致 ─────────────────────────────────────
+{
+  const screen = makeScreen(5, 10)
+  const sel = makeSel()
+  startSelection(sel, 0, 1)
+  updateSelection(sel, 3, 1)
+  for (let c = 0; c <= 3; c++) putNarrow(screen, c, 1, 100 + c)
+  refreshSelectionFingerprint(sel, screen, false)
+  // 选区列之外的流式追加（列 5-9 持续输出）——复制不读这些列，不误伤
+  for (let c = 5; c < 10; c++) putNarrow(screen, c, 1, 200 + c)
+  const changed = refreshSelectionFingerprint(sel, screen, false)
+  check('I. streaming append outside the selected columns does not latch stale',
+    !changed && !sel.stale)
+  // 选区内列被替换 → 正常锁存
+  putNarrow(screen, 1, 1, 999)
+  const inside = refreshSelectionFingerprint(sel, screen, false)
+  check('I2. replacement inside the selected columns still latches', inside && sel.stale)
 }
 
 console.log(failures === 0 ? 'selection stale-guard regression passed' : `${failures} failure(s)`)
