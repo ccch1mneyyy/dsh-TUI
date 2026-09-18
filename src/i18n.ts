@@ -352,14 +352,10 @@ const dict = {
   'workspace-command-failed': { zh: 'workspace 操作失败 · {{err}}', en: 'Workspace action failed · {{err}}' },
   'workspace-renamed': { zh: '工作区已重命名：{{title}}', en: 'Workspace renamed: {{title}}' },
   'workspace-rename-failed': { zh: '工作区重命名失败 · {{err}}', en: 'Failed to rename workspace · {{err}}' },
-  'workspace-added': { zh: '已添加工作区：{{title}}', en: 'Workspace added: {{title}}' },
-  'workspace-register-provider': { zh: '{{target}} 由插件提供，无法登记到本地工作区列表', en: '{{target}} is provider-owned and cannot be registered in the local workspace list' },
   'workspace-removed': { zh: '已从工作区列表移除：{{target}}（会话与目录保留）', en: 'Removed from the workspace list: {{target}} (sessions and directory kept)' },
   'workspace-remove-unknown': { zh: '工作区列表中没有：{{target}}', en: 'Not in the workspace list: {{target}}' },
   'workspace-remove-failed': { zh: '移除工作区失败 · {{err}}', en: 'Failed to remove the workspace · {{err}}' },
-  // ── screens/WorkspaceHome.tsx（工作区主页）────────────────────────────
-  'home-title': { zh: '工作区', en: 'Workspaces' },
-  'home-subtitle': { zh: '选择工作区查看它的会话', en: 'Pick a workspace to see its sessions' },
+  // ── 工作区栏与菜单（screens/SessionSupervisor.tsx + HomeWorkspaceRow）──
   'home-section-workspaces': { zh: '工作区（{{n}}）', en: 'Workspaces ({{n}})' },
   'home-add-workspace': { zh: '添加工作区', en: 'Add workspace' },
   'home-add-hint': { zh: '选择目录并加入列表', en: 'Pick a directory and add it to the list' },
@@ -383,8 +379,6 @@ const dict = {
   'home-rename-failed': { zh: '重命名失败 · {{err}}', en: 'Rename failed · {{err}}' },
   'home-remove-title': { zh: '移除工作区「{{name}}」？', en: 'Remove workspace "{{name}}"?' },
   'home-remove-detail': { zh: '只从列表移除，会话记录与磁盘目录都会保留', en: 'Only the list entry goes away; sessions and the directory stay' },
-  'home-remove-working': { zh: 'Agent 运行中，无法移除当前工作区', en: 'Cannot remove the current workspace while the agent is running' },
-  'home-working': { zh: 'Agent 运行中，先结束或中断当前回合', en: 'The agent is working — finish or interrupt the turn first' },
   // ── screens/SessionSupervisor.tsx（三合一会话管理：/resume /agentview /home）─
   'supervisor-title': { zh: '会话管理', en: 'Sessions' },
   'supervisor-unregistered': { zh: '未登记的工作区', en: 'Unregistered' },
@@ -403,16 +397,6 @@ const dict = {
   'supervisor-stop-failed': { zh: '无法停止该会话', en: 'Could not stop that session' },
   'supervisor-stop-current': { zh: '不能停止当前正在使用的会话', en: 'The session you are attached to cannot be stopped' },
   'supervisor-open-failed': { zh: '无法进入会话「{{name}}」· 原因见下方通知', en: 'Could not enter {{name}} · the reason is in the notification below' },
-  'home-picker-title': { zh: '添加工作区', en: 'Add workspace' },
-  'home-picker-empty': { zh: '（没有子目录）', en: '(no subdirectories)' },
-  'home-picker-loading': { zh: '正在读取目录…', en: 'Loading directories…' },
-  'home-picker-failed': { zh: '无法读取目录 · {{err}}', en: 'Cannot read the directory · {{err}}' },
-  'home-picker-add': { zh: '添加当前目录', en: 'Add this directory' },
-  'home-picker-up': { zh: '上一级', en: 'Parent directory' },
-  'home-picker-home': { zh: '主目录', en: 'Home' },
-  'home-picker-hint': { zh: '**↑/↓** 选择 · **Enter** 进入 · Tab 添加到列表 · ← 上一级 · 可直接输入路径 · Esc 取消', en: '**↑/↓** move · **Enter** open · Tab add to list · ← parent · or type a path · Esc cancel' },
-  'home-picker-input-hint': { zh: '输入路径 · **Enter** 打开 · Esc 返回浏览', en: 'Type a path · **Enter** open · Esc back to browsing' },
-  'home-picker-adding': { zh: '正在添加…', en: 'Adding…' },
   'cost-cache-rate': { zh: '缓存率 {{rate}}% · {{read}} 读 / {{write}} 写', en: 'Cache rate {{rate}}% · {{read}} read / {{write}} write' },
   'cost-context': { zh: '上下文 {{pct}}%', en: 'Context {{pct}}%' },
   'status-title': { zh: '标题   {{title}}', en: 'Title   {{title}}' },
@@ -764,18 +748,9 @@ const dict = {
   // ── components/MessageList.tsx ──────────────────────────────────────
   'load-earlier': { zh: ' ↑ 加载更早消息（会话日志完整，/export 导出全文） ', en: ' ↑ load earlier messages (full session log; /export for full text) ' },
   'show-previous-messages': { zh: ' ctrl+e 显示前 {{n}} 条消息 ', en: ' ctrl+e to show {{n}} previous messages ' },
-  'resume-none-in-cwd': { zh: '当前目录没有可恢复的历史会话', en: 'No resumable sessions in the current directory' },
 
-  // ── screens/SessionBrowser.tsx + screens/Chat.tsx (/resume) ─────────
+  // ── screens/Chat.tsx (/resume) ──────────────────────────────────────
   'resume-resumed': { zh: '已恢复会话', en: 'Session resumed' },
-  'resume-delete-confirm': { zh: '删除「{{name}}」？会话日志将被永久移除。', en: 'Delete "{{name}}"? The session log is removed permanently.' },
-  'resume-deleted': { zh: '已删除会话「{{name}}」', en: 'Deleted session {{name}}' },
-  'resume-delete-failed': { zh: '无法删除会话「{{name}}」', en: 'Could not delete session {{name}}' },
-  'resume-rename-placeholder': { zh: '新的会话名称…', en: 'New session name…' },
-  'resume-rename-failed': { zh: '无法重命名会话「{{name}}」', en: 'Could not rename session {{name}}' },
-  'resume-hint-delete': { zh: '**Enter** 删除 · Esc 取消', en: '**Enter** to delete · Esc to cancel' },
-  'resume-hint-rename': { zh: '**Enter** 保存 · Esc 取消', en: '**Enter** to save · Esc to cancel' },
-  'resume-title': { zh: '恢复会话', en: 'Resume session' },
 
   // ── screens/AgentView.tsx + channel.ts (session overview) ─
   'agentview-title': { zh: '会话总览', en: 'Session overview' },
@@ -850,9 +825,7 @@ const dict = {
   'settings-hint-group': { zh: '**Enter** 编辑/切换（改动即保存） · Esc 返回', en: '**Enter** edit/toggle (auto-saves) · Esc back' },
   'settings-hint-edit': { zh: '**Enter** 确认并保存 · Esc 取消', en: '**Enter** to confirm & save · Esc to cancel' },
 
-  // ── 会话浏览器：行、计数、筛选、预览 ───────────────────────────────
-  'session-loading': { zh: '正在读取会话…', en: 'Reading sessions…' },
-  'session-list-failed': { zh: '无法读取会话列表 · {{err}}', en: 'Could not read the session list · {{err}}' },
+  // ── 会话与工作区列表行：行、计数、筛选、预览 ─────────────────────────
   'session-resume-failed': { zh: '恢复会话失败 · {{err}}', en: 'Resuming the session failed · {{err}}' },
   'session-when-now': { zh: '刚刚', en: 'just now' },
   'session-when-minutes': { zh: '{{n}} 分钟前', en: '{{n}}m ago' },
@@ -864,47 +837,20 @@ const dict = {
   'session-kind-fork': { zh: '回溯分支', en: 'Rewound branch' },
   'session-kind-subagent': { zh: '子 agent 运行', en: 'Sub-agent run' },
   'session-project-unknown': { zh: '（未记录目录）', en: '(no directory recorded)' },
-  'session-scope-all': { zh: '全部工作目录', en: 'all working directories' },
-  'session-search-placeholder': { zh: '输入以搜索 · {{scope}}', en: 'Type to search · {{scope}}' },
-  'session-workspace-scope': { zh: '工作目录', en: 'Working directory' },
-  'session-workspace-switch': { zh: '← 选择目录', en: '← choose directory' },
-  'session-workspace-select-title': { zh: '选择工作目录', en: 'Choose working directory' },
-  'session-workspace-search-placeholder': { zh: '输入以搜索工作目录', en: 'Type to search working directories' },
   'session-workspace-all': { zh: '全部工作目录', en: 'All working directories' },
   'session-workspace-current': { zh: '当前', en: 'current' },
   'session-workspace-project-count': { zh: '{{n}} 个目录', en: '{{n}} directories' },
   'session-workspace-all-detail': { zh: '跨目录浏览 · {{n}} 个会话', en: 'browse across directories · {{n}} sessions' },
   'session-workspace-empty': { zh: '暂无历史会话', en: 'no history yet' },
-  'session-workspace-no-match': { zh: '没有匹配的工作目录', en: 'No matching working directory' },
-  // Right-click session menu items (SessionBrowser popup).
-  'resume-menu-open': { zh: '打开', en: 'Open' },
+  // Right-click session menu items (components/sessions/SessionListRow.tsx).
   'resume-menu-pin': { zh: '固定到顶部', en: 'Pin to top' },
   'resume-menu-unpin': { zh: '取消固定', en: 'Unpin' },
-  'resume-menu-rename': { zh: '重命名', en: 'Rename' },
-  'resume-menu-delete': { zh: '删除', en: 'Delete' },
-  // Session pinning (SessionBrowser pinned group + toasts).
-  'session-pinned-group': { zh: '已固定', en: 'Pinned' },
-  'resume-pinned': { zh: '已固定 {{name}}', en: 'Pinned {{name}}' },
-  'resume-unpinned': { zh: '已取消固定 {{name}}', en: 'Unpinned {{name}}' },
+  // Session pinning (supervisor toasts + persisted pin state).
   'resume-pin-save-failed': { zh: '固定状态保存失败，未应用更改', en: 'Could not save pin; no change was applied' },
   'session-count-shown': { zh: '{{n}} 个会话', en: '{{n}} sessions' },
-  'session-count-subagents': { zh: '{{n}} 个子运行已折叠', en: '{{n}} runs folded' },
-  'session-count-empty': { zh: '{{n}} 个空会话', en: '{{n}} empty' },
-  'session-clean-confirm': { zh: '清理 {{n}} 个没有对话内容的会话？日志将被永久移除。', en: 'Remove {{n}} sessions that hold no conversation? Their logs are deleted permanently.' },
-  'session-cleaned': { zh: '已清理 {{n}} 个空会话', en: 'Removed {{n}} empty sessions' },
   'session-preview-times': { zh: '创建于 {{created}} · 最后活动 {{updated}}', en: 'created {{created}} · last active {{updated}}' },
   'session-preview-loading': { zh: '正在读取会话结尾…', en: 'Reading the end of this session…' },
   'session-preview-empty': { zh: '这个会话没有可预览的往来消息', en: 'No exchanges to preview in this session' },
-  'session-toggle-on': { zh: '开', en: 'on' },
-  'session-toggle-off': { zh: '关', en: 'off' },
-  // Three widths of the same hint. The browser picks the widest that fits the
-  // terminal, because a hint that wraps costs the rows the list needs and can
-  // push its own tail off the bottom of the screen.
-  'session-hint-list': { zh: '**Enter** 恢复 · ← 工作目录 · Tab 预览 · 右键菜单 · {{mod}}a 全部目录（{{projects}}） · {{mod}}s 子运行（{{runs}}） · {{mod}}b 本分支 · {{mod}}r 重命名 · {{mod}}p 固定 · {{mod}}d 删除 · {{mod}}x 清空壳 · Esc 退出', en: '**Enter** resume · ← directories · Tab preview · right-click menu · {{mod}}a all directories ({{projects}}) · {{mod}}s runs ({{runs}}) · {{mod}}b this branch · {{mod}}r rename · {{mod}}p pin · {{mod}}d delete · {{mod}}x clean · Esc exit' },
-  'session-hint-list-mid': { zh: '**Enter** 恢复 · ← 工作目录 · Tab 预览 · 右键菜单 · {{mod}}a 全部目录 · {{mod}}s 子运行 · {{mod}}r 重命名 · {{mod}}p 固定 · {{mod}}d 删除 · Esc 退出', en: '**Enter** resume · ← directories · Tab preview · right-click menu · {{mod}}a all directories · {{mod}}s runs · {{mod}}r rename · {{mod}}p pin · {{mod}}d delete · Esc exit' },
-  'session-hint-list-short': { zh: '**Enter** 恢复 · {{mod}}p ★ · ← 目录 · Esc', en: '**Enter** resume · {{mod}}p ★ · ← dirs · Esc' },
-  'session-hint-workspaces': { zh: '**Enter/→** 查看会话 · ↑/↓ 选择 · {{mod}}a 全部目录 · Esc 返回', en: '**Enter/→** view sessions · ↑/↓ choose · {{mod}}a all directories · Esc back' },
-  'session-hint-workspaces-short': { zh: '**Enter/→** 查看 · Esc', en: '**Enter/→** view · Esc' },
 
   // ── picker 通用快捷键提示（整句本地化，zh 不用 "to" 结构；**段** 渲染为粗体主快捷键）─
   'hint-confirm-exit': { zh: '**Enter** 确认 · Esc 退出', en: '**Enter** to confirm · Esc to exit' },

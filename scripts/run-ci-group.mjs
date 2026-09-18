@@ -367,11 +367,6 @@ const GROUPS = {
 // Esc 先清查询再退出、rename 后光标按 id 跟随目标（不是按行号）、
 // confirm-delete 只认无修饰 Enter、Esc 取消。真实 Chat 渲染驱动。
     ["verify-session-browser", ['node', 'scripts/verify-session-browser.mjs']],
-// 会话浏览器布局压测：8 种几何 × 中英双语 × 9 个交互状态，用 xterm 的
-// isWrapped 断言没有任何一行溢出终端宽度，并要求提示行始终是最后一行
-// （等价于「上方每个区域都放得下、没有多占行、没有被挤出屏幕」）。
-// 中文必测：所有文案都本地化，按字符数而非列宽排版在英文下看不出来。
-    ["verify-session-browser-layout", ['node', 'scripts/verify-session-browser-layout.mjs']],
 // Tooltip 悬停提示回归：悬停截断元素 ~600ms 后弹完整内容浮层——延迟未到
 // 不出现、到点内容正确、leave 即隐、leave 早于延迟取消、自定义 delayMs、
 // 多行内容锚点上方、屏顶锚点转下方、resize 隐藏（几何失效）、窄屏水平钳制。
@@ -412,12 +407,11 @@ const GROUPS = {
 // DATA_DIR 建目录 0700；临时 HOME 重定向 + 固定 umask，修复前按 umask
 // 落 0644 必红。
     ["verify-data-file-perms", ['node', '--import', 'tsx/esm', 'scripts/verify-data-file-perms.tsx']],
-// /resume・/tree 搜索框显示塌缩回归：SearchBox 的单行窗口化预算取自实测
-// 自身宽度，自适应宽度（默认 row 包裹、无 width prop）会让预算跟随内容
-// 收缩，收敛到「前缀 + 1 字符 + 反色 caret」——只看得见最新输入的字符。
-// 断言逐键英文、IME 整段上屏、退格、rename 预填+追加与 /tree 搜索的查询
-// 始终完整可见，并守住超长查询单行窗口化语义（尾部可见、头部滚出、不折行）。
-    ["verify-session-browser-searchbox", ['node', '--import', 'tsx/esm', 'scripts/verify-session-browser-searchbox.tsx']],
+// /tree 搜索框显示塌缩回归：SearchBox 的单行窗口化预算取自实测自身宽度，
+// 自适应宽度（默认 row 包裹、无 width prop）会让预算跟随内容收缩，收敛到
+// 「前缀 + 1 字符 + 反色 caret」——只看得见最新输入的字符。断言逐键输入
+// 完整可见，并守住超长查询单行窗口化语义（尾部可见、头部滚出、不折行）。
+    ["verify-searchbox-windowing", ['node', '--import', 'tsx/esm', 'scripts/verify-searchbox-windowing.tsx']],
   ],
   'channel-ui': [
 // L4 composition boundary plus report/metadata lifetime fences.
