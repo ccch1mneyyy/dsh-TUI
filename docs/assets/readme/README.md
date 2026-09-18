@@ -31,11 +31,12 @@ ConPTY and decodes its actual ANSI output with xterm-headless. DSH CLI and its
 engine dependencies are pinned to 0.1.5-rc.1. HOME, USERPROFILE, DSH_HOME and session
 storage are isolated. No production settings or credentials are copied.
 
-The animated README logos reuse the same 22 whale poses as the captured preview.
-They run at a slower 3.2-second cycle: the original heart overlay is replaced by
-`我想要`, followed by a yellow GitHub star; the English logo uses `I desire`.
-The logo keeps the body, blink, spout, fin and tail poses while removing the
-source heart and sleep overlays so the new callout remains visually clear.
+The animated README logos reuse the same whale poses as the captured preview.
+They run at a slower 5.2-second cycle: `我想要` becomes an outlined
+`☆ 星标` button, then the yellow star lights, expands and settles while
+particles radiate outward; the whale finishes with `≧∀≦`. The English logo
+uses `I desire`, `☆ Star` and `★ Starred`. Only body, blink, fin and tail
+poses remain; spout, heart and sleep overlays are removed.
 The four files in `runtime/` preserve the original character cells, ANSI colors,
 attributes, capture timestamps, package versions and source ANSI SHA-256 hashes.
 Desktop capture uses 110 columns x 42 rows; narrow capture uses 58 x 36. The
