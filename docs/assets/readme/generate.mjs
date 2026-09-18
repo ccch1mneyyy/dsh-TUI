@@ -5,6 +5,7 @@ import { resolve, dirname } from 'node:path'
 import icons from './lucide-icons.json' with { type: 'json' }
 import { renderRuntime } from './runtime-svg.mjs'
 import { withWelcomeCopy } from './welcome-copy.mjs'
+import { WHALE_FRAMES } from '../../../src/components/whaleFrames.ts'
 
 const directory = dirname(fileURLToPath(import.meta.url))
 const root = resolve(directory, '../../..')
@@ -48,6 +49,57 @@ const svg = (width, height, title, description, content, styles = '') => `\
 </svg>
 `
 
+const whaleLogo = language => {
+  const en = language === 'en'
+  const palette = { D: '#142660', B: '#4e6fff', L: '#bee1ff', W: '#ffffff', Z: '#808080' }
+  const logoFrames = WHALE_FRAMES.filter(frame => !frame.rows.some(row => row.includes('H') || row.includes('Z')))
+  const frames = logoFrames.map((frame, index) => {
+    const paths = new Map(Object.keys(palette).map(key => [key, '']))
+    frame.rows.forEach((row, y) => [...row].forEach((pixel, x) => {
+      if (pixel !== '.' && pixel !== 'H') paths.set(pixel, paths.get(pixel) + `M${x} ${y}h1v1h-1z`)
+    }))
+    const start = (index / logoFrames.length * 100).toFixed(5)
+    const end = ((index + 1) / logoFrames.length * 100).toFixed(5)
+    return {
+      css: `.logo-whale-${index}{animation:logoWhale${index} 3200ms step-end infinite}@keyframes logoWhale${index}{${index === 0 ? '0%{visibility:visible}' : `0%{visibility:hidden}${start}%{visibility:visible}`}${end}%{visibility:hidden}}`,
+      svg: `<g class="logo-whale-frame logo-whale-${index}" data-whale-frame="${index}" data-pose="${xml(frame.name)}">${[...paths].filter(([, d]) => d).map(([key, d]) => `<path fill="${palette[key]}" d="${d}"/>`).join('')}</g>`,
+    }
+  })
+  const message = en ? 'I desire' : '我想要'
+  const starLabel = en ? 'GitHub star' : 'GitHub 星标'
+  const star = 'M15 1.8l4.1 8.3 9.2 1.3-6.7 6.5 1.6 9.2L15 22.8 6.8 27.1l1.6-9.2-6.7-6.5 9.2-1.3z'
+  return svg(760, 180, en ? 'dsh-TUI animated logo' : 'dsh-TUI 动态 Logo',
+    en ? 'A whale animation followed by a GitHub star prompt.' : '鲸鱼动画随后出现想要与 GitHub 黄色星标提示。',
+    `<style>
+      .logo-whale-frame{visibility:hidden}.logo-speech,.logo-star{opacity:0}
+      ${frames.map(frame => frame.css).join('')}
+      .logo-speech{animation:logoSpeech 3200ms ease-in-out infinite}
+      .logo-star{animation:logoStar 3200ms ease-in-out infinite}
+      @keyframes logoSpeech{0%,8%{opacity:0;transform:translateY(8px)}16%,48%{opacity:1;transform:translateY(0)}58%,100%{opacity:0;transform:translateY(-5px)}}
+      @keyframes logoStar{0%,50%{opacity:0;transform:scale(.7) rotate(-10deg)}62%,86%{opacity:1;transform:scale(1) rotate(0)}100%{opacity:0;transform:scale(.9) rotate(8deg)}}
+      .logo-wordmark{fill:#263146}.logo-descriptor{fill:#687386}.logo-rule{stroke:#abc2ec}
+      @media (prefers-color-scheme: dark){.logo-wordmark{fill:#e8e6e0}.logo-descriptor{fill:#abc2ec}.logo-rule{stroke:#5e88cc}}
+    </style>
+    <g transform="translate(8 18) scale(4.15)" shape-rendering="crispEdges">${frames.map(frame => frame.svg).join('')}</g>
+    <g class="logo-speech" transform="translate(38 4)">
+      <rect x="0" y="0" width="${en ? 86 : 78}" height="30" rx="8" fill="#263146"/>
+      <path d="M16 30l7 7 7-7" fill="#263146"/>
+      <text x="${en ? 43 : 39}" y="21" text-anchor="middle" font-size="15" font-weight="700" fill="#ffffff">${xml(message)}</text>
+    </g>
+    <a href="https://github.com/says693/dsh-TUI-693/stargazers" aria-label="${xml(starLabel)}">
+      <g class="logo-star" transform="translate(139 2)">
+        <circle cx="17" cy="17" r="17" fill="#fff3b0"/>
+        <path d="${star}" transform="translate(2 2) scale(.86)" fill="#f2bf27"/>
+        <text x="42" y="22" font-size="14" font-weight="700" fill="#896819">${xml(starLabel)}</text>
+      </g>
+    </a>
+    <g transform="translate(225 31)">
+      <text class="logo-wordmark" x="0" y="74" font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="72" font-weight="750"><tspan fill="#4b6fff">dsh</tspan><tspan>-TUI</tspan></text>
+      <path class="logo-rule" d="M2 91H514" fill="none" stroke-width="2"/>
+      <text class="logo-descriptor" x="2" y="121" font-family="ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', monospace" font-size="16" font-weight="600">DEEPSEEK HARNESS TERMINAL INTERFACE</text>
+    </g>`).replace(/[ \t]+$/gm, '')
+}
+
 function tile(entry, language) {
   const en = language === 'en'
   const title = entry[en ? 4 : 3]
@@ -85,6 +137,7 @@ function securityLink(language) {
 
 await mkdir(directory, { recursive: true })
 for (const language of ['zh', 'en']) {
+  await writeFile(resolve(directory, language === 'en' ? 'logo-en.svg' : 'logo.svg'), whaleLogo(language))
   await writeFile(resolve(directory, `security-link-${language}.svg`), securityLink(language))
   for (const mobile of [false, true]) {
     const recording = JSON.parse(await readFile(resolve(directory, 'runtime', `${language}-${mobile ? 'mobile' : 'desktop'}.json`), 'utf8'))

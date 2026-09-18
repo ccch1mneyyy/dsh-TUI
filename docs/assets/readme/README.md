@@ -13,8 +13,8 @@ node docs/assets/readme/generate.mjs
 node docs/assets/readme/verify.mjs
 ```
 
-The generator updates four responsive, bilingual automatic animated previews,
-16 navigation tiles, two compact security-link buttons and the marked navigation
+The generator updates two animated language-specific logos, four responsive,
+bilingual automatic animated previews, 16 navigation tiles, two compact security-link buttons and the marked navigation
 blocks in both READMEs. It verifies
 local link targets before writing the indexes. Do not edit generated SVG files by hand.
 
@@ -31,6 +31,11 @@ ConPTY and decodes its actual ANSI output with xterm-headless. DSH CLI and its
 engine dependencies are pinned to 0.1.5-rc.1. HOME, USERPROFILE, DSH_HOME and session
 storage are isolated. No production settings or credentials are copied.
 
+The animated README logos reuse the same 22 whale poses as the captured preview.
+They run at a slower 3.2-second cycle: the original heart overlay is replaced by
+`我想要`, followed by a yellow GitHub star; the English logo uses `I desire`.
+The logo keeps the body, blink, spout, fin and tail poses while removing the
+source heart and sleep overlays so the new callout remains visually clear.
 The four files in `runtime/` preserve the original character cells, ANSI colors,
 attributes, capture timestamps, package versions and source ANSI SHA-256 hashes.
 Desktop capture uses 110 columns x 42 rows; narrow capture uses 58 x 36. The

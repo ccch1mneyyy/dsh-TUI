@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/assets/logo.svg" alt="dsh-TUI - DeepSeek Harness terminal interface" width="560">
+  <img src="docs/assets/readme/logo-en.svg" alt="dsh-TUI animated logo: whale, I desire, and GitHub yellow star" width="560">
 </p>
 
 <p align="center">

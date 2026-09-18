@@ -1,6 +1,6 @@
 
 <p align="center">
-  <img src="docs/assets/logo.svg" alt="dsh-TUI - DeepSeek Harness terminal interface" width="560">
+  <img src="docs/assets/readme/logo.svg" alt="dsh-TUI 动态 Logo：鲸鱼、我想要和 GitHub 黄色星标" width="560">
 </p>
 <p align="center">
   <strong>简体中文</strong> | <a href="README_EN.md">English</a>
