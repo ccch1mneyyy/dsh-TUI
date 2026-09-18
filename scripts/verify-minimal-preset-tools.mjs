@@ -10,6 +10,7 @@ import {
   runningPresetOf,
 } from '../lib/types/dsh-adapter/presets.js'
 import { settled } from './lib/term-test.mjs'
+import { setLang } from '../lib/types/i18n.js'
 
 const bash = { name: 'bash' }
 const editor = { name: 'str_replace_editor' }
@@ -156,6 +157,51 @@ assert.equal(directChannel.rows.some(row => row.text.includes('ptc')), true)
 assert.equal(directChannel.rows.some(row => row.text.includes('code')), false)
 assert.equal(await directChannel.switchPreset('ptc'), true)
 assert.equal(directResolveId, 'ptc')
+
+// Display localization: the 0.1.2 roster id `ptc` must resolve the en
+// dictionary surface keyed under the legacy `code` id (preset-name-code /
+// preset-desc-code), never the Chinese roster copy — same bug as issue #8.
+setLang('en')
+const displayChannel = createChannel({
+  on() { return () => {} },
+  get(name) {
+    if (name !== 'agentPresets') return undefined
+    return {
+      defaultId: 'standard',
+      async list() {
+        return [
+          { id: 'standard', trust: 'system', name: '标准模式', description: '标准描述' },
+          { id: 'ptc', trust: 'system', name: 'PTC 模式', description: 'PTC 描述' },
+          { id: 'minimal', trust: 'system', name: '极简模式', description: '极简描述' },
+        ]
+      },
+      async resolve() { throw new Error('not used') },
+      async mount() {},
+      async recompose() { throw new Error('not used') },
+    }
+  },
+  logger: { warn() {} },
+}, {
+  id: 'preset-display-agent',
+  status: 'idle',
+  session: { id: 'preset-display-session', seq: 1, events: [] },
+  ctx: { on() { return () => {} } },
+  followup() {},
+  steer() {},
+}, {
+  model: 'deepseek-chat',
+  cwd: '/tmp',
+  provider: 'deepseek',
+  activity: false,
+  agentPreset: 'ptc',
+})
+const displayList = await displayChannel.listPresets()
+const ptcOption = displayList.find(preset => preset.id === 'ptc')
+assert.equal(ptcOption.name, 'PTC')
+assert.equal(ptcOption.description, 'Everything standard mode offers, with tools exposed through the Code Mode SDK so the model composes multi-step operations in one TypeScript program.')
+assert.equal(displayList.find(preset => preset.id === 'standard').name, 'Standard')
+assert.equal(displayList.find(preset => preset.id === 'minimal').name, 'Minimal')
+setLang('zh')
 
 const bundledSkills = [{
   name: 'audit',
