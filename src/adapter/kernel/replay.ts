@@ -59,7 +59,6 @@ export const CHANNEL_METHOD_FEATURES: Readonly<Record<string, string>> = Object.
   runWorkspaceCommand: 'workspaces',
   listWorkspaces: 'workspaces',
   listWorkspaceRegistry: 'workspaces',
-  registerWorkspace: 'workspaces',
   removeWorkspace: 'workspaces',
   renameWorkspaceAt: 'workspaces',
   resolveWorkspace: 'workspaces',

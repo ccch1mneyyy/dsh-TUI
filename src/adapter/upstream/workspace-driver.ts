@@ -29,7 +29,6 @@ const WORKSPACE_FEATURES = Object.freeze([
   'host.workspaces.commands',
   'host.workspaces.commandShell',
   'host.workspaces.rename',
-  'host.workspaces.create',
   'host.workspaces.remove',
   'host.workspaces.runCommand',
 ] as const)
@@ -177,7 +176,6 @@ async function verifyWorkspaceLive(ctx: unknown): Promise<CapabilityLifecycle[]>
   for (const feature of [
     'host.workspaces.commandShell',
     'host.workspaces.rename',
-    'host.workspaces.create',
     'host.workspaces.remove',
     'host.workspaces.runCommand',
   ] as const) {
@@ -195,7 +193,6 @@ function createWorkspacePort(host: TuiWorkspaceHost): HostWorkspacePort {
     describe: cwd => host.describe(cwd),
     commandShell: cwd => host.commandShell(cwd),
     rename: (cwd, title) => host.rename(cwd, title),
-    create: (path, title) => host.create(path, title),
     remove: cwd => host.remove(cwd),
     commands: () => host.commands(),
     runCommand: (name, input, cwd, signal) => host.runCommand(name, input, cwd, signal),

@@ -896,7 +896,6 @@ function createChannelWithOwner(
     newSession: newSessionAction,
     listWorkspaces: workspaceActions.listWorkspaces,
     listWorkspaceRegistry: workspaceActions.listWorkspaceRegistry,
-    registerWorkspace: workspaceActions.registerWorkspace,
     removeWorkspace: workspaceActions.removeWorkspace,
     renameWorkspaceAt: workspaceActions.renameWorkspaceAt,
     resolveWorkspace: workspaceActions.resolveWorkspace,

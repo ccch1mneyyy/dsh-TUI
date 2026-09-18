@@ -48,8 +48,6 @@ export interface HostWorkspacePort {
   describe(cwd: string): HostWorkspaceTarget
   commandShell(cwd: string): Promise<HostCommandShell | undefined>
   rename(cwd: string, title: string): Promise<HostWorkspaceTarget>
-  /** Register a directory in the durable workspace ledger (no session). */
-  create(path: string, title?: string): Promise<HostWorkspaceTarget>
   /** Drop a workspace registration; the directory and logs survive. */
   remove(cwd: string): Promise<boolean>
   commands(): readonly Pick<HostWorkspaceCommand, 'name' | 'aliases' | 'description'>[]

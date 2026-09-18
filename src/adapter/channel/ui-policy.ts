@@ -52,7 +52,6 @@ export const CHANNEL_UI_EFFECTS = Object.freeze({
   'newSession': 'mutate',
   'listWorkspaces': 'read-only',
   'listWorkspaceRegistry': 'read-only',
-  'registerWorkspace': 'mutate',
   'removeWorkspace': 'mutate',
   'renameWorkspaceAt': 'mutate',
   'resolveWorkspace': 'mutate',

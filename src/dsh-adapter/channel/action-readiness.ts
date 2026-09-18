@@ -15,7 +15,6 @@ export type ChannelActionDelegates = Pick<ChannelState,
   | 'newSession'
   | 'listWorkspaces'
   | 'listWorkspaceRegistry'
-  | 'registerWorkspace'
   | 'removeWorkspace'
   | 'renameWorkspaceAt'
   | 'resolveWorkspace'
@@ -91,7 +90,6 @@ export function createChannelActionMethods(
     newSession: () => getReadyActions().newSession(),
     listWorkspaces: () => getReadyActions().listWorkspaces(),
     listWorkspaceRegistry: () => getReadyActions().listWorkspaceRegistry(),
-    registerWorkspace: (path, title) => getReadyActions().registerWorkspace(path, title),
     removeWorkspace: path => getReadyActions().removeWorkspace(path),
     renameWorkspaceAt: (path, title) => getReadyActions().renameWorkspaceAt(path, title),
     resolveWorkspace: uri => getReadyActions().resolveWorkspace(uri),

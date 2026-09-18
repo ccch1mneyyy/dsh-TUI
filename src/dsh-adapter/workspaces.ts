@@ -59,17 +59,6 @@ export interface TuiWorkspaceHost {
   describe(cwd: string): TuiWorkspaceTarget
   commandShell(cwd: string): Promise<TuiCommandShell | undefined>
   rename(cwd: string, title: string): Promise<TuiWorkspaceTarget>
-  /**
-   * Register a directory as a durable workspace without starting a session.
-   *
-   * `create` is create-or-reuse by canonical path (the upstream registry calls
-   * `fs.realpath` and returns the existing record when one already owns that
-   * directory), so this is the idempotent "add to the sidebar" action the
-   * workspace home screen needs: the path must exist, and a nonexistent one
-   * rejects with the registry's own `ENOENT` instead of silently minting a
-   * record.
-   */
-  create(path: string, title?: string): Promise<TuiWorkspaceTarget>
   /** Drop a workspace registration (never the directory or its session logs). */
   remove(cwd: string): Promise<boolean>
   /**
@@ -135,30 +124,6 @@ export async function listRegistryWorkspaces(
     })
   }
   return out
-}
-
-/**
- * Register `path` as a durable workspace, or return the existing record.
- *
- * @param path - Absolute directory path; the registry canonicalizes it.
- * @returns The registered workspace, or undefined when the ledger is unmounted
- *   (bare compositions without the workspace stack).
- */
-export async function createRegistryWorkspace(
-  runtime: TuiWorkspaceRuntime | undefined,
-  path: string,
-): Promise<RegistryWorkspaceEntry | undefined> {
-  if (runtime === undefined) return undefined
-  const registry = workspaceRegistry(runtime)
-  if (registry === undefined) return undefined
-  const workspace = await registry.create(path)
-  return {
-    id: String(workspace.id),
-    path: workspace.path,
-    title: workspace.title,
-    present: true,
-    sessionCount: 0,
-  }
 }
 
 /**
@@ -265,10 +230,6 @@ export class TuiWorkspaceRuntime extends Service {
         assertCapabilityShadowPolicy('host.workspaces.rename', state.runtime.mode, state.runtime.slices)
         return renameWorkspace(runtime, cwd, title, undefined)
       },
-      create: (path: string, title?: string) => {
-        assertCapabilityShadowPolicy('host.workspaces.create', state.runtime.mode, state.runtime.slices)
-        return createWorkspace(runtime, path, title, undefined)
-      },
       remove: (cwd: string) => {
         assertCapabilityShadowPolicy('host.workspaces.remove', state.runtime.mode, state.runtime.slices)
         return removeRegistryWorkspace(runtime, cwd)
@@ -333,20 +294,6 @@ export class TuiWorkspaceRuntime extends Service {
     assertCapabilityShadowPolicy('host.workspaces.rename', workspaceStateFor(this).runtime.mode, workspaceStateFor(this).runtime.slices)
     const owner = workspaceCaller(this, 'tuiWorkspaces.rename')
     return renameWorkspace(this, cwd, title, owner)
-  }
-
-  /**
-   * Register a directory as a durable workspace without starting a session.
-   *
-   * The sidebar's "+" action reaches this through the host facade. A plugin
-   * may call it too, but only on its own behalf: the registration is a local
-   * ledger entry, not a provider-owned scheme, so the caller discipline here
-   * is the same live-activation check every other mutating method applies.
-   */
-  async create(path: string, title?: string): Promise<TuiWorkspaceTarget> {
-    assertCapabilityShadowPolicy('host.workspaces.create', workspaceStateFor(this).runtime.mode, workspaceStateFor(this).runtime.slices)
-    workspaceCaller(this, 'tuiWorkspaces.create')
-    return createWorkspace(this, path, title, undefined)
   }
 
   /**
@@ -547,46 +494,6 @@ async function commandShellFor(runtime: TuiWorkspaceRuntime, cwd: string, owner:
   return undefined
 }
 
-/**
- * Register a directory as a workspace, or return the record that already owns
- * it.
- *
- * Deliberately does NOT start a session: the workspace home screen's "+" is
- * "put this directory in my sidebar", and the registry is the durable ledger
- * Web reads, so the record is immediately visible to both front doors. A
- * provider that owns the resolved cwd is left alone (the ledger is local-only
- * by contract) and the provider's own target is returned instead.
- */
-async function createWorkspace(
-  runtime: TuiWorkspaceRuntime,
-  path: string,
-  title: string | undefined,
-  owner: object | undefined,
-): Promise<TuiWorkspaceTarget> {
-  const requested = path.trim()
-  if (requested.length === 0) throw new Error('workspace path must not be empty')
-  const target = await resolveWorkspace(runtime, requested, process.cwd(), undefined, owner)
-  if (target === undefined) throw new Error(`workspace path could not be resolved: ${requested}`)
-  const state = workspaceStateFor(runtime)
-  for (const provider of providersFor(state, owner)) {
-    let owned = false
-    try {
-      owned = provider.describe(target.cwd) !== undefined
-    } catch {
-      continue
-    }
-    if (owned) return withStoredTitle(runtime, target)
-  }
-  const registry = workspaceRegistry(runtime)
-  if (registry === undefined) throw new Error('workspace registry is unavailable')
-  const normalizedTitle = title?.trim()
-  const workspace = await registry.create(
-    target.cwd,
-    normalizedTitle === undefined || normalizedTitle.length === 0 ? undefined : normalizedTitle,
-  )
-  return { ...describeWorkspace(runtime, target.cwd, owner), label: workspace.title }
-}
-
 async function renameWorkspace(
   runtime: TuiWorkspaceRuntime,
   cwd: string,
@@ -687,8 +594,7 @@ function waitForProvider(runtime: TuiWorkspaceRuntime, timeoutMs: number, signal
  * mounting the optional workspace registry/provider service. */
 export function createLocalWorkspaceRuntime(): Pick<
   TuiWorkspaceRuntime,
-  'list' | 'resolve' | 'describe' | 'commandShell' | 'rename' | 'create' | 'remove' | 'listRegistry' | 'commands' | 'runCommand'
-> {
+  'list' | 'resolve' | 'describe' | 'commandShell' | 'rename' | 'remove' | 'listRegistry' | 'commands' | 'runCommand'> {
   return {
     async list(currentCwd) {
       return [localWorkspaceTarget(currentCwd)]
@@ -707,9 +613,6 @@ export function createLocalWorkspaceRuntime(): Pick<
       return undefined
     },
     async rename() {
-      throw new Error('workspace registry is unavailable')
-    },
-    async create() {
       throw new Error('workspace registry is unavailable')
     },
     async remove() {

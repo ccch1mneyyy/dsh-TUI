@@ -8,7 +8,6 @@ export {
   localWorkspaceUri,
   parseLocalWorkspaceReference,
   listRegistryWorkspaces,
-  createRegistryWorkspace,
   removeRegistryWorkspace,
 } from './dsh-adapter/workspaces.js'
 export type {

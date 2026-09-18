@@ -29,41 +29,6 @@ export function createWorkspaceActions(
    * directory still exists.
    */
   const listWorkspaceRegistry = (): Promise<readonly TuiWorkspaceEntry[]> => service.listRegistry()
-  /**
-   * "Add this directory to my workspaces", without starting a session.
-   *
-   * The path is resolved through the same provider-aware seam every other
-   * workspace entry point uses, so a provider URI is routed to its owner; the
-   * durable record is only minted for a local path (providers own their own
-   * listings).
-   */
-  const registerWorkspace = async (path: string, title?: string): Promise<TuiWorkspaceEntry | undefined> => {
-    deps.owner.assertActive()
-    const target = await service.resolve(path, state.cwd)
-    if (target === undefined) {
-      notify(t('workspace-uri-invalid', { target: path }), { color: 'error', timeoutMs: 8000 })
-      return undefined
-    }
-    if (target.kind !== 'local') {
-      notify(t('workspace-register-provider', { target: target.label }), { color: 'warning', timeoutMs: 8000 })
-      return undefined
-    }
-    try {
-      if (!statSync(target.cwd).isDirectory()) throw new Error('not a directory')
-    } catch {
-      notify(t('workspace-open-invalid', { target: target.label }), { color: 'error', timeoutMs: 8000 })
-      return undefined
-    }
-    const registered = await service.create(target.cwd, title)
-    notify(t('workspace-added', { title: registered.label }))
-    return {
-      id: registered.uri,
-      path: target.cwd,
-      title: registered.label,
-      present: true,
-      sessionCount: 0,
-    }
-  }
   /** Forget a registration. Sessions are untouched; removing the live workspace is refused. */
   const removeWorkspace = async (path: string): Promise<boolean> => {
     deps.owner.assertActive()
@@ -127,5 +92,5 @@ export function createWorkspaceActions(
       return false
     }
   }
-  return { listWorkspaces, listWorkspaceRegistry, registerWorkspace, removeWorkspace, renameWorkspaceAt, resolveWorkspace, switchWorkspace, renameWorkspace, workspaceCommands: () => service.commands(), runWorkspaceCommand: (name: string, input: string) => service.runCommand(name, input, state.cwd) }
+  return { listWorkspaces, listWorkspaceRegistry, removeWorkspace, renameWorkspaceAt, resolveWorkspace, switchWorkspace, renameWorkspace, workspaceCommands: () => service.commands(), runWorkspaceCommand: (name: string, input: string) => service.runCommand(name, input, state.cwd) }
 }

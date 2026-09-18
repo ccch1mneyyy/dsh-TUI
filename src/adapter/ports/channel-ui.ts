@@ -321,16 +321,6 @@ export interface ChannelUi {
    * all gone, whose directory has been deleted, or that never had a session.
    */
   listWorkspaceRegistry(): Promise<readonly TuiWorkspaceEntry[]>
-  /**
-   * Register a directory as a durable workspace, without starting a session.
-   *
-   * @param path - Directory to register; the upstream registry canonicalizes
-   *   it (`fs.realpath`) and rejects when it does not exist.
-   * @param title - Optional display title; defaults to the path's last segment.
-   * @returns The registered workspace, or undefined when the ledger is
-   *   unavailable (bare compositions without the workspace stack).
-   */
-  registerWorkspace(path: string, title?: string): Promise<TuiWorkspaceEntry | undefined>
   /** Drop a workspace registration; the directory and its session logs stay. */
   removeWorkspace(path: string): Promise<boolean>
   /** Rename the durable workspace owning `path` (title only; the path is immutable). */
