@@ -202,6 +202,17 @@ pnpm dev:copy-config
 pnpm dev
 ```
 
+`pnpm dev` 按内容指纹分层跳过输入未变化的环节（依赖安装、vendor/dsh-auth
+构建、打包与隔离安装），全部命中缓存时只做一次增量类型检查；`src/` 有改动
+时仍会先清理 `lib/` 再完整编译，删除过的源文件不会残留进打包产物。加
+`--force` 可强制所有环节执行一次。不要对同一个 dev root（`DSH_TUI_DEV_ROOT`）
+并发运行多个 `pnpm dev`。构建门禁不在日常循环里，需要完整流水线
+（发版前或怀疑缓存时）运行：
+
+```sh
+pnpm dev:full
+```
+
 `pnpm dev:copy-config` 只复制 `~/.dsh/settings.yaml` 与
 `~/.dsh/.credentials.yaml`。Unix 上文件权限设为 `0600`；Windows 使用系统管理的
 文件 ACL。`pnpm dev` 使用独立的 `HOME`、`DSH_HOME` 和会话目录，不覆盖正式
@@ -209,7 +220,7 @@ pnpm dev
 `$XDG_CACHE_HOME/dsh-tui-dev`（未设置时为 `~/.cache/dsh-tui-dev`），Windows
 则为 `%LOCALAPPDATA%\dsh-tui-dev`；可通过 `DSH_TUI_DEV_ROOT` 覆盖。
 
-不启动 TUI、只验证构建、打包和安装链路时运行：
+不启动 TUI、只验证完整构建、打包和安装链路（含全部构建门禁）时运行：
 
 ```sh
 pnpm dev:test
