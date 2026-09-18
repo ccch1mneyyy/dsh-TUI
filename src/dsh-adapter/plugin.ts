@@ -51,6 +51,7 @@ import { logMouseDebug } from '../utils/debug.js'
 import { Chat } from '../screens/Chat.js'
 import { openInjectChannel, type InjectController } from './inject-channel.js'
 import { startSessionMountHeartbeat } from './session-mount-heartbeat.js'
+import { claimMount, releaseMount } from '../sessionMounts.js'
 import { getHostDialogStore, type TuiDialogRuntime } from './dialogs.js'
 import { getHostStatusStore, type TuiStatusRuntime } from './status.js'
 import { getHostToastStore, type TuiToastRuntime } from './toast.js'
@@ -1812,6 +1813,32 @@ async function resolveAgent(
     if (existing !== undefined) {
       return { agent: existing, agentPreset: runningPresetOf(existing.session) }
     }
+    // The launch-time counterpart of the in-session `/resume` claim
+    // (`channel/session-resume.ts`), and it has to happen before ANY await:
+    // without it `dsh-tui --resume <id>` mounts the log purely because the user
+    // asked for it, so a second terminal doing the same joins the first and
+    // both interleave writes into one append-only transcript. The mount
+    // publisher cannot cover this — it publishes the set, it never refuses a
+    // mount — so the claim is the only place the refusal can come from.
+    const claim = claimMount(requestedSessionId)
+    if (!claim.ok) {
+      const holder = claim.holders[0]
+      if (holder === undefined) {
+        // No holder to name means the ledger itself was unavailable, not a
+        // conflict. The ledger is best-effort by contract, and a boot is not a
+        // place with a retry: degrade to "no cross-process protection" rather
+        // than refusing to start in a read-only home.
+        ctx.logger.warn(
+          `dsh-tui: session mount ledger unavailable; resuming "${requestedSessionId}" without cross-process occupancy protection`,
+        )
+      } else {
+        throw new Error(
+          `dsh-tui: cannot resume session "${requestedSessionId}": it is mounted by another TUI terminal ` +
+          `(pid ${holder}) — two processes driving one session log would corrupt it. ` +
+          'Close that terminal, or drop --resume to start a fresh session.',
+        )
+      }
+    }
     try {
       // Compat boundary: register vouched-for legacy event types before the
       // strict read path (issue #153) — same seam as the /resume picker,
@@ -1843,6 +1870,9 @@ async function resolveAgent(
         route: resumeRoute ?? recordedModelRoute(snapshotLiveSessionEvents(resumed.agent.session)),
       }
     } catch (error) {
+      // A claim says "this process is driving the log". A resume that never
+      // mounted must not leave one behind for a peer to see and refuse.
+      releaseMount(requestedSessionId)
       // A launch-time --resume is an explicit request: silently substituting a
       // fresh session presents a cold conversation as the resumed one (the
       // "resume did nothing" failure mode — the warn below never reached a

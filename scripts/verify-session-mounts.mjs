@@ -3,32 +3,34 @@
  * (src/sessionMounts.ts).
  *
  * This ledger is the only thing standing between two TUI terminals and a
- * corrupted shared transcript, so this script pins the three properties whose
- * silent failure would corrupt a log — and nothing else:
+ * corrupted shared transcript, so this script pins the properties whose silent
+ * failure would corrupt a log — and nothing else:
  *
  * 1. IDENTITY: our own published session reads as `mine`, so a terminal never
- *    refuses its own parked session; a foreign LIVE pid's session reads as
- *    `occupied`.
- * 2. ABANDONMENT: a record whose pid is gone is ignored on read (the `kill -9`
- *    case) and pruned by the next write, so no reaper is needed.
- * 3. ATOMIC CLAIM: a live foreign holder blocks the claim and leaves the file
- *    untouched, while re-claiming our own session is not a conflict.
+ *    refuses its own parked session; a session held by a LIVE PEER PROCESS
+ *    reads as `occupied`.
+ * 2. ATOMIC CLAIM: a live peer holder blocks `claimMount` and the refusal
+ *    writes nothing; re-claiming our own session is not a conflict.
+ * 3. ABANDONMENT: once the peer is gone the session is claimable again, and a
+ *    record whose pid is gone is pruned by the next write.
  *
  * Plus the degradation rule: a malformed or foreign-shaped document reads as an
  * empty ledger instead of throwing, because a corrupt cache must never take
  * down a session.
  *
- * Ownership is pid-only, so a foreign holder has to be a REAL second process;
- * this script spawns one rather than staging a record with our own pid.
+ * Ownership is pid-only, so the foreign holder is a REAL second process that
+ * PUBLISHES through this same module in the same fake HOME — a staged JSON
+ * record written by this process would not prove the cross-process guarantee,
+ * and would pass even if publishing never worked.
  *
  * Uses a temp HOME so the real ~/.dsh-tui is never touched. The module reads
  * `homedir()` at import time, so HOME/USERPROFILE are set BEFORE the dynamic
- * import.
+ * import, and the spawned peer inherits them.
  *
  * Run: node --import tsx/esm scripts/verify-session-mounts.mjs
  */
 import { spawn } from 'node:child_process'
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -65,14 +67,18 @@ function writeRaw(owners, version = 1) {
   writeFileSync(LEDGER, JSON.stringify({ version, owners }, null, 2), 'utf8')
 }
 
-/** The owners currently on disk, parsed directly (no module heuristics). */
-function rawOwners() {
-  return JSON.parse(readFileSync(LEDGER, 'utf8')).owners
-}
-
 /** A peer record with the fields the ledger validates. */
 function peer(pid, sessionIds) {
   return { pid, startedAt: Date.now(), sessionIds }
+}
+
+/** Poll a condition with a bound instead of a fixed wait. */
+async function until(predicate) {
+  for (let attempt = 0; attempt < 200; attempt++) {
+    if (predicate()) return true
+    await new Promise(resolve => setTimeout(resolve, 50)) // 固定窗:pacing 等对端进程落账
+  }
+  return predicate()
 }
 
 /** A pid that is certainly not running: spawn-free, and validated by probe. */
@@ -83,14 +89,20 @@ function findDeadPid() {
   throw new Error('no dead pid candidate found')
 }
 
-/** A genuinely separate live process, for the foreign-holder cases. */
-const holder = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 60000)'], { stdio: 'ignore' })
+/**
+ * The peer: a real second process that publishes a claim through this module
+ * under the same HOME, then stays alive. `child-held` is not written by this
+ * process anywhere, so seeing it — and being refused by it — can only come from
+ * the peer's own publication.
+ */
+const MODULE_URL = new URL('../src/sessionMounts.ts', import.meta.url).href
+const peerSource = `const m = await import(${JSON.stringify(MODULE_URL)}); m.publishMounts(['child-held']); setInterval(() => {}, 60_000)`
+const holder = spawn(process.execPath, ['--import', 'tsx/esm', '-e', peerSource], { stdio: 'ignore' })
 const holderPid = holder.pid
-// 固定窗:pacing 等子进程真正起来，pid 才是「活着的异进程」
-await new Promise(resolve => setTimeout(resolve, 200))
-if (!pidAlive(holderPid)) throw new Error('spawned holder is not alive')
+const peerPublished = await until(() => readSessionOwners().has('child-held'))
+if (!peerPublished) throw new Error('the peer process never published its claim')
 
-// ── 1. Identity: ours reads as mine, a live foreign peer is occupied ────────
+// ── 1. Identity: ours reads as mine, a live peer process is occupied ────────
 console.log('identity:')
 publishMounts(['sess-a', 'sess-b'])
 check('both ids published', ownMounts().length === 2)
@@ -99,48 +111,65 @@ check('an unknown session reads as free', occupancyOf('nope', readSessionOwners(
 check('releaseMount drops one id', releaseMount('sess-b') && ownMounts().length === 1)
 check('the released id is no longer ours', occupancyOf('sess-b', readSessionOwners()).kind === 'free')
 
-writeRaw([peer(holderPid, ['foreign-sess'])])
-const foreign = occupancyOf('foreign-sess', readSessionOwners())
-check('a live foreign pid reads as occupied', foreign.kind === 'occupied' && foreign.pid === holderPid)
+const foreign = occupancyOf('child-held', readSessionOwners())
+check('a live PEER PROCESS reads as occupied', foreign.kind === 'occupied' && foreign.pid === holderPid)
 clearOwnMounts()
 
-// ── 2. Abandonment: a dead pid is ignored and pruned on the next write ──────
-console.log('abandonment:')
-const deadPid = findDeadPid()
-writeRaw([peer(deadPid, ['dead-sess']), peer(holderPid, ['live-sess'])])
-const owners = readSessionOwners()
-check('the dead owner is ignored', occupancyOf('dead-sess', owners).kind === 'free')
-check('the live peer survives the same read', occupancyOf('live-sess', owners).kind === 'occupied')
-publishMounts(['ours'])
-check('a write prunes the dead owner', !rawOwners().some(owner => owner.pid === deadPid))
-check('and keeps the live peer', rawOwners().some(owner => owner.pid === holderPid && owner.sessionIds.includes('live-sess')))
-clearOwnMounts()
-
-// ── 3. Atomic claim: a live holder blocks, our own re-claim does not ────────
+// ── 2. Atomic claim: the live peer blocks, our own re-claim does not ────────
 console.log('claim:')
-writeRaw([peer(holderPid, ['contended'])])
-const refused = claimMount('contended')
-check('a live foreign holder refuses the claim', refused.ok === false && refused.holders.includes(holderPid))
-check('the refused claim is not remembered as ours', !ownMounts().includes('contended'))
-check('the refused claim wrote nothing', rawOwners().length === 1 && rawOwners()[0].sessionIds.includes('contended'))
+const refused = claimMount('child-held')
+check('the live peer holder refuses the claim', refused.ok === false && refused.holders.includes(holderPid))
+check('the refused claim is not remembered as ours', !ownMounts().includes('child-held'))
+check('the refused claim wrote nothing of ours', !readMountLedger().some(
+  owner => owner.pid === process.pid && owner.sessionIds.includes('child-held'),
+))
+check('and the peer record is untouched', readSessionOwners().get('child-held')?.pid === holderPid)
 
-writeRaw([])
 check('a free session claims ok', claimMount('reclaimable').ok === true)
-check('the new claim is in the ledger', rawOwners().some(owner => owner.sessionIds.includes('reclaimable')))
 check('claiming our own session twice is not a conflict', claimMount('reclaimable').ok === true)
 releaseMount('reclaimable')
+clearOwnMounts()
+
+// ── 3. Abandonment: a peer that exits frees its sessions ───────────────────
+console.log('abandonment:')
+// Our own write must not drop a LIVE peer record: "prune while publishing" is
+// the read-modify-write that would lose a peer's update.
+publishMounts(['ours'])
+check('our own record is written', readMountLedger().some(
+  owner => owner.pid === process.pid && owner.sessionIds.includes('ours'),
+))
+check('the live peer record survives our write', readMountLedger().some(
+  owner => owner.pid === holderPid && owner.sessionIds.includes('child-held'),
+))
+clearOwnMounts()
+check('clearOwnMounts leaves the live peer alone', readMountLedger().some(owner => owner.pid === holderPid))
+
+holder.kill()
+const peerGone = await until(() => !pidAlive(holderPid))
+check('the peer process is gone', peerGone)
+check('a session the peer held is claimable again', claimMount('child-held').ok === true)
+check('and we now hold it', ownMounts().includes('child-held'))
+releaseMount('child-held')
+clearOwnMounts()
+
+// A record whose pid is gone is pruned by the next write, which is what makes a
+// `kill -9` recoverable without a reaper.
+const deadPid = findDeadPid()
+writeRaw([peer(deadPid, ['dead-sess'])])
+publishMounts(['ours'])
+check('the dead record is pruned by the write', !readMountLedger().some(owner => owner.pid === deadPid))
+check('and our own record landed in the same write', readMountLedger().some(owner => owner.pid === process.pid))
 clearOwnMounts()
 
 // ── 4. Degradation: a corrupt cache reads as empty, never throws ────────────
 console.log('degradation:')
 writeFileSync(LEDGER, '{ not json', 'utf8')
 check('unparseable reads as empty', readMountLedger().length === 0)
-writeRaw([peer(holderPid, ['x'])], 99)
+writeRaw([peer(deadPid, ['x'])], 99)
 check('a version mismatch reads as empty', readMountLedger().length === 0)
 writeRaw([{ pid: 'x', startedAt: 1, sessionIds: [] }])
 check('a wrong-typed record is dropped', readMountLedger().length === 0)
 
-holder.kill()
 if (failures > 0) {
   console.error(`\n${failures} check(s) failed`)
   process.exit(1)
