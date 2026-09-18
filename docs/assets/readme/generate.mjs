@@ -51,8 +51,9 @@ const svg = (width, height, title, description, content, styles = '') => `\
 
 const whaleLogo = language => {
   const en = language === 'en'
-  const palette = { D: '#142660', B: '#4e6fff', L: '#bee1ff', W: '#ffffff', Z: '#808080' }
-  const logoFrames = WHALE_FRAMES.filter(frame => !frame.rows.some(row => row.includes('H') || row.includes('Z')))
+  const palette = { D: '#142660', B: '#4e6fff', L: '#bee1ff', W: '#ffffff' }
+  const logoPoseNames = new Set(['standard', 'blink', 'fin1', 'fin2', 'tail1', 'tail2', 'tail3', 'tail4'])
+  const logoFrames = WHALE_FRAMES.filter(frame => logoPoseNames.has(frame.name))
   const frames = logoFrames.map((frame, index) => {
     const paths = new Map(Object.keys(palette).map(key => [key, '']))
     frame.rows.forEach((row, y) => [...row].forEach((pixel, x) => {
@@ -61,36 +62,54 @@ const whaleLogo = language => {
     const start = (index / logoFrames.length * 100).toFixed(5)
     const end = ((index + 1) / logoFrames.length * 100).toFixed(5)
     return {
-      css: `.logo-whale-${index}{animation:logoWhale${index} 3200ms step-end infinite}@keyframes logoWhale${index}{${index === 0 ? '0%{visibility:visible}' : `0%{visibility:hidden}${start}%{visibility:visible}`}${end}%{visibility:hidden}}`,
+      css: `.logo-whale-${index}{animation:logoWhale${index} 5200ms step-end infinite}@keyframes logoWhale${index}{${index === 0 ? '0%{visibility:visible}' : `0%{visibility:hidden}${start}%{visibility:visible}`}${end}%{visibility:hidden}}`,
       svg: `<g class="logo-whale-frame logo-whale-${index}" data-whale-frame="${index}" data-pose="${xml(frame.name)}">${[...paths].filter(([, d]) => d).map(([key, d]) => `<path fill="${palette[key]}" d="${d}"/>`).join('')}</g>`,
     }
   })
-  const message = en ? 'I desire' : '我想要'
-  const starLabel = en ? 'GitHub star' : 'GitHub 星标'
+  const idleLabel = en ? 'Star' : '星标'
+  const activeLabel = en ? 'Starred' : '已加星标'
   const star = 'M15 1.8l4.1 8.3 9.2 1.3-6.7 6.5 1.6 9.2L15 22.8 6.8 27.1l1.6-9.2-6.7-6.5 9.2-1.3z'
   return svg(760, 180, en ? 'dsh-TUI animated logo' : 'dsh-TUI 动态 Logo',
-    en ? 'A whale animation followed by a GitHub star prompt.' : '鲸鱼动画随后出现想要与 GitHub 黄色星标提示。',
+    en ? 'An animated whale with a GitHub star button.' : '带有 GitHub 星标按钮的动态鲸鱼 Logo。',
     `<style>
-      .logo-whale-frame{visibility:hidden}.logo-speech,.logo-star{opacity:0}
+      .logo-whale-frame{visibility:hidden}.logo-desire,.logo-star-idle,.logo-star-active,.logo-particles,.logo-happy{opacity:0}
       ${frames.map(frame => frame.css).join('')}
-      .logo-speech{animation:logoSpeech 3200ms ease-in-out infinite}
-      .logo-star{animation:logoStar 3200ms ease-in-out infinite}
-      @keyframes logoSpeech{0%,8%{opacity:0;transform:translateY(8px)}16%,48%{opacity:1;transform:translateY(0)}58%,100%{opacity:0;transform:translateY(-5px)}}
-      @keyframes logoStar{0%,50%{opacity:0;transform:scale(.7) rotate(-10deg)}62%,86%{opacity:1;transform:scale(1) rotate(0)}100%{opacity:0;transform:scale(.9) rotate(8deg)}}
+      .logo-desire{animation:logoDesire 5200ms ease-in-out infinite}
+      .logo-star-idle{animation:logoStarIdle 5200ms ease-in-out infinite}
+      .logo-star-active{animation:logoStarActive 5200ms ease-in-out infinite}
+      .logo-particles{animation:logoParticles 5200ms ease-out infinite;transform-origin:92px 19px}
+      .logo-happy{animation:logoHappy 5200ms ease-in-out infinite}
+      @keyframes logoDesire{0%,8%{opacity:0;transform:translateY(7px)}14%,28%{opacity:1;transform:translateY(0)}36%,100%{opacity:0;transform:translateY(-4px)}}
+      @keyframes logoStarIdle{0%,28%{opacity:0;transform:translateY(7px) scale(.96)}36%,52%{opacity:1;transform:translateY(0) scale(1)}58%,100%{opacity:0}}
+      @keyframes logoStarActive{0%,50%{opacity:0;transform:translateY(5px) scale(.9)}58%,66%{opacity:1;transform:translateY(0) scale(.95)}70%,78%{opacity:1;transform:translateY(0) scale(1.14)}84%,96%{opacity:1;transform:translateY(0) scale(1)}100%{opacity:0}}
+      @keyframes logoParticles{0%,58%{opacity:0;transform:scale(.2)}68%,82%{opacity:1;transform:scale(1.08)}96%,100%{opacity:0;transform:scale(1.55)}}
+      @keyframes logoHappy{0%,60%{opacity:0}68%,94%{opacity:1}100%{opacity:0}}
       .logo-wordmark{fill:#263146}.logo-descriptor{fill:#687386}.logo-rule{stroke:#abc2ec}
       @media (prefers-color-scheme: dark){.logo-wordmark{fill:#e8e6e0}.logo-descriptor{fill:#abc2ec}.logo-rule{stroke:#5e88cc}}
     </style>
     <g transform="translate(8 18) scale(4.15)" shape-rendering="crispEdges">${frames.map(frame => frame.svg).join('')}</g>
-    <g class="logo-speech" transform="translate(38 4)">
+    <g class="logo-desire" transform="translate(52 2)">
       <rect x="0" y="0" width="${en ? 86 : 78}" height="30" rx="8" fill="#263146"/>
       <path d="M16 30l7 7 7-7" fill="#263146"/>
-      <text x="${en ? 43 : 39}" y="21" text-anchor="middle" font-size="15" font-weight="700" fill="#ffffff">${xml(message)}</text>
+      <text x="${en ? 43 : 39}" y="21" text-anchor="middle" font-size="15" font-weight="700" fill="#ffffff">${xml(en ? 'I desire' : '我想要')}</text>
     </g>
-    <a href="https://github.com/says693/dsh-TUI-693/stargazers" aria-label="${xml(starLabel)}">
-      <g class="logo-star" transform="translate(139 2)">
-        <circle cx="17" cy="17" r="17" fill="#fff3b0"/>
-        <path d="${star}" transform="translate(2 2) scale(.86)" fill="#f2bf27"/>
-        <text x="42" y="22" font-size="14" font-weight="700" fill="#896819">${xml(starLabel)}</text>
+    <a href="https://github.com/says693/dsh-TUI-693/stargazers" aria-label="${xml(activeLabel)}">
+      <g class="logo-star-idle" transform="translate(38 2)">
+        <rect x="0" y="0" width="${en ? 110 : 102}" height="34" rx="7" fill="#f5f7fa" stroke="#c6d0dc" stroke-width="2"/>
+        <path d="${star}" transform="translate(8 3) scale(.75)" fill="none" stroke="#65717f" stroke-width="2"/>
+        <text x="47" y="23" font-size="15" font-weight="700" fill="#263146">${xml(idleLabel)}</text>
+      </g>
+      <g class="logo-star-active" transform="translate(38 2)">
+        <rect x="0" y="0" width="${en ? 110 : 112}" height="34" rx="7" fill="#f5f7fa" stroke="#c6d0dc" stroke-width="2"/>
+        <path d="${star}" transform="translate(8 3) scale(.75)" fill="#f2bf27" stroke="#e1ad1b" stroke-width="1"/>
+        <text x="47" y="23" font-size="15" font-weight="700" fill="#263146">${xml(activeLabel)}</text>
+      </g>
+      <g class="logo-particles" transform="translate(38 2)" fill="#f2bf27">
+        <circle cx="6" cy="9" r="2"/><circle cx="100" cy="8" r="2"/><circle cx="12" cy="30" r="1.7"/><circle cx="105" cy="29" r="1.7"/>
+        <path d="M28 2l2 4-2 4-2-4zM82 1l2 4-2 4-2-4zM54 36l2 4-2 4-2-4z"/>
+      </g>
+      <g class="logo-happy" transform="translate(63 78)">
+        <text x="37" y="13" text-anchor="middle" font-size="12" font-weight="700" fill="#142660">≧∀≦</text>
       </g>
     </a>
     <g transform="translate(225 31)">
