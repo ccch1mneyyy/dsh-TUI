@@ -1,7 +1,11 @@
 import React from 'react'
 import { Box, useApp, useTerminalSize } from '../ui.js'
 import type { DOMElement } from '../ink/dom.js'
-import { clampOverlayHeight, overlaySpaceAbove } from './overlayBudget.js'
+import {
+  acceptOverlayMeasurement,
+  clampOverlayHeight,
+  overlaySpaceAbove,
+} from './overlayBudget.js'
 
 /** 最近一层 OverlayAbove 的有效 maxHeight（已钳到锚点上方的真实空间）。 */
 const OverlayBudgetContext = React.createContext<number | undefined>(undefined)
@@ -72,6 +76,7 @@ export function OverlayAbove({
   const terminal = useTerminalSize()
   const { stdout } = useApp()
   const [spaceAbove, setSpaceAbove] = React.useState<number | undefined>(undefined)
+  const recentMeasuredRef = React.useRef<number[]>([])
   // 每次 commit 重量：锚点位置随转录涨落、底部 chrome 行增减而变，不只是
   // resize。等值 setState 是 no-op，自然收敛。
   React.useLayoutEffect(() => {
@@ -90,7 +95,10 @@ export function OverlayAbove({
       rootHeight,
       terminalRows: stdout.rows ?? terminal.rows,
     })
-    setSpaceAbove(previous => (previous === next ? previous : next))
+    if (!acceptOverlayMeasurement(recentMeasuredRef.current, next, spaceAbove)) return
+    const recent = recentMeasuredRef.current
+    recentMeasuredRef.current = recent.length >= 2 ? [recent[1], next] : [...recent, next]
+    setSpaceAbove(next)
   })
   const effectiveMaxHeight = clampOverlayHeight(maxHeight, spaceAbove)
   return (

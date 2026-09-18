@@ -49,3 +49,33 @@ export function clampOverlayHeight(
   const bound = maxHeight === undefined ? spaceAbove : Math.min(maxHeight, spaceAbove)
   return Math.max(1, bound)
 }
+
+/**
+ * 测量振荡门：返回值 true 表示采纳 next（调用方负责把 next 计入 history）。
+ *
+ * #185 回归：OverlayAbove 每次 commit 重测 spaceAbove 并 setState。帧高 > 终端
+ * 行数时（长转录顶进 scrollback），应用值会反馈进下一帧的测量输入，测得值在
+ * 相邻 commit 间 A/B 翻跳；"等值 setState 是 no-op" 挡不住翻跳，每次 commit
+ * 阶段的 dispatch 又排定下一次 commit，自持嵌套更新 >50 即抛 React #185。
+ *
+ * 合法变化"往前走"（10→11→12）；只有自持反馈会造成"一步之内回到旧值"
+ * （A→B→A）。这是唯一能自持的形态：浮层自身零布局高度，单调漂移必然落在
+ * 不动点上，而 A/B 翻跳可以永远转。门只拦后者。
+ *
+ * @param history - 最近两次测得值（≤2 项，旧值在前）。
+ * @param next - 本次测得的值。
+ * @param applied - 当前已应用的值（未量过时 undefined）。
+ * @returns 是否应 dispatch next。
+ */
+export function acceptOverlayMeasurement(
+  history: readonly number[],
+  next: number,
+  applied: number | undefined,
+): boolean {
+  // 已到该值：连 update 都不入队（入队的 no-op update 在繁忙帧里仍会
+  // 触发一次调度，没必要）。
+  if (next === applied) return false
+  // 一步之内回到旧值 = A/B 翻跳（自身 setState 的布局反馈）：冻结。
+  if (history.length === 2 && history[0] === next) return false
+  return true
+}
