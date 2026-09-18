@@ -17,8 +17,9 @@
 
 # dsh-TUI
 
->一个面向 DeepSeek Harness 的交互式终端界面插件：提供像素鲸鱼顶栏、实时工作状态行、流式思考展示、双击 Esc 时间回溯、上下文进度条与 TPS 仪表。
->零核心改动，纯插件挂载。安装插件即可启用，卸载后不会留下核心补丁。
+>一个面向 DeepSeek Harness 的交互式终端界面插件
+>零核心改动，纯插件挂载。一行代码安装，一行代码启用，卸载不留残余。
+>提供像素鲸鱼顶栏、实时工作状态、流式思考、双击 Esc 时间回溯、上下文进度条与 TPS 仪表等功能。
 >
 >An interactive terminal UI plugin for DeepSeek Harness: pixel-whale header, live work status, streaming thinking display, double-Esc time rewind, a context progress bar, and a TPS gauge.
 >Zero core changes, pure plugin mounting. Install to enable; uninstall leaves no core patches.
