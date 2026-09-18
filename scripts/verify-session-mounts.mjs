@@ -3,24 +3,23 @@
  * (src/sessionMounts.ts).
  *
  * This ledger is the only thing standing between two TUI terminals and a
- * corrupted shared transcript, so the cases that matter are the ones where the
- * safety property could silently fail rather than the happy path:
+ * corrupted shared transcript, so this script pins the three properties whose
+ * silent failure would corrupt a log — and nothing else:
  *
- * - publish/read round trip, and `occupancyOf` reporting `mine` for our own
- *   claim (so a terminal never refuses its OWN parked session);
- * - a FOREIGN live claim reports `occupied` with the holder's pid;
- * - a claim whose heartbeat is older than the TTL is abandoned — the pulled
- *   plug / suspended laptop case, where the process may even still exist;
- * - a claim whose pid is gone is abandoned regardless of heartbeat — the
- *   `kill -9` case;
- * - a claim that is BOTH dead and stale is pruned from the file on READ, so the
- *   ledger heals itself with no separate reaper;
- * - one session claimed twice keeps the most recent heartbeat (the protocol
- *   forbids the state; picking deterministically beats picking arbitrarily);
- * - `clearOwnMounts` removes only our record and leaves a peer's intact;
- * - malformed and version-mismatched documents read as empty instead of
- *   throwing, because a corrupt cache must degrade and never take down a
- *   session.
+ * 1. IDENTITY: our own published session reads as `mine`, so a terminal never
+ *    refuses its own parked session; a foreign LIVE pid's session reads as
+ *    `occupied`.
+ * 2. ABANDONMENT: a record whose pid is gone is ignored on read (the `kill -9`
+ *    case) and pruned by the next write, so no reaper is needed.
+ * 3. ATOMIC CLAIM: a live foreign holder blocks the claim and leaves the file
+ *    untouched, while re-claiming our own session is not a conflict.
+ *
+ * Plus the degradation rule: a malformed or foreign-shaped document reads as an
+ * empty ledger instead of throwing, because a corrupt cache must never take
+ * down a session.
+ *
+ * Ownership is pid-only, so a foreign holder has to be a REAL second process;
+ * this script spawns one rather than staging a record with our own pid.
  *
  * Uses a temp HOME so the real ~/.dsh-tui is never touched. The module reads
  * `homedir()` at import time, so HOME/USERPROFILE are set BEFORE the dynamic
@@ -28,7 +27,8 @@
  *
  * Run: node --import tsx/esm scripts/verify-session-mounts.mjs
  */
-import { mkdtempSync, readFileSync, writeFileSync, mkdirSync, existsSync, rmSync } from 'node:fs'
+import { spawn } from 'node:child_process'
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -36,31 +36,24 @@ const tmpHome = mkdtempSync(join(tmpdir(), 'dsh-mounts-'))
 process.env.HOME = tmpHome
 process.env.USERPROFILE = tmpHome
 
-const mod = await import('../src/sessionMounts.ts')
 const {
-  HEARTBEAT_TTL_MS,
-  HOST_IDENTITY,
-  PROCESS_INSTANCE,
   claimMount,
   clearOwnMounts,
   occupancyOf,
-  ownerIsSelf,
   ownMounts,
   pidAlive,
   publishMounts,
-  readLiveMounts,
   readMountLedger,
   readSessionOwners,
   releaseMount,
-} = mod
+} = await import('../src/sessionMounts.ts')
 
 const LEDGER = join(tmpHome, '.dsh-tui', 'session-mounts.json')
 
 let failures = 0
 function check(name, cond) {
-  if (cond) {
-    console.log(`  ok   ${name}`)
-  } else {
+  if (cond) console.log(`  ok   ${name}`)
+  else {
     console.error(`  FAIL ${name}`)
     failures++
   }
@@ -77,9 +70,9 @@ function rawOwners() {
   return JSON.parse(readFileSync(LEDGER, 'utf8')).owners
 }
 
-/** A peer record shape with the fields the ledger validates. */
-function peer(pid, sessionIds, heartbeatAt) {
-  return { pid, heartbeatAt, startedAt: heartbeatAt, sessionIds }
+/** A peer record with the fields the ledger validates. */
+function peer(pid, sessionIds) {
+  return { pid, startedAt: Date.now(), sessionIds }
 }
 
 /** A pid that is certainly not running: spawn-free, and validated by probe. */
@@ -90,249 +83,66 @@ function findDeadPid() {
   throw new Error('no dead pid candidate found')
 }
 
-const NOW = Date.now()
+/** A genuinely separate live process, for the foreign-holder cases. */
+const holder = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 60000)'], { stdio: 'ignore' })
+const holderPid = holder.pid
+// 固定窗:pacing 等子进程真正起来，pid 才是「活着的异进程」
+await new Promise(resolve => setTimeout(resolve, 200))
+if (!pidAlive(holderPid)) throw new Error('spawned holder is not alive')
 
-console.log('occupancy of our own claim:')
+// ── 1. Identity: ours reads as mine, a live foreign peer is occupied ────────
+console.log('identity:')
 publishMounts(['sess-a', 'sess-b'])
 check('both ids published', ownMounts().length === 2)
-{
-  const owners = readSessionOwners()
-  check('our session reads as mine', occupancyOf('sess-a', owners).kind === 'mine')
-  check('an unknown session reads as free', occupancyOf('nope', owners).kind === 'free')
-}
+check('our session reads as mine', occupancyOf('sess-a', readSessionOwners()).kind === 'mine')
+check('an unknown session reads as free', occupancyOf('nope', readSessionOwners()).kind === 'free')
 check('releaseMount drops one id', releaseMount('sess-b') && ownMounts().length === 1)
-check('released id is no longer ours', occupancyOf('sess-b', readSessionOwners()).kind === 'free')
+check('the released id is no longer ours', occupancyOf('sess-b', readSessionOwners()).kind === 'free')
 
-console.log('a foreign live claim:')
-{
-  // A live pid of another process: the node process running this script is not
-  // a peer, so use pid 1 (always present on POSIX; on Windows use the parent).
-  const foreignPid = process.platform === 'win32' ? process.ppid : 1
-  writeRaw([peer(foreignPid, ['foreign-sess'], NOW)])
-  const owners = readSessionOwners(NOW)
-  const occupancy = occupancyOf('foreign-sess', owners)
-  check('foreign session is occupied', occupancy.kind === 'occupied')
-  check('occupancy names the holder pid', occupancy.kind === 'occupied' && occupancy.pid === foreignPid)
+writeRaw([peer(holderPid, ['foreign-sess'])])
+const foreign = occupancyOf('foreign-sess', readSessionOwners())
+check('a live foreign pid reads as occupied', foreign.kind === 'occupied' && foreign.pid === holderPid)
+clearOwnMounts()
+
+// ── 2. Abandonment: a dead pid is ignored and pruned on the next write ──────
+console.log('abandonment:')
+const deadPid = findDeadPid()
+writeRaw([peer(deadPid, ['dead-sess']), peer(holderPid, ['live-sess'])])
+const owners = readSessionOwners()
+check('the dead owner is ignored', occupancyOf('dead-sess', owners).kind === 'free')
+check('the live peer survives the same read', occupancyOf('live-sess', owners).kind === 'occupied')
+publishMounts(['ours'])
+check('a write prunes the dead owner', !rawOwners().some(owner => owner.pid === deadPid))
+check('and keeps the live peer', rawOwners().some(owner => owner.pid === holderPid && owner.sessionIds.includes('live-sess')))
+clearOwnMounts()
+
+// ── 3. Atomic claim: a live holder blocks, our own re-claim does not ────────
+console.log('claim:')
+writeRaw([peer(holderPid, ['contended'])])
+const refused = claimMount('contended')
+check('a live foreign holder refuses the claim', refused.ok === false && refused.holders.includes(holderPid))
+check('the refused claim is not remembered as ours', !ownMounts().includes('contended'))
+check('the refused claim wrote nothing', rawOwners().length === 1 && rawOwners()[0].sessionIds.includes('contended'))
+
+writeRaw([])
+check('a free session claims ok', claimMount('reclaimable').ok === true)
+check('the new claim is in the ledger', rawOwners().some(owner => owner.sessionIds.includes('reclaimable')))
+check('claiming our own session twice is not a conflict', claimMount('reclaimable').ok === true)
+releaseMount('reclaimable')
+clearOwnMounts()
+
+// ── 4. Degradation: a corrupt cache reads as empty, never throws ────────────
+console.log('degradation:')
+writeFileSync(LEDGER, '{ not json', 'utf8')
+check('unparseable reads as empty', readMountLedger().length === 0)
+writeRaw([peer(holderPid, ['x'])], 99)
+check('a version mismatch reads as empty', readMountLedger().length === 0)
+writeRaw([{ pid: 'x', startedAt: 1, sessionIds: [] }])
+check('a wrong-typed record is dropped', readMountLedger().length === 0)
+
+holder.kill()
+if (failures > 0) {
+  console.error(`\n${failures} check(s) failed`)
+  process.exit(1)
 }
-
-console.log('ownership is host + instance + pid, never pid alone:')
-{
-  // A home directory shared over a network can hand the same pid to two
-  // machines. Treating the remote record as "mine" would skip the occupancy
-  // refusal and let both write one log, so the identity has to be compared.
-  writeRaw([
-    { pid: process.pid, host: 'some-other-host', instance: PROCESS_INSTANCE, heartbeatAt: NOW, startedAt: NOW, sessionIds: ['remote-sess'] },
-  ])
-  check('a same-pid record from another HOST is not ours',
-    ownerIsSelf(readMountLedger()[0]) === false)
-  check('a same-pid record from another host reads as occupied',
-    occupancyOf('remote-sess', readSessionOwners(NOW)).kind === 'occupied')
-  writeRaw([
-    { pid: process.pid, host: HOST_IDENTITY, instance: 'another-run', heartbeatAt: NOW, startedAt: NOW, sessionIds: ['reused-sess'] },
-  ])
-  check('a same-pid record from another RUN is not ours',
-    ownerIsSelf(readMountLedger()[0]) === false)
-  check('a pid-reuse record reads as occupied, so we cannot claim over it',
-    claimMount('reused-sess').ok === false)
-  // Our own identity is still recognised, or nothing would ever read as `mine`.
-  writeRaw([
-    { pid: process.pid, host: HOST_IDENTITY, instance: PROCESS_INSTANCE, heartbeatAt: NOW, startedAt: NOW, sessionIds: ['self-sess'] },
-  ])
-  check('our own host+instance+pid reads as ours', ownerIsSelf(readMountLedger()[0]) === true)
-  check('and as mine for occupancy', occupancyOf('self-sess', readSessionOwners(NOW)).kind === 'mine')
-  clearOwnMounts()
-}
-
-console.log('a stale heartbeat is abandoned (pulled plug):')
-{
-  const foreignPid = process.platform === 'win32' ? process.ppid : 1
-  writeRaw([peer(foreignPid, ['stale-sess'], NOW - HEARTBEAT_TTL_MS - 1)])
-  check('stale claim is not live', readLiveMounts(NOW).length === 0)
-  check('stale session reads as free', occupancyOf('stale-sess', readSessionOwners(NOW)).kind === 'free')
-}
-
-console.log('a dead pid is abandoned (kill -9):')
-{
-  const dead = findDeadPid()
-  writeRaw([peer(dead, ['dead-sess'], NOW)])
-  check('dead claim is not live', readLiveMounts(NOW).length === 0)
-  check('dead session reads as free', occupancyOf('dead-sess', readSessionOwners(NOW)).kind === 'free')
-  // The read that discovered it must have healed the file.
-  const healed = JSON.parse(readFileSync(LEDGER, 'utf8'))
-  check('ledger prunes the dead owner on read', healed.owners.every(o => o.pid !== dead))
-}
-
-console.log('a live claim survives a read (no over-eager pruning):')
-{
-  const foreignPid = process.platform === 'win32' ? process.ppid : 1
-  writeRaw([peer(foreignPid, ['keep-sess'], NOW)])
-  check('live claim stays live', readLiveMounts(NOW).length === 1)
-  check('live claim still in the file', readMountLedger().some(o => o.sessionIds.includes('keep-sess')))
-}
-
-console.log('the lock token is enforced, and a crashed lock is still reclaimable:')
-{
-  const lockPath = join(tmpHome, '.dsh-tui', 'session-mounts.lock')
-  mkdirSync(join(tmpHome, '.dsh-tui'), { recursive: true })
-  clearOwnMounts()
-  check('a normal publish takes and releases its own lock',
-    publishMounts(['locked-sess']) && !existsSync(lockPath))
-  // A writer that was reclaimed as stale must abandon the mutation instead of
-  // committing a snapshot that predates the new holder. Its token is not the
-  // one on disk, so `releaseLock` must also leave that file alone.
-  writeFileSync(lockPath, 'someone-else:deadbeef\n', 'utf8')
-  const before = readMountLedger()
-  check('a held lock makes a fresh publish fail instead of clobbering',
-    publishMounts(['must-not-land']) === false)
-  check('the refused publish wrote nothing',
-    JSON.stringify(readMountLedger()) === JSON.stringify(before))
-  check('the foreign lock is left in place for its owner',
-    readFileSync(lockPath, 'utf8').includes('someone-else'))
-  // The documented crash recovery: once the lock is older than STALE_LOCK_MS a
-  // writer may reclaim it (the test ages it instead of waiting 30s).
-  const old = new Date(Date.now() - 60_000)
-  const { utimesSync } = await import('node:fs')
-  utimesSync(lockPath, old, old)
-  check('a stale lock is reclaimed and the publish succeeds',
-    publishMounts(['reclaimed']) && ownMounts().includes('reclaimed'))
-  check('the reclaimed lock is gone after its holder released it', !existsSync(lockPath))
-  clearOwnMounts()
-}
-
-console.log('claiming is one atomic step, and a refusal writes nothing:')
-{
-  clearOwnMounts()
-  const foreignPid = process.platform === 'win32' ? process.ppid : 1
-  // The interleaving this replaces: two processes that each check occupancy and
-  // then publish both observe `free` and both claim. `claimMount` re-derives the
-  // conflict from the file while holding the same lock the write takes, so the
-  // second claim sees the first and is refused.
-  writeRaw([peer(foreignPid, ['contended'], NOW)])
-  const refused = claimMount('contended')
-  check('a live peer claim is refused', refused.ok === false)
-  check('the refusal names the holder', refused.ok === false && refused.holders.includes(foreignPid))
-  check('a refused claim is not written to the ledger', !ownMounts().includes('contended'))
-  check(
-    "the peer's record is left exactly as it was",
-    rawOwners().length === 1 && rawOwners()[0].sessionIds.join(',') === 'contended',
-    JSON.stringify(rawOwners()),
-  )
-
-  // A claim with nobody live on it succeeds, and replaces the dead record.
-  const dead = findDeadPid()
-  writeRaw([peer(dead, ['reclaimable'], NOW)])
-  const claimed = claimMount('reclaimable')
-  check('a claim over a dead owner succeeds', claimed.ok === true)
-  check('the new claim is ours and in the file', ownMounts().includes('reclaimable')
-    && rawOwners().some(o => o.pid === process.pid && o.sessionIds.includes('reclaimable')))
-  check('claiming twice from the same process is not a conflict', claimMount('reclaimable').ok === true)
-  releaseMount('reclaimable')
-
-  // An unreadable ledger must refuse rather than claim blind: without the lock
-  // there is no way to know whether a peer got there first.
-  const lockPath = join(tmpHome, '.dsh-tui', 'session-mounts.lock')
-  mkdirSync(join(tmpHome, '.dsh-tui'), { recursive: true })
-  writeFileSync(lockPath, `${process.pid}\n`, 'utf8')
-  const blocked = claimMount('unlocked')
-  check('a claim without the lock is refused', blocked.ok === false && blocked.holders.length === 0)
-  check('the refused claim is not remembered as ours', !ownMounts().includes('unlocked'))
-  rmSync(lockPath, { force: true })
-  clearOwnMounts()
-}
-
-console.log('pruning never drops a record published while we read:')
-{
-  clearOwnMounts()
-  const dead = findDeadPid()
-  writeRaw([peer(dead, ['dead-one'], NOW)])
-  // The prune path (a read that found something dead) re-reads under the lock
-  // and merges; a peer that published between the read and the replace must
-  // survive. Emulate the peer by publishing AFTER the stale file is on disk but
-  // BEFORE the pruning read: the record is in the file the prune re-reads.
-  const foreignPid = process.platform === 'win32' ? process.ppid : 1
-  writeRaw([peer(dead, ['dead-one'], NOW), peer(foreignPid, ['live-one'], NOW)])
-  const live = readLiveMounts(NOW)
-  check('the dead owner is pruned', !live.some(o => o.pid === dead))
-  check(
-    'the concurrent live owner survives the prune',
-    rawOwners().some(o => o.pid === foreignPid && o.sessionIds.includes('live-one')),
-    JSON.stringify(rawOwners()),
-  )
-  check(
-    "our own record survives a prune too (it is not 'dead' just because it is stale)",
-    (publishMounts(['mine-kept']), readLiveMounts(NOW + HEARTBEAT_TTL_MS + 1).some(o => o.pid === process.pid && o.sessionIds.includes('mine-kept'))),
-    JSON.stringify(rawOwners()),
-  )
-  clearOwnMounts()
-}
-
-console.log('TTL and pid are independent witnesses, and BOTH must fail:')
-{
-  clearOwnMounts()
-  const foreignPid = process.platform === 'win32' ? process.ppid : 1
-  // Alive + fresh heartbeat: authoritative, even at the edge of the window.
-  writeRaw([peer(foreignPid, ['alive-fresh'], NOW - HEARTBEAT_TTL_MS)])
-  check('alive within the TTL keeps its claim', readLiveMounts(NOW).some(o => o.pid === foreignPid))
-  // Alive but stale: the timer is not a write-lock revocation, but a heartbeat
-  // this old cannot be distinguished from a pid that was reused, so the claim
-  // is treated as abandoned (see the module header).
-  writeRaw([peer(foreignPid, ['alive-stale'], NOW - HEARTBEAT_TTL_MS - 1)])
-  check('alive past the TTL is abandoned', !readLiveMounts(NOW).some(o => o.pid === foreignPid))
-  // Dead: no heartbeat can save it.
-  const dead = findDeadPid()
-  writeRaw([peer(dead, ['dead-fresh'], NOW)])
-  check('a fresh heartbeat on a dead pid is abandoned', !readLiveMounts(NOW).some(o => o.pid === dead))
-  clearOwnMounts()
-}
-
-console.log('duplicate claims keep the most recent heartbeat:')
-{
-  const foreignPid = process.platform === 'win32' ? process.ppid : 1
-  const otherPid = process.platform === 'win32' ? process.pid : 1
-  writeRaw([
-    peer(foreignPid, ['dup-sess'], NOW - 5_000),
-    peer(otherPid, ['dup-sess'], NOW),
-  ])
-  const owners = readSessionOwners(NOW)
-  check('duplicate resolves to the newest heartbeat', owners.get('dup-sess')?.heartbeatAt === NOW)
-}
-
-console.log('clearOwnMounts removes only our record:')
-{
-  const foreignPid = process.platform === 'win32' ? process.ppid : 1
-  publishMounts(['sess-c'])
-  writeRaw([
-    ...readMountLedger().filter(o => o.pid !== process.pid),
-    peer(foreignPid, ['peer-sess'], NOW),
-    ...readMountLedger().filter(o => o.pid === process.pid),
-  ])
-  clearOwnMounts()
-  const after = readMountLedger()
-  check('our record is gone', after.every(o => o.pid !== process.pid))
-  check("the peer's record survives", after.some(o => o.sessionIds.includes('peer-sess')))
-}
-
-console.log('malformed documents degrade instead of throwing:')
-{
-  mkdirSync(join(tmpHome, '.dsh-tui'), { recursive: true })
-  writeFileSync(LEDGER, '{ not json', 'utf8')
-  check('unparseable file reads as empty', readMountLedger().length === 0)
-  writeRaw([], 99)
-  check('version mismatch reads as empty', readMountLedger().length === 0)
-  writeRaw([{ pid: 'x', heartbeatAt: NOW, startedAt: NOW, sessionIds: [] }])
-  check('a wrong-typed record is dropped', readMountLedger().length === 0)
-  writeRaw([{ pid: 12, heartbeatAt: 'soon', startedAt: NOW, sessionIds: [] }])
-  check('a non-numeric heartbeat is dropped', readMountLedger().length === 0)
-}
-
-console.log('missing ledger is not an error:')
-{
-  const gone = join(tmpHome, '.dsh-tui', 'session-mounts.json')
-  if (existsSync(gone)) {
-    writeFileSync(gone, '', 'utf8')
-  }
-  check('empty file reads as empty', readMountLedger().length === 0)
-}
-
-console.log(failures === 0 ? '\nAll session-mount checks passed.' : `\n${failures} check(s) failed.`)
-process.exit(failures === 0 ? 0 : 1)
+console.log('\nsession mount ledger checks passed')

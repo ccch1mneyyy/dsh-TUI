@@ -87,20 +87,19 @@ mounted:
 {
   "version": 1,
   "owners": [
-    { "pid": 12345, "host": "<hostname>", "instance": "12345-9f3c…",
-      "heartbeatAt": 1789361335705, "startedAt": 1789361300000,
+    { "pid": 12345, "startedAt": 1789361300000,
       "sessionIds": ["<sessionId>", "..."] }
   ]
 }
 ```
 
-`host` / `instance` are the source of truth for ownership: `instance` is a token
-minted at random on every process start, and `host` is the machine name. **Pid
-alone is not enough** — a home directory can be shared over a network, and two
-machines then hand out the SAME pid. Deciding by pid would read a remote record
-as "this process", skip the occupancy refusal, and delete that record on the next
-publish, letting both machines write one log. Records written by older versions
-carry neither field and are read as "same host, same process".
+The source of truth for ownership is **pid**: while that process exists, the
+record still counts as live. `host` / `instance` are deliberately not part of
+the record — a home directory can be shared over a network, but genuinely
+deciding across machines needs a transport-level protocol, not a field written
+to a local disk. Pid reuse only makes a session that is in fact free look
+occupied (one restart fixes it); the opposite error interleaves two writers
+into one log.
 
 Write discipline (the pattern already proven in `src/sessionPins.ts`):
 
@@ -117,41 +116,29 @@ Write discipline (the pattern already proven in `src/sessionPins.ts`):
 - **Total and best-effort**: any failure degrades to "no cross-process
   protection this beat". It never throws and never takes a session down.
 
-### 3.3 Liveness needs two witnesses
+### 3.3 Liveness has exactly one witness: the pid
 
-A record counts as live only while **both** witnesses hold, so **either**
-witness failing releases the claim:
-
-- **`process.kill(pid, 0)`**: a clean exit, a `kill -9`, or a forcefully closed
-  terminal removes the pid. It cannot see **pid reuse**, nor a process on
-  another machine sharing the home directory over a network.
-- **The `heartbeatAt` timestamp**: no refresh within `HEARTBEAT_TTL_MS` (45s)
-  means abandoned. It catches pid reuse (a recycled pid would not happen to be
-  refreshing this exact record) and a pulled plug.
-
-The two are **AND**ed: `pidAlive(pid) && (now - heartbeatAt) <= TTL`. An OR is
-deliberately avoided — it would let a dead record whose pid happens to be reused
-live forever, which is harder to recover from than the stale-owner case below.
-
-So:
+A record is live if and only if `process.kill(pid, 0)` holds (`EPERM` counts as
+alive too). There is **no heartbeat timestamp**: a timestamp is only trustworthy
+while a timer keeps refreshing it, and the process that cannot refresh it is
+exactly the record that should expire. One witness gives one answer instead of
+two that can contradict each other.
 
 | Situation | Outcome |
 | --- | --- |
 | Clean exit (including `Ctrl+C`) | The teardown funnel calls `clearOwnMounts()`; the record is deleted and the sessions are mountable by another tui **immediately** |
-| `kill -9` / terminal force-closed | The heartbeat stops, so the claim expires within one TTL (≤45s); the pid probe usually decides sooner |
-| Power loss / unplug / suspend | The process is gone and the on-disk record expires — self-healing |
-| Process alive but its heartbeat is stale (suspended past one TTL, long-blocked event loop) | The claim is **released**. This is the known cost of AND: a stale heartbeat cannot be told apart from a reused pid on disk, and this ledger is the cross-process **visibility** layer rather than the write authority — the host's own session write lock is what separates writers, so the choice here is to give up one layer of protection rather than leave a claim nothing can reclaim |
-| Pid reused | The stale heartbeat still expires, so nothing is locked forever |
+| `kill -9` / terminal force-closed / power loss | The pid is gone, so the next read ignores the record |
+| Pid reused | The record reads as occupied until that unrelated process exits |
 
-> Historical note: the old text and the code contradicted each other here — the
-> comment promised a wedged-but-alive owner kept its claim while the code
-> reclaimed on the heartbeat. They now agree on the table above (the code keeps
-> its behaviour, the text states it).
+The known cost is stated in the module header: this ledger is a **same-machine**
+visibility layer, not the write authority — the host's own session write lock is
+what separates writers.
 
-**Self-healing needs no reaper**: the read path (`readLiveMounts`) takes the
-same cross-process lock and **re-reads the file before** rewriting it. Filtering
-a lock-free snapshot and writing it back drops any record a peer published in
-between — `rename` atomicity prevents half a file, not a lost update.
+**The read path never writes back.** Reads only filter; cleanup happens on the
+write path. Filtering a lock-free snapshot and writing it back drops any record
+a peer published in between — `rename` atomicity prevents half a file, not a
+lost update — so "self-healing on read" would degrade into "deleting a peer's
+claim on read".
 
 ### 3.4 Check and claim are one step
 
@@ -205,7 +192,7 @@ revision-keyed digest cache):
 
 | Data | Source | Cadence |
 | --- | --- | --- |
-| Mount-set heartbeat (write) | `publishMounts`, one small lock-guarded file write | `HEARTBEAT_INTERVAL_MS` = **15s** |
+| Mount-set publish (write) | `publishMounts`, one small lock-guarded file write | `PUBLISH_INTERVAL_MS` = **15s** |
 | On-screen live status / occupancy (read) | The channel's agent-view projection snapshot + the ledger | The screen's own **2s** tick, `setState` only |
 | Session listing | `listSessions()` | Once when the screen opens, plus manual `Ctrl+L` |
 
@@ -213,10 +200,11 @@ All three follow the repository's existing resource discipline:
 
 - Every timer is `.unref()`d; it must never be the reason a process cannot exit.
 - Every timer is cleaned up through `ctx.effect` / the `owner.own` funnel.
-- `readLiveMounts` heals on the read path, adding no reaper timer.
+- The read path never touches the file: dead records are filtered in memory and
+  actually pruned by the next write.
 
-There is no memory growth: the ledger is bounded by (processes × ≤256 session
-ids each) and is rewritten wholesale on each publish; live status reads the
+There is no memory growth: the ledger holds (processes × their mounted session
+ids) and is rewritten wholesale on each publish; live status reads the
 projection snapshot the channel already maintains rather than creating a new
 subscription.
 
@@ -247,18 +235,18 @@ even the session store root differs.
 2. **Switching a session never destroys it.** Park, do not `dispose`; a running
    turn is not interrupted by a switch.
 3. **A claim must never be locked forever.** Every record must be reclaimable by
-   either "pid gone" or "heartbeat expired" (both must hold for a claim to
-   stand). A state that requires manual unlocking is forbidden.
-4. **Ownership is never decided by pid alone.** A record carries `host` and
-   `instance` and is compared on all three: two machines sharing a home
-   directory hand out the same pid, and pid-only would read their claim as ours.
+   "pid gone". A state that requires manual unlocking is forbidden.
+4. **Same-machine semantics must stay explicit.** Ownership is pid-only; do not
+   use a local `host` / `instance` field to pretend the ledger decides across
+   machines — two machines sharing a home directory need a transport-level
+   protocol, not this layer.
 5. **Only the holder writes or releases the lock.** Each acquisition writes a
    random token into the lock file; a holder that lost the lock (reclaimed as
    stale) must abandon its commit, and a release may delete only its own lock.
-6. **The read path must not throw, and must not lose updates.** Missing file,
+6. **The read path must not throw, and must not write back.** Missing file,
    corrupt JSON, wrong version, wrong field types — all read as empty, and the
-   next write repairs it; self-healing rewrites must re-read under the lock
-   rather than committing a pre-lock snapshot.
+   next write repairs it; cleanup must re-read under the lock rather than
+   committing a pre-lock snapshot.
 7. **A timer must never block exit.** `.unref()` plus funnel cleanup, both.
 8. **The screen must not disagree with the runtime.** Whether a session can be
    entered is the runtime's decision; the screen only explains the reason one

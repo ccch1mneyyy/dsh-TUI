@@ -2,57 +2,37 @@
  * Cross-process session mounting ledger, kept at
  * `~/.dsh-tui/session-mounts.json`.
  *
- * A TUI terminal is a process that can host SEVERAL agent sessions at once
- * (the attached one plus every parked background session). Sessions are also
- * durable: another TUI, or `dsh web`, can list the same logs. Nothing in the
- * DSH session store says *who is currently driving a log*, so two TUI
- * processes resuming the same session would interleave writes into one
- * append-only event log and corrupt the transcript.
+ * A TUI terminal hosts SEVERAL agent sessions at once (the attached one plus
+ * every parked background session), and sessions are durable: another TUI, or
+ * `dsh web`, can list the same logs. Nothing in the DSH session store says
+ * *who is currently driving a log*, so two TUI processes resuming the same
+ * session would interleave writes into one append-only event log and corrupt
+ * the transcript. This file is that missing fact: each TUI process publishes
+ * the set of sessions it has mounted, and a reader that sees a foreign entry
+ * treats the session as OCCUPIED and refuses to mount it.
  *
- * This file is that missing fact, and it is deliberately the smallest one
- * that answers "may I mount this session?": each TUI process publishes the
- * set of sessions it currently has mounted, plus a heartbeat. A reader that
- * sees a foreign entry treats the session as OCCUPIED and refuses to mount it.
+ * Liveness is one witness, `process.kill(pid, 0)`: it catches a clean exit and
+ * a `kill -9`. There is no heartbeat timestamp, because a timestamp only stays
+ * truthful while a timer keeps refreshing it, and the process that cannot
+ * refresh it is exactly the one whose record should expire. The cost is pid
+ * REUSE — a recycled pid keeps a dead owner's record alive — which errs toward
+ * refusing a session that is in fact free and costs one restart; the opposite
+ * error interleaves two writers into one transcript. This is a same-machine
+ * guard only: the host's own session write lock stays the authority that
+ * actually separates writers.
  *
- * Liveness is decided by two independent witnesses, because each one alone
- * has a failure mode:
+ * Reads never write. Pruning a dead owner happens on the write path, because a
+ * reader that wrote its snapshot back could erase a peer's record published
+ * between its read and its replace — silently dropping a live session from the
+ * occupancy table while its process kept writing.
  *
- * - `process.kill(pid, 0)` catches a clean exit and a kill -9 (the pid is
- *   gone). It cannot catch pid REUSE, and it cannot see anything across
- *   machines that share a home directory over a network.
- * - The heartbeat timestamp catches pid reuse (a task manager entry cannot
- *   refresh a record the way the removed process did) and a machine that
- *   vanished. It cannot tell a process that exited from one that is alive but
- *   wedged.
- *
- * An entry is live when the pid exists AND the heartbeat is within
- * {@link HEARTBEAT_TTL_MS}: BOTH witnesses have to fail before a foreign
- * session becomes mountable. That is the correct direction for a pid-reuse
- * guard — an OR would let a recycled pid keep a dead owner's record alive
- * forever, which is worse than the stale-owner case below.
- *
- * The known cost of AND is a live-but-stale owner: a process suspended longer
- * than one TTL (a laptop closed overnight) loses its published claim on
- * resume, and a peer that took the session meanwhile is not visible to it. The
- * writers that matter are still separated by the host's own write lock — this
- * ledger is the cross-process VISIBILITY layer, not the write authority — but a
- * long suspension is the one window where it cannot promise more. What is NOT
- * acceptable, and what this file used to do, is treating a stale heartbeat as
- * authority to release a record while claiming to keep wedged owners: the two
- * answers cannot both be true, and the code and the docs above now agree.
- *
- * A pulled plug or a truncated process leaves no heartbeat, so the claim
- * expires on its own within one TTL and never needs a repair step — the ledger
- * is self-healing on read.
- *
- * Writes take a short cross-process lock and replace the file atomically, so
- * two TUIs publishing at the same instant cannot lose each other's records. A
- * CLAIM takes the same lock and re-derives its conflict from the file while
- * holding it ({@link claimMount}), because "check, then publish" is not atomic
- * across processes: both callers can observe `free` and both publish. Every
- * operation is best-effort and total: this ledger is a safety net, and an
- * unwritable home directory must degrade to "no cross-process protection"
- * rather than take down the session.
+ * Writes take a short cross-process lock, re-read the file under it, and replace
+ * it atomically. The lock is token-checked, so a holder whose lock was reclaimed
+ * as stale cannot write over — or delete — the new holder's lock. A CLAIM
+ * re-derives its conflict under that lock ({@link claimMount}), because
+ * "check, then publish" is not atomic across processes. Every operation is
+ * best-effort: an unwritable home degrades to "no cross-process protection"
+ * rather than taking down the session.
  */
 
 import {
@@ -68,7 +48,6 @@ import {
   writeSync,
 } from 'node:fs'
 import { randomBytes } from 'node:crypto'
-import { hostname } from 'node:os'
 import { join } from 'node:path'
 import { DATA_DIR } from './utils/paths.js'
 
@@ -78,29 +57,8 @@ const LOCK_FILE = 'session-mounts.lock'
 /** Schema version of the persisted document. */
 const MOUNTS_VERSION = 1
 
-/**
- * How long a heartbeat stays valid without a refresh. The writer refreshes at
- * {@link HEARTBEAT_INTERVAL_MS}, so this tolerates four consecutive missed
- * beats: long enough that a busy event loop or a suspended laptop does not
- * drop a live owner's claim, short enough that a killed terminal frees its
- * sessions while the user is still looking at the screen.
- */
-export const HEARTBEAT_TTL_MS = 45_000
-
-/**
- * How often the owning process republishes its mounted set. The requirement
- * is a bounded, cheap poll: this is one small file write, so the cost is a
- * few hundred microseconds and it is deliberately not tied to any render
- * frame. A `setInterval` at this period is `.unref()`d by the caller so it
- * never holds the process open on its own.
- */
-export const HEARTBEAT_INTERVAL_MS = 15_000
-
 /** Reclaim a lock left behind by a crashed writer after this long. */
 const STALE_LOCK_MS = 30_000
-
-/** Sessions one process may claim. Guards a runaway against an unbounded file. */
-const MAX_SESSIONS_PER_OWNER = 256
 
 let temporarySequence = 0
 
@@ -114,58 +72,22 @@ function hasCode(error: unknown, code: string): boolean {
 export interface SessionMountOwner {
   /** Operating-system process id of the TUI holding these sessions. */
   readonly pid: number
-  /**
-   * Host this record was published from. Absent on records written by older
-   * versions; an absent host counts as "same host".
-   *
-   * A home directory can be shared over a network, and two machines can then
-   * hand out the SAME pid. Pid alone would call a remote TUI this process, skip
-   * the occupancy refusal, and let both write one log — so ownership is decided
-   * by host + instance + pid, never by pid alone.
-   */
-  readonly host?: string
-  /**
-   * Random per-process-run identity. Absent on records written by older
-   * versions. This is what makes pid REUSE safe: a recycled pid is a different
-   * run, so the stale record is not this process's.
-   */
-  readonly instance?: string
-  /**
-   * Epoch ms of the owner's last heartbeat. A record whose heartbeat is older
-   * than {@link HEARTBEAT_TTL_MS} is treated as abandoned.
-   */
-  readonly heartbeatAt: number
   /** Epoch ms when this process first published a record (diagnostics). */
   readonly startedAt: number
   /** Session ids this process has mounted, in no significant order. */
   readonly sessionIds: readonly string[]
 }
 
-/**
- * This process's stable identity: the host it runs on and a token minted once
- * per process. Both are published with every record so another reader can tell
- * "mine" from "a stranger that happens to share my pid".
- */
-export const HOST_IDENTITY = hostname()
-export const PROCESS_INSTANCE = `${process.pid}-${randomBytes(8).toString('hex')}`
-
-/**
- * Whether a published record was written by THIS process instance.
- * @param owner - The record to test.
- * @returns True when host, instance and pid all match this process.
- */
+/** Whether a published record was written by THIS process. */
 export function ownerIsSelf(owner: SessionMountOwner): boolean {
-  if (owner.pid !== process.pid) return false
-  if (owner.host !== undefined && owner.host !== HOST_IDENTITY) return false
-  if (owner.instance !== undefined && owner.instance !== PROCESS_INSTANCE) return false
-  return true
+  return owner.pid === process.pid
 }
 
 /** Why a session cannot be mounted by this process. */
 export type SessionOccupancy =
   | { readonly kind: 'free' }
   | { readonly kind: 'mine' }
-  | { readonly kind: 'occupied'; readonly pid: number; readonly heartbeatAt: number }
+  | { readonly kind: 'occupied'; readonly pid: number }
 
 const EMPTY: SessionOccupancy = { kind: 'free' }
 
@@ -183,8 +105,6 @@ export type MountClaim =
  * Whether a process id is still alive. `process.kill(pid, 0)` sends no signal
  * and throws `ESRCH` when the process is gone; `EPERM` means it exists but is
  * owned by another user, which still counts as alive here.
- * @param pid - Process id to probe.
- * @returns True when the process appears to exist.
  */
 export function pidAlive(pid: number): boolean {
   if (!Number.isInteger(pid) || pid <= 0) return false
@@ -197,124 +117,53 @@ export function pidAlive(pid: number): boolean {
   }
 }
 
-/**
- * Whether a published record still owns its sessions. The record stays live
- * only while BOTH witnesses agree: the pid exists and the heartbeat is fresh.
- * See the module header for why the heartbeat outranks a live-but-stale pid.
- * @param owner - The record to judge.
- * @param now - Current epoch ms (injectable for the regression).
- * @returns True when the record is still authoritative.
- */
-export function ownerIsLive(owner: SessionMountOwner, now: number = Date.now()): boolean {
-  if (!pidAlive(owner.pid)) return false
-  return now - owner.heartbeatAt <= HEARTBEAT_TTL_MS
-}
-
-/** Parse and validate one record, or undefined when the shape is wrong. */
+/** Parse one record, or undefined when the shape is wrong. */
 function parseOwner(value: unknown): SessionMountOwner | undefined {
   if (typeof value !== 'object' || value === null) return undefined
-  const record = value as Record<string, unknown>
-  const { pid, heartbeatAt, startedAt, sessionIds, host, instance } = record
+  const { pid, startedAt, sessionIds } = value as Record<string, unknown>
   if (typeof pid !== 'number' || !Number.isInteger(pid) || pid <= 0) return undefined
-  if (typeof heartbeatAt !== 'number' || !Number.isFinite(heartbeatAt)) return undefined
   if (typeof startedAt !== 'number' || !Number.isFinite(startedAt)) return undefined
   if (!Array.isArray(sessionIds)) return undefined
-  const ids = sessionIds.filter((id): id is string => typeof id === 'string' && id.length > 0)
   return {
     pid,
-    heartbeatAt,
     startedAt,
-    sessionIds: ids,
-    // Identity fields are optional so a ledger written by an older version
-    // still reads; a wrong-typed one is dropped rather than trusted.
-    ...(typeof host === 'string' && host.length > 0 ? { host } : {}),
-    ...(typeof instance === 'string' && instance.length > 0 ? { instance } : {}),
+    sessionIds: sessionIds.filter((id): id is string => typeof id === 'string' && id.length > 0),
   }
 }
 
 /**
- * Read the ledger, keeping every record the shape check accepts. Missing or
- * malformed data reads as empty: the caller's next write repairs the file, so
- * there is nothing to report and nothing to throw.
- * @returns The parsed records, in file order.
+ * Read the ledger, keeping every record the shape check accepts. A missing,
+ * empty, truncated or foreign-shaped document reads as an empty ledger: the
+ * next write replaces the file wholesale, so there is nothing to repair and
+ * nothing to report.
  */
 export function readMountLedger(): readonly SessionMountOwner[] {
-  let raw: string
   try {
-    raw = readFileSync(join(DATA_DIR, MOUNTS_FILE), 'utf8')
+    const parsed: unknown = JSON.parse(readFileSync(join(DATA_DIR, MOUNTS_FILE), 'utf8'))
+    if (typeof parsed !== 'object' || parsed === null) return []
+    const document = parsed as Record<string, unknown>
+    if (document.version !== MOUNTS_VERSION || !Array.isArray(document.owners)) return []
+    return document.owners
+      .map(parseOwner)
+      .filter((owner): owner is SessionMountOwner => owner !== undefined)
   } catch {
-    // No ledger yet, or a concurrent writer replaced it mid-read.
     return []
   }
-  let parsed: unknown
-  try {
-    parsed = JSON.parse(raw) as unknown
-  } catch {
-    // A partially written file; the next writer replaces it wholesale.
-    return []
-  }
-  if (typeof parsed !== 'object' || parsed === null) return []
-  const document = parsed as Record<string, unknown>
-  if (document.version !== MOUNTS_VERSION || !Array.isArray(document.owners)) return []
-  return document.owners
-    .map(parseOwner)
-    .filter((owner): owner is SessionMountOwner => owner !== undefined)
 }
 
 /**
- * The live records only: a record that died is pruned from disk so the next
- * reader starts clean.
- *
- * This is the read path the UI polls, so it is the natural place to heal a
- * ledger abandoned by a killed terminal — no separate reaper to schedule, and
- * a reader is always looking anyway.
- *
- * The prune takes the SAME lock every writer takes and re-reads the file under
- * it. Filtering a lock-free snapshot and writing it back would drop any record
- * a peer published between our read and our replace — a live session would
- * simply vanish from the occupancy table while its process kept writing.
- * It also keeps this process's OWN record: our heartbeat is refreshed by a
- * timer, so a reader can legitimately see our record as stale for a moment, and
- * dropping it would drop our claim.
- * @param now - Current epoch ms (injectable for the regression).
- * @returns The authoritative records as of this read.
+ * Which process has each session mounted, considering only owners whose pid is
+ * still alive. A session claimed by several live owners keeps the record that
+ * started last: the protocol forbids that state, and picking one
+ * deterministically beats reporting whichever the file happened to list first.
  */
-export function readLiveMounts(now: number = Date.now()): readonly SessionMountOwner[] {
-  const all = readMountLedger()
-  const live = all.filter(owner => ownerIsSelf(owner) || ownerIsLive(owner, now))
-  if (live.length !== all.length) {
-    const lock = acquireLock()
-    if (lock !== null) {
-      try {
-        if (lockIsHeld(lock)) {
-          const pruned = readMountLedger().filter(owner => ownerIsSelf(owner) || ownerIsLive(owner, now))
-          writeLedger(pruned)
-          return pruned
-        }
-      } finally {
-        releaseLock(lock)
-      }
-    }
-  }
-  return live
-}
-
-/**
- * Which process has each session mounted, considering only live owners.
- * A session claimed by several live owners keeps the most recent heartbeat:
- * the protocol forbids that state, and picking one deterministically beats
- * reporting whichever the file happened to list first.
- * @param now - Current epoch ms (injectable for the regression).
- * @returns Session id to the owning record.
- */
-export function readSessionOwners(now: number = Date.now()): ReadonlyMap<string, SessionMountOwner> {
+export function readSessionOwners(): ReadonlyMap<string, SessionMountOwner> {
   const owners = new Map<string, SessionMountOwner>()
-  for (const owner of readLiveMounts(now)) {
+  for (const owner of readMountLedger()) {
+    if (!pidAlive(owner.pid)) continue
     for (const sessionId of owner.sessionIds) {
       const existing = owners.get(sessionId)
-      if (existing === undefined || existing.heartbeatAt < owner.heartbeatAt) {
-        owners.set(sessionId, owner)
-      }
+      if (existing === undefined || existing.startedAt < owner.startedAt) owners.set(sessionId, owner)
     }
   }
   return owners
@@ -334,16 +183,16 @@ export function occupancyOf(
   const owner = owners.get(sessionId)
   if (owner === undefined) return EMPTY
   if (ownerIsSelf(owner)) return { kind: 'mine' }
-  return { kind: 'occupied', pid: owner.pid, heartbeatAt: owner.heartbeatAt }
+  return { kind: 'occupied', pid: owner.pid }
 }
 
 /**
  * A held lock: the file descriptor, the path, and the unique token written into
  * the lock file.
  *
- * The token is what makes a reclaimed lock safe. A writer that pauses for
- * longer than {@link STALE_LOCK_MS} has its lock removed by a peer, and if it
- * then wrote or released blindly it would clobber the peer's work — including
+ * The token is what makes a reclaimed lock safe. A writer that pauses longer
+ * than {@link STALE_LOCK_MS} has its lock removed by a peer, and if it then
+ * wrote or released blindly it would clobber the peer's work — including
  * deleting the PEER's lock on the way out. So every holder re-reads the file it
  * is about to replace and abandons the mutation when the token is not its own.
  */
@@ -375,7 +224,7 @@ function acquireLock(): HeldLock | null {
       }
       continue
     }
-    const token = `${PROCESS_INSTANCE}:${randomBytes(6).toString('hex')}`
+    const token = `${process.pid}-${randomBytes(6).toString('hex')}`
     try {
       // `writeSync` on the descriptor (not `writeFileSync`) so the token lands
       // in the file this fd owns, and flush before anyone can read it.
@@ -434,32 +283,23 @@ function releaseLock(lock: HeldLock): void {
 }
 
 /**
- * Atomically replace the ledger. A random-suffixed sibling plus a rename means
- * a reader never observes a half-written document, and a crash mid-write
- * leaves the previous ledger intact.
+ * Atomically replace the ledger with the live foreign records plus `mine`.
  *
- * CALLERS MUST HOLD THE LOCK. The splice form is what makes the atomic replace
- * safe for a mutation that only claims THIS process's record: the caller's read
- * of the file may predate a peer's publish (the two are not serialized by the
- * rename), so passing `undefined` re-reads under the lock and splices this
- * process's fresh record onto the records that are there NOW.
- * @param owners - The complete record set to persist, or undefined to splice
- *   `mine` into whatever the file holds at this instant.
+ * A random-suffixed sibling plus a rename means a reader never observes a
+ * half-written document, and a crash mid-write leaves the previous ledger
+ * intact. CALLERS MUST HOLD THE LOCK: the replacement is rebuilt from a read
+ * taken while holding it, so a peer that published since the caller's last read
+ * survives, and dead owners are dropped here — the write path is the only place
+ * that prunes.
  * @param mine - This process's record; undefined clears our own record.
  * @returns True when the ledger was replaced.
- */
-function writeLedger(owners: readonly SessionMountOwner[] | undefined, mine?: SessionMountOwner): boolean {
+ */function writeLedger(mine: SessionMountOwner | undefined): boolean {
   const target = join(DATA_DIR, MOUNTS_FILE)
-  const temporary = join(
-    DATA_DIR,
-    `${MOUNTS_FILE}.${process.pid}.${Date.now()}.${temporarySequence++}.tmp`,
-  )
+  const temporary = `${target}.${process.pid}.${temporarySequence++}.tmp`
   try {
     mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 })
-    const records = owners ?? [
-      ...readMountLedger().filter(owner => !ownerIsSelf(owner)),
-      ...(mine === undefined ? [] : [mine]),
-    ]
+    const records = readMountLedger().filter(owner => !ownerIsSelf(owner) && pidAlive(owner.pid))
+    if (mine !== undefined) records.push(mine)
     writeFileSync(
       temporary,
       JSON.stringify({ version: MOUNTS_VERSION, owners: records }, null, 2),
@@ -482,16 +322,15 @@ let ownStartedAt: number | undefined
 /** Session ids this process currently has mounted. */
 const ownSessionIds = new Set<string>()
 
+/** This process's record, or undefined before the first publish. */
+function ownRecord(): SessionMountOwner {
+  return { pid: process.pid, startedAt: ownStartedAt ?? Date.now(), sessionIds: [...ownSessionIds] }
+}
+
 /**
- * Publish this process's mounted set and refresh its heartbeat.
- *
- * Call at boot and then on {@link HEARTBEAT_INTERVAL_MS}. Every call re-reads
- * the ledger under the lock, so it also prunes owners that died since the last
- * beat — a TUI that is running is therefore enough to keep the whole file
- * clean, with no separate garbage collection.
- *
- * The read-modify-write is lock-guarded rather than blind: two TUIs beating at
- * the same moment would otherwise each write a file missing the other.
+ * Publish this process's mounted set. Call at boot, whenever the set changes,
+ * and just before teardown, so a peer always reads a current answer without a
+ * timer keeping it fresh.
  * @param sessionIds - The sessions currently mounted (replaces the prior set).
  * @returns True when the ledger was updated.
  */
@@ -503,29 +342,16 @@ export function publishMounts(sessionIds: Iterable<string>): boolean {
   const requested = [...sessionIds]
   ownSessionIds.clear()
   for (const sessionId of requested) {
-    if (typeof sessionId !== 'string' || sessionId.length === 0) continue
-    ownSessionIds.add(sessionId)
-    if (ownSessionIds.size >= MAX_SESSIONS_PER_OWNER) break
+    if (typeof sessionId === 'string' && sessionId.length > 0) ownSessionIds.add(sessionId)
   }
   if (ownStartedAt === undefined) ownStartedAt = now
-
   const lock = acquireLock()
   if (lock === null) return false
   try {
     // A lock reclaimed as stale belongs to somebody else now: this process's
     // snapshot is older than theirs, so it must not be committed over it.
     if (!lockIsHeld(lock)) return false
-    const mine: SessionMountOwner = {
-      pid: process.pid,
-      host: HOST_IDENTITY,
-      instance: PROCESS_INSTANCE,
-      heartbeatAt: now,
-      startedAt: ownStartedAt,
-      sessionIds: [...ownSessionIds],
-    }
-    // Publish under the lock by splicing our fresh record into whatever the
-    // file holds NOW: peers that published since our last read survive.
-    return writeLedger(undefined, mine)
+    return writeLedger(ownRecord())
   } finally {
     releaseLock(lock)
   }
@@ -534,22 +360,16 @@ export function publishMounts(sessionIds: Iterable<string>): boolean {
 /**
  * Claim one session for THIS process, atomically.
  *
- * The occupancy check and the claim have to be one lock-protected step. Two
+ * The occupancy check and the claim have to be one lock-protected step: two
  * processes that each check first and publish second can both observe `free`
- * and both publish, which is precisely the state this ledger exists to
- * prevent; `publishMounts` cannot detect it, because it only protects the merge
- * write.
- *
- * Inside the lock the conflict is re-derived from the file, this process's
- * fresh record (with the candidate already in it) is spliced in, and a session
- * that IS genuinely ours is accepted — a second mount of our own parked handle
- * is not a conflict. When a live PEER holds it, nothing is written: the ledger
- * must not be mutated to say a claim was taken when it was not.
+ * and both publish, which is exactly the state this ledger exists to prevent.
+ * Inside the lock the conflict is re-derived from the file, and a session that
+ * is genuinely ours is accepted — a second mount of our own parked handle is
+ * not a conflict. When a live PEER holds it, nothing is written.
  * @param sessionId - Session id to claim.
  * @returns `ok`, or the pids holding the session.
  */
 export function claimMount(sessionId: string): MountClaim {
-  const now = Date.now()
   const lock = acquireLock()
   if (lock === null) {
     // No claim without the lock: an unreadable ledger is a state we cannot
@@ -560,26 +380,15 @@ export function claimMount(sessionId: string): MountClaim {
     // Lost the lock (reclaimed as stale): the file on disk is no longer the one
     // this claim was derived from, so refuse rather than write a stale merge.
     if (!lockIsHeld(lock)) return { ok: false, holders: [] }
-    const records = readMountLedger()
     const holders: number[] = []
-    for (const owner of records) {
-      if (ownerIsSelf(owner)) continue
-      if (!ownerIsLive(owner, now)) continue
+    for (const owner of readMountLedger()) {
+      if (ownerIsSelf(owner) || !pidAlive(owner.pid)) continue
       if (owner.sessionIds.includes(sessionId)) holders.push(owner.pid)
     }
     if (holders.length > 0) return { ok: false, holders }
     ownSessionIds.add(sessionId)
-    if (ownStartedAt === undefined) ownStartedAt = now
-    const mine: SessionMountOwner = {
-      pid: process.pid,
-      host: HOST_IDENTITY,
-      instance: PROCESS_INSTANCE,
-      heartbeatAt: now,
-      startedAt: ownStartedAt,
-      sessionIds: [...ownSessionIds],
-    }
-    const claimed = writeLedger(undefined, mine)
-    if (!claimed) {
+    if (ownStartedAt === undefined) ownStartedAt = Date.now()
+    if (!writeLedger(ownRecord())) {
       // The claim was not persisted, so it must not be held in memory either:
       // the process must not believe it owns what the ledger does not record.
       ownSessionIds.delete(sessionId)
@@ -600,17 +409,17 @@ export function claimMount(sessionId: string): MountClaim {
  */
 export function releaseMount(sessionId: string): boolean {
   if (!ownSessionIds.delete(sessionId)) return true
-  // Snapshot before republishing: `publishMounts` clears `ownSessionIds`
-  // before it reads its argument, so handing it the live Set would empty the
-  // very claim being rebuilt and release every session this process holds.
+  // Snapshot before republishing: `publishMounts` clears `ownSessionIds` before
+  // it reads its argument, so handing it the live Set would empty the very
+  // claim being rebuilt and release every session this process holds.
   return publishMounts([...ownSessionIds])
 }
 
 /**
  * Remove this process's record entirely, so every session it held is
- * immediately mountable by another TUI instead of waiting out the TTL.
- * Called from the teardown funnel; a crashed process skips this and is
- * reclaimed by liveness instead, which is why both paths must work.
+ * immediately mountable by another TUI. Called from the teardown funnel; a
+ * crashed process skips this and its record is pruned by the next write
+ * instead, which is why both paths must work.
  * @returns True when the ledger was updated.
  */
 export function clearOwnMounts(): boolean {
@@ -620,8 +429,6 @@ export function clearOwnMounts(): boolean {
     if (!lockIsHeld(lock)) return false
     ownSessionIds.clear()
     ownStartedAt = undefined
-    // Splice-free: an undefined `mine` removes our record and leaves every
-    // record published since our last read alone.
     return writeLedger(undefined)
   } finally {
     releaseLock(lock)

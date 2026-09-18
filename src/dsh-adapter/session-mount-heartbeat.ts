@@ -1,20 +1,27 @@
 /**
  * Publishes this TUI process's mounted-session set to the cross-process
- * ledger ({@link ../../sessionMounts.js}) on a small heartbeat.
+ * ledger ({@link ../../sessionMounts.js}).
  *
  * A TUI terminal hosts several agent sessions at once — the attached one plus
  * every parked background session — and two processes driving the same
  * session log would interleave writes into one append-only transcript. The
  * ledger is what lets another TUI see "this session is already mounted" and
- * refuse it, so the heartbeat has to cover EVERY live agent in this process,
- * not just the attached one. Reading the agent registry is what makes that
- * automatic: a session dispatched from `/resume`, parked by a switch, or
- * created by `/new` is published on the next beat without any call site
- * having to remember to announce it.
+ * refuse it, so the published set has to cover EVERY live agent in this
+ * process, not just the attached one.
  *
- * The timer is deliberately unref'd: it must never be the reason a quitting
- * TUI stays alive. Teardown removes the record outright so a clean exit frees
- * its sessions immediately instead of leaving them claimed for one TTL.
+ * Reading the agent registry is what makes that automatic, and the small timer
+ * is what keeps it honest: agents are created from more than seven paths
+ * (`/new`, `/resume`, `/bg`, fork, rewind, model switch, boot attach), so an
+ * announce-at-each-call-site design would silently drop a session the day
+ * someone adds an eighth. Deriving the set from the registry has exactly one
+ * place to be right.
+ *
+ * Publishing is NOT a liveness witness: {@link ../../sessionMounts.js} decides
+ * liveness from the owner's pid alone, so a late or missed publish cannot keep
+ * a dead process's claim alive and there is no timestamp here to expire. The
+ * timer's only job is to keep the published SET current, and it is deliberately
+ * unref'd: it must never be the reason a quitting TUI stays alive. Teardown
+ * removes the record outright so a clean exit frees its sessions immediately.
  *
  * Registered through the host's single teardown funnel by the caller, so both
  * the interval and the ledger record are released exactly once.
@@ -23,7 +30,14 @@
  */
 
 import type { Context } from '@deepseek-ai/cordis'
-import { clearOwnMounts, HEARTBEAT_INTERVAL_MS, publishMounts } from '../sessionMounts.js'
+import { clearOwnMounts, publishMounts } from '../sessionMounts.js'
+
+/**
+ * How often the mounted set is republished. One small file write, not tied to
+ * any render frame; it bounds how long a peer can read a set that predates a
+ * session this process just mounted.
+ */
+const PUBLISH_INTERVAL_MS = 15_000
 
 /** The subset of the host agent registry this module reads. */
 type AgentRoster = {
@@ -55,12 +69,10 @@ export function mountedSessionIds(ctx: Context): string[] {
 /**
  * Start publishing this process's mounted sessions.
  *
- * The first beat runs synchronously so a session mounted during boot is
- * claimed before the user can reach a second terminal, and every later beat is
- * a self-contained read-modify-write that also prunes owners that died since
- * the previous one.
+ * The first publish runs synchronously so a session mounted during boot is
+ * claimed before the user can reach a second terminal.
  * @param ctx - The plugin context, for the agent registry.
- * @returns A disposer that stops the heartbeat and releases the claim.
+ * @returns A disposer that stops publishing and releases the claim.
  */
 export function startSessionMountHeartbeat(ctx: Context): () => void {
   let stopped = false
@@ -70,13 +82,13 @@ export function startSessionMountHeartbeat(ctx: Context): () => void {
       publishMounts(mountedSessionIds(ctx))
     } catch {
       // The ledger is a safety net around corrupting a shared transcript, and
-      // it is also best-effort by contract. A failed beat costs cross-process
+      // it is also best-effort by contract. A failed publish costs cross-process
       // protection until the next one, which must not disturb this session.
     }
   }
   beat()
-  const timer = setInterval(beat, HEARTBEAT_INTERVAL_MS)
-  // Never let the heartbeat hold the process open: quitting the TUI must not
+  const timer = setInterval(beat, PUBLISH_INTERVAL_MS)
+  // Never let the publisher hold the process open: quitting the TUI must not
   // wait for a timer that exists only to describe a process that is leaving.
   timer.unref?.()
 
@@ -86,7 +98,7 @@ export function startSessionMountHeartbeat(ctx: Context): () => void {
     try {
       clearOwnMounts()
     } catch {
-      // A leftover record is reclaimed by liveness on the next reader.
+      // A leftover record is ignored once this pid is gone.
     }
   }
 }

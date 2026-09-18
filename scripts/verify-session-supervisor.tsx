@@ -143,7 +143,6 @@ const HELD_SESSION_ID = 'held-one'
       version: 1,
       owners: [{
         pid: FOREIGN_PID,
-        heartbeatAt: Date.now(),
         startedAt: Date.now(),
         sessionIds: [HELD_SESSION_ID],
       }],
@@ -526,7 +525,6 @@ console.log('occupancy follows the LEDGER, not a snapshot taken at first render'
     version: 1,
     owners: sessionIds.length === 0 ? [] : [{
       pid: FOREIGN_PID,
-      heartbeatAt: Date.now(),
       startedAt: Date.now(),
       sessionIds,
     }],
