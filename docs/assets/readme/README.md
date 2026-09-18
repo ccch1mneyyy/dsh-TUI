@@ -34,7 +34,7 @@ storage are isolated. No production settings or credentials are copied.
 The animated README logos reuse the same whale poses as the captured preview.
 The CTA is deliberately attached to the whale's head so it reads as the first
 thing to click: `我想要` appears first, then a large outlined star button,
-followed by the yellow filled state, a short scale pulse, particles and the
+followed by the yellow filled state and a short scale pulse; the
 whale's `≧∀≦` finish. The English logo uses `I desire`, `Star this repo` and
 `Starred`. Only body, blink, fin and tail poses remain; spout, heart and sleep
 overlays are removed.
