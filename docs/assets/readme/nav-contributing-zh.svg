@@ -6,13 +6,19 @@
     a:hover .tile { fill: #1b2028; }
     a:focus-visible .tile { stroke: #8bb6fb; stroke-width: 3; }
     
+    text { fill: #ffffff; stroke: #111519; stroke-width: 1.5; paint-order: stroke fill; stroke-linejoin: round; }
+    @media (prefers-color-scheme: light) {
+      .tile { fill: #f5f7fa; stroke: #65717f; }
+      a:hover .tile { fill: #e8edf4; }
+    }
+
   </style>
   
     <a href="https://github.com/says693/dsh-TUI-693/blob/main/docs/contributing.md">
       <rect class="tile" x="1" y="4" width="478" height="88" rx="6" fill="#111519" stroke="#303741"/>
-      <g transform="translate(20 21) scale(1)" fill="none" stroke="#e697bc" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><path d="M13 6h3a2 2 0 0 1 2 2v7"/><line x1="6" x2="6" y1="9" y2="21"/></g>
+      <g class="outlined-icon"><g transform="translate(20 21) scale(1)" fill="none" stroke="#111519" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><path d="M13 6h3a2 2 0 0 1 2 2v7"/><line x1="6" x2="6" y1="9" y2="21"/></g><g transform="translate(20 21) scale(1)" fill="none" stroke="#ffffff" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><path d="M13 6h3a2 2 0 0 1 2 2v7"/><line x1="6" x2="6" y1="9" y2="21"/></g></g>
       <text x="58" y="38" font-size="21" fill="#edf1f6" font-weight="600">贡献与开发约定</text>
       <text x="58" y="68" font-size="16" fill="#aeb8c6" >仓库地图、构建与验证矩阵</text>
-      <g transform="translate(434 20) scale(0.9166666666666666)" fill="none" stroke="#e697bc" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M7 7h10v10"/><path d="M7 17 17 7"/></g>
+      <g class="outlined-icon"><g transform="translate(434 20) scale(0.9166666666666666)" fill="none" stroke="#111519" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"><path d="M7 7h10v10"/><path d="M7 17 17 7"/></g><g transform="translate(434 20) scale(0.9166666666666666)" fill="none" stroke="#ffffff" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M7 7h10v10"/><path d="M7 17 17 7"/></g></g>
     </a>
 </svg>

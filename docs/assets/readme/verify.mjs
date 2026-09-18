@@ -22,6 +22,12 @@ for (const language of ['zh', 'en']) {
   assert.ok(button.includes('viewBox="0 0 288 44"'))
   assert.ok(button.includes(securityTarget))
   assert.ok(!/<(?:script|foreignObject|image|iframe)\b/.test(button))
+  for (const filename of [`security-link-${language}.svg`, ...['start', 'configuration', 'interaction', 'themes', 'architecture', 'vscode', 'plugins', 'contributing'].map(name => `nav-${name}-${language}.svg`)]) {
+    const asset = await readFile(new URL(filename, import.meta.url), 'utf8')
+    assert.ok(asset.includes('paint-order: stroke fill'), `${filename}: outlined white text`)
+    assert.equal((asset.match(/class="outlined-icon"/g) || []).length, 2, `${filename}: both icons outlined`)
+    assert.ok(asset.includes('prefers-color-scheme: light'), `${filename}: light surface`)
+  }
   const logo = await readFile(new URL(language === 'zh' ? 'logo.svg' : 'logo-en.svg', import.meta.url), 'utf8')
   assert.equal((logo.match(/data-whale-frame="/g) || []).length, 8)
   assert.ok(logo.includes(language === 'zh' ? '我想要' : 'I want'))

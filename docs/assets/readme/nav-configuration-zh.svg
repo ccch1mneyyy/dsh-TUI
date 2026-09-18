@@ -6,13 +6,19 @@
     a:hover .tile { fill: #1b2028; }
     a:focus-visible .tile { stroke: #8bb6fb; stroke-width: 3; }
     
+    text { fill: #ffffff; stroke: #111519; stroke-width: 1.5; paint-order: stroke fill; stroke-linejoin: round; }
+    @media (prefers-color-scheme: light) {
+      .tile { fill: #f5f7fa; stroke: #65717f; }
+      a:hover .tile { fill: #e8edf4; }
+    }
+
   </style>
   
     <a href="https://github.com/says693/dsh-TUI-693/blob/main/docs/configuration.md">
       <rect class="tile" x="1" y="4" width="478" height="88" rx="6" fill="#111519" stroke="#303741"/>
-      <g transform="translate(20 21) scale(1)" fill="none" stroke="#e5c07b" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M14 17H5"/><path d="M19 7h-9"/><circle cx="17" cy="17" r="3"/><circle cx="7" cy="7" r="3"/></g>
+      <g class="outlined-icon"><g transform="translate(20 21) scale(1)" fill="none" stroke="#111519" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"><path d="M14 17H5"/><path d="M19 7h-9"/><circle cx="17" cy="17" r="3"/><circle cx="7" cy="7" r="3"/></g><g transform="translate(20 21) scale(1)" fill="none" stroke="#ffffff" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M14 17H5"/><path d="M19 7h-9"/><circle cx="17" cy="17" r="3"/><circle cx="7" cy="7" r="3"/></g></g>
       <text x="58" y="38" font-size="21" fill="#edf1f6" font-weight="600">配置参考</text>
       <text x="58" y="68" font-size="16" fill="#aeb8c6" >Cordis、模型、MCP 与环境变量</text>
-      <g transform="translate(434 20) scale(0.9166666666666666)" fill="none" stroke="#e5c07b" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M7 7h10v10"/><path d="M7 17 17 7"/></g>
+      <g class="outlined-icon"><g transform="translate(434 20) scale(0.9166666666666666)" fill="none" stroke="#111519" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"><path d="M7 7h10v10"/><path d="M7 17 17 7"/></g><g transform="translate(434 20) scale(0.9166666666666666)" fill="none" stroke="#ffffff" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M7 7h10v10"/><path d="M7 17 17 7"/></g></g>
     </a>
 </svg>

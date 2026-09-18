@@ -6,13 +6,19 @@
     a:hover .tile { fill: #1b2028; }
     a:focus-visible .tile { stroke: #8bb6fb; stroke-width: 3; }
     
+    text { fill: #ffffff; stroke: #111519; stroke-width: 1.5; paint-order: stroke fill; stroke-linejoin: round; }
+    @media (prefers-color-scheme: light) {
+      .tile { fill: #f5f7fa; stroke: #65717f; }
+      a:hover .tile { fill: #e8edf4; }
+    }
+
   </style>
   
     <a href="https://github.com/says693/dsh-TUI-693/blob/main/docs/interaction.en.md">
       <rect class="tile" x="1" y="4" width="478" height="88" rx="6" fill="#111519" stroke="#303741"/>
-      <g transform="translate(20 21) scale(1)" fill="none" stroke="#65d4bc" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M16 10a2 2 0 0 1-2 2H6.828a2 2 0 0 0-1.414.586l-2.202 2.202A.71.71 0 0 1 2 14.286V4a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/><path d="M20 9a2 2 0 0 1 2 2v10.286a.71.71 0 0 1-1.212.502l-2.202-2.202A2 2 0 0 0 17.172 19H10a2 2 0 0 1-2-2v-1"/></g>
+      <g class="outlined-icon"><g transform="translate(20 21) scale(1)" fill="none" stroke="#111519" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"><path d="M16 10a2 2 0 0 1-2 2H6.828a2 2 0 0 0-1.414.586l-2.202 2.202A.71.71 0 0 1 2 14.286V4a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/><path d="M20 9a2 2 0 0 1 2 2v10.286a.71.71 0 0 1-1.212.502l-2.202-2.202A2 2 0 0 0 17.172 19H10a2 2 0 0 1-2-2v-1"/></g><g transform="translate(20 21) scale(1)" fill="none" stroke="#ffffff" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M16 10a2 2 0 0 1-2 2H6.828a2 2 0 0 0-1.414.586l-2.202 2.202A.71.71 0 0 1 2 14.286V4a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/><path d="M20 9a2 2 0 0 1 2 2v10.286a.71.71 0 0 1-1.212.502l-2.202-2.202A2 2 0 0 0 17.172 19H10a2 2 0 0 1-2-2v-1"/></g></g>
       <text x="58" y="38" font-size="21" fill="#edf1f6" font-weight="600">Interaction &amp; commands</text>
       <text x="58" y="68" font-size="16" fill="#aeb8c6" >Keys, mouse, sessions</text>
-      <g transform="translate(434 20) scale(0.9166666666666666)" fill="none" stroke="#65d4bc" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M7 7h10v10"/><path d="M7 17 17 7"/></g>
+      <g class="outlined-icon"><g transform="translate(434 20) scale(0.9166666666666666)" fill="none" stroke="#111519" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"><path d="M7 7h10v10"/><path d="M7 17 17 7"/></g><g transform="translate(434 20) scale(0.9166666666666666)" fill="none" stroke="#ffffff" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M7 7h10v10"/><path d="M7 17 17 7"/></g></g>
     </a>
 </svg>
