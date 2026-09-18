@@ -32,11 +32,12 @@ engine dependencies are pinned to 0.1.5-rc.1. HOME, USERPROFILE, DSH_HOME and se
 storage are isolated. No production settings or credentials are copied.
 
 The animated README logos reuse the same whale poses as the captured preview.
-They run at a slower 5.2-second cycle: `我想要` becomes an outlined
-`☆ 星标` button, then the yellow star lights, expands and settles while
-particles radiate outward; the whale finishes with `≧∀≦`. The English logo
-uses `I desire`, `☆ Star` and `★ Starred`. Only body, blink, fin and tail
-poses remain; spout, heart and sleep overlays are removed.
+The CTA is deliberately attached to the whale's head so it reads as the first
+thing to click: `我想要` appears first, then a large outlined star button,
+followed by the yellow filled state, a short scale pulse, particles and the
+whale's `≧∀≦` finish. The English logo uses `I desire`, `Star this repo` and
+`Starred`. Only body, blink, fin and tail poses remain; spout, heart and sleep
+overlays are removed.
 The four files in `runtime/` preserve the original character cells, ANSI colors,
 attributes, capture timestamps, package versions and source ANSI SHA-256 hashes.
 Desktop capture uses 110 columns x 42 rows; narrow capture uses 58 x 36. The
