@@ -31,13 +31,21 @@ ConPTY and decodes its actual ANSI output with xterm-headless. DSH CLI and its
 engine dependencies are pinned to 0.1.5-rc.1. HOME, USERPROFILE, DSH_HOME and session
 storage are isolated. No production settings or credentials are copied.
 
-The animated README logos reuse the same whale poses as the captured preview.
-The CTA is deliberately attached to the whale's head so it reads as the first
-thing to click: `我想要` appears first, then a large outlined star button,
-followed by the yellow filled state and a short scale pulse; the
-whale's `≧∀≦` finish. The English logo uses `I desire`, `Star this repo` and
-`Starred`. Only body, blink, fin and tail poses remain; spout, heart and sleep
-overlays are removed.
+The animated README logos reuse a subset of the whale poses from the captured
+preview. The four CTA stages run in a 5200 ms loop: `我想要` → `点亮星标` →
+`感谢` → `已加星标`; the English equivalents are `I want` → `Star this repo` →
+`Thank you` → `Starred`. The `≧∀≦` expression accompanies the thank-you bubble.
+The stages do not overlap, and the starred button has no scale pulse. The logo
+uses eight body, blink, fin and tail frames over 5200 ms; this is independent of
+the preview's 22-frame, 1000 ms whale animation. Spout, heart and sleep overlays
+are omitted from the logo. OS reduced-motion preferences do not pause the logo.
+
+The 16 navigation tiles and two permission links use white text with dark
+outlines, plus white inner icon strokes over dark outer strokes. Light-mode
+surfaces follow `prefers-color-scheme`; the outlines remain visible on either
+surface. This media query follows the browser's exposed color preference, which
+may differ from a manually selected GitHub theme. Geometry and link targets are
+shared by the Chinese and English variants.
 The four files in `runtime/` preserve the original character cells, ANSI colors,
 attributes, capture timestamps, package versions and source ANSI SHA-256 hashes.
 Desktop capture uses 110 columns x 42 rows; narrow capture uses 58 x 36. The

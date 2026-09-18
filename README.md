@@ -1,6 +1,6 @@
 
 <p align="center">
-  <img src="docs/assets/readme/logo.svg" alt="dsh-TUI 动态 Logo：鲸鱼、我想要和 GitHub 黄色星标" width="560">
+  <img src="docs/assets/readme/logo.svg" alt="dsh-TUI 动态 Logo：鲸鱼、我想要、点亮星标、感谢、已加星标" width="560">
 </p>
 <p align="center">
   <strong>简体中文</strong> | <a href="README_EN.md">English</a>
@@ -24,9 +24,11 @@
 >An interactive terminal UI plugin for DeepSeek Harness: pixel-whale header, live work status, streaming thinking display, double-Esc time rewind, a context progress bar, and a TPS gauge.
 >Zero core changes, pure plugin mounting. Install to enable; uninstall leaves no core patches.
 
+> 当前处于公开测试阶段。依赖权限模型或特定终端行为前，请阅读[架构与限制](docs/architecture.md)。
+
 ## 🎉 官方收录
 
-本插件被 **DeepSeek Harness 官方公众号** 推文收录，也被 [dshfind](https://dshfind.com/ccch1mneyyy/dsh-TUI) 插件目录与 [GitHub Trending](https://trendshift.io/repositories/146168) 收录，同时登上了Github Treding日榜第七
+本插件被 **DeepSeek Harness 官方公众号** 推文收录，也被 [dshfind](https://dshfind.com/ccch1mneyyy/dsh-TUI) 插件目录收录，并在 [Trendshift](https://trendshift.io/repositories/146168) 展示的 GitHub Trending **TypeScript 日榜中位列第七**。
 
 <div align="center">
   <table>
@@ -43,7 +45,7 @@
         <br><br>
         <a href="https://trendshift.io/repositories/146168" title="GitHub Trending 日榜 #7 · TypeScript 口径"><img alt="Trendshift" src="https://trendshift.io/api/badge/trendshift/repositories/146168/daily?language=TypeScript"></a>
          <br>
-        <strong>dshfind Github Treding榜第七 </strong>
+        <strong>TypeScript 日榜第七</strong>
       </td>
     </tr>
   </table>
@@ -86,7 +88,7 @@
 
 ## 快速开始
 
-前置条件：安装[Nodejs](https://nodejs.org/zh-cn)与[deepseek-harness](https://github.com/deepseek-ai/deepseek-harness)，注册`DEEPSEEK_API_KEY`。
+前置条件：[Node.js](https://nodejs.org/zh-cn)（`^22.19 || >=24`）、交互式终端 TTY、官方 [DeepSeek Harness CLI](https://github.com/deepseek-ai/deepseek-harness) 与 `pnpm` 10+。模型请求还需配置 `DEEPSEEK_API_KEY`。
 
 安装命令：
 
@@ -145,6 +147,18 @@ TUI 启动失败时运行。子命令属于 npm 安装的启动器，仓库根�
 
 
 
+<details>
+<summary>补充使用说明与详细参考</summary>
+
+- 使用 `dsh-tui --resume`（或 `dst --resume`）恢复最近选中的会话；Windows 仓库启动脚本同样支持。
+- [安装与快速开始](docs/getting-started.md)：安装、profile 组合、更新与旧包迁移。
+- [交互与命令](docs/interaction.md)：快捷键、鼠标操作、问卷与会话工作流。
+- [配置参考](docs/configuration.md)、[架构与限制](docs/architecture.md)、[贡献与开发约定](docs/contributing.md)：配置、已知限制及开发验证。
+- [VS Code 使用指南](docs/vscode.md)：集成终端与配套扩展。
+- **Herdr**：可直接在 Herdr 面板中运行 `dsh-tui`；会报告空闲、工作中与等待输入状态，Herdr 外不启用该集成。通过 `herdr agent start --kind dsh-tui` 启动及服务重启后的自动恢复，仍依赖上游提供原生 agent kind。完整说明及保留的扩展参考见[英文版](README_EN.md#herdr)。
+
+</details>
+
 ## 插件扩展与开发指南
 
 想为 dsh-TUI 做插件/扩展？欢迎加入生态！
@@ -170,6 +184,8 @@ TUI 启动失败时运行。子命令属于 npm 安装的启动器，仓库根�
 已随 adapter 分层重构（#705）移除，`grants` 收窄为 `HostGrantFacade`，迁移细节见该 PR。
 
 
+
+核心仓库保持独立，社区插件由各自作者拥有并维护。生态组织维护收录与准入规则，不为社区插件的功能、质量或安全作担保；作者负责其维护与安全。
 
 ## 社区
 

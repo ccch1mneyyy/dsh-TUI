@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/assets/readme/logo-en.svg" alt="dsh-TUI animated logo: whale, I desire, and GitHub yellow star" width="560">
+  <img src="docs/assets/readme/logo-en.svg" alt="dsh-TUI animated logo: whale, I want, Star this repo, Thank you, and Starred" width="560">
 </p>
 
 <p align="center">
@@ -11,31 +11,48 @@
   <a href="https://github.com/ccch1mneyyy/dsh-TUI/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/ccch1mneyyy/dsh-TUI/actions/workflows/ci.yml/badge.svg"></a>
   <a href="LICENSE"><img alt="MIT License" src="https://img.shields.io/badge/license-MIT-263146?style=flat-square"></a>
   <img alt="Public beta" src="https://img.shields.io/badge/status-public%20beta-7da1de?style=flat-square">
-  <a href="https://github.com/ccch1mneyyy/dsh-TUI/stargazers"><img alt="GitHub stars" src="https://img.shields.io/github/stars/ccch1mneyyy/dsh-TUI?style=flat-square&color=4b6fff"></a>
-  <a href="https://www.npmjs.com/package/@deepseek-harness-tui/dsh-tui"><img alt="npm downloads" src="https://img.shields.io/npm/dm/@deepseek-harness-tui/dsh-tui?style=flat-square&color=4b6fff"></a>
-</p>
-
-<p align="center">
-  <a href="https://trendshift.io/repositories/146168" title="GitHub Trending Daily #7 · TypeScript"><img alt="Trendshift" src="https://trendshift.io/api/badge/trendshift/repositories/146168/daily?language=TypeScript"></a>
+  <img alt="Official feature" src="https://img.shields.io/badge/DeepSeek%20Harness%20Official%20WeChat-Featured-brightgreen">
 </p>
 
 # dsh-TUI
 
-`dsh-TUI` is an interactive terminal UI for DeepSeek Harness. It is mounted as
-a Cordis plugin and provides conversation, tool, session, and fullscreen
-terminal views while continuing to use the
-official DSH agent, model, tool, session, and persistence services.
-
-The project does not patch DeepSeek Harness core. Installing the plugin enables
-the interface, and removing it leaves no core modifications behind.
+> An interactive terminal UI plugin for DeepSeek Harness.
+> It provides a pixel-whale header, live work status, streaming thinking,
+> double-Esc history rewind, a context progress bar, TPS indicators, and more.
+> Zero core changes, pure plugin mounting: one command to install and one to
+> launch; uninstalling leaves no core patches.
 
 > Status: public beta. It is suitable for daily use and extension work. Read
 > [Architecture and limitations](docs/architecture.en.md) before relying on its
 > permission model or terminal-specific behavior.
 
-<p align="center">
-  <a href="https://dshfind.com/en/plugins/ccch1mneyyy/dsh-TUI"><img src="https://dshfind.com/api/card/ccch1mneyyy/dsh-TUI?lang=en" alt="dsh-TUI on dshfind"></a>
-</p>
+## 🎉 Official Recognition
+
+The plugin was featured by the **DeepSeek Harness official WeChat account**,
+listed in [dshfind](https://dshfind.com/en/plugins/ccch1mneyyy/dsh-TUI), and
+reached daily **#7 in the TypeScript ranking** shown by
+[Trendshift](https://trendshift.io/repositories/146168).
+
+<div align="center">
+  <table>
+    <tr>
+      <td align="center" valign="middle" width="50%">
+        <img src="screenshots/wechat-official.png" alt="dsh-TUI featured by the DeepSeek Harness official WeChat account" width="480">
+        <br>
+        <strong>DeepSeek Harness official WeChat feature</strong>
+      </td>
+      <td align="center" valign="middle" width="50%">
+        <a href="https://dshfind.com/en/plugins/ccch1mneyyy/dsh-TUI"><img src="https://dshfind.com/api/card/ccch1mneyyy/dsh-TUI?lang=en" alt="dsh-TUI on dshfind" width="420"></a>
+        <br>
+        <strong>dshfind plugin directory</strong>
+        <br><br>
+        <a href="https://trendshift.io/repositories/146168" title="GitHub Trending Daily #7 · TypeScript"><img alt="Trendshift" src="https://trendshift.io/api/badge/trendshift/repositories/146168/daily?language=TypeScript"></a>
+        <br>
+        <strong>Daily #7 · TypeScript ranking</strong>
+      </td>
+    </tr>
+  </table>
+</div>
 
 ## Preview
 
@@ -74,8 +91,9 @@ the interface, and removing it leaves no core modifications behind.
 
 ## Quick Start
 
-Prerequisites: an interactive terminal TTY, the official `dsh` CLI, and
-`pnpm` 10+. Model requests also require `DEEPSEEK_API_KEY`.
+Prerequisites: [Node.js](https://nodejs.org/en) (`^22.19 || >=24`), an interactive
+terminal TTY, the official [DeepSeek Harness CLI](https://github.com/deepseek-ai/deepseek-harness),
+and `pnpm` 10+. Model requests also require `DEEPSEEK_API_KEY`.
 
 ```sh
 # 1. Install the CLI and this plugin globally (ships the dsh-tui command)
@@ -124,6 +142,9 @@ The repository-root `dsh-tui.cmd` is a launch wrapper that goes straight to
 `dsh --profile` and carries no subcommands — subcommands belong to the
 npm-installed `dsh-tui` command.
 
+<details>
+<summary>Additional usage notes: Herdr, VS Code, updates, and migration</summary>
+
 ### Herdr
 
 Run `dsh-tui` directly in a [Herdr](https://herdr.dev) pane; no extra setup is
@@ -160,6 +181,11 @@ the launcher when versions disagree. The authoritative procedure is
 
 For migration from the former `dsh-cc-tui` package and `cc-tui` profile, see
 [Getting started](docs/getting-started.en.md#migrate-from-the-former-package).
+
+</details>
+
+<details>
+<summary>Detailed English reference: keybindings, configuration, architecture, limitations, and development</summary>
 
 ## Keybindings
 
@@ -413,6 +439,8 @@ git-hosted `prepare` scripts by default); install the registry package:
 `dsh plugin --profile dsh-tui add @deepseek-harness-tui/dsh-tui`. Rendering, questionnaire, or tool-card
 changes also require the relevant regression scripts.
 
+</details>
+
 ## Plugin Ecosystem
 
 Want to build a plugin or extension for dsh-TUI? Join the ecosystem:
@@ -486,11 +514,6 @@ responsible for their maintenance and security.
   <a href="docs/architecture.en.md#permissions-and-security-boundary"><img src="docs/assets/readme/security-link-en.svg" width="288" height="44" alt="Full permission rules and known limitations"></a>
 </p>
 
-## Featured by DeepSeek Harness
-
-The DeepSeek Harness official WeChat account featured this plugin among its
-early user-built extensions. [View the feature screenshot](screenshots/wechat-official.png).
-
 ## Acknowledgments
 
 - The pixel whale's 22 hand-drawn frames (drawn cell by cell in Excel) and
@@ -504,9 +527,11 @@ early user-built extensions. [View the feature screenshot](screenshots/wechat-of
 Community, related projects, and companion tools built by friends:
 [see the links page](docs/links.md)
 
-## Trend
+## Stars
 
+<!-- star-history:start -->
 [![Star History](https://raw.githubusercontent.com/ccch1mneyyy/dsh-TUI/bot-star-history/assets/star-history/star-history.png)](https://star-history.com/#ccch1mneyyy/dsh-TUI&Date)
+<!-- star-history:end -->
 
 ## License
 
