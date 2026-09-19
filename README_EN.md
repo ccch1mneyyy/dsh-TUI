@@ -116,8 +116,9 @@ the interface, and removing it leaves no core modifications behind.
   clicking), while `Shift`/`Alt`/`Ctrl`+drag still selects text.
 - **Visible agent state**: live activity, segmented context usage, TPS, cache
   hit rate, reasoning effort, input/output tokens, and Git/session metadata.
-  In fullscreen, hovering a truncated tool header, wrapped user prompt, or
-  session title for ~600ms opens a tooltip with the full content.
+  In fullscreen, hovering a truncated tool header or session title for
+  ~600ms opens a tooltip with the full content; tooltips never appear while
+  a text selection is active (the card would cover the cells being copied).
 - **Activity animation**: `moon8` is the default. A legacy local `claude`
   setting is read as `moon8`, and the picker lists current presets only.
 - **Complete session workflow**: `/resume`, `/home`, `/agentview`, `/bg` and the

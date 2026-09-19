@@ -374,7 +374,10 @@ const GROUPS = {
     ["verify-composer-draft-handoff", ['node', '--import', 'tsx/esm', 'scripts/verify-composer-draft-handoff.tsx']],
 // Tooltip 悬停提示回归：悬停截断元素 ~600ms 后弹完整内容浮层——延迟未到
 // 不出现、到点内容正确、leave 即隐、leave 早于延迟取消、自定义 delayMs、
-// 多行内容锚点上方、屏顶锚点转下方、resize 隐藏（几何失效）、窄屏水平钳制。
+// 多行内容锚点上方、屏顶锚点转下方、resize 隐藏（几何失效）、窄屏水平钳制；
+// 复制干扰：折行的用户消息不再武装浮层（文本本就全可见，且卡片会盖住
+// 待复制单元格），文本选区拖动/存续期间整个浮层层熄灭（dwell 照常触发
+// 但不上屏），选区落定清掉 pending 卡片，随后悬停恢复。
     ["verify-tooltip", ['node', '--import', 'tsx/esm', 'scripts/verify-tooltip.tsx']],
 // 工具卡头部 hover tooltip 内容门控回归：头部已经完整显示（单行标题 / 未
 // 超出预算的 args）时悬停不再弹「重复可见文本」的浮层，改弹卡片元数据
