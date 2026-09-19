@@ -299,6 +299,7 @@ const dict = {
   'context-panel-expand': { zh: ' 展开', en: ' to expand' },
   'context-panel-collapse': { zh: ' 折叠', en: ' to collapse' },
   'copied-chars': { zh: '已复制 {{n}} 个字符', en: 'Copied {{n}} characters' },
+  'copy-refused-stale': { zh: '选区内容已变化，已取消复制', en: 'Content under the selection changed; copy cancelled' },
   'activity-current-preset': { zh: '当前预设  {{name}}', en: 'Current preset  {{name}}' },
   'activity-switch-hint': { zh: '切换      /activity（选择器）或 /activity frames <名>', en: 'Switch      /activity (picker) or /activity frames <name>' },
   'activity-persist-hint': { zh: '持久化    ~/.dsh-tui/working-activity.json（重启后仍生效）', en: 'Persisted    ~/.dsh-tui/working-activity.json (survives restart)' },
