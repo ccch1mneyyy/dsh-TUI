@@ -8,16 +8,25 @@
  *   2. setScrollGutter('scrollbar')：██ 滑块出现，钉底时贴底；无 ▴▾ tick；
  *   3. 上滚：滑块上移且仍在轨道内；
  *   4. 点击轨道顶部：滚到顶（问题 1 可见），滑块贴顶；
+ *   4b. 拖拽轨道到底部：连续滚动到末期内容，且不建立选区、不触发
+ *       copy-on-select（全屏 alt-screen 拖拽不再落入选字路径）；
  *   5. setScrollGutter('hidden')：右缘无任何 gutter glyph，转译区占满宽；
- *   6. 切回 timeline：rail 恢复。
+ *   6. 切回 timeline：rail 恢复；
+ *   7. 记录型 handle 直接挂载 ScrollbarGutter：绝对映射语义（拖到哪滚到哪，
+ *       与轨道点击同一 trackScrollTop）、未移动 press+release 回放点击、
+ *       Shift+拖动仍走选区路径。
  *
  * 运行：node --import tsx/esm scripts/verify-scrollbar-gutter.tsx
  */
 process.env.FORCE_COLOR = '3'
 process.env.DSH_TUI_THEME = 'dark'
 process.env.DSH_TUI_LANG = 'zh'
+// 强制 OSC 52 复制路径：拖拽若意外落入选字路径，复制会写进假 stdout，
+// 断言可据此发现回归（见 4b）。
+process.env.SSH_CONNECTION = 'headless-test'
+delete process.env.TMUX
 
-const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render, AlternateScreen }, { Chat }, { QuestionStore }, { LOCAL_COMMANDS, completeCommands }, { settle, settled, sleep }] = await Promise.all([
+const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render, AlternateScreen, Box, useInput }, { Chat }, { QuestionStore }, { LOCAL_COMMANDS, completeCommands }, { ScrollbarGutter }, { default: instances }, { settle, settled, sleep }] = await Promise.all([
   import('node:stream'),
   import('react'),
   import('@xterm/headless'),
@@ -25,6 +34,8 @@ const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render, Alternat
   import('../src/screens/Chat.js'),
   import('../src/dsh-adapter/questions.js'),
   import('../src/commands.js'),
+  import('../src/components/ScrollbarGutter.js'),
+  import('../src/ink/instances.js'),
   import('./lib/term-test.mjs'),
 ])
 
@@ -36,9 +47,14 @@ function check(name: string, ok: boolean, extra = '') {
 }
 
 const term = new XTerm({ cols: COLS, rows: ROWS, scrollback: 0, allowProposedApi: true })
+const rawChunks: string[] = []
+const osc52Count = (): number => rawChunks.join('').match(/\x1b\]52;c;/g)?.length ?? 0
 class FakeStdout extends Writable {
   columns = COLS; rows = ROWS; isTTY = true
-  _write(chunk: unknown, _e: BufferEncoding, cb: () => void) { term.write(String(chunk), cb) }
+  _write(chunk: unknown, _e: BufferEncoding, cb: () => void) {
+    rawChunks.push(String(chunk))
+    term.write(String(chunk), cb)
+  }
 }
 class FakeStderr extends Writable { isTTY = true; _write(_c: unknown, _e: BufferEncoding, cb: () => void) { cb() } }
 class FakeStdin extends PassThrough {
@@ -135,6 +151,10 @@ const clickAt = (col: number, row: number) => {
   stdin.write(`\x1b[<0;${col};${row}M`)
   stdin.write(`\x1b[<0;${col};${row}m`)
 }
+// SGR 拖拽序列（1-based 坐标）：button 32 = motion bit。
+const dragAt = (col: number, row: number) => stdin.write(`\x1b[<0;${col};${row}M`)
+const dragMotion = (col: number, row: number) => stdin.write(`\x1b[<32;${col};${row}M`)
+const dragRelease = (col: number, row: number) => stdin.write(`\x1b[<0;${col};${row}m`)
 
 // ── 1. 默认 timeline ──
 // 各块断言均在 settle 捕获的同一快照 snap 上求值：等待条件与断言共用快照，无分叉。
@@ -198,7 +218,31 @@ await wheel(true, 16)
     `top4=${JSON.stringify(lines.slice(0, 4).map(l => l.trimEnd().slice(0, 24)))}`)
 }
 
-// ── 5. 切 hidden：无 gutter（whale 的 █ 不算——只查 timeline/scrollbar glyph）──
+// ── 4b. 拖拽轨道到底部：连续滚动；不落入选字/复制路径 ──
+// 全屏 alt-screen 开着鼠标上报，未修饰左键拖拽会命中轨道的 onDragStart
+// （拖拽协议），不再走 startSelection；带位移的 release 也不会 copy-on-select。
+{
+  const [top, bottom] = gutterRange()
+  const end = bottom - 1
+  const oscBefore = osc52Count()
+  dragAt(COLS, top + 1)
+  dragMotion(COLS, top + Math.floor((bottom - top) / 2))
+  dragMotion(COLS, end)
+  dragRelease(COLS, end)
+  let lines: string[] = []
+  const scrolled = await settled(() => {
+    lines = screenLines()
+    return lines.slice(0, 30).some(l => l.includes('回复 8'))
+  })
+  check('拖拽轨道：转录连续滚动到末期内容（回复 8 可见）', scrolled,
+    `head=${JSON.stringify(lines.slice(0, 2).map(l => l.trimEnd().slice(0, 16)))}`)
+  const ink = instances.get(stdout) as unknown as { hasTextSelection?: () => boolean } | undefined
+  check('拖拽滚动条不建立文本选区', ink?.hasTextSelection?.() === false, `sel=${ink?.hasTextSelection?.()}`)
+  check('拖拽滚动条不触发 copy-on-select（无 OSC 52）', osc52Count() === oscBefore,
+    `osc52=${osc52Count()} before=${oscBefore}`)
+}
+
+// ─ 5. 切 hidden：无 gutter（whale 的 █ 不算——只查 timeline/scrollbar glyph）──
 const hasGutterGlyph = (): boolean => {
   const [top, bottom] = gutterRange()
   let anyGlyph = false
@@ -233,5 +277,101 @@ setGutter('timeline')
 }
 
 await inst.unmount()
+
+// ─ 7. 拖拽协议语义：记录型 handle 直接挂载 ScrollbarGutter ──
+// 真实 Chat 的 handle 不可注入，这里用确定性几何（viewport=20、content=120
+// ⇒ thumbH=3、trackH=17、maxScroll=100）逐步断言绝对映射的 trackScrollTop
+// 取值，并覆盖未移动点击回放与 Shift 选区路径。组件与真实 Chat 同走
+// AlternateScreen + App 的鼠标/拖拽分派，选字路径行为一致。
+{
+  const PROBE_VIEWPORT = 20, PROBE_CONTENT = 120
+  const probeThumbH = Math.max(2, Math.round((PROBE_VIEWPORT * PROBE_VIEWPORT) / PROBE_CONTENT))
+  const probeTrackH = Math.max(1, PROBE_VIEWPORT - probeThumbH)
+  const probeMaxScroll = PROBE_CONTENT - PROBE_VIEWPORT
+  const expectTop = (y: number): number =>
+    y <= 0 ? 0 : y >= probeTrackH ? probeMaxScroll : Math.round((y / probeTrackH) * probeMaxScroll)
+  const calls: number[] = []
+  let fakeScrollTop = 0
+  const fakeHandle = {
+    scrollTo(y: number) { calls.push(y); fakeScrollTop = Math.max(0, Math.floor(y)) },
+    scrollBy() {}, scrollToElement() {}, scrollToBottom() {},
+    getScrollTop: () => fakeScrollTop, getPendingDelta: () => 0,
+    getScrollHeight: () => PROBE_CONTENT, getFreshScrollHeight: () => PROBE_CONTENT,
+    getViewportHeight: () => PROBE_VIEWPORT, getViewportTop: () => 0,
+    isSticky: () => false, subscribe: () => () => {}, setClampBounds() {},
+  }
+  class ProbeStdin extends PassThrough {
+    isTTY = true
+    setRawMode() { return this }
+    ref() { return this }
+    unref() { return this }
+  }
+  class ProbeStdout extends Writable {
+    columns = COLS; rows = 30; isTTY = true
+    _write(_c: unknown, _e: BufferEncoding, cb: () => void) { cb() }
+  }
+  class ProbeStderr extends Writable { isTTY = true; _write(_c: unknown, _e: BufferEncoding, cb: () => void) { cb() } }
+  const probeIn = new ProbeStdin(), probeOut = new ProbeStdout(), probeErr = new ProbeStderr()
+  const pPress = (row: number) => probeIn.write(`\x1b[<0;1;${row + 1}M`)
+  const pMotion = (row: number) => probeIn.write(`\x1b[<32;1;${row + 1}M`)
+  const pRelease = (row: number) => probeIn.write(`\x1b[<0;1;${row + 1}m`)
+  // 带 Shift 位（0x04）的 press/motion/release：不打开拖拽会话，走选区路径。
+  const pShiftPress = (row: number) => probeIn.write(`\x1b[<4;1;${row + 1}M`)
+  const pShiftMotion = (row: number) => probeIn.write(`\x1b[<36;1;${row + 1}M`)
+  const pShiftRelease = (row: number) => probeIn.write(`\x1b[<4;1;${row + 1}m`)
+  function ProbeScene() {
+    useInput(() => {})
+    return (
+      <AlternateScreen>
+        <Box flexDirection="column">
+          <ScrollbarGutter handle={fakeHandle as any} terminalWidth={COLS} />
+        </Box>
+      </AlternateScreen>
+    )
+  }
+  const probeInst = await render(<ProbeScene />, {
+    stdout: probeOut as any, stdin: probeIn as any, stderr: probeErr as any,
+    exitOnCtrlC: false, patchConsole: false,
+  })
+  const probeInk = instances.get(probeOut as any) as unknown as { hasTextSelection?: () => boolean } | undefined
+
+  // a. press → motion(4) → motion(10) → release(15)：首个 motion 同帧并发
+  //    dragstart + dragmove（App 语义），因此每一步都按 localRow 映射。
+  calls.length = 0
+  pPress(0)
+  pMotion(4)
+  pMotion(10)
+  pRelease(15)
+  await settle(() => calls.length >= 4)
+  const expectDrag = [expectTop(4), expectTop(4), expectTop(10), expectTop(15)]
+  check('拖拽映射：按轨道行依次收到预期 scrollTo（绝对映射）',
+    JSON.stringify(calls) === JSON.stringify(expectDrag),
+    `calls=${JSON.stringify(calls)} expect=${JSON.stringify(expectDrag)}`)
+  check('拖拽映射：未建立文本选区', probeInk?.hasTextSelection?.() === false,
+    `sel=${probeInk?.hasTextSelection?.()}`)
+  // copy-on-select 不在此断言：本场景不挂 useCopyOnSelect，OSC 52 恒不会
+  // 出现（真实覆盖在 4b 的 Chat 场景）。
+
+  // b. 未移动 press+release：拖拽会话休眠，release 回放点击 → 点击跳转仍生效。
+  calls.length = 0
+  pPress(6)
+  pRelease(6)
+  await settle(() => calls.length >= 1)
+  check('未移动 press+release：点击跳转照常触发',
+    JSON.stringify(calls) === JSON.stringify([expectTop(6)]), `calls=${JSON.stringify(calls)}`)
+
+  // c. Shift+拖动：不打开拖拽会话，仍走选区路径，且不触发拖拽滚动。
+  calls.length = 0
+  pShiftPress(0)
+  pShiftMotion(8)
+  const shiftSelected = await settled(() => probeInk?.hasTextSelection?.() === true)
+  pShiftRelease(8)
+  probeIn.write('\x1b')
+  check('Shift+拖动：仍走选区路径且不触发拖拽滚动',
+    shiftSelected && calls.length === 0, `sel=${shiftSelected} calls=${JSON.stringify(calls)}`)
+
+  probeInst.unmount()
+}
+
 console.log(failed === 0 ? '\nALL PASS' : `\n${failed} 项失败`)
 process.exit(failed === 0 ? 0 : 1)

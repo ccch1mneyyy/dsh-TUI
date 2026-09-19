@@ -1,5 +1,6 @@
 import React from 'react'
 import { Box, Text, NoSelect, type ScrollBoxHandle } from '../ui.js'
+import type { DragEvent } from '../ink/events/drag-event.js'
 import { RAIL_MIN_TERMINAL_WIDTH, RAIL_WIDTH } from '../ink/timeline-rail.js'
 
 /** Thumb glyph across the 2-col gutter: solid, clearly positional —
@@ -19,16 +20,24 @@ const CHIP_DWELL_MS = 250
  *  - clicking the track scrolls the clicked position to the viewport top
  *    (classic scrollbar semantics — the thumb centers under the click
  *    through the follow-up renders);
+ *  - dragging the track scrubs the transcript: the drag protocol's
+ *    per-target localRow maps through the SAME trackScrollTop as a click
+ *    (absolute mapping — drag to point, no grabbed thumb offset), so a
+ *    drag is a continuous run of click-to-position jumps. The mapping only
+ *    reads the render-time maxScroll/trackH and never re-reads scrollTop
+ *    mid-gesture, so a throttled/clamped scrollTo cannot feed back into the
+ *    pointer mapping (no jitter). Dragging the thumb therefore lands the
+ *    pointer's row at the viewport top, exactly like clicking that row;
  *  - the gutter is permanent while scrollable (Qwen's rule: an
  *    auto-hiding gutter that changes content width rewraps everything);
  *    hidden below 60 terminal columns or when the content fits (inline
  *    mode keeps the terminal's native scrollback);
  *  - NoSelect fences the glyphs out of click-drag text selection; the
- *    wheel over the gutter scrolls the transcript.
- *
- * Thumb dragging is intentionally NOT implemented (Grok's MVP rule): a
- * proportional thumb encodes position, and the tick rail remains the
- * semantic navigator. Click-to-position covers the same need.
+ *    wheel over the gutter scrolls the transcript. Because the track is a
+ *    drag target, an unmodified left drag scrubs instead of selecting, and
+ *    multi-clicks on the track no longer feed the select-line chain;
+ *    Shift/Alt/Ctrl drags never open a drag session and keep the
+ *    selection path.
  */
 export function ScrollbarGutter({
   handle,
@@ -79,10 +88,15 @@ export function ScrollbarGutter({
 
   // Clicking the track maps the clicked row's position on the track back
   // to a scrollTop and scrolls that content position to the viewport top.
+  // Dragging reuses the same mapping per motion through the drag protocol's
+  // target-relative localRow (the outer track is the single drag target).
   const trackScrollTop = (y: number): number => {
     if (y <= 0) return 0
     if (y >= trackH) return maxScroll
     return Math.round((y / trackH) * maxScroll)
+  }
+  const applyDragRow = (event: DragEvent): void => {
+    handle.scrollTo(trackScrollTop(event.localRow))
   }
 
   const rows: React.ReactNode[] = []
@@ -158,11 +172,16 @@ export function ScrollbarGutter({
           (same as ScrollBox's viewport) — wheel over the gutter scrolls
           the transcript, the gutter has no scroll of its own. The row
           above extends past the page margin (Chat), so this track
-          naturally lands at the terminal's right edge. */}
+          naturally lands at the terminal's right edge. The whole track is
+          the single drag target: its localRow is the hovered row, so drag
+          start/move/end all scrub through trackScrollTop. */}
       <ink-box
         onWheel={e => {
           if (e.deltaY !== 0) handle.scrollBy(e.deltaY)
         }}
+        onDragStart={applyDragRow}
+        onDragMove={applyDragRow}
+        onDragEnd={applyDragRow}
         style={{ flexDirection: 'column', flexShrink: 0, width: RAIL_WIDTH }}
       >
         {rows}

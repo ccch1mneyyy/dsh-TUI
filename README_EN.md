@@ -102,8 +102,11 @@ the interface, and removing it leaves no core modifications behind.
   few turns, the full history stays one click away (clicking a folded tick
   reveals that turn and scrolls to it). When not pinned to the bottom,
   `Enter`/`End` jump back in one step (no blank flash from long distances)
-  and a clickable new-messages pill stays in view; the right gutter offers
-  timeline / scrollbar / hidden modes.
+  and a clickable new-messages pill stays in view; in fullscreen, the right
+  gutter offers timeline / scrollbar / hidden modes. In scrollbar mode the
+  track is also a drag target: an unmodified left drag scrubs the transcript
+  continuously to the pointer's track position (a drop-in extension of track
+  clicking), while `Shift`/`Alt`/`Ctrl`+drag still selects text.
 - **Visible agent state**: live activity, segmented context usage, TPS, cache
   hit rate, reasoning effort, input/output tokens, and Git/session metadata.
   In fullscreen, hovering a truncated tool header, wrapped user prompt, or
