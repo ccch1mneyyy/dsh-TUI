@@ -35,7 +35,6 @@ process.env.DSH_TUI_LANG = 'zh'
 process.env.DSH_TUI_ADAPTER_MODE = 'new'
 
 const { Context } = await import('@deepseek-ai/cordis')
-const pluginHostRow = await import('../src/dsh-adapter/plugin-host.js')
 const { TuiEffectLedgerRuntime, EFFECT_LEDGER_FILE } = await import('../src/dsh-adapter/effect-ledger.js')
 const { TuiStatusRuntime } = await import('../src/dsh-adapter/status.js')
 const { default: TuiShortcutRuntime } = await import('../src/dsh-adapter/shortcuts.js')
@@ -43,11 +42,10 @@ const { default: TuiThemeRuntime } = await import('../src/dsh-adapter/themes.js'
 const { loadSpecData } = await import('../src/adapter/standard/registry.js')
 const { check: schemaCheck } = await import('../src/adapter/standard/schema-check.js')
 const { DATA_DIR } = await import('../src/utils/paths.js')
-const { mountAdmitted, testManifest, STORAGE_COORDINATE } = await import('../scripts/lib/plugin-test-utils.js')
+const { mountAdmitted, mountAdmissionHost, testManifest, STORAGE_COORDINATE } = await import('../scripts/lib/plugin-test-utils.js')
 import type { LedgerEntry } from '../src/dsh-adapter/effect-ledger.js'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
-const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
 const cleanup: string[] = [fakeHome]
 
 let checks = 0
@@ -99,8 +97,7 @@ const fileA = join(fakeHome, 'ledger-a.jsonl')
   const ctx = new Context()
   const ledger = new TuiEffectLedgerRuntime(ctx, { file: fileA, generationId: 'gen-battery' })
   const admissionRoot = new Context()
-  admissionRoot.plugin({ name: pluginHostRow.name, apply: pluginHostRow.apply })
-  await sleep(50)
+  await mountAdmissionHost(admissionRoot, 'ledger battery A')
   const alpha = await namedCtx(admissionRoot, 'alpha')
   const entries: LedgerEntry[] = [
     { operation: 'create', resource: { kind: 'scene', id: 'scene-a' }, result: 'applied' },
@@ -216,8 +213,7 @@ const fileA = join(fakeHome, 'ledger-a.jsonl')
   const ctx = new Context()
   // 生产接线：整行挂载（host → ledger → storage → observer），台账的
   // generationId 来自 tuiPluginHost 服务而非 fallback。
-  ctx.plugin({ name: pluginHostRow.name, apply: pluginHostRow.apply })
-  await sleep(50)
+  await mountAdmissionHost(ctx, 'ledger battery F')
   const ledger = ctx.get('tuiEffectLedger')
   check1('ledger service mounts via the plugin-host row', ledger !== undefined)
   const alpha = await namedCtx(ctx, 'alpha', 'com.example.alpha', [
