@@ -42,6 +42,13 @@ import { FileSuggestions } from './FileSuggestions.js'
 import { HelpMenu } from './HelpMenu.js'
 import { OverlayAbove } from './OverlayAbove.js'
 import { SuggestionCard, cardContentWidth } from './SuggestionCard.js'
+import {
+  filterLiveImageBindings,
+  isUsableDraftSnapshot,
+  resolveBindingGeneration,
+  type PromptDraftCache,
+  type PromptDraftImage,
+} from './promptDraftCache.js'
 
 const HISTORY_LIMIT = 50
 
@@ -393,15 +400,8 @@ const DOUBLE_CLICK_MS = 500
  */
 export interface PromptController {
   hasText(): boolean
-  /** The draft text, for a caller that must not lose it (see {@link PromptDraftStore}). */
+  /** The draft text, for a caller that must not lose it (see {@link PromptDraftCache}). */
   text(): string
-  /**
-   * How many times the draft has been written since mount. A caller that must
-   * tell "stale text left over from the previous conversation" apart from "text
-   * a command just restored into the new one" compares this across a session
-   * change: a bump means the composer was written for the new session.
-   */
-  editSequence(): number
   /** Current capability-backed draft images in token order, without reads. */
   previewImages?(): readonly { image: TranscriptImage; title: string }[]
   clear(): void
@@ -426,37 +426,32 @@ export interface PromptController {
   vimActive(): boolean}
 
 /**
- * Owner-held storage for the composer draft, so a screen that unmounts the
+ * Owner-held slot for the composer draft, so a screen that unmounts the
  * prompt (every early return in Chat) does not discard what the user typed.
  *
- * Only the FACTS the composer can resume from are stored: the raw text (staged
- * `[Image #N]` tokens included, so the capability bindings come back with it)
- * and the caret offset. Selection and the fold block are cover state for a
- * visible composer, not content, and are rebuilt normally on the next edit.
+ * The composer writes ONE complete snapshot as it unmounts and consumes it on
+ * the way back; the shape and the reasoning live in `promptDraftCache.ts`.
  */
-export interface PromptDraftStore {
-  text: string
-  cursor: number
-  /** Session id the stored draft belongs to; a mismatch means "not this one". */
-  sessionId?: string
-}
-
 export interface PromptInputProps {
   channel: Channel
   /** Keep the draft mounted while another prompt-slot panel owns the UI. */
   suspended?: boolean
   /**
-   * Owner-held storage for the unsent draft.
+   * Owner-held slot for the unsent draft.
    *
    * The prompt owns its text in local state, and several screens REPLACE the
    * conversation (the session screen, the session tree, settings, the jobs and
    * subagent panels, the trajectory scene) — early returns that unmount this
    * component and would take a half-written prompt down with it. Chat owns the
-   * store, so the text, its caret and its image tokens survive that unmount and
-   * come back when the composer does. The owner also clears it on a session
+   * slot, so the text, its caret AND its image bindings survive that unmount
+   * and come back when the composer does. The owner also drops it on a session
    * change, so a draft can never leak into a different conversation.
+   *
+   * Nothing is written from render: a commit-time assignment would run before
+   * the restore effect has read the slot and overwrite the draft with the
+   * empty first value.
    */
-  draftStore?: PromptDraftStore
+  draftCache?: PromptDraftCache
   /** Whether the `?` help menu is open (state lives in the Chat screen). */
   helpOpen: boolean
   onToggleHelp(): void
@@ -555,7 +550,7 @@ export interface PromptInputProps {
 export function PromptInput({
   channel,
   suspended = false,
-  draftStore,
+  draftCache,
   helpOpen,
   onToggleHelp,
   onRunCommand,
@@ -584,33 +579,39 @@ export function PromptInput({
   // while still handing the draft back.
   const [value, setValue] = React.useState('')
   const [cursor, setCursor] = React.useState(0)
-  /** Latest live draft, for the unmount hand-off back to the owner's store. */
-  const draftValueRef = React.useRef('')
-  const draftCursorRef = React.useRef(0)
   /**
    * Adopt the owner's draft ONCE, after mount.
    *
-   * This is where a screen swap gives the text back: the store outlives this
-   * component, so a remount picks up what the user had written. It runs only
-   * while the store still holds something, and consumes it immediately, so it
-   * can never fight a later edit or re-apply itself on an unrelated re-render.
+   * This is where a screen swap gives the draft back: the slot outlives this
+   * component, so a remount picks up what the user had written — text, caret
+   * and the image bindings behind the visible `[Image #N]` tokens.
+   *
+   * It runs as an effect rather than as the `useState` initial value on
+   * purpose. A composer whose FIRST frame is already non-empty moves the
+   * transcript's restored scroll position (`repro-resume-position`); adopting
+   * after the first commit keeps that frame identical to a fresh composer. The
+   * slot is consumed here, and the composer never writes to it while mounted,
+   * so the empty first value cannot overwrite the draft before this reads it.
    */
   const adoptDraft = React.useRef(true)
-  /** Session id of the PREVIOUS render; a change means the conversation
-   *  underneath the composer was replaced. */
-  const sessionRef = React.useRef<string | undefined>(undefined)
   React.useEffect(() => {
-    if (draftStore === undefined || !adoptDraft.current) return
+    if (draftCache === undefined || !adoptDraft.current) return
     adoptDraft.current = false
-    const text = draftStore.text
-    draftStore.text = ''
-    draftStore.cursor = 0
+    const snapshot = draftCache.current
+    draftCache.current = null
+    if (!isUsableDraftSnapshot(snapshot, String(channel.agentId), resolveBindingGeneration(channel))) return
+    const text = snapshot.value
     if (text === '') return
+    const restoredCursor = normalizeCursorOffset(text, snapshot.cursor)
+    replaceDraftImages(filterLiveImageBindings(
+      snapshot.images,
+      stageId => channel.hasStagedImage?.(stageId) === true,
+    ).map(([token, stageId]) => ({ token, stageId })))
     valueRef.current = text
-    cursorRef.current = normalizeCursorOffset(text, text.length)
+    cursorRef.current = restoredCursor
     setValue(text)
-    setCursor(normalizeCursorOffset(text, text.length))
-  }, [draftStore])
+    setCursor(restoredCursor)
+  }, [draftCache])
   /**
    * Mouse text selection: UTF-16 offsets [start, end) in `value`, snapped
    * to grapheme boundaries, start ≤ end. Null = no selection. Created by
@@ -807,28 +808,10 @@ export function PromptInput({
   syncImageGeneration()
   valueRef.current = value
   cursorRef.current = cursor
-  /**
-   * Hand the draft to the owner's store on UNMOUNT, and drop it when the
-   * conversation underneath the composer was replaced.
-   *
-   * The hand-off deliberately does NOT write on every commit. Both shapes that
-   * do — a layout effect per commit, and a render-time assignment — leave
-   * `repro-resume-position` red: resuming a session parks the transcript
-   * mid-history instead of pinning it to the newest message. Recording the live
-   * value in refs during render and committing it in an unmount cleanup costs
-   * nothing while the composer is up and still holds the draft at the instant a
-   * screen swap replaces it.
-   *
-   * The switch check compares the id of the PREVIOUS render against this one.
-   * The store's own sessionId cannot drive it: that field is the verdict, not
-   * the fact, and it is written on every render anyway.
-   */
-  draftValueRef.current = value
-  draftCursorRef.current = cursor
-  if (draftStore !== undefined) {
-    draftStore.text = value
-    draftStore.cursor = cursor
-  }
+  // Nothing is written to the owner's draft slot here — see the unmount
+  // hand-off below. A commit-time write would run BEFORE the restore effect
+  // has consumed the slot, so the composer's own first (empty) value would
+  // erase the draft it just came back for.
   // Publish the live controller (fresh closure over `value` every render).
   // A prompt-slot panel withdraws the handle in the same commit: external
   // injection must not append/submit a hidden command draft while it waits
@@ -842,7 +825,6 @@ export function PromptInput({
     controllerRef.current = {
       hasText: () => value.length > 0,
       text: () => valueRef.current,
-      editSequence: () => inputEditSequenceRef.current,
       previewImages: () => composerImageRefsForText(valueRef.current, draftImagesRef.current).flatMap(ref => {
         const image = channel.stagedImage(ref.stageId)
         return image === undefined ? [] : [{ image, title: ref.token.slice(1, -1) }]
@@ -933,9 +915,45 @@ export function PromptInput({
     return () => {
       if (escTimerRef.current) clearTimeout(escTimerRef.current)
       if (hoverLeaveTimerRef.current) clearTimeout(hoverLeaveTimerRef.current)
-      // An async image read/stage may outlive this component. Revoke its
-      // draft lease so it cannot bind an invisible capability after unmount.
-      discardDraftImages()
+      /**
+       * Hand the draft to the owner's slot as this component goes away.
+       *
+       * This is the ONLY write to that slot, and it belongs here: it happens at
+       * the instant a screen replaces the composer, so it can neither race the
+       * restore effect nor change the transcript's first frame.
+       *
+       * `advanceDraftRevision` invalidates any image read/stage still in
+       * flight, so a late continuation cannot bind a capability into a composer
+       * that no longer exists. `clearVimUndo` releases the capabilities that
+       * only the undo stack was holding: they are not part of the draft, and
+       * nothing will ever restore them once this composer is gone.
+       *
+       * The stageIds the DRAFT holds are deliberately NOT revoked — they are
+       * part of the snapshot the slot now keeps, and the restore filters out
+       * whatever the channel revoked in the meantime. Revoking them here is why
+       * an image draft used to come back as inert text.
+       */
+      advanceDraftRevision()
+      clearVimUndo()
+      const images: PromptDraftImage[] = [...draftImagesRef.current.entries()]
+        .map(([token, stageId]) => [token, stageId] as const)
+      draftImagesRef.current.clear()
+      if (draftCache === undefined) {
+        discardUnretainedImages(images.map(image => image[1]))
+        return
+      }
+      const text = valueRef.current
+      if (text === '' && images.length === 0) {
+        draftCache.current = null
+        return
+      }
+      draftCache.current = {
+        ownerAgentId: String(channel.agentId),
+        bindingGeneration: resolveBindingGeneration(channel),
+        value: text,
+        cursor: cursorRef.current,
+        images,
+      }
     }
   }, [])
   const { columns, rows: terminalRows } = useTerminalSize()

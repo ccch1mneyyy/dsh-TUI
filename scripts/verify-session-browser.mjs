@@ -563,64 +563,24 @@ instances.delete(process.stdout)
 }
 writeSessionPins([])
 
-// ── an unsent draft survives a screen that REPLACES the conversation ───────
+// ── the unsent draft leaves and comes back through the owner slot ──────────
 // Every screen Chat renders instead of the transcript (the session screen, the
 // tree, settings, the jobs panel, the trajectory scene) is an early return that
-// unmounts `PromptInput`, whose text lives in local state. Opening the session
-// screen and pressing Esc therefore used to come back to an EMPTY composer:
-// the half-written prompt was gone, and nothing was sent.
+// unmounts `PromptInput`, whose text lives in local state. The draft therefore
+// lives in a slot Chat owns, written as the composer unmounts and consumed as it
+// mounts.
 //
-// The claim under test is that the composer still HOLDS the draft after the
-// screen swap, so it is read through the composer's own controller — the same
-// accessor Chat uses. (Driving this through a spawned `/resume` would only test
-// the harness's stdin pacing, not draft ownership.)
-{
-  const { stdout: out3, stderr: err3, stdin: in3 } = makeStreams()
-  const channel3 = makeChannel()
-  const promptRef = { current: null }
-  const app3 = await render(
-    React.createElement(Chat, {
-      channel: channel3,
-      promptControllerRef: promptRef,
-      questionStore: { subscribe: () => () => {}, getSnapshot: () => null, answerCurrent: () => {} },
-      onExit() {},
-    }),
-    { stdout: out3, stderr: err3, stdin: in3, exitOnCtrlC: false, patchConsole: false },
-  )
-  for (const value of instances.values()) instances.set(process.stdout, value)
-  const screen3 = () => {
-    const buf = out3.term.buffer.active
-    return Array.from({ length: out3.term.rows }, (_, y) =>
-      (buf.getLine(buf.baseY + y)?.translateToString(true) ?? '').replace(/\s+$/, '')).join('\n')
-  }
-  const draftOf = () => promptRef.current?.text?.() ?? null
-  await settle(() => draftOf() !== null)
-  const DRAFT = 'UNSENT_DRAFT_890'
-  // Paced: this harness delivers a whole burst between renders and the composer
-  // consumes the first character of a burst before its input is live.
-  for (const character of DRAFT) {
-    in3.write(character)
-    await sleep(40) // 固定窗:pacing 逐字投喂：整串一次写入会丢首个字符
-  }
-  check('the composer holds the draft', await settled(() => draftOf() === DRAFT), String(draftOf()))
-  // The TRIP: a bare Esc closes the composer and mounts a screen that replaces
-  // the conversation (the rewind picker). That unmount is what used to take the
-  // draft with it. `Esc` + a space is one keypress: the trailing space is what
-  // makes the parser resolve the escape instead of leaving it pending.
-  in3.write('\u001b ')
-  await sleep(200) // 固定窗:探针 断言「换屏之后草稿仍在」——无单一可轮询锚点
-  check('the composer still holds the draft after the screen swap', draftOf() === DRAFT, String(draftOf()))
-  check('the draft never became a message',
-    channel3.calls.resume.length === 0 && channel3.rows.every(row => !String(row.text ?? '').includes(DRAFT)),
-    JSON.stringify(channel3.rows.map(row => row.text)))
-  app3.unmount()
-}
-// A draft belongs to one conversation. The owner empties its store the moment
-// the attached session changes, and the composer adopts that store on mount, so
-// the draft of a session you left is never carried into the next one. This is
-// asserted through the owner's store rather than through a mounted composer:
-// every real session change in this app goes through a screen that unmounts the
-// composer, so the store is the thing that decides what comes back.
+// The mount/unmount half of that contract is pinned deterministically by
+// `verify-composer-draft-handoff.tsx`, which mounts the real composer and really
+// unmounts it. It lives there because the failure is an ORDERING one (a
+// commit-time write runs before the restore effect), and because a screen swap
+// driven through this harness is not reliable evidence: an earlier version of
+// this block pressed `Esc` + space, which opens the rewind OVERLAY and never
+// unmounts anything, so it passed without exercising the hand-off at all.
+//
+// What belongs HERE is the rule Chat itself owns: a draft is dropped when the
+// attached session changes, so it can never follow the user into the next
+// conversation.
 {
   const { stdout: out4, stderr: err4, stdin: in4 } = makeStreams()
   const channel4 = makeChannel()
@@ -643,7 +603,60 @@ writeSessionPins([])
   }
   check('a draft is present before the switch',
     await settled(() => draftRef.current?.text?.() === 'SWITCH_DRAFT'), String(draftRef.current?.text?.()))
+
+  // The attached session is replaced underneath the composer.
+  channel4.agentId = 'other-session'
+  channel4.emit()
+  check('the draft of a replaced conversation is dropped',
+    await settled(() => draftRef.current?.text?.() === ''), String(draftRef.current?.text?.()))
   app4.unmount()
+}
+
+// ── a real Chat screen REPLACES the composer and gives the draft back ──────
+// The deterministic mount/unmount contract lives in
+// `verify-composer-draft-handoff.tsx`. What this block adds is the ROUTING: the
+// screen the user actually opens is an early return in Chat, so the composer is
+// really unmounted, and coming back really re-mounts it against the owner's
+// slot. Ctrl+T (the trajectory scene) is the one such screen that a single key
+// opens without typing into the composer first.
+{
+  const { stdout: out5, stderr: err5, stdin: in5 } = makeStreams()
+  const channel5 = makeChannel()
+  const draftRef = { current: null }
+  const { Chat: ChatDirect } = await import('../lib/types/screens/Chat.js')
+  const app5 = await render(
+    React.createElement(ChatDirect, {
+      channel: channel5,
+      promptControllerRef: draftRef,
+      questionStore: { subscribe: () => () => {}, getSnapshot: () => null, answerCurrent: () => {} },
+      onExit() {},
+    }),
+    { stdout: out5, stderr: err5, stdin: in5, exitOnCtrlC: false, patchConsole: false },
+  )
+  for (const value of instances.values()) instances.set(process.stdout, value)
+  const screen5 = () => {
+    const buf = out5.term.buffer.active
+    return Array.from({ length: out5.term.rows }, (_, y) =>
+      (buf.getLine(buf.baseY + y)?.translateToString(true) ?? '').replace(/\s+$/, '')).join('\n')
+  }
+  await settle(() => draftRef.current !== null)
+  const DRAFT5 = 'SCENE_ROUND_TRIP'
+  for (const character of DRAFT5) {
+    in5.write(character)
+    await sleep(40) // 固定窗:pacing 逐字投喂：整串一次写入会丢首个字符
+  }
+  check('the draft is typed before the screen swap',
+    await settled(() => draftRef.current?.text?.() === DRAFT5), String(draftRef.current?.text?.()))
+
+  in5.write('\u0014') // Ctrl+T: the trajectory scene, an early return
+  check('the scene screen replaced the composer',
+    await settled(() => draftRef.current === null), String(draftRef.current?.text?.()))
+
+  in5.write('\u001b') // Esc closes the scene and re-mounts the composer
+  check('coming back from the scene restores the draft',
+    await settled(() => draftRef.current?.text?.() === DRAFT5), String(draftRef.current?.text?.()))
+  check('and the transcript is back with it', /❯/.test(screen5()), flat(screen5()).slice(0, 200))
+  app5.unmount()
 }
 
 if (failed > 0) {

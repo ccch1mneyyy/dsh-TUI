@@ -170,6 +170,13 @@ async function verify(fullscreen: boolean, columns: number, entry: 'slash' | 'es
         assert.equal(await channel.rewindToNode(String(current.id), row.seq!, 'rewind'), prompt)
         // The tree action returns its draft to the UI; this case exercises
         // that backend sibling without coupling to the tree browser layout.
+        //
+        // Let Chat PROCESS the swap first. `rewindToNode` resolves as soon as
+        // the channel has committed the new session, while the screen that
+        // notices it — and drops the previous conversation's text — commits a
+        // beat later. Typing in that gap is a race, not a requirement, and it
+        // used to be won only by accident.
+        await sleep(150) // 固定窗:pacing 等 Chat 处理完会话切换再模拟用户输入
         stdin.write(prompt)
       } else if (entry === 'slash') {
         stdin.write('/rewind')

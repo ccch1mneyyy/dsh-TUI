@@ -367,6 +367,11 @@ const GROUPS = {
 // Esc 先清查询再退出、rename 后光标按 id 跟随目标（不是按行号）、
 // confirm-delete 只认无修饰 Enter、Esc 取消。真实 Chat 渲染驱动。
     ["verify-session-browser", ['node', 'scripts/verify-session-browser.mjs']],
+// 未发送草稿的跨屏交接回归：真实 PromptInput 真卸载再重挂——快照带上
+// 光标偏移与图片绑定、按 agent 与世代校验归属、被回收的图片能力不复活、
+// 空草稿不留残留。这条测的是「渲染期写回会先于认领 effect 覆盖草稿」，
+// 只靠打字或由浮层换屏都到不了。
+    ["verify-composer-draft-handoff", ['node', '--import', 'tsx/esm', 'scripts/verify-composer-draft-handoff.tsx']],
 // Tooltip 悬停提示回归：悬停截断元素 ~600ms 后弹完整内容浮层——延迟未到
 // 不出现、到点内容正确、leave 即隐、leave 早于延迟取消、自定义 delayMs、
 // 多行内容锚点上方、屏顶锚点转下方、resize 隐藏（几何失效）、窄屏水平钳制。

@@ -265,6 +265,12 @@ several sessions at once**. Switching away PARKS a session, it does not end it �
 a turn in flight keeps running and is still there when you come back. Leaving a
 session therefore needs no confirmation, and there is no "stop" meaning to it.
 
+Opening this screen **does not lose an unsent draft**: the composer unmounts with
+the screen, and Chat keeps the draft — text, caret position and the staged image
+references — until `Esc` brings it back. A draft belongs to its **session**, so
+it never follows you into another conversation; the message `/rewind` hands back
+belongs to the session the rewind created, so it does stay in the input.
+
 | Key | Action |
 | --- | --- |
 | `←` `→` | Choose the column that owns the keyboard (rail / sessions); exactly one `❯` is on screen |

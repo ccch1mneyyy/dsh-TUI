@@ -52,7 +52,8 @@ import type { TimelineSnapshot } from '../ink/timeline-rail.js'
 import { normalizeScrollGutter } from '../tuiDisplayPrefs.js'
 import { OverlayAbove } from '../components/OverlayAbove.js'
 import { TooltipLayer } from '../components/Tooltip.js'
-import { PromptInput, type PromptController, type PromptDraftStore } from '../components/PromptInput.js'
+import { PromptInput, type PromptController } from '../components/PromptInput.js'
+import type { PromptDraftCache } from '../components/promptDraftCache.js'
 import type { InjectController } from '../dsh-adapter/inject-channel.js'
 import { PromptEditorLayer, usePromptEditorOpen } from '../components/PromptEditor.js'
 import { GoalTodoPanel } from '../components/GoalTodoPanel.js'
@@ -1088,33 +1089,48 @@ export function Chat({
    * the conversation (the session screen, the tree, settings, the jobs and
    * subagent panels, the trajectory scene) unmounts the composer, and the
    * composer keeps its text in local state — so without this the half-written
-   * prompt died on the way in. The store lives here, outlives that unmount, and
+   * prompt died on the way in. The slot lives here, outlives that unmount, and
    * is dropped the moment the attached session changes so no draft can follow
    * the user into a different conversation.
    */
-  const promptDraftRef = React.useRef<PromptDraftStore>({ text: '', cursor: 0, sessionId: channel.agentId })
+  const promptDraftRef = React.useRef<PromptDraftCache>({ current: null })
   const draftSessionId = channel.agentId
+  /** Session the effect below last reconciled against; a change is a switch. */
+  const draftSessionRef = React.useRef(draftSessionId)
   /**
-   * Drafts belong to one conversation, so a session change has to drop the old
-   * one — but a REWIND hands the restored text to the composer in the very same
-   * commit that changes the session, and that text is what the user asked for.
+   * The session a fill Chat itself requested belongs to, if one is in flight.
    *
-   * The two are told apart by the composer's own edit counter: it advances
-   * whenever a command writes the composer, so a change since the previous
-   * commit means the text on screen belongs to the NEW session and must
-   * survive. No timing assumptions, no guessing which effect ran first.
+   * A rewind's restored message arrives in the same commit that replaces the
+   * session, and it belongs to the NEW binding — the user picked it. The
+   * composer cannot tell, so Chat says so here, at the two call sites that ask
+   * for a fill.
+   *
+   * Keyed by the session id rather than a bare flag, so it can only ever excuse
+   * the switch it was written for. Do NOT clear it when the composer consumes
+   * the fill: a child's layout effects run before the parent's, so the fill is
+   * consumed in the very commit this effect judges, and clearing it there would
+   * wipe the message the user just got back.
    */
-  const draftEditRef = React.useRef(0)
-  React.useEffect(() => {
-    const store = promptDraftRef.current
-    const sequence = promptControllerRef.current?.editSequence?.() ?? draftEditRef.current
-    const editedSinceLastRender = sequence !== draftEditRef.current
-    draftEditRef.current = sequence
-    if (store.sessionId === draftSessionId) return
-    store.sessionId = draftSessionId
-    if (editedSinceLastRender) return
-    store.text = ''
-    store.cursor = 0
+  const pendingFillRef = React.useRef<string | null>(null)
+  /**
+   * Drop the composer's text when the session underneath it is replaced.
+   *
+   * A LAYOUT effect, not a passive one: the clear has to land in the commit
+   * that swaps the session. A passive effect is flushed later, and anything
+   * typed in between (the tree's hand-off, a fast user) would be wiped with the
+   * old conversation's text. Which DRAFT the slot keeps is a separate question,
+   * answered by the snapshot's owner fields.
+   */
+  React.useLayoutEffect(() => {
+    if (draftSessionRef.current === draftSessionId) return
+    draftSessionRef.current = draftSessionId
+    // A stored draft can only belong to the conversation being replaced: the
+    // composer is the one that writes it, and it writes it on the way out.
+    promptDraftRef.current.current = null
+    if (pendingFillRef.current === draftSessionId) {
+      pendingFillRef.current = null
+      return
+    }
     promptControllerRef.current?.clear()
   }, [draftSessionId])
   const previewGallery = activePreview === null ? [] : activePreview.peek
@@ -2547,6 +2563,10 @@ export function Chat({
   const performRewind = async (row: ChatRow, mode: string | null = null) => {
     const text = await channel.rewindTo(row, mode)
     if (text !== null) {
+      // The restored message belongs to the binding `rewindTo` just created,
+      // not to the one it replaced: it is the user's choice, and the switch
+      // effect must not treat it as the old conversation's leftovers.
+      pendingFillRef.current = String(channel.agentId)
       // Put the restored message back in the prompt for re-editing.
       setHistoryFill(text)
       channel.notify(t('rewind-done'))
@@ -3710,6 +3730,10 @@ export function Chat({
         currentSessionId={channel.agentId}
         onClose={() => setTreeOpen(false)}
         onRestoreText={(text) => {
+          // The tree rewound to a node and is handing that turn's prompt back,
+          // exactly like the picker does. It belongs to the binding the tree
+          // action just created.
+          pendingFillRef.current = String(channel.agentId)
           setHistoryFill(text)
         }}
       />
@@ -4153,13 +4177,13 @@ export function Chat({
           key="prompt-input"
           channel={channel}
           suspended={promptReplacementOpen}
-          draftStore={promptDraftRef.current}
+          draftCache={promptDraftRef.current}
           helpOpen={helpOpen}
           onToggleHelp={() =>{  setHelpOpen(previous => !previous) }}
           onRunCommand={runCommand}
           selectionActive={promptSelectionActive}
           fillText={historyFill}
-          onFillConsumed={() =>{  setHistoryFill(null) }}
+          onFillConsumed={() => setHistoryFill(null)}
           onRewindRequest={openRewind}
           onBackgroundRequest={backgroundToAgentView}
           // The 🏠 at the head of the input row opens the same session screen

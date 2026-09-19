@@ -236,6 +236,8 @@ CI 回归都要跑。窄改动还要跑最近的聚焦脚本：
 | 输入框鼠标选区编辑（拖选/Shift+click/双击选词/删除替换/Esc 分层/Ctrl+C 复制、CJK 宽字符与 fold 侧钳制） | `node --import tsx/esm scripts/verify-input-selection.tsx` |
 | Sixel 编码、worker 缓存、缩略图/预览生命周期 | `node --import tsx/esm scripts/verify-terminal-images-sixel.tsx`、`node --import tsx/esm scripts/verify-sixel-transcript.tsx`；耗时对比 `node --import tsx/esm scripts/bench-sixel-encode.tsx` |
 | Markdown 独立节点（表格、mermaid 图）与流式分块间距 | `pnpm verify:table-layout`、`pnpm verify:mermaid-diagram`、`node --import tsx/esm scripts/verify-streaming-markdown-spacing.tsx` |
+| 跨进程会话占用账本（失败语义、严格读、锁回收、预约） | `pnpm verify:session-mounts` |
+| 未发送草稿的跨屏交接（快照、光标、图片绑定、归属） | `pnpm verify:composer-draft-handoff`；端到端换屏另见 `node scripts/verify-session-browser.mjs` |
 
 多数用普通 `node` 调用的脚本 import `lib/types/`——先跑 `pnpm build`。import
 TypeScript 源的脚本在头部声明 `node --import tsx/esm <script>` 形式。不要凭
