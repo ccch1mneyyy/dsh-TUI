@@ -2733,6 +2733,24 @@ export function PromptInput({
     windowStart,
     windowStart + visibleCount,
   )
+  // Caret-window jump: when the caret leaves MAX_VISIBLE_LINES (typing past
+  // it, arrow-key walks through a long prompt) the whole visible band is
+  // replaced in place — same-height rows, completely different text. The
+  // per-cell diff that repaints that band is exactly the path that goes
+  // haywire when the inline viewport is even one row out of sync with the
+  // terminal's scrollback ("重叠变花": old rows bleeding through the new
+  // ones). Same one-shot reanchor family as the shrink/floaters/editor
+  // patches above — the window jump is a viewport-level discontinuity, not
+  // an ordinary content edit.
+  const prevWindowStartRef = React.useRef(windowStart)
+  React.useLayoutEffect(() => {
+    if (windowStart !== prevWindowStartRef.current) {
+      prevWindowStartRef.current = windowStart
+      const ink = instances.get(process.stdout) ?? instances.values().next().value
+      ink?.invalidatePrevFrame()
+      ink?.reanchorViewport()
+    }
+  }, [windowStart])
   // useInput 的滚轮分支需要这份几何（它在这些派生之前注册）。
   if (expanded) {
     editorViewportRef.current = { maxRows: editorMaxRows, total: visualLines.length }
@@ -2740,10 +2758,20 @@ export function PromptInput({
 
   // Folded chip content: block stats + first-line preview + hover hint,
   // all pre-truncated to the input width (the row is one line, always).
+  // `·` separators are U+30FB KATAKANA MIDDLE DOT, NOT U+00B7: the latter
+  // is East-Asian-ambiguous (model 1 cell, CJK terminal fonts paint 2) and
+  // this row's stats→preview→hint truncation arithmetic all runs through
+  // stringWidth — a painted-wide separator shifts every segment right by
+  // one column per separator and the row reads as overlapping text.
+  // U+30FB is officially Ambiguous too, but get-east-asian-width hardcodes
+  // it Wide and mainstream terminals (Western included) paint it 2 cells —
+  // the model and the painted width agree in practice. A wcwidth-strict
+  // Western terminal painting it 1 cell would mirror the old misalignment;
+  // DSH_TUI_AMBIGUOUS_WIDE=1 is the escape hatch for either direction.
   const foldBadge = `▸ ${stats}`
   const foldHint = t('input-fold-hover')
   const foldPreviewWidth =
-    inputWidth - stringWidth(foldBadge) - stringWidth(` · ${foldHint}`) - 6
+    inputWidth - stringWidth(foldBadge) - stringWidth(`・${foldHint}`) - 6
   const foldPreview =
     foldPreviewWidth >= 8
       ? truncateToWidth(foldText.split('\n')[0] ?? '', foldPreviewWidth)
@@ -2752,7 +2780,7 @@ export function PromptInput({
   // Expanded-state fold affordance: a `▾` prefix at the start of the FIRST
   // row (only while the window is at the top and no block exists); its
   // cells fold the whole input into a block again on click.
-  const prefixLabel = `▾ ${stats} · `
+  const prefixLabel = `▾ ${stats}・`
   const prefixCols =
     !block && !expanded && big && windowStart === 0 ? stringWidth(prefixLabel) : 0
 
@@ -2841,9 +2869,9 @@ export function PromptInput({
           onMouseLeave={hoverLeave}
         >
           <Text dimColor>{foldBadge}</Text>
-          {foldPreview !== '' && <Text dimColor> · </Text>}
+          {foldPreview !== '' && <Text dimColor>・</Text>}
           {foldPreview !== '' && <Text wrap="truncate-end">{foldPreview}</Text>}
-          <Text dimColor>{` · ${foldHint}`}</Text>
+          <Text dimColor>{`・${foldHint}`}</Text>
         </Box>
       )
     }

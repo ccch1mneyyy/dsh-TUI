@@ -620,9 +620,12 @@ const dict = {
   'input-pending-steer-label': { zh: '插话 · 下一步送达', en: 'Steer · delivered next' },
   'input-pending-queue-label': { zh: '排队 · 回合结束后送达', en: 'Queued · delivered after the turn' },
   'input-pending-actions-hint': { zh: '撤回 · Esc 打断并立即发送', en: 'Retract · Esc interrupts and sends immediately' },
-  'input-fold-stats': { zh: '{{lines}} 行 · {{chars}} 字', en: '{{lines}} lines · {{chars}} chars' },
+  // U+30FB (not U+00B7): the separator participates in the folded-chip
+  // width arithmetic; U+00B7 is EA-ambiguous and paints 2 cells on CJK
+  // terminal fonts while the model measures 1 (see PromptInput foldBadge).
+  'input-fold-stats': { zh: '{{lines}} 行・{{chars}} 字', en: '{{lines}} lines・{{chars}} chars' },
   'input-fold-hover': { zh: '悬停查看', en: 'hover to peek' },
-  'input-fold-peek-footer': { zh: '… 共 {{lines}} 行 · 点击展开编辑', en: '… {{lines}} lines total · click to edit' },
+  'input-fold-peek-footer': { zh: '… 共 {{lines}} 行・点击展开编辑', en: '… {{lines}} lines total・click to edit' },
 
   // ── 全屏草稿编辑（PromptInput 展开态 + PromptEditor Layer）─────────
   'input-expand-editor-title': { zh: '草稿编辑', en: 'Draft editor' },

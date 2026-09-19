@@ -6,6 +6,31 @@ import { getGraphemeSegmenter } from '../utils/intl.js'
 const EMOJI_REGEX = emojiRegex()
 
 /**
+ * Should East-Asian-AMBIGUOUS characters (·, ▸, ❯, °, U+2699 …) measure
+ * as 2 cells?
+ *
+ * CJK terminal fonts (and terminals under a zh/ja/ko locale) often paint
+ * these as wide glyphs while the model measures them narrow — both are
+ * valid readings of "ambiguous", and a disagreement in either direction
+ * is the "one glyph overlaps the next / row creeps +1 column" family of
+ * visual corruption (see StatusLine's U+2699 precedent).
+ *
+ * The default stays NARROW (width 1) to match the Unicode recommendation
+ * for Western contexts — and, critically, every layout/width assertion in
+ * this repo's verify suite. The escape hatch is for users on a CJK-locale
+ * terminal whose font paints ambiguous wide and who would rather have the
+ * MODEL widen to agree with their terminal than repaint the terminal's
+ * idea of width:
+ *
+ *   DSH_TUI_AMBIGUOUS_WIDE=1  measure ambiguous as 2 cells (opt-in);
+ *   DSH_TUI_AMBIGUOUS_WIDE=0  the default, explicit.
+ */
+const ambiguousAsWide = (() => {
+  const forced = process.env.DSH_TUI_AMBIGUOUS_WIDE
+  return forced === '1' || forced === 'true'
+})()
+
+/**
  * Measure visible terminal cells using Unicode and ANSI rules.
  *
  * Get the display width of a string as it would appear in a terminal.
@@ -13,9 +38,11 @@ const EMOJI_REGEX = emojiRegex()
  * This is a more accurate alternative to the string-width package that correctly handles
  * characters like ⚠ (U+26A0) which string-width incorrectly reports as width 2.
  *
- * The implementation uses eastAsianWidth directly with ambiguousAsWide: false,
- * which correctly treats ambiguous-width characters as narrow (width 1) as
- * recommended by the Unicode standard for Western contexts.
+ * The implementation uses eastAsianWidth directly with the ambiguous-width
+ * policy pinned to NARROW (width 1 — the Unicode Western-context
+ * recommendation) unless DSH_TUI_AMBIGUOUS_WIDE opts the model into
+ * agreeing with a CJK terminal that paints ambiguous glyphs wide (see
+ * `ambiguousAsWide` below).
  */
 function stringWidthJavaScript(str: string): number {
   if (typeof str !== 'string' || str.length === 0) {
@@ -58,7 +85,7 @@ function stringWidthJavaScript(str: string): number {
     for (const char of str) {
       const codePoint = char.codePointAt(0)!
       if (!isZeroWidth(codePoint)) {
-        width += eastAsianWidth(codePoint, { ambiguousAsWide: false })
+        width += eastAsianWidth(codePoint, { ambiguousAsWide })
       }
     }
     return width
@@ -80,7 +107,7 @@ function stringWidthJavaScript(str: string): number {
     for (const char of grapheme) {
       const codePoint = char.codePointAt(0)!
       if (!isZeroWidth(codePoint)) {
-        width += eastAsianWidth(codePoint, { ambiguousAsWide: false })
+        width += eastAsianWidth(codePoint, { ambiguousAsWide })
         break
       }
     }
