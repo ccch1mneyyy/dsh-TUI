@@ -43,6 +43,7 @@ import createRenderer, { type Renderer } from './renderer.js';
 import { CellWidth, CharPool, cellAt, createScreen, HyperlinkPool, isEmptyCellAt, migrateScreenPools, StylePool } from './screen.js';
 import { applySearchHighlight } from './transcript-highlight.js';
 import { applySelectionOverlay, captureScrolledRows, clearSelection, createSelectionState, extendSelection, type FocusMove, findPlainTextUrlAt, getSelectedText, hasSelection, moveFocus, pickFollowForSelection, type SelectionState, selectLineAt, selectWordAt, shiftAnchor, shiftSelection, shiftSelectionForFollow, shiftSelectionForViewportResize, shiftSelectionForViewportTranslation, startSelection, updateSelection } from './selection.js';
+import { setPointerGestureActive } from './pointer-gesture.js';
 import { isDecstbmSafe, SYNC_OUTPUT_SUPPORTED, serializeDiff, supportsDecrqmProbe, supportsExtendedKeys, supportsWin32InputMode, type Terminal, writeDiffToTerminal } from './terminal.js';
 import { CURSOR_HOME, cursorMove, cursorPosition, DISABLE_KITTY_KEYBOARD, DISABLE_MODIFY_OTHER_KEYS, DISABLE_WIN32_INPUT_MODE, ENABLE_KITTY_KEYBOARD, ENABLE_MODIFY_OTHER_KEYS, ENABLE_WIN32_INPUT_MODE, ERASE_SCREEN, ERASE_SCROLLBACK, SGR_RESET } from './termio/csi.js';
 import { DBP, DFE, DISABLE_MOUSE_TRACKING, ENABLE_MOUSE_TRACKING, ENTER_ALT_SCREEN, EXIT_ALT_SCREEN, SHOW_CURSOR } from './termio/dec.js';
@@ -1594,6 +1595,12 @@ export default class Ink {
   private pendingProbeRequest: { skipMouseReassert?: boolean } | undefined = undefined;
   setPointerGestureActive = (active: boolean): void => {
     this.pointerGestureActive = active;
+    // Publish the latch so hover-driven floating cards (tooltip, rail
+    // preview, scrollbar chip) dismiss themselves: while a button is held
+    // the renderer stops dispatching hover events, so an already-shown card
+    // would never see its onMouseLeave and would stay frozen over the text
+    // being selected.
+    setPointerGestureActive(active);
     // Do NOT drain pendingAltScreenReentry here: the gesture latch clears at
     // the START of release handling, but the destructive re-entry must wait
     // until the full release/click/drag tail completes (dispatchClick reads
