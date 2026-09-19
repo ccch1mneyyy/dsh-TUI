@@ -81,9 +81,11 @@ export function startSessionMountHeartbeat(ctx: Context): () => void {
     try {
       publishMounts(mountedSessionIds(ctx))
     } catch {
-      // The ledger is a safety net around corrupting a shared transcript, and
-      // it is also best-effort by contract. A failed publish costs cross-process
-      // protection until the next one, which must not disturb this session.
+      // PUBLISHING is best-effort; DECIDING is not. A beat that cannot write
+      // costs announcement until the next one, and must not disturb this
+      // session — while the paths that grant a mount refuse outright when they
+      // cannot read the ledger, because that is the one error nothing can
+      // repair afterwards.
     }
   }
   beat()

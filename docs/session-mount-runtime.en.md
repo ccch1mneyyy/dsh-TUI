@@ -103,18 +103,29 @@ into one log.
 
 Write discipline (the pattern already proven in `src/sessionPins.ts`):
 
-- **Cross-process lock**: `session-mounts.lock` (`wx` exclusive create; one
-  stale lock may be reclaimed after 30s). The lock file holds the RANDOM TOKEN
-  of the acquisition, not a pid.
+- **Cross-process lock**: `session-mounts.lock` (`wx` exclusive create). The
+  lock file holds `<pid>-<random nonce>`: the nonce decides "is this lock
+  mine?", the pid decides "may this lock still be taken?".
 - **Atomic replace**: `session-mounts.json.<pid>.<ts>.<seq>.tmp` + `rename`, so
   a reader never observes a half-written document.
-- **A reclaimed holder must not write**: a writer that exceeded
-  `STALE_LOCK_MS` and had its lock taken has to notice that the lock is no
-  longer its own, abandon the commit, and — on the way out — delete only its OWN
-  lock rather than the new holder's.
+- **A reclaimed holder must not write**: a writer whose lock was reclaimed has
+  to notice that the lock is no longer its own, abandon the commit, and — on
+  the way out — delete only its OWN lock rather than the new holder's.
+- **Only a provably dead holder is reclaimed**: a lock whose pid is still ALIVE
+  is never taken, however old the file is. Only a dead pid (or a token that
+  cannot be read at all, past `STALE_LOCK_MS` — the create-then-write window)
+  is reclaimable. Reclaiming on mtime alone steals the lock from a holder that
+  was merely paused, and when it resumes it can commit a snapshot derived
+  before the steal. The price is pid REUSE: if an unrelated process recycles a
+  dead holder's pid, that lock can no longer be reclaimed automatically and
+  `session-mounts.lock` has to be removed by hand once every process sharing
+  the data directory has stopped.
 - **Permissions**: directory `0700`, file `0600`.
-- **Total and best-effort**: any failure degrades to "no cross-process
-  protection this beat". It never throws and never takes a session down.
+- **Display may be best-effort; granting may not**: the screen reads the ledger
+  tolerantly (a damaged document reads as empty — showing fewer rows beats
+  crashing the screen), but the paths that DECIDE whether a mount may proceed
+  read it strictly (see 3.4). No failure degrades into "so let us assume nobody
+  holds it": that is the one unrecoverable mistake.
 
 ### 3.3 Liveness has exactly one witness: the pid
 
@@ -146,18 +157,59 @@ Mounting a session with no live agent in this process must go:
 
 1. read the ledger (`readSessionOwners`) as a **pre-filter**, only so the user
    can be told which pid holds the session;
-2. if free, call `claimMount(sessionId)`: inside the cross-process lock it
-   re-reads the file, re-derives the conflict, writes **nothing** on a conflict,
-   and on success splices its own fresh record into the current file;
-3. only then `await` the resume workflow.
+2. if free, call `reserveMount(sessionId)`: inside the cross-process lock it
+   STRICTLY re-reads the file, re-derives the conflict, writes **nothing** on a
+   conflict, and on success splices its own fresh record into the current file
+   and pins the session for the duration of this operation;
+3. only then `await` the resume workflow. It ends one of two ways: `settle()`
+   on a commit (the agent registry is the authority from then on), `abandon()`
+   on every path that does not commit.
 
 "Check, then publish" is **not atomic across processes**: two processes can each
 observe `free` at step 1 and then publish in turn, leaving two live holders of
 one session in the ledger. Step 2 is what makes the admission decision real.
 
-A claim this call newly took is released (`releaseMount`) when the switch is
-vetoed, the binding went stale, or the resume threw — a reservation must never
-outlive the attempt that made it.
+**Three refusals, kept apart** (`MountFailure`):
+
+| Result | Meaning | Handling |
+| --- | --- | --- |
+| `occupied` + `holders` | A live holder, by pid | Report "held by pid N", refuse |
+| `busy` | A peer holds the short lock, so the check **did not happen** | Bounded backoff (25–400ms), then refuse and ask the user to retry |
+| `unavailable` + `detail` | The ledger cannot be read or written, so the check **did not happen** | Refuse with the reason (a damaged file names the manual repair) |
+
+The old shape folded the last two into `holders: []`, leaving callers to guess —
+and boot treated "could not check" as "nobody holds it" and resumed anyway,
+which is precisely the mistake this ledger exists to prevent. **An existing
+session refuses on all three; none of them fails open.** A read-only home then
+costs one loud refusal, where guessing wrong costs an unrecoverable interleaved
+log.
+
+**The one exception is a session id that was just minted** (`/new`, `/bg`, fork,
+rewind, model switch, boot create): it cannot be somebody else's, so a refusal
+there is "could not announce it", not a conflict, and the create proceeds with a
+warning. Blocking a user from starting a new session over a conflict that cannot
+exist is not what this ledger is for.
+
+**Strict read vs. tolerant read.** `readMountLedgerStrict()` treats only ENOENT
+as an initial empty ledger; anything else — unreadable, malformed JSON, unknown
+version, a record whose shape is wrong — is `unavailable`, and a refusal
+**changes nothing on disk**: the record that failed to parse may be another
+writer's only claim, so skipping it and rewriting the file would throw away that
+peer's reservation for it.
+
+**A reservation must outlive the waits.** The claim is committed before the
+agent exists in the registry (a resume reads preset, route and workspace first)
+while the publisher derives its set from the registry. Publishing therefore
+unions the observable roster with the in-flight operations; without that, this
+process's own heartbeat can erase the claim it just committed and a peer reads
+`free`.
+
+A reservation this call took is given back (`abandon()` → `releaseMount`) when
+the switch is vetoed, the binding went stale, or the resume threw — including a
+throwing `binding.adopt()`. It is only released after the handle has actually
+finished closing (`binding.abandon()` now awaits the underlying `dispose`),
+because releasing earlier drops the occupancy while writes may still be in
+flight.
 
 **A session that already has a live agent in this process neither checks
 occupancy nor goes through live adoption**: it is the session currently
@@ -240,13 +292,17 @@ even the session store root differs.
    use a local `host` / `instance` field to pretend the ledger decides across
    machines — two machines sharing a home directory need a transport-level
    protocol, not this layer.
-5. **Only the holder writes or releases the lock.** Each acquisition writes a
-   random token into the lock file; a holder that lost the lock (reclaimed as
-   stale) must abandon its commit, and a release may delete only its own lock.
-6. **The read path must not throw, and must not write back.** Missing file,
-   corrupt JSON, wrong version, wrong field types — all read as empty, and the
-   next write repairs it; cleanup must re-read under the lock rather than
-   committing a pre-lock snapshot.
+5. **Only the holder writes or releases the lock, and only a dead holder loses
+   it.** Each acquisition writes `<pid>-<nonce>` into the lock file; a holder
+   that lost the lock must abandon its commit, and a release may delete only its
+   own lock. A lock whose pid is still alive is NEVER reclaimed, however old the
+   file looks — the accepted cost is a pid-reused lock needing manual removal
+   (see 3.2).
+6. **Display reads tolerantly; deciding reads strictly.** Missing file, corrupt
+   JSON, wrong version, wrong field types — the SCREEN reads all of those as
+   empty, and cleanup must re-read under the lock rather than committing a
+   pre-lock snapshot. The paths that grant a mount must do the opposite: only
+   ENOENT is empty, everything else refuses, and a refusal writes nothing.
 7. **A timer must never block exit.** `.unref()` plus funnel cleanup, both.
 8. **The screen must not disagree with the runtime.** Whether a session can be
    entered is the runtime's decision; the screen only explains the reason one

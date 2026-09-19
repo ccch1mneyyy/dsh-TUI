@@ -3,12 +3,19 @@ import { randomUUID } from 'node:crypto'
 import type { Context } from '@deepseek-ai/cordis'
 import { SessionId, type SessionEvent } from '@deepseek-ai/dsh-session'
 import { explicitModelRoute, recordedModelRoute, resolveModelRoute, validateModelRoute } from '../../modelRoute.js'
-import { clearResumeTarget, touchAgentViewSession, touchSession, writeResumeTarget } from '../../sessionHistory.js'
+import { clearResumeTarget, writeResumeTarget, touchAgentViewSession, touchSession } from '../../sessionHistory.js'
+import { mountFailureText } from '../../sessions/resumeFailure.js'
 import { t } from '../../i18n.js'
 import { readModelPref } from '../../modelPrefs.js'
 import { migratePresetPref, readPresetPref } from '../../presetPrefs.js'
 import { agentViewHasTurns } from '../agent-view.js'
-import { claimMount, occupancyOf, readSessionOwners, releaseMount } from '../../sessionMounts.js'
+import {
+  occupancyOf,
+  readSessionOwners,
+  reserveMount,
+  reserveNewSession,
+  type MountReservation,
+} from '../../sessionMounts.js'
 import { ensureLegacySessionEventTypes } from '../compat/index.js'
 import { snapshotLiveSessionEvents } from '../compat/liveSession.js'
 import { composePreset, resolvePersistedPreset, resolvePersistedRoute } from '../presets.js'
@@ -137,88 +144,170 @@ export function createSessionResumeActions(
     adoption: ReturnType<Binding['capture']>,
     entrySession?: Agent['session'],
     /**
-     * Undo a ledger claim this call's caller made for `sessionId`. Invoked on
-     * every path that ends WITHOUT a commit, so a reservation never outlives the
-     * attempt that made it — a claim left behind would make the session look
-     * occupied to every other terminal.
+     * The ledger reservation this call holds for `sessionId`; ended by this
+     * function on every exit. `settle` on a commit (the agent is in the
+     * registry from then on), `abandon` on every path that ends WITHOUT one —
+     * including a throwing `binding.adopt()` and a setup failure inside its
+     * tail, which revokes the candidate.
      */
-    onAbandon?: () => void,
+    reservation?: MountReservation,
   ): Promise<ResumeResult> => {
+    /**
+     * The reservation is ended on EVERY exit from here, so the attempt owns it
+     * for the whole body: `settle` on a commit (the agent is in the registry
+     * from then on), `abandon` on everything else — a throwing
+     * `binding.adopt()`, a setup failure inside its tail, and also a throw from
+     * the preset/route reads below, which used to sit outside any guard and
+     * would have left a pin that republishes the session as ours on every beat.
+     */
+    let committed = false
+    try {
+      return await runResume()
+    } finally {
+      if (committed) reservation?.settle()
+      else reservation?.abandon()
+    }
+
+    async function runResume(): Promise<ResumeResult> {
+      const agents = ctx.get('agents') as ResumeAgents | undefined
+      if (!agents) {
+        deps.notify(t('resume-unavailable'), { color: 'error' })
+        return { ok: false, reason: 'unavailable' }
+      }
+      ensureLegacySessionEventTypes()
+      const composed = await composePreset(ctx, await resolvePersistedPreset(ctx, SessionId(sessionId)))
+      const explicitRoute = explicitModelRoute({ provider: options.configuredProvider, model: options.configuredModel })
+      const persistedRoute = await resolvePersistedRoute(ctx, SessionId(sessionId))
+      let handle: AgentHandle
+      try {
+        handle = await deps.binding.prepare(adoption, () => agents.resume({
+          resumeSessionId: SessionId(sessionId),
+          agentOptions: {
+            provider: explicitRoute?.provider ?? persistedRoute?.provider,
+            model: explicitRoute?.model ?? persistedRoute?.model,
+          },
+          ...(composed.setup === undefined ? {} : { setup: composed.setup }),
+        }))
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        deps.notify(t('resume-failed', { err: message }), { color: 'error', timeoutMs: 8000 })
+        return { ok: false, reason: 'failed', error: message }
+      }
+      if (!deps.binding.isCurrent(adoption)) {
+        await deps.binding.abandon(handle)
+        return { ok: false, reason: 'cancelled' }
+      }
+      try {
+        await attachSessionToWorkspace(ctx, handle.agent.session.header.cwd ?? state.cwd, SessionId(sessionId))
+      } catch (error) {
+        deps.notify(t('resume-attach-failed', { err: error instanceof Error ? error.message : String(error) }), { color: 'warning', timeoutMs: 8000 })
+      }
+      if (entrySession !== undefined && (!deps.owner.current() || deps.binding.agent.session !== entrySession)) {
+        await deps.binding.abandon(handle)
+        deps.notify(t('resume-session-changed'), { color: 'error' })
+        return { ok: false, reason: 'failed', error: 'live session changed during resume' }
+      }
+      // `adopt` is a transaction: it revokes the candidate and disposes it when
+      // the tail fails, and it can also refuse before the tail ever runs. Only a
+      // normal return is a commit, which is what the outer finally keys on.
+      const result = deps.binding.adopt<ResumeResult>(handle, adoption, (committedBinding, disposePrevious) => {
+        const previousSessionId = String(committedBinding.agent.session.id)
+        state.cwd = handle.agent.session.header.cwd ?? state.cwd
+        state.displayCwd = deps.describeWorkspace(state.cwd).description ?? state.cwd
+        deps.refreshGitBranch()
+        // Reset the input FIFO and pending-decision indicators BEFORE the first
+        // emit (main's bind → clear → refresh order); see the /new tail.
+        deps.clearStagedImages()
+        resetAndBind(handle, composed.agentPreset, explicitRoute ?? recordedModelRoute(snapshotLiveSessionEvents(handle.agent.session)), true)
+        writeResumeTarget(sessionId)
+        touchSession(sessionId)
+        state.emit()
+        const keepPrevious = keepCurrent && committedBinding.handle !== undefined
+          && (committedBinding.handle.agent.status === 'running' || agentViewHasTurns(snapshotLiveSessionEvents(committedBinding.handle.agent.session)))
+        if (committedBinding.handle !== undefined) {
+          if (keepPrevious) {
+            deps.backgroundHandles.set(previousSessionId, committedBinding.handle)
+            disposePrevious('park')
+          } else {
+            disposePrevious('dispose')
+          }
+        }
+        if (kind === 'agent-view') {
+          touchAgentViewSession(sessionId)
+          touchAgentViewSession(previousSessionId)
+        }
+        deps.notifySessionSwitched(kind, sessionId, previousSessionId)
+        return { ok: true }
+      })
+      committed = true
+      return result
+    }
+  }
+
+  /**
+   * Reserve `sessionId` for a disk resume on THIS terminal.
+   *
+   * Returning a reservation means the caller owns the session in the ledger
+   * until it calls `finish()`. That covers the whole attempt, not just the
+   * `agents.resume` call: the awaits in between (veto, compaction, preset and
+   * route reads) are exactly the window a publisher beat — or a peer — could
+   * otherwise slip into.
+   * @param sessionId - Session about to be resumed from disk.
+   * @returns The reservation, or the refusal to hand back to the caller.
+   */
+  const reserveDiskResume = async (
+    sessionId: string,
+  ): Promise<{ readonly ok: true; readonly reservation: MountReservation } | { readonly ok: false; readonly result: ResumeResult }> => {
+    // Cheap pre-filter for the friendly toast: the authoritative conflict test
+    // runs inside reserveMount, under the ledger lock.
+    const occupancy = occupancyOf(sessionId, readSessionOwners())
+    if (occupancy.kind === 'occupied') {
+      deps.notify(t('resume-session-occupied', { pid: occupancy.pid }), { color: 'error', timeoutMs: 8000 })
+      return { ok: false, result: { ok: false, reason: 'occupied', pid: occupancy.pid } }
+    }
+    const reserved = await reserveMount(sessionId)
+    if (!reserved.ok) {
+      if (reserved.reason === 'occupied') {
+        const pid = reserved.holders[0] ?? 0
+        deps.notify(t('resume-session-occupied', { pid }), { color: 'error', timeoutMs: 8000 })
+        return { ok: false, result: { ok: false, reason: 'occupied', pid } }
+      }
+      // Both of these are refusals, not conflicts, and neither may be dressed
+      // up as "held by pid 0". The generic failure branch carries the sentence.
+      return { ok: false, result: { ok: false, reason: 'failed', error: mountFailureText(reserved) } }
+    }
+    return { ok: true, reservation: reserved.reservation }
+  }
+
+  /**
+   * Reserve a freshly minted session id for a create on THIS terminal. See
+   * `reserveNewSession`: a new id cannot conflict, so a refusal is a loss of
+   * announcement rather than a reason to stop, and it is warned about.
+   * @param sessionId - Session id minted for the new agent.
+   * @returns The reservation (a no-op when the claim could not be made).
+   */
+  const reserveCreatedSession = async (sessionId: string): Promise<MountReservation> => {
+    const { reservation, failure } = await reserveNewSession(sessionId)
+    if (failure !== undefined && failure.reason !== 'occupied') {
+      deps.notify(mountFailureText(failure), { color: 'warning', timeoutMs: 8000 })
+    }
+    return reservation
+  }
+
+  const resumeInto = async (sessionId: string, kind: 'resume' | 'agent-view', keepCurrent: boolean): Promise<ResumeResult> => {
+    const adoption = deps.binding.capture()
     const agents = ctx.get('agents') as ResumeAgents | undefined
     if (!agents) {
       deps.notify(t('resume-unavailable'), { color: 'error' })
-      onAbandon?.()
       return { ok: false, reason: 'unavailable' }
     }
-    ensureLegacySessionEventTypes()
-    const composed = await composePreset(ctx, await resolvePersistedPreset(ctx, SessionId(sessionId)))
-    const explicitRoute = explicitModelRoute({ provider: options.configuredProvider, model: options.configuredModel })
-    const persistedRoute = await resolvePersistedRoute(ctx, SessionId(sessionId))
-    let handle: AgentHandle
-    try {
-      handle = await deps.binding.prepare(adoption, () => agents.resume({
-        resumeSessionId: SessionId(sessionId),
-        agentOptions: {
-          provider: explicitRoute?.provider ?? persistedRoute?.provider,
-          model: explicitRoute?.model ?? persistedRoute?.model,
-        },
-        ...(composed.setup === undefined ? {} : { setup: composed.setup }),
-      }))
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error)
-      deps.notify(t('resume-failed', { err: message }), { color: 'error', timeoutMs: 8000 })
-      onAbandon?.()
-      return { ok: false, reason: 'failed', error: message }
-    }
-    if (!deps.binding.isCurrent(adoption)) {
-      await deps.binding.abandon(handle)
-      onAbandon?.()
-      return { ok: false, reason: 'cancelled' }
-    }
-    try {
-      await attachSessionToWorkspace(ctx, handle.agent.session.header.cwd ?? state.cwd, SessionId(sessionId))
-    } catch (error) {
-      deps.notify(t('resume-attach-failed', { err: error instanceof Error ? error.message : String(error) }), { color: 'warning', timeoutMs: 8000 })
-    }
-    if (entrySession !== undefined && (!deps.owner.current() || deps.binding.agent.session !== entrySession)) {
-      await deps.binding.abandon(handle)
-      deps.notify(t('resume-session-changed'), { color: 'error' })
-      onAbandon?.()
-      return { ok: false, reason: 'failed', error: 'live session changed during resume' }
-    }
-    return deps.binding.adopt(handle, adoption, (committed, disposePrevious) => {
-      const previousSessionId = String(committed.agent.session.id)
-      state.cwd = handle.agent.session.header.cwd ?? state.cwd
-      state.displayCwd = deps.describeWorkspace(state.cwd).description ?? state.cwd
-      deps.refreshGitBranch()
-      // Reset the input FIFO and pending-decision indicators BEFORE the first
-      // emit (main's bind → clear → refresh order); see the /new tail.
-      deps.clearStagedImages()
-      resetAndBind(handle, composed.agentPreset, explicitRoute ?? recordedModelRoute(snapshotLiveSessionEvents(handle.agent.session)), true)
-      writeResumeTarget(sessionId)
-      touchSession(sessionId)
-      state.emit()
-      const keepPrevious = keepCurrent && committed.handle !== undefined
-        && (committed.handle.agent.status === 'running' || agentViewHasTurns(snapshotLiveSessionEvents(committed.handle.agent.session)))
-      if (committed.handle !== undefined) {
-        if (keepPrevious) {
-          deps.backgroundHandles.set(previousSessionId, committed.handle)
-          disposePrevious('park')
-        } else {
-          disposePrevious('dispose')
-        }
-      }
-      if (kind === 'agent-view') {
-        touchAgentViewSession(sessionId)
-        touchAgentViewSession(previousSessionId)
-      }
-      deps.notifySessionSwitched(kind, sessionId, previousSessionId)
-      return { ok: true }
-    })
+    // Same reservation as `/resume`: this is the other public door onto the
+    // disk path (`ChannelUi.attachToAgent`), and a mount that skips the ledger
+    // is a mount a peer can race from the outside.
+    const reserved = await reserveDiskResume(sessionId)
+    if (!reserved.ok) return reserved.result
+    return resume(sessionId, kind, keepCurrent, adoption, undefined, reserved.reservation)
   }
-
-  const resumeInto = (sessionId: string, kind: 'resume' | 'agent-view', keepCurrent: boolean): Promise<ResumeResult> =>
-    resume(sessionId, kind, keepCurrent, deps.binding.capture())
 
   /**
    * `/resume` — mount a session on THIS terminal, the same non-destructive way
@@ -247,6 +336,12 @@ export function createSessionResumeActions(
    * The occupancy check happens BEFORE the resume awaits (which yield), and
    * the claim is published immediately after it so this process owns the
    * session before any other process can pass the same check.
+   *
+   * The reservation also outlives those awaits: it is released only when the
+   * attempt ends without a commit. The publisher's beat derives its set from
+   * the agent registry, which does not list the target yet, so a reservation
+   * that was not held across them could be erased by this process's own
+   * heartbeat and handed straight to a peer.
    */
   const resumeTo = async (sessionId: string): Promise<ResumeResult> => {
     const adoption = deps.binding.capture()
@@ -273,50 +368,38 @@ export function createSessionResumeActions(
     // to claim and nothing that can be occupied. Adoption takes the live
     // handle (parking the current one) with no occupancy round-trip.
     const live = agents.get?.(SessionId(sessionId))
-    let claimed = false
+    let reservation: MountReservation | undefined
     if (live === undefined) {
-      const occupancy = occupancyOf(sessionId, readSessionOwners())
-      if (occupancy.kind === 'occupied') {
-        deps.notify(t('resume-session-occupied', { pid: occupancy.pid }), { color: 'error', timeoutMs: 8000 })
-        return { ok: false, reason: 'occupied', pid: occupancy.pid }
-      }
-      // Claim INSIDE the ledger lock: the check above is only a pre-filter for
-      // the friendly toast. Two processes that each check and then publish can
-      // both pass it, so the authoritative conflict test has to run where the
-      // claim is written (claimMount re-derives it from the file under the
-      // lock). Nothing is claimed on refusal.
-      const claim = claimMount(sessionId)
-      if (!claim.ok) {
-        // An empty holder list means the ledger itself could not be read or
-        // written: a refusal, but not one that can name a peer. pid 0 is never a
-        // real process, so the surface says "held" without inventing a terminal.
-        const pid = claim.holders[0] ?? 0
-        if (pid !== 0) deps.notify(t('resume-session-occupied', { pid }), { color: 'error', timeoutMs: 8000 })
-        return { ok: false, reason: 'occupied', pid }
-      }
-      claimed = true
-    }
-    /** Undo a claim this call made and did not end up using. */
-    const releaseClaim = (): void => {
-      if (!claimed) return
-      claimed = false
-      releaseMount(sessionId)
+      const reserved = await reserveDiskResume(sessionId)
+      if (!reserved.ok) return reserved.result
+      reservation = reserved.reservation
     }
     if (await deps.sessionSwitchVetoed('resume', sessionId)) {
-      releaseClaim()
+      reservation?.abandon()
       return { ok: false, reason: 'cancelled' }
     }
     await deps.settleCompaction()
     if (!deps.binding.isCurrent(adoption) || deps.binding.agent.session !== entrySession) {
-      releaseClaim()
+      reservation?.abandon()
+      return { ok: false, reason: 'cancelled' }
+    }
+    // The target was read BEFORE those awaits. Re-read it in BOTH directions:
+    // the registry can have replaced or dropped that agent while we yielded
+    // (adopting the captured object would hand the screen a session nothing
+    // owns any more), and it can also have GROWN one — a peer action mounting
+    // this very session here means the disk path below would resume a log this
+    // process is already driving. `agent-view-projection.attach` has always made
+    // the first check.
+    const liveNow = agents.get?.(SessionId(sessionId))
+    if (liveNow !== live) {
+      reservation?.abandon()
       return { ok: false, reason: 'cancelled' }
     }
     // A live target is adopted in place — the same path `/agentview` uses, so
     // the session being left is parked rather than disposed of. Only a target
     // with no live agent here goes back to the persistence backend.
-    return live !== undefined
-      ? deps.adoptLive(live)
-      : resume(sessionId, 'agent-view', true, adoption, entrySession, releaseClaim)
+    if (live !== undefined) return deps.adoptLive(live)
+    return resume(sessionId, 'agent-view', true, adoption, entrySession, reservation)
   }
 
   const newSessionWithTarget = async (target?: NewSessionTarget): Promise<boolean> => {
@@ -369,6 +452,10 @@ export function createSessionResumeActions(
       }
       return false
     }
+    // Reserve BEFORE the factory runs: the moment `agents.create` returns, this
+    // process holds the only write handle on a log no peer has been told about
+    // yet, and the publisher would not name it until its next beat.
+    const reservation = await reserveCreatedSession(sessionId)
     let handle: AgentHandle
     try {
       handle = await deps.binding.prepare(adoption, () => agents.create({
@@ -378,41 +465,50 @@ export function createSessionResumeActions(
         ...(composed.setup === undefined ? {} : { setup: composed.setup }),
       }))
     } catch (error) {
+      reservation.abandon()
       if (current()) {
         const message = error instanceof Error ? error.message : String(error)
         deps.notify(t('new-session-failed', { err: message }), { color: 'error', timeoutMs: 8000 })
       }
       return false
     }
-    if (!current()) { await deps.binding.abandon(handle); return false }
+    if (!current()) { await deps.binding.abandon(handle); reservation.abandon(); return false }
     try {
       await attachSessionToWorkspace(ctx, targetCwd, sessionId)
     } catch (error) {
       if (current()) deps.notify(t('new-session-attach-failed', { err: error instanceof Error ? error.message : String(error) }), { color: 'warning', timeoutMs: 8000 })
     }
-    if (!current()) { await deps.binding.abandon(handle); return false }
+    if (!current()) { await deps.binding.abandon(handle); reservation.abandon(); return false }
     // Do not catch this synchronous commit tail. A post-commit setup failure
     // is owned by binding.adopt(), which revokes the new live handle and must
     // reject its caller rather than masquerade as an ordinary precommit false.
-    return deps.binding.adopt(handle, adoption, (committed, disposePrevious) => {
-      const previousSessionId = String(committed.agent.session.id)
-      // The target only becomes shared channel state inside the successful
-      // adoption tail. A losing prepared handle therefore cannot publish or
-      // roll back another workspace's cwd.
-      state.cwd = targetCwd
-      state.displayCwd = targetDisplayCwd ?? deps.describeWorkspace(targetCwd).description ?? targetCwd
-      // Reset the input FIFO and the pending-decision indicators BEFORE the
-      // first emit: a submit enqueued from a session-changed subscriber must
-      // land on a fresh chain instead of behind the replaced session's parked
-      // promise (main's bind → clear → refresh order).
-      deps.clearStagedImages()
-      resetAndBind(handle, composed.agentPreset, route, false)
-      clearResumeTarget()
-      touchSession(handle.agent.id)
-      disposePrevious('dispose')
-      deps.notifySessionSwitched('new', String(handle.agent.id), previousSessionId)
-      return true
-    })
+    let committed = false
+    try {
+      const result = deps.binding.adopt(handle, adoption, (committedBinding, disposePrevious) => {
+        const previousSessionId = String(committedBinding.agent.session.id)
+        // The target only becomes shared channel state inside the successful
+        // adoption tail. A losing prepared handle therefore cannot publish or
+        // roll back another workspace's cwd.
+        state.cwd = targetCwd
+        state.displayCwd = targetDisplayCwd ?? deps.describeWorkspace(targetCwd).description ?? targetCwd
+        // Reset the input FIFO and the pending-decision indicators BEFORE the
+        // first emit: a submit enqueued from a session-changed subscriber must
+        // land on a fresh chain instead of behind the replaced session's parked
+        // promise (main's bind → clear → refresh order).
+        deps.clearStagedImages()
+        resetAndBind(handle, composed.agentPreset, route, false)
+        clearResumeTarget()
+        touchSession(handle.agent.id)
+        disposePrevious('dispose')
+        deps.notifySessionSwitched('new', String(handle.agent.id), previousSessionId)
+        return true
+      })
+      committed = true
+      return result
+    } finally {
+      if (committed) reservation.settle()
+      else reservation.abandon()
+    }
   }
   const newSession = (): Promise<boolean> => newSessionWithTarget()
 

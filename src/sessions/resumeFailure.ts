@@ -17,6 +17,7 @@
  */
 
 import type { ResumeResult } from '../adapter/ports/channel-view.js'
+import type { MountFailure } from '../sessionMounts.js'
 import { t } from '../i18n.js'
 
 /**
@@ -38,4 +39,24 @@ export function resumeFailureText(result: ResumeResult): string | undefined {
     case 'failed':
       return t('session-resume-failed', { err: result.error })
   }
+}
+
+/**
+ * The sentence for a ledger refusal that did NOT find a holder.
+ *
+ * A refusal to CHECK is not a refusal by a peer, so it must not borrow the
+ * "another terminal holds it" wording — that would invent a terminal. The
+ * `occupied` case is here too because it is a {@link MountFailure} and its
+ * sentence already exists; {@link resumeFailureText} reaches the same key from
+ * the adapter's own result.
+ * @param failure - Why the session could not be claimed.
+ * @returns The user-facing sentence.
+ */
+export function mountFailureText(failure: MountFailure): string {
+  if (failure.reason === 'occupied') {
+    return t('resume-session-occupied', { pid: failure.holders[0] ?? 0 })
+  }
+  return failure.reason === 'busy'
+    ? t('resume-mount-busy')
+    : t('resume-mount-unavailable', { detail: failure.detail })
 }

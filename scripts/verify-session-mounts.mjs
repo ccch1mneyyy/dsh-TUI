@@ -13,10 +13,22 @@
  *    writes nothing; re-claiming our own session is not a conflict.
  * 3. ABANDONMENT: once the peer is gone the session is claimable again, and a
  *    record whose pid is gone is pruned by the next write.
+ * 4. AUTHORITATIVE READ: a damaged ledger is `unavailable`, not "empty", and a
+ *    claim against one writes nothing at all. "Could not check" must never be
+ *    reported as "nobody holds it" — that is the one mistake this ledger exists
+ *    to prevent, and it is unrecoverable.
+ * 5. LOCK POLICY: a lock whose holder pid is ALIVE is never reclaimed, however
+ *    old the file looks; a lock whose holder is gone is reclaimed immediately.
+ *    The first half is what the old mtime-only rule got wrong (a paused holder
+ *    could be stolen from and then commit a snapshot derived before the steal);
+ *    the second half is what keeps a crash from needing manual cleanup.
+ * 6. RESERVATIONS: an in-flight mount survives a publisher beat that cannot see
+ *    its agent yet, and ends explicitly — settle (the roster takes over) or
+ *    abandon (the session goes back).
  *
- * Plus the degradation rule: a malformed or foreign-shaped document reads as an
- * empty ledger instead of throwing, because a corrupt cache must never take
- * down a session.
+ * Plus the degradation rule: a malformed or foreign-shaped document still reads
+ * as an empty ledger through the DISPLAY reader, because a corrupt cache must
+ * never take down a session screen. Only the deciding reader refuses.
  *
  * Ownership is pid-only, so the foreign holder is a REAL second process that
  * PUBLISHES through this same module in the same fake HOME — a staged JSON
@@ -30,7 +42,7 @@
  * Run: node --import tsx/esm scripts/verify-session-mounts.mjs
  */
 import { spawn } from 'node:child_process'
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -46,11 +58,14 @@ const {
   pidAlive,
   publishMounts,
   readMountLedger,
+  readMountLedgerStrict,
   readSessionOwners,
   releaseMount,
+  reserveMount,
 } = await import('../src/sessionMounts.ts')
 
 const LEDGER = join(tmpHome, '.dsh-tui', 'session-mounts.json')
+const LOCK = join(tmpHome, '.dsh-tui', 'session-mounts.lock')
 
 let failures = 0
 function check(name, cond) {
@@ -118,15 +133,21 @@ clearOwnMounts()
 // ── 2. Atomic claim: the live peer blocks, our own re-claim does not ────────
 console.log('claim:')
 const refused = claimMount('child-held')
-check('the live peer holder refuses the claim', refused.ok === false && refused.holders.includes(holderPid))
+check('the live peer holder refuses the claim',
+  refused.ok === false && refused.reason === 'occupied' && refused.holders.includes(holderPid))
 check('the refused claim is not remembered as ours', !ownMounts().includes('child-held'))
 check('the refused claim wrote nothing of ours', !readMountLedger().some(
   owner => owner.pid === process.pid && owner.sessionIds.includes('child-held'),
 ))
 check('and the peer record is untouched', readSessionOwners().get('child-held')?.pid === holderPid)
 
-check('a free session claims ok', claimMount('reclaimable').ok === true)
-check('claiming our own session twice is not a conflict', claimMount('reclaimable').ok === true)
+const first = claimMount('reclaimable')
+const second = claimMount('reclaimable')
+check('a free session claims ok', first.ok === true && first.fresh === true)
+// "fresh" is what lets a reservation give back exactly what it took: claiming
+// a session this process already holds must not report itself as the owner of
+// the entry, or an abandoned attempt would release a live mount.
+check('claiming our own session twice is not a conflict', second.ok === true && second.fresh === false)
 releaseMount('reclaimable')
 clearOwnMounts()
 
@@ -169,6 +190,117 @@ writeRaw([peer(deadPid, ['x'])], 99)
 check('a version mismatch reads as empty', readMountLedger().length === 0)
 writeRaw([{ pid: 'x', startedAt: 1, sessionIds: [] }])
 check('a wrong-typed record is dropped', readMountLedger().length === 0)
+
+// ── 5. Authoritative read: "could not check" is not "free" ─────────────────
+// The display reader above stays tolerant on purpose. The DECIDING reader must
+// not: granting a write handle on a ledger it could not read is the corruption
+// this module exists to prevent, and the failure is not repairable afterwards.
+console.log('authoritative read:')
+writeFileSync(LEDGER, '{ not json', 'utf8')
+check('a corrupt ledger is unavailable, not empty', readMountLedgerStrict().ok === false)
+const afterCorrupt = claimMount('after-corrupt')
+check('a claim against a corrupt ledger is refused', afterCorrupt.ok === false && afterCorrupt.reason === 'unavailable')
+check('and says why', typeof afterCorrupt.detail === 'string' && afterCorrupt.detail.length > 0)
+check('the corrupt file is left byte-for-byte as it was', readFileSync(LEDGER, 'utf8') === '{ not json')
+writeRaw([{ pid: 'x', startedAt: 1, sessionIds: [] }])
+check('a wrong-typed record is unavailable too', readMountLedgerStrict().ok === false)
+const afterBadRecord = claimMount('after-bad-record')
+check('so a claim is refused there as well', afterBadRecord.ok === false && afterBadRecord.reason === 'unavailable')
+check('and that file is not overwritten either', readMountLedgerStrict().ok === false)
+
+rmSync(LEDGER, { force: true })
+const missing = readMountLedgerStrict()
+check('a MISSING ledger is an empty ledger', missing.ok === true && missing.owners.length === 0)
+check('so a first-run claim proceeds', claimMount('after-missing').ok === true)
+releaseMount('after-missing')
+clearOwnMounts()
+
+// ── 6. Lock policy: only a holder that is gone may be reclaimed ────────────
+// The stale-lock rule used to be mtime-only, so a peer could take a lock away
+// from a holder that was merely paused; when that holder resumed it could then
+// commit a snapshot derived before the steal. Judging by the holder PID closes
+// that window without giving up crash recovery.
+console.log('lock policy:')
+const longAgo = new Date(Date.now() - 10 * 60_000)
+rmSync(LEDGER, { force: true })
+// A pid that is genuinely alive and is NOT ours: `pidAlive` short-circuits on
+// `pid === process.pid`, so using our own would never exercise the
+// `process.kill` witness this rule is built on. (The peer above is dead by now.)
+const liveKeeper = spawn(process.execPath, ['-e', 'setInterval(() => {}, 60_000)'], { stdio: 'ignore' })
+const livePid = liveKeeper.pid
+if (!await until(() => pidAlive(livePid))) throw new Error('the live keeper never started')
+writeFileSync(LOCK, `${livePid}-liveholder\n`, 'utf8')
+utimesSync(LOCK, longAgo, longAgo)
+const blockedByLive = claimMount('locked-sess')
+check('a lock whose holder is ALIVE is never reclaimed', blockedByLive.ok === false && blockedByLive.reason === 'busy')
+check('and the live holder still owns its lock file', existsSync(LOCK))
+rmSync(LOCK, { force: true })
+liveKeeper.kill()
+if (!await until(() => !pidAlive(livePid))) throw new Error('the live keeper did not exit')
+
+// A lock whose token cannot be read is the create-then-write window: a FRESH
+// one is a peer mid-acquisition and must be left alone, an old one is a crash.
+writeFileSync(LOCK, '', 'utf8')
+check('a fresh lock with no readable holder is left alone', claimMount('locked-sess').ok === false)
+writeFileSync(LOCK, '', 'utf8')
+utimesSync(LOCK, longAgo, longAgo)
+check('an OLD unreadable lock is reclaimed as a crash leftover', claimMount('locked-sess').ok === true)
+releaseMount('locked-sess')
+
+writeFileSync(LOCK, `${deadPid}-crashed\n`, 'utf8')
+utimesSync(LOCK, longAgo, longAgo)
+check('a lock whose holder is DEAD is reclaimed at once', claimMount('locked-sess').ok === true)
+check('and the lock file is released afterwards', !existsSync(LOCK))
+releaseMount('locked-sess')
+clearOwnMounts()
+
+// ── 7. Reservations survive a publisher beat, and end explicitly ───────────
+// A claim is committed before the agent exists in the registry. If the beat
+// rebuilt the published set from the roster alone it would erase that claim,
+// and a peer asking in the meantime would be told the session is free.
+console.log('reservation:')
+rmSync(LEDGER, { force: true })
+const reserved = await reserveMount('reserved-sess')
+check('a free session reserves ok', reserved.ok === true)
+publishMounts([])
+check('a beat that cannot see the agent keeps the reservation', readMountLedger().some(
+  owner => owner.pid === process.pid && owner.sessionIds.includes('reserved-sess'),
+))
+check('and the session still reads as ours', occupancyOf('reserved-sess', readSessionOwners()).kind === 'mine')
+reserved.reservation.settle()
+publishMounts([])
+check('settle ends the pin, so the next beat drops it', !readMountLedger().some(
+  owner => owner.sessionIds.includes('reserved-sess'),
+))
+
+const abandoned = await reserveMount('abandoned-sess')
+check('a second reservation is ok', abandoned.ok === true)
+abandoned.reservation.abandon()
+check('abandon gives the session straight back',
+  occupancyOf('abandoned-sess', readSessionOwners()).kind === 'free'
+  && !ownMounts().includes('abandoned-sess')
+  && readMountLedgerStrict().ok === true)
+abandoned.reservation.abandon()
+check('and abandon is idempotent',
+  occupancyOf('abandoned-sess', readSessionOwners()).kind === 'free' && ownMounts().length === 0)
+
+// A reservation only gives back what it TOOK. Two attempts can overlap on one
+// session (two fast `/resume`s, or a re-resume of a parked handle); when the
+// first commits and the second is vetoed, the abandoned reservation must not
+// release the mount the committed one is still driving — that would hand a log
+// this process is writing to the next peer that asks.
+const committedAttempt = await reserveMount('shared-sess')
+const vetoedAttempt = await reserveMount('shared-sess')
+check('two attempts on one session both reserve', committedAttempt.ok === true && vetoedAttempt.ok === true)
+committedAttempt.reservation.settle()
+vetoedAttempt.reservation.abandon()
+check('an abandoned reservation does NOT release a committed mount',
+  occupancyOf('shared-sess', readSessionOwners()).kind === 'mine' && ownMounts().includes('shared-sess'))
+check('and the ledger still records us as its holder', readMountLedger().some(
+  owner => owner.pid === process.pid && owner.sessionIds.includes('shared-sess'),
+))
+releaseMount('shared-sess')
+clearOwnMounts()
 
 if (failures > 0) {
   console.error(`\n${failures} check(s) failed`)

@@ -139,19 +139,25 @@ assert.match(
 assert.doesNotMatch(plugin, /if \(created\)/, 'startup attachment must not skip resumed legacy sessions')
 // The launch-time --resume path mounts the log before the mount publisher is
 // even installed (`startSessionMountHeartbeat` runs later in `apply`), and the
-// publisher never refuses a mount — it publishes the set. So the claim, taken
-// before any await, is the only thing standing between two terminals doing
-// `--resume <same id>` and a corrupted transcript. Pin the seam, not the prose.
-const claimAt = plugin.indexOf('claimMount(requestedSessionId)')
-const claimRefusalAt = plugin.indexOf('if (!claim.ok)')
+// publisher never refuses a mount — it publishes the set. So the reservation,
+// taken before any await, is the only thing standing between two terminals
+// doing `--resume <same id>` and a corrupted transcript. Pin the seam, not the
+// prose.
+const claimAt = plugin.indexOf('reserveMount(requestedSessionId)')
+const claimRefusalAt = plugin.indexOf('if (!reserved.ok)')
 const resumeAt = plugin.indexOf('await ctx.agents.resume(')
-assert.ok(claimAt >= 0, 'the launch-time --resume path claims the session mount')
-assert.ok(claimRefusalAt > claimAt, 'a refused launch-time claim is handled, not ignored')
-assert.ok(resumeAt > claimRefusalAt, 'the claim and its refusal precede the resume it guards')
+assert.ok(claimAt >= 0, 'the launch-time --resume path reserves the session mount')
+assert.ok(claimRefusalAt > claimAt, 'a refused launch-time reservation is handled, not ignored')
+assert.ok(resumeAt > claimRefusalAt, 'the reservation and its refusal precede the resume it guards')
 assert.match(
   plugin,
-  /releaseMount\(requestedSessionId\)/,
-  'a launch-time resume that fails releases its claim instead of leaving a phantom holder',
+  /reservation\.abandon\(\)/,
+  'a launch-time resume that fails gives its reservation back instead of leaving a phantom holder',
+)
+assert.match(
+  plugin,
+  /reservation\.settle\(\)/,
+  'a launch-time resume that succeeds hands the session to the agent registry',
 )
 assert.equal(
   [...channel.matchAll(/await attachSessionToWorkspace\(ctx, (?:state\.cwd|targetCwd|deps\.cwd\(\)|handle\.agent\.session\.header\.cwd \?\? state\.cwd|sourceCwd), (?:SessionId\(sessionId\)|childId|sessionId)\)/g)].length,
