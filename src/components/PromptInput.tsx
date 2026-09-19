@@ -923,13 +923,16 @@ export function PromptInput({
     { image: undefined, title: undefined },
   )
   /** Tell the caller which staged image the caret is on. `'caret'` reports
-   *  only changes; `'click'` always reports (see onCaretImage). */
+   *  only changes; `'click'` always reports (see onCaretImage). "Same image"
+   *  is the attachment id plus the token, not facade identity: this runs
+   *  after every commit and the caller stores what it reports, so an
+   *  identity-only difference would re-render the caller forever (#885). */
   const reportCaretImage = (reason: 'caret' | 'click'): void => {
     const report = onCaretImageRef.current
     if (report === undefined) return
     const found = suspended ? undefined : caretImageAt(valueRef.current, cursorRef.current)
     const last = lastCaretImageRef.current
-    if (reason === 'caret' && last.image === found?.image && last.title === found?.title) return
+    if (reason === 'caret' && last.image?.id === found?.image.id && last.title === found?.title) return
     lastCaretImageRef.current = { image: found?.image, title: found?.title }
     report(found?.image, found?.title, reason)
   }

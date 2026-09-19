@@ -162,6 +162,10 @@ const GROUPS = {
 // 时间线 rail 回归：rail 覆盖全部轮次（含折叠轮），高亮锚定视口顶、
 // ▲/▼ 目标不越过 maxScroll。
     ["verify-timeline-rail", ['node', '--import', 'tsx/esm', 'scripts/verify-timeline-rail.tsx']],
+// 时间线 rail 视口高度落定回归：底部 chrome 悬停展开/收回与终端行 resize
+// 改变转录视口高度时（无滚动通知、不翻转 sticky），rail 几何必须跟随；
+// 通知语义（仅高度变化触发）经渲染器→React 回调计数探针断言。
+    ["verify-timeline-rail-settle", ['node', '--import', 'tsx/esm', 'scripts/verify-timeline-rail-settle.tsx']],
 // 多行 user 的置顶摘要不得向转录左侧出血；宽/窄终端均保留滚动锚定。
     ['verify-sticky-anchor', ['node', '--import', 'tsx/esm', 'scripts/verify-sticky-anchor.tsx']],
     ['verify-sticky-anchor-narrow', ['node', '--import', 'tsx/esm', 'scripts/verify-sticky-anchor.tsx'], { DSH_TEST_COLUMNS: '60' }],

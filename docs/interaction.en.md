@@ -445,8 +445,8 @@ owns native scrollback and selection.
 | Action | Behavior |
 | --- | --- |
 | Wheel | Routed by position: moves the selected row in the completion/command menu under the pointer; scrolls the topmost scroll container (transcript / help / subagent panel); elsewhere scrolls the message list; never scrolls the transcript behind an open overlay; moves the cursor in the trajectory scene (±3 rows per notch on the timeline, ±1 in hotspot, scrolls the detail while expanded); walks the focused row in /settings |
-| Drag | Select text, copy on release, then clear the selection |
-| Double/triple click | Select and copy a word/line |
+| Drag | Select text, copy on release, then clear the selection; with `dsh-tui.scrollGutter: scrollbar` the right-edge scrollbar is a drag target — an unmodified left drag scrubs the transcript to the track position (the same mapping as a track click: drag to point), while `Shift`/`Alt`/`Ctrl`+drag still selects text (the drag protocol opens only for unmodified left presses) |
+| Double/triple click | Select and copy a word/line (exception: the `scrollGutter: scrollbar` track is a drag target, so multi-clicks there no longer select a line) |
 | `Esc` | Cancel an active drag (or an existing selection) without copying |
 | Single-click a message row | Plain text rows (user/assistant) do nothing — the transcript is a reading surface, selection is the mouse's job there |
 | Single-click a tool card / thinking / compact summary | Expand / collapse (header brightens on hover; trailing blank cells do not trigger) |
@@ -469,6 +469,10 @@ owns native scrollback and selection.
 | Single-click a session-browser confirm row | Confirm the delete/clean (same as Enter); cancelling stays on keyboard Esc |
 | Single-click a help-menu command row | Fill `/name ` into the prompt and close the help (the Tab completion's mouse equivalent) |
 | Keyboard selection extension | With a selection, `Shift+←/→/↑/↓/Home/End` extends / shrinks it (wraps across lines) |
+
+These mouse behaviors apply only under `fullscreen: true` (alternate screen);
+inline mode enables no mouse reporting, so scrollbar dragging does not apply
+there — the terminal's native scrollback and selection stay in charge.
 
 Copy prefers OSC 52. Local fallbacks include `wl-copy`, `xclip`, and `xsel`;
 tmux uses `load-buffer -w`. Set `DSH_TUI_DISABLE_MOUSE=1` to temporarily disable
