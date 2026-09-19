@@ -8,6 +8,7 @@
  *    yellow ≥ 20, red below.
  */
 import type { Color } from '../ink/styles.js'
+import { stringWidth } from '../ink/stringWidth.js'
 
 /** Context bar segments — DeepSeek blue family (dark-theme friendly: deep
  *  navy → brand blue, neutral grey free segment).
@@ -210,7 +211,14 @@ export function contextBarBreakdown(
     rung = candidate
     const labels = raw.map(entry => breakdownLabel(entry, candidate.labelIndex))
     // One chip cell per entry prefixes each label on the supplemental row.
-    if (labels.join(candidate.separator).length + labels.length <= budget) break
+    // Measured in terminal cells with the renderer's own helper, not UTF-16
+    // units: the ` · ` separator is East-Asian ambiguous, and the label set is
+    // free to gain non-ASCII names later.
+    const rendered =
+      labels.reduce((sum, label) => sum + stringWidth(label), 0)
+      + labels.length
+      + stringWidth(candidate.separator) * (labels.length - 1)
+    if (rendered <= budget) break
   }
   return {
     entries: raw.map(entry => ({
