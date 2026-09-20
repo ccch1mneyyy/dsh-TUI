@@ -43,11 +43,16 @@ function makeAgent(id, sessionId, events = []) {
   }
 }
 
+// Cache reads/writes occupy the window too, so keep them non-zero: the live
+// scenario below is sized so a cache-BLIND numerator (lastUsage.input alone:
+// 30k left of 100k) stays above the 20k warning buffer while the billed
+// numerator (70k + 6k + 6k = 82k used, 18k left) crosses it. A
+// cumulative-tokens implementation and a cache-ignoring one both fail here.
 const usage = {
   inputTokens: 70_000,
   outputTokens: 1_000,
-  cacheReadTokens: 0,
-  cacheWriteTokens: 0,
+  cacheReadTokens: 6_000,
+  cacheWriteTokens: 6_000,
 }
 const historicalEvents = [
   { type: 'request/context', seq: 1, time: 1, data: { contextWindow: 128_000 } },
@@ -147,7 +152,9 @@ const emit = (type, data) => {
   target.session.events.push(event)
   ctx.emit('session/event', target.session, event)
 }
-emit('request/context', { contextWindow: 80_000 })
+// 100k with the billed 82k leaves 18k — under the 20k buffer, but a numerator
+// that ignored the cache split (70k) would leave 30k and stay silent.
+emit('request/context', { contextWindow: 100_000 })
 emit('turn/start', { turn: 4 })
 emit('assistant/message', {
   turn: 4,

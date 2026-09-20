@@ -65,8 +65,11 @@ import { createModelActions } from '../src/dsh-adapter/channel/model-actions.js'
   const warnings: string[] = []
   // The warning reads the last turn's billed usage (input + cache read +
   // cache write), not the cumulative tokens counter — resumed sessions
-  // replay the counter at full size while the live turn stays small.
-  const state = { contextWindow: 100, tokens: { input: 90 }, lastUsage: { input: 90, cacheRead: 0, cacheWrite: 0 }, pending: [], emit() {} }
+  // replay the counter at full size while the live turn stays small. Keep the
+  // two numerators on OPPOSITE sides of the threshold (window 100, buffer 20:
+  // warn only above 80 used) so a cumulative-counter implementation produces
+  // no warning at all instead of passing these assertions by accident.
+  const state = { contextWindow: 100, tokens: { input: 50 }, lastUsage: { input: 90, cacheRead: 0, cacheWrite: 0 }, pending: [], emit() {} }
   const bookkeeping = createContextBookkeeping(
     () => state,
     text => { warnings.push(text) },
