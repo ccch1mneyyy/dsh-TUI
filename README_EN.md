@@ -207,6 +207,19 @@ commands), then `dsh-tui` (or `dst`) and `dsh --profile dsh-tui` are equivalent.
 >
 > `/update` and `dsh-tui update` seed this configuration automatically —
 > no manual step needed.
+>
+> Updates also maintain `ignoredOptionalDependencies` covering foreign-platform
+> `@img/sharp-*` natives: sharp ships as all-platform optional dependencies, and
+> an untouched `pnpm update` downloads every platform's binaries (about 200MB
+> measured). The list is recomputed for the running platform on every update, so
+> the foreign natives are skipped while this platform's own and the
+> platform-agnostic wasm fallbacks stay; move the profile to another platform or
+> musl container and the next update there refreshes it. An existing profile's
+> lockfile still lists every platform, so its first update downloads them once
+> more before the filter takes effect. Entries outside those two platform tables
+> (a user's `fsevents`, a hand-written `@img/sharp-wasm32` exemption) are left as
+> they are; this needs a pnpm that supports the key, and one that does not fails
+> nothing — it merely loses the saving.
 
 `dsh-tui` (or its `dst` alias) with `--resume` restores the most recently selected session; on Windows
 the repository's `dsh-tui.cmd` works the same way.

@@ -129,6 +129,8 @@ sh install.sh
 > ```
 >
 > `/update` 与 `dsh-tui update` 会自动写入这份配置，无需手工处理。
+>
+> 更新时还会维护 `ignoredOptionalDependencies`（忽略异平台的 `@img/sharp-*` 原生包）——sharp 以全平台可选依赖分发，不处理时 `pnpm update` 会把各平台二进制一起下载（实测约 200MB）。名单每次更新按当前平台重算，异平台原生包不再下载（当前平台原生包与无平台归属的 wasm 回退包保留）；把 profile 搬到别的平台或 musl 容器后，在那台机器上跑一次更新即可刷新。老 profile 的 lockfile 里仍写着全平台条目，第一次更新会照旧下载一遍，之后才被忽略。块内不属于这两张平台表的条目（`fsevents`、自己写的 `@img/sharp-wasm32` 豁免）原样保留；需要 pnpm 支持该键，不认识的版本不会因此报错，只失去这项收益。
 
 更面向零基础的安装流程、profile 叠加机制、源码构建与常见问题见[安装与快速开始](docs/getting-started.md)。
 
