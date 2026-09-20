@@ -126,13 +126,18 @@ function isUnregisteredProvider(error: unknown): boolean {
  * @param llm - The llm runtime seam, when mounted.
  * @param route - The resolved route to check.
  * @param fallback - Route to adopt when the check rejects.
- * @returns The adopted route plus the rejected one (for a warning), if any.
+ * @returns The adopted route, the rejected one (for a warning) if any, and
+ *   whether a non-empty catalog actually listed the model. A route that was
+ *   merely trusted — no llm service, an empty catalog, a transport failure —
+ *   carries no `verified`, which is the distinction the verification cache
+ *   (modelRouteCache.ts) keys off: only a real catalog answer is worth
+ *   remembering.
  */
 export async function validateModelRoute(
   llm: { listModels(provider: string): Promise<readonly { id: string }[]> } | undefined,
   route: ModelRoute,
   fallback: ModelRoute = DEFAULT_MODEL_ROUTE,
-): Promise<{ route: ModelRoute; rejected?: ModelRoute }> {
+): Promise<{ route: ModelRoute; rejected?: ModelRoute; verified?: boolean }> {
   if (llm === undefined) return { route }
   let models: readonly { id: string }[]
   try {
@@ -141,6 +146,7 @@ export async function validateModelRoute(
     if (!isUnregisteredProvider(error)) return { route }
     return { route: fallback, rejected: route }
   }
-  if (models.length === 0 || models.some(model => model.id === route.model)) return { route }
+  if (models.length === 0) return { route }
+  if (models.some(model => model.id === route.model)) return { route, verified: true }
   return { route: fallback, rejected: route }
 }

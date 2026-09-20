@@ -25,7 +25,8 @@ import { registerPromptDebug } from './promptDebug.js'
 import { readActivityFrames } from '../activityPrefs.js'
 import { commitFullscreenFactoryMigration, planFullscreenFactoryMigration, readAppliedMigrations } from '../migrationPrefs.js'
 import { readModelPref } from '../modelPrefs.js'
-import { explicitModelRoute, recordedModelRoute, resolveModelRoute, validateModelRoute } from '../modelRoute.js'
+import { explicitModelRoute, recordedModelRoute, resolveModelRoute } from '../modelRoute.js'
+import { validateModelRouteCached } from '../modelRouteCache.js'
 import type { ModelRoute } from '../modelRoute.js'
 import { migratePresetPref, readPresetPref } from '../presetPrefs.js'
 import { readEffortPref } from '../effortPrefs.js'
@@ -1921,7 +1922,7 @@ async function resolveAgent(
   const llm = ctx.get('llm') as
     | { listModels(provider: string): Promise<readonly { id: string }[]> }
     | undefined
-  const { route, rejected } = await validateModelRoute(llm, startupRoute)
+  const { route, rejected } = await validateModelRouteCached(llm, startupRoute)
   if (rejected !== undefined) {
     ctx.logger.warn(
       `dsh-tui: model route ${rejected.provider}/${rejected.model} is not advertised by provider "${rejected.provider}"; falling back to ${route.provider}/${route.model}`,

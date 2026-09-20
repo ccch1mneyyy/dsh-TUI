@@ -489,6 +489,7 @@ provider / model / cwd / preset / workspace / sessionId / modes
 **主题优先级**：`DSH_TUI_THEME` > `~/.dsh-tui/theme.json` > OSC 11 终端背景检测 > dark 回退。
 
 **~/.dsh-tui/ 偏好文件**（均 best-effort，坏文件回退默认）：`theme.json`、`model.json`、
+`model-route-cache.json`（模型目录校验结果缓存，7 天有效；只在 `/model` 变更后首次启动重新校验）、
 `agent-preset.json`、`effort.json`、`working-activity.json`、`lang.json`、`trajectory.json`（提示退休标记）、
 `resume.txt` / `last-used.json`（会话恢复）、`themes/<名>.json`（自定义主题）。
 

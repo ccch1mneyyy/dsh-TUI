@@ -26,10 +26,19 @@
  *    preference behind it.
  * 9. recordedModelRoute: a resume's status-line route comes from the target
  *    session's own log (last request/header wins; a bare log records none).
+ * 10. validateModelRouteCached: the advisory catalog check is remembered per
+ *    exact route, so the provider is asked once per `/model` change instead of
+ *    once per launch (a third-party adapter can spend seconds on that one
+ *    call). A remembered answer is reused while fresh, expires with the TTL,
+ *    and is only ever written for a catalog that actually answered — a trusted
+ *    route is re-checked.
  *
  * Run with plain node against the compiled lib (after `pnpm build`):
  * `node scripts/verify-model-route.mjs`
  */
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import {
   DEFAULT_MODEL_ROUTE,
   explicitModelRoute,
@@ -37,6 +46,14 @@ import {
   resolveModelRoute,
   validateModelRoute,
 } from '../lib/types/modelRoute.js'
+import {
+  MODEL_ROUTE_CACHE_TTL_MS,
+  lookupCachedRoute,
+  parseRouteCache,
+  readRouteCache,
+  rememberRouteDecision,
+  validateModelRouteCached,
+} from '../lib/types/modelRouteCache.js'
 
 let failed = 0
 function check(name, ok, extra = '') {
@@ -182,6 +199,117 @@ const PREF = { provider: 'my-gateway', model: 'glm-5.3' }
     'resume -> malformed header data is skipped',
     recordedModelRoute([{ type: 'request/header', data: { header: {} } }]) === undefined,
   )
+}
+
+// 10. Verification cache (see modelRouteCache.ts): the catalog answer is
+//     remembered per exact route, so a launch does not pay the provider's
+//     catalog round trip again — a third-party adapter's cold answer measured
+//     2.0-2.9s on a real launch, the largest single block of the boot.
+{
+  const dirs = []
+  const tempDir = () => {
+    const dir = mkdtempSync(join(tmpdir(), 'dsh-tui-model-route-cache-'))
+    dirs.push(dir)
+    return dir
+  }
+  const catalog = provider => Promise.resolve(provider === 'my-gateway' ? [{ id: 'glm-5.3' }] : [])
+
+  // A miss asks the provider once and remembers the decision.
+  const missDir = tempDir()
+  let calls = 0
+  const counting = { listModels: provider => { calls += 1; return catalog(provider) } }
+  const first = await validateModelRouteCached(counting, PREF, DEFAULT_MODEL_ROUTE, missDir)
+  check(
+    'cache miss -> catalog read once, route kept and remembered',
+    calls === 1 && first.rejected === undefined && eq(first.route, PREF) && readRouteCache(missDir).length === 1,
+    `calls=${calls}`,
+  )
+
+  // A fresh entry answers without touching the provider at all.
+  const second = await validateModelRouteCached(counting, PREF, DEFAULT_MODEL_ROUTE, missDir)
+  check(
+    'fresh cache -> provider never asked again',
+    calls === 1 && second.rejected === undefined && eq(second.route, PREF),
+    `calls=${calls}`,
+  )
+
+  // A `/model` change is a different key: it is verified on that launch, and
+  // the wholesale fallback it produces is remembered too (the stale pref must
+  // not cost a network round trip on every launch until it is fixed).
+  const badRoute = { provider: 'my-gateway', model: 'glm-4' }
+  const changed = await validateModelRouteCached(counting, badRoute, DEFAULT_MODEL_ROUTE, missDir)
+  check(
+    'changed route -> verified on that launch, wholesale fallback',
+    calls === 2 && changed.rejected !== undefined && eq(changed.route, DEFAULT_MODEL_ROUTE),
+    `calls=${calls}`,
+  )
+  const changedAgain = await validateModelRouteCached(counting, badRoute, DEFAULT_MODEL_ROUTE, missDir)
+  check(
+    'remembered rejection -> fallback without another catalog read',
+    calls === 2 && eq(changedAgain.route, DEFAULT_MODEL_ROUTE) && eq(changedAgain.rejected, badRoute),
+    `calls=${calls}`,
+  )
+
+  // Trusted-but-unverified answers (transport failure, empty catalog) prove
+  // nothing about the catalog and are re-checked on the next launch.
+  const trustDir = tempDir()
+  let trustCalls = 0
+  const failing = { listModels: () => { trustCalls += 1; return Promise.reject(new Error('boom')) } }
+  await validateModelRouteCached(failing, PREF, DEFAULT_MODEL_ROUTE, trustDir)
+  await validateModelRouteCached(failing, PREF, DEFAULT_MODEL_ROUTE, trustDir)
+  check(
+    'transport failure -> trusted, never cached (re-checked)',
+    trustCalls === 2 && readRouteCache(trustDir).length === 0,
+    `calls=${trustCalls}`,
+  )
+  const emptyDir = tempDir()
+  let emptyCalls = 0
+  const emptyCatalog = { listModels: () => { emptyCalls += 1; return Promise.resolve([]) } }
+  await validateModelRouteCached(emptyCatalog, PREF, DEFAULT_MODEL_ROUTE, emptyDir)
+  await validateModelRouteCached(emptyCatalog, PREF, DEFAULT_MODEL_ROUTE, emptyDir)
+  check(
+    'empty catalog -> trusted, never cached (re-checked)',
+    emptyCalls === 2 && readRouteCache(emptyDir).length === 0,
+    `calls=${emptyCalls}`,
+  )
+  const absentDir = tempDir()
+  const noLlm = await validateModelRouteCached(undefined, PREF, DEFAULT_MODEL_ROUTE, absentDir)
+  check(
+    'no llm service -> trusted, nothing written',
+    eq(noLlm.route, PREF) && readRouteCache(absentDir).length === 0,
+  )
+
+  // TTL expiry: an old answer is not reused.
+  const staleDir = tempDir()
+  rememberRouteDecision(PREF, PREF, staleDir, Date.now() - MODEL_ROUTE_CACHE_TTL_MS - 1)
+  const stale = readRouteCache(staleDir)
+  check(
+    'expired entry -> not reused',
+    stale.length === 1
+      && lookupCachedRoute(PREF, stale, Date.now()) === undefined
+      && eq(lookupCachedRoute(PREF, stale, Date.now() - MODEL_ROUTE_CACHE_TTL_MS), PREF),
+  )
+
+  // A corrupt or malformed file only means "ask again" — never a crash.
+  const corruptDir = tempDir()
+  writeFileSync(join(corruptDir, 'model-route-cache.json'), '{not json')
+  check(
+    'corrupt cache file -> treated as empty',
+    readRouteCache(corruptDir).length === 0 && parseRouteCache('{not json').length === 0,
+  )
+  check(
+    'malformed entries dropped, valid ones kept',
+    parseRouteCache(JSON.stringify({
+      version: 1,
+      routes: [
+        { provider: 'a' },
+        { provider: 'a', model: 'b', adopted: { provider: 'a', model: 'b' }, at: 'x' },
+        { provider: 'a', model: 'b', adopted: { provider: 'a', model: 'b' }, at: 1 },
+      ],
+    })).length === 1,
+  )
+
+  for (const dir of dirs) rmSync(dir, { recursive: true, force: true })
 }
 
 if (failed > 0) {
