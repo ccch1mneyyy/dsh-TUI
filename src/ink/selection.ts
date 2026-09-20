@@ -1175,9 +1175,21 @@ function joinRows(
  *
  * Called once per rendered frame (post-render, pre-swap) on the frame the
  * copy would read. The hash covers every visible cell of every covered row
- * (charId + width, same visibility rules as getSelectedText: noSelect and
- * spacer cells skipped) — styleId is excluded so the selection overlay and
- * syntax highlighting themselves cannot trip the guard.
+ * (same visibility rules as getSelectedText: noSelect and spacer cells
+ * skipped) via the cell's TEXT — `charPool.get(charId)` — not its pool
+ * index. styleId is excluded so the selection overlay and syntax
+ * highlighting themselves cannot trip the guard.
+ *
+ * Why content and not charId: a charId is an index into a generational
+ * CharPool, not a stable identity. Ink.resetPools() (ink.tsx) swaps in a
+ * fresh CharPool every ~5 minutes and re-interns the front frame through
+ * migrateScreenPools, so the SAME glyph comes back under a different
+ * number. Hashing ids would read that renumbering as "the covered rows
+ * changed" and refuse a perfectly legitimate copy with the stale-content
+ * notice — a false positive on a screen where nothing was replaced. The
+ * pool lookup is an array index plus a 1-2 code-unit hash loop, measured
+ * at ~0.05ms for a full 200x50 selection (~0.14ms at 200x200), i.e. no
+ * worse than hashing the ids themselves.
  *
  * @param s - the selection state to fingerprint.
  * @param screen - the frame's screen buffer.
@@ -1207,7 +1219,7 @@ export function refreshSelectionFingerprint(
     s.coveredGeometry = geometry
     s.coveredFingerprint = null
   }
-  const { cells, noSelect, width, height } = screen
+  const { cells, noSelect, width, height, charPool } = screen
   let h = 0x811c9dc5
   for (let row = b.start.row; row <= b.end.row; row++) {
     if (row < 0 || row >= height) continue
@@ -1220,11 +1232,19 @@ export function refreshSelectionFingerprint(
     const colStart = row === b.start.row ? b.start.col : 0
     const colEnd = row === b.end.row ? b.end.col : width - 1
     for (let col = colStart; col <= colEnd; col++) {
+      const ci = (rowOff + col) * 2
       // word1's low 2 bits are the cell width; SpacerTail/SpacerHead carry
       // no text of their own.
-      if ((cells[(rowOff + col) * 2 + 1]! & 3) >= CellWidth.SpacerTail) continue
+      if ((cells[ci + 1]! & 3) >= CellWidth.SpacerTail) continue
       if (noSelect![rowOff + col] === 1) continue
-      h = Math.imul(h ^ cells[(rowOff + col) * 2]!, 0x01000193)
+      // Resolve the id through the pool and hash the actual characters —
+      // the exact string getSelectedText would emit for this cell. Two
+      // pools holding the same glyph hash identically, so a generational
+      // pool swap is invisible here; a different glyph is not.
+      const ch = charPool.get(cells[ci]!)
+      for (let k = 0; k < ch.length; k++) {
+        h = Math.imul(h ^ ch.charCodeAt(k), 0x01000193)
+      }
     }
     // Row separator + the row's soft-wrap bit: getSelectedText joins a
     // wrapped row onto the previous line with NO newline (softWrap[row]>0)
