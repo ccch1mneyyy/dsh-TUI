@@ -8,6 +8,7 @@ import { dispatchTuiDecision } from '../extension-events.js'
 import { normalizeRewindDoneSummary } from './decisions.js'
 import { composePreset, runningPresetOf } from '../presets.js'
 import { attachSessionToWorkspace } from '../workspace.js'
+import { reserveNewSession } from '../../sessionMounts.js'
 import type { createChannelBinding } from './binding.js'
 import type { ChannelOwner } from './owner.js'
 import type { ChannelState, ChatRow } from './types.js'
@@ -80,6 +81,10 @@ export function createRewindToAction(
       return null
     }
     const composed = await composePreset(ctx, runningPresetOf(deps.binding.agent.session))
+    // Announce the id before the factory: the rewind creates the child's log
+    // here, and the publisher only learns the id from the registry on its next
+    // beat.
+    const { reservation } = await reserveNewSession(String(childId))
     let handle: AgentHandle
     try {
       handle = await deps.binding.prepare(adoption, () => agents.create(liveSessionCreateOptions({
@@ -91,36 +96,53 @@ export function createRewindToAction(
         parentSession: deps.binding.agent.session.id,
         agentPreset: composed.agentPreset,
         agentOptions: { provider: state.provider, model: state.model },
-        setup: composed.setup,
+        setup: async (agentCtx, agent) => {
+          // The cut keeps pre-turn inbox insertions but drops their claims.
+          // Newer hosts replay those inherited splices, so cancel the restored
+          // queue durably in the CHILD before publication or preset setup.
+          // Clearing only state.pending would hide, not revoke, the old work.
+          agent.inbox.clear()
+          return composed.setup?.(agentCtx, agent)
+        },
       })))
     } catch {
+      reservation.abandon()
       deps.notify(t('rewind-create-failed'), { color: 'error' })
       return null
     }
-    if (!deps.binding.isCurrent(adoption)) { await deps.binding.abandon(handle); return null }
+    if (!deps.binding.isCurrent(adoption)) { await deps.binding.abandon(handle); reservation.abandon(); return null }
     try {
       await attachSessionToWorkspace(ctx, state.cwd, childId)
     } catch (error) {
       deps.notify(t('rewind-attach-failed', { err: error instanceof Error ? error.message : String(error) }), { color: 'warning', timeoutMs: 8000 })
     }
-    if (!deps.owner.current()) { await deps.binding.abandon(handle); return null }
-    const sourceSessionId = deps.adoptForkedAgent(handle, adoption, seed, composed.agentPreset, childId)
+    if (!deps.owner.current()) { await deps.binding.abandon(handle); reservation.abandon(); return null }
+    // `adoptForkedAgent` is the commit: the child is the session this process
+    // now drives, so the reservation hands over to the registry. It THROWS when
+    // the adoption transaction revokes the candidate, so it is guarded.
     try {
-      void dispatchTuiDecision(ctx, 'tui/rewind-done', {
-        text: row.text,
-        mode,
-        boundarySeq: boundary,
-        sourceSessionId,
-        childSessionId: String(childId),
-        sessionId: String(childId),
-        cwd: state.cwd,
-      }, normalizeRewindDoneSummary).then(summary => {
-        if (typeof summary === 'string') deps.notify(summary, { timeoutMs: 6000 })
-      }).catch((error: unknown) => ctx.logger.warn('dsh-tui: tui/rewind-done dispatch failed: %o', error))
+      const sourceSessionId = deps.adoptForkedAgent(handle, adoption, snapshotLiveSessionEvents(handle.agent.session), composed.agentPreset, childId)
+      reservation.settle()
+      try {
+        void dispatchTuiDecision(ctx, 'tui/rewind-done', {
+          text: row.text,
+          mode,
+          boundarySeq: boundary,
+          sourceSessionId,
+          childSessionId: String(childId),
+          sessionId: String(childId),
+          cwd: state.cwd,
+        }, normalizeRewindDoneSummary).then(summary => {
+          if (typeof summary === 'string') deps.notify(summary, { timeoutMs: 6000 })
+        }).catch((error: unknown) => ctx.logger.warn('dsh-tui: tui/rewind-done dispatch failed: %o', error))
+      } catch (error) {
+        ctx.logger.warn('dsh-tui: tui/rewind-done dispatch failed: %o', error)
+      }
+      deps.notifySessionSwitched('rewind', String(childId), sourceSessionId)
+      return row.text
     } catch (error) {
-      ctx.logger.warn('dsh-tui: tui/rewind-done dispatch failed: %o', error)
+      reservation.abandon()
+      throw error
     }
-    deps.notifySessionSwitched('rewind', String(childId), sourceSessionId)
-    return row.text
   }
 }

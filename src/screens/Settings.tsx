@@ -281,8 +281,8 @@ export function Settings({
   channel: Channel
   onClose: () => void
 }): React.ReactNode {
-  // Explicit terminal size (not flexGrow) — the same rule SessionBrowser's
-  // root follows inside the alternate screen's fixed-height box.
+  // Explicit terminal size (not flexGrow) — the same rule the full-screen
+  // session views follow inside the alternate screen's fixed-height box.
   const { columns, rows } = useTerminalSize()
   // channel caches the host — a fresh object per call would re-fire the
   // host-keyed effects below on every render (an endless render loop).
@@ -493,7 +493,7 @@ export function Settings({
       } else if (key.backspace || key.delete) {
         setEditing(state => state === null ? null : { ...state, draft: state.draft.slice(0, -1) })
       } else if (!isMod(key) && !key.meta && !key.super && input && !key.return) {
-        // Only real characters reach the draft (see SessionBrowser's query).
+        // Only real characters reach the draft (see the supervisor's filter).
         const typed = input.replace(/\p{Cc}/gu, '')
         if (typed.length > 0) {
           setEditing(state => state === null ? null : { ...state, draft: state.draft + typed })
@@ -721,10 +721,21 @@ export function Settings({
   }
 
   // Focus-follow window: keep the focused entry fully inside the viewport.
+  // The card chrome rows (top border + title, bottom border, section gaps)
+  // carry no focus, so the follow rules alone can push them out of the window
+  // at the ends of the scroll range — the clamp below keeps the window inside
+  // the list's physical bounds, and pins it there while the focus sits at
+  // either end of the focus order.
   let totalLines = 0
   let focusedOffset = 0
   let focusedLines = 1
+  let firstFocusOffset: number | undefined
+  let lastFocusOffset: number | undefined
   for (const entry of entries) {
+    if (entry.focus !== undefined) {
+      if (firstFocusOffset === undefined) firstFocusOffset = totalLines
+      lastFocusOffset = totalLines
+    }
     if (entry.focus === effFocus) {
       focusedOffset = totalLines
       focusedLines = entry.lines
@@ -735,13 +746,22 @@ export function Settings({
   // permanent (blank while quiet) so a save/discard toast never shifts the
   // list above it.
   const viewport = Math.max(1, rows - 4)
+  const maxStart = Math.max(0, totalLines - viewport)
   React.useEffect(() => {
     setWindowStart(start => {
-      if (focusedOffset < start) return focusedOffset
-      if (focusedOffset + focusedLines > start + viewport) return focusedOffset + focusedLines - viewport
-      return start
+      let next = Math.min(Math.max(0, start), maxStart)
+      if (focusedOffset < next) next = focusedOffset
+      if (focusedOffset + focusedLines > next + viewport) next = focusedOffset + focusedLines - viewport
+      // Focus at either end of the focus order pins the window to the list's
+      // edge (the card title / bottom border stay visible once the scroll
+      // bottoms out) — but only while the focused row stays inside the pinned
+      // window: a viewport too small for the edge must keep hiding chrome
+      // rather than ever hiding the focus.
+      if (firstFocusOffset !== undefined && focusedOffset <= firstFocusOffset && focusedOffset + focusedLines <= viewport) return 0
+      if (lastFocusOffset !== undefined && focusedOffset >= lastFocusOffset && focusedOffset >= maxStart) return maxStart
+      return next
     })
-  }, [focusedOffset, focusedLines, viewport])
+  }, [focusedOffset, focusedLines, viewport, maxStart, firstFocusOffset, lastFocusOffset])
 
   let entryOffset = 0
   const visible = entries.filter(entry => {

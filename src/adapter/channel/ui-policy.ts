@@ -51,6 +51,9 @@ export const CHANNEL_UI_EFFECTS = Object.freeze({
   'resumeTo': 'mutate',
   'newSession': 'mutate',
   'listWorkspaces': 'read-only',
+  'listWorkspaceRegistry': 'read-only',
+  'removeWorkspace': 'mutate',
+  'renameWorkspaceAt': 'mutate',
   'resolveWorkspace': 'mutate',
   'switchWorkspace': 'mutate',
   'renameWorkspace': 'mutate',
@@ -174,7 +177,8 @@ export const CHANNEL_UI_PROPERTIES = [
   'jobControl',
   'mode',
   'modeIndex',
-  'agentPreset'
+  'agentPreset',
+  'selection'
 ] as const satisfies readonly (keyof ChannelUi)[]
 
 // Both inventories are exhaustive: adding a public property is a compile error

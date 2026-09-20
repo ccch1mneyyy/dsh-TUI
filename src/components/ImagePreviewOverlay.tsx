@@ -136,10 +136,16 @@ export function ImagePreviewOverlay({
   const graphicsFit = columns >= MIN_GRAPHICS_COLUMNS && rows >= MIN_GRAPHICS_ROWS
   const graphicsAvailable = useTerminalImages(graphicsFit)
   const cell = useTerminalImageCellSize()
-  const [view, setView] = React.useState({ image, zoom: 0 })
-  React.useEffect(() => { setView(previous => previous.image === image ? previous : { image, zoom: 0 }) }, [image])
-  const zoom = view.image === image && cell && graphicsAvailable ? view.zoom : 0
-  const setZoom = (value: number): void => setView({ image, zoom: value })
+  // Zoom belongs to the attachment (`image.id`), not to the facade object:
+  // a caller may hand a fresh facade for the same attachment on every
+  // render, and keying on the object would reset the view each commit (#885).
+  const imageId = image.id
+  const [view, setView] = React.useState({ imageId, zoom: 0 })
+  React.useEffect(() => {
+    setView(previous => previous.imageId === imageId ? previous : { imageId, zoom: 0 })
+  }, [imageId])
+  const zoom = view.imageId === imageId && cell && graphicsAvailable ? view.zoom : 0
+  const setZoom = (value: number): void => setView({ imageId, zoom: value })
   const maxImageColumns = Math.max(1, Math.min(columns - 2, Math.floor(columns * PREVIEW_MAX_WIDTH_RATIO)) - CARD_CHROME_COLS)
   const navigationRows = navigation && navigation.total > 1 && rows >= 6 ? 1 : 0
   const maxImageRows = Math.max(1, Math.min(rows - 2, Math.floor(rows * PREVIEW_MAX_HEIGHT_RATIO)) - CARD_CHROME_ROWS - 1 - navigationRows)
@@ -385,7 +391,7 @@ function OriginalImageLink({ image, label }: { image: TranscriptImage; label: st
   React.useEffect(() => {
     setStatus('idle')
     return () => { pending.current?.abort(); pending.current = null }
-  }, [image])
+  }, [image.id])
   const tooltip = useTooltip(image.path ?? image.name ?? t('image-preview-open-original'))
   return <Box height={1} flexShrink={0} {...tooltip} onDragStart={stopControlDrag} onClick={event => {
     event.stopImmediatePropagation()

@@ -14,6 +14,12 @@
  *   7. an anchor at the top of the screen drops the tooltip BELOW instead
  *   8. terminal resize hides the shown tooltip (stale geometry)
  *   9. a narrow terminal clamps the card inside the screen width
+ *  10. an ultra-narrow terminal still renders a bounded card
+ *  11. copy interference: a wrapped user prompt never arms a tooltip (its
+ *      text is fully visible; the card would also REPLACE its cells, so a
+ *      drag-copy crossing it yields the tooltip fragment), and any active
+ *      text selection forces the whole layer dark until the selection
+ *      settles — then hover behavior recovers
  *
  * Run: `node --import tsx/esm scripts/verify-tooltip.tsx`
  * Exits 1 on any failed assertion.
@@ -31,13 +37,15 @@ const dataDir = mkdtempSync(join(tmpdir(), 'verify-tooltip-data-'))
 process.env.HOME = dataDir
 process.env.USERPROFILE = dataDir
 
-const [{ PassThrough, Writable }, React, { Terminal: XTerm }, ui, tooltip, termTest] = await Promise.all([
+const [{ PassThrough, Writable }, React, { Terminal: XTerm }, ui, tooltip, termTest, userPrompt, instancesMod] = await Promise.all([
   import('node:stream'),
   import('react'),
   import('@xterm/headless'),
   import('../src/ui.js'),
   import('../src/components/Tooltip.js'),
   import('./lib/term-test.mjs'),
+  import('../src/components/messages/UserPromptMessage.js'),
+  import('../src/ink/instances.js'),
 ])
 
 const { sleep, settle, settled, screenHas, findText, viewportLines } = termTest
@@ -90,6 +98,25 @@ function TinyProbe(): React.ReactNode {
   return (
     <Box flexDirection="column">
       <Target label="T" content={'\x1b[31mWIDE\x1b[0m'} delayMs={0} />
+      <KeySink />
+      <tooltip.TooltipLayer />
+    </Box>
+  )
+}
+
+/** Scenario 11 rig: two plain targets, a real wrapped user prompt, and the
+ * layer. No useCopyOnSelect here — the released selection must SURVIVE so
+ * the dark-while-selected path is observable. */
+function SelectionProbe(): React.ReactNode {
+  return (
+    <Box flexDirection="column">
+      <Target label="SEL-ONE" content="SEL-TIP-ONE" />
+      <Target label="SEL-TWO" content="SEL-TIP-TWO" />
+      <userPrompt.UserPromptMessage
+        text={'PROMPT-A-PART-ONE\nPROMPT-B-PART-TWO'}
+        marginTopOnTurn={false}
+      />
+      <Text>PROMPT-TAIL</Text>
       <KeySink />
       <tooltip.TooltipLayer />
     </Box>
@@ -251,6 +278,87 @@ try {
       !viewportLines(rig3.term).some(line => /\[(?:31|0)m/u.test(line)),
     JSON.stringify(tinyLines))
   await instance3.unmount()
+
+  // 11. Copy interference (the drag-copy reads the PAINTED screen; a tooltip
+  // card replaces the cells it covers, so any card alive during a selection
+  // drag corrupts the clipboard).
+  const R4 = 30
+  const rig4 = makeRig(COLS, R4)
+  const instance4 = await render(
+    <AlternateScreen>
+      <SelectionProbe />
+    </AlternateScreen>,
+    { stdout: rig4.stdout, stdin: rig4.stdin, stderr: new (class extends Writable {
+      isTTY = true
+      _write(_c: unknown, _e: BufferEncoding, cb: () => void) { cb() }
+    })(), exitOnCtrlC: false, patchConsole: false },
+  )
+  // useSelection resolves the Ink instance via instances.get(process.stdout);
+  // this rig renders to a fake stdout, so alias the key and re-render, or
+  // TooltipLayer's selection subscription silently binds to the no-op stub
+  // (same workaround as verify-copy-on-select.mjs).
+  const ink4 = instancesMod.default.get(rig4.stdout)
+  if (ink4) instancesMod.default.set(process.stdout, ink4)
+  instance4.rerender(
+    <AlternateScreen>
+      <SelectionProbe />
+    </AlternateScreen>,
+  )
+  await sleep(600) // 固定窗:pacing 等首帧上屏，无单一可轮询锚点
+  const r4 = { term: rig4.term, stdin: rig4.stdin }
+  const selOneRow = findText(r4.term, 'SEL-ONE')?.row ?? -1
+  const selTwoRow = findText(r4.term, 'SEL-TWO')?.row ?? -1
+  const promptRow = findText(r4.term, 'PROMPT-A-PART-ONE')?.row ?? -1
+  check('selection probe rows are laid out', selOneRow >= 0 && selTwoRow > selOneRow && promptRow > selTwoRow,
+    `one=${selOneRow} two=${selTwoRow} prompt=${promptRow}`)
+
+  // 11a. A wrapped user prompt is fully visible — dwelling on it must never
+  // even write the tooltip store (pre-fix it armed a card that repeated the
+  // on-screen text and hijacked drag-copies crossing it).
+  hover(r4.stdin, 3, promptRow + 1)
+  await sleep(800) // 固定窗:墙钟 停满默认 dwell，验证用户消息永不写悬浮 store
+  check('wrapped user prompt never arms a tooltip', tooltip.getTooltipSnapshot() === null)
+  hover(r4.stdin, COLS - 1, R4 - 1)
+
+  // 11b. A shown tooltip dies the moment a selection drag starts.
+  hover(r4.stdin, 3, selOneRow + 1)
+  check('tooltip shows before the drag', await settled(() => screenHas(r4.term, 'SEL-TIP-ONE')))
+  r4.stdin.write(`\x1b[<0;3;${selOneRow + 1}M`) // press → selection drag starts
+  check('drag start hides the shown tooltip', await settled(() => !screenHas(r4.term, 'SEL-TIP-ONE')))
+  check('drag start cleared the tooltip store', tooltip.getTooltipSnapshot() === null)
+
+  // While the button is held, no dwell may paint: drag onto SEL-TWO and
+  // hold — the store must stay empty (every motion re-clears it).
+  r4.stdin.write(`\x1b[<32;3;${selTwoRow + 1}M`) // drag motion
+  await sleep(200) // 固定窗:pacing 等拖动帧上屏，给中途 dwell 留出触发窗
+  check('no tooltip paints mid-drag', !screenHas(r4.term, 'SEL-TIP-TWO') &&
+    tooltip.getTooltipSnapshot() === null)
+
+  // Release settles the selection (no copy hook mounted in this probe, so
+  // the selection survives). A dwell armed AFTER the release must really
+  // fire (store written) yet stay unpainted while the selection exists —
+  // that is the render guard doing its job, not a dead probe.
+  r4.stdin.write(`\x1b[<0;3;${selTwoRow + 1}m`) // release
+  // The renderer's hovered node never moved during the drag (button events
+  // don't dispatch hover), so re-entering SEL-ONE would fire nothing — hop
+  // to the OTHER target so a real mouseenter arms a fresh dwell.
+  hover(r4.stdin, 5, selTwoRow + 1)
+  await sleep(800) // 固定窗:墙钟 停满默认 dwell，验证计时器触发也画不上屏
+  check('an active selection keeps the fired dwell off the screen',
+    !screenHas(r4.term, 'SEL-TIP-TWO') && !screenHas(r4.term, 'SEL-TIP-ONE'))
+  check('the dwell really fired (the guard held it back)',
+    tooltip.getTooltipSnapshot()?.content === 'SEL-TIP-TWO')
+
+  // Clearing the selection (what copy-on-select does after copying) wipes
+  // the pending card instead of popping it, and hover behavior recovers.
+  instancesMod.default.get(rig4.stdout)?.clearTextSelection()
+  check('selection settle wipes the pending tooltip', tooltip.getTooltipSnapshot() === null)
+  hover(r4.stdin, COLS - 1, R4 - 1)
+  await sleep(150) // 固定窗:pacing 离开目标触发 mouseleave，再折返重新进入
+  hover(r4.stdin, 3, selTwoRow + 1)
+  check('layer recovers after the selection clears', await settled(() => screenHas(r4.term, 'SEL-TIP-TWO')))
+  await instance4.unmount()
+  instancesMod.default.delete(process.stdout)
 } finally {
   rmSync(dataDir, { recursive: true, force: true })
 }

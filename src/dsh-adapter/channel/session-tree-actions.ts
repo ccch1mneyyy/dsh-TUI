@@ -8,6 +8,7 @@ import { readPersistedSession, type SessionReader } from '../compat/persistence.
 import { closeLiveForkTurn } from '../compat/liveSession.js'
 import { composePreset, resolvePersistedPreset, runningPresetOf } from '../presets.js'
 import { attachSessionToWorkspace } from '../workspace.js'
+import { reserveNewSession } from '../../sessionMounts.js'
 import { forkTarget, rewindTarget, turnUserText } from '../sessionTree.js'
 import type { createChannelBinding } from './binding.js'
 import type { ChannelOwner } from './owner.js'
@@ -104,6 +105,9 @@ export function createTreeRewindAction(
     if (target.closeTurn !== undefined && !closeAfterCreate) {
       appendInterruptedTurnEnd(seed, target.closeTurn)
     }
+    // Announce the id before the factory: the child's log is created here, and
+    // the publisher only learns the id from the registry on its next beat.
+    const { reservation } = await reserveNewSession(String(childId))
     let handle: AgentHandle
     try {
       handle = await deps.binding.prepare(adoption, () => agents.create(liveSessionCreateOptions({
@@ -115,19 +119,24 @@ export function createTreeRewindAction(
         parentSession: SessionId(sessionId),
         agentPreset: composed.agentPreset,
         agentOptions: { provider: state.provider, model: state.model },
-        setup: closeAfterCreate ? async (agentCtx, agent) => {
+        setup: closeAfterCreate || mode === 'rewind' ? async (agentCtx, agent) => {
           // V3 requires seed.length === inheritedEventCount. The constructor
           // inserts the inherited marker, then these closers belong to the
           // child and persist before publication, without falsifying the cut.
-          closeLiveForkTurn(agent.session, target.closeTurn!)
+          if (closeAfterCreate) closeLiveForkTurn(agent.session, target.closeTurn!)
+          // Re-editing starts with no historical pending work. Cancel through
+          // the child's Inbox so a later resume cannot resurrect the queue.
+          // A plain fork deliberately keeps its separate semantics.
+          if (mode === 'rewind') agent.inbox.clear()
           return composed.setup?.(agentCtx, agent)
         } : composed.setup,
       })))
     } catch {
+      reservation.abandon()
       deps.notify(t('rewind-create-failed'), { color: 'error' })
       return null
     }
-    if (!deps.binding.isCurrent(adoption)) { await deps.binding.abandon(handle); return null }
+    if (!deps.binding.isCurrent(adoption)) { await deps.binding.abandon(handle); reservation.abandon(); return null }
     try {
       await attachSessionToWorkspace(ctx, sourceCwd, childId)
     } catch (error) {
@@ -135,12 +144,21 @@ export function createTreeRewindAction(
     }
     if (!deps.owner.current() || deps.binding.agent.session !== entrySession) {
       await deps.binding.abandon(handle)
+      reservation.abandon()
       deps.notify(t('rewind-session-changed'), { color: 'error' })
       return null
     }
-    const replay = closeAfterCreate ? snapshotLiveSessionEvents(handle.agent.session) : seed
-    const sourceSessionId = deps.adoptForkedAgent(handle, adoption, replay, composed.agentPreset, childId)
-    deps.notifySessionSwitched(mode === 'fork' ? 'fork' : 'rewind', String(childId), sourceSessionId)
-    return restoredText
+    const replay = closeAfterCreate || mode === 'rewind' ? snapshotLiveSessionEvents(handle.agent.session) : seed
+    // `adoptForkedAgent` is the commit, and it THROWS when the adoption
+    // transaction revokes the candidate.
+    try {
+      const sourceSessionId = deps.adoptForkedAgent(handle, adoption, replay, composed.agentPreset, childId)
+      reservation.settle()
+      deps.notifySessionSwitched(mode === 'fork' ? 'fork' : 'rewind', String(childId), sourceSessionId)
+      return restoredText
+    } catch (error) {
+      reservation.abandon()
+      throw error
+    }
   }
 }

@@ -269,14 +269,20 @@ check('compact StatusLine hides disabled optional fields', () => {
 
 check('compact StatusLine shows the context bar by default', () => {
   // Defaults flipped on 2026-09-10: the bar renders without any /settings edit.
-  assert.ok(compact.includes('system'), `missing context-bar segment in:\n${compact}`)
-  assert.ok(compact.includes('77.4%'), `missing context-bar percentage in:\n${compact}`)
+  // The bar is fill-only (2026-09-10, community feedback on the s/p/t
+  // letters), so its row carries exactly one string: the right-aligned
+  // `counts percent` readout. Segment names live in the hover breakdown now
+  // (verify-hover-details group I).
+  const barRow = compact.split('\n')[0] ?? ''
+  assert.ok(/^\s*206k\/266k 77\.4%$/.test(barRow), `unexpected context-bar row:\n${barRow}`)
 })
 
 const minimalMode = await renderStatus({ minimal: true })
 check('minimal StatusLine stays free of the context bar', () => {
   // Minimal mode pins its decoration switches OFF instead of inheriting them:
   // the default flip above must not leak a bar row into the trimmed footer.
+  // Its ctx field spells the percentage '77%' (compact), so the bar's own
+  // one-decimal readout is the marker that must be absent.
   assert.ok(!minimalMode.includes('77.4%'), `unexpected context-bar readout in:\n${minimalMode}`)
   assert.ok(!minimalMode.includes('system'), `unexpected context-bar segment in:\n${minimalMode}`)
 })
@@ -375,8 +381,10 @@ check('full StatusLine exposes tps, git, title, and token totals', () => {
 })
 
 check('full StatusLine renders context bar and deterministic trajectory wake', () => {
-  assert.ok(full.includes('system') || full.includes('sys'), `missing context-bar segment in:\n${full}`)
-  assert.ok(full.includes('77.4%'), `missing context-bar percentage in:\n${full}`)
+  // Row 1 is the bar: fill-only, its one text the right-aligned readout
+  // (row 2's ctx field spells the same numbers its own way).
+  const barRow = full.split('\n')[0] ?? ''
+  assert.ok(/^\s*206k\/266k 77\.4%$/.test(barRow), `unexpected context-bar row:\n${barRow}`)
   assert.ok(/[▁▂▃▄▅▆▇█]/.test(full), `missing trajectory glyph in:\n${full}`)
 })
 

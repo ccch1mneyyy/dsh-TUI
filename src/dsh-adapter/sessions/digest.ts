@@ -25,7 +25,7 @@ import { createHash } from 'node:crypto'
 import { open } from 'node:fs/promises'
 import { basename } from 'node:path'
 import { scheduler } from 'node:timers/promises'
-import { decodeFrame, decodeFrames, decodeTail, readWindow, resyncFrames, walkFrames, type FrameRange, type LogLine } from './frames.js'
+import { decodeFrame, decodeTail, readWindow, resyncFrames, walkFrames, type FrameRange, type LogLine } from './frames.js'
 import type { PreviewEntry, SessionDigest, SessionTitle } from './types.js'
 
 /** Head window budget. Eight times the measured worst-case prompt offset. */
@@ -69,27 +69,30 @@ function isHumanSource(source: unknown): boolean {
   return (source as Record<string, unknown>)['kind'] === 'user'
 }
 
-/** The human prompt carried by one log line, in either of its two forms. */
-function humanPrompt(line: LogLine): string | undefined {
+/** A human message is conversation evidence even when it has no title text. */
+function humanPrompt(line: LogLine): { readonly text: string | undefined } | undefined {
   const data = line['data']
   if (data === null || typeof data !== 'object') return undefined
   const record = data as Record<string, unknown>
 
   if (line['type'] === 'user/message') {
-    return isHumanSource(record['source']) ? textOfContent(record['content']) : undefined
+    return isHumanSource(record['source']) ? { text: textOfContent(record['content']) } : undefined
   }
   // The inbox splice precedes the durable user/message and reaches the log
   // several frames earlier, which is what keeps the head window small.
   if (line['type'] === 'agent/inbox/spliced') {
     const inserted = record['inserted']
     if (!Array.isArray(inserted)) return undefined
+    let found = false
     for (const message of inserted) {
       if (message === null || typeof message !== 'object') continue
       const entry = message as Record<string, unknown>
       if (entry['role'] !== 'user' || !isHumanSource(entry['source'])) continue
+      found = true
       const text = textOfContent(entry['content'])
-      if (text !== undefined) return text
+      if (text !== undefined) return { text }
     }
+    if (found) return { text: undefined }
   }
   return undefined
 }
@@ -145,27 +148,37 @@ function timeOf(line: LogLine): number | undefined {
 export function digestSession(path: string, cwd: string): SessionDigest {
   const head = readWindow(path, HEAD_WINDOW_BYTES)
   if (head === undefined) {
-    return { title: undefined, hasPrompt: false, model: undefined, label: undefined }
+    return { title: undefined, hasPrompt: true, model: undefined, label: undefined }
   }
-  const headLines = decodeFrames(head.buffer, walkFrames(head.buffer, 0, HEAD_MAX_FRAMES))
+  const headFrames = walkFrames(head.buffer, 0, HEAD_MAX_FRAMES)
+  const headLines: LogLine[] = []
+  let completeHead = head.whole && headFrames.at(-1)?.end === head.buffer.length
+  for (const frame of headFrames) {
+    const lines = decodeFrame(head.buffer, frame)
+    if (lines === undefined) completeHead = false
+    else headLines.push(...lines)
+  }
+  completeHead &&= headLines[0]?.['type'] === 'session'
 
   let prompt: string | undefined
+  let hasHumanMessage = false
   let headTitle: SessionTitle | undefined
   let label: string | undefined
   for (const line of headLines) {
-    prompt ??= humanPrompt(line)
+    const human = humanPrompt(line)
+    hasHumanMessage ||= human !== undefined
+    prompt ??= human?.text
     headTitle ??= titleOf(line)
     label ??= labelOf(line)
   }
 
-  // Absence of a prompt only means "empty" when the window actually saw the
-  // whole log. A log too large for the window has a conversation in it by
-  // construction, and erring toward listing it is the safe direction: hiding
-  // a real session is a defect, showing a boot artifact is a nuisance.
-  const hasPrompt = prompt !== undefined || !head.whole
+  // The byte window, frame limit, decoding and parsing must ALL cover the
+  // log before absence proves emptiness. Unknown is visible, never eligible
+  // for destructive cleanup; title text is not required for image-only input.
+  const hasPrompt = hasHumanMessage || !completeHead
 
-  // A head window that already covered the whole log IS the tail.
-  const tail = head.whole ? undefined : readWindow(path, TAIL_WINDOW_BYTES, true)
+  // Only a completely decoded head can stand in for the tail.
+  const tail = completeHead ? undefined : readWindow(path, TAIL_WINDOW_BYTES, true)
   const tailLines = tail === undefined ? headLines : decodeTail(tail)
 
   let tailTitle: SessionTitle | undefined
@@ -187,7 +200,7 @@ export function digestSession(path: string, cwd: string): SessionDigest {
     hasPrompt,
     model,
     label,
-    ...(!head.whole && tailTitle === undefined ? {} : { titleComplete: true as const }),
+    ...(!completeHead && tailTitle === undefined ? {} : { titleComplete: true as const }),
   }
 }
 
@@ -351,7 +364,7 @@ async function recoverFirstPrompt(
   path: string,
   bytes: number,
   signal?: AbortSignal,
-): Promise<{ prompt: string | undefined; complete: boolean }> {
+): Promise<{ prompt: string | undefined; complete: boolean; hasPrompt?: boolean }> {
   signal?.throwIfAborted()
   let handle: SessionLogHandle
   try {
@@ -362,6 +375,7 @@ async function recoverFirstPrompt(
   }
   try {
     let position = 0
+    let hasPrompt = false
     while (position < bytes) {
       signal?.throwIfAborted()
       const page = await forwardPage(handle, position, bytes, signal)
@@ -369,9 +383,13 @@ async function recoverFirstPrompt(
       for (const frame of page.frames) {
         const lines = decodeFrame(page.buffer, frame)
         if (lines === undefined) return { prompt: undefined, complete: false }
+        if (position === 0 && frame.start === 0 && lines[0]?.['type'] !== 'session') {
+          return { prompt: undefined, complete: false }
+        }
         for (const line of lines) {
           const prompt = humanPrompt(line)
-          if (prompt !== undefined) return { prompt, complete: true }
+          hasPrompt ||= prompt !== undefined
+          if (prompt?.text !== undefined) return { prompt: prompt.text, complete: true, hasPrompt: true }
         }
       }
       const consumed = page.frames[page.frames.length - 1]!.end
@@ -379,7 +397,7 @@ async function recoverFirstPrompt(
       position += consumed
       await scheduler.yield()
     }
-    return { prompt: undefined, complete: true }
+    return { prompt: undefined, complete: bytes > 0, ...(bytes > 0 ? { hasPrompt } : {}) }
   } finally {
     await handle.close().catch(() => {})
   }
@@ -401,7 +419,7 @@ export async function recoverSessionTitle(
   return {
     title: opening.prompt === undefined ? undefined : { text: opening.prompt, source: 'prompt' },
     complete: opening.complete,
-    ...(opening.complete ? { hasPrompt: opening.prompt !== undefined } : {}),
+    ...(opening.hasPrompt === undefined ? {} : { hasPrompt: opening.hasPrompt }),
   }
 }
 

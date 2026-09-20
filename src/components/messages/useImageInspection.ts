@@ -5,21 +5,31 @@ import type { DragEvent } from '../../ink/events/drag-event.js'
 import { ImageInspectionSession, inspectionRegion, type ImageCenter, type ImageDimensions } from './imageInspection.js'
 import { loadTranscriptImageFull } from './TranscriptImages.js'
 
+// The attachment is identified by `image.id` (a content hash), never by the
+// facade object: callers may hand a fresh facade for the same attachment on
+// every render, and keying effects or memos on the object would then restart
+// the session and re-request pixels each commit — a render loop (#885).
 export function useImageInspection(image: TranscriptImage, available: boolean, columns: number, rows: number,
   cell: TerminalCellSize | undefined, zoom: number) {
+  const imageId = image.id
+  // Committed facade for the loaders below. Written in a layout effect, not
+  // during render: an interrupted render must not leak its facade into a
+  // timer that an earlier commit already scheduled.
+  const latestImage = React.useRef(image)
+  React.useLayoutEffect(() => { latestImage.current = image }, [image])
   const session = React.useRef<ImageInspectionSession | null>(null)
-  const [position, setPosition] = React.useState<{ image: TranscriptImage; center: ImageCenter } | null>(null)
-  const center = position?.image === image ? position.center : undefined
+  const [position, setPosition] = React.useState<{ imageId: string; center: ImageCenter } | null>(null)
+  const center = position?.imageId === imageId ? position.center : undefined
   const dimensions = React.useRef<ImageDimensions | null>(null)
   React.useEffect(() => {
-    const current = new ImageInspectionSession(image)
+    const current = new ImageInspectionSession(latestImage.current)
     session.current = current
     dimensions.current = null
     setPosition(null)
     return () => { current.dispose(); session.current = null }
-  }, [image])
-  const request = React.useMemo(() => ({ image, available, columns, rows, cell, zoom, center }),
-    [image, available, columns, rows, cell, zoom, center])
+  }, [imageId])
+  const request = React.useMemo(() => ({ imageId, available, columns, rows, cell, zoom, center }),
+    [imageId, available, columns, rows, cell, zoom, center])
   const [result, setResult] = React.useState<{
     request: typeof request; source?: TerminalImageSource; failed?: boolean
   } | null>(null)
@@ -31,7 +41,7 @@ export function useImageInspection(image: TranscriptImage, available: boolean, c
     // scheduler also bounds jobs already running when a request is cancelled.
     const timer = setTimeout(() => {
       void (async () => {
-        if (zoom === 0) return loadTranscriptImageFull(image, controller.signal)
+        if (zoom === 0) return loadTranscriptImageFull(latestImage.current, controller.signal)
         const size = await current.metadata()
         controller.signal.throwIfAborted()
         dimensions.current = size
@@ -57,9 +67,9 @@ export function useImageInspection(image: TranscriptImage, available: boolean, c
     const previous = origin ?? clampedCenter()
     if (!previous) return
     const next = clampedCenter({ x: previous.x + x, y: previous.y + y })
-    if (next) setPosition(old => old?.image === image && old.center.x === next.x && old.center.y === next.y
-      ? old : { image, center: next })
-  }, [clampedCenter, image])
+    if (next) setPosition(old => old?.imageId === imageId && old.center.x === next.x && old.center.y === next.y
+      ? old : { imageId, center: next })
+  }, [clampedCenter, imageId])
   const dragOrigin = React.useRef<ImageCenter | undefined>(undefined)
   const drag = React.useCallback((event: DragEvent) => {
     event.stopImmediatePropagation()
@@ -71,7 +81,7 @@ export function useImageInspection(image: TranscriptImage, available: boolean, c
   }, [cell, zoom, clampedCenter, move])
   // Preserve the previous pixels while panning, but never stretch stale pixels
   // across a new geometry, zoom, terminal cell size, or attachment.
-  const reusable = result?.request.image === image && result.request.zoom === zoom &&
+  const reusable = result?.request.imageId === imageId && result.request.zoom === zoom &&
     result.request.columns === columns && result.request.rows === rows && result.request.cell === cell
   return {
     source: available && reusable ? result?.source : undefined,
