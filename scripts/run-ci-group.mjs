@@ -455,6 +455,7 @@ const GROUPS = {
 // 防再腐烂。
     ["verify-submit", ['node', '--import', 'tsx/esm', 'scripts/verify-submit.mjs']],
     ["verify-compact", ['node', '--import', 'tsx/esm', 'scripts/verify-compact.mjs']],
+    ["verify-context-warning", ['node', '--import', 'tsx/esm', 'scripts/verify-context-warning.mjs']],
     ["verify-channel-goal-todo", ['node', '--import', 'tsx/esm', 'scripts/verify-channel-goal-todo.mjs']],
 // IDE 选区通道回归（PR #562）：纯函数（env 直连/lock 扫描与 workspace
 // 匹配过滤/hello_ack 解析/selection_changed 校验）、无 IDE 静默降级、
@@ -524,6 +525,11 @@ const GROUPS = {
 // effort 配置链路回归（issue #51）：cordis 配置的 effort 必须进入实际
 // 请求配置，而不是只做状态栏启动显示（≤0.3.5 的 display-only 行为）。
     ["repro-effort", ['node', '--import', 'tsx/esm', 'scripts/repro-effort.tsx']],
+// effort 默认档纯函数矩阵（src/effortPrefs.ts）：resolveEffortDefault 优先级
+// 链、effort.json best-effort 语义（缺文件/坏 JSON/结构不符）、
+// nearestLowerEffort 的只降不升边界（未知档 id 双向不参与、空候选）。
+// repro-effort 钉请求级行为，这条钉纯函数输入域，二者互补。
+    ["verify-effort-default", ['node', '--import', 'tsx/esm', 'scripts/verify-effort-default.ts']],
 // 子代理模型路由回归（issue #191）：child scope 没有 AgentOptions 路由时，
 // 首次请求继承 TUI 当前完整路由；显式 child 路由保持优先。
     ["verify-subagent-model-route", ['node', '--import', 'tsx/esm', 'scripts/verify-subagent-model-route.tsx']],

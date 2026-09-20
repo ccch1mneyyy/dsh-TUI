@@ -325,7 +325,19 @@ try {
   await delay(100)
   await checkFrame('text-only change')
   assert.equal(draws, beforeText, 'ordinary streaming text must not retransmit thumbnails')
-  for (const offset of [1, 2, 4, 5, 7, 9, 11, 14, 16, 12, 5, 0]) {
+  // One scroll row moves every visible clip, so the raster each node wants is
+  // a crop the worker has not encoded yet. A frame that erases the displayed
+  // rect without drawing a replacement in the same write is the black tile the
+  // user sees while scrolling; the manager holds the old pixels instead.
+  const scrollStart = output.chunks.length
+  scroller!.scrollTo(1)
+  await until(() => scroller!.getScrollTop() === 1, 'scroll position settles')
+  await checkFrame('scroll 1')
+  const managerErases = /^\x1b\[\d+;\d+H\x1b\[\d+X|\x1b\[0m\x1b\[\d+;\d+H\x1b\[\d+X/u
+  const blanked = output.chunks.slice(scrollStart)
+    .filter(chunk => managerErases.test(chunk) && !chunk.includes('\x1bP0;1;q'))
+  assert.deepEqual(blanked, [], 'a scrolled frame must never blank Sixel pixels without redrawing them')
+  for (const offset of [2, 4, 5, 7, 9, 11, 14, 16, 12, 5, 0]) {
     scroller!.scrollTo(offset)
     await until(() => scroller!.getScrollTop() === offset, 'scroll position settles')
     await checkFrame('scroll ' + offset)

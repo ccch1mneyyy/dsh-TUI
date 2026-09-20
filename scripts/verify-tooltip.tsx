@@ -37,7 +37,7 @@ const dataDir = mkdtempSync(join(tmpdir(), 'verify-tooltip-data-'))
 process.env.HOME = dataDir
 process.env.USERPROFILE = dataDir
 
-const [{ PassThrough, Writable }, React, { Terminal: XTerm }, ui, tooltip, termTest, userPrompt, instancesMod] = await Promise.all([
+const [{ PassThrough, Writable }, React, { Terminal: XTerm }, ui, tooltip, termTest, userPrompt, instancesMod, { PageMargin }, displayPrefs] = await Promise.all([
   import('node:stream'),
   import('react'),
   import('@xterm/headless'),
@@ -46,6 +46,8 @@ const [{ PassThrough, Writable }, React, { Terminal: XTerm }, ui, tooltip, termT
   import('./lib/term-test.mjs'),
   import('../src/components/messages/UserPromptMessage.js'),
   import('../src/ink/instances.js'),
+  import('../src/components/PageMargin.js'),
+  import('../src/tuiDisplayPrefs.js'),
 ])
 
 const { sleep, settle, settled, screenHas, findText, viewportLines } = termTest
@@ -182,6 +184,28 @@ try {
   const tipTopRow = findText(term, 'TIP-TOP-MARKER')?.row ?? -1
   check('top-of-screen anchor drops the tooltip below', tipTopRow > topRow,
     `anchor=${topRow} tip=${tipTopRow}`)
+
+  // The card's border ring belongs to the same surface as its interior. A ring
+  // left at the terminal default is the black frame around the popup — and on
+  // Windows Terminal it is what showed through the old Sixel preview card.
+  {
+    const borderRow = term.buffer.active.getLine(tipTopRow - 1)
+    const contentRow = term.buffer.active.getLine(tipTopRow)
+    const contentX = findText(term, 'TIP-TOP-MARKER')?.col ?? -1
+    const borderLeft = Array.from({ length: COLS }, (_, x) => x)
+      .find(x => borderRow?.getCell(x)?.getChars() === '╭')
+    const borderRight = Array.from({ length: COLS }, (_, x) => x)
+      .find(x => borderRow?.getCell(x)?.getChars() === '╮')
+    const surface = contentRow?.getCell(contentX)?.getBgColor()
+    check('tooltip interior paints a surface color', surface !== undefined && surface !== 0,
+      `bg=${surface?.toString(16)}`)
+    let ringOk = borderLeft !== undefined && borderRight !== undefined
+    for (let x = borderLeft ?? 0; ringOk && x <= (borderRight ?? -1); x++) {
+      if (borderRow?.getCell(x)?.getBgColor() !== surface) ringOk = false
+    }
+    check('tooltip border ring keeps the surface background', ringOk,
+      `border=${borderLeft}..${borderRight} surface=${surface?.toString(16)}`)
+  }
 
   // 3. Leaving hides it.
   hover(stdin, COLS - 1, ROWS - 1)
@@ -359,6 +383,38 @@ try {
   check('layer recovers after the selection clears', await settled(() => screenHas(r4.term, 'SEL-TIP-TWO')))
   await instance4.unmount()
   instancesMod.default.delete(process.stdout)
+
+  // 12. Page margin: the pointer anchor is screen geometry while the absolute
+  // card lives in the inset content area (useTerminalSize() already reports the
+  // content size). Adding the inset instead of subtracting it pushed the card
+  // one row low and two columns right on the default margin, so its bottom
+  // border landed ON the hovered row and that row's glyphs showed beside it.
+  displayPrefs.applyPageMargin('normal')
+  const MARGIN_COLS = 60
+  const MARGIN_ROWS = 20
+  const rig5 = makeRig(MARGIN_COLS, MARGIN_ROWS)
+  const instance5 = await render(
+    <AlternateScreen>
+      <PageMargin><Probe /></PageMargin>
+    </AlternateScreen>,
+    { stdout: rig5.stdout, stdin: rig5.stdin, stderr: new (class extends Writable {
+      isTTY = true
+      _write(_c: unknown, _e: BufferEncoding, cb: () => void) { cb() }
+    })(), exitOnCtrlC: false, patchConsole: false },
+  )
+  await sleep(600) // 固定窗:pacing 等首帧上屏，无单一可轮询锚点
+  const anchorRow = findText(rig5.term, 'ROW-TWO')?.row ?? -1
+  hover(rig5.stdin, 5, anchorRow + 1)
+  const marginShown = await settled(() => screenHas(rig5.term, 'multi-first-line'))
+  check('page margin: tooltip appears', marginShown)
+  const markerRow = findText(rig5.term, 'multi-first-line')?.row ?? -1
+  const bottomRow = Array.from({ length: MARGIN_ROWS }, (_, y) => y).find(y =>
+    y > markerRow && (rig5.term.buffer.active.getLine(y)?.translateToString(true) ?? '').includes('╰')) ?? -1
+  const bottomLine = rig5.term.buffer.active.getLine(bottomRow)?.translateToString(true) ?? ''
+  check('page margin: card rests directly above the hovered row',
+    marginShown && bottomRow === anchorRow - 1 && bottomLine.includes('╰'),
+    `anchor=${anchorRow} marker=${markerRow} bottom=${bottomRow} line=${JSON.stringify(bottomLine.trim())}`)
+  await instance5.unmount()
 } finally {
   rmSync(dataDir, { recursive: true, force: true })
 }
