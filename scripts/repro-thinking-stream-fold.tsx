@@ -17,7 +17,7 @@ process.env.FORCE_COLOR = '3'
 process.env.DSH_TUI_THEME = 'dark'
 process.env.DSH_TUI_LANG = 'zh'
 
-const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render, AlternateScreen }, { Chat }, { QuestionStore }, { LOCAL_COMMANDS }, { settled }] = await Promise.all([
+const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render, AlternateScreen, Text }, { Chat }, { QuestionStore }, { LOCAL_COMMANDS }, { settled }, { THINKING_SPINNER_FRAMES }, { t }] = await Promise.all([
   import('node:stream'),
   import('react'),
   import('@xterm/headless'),
@@ -26,6 +26,8 @@ const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render, Alternat
   import('../src/dsh-adapter/questions.js'),
   import('../src/commands.js'),
   import('./lib/term-test.mjs'),
+  import('../src/terminal-utils/figures.js'),
+  import('../src/i18n.js'),
 ])
 
 const COLS = 100, ROWS = 40
@@ -96,6 +98,9 @@ const channel: any = {
 
 const inst = await render(
   <AlternateScreen>
+    {/* CI once picked the random startup tip containing “思考” as the
+        clickable header. Keep that distractor present on EVERY run. */}
+    <Text>提示：Ctrl+O 展开/收起思考全文与工具详情</Text>
     <Chat channel={channel} questionStore={new QuestionStore()} />
   </AlternateScreen>,
   { stdout: stdout as any, stdin: stdin as any, stderr: stderr as any, exitOnCtrlC: false, patchConsole: false },
@@ -107,7 +112,9 @@ const lines = () => {
   return Array.from({ length: ROWS }, (_, y) => buf.getLine(buf.baseY + y)?.translateToString(true) ?? '')
 }
 const bodyLines = (ls: string[]) => ls.filter(l => l.includes('推理第')).length
-const headerRow = (ls: string[]) => ls.findIndex(l => l.includes('Thinking') || l.includes('思考'))
+// Match the whole streaming header, not a startup tip that mentions thinking.
+const thinkingHeaders = new Set(THINKING_SPINNER_FRAMES.map(frame => `${frame} ${t('thinking-label')}…`.trim()))
+const headerRow = (ls: string[]) => ls.findIndex(line => thinkingHeaders.has(line.trim()))
 // 点击后的重绘在高负载（CI、并行回归）下可能晚于任何固定等待：按结果轮询，
 // 超时才判失败（term-test 的 settled 就是这条语义）。
 const waitFor = (pred: () => boolean, ms = 3000): Promise<boolean> => settled(pred, { timeoutMs: ms })
@@ -115,6 +122,7 @@ const waitFor = (pred: () => boolean, ms = 3000): Promise<boolean> => settled(pr
 await waitFor(() => headerRow(lines()) >= 0 && bodyLines(lines()) === 3)
 let ls = lines()
 const headerIdx = headerRow(ls)
+check('含“思考”的提示行不会被识别为折叠头', headerRow([ls[0] ?? '']) === -1 && headerIdx > 0)
 check('流式思考头行可见', headerIdx >= 0, headerIdx >= 0 ? `行${headerIdx}` : '未找到')
 check('默认三行预览', bodyLines(ls) === 3, `body=${bodyLines(ls)}`)
 check('预览跟随最新三行', ls.some(line => line.includes('推理第11行')), '应包含推理第11行')

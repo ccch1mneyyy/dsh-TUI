@@ -3,12 +3,16 @@ import { marked, type Token, type Tokens } from 'marked'
 import { Box, Text } from '../ui.js'
 import { configureMarked, formatToken, stripPromptXMLTags } from '../terminal-utils/markdown.js'
 import { getCliHighlightPromise, type CliHighlight } from '../terminal-utils/cliHighlight.js'
+import { isMermaidLang } from '../terminal-utils/mermaid.js'
 import { MarkdownTable } from './MarkdownTable.js'
+import { MermaidDiagram } from './MermaidDiagram.js'
 
 /**
  * Markdown 渲染组件：marked 分词 + ANSI 格式化。
  *
- * 表格 token 交给 MarkdownTable 渲染为带边框的 flexbox 布局；
+ * 表格 token 交给 MarkdownTable 渲染为带边框的 flexbox 布局，mermaid
+ * 代码块交给 MermaidDiagram 画成 box-drawing 图（两者都需要终端宽度，
+ * 所以是独立节点而不是 ANSI 字符串）；
  * 其余块级内容由 formatToken 转成 ANSI 字符串，按块边界分批放进
  * Text（只去整段首尾空白）。代码块高亮由 cli-highlight 异步提供，
  * 加载完成后自动触发一次重渲染。无 markdown 语法的纯文本走快速
@@ -98,8 +102,22 @@ function lexWithCache(content: string, allowCache: boolean): Token[] {
 }
 
 /**
- * 把 lexer 产出的 token 列表转成 React 节点序列：table 独立渲染，
- * 其余 token 的 ANSI 文本按完整块分批拼接，只去整段首尾空白。
+ * Tokens that render as their own layout node (a width-aware component)
+ * instead of joining the ANSI text run. StreamingMarkdown consults the same
+ * predicate: a standalone node has a fixed one-row gap to its neighbours
+ * rather than the newline-derived spacing of text blocks.
+ */
+export function isStandaloneToken(token: Token): boolean {
+  return token.type === 'table' || isMermaidToken(token)
+}
+
+function isMermaidToken(token: Token): token is Tokens.Code {
+  return token.type === 'code' && isMermaidLang((token as Tokens.Code).lang)
+}
+
+/**
+ * 把 lexer 产出的 token 列表转成 React 节点序列：table 与 mermaid 块独立
+ * 渲染，其余 token 的 ANSI 文本按完整块分批拼接，只去整段首尾空白。
  */
 function renderTokensToNodes(
   tokens: Token[],
@@ -144,6 +162,16 @@ function renderTokensToNodes(
           key={nodes.length}
           token={token as Tokens.Table}
           highlight={highlight}
+        />,
+      )
+    } else if (isMermaidToken(token)) {
+      flushAnsiText()
+      nodes.push(
+        <MermaidDiagram
+          key={nodes.length}
+          token={token}
+          highlight={highlight}
+          dimColor={dimColor}
         />,
       )
     } else {

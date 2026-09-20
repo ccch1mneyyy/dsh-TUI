@@ -3,7 +3,7 @@ import { createLayoutNode } from './layout/engine.js'
 import type { LayoutNode } from './layout/node.js'
 import { LayoutDisplay, LayoutMeasureMode } from './layout/node.js'
 import measureText from './measure-text.js'
-import { addPendingClear, nodeCache } from './node-cache.js'
+import { addPendingClear, nodeCache, textPaintCache } from './node-cache.js'
 import squashTextNodes from './squash-text-nodes.js'
 import type { Styles, TextStyles } from './styles.js'
 import { expandTabs } from './tabstops.js'
@@ -100,6 +100,22 @@ export type DOMElement = {
   // leave useSyncExternalStore snapshots stale (the new-messages pill
   // never clears).
   onStickyRestore?: () => void
+  // Renderer → React notification channel, set by ScrollBox to its
+  // subscriber-notify. Invoked ONLY when the scroll viewport's HEIGHT
+  // changes between two layout passes — the renderer just overwrote
+  // scrollViewportHeight with a different value than the previous pass
+  // wrote. Geometry-reading subscribers (scrollbar thumb, timeline rail,
+  // the MessageList virtual window) paint from the handle's cached bounds,
+  // which the renderer owns: any React commit that resizes the viewport
+  // (bottom-chrome mount/unmount, terminal row resize) paints the OLD
+  // bounds, and the pass that lands the new ones is otherwise silent (no
+  // scroll delta, no sticky flip). Deliberately NOT fired on a first-frame
+  // write (previous height undefined — nothing has observed a change yet)
+  // and NOT on scrollTop / scrollViewportTop motion: the sticky re-pin
+  // rewrites scrollTop every streaming frame, and notifying there would
+  // add a React commit per frame. Width is out of scope (selection already
+  // consumes the renderer's per-frame viewportResizes).
+  onViewportHeightChange?: () => void
   // Set by ScrollBox.scrollToElement; render-node-to-output reads
   // el.yogaNode.getComputedTop() (FRESH — same Yoga pass as scrollHeight)
   // and sets scrollTop = top + offset, then clears this. Unlike an
@@ -520,6 +536,9 @@ export const markDirty = (node?: DOMNode): void => {
   while (current) {
     if (current.nodeName !== '#text') {
       ;(current).dirty = true
+      // Culling can clear the paint dirty bit without preparing changed text.
+      // Invalidate at mutation time so re-entry cannot reuse stale content.
+      textPaintCache.delete(current)
       // Only mark yoga dirty on leaf nodes that have measure functions
       if (
         !markedYoga &&
@@ -556,6 +575,7 @@ export const markTreeDirty = (node?: DOMNode): void => {
     if (current.nodeName === '#text') continue
     const element = current as DOMElement
     element.dirty = true
+    textPaintCache.delete(element)
     // markDirty() is only legal on yoga nodes that carry a measure function;
     // those are exactly the two text node kinds (see createNode).
     if (

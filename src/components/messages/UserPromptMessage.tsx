@@ -3,7 +3,6 @@ import { Box, Text, useTerminalSize } from '../../ui.js'
 import { POINTER } from '../../terminal-utils/figures.js'
 import { stringWidth } from '../../ink/stringWidth.js'
 import { wrapWidth } from '../../sessions/format.js'
-import { useTooltip } from '../Tooltip.js'
 import type { ClickEvent } from '../../ink/events/click-event.js'
 
 type Props = {
@@ -37,11 +36,10 @@ export function UserPromptMessage({
   // Ink; a second wrap would move the continuation back to column zero.
   const lines = wrapWidth(text, Math.max(1, columns - prefixWidth - 3))
   const continuationIndent = ' '.repeat(prefixWidth)
-  // Hover tooltip: a message that wrapped/truncated onto several visual
-  // lines pops its full original text in one floating card (the pointer
-  // row only shows one visual line at a time).
-  const promptTooltip = useTooltip(text)
-  const tooltipActive = lines.length > 1
+  // No hover tooltip here, deliberately: the message is pre-wrapped so every
+  // visual line is already on screen — a float would only repeat visible
+  // text, and worse, the card REPLACES the cells it covers, so a drag-copy
+  // crossing it yields the tooltip fragment instead of the message.
 
   return (
     <Box
@@ -50,7 +48,6 @@ export function UserPromptMessage({
       backgroundColor={isSelected ? 'messageActionsBackground' : undefined}
       paddingRight={1}
       onClick={onClick}
-      {...(tooltipActive ? promptTooltip : {})}
     >
       {lines.map((line, index) => (
         <Text key={index} color="userPromptLabel" bold wrap="truncate-end">

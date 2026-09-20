@@ -148,6 +148,9 @@ importers:
       lodash-es:
         specifier: ^4.17.0
         version: 4.18.1
+      lovely-mermaid:
+        specifier: 0.3.3
+        version: 0.3.3
       marked:
         specifier: ^18.0.7
         version: 18.0.11
@@ -3006,6 +3009,10 @@ packages:
   long@5.3.2:
     resolution: {integrity: sha512-mNAgZ1GmyNhD7AuqnTG3/VQ26o760+ZYBPKjPvugO8+nLbYfX6TVpJPseBvopbdY+qpZ/lKUnmEc1LeZYS3QAA==}
 
+  lovely-mermaid@0.3.3:
+    resolution: {integrity: sha512-EMLJS934qwt2MLO/a5o+T/89HGbuXZPwmCpHIhHO+DVrm+y5tHlEHgpZzlC2o4yW/rFPHRFO9xSMafzqH4wH5A==}
+    engines: {node: '>=18'}
+
   marked@18.0.11:
     resolution: {integrity: sha512-HnslJfsZkRPBDJRHvVtAaWlZHEpSu7u8LgQuJCELjRKuWR+hpq4A7sLq3p8HaI9ypVoXDXxV34CsQJEe1+J5Aw==}
     engines: {node: '>= 20'}
@@ -5855,6 +5862,8 @@ snapshots:
   lodash.debounce@4.0.8: {}
 
   long@5.3.2: {}
+
+  lovely-mermaid@0.3.3: {}
 
   marked@18.0.11: {}
 

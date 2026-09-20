@@ -6,7 +6,7 @@ import { readEffortPref, resolveEffortDefault, writeEffortPref } from '../../eff
 import { snapshotLiveSessionEvents } from '../compat/liveSession.js'
 import { getLang, t, tOr, type Lang } from '../../i18n.js'
 import { migratePresetPref, writePresetPref } from '../../presetPrefs.js'
-import { resolveCompatiblePreset, rosterOf, type AgentPresetInfo } from '../preset-resolution.js'
+import { presetDisplayId, resolveCompatiblePreset, rosterOf, type AgentPresetInfo } from '../preset-resolution.js'
 import type { createChannelBinding } from './binding.js'
 import type { ChannelOwner } from './owner.js'
 import type { ChannelState, EffortOption, PresetOption } from './types.js'
@@ -180,7 +180,7 @@ export function createModelActions(
     if (presets === undefined) return []
     const localized = getLang() === 'en'
     try {
-      return (await presets.list()).map(preset => ({ id: preset.id, ...(preset.name === undefined ? {} : { name: localized ? tOr(`preset-name-${preset.id}`, preset.name) : preset.name }), ...(preset.description === undefined ? {} : { description: localized ? tOr(`preset-desc-${preset.id}`, preset.description) : preset.description }), ...(preset.broken === undefined ? {} : { broken: preset.broken }), isDefault: preset.id === presets.defaultId }))
+      return (await presets.list()).map(preset => ({ id: preset.id, ...(preset.name === undefined ? {} : { name: localized ? tOr(`preset-name-${presetDisplayId(preset.id)}`, preset.name) : preset.name }), ...(preset.description === undefined ? {} : { description: localized ? tOr(`preset-desc-${presetDisplayId(preset.id)}`, preset.description) : preset.description }), ...(preset.broken === undefined ? {} : { broken: preset.broken }), isDefault: preset.id === presets.defaultId }))
     } catch { return [] }
   }
   const switchPreset = async (presetId: string): Promise<boolean> => {

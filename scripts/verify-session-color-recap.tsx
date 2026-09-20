@@ -43,6 +43,10 @@ const [
 
 const COLS = 100
 const ROWS = 30
+// CI's random startup tip mentioned “建议标题” after the panel had closed.
+// Keep the same distractor in the transcript so every run covers that case.
+const RECAP_TIP = '提示：/recap 总结近期活动并建议标题，a 键应用'
+const RECAP_TITLE_ROW = '建议标题: 会话标识 PR'
 const term = new XTerm({ cols: COLS, rows: ROWS, scrollback: 0, allowProposedApi: true })
 
 class FakeStdout extends Writable {
@@ -109,7 +113,7 @@ function makeChannel() {
   const notifications: string[] = []
   const rows = [
     { id: 1, kind: 'user', text: '检查这个问题' },
-    { id: 2, kind: 'assistant', text: '已经检查。', streaming: false },
+    { id: 2, kind: 'assistant', text: `已经检查。\n${RECAP_TIP}`, streaming: false },
   ]
   const channel: any = {
     version: 0,
@@ -316,11 +320,11 @@ check('选择器设置后边框重绘为橙色 #F76B15', await settled(() => bor
 
 // ── 6. /recap 面板：摘要 + 建议标题 + 一键应用 ─────────────────────────
 stdin.write('/recap')
-await settle(() => screenText().includes('/recap'))
+await settle(() => screenText().includes('❯ /recap'))
 stdin.write('\r')
 check('recap 摘要渲染', await settled(() => screenText().includes('最近在修会话颜色与 recap')))
-check('建议标题渲染', await settled(() => screenText().includes('建议标题') && screenText().includes('会话标识 PR')))
-check('应用按钮渲染', await settled(() => screenText().includes('应用')))
+check('建议标题渲染', await settled(() => screenText().includes(RECAP_TITLE_ROW)))
+check('应用按钮渲染', await settled(() => screenText().includes('[应用]')))
 
 stdin.write('a')
 check('按 a 应用标题走 renameSession', await settled(() => channel.renameCalls[0] === '会话标识 PR'), JSON.stringify(channel.renameCalls))
@@ -328,7 +332,11 @@ check('会话标题已更新', channel.sessionTitle === '会话标识 PR', chann
 check('面板标记已应用', await settled(() => screenText().includes('已应用')))
 
 stdin.write('\x1b')
-check('Esc 关闭 recap 面板', await settled(() => !screenText().includes('建议标题')))
+check('Esc 关闭 recap 面板', await settled(() => {
+  const text = screenText()
+  return !text.includes(RECAP_TITLE_ROW) && !text.includes('最近在修会话颜色与 recap')
+}))
+check('关闭面板不要求同文案提示消失', await settled(() => screenText().includes(RECAP_TIP)))
 
 await instance.unmount()
 setLang('zh')

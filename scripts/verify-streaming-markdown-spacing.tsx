@@ -18,6 +18,7 @@ const [
   { render, Box, Text },
   { Markdown },
   { StreamingMarkdown },
+  { getMermaidEnginePromise },
 ] = await Promise.all([
   import('node:stream'),
   import('react'),
@@ -25,7 +26,12 @@ const [
   import('../src/ui.js'),
   import('../src/components/Markdown.js'),
   import('../src/components/StreamingMarkdown.js'),
+  import('../src/terminal-utils/mermaid.js'),
 ])
+
+// Both renderers must see the same engine state: preload it so the mermaid
+// cases compare diagram-to-diagram rather than racing the lazy import.
+if ((await getMermaidEnginePromise()) === null) throw new Error('lovely-mermaid failed to load')
 
 const COLS = 56
 const ROWS = 30
@@ -96,6 +102,21 @@ const cases: readonly {
     name: 'incremental table-to-table gap',
     source: '| a |\n| - |\n| 1 |\n\n| b |\n| - |\n| 2 |',
     stages: ['| a |\n| - |\n| 1 |', '| a |\n| - |\n| 1 |\n\n| b |\n| - |\n| 2 |'],
+  },
+  {
+    name: 'incremental mermaid-to-prose gap',
+    source: '```mermaid\nflowchart LR\n  A --> B\n```\n\ntail',
+    stages: ['```mermaid\nflowchart LR\n  A --> B\n```', '```mermaid\nflowchart LR\n  A --> B\n```\n\ntail'],
+  },
+  {
+    name: 'incremental prose-to-mermaid gap',
+    source: 'alpha\n\n```mermaid\nflowchart LR\n  A --> B\n```',
+    stages: ['alpha', 'alpha\n\n```mermaid\nflowchart LR\n  A --> B\n```'],
+  },
+  {
+    name: 'incremental table-to-mermaid gap',
+    source: '| a |\n| - |\n| 1 |\n\n```mermaid\nflowchart LR\n  A --> B\n```',
+    stages: ['| a |\n| - |\n| 1 |', '| a |\n| - |\n| 1 |\n\n```mermaid\nflowchart LR\n  A --> B\n```'],
   },
   {
     name: 'invisible definition spacing',

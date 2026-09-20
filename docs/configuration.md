@@ -175,6 +175,7 @@ Profile 模式不再使用旧的 `DSH_TUI_COMPACT_RATIO`、
 | `VISUAL` / `EDITOR` | `Ctrl+G` 打开的外部编辑器（`VISUAL` 优先，可带参数如 `code --wait`；两者都未设置时提示配置，无 `vi` 兜底） |
 | `DEEPSEEK_API_KEY` | DeepSeek 凭证；运行模型的必需项 |
 | `DEEPSEEK_BASE_URL` | 覆盖 DeepSeek 兼容 API 端点 |
+| `DSH_HOME` | harness 家目录（profile、会话、凭据、附件）；未设置时用上游默认 `~/.dsh` |
 | `DSH_TUI_PERSONA` | 覆盖组合注入的 Agent persona |
 | `DSH_TUI_PRESET` | 覆盖新会话默认 Agent preset |
 | `DSH_TUI_THEME` | 锁定内置（`auto`/`light`/`dark`/`dark-ansi`）、静态主题或已注册的插件主题，优先于持久化选择 |
@@ -189,9 +190,15 @@ Profile 模式不再使用旧的 `DSH_TUI_COMPACT_RATIO`、
 | `DSH_TUI_DEBUG` | 启用写往 stderr 的 dsh-tui 调试日志 |
 | `DSH_TUI_RENDER_LOG` | 指定文件路径，记录原始 ANSI 渲染帧用于取证 |
 
-旧名 `CC_TUI_*` 与 `DSH_CC_*`（以及早期数据目录 `~/.dsh-cc`）来自早期版本命名，
-自本版本起不再被读取；环境变量一律使用 `DSH_TUI_*` 前缀，数据目录为
-`~/.dsh-tui`。
+旧名 `CC_TUI_*` 与 `DSH_CC_*` 来自早期版本命名，自本版本起不再被读取；环境变量
+一律使用 `DSH_TUI_*` 前缀。
+
+数据目录分两层，互不替代：
+
+- **harness 家目录**：`$DSH_HOME`，未设置时用上游默认 `~/.dsh`。存 profile、
+  会话、凭据与附件。早期版本把它钉在 `~/.dsh-cc`。
+- **TUI 数据目录**：`~/.dsh-tui`（固定路径，不随 `$DSH_HOME` 走）。存 `/model`、
+  `/lang`、`/theme` 等偏好与 `resume.txt`。早期版本曾把这些写在 `$DSH_HOME` 下。
 
 `DSH_TUI_RENDER_LOG` 可能捕获屏幕上可见的提示词、工具参数和输出，不应上传到
 公开 issue，除非已经检查并脱敏。

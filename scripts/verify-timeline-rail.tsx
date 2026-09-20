@@ -13,6 +13,9 @@
  *   5. 滚到顶：active = 首 tick（pre-turn 内容 → 第一轮），▲ 点击无操作；
  *   6. 悬停第 2 个 tick：左侧弹出圆角预览卡（含 问题 2）；移开消失；
  *   7. resize 到 59 列：rail 隐藏；恢复 100 列：rail 回来。
+ *   9. End/回底落定：上滚卸载/装载 !isSticky chrome（回到底部 pill + 置顶头）
+ *      改变转录视口高度后，rail 必须跟随；该 pass 无滚动通知、不翻转 sticky，
+ *      接缝的视口高度通知（onViewportHeightChange）是唯一再渲染信号。
  *
  * 运行：node --import tsx/esm scripts/verify-timeline-rail.tsx
  */
@@ -20,7 +23,7 @@ process.env.FORCE_COLOR = '3'
 process.env.DSH_TUI_THEME = 'dark'
 process.env.DSH_TUI_LANG = 'zh'
 
-const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render, AlternateScreen }, { Chat }, { QuestionStore }, { LOCAL_COMMANDS, completeCommands }, { settle, settled, sleep }] = await Promise.all([
+const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render, AlternateScreen }, { Chat }, { QuestionStore }, { LOCAL_COMMANDS, completeCommands }, { default: instances }, { computeRailGeometry }, { settle, settled, sleep }] = await Promise.all([
   import('node:stream'),
   import('react'),
   import('@xterm/headless'),
@@ -28,6 +31,8 @@ const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render, Alternat
   import('../src/screens/Chat.js'),
   import('../src/dsh-adapter/questions.js'),
   import('../src/commands.js'),
+  import('../src/ink/instances.js'),
+  import('../src/ink/timeline-rail.js'),
   import('./lib/term-test.mjs'),
 ])
 
@@ -143,15 +148,24 @@ function cellAt(y: number, col: number): string {
 function headerVisible(): boolean {
   return /^❯/.test(screenLines()[0]!.trimEnd())
 }
-/** rail 区域：置顶头之下、prompt 输入框 margin 之上。返回 [top, bottom)。 */
+/**
+ * rail 区域：置顶头之下、prompt 输入框 margin 之上。返回 [top, bottom)。
+ *
+ * The bottom anchor is the prompt BOX's top border (`╭`), not a `❯` row: the
+ * input row now leads with the session-entry affordance (`⌸ ❯ …`), and the
+ * transcript's own user rows (`❯ 问题 11`) match the caret glyph too, so a
+ * `❯` search finds the wrong row at both ends. The border is unambiguous and
+ * content-independent. Search from the END so the transcript's own top border,
+ * if the user pasted one, cannot win.
+ */
 function railRange(): [number, number] {
   const lines = screenLines()
   const top = headerVisible() ? 1 : 0
-  let promptRow = -1
+  let boxTop = -1
   for (let y = ROWS - 1; y >= 0; y--) {
-    if (lines[y]!.trimStart().startsWith('❯')) { promptRow = y; break }
+    if (lines[y]!.trimEnd().endsWith('╭') || lines[y]!.trimStart().startsWith('╭')) { boxTop = y; break }
   }
-  return [top, promptRow >= 0 ? promptRow - 2 : ROWS - 4]
+  return [top, boxTop >= 0 ? boxTop - 2 : ROWS - 4]
 }
 /** rail 快照：{ ticks: 各 tick 屏幕 0 基行序, activeRow: ━━ 行, upRow, downRow } */
 function railSnapshot(): { ticks: number[]; activeRow: number | null; upRow: number | null; downRow: number | null } {
@@ -413,6 +427,108 @@ await inst.unmount()
       `active=${snap2.activeRow} ticks=${JSON.stringify(snap2.ticks)}`)
   }
   await inst2.unmount()
+
+// ── 9. End/回底落定：卸载 !isSticky chrome 撑高视口后 rail 必须跟随 ──
+// 上滚时 showPill(!isSticky) 与 PinnedTurnHeader 一起挂载，转录行被压矮；
+// 按 End 回底时两者一起卸载，视口长回。渲染器在 commit 之后的 pass 里把
+// scrollTop 重钉到新 maxScroll，但它不翻转 sticky（既有的 onStickyRestore
+// 只在 sticky===false 翻真时触发），订阅面全程收不到通知。rail 若只靠滚动
+// 订阅重渲染，就停在压缩几何。断言：chrome 装载/卸载两个方向都有视口高度
+// 信号，且落定后屏幕 rail 与按真实 scrollViewportHeight/Top 反算的
+// computeRailGeometry 一致。
+{
+  const inst3 = await render(
+    <AlternateScreen>
+      <Chat channel={channel} questionStore={new QuestionStore()} fullscreen />
+    </AlternateScreen>,
+    { stdout: stdout as any, stdin: stdin as any, stderr: stderr as any, exitOnCtrlC: false, patchConsole: false },
+  )
+  const railInk = instances.get(stdout as any) as any
+  const scrollNode = (): any => {
+    const walk = (node: any): any => {
+      if (node?.scrollViewportHeight !== undefined) return node
+      for (const c of node?.childNodes ?? []) {
+        const hit = walk(c)
+        if (hit) return hit
+      }
+      return null
+    }
+    return walk(railInk.rootNode)
+  }
+  const viewport = (): number => scrollNode()?.scrollViewportHeight ?? 0
+  const viewportTop = (): number => scrollNode()?.scrollViewportTop ?? 0
+  const pillOnScreen = (): boolean => screenLines().some(l => l.includes('回到底部') || l.includes('条新消息'))
+  const railOnScreen = (): { up: number | null; down: number | null; ticks: number[] } => {
+    const top = viewportTop()
+    const bottom = top + viewport()
+    const ticks: number[] = []
+    let up: number | null = null
+    let down: number | null = null
+    for (let y = top; y < bottom; y++) {
+      const two = cellAt(y, COLS - 2) + cellAt(y, COLS - 1)
+      if (two.includes('▴')) up = y
+      else if (two.includes('▾')) down = y
+      else if (two === '━━' || two === '──' || two === ' ─') ticks.push(y)
+    }
+    return { up, down, ticks }
+  }
+  // 8 轮 < 视口 tick 容量 ⇒ 期望几何与 active/atBottom 无关。
+  const railFollowsViewport = (): boolean => {
+    const geo = computeRailGeometry(8, viewport(), null, true)
+    if (!geo) return false
+    const top = viewportTop()
+    const obs = railOnScreen()
+    if (obs.up !== top + geo.upRow || obs.down !== top + geo.downRow) return false
+    const shown = geo.windowEnd - geo.windowStart
+    if (obs.ticks.length !== shown) return false
+    for (let k = 0; k < shown; k++) if (obs.ticks[k] !== top + geo.tickTop + k) return false
+    return true
+  }
+  // 视口高度信号探针：包装渲染器→React 回调（修复前字段不存在，恒 0）。
+  let signals = 0
+  const patchSignalCounter = (): void => {
+    const n = scrollNode()
+    if (!n) return
+    const original = n.onViewportHeightChange
+    n.onViewportHeightChange = (): void => {
+      signals += 1
+      if (typeof original === 'function') original()
+    }
+  }
+  const scrollUp = async (times: number): Promise<void> => {
+    for (let i = 0; i < times; i++) {
+      stdin.write('\x1b[<64;90;30M')
+      // 固定窗:pacing 滚轮事件需逐个进入滚动路径，无逐步可轮询条件
+      await sleep(180)
+    }
+  }
+
+  const pinnedReady = await settled(() => !pillOnScreen() && railFollowsViewport())
+  check('End 场景：初始贴底且 rail 跟随视口（前提）', pinnedReady,
+    `vp=${viewport()} vpTop=${viewportTop()} pill=${pillOnScreen()}`)
+  const vpPinned = viewport()
+  patchSignalCounter()
+  const signalsAtPinned = signals
+  await scrollUp(6)
+  const chromeMounted = await settled(() => pillOnScreen() && viewport() !== vpPinned && railFollowsViewport())
+  check('End 场景：上滚装载 !isSticky chrome 压缩视口后 rail 跟随', chromeMounted,
+    `vp=${viewport()} vpPinned=${vpPinned} signals=${signals} paint=${JSON.stringify(railOnScreen())}`)
+  check('End 场景：chrome 装载产生视口高度信号', signals > signalsAtPinned,
+    `signals=${signals} base=${signalsAtPinned}`)
+
+  const vpScrolled = viewport()
+  const signalsAtScrolled = signals
+  stdin.write('\x1b[F') // End = handle.scrollToBottom()
+  const landed = await settled(() => !pillOnScreen() && viewport() !== vpScrolled && railFollowsViewport())
+  // 固定窗:探针 断言「落定后几何不得回到压缩值」——重绘是瞬态的，settled
+  // 对已成立条件立即返回，需给错误帧留一个观察窗。
+  await sleep(300)
+  check('End 回底落定：rail 几何跟随撑高的视口', landed && railFollowsViewport(),
+    `vp=${viewport()} vpScrolled=${vpScrolled} paint=${JSON.stringify(railOnScreen())}`)
+  check('End 回底落定：卸载 chrome 产生视口高度信号', signals > signalsAtScrolled,
+    `signals=${signals} base=${signalsAtScrolled}`)
+  await inst3.unmount()
+}
 }
 
 console.log(failed === 0 ? '\nALL PASS' : `\n${failed} 项失败`)
