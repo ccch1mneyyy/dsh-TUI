@@ -1102,7 +1102,7 @@ export function Chat({
   const channelRef = React.useRef(channel)
   channelRef.current = channel
   /**
-   * Release the staged images a waiting snapshot alone owns.
+   * Release the staged images a WAITING snapshot alone owns.
    *
    * While a draft waits in the slot for the composer to remount, the snapshot
    * is the only owner of the capabilities behind its `[Image #N]` tokens. If
@@ -1111,13 +1111,27 @@ export function Chat({
    * 128-entry FIFO would evict live entries instead. The `hasStagedImage`
    * guard keeps a capability the channel already recycled a no-op; both calls
    * are idempotent.
+   *
+   * Scope, deliberately narrow (review round 7): a capability a QUEUED message
+   * still references (`channel.pending` — the same image can be in the parked
+   * draft and in a message typed from it, or pulled back with Alt+Up) is never
+   * revoked here. A composer that is still MOUNTED when Chat unmounts keeps its
+   * own draft/history/vim-undo state, and React runs this parent cleanup
+   * BEFORE the child's, so those ids are invisible here — this releases the
+   * parked snapshot's unshared ids only, and the composer's own discard path
+   * stays responsible for the rest.
    */
   React.useEffect(() => {
     return () => {
       const snapshot = promptDraftRef.current.current
       promptDraftRef.current.current = null
       if (snapshot === null) return
+      const queued = new Set<string>()
+      for (const item of channelRef.current.pending) {
+        for (const image of item.images) queued.add(image.stageId)
+      }
       for (const [, stageId] of snapshot.images) {
+        if (queued.has(stageId)) continue
         if (channelRef.current.hasStagedImage?.(stageId) === true) {
           channelRef.current.discardStagedImage(stageId)
         }
