@@ -24,6 +24,8 @@ const attachments = {
     maxImageBytes: 1024,
     maxImagesPerMessage: 4,
     maxMessageImageBytes: 4096,
+    maxImageDimension: 8192,
+    maxImagePixels: 64_000_000,
     mediaTypes: ['image/png'] as const,
   },
   saveImage: async () => attachment,

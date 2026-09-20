@@ -442,20 +442,21 @@ export interface TranscriptImage {
   read(signal?: AbortSignal): Promise<Uint8Array>
 }
 
-/** What the ingress gate changed before the bytes reached the attachment
- * store: the composer reports it so a re-encode is never silent. Present only
- * when something actually changed. */
+/** What an adapted paste ended up as, so the composer can report it instead of
+ * a re-encode happening silently. Present only when the ingress gate had to
+ * change the bytes. Dimensions and media type are the STORE's report for what
+ * it persisted (it normalizes further on its own), i.e. what the user gets. */
 export interface StagedImageAdjustment {
   /** Media type the bytes were declared with (the pasted file's type). */
   readonly sourceMediaType: ChannelImageMediaType
-  /** Media type of the stored bytes. */
+  /** Media type the store reports for the stored bytes. */
   readonly mediaType: ChannelImageMediaType
-  /** Final per-frame pixel dimensions of the stored bytes. */
+  /** Stored pixel dimensions as the store reports them. */
   readonly width: number
   readonly height: number
-  /** The source exceeded the profile's pixel caps and was resampled. */
+  /** The stored image is smaller than what the gate handed over. */
   readonly resized: boolean
-  /** An alpha channel was composited onto an opaque background. */
+  /** This gate composited an alpha channel onto an opaque background. */
   readonly flattened: boolean
 }
 

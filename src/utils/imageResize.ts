@@ -97,11 +97,13 @@ function probeWebp(b: Uint8Array): ImageSizeProbe | null {
   return null
 }
 
-function probeGif(b: Uint8Array): ImageSizeProbe {
-  // Logical screen descriptor: u16 LE at fixed offsets 6/8.
+function probeGif(b: Uint8Array): ImageSizeProbe | null {
+  // Logical screen descriptor: u16 LE at fixed offsets 6/8. A truncated header
+  // reads as 0×0 and would then look "inside the caps", so the zero check is
+  // what keeps an unmeasurable file on the decode path.
   const width = b[6]! | (b[7]! << 8)
   const height = b[8]! | (b[9]! << 8)
-  return { width, height }
+  return width > 0 && height > 0 ? { width, height } : null
 }
 
 /**
@@ -174,38 +176,25 @@ const OPAQUE_TARGETS = ['image/jpeg', 'image/webp', 'image/png'] as const
  *  reads as a broken image on any light UI. */
 const OPAQUE_BACKGROUND = { r: 255, g: 255, b: 255 }
 
-/** Whether a writer keeps every frame of an animated source. JPEG and PNG
- *  output are single-frame, so an animated image is never re-encoded into
- *  them — silently dropping to a still is worse than a clear refusal. */
-function carriesAnimation(mediaType: string): boolean {
-  return mediaType === 'image/webp' || mediaType === 'image/gif'
-}
-
 /**
- * The media type one re-encode should produce, or null to refuse.
+ * The media type one re-encode should produce.
  *
- * 1. Animated sources need an animation-capable target: the source format
- *    when the profile accepts it (no cross-format transcode for webp/gif),
- *    otherwise the first accepted of webp, gif. Null when the profile accepts
- *    neither, which the caller reports instead of writing one frame.
- * 2. A source format the profile already accepts is kept: re-encoding a
- *    format nobody objected to costs quality (JPEG), losslessness (PNG) or
- *    animation, for nothing.
- * 3. Otherwise the first accepted entry of the alpha/opaque order above.
+ * 1. A source format the profile already accepts is kept: re-encoding a format
+ *    nobody objected to costs quality (JPEG) or losslessness (PNG) for
+ *    nothing.
+ * 2. Otherwise the first accepted entry of the alpha/opaque order above. An
+ *    empty allowlist falls back to the source format, which the caller's own
+ *    admission check then refuses with the established message.
  */
 function chooseTargetMediaType(input: {
-  readonly animated: boolean
   readonly hasAlpha: boolean
   readonly sourceMediaType: string
   readonly acceptedMediaTypes: readonly string[]
-}): string | null {
-  const { animated, hasAlpha, sourceMediaType, acceptedMediaTypes } = input
-  if (animated) {
-    if (carriesAnimation(sourceMediaType) && acceptedMediaTypes.includes(sourceMediaType)) return sourceMediaType
-    return ['image/webp', 'image/gif'].find(type => acceptedMediaTypes.includes(type)) ?? null
-  }
+}): string {
+  const { hasAlpha, sourceMediaType, acceptedMediaTypes } = input
   if (acceptedMediaTypes.includes(sourceMediaType)) return sourceMediaType
-  return (hasAlpha ? ALPHA_TARGETS : OPAQUE_TARGETS).find(type => acceptedMediaTypes.includes(type)) ?? null
+  return (hasAlpha ? ALPHA_TARGETS : OPAQUE_TARGETS).find(type => acceptedMediaTypes.includes(type))
+    ?? sourceMediaType
 }
 
 export type AdaptOutcome =
@@ -215,22 +204,20 @@ export type AdaptOutcome =
     readonly data: Uint8Array
     /** Media type of the produced bytes (equals the source's when accepted). */
     readonly mediaType: string
-    /** Final per-frame pixel dimensions. */
     readonly width: number
     readonly height: number
     /** The source exceeded the caps and was resampled. */
     readonly resized: boolean
     /** An alpha channel was composited onto {@link OPAQUE_BACKGROUND}. */
     readonly flattened: boolean
-    readonly animated: boolean
   }
   | {
-    /** Nothing admissible could be produced. Only `sharp-missing` is a
-     * degradation a caller may tolerate (the optional dependency is absent,
-     * so nothing could be measured at all); every other reason is a definite
-     * refusal that must be reported instead of handed to the store. */
+    /** Nothing could be produced. Only `sharp-missing` is a degradation a
+     * caller may tolerate (the optional dependency is absent, so nothing could
+     * be measured at all); every other reason is a definite refusal that must
+     * be reported instead of handed to the store. */
     readonly kind: 'unavailable'
-    readonly reason: 'sharp-missing' | 'decode-failed' | 'animated-unsupported' | 'no-accepted-format'
+    readonly reason: 'sharp-missing' | 'decode-failed' | 'animated-unsupported'
     readonly detail: string
   }
 
@@ -274,9 +261,12 @@ async function loadSharp(): Promise<SharpFactory | null> {
  * short-circuits the common case — bytes it proves to be inside the caps in an
  * accepted format are returned untouched, with no encoder loaded.
  *
- * Aspect ratio is preserved by {@link downscaleTarget}. An animated source
- * keeps every frame (`animated: true` on the reader) or is refused; it is
- * never re-encoded into a single-frame format.
+ * Aspect ratio is preserved by {@link downscaleTarget}. An animated source is
+ * REFUSED whenever this gate would have to touch its bytes: re-encoding a
+ * multi-page image here cannot promise frames, delays and loop survive, and
+ * silently returning a still is a data loss the store's own refusal (the
+ * behaviour without this gate) never inflicted. Animated images that need no
+ * change pass through untouched.
  */
 export async function adaptImageForAdmission(
   bytes: Uint8Array,
@@ -291,10 +281,9 @@ export async function adaptImageForAdmission(
   }
   try {
     // One header read drives every decision below: dimensions for a format
-    // the byte probe cannot measure (the #432 gap), alpha support and frame
-    // count. `animated: true` keeps all frames of a multi-page input and is a
-    // no-op for single-frame ones.
-    const image = sharp(bytes, { animated: true })
+    // the byte probe cannot measure (the #432 gap), alpha support, and the
+    // frame count that decides whether this gate may touch the bytes at all.
+    const image = sharp(bytes)
     const meta = await image.metadata()
     const measured = probe ?? (meta.width !== undefined && meta.height !== undefined
       ? { width: meta.width, height: meta.height }
@@ -302,18 +291,17 @@ export async function adaptImageForAdmission(
     if (measured === null) {
       return { kind: 'unavailable', reason: 'decode-failed', detail: 'the image decodes without pixel dimensions' }
     }
-    const animated = (meta.pages ?? 1) > 1
     const hasAlpha = meta.hasAlpha === true
     const resized = !withinDimensionLimits(measured, limits)
     if (!resized && acceptedMediaTypes.includes(sourceMediaType)) return { kind: 'unchanged' }
-    const mediaType = chooseTargetMediaType({ animated, hasAlpha, sourceMediaType, acceptedMediaTypes })
-    if (mediaType === null) {
+    if ((meta.pages ?? 1) > 1) {
       return {
         kind: 'unavailable',
-        reason: animated ? 'animated-unsupported' : 'no-accepted-format',
-        detail: `accepted formats: ${acceptedMediaTypes.join(', ') || 'none'}`,
+        reason: 'animated-unsupported',
+        detail: `${meta.pages} frames`,
       }
     }
+    const mediaType = chooseTargetMediaType({ hasAlpha, sourceMediaType, acceptedMediaTypes })
     const target = downscaleTarget(measured, limits)
     const flattened = hasAlpha && mediaType === 'image/jpeg'
     let pipeline: SharpPipeline = image
@@ -330,7 +318,6 @@ export async function adaptImageForAdmission(
       height: target.height,
       resized,
       flattened,
-      animated,
     }
   } catch (error) {
     return {

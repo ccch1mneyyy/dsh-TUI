@@ -117,13 +117,16 @@ function admissionFailure(
         ? `image is ${context.probe.width}×${context.probe.height} (over ${context.limits.maxImageDimension}px) and sharp is unavailable to resample it`
         : `${context.mediaType} is not accepted by this profile and sharp is unavailable to convert it`
     case 'animated-unsupported':
-      return `animated ${context.mediaType} cannot be re-encoded into a format this profile accepts (${outcome.detail})`
-    case 'no-accepted-format':
-      return `${context.mediaType} is not accepted by this profile and no accepted format is available to convert it to`
+      return `resizing or converting this animated image cannot keep its frames (${outcome.detail})`
     default:
       return `image could not be decoded to resize or convert it (${outcome.detail})`
   }
 }
+
+/** A store-reported pixel dimension, or the gate's own value when the store
+ *  reported none (lean attachment fakes in the verify scripts). */
+const positiveOr = (value: unknown, fallback: number): number =>
+  typeof value === 'number' && value > 0 ? value : fallback
 
 /**
  * Owns the editable-composer image capabilities: the session epoch, the
@@ -217,7 +220,8 @@ export function createComposerImages(
     // budget and the per-side / total pixel caps, and refuses on all of them
     // when the bytes reach it. Measure and re-encode HERE instead, while the
     // paste can still be explained to the user. Admission is judged against
-    // the pair that will actually be stored, and both triggers are
+    // the pair this gate HANDS OVER (the store may normalize further on its
+    // own — that step is outside this feature), and both triggers are
     // size-independent:
     //   * a source media type the profile does not accept is converted, so a
     //     small PNG is never refused while a large one succeeds;
@@ -227,16 +231,16 @@ export function createComposerImages(
     //   * with sharp absent the image goes to the store unchanged ONLY while
     //     it is still admissible as-is — an accepted format whose size the
     //     probe could not prove fits (upstream stays the backstop); a measured
-    //     oversize, a decode failure, an unaccepted format or an animation
-    //     that cannot survive re-encoding is reported now instead of becoming
-    //     a token that dies at save time.
+    //     oversize, a decode failure, an unaccepted format or a multi-frame
+    //     image this gate would have to re-encode is reported now instead of
+    //     becoming a token that dies at save time.
     // The runtime guards keep older attachment fakes (whose imageLimits
     // predate the dimension fields) on the legacy synchronous path.
     const dimensionCap = attachments.imageLimits.maxImageDimension
     const pixelCap = attachments.imageLimits.maxImagePixels
     let mediaType = input.mediaType
     let data = input.data
-    let adjustment: StagedImageAdjustment | undefined
+    let adapted: Extract<AdaptOutcome, { kind: 'adapted' }> | undefined
     if (typeof dimensionCap === 'number' && typeof pixelCap === 'number'
       && Number.isFinite(dimensionCap) && Number.isFinite(pixelCap)) {
       const dimensionLimits = { maxImageDimension: dimensionCap, maxImagePixels: pixelCap }
@@ -259,14 +263,7 @@ export function createComposerImages(
           // not trusting.
           mediaType = outcome.mediaType as typeof mediaType
           data = outcome.data
-          adjustment = {
-            sourceMediaType: input.mediaType,
-            mediaType,
-            width: outcome.width,
-            height: outcome.height,
-            resized: outcome.resized,
-            flattened: outcome.flattened,
-          }
+          adapted = outcome
           if (data.byteLength > attachments.imageLimits.maxImageBytes) {
             throw new Error(`image still exceeds this profile's per-image size limit after resampling`)
           }
@@ -309,8 +306,21 @@ export function createComposerImages(
       deleteStagedImage(oldest)
     }
     // The adjustment travels with the capability so the composer can say what
-    // the gate did (resampled / re-encoded / alpha filled) instead of letting
-    // a rewritten image reach the store silently.
+    // happened instead of letting a rewritten image reach the store silently.
+    // Its numbers come from the STORE's own report, not from what this gate
+    // handed over: the store normalizes further (dimensions, and the media type
+    // too), and a notice quoting the gate's numbers would contradict the
+    // preview card the user is looking at.
+    const adjustment: StagedImageAdjustment | undefined = adapted === undefined ? undefined : {
+      sourceMediaType: input.mediaType,
+      mediaType: attachment.mediaType,
+      width: positiveOr(attachment.width, adapted.width),
+      height: positiveOr(attachment.height, adapted.height),
+      resized: adapted.resized
+        || positiveOr(attachment.width, adapted.width) !== adapted.width
+        || positiveOr(attachment.height, adapted.height) !== adapted.height,
+      flattened: adapted.flattened,
+    }
     return adjustment === undefined ? { stageId } : { stageId, adjustment }
   }
 

@@ -1673,9 +1673,10 @@ export function PromptInput({
     return queued
   }
 
-  /** Success notice for one staged image. The ingress gate may have resampled
-   *  or re-encoded the bytes to fit the profile: naming that is the difference
-   *  between a reported adaptation and a silently rewritten image. */
+  /** Success notice for one staged image. An adapted paste says what the user
+   *  actually got (stored dimensions, stored format, filled alpha) — naming it
+   *  is the difference between a reported adaptation and a silently rewritten
+   *  image. */
   const stagedImageNotice = (token: string, handle: StagedImageHandle): string => {
     const adjustment = handle.adjustment
     if (adjustment === undefined) return t('input-image-pasted', { token })
@@ -1694,18 +1695,10 @@ export function PromptInput({
         : t('input-image-detail-converted', { from, to }))
     }
     // An adjustment always describes a resize or a conversion; anything else
-    // keeps the plain notice rather than an empty parenthetical.
+    // keeps the plain notice rather than an empty parenthetical. ' · ' joins
+    // the clauses in both shipped languages.
     if (details.length === 0) return t('input-image-pasted', { token })
-    return t('input-image-pasted-adjusted', { token, detail: details.join(t('input-image-detail-join')) })
-  }
-
-  /** Batch notice for a multi-file paste: the count, plus how many members
-   *  the gate had to adapt (a per-image sentence would not fit the row). */
-  const stagedImagesNotice = (count: number, handles: readonly StagedImageHandle[]): string => {
-    const adjusted = handles.filter(handle => handle.adjustment !== undefined).length
-    return adjusted === 0
-      ? t('input-images-staged', { count })
-      : t('input-images-staged-adjusted', { count, adjusted })
+    return t('input-image-pasted-adjusted', { token, detail: details.join(' · ') })
   }
 
   const discardStagedHandles = (handles: readonly StagedImageHandle[]): void => {
@@ -1981,13 +1974,11 @@ export function PromptInput({
                     return true
                   }
                   const boundTokens: string[] = []
-                  const boundHandles: StagedImageHandle[] = []
                   try {
                     const rendered = parts.map(part => {
                       if (part.kind === 'text') return part.value
                       const token = bindStagedImage(part.value, lease)
                       boundTokens.push(token)
-                      boundHandles.push(part.value)
                       return token
                     })
                     if (failure !== '') {
@@ -2000,8 +1991,8 @@ export function PromptInput({
                     insertClipboardAtCaret(`${rendered.join(' ')} `)
                     channel.notify(
                       boundTokens.length === 1
-                        ? stagedImageNotice(boundTokens[0]!, boundHandles[0]!)
-                        : stagedImagesNotice(boundTokens.length, boundHandles),
+                        ? stagedImageNotice(boundTokens[0]!, staged[0]!)
+                        : t('input-images-staged', { count: boundTokens.length }),
                       { timeoutMs: 2500 },
                     )
                     return true

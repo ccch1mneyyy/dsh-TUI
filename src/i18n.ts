@@ -139,13 +139,6 @@ const dict = {
   'transcript-image-message': { zh: '{{count}} 张图片', en: { one: '{{count}} image', other: '{{count}} images' } },
   'input-image-token-stale': { zh: '{{token}} 已失效，发送时不会附带图片', en: '{{token}} is no longer staged; no image will attach' },
   'input-images-staged': { zh: '已附加 {{count}} 张图片', en: { one: 'Attached {{count}} image', other: 'Attached {{count}} images' } },
-  'input-images-staged-adjusted': {
-    zh: '已附加 {{count}} 张图片（其中 {{adjusted}} 张已缩放或转换）',
-    en: {
-      one: 'Attached {{count}} image ({{adjusted}} resized or converted)',
-      other: 'Attached {{count}} images ({{adjusted}} resized or converted)',
-    },
-  },
   'send-failed': { zh: '发送失败 · {{err}}', en: 'Send failed · {{err}}' },
   'export-user-section': { zh: '## 用户', en: '## User' },
   'export-thinking-section': { zh: '## 思考', en: '## Thinking' },
@@ -680,7 +673,6 @@ const dict = {
   'input-image-detail-resized': { zh: '已缩放至 {{width}}×{{height}}', en: 'resized to {{width}}×{{height}}' },
   'input-image-detail-converted': { zh: '{{from}} 已转 {{to}}', en: '{{from}} converted to {{to}}' },
   'input-image-detail-converted-flattened': { zh: '{{from}} 已转 {{to}}，透明区域已填白', en: '{{from}} converted to {{to}}, transparency filled white' },
-  'input-image-detail-join': { zh: '；', en: '; ' },
   'input-image-paste-failed': { zh: '粘贴图片失败：{{err}}', en: 'Could not paste image: {{err}}' },
   'input-image-paste-limit': { zh: '图片数量超过当前配置的单条消息上限', en: 'Image count exceeds the per-message limit for this profile' },
   'input-image-format-unsupported': { zh: '剪贴板图片格式不受支持；请使用 PNG、JPEG、WebP 或 GIF', en: 'Clipboard image format is unsupported; use PNG, JPEG, WebP, or GIF' },

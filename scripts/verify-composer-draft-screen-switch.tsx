@@ -287,7 +287,12 @@ function makeChannel() {
       state.discarded.push(stageId)
       state.staged.delete(stageId)
     },
-    stagedImageLimits: () => ({ maxImageBytes: 1_000_000, maxImagesPerMessage: 8 }),
+    stagedImageLimits: () => ({
+      maxImageBytes: 1_000_000,
+      maxImagesPerMessage: 8,
+      maxImageDimension: 8192,
+      maxImagePixels: 64_000_000,
+    }),
     stageComposerImage: async () => {
       const stageId = `stage-${state.nextStage++}`
       state.staged.set(stageId, { id: stageId, path: pastedImagePath })
