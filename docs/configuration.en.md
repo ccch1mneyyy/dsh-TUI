@@ -194,6 +194,7 @@ for the complete field reference.
 | `VISUAL` / `EDITOR` | External editor opened by `Ctrl+G` (`VISUAL` wins; arguments like `code --wait` are allowed; with neither set the TUI prompts you to configure one — no `vi` fallback) |
 | `DEEPSEEK_API_KEY` | Required DeepSeek credential |
 | `DEEPSEEK_BASE_URL` | Override the compatible DeepSeek API endpoint |
+| `DSH_HOME` | Harness home (profiles, sessions, credentials, attachments); falls back to the upstream default `~/.dsh` |
 | `DSH_TUI_PERSONA` | Override the Agent persona injected by the composition |
 | `DSH_TUI_PRESET` | Override the default Agent preset for new sessions |
 | `DSH_TUI_THEME` | Pin a built-in (`auto`/`light`/`dark`/`dark-ansi`), static theme, or registered plugin theme ahead of persisted selection |
@@ -208,9 +209,17 @@ for the complete field reference.
 | `DSH_TUI_DEBUG` | Enable dsh-tui diagnostics on stderr |
 | `DSH_TUI_RENDER_LOG` | File path for raw ANSI frame capture |
 
-The old `CC_TUI_*` and `DSH_CC_*` names (and the early `~/.dsh-cc` data
-directory) come from earlier release naming and are no longer read as of this
-release; use the `DSH_TUI_*` prefix and the `~/.dsh-tui` data directory.
+The old `CC_TUI_*` and `DSH_CC_*` names come from earlier release naming and
+are no longer read as of this release; use the `DSH_TUI_*` prefix.
+
+Two directories are involved and neither substitutes for the other:
+
+- **Harness home**: `$DSH_HOME`, falling back to the upstream default `~/.dsh`.
+  Holds profiles, sessions, credentials, and attachments. Early releases pinned
+  it to `~/.dsh-cc`.
+- **TUI data directory**: `~/.dsh-tui` (a fixed path, independent of
+  `$DSH_HOME`). Holds `/model`, `/lang`, `/theme` and similar preferences plus
+  `resume.txt`. Early releases wrote these under `$DSH_HOME` instead.
 
 `DSH_TUI_RENDER_LOG` may capture visible prompts, tool arguments, and output.
 Do not attach it to a public issue without reviewing and redacting it.

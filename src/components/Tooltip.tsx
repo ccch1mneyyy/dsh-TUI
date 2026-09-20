@@ -2,6 +2,8 @@ import React from 'react'
 import stripAnsi from 'strip-ansi'
 import { Box, Text, useTerminalSize } from '../ui.js'
 import { useTerminalFocus } from '../ink/hooks/use-terminal-focus.js'
+import { useSelection } from '../ink/hooks/use-selection.js'
+import { hasSelection } from '../ink/selection.js'
 import { stringWidth } from '../ink/stringWidth.js'
 import { getGraphemeSegmenter } from '../utils/intl.js'
 import { PageInsetContext } from './PageMargin.js'
@@ -17,6 +19,11 @@ import type { PointerEvent } from '../ink/events/pointer-event.js'
  * Attach it ONLY when the text is actually hidden: a float that repeats
  * content already visible next to the pointer is noise, not detail (the
  * tool-call header gates on folded/clipped content for this reason).
+ *
+ * Tooltips and text selection are mutually exclusive: a drag-copy reads the
+ * painted screen, and the card REPLACES the cells it covers, so
+ * {@link TooltipLayer} hides all tooltips while a selection drag or an
+ * active selection exists (see its subscription on selection mutations).
  *
  * Hover events only exist in fullscreen (alternate screen + mouse
  * tracking); inline mode never fires the handlers, so the store can only
@@ -183,6 +190,33 @@ export function TooltipLayer({
   const { columns, rows } = useTerminalSize()
   const terminalFocused = useTerminalFocus()
   const tooltip = React.useSyncExternalStore(subscribeTooltip, getTooltipSnapshot)
+  // A text selection and a floating tooltip are mutually exclusive: the copy
+  // reads the PAINTED screen, and the tooltip card REPLACES the cells of the
+  // text it covers — dragging across a shown tooltip (or letting one pop
+  // mid-drag via its dwell timer) puts the tooltip fragment in the clipboard
+  // instead of the message text. Every selection mutation (drag start, each
+  // motion event, release, clear) funnels through this notification, so the
+  // layer goes dark the instant a drag begins and stays dark until the
+  // selection settles. The render guard below is belt-and-suspenders: a
+  // dwell that fires between two motion events must still never paint.
+  const selection = useSelection()
+  const selectionBusy = React.useSyncExternalStore(
+    selection.subscribe,
+    () => {
+      const state = selection.getState()
+      return state !== null && (state.isDragging || hasSelection(state))
+    },
+    () => false,
+  )
+  React.useEffect(() => {
+    return selection.subscribe(() => {
+      // Every selection mutation (drag start, motion, release, clear) resets
+      // the tooltip system wholesale: while busy the card must never paint,
+      // and the settle must also invalidate dwell timers armed while dark,
+      // so a finished copy is not immediately followed by a surprise card.
+      clearTooltip()
+    })
+  }, [selection])
   // Remounts and modal/screen transitions invalidate shown AND pending tips.
   React.useEffect(() => {
     clearTooltip()
@@ -203,6 +237,8 @@ export function TooltipLayer({
   }, [columns, rows])
 
   if (tooltip === null) return null
+  // Never paint over an active drag/selection (see the subscription above).
+  if (selectionBusy) return null
   // A bordered card needs at least one content cell plus two border cells.
   // Below that, hiding is safer than creating geometry wider/taller than the
   // terminal (Yoga would clip unpredictably on 1–2 column/row resize states).

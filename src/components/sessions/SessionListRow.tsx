@@ -4,6 +4,8 @@ import { t } from '../../i18n.js'
 import type { ClickEvent } from '../../ink/events/click-event.js'
 import type { ContextMenuEvent } from '../../ink/events/context-menu-event.js'
 import { useTooltip } from '../Tooltip.js'
+import { SpinnerGlyph } from '../Spinner/SpinnerGlyph.js'
+import { stringWidth } from '../../ink/stringWidth.js'
 import {
   formatAbsolute,
   formatBytes,
@@ -13,6 +15,31 @@ import {
   truncateWidth,
 } from '../../sessions/format.js'
 import type { SessionSummary } from '../../dsh-adapter/sessions/index.js'
+import type { AgentViewStatus } from '../../adapter/ports/channel-view.js'
+
+/**
+ * State presentation for a session this terminal is running: one glyph and one
+ * theme colour per status, matching the session overview's own vocabulary so
+ * the same session never looks like two different things on two screens.
+ * `stopped` is the "not running here" spelling and draws dim.
+ */
+const LIVE_STATUS_GLYPH: Readonly<Record<AgentViewStatus, string>> = {
+  'needs-input': '✻',
+  working: '✽',
+  completed: '✓',
+  failed: '✕',
+  idle: '∙',
+  stopped: '∙',
+}
+
+const LIVE_STATUS_COLOR: Readonly<Record<AgentViewStatus, 'warning' | 'suggestion' | 'success' | 'error' | undefined>> = {
+  'needs-input': 'warning',
+  working: 'suggestion',
+  completed: 'success',
+  failed: 'error',
+  idle: undefined,
+  stopped: undefined,
+}
 
 /**
  * One session in the browser's list: a title line and a metadata line.
@@ -37,6 +64,10 @@ export function SessionListRow({
   onClick,
   onContextMenu,
   onTogglePin,
+  liveStatus,
+  current,
+  occupiedPid,
+  spinner,
 }: {
   session: SessionSummary
   /** Columns available to the row, indentation included. */
@@ -54,6 +85,24 @@ export function SessionListRow({
   onContextMenu?(event: ContextMenuEvent): void
   /** 点击行内 ★/☆（fullscreen）：切换固定状态，不冒泡成"打开会话"。 */
   onTogglePin?(): void
+  /**
+   * Live status of an agent THIS terminal is running, when there is one.
+   * `working` animates instead of holding a static glyph, so a busy session
+   * is legible at a glance — the same vocabulary the session overview uses,
+   * which is what lets the two surfaces read as one feature.
+   */
+  liveStatus?: AgentViewStatus
+  /** True when this is the session the terminal is attached to. */
+  current?: boolean
+  /**
+   * The pid of ANOTHER TUI terminal holding this session, when one does. The
+   * row turns red and says so: the session stays visible but cannot be
+   * entered, which is the honest presentation of a claim this process must
+   * not break. Undefined means free, or already ours.
+   */
+  occupiedPid?: number
+  /** Shared animation clock for the working glyph. */
+  spinner?: { frame: number; time: number }
 }): React.ReactNode {
   const indent = depth * 2
   // Two cells for the focus marker, plus the indent for a nested run.
@@ -67,10 +116,27 @@ export function SessionListRow({
   // and never the working directory, so that pair is always new information
   // for telling look-alike sessions apart.
   const titleText = session.label ?? session.title.text
-  const titleBudget = body - 2 - (mark === undefined ? 0 : 2)
-  const shownTitle = truncateWidth(titleText, titleBudget)
+  /**
+   * The state cell holds EXACTLY two columns on every row, occupied or not,
+   * for the same reason the pin slot does: a column that appears only when a
+   * session is busy would shift every title on screen each time one starts or
+   * stops working.
+   */
+  const occupied = occupiedPid !== undefined
+  const stateGlyph = occupied ? '⊘' : LIVE_STATUS_GLYPH[liveStatus ?? 'stopped']
+  const stateColor = occupied
+    ? 'error'
+    : liveStatus === undefined
+      ? undefined
+      : LIVE_STATUS_COLOR[liveStatus]
+  const occupiedText = occupied ? ` ${t('supervisor-occupied-badge', { pid: occupiedPid })}` : ''
+  const currentText = current === true ? ` ${t('supervisor-current')}` : ''
+  const titleBudget = body - 2 - (mark === undefined ? 0 : 2) - 2
+    - stringWidth(occupiedText) - stringWidth(currentText)
+  const shownTitle = truncateWidth(titleText, Math.max(4, titleBudget))
   const titleTooltip = useTooltip(() => {
     const parts: string[] = []
+    if (occupied) parts.push(t('session-mount-occupied-short', { pid: occupiedPid }))
     if (shownTitle !== titleText) parts.push(titleText)
     parts.push(formatAbsolute(session.updatedAt))
     if (session.cwd !== '') parts.push(session.cwd)
@@ -94,10 +160,14 @@ export function SessionListRow({
       onContextMenu={onContextMenu}
       onMouseEnter={onClick !== undefined || onContextMenu !== undefined ? () => setHovered(true) : undefined}
       onMouseLeave={onClick !== undefined || onContextMenu !== undefined ? () => setHovered(false) : undefined}
-      backgroundColor={focused || hovered ? 'userMessageBackgroundHover' : undefined}
+      // Hover is the BLUE prompt — pointer feedback and nothing else. Selection
+      // is green and never blue: a row the keyboard cursor is on must not look
+      // like a row the mouse happens to be over, so the two never share a
+      // background and a selected row keeps its own colour while hovered.
+      backgroundColor={hovered && !focused ? 'userMessageBackgroundHover' : undefined}
     >
       <Box>
-        <Text color={focused ? 'suggestion' : 'subtle'}>
+        <Text color={focused ? 'success' : 'subtle'}>
           {`${' '.repeat(indent)}${focused ? '❯ ' : '  '}`}
         </Text>
         {/* The pin slot is a FIXED two-column cell on every row — ★ for a
@@ -116,17 +186,43 @@ export function SessionListRow({
         >
           <Text color={pinned ? 'remember' : undefined} dimColor={!pinned}>{pinned ? '★ ' : '☆ '}</Text>
         </Box>
+        {/* The live-state cell. A working session animates in place; an
+            occupied one is a red ⊘; a session this terminal is not running
+            holds the same two columns blank. */}
+        <Box>
+          {liveStatus === 'working' && !occupied && spinner !== undefined ? (
+            <SpinnerGlyph
+              frame={spinner.frame}
+              messageColor="suggestion"
+              reducedMotion={false}
+              time={spinner.time}
+            />
+          ) : (
+            <Text color={stateColor} dimColor={liveStatus === undefined && !occupied}>
+              {`${stateGlyph} `}
+            </Text>
+          )}
+        </Box>
         {mark !== undefined && <Text color={mark.color}>{`${mark.glyph} `}</Text>}
         {/* The tooltip rides ONLY the title text, not the whole line: the
             pin slot's own tooltip must win over its two cells. */}
         <Box {...titleTooltip}>
-          <Text color={titleColor(session.title.source, focused)} bold={focused}>
+          <Text
+            color={occupied ? 'error' : titleColor(session.title.source, focused)}
+            bold={focused}
+          >
             {shownTitle}
           </Text>
         </Box>
+        {occupiedText !== '' && <Text color="error">{occupiedText}</Text>}
+        {currentText !== '' && <Text color="success">{currentText}</Text>}
       </Box>
       <Box>
-        <Text dimColor>
+        {/* Selection is a GREEN foreground, never a background box: the second
+            line carries the same colour as the title so a selected row reads as
+            one green row, and `dimColor` stays off it or the green would wash
+            out to grey. */}
+        <Text color={focused ? 'success' : undefined} dimColor={!focused}>
           {`${' '.repeat(indent + 2)}${truncateWidth(facts.join(' · '), body)}`}
         </Text>
       </Box>

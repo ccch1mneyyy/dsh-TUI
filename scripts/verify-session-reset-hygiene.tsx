@@ -229,6 +229,43 @@ const subagentRows = (channel: { rows: Array<{ kind: string }> }) => channel.row
   check('5d. 新会话未被踩踏（agentId 不变）', (channel as unknown as { agentId: string }).agentId === 'agent-e3')
 }
 
+// ── 场景 5b：resumeTo 当前会话必须幂等短路（不得销毁活句柄） ─────────────
+//
+// 统一的会话界面上，光标默认落在「当前」这一行：用户按 Enter 进入自己已经
+// 在用的会话，这是**重复进入**，不是切换。旧实现把它送到活体收养路径，
+// 从 backgroundHandles 取不到自己的句柄 → 传 undefined → 收养事务的默认处置
+// 是 dispose，于是**正在跑的会话被杀掉**，调用还返回成功。
+{
+  const ctx = new Context()
+  const provide = (ctx as unknown as { provide(name: string, value: unknown): void }).provide.bind(ctx)
+  const initial = makeAgent('agent-h', 'sess-current')
+  // A second handle for the SAME session: nothing in the short-circuit path may
+  // ever reach it, and if the old live-adoption path ran it would dispose the
+  // binding's handle instead — the `noResume`/`noAdopt` counters are the
+  // observable form of "neither path was entered".
+  let resumeCalls = 0
+  provide('agents', {
+    get: () => undefined,
+    resume: () => {
+      resumeCalls += 1
+      return Promise.resolve(makeHandle(makeAgent('agent-h2', 'sess-current')))
+    },
+  })
+  const channel = createChannel(ctx as never, initial as never, {
+    model: 'm0', cwd: '/tmp/demo', provider: 'p0', activity: false,
+  })
+  const result = await channel.resumeTo('sess-current')
+  check('5b-1. resumeTo on the attached session succeeds', result.ok === true, JSON.stringify(result))
+  check('5b-2. it never re-resumes the log from disk', resumeCalls === 0, String(resumeCalls))
+  check('5b-3. the attached session is still attached',
+    (channel as unknown as { agentId: string }).agentId === 'agent-h',
+    String((channel as unknown as { agentId: string }).agentId))
+  check('5b-4. the same session id survives a second resumeTo',
+    (await channel.resumeTo('sess-current')).ok === true
+    && (channel as unknown as { agentId: string }).agentId === 'agent-h',
+    String(resumeCalls))
+}
+
 // ── 场景 6：真实 createChannel 的 deferred attachment/owner teardown ──
 {
   const ctx = new Context()

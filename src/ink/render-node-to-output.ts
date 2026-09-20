@@ -1174,10 +1174,27 @@ function renderNodeToOutput(
         // Capture previous scroll bounds BEFORE overwriting — the at-bottom
         // follow check compares against last frame's max.
         const prevScrollHeight = node.scrollHeight ?? scrollHeight
-        const prevInnerHeight = node.scrollViewportHeight ?? innerHeight
+        const prevViewportHeight = node.scrollViewportHeight
+        const prevInnerHeight = prevViewportHeight ?? innerHeight
         const prevViewportTop = node.scrollViewportTop
         node.scrollHeight = scrollHeight
         node.scrollViewportHeight = innerHeight
+        // Viewport-height change is the one geometry move no scroll notify
+        // covers: chrome above/below the box mounts or unmounts (pill,
+        // pinned header, recap row) or the terminal changes row count —
+        // the viewport resizes with no scroll delta and no sticky flip,
+        // while subscribers that paint from the handle's bounds still hold
+        // the previous pass's geometry. Fire only on a real transition
+        // between two passes: a first frame (`undefined`) observed no
+        // change, and scrollTop/scrollViewportTop motion is excluded on
+        // purpose (see DOMElement.onViewportHeightChange). Called in the
+        // render pass like onStickyRestore below.
+        if (
+          prevViewportHeight !== undefined &&
+          prevViewportHeight !== innerHeight
+        ) {
+          node.onViewportHeightChange?.()
+        }
         // Absolute screen-buffer row where the scrollable area (inside
         // padding) begins. Exposed via ScrollBoxHandle.getViewportTop() so
         // drag-to-scroll can detect when the drag leaves the scroll viewport.

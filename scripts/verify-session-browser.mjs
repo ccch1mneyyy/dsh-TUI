@@ -1,30 +1,35 @@
 #!/usr/bin/env node
 /**
- * Headless regression for the /resume session browser, driven through the
- * REAL Chat screen (compiled lib) with fake stdin — the same harness the
- * picker it replaces used.
+ * Headless regression for the session screen `/resume`, `/agentview` and
+ * `/home` share — driven through the REAL Chat screen (compiled lib) with fake
+ * stdin, the same harness the picker it replaces used.
  *
- * Covers the behaviours a person would notice breaking:
- *   1. the browser opens as a screen, lists conversations, and FOLDS the
- *      delegated sub-agent runs away while still counting them;
- *   2. sessions holding no conversation are never listed, only counted;
- *   3. typing filters the list, Esc clears the query, a second Esc leaves;
- *   4. ctrl+s reveals the runs, indented under their parent;
- *   5. rename: the inline editor prefills, the call hits the intended
- *      session, and the cursor FOLLOWS that session when the rename bumps it
- *      to the top of the list — the cursor tracks identity, not position;
- *   6. delete: the confirmation names the focused session, Ctrl+Enter must
- *      NOT confirm an irreversible action, Esc cancels, and repeated Enter
- *      commits the action only once.
- *   7. right-click: a session row opens a pointer-anchored action menu
- *      (open/pin/rename/delete); keyboard and mouse both drive it, modal
- *      screens keep it inert, outside clicks dismiss it, and it clamps
- *      inside the terminal.
- *   8. pinning: ctrl+p and the in-row star toggle a session into a top
- *      "Pinned" group (and back), the star click never resumes, the pin
- *      is persisted to ~/.dsh-tui/session-pins.json, delete clears it,
- *      pins for sessions that no longer exist are lazily ignored, and
- *      modals keep both paths inert.
+ * This script used to drive the pre-#879 session BROWSER: one flat list with
+ * its own session-level action menu (rename/delete per session), Ctrl+P pins,
+ * Ctrl+S to reveal delegated runs and a workspace-directory menu. That surface
+ * is gone. Its session-level actions were not carried over: the unified screen
+ * manages WORKSPACES (edit / new session here / rename / remove from list) and
+ * lists the sessions of the selected workspace read-only, because the runtime
+ * behind it parks sessions instead of ending them.
+ *
+ * So this file keeps ONE job: pin down the behaviours of the CURRENT screen
+ * that `verify-session-supervisor.tsx` does not already own — the pin STORE
+ * contract, the pin STAR input path (the affordance still exists), and the two
+ * ends of entering a session (the pane's own rows, and the failure path that
+ * must not be misreported).
+ *
+ * What is NO LONGER asserted here, and why (delete, do not resurrect):
+ *   - session-level right-click menu, rename and delete: no such affordance on
+ *     the new screen (session rows are not editable there);
+ *   - Ctrl+S to reveal delegated runs and the "N runs folded" counter: the new
+ *     list shows the workspace's conversations and folds nothing;
+ *   - Ctrl+A / the working-directory menu / per-directory scoping: replaced by
+ *     the workspace rail.
+ *
+ * The in-row star is NOT in that list: `SessionSupervisor` still passes
+ * `pinned`/`onTogglePin` to `SessionListRow`, which still renders a clickable
+ * `★`/`☆`. Removing its regression was justified by an affordance that is
+ * still there, so the click path is asserted at the bottom of this file.
  *
  * Assertion discipline: ink repaints only changed lines, so each step opens a
  * FRESH output window and asserts on what that window painted; checks that
@@ -54,8 +59,10 @@ function check(name, ok, extra = '') {
   if (!ok) failed += 1
 }
 
-// Pin-store contract: private atomic replacement, fresh read-modify-write,
-// corruption preservation, and lock contention failure without lost data.
+// ── pin store contract ────────────────────────────────────────────────────
+// Independent of any screen: private atomic replacement, fresh
+// read-modify-write, corruption preservation, and lock contention failure
+// without lost data. Still the store the session screen reads.
 const pinDir = join(fakeHome, '.dsh-tui')
 const pinFile = join(pinDir, 'session-pins.json')
 const pinLock = join(pinDir, 'session-pins.lock')
@@ -78,7 +85,7 @@ const lockedMutation = setSessionPinned('contended', true)
 check('live pin lock fails cleanly without a lost update',
   !lockedMutation.ok && [...readSessionPins()].join(',') === 'base')
 rmSync(pinLock, { force: true })
-check('pin store resets for browser scenario', writeSessionPins([]))
+check('pin store resets for the screen scenario', writeSessionPins([]))
 
 const COLS = 110
 const ROWS = 34
@@ -109,11 +116,12 @@ function makeStreams() {
   return { stdout, stderr, stdin }
 }
 
+const WORKSPACE = '/tmp'
 const summary = (over) => ({
   id: 'id',
   kind: { kind: 'root' },
   title: { text: 'title', source: 'auto' },
-  cwd: '/tmp',
+  cwd: WORKSPACE,
   createdAt: 1,
   updatedAt: 1,
   bytes: 2048,
@@ -127,11 +135,13 @@ const summary = (over) => ({
 })
 
 function makeChannel() {
-  // The live session is a model-switch fork. Its current lineage must not be
-  // offered as a separate resumable conversation; the remaining MRU order is
-  // gamma (newest) → beta → alpha, plus one foreign-directory conversation,
-  // two delegated runs under beta and one boot artifact holding no conversation.
-  let sessions = [
+  // gamma (newest) → beta → alpha, all in the terminal's own workspace. The
+  // live session is a model-switch fork; its current lineage must not be
+  // offered as a separate resumable conversation. The delegated runs and the
+  // boot artifact (no conversation) are filtered out of the list by the screen
+  // itself. One foreign-directory conversation exists but belongs to another
+  // workspace, so it must not appear while /tmp is selected.
+  const sessions = [
     summary({
       id: 'live-session',
       kind: { kind: 'fork', parent: 'live-parent' },
@@ -147,7 +157,11 @@ function makeChannel() {
     summary({ id: 's-run2', title: { text: 'delegated two', source: 'prompt' }, updatedAt: 1, kind: { kind: 'subagent', parent: 's-mid', depth: 1 } }),
     summary({ id: 's-boot', title: { text: 'tmp', source: 'fallback' }, updatedAt: 6, hasPrompt: false }),
   ]
-  const calls = { rename: [], delete: [], preview: [], resume: [] }
+  const registry = [
+    { id: 'w-tmp', path: WORKSPACE, title: 'tmp', present: true, sessionCount: 5 },
+    { id: 'w-other', path: '/other/project', title: 'other', present: true, sessionCount: 1 },
+  ]
+  const calls = { rename: [], delete: [], resume: [], workspace: [] }
   const listeners = new Set()
   const rows = []
   const channel = {
@@ -159,8 +173,8 @@ function makeChannel() {
     model: 'deepseek-v4-flash',
     provider: 'deepseek',
     tokens: { input: 0, output: 0 },
-    cwd: '/tmp',
-    displayCwd: '/tmp',
+    cwd: WORKSPACE,
+    displayCwd: WORKSPACE,
     gitBranch: 'main',
     working: false,
     spinnerMode: 'requesting',
@@ -188,9 +202,37 @@ function makeChannel() {
     contextSegments: { system: 0, prompt: 0, assistant: 0, thinking: 0, tools: 0 },
     mode: { id: 'default', plan: false, sandbox: 'workspace-write', approval: 'ask' },
     modeIndex: 0,
-    // The real rename touches MRU (verify-resume-rename-mru), so the renamed
-    // session jumps to the top — mirror that, because the cursor following it
-    // is exactly what check 5 is about.
+    // Workspace lifecycle: the screen resolves a target, the HOST switches to
+    // it. `switchWorkspace` is therefore what "start a session here" reports.
+    async renameWorkspaceAt(path, title) {
+      calls.workspace.push(`rename:${path}:${title}`)
+      const entry = registry.find((e) => e.path === path)
+      if (entry === undefined) return false
+      entry.title = title
+      return true
+    },
+    async removeWorkspace(path) {
+      calls.workspace.push(`remove:${path}`)
+      const i = registry.findIndex((e) => e.path === path)
+      if (i < 0) return false
+      registry.splice(i, 1)
+      return true
+    },
+    async resolveWorkspace(reference) {
+      calls.workspace.push(`resolve:${reference}`)
+      return { cwd: reference, uri: reference, label: reference, kind: 'local', badge: 'LOCAL' }
+    },
+    async switchWorkspace(target) {
+      calls.workspace.push(`switch:${target.cwd}`)
+      return true
+    },
+    async stopBackgroundAgent(id) {
+      calls.workspace.push(`stop:${id}`)
+      return true
+    },
+    async listWorkspaceRegistry() {
+      return registry.map((e) => ({ ...e }))
+    },
     async renameSessionTo(id, title) {
       calls.rename.push([id, title])
       const i = sessions.findIndex((s) => s.id === id)
@@ -210,15 +252,9 @@ function makeChannel() {
       return sessions.map((s) => ({ ...s }))
     },
     async previewSession(id) {
-      calls.preview.push(id)
       return [{ role: 'user', text: `preview of ${id}`, at: 1 }]
     },
     notify(text, options) { this.notifications.push({ text, options }) },
-    pushLocal(title, lines) {
-      for (const line of [title, ...lines]) rows.push({ id: rows.length, kind: 'notice', text: line })
-      channel.version += 1
-      for (const listener of listeners) listener()
-    },
     subscribe(listener) { listeners.add(listener); return () => listeners.delete(listener) },
     emit() { channel.version += 1; for (const listener of listeners) listener() },
     submit() {},
@@ -243,6 +279,8 @@ function makeChannel() {
     switchPreset: async () => false,
     switchModel: async () => false,
     rewindTo: async () => null,
+    // The mount path must NOT silently succeed: its failure text is what the
+    // screen has to surface instead of a generic "the model is working".
     resumeTo: async (id) => {
       calls.resume.push(id)
       return {
@@ -278,14 +316,14 @@ const instance = await render(
 )
 // <AlternateScreen> finds its Ink instance through `process.stdout`; alias the
 // fake one so the harness enters the alternate screen the way a real terminal
-// does. Without this the browser would render with inline geometry and the
+// does. Without this the screen would render with inline geometry and the
 // test would be measuring an artefact of its own rig.
 for (const value of instances.values()) instances.set(process.stdout, value)
 
 const flat = (s) => s.replace(/\s+/g, ' ')
 
 /** The composed screen, as the user sees it. Reads from baseY: before the
- *  browser enters the alternate screen the harness is in inline mode, where
+ *  screen enters the alternate screen the harness is in inline mode, where
  *  scrollback would shift the viewport (baseY is 0 in the alt screen). */
 const screen = () => {
   const buf = stdout.term.buffer.active
@@ -294,415 +332,335 @@ const screen = () => {
     .join('\n')
 }
 
-/** 稳定性探针的观察窗：全部调用点断言的都是「不得改变」，对已成立条件
- *  轮询会立即返回等于没测。 */
-async function windowed(action, settleMs = 300) {
-  stdout.frames.length = 0
-  action()
-  await sleep(settleMs) // 固定窗:探针 观察窗，窗内不得出现错误重绘/副作用
-  return toPlain(stdout.frames.join(''))
-}
-
 setLang('en')
 
-// 启动落定：composer 提示符出现即可接收输入。
+// Startup settles once the composer prompt is up and can take input.
 await settle(() => screen().includes('❯'))
 
-// ── open the browser ────────────────────────────────────────────────────
+// ── open the session screen ────────────────────────────────────────────────
+// The screen seeds its listing asynchronously, so "it is up" is read from the
+// pane header, which only carries the workspace NAME after `listSessions()`
+// resolved — the banner alone appears on the first paint with no rows.
 stdin.write('/resume')
 await settle(() => flat(screen()).includes('/resume'))
 stdin.write('\r')
-check('the browser opens as a screen', await settled(() => /Resume session/.test(flat(screen()))), flat(screen()).slice(0, 120))
-check('conversations are listed', await settled(() => /gamma/.test(screen()) && /beta/.test(screen()) && /alpha/.test(screen())))
+check('the session screen opens as a screen',
+  await settled(() => /Sessions in tmp/.test(flat(screen()))), flat(screen()).slice(0, 140))
+
+/**
+ * The rail's own rows, as the user scans them.
+ *
+ * "the rail lists workspace X" cannot be asked of the composed screen text: the
+ * pane header reads `Sessions in tmp`, so `/tmp/` matches even when the rail
+ * dropped the entry. A rail row is identified by its own `▣`/`▢` marker (the
+ * same witness the rail-cursor assertions use), and the entry's title follows
+ * that marker — the session pane can produce neither.
+ */
+const railRows = () => screen()
+  .split('\n')
+  .filter(line => /[▣▢]/u.test(line))
+  .join('\n')
+
+// ── the listing ────────────────────────────────────────────────────────────
 let s = screen()
-check('the current model-switch lineage is not offered as another conversation', !/before model switch/.test(s) && !/after model switch/.test(s))
-check('delegated runs are NOT listed by default', !/delegated one/.test(s) && !/delegated two/.test(s))
-check('but they are counted', await settled(() => /2 runs folded/.test(flat(screen()))), flat(screen()).slice(0, 200))
-check('a session with no conversation is never a row', !/^\s*❯?\s*tmp\b/m.test(s))
-check('and it is counted too', await settled(() => /1 empty/.test(flat(screen()))), flat(screen()).slice(0, 200))
-check('the count reflects only what is shown', await settled(() => /3 sessions/.test(flat(screen()))), flat(screen()).slice(0, 200))
-check('metadata rides under each title', await settled(() => /2\.0 KB/.test(flat(screen())) && /deepseek-v4-pro/.test(flat(screen()))))
-check('focus starts on the MRU top row (gamma)', await settled(() => /❯\s*[★☆]\s*gamma/.test(screen())), screen().split('\n').filter(l => l.includes('❯')).join('|'))
-check('a foreign directory is hidden until its scope is selected', !/delta other workspace/.test(screen()))
+check('conversations are listed', /gamma/.test(s) && /beta/.test(s) && /alpha/.test(s))
+// A `/resume` fork records `parentSession` exactly like a delegated run does.
+// The row for the session the terminal is IN is kept (the screen marks it
+// `current`), but its ANCESTOR is the same conversation at an earlier point —
+// listing both makes one conversation look like two.
+check('the current session\'s fork ancestor is not offered as another conversation',
+  !/before model switch/.test(s), flat(s).slice(0, 220))
+check('the current session itself is listed',
+  /after model switch/.test(s), flat(s).slice(0, 220))
+check('delegated runs are NOT listed', !/delegated one/.test(s) && !/delegated two/.test(s))
+check('a session with no conversation is never a row', !/^\s*☆ ∙ tmp\b/m.test(s))
+check('a conversation from another workspace is not listed',
+  !/delta other workspace/.test(s), flat(s).slice(0, 160))
+check('the workspace rail lists both ledger entries',
+  /[▣▢] tmp\b/u.test(railRows()) && /[▣▢] other\b/u.test(railRows()),
+  flat(railRows()).slice(0, 200))
+check('the filter box is live', /Type to search sessions/.test(flat(s)))
+check('the new-session card is the list\'s first row', /New session/.test(flat(s)))
 
-// ── explicit working-directory menu ─────────────────────────────────────
-stdin.write('\x1b[D') // ← opens the directory layer
-check('left opens the visible working-directory menu',
-  await settled(() => /Choose working directory/.test(flat(screen())) && /All working directories/.test(flat(screen()))),
-  flat(screen()).slice(0, 260))
-check('the directory menu exposes the foreign path', /\/other\/project/.test(screen()), flat(screen()).slice(0, 300))
-stdin.write('\x1b[B') // current → foreign (all is above current)
-check('directory focus moves independently from session focus',
-  await settled(() => /❯\s*▣\s*project/.test(screen())),
-  screen().split('\n').filter(line => line.includes('❯')).join('|'))
-stdin.write('\r')
-check('choosing a directory scopes the session list',
-  await settled(() => /delta other workspace/.test(screen()) && !/gamma/.test(screen())),
-  flat(screen()).slice(0, 280))
-stdin.write('\x01') // ctrl+a = all directories quick toggle
-check('ctrl+a still provides the all-directories fast path',
-  await settled(() => /delta other workspace/.test(screen()) && /gamma/.test(screen()) && /all working directories/i.test(flat(screen()))))
-stdin.write('\x01') // all → current
-check('ctrl+a toggles back to the current directory',
-  await settled(() => /gamma/.test(screen()) && !/delta other workspace/.test(screen()) && /Working directory\s+\/tmp/.test(flat(screen()))))
-check('returning to current scope restores the MRU focus', await settled(() => /❯\s*[★☆]\s*gamma/.test(screen())))
-
-// ── mouse wheel ─────────────────────────────────────────────────────────
-// Wheel events arrive as SGR mouse sequences over the list region, exactly
-// as a real fullscreen terminal delivers them. Rolling walks the cursor one
-// session per notch (the window is cursor-follow, so rolling IS scrolling).
-const wheelRow = screen().split('\n').findIndex(l => /❯\s*[★☆]\s*gamma/.test(l)) + 1 // SGR is 1-indexed
-stdin.write(`\x1b[<65;10;${wheelRow}M`) // wheel-down
-check('mouse wheel-down moves the focus one session', await settled(() => /❯\s*[★☆]\s*beta/.test(screen())), screen().split('\n').filter(l => l.includes('❯')).join('|'))
-stdin.write(`\x1b[<64;10;${wheelRow}M`) // wheel-up
-check('mouse wheel-up moves it back', await settled(() => /❯\s*[★☆]\s*gamma/.test(screen())), screen().split('\n').filter(l => l.includes('❯')).join('|'))
-
-// ── held arrow keys ─────────────────────────────────────────────────────
-// A held key (or a paste) arrives as several key events out of ONE stdin
-// chunk, all handled before React re-renders. Every one of them must move
-// the cursor; a handler reading its start position from the render closure
-// would compute them all from the same row and keep only the last.
-stdin.write('\x1b[B\x1b[B') // two ↓ in one chunk
-check('two arrows in one chunk move two rows, not one', await settled(() => /❯\s*[★☆]\s*alpha/.test(screen())), screen().split('\n').filter(l => l.includes('❯')).join('|'))
-stdin.write('\x1b[A\x1b[A') // two ↑ back to the top
-check('and back again', await settled(() => /❯\s*[★☆]\s*gamma/.test(screen())))
-// Control bytes this screen does not claim must never be typed into the
-// search box. A chord arriving as raw C0 (here two ctrl+s in one chunk, which
-// the parser hands over as literal control characters rather than as the
-// shortcut) used to land in the query and leave a filter matching nothing,
-// with nothing on screen to explain why the list went empty.
-// Stability probe (the query and list must NOT change; the expected final
-// screen equals the current one, so a settle would return immediately) —
-// keep the fixed window for a wrong repaint to show up.
-await windowed(() => stdin.write('\x13\x13'), 500)
-// An empty query still shows the placeholder; a polluted one would not.
-check('unclaimed control bytes never reach the search box', /Type to search/.test(flat(screen())), flat(screen()).slice(0, 200))
-check('and the list is untouched by them', /gamma/.test(screen()) && /alpha/.test(screen()) && /3 sessions/.test(flat(screen())))
-
-// ── search ──────────────────────────────────────────────────────────────
-stdin.write('alph')
-check('typing filters the list', await settled(() => /alpha/.test(screen()) && !/gamma/.test(screen())), flat(screen()).slice(0, 200))
-check('the cursor lands on the surviving row', await settled(() => /❯\s*[★☆]\s*alpha/.test(screen())))
-// Fixed window kept: the assertion condition (/alpha/) already holds before
-// the backspace — the only change is one query character, which these
-// regexes cannot distinguish ('alpha' contains 'alph'), so a settle would
-// return on the stale screen.
-await windowed(() => stdin.write('\x7f'), 300) // backspace
-s = screen()
-check('backspace widens the query again', /alpha/.test(s))
-stdin.write('\x1b') // Esc clears the query first
-check('Esc clears the query rather than leaving',
-  await settled(() => /gamma/.test(screen()) && /Resume session/.test(flat(screen()))))
-
-// ── right-click context menu ───────────────────────────────────────────
-// SGR button 2 = right press. The menu must appear on press, anchored at
-// the pointer, and must NOT trigger the row's left-click resume path.
-const gammaLine = screen().split('\n').findIndex(l => /❯\s*[★☆]\s*gamma/.test(l))
-const menuSgr = (col, row) => `\x1b[<2;${col};${row}M\x1b[<2;${col};${row}m`
-stdin.write(menuSgr(30, gammaLine + 1))
-check('right-click on a session row opens the action menu',
-  await settled(() => /Open/.test(screen()) && /Rename/.test(screen()) && /Delete/.test(screen())),
-  flat(screen()).slice(0, 260))
-check('a right-click does not resume the session',
-  channel.calls.resume.length === 0, JSON.stringify(channel.calls.resume))
+// ── entering a session needs the session pane ──────────────────────────────
+// The keyboard opens on the RAIL, and the list's row 0 is the new-session
+// card. Entering a conversation is therefore: → into the pane, ↓ past the
+// card, Enter. Each step must not reach the mount path on its own.
 {
-  const lines = screen().split('\n')
-  check('the menu is anchored just past the pointer, not at the screen top',
-    /Open/.test(lines[gammaLine + 2] ?? ''),
-    JSON.stringify(lines.slice(gammaLine, gammaLine + 4)))
+  const before = channel.calls.resume.length
+  stdin.write('\r')
+  await sleep(200) // 固定窗:pacing Enter 处理步间，无可观测锚点
+  check('Enter on the rail does not mount anything', channel.calls.resume.length === before,
+    `resume calls: ${channel.calls.resume.join(', ')}`)
+  // Enter on the rail opens that workspace's action menu (edit / new session /
+  // rename / remove), which is a modal layer: close it before the pane tests,
+  // or every later key is swallowed by the menu.
+  check('Enter on the rail opens the workspace action menu',
+    await settled(() => /Rename workspace/.test(screen()) && /Remove from list/.test(screen())),
+    flat(screen()).slice(0, 200))
+  stdin.write('\u001b')
+  check('Esc closes the workspace menu without mounting anything',
+    await settled(() => !/Rename workspace/.test(screen())), flat(screen()).slice(0, 160))
 }
-// ↑/↓ move the keyboard cursor; Enter runs the highlighted action. Both
-// keys go in ONE write so they land in the same stdin chunk — the exact
-// path the menuRef exists for (↓ must move the item before Enter reads it).
-// Two ↓: the menu is open/pin/rename/delete, so rename is the THIRD item.
-stdin.write('\x1b[B\x1b[B\r')
-check('menu Enter runs the highlighted action (rename)',
-  await settled(() => /✎ gamma/.test(flat(screen()))), flat(screen()).slice(-200))
-stdin.write('\x1b') // leave the rename editor
-await settle(() => !/✎ gamma/.test(flat(screen())))
-// Mouse activation: reopen, then left-click the Delete item. The popup is
-// anchored at the pointer (menuCol → screen col 30), so the click must land
-// INSIDE the popup's span — a click outside it would dismiss the menu by
-// design.
-stdin.write(menuSgr(30, gammaLine + 1))
-await settle(() => /Open/.test(screen()))
-const deleteItemLine = screen().split('\n').findIndex(l => /Delete/.test(l))
-stdin.write(`\x1b[<0;34;${deleteItemLine + 1}M\x1b[<0;34;${deleteItemLine + 1}m`)
-check('left-clicking a menu item runs it (delete → confirmation)',
-  await settled(() => /Delete "gamma"/.test(flat(screen()))), flat(screen()).slice(-220))
-// While a confirmation is up, right-click must not open a menu.
-stdin.write(menuSgr(30, gammaLine + 1))
-await sleep(250) // 固定窗:探针 确认框在场时右键不得开出菜单
-check('a right-click during the delete confirmation opens no menu',
-  !/Open/.test(screen()) && /Delete "gamma"/.test(flat(screen())), flat(screen()).slice(-220))
-stdin.write('\x1b') // cancel the confirmation
-await settle(() => !/Delete "gamma"/.test(flat(screen())))
-// Outside click dismisses the menu without acting on the row beneath.
-stdin.write(menuSgr(30, gammaLine + 1))
-await settle(() => /Open/.test(screen()))
-stdin.write(`\x1b[<0;5;${ROWS}M\x1b[<0;5;${ROWS}m`) // hint row: no handler
-await sleep(250) // 固定窗:探针 菜单外点击不得 resume 任何会话、不得移动光标
-check('a left-click outside the menu dismisses it and resumes nothing',
-  !/Open/.test(screen()) && channel.calls.resume.length === 0 && /❯\s*[★☆]\s*gamma/.test(screen()),
-  flat(screen()).slice(0, 240))
-// Left-clicking ANOTHER session row while the menu is open must be inert
-// (rows carry onClick but the menu gates them): the menu closes, nothing
-// resumes, and the cursor stays where it was.
-stdin.write(menuSgr(30, gammaLine + 1))
-await settle(() => /Open/.test(screen()))
-const betaLine = screen().split('\n').findIndex(l => /^\s*beta\b/.test(l))
-stdin.write(`\x1b[<0;6;${betaLine + 1}M\x1b[<0;6;${betaLine + 1}m`)
-await sleep(250) // 固定窗:探针 菜单开着时点别的行不得 resume、光标不得移动
-check('left-clicking another row while the menu is open only dismisses it',
-  !/Open/.test(screen()) && channel.calls.resume.length === 0 && /❯\s*[★☆]\s*gamma/.test(screen()),
-  flat(screen()).slice(0, 240))
-// Right-click near the right edge: the popup clamps inside the terminal.
-stdin.write(menuSgr(COLS - 2, gammaLine + 1))
-await settle(() => /Open/.test(screen()))
-{
-  const lines = screen().split('\n')
-  const openLine = lines.findIndex(l => /Open/.test(l))
-  check('a menu near the right edge clamps to the terminal width',
-    openLine >= 0 && (lines[openLine]?.length ?? 0) === COLS,
-    openLine >= 0 ? `line=${JSON.stringify(lines[openLine])}` : 'menu missing')
+// Cursor presence is read from the buffer with escapes stripped: a captured
+// row can carry a bare ANSI cursor-move in front of the glyph.
+const focusedRowHas = (needle) => {
+  const buf = stdout.term.buffer.active
+  for (let y = 0; y < stdout.term.rows; y++) {
+    const raw = buf.getLine(buf.baseY + y)?.translateToString(true) ?? ''
+    if (!raw.includes(needle)) continue
+    return raw.replace(/\x1b\[[0-9;]*[A-Za-z]/g, '').includes('❯')
+  }
+  return false
 }
-stdin.write('\x1b') // dismiss
-await settle(() => !/Open/.test(screen()))
-// Right-click on chrome with no handler opens nothing.
-stdin.write(menuSgr(5, ROWS))
-await sleep(250) // 固定窗:探针 无处理器的空白 chrome 上右键不得开出菜单
-check('a right-click on empty chrome opens no menu',
-  !/Open/.test(screen()) && !/Rename/.test(screen()), flat(screen()).slice(0, 200))
-
-// ── reveal the delegated runs ───────────────────────────────────────────
-stdin.write('\x13') // ctrl+s
-check('ctrl+s reveals the delegated runs', await settled(() => /audit run/.test(screen())), flat(screen()).slice(0, 300))
-s = screen()
-check('nothing is folded any more', /0 runs folded/.test(flat(s)) || !/runs folded/.test(flat(s)))
-const runLine = s.split('\n').find((l) => l.includes('audit run')) ?? ''
-check('a run is indented under its parent', /^\s{3,}/.test(runLine), JSON.stringify(runLine))
-// Attached child pins used to paint ★ but remain buried under the parent.
-// Clicking its star must promote it exactly once into the Pinned group.
-{
-  const runRow = s.split('\n').findIndex(line => line.includes('audit run')) + 1
-  const runStarCol = runLine.indexOf('☆') + 1
-  stdin.write(`\x1b[<0;${runStarCol};${runRow}M\x1b[<0;${runStarCol};${runRow}m`)
-  check('an attached sub-agent pin is promoted into the Pinned group',
-    await settled(() => /★\s*Pinned/.test(flat(screen())) && /^❯\s*★\s*⑂\s*audit run/m.test(screen())),
-    screen().split('\n').filter(line => /Pinned|audit run/.test(line)).join(' | '))
-  stdin.write('\x10') // focused promoted run → unpin
-  check('unpinning the child returns it under its parent without duplication',
-    await settled(() => !/Pinned/.test(flat(screen())) &&
-      screen().split('\n').filter(line => line.includes('audit run')).length === 1 &&
-      /^\s{2}(?:❯|\s{2})/.test(screen().split('\n').find(line => line.includes('audit run')) ?? '')),
-    screen().split('\n').filter(line => /Pinned|audit run/.test(line)).join(' | '))
+const rowOfText = (needle) => {
+  const buf = stdout.term.buffer.active
+  for (let y = 0; y < stdout.term.rows; y++) {
+    const raw = buf.getLine(buf.baseY + y)?.translateToString(true) ?? ''
+    const col = raw.indexOf(needle)
+    if (col >= 0) return { row: y, col }
+  }
+  return null
 }
-stdin.write('\x13') // fold them back
-check('ctrl+s folds them away again', await settled(() => !/audit run/.test(screen())))
+/** Click the row carrying `needle`, through the renderer's hit-testing path.
+ *  The pointer report goes to STDIN (the app's input), like a real terminal. */
+const clickText = async (needle) => {
+  await settled(() => rowOfText(needle) !== null)
+  const found = rowOfText(needle)
+  if (found === null) throw new Error(`row not found: ${needle}`)
+  const x = found.col + 1
+  const y = found.row + 1
+  stdin.write(`\u001b[<0;${x};${y}M\u001b[<0;${x};${y}m`)
+  await sleep(150) // 固定窗:pacing 输入泵把字节交给解析器的步间
+}
 
-// ── rename, and the cursor that follows it ──────────────────────────────
-stdin.write('\x1b[B') // ↓ → beta
-await settle(() => /❯\s*[★☆]\s*beta/.test(screen()))
-// The prefill assertion reads the PAINTED window (per-cell diff semantics),
-// so poll the accumulating frame bytes for the same condition.
-stdout.frames.length = 0
-stdin.write('\x12') // ctrl+r → rename
-check('rename prefills the editor with the focused title',
-  await settled(() => /✎ beta/.test(flat(toPlain(stdout.frames.join(''))))),
-  flat(toPlain(stdout.frames.join(''))).slice(-160))
-const renameForeignRow = screen().split('\n').findIndex(line => line.includes('gamma')) + 1
-stdin.write(`\x1b[<0;6;${renameForeignRow}M\x1b[<0;6;${renameForeignRow}m`)
-await sleep(250) // 固定窗:探针 重命名态下点别的行不得 resume、不得移动光标
-check(
-  'rename mode makes other session rows inert to mouse clicks',
-  channel.calls.resume.length === 0 && /✎\s*beta/.test(flat(screen())) && /❯\s*[★☆]\s*beta/.test(screen()),
-  JSON.stringify({ resume: channel.calls.resume, focus: screen().split('\n').find(line => line.includes('❯')) }),
-)
-stdin.write('renamed')
-await settle(() => /betarenamed/.test(screen()))
-stdin.write('\r')
-check(
-  'the rename call hit the intended session',
-  await settled(() => channel.calls.rename.length === 1 && channel.calls.rename[0][0] === 's-mid'),
-  JSON.stringify(channel.calls.rename),
-)
-check(
-  'the cursor followed the renamed session to its new position',
-  await settled(() => {
-    const row = screen().split('\n').find((l) => l.includes('betarenamed')) ?? ''
-    return /❯\s*[★☆]\s*betarenamed/.test(row)
-  }),
-  JSON.stringify(screen().split('\n').find((l) => l.includes('betarenamed')) ?? ''),
-)
-
-// ── delete: the guard, the cancel, the commit ───────────────────────────
-// Composed screen, not the painted window: the notice row this replaces sat
-// on the same line, so the per-cell diff legitimately emits only the changed
-// characters and a regex over those bytes can never match.
-stdin.write('\x04') // ctrl+d
-check('the confirmation names the focused session',
-  await settled(() => /Delete "betarenamed"/.test(flat(screen()))), flat(screen()).slice(-220))
-const deleteForeignRow = screen().split('\n').findIndex(line => line.includes('alpha')) + 1
-stdin.write(`\x1b[<0;6;${deleteForeignRow}M\x1b[<0;6;${deleteForeignRow}m`)
-await sleep(250) // 固定窗:探针 确认框在场时点别的行不得 resume、不得移动光标
-check(
-  'delete confirmation makes other session rows inert to mouse clicks',
-  channel.calls.resume.length === 0 && /Delete "betarenamed"/.test(flat(screen())) && /❯\s*[★☆]\s*betarenamed/.test(screen()),
-  JSON.stringify({ resume: channel.calls.resume, confirmation: flat(screen()).slice(-180) }),
-)
-// Negative probe (Ctrl+Enter must NOT confirm): nothing is supposed to
-// change, so a settle would return immediately.
-await windowed(() => stdin.write('\x1b[13;5u'), 400) // Ctrl+Enter must not confirm
-check('Ctrl+Enter does not confirm an irreversible delete', channel.calls.delete.length === 0, JSON.stringify(channel.calls.delete))
-stdin.write('\x1b') // Esc cancels
-check('Esc cancels the confirmation',
-  await settled(() => !/Delete "/.test(flat(screen())) && channel.calls.delete.length === 0))
-stdin.write('\x04')
-await settle(() => /Delete "betarenamed"/.test(flat(screen())))
-stdin.write('\x1b[13u\x1b[13u')
-// 先等屏幕呈现删除结果（两次 Enter 同批处理完毕），再断言「恰好一次」：
-// 直接对 delete.length === 1 轮询可能在第二次 Enter 生效前提前通过。
-const deleteEffectsPainted = await settled(() =>
-  /Deleted session betarenamed/.test(flat(screen())) && /2 sessions/.test(flat(screen())))
-check(
-  'repeated Enter commits one delete, on the session the confirmation named',
-  channel.calls.delete.length === 1 && channel.calls.delete[0] === 's-mid',
-  JSON.stringify(channel.calls.delete),
-)
-// The notice line names what was deleted, so "gone" is asserted on the list
-// itself: one fewer session, and no row carrying that title any more.
-s = screen()
-check('the browser says what it did, on the screen the user is looking at', deleteEffectsPainted && /Deleted session betarenamed/.test(flat(s)), flat(s).slice(-200))
-check('the deleted row leaves the list', /2 sessions/.test(flat(s)) && !s.split('\n').some(l => /^[❯★☆\s]*betarenamed/.test(l)), flat(s).slice(0, 200))
-
-// ── pin: the star, the group, the cleanup ───────────────────────────────
-// The list is now gamma (MRU top) and alpha. Every row carries a ☆ slot; a
-// pin turns it into ★ and lifts the row into a "Pinned" group at the top.
-await settle(() => /❯\s*☆\s*gamma/.test(screen()))
-stdin.write('\x10') // ctrl+p
-check('ctrl+p pins the focused session',
-  await settled(() => /❯\s*★\s*gamma/.test(screen()) && /★\s*Pinned/.test(flat(screen()))),
+// ── the filter is a live query ─────────────────────────────────────────────
+// Keyboard entry (`→` into the pane, then Enter) is covered by
+// verify-session-supervisor.tsx; this file drives the pointer, which is the
+// path a click on a row takes: row → hit-test → openSession.
+stdin.write('gamma')
+check('typing narrows the list',
+  await settled(() => /gamma/.test(screen()) && !/beta/.test(screen()) && !/alpha/.test(screen())),
+  flat(screen()).slice(0, 220))
+check('the surviving row is still listed', /gamma/.test(screen()))
+stdin.write('\u007f\u007f\u007f\u007f\u007f')
+check('backspace widens it again',
+  await settled(() => /beta/.test(screen()) && /alpha/.test(screen())), flat(screen()).slice(0, 220))
+// Esc on a NON-empty query clears it and stays on the screen; Esc on an empty
+// one leaves (checked at the end). The distinction is the whole layering rule:
+// getting it wrong throws the user out of the screen for one stray keypress.
+stdin.write('beta')
+await settled(() => !/gamma/.test(screen()))
+stdin.write('\u001b')
+// After the clear, the whole workspace listing is back — the lineage rows stay
+// hidden, so `gamma` is the newest CONVERSATION and the click target below.
+check('Esc clears a live query rather than leaving the screen',
+  await settled(() => /gamma/.test(screen()) && /beta/.test(screen()) && /Sessions in tmp/.test(flat(screen()))),
   flat(screen()).slice(0, 200))
-{
-  const lines = screen().split('\n')
-  const headerIdx = lines.findIndex(l => /★\s*Pinned/.test(l))
-  const gammaIdx = lines.findIndex(l => /★\s*gamma/.test(l))
-  const alphaIdx = lines.findIndex(l => /☆\s*alpha/.test(l))
-  check('the pinned group sits above the ordinary rows',
-    headerIdx >= 0 && gammaIdx === headerIdx + 1 && alphaIdx > gammaIdx,
-    JSON.stringify({ headerIdx, gammaIdx, alphaIdx }))
-}
-check('the pin is persisted', [...readSessionPins()].join(',') === 's-new', [...readSessionPins()].join(','))
-// Two toggles in one stdin chunk must observe each other and cancel out.
-stdin.write('\x10\x10')
-check('same-chunk ctrl+p twice cancels out',
-  await settled(() => readSessionPins().has('s-new') && /★\s*gamma/.test(screen())),
-  JSON.stringify([...readSessionPins()]))
-// Down + Ctrl+P in one chunk pins the row the cursor MOVED to, not the stale
-// render-closure target.
-stdin.write('\x1b[B\x10')
-check('same-chunk Down + ctrl+p follows the moved focus',
-  await settled(() => readSessionPins().has('s-old') && /❯\s*★\s*alpha/.test(screen())),
-  JSON.stringify([...readSessionPins()]))
-// Clicking the star of ANOTHER row toggles it and must never resume: the star
-// is a control on the row, not the row. The ☆ sits two columns in (focus
-// marker + star), so the SGR click lands on column 3.
-{
-  const alphaStarRow = screen().split('\n').findIndex(l => /★\s*alpha/.test(l)) + 1
-  stdin.write(`\x1b[<0;3;${alphaStarRow}M\x1b[<0;3;${alphaStarRow}m`)
-  check('clicking the star unpins without resuming',
-    await settled(() => /☆\s*alpha/.test(screen()) && channel.calls.resume.length === 0),
-    JSON.stringify({ resume: channel.calls.resume }))
-  // 固定窗:墙钟 跨过 App.tsx 的 MULTI_CLICK_TIMEOUT_MS=500，否则同格第二次点击
-  // 会被判成双击走词选路径而不是 onClickAt。
-  await sleep(550)
-  const alphaRowAgain = screen().split('\n').findIndex(l => /☆\s*alpha/.test(l)) + 1
-  stdin.write(`\x1b[<0;3;${alphaRowAgain}M\x1b[<0;3;${alphaRowAgain}m`)
-  check('clicking the star can pin again',
-    await settled(() => /★\s*alpha/.test(screen()) && channel.calls.resume.length === 0),
-    JSON.stringify({ resume: channel.calls.resume }))
-}
-// The right-click menu's pin item is state-aware: pinned ⇒ "Unpin".
-{
-  const gammaMenuRow = screen().split('\n').findIndex(l => /★\s*gamma/.test(l)) + 1
-  stdin.write(menuSgr(30, gammaMenuRow))
-  await settled(() => /Unpin/.test(screen()))
-  check('the menu offers Unpin for a pinned session',
-    /Unpin/.test(screen()) && !/Pin to top/.test(screen()), flat(screen()).slice(0, 240))
-  const unpinItemRow = screen().split('\n').findIndex(l => /Unpin/.test(l)) + 1
-  // Col 34 sits inside the popup (anchored at the pointer col 30 + 1).
-  stdin.write(`\x1b[<0;34;${unpinItemRow}M\x1b[<0;34;${unpinItemRow}m`)
-  check('the menu item unpins the session',
-    await settled(() => /☆\s*gamma/.test(screen()) && /★\s*alpha/.test(screen())),
-    JSON.stringify(screen().split('\n').filter(l => /gamma|alpha|Pinned|Open|Unpin|Rename|Delete|✎/.test(l))))
-}
-// Modals keep both pin paths inert: ctrl+p must not toggle, and the star
-// must not even be a click target while the rename editor is up.
-stdin.write('\x12') // ctrl+r → rename
-await settled(() => /✎ gamma/.test(flat(screen())))
-const pinsBeforeModal = [...readSessionPins()].sort().join(',')
-await windowed(() => stdin.write('\x10'), 300) // ctrl+p during rename
-{
-  const alphaStarRow = screen().split('\n').findIndex(l => /[★☆]\s*alpha/.test(l)) + 1
-  await windowed(() => stdin.write(`\x1b[<0;3;${alphaStarRow}M\x1b[<0;3;${alphaStarRow}m`), 300)
-}
-check('ctrl+p and the star stay inert under a modal',
-  [...readSessionPins()].sort().join(',') === pinsBeforeModal && channel.calls.resume.length === 0,
-  JSON.stringify({ pins: [...readSessionPins()], resume: channel.calls.resume }))
-stdin.write('\x1b') // leave the rename editor
-await settled(() => !/✎ gamma/.test(flat(screen())))
-// Delete clears the pin with the session: wrap ↓ from gamma (last row) to
-// alpha (first selectable), then delete it.
-stdin.write('\x1b[B')
-await settled(() => /❯\s*★\s*alpha/.test(screen()))
-stdin.write('\x04')
-await settled(() => /Delete "alpha"/.test(flat(screen())))
-stdin.write('\r')
-check('deleting a pinned session clears its pin',
-  await settled(() => !readSessionPins().has('s-old') && !/Pinned/.test(flat(screen()))),
-  JSON.stringify([...readSessionPins()]))
-// Reopening the browser re-reads the pin file; pins whose sessions are gone
-// are lazily ignored — no row, no error, and the file is left untouched.
-stdin.write('\x1b') // Esc leaves the browser
-await settled(() => !/Resume session/.test(flat(screen())))
-writeSessionPins(['ghost-session', 's-new'])
-stdin.write('/resume')
-await settled(() => flat(screen()).includes('/resume'))
-stdin.write('\r')
-check('a reopened browser ignores pins for missing sessions',
-  await settled(() => /Resume session/.test(flat(screen())) && /❯\s*★\s*gamma/.test(screen())),
-  flat(screen()).slice(0, 200))
-s = screen()
-check('a ghost pin never becomes a row',
-  /Pinned/.test(flat(s)) && !s.split('\n').some(l => /ghost/.test(l)) && [...readSessionPins()].includes('ghost-session'),
-  JSON.stringify([...readSessionPins()]))
 
-// ── resume failure detail ──────────────────────────────────────────────────
-stdin.write('\r')
-const failureShown = await settled(() => /corrupt session log: seq gap in committed region/.test(flat(screen())))
+// ── resume failure ─────────────────────────────────────────────────────────
+// The stub's mount always fails with a REAL error string. The host (Chat) owns
+// the reason and renders it through the shared `resumeFailureText`, so the
+// screen must keep that sentence intact and stay up — never collapse into "the
+// model is working", which is what misreported every failure before.
+await clickText('gamma')
+const failureShown = await settled(() =>
+  /corrupt session log: seq gap in committed region/.test(flat(screen())))
 s = screen()
-check('a failed resume stays in the browser', /Resume session/.test(flat(s)), flat(s).slice(0, 180))
-check(
-  'the browser shows the real resume failure',
-  failureShown,
-  flat(s).slice(-220),
-)
-check(
-  'the browser does not misreport every failure as a running model',
-  !/model is working/.test(flat(s)),
-  flat(s).slice(-220),
-)
+check('clicking a conversation reaches the mount path with THAT session',
+  channel.calls.resume.includes('s-new'), `resume calls: ${channel.calls.resume.join(', ')}`)
+check('a failed resume stays on the session screen',
+  /Sessions in tmp/.test(flat(s)), flat(s).slice(0, 200))
+check('the screen names the session it could not enter',
+  /Could not enter gamma/.test(flat(s)), flat(s).slice(-260))
+// The reason travels through the shared `resumeFailureText` and out on the
+// channel's notification seam — the host's wording, not a re-derived one.
+check('the real resume failure reached the notification seam, not a generic one',
+  channel.notifications.some((n) =>
+    /corrupt session log: seq gap in committed region/.test(n.text)),
+  JSON.stringify(channel.notifications.map((n) => n.text)))
+check('it does not misreport the failure as a running model',
+  !/model is working/.test(flat(s)) &&
+    !channel.notifications.some((n) => /model is working/.test(n.text)),
+  flat(s).slice(-260))
 
-// ── leaving ─────────────────────────────────────────────────────────────
-stdin.write('\x1b')
-check('Esc leaves the browser and restores the conversation',
-  await settled(() => !/Resume session/.test(flat(screen()))), flat(screen()).slice(0, 160))
+// ── leaving ────────────────────────────────────────────────────────────────
+// The mount failure left a notice on screen, and Esc dismisses THAT layer
+// first; the second Esc is the one that leaves.
+stdin.write('\u001b')
+await settled(() => /Sessions in tmp/.test(flat(screen())))
+stdin.write('\u001b')
+check('Esc leaves the session screen and restores the conversation',
+  await settled(() => !/Sessions in tmp/.test(flat(screen()))), flat(screen()).slice(0, 160))
 
 instance.unmount()
 instances.delete(process.stdout)
+
+// ── the pin affordance still exists, so it still needs a regression ────────
+// The star survives on the session screen (`SessionListRow` still renders a
+// clickable `★`/`☆` and the screen still passes `pinned`/`onTogglePin`), so
+// "the new screen has no pin affordance" is NOT a reason to drop this: clicking
+// the star must toggle the pin STORE and must NOT reach the mount path. The
+// store's own contract is checked at the top of this file; this is the input
+// path, which no unit test covers.
+{
+  writeSessionPins([])
+  const { stdout: out2, stderr: err2, stdin: in2 } = makeStreams()
+  const channel2 = makeChannel()
+  const app2 = await render(
+    React.createElement(Chat, {
+      channel: channel2,
+      questionStore: { subscribe: () => () => {}, getSnapshot: () => null, answerCurrent: () => {} },
+      onExit() {},
+    }),
+    { stdout: out2, stderr: err2, stdin: in2, exitOnCtrlC: false, patchConsole: false },
+  )
+  for (const value of instances.values()) instances.set(process.stdout, value)
+  const screen2 = () => {
+    const buf = out2.term.buffer.active
+    return Array.from({ length: out2.term.rows }, (_, y) =>
+      (buf.getLine(buf.baseY + y)?.translateToString(true) ?? '').replace(/\s+$/, '')).join('\n')
+  }
+  const rowOf = (needle) => {
+    const buf = out2.term.buffer.active
+    for (let y = 0; y < out2.term.rows; y++) {
+      const raw = buf.getLine(buf.baseY + y)?.translateToString(true) ?? ''
+      const col = raw.indexOf(needle)
+      if (col >= 0) return { row: y, col }
+    }
+    return null
+  }
+  const click = async (needle) => {
+    await settled(() => rowOf(needle) !== null)
+    const found = rowOf(needle)
+    if (found === null) throw new Error(`row not found: ${needle}`)
+    in2.write(`\u001b[<0;${found.col + 1};${found.row + 1}M\u001b[<0;${found.col + 1};${found.row + 1}m`)
+    await sleep(150) // 固定窗:pacing 输入泵把字节交给解析器的步间
+  }
+  await settle(() => screen2().includes('❯'))
+  in2.write('/resume')
+  await settle(() => flat(screen2()).includes('/resume'))
+  in2.write('\r')
+  await settle(() => /Sessions in tmp/.test(flat(screen2())))
+  const star = rowOf('☆')
+  check('the session screen still renders a pin affordance', star !== null, flat(screen2()).slice(0, 240))
+  const resumesBefore = channel2.calls.resume.length
+  await click('☆')
+  // The first row of the list is the session this terminal is attached to, so
+  // that is the star the click lands on; the assertion is about the INPUT PATH
+  // (the store changed, the mount path did not), not about which row is first.
+  const pinned = () => [...readSessionPins()]
+  check('clicking the star pins the row it belongs to',
+    await settled(() => pinned().length === 1, { timeoutMs: 4_000 }),
+    JSON.stringify(pinned()))
+  check('the pinned id is a real session row',
+    pinned()[0] === 'live-session',
+    JSON.stringify(pinned()))
+  check('clicking the star does NOT mount the session',
+    channel2.calls.resume.length === resumesBefore,
+    `resume calls: ${channel2.calls.resume.join(', ')}`)
+  app2.unmount()
+}
+writeSessionPins([])
+
+// ── the unsent draft leaves and comes back through the owner slot ──────────
+// Every screen Chat renders instead of the transcript (the session screen, the
+// tree, settings, the jobs panel, the trajectory scene) is an early return that
+// unmounts `PromptInput`, whose text lives in local state. The draft therefore
+// lives in a slot Chat owns, written as the composer unmounts and consumed as it
+// mounts.
+//
+// The mount/unmount half of that contract is pinned deterministically by
+// `verify-composer-draft-handoff.tsx`, which mounts the real composer and really
+// unmounts it. It lives there because the failure is an ORDERING one (a
+// commit-time write runs before the restore effect), and because a screen swap
+// driven through this harness is not reliable evidence: an earlier version of
+// this block pressed `Esc` + space, which opens the rewind OVERLAY and never
+// unmounts anything, so it passed without exercising the hand-off at all.
+//
+// What belongs HERE is the rule Chat itself owns: a draft is dropped when the
+// attached session changes, so it can never follow the user into the next
+// conversation.
+{
+  const { stdout: out4, stderr: err4, stdin: in4 } = makeStreams()
+  const channel4 = makeChannel()
+  const draftRef = { current: null }
+  const { Chat: ChatDirect } = await import('../lib/types/screens/Chat.js')
+  const app4 = await render(
+    React.createElement(ChatDirect, {
+      channel: channel4,
+      promptControllerRef: draftRef,
+      questionStore: { subscribe: () => () => {}, getSnapshot: () => null, answerCurrent: () => {} },
+      onExit() {},
+    }),
+    { stdout: out4, stderr: err4, stdin: in4, exitOnCtrlC: false, patchConsole: false },
+  )
+  for (const value of instances.values()) instances.set(process.stdout, value)
+  await settle(() => draftRef.current !== null)
+  for (const character of 'SWITCH_DRAFT') {
+    in4.write(character)
+    await sleep(40) // 固定窗:pacing 逐字投喂：整串一次写入会丢首个字符
+  }
+  check('a draft is present before the switch',
+    await settled(() => draftRef.current?.text?.() === 'SWITCH_DRAFT'), String(draftRef.current?.text?.()))
+
+  // The attached session is replaced underneath the composer.
+  channel4.agentId = 'other-session'
+  channel4.emit()
+  check('the draft of a replaced conversation is dropped',
+    await settled(() => draftRef.current?.text?.() === ''), String(draftRef.current?.text?.()))
+  app4.unmount()
+}
+
+// ── a real Chat screen REPLACES the composer and gives the draft back ──────
+// The deterministic mount/unmount contract lives in
+// `verify-composer-draft-handoff.tsx`. What this block adds is the ROUTING: the
+// screen the user actually opens is an early return in Chat, so the composer is
+// really unmounted, and coming back really re-mounts it against the owner's
+// slot. Ctrl+T (the trajectory scene) is the one such screen that a single key
+// opens without typing into the composer first.
+{
+  const { stdout: out5, stderr: err5, stdin: in5 } = makeStreams()
+  const channel5 = makeChannel()
+  const draftRef = { current: null }
+  const { Chat: ChatDirect } = await import('../lib/types/screens/Chat.js')
+  const app5 = await render(
+    React.createElement(ChatDirect, {
+      channel: channel5,
+      promptControllerRef: draftRef,
+      questionStore: { subscribe: () => () => {}, getSnapshot: () => null, answerCurrent: () => {} },
+      onExit() {},
+    }),
+    { stdout: out5, stderr: err5, stdin: in5, exitOnCtrlC: false, patchConsole: false },
+  )
+  for (const value of instances.values()) instances.set(process.stdout, value)
+  const screen5 = () => {
+    const buf = out5.term.buffer.active
+    return Array.from({ length: out5.term.rows }, (_, y) =>
+      (buf.getLine(buf.baseY + y)?.translateToString(true) ?? '').replace(/\s+$/, '')).join('\n')
+  }
+  await settle(() => draftRef.current !== null)
+  const DRAFT5 = 'SCENE_ROUND_TRIP'
+  for (const character of DRAFT5) {
+    in5.write(character)
+    await sleep(40) // 固定窗:pacing 逐字投喂：整串一次写入会丢首个字符
+  }
+  check('the draft is typed before the screen swap',
+    await settled(() => draftRef.current?.text?.() === DRAFT5), String(draftRef.current?.text?.()))
+
+  in5.write('\u0014') // Ctrl+T: the trajectory scene, an early return
+  check('the scene screen replaced the composer',
+    await settled(() => draftRef.current === null), String(draftRef.current?.text?.()))
+
+  in5.write('\u001b') // Esc closes the scene and re-mounts the composer
+  check('coming back from the scene restores the draft',
+    await settled(() => draftRef.current?.text?.() === DRAFT5), String(draftRef.current?.text?.()))
+  check('and the transcript is back with it', /❯/.test(screen5()), flat(screen5()).slice(0, 200))
+  app5.unmount()
+}
 
 if (failed > 0) {
   console.error(`\n${failed} check(s) failed`)
   process.exit(1)
 }
-console.log('\nall session-browser checks passed')
+console.log('\nall session-screen checks passed')
