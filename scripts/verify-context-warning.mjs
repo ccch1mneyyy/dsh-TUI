@@ -217,7 +217,7 @@ check(
   const notificationsBeforeRelease = lateChannel.notifications.length
   lateChannel.releaseContributions()
   answerLateMetadata({ context: { contextWindow: 8_000 }, reasoning: { efforts: [] } })
-  await sleep(50)
+  await sleep(50) // 固定窗:探针 迟到答案的观察窗：等它落地后再断言窗口与通知都不变
   check(
     'a released channel keeps its replayed context window',
     lateChannel.contextWindow === 128_000,
