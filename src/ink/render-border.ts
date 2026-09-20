@@ -1,6 +1,6 @@
 import chalk from 'chalk'
 import cliBoxes, { type Boxes, type BoxStyle } from 'cli-boxes'
-import { applyColor } from './colorize.js'
+import { applyColor, applyTextStyles } from './colorize.js'
 import type { DOMNode } from './dom.js'
 import type Output from './output.js'
 import { stringWidth } from './stringWidth.js'
@@ -74,10 +74,19 @@ function styleBorderLine(
   line: string,
   color: Color | undefined,
   dim: boolean | undefined,
+  background: Color | undefined,
 ): string {
   let styled = applyColor(line, color)
   if (dim) {
     styled = chalk.dim(styled)
+  }
+  // The cells a border occupies belong to the surface it frames. Without an
+  // explicit background they diff back to the terminal default, which reads
+  // as a black frame around any bordered surface sitting on a colored one (a
+  // tooltip over the preview card, that card over a tool card) and as a black
+  // hole wherever a Sixel raster is exposed by a border row or column.
+  if (background !== undefined) {
+    styled = applyTextStyles(styled, { backgroundColor: background })
   }
   return styled
 }
@@ -89,12 +98,17 @@ function styleBorderLine(
  * @param y - the border's top row.
  * @param node - the node whose border style to render.
  * @param output - the output buffer receiving the border writes.
+ * @param background - the surface color the border's cells belong to, when the
+ *   node paints its own rect (own background, `opaque`, or an occlusion color
+ *   while a terminal image sits behind it). Transparent bordered overlays pass
+ *   undefined and keep terminal-transparent border cells.
  */
 const renderBorder = (
   x: number,
   y: number,
   node: DOMNode,
   output: Output,
+  background?: Color,
 ): void => {
   if (node.style.borderStyle) {
     const width = Math.floor(node.yogaNode!.getComputedWidth())
@@ -152,14 +166,15 @@ const renderBorder = (
         box.top,
       )
       topBorder =
-        styleBorderLine(before, topBorderColor, dimTopBorderColor) +
+        styleBorderLine(before, topBorderColor, dimTopBorderColor, background) +
         text +
-        styleBorderLine(after, topBorderColor, dimTopBorderColor)
+        styleBorderLine(after, topBorderColor, dimTopBorderColor, background)
     } else if (showTopBorder) {
       topBorder = styleBorderLine(
         topBorderLine,
         topBorderColor,
         dimTopBorderColor,
+        background,
       )
     }
 
@@ -191,6 +206,11 @@ const renderBorder = (
       rightBorder = chalk.dim(rightBorder)
     }
 
+    if (background !== undefined) {
+      leftBorder = applyTextStyles(leftBorder, { backgroundColor: background })
+      rightBorder = applyTextStyles(rightBorder, { backgroundColor: background })
+    }
+
     const bottomBorderLine = showBottomBorder
       ? (showLeftBorder ? box.bottomLeft : '') +
         box.bottom.repeat(contentWidth) +
@@ -208,14 +228,15 @@ const renderBorder = (
         box.bottom,
       )
       bottomBorder =
-        styleBorderLine(before, bottomBorderColor, dimBottomBorderColor) +
+        styleBorderLine(before, bottomBorderColor, dimBottomBorderColor, background) +
         text +
-        styleBorderLine(after, bottomBorderColor, dimBottomBorderColor)
+        styleBorderLine(after, bottomBorderColor, dimBottomBorderColor, background)
     } else if (showBottomBorder) {
       bottomBorder = styleBorderLine(
         bottomBorderLine,
         bottomBorderColor,
         dimBottomBorderColor,
+        background,
       )
     }
 
