@@ -24,7 +24,6 @@
 >An interactive terminal UI plugin for DeepSeek Harness: pixel-whale header, live work status, streaming thinking display, double-Esc time rewind, a context progress bar, and a TPS gauge.
 >Zero core changes, pure plugin mounting. Install to enable; uninstall leaves no core patches.
 
-> 当前处于公开测试阶段。依赖权限模型或特定终端行为前，请阅读[架构与限制](docs/architecture.md)。
 
 ## 🎉 官方收录
 
