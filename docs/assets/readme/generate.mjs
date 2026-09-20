@@ -125,6 +125,11 @@ const outlinedStyles = `
       a:hover .tile { fill: #e8edf4; }
     }
 `
+const outlinedIcon = (name, x, y, size = 24) => {
+  const inner = icon(name, x, y, '#ffffff', size)
+  const outer = icon(name, x, y, '#111519', size).replace('stroke-width="1.7"', 'stroke-width="3.5"')
+  return `<g class="outlined-icon">${outer}${inner}</g>`
+}
 
 function tile(entry, language) {
   const en = language === 'en'
@@ -135,10 +140,10 @@ function tile(entry, language) {
   return svg(480, 96, title, description, `
     <a href="${xml(absolute)}">
       <rect class="tile" x="1" y="4" width="478" height="88" rx="6" fill="#111519" stroke="#303741"/>
-      ${icon(entry[1], 20, 21, entry[7], 24)}
+      ${outlinedIcon(entry[1], 20, 21, 24)}
       ${text(58, 38, title, 21, '#edf1f6', 'font-weight="600"')}
       ${text(58, 68, description, 16, '#aeb8c6')}
-      ${icon('ArrowUpRight', 434, 20, entry[7], 22)}
+      ${outlinedIcon('ArrowUpRight', 434, 20, 22)}
     </a>`, outlinedStyles)
 }
 
@@ -155,9 +160,9 @@ function securityLink(language) {
   return svg(288, 44, title, en ? 'Read the full permission rules and limitations' : '查看完整权限规则与已知限制', `
     <a href="${xml(repository + target)}">
       <rect class="tile" x="1" y="1" width="286" height="42" rx="6" fill="#111519" stroke="#526174"/>
-      ${icon('BookOpen', 14, 12, '#8bb6fb', 20)}
+      ${outlinedIcon('BookOpen', 14, 12, 20)}
       ${text(46, 28, title, 16, '#edf1f6', 'font-weight="600"')}
-      ${icon('ArrowUpRight', 252, 12, '#8bb6fb', 20)}
+      ${outlinedIcon('ArrowUpRight', 252, 12, 20)}
     </a>`.trim(), outlinedStyles)
 }
 
