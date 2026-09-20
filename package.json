@@ -215,7 +215,6 @@
     "verify:adapter-channel-conformance": "node --import tsx/esm scripts/verify-adapter-channel-conformance.ts",
     "verify:win32-protocol": "node --import tsx/esm scripts/verify-win32-protocol.ts",
     "verify:selection-resize": "node --import tsx/esm scripts/verify-selection-viewport-resize.ts",
-    "verify:image-downsample": "node --import tsx/esm scripts/verify-image-downsample.tsx",
     "verify:inject-channel": "node --import tsx/esm scripts/verify-inject-channel.mjs",
     "verify:session-mounts": "node --import tsx/esm scripts/verify-session-mounts.mjs",
     "verify:session-supervisor": "node --import tsx/esm scripts/verify-session-supervisor.tsx",

@@ -1,12 +1,13 @@
 /**
- * Inbound image resizing for the composer's staging gate.
+ * Inbound image adaptation for the composer's staging gate.
  *
  * The upstream attachment store admits images by media type, byte budget,
- * pixel budget and a per-side dimension cap (`maxImageDimension`). A paste
- * that exceeds the dimension cap used to fail at submit with no user-side
- * recourse; this module measures the bytes BEFORE staging and, when they
- * overshoot, resamples through sharp (an optionalDependency — absent on
- * minimal installs, which must degrade with a clear error, not a crash).
+ * pixel budget and a per-side dimension cap (`maxImageDimension`). Two kinds
+ * of paste used to fail with no user-side recourse: one that exceeds the
+ * dimension cap, and one whose format the deployment does not accept. This
+ * module measures the bytes BEFORE staging and produces an admissible pair
+ * (bytes + media type) through sharp — an optionalDependency, absent on
+ * minimal installs, which must degrade with a clear error, not a crash.
  *
  * Sizing probe is pure byte inspection (PNG/JPEG/WebP/GIF). Formats the
  * probe cannot identify return null and MUST be forced through an actual
@@ -14,6 +15,11 @@
  * "unrecognized but under the byte cap" image through, where a
  * large-resolution small-byte WebP/GIF would sail past the probe and be
  * rejected by upstream afterwards.
+ *
+ * The single entry point is {@link adaptImageForAdmission}: it decides
+ * whether anything has to change (resample, re-encode, or both) and reports
+ * exactly what it did, so the caller can tell the user instead of silently
+ * rewriting their image.
  */
 
 export interface ImageSizeProbe {
@@ -73,10 +79,13 @@ function probeWebp(b: Uint8Array): ImageSizeProbe | null {
     return { width, height }
   }
   if (fourcc === 'VP8 ') {
-    // Uncompressed chunk header (10 bytes) then keyframe tag (3) then
-    // the 16-bit dimensions.
-    const width = b[26]! | (b[27]! << 8)
-    const height = b[28]! | (b[29]! << 8)
+    // Uncompressed chunk header (10 bytes) then keyframe tag (3) then the
+    // dimensions: 14-bit width/height in the low bits of each u16, with a
+    // 2-bit horizontal/vertical scale in the top bits (RFC 6386 §9.1). Mask
+    // them off, or an encoder that sets the scale bits is measured up to
+    // 49152px too wide and gets shrunk far past the caps.
+    const width = (b[26]! | (b[27]! << 8)) & 0x3fff
+    const height = (b[28]! | (b[29]! << 8)) & 0x3fff
     return width > 0 && height > 0 ? { width, height } : null
   }
   if (fourcc === 'VP8L') {
@@ -151,22 +160,77 @@ export function downscaleTarget(size: ImageSizeProbe, limits: ResizeLimits): Ima
   }
 }
 
-export type ShrinkOutcome =
+/** Re-encode preference for a source format the profile does not accept.
+ *  Alpha first: never trade transparency away for bytes. For opaque sources
+ *  JPEG leads because the per-image BYTE cap — not the pixel cap — is what a
+ *  lossless re-encode of a large photo most often blows; PNG is the last
+ *  resort there: lossless, and by far the largest wire form. */
+const ALPHA_TARGETS = ['image/png', 'image/webp', 'image/jpeg'] as const
+const OPAQUE_TARGETS = ['image/jpeg', 'image/webp', 'image/png'] as const
+
+/** Background composited under an alpha channel when the only writable
+ *  target carries no transparency. White matches the screenshots and document
+ *  captures this gate mostly sees; sharp's default composite is BLACK, which
+ *  reads as a broken image on any light UI. */
+const OPAQUE_BACKGROUND = { r: 255, g: 255, b: 255 }
+
+/** Whether a writer keeps every frame of an animated source. JPEG and PNG
+ *  output are single-frame, so an animated image is never re-encoded into
+ *  them — silently dropping to a still is worse than a clear refusal. */
+function carriesAnimation(mediaType: string): boolean {
+  return mediaType === 'image/webp' || mediaType === 'image/gif'
+}
+
+/**
+ * The media type one re-encode should produce, or null to refuse.
+ *
+ * 1. Animated sources need an animation-capable target: the source format
+ *    when the profile accepts it (no cross-format transcode for webp/gif),
+ *    otherwise the first accepted of webp, gif. Null when the profile accepts
+ *    neither, which the caller reports instead of writing one frame.
+ * 2. A source format the profile already accepts is kept: re-encoding a
+ *    format nobody objected to costs quality (JPEG), losslessness (PNG) or
+ *    animation, for nothing.
+ * 3. Otherwise the first accepted entry of the alpha/opaque order above.
+ */
+function chooseTargetMediaType(input: {
+  readonly animated: boolean
+  readonly hasAlpha: boolean
+  readonly sourceMediaType: string
+  readonly acceptedMediaTypes: readonly string[]
+}): string | null {
+  const { animated, hasAlpha, sourceMediaType, acceptedMediaTypes } = input
+  if (animated) {
+    if (carriesAnimation(sourceMediaType) && acceptedMediaTypes.includes(sourceMediaType)) return sourceMediaType
+    return ['image/webp', 'image/gif'].find(type => acceptedMediaTypes.includes(type)) ?? null
+  }
+  if (acceptedMediaTypes.includes(sourceMediaType)) return sourceMediaType
+  return (hasAlpha ? ALPHA_TARGETS : OPAQUE_TARGETS).find(type => acceptedMediaTypes.includes(type)) ?? null
+}
+
+export type AdaptOutcome =
   | { readonly kind: 'unchanged' }
   | {
-    readonly kind: 'resized'
+    readonly kind: 'adapted'
     readonly data: Uint8Array
-    /** Media type of the re-encoded bytes (may differ from the input's). */
+    /** Media type of the produced bytes (equals the source's when accepted). */
     readonly mediaType: string
+    /** Final per-frame pixel dimensions. */
     readonly width: number
     readonly height: number
+    /** The source exceeded the caps and was resampled. */
+    readonly resized: boolean
+    /** An alpha channel was composited onto {@link OPAQUE_BACKGROUND}. */
+    readonly flattened: boolean
+    readonly animated: boolean
   }
   | {
-    /** sharp missing (optionalDependency not installed) or the decode of
-     * the oversized bytes failed — distinct reasons, same shape: staging
-     * must stop with a message naming the cause. */
+    /** Nothing admissible could be produced. Only `sharp-missing` is a
+     * degradation a caller may tolerate (the optional dependency is absent,
+     * so nothing could be measured at all); every other reason is a definite
+     * refusal that must be reported instead of handed to the store. */
     readonly kind: 'unavailable'
-    readonly reason: 'sharp-missing' | 'decode-failed'
+    readonly reason: 'sharp-missing' | 'decode-failed' | 'animated-unsupported' | 'no-accepted-format'
     readonly detail: string
   }
 
@@ -174,13 +238,14 @@ export type ShrinkOutcome =
  * module typechecking without depending on the optional package's d.ts
  * resolution in every tsconfig that pulls it in. */
 interface SharpPipeline {
+  flatten(options: { background: { r: number; g: number; b: number } }): SharpPipeline
   toFormat(format: string, options?: unknown): { toBuffer(): Promise<Uint8Array> }
 }
-interface SharpInstance {
-  metadata(): Promise<{ width?: number; height?: number }>
+interface SharpInstance extends SharpPipeline {
+  metadata(): Promise<{ width?: number; height?: number; pages?: number; hasAlpha?: boolean }>
   resize(width: number, height: number, options: { fit: string }): SharpPipeline
 }
-type SharpFactory = (input: Uint8Array) => SharpInstance
+type SharpFactory = (input: Uint8Array, options?: { animated?: boolean }) => SharpInstance
 
 /** Load sharp lazily so a missing optionalDependency stays a typed outcome. */
 async function loadSharp(): Promise<SharpFactory | null> {
@@ -200,50 +265,72 @@ async function loadSharp(): Promise<SharpFactory | null> {
 }
 
 /**
- * Bring image bytes inside `limits`, preserving aspect ratio.
+ * Produce bytes the profile can admit, and report what had to change.
  *
- * `acceptedMediaTypes` orders the re-encode fallback: an oversized image is
- * re-encoded in its own format when that format is still accepted,
- * otherwise in the first accepted format sharp can write (png/jpeg are the
- * dependable writers). Pass the input's media type as `sourceMediaType`.
+ * Both triggers are size-independent by design: a media type the profile does
+ * not accept is converted even when it fits the pixel caps (a small PNG must
+ * not be refused while a large one succeeds), and an image the byte probe
+ * cannot measure is decoded so its real dimensions decide. The probe still
+ * short-circuits the common case — bytes it proves to be inside the caps in an
+ * accepted format are returned untouched, with no encoder loaded.
+ *
+ * Aspect ratio is preserved by {@link downscaleTarget}. An animated source
+ * keeps every frame (`animated: true` on the reader) or is refused; it is
+ * never re-encoded into a single-frame format.
  */
-export async function shrinkImageToLimits(
+export async function adaptImageForAdmission(
   bytes: Uint8Array,
   sourceMediaType: string,
   limits: ResizeLimits,
   acceptedMediaTypes: readonly string[],
-): Promise<ShrinkOutcome> {
+): Promise<AdaptOutcome> {
   const probe = probeImageSize(bytes)
   const sharp = await loadSharp()
   if (sharp === null) {
     return { kind: 'unavailable', reason: 'sharp-missing', detail: 'sharp is not installed in this environment' }
   }
   try {
-    let measured = probe
+    // One header read drives every decision below: dimensions for a format
+    // the byte probe cannot measure (the #432 gap), alpha support and frame
+    // count. `animated: true` keeps all frames of a multi-page input and is a
+    // no-op for single-frame ones.
+    const image = sharp(bytes, { animated: true })
+    const meta = await image.metadata()
+    const measured = probe ?? (meta.width !== undefined && meta.height !== undefined
+      ? { width: meta.width, height: meta.height }
+      : null)
     if (measured === null) {
-      // Unknown-to-the-probe format (or corrupted header): the #432 gap —
-      // measure by actually decoding instead of trusting the byte budget.
-      const meta = await sharp(bytes).metadata()
-      if (meta.width === undefined || meta.height === undefined) {
-        return { kind: 'unavailable', reason: 'decode-failed', detail: 'the image decodes without pixel dimensions' }
-      }
-      measured = { width: meta.width, height: meta.height }
+      return { kind: 'unavailable', reason: 'decode-failed', detail: 'the image decodes without pixel dimensions' }
     }
-    if (withinDimensionLimits(measured, limits)) return { kind: 'unchanged' }
+    const animated = (meta.pages ?? 1) > 1
+    const hasAlpha = meta.hasAlpha === true
+    const resized = !withinDimensionLimits(measured, limits)
+    if (!resized && acceptedMediaTypes.includes(sourceMediaType)) return { kind: 'unchanged' }
+    const mediaType = chooseTargetMediaType({ animated, hasAlpha, sourceMediaType, acceptedMediaTypes })
+    if (mediaType === null) {
+      return {
+        kind: 'unavailable',
+        reason: animated ? 'animated-unsupported' : 'no-accepted-format',
+        detail: `accepted formats: ${acceptedMediaTypes.join(', ') || 'none'}`,
+      }
+    }
     const target = downscaleTarget(measured, limits)
-    const targetMediaType = acceptedMediaTypes.includes(sourceMediaType)
-      ? sourceMediaType
-      : (acceptedMediaTypes.find(t => t === 'image/png' || t === 'image/jpeg') ?? 'image/png')
-    const output = await sharp(bytes)
-      .resize(target.width, target.height, { fit: 'inside' })
-      .toFormat(targetMediaType.replace('image/', ''), targetMediaType === 'image/jpeg' ? { quality: 90 } : {})
+    const flattened = hasAlpha && mediaType === 'image/jpeg'
+    let pipeline: SharpPipeline = image
+    if (resized) pipeline = image.resize(target.width, target.height, { fit: 'inside' })
+    if (flattened) pipeline = pipeline.flatten({ background: OPAQUE_BACKGROUND })
+    const data = await pipeline
+      .toFormat(mediaType.replace('image/', ''), mediaType === 'image/jpeg' ? { quality: 90 } : {})
       .toBuffer()
     return {
-      kind: 'resized',
-      data: output,
-      mediaType: targetMediaType,
+      kind: 'adapted',
+      data,
+      mediaType,
       width: target.width,
       height: target.height,
+      resized,
+      flattened,
+      animated,
     }
   } catch (error) {
     return {

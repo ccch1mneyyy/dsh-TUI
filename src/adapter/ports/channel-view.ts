@@ -442,11 +442,30 @@ export interface TranscriptImage {
   read(signal?: AbortSignal): Promise<Uint8Array>
 }
 
+/** What the ingress gate changed before the bytes reached the attachment
+ * store: the composer reports it so a re-encode is never silent. Present only
+ * when something actually changed. */
+export interface StagedImageAdjustment {
+  /** Media type the bytes were declared with (the pasted file's type). */
+  readonly sourceMediaType: ChannelImageMediaType
+  /** Media type of the stored bytes. */
+  readonly mediaType: ChannelImageMediaType
+  /** Final per-frame pixel dimensions of the stored bytes. */
+  readonly width: number
+  readonly height: number
+  /** The source exceeded the profile's pixel caps and was resampled. */
+  readonly resized: boolean
+  /** An alpha channel was composited onto an opaque background. */
+  readonly flattened: boolean
+}
+
 /** Opaque capability returned for one staged composer image. The visible
  * `[Image #N]` label is deliberately absent: PromptInput owns presentation
  * numbering while this id is the non-reusable attachment identity. */
 export interface StagedImageHandle {
   readonly stageId: string
+  /** How the ingress gate adapted the pasted bytes, when it had to. */
+  readonly adjustment?: StagedImageAdjustment
 }
 
 /** One visible composer token bound to its opaque staged-image capability. */

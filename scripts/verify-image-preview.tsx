@@ -811,7 +811,12 @@ function makeChannel() {
     discardStagedImage() {},
     hasStagedImage: (stageId: string) => staged.has(stageId),
     stagedImage: (stageId: string) => staged.get(stageId),
-    stagedImageLimits: () => ({ maxImageBytes: 1024 * 1024, maxImagesPerMessage: 4 }),
+    stagedImageLimits: () => ({
+      maxImageBytes: 1024 * 1024,
+      maxImagesPerMessage: 4,
+      maxImageDimension: 8192,
+      maxImagePixels: 64_000_000,
+    }),
     listModels: () => Promise.resolve([]),
     listSessions: () => [],
     setResumeTarget: () => {},

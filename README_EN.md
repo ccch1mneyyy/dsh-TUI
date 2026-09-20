@@ -55,10 +55,14 @@ the interface, and removing it leaves no core modifications behind.
   it and leaving the prompt visible (Esc or click outside closes); its title reads `Image #N — format · size · bytes ·
   file name` and images staged in this session show their source path on the
   card's bottom row. Finder-copied
-  image files paste straight into the attachment store as `[Image #N]`, and images over the
-  profile's dimension caps (per-side pixels / total pixels) are resampled proportionally to fit
-  before staging (needs the optional sharp dependency; without it an oversized image fails with a
-  clear error at paste time instead of at submit); in the
+  image files paste straight into the attachment store as `[Image #N]`, and every paste is fitted to the
+  profile's image limits first: images over the dimension caps (per-side / total pixels) are resampled
+  proportionally, a format the profile does not accept is re-encoded into one it does (transparency is
+  kept whenever an accepted format carries it, otherwise the alpha is composited onto white), and an
+  animation that cannot survive re-encoding is refused instead of silently losing its frames. The paste
+  notice names every resize and conversion (fitting needs the optional sharp dependency — without it, an
+  image that still needs fitting fails at paste time with a clear error instead of being handed to the
+  store); in the
   composer a staged `[Image #N]` is one unit — the caret steps over it, deletes
   remove it whole, and while the caret sits on it the token inverts and its
   preview opens, closing again when the caret leaves. Vim `x`/`X`/`d…` also

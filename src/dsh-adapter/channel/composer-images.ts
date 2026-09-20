@@ -1,12 +1,14 @@
 import type { Context } from '@deepseek-ai/cordis'
 import { randomUUID } from 'node:crypto'
 import { rememberImagePath, transcriptImageFromAttachment } from '../transcript-images.js'
-import { probeImageSize, shrinkImageToLimits, withinDimensionLimits } from '../../utils/imageResize.js'
+import { probeImageSize, adaptImageForAdmission, withinDimensionLimits } from '../../utils/imageResize.js'
+import type { AdaptOutcome, ImageSizeProbe, ResizeLimits } from '../../utils/imageResize.js'
 import { mentionAttachments } from './mentions.js'
 import type { ChannelOwner } from './owner.js'
 import type {
   ChannelImageBlock,
   ComposerImageRef,
+  StagedImageAdjustment,
   StagedImageHandle,
   StagedImageInput,
   TranscriptImage,
@@ -102,6 +104,27 @@ export interface ComposerImages {
   captureDraftImages(text: string, images: readonly ComposerImageRef[]): readonly ComposerImageRef[]
 }
 
+/** Failure text for a refusal the ingress gate can state before the store:
+ *  every reason except a missing sharp describes an image the deployment
+ *  would reject anyway, so the paste is refused with the cause named. */
+function admissionFailure(
+  outcome: Extract<AdaptOutcome, { kind: 'unavailable' }>,
+  context: { readonly probe: ImageSizeProbe | null; readonly mediaType: string; readonly limits: ResizeLimits },
+): string {
+  switch (outcome.reason) {
+    case 'sharp-missing':
+      return context.probe !== null
+        ? `image is ${context.probe.width}×${context.probe.height} (over ${context.limits.maxImageDimension}px) and sharp is unavailable to resample it`
+        : `${context.mediaType} is not accepted by this profile and sharp is unavailable to convert it`
+    case 'animated-unsupported':
+      return `animated ${context.mediaType} cannot be re-encoded into a format this profile accepts (${outcome.detail})`
+    case 'no-accepted-format':
+      return `${context.mediaType} is not accepted by this profile and no accepted format is available to convert it to`
+    default:
+      return `image could not be decoded to resize or convert it (${outcome.detail})`
+  }
+}
+
 /**
  * Owns the editable-composer image capabilities: the session epoch, the
  * capability map, its preview facades and the `[Image #N]` compatibility
@@ -187,67 +210,85 @@ export function createComposerImages(
     if (generation !== stagedImageEpoch) {
       throw new Error('the session changed while the image was being staged')
     }
-    if (!attachments.imageLimits.mediaTypes.includes(input.mediaType)) {
-      throw new Error(`${input.mediaType} images are not accepted by this profile`)
-    }
     if (input.data.byteLength > attachments.imageLimits.maxImageBytes) {
       throw new Error(`image exceeds this profile's per-image size limit`)
     }
-    // Ingress resampling (issue #938): upstream rejects images over the
-    // per-side dimension / total-pixel caps at submit, after the user has
-    // already composed around the token. Measure at STAGE time and shrink
-    // while the paste can still be informed. A probe-recognized image
-    // inside the caps skips sharp entirely; an unrecognized format is
-    // decoded for measurement (never trusted by byte budget alone — the
-    // #432 review gap); with sharp absent AND no probe answer the image
-    // passes through to upstream admission unchanged (today's behavior,
-    // upstream stays the backstop). The runtime guards keep older
-    // attachment fakes (whose imageLimits predate the dimension fields)
-    // on the legacy synchronous path.
+    // Ingress adaptation (issue #938): the store admits by media type, byte
+    // budget and the per-side / total pixel caps, and refuses on all of them
+    // when the bytes reach it. Measure and re-encode HERE instead, while the
+    // paste can still be explained to the user. Admission is judged against
+    // the pair that will actually be stored, and both triggers are
+    // size-independent:
+    //   * a source media type the profile does not accept is converted, so a
+    //     small PNG is never refused while a large one succeeds;
+    //   * a probe-recognized image inside the caps skips sharp entirely;
+    //   * an unrecognized format is decoded for measurement (never trusted by
+    //     byte budget alone — the #432 gap);
+    //   * with sharp absent the image goes to the store unchanged ONLY while
+    //     it is still admissible as-is — an accepted format whose size the
+    //     probe could not prove fits (upstream stays the backstop); a measured
+    //     oversize, a decode failure, an unaccepted format or an animation
+    //     that cannot survive re-encoding is reported now instead of becoming
+    //     a token that dies at save time.
+    // The runtime guards keep older attachment fakes (whose imageLimits
+    // predate the dimension fields) on the legacy synchronous path.
     const dimensionCap = attachments.imageLimits.maxImageDimension
     const pixelCap = attachments.imageLimits.maxImagePixels
     let mediaType = input.mediaType
     let data = input.data
+    let adjustment: StagedImageAdjustment | undefined
     if (typeof dimensionCap === 'number' && typeof pixelCap === 'number'
       && Number.isFinite(dimensionCap) && Number.isFinite(pixelCap)) {
       const dimensionLimits = { maxImageDimension: dimensionCap, maxImagePixels: pixelCap }
       const probe = probeImageSize(data)
-      if (probe === null || !withinDimensionLimits(probe, dimensionLimits)) {
-        const outcome = await shrinkImageToLimits(
+      const sourceAccepted = attachments.imageLimits.mediaTypes.includes(mediaType)
+      // Only a probe-measured oversize is *known* to be refused by the store;
+      // an unmeasurable image may well be admissible, which is what keeps the
+      // sharp-less degradation a degradation rather than a guess.
+      const knownOversize = probe !== null && !withinDimensionLimits(probe, dimensionLimits)
+      if (!sourceAccepted || probe === null || knownOversize) {
+        const outcome = await adaptImageForAdmission(
           data,
           mediaType,
           dimensionLimits,
           attachments.imageLimits.mediaTypes,
         )
-        if (outcome.kind === 'resized') {
-          // targetMediaType is selected from the accepted list inside
-          // shrinkImageToLimits, so this string is one of the profile's
-          // media types at runtime — narrowing, not trusting.
+        if (outcome.kind === 'adapted') {
+          // outcome.mediaType comes from the accepted list inside the gate, so
+          // it is one of the profile's media types at runtime — narrowing,
+          // not trusting.
           mediaType = outcome.mediaType as typeof mediaType
           data = outcome.data
-          // The re-encoded bytes may have crossed into a media type this
-          // profile does not accept, or grown past the byte cap: re-run BOTH
-          // admission checks against what will actually be stored.
-          if (!attachments.imageLimits.mediaTypes.includes(mediaType)) {
-            throw new Error(`${mediaType} images are not accepted by this profile`)
+          adjustment = {
+            sourceMediaType: input.mediaType,
+            mediaType,
+            width: outcome.width,
+            height: outcome.height,
+            resized: outcome.resized,
+            flattened: outcome.flattened,
           }
           if (data.byteLength > attachments.imageLimits.maxImageBytes) {
             throw new Error(`image still exceeds this profile's per-image size limit after resampling`)
           }
-        } else if (outcome.kind === 'unavailable' && probe !== null) {
-          // Oversized AND sharp cannot fix it (not installed / decode
-          // failed): a clear refusal beats a token that dies at submit.
-          throw new Error(
-            outcome.reason === 'sharp-missing'
-              ? `image is ${probe.width}×${probe.height} (over ${dimensionLimits.maxImageDimension}px) and sharp is unavailable to resample it`
-              : `image is over the size limit and could not be resampled (${outcome.detail})`,
-          )
+        } else if (outcome.kind === 'unavailable') {
+          // Degrade ONLY when the paste is still admissible as-is: an accepted
+          // format whose size the probe could not prove fits. Everything else
+          // (measured oversize, unaccepted format, decode failure, animation
+          // that cannot survive) is a refusal we can state now.
+          const degraded = outcome.reason === 'sharp-missing' && sourceAccepted && !knownOversize
+          if (!degraded) throw new Error(admissionFailure(outcome, { probe, mediaType, limits: dimensionLimits }))
         }
       }
     }
+    // What the store will actually see: an accepted media type, inside the
+    // byte cap. A media type can still be unaccepted here only when the
+    // adaptation did not run (legacy limits) or could not produce one.
+    if (!attachments.imageLimits.mediaTypes.includes(mediaType)) {
+      throw new Error(`${mediaType} images are not accepted by this profile`)
+    }
     // The source path is TUI-side display metadata; the store only sees the
-    // fields its contract names. mediaType/data may be the resampled pair
-    // from the ingress gate above.
+    // fields its contract names. mediaType/data may be the adapted pair from
+    // the ingress gate above.
     const { path, ...stored } = input
     const attachment = await attachments.saveImage({ ...stored, mediaType, data })
     // A session change (/new, resume, rewind, model switch, background)
@@ -267,7 +308,10 @@ export function createComposerImages(
       if (oldest === undefined) break
       deleteStagedImage(oldest)
     }
-    return { stageId }
+    // The adjustment travels with the capability so the composer can say what
+    // the gate did (resampled / re-encoded / alpha filled) instead of letting
+    // a rewritten image reach the store silently.
+    return adjustment === undefined ? { stageId } : { stageId, adjustment }
   }
 
   return {
