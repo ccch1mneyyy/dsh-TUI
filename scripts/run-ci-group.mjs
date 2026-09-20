@@ -166,6 +166,12 @@ const GROUPS = {
 // help 浮层让位、问询面板不让位（面板在转录下方且不消费这对键）、inline
 // 模式不接管（历史在终端原生 scrollback）、窄终端行为一致。
     ["verify-transcript-paging", ['node', 'scripts/verify-transcript-paging.mjs']],
+// zellij 兼容回归（DECSTBM 硬件滚动撤回）：zellij 的 CSI T 只在光标位于
+// 滚动区内时移动行，而渲染器把光标停在整屏最后一行（每个 ScrollBox 之下），
+// 位移被静默吞掉而差分引擎仍当作已发生 → 上滚时旧行残留/错行；zellij 实现了
+// DEC 2026，所以只撤 DECSTBM、BSU/ESU 保留。断言 zellij 下撤回 + DEC 2026
+// 保留 + 无 zellij 对照，终端环境按场景显式构造（不继承宿主 env，见脚本头注）。
+    ["verify-zellij", ['node', '--import', 'tsx/esm', 'scripts/verify-zellij.tsx']],
   ],
   'input-terminal': [
 // 按键解析回归（issue #110）：Option+Enter（ESC CR）精确/合并/分块
