@@ -64,8 +64,12 @@ export function createModelActions(
    * context window follows the route, not the binding: a resume rebuilds
    * the binding (effortCurrent goes false) while the capacity answer for
    * the same provider/model is still the live truth, so this runs before
-   * any effort freshness gate. */
+   * any effort freshness gate. Lifetime is the one fence it keeps: the
+   * answer crosses an await, so a Channel released while the lookup was in
+   * flight must neither write into its dead state nor re-arm the
+   * context-low warning through checkContextWarning. */
   const applyRouteMetadata = (capture: EffortCapture, info: { context?: { contextWindow: number } }): void => {
+    if (!owner.current()) return
     if (state.provider === capture.provider && state.model === capture.model && info.context !== undefined) {
       state.contextWindow = info.context.contextWindow
       deps.checkContextWarning()

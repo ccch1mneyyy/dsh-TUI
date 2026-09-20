@@ -11,7 +11,7 @@ process.env.HOME = isolatedHome
 process.env.USERPROFILE = isolatedHome
 process.on('exit', () => rmSync(isolatedHome, { recursive: true, force: true }))
 
-const [{ Context }, { createChannel }, { settled }] = await Promise.all([
+const [{ Context }, { createChannel }, { settled, sleep }] = await Promise.all([
   import('@deepseek-ai/cordis'),
   import('../lib/types/dsh-adapter/channel.js'),
   import('./lib/term-test.mjs'),
@@ -108,6 +108,9 @@ const channel = createChannel(ctx, makeAgent('current-agent', 'current-session')
 const hasLowWarning = () => channel.notifications.some(item =>
   /Context low|上下文即将耗尽/u.test(item.text),
 )
+const countLowWarnings = () => channel.notifications.filter(item =>
+  /Context low|上下文即将耗尽/u.test(item.text),
+).length
 const hasTurnError = detail => channel.notifications.some(item =>
   item.color === 'error' &&
   /Turn error|回合出错/u.test(item.text) &&
@@ -154,6 +157,7 @@ emit('assistant/message', {
 })
 emit('turn/end', { turn: 4, reason: { kind: 'completed' } })
 check('a genuinely low live context still warns', hasLowWarning(), JSON.stringify(channel.notifications))
+check('the live warning fires exactly once', countLowWarnings() === 1, String(countLowWarnings()))
 
 emit('turn/start', { turn: 5 })
 emit('turn/end', {
@@ -168,5 +172,62 @@ check(
   hasTurnError('live provider failure'),
   JSON.stringify(channel.notifications),
 )
+
+// A route-metadata answer that lands after the Channel was released must not
+// reach the dead state surface. applyRouteMetadata intentionally runs before
+// the effort freshness gate (capacity follows the provider/model across a
+// resume's binding rebuild), so owner liveness is the only fence it keeps; the
+// answer below is deliberately tiny (8k < the 70k lastUsage) so a missing fence
+// would both replace the window and re-arm the context-low warning.
+{
+  const lateHistory = [
+    { type: 'request/context', seq: 1, time: 1, data: { contextWindow: 128_000 } },
+    { type: 'turn/start', seq: 2, time: 2, data: { turn: 1 } },
+    {
+      type: 'assistant/message',
+      seq: 3,
+      time: 3,
+      data: { turn: 1, step: 1, message: { role: 'assistant', content: [] }, usage },
+    },
+    { type: 'turn/end', seq: 4, time: 4, data: { turn: 1, reason: { kind: 'completed' } } },
+  ]
+  const lateTarget = makeAgent('late-agent', 'late-session', lateHistory)
+  const lateCtx = new Context()
+  let answerLateMetadata
+  lateCtx.provide('llm', {
+    resolveModelInfo: () => new Promise(resolve => { answerLateMetadata = resolve }),
+  })
+  lateCtx.provide('agents', {
+    resume: () => Promise.resolve({ agent: lateTarget, dispose: () => Promise.resolve() }),
+  })
+  const lateChannel = createChannel(lateCtx, makeAgent('late-current-agent', 'late-current-session'), {
+    model: 'test-model',
+    provider: 'test-provider',
+    cwd: '/tmp/context-warning',
+    activity: false,
+  })
+  const lateResult = await lateChannel.resumeTo(lateTarget.session.id)
+  check('late metadata: /resume succeeds', lateResult.ok === true, JSON.stringify(lateResult))
+  check(
+    'late metadata: replay restored the historical window',
+    lateChannel.contextWindow === 128_000,
+    String(lateChannel.contextWindow),
+  )
+  check('late metadata: the route lookup is still in flight', typeof answerLateMetadata === 'function')
+  const notificationsBeforeRelease = lateChannel.notifications.length
+  lateChannel.releaseContributions()
+  answerLateMetadata({ context: { contextWindow: 8_000 }, reasoning: { efforts: [] } })
+  await sleep(50)
+  check(
+    'a released channel keeps its replayed context window',
+    lateChannel.contextWindow === 128_000,
+    String(lateChannel.contextWindow),
+  )
+  check(
+    'a released channel raises no notification for the late answer',
+    lateChannel.notifications.length === notificationsBeforeRelease,
+    JSON.stringify(lateChannel.notifications),
+  )
+}
 
 process.exit(failed)

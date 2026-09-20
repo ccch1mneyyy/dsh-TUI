@@ -5,6 +5,7 @@ import { createChannelActionReadiness } from '../src/dsh-adapter/channel/action-
 import { registerTuiChannel, getRegisteredTuiChannel } from '../src/adapter/channel/host-registry.js'
 import { createAgentViewProjection } from '../src/dsh-adapter/channel/agent-view-projection.js'
 import { createContextBookkeeping } from '../src/dsh-adapter/channel/context-bookkeeping.js'
+import { createModelActions } from '../src/dsh-adapter/channel/model-actions.js'
 
 // Cleanup is exhaustive: later resources are released even if an earlier
 // external unsubscriber throws, and the primary cleanup failure is surfaced.
@@ -76,6 +77,48 @@ import { createContextBookkeeping } from '../src/dsh-adapter/channel/context-boo
   bookkeeping.resetContextWarning()
   bookkeeping.checkContextWarning()
   assert.deepEqual(warnings, ['remaining 10%', 'remaining 10%'])
+}
+
+// Route-capacity metadata crosses an await, so a late answer can outlive the
+// Channel that asked for it. `applyRouteMetadata` deliberately runs AHEAD of
+// the effort freshness gate (the capacity of a provider/model survives the
+// binding rebuild a /resume performs), so owner liveness is the only fence it
+// has — and `refreshEffortLevels` writes via a bare `.then`, not through any
+// binding check. A released owner must therefore stop both the contextWindow
+// replacement and the checkContextWarning re-arm.
+{
+  const owner = createChannelOwner()
+  let answer: ((info: unknown) => void) | undefined
+  const state = {
+    provider: 'provider',
+    model: 'model',
+    reasoningEffort: undefined as string | undefined,
+    effortLevels: undefined as readonly string[] | undefined,
+    agentPreset: undefined as string | undefined,
+    working: false,
+    contextWindow: 128_000,
+    emit() {},
+  }
+  let warningChecks = 0
+  const actions = createModelActions(
+    { get: () => ({ resolveModelInfo: () => new Promise(resolve => { answer = resolve }) }) } as never,
+    state,
+    {
+      owner,
+      binding: { capture: () => undefined, isCurrent: () => true } as never,
+      selection: {} as never,
+      agent: () => ({} as never),
+      notify() {},
+      checkContextWarning() { warningChecks += 1 },
+    },
+  )
+  actions.refreshEffortLevels()
+  assert.equal(typeof answer, 'function', 'the route lookup is in flight')
+  owner.dispose()
+  answer!({ context: { contextWindow: 8_000 }, reasoning: { efforts: [] } })
+  await Promise.resolve()
+  assert.equal(state.contextWindow, 128_000, 'a released owner keeps the replayed context window')
+  assert.equal(warningChecks, 0, 'a released owner re-arms no context-low warning')
 }
 
 // Agent-view cleanup has independent external subscriptions and background
