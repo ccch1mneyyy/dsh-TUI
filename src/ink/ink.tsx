@@ -43,11 +43,11 @@ import createRenderer, { type Renderer } from './renderer.js';
 import { CellWidth, CharPool, cellAt, createScreen, HyperlinkPool, isEmptyCellAt, migrateScreenPools, StylePool } from './screen.js';
 import { applySearchHighlight } from './transcript-highlight.js';
 import { applySelectionOverlay, captureScrolledRows, clearSelection, createSelectionState, extendSelection, type FocusMove, findPlainTextUrlAt, getSelectedText, hasSelection, moveFocus, pickFollowForSelection, type SelectionState, selectLineAt, selectWordAt, shiftAnchor, shiftSelection, shiftSelectionForFollow, shiftSelectionForViewportResize, shiftSelectionForViewportTranslation, startSelection, updateSelection } from './selection.js';
-import { isDecstbmSafe, SYNC_OUTPUT_SUPPORTED, serializeDiff, supportsDecrqmProbe, supportsExtendedKeys, supportsWin32InputMode, type Terminal, writeDiffToTerminal } from './terminal.js';
+import { isConptyConsoleHost, isDecstbmSafe, SYNC_OUTPUT_SUPPORTED, serializeDiff, supportsDecrqmProbe, supportsExtendedKeys, supportsWin32InputMode, type Terminal, writeDiffToTerminal } from './terminal.js';
 import { CURSOR_HOME, cursorMove, cursorPosition, DISABLE_KITTY_KEYBOARD, DISABLE_MODIFY_OTHER_KEYS, DISABLE_WIN32_INPUT_MODE, ENABLE_KITTY_KEYBOARD, ENABLE_MODIFY_OTHER_KEYS, ENABLE_WIN32_INPUT_MODE, ERASE_SCREEN, ERASE_SCROLLBACK, SGR_RESET } from './termio/csi.js';
 import { DBP, DFE, DISABLE_MOUSE_TRACKING, ENABLE_MOUSE_TRACKING, ENTER_ALT_SCREEN, EXIT_ALT_SCREEN, SHOW_CURSOR } from './termio/dec.js';
 import { CLEAR_ITERM2_PROGRESS, CLEAR_TAB_STATUS, setClipboard, supportsTabStatus, wrapForMultiplexer } from './termio/osc.js';
-import { decrqm, kittyGraphics, terminalCellSizePixels, terminalWindowSizePixels } from './terminal-querier.js';
+import { cursorPosition as cursorPositionQuery, decrqm, kittyGraphics, terminalCellSizePixels, terminalWindowSizePixels } from './terminal-querier.js';
 import { TerminalWriteProvider } from './useTerminalNotification.js';
 import { TerminalImagesContext } from './hooks/use-terminal-images.js';
 import { DEFAULT_TERMINAL_CELL_SIZE, resolveTerminalCellSize, type TerminalImagePlacement } from './terminal-image.js';
@@ -69,6 +69,35 @@ const ERASE_THEN_HOME_PATCH = Object.freeze({
   content: ERASE_SCREEN + CURSOR_HOME
 });
 const TERMINAL_REPLY_QUARANTINE_MS = 120;
+
+// Launch surface hold (see refreshSurfaceHold). ConPTY re-emits its reflowed
+// buffer when the console buffer grows, and that output overwrites whatever is
+// on screen (microsoft/terminal#16911, #16231); the resize notification that
+// announces it can even carry a stale size first (#1465). At launch the
+// window/tab sizing lands *after* the TUI has painted, so any frame we write can
+// be overwritten — and a repair we paint is itself at risk, which is what a
+// repair burst answers with a visible flash. The renderer therefore withholds
+// frame output from the first alt-screen entry until the console size has been
+// stable for SURFACE_HOLD_QUIET_MS, then paints once from a blank baseline: the
+// re-emission lands on an empty alt screen and the splash appears complete on
+// the first try. The re-emission lands within ~60ms of the event that triggers
+// it (a repair burst measured 31-63ms), so 120ms of quiet covers it with
+// margin; the cap bounds the wait when the notifications never stop. Measured
+// on a real Windows Terminal launch: hold 120-132ms, first frame at +2.3s of
+// which the provider catalog check was 2.0-2.9s before it moved behind
+// modelRouteCache.
+const SURFACE_HOLD_QUIET_MS = 120;
+const SURFACE_HOLD_MAX_MS = 600;
+
+// Cursor-integrity probe (see probeSurfaceIntegrity). For resizes *after* the
+// launch hold, this is the observable signal: the renderer parks the cursor at a
+// known cell after every frame, so if the terminal reports a different position
+// the surface was rewritten underneath us (#16911) and the very next frame must
+// repair it. Probing runs only while a resize risk window is open, and a
+// disagreement that persists must not become a repaint loop (hence the spacing).
+const SURFACE_PROBE_WINDOW_MS = 2_500;
+const SURFACE_PROBE_INTERVAL_MS = 60;
+const SURFACE_PROBE_REPAIR_INTERVAL_MS = 400;
 
 // Cached per-Ink-instance, invalidated on resize. frame.cursor.y for
 // alt-screen is always terminalRows - 1 (renderer.ts).
@@ -147,6 +176,22 @@ export default class Ink {
   private backFrame: Frame;
   private lastPoolResetTime = performance.now();
   private drainTimer: ReturnType<typeof setTimeout> | null = null;
+  // Launch surface hold (see refreshSurfaceHold). While `surfaceHoldReleaseAt`
+  // is in the future, onRender writes nothing at all — the alt screen stays
+  // blank, so ConPTY's re-emitted buffer has nothing of ours to overwrite. The
+  // latch makes it launch-only: after the first release, resizes are handled by
+  // the cursor probe below instead of a blank screen.
+  private surfaceHoldReleaseAt = 0;
+  private surfaceHoldStart = 0;
+  private surfaceHoldTimer: ReturnType<typeof setTimeout> | null = null;
+  private surfaceHoldLatched = false;
+  // Cursor-integrity probe state (see probeSurfaceIntegrity). `until` is 0 while
+  // no risk window is open, which is what keeps the per-frame hook a single
+  // field read in steady state.
+  private surfaceProbeUntil = 0;
+  private surfaceProbeNextAt = 0;
+  private surfaceProbeInFlight = false;
+  private surfaceProbeRepairAt = 0;
   // Every scheduled microtask carries the generation that created it. Immediate
   // renders invalidate older trailing work before it can append an old frame.
   private renderGeneration = 0;
@@ -414,13 +459,18 @@ export default class Ink {
       // row/column grid. The in-flight guard coalesces duplicate events.
       this.refreshTerminalCellMetrics();
       if (
-        (process.platform === 'win32' || !!process.env.WT_SESSION) &&
+        isConptyConsoleHost() &&
         this.altScreenActive && this.options.stdout.isTTY &&
         !this.isPaused && !this.isUnmounted && !this.needsSurfaceRepaint
       ) {
         this.needsSurfaceRepaint = true;
         this.scheduleRender();
       }
+      // #891: with the grid unchanged ConPTY can still rebuild the alt buffer
+      // behind that paint, so watch the parked cursor; a real size change below
+      // also refreshes the launch hold.
+      this.openSurfaceProbeWindow();
+      this.refreshSurfaceHold();
       return;
     }
     noteFrameCause('resize');
@@ -484,6 +534,13 @@ export default class Ink {
       this.resetFramesForAltScreen();
       this.needsEraseBeforePaint = true;
     }
+    // Same trailing repair as the same-grid branch: ConPTY re-emits the
+    // reflowed buffer for this size change too, and the notification above can
+    // carry a stale size first (#1465). While the launch hold is active the
+    // frames are withheld outright; afterwards the cursor probe watches for the
+    // re-emission.
+    this.refreshSurfaceHold();
+    this.openSurfaceProbeWindow();
 
     // Re-render the React tree with updated props so the context value changes.
     // React's commit phase will call onComputeLayout() to recalculate yoga layout
@@ -671,6 +728,12 @@ export default class Ink {
     if (this.isUnmounted || this.isPaused) {
       return;
     }
+    // Launch hold, deadline check: the release timer was cancelled (unmount
+    // path, a pause in between) but the deadline has passed — release now.
+    if (this.surfaceHoldActive() && performance.now() >= this.surfaceHoldReleaseAt) {
+      this.releaseSurfaceHold();
+      return;
+    }
     if (this.needsSurfaceRepaint) {
       this.needsSurfaceRepaint = false;
       if (this.altScreenActive) {
@@ -730,6 +793,17 @@ export default class Ink {
     });
     const rendererMs = performance.now() - renderStart;
     this.maybeProbeKittyGraphics(frame.images ?? []);
+    // Launch hold: the render pass above ran on purpose — it is what publishes
+    // the scroll geometry the next React commit reads (ScrollBox's
+    // scrollHeight/scrollViewportHeight, plus layout marks). What must not
+    // reach the terminal is the FRAME, because ConPTY's re-emitted buffer
+    // overwrites whatever is on screen. So the hold drops the write and the
+    // frame-swap below, and leaves frontFrame describing what is actually on
+    // screen (nothing of ours yet); releaseSurfaceHold repaints from that
+    // blank baseline. Withholding the whole render — the earlier shape of this
+    // fix — starved the geometry: a fullscreen mount drew a transcript with no
+    // rail because ScrollBox still reported content 0 / viewport 0.
+    if (this.surfaceHoldActive()) return;
 
     // Viewport-shrink translation (companion to the follow block below):
     // chrome mounting around a ScrollBox (the new-messages pill, the sticky
@@ -1138,6 +1212,11 @@ export default class Ink {
     // its frame flushes, so "mounted" alone must never unlock tightening.
     noteTerminalFlush();
 
+    // With a frame on screen and the cursor parked at a known cell, check that
+    // the terminal still agrees (see probeSurfaceIntegrity). In steady state no
+    // risk window is open and this is one field read.
+    if (hasDiff) this.probeSurfaceIntegrity();
+
     // Update blit safety for the NEXT frame. The frame just rendered
     // becomes frontFrame (= next frame's prevScreen). If we applied the
     // selection overlay, that buffer has inverted cells. selActive/hlActive
@@ -1315,6 +1394,10 @@ export default class Ink {
       resetOldPointerContext();
       const deleteImages = this.kittyGraphicsManager.deleteAll() + this.sixelGraphicsManager.clear();
       if (deleteImages !== '') this.options.stdout.write(deleteImages);
+      // The alt screen is no longer ours: stop holding frames for it and stop
+      // comparing cursor positions.
+      this.cancelSurfaceHold();
+      this.clearSurfaceProbe();
     }
     this.altScreenActive = active;
     this.notifyTerminalImagesChange();
@@ -1334,6 +1417,17 @@ export default class Ink {
       // remounted, so no gesture can be in flight. Drain any deferred
       // re-entry confirmed while the alt screen was inactive.
       this.drainAltScreenReentry();
+      // A launch that has not released its hold yet keeps holding: the very
+      // first alt-screen entry is the risky one (see refreshSurfaceHold). Once
+      // the hold is latched this is a no-op, so a later fullscreen toggle never
+      // blanks the screen — a swap with an unchanged grid does not make ConPTY
+      // re-emit its buffer (verify-tool-history-window /
+      // verify-scrollbox-bottom-overscroll pin exactly that quiet).
+      this.refreshSurfaceHold();
+      // Watch the parked cursor instead: that costs nothing until the terminal
+      // actually disagrees, and it is the only signal that cannot be read off
+      // our own frame cache.
+      this.openSurfaceProbeWindow();
     } else {
       const saved = this.mainScreenFrameState;
       this.mainScreenFrameState = null;
@@ -1447,6 +1541,8 @@ export default class Ink {
       clearTimeout(this.drainTimer);
       this.drainTimer = null;
     }
+    this.cancelSurfaceHold();
+    this.clearSurfaceProbe();
     if (this.terminalQueryResumeTimer !== null) {
       clearTimeout(this.terminalQueryResumeTimer);
       this.terminalQueryResumeTimer = null;
@@ -1955,8 +2051,12 @@ export default class Ink {
    * viewport.height = rows + 1 matches the renderer's alt-screen output,
    * preventing a spurious resize trigger on the first frame. cursor.y = 0
    * matches the physical cursor after ENTER_ALT_SCREEN + CSI H (home).
+   * @param invalidateImages - also drop the placed kitty/sixel graphics. A
+   * re-entry needs that (the placement may be gone), a cell repair must NOT:
+   * re-transmitting already-placed thumbnails is exactly what
+   * verify-sixel-transcript pins down.
    */
-  private resetFramesForAltScreen(): void {
+  private resetFramesForAltScreen(invalidateImages = true): void {
     this.needsSurfaceRepaint = false;
     const rows = this.terminalRows;
     const cols = this.terminalColumns;
@@ -1975,8 +2075,10 @@ export default class Ink {
     this.frontFrame = blank();
     this.backFrame = blank();
     this.log.reset();
-    this.kittyGraphicsManager.invalidateAll();
-    this.sixelGraphicsManager.invalidateAll();
+    if (invalidateImages) {
+      this.kittyGraphicsManager.invalidateAll();
+      this.sixelGraphicsManager.invalidateAll();
+    }
     // Defense-in-depth: alt-screen skips the cursor preamble anyway (CSI H
     // resets), but a stale displayCursor would be misleading if we later
     // exit to main-screen without an intervening render.
@@ -1984,6 +2086,159 @@ export default class Ink {
     // Fresh frontFrame is blank rows×cols — blitting from it would copy
     // blanks over content. Next alt-screen frame must full-render.
     this.prevFrameContaminated = true;
+  }
+
+  /**
+   * True when a full-surface alt-screen repair may be painted at all: the alt
+   * screen is ours, we are attached to a TTY, and the console host is one that
+   * can overwrite painted cells when it reflows (see isConptyConsoleHost).
+   */
+  private canRepaintAltSurface(): boolean {
+    return this.options.stdout.isTTY && this.altScreenActive && !this.isUnmounted && isConptyConsoleHost();
+  }
+
+  /**
+   * Arm/refresh the launch surface hold: withhold frame output until the console
+   * size has been stable for SURFACE_HOLD_QUIET_MS, capped by SURFACE_HOLD_MAX_MS
+   * from the first arming.
+   *
+   * ConPTY re-emits its reflowed buffer when the console buffer grows, and that
+   * output overwrites whatever is on screen (#16911); at launch the window/tab
+   * sizing lands after the TUI has painted, so anything painted first is at risk
+   * — and painting a repair is just as exposed, which is what makes a
+   * repair-based fix flash on every launch. Withholding the frames instead means
+   * the re-emission lands on a blank alt screen and the first paint that reaches
+   * the terminal is already complete.
+   *
+   * Launch-only (`surfaceHoldLatched`): resizes after the first release are
+   * covered by the cursor probe rather than by blanking the screen again.
+   */
+  private refreshSurfaceHold(): void {
+    if (this.surfaceHoldLatched || !this.canRepaintAltSurface()) return;
+    const now = performance.now();
+    if (this.surfaceHoldStart === 0) this.surfaceHoldStart = now;
+    const cap = this.surfaceHoldStart + SURFACE_HOLD_MAX_MS;
+    this.surfaceHoldReleaseAt = Math.min(now + SURFACE_HOLD_QUIET_MS, cap);
+    if (this.surfaceHoldTimer !== null) clearTimeout(this.surfaceHoldTimer);
+    this.surfaceHoldTimer = setTimeout(this.releaseSurfaceHold, Math.max(0, this.surfaceHoldReleaseAt - now));
+    // A held frame must never hold the process alive on its own.
+    this.surfaceHoldTimer.unref?.();
+  }
+
+  /** True while frame output must be withheld (launch hold). */
+  private surfaceHoldActive(): boolean {
+    return this.surfaceHoldReleaseAt !== 0;
+  }
+
+  /**
+   * Release the launch hold and paint everything: nothing was written during the
+   * hold, so the diff baseline still describes the blank alt screen — blank it
+   * once more (without touching placed graphics) and let the next render cover
+   * every cell.
+   */
+  private releaseSurfaceHold = (): void => {
+    this.surfaceHoldTimer = null;
+    this.surfaceHoldReleaseAt = 0;
+    this.surfaceHoldStart = 0;
+    this.surfaceHoldLatched = true;
+    if (this.isUnmounted || this.isPaused || !this.altScreenActive || !this.options.stdout.isTTY) return;
+    this.resetFramesForAltScreen(false);
+    this.scheduleRender();
+  };
+
+  /** Cancel the active hold (alt-screen exit); the latch survives. */
+  private cancelSurfaceHold(): void {
+    if (this.surfaceHoldTimer !== null) {
+      clearTimeout(this.surfaceHoldTimer);
+      this.surfaceHoldTimer = null;
+    }
+    this.surfaceHoldReleaseAt = 0;
+    this.surfaceHoldStart = 0;
+  }
+
+  /** Full reset, latch included (unmount, shutdown). */
+  private clearSurfaceHold(): void {
+    this.cancelSurfaceHold();
+    this.surfaceHoldLatched = false;
+  }
+
+  /**
+   * Open the cursor-integrity probe window for a surface-risk event (alt-screen
+   * entry, resize notification). Probes only run while such a window is open —
+   * in steady state the per-frame hook is a single field read and no terminal
+   * queries are sent at all.
+   */
+  private openSurfaceProbeWindow(): void {
+    if (!this.canRepaintAltSurface()) return;
+    this.surfaceProbeUntil = performance.now() + SURFACE_PROBE_WINDOW_MS;
+    this.surfaceProbeNextAt = 0;
+  }
+
+  /**
+   * Ask the terminal where the cursor is and compare the reply with the cell
+   * this renderer parked it at. Every frame ends by writing an absolute cursor
+   * position (the declared caret, else the alt-screen park row), so the physical
+   * cursor is a value we own — and the only thing that can move it behind our
+   * back is the terminal itself re-emitting its buffer over our frame
+   * (microsoft/terminal#16911). A disagreement is therefore direct evidence of
+   * lost cells, and the next frame is forced to full damage: the repair is
+   * event-driven instead of a bet on when the re-emission lands.
+   *
+   * Best-effort by construction: an unanswered probe changes nothing, a reply
+   * that arrives after another frame was painted is discarded (it describes a
+   * park position we no longer hold), and repeat disagreements are spaced out so
+   * a terminal that keeps reporting a different position cannot become a
+   * repaint loop.
+   */
+  private probeSurfaceIntegrity(): void {
+    if (this.surfaceProbeUntil === 0 || this.surfaceProbeInFlight) return;
+    const now = performance.now();
+    if (now > this.surfaceProbeUntil) {
+      this.surfaceProbeUntil = 0;
+      return;
+    }
+    if (now < this.surfaceProbeNextAt) return;
+    if (this.isPaused || this.isUnmounted || !this.altScreenActive) return;
+    const parked = this.displayCursor;
+    // No declared cursor: the parked cell is whatever the frame's own cursor
+    // moves left behind, which is not a value worth judging.
+    if (parked === null) return;
+    const querier = this.app?.querier;
+    if (querier === undefined || querier.isSuspended) return;
+    this.surfaceProbeInFlight = true;
+    this.surfaceProbeNextAt = now + SURFACE_PROBE_INTERVAL_MS;
+    void Promise.all([querier.send(cursorPositionQuery()), querier.flush()]).then(([reply]) => {
+      this.surfaceProbeInFlight = false;
+      if (reply === undefined) return;
+      if (this.isUnmounted || this.isPaused || !this.altScreenActive) return;
+      if (this.surfaceProbeUntil === 0) return;
+      // The probed frame is no longer the latest: judge the reply by the park
+      // *cell*, not by object identity — an intervening frame that parked the
+      // cursor at the same cell (the usual case: the caret does not move) still
+      // describes this terminal state, while a moved caret invalidates it.
+      const current = this.displayCursor;
+      if (current === null || current.x !== parked.x || current.y !== parked.y) return;
+      // Terminal cursor reports are 1-based; frame coordinates are 0-based.
+      const expectedRow = parked.y + 1;
+      const expectedCol = parked.x + 1;
+      if (reply.row === expectedRow && reply.col === expectedCol) return;
+      logForDebugging(`[surface] cursor probe disagrees: parked=${expectedCol},${expectedRow} terminal=${reply.col},${reply.row} — repairing the surface`);
+      const repairedAt = performance.now();
+      if (repairedAt - this.surfaceProbeRepairAt < SURFACE_PROBE_REPAIR_INTERVAL_MS) return;
+      this.surfaceProbeRepairAt = repairedAt;
+      this.resetFramesForAltScreen(false);
+      this.scheduleRender();
+    }).catch(() => {
+      /* best-effort: the next frame probes again */
+    });
+  }
+
+  /** Drop the probe state (alt-screen exit, unmount, shutdown). */
+  private clearSurfaceProbe(): void {
+    this.surfaceProbeUntil = 0;
+    this.surfaceProbeNextAt = 0;
+    this.surfaceProbeInFlight = false;
+    this.surfaceProbeRepairAt = 0;
   }
 
   /**
@@ -2581,6 +2836,10 @@ export default class Ink {
     if (this.isUnmounted) {
       return;
     }
+    // No surface repair may fire after this point: the shutdown path below
+    // writes synchronously and the terminal stops being ours.
+    this.clearSurfaceHold();
+    this.clearSurfaceProbe();
     // The final frame render is best-effort: a mid-state React commit can
     // throw (agent still working at the exact exit moment). It must NOT
     // skip the synchronous cleanup block below — a skipped DISABLE_*

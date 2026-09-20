@@ -301,6 +301,28 @@ export function hasCursorUpViewportYankBug(): boolean {
 }
 
 /**
+ * True when the console host is conhost/ConPTY. On those hosts the console
+ * buffer can be rebuilt out from under the renderer without a size change —
+ * notably while Windows Terminal maximizes a window, where the alt-screen
+ * buffer is recreated and every already-painted cell is lost while the
+ * renderer's cached frame still counts them as painted. The resize
+ * notification that accompanies it can arrive before the rebuild (so the
+ * reactive repair is itself discarded) or not at all (issue #891), which is
+ * why callers repaint the whole surface instead of trusting the frame cache.
+ * WT_SESSION catches WSL-in-Windows-Terminal, where platform is linux but
+ * output still routes through conpty.
+ * @param platform - Node platform; injectable so tests can drive the branch on any runner.
+ * @param wtSession - `WT_SESSION` value; injectable for the same reason.
+ * @returns true when the console host may drop painted cells silently.
+ */
+export function isConptyConsoleHost(
+  platform: NodeJS.Platform = process.platform,
+  wtSession: string | undefined = process.env.WT_SESSION,
+): boolean {
+  return platform === 'win32' || !!wtSession
+}
+
+/**
  * Whether synchronized output (DEC 2026) is available, computed once at
  * module load — terminal capabilities don't change mid-session. Exported
  * so callers can pass a sync-skip hint gated to specific modes.

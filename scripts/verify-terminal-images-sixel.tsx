@@ -409,8 +409,11 @@ for (const [name, env, caps] of [
   const input = new Input()
   const output = new Output(input, caps)
   const instance = await render(imageTree(true), { stdin: input, stdout: output, stderr, exitOnCtrlC: false, patchConsole: false })
-  await delay(100)
-  assert.ok(output.data.includes('FALLBACK'), name)
+  // Wait for the fallback text instead of a fixed 100ms: a fullscreen mount
+  // withholds its first frame until the launch surface hold releases
+  // (ink.tsx, SURFACE_HOLD_QUIET_MS), which is deliberately longer than the
+  // sleep this used to be.
+  await until(() => output.data.includes('FALLBACK'), `${name}: fallback text reaches the terminal`)
   assert.ok(!output.data.includes('\x1bP0;1;q'), name)
   output.isTTY = false
   instance.unmount()

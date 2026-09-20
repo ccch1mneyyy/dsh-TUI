@@ -153,11 +153,16 @@ const KITTY_FLAGS_RE = /^\x1b\[\?(\d+)u$/
 // Kitty graphics APC response: ESC_G key=value,...;OK|error ESC\\
 // eslint-disable-next-line no-control-regex
 const KITTY_GRAPHICS_RE = /^\x1b_G([^;]*);([^\x1b]*)\x1b\\$/
-// DECXCPR cursor position: CSI ? row ; col R
+// DECXCPR cursor position: CSI ? row ; col R — and terminals answer the DEC
+// form with the optional page parameter (xterm: CSI ? row ; col ; page R;
+// Windows Terminal/ConPTY answers `?30;5;1R`). Accepting only two parameters
+// left the three-parameter reply unrecognized, so it fell through to the
+// key/text parser and the reply itself was typed into the prompt (measured
+// field report). The page is ignored: only row/col are meaningful here.
 // The ? marker disambiguates from modified F3 keys (Shift+F3 = CSI 1;2 R,
 // Ctrl+F3 = CSI 1;5 R, etc.) — plain CSI row;col R is genuinely ambiguous.
 // eslint-disable-next-line no-control-regex
-const CURSOR_POSITION_RE = /^\x1b\[\?(\d+);(\d+)R$/
+const CURSOR_POSITION_RE = /^\x1b\[\?(\d+);(\d+)(?:;(\d+))?R$/
 // XTWINOPS pixel-size replies: CSI 6;height;width t (cell) and
 // CSI 4;height;width t (text area).
 // eslint-disable-next-line no-control-regex

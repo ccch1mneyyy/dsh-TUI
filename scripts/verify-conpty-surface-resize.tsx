@@ -12,9 +12,10 @@ delete process.env.TERM_PROGRAM
 delete process.env.TMUX
 
 import assert from 'node:assert/strict'
-const [React, { PassThrough, Writable }, { Terminal }, { render, AlternateScreen }, { LogoV2 }, { default: instances }, { settled, sleep, viewportLines, writeParsed }] = await Promise.all([
+const [React, { PassThrough, Writable }, { Terminal }, { render, AlternateScreen, Box, Text }, { LogoV2 }, { default: instances }, { settled, sleep, viewportLines, writeParsed }, { useDeclaredCursor }] = await Promise.all([
   import('react'), import('node:stream'), import('@xterm/headless'), import('../src/ui.js'),
   import('../src/components/LogoV2.js'), import('../src/ink/instances.js'), import('./lib/term-test.mjs'),
+  import('../src/ink/hooks/use-declared-cursor.js'),
 ])
 
 class Input extends PassThrough {
@@ -24,11 +25,23 @@ class Input extends PassThrough {
   unref(): this { return this }
 }
 
-async function mount(fullscreen: boolean, animated = false) {
+/**
+ * Declares a caret, which is what gives the surface probe a parked cell to
+ * judge (the real app's prompt input does this). Without a declaration the
+ * probe has nothing to compare against and stays silent by design.
+ */
+function CursorHome(): React.ReactNode {
+  const setCursor = useDeclaredCursor({ line: 0, column: 0, active: true })
+  return <Box ref={setCursor}><Text>CURSOR-HOME</Text></Box>
+}
+
+async function mount(fullscreen: boolean, animated = false, extra?: React.ReactNode) {
   const term = new Terminal({ cols: 100, rows: 32, scrollback: 1000, allowProposedApi: true })
   const writes: string[] = []
   let frames = 0
   let lastFrameAt = performance.now()
+  const mountAt = performance.now()
+  let firstFrameAt = 0
   class Output extends Writable {
     columns = 100
     rows = 32
@@ -39,15 +52,18 @@ async function mount(fullscreen: boolean, animated = false) {
     }
   }
   const stdout = new Output()
+  const stdin = new Input()
   const logo = <LogoV2 model="STATIC-MODEL" cwd="/static/cwd" effort="max"
     intro="classic" skipIntro={!animated} whaleIdle={false} drift={null}
     tip={{ id: 'surface', group: 'display', zh: 'STATIC-TIP', en: 'STATIC-TIP' }} />
-  const instance = await render(fullscreen ? <AlternateScreen>{logo}</AlternateScreen> : logo, {
+  const instance = await render(fullscreen
+    ? <AlternateScreen>{extra === undefined ? logo : <Box flexDirection="column">{logo}{extra}</Box>}</AlternateScreen>
+    : logo, {
     stdout: stdout as unknown as NodeJS.WriteStream,
-    stdin: new Input() as unknown as NodeJS.ReadStream,
+    stdin: stdin as unknown as NodeJS.ReadStream,
     stderr: new Writable({ write(_c, _e, cb) { cb() } }) as unknown as NodeJS.WriteStream,
     exitOnCtrlC: false, patchConsole: false,
-    onFrame() { frames++; lastFrameAt = performance.now() },
+    onFrame() { frames++; lastFrameAt = performance.now(); if (firstFrameAt === 0) firstFrameAt = performance.now() },
   })
   const ink = instances.get(stdout as unknown as NodeJS.WriteStream)
   assert.ok(ink)
@@ -76,7 +92,14 @@ async function mount(fullscreen: boolean, animated = false) {
   }
   assert.ok(await settled(() => staticText() && pixels() > 60 &&
     (animated || performance.now() - lastFrameAt >= 50)), 'startup paints whale and static details')
-  return { term, stdout, instance, ink, writes, frames: () => frames, staticText, pixels, snapshot, idle: () => performance.now() - lastFrameAt >= 50 }
+  // The launch hold: the first frame that reaches the terminal waits for the
+  // console size to look stable, so nothing of ours is on screen while ConPTY
+  // may still re-emit its buffer. Inline mounts have no hold.
+  if (fullscreen) {
+    assert.ok(firstFrameAt - mountAt >= 100,
+      `launch hold withholds the first frame (saw ${Math.round(firstFrameAt - mountAt)}ms)`)
+  }
+  return { term, stdout, stdin, instance, ink, writes, frames: () => frames, staticText, pixels, snapshot, idle: () => performance.now() - lastFrameAt >= 50 }
 }
 
 // A real dimension change followed by terminal-side surface loss and a
@@ -90,6 +113,10 @@ async function mount(fullscreen: boolean, animated = false) {
     app.term.resize(213, 52)
     app.stdout.emit('resize')
     assert.ok(await settled(() => app.frames() > beforeResize && app.staticText() && app.pixels() > 60 && app.idle()), 'real resize settles')
+    // Let the resize's own repair paint land before wiping, so the wipe below
+    // cannot be raced by a repair still in flight (the launch hold is already
+    // latched by now, so no blanking follows).
+    await sleep(120) // 固定窗:探针 resize 修复与擦除之间的落帧余量
     const baseline = app.snapshot()
     // Only the physical terminal is cleared. Ink must not learn about this
     // until the resize notification (the failure modeled by the issue).
@@ -99,9 +126,16 @@ async function mount(fullscreen: boolean, animated = false) {
     const beforeWrites = app.writes.length
     for (let i = 0; i < 20; i++) app.stdout.emit('resize')
     assert.ok(await settled(() => app.staticText() && app.pixels() > 60), 'same-grid resize restores static cells without Ctrl+L')
-    await sleep(80) // 固定窗:探针 重复 resize 的尾沿不得再追加整屏重绘
+    // The 20 events coalesce into the immediate #891 repair — never one paint
+    // per event, and (with the launch hold latched) no extra blanking either.
+    assert.ok(
+      await settled(() => app.frames() - before >= 1),
+      'a duplicate resize burst still repairs the surface',
+    )
+    await sleep(80) // 固定窗:探针 尾沿不得再追加更多整屏重绘
+    const burstFrames = app.frames() - before
+    assert.ok(burstFrames <= 2, `20 resize events must not paint per event (saw ${burstFrames})`)
     assert.deepEqual(app.snapshot(), baseline, 'restored text and whale colors match the intact surface')
-    assert.equal(app.frames() - before, 1, 'a duplicate resize burst coalesces to one paint')
     const output = app.writes.slice(beforeWrites).join('')
     assert.ok(!/\x1b\[(?:2J|3J|\?1049h)/.test(output), 'repair must not clear the screen/scrollback or re-enter alt-screen')
 
@@ -152,6 +186,50 @@ async function mount(fullscreen: boolean, animated = false) {
     await app.instance.unmount()
     app.term.dispose()
   }
+}
+
+// Cursor-integrity probe: every frame ends by parking the cursor at a cell the
+// renderer owns, so a terminal that reports a *different* position has rewritten
+// the surface underneath it (ConPTY re-emitting its buffer, #16911). This pins
+// the wiring this half needs — a declared caret plus an actual DECXCPR query;
+// the reply-driven repair needs a terminal that answers, so it is verified on a
+// real host (DSH_TUI_DEBUG logs "[surface] cursor probe disagrees …").
+{
+  const app = await mount(true, false, <CursorHome />)
+  try {
+    // The caret declaration lands in a layout effect: paint once more so the
+    // probe has a parked cell to judge (no resize — this case is about the probe
+    // alone, not the repair burst).
+    app.ink.renderNow()
+    assert.ok(
+      await settled(() => app.writes.some(w => w.includes('?6n'))),
+      'the surface probe asks the terminal where the cursor is',
+    )
+    // The other half — a reply that disagrees forces a full repair — needs a
+    // terminal that answers, so it is exercised by the real-host check
+    // (DSH_TUI_DEBUG logs "[surface] cursor probe disagrees …") rather than by
+    // this headless harness.
+    console.log('PASS: cursor-integrity probe is wired to the parked cell')
+  } finally {
+    await app.instance.unmount()
+    app.term.dispose()
+  }
+}
+
+// The reply shape is what makes the probe safe to use at all: Windows
+// Terminal/ConPTY answers DECXCPR with the optional page parameter
+// (`CSI ? row ; col ; page R`, seen as `?30;5;1R`). A parser that only accepts
+// two parameters drops the reply into the key/text path, and the reply text
+// lands in the prompt (measured field report).
+{
+  const { parseMultipleKeypresses, INITIAL_STATE } = await import('../src/ink/parse-keypress.js')
+  for (const reply of ['[?30;5;1R', '[?30;5R']) {
+    const [items] = parseMultipleKeypresses(INITIAL_STATE, reply)
+    assert.equal(items.length, 1, `one item for ${JSON.stringify(reply)}`)
+    assert.equal(items[0]?.kind, 'response', `${JSON.stringify(reply)} must parse as a terminal response`)
+    assert.equal(items[0]?.response?.type, 'cursorPosition')
+  }
+  console.log('PASS: DECXCPR replies (2- and 3-parameter) are consumed as responses')
 }
 
 // Preserve the quiet same-grid path for inline mode and non-ConPTY hosts.

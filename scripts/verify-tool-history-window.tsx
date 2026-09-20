@@ -82,6 +82,12 @@ for (const fullscreen of [true, false]) {
     },
   })
   try {
+    // A fullscreen mount withholds its first frame until the launch surface
+    // hold releases (ink.tsx, SURFACE_HOLD_QUIET_MS), and MessageList must not
+    // tighten a widened mount window until a frame with that layout has been
+    // flushed. Wait for that first paint so the tightening assertions below
+    // exercise the steady state instead of the launch window.
+    assert.ok(await settled(() => frameCount > 0), 'the launch hold releases and paints the first frame')
     if (!fullscreen) {
       // Inline history must first reach scrollback. Then a live update may
       // release the flush hold and tighten the mount window again.
