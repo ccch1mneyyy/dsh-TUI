@@ -419,19 +419,26 @@ export class IdeChannel {
 
   /** Drop the link (if any) and mark the channel disconnected. Cancels any
    *  dial still pending: the generation bump invalidates its finish, and the
-   *  pending socket is aborted so a late onopen/ack can never re-connect. */
+   *  pending socket is aborted so a late onopen/ack can never re-connect.
+   *  Cached selection state goes with the link — a stopped channel must not
+   *  keep serving the old window's snapshot to anyone who reads `selection` /
+   *  `workspaceFolders` (degradeToDisconnected already does this; stop() used
+   *  to leave both behind, contradicting rebind()'s own contract). */
   stop(): void {
     this.generation++
     this.teardown()
     this.state = 'disconnected'
+    this.current = undefined
+    this.ackedWorkspaceFolders = undefined
   }
 
   /**
    * Re-target the channel after the session cwd changed (/workspace, /resume
    * adopting another session, ...). The old link belongs to the old
    * workspace — a selection pushed there must never attach into the new one
-   * — so drop it (clearing the live selection) and rediscover against the
-   * new cwd with the env/lockDir start() was last given (maintainer review
+   * — so drop it (stop() clears the cached selection and the acked folders)
+   * and rediscover against the new cwd with the env/lockDir start() was last
+   * given (maintainer review
    * round 3: clearing the cached selection used to keep the stale link, and
    * the terminal-on-disconnect design meant a plain stop() could never
    * reconnect; rebind() is the one sanctioned way back to idle).
