@@ -1,6 +1,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import { randomUUID } from 'node:crypto'
 import { rememberImagePath, transcriptImageFromAttachment } from '../transcript-images.js'
+import { probeImageSize, shrinkImageToLimits, withinDimensionLimits } from '../../utils/imageResize.js'
 import { mentionAttachments } from './mentions.js'
 import type { ChannelOwner } from './owner.js'
 import type {
@@ -67,6 +68,11 @@ const STAGED_IMAGE_LIMIT = 128
 export interface ComposerImageLimits {
   readonly maxImageBytes: number
   readonly maxImagesPerMessage: number
+  /** Per-side intrinsic pixel cap mirrored from the upstream store so the
+   *  ingress gate can resample before staging (issue #938). */
+  readonly maxImageDimension: number
+  /** Total-pixel cap ditto. */
+  readonly maxImagePixels: number
 }
 
 /** The composer's staged-image capability store plus its draft-binding rules. */
@@ -187,10 +193,63 @@ export function createComposerImages(
     if (input.data.byteLength > attachments.imageLimits.maxImageBytes) {
       throw new Error(`image exceeds this profile's per-image size limit`)
     }
+    // Ingress resampling (issue #938): upstream rejects images over the
+    // per-side dimension / total-pixel caps at submit, after the user has
+    // already composed around the token. Measure at STAGE time and shrink
+    // while the paste can still be informed. A probe-recognized image
+    // inside the caps skips sharp entirely; an unrecognized format is
+    // decoded for measurement (never trusted by byte budget alone — the
+    // #432 review gap); with sharp absent AND no probe answer the image
+    // passes through to upstream admission unchanged (today's behavior,
+    // upstream stays the backstop). The runtime guards keep older
+    // attachment fakes (whose imageLimits predate the dimension fields)
+    // on the legacy synchronous path.
+    const dimensionCap = attachments.imageLimits.maxImageDimension
+    const pixelCap = attachments.imageLimits.maxImagePixels
+    let mediaType = input.mediaType
+    let data = input.data
+    if (typeof dimensionCap === 'number' && typeof pixelCap === 'number'
+      && Number.isFinite(dimensionCap) && Number.isFinite(pixelCap)) {
+      const dimensionLimits = { maxImageDimension: dimensionCap, maxImagePixels: pixelCap }
+      const probe = probeImageSize(data)
+      if (probe === null || !withinDimensionLimits(probe, dimensionLimits)) {
+        const outcome = await shrinkImageToLimits(
+          data,
+          mediaType,
+          dimensionLimits,
+          attachments.imageLimits.mediaTypes,
+        )
+        if (outcome.kind === 'resized') {
+          // targetMediaType is selected from the accepted list inside
+          // shrinkImageToLimits, so this string is one of the profile's
+          // media types at runtime — narrowing, not trusting.
+          mediaType = outcome.mediaType as typeof mediaType
+          data = outcome.data
+          // The re-encoded bytes may have crossed into a media type this
+          // profile does not accept, or grown past the byte cap: re-run BOTH
+          // admission checks against what will actually be stored.
+          if (!attachments.imageLimits.mediaTypes.includes(mediaType)) {
+            throw new Error(`${mediaType} images are not accepted by this profile`)
+          }
+          if (data.byteLength > attachments.imageLimits.maxImageBytes) {
+            throw new Error(`image still exceeds this profile's per-image size limit after resampling`)
+          }
+        } else if (outcome.kind === 'unavailable' && probe !== null) {
+          // Oversized AND sharp cannot fix it (not installed / decode
+          // failed): a clear refusal beats a token that dies at submit.
+          throw new Error(
+            outcome.reason === 'sharp-missing'
+              ? `image is ${probe.width}×${probe.height} (over ${dimensionLimits.maxImageDimension}px) and sharp is unavailable to resample it`
+              : `image is over the size limit and could not be resampled (${outcome.detail})`,
+          )
+        }
+      }
+    }
     // The source path is TUI-side display metadata; the store only sees the
-    // fields its contract names.
+    // fields its contract names. mediaType/data may be the resampled pair
+    // from the ingress gate above.
     const { path, ...stored } = input
-    const attachment = await attachments.saveImage(stored)
+    const attachment = await attachments.saveImage({ ...stored, mediaType, data })
     // A session change (/new, resume, rewind, model switch, background)
     // cleared the maps while the save was in flight: the durable object is
     // harmless, but the OLD session's capability must not reach the new one.
@@ -252,6 +311,8 @@ export function createComposerImages(
       return {
         maxImageBytes: limits.maxImageBytes,
         maxImagesPerMessage: limits.maxImagesPerMessage,
+        maxImageDimension: limits.maxImageDimension,
+        maxImagePixels: limits.maxImagePixels,
       }
     },
     clearStagedImages(): void {

@@ -256,7 +256,12 @@ export interface ChannelUi {
   /** The profile's image-paste limits, for callers that must bound work
    *  BEFORE reading bytes (a Finder path is untrusted input). Undefined
    *  when the composition has no attachment service. */
-  stagedImageLimits(): { readonly maxImageBytes: number; readonly maxImagesPerMessage: number } | undefined
+  stagedImageLimits(): {
+    readonly maxImageBytes: number
+    readonly maxImagesPerMessage: number
+    readonly maxImageDimension: number
+    readonly maxImagePixels: number
+  } | undefined
   submit(text: string, images?: readonly ComposerImageRef[]): void
   /**
    * Steer a message into the running turn (Codex/pi semantics): injected at

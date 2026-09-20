@@ -55,7 +55,10 @@ the interface, and removing it leaves no core modifications behind.
   it and leaving the prompt visible (Esc or click outside closes); its title reads `Image #N — format · size · bytes ·
   file name` and images staged in this session show their source path on the
   card's bottom row. Finder-copied
-  image files paste straight into the attachment store as `[Image #N]`; in the
+  image files paste straight into the attachment store as `[Image #N]`, and images over the
+  profile's dimension caps (per-side pixels / total pixels) are resampled proportionally to fit
+  before staging (needs the optional sharp dependency; without it an oversized image fails with a
+  clear error at paste time instead of at submit); in the
   composer a staged `[Image #N]` is one unit — the caret steps over it, deletes
   remove it whole, and while the caret sits on it the token inverts and its
   preview opens, closing again when the caret leaves. Vim `x`/`X`/`d…` also

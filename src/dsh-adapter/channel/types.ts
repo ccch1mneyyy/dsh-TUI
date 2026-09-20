@@ -138,6 +138,11 @@ export interface MentionAttachments {
     readonly maxImageBytes: number
     readonly maxImagesPerMessage: number
     readonly maxMessageImageBytes: number
+    /** Per-side intrinsic pixel cap (mirrored from the upstream store's
+     *  ImageAttachmentLimits — used by the composer's ingress resample). */
+    readonly maxImageDimension: number
+    /** Total-pixel cap ditto. */
+    readonly maxImagePixels: number
     readonly mediaTypes: readonly MentionImageMediaType[]
   }
   saveImage(input: { data: Uint8Array; mediaType: MentionImageMediaType; name?: string }): Promise<MentionImageBlock['attachment']>
