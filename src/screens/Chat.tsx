@@ -1113,13 +1113,19 @@ export function Chat({
    * are idempotent.
    *
    * Scope, deliberately narrow (review round 7): a capability a QUEUED message
-   * still references (`channel.pending` — the same image can be in the parked
-   * draft and in a message typed from it, or pulled back with Alt+Up) is never
-   * revoked here. A composer that is still MOUNTED when Chat unmounts keeps its
-   * own draft/history/vim-undo state, and React runs this parent cleanup
-   * BEFORE the child's, so those ids are invisible here — this releases the
-   * parked snapshot's unshared ids only, and the composer's own discard path
-   * stays responsible for the rest.
+   * still references (`channel.pending`) is never revoked here. The real
+   * double-hold path is paste an image → queue the draft with Tab while the
+   * model works → recall that line from input history with ↑ (same stageId
+   * rebound to the draft) → park the composer. Delivery resolves its refs from
+   * the enqueue-time capture, so a late revoke would only bite a host that
+   * re-resolves them afterwards — this keeps the rule identical to
+   * `stageIdIsRetained` instead of relying on that.
+   *
+   * A composer that is still MOUNTED when Chat unmounts is NOT covered: React
+   * runs this parent cleanup BEFORE the child's, so the child then writes its
+   * draft into the now-dead ref and those ids ride the channel's lifetime out
+   * (the #942 review's remaining P2). Neither unmount path loses anything
+   * user-visible — the channel dies with them.
    */
   React.useEffect(() => {
     return () => {
@@ -1128,7 +1134,10 @@ export function Chat({
       if (snapshot === null) return
       const queued = new Set<string>()
       for (const item of channelRef.current.pending) {
-        for (const image of item.images) queued.add(image.stageId)
+        // `?? []`: a foreign/embedded host may hand us a pending entry without
+        // images, and a throw inside an unmount cleanup escapes into the exit
+        // path — every other reader of this field guards it the same way.
+        for (const image of item.images ?? []) queued.add(image.stageId)
       }
       for (const [, stageId] of snapshot.images) {
         if (queued.has(stageId)) continue
