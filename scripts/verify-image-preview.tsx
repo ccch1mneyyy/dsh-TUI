@@ -1709,6 +1709,54 @@ for (const columns of [32, 80]) {
   terminal.dispose()
 }
 
+// --- Prompt ingress notice: an adapted paste says what changed -------------
+{
+  const notices: string[] = []
+  const adaptedImagePath = `${process.env.HOME}/adapted.png`
+  writeFileSync(adaptedImagePath, png)
+  const channel = {
+    ...makeChannel(),
+    notify(text: string) { notices.push(text) },
+    hasStagedImage: () => true,
+    // The ingress gate resampled AND converted this paste (alpha filled with
+    // white). The composer must surface all three facts, not just the token —
+    // a silently rewritten image is what issue #938 exists to prevent.
+    stageComposerImage: async () => ({
+      stageId: 'stage-adapted',
+      adjustment: {
+        sourceMediaType: 'image/png',
+        mediaType: 'image/jpeg',
+        width: 1024,
+        height: 768,
+        resized: true,
+        flattened: true,
+      },
+    }),
+  }
+  const terminal = new XTerm({ cols: COLS, rows: ROWS, scrollback: 0, allowProposedApi: true })
+  const stdout = new FakeStdout(terminal)
+  const stdin = new FakeStdin()
+  const app = await render(
+    <PromptInput
+      channel={channel as never}
+      helpOpen={false}
+      onToggleHelp={() => {}}
+      onRunCommand={() => false}
+      selectionActive={false}
+    />,
+    { stdin: stdin as never, stdout: stdout as never, stderr: new FakeStderr() as never, exitOnCtrlC: false, patchConsole: false },
+  )
+  stdin.write(`\x1b[200~${adaptedImagePath}\x1b[201~`)
+  check('prompt: an adapted paste names the resize, the conversion and the alpha fill',
+    await settled(() => notices.some(text => text.includes('[Image #1]')
+      && text.includes('resized to 1024')
+      && text.includes('PNG converted to JPEG')
+      && text.includes('transparency filled white'))),
+    JSON.stringify(notices))
+  await app.unmount()
+  terminal.dispose()
+}
+
 if (failures > 0) {
   console.error(`\n${failures} failure(s)`)
   process.exit(1)
