@@ -507,11 +507,42 @@ function imageOcclusionRect(op: Operation, width: number): Rectangle | undefined
 }
 
 /**
- * Fold overlapping occluder rects into disjoint ones, so an image protocol that
- * has to erase them (Sixel) does not repeat the same cells. One overlay usually
- * contributes several rects for the same area (interior fill, border row, text
- * row), and an overlay that covers several placements would otherwise erase the
- * shared cells once per placement.
+ * The union of two rects, but only when that union covers no cell the pair did
+ * not already cover between them. Two rects qualify when one contains the
+ * other, or when they are bands sharing a full edge span (same x-span and
+ * abutting/overlapping rows, or the transpose) — exactly the pairs whose union
+ * is itself a rectangle. An L-shaped pair does not qualify: the bounding box of
+ * its two arms covers cells neither arm covers, and the caller would erase
+ * pixels that are still visible.
+ * @param a - the first rectangle.
+ * @param b - the second rectangle.
+ * @returns their union, or undefined when folding them would add cells.
+ */
+function exactUnion(a: Rectangle, b: Rectangle): Rectangle | undefined {
+  const contains = (outer: Rectangle, inner: Rectangle): boolean =>
+    outer.x <= inner.x && outer.y <= inner.y &&
+    outer.x + outer.width >= inner.x + inner.width &&
+    outer.y + outer.height >= inner.y + inner.height
+  if (contains(a, b)) return a
+  if (contains(b, a)) return b
+  const sameColumns = a.x === b.x && a.width === b.width &&
+    a.y <= b.y + b.height && b.y <= a.y + a.height
+  const sameRows = a.y === b.y && a.height === b.height &&
+    a.x <= b.x + b.width && b.x <= a.x + a.width
+  return sameColumns || sameRows ? unionRect(a, b) : undefined
+}
+
+/**
+ * Fold occluder rects that can be folded without covering anything new, so an
+ * image protocol that has to erase them (Sixel) does not repeat the same cells.
+ * One overlay usually contributes several rects for the same area (interior
+ * fill, border row, text row), and an overlay that covers several placements
+ * would otherwise erase the shared cells once per placement.
+ *
+ * Folding stops at exact unions on purpose. The erasure has to match the cells
+ * an overlay really covers: merging any two intersecting rects into their
+ * bounding box would take down the pixels beside an L-shaped cover, which are
+ * still on screen.
  */
 function mergeOcclusionRects(rects: readonly Rectangle[]): Rectangle[] {
   const merged: Rectangle[] = []
@@ -522,10 +553,9 @@ function mergeOcclusionRects(rects: readonly Rectangle[]): Rectangle[] {
       joined = false
       for (let index = merged.length - 1; index >= 0; index--) {
         const other = merged[index]!
-        const overlapsX = current.x < other.x + other.width && current.x + current.width > other.x
-        const overlapsY = current.y < other.y + other.height && current.y + current.height > other.y
-        if (!overlapsX || !overlapsY) continue
-        current = unionRect(current, other)
+        const union = exactUnion(current, other)
+        if (union === undefined) continue
+        current = union
         merged.splice(index, 1)
         joined = true
       }

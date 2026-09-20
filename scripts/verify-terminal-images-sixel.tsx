@@ -297,7 +297,7 @@ delete process.env.STY
 delete process.env.DSH_TUI_ACCESSIBILITY
 delete process.env.DSH_TUI_DISABLE_TERMINAL_IMAGES
 delete process.env.DSH_TUI_IMAGE_PROTOCOL
-const imageTree = (show: boolean, counter = 0, preview = true, covered = false, partial = false) => (
+const imageTree = (show: boolean, counter = 0, preview = true, covered = false, partial = false, ell = false) => (
   <AlternateScreen>
     <Box width={50} height={17} flexDirection="column">
       <Text>PREVIEW HEADER</Text>
@@ -306,6 +306,11 @@ const imageTree = (show: boolean, counter = 0, preview = true, covered = false, 
         {/* A popup that covers only part of the raster: the same surface color,
             so the covered cells keep the image's own backing style. */}
         {partial ? <Box position="absolute" top={2} left={2} width={3} height={2} backgroundColor="toolCardBackground"><Text>{'   \n   '}</Text></Box> : null}
+        {/* An overlay is not necessarily one rectangle. A 4x1 bar and a 1x4 bar
+            sharing one corner cover 7 cells; their bounding box is 4x4 = 16.
+            Same surface color, so the covered cells keep the image's backing. */}
+        {ell ? <Box position="absolute" top={0} left={1} width={4} height={1} backgroundColor="toolCardBackground"><Text>{'    '}</Text></Box> : null}
+        {ell ? <Box position="absolute" top={0} left={1} width={1} height={4} backgroundColor="toolCardBackground"><Text>{' \n \n \n '}</Text></Box> : null}
       </Box>
       <Text>AFTER {counter}</Text>
       {covered ? <Box position="absolute" top={1} left={0} width={8} height={4} opaque><Text>{'        \n        \n        \n        '}</Text></Box> : null}
@@ -349,6 +354,51 @@ try {
   const partialUncover = stdout.data.length
   app.rerender(imageTree(true, 1))
   await until(() => stdout.data.slice(partialUncover).includes('\x1bP0;1;q'), 'the raster returns once the overlay closes')
+  // An overlay's cover is not always one rectangle. An L made of a 4x1 bar and
+  // a 1x4 bar sharing one corner covers 7 cells, while their bounding box is
+  // 4x4 = 16. Folding intersecting occluders into their bounding box therefore
+  // erases 9 cells whose pixels are still on screen — the manager has to erase
+  // the union of the covered rects, never the bounding box that encloses them.
+  const ellStart = stdout.data.length
+  app.rerender(imageTree(true, 1, true, false, false, true))
+  await until(() => {
+    const covered = stdout.data.slice(ellStart)
+    return /\x1b\[0m\x1b\[48;2;\d+;\d+;\d+m(?:\x1b\[\d+;\d+H\x1b\[\d+X)+/u.test(covered)
+  }, 'an L-shaped overlay erases its covered cells with the surface color')
+  const ellFrame = stdout.data.slice(ellStart)
+  const ellPlacement = (instances.get(stdout) as unknown as {
+    frontFrame: { images?: TerminalImagePlacement[] }
+  }).frontFrame.images?.find(placement => placement.coveredRects !== undefined)
+  assert.ok(ellPlacement, 'an L-shaped cover stays partial instead of taking the whole raster down')
+  const rectKey = (rect: { x: number; y: number; width: number; height: number }) =>
+    `${rect.x},${rect.y},${rect.width},${rect.height}`
+  const ellX = ellPlacement!.x + 1
+  const ellY = ellPlacement!.y
+  // Rectangle level: an L has no rectangular union, so the two bars must stay
+  // two rects. One 4x4 rect here is the bounding-box mistake.
+  assert.deepEqual((ellPlacement!.coveredRects ?? []).map(rectKey).sort(),
+    [`${ellX},${ellY},4,1`, `${ellX},${ellY},1,4`].sort(),
+    'the covered rects are the real occluders, not their bounding box')
+  // Cell level: every erased cell is covered and every covered cell is erased —
+  // 7 distinct cells, not the 16 of the bounding box.
+  const erasedCells = new Set<string>()
+  for (const run of ellFrame.matchAll(/\x1b\[0m\x1b\[48;2;\d+;\d+;\d+m((?:\x1b\[\d+;\d+H\x1b\[\d+X)+)/gu)) {
+    for (const op of run[1]!.matchAll(/\x1b\[(\d+);(\d+)H\x1b\[(\d+)X/gu)) {
+      const row = Number(op[1]) - 1
+      const column = Number(op[2]) - 1
+      for (let i = 0; i < Number(op[3]); i++) erasedCells.add(`${column + i},${row}`)
+    }
+  }
+  const coveredCells = new Set<string>()
+  for (let i = 0; i < 4; i++) coveredCells.add(`${ellX + i},${ellY}`)
+  for (let i = 0; i < 4; i++) coveredCells.add(`${ellX},${ellY + i}`)
+  assert.equal(coveredCells.size, 7, 'the L covers 7 distinct cells')
+  assert.deepEqual([...erasedCells].sort(), [...coveredCells].sort(),
+    'exactly the covered cells are erased — an uncovered pixel is never taken down')
+  assert.ok(!ellFrame.includes('\x1bP0;1;q'), 'a covered raster is not redrawn over the overlay')
+  const ellUncover = stdout.data.length
+  app.rerender(imageTree(true, 1))
+  await until(() => stdout.data.slice(ellUncover).includes('\x1bP0;1;q'), 'the raster returns once the L closes')
   const closeStart = stdout.data.length
   app.rerender(imageTree(false))
   await until(() => stdout.data.slice(closeStart).includes('\x1b[8X'), 'closing a preview must erase actual pixels')
