@@ -398,8 +398,8 @@ export function SessionTree({
   }
 
   // ── Keyboard ────────────────────────────────────────────────────────────
-  // Keys are read through refs for the same reason SessionBrowser does it:
-  // several key events can arrive in one stdin chunk before React re-renders.
+  // Keys are read through refs for the same reason the other keyed screens do
+  // it: several key events can arrive in one stdin chunk before React re-renders.
   const focusIndexRef = React.useRef(focusIndex)
   focusIndexRef.current = focusIndex
   const visibleRef = React.useRef(visible)

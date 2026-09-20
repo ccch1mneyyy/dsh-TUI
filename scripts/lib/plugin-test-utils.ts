@@ -10,7 +10,12 @@
  */
 
 import type { Context } from '@deepseek-ai/cordis'
-import { getHostAdmissionForTest } from '../../src/dsh-adapter/plugin-host.js'
+import {
+  apply as hostRowApply,
+  getHostAdmissionForTest,
+  getHostInitialKernelRefreshForTest,
+  name as hostRowName,
+} from '../../src/dsh-adapter/plugin-host.js'
 
 export const sleep = (ms: number): Promise<void> => new Promise(resolve => setTimeout(resolve, ms))
 
@@ -84,6 +89,42 @@ export async function mountAdmitted(
     throw new Error(`Component activation ${name} completed without an admission context`)
   }
   return { context, fiber }
+}
+
+/** Bounded ceiling for the host-owned initial kernel refresh; it only turns a
+ * pathological hang into a loud, attributable error. */
+const INITIAL_KERNEL_REFRESH_TIMEOUT_MS = 5_000
+
+/** Mount the plugin-host row on a battery context and wait until new-mode
+ * admission is actually possible. Admission stays fail-closed while the
+ * initial kernel refresh is pending (build() then publishes an empty
+ * descriptor that rejects every required protocol, issue #844), so batteries
+ * must await the host-owned readiness signal instead of gambling on a fixed
+ * timer. A failed or skipped refresh is still a loud error; this helper
+ * never retries. */
+export async function mountAdmissionHost(root: Context, label: string): Promise<void> {
+  const fiber = root.plugin({ name: hostRowName, apply: hostRowApply }) as unknown as { await(): Promise<unknown> }
+  await fiber.await()
+  const host = root.get('tuiPluginHost')
+  if (host === undefined) throw new Error(`${label}: tuiPluginHost is not mounted`)
+  const readiness = getHostInitialKernelRefreshForTest(host)
+  if (readiness === undefined) throw new Error(`${label}: initial kernel readiness accessor unavailable`)
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    const result = await Promise.race([
+      readiness.awaitResult(),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(
+          `${label}: initial kernel refresh did not settle within ${INITIAL_KERNEL_REFRESH_TIMEOUT_MS}ms`,
+        )), INITIAL_KERNEL_REFRESH_TIMEOUT_MS)
+      }),
+    ])
+    if (result.status !== 'completed') {
+      throw new Error(`${label}: initial kernel refresh ended ${result.status}${result.error === undefined ? '' : ` (${result.error})`}`)
+    }
+  } finally {
+    if (timer !== undefined) clearTimeout(timer)
+  }
 }
 
 export const STORAGE_COORDINATE = { apiVersion: 'storage.dsh/v1alpha1', kind: 'LocalStorage' } as const

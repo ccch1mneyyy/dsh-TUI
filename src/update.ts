@@ -1137,6 +1137,205 @@ function existsSafe(path: string): boolean {
 }
 
 /**
+ * sharp distributes its native binaries as platform-specific optional
+ * dependencies (@img/sharp-<platform> wrappers plus @img/sharp-libvips-<platform>
+ * runtimes). pnpm's lockfile records EVERY platform's entry by design, and
+ * some pnpm update paths materialize all of them — maintainer-group report
+ * 2026-09-11: a 0.10.0 → 0.10.1 update downloaded ~90MB of win32/darwin/
+ * musl/riscv64/s390x/ppc64 binaries on a linux-x64 box. The fix keeps
+ * `ignoredOptionalDependencies` patterns for every OTHER platform in the
+ * profile: pnpm skips ignored optionals entirely (no download, no node_modules
+ * entry), while the current platform's packages — the only ones sharp loads —
+ * stay untouched. These tables mirror sharp's published platform matrix; a
+ * suffix sharp adds later only costs the saving for that platform, never a
+ * broken install, since an unknown suffix is simply not ignored.
+ */
+const SHARP_WRAPPER_SUFFIXES = [
+  'darwin-arm64', 'darwin-x64', 'freebsd-wasm32', 'linux-arm', 'linux-arm64',
+  'linux-ppc64', 'linux-riscv64', 'linux-s390x', 'linux-x64',
+  'linuxmusl-arm64', 'linuxmusl-x64',
+  'win32-arm64', 'win32-ia32', 'win32-x64',
+] as const
+const SHARP_LIBVIPS_SUFFIXES = [
+  'darwin-arm64', 'darwin-x64', 'linux-arm', 'linux-arm64',
+  'linux-ppc64', 'linux-riscv64', 'linux-s390x', 'linux-x64',
+  'linuxmusl-arm64', 'linuxmusl-x64',
+] as const
+
+/**
+ * The @img suffix of the RUNNING platform: musl linux maps to linuxmusl, and
+ * FreeBSD — which has no native @img build — maps to the only form it can load.
+ * Without that mapping a FreeBSD update would ignore `@img/sharp-freebsd-wasm32`
+ * and leave sharp with nothing to load.
+ */
+export function sharpCurrentSuffix(platform: string, cpu: string, libc: string): string {
+  if (platform === 'freebsd') return 'freebsd-wasm32'
+  const os = platform === 'linux' && libc === 'musl' ? 'linuxmusl' : platform
+  return `${os}-${cpu}`
+}
+
+/**
+ * Deliberate omission: sharp's registry matrix (0.35.3) also carries the
+ * platform-agnostic `wasm32` fallback (~9MB unpacked) plus
+ * `webcontainers-wasm32`. They carry no os constraint, so they resolve on
+ * every platform — including architectures with no native @img build at all
+ * (loong64 etc.), where wasm is the only working form. They are therefore
+ * NOT ignored: updates keep downloading them, trading ~9MB for not breaking
+ * sharp on fallback-only architectures.
+ */
+
+/** Patterns for every @img platform package EXCEPT the running one. */
+export function ignoredSharpOptionalPatterns(platform: string, cpu: string, libc: string): string[] {
+  const current = sharpCurrentSuffix(platform, cpu, libc)
+  return [
+    ...SHARP_WRAPPER_SUFFIXES.filter(s => s !== current).map(s => `@img/sharp-${s}`),
+    ...SHARP_LIBVIPS_SUFFIXES.filter(s => s !== current).map(s => `@img/sharp-libvips-${s}`),
+  ]
+}
+
+/**
+ * Libc verdict for an explicit platform, so the whole matrix is testable on any
+ * host. Node's report wins when present: a stray musl loader (Debian's musl
+ * package, cross-compile toolchains) on a glibc system must NOT flip the
+ * verdict, or the current platform's own packages would land in the ignore
+ * list. The loader-path probe only answers when the report is unavailable (the
+ * same fallback sharp's detect-libc uses); a non-Linux platform is always glibc.
+ */
+export function detectLibc(
+  platform: string,
+  report: { header?: { glibcVersionRuntime?: string } } | undefined,
+  muslLoaderPresent: boolean,
+): 'glibc' | 'musl' {
+  if (platform !== 'linux') return 'glibc'
+  if (report?.header?.glibcVersionRuntime !== undefined) return 'glibc'
+  return muslLoaderPresent ? 'musl' : 'glibc'
+}
+
+/** The running libc, via detectLibc's precedence (report first, paths last). */
+function isMuslRuntime(): boolean {
+  const report = (process.report as NodeJS.ProcessReport | undefined)?.getReport() as
+    | { header?: { glibcVersionRuntime?: string } }
+    | undefined
+  return detectLibc(
+    process.platform,
+    report,
+    existsSafe('/lib/ld-musl-x86_64.so.1') || existsSafe('/lib/ld-musl-aarch64.so.1') || existsSafe('/etc/alpine-release'),
+  ) === 'musl'
+}
+
+/** Every @img package this module's tables cover (both the wrapper and the libvips matrix). */
+const SHARP_MANAGED_PATTERNS: ReadonlySet<string> = new Set([
+  ...SHARP_WRAPPER_SUFFIXES.map(s => `@img/sharp-${s}`),
+  ...SHARP_LIBVIPS_SUFFIXES.map(s => `@img/sharp-libvips-${s}`),
+])
+
+/**
+ * The package name a list entry names, whatever spelling pnpm accepts: an
+ * optional leading `-`, either quote style, and a trailing comment outside the
+ * quotes. Returns undefined for a line that carries no scalar (a nested key),
+ * which callers must treat as "not ours". Comparing names rather than raw
+ * lines is what keeps a hand-edited block (`- "@img/sharp-…" # keep`, a blank
+ * line inside the list) from being mistaken for a user entry and preserved —
+ * that mistake would leave THIS platform's own package ignored.
+ */
+function optionalDependencyNameOf(line: string): string | undefined {
+  const body = line.trim().replace(/^-\s*/u, '')
+  if (body === '') return undefined
+  const quote = body.startsWith("'") || body.startsWith('"') ? body[0] : undefined
+  if (quote !== undefined) {
+    const end = body.indexOf(quote, 1)
+    return end === -1 ? undefined : body.slice(1, end)
+  }
+  const commentAt = body.search(/\s#/u)
+  const name = (commentAt === -1 ? body : body.slice(0, commentAt)).trim()
+  return name === '' ? undefined : name
+}
+
+/** What ensureProfileSharpPlatformFilter did to the profile workspace file. */
+export interface SharpPlatformFilterOutcome {
+  /** The foreign-platform ignore patterns the file now carries. */
+  entries: string[]
+  /** True when the file was written (filter added or refreshed). */
+  changed: boolean
+}
+
+/**
+ * Keep an `ignoredOptionalDependencies:` block in the profile's
+ * pnpm-workspace.yaml listing every non-current-platform @img package, so an
+ * update stops downloading the foreign-platform sharp natives. The list is
+ * recomputed on every run: it is a fact about the machine running the update,
+ * so a profile carried to another platform (WSL, a musl container, a new cpu)
+ * gets a fresh list instead of a stale one that would skip the packages that
+ * machine needs. Entries this module's own tables cover are rewritten (by
+ * package name, so quoted forms, trailing comments and blank lines inside the
+ * block all still refresh); every other entry — a user's `fsevents`, a name
+ * sharp adds later, a user's own `@img/sharp-wasm32` exemption — is preserved
+ * verbatim, same as in {@link ensureProfileAllowBuilds}. Best effort and
+ * idempotent: the file is written only when the resulting block actually
+ * differs, a missing `ignoredOptionalDependencies:` block is appended, and an
+ * absent profile directory resolves to undefined — the update still runs, only
+ * the download-size win is lost. A document this function cannot rewrite safely
+ * (a flow-style value, a duplicated key, which is already invalid YAML) is left
+ * untouched rather than half-rewritten. Residual caveat shared by any persisted
+ * machine fact: a second platform using the same profile without running an
+ * update keeps this platform's list, so its own binaries stay skipped until the
+ * next update there.
+ */
+export function ensureProfileSharpPlatformFilter(profile: string): SharpPlatformFilterOutcome | undefined {
+  const yamlPath = profileWorkspaceYamlPath(profile)
+  try {
+    if (!existsSafe(dirname(yamlPath))) return undefined
+    let text = ''
+    try {
+      text = readFileSync(yamlPath, 'utf8')
+    } catch {
+      // Missing file — start from an empty document; writeFileSync creates it.
+    }
+    const lines = text === '' ? [] : text.split(/\r?\n/u)
+    let blockStart = -1
+    for (let i = 0; i < lines.length; i += 1) {
+      const line = lines[i]
+      if (line === '' || line !== line.trimStart() || !/^ignoredOptionalDependencies:/u.test(line)) continue
+      // A value on the key line itself (flow style `[a, b]`) is a list this
+      // block rewriter would duplicate rather than refresh, and a second such
+      // key is already invalid YAML — leave both alone, losing only the saving.
+      const rest = line.slice(line.indexOf(':') + 1).trim()
+      if ((rest !== '' && !rest.startsWith('#')) || blockStart !== -1) return undefined
+      blockStart = i
+    }
+    const foreign: string[] = []
+    let blockEnd = blockStart === -1 ? -1 : blockStart + 1
+    if (blockStart !== -1) {
+      for (let i = blockStart + 1; i < lines.length; i += 1) {
+        const line = lines[i]
+        if (line.trim() === '') continue // blank lines inside a block list don't end it
+        if (line === line.trimStart()) break // dedent = block ends
+        blockEnd = i + 1
+        const name = optionalDependencyNameOf(line)
+        // Entries from our own tables (possibly computed for another platform)
+        // are dropped here and recomputed below; everything else is preserved.
+        if (name === undefined || !SHARP_MANAGED_PATTERNS.has(name)) foreign.push(line)
+      }
+    }
+    const patterns = ignoredSharpOptionalPatterns(process.platform, process.arch, isMuslRuntime() ? 'musl' : 'glibc')
+    const insert = foreign.concat(patterns.map(p => `  - '${p}'`))
+    if (blockStart !== -1 && lines.slice(blockStart + 1, blockEnd).join('\n') === insert.join('\n')) {
+      return { entries: patterns, changed: false }
+    }
+    if (blockStart !== -1) {
+      lines.splice(blockStart + 1, blockEnd - blockStart - 1, ...insert)
+    } else {
+      if (lines.length > 0 && lines[lines.length - 1] !== '') lines.push('')
+      lines.push('ignoredOptionalDependencies:', ...insert)
+    }
+    writeFileSync(yamlPath, `${lines.join('\n')}\n`)
+    return { entries: patterns, changed: true }
+  } catch {
+    return undefined
+  }
+}
+
+/**
  * The pnpm Windows tmp-rename race signature (issue #225): pnpm swaps a
  * package directory via a `<name>_tmp_<pid>` staging dir, and a file lock or
  * AV scan makes the scandir/rename fail with ENOENT/EPERM/EBUSY. The failure
@@ -1363,6 +1562,16 @@ export async function updateTui(
     process.stderr.write(
       `dsh-tui: pre-seeded profile pnpm allowBuilds (${allowBuilds.added.join(', ')}) — ` +
         'postinstall-only deps are explicitly ignored\n',
+    )
+  }
+  // Foreign-platform @img/sharp-* optionals are pure download waste (~90MB on
+  // the maintainer-group report); keep the profile's ignore list matching THIS
+  // machine (each update recomputes it) so pnpm never fetches them.
+  const sharpFilter = ensureProfileSharpPlatformFilter(profile)
+  if (sharpFilter !== undefined && sharpFilter.changed) {
+    process.stderr.write(
+      `dsh-tui: sharp platform filter updated (${sharpFilter.entries.length} foreign-platform patterns ignored) — ` +
+        `this profile's install keeps only the current platform's natives\n`,
     )
   }
   // pnpm ≥11's minimumReleaseAge (24h by default) refuses installs of

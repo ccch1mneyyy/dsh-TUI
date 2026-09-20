@@ -142,7 +142,15 @@ async function verify(fullscreen: boolean, columns: number, entry: 'slash' | 'es
     exitOnCtrlC: false, patchConsole: false,
   })
   const shows = (text: string) => viewportLines(terminal).some(line => line.includes(text))
-  const promptShows = (text: string) => viewportLines(terminal).some(line => /^\s*❯/u.test(line) && line.includes(text))
+  /**
+   * A prompt ROW, not just any row carrying the text.
+   *
+   * The composer's row now begins with the session entry control (`⌸ `) before
+   * the caret glyph, so anchoring on `^\s*❯` stopped matching the very row it
+   * was written to find: the draft was on screen and the assertion said it was
+   * never typed. The anchor therefore skips that leading control.
+   */
+  const promptShows = (text: string) => viewportLines(terminal).some(line => /^\s*(?:⌸\s*)?❯/u.test(line) && line.includes(text))
   const enter = async () => {
     await sleep(120) // 固定窗:墙钟 Enter deduplication is 80 ms in both Chat and PromptInput
     stdin.write('\r')
@@ -162,6 +170,13 @@ async function verify(fullscreen: boolean, columns: number, entry: 'slash' | 'es
         assert.equal(await channel.rewindToNode(String(current.id), row.seq!, 'rewind'), prompt)
         // The tree action returns its draft to the UI; this case exercises
         // that backend sibling without coupling to the tree browser layout.
+        //
+        // Let Chat PROCESS the swap first. `rewindToNode` resolves as soon as
+        // the channel has committed the new session, while the screen that
+        // notices it — and drops the previous conversation's text — commits a
+        // beat later. Typing in that gap is a race, not a requirement, and it
+        // used to be won only by accident.
+        await sleep(150) // 固定窗:pacing 等 Chat 处理完会话切换再模拟用户输入
         stdin.write(prompt)
       } else if (entry === 'slash') {
         stdin.write('/rewind')

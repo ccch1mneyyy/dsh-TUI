@@ -9,7 +9,7 @@
  */
 process.env.FORCE_COLOR = '3'
 
-const [{ PassThrough, Writable }, React, { render }, { Chat }, { QuestionStore }, figures, width] =
+const [{ PassThrough, Writable }, React, { render }, { Chat }, { QuestionStore }, figures, width, activity] =
   await Promise.all([
     import('node:stream'),
     import('react'),
@@ -18,6 +18,7 @@ const [{ PassThrough, Writable }, React, { render }, { Chat }, { QuestionStore }
     import('../src/dsh-adapter/questions.js'),
     import('../src/terminal-utils/figures.js'),
     import('../src/ink/stringWidth.js'),
+    import('../src/components/activityFrames.js'),
   ])
 const { THINKING_SPINNER_FRAMES, THINKING_SETTLED_MARKER } = figures
 const { stringWidth } = width
@@ -256,9 +257,13 @@ check('statusline tps single value', statusLine.includes('tps') && !statusLine.i
 check('statusline sparkline blocks', /[▁▂▃▄▅▆▇█]/.test(cursorMoved), 'sparkline glyphs present')
 check('statusline speed color', cursorMoved.includes('\x1b[38;2;202;138;4m') || cursorMoved.includes('\x1b[38;2;78;186;101m'), 'warning/success tps color')
 // 9. Segmented context bar (pi-nano-context algorithm, DeepSeek palette) on
-//    its own first footer row.
+//    its own first footer row. The bar is fill-only: its one piece of text is
+//    the right-aligned `counts percent` readout (labels were removed
+//    2026-09-10; the per-content-type numbers live on hover —
+//    verify-hover-details I).
 check('context bar bg segments', /48;2;(34|43|52|77|90);\d+;\d+m/.test(cursorMoved), 'DeepSeek-blue segment backgrounds')
-check('context bar usage readout', cursorMoved.includes('ctx ') && cursorMoved.includes('/1.0M'), 'free-segment usage text')
+check('context bar usage readout', cursorMoved.includes('17k/1.0M') && cursorMoved.includes('1.7%'),
+  'right-aligned counts + percent, no labels')
 
 // 10. Working-activity line (dsh-working-activity integration): the live
 //     line renders on the status row with the hint still visible, and the
@@ -273,10 +278,15 @@ check(
   contentLines.some(l => l.includes('正在查看 src/dsh-adapter/channel.ts') && l.includes('? 查看快捷键')),
   'hint stays visible beside the activity line',
 )
+// 指示帧来自 `activityFrames: 'moon8'` 预设本身（月相 emoji），不再断言
+// 旧版的 [·•●] 字符集——那条断言在默认预设改成 emoji 之后就恒红。
+const moonFrames: readonly string[] = activity.FRAME_PRESETS.moon8?.frames ?? []
 check(
   'activity indicator frame',
-  contentLines.some(l => l.includes('正在查看 src/dsh-adapter/channel.ts') && /^[·•●]/.test(l)),
-  'indicator frame leads the activity line',
+  contentLines.some(l => l.includes('正在查看 src/dsh-adapter/channel.ts')
+    && moonFrames.some(frame => l.startsWith(frame))),
+  // 诊断用：这里打出实际首字符，预设换帧时一眼可见。
+  `line=${JSON.stringify(contentLines.find(l => l.includes('正在查看')) ?? '')}`,
 )
 check(
   'activity no warn at low usage',

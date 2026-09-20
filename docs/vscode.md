@@ -10,11 +10,12 @@ dsh-TUI 是终端程序：它把 ANSI 写进 PTY、从 PTY 读按键，因此任
    一键启动、恢复上次会话和恢复指定会话。扩展已上架 VS Code Marketplace。
 2. **内置集成终端直接运行** —— 零安装，秒级可用，适合不想装扩展的场景。
 
-> 版本说明：本页中的 `dsh-tui` 指本仓库（TUI 插件，当前 **0.9.0**，建议
-> 0.7.0+）；`dsh-tui-vscode` 指 companion 扩展（当前 **0.5.1**）。两者版本
-> 独立、各自发布。扩展的完整说明见其仓库
+> 版本说明：本页中的 `dsh-tui` 指本仓库（TUI 插件）；`dsh-tui-vscode` 指
+> companion 扩展。两者版本独立、各自发布；扩展的完整说明见其仓库
 > [baobaolaodie/dsh-tui-vscode](https://github.com/baobaolaodie/dsh-tui-vscode)
-> 的 README。
+> 的 README。**选区通道要求扩展支持协议 v2**（dsh-tui-vscode 含
+> `feat/mentions-ide-adapter` + 协议 v2 改动的版本； Marketplace 上的
+> 0.5.1 尚未包含——旧扩展下该功能静默不启用，其余功能不受影响）。
 
 ## 方式一：companion 扩展 dsh-tui-vscode（推荐）
 
@@ -31,6 +32,35 @@ CLI），没有 webview 或 xterm 模拟层。它不改动 TUI 核心渲染链�
 - 侧边栏按项目分组显示会话历史，并支持刷新和恢复指定会话；
 - 注入 `DSH_TUI_LANG`、`$VISUAL`、`$DSH_HOME` 和指定会话 id 等环境变量；
 - 关闭终端结束对应会话，TUI 内双击 `Ctrl+C` 也可退出。
+
+| 能力 | Claude Code 官方扩展 | dsh-tui-vscode |
+| --- | --- | --- |
+| 入口 | 活动栏图标 + 编辑器标签栏按钮 + 命令面板 | 同（DeepSeek 鲸鱼图标） |
+| 会话位置 | 编辑器区**另一侧**新开一列（`ViewColumn.Beside`） | 同，不占当前列 |
+| 终端标签 | `Claude Code` + logo 图标 | `DeepSeek` + 鲸鱼图标 |
+| 会话承载 | 真实集成终端（默认 shell：Windows = PowerShell） | 同 |
+| 多会话 | 每次点击新开一个会话终端 | 同，旧会话继续运行 |
+| 侧边栏 | sessions 会话列表 | 会话历史（按项目分组树，更强） |
+| 自动启停 | 打开 = 启动；关闭终端 = 结束 | 同 |
+| 环境注入 | — | `DSH_TUI_LANG` / `$VISUAL` / `$DSH_HOME` / 指定会话 id / `DSH_TUI_IDE_PORT/TOKEN`（选区通道） |
+| 编辑器选区联动 | 选区自动进上下文，prompt 下方 `⧉ N lines selected` | 同（IDE 选区通道，见下） |
+
+### IDE 选区通道
+
+搭配 dsh-tui ≥ 含 IDE 选区通道的版本，扩展会在本机起一个 loopback WebSocket 服务并写入 lock 文件（目录 0700、文件 0600）；dsh-tui 启动时通过环境变量直连（手动启动的会话则扫描 lock 自动发现——只连 workspace 覆盖当前会话目录的窗口，没有匹配就静默禁用，绝不连别的项目）。此后：
+
+- 编辑器选中代码 → TUI prompt 下方**实时**出现 `⧉ N lines selected` 徽标（清空选区即消失）；
+- 提交消息 → 选中行自动附加进模型上下文，transcript 用户消息上方渲染「⧉ Selected N lines from <相对路径>」指示行（重启后 resume 仍能重建该指示行）；
+- 选区推送携带**编辑器缓冲区自己的文本**——未保存的修改也会如实附加（附加的就是你屏幕上看到的）；超大选区按与 @-引用相同的上限截断并标记。无 IDE / 断连时静默降级，TUI 其余功能零影响。
+
+![IDE 选区通道：footer 实时徽标与 transcript 指示行](../screenshots/ide-selection-badge.png)
+
+**协议与版本**：连接后 TUI 先发 `ide/hello`（token + protocolVersion），
+扩展验证通过才回 `ide/hello_ack`（protocolVersion + workspaceFolders）——
+只有收到合法 v2 ACK 才算连接建立，token 不对会被静默断开。此后
+`selection_changed` 携带绝对行号（0-based 含端）与编辑器缓冲区自身的
+选区文本；lock 发现只连 workspace 覆盖会话目录的窗口，无匹配即静默
+禁用。协议两端需同版本发布。
 
 ### 前置条件
 
@@ -55,7 +85,7 @@ CLI），没有 webview 或 xterm 模拟层。它不改动 TUI 核心渲染链�
 git clone https://github.com/baobaolaodie/dsh-tui-vscode.git
 cd dsh-tui-vscode
 npm install
-npm run package && code --install-extension dsh-tui-vscode-0.5.1.vsix --force
+npm run package && code --install-extension dsh-tui-vscode-<version>.vsix --force
 # 或一步到位：npm run install:local
 ```
 

@@ -406,6 +406,8 @@
         # Edit/Write diff 呈现：auto（≥110 列双栏对照，窄屏统一式）/
         # split（强制双栏）/ unified（强制统一式）。/settings 屏可实时改。
         # diffLayout: auto
+        # 回复中的 ```mermaid 代码块画成字符图；false 保留源码。/settings 可实时改。
+        # mermaidDiagrams: true
         # 每个请求实际生效的推理强度，按当前路由的 adapter 档位校验
         #（deepseek: off/low/high/max）；非法值回落 adapter 默认。
         effort: max
