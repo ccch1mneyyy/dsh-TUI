@@ -133,14 +133,17 @@ function fixture(jobs?: unknown, options: { throwOnEvent?: string; effectCleanup
   const { raw, agent, listeners } = fixture()
   const route = listeners.get('session/event')!
   raw.contextWindow = 100_000
-  raw.tokens.input = 90_000
+  // The warning reads the last turn's billed usage (input + cache read +
+  // cache write), not the cumulative tokens counter — resumed sessions
+  // replay the counter at full size while the live turn stays small.
+  raw.lastUsage = { input: 90_000, cacheRead: 0, cacheWrite: 0 }
   route(agent.session, { type: 'turn/end', data: { turn: 1, reason: { kind: 'completed' } }, time: 1 })
   assert.equal(raw.notifications.length, 1)
   route(agent.session, {
     type: 'user/message', time: 2,
     data: { source: { kind: 'plugin', plugin: 'compact' }, content: [{ type: 'text', text: 'summary' }] },
   })
-  raw.tokens.input = 90_000
+  raw.lastUsage = { input: 90_000, cacheRead: 0, cacheWrite: 0 }
   route(agent.session, { type: 'turn/end', data: { turn: 2, reason: { kind: 'completed' } }, time: 3 })
   assert.equal(raw.notifications.length, 2, 'warn → compact checkpoint → warn traverses the shared reset')
   raw.releaseContributions()

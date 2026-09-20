@@ -1102,7 +1102,7 @@ export function Chat({
   const channelRef = React.useRef(channel)
   channelRef.current = channel
   /**
-   * Release the staged images a waiting snapshot alone owns.
+   * Release the staged images a WAITING snapshot alone owns.
    *
    * While a draft waits in the slot for the composer to remount, the snapshot
    * is the only owner of the capabilities behind its `[Image #N]` tokens. If
@@ -1111,13 +1111,36 @@ export function Chat({
    * 128-entry FIFO would evict live entries instead. The `hasStagedImage`
    * guard keeps a capability the channel already recycled a no-op; both calls
    * are idempotent.
+   *
+   * Scope, deliberately narrow (review round 7): a capability a QUEUED message
+   * still references (`channel.pending`) is never revoked here. The real
+   * double-hold path is paste an image → queue the draft with Tab while the
+   * model works → recall that line from input history with ↑ (same stageId
+   * rebound to the draft) → park the composer. Delivery resolves its refs from
+   * the enqueue-time capture, so a late revoke would only bite a host that
+   * re-resolves them afterwards — this keeps the rule identical to
+   * `stageIdIsRetained` instead of relying on that.
+   *
+   * A composer that is still MOUNTED when Chat unmounts is NOT covered: React
+   * runs this parent cleanup BEFORE the child's, so the child then writes its
+   * draft into the now-dead ref and those ids ride the channel's lifetime out
+   * (the #942 review's remaining P2). Neither unmount path loses anything
+   * user-visible — the channel dies with them.
    */
   React.useEffect(() => {
     return () => {
       const snapshot = promptDraftRef.current.current
       promptDraftRef.current.current = null
       if (snapshot === null) return
+      const queued = new Set<string>()
+      for (const item of channelRef.current.pending) {
+        // `?? []`: a foreign/embedded host may hand us a pending entry without
+        // images, and a throw inside an unmount cleanup escapes into the exit
+        // path — every other reader of this field guards it the same way.
+        for (const image of item.images ?? []) queued.add(image.stageId)
+      }
       for (const [, stageId] of snapshot.images) {
+        if (queued.has(stageId)) continue
         if (channelRef.current.hasStagedImage?.(stageId) === true) {
           channelRef.current.discardStagedImage(stageId)
         }

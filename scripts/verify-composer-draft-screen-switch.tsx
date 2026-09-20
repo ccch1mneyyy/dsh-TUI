@@ -707,6 +707,18 @@ async function scenarioEditState(): Promise<string> {
     await waitFor(scenario, 'phase D staged image token', () => composerHas(app, STAGED_IMAGE_TOKEN), 8000)
     const stageIdD = [...app.channel.state.staged.keys()].at(-1)!
     assertTrue(scenario, 'phase D capability alive before parking', app.channel.hasStagedImage(stageIdD))
+    // 第二张图（复审轮 7）：同一条草稿里再贴一张，稍后把它挂到一条**排队中的
+    // 消息**上——卸载释放必须跳过仍被队列引用的 capability。真实双持路径（复审
+    // 用真实按键探针实证）：贴图 → working 时 Tab 排队 → ↑ 从输入历史回填（同一
+    // stageId 重新绑到草稿）→ Ctrl+A 停放，此时草稿与队列各持一份引用。
+    pasteText(app, pastedImagePath)
+    await waitFor(scenario, 'phase D second staged image token', () => composerHas(app, '[Image #2]'), 8000)
+    const stageIdQueued = [...app.channel.state.staged.keys()].at(-1)!
+    assertTrue(
+      scenario,
+      'phase D second capability staged and distinct',
+      stageIdQueued !== stageIdD && app.channel.hasStagedImage(stageIdQueued),
+    )
     app.stdin.write(CTRL_A)
     await waitFor(scenario, 'dashboard to park the composer', () => dashboardVisible(app), 8000)
     assertTrue(scenario, 'composer unmounted behind the dashboard', !composerMounted(app))
@@ -718,6 +730,13 @@ async function scenarioEditState(): Promise<string> {
       'phase D capability alive and unreleased while parked',
       app.channel.hasStagedImage(stageIdD) && !app.channel.state.discarded.includes(stageIdD),
     )
+    // 队列持有第二个 stageId：装卸载前后都必须活着、且从未被撤销。
+    app.channel.pending.push({
+      id: 'queued-1',
+      text: 'queued while parked',
+      images: [{ stageId: stageIdQueued }],
+      placement: 'followup',
+    })
     app.unmount()
     assertEqual(
       scenario,
@@ -730,6 +749,18 @@ async function scenarioEditState(): Promise<string> {
       'release recorded for the discarded stage id',
       true,
       app.channel.state.discarded.includes(stageIdD),
+    )
+    assertEqual(
+      scenario,
+      'queued message keeps its capability across the unmount release',
+      true,
+      app.channel.hasStagedImage(stageIdQueued),
+    )
+    assertEqual(
+      scenario,
+      'queued capability was never discarded',
+      false,
+      app.channel.state.discarded.includes(stageIdQueued),
     )
     phases.push('unmount-release')
 
