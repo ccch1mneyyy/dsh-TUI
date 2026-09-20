@@ -117,20 +117,6 @@ const whaleLogo = language => {
     </g>`).replace(/[ \t]+$/gm, '')
 }
 
-// Outlines remain legible even when the GitHub theme differs from the OS theme.
-const outlinedStyles = `
-    text { fill: #ffffff; stroke: #111519; stroke-width: 1.5; paint-order: stroke fill; stroke-linejoin: round; }
-    @media (prefers-color-scheme: light) {
-      .tile { fill: #f5f7fa; stroke: #65717f; }
-      a:hover .tile { fill: #e8edf4; }
-    }
-`
-const outlinedIcon = (name, x, y, size = 24) => {
-  const inner = icon(name, x, y, '#ffffff', size)
-  const outer = icon(name, x, y, '#111519', size).replace('stroke-width="1.7"', 'stroke-width="3.5"')
-  return `<g class="outlined-icon">${outer}${inner}</g>`
-}
-
 function tile(entry, language) {
   const en = language === 'en'
   const title = entry[en ? 4 : 3]
@@ -144,7 +130,7 @@ function tile(entry, language) {
       ${text(58, 38, title, 21, '#edf1f6', 'font-weight="600"')}
       ${text(58, 68, description, 16, '#aeb8c6')}
       ${icon('ArrowUpRight', 434, 20, entry[7], 22)}
-    </a>`, outlinedStyles)
+    </a>`)
 }
 
 function navigation(language) {
@@ -163,7 +149,7 @@ function securityLink(language) {
       ${icon('BookOpen', 14, 12, '#8bb6fb', 20)}
       ${text(46, 28, title, 16, '#edf1f6', 'font-weight="600"')}
       ${icon('ArrowUpRight', 252, 12, '#8bb6fb', 20)}
-    </a>`.trim(), outlinedStyles)
+    </a>`.trim())
 }
 
 await mkdir(directory, { recursive: true })

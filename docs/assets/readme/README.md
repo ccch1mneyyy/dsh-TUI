@@ -40,12 +40,11 @@ uses eight body, blink, fin and tail frames over 5200 ms; this is independent of
 the preview's 22-frame, 1000 ms whale animation. Spout, heart and sleep overlays
 are omitted from the logo. OS reduced-motion preferences do not pause the logo.
 
-The 16 navigation tiles and two permission links use white text with dark
-outlines. Icons retain their original colored single strokes without added
-outlines. Light-mode surfaces follow `prefers-color-scheme`; text outlines remain
-visible on either surface. This media query follows the browser's exposed color preference, which
-may differ from a manually selected GitHub theme. Geometry and link targets are
-shared by the Chinese and English variants.
+The 16 navigation tiles and two permission links use white text on dark tiles
+with each icon drawn in its own accent color (blue, gold, teal, pink) alongside
+a matching arrow. Tiles stay dark regardless of the reader's OS theme, so the
+bilingual README renders the same in light and dark GitHub modes. Geometry and
+link targets are shared by the Chinese and English variants.
 The four files in `runtime/` preserve the original character cells, ANSI colors,
 attributes, capture timestamps, package versions and source ANSI SHA-256 hashes.
 Desktop capture uses 110 columns x 42 rows; narrow capture uses 58 x 36. The

@@ -6,12 +6,6 @@
     a:hover .tile { fill: #1b2028; }
     a:focus-visible .tile { stroke: #8bb6fb; stroke-width: 3; }
     
-    text { fill: #ffffff; stroke: #111519; stroke-width: 1.5; paint-order: stroke fill; stroke-linejoin: round; }
-    @media (prefers-color-scheme: light) {
-      .tile { fill: #f5f7fa; stroke: #65717f; }
-      a:hover .tile { fill: #e8edf4; }
-    }
-
   </style>
   
     <a href="https://github.com/T-Auto/dsh-ecosystem-spec/blob/main/docs/plugin-admission-and-development.md">
