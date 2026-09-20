@@ -25,7 +25,8 @@ for (const language of ['zh', 'en']) {
   for (const filename of [`security-link-${language}.svg`, ...['start', 'configuration', 'interaction', 'themes', 'architecture', 'vscode', 'plugins', 'contributing'].map(name => `nav-${name}-${language}.svg`)]) {
     const asset = await readFile(new URL(filename, import.meta.url), 'utf8')
     assert.ok(asset.includes('paint-order: stroke fill'), `${filename}: outlined white text`)
-    assert.equal((asset.match(/class="outlined-icon"/g) || []).length, 2, `${filename}: both icons outlined`)
+    assert.ok(!asset.includes('outlined-icon'), `${filename}: original colored icons`)
+    assert.equal((asset.match(/stroke-width="1.7"/g) || []).length, 2, `${filename}: two original single-stroke icons`)
     assert.ok(asset.includes('prefers-color-scheme: light'), `${filename}: light surface`)
   }
   const logo = await readFile(new URL(language === 'zh' ? 'logo.svg' : 'logo-en.svg', import.meta.url), 'utf8')
