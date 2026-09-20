@@ -232,7 +232,10 @@ export function kindLabel(kind: SessionKind): string {
  * dimmest of all, because it says only "nothing here was readable".
  */
 export function titleColor(source: TitleSource, focused: boolean): keyof Theme {
-  if (focused) return 'suggestion'
+  // Selection is green (see SessionListRow): blue is reserved for the pointer
+  // hover prompt, so the row under the cursor cannot look like the row the
+  // pointer is merely passing over.
+  if (focused) return 'success'
   if (source === 'fallback') return 'subtle'
   if (source === 'prompt') return 'inactive'
   return 'text'

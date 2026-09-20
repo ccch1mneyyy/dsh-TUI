@@ -112,7 +112,10 @@ check('a fork is marked', kindMark({ kind: 'fork', parent: 'p' })?.glyph, '⑃')
 check('a delegated run is marked differently', kindMark({ kind: 'subagent', parent: 'p', depth: 1 })?.glyph, '⑂')
 check('a fallback title is dimmed rather than stated as a name', titleColor('fallback', false), 'subtle')
 check('a real title is stated plainly', titleColor('auto', false), 'text')
-check('focus wins over provenance', titleColor('fallback', true), 'suggestion')
+// The focused row is green, not blue: blue belongs to the pointer's hover
+// prompt, so a row the cursor merely passes over must not look like the row
+// the keyboard is on (SessionListRow draws both).
+check('focus wins over provenance', titleColor('fallback', true), 'success')
 
 // ── 3. The view ─────────────────────────────────────────────────────────
 const summary = (over) => ({

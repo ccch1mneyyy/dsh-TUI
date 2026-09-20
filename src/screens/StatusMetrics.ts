@@ -7,26 +7,35 @@
  *    normalized sparkline after each completed turn; colors green ≥ 50 tps,
  *    yellow ≥ 20, red below.
  */
+import type { Color } from '../ink/styles.js'
+import { stringWidth } from '../ink/stringWidth.js'
 
 /** Context bar segments — DeepSeek blue family (dark-theme friendly: deep
- *  navy → brand blue, neutral grey free segment; labels adapt to width).
- *  Exported for the hoverable JSX bar (ContextBarView), which re-derives
- *  the same column split this module's ANSI path renders. */
+ *  navy → brand blue, neutral grey free segment).
+ *
+ *  The bar draws NO text inside a used segment: the fill color is the whole
+ *  signal (community feedback — the old `s`/`p`/`t` letters read as noise on
+ *  a row that is already decorative). `labels` therefore belongs to the hover
+ *  breakdown only: index 0 is the readable name, index 1 the short form the
+ *  supplemental row falls back to on a narrow terminal. Exported for the
+ *  hoverable JSX bar (ContextBarView), which re-derives the same column split
+ *  this module's ANSI path renders. */
 export const USED_SEGMENTS = [
-  { key: 'system', color: '#22305F', labels: ['system', 'sys', 's'] }, // deep navy
-  { key: 'prompt', color: '#2B3D78', labels: ['prompt', 'pr', 'p'] }, // navy
-  { key: 'assistant', color: '#344A92', labels: ['assistant', 'ast', 'a'] }, // indigo
-  { key: 'thinking', color: '#4D6BFE', labels: ['think', 'th', 't'] }, // DeepSeek brand blue
-  { key: 'tools', color: '#5A7CFF', labels: ['tools', 'tl', 'x'] }, // lighter blue
+  { key: 'system', color: '#22305F', labels: ['system', 'sys'] }, // deep navy
+  { key: 'prompt', color: '#2B3D78', labels: ['prompt', 'pr'] }, // navy
+  { key: 'assistant', color: '#344A92', labels: ['assistant', 'ast'] }, // indigo
+  { key: 'thinking', color: '#4D6BFE', labels: ['thinking', 'th'] }, // DeepSeek brand blue
+  { key: 'tools', color: '#5A7CFF', labels: ['tools', 'tl'] }, // lighter blue
 ] as const
 
 /** Used tokens per context content type (system, prompt, assistant, thinking, tools). */
 export type ContextSegments = Record<(typeof USED_SEGMENTS)[number]['key'], number>
 
-const USED_SEGMENT_TEXT = '#FFFFFF'
-const FREE_SEGMENT_FILL = '#E8E8E8'
-const FREE_SEGMENT_TEXT = '#4A4A4A'
-const FREE_SEGMENT_LABELS = ['free', 'fr', 'f'] as const
+/** Free-segment colors: light grey fill, dark grey readout. Exported so the
+ *  JSX bar (ContextBarView) and the hover chip paint the same free color the
+ *  ANSI path does instead of re-declaring the hex. */
+export const FREE_SEGMENT_FILL = '#E8E8E8'
+export const FREE_SEGMENT_TEXT = '#4A4A4A'
 
 const ANSI_RE = /\x1b\[[0-9;]*m/g
 const stripAnsi = (text: string): string => text.replace(ANSI_RE, '')
@@ -56,91 +65,177 @@ export function formatTokens(count: number): string {
   return `${Math.round(value / 1000000)}M`
 }
 
+/** Context-pressure thresholds, shared by the bar readout's tint, the ctx
+ *  field's hover gauge, and contextPressurePct's amber/red footer convention
+ *  (amber ≥ 80%, red ≥ 95%). */
+const PRESSURE_WARN = 80
+const PRESSURE_DANGER = 95
+
+/** Which pressure step a context occupancy falls in: undefined while the
+ *  context is comfortable, then the shared `warning` / `error` theme colors.
+ * @param pct - Context occupancy percent (0–100+).
+ * @returns The theme color key, or undefined below the amber threshold.
+ */
+export function contextPressureStep(pct: number): 'warning' | 'error' | undefined {
+  if (pct >= PRESSURE_DANGER) return 'error'
+  if (pct >= PRESSURE_WARN) return 'warning'
+  return undefined
+}
+
 // --- Context bar (pi-nano-context) ---
 
-/** Center `text` in `width` cells (plain spaces, no ANSI). Exported for
- *  ContextBarView's JSX used-segment labels. */
-export function centeredText(text: string, width: number): string {
-  const textWidth = plainWidth(text)
-  if (textWidth > width) return ' '.repeat(width)
-  const left = Math.floor((width - textWidth) / 2)
-  const right = width - textWidth - left
-  return `${' '.repeat(left)}${text}${' '.repeat(right)}`
+/**
+ * The bar's right-aligned usage readout, longest form first: token counts and
+ * percent (`13k/64k 19.5%`), then the percent alone once the free segment is
+ * too narrow to carry the counts.
+ * @param usedTokens - Total context tokens in use.
+ * @param contextWindow - The context window size in tokens.
+ * @returns The readout ladder, widest option first.
+ */
+export function contextBarReadout(
+  usedTokens: number,
+  contextWindow: number,
+): readonly string[] {
+  const percent = `${((usedTokens / contextWindow) * 100).toFixed(1)}%`
+  return [`${formatTokens(usedTokens)}/${formatTokens(contextWindow)} ${percent}`, percent]
 }
 
-/** Pick the longest label that fits `width` cells. Exported for
- *  ContextBarView's JSX segments (same fallback ladder as the ANSI path). */
-export function chooseLabel(labels: readonly string[], width: number): string {
-  for (const label of labels) {
-    if (plainWidth(label) <= width) return label
-  }
-  return ''
-}
-
-function renderUsedSegment(
-  labels: readonly string[],
-  color: string,
-  width: number,
-): string {
-  if (width <= 0) return ''
-  const label = chooseLabel(labels, width)
-  const text =
-    label.length > 0
-      ? foreground(USED_SEGMENT_TEXT, centeredText(label, width))
-      : ' '.repeat(width)
-  return background(color, text)
-}
-
-function chooseRightAlignedText(
-  options: readonly string[],
-  width: number,
-  blockedUntil: number,
-): string {
-  for (const option of options) {
-    const start = width - plainWidth(option)
-    if (start > blockedUntil) return option
-  }
-  return ''
-}
+// --- Context bar (pi-nano-context) ---
 
 /**
- * Compose the free segment's plain text: the `free` label centered, the
- * usage readout right-aligned into whatever width remains. Shared by the
- * ANSI string path (renderContextBar) and the hoverable JSX bar
- * (ContextBarView) so both render pixel-identical content.
+ * Blank-pad to `width` cells and right-align the first readout option that
+ * fits. Shared by the ANSI string path (renderContextBar) and the hoverable
+ * JSX bar (ContextBarView) so both render identical readouts.
  */
-export function composeFreeSegmentText(
+export function rightAlignBarText(
   options: readonly string[],
   width: number,
 ): string {
   if (width <= 0) return ''
   const content = Array.from({ length: width }, () => ' ')
-  const label = chooseLabel(FREE_SEGMENT_LABELS, width)
-  const labelStart = Math.max(0, Math.floor((width - plainWidth(label)) / 2))
-  const labelEnd = label.length > 0 ? labelStart + plainWidth(label) : -1
-  const rightText = chooseRightAlignedText(options, width, labelEnd)
-  if (rightText) {
-    const start = width - plainWidth(rightText)
-    for (const [offset, char] of Array.from(rightText).entries()) {
+  for (const option of options) {
+    const start = width - plainWidth(option)
+    if (start < 0) continue
+    for (const [offset, char] of Array.from(option).entries()) {
       content[start + offset] = char
     }
-  }
-  if (label) {
-    for (const [offset, char] of Array.from(label).entries()) {
-      content[labelStart + offset] = char
-    }
+    break
   }
   return content.join('')
+}
+
+/** A used segment's fill: background color only, no text. Letters inside the
+ *  bar read as noise (community feedback) and never fit the narrow segments
+ *  anyway — the pointer names a color now (contextBarBreakdown). */
+function renderUsedSegment(color: string, width: number): string {
+  if (width <= 0) return ''
+  return background(color, ' '.repeat(width))
 }
 
 function renderFreeSegment(
   options: readonly string[],
   width: number,
   fill: string,
-  text: string,
+  style: (text: string) => string,
 ): string {
   if (width <= 0) return ''
-  return background(fill, foreground(text, composeFreeSegmentText(options, width)))
+  return background(fill, style(rightAlignBarText(options, width)))
+}
+
+/** One entry of the context bar's hover breakdown: the fill color, the name
+ *  to put next to a swatch of it, and the token count already folded into
+ *  `label` (`system 1.2k`). */
+export type ContextBarBreakdownEntry = {
+  /** `system` … `tools`, or `free`. */
+  key: string
+  /** The chip label, e.g. `thinking 5.0k`. */
+  label: string
+  /** The segment's fill color — the hover chip paints with it, which is what
+   *  ties each number back to a slice of the bar. */
+  color: Color
+}
+
+/** Separator between breakdown entries, chosen by the width ladder below. */
+export type ContextBarBreakdown = {
+  readonly entries: readonly ContextBarBreakdownEntry[]
+  readonly separator: string
+}
+
+/**
+ * The context bar's hover breakdown — the legend the bar no longer carries
+ * itself. One entry per segment the bar actually paints (a zero-token content
+ * type gets no columns, so it gets no entry either), in bar order, free last.
+ *
+ * `columns` picks the label form: readable names with a ` · ` separator while
+ * the line fits, then the short forms, then a bare space separator (the color
+ * chip already separates the entries). The caller renders each entry as
+ * `chip + space + label`, which is what the fit test measures.
+ *
+ * @param segments - Used tokens per content type.
+ * @param usedTokens - Total used tokens; the remainder is the free entry.
+ * @param contextWindow - The context window size in tokens.
+ * @param columns - Terminal width; the footer's own padding is subtracted here.
+ * @param freeFill - The free segment's fill color (callers pass a theme override).
+ * @returns The breakdown entries and the separator to join them with.
+ */
+export function contextBarBreakdown(
+  segments: ContextSegments,
+  usedTokens: number,
+  contextWindow: number,
+  columns: number,
+  freeFill: Color = FREE_SEGMENT_FILL,
+): ContextBarBreakdown {
+  if (contextWindow <= 0) return { entries: [], separator: ' · ' }
+  const freeTokens = Math.max(0, contextWindow - usedTokens)
+  const raw: { key: string; tokens: number; color: Color; labels: readonly string[] }[] = []
+  for (const segment of USED_SEGMENTS) {
+    const tokens = segments[segment.key]
+    if (tokens > 0) {
+      raw.push({ key: segment.key, tokens, color: segment.color, labels: segment.labels })
+    }
+  }
+  if (freeTokens > 0) raw.push({ key: 'free', tokens: freeTokens, color: freeFill, labels: ['free'] })
+  if (raw.length === 0) return { entries: [], separator: ' · ' }
+  // Footer padding (1 cell each side) plus slack for the trajectory wake that
+  // shares this row: a breakdown one cell too long would truncate its tail.
+  const budget = columns - 6
+  // Widest form first; the last rung wins when nothing fits (the row then
+  // truncates like every other hover detail).
+  const rungs = [
+    { separator: ' · ', labelIndex: 0 },
+    { separator: ' ', labelIndex: 0 },
+    { separator: ' ', labelIndex: 1 },
+  ] as const
+  let rung: { separator: string; labelIndex: number } = { separator: ' ', labelIndex: 1 }
+  for (const candidate of rungs) {
+    rung = candidate
+    const labels = raw.map(entry => breakdownLabel(entry, candidate.labelIndex))
+    // One chip cell per entry prefixes each label on the supplemental row.
+    // Measured in terminal cells with the renderer's own helper, not UTF-16
+    // units: the ` · ` separator is East-Asian ambiguous, and the label set is
+    // free to gain non-ASCII names later.
+    const rendered =
+      labels.reduce((sum, label) => sum + stringWidth(label), 0)
+      + labels.length
+      + stringWidth(candidate.separator) * (labels.length - 1)
+    if (rendered <= budget) break
+  }
+  return {
+    entries: raw.map(entry => ({
+      key: entry.key,
+      color: entry.color,
+      label: breakdownLabel(entry, rung.labelIndex),
+    })),
+    separator: rung.separator,
+  }
+}
+
+function breakdownLabel(
+  entry: { key: string; tokens: number; labels: readonly string[] },
+  labelIndex: number,
+): string {
+  const name = entry.labels[labelIndex] ?? entry.labels[0] ?? entry.key
+  return `${name} ${formatTokens(entry.tokens)}`
 }
 
 /** Largest-remainder column allocation (pi-nano-context). */
@@ -185,9 +280,11 @@ export function allocateBarColumns(values: readonly number[], width: number): nu
 }
 
 /**
- * The segmented context bar: used segments by content type, the remainder as
- * a light free segment whose right edge carries the usage readout
- * (`ctx 12.3k/1.0M 1.2% 988.9k`, shrinking as width allows).
+ * The segmented context bar: used segments by content type, then the
+ * remainder as a light free segment whose right edge carries the usage
+ * readout (`13k/64k 19.5%`). No other text — the bar is read by color, and
+ * the pointer supplies the names and numbers (contextBarBreakdown). The
+ * readout tints amber / red as the context fills (contextPressureStep).
  * @param segments - Used tokens per content type.
  * @param usedTokens - Total used tokens, driving the usage readout.
  * @param contextWindow - The context window size in tokens.
@@ -206,26 +303,25 @@ export function renderContextBar(
   const values = [...USED_SEGMENTS.map(segment => segments[segment.key]), freeTokens]
   const columns = allocateBarColumns(values, width)
   const used = USED_SEGMENTS.map((segment, index) =>
-    renderUsedSegment(segment.labels, segment.color, columns[index] ?? 0),
+    renderUsedSegment(segment.color, columns[index] ?? 0),
   ).join('')
   const freeWidth = columns[USED_SEGMENTS.length] ?? 0
-  const percent = `${((usedTokens / contextWindow) * 100).toFixed(1)}%`
-  const total = `${formatTokens(usedTokens)}/${formatTokens(contextWindow)}`
-  const free = formatTokens(contextWindow - usedTokens)
+  const pct = (usedTokens / contextWindow) * 100
+  const step = contextPressureStep(pct)
+  // Same two-path convention as the free-segment colors: the JSX bar tints
+  // through the theme key, this string path through the raw ANSI twin.
+  const style = step === undefined
+    ? (text: string) => foreground(colors?.freeText ?? FREE_SEGMENT_TEXT, text)
+    : (text: string) => pressureColor(pct, text)
   return `${used}${renderFreeSegment(
-    [`ctx ${total} ${percent} ${free}`, `${total} ${percent} ${free}`, `${total} ${percent}`, percent],
+    contextBarReadout(usedTokens, contextWindow),
     freeWidth,
     colors?.freeFill ?? FREE_SEGMENT_FILL,
-    colors?.freeText ?? FREE_SEGMENT_TEXT,
+    style,
   )}`
 }
 
 // --- Mini context bar (footer ctx-field hover) ---
-
-/** Context-pressure thresholds, shared with contextPressurePct's amber/red
- *  footer convention (amber ≥ 80%, red ≥ 95%). */
-const PRESSURE_WARN = 80
-const PRESSURE_DANGER = 95
 
 /** Pressure-colored text: green below 80%, amber ≥ 80, red ≥ 95.
  * @param pct - Context occupancy percent (0–100+).
@@ -233,7 +329,7 @@ const PRESSURE_DANGER = 95
  * @returns The ANSI 24-bit color-wrapped text.
  */
 export function pressureColor(pct: number, text: string): string {
-  const key = pct >= PRESSURE_DANGER ? 'error' : pct >= PRESSURE_WARN ? 'warning' : 'success'
+  const key = contextPressureStep(pct) ?? 'success'
   return `\x1b[38;2;${colorHex(key)}m${text}\x1b[39m`
 }
 

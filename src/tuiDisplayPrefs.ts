@@ -149,34 +149,54 @@ export function resolvePageMargin(setting: PageMarginSetting): { readonly x: num
   return PAGE_MARGIN_PRESETS[DEFAULT_PAGE_MARGIN]
 }
 
-// ── Live module store ──────────────────────────────────────────────────
-// PageMargin sits ABOVE Chat in the tree, so it cannot observe the
-// channel's version bump used to re-render everything below Chat. The
-// settings watch therefore mirrors the applied setting through this store;
-// PageMargin subscribes with useSyncExternalStore and re-lays out.
-const pageMarginListeners = new Set<() => void>()
-let pageMarginState: PageMarginSetting = DEFAULT_PAGE_MARGIN
+// ── Live module stores ─────────────────────────────────────────────────
+// Settings that components read directly (useSyncExternalStore) instead of
+// through the channel: PageMargin sits ABOVE Chat, so the channel's version
+// bump (which re-renders everything below Chat) cannot reach it; Markdown
+// is memoized by content and mounted from many parents, so threading a prop
+// to every diagram would re-render the whole transcript on each edit. The
+// settings watch mirrors each applied value into its store; the plugin
+// seeds the stores from config before the tree mounts.
 
-/** Subscribe to page-margin setting changes; returns the unsubscribe fn. */
-export function subscribePageMargin(listener: () => void): () => void {
-  pageMarginListeners.add(listener)
-  return () => { pageMarginListeners.delete(listener) }
+type LiveSetting<T> = {
+  /** Subscribe to changes; returns the unsubscribe fn. */
+  subscribe: (listener: () => void) => () => void
+  /** Current applied value (normalized; a primitive, so its identity is stable). */
+  get: () => T
+  /** Apply a new value (normalized, no-op when unchanged); returns what was applied. */
+  apply: (value: unknown) => T
 }
 
-/** Current applied setting (normalized; safe for useSyncExternalStore —
- *  a primitive string identity is stable). */
-export function getPageMarginSetting(): PageMarginSetting {
-  return normalizePageMargin(pageMarginState)
-}
-
-/** Apply a new setting (normalized, no-op when unchanged). Returns the
- *  value that ended up applied — useful for the plugin to mirror the
- *  channel. */
-export function applyPageMargin(setting: unknown): PageMarginSetting {
-  const next = normalizePageMargin(setting)
-  if (next !== pageMarginState) {
-    pageMarginState = next
-    for (const listener of [...pageMarginListeners]) listener()
+function createLiveSetting<T>(initial: T, normalize: (value: unknown) => T): LiveSetting<T> {
+  const listeners = new Set<() => void>()
+  let state = initial
+  return {
+    subscribe(listener) {
+      listeners.add(listener)
+      return () => { listeners.delete(listener) }
+    },
+    get: () => state,
+    apply(value) {
+      const next = normalize(value)
+      if (next !== state) {
+        state = next
+        for (const listener of [...listeners]) listener()
+      }
+      return next
+    },
   }
-  return next
 }
+
+const pageMarginStore = createLiveSetting<PageMarginSetting>(DEFAULT_PAGE_MARGIN, normalizePageMargin)
+export const subscribePageMargin = pageMarginStore.subscribe
+export const getPageMarginSetting = pageMarginStore.get
+/** Returns the value that ended up applied — the plugin mirrors it into the channel. */
+export const applyPageMargin = pageMarginStore.apply
+
+/** Whether ```mermaid fences render as box-drawing diagrams (settings
+ *  `dsh-tui.mermaidDiagrams`, default on). Only an explicit `false` keeps
+ *  the fenced source. */
+const mermaidDiagramsStore = createLiveSetting<boolean>(true, value => value !== false)
+export const subscribeMermaidDiagrams = mermaidDiagramsStore.subscribe
+export const getMermaidDiagrams = mermaidDiagramsStore.get
+export const applyMermaidDiagrams = mermaidDiagramsStore.apply

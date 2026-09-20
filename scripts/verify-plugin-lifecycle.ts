@@ -25,6 +25,35 @@ const check = (name: string, ok: boolean, detail = ''): void => {
 }
 
 const root = new Context()
+/** The host's durable workspace ledger, faked in memory. It is mounted BEFORE
+ *  the workspace runtime so `ctx.get('workspaceRegistry')` resolves from the
+ *  composition root the runtime captured. */
+const ledger = new Map<string, { id: unknown; path: string; title: string }>([
+  ['victim', { id: 'w-victim', path: process.cwd(), title: 'Victim' }],
+  // A registration whose path one activation's own provider vouches for. It
+  // exists so the ownership rule can be shown to ALLOW a legitimate caller
+  // rather than only to refuse everyone.
+  ['owned', { id: 'w-owned', path: 'owned://workspace', title: 'Owned' }],
+])
+let registryCreateCalls = 0
+/** The host's durable workspace ledger, faked in memory. It is provided BEFORE
+ *  the workspace runtime so `ctx.get('workspaceRegistry')` resolves from the
+ *  composition root that runtime captured. */
+root.provide('workspaceRegistry', {
+  list: () => [...ledger.values()],
+  create: (path: string) => {
+    registryCreateCalls += 1
+    const record = { id: `w-${ledger.size}`, path, title: path }
+    ledger.set(String(record.id), record)
+    return record
+  },
+  delete: (id: unknown) => {
+    for (const [key, record] of ledger) {
+      if (record.id === id) return ledger.delete(key)
+    }
+    return false
+  },
+})
 await root.plugin(TuiDialogRuntime)
 await root.plugin(TuiStatusRuntime)
 await root.plugin(TuiShortcutRuntime)
@@ -321,6 +350,73 @@ try {
 }
 check('retained workspace proxy rejects commands after dispose', retainedWorkspaceCommandsRejected)
 check('retained workspace proxy rejects rename after dispose', retainedWorkspaceRenameRejected)
+
+// ── the durable workspace ledger is host-owned ─────────────────────────────
+//
+// `remove`/`create` reach the HOST's workspace registry, so they are bound by
+// the same caller discipline as `rename`: a live non-root activation, and (for
+// `remove`) a cwd one of that activation's OWN providers vouches for. Without
+// it, any plugin — including one whose fiber was already disposed and whose
+// caller context is a retained handle — could drop a host registration. Shadow
+// policy is not caller authentication.
+
+// A plugin calling the PLUGIN-facing entry with a cwd it does not own must be
+// refused: the ledger entry is the host's, and no provider of the caller's
+// vouches for the path. This runs on the real Cordis plugin proxy (the same
+// path a third-party plugin takes), against a live in-memory registry, and it
+// asserts BOTH halves: the rejection AND that the ledger file was not touched.
+let foreignRemoveOutcome = 'no-error'
+const foreignLedgerFiber = root.inject(['tuiWorkspaces'], async (pluginCtx) => {
+  try {
+    await pluginCtx.tuiWorkspaces.remove(process.cwd())
+  } catch (error) {
+    foreignRemoveOutcome = error instanceof Error ? error.message : String(error)
+  }
+})
+await foreignLedgerFiber
+await foreignLedgerFiber.dispose()
+check('a foreign activation cannot remove a host workspace registration',
+  foreignRemoveOutcome.includes('not owned by the calling activation'), foreignRemoveOutcome)
+check('the refused removal left every registration in place',
+  ledger.has('victim') && ledger.has('owned'))
+
+let retainedLedgerHandle: { remove(cwd: string): Promise<boolean> } | undefined
+const ledgerPluginFiber = root.inject(['tuiWorkspaces'], (pluginCtx) => {
+  retainedLedgerHandle = pluginCtx.get('tuiWorkspaces') as typeof retainedLedgerHandle
+})
+await ledgerPluginFiber
+await ledgerPluginFiber.dispose()
+let retainedRemoveOutcome = 'no-error'
+try {
+  await retainedLedgerHandle?.remove(process.cwd())
+} catch (error) {
+  retainedRemoveOutcome = error instanceof Error ? error.message : String(error)
+}
+check('a retained handle cannot remove a registration after its fiber is disposed',
+  retainedRemoveOutcome !== 'no-error', retainedRemoveOutcome)
+check('the retained-handle removal wrote nothing', ledger.has('victim') && ledger.has('owned'))
+
+// The same call from an activation that DOES own the cwd is allowed: the rule
+// is ownership, not "plugins may never remove". This is what shows the refusal
+// above comes from the ownership test rather than from a blanket ban.
+let ownedRemoveOutcome = 'no-error'
+const ownerPluginFiber = root.inject(['tuiWorkspaces'], async (pluginCtx) => {
+  pluginCtx.tuiWorkspaces.register({
+    schemes: ['owned'],
+    list: () => [],
+    resolve: () => undefined,
+    describe: (cwd: string) => (cwd === 'owned://workspace' ? { uri: cwd, cwd, label: 'Owned', kind: 'local' } : undefined),
+  })
+  try {
+    await pluginCtx.tuiWorkspaces.remove('owned://workspace')
+  } catch (error) {
+    ownedRemoveOutcome = error instanceof Error ? error.message : String(error)
+  }
+})
+await ownerPluginFiber
+check('an owning activation keeps the ledger path working',
+  ownedRemoveOutcome === 'no-error' && !ledger.has('owned'), ownedRemoveOutcome)
+await ownerPluginFiber.dispose()
 
 // A plugin can shadow the public `fiber` property with an object that looks
 // live, or mutate the real fiber's effect method. Caller authentication must

@@ -7,6 +7,7 @@ import { writeModelPref } from '../../modelPrefs.js'
 import { touchSession } from '../../sessionHistory.js'
 import { liveSessionCreateOptions, sliceLiveSessionSeed } from '../compat/index.js'
 import { composePreset, runningPresetOf } from '../presets.js'
+import { reserveNewSession } from '../../sessionMounts.js'
 import { attachSessionToWorkspace } from '../workspace.js'
 import type { createChannelBinding } from './binding.js'
 import type { ChannelOwner } from './owner.js'
@@ -56,6 +57,10 @@ export function createModelSwitchAction(
       seed = sliceLiveSessionSeed(deps.binding.agent.session)
     } catch (error) { deps.notify(t('model-switch-fork-failed', { err: error instanceof Error ? error.message : String(error) }), { color: 'error' }); return false }
     const childId = SessionId(randomUUID())
+    // Announce the id before the factory: from the moment `agents.create`
+    // returns this process holds the only write handle on a log the publisher
+    // will not name until its next beat.
+    const { reservation } = await reserveNewSession(String(childId))
     const composed = await composePreset(ctx, runningPresetOf(deps.binding.agent.session))
     let handle: AgentHandle
     try {
@@ -70,39 +75,47 @@ export function createModelSwitchAction(
         agentOptions: { provider, model },
         setup: composed.setup,
       })))
-    } catch (error) { deps.notify(t('model-switch-failed', { err: error instanceof Error ? error.message : String(error) }), { color: 'error', timeoutMs: 8000 }); return false }
+    } catch (error) { reservation.abandon(); deps.notify(t('model-switch-failed', { err: error instanceof Error ? error.message : String(error) }), { color: 'error', timeoutMs: 8000 }); return false }
     try { await attachSessionToWorkspace(ctx, state.cwd, childId) }
     catch (error) { deps.notify(t('model-switch-attach-failed', { err: error instanceof Error ? error.message : String(error) }), { color: 'warning', timeoutMs: 8000 }) }
-    if (!deps.binding.isCurrent(adoption) || !deps.owner.current()) { await deps.binding.abandon(handle); return false }
-    return deps.binding.adopt(handle, adoption, (_previous, disposePrevious) => {
-      resetSessionProjection(state, deps.rowIds, deps.resetProjector, deps.resetSubagents, deps.resetJobs)
-      state.status = handle.agent.status
-      state.agentId = handle.agent.id
-      state.agentPreset = composed.agentPreset
-      state.provider = provider
-      state.model = model
-      state.contextWindow = undefined
-      state.effortLevels = undefined
-      state.reasoningEffort = undefined
-      deps.dropModelCompletion()
-      deps.replay(seed)
-      deps.settleReplay()
-      state.working = handle.agent.status === 'running'
-      // Reset the input FIFO and pending-decision indicators BEFORE the first
-      // emit: a submit from a session-changed subscriber must not chain onto
-      // the replaced session's parked promise (main's bind → clear → refresh
-      // order).
-      deps.clearStagedImages()
-      deps.bindAgent()
-      deps.onModelSwitch(model)
-      deps.refreshCommands()
-      void deps.refreshLoadedContext()
-      void deps.refreshSkillCommands()
-      touchSession(childId)
-      state.emit()
-      disposePrevious('dispose')
-      if (!writeModelPref(provider, model)) deps.notify(t('model-pref-write-failed'), { color: 'warning' })
-      return true
-    })
+    if (!deps.binding.isCurrent(adoption) || !deps.owner.current()) { await deps.binding.abandon(handle); reservation.abandon(); return false }
+    let committed = false
+    try {
+      const result = deps.binding.adopt<boolean>(handle, adoption, (_previous, disposePrevious) => {
+        resetSessionProjection(state, deps.rowIds, deps.resetProjector, deps.resetSubagents, deps.resetJobs)
+        state.status = handle.agent.status
+        state.agentId = handle.agent.id
+        state.agentPreset = composed.agentPreset
+        state.provider = provider
+        state.model = model
+        state.contextWindow = undefined
+        state.effortLevels = undefined
+        state.reasoningEffort = undefined
+        deps.dropModelCompletion()
+        deps.replay(seed)
+        deps.settleReplay()
+        state.working = handle.agent.status === 'running'
+        // Reset the input FIFO and pending-decision indicators BEFORE the first
+        // emit: a submit from a session-changed subscriber must not chain onto
+        // the replaced session's parked promise (main's bind → clear → refresh
+        // order).
+        deps.clearStagedImages()
+        deps.bindAgent()
+        deps.onModelSwitch(model)
+        deps.refreshCommands()
+        void deps.refreshLoadedContext()
+        void deps.refreshSkillCommands()
+        touchSession(childId)
+        state.emit()
+        disposePrevious('dispose')
+        if (!writeModelPref(provider, model)) deps.notify(t('model-pref-write-failed'), { color: 'warning' })
+        return true
+      })
+      committed = true
+      return result
+    } finally {
+      if (committed) reservation.settle()
+      else reservation.abandon()
+    }
   }
 }

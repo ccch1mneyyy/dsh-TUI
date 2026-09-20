@@ -20,7 +20,9 @@ import { TooltipTarget } from '../components/Tooltip.js'
 import { formatProject } from '../sessions/format.js'
 import { homeDir } from '../utils/paths.js'
 import {
+  FREE_SEGMENT_FILL,
   USED_SEGMENTS,
+  contextBarBreakdown,
   renderMiniContextBar,
   renderTpsGauge,
   renderTpsSparkline,
@@ -42,7 +44,8 @@ import type { WaveBand } from '../dsh-adapter/types.js'
  * swaps the ctx readout for a mini pressure gauge and parks that field's
  * detailed breakdown on the supplemental row where the idle hint lives —
  * the footer stays one line tall, the detail is a peek, not a layout
- * change. Hovering a context-bar segment does the same for that segment.
+ * change. The context bar answers the same way: it carries no labels of its
+ * own, so hovering it is how its colors get their names and numbers.
  */
 
 /**
@@ -71,7 +74,7 @@ const MINIMAL_STATUS_BAR: StatusBarConfig = Object.freeze({
 })
 
 /** Footer fields that answer a hover with a supplemental-row detail.
- *  Context-bar segments arrive as `segment:<key>` (see ContextBarView). */
+ *  The context bar reports the single `bar` target (see ContextBarView). */
 type HoverTarget =
   | 'ctx'
   | 'cache'
@@ -85,7 +88,7 @@ type HoverTarget =
   | 'sessionId'
   | 'cwd'
   | 'title'
-  | `segment:${string}`
+  | 'bar'
 
 /** One inline footer field: `node` renders inside a shrinkable, optionally
  *  hoverable Box; `key` doubles as the React key in its row. */
@@ -447,7 +450,7 @@ export function StatusLine({
 
   // The supplemental-row readout for the hovered field: replaces the idle
   // hint (never the activity line) while the pointer dwells on a field.
-  const detail = buildHoverDetail(hover, channel, usage, contextUsed)
+  const detail = buildHoverDetail(hover, channel, usage, contextUsed, columns, barColors)
   const trailer: React.ReactNode = detail !== null
     ? detail
     : hint !== ''
@@ -488,8 +491,9 @@ export function StatusLine({
       <Box flexDirection="column" width="100%">
         {/* Row 1: segmented context bar, its own line, first (pi-nano-context
             placement — the bar sits directly under the transcript). Rendered
-            as per-segment Boxes so each segment is hoverable; hovering one
-            parks its token breakdown on the supplemental row. */}
+            as per-segment Boxes so the fill can react to the pointer; the bar
+            carries no labels — hovering it parks the breakdown of every
+            content type on the supplemental row. */}
         {barVisible ? (
           <ContextBarView
             segments={channel.contextSegments}
@@ -497,11 +501,9 @@ export function StatusLine({
             contextWindow={channel.contextWindow ?? 0}
             width={barWidth}
             colors={barColors}
-            onHover={segment =>
+            onHover={hovered =>
               setHover(current =>
-                segment === null
-                  ? (current !== null && current.startsWith('segment:') ? null : current)
-                  : `segment:${segment}`)}
+                hovered ? 'bar' : current === 'bar' ? null : current)}
           />
         ) : null}
         {/* Row 2: optional status fields — every field is independently gated. */}
@@ -586,29 +588,34 @@ function buildHoverDetail(
   channel: Channel,
   usage: UsageSnapshot | undefined,
   contextUsed: number | undefined,
+  columns: number,
+  barColors: { freeFill: Color; freeText: Color } | undefined,
 ): React.ReactNode | null {
   if (hover === null) return null
   const window = channel.contextWindow
   const dim = (label: string): React.ReactNode => <Text dimColor>{label}</Text>
 
-  if (hover.startsWith('segment:')) {
+  if (hover === 'bar') {
     if (window === undefined || window <= 0 || contextUsed === undefined) return null
-    const key = hover.slice('segment:'.length)
-    const free = Math.max(0, window - contextUsed)
-    if (key === 'free') {
-      return (
-        <Text wrap="truncate">
-          {dim('free ')}{formatTokens(free)} · {((free / window) * 100).toFixed(1)}% {t('status-detail-of-window')}
-        </Text>
-      )
-    }
-    const segment = USED_SEGMENTS.find(s => s.key === key)
-    if (segment === undefined) return null
-    const tokens = channel.contextSegments[segment.key]
+    // The bar's text-free design pays off here: this line is its legend, so
+    // every entry leads with a chip of the very color it names.
+    const { entries, separator } = contextBarBreakdown(
+      channel.contextSegments,
+      contextUsed,
+      window,
+      columns,
+      barColors?.freeFill ?? FREE_SEGMENT_FILL,
+    )
+    if (entries.length === 0) return null
     return (
       <Text wrap="truncate">
-        {dim(`${segment.labels[1] ?? segment.key} `)}{formatTokens(tokens)} ·{' '}
-        {((tokens / window) * 100).toFixed(1)}% {t('status-detail-of-window')}
+        {entries.map((entry, index) => (
+          <React.Fragment key={entry.key}>
+            {index > 0 ? dim(separator) : null}
+            <Text backgroundColor={entry.color}> </Text>
+            {entry.label}
+          </React.Fragment>
+        ))}
       </Text>
     )
   }

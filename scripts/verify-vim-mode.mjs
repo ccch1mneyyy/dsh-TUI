@@ -151,12 +151,14 @@ setLang('en')
 const screen = () => viewportLines(term).join('\n')
 
 const promptText = () => {
-  // The prompt row begins with the '❯' glyph; the vim badge (INSERT/NORMAL)
-  // sits right after it, then the draft. Strip border decoration and the
-  // ⛶ expand-editor affordance now ending the row.
-  const match = screen().match(/^[❯]\s*(.*)$/m)
+  // The prompt row starts with the ⌸ session-entry control, then the '❯' glyph,
+  // then the vim badge (INSERT/NORMAL) and the draft. The ⌸ comes first, so the
+  // anchor must allow it — with a bare `^[❯]` nothing matches and every draft
+  // reads as empty. Strip border decoration, the ⛶ expand-editor affordance
+  // ending the row, and the ⌸ control itself.
+  const match = screen().match(/^\s*⌸?\s*[❯]\s*(.*)$/m)
   const raw = match === null ? '' : (match[1] ?? '')
-  return raw.replace(/[╭╮╰╯─│═║⛶]+/g, '').trim()
+  return raw.replace(/[╭╮╰╯─│═║⛶⌸]+/g, '').trim()
 }
 // NOTE: the prompt can span multiple visual rows (multi-line drafts); the
 // '❯' row only carries the FIRST line, so multi-line assertions check the
