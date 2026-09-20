@@ -162,6 +162,10 @@ const GROUPS = {
 // 时间线 rail 回归：rail 覆盖全部轮次（含折叠轮），高亮锚定视口顶、
 // ▲/▼ 目标不越过 maxScroll。
     ["verify-timeline-rail", ['node', '--import', 'tsx/esm', 'scripts/verify-timeline-rail.tsx']],
+// 时间线 rail 视口高度落定回归：底部 chrome 悬停展开/收回与终端行 resize
+// 改变转录视口高度时（无滚动通知、不翻转 sticky），rail 几何必须跟随；
+// 通知语义（仅高度变化触发）经渲染器→React 回调计数探针断言。
+    ["verify-timeline-rail-settle", ['node', '--import', 'tsx/esm', 'scripts/verify-timeline-rail-settle.tsx']],
 // 多行 user 的置顶摘要不得向转录左侧出血；宽/窄终端均保留滚动锚定。
     ['verify-sticky-anchor', ['node', '--import', 'tsx/esm', 'scripts/verify-sticky-anchor.tsx']],
     ['verify-sticky-anchor-narrow', ['node', '--import', 'tsx/esm', 'scripts/verify-sticky-anchor.tsx'], { DSH_TEST_COLUMNS: '60' }],
@@ -319,11 +323,17 @@ const GROUPS = {
 // 双击选词自检测/Backspace/Delete 删选区/打字替换/Esc 分层/Ctrl+C 经
 // Chat→控制器复制选区、CJK 宽字符显示列与 fold block 侧钳制。
     ["verify-input-selection", ['node', '--import', 'tsx/esm', 'scripts/verify-input-selection.tsx']],
-// 全屏草稿编辑回归（expandEditor）：Ctrl+Shift+E/⛶ 展开收起、Enter 换行
+// 全屏草稿编辑回归（expandEditor）：Ctrl+Shift+E/✎ 展开收起、Enter 换行
 // 不发送、Ctrl+Enter 发送并收起、Esc 分层（选区→收起）、点击定位/拖选、
 // 行号渲染、多行窗口跟随 + onWheel 滚轮自由滚动、折叠块互斥（展开清块/
 // 展开态粘贴纯文本）、设置开关（expandEditor=false 入口消失）。
     ["verify-expand-editor", ['node', '--import', 'tsx/esm', 'scripts/verify-expand-editor.tsx']],
+// 三合一会话管理界面回归（issue #879）：/resume、/agentview、/home 合并为
+// 同一个 SessionSupervisor 后的两条硬性质——它确实是一个界面（工作区栏 +
+// 该工作区会话 + 每行活跃状态 + 当前会话标记），以及被其他 TUI 终端占用的
+// 会话可见但不可进入（点击绝不落到 channel.resumeTo，否则两个进程会交错写
+// 同一份 append-only 会话日志）。
+    ["verify-session-supervisor", ['node', '--import', 'tsx/esm', 'scripts/verify-session-supervisor.tsx']],
 // 输入历史草稿回归（issue #287）：首次 ↑ 保存未提交草稿，遍历历史后
 // ↓ 回到末尾必须恢复原文，重复越界不能把草稿清空。
     ["verify-prompt-history-draft", ['node', 'scripts/verify-prompt-history-draft.mjs']],
@@ -357,14 +367,17 @@ const GROUPS = {
 // Esc 先清查询再退出、rename 后光标按 id 跟随目标（不是按行号）、
 // confirm-delete 只认无修饰 Enter、Esc 取消。真实 Chat 渲染驱动。
     ["verify-session-browser", ['node', 'scripts/verify-session-browser.mjs']],
-// 会话浏览器布局压测：8 种几何 × 中英双语 × 9 个交互状态，用 xterm 的
-// isWrapped 断言没有任何一行溢出终端宽度，并要求提示行始终是最后一行
-// （等价于「上方每个区域都放得下、没有多占行、没有被挤出屏幕」）。
-// 中文必测：所有文案都本地化，按字符数而非列宽排版在英文下看不出来。
-    ["verify-session-browser-layout", ['node', 'scripts/verify-session-browser-layout.mjs']],
+// 未发送草稿的跨屏交接回归：真实 PromptInput 真卸载再重挂——快照带上
+// 光标偏移与图片绑定、按 agent 与世代校验归属、被回收的图片能力不复活、
+// 空草稿不留残留。这条测的是「渲染期写回会先于认领 effect 覆盖草稿」，
+// 只靠打字或由浮层换屏都到不了。
+    ["verify-composer-draft-handoff", ['node', '--import', 'tsx/esm', 'scripts/verify-composer-draft-handoff.tsx']],
 // Tooltip 悬停提示回归：悬停截断元素 ~600ms 后弹完整内容浮层——延迟未到
 // 不出现、到点内容正确、leave 即隐、leave 早于延迟取消、自定义 delayMs、
-// 多行内容锚点上方、屏顶锚点转下方、resize 隐藏（几何失效）、窄屏水平钳制。
+// 多行内容锚点上方、屏顶锚点转下方、resize 隐藏（几何失效）、窄屏水平钳制；
+// 复制干扰：折行的用户消息不再武装浮层（文本本就全可见，且卡片会盖住
+// 待复制单元格），文本选区拖动/存续期间整个浮层层熄灭（dwell 照常触发
+// 但不上屏），选区落定清掉 pending 卡片，随后悬停恢复。
     ["verify-tooltip", ['node', '--import', 'tsx/esm', 'scripts/verify-tooltip.tsx']],
 // 工具卡头部 hover tooltip 内容门控回归：头部已经完整显示（单行标题 / 未
 // 超出预算的 args）时悬停不再弹「重复可见文本」的浮层，改弹卡片元数据
@@ -402,12 +415,11 @@ const GROUPS = {
 // DATA_DIR 建目录 0700；临时 HOME 重定向 + 固定 umask，修复前按 umask
 // 落 0644 必红。
     ["verify-data-file-perms", ['node', '--import', 'tsx/esm', 'scripts/verify-data-file-perms.tsx']],
-// /resume・/tree 搜索框显示塌缩回归：SearchBox 的单行窗口化预算取自实测
-// 自身宽度，自适应宽度（默认 row 包裹、无 width prop）会让预算跟随内容
-// 收缩，收敛到「前缀 + 1 字符 + 反色 caret」——只看得见最新输入的字符。
-// 断言逐键英文、IME 整段上屏、退格、rename 预填+追加与 /tree 搜索的查询
-// 始终完整可见，并守住超长查询单行窗口化语义（尾部可见、头部滚出、不折行）。
-    ["verify-session-browser-searchbox", ['node', '--import', 'tsx/esm', 'scripts/verify-session-browser-searchbox.tsx']],
+// /tree 搜索框显示塌缩回归：SearchBox 的单行窗口化预算取自实测自身宽度，
+// 自适应宽度（默认 row 包裹、无 width prop）会让预算跟随内容收缩，收敛到
+// 「前缀 + 1 字符 + 反色 caret」——只看得见最新输入的字符。断言逐键输入
+// 完整可见，并守住超长查询单行窗口化语义（尾部可见、头部滚出、不折行）。
+    ["verify-searchbox-windowing", ['node', '--import', 'tsx/esm', 'scripts/verify-searchbox-windowing.tsx']],
   ],
   'channel-ui': [
 // L4 composition boundary plus report/metadata lifetime fences.

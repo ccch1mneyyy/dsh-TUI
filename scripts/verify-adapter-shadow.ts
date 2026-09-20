@@ -158,6 +158,8 @@ const METHOD_POLICY: Record<string, Record<string, MethodPolicy>> = {
     describe: { kind: 'capability', capability: 'host.workspaces.describe' },
     commandShell: { kind: 'capability', capability: 'host.workspaces.commandShell' },
     rename: { kind: 'capability', capability: 'host.workspaces.rename' },
+    remove: { kind: 'capability', capability: 'host.workspaces.remove' },
+    listRegistry: { kind: 'capability', capability: 'host.workspaces.list' },
     commands: { kind: 'capability', capability: 'host.workspaces.commands' },
     runCommand: { kind: 'capability', capability: 'host.workspaces.runCommand' },
   },

@@ -7,6 +7,8 @@ import { readModelPref } from '../../modelPrefs.js'
 import { readPresetPref } from '../../presetPrefs.js'
 import { clearResumeTarget, touchAgentViewSession, touchSession } from '../../sessionHistory.js'
 import { t } from '../../i18n.js'
+import { reserveMount, type MountReservation } from '../../sessionMounts.js'
+import { mountFailureText } from '../../sessions/resumeFailure.js'
 import { composePreset } from '../presets.js'
 import { attachSessionToWorkspace } from '../workspace.js'
 import { resetSessionProjection } from './session-reset.js'
@@ -52,6 +54,12 @@ export function createBackgroundCurrentAction(
       return { ok: false, reason: 'unavailable' }
     }
     const sessionId = SessionId(randomUUID())
+    // Reserve before the factory: from the moment `agents.create` returns this
+    // process holds the only write handle on a log the publisher has not named
+    // yet, and a peer listing sessions in that gap would be told it is free.
+    const reserved = await reserveMount(sessionId)
+    if (!reserved.ok && reserved.reason !== 'occupied') deps.notify(mountFailureText(reserved), { color: 'warning', timeoutMs: 8000 })
+    const reservation: MountReservation = reserved.ok ? reserved.reservation : { settle: () => {}, abandon: () => {} }
     try {
       const composed = await composePreset(ctx, options.configuredPreset ?? readPresetPref())
       const route = await validateModelRoute(
@@ -65,7 +73,7 @@ export function createBackgroundCurrentAction(
         agentOptions: route.route,
         ...(composed.setup === undefined ? {} : { setup: composed.setup }),
       }))
-      if (!deps.binding.isCurrent(adoption)) { await deps.binding.abandon(handle); return { ok: false, reason: 'failed', error: 'Channel lifetime ended' } }
+      if (!deps.binding.isCurrent(adoption)) { await deps.binding.abandon(handle); reservation.abandon(); return { ok: false, reason: 'failed', error: 'Channel lifetime ended' } }
       try {
         await attachSessionToWorkspace(ctx, state.cwd, sessionId)
       } catch (error) {
@@ -78,38 +86,48 @@ export function createBackgroundCurrentAction(
       // agent; the prepared candidate is abandoned instead.
       if (!deps.binding.isCurrent(adoption)) {
         await deps.binding.abandon(handle)
+        reservation.abandon()
         return { ok: false, reason: 'failed', error: 'Channel lifetime ended' }
       }
-      return deps.binding.adopt(handle, adoption, (previous, disposePrevious) => {
-        const previousSessionId = String(previous.agent.session.id)
-        if (previous.handle !== undefined) {
-          deps.backgroundHandles.set(previousSessionId, previous.handle)
-          disposePrevious('park')
-        }
-        resetSessionProjection(state, deps.rowIds, deps.resetProjector, deps.resetSubagents, deps.resetJobs)
-        state.status = handle.agent.status
-        state.agentId = handle.agent.id
-        state.loadedContext = undefined
-        state.contextWindow = undefined
-        state.effortLevels = undefined
-        state.reasoningEffort = undefined
-        deps.refreshEffortLevels()
-        // Reset the input FIFO and pending-decision indicators BEFORE the first
-        // emit (main's bind → clear → refresh order).
-        deps.clearStagedImages()
-        deps.bindAgent()
-        deps.refreshCommands()
-        void deps.refreshLoadedContext()
-        void deps.refreshSkillCommands()
-        clearResumeTarget()
-        touchSession(handle.agent.id)
-        touchAgentViewSession(previousSessionId)
-        touchAgentViewSession(String(handle.agent.id))
-        deps.notifySessionSwitched('background', String(handle.agent.id), previousSessionId)
-        deps.notifyAgentView()
-        return { ok: true, backgroundedSessionId: previousSessionId }
-      })
+      let committed = false
+      try {
+        const result = deps.binding.adopt<BackgroundResult>(handle, adoption, (previous, disposePrevious) => {
+          const previousSessionId = String(previous.agent.session.id)
+          if (previous.handle !== undefined) {
+            deps.backgroundHandles.set(previousSessionId, previous.handle)
+            disposePrevious('park')
+          }
+          resetSessionProjection(state, deps.rowIds, deps.resetProjector, deps.resetSubagents, deps.resetJobs)
+          state.status = handle.agent.status
+          state.agentId = handle.agent.id
+          state.loadedContext = undefined
+          state.contextWindow = undefined
+          state.effortLevels = undefined
+          state.reasoningEffort = undefined
+          deps.refreshEffortLevels()
+          // Reset the input FIFO and pending-decision indicators BEFORE the first
+          // emit (main's bind → clear → refresh order).
+          deps.clearStagedImages()
+          deps.bindAgent()
+          deps.refreshCommands()
+          void deps.refreshLoadedContext()
+          void deps.refreshSkillCommands()
+          clearResumeTarget()
+          touchSession(handle.agent.id)
+          touchAgentViewSession(previousSessionId)
+          touchAgentViewSession(String(handle.agent.id))
+          deps.notifySessionSwitched('background', String(handle.agent.id), previousSessionId)
+          deps.notifyAgentView()
+          return { ok: true, backgroundedSessionId: previousSessionId }
+        })
+        committed = true
+        return result
+      } finally {
+        if (committed) reservation.settle()
+        else reservation.abandon()
+      }
     } catch (error) {
+      reservation.abandon()
       const message = error instanceof Error ? error.message : String(error)
       deps.notify(t('agentview-dispatch-failed', { err: message }), { color: 'error', timeoutMs: 8000 })
       return { ok: false, reason: 'failed', error: message }

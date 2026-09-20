@@ -19,6 +19,7 @@ import {
 } from '../agent-view.js'
 import { snapshotLiveSessionEvents } from '../compat/liveSession.js'
 import { composePreset } from '../presets.js'
+import { reserveNewSession } from '../../sessionMounts.js'
 import { locateSession, previewSession, type SessionSource, type SessionSummary } from '../sessions/index.js'
 import { attachSessionToWorkspace } from '../workspace.js'
 import { logForDebugging } from '../../utils/debug.js'
@@ -174,6 +175,10 @@ export function createAgentViewProjection(
       return { ok: false, reason: 'unavailable' }
     }
     const sessionId = SessionId(randomUUID())
+    // Announce the id before the factory: the background session's log is
+    // created here, and the publisher only learns the id from the registry on
+    // its next beat.
+    const { reservation } = await reserveNewSession(String(sessionId))
     let detached: Awaited<ReturnType<typeof deps.createDetached>>
     try {
       deps.owner.assertActive()
@@ -189,15 +194,19 @@ export function createAgentViewProjection(
         ...(composed.setup === undefined ? {} : { setup: composed.setup }),
       }))
     } catch (error) {
+      reservation.abandon()
       const message = error instanceof Error ? error.message : String(error)
       deps.notify(t('agentview-dispatch-failed', { err: message }), { color: 'error', timeoutMs: 8000 })
       return { ok: false, reason: 'failed', error: message }
     }
-    if (!deps.owner.current()) { await detached.release(); return { ok: false, reason: 'failed', error: 'Channel lifetime ended' } }
+    if (!deps.owner.current()) { await detached.release(); reservation.abandon(); return { ok: false, reason: 'failed', error: 'Channel lifetime ended' } }
     try { await attachSessionToWorkspace(ctx, deps.cwd(), sessionId) } catch { /* optional ledger */ }
-    if (!deps.owner.current()) { await detached.release(); return { ok: false, reason: 'failed', error: 'Channel lifetime ended' } }
+    if (!deps.owner.current()) { await detached.release(); reservation.abandon(); return { ok: false, reason: 'failed', error: 'Channel lifetime ended' } }
     detached.transfer()
     backgroundHandles.set(String(sessionId), detached.handle)
+    // The session is this process's background handle from here on, so the
+    // reservation has done its job: the registry is the authority now.
+    reservation.settle()
     touchAgentViewSession(String(sessionId))
     touchSession(sessionId)
     // transfer intentionally moves disposal to the background ledger; check

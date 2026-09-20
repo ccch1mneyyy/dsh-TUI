@@ -1,5 +1,5 @@
-import type { TuiWorkspaceTarget, TuiWorkspaceKind, TuiWorkspaceCommand, TuiWorkspaceCommandResult, TuiWorkspaceChoice } from '../adapter/ports/channel-workspace.js'
-export type { TuiWorkspaceTarget, TuiWorkspaceKind, TuiWorkspaceCommand, TuiWorkspaceCommandResult, TuiWorkspaceChoice } from '../adapter/ports/channel-workspace.js'
+import type { TuiWorkspaceTarget, TuiWorkspaceKind, TuiWorkspaceCommand, TuiWorkspaceCommandResult, TuiWorkspaceChoice, TuiWorkspaceEntry } from '../adapter/ports/channel-workspace.js'
+export type { TuiWorkspaceTarget, TuiWorkspaceKind, TuiWorkspaceCommand, TuiWorkspaceCommandResult, TuiWorkspaceChoice, TuiWorkspaceEntry } from '../adapter/ports/channel-workspace.js'
 /**
  * Workspace-target extension seam for terminal front doors.
  *
@@ -59,19 +59,121 @@ export interface TuiWorkspaceHost {
   describe(cwd: string): TuiWorkspaceTarget
   commandShell(cwd: string): Promise<TuiCommandShell | undefined>
   rename(cwd: string, title: string): Promise<TuiWorkspaceTarget>
+  /** Drop a workspace registration (never the directory or its session logs). */
+  remove(cwd: string): Promise<boolean>
+  /**
+   * The durable ledger's own listing, in its own order.
+   *
+   * Unlike `list`, this merges nothing and appends nothing: it is the set of
+   * registrations the sidebar manages, including entries with no sessions and
+   * entries whose directory has disappeared.
+   */
+  listRegistry(): Promise<readonly TuiWorkspaceEntry[]>
   commands(): readonly Pick<TuiWorkspaceCommand, 'name' | 'aliases' | 'description'>[]
   runCommand(name: string, input: string, cwd: string, signal?: AbortSignal): Promise<TuiWorkspaceCommandResult | undefined>
 }
 
 interface WorkspaceRecordLike {
+  id: unknown
   path: string
   title: string
   setTitle(title: string): Promise<void>
+  /** Whether the recorded directory still exists (`missing-dir` when not). */
+  status?(): Promise<'ok' | 'missing-dir'>
 }
 
 interface WorkspaceRegistryLike {
   list(): readonly WorkspaceRecordLike[]
   create(path: string, title?: string): Promise<WorkspaceRecordLike>
+  delete(id: never): Promise<boolean>
+}
+
+/** Registry-backed list surface for the workspace home screen. */
+type RegistryWorkspaceEntry = TuiWorkspaceEntry
+
+/**
+ * Enumerate the durable workspace registry, in its own display order.
+ *
+ * The sidebar needs the *registry* (every workspace the user ever registered,
+ * including ones with no sessions yet), not the session-derived grouping the
+ * `/resume` browser builds. Order, ids and titles come from the ledger;
+ * `sessionCount` is filled in by the caller (the adapter holds no session
+ * index), and `present` is derived here.
+ */
+export async function listRegistryWorkspaces(
+  runtime: TuiWorkspaceRuntime | undefined,
+): Promise<readonly RegistryWorkspaceEntry[]> {
+  if (runtime === undefined) return []
+  const registry = workspaceRegistry(runtime)
+  if (registry === undefined) return []
+  const out: RegistryWorkspaceEntry[] = []
+  for (const workspace of registry.list()) {
+    let present = true
+    try {
+      present = (await workspace.status?.()) !== 'missing-dir'
+    } catch {
+      // An unreadable status is not evidence of absence.
+      present = true
+    }
+    out.push({
+      id: String(workspace.id),
+      path: workspace.path,
+      title: workspace.title,
+      present,
+      sessionCount: 0,
+    })
+  }
+  return out
+}
+
+/**
+ * Remove a workspace registration by path. Sessions and the directory survive:
+ * only the ledger entry goes away, so the sessions reappear as ungrouped.
+ *
+ * @returns True when a record was removed, false when no record owned `cwd`
+ *   (or the ledger is unmounted).
+ */
+export async function removeRegistryWorkspace(
+  runtime: TuiWorkspaceRuntime | undefined,
+  cwd: string,
+  owner?: object,
+): Promise<boolean> {
+  if (runtime === undefined) return false
+  const registry = workspaceRegistry(runtime)
+  if (registry === undefined) return false
+  const workspace = registry.list().find(candidate => sameCwd(candidate.path, cwd))
+  if (workspace === undefined) return false
+  // The durable ledger is host-owned: a plugin may only drop a registration
+  // for a cwd one of ITS OWN providers still vouches for. `owner === undefined`
+  // is the host facade's own call (the sidebar's remove action).
+  if (owner !== undefined && !ownsWorkspace(runtime, owner, cwd)) {
+    throw new Error('workspace is not owned by the calling activation')
+  }
+  return registry.delete(workspace.id as never)
+}
+
+/**
+ * Whether a calling activation's own providers still vouch for `cwd`.
+ *
+ * This is the same evidence `renameWorkspace` accepts, and the only ownership
+ * fact the local ledger records 鈥?the registry entry itself carries no creator.
+ * A provider `describe()` that returns a target means the cwd belongs to that
+ * provider's scheme, so the activation behind it is the one entitled to mutate
+ * the registration.
+ * @param runtime - The workspace service.
+ * @param owner - Live activation fiber of the caller.
+ * @param cwd - Directory to test.
+ * @returns True when one of the caller's providers owns `cwd`.
+ */
+function ownsWorkspace(runtime: TuiWorkspaceRuntime, owner: object, cwd: string): boolean {
+  for (const provider of providersFor(workspaceStateFor(runtime), owner)) {
+    try {
+      if (provider.describe(cwd) !== undefined) return true
+    } catch {
+      // A provider that throws on describe vouches for nothing.
+    }
+  }
+  return false
 }
 
 declare module '@deepseek-ai/cordis' {
@@ -128,6 +230,11 @@ export class TuiWorkspaceRuntime extends Service {
         assertCapabilityShadowPolicy('host.workspaces.rename', state.runtime.mode, state.runtime.slices)
         return renameWorkspace(runtime, cwd, title, undefined)
       },
+      remove: (cwd: string) => {
+        assertCapabilityShadowPolicy('host.workspaces.remove', state.runtime.mode, state.runtime.slices)
+        return removeRegistryWorkspace(runtime, cwd)
+      },
+      listRegistry: () => listRegistryWorkspaces(runtime),
       commands: () => workspaceCommands(runtime, undefined),
       runCommand: (name: string, input: string, cwd: string, signal?: AbortSignal) => {
         assertCapabilityShadowPolicy('host.workspaces.runCommand', state.runtime.mode, state.runtime.slices)
@@ -187,6 +294,29 @@ export class TuiWorkspaceRuntime extends Service {
     assertCapabilityShadowPolicy('host.workspaces.rename', workspaceStateFor(this).runtime.mode, workspaceStateFor(this).runtime.slices)
     const owner = workspaceCaller(this, 'tuiWorkspaces.rename')
     return renameWorkspace(this, cwd, title, owner)
+  }
+
+  /**
+   * Drop a workspace registration; the directory and session logs survive.
+   *
+   * Plugin-facing, and therefore bound by the SAME rule as {@link rename}: a
+   * live calling activation is required, and the target must be a cwd one of
+   * that activation's own providers vouches for. Without both, a plugin that
+   * never owned the workspace 鈥?including one whose fiber was already disposed
+   * and whose caller context is a retained handle 鈥?could delete a host
+   * registration. Shadow policy alone is not caller authentication.
+   */
+  async remove(cwd: string): Promise<boolean> {
+    assertCapabilityShadowPolicy('host.workspaces.remove', workspaceStateFor(this).runtime.mode, workspaceStateFor(this).runtime.slices)
+    const owner = workspaceCaller(this, 'tuiWorkspaces.remove')
+    return removeRegistryWorkspace(this, cwd, owner)
+  }
+
+  /** The durable ledger's own listing, in its own order. */
+  async listRegistry(): Promise<readonly TuiWorkspaceEntry[]> {
+    assertCapabilityShadowPolicy('host.workspaces.list', workspaceStateFor(this).runtime.mode, workspaceStateFor(this).runtime.slices)
+    workspaceCaller(this, 'tuiWorkspaces.listRegistry')
+    return listRegistryWorkspaces(this)
   }
 
   commands(): readonly Pick<TuiWorkspaceCommand, 'name' | 'aliases' | 'description'>[] {
@@ -464,8 +594,7 @@ function waitForProvider(runtime: TuiWorkspaceRuntime, timeoutMs: number, signal
  * mounting the optional workspace registry/provider service. */
 export function createLocalWorkspaceRuntime(): Pick<
   TuiWorkspaceRuntime,
-  'list' | 'resolve' | 'describe' | 'commandShell' | 'rename' | 'commands' | 'runCommand'
-> {
+  'list' | 'resolve' | 'describe' | 'commandShell' | 'rename' | 'remove' | 'listRegistry' | 'commands' | 'runCommand'> {
   return {
     async list(currentCwd) {
       return [localWorkspaceTarget(currentCwd)]
@@ -485,6 +614,12 @@ export function createLocalWorkspaceRuntime(): Pick<
     },
     async rename() {
       throw new Error('workspace registry is unavailable')
+    },
+    async remove() {
+      return false
+    },
+    async listRegistry() {
+      return []
     },
     commands() {
       return []

@@ -330,8 +330,19 @@ function ScrollBox({
     if (el) {
       el.scrollTop ??= 0;
       el.onStickyRestore = notify;
+      // A viewport-height change since the last layout pass means every
+      // geometry-reading subscriber painted the previous bounds (the
+      // renderer owns the write and this pass was otherwise silent). Wire
+      // it to the same subscriber notify as scroll mutations, coalesced to
+      // the frame budget: a terminal resize storm or a landing's chained
+      // chrome unmounts each produce a pass, and merging them bounds the
+      // React commits without dropping the final state — notifyCoalesced
+      // always runs the queued notify, and subscribers re-read the handle
+      // (level-triggered), so a coalesced pass still sees the latest bounds.
+      el.onViewportHeightChange = notifyCoalesced;
     }
-  // notify only closes over refs, like the imperative handle above.
+  // notify/notifyCoalesced only close over refs, like the imperative handle
+  // above.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 

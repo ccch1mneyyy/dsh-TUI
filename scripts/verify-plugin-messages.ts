@@ -36,7 +36,6 @@ process.env.DSH_TUI_LANG = 'zh'
 process.env.DSH_TUI_ADAPTER_MODE = 'new'
 
 const { Context, Service } = await import('@deepseek-ai/cordis')
-const pluginHostRow = await import('../src/dsh-adapter/plugin-host.js')
 const {
   TuiMessageObserverRuntime,
   getHostMessageObserver,
@@ -47,7 +46,7 @@ const { runMessageLiveProbe } = await import('../src/adapter/kernel/host-probe-a
 const { loadSpecData } = await import('../src/adapter/standard/registry.js')
 const { check } = await import('../src/adapter/standard/schema-check.js')
 const { DATA_DIR } = await import('../src/utils/paths.js')
-const { mountAdmitted, testManifest, MESSAGE_COORDINATE } = await import('../scripts/lib/plugin-test-utils.js')
+const { mountAdmitted, mountAdmissionHost, testManifest, MESSAGE_COORDINATE } = await import('../scripts/lib/plugin-test-utils.js')
 const { validateMessageEvent } = await import('@dsh-std/messages')
 import type { MessagesObserveEnvelope } from '../src/dsh-adapter/message-observer.js'
 
@@ -85,8 +84,7 @@ const hostWarnings: string[] = []
 hostCtx.logger.warn = (format: unknown, ...params: unknown[]) => {
   hostWarnings.push([format, ...params].map(String).join(' '))
 }
-hostCtx.plugin({ name: pluginHostRow.name, apply: pluginHostRow.apply })
-await sleep(50)
+await mountAdmissionHost(hostCtx, 'messages battery')
 const broker = hostCtx.get('tuiMessageObserver')
 if (broker === undefined) {
   console.error('tuiMessageObserver not mounted')

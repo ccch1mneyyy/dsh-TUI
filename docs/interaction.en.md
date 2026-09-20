@@ -250,92 +250,80 @@ redelivers them immediately.
 
 ## Session workflows
 
-### Resume
+### Session management (`/resume`, `/home`, `/agentview`, `/bg`, prompt `⌸`)
 
-`/resume` opens the session browser — a full screen, not a floating panel. It
-lists the conversations in the current working directory, most recently active
-first; confirming switches the Agent and replays persisted events.
+The four commands and the `⌸` entry at the head of the prompt row all open the
+**same screen**: the workspace rail (the durable registry) on the left, the
+sessions of the selected workspace on the right, every row carrying that
+session's live state. They used to be three implementations that grew apart (a
+session browser, an agent view, a workspace home), each listing the same session
+with its own selection model and its own idea of what "open" meant — so there is
+one screen and one selection model now.
 
-The browser shows **conversations** only. Sub-agent runs the model delegated to
-itself are persisted as sessions too (the session header records
-`origin: 'subagent'`); they are folded away by default, counted in the header,
-and revealed as indented rows under their parent with `ctrl+s`. Rewound
-branches from `/rewind` are unaffected — those record `parentSession` without
-`origin`, and they are the user's own conversations. Sessions that recorded
-only their boot policy and hold no conversation are never listed, only counted,
-with `ctrl+x` to clear them (scoped to the current list, never across
-projects).
+The screen describes the runtime as it actually is: **one TUI process hosts
+several sessions at once**. Switching away PARKS a session, it does not end it —
+a turn in flight keeps running and is still there when you come back. Leaving a
+session therefore needs no confirmation, and there is no "stop" meaning to it.
+
+Opening this screen **does not lose an unsent draft**: the composer unmounts with
+the screen, and Chat keeps the draft — text, caret position and the staged image
+references — until `Esc` brings it back. A draft belongs to its **session**, so
+it never follows you into another conversation; the message `/rewind` hands back
+belongs to the session the rewind created, so it does stay in the input.
 
 | Key | Action |
 | --- | --- |
-| Type | Live search over titles, directories, branches, models |
-| `↑` `↓` / `PgUp` `PgDn` | Move, page |
-| `Enter` | Resume the selected session |
-| `Tab` | Preview that session's last few exchanges |
-| `ctrl+a` | Toggle this project / all projects (grouped by directory) |
-| `ctrl+b` | Only sessions last used on the current branch |
-| `ctrl+s` | Expand / fold sub-agent runs |
-| `ctrl+p` | Pin / unpin the selected session (to the top of the current filtered view) |
-| `ctrl+r` / `ctrl+d` | Rename / delete the selected session |
-| `ctrl+x` | Remove sessions that hold no conversation |
-| `Esc` | Clear the search first, leave second |
+| `←` `→` | Choose the column that owns the keyboard (rail / sessions); exactly one `❯` is on screen |
+| `↑` `↓` / `PgUp` `PgDn` / wheel | Move in the rail; move in the session list (row 0 is the new-session card) |
+| Type | Filter the selected workspace's sessions live (title, directory, branch, model) |
+| `Enter` | Sessions: enter the row under the cursor (row 0 = start a session in this workspace). Rail: open that workspace's action menu |
+| `Ctrl+Enter` | Start a session in the workspace under the cursor (either column) |
+| `Ctrl+N` | Start a session in the workspace under the cursor |
+| `Ctrl+X` | Stop the **background** session under the cursor (the attached one cannot be stopped) |
+| `Ctrl+L` | Re-read the workspace registry and the session listing |
+| `Shift+Tab` | Rail: open the action menu of the workspace under the cursor |
+| `Esc` | Dismiss a notice → clear the filter → leave the screen |
 
-Clicking a row resumes it. Click ★/☆ or press `ctrl+p` to toggle its pin;
-pins are atomically persisted in `~/.dsh-tui/session-pins.json`. The right-click
-menu offers Open, Pin/Unpin, Rename, and Delete. Revealed sub-agent runs can be
-pinned too and are promoted into the Pinned group as independent rows.
+The rail's menu has four entries: **edit** (select that workspace, listing its
+sessions on the right), **new session**, **rename**, and **remove from list**
+(the registration only — the directory and every session log survive). A
+workspace joins by *starting dsh-tui in that directory* (the startup attach);
+there is no "add workspace" picker on this screen.
 
-Each row carries the title, last activity, the git branch this install was on
-when it last used the session, the log size, and the model. Titles are graded
-by evidence: a `/rename`, an automatically generated title, an excerpt of the
-opening prompt, or — when none of those can be read — the directory name,
-which is dimmed to say it is not really a name.
+A session row's live state comes from the channel's own agent-view projection —
+the same source as the status bar's "needs input" hint: working / needs input /
+idle / completed / failed / stopped, and the session this terminal is attached to
+is marked `current`. Clicking a row enters that session (same as `Enter`);
+clicking the in-row `★`/`☆` toggles the pin only (persisted in
+`~/.dsh-tui/session-pins.json`) and never enters the session.
 
-The list reads only bounded windows at each end of a session log and caches the
-result against the persistence layer's own change token, so opening it costs
-the same regardless of how long the history is or how large a session got.
+A session held by **another** TUI terminal is still listed, but the row turns
+red, ends with `held by pid <pid>`, and **cannot be clicked**: two processes
+driving one append-only log would interleave its events and corrupt the
+transcript. Occupancy is re-read from the ledger on the screen's own 2-second
+tick, so the row becomes enterable again on its own once that process exits. A
+session this process parked is not "occupied". See
+[session-mount-runtime.en.md](session-mount-runtime.en.md).
+
+When the workspace service is absent (a bare composition) or a session's
+directory is **not registered**, the rail carries an "Unregistered" group that
+lists and resumes those sessions as usual — "no registration" is not "no
+history". The group lives only inside this screen and is never written back to
+the registry.
+
+**Behaviour changes versus the old screens** (deliberately removed, and no
+longer covered by regressions): the session-level right-click menu
+(rename/delete one session), the `Ctrl+P` pin shortcut, `Ctrl+S` to reveal
+delegated runs, `Ctrl+A` this-project/all-projects, `Ctrl+B` branch filter,
+`Tab` preview, `Ctrl+R` rename, `Ctrl+D` delete, and `Ctrl+X` clearing empty
+sessions. Pinning is still reachable by clicking the row's `★`. Dispatching a
+background session and replying to one, the `Space` peek panel, and
+`Shift+Enter` dispatch-and-attach have **not** returned to the new screen: after
+`/bg`, reach a background session by pressing `Enter` on it in the workspace
+list.
 
 On Windows, `dsh-tui.cmd --resume` uses the session ID last written to
 `~/.dsh-tui/resume.txt`.
-
-### Agent view
-
-`/agentview` opens the agent view — a full screen listing every session in
-this process: the attached conversation, the background sessions dispatched
-here, and the stopped sessions persisted on disk. Rows are grouped by state
-(needs input > working > failed > completed > idle > stopped), each with a
-one-line activity summary derived from the session's own output — no extra
-summary-model calls.
-
-| Key | Action |
-| --- | --- |
-| Type | Write a task into the input at the bottom |
-| `Enter` | With input text: dispatch a new background session; otherwise attach to the selected session |
-| `Shift+Enter` | Dispatch and attach immediately |
-| `↑` `↓` / `PgUp` `PgDn` | Move, page |
-| `→` | Attach to the selected session |
-| `Space` | Toggle the peek panel (when the input is empty); type a reply inside and `Enter` to send |
-| `Ctrl+X` | Stop a background session; press again within 2s to delete it |
-| `Ctrl+R` | Rename the selected session |
-| `Esc` | Close peek → clear input → exit |
-| `Ctrl+C` | Clear input; press again to exit |
-| `?` | Show all shortcuts |
-
-Dispatched sessions run independently inside this process (turns, tools,
-approvals all work); switching the TUI elsewhere never interrupts them. A
-background session's approval request shows as "needs input" and its panel
-pops up inside the view (labelled with the session); the row's summary shows
-the question it is blocked on. `/bg` (alias `/background`) moves the attached
-session to the background — it keeps running — switches the terminal to a
-fresh session and opens the view. **`←` on an empty prompt does the same
-thing**: the session moves to the background and the view opens (with text,
-`←` moves the caret as usual); the view tops out with "Your conversation
-moved to the background — Enter opens it · Esc returns to it · Ctrl+C twice
-quits" and the final Esc returns to the backgrounded session; the prompt
-footer keeps a live "← N agents" count of sessions waiting on you. Peek and
-reply work live for running sessions; a stopped session needs an `Enter`
-attach first. Background sessions stop when the TUI process exits (logs
-survive for resume); there is no supervisor process.
 
 ### Rewind
 
@@ -445,8 +433,8 @@ owns native scrollback and selection.
 | Action | Behavior |
 | --- | --- |
 | Wheel | Routed by position: moves the selected row in the completion/command menu under the pointer; scrolls the topmost scroll container (transcript / help / subagent panel); elsewhere scrolls the message list; never scrolls the transcript behind an open overlay; moves the cursor in the trajectory scene (±3 rows per notch on the timeline, ±1 in hotspot, scrolls the detail while expanded); walks the focused row in /settings |
-| Drag | Select text, copy on release, then clear the selection |
-| Double/triple click | Select and copy a word/line |
+| Drag | Select text, copy on release, then clear the selection; with `dsh-tui.scrollGutter: scrollbar` the right-edge scrollbar is a drag target — an unmodified left drag scrubs the transcript to the track position (the same mapping as a track click: drag to point), while `Shift`/`Alt`/`Ctrl`+drag still selects text (the drag protocol opens only for unmodified left presses) |
+| Double/triple click | Select and copy a word/line (exception: the `scrollGutter: scrollbar` track is a drag target, so multi-clicks there no longer select a line) |
 | `Esc` | Cancel an active drag (or an existing selection) without copying |
 | Single-click a message row | Plain text rows (user/assistant) do nothing — the transcript is a reading surface, selection is the mouse's job there |
 | Single-click a tool card / thinking / compact summary | Expand / collapse (header brightens on hover; trailing blank cells do not trigger) |
@@ -469,6 +457,10 @@ owns native scrollback and selection.
 | Single-click a session-browser confirm row | Confirm the delete/clean (same as Enter); cancelling stays on keyboard Esc |
 | Single-click a help-menu command row | Fill `/name ` into the prompt and close the help (the Tab completion's mouse equivalent) |
 | Keyboard selection extension | With a selection, `Shift+←/→/↑/↓/Home/End` extends / shrinks it (wraps across lines) |
+
+These mouse behaviors apply only under `fullscreen: true` (alternate screen);
+inline mode enables no mouse reporting, so scrollbar dragging does not apply
+there — the terminal's native scrollback and selection stay in charge.
 
 Copy prefers OSC 52. Local fallbacks include `wl-copy`, `xclip`, and `xsel`;
 tmux uses `load-buffer -w`. Set `DSH_TUI_DISABLE_MOUSE=1` to temporarily disable
@@ -545,7 +537,7 @@ zh; unmapped registry commands fall back to the registry's own text.
 
 | Group | Commands |
 | --- | --- |
-| Sessions | `/new`, `/resume`, `/agentview` (agent view), `/bg` (alias `/background`, backgrounds the session and opens the view), `/rename`, `/recap` (recent-activity summary + one-key suggested title), `/workspace resume|rename|open`, `/clear`, `/compact`, `/export`, `/btw`, `/trace` (trajectory scene, also `Ctrl+T`), `/rewind` (time travel, same as double-`Esc` on an empty input) |
+| Sessions | `/new`, `/resume`, `/home`, `/agentview` (all three open the same session-management screen), `/bg` (alias `/background`, backgrounds the session and opens that screen), `/rename`, `/recap` (recent-activity summary + one-key suggested title), `/workspace resume|rename|open`, `/clear`, `/compact`, `/export`, `/btw`, `/trace` (trajectory scene, also `Ctrl+T`), `/rewind` (time travel, same as double-`Esc` on an empty input) |
 | Status | `/context`, `/status`, `/cost`, `/balance` (official DeepSeek balance: summary row + hover details, click to refresh), `/config`, `/doctor`, `/init`, `/agents`, `/jobs` (background jobs panel: status/elapsed/exit code, `k` kills), `/settings` |
 | Model and display | `/model`, `/effort`, `/thinking`, `/tokens`, `/activity`, `/preset`, `/theme`, `/color` (session accent color: bare opens the palette picker, `<name>` sets directly, `status`/`reset`; input border + session-name chip at the top-right, per-session; chip off by default, enable in `/settings`), `/lang` |
 | Account and policy | `/provider`, `/login`, `/logout`, `/permission`, `/add-dir`, `/hooks`, `/mcp`, `/plugins` (`check <path>` validates a plugin manifest) |

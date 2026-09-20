@@ -237,7 +237,8 @@ assert(settingsHostCalls - quietCalls < 50, 'idle screen settles (no render loop
 // so a single Esc returns to the conversation with no discard notice and no
 // extra writes. NOTE: assert the conversation's return, not the title's
 // absence — this headless harness keeps a stale first-row residue after
-// EVERY screen close (SessionBrowser shows the same artifact; pre-existing
+// EVERY screen close (the other full-screen views show the same artifact;
+// pre-existing
 // renderer behavior, not this screen's doing).
 stdin.write('\x1b')
 assert(await settled(() => screenText().includes('Explore the uncharted')), 'Esc leaves the settings screen directly')

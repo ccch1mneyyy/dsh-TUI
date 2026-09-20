@@ -67,6 +67,13 @@ the interface, and removing it leaves no core modifications behind.
   before restarting. Disabled previews keep text
   metadata and skip preview decoding; sending images to the model is unaffected.
   `DSH_TUI_DISABLE_TERMINAL_IMAGES=1` always forces previews off.
+  ```` ```mermaid ```` fences in replies render as Unicode box-drawing diagrams
+  (flowchart / sequence / state / class / ER / pie / mindmap / timeline /
+  gitGraph), laid out in-process with no browser or image protocol, and take
+  shape progressively while streaming; a diagram wider than the terminal or of
+  an unsupported type keeps the fenced source with a note of the columns it
+  needs. On by default; turn it off in `/settings → Mermaid diagrams` or with
+  `mermaidDiagrams: false` — applies immediately.
   Windows Terminal with Sixel support displays embedded transcript thumbnails
   and the fullscreen preview card. Non-fullscreen inline mode stays text-only.
   Sixel uses a bounded 256-color adaptive palette and background-composited
@@ -102,19 +109,28 @@ the interface, and removing it leaves no core modifications behind.
   few turns, the full history stays one click away (clicking a folded tick
   reveals that turn and scrolls to it). When not pinned to the bottom,
   `Enter`/`End` jump back in one step (no blank flash from long distances)
-  and a clickable new-messages pill stays in view; the right gutter offers
-  timeline / scrollbar / hidden modes.
+  and a clickable new-messages pill stays in view; in fullscreen, the right
+  gutter offers timeline / scrollbar / hidden modes. In scrollbar mode the
+  track is also a drag target: an unmodified left drag scrubs the transcript
+  continuously to the pointer's track position (a drop-in extension of track
+  clicking), while `Shift`/`Alt`/`Ctrl`+drag still selects text.
 - **Visible agent state**: live activity, segmented context usage, TPS, cache
   hit rate, reasoning effort, input/output tokens, and Git/session metadata.
-  In fullscreen, hovering a truncated tool header, wrapped user prompt, or
-  session title for ~600ms opens a tooltip with the full content.
+  In fullscreen, hovering a truncated tool header or session title for
+  ~600ms opens a tooltip with the full content; tooltips never appear while
+  a text selection is active (the card would cover the cells being copied).
 - **Activity animation**: `moon8` is the default. A legacy local `claude`
   setting is read as `moon8`, and the picker lists current presets only.
-- **Complete session workflow**: `/resume` groups history by working directory
-  with search and preview (left-click resumes, right-click opens an action
-  menu; pin frequent sessions — a `Pinned` group floats them to the top, the
-  in-row star or `Ctrl+P` toggles, pins persist in `~/.dsh-tui`), alongside
-  `/new`, `/workspace`, `/compact`, `/export`,
+- **Complete session workflow**: `/resume`, `/home`, `/agentview`, `/bg` and the
+  `⌸` entry at the head of the prompt row all open the SAME session-management
+  screen — a workspace rail on the left (the durable registry: edit / new
+  session here / rename / remove from list) and that workspace's sessions on the
+  right, with live state, a filter, and an in-row ★ pin that persists in
+  `~/.dsh-tui`. A session another TUI terminal holds is listed but refuses to be
+  entered; a session this terminal parked is one keypress away, because
+  switching never interrupts a running turn. Sessions whose directory is not
+  registered still get a fallback group, so "not registered" never means "gone".
+  Also available: `/new`, `/workspace`, `/compact`, `/export`,
   the `/btw` side question, model switching, double-`Esc` rewind through a
   session fork, vim editing for the prompt (`/vim`), mouse selection
   editing in the prompt (drag to select, Shift+click to extend,
@@ -265,7 +281,7 @@ For migration from the former `dsh-cc-tui` package and `cc-tui` profile, see
 | `/vim` | Toggle vim editing for the prompt (session-scoped): `Esc` switches to NORMAL (`h/l/j/k`, `0/^/$`, `w/b`, `x/X`, `dd`/`d$`/`d0`/`dw`, `u` undo), `i/a/o` back to INSERT |
 | `?` | Keybinding menu (responds only when the input is empty) |
 | `Shift+↑` | Message selection mode (`Enter` expands a single message) |
-| `Ctrl+P` | Toggle the startup loaded-context panel while it is on screen; inside `/resume`, pin/unpin the selected session |
+| `Ctrl+P` | Toggle the startup loaded-context panel while it is on screen (the old pin shortcut inside `/resume` is gone; pin a session by clicking its row's ★) |
 | `Home` / `End`, `Ctrl+A` / `Ctrl+E` | `Ctrl+A` opens the subagent dashboard (in-editor `Mod+A` still moves to line start); `Ctrl+E` is dual-purpose: line end in the input, expand/collapse hidden older messages during transcription |
 | `Ctrl+←` / `Ctrl+→` (⌘←/→) | Jump by word |
 | `←` / `→` (image modal) | Previous / next image; caret peeks retain prompt editing |
@@ -320,7 +336,7 @@ so keep using `Ctrl`.
 
 | Group | Commands |
 |---|---|
-| Session | `/new` new session · `/resume` working-directory/session browser (visible directory scope, search, preview, cross-project, sub-agent runs folded) · `/agentview` agent view (all sessions) · `/bg` (alias `/background`) background this session and open the view · `/rename` rename session · `/recap` session recap (apply the suggested title in one key; `/settings` can enable an auto-summary on session open — on by default: a divider + `Recap:` line appears at the bottom of the transcript when resuming, and bows out once you send a new message) · `/workspace resume\|rename\|open` manage workspaces · `/clear` clear screen · `/compact` compact · `/export` export Markdown · `/trace` trace timeline (or `Ctrl+T`) · `/rewind` rewind picker (same as double-`Esc` on empty input) · `/tree` session family tree (every fork branch stitched together; hover previews a node, click opens a rewind/fork-here/adopt-branch menu) · `/fork` copy the current session into a resumable twin (the original is untouched) · `/btw <question>` side question (never interrupts the main turn, writes no history) |
+| Session | `/new` new session · `/resume`, `/home`, `/agentview` open the one session-management screen (workspace rail + that workspace's sessions, live state, filter, in-row ★ pins) · `/bg` (alias `/background`) background this session and open that screen · `/rename` rename session · `/recap` session recap (apply the suggested title in one key; `/settings` can enable an auto-summary on session open — on by default: a divider + `Recap:` line appears at the bottom of the transcript when resuming, and bows out once you send a new message) · `/workspace resume\|rename\|open` manage workspaces · `/clear` clear screen · `/compact` compact · `/export` export Markdown · `/trace` trace timeline (or `Ctrl+T`) · `/rewind` rewind picker (same as double-`Esc` on empty input) · `/tree` session family tree (every fork branch stitched together; hover previews a node, click opens a rewind/fork-here/adopt-branch menu) · `/fork` copy the current session into a resumable twin (the original is untouched) · `/btw <question>` side question (never interrupts the main turn, writes no history) |
 | Status | `/context` loaded-context details · `/status` session info · `/cost` token usage · `/doctor` environment self-check · `/config` configuration sources · `/init` create AGENTS.md · `/settings` settings panel (namespace read/edit) |
 | Model | `/model` two-level picker (a pinned **Recently used** group first — the last 10 switched models, persisted at `~/.dsh-tui/model-recents.json` — then provider groups; Enter drills into a group's models; a single provider with no recents skips straight to the list; **switching = fork continuation, history preserved**) · `/effort` reasoning effort (slider / `status` / `<id>`; the default level new sessions start on is set in `/settings` → Default reasoning effort) · `/preset` agent preset (**cannot switch once the session has started** — blank-only) · `/thinking` thinking display · `/tokens` token details · `/activity` working animation (`frames <name>` / `status`) · `/theme` theme picker · `/color` (bare opens the palette picker; `<name>` sets directly; `status`/`reset`) session accent color (input border + session-name chip at the top-right, per-session; chip off by default, enable in `/settings`) · `/lang` zh/en UI switch (also selectable in `/settings`) |
 | Accounts/Policy | `/provider` manage model providers — add a provider, or edit an existing one via a menu (API key · model list · delete the provider; custom endpoints also get base URL · wire protocol; a targeted edit patches only that field, the rest of the profile survives untouched; the model list pre-checks what you already enabled; only user-layer providers are editable) (includes the bundled dsh-auth **subscription OAuth sign-in** branch — ChatGPT / Claude / Grok, no API key; same source as `/auth status\|login\|logout`) · `/login` credential & account status · `/logout` logout notes · `/permission` dynamic preset/status notes · `/add-dir` file-policy scope · `/hooks` · `/mcp` |
