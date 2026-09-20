@@ -698,6 +698,19 @@ async function main(): Promise<void> {
       )
       check('attach·v2 回归：单行选区（start=end=41）附加 1 行',
         single !== undefined && single.lines === 1)
+      // 整行选区（终审轮 5）：getText 对跨行选区带一个尾换行（下一行行首
+      // 收尾）——必须剥掉，否则计数 +1 且块体多一个空行。
+      const fullLines = await attach(
+        mkBlocks(), '/repo',
+        { path: 'full.ts', startLine: 5, endLine: 7, isEmpty: false, text: 'L5\nL6\nL7\n' },
+        boobyFs,
+      )
+      const fullBlocks = mkBlocks()
+      await attach(fullBlocks, '/repo',
+        { path: 'full.ts', startLine: 5, endLine: 7, isEmpty: false, text: 'L5\nL6\nL7\n' }, boobyFs)
+      check('attach·v2 回归：整行选区尾换行被剥——3 行、无幻影空行',
+        fullLines !== undefined && fullLines.lines === 3
+        && fullBlocks[0]?.text === '<attached-file path="full.ts" selection>\nL5\nL6\nL7\n</attached-file>')
       const { MENTION_MAX_FILE_CHARS: CAP } = await import('../src/dsh-adapter/channel/mentions.js') as { MENTION_MAX_FILE_CHARS: number }
       const bigText = ('y'.repeat(200) + '\n').repeat(300)
       const bigBlocks = mkBlocks()

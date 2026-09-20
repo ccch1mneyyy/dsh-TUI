@@ -147,7 +147,7 @@ session fork, vim editing for the prompt (`/vim`), mouse selection
   prompt, and submitting attaches only the selected lines (with a
   `⧉ Selected N lines` indicator in the transcript). Manually launched sessions
   (tmux/SSH) discover a local IDE through lock files automatically; without an
-  IDE everything degrades silently. See [vscode.md](docs/vscode.md).
+  IDE everything degrades silently. See [vscode.en.md](docs/vscode.en.md).
 - **Official DSH integrations**: agent presets, skills, MCP, goals, todos,
   subagents, and `ask_user_question` are connected through existing services
   and registries. `/skills` shows skills discovered from the active profile,

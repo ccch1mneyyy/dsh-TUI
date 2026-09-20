@@ -116,8 +116,13 @@ export async function attachIdeSelection(
     // along for the badge/indicator, but they must NOT slice this string:
     // it already contains exactly the selected lines, so anything not
     // starting at line 0 would be mis-cut or dropped entirely (review
-    // round 4). Attach it verbatim with the shared size cap.
-    const block = cappedSelectionBlock(selection.path, selection.text)
+    // round 4). Attach it verbatim with the shared size cap. A full-line
+    // selection ends at column 0 of the NEXT line, so getText hands back a
+    // trailing '\n' — strip that one terminator or the body grows a phantom
+    // blank line and the indicator over-counts by one (review round 5).
+    let text = selection.text
+    if (text.endsWith('\n')) text = text.slice(0, -1)
+    const block = cappedSelectionBlock(selection.path, text)
     if (block === undefined) return undefined
     blocks.push({ type: 'text', text: block.text })
     return { lines: block.lines, path: selection.path }
