@@ -266,8 +266,9 @@ a turn in flight keeps running and is still there when you come back. Leaving a
 session therefore needs no confirmation, and there is no "stop" meaning to it.
 
 Opening this screen **does not lose an unsent draft**: the composer unmounts with
-the screen, and Chat keeps the draft — text, caret position and the staged image
-references — until `Esc` brings it back. A draft belongs to its **session**, so
+the screen, and Chat keeps the draft — text, caret position, the staged image
+references, and the edit state around them (fold block, fullscreen draft editor,
+vim mode) — until `Esc` brings it back. A draft belongs to its **session**, so
 it never follows you into another conversation; the message `/rewind` hands back
 belongs to the session the rewind created, so it does stay in the input.
 

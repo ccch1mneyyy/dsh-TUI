@@ -1094,6 +1094,36 @@ export function Chat({
    * the user into a different conversation.
    */
   const promptDraftRef = React.useRef<PromptDraftCache>({ current: null })
+  /**
+   * Latest channel for the unmount release below: that effect must not re-run
+   * on a channel identity change, yet its cleanup must release against the
+   * channel of the last render.
+   */
+  const channelRef = React.useRef(channel)
+  channelRef.current = channel
+  /**
+   * Release the staged images a waiting snapshot alone owns.
+   *
+   * While a draft waits in the slot for the composer to remount, the snapshot
+   * is the only owner of the capabilities behind its `[Image #N]` tokens. If
+   * Chat itself goes away first (leaving an early-return screen by exiting the
+   * TUI), nothing would ever restore or discard them — the session's
+   * 128-entry FIFO would evict live entries instead. The `hasStagedImage`
+   * guard keeps a capability the channel already recycled a no-op; both calls
+   * are idempotent.
+   */
+  React.useEffect(() => {
+    return () => {
+      const snapshot = promptDraftRef.current.current
+      promptDraftRef.current.current = null
+      if (snapshot === null) return
+      for (const [, stageId] of snapshot.images) {
+        if (channelRef.current.hasStagedImage?.(stageId) === true) {
+          channelRef.current.discardStagedImage(stageId)
+        }
+      }
+    }
+  }, [])
   const draftSessionId = channel.agentId
   /** Session the effect below last reconciled against; a change is a switch. */
   const draftSessionRef = React.useRef(draftSessionId)
@@ -3978,6 +4008,7 @@ export function Chat({
           onOpenSubagent={setSubagentDetailId}
           onOpenJobs={openJobsPanel}
           onOpenFile={openFileActions}
+          sessionCwd={channel.cwd}
           onPreviewImage={openImagePreview}
           suppressImageGraphics={activePreview !== null}
         />

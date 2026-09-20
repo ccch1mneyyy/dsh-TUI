@@ -69,6 +69,7 @@ Sixel 使用最多 256 色的自适应调色板，透明像素与背景合成；
     回复中的 ```` ```mermaid ```` 代码块直接画成 Unicode 字符图（flowchart / sequence / state / class / ER / pie / mindmap / timeline / gitGraph），纯进程内布局，不依赖浏览器或图片协议，流式输出时随内容逐步成形；比终端宽或类型不支持的图保留源码并注明所需列数。默认开启，`/settings → Mermaid 图表` 或配置 `mermaidDiagrams: false` 关闭，立即生效。
   - **功能全面**：`/resume`、`/home`、`/agentview`、`/bg` 与输入框行首 `⌸` 打开**同一个会话管理界面**——左侧工作区栏（持久登记：编辑 / 在此新建 / 重命名 / 从列表移除），右侧该工作区的会话列表（实时状态、筛选、行内 ★ 固定，持久化到 `~/.dsh-tui`）；被其他 TUI 终端占用的会话照常列出但拒绝进入，本终端停放中的会话可随时切回（切换不中断正在跑的回合）；未登记目录下的会话有兜底分组，不会因"没有登记"而消失、`/new`、`/compact`、`/export`、`/btw`，模型热切换（新会话默认推理强度可在 /settings → 默认推理强度 预设），原生subagent，会话fork，自动更新，输入框 `/vim` vim 编辑模式、鼠标选区编辑（拖选高亮、Shift+click 扩展、双击选词、Ctrl+C 复制选区）与全屏草稿编辑（`Ctrl+Shift+E` 或输入行 `⛶` 按钮：行号 + 当前行高亮、Enter 换行、Ctrl+Enter 发送、滚轮滚动、点击/拖选，长草稿独占整屏；`/settings` 可关）；可在vs code中[以vscode插件形式启动](docs/vscode.md)，已上架 VS Code Marketplace。
     `/resume` 只将完整读取并确认没有用户消息的日志判为空会话；仅发图片、读取不完整或解析失败的会话不会被归入空会话清理。
+  - **IDE 选区通道**：搭配 VS Code 扩展启动时，编辑器选中代码后 prompt 下方实时显示 `⧉ N lines selected` 徽标，提交消息自动附加选中行内容（transcript 有「⧉ Selected N lines」指示行）；手动启动（tmux/SSH）通过 lock 自动发现本机 IDE，无 IDE 时静默降级零影响。详见 [vscode.md](docs/vscode.md)。
   - **扩展丰富**：原生浏览器交互，compter use等大量附属功能性扩展
   - **技能归 DSH 管理**：`/skills` 展示当前 profile、用户与项目发现的技能；dsh-TUI 不预装通用技能。
     技能目录暂时不完整时，保留最后一次完整观测的技能菜单与命令注册，并按 800/1600/3200ms 最多重试三次；耗尽后等待 DSH 的 `skills/change` 通知或显式刷新，不持续轮询。只有完整观测才能移除已消失的技能，包括完整空目录。
@@ -128,6 +129,8 @@ sh install.sh
 > ```
 >
 > `/update` 与 `dsh-tui update` 会自动写入这份配置，无需手工处理。
+>
+> 更新时还会维护 `ignoredOptionalDependencies`（忽略异平台的 `@img/sharp-*` 原生包）——sharp 以全平台可选依赖分发，不处理时 `pnpm update` 会把各平台二进制一起下载（实测约 200MB）。名单每次更新按当前平台重算，异平台原生包不再下载（当前平台原生包与无平台归属的 wasm 回退包保留）；把 profile 搬到别的平台或 musl 容器后，在那台机器上跑一次更新即可刷新。老 profile 的 lockfile 里仍写着全平台条目，第一次更新会照旧下载一遍，之后才被忽略。块内不属于这两张平台表的条目（`fsevents`、自己写的 `@img/sharp-wasm32` 豁免）原样保留；需要 pnpm 支持该键，不认识的版本不会因此报错，只失去这项收益。
 
 更面向零基础的安装流程、profile 叠加机制、源码构建与常见问题见[安装与快速开始](docs/getting-started.md)。
 

@@ -15,11 +15,14 @@ integrated terminal** (xterm.js). This page covers two ways to use it:
    start; for when you do not want the extension.
 
 > Version note: `dsh-tui` on this page refers to this repository (the TUI
-> plugin, currently **0.9.0**; 0.7.0+ recommended); `dsh-tui-vscode` refers
-> to the companion extension (currently **0.5.1**). The two version and
-> release independently. See the
+> plugin); `dsh-tui-vscode` refers to the companion extension. The two
+> version and release independently. See the
 > [baobaolaodie/dsh-tui-vscode](https://github.com/baobaolaodie/dsh-tui-vscode)
-> README for the extension's full documentation.
+> README for the extension's full documentation. **The selection channel
+> requires an extension that speaks protocol v2** (a dsh-tui-vscode build
+> including `feat/mentions-ide-adapter` plus the protocol-v2 changes; the
+> Marketplace 0.5.1 does not have it yet — with an older extension the
+> feature stays silently disabled and everything else is unaffected).
 
 ## Option 1: the dsh-tui-vscode companion extension (recommended)
 
@@ -41,6 +44,38 @@ integration.
   session id;
 - per-session termination when its terminal closes, or when `Ctrl+C` is pressed
   twice inside the TUI.
+
+| Capability | Official Claude Code extension | dsh-tui-vscode |
+| --- | --- | --- |
+| Entry points | Activity-bar icon + editor-title button + command palette | Same (DeepSeek whale icon) |
+| Session position | NEW column beside the active one (`ViewColumn.Beside`) | Same — never takes the current column |
+| Terminal tab | `Claude Code` + logo icon | `DeepSeek` + whale icon |
+| Session host | Real integrated terminal (default shell — PowerShell on Windows) | Same |
+| Multiple sessions | Every click opens a new session terminal | Same; old sessions keep running |
+| Sidebar | Sessions list | Session history (grouped by project — stronger) |
+| Auto start/stop | Open = start; closing the terminal = end | Same |
+| Env injection | — | `DSH_TUI_LANG` / `$VISUAL` / `$DSH_HOME` / session id / `DSH_TUI_IDE_PORT/TOKEN` (selection channel) |
+| Editor selection sync | Selection enters context automatically; `⧉ N lines selected` under the prompt | Same (IDE selection channel, below) |
+
+### IDE selection channel
+
+With a dsh-tui build that includes the IDE selection channel, the extension runs a loopback WebSocket server and writes a lock file (directory 0700, file 0600); dsh-tui connects via injected env vars when launched from the extension (manually launched sessions discover it by scanning the lock — only windows whose workspace covers the session directory are ever dialed; with no match the integration stays silently disabled and a foreign project is never connected). Afterwards:
+
+- Selecting code in the editor instantly shows a `⧉ N lines selected` badge under the TUI prompt (it disappears when the selection clears);
+- Submitting a message attaches only the selected lines to the model context, with a `⧉ Selected N lines from <relative path>` indicator above the user bubble (resuming the session after a restart still rebuilds that indicator);
+- Selection pushes carry the editor buffer's OWN text — unsaved edits are attached exactly as you see them on screen; oversized selections are capped and marked with the same policy as @-mentions. Without an IDE or on disconnect everything degrades silently with zero impact on the rest of the TUI.
+
+![IDE selection channel: live footer badge and transcript indicator](../screenshots/ide-selection-badge.png)
+
+**Protocol & versions**: after connecting, the TUI sends `ide/hello`
+(token + protocolVersion) and the extension answers `ide/hello_ack`
+(protocolVersion + workspaceFolders) only when the token validates — the
+link counts as established only after a valid v2 ack; a wrong token is
+silently dropped. `selection_changed` then carries absolute 0-based
+inclusive line numbers plus the editor buffer's own selection text; lock
+discovery only ever dials windows whose workspace covers the session
+directory and stays silently disabled without a match. Both ends of the
+protocol must ship at the same version.
 
 ### Prerequisites
 
@@ -69,7 +104,7 @@ Or build from source:
 git clone https://github.com/baobaolaodie/dsh-tui-vscode.git
 cd dsh-tui-vscode
 npm install
-npm run package && code --install-extension dsh-tui-vscode-0.5.1.vsix --force
+npm run package && code --install-extension dsh-tui-vscode-<version>.vsix --force
 # or: npm run install:local
 ```
 

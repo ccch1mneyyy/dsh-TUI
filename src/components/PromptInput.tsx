@@ -583,8 +583,9 @@ export function PromptInput({
    * Adopt the owner's draft ONCE, after mount.
    *
    * This is where a screen swap gives the draft back: the slot outlives this
-   * component, so a remount picks up what the user had written — text, caret
-   * and the image bindings behind the visible `[Image #N]` tokens.
+   * component, so a remount picks up what the user had written — text, caret,
+   * the image bindings behind the visible `[Image #N]` tokens, and the edit
+   * state around them (fold chip, fullscreen editor, vim mode).
    *
    * It runs as an effect rather than as the `useState` initial value on
    * purpose. A composer whose FIRST frame is already non-empty moves the
@@ -601,6 +602,22 @@ export function PromptInput({
     draftCache.current = null
     if (!isUsableDraftSnapshot(snapshot, String(channel.agentId), resolveBindingGeneration(channel))) return
     const text = snapshot.value
+    // Carried edit state, restored ahead of the text: the chip, the
+    // fullscreen editor and the vim mode/submode come back with the draft —
+    // and they come back even with NO text, because they are modes rather
+    // than content. Fold ranges are safe by the CAPTURE invariant, not by
+    // restore order: a snapshot's block, when set, always sits inside the
+    // snapshot's own text (setInput keeps or drops it atomically), and at
+    // mount the caret is 0 so updateFoldBlock's caret-drag clamp cannot fire
+    // here. The transient state around them — editor scroll, vim undo stack,
+    // selection — does not come back.
+    updateFoldBlock(snapshot.foldBlock)
+    expandedRef.current = snapshot.expanded
+    setExpanded(snapshot.expanded)
+    vimEnabledRef.current = snapshot.vimEnabled
+    setVimEnabled(snapshot.vimEnabled)
+    vimInsertRef.current = snapshot.vimInsert
+    setVimInsert(snapshot.vimInsert)
     if (text === '') return
     const restoredCursor = normalizeCursorOffset(text, snapshot.cursor)
     replaceDraftImages(filterLiveImageBindings(
@@ -943,7 +960,14 @@ export function PromptInput({
         return
       }
       const text = valueRef.current
-      if (text === '' && images.length === 0) {
+      // The edit state rides along even with nothing typed: vim mode and the
+      // fullscreen editor are MODES the user turned on, not content, and an
+      // empty composer must not drop them (`text === ''` alone used to skip
+      // the snapshot entirely, losing the vim badge on a round trip with an
+      // empty composer).
+      const editState = foldBlockRef.current !== null || expandedRef.current
+        || vimEnabledRef.current
+      if (text === '' && images.length === 0 && !editState) {
         draftCache.current = null
         return
       }
@@ -952,6 +976,10 @@ export function PromptInput({
         bindingGeneration: resolveBindingGeneration(channel),
         value: text,
         cursor: cursorRef.current,
+        foldBlock: foldBlockRef.current,
+        expanded: expandedRef.current,
+        vimEnabled: vimEnabledRef.current,
+        vimInsert: vimInsertRef.current,
         images,
       }
     }

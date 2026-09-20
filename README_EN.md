@@ -135,7 +135,7 @@ the interface, and removing it leaves no core modifications behind.
   registered still get a fallback group, so "not registered" never means "gone".
   Also available: `/new`, `/workspace`, `/compact`, `/export`,
   the `/btw` side question, model switching, double-`Esc` rewind through a
-  session fork, vim editing for the prompt (`/vim`), mouse selection
+session fork, vim editing for the prompt (`/vim`), mouse selection
   editing in the prompt (drag to select, Shift+click to extend,
   double-click word select, `Ctrl+C` to copy the selection), and a
   fullscreen draft editor (`Ctrl+Shift+E` or the `⛶` row button: line
@@ -145,6 +145,12 @@ the interface, and removing it leaves no core modifications behind.
   `/resume` classifies a log as empty only after a complete read confirms no
   user messages; image-only input, incomplete reads, and parse failures never
   make a session eligible for empty-session cleanup.
+- **IDE selection channel**: when launched from the VS Code extension, selecting
+  code in the editor instantly shows a `⧉ N lines selected` badge under the
+  prompt, and submitting attaches only the selected lines (with a
+  `⧉ Selected N lines` indicator in the transcript). Manually launched sessions
+  (tmux/SSH) discover a local IDE through lock files automatically; without an
+  IDE everything degrades silently. See [vscode.en.md](docs/vscode.en.md).
 - **Official DSH integrations**: agent presets, skills, MCP, goals, todos,
   subagents, and `ask_user_question` are connected through existing services
   and registries. `/skills` shows skills discovered from the active profile,
@@ -204,6 +210,19 @@ commands), then `dsh-tui` (or `dst`) and `dsh --profile dsh-tui` are equivalent.
 >
 > `/update` and `dsh-tui update` seed this configuration automatically —
 > no manual step needed.
+>
+> Updates also maintain `ignoredOptionalDependencies` covering foreign-platform
+> `@img/sharp-*` natives: sharp ships as all-platform optional dependencies, and
+> an untouched `pnpm update` downloads every platform's binaries (about 200MB
+> measured). The list is recomputed for the running platform on every update, so
+> the foreign natives are skipped while this platform's own and the
+> platform-agnostic wasm fallbacks stay; move the profile to another platform or
+> musl container and the next update there refreshes it. An existing profile's
+> lockfile still lists every platform, so its first update downloads them once
+> more before the filter takes effect. Entries outside those two platform tables
+> (a user's `fsevents`, a hand-written `@img/sharp-wasm32` exemption) are left as
+> they are; this needs a pnpm that supports the key, and one that does not fails
+> nothing — it merely loses the saving.
 
 `dsh-tui` (or its `dst` alias) with `--resume` restores the most recently selected session; on Windows
 the repository's `dsh-tui.cmd` works the same way.

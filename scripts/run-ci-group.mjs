@@ -262,6 +262,13 @@ const GROUPS = {
 // 转录拉进不可选取区。真实 Chat 树 + SGR 拖选注入，静息/上滚阅读+
 // 流式并发/流式结束后三场景断言 OSC 52 携带完整选中文本。
     ["repro-drag-select-streaming", ['node', '--import', 'tsx/esm', 'scripts/repro-drag-select-streaming.tsx']],
+// 草稿编辑态跨整屏往返回归（#846 增量，PR #942）：真实 Chat 往返——
+// 折叠块/全屏编辑器/vim 模式与 insert-normal 子模式随快照往返、空输入
+// 框保留模式态、Chat 卸载释放快照独占的 staged 图片、staged 绑定可提交。
+// 文本/光标/归属基础往返在 session-workspace 组的
+// verify-composer-draft-handoff；在途 staging 围栏在 verify:build 链的
+// verify-image-preview。完整 8 场景矩阵见 PR #942 历史。
+    ["verify-composer-draft-screen-switch", ['node', '--import', 'tsx/esm', 'scripts/verify-composer-draft-screen-switch.tsx']],
   ],
   'session-workspace': [
 // 审批服务配置回归（issue #49 尾巴）：裸组合 cordis.yml 必须挂载
@@ -443,6 +450,11 @@ const GROUPS = {
     ["verify-submit", ['node', '--import', 'tsx/esm', 'scripts/verify-submit.mjs']],
     ["verify-compact", ['node', '--import', 'tsx/esm', 'scripts/verify-compact.mjs']],
     ["verify-channel-goal-todo", ['node', '--import', 'tsx/esm', 'scripts/verify-channel-goal-todo.mjs']],
+// IDE 选区通道回归（PR #562）：纯函数（env 直连/lock 扫描与 workspace
+// 匹配过滤/hello_ack 解析/selection_changed 校验）、无 IDE 静默降级、
+// loopback 对连（token 握手 ACK、错误 token 换下一候选、断连清空）、
+// 选区消费（text 优先/磁盘回退/截断计数/replay 指示回扫）。
+    ["verify-ide-channel", ['node', '--import', 'tsx/esm', 'scripts/verify-ide-channel.tsx']],
     ["verify-whale-toggle", ['node', '--import', 'tsx/esm', 'scripts/verify-whale-toggle.mjs']],
 // 开屏鲸鱼三选一（classic 组合开场/heart/sleep）：帧表完整性（22 帧
 // 含 heart/sleep 新调色）、序列合法性（standard 起止/纯自家行为帧、

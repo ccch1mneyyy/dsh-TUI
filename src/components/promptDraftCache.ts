@@ -12,7 +12,8 @@
  * be a cycle), so the component and the headless regressions can both assert
  * against the same rules.
  *
- * The snapshot shape and the image-liveness rule are taken from PR #847
+ * The snapshot shape, the image-liveness rule and the carried edit state
+ * (fold block, fullscreen editor, vim mode) are taken from PR #847
  * (`promptDraftCache.ts`, branch `fix/composer-draft-retention`); the owner
  * check here adds the agent id, because a generation alone cannot tell two
  * channels with a fixed generation apart.
@@ -35,6 +36,17 @@ export interface PromptDraftSnapshot {
   readonly bindingGeneration: number
   readonly value: string
   readonly cursor: number
+  /**
+   * Fold block [start, end) rendering as a one-line chip, or null. Edit
+   * state, not transient chrome: coming back with the text unfolded loses
+   * exactly what the user folded.
+   */
+  readonly foldBlock: { readonly start: number; readonly end: number } | null
+  /** Fullscreen draft editor open at capture time. */
+  readonly expanded: boolean
+  /** vim mode on (`/vim`), and whether it is in INSERT (vs NORMAL) submode. */
+  readonly vimEnabled: boolean
+  readonly vimInsert: boolean
   /** Visible `[Image #N]` token → staged stageId, so images survive the trip. */
   readonly images: readonly PromptDraftImage[]
 }

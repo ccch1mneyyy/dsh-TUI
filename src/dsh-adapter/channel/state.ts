@@ -56,10 +56,10 @@ export function createInitialChannelView(
   'foldTerminalCommand' | 'promptSessionLabel' | 'expandEditor' | 'smoothStreaming' |
   'statusBar' | 'whale' | 'whaleIdle' | 'minimal' | 'activityEnabled' | 'contextBarEnabled' |
   'agentPreset' | 'goal' | 'todos' | 'loadedContext' | 'pending' | 'commandList' |
-  'lastUsage' | 'tps' | 'tpsSamples' | 'contextSegments' | 'subagents' | 'backgroundJobs'
+  'lastUsage' | 'tps' | 'tpsSamples' | 'contextSegments' | 'subagents' | 'backgroundJobs' | 'selection'
 > {
   return {
-    effortLevels: undefined, version: 0, rows: [], status: 'starting', sessionTitle: '', sessionColor: '',
+    effortLevels: undefined, version: 0, rows: [], selection: undefined, status: 'starting', sessionTitle: '', sessionColor: '',
     agentId: input.agentId, agentBindingGeneration: 0, model: options.model, provider: options.provider,
     tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, peak: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, idle: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } },
     cwd: options.cwd, displayCwd: input.cwdDescription, gitBranch: undefined, working: false,
