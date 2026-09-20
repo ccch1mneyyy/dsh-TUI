@@ -33,11 +33,11 @@ import { DATA_DIR } from '../../utils/paths.js'
 import type { TitleSource } from './types.js'
 
 /**
- * Bumped when an entry's shape changes. A mismatch drops the whole file
- * rather than migrating it — re-deriving is cheap and bounded, whereas a
- * migration path is code that runs once and is never exercised again.
+ * Bumped when derived facts change shape or meaning. Version 2 could cache
+ * incomplete reads as empty: discard those derivations, retaining only the
+ * branch notes that cannot be recovered from the session log.
  */
-const SCHEMA_VERSION = 2
+const SCHEMA_VERSION = 3
 
 const INDEX_FILE = join(DATA_DIR, 'session-index.json')
 
@@ -77,11 +77,11 @@ function readTitleSource(value: unknown): TitleSource | undefined {
 }
 
 /** Narrow one persisted entry; an unrecognizable record is simply absent. */
-function readEntry(value: unknown): IndexEntry | undefined {
+function readEntry(value: unknown, derivedValid: boolean): IndexEntry | undefined {
   if (value === null || typeof value !== 'object') return undefined
   const record = value as Record<string, unknown>
   const branch = typeof record['branch'] === 'string' ? record['branch'] : undefined
-  const raw = record['derived']
+  const raw = derivedValid ? record['derived'] : undefined
   if (raw === null || typeof raw !== 'object') return { derived: undefined, branch }
   const derived = raw as Record<string, unknown>
   const revision = derived['revision']
@@ -100,7 +100,8 @@ function readEntry(value: unknown): IndexEntry | undefined {
     (anchor !== undefined && typeof anchor !== 'string') ||
     typeof title !== 'string' ||
     titleSource === undefined ||
-    typeof titleComplete !== 'boolean'
+    typeof titleComplete !== 'boolean' ||
+    typeof derived['hasPrompt'] !== 'boolean'
   ) {
     return { derived: undefined, branch }
   }
@@ -123,8 +124,8 @@ function readEntry(value: unknown): IndexEntry | undefined {
 
 /**
  * Load the cache.
- * @returns The parsed index; an unreadable, malformed, or stale-schema file
- *   yields an empty one, which costs a rebuild and never an error.
+ * @returns The parsed index; old derived facts are discarded for a rebuild.
+ *   Version 2 retains branch notes; unrecognized files yield an empty index.
  */
 export function readIndex(): SessionIndex {
   const index: SessionIndex = new Map()
@@ -136,11 +137,11 @@ export function readIndex(): SessionIndex {
   }
   if (parsed === null || typeof parsed !== 'object') return index
   const file = parsed as Record<string, unknown>
-  if (file['version'] !== SCHEMA_VERSION) return index
+  if (file['version'] !== SCHEMA_VERSION && file['version'] !== 2) return index
   const entries = file['entries']
   if (entries === null || typeof entries !== 'object') return index
   for (const [id, value] of Object.entries(entries as Record<string, unknown>)) {
-    const entry = readEntry(value)
+    const entry = readEntry(value, file['version'] === SCHEMA_VERSION)
     if (entry !== undefined) index.set(id, entry)
   }
   return index

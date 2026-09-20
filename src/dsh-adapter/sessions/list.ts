@@ -198,7 +198,7 @@ export async function listSummaries(
     } else if (path !== undefined && token !== undefined) {
       const digest = digestSession(path, header.cwd ?? '')
       let title = digest.title
-      let hasPrompt = digest.hasPrompt
+      const hasPrompt = digest.hasPrompt
       let titleComplete = digest.titleComplete === true
       const previous = cached?.derived
 
@@ -206,6 +206,8 @@ export async function listSummaries(
       // scan only the new frames. This preserves an older authoritative title
       // without trusting file size alone, and still observes a newly appended
       // rename even when later output pushed it outside the cheap tail window.
+      // Only title evidence carries forward: a formerly empty session can
+      // have acquired its first human message in the appended suffix.
       if (
         !titleComplete &&
         previous !== undefined &&
@@ -221,7 +223,6 @@ export async function listSummaries(
             title = previous.title.length === 0
               ? undefined
               : { text: previous.title, source: previous.titleSource }
-            hasPrompt = previous.hasPrompt
             titleComplete = true
           } else if (facts.bytes > previous.bytes) {
             const appended = await recoverAppendedTitle(path, previous.bytes, facts.bytes, signal)
@@ -232,7 +233,6 @@ export async function listSummaries(
                   ? undefined
                   : { text: previous.title, source: previous.titleSource }
               }
-              hasPrompt = previous.hasPrompt
               titleComplete = true
             }
           }

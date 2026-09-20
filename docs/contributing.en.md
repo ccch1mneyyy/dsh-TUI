@@ -299,6 +299,7 @@ change, also run the closest focused script:
 | --- | --- |
 | General headless screen composition | `pnpm smoke` |
 | Channel submit/steer/pending behavior | `node scripts/verify-submit.mjs` |
+| Rewind/edit/resend and historical inbox cancellation | `pnpm verify:rewind-edit` |
 | Prompt queue behavior | `node scripts/verify-queue.mjs` |
 | Goal/todo projection and rendering | `node scripts/verify-channel-goal-todo.mjs` and `node scripts/verify-goal-todo.mjs` |
 | Compaction and folded transcript rows | `node scripts/verify-compact.mjs` |

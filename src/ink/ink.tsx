@@ -218,6 +218,9 @@ export default class Ink {
   // one full-render frame; steady-state frames after clear it and regain
   // the blit + narrow-damage fast path.
   private prevFrameContaminated = false;
+  // A ConPTY resize may discard terminal cells without changing the grid.
+  // Consume once at the next scheduled paint, not once per resize event.
+  private needsSurfaceRepaint = false;
   // Set by handleResize: prepend ERASE_SCREEN to the next onRender's patches
   // INSIDE the BSU/ESU block so clear+paint is atomic. Writing ERASE_SCREEN
   // synchronously in handleResize would leave the screen blank for the ~80ms
@@ -403,13 +406,21 @@ export default class Ink {
   private handleResize = () => {
     const cols = this.options.stdout.columns || 80;
     const rows = this.options.stdout.rows || 24;
-    // Terminals often emit 2+ resize events for one user action (window
-    // settling). Same-dimension events are no-ops; skip to avoid redundant
-    // frame resets and renders.
+    // Duplicate resize events normally leave both layout and surface intact.
+    // ConPTY can rebuild the alt buffer during maximize with the SAME grid,
+    // though: the cached frame then hides lost static cells forever (#891).
     if (cols === this.terminalColumns && rows === this.terminalRows) {
       // A font zoom or DPI move can change cell pixels without changing the
       // row/column grid. The in-flight guard coalesces duplicate events.
       this.refreshTerminalCellMetrics();
+      if (
+        (process.platform === 'win32' || !!process.env.WT_SESSION) &&
+        this.altScreenActive && this.options.stdout.isTTY &&
+        !this.isPaused && !this.isUnmounted && !this.needsSurfaceRepaint
+      ) {
+        this.needsSurfaceRepaint = true;
+        this.scheduleRender();
+      }
       return;
     }
     noteFrameCause('resize');
@@ -659,6 +670,15 @@ export default class Ink {
   onRender() {
     if (this.isUnmounted || this.isPaused) {
       return;
+    }
+    if (this.needsSurfaceRepaint) {
+      this.needsSurfaceRepaint = false;
+      if (this.altScreenActive) {
+        noteFrameCause('resize');
+        // Repaint from an empty diff baseline without an early erase or
+        // DECSET 1049: neither may interrupt an external-editor handoff.
+        this.resetFramesForAltScreen();
+      }
     }
     if (GEOMETRY_TRACE_ENABLED) beginGeometryFrame(this.renderGeneration);
     // Entering a render cancels any pending drain tick — this render will
@@ -1937,6 +1957,7 @@ export default class Ink {
    * matches the physical cursor after ENTER_ALT_SCREEN + CSI H (home).
    */
   private resetFramesForAltScreen(): void {
+    this.needsSurfaceRepaint = false;
     const rows = this.terminalRows;
     const cols = this.terminalColumns;
     const blank = (): Frame => ({

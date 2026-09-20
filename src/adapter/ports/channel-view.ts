@@ -438,6 +438,14 @@ export type ResumeResult =
   | { readonly ok: false; readonly reason: 'unavailable' }
   | { readonly ok: false; readonly reason: 'cancelled' }
   | { readonly ok: false; readonly reason: 'failed'; readonly error: string }
+  /**
+   * Another TUI process currently has this session mounted. Two processes
+   * driving one session would interleave writes into a single append-only
+   * transcript, so the mount is refused rather than raced. `pid` names the
+   * holder so a surface can say which terminal owns it; the claim clears on
+   * its own once that process exits (see `sessionMounts`).
+   */
+  | { readonly ok: false; readonly reason: 'occupied'; readonly pid: number }
 
 /**
  * Mutable channel state owned by {@link createChannel}: the screen's

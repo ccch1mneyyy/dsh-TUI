@@ -792,6 +792,10 @@ function createChannelWithOwner(
   }, {
     owner,
     binding,
+    // `/resume` shares the live-adoption path with the session supervisor, so
+    // a target already running in this process is re-attached rather than
+    // resumed twice from its log (which would mount one log in two places).
+    adoptLive: target => adoptLiveAgent(target),
     backgroundHandles,
     rowIds,
     resetProjector: () => projector.reset(),
@@ -891,6 +895,9 @@ function createChannelWithOwner(
     resumeTo: resumeToAction,
     newSession: newSessionAction,
     listWorkspaces: workspaceActions.listWorkspaces,
+    listWorkspaceRegistry: workspaceActions.listWorkspaceRegistry,
+    removeWorkspace: workspaceActions.removeWorkspace,
+    renameWorkspaceAt: workspaceActions.renameWorkspaceAt,
     resolveWorkspace: workspaceActions.resolveWorkspace,
     switchWorkspace: workspaceActions.switchWorkspace,
     renameWorkspace: workspaceActions.renameWorkspace,

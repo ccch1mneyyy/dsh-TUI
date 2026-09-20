@@ -11,6 +11,8 @@ export type { SessionSummary, SessionKind, SessionTitle, TitleSource, PreviewEnt
  */
 export interface SessionDigest {
   readonly title: SessionTitle | undefined
+  /** False only after a complete successful scan proves no human message;
+   * true also keeps inconclusive reads visible and out of empty cleanup. */
   readonly hasPrompt: boolean
   readonly model: string | undefined
   readonly label: string | undefined

@@ -181,7 +181,7 @@ export function decodeFrame(buffer: Buffer, frame: FrameRange): LogLine[] | unde
       const parsed: unknown = JSON.parse(line)
       if (parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)) {
         lines.push(parsed as LogLine)
-      }
+      } else return undefined
     } catch {
       return undefined
     }

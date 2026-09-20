@@ -281,8 +281,8 @@ export function Settings({
   channel: Channel
   onClose: () => void
 }): React.ReactNode {
-  // Explicit terminal size (not flexGrow) — the same rule SessionBrowser's
-  // root follows inside the alternate screen's fixed-height box.
+  // Explicit terminal size (not flexGrow) — the same rule the full-screen
+  // session views follow inside the alternate screen's fixed-height box.
   const { columns, rows } = useTerminalSize()
   // channel caches the host — a fresh object per call would re-fire the
   // host-keyed effects below on every render (an endless render loop).
@@ -493,7 +493,7 @@ export function Settings({
       } else if (key.backspace || key.delete) {
         setEditing(state => state === null ? null : { ...state, draft: state.draft.slice(0, -1) })
       } else if (!isMod(key) && !key.meta && !key.super && input && !key.return) {
-        // Only real characters reach the draft (see SessionBrowser's query).
+        // Only real characters reach the draft (see the supervisor's filter).
         const typed = input.replace(/\p{Cc}/gu, '')
         if (typed.length > 0) {
           setEditing(state => state === null ? null : { ...state, draft: state.draft + typed })
