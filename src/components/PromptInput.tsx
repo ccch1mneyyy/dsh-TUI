@@ -1989,10 +1989,15 @@ export function PromptInput({
                     // All bindings and their visible labels enter together;
                     // typing while an earlier file saves cannot prune one.
                     insertClipboardAtCaret(`${rendered.join(' ')} `)
+                    // A batch cannot itemise every image in one line, but it must
+                    // still say that some of them were not stored as pasted.
+                    const adapted = staged.filter(handle => handle.adjustment !== undefined).length
                     channel.notify(
                       boundTokens.length === 1
                         ? stagedImageNotice(boundTokens[0]!, staged[0]!)
-                        : t('input-images-staged', { count: boundTokens.length }),
+                        : adapted > 0
+                          ? t('input-images-staged-adapted', { count: boundTokens.length, adapted })
+                          : t('input-images-staged', { count: boundTokens.length }),
                       { timeoutMs: 2500 },
                     )
                     return true

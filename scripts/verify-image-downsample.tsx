@@ -126,6 +126,7 @@ async function stageViaEntry(options: {
   data: Uint8Array
   mediaType: string
   maxImageBytes?: number
+  limits?: { maxImageDimension: number; maxImagePixels: number }
   report?: { width?: number; height?: number; mediaType?: string }
 }): Promise<GateResult> {
   const saved: StoredImage[] = []
@@ -134,8 +135,8 @@ async function stageViaEntry(options: {
       maxImageBytes: options.maxImageBytes ?? 20_000_000,
       maxImagesPerMessage: 8,
       maxMessageImageBytes: 40_000_000,
-      maxImageDimension: LIMITS.maxImageDimension,
-      maxImagePixels: LIMITS.maxImagePixels,
+      maxImageDimension: options.limits?.maxImageDimension ?? LIMITS.maxImageDimension,
+      maxImagePixels: options.limits?.maxImagePixels ?? LIMITS.maxImagePixels,
       mediaTypes: options.mediaTypes,
     },
     saveImage: async (input: { data: Uint8Array; mediaType: string }) => {
@@ -248,12 +249,17 @@ if (!NO_SHARP) {
       b5.error === undefined && b5.stored?.mediaType === 'image/jpeg' && b5.adjustment?.resized === false,
       b5.error ?? String(b5.stored?.mediaType))
 
-    // Sides within 1024 but 2M pixels: only the total-pixel cap can pull it in.
-    const densePng = await pngBytes(sharp, 1024, 2048)
-    const b6 = await stageViaEntry({ mediaTypes: ACCEPTED, data: densePng, mediaType: 'image/png' })
+    // Both sides fit a relaxed 2048 per-side cap, so only the total-pixel cap
+    // (1.5 M > 1 M) can pull this in: a per-side-only implementation would
+    // leave 1500x1000 and fail here.
+    const densePng = await pngBytes(sharp, 1500, 1000)
+    const denseLimits = { maxImageDimension: 2048, maxImagePixels: LIMITS.maxImagePixels }
+    const b6 = await stageViaEntry({ mediaTypes: ACCEPTED, data: densePng, mediaType: 'image/png', limits: denseLimits })
     const b6Size = b6.stored ? probeImageSize(b6.stored.data) : null
     check('B6. the total-pixel cap alone forces a resample',
-      b6.error === undefined && b6Size !== null && b6Size.width * b6Size.height <= LIMITS.maxImagePixels,
+      b6.error === undefined && b6Size !== null && b6.adjustment?.resized === true
+      && b6Size.width * b6Size.height <= LIMITS.maxImagePixels
+      && b6Size.width <= denseLimits.maxImageDimension && b6Size.height <= denseLimits.maxImageDimension,
       b6.error ?? JSON.stringify(b6Size))
 
     const alphaPng = await pngBytes(sharp, 2400, 1600, true)
