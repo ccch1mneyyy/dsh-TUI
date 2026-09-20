@@ -550,7 +550,18 @@ async function main(): Promise<void> {
       rebindCh.connected && (await fixtureB.helloPromise).token === 'tok-b')
     check('rebind：重绑后 workspaceFolders 换成 B 的',
       JSON.stringify(rebindCh.workspaceFolders) === '["/repo/b"]')
+    // stop() 也必须带走缓存选区与 ACK 的 workspaceFolders（终审轮 6）：直接读
+    // channel.selection / .workspaceFolders 的调用方在停止后不得再拿到上一个
+    // 窗口的快照——degradeToDisconnected 早已清，stop 曾漏清（rebind 的注释
+    // 却已承诺「clearing the live selection」）。
+    await waitFor(() => rebindCh.selection !== undefined, 2000)
+    const selectionBeforeStop = rebindCh.selection !== undefined
+    const foldersBeforeStop = rebindCh.workspaceFolders !== undefined
     rebindCh.stop()
+    check('stop：连上期间确有缓存选区与 ACK 目录（前置条件成立）',
+      selectionBeforeStop && foldersBeforeStop)
+    check('stop：停止后清空缓存选区与 ACK 的 workspaceFolders',
+      rebindCh.selection === undefined && rebindCh.workspaceFolders === undefined)
     fixtureA.close()
     fixtureB.close()
   }
@@ -572,21 +583,21 @@ async function main(): Promise<void> {
     const normal = build({ path: 'src/my file.ts', startLine: 2, endLine: 4, isEmpty: false }, FIVE_LINE_CONTENT)
     check('selectionBlock: 0-based [2,4] 切出第 3~5 行且带 selection 属性',
       normal !== undefined
-      && normal.text === '<attached-file path="src/my file.ts" selection>\nline3\nline4\nline5\n</attached-file>'
+      && normal.text === '<attached-file path="src/my file.ts" selection count="3">\nline3\nline4\nline5\n</attached-file>'
       && normal.lines === 3)
 
     // 含空格路径不经文本解析——直接构造必须原样保留。
     const spaced = build({ path: 'my dir/a b.ts', startLine: 0, endLine: 0, isEmpty: false }, FIVE_LINE_CONTENT)
     check('selectionBlock: 含空格路径原样保留（D7 不走文本解析）',
       spaced !== undefined
-      && spaced.text.startsWith('<attached-file path="my dir/a b.ts" selection>')
+      && spaced.text.startsWith('<attached-file path="my dir/a b.ts" selection count="1">')
       && spaced.text.includes('\nline1\n</attached-file>'))
 
     // endLine 超界钳制到实际行数（0-based 99 → 1-based 100 > 5 → 全部剩余行）。
     const clampedEnd = build({ path: 'src/a.ts', startLine: 3, endLine: 99, isEmpty: false }, FIVE_LINE_CONTENT)
     check('selectionBlock: endLine 越界钳制到末行',
       clampedEnd !== undefined
-      && clampedEnd.text === '<attached-file path="src/a.ts" selection>\nline4\nline5\n</attached-file>'
+      && clampedEnd.text === '<attached-file path="src/a.ts" selection count="2">\nline4\nline5\n</attached-file>'
       && clampedEnd.lines === 2)
 
     // startLine 越过 EOF → sliceLines 返回 undefined → 无块（静默跳过）。
@@ -614,11 +625,11 @@ async function main(): Promise<void> {
     const evil = build({ path: 'a&b"c<d>e.ts', startLine: 0, endLine: 0, isEmpty: false }, 'line1\n')
     check('selectionBlock: 含引号/&/尖括号路径被 HTML 转义（escapeSnippetAttr）',
       evil !== undefined
-        && evil.text.startsWith('<attached-file path="a&amp;b&quot;c&lt;d&gt;e.ts" selection>')
+        && evil.text.startsWith('<attached-file path="a&amp;b&quot;c&lt;d&gt;e.ts" selection count="1">')
         && evil.text.includes('\nline1\n</attached-file>'))
     const plain = build({ path: 'plain.ts', startLine: 0, endLine: 0, isEmpty: false }, 'line1\n')
     check('selectionBlock: 普通路径不转义（行为不变）',
-      plain?.text.startsWith('<attached-file path="plain.ts" selection>'))
+      plain?.text.startsWith('<attached-file path="plain.ts" selection count="1">'))
     // 超大选区须按 @-提及同一策略截断（C-5，coderabbit review）——防撑爆
     // 上下文。构造远超 50k 的切片内容，断言正文被截断并带可见省略标记。
     const huge = ('x'.repeat(200) + '\n').repeat(300) // ~60k 字符，超 50k cap
@@ -665,7 +676,7 @@ async function main(): Promise<void> {
       check('attach·v2：编辑器 text 原样附加且完全不触碰文件系统',
         attached !== undefined && attached.lines === 2 && attached.path === 'src/unsaved.ts'
         && fsTouched === false
-        && blocks[0]?.text === '<attached-file path="src/unsaved.ts" selection>\neditor view\nwith unsaved edits\n</attached-file>')
+        && blocks[0]?.text === '<attached-file path="src/unsaved.ts" selection count="2">\neditor view\nwith unsaved edits\n</attached-file>')
     }
     {
       // 复审轮 4 回归（曾为 P1）：text 是选区自身文本，绝对行号不得参与
@@ -710,7 +721,7 @@ async function main(): Promise<void> {
         { path: 'full.ts', startLine: 5, endLine: 7, isEmpty: false, text: 'L5\nL6\nL7\n' }, boobyFs)
       check('attach·v2 回归：整行选区尾换行被剥——3 行、无幻影空行',
         fullLines !== undefined && fullLines.lines === 3
-        && fullBlocks[0]?.text === '<attached-file path="full.ts" selection>\nL5\nL6\nL7\n</attached-file>')
+        && fullBlocks[0]?.text === '<attached-file path="full.ts" selection count="3">\nL5\nL6\nL7\n</attached-file>')
       const { MENTION_MAX_FILE_CHARS: CAP } = await import('../src/dsh-adapter/channel/mentions.js') as { MENTION_MAX_FILE_CHARS: number }
       const bigText = ('y'.repeat(200) + '\n').repeat(300)
       const bigBlocks = mkBlocks()
@@ -729,7 +740,7 @@ async function main(): Promise<void> {
         boobyFs,
       )
       check('attach·v2 回归：正文就是 text 本身（首行保留、无错位）',
-        body !== undefined && blocksProbe[0]?.text === '<attached-file path="src/deep.ts" selection>\nL120\nL121\nL122\n</attached-file>')
+        body !== undefined && blocksProbe[0]?.text === '<attached-file path="src/deep.ts" selection count="3">\nL120\nL121\nL122\n</attached-file>')
       // loopback 端到端（原 fromLive 假绿的替代）：第 6 节真实推送快照
       // startLine=2 但 text 只有选区 3 行——attach 必须原样附加全部 3 行。
       const liveBlocks = mkBlocks()
@@ -738,7 +749,7 @@ async function main(): Promise<void> {
       )
       check('attach·loopback 端到端：真实推送快照（startLine=2, text=3 行）原样附加',
         liveAttach !== undefined && liveAttach.lines === 3
-        && liveBlocks[0]?.text === '<attached-file path="src/a.ts" selection>\nfa.ts\nfb.ts\nfc.ts\n</attached-file>')
+        && liveBlocks[0]?.text === '<attached-file path="src/a.ts" selection count="3">\nfa.ts\nfb.ts\nfc.ts\n</attached-file>')
     }
     {
       const calls: string[] = []
@@ -796,6 +807,29 @@ async function main(): Promise<void> {
         ])
         return r !== undefined && r.lines === 3 && r.path === 'src/my file.ts'
       })())
+    // 复审 nit（终审轮 6）：行数不再从正文尾部猜——`count` 属性是唯一真相。
+    // 正文末行恰好是截断标记字面时，旧启发式会把正常块少算一行。
+    check('replay：正文末行恰为截断标记字面时仍按 count 计行（不再少算一行）',
+      (() => {
+        const literal = build(
+          { path: 'lit.ts', startLine: 0, endLine: 2, isEmpty: false },
+          'alpha\nbeta\n[… truncated]',
+        )
+        const r = replay([{ type: 'text', text: literal?.text ?? '' }])
+        return literal !== undefined && literal.lines === 3
+          && r !== undefined && r.lines === 3 && r.path === 'lit.ts'
+      })())
+    check('replay：无 count 的旧块回退尾标记启发式（历史会话仍可读）',
+      (() => {
+        const r = replay([{
+          type: 'text',
+          text: '<attached-file path="old.ts" selection>\na\nb\n[… truncated]\n</attached-file>',
+        }])
+        return r !== undefined && r.lines === 2 && r.path === 'old.ts'
+      })())
+    check('replay：build 的每个块都带 count 且等于 lines（含截断块）',
+      [normal, capped, evil].every(block => block !== undefined
+        && block.text.includes(`selection count="${block.lines}">`)))
   }
 
   // ── 8.4. POSIX 根归一化（coderabbit review C-1）──
@@ -920,6 +954,16 @@ async function main(): Promise<void> {
       badge?.(undefined) === undefined)
     check('selectionBadge: isEmpty 快照 → 不渲染字段（防御）',
       badge?.({ startLine: 0, endLine: 0, isEmpty: true }) === undefined)
+    // 跨端契约回归（扩展侧 selectionLineRange 归一化）：整行选区推的是
+    // 「含端」坐标（选中第 5~7 行 → startLine=5/endLine=7），徽标行数必须
+    // 等于实际附加的正文行数——扩展曾推原始 end.line=8，footer 说 4 行而
+    // transcript 指示行说 3 行（同一手势自相矛盾）。
+    check('selectionBadge: 含端坐标下徽标行数 == text 实际行数（归一化契约）',
+      (() => {
+        const text = 'L5\nL6\nL7\n' // 扩展 getText() 对整行选区的返回（含尾换行）
+        const counted = text.replace(/\n$/, '').split('\n').length
+        return badge?.({ startLine: 5, endLine: 7, isEmpty: false }) === `⧉ ${counted} lines selected`
+      })())
   }
 
   rmSync(tmpRoot, { recursive: true, force: true })
