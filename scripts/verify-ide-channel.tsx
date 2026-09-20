@@ -107,7 +107,11 @@ function encodeTextFrame(text: string): Buffer {
   return Buffer.concat([header, payload])
 }
 
-function startWsFixture(token: string, workspaceFolders: string[] = ['/fixture-ws']): Promise<WsFixture> {
+function startWsFixture(
+  token: string,
+  workspaceFolders: string[] = ['/fixture-ws'],
+  options: { clearSelectionAfterMs?: number | null } = {},
+): Promise<WsFixture> {
   return new Promise(resolveFixture => {
     let socketRef: Socket | null = null
     let buffer = Buffer.alloc(0)
@@ -176,9 +180,14 @@ function startWsFixture(token: string, workspaceFolders: string[] = ['/fixture-w
             method: 'ide/hello_ack',
             params: { protocolVersion: 2, workspaceFolders },
           })))
-          // 握手完成后推一条非空选区，稍后再推一条空选区（验证清空路径）
+          // 握手完成后推一条非空选区，稍后再推一条空选区（验证清空路径）。
+          // clearSelectionAfterMs: null = 永不推空（该夹具的选区在 stop 前恒有
+          // 值，供「stop 清空缓存」这类断言做无时间窗的前置条件）。
           sendSelection(false)
-          void sleep(50).then(() => sendSelection(true)) // 固定窗:pacing 空选区第二条推送的间隔，无状态锚点可 settle
+          const clearAfter = options.clearSelectionAfterMs === undefined ? 50 : options.clearSelectionAfterMs
+          if (clearAfter !== null) {
+            void sleep(clearAfter).then(() => sendSelection(true)) // 固定窗:pacing 空选区第二条推送的间隔，无状态锚点可 settle
+          }
         }
       })
     })
@@ -532,7 +541,7 @@ async function main(): Promise<void> {
     // 会话 cwd 从 /repo/a 切到 /repo/b：旧连接（fixture A）必须被丢弃，
     // 重新按新 cwd 发现并连上 fixture B —— 而不是保留 A 的旧链路。
     const fixtureA = await startWsFixture('tok-a', ['/repo/a'])
-    const fixtureB = await startWsFixture('tok-b', ['/repo/b'])
+    const fixtureB = await startWsFixture('tok-b', ['/repo/b'], { clearSelectionAfterMs: null })
     const rebindDir = join(tmpRoot, 'rebind')
     mkdirSync(rebindDir, { recursive: true })
     writeFileSync(join(rebindDir, `${fixtureA.port}.lock`),
@@ -540,6 +549,16 @@ async function main(): Promise<void> {
     writeFileSync(join(rebindDir, `${fixtureB.port}.lock`),
       JSON.stringify({ port: fixtureB.port, token: 'tok-b', workspaceFolders: ['/repo/b'], pid: process.pid }))
     const rebindCh = new mod.IdeChannel()
+    // 非空选区的到达观察走 listener（消息处理里同步触发），配 fixtureB 的
+    // clearSelectionAfterMs: null，前置条件与采样时机无关：不会因为 20ms 轮询
+    // 落不进夹具那条 50ms 空推送前的窗口而在慢机上假红（终审轮 7）。
+    const sawSelection = new Promise<void>(resolve => {
+      const off = rebindCh.onSelection(snapshot => {
+        if (snapshot.isEmpty) return
+        off()
+        resolve()
+      })
+    })
     await rebindCh.start({}, rebindDir, '/repo/a')
     check('rebind：初始按 /repo/a 连上 fixture A',
       rebindCh.connected && (await fixtureA.helloPromise).token === 'tok-a')
@@ -554,11 +573,11 @@ async function main(): Promise<void> {
     // channel.selection / .workspaceFolders 的调用方在停止后不得再拿到上一个
     // 窗口的快照——degradeToDisconnected 早已清，stop 曾漏清（rebind 的注释
     // 却已承诺「clearing the live selection」）。
-    await waitFor(() => rebindCh.selection !== undefined, 2000)
+    await sawSelection
     const selectionBeforeStop = rebindCh.selection !== undefined
     const foldersBeforeStop = rebindCh.workspaceFolders !== undefined
     rebindCh.stop()
-    check('stop：连上期间确有缓存选区与 ACK 目录（前置条件成立）',
+    check('stop：停止前确有缓存选区与 ACK 目录（前置条件成立）',
       selectionBeforeStop && foldersBeforeStop)
     check('stop：停止后清空缓存选区与 ACK 的 workspaceFolders',
       rebindCh.selection === undefined && rebindCh.workspaceFolders === undefined)
@@ -607,6 +626,17 @@ async function main(): Promise<void> {
     // isEmpty 快照守卫：调用侧不会传入，但纯函数自身也拒绝。
     check('selectionBlock: isEmpty=true → undefined',
       build({ path: 'src/a.ts', startLine: 0, endLine: 0, isEmpty: true }, FIVE_LINE_CONTENT) === undefined)
+
+    // 单个空行选区（终审轮 7）：三击一个空行 → 切出的就是一个空串，但那一行
+    // 真的存在（徽标也报 1 行）——必须产块，否则 footer 说 1 行而提交什么都不带。
+    const blankLine = build({ path: 'src/blank.ts', startLine: 1, endLine: 1, isEmpty: false }, 'L1\n\nL3')
+    check('selectionBlock: 单个空行选区仍产块（count="1"、正文为空行）',
+      blankLine !== undefined && blankLine.lines === 1
+      && blankLine.text === '<attached-file path="src/blank.ts" selection count="1">\n\n</attached-file>')
+    // 对照组：真正的空内容（起行越过 EOF 已在上一条）仍不产块，allowEmpty 只对
+    // 「恰好一行」开放——多行选区切出空串只可能是越界。
+    check('selectionBlock: 越界起行仍不产块（allowEmpty 不放宽越界）',
+      build({ path: 'src/a.ts', startLine: 9, endLine: 9, isEmpty: false }, 'L1\nL2') === undefined)
 
     // loopback 端到端（复审轮 4 修正假绿）：真实快照钉的是「绝对坐标 + 选区
     // 自身 text」的扩展语义；块的构造在 8b 用 attach（text 分支）端到端验证，
@@ -709,6 +739,18 @@ async function main(): Promise<void> {
       )
       check('attach·v2 回归：单行选区（start=end=41）附加 1 行',
         single !== undefined && single.lines === 1)
+      // 单个空行（终审轮 7）：三击空行 getText="\n"，strip 后为空串——徽标仍报
+      // 「1 line selected」，所以必须照样产块（count="1"、正文是那一空行），
+      // 否则 footer 与实际附加/指示行自相矛盾。
+      const blankBlocks = mkBlocks()
+      const blankLine = await attach(
+        blankBlocks, '/repo',
+        { path: 'blank.ts', startLine: 5, endLine: 5, isEmpty: false, text: '\n' },
+        boobyFs,
+      )
+      check('attach·v2 回归：单个空行选区仍附加 1 行（不再静默丢块）',
+        blankLine !== undefined && blankLine.lines === 1
+        && blankBlocks[0]?.text === '<attached-file path="blank.ts" selection count="1">\n\n</attached-file>')
       // 整行选区（终审轮 5）：getText 对跨行选区带一个尾换行（下一行行首
       // 收尾）——必须剥掉，否则计数 +1 且块体多一个空行。
       const fullLines = await attach(
@@ -830,6 +872,15 @@ async function main(): Promise<void> {
     check('replay：build 的每个块都带 count 且等于 lines（含截断块）',
       [normal, capped, evil].every(block => block !== undefined
         && block.text.includes(`selection count="${block.lines}">`)))
+    // 空行选区回放（终审轮 7）：count 让「正文为空」也能报回 1 行，旧启发式对
+    // 空正文会数成 1 行纯属巧合（`''.split('\n').length === 1`），这里钉的是
+    // 属性来源而非巧合：把 count 换成 2 就应报 2（证明没有被正文长度掩盖）。
+    check('replay：空行选区块按 count 报行（不是被空正文凑对）',
+      (() => {
+        const one = replay([{ type: 'text', text: '<attached-file path="blank.ts" selection count="1">\n\n</attached-file>' }])
+        const two = replay([{ type: 'text', text: '<attached-file path="blank.ts" selection count="2">\n\n</attached-file>' }])
+        return one?.lines === 1 && two?.lines === 2 && one.path === 'blank.ts'
+      })())
   }
 
   // ── 8.4. POSIX 根归一化（coderabbit review C-1）──

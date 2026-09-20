@@ -48,24 +48,35 @@ export function escapeSnippetAttr(value: string): string {
 /**
  * Format the attached-file block from an ALREADY-SLICED body: cap it like
  * @-mention attachments (same MENTION_MAX_FILE_CHARS policy, same visible
- * truncation marker) and count the lines the MODEL actually receives —
- * the truncated body, not the request (review round 3).
+ * truncation marker) and count the lines the model gets — the truncated body,
+ * not the request (review round 3).
+ *
+ * `allowEmpty` keeps a selection that covers ONE blank line: the body is
+ * legitimately empty there while the badge still says "1 line selected", and
+ * dropping the block made the footer and the transcript disagree (review
+ * round 7). Callers pass it only for a single-line range that really exists.
  */
-function cappedSelectionBlock(path: string, sliced: string): { text: string; lines: number } | undefined {
-  if (sliced === '') return undefined
+function cappedSelectionBlock(
+  path: string,
+  sliced: string,
+  allowEmpty = false,
+): { text: string; lines: number } | undefined {
+  if (sliced === '' && !allowEmpty) return undefined
   let body = sliced
   let attached = sliced
   if (body.length > MENTION_MAX_FILE_CHARS) {
     attached = body.slice(0, MENTION_MAX_FILE_CHARS)
     body = `${attached}\n[… truncated]`
   }
-  // `count` is how many lines the model actually receives (post-cap). It exists
-  // so the replay path never has to GUESS that number from the body tail: a
-  // selection whose last line is literally `[… truncated]` used to lose one
-  // line when the indicator was rebuilt from the persisted event (fuzz rounds
-  // found 46/400 such bodies). Deliberately NOT `lines`: @-mention attachments
-  // already use `lines="2-4"` for the REQUESTED range, and overloading the key
-  // with a count would make the two block flavours read alike.
+  // `count` is the number of lines in the attached BODY — the truncation
+  // marker line is not counted (it rides on top of the cap and the live
+  // indicator reports the same number). It exists so the replay path never has
+  // to GUESS that number from the body tail: a selection whose last line is
+  // literally `[… truncated]` used to lose one line when the indicator was
+  // rebuilt from the persisted event (fuzz rounds found 46/400 such bodies).
+  // Deliberately NOT `lines`: @-mention attachments already use `lines="2-4"`
+  // for the REQUESTED range, and overloading the key with a count would make
+  // the two block flavours read alike.
   const lines = attached.split('\n').length
   return {
     text: `<attached-file path="${escapeSnippetAttr(path)}" selection count="${lines}">\n${body}\n</attached-file>`,
@@ -95,7 +106,9 @@ export function buildSelectionBlock(
     selection.endLine + 1,
   )
   if (sliced === undefined) return undefined
-  return cappedSelectionBlock(selection.path, sliced)
+  // sliceLines returning '' (not undefined) means the requested line EXISTS and
+  // is blank — a single blank line is a real selection the badge reports.
+  return cappedSelectionBlock(selection.path, sliced, selection.startLine === selection.endLine)
 }
 
 /**
@@ -130,7 +143,10 @@ export async function attachIdeSelection(
     // blank line and the indicator over-counts by one (review round 5).
     let text = selection.text
     if (text.endsWith('\n')) text = text.slice(0, -1)
-    const block = cappedSelectionBlock(selection.path, text)
+    // Triple-clicking ONE blank line hands back "\n": after the strip the body
+    // is empty but a line WAS selected (the footer badge says so) — keep the
+    // block so the indicator and the badge agree instead of attaching nothing.
+    const block = cappedSelectionBlock(selection.path, text, selection.text !== '')
     if (block === undefined) return undefined
     blocks.push({ type: 'text', text: block.text })
     return { lines: block.lines, path: selection.path }
