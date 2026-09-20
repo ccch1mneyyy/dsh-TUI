@@ -26,7 +26,10 @@
  *   J. softWrap 位翻转（复制结果从两行变拼接）在 cell 不变时也锁存；
  *   K. 代际池重建（charPool 换新 + migrateScreenPools，即 Ink.resetPools）
  *      且文本不变 → 不锁存，真实 Ink.copySelectionNoClear() 仍复制出原文；
- *   K2. 同一颗树上真实替换文本 → 仍然拒绝（守卫没被改钝）。
+ *   K2. 同一颗树上真实替换文本 → 仍然拒绝（守卫没被改钝）；
+ *   L. 选区**下一行**的 softWrap 位也是复制结果的输入（extractRowText 用它当
+ *      本行 contentEnd）：只翻它 → 复制变了 → 守卫必须 trip；而 contentEnd
+ *      变化但没移动裁剪（L3/L4）→ 复制不变、也不误伤；末行越界（L5）安全。
  *
  * 运行：node --import tsx/esm scripts/verify-selection-stale-guard.tsx
  */
@@ -366,6 +369,65 @@ function putRaw(s: Screen, col: number, row: number, charId: number, width: numb
   const refused = rig.copySelectionNoClear()
   check('K4. stale copy is refused (empty) and the highlight is cleared',
     refused === '' && selectionBounds(sel2) === null)
+}
+
+// ── L. 选区**下一行**的 softWrap 也是复制结果的输入 ──────────────────────
+//
+// extractRowText 读 softWrap[row + 1] 当**本行**的 contentEnd：>0 表示本行折
+// 进下一行，于是末列裁到 min(colEnd, contentEnd - 1) 且不再 trim 尾部空白。
+// 只翻转下一行的 wrap 位就能改写末行的尾部内容，而本行 cell 一个都没动——
+// 指纹不把 softWrap[row + 1] 算进去就会漏检（实测 copy 从 "A" 变
+// "A         "）。
+{
+  const screen = makeScreen(5, 12)
+  const sel = makeSel()
+  startSelection(sel, 0, 2)
+  updateSelection(sel, 9, 2) // 只选第 2 行（end.row = 2 < height-1）
+  putText(screen, 0, 2, 'A')
+  refreshSelectionFingerprint(sel, screen, false)
+  const before = getSelectedText(sel, screen)
+  check('L0. precondition: copy is the bare line (trailing blanks trimmed)',
+    before === 'A', JSON.stringify(before))
+  // 只翻转第 3 行（选区**之下**）的 softWrap 位，第 2 行一个 cell 都不动。
+  screen.softWrap[3] = 40
+  const after = getSelectedText(sel, screen)
+  check('L1. flipping only the row BELOW changes the copied text',
+    after !== before, `${JSON.stringify(before)} -> ${JSON.stringify(after)}`)
+  const tripped = refreshSelectionFingerprint(sel, screen, false)
+  check('L2. the guard trips on a next-row soft-wrap flip', tripped && sel.stale)
+}
+
+// ── L3/L4. contentEnd 变了但没移动裁剪 → 复制不变，也不许误伤 ────────────
+{
+  const screen = makeScreen(5, 12)
+  const sel = makeSel()
+  startSelection(sel, 0, 2)
+  updateSelection(sel, 3, 2) // colEnd = 3
+  putText(screen, 0, 2, 'A')
+  screen.softWrap[3] = 20 // contentEnd 20 > colEnd → 裁到 colEnd
+  refreshSelectionFingerprint(sel, screen, false)
+  const before = getSelectedText(sel, screen)
+  screen.softWrap[3] = 40 // contentEnd 40，仍 > colEnd → 同一裁剪
+  const after = getSelectedText(sel, screen)
+  check('L3. a contentEnd change that does not move the clamp leaves the copy identical',
+    before === after, `${JSON.stringify(before)} -> ${JSON.stringify(after)}`)
+  const tripped = refreshSelectionFingerprint(sel, screen, false)
+  check('L4. ... and does not trip the guard', !tripped && !sel.stale)
+}
+
+// ── L5. 选区落在屏幕最后一行：row+1 越界必须安全，本行 softWrap 仍在指纹里 ─
+{
+  const screen = makeScreen(5, 12)
+  const sel = makeSel()
+  startSelection(sel, 0, 4) // 第 4 行 = 最后一行（height = 5）
+  updateSelection(sel, 3, 4)
+  putText(screen, 0, 4, 'Z')
+  refreshSelectionFingerprint(sel, screen, false)
+  const base = getSelectedText(sel, screen)
+  screen.softWrap[4] = 9 // 自己那行的 wrap 位（joinRows 的换行判定）
+  const tripped = refreshSelectionFingerprint(sel, screen, false)
+  check('L5. last screen row: own softWrap still hashed, out-of-range row+1 read is safe',
+    tripped && sel.stale && base === 'Z')
 }
 
 console.log(failures === 0 ? 'selection stale-guard regression passed' : `${failures} failure(s)`)

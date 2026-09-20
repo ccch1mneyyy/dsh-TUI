@@ -1177,8 +1177,11 @@ function joinRows(
  * copy would read. The hash covers every visible cell of every covered row
  * (same visibility rules as getSelectedText: noSelect and spacer cells
  * skipped) via the cell's TEXT — `charPool.get(charId)` — not its pool
- * index. styleId is excluded so the selection overlay and syntax
- * highlighting themselves cannot trip the guard.
+ * index, plus the two soft-wrap inputs that decide how those cells are laid
+ * out into lines (the row's own `softWrap[row]`, and the `softWrap[row + 1]`
+ * extractRowText reads as this row's content end). styleId is excluded so
+ * the selection overlay and syntax highlighting themselves cannot trip the
+ * guard.
  *
  * Why content and not charId: a charId is an index into a generational
  * CharPool, not a stable identity. Ink.resetPools() (ink.tsx) swaps in a
@@ -1219,7 +1222,7 @@ export function refreshSelectionFingerprint(
     s.coveredGeometry = geometry
     s.coveredFingerprint = null
   }
-  const { cells, noSelect, width, height, charPool } = screen
+  const { cells, noSelect, width, height, charPool, softWrap } = screen
   let h = 0x811c9dc5
   for (let row = b.start.row; row <= b.end.row; row++) {
     if (row < 0 || row >= height) continue
@@ -1250,7 +1253,20 @@ export function refreshSelectionFingerprint(
     // wrapped row onto the previous line with NO newline (softWrap[row]>0)
     // but emits a real newline otherwise — identical cells with a flipped
     // wrap bit produce a different copy, so the fingerprint must see it.
-    h = Math.imul(h ^ 0x9e3779b9 ^ (screen.softWrap[row]! > 0 ? 0x51ed270b : 0), 0x85ebca6b)
+    h = Math.imul(h ^ 0x9e3779b9 ^ (softWrap[row]! > 0 ? 0x51ed270b : 0), 0x85ebca6b)
+    // The row BELOW is an input to THIS row's copy. extractRowText reads
+    // softWrap[row + 1] as this row's content end: > 0 means the row wraps
+    // into the next one, which both clamps the last column to
+    // min(colEnd, contentEnd - 1) and suppresses the trailing-blank trim.
+    // Flipping only the next row's wrap bit therefore rewrites the last
+    // covered line's trailing columns ("A" → "A         ") with every
+    // covered CELL unchanged — the guard has to see the wrap, not just the
+    // cells. Hash exactly what extractRowText consumes (0 = not wrapped) so
+    // a contentEnd change that does not move the clamp stays invisible
+    // instead of becoming a false positive.
+    const contentEnd = row + 1 < height ? softWrap[row + 1]! : 0
+    const wrapClamp = contentEnd > 0 ? Math.min(colEnd, contentEnd - 1) + 1 : 0
+    h = Math.imul(h ^ 0x27d4eb2f ^ wrapClamp, 0x165667b1)
   }
   if (s.coveredFingerprint === null) {
     // First frame observing this selection: baseline, no verdict.
