@@ -51,7 +51,14 @@ interface SharpLike {
     png(): { toBuffer(): Promise<Uint8Array> }
     webp(options?: unknown): { toBuffer(): Promise<Uint8Array> }
     gif(): { toBuffer(): Promise<Uint8Array> }
-    metadata(): Promise<{ width?: number; height?: number; pages?: number; hasAlpha?: boolean }>
+    metadata(): Promise<{
+      width?: number
+      height?: number
+      pages?: number
+      delay?: number[]
+      loop?: number
+      hasAlpha?: boolean
+    }>
     raw(): { toBuffer(options: { resolveWithObject: boolean }): Promise<{ data: Uint8Array }> }
   }
 }
@@ -93,8 +100,20 @@ async function animatedBytes(sharp: SharpLike, width: number, height: number, fo
   return format === 'webp' ? joined.webp({ quality: 80 }).toBuffer() : joined.gif().toBuffer()
 }
 
-async function pageCount(sharp: SharpLike, bytes: Uint8Array): Promise<number | undefined> {
-  return (await sharp(bytes, { animated: true }).metadata()).pages
+/** Animation facts that must survive a re-encode: frame count, per-frame
+ *  delays and the loop flag. Losing the delays keeps `pages > 1` while the
+ *  "animation" plays at the wrong speed, so count alone is not enough. */
+async function animationMeta(
+  sharp: SharpLike,
+  bytes: Uint8Array,
+): Promise<{ pages: number; delay: number[]; loop: number | undefined; hasAlpha: boolean }> {
+  const meta = await sharp(bytes, { animated: true }).metadata()
+  return {
+    pages: meta.pages ?? 1,
+    delay: [...(meta.delay ?? [])],
+    loop: meta.loop,
+    hasAlpha: meta.hasAlpha === true,
+  }
 }
 
 async function firstPixel(sharp: SharpLike, bytes: Uint8Array): Promise<number[]> {
@@ -320,11 +339,14 @@ if (!NO_SHARP) {
       c8.kind === 'adapted' && c8.mediaType === 'image/jpeg' && !c8.flattened)
 
     const animWebp = await animatedBytes(sharp, 1200, 900, 'webp')
+    const animIn = await animationMeta(sharp, animWebp)
     const c9 = await adaptImageForAdmission(animWebp, 'image/webp', LIMITS, ['image/png', 'image/webp'])
-    const c9Pages = c9.kind === 'adapted' ? await pageCount(sharp, c9.data) : undefined
-    check('C9. animated webp keeps every frame through a resize',
-      c9.kind === 'adapted' && c9.animated && (c9Pages ?? 0) > 1,
-      `pages=${c9Pages}`)
+    const c9Meta = c9.kind === 'adapted' ? await animationMeta(sharp, c9.data) : undefined
+    check('C9. animated webp keeps its frames, delays and loop through a resize',
+      c9.kind === 'adapted' && c9.animated && (c9Meta?.pages ?? 0) > 1
+      && JSON.stringify(c9Meta?.delay) === JSON.stringify(animIn.delay)
+      && c9Meta?.loop === animIn.loop,
+      `in pages=${animIn.pages} delay=${JSON.stringify(animIn.delay)} → out pages=${c9Meta?.pages} delay=${JSON.stringify(c9Meta?.delay)}`)
 
     const c10 = await adaptImageForAdmission(animWebp, 'image/webp', LIMITS, ['image/png', 'image/jpeg'])
     check('C10. animation with no animation-capable target is refused',
@@ -334,6 +356,13 @@ if (!NO_SHARP) {
     const inCapAnim = await animatedBytes(sharp, 64, 48, 'webp')
     const c11 = await adaptImageForAdmission(inCapAnim, 'image/webp', LIMITS, ACCEPTED)
     check('C11. in-cap animated image passes through untouched', c11.kind === 'unchanged')
+
+    const bigAlpha = await pngBytes(sharp, 2000, 1500, true)
+    const c12 = await adaptImageForAdmission(bigAlpha, 'image/png', LIMITS, ACCEPTED)
+    const c12Meta = c12.kind === 'adapted' ? await animationMeta(sharp, c12.data) : undefined
+    check('C12. a resize that keeps the accepted format keeps the alpha channel',
+      c12.kind === 'adapted' && !c12.flattened && c12Meta?.hasAlpha === true,
+      c12.kind === 'adapted' ? `flattened=${c12.flattened} hasAlpha=${c12Meta?.hasAlpha}` : c12.kind)
   }
 
   // ── D. 真实入口（stageComposerImage + 附件库桩）─────────────────────────
@@ -392,11 +421,14 @@ if (!NO_SHARP) {
       d7.error ?? 'no error')
 
     const animWebp = await animatedBytes(sharp, 1600, 1200, 'webp')
+    const animWebpIn = await animationMeta(sharp, animWebp)
     const d8 = await stageViaEntry({ mediaTypes: ['image/webp', 'image/png'], data: animWebp, mediaType: 'image/webp' })
-    const d8Pages = d8.stored ? await pageCount(sharp, d8.stored.data) : undefined
-    check('D8. animated paste through the entry keeps its frames',
-      d8.error === undefined && (d8Pages ?? 0) > 1,
-      d8.error ?? `pages=${d8Pages}`)
+    const d8Meta = d8.stored ? await animationMeta(sharp, d8.stored.data) : undefined
+    check('D8. animated paste through the entry keeps frames, delays and loop',
+      d8.error === undefined && (d8Meta?.pages ?? 0) > 1
+      && JSON.stringify(d8Meta?.delay) === JSON.stringify(animWebpIn.delay)
+      && d8Meta?.loop === animWebpIn.loop,
+      d8.error ?? `in delay=${JSON.stringify(animWebpIn.delay)} → out pages=${d8Meta?.pages} delay=${JSON.stringify(d8Meta?.delay)}`)
 
     const d9 = await stageViaEntry({ mediaTypes: ['image/png', 'image/jpeg'], data: animWebp, mediaType: 'image/webp' })
     check('D9. animated paste with no animation-capable target is refused',
@@ -405,10 +437,21 @@ if (!NO_SHARP) {
 
     const animGif = await animatedBytes(sharp, 1600, 1200, 'gif')
     const d10 = await stageViaEntry({ mediaTypes: ACCEPTED, data: animGif, mediaType: 'image/gif' })
-    const d10Pages = d10.stored ? await pageCount(sharp, d10.stored.data) : undefined
+    const d10Meta = d10.stored ? await animationMeta(sharp, d10.stored.data) : undefined
     check('D10. oversized animated gif keeps its frames through the entry',
-      d10.error === undefined && d10.stored?.mediaType === 'image/gif' && (d10Pages ?? 0) > 1,
-      d10.error ?? `pages=${d10Pages}`)
+      d10.error === undefined && d10.stored?.mediaType === 'image/gif' && (d10Meta?.pages ?? 0) > 1,
+      d10.error ?? `pages=${d10Meta?.pages}`)
+
+    // D12: the resize-only path must not composite an accepted, alpha-carrying
+    // format — transparency is the user's data, not an implementation detail.
+    const bigAlphaPng = await pngBytes(sharp, 2000, 1500, true)
+    const d12 = await stageViaEntry({ mediaTypes: ACCEPTED, data: bigAlphaPng, mediaType: 'image/png' })
+    const d12Meta = d12.stored ? await animationMeta(sharp, d12.stored.data) : undefined
+    check('D12. oversized alpha png keeps alpha through the entry (no flatten)',
+      d12.error === undefined && d12.stored?.mediaType === 'image/png'
+      && d12.adjustment?.resized === true && d12.adjustment.flattened === false
+      && d12Meta?.hasAlpha === true,
+      d12.error ?? `flattened=${d12.adjustment?.flattened} hasAlpha=${d12Meta?.hasAlpha}`)
 
     // D11: the generation guard protects the cross-await entry — a caller that
     // captured the epoch before a session change must be refused.
