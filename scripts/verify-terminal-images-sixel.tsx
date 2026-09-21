@@ -497,6 +497,25 @@ try {
   const start = overlayOutput.data.length
   overlayApp.rerender(overlayTree(false))
   await until(() => /\x1b\[\d+X/u.test(overlayOutput.data.slice(start)), 'the real card close erases Sixel')
+  // Erase-Character fills the erased cells with the current background, so an
+  // erase that passes the CARD surface color leaves that color on screen: the
+  // frame clears exactly these cells in its own model (see reconcile's
+  // clearRegion), so nothing rewrites them and the block survives until
+  // unrelated text scrolls past — the white rectangle a closed light-theme
+  // preview used to leave on the transcript. The rect must end at the
+  // terminal default, like every other cell the frame does not rewrite.
+  const residueTerminal = new Terminal({ cols: 50, rows: 18, allowProposedApi: true })
+  try {
+    await new Promise<void>(resolve => residueTerminal.write(overlayOutput.data, resolve))
+    const residue: string[] = []
+    for (let y = 0; y < 18; y++) {
+      const line = residueTerminal.buffer.active.getLine(y)
+      for (let x = 0; x < 50; x++) {
+        if (line?.getCell(x)?.getBgColor() === 0xffffff) residue.push(`${x},${y}`)
+      }
+    }
+    assert.deepEqual(residue, [], 'a closed card leaves no surface-colored cells behind')
+  } finally { residueTerminal.dispose() }
 } finally {
   overlayOutput.isTTY = false
   overlayApp.unmount()

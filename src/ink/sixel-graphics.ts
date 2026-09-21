@@ -273,7 +273,13 @@ export class SixelGraphicsManager {
     let erase = ''
     for (const rect of erased) {
       clearRegion(baseline, rect.x, rect.y, rect.columns, rect.rows)
-      erase += this.erase(rect, rect.background)
+      // Erase at the terminal default, never at the placement's surface color:
+      // clearRegion just reset these cells to a default blank in the model, so
+      // the frame writes back everything it has to show and leaves the rest
+      // alone — an erase filled with the surface color would keep that color
+      // on screen with no write to correct it (the white card of a closed
+      // light-theme preview, cleared only when unrelated text scrolls past).
+      erase += this.erase(rect)
     }
     return { erase: coverErase + erase + '\x1b[H', baseline }
   }
@@ -329,12 +335,10 @@ export class SixelGraphicsManager {
     const rows = Math.min(rect.rows, this.rows - rect.y)
     if (columns <= 0 || rows <= 0) return ''
     // Erase-Character fills with the cell's current background and is the only
-    // way to drop pixels a frame never rewrites. A rect the frame does rewrite
-    // (a placement whose replacement raster was drawn, or the image node's own
-    // opaque backing) would be repainted with the surface color anyway; a rect
-    // it leaves alone (the cells an overlay covers without changing their
-    // style) keeps whatever the erase filled in, so that has to be the
-    // placement's surface color rather than the terminal default.
+    // way to drop pixels a frame never rewrites. The surface color is for the
+    // one rect the frame cannot correct afterwards — cells a later paint
+    // covers while keeping their style (see reconcile); every caller that
+    // hands those cells back to the diff passes no color.
     // The placement carries the raw color string; Color is its renderer form.
     const open = background === undefined ? '' : backgroundOpenCode(background as Color)
     let data = `\x1b[0m${open}`
