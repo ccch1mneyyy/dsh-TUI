@@ -418,13 +418,30 @@ const cleanManifest = {
   const second = run(['safe', '--rescue'], { PATH: stub.dir, DSH_STUB_STATE: stub.state, DSH_HOME: home })
   check('救援: 已存在时按现状复用', second.status === 0 && second.stdout.includes('救援 profile 已存在'), `status=${second.status}`)
   check(
-    '救援: 复用时的非交互结论行同样不承诺启动',
+    '救援: 复用时的非交互结论行同样不承诺启动、并给出启动命令',
     !lastLine(second.stdout).includes('正在启动') &&
       !lastLine(second.stdout).includes('直接启动') &&
-      lastLine(second.stdout).includes('未启动任何会话'),
+      lastLine(second.stdout).includes('未启动任何会话') &&
+      lastLine(second.stdout).includes(`dsh --profile dsh-tui-safe`),
     lastLine(second.stdout),
   )
   check('救援: 复用不重复 add', pluginCalls(stub.state).length === 1, `adds=${pluginCalls(stub.state).length}`)
+  // 3) 英文路径同样要锁：baseEnv 默认 zh，只断中文时英文文案哪天退回「starting it」
+  //    本套件照样全绿（review 指出）。用独立 home 走创建分支，避免与复用文案混淆。
+  const enHome = join(tmp, 'rescue-en')
+  mkdirSync(enHome, { recursive: true })
+  const ren = run(['safe', '--rescue'], {
+    PATH: stub.dir, DSH_STUB_STATE: stub.state, DSH_HOME: enHome, DSH_TUI_LANG: 'en',
+  })
+  const enLine = lastLine(ren.stdout)
+  check(
+    '救援: 英文非交互结论行同样不承诺启动、并给出启动命令',
+    ren.status === 0 &&
+      !enLine.includes('starting it') &&
+      enLine.includes('nothing was started here') &&
+      enLine.includes(`dsh --profile dsh-tui-safe`),
+    enLine,
+  )
 }
 {
   // 3) home 层补丁存在 → 干净不可证明，拒绝且不写盘。
