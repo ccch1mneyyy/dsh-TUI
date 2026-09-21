@@ -257,6 +257,14 @@ export function TimelineRail({
                 flexShrink={0}
                 borderStyle="round"
                 borderColor="inactive"
+                // An opaque surface, like every other card floating over the
+                // transcript (Tooltip's card uses the same token). Without it
+                // the card is translucent: the rows underneath show through
+                // the padding/border columns, so the transcript's own fills
+                // leak out beside each preview line (reported from a real
+                // session: one line leaked the message background, the next a
+                // terminal-default gap).
+                backgroundColor="toolCardBackground"
                 paddingX={1}
                 // The card floats LEFT of the rail over selectable
                 // transcript text; fence its own rect so a drag that
