@@ -1,6 +1,6 @@
 # dsh-TUI 使用说明
 
-[文档索引](README.md) · 英文版待补
+[文档索引](README.md) · [English](user-guide.en.md)
 
 > 面向日常用户的操作手册：启动、键位、命令、会话工作流、界面指标与常用技巧。
 

@@ -179,7 +179,7 @@ pnpm smoke
 ## 文档索引
 
 - **上手** — [安装与快速开始](docs/getting-started.md) · [VS Code](docs/vscode.md)
-- **使用** — [交互与命令](docs/interaction.md) · [使用说明](docs/user-guide.md) · [主题系统](docs/themes.md)
+- **使用** — [交互与命令](docs/interaction.md) · [使用说明](docs/user-guide.md)（[English](docs/user-guide.en.md)） · [主题系统](docs/themes.md)
 - **配置** — [配置参考](docs/configuration.md)
 - **实现** — [架构与限制](docs/architecture.md) · [会话挂载运行时](docs/session-mount-runtime.md)
 - **插件** — [准入与开发指南](https://github.com/T-Auto/dsh-ecosystem-spec/blob/main/docs/plugin-admission-and-development.md) · [插件速览](docs/plugins.md)

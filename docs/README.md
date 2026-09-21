@@ -14,7 +14,7 @@ The root README lists what ships; the details live here. Chinese files have no s
 
 | 文档 / Doc | 中文 | English | 讲什么 / What it covers |
 | --- | --- | --- | --- |
-| 使用说明 / User guide | [user-guide.md](user-guide.md) | 英文待补 | 键位、命令、会话工作流与设置。 |
+| 使用说明 / User guide | [user-guide.md](user-guide.md) | [user-guide.en.md](user-guide.en.md) | 键位、命令、会话工作流与设置。 |
 | 交互与命令 / Interaction & commands | [interaction.md](interaction.md) | [interaction.en.md](interaction.en.md) | 键位、鼠标、问卷审批与 slash 命令。 |
 | 主题系统 / Themes | [themes.md](themes.md) | [themes.en.md](themes.en.md) | 内置主题、自动检测与自定义主题。 |
 

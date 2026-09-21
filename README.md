@@ -203,7 +203,7 @@ Seam grading and API notes: [Plugin development](docs/plugins.en.md). The organi
 ## Documentation
 
 - **Start** — [Getting started](docs/getting-started.en.md) · [VS Code](docs/vscode.en.md)
-- **Use** — [Keys and commands](docs/interaction.en.md) · [User guide (中文)](docs/user-guide.md) · [Themes](docs/themes.en.md)
+- **Use** — [Keys and commands](docs/interaction.en.md) · [User guide](docs/user-guide.en.md) · [Themes](docs/themes.en.md)
 - **Configure** — [Configuration](docs/configuration.en.md)
 - **Internals** — [Architecture and limitations](docs/architecture.en.md) · [Session mounting](docs/session-mount-runtime.en.md)
 - **Plugins** — [Admission and development](https://github.com/T-Auto/dsh-ecosystem-spec/blob/main/docs/plugin-admission-and-development.md) · [Seams](docs/plugins.en.md)
