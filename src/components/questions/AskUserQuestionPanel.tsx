@@ -584,13 +584,27 @@ export function AskUserQuestionPanel({
         )}
         <Text dimColor>：</Text>
         {customText === '' && !inputFocused ? (
-          <Text ref={caretRef} dimColor>{t('question-direct-input')}</Text>
+          // The IME anchor must sit on a cell styled exactly like the answer
+          // text the user is about to commit: the terminal draws the preedit
+          // at the physical cursor USING THAT CELL'S STYLE, so an anchor over
+          // the dim placeholder turned pinyin dim, and one on the suggestion-
+          // colored caret turned it blue (reported from a real session).
+          // Hence a bare leading cell takes the anchor — no color prop, same
+          // "terminal default foreground" the typed run gets — and the
+          // placeholder starts one column later.
+          <>
+            <Text ref={caretRef}>{' '}</Text>
+            <Text dimColor>{t('question-direct-input')}</Text>
+          </>
         ) : (
           <>
             <Text wrap="wrap">{textPoints.slice(0, customCursor).join('')}</Text>
+            {/* Focused keeps the inverse block caret (same contract as the
+                composer's value box): the preedit then renders inverted,
+                which reads as "the block is filling with text". */}
             {inputFocused
               ? <Text ref={caretRef} inverse>{cursorChar}</Text>
-              : <Text ref={caretRef} color="suggestion">▏</Text>}
+              : <Text ref={caretRef}>▏</Text>}
             <Text wrap="wrap">{textPoints.slice(inputFocused ? customCursor + 1 : customCursor).join('')}</Text>
           </>
         )}

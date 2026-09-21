@@ -8,7 +8,7 @@
  */
 process.env.FORCE_COLOR = '3'
 
-const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render }, { AskUserQuestionPanel }, { settle, settled, sleep, viewportLines }] = await Promise.all([
+const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render }, { AskUserQuestionPanel }, { settle, settled, sleep, viewportLines, findText }] = await Promise.all([
   import('node:stream'),
   import('react'),
   import('@xterm/headless'),
@@ -61,14 +61,69 @@ const app = await render(
 
 let failures = 0
 const results: string[] = []
-const check = (name: string, ok: boolean) => {
-  results.push(`${ok ? 'PASS' : 'FAIL'}  ${name}`)
+const check = (name: string, ok: boolean, extra = '') => {
+  results.push(`${ok ? 'PASS' : 'FAIL'}  ${name}${extra ? `  (${extra})` : ''}`)
   if (!ok) failures++
+}
+
+/** 视口坐标 → 单元格（相对 baseY）；越界返回 undefined。 */
+function bufferCell(row: number, col: number) {
+  const buf = term.buffer.active
+  return col < 0 ? undefined : buf.getLine(buf.baseY + row)?.getCell(col)
+}
+type CellRef = ReturnType<typeof bufferCell>
+/**
+ * 在视口里按**整格字形**定位。不用 findText：那返回的是 translateToString
+ * 的字符串下标，而中日韩宽字符占两格——在含中文的行上取格会整体左移
+ * （本脚本第一版就因此读到隔壁标签的颜色，把红的断言读成绿的）。
+ */
+function findGlyph(glyph: string): { row: number; col: number } | null {
+  const buf = term.buffer.active
+  for (let row = 0; row < ROWS; row++) {
+    const line = buf.getLine(buf.baseY + row)
+    if (!line) continue
+    for (let x = 0; x < COLS; x++) {
+      if (line.getCell(x)?.getChars() === glyph) return { row, col: x }
+    }
+  }
+  return null
+}
+/** 前景样式：是否走终端默认色 + 具体色值。 */
+function styleOf(cell: CellRef): string {
+  if (cell === undefined) return 'n/a'
+  return `${cell.isFgDefault() ? 'default' : 'set#' + (cell.getFgColor() & 0xffffff).toString(16)}`
+}
+function fgAt(row: number, col: number): string {
+  return styleOf(bufferCell(row, col))
 }
 
 // 1. Initial render: the input row is visible INSIDE the option list.
 check('选项列表里直接可见「自定义回答」输入行', await settled(() => screen().includes('自定义回答')))
 check('提示行说明可直接输入', await settled(() => screen().includes('输入文字附带回答')))
+
+// 1b. IME 锚点格必须是「正文色空格」：终端在物理光标那一格上绘制输入法
+//     拼音并继承该格的前景色——锚点若压在 dim 占位符上，拼音会跟着变暗
+//     （与 2b 同源；2026-09-22 主人真机截图：按空格后打字，拼音是选项蓝）。
+// 1b. IME 锚点格必须是「与正文同款样式」的一格空白：终端在物理光标那一格
+//     上绘制输入法拼音并继承该格样式——锚点压在 dim 占位符上，拼音会跟着
+//     变暗；压在蓝色光标条上，拼音会跟着变蓝（2026-09-22 主人真机截图）。
+//     插入点 = 输入行 `：` 之后的第一格（同一行内定位，不靠提示行里的同名字）。
+{
+  const question = findGlyph('你')        // 题干：不带 color 的正文样式基准
+  const labelRow = findGlyph('自')        // 输入行的「自定义回答」
+  const textStyle = question === null ? 'n/a' : fgAt(question.row, question.col)
+  let anchor: CellRef
+  if (labelRow !== null) {
+    const line = term.buffer.active.getLine(term.buffer.active.baseY + labelRow.row)
+    const colonX = Array.from({ length: COLS }, (_, x) => x)
+      .find(x => line?.getCell(x)?.getChars() === '：') ?? -1
+    anchor = colonX < 0 ? undefined : bufferCell(labelRow.row, colonX + (line?.getCell(colonX)?.getWidth() ?? 1))
+  }
+  check('空输入时插入点那格是正文样式的空白（占位符不再压在锚点上）',
+    question !== null && anchor !== undefined && (anchor.getChars() === '' || anchor.getChars() === ' ')
+      && styleOf(anchor) === textStyle,
+    `chars=${JSON.stringify(anchor?.getChars())} anchor=${styleOf(anchor)} text=${textStyle}`)
+}
 
 // 2. Type on the focused "我有" option: text lands in the input row, the
 //    option list stays (no jump), and the label is attached.
@@ -76,6 +131,16 @@ stdin.write('sk-test123')
 check('输入内容出现在输入行', await settled(() => screen().includes('sk-test123')))
 check('视图不跳转（选项列表仍在）', await settled(() => screen().includes('我没有')))
 check('输入行标注附加标签「我有」', await settled(() => screen().includes('（附加：我有）')))
+
+// 2b. 内联 caret 的那一格同样必须是正文色——它就是 IME 锚点（见 1b）。
+{
+  const caret = findGlyph('▏')            // 输入行内联 caret 格 = IME 锚点
+  const typed = findGlyph('k')            // 已键入正文（sk-test123 里的 k）
+  const textFg = typed === null ? 'n/a' : fgAt(typed.row, typed.col)
+  check('内联 caret 格与正文同色（拼音继承白色，不再染成选项色）',
+    caret !== null && typed !== null && fgAt(caret.row, caret.col) === textFg,
+    `caret=(${caret?.row},${caret?.col}) caretFg=${fgAt(caret?.row ?? -1, caret?.col ?? -1)} textFg=${textFg}`)
+}
 
 // 3. Enter right there → the answer carries BOTH the label and the text.
 stdin.write('\r')
