@@ -204,6 +204,12 @@ const GROUPS = {
 // 事件而不是逐键泄漏进输入框；截断的鼠标候选在 flush 时丢弃，单独
 // Escape/未知 CSI/物理键不受影响。
     ["verify-win32-protocol", ['node', '--import', 'tsx/esm', 'scripts/verify-win32-protocol.ts']],
+// 控制台代码页回归（2026-09-21 真机实测）：win32 上首帧之前把控制台切到
+// UTF-8（原生子进程按控制台页输出、dsh 子进程层按 UTF-8 解码），且必须
+// 先读后写（已是目标页就不许再写——写会让控制台重发缓冲、盖掉已画首屏）、
+// 且**不带 windowsHide**（CREATE_NO_WINDOW 的子进程没有控制台句柄，
+// chcp 会静默失效）；非 win32 一个子进程都不许起。
+    ["verify-console-codepage", ['node', '--import', 'tsx/esm', 'scripts/verify-console-codepage.ts']],
 // 退出漏斗回归（issue #12）：上下文 teardown 不得走到进程退出。
     ["verify-teardown-exit", ['node', '--import', 'tsx/esm', 'scripts/verify-teardown-exit.tsx']],
 // 退出 resume marker 回归（issue #42）：仅有实际消息或 pending 操作时保留 marker。

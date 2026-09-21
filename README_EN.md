@@ -527,6 +527,14 @@ chat / tool base events ──> persisted Session log ──> TUI / Web
   and highlights; body text stays neutral gray. On startup the terminal background
   color (OSC 11) is queried to auto-select a light or dark palette, falling back to
   dark when the terminal does not respond.
+- **UTF-8 console code page on Windows**: before the first frame, the console's
+  output code page is switched to UTF-8. The dsh subprocess layer decodes every
+  child stream as UTF-8, while native children (`powershell.exe`, `cmd.exe`,
+  `git.exe`, `chcp.com`) encode according to the console's code page — on a
+  zh-CN/ja-JP Windows their output otherwise arrives as replacement characters.
+  Doing it before the first frame also keeps a code page change (which makes the
+  console re-encode and re-emit its buffer) out of the session, where that
+  re-emission can overwrite cells the TUI has already painted.
 - **Event-driven rendering**: the `session/event` stream drives incremental differential
   rendering; scroll state is maintained independently.
 - **Layout-level virtualization**: per-frame cost for long sessions drops from

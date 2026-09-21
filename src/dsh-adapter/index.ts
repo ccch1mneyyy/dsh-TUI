@@ -9,6 +9,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import Schema from '@deepseek-ai/schemastery'
 import type { SessionModeSpec } from '../sessionModes.js'
+import { ensureUtf8ConsolePage } from '../terminal-utils/consoleCodePage.js'
 import { DEFAULT_STATUS_BAR, normalizePageMargin, type PageMarginSetting, type ScrollGutterMode, type StatusBarConfig, type ToolBackground } from '../tuiDisplayPrefs.js'
 import { SHORTCUT_ACTIONS, type ShortcutActionId } from '../utils/keymap.js'
 
@@ -227,6 +228,13 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   // natural-language notice now renders in the logo header under the
   // startup tip (LogoV2 ← upstreamDriftSummary); CI keeps the hard gate
   // via scripts/verify-upstream-contract.ts.
+  //
+  // Console code page FIRST, before anything mounts: native children encode
+  // their output per the console's page while the dsh subprocess layer decodes
+  // every stream as UTF-8, and a page change makes the console re-emit its
+  // buffer — which wipes the splash if it lands after the first frame
+  // (see ../terminal-utils/consoleCodePage.ts for the measurements).
+  ensureUtf8ConsolePage()
   const { apply: tuiApply } = await import('./plugin.js')
   return tuiApply(ctx, config)
 }
