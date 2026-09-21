@@ -434,6 +434,7 @@ async function runEditMenu(
   const picked = answerSelected(menuAnswer, 'edit-menu')[0]
   if (picked === t('provider-opt-edit-delete')) return deleteConfiguredProvider(deps, provider)
   if (picked === t('provider-opt-edit-key')) return editApiKey(deps, provider)
+  if (picked === t('provider-opt-edit-name')) return editDisplayName(deps, provider)
   if (picked === t('provider-opt-edit-baseurl')) return editBaseUrl(deps, provider)
   if (picked === t('provider-opt-edit-protocol')) return editWireProtocol(deps, provider)
   if (picked === t('provider-opt-edit-models')) return editModelList(deps, provider)
@@ -449,6 +450,8 @@ function buildEditMenuOptions(provider: ConfiguredProvider): { label: string; de
   const options: { label: string; description?: string }[] = [
     { label: t('provider-opt-edit-key'),
       ...(provider.shadowed ? { description: t('provider-row-key-shadowed') } : {}) },
+    { label: t('provider-opt-edit-name'),
+      description: provider.displayName ?? provider.route },
   ]
   if (!isCatalog) {
     options.push(
@@ -530,6 +533,7 @@ async function editApiKey(
   await host.writeCredential(provider.ref, value)
   pushLocal('/provider', buildSummaryLines({
     route: provider.route,
+    displayName: provider.displayName,
     ref: provider.ref,
     shadowed: provider.shadowed,
     baseURL: provider.baseURL,
@@ -552,12 +556,13 @@ async function patchProfileField(
   path: readonly string[],
   value: unknown,
   /** Summary override for the field that changed; the others as stored. */
-  change: { baseURL?: string; api?: string },
+  change: { baseURL?: string; api?: string; displayName?: string },
 ): Promise<ProviderWizardOutcome> {
   const { host, notify, pushLocal } = deps
   await host.mutateProfile(provider.route, [{ op: 'set', path, value }])
   pushLocal('/provider', buildSummaryLines({
     route: provider.route,
+    displayName: change.displayName ?? provider.displayName,
     ref: provider.ref,
     shadowed: provider.shadowed,
     baseURL: change.baseURL ?? provider.baseURL,
@@ -570,6 +575,25 @@ async function patchProfileField(
   }))
   notify(t('provider-edit-success', { route: provider.route }), { color: 'success' })
   return 'updated'
+}
+
+/** Edit the display name (all routes): prompt the new name, then
+ *  patch just that field. An empty answer is a no-op. */
+async function editDisplayName(
+  deps: ProviderWizardDeps,
+  provider: ConfiguredProvider,
+): Promise<ProviderWizardOutcome> {
+  const { ask, notify } = deps
+  const nameAnswer = await ask({
+    questions: [textQuestion('display-name', t('provider-q-name'),
+      t('provider-edit-current', { value: provider.displayName ?? provider.route }))],
+  })
+  const value = answerText(nameAnswer, 'display-name')
+  if (value === '') {
+    notify(t('provider-edit-no-changes'))
+    return 'cancelled'
+  }
+  return patchProfileField(deps, provider, ['displayName'], value, { displayName: value })
 }
 
 /** Edit the base URL (custom routes only): prompt the new endpoint, then
@@ -723,6 +747,7 @@ async function editModelList(
   ])
   pushLocal('/provider', buildSummaryLines({
     route: provider.route,
+    displayName: provider.displayName,
     ref: provider.ref,
     shadowed: provider.shadowed,
     baseURL: provider.baseURL,
@@ -987,6 +1012,7 @@ function mergeModelIds(selected: readonly string[], custom: string): string[] {
 
 function buildSummaryLines(input: {
   route: string
+  displayName?: string | undefined
   ref: string
   shadowed: boolean
   baseURL: string | undefined
@@ -997,6 +1023,9 @@ function buildSummaryLines(input: {
   keyLine?: string
 }): string[] {
   const lines = [t('provider-line-route', { route: input.route })]
+  if (input.displayName !== undefined && input.displayName !== '') {
+    lines.push(t('provider-line-name', { name: input.displayName }))
+  }
   lines.push(input.keyLine ?? (input.shadowed
     ? t('provider-line-keyref-env', { ref: input.ref })
     : t('provider-line-keyref', { ref: input.ref })))

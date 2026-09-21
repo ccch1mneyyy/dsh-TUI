@@ -108,6 +108,8 @@ export interface ConfiguredProvider {
    * wizard never learned about (`input`, `compat`, …) survive the edit.
    */
   readonly modelEntries?: readonly Record<string, unknown>[]
+  /** Display name (profile.displayName) when the user sets one. */
+  readonly displayName?: string
 }
 
 /** One path op inside a provider profile, relative to the profile object. */

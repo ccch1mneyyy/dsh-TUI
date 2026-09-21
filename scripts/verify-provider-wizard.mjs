@@ -218,6 +218,7 @@ const ACTION_ADD = { selected: [t('provider-opt-action-add')] }
 const ACTION_EDIT = { selected: [t('provider-opt-action-edit')] }
 // Edit-menu picks (asked exactly once per edit session).
 const MENU_KEY = { selected: [t('provider-opt-edit-key')] }
+const MENU_NAME = { selected: [t('provider-opt-edit-name')] }
 const MENU_BASEURL = { selected: [t('provider-opt-edit-baseurl')] }
 const MENU_PROTOCOL = { selected: [t('provider-opt-edit-protocol')] }
 const MENU_MODELS = { selected: [t('provider-opt-edit-models')] }
@@ -867,6 +868,7 @@ function oauthStub(behavior = {}) {
     outcomeCatalog === 'updated'
       && eq(catalogLabels, [
         t('provider-opt-edit-key'),
+        t('provider-opt-edit-name'),
         t('provider-opt-edit-models'),
         t('provider-opt-edit-delete'),
       ]),
@@ -886,6 +888,7 @@ function oauthStub(behavior = {}) {
     outcomeCustom === 'updated'
       && eq(customLabels, [
         t('provider-opt-edit-key'),
+        t('provider-opt-edit-name'),
         t('provider-opt-edit-baseurl'),
         t('provider-opt-edit-protocol'),
         t('provider-opt-edit-models'),
@@ -911,6 +914,7 @@ function oauthStub(behavior = {}) {
     outcome === 'updated'
       && eq(labels, [
         t('provider-opt-edit-key'),
+        t('provider-opt-edit-name'),
         t('provider-opt-edit-models'),
         t('provider-opt-edit-delete'),
       ]),
@@ -1224,6 +1228,47 @@ function oauthStub(behavior = {}) {
   const op = calls.mutations[0][1][0]
   check('28b patch shape: single op, path is exactly [baseURL]',
     calls.mutations[0][1].length === 1 && eq(op.path, ['baseURL']) && op.op === 'set',
+    JSON.stringify(calls.mutations))
+}
+
+// 28c. single-field patch shape: editing displayName addresses exactly
+// one path ['displayName'] and updates the summary.
+{
+  const { deps, calls } = makeDeps({
+    'action': ACTION_EDIT,
+    'edit-provider': { selected: ['acme-gateway'] },
+    'edit-menu': MENU_NAME,
+    'display-name': { custom: '我的网关' },
+  }, {
+    configured: [{ route: 'acme-gateway', ref: 'ACME_GATEWAY_API_KEY', shadowed: false, isCatalog: false, baseURL: 'https://gw.example/v1', api: 'openai-completions', models: ['acme-large'] }],
+  })
+  const outcome = await runProviderWizard(deps)
+  const op = calls.mutations[0][1][0]
+  check('28c patch shape: single op, path is exactly [displayName]',
+    outcome === 'updated'
+      && calls.mutations[0][1].length === 1
+      && eq(op.path, ['displayName'])
+      && op.op === 'set'
+      && op.value === '我的网关',
+    JSON.stringify(calls.mutations))
+  check('28c summary notes the display name',
+    calls.pushed.length === 1 && calls.pushed[0].lines.some(l => l.includes('我的网关')),
+    JSON.stringify(calls.pushed))
+}
+
+// 28d. empty display-name cancels without mutation
+{
+  const { deps, calls } = makeDeps({
+    'action': ACTION_EDIT,
+    'edit-provider': { selected: ['acme-gateway'] },
+    'edit-menu': MENU_NAME,
+    'display-name': { custom: '' },
+  }, {
+    configured: [{ route: 'acme-gateway', ref: 'ACME_GATEWAY_API_KEY', shadowed: false, isCatalog: false, baseURL: 'https://gw.example/v1', api: 'openai-completions', models: ['acme-large'] }],
+  })
+  const outcome = await runProviderWizard(deps)
+  check('28d empty display-name cancels without mutation',
+    outcome === 'cancelled' && calls.mutations.length === 0,
     JSON.stringify(calls.mutations))
 }
 

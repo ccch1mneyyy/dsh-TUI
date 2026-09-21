@@ -1141,6 +1141,7 @@ const dict = {
   'provider-opt-baseurl-skip': { zh: '跳过，使用默认端点', en: 'Skip — use the default endpoint' },
   'provider-opt-baseurl-input': { zh: '现在输入 baseURL', en: 'Enter a baseURL now' },
   'provider-q-baseurl': { zh: '输入 baseURL', en: 'Enter the baseURL' },
+  'provider-q-name': { zh: '给这个服务商起个名字（支持中文）', en: 'Name this provider (Chinese is fine)' },
   'provider-q-protocol': { zh: '选择 API 协议', en: 'Choose the wire protocol' },
   'provider-protocol-completions-desc': { zh: 'OpenAI Chat Completions 兼容（大多数网关）', en: 'OpenAI Chat Completions compatible (most gateways)' },
   'provider-protocol-responses-desc': { zh: 'OpenAI Responses API', en: 'OpenAI Responses API' },
@@ -1155,6 +1156,7 @@ const dict = {
   'provider-opt-confirm-write': { zh: '写入并启用', en: 'Write and enable' },
   'provider-opt-confirm-cancel': { zh: '取消', en: 'Cancel' },
   'provider-line-route': { zh: '路由：{{route}}', en: 'Route: {{route}}' },
+  'provider-line-name': { zh: '显示名：{{name}}', en: 'Display name: {{name}}' },
   'provider-line-keyref': { zh: '密钥引用：{{ref}}（已写入 ~/.dsh/.credentials.yaml）', en: 'Key ref: {{ref}} (stored in ~/.dsh/.credentials.yaml)' },
   'provider-line-keyref-env': { zh: '密钥引用：{{ref}}（进程环境已提供同名变量，跳过写入）', en: 'Key ref: {{ref}} (already in the process environment, write skipped)' },
   'provider-line-baseurl': { zh: 'baseURL：{{url}}', en: 'baseURL: {{url}}' },
@@ -1203,6 +1205,7 @@ const dict = {
   // /provider 编辑菜单（选中 provider 后；每项改完立即保存并退出）
   'provider-q-edit-menu': { zh: '{{route}} 要编辑哪一项？', en: 'What would you like to change for {{route}}?' },
   'provider-opt-edit-key': { zh: '编辑 API Key', en: 'Edit API Key' },
+  'provider-opt-edit-name': { zh: '编辑显示名', en: 'Edit display name' },
   'provider-opt-edit-baseurl': { zh: '编辑 Base URL', en: 'Edit Base URL' },
   'provider-opt-edit-protocol': { zh: '编辑 wire protocol', en: 'Edit wire protocol' },
   'provider-opt-edit-models': { zh: '编辑模型列表', en: 'Edit model list' },
