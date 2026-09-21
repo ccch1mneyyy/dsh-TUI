@@ -223,6 +223,18 @@ const MSG = {
     en: `[dsh-tui] Rescue profile created (base + TUI only, no third-party plugins) — starting it.`,
     zh: `[dsh-tui] 救援 profile 已创建（仅 base + TUI，无第三方插件）——正在启动。`,
   },
+  // 上面两条是**交互**路径的措辞（菜单选项 5 与 TTY 下的 `safe --rescue` 都经
+  // runRescue → startDshSession），说「正在启动」属实。非交互 `safe --rescue`
+  // 只做门禁 + 创建/复用就退出（没有终端可交接，见文件末尾该分支），一条会话
+  // 都不启动，故它单独用下面两条：不承诺启动，把启动动作交回用户。
+  safeRescueExistsNonInteractive: {
+    en: `[dsh-tui] Rescue profile already exists and is ready — nothing was started here (no terminal). Start it in a terminal: dsh --profile ${RESCUE_PROFILE}`,
+    zh: `[dsh-tui] 救援 profile 已存在且已就绪——此处没有终端，未启动任何会话。请在终端里启动：dsh --profile ${RESCUE_PROFILE}`,
+  },
+  safeRescueCreatedNonInteractive: {
+    en: `[dsh-tui] Rescue profile created (base + TUI only, no third-party plugins) and ready — nothing was started here (no terminal). Start it in a terminal: dsh --profile ${RESCUE_PROFILE}`,
+    zh: `[dsh-tui] 救援 profile 已创建（仅 base + TUI，无第三方插件）且已就绪——此处没有终端，未启动任何会话。请在终端里启动：dsh --profile ${RESCUE_PROFILE}`,
+  },
   safeRescueFailed: {
     en: detail => `[dsh-tui] Rescue profile creation failed (${detail}). See the diagnostics above and the guidance (option 4).`,
     zh: detail => `[dsh-tui] 救援 profile 创建失败（${detail}）。请看上方诊断与指引（选项 4）。`,
@@ -1184,7 +1196,8 @@ if (subcommand === 'safe') {
       for (const l of created.lines) console.error(l)
       process.exit(1)
     }
-    console.log(created.kind === 'exists' ? msg('safeRescueExists') : msg('safeRescueCreated'))
+    // 结论行走非交互专用键：这条路径到此为止，没有 startDshSession。
+    console.log(created.kind === 'exists' ? msg('safeRescueExistsNonInteractive') : msg('safeRescueCreatedNonInteractive'))
     process.exit(0)
   }
   process.exit(await runSafeSession({ pendingExitCode: 0, retryDsh: null, extraLines, rescueFirst: rescueOnly }))

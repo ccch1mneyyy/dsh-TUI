@@ -112,7 +112,9 @@ const place = (from, to) => {
 }
 bump('calls')
 appendFileSync(join(state, 'argv'), argv.join(' ') + '\\n')
-appendFileSync(join(state, 'env'), 'resume=' + (process.env.DSH_TUI_RESUME_SESSION ?? 'none') + '\\n')
+// 被剥离的会话控制变量**两个都**记，且记在同一行：argv 与 env 两个文件是按行
+// 号一一配对的（见 stubCalls），一个调用占两行会让后面每次配对整体错位。
+appendFileSync(join(state, 'env'), 'resume=' + (process.env.DSH_TUI_RESUME_SESSION ?? 'none') + ' workspace=' + (process.env.DSH_TUI_WORKSPACE_TARGET ?? 'none') + '\\n')
 
 const [command] = argv
 if (command === '--version') {
@@ -201,7 +203,7 @@ const stubCalls = state => {
   }
   const argv = read('argv')
   const env = read('env')
-  return argv.map((line, i) => ({ argv: line, resume: env[i] ?? '' }))
+  return argv.map((line, i) => ({ argv: line, env: env[i] ?? '' }))
 }
 const pluginCalls = state => stubCalls(state).filter(c => c.argv.startsWith('plugin '))
 
@@ -243,6 +245,11 @@ const section = (text, start, end) => {
   const to = rest.indexOf(end)
   return to === -1 ? rest : rest.slice(0, to)
 }
+
+// 结论行 = stdout 最后一条非空行。非交互救援的结论文案必须钉在这一行上：
+// 整段 stdout 里 renderGuide 早就打过 `dsh --profile dsh-tui-safe`，拿整段
+// includes 比「有没有给出启动命令」会被指引区段顶替（假通过）。
+const lastLine = text => text.split('\n').map(l => l.trim()).filter(l => l !== '').pop() ?? ''
 
 // 在指定 home 下预置救援 profile 的脚手架。
 const rescueDirOf = home => join(home, 'profiles', 'dsh-tui-safe')
@@ -391,6 +398,16 @@ const cleanManifest = {
   const r = run(['safe', '--rescue'], { PATH: stub.dir, DSH_STUB_STATE: stub.state, DSH_HOME: home })
   const adds = pluginCalls(stub.state)
   check('救援: 创建成功且退出 0', r.status === 0 && r.stdout.includes('救援 profile 已创建'), `status=${r.status}`)
+  // 非交互路径到此为止，没有 startDshSession——结论行不许出现「启动」承诺，
+  // 而要把启动动作交回用户（含可直接粘贴的命令）。
+  check(
+    '救援: 非交互结论行不承诺启动、并给出启动命令',
+    !lastLine(r.stdout).includes('正在启动') &&
+      !lastLine(r.stdout).includes('直接启动') &&
+      lastLine(r.stdout).includes('未启动任何会话') &&
+      lastLine(r.stdout).includes(`dsh --profile dsh-tui-safe`),
+    lastLine(r.stdout),
+  )
   check('救援: 插件包落位（安装判定文件可读）', existsSync(rescuePkgOf(home)))
   check(
     '救援: 走官方 dsh plugin add 且钉本副本版本',
@@ -400,6 +417,13 @@ const cleanManifest = {
   // 2) 再跑一次：已存在 → 复用，绝不覆盖重装。
   const second = run(['safe', '--rescue'], { PATH: stub.dir, DSH_STUB_STATE: stub.state, DSH_HOME: home })
   check('救援: 已存在时按现状复用', second.status === 0 && second.stdout.includes('救援 profile 已存在'), `status=${second.status}`)
+  check(
+    '救援: 复用时的非交互结论行同样不承诺启动',
+    !lastLine(second.stdout).includes('正在启动') &&
+      !lastLine(second.stdout).includes('直接启动') &&
+      lastLine(second.stdout).includes('未启动任何会话'),
+    lastLine(second.stdout),
+  )
   check('救援: 复用不重复 add', pluginCalls(stub.state).length === 1, `adds=${pluginCalls(stub.state).length}`)
 }
 {
@@ -588,7 +612,13 @@ const cleanManifest = {
     DSH_TUI_RESUME_SESSION: 'leaked-session-id', DSH_TUI_WORKSPACE_TARGET: '/leaked/target',
   })
   const addCall = pluginCalls(stub.state)[0]
-  check('救援: 显式环境剥离宿主会话控制变量', r.status === 0 && addCall?.resume === 'resume=none', addCall?.resume ?? 'no call')
+  // 两个会话控制变量都在被剥离之列（实现侧 RESCUE_DROPPED_ENV），所以两个都
+  // 断言：只断 resume 时，第二个键哪天从剥离清单里掉出去本套件照样全绿。
+  check(
+    '救援: 显式环境剥离宿主会话控制变量（resume 与 workspace 两键）',
+    r.status === 0 && addCall?.env === 'resume=none workspace=none',
+    addCall?.env ?? 'no call',
+  )
 }
 
 // --- 插件清单解析矩阵（伪 profile 根 package.json）------------------------------
