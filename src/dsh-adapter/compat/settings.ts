@@ -13,6 +13,19 @@ export function editableConfig<T>(schema: Schema<T>, keys: readonly (keyof T)[])
   return schema as Schema<T, RuntimeConfig<T>>
 }
 
+/** Settings forms use the Config owner's Loader ID, not the plugin name. */
+export function resolveSettingsNamespace(ctx: Context, schema: Pick<Schema, 'dict'>): string {
+  const settings = ctx.get('settings') as { register?: unknown } | undefined
+  if (!settings || typeof settings.register === 'function') return 'dsh-tui'
+  if (!Object.values(schema.dict ?? {}).some(field => field.meta.volatile === true)) {
+    throw new Error('dsh-tui: profile-backed settings require @deepseek-ai/schemastery >= 3.18.3 with volatile Config support. Update DSH and reinstall the current profile dependencies before starting the TUI.')
+  }
+  const owner = ctx.fiber as typeof ctx.fiber & { entry?: { options: { id?: string } } }
+  const ns = owner.entry?.options.id
+  if (!ns) throw new Error('dsh-tui: profile-backed settings require a Loader entry for the Config owner.')
+  return ns
+}
+
 /** Snapshot at an operation boundary; retain the host refs for later updates. */
 export function configValues<T extends object>(config: RuntimeConfig<T>): T {
   return Object.fromEntries(Object.entries(config).map(([key, value]: [string, unknown]) => [

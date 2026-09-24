@@ -70,5 +70,8 @@ Loader 行只调度 TUI runtime：Host 加载完成后由 Cordis 子插件启动
 Config 仍由原 Loader 行拥有，runtime 的设置监听显式使用该 owner。
 
 `compat/settings.ts` 在新 host 消费 Config 的 volatile 字段与 Loader 更新事件，
-旧 host 保留 scope 注册/watch。设置由 DSH 写入当前 profile 配置；TUI 不维护第二份
+旧 host 保留 scope 注册/watch。新 host 的设置 namespace 使用 Config owner 的
+Loader 行 ID；若实际 Config 缺少 volatile 字段，启动报错并提示更新 DSH、重装
+profile 依赖（需 schemastery >= 3.18.3），不回落到不可编辑的设置页。
+设置由 DSH 写入当前 profile 配置；TUI 不维护第二份
 设置文件。历史 Session 转换及子会话 catalog 仍交给官方 format catalog。

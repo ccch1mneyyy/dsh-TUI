@@ -4,14 +4,18 @@
  * Run: node --import tsx/esm scripts/verify-settings-compat.mjs
  */
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import ts from 'typescript'
 import { Context } from '@deepseek-ai/cordis'
 import Loader from '@deepseek-ai/cordis-plugin-loader'
 import Schema from '@deepseek-ai/schemastery'
+import Settings from '@deepseek-ai/dsh-settings'
 import { Config } from '../src/dsh-adapter/index.ts'
-import { configValues, createSettingsScope } from '../src/dsh-adapter/compat/settings.ts'
+import { configValues, createSettingsScope, editableConfig, resolveSettingsNamespace } from '../src/dsh-adapter/compat/settings.ts'
 import { createSettingsHosts } from '../src/dsh-adapter/channel/settings-host.ts'
+import { SettingsForm } from '../src/dsh-adapter/settingsEditor.ts'
 import { DEFAULT_STATUS_BAR, normalizePageMargin } from '../src/tuiDisplayPrefs.ts'
 import { isLang } from '../src/i18n.ts'
 import { SHORTCUT_ACTIONS, setKeymapOverrides, resetKeymapOverrides, effectiveComboString } from '../src/utils/keymap.ts'
@@ -67,12 +71,29 @@ assert.equal(observed.fullscreen, true)
 stopOld()
 assert.equal(legacyWatch, undefined)
 
+// Reproduce the old schema capability without changing the installed framework.
+const oldField = Schema.boolean()
+oldField.volatile = undefined
+const oldConfig = editableConfig(Schema.object({ fullscreen: oldField }), ['fullscreen'])
+assert.notEqual(oldConfig.dict.fullscreen.meta.volatile, true)
+assert.equal(resolveSettingsNamespace({ get: () => legacy }, oldConfig), 'dsh-tui')
+assert.equal(resolveSettingsNamespace({ get: () => undefined }, oldConfig), 'dsh-tui', 'settings remains optional')
+assert.throws(() => resolveSettingsNamespace({ get: () => ({}) }, oldConfig), /schemastery >= 3\.18\.3.*reinstall/)
+
 // Execute the production settings wiring, not a hand-copied listener/merge.
 // Isolate these statements from TTY/agent startup, retaining their real lexical
 // ctx/settingsCtx ownership and watch disposer. Loader itself dispatches events.
 const source = ts.createSourceFile('plugin.ts', readFileSync(new URL('../src/dsh-adapter/plugin.ts', import.meta.url), 'utf8'), ts.ScriptTarget.Latest, true)
 let settingsBody
+let namespaceDeclaration, sectionNamespace
 function visit(node) {
+  if (ts.isVariableStatement(node) && node.declarationList.declarations.some(declaration => declaration.name.getText(source) === 'tuiSettingsNs')) {
+    assert.equal(namespaceDeclaration, undefined)
+    namespaceDeclaration = node.getText(source)
+  }
+  if (ts.isCallExpression(node) && node.expression.getText(source) === 'settingsSections.register') {
+    sectionNamespace = node.arguments[0].properties.find(property => property.name?.getText(source) === 'ns').initializer.getText(source)
+  }
   if (ts.isArrowFunction(node) && node.parameters[0]?.name.getText(source) === 'settingsCtx') {
     assert.equal(settingsBody, undefined, 'settings injection must be unambiguous')
     settingsBody = node.body
@@ -81,7 +102,13 @@ function visit(node) {
 }
 visit(source)
 assert.ok(settingsBody && ts.isBlock(settingsBody))
-const declarationNames = ['tuiSettingsNs', 'scope', 'applyShortcuts', 'bootSettings', 'lastTerminalImages']
+assert.ok(namespaceDeclaration)
+assert.ok(sectionNamespace)
+const namespaceJs = ts.transpileModule(`${namespaceDeclaration}; return ${sectionNamespace}`, {
+  compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext },
+}).outputText
+const sectionNs = configOwner => new Function('configOwner', 'Config', 'resolveSettingsNamespace', namespaceJs)(configOwner, Config, resolveSettingsNamespace)
+const declarationNames = ['scope', 'applyShortcuts', 'bootSettings', 'lastTerminalImages']
 const declarations = declarationNames.map(name => {
   const statement = settingsBody.statements.find(node => ts.isVariableStatement(node)
     && node.declarationList.declarations.some(declaration => declaration.name.getText(source) === name))
@@ -95,6 +122,7 @@ function containsWatch(node) {
 const watchStatements = settingsBody.statements.filter(node => ts.isExpressionStatement(node) && containsWatch(node))
 assert.equal(watchStatements.length, 1, 'one production watch registration')
 const javascript = ts.transpileModule(`
+  ${namespaceDeclaration}
   return ctx.inject(['settings'], settingsCtx => {
     ${declarations.join('\n')}
     const apply = next => { observe(next); applyShortcuts(next) }
@@ -105,23 +133,36 @@ const javascript = ts.transpileModule(`
 `, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext } }).outputText
 const bindSettings = dependencies => new Function(...Object.keys(dependencies), javascript)(...Object.values(dependencies))
 
-if (modernSchema) {
+if (modernSchema) for (const entryId of ['dsh-tui', 'custom-tui']) {
   const root = new Context()
+  const home = mkdtempSync(join(tmpdir(), 'dsh-tui-settings-'))
   const observed = []
   const notices = []
   let owner, child, liveScope, applyShortcuts, runtime
   resetKeymapOverrides()
   const defaultPaste = effectiveComboString('paste')
   try {
-    root.provide('settings', {})
     await root.plugin(Loader)
+    // Only the profile IO is in-memory; form projection, validation, revision
+    // fencing, mutation and Loader updates all run through the real services.
+    root.provide('profileContext', { home })
+    root.provide('configEditor', {
+      entries: () => [...root.loader.entries()],
+      configuration: () => [...root.loader.entries()].map(entry => ({ entry, inherited: {}, override: entry.options.config ?? {} })),
+      async edit(entry, change) {
+        await root.loader.update(entry.options.id, { config: change(entry.options.config ?? {}, {}) })
+        await root.loader.await()
+      },
+    })
+    await root.plugin(Settings)
+    assert.throws(() => resolveSettingsNamespace(root, Config), /require a Loader entry/)
     root.loader.builtins.fixture = { Config, async apply(ctx, runtimeConfig) {
       owner = ctx
       runtime = runtimeConfig
       await ctx.plugin(async runtimeCtx => {
         await bindSettings({
           ctx: runtimeCtx, configOwner: ctx, runtimeConfig, config: configValues(runtimeConfig), Schema, SHORTCUT_ACTIONS,
-          DEFAULT_STATUS_BAR, normalizePageMargin, isLang, configValues, createSettingsScope, setKeymapOverrides,
+          DEFAULT_STATUS_BAR, normalizePageMargin, isLang, Config, configValues, createSettingsScope, resolveSettingsNamespace, setKeymapOverrides,
           bootedFullscreen: true, bootedTerminalImages: true,
           t: key => key, notifyChannel: message => notices.push(message), channel: { notify: message => notices.push(message) },
           observe: value => observed.push(value),
@@ -129,12 +170,31 @@ if (modernSchema) {
         })
       })
     } }
-    await root.loader.create({ id: 'fixture', name: 'cordis:fixture', config: { diffLayout: 'split', shortcuts: { paste: 'alt+v' } } })
+    await root.loader.create({ id: entryId, name: 'cordis:fixture', config: { diffLayout: 'split', shortcuts: { paste: 'alt+v' } } })
     await root.loader.await()
     assert.notEqual(owner.fiber, child.fiber, 'injection has its own lifecycle')
     assert.equal(effectiveComboString('paste'), 'alt+v')
+    const ownerFiber = owner.fiber
+    const ns = sectionNs(owner)
+    assert.equal(ns, entryId, 'production section follows the Config owner entry ID')
+    const host = createSettingsHosts(root).settingsHost()
+    const view = host.listNamespaces().find(view => view.ns === ns)
+    const diffField = { path: ['diffLayout'], label: 'Diff layout', kind: 'select', options: [{ value: 'split', label: 'Split' }, { value: 'unified', label: 'Unified' }] }
+    const form = new SettingsForm(host, view, [diffField])
+    assert.equal(form.available, true, 'real describe() supplies the editable TUI section')
+    assert.equal(form.field(diffField).text, 'split', 'the settings page shows the effective value')
+    const descriptor = root.settings.describe().find(view => view.ns === ns)
+    assert.deepEqual(Object.keys(descriptor.schema.refs[descriptor.schema.uid].dict).sort(), Object.keys(Config.dict).filter(key => Config.dict[key].meta.volatile === true).sort())
     observed.length = 0
-    await root.loader.update('fixture', { config: { diffLayout: 'unified', fullscreen: false, shortcuts: {} } })
+    form.edit(diffField, 'unified')
+    const saved = await form.save()
+    assert.equal(saved, true, `form save uses the real settings mutation path: ${form.failureMessage}`)
+    assert.equal(configValues(runtime).diffLayout, 'unified')
+    assert.equal(owner.fiber, ownerFiber, 'editing settings does not remount the agent owner')
+    assert.equal(observed.length, 1)
+    assert.equal(host.listNamespaces().find(view => view.ns === ns).value.diffLayout, 'unified')
+    observed.length = 0
+    await root.loader.update(entryId, { config: { diffLayout: 'unified', fullscreen: false, shortcuts: {} } })
     await root.loader.await()
     assert.equal(configValues(runtime).diffLayout, 'unified', 'real Loader committed the config')
     assert.equal(observed.length, 1, 'owner event reaches the injected settings consumer exactly once')
@@ -153,7 +213,7 @@ if (modernSchema) {
     assert.equal(effectiveComboString('paste'), 'ctrl+shift+v')
     liveScope.legacy = false
     await child.fiber.dispose()
-    await root.loader.update('fixture', { config: { diffLayout: 'split', shortcuts: {} } })
+    await root.loader.update(entryId, { config: { diffLayout: 'split', shortcuts: {} } })
     await root.loader.await()
     assert.equal(observed.length, 1, 'disposing the injection removes its owner-fiber listener')
     await root.loader.create({ id: 'restarted', name: 'cordis:fixture', config: { diffLayout: 'split', shortcuts: {} } })
@@ -162,6 +222,7 @@ if (modernSchema) {
   } finally {
     await root.fiber.dispose()
     resetKeymapOverrides()
+    rmSync(home, { recursive: true, force: true })
   }
 }
 

@@ -7,8 +7,8 @@ import * as toolAskUser from '@deepseek-ai/dsh-tool-ask-user'
 import type { Context } from '@deepseek-ai/cordis'
 import type { SettingsNamespace } from '@deepseek-ai/dsh-settings'
 import Schema from '@deepseek-ai/schemastery'
-import type { Config } from './index.js'
-import { configValues, createSettingsScope, type RuntimeConfig } from './compat/settings.js'
+import { Config } from './index.js'
+import { configValues, createSettingsScope, resolveSettingsNamespace, type RuntimeConfig } from './compat/settings.js'
 import { createChannel } from './channel.js'
 import { createChannelSceneOutlet } from './channel-scene-outlet.js'
 import { mountChannelUi } from './channel-ui.js'
@@ -219,6 +219,9 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
     )
     return
   }
+
+  // Validate settings before creating an agent or taking over the terminal.
+  const tuiSettingsNs = resolveSettingsNamespace(configOwner, Config) as SettingsNamespace
 
   // Modern hosts own a declarative registry; old hosts discover directories.
   // A modern bundle failure must not silently fall back to obsolete files.
@@ -611,12 +614,6 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
   // Old hosts register a settings.yaml scope. 0.1.7 projects the plugin's
   // volatile Config fields instead; both paths apply edits without remounting.
   ctx.inject(['settings'], (settingsCtx) => {
-    // alpha.2 removed the `settingsNamespace()` brand helper: register() now
-    // takes the raw string and validates it itself, while rc.2 still wants the
-    // branded handle. Brands are type-only, so the constant cast compiles
-    // against both lines and the runtime value is identical ('dsh-tui' always
-    // satisfied the namespace pattern).
-    const tuiSettingsNs = 'dsh-tui' as SettingsNamespace
     // Loader targets the Config owner's fiber, not the injected child fiber.
     const scope = createSettingsScope<SettingsValue>(configOwner, settingsCtx.settings,
       tuiSettingsNs,
@@ -972,7 +969,7 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
       ctx.get('tuiSettingsSections') as TuiSettingsSectionsRuntime | undefined,
     ) ?? getLocalSettingsSectionsHost(ctx)
     const unregister = settingsSections.register({
-      ns: 'dsh-tui',
+      ns: tuiSettingsNs,
       title: 'dsh-tui',
       groups: [
         { id: 'status-bar', title: 'Status bar', descriptions: { zh: '底栏设置' } },

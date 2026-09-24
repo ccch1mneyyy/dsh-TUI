@@ -96,6 +96,11 @@ The primary compatibility target is DSH `0.1.7-rc.1`. This adapter supports its
 Shell API, V4 session messages, declarative presets, and profile-backed settings;
 older supported hosts retain their compatibility paths. See [configuration](docs/configuration.en.md).
 
+On DSH 0.1.7, `/settings` uses the TUI's actual Loader entry ID, including custom
+IDs. It requires matching profile dependencies with `@deepseek-ai/schemastery`
+3.18.3 or newer; an incompatible schema stops TUI startup with repair guidance
+instead of showing an uneditable settings page. Older hosts keep their legacy settings scope.
+
 ```sh
 # Install the CLI and this plugin globally (ships the dsh-tui command)
 npm install -g @deepseek-ai/dsh @deepseek-harness-tui/dsh-tui
