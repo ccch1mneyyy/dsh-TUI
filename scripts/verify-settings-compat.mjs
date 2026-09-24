@@ -16,9 +16,10 @@ import { Config } from '../src/dsh-adapter/index.ts'
 import { configValues, createSettingsScope, editableConfig, resolveSettingsNamespace } from '../src/dsh-adapter/compat/settings.ts'
 import { createSettingsHosts } from '../src/dsh-adapter/channel/settings-host.ts'
 import { SettingsForm } from '../src/dsh-adapter/settingsEditor.ts'
-import { DEFAULT_STATUS_BAR, normalizePageMargin } from '../src/tuiDisplayPrefs.ts'
-import { isLang } from '../src/i18n.ts'
-import { SHORTCUT_ACTIONS, setKeymapOverrides, resetKeymapOverrides, effectiveComboString } from '../src/utils/keymap.ts'
+import TuiSettingsSectionsRuntime, { getHostSettingsSections, getLocalSettingsSectionsHost } from '../src/dsh-adapter/settings-sections.ts'
+import { DEFAULT_PAGE_MARGIN, DEFAULT_STATUS_BAR, isPageMarginMode, normalizePageMargin, parsePageMarginSpec } from '../src/tuiDisplayPrefs.ts'
+import { getLang, isLang } from '../src/i18n.ts'
+import { SHORTCUT_ACTIONS, setKeymapOverrides, resetKeymapOverrides, effectiveComboString, parseComboDraft, draftComboConflicts } from '../src/utils/keymap.ts'
 
 const modernSchema = typeof Schema.boolean().volatile === 'function'
 const parsed = Config({ fullscreen: false, whale: false, effortDefault: 'high', statusBar: { model: false } })
@@ -85,14 +86,22 @@ assert.throws(() => resolveSettingsNamespace({ get: () => ({}) }, oldConfig), /s
 // ctx/settingsCtx ownership and watch disposer. Loader itself dispatches events.
 const source = ts.createSourceFile('plugin.ts', readFileSync(new URL('../src/dsh-adapter/plugin.ts', import.meta.url), 'utf8'), ts.ScriptTarget.Latest, true)
 let settingsBody
-let namespaceDeclaration, sectionNamespace
+let namespaceDeclaration, sectionRegistration
+const sectionDeclarations = new Map()
 function visit(node) {
   if (ts.isVariableStatement(node) && node.declarationList.declarations.some(declaration => declaration.name.getText(source) === 'tuiSettingsNs')) {
     assert.equal(namespaceDeclaration, undefined)
     namespaceDeclaration = node.getText(source)
   }
+  if (ts.isVariableStatement(node)) {
+    for (const declaration of node.declarationList.declarations) {
+      const name = declaration.name.getText(source)
+      if (name === 'shortcutFieldMeta' || name === 'shortcutFields') sectionDeclarations.set(name, node.getText(source))
+    }
+  }
   if (ts.isCallExpression(node) && node.expression.getText(source) === 'settingsSections.register') {
-    sectionNamespace = node.arguments[0].properties.find(property => property.name?.getText(source) === 'ns').initializer.getText(source)
+    assert.equal(sectionRegistration, undefined)
+    sectionRegistration = node.getText(source)
   }
   if (ts.isArrowFunction(node) && node.parameters[0]?.name.getText(source) === 'settingsCtx') {
     assert.equal(settingsBody, undefined, 'settings injection must be unambiguous')
@@ -103,11 +112,15 @@ function visit(node) {
 visit(source)
 assert.ok(settingsBody && ts.isBlock(settingsBody))
 assert.ok(namespaceDeclaration)
-assert.ok(sectionNamespace)
-const namespaceJs = ts.transpileModule(`${namespaceDeclaration}; return ${sectionNamespace}`, {
+assert.ok(sectionRegistration)
+assert.equal(sectionDeclarations.size, 2)
+const registrationJs = ts.transpileModule(`${namespaceDeclaration}
+  ${sectionDeclarations.get('shortcutFieldMeta')}
+  ${sectionDeclarations.get('shortcutFields')}
+  return ${sectionRegistration}`, {
   compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext },
 }).outputText
-const sectionNs = configOwner => new Function('configOwner', 'Config', 'resolveSettingsNamespace', namespaceJs)(configOwner, Config, resolveSettingsNamespace)
+const registerSection = dependencies => new Function(...Object.keys(dependencies), registrationJs)(...Object.values(dependencies))
 const declarationNames = ['scope', 'applyShortcuts', 'bootSettings', 'lastTerminalImages']
 const declarations = declarationNames.map(name => {
   const statement = settingsBody.statements.find(node => ts.isVariableStatement(node)
@@ -133,7 +146,7 @@ const javascript = ts.transpileModule(`
 `, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext } }).outputText
 const bindSettings = dependencies => new Function(...Object.keys(dependencies), javascript)(...Object.values(dependencies))
 
-if (modernSchema) for (const entryId of ['dsh-tui', 'custom-tui']) {
+if (modernSchema) for (const registry of ['service', 'local']) for (const entryId of ['dsh-tui', 'custom-tui', '1234abcd', 'Custom.TUI', ' custom-tui ']) {
   const root = new Context()
   const home = mkdtempSync(join(tmpdir(), 'dsh-tui-settings-'))
   const observed = []
@@ -143,6 +156,11 @@ if (modernSchema) for (const entryId of ['dsh-tui', 'custom-tui']) {
   const defaultPaste = effectiveComboString('paste')
   try {
     await root.plugin(Loader)
+    if (registry === 'service') await root.plugin(TuiSettingsSectionsRuntime)
+    const sections = registry === 'service'
+      ? getHostSettingsSections(root.get('tuiSettingsSections'))
+      : getLocalSettingsSectionsHost(root)
+    assert.ok(sections)
     // Only the profile IO is in-memory; form projection, validation, revision
     // fencing, mutation and Loader updates all run through the real services.
     root.provide('profileContext', { home })
@@ -175,12 +193,28 @@ if (modernSchema) for (const entryId of ['dsh-tui', 'custom-tui']) {
     assert.notEqual(owner.fiber, child.fiber, 'injection has its own lifecycle')
     assert.equal(effectiveComboString('paste'), 'alt+v')
     const ownerFiber = owner.fiber
-    const ns = sectionNs(owner)
+    const unregister = registerSection({
+      configOwner: owner, Config, resolveSettingsNamespace, settingsSections: sections,
+      config: configValues(runtime), SHORTCUT_ACTIONS, effectiveComboString, parseComboDraft, draftComboConflicts,
+      getLang, DEFAULT_PAGE_MARGIN, isPageMarginMode, parsePageMarginSpec,
+      bootedFullscreen: true, terminalImagesDisabledByEnv: false,
+      readEffortPref: () => undefined, // Do not read the developer's persisted preferences.
+    })
+    root.effect(() => unregister)
+    const section = sections.section(entryId)
+    assert.ok(section, `${registry}: production registration preserves the exact Loader ID ${JSON.stringify(entryId)}`)
+    if (entryId !== entryId.trim()) {
+      const removeSibling = sections.register({ ns: entryId.trim(), fields: [] })
+      root.effect(() => removeSibling)
+      assert.equal(sections.section(entryId), section, 'distinct Loader IDs must not alias after trimming')
+    }
+    const ns = section.ns
     assert.equal(ns, entryId, 'production section follows the Config owner entry ID')
     const host = createSettingsHosts(root).settingsHost()
     const view = host.listNamespaces().find(view => view.ns === ns)
-    const diffField = { path: ['diffLayout'], label: 'Diff layout', kind: 'select', options: [{ value: 'split', label: 'Split' }, { value: 'unified', label: 'Unified' }] }
-    const form = new SettingsForm(host, view, [diffField])
+    const diffField = section.fields.find(field => field.path.length === 1 && field.path[0] === 'diffLayout')
+    assert.ok(diffField, 'the production section exposes diffLayout')
+    const form = new SettingsForm(host, view, section.fields)
     assert.equal(form.available, true, 'real describe() supplies the editable TUI section')
     assert.equal(form.field(diffField).text, 'split', 'the settings page shows the effective value')
     const descriptor = root.settings.describe().find(view => view.ns === ns)
@@ -219,11 +253,29 @@ if (modernSchema) for (const entryId of ['dsh-tui', 'custom-tui']) {
     await root.loader.create({ id: 'restarted', name: 'cordis:fixture', config: { diffLayout: 'split', shortcuts: {} } })
     await root.loader.await()
     assert.equal(effectiveComboString('paste'), defaultPaste, 'a fresh boot agrees with the live reset')
+    unregister()
+    assert.equal(sections.section(entryId), undefined, 'disposal removes the exact Loader ID')
   } finally {
     await root.fiber.dispose()
     resetKeymapOverrides()
     rmSync(home, { recursive: true, force: true })
   }
+}
+
+// Only host-owned sections accept Loader IDs; external plugin validation stays strict.
+const pluginRoot = new Context()
+try {
+  await pluginRoot.plugin(TuiSettingsSectionsRuntime)
+  await pluginRoot.inject(['tuiSettingsSections'], ctx => {
+    for (const ns of ['', '1234abcd', 'Custom.TUI']) {
+      assert.throws(() => ctx.tuiSettingsSections.register({ ns, fields: [] }), /invalid TUI settings-section namespace/)
+    }
+    const unregister = ctx.tuiSettingsSections.register({ ns: ' plugin-settings ', fields: [] })
+    assert.equal(ctx.tuiSettingsSections.section('plugin-settings').ns, 'plugin-settings', 'legacy plugin namespaces still normalize whitespace')
+    unregister()
+  })
+} finally {
+  await pluginRoot.fiber.dispose()
 }
 
 for (const api of ['legacy', 'forms']) {
@@ -252,4 +304,4 @@ for (const api of ['legacy', 'forms']) {
   await host.write('llm-pi-ai', ops, 7)
   assert.deepEqual(mutations, [['llm-pi-ai', ops, 7]], 'writes retain revision fencing and path operations')
 }
-console.log(`PASS: settings scopes, config snapshots and provider reads (${modernSchema ? 'volatile updates, shortcut resets and disposal' : 'legacy schema'})`)
+console.log(`PASS: settings scopes, config snapshots and provider reads (${modernSchema ? 'production sections, exact Loader IDs, volatile updates, shortcut resets and disposal' : 'legacy schema'})`)
