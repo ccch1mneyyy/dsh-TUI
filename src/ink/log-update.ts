@@ -617,9 +617,20 @@ export class LogUpdate {
     // Main screen: if cursor needs to be past the last line of content
     // (typical: cursor.y = screen.height), emit \n to create that line
     // since cursor movement can't create new lines.
+    //
+    // LFs are only for CREATING rows: past the viewport bottom they scroll a
+    // row into scrollback, which is what grows the transcript. A target row
+    // that is still on screen (cursor.y < viewport.height) is reachable by
+    // plain cursor movement, and LF-ing to it instead scrolls the terminal
+    // one row per LF for no content gain — the idle-repaint churn: a settled
+    // session whose header only animates wrote 9-22 LF per frame (5 frames/s,
+    // ~73 LF/s measured) for a screen that changed nothing visible, refilling
+    // a 1000-row phone scrollback window with duplicate viewports in seconds.
+    // Same destination, no scroll: fall through to moveCursorTo.
     if (altScreen) {
       // no-op; next frame's CSI H anchors cursor
-    } else if (next.cursor.y >= next.screen.height) {
+    } else if (next.cursor.y >= next.viewport.height) {
+      // Target row is below the visible viewport: only LF can create it.
       // Move to column 0 of current line, then emit newlines to reach target row
       screen.txn(prev => {
         const rowsToCreate = next.cursor.y - prev.y
