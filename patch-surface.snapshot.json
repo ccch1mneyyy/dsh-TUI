@@ -86,6 +86,14 @@
         "workflow-ptc"
       ],
       "insertsSharedWithWebApp": []
+    },
+    "0.1.7-rc.2": {
+      "disablesBeyondWebApp": [],
+      "webAppDisablesBeyondTui": [
+        "tool-plugin-manager",
+        "workflow-ptc"
+      ],
+      "insertsSharedWithWebApp": []
     }
   }
 }

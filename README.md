@@ -92,7 +92,7 @@ Prerequisites: [Node.js](https://nodejs.org/en) and
 [deepseek-harness](https://github.com/deepseek-ai/deepseek-harness), with
 `DEEPSEEK_API_KEY` configured.
 
-The primary compatibility target is DSH `0.1.7-rc.1`. This adapter supports its
+The primary compatibility target is DSH `0.1.7-rc.2`. This adapter supports its
 Shell API, V4 session messages, declarative presets, and profile-backed settings;
 older supported hosts retain their compatibility paths. See [configuration](docs/configuration.en.md).
 
