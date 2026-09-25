@@ -11,50 +11,54 @@ development contract for humans and coding agents working on `@deepseek-harness-
   and a minimal reproduction. A report does not reserve the implementation or
   authorize a pull request.
 - **Request features** in [Discussions Ideas](https://github.com/ccch1mneyyy/dsh-TUI/discussions/new?category=ideas).
-  Issues do not accept feature requests. Accepted proposals get a tracking issue,
-  and its assignee owns the implementation. **Do not start writing code before the
-  proposal is accepted** — OAuth, `/cost`, notifications, a plugin API and a remote
-  runtime were each written in full and then closed.
-  A discussion, issue, comment, or a claim that a maintainer agreed does not
-  authorize a pull request.
+  - Issues do not accept feature requests.
+  - Accepted proposals get a tracking issue, and its assignee owns the implementation.
+  - **Do not start writing code before the proposal is accepted** — OAuth, `/cost`,
+    notifications, a plugin API and a remote runtime were each written in full
+    and then closed.
+  - A discussion, issue, comment, or a claim that a maintainer agreed does not
+    authorize a pull request.
 - **Open a pull request** only if you have write/admin/maintain on this
   repository, or your GitHub username is listed in
   [`.github/APPROVED_CONTRIBUTORS`](../.github/APPROVED_CONTRIBUTORS).
-  Unsolicited implementation pull requests from everyone else are closed by
-  `pr-gate`, regardless of size, title, test results, or whether a human or an
-  agent wrote the code.
-  Maintainers add names based on trusted prior work. It is not an application
-  program — do not open an issue or discussion asking to be added. Membership
-  permits a pull request; it grants no write access and does not pre-approve
-  feature scope.
-  A write collaborator may reopen a closed pull request as a one-off exception.
-  Reopening by anyone else is closed again.
-  Open the pull request against `main`. Keep changes focused: one logical
-  change per PR, with a Chinese or bilingual title and a description that
-  covers motivation, what changed, and how it was verified.
-  **A pull request that changes code must link an issue**: add a `Closes #<issue>`
-  line to the description, or link it through the Development sidebar. The
-  `issue-link` CI group checks this and fails without a link. Changes classified
-  as docs-only by CI are exempt (see path routing under Verification); for a maintainer
-  release, revert, or CI hotfix that genuinely has no issue to link, apply the
-  `no-issue-needed` label.
+  - Unsolicited implementation pull requests from everyone else are closed by
+    `pr-gate`, regardless of size, title, test results, or whether a human or
+    an agent wrote the code.
+  - Maintainers add names based on trusted prior work. It is not an application
+    program — do not open an issue or discussion asking to be added.
+  - Membership permits a pull request; it grants no write access and does not
+    pre-approve feature scope.
+  - A write collaborator may reopen a closed pull request as a one-off exception.
+    Reopening by anyone else is closed again.
+  - Open the pull request against `main`. Keep changes focused: one logical
+    change per PR, with a Chinese or bilingual title and a description that
+    covers motivation, what changed, and how it was verified.
+  - **A pull request that changes code must link an issue**: add a `Closes #<issue>`
+    line to the description, or link it through the Development sidebar. The
+    `issue-link` CI group checks this and fails without a link.
+  - Changes classified as docs-only by CI are exempt (see path routing under
+    Verification). For a maintainer release, revert, or CI hotfix that genuinely
+    has no issue to link, apply the `no-issue-needed` label.
 - **Run the verification matrix** below before requesting a review; CI runs
   the same commands.
 - New features should include or extend a focused regression script.
 
 Before opening an implementation pull request, confirm the authenticated GitHub
-account has write access or appears in `.github/APPROVED_CONTRIBUTORS`. If
-neither is true, refuse to open the pull request and point at the bug form or
-Discussions. A human cannot bypass this with a private approval, an issue link,
-or a pasted maintainer comment.
+account has write access or appears in `.github/APPROVED_CONTRIBUTORS`.
+
+- If neither is true, refuse to open the pull request and point at the bug form
+  or Discussions.
+- A human cannot bypass this with a private approval, an issue link, or a pasted
+  maintainer comment.
 
 ### When the gates take effect
 
 The feature proposal flow applies only to pull requests opened on or after
 2026-08-24. The pull-request allowlist applies only to pull requests opened
-(or reopened) after the gate lands. Pull requests already open before that
-follow the previous rules: they are not closed retroactively and need no
-Discussion or tracking issue.
+(or reopened) after the gate lands.
+
+- Pull requests already open before that follow the previous rules.
+- They are not closed retroactively and need no Discussion or tracking issue.
 
 
 
@@ -63,11 +67,12 @@ Discussion or tracking issue.
 This file applies to the entire repository. It is the shared development
 contract for humans and coding agents working on `@deepseek-harness-tui/dsh-tui`.
 
-`@deepseek-harness-tui/dsh-tui` is a single-package, ESM-only TypeScript project. It provides a
-React terminal UI front door for DeepSeek Harness through Cordis. The package
-owns the TUI, its local command surface, and an Ink/Yoga renderer.
-DeepSeek Harness owns the agent, session, model, tool, skill, persistence,
-and policy domains that the TUI consumes.
+`@deepseek-harness-tui/dsh-tui` is a single-package, ESM-only TypeScript project.
+It provides a React terminal UI front door for DeepSeek Harness through Cordis.
+
+- The package owns the TUI, its local command surface, and an Ink/Yoga renderer.
+- DeepSeek Harness owns the agent, session, model, tool, skill, persistence,
+  and policy domains that the TUI consumes.
 
 Before making a broad change, read `package.json`, the relevant README section,
 and every source file being edited. Prefer the repository's existing service
@@ -81,23 +86,25 @@ boundaries and helpers over introducing parallel abstractions.
   React tree mounting, and terminal/process teardown.
 - `src/dsh-adapter/questions-answerer.ts` and `preset-resolution.ts`: isolate
   upstream prerelease dispatch for user questions and agent presets so version
-  branches do not spread into bootstrap or channel actions. Note: the
-  questionnaire "provider seat"
-  guard (DUPLICATE_PROVIDER probe + private symbol check, #586) only applies to
-  the legacy rc `registerProvider` path. On the 0.1.2 line's `user-questions/request`
-  waterfall, Cordis first scope-filters requests carrying an agent; agentless
-  `/auth` requests are dispatched without a scope carrier. Under the answerer
-  convention, the first eligible listener that returns instead of delegating
-  with `next()` claims the request. Cordis waterfall is around middleware,
-  however: an outer listener can call `next()` and then observe, replace, or
-  reject the downstream result, while `{ prepend: true }` inserts a listener
-  at the front. Upstream offers no supported way to discover or reserve a
-  verifiably exclusive claimant, so the legacy seat guard and its warning
-  cannot be reproduced locally.
-- `src/dsh-adapter/channel.ts`: event-to-view projection and the non-React action surface.
-  It translates DSH session events into transcript rows and implements submit,
-  steering, rewind, resume, model/preset switching, local reports, and related
-  state transitions.
+  branches do not spread into bootstrap or channel actions.
+  - The questionnaire "provider seat" guard (DUPLICATE_PROVIDER probe + private
+    symbol check, #586) only applies to the legacy rc `registerProvider` path.
+  - On the 0.1.2 line's `user-questions/request` waterfall, Cordis first
+    scope-filters requests carrying an agent; agentless `/auth` requests are
+    dispatched without a scope carrier.
+  - Under the answerer convention, the first eligible listener that returns
+    instead of delegating with `next()` claims the request.
+  - Cordis waterfall is around middleware, however: an outer listener can call
+    `next()` and then observe, replace, or reject the downstream result, while
+    `{ prepend: true }` inserts a listener at the front.
+  - Upstream offers no supported way to discover or reserve a verifiably
+    exclusive claimant, so the legacy seat guard and its warning cannot be
+    reproduced locally.
+- `src/dsh-adapter/channel.ts`: event-to-view projection and the non-React
+  action surface.
+  - It translates DSH session events into transcript rows.
+  - It implements submit, steering, rewind, resume, model/preset switching,
+    local reports, and related state transitions.
 - `src/screens/Chat.tsx`: top-level interaction coordinator. It owns modal
   precedence, global keyboard handling, scroll/search/selection state, slash
   command dispatch, and composition of the chat screen.
@@ -128,9 +135,9 @@ boundaries and helpers over introducing parallel abstractions.
 - `lib/`: ignored JavaScript, declarations, and declaration maps generated from
   `src/` and shipped to npm. `./invariant` uses the compiled
   `lib/types/dsh-adapter/invariant.js` entry as well.
-- `README.md` and `README_EN.md`: Chinese and English user documentation. Keep
-  behavior, configuration, shortcuts, and limitations synchronized between
-  them.
+- `README.md` (English, the default front page) and `README_ZH.md` (Chinese):
+  the bilingual user documentation. Keep behavior, configuration, shortcuts,
+  and limitations synchronized between them.
 
 ## Runtime Shape
 
@@ -189,24 +196,24 @@ seam.
   `pnpm add`, inspect the full lockfile diff, and avoid unrelated upgrades.
 - Every `@deepseek-ai/*` framework package this package references at runtime
   or from its published types (following `UPSTREAM_BLESSED_PACKAGES`, including
-  `@deepseek-ai/schemastery`) is both a peer and a dev dependency: framework
-  packages are host-provided and resolve at runtime to the host's own instance
-  through the `$DSH_HOME/profiles/node_modules` fallback tree (see #198 —
-  declaring them as
-  runtime dependencies lands real copies inside the profile and splits module
-  identity from the host. The dev declarations exist only
-  so the package can type-check locally. Add new references of this kind to
-  both sections at matching ranges (the verify:manifest-deps gate enforces
-  it). Framework packages used only by tests/scripts (e.g. dsh-settings,
-  dsh-tools, dsh-session-persistence-*) stay dev-only — do NOT declare peers
-  for them. Non-host packages such as `dsh-working-activity` stay runtime
-  dependencies. Historical exception, now resolved: `dsh-working-activity@0.2.4`
-  and earlier pulled a real copy of `@deepseek-ai/schemastery` (plus cosmokit)
-  into the profile via its runtime dependency, shadowing the fallback tree;
-  0.2.5 peer-ified it (working-activity#2), so profiles no longer carry any
-  framework copies. Keep the dependency range at `^0.2.6` or above (0.2.6 also
-  fixes the web-side WorkingLine absent-field guard on unpatched hosts,
-  working-activity#5).
+  `@deepseek-ai/schemastery`) is both a peer and a dev dependency.
+  - Framework packages are host-provided and resolve at runtime to the host's
+    own instance through the `$DSH_HOME/profiles/node_modules` fallback tree
+    (see #198 — declaring them as runtime dependencies lands real copies inside
+    the profile and splits module identity from the host).
+  - The dev declarations exist only so the package can type-check locally. Add
+    new references of this kind to both sections at matching ranges (the
+    verify:manifest-deps gate enforces it).
+  - Framework packages used only by tests/scripts (e.g. dsh-settings, dsh-tools,
+    dsh-session-persistence-*) stay dev-only — do NOT declare peers for them.
+  - Non-host packages such as `dsh-working-activity` stay runtime dependencies.
+  - Historical exception, now resolved: `dsh-working-activity@0.2.4` and earlier
+    pulled a real copy of `@deepseek-ai/schemastery` (plus cosmokit) into the
+    profile via its runtime dependency, shadowing the fallback tree.
+  - 0.2.5 peer-ified it (working-activity#2), so profiles no longer carry any
+    framework copies. Keep the dependency range at `^0.2.6` or above (0.2.6
+    also fixes the web-side WorkingLine absent-field guard on unpatched hosts,
+    working-activity#5).
 - Do not expose, persist, or print credentials. Interactive startup reads
   `DEEPSEEK_API_KEY`; diagnostics may report whether it is set but must not
   reveal the complete value.
@@ -219,15 +226,16 @@ The normal build and type-check gate is:
 pnpm build
 ```
 
-This removes the complete `lib/` directory, runs `tsc -p tsconfig.json` to emit
-`src/` into `lib/types/`, and then checks the adapter boundary, upstream
-contract, and patch surface. The `prepare` lifecycle serves **source-checkout
-bootstrapping only** (it fails fast when the vendored submodules are absent —
-see scripts/prepare-guard.mjs); Git URL dependency installs have been triply
-blocked since vendoring (#308: workspace deps / submodules / pnpm ≥11's
-prepare allowlist) and are unsupported — install the registry package. Local
-and CI workflows use explicit commands instead of depending on whether pnpm
-implicitly runs the root lifecycle.
+- This removes the complete `lib/` directory, runs `tsc -p tsconfig.json` to
+  emit `src/` into `lib/types/`, and then checks the adapter boundary, upstream
+  contract, and patch surface.
+- The `prepare` lifecycle serves **source-checkout bootstrapping only** (it
+  fails fast when the vendored submodules are absent — see scripts/prepare-guard.mjs).
+- Git URL dependency installs have been triply blocked since vendoring
+  (#308: workspace deps / submodules / pnpm ≥11's prepare allowlist) and are
+  unsupported — install the registry package.
+- Local and CI workflows use explicit commands instead of depending on whether
+  pnpm implicitly runs the root lifecycle.
 
 Rules for generated output:
 
@@ -259,25 +267,32 @@ There is no root `test` or `lint` script. Do not claim that either ran. The
 TypeScript build is the universal static gate, followed by focused executable
 regressions.
 
-Select local verification by actual impact. For documentation and skills, check
-facts, links, triggers, and conflicting instructions. For ordinary comments,
-check the explanation against the implementation and confirm that code and types
-are unchanged, for example with an AST comparison that ignores comments. Compiler
-directives, JSDoc type annotations, and build-tool annotations are not ordinary
-comments. For workflow and YAML changes, check syntax and affected configuration
-contracts. Do not add behavior tests for prose edits. Once required checks pass,
-broaden or repeat them only for new changes, failures, or unresolved risks.
+Select local verification by actual impact.
+
+- For documentation and skills, check facts, links, triggers, and conflicting
+  instructions.
+- For ordinary comments, check the explanation against the implementation and
+  confirm that code and types are unchanged, for example with an AST comparison
+  that ignores comments. Compiler directives, JSDoc type annotations, and
+  build-tool annotations are not ordinary comments.
+- For workflow and YAML changes, check syntax and affected configuration contracts.
+- Do not add behavior tests for prose edits. Once required checks pass, broaden
+  or repeat them only for new changes, failures, or unresolved risks.
 
 CI separately routes changes using the path allowlist in
-`.github/workflows/ci.yml`. `AGENTS.md`, `.agents/skills/`, and comments in source
-files are outside the docs-only exemption and still trigger code gates. A local
-rebuild exemption does not skip CI; preserve required gates and report the
-actual local verification scope.
+`.github/workflows/ci.yml`.
 
-`verify:build` also checks source hygiene, renderer primitives, theme and activity
-preference migrations, status animations, table layout, and side-question behavior.
-Source hygiene rejects the listed naming and compiled-input regressions; it is
-not a source-provenance or license audit.
+- `AGENTS.md`, `.agents/skills/`, and comments in source files are outside the
+  docs-only exemption and still trigger code gates.
+- A local rebuild exemption does not skip CI; preserve required gates and report
+  the actual local verification scope.
+
+`verify:build` also checks source hygiene, renderer primitives, theme and
+activity preference migrations, status animations, table layout, and
+side-question behavior.
+
+- Source hygiene rejects the listed naming and compiled-input regressions.
+- It is not a source-provenance or license audit.
 
 CI runs these commands after installation:
 
@@ -317,40 +332,49 @@ change, also run the closest focused script:
 
 Most focused scripts invoked with plain `node` import `lib/types/`; run
 `pnpm build` first. Scripts that import TypeScript sources declare the
-`node --import tsx/esm <script>` form in their header. Do not infer the input
-layer from the file extension: `verify-themes.mjs`, for example, imports
-`src/` through `tsx`.
+`node --import tsx/esm <script>` form in their header.
+
+- Do not infer the input layer from the file extension.
+- `verify-themes.mjs`, for example, imports `src/` through `tsx`.
 
 Regression scripts take their wait primitives from `scripts/lib/term-test.mjs`:
-`settled` for wait-then-assert, `settle` for wait-then-act. Any fixed `sleep(`
-that stays must carry a machine-readable tag, `固定窗:探针` / `固定窗:墙钟` /
-`固定窗:pacing` (defined in that file's header), in a trailing comment on the
-same line or in the comment block directly above. The `verify:fixed-window`
-gate scans every script registered in `scripts/run-ci-group.mjs` and fails on
-an untagged call. `固定窗:待迁移` marks pre-existing debt (burn-down tracked
-in issue #791), pinned per file in `scripts/fixed-window.baseline.json`: any file going
-up fails, and old debt going down never offsets it. After clearing a site, run
-`--write-baseline` and commit the rewritten baseline alongside. It must not
-appear in new code.
+`settled` for wait-then-assert, `settle` for wait-then-act.
+
+- Any fixed `sleep(` that stays must carry a machine-readable tag,
+  `固定窗:探针` / `固定窗:墙钟` / `固定窗:pacing` (defined in that file's
+  header), in a trailing comment on the same line or in the comment block
+  directly above.
+- The `verify:fixed-window` gate scans every script registered in
+  `scripts/run-ci-group.mjs` and fails on an untagged call.
+- `固定窗:待迁移` marks pre-existing debt (burn-down tracked in issue #791),
+  pinned per file in `scripts/fixed-window.baseline.json`: any file going up
+  fails, and old debt going down never offsets it.
+- After clearing a site, run `--write-baseline` and commit the rewritten
+  baseline alongside. It must not appear in new code.
 
 Some scripts are forensic or interactive tools, not bounded tests. In
 particular, heap/leak scripts, PTY probes, replay capture, performance probes,
 and `scripts/run.ts` can require a specific OS, terminal, native dependency,
-DSH checkout, or long-running process. Read the header and prerequisites; do
-not run every file in `scripts/` as a blanket suite.
+DSH checkout, or long-running process.
+
+- Read the header and prerequisites.
+- Do not run every file in `scripts/` as a blanket suite.
 
 For terminal-visible changes, headless assertions are necessary but not always
-sufficient. When the environment is available, manually exercise the affected
-flow in both inline and fullscreen modes and at a narrow terminal width. Check
-startup, resize, scrolling, input, cancellation, and clean exit. Windows
-ConPTY, tmux, OSC clipboard behavior, and synchronized output have distinct
-paths, so use the matching probe when changing one of them.
+sufficient.
+
+- When the environment is available, manually exercise the affected flow in
+  both inline and fullscreen modes and at a narrow terminal width. Check
+  startup, resize, scrolling, input, cancellation, and clean exit.
+- Windows ConPTY, tmux, OSC clipboard behavior, and synchronized output have
+  distinct paths, so use the matching probe when changing one of them.
 
 `pnpm tui` invokes `scripts/run.ts`, which assumes the package lives inside a
-DeepSeek Harness monorepo layout with `apps/cli` and `packages/*`. It is not a
-portable standalone smoke command. For an end-user integration check, install
-the plugin into a DSH profile and run `dsh --profile dsh-tui` in a real TTY with
-the required credentials.
+DeepSeek Harness monorepo layout with `apps/cli` and `packages/*`.
+
+- It is not a portable standalone smoke command.
+- For an end-user integration check, install the plugin into a DSH profile and
+  run `dsh --profile dsh-tui` in a real TTY with the required credentials.
 
 ## TypeScript And Style
 
@@ -358,33 +382,38 @@ the required credentials.
   for example `import { Chat } from './screens/Chat.js'`. Preserve this rule.
 - In repository-authored TypeScript, follow the prevailing style: two-space
   indentation, single quotes, no semicolons, and trailing commas in multiline
-  constructs. The Ink-based renderer files under `src/ink` may retain their
-  upstream tabs or quoting; do not mass-format them.
+  constructs.
+  - The Ink-based renderer files under `src/ink` may retain their upstream tabs
+    or quoting; do not mass-format them.
 - Prefer `import type` for type-only dependencies.
 - Do not introduce `any` merely because `tsconfig.json` relaxes
   `noImplicitAny`. Those relaxations exist to compile the Ink-based renderer and
-  must not become the quality bar for new application code. Use `unknown` and
-  narrow it, or define a small structural interface at an external seam.
+  must not become the quality bar for new application code.
+  - Use `unknown` and narrow it, or define a small structural interface at an
+    external seam.
 - Preserve readonly data where the surrounding API uses it. Keep state
   mutations inside the channel/store implementation rather than mutating
   values from components.
 - Keep exported APIs documented with concise JSDoc. Explain contracts and
   non-obvious invariants, not line-by-line mechanics.
 - Comments should explain current ownership, ordering, failure causes, or
-  compatibility constraints. Reference functions or modules rather than unstable
-  line numbers; keep issue or regression evidence that explains a tradeoff. Put
-  future ideas in TODOs with explicit conditions instead of describing them as
-  existing capabilities, and revisit related comments when behavior changes.
+  compatibility constraints.
+  - Reference functions or modules rather than unstable line numbers.
+  - Keep issue or regression evidence that explains a tradeoff.
+  - Put future ideas in TODOs with explicit conditions instead of describing
+    them as existing capabilities, and revisit related comments when behavior
+    changes.
 - Avoid one-use abstractions and unrelated refactors. Inline a trivial helper
   when it has one call site and does not clarify a real invariant.
 - Preserve initialization ordering around environment-sensitive imports.
   `FORCE_COLOR`, `NODE_ENV`, and terminal capability flags are often read at
   module evaluation time; moving an import above their setup can change
-  behavior without a type error. Regression scripts that import `lib/types/`
-  directly bypass the package entry, so React loads its dev build and
-  structured-clones every component's props on each commit; a script that
-  passes large image buffers as props must make
-  `lib/types/force-production-react.js` its first import.
+  behavior without a type error.
+  - Regression scripts that import `lib/types/` directly bypass the package
+    entry, so React loads its dev build and structured-clones every component's
+    props on each commit.
+  - A script that passes large image buffers as props must make
+    `lib/types/force-production-react.js` its first import.
 
 ## Agent Instructions And Skills
 
@@ -393,22 +422,26 @@ guide owns detailed contracts such as the toolchain and verification matrix.
 `.agents/skills/` contains maintainer workflows and is excluded from npm.
 
 - A skill description should say when to use it and distinguish adjacent skills.
-  Keep the body focused on one outcome, the evidence needed to finish, and the
-  necessary steps. `AGENTS.md` introduces shared rules; skills should not repeat
-  their content or reading reminders. Link additional references only when the
-  task needs them, and say when to read them.
+  - Keep the body focused on one outcome, the evidence needed to finish, and
+    the necessary steps.
+  - `AGENTS.md` introduces shared rules; skills should not repeat their content
+    or reading reminders.
+  - Link additional references only when the task needs them, and say when to
+    read them.
 - Preserve the user's goal and existing authorization: review, repair, reporting,
-  and publishing are different tasks. Ask only for missing information that affects
-  the result. If external data is unavailable, state the gap instead of substituting
-  a different task.
+  and publishing are different tasks.
+  - Ask only for missing information that affects the result.
+  - If external data is unavailable, state the gap instead of substituting a
+    different task.
 - Choose the smallest view that answers the current question: a short call tree
   for ordering, a shallow module tree for ownership, or a focused diff for a change.
-  Plain prose can be sufficient. Use real names and only relevant boundaries;
-  diagrams are optional.
-- Use examples to clarify ambiguous choices, not to enumerate every case. Allow
-  no findings, unknowns, and short results; avoid mandatory praise, empty sections,
-  or fixed lengths. Check whether triggers hijack another task or steps stop
-  already-authorized work before it is complete.
+  - Plain prose can be sufficient. Use real names and only relevant boundaries;
+    diagrams are optional.
+- Use examples to clarify ambiguous choices, not to enumerate every case.
+  - Allow no findings, unknowns, and short results; avoid mandatory praise,
+    empty sections, or fixed lengths.
+  - Check whether triggers hijack another task or steps stop already-authorized
+    work before it is complete.
 
 ## Architectural Invariants
 
@@ -449,18 +482,18 @@ guide owns detailed contracts such as the toolchain and verification matrix.
 
 ### Interaction And Commands
 
-- Keyboard precedence is behavior, not incidental control flow. A focused
-  questionnaire or modal consumes its keys before global handlers; mouse text
-  selection consumes Escape before rewind/clear behavior; the prompt owns text
-  editing only when no overlay is active.
+- Keyboard precedence is behavior, not incidental control flow.
+  - A focused questionnaire or modal consumes its keys before global handlers.
+  - Mouse text selection consumes Escape before rewind/clear behavior.
+  - The prompt owns text editing only when no overlay is active.
 - Do not hardcode a new shortcut in one component and stop there. Update the
   relevant help UI and both README shortcut tables, and add or extend a
   regression for conflicts with existing modes.
 - Local slash commands are declared in `src/commands.ts` and dispatched in
-  `Chat.tsx`; registry commands are merged at runtime. When adding a command,
-  update declaration, dispatch, help/documentation, the i18n description
-  (`cmd-desc-<name>` in `src/i18n.ts`, zh only — en falls back to the
-  declaration), and any related skill mapping together.
+  `Chat.tsx`; registry commands are merged at runtime.
+  - When adding a command, update declaration, dispatch, help/documentation,
+    the i18n description (`cmd-desc-<name>` in `src/i18n.ts`, zh only — en falls
+    back to the declaration), and any related skill mapping together.
 - Skill commands stay out of LOCAL_COMMANDS: user-invocable skills discovered by
   DSH are merged from the registry as dispatch commands. Names must be parseable
   kebab-case and must not collide with a local command.
@@ -501,15 +534,16 @@ guide owns detailed contracts such as the toolchain and verification matrix.
   Preserve path containment checks, plugin ID constraints, activation cleanup,
   and all-or-nothing validation of malformed theme files.
 - Keep theme additions complete across the `Theme` contract and every built-in
-  palette. Runtime themes must use the `tuiThemes` seam; plugins must not rewrite
-  `~/.dsh-tui/themes/` or bypass the managed extension service. Use semantic
-  theme keys in components instead of isolated literal colors.
+  palette.
+  - Runtime themes must use the `tuiThemes` seam; plugins must not rewrite
+    `~/.dsh-tui/themes/` or bypass the managed extension service.
+  - Use semantic theme keys in components instead of isolated literal colors.
 
 ## Cross-File Change Checklist
 
 | If you change | Keep these in sync |
 | --- | --- |
-| Plugin config or environment behavior | `src/index.ts`, runtime consumer, `cordis.patch.yml`, `cordis.yml`, `README.md`, `README_EN.md` |
+| Plugin config or environment behavior | `src/index.ts`, runtime consumer, `cordis.patch.yml`, `cordis.yml`, `README.md`, `README_ZH.md` |
 | Slash commands or shortcuts | `src/commands.ts`, `src/screens/Chat.tsx`, help/input components, both READMEs, relevant skill mapping/tests |
 | Theme contract, plugin seam, or persisted theme behavior | `src/theme.ts`, `src/themeCatalog.ts`, `src/dsh-adapter/themes.ts`, all palettes, theme provider/picker, custom-theme parser, theme verification, both READMEs, plugin docs |
 | Session/channel behavior | `src/dsh-adapter/channel.ts`, affected UI projections, compiled output, focused channel/replay regression |
@@ -535,16 +569,16 @@ guide owns detailed contracts such as the toolchain and verification matrix.
   at every step. Authorization for one action does not extend to other release actions.
 - Publishing is tag-driven. `.github/workflows/publish.yml` requires a `v*`
   tag whose version exactly matches `package.json`, then builds, runs focused
-  regressions, and publishes to npm. Treat version changes and tags as release
-  operations, not routine cleanup.
+  regressions, and publishes to npm.
+  - Treat version changes and tags as release operations, not routine cleanup.
 - Release notes credit contributors. Create GitHub Releases with
-  `gh release create vX.Y.Z --notes-file notes.md --generate-notes`: the
-  hand-written summary comes first, and GitHub appends What's Changed (PR
-  title + author + link), New Contributors, and the Full Changelog;
-  `.github/release.yml` excludes bots from the generated list. In the
-  hand-written summary, entries from external contributors end with
-  `(#PR by @user)`; the maintainer's own entries are unmarked. Write bare
-  `#123` and `@user` — GitHub renders them as links.
+  `gh release create vX.Y.Z --notes-file notes.md --generate-notes`.
+  - The hand-written summary comes first, and GitHub appends What's Changed
+    (PR title + author + link), New Contributors, and the Full Changelog;
+    `.github/release.yml` excludes bots from the generated list.
+  - In the hand-written summary, entries from external contributors end with
+    `(#PR by @user)`; the maintainer's own entries are unmarked.
+  - Write bare `#123` and `@user` — GitHub renders them as links.
 - Before handing off a code change, inspect `git diff --check`, the source diff,
   the generated diff, and `git status`. Report exactly which verification ran
   and any platform or credential-dependent checks that could not run.

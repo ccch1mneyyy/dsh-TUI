@@ -38,6 +38,7 @@ export function createChannelBinding(initial: Agent, handle: AgentHandle | undef
    * `dispose()` must not start a parallel close.
    */
   const closing = new WeakMap<AgentHandle, Promise<void>>()
+  const closingSessions = new Map<string, Promise<void>>()
 
   /** Close `candidate` exactly once; the result resolves however it ends. */
   const dispose = (candidate: AgentHandle): Promise<void> => {
@@ -53,6 +54,11 @@ export function createChannelBinding(initial: Agent, handle: AgentHandle | undef
       close = Promise.resolve()
     }
     closing.set(candidate, close)
+    const id = String(candidate.agent.session.id)
+    closingSessions.set(id, close)
+    void close.then(() => {
+      if (closingSessions.get(id) === close) closingSessions.delete(id)
+    })
     return close
   }
   const disposePending = (candidate: AgentHandle): Promise<void> | undefined => {
@@ -254,6 +260,11 @@ export function createChannelBinding(initial: Agent, handle: AgentHandle | undef
      */
     async abandon(candidate: AgentHandle): Promise<void> {
       await disposePending(candidate)
+    },
+
+    /** A registry may retain an agent while its async handle close drains. */
+    async waitForDisposal(sessionId: string): Promise<void> {
+      await closingSessions.get(sessionId)
     },
 
     /** Perform one explicit synchronous prepared-handle adoption transaction. */

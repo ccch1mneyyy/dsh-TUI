@@ -40,7 +40,7 @@ export function createAgentViewProjection(
   ctx: Context,
   deps: {
     owner: Pick<ChannelOwner, 'current' | 'assertActive' | 'own'>
-    binding: Pick<Binding, 'agent' | 'capture' | 'isCurrent' | 'prepare' | 'abandon'>
+    binding: Pick<Binding, 'agent' | 'capture' | 'isCurrent' | 'prepare' | 'abandon' | 'waitForDisposal'>
     cwd(): string
     configuredPreset?: string
     configuredProvider?: string
@@ -117,7 +117,7 @@ export function createAgentViewProjection(
     // These process-wide roster observations still belong to this channel
     // owner. Revoke them so a retained Context cannot wake a dead projection.
     disposeStatus = ctx.on('agent/status', () => schedule())
-    disposeCreated = ctx.on('agent/created', () => notify())
+    disposeCreated = ctx.on('agent/created', () => { notify() })
     disposeDisposed = ctx.on('agent/disposed', ({ agent }: { agent: { id?: unknown } }) => {
       folds.delete(String(agent.id ?? ''))
       backgroundHandles.delete(String(agent.id ?? ''))
@@ -245,12 +245,17 @@ export function createAgentViewProjection(
   }
   const attach = async (sessionId: string): Promise<ResumeResult> => {
     if (sessionId === String(deps.binding.agent.session.id)) return { ok: true }
+    const capture = deps.binding.capture()
+    // A retiring Agent can remain in the registry until its JSONL writer has
+    // drained. Read the live target only after that close, just like /resume.
+    await deps.binding.waitForDisposal(sessionId)
+    if (!deps.binding.isCurrent(capture)) return { ok: false, reason: 'cancelled' }
     // Capture the exact live target before the async host decision. If the
     // registry replaces it while parked, never silently adopt that arbitrary
     // replacement; a later user action can make a fresh, explicit choice.
     const live = agents()?.get(SessionId(sessionId))
     if (await deps.sessionSwitchVetoed('agent-view', sessionId)) return { ok: false, reason: 'cancelled' }
-    if (live !== undefined && agents()?.get(SessionId(sessionId)) !== live) return { ok: false, reason: 'cancelled' }
+    if (!deps.binding.isCurrent(capture) || agents()?.get(SessionId(sessionId)) !== live) return { ok: false, reason: 'cancelled' }
     return live === undefined ? deps.resumeInto(sessionId, 'agent-view', true) : deps.adoptLive(live)
   }
   const peek = async (sessionId: string): Promise<PreviewEntry[]> => {

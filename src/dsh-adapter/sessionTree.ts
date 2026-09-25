@@ -17,6 +17,7 @@ export type { SessionTreeData, TreeNode, TreeEntry, TreeEntryKind, SessionTreeMe
  * @module @deepseek-harness-tui/dsh-tui/sessionTree
  */
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
+import { isCompactionCheckpointSource, toolResultPayload } from './compat/messages.js'
 
 /** Filter modes cycled in the tree screen (pi parity, minus labels). */
 export type TreeFilter = 'default' | 'no-tools' | 'user-only' | 'all'
@@ -436,8 +437,8 @@ export function extractEntries(sessionId: string, events: readonly SessionEvent[
     }
     switch (event.type) {
       case 'user/message': {
-        const source = event.data.source as { kind: string; plugin?: string }
-        if (source.kind === 'plugin' && source.plugin === 'compact') {
+        const source = event.data.source
+        if (isCompactionCheckpointSource(source)) {
           const summary = textOf(event.data.content as readonly Block[])
           push({
             seq: event.seq,
@@ -497,7 +498,7 @@ export function extractEntries(sessionId: string, events: readonly SessionEvent[
         const entry = entries[index]!
         entries[index] = {
           ...entry,
-          toolStatus: event.data.error === undefined ? 'ok' : 'error',
+          toolStatus: event.data.error !== undefined || toolResultPayload(event.data.message).isError ? 'error' : 'ok',
         }
         openTools.delete(event.data.message.source.callId)
         break

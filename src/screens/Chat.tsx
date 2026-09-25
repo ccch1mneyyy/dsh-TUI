@@ -1094,6 +1094,59 @@ export function Chat({
    * the user into a different conversation.
    */
   const promptDraftRef = React.useRef<PromptDraftCache>({ current: null })
+  /**
+   * Latest channel for the unmount release below: that effect must not re-run
+   * on a channel identity change, yet its cleanup must release against the
+   * channel of the last render.
+   */
+  const channelRef = React.useRef(channel)
+  channelRef.current = channel
+  /**
+   * Release the staged images a WAITING snapshot alone owns.
+   *
+   * While a draft waits in the slot for the composer to remount, the snapshot
+   * is the only owner of the capabilities behind its `[Image #N]` tokens. If
+   * Chat itself goes away first (leaving an early-return screen by exiting the
+   * TUI), nothing would ever restore or discard them — the session's
+   * 128-entry FIFO would evict live entries instead. The `hasStagedImage`
+   * guard keeps a capability the channel already recycled a no-op; both calls
+   * are idempotent.
+   *
+   * Scope, deliberately narrow (review round 7): a capability a QUEUED message
+   * still references (`channel.pending`) is never revoked here. The real
+   * double-hold path is paste an image → queue the draft with Tab while the
+   * model works → recall that line from input history with ↑ (same stageId
+   * rebound to the draft) → park the composer. Delivery resolves its refs from
+   * the enqueue-time capture, so a late revoke would only bite a host that
+   * re-resolves them afterwards — this keeps the rule identical to
+   * `stageIdIsRetained` instead of relying on that.
+   *
+   * A composer that is still MOUNTED when Chat unmounts is NOT covered: React
+   * runs this parent cleanup BEFORE the child's, so the child then writes its
+   * draft into the now-dead ref and those ids ride the channel's lifetime out
+   * (the #942 review's remaining P2). Neither unmount path loses anything
+   * user-visible — the channel dies with them.
+   */
+  React.useEffect(() => {
+    return () => {
+      const snapshot = promptDraftRef.current.current
+      promptDraftRef.current.current = null
+      if (snapshot === null) return
+      const queued = new Set<string>()
+      for (const item of channelRef.current.pending) {
+        // `?? []`: a foreign/embedded host may hand us a pending entry without
+        // images, and a throw inside an unmount cleanup escapes into the exit
+        // path — every other reader of this field guards it the same way.
+        for (const image of item.images ?? []) queued.add(image.stageId)
+      }
+      for (const [, stageId] of snapshot.images) {
+        if (queued.has(stageId)) continue
+        if (channelRef.current.hasStagedImage?.(stageId) === true) {
+          channelRef.current.discardStagedImage(stageId)
+        }
+      }
+    }
+  }, [])
   const draftSessionId = channel.agentId
   /** Session the effect below last reconciled against; a change is a switch. */
   const draftSessionRef = React.useRef(draftSessionId)
@@ -1222,8 +1275,12 @@ export function Chat({
   // fullscreen (<AlternateScreen> supplies mouse tracking); a no-op
   // subscription in inline mode, where selection belongs to the terminal.
   // The copy clears the highlight and posts a transient notification.
-  useCopyOnSelect(text =>
-    channel.notify(t('copied-chars', { n: text.length }), { timeoutMs: 1500 }),
+  useCopyOnSelect(
+    text => channel.notify(t('copied-chars', { n: text.length }), { timeoutMs: 1500 }),
+    // Stale-selection refusal: the highlighted rows were replaced in place
+    // (streaming overwrite), so nothing was copied — say why instead of
+    // letting the highlight vanish silently.
+    () => channel.notify(t('copy-refused-stale'), { timeoutMs: 2500 }),
   )
   const { clearSelection: clearMouseSelection, hasSelection: hasMouseSelection } =
     useSelection()
@@ -3978,6 +4035,7 @@ export function Chat({
           onOpenSubagent={setSubagentDetailId}
           onOpenJobs={openJobsPanel}
           onOpenFile={openFileActions}
+          sessionCwd={channel.cwd}
           onPreviewImage={openImagePreview}
           suppressImageGraphics={activePreview !== null}
         />

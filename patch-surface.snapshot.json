@@ -13,6 +13,7 @@
     "dsh-tui-plugin-host",
     "dsh-tui-extensions",
     "dsh-tui-agent-presets",
+    "dsh-tui-agent-preset-registry",
     "dsh-tui-cordis-host-runner",
     "dsh-tui-auth",
     "dsh-tui",
@@ -76,6 +77,14 @@
     "0.1.5-rc.1": {
       "disablesBeyondWebApp": [],
       "webAppDisablesBeyondTui": [],
+      "insertsSharedWithWebApp": []
+    },
+    "0.1.7-rc.1": {
+      "disablesBeyondWebApp": [],
+      "webAppDisablesBeyondTui": [
+        "tool-plugin-manager",
+        "workflow-ptc"
+      ],
       "insertsSharedWithWebApp": []
     }
   }

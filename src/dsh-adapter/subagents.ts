@@ -1,4 +1,5 @@
 import type { AssistantStreamFrame } from '@deepseek-ai/dsh-agent'
+import { toolResultPayload } from './compat/messages.js'
 import type { SubagentState, SubagentStatus, SubagentOutputLine, SubagentOutputKind, SubagentToolCall, SubagentTokenUsage } from '../adapter/ports/channel-view.js'
 export type { SubagentState, SubagentStatus, SubagentOutputLine, SubagentOutputKind, SubagentToolCall, SubagentTokenUsage } from '../adapter/ports/channel-view.js'
 
@@ -207,14 +208,13 @@ export class SubagentActivityStore {
         const state = this.states.get(agentId)
         const tool = callId !== undefined ? state?.toolCalls.find(entry => entry.id === callId) : undefined
         if (tool) {
-          tool.status = data.error !== undefined ? 'failed' : 'completed'
+          const payload = toolResultPayload(data.message)
+          tool.status = data.error !== undefined || payload.isError ? 'failed' : 'completed'
           tool.endedAt = Date.now()
           if (data.error !== undefined) tool.error = String(data.error)
+          else if (payload.isError) tool.error = this.previewOf(payload.content)
           else {
-            const block = data.message?.content?.[0]
-            tool.resultPreview = block !== undefined && block.type === 'tool-result'
-              ? this.previewOf(block.content)
-              : undefined
+            tool.resultPreview = this.previewOf(payload.content)
           }
           this.notify()
         }

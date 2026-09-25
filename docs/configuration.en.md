@@ -13,15 +13,25 @@ $DSH_HOME/profiles/dsh-tui/cordis.patch.yml
 When `DSH_HOME` is unset, it normally defaults to `~/.dsh`. The file is a
 top-level YAML array and may use the `!!js` expressions supported by DSH.
 
-Profile startup layers `dsh-base`, installed bundles, the package's
-`cordis.patch.yml`, and finally the user patch. A user configuration normally
-overrides an existing row by `id`; use `insert` only for a genuinely new
-service.
+Profile startup layers, in order:
+
+- `dsh-base`
+- Installed bundles
+- The package's `cordis.patch.yml`
+- The user patch (applied last)
+
+A user configuration normally overrides an existing row by `id`; use `insert`
+only for a genuinely new service.
 
 > When a row is overridden, its `config` block is replaced as a whole. It is
 > not deep-merged, so repeat every key that must remain active.
 
 ## TUI configuration
+
+On DSH 0.1.7, `/settings` writes plugin Config fields to the active profile's
+`cordis.patch.yml`. Older hosts still use `~/.dsh/settings.yaml`; that file is
+not the new settings entry point. Language and layout preferences update live;
+fullscreen and image previews require `/restart`.
 
 A complete common override looks like this:
 
@@ -51,7 +61,10 @@ A complete common override looks like this:
 | `model` | Harness `agentDefaultModel`; bare compositions fall back to `deepseek-flash` | Startup model; `/model` can switch through a session fork |
 | `cwd` | git worktree root containing the launch directory (`process.cwd()` when outside any worktree; a dotfiles repo at `$HOME` does not count) | TUI-side session workspace: agent meta, `@` completion/mention expansion, /resume filtering, statusline; resuming an existing session adopts that session's persisted cwd. Note the bash/fs-policy/sandbox roots are still owned by the composition layer's cordis config (default: the launch directory, governed by dsh-base) and may differ from this session-side cwd |
 | `workspace` | unset | Startup workspace target: a local path, `file://` URL, or plugin-provided URI; takes precedence over `cwd` |
-| `effort` | normally `max` in the bundle | Reasoning effort applied to every request (validated against the runtime model's levels; invalid levels silently fall back to the adapter default), also shown in the header at startup. Precedence: /settings default reasoning effort `effortDefault` (settings.yaml user layer; `auto` defers) > this field > the persisted `/effort` choice (`~/.dsh-tui/effort.json`) > the model default |
+| `effort` | normally `max` in the bundle | Reasoning effort applied to every request (validated against the runtime model's levels; invalid levels silently fall back to the adapter default), also shown in the header at startup. Precedence: /settings `effortDefault` (`auto` defers) > this field > the persisted `/effort` choice (`~/.dsh-tui/effort.json`) > the model default |
+| `effortDefault` | unset | Default reasoning effort for new sessions; `auto` defers to `effort`; editable through `/settings` |
+| `whale` / `whaleIdle` | `true` / `true` | Header whale and welcome-page idle animation |
+| `minimal` | `false` | Reduce header decoration and colors |
 | `modes` | built-in trio | Shift+Tab session-mode cycle (plan/sandbox/approval atom bundles); defaults to default → plan → full-access |
 | `activity` | `true` | Show the live activity row |
 | `activityFrames` | `moon8` | Activity animation preset; `/activity` changes it at runtime. A legacy saved value of `claude` is read as `moon8`, and the picker no longer offers that legacy preset |
@@ -61,22 +74,31 @@ A complete common override looks like this:
 | `preset` | roster default `standard` | Agent preset for new sessions; explicit configuration wins over persisted preference |
 | `sessionId` | unset | Session to resume, normally injected by the Windows `--resume` launcher |
 
-The choice saved in `/settings → Terminal image previews` overrides `config.terminalImages`.
-Without a saved choice, the configuration value applies and defaults to on. Enabling previews
-still requires Kitty graphics support and a display mode that allows image rendering.
-`DSH_TUI_DISABLE_TERMINAL_IMAGES=1` always forces previews off. Disabled previews do not read
-or decode image data or send image rendering commands; sending images to the model is unaffected.
-The checkbox edits the preview preference; an environment override is shown separately as
-“Image previews (forced off)” in the settings list.
+### Precedence and force-off
 
-This switch is read at startup. Use `/restart` after changing it to automatically restart the
-TUI and resume the current session; `/reload` does not apply it. If a turn is running, wait for
-it to finish or stop it with `Ctrl+C` before restarting.
+- `/settings → Terminal image previews` overrides `config.terminalImages`.
+- Without a saved choice, the config value applies and defaults to on.
+- Enabling still needs Kitty graphics support and a display mode that allows
+  image rendering.
+- `DSH_TUI_DISABLE_TERMINAL_IMAGES=1` always forces previews off.
+- Disabled previews do not read or decode image data or send image rendering
+  commands; sending images to the model is unaffected.
+- The checkbox edits the preview preference; an environment override is shown
+  separately as “Image previews (forced off)” in the settings list.
+
+### Restart
+
+- This switch is read at startup.
+- Use `/restart` after changing it to restart the TUI and resume the current
+  session; `/reload` does not apply it.
+- If a turn is running, wait for it to finish or stop it with `Ctrl+C` before
+  restarting.
 
 ## Diagnostic environment variables
 
-The following variables are for diagnostics or experimental terminal integration. They are all
-off by default and take effect only when explicitly set:
+The following variables are for diagnostics or experimental terminal
+integration. They are all off by default and take effect only when explicitly
+set:
 
 | Variable | Purpose |
 | --- | --- |
@@ -86,8 +108,9 @@ off by default and take effect only when explicitly set:
 | `DSH_TUI_TMUX_TRUECOLOR=1` | Enable the truecolor detection path in tmux |
 | `DSH_TUI_TAB_STATUS=1` | Experimental terminal tab-status opt-in; off by default, with no guarantee of support in every terminal |
 
-Diagnostic output does not change session events or model routing. Enable only the variable
-needed for the terminal or rendering issue being investigated.
+Diagnostic output does not change session events or model routing. Enable
+only the variable needed for the terminal or rendering issue being
+investigated.
 
 ## Live activity row
 
@@ -105,8 +128,9 @@ Do not insert a second row and do not separately run
 
 ## Agent presets
 
-Each session composes its model-visible tools and prompt through
-`@deepseek-ai/dsh-agent-presets`:
+Each session composes its model-visible tools and prompt through the official
+preset registry: `@deepseek-ai/dsh-agent-preset-registry` on 0.1.7, or
+`@deepseek-ai/dsh-agent-presets` on older hosts:
 
 | ID | Name | Capability |
 | --- | --- | --- |
@@ -116,39 +140,53 @@ Each session composes its model-visible tools and prompt through
 | `cordis` | Creation | Standard plus runtime inspection and plugin-experimentation tools |
 | `liangshen` | Liangshen mode | Minimal's two-tool surface first for root and delegated agents, the full catalog after the first tool call, and a fresh anchor after compaction |
 
-Usage rules:
+### Selecting and switching
 
 - `/preset` opens the picker.
 - `/preset <id>` selects directly; `/preset status` reports the current state.
-- Picker names and descriptions come verbatim from each preset's `preset.yml`
-  (written in Chinese). Under the `en` UI language (`/lang en`), the built-in
-  presets (`standard` / `minimal` / `code` / `cordis` / `liangshen`) show
-  localized English names and descriptions; custom presets are shown as-is.
+- Picker names and descriptions come from registry declarations (from
+  `preset.yml` on older hosts).
+- Under the `en` UI language (`/lang en`), the built-in presets show localized
+  English names and descriptions.
+- Built-in presets: `standard` / `minimal` / `ptc` (legacy `code`) / `cordis` / `liangshen`;
+  custom presets are shown as-is.
 - A blank session can switch in place. Once a conversation has started, the
   official blank-only rule stores the choice as the new default for `/new` or
   the next launch.
+
+### Default and precedence
+
 - The default is stored in `~/.dsh-tui/agent-preset.json`.
+- Precedence: explicit `config.preset` or `DSH_TUI_PRESET`, then persisted
+  preference, then the roster default `standard`.
 - A legacy `code` preference resolves to `ptc` when the active roster no
   longer provides `code`, then migrates after that successful resolution;
   rc rosters keep their real `code` id, and session logs are never rewritten.
-- Precedence is explicit `config.preset` or `DSH_TUI_PRESET`, then persisted
-  preference, then the roster default `standard`.
 - Resuming a session restores the preset recorded in that session's log and
   does not overwrite it with the current default.
-- Liangshen mode ships with dsh-tui and is installed into the user preset root
-  at startup. An existing unmanaged directory with the same id is preserved.
-- Liangshen mode's first-round `bash` on Windows runs an auto-discovered Git
-  Bash: candidates are the installation tree of a `git.exe` found on PATH
-  (covers installer, portable, and Scoop layouts; Scoop shims are followed),
-  then conventional install roots and Scoop's conventional directories, then
-  bare `bash` on PATH — never accepting the System32 WSL launcher as Git Bash.
-  Set `DSH_TUI_LIANGSHEN_BASH_PATH` to an absolute `bash.exe` path to pin it
-  explicitly (the pin is the only candidate; a miss warns and skips
-  registration, exposing the full tool catalog on the first round).
 
-Place a custom preset at `$DSH_HOME/.agent-presets/<name>/` with an
-`agent.cordis.yml` file. Under the default DSH home this is
-`~/.dsh/.agent-presets/`.
+### Liangshen mode
+
+- Liangshen mode ships with dsh-tui. On 0.1.7 it registers with the official
+  registry; an existing profile declaration with the same id takes precedence.
+  Older hosts install it into the user preset root, preserving unmanaged directories.
+- The first-round `bash` on Windows runs an auto-discovered Git Bash, trying
+  in order:
+  - The installation tree of a `git.exe` found on PATH (covers installer,
+    portable, and Scoop layouts; Scoop shims are followed)
+  - Conventional install roots and Scoop's conventional directories
+  - Bare `bash` on PATH (final fallback)
+  - It never accepts the System32 WSL launcher as Git Bash
+- Set `DSH_TUI_LIANGSHEN_BASH_PATH` to an absolute `bash.exe` path to pin it.
+- The pin is the only candidate; a miss warns and skips registration, exposing
+  the full tool catalog on the first round.
+
+### Custom presets
+
+On 0.1.7, declare `@deepseek-ai/dsh-agent-preset` through a profile/bundle with
+`id`, `name`, and `plugins` in its config. Migrate old directory presets to
+bundles using the upstream workflow; TUI no longer scans directories itself.
+Older hosts still discover `$DSH_HOME/.agent-presets/<name>/agent.cordis.yml`.
 
 Since 0.3, model-side tools, planning, compaction, and delegation are owned by
 the preset. Profile mode no longer uses the old `DSH_TUI_COMPACT_RATIO`,
@@ -218,7 +256,8 @@ Two directories are involved and neither substitutes for the other:
   Holds profiles, sessions, credentials, and attachments. Early releases pinned
   it to `~/.dsh-cc`.
 - **TUI data directory**: `~/.dsh-tui` (a fixed path, independent of
-  `$DSH_HOME`). Holds `/model`, `/lang`, `/theme` and similar preferences plus
+  `$DSH_HOME`). Holds `/model` (persisted at `~/.dsh-tui/model.json`, surviving
+  restart and `/new`), `/lang`, `/theme` and similar preferences plus
   `resume.txt`. Early releases wrote these under `$DSH_HOME` instead.
 
 `DSH_TUI_RENDER_LOG` may capture visible prompts, tool arguments, and output.
@@ -226,67 +265,28 @@ Do not attach it to a public issue without reviewing and redacting it.
 
 ## `/provider`: manage model providers at runtime
 
-`/provider` opens an interactive wizard that manages model providers without a
-restart. The first step picks an action:
+`/provider` opens an interactive wizard to add, edit, or delete model
+providers without a restart.
 
-- **Add a new provider**: built-in catalog or custom API endpoint (below).
-- **Edit an existing provider**: pick one of the routes your **user settings
-  layer** carries (providers inherited from the composition base cannot be
-  removed from the user layer, so they stay out of the edit/delete menu),
-  then edit through a menu. Built-in routes offer **Edit API Key**, **Edit
-  model list**, and **Delete this provider**; custom endpoints additionally
-  get **Edit Base URL** and **Edit wire protocol** (a built-in route stays
-  built-in even when its profile carries an explicit `api` override). Any
-  edit patches only the picked field in place and exits immediately — no
-  further confirmation; every other profile field (including keys the TUI
-  does not model, like `headers`, `timeoutMs`, `retryPolicy`) never enters
-  the write and survives untouched. "Edit model list" pre-checks the models
-  you already enabled, and the stored entries of kept models are preserved
-  verbatim too. "Delete this provider" is the one exception: it asks for
-  confirmation, then removes the profile and the API key — an
-  environment-provided key, or one shared with another provider, is kept
-  (only the configuration is deleted); if the profile was removed but the
-  key cleanup failed, the wizard says so and points you at the store
-  (the provider itself is gone).
+- Sources: built-in catalog routes or custom API endpoints.
+- Only providers written by the **user settings layer** can be edited or
+  deleted; ones inherited from the composition base cannot be removed.
+- Keys are written to `~/.dsh/.credentials.yaml` (mode 0600) and render as
+  `••••••`.
+- Only non-environment keys are written to the store; a key shared with
+  another provider is kept on delete.
 
-The **add** branch offers the following sources (the third appears only while
-the bundled dsh-auth plugin is mounted):
-
-- **Built-in provider**: pick a catalog route (openai, anthropic, deepseek, …)
-  from `llm.listConfigurableProviders()`; only the API key is required. The
-  baseURL can optionally be overridden (proxy gateways); the protocol and
-  model catalog are inherited.
-- **Custom API endpoint**: enter a route name, API key, baseURL, and the wire
-  protocol (`openai-completions` / `openai-responses` / `anthropic-messages`).
-  The wizard probes the endpoint with the draft credential and offers the
-  advertised models for selection (manual id entry as fallback).
-- **Subscription sign-in (OAuth)**: this option appears only while the bundled
-  dsh-auth plugin is mounted. Pick a subscription account (ChatGPT / Claude /
-  Grok, …) from the list and sign in through the browser / device-code flow —
-  **no API key**. Every account carries a masked status line (signed in, with
-  the token expiry, or expired); an already-signed-in account offers **Sign in
-  again** (switch accounts or refresh the credential) and **Sign out** (remove
-  the locally stored OAuth credential). Credential storage and route
-  registration belong to dsh-auth; `/auth status|login|logout` shares the same
-  source. Without the plugin the option is absent and the wizard behaves
-  exactly as before; with the plugin mounted but no OAuth-capable provider,
-  the wizard says so.
-
-What gets written/removed (on a profile start, where dsh-base provides the
-settings/credentials services):
+Where it writes:
 
 | Artifact | Location |
 | --- | --- |
-| Provider profile | `llm-pi-ai.providers.<route>` in `~/.dsh/settings.yaml`; the route registers on write and unregisters on delete |
+| Provider profile | `llm-pi-ai.providers.<route>` in the active profile config on 0.1.7, or `~/.dsh/settings.yaml` on older hosts; the route registers on write and unregisters on delete |
 | API key | `~/.dsh/.credentials.yaml` (mode 0600), referenced as `<ROUTE>_API_KEY` |
 
-Key answers render as `••••••` in the transcript; when the process environment
-already provides the same-named variable, the write is skipped and the value
-resolves from the environment at request time (deletion never touches it). The
-configuration is shared with the dsh web UI's Models settings page (same
-settings section). A bare `dsh --config cordis.yml` start lacks these services
-and `/provider` reports itself unavailable. After adding or editing, run
-`/model` to switch to the route's models.
+With the bundled dsh-auth plugin mounted, the add branch also offers
+**Subscription sign-in (OAuth)**: sign in to ChatGPT / Claude / Grok through
+the browser or device-code flow (no API key); `/auth status|login|logout`
+shares the same source.
 
 ## Composition constraints
 

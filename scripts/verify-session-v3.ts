@@ -1,4 +1,4 @@
-/** V3 adapter regressions against real Session, JSONL and CommandRuntime APIs.
+/** V3+ adapter regressions against real Session, JSONL and CommandRuntime APIs.
  * Run: node --import tsx/esm scripts/verify-session-v3.ts
  * All files and preferences are isolated under a disposable temporary root.
  */
@@ -38,7 +38,7 @@ const { SubagentActivityStore } = await import('../src/dsh-adapter/subagents.js'
 function session(id: string, parent?: Session) {
   const seed = parent?.snapshotEvents() ?? []
   return Session.create(SessionId(id), seed, {
-    version: 3, id: SessionId(id), createdAt: 1, cwd, agentPreset: 'liangshen', isSeeded: parent !== undefined,
+    ...Session.create(SessionId(id)).header, createdAt: 1, cwd, agentPreset: 'liangshen', isSeeded: parent !== undefined,
     ...(parent === undefined ? {} : { parentSession: parent.id, isSeeded: true }),
   }, SessionLogOffset(seed.length))
 }
@@ -216,12 +216,15 @@ try {
     prompt(child, 'child prompt')
     const grandchild = session('grandchild', child)
     prompt(grandchild, 'grandchild prompt')
+    grandchild.append('turn/start', { turn: 1 })
     grandchild.append('request/header', { reason: 'initial', header: { config: { provider: 'deepseek', model: 'saved-model' } } })
+    grandchild.append('turn/end', { turn: 1, reason: { kind: 'completed' } })
     for (const s of [parent, child, grandchild]) {
       const writer = await store.create(s.header, { inheritedEventCount: s.inheritedEventCount })
       try { await writer.append(s.snapshotEvents()); await writer.flush() }
       finally { await writer.close() }
     }
+    assert.equal((await readPersistedSession(store, grandchild.id)).meta.agentPreset, 'liangshen')
     assert.equal(await resolvePersistedPreset(ctx, grandchild.id), 'liangshen')
     assert.deepEqual(await resolvePersistedRoute(ctx, grandchild.id), { provider: 'deepseek', model: 'saved-model' })
     const grandchildPath = await locateSession(store as never, String(grandchild.id))

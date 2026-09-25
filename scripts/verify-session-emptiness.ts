@@ -172,7 +172,7 @@ try {
       const id = SessionId(`persisted-${compression}`)
       try {
         assert.ok(await settled(() => ctx.get('sessionPersistence') !== undefined))
-        const session = Session.create(id, [], { version: 3, id, createdAt: 1, cwd, isSeeded: false })
+        const session = Session.create(id, [], { ...Session.create(id).header, createdAt: 1, cwd })
         session.append('user/message', createUserMessage({ content: [{ type: 'text', text: 'durable input' }], source: { kind: 'user' } }), { surfaceOp: 'append' })
         const writer = await ctx.sessionPersistence.create(session.header)
         try { await writer.append(session.snapshotEvents()); await writer.flush() }

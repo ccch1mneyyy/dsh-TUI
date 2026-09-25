@@ -48,6 +48,10 @@ const {
   removeStalePackageInstall,
   ensureProfileAllowBuilds,
   ensureProfileReleaseAgeExclude,
+  sharpCurrentSuffix,
+  ignoredSharpOptionalPatterns,
+  ensureProfileSharpPlatformFilter,
+  detectLibc,
   profileWorkspaceYamlPath,
   isStandaloneRuntime,
   getStandaloneBinaryPath,
@@ -730,6 +734,131 @@ check(
     else process.env.DSH_TUI_STANDALONE_BINARY = origEnv.binary
     if (origEnv.dshHome === undefined) delete process.env.DSH_HOME
     else process.env.DSH_HOME = origEnv.dshHome
+  }
+}
+
+// --- sharp 异平台 optional 过滤（维护群 2026-09-11 反馈：更新时下载全平台
+// --- @img/sharp-*，~90MB 下载量换不来任何运行时价值）----------------------------
+// 平台矩阵一律用显式输入断言：断言不得依赖跑测试的机器，否则 Windows/macOS
+// 上会把本机平台当成异平台而假红（PR #861 首版即如此）。
+{
+  check('sharp 后缀: glibc linux x64', sharpCurrentSuffix('linux', 'x64', 'glibc') === 'linux-x64')
+  check('sharp 后缀: musl linux arm64', sharpCurrentSuffix('linux', 'arm64', 'musl') === 'linuxmusl-arm64')
+  check('sharp 后缀: win32 x64 直拼', sharpCurrentSuffix('win32', 'x64', 'glibc') === 'win32-x64')
+  check('sharp 后缀: darwin arm64 直拼', sharpCurrentSuffix('darwin', 'arm64', 'glibc') === 'darwin-arm64')
+  check('sharp 后缀: freebsd 只有 wasm 形态', sharpCurrentSuffix('freebsd', 'x64', 'glibc') === 'freebsd-wasm32')
+  const onLinuxX64 = ignoredSharpOptionalPatterns('linux', 'x64', 'glibc')
+  check('忽略清单: 排除本平台 wrapper 与 libvips', !onLinuxX64.includes('@img/sharp-linux-x64') && !onLinuxX64.includes('@img/sharp-libvips-linux-x64'))
+  check('忽略清单: 含异平台代表项', onLinuxX64.includes('@img/sharp-win32-x64') && onLinuxX64.includes('@img/sharp-darwin-arm64') && onLinuxX64.includes('@img/sharp-libvips-linuxmusl-x64'))
+  check('忽略清单: 与 registry 矩阵对齐（不列不存在的包）', !onLinuxX64.includes('@img/sharp-libvips-win32-x64') && !onLinuxX64.includes('@img/sharp-linuxmusl-arm') && !onLinuxX64.includes('@img/sharp-linux-ia32'))
+  check('忽略清单: freebsd 的 wasm 形态在别的平台算异平台', onLinuxX64.includes('@img/sharp-freebsd-wasm32'))
+  check('忽略清单: freebsd 保留自身唯一可加载的 wasm 形态', !ignoredSharpOptionalPatterns('freebsd', 'x64', 'glibc').includes('@img/sharp-freebsd-wasm32'))
+  const onMusl = ignoredSharpOptionalPatterns('linux', 'x64', 'musl')
+  check('忽略清单: musl 环境排除 linuxmusl-x64 而保留 linux-x64', !onMusl.includes('@img/sharp-linuxmusl-x64') && onMusl.includes('@img/sharp-linux-x64'))
+  check('忽略清单: 不含非平台的纯 JS 包', !onMusl.some(p => p.includes('colour')))
+  check('libc 判定: report 的 glibc 标记优先于 musl loader 存在', detectLibc('linux', { header: { glibcVersionRuntime: '2.36' } }, true) === 'glibc')
+  check('libc 判定: 无 report 时 loader 探测兜底', detectLibc('linux', undefined, true) === 'musl' && detectLibc('linux', undefined, false) === 'glibc')
+  check('libc 判定: 非 Linux 平台恒为 glibc', detectLibc('win32', undefined, true) === 'glibc' && detectLibc('darwin', undefined, true) === 'glibc')
+
+  // 本机平台（与被测实现同源输入：report 优先，loader 路径兜底）。
+  const hostLoaderPresent = existsSync('/lib/ld-musl-x86_64.so.1') || existsSync('/lib/ld-musl-aarch64.so.1') || existsSync('/etc/alpine-release')
+  const hostLibc = detectLibc(process.platform, process.report?.getReport(), hostLoaderPresent)
+  const hostSuffix = sharpCurrentSuffix(process.platform, process.arch, hostLibc)
+  const hostIgnore = ignoredSharpOptionalPatterns(process.platform, process.arch, hostLibc)
+
+  // 手写字面表（刻意不调用被测 helper）：本机平台自己的包，以及必须被忽略的
+  // 异平台代表性包。与 helper 推导的期望互为独立 oracle——helper 少算/漏算时
+  // 这组会红，反过来 helper 多算（忽略本机包）时 OWN_NAMES 会红。
+  const OWN_NAMES = {
+    'win32-x64': ['@img/sharp-win32-x64'],
+    'darwin-arm64': ['@img/sharp-darwin-arm64', '@img/sharp-libvips-darwin-arm64'],
+    'darwin-x64': ['@img/sharp-darwin-x64', '@img/sharp-libvips-darwin-x64'],
+    'linux-x64': ['@img/sharp-linux-x64', '@img/sharp-libvips-linux-x64'],
+    'linux-arm64': ['@img/sharp-linux-arm64', '@img/sharp-libvips-linux-arm64'],
+    'linuxmusl-x64': ['@img/sharp-linuxmusl-x64', '@img/sharp-libvips-linuxmusl-x64'],
+    'linuxmusl-arm64': ['@img/sharp-linuxmusl-arm64', '@img/sharp-libvips-linuxmusl-arm64'],
+    'freebsd-wasm32': ['@img/sharp-freebsd-wasm32'],
+  }
+  const IGNORED_PROBES = {
+    'win32-x64': ['@img/sharp-darwin-arm64', '@img/sharp-linux-x64', '@img/sharp-linuxmusl-x64', '@img/sharp-libvips-linux-x64', '@img/sharp-libvips-linuxmusl-x64'],
+    'darwin-arm64': ['@img/sharp-darwin-x64', '@img/sharp-win32-x64', '@img/sharp-linux-x64', '@img/sharp-libvips-darwin-x64'],
+    'linux-x64': ['@img/sharp-win32-x64', '@img/sharp-darwin-arm64', '@img/sharp-linux-arm64', '@img/sharp-libvips-linuxmusl-x64'],
+    'linuxmusl-x64': ['@img/sharp-linux-x64', '@img/sharp-win32-x64', '@img/sharp-libvips-linux-x64'],
+    'freebsd-wasm32': ['@img/sharp-linux-x64', '@img/sharp-win32-x64', '@img/sharp-libvips-linux-x64'],
+  }
+  const ownNames = OWN_NAMES[hostSuffix] ?? [`@img/sharp-${hostSuffix}`]
+  const literalProbes = IGNORED_PROBES[hostSuffix] ?? ['@img/sharp-linux-x64', '@img/sharp-win32-x64', '@img/sharp-darwin-arm64'].filter(p => p !== `@img/sharp-${hostSuffix}`)
+
+  const sharpScratch = mkdtempSync(join(tmpdir(), 'verify-sharp-filter-'))
+  const prevDshHome = process.env.DSH_HOME
+  try {
+    process.env.DSH_HOME = join(sharpScratch, 'dsh-home')
+    const profDir = join(process.env.DSH_HOME, 'profiles', 'dsh-tui')
+    mkdirSync(profDir, { recursive: true })
+    const wsPath = join(profDir, 'pnpm-workspace.yaml')
+    writeFileSync(wsPath, 'packages:\n  - .\nnodeLinker: hoisted\n')
+    const first = ensureProfileSharpPlatformFilter('dsh-tui')
+    const yamlText = readFileSync(profileWorkspaceYamlPath('dsh-tui'), 'utf8')
+    check('workspace 预种: 块落盘且带模式行', first !== undefined && first.changed && yamlText.includes('ignoredOptionalDependencies:') && yamlText.includes(`- '${hostIgnore[0]}'`), `host=${process.platform}-${process.arch} first=${JSON.stringify(first)}`)
+    check('workspace 预种: 既有内容保留', yamlText.includes('nodeLinker: hoisted'))
+    check('workspace 预种: 不忽略本机平台（手写期望）', !ownNames.some(n => yamlText.includes(n)), `yaml 含本机包 ownNames=${ownNames.join(',')}`)
+    check('workspace 预种: 忽略本机外的代表性包（手写期望）', literalProbes.every(p => yamlText.includes(`- '${p}'`)), `host=${hostSuffix} probes=${literalProbes.join(',')}`)
+    const second = ensureProfileSharpPlatformFilter('dsh-tui')
+    const afterText = readFileSync(profileWorkspaceYamlPath('dsh-tui'), 'utf8')
+    check('workspace 预种: 幂等（不重复块、不再写盘）', afterText.match(/ignoredOptionalDependencies:/gu)?.length === 1 && second !== undefined && second.changed === false && afterText === yamlText)
+
+    // 名单跟着运行平台走：已有块里若有「本机平台的包」或别的平台算出的残留，
+    // 重算必须把它换掉；块内非表内条目是用户显式决策，原样保留。
+    const hostOwnLine = `- '${ownNames[0]}'`
+    writeFileSync(wsPath, `ignoredOptionalDependencies:\n  - fsevents\n  ${hostOwnLine}\n  - '@img/sharp-linux-riscv64'\n`)
+    const third = ensureProfileSharpPlatformFilter('dsh-tui')
+    const refreshed = readFileSync(profileWorkspaceYamlPath('dsh-tui'), 'utf8')
+    check('workspace 预种: 旧名单被重算（本机平台的包被移出）', third !== undefined && third.changed && !refreshed.includes(ownNames[0]))
+    check('workspace 预种: 用户自定义条目保留', refreshed.includes('- fsevents'))
+    check('workspace 预种: 重算后覆盖当前平台矩阵', hostIgnore.every(p => refreshed.includes(`- '${p}'`)))
+    check('workspace 预种: 重算后仍只有一个块', refreshed.match(/ignoredOptionalDependencies:/gu)?.length === 1)
+    const fourth = ensureProfileSharpPlatformFilter('dsh-tui')
+    check('workspace 预种: 重算后再次运行不再写盘', fourth !== undefined && fourth.changed === false)
+
+    // 归类必须按「包名」而不是原始字节：空行、条目尾注释、双引号都是合法 YAML，
+    // 若把它们当成用户条目保留，本机平台自己的包就会留在忽略名单里——pnpm 跳过
+    // 它、sharp 直接加载失败，正是本改动要消灭的跨平台故障。
+    const malformed = [
+      ['块内空行', `ignoredOptionalDependencies:\n  - fsevents\n\n  ${hostOwnLine}\n`],
+      ['条目尾注释', `ignoredOptionalDependencies:\n  - fsevents\n  ${hostOwnLine} # keep\n`],
+      ['双引号写法', `ignoredOptionalDependencies:\n  - fsevents\n  - "@img/sharp-${hostSuffix}"\n`],
+    ]
+    for (const [label, seeded] of malformed) {
+      writeFileSync(wsPath, seeded)
+      const outcome = ensureProfileSharpPlatformFilter('dsh-tui')
+      const got = readFileSync(wsPath, 'utf8')
+      check(`workspace 预种: ${label}时本机包仍被重算掉`, outcome !== undefined && !got.includes(ownNames[0]) && got.includes('- fsevents'), `got=${got.replace(/\n/gu, '|')}`)
+    }
+    // 用户自写的、不在本模块两张表内的 @img 条目（如自带豁免 wasm 回退包）是用户
+    // 决策，不能被重算抹掉。
+    writeFileSync(wsPath, `ignoredOptionalDependencies:\n  - fsevents\n  - '@img/sharp-wasm32'\n`)
+    const keepOutcome = ensureProfileSharpPlatformFilter('dsh-tui')
+    check('workspace 预种: 用户自写的表外 @img 条目保留', keepOutcome !== undefined && readFileSync(wsPath, 'utf8').includes(`- '@img/sharp-wasm32'`))
+
+    // 重复键的文档本来就不是合法 YAML：不能往里写（否则 pnpm 连 workspace 都读不了）。
+    const duplicated = `ignoredOptionalDependencies:\n  - fsevents\nignoredOptionalDependencies:\n  - '@img/sharp-wasm32'\n`
+    writeFileSync(wsPath, duplicated)
+    check('workspace 预种: 重复键原样放过', ensureProfileSharpPlatformFilter('dsh-tui') === undefined && readFileSync(wsPath, 'utf8') === duplicated)
+    // 流式写法（键行自带值）同理。
+    writeFileSync(wsPath, 'ignoredOptionalDependencies: [fsevents]\n')
+    check('workspace 预种: 流式写法不动用户文件', ensureProfileSharpPlatformFilter('dsh-tui') === undefined && readFileSync(wsPath, 'utf8') === 'ignoredOptionalDependencies: [fsevents]\n')
+
+    // 文件不存在时要新建，且不能以空行开头。
+    const emptyProf = join(process.env.DSH_HOME, 'profiles', 'dsh-tui-empty')
+    mkdirSync(emptyProf, { recursive: true })
+    const created = ensureProfileSharpPlatformFilter('dsh-tui-empty')
+    const createdText = readFileSync(join(emptyProf, 'pnpm-workspace.yaml'), 'utf8')
+    check('workspace 预种: 新建文件不以空行开头', created !== undefined && createdText.startsWith('ignoredOptionalDependencies:'))
+    check('workspace 预种: profile 目录缺失返回 undefined', ensureProfileSharpPlatformFilter('absent') === undefined)
+  } finally {
+    if (prevDshHome === undefined) delete process.env.DSH_HOME
+    else process.env.DSH_HOME = prevDshHome
+    rmSync(sharpScratch, { recursive: true, force: true })
   }
 }
 

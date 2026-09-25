@@ -2,11 +2,11 @@ import type { Context } from '@deepseek-ai/cordis'
 import { ReasoningEffortId, type LlmModelInfo } from '@deepseek-ai/dsh-llm'
 import type { Agent, ModelSelectionRef } from '@deepseek-ai/dsh-agent'
 import type { CommandCompletionNode } from '../../commands.js'
-import { readEffortPref, resolveEffortDefault, writeEffortPref } from '../../effortPrefs.js'
+import { nearestLowerEffort, readEffortPref, resolveEffortDefault, writeEffortPref } from '../../effortPrefs.js'
 import { snapshotLiveSessionEvents } from '../compat/liveSession.js'
 import { getLang, t, tOr, type Lang } from '../../i18n.js'
 import { migratePresetPref, writePresetPref } from '../../presetPrefs.js'
-import { resolveCompatiblePreset, rosterOf, type AgentPresetInfo } from '../preset-resolution.js'
+import { presetDisplayId, resolveCompatiblePreset, rosterOf, type AgentPresetInfo } from '../preset-resolution.js'
 import type { createChannelBinding } from './binding.js'
 import type { ChannelOwner } from './owner.js'
 import type { ChannelState, EffortOption, PresetOption } from './types.js'
@@ -20,7 +20,7 @@ type Binding = ReturnType<typeof createChannelBinding>
  */
 export function createModelActions(
   ctx: Context,
-  state: Pick<ChannelState, 'provider' | 'model' | 'reasoningEffort' | 'effortLevels' | 'agentPreset' | 'working' | 'emit'>,
+  state: Pick<ChannelState, 'provider' | 'model' | 'reasoningEffort' | 'effortLevels' | 'agentPreset' | 'working' | 'contextWindow' | 'emit'>,
   deps: {
     owner: Pick<ChannelOwner, 'current'>
     binding: Pick<Binding, 'capture' | 'isCurrent'>
@@ -28,17 +28,23 @@ export function createModelActions(
     initialEffort?: string
     agent(): Agent
     notify: ChannelState['notify']
+    /** Re-check the context-low warning after a refreshed route metadata
+     * answer carries a newer contextWindow than the session started with. */
+    checkContextWarning(): void
   },
 ) {
   const { owner, selection, notify } = deps
   const llmRuntime = ctx.get('llm') as
     | {
-      resolveModelInfo(provider: string, model: string): Promise<{ reasoning?: { efforts: ReadonlyArray<{ id: string; name: string; description?: string }>; defaultEffort?: string } }>
+      resolveModelInfo(provider: string, model: string): Promise<{ context?: { contextWindow: number }; reasoning?: { efforts: ReadonlyArray<{ id: string; name: string; description?: string }>; defaultEffort?: string } }>
       listProviders(): readonly { id: string; name: string }[]
       listModels(provider: string): Promise<readonly LlmModelInfo[]>
     }
     | undefined
   let preferredEffort: string | undefined = deps.initialEffort ?? readEffortPref()
+  // Last fallback notice shown for a (preferred → applied) pair: bind fires on
+  // every session switch, so an unchanged downgrade must not re-toast.
+  let lastEffortFallbackNotice: { preferred: string; applied: string | undefined } | undefined
   // State construction cannot call this factory yet; seed the visible value
   // before the root starts binding or exposes the completed ChannelState.
   state.reasoningEffort = preferredEffort
@@ -57,10 +63,26 @@ export function createModelActions(
   const effortCurrent = (capture: EffortCapture): boolean =>
     owner.current() && deps.binding.isCurrent(capture.binding) &&
     state.provider === capture.provider && state.model === capture.model && effortOperation === capture.operation
+  /** Route-level metadata shared by every resolveModelInfo consumer. The
+   * context window follows the route, not the binding: a resume rebuilds
+   * the binding (effortCurrent goes false) while the capacity answer for
+   * the same provider/model is still the live truth, so this runs before
+   * any effort freshness gate. Lifetime is the one fence it keeps: the
+   * answer crosses an await, so a Channel released while the lookup was in
+   * flight must neither write into its dead state nor re-arm the
+   * context-low warning through checkContextWarning. */
+  const applyRouteMetadata = (capture: EffortCapture, info: { context?: { contextWindow: number } }): void => {
+    if (!owner.current()) return
+    if (state.provider === capture.provider && state.model === capture.model && info.context !== undefined) {
+      state.contextWindow = info.context.contextWindow
+      deps.checkContextWarning()
+    }
+  }
   const resolveEfforts = async (capture: EffortCapture): Promise<EffortResult | 'unavailable' | 'error' | 'stale'> => {
     if (llmRuntime === undefined || typeof llmRuntime.resolveModelInfo !== 'function') return 'unavailable'
     try {
       const info = await llmRuntime.resolveModelInfo(capture.provider, capture.model)
+      applyRouteMetadata(capture, info)
       if (!effortCurrent(capture)) return 'stale'
       const efforts = info.reasoning?.efforts ?? []
       state.effortLevels = efforts.map(level => level.id)
@@ -79,15 +101,69 @@ export function createModelActions(
     // This same binding-time lookup is the route's initial tier refresh even
     // without a stored preference. Do not make a separate competing refresh
     // operation that could invalidate the selected preference completion.
-    if (preferredEffort === undefined || !resolved.efforts.some(effort => effort.id === preferredEffort)) return
-    selection.current = { provider: capture.provider, model: capture.model, reasoningEffort: ReasoningEffortId(preferredEffort) }
+    if (preferredEffort === undefined) return
+    const available = resolved.efforts.map(effort => effort.id)
+    // Exact hit applies silently; a miss falls back to the nearest LOWER tier
+    // the route offers (never up), and both miss paths notify exactly once
+    // per (preferred → applied) pair — bind fires on every session switch,
+    // so an unchanged downgrade must not re-toast.
+    const applied = nearestLowerEffort(preferredEffort, available)
+    if (applied === undefined) {
+      if (lastEffortFallbackNotice?.preferred !== preferredEffort || lastEffortFallbackNotice.applied !== undefined) {
+        lastEffortFallbackNotice = { preferred: preferredEffort, applied: undefined }
+        notify(t('effort-preference-unsupported', { preferred: preferredEffort }), { color: 'warning' })
+      }
+      // Nothing is pinned, so the ROUTE's model default is what actually ships
+      // and the readout (status line, /effort status) must say so. Every switch
+      // tail clears it before this runs (session-resume.ts / model-switch.ts /
+      // session-live-adoption.ts / background-action.ts), but a resumed log's
+      // replayed `request/header` can leave an older tier behind — neither blank
+      // nor "last route's tier" is the truth. Only the readout moves: pinning
+      // the default into selection.current would put a tier the user never chose
+      // onto the wire, which is exactly what "never up" forbids.
+      const shipped = resolved.defaultEffort
+      if (state.reasoningEffort !== shipped) {
+        state.reasoningEffort = shipped
+        state.emit()
+      }
+      // An effort pin installed earlier (an exact hit, /effort <id>) survives
+      // every path that is NOT a bind: /settings' effortDefault hands the level
+      // straight to setDefaultEffort → applyPreferredEffort (plugin.ts:804 →
+      // setDefaultEffort above), which never resets selection.current — the four
+      // switch tails that do are all on the bind side. Leaving it would put the
+      // OLD tier back on the wire while the readout above announces the model
+      // default. Drop the effort only: the provider/model half of the pin is
+      // this route's, not the stale tier's. No emit — setDefaultEffort reaches
+      // here through that same non-bind path, and nothing UI-visible reads this
+      // ref (it is the router's ModelSelectionRef, not the IDE ChannelSelection
+      // the status line shows); the readout above already emits when it moves.
+      if (selection.current?.reasoningEffort !== undefined) {
+        selection.current = { provider: capture.provider, model: capture.model }
+      }
+      return
+    }
+    // Dedupe gates ONLY the toast: bind resets selection.current on every
+    // session switch, so the pin below must re-apply unconditionally — an
+    // early return here would ship the model default from the second session
+    // on (review C1). The status line shows the tier that actually ships.
+    const fresh = lastEffortFallbackNotice?.preferred !== preferredEffort || lastEffortFallbackNotice.applied !== applied
+    if (applied !== preferredEffort && fresh) {
+      lastEffortFallbackNotice = { preferred: preferredEffort, applied }
+      notify(t('effort-preference-downgraded', { preferred: preferredEffort, applied }), { color: 'warning' })
+    }
+    if (applied === preferredEffort) lastEffortFallbackNotice = undefined
+    state.reasoningEffort = applied
+    selection.current = { provider: capture.provider, model: capture.model, reasoningEffort: ReasoningEffortId(applied) }
+    state.emit()
   }
   const refreshEffortLevels = (): void => {
     if (llmRuntime === undefined || typeof llmRuntime.resolveModelInfo !== 'function') return
     const capture = captureEffort()
     const generation = ++effortLevelsGeneration
     void llmRuntime.resolveModelInfo(capture.provider, capture.model).then(info => {
-      if (!effortCurrent(capture) || generation !== effortLevelsGeneration) return
+      if (generation !== effortLevelsGeneration) return
+      applyRouteMetadata(capture, info)
+      if (!effortCurrent(capture)) return
       state.effortLevels = (info.reasoning?.efforts ?? []).map(level => level.id)
       state.emit()
     }).catch(() => undefined)
@@ -180,7 +256,7 @@ export function createModelActions(
     if (presets === undefined) return []
     const localized = getLang() === 'en'
     try {
-      return (await presets.list()).map(preset => ({ id: preset.id, ...(preset.name === undefined ? {} : { name: localized ? tOr(`preset-name-${preset.id}`, preset.name) : preset.name }), ...(preset.description === undefined ? {} : { description: localized ? tOr(`preset-desc-${preset.id}`, preset.description) : preset.description }), ...(preset.broken === undefined ? {} : { broken: preset.broken }), isDefault: preset.id === presets.defaultId }))
+      return (await presets.list()).map(preset => ({ id: preset.id, ...(preset.name === undefined ? {} : { name: localized ? tOr(`preset-name-${presetDisplayId(preset.id)}`, preset.name) : preset.name }), ...(preset.description === undefined ? {} : { description: localized ? tOr(`preset-desc-${presetDisplayId(preset.id)}`, preset.description) : preset.description }), ...(preset.broken === undefined ? {} : { broken: preset.broken }), isDefault: preset.id === presets.defaultId }))
     } catch { return [] }
   }
   const switchPreset = async (presetId: string): Promise<boolean> => {

@@ -15,6 +15,7 @@ import { getHostGrantStore } from '../host-grants.js'
 import { getHostFacade } from '../plugin-host.js'
 import { pluginsInfoLines } from '../plugins-info.js'
 import type { ChannelOwner } from './owner.js'
+import { toolResultText } from './transcript.js'
 
 /** Local reports and filesystem actions, fenced to the originating binding. */
 export function createReportActions(ctx: Context, deps: {
@@ -69,13 +70,6 @@ export function createReportActions(ctx: Context, deps: {
     }
     return ''
   }
-  const textOf = (content: readonly unknown[] | undefined): string =>
-    (content ?? []).flatMap(block => {
-      if (block === null || typeof block !== 'object') return []
-      const record = block as { type?: unknown; text?: unknown }
-      return record.type === 'text' && typeof record.text === 'string' ? [record.text] : []
-    }).join('').trim()
-
   const exportSession = (): string | null => {
     const capture = deps.capture()
     const agent = capture.agent
@@ -97,11 +91,8 @@ export function createReportActions(ctx: Context, deps: {
           break
         case 'tool/call': parts.push(`${t('export-tool-section', { name: event.data.name })}\n\n\`\`\`json\n${event.data.arguments}\n\`\`\`\n`); break
         case 'tool/result': {
-          const block = event.data.message.content[0]
-          if (block?.type === 'tool-result') {
-            const text = textOf(block.content)
-            if (text) parts.push(`${t('export-result-section')}\n\n\`\`\`\n${text}\n\`\`\`\n`)
-          }
+          const text = toolResultText(event)
+          if (text) parts.push(`${t('export-result-section')}\n\n\`\`\`\n${text}\n\`\`\`\n`)
           break
         }
       }

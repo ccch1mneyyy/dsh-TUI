@@ -1,23 +1,28 @@
 # dsh-TUI Roadmap
 
+[文档索引](README.md) · [English](roadmap.en.md)
+
 > 本文档是长期方向；具体任务的实时状态应以 GitHub Roadmap tracker 为准。
 
 ## Goal
 
-建设一个可靠、可恢复、可观察、可扩展的 DeepSeek Harness 终端工作台，帮助用户完成长时间的编码和 Agent 工作流。
+建设一个可靠、可恢复、可观察、可扩展的 DeepSeek Harness 终端工作台，
+帮助用户完成长时间的编码和 Agent 工作流。
 
 ## Current Focus
 
 1. 建立公开、可追踪的社区协作流程。
 2. 提升长会话、恢复、错误处理和终端兼容性的可靠性。
-3. 把 DSH 的 Agent、session、model、preset、permission、workspace 和 plugin 能力呈现清楚。
+3. 把 DSH 的 Agent、session、model、preset、permission、workspace 和 plugin
+   能力呈现清楚。
 4. 稳定扩展接缝，让社区可以构建主题、命令、场景、状态行和工作区插件。
 5. 改善安装、诊断、文档、发布和贡献者体验。
 
 ## Non-goals
 
 - 不以功能数量或外部产品的逐项对应作为项目目标。
-- 不在 TUI 中重复实现 DSH 已经拥有的 Agent、session、sandbox 或策略服务。
+- 不在 TUI 中重复实现 DSH 已经拥有的 Agent、session、sandbox
+  或策略服务。
 - 不在公开 API 尚未稳定前大规模扩展插件数量。
 - 不把动画、装饰或没有明确用户场景的功能列入关键路径。
 - 不把 Star、PR 数量或 commit 数量当作主要进展指标。

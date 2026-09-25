@@ -23,7 +23,7 @@ const rules = [
 ]
 const files = ['src', 'scripts', 'docs'].flatMap(name => collect(resolve(root, name)))
   .filter(path => /\.(?:[cm]?[jt]sx?|md)$/.test(path) && path !== ownPath)
-files.push(...['README.md', 'README_EN.md', 'AGENTS.md', 'ADAPTER.md', 'package.json'].map(name => resolve(root, name)))
+files.push(...['README.md', 'README_ZH.md', 'AGENTS.md', 'ADAPTER.md', 'package.json'].map(name => resolve(root, name)))
 // Retired env naming is code-only: launcher and config files are scanned
 // as code, while docs may still mention the old names in migration history.
 // The harness home now follows the upstream default (~/.dsh), so run.ts and

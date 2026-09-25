@@ -5,6 +5,7 @@ import type { ChannelState } from '../channel/types.js'
 import { isReservedCredentialRef } from '../credentialRefGuard.js'
 import type { OAuthProviderStatus, OAuthSetupHost, ProfilePathOp, ProviderSetupHost } from '../providerWizard.js'
 import type { SettingsHost } from '../settingsEditor.js'
+import { settingsValue } from '../compat/settings.js'
 
 export function createSettingsHosts(ctx: Context, assertActive: () => void = () => undefined): Pick<ChannelState, 'settingsHost' | 'providerSetup' | 'oauthProviderStatuses'> {
   let settingsHostResolved = false
@@ -101,8 +102,8 @@ export function createSettingsHosts(ctx: Context, assertActive: () => void = () 
         | undefined
       const settings = ctx.get('settings') as
         | {
-          describe(): readonly { ns: string; revision: number; user?: unknown }[]
-          get(ns: string): unknown
+          describe(): readonly { ns: string; revision: number; value?: unknown; user?: unknown }[]
+          get?(ns: string): unknown
           mutate(
             ns: string,
             ops: readonly (
@@ -157,7 +158,7 @@ export function createSettingsHosts(ctx: Context, assertActive: () => void = () 
             .map(entry => ({ provider: entry.provider, displayName: entry.displayName }))
         },
         routeExists(route) {
-          const section = settings.get('llm-pi-ai') as
+          const section = settingsValue(settings, 'llm-pi-ai') as
             | { providers?: Record<string, unknown> }
             | undefined
           return section?.providers !== undefined && route in section.providers
@@ -166,7 +167,7 @@ export function createSettingsHosts(ctx: Context, assertActive: () => void = () 
           // The RESOLVED merge (settings.get), not the user layer: a base
           // provider or composition-base route naming this ref is invisible
           // to listConfiguredProviders() but still consumes the credential.
-          const section = settings.get('llm-pi-ai') as
+          const section = settingsValue(settings, 'llm-pi-ai') as
             | { providers?: Record<string, unknown> }
             | undefined
           const providers = section?.providers
@@ -193,7 +194,7 @@ export function createSettingsHosts(ctx: Context, assertActive: () => void = () 
           // user layer legitimately exposes nothing to edit.
           const section = (descriptor?.user !== undefined
             ? descriptor.user
-            : settings.get('llm-pi-ai')) as
+            : settingsValue(settings, 'llm-pi-ai')) as
             | { providers?: Record<string, unknown> }
             | undefined
           const providers = section?.providers

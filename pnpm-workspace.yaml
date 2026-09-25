@@ -11,40 +11,40 @@ packages:
 # Dev-tree resolution pin: pnpm's prerelease range resolution prefers the
 # registry `latest` dist-tag (0.1.0-rc.6 for most @deepseek-ai/dsh-* even
 # after the 0.1.1 release; the 0.1.1 line rides the `next` tag), so the
-# wide peer/dev range ending in `|| 0.1.5-rc.1` would install an rc.6
+# wide peer/dev range ending in `|| 0.1.7-rc.1` would install an rc.6
 # mix instead of a coherent fixture tree. Overrides force the whole
-# @deepseek-ai tree to the 0.1.5-rc.1 line locally (the primary
+# @deepseek-ai tree to the 0.1.7-rc.1 line locally (the primary
 # validated line; see src/dsh-adapter/contract.ts). Published
 # peerDependencies stay wide, and this file is never consulted by consumer
 # installs.
 overrides:
-  '@deepseek-ai/dsh-agent': 0.1.5-rc.1
-  '@deepseek-ai/dsh-agent-instructions': 0.1.5-rc.1
-  '@deepseek-ai/dsh-agent-presets': 0.1.5-rc.1
-  '@deepseek-ai/dsh-atomic-write': 0.1.5-rc.1
-  '@deepseek-ai/dsh-attachment': 0.1.5-rc.1
-  '@deepseek-ai/dsh-brand': 0.1.5-rc.1
-  '@deepseek-ai/dsh-code-runtime': 0.1.5-rc.1
-  '@deepseek-ai/dsh-code-runtime-worker-thread': 0.1.5-rc.1
-  '@deepseek-ai/dsh-commands': 0.1.5-rc.1
-  '@deepseek-ai/dsh-command-compact': 0.1.5-rc.1
-  '@deepseek-ai/dsh-compaction-basic': 0.1.5-rc.1
-  '@deepseek-ai/dsh-compaction-tool-result-pruner': 0.1.5-rc.1
-  '@deepseek-ai/dsh-cordis-host-runner': 0.1.5-rc.1
-  '@deepseek-ai/dsh-fs': 0.1.5-rc.1
-  '@deepseek-ai/dsh-fs-local': 0.1.5-rc.1
-  '@deepseek-ai/dsh-home-paths': 0.1.5-rc.1
-  '@deepseek-ai/dsh-invariants': 0.1.5-rc.1
-  '@deepseek-ai/dsh-llm': 0.1.5-rc.1
-  '@deepseek-ai/dsh-llm-pi-ai': 0.1.5-rc.1
-  '@deepseek-ai/dsh-persona': 0.1.5-rc.1
-  '@deepseek-ai/dsh-plan-mode': 0.1.5-rc.1
-  '@deepseek-ai/dsh-sandbox': 0.1.5-rc.1
-  '@deepseek-ai/dsh-sandbox-policy': 0.1.5-rc.1
-  '@deepseek-ai/dsh-scope': 0.1.5-rc.1
-  '@deepseek-ai/dsh-session': 0.1.5-rc.1
-  '@deepseek-ai/dsh-session-persistence': 0.1.5-rc.1
-  '@deepseek-ai/dsh-session-persistence-jsonl': 0.1.5-rc.1
+  '@deepseek-ai/dsh-agent': 0.1.7-rc.1
+  '@deepseek-ai/dsh-agent-instructions': 0.1.7-rc.1
+  '@deepseek-ai/dsh-agent-preset-registry': 0.1.7-rc.1
+  '@deepseek-ai/dsh-atomic-write': 0.1.7-rc.1
+  '@deepseek-ai/dsh-attachment': 0.1.7-rc.1
+  '@deepseek-ai/dsh-brand': 0.1.7-rc.1
+  '@deepseek-ai/dsh-ptc-runtime': 0.1.7-rc.1
+  '@deepseek-ai/dsh-ptc-runtime-node': 0.1.7-rc.1
+  '@deepseek-ai/dsh-commands': 0.1.7-rc.1
+  '@deepseek-ai/dsh-command-compact': 0.1.7-rc.1
+  '@deepseek-ai/dsh-compaction-basic': 0.1.7-rc.1
+  '@deepseek-ai/dsh-compaction-tool-result-pruner': 0.1.7-rc.1
+  '@deepseek-ai/dsh-cordis-host-runner': 0.1.7-rc.1
+  '@deepseek-ai/dsh-fs': 0.1.7-rc.1
+  '@deepseek-ai/dsh-fs-local': 0.1.7-rc.1
+  '@deepseek-ai/dsh-home-paths': 0.1.7-rc.1
+  '@deepseek-ai/dsh-invariants': 0.1.7-rc.1
+  '@deepseek-ai/dsh-llm': 0.1.7-rc.1
+  '@deepseek-ai/dsh-llm-pi-ai': 0.1.7-rc.1
+  '@deepseek-ai/dsh-persona': 0.1.7-rc.1
+  '@deepseek-ai/dsh-plan-mode': 0.1.7-rc.1
+  '@deepseek-ai/dsh-sandbox': 0.1.7-rc.1
+  '@deepseek-ai/dsh-sandbox-policy': 0.1.7-rc.1
+  '@deepseek-ai/dsh-scope': 0.1.7-rc.1
+  '@deepseek-ai/dsh-session': 0.1.7-rc.1
+  '@deepseek-ai/dsh-session-persistence': 0.1.7-rc.1
+  '@deepseek-ai/dsh-session-persistence-jsonl': 0.1.7-rc.1
   # Upstream dropped the sqlite backend at 0.1.2-alpha.3; rc.2 stays as a
   # dev-only exact pin because scripts/migrate-sessions-to-jsonl.mts still
   # reads the retired cc-tui SQLite store through it. Never a peer.
@@ -70,38 +70,38 @@ overrides:
   '@dsh-tui-dev/sqlite-island>@deepseek-ai/dsh-scope': 0.1.1-rc.2
   '@dsh-tui-dev/sqlite-island>@deepseek-ai/dsh-typert-protocol': 0.1.1-rc.2
   '@dsh-tui-dev/sqlite-island>@deepseek-ai/dsh-attachment': 0.1.1-rc.2
-  '@deepseek-ai/dsh-skill-filesystem': 0.1.5-rc.1
-  '@deepseek-ai/dsh-settings': 0.1.5-rc.1
-  '@deepseek-ai/dsh-skill': 0.1.5-rc.1
-  '@deepseek-ai/dsh-storage': 0.1.5-rc.1
-  '@deepseek-ai/dsh-storage-domain': 0.1.5-rc.1
-  '@deepseek-ai/dsh-storage-json': 0.1.5-rc.1
-  '@deepseek-ai/dsh-subprocess': 0.1.5-rc.1
-  '@deepseek-ai/dsh-system-prompt': 0.1.5-rc.1
-  '@deepseek-ai/dsh-terminal': 0.1.5-rc.1
-  '@deepseek-ai/dsh-terminal-bash': 0.1.5-rc.1
-  '@deepseek-ai/dsh-timeout': 0.1.5-rc.1
-  '@deepseek-ai/dsh-tool-ask-user': 0.1.5-rc.1
-  '@deepseek-ai/dsh-tool-fs': 0.1.5-rc.1
-  '@deepseek-ai/dsh-tool-fs-search': 0.1.5-rc.1
-  '@deepseek-ai/dsh-tool-goal': 0.1.5-rc.1
-  '@deepseek-ai/dsh-tool-jobs': 0.1.5-rc.1
-  '@deepseek-ai/dsh-tool-ralph': 0.1.5-rc.1
-  '@deepseek-ai/dsh-tool-str-replace-editor': 0.1.5-rc.1
-  '@deepseek-ai/dsh-tool-subagent-control': 0.1.5-rc.1
-  '@deepseek-ai/dsh-tool-todo': 0.1.5-rc.1
-  '@deepseek-ai/dsh-tool-web': 0.1.5-rc.1
-  '@deepseek-ai/dsh-tool-workflow': 0.1.5-rc.1
-  '@deepseek-ai/dsh-workflow-worker-thread': 0.1.5-rc.1
-  '@deepseek-ai/dsh-tool-bash-persistent': 0.1.5-rc.1
-  '@deepseek-ai/dsh-tool-cordis': 0.1.5-rc.1
-  '@deepseek-ai/dsh-tool-subagent': 0.1.5-rc.1
-  '@deepseek-ai/dsh-tools': 0.1.5-rc.1
-  '@deepseek-ai/dsh-typert-protocol': 0.1.5-rc.1
-  '@deepseek-ai/dsh-user-approval': 0.1.5-rc.1
-  '@deepseek-ai/dsh-user-questions': 0.1.5-rc.1
-  '@deepseek-ai/dsh-web-app': 0.1.5-rc.1
-  '@deepseek-ai/dsh-workspace': 0.1.5-rc.1
+  '@deepseek-ai/dsh-skill-filesystem': 0.1.7-rc.1
+  '@deepseek-ai/dsh-settings': 0.1.7-rc.1
+  '@deepseek-ai/dsh-skill': 0.1.7-rc.1
+  '@deepseek-ai/dsh-storage': 0.1.7-rc.1
+  '@deepseek-ai/dsh-storage-domain': 0.1.7-rc.1
+  '@deepseek-ai/dsh-storage-json': 0.1.7-rc.1
+  '@deepseek-ai/dsh-subprocess': 0.1.7-rc.1
+  '@deepseek-ai/dsh-system-prompt': 0.1.7-rc.1
+  '@deepseek-ai/dsh-terminal': 0.1.7-rc.1
+  '@deepseek-ai/dsh-terminal-bash': 0.1.7-rc.1
+  '@deepseek-ai/dsh-timeout': 0.1.7-rc.1
+  '@deepseek-ai/dsh-tool-ask-user': 0.1.7-rc.1
+  '@deepseek-ai/dsh-tool-fs': 0.1.7-rc.1
+  '@deepseek-ai/dsh-tool-fs-search': 0.1.7-rc.1
+  '@deepseek-ai/dsh-tool-goal': 0.1.7-rc.1
+  '@deepseek-ai/dsh-tool-jobs': 0.1.7-rc.1
+  '@deepseek-ai/dsh-tool-ralph': 0.1.7-rc.1
+  '@deepseek-ai/dsh-tool-str-replace-editor': 0.1.7-rc.1
+  '@deepseek-ai/dsh-tool-subagent-control': 0.1.7-rc.1
+  '@deepseek-ai/dsh-tool-todo': 0.1.7-rc.1
+  '@deepseek-ai/dsh-tool-web': 0.1.7-rc.1
+  '@deepseek-ai/dsh-tool-workflow': 0.1.7-rc.1
+  '@deepseek-ai/dsh-workflow-ptc': 0.1.7-rc.1
+  '@deepseek-ai/dsh-tool-bash-persistent': 0.1.7-rc.1
+  '@deepseek-ai/dsh-tool-cordis': 0.1.7-rc.1
+  '@deepseek-ai/dsh-tool-subagent': 0.1.7-rc.1
+  '@deepseek-ai/dsh-tools': 0.1.7-rc.1
+  '@deepseek-ai/dsh-typert-protocol': 0.1.7-rc.1
+  '@deepseek-ai/dsh-user-approval': 0.1.7-rc.1
+  '@deepseek-ai/dsh-user-questions': 0.1.7-rc.1
+  '@deepseek-ai/dsh-web-app': 0.1.7-rc.1
+  '@deepseek-ai/dsh-workspace': 0.1.7-rc.1
 
 allowBuilds:
   # Optional postinstall-only (pi-ai transitive deps): nothing at runtime
@@ -111,7 +111,7 @@ allowBuilds:
   koffi: false
   protobufjs: false
 minimumReleaseAgeExclude:
-  # Same-day alpha adaptation: the 0.1.5-rc.1 cohort is younger than
+  # Same-day alpha adaptation: the 0.1.7-rc.1 cohort is younger than
   # pnpm 11's default 24h minimumReleaseAge; exempt the whole scope
   # (rollup R-08 recommends per-scope exemption over disabling; name
   # patterns cannot carry a version spec here).

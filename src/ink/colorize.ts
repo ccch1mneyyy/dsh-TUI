@@ -244,3 +244,25 @@ export function applyColor(text: string, color: Color | undefined): string {
   }
   return colorize(text, color, 'foreground')
 }
+
+/**
+ * Marker used to split chalk's open/close pair. No SGR sequence contains a NUL,
+ * so everything before it is the opening code.
+ */
+const SGR_OPEN_MARKER = '\u0000'
+
+/**
+ * The opening SGR sequence for a raw background color — no text, no reset.
+ *
+ * SixelGraphicsManager needs it to give Erase-Character the placement's surface
+ * color as its fill: the erased cells keep a "background-only" style in the cell
+ * model, so filling them with the terminal default would leave a black patch.
+ * @param color - the raw background color value; undefined or empty yields ''.
+ * @returns the opening SGR sequence, or '' when no color applies.
+ */
+export function backgroundOpenCode(color: Color | undefined): string {
+  if (!color) return ''
+  const styled = colorize(SGR_OPEN_MARKER, color, 'background')
+  const end = styled.indexOf(SGR_OPEN_MARKER)
+  return end <= 0 ? '' : styled.slice(0, end)
+}

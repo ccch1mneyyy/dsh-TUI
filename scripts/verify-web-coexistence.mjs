@@ -42,8 +42,8 @@ const sourceBasePath = join(sourceRoot, 'packages/bundle/base/cordis.patch.yml')
 const requireSourceBaseline = process.env.DSH_REQUIRE_ALPHA_BASELINE === '1'
 if (existsSync(sourceWebPath) && existsSync(sourceWebManifest) && existsSync(sourceBasePath)) {
   const sourceWebVersion = JSON.parse(readFileSync(sourceWebManifest, 'utf8')).version
-  if (requireSourceBaseline && sourceWebVersion !== '0.1.5-rc.1') {
-    throw new Error(`required source baseline is 0.1.5-rc.1, got ${sourceWebVersion}`)
+  if (requireSourceBaseline && sourceWebVersion !== '0.1.7-rc.1') {
+    throw new Error(`required source baseline is 0.1.7-rc.1, got ${sourceWebVersion}`)
   }
   const resolver = prepareUpstreamSourceResolver(sourceRoot)
   baselines.push({
@@ -73,6 +73,7 @@ const shared = [
   { id: 'code-runtime', name: '@deepseek-ai/dsh-code-runtime-worker-thread' },
   { id: 'subagent-model-selection-settings', name: '@deepseek-ai/dsh-tool-subagent/model-selection-settings' },
   { id: 'agent-presets', name: '@deepseek-ai/dsh-agent-presets' },
+  { id: 'agent-preset-registry', name: '@deepseek-ai/dsh-agent-preset-registry' },
   { id: 'cordis-host-runner', name: '@deepseek-ai/dsh-cordis-host-runner' },
 ]
 
@@ -91,12 +92,15 @@ for (const baseline of baselines) {
     }
   }
   const presetManifest = resolvePackage('@deepseek-ai/dsh-agent-presets/package.json')
+  const hasRegistry = resolvePackage('@deepseek-ai/dsh-agent-preset-registry/package.json') !== undefined
   const shippedStandardPreset = presetManifest === undefined
     ? undefined
     : join(dirname(presetManifest), 'presets', 'standard', 'agent.cordis.yml')
   const hasShippedPresets = shippedStandardPreset !== undefined && existsSync(shippedStandardPreset)
-  const shippedOwnsCommandGoal = hasShippedPresets
-    && loadPatch(shippedStandardPreset).some(row => row?.id === 'command-goal')
+  const shippedOwnsCommandGoal = hasRegistry
+    ? insertedRows(loadPatch(resolvePackage('@deepseek-ai/dsh-web-app/presets/standard.patch.yml')))
+      .some(row => row.config.plugins.some(plugin => plugin.id === 'command-goal'))
+    : hasShippedPresets && loadPatch(shippedStandardPreset).some(row => row?.id === 'command-goal')
   const hasSubagentModelSelectionSettings = resolvePackage(
     '@deepseek-ai/dsh-tool-subagent/model-selection-settings',
   ) !== undefined
@@ -137,6 +141,16 @@ for (const baseline of baselines) {
       tuiRow.disabled.includes(`entry.options.id === '${id}'`) && tuiRow.disabled.includes(`'${name}'`),
       `${baseline.label}: ${scopedId} must yield to ${id}/${name}`,
     )
+    const unavailable = id === 'agent-preset-registry' ? !hasRegistry
+      : (id === 'agent-presets' || id === 'code-runtime') ? hasRegistry
+        : id === 'subagent-model-selection-settings' ? !hasSubagentModelSelectionSettings
+          : false
+    assert.equal(Boolean(evaluateFor(baseline, tuiRow.disabled)), unavailable,
+      `${baseline.label}: ${scopedId} must follow the installed package generation`)
+    assert.equal(Boolean(evaluateFor(baseline, tuiRow.disabled, [{ options: { id, name }, disabled: false }])), true,
+      `${baseline.label}: ${scopedId} must yield to an enabled official row`)
+    assert.equal(Boolean(evaluateFor(baseline, tuiRow.disabled, [{ options: { id, name }, disabled: true }])), unavailable,
+      `${baseline.label}: a disabled official row does not own ${scopedId}`)
     if (id === 'subagent-model-selection-settings') {
       assert.ok(
         tuiRow.disabled.includes("require.resolve('@deepseek-ai/dsh-tool-subagent/model-selection-settings')"),

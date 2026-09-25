@@ -28,7 +28,7 @@ const dataDir = mkdtempSync(join(tmpdir(), 'repro-paste-fold-data-'))
 process.env.HOME = dataDir
 process.env.USERPROFILE = dataDir
 
-const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render, AlternateScreen }, { Chat }, { QuestionStore }, termTest] = await Promise.all([
+const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render, AlternateScreen }, { Chat }, { QuestionStore }, termTest, { stringWidth }] = await Promise.all([
   import('node:stream'),
   import('react'),
   import('@xterm/headless'),
@@ -36,6 +36,7 @@ const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render, Alternat
   import('../src/screens/Chat.js'),
   import('../src/dsh-adapter/questions.js'),
   import('./lib/term-test.mjs'),
+  import('../src/ink/stringWidth.js'),
 ])
 
 const COLS = 100
@@ -141,6 +142,25 @@ try {
   check('big paste folds into block chip', await settled(() => screenHas('▸ 12 lines')), screenHas('▸ 12 lines') ? '' : 'no chip stats on screen')
   check('chip shows the first-line preview', await settled(() => screenHas('fold-line-0')))
   check('block text hides the later lines', !screenHas('FOURTH_MARKER'))
+
+  // The chip row is exactly one row: badge ・ preview ・ hint, each segment
+  // pre-truncated against the input width. Measure what the terminal painted
+  // from the first `▸` to the trimmed end with the SAME stringWidth the
+  // truncation arithmetic uses, and hold it inside the value box the chip is
+  // laid out in: from the chip's own start column (past the ⌸ entry / prompt
+  // glyph slot) to the trailing 2-column expand control — the region
+  // PromptInput's inputWidth budget covers. Every separator must be U+30FB,
+  // the glyph get-east-asian-width hardcodes Wide (2 cells): the U+00B7 it
+  // replaced measures 1 cell in the model while CJK terminal fonts paint 2,
+  // which is the row drift this chip was fixed for.
+  const chipRow = termTest.viewportLines(term).find(row => row.includes('▸ 12 lines')) ?? ''
+  const chipStart = chipRow.indexOf('▸')
+  const chip = chipRow.slice(chipStart).trimEnd()
+  const chipLimit = stringWidth(chipRow) - chipStart - 2
+  check('folded chip row fits the input width (badge・preview・hint)',
+    chipStart >= 0 && chip.includes('fold-line-0') && chip.endsWith('hover to peek') &&
+      !chip.includes('·') && stringWidth(chip) <= chipLimit,
+    `w=${stringWidth(chip)} limit=${chipLimit}`)
 
   // 2. Hover pops the bordered peek CARD over the chip — the input box
   //    stays one row; the card shows the block head and caps the tail.

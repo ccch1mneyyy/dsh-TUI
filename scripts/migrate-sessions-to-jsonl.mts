@@ -16,7 +16,7 @@
  * by relative path, keeping the wrapper out of the published manifest.
  * The source is opened read-only for an SQLite backup. The retired backend
  * reads that disposable copy; the official format catalog converts its V0
- * records through the complete migration chain before the V3 writer opens.
+ * records through the complete migration chain before the current writer opens.
  * Unsupported historical chronology is reported per session without writing
  * a target artifact; the catalog, not this script, owns admissible rewrites.
  *
@@ -30,7 +30,8 @@ import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
 import { SessionId, SessionLogOffset, type SessionEvent, type SessionHeader } from '@deepseek-ai/dsh-session'
-import { sessionFormatCatalog } from '@deepseek-ai/dsh-session-format-catalog'
+import { createSessionFormatCatalogWithChildren, historicalSessionFormatCatalog } from '@deepseek-ai/dsh-session-format-catalog'
+import { historicalChildCatalogSource } from '@deepseek-ai/dsh-session-format-v3-to-v4'
 // Relative import, not a manifest dependency: a `workspace:*` devDependency
 // would ship verbatim in the npm tarball (this package publishes via npm,
 // which rewrites no workspace protocols) and break `dsh plugin add` in the
@@ -89,7 +90,19 @@ try {
       }
       try {
         const { meta: stored, events } = await src.sessionPersistence.inspect(meta.id)
-        const restore = sessionFormatCatalog.createRestore({ type: 'session', ...stored, delegationDepth: stored.delegationDepth ?? 0 }, {
+        // Read direct subagent facts from the same immutable SQLite backup.
+        // Historical decoding stops at V3, avoiding recursive catalog migration.
+        const children = []
+        for (const child of metas) {
+          if (child.parentSession !== stored.id || child.origin !== 'subagent') continue
+          const inspected = await src.sessionPersistence.inspect(child.id)
+          const historical = historicalSessionFormatCatalog.createRestore({
+            type: 'session', ...inspected.meta, delegationDepth: inspected.meta.delegationDepth ?? 0,
+          }, { recovery: 'strict', validation: 'current' })
+          for (const event of inspected.events) historical.decodeRow(event)
+          children.push(historicalChildCatalogSource(historical.finish()))
+        }
+        const restore = createSessionFormatCatalogWithChildren(children).createRestore({ type: 'session', ...stored, delegationDepth: stored.delegationDepth ?? 0 }, {
           recovery: 'strict', validation: 'current',
         })
         for (const event of events) restore.decodeRow(event)

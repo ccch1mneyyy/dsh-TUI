@@ -35,6 +35,15 @@ const [{ Context }, { createChannel }, { collectRecentActivity }, { settled, sle
   import('./lib/term-test.mjs'),
 ])
 
+/** A real 1×1 PNG. The image fixtures below now carry the dimension caps, so
+ *  the ingress gate runs; it measures this from the header and hands it over
+ *  untouched, and the fake store stays the only thing that assigns ids. */
+const TINY_PNG = Buffer.from(
+  '89504e470d0a1a0a0000000d4948445200000001000000010802000000907753de'
+  + '0000000970485973000003e8000003e801b57b526b0000000c49444154089963f8ffff3f0005fe02fe58f26b0e0000000049454e44ae426082',
+  'hex',
+)
+
 let failed = 0
 function check(name: string, ok: boolean, extra = ''): void {
   console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}${extra ? `  (${extra})` : ''}`)
@@ -165,6 +174,8 @@ const subagentRows = (channel: { rows: Array<{ kind: string }> }) => channel.row
       maxImagesPerMessage: 4,
       maxMessageImageBytes: 4_000_000,
       mediaTypes: ['image/png'],
+      maxImageDimension: 8192,
+      maxImagePixels: 64_000_000,
     },
     saveImage: () => Promise.resolve({ ref: 'img-1', mediaType: 'image/png', bytes: 8 }),
   })
@@ -173,7 +184,7 @@ const subagentRows = (channel: { rows: Array<{ kind: string }> }) => channel.row
   })
 
   const staged = await channel.stageComposerImage(
-    { data: new Uint8Array([1]), mediaType: 'image/png' },
+    { data: TINY_PNG, mediaType: 'image/png' },
     channel.stagedImageGeneration(),
   )
   const token = '[Image #1]'
@@ -359,15 +370,18 @@ const subagentRows = (channel: { rows: Array<{ kind: string }> }) => channel.row
   const initial = makeAgent('agent-g', 'sess-g')
   const sent: unknown[][] = []
   initial.followup = message => sent.push((message as { content: unknown[] }).content)
+  let stagedSaves = 0
   provide('attachments', {
     imageLimits: {
       maxImageBytes: 1_000_000,
       maxImagesPerMessage: 4,
       maxMessageImageBytes: 4_000_000,
       mediaTypes: ['image/png'],
+      maxImageDimension: 8192,
+      maxImagePixels: 64_000_000,
     },
     saveImage: (input: { data: Uint8Array }) => Promise.resolve({
-      ref: `img-${input.data[0]}`,
+      ref: `img-${++stagedSaves}`,
       mediaType: 'image/png',
       bytes: input.data.byteLength,
     }),
@@ -377,11 +391,11 @@ const subagentRows = (channel: { rows: Array<{ kind: string }> }) => channel.row
   })
 
   const first = await channel.stageComposerImage(
-    { data: new Uint8Array([1]), mediaType: 'image/png' },
+    { data: TINY_PNG, mediaType: 'image/png' },
     channel.stagedImageGeneration(),
   )
   const second = await channel.stageComposerImage(
-    { data: new Uint8Array([2]), mediaType: 'image/png' },
+    { data: TINY_PNG, mediaType: 'image/png' },
     channel.stagedImageGeneration(),
   )
   const firstToken = '[Image #1]'
@@ -408,15 +422,18 @@ const subagentRows = (channel: { rows: Array<{ kind: string }> }) => channel.row
   const sent: unknown[][] = []
   switched.followup = message => sent.push((message as { content: unknown[] }).content)
   provide('agents', { create: () => Promise.resolve(makeHandle(switched)) })
+  let stagedSaves = 0
   provide('attachments', {
     imageLimits: {
       maxImageBytes: 1_000_000,
       maxImagesPerMessage: 4,
       maxMessageImageBytes: 4_000_000,
       mediaTypes: ['image/png'],
+      maxImageDimension: 8192,
+      maxImagePixels: 64_000_000,
     },
     saveImage: (input: { data: Uint8Array }) => Promise.resolve({
-      ref: `img-${input.data[0]}`,
+      ref: `img-${++stagedSaves}`,
       mediaType: 'image/png',
       bytes: input.data.byteLength,
     }),
@@ -426,12 +443,12 @@ const subagentRows = (channel: { rows: Array<{ kind: string }> }) => channel.row
   })
 
   await channel.stageComposerImage(
-    { data: new Uint8Array([1]), mediaType: 'image/png' },
+    { data: TINY_PNG, mediaType: 'image/png' },
     channel.stagedImageGeneration(),
   )
   check('10a. /new 清除旧会话 capability', (await channel.newSession()) === true)
   const fresh = await channel.stageComposerImage(
-    { data: new Uint8Array([2]), mediaType: 'image/png' },
+    { data: TINY_PNG, mediaType: 'image/png' },
     channel.stagedImageGeneration(),
   )
   const reusedToken = '[Image #1]'

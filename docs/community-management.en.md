@@ -1,6 +1,10 @@
 # Community Management Framework
 
-This document defines how the dsh-TUI community proposes, discusses, tracks, and delivers public work. It does not replace the [contributing guide](contributing.en.md), [Code of Conduct](../CODE_OF_CONDUCT.en.md), or the security reporting process.
+[Documentation index](README.md) · [简体中文](community-management.md)
+
+This document defines how the dsh-TUI community proposes, discusses, tracks, and
+delivers public work. It does not replace the [contributing guide](contributing.en.md),
+[Code of Conduct](../CODE_OF_CONDUCT.en.md), or the security reporting process.
 
 ## Goals
 
@@ -20,7 +24,13 @@ This document defines how the dsh-TUI community proposes, discusses, tracks, and
 | Roadmap tracker | Public status, owners, dependencies, and exit criteria | Trackable task table |
 | Pull request | A scoped implementation with an approved entry point | Reviewable and verifiable change |
 
-The routing follows the current repository rules: feature proposals start in Discussions, bugs do not require prior approval, and code PRs should link to their tracking issue. See the [contributing guide](contributing.en.md).
+The routing follows the current repository rules:
+
+- Feature proposals start in Discussions.
+- Bugs do not require prior approval.
+- Code PRs should link to their tracking issue.
+
+See the [contributing guide](contributing.en.md).
 
 ## Roles
 
@@ -32,7 +42,9 @@ The routing follows the current repository rules: feature proposals start in Dis
 | Contributor | Provides reproductions, documentation, tests, fixes, or approved feature implementations |
 | Community member | Provides user feedback, cases, context, and design discussion |
 
-Only assign a PIC when someone is actually responsible. Without an owner and exit criteria, an item stays `Design` or `Not started` rather than being presented as active work.
+Only assign a PIC when someone is actually responsible. Without an owner and
+exit criteria, an item stays `Design` or `Not started` rather than being
+presented as active work.
 
 ## Proposal Flow
 
@@ -57,7 +69,9 @@ User problem or idea
 - how completion will be verified;
 - whether it requires a public API, configuration, or persistence change.
 
-Acceptance does not freeze the implementation. The tracking issue must still define scope, non-goals, dependencies, and exit criteria before implementation starts.
+Acceptance does not freeze the implementation. The tracking issue must still
+define scope, non-goals, dependencies, and exit criteria before implementation
+starts.
 
 ## Roadmap Rules
 
@@ -82,7 +96,9 @@ Each roadmap task should include:
 | Depends on | Prerequisite work or external conditions |
 | Exit criterion | Evidence that the task is complete |
 
-The roadmap is a public status surface, not a promise that every item will ship in order. Update it when scope changes, a phase completes, work is deferred, or a task is rejected.
+The roadmap is a public status surface, not a promise that every item will ship
+in order. Update it when scope changes, a phase completes, work is deferred, or
+a task is rejected.
 
 ## Status Legend
 
@@ -96,11 +112,13 @@ The roadmap is a public status surface, not a promise that every item will ship 
 | `⏸ Deferred` | Deliberately postponed outside the current critical path |
 | `❌ Rejected` | Discussed and declined, with the reason retained |
 
-Status changes should leave a short reason in the tracking issue. Only call a task `Done` after the PR is merged and the applicable verification is complete.
+Status changes should leave a short reason in the tracking issue. Only call a
+task `Done` after the PR is merged and the applicable verification is complete.
 
 ## Maintenance Cadence
 
-The following cadence is recommended and can be adjusted to the maintainer team's size:
+The following cadence is recommended and can be adjusted to the maintainer
+team's size:
 
 - Regular triage for new bugs, duplicates, unreproducible reports, and proposal states;
 - a roadmap check before each release;
@@ -127,4 +145,5 @@ Community health should be measured by:
 - whether new contributors can make a useful contribution from the documentation;
 - whether regressions are recorded and fed into future work.
 
-Stars, PR count, commit count, and activity alone are not the primary measures of progress.
+Stars, PR count, commit count, and activity alone are not the primary measures
+of progress.

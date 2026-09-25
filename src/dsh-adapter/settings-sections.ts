@@ -57,7 +57,7 @@ export class TuiSettingsSectionsRuntime extends Service {
         return [...settingsSectionStateFor(runtime).sections.values()]
       },
       section(ns: string) {
-        return settingsSectionStateFor(runtime).sections.get(ns.trim())
+        return settingsSectionStateFor(runtime).sections.get(ns)
       },
       subscribe(listener: () => void) {
         return subscribeSections(runtime, listener)
@@ -143,8 +143,12 @@ function settingsSectionStateFor(runtime: TuiSettingsSectionsRuntime): SettingsS
 
 function registerSection(runtime: TuiSettingsSectionsRuntime | SettingsSectionState, section: TuiSettingsSection, owner?: object): () => void {
   const state = isSectionState(runtime) ? runtime : settingsSectionStateFor(runtime)
-  const ns = section.ns.trim()
-  if (!/^[a-z][a-z0-9_-]*$/u.test(ns)) throw new TypeError(`invalid TUI settings-section namespace: ${section.ns}`)
+  // Host sections use opaque Loader IDs; rewriting them breaks settings.mutate.
+  // Plugin-owned sections retain their existing namespace validation.
+  const ns = owner === undefined ? section.ns : section.ns.trim()
+  if (!ns || (owner !== undefined && !/^[a-z][a-z0-9_-]*$/u.test(ns))) {
+    throw new TypeError(`invalid TUI settings-section namespace: ${section.ns}`)
+  }
   if (state.sections.has(ns)) throw new Error(`TUI settings section "${ns}" is already registered`)
 
   const groupIds = new Set<string>()
@@ -278,7 +282,7 @@ export function getLocalSettingsSectionsHost(ctx?: Context): TuiSettingsSections
       return [...state.sections.values()]
     },
     section(ns: string) {
-      return state.sections.get(ns.trim())
+      return state.sections.get(ns)
     },
     subscribe(listener: () => void) {
       return subscribeSections(state, listener)

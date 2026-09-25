@@ -8,6 +8,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { SettingsNamespace } from '@deepseek-ai/dsh-settings'
 import Schema from '@deepseek-ai/schemastery'
 import { Config } from './index.js'
+import { configValues, createSettingsScope, resolveSettingsNamespace, type RuntimeConfig } from './compat/settings.js'
 import { createChannel } from './channel.js'
 import { createChannelSceneOutlet } from './channel-scene-outlet.js'
 import { mountChannelUi } from './channel-ui.js'
@@ -31,6 +32,7 @@ import { migratePresetPref, readPresetPref } from '../presetPrefs.js'
 import { readEffortPref } from '../effortPrefs.js'
 import { composePreset, filterMinimalPresetTools, resolvePersistedPreset, resolvePersistedRoute, runningPresetOf } from './presets.js'
 import { ensurePackagedPresets } from './packaged-presets.js'
+import { registerBundledPresets } from './bundled-presets.js'
 import { ensureLegacySessionEventTypes, snapshotLiveSessionEvents } from './compat/index.js'
 import { clearResumeTarget, resumeTargetFromArgv, writeResumeTarget } from '../sessionHistory.js'
 import { readHomePrefs } from '../homePrefs.js'
@@ -142,7 +144,8 @@ export function resolveTuiHostMode(
   return explicitTuiLaunch ? 'invalid-explicit-launch' : 'headless-host'
 }
 
-export async function apply(ctx: Context, config: Config): Promise<void> {
+export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, configOwner: Context = ctx): Promise<void> {
+  const config = configValues<Config>(runtimeConfig)
   // /restart handoff diagnosis: the replacement process is marked by env and
   // logs its boot progress to ~/.dsh-tui/restart.log (ordinary launches stay
   // silent). First line lands before anything in this function can throw.
@@ -217,11 +220,12 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     return
   }
 
-  // The official profile launcher owns the system preset root and replaces
-  // any bundle-supplied roots at boot. Install dsh-tui's bundled presets via
-  // the roster's supported user-root seam before resolving the first agent.
-  // Never overwrite an existing directory unless it carries our marker.
-  try {
+  // Validate settings before creating an agent or taking over the terminal.
+  const tuiSettingsNs = resolveSettingsNamespace(configOwner, Config) as SettingsNamespace
+
+  // Modern hosts own a declarative registry; old hosts discover directories.
+  // A modern bundle failure must not silently fall back to obsolete files.
+  if (!await registerBundledPresets(ctx)) try {
     for (const result of ensurePackagedPresets()) {
       if (result.status === 'conflict') {
         ctx.logger.warn(
@@ -607,18 +611,11 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     resolveSettingsReady = () => resolve()
     setTimeout(resolve, 300)
   })
-  // Register the dsh-tui settings namespace so the /settings screen can
-  // edit it (the section below was '命名空间未注册' without this): the
-  // user layer in settings.yaml wins over cordis.yml's diffLayout, and
-  // watch() lands commits on the live channel — no recompose needed.
+  // Old hosts register a settings.yaml scope. 0.1.7 projects the plugin's
+  // volatile Config fields instead; both paths apply edits without remounting.
   ctx.inject(['settings'], (settingsCtx) => {
-    // alpha.2 removed the `settingsNamespace()` brand helper: register() now
-    // takes the raw string and validates it itself, while rc.2 still wants the
-    // branded handle. Brands are type-only, so the constant cast compiles
-    // against both lines and the runtime value is identical ('dsh-tui' always
-    // satisfied the namespace pattern).
-    const tuiSettingsNs = 'dsh-tui' as SettingsNamespace
-    const scope = settingsCtx.settings.register(
+    // Loader targets the Config owner's fiber, not the injected child fiber.
+    const scope = createSettingsScope<SettingsValue>(configOwner, settingsCtx.settings,
       tuiSettingsNs,
       Schema.object({
         diffLayout: Schema.union(['auto', 'split', 'unified']).default('auto'),
@@ -696,6 +693,10 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
           Object.fromEntries(SHORTCUT_ACTIONS.map(action => [action.id, Schema.string().required(false)])),
         ).required(false),
       }),
+      () => {
+        const current = configValues<Config>(runtimeConfig)
+        return { ...current, lang: isLang(current.lang) ? current.lang : undefined }
+      },
     )
     type SettingsValue = {
       diffLayout?: 'auto' | 'split' | 'unified'
@@ -772,13 +773,12 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
       applyMermaidDiagrams(value.mermaidDiagrams ?? config.mermaidDiagrams)
       channel.setStatusBar(normalizeStatusBar(value.statusBar ?? config.statusBar))
     }
-    // Shortcut overrides resolve per action: settings user layer wins over
-    // cordis.yml's `shortcuts` (same precedence as every other field);
-    // unset everywhere keeps the registry default. Applied live into the
-    // keymap module — the very next keypress matches the new combos.
+    // Legacy user scopes layer over cordis.yml. Modern Config is already
+    // resolved: an unset action must not revive its startup override.
+    // Applied live so the very next keypress matches the new combos.
     const applyShortcuts = (value: SettingsValue): void => {
       const userLayer = value.shortcuts ?? {}
-      const configLayer = config.shortcuts ?? {}
+      const configLayer = scope.legacy ? config.shortcuts ?? {} : {}
       const merged: Partial<Record<ShortcutActionId, string>> = {}
       for (const action of SHORTCUT_ACTIONS) {
         const user = userLayer[action.id]
@@ -825,7 +825,11 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     // not an explicit undefined), and the later watch commit (fullscreen
     // back to undefined) leaves the fullscreen decision unchanged.
     const bootSettings = scope.get()
-    const fullscreenMigration = planFullscreenFactoryMigration(bootSettings.fullscreen, readAppliedMigrations())
+    // The old migration applies only to the separate user layer. A modern
+    // profile's explicit inline Config must never be mistaken for that layer.
+    const fullscreenMigration = scope.legacy
+      ? planFullscreenFactoryMigration(bootSettings.fullscreen, readAppliedMigrations())
+      : 'done'
     void commitFullscreenFactoryMigration(fullscreenMigration, {
       unset: () => settingsCtx.settings.mutate(tuiSettingsNs, [{ op: 'unset', path: ['fullscreen'] }]),
     })
@@ -835,7 +839,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     const { fullscreen: staleFullscreen, ...migratedSettings } = bootSettings
     apply(fullscreenMigration === 'unset' ? migratedSettings : bootSettings)
     let lastTerminalImages = bootSettings.terminalImages ?? config.terminalImages ?? true
-    scope.watch(next => {
+    settingsCtx.effect(() => scope.watch(next => {
       apply(next)
       if (typeof next.fullscreen === 'boolean' && next.fullscreen !== bootedFullscreen) {
         notifyChannel(t('settings-fullscreen-restart'), { color: 'warning' })
@@ -845,7 +849,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
         channel.notify(t('settings-terminal-images-restart'), { color: 'warning' })
       }
       lastTerminalImages = terminalImages
-    })
+    }))
     resolveSettingsReady?.()
   })
   // The /settings screen's own section: the dsh-tui namespace comes from
@@ -965,7 +969,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
       ctx.get('tuiSettingsSections') as TuiSettingsSectionsRuntime | undefined,
     ) ?? getLocalSettingsSectionsHost(ctx)
     const unregister = settingsSections.register({
-      ns: 'dsh-tui',
+      ns: tuiSettingsNs,
       title: 'dsh-tui',
       groups: [
         { id: 'status-bar', title: 'Status bar', descriptions: { zh: '底栏设置' } },
@@ -2252,6 +2256,13 @@ function runUpdate(
       },
     )
   })
+}
+
+/** Deferred runtime failures must restore the terminal and fail the process. */
+export function handleStartupError(ctx: Context, error: unknown): void {
+  const message = error instanceof Error ? error.message : String(error)
+  void finishExit(ctx, undefined, lastBootedFullscreen ?? true, undefined,
+    `dsh-tui startup failed: ${message}`, () => disposeRootAndExit(ctx, 1))
 }
 
 /**

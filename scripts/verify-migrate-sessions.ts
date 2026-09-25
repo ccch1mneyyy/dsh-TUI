@@ -1,4 +1,4 @@
-/** Nonempty SQLite -> official format migration -> V3 JSONL round trip.
+/** Nonempty SQLite -> official format migration -> current JSONL round trip.
  * Run: node --import tsx/esm scripts/verify-migrate-sessions.ts
  * Uses disposable databases only; no credentials or live sessions.
  */
@@ -51,26 +51,37 @@ try {
     })
     await ctx.sessionPersistence.create(child.header)
     await ctx.sessionPersistence.append(child.id, child.events)
+    const worker = LegacySession.create('worker' as never, s.events, {
+      ...s.header, id: 'worker' as never, parentSession: s.id, origin: 'subagent',
+      createdAt: 2, seedLength: s.events.length,
+    })
+    await ctx.sessionPersistence.create(worker.header)
+    await ctx.sessionPersistence.append(worker.id, worker.events)
   } finally { await plugin.dispose(); await sessions.dispose() }
   const before = readFileSync(from)
-  assert.match(run(['--dry-run']), /2 migrated, 0 skipped.*0 failed/)
+  assert.match(run(['--dry-run']), /3 migrated, 0 skipped.*0 failed/)
   assert.equal(existsSync(to), false, 'dry-run must not create a destination')
   assert.deepEqual(readFileSync(from), before, 'dry-run leaves the original database byte-identical')
-  assert.match(run(), /2 migrated, 0 skipped.*0 failed/)
+  assert.match(run(), /3 migrated, 0 skipped.*0 failed/)
   assert.deepEqual(readFileSync(from), before, 'migration leaves the original database byte-identical')
-  assert.match(run(), /0 migrated, 2 skipped.*0 failed/)
+  assert.match(run(), /0 migrated, 3 skipped.*0 failed/)
 
   const dst = new Context()
   const dstPlugin = dst.plugin(JsonlSessionPersistence, { root: to })
   try {
     assert.ok(await settled(() => dst.get('sessionPersistence') !== undefined))
-    assert.equal((await dst.sessionPersistence.list()).length, 2)
-    for (const id of ['source', 'fork']) {
+    assert.equal((await dst.sessionPersistence.list()).length, 3)
+    for (const id of ['source', 'fork', 'worker']) {
       const handle = await dst.sessionPersistence.open(SessionId(id), 'read')
       try {
-        assert.equal(handle.header.version, 3)
+        assert.equal(handle.header.version, Session.create(SessionId('version-probe')).header.version)
         assert.equal(handle.header.agentPreset, 'liangshen')
         const { events, eventState } = await handle.read()
+        if (id === 'source') {
+          assert.deepEqual(events.filter(event => event.type === 'subagent/catalog').map(event => event.data), [{
+            version: 1, childId: 'worker', childCreatedAt: 2, mode: 'unknown',
+          }], 'V4 catalog preserves direct subagent membership without treating forks as subagents')
+        }
         const restored = Session.fromRestore(handle.id, events, handle.header, handle.inheritedEventCount, eventState)
         assert.deepEqual(restored.deriveMessages().map(message => message.content[0]?.type === 'text' ? message.content[0].text : ''), [
           'migrate this question', 'retained answer',
@@ -92,7 +103,7 @@ try {
   } finally { await unsupportedPlugin.dispose(); await unsupportedSessions.dispose() }
   const unsupportedBefore = readFileSync(from)
   const refused = run([], 1)
-  assert.match(refused, /0 migrated, 2 skipped.*1 failed/)
+  assert.match(refused, /0 migrated, 3 skipped.*1 failed/)
   assert.match(refused, /cannot acquire a system head/)
   assert.deepEqual(readFileSync(from), unsupportedBefore, 'unsupported migration leaves original data intact')
   console.log('PASS nonempty SQLite migration, fork lineage, dry-run, source preservation and repeat invocation')

@@ -72,9 +72,9 @@ reviews:
         不要建议改成轮询；term-test 的 settle 超时静默返回是既定设计，不要建议
         改抛出。只指出会让断言假通过或假失败的问题（等待条件与断言条件分叉、
         对已成立条件轮询、读到过期屏幕）。
-    - path: "{docs/**/*.md,README.md,README_EN.md}"
+    - path: "{docs/**/*.md,README.md,README_ZH.md}"
       instructions: >-
-        只检查中文版与 .en.md/README_EN 是否同步：行为、配置项、快捷键、限制
+        只检查中文版与 .en.md/README_ZH 是否同步：行为、配置项、快捷键、限制
         必须两版一致。不做 markdown 风格、标点与语法润色。
     - path: "{cordis.patch.yml,cordis.yml}"
       instructions: >-

@@ -1,17 +1,23 @@
 # dsh-TUI Roadmap
 
-> This file defines the long-term direction. Live task status belongs in the GitHub Roadmap tracker.
+[Documentation index](README.md) · [简体中文](roadmap.md)
+
+> This file defines the long-term direction. Live task status belongs in the
+> GitHub Roadmap tracker.
 
 ## Goal
 
-Build a reliable, recoverable, observable, and extensible DeepSeek Harness terminal workbench for long-running coding and Agent workflows.
+Build a reliable, recoverable, observable, and extensible DeepSeek Harness
+terminal workbench for long-running coding and Agent workflows.
 
 ## Current Focus
 
 1. Establish a public and trackable community workflow.
 2. Improve long-session, recovery, error-handling, and terminal compatibility reliability.
-3. Make DSH Agent, session, model, preset, permission, workspace, and plugin capabilities understandable in the terminal.
-4. Stabilize extension seams for community themes, commands, scenes, status lines, and workspace plugins.
+3. Make DSH Agent, session, model, preset, permission, workspace, and plugin
+   capabilities understandable in the terminal.
+4. Stabilize extension seams for community themes, commands, scenes, status
+   lines, and workspace plugins.
 5. Improve installation, diagnostics, documentation, releases, and contributor experience.
 
 ## Non-goals
@@ -93,7 +99,8 @@ Build a reliable, recoverable, observable, and extensible DeepSeek Harness termi
 
 ## Future Work
 
-The following items are outside the current critical path and should be reevaluated only after the prerequisite phases are stable:
+The following items are outside the current critical path and should be
+reevaluated only after the prerequisite phases are stable:
 
 - More complex remote runtimes;
 - a large official plugin collection;
@@ -106,6 +113,7 @@ The following items are outside the current critical path and should be reevalua
 - Roadmap status follows the tracking Issue and merged verification results.
 - Update phase summaries and Future Work when a phase ends.
 - Record scope changes, deferrals, and rejections in the relevant Issue.
-- Team-internal implementation strategy, refactoring plans, and non-public technical details do not belong in this public roadmap.
+- Team-internal implementation strategy, refactoring plans, and non-public
+  technical details do not belong in this public roadmap.
 
 Last updated: 2026-09-07

@@ -2,7 +2,7 @@
  * Upstream compatibility contract.
  *
  * The TUI is validated against a set of upstream prerelease lines — the
- * current primary (0.1.5-rc.1) plus older lines kept in backward
+ * current primary (0.1.7-rc.1) plus older lines kept in backward
  * compatibility across the 0.1.5, 0.1.3, 0.1.2, 0.1.1 and 0.1.0 release
  * families.
  * Every official package this adapter touches is blessed here; anything
@@ -17,12 +17,12 @@ import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 
 /** Primary validated upstream line (newest). */
-export const UPSTREAM_VALIDATED_VERSION = '0.1.5-rc.1'
+export const UPSTREAM_VALIDATED_VERSION = '0.1.7-rc.1'
 
 /**
  * Explicitly supported upstream prerelease lines, oldest first.
  *
- * 0.1.5-rc.1 = primary continuous-CI line; 0.1.5-alpha.2/alpha.1 = mapped
+ * 0.1.7-rc.1 = primary continuous-CI line; 0.1.5-rc.1/alpha.2/alpha.1 = mapped
  * compatibility lines (source-checked when the primary line moves);
  * 0.1.3-alpha.2 = compatibility line (the only 0.1.3 build on npm);
  * 0.1.2-rc.1 = previous family (full CI coverage); 0.1.2-alpha.3–alpha.5 =
@@ -48,6 +48,7 @@ export const UPSTREAM_VALIDATED_VERSIONS = [
   '0.1.5-alpha.1',
   '0.1.5-alpha.2',
   '0.1.5-rc.1',
+  '0.1.7-rc.1',
 ] as const
 
 /**
@@ -66,9 +67,9 @@ export const UPSTREAM_BLESSED_PACKAGES = [
   '@deepseek-ai/dsh-invariants',
   '@deepseek-ai/dsh-agent',
   '@deepseek-ai/dsh-agent-instructions',
-  '@deepseek-ai/dsh-agent-presets',
+  '@deepseek-ai/dsh-agent-preset-registry',
   '@deepseek-ai/dsh-atomic-write',
-  '@deepseek-ai/dsh-code-runtime-worker-thread',
+  '@deepseek-ai/dsh-ptc-runtime-node',
   '@deepseek-ai/dsh-commands',
   '@deepseek-ai/dsh-cordis-host-runner',
   '@deepseek-ai/dsh-llm',
@@ -81,6 +82,7 @@ export const UPSTREAM_BLESSED_PACKAGES = [
   '@deepseek-ai/dsh-storage-domain',
   '@deepseek-ai/dsh-storage-json',
   '@deepseek-ai/dsh-workspace',
+  '@deepseek-ai/dsh-web-app',
   '@deepseek-ai/dsh-system-prompt',
   '@deepseek-ai/dsh-terminal',
   '@deepseek-ai/dsh-terminal-bash',
@@ -97,6 +99,14 @@ export interface UpstreamDriftEntry {
   installed: string | undefined
   validated: string
 }
+
+// These capabilities are loaded dynamically and did not exist on every
+// supported host line. Their absence is valid at runtime, not in the CI tree.
+const OPTIONAL_RUNTIME_PACKAGES = new Set<string>([
+  '@deepseek-ai/dsh-agent-preset-registry',
+  '@deepseek-ai/dsh-ptc-runtime-node',
+  '@deepseek-ai/dsh-web-app',
+])
 
 /** Supported upstream prerelease channels in ascending precedence order. */
 export type UpstreamPrereleaseChannel = 'alpha' | 'beta' | 'rc'
@@ -275,7 +285,8 @@ export function upstreamDriftSummary(
 ): UpstreamDriftSummary | undefined {
   const installedLines = installedUpstreamLines(installedVersions)
   if (installedLines.length > 1) return { kind: 'mixed', versions: installedLines }
-  const drift = upstreamDrift(installedVersions)
+  const drift = upstreamDrift(installedVersions).filter(entry =>
+    entry.installed !== undefined || !OPTIONAL_RUNTIME_PACKAGES.has(entry.package))
   if (drift.length === 0) return undefined
   const harness = drift.filter(entry => UPSTREAM_FRAMEWORK_MAJORS[entry.package] === undefined)
   const versions = [...new Set(drift.map(entry => entry.installed ?? 'missing'))]

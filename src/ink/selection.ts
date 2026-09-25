@@ -71,6 +71,25 @@ export type SelectionState = {
    *  were on, xterm.js would have consumed the event for native selection
    *  and we'd never receive it. Used by the footer to show the right hint. */
   lastPressHadAlt: boolean
+  /** Rolling fingerprint (hash) of the rows under the highlight. Ink's
+   *  render loop refreshes it every frame; a change between frames
+   *  WITHOUT a paired follow-shift means screen content was replaced in
+   *  place under a stationary selection (a streaming transcript
+   *  overwriting the rows the highlight covers), and a copy from these
+   *  coordinates would read whatever text now sits there — not what the
+   *  user highlighted. Null until the first frame observes the
+   *  selection. */
+  coveredFingerprint: number | null
+  /** Geometry key (start/end row:col) the fingerprint was taken at. Any
+   *  user-driven geometry change (drag motion, word/line extension,
+   *  keyboard pan, multi-click) re-baselines instead of judging — the
+   *  guard only ever indicts a STATIONARY highlight whose text was
+   *  swapped underneath. Owned by refreshSelectionFingerprint. */
+  coveredGeometry: string | null
+  /** Sticky once the covered rows changed without follow coordination.
+   *  Commit-time copy (copySelectionNoClear) refuses and clears instead
+   *  of shipping the replaced text. Cleared on start/clear. */
+  stale: boolean
 }
 
 /**
@@ -88,6 +107,9 @@ export function createSelectionState(): SelectionState {
     scrolledOffAboveSW: [],
     scrolledOffBelowSW: [],
     lastPressHadAlt: false,
+    coveredFingerprint: null,
+    coveredGeometry: null,
+    stale: false,
   }
 }
 
@@ -119,6 +141,9 @@ export function startSelection(
   s.virtualFocusRow = undefined
   s.dragBounds = undefined
   s.lastPressHadAlt = false
+  s.coveredFingerprint = null
+  s.coveredGeometry = null
+  s.stale = false
 }
 
 /**
@@ -193,6 +218,9 @@ export function clearSelection(s: SelectionState): void {
   s.virtualFocusRow = undefined
   s.dragBounds = undefined
   s.lastPressHadAlt = false
+  s.coveredFingerprint = null
+  s.coveredGeometry = null
+  s.stale = false
 }
 
 // Unicode-aware word character matcher: letters (any script), digits,
@@ -1131,6 +1159,125 @@ function joinRows(
   } else {
     lines.push(text)
   }
+}
+
+/**
+ * Rehash the rows under the highlight and latch `stale` when they changed
+ * without a coordinated shift this frame.
+ *
+ * Copy reads whatever text occupies the highlight's screen coordinates at
+ * commit time. When the transcript REPLACES those rows in place while the
+ * highlight sits still (streaming output overwriting folded rows, a card
+ * collapsing under the anchor), the copied text is whatever moved in —
+ * visibly wrong text, not mojibake from a width bug. The follow/resize
+ * shifts keep the highlight anchored to text that MOVES; this guard catches
+ * the complementary case: stationary coordinates, moving content.
+ *
+ * Called once per rendered frame (post-render, pre-swap) on the frame the
+ * copy would read. The hash covers every visible cell of every covered row
+ * (same visibility rules as getSelectedText: noSelect and spacer cells
+ * skipped) via the cell's TEXT — `charPool.get(charId)` — not its pool
+ * index, plus the two soft-wrap inputs that decide how those cells are laid
+ * out into lines (the row's own `softWrap[row]`, and the `softWrap[row + 1]`
+ * extractRowText reads as this row's content end). styleId is excluded so
+ * the selection overlay and syntax highlighting themselves cannot trip the
+ * guard.
+ *
+ * Why content and not charId: a charId is an index into a generational
+ * CharPool, not a stable identity. Ink.resetPools() (ink.tsx) swaps in a
+ * fresh CharPool every ~5 minutes and re-interns the front frame through
+ * migrateScreenPools, so the SAME glyph comes back under a different
+ * number. Hashing ids would read that renumbering as "the covered rows
+ * changed" and refuse a perfectly legitimate copy with the stale-content
+ * notice — a false positive on a screen where nothing was replaced. The
+ * pool lookup is an array index plus a 1-2 code-unit hash loop, measured
+ * at ~0.05ms for a full 200x50 selection (~0.14ms at 200x200), i.e. no
+ * worse than hashing the ids themselves.
+ *
+ * @param s - the selection state to fingerprint.
+ * @param screen - the frame's screen buffer.
+ * @param coordinated - true when this frame translated the selection
+ *   endpoints (follow-shift or viewport resize); a fingerprint change in
+ *   such a frame is the expected content scroll, not an overwrite.
+ * @returns true when an uncoordinated change latched `stale` this call.
+ */
+export function refreshSelectionFingerprint(
+  s: SelectionState,
+  screen: Screen,
+  coordinated: boolean,
+): boolean {
+  if (s.stale) return false
+  const b = selectionBounds(s)
+  if (!b) {
+    s.coveredFingerprint = null
+    s.coveredGeometry = null
+    return false
+  }
+  // Any geometry change re-baselines: drag motion, word/line extension,
+  // keyboard pan, multi-click — the user redefined what is highlighted, so
+  // the next copy legitimately reads the new band's CURRENT text. Only a
+  // stationary highlight can go stale.
+  const geometry = `${b.start.row}:${b.start.col}-${b.end.row}:${b.end.col}`
+  if (geometry !== s.coveredGeometry) {
+    s.coveredGeometry = geometry
+    s.coveredFingerprint = null
+  }
+  const { cells, noSelect, width, height, charPool, softWrap } = screen
+  let h = 0x811c9dc5
+  for (let row = b.start.row; row <= b.end.row; row++) {
+    if (row < 0 || row >= height) continue
+    const rowOff = row * width
+    // Column bounds mirror getSelectedText exactly: the boundary rows hash
+    // only from start.col / through end.col. Streaming text appended to a
+    // covered row OUTSIDE the selected column range (stable head selected,
+    // live tail still writing) must not latch stale — the copy would not
+    // read those columns anyway.
+    const colStart = row === b.start.row ? b.start.col : 0
+    const colEnd = row === b.end.row ? b.end.col : width - 1
+    for (let col = colStart; col <= colEnd; col++) {
+      const ci = (rowOff + col) * 2
+      // word1's low 2 bits are the cell width; SpacerTail/SpacerHead carry
+      // no text of their own.
+      if ((cells[ci + 1]! & 3) >= CellWidth.SpacerTail) continue
+      if (noSelect![rowOff + col] === 1) continue
+      // Resolve the id through the pool and hash the actual characters —
+      // the exact string getSelectedText would emit for this cell. Two
+      // pools holding the same glyph hash identically, so a generational
+      // pool swap is invisible here; a different glyph is not.
+      const ch = charPool.get(cells[ci]!)
+      for (let k = 0; k < ch.length; k++) {
+        h = Math.imul(h ^ ch.charCodeAt(k), 0x01000193)
+      }
+    }
+    // Row separator + the row's soft-wrap bit: getSelectedText joins a
+    // wrapped row onto the previous line with NO newline (softWrap[row]>0)
+    // but emits a real newline otherwise — identical cells with a flipped
+    // wrap bit produce a different copy, so the fingerprint must see it.
+    h = Math.imul(h ^ 0x9e3779b9 ^ (softWrap[row]! > 0 ? 0x51ed270b : 0), 0x85ebca6b)
+    // The row BELOW is an input to THIS row's copy. extractRowText reads
+    // softWrap[row + 1] as this row's content end: > 0 means the row wraps
+    // into the next one, which both clamps the last column to
+    // min(colEnd, contentEnd - 1) and suppresses the trailing-blank trim.
+    // Flipping only the next row's wrap bit therefore rewrites the last
+    // covered line's trailing columns ("A" → "A         ") with every
+    // covered CELL unchanged — the guard has to see the wrap, not just the
+    // cells. Hash exactly what extractRowText consumes (0 = not wrapped) so
+    // a contentEnd change that does not move the clamp stays invisible
+    // instead of becoming a false positive.
+    const contentEnd = row + 1 < height ? softWrap[row + 1]! : 0
+    const wrapClamp = contentEnd > 0 ? Math.min(colEnd, contentEnd - 1) + 1 : 0
+    h = Math.imul(h ^ 0x27d4eb2f ^ wrapClamp, 0x165667b1)
+  }
+  if (s.coveredFingerprint === null) {
+    // First frame observing this selection: baseline, no verdict.
+    s.coveredFingerprint = h
+    return false
+  }
+  if (h === s.coveredFingerprint) return false
+  s.coveredFingerprint = h
+  if (coordinated) return false
+  s.stale = true
+  return true
 }
 
 /**

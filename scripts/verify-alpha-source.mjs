@@ -10,7 +10,7 @@ import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import ts from 'typescript'
 
-const EXPECTED_UPSTREAM_VERSION = process.env.DSH_HARNESS_EXPECTED_VERSION ?? '0.1.5-rc.1'
+const EXPECTED_UPSTREAM_VERSION = process.env.DSH_HARNESS_EXPECTED_VERSION ?? '0.1.7-rc.1'
 const tuiRoot = resolve(import.meta.dirname, '..')
 const sourceRoot = resolve(process.env.DSH_HARNESS_SOURCE_ROOT ?? join(tuiRoot, '../deepseek-harness'))
 const sourceManifestPath = join(sourceRoot, 'package.json')
@@ -57,6 +57,20 @@ sourcePaths['@deepseek-ai/cordis'] = [
 sourcePaths['@deepseek-ai/schemastery'] = [
   join(tuiRoot, 'node_modules/@deepseek-ai/schemastery/lib/types/index.d.ts'),
 ]
+
+// HMR is an indirect settings dependency, not a TUI-owned implementation.
+// Compile it with upstream's strict options: our renderer's noImplicitAny=false
+// changes its evolving empty arrays into never[]. Keep the declarations
+// source-authoritative rather than hiding diagnostics or using npm instead.
+const hmrProject = join(sourceRoot, 'packages/boot/hmr/tsconfig.json')
+if (existsSync(hmrProject)) {
+  const result = spawnSync(process.execPath, [
+    join(sourceRoot, 'node_modules/typescript/bin/tsc'), '-b', hmrProject,
+  ], { cwd: sourceRoot, stdio: 'inherit' })
+  if (result.error !== undefined) throw result.error
+  if (result.status !== 0) process.exit(result.status ?? 1)
+  sourcePaths['@deepseek-ai/dsh-hmr'] = [join(dirname(hmrProject), 'lib/types/index.d.ts')]
+}
 
 const typescriptRoot = dirname(fileURLToPath(import.meta.resolve('typescript/package.json')))
 // tsc requires every input file to live under rootDir. POSIX '/' covers any

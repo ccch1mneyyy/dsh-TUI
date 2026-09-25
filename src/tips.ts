@@ -37,8 +37,8 @@ export const TIPS: readonly Tip[] = [
   {
     id: 'keys-esc-levels',
     group: 'keys',
-    zh: 'Esc 逐层关闭：帮助 → 命令/文件菜单 → 清空输入',
-    en: 'Esc closes layers: help → command/file menus → clear input',
+    zh: 'Esc 逐层收：帮助 → 图片预览 → 命令/文件菜单 → 清选区 → 清空',
+    en: 'Esc peels layers: help → image preview → command/file menus → selection → clear input',
   },
   {
     id: 'keys-ctrl-o',
@@ -133,8 +133,8 @@ export const TIPS: readonly Tip[] = [
   {
     id: 'keys-shift-tab',
     group: 'keys',
-    zh: 'Shift+Tab 循环会话模式：默认→计划→完全访问',
-    en: 'Shift+Tab cycles modes: default → plan → full access',
+    zh: 'Shift+Tab 循环会话模式：默认→计划→完全访问（挂了第三方权限预设时按 registry 顺序追加到末尾）',
+    en: 'Shift+Tab cycles modes: default → plan → full access (third-party presets append in registry order)',
   },
   {
     id: 'keys-shift-up',
@@ -172,19 +172,73 @@ export const TIPS: readonly Tip[] = [
     zh: '轨迹与 /settings 支持鼠标：行点击跳转/编辑，滚轮移动光标或焦点',
     en: 'Trajectory and /settings take the mouse: row clicks jump/edit, the wheel moves cursor or focus',
   },
+  {
+    id: 'keys-session-screen',
+    group: 'keys',
+    zh: '会话管理界面：←/→ 切栏，会话栏 Enter 进会话、工作区栏 Enter 开菜单（初始焦点在工作区栏）',
+    en: 'Session manager: ←/→ switch panes; Enter enters a session (list) or opens the workspace menu (rail)',
+  },
+  {
+    id: 'keys-session-actions',
+    group: 'keys',
+    zh: '会话管理界面：Ctrl+N 新建、Ctrl+X 停止后台会话、Ctrl+L 重读列表、打字即筛选',
+    en: 'Session manager: Ctrl+N new · Ctrl+X stop a background session · Ctrl+L reload · type to filter',
+  },
+  {
+    id: 'keys-prompt-background',
+    group: 'keys',
+    zh: '输入框空着按 ←：当前会话转后台并打开会话管理界面（同 /bg）',
+    en: '← on an empty prompt backgrounds this session and opens the session manager (same as /bg)',
+  },
+  {
+    id: 'keys-jobs-esc',
+    group: 'keys',
+    zh: '/jobs 面板里 Esc 只关面板，不会中断正在跑的回合',
+    en: 'In the /jobs panel, Esc only closes the panel — it does not interrupt the turn',
+  },
+  {
+    id: 'keys-settings-arrows',
+    group: 'keys',
+    zh: '/settings 里 ←/→ 在有选项的字段上循环切换；布尔项仍只认 Enter',
+    en: 'In /settings, ←/→ cycle options on fields that have them; booleans still only toggle with Enter',
+  },
+  {
+    id: 'keys-transcript-page',
+    group: 'keys',
+    zh: '全屏下 PgUp/PgDn 按页翻消息列表，跟翻书一样',
+    en: 'Fullscreen: PgUp/PgDn page through the message list like a book',
+  },
+  {
+    id: 'keys-expand-editor',
+    group: 'keys',
+    zh: 'Ctrl+Shift+E 或输入行尾 ⛶ 展开全屏草稿编辑器，写长文更舒服',
+    en: 'Ctrl+Shift+E or the ⛶ button opens the fullscreen draft editor — great for long posts',
+  },
+  {
+    id: 'keys-composer-fold',
+    group: 'keys',
+    zh: '粘贴大段（≥6 行或 ≥600 字）折成 ▸ 小条，点它或 Esc 展开；Enter 提交的还是全文',
+    en: 'Big pastes (≥6 lines or ≥600 chars) fold into a ▸ chip; click or Esc expands, Enter sends it all',
+  },
+  {
+    id: 'keys-image-preview',
+    group: 'keys',
+    zh: '大图预览：←/→ 换张，缩放走底部按钮（适应/100%/200%/400%/800%），拖动或滚轮平移',
+    en: 'Image preview: ←/→ switch, zoom via bottom buttons (fit/100/200/400/800%), drag or wheel to pan',
+  },
 
   // ── 命令 ──────────────────────────────────────────────────
   {
     id: 'cmd-new-resume',
     group: 'commands',
-    zh: '/new 新会话；/resume 恢复历史会话',
-    en: '/new starts a session; /resume brings back old ones',
+    zh: '/new 开新会话；/resume 打开会话管理界面找回历史会话',
+    en: '/new starts a session; /resume opens the session manager to bring back old ones',
   },
   {
-    id: 'cmd-resume-search',
+    id: 'cmd-session-manager',
     group: 'commands',
-    zh: '/resume 顶部可选工作目录，← 切目录，打字搜索当前层',
-    en: '/resume has a directory selector; ← switches scope, typing searches the active list',
+    zh: '/resume、/home、/agentview、/bg 和输入框行首 ⌸，进的都是同一个会话管理界面',
+    en: '/resume, /home, /agentview, /bg and the ⌸ button all open one session manager',
   },
   {
     id: 'cmd-rename',
@@ -345,8 +399,8 @@ export const TIPS: readonly Tip[] = [
   {
     id: 'cmd-provider',
     group: 'commands',
-    zh: '/provider 交互式添加自己的模型提供方',
-    en: '/provider adds your own model provider interactively',
+    zh: '/provider 交互式管理模型提供方：添加、编辑、删除',
+    en: '/provider adds, edits or deletes model providers interactively',
   },
   {
     id: 'cmd-login',
@@ -429,16 +483,46 @@ export const TIPS: readonly Tip[] = [
     en: '/fork copies the session into a resumable twin; the original is untouched',
   },
   {
-    id: 'flow-resume',
+    id: 'flow-session-park',
     group: 'workflow',
-    zh: '/resume 里 Ctrl+S 折叠子 agent 运行',
-    en: 'In /resume, Ctrl+S folds subagent runs',
+    zh: '切换会话只是停放（先放一边），回合照跑不打断；被其他 TUI 终端占用的会标红、进不去',
+    en: 'Switching a session just parks it (the turn keeps running); a session held elsewhere turns red',
   },
   {
-    id: 'flow-resume-clean',
+    id: 'flow-draft-kept',
     group: 'workflow',
-    zh: '/resume 里 Ctrl+X 清理空壳会话',
-    en: 'In /resume, Ctrl+X prunes empty sessions',
+    zh: '去 /settings、会话管理界面、轨迹转一圈再回来，草稿（含暂存图片）原样还在',
+    en: 'Leave for /settings, the session manager or trajectory: your draft (images too) is still there',
+  },
+  {
+    id: 'flow-first-launch',
+    group: 'workflow',
+    zh: '首次普通启动（不带 --resume、工作区目标或首条提示词）落在会话管理界面选工作区，之后直接进对话',
+    en: 'First plain launch (no --resume/workspace/prompt) opens the session manager; then straight to chat',
+  },
+  {
+    id: 'flow-prompt-background-return',
+    group: 'workflow',
+    zh: '/bg 或空输入 ← 之后，再按 Esc 回到刚转后台的那个会话',
+    en: 'After /bg (or ← on empty input), Esc takes you back to the session you just backgrounded',
+  },
+  {
+    id: 'flow-dialog-paste',
+    group: 'workflow',
+    zh: '问卷、计划评审和插件对话框里都能 Ctrl+V 粘贴文本',
+    en: 'Question, plan-review and plugin dialogs all accept Ctrl+V paste',
+  },
+  {
+    id: 'flow-ide-selection',
+    group: 'workflow',
+    zh: 'VS Code 扩展 ≥0.7.0：选中代码后输入框下方显示 ⧉ N lines selected，发送自动附上选中行',
+    en: 'VS Code extension ≥0.7.0: select code to show ⧉ N lines selected below input; sent with the message',
+  },
+  {
+    id: 'flow-image-adapt',
+    group: 'workflow',
+    zh: '粘贴超尺寸图先等比缩放或转格式；需重编码的动图直接拒绝，不悄悄丢帧',
+    en: 'Oversized images get scaled or converted first; animated ones needing re-encode are refused',
   },
   {
     id: 'flow-search',
@@ -463,6 +547,12 @@ export const TIPS: readonly Tip[] = [
     group: 'workflow',
     zh: '问卷选项行直接打字 = 选项 + 自定义文本一起提交',
     en: 'Typing on a question row submits option + custom text',
+  },
+  {
+    id: 'flow-question-fold',
+    group: 'workflow',
+    zh: '问卷面板 Ctrl+K 或点标题行折叠；挂起时 Esc/Ctrl+C 先展开，不直接取消',
+    en: 'Fold the question panel with Ctrl+K or its header; when pending, Esc/Ctrl+C expands first',
   },
   {
     id: 'flow-plan-review',
@@ -505,8 +595,8 @@ export const TIPS: readonly Tip[] = [
   {
     id: 'disp-statusbar',
     group: 'display',
-    zh: '底栏 TPS、轨迹条、上下文条默认关，/settings 里打开',
-    en: 'TPS, trajectory, context bars are off by default — enable in /settings',
+    zh: '底栏 TPS、轨迹条默认关，上下文条默认开；都在 /settings 逐项开关',
+    en: 'TPS and trajectory bars are off by default, context bar on; all switch in /settings',
   },
   {
     id: 'disp-statusbar-session-id',
@@ -640,6 +730,48 @@ export const TIPS: readonly Tip[] = [
     zh: '首屏鲸鱼动画（终端 ≥64 列才显示）',
     en: 'The whale intro shows on terminals ≥64 columns',
   },
+  {
+    id: 'disp-context-legend',
+    group: 'display',
+    zh: '悬停上下文条看分段图例；读数 ≥80% 琥珀、≥95% 红，该 /compact 了',
+    en: 'Hover the context bar for its legend; ≥80% amber, ≥95% red — time to /compact',
+  },
+  {
+    id: 'disp-long-line',
+    group: 'display',
+    zh: '超过 1000 字符的单行只显示前 1000 字符，行尾标记写明折叠了多少；点它或 Ctrl+O 看全文',
+    en: 'Lines over 1000 chars show the first 1000 plus a folded-count marker; click or Ctrl+O for the rest',
+  },
+  {
+    id: 'disp-gutter',
+    group: 'display',
+    zh: '转录边栏三选一：轮次时间线 / 滚动条 / 隐藏；滚动条能直接拖',
+    en: 'Transcript gutter: timeline, scrollbar or hidden; drag the scrollbar to scroll',
+  },
+  {
+    id: 'disp-mermaid',
+    group: 'display',
+    zh: '回复里的 ```mermaid 代码块直接画成字符图，/settings 里可关',
+    en: '```mermaid fences in replies are drawn as character diagrams; toggle in /settings',
+  },
+  {
+    id: 'disp-whale-click',
+    group: 'display',
+    zh: '开始第一个任务前点鲸鱼冒爱心、唤醒睡着的它；闲置动作可在 /settings 关',
+    en: 'Before your first task, click the whale for hearts and to wake it; idle moves toggle in /settings',
+  },
+  {
+    id: 'disp-smooth',
+    group: 'display',
+    zh: '流式输出默认平滑打出（约 30fps）；嫌慢可在 /settings 关',
+    en: 'Streaming reveals smoothly by default (~30fps); turn it off in /settings',
+  },
+  {
+    id: 'disp-terminal-images',
+    group: 'display',
+    zh: '终端不支持 Kitty/Sixel 时图片只显示文字信息；预览开关在 /settings',
+    en: 'Without Kitty/Sixel, images show text only; the preview toggle lives in /settings',
+  },
 
   // ── 避坑 ──────────────────────────────────────────────────
   {
@@ -743,6 +875,30 @@ export const TIPS: readonly Tip[] = [
     group: 'pitfalls',
     zh: '需要交互 TTY；推荐 Windows Terminal ≥110 列',
     en: 'An interactive TTY is required; try Windows Terminal ≥110 cols',
+  },
+  {
+    id: 'pit-safe-mode',
+    group: 'pitfalls',
+    zh: 'dsh 异常退出会提示进入 dsh-tui safe：只读诊断 + 干净救援 profile',
+    en: 'When dsh exits badly, dsh-tui safe offers read-only diagnostics and a clean rescue profile',
+  },
+  {
+    id: 'pit-effort-fallback',
+    group: 'pitfalls',
+    zh: '偏好的推理档当前模型没有时，自动就近降一级并弹提示说明',
+    en: 'If the model lacks your preferred effort tier, it drops to the nearest lower one and says so',
+  },
+  {
+    id: 'pit-selection-guard',
+    group: 'pitfalls',
+    zh: '选中高亮的内容被就地替换时，复制会被取消，避免复制到过期文本',
+    en: 'If the text under your selection is replaced in place, the copy is cancelled',
+  },
+  {
+    id: 'pit-tooltip-select',
+    group: 'pitfalls',
+    zh: '拖选转录文字时悬浮详情卡不会弹出，免得盖住要复制的格子',
+    en: 'Hover cards stay hidden while you drag-select the transcript, so nothing covers the text you copy',
   },
 ]
 

@@ -3,7 +3,7 @@
   <img src="docs/assets/readme/logo.svg" alt="dsh-TUI 动态 Logo：鲸鱼、我想要、点亮星标、感谢、已加星标" width="560">
 </p>
 <p align="center">
-  <strong>简体中文</strong> | <a href="README_EN.md">English</a>
+  <strong>简体中文</strong> | <a href="https://github.com/ccch1mneyyy/dsh-TUI/blob/main/README.md">English (upstream)</a>
 </p>
 
 
@@ -73,6 +73,8 @@
 <!-- readme-svg-navigation:end -->
 
 ## 核心能力
+
+上游还支持 Mermaid 代码块的 Unicode 图表、可点击时间轴、Kitty/Sixel 图片预览、VS Code 选区通道、缓存命中率与推理强度显示，以及面向长会话的虚拟化渲染。完整功能列表见[上游中文说明](README_ZH.md)。
 
 <table>
   <thead><tr><th width="112" align="left">能力</th><th align="left">亮点</th></tr></thead>
@@ -157,7 +159,7 @@ TUI 启动失败时运行。子命令属于 npm 安装的启动器，仓库根�
 - [交互与命令](docs/interaction.md)：快捷键、鼠标操作、问卷与会话工作流。
 - [配置参考](docs/configuration.md)、[架构与限制](docs/architecture.md)、[贡献与开发约定](docs/contributing.md)：配置、已知限制及开发验证。
 - [VS Code 使用指南](docs/vscode.md)：集成终端与配套扩展。
-- **Herdr**：可直接在 Herdr 面板中运行 `dsh-tui`；会报告空闲、工作中与等待输入状态，Herdr 外不启用该集成。通过 `herdr agent start --kind dsh-tui` 启动及服务重启后的自动恢复，仍依赖上游提供原生 agent kind。完整说明及保留的扩展参考见[英文版](README_EN.md#herdr)。
+- **Herdr**：可直接在 Herdr 面板中运行 `dsh-tui`；会报告空闲、工作中与等待输入状态，Herdr 外不启用该集成。通过 `herdr agent start --kind dsh-tui` 启动及服务重启后的自动恢复，仍依赖上游提供原生 agent kind。相关说明见[上游英文版](https://github.com/ccch1mneyyy/dsh-TUI/blob/main/README.md#quick-start)。
 
 </details>
 

@@ -26,6 +26,26 @@ function handle(id: string) {
   } as never as { agent: ReturnType<typeof agent>; dispose(): Promise<void>; readonly disposeCount: number }
 }
 
+// Resume can await a retiring session without blocking the switch commit or
+// unrelated sessions. The registry's old Agent remains unsafe until close ends.
+{
+  const owner = createChannelOwner()
+  const gate = deferred<void>()
+  const old = { agent: agent('draining'), dispose: () => gate.promise }
+  const binding = createChannelBinding(old.agent, old as never, owner)
+  binding.switchTo(agent('next'), undefined, () => undefined)
+  let drained = false
+  const waiting = binding.waitForDisposal('session-draining').then(() => { drained = true })
+  await binding.waitForDisposal('unrelated')
+  assert.equal(drained, false)
+  assert.equal(binding.agent.id, 'next')
+  gate.resolve()
+  await waiting
+  assert.equal(drained, true)
+  await binding.waitForDisposal('session-draining')
+  owner.dispose()
+}
+
 // Deferred preparation never acquires live authority; a rival identity change
 // rejects the candidate and releases it exactly once.
 {

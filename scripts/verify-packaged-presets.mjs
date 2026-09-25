@@ -3,7 +3,7 @@ import { cp, mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { discoverPresets } from '@deepseek-ai/dsh-agent-presets'
+import { parse } from 'yaml'
 import { ensurePackagedPresets, packagedPresetRoot } from '../lib/types/dsh-adapter/packaged-presets.js'
 
 const workspace = new URL('..', import.meta.url)
@@ -20,12 +20,9 @@ try {
     { id: 'liangshen', status: 'current' },
   ])
 
-  const discovered = await discoverPresets([
-    { path: join(dshHome, '.agent-presets'), trust: 'user' },
-  ], workspace)
-  const liangshen = discovered.find(preset => preset.id === 'liangshen')
-  assert.equal(liangshen?.name, '梁神模式')
-  assert.equal(liangshen?.broken, undefined)
+  const installed = await readFile(join(dshHome, '.agent-presets', 'liangshen', 'agent.cordis.yml'), 'utf8')
+  assert.deepEqual(parse(installed, { logLevel: 'silent' }),
+    parse(await readFile(join(packagedRoot, 'liangshen', 'agent.cordis.yml'), 'utf8'), { logLevel: 'silent' }))
 
   const conflictingHome = join(temporary, 'conflicting-home')
   const conflictingPreset = join(conflictingHome, '.agent-presets', 'liangshen')

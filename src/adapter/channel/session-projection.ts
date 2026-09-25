@@ -76,6 +76,8 @@ export const KNOWN_DSH_EVENT_TYPES = new Set<string>([
   'assistant/attempt',
   // 0.1.5: the system prompt became a surface node.
   'system/message',
+  // 0.1.7: developer instructions are a distinct context-only surface node.
+  'developer/message',
   'tool/call',
   'tool/result',
   'command/run',

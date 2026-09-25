@@ -2,6 +2,8 @@ import type { Agent, AssistantStreamFrame } from '@deepseek-ai/dsh-agent'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import type { ContentBlock, StreamChunk } from '@deepseek-ai/dsh-llm'
 import type { ChannelState, ChannelGoal, ChatRow, ToolCallView, ToolResultView, ToolsRegistryLike } from './types.js'
+import type { SelectionAttachment } from '../../adapter/ports/channel-view.js'
+import { replaySelectionAttachment } from './ide-selection.js'
 import type { InputConvergence } from './input-actions.js'
 import type { BackgroundJobStore } from '../jobs.js'
 import type { TuiRendererHost } from '../renderers.js'
@@ -9,6 +11,7 @@ import { isSubagentToolName, parseJobOutputId, toolCommandOf, BACKGROUND_START_A
 import { ARGS_PREVIEW_LIMIT, harnessToolResultView, LOCAL_OUTPUT_LIMIT, prepareReplayEvents, preview, RESULT_PREVIEW_LIMIT, toolErrorText } from './transcript.js'
 import { estimateTokens, isTokenDelta, tokenDeltaChars, usageOutputTokens } from './usage.js'
 import { transcriptImagesOf, type TranscriptImage } from '../transcript-images.js'
+import { isCompactionCheckpointSource, toolResultPayload } from '../compat/messages.js'
 import { isPeakHour } from '../../deepseekPricing.js'
 import { t } from '../../i18n.js'
 import { logForDebugging } from '../../utils/debug.js'
@@ -31,6 +34,9 @@ interface ProjectionDependencies {
  /** DSH attachment service, resolved at call time (a late-mounted provider
   *  must still serve images for rows projected earlier). */
  attachments(): unknown
+ /** What a submitted message's IDE selection attached (keyed by the message
+  *  id the durable event carries), for the user row's indicator line. */
+ selectionAttached(messageId: string): SelectionAttachment | undefined
 }
 /** One authoritative reducer for both durable replay and live session events. */
 export function createChannelProjection(state: ProjectionState, deps: ProjectionDependencies) {
@@ -175,12 +181,8 @@ export function createChannelProjection(state: ProjectionState, deps: Projection
       if (local !== undefined) return local
       const tool = toolsRegistry?.get(name, deps.agent())
       if (tool?.presentResult === undefined) return undefined
-      const block = data.message.content[0]
-      // oxlint-disable-next-line typescript/no-unnecessary-condition -- durable session data may not match type
-      const content = block !== undefined && block.type === 'tool-result' ? block.content : []
       return tool.presentResult(JSON.parse(rawArgs), {
-        content,
-        isError: block?.isError === true,
+        ...toolResultPayload(data.message),
         ...(data.meta !== undefined ? { meta: data.meta } : {}),
       }) as ToolResultView | undefined
     } catch {
@@ -483,15 +485,9 @@ export function createChannelProjection(state: ProjectionState, deps: Projection
     }
     switch (event.type) {
       case 'user/message': {
-        // Compaction checkpoint: `source = { kind: 'plugin', plugin:
-        // 'compact' }` (dsh-compact's COMPACT_CHECKPOINT_SOURCE). Render the
-        // framed summary after /compact as a Divider title + a summary row
-        // that defaults folded (`compact` kind) instead of skipping it like
-        // other injected context.
-        if (
-          event.data.source.kind === 'plugin' &&
-          event.data.source.plugin === 'compact'
-        ) {
+        // Both legacy and V4 checkpoints render as a folded summary rather
+        // than disappearing with the other injected context.
+        if (isCompactionCheckpointSource(event.data.source)) {
           const summary = textOf(event.data.content)
           appendRow({ id: deps.rowIds.value, kind: 'notice', text: 'Session summary is ready' })
           deps.rowIds.value += 1
@@ -543,11 +539,22 @@ export function createChannelProjection(state: ProjectionState, deps: Projection
         const text = firstTextOf(event.data.content)
         const images = transcriptImages(event.data.content)
         if (text || images.length > 0) {
+          // IDE selection indicator: the delivery path remembered what this
+          // message attached; the durable event carries the same message id.
+          // On replay (session resumed in a NEW process) the in-memory map
+          // starts empty, so the indicator falls back to the durable content
+          // itself — the `<attached-file … selection>` block IS part of the
+          // persisted event, and the session log is the source of truth
+          // (maintainer review round 3: the indicator used to vanish after a
+          // restart because nothing re-derived it from the event).
+          const selectionAttached = deps.selectionAttached(event.data.id)
+            ?? replaySelectionAttachment(event.data.content)
           appendRow({
             id: deps.rowIds.value,
             kind: 'user',
             text,
             ...(images.length === 0 ? {} : { images }),
+            ...(selectionAttached === undefined ? {} : { selectionAttached }),
             seq: event.seq,
           })
           state.lastUserText = text || t('transcript-image-message', { count: images.length })
@@ -797,17 +804,15 @@ export function createChannelProjection(state: ProjectionState, deps: Projection
           const images = transcriptImages(event.data.message.content)
           card.images = images.length === 0 ? undefined : images
           card.tool.durationMs = Math.max(0, Date.now() - card.tool.startedAt)
-          const failure = event.data.error
-          if (failure !== undefined) {
+          const payload = toolResultPayload(event.data.message)
+          if (event.data.error !== undefined || payload.isError) {
             card.tool.status = 'error'
             const errorText = toolErrorText(event)
             card.tool.errorText = errorText
             state.contextSegments.tools += estimateTokens(errorText)
           } else {
             card.tool.status = 'ok'
-            const block = event.data.message.content[0]
-            // oxlint-disable-next-line typescript/no-unnecessary-condition -- durable session data may not match type
-            const result = block !== undefined && block.type === 'tool-result' ? textOf(block.content) : ''
+            const result = textOf(payload.content)
             card.tool.resultFull = result || undefined
             card.tool.resultText = result ? preview(result, RESULT_PREVIEW_LIMIT) : undefined
             // The tool's own settled-state view (applied diff, terminal
@@ -898,7 +903,9 @@ export function createChannelProjection(state: ProjectionState, deps: Projection
         }
         const reason = event.data.reason
         if (reason.kind === 'completed') {
-          deps.checkContextWarning()
+          // Replay drains a resumed session's history through the projector;
+          // its totals describe the past, not a live context-low state.
+          if (!replaying) deps.checkContextWarning()
           break
         }
         if (reason.kind === 'aborted' || reason.kind === 'interrupted') {
@@ -920,7 +927,10 @@ export function createChannelProjection(state: ProjectionState, deps: Projection
         const detail = reason.kind === 'error' ? cleanRenderText(reason.error.message, NOTICE_CELLS) : ''
         appendRow({ id: deps.rowIds.value, kind: 'notice', text: `turn ${reason.kind}${detail ? ` · ${detail}` : ''}` })
         deps.rowIds.value += 1
-        deps.notify(
+        // Historical failure notices belong to the transcript row above;
+        // re-raising them as a live toast on every /resume re-alarmes the
+        // user over a turn that already ended.
+        if (!replaying) deps.notify(
           t('turn-failed', { detail: detail ? ` · ${detail}` : '' }),
           { color: 'error', timeoutMs: 8000 },
         )

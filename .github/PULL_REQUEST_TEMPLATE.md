@@ -30,6 +30,6 @@
 
 - [ ] 只改了 `src/`，没有手改或提交 `lib/` 下的生成产物
 - [ ] 官方 `@deepseek-ai/*` 的 import 仍只出现在 `src/dsh-adapter/` 内
-- [ ] 行为、配置、快捷键与限制的改动已在 `README.md` 与 `README_EN.md` 双语同步
+- [ ] 行为、配置、快捷键与限制的改动已在 `README.md`（英文）与 `README_ZH.md`（中文）双语同步
 - [ ] 改了 `cordis.patch.yml` 的话，`patch-surface.snapshot.json` 已同步
 - [ ] 只暂存了显式路径，没有用 `git add .` / `git add -A`

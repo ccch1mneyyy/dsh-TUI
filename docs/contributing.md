@@ -10,23 +10,27 @@
 - **报告 bug**：用 bug 表单提交 issue，填写版本、终端环境与最短复现步骤。
   报告不预留实现，也不授权开 PR。
 - **提功能建议**：发到 [Discussions Ideas](https://github.com/ccch1mneyyy/dsh-TUI/discussions/new?category=ideas)。
-  Issues 不接受功能请求。维护者认可后会开一个 issue 跟踪实现，实现由该 issue
-  的 assignee 负责。**拿到认可之前不要开始写代码**——被否的提案里已经有 OAuth、
-  `/cost`、通知、插件 API、remote runtime 几套写完整才被关掉的实现。
-  Discussion、issue、评论或「维护者同意了」的转述，都不构成开 PR 的许可。
+  - Issues 不接受功能请求。
+  - 维护者认可后开 issue 跟踪实现，由该 issue 的 assignee 负责。
+  - **拿到认可前不要开始写代码**。被否的提案里已有 OAuth、`/cost`、
+    通知、插件 API、remote runtime 几套写完整才被关掉的实现。
+  - Discussion、issue、评论或「维护者同意了」的转述，
+    都不构成开 PR 的许可。
 - **提交 PR**：只有仓库 write/admin/maintain 协作者，或
-  [`.github/APPROVED_CONTRIBUTORS`](../.github/APPROVED_CONTRIBUTORS) 名单中的
-  用户，可以提交实现 PR。其余人的实现 PR 会被 `pr-gate` 自动关闭，不论体积、
-  标题、测试结果，也不论是人还是 Agent 写的。
-  名单由维护者按既有信任添加，不是申请制——不要开 issue 或 Discussion 申请加入。
-  名单只允许提交 PR，不授予 write，也不预审功能范围。
-  维护者 reopen 一次已关闭的 PR 可作为例外；其他人 reopen 会被再次关闭。
-  base 指向 `main`。保持改动聚焦——一个 PR 只做一个逻辑改动，
-  标题用中文或中英对照，描述写清动机、改动点与验证方式。
-  **改动代码的 PR 必须关联 issue**：描述里写一行 `Closes #<issue 号>`，或用
-  侧边栏 Development 关联。CI 的 `issue-link` 组会检查，没有关联即判失败。
-  CI 判定为纯文档的改动不需要（路径分流见“验证”）；维护者的 release、回滚、CI
-  急修等确实无 issue 可关联的场合，打 `no-issue-needed` 标签豁免。
+  [`.github/APPROVED_CONTRIBUTORS`](../.github/APPROVED_CONTRIBUTORS) 名单中的用户，
+  可以提交实现 PR。
+  - 其余人的实现 PR 会被 `pr-gate` 自动关闭，不论体积、标题、测试结果，
+    也不论是人还是 Agent 写的。
+  - 名单由维护者按既有信任添加，不是申请制；不要开 issue 或 Discussion 申请加入。
+  - 名单只允许提交 PR，不授予 write，也不预审功能范围。
+  - 维护者 reopen 一次已关闭的 PR 可作为例外；其他人 reopen 会被再次关闭。
+  - base 指向 `main`。保持改动聚焦：一个 PR 只做一个逻辑改动。
+    标题用中文或中英对照，描述写清动机、改动点与验证方式。
+  - **改动代码的 PR 必须关联 issue**：描述里写一行 `Closes #<issue 号>`，
+    或用侧边栏 Development 关联。CI 的 `issue-link` 组会检查，没有关联即判失败。
+  - CI 判定为纯文档的改动不需要关联（路径分流见“验证”）。
+    维护者的 release、回滚、CI 急修等确实无 issue 可关联时，
+    打 `no-issue-needed` 标签豁免。
 - **请求 review 前先跑验证矩阵**：CI 运行的就是下面这些命令。
 - 新功能应附带或扩展一个聚焦的回归脚本。
 
@@ -45,10 +49,12 @@ Discussions。人不能用「私下批准」、关联 issue 或粘贴维护者�
 本文件适用于整个仓库。它是 `@deepseek-harness-tui/dsh-tui` 的共享开发契约，
 适用于在本仓库工作的所有人与编码 Agent。
 
-`@deepseek-harness-tui/dsh-tui` 是单包、纯 ESM 的 TypeScript 项目：为 DeepSeek Harness 提供
-React 终端 UI 前门（通过 Cordis 挂载）。包内拥有 TUI、本地命令面
-以及 Ink/Yoga 渲染器；Agent、会话、模型、工具、技能、持久化与策略域由
-DeepSeek Harness 拥有，TUI 只消费它们。
+`@deepseek-harness-tui/dsh-tui` 是单包、纯 ESM 的 TypeScript 项目：
+为 DeepSeek Harness 提供 React 终端 UI 前门（通过 Cordis 挂载）。
+
+- 包内拥有 TUI、本地命令面以及 Ink/Yoga 渲染器。
+- Agent、会话、模型、工具、技能、持久化与策略域由 DeepSeek Harness 拥有，
+  TUI 只消费它们。
 
 做大改动前，先读 `package.json`、相关 README 章节和你将要编辑的每个源文件。
 优先复用仓库现有的服务边界与辅助函数，而不是引入平行的抽象。
@@ -58,17 +64,18 @@ DeepSeek Harness 拥有，TUI 只消费它们。
 - `src/index.ts`：公共 Cordis 插件入口、配置 Schema，与对运行时插件的惰性移交。
 - `src/dsh-adapter/plugin.ts`：TTY 校验、服务注册、Agent 创建/恢复、React 树挂载，以及
   终端/进程的收尾清理。
-- `src/dsh-adapter/questions-answerer.ts` 与 `preset-resolution.ts`：隔离
-  user-questions / agent-preset 的上游预发布兼容分派，避免把版本分支散进
-  bootstrap 与 channel 动作面。注意：问卷
-  "provider 座位"守卫（DUPLICATE_PROVIDER 探测 + 私有 symbol 校验，#586）只在
-  旧 rc 的 `registerProvider` 路径生效。0.1.2 线的 `user-questions/request`
-  waterfall 对带 agent 的请求先按 scope 过滤 listener；agentless 的 `/auth` 请求
-  不带 scope carrier。按 answerer 约定，首个不调用 `next()` 委派的 eligible
-  listener 会 claim 请求；但 Cordis waterfall 是 around middleware，外层 listener
-  即使调用 `next()` 也能观察、替换或拒绝下游结果，`{ prepend: true }` 会把 listener
-  插到队首。上游没有受支持的方法发现或保留可验证的独占 claimant，因此 legacy
-  seat guard 及其告警无法在本地复现。
+- `src/dsh-adapter/questions-answerer.ts` 与 `preset-resolution.ts`：
+  隔离 user-questions / agent-preset 的上游预发布兼容分派，避免把版本分支
+  散进 bootstrap 与 channel 动作面。
+  - 问卷 "provider 座位"守卫（DUPLICATE_PROVIDER 探测 + 私有 symbol 校验，#586）
+    只在旧 rc 的 `registerProvider` 路径生效。
+  - 0.1.2 线的 `user-questions/request` waterfall 对带 agent 的请求先按 scope
+    过滤 listener；agentless 的 `/auth` 请求不带 scope carrier。
+  - 按 answerer 约定，首个不调用 `next()` 委派的 eligible listener 会 claim 请求。
+  - 但 Cordis waterfall 是 around middleware：外层 listener 即使调用 `next()`
+    也能观察、替换或拒绝下游结果；`{ prepend: true }` 会把 listener 插到队首。
+  - 上游没有受支持的方法发现或保留可验证的独占 claimant，
+    因此 legacy seat guard 及其告警无法在本地复现。
 - `src/dsh-adapter/channel.ts`：事件到视图的投影 + 非 React 的动作面。把 DSH 会话事件
   翻译成 transcript 行，实现 submit、steer、rewind、resume、模型/preset 切换、
   本地报告及相关状态迁移。
@@ -87,17 +94,18 @@ DeepSeek Harness 拥有，TUI 只消费它们。
 - `src/terminal-utils/`：终端格式化与呈现辅助。
 - `src/*Prefs.ts`、`src/customTheme.ts`、`src/sessionHistory.ts`：持久化的
   用户偏好与 `~/.dsh-tui` 下的本地会话元数据。
-- `.agents/skills/*/SKILL.md`：仅供仓库维护者使用的项目技能，由 DSH 文件系统 provider 发现，不随 npm 包分发。
+- `.agents/skills/*/SKILL.md`：仅供仓库维护者使用的项目技能，由 DSH 文件系统
+  provider 发现，不随 npm 包分发。
 - `cordis.patch.yml`：profile 安装时使用的包级 bundle 覆盖层。行的顺序、行 ID、
-  被禁用的 host 行、insert/override 语义都很关键。
+  被禁用的 host 行、insert 与 override 的区分都很关键。
 - `cordis.yml`：直接 Cordis/DSH 启动的完整裸组合示例。
 - `scripts/`：无头回归、复现环境、探针与诊断。运行前先读脚本头部说明。
 - `.github/scripts/pr-intake/`：PR 入口门禁（语言、关单文案、白名单、issue-link）。
   workflow 只编排；`pr-gate.yml` 必须 checkout 默认分支，不能跑 PR 头。
 - `lib/`：由 `src/` 生成、忽略入库并随 npm 分发的 JavaScript、声明与声明映射。
   `./invariant` 也直接使用 `lib/types/dsh-adapter/invariant.js` 的编译结果。
-- `README.md` 与 `README_EN.md`：中英文用户文档。行为、配置、快捷键与限制
-  必须两版同步。
+- `README.md`（英文，默认门面）与 `README_ZH.md`（中文）：双语用户文档。
+  行为、配置、快捷键与限制必须两版同步。
 
 ## 运行时形态（Runtime Shape）
 
@@ -141,30 +149,33 @@ Cordis config
   避免无关升级。
 - 本包运行时或发布类型引用到的 `@deepseek-ai/*` 框架包（与
   `UPSTREAM_BLESSED_PACKAGES` 一一对应，含 `@deepseek-ai/schemastery`）必须同时
-  是 peer 与 dev 依赖：框架包由宿主提供，profile 内运行时经
-  `$DSH_HOME/profiles/node_modules` 回退树解析到宿主实例（见 #198——声明为
-  runtime dependency 会在 profile 里落下真实拷贝，与宿主形成双模块实例）；
-  dev 声明只为本地类型检查。新增此类引用时两组声明都要加、范围保持一致
-  （verify:manifest-deps 门禁会校验）。仅测试/脚本使用的框架包
-  （如 dsh-settings、dsh-tools、dsh-session-persistence-*）只需 dev 依赖，
-  不要为它们声明 peer。`dsh-working-activity` 等非宿主包仍是 runtime
-  dependency。历史例外已消除：`dsh-working-activity@0.2.4` 及更早版本会经其
-  runtime dependency 把 `@deepseek-ai/schemastery`（连带 cosmokit）的真实拷贝
-  带进 profile；0.2.5 起已 peer 化（working-activity#2），profile 内不再
-  有任何框架包拷贝。保持依赖范围不低于 `^0.2.6`（0.2.6 另修复了 web 端
-  WorkingLine 在未打补丁宿主上的空值守卫，working-activity#5）。
+  是 peer 与 dev 依赖。
+  - 框架包由宿主提供，profile 内运行时经 `$DSH_HOME/profiles/node_modules`
+    回退树解析到宿主实例（见 #198——声明为 runtime dependency 会在 profile
+    里落下真实拷贝，与宿主形成双模块实例）；dev 声明只为本地类型检查。
+  - 新增此类引用时两组声明都要加、范围保持一致（verify:manifest-deps 门禁会校验）。
+  - 仅测试/脚本使用的框架包（如 dsh-settings、dsh-tools、dsh-session-persistence-*）
+    只需 dev 依赖，不要为它们声明 peer。
+  - `dsh-working-activity` 等非宿主包仍是 runtime dependency。
+  - 历史例外已消除：`dsh-working-activity@0.2.4` 及更早版本会经其 runtime
+    dependency 把 `@deepseek-ai/schemastery`（连带 cosmokit）的真实拷贝带进
+    profile；0.2.5 起已 peer 化（working-activity#2），profile 内不再有任何框架包拷贝。
+  - 保持依赖范围不低于 `^0.2.6`（0.2.6 另修复 web 端 WorkingLine
+    在未打补丁宿主上的空值守卫，working-activity#5）。
 - 不要暴露、持久化或打印凭证。交互启动读取 `DEEPSEEK_API_KEY`；诊断可以
   报告是否已设置，但绝不能泄露完整值。
 
 ## 构建与生成产物（Build And Generated Files）
 
-常规构建与类型检查关口：`pnpm build`。该命令先删除整个 `lib/`，再用
-`tsc -p tsconfig.json` 把 `src/` 输出到 `lib/types/`，最后运行适配边界、上游
-契约与 patch surface 门禁。`prepare` 生命周期只服务**源码检出场景**的自举
-编译（vendor 子模块缺失时快速失败，见 scripts/prepare-guard.mjs）；Git URL
-依赖安装自 vendoring（#308）起三重阻断（workspace 依赖/子模块/pnpm ≥11
-prepare 白名单），不受支持，请装 registry 包。本地与 CI 使用显式命令，不
-依赖 pnpm 是否隐式执行根包生命周期。
+常规构建与类型检查关口：`pnpm build`。
+
+- 该命令先删除整个 `lib/`，再用 `tsc -p tsconfig.json` 把 `src/` 输出到
+  `lib/types/`，最后运行适配边界、上游契约与 patch surface 门禁。
+- `prepare` 生命周期只服务**源码检出场景**的自举编译（vendor 子模块缺失时
+  快速失败，见 scripts/prepare-guard.mjs）。
+- Git URL 依赖安装自 vendoring（#308）起三重阻断（workspace 依赖/子模块/
+  pnpm ≥11 prepare 白名单），不受支持，请装 registry 包。
+- 本地与 CI 使用显式命令，不依赖 pnpm 是否隐式执行根包生命周期。
 
 生成产物规则：
 
@@ -187,11 +198,14 @@ prepare 白名单），不受支持，请装 registry 包。本地与 CI 使用�
 仓库没有根级 `test` 或 `lint` 脚本；不要声称跑过它们。TypeScript 构建是通用
 静态关口，随后是聚焦的可执行回归。
 
-本地验证按实际影响选择。文档与 skill 改动检查事实、链接、触发条件和指令
-冲突；普通注释改动检查说明与实现一致，并确认代码和类型未变（可用忽略
-注释的 AST 对比）。编译器指令、JSDoc 类型标注和构建工具注解不算普通注释。
-workflow 与 YAML 改动检查语法和受影响的配置契约。不为纯文字改写新增行为
-测试；所需检查通过后，仅因新改动、失败或未解决的风险扩大或重复验证。
+本地验证按实际影响选择。
+
+- 文档与 skill 改动：检查事实、链接、触发条件和指令冲突。
+- 普通注释改动：检查说明与实现一致，并确认代码和类型未变（可用忽略
+  注释的 AST 对比）。编译器指令、JSDoc 类型标注和构建工具注解不算普通注释。
+- workflow 与 YAML 改动：检查语法和受影响的配置契约。
+- 不为纯文字改写新增行为测试；所需检查通过后，仅因新改动、失败或未解决的
+  风险扩大或重复验证。
 
 CI 另按 `.github/workflows/ci.yml` 的 `changes` 路径白名单分流：`AGENTS.md`、
 `.agents/skills/` 和源码中的注释不在文档豁免内，仍会触发代码门禁。本地无需
@@ -236,7 +250,7 @@ CI 回归都要跑。窄改动还要跑最近的聚焦脚本：
 | 输入框鼠标选区编辑（拖选/Shift+click/双击选词/删除替换/Esc 分层/Ctrl+C 复制、CJK 宽字符与 fold 侧钳制） | `node --import tsx/esm scripts/verify-input-selection.tsx` |
 | Sixel 编码、worker 缓存、缩略图/预览生命周期 | `node --import tsx/esm scripts/verify-terminal-images-sixel.tsx`、`node --import tsx/esm scripts/verify-sixel-transcript.tsx`；耗时对比 `node --import tsx/esm scripts/bench-sixel-encode.tsx` |
 | Markdown 独立节点（表格、mermaid 图）与流式分块间距 | `pnpm verify:table-layout`、`pnpm verify:mermaid-diagram`、`node --import tsx/esm scripts/verify-streaming-markdown-spacing.tsx` |
-| 跨进程会话占用账本（失败语义、严格读、锁回收、预约） | `pnpm verify:session-mounts` |
+| 跨进程会话占用账本（失败行为、严格读、锁回收、预约） | `pnpm verify:session-mounts` |
 | 未发送草稿的跨屏交接（快照、光标、图片绑定、归属） | `pnpm verify:composer-draft-handoff`；端到端换屏另见 `node scripts/verify-session-browser.mjs` |
 
 多数用普通 `node` 调用的脚本 import `lib/types/`——先跑 `pnpm build`。import
@@ -244,22 +258,24 @@ TypeScript 源的脚本在头部声明 `node --import tsx/esm <script>` 形式�
 扩展名推断输入层：例如 `verify-themes.mjs` 其实通过 tsx import `src/`。
 
 写回归脚本时，等待原语用 `scripts/lib/term-test.mjs`：「等待后断言」用
-`settled`，「等待后操作」用 `settle`。保留的固定 `sleep(` 必须带机读标签
-`固定窗:探针` / `固定窗:墙钟` / `固定窗:pacing`（定义见该文件头部），写在
-sleep 同行尾注释或紧贴上方的注释里。`verify:fixed-window` 门禁扫描
-`scripts/run-ci-group.mjs` 登记的脚本，无标签即失败；`固定窗:待迁移` 是存量技术
-债（清零跟踪 #791），按文件计数锁在 `scripts/fixed-window.baseline.json`：任一
-文件增加即失败，旧债减少不能抵消；清掉一处后用 `--write-baseline` 重写基线并
-一起提交。新代码不得使用。
+`settled`，「等待后操作」用 `settle`。
+
+- 保留的固定 `sleep(` 必须带机读标签 `固定窗:探针` / `固定窗:墙钟` /
+  `固定窗:pacing`（定义见该文件头部），写在 sleep 同行尾注释或紧贴上方注释里。
+- `verify:fixed-window` 门禁扫描 `scripts/run-ci-group.mjs` 登记的脚本，无标签即失败。
+- `固定窗:待迁移` 是存量技术债（清零跟踪 #791），按文件计数锁在
+  `scripts/fixed-window.baseline.json`：任一文件增加即失败，旧债减少不能抵消。
+- 清掉一处后用 `--write-baseline` 重写基线并一起提交。新代码不得使用。
 
 部分脚本是取证/交互工具而非有界测试：堆/泄漏脚本、PTY 探针、回放捕获、
 性能探针与 `scripts/run.ts` 可能依赖特定 OS、终端、原生依赖、DSH 检出或长时
 进程。读头部与前置条件，不要把 `scripts/` 当套件全跑。
 
-终端可见改动：无头断言必要但不充分。环境可用时，在 inline 与 fullscreen 两种
-模式、窄终端宽度下手动走一遍受影响流程：启动、resize、滚动、输入、取消与干净
-退出。Windows ConPTY、tmux、OSC 剪贴板与同步输出有独立路径，改动它们时用对应
-探针。
+终端可见改动：无头断言必要但不充分。
+
+- 环境可用时，在 inline 与 fullscreen 两种模式、窄终端宽度下手动走一遍
+  受影响流程：启动、resize、滚动、输入、取消与干净退出。
+- Windows ConPTY、tmux、OSC 剪贴板与同步输出有独立路径，改动它们时用对应探针。
 
 `pnpm tui` 调用 `scripts/run.ts`，它假定包位于 DeepSeek Harness monorepo
 （`apps/cli` + `packages/*`）布局内，不是可移植的独立冒烟命令。端到端集成检查：
@@ -285,9 +301,10 @@ sleep 同行尾注释或紧贴上方的注释里。`verify:fixed-window` 门禁�
   就地内联。
 - 保护环境敏感 import 的初始化顺序。`FORCE_COLOR`、`NODE_ENV`、终端能力标志
   常在模块求值时读取；把 import 移到它们初始化之前会无类型错误地改变行为。
-  直接 import `lib/types/` 的回归脚本绕过了包入口，React 会按 dev 构建加载，
-  每次 commit 都把组件 props 整份 structured-clone 一遍；把大图 buffer 当
-  props 传递的脚本要把 `lib/types/force-production-react.js` 放在第一个 import。
+  - 直接 import `lib/types/` 的回归脚本绕过包入口，React 会按 dev 构建加载，
+    每次 commit 都把组件 props 整份 structured-clone 一遍。
+  - 把大图 buffer 当 props 传递的脚本要把 `lib/types/force-production-react.js`
+    放在第一个 import。
 
 ## 项目指引与技能（Agent Instructions And Skills）
 
@@ -385,7 +402,7 @@ sleep 同行尾注释或紧贴上方的注释里。`verify:fixed-window` 门禁�
 
 | 改动 | 需要同步 |
 | --- | --- |
-| 插件配置或环境行为 | `src/index.ts`、运行时消费、`cordis.patch.yml`、`cordis.yml`、`README.md`、`README_EN.md` |
+| 插件配置或环境行为 | `src/index.ts`、运行时消费、`cordis.patch.yml`、`cordis.yml`、`README.md`、`README_ZH.md` |
 | Slash 命令或快捷键 | `src/commands.ts`、`src/screens/Chat.tsx`、帮助/输入组件、双 README、相关技能映射/测试 |
 | 主题契约、插件接缝或持久化主题行为 | `src/theme.ts`、`src/themeCatalog.ts`、`src/dsh-adapter/themes.ts`、所有色板、主题 provider/picker、自定义主题解析器、主题验证、双 README、插件文档 |
 | 会话/channel 行为 | `src/dsh-adapter/channel.ts`、受影响的 UI 投影、编译产物、聚焦 channel/回放回归 |
@@ -409,10 +426,10 @@ sleep 同行尾注释或紧贴上方的注释里。`verify:fixed-window` 门禁�
   `package.json` 版本完全一致，随后构建、跑聚焦回归并发布 npm。版本变更与
   tag 是发布操作，不是日常清理。
 - Release note 带贡献者署名：建 GitHub Release 用
-  `gh release create vX.Y.Z --notes-file notes.md --generate-notes`——手写摘要
-  在前，GitHub 在后面自动追加 What's Changed（PR 标题 + 作者 + 链接）、
-  New Contributors 与 Full Changelog；`.github/release.yml` 从自动清单里排除
-  bot。手写摘要中来自外部贡献者的条目在末尾标 `（#PR号 by @用户名）`，维护者
-  自己的条目不标；裸写 `#123` 与 `@user`，GitHub 渲染成链接。
+  `gh release create vX.Y.Z --notes-file notes.md --generate-notes`。
+  - 手写摘要在前，GitHub 在后自动追加 What's Changed（PR 标题 + 作者 + 链接）、
+    New Contributors 与 Full Changelog；`.github/release.yml` 从自动清单里排除 bot。
+  - 手写摘要中来自外部贡献者的条目在末尾标 `（#PR号 by @用户名）`，
+    维护者自己的条目不标；裸写 `#123` 与 `@user`，GitHub 渲染成链接。
 - 移交代码改动前检查 `git diff --check`、源码 diff、生成 diff 与 `git status`，
   并如实报告跑了哪些验证、哪些平台/凭证相关的检查没跑。

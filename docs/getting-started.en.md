@@ -6,11 +6,11 @@
 
 - Node.js `^22.19 || >=24`; CI uses Node 24.
 - The official DeepSeek Harness CLI: `@deepseek-ai/dsh`.
-- `pnpm` **10 or newer** (CI uses 11); `dsh plugin` delegates profile
-  installation to pnpm. pnpm 9 hoists transitive dependencies differently,
+- `pnpm` **10 or newer** (CI uses 11). `dsh plugin` delegates profile
+  installation to pnpm; pnpm 9 hoists transitive dependencies differently,
   leaving `dsh-working-activity` unresolvable inside the profile — the TUI
-  then exits right after startup with almost no error output (issue #60,
-  see Troubleshooting below).
+  then exits right after startup with almost no error output (issue #60, see
+  Troubleshooting below).
 - An interactive terminal TTY. `dsh-tui` cannot start with stdout redirected.
 - `DEEPSEEK_API_KEY`. Set `DEEPSEEK_BASE_URL` as well when using a compatible
   custom endpoint.
@@ -54,11 +54,13 @@ command. It does not copy source files and does not require a local build.
 
 ## Migrate from the former package
 
-Earlier releases used the unscoped `dsh-cc-tui` package and a `cc-tui`
-profile, with `CC_TUI_*`/`DSH_CC_*` environment variables and a `~/.dsh-cc`
-data directory. The current identity is `@deepseek-harness-tui/dsh-tui` in a
-`dsh-tui` profile, using only `DSH_TUI_*` variables and `~/.dsh-tui`. Create
-the new profile with:
+Earlier releases used the unscoped `dsh-cc-tui` package and a `cc-tui` profile:
+
+- `CC_TUI_*`/`DSH_CC_*` environment variables.
+- a `~/.dsh-cc` data directory.
+
+The current identity is `@deepseek-harness-tui/dsh-tui` in a `dsh-tui` profile,
+using only `DSH_TUI_*` variables and `~/.dsh-tui`. Create the new profile with:
 
 ```sh
 dsh plugin --profile dsh-tui add @deepseek-harness-tui/dsh-tui
@@ -68,9 +70,12 @@ dsh --profile dsh-tui
 The current release no longer reads the old names and does not migrate data
 automatically. After first launch, copy themes, configuration and history
 files from the old data directory (`~/.dsh-cc`) into `~/.dsh-tui` yourself.
-Once the new profile works, `$DSH_HOME/profiles/cc-tui` and the old data
-directory are just former-installation leftovers and may be removed when
-convenient. Do not add both packages to the same profile.
+
+Once the new profile works:
+
+- `$DSH_HOME/profiles/cc-tui` and the old data directory are just
+  former-installation leftovers and may be removed when convenient.
+- Do not add both packages to the same profile.
 
 ## What installation does
 
@@ -89,9 +94,10 @@ The important startup order is:
 dsh-base -> other bundles -> @deepseek-harness-tui/dsh-tui patch -> user profile patch
 ```
 
-The base supplies agent, model, session, filesystem, shell, policy, and
-registry services. The plugin patch overrides or inserts the TUI, agent-preset
-roster, SQLite session persistence, and live activity row.
+- The base supplies agent, model, session, filesystem, shell, policy, and
+  registry services.
+- The plugin patch overrides or inserts the TUI, agent-preset roster, SQLite
+  session persistence, and live activity row.
 
 `dsh-working-activity` is already a dependency of this package and is inserted
 by the `dsh-tui` patch. Do not separately add `dsh-working-activity` to the
@@ -113,9 +119,79 @@ dsh-tui.cmd
 dsh-tui.cmd --resume
 ```
 
-`--resume` reads `%USERPROFILE%\.dsh-tui\resume.txt` and restores the session
-last selected by the TUI. Set `DSH_TUI_WORKSPACE` to override the working
-directory used by the batch launcher.
+- `--resume` reads `%USERPROFILE%\.dsh-tui\resume.txt` and restores the
+  session last selected by the TUI.
+- Set `DSH_TUI_WORKSPACE` to override the working directory used by the batch
+  launcher.
+
+## CLI subcommands
+
+`dsh-tui help` (or `dst help`) prints the full usage; the `dst` alias accepts
+the same commands:
+
+| Command | Purpose |
+| --- | --- |
+| `dsh-tui update` | Update the profile to the latest release and align the launcher (same install logic as the in-TUI `/update`, without restarting into the TUI) |
+| `dsh-tui doctor` | Environment checks: dsh/pnpm, profile install and version alignment, whether the API key is set (state only, never the value), config file presence; complements the in-TUI `/doctor` session diagnostics |
+| `dsh-tui safe` | Safe mode: read-only diagnostics, inventory, repair guidance (`safe --rescue` also creates/verifies the clean rescue profile) |
+| `dsh-tui version` | Show the launcher and profile versions (`--version`/`-v` are equivalent) |
+| `dsh-tui help` | Show usage (`--help`/`-h` are equivalent) |
+
+`help`/`version` work even when dsh is missing or the profile is not
+initialized; every other argument is forwarded verbatim to
+`dsh --profile dsh-tui`.
+
+## Safe mode (`dsh-tui safe`)
+
+When dsh exits unexpectedly, safe mode provides read-only environment
+diagnostics, a profile plugin inventory, and repair guidance.
+
+- **Two entries**: run `dsh-tui safe` manually; or accept the prompt after
+  dsh exits with a non-zero code.
+  - The prompt only appears in interactive terminals; scripts and pipes get
+    a single hint line and keep the exit code.
+  - It covers only a non-zero exit of the final dsh child process, not a
+    startup hang (a spawn failure counts as exit code 1).
+- **Read-only**: diagnostics, inventory, and guidance never change state. Two
+  exceptions:
+  - Retry normal startup.
+  - Create/reuse the rescue profile, writing only to
+    `$DSH_HOME/profiles/dsh-tui-safe/`.
+  Note: every dsh launch writes `$DSH_HOME/profiles/node_modules` fallback
+  links and the pnpm global store (not introduced by safe mode).
+- **The rescue profile must be clean, or it refuses to start**. Each check
+  blocks startup if it fails:
+  - The candidate directory exists but is not a recognizable profile.
+  - The existing profile's root manifest declares third-party plugins.
+  - `$DSH_HOME/cordis.patch.yml` (home layer): **rejects if it exists**.
+  - `dsh-tui-safe/cordis.patch.yml` (profile layer): **rejects only if it has
+    entries**; the default "comments + `[]`" does not count as entries.
+  Before deleting or rebuilding a rescue profile, it checks the top-level
+  entries by **name and shape**; any other name or shape makes it refuse and
+  list them — never silently deleting your files.
+- **Non-interactive**: `dsh-tui safe --rescue` runs the same gate plus
+  create/reuse and only reports the verdict (exit 0 when ready, 1 when
+  refused).
+- **Outdated launcher**: upgrade first when the profile copy is unreadable or
+  too old:
+  `npm install -g --legacy-peer-deps @deepseek-harness-tui/dsh-tui@<version>`.
+- **Run repair commands yourself** (safe mode only lists them):
+  - `dsh plugin --profile dsh-tui remove <third-party plugin>` removes
+    suspects one by one;
+  - `dsh plugin --profile dsh-tui add @deepseek-harness-tui/dsh-tui@<version>`
+    reinstalls/aligns;
+  - `dsh-tui doctor` runs environment diagnostics.
+
+## Running in VS Code / Herdr
+
+- **VS Code**: run directly in the integrated terminal, or use the
+  `dsh-tui-vscode` companion extension on the Marketplace (real terminal
+  sessions, session history, specific-session resume, IDE selection channel).
+  See [VS Code guide](vscode.en.md).
+- **Herdr**: run `dsh-tui` directly in a [Herdr](https://herdr.dev) pane with
+  no extra setup; dsh-TUI reports `idle` / `working` / `blocked` through
+  Herdr's local integration API (questionnaires and tool approvals count as
+  `blocked`), and stays completely inactive outside Herdr.
 
 ## Update to the latest version
 
@@ -132,8 +208,7 @@ Both entry points update the profile runtime and attempt to migrate a
 discoverable, writable global entry to the delegating launcher. Automatic
 alignment is not guaranteed: source runs, direct `dsh --profile` launches,
 permissions or locked files may skip it. If a version mismatch is reported,
-follow the launcher's **exact-version command**, rather than blindly upgrading
-both copies to `@latest`.
+follow the launcher's exact-version command.
 
 For older launchers without `update`, an incomplete profile, or manual upgrades:
 
@@ -148,11 +223,43 @@ npm install -g @deepseek-harness-tui/dsh-tui@latest
 - Check both copies with `dsh-tui version`, and the environment with
   `dsh-tui doctor`. The startup banner shows the actual running version
   (`✦ dsh-TUI vX.Y.Z`).
-- Your `cordis.patch.yml` override layer survives updates untouched. Session
-  storage may move between versions (since 0.3.7, `/resume` uses the JSONL
-  session store shared with dsh web), so older sessions missing from the
-  list after a major update is expected — the underlying data is not
-  deleted.
+- Your `cordis.patch.yml` override layer survives updates untouched.
+- Session storage may move between versions (since 0.3.7, `/resume` uses the
+  JSONL session store shared with dsh web), so older sessions missing from the
+  list after a major update is expected — the underlying data is not deleted.
+
+### pnpm install-script blocks and foreign-platform natives
+
+If `dsh plugin` fails with `ERR_PNPM_IGNORED_BUILDS` (pnpm ≥11 blocks
+dependencies that carry install scripts by default, e.g. `@google/genai` and
+`protobufjs` — none of these scripts is needed at runtime, so they can safely
+be ignored), add to the profile's `pnpm-workspace.yaml`:
+
+```yaml
+allowBuilds:
+  '@google/genai': false
+  protobufjs: false
+```
+
+`/update` and `dsh-tui update` seed this configuration automatically — no
+manual step needed.
+
+Updates also maintain `ignoredOptionalDependencies` covering foreign-platform
+`@img/sharp-*` natives:
+
+- sharp ships as all-platform optional dependencies, and an untouched
+  `pnpm update` downloads every platform's binaries (about 200MB measured).
+- The list is recomputed for the running platform on every update. Foreign
+  natives are skipped while this platform's own and the platform-agnostic wasm
+  fallbacks stay.
+- Move the profile to another platform or musl container and the next update
+  there refreshes it.
+- An existing profile's lockfile still lists every platform, so its first
+  update downloads them once more before the filter takes effect.
+- Entries outside those two platform tables (a user's `fsevents`, a
+  hand-written `@img/sharp-wasm32` exemption) are left as they are. This needs
+  a pnpm that supports the key; one that does not fails nothing — it merely
+  loses the saving.
 
 ## Profile configuration
 
@@ -181,20 +288,26 @@ pnpm smoke
 ```
 
 The repository has three submodules, and two of them are required to install:
-`vendor/dsh-std` (its `packages/*` are listed as workspace packages in
-`pnpm-workspace.yaml`) and `dsh-auth` (pulled in through `link:`). Without
-`--recurse-submodules` those directories stay empty and
-`pnpm install --frozen-lockfile` fails outright. For a checkout that was already
-cloned:
+
+- `vendor/dsh-std`: its `packages/*` are listed as workspace packages in
+  `pnpm-workspace.yaml`.
+- `dsh-auth`: pulled in through `link:`.
+
+Without `--recurse-submodules` those directories stay empty and
+`pnpm install --frozen-lockfile` fails outright. For a checkout that was
+already cloned:
 
 ```sh
 git submodule update --init --recursive
 ```
 
 `pnpm build` cleans the ignored `lib/` directory, compiles `src/` into
-`lib/types/`, and runs the build gates. **Git URL installs are not supported**
-(workspace deps / submodule / pnpm ≥11 prepare allowlist); the publish workflow
-performs an explicit clean compilation and package-surface check before packing.
+`lib/types/`, and runs the build gates.
+
+- **Git URL installs are not supported** (workspace deps / submodule / pnpm
+  ≥11 prepare allowlist).
+- The publish workflow performs an explicit clean compilation and
+  package-surface check before packing.
 
 For an integration test of the current source, run this once after initial
 setup or whenever the normal model/key configuration changes:
@@ -211,13 +324,18 @@ pnpm dev
 
 `pnpm dev:copy-config` copies only `~/.dsh/settings.yaml` and
 `~/.dsh/.credentials.yaml`. Files are set to mode `0600` on Unix; Windows uses
-the OS-managed file ACL. `pnpm dev` uses isolated `HOME`, `DSH_HOME`, and session
-directories, leaving the normal `~/.dsh/profiles/dsh-tui`, `~/.dsh-tui`, and
-sessions untouched. The test root defaults to
-`$XDG_CACHE_HOME/dsh-tui-dev` on Unix (`~/.cache/dsh-tui-dev` when unset) and
-`%LOCALAPPDATA%\dsh-tui-dev` on Windows. Override it with `DSH_TUI_DEV_ROOT`.
+the OS-managed file ACL.
 
-To verify only the build, pack, and install path without launching the TUI, run:
+`pnpm dev` uses isolated `HOME`, `DSH_HOME`, and session directories, leaving
+the normal `~/.dsh/profiles/dsh-tui`, `~/.dsh-tui`, and sessions untouched. The
+test root defaults to:
+
+- `$XDG_CACHE_HOME/dsh-tui-dev` on Unix (`~/.cache/dsh-tui-dev` when unset).
+- `%LOCALAPPDATA%\dsh-tui-dev` on Windows.
+- Override it with `DSH_TUI_DEV_ROOT`.
+
+To verify only the build, pack, and install path without launching the TUI,
+run:
 
 ```sh
 pnpm dev:test
@@ -231,12 +349,11 @@ node --import tsx/esm scripts/verify-askpanel-layout.tsx
 node --import tsx/esm scripts/repro-toolcards.tsx
 ```
 
-The `pnpm tui` script invokes `scripts/run.ts`, which directly composes DeepSeek
-Harness source patches and assumes a Harness monorepo `packages/*` layout by
-default. A standalone checkout must set `DSH_TUI_DEV_WORKSPACE` to the Harness
-root. To test only this repository's current source, prefer `pnpm dev`; it uses
-the same profile installation path as an end-user install.
-
+The `pnpm tui` script invokes `scripts/run.ts`, which directly composes
+DeepSeek Harness source patches and assumes a Harness monorepo `packages/*`
+layout by default. A standalone checkout must set `DSH_TUI_DEV_WORKSPACE` to
+the Harness root. To test only this repository's current source, prefer
+`pnpm dev`; it uses the same profile installation path as an end-user install.
 
 ## Troubleshooting
 
@@ -245,12 +362,14 @@ the same profile installation path as an end-user install.
 stdout is not a TTY. Start the process directly in a terminal rather than
 redirecting its main output to another command or file.
 
-When dsh-tui is only installed in a profile and the DSH composition is started
-by a non-terminal host (Web / Tauri / GUI, stdout piped or null), dsh-tui
-detects that stdout is not a TTY and that the process was not started by the
-`dsh-tui` launcher, and silently skips the TUI frontend (no error, the host
-keeps booting). The error above only appears when `dsh-tui` (or the standalone
-portable build) was explicitly launched without a TTY.
+dsh-tui detects two things: stdout is not a TTY, and the process was not
+started by the `dsh-tui` launcher. When both hold, it silently skips the TUI
+frontend (no error, the host keeps booting). That is the case when dsh-tui is
+only installed in a profile and a non-terminal host (Web / Tauri / GUI, stdout
+piped or null) starts the DSH composition.
+
+The error above only appears when `dsh-tui` (or the standalone portable build)
+was explicitly launched without a TTY.
 
 ### `dsh` or `pnpm` cannot be found
 

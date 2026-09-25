@@ -5,13 +5,9 @@ import { writeActivityFrames } from '../../activityPrefs.js'
 import { isPresetName, normalizeActivityPreset } from '../../components/activityFrames.js'
 import { t } from '../../i18n.js'
 import { snapshotLiveSessionEvents } from '../compat/liveSession.js'
+import { runForegroundShell, type ForegroundShell } from '../compat/shell.js'
 import { LOCAL_OUTPUT_LIMIT, preview, type foldBack as FoldBack } from './transcript.js'
 import type { ChannelState, ToolViewPresenter } from './types.js'
-
-type Shell = {
-  resolve(request: { command: string; workdir?: string; timeoutMs: number }): unknown
-  run(spec: unknown): Promise<{ stdout: { text: string }; stderr: { text: string }; timedOut: boolean }>
-}
 
 /** Owns local-only transcript mutations, shell output, and live subagent queries. */
 export function createLocalActions(deps: {
@@ -28,8 +24,8 @@ export function createLocalActions(deps: {
   subagents: { dropRows(): void }
   jobs: { dropRows(): void }
   foldBack: typeof FoldBack
-  workspace: { describe(cwd: string): { kind: string; badge: string; label: string }; commandShell(cwd: string): Promise<Shell | undefined> }
-  shell?: Shell
+  workspace: { describe(cwd: string): { kind: string; badge: string; label: string }; commandShell(cwd: string): Promise<ForegroundShell | undefined> }
+  shell?: ForegroundShell
   notify: ChannelState['notify']
 }) {
   const { ctx, owner, binding, state, rowIds, projector, subagents, jobs, foldBack, workspace, shell, notify } = deps
@@ -100,7 +96,7 @@ export function createLocalActions(deps: {
       if (!current(capture)) return
       if (executor) {
         try {
-          const result = await executor.run(executor.resolve({ command, workdir: cwd, timeoutMs: 30000 }))
+          const result = await runForegroundShell(executor, { command, workdir: cwd, timeoutMs: 30000 })
           output = result.stdout.text.trim() || result.stderr.text.trim() || (result.timedOut ? '(timed out)' : '(no output)')
         } catch (error) { output = error instanceof Error ? error.message : String(error) }
       }

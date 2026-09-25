@@ -1,6 +1,40 @@
 /** Host-owned in-process Channel contract. No runtime or upstream imports. */
 
 
+/** Live editor selection projection (IDE selection channel): the editor
+ *  buffer's own text when the IDE pushed it (protocol 2 — unsaved edits
+ *  included), plus the coordinates. Structurally mirrors the adapter's
+ *  SelectionSnapshot without importing from the adapter layer (this port
+ *  takes no runtime or upstream imports). */
+export interface ChannelSelection {
+  /** Workspace-relative or absolute file path, as the extension reports it. */
+  readonly path: string
+  /** First selected line, 0-based. */
+  readonly startLine: number
+  /** Last selected line, 0-based inclusive. */
+  readonly endLine: number
+  /** True when the editor selection collapsed to nothing. */
+  readonly isEmpty: boolean
+  /**
+   * Protocol 2: the editor buffer's own text for the selection, exactly
+   * what the user saw. The submit path attaches it verbatim; when absent
+   * (protocol-1 push) it falls back to reading the file from disk.
+   */
+  readonly text?: string
+  /** Protocol 2: the editor document version the text came from. */
+  readonly documentVersion?: number
+}
+
+/** What one consumed selection contributed to a submitted message, recorded
+ *  next to the user row so the transcript can render a "Selected N lines
+ *  from <file>" indicator. `lines` is the count actually attached after
+ *  clamping — the truth the model received, not the request. */
+export interface SelectionAttachment {
+  readonly lines: number
+  /** The path as the extension reported it (absolute or workspace-relative). */
+  readonly path: string
+}
+
 /**
  * One rendered transcript row. The DSH session log is the source of truth:
  * rows are derived from `session/event` records (and the initial
@@ -43,6 +77,9 @@ export interface ChatRow {
    *  content only; replayed history must paint complete. Set once at
    *  creation; never mutated afterwards. */
   fresh?: boolean
+  /** Present on user rows whose submit consumed a live IDE selection: the
+   *  transcript renders the "Selected N lines" indicator above the bubble. */
+  selectionAttached?: SelectionAttachment
 }
 
 /** Tool-call card state: the presentation of one tool invocation. */
@@ -405,11 +442,31 @@ export interface TranscriptImage {
   read(signal?: AbortSignal): Promise<Uint8Array>
 }
 
+/** What an adapted paste ended up as, so the composer can report it instead of
+ * a re-encode happening silently. Present only when the ingress gate had to
+ * change the bytes. Dimensions and media type are the STORE's report for what
+ * it persisted (it normalizes further on its own), i.e. what the user gets. */
+export interface StagedImageAdjustment {
+  /** Media type the bytes were declared with (the pasted file's type). */
+  readonly sourceMediaType: ChannelImageMediaType
+  /** Media type the store reports for the stored bytes. */
+  readonly mediaType: ChannelImageMediaType
+  /** Stored pixel dimensions as the store reports them. */
+  readonly width: number
+  readonly height: number
+  /** The stored image is smaller than what the gate handed over. */
+  readonly resized: boolean
+  /** This gate composited an alpha channel onto an opaque background. */
+  readonly flattened: boolean
+}
+
 /** Opaque capability returned for one staged composer image. The visible
  * `[Image #N]` label is deliberately absent: PromptInput owns presentation
  * numbering while this id is the non-reusable attachment identity. */
 export interface StagedImageHandle {
   readonly stageId: string
+  /** How the ingress gate adapted the pasted bytes, when it had to. */
+  readonly adjustment?: StagedImageAdjustment
 }
 
 /** One visible composer token bound to its opaque staged-image capability. */

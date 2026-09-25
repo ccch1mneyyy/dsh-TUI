@@ -77,7 +77,7 @@ try {
   const capture = { agent, generation: 1 }
   const agents = { create: async (options: CreateAgentOptions) => {
     const child = Session.create(options.sessionId, options.seed, {
-      version: 3, id: options.sessionId, createdAt: 1, isSeeded: options.meta?.isSeeded ?? false, ...options.meta,
+      ...Session.create(options.sessionId).header, createdAt: 1, ...options.meta,
     }, options.inheritedEventCount)
     const childAgent = { id: child.id, session: child, status: 'idle', inbox: { clear() {} } }
     const setup = await options.setup?.(ctx, childAgent as never)

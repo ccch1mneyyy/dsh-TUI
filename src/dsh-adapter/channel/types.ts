@@ -1,6 +1,6 @@
 import type { ChannelUi } from '../../adapter/ports/channel-ui.js'
-import type { ChatRow, ToolRow, ToolCallView, ToolFileDiff, ToolResultView, SubagentRow, JobRow, TokenUsage, TokenBucket, NotificationItem, ActivityStatus, ChannelGoal, TodoPanelItem, LoadedContext, LoadedContextEntry, LoadedContextFile, LoadedContextSkill, LoadedContextTool, PendingMessage, SubagentControl, JobControl, StagedImageInput, StagedImageHandle, ComposerImageRef, ComposerSubmission, ExternalCommandOutcome, TranscriptImage, ResumeResult, EffortOption, PermissionPresetSnapshot, PermissionPresetAvailability, PermissionPresetOption, PermissionPresetCurrent, PresetOption, SkillInfo, CredentialStatus, AgentViewRow, AgentViewStatus, AgentViewDispatchResult, BackgroundResult } from '../../adapter/ports/channel-view.js'
-export type { ChatRow, ToolRow, ToolCallView, ToolFileDiff, ToolResultView, SubagentRow, JobRow, TokenUsage, TokenBucket, NotificationItem, ActivityStatus, ChannelGoal, TodoPanelItem, LoadedContext, LoadedContextEntry, LoadedContextFile, LoadedContextSkill, LoadedContextTool, PendingMessage, SubagentControl, JobControl, StagedImageInput, StagedImageHandle, ComposerImageRef, ComposerSubmission, ExternalCommandOutcome, TranscriptImage, ResumeResult, EffortOption, PermissionPresetSnapshot, PermissionPresetAvailability, PermissionPresetOption, PermissionPresetCurrent, PresetOption, SkillInfo, CredentialStatus, AgentViewRow, AgentViewStatus, AgentViewDispatchResult, BackgroundResult } from '../../adapter/ports/channel-view.js'
+import type { ChatRow, ToolRow, ToolCallView, ToolFileDiff, ToolResultView, SubagentRow, JobRow, TokenUsage, TokenBucket, NotificationItem, ActivityStatus, ChannelGoal, TodoPanelItem, LoadedContext, LoadedContextEntry, LoadedContextFile, LoadedContextSkill, LoadedContextTool, PendingMessage, SubagentControl, JobControl, StagedImageInput, StagedImageAdjustment, StagedImageHandle, ComposerImageRef, ComposerSubmission, ExternalCommandOutcome, TranscriptImage, ResumeResult, EffortOption, PermissionPresetSnapshot, PermissionPresetAvailability, PermissionPresetOption, PermissionPresetCurrent, PresetOption, SkillInfo, CredentialStatus, AgentViewRow, AgentViewStatus, AgentViewDispatchResult, BackgroundResult } from '../../adapter/ports/channel-view.js'
+export type { ChatRow, ToolRow, ToolCallView, ToolFileDiff, ToolResultView, SubagentRow, JobRow, TokenUsage, TokenBucket, NotificationItem, ActivityStatus, ChannelGoal, TodoPanelItem, LoadedContext, LoadedContextEntry, LoadedContextFile, LoadedContextSkill, LoadedContextTool, PendingMessage, SubagentControl, JobControl, StagedImageInput, StagedImageAdjustment, StagedImageHandle, ComposerImageRef, ComposerSubmission, ExternalCommandOutcome, TranscriptImage, ResumeResult, EffortOption, PermissionPresetSnapshot, PermissionPresetAvailability, PermissionPresetOption, PermissionPresetCurrent, PresetOption, SkillInfo, CredentialStatus, AgentViewRow, AgentViewStatus, AgentViewDispatchResult, BackgroundResult } from '../../adapter/ports/channel-view.js'
 import { type AgentStatus } from '@deepseek-ai/dsh-agent'
 import type { LlmModelInfo, LlmProviderInfo } from '@deepseek-ai/dsh-llm'
 import {
@@ -138,6 +138,11 @@ export interface MentionAttachments {
     readonly maxImageBytes: number
     readonly maxImagesPerMessage: number
     readonly maxMessageImageBytes: number
+    /** Per-side intrinsic pixel cap (mirrored from the upstream store's
+     *  ImageAttachmentLimits — used by the composer's ingress resample). */
+    readonly maxImageDimension: number
+    /** Total-pixel cap ditto. */
+    readonly maxImagePixels: number
     readonly mediaTypes: readonly MentionImageMediaType[]
   }
   saveImage(input: { data: Uint8Array; mediaType: MentionImageMediaType; name?: string }): Promise<MentionImageBlock['attachment']>

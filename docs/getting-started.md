@@ -6,13 +6,11 @@
 
 - Node.js `^22.19 || >=24`。CI 使用 Node 24。
 - 官方 DeepSeek Harness CLI：`@deepseek-ai/dsh`。
-- `pnpm` **10 或更高**（CI 使用 11）。`dsh plugin` 会把 profile 内的包安装
-  交给 pnpm；pnpm 9 对传递依赖的提升行为不同，profile 里会解析不到
-  `dsh-working-activity`，表现为启动后立刻退出且几乎无报错（见 issue #60
-  与下方常见问题）。
+- `pnpm` **10 或更高**（CI 使用 11）。`dsh plugin` 把 profile 内的包安装
+  交给 pnpm；pnpm 9 的传递依赖提升行为不同，会让 `dsh-working-activity`
+  解析不到，表现为启动后立刻退出且几乎无报错（issue #60，见下方常见问题）。
 - 支持交互输入的终端 TTY。`dsh-tui` 不支持把 stdout 重定向后启动。
-- `DEEPSEEK_API_KEY`。使用自定义兼容端点时还可设置
-  `DEEPSEEK_BASE_URL`。
+- `DEEPSEEK_API_KEY`。用自定义兼容端点时还可设置 `DEEPSEEK_BASE_URL`。
 
 macOS/Linux：
 
@@ -68,9 +66,13 @@ sh install.sh
 
 ## 从旧包迁移
 
-早期版本使用无 scope 包 `dsh-cc-tui` 和 `cc-tui` profile，环境变量前缀为
-`CC_TUI_*`/`DSH_CC_*`、数据目录为 `~/.dsh-cc`。新版本统一为组织包
-`@deepseek-harness-tui/dsh-tui` 与 `dsh-tui` profile；执行以下命令创建新 profile：
+早期版本使用无 scope 包 `dsh-cc-tui` 和 `cc-tui` profile：
+
+- 环境变量前缀为 `CC_TUI_*`/`DSH_CC_*`。
+- 数据目录为 `~/.dsh-cc`。
+
+新版本统一为组织包 `@deepseek-harness-tui/dsh-tui` 与 `dsh-tui` profile。
+执行以下命令创建新 profile：
 
 ```sh
 dsh plugin --profile dsh-tui add @deepseek-harness-tui/dsh-tui
@@ -79,13 +81,17 @@ dsh --profile dsh-tui
 
 新版本只使用 `DSH_TUI_*` 环境变量与 `~/.dsh-tui` 数据目录，旧名不再被读取，
 也不自动迁移数据。首次启动后，请把旧数据目录（`~/.dsh-cc` 等）中的主题、
-配置与历史文件自行复制到 `~/.dsh-tui`。确认新 profile 正常后，旧的
-`$DSH_HOME/profiles/cc-tui` 与旧数据目录残留可按需删除；不要把旧包和新包
-同时添加到同一个 profile。
+配置与历史文件自行复制到 `~/.dsh-tui`。
+
+确认新 profile 正常后：
+
+- 旧的 `$DSH_HOME/profiles/cc-tui` 与旧数据目录残留可按需删除。
+- 不要把旧包和新包同时添加到同一个 profile。
 
 ## 安装命令做了什么
 
-首次执行 `dsh plugin --profile dsh-tui add @deepseek-harness-tui/dsh-tui` 时，官方 CLI 会：
+首次执行 `dsh plugin --profile dsh-tui add @deepseek-harness-tui/dsh-tui` 时，
+官方 CLI 会：
 
 1. 在 `$DSH_HOME/profiles/dsh-tui/` 初始化 profile。未设置 `DSH_HOME` 时，
    默认根目录通常是 `~/.dsh`。
@@ -99,8 +105,9 @@ dsh --profile dsh-tui
 dsh-base -> 其他 bundle -> @deepseek-harness-tui/dsh-tui patch -> 用户 profile patch
 ```
 
-base 提供 Agent、模型、会话、文件、Shell、策略和注册表等服务；本插件的 patch
-覆盖或插入 TUI、Agent preset 名册、SQLite 会话持久化与工作状态行。
+- base 提供 Agent、模型、会话、文件、Shell、策略和注册表等服务。
+- 本插件的 patch 覆盖或插入 TUI、Agent preset 名册、SQLite 会话持久化与
+  工作状态行。
 
 `dsh-working-activity` 已经是本包依赖，并由 `dsh-tui` 的 patch 自动插入。
 不要对同一个 profile 再单独执行 `add dsh-working-activity`，否则可能出现重复行。
@@ -121,8 +128,63 @@ dsh-tui.cmd
 dsh-tui.cmd --resume
 ```
 
-`--resume` 会读取 `%USERPROFILE%\.dsh-tui\resume.txt`，恢复 TUI 最近选择的
-会话。设置 `DSH_TUI_WORKSPACE` 可以覆盖批处理启动器采用的工作目录。
+- `--resume` 会读取 `%USERPROFILE%\.dsh-tui\resume.txt`，恢复 TUI 最近选择的
+  会话。
+- 设置 `DSH_TUI_WORKSPACE` 可以覆盖批处理启动器采用的工作目录。
+
+## CLI 子命令
+
+`dsh-tui help`（或 `dst help`）打印完整用法，`dst` 别名接受相同命令：
+
+| 命令 | 作用 |
+| --- | --- |
+| `dsh-tui update` | 更新 profile 到最新版本并对齐启动器（与 TUI 内 `/update` 同一安装逻辑，不进入 TUI） |
+| `dsh-tui doctor` | 环境检查：dsh/pnpm、profile 安装与版本对齐、API key 是否设置（只报状态不读值）、配置文件存在性；与 TUI 内 `/doctor` 会话诊断互补 |
+| `dsh-tui safe` | 安全模式：只读诊断、插件清单与修复指引（`safe --rescue` 还会创建/校验干净的救援 profile） |
+| `dsh-tui version` | 显示启动器与 profile 版本（`--version`/`-v` 等价） |
+| `dsh-tui help` | 显示用法（`--help`/`-h` 等价） |
+
+`help`/`version` 在 dsh 缺失或 profile 未初始化时也能用；其余参数原样转发给
+`dsh --profile dsh-tui`。
+
+## 安全模式（`dsh-tui safe`）
+
+dsh 意外结束时，安全模式提供只读的环境诊断、profile 插件清单与修复指引。
+
+- **两个入口**：手动运行 `dsh-tui safe`；或 dsh 非零退出后按提示进入。
+  - 提示仅出现在交互终端；脚本/管道只加一行提示、退出码不变。
+  - 只覆盖最终 dsh 子进程的非零退出码，不含启动挂起（启动失败按退出码 1）。
+- **只读边界**：诊断/清单/指引不改状态。两个例外：
+  - 重试正常启动。
+  - 创建/复用救援 profile，只写 `$DSH_HOME/profiles/dsh-tui-safe/`。
+  注：每次 dsh 启动仍会写 `$DSH_HOME/profiles/node_modules` 回退链接与
+  pnpm 全局 store（非安全模式引入）。
+- **救援 profile 必须干净，证不出就拒绝**。逐条校验，任一不成立即拒绝：
+  - 候选目录已存在，但不是可识别的 profile。
+  - 既有 profile 的根 manifest 声明了第三方插件。
+  - `$DSH_HOME/cordis.patch.yml`（home 层）**存在即拒绝**。
+  - `dsh-tui-safe/cordis.patch.yml`（profile 层）**有条目即拒绝**；dsh 默认
+    生成的「注释 + `[]`」不算条目。
+  删除/重建救援 profile 前会**按名字与形态核对顶层条目**，发现别的名字或
+  形态不符就拒绝并列出，**不会静默删你的文件**。
+- **非交互**：`dsh-tui safe --rescue` 跑同一套门禁与创建/复用，只报结论
+  （就绪退出 0，拒绝退出 1）。
+- **旧全局启动器**：profile 副本不可读或过旧时，先升级：
+  `npm install -g --legacy-peer-deps @deepseek-harness-tui/dsh-tui@<版本>`。
+- **修复命令需自行执行**（安全模式只列出）：
+  - `dsh plugin --profile dsh-tui remove <第三方插件>` 逐个移除可疑插件；
+  - `dsh plugin --profile dsh-tui add @deepseek-harness-tui/dsh-tui@<版本>`
+    重装对齐；
+  - `dsh-tui doctor` 环境诊断。
+
+## 在 VS Code / Herdr 中运行
+
+- **VS Code**：可在集成终端直接运行，或用已上架 Marketplace 的 companion 扩展
+  `dsh-tui-vscode`（真实终端会话、会话历史、指定会话恢复、IDE 选区通道）。
+  见 [VS Code 使用指南](vscode.md)。
+- **Herdr**：直接在 [Herdr](https://herdr.dev) 窗格中运行 `dsh-tui`，无需额外
+  配置；dsh-TUI 经 Herdr 本地集成 API 报告 `idle` / `working` / `blocked`
+  （问卷与工具审批记为 `blocked`），在 Herdr 之外不做任何事。
 
 ## 更新到最新版本
 
@@ -135,10 +197,9 @@ dsh-tui update
 ```
 
 两条入口都以 profile runtime 为更新对象，并尝试将可定位、可写的全局入口
-迁移为委托启动器；委托启动器把启动逻辑交给 profile 内副本。自动对齐并非
-保证成功：源码运行、直接 `dsh --profile` 启动、目录权限或文件锁都可能使
-这一步跳过。出现启动器版本不一致提示时，按提示中的**精确版本命令**修复，
-而不是盲目把两处都升级到 `@latest`。
+迁移为委托启动器。自动对齐并非保证成功：源码运行、直接 `dsh --profile`
+启动、目录权限或文件锁都可能使这一步跳过。出现启动器版本不一致提示时，
+按提示中的**精确版本命令**修复。
 
 旧版本尚无 `update` 子命令、profile 未正确安装或希望手动升级时：
 
@@ -152,9 +213,37 @@ npm install -g @deepseek-harness-tui/dsh-tui@latest
   版本范围解析，停留在旧版本线。
 - 用 `dsh-tui version` 检查启动器与 profile 版本，用 `dsh-tui doctor` 排查环境；
   启动横幅右上角显示真正运行的版本（`✦ dsh-TUI vX.Y.Z`）。
-- 用户覆盖层 `cordis.patch.yml` 在更新中原样保留；会话数据的存放位置
-  可能随版本变化（如 0.3.7 起 `/resume` 改用与 dsh web 共享的 JSONL
-  会话库），跨大版本更新后旧会话不在列表属预期，原数据不会被删除。
+- 用户覆盖层 `cordis.patch.yml` 在更新中原样保留。
+- 会话数据的存放位置可能随版本变化（如 0.3.7 起 `/resume` 改用与 dsh web
+  共享的 JSONL 会话库），跨大版本更新后旧会话不在列表属预期，原数据不会被删除。
+
+### pnpm 安装脚本拦截与异平台原生包
+
+若 `dsh plugin` 安装时报 `ERR_PNPM_IGNORED_BUILDS`（pnpm ≥11 默认阻止带
+安装脚本的依赖，如 `@google/genai`、`protobufjs`——这些脚本运行时不需要，
+忽略即可），在 profile 的 `pnpm-workspace.yaml` 里加入：
+
+```yaml
+allowBuilds:
+  '@google/genai': false
+  protobufjs: false
+```
+
+`/update` 与 `dsh-tui update` 会自动写入这份配置，无需手工处理。
+
+更新时还会维护 `ignoredOptionalDependencies`（忽略异平台的 `@img/sharp-*`
+原生包）：
+
+- sharp 以全平台可选依赖分发，不处理时 `pnpm update` 会把各平台二进制一起
+  下载（实测约 200MB）。
+- 名单每次更新按当前平台重算，异平台原生包不再下载（当前平台原生包与无平台
+  归属的 wasm 回退包保留）。
+- 把 profile 搬到别的平台或 musl 容器后，在那台机器上跑一次更新即可刷新。
+- 老 profile 的 lockfile 里仍写着全平台条目，第一次更新会照旧下载一遍，之后
+  才被忽略。
+- 块内不属于这两张平台表的条目（`fsevents`、自己写的 `@img/sharp-wasm32`
+  豁免）原样保留；需要 pnpm 支持该键，不认识的版本不会因此报错，只失去这项
+  收益。
 
 ## Profile 配置
 
@@ -180,9 +269,13 @@ pnpm build
 pnpm smoke
 ```
 
-本仓库有三个子模块，其中 `vendor/dsh-std` 与 `dsh-auth` 是安装必需
-（`pnpm-workspace.yaml` 把 `vendor/dsh-std/packages/*` 列为 workspace 包，
-`dsh-auth` 经 `link:` 引入）。漏掉 `--recurse-submodules` 会让这两个目录为空，
+本仓库有三个子模块，其中两个是安装必需：
+
+- `vendor/dsh-std`：`pnpm-workspace.yaml` 把 `vendor/dsh-std/packages/*` 列为
+  workspace 包。
+- `dsh-auth`：经 `link:` 引入。
+
+漏掉 `--recurse-submodules` 会让这两个目录为空，
 `pnpm install --frozen-lockfile` 直接失败。已经克隆过的检出补一条：
 
 ```sh
@@ -190,8 +283,11 @@ git submodule update --init --recursive
 ```
 
 `pnpm build` 会清理忽略入库的 `lib/`，把 `src/` 编译到 `lib/types/`，再运行
-构建门禁。**Git URL 安装不受支持**（workspace 依赖/子模块/pnpm ≥11 prepare 白名单三重阻断）；发布 workflow
-也会在打包前显式执行干净编译和包面验证。
+构建门禁。
+
+- **Git URL 安装不受支持**（workspace 依赖/子模块/pnpm ≥11 prepare 白名单
+  三重阻断）。
+- 发布 workflow 也会在打包前显式执行干净编译和包面验证。
 
 真实测试当前源码时，首次使用或正式模型/密钥配置变化后运行：
 
@@ -207,12 +303,16 @@ pnpm dev
 
 `pnpm dev:copy-config` 只复制 `~/.dsh/settings.yaml` 与
 `~/.dsh/.credentials.yaml`。Unix 上文件权限设为 `0600`；Windows 使用系统管理的
-文件 ACL。`pnpm dev` 使用独立的 `HOME`、`DSH_HOME` 和会话目录，不覆盖正式
-`~/.dsh/profiles/dsh-tui`、`~/.dsh-tui` 或正式会话。默认测试目录在 Unix 的
-`$XDG_CACHE_HOME/dsh-tui-dev`（未设置时为 `~/.cache/dsh-tui-dev`），Windows
-则为 `%LOCALAPPDATA%\dsh-tui-dev`；可通过 `DSH_TUI_DEV_ROOT` 覆盖。
+文件 ACL。
 
-不启动 TUI、只验证构建、打包和安装链路时运行：
+`pnpm dev` 使用独立的 `HOME`、`DSH_HOME` 和会话目录，不覆盖正式
+`~/.dsh/profiles/dsh-tui`、`~/.dsh-tui` 或正式会话。默认测试目录：
+
+- Unix：`$XDG_CACHE_HOME/dsh-tui-dev`（未设置时为 `~/.cache/dsh-tui-dev`）。
+- Windows：`%LOCALAPPDATA%\dsh-tui-dev`。
+- 可通过 `DSH_TUI_DEV_ROOT` 覆盖。
+
+不启动 TUI、只验证构建、打包和安装流程时运行：
 
 ```sh
 pnpm dev:test
@@ -226,20 +326,28 @@ node --import tsx/esm scripts/verify-askpanel-layout.tsx
 node --import tsx/esm scripts/repro-toolcards.tsx
 ```
 
-`pnpm tui` 调用的 `scripts/run.ts` 直接组合 DeepSeek Harness 源码 patch，默认假设
-包位于 Harness monorepo 的 `packages/*` 布局中；独立 checkout 需要另外设置
-`DSH_TUI_DEV_WORKSPACE` 指向 Harness 根目录。只测试本仓库当前源码时，优先使用
-上述 `pnpm dev`，它会走与用户安装一致的 profile 路径。
-
+`pnpm tui` 调用的 `scripts/run.ts` 直接组合 DeepSeek Harness 源码 patch，默认
+假设包位于 Harness monorepo 的 `packages/*` 布局中；独立 checkout 需要另外
+设置 `DSH_TUI_DEV_WORKSPACE` 指向 Harness 根目录。只测试本仓库当前源码时，
+优先使用上述 `pnpm dev`，它会走与用户安装一致的 profile 路径。
 
 ## 常见问题
 
-### Git URL 安装报 `ERR_PNPM_GIT_DEP_PREPARE_NOT_ALLOWED` / `ERR_PNPM_WORKSPACE_PKG_NOT_FOUND`
+### Git URL 安装报错
 
-Git URL（如 `https://github.com/ccch1mneyyy/dsh-TUI`）安装不受支持，三重阻断：
-源 manifest 的 `@dsh-std/*` 是 workspace 依赖（git tarball 原样保留，profile
-内无法解析）；`vendor/dsh-std` 是 git 子模块（依赖抓取不带子模块内容，编译必
-败）；pnpm ≥11 默认拒绝 git 依赖执行 `prepare` 构建脚本。请安装 registry 包：
+Git URL（如 `https://github.com/ccch1mneyyy/dsh-TUI`）安装不受支持，报以下错误码：
+
+- `ERR_PNPM_GIT_DEP_PREPARE_NOT_ALLOWED`
+- `ERR_PNPM_WORKSPACE_PKG_NOT_FOUND`
+
+三重阻断：
+
+- 源 manifest 的 `@dsh-std/*` 是 workspace 依赖（git tarball 原样保留，
+  profile 内无法解析）。
+- `vendor/dsh-std` 是 git 子模块（依赖抓取不带子模块内容，编译必败）。
+- pnpm ≥11 默认拒绝 git 依赖执行 `prepare` 构建脚本。
+
+请安装 registry 包：
 
 ```sh
 dsh plugin --profile dsh-tui add @deepseek-harness-tui/dsh-tui
@@ -249,15 +357,17 @@ dsh plugin --profile dsh-tui add @deepseek-harness-tui/dsh-tui
 
 stdout 不是 TTY。请直接在终端中启动，不要把主进程输出管道到文件或其他命令。
 
-如果 dsh-tui 只是装在某个 profile 里、而实际由 Web / Tauri / GUI 等非终端宿主
-启动 DSH，dsh-tui 会检测到 stdout 不是 TTY 且并非由 `dsh-tui` launcher 启动，
-自动跳过 TUI 前端（不报错、不影响宿主启动）；只有显式执行 `dsh-tui`（含
-standalone 便携版）却没有 TTY 时才会报上面的错误。
+如果 dsh-tui 只是装在某个 profile 里、而实际由 Web / Tauri / GUI 等非终端
+宿主启动 DSH，dsh-tui 会检测到 stdout 不是 TTY 且并非由 `dsh-tui` launcher
+启动，自动跳过 TUI 前端（不报错、不影响宿主启动）。
+
+只有显式执行 `dsh-tui`（含 standalone 便携版）却没有 TTY 时，才会报上面的
+错误。
 
 ### 找不到 `dsh` 或 `pnpm`
 
-确认全局 npm bin 目录在 `PATH` 中，并重新打开终端。`install.sh` 会在安装前检查
-这两个命令。
+确认全局 npm bin 目录在 `PATH` 中，并重新打开终端。`install.sh` 会在安装前
+检查这两个命令。
 
 ### 启动后立刻退回 shell，几乎没有报错（pnpm 9）
 

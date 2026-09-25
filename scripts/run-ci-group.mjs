@@ -85,6 +85,10 @@ const GROUPS = {
 // /settings 设置屏回归（issue #165）：开屏、staged 编辑、revision 栅栏
 // 保存、密钥走 credentials、Esc 返回会话。
     ["repro-settings", ['node', '--import', 'tsx/esm', 'scripts/repro-settings.tsx']],
+// /settings 长页滚动回归：focus-follow 窗口只钉焦点行会裁掉不可聚焦的
+// 卡片边框行——下滚到底丢 ╰──╯、上滚到顶丢 ╭─ 标题；窗口必须贴住列表
+// 物理边界（根页/group 子页/极小视口下焦点永不被钉边挤出）。
+    ["verify-settings-scroll", ['node', '--import', 'tsx/esm', 'scripts/verify-settings-scroll.tsx']],
     ["repro-inline-scrollback", ['node', '--import', 'tsx/esm', 'scripts/repro-inline-scrollback.tsx']],
     ["repro-inline-thirdparty", ['node', '--import', 'tsx/esm', 'scripts/repro-inline-thirdparty.tsx']],
 // 安全回归：OSC 出口控制字符剥离 + 超链接 scheme 门禁（安全审查
@@ -176,6 +180,12 @@ const GROUPS = {
 // help 浮层让位、问询面板不让位（面板在转录下方且不消费这对键）、inline
 // 模式不接管（历史在终端原生 scrollback）、窄终端行为一致。
     ["verify-transcript-paging", ['node', 'scripts/verify-transcript-paging.mjs']],
+// zellij 兼容回归（DECSTBM 硬件滚动撤回）：zellij 的 CSI T 只在光标位于
+// 滚动区内时移动行，而渲染器把光标停在整屏最后一行（每个 ScrollBox 之下），
+// 位移被静默吞掉而差分引擎仍当作已发生 → 上滚时旧行残留/错行；zellij 实现了
+// DEC 2026，所以只撤 DECSTBM、BSU/ESU 保留。断言 zellij 下撤回 + DEC 2026
+// 保留 + 无 zellij 对照，终端环境按场景显式构造（不继承宿主 env，见脚本头注）。
+    ["verify-zellij", ['node', '--import', 'tsx/esm', 'scripts/verify-zellij.tsx']],
   ],
   'input-terminal': [
 // 按键解析回归（issue #110）：Option+Enter（ESC CR）精确/合并/分块
@@ -238,6 +248,10 @@ const GROUPS = {
 // CLI 子命令回归（issue #509）：help/version 零环境应答（不触发自举
 // 与委托）、双语输出、profile 版本读取、只认第一个参数。
     ["verify-cli-subcommands", ['node', 'scripts/verify-cli-subcommands.mjs']],
+// 安全模式回归（PR① spec）：safe 子命令零环境可用与非 TTY 降级、
+// 控制面只读（文件系统快照）、插件清单解析矩阵、fallback 触发矩阵
+// （非 TTY）、doctor 提取行为等价（完整期望值 golden）。
+    ["verify-safe-mode", ['node', 'scripts/verify-safe-mode.mjs']],
 // 剪贴板回归：text/uri-list 严格 URL 解析（远程 authority 拒绝、
 // query/fragment 剥离、畸形转义保留）、image/text MIME 挑选、插入格式化；
 // stub PATH 假 wl-paste/xclip 集成——CJK 跨 chunk、gnome verb 行、
@@ -258,6 +272,13 @@ const GROUPS = {
 // 转录拉进不可选取区。真实 Chat 树 + SGR 拖选注入，静息/上滚阅读+
 // 流式并发/流式结束后三场景断言 OSC 52 携带完整选中文本。
     ["repro-drag-select-streaming", ['node', '--import', 'tsx/esm', 'scripts/repro-drag-select-streaming.tsx']],
+// 草稿编辑态跨整屏往返回归（#846 增量，PR #942）：真实 Chat 往返——
+// 折叠块/全屏编辑器/vim 模式与 insert-normal 子模式随快照往返、空输入
+// 框保留模式态、Chat 卸载释放快照独占的 staged 图片、staged 绑定可提交。
+// 文本/光标/归属基础往返在 session-workspace 组的
+// verify-composer-draft-handoff；在途 staging 围栏在 verify:build 链的
+// verify-image-preview。完整 8 场景矩阵见 PR #942 历史。
+    ["verify-composer-draft-screen-switch", ['node', '--import', 'tsx/esm', 'scripts/verify-composer-draft-screen-switch.tsx']],
   ],
   'session-workspace': [
 // 审批服务配置回归（issue #49 尾巴）：裸组合 cordis.yml 必须挂载
@@ -437,8 +458,20 @@ const GROUPS = {
 // installModelSelection、#34 的投递异步化都没被它们拦下），挂进来
 // 防再腐烂。
     ["verify-submit", ['node', '--import', 'tsx/esm', 'scripts/verify-submit.mjs']],
+    ['verify-shell-compat', ['node', 'scripts/verify-shell-compat.mjs']],
+    ['verify-agent-lifecycle-compat', ['node', 'scripts/verify-agent-lifecycle-compat.mjs']],
+    ['verify-bundled-presets', ['node', 'scripts/verify-bundled-presets.mjs']],
+    ['verify-preset-startup', ['node', 'scripts/verify-preset-startup.mjs']],
+    ['verify-message-compat', ['node', 'scripts/verify-message-compat.mjs']],
+    ['verify-settings-compat', ['node', '--import', 'tsx/esm', 'scripts/verify-settings-compat.mjs']],
     ["verify-compact", ['node', '--import', 'tsx/esm', 'scripts/verify-compact.mjs']],
+    ["verify-context-warning", ['node', '--import', 'tsx/esm', 'scripts/verify-context-warning.mjs']],
     ["verify-channel-goal-todo", ['node', '--import', 'tsx/esm', 'scripts/verify-channel-goal-todo.mjs']],
+// IDE 选区通道回归（PR #562）：纯函数（env 直连/lock 扫描与 workspace
+// 匹配过滤/hello_ack 解析/selection_changed 校验）、无 IDE 静默降级、
+// loopback 对连（token 握手 ACK、错误 token 换下一候选、断连清空）、
+// 选区消费（text 优先/磁盘回退/截断计数/replay 指示回扫）。
+    ["verify-ide-channel", ['node', '--import', 'tsx/esm', 'scripts/verify-ide-channel.tsx']],
     ["verify-whale-toggle", ['node', '--import', 'tsx/esm', 'scripts/verify-whale-toggle.mjs']],
 // 开屏鲸鱼三选一（classic 组合开场/heart/sleep）：帧表完整性（22 帧
 // 含 heart/sleep 新调色）、序列合法性（standard 起止/纯自家行为帧、
@@ -454,9 +487,9 @@ const GROUPS = {
 // 切换重置、/clear 后在途子代理卡可回现、staged image token 会话作用域
 // （switchModel 不泄漏）、resumeTo 竞争切换守卫、recap 预算从新到旧收容。
     ["verify-session-reset-hygiene", ['node', '--import', 'tsx/esm', 'scripts/verify-session-reset-hygiene.tsx']],
-// Agent View 回归：派生辅助（折叠/摘要/状态映射/标题回退）、无头整屏
-// 组装、按键驱动（派发/预览/帮助/退出）、停止→删除武装的安全语义
-// （Enter 取消、焦点漂移不得改向、窗口过期自动解除）。
+// 会话总览投影回归：派生辅助（折叠/摘要/状态映射/标题回退）+ Chat 接线
+// （「← N 个会话等待输入」页脚与空输入按 ← 请求后台化）。整屏 Agent View
+// 已随三合一会话界面删除，其断言一并移除。
     ["verify-agent-view", ['node', '--import', 'tsx/esm', 'scripts/verify-agent-view.mjs']],
 // 后台任务（ctx.jobs）UI 投影：BackgroundJobStore 单元（注册/转换/消失
 // 合成 killed/输出镜像有界）、channel 集成（建卡、job_output 镜像、落定
@@ -502,6 +535,11 @@ const GROUPS = {
 // effort 配置链路回归（issue #51）：cordis 配置的 effort 必须进入实际
 // 请求配置，而不是只做状态栏启动显示（≤0.3.5 的 display-only 行为）。
     ["repro-effort", ['node', '--import', 'tsx/esm', 'scripts/repro-effort.tsx']],
+// effort 默认档纯函数矩阵（src/effortPrefs.ts）：resolveEffortDefault 优先级
+// 链、effort.json best-effort 语义（缺文件/坏 JSON/结构不符）、
+// nearestLowerEffort 的只降不升边界（未知档 id 双向不参与、空候选）。
+// repro-effort 钉请求级行为，这条钉纯函数输入域，二者互补。
+    ["verify-effort-default", ['node', '--import', 'tsx/esm', 'scripts/verify-effort-default.ts']],
 // 子代理模型路由回归（issue #191）：child scope 没有 AgentOptions 路由时，
 // 首次请求继承 TUI 当前完整路由；显式 child 路由保持优先。
     ["verify-subagent-model-route", ['node', '--import', 'tsx/esm', 'scripts/verify-subagent-model-route.tsx']],

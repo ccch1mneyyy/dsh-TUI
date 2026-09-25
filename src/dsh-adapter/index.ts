@@ -11,6 +11,7 @@ import Schema from '@deepseek-ai/schemastery'
 import type { SessionModeSpec } from '../sessionModes.js'
 import { DEFAULT_STATUS_BAR, normalizePageMargin, type PageMarginSetting, type ScrollGutterMode, type StatusBarConfig, type ToolBackground } from '../tuiDisplayPrefs.js'
 import { SHORTCUT_ACTIONS, type ShortcutActionId } from '../utils/keymap.js'
+import { editableConfig, type RuntimeConfig } from './compat/settings.js'
 
 export const name = 'dsh-tui'
 // `tuiWorkspaces` must stay OUT of this code-level inject (issue #183): the
@@ -54,6 +55,13 @@ export interface Config {
    *  the startup status line until the first request header reports the
    *  live value. */
   effort?: string
+  /** Settings default for future sessions; overrides the `effort` fallback. */
+  effortDefault?: string
+  /** Show the header whale and its idle animation. */
+  whale?: boolean
+  whaleIdle?: boolean
+  /** Reduce decorative header content and colors. */
+  minimal?: boolean
   /** Show the live working line derived in-process from base session events. */
   activity?: boolean
   /** Working-activity indicator preset (`moon8`/`moon`/`comet`/`dots`/…
@@ -143,7 +151,7 @@ export interface Config {
   modes?: SessionModeSpec[]
 }
 
-export const Config: Schema<Config> = Schema.object({
+export const Config: Schema<Config, RuntimeConfig<Config>> = editableConfig<Config>(Schema.object({
   sessionId: Schema.string().required(false),
   // No schema defaults on the route: a `.default()` here would make an
   // unset key indistinguishable from an explicit cordis.yml choice and the
@@ -154,6 +162,10 @@ export const Config: Schema<Config> = Schema.object({
   cwd: Schema.string().required(false),
   workspace: Schema.string().required(false),
   effort: Schema.string().required(false),
+  effortDefault: Schema.string().required(false),
+  whale: Schema.boolean().default(true),
+  whaleIdle: Schema.boolean().default(true),
+  minimal: Schema.boolean().default(false),
   activity: Schema.boolean().default(true),
   activityFrames: Schema.string().required(false),
   contextBar: Schema.boolean().default(true),
@@ -211,22 +223,41 @@ export const Config: Schema<Config> = Schema.object({
       permission: Schema.string().required(false),
     }),
   ).required(false),
-})
+}), [
+  'diffLayout', 'thinkingFold', 'toolBackground', 'scrollGutter', 'pageMargin',
+  'foldTerminalCommand', 'promptSessionLabel', 'expandEditor', 'smoothStreaming',
+  'mermaidDiagrams', 'effortDefault', 'statusBar', 'whale', 'whaleIdle', 'minimal',
+  'lang', 'fullscreen', 'terminalImages', 'shortcuts',
+])
 
 /**
  * Start the interactive TUI front door, delegating to the JSX implementation
  * in `./plugin.tsx` (see its module doc for the full contract).
  * @param ctx - the plugin context.
  * @param config - the validated dsh-tui configuration.
- * @returns a promise settling when the TUI teardown completes.
+ * @returns a promise settling when the Loader entry has scheduled its runtime.
  */
-export async function apply(ctx: Context, config: Config): Promise<void> {
+export async function apply(ctx: Context, config: RuntimeConfig<Config>): Promise<void> {
   // Upstream drift is NO LONGER spammed to stderr here: per-package
   // console.warn lines interleave with the TUI frame redraw and arrive
   // garbled (typewriter animation repaints over them). The merged,
   // natural-language notice now renders in the logo header under the
   // startup tip (LogoV2 ← upstreamDriftSummary); CI keeps the hard gate
   // via scripts/verify-upstream-contract.ts.
-  const { apply: tuiApply } = await import('./plugin.js')
-  return tuiApply(ctx, config)
+  const { apply: tuiApply, handleStartupError } = await import('./plugin.js')
+  let disposed = false
+  ctx.effect(() => () => { disposed = true })
+  // Registry diagnostics can await the whole Loader. Do not make this Host
+  // row await the runtime in return. Let Host providers settle before starting
+  // a Cordis-owned child; the original row still owns volatile Config.
+  const loader = ctx.get('loader') as { await(): Promise<unknown> } | undefined
+  void (loader?.await() ?? ctx.fiber.await()).then(() => {
+    if (disposed) return
+    return ctx.plugin({
+      name: 'dsh-tui-runtime',
+      apply: (runtimeCtx: Context) => tuiApply(runtimeCtx, config, ctx),
+    })
+  }).catch(error => {
+    if (!disposed) handleStartupError(ctx, error)
+  })
 }

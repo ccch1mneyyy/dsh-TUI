@@ -45,10 +45,19 @@ export function prepareUpstreamSourceResolver(sourceRoot) {
 
   const presetsSource = join(sourceRoot, 'packages/preset/agent-presets')
   const presetsTarget = join(scopeRoot, 'dsh-agent-presets')
-  copyManifest(join(presetsSource, 'package.json'), presetsTarget, 'dsh-agent-presets')
-  const shippedPresets = join(presetsSource, 'presets')
-  if (!existsSync(shippedPresets)) throw new Error('dsh-agent-presets source has no shipped presets')
-  cpSync(shippedPresets, join(presetsTarget, 'presets'), { recursive: true })
+  if (existsSync(join(presetsSource, 'package.json'))) {
+    copyManifest(join(presetsSource, 'package.json'), presetsTarget, 'dsh-agent-presets')
+    const shippedPresets = join(presetsSource, 'presets')
+    if (!existsSync(shippedPresets)) throw new Error('dsh-agent-presets source has no shipped presets')
+    cpSync(shippedPresets, join(presetsTarget, 'presets'), { recursive: true })
+  } else {
+    for (const [name, directory] of [
+      ['dsh-agent-preset-registry', 'preset/agent-preset-registry'],
+      ['dsh-ptc-runtime-node', 'ptc-runtime/ptc-runtime-node'],
+    ]) {
+      copyManifest(join(sourceRoot, 'packages', directory, 'package.json'), join(scopeRoot, name), name)
+    }
+  }
 
   const subagentSource = join(sourceRoot, 'packages/subagent/tool-subagent')
   const subagentTarget = join(scopeRoot, 'dsh-tool-subagent')
@@ -82,6 +91,8 @@ export function prepareUpstreamSourceResolver(sourceRoot) {
     version: sourceWebManifest.version,
     type: 'module',
   }, null, 2)}\n`)
+  const webPresets = join(sourceRoot, 'packages/bundle/web-app/presets')
+  if (existsSync(webPresets)) cpSync(webPresets, join(dirname(resolverManifest), 'presets'), { recursive: true })
 
   let cleaned = false
   const cleanup = () => {

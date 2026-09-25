@@ -1,5 +1,5 @@
 {
   "owner": "@deepseek-harness-tui/dsh-tui",
   "preset": "liangshen",
-  "revision": "liangshen-session-snapshot-compat-v6"
+  "revision": "liangshen-ptc-runtime-compat-v7"
 }

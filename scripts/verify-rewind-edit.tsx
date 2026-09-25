@@ -110,7 +110,7 @@ async function verify(fullscreen: boolean, columns: number, entry: 'slash' | 'es
     return agent
   }
   const source = Session.create(SessionId('source'), [], {
-    version: 3, id: SessionId('source'), createdAt: 1, isSeeded: false, cwd: home,
+    ...Session.create(SessionId('source')).header, createdAt: 1, cwd: home,
   })
   source.append('turn/start', { turn: 1 })
   appendReply(source, 1, createUserMessage({ source: { kind: 'user' }, content: [{ type: 'text', text: '你好' }] }))
@@ -123,7 +123,7 @@ async function verify(fullscreen: boolean, columns: number, entry: 'slash' | 'es
   ctx.provide('agents', {
     async create(options: CreateAgentOptions) {
       const session = Session.create(options.sessionId, options.seed, {
-        version: 3, id: options.sessionId, createdAt: 1, isSeeded: false, ...options.meta,
+        ...Session.create(options.sessionId).header, createdAt: 1, ...options.meta,
       }, options.inheritedEventCount)
       const agent = makeAgent(session)
       const setup = await options.setup?.(ctx, agent as never)

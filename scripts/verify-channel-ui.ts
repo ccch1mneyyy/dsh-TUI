@@ -133,14 +133,17 @@ function fixture(jobs?: unknown, options: { throwOnEvent?: string; effectCleanup
   const { raw, agent, listeners } = fixture()
   const route = listeners.get('session/event')!
   raw.contextWindow = 100_000
-  raw.tokens.input = 90_000
+  // The warning reads the last turn's billed usage (input + cache read +
+  // cache write), not the cumulative tokens counter — resumed sessions
+  // replay the counter at full size while the live turn stays small.
+  raw.lastUsage = { input: 90_000, cacheRead: 0, cacheWrite: 0 }
   route(agent.session, { type: 'turn/end', data: { turn: 1, reason: { kind: 'completed' } }, time: 1 })
   assert.equal(raw.notifications.length, 1)
   route(agent.session, {
     type: 'user/message', time: 2,
     data: { source: { kind: 'plugin', plugin: 'compact' }, content: [{ type: 'text', text: 'summary' }] },
   })
-  raw.tokens.input = 90_000
+  raw.lastUsage = { input: 90_000, cacheRead: 0, cacheWrite: 0 }
   route(agent.session, { type: 'turn/end', data: { turn: 2, reason: { kind: 'completed' } }, time: 3 })
   assert.equal(raw.notifications.length, 2, 'warn → compact checkpoint → warn traverses the shared reset')
   raw.releaseContributions()
@@ -615,11 +618,23 @@ for (const deferred of [false, true]) {
   await tick()
   assert.equal(writes.includes('submit'), false)
   let save!: (value: unknown) => void
+  // A real 1×1 PNG: with the dimension caps present the ingress gate runs, and
+  // it measures this from the header, so it reaches saveImage untouched.
+  const tinyPng = Buffer.from(
+    '89504e470d0a1a0a0000000d4948445200000001000000010802000000907753de'
+    + '0000000970485973000003e8000003e801b57b526b0000000c49444154089963f8ffff3f0005fe02fe58f26b0e0000000049454e44ae426082',
+    'hex',
+  )
   services.attachments = {
-    imageLimits: { mediaTypes: ['image/png'], maxImageBytes: 1000 },
+    imageLimits: {
+      mediaTypes: ['image/png'],
+      maxImageBytes: 1000,
+      maxImageDimension: 8192,
+      maxImagePixels: 64_000_000,
+    },
     saveImage: () => new Promise(resolve => { save = resolve }),
   }
-  const pending = mount.channel.stageImage({ data: new Uint8Array([1]), mediaType: 'image/png' })
+  const pending = mount.channel.stageImage({ data: tinyPng, mediaType: 'image/png' })
   raw.agentBindingGeneration += 1
   save({ id: 'saved', mediaType: 'image/png' })
   await assert.rejects(pending, /session changed while the image was being staged/)

@@ -122,6 +122,11 @@ function sanitizeEditableText(text: string): string {
 
 const COMPOSER_IMAGE_TOKEN = /\[Image #\d+\]/gu
 
+/** Format label for one image media type, matching the image preview card's
+ *  title (`JPEG`, `PNG`, `WEBP`, `GIF`). */
+const mediaTypeLabel = (mediaType: string): string =>
+  mediaType.replace(/^image\//u, '').replace(/\+xml$/u, '').toUpperCase()
+
 /** One `[Image #N]` occurrence: [start, end) offsets into the draft. */
 interface ImageTokenSpan {
   readonly start: number
@@ -583,8 +588,9 @@ export function PromptInput({
    * Adopt the owner's draft ONCE, after mount.
    *
    * This is where a screen swap gives the draft back: the slot outlives this
-   * component, so a remount picks up what the user had written — text, caret
-   * and the image bindings behind the visible `[Image #N]` tokens.
+   * component, so a remount picks up what the user had written — text, caret,
+   * the image bindings behind the visible `[Image #N]` tokens, and the edit
+   * state around them (fold chip, fullscreen editor, vim mode).
    *
    * It runs as an effect rather than as the `useState` initial value on
    * purpose. A composer whose FIRST frame is already non-empty moves the
@@ -601,6 +607,22 @@ export function PromptInput({
     draftCache.current = null
     if (!isUsableDraftSnapshot(snapshot, String(channel.agentId), resolveBindingGeneration(channel))) return
     const text = snapshot.value
+    // Carried edit state, restored ahead of the text: the chip, the
+    // fullscreen editor and the vim mode/submode come back with the draft —
+    // and they come back even with NO text, because they are modes rather
+    // than content. Fold ranges are safe by the CAPTURE invariant, not by
+    // restore order: a snapshot's block, when set, always sits inside the
+    // snapshot's own text (setInput keeps or drops it atomically), and at
+    // mount the caret is 0 so updateFoldBlock's caret-drag clamp cannot fire
+    // here. The transient state around them — editor scroll, vim undo stack,
+    // selection — does not come back.
+    updateFoldBlock(snapshot.foldBlock)
+    expandedRef.current = snapshot.expanded
+    setExpanded(snapshot.expanded)
+    vimEnabledRef.current = snapshot.vimEnabled
+    setVimEnabled(snapshot.vimEnabled)
+    vimInsertRef.current = snapshot.vimInsert
+    setVimInsert(snapshot.vimInsert)
     if (text === '') return
     const restoredCursor = normalizeCursorOffset(text, snapshot.cursor)
     replaceDraftImages(filterLiveImageBindings(
@@ -943,7 +965,14 @@ export function PromptInput({
         return
       }
       const text = valueRef.current
-      if (text === '' && images.length === 0) {
+      // The edit state rides along even with nothing typed: vim mode and the
+      // fullscreen editor are MODES the user turned on, not content, and an
+      // empty composer must not drop them (`text === ''` alone used to skip
+      // the snapshot entirely, losing the vim badge on a round trip with an
+      // empty composer).
+      const editState = foldBlockRef.current !== null || expandedRef.current
+        || vimEnabledRef.current
+      if (text === '' && images.length === 0 && !editState) {
         draftCache.current = null
         return
       }
@@ -952,6 +981,10 @@ export function PromptInput({
         bindingGeneration: resolveBindingGeneration(channel),
         value: text,
         cursor: cursorRef.current,
+        foldBlock: foldBlockRef.current,
+        expanded: expandedRef.current,
+        vimEnabled: vimEnabledRef.current,
+        vimInsert: vimInsertRef.current,
         images,
       }
     }
@@ -1640,6 +1673,34 @@ export function PromptInput({
     return queued
   }
 
+  /** Success notice for one staged image. An adapted paste says what the user
+   *  actually got (stored dimensions, stored format, filled alpha) — naming it
+   *  is the difference between a reported adaptation and a silently rewritten
+   *  image. */
+  const stagedImageNotice = (token: string, handle: StagedImageHandle): string => {
+    const adjustment = handle.adjustment
+    if (adjustment === undefined) return t('input-image-pasted', { token })
+    const details: string[] = []
+    if (adjustment.resized) {
+      details.push(t('input-image-detail-resized', {
+        width: adjustment.width,
+        height: adjustment.height,
+      }))
+    }
+    if (adjustment.mediaType !== adjustment.sourceMediaType) {
+      const from = mediaTypeLabel(adjustment.sourceMediaType)
+      const to = mediaTypeLabel(adjustment.mediaType)
+      details.push(adjustment.flattened
+        ? t('input-image-detail-converted-flattened', { from, to })
+        : t('input-image-detail-converted', { from, to }))
+    }
+    // An adjustment always describes a resize or a conversion; anything else
+    // keeps the plain notice rather than an empty parenthetical. ' · ' joins
+    // the clauses in both shipped languages.
+    if (details.length === 0) return t('input-image-pasted', { token })
+    return t('input-image-pasted-adjusted', { token, detail: details.join(' · ') })
+  }
+
   const discardStagedHandles = (handles: readonly StagedImageHandle[]): void => {
     for (const stageId of new Set(handles.map(handle => handle.stageId))) {
       channel.discardStagedImage(stageId)
@@ -1823,7 +1884,7 @@ export function PromptInput({
           // Bind and insert share this synchronous continuation: setInput's
           // sidecar pruning can never observe a bound-but-not-visible token.
           insertClipboardAtCaret(`${token} `)
-          channel.notify(t('input-image-pasted', { token }), { timeoutMs: 2500 })
+          channel.notify(stagedImageNotice(token, handle), { timeoutMs: 2500 })
         })
           .catch(() => {
             if (!draftImageLeaseIsCurrent(lease)) return
@@ -1883,7 +1944,7 @@ export function PromptInput({
                   const handle = await stageImagePath(content.path, lease)
                   const token = bindStagedImage(handle, lease)
                   insertClipboardAtCaret(`${token} `)
-                  channel.notify(t('input-image-pasted', { token }), { timeoutMs: 2500 })
+                  channel.notify(stagedImageNotice(token, handle), { timeoutMs: 2500 })
                 })
               } catch (error: unknown) {
                 if (!draftImageLeaseIsCurrent(lease)) return
@@ -1928,10 +1989,15 @@ export function PromptInput({
                     // All bindings and their visible labels enter together;
                     // typing while an earlier file saves cannot prune one.
                     insertClipboardAtCaret(`${rendered.join(' ')} `)
+                    // A batch cannot itemise every image in one line, but it must
+                    // still say that some of them were not stored as pasted.
+                    const adapted = staged.filter(handle => handle.adjustment !== undefined).length
                     channel.notify(
                       boundTokens.length === 1
-                        ? t('input-image-pasted', { token: boundTokens[0]! })
-                        : t('input-images-staged', { count: boundTokens.length }),
+                        ? stagedImageNotice(boundTokens[0]!, staged[0]!)
+                        : adapted > 0
+                          ? t('input-images-staged-adapted', { count: boundTokens.length, adapted })
+                          : t('input-images-staged', { count: boundTokens.length }),
                       { timeoutMs: 2500 },
                     )
                     return true
@@ -2886,6 +2952,24 @@ export function PromptInput({
     windowStart,
     windowStart + visibleCount,
   )
+  // Caret-window jump: when the caret leaves MAX_VISIBLE_LINES (typing past
+  // it, arrow-key walks through a long prompt) the whole visible band is
+  // replaced in place — same-height rows, completely different text. The
+  // per-cell diff that repaints that band is exactly the path that goes
+  // haywire when the inline viewport is even one row out of sync with the
+  // terminal's scrollback ("重叠变花": old rows bleeding through the new
+  // ones). Same one-shot reanchor family as the shrink/floaters/editor
+  // patches above — the window jump is a viewport-level discontinuity, not
+  // an ordinary content edit.
+  const prevWindowStartRef = React.useRef(windowStart)
+  React.useLayoutEffect(() => {
+    if (windowStart !== prevWindowStartRef.current) {
+      prevWindowStartRef.current = windowStart
+      const ink = instances.get(process.stdout) ?? instances.values().next().value
+      ink?.invalidatePrevFrame()
+      ink?.reanchorViewport()
+    }
+  }, [windowStart])
   // useInput 的滚轮分支需要这份几何（它在这些派生之前注册）。
   if (expanded) {
     editorViewportRef.current = { maxRows: editorMaxRows, total: visualLines.length }
@@ -2893,10 +2977,20 @@ export function PromptInput({
 
   // Folded chip content: block stats + first-line preview + hover hint,
   // all pre-truncated to the input width (the row is one line, always).
+  // `·` separators are U+30FB KATAKANA MIDDLE DOT, NOT U+00B7: the latter
+  // is East-Asian-ambiguous (model 1 cell, CJK terminal fonts paint 2) and
+  // this row's stats→preview→hint truncation arithmetic all runs through
+  // stringWidth — a painted-wide separator shifts every segment right by
+  // one column per separator and the row reads as overlapping text.
+  // U+30FB is officially Ambiguous too, but get-east-asian-width hardcodes
+  // it Wide and mainstream terminals (Western included) paint it 2 cells —
+  // the model and the painted width agree in practice. A wcwidth-strict
+  // Western terminal painting it 1 cell would leave a spare column, which
+  // the `- 6` slack below absorbs.
   const foldBadge = `▸ ${stats}`
   const foldHint = t('input-fold-hover')
   const foldPreviewWidth =
-    inputWidth - stringWidth(foldBadge) - stringWidth(` · ${foldHint}`) - 6
+    inputWidth - stringWidth(foldBadge) - stringWidth(`・${foldHint}`) - 6
   const foldPreview =
     foldPreviewWidth >= 8
       ? truncateToWidth(foldText.split('\n')[0] ?? '', foldPreviewWidth)
@@ -2905,7 +2999,7 @@ export function PromptInput({
   // Expanded-state fold affordance: a `▾` prefix at the start of the FIRST
   // row (only while the window is at the top and no block exists); its
   // cells fold the whole input into a block again on click.
-  const prefixLabel = `▾ ${stats} · `
+  const prefixLabel = `▾ ${stats}・`
   const prefixCols =
     !block && !expanded && big && windowStart === 0 ? stringWidth(prefixLabel) : 0
 
@@ -2994,9 +3088,9 @@ export function PromptInput({
           onMouseLeave={hoverLeave}
         >
           <Text dimColor>{foldBadge}</Text>
-          {foldPreview !== '' && <Text dimColor> · </Text>}
+          {foldPreview !== '' && <Text dimColor>・</Text>}
           {foldPreview !== '' && <Text wrap="truncate-end">{foldPreview}</Text>}
-          <Text dimColor>{` · ${foldHint}`}</Text>
+          <Text dimColor>{`・${foldHint}`}</Text>
         </Box>
       )
     }

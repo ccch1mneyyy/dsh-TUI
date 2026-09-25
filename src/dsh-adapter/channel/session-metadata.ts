@@ -12,6 +12,15 @@ import type { ChannelOwner } from './owner.js'
 import type { CredentialStatus, SideQuestionLlm } from './types.js'
 import { isUserInvocable } from '@deepseek-ai/dsh-skill'
 
+// These tool-less requests never enter the session log. Give each producer
+// its own source kind, as required by 0.1.7 (the old catch-all was removed).
+declare module '@deepseek-ai/dsh-llm' {
+  interface MessageSourceMap {
+    'dsh-tui-btw': { kind: 'dsh-tui-btw' }
+    'dsh-tui-recap': { kind: 'dsh-tui-recap' }
+  }
+}
+
 const PREVIEW_ENTRIES = 8
 
 type Capture = { readonly agent: Agent; readonly generation: number }
@@ -146,7 +155,7 @@ export function createSessionMetadataActions(ctx: Context, deps: {
       stream: llm.stream.bind(llm),
       options: llmRequest(capture, [
         ...capture.agent.session.deriveMessages(),
-        createUserMessage({ content: [{ type: 'text', text: wrapSideQuestion(question) }], source: { kind: 'plugin', plugin: 'dsh-tui/btw' } }),
+        createUserMessage({ content: [{ type: 'text', text: wrapSideQuestion(question) }], source: { kind: 'dsh-tui-btw' } }),
       ], true, signal),
       // Do not let an old session append streamed UI facts after a switch.
       onText: delta => { if (current(capture) && !options?.signal?.aborted) options?.onText?.(delta) },
@@ -168,7 +177,7 @@ export function createSessionMetadataActions(ctx: Context, deps: {
     const outcome = await runSideQuestion({
       stream: llm.stream.bind(llm),
       options: llmRequest(capture, [
-        createUserMessage({ content: [{ type: 'text', text: wrapRecapPrompt(activity) }], source: { kind: 'plugin', plugin: 'dsh-tui/recap' } }),
+        createUserMessage({ content: [{ type: 'text', text: wrapRecapPrompt(activity) }], source: { kind: 'dsh-tui-recap' } }),
       ], false, signal),
       onText: delta => { if (current(capture) && !options?.signal?.aborted) options?.onText?.(delta) },
       signal,
