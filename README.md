@@ -3,31 +3,23 @@
   <img src="docs/assets/readme/logo.svg" alt="dsh-TUI 动态 Logo：鲸鱼、我想要、点亮星标、感谢、已加星标" width="560">
 </p>
 <p align="center">
-  <strong>简体中文</strong> | <a href="https://github.com/ccch1mneyyy/dsh-TUI/blob/main/README.md">English (upstream)</a>
-</p>
-
-
-<p align="center">
   <a href="https://www.npmjs.com/package/@deepseek-harness-tui/dsh-tui"><img alt="npm" src="https://img.shields.io/npm/v/@deepseek-harness-tui/dsh-tui?style=flat-square&color=4b6fff"></a>
   <a href="https://github.com/says693/dsh-TUI-693/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/says693/dsh-TUI-693/actions/workflows/ci.yml/badge.svg"></a>
   <a href="LICENSE"><img alt="MIT License" src="https://img.shields.io/badge/license-MIT-263146?style=flat-square"></a>
   <img alt="Public beta" src="https://img.shields.io/badge/status-public%20beta-7da1de?style=flat-square">
   <a href="https://github.com/says693/dsh-TUI-693/stargazers"><img alt="GitHub stars" src="https://img.shields.io/github/stars/says693/dsh-TUI-693?style=flat-square&color=4b6fff"></a>
+  <a href="https://www.npmjs.com/package/@deepseek-harness-tui/dsh-tui"><img alt="npm downloads" src="https://img.shields.io/npm/dm/@deepseek-harness-tui/dsh-tui?style=flat-square&color=4b6fff"></a>
   <img alt="官方收录" src="https://img.shields.io/badge/DeepSeek%20Harness%20官方公众号-收录-brightgreen">
 </p>
 
 # dsh-TUI
 
->一个面向 DeepSeek Harness 的交互式终端界面插件： 零核心改动，纯插件挂载。安装插件即可启用，卸载后不会留下核心补丁。
->提供像素鲸鱼顶栏、实时工作状态行、流式思考展示、双击 Esc 时间回溯、上下文进度条与 TPS 仪表。
->
->An interactive terminal UI plugin for DeepSeek Harness: pixel-whale header, live work status, streaming thinking display, double-Esc time rewind, a context progress bar, and a TPS gauge.
->Zero core changes, pure plugin mounting. Install to enable; uninstall leaves no core patches.
+> 面向 DeepSeek Harness 的交互式终端界面插件：像素鲸鱼顶栏、实时工作状态、流式思考展示、双击 Esc 时间回溯、上下文进度条与 TPS 仪表。
+> 零核心改动，纯插件挂载。安装即启用，卸载不留核心补丁。
 
+## 官方收录
 
-## 🎉 官方收录与上游信息
-
-本项目基于 [ccch1mneyyy/dsh-TUI](https://github.com/ccch1mneyyy/dsh-TUI) 演进。当前官方公众号、[dshfind](https://dshfind.com/ccch1mneyyy/dsh-TUI) 与 [Trendshift](https://trendshift.io/repositories/146168) 条目仍指向上游项目页面，并在 GitHub Trending **TypeScript 日榜中位列第七**。
+本插件被 **DeepSeek Harness 官方公众号**推文收录，也被 [dshfind](https://dshfind.com/ccch1mneyyy/dsh-TUI) 插件目录收录，并登上 [GitHub Trending](https://trendshift.io/repositories/146168) 日榜第七（TypeScript 口径）。
 
 <div align="center">
   <table>
@@ -44,7 +36,7 @@
         <br><br>
         <a href="https://trendshift.io/repositories/146168" title="GitHub Trending 日榜 #7 · TypeScript 口径"><img alt="Trendshift" src="https://trendshift.io/api/badge/trendshift/repositories/146168/daily?language=TypeScript"></a>
          <br>
-        <strong>TypeScript 日榜第七</strong>
+        <strong>GitHub Trending 日榜第七</strong>
       </td>
     </tr>
   </table>
@@ -210,23 +202,11 @@ pnpm smoke
 
 ## 权限与安全边界
 
-> [!WARNING]
-> **Windows 默认高权限：** `danger-full-access`，审批 
-ever`。文件与 Shell 操作不逐次确认；处理敏感或不可信内容前，请收紧 profile。
+> **Windows 安全警告：** Windows profile 默认 `danger-full-access`、approval 默认 `never`，工具访问不受限制。在敏感凭证或不可信仓库旁启动前，先检查并收紧 profile。
 
-<table>
-  <thead><tr><th width="112" align="left">边界</th><th align="left">规则</th></tr></thead>
-  <tbody>
-    <tr><td><strong>执行策略</strong></td><td>沿用 DSH profile 的沙箱与审批策略；TUI 不另设沙箱。</td></tr>
-    <tr><td><strong>权限切换</strong></td><td><code>/permission</code> 或 <code>Shift+Tab</code> 选择 DSH 提供的预设。</td></tr>
-    <tr><td><strong>状态校验</strong></td><td>以真实事件或读回确认；服务异常或无写路径时明确报错。</td></tr>
-    <tr><td><strong>计划退出</strong></td><td>恢复进入前的权限；原预设仍可用时恢复其身份。</td></tr>
-  </tbody>
-</table>
+不自带沙箱：用当前 DSH profile 的文件、Shell、sandbox 与 approval 策略。权限预设来自 DSH `permissionPresets` registry。
 
-<p>
-  <a href="docs/architecture.md#权限与安全边界"><img src="docs/assets/readme/security-link-zh.svg" width="288" height="44" alt="查看完整权限规则与已知限制"></a>
-</p>
+详见[权限边界](docs/architecture.md#权限与安全边界)。
 
 ### 致谢
 

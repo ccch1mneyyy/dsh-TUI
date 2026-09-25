@@ -17,7 +17,9 @@ for (const language of ['zh', 'en']) {
   const navigationHeading = language === 'zh' ? '## 文档索引' : '## Documentation'
   assert.match(readme.slice(readme.indexOf(previewHeading), readme.indexOf(navigationHeading)), /<\/picture>\s*$/)
   const securityTarget = language === 'zh' ? 'docs/architecture.md#权限与安全边界' : 'docs/architecture.en.md#permissions-and-security-boundary'
-  assert.ok(readme.includes(`<a href="${securityTarget}"><img src="docs/assets/readme/security-link-${language}.svg"`))
+  const securityLabel = language === 'zh' ? '权限边界' : 'Permissions and security boundary'
+  assert.ok(readme.includes(`[${securityLabel}](${securityTarget})`))
+  assert.ok(!readme.includes(`src="docs/assets/readme/security-link-${language}.svg"`))
   const button = await readFile(new URL(`security-link-${language}.svg`, import.meta.url), 'utf8')
   assert.ok(button.includes('viewBox="0 0 288 44"'))
   assert.ok(button.includes(securityTarget))
