@@ -205,7 +205,7 @@ function createChannelWithOwner(
     agent: () => binding.agent,
     subagents: () => (ctx as { get(name: string): unknown }).get('subagents') as { interrupt?(target: string, reason: unknown): void } | undefined,
     lookupChild: id => {
-      const agents = ctx.get('agents') as { get(id: string): { session?: unknown; options?: { provider?: string; model?: string } } | undefined } | undefined
+      const agents = ctx.get('agents') as { get(id: string): { status?: string; session?: unknown; options?: { provider?: string; model?: string } } | undefined } | undefined
       return agents?.get(id)
     },
   })

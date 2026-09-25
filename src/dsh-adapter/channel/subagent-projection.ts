@@ -29,7 +29,7 @@ export function createSubagentProjection(
     agent(): Agent
     subagents(): { interrupt?(target: string, reason: unknown): void } | undefined
     /** Optional child metadata lookup; failures must not suppress spawning. */
-    lookupChild(id: string): { session?: unknown; options?: { provider?: string; model?: string } } | undefined
+    lookupChild(id: string): { status?: string; session?: unknown; options?: { provider?: string; model?: string } } | undefined
   },
 ) {
   const store = new SubagentActivityStore()
@@ -121,29 +121,33 @@ export function createSubagentProjection(
     let child: ReturnType<typeof deps.lookupChild> | undefined
     try { child = deps.lookupChild(sessionId) } catch { return undefined }
     if (!child || child.session !== session) return undefined
-    // Registry presence means the child is streaming right now: a row that
-    // was discovered before its registration (workflow member edge racing
-    // the registry) upgrades from `unknown` to `running`.
-    if (store.get(sessionId)?.status === 'unknown') store.patch(sessionId, { status: 'running' })
+    // Registry presence is not liveness: a continuable child stays
+    // registered while idle. Only a running child upgrades a discovered row
+    // and earns a transcript card; the session link itself is established
+    // regardless so attribution heals the moment it starts streaming.
+    const running = child.status === 'running'
+    if (running && store.get(sessionId)?.status === 'unknown') store.patch(sessionId, { status: 'running' })
     store.linkSession(sessionId, session)
-    cardedIds.add(sessionId)
+    if (running) cardedIds.add(sessionId)
     return sessionId
   }
   /** Register a discovered child and, when the agents registry currently
-   * holds it, bind its live session so streaming state flows. */
+   * holds it RUNNING (idle continuable children stay registered without
+   * being live), bind its session so streaming state flows. */
   const discover = (childId: string, info: { label?: string; childCreatedAt?: number; provider?: string; runId?: string }): void => {
     let child: ReturnType<typeof deps.lookupChild> | undefined
     try { child = deps.lookupChild(childId) } catch { child = undefined }
+    const running = child?.status === 'running'
     store.onDiscovered(childId, {
       label: info.label,
       childCreatedAt: info.childCreatedAt,
-      live: child !== undefined,
+      live: running,
       provider: info.provider ?? child?.options?.provider,
       model: child?.options?.model,
     })
     if (info.runId !== undefined) store.patch(childId, { runId: info.runId })
     if (child?.session) store.linkSession(childId, child.session)
-    if (child !== undefined) cardedIds.add(childId)
+    if (running) cardedIds.add(childId)
   }
   /** Durable session events stamp their own wall time; a fold from the log
    * must not date a historical child at resume time. */
@@ -177,9 +181,12 @@ export function createSubagentProjection(
       if (typeof data.runId !== 'string' || typeof data.seq !== 'number') return
       const agentId = workflowMembers.get(`${data.runId}:${data.seq}`)
       if (agentId === undefined) return
-      if (data.outcome === 'failed') store.onFailed(agentId, 'failed')
-      else if (data.outcome === 'cancelled') store.onCancelled(agentId, 'cancelled')
-      else store.onCompleted(agentId)
+      // The durable end event stamps the historical wall time; folding it
+      // must close the member at that time, not at fold/resume time.
+      const endedAt = eventTime(event)
+      if (data.outcome === 'failed') store.onFailed(agentId, 'failed', endedAt)
+      else if (data.outcome === 'cancelled') store.onCancelled(agentId, 'cancelled', undefined, endedAt)
+      else store.onCompleted(agentId, undefined, undefined, endedAt)
     } else {
       return
     }

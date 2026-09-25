@@ -94,7 +94,7 @@ const catalog = (childId: string, label: string, at: number) =>
 // ── A + B: live lifecycle — catalog birth, epoch reset, late-end immunity ──
 {
   const h = makeHarness()
-  const child: FakeChild = { session: { id: 'cat-child', seq: 0, events: [], header: {} }, options: { provider: 'fake-provider', model: 'model-00' } }
+  const child: FakeChild = { status: 'running', session: { id: 'cat-child', seq: 0, events: [], header: {} }, options: { provider: 'fake-provider', model: 'model-00' } }
   h.registry.set('cat-child', child)
 
   h.parentEvent(catalog('cat-child', '检索索引结构', 1_000))
@@ -135,6 +135,7 @@ const catalog = (childId: string, label: string, at: number) =>
   const t0 = Date.now() - 3_600_000
   const seed = [
     catalog('old-child', '历史子任务', t0),
+    catalog('idle-child', '驻留子任务', t0),
     { type: 'tool-workflow/run-start', seq: 1, time: t0, data: { runId: 'wr-1', name: 'audit' } },
     { type: 'tool-workflow/agent-start', seq: 2, time: t0, data: { runId: 'wr-1', seq: 0, label: '审计甲', childId: 'wf-old' } },
     { type: 'tool-workflow/agent-start', seq: 3, time: t0, data: { runId: 'wr-1', seq: 1, label: '审计乙', childId: 'wf-gone' } },
@@ -142,22 +143,31 @@ const catalog = (childId: string, label: string, at: number) =>
   ]
   const h = makeHarness(seed, registry => {
     // One catalog child is STILL live mid-run in this process (adoption of a
-    // running session): registered before the fold runs.
-    registry.set('old-child', { session: { id: 'old-child', seq: 0, events: [], header: {} }, options: { provider: 'fake-provider' } })
+    // running session): registered before the fold runs. Another stays
+    // REGISTERED BUT IDLE — a continuable child parked between epochs must
+    // not count as live (no fake running row, no replay card).
+    registry.set('old-child', { status: 'running', session: { id: 'old-child', seq: 0, events: [], header: {} }, options: { provider: 'fake-provider' } })
+    registry.set('idle-child', { status: 'idle', session: { id: 'idle-child', seq: 0, events: [], header: {} } })
   })
 
   const panelIds = h.channel.subagents.map(s => s.agentId).sort()
   check('C1 bootstrap 重建面板：catalog 历史 + workflow 成员齐全',
-    JSON.stringify(panelIds) === JSON.stringify(['old-child', 'wf-gone', 'wf-old']),
+    JSON.stringify(panelIds) === JSON.stringify(['idle-child', 'old-child', 'wf-gone', 'wf-old']),
     JSON.stringify(h.channel.subagents.map(s => [s.agentId, s.status])))
-  check('C2 registry 仍在的子代理显示 running',
+  check('C2 registry 仍在运行的子代理显示 running',
     h.panel('old-child')?.status === 'running', `status=${String(h.panel('old-child')?.status)}`)
+  check('C2b 注册但 idle 的 continuable 子代理不算 live（unknown、不出卡）',
+    h.panel('idle-child')?.status === 'unknown' && h.row('idle-child') === undefined,
+    `status=${String(h.panel('idle-child')?.status)} card=${String(h.row('idle-child') !== undefined)}`)
   check('C3 历史 catalog 子代理显示 unknown、startedAt 用日志时间',
     h.panel('wf-gone')?.status === 'unknown' && h.panel('wf-gone')?.startedAt === t0,
     `status=${String(h.panel('wf-gone')?.status)} at=${String(h.panel('wf-gone')?.startedAt)}`)
   check('C4 workflow 成员按 agent-end 落地终态（failed）',
     h.panel('wf-old')?.status === 'failed' && h.panel('wf-old')?.description === '审计甲',
     `status=${String(h.panel('wf-old')?.status)} desc=${String(h.panel('wf-old')?.description)}`)
+  check('C4b 结算用持久 end 事件的墙钟（completedAt=事件时间，非 fold 时刻）',
+    h.panel('wf-old')?.completedAt === t0 + 5000,
+    `completedAt=${String(h.panel('wf-old')?.completedAt)} expect=${t0 + 5000}`)
   const transcriptOld = h.channel.rows.some(r => r.kind === 'subagent' && r.subagent?.agentId === 'wf-gone')
   check('C5 历史行不进转录（卡片只属于 live 发现）', transcriptOld === false,
     `rows=${JSON.stringify(h.channel.rows.filter(r => r.kind === 'subagent').map(r => r.subagent?.agentId))}`)
@@ -168,7 +178,7 @@ const catalog = (childId: string, label: string, at: number) =>
   const h = makeHarness()
   // Start arrives while the registry does NOT yet know the child.
   h.emit('subagent/start', { id: 'late-child', runId: 'run-l', provider: 'fake-provider' })
-  const child: FakeChild = { session: { id: 'late-child', seq: 0, events: [], header: {} } }
+  const child: FakeChild = { status: 'running', session: { id: 'late-child', seq: 0, events: [], header: {} } }
   h.childEvent(child, { type: 'assistant/chunk', data: { chunk: { type: 'text-delta', text: '孤儿输出' } } })
   await sleep(40) // 固定窗:探针 等 flush 落定后确认输出仍未归属
   check('D1 未绑定会话事件不产生输出', (h.panel('late-child')?.output.join('') ?? '') === '')
@@ -190,7 +200,7 @@ const catalog = (childId: string, label: string, at: number) =>
 // ── E: live workflow member lifecycle ──
 {
   const h = makeHarness()
-  const member: FakeChild = { session: { id: 'wf-live', seq: 0, events: [], header: {} } }
+  const member: FakeChild = { status: 'running', session: { id: 'wf-live', seq: 0, events: [], header: {} } }
   // Registration races the member edge: agent-start lands FIRST, the registry
   // catches up only when the child starts streaming.
   h.parentEvent({ type: 'tool-workflow/agent-start', seq: 9, time: Date.now(), data: { runId: 'wr-2', seq: 3, label: '并行审计', childId: 'wf-live' } })

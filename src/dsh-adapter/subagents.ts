@@ -315,24 +315,26 @@ export class SubagentActivityStore {
     this.notify()
   }
 
-  onCompleted(agentId: string, summary?: string, stopReason = 'completed'): void { this.finish(agentId, 'completed', stopReason, summary) }
-  onFailed(agentId: string, error: string): void { this.finish(agentId, 'failed', error, undefined) }
-  onCancelled(agentId: string, reason = 'cancelled', summary?: string): void { this.finish(agentId, 'cancelled', reason, summary) }
+  onCompleted(agentId: string, summary?: string, stopReason = 'completed', endedAt?: number): void { this.finish(agentId, 'completed', stopReason, summary, endedAt) }
+  onFailed(agentId: string, error: string, endedAt?: number): void { this.finish(agentId, 'failed', error, undefined, endedAt) }
+  onCancelled(agentId: string, reason = 'cancelled', summary?: string, endedAt?: number): void { this.finish(agentId, 'cancelled', reason, summary, endedAt) }
 
-  private finish(agentId: string, status: SubagentStatus, reason?: string, summary?: string): void {
+  private finish(agentId: string, status: SubagentStatus, reason?: string, summary?: string, endedAt?: number): void {
     const state = this.states.get(agentId)
     // `unknown` rows (durable discovery: catalog children, workflow members
     // folded from the log) accept their settlement edge the same as live
     // rows — a terminal edge is authoritative regardless of how the row was
     // born. Already-settled rows keep their first outcome.
     if (!state || (state.status !== 'running' && state.status !== 'starting' && state.status !== 'unknown')) return
-    // A discovered row settling from `unknown` has no live timing to close:
-    // keep duration 0 instead of dating its completion at fold/resume time.
+    // A discovered row settling from `unknown` closes at the durable event's
+    // wall time (`agent-end` stamps it), falling back to startedAt when even
+    // that is missing: completedAt must stay a number so the row projection's
+    // durationMs never ticks on a settled row.
     const discovered = state.status === 'unknown'
     const stream = this.streams.get(agentId)
     if (stream !== undefined) this.restoreAttempt(agentId, stream)
     state.status = status
-    state.completedAt = discovered ? state.startedAt : Date.now()
+    state.completedAt = discovered ? endedAt ?? state.startedAt : Date.now()
     state.endedAt = state.completedAt
     state.stopReason = reason
     if (summary) state.summary = summary
