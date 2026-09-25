@@ -108,6 +108,11 @@ const GROUPS = {
 // 空转重渲染风暴回归（issue #433）：长历史 + 30ms 空转 commit 风暴下
 // renderScrollTop / 画面 / 输入框行数必须逐帧恒定，几何不震荡。
     ["repro-idle-oscillation", ['node', '--import', 'tsx/esm', 'scripts/repro-idle-oscillation.tsx']],
+// 静置空转的终端下泄回归：inline 模式下光标停在内容下一行时，用 LF 补行会
+// 逐行滚动终端——一帧「什么都没变」的画面也往回滚缓冲里塞一份重复视口
+// （实测 ~73 LF/s）。静置窗口内 stdout 不得出现 LF、回滚缓冲不得增长，同时
+// 鲸鱼闲置动画必须仍在重绘（不许靠冻结界面取巧）。
+    ["verify-idle-repaint", ['node', '--import', 'tsx/esm', 'scripts/verify-idle-repaint.tsx']],
 // settled 子代理卡片不得永久持有动画时钟（空闲帧归零回归）：
 // 曾以 120ms/卡片持续驱动 React commit，N 张相位错开合成 ~30ms
 // 均匀帧 cadence。
