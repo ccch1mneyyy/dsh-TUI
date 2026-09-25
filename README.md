@@ -11,7 +11,8 @@
   <a href="https://www.npmjs.com/package/@deepseek-harness-tui/dsh-tui"><img alt="npm" src="https://img.shields.io/npm/v/@deepseek-harness-tui/dsh-tui?style=flat-square&color=4b6fff"></a>
   <a href="https://github.com/says693/dsh-TUI-693/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/says693/dsh-TUI-693/actions/workflows/ci.yml/badge.svg"></a>
   <a href="LICENSE"><img alt="MIT License" src="https://img.shields.io/badge/license-MIT-263146?style=flat-square"></a>
-  <img alt="Public beta" src="https://img.shields.io/badge/status-public%20beta-7da1de?style=flat-square">`n  <a href="https://github.com/says693/dsh-TUI-693/stargazers"><img alt="GitHub stars" src="https://img.shields.io/github/stars/says693/dsh-TUI-693?style=flat-square&color=4b6fff"></a>
+  <img alt="Public beta" src="https://img.shields.io/badge/status-public%20beta-7da1de?style=flat-square">
+  <a href="https://github.com/says693/dsh-TUI-693/stargazers"><img alt="GitHub stars" src="https://img.shields.io/github/stars/says693/dsh-TUI-693?style=flat-square&color=4b6fff"></a>
   <img alt="官方收录" src="https://img.shields.io/badge/DeepSeek%20Harness%20官方公众号-收录-brightgreen">
 </p>
 
@@ -135,7 +136,8 @@ sh install.sh
 | --- | --- |
 | `dsh-tui update` | 更新当前 `dsh-tui` profile，并尝试对齐全局启动器 |
 | `dsh-tui doctor` | 检查 dsh、pnpm、profile、版本与凭证是否配置；不输出密钥值 |
-| `dsh-tui safe` | 只读诊断、插件清单与修复建议；`safe --rescue` 可创建干净的救援 profile |`n| `dsh-tui version` | 显示启动器与 profile 版本，等同于 `--version` / `-v` |
+| `dsh-tui safe` | 只读诊断、插件清单与修复建议；`safe --rescue` 可创建干净的救援 profile |
+| `dsh-tui version` | 显示启动器与 profile 版本，等同于 `--version` / `-v` |
 | `dsh-tui help` | 显示命令帮助，等同于 `--help` / `-h` |
 
 `dst` 支持相同子命令。`help`、`version` 无需初始化 profile；`doctor` 可在
@@ -257,7 +259,8 @@ dsh plugin --profile dsh-tui add @deepseek-harness-tui/dsh-tui
 ## 权限与安全边界
 
 > [!WARNING]
-> **Windows 默认高权限：** `danger-full-access`，审批 `never`。文件与 Shell 操作不逐次确认；处理敏感或不可信内容前，请收紧 profile。
+> **Windows 默认高权限：** `danger-full-access`，审批 
+ever`。文件与 Shell 操作不逐次确认；处理敏感或不可信内容前，请收紧 profile。
 
 <table>
   <thead><tr><th width="112" align="left">边界</th><th align="left">规则</th></tr></thead>
