@@ -39,27 +39,77 @@ export class SubagentActivityStore {
 
   onSpawned(agentId: string, provider = 'subagent', model?: string, info: Partial<SubagentState> = {}): void {
     const existing = this.states.get(agentId)
-    const state: SubagentState = existing ?? {
+    if (!existing) {
+      this.states.set(agentId, {
+        agentId,
+        runId: info.runId ?? agentId,
+        description: info.description ?? `${provider} task`,
+        provider,
+        model: model ?? info.model ?? provider,
+        effort: info.effort,
+        status: 'running',
+        startedAt: info.startedAt ?? Date.now(),
+        local: info.local,
+        parentSessionId: info.parentSessionId,
+        sessionId: info.sessionId,
+        output: [],
+        outputEvents: [],
+        toolCalls: [],
+      })
+      this.notify()
+      return
+    }
+    // Continuable children re-use one agent id across residency epochs, and a
+    // new epoch announces a NEW runId (the host's `subagent/start` pairing
+    // key). A runId change therefore opens a fresh run: the previous epoch's
+    // terminal state, timing, output and tools must not leak into it. The
+    // same runId re-announced only refreshes display metadata.
+    if (info.runId !== undefined && info.runId !== existing.runId) {
+      this.streams.delete(agentId)
+      existing.runId = info.runId
+      existing.status = 'running'
+      existing.startedAt = info.startedAt ?? Date.now()
+      existing.completedAt = undefined
+      existing.endedAt = undefined
+      existing.stopReason = undefined
+      existing.summary = undefined
+      existing.error = undefined
+      existing.output = []
+      existing.outputEvents = []
+      existing.toolCalls = []
+      existing.tokens = undefined
+      existing.description = info.description ?? existing.description
+      existing.local = info.local ?? existing.local
+      existing.provider = provider
+      existing.model = model ?? existing.model
+    } else {
+      existing.provider = provider
+      existing.model = model ?? existing.model
+      if (info.description !== undefined) existing.description = info.description
+      if (info.local !== undefined) existing.local = info.local
+    }
+    this.notify()
+  }
+
+  /** Durable discovery (`subagent/catalog`, workflow member events, registry
+   * back-fill): register a child WITHOUT disturbing an already-tracked run.
+   * `live` marks a child the agents registry currently holds, which keeps the
+   * row running; an idle historical child shows as `unknown` (the parent log
+   * alone cannot prove how its last epoch ended). */
+  onDiscovered(agentId: string, info: { label?: string; childCreatedAt?: number; live?: boolean; provider?: string; model?: string } = {}): void {
+    if (this.states.has(agentId)) return
+    this.states.set(agentId, {
       agentId,
-      runId: info.runId ?? agentId,
-      description: info.description ?? 'Subagent task',
-      provider,
-      model: model ?? info.model ?? provider,
-      effort: info.effort,
-      status: 'running',
-      startedAt: info.startedAt ?? Date.now(),
-      local: info.local,
-      parentSessionId: info.parentSessionId,
-      sessionId: info.sessionId,
+      description: info.label ?? `${info.provider ?? 'subagent'} task`,
+      provider: info.provider ?? 'subagent',
+      model: info.model ?? info.provider,
+      status: info.live ? 'running' : 'unknown',
+      startedAt: info.childCreatedAt ?? Date.now(),
+      sessionId: agentId,
       output: [],
       outputEvents: [],
       toolCalls: [],
-    }
-    if (existing) {
-      Object.assign(existing, info, { provider, model: model ?? existing.model, status: existing.status === 'completed' ? existing.status : 'running' })
-    } else {
-      this.states.set(agentId, state)
-    }
+    })
     this.notify()
   }
 
@@ -70,6 +120,8 @@ export class SubagentActivityStore {
   }
 
   getSubagentIdBySession(session: unknown): string | undefined { return this.sessionToAgent.get(session) }
+
+  has(agentId: string): boolean { return this.states.has(agentId) }
 
   appendOutput(agentId: string, text: string, kind: SubagentOutputKind = 'text'): void {
     const state = this.states.get(agentId)
@@ -269,11 +321,18 @@ export class SubagentActivityStore {
 
   private finish(agentId: string, status: SubagentStatus, reason?: string, summary?: string): void {
     const state = this.states.get(agentId)
-    if (!state || (state.status !== 'running' && state.status !== 'starting')) return
+    // `unknown` rows (durable discovery: catalog children, workflow members
+    // folded from the log) accept their settlement edge the same as live
+    // rows — a terminal edge is authoritative regardless of how the row was
+    // born. Already-settled rows keep their first outcome.
+    if (!state || (state.status !== 'running' && state.status !== 'starting' && state.status !== 'unknown')) return
+    // A discovered row settling from `unknown` has no live timing to close:
+    // keep duration 0 instead of dating its completion at fold/resume time.
+    const discovered = state.status === 'unknown'
     const stream = this.streams.get(agentId)
     if (stream !== undefined) this.restoreAttempt(agentId, stream)
     state.status = status
-    state.completedAt = Date.now()
+    state.completedAt = discovered ? state.startedAt : Date.now()
     state.endedAt = state.completedAt
     state.stopReason = reason
     if (summary) state.summary = summary

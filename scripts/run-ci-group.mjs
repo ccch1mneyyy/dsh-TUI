@@ -543,6 +543,10 @@ const GROUPS = {
 // 子代理模型路由回归（issue #191）：child scope 没有 AgentOptions 路由时，
 // 首次请求继承 TUI 当前完整路由；显式 child 路由保持优先。
     ["verify-subagent-model-route", ['node', '--import', 'tsx/esm', 'scripts/verify-subagent-model-route.tsx']],
+// 子代理面板同步回归（issue #966）：catalog/workflow 持久发现、重派 runId
+// 分代（含上一 epoch 迟到 end 不得错杀）、resume 日志 bootstrap（历史行
+// 不进转录）、会话绑定延迟愈合与 peer 会话不污染。
+    ["verify-subagent-panel-sync", ['node', '--import', 'tsx/esm', 'scripts/verify-subagent-panel-sync.tsx']],
 // 子进程 stderr 接管回归（issue #17）：inherit 的 MCP 子进程 stderr
 // 不再裸写终端破坏 alt-screen，输出去重聚合为受控通知。
     ["verify-child-stderr", ['node', '--import', 'tsx/esm', 'scripts/verify-child-stderr.tsx']],

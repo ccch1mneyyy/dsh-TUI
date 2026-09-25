@@ -14,7 +14,11 @@ export interface SubagentCardProps { subagent: SubagentState; focused?: boolean;
 
 export function SubagentCard({ subagent, focused, onClick }: SubagentCardProps): React.ReactNode {
   const running = subagent.status === 'running' || subagent.status === 'starting'
-  const elapsed = subagent.completedAt ? subagent.completedAt - subagent.startedAt : Date.now() - subagent.startedAt
+  // Only a live run ticks; discovered history (`unknown`) has no end time to
+  // count from, so it must not accumulate a fake growing duration.
+  const elapsed = running
+    ? Date.now() - subagent.startedAt
+    : subagent.completedAt !== undefined ? subagent.completedAt - subagent.startedAt : undefined
   const total = subagent.tokens?.total ?? ((subagent.tokens?.input ?? 0) + (subagent.tokens?.output ?? 0) || 0)
   // Mouse affordance: clickable cards tint on hover; the keyboard-focused
   // card keeps its brand-color header (no double highlight).
@@ -27,10 +31,12 @@ export function SubagentCard({ subagent, focused, onClick }: SubagentCardProps):
   const liveLine = running ? subagent.output[subagent.output.length - 1] : undefined
   const minimal = isMinimalMode()
   const glyph = running ? (minimal ? '·' : '🟡')
+    : subagent.status === 'unknown' ? (minimal ? '·' : '⚪')
     : subagent.status === 'failed' || subagent.status === 'cancelled' ? (minimal ? '×' : '🔴')
     : (minimal ? '✓' : '🟢')
   const glyphColor = minimal ? undefined
     : running ? 'warning' as const
+    : subagent.status === 'unknown' ? 'subtle' as const
     : subagent.status === 'failed' || subagent.status === 'cancelled' ? 'error' as const
     : 'success' as const
   const hoverTint = onClick !== undefined && hovered && !focused
@@ -49,7 +55,7 @@ export function SubagentCard({ subagent, focused, onClick }: SubagentCardProps):
       <Text>
         <Text dimColor>{' · '}</Text>
         <Text>{subagent.model ?? subagent.provider ?? 'default'}</Text>
-        <Text dimColor>{` · ${formatDuration(elapsed)} · ${total || '—'} tok · ${subagent.toolCalls.length} tools`}</Text>
+        <Text dimColor>{elapsed !== undefined ? ` · ${formatDuration(elapsed)} · ` : ' · '}{total || '—'} tok · {subagent.toolCalls.length} tools</Text>
       </Text>
     </Box>
     {liveLine && <Text dimColor wrap="truncate">{`  │ ${liveLine}`}</Text>}

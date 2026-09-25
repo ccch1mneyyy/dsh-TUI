@@ -5,7 +5,23 @@ import type { ChannelState, ChatRow, SubagentControl, SubagentRow } from './type
 
 /** Current-session subagent store, row projection and frame-batched stream
  * bridge. The owning channel installs transport subscriptions; this module
- * only accepts scoped events and never captures a replaceable agent itself. */
+ * only accepts scoped events and never captures a replaceable agent itself.
+ *
+ * Discovery comes from three seams so the dashboard can mirror EVERY child
+ * the session dispatched (issue #966):
+ *  1. `subagent/start`/`subagent/end` bus edges — per-run lifecycle of
+ *     one-shot runs and continuable epochs, paired by `runId`;
+ *  2. parent-session durable events — `subagent/catalog` (child creation
+ *     fact, written for every child) and `tool-workflow/agent-start|end`
+ *     (workflow/ralph members, which never emit subagent edges) — received
+ *     live AND folded from the log at bind/resume so a restart no longer
+ *     blanks the panel;
+ *  3. lazy registry back-fill — a child session event or stream frame whose
+ *     session link was never established is resolved through the agents
+ *     registry on arrival, healing one-shot `lookupChild` misses.
+ * Transcript cards are gated to children discovered while LIVE: a resumed
+ * session's historical children appear in the dashboard without flooding the
+ * replayed transcript with cards that the durable log never contained. */
 export function createSubagentProjection(
   getState: () => Pick<ChannelState, 'rows' | 'subagents' | 'emit' | 'emitStream'>,
   deps: {
@@ -19,11 +35,17 @@ export function createSubagentProjection(
   const store = new SubagentActivityStore()
   const rowsByAgentId = new Map<string, ChatRow>()
   const pendingTaskDescriptions: string[] = []
+  /** Workflow member identity: `tool-workflow/agent-end` carries no childId,
+   * so member starts remember `runId:seq` → agentId for their settlement. */
+  const workflowMembers = new Map<string, string>()
+  /** Children that earned a transcript card (live discovery only). */
+  const cardedIds = new Set<string>()
   let streamDirty = false
 
   const syncRows = (snapshot: readonly SubagentState[] = store.snapshot()): void => {
     const state = getState()
     for (const sub of snapshot) {
+      if (!cardedIds.has(sub.agentId)) continue
       let row = rowsByAgentId.get(sub.agentId)
       if (!row) {
         row = { id: deps.rowIds.value++, kind: 'subagent', text: sub.description, subagent: undefined }
@@ -56,7 +78,8 @@ export function createSubagentProjection(
     return true
   }
   const onSessionEvent = (session: unknown, event: { type?: string }): boolean => {
-    const id = store.getSubagentIdBySession(session)
+    let id = store.getSubagentIdBySession(session)
+    if (id === undefined) id = backfillSessionLink(session)
     if (id === undefined) return false
     store.onSessionEvent(id, event)
     if (event.type === 'assistant/chunk') {
@@ -72,7 +95,8 @@ export function createSubagentProjection(
   // (not its session), so resolve the subagent through its bound session.
   const onStreamFrame = (agent: unknown, frame: AssistantStreamFrame): boolean => {
     const session = (agent as { session?: unknown } | null | undefined)?.session
-    const id = session !== undefined && session !== null ? store.getSubagentIdBySession(session) : undefined
+    let id = session !== undefined && session !== null ? store.getSubagentIdBySession(session) : undefined
+    if (id === undefined && session !== undefined && session !== null) id = backfillSessionLink(session)
     if (id === undefined) return false
     store.onStreamFrame(id, frame)
     if (frame.type === 'chunk') {
@@ -84,6 +108,96 @@ export function createSubagentProjection(
     }
     return true
   }
+  /** Heal a missing session→agent link through the agents registry. The
+   * start-time lookup is one-shot; a miss (service not yet mounted, child not
+   * yet registered) previously left the child's events permanently
+   * unattributed — its row then never left `running`. Only rows the store
+   * already tracks are linked: the registry also holds peer top-level
+   * sessions (a parked `/bg` agent streams on the same bus) that must never
+   * become dashboard rows. */
+  const backfillSessionLink = (session: unknown): string | undefined => {
+    const sessionId = (session as { id?: unknown } | null | undefined)?.id
+    if (typeof sessionId !== 'string' || !store.has(sessionId)) return undefined
+    let child: ReturnType<typeof deps.lookupChild> | undefined
+    try { child = deps.lookupChild(sessionId) } catch { return undefined }
+    if (!child || child.session !== session) return undefined
+    // Registry presence means the child is streaming right now: a row that
+    // was discovered before its registration (workflow member edge racing
+    // the registry) upgrades from `unknown` to `running`.
+    if (store.get(sessionId)?.status === 'unknown') store.patch(sessionId, { status: 'running' })
+    store.linkSession(sessionId, session)
+    cardedIds.add(sessionId)
+    return sessionId
+  }
+  /** Register a discovered child and, when the agents registry currently
+   * holds it, bind its live session so streaming state flows. */
+  const discover = (childId: string, info: { label?: string; childCreatedAt?: number; provider?: string; runId?: string }): void => {
+    let child: ReturnType<typeof deps.lookupChild> | undefined
+    try { child = deps.lookupChild(childId) } catch { child = undefined }
+    store.onDiscovered(childId, {
+      label: info.label,
+      childCreatedAt: info.childCreatedAt,
+      live: child !== undefined,
+      provider: info.provider ?? child?.options?.provider,
+      model: child?.options?.model,
+    })
+    if (info.runId !== undefined) store.patch(childId, { runId: info.runId })
+    if (child?.session) store.linkSession(childId, child.session)
+    if (child !== undefined) cardedIds.add(childId)
+  }
+  /** Durable session events stamp their own wall time; a fold from the log
+   * must not date a historical child at resume time. */
+  const eventTime = (event: unknown): number | undefined => {
+    const time = (event as { time?: unknown } | null | undefined)?.time
+    return typeof time === 'number' ? time : undefined
+  }
+  /** Parent-session durable discovery events, live or folded from the log. */
+  const onParentEvent = (event: unknown, historical = false): void => {
+    if (!event || typeof event !== 'object') return
+    const ev = event as { type?: string; data?: { childId?: unknown; childCreatedAt?: unknown; label?: unknown; runId?: unknown; seq?: unknown; outcome?: unknown } }
+    const data = ev.data ?? {}
+    const childId = typeof data.childId === 'string' ? data.childId : undefined
+    if (ev.type === 'subagent/catalog') {
+      if (childId === undefined) return
+      discover(childId, {
+        label: typeof data.label === 'string' ? data.label : undefined,
+        childCreatedAt: typeof data.childCreatedAt === 'number' ? data.childCreatedAt : eventTime(event),
+      })
+    } else if (ev.type === 'tool-workflow/agent-start') {
+      if (childId === undefined || typeof data.runId !== 'string' || typeof data.seq !== 'number') return
+      const memberKey = `${data.runId}:${data.seq}`
+      workflowMembers.set(memberKey, childId)
+      discover(childId, {
+        label: typeof data.label === 'string' ? data.label : undefined,
+        childCreatedAt: eventTime(event),
+        provider: 'workflow',
+        runId: memberKey,
+      })
+    } else if (ev.type === 'tool-workflow/agent-end') {
+      if (typeof data.runId !== 'string' || typeof data.seq !== 'number') return
+      const agentId = workflowMembers.get(`${data.runId}:${data.seq}`)
+      if (agentId === undefined) return
+      if (data.outcome === 'failed') store.onFailed(agentId, 'failed')
+      else if (data.outcome === 'cancelled') store.onCancelled(agentId, 'cancelled')
+      else store.onCompleted(agentId)
+    } else {
+      return
+    }
+    if (!historical) {
+      syncNow()
+      getState().emit()
+    }
+  }
+  /** Seed the dashboard from the durable parent log at bind/resume: catalog
+   * children and workflow members survive a restart. Historical children the
+   * registry no longer holds stay card-less (dashboard-only, `unknown`). */
+  const bootstrapFromLog = (events: readonly unknown[]): void => {
+    if (!Array.isArray(events)) return
+    try {
+      for (const event of events) onParentEvent(event, true)
+    } catch { /* bootstrap is best-effort discovery; live events remain authoritative */ }
+    syncNow()
+  }
   const onStart = (info: { id: string; runId?: string; provider: string; local?: boolean }): void => {
     if (!info?.id) return
     // The fact that the host spawned a child is authoritative even when its
@@ -91,8 +205,10 @@ export function createSubagentProjection(
     store.onSpawned(info.id, info.provider || 'subagent', info.provider, {
       runId: info.runId ?? info.id,
       local: info.local,
-      description: pendingTaskDescriptions.shift() ?? `${info.provider || 'subagent'} task`,
+      startedAt: Date.now(),
+      description: pendingTaskDescriptions.shift(),
     })
+    cardedIds.add(info.id)
     try {
       const child = deps.lookupChild(info.id)
       if (child?.session) {
@@ -104,8 +220,17 @@ export function createSubagentProjection(
     syncNow()
     getState().emit()
   }
-  const onEnd = (info: { id: string; stopReason: string; lastAssistantMessage?: unknown[] }): void => {
+  const onEnd = (info: { id: string; runId?: string; stopReason: string; lastAssistantMessage?: unknown[] }): void => {
     if (!info?.id) return
+    // Host ordering guarantee: a continuable epoch's `subagent/end` may be
+    // published AFTER the next epoch's `subagent/start` already arrived (the
+    // parent delivery runs before the ownership release). An end that names a
+    // runId this row no longer holds belongs to that earlier epoch — the new
+    // run must keep running.
+    if (info.runId !== undefined) {
+      const current = store.get(info.id)
+      if (current?.runId !== undefined && current.runId !== info.runId) return
+    }
     const output = Array.isArray(info.lastAssistantMessage)
       ? info.lastAssistantMessage.map(block => typeof block === 'object' && block !== null && 'text' in block ? String((block as { text?: unknown }).text ?? '') : '').filter(Boolean).join('\n')
       : ''
@@ -132,6 +257,6 @@ export function createSubagentProjection(
     },
   }
   const dropRows = (): void => { streamDirty = false; rowsByAgentId.clear() }
-  const reset = (): void => { dropRows(); pendingTaskDescriptions.length = 0; store.reset(); getState().subagents = [] }
-  return { store, control, pendingTaskDescriptions, onSessionEvent, onStreamFrame, onStart, onEnd, syncNow, flush, dropRows, reset }
+  const reset = (): void => { dropRows(); cardedIds.clear(); workflowMembers.clear(); pendingTaskDescriptions.length = 0; store.reset(); getState().subagents = [] }
+  return { store, control, pendingTaskDescriptions, onSessionEvent, onStreamFrame, onParentEvent, bootstrapFromLog, onStart, onEnd, syncNow, flush, dropRows, reset }
 }

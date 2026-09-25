@@ -27,6 +27,7 @@ function statusGlyph(status: SubagentState['status']): { glyph: string; color: k
   if (status === 'completed') return { glyph: minimal ? '✓' : '🟢', color: minimal ? undefined : 'success', label: 'done' }
   if (status === 'failed') return { glyph: minimal ? '×' : '🔴', color: minimal ? undefined : 'error', label: 'failed' }
   if (status === 'cancelled') return { glyph: minimal ? '×' : '🔴', color: minimal ? undefined : 'error', label: 'cancelled' }
+  if (status === 'unknown') return { glyph: minimal ? '·' : '⚪', color: minimal ? undefined : 'subtle', label: 'history' }
   return { glyph: minimal ? '·' : '🟡', color: minimal ? undefined : 'warning', label: 'running' }
 }
 
@@ -47,7 +48,7 @@ function StatRow({ label, children }: { label: string; children: React.ReactNode
 function StatGrid({ subagent, totalTokens, elapsed, statusLabel, statusColor }: {
   subagent: SubagentState
   totalTokens: number
-  elapsed: number
+  elapsed: number | undefined
   statusLabel: string
   statusColor: keyof Theme | undefined
 }): React.ReactNode {
@@ -60,7 +61,7 @@ function StatGrid({ subagent, totalTokens, elapsed, statusLabel, statusColor }: 
         <Text>{subagent.model ?? subagent.provider ?? 'default'}</Text>
       </StatRow>
       <StatRow label={t('subagent-duration')}>
-        <Text>{formatDuration(elapsed)}</Text>
+        <Text>{elapsed !== undefined ? formatDuration(elapsed) : '—'}</Text>
       </StatRow>
       <StatRow label="tokens">
         <Text>{totalTokens || '—'}{subagent.tokens?.input !== undefined ? ` (in ${subagent.tokens.input} · out ${subagent.tokens.output ?? 0})` : ''}</Text>
@@ -126,7 +127,10 @@ export function SubagentDetailScene({
   const [page, setPage] = React.useState<DetailPage>('summary')
 
   const isRunning = subagent.status === 'running' || subagent.status === 'starting'
-  const elapsed = subagent.completedAt ? subagent.completedAt - subagent.startedAt : Date.now() - subagent.startedAt
+  // Only a live run ticks; discovered history (`unknown`) shows no duration.
+  const elapsed = isRunning
+    ? Date.now() - subagent.startedAt
+    : subagent.completedAt !== undefined ? subagent.completedAt - subagent.startedAt : undefined
   const info = statusGlyph(subagent.status)
   const totalTokens = subagent.tokens?.total ?? ((subagent.tokens?.input ?? 0) + (subagent.tokens?.output ?? 0) || 0)
   const pageIndex = PAGES.indexOf(page)
@@ -216,7 +220,7 @@ export function SubagentDetailScene({
       </Box>
       <Text>
         <Text>{subagent.model ?? subagent.provider ?? 'default'}</Text>
-        <Text dimColor>{` · ${formatDuration(elapsed)} · ${totalTokens || '—'} tok · ${subagent.toolCalls.length} tools`}</Text>
+        <Text dimColor>{elapsed !== undefined ? ` · ${formatDuration(elapsed)} · ` : ' · '}{totalTokens || '—'} tok · {subagent.toolCalls.length} tools</Text>
       </Text>
       <Text dimColor>
         {`${t('subagent-started')} ${formatTimestamp(subagent.startedAt)}`

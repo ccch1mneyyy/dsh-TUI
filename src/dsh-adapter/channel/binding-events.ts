@@ -28,7 +28,7 @@ export function createBindingEvents(ctx: Context, deps: {
   modelActions: { applyPreferredEffort(): Promise<void>; selection: ModelSelectionRef }
   modeActions: { refreshMode(): void; onSessionEvent(session: unknown, event: unknown): void }
   projector: ReturnType<typeof createChannelProjection>
-  subagents: { onSessionEvent(session: unknown, event: unknown): boolean; onStreamFrame?(agent: unknown, frame: AssistantStreamFrame): boolean; onStart(info: { id: string; runId?: string; provider: string; local?: boolean }): void; onEnd(info: { id: string; stopReason: string; lastAssistantMessage?: unknown[] }): void }
+  subagents: { onSessionEvent(session: unknown, event: unknown): boolean; onStreamFrame?(agent: unknown, frame: AssistantStreamFrame): boolean; onParentEvent?(event: unknown): void; onStart(info: { id: string; runId?: string; provider: string; local?: boolean }): void; onEnd(info: { id: string; runId?: string; stopReason: string; lastAssistantMessage?: unknown[] }): void }
   agentView: { schedule(): void }
   messageObserver?: { publish(session: unknown, event: unknown): void }
   /** Drop a pre-step attachment registered by this channel for one message id
@@ -143,6 +143,10 @@ export function createBindingEvents(ctx: Context, deps: {
         if (!isMainSession && deps.subagents.onSessionEvent(subject, event)) return
         if (!isMainSession) return
         deps.messageObserver?.publish(subject, event)
+        // Parent-log discovery events (`subagent/catalog`, workflow member
+        // edges) reach the dashboard through the same firehose; they are not
+        // transcript rows and render below remains untouched by them.
+        deps.subagents.onParentEvent?.(event)
         deps.activity.onSessionEvent(event)
         deps.modeActions.onSessionEvent(subject, event)
         deps.projector.renderEvent(event)
