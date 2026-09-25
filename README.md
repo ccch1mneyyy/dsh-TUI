@@ -41,22 +41,10 @@ Keys and commands: [Interaction and commands](docs/interaction.en.md). Everythin
 
 ## Preview
 
-<div align="center">
-  <table>
-    <tr>
-      <td align="center" valign="middle" width="50%">
-        <img src="screenshots/splash.png" alt="dsh-TUI conversation with the pixel-whale header" width="480">
-        <br>
-        <strong>Conversation with the pixel-whale header</strong>
-      </td>
-      <td align="center" valign="middle" width="50%">
-        <img src="screenshots/ide-selection-badge.png" alt="IDE selection badge: live line count under the prompt" width="480">
-        <br>
-        <strong>Live IDE selection badge</strong>
-      </td>
-    </tr>
-  </table>
-</div>
+<picture>
+  <source media="(max-width: 640px)" srcset="docs/assets/readme/preview-en-mobile.svg">
+  <img src="docs/assets/readme/preview-en.svg" alt="Recorded dsh-TUI session: welcome, completion, help and typing, with animated pixel whale." width="1200">
+</picture>
 
 ## Featured & Listed
 

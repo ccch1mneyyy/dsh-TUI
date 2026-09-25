@@ -40,22 +40,10 @@
 
 ## 界面预览
 
-<div align="center">
-  <table>
-    <tr>
-      <td align="center" valign="middle" width="50%">
-        <img src="screenshots/splash.png" alt="首屏：像素鲸鱼顶栏" width="480">
-        <br>
-        <strong>首屏：像素鲸鱼顶栏</strong>
-      </td>
-      <td align="center" valign="middle" width="50%">
-        <img src="screenshots/ide-selection-badge.png" alt="IDE 选区徽标：编辑器选中代码后 prompt 下方实时显示行数" width="480">
-        <br>
-        <strong>IDE 选区实时徽标</strong>
-      </td>
-    </tr>
-  </table>
-</div>
+<picture>
+  <source media="(max-width: 640px)" srcset="docs/assets/readme/preview-zh-mobile.svg">
+  <img src="docs/assets/readme/preview-zh.svg" alt="dsh-TUI 会话录制：欢迎页、命令补全、帮助与输入，包含像素鲸鱼动画。" width="1200">
+</picture>
 
 ## 官方收录
 
