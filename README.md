@@ -72,114 +72,90 @@
 </p>
 <!-- readme-svg-navigation:end -->
 
-## 核心能力
-
-上游还支持 Mermaid 代码块的 Unicode 图表、可点击时间轴、Kitty/Sixel 图片预览、VS Code 选区通道、缓存命中率与推理强度显示，以及面向长会话的虚拟化渲染。完整功能列表见[上游中文说明](README_ZH.md)。
+## 功能亮点
 
 <table>
-  <thead><tr><th width="112" align="left">能力</th><th align="left">亮点</th></tr></thead>
+  <thead><tr><th width="188" align="left">功能</th><th align="left">亮点</th></tr></thead>
   <tbody>
-    <tr><td><strong>对话工具</strong></td><td>流式回复、可折叠工具卡、文件引用与实时状态。</td></tr>
-    <tr><td><strong>会话管理</strong></td><td>恢复、分支、后台任务、压缩与导出；随时切换模型。</td></tr>
-    <tr><td><strong>编辑导航</strong></td><td>Vim 输入、全屏草稿、鼠标选区与历史回溯。</td></tr>
-    <tr><td><strong>视觉体验</strong></td><td>图片预览与缩放、多主题、欢迎动画。</td></tr>
-    <tr><td><strong>生态扩展</strong></td><td>接入 DSH 技能、MCP、子代理及 VS Code。</td></tr>
+    <tr><td><strong>像素鲸鱼娘</strong></td><td>开屏三选一动画，点击唤醒；开始第一个任务后定格。</td></tr>
+    <tr><td><strong>终端原生界面</strong></td><td>流式 Markdown、工具卡、<code>/</code> 与 <code>@</code> 补全、<code>#L12-14</code> 行区间、历史搜索、中英界面。</td></tr>
+    <tr><td><strong>图片</strong></td><td>Kitty/Sixel 缩略图，居中大图可缩放平移，粘贴前按限额适配，无图形时文字回退。</td></tr>
+    <tr><td><strong>Mermaid 图表</strong></td><td><code>```mermaid</code> 代码块画成 Unicode 字符图。</td></tr>
+    <tr><td><strong>时间轴</strong></td><td>全部回合可点；右栏时间线 / 滚动条 / 隐藏。</td></tr>
+    <tr><td><strong>实时状态</strong></td><td>工作动画、上下文条、TPS、缓存命中率、推理强度、token、Git 与会话信息。</td></tr>
+    <tr><td><strong>唯一的会话管理界面</strong></td><td><code>/resume</code> <code>/home</code> <code>/agentview</code> <code>/bg</code> ⌸。</td></tr>
+    <tr><td><strong>会话工作流</strong></td><td><code>/new</code> <code>/compact</code> <code>/export</code> <code>/btw</code>、模型热切换、fork、回溯、vim、全屏草稿编辑器。</td></tr>
+    <tr><td><strong>IDE 选区通道</strong></td><td>VS Code 里选中的代码进 prompt。</td></tr>
+    <tr><td><strong>DSH 集成</strong></td><td>presets、技能、MCP、目标、待办、子代理、问卷。</td></tr>
+    <tr><td><strong>扩展</strong></td><td>浏览器交互、computer use 等。</td></tr>
+    <tr><td><strong>为长会话设计</strong></td><td>事件驱动投影、虚拟化、有界缓存。</td></tr>
   </tbody>
 </table>
 
+键位与命令：[交互与命令](docs/interaction.md)。其余见[文档索引](docs/README.md)。
+
 ## 快速开始
 
-前置条件：[Node.js](https://nodejs.org/zh-cn)（`^22.19 || >=24`）、交互式终端 TTY、官方 [DeepSeek Harness CLI](https://github.com/deepseek-ai/deepseek-harness) 与 `pnpm` 10+。模型请求还需配置 `DEEPSEEK_API_KEY`。
+前置条件：安装 [Node.js](https://nodejs.org/zh-cn) 与 [deepseek-harness](https://github.com/deepseek-ai/deepseek-harness)，并配置 `DEEPSEEK_API_KEY`。
 
-主要兼容目标是 DSH `0.1.7-rc.1`，覆盖 Shell API、V4 session messages、声明式 preset 与 profile 设置；旧版主机保留兼容路径。DSH 0.1.7 的 `/settings` 使用 TUI 实际 Loader entry ID（包括自定义 ID），profile 依赖需要 `@deepseek-ai/schemastery` `3.18.3+`；schema 不兼容时会直接给出修复提示。详见[配置参考](docs/configuration.md)。
+主适配目标为 DSH `0.1.7-rc.1`，已接入新版 Shell API、V4 会话消息、声明式预设与
+profile 设置；旧受支持版本保留兼容路径。迁移说明见[配置参考](docs/configuration.md)。
 
-安装命令：
+DSH 0.1.7 的 `/settings` 使用 TUI 实际的 Loader 行 ID，也支持自定义 ID。
+profile 依赖须配套，包含 `@deepseek-ai/schemastery` 3.18.3 或更新版本；
+Schema 不兼容时，TUI 在启动阶段报错并提示修复安装，不再显示不可编辑的设置页。
+旧 host 继续使用原有设置 scope。
 
 ```sh
+# 安装（全局，自带 dsh-tui 命令）
 npm install -g @deepseek-ai/dsh @deepseek-harness-tui/dsh-tui
-```
 
-启动命令：
-
-```bash
-# 完整命令
+# 启动（首次运行自动初始化 profile，需要 pnpm）
 dsh-tui
-# 如果你不想按键盘七次
+# dst 是短别名，启动同一个 TUI
 dst
 ```
 
-如果你想手动安装，可以使用仓库根目录的 `install.sh`：
+手动安装：跑仓库根目录的 `install.sh`，或 `dsh plugin --profile dsh-tui add @deepseek-harness-tui/dsh-tui`。之后 `dsh-tui` 与 `dsh --profile dsh-tui` 等价。
 
-```sh
-sh install.sh
-# 或：dsh plugin --profile dsh-tui add @deepseek-harness-tui/dsh-tui
-# 之后 dsh-tui 与 dsh --profile dsh-tui 等价
-```
+> **新用户提示**：pnpm ≥11 默认拦截带安装脚本的依赖，报 `ERR_PNPM_IGNORED_BUILDS`。更新时还会忽略异平台的 `@img/sharp-*` 原生包，省约 200MB 下载。`/update` 与 `dsh-tui update` 都会自动写好这两份配置，无需手工处理。细节见[安装与快速开始](docs/getting-started.md#pnpm-安装脚本拦截与异平台原生包)。
 
-> **新用户提示**：若 `dsh plugin` 安装时报 `ERR_PNPM_IGNORED_BUILDS`（pnpm ≥11 默认阻止带安装脚本的依赖，如 `@google/genai`、`protobufjs`——这些脚本运行时不需要，忽略即可），在 profile 的 `pnpm-workspace.yaml` 里加入：
->
-> ```yaml
-> allowBuilds:
->   '@google/genai': false
->   protobufjs: false
-> ```
->
-> 更新时还会跳过其他平台的 `@img/sharp-*` 原生包，减少无用下载；`/update` 与 `dsh-tui update` 会自动写入相关配置，无需手工处理。
+TUI 启动后会在后台检查新版本，不阻塞首帧。有更新时输入 `/update` 一键升级，自动重启并恢复当前会话。profile 叠加机制、源码构建与常见问题见[安装与快速开始](docs/getting-started.md)。
 
-更面向零基础的安装流程、profile 叠加机制、源码构建与常见问题见[安装与快速开始](docs/getting-started.md)。
+### CLI 子命令
 
-### 更新与启动前诊断
-
-启动后会在后台检查新版本，不会自动安装。空闲时执行 `/update`，更新成功后会
-重启并恢复当前会话；终端中的 `dsh-tui update` 使用同一更新流程，但不启动 TUI。
-
-| 命令 | 用途 |
+| 命令 | 作用 |
 | --- | --- |
-| `dsh-tui update` | 更新当前 `dsh-tui` profile，并尝试对齐全局启动器 |
-| `dsh-tui doctor` | 检查 dsh、pnpm、profile、版本与凭证是否配置；不输出密钥值 |
-| `dsh-tui safe` | 只读诊断、插件清单与修复建议；`safe --rescue` 可创建干净的救援 profile |
-| `dsh-tui version` | 显示启动器与 profile 版本，等同于 `--version` / `-v` |
-| `dsh-tui help` | 显示命令帮助，等同于 `--help` / `-h` |
+| `dsh-tui` / `dst` | 启动 TUI；短别名是同一个程序 |
+| `dsh-tui --resume [id]` · `dsh-tui update` · `dsh-tui doctor` | 恢复会话 · 更新 profile 并对齐启动器 · 环境体检 |
+| `dsh-tui safe` | 只读诊断、插件清单与修复指引；`safe --rescue` 创建干净的救援 profile |
+| `dsh-tui version` · `dsh-tui help` | 启动器与 profile 版本、用法；没装 dsh 时这两条也能用 |
 
-`dst` 支持相同子命令。`help`、`version` 无需初始化 profile；`doctor` 可在
-TUI 启动失败时运行。子命令属于 npm 安装的启动器，仓库根目录的 `dsh-tui.cmd`
-只负责启动，不提供这些子命令。
+其余参数转发给 `dsh --profile dsh-tui`。安全模式：[安装与快速开始](docs/getting-started.md)。
 
-全局启动器的自动对齐取决于启动方式和目录写权限，并非保证成功；出现版本不一致
-提示时，按提示中的精确版本命令修复。日常更新与旧启动器修复步骤统一见
-[更新到最新版本](docs/getting-started.md#更新到最新版本)。
-
-
-
-<details>
-<summary>补充使用说明与详细参考</summary>
-
-- 使用 `dsh-tui --resume`（或 `dst --resume`）恢复最近选中的会话；Windows 仓库启动脚本同样支持。
-- [安装与快速开始](docs/getting-started.md)：安装、profile 组合、更新与旧包迁移。
-- [交互与命令](docs/interaction.md)：快捷键、鼠标操作、问卷与会话工作流。
-- [配置参考](docs/configuration.md)、[架构与限制](docs/architecture.md)、[贡献与开发约定](docs/contributing.md)：配置、已知限制及开发验证。
-- [VS Code 使用指南](docs/vscode.md)：集成终端与配套扩展。
-- **Herdr**：可直接在 Herdr 面板中运行 `dsh-tui`；会报告空闲、工作中与等待输入状态，Herdr 外不启用该集成。通过 `herdr agent start --kind dsh-tui` 启动及服务重启后的自动恢复，仍依赖上游提供原生 agent kind。相关说明见[上游英文版](https://github.com/ccch1mneyyy/dsh-TUI/blob/main/README.md#quick-start)。
-
-</details>
+**VS Code**：用集成终端，或用 `dsh-tui-vscode` 扩展。见 [VS Code 使用指南](docs/vscode.md)。**Herdr**：在 [Herdr](https://herdr.dev) 窗格运行 `dsh-tui`，经其本地集成 API 报告 `idle` / `working` / `blocked`。
 
 ## 快捷键与鼠标
 
-`Enter` 发送 · `Tab` 补全 · `Ctrl+Enter` 中断并发送 · `Alt+Up` 取回上一条消息 · `Esc` 关闭，双击 `Esc` 回溯 · `Ctrl+O` 查看详情 · `Ctrl+R` 搜索历史 · `Ctrl+V` 粘贴 · `Ctrl+Shift+E` 全屏草稿编辑器 · `?` 查看快捷键 · `←` 将会话转入后台。
+`Enter` 发送 · `Tab` 补全 · `Ctrl+Enter` 打断并发送 · `Alt+Up` 取回上一条 · `Esc` 逐层关闭，空输入双击回溯 · `Ctrl+O` 详情 · `Ctrl+R` 搜历史 · `Ctrl+V` 粘贴 · `Ctrl+Shift+E` 全屏草稿编辑器 · `?` 快捷键 · `←` 转后台。
 
-模型工作期间：`Enter` 用于 steer，`Tab` 排队 follow-up，`Ctrl+Enter` 中断并发送。全屏模式下支持拖拽选择复制、双击/三击选择词或行，以及点击工具卡、时间线刻度和图片预览。
+模型工作时：`Enter` 加塞、`Tab` 排队、`Ctrl+Enter` 打断并立即发送。
 
-完整说明见[交互与命令](docs/interaction.md)。
+鼠标（全屏）：拖选即复制、双击/三击选词选行、点工具卡、时间轴刻度与 `[Image #N]` 预览。
+
+完整参考：[交互与命令](docs/interaction.md)。
 
 ## 内置命令
 
-会话管理：`/resume` · `/home` · `/agentview` · `/bg`；会话工作流：`/model` · `/new` · `/compact` · `/export` · `/btw` · `/tree` · `/fork` · `/rewind`；诊断与扩展：`/settings` · `/status` · `/cost` · `/jobs` · `/skills` · `/mcp` · `/login` · `/update`。
+`/resume` · `/home` · `/agentview` · `/bg` · `⌸` 打开同一个会话管理界面：工作区栏、实时状态、筛选、★ 固定。另有 `/model` `/new` `/compact` `/export` `/btw` `/tree` `/fork` `/rewind` `/settings` `/status` `/cost` `/jobs` `/skills` `/mcp` `/login` `/update`。
 
-`/bg` 或空输入时按 `←` 可将会话转入后台，按 `Esc` 返回。后台会话运行在当前进程中，TUI 退出后会停止，但日志会保留。
+**后台会话**：`/bg` 或空输入按 `←`；按 `Esc` 回到它。跑在本进程内，TUI 退出即停止，日志保留。
+
+完整命令：[交互与命令](docs/interaction.md)。
 
 ## 配置与扩展
 
-Agent preset、主题、MCP 服务和环境变量见[配置参考](docs/configuration.md)与[主题系统](docs/themes.md)。插件接口、准入规则和模板见[插件准入与开发指南](https://github.com/T-Auto/dsh-ecosystem-spec/blob/main/docs/plugin-admission-and-development.md)。
+Agent 预设、主题、MCP 服务器、环境变量：[配置参考](docs/configuration.md) · [主题系统](docs/themes.md)。
 
 ## 工作原理
 
@@ -188,21 +164,23 @@ dsh profile → dsh-base → dsh-TUI Cordis patch → agent preset + DSH service
   → session/event → Channel projection → React components → Ink/Yoga renderer → terminal
 ```
 
-TUI 负责交互和呈现，会话日志是事实来源；模型、工具和持久化由 DSH 服务负责。长会话按可见窗口渲染，避免随历史长度线性扩大渲染开销。运行时路径、模块边界、性能和持久化位置见[架构与限制](docs/architecture.md)。
+TUI 只负责交互与呈现：会话日志是唯一事实源，模型、工具与持久化归 DSH 服务。长会话单帧成本 O（可见窗口）。
+
+运行链路、模块边界、性能要点与持久化位置见[架构与限制](docs/architecture.md)。
 
 ## 已知限制
 
-- 注入式插件上下文没有独立显示，会计入上下文分段。
-- `/model` 通过分支切换会话，旧会话仍可在 `/resume` 中找到。
-- `Ctrl+V` 依赖平台剪贴板工具，不支持的位图格式会被拒绝。
-- 后台会话属于当前进程，TUI 退出后停止。
-- `/thinking` 不持久化；`minimal` preset 下不可用 `/compact`；`/update` 需要通过 `dsh --profile` 启动，并且运行 turn 时会拒绝更新。
+- 注入的插件上下文没有独立展示，计入上下文分段。
+- `/model` 靠 fork 切换会话；旧会话留在 `/resume`。
+- `Ctrl+V` 需要平台剪贴板工具；不支持的位图格式直接拒绝。
+- 后台会话活在本进程内，TUI 退出即停止。
+- `/thinking` 不持久化；`/compact` 在 `minimal` 预设下不可用；`/update` 需 `dsh --profile` 启动，回合运行中会被拒绝。
 
-完整限制见[架构与限制](docs/architecture.md)。
+完整清单见[架构与限制](docs/architecture.md)。
 
-## 开发与验证
+## 开发
 
-CI 使用 Node 24 与 pnpm 11；包支持 Node `^22.19 || >=24`。
+CI 使用 Node 24 与 pnpm 11，本包支持 Node `^22.19 || >=24`。
 
 ```sh
 pnpm install --frozen-lockfile
@@ -210,40 +188,13 @@ pnpm build
 pnpm smoke
 ```
 
-`lib/types/` 为构建生成目录。`pnpm build` 会清理并重新生成类型后执行构建门禁；不支持 Git URL 安装，应安装 registry 包：
+`lib/types/` 是被忽略的生成物。`pnpm build` 从干净输出目录重编译，并跑构建门禁。**不支持 Git URL 安装**。源码 manifest 把 `@dsh-std/*` 保留为 workspace 依赖，`vendor/dsh-std` 是子模块，pnpm ≥11 还默认拒绝 git 托管的 `prepare` 脚本。请安装 registry 包：`dsh plugin --profile dsh-tui add @deepseek-harness-tui/dsh-tui`。渲染、问卷或工具卡改动还需对应的回归脚本。
 
-```sh
-dsh plugin --profile dsh-tui add @deepseek-harness-tui/dsh-tui
-```
+## 插件生态
 
-渲染、问卷或工具卡变更还需要运行对应的回归脚本。
-## 插件扩展与开发指南
+插件开发：[准入与开发指南](https://github.com/T-Auto/dsh-ecosystem-spec/blob/main/docs/plugin-admission-and-development.md) · [plugin-template](https://github.com/dsh-tui-ecosystem/plugin-template) · [dsh-tui-ecosystem](https://github.com/dsh-tui-ecosystem)。参考实现：`dsh-working-activity`。
 
-想为 dsh-TUI 做插件/扩展？欢迎加入生态！
-
-- **接口与兼容性协定 / 插件开发指南**：[终端交互生态插件准入与开发指南](https://github.com/T-Auto/dsh-ecosystem-spec/blob/main/docs/plugin-admission-and-development.md)（准入规范、接缝、契约、验证清单）
-- **生态组织**：[dsh-tui-ecosystem](https://github.com/dsh-tui-ecosystem)（社区插件与模板的家）
-- **模板仓库**：[plugin-template](https://github.com/dsh-tui-ecosystem/plugin-template)（从模板起步，5 分钟出一个插件）
-- **参考实现**：`dsh-working-activity`（实时工作状态行：TUI 槽位 + `activity/status` 会话事件双出口）
-
-### 接缝稳定性参考
-
-按当前实现成熟度给出的**非正式**分级，帮助插件作者评估投入；正式状态与兼容性协定以
-[准入与开发指南](https://github.com/T-Auto/dsh-ecosystem-spec/blob/main/docs/plugin-admission-and-development.md)为准：
-
-| 分级 | 接缝 |
-| --- | --- |
-| 稳定候选（形态冻结；如有破坏性变更，先在次版本弃用告警再移除） | 六 设置区块 · 八 全屏场景 · 十 托管对话框 · 十一 状态行 · 十二 键盘快捷键 · 十三 条目渲染器 |
-| 实验性（仍可能随 dsh-std / 准入规范演进调整） | 九 决策事件 · toast 通知（`ctx.tuiToast`，新增） |
-| 跟随上游（稳定性由 cordis / dsh 官方机制决定） | 一 会话事件 · 二 官方 prompt 槽位 · 三 技能打包 · 四 主题 · 五 system prompt 段 · 七 profile 组合 |
-
-另：`@deepseek-harness-tui/dsh-tui/api`（纯类型入口）为实验性公开面；
-`@deepseek-harness-tui/dsh-tui/test-utils` 子路径与 `ctx.tuiPluginHost.grants.corrupt`
-已随 adapter 分层重构（#705）移除，`grants` 收窄为 `HostGrantFacade`，迁移细节见该 PR。
-
-
-
-核心仓库保持独立，社区插件由各自作者拥有并维护。生态组织维护收录与准入规则，不为社区插件的功能、质量或安全作担保；作者负责其维护与安全。
+接缝分级与 API 说明：[插件开发](docs/plugins.md)。生态组织只维护收录，不背书社区插件。
 
 ## 社区
 
