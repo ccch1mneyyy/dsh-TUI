@@ -188,31 +188,29 @@ dsh 意外结束时，安全模式提供只读的环境诊断、profile 插件�
 
 ## 更新到最新版本
 
-启动后会在后台检查新版本，不会自动安装。日常升级可在空闲的 TUI 内执行
-`/update`：更新当前 profile，验证结果，成功后重启并恢复会话。
-也可在终端中升级而不启动 TUI：
+项目迭代很快，更新复用安装命令，显式指定 `@latest`：
 
 ```sh
-dsh-tui update
-```
-
-两条入口都以 profile runtime 为更新对象，并尝试将可定位、可写的全局入口
-迁移为委托启动器。自动对齐并非保证成功：源码运行、直接 `dsh --profile`
-启动、目录权限或文件锁都可能使这一步跳过。出现启动器版本不一致提示时，
-按提示中的**精确版本命令**修复。
-
-旧版本尚无 `update` 子命令、profile 未正确安装或希望手动升级时：
-
-```sh
+# 更新 Profile runtime（TUI 内 /update 做的就是这件事）
 dsh plugin --profile dsh-tui add @deepseek-harness-tui/dsh-tui@latest
-# 仅在全局启动器需要更新时执行；原来用 pnpm 全局安装则用 pnpm add -g
-npm install -g @deepseek-harness-tui/dsh-tui@latest
 ```
 
-- 手动主动升级显式指定 `@latest`；不指定时可能仍按 profile 中已记录的
-  版本范围解析，停留在旧版本线。
-- 用 `dsh-tui version` 检查启动器与 profile 版本，用 `dsh-tui doctor` 排查环境；
-  启动横幅右上角显示真正运行的版本（`✦ dsh-TUI vX.Y.Z`）。
+通过全局 `dsh-tui` 命令启动时，还需要让 Launcher 对齐（TUI 内的
+`/update` 只更新 profile，不会动全局安装）：
+
+```sh
+npm install -g @deepseek-harness-tui/dsh-tui@latest
+# 或（原本用 pnpm 全局安装时）
+pnpm add -g @deepseek-harness-tui/dsh-tui@latest
+```
+
+- 不带 `@latest` 时 pnpm 会按 profile `package.json` 里已记录的版本范围
+  （如 `^0.1.4`）就地解析，可能停留在旧的主线上——这是"重复执行安装命令
+  但版本没变"的常见原因。
+- 修复"版本不一致"时，优先使用启动器打印的"精确版本"命令（例如
+  `npm install -g @deepseek-harness-tui/dsh-tui@0.8.3`）；日常主动升级才
+  使用 `@latest`。
+- 确认生效：启动横幅右上角显示当前版本（`✦ dsh-TUI vX.Y.Z`）。
 - 用户覆盖层 `cordis.patch.yml` 在更新中原样保留。
 - 会话数据的存放位置可能随版本变化（如 0.3.7 起 `/resume` 改用与 dsh web
   共享的 JSONL 会话库），跨大版本更新后旧会话不在列表属预期，原数据不会被删除。

@@ -195,33 +195,18 @@ diagnostics, a profile plugin inventory, and repair guidance.
 
 ## Update to the latest version
 
-Startup checks for new releases in the background; it never installs them
-automatically. Run `/update` while the TUI is idle to update the active profile,
-verify the result, then restart and resume the session. To update without
-launching the TUI:
-
-```sh
-dsh-tui update
-```
-
-Both entry points update the profile runtime and attempt to migrate a
-discoverable, writable global entry to the delegating launcher. Automatic
-alignment is not guaranteed: source runs, direct `dsh --profile` launches,
-permissions or locked files may skip it. If a version mismatch is reported,
-follow the launcher's exact-version command.
-
-For older launchers without `update`, an incomplete profile, or manual upgrades:
+The project moves fast. Updating reuses the install command with an explicit
+`@latest`:
 
 ```sh
 dsh plugin --profile dsh-tui add @deepseek-harness-tui/dsh-tui@latest
-# Only when the global launcher needs updating; use pnpm add -g if installed with pnpm
-npm install -g @deepseek-harness-tui/dsh-tui@latest
 ```
 
-- Explicitly use `@latest` for a manual upgrade; otherwise resolution may remain
-  within the version range already recorded in the profile.
-- Check both copies with `dsh-tui version`, and the environment with
-  `dsh-tui doctor`. The startup banner shows the actual running version
+- Without `@latest`, pnpm resolves within the version range already recorded
+  in the profile's `package.json` (for example `^0.1.4`), so it may stay on an
+  old line. That is the usual reason "re-running the install command" appears
+  to change nothing.
+- To confirm: the startup banner shows the running version
   (`✦ dsh-TUI vX.Y.Z`).
 - Your `cordis.patch.yml` override layer survives updates untouched.
 - Session storage may move between versions (since 0.3.7, `/resume` uses the
