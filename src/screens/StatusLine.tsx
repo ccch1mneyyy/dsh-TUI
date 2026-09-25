@@ -448,7 +448,11 @@ const selectionBadge = formatSelectionBadge(channel.selection)
     activity.phase !== 'idle'
   const showTrajectory = statusBar.trajectory && wake !== undefined
 
-  const barWidth = columns - 4
+  // The root Box below paints paddingX={1} inside width={columns}, so the
+  // content area is `columns - 2` cells wide — size the bar from the same
+  // arithmetic or its right edge falls 2 columns short of the status row's
+  // (the v0.8.0 paddingX 2→1 tightening left the old `columns - 4` stale).
+  const barWidth = columns - 2
   const barColors: { freeFill: Color; freeText: Color } | undefined =
     themeName === 'light'
       ? undefined
