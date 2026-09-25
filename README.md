@@ -9,9 +9,9 @@
 
 <p align="center">
   <a href="https://www.npmjs.com/package/@deepseek-harness-tui/dsh-tui"><img alt="npm" src="https://img.shields.io/npm/v/@deepseek-harness-tui/dsh-tui?style=flat-square&color=4b6fff"></a>
-  <a href="https://github.com/ccch1mneyyy/dsh-TUI/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/ccch1mneyyy/dsh-TUI/actions/workflows/ci.yml/badge.svg"></a>
+  <a href="https://github.com/says693/dsh-TUI-693/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/says693/dsh-TUI-693/actions/workflows/ci.yml/badge.svg"></a>
   <a href="LICENSE"><img alt="MIT License" src="https://img.shields.io/badge/license-MIT-263146?style=flat-square"></a>
-  <img alt="Public beta" src="https://img.shields.io/badge/status-public%20beta-7da1de?style=flat-square">
+  <img alt="Public beta" src="https://img.shields.io/badge/status-public%20beta-7da1de?style=flat-square">`n  <a href="https://github.com/says693/dsh-TUI-693/stargazers"><img alt="GitHub stars" src="https://img.shields.io/github/stars/says693/dsh-TUI-693?style=flat-square&color=4b6fff"></a>
   <img alt="官方收录" src="https://img.shields.io/badge/DeepSeek%20Harness%20官方公众号-收录-brightgreen">
 </p>
 
@@ -25,9 +25,9 @@
 >Zero core changes, pure plugin mounting. Install to enable; uninstall leaves no core patches.
 
 
-## 🎉 官方收录
+## 🎉 官方收录与上游信息
 
-本插件被 **DeepSeek Harness 官方公众号** 推文收录，也被 [dshfind](https://dshfind.com/ccch1mneyyy/dsh-TUI) 插件目录收录，并在 [Trendshift](https://trendshift.io/repositories/146168) 展示的 GitHub Trending **TypeScript 日榜中位列第七**。
+本项目基于 [ccch1mneyyy/dsh-TUI](https://github.com/ccch1mneyyy/dsh-TUI) 演进。当前官方公众号、[dshfind](https://dshfind.com/ccch1mneyyy/dsh-TUI) 与 [Trendshift](https://trendshift.io/repositories/146168) 条目仍指向上游项目页面，并在 GitHub Trending **TypeScript 日榜中位列第七**。
 
 <div align="center">
   <table>
@@ -89,6 +89,8 @@
 
 前置条件：[Node.js](https://nodejs.org/zh-cn)（`^22.19 || >=24`）、交互式终端 TTY、官方 [DeepSeek Harness CLI](https://github.com/deepseek-ai/deepseek-harness) 与 `pnpm` 10+。模型请求还需配置 `DEEPSEEK_API_KEY`。
 
+主要兼容目标是 DSH `0.1.7-rc.1`，覆盖 Shell API、V4 session messages、声明式 preset 与 profile 设置；旧版主机保留兼容路径。DSH 0.1.7 的 `/settings` 使用 TUI 实际 Loader entry ID（包括自定义 ID），profile 依赖需要 `@deepseek-ai/schemastery` `3.18.3+`；schema 不兼容时会直接给出修复提示。详见[配置参考](docs/configuration.md)。
+
 安装命令：
 
 ```sh
@@ -120,7 +122,7 @@ sh install.sh
 >   protobufjs: false
 > ```
 >
-> `/update` 与 `dsh-tui update` 会自动写入这份配置，无需手工处理。
+> 更新时还会跳过其他平台的 `@img/sharp-*` 原生包，减少无用下载；`/update` 与 `dsh-tui update` 会自动写入相关配置，无需手工处理。
 
 更面向零基础的安装流程、profile 叠加机制、源码构建与常见问题见[安装与快速开始](docs/getting-started.md)。
 
@@ -133,7 +135,7 @@ sh install.sh
 | --- | --- |
 | `dsh-tui update` | 更新当前 `dsh-tui` profile，并尝试对齐全局启动器 |
 | `dsh-tui doctor` | 检查 dsh、pnpm、profile、版本与凭证是否配置；不输出密钥值 |
-| `dsh-tui version` | 显示启动器与 profile 版本，等同于 `--version` / `-v` |
+| `dsh-tui safe` | 只读诊断、插件清单与修复建议；`safe --rescue` 可创建干净的救援 profile |`n| `dsh-tui version` | 显示启动器与 profile 版本，等同于 `--version` / `-v` |
 | `dsh-tui help` | 显示命令帮助，等同于 `--help` / `-h` |
 
 `dst` 支持相同子命令。`help`、`version` 无需初始化 profile；`doctor` 可在
@@ -158,6 +160,60 @@ TUI 启动失败时运行。子命令属于 npm 安装的启动器，仓库根�
 
 </details>
 
+## 快捷键与鼠标
+
+`Enter` 发送 · `Tab` 补全 · `Ctrl+Enter` 中断并发送 · `Alt+Up` 取回上一条消息 · `Esc` 关闭，双击 `Esc` 回溯 · `Ctrl+O` 查看详情 · `Ctrl+R` 搜索历史 · `Ctrl+V` 粘贴 · `Ctrl+Shift+E` 全屏草稿编辑器 · `?` 查看快捷键 · `←` 将会话转入后台。
+
+模型工作期间：`Enter` 用于 steer，`Tab` 排队 follow-up，`Ctrl+Enter` 中断并发送。全屏模式下支持拖拽选择复制、双击/三击选择词或行，以及点击工具卡、时间线刻度和图片预览。
+
+完整说明见[交互与命令](docs/interaction.md)。
+
+## 内置命令
+
+会话管理：`/resume` · `/home` · `/agentview` · `/bg`；会话工作流：`/model` · `/new` · `/compact` · `/export` · `/btw` · `/tree` · `/fork` · `/rewind`；诊断与扩展：`/settings` · `/status` · `/cost` · `/jobs` · `/skills` · `/mcp` · `/login` · `/update`。
+
+`/bg` 或空输入时按 `←` 可将会话转入后台，按 `Esc` 返回。后台会话运行在当前进程中，TUI 退出后会停止，但日志会保留。
+
+## 配置与扩展
+
+Agent preset、主题、MCP 服务和环境变量见[配置参考](docs/configuration.md)与[主题系统](docs/themes.md)。插件接口、准入规则和模板见[插件准入与开发指南](https://github.com/T-Auto/dsh-ecosystem-spec/blob/main/docs/plugin-admission-and-development.md)。
+
+## 工作原理
+
+```text
+dsh profile → dsh-base → dsh-TUI Cordis patch → agent preset + DSH services
+  → session/event → Channel projection → React components → Ink/Yoga renderer → terminal
+```
+
+TUI 负责交互和呈现，会话日志是事实来源；模型、工具和持久化由 DSH 服务负责。长会话按可见窗口渲染，避免随历史长度线性扩大渲染开销。运行时路径、模块边界、性能和持久化位置见[架构与限制](docs/architecture.md)。
+
+## 已知限制
+
+- 注入式插件上下文没有独立显示，会计入上下文分段。
+- `/model` 通过分支切换会话，旧会话仍可在 `/resume` 中找到。
+- `Ctrl+V` 依赖平台剪贴板工具，不支持的位图格式会被拒绝。
+- 后台会话属于当前进程，TUI 退出后停止。
+- `/thinking` 不持久化；`minimal` preset 下不可用 `/compact`；`/update` 需要通过 `dsh --profile` 启动，并且运行 turn 时会拒绝更新。
+
+完整限制见[架构与限制](docs/architecture.md)。
+
+## 开发与验证
+
+CI 使用 Node 24 与 pnpm 11；包支持 Node `^22.19 || >=24`。
+
+```sh
+pnpm install --frozen-lockfile
+pnpm build
+pnpm smoke
+```
+
+`lib/types/` 为构建生成目录。`pnpm build` 会清理并重新生成类型后执行构建门禁；不支持 Git URL 安装，应安装 registry 包：
+
+```sh
+dsh plugin --profile dsh-tui add @deepseek-harness-tui/dsh-tui
+```
+
+渲染、问卷或工具卡变更还需要运行对应的回归脚本。
 ## 插件扩展与开发指南
 
 想为 dsh-TUI 做插件/扩展？欢迎加入生态！
@@ -228,7 +284,7 @@ TUI 启动失败时运行。子命令属于 npm 安装的启动器，仓库根�
 ## Stars
 
 <!-- star-history:start -->
-[![Star History](https://raw.githubusercontent.com/ccch1mneyyy/dsh-TUI/bot-star-history/assets/star-history/star-history.png)](https://star-history.com/#ccch1mneyyy/dsh-TUI&Date)
+[![Star History](https://raw.githubusercontent.com/says693/dsh-TUI-693/bot-star-history/assets/star-history/star-history.png)](https://star-history.com/#says693/dsh-TUI-693&Date)
 <!-- star-history:end -->
 
 
