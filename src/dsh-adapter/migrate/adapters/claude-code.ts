@@ -36,8 +36,8 @@ function toMillis(iso: unknown): number {
 }
 
 /** Extract the text of a user line, skipping tool_result-only lines. */
-function userText(message: { content?: unknown } | undefined): string | undefined {
-  if (message === undefined) return undefined
+function userText(message: { content?: unknown } | undefined | null): string | undefined {
+  if (message === undefined || message === null) return undefined
   const content = message.content
   if (Array.isArray(content)) {
     const blocks = content as CodeBlock[]
@@ -79,7 +79,7 @@ function readOne(path: string, fallbackCwd: string): MigrationSession | undefine
     if (type !== 'user' && type !== 'assistant') continue
     if (entry.isSidechain === true || entry.isMeta === true) continue
     const message = entry.message as { role?: unknown, content?: unknown, model?: unknown } | undefined
-    if (message === undefined || typeof message !== 'object') continue
+    if (!message || typeof message !== 'object') continue  // !x also rejects JSON null (typeof null === 'object')
     // Claude Code writes the authoritative cwd on every message line; the
     // dash-munged directory name cannot preserve `_`/`.`/`-` and the
     // system-reminder marker appears in only a small minority of logs.

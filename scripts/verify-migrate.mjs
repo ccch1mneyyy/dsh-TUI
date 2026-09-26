@@ -190,6 +190,10 @@ const root = mkdtempSync(join(tmpdir(), 'verify-migrate-'))
   writeFileSync(join(ccDir, `${firstUuid()}.jsonl`), [
     // 合法 JSON null 行（codex 对抗审核：不得终止扫描）
     'null',
+    // 合法 JSON 的 null 子对象（dsh-tui-df 独立测试 CONFIRMED：不得让 discover 抛
+    // 未捕获 TypeError——typeof null === 'object' 骗过旧守卫）
+    JSON.stringify({ type: 'user', timestamp: '2026-01-01T00:00:00Z', cwd: '/tmp/cc', message: null }),
+    JSON.stringify({ type: 'assistant', timestamp: '2026-01-01T00:00:00Z', cwd: '/tmp/cc', message: null }),
     JSON.stringify({ type: 'user', timestamp: '2026-01-01T00:00:00Z', cwd: '/tmp/cc', message: { role: 'user', content: '纯文本提问' } }),
     // 真实格式：thinking 块的文本在 `thinking` 字段（不是 text）
     JSON.stringify({ type: 'assistant', timestamp: '2026-01-01T00:00:01Z', cwd: '/tmp/cc', message: { role: 'assistant', model: 'claude-sonnet-5', content: [{ type: 'text', text: '带思考的答复' }, { type: 'thinking', thinking: '思考内容' }] } }),
@@ -199,6 +203,8 @@ const root = mkdtempSync(join(tmpdir(), 'verify-migrate-'))
   const codexDay = join(home, '.codex', 'sessions', '2026', '01', '01')
   mkdirSync(codexDay, { recursive: true })
   writeFileSync(join(codexDay, `rollout-2026-01-01T00-00-00-${firstUuid()}.jsonl`), [
+    // payload 为合法 JSON null（不得让 discover 抛未捕获 TypeError）
+    JSON.stringify({ timestamp: '2026-01-01T00:00:00Z', type: 'session_meta', payload: null }),
     JSON.stringify({ timestamp: '2026-01-01T00:00:00Z', type: 'session_meta', payload: { cwd: '/tmp/codex', timestamp: '2026-01-01T00:00:00Z' } }),
     JSON.stringify({ timestamp: '2026-01-01T00:00:00Z', type: 'turn_context', payload: { model: 'gpt-5.1' } }),
     JSON.stringify({ timestamp: '2026-01-01T00:00:01Z', type: 'response_item', payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'codex 提问' }] } }),
@@ -210,6 +216,8 @@ const root = mkdtempSync(join(tmpdir(), 'verify-migrate-'))
   mkdirSync(ompDir, { recursive: true })
   writeFileSync(join(ompDir, `1790000000000_${firstUuid()}.jsonl`), [
     JSON.stringify({ type: 'session', timestamp: '2026-01-01T00:00:00Z', cwd: '/tmp/omp', title: 'omp 会话' }),
+    // message 为合法 JSON null（不得让 discover 抛未捕获 TypeError）
+    JSON.stringify({ type: 'message', timestamp: '2026-01-01T00:00:00Z', message: null }),
     JSON.stringify({ type: 'message', timestamp: '2026-01-01T00:00:01Z', message: { role: 'user', content: [{ type: 'text', text: 'omp 提问' }] } }),
     JSON.stringify({ type: 'message', timestamp: '2026-01-01T00:00:02Z', message: { role: 'assistant', content: [{ type: 'text', text: 'omp 答复' }, { type: 'thinking', text: 'omp 思考' }] } }),
     '',
