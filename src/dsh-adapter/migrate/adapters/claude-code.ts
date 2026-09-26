@@ -12,7 +12,7 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 import type { MigrationAdapter, MigrationDiscovery, MigrationSession, MigrationTurn } from '../types.js'
 
-interface CodeBlock { readonly type?: unknown, readonly text?: unknown }
+interface CodeBlock { readonly type?: unknown, readonly text?: unknown, readonly thinking?: unknown }
 
 function textOf(content: unknown): string | undefined {
   if (typeof content === 'string') return content === '' ? undefined : content
@@ -68,6 +68,9 @@ function readOne(path: string, fallbackCwd: string): MigrationSession | undefine
     } catch {
       continue
     }
+    // A legal `null` (or scalar) line is not a record; reading .type on it
+    // would throw and kill the whole scan (codex adversarial review).
+    if (entry === null || typeof entry !== 'object') continue
     const type = entry.type
     if (type === 'session' && startedAt === 0) {
       startedAt = toMillis(entry.timestamp)
@@ -89,8 +92,12 @@ function readOne(path: string, fallbackCwd: string): MigrationSession | undefine
     } else {
       const content = message.content
       const text = textOf(content) ?? ''
+      // Claude Code thinking blocks carry the trace in a `thinking` field
+      // (not `text`); accept both so a pure-reasoning message never vanishes.
       const reasoning = Array.isArray(content)
-        ? (content as CodeBlock[]).filter(block => block?.type === 'thinking').map(block => block.text).filter((t): t is string => typeof t === 'string').join('\n\n')
+        ? (content as CodeBlock[]).filter(block => block?.type === 'thinking')
+          .map(block => block.thinking ?? block.text)
+          .filter((t): t is string => typeof t === 'string').join('\n\n')
         : ''
       if (text === '' && reasoning === '') continue
       const model = typeof message.model === 'string' && message.model !== '' ? message.model : undefined

@@ -157,10 +157,20 @@ const root = mkdtempSync(join(tmpdir(), 'verify-migrate-'))
   await Promise.resolve(readFiber.dispose()).catch(() => {})
 }
 
-// ── 4. 幂等：同批再导入全部 existing，列表数不变 ────────────────────────
+// ── 4. 幂等：同批再导入全部 existing，官方列表数不变 ────────────────────
 {
   const run2 = await importSessions(fakeAdapter, root, fixtureSessions())
   check('4a. 二次导入零新增零失败', run2.imported === 0 && run2.existing === 3 && run2.failed === 0, JSON.stringify(run2))
+  const { default: JsonlSessionPersistence } = await import('@deepseek-ai/dsh-session-persistence-jsonl')
+  const { Context } = await import('@deepseek-ai/cordis')
+  const ctx = new Context()
+  const fiber = ctx.plugin(JsonlSessionPersistence, { root })
+  for (let i = 0; i < 100 && ctx.get('sessionPersistence') === undefined; i++) {
+    await new Promise(resolve => setTimeout(resolve, 50))
+  }
+  const relisted = await ctx.get('sessionPersistence').list()
+  check('4b. 二次导入后官方列表仍为三条', relisted.length === 3)
+  await Promise.resolve(fiber.dispose()).catch(() => {})
 }
 
 // ── 5. uuid 确定性与区分性 ──────────────────────────────────────────────
@@ -178,8 +188,11 @@ const root = mkdtempSync(join(tmpdir(), 'verify-migrate-'))
   const ccDir = join(home, '.claude', 'projects', '-tmp-cc')
   mkdirSync(ccDir, { recursive: true })
   writeFileSync(join(ccDir, `${firstUuid()}.jsonl`), [
+    // 合法 JSON null 行（codex 对抗审核：不得终止扫描）
+    'null',
     JSON.stringify({ type: 'user', timestamp: '2026-01-01T00:00:00Z', cwd: '/tmp/cc', message: { role: 'user', content: '纯文本提问' } }),
-    JSON.stringify({ type: 'assistant', timestamp: '2026-01-01T00:00:01Z', cwd: '/tmp/cc', message: { role: 'assistant', model: 'claude-sonnet-5', content: [{ type: 'text', text: '带思考的答复' }, { type: 'thinking', text: '思考内容' }] } }),
+    // 真实格式：thinking 块的文本在 `thinking` 字段（不是 text）
+    JSON.stringify({ type: 'assistant', timestamp: '2026-01-01T00:00:01Z', cwd: '/tmp/cc', message: { role: 'assistant', model: 'claude-sonnet-5', content: [{ type: 'text', text: '带思考的答复' }, { type: 'thinking', thinking: '思考内容' }] } }),
     '',
   ].join('\n'))
   // codex：turn_context 带 model + assistant 输出
