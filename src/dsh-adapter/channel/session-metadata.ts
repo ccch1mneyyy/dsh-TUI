@@ -3,7 +3,7 @@ import { createUserMessage, type Message } from '@deepseek-ai/dsh-llm'
 import type { Context } from '@deepseek-ai/cordis'
 import { clearResumeTarget, forgetSession, readResumeTarget, touchSession, writeResumeTarget } from '../../sessionHistory.js'
 import { t } from '../../i18n.js'
-import { appendSessionTitle, deleteSessionLog } from '../compat/index.js'
+import { appendSessionTitle, deleteSessionLog, userTitleData } from '../compat/index.js'
 import { snapshotLiveSessionEvents } from '../compat/liveSession.js'
 import { collectRecentActivity, parseRecapResponse, RECAP_RECENT_CHARS, wrapRecapPrompt } from '../recap.js'
 import { listSummaries, locateSession, previewSession, type SessionSource, type SessionSummary } from '../sessions/index.js'
@@ -190,7 +190,9 @@ export function createSessionMetadataActions(ctx: Context, deps: {
   const renameSession = (title: string): void => {
     const capture = deps.binding.capture()
     if (!current(capture)) return
-    capture.agent.session.append('session/title', { title })
+    // Live rename: the same strict-reader-required payload the offline append
+    // writes — a `{ title }`-only event made the log unopenable (issue #1006).
+    capture.agent.session.append('session/title', userTitleData(title))
     deps.setSessionTitle(title)
     deps.emit()
   }

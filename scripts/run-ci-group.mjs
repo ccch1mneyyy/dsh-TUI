@@ -317,6 +317,12 @@ const GROUPS = {
 // 会话标题回归：选择器标题宽容读取（带未标记第三方事件的日志
 // 不能让标题退化成目录名），/rename 的最后一条 session/title 优先。
     ["verify-session-titles", ['node', 'scripts/verify-session-titles.mjs']],
+// session/title 载荷形状回归（issue #1006）：真存储栈 e2e——离线写入器
+// （/fork + 选择器改名）与实时 /rename 共用的 userTitleData 必须带
+// messageSeqs/source，否则严格读取把整份日志判损坏（stored log is
+// corrupt: title messageSeqs requires an array）而会话再也 resume 不了；
+// 同一夹具塞旧形状 `{ title }` 必须仍被拒（红态自证，回退修复即失败）。
+    ["verify-session-title-payload", ['node', 'scripts/verify-session-title-payload.mjs']],
 // resume 遗留事件注册回归（issue #153）：真实存储栈 e2e——注册前
 // load() 抛 SessionFormatUnsupportedError（原样复现 issue）、注册后
 // 放行；日志字节与 0600 权限绝不被改写；非白名单未知类型保持拒读
