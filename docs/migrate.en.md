@@ -13,10 +13,16 @@ dsh-tui migrate claude-code    # import every Claude Code conversation
 dsh-tui migrate codex --dry-run  # preview what would land, write nothing
 ```
 
-In-TUI equivalent: `/migrate`. Bare `/migrate` opens a **source picker** —
-one row per agent showing its scannable file count and an "active X min ago"
-badge (most recently active first); Enter imports the focused source, Esc
-closes. `/migrate <agent> [--dry-run]` skips the picker and runs directly. The import
+In-TUI equivalent: `/migrate`. Bare `/migrate` opens a **multi-select source
+picker** — one row per agent (checkbox + scannable file count + an "active X
+min ago" badge, most recently active first): Space toggles, `a` selects
+all/none, Enter opens the **confirmation layer** (one line per checked
+source with its count and the "existing sessions are skipped automatically,
+safe to re-run" note; Enter imports / `d` dry-runs / Esc returns to the
+picker), Esc closes. `/migrate <agent>` passes through the same layer (single
+source); `/migrate <agent> --dry-run` previews directly since it writes
+nothing. The completion notification carries per-source real counters
+("imported X · already present Y"). The CLI stays direct for scripts. The import
 runs in a child process so the interface never freezes; results arrive
 through the notification flow and the output lands in a `/migrate` local
 row. Both entry points share the same import logic and idempotency rules.
@@ -73,7 +79,9 @@ About 12 seconds after the TUI starts, one background pass checks whether any
 source saw file writes within the last 20 minutes (newest file mtime per
 source) and surfaces a single notification: "Just came from <agent>?
 /migrate imports it quickly". The scan is off the render path (sub-second)
-and fires at most once per session; a source with no data stays silent.
+and fires at most once per session; a source with no data stays silent. While
+the hint is up, Enter (with an empty prompt) jumps straight into the picker
+with that source pre-checked; any other key dismisses it.
 
 ## Troubleshooting
 

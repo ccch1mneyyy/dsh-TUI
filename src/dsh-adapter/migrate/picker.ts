@@ -52,3 +52,37 @@ export function collectMigratePickerRows(nowMs: number): MigratePickerRow[] {
     return aRecent - bRecent
   })
 }
+
+/** One source's import outcome, parsed from the CLI child's stdout. */
+export interface ImportSummary {
+  readonly agentId: string
+  readonly imported: number
+  readonly existing: number
+}
+
+/**
+ * Parse per-source import counters out of the CLI's report lines
+ * (`[<agentId>] imported 12 · already present 3`). Pure string work so the
+ * TUI's completion notification can carry real numbers (PRD #3) without
+ * re-running any scan.
+ */
+export function parseImportSummary(stdout: string): ImportSummary[] {
+  const summaries: ImportSummary[] = []
+  for (const match of stdout.matchAll(/\[([a-z0-9-]+)\] imported (\d+)(?: · already present (\d+))?/gu)) {
+    summaries.push({
+      agentId: match[1]!,
+      imported: Number(match[2]),
+      existing: match[3] === undefined ? 0 : Number(match[3]),
+    })
+  }
+  return summaries
+}
+
+/**
+ * Confirmation-layer lines for the checked sources (PRD #2): one row per
+ * source with its scannable count and the repeat-safe note. Pure so the
+ * verify suite can assert the exact shape.
+ */
+export function confirmSummaryLines(rows: readonly MigratePickerRow[]): string[] {
+  return rows.map(row => `${row.label}: ${row.count}`)
+}

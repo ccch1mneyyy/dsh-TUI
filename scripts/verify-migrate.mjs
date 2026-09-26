@@ -327,6 +327,30 @@ const root = mkdtempSync(join(tmpdir(), 'verify-migrate-'))
     && recentAgentsFrom([sample('cc', 21)], NOW, RECENT_ACTIVITY_WINDOW_MS).length === 0)
 }
 
+// ── 4h. 交互返工数据层：确认行构造 + 子进程汇报计数解析（PRD #2/#3）────
+{
+  const { parseImportSummary, confirmSummaryLines } = await import('../src/dsh-adapter/migrate/picker.js')
+  const out = [
+    '[zcode] importing 60 conversation(s) into /x',
+    '[zcode] imported 60',
+    '[omp] importing 1366 conversation(s) into /x',
+    '[omp] imported 0 · already present 1366',
+  ].join('\n')
+  const parsed = parseImportSummary(out)
+  check('4h1. 解析逐源真实计数（导入/已存在）',
+    parsed.length === 2
+    && parsed[0].agentId === 'zcode' && parsed[0].imported === 60 && parsed[0].existing === 0
+    && parsed[1].agentId === 'omp' && parsed[1].imported === 0 && parsed[1].existing === 1366)
+  check('4h2. 无汇总输出 → 空数组（P2：不再误报完成）',
+    parseImportSummary('[claude-code] 848 session file(s) to scan').length === 0)
+  const rows = [
+    { agentId: 'zcode', label: 'zcode', count: 60 },
+    { agentId: 'omp', label: 'OMP', count: 1375 },
+  ]
+  check('4h3. 确认层逐行构造',
+    JSON.stringify(confirmSummaryLines(rows)) === JSON.stringify(['zcode: 60', 'OMP: 1375']))
+}
+
 // ── 5. uuid 确定性与区分性 ──────────────────────────────────────────────
 {
   const [first] = fixtureSessions()

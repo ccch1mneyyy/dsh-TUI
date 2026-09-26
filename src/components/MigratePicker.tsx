@@ -9,19 +9,23 @@ import { useOverlayListRows } from './OverlayAbove.js'
 import type { MigratePickerRow } from '../dsh-adapter/migrate/picker.js'
 
 /**
- * `/migrate` source picker (SkillsPicker style): one row per foreign agent,
- * main line = label + scannable file count, description line = recent
- * activity badge or the store location hint. Enter (Chat) spawns the import
- * for the focused source; Esc closes. `/migrate <agent>` bypasses the picker.
+ * `/migrate` source picker (multi-select, PRD revision): each row shows a
+ * checkbox, the scannable file count, and a recent-activity badge. Keys
+ * (Chat owns the logic): space toggles the focused source, `a` selects
+ * all/none, Enter proceeds to the confirmation layer with the checked set
+ * (the focused row when nothing is checked), Esc closes.
  */
 export function MigratePicker({
   rows,
   focusIndex,
+  checked,
   onPick,
 }: {
   rows: readonly MigratePickerRow[]
   focusIndex: number
-  /** Mouse pick (fullscreen): Chat applies the same path as keyboard Enter. */
+  /** Checked agent ids (multi-select state lives in Chat). */
+  checked: ReadonlySet<string>
+  /** Mouse pick (fullscreen): toggle the clicked row's checked state. */
   onPick?: (index: number) => void
 }): React.ReactNode {
   // 每项恒占 2 行（主行 + 描述行），预算同 SkillsPicker（OverlayAbove 高度
@@ -57,7 +61,7 @@ export function MigratePicker({
                 showScrollDown={absoluteIndex === end - 1 && end < rows.length}
                 onClick={onPick ? () => onPick(absoluteIndex) : undefined}
               >
-                {`${row.label} · ${t('migrate-picker-count', { n: row.count })}`}
+                {`${checked.has(row.agentId) ? '[x]' : '[ ]'} ${row.label} · ${t('migrate-picker-count', { n: row.count })}`}
               </ListItem>
             )
           })
@@ -65,6 +69,42 @@ export function MigratePicker({
       </Box>
       <Text dimColor italic>
         <HintLine text={t('migrate-picker-hint')} />
+      </Text>
+    </Pane>
+  )
+}
+
+/**
+ * The second confirmation layer (PRD #2): one line per checked source with
+ * its scannable count and the repeat-safe note. Keys (Chat): Enter imports,
+ * `d` dry-runs, Esc returns to the picker with the checked set preserved.
+ */
+export function MigrateConfirm({
+  rows,
+}: {
+  rows: readonly MigratePickerRow[]
+}): React.ReactNode {
+  return (
+    <Pane color="permission">
+      <Box flexDirection="column">
+        <Box marginBottom={1}>
+          <Text color="remember" bold>
+            {t('migrate-confirm-title')}
+          </Text>
+        </Box>
+        {rows.map(row => (
+          <Box key={row.agentId} paddingLeft={1}>
+            <Text>
+              {t('migrate-confirm-line', { label: row.label, n: row.count })}
+            </Text>
+          </Box>
+        ))}
+        <Box marginTop={1}>
+          <Text dimColor>{t('migrate-confirm-note')}</Text>
+        </Box>
+      </Box>
+      <Text dimColor italic>
+        <HintLine text={t('migrate-confirm-actions')} />
       </Text>
     </Pane>
   )
