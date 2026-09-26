@@ -306,6 +306,14 @@ node --import tsx/esm scripts/verify-askpanel-layout.tsx
 node --import tsx/esm scripts/repro-toolcards.tsx
 ```
 
+CI test jobs set `DSH_TUI_LANG=zh` globally. The UI language resolves at
+import time from `DSH_TUI_LANG` → `~/.dsh-tui/lang.json` → the OS locale, so a
+script asserting UI copy should pin its language before its dynamic imports
+(`process.env.DSH_TUI_LANG = 'zh'` or `'en'`, matching its assertions). When
+running a script that does not pin yet, prefix `DSH_TUI_LANG=zh` locally;
+otherwise a machine with an `en` lang.json or an `en_US` locale reports
+false failures.
+
 Run all three CI regressions for changes to shared rendering, `Chat`, prompt or
 question layout, tool cards, theme primitives, or the Ink core. For a narrow
 change, also run the closest focused script:
