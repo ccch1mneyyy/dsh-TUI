@@ -17,6 +17,15 @@
  */
 export {} // 模块边界：避免顶层 await/全局名与其他 verify 脚本冲突
 
+// Isolation (issue #986): this fixture presses `↑` 13 times and asserts the
+// fold-block caret walk owns them. The composer's `↑` also walks the persisted
+// input history, so a `~/.dsh-tui/history.jsonl` left behind by an earlier
+// script in the same shard would be recalled instead of walking the block —
+// the shared real home made this fixture's premise ("no history") depend on
+// what ran before it. Imported before the app modules: DATA_DIR is a
+// module-level constant resolved at import time.
+import './lib/fake-home.mjs'
+
 process.env.FORCE_COLOR = '3'
 process.env.DSH_TUI_LANG = 'en'
 // 纯 OSC 52 剪贴板路径：跳过原生剪贴板工具探测（与 verify-copy-on-select

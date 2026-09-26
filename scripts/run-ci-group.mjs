@@ -284,6 +284,11 @@ const GROUPS = {
 // verify-composer-draft-handoff；在途 staging 围栏在 verify:build 链的
 // verify-image-preview。完整 8 场景矩阵见 PR #942 历史。
     ["verify-composer-draft-screen-switch", ['node', '--import', 'tsx/esm', 'scripts/verify-composer-draft-screen-switch.tsx']],
+// 队列召回撤回回归（issue #986 后半）：↑ 走位召回的文本若仍挂在 pending 里，
+// 必须把那条排队副本撤下来（否则改完重发等于同一句发两遍）——可撤时队列少一条
+// 且有提示、已被本轮取走时如实报「撤不回来」且副本留在队列、文本不匹配的排队
+// 项一律不动。
+    ["verify-prompt-history-queue-retract", ['node', 'scripts/verify-prompt-history-queue-retract.mjs']],
   ],
   'session-workspace': [
 // 审批服务配置回归（issue #49 尾巴）：裸组合 cordis.yml 必须挂载
@@ -317,6 +322,12 @@ const GROUPS = {
 // 会话标题回归：选择器标题宽容读取（带未标记第三方事件的日志
 // 不能让标题退化成目录名），/rename 的最后一条 session/title 优先。
     ["verify-session-titles", ['node', 'scripts/verify-session-titles.mjs']],
+// session/title 载荷形状回归（issue #1006）：真存储栈 e2e——离线写入器
+// （/fork + 选择器改名）与实时 /rename 共用的 userTitleData 必须带
+// messageSeqs/source，否则严格读取把整份日志判损坏（stored log is
+// corrupt: title messageSeqs requires an array）而会话再也 resume 不了；
+// 同一夹具塞旧形状 `{ title }` 必须仍被拒（红态自证，回退修复即失败）。
+    ["verify-session-title-payload", ['node', 'scripts/verify-session-title-payload.mjs']],
 // resume 遗留事件注册回归（issue #153）：真实存储栈 e2e——注册前
 // load() 抛 SessionFormatUnsupportedError（原样复现 issue）、注册后
 // 放行；日志字节与 0600 权限绝不被改写；非白名单未知类型保持拒读
@@ -363,6 +374,11 @@ const GROUPS = {
 // 输入历史草稿回归（issue #287）：首次 ↑ 保存未提交草稿，遍历历史后
 // ↓ 回到末尾必须恢复原文，重复越界不能把草稿清空。
     ["verify-prompt-history-draft", ['node', 'scripts/verify-prompt-history-draft.mjs']],
+// 输入历史持久化回归（issue #986）：↑/↓ 必须走磁盘上的 history.jsonl——
+// 冷启动后第一次 ↑ 召回的是最新一条（文件是追加序，漏了反转会翻出最旧的）、
+// 能一路走到最旧并在那里钳住、本次进程提交的条目排在持久化条目之后且
+// 接缝处不重复、重新挂载（重启）后仍能召回。
+    ["verify-prompt-history-persist", ['node', 'scripts/verify-prompt-history-persist.mjs']],
 // 文件补全回归（issue #278）：CMake 构建目录与任意大型兄弟目录不得
 // 独占 100 条全局预算，普通深层源码也不能被固定深度静默截断。
     ["verify-file-completion", ['node', 'scripts/verify-file-completion.mjs']],

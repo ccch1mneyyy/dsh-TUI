@@ -105,7 +105,7 @@ dsh-tui
 | `Ctrl+U` / `Ctrl+K` | delete before the cursor (to line start) / after the cursor (to line end) |
 | `Ctrl+W` | delete the previous word |
 | `Backspace` / `Delete` | delete previous / next character; **with a selection, delete the whole selection** |
-| `↑` / `↓` | move between lines when multi-line; browse input history when single-line (50 entries) |
+| `↑` / `↓` | move between lines when multi-line; browse input history when single-line (last 200 entries, kept across restarts) |
 | `Ctrl+V` (⌘V) / `Alt+V` | paste: text / file path (images auto `@`-referenced) / clipboard bitmap (`[Image #N]` attachment); use `Alt+V` when the terminal swallows `Ctrl+V` |
 | `Ctrl+G` | edit the input in the `$VISUAL`/`$EDITOR` external editor (`:cq` keeps the draft; prompts you to configure when unset) |
 | `Ctrl+Shift+E` (⌘⇧E) | open the **full-screen draft editor** (or click `⛶` at the end of the input line): line numbers, current line highlighted, `Enter` newline, `Ctrl+Enter` send, `Esc` collapse (draft kept); off at `/settings → 全屏草稿编辑` |
@@ -343,6 +343,7 @@ Keys are in §2.1:
 - `Tab` = **follow-up** (queue after the turn)
 - `Ctrl+Enter` = **interrupt** (interrupt and send)
 - `Alt+Up` bring the last unhandled message back
+- `↑` recalling a message that is still queued also withdraws that queued entry (same as `Alt+Up`, so the same text is not sent twice); once the running turn claimed it, only a notice appears
 - `Esc` (with pending) interrupt and re-send
 - `/btw …` side question never interrupts the main turn
 
