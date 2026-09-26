@@ -51,7 +51,7 @@ function readOne(path: string): MigrationSession | undefined {
     // would throw and kill the whole scan (codex adversarial review).
     if (entry === null || typeof entry !== 'object') continue
     const payload = entry.payload as Record<string, unknown> | undefined
-    if (payload === undefined || typeof payload !== 'object') continue
+    if (!payload || typeof payload !== 'object') continue  // !x also rejects JSON null (typeof null === 'object')
     const time = toMillis(entry.timestamp)
     if (entry.type === 'session_meta') {
       if (typeof payload.cwd === 'string' && payload.cwd !== '') cwd = payload.cwd

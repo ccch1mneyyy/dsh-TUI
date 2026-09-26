@@ -61,7 +61,7 @@ function readOne(path: string): MigrationSession | undefined {
     }
     if (entry.type !== 'message') continue
     const message = entry.message as { role?: unknown, content?: unknown } | undefined
-    if (message === undefined || typeof message !== 'object') continue
+    if (!message || typeof message !== 'object') continue  // !x also rejects JSON null (typeof null === 'object')
     if (message.role === 'user') {
       const text = blocksText(message.content, ['text'])
       if (text === '') continue
