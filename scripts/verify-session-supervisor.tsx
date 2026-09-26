@@ -24,6 +24,14 @@
  * keeps the previous snapshot beside its error notice — only a successful
  * listing ever writes the snapshot.
  *
+ * Order is load-bearing for those checks: the snapshot lives for the whole
+ * process, so the cold-start case is observable only on the FIRST mount and
+ * every later mount paints what the previous one left. The snapshot segments
+ * must stay above the main instance, and the failure case depends on the
+ * normalization mount right before it. Inserting any mount ahead of them, or
+ * running this file as split suites, changes those first frames and breaks
+ * the checks that follow.
+ *
  * Renders the real `SessionSupervisor` into an in-memory terminal with a stub
  * channel, then drives it with real stdin bytes (SGR mouse reports).
  *
