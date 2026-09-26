@@ -23,7 +23,7 @@ type Binding = ReturnType<typeof createChannelBinding>
 export function createBackgroundCurrentAction(
   ctx: Context,
   state: Pick<ChannelState,
-    'cwd' | 'status' | 'agentId' | 'loadedContext' | 'contextWindow' |
+    'cwd' | 'status' | 'agentId' | 'sessionId' | 'loadedContext' | 'contextWindow' |
     'effortLevels' | 'reasoningEffort' | 'emit' | 'notify'> & Parameters<typeof resetSessionProjection>[0],
   options: { configuredPreset?: string; configuredProvider?: string; configuredModel?: string; provider: string; model: string },
   deps: {
@@ -100,6 +100,7 @@ export function createBackgroundCurrentAction(
           resetSessionProjection(state, deps.rowIds, deps.resetProjector, deps.resetSubagents, deps.resetJobs)
           state.status = handle.agent.status
           state.agentId = handle.agent.id
+          state.sessionId = handle.agent.session.id
           state.loadedContext = undefined
           state.contextWindow = undefined
           state.effortLevels = undefined

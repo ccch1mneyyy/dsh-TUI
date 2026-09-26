@@ -6,7 +6,7 @@ import { BRAND, FLASH, ICE, sweep } from './shimmer.js'
 import { getTheme } from '../theme.js'
 import { useTheme } from './design-system/ThemeProvider.js'
 import { parseRGB } from './Spinner/spinnerUtils.js'
-import type { ActivityStatus } from '../dsh-adapter/channel.js'
+import type { ActivityView } from '../dsh-adapter/activity-store.js'
 
 /**
  * Context-pressure percentage (0–100) from the last usage snapshot, or
@@ -33,6 +33,12 @@ export function contextPressurePct(
  * `⚠ ctx N%` pressure prefix, and a trailing token suffix for the spinner
  * placement. Done summaries render statically in the brand mist blue.
  */
+/** The fields the line renders, from the working-activity plugin's projection. */
+export interface ActivityLineValue {
+  readonly phase: ActivityView['phase']
+  readonly line: string
+}
+
 export function ActivityLine({
   activity,
   activityFrames,
@@ -40,7 +46,7 @@ export function ActivityLine({
   warnDanger,
   suffix,
 }: {
-  activity: ActivityStatus
+  activity: ActivityLineValue
   activityFrames: string | undefined
   warnPct?: number
   warnDanger?: boolean

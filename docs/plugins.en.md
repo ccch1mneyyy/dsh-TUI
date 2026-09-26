@@ -21,7 +21,8 @@ live in the admission & development guide.
   [plugin-template](https://github.com/dsh-tui-ecosystem/plugin-template)
   (start from the template and ship a plugin in minutes).
 - **Reference implementation**: `dsh-working-activity` (live working-status
-  line with dual outlets: TUI prompt slot + `activity/status` session events).
+  line with dual outlets: TUI prompt slot + `workingActivity` session
+  projection).
 
 ## Seam stability reference
 

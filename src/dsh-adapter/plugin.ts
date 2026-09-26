@@ -56,6 +56,7 @@ import { startSessionMountHeartbeat } from './session-mount-heartbeat.js'
 import { reserveMount } from '../sessionMounts.js'
 import { getHostDialogStore, type TuiDialogRuntime } from './dialogs.js'
 import { getHostStatusStore, type TuiStatusRuntime } from './status.js'
+import { createActivityStore } from './activity-store.js'
 import { getHostToastStore, type TuiToastRuntime } from './toast.js'
 import { getHostShortcuts, type TuiShortcutRuntime } from './shortcuts.js'
 import { getHostThemes, type TuiThemeRuntime } from './themes.js'
@@ -496,8 +497,23 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
   // validated startup resolution, on resume the route the target session's
   // own records carry (a complete cordis.yml pin wins over them).
   const displayRoute = createdRoute ?? startupRoute
+  // Read side of the activity projection: filled by the working-activity
+  // plugin's unit, read by the status line. Created BEFORE the channel on
+  // purpose — `createChannel` binds its agent synchronously while it is still
+  // being constructed, and that bind seeds this store (see `seedActivity`
+  // below), so a store declared after the channel is still in its temporal
+  // dead zone when the first seed arrives and takes the whole boot down with
+  // it. One store per process; a composition without the projection service
+  // simply leaves it empty. `activity: false` is a static config-time switch
+  // (the runtime `/activity` command only changes the preset), so a hidden
+  // line attaches nothing at all — no feed, no 500ms tick.
+  const activityStore = createActivityStore(ctx, config.activity !== false)
   const rawChannel = createChannel(ctx, agent, {
     model: displayRoute.model,
+    // The activity projection only pushes on change; read the current value as
+    // soon as this session binds so a resumed or reattached session renders its
+    // line immediately instead of waiting for the next event.
+    seedActivity: session => activityStore.seed(session),
     // A RESUMED session keeps its persisted header cwd (issue #96 review):
     // pre-upgrade sessions recorded the launch directory, and re-resolving
     // from the current launch directory would split @ expansion / file
@@ -1606,6 +1622,10 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
     // Chat falls back to inert stores and no shortcut registry.
     extensionDialogs: getHostDialogStore(ctx.get('tuiDialogs') as TuiDialogRuntime | undefined),
     extensionStatus: getHostStatusStore(ctx.get('tuiStatus') as TuiStatusRuntime | undefined),
+    // The working line's semantics belong to the dsh-working-activity plugin's
+    // session projection; this store is the read side of that seam, so the TUI
+    // no longer runs a second activity tracker of its own.
+    activityStore,
     extensionShortcuts: getHostShortcuts(ctx.get('tuiShortcuts') as TuiShortcutRuntime | undefined),
     themeHost,
     // Full-screen surfaces inside Chat — the trajectory scene and the session

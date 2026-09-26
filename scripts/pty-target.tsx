@@ -1,7 +1,8 @@
 /** conpty 探测的目标进程：真实 stdout 渲染 Chat + ask 问卷（精确 payload）。 */
 process.env.FORCE_COLOR = '3'
-const [{ default: React }, { render }, { Chat }, { QuestionStore }] = await Promise.all([
+const [{ default: React }, { render }, { Chat }, { QuestionStore }, { ActivityStore }] = await Promise.all([
   import('react'), import('../src/ui.js'), import('../src/screens/Chat.js'), import('../src/dsh-adapter/questions.js'),
+  import('../src/dsh-adapter/activity-store.js'),
 ])
 const rows: unknown[] = []
 for (let i = 0; i < 60; i++) {
@@ -10,17 +11,29 @@ for (let i = 0; i < 60; i++) {
 }
 const channel = {
   version: 0, rows, status: 'idle', sessionTitle: 'probe', agentId: 'probe',
+  sessionId: 'pty-target',
   model: 'deepseek-v4-flash', tokens: { input: 120, output: 45 },
   cwd: 'C:/code/demo-project', gitBranch: 'main', working: true,
   spinnerMode: 'requesting', responseChars: 20, activeToolCount: 0, turnStart: Date.now(),
   lastUserText: '再来问一个问题', pending: [], commandList: [], notifications: [],
   activityEnabled: true, activityFrames: [], contextBarEnabled: true,
-  workingActivity: { phase: 'asking', line: '提问中', toolCount: 0, turnElapsedMs: 80000, phaseStartedAt: Date.now() - 80000 },
   subscribe: () => () => {}, submit: () => {}, cancel: () => {}, clear: () => {}, notify: () => {},
   listModels: () => Promise.resolve([]), listSessions: () => [], setResumeTarget: () => {},
 } as never
+// The working line comes from the projection store, keyed by session id.
+const activityStore = new ActivityStore()
+activityStore.update('pty-target', {
+  phase: 'asking',
+  line: '提问中',
+  live: true,
+  toolCount: 0,
+  phaseStartedAt: Date.now() - 80_000,
+  turnStartedAt: Date.now() - 80_000,
+  updatedAt: Date.now(),
+  lang: 'zh',
+})
 const store = new QuestionStore()
-const app = render(React.createElement(Chat, { channel, questionStore: store as never }), { exitOnCtrlC: false, patchConsole: false })
+const app = render(React.createElement(Chat, { channel, questionStore: store as never, activityStore }), { exitOnCtrlC: false, patchConsole: false })
 await new Promise(r => setTimeout(r, 1200))
 void store.ask({
   questions: [{

@@ -14,8 +14,8 @@
  * wcwidth 语义一致），单一真源不漂移。
  *
  * 本模块顶层 import TypeScript 源——只可被 `node --import tsx/esm`
- * 运行的脚本引入；纯 node 脚本（如 verify-working-activity）请勿引入
- * （它们也不需要：断言不含 Emoji_Presentation 字符的行）。
+ * 运行的脚本引入；纯 node 脚本请勿引入（它们也不需要：
+ * 断言不含 Emoji_Presentation 字符的行）。
  */
 const { stringWidth } = await import('../../src/ink/stringWidth.js')
 

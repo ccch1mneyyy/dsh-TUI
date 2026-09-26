@@ -19,7 +19,6 @@ export type SessionResetState = Pick<
   | 'tps'
   | 'tpsSamples'
   | 'lastUsage'
-  | 'workingActivity'
   | 'contextSegments'
 >
 
@@ -63,7 +62,6 @@ export function resetSessionProjection(
   state.tps = undefined
   state.tpsSamples = []
   state.lastUsage = undefined
-  state.workingActivity = undefined
   state.contextSegments = {
     system: 0,
     prompt: 0,

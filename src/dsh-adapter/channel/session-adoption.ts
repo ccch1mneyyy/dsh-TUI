@@ -9,6 +9,7 @@ type AdoptionState = Pick<
   ChannelState,
   | 'status'
   | 'agentId'
+  | 'sessionId'
   | 'agentPreset'
   | 'working'
   | 'emit'
@@ -52,6 +53,7 @@ export function createSessionAdoption(
     resetSessionProjection(state, deps.rowIds, deps.resetProjector, deps.resetSubagents, deps.resetJobs)
     state.status = handle.agent.status
     state.agentId = handle.agent.id
+    state.sessionId = handle.agent.session.id
     state.agentPreset = agentPreset
     deps.replay(seed)
     deps.settleReplay()

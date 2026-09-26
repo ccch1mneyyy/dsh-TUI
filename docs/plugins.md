@@ -20,7 +20,7 @@
   [plugin-template](https://github.com/dsh-tui-ecosystem/plugin-template)
   （从模板起步，5 分钟出一个插件）。
 - **参考实现**：`dsh-working-activity`（实时工作状态行：TUI 槽位 +
-  `activity/status` 会话事件双出口）。
+  `workingActivity` 会话投影双出口）。
 
 ## 接缝稳定性参考
 

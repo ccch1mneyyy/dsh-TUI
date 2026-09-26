@@ -13,6 +13,7 @@ type LiveAdoptionState = Pick<
   ChannelState,
   | 'status'
   | 'agentId'
+  | 'sessionId'
   | 'cwd'
   | 'displayCwd'
   | 'agentPreset'
@@ -25,7 +26,6 @@ type LiveAdoptionState = Pick<
   | 'tps'
   | 'tpsSamples'
   | 'lastUsage'
-  | 'workingActivity'
   | 'working'
   | 'emit'
 > & Parameters<typeof resetSessionProjection>[0]
@@ -66,6 +66,7 @@ export function createLiveAgentAdoption(
       resetSessionProjection(state, deps.rowIds, deps.resetProjector, deps.resetSubagents, deps.resetJobs)
       state.status = target.status
       state.agentId = target.id
+      state.sessionId = target.session.id
       state.cwd = target.session.header.cwd ?? state.cwd
       state.displayCwd = deps.describeWorkspace(state.cwd).description ?? state.cwd
       deps.resetIdeSelection()

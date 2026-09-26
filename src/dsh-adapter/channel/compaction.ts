@@ -23,7 +23,6 @@ export function createManualCompaction(
     agent(): Agent
     withDecisionPending<T>(name: string, pending: Promise<T>): Promise<T>
     notify: Notify
-    onComplete(): void
   },
 ) {
   let active: ManualCompaction | undefined
@@ -99,7 +98,6 @@ export function createManualCompaction(
           const result = await compactService.compactNow(originAgent, controller.signal)
           if (!isCurrent()) return
           deps.notify(result ? t('compact-done') : t('compact-nothing'))
-          if (result) deps.onComplete()
         } catch (error: unknown) {
           if (!isCurrent() || cancelled.has(controller)) return
           if ((error as { code?: unknown }).code === 'persistence') {

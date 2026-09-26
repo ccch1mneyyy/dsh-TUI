@@ -71,7 +71,6 @@ const baseChannel = {
   lastUsage: undefined,
   tps: undefined,
   tpsSamples: [],
-  workingActivity: undefined,
   activityFrames: undefined,
   activityEnabled: false,
   contextBarEnabled: true,

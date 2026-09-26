@@ -86,7 +86,6 @@ const channel = {
   contextWindow: undefined,
   reasoningEffort: 'high',
   effortLevels: [],
-  workingActivity: undefined,
   activityEnabled: false,
   contextBarEnabled: true,
   statusBar: {},
