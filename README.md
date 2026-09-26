@@ -140,6 +140,21 @@ source builds, and troubleshooting, including migration from the former
 
 Other arguments go to `dsh --profile dsh-tui`. Safe mode: [Getting started](docs/getting-started.en.md).
 
+### Importing conversations from other agents (`dsh-tui migrate`)
+
+Bring Claude Code, Codex, or OMP conversation histories into the DSH session store, then browse and resume them by their original working directory via `/resume`:
+
+```sh
+dsh-tui migrate                # list importable counts per agent (writes nothing)
+dsh-tui migrate claude-code    # import every Claude Code conversation (likewise codex / omp)
+dsh-tui migrate codex --dry-run  # preview what would land, write nothing
+```
+
+- **Read-only source**: migration only reads the foreign agent's local store; artifacts are written through the official `JsonlSessionPersistence` backend, so imported sessions are first-class (openable, continuable).
+- **Idempotent**: one deterministic UUID per source conversation — re-importing skips what is already present instead of stacking duplicates.
+- **Structure preserved**: user/assistant messages and reasoning traces are rebuilt turn by turn; tool traffic is not migrated (source formats cannot replay it faithfully — the contract is "re-read the conversation", not "resume the task").
+- More agents (pi, opencode, …) extend the adapter registry once real samples exist.
+
 **VS Code**: use the integrated terminal or the `dsh-tui-vscode` extension. See [VS Code guide](docs/vscode.en.md). **Herdr**: run `dsh-tui` in a [Herdr](https://herdr.dev) pane; `idle` / `working` / `blocked` are reported through its local integration API.
 
 ## Keybindings & Mouse
