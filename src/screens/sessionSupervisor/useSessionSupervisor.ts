@@ -25,19 +25,51 @@ import type { ChannelUi as Channel } from '../../adapter/channel/ui-policy.js'
 import { RAIL_CHROME_ROWS, WORKSPACE_ROW_LINES, RAIL_MIN_TOTAL_COLUMNS, RAIL_WIDTH_MIN, RAIL_WIDTH_MAX, SESSION_ROW_LINES, SESSION_PANE_CHROME_ROWS, MenuAction, MENU_ACTIONS, MENU_WIDTH, MENU_HEIGHT, MENU_LABEL_KEYS, SupervisorLiveState, RailEntry, UNREGISTERED_RAIL_ID, message, samePath, sessionMatchesQuery } from './model.js'
 
 /**
- * The last listing this process saw, carried across mounts of this screen.
+ * The last successful listing, per channel, carried across mounts of this
+ * screen.
  *
  * A snapshot, not a source of truth: it only decides what the screen paints
  * before the fresh listing lands; the listing every open re-runs stays the
- * truth and corrects every stale title, order and deletion on arrival, so
- * the stale window is one listing's duration and a failed listing never
- * writes here — the screen keeps the previous list beside its error notice.
+ * truth and corrects every stale title, order and deletion on arrival, so the
+ * stale window is one listing's duration and a failed listing never writes
+ * here — the screen keeps the previous list beside its error notice.
  *
- * One immutable array reference, replaced wholesale per successful listing —
- * no timers, handles or subscriptions — and concurrent instances writing the
- * same store data last-write-wins, harmlessly.
+ * Keyed by the CHANNEL rather than by the process, because the rows belong to
+ * one channel's persistence source and a process can host more than one: a
+ * screen that switches channels must not paint another source's session
+ * metadata, not even for one frame. `Chat` keeps one channel for the life of
+ * the screen, so a reopen still finds its own snapshot. The map holds channel
+ * → rows and never keeps a channel alive on its own.
+ *
+ * The slot also carries the listing generation, because reloads overlap:
+ * `Ctrl+L`, a rename and a delete each re-run the listing, and the previous
+ * mount's listing can still be in flight when the screen is reopened. Only the
+ * NEWEST reload may publish — to the screen or to the snapshot — so a slow
+ * answer landing late can neither repaint older rows over newer ones nor
+ * become the next mount's first frame.
  */
-let lastListing: readonly SessionSummary[] | undefined
+interface ListingSnapshotSlot {
+  /** Rows of this channel's last successful listing; undefined before one. */
+  rows: readonly SessionSummary[] | undefined
+  /** Sequence number of the newest reload; only that one may publish. */
+  requestGeneration: number
+}
+
+const listingSnapshots = new WeakMap<Channel, ListingSnapshotSlot>()
+
+/**
+ * The snapshot slot for one channel, created on first use.
+ * @param channel - The screen's channel, which owns the rows.
+ * @returns The channel's slot, empty when it has never listed.
+ */
+function snapshotSlot(channel: Channel): ListingSnapshotSlot {
+  let slot = listingSnapshots.get(channel)
+  if (slot === undefined) {
+    slot = { rows: undefined, requestGeneration: 0 }
+    listingSnapshots.set(channel, slot)
+  }
+  return slot
+}
 
 /** Everything the screen owns that the model needs to read. */
 export interface SessionSupervisorInput {
@@ -65,10 +97,13 @@ export function useSessionSupervisor(input: SessionSupervisorInput) {
   const { channel, home, onOpenSession, onNewSession, onStopSession, liveStateOf, columns, rows } = input
 
   const [entries, setEntries] = useState<readonly RailEntry[]>([])
-  // Lazy so a non-empty snapshot from a previous mount paints as the first
-  // frame; no or empty snapshot keeps today's loading path.
-  const [sessions, setSessions] = useState<readonly SessionSummary[]>(() => lastListing ?? [])
-  const [loading, setLoading] = useState(() => lastListing === undefined || lastListing.length === 0)
+  // Lazy so a non-empty snapshot from this channel's previous mount paints as
+  // the first frame; no or empty snapshot keeps today's loading path.
+  const [sessions, setSessions] = useState<readonly SessionSummary[]>(() => snapshotSlot(channel).rows ?? [])
+  const [loading, setLoading] = useState(() => {
+    const snapshot = snapshotSlot(channel).rows
+    return snapshot === undefined || snapshot.length === 0
+  })
   const [notice, setNotice] = useState<{ text: string; tone: 'info' | 'error' } | undefined>(undefined)
   /** Live status and occupancy are re-read on their own clock, not the listing's. */
   const [pulse, setPulse] = useState(0)
@@ -274,6 +309,13 @@ export function useSessionSupervisor(input: SessionSupervisorInput) {
    * this screen cannot work without, so it must survive a missing ledger.
    */
   const reload = useCallback(async (): Promise<void> => {
+    // Claim this reload's generation before the first await: everything below
+    // only publishes while it is still the newest request, so a slower earlier
+    // one that lands later cannot repaint the screen (or the snapshot) with
+    // rows the newer listing has already corrected.
+    const slot = snapshotSlot(channel)
+    const generation = ++slot.requestGeneration
+
     // The two reads are independent, and the session listing is the half this
     // screen cannot work without: a registry that rejects (bare composition,
     // unmounted service, a provider throwing) must not take the history down
@@ -282,12 +324,15 @@ export function useSessionSupervisor(input: SessionSupervisorInput) {
     await Promise.all([
       (async (): Promise<void> => {
         try {
-          // Recorded only after success: a failed listing keeps the previous snapshot.
           const fresh = await channel.listSessions()
-          lastListing = fresh
+          // Recorded only after success: a failed listing keeps the previous
+          // snapshot, and only the newest reload may write it.
+          if (slot.requestGeneration !== generation) return
+          slot.rows = fresh
           setSessions(fresh)
           setNotice(current => (current?.tone === 'error' ? undefined : current))
         } catch (error) {
+          if (slot.requestGeneration !== generation) return
           setNotice({ text: t('home-sessions-failed', { err: message(error) }), tone: 'error' })
         }
       })(),
@@ -296,15 +341,17 @@ export function useSessionSupervisor(input: SessionSupervisorInput) {
           const registry = typeof channel.listWorkspaceRegistry === 'function'
             ? await channel.listWorkspaceRegistry()
             : []
+          if (slot.requestGeneration !== generation) return
           setEntries(registry.map(entry => ({ ...entry, from: 'registry' })))
         } catch {
           // An unreadable registry is not an empty history: the sessions stay
           // listed (and resumable) under the cwd-derived fallback groups.
+          if (slot.requestGeneration !== generation) return
           setEntries([])
         }
       })(),
     ])
-    setLoading(false)
+    if (slot.requestGeneration === generation) setLoading(false)
   }, [channel])
 
   React.useEffect(() => {

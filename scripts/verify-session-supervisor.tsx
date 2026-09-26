@@ -19,18 +19,16 @@
  * rail's window math.
  *
  * It also pins the snapshot-then-refresh first paint (issue #987): a mount
- * paints the previous listing's rows instead of a loading placeholder, and
- * the fresh listing corrects them wholesale when it lands. A failed listing
+ * paints its channel's previous listing instead of a loading placeholder, and
+ * the fresh listing corrects it wholesale when it lands. A rejected listing
  * keeps the previous snapshot beside its error notice — only a successful
- * listing ever writes the snapshot.
+ * listing ever writes the snapshot, and only the newest reload may (a listing
+ * that lands late must not repaint over a newer one).
  *
- * Order is load-bearing for those checks: the snapshot lives for the whole
- * process, so the cold-start case is observable only on the FIRST mount and
- * every later mount paints what the previous one left. The snapshot segments
- * must stay above the main instance, and the failure case depends on the
- * normalization mount right before it. Inserting any mount ahead of them, or
- * running this file as split suites, changes those first frames and breaks
- * the checks that follow.
+ * The snapshot is keyed by the CHANNEL, so every case below owns one: a case
+ * that wants a carried-over first frame mounts the SAME stub twice, and a case
+ * that wants a cold one builds a fresh stub. No case inherits another's rows,
+ * and none of them depends on where it sits in this file.
  *
  * Renders the real `SessionSupervisor` into an in-memory terminal with a stub
  * channel, then drives it with real stdin bytes (SGR mouse reports).
@@ -194,48 +192,73 @@ const liveState = {
   'live-one': { status: 'working' as const, live: true, current: true, summary: 'doing work' },
 }
 
+/** What one stub channel answers with, and how its reads fail. */
+interface StubChannelConfig {
+  readonly registry: readonly unknown[]
+  readonly cwd: string
+  /** Rows the listing answers with; the shared stub listing by default. */
+  readonly sessions?: readonly unknown[]
+  /** True when the registry read itself fails (service missing / throwing). */
+  readonly registryRejects?: boolean
+  readonly registryAbsent?: boolean
+}
+
+/** How the NEXT listing call behaves; a case swaps it between mounts. */
+interface ListingPlan {
+  /** Held unresolved to keep the listing in flight (the snapshot cases). */
+  readonly defer?: Promise<void>
+  /** Reject instead of answering — a channel listing rejection. */
+  readonly reject?: boolean
+  /** Rows to answer with; the shared stub listing by default. */
+  readonly sessions?: readonly unknown[]
+}
+
 /**
- * A second, independent screen on the SAME fake home, for the cases whose
- * assertions need a different registry (an empty one, and one longer than the
- * rail can show). Separate terminals keep each case's frame independent — a
- * shared window would carry the previous case's rows into the next.
+ * One stub channel: its own identity, its own call log, its own listing plan.
+ *
+ * The screen's snapshot is keyed by the channel, so a case controls its first
+ * frame by building a fresh channel (a cold screen) or by mounting the same
+ * one twice (rows carried over) — never by another case's leftovers.
  */
-async function openSupervisor(
-  overrides: {
-    registry: readonly unknown[]
-    cwd: string
-    sessions?: readonly unknown[]
-    /** True when the registry read itself fails (service missing / throwing). */
-    registryRejects?: boolean
-    registryAbsent?: boolean
-    /** Held unresolved to keep the listing in flight (the snapshot cases). */
-    deferListSessions?: Promise<void>
-    /** True when the listing itself fails (store error) — the snapshot cases. */
-    listSessionsRejects?: boolean
-  },
-): Promise<{ write: (data: string) => void; lines: () => string[]; calls: readonly string[]; close: () => void }> {
-  const screen = new XTerm({ cols: COLS, rows: ROWS, scrollback: 0, allowProposedApi: true })
-  const out = new FakeStdout(screen)
-  const input = new FakeStdin()
-  const ownCalls: string[] = []
-  const ownChannel = {
+interface StubChannel {
+  /** Passed as the screen's channel; `never` so the JSX site needs no cast. */
+  channel: never
+  readonly calls: string[]
+  /** Behaviour of the next listing call. */
+  plan: ListingPlan
+  /** Listings that finished, resolved or rejected: the deterministic "the
+   *  held-back answer really landed" signal, instead of a fixed sleep. */
+  landed: number
+}
+
+/** Build one stub channel over the shared fixtures. */
+function makeChannel(config: StubChannelConfig): StubChannel {
+  const calls: string[] = []
+  const stub: StubChannel = { channel: undefined as never, calls, plan: {}, landed: 0 }
+  stub.channel = {
     version: 0,
-    cwd: overrides.cwd,
+    cwd: config.cwd,
     working: false,
     agentId: 'live-one',
-    ...(overrides.registryAbsent === true ? {} : {
+    ...(config.registryAbsent === true ? {} : {
       listWorkspaceRegistry: async () => {
-        if (overrides.registryRejects === true) throw new Error('workspace service unavailable')
-        return overrides.registry
+        if (config.registryRejects === true) throw new Error('workspace service unavailable')
+        return config.registry
       },
     }),
     listSessions: async () => {
-      if (overrides.listSessionsRejects === true) throw new Error('session store unavailable')
-      if (overrides.deferListSessions !== undefined) await overrides.deferListSessions
-      return overrides.sessions ?? sessions
+      // Read per call, not per channel: a case swaps the plan between mounts.
+      const plan = stub.plan
+      if (plan.reject === true) {
+        stub.landed++
+        throw new Error('session listing rejected')
+      }
+      if (plan.defer !== undefined) await plan.defer
+      stub.landed++
+      return plan.sessions ?? config.sessions ?? sessions
     },
     resumeTo: async (id: string) => {
-      ownCalls.push(`resumeTo:${id}`)
+      calls.push(`resumeTo:${id}`)
       return { ok: true }
     },
     switchWorkspace: async () => true,
@@ -244,18 +267,41 @@ async function openSupervisor(
     notify: () => {},
     subscribe: () => () => {},
   } as never
+  return stub
+}
+
+/** A mounted screen over one stub channel. */
+interface SupervisorScreen {
+  write: (data: string) => void
+  lines: () => string[]
+  calls: readonly string[]
+  close: () => void
+}
+
+/**
+ * One screen over one stub channel, on its own terminal: each case's frame
+ * stays independent (a shared window would carry the previous case's rows into
+ * the next), including the cases whose assertions need a different registry
+ * (an empty one, and one longer than the rail can show).
+ *
+ * Mounting the SAME stub twice is what a reopen of one channel looks like.
+ */
+async function mountSupervisor(target: StubChannel): Promise<SupervisorScreen> {
+  const screen = new XTerm({ cols: COLS, rows: ROWS, scrollback: 0, allowProposedApi: true })
+  const out = new FakeStdout(screen)
+  const input = new FakeStdin()
   const app = await render(
     <ThemeProvider theme="dark">
       <AlternateScreen>
         <SessionSupervisor
-          channel={ownChannel}
+          channel={target.channel}
           home={sandbox}
           onClose={() => {}}
           onOpenSession={async (id) => {
             // Same path Chat.tsx wires: the screen hands the row's id to the
             // channel, which is where "did Enter open the RIGHT row" is
             // observable.
-            await (ownChannel as unknown as { resumeTo(id: string): Promise<{ ok: boolean }> }).resumeTo(id)
+            await (target.channel as unknown as { resumeTo(id: string): Promise<{ ok: boolean }> }).resumeTo(id)
             return true
           }}
           onNewSession={async () => true}
@@ -277,30 +323,49 @@ async function openSupervisor(
   return {
     write: (data: string) => { input.write(data) },
     lines: () => viewportLines(screen),
-    calls: ownCalls,
+    calls: target.calls,
     close: () => { app.unmount() },
   }
 }
 
+/** A screen over a channel of its own, for the cases that mount once. */
+async function openSupervisor(config: StubChannelConfig): Promise<SupervisorScreen> {
+  return mountSupervisor(makeChannel(config))
+}
+
 // ── snapshot-then-refresh (issue #987) ─────────────────────────────────────
 //
-// What a mount paints BEFORE the fresh listing lands. These segments are
-// ORDER-SENSITIVE and must stay ahead of the main instance below: the
-// module-level snapshot lives for the WHOLE process, so the cold-start case
-// (no snapshot at all) is observable only on the first mount, and every later
-// mount inherits the snapshot the previous one left. Each segment closes its
-// own app before the next one mounts.
+// What a mount paints BEFORE the fresh listing lands. The snapshot lives on
+// the channel, so every case below owns one: a case that wants rows carried
+// over mounts the SAME stub twice, and a case that wants a cold screen builds
+// a fresh stub. Nothing here depends on the order of these blocks.
 
 /** The loading placeholder the pane shows while the listing is in flight (i18n en). */
 const LOADING_PLACEHOLDER = 'Loading sessions…'
 
+/** A gate this test opens by hand, to hold one listing in flight. */
+function deferred(): { promise: Promise<void>; resolve: () => void } {
+  let resolve!: () => void
+  const promise = new Promise<void>(done => { resolve = done })
+  return { promise, resolve }
+}
+
+/** The same listing with one title renamed on disk (same id): a carried-over
+ *  snapshot shows the OLD title, the fresh listing corrects it. */
+const renamedSessions = [
+  session({ id: 'free-one', title: { text: 'renamed on disk', source: 'prompt' }, updatedAt: now - 1_000 }),
+  sessions[1],
+  sessions[2],
+]
+
 console.log('snapshot-then-refresh:')
 {
-  // Cold start: no snapshot exists yet, so the screen keeps today's loading
-  // path — the placeholder shows and no session row is invented.
-  let resolveGate!: () => void
-  const gate = new Promise<void>(resolve => { resolveGate = resolve })
-  const app = await openSupervisor({ registry, cwd: alphaDir, deferListSessions: gate })
+  // Cold start on a fresh channel: no snapshot exists yet, so the screen keeps
+  // today's loading path — the placeholder shows and no session row is invented.
+  const target = makeChannel({ registry, cwd: alphaDir })
+  const gate = deferred()
+  target.plan = { defer: gate.promise }
+  const app = await mountSupervisor(target)
   check(
     'cold open shows the loading placeholder before the listing lands',
     await settled(() => app.lines().join('\n').includes(LOADING_PLACEHOLDER)),
@@ -311,7 +376,7 @@ console.log('snapshot-then-refresh:')
     !app.lines().join('\n').includes('free session'),
     app.lines().join('\n'),
   )
-  resolveGate()
+  gate.resolve()
   check(
     'the landing listing replaces the placeholder with real rows',
     await settled(() => {
@@ -323,19 +388,18 @@ console.log('snapshot-then-refresh:')
   app.close()
 }
 {
-  // Snapshot first paint: a second mount whose listing is held back paints the
-  // previous listing's rows immediately — a non-empty snapshot skips the
-  // placeholder — and the fresh listing corrects them wholesale when it lands.
-  let resolveGate!: () => void
-  const gate = new Promise<void>(resolve => { resolveGate = resolve })
-  // The same listing with one title renamed on disk (same id): the snapshot
-  // shows the OLD title, the fresh listing corrects it.
-  const renamed = [
-    session({ id: 'free-one', title: { text: 'renamed on disk', source: 'prompt' }, updatedAt: now - 1_000 }),
-    sessions[1],
-    sessions[2],
-  ]
-  const app = await openSupervisor({ registry, cwd: alphaDir, deferListSessions: gate, sessions: renamed })
+  // Snapshot first paint: the SAME channel reopened while its listing is held
+  // back paints the previous listing's rows immediately — a non-empty snapshot
+  // skips the placeholder — and the fresh listing corrects them wholesale when
+  // it lands.
+  const target = makeChannel({ registry, cwd: alphaDir })
+  const first = await mountSupervisor(target)
+  await settled(() => first.lines().join('\n').includes('free session'))
+  first.close()
+
+  const gate = deferred()
+  target.plan = { defer: gate.promise, sessions: renamedSessions }
+  const app = await mountSupervisor(target)
   check(
     'a non-empty snapshot paints its rows without the loading placeholder',
     await settled(() => {
@@ -344,7 +408,7 @@ console.log('snapshot-then-refresh:')
     }),
     app.lines().join('\n'),
   )
-  resolveGate()
+  gate.resolve()
   check(
     'the fresh listing corrects a stale snapshot title',
     await settled(() => {
@@ -356,22 +420,23 @@ console.log('snapshot-then-refresh:')
   app.close()
 }
 {
-  // Normalization: leave the snapshot equal to the stub data the main
-  // instance's assertions below were written against, so its first frame
-  // already carries the final listing content and every existing check stays
-  // timing-independent.
-  const app = await openSupervisor({ registry, cwd: alphaDir })
-  await settled(() => app.lines().join('\n').includes('free session'))
-  app.close()
-}
-{
-  // A failed listing keeps the previous snapshot: the stale rows stay beside
-  // the error notice instead of dropping to an empty list, and the failure
-  // never writes the snapshot — the next mount still paints from it while its
-  // own listing is in flight. Only a successful listing may write.
-  const app = await openSupervisor({ registry, cwd: alphaDir, listSessionsRejects: true })
+  // A REJECTED channel listing keeps the previous snapshot: the stale rows stay
+  // beside the error notice instead of dropping to an empty list, and the
+  // rejection never writes the snapshot — the next mount still paints from it
+  // while its own listing is in flight. Only a successful listing may write.
+  //
+  // Rejection here is the channel's own (`listSessions` itself throws), which
+  // is what the hook can observe; a backend enumeration failure is folded into
+  // an empty list inside `listSummaries` and reaches this screen as success.
+  const target = makeChannel({ registry, cwd: alphaDir })
+  const first = await mountSupervisor(target)
+  await settled(() => first.lines().join('\n').includes('free session'))
+  first.close()
+
+  target.plan = { reject: true }
+  const app = await mountSupervisor(target)
   check(
-    'a failed listing keeps the previous snapshot rows beside the error notice',
+    'a rejected channel listing keeps the previous snapshot rows beside the error notice',
     await settled(() => {
       const shown = app.lines().join('\n')
       return shown.includes('free session') && shown.includes('Failed to load sessions')
@@ -380,20 +445,103 @@ console.log('snapshot-then-refresh:')
     app.lines().join('\n'),
   )
   app.close()
-  let resolveGate!: () => void
-  const gate = new Promise<void>(resolve => { resolveGate = resolve })
-  const next = await openSupervisor({ registry, cwd: alphaDir, deferListSessions: gate })
+
+  const gate = deferred()
+  target.plan = { defer: gate.promise }
+  const next = await mountSupervisor(target)
   check(
-    'the failed listing never wrote the snapshot (the next mount paints it)',
+    'the rejected listing never wrote the snapshot (the next mount paints it)',
     await settled(() => {
       const shown = next.lines().join('\n')
       return shown.includes('free session') && !shown.includes(LOADING_PLACEHOLDER)
     }),
     next.lines().join('\n'),
   )
-  resolveGate()
-  await settled(() => next.lines().join('\n').includes('free session'))
+  gate.resolve()
+  await settled(() => target.landed >= 3, { timeoutMs: 4_000 })
   next.close()
+}
+{
+  // The newest reload wins. `Ctrl+L` re-runs the listing while a slower one is
+  // still in flight — an earlier press, or the previous mount's — and the
+  // older answer landing afterwards must not repaint over the newer rows, nor
+  // become the next mount's snapshot.
+  const target = makeChannel({ registry, cwd: alphaDir })
+  const gate = deferred()
+  target.plan = { defer: gate.promise }
+  const app = await mountSupervisor(target)
+  check(
+    'an in-flight listing holds the first paint',
+    await settled(() => app.lines().join('\n').includes(LOADING_PLACEHOLDER)),
+    app.lines().join('\n'),
+  )
+
+  target.plan = { sessions: renamedSessions }
+  app.write('\u000c') // Ctrl+L: the documented manual re-listing
+  check(
+    'the newer listing paints the rows it answered with',
+    await settled(() => {
+      const shown = app.lines().join('\n')
+      return shown.includes('renamed on disk') && !shown.includes('free session')
+    }),
+    app.lines().join('\n'),
+  )
+
+  gate.resolve()
+  const shown = (): string => app.lines().join('\n')
+  await settled(() => target.landed >= 2, { timeoutMs: 4_000 })
+  // This assertion is about a repaint that must NOT happen, so there is no
+  // positive anchor to poll for: let one render cycle pass first, and only
+  // then read the frame.
+  await sleep(150) // 固定窗:pacing 等陈旧 listing 的一次重绘窗口（没有可轮询的正向锚点）
+  check(
+    'the older listing landing late does not repaint over the newer one',
+    shown().includes('renamed on disk') && !shown().includes('free session'),
+    shown(),
+  )
+  app.close()
+
+  const reopen = deferred()
+  target.plan = { defer: reopen.promise }
+  const again = await mountSupervisor(target)
+  check(
+    'and the late listing did not become the snapshot either',
+    await settled(() => {
+      const rows = again.lines().join('\n')
+      return rows.includes('renamed on disk') && !rows.includes('free session')
+    }),
+    again.lines().join('\n'),
+  )
+  reopen.resolve()
+  await settled(() => target.landed >= 3, { timeoutMs: 4_000 })
+  again.close()
+}
+{
+  // A snapshot belongs to its own channel: a screen opened on a DIFFERENT
+  // channel must not paint another channel's rows while its own listing is in
+  // flight, even though both answer from the same store here.
+  const other = makeChannel({ registry, cwd: alphaDir })
+  const first = await mountSupervisor(other)
+  await settled(() => first.lines().join('\n').includes('free session'))
+  first.close()
+
+  const target = makeChannel({ registry, cwd: alphaDir })
+  const gate = deferred()
+  target.plan = { defer: gate.promise }
+  const app = await mountSupervisor(target)
+  check(
+    'a different channel does not paint the previous channel snapshot',
+    await settled(() => app.lines().join('\n').includes(LOADING_PLACEHOLDER)),
+    app.lines().join('\n'),
+  )
+  check(
+    'and shows none of its rows',
+    !app.lines().join('\n').includes('free session'),
+    app.lines().join('\n'),
+  )
+  gate.resolve()
+  await settled(() => target.landed >= 1, { timeoutMs: 4_000 })
+  app.close()
 }
 
 const terminal = new XTerm({ cols: COLS, rows: ROWS, scrollback: 0, allowProposedApi: true })
