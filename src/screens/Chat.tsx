@@ -409,18 +409,6 @@ export function Chat({
       channel.notify(t('ext-shortcut-failed', { combo }), { color: 'error', timeoutMs: 4000 })
     })
   }, [extensionShortcuts, channel])
-  // When a questionnaire batch completes, fold a Q&A summary into the
-  // transcript (the tool card itself is hidden from the message list).
-  const questionOpenRef = React.useRef(questionSnapshot !== null)
-  React.useEffect(() => {
-    const wasOpen = questionOpenRef.current
-    questionOpenRef.current = questionSnapshot !== null
-    if (wasOpen && questionSnapshot === null) {
-      for (const summary of questionStore.takeSummaries()) {
-        channel.pushLocal(summary.title, summary.lines)
-      }
-    }
-  }, [channel, questionSnapshot, questionStore])
   const [expanded, setExpanded] = React.useState(false)
   const [helpOpen, setHelpOpen] = React.useState(false)
   const [handle, setHandle] = React.useState<ScrollBoxHandle | null>(null)

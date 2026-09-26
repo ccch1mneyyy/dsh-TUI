@@ -685,6 +685,13 @@ const GROUPS = {
 // 长问卷列表回归：24 行终端中的 36 个两行 provider 选项必须围绕
 // focusIndex 窗口化，初始和深度导航后焦点 label/单选标记始终可见。
     ["verify-askpanel-long-list", ['node', '--import', 'tsx/esm', 'scripts/verify-askpanel-long-list.tsx']],
+// 问卷作答记录的真源投影回归（issue #1009）：ask_user_question 不渲染工具卡，
+// 它的 tool/result 必须自己折叠出作答记录——实时一条、重放（/resume、rewind、
+// 模型切换）同一条、同 callId 不重复、错误结果渲染日志里的错误文本（ASK_CANCELLED/
+// ASK_ABORTED 不得伪造答案）、redact 仍只在本地向导打码、不可解析的载荷退化成
+// 只有标题而不抛异常中断投影。修复前记录只由面板「开→关」那一跳 pushLocal 推送，
+// 重放后必丢。
+    ["verify-question-transcript-record", ['node', '--import', 'tsx/esm', 'scripts/verify-question-transcript-record.tsx']],
 // 长 plan-review 正文回归（issue #413）：24 行终端里 40 段 plan 不得把
 // Approve/反馈顶出屏外；滚轮必须滚 plan body（直接面板 + 挂进 Chat）。
     ["verify-plan-review-scroll", ['node', '--import', 'tsx/esm', 'scripts/verify-plan-review-scroll.tsx']],
