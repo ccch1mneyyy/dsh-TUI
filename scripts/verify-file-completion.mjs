@@ -63,6 +63,12 @@ try {
   })
 
   const files = await channel.listFiles()
+  const windowsStyleListing = await channel.listFileCandidates(`${fixture}\\src\\`)
+  assert.deepEqual(
+    windowsStyleListing.map(entry => entry.path),
+    [`${fixture}\\src\\main.cpp`],
+  )
+  console.log('PASS: Windows path completion preserves typed separators')
   assert.ok(
     files.includes('src/main.cpp'),
     `source file was crowded out by generated files:\n${files.join('\n')}`,
