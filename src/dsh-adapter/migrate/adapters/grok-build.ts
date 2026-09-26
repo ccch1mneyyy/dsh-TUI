@@ -13,6 +13,7 @@ import { readdirSync, readFileSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import type { MigrationAdapter, MigrationDiscovery, MigrationSession, MigrationTurn } from '../types.js'
+import { countEntries } from './scan.js'
 
 interface TextPart { readonly type?: unknown, readonly text?: unknown }
 
@@ -148,5 +149,8 @@ export const grokBuildAdapter: MigrationAdapter = {
     }
     for (const root of roots) walk(root, 0)
     return { roots, sessions }
+  },
+  count(): number {
+    return countEntries(this.roots(), { maxDepth: 2, fileMatch: name => name === 'chat_history.jsonl' })
   },
 }

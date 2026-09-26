@@ -18,7 +18,7 @@
  * 运行：node --import tsx/esm scripts/verify-migrate.mjs
  */
 import assert from 'node:assert/strict'
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -118,6 +118,7 @@ const root = mkdtempSync(join(tmpdir(), 'verify-migrate-'))
     await new Promise(resolve => setTimeout(resolve, 50))
   }
   const persistence = ctx.get('sessionPersistence')
+  assert.ok(persistence !== undefined, 'persistence service became ready')
   const listed = await persistence.list()
   check('2b. 官方 list 可见全部三条', listed.length === 3)
 
@@ -173,6 +174,105 @@ const root = mkdtempSync(join(tmpdir(), 'verify-migrate-'))
   const relisted = await ctx.get('sessionPersistence').list()
   check('4b. 二次导入后官方列表仍为三条', relisted.length === 3)
   await Promise.resolve(fiber.dispose()).catch(() => {})
+}
+
+// ── 4c. 维护者点名的非常规形状：事件骨架全序断言（deep-review M4）──────
+{
+  const { SessionId } = await import('@deepseek-ai/dsh-session')
+  const sessions = fixtureSessions()
+  // 夹具 2：一 user 三 assistant + 尾部无回复 user —— turn 配对必须是
+  // 「下一个 user 关闭上一轮 + 收尾关闭最后一轮」，三个 assistant 各占一步
+  {
+    const id = SessionId(migrationUuid(`fixture:${sessions[1].sourceId}`))
+    const { events } = sessionize(id, 'fixture', sessions[1])
+    const types = events.map(e => e.type).join(' ')
+    const expected = 'turn/start user/message step/start assistant/message step/end step/start assistant/message step/end step/start assistant/message step/end turn/end turn/start user/message turn/end'
+    check('4c1. 一 user 三 assistant + 尾 user 的事件全序', types === expected, types)
+  }
+  // 夹具 3：孤立 assistant 开头（无 user 的首轮，一个 step 无 user/message）
+  {
+    const id = SessionId(migrationUuid(`fixture:${sessions[2].sourceId}`))
+    const { events } = sessionize(id, 'fixture', sessions[2])
+    const types = events.map(e => e.type).join(' ')
+    check('4c2. 孤立 assistant 开头的事件全序',
+      types === 'turn/start step/start assistant/message step/end turn/end', types)
+  }
+  // 夹具 2 端到端：restore 后 5 条消息且末位是 user（尾问保留）
+  {
+    const { default: JsonlSessionPersistence } = await import('@deepseek-ai/dsh-session-persistence-jsonl')
+    const { Context } = await import('@deepseek-ai/cordis')
+    const { SessionLogOffset: SLO, Session } = await import('@deepseek-ai/dsh-session')
+    const root2 = mkdtempSync(join(tmpdir(), 'verify-migrate-shapes-'))
+    const only = [{ ...sessions[1] }]
+    await importSessions(fakeAdapter, root2, only)
+    const ctx2 = new Context()
+    const fiber2 = ctx2.plugin(JsonlSessionPersistence, { root: root2 })
+    for (let i = 0; i < 100 && ctx2.get('sessionPersistence') === undefined; i++) {
+      await new Promise(resolve => setTimeout(resolve, 50))
+    }
+    assert.ok(ctx2.get('sessionPersistence') !== undefined, 'persistence ready (shapes)')
+    const id = migrationSessionId(fakeAdapter, sessions[1])
+    const h = await ctx2.get('sessionPersistence').open(id, 'read')
+    const r = await h.read()
+    await h.close()
+    const restored = Session.fromRestore(id, r.events, h.header, SLO(0), r.eventState)
+    const msgs = restored.deriveMessages()
+    check('4c3. 夹具 2 restore 得 5 条消息且末位 user',
+      msgs.length === 5 && msgs[4].role === 'user', msgs.map(m => m.role).join(','))
+    await Promise.resolve(fiber2.dispose()).catch(() => {})
+    rmSync(root2, { recursive: true, force: true })
+  }
+}
+
+// ── 4d. 单会话失败不中断批次（deep-review M6：容错路径必须被触发）────────
+{
+  const good1 = fixtureSessions()[0]
+  const good2 = fixtureSessions()[2]
+  const poisoned = {
+    ...fixtureSessions()[1],
+    // createdAt: NaN 让 Session.create 拒绝（header 非 JSON 无损可序列化）
+    startedAt: Number.NaN,
+  }
+  const run = await importSessions(fakeAdapter, mkdtempSync(join(tmpdir(), 'verify-migrate-batch-')), [good1, poisoned, good2])
+  check('4d. 坏会话失败 1、前后好会话各导入 1（批次不中断）',
+    run.imported === 2 && run.failed === 1
+    && run.failures.length === 1 && run.failures[0].includes(poisoned.sourceId),
+    JSON.stringify({ imported: run.imported, failed: run.failed }))
+}
+
+// ── 4e. cliMigrate 集成：七个分支的可执行面（deep-review M5）────────────
+{
+  const { cliMigrate } = await import('../src/dsh-adapter/migrate/cli.js')
+  const home = mkdtempSync(join(tmpdir(), 'verify-migrate-cli-'))
+  const dshHome = join(home, 'dsh')
+  const prevHome = process.env.HOME
+  const prevDsh = process.env.DSH_HOME
+  const prevStdoutWrite = process.stdout.write.bind(process.stdout)
+  const sink = []
+  process.stdout.write = (chunk) => { sink.push(String(chunk)); return true }
+  process.env.HOME = home
+  process.env.DSH_HOME = dshHome
+  try {
+    const usage = await cliMigrate(['a', 'b'])
+    check('4e1. 多参数 → 退出码 2', usage === 2)
+    const bogus = await cliMigrate(['not-an-agent'])
+    check('4e2. 未知 agent → 退出码 2', bogus === 2)
+    const bare = await cliMigrate([])
+    check('4e3. 裸列表 → 退出码 0（HOME 指空目录，各源 0 会话）', bare === 0)
+    // dry-run 契约：绝不写盘（目标根不存在）
+    const dry = await cliMigrate(['fixture-agent' in {} ? 'x' : 'claude-code', '--dry-run'])
+    const dryTargetExists = existsSync(dshHome)
+    check('4e4. dry-run → 退出码 0 且未写目标根', dry === 0 && !dryTargetExists,
+      `exit=${dry} targetExists=${dryTargetExists}`)
+    check('4e5. 输出经过 stdout 且非空', sink.length > 0)
+  } finally {
+    process.stdout.write = prevStdoutWrite
+    if (prevHome === undefined) delete process.env.HOME
+    else process.env.HOME = prevHome
+    if (prevDsh === undefined) delete process.env.DSH_HOME
+    else process.env.DSH_HOME = prevDsh
+    rmSync(home, { recursive: true, force: true })
+  }
 }
 
 // ── 5. uuid 确定性与区分性 ──────────────────────────────────────────────
@@ -297,4 +397,4 @@ function firstUuid() {
 }
 
 rmSync(root, { recursive: true, force: true })
-console.log(process.exitCode ? `${checks - 0} check(s), FAILED` : 'migrate regression passed')
+console.log(process.exitCode ? `${checks} check(s), FAILED` : `migrate regression passed (${checks} checks)`)

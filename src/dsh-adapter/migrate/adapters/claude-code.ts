@@ -11,6 +11,7 @@ import { readdirSync, readFileSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import type { MigrationAdapter, MigrationDiscovery, MigrationSession, MigrationTurn } from '../types.js'
+import { countEntries } from './scan.js'
 
 interface CodeBlock { readonly type?: unknown, readonly text?: unknown, readonly thinking?: unknown }
 
@@ -26,8 +27,12 @@ function textOf(content: unknown): string | undefined {
   return parts.length === 0 ? undefined : parts.join('\n\n')
 }
 
-/** Strip Claude Code's inline <system-reminder> machine blocks from user text. */
+/** Strip Claude Code's inline <system-reminder> machine blocks from user text.
+ *  Fast path first: plain text without the opening tag skips the regex
+ *  entirely (the lazy [\s\S]*? scan is O(text) per unclosed tag start and a
+ *  hostile single line could burn minutes of CPU — deep-review m1). */
 function stripReminders(text: string): string {
+  if (!text.includes('<system-reminder')) return text.trim()
   return text.replace(/<system-reminder>[\s\S]*?<\/system-reminder>/gu, '').trim()
 }
 
@@ -152,6 +157,9 @@ export const claudeCodeAdapter: MigrationAdapter = {
     }
     for (const root of roots) walk(root, 0, homedir())
     return { roots, sessions }
+  },
+  count(): number {
+    return countEntries(this.roots(), { maxDepth: 3, fileMatch: name => name.endsWith('.jsonl') })
   },
 }
 
