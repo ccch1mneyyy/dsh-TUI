@@ -284,6 +284,11 @@ const GROUPS = {
 // verify-composer-draft-handoff；在途 staging 围栏在 verify:build 链的
 // verify-image-preview。完整 8 场景矩阵见 PR #942 历史。
     ["verify-composer-draft-screen-switch", ['node', '--import', 'tsx/esm', 'scripts/verify-composer-draft-screen-switch.tsx']],
+// 队列召回撤回回归（issue #986 后半）：↑ 走位召回的文本若仍挂在 pending 里，
+// 必须把那条排队副本撤下来（否则改完重发等于同一句发两遍）——可撤时队列少一条
+// 且有提示、已被本轮取走时如实报「撤不回来」且副本留在队列、文本不匹配的排队
+// 项一律不动。
+    ["verify-prompt-history-queue-retract", ['node', 'scripts/verify-prompt-history-queue-retract.mjs']],
   ],
   'session-workspace': [
 // 审批服务配置回归（issue #49 尾巴）：裸组合 cordis.yml 必须挂载

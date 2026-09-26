@@ -1416,6 +1416,28 @@ export function PromptInput({
   }
 
   /**
+   * Withdraw the queued copy of the text `↑` just recalled (issue #986): the
+   * message is still parked in the inbox, so editing it and sending again
+   * would run the same text twice. Alt+Up withdraws explicitly; walking the
+   * history to the same text has to land in the same place. The newest match
+   * wins — `↑` walks newest-first and the queue is FIFO. A message the
+   * running turn already claimed cannot be withdrawn, and saying so beats
+   * pretending it was.
+   */
+  const retractRecalledCopy = (text: string): void => {
+    let target: (typeof channel.pending)[number] | undefined
+    for (const item of channel.pending) {
+      if (item.text === text) target = item
+    }
+    if (target === undefined) return
+    if (channel.removePending(target.id)) {
+      channel.notify(t('input-retracted'), { timeoutMs: 2000 })
+    } else {
+      channel.notify(t('input-cannot-retract'), { color: 'warning', timeoutMs: 2500 })
+    }
+  }
+
+  /**
    * Ctrl+Enter: abort the running turn and send the input immediately — the
    * model stops what it is doing and starts on this message right away.
    */
@@ -2316,6 +2338,7 @@ export function PromptInput({
       }
       const entry = history.current[historyIndex.current]
       if (entry === undefined) return
+      retractRecalledCopy(entry.text)
       updateFoldBlock(null)
       restoreDraftImages(entry)
       setInput(entry.text)

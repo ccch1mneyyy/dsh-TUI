@@ -343,6 +343,7 @@ Keys are in §2.1:
 - `Tab` = **follow-up** (queue after the turn)
 - `Ctrl+Enter` = **interrupt** (interrupt and send)
 - `Alt+Up` bring the last unhandled message back
+- `↑` recalling a message that is still queued also withdraws that queued entry (same as `Alt+Up`, so the same text is not sent twice); once the running turn claimed it, only a notice appears
 - `Esc` (with pending) interrupt and re-send
 - `/btw …` side question never interrupts the main turn
 
