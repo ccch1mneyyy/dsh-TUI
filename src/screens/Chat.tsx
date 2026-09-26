@@ -69,6 +69,10 @@ import { PluginSceneBoundary } from '../components/PluginSceneBoundary.js'
 import { PluginStatusViewBoundary } from '../components/PluginStatusViewBoundary.js'
 import { ImagePreviewOverlay } from '../components/ImagePreviewOverlay.js'
 import { SkillsPicker, SkillsPickerLoading } from '../components/SkillsPicker.js'
+import { MigratePicker } from '../components/MigratePicker.js'
+import { collectMigratePickerRows, MIGRATE_SCAN_SPECS, type MigratePickerRow } from '../dsh-adapter/migrate/picker.js'
+import { collectActivitySamples, recentAgentsFrom, type ActivitySample } from '../dsh-adapter/migrate/recent-agents.js'
+import { MIGRATION_ADAPTERS } from '../dsh-adapter/migrate/index.js'
 import { SessionSupervisor } from './SessionSupervisor.js'
 import { SessionTree } from './SessionTree.js'
 import { Settings } from './Settings.js'
@@ -461,6 +465,9 @@ export function Chat({
    * list while the fresh one loads, exactly as the boolean era did.
    */
   const [overlay, dispatchOverlay] = React.useReducer(chatOverlayReducer, NO_OVERLAY)
+  // `/migrate` picker rows (null = collecting in the background; the picker
+  // shows its empty state until the sub-second scan lands).
+  const [migrateRows, setMigrateRows] = React.useState<MigratePickerRow[] | null>(null)
   // Chat and PromptInput both receive one parsed stdin batch. Keep the
   // permission focus synchronous so arrow+Enter in the same batch uses the
   // post-arrow row rather than the previous render's index.
@@ -1275,6 +1282,32 @@ export function Chat({
   // fullscreen (<AlternateScreen> supplies mouse tracking); a no-op
   // subscription in inline mode, where selection belongs to the terminal.
   // The copy clears the highlight and posts a transient notification.
+  // Smart migration hint (product ask): ~12s after mount, one background
+  // pass over the foreign-agent stores; when a source was active inside the
+  // 20-minute window, surface the user's own wording once per session. The
+  // file-level mtime scan is the counter's walk shape (sub-second) and runs
+  // off the render path; failures read as "no data" and stay silent.
+  const migrateHintShownRef = React.useRef(false)
+  React.useEffect(() => {
+    if (migrateHintShownRef.current) return
+    const timer = setTimeout(() => {
+      migrateHintShownRef.current = true
+      void (async () => {
+        const newest = await new Promise<readonly ActivitySample[]>(resolve => {
+          setImmediate(() => resolve(collectActivitySamples(
+            MIGRATION_ADAPTERS,
+            adapter => MIGRATE_SCAN_SPECS[adapter.id],
+          )))
+        })
+        const top = recentAgentsFrom(newest, Date.now())[0]
+        if (top !== undefined) {
+          channel.notify(t('migrate-hint-notify', { agent: top.label }), { timeoutMs: 10000 })
+        }
+      })()
+    }, 12_000)
+    return () => clearTimeout(timer)
+  }, [channel])
+
   useCopyOnSelect(
     text => channel.notify(t('copied-chars', { n: text.length }), { timeoutMs: 1500 }),
     // Stale-selection refusal: the highlighted rows were replaced in place
@@ -1518,6 +1551,53 @@ export function Chat({
       case 'model': return t('reload-kind-model')
       case 'activity': return t('reload-kind-activity')
     }
+  }
+
+  /** Spawn `dsh-tui migrate <args>` through the package bin and stream the
+   *  outcome into a /migrate local row + notification (shared by the direct
+   *  command form and the picker's Enter). */
+  const spawnMigrateCli = (parts: readonly string[]): void => {
+    channel.notify(t('migrate-running'), { timeoutMs: 4000 })
+    void (async () => {
+      const { spawn } = await import('node:child_process')
+      const { dirname } = await import('node:path')
+      const { fileURLToPath } = await import('node:url')
+      const { resolveOwnBin } = await import('../dsh-adapter/migrate/bin-path.js')
+      // This file sits at a different depth per layout (src/screens vs
+      // lib/types/screens), so the bin resolves by upward probe — see
+      // bin-path.ts; a fixed dirname count fails on real installs.
+      const bin = resolveOwnBin(dirname(fileURLToPath(import.meta.url)))
+      if (bin === undefined) {
+        channel.notify(t('migrate-spawn-failed'), { color: 'error', timeoutMs: 8000 })
+        return
+      }
+      const child = spawn(process.execPath, [bin, 'migrate', ...parts], {
+        stdio: ['ignore', 'pipe', 'pipe'],
+      })
+      let out = ''
+      const { cleanRenderText } = await import('../dsh-adapter/sanitize.js')
+      const collect = (chunk: Buffer): void => {
+        // Sanitize per line at render time: the child prints
+        // already-cleaned text, but an older/newer CLI copy on the other
+        // side of the bin is out of this build's control (deep-review M2).
+        out += chunk.toString('utf8')
+        // Bound the transcript row: the CLI's own output is per-run
+        // counters, but keep a sane cap so a pathological child cannot
+        // grow it without limit.
+        if (out.length > 64 * 1024) out = out.slice(-64 * 1024)
+      }
+      child.stdout?.on('data', collect)
+      child.stderr?.on('data', collect)
+      child.on('error', () => channel.notify(t('migrate-spawn-failed'), { color: 'error', timeoutMs: 8000 }))
+      child.on('close', code => {
+        const lines = out.split('\n').map(line => cleanRenderText(line, 400)).filter(Boolean)
+        channel.pushLocal('/migrate', lines.length > 0 ? lines : [t('migrate-done')])
+        channel.notify(
+          code === 0 ? t('migrate-done') : t('migrate-failed', { code: code ?? -1 }),
+          code === 0 ? { timeoutMs: 6000 } : { color: 'error', timeoutMs: 10000 },
+        )
+      })
+    })()
   }
 
   const runCommand = (
@@ -2159,55 +2239,25 @@ export function Chat({
         channel.pushLocal('/doctor', channel.doctorInfo())
         return true
       case 'migrate': {
-        // The in-TUI twin of `dsh-tui migrate` (double entry points). The
-        // import itself always runs in a CHILD process through the package
-        // bin: discovery is synchronous disk scanning (real-world scale:
-        // 2000+ conversations), which would freeze the renderer if run
-        // in-process. stdout is collected and rendered through the local
-        // transcript row; the exit code lands as a notification.
+        // Double entry points with the CLI. With arguments this runs the
+        // import directly; BARE `/migrate` opens the source picker instead:
+        // counts come from the name-only scan (sub-second) plus a
+        // recent-activity badge, collected in the background so the
+        // overlay never blocks on disk.
         const parts = rawInput.trim().split(/\s+/).filter(Boolean)
         setHelpOpen(false)
-        channel.notify(t('migrate-running'), { timeoutMs: 4000 })
-        void (async () => {
-          const { spawn } = await import('node:child_process')
-          const { dirname } = await import('node:path')
-          const { fileURLToPath } = await import('node:url')
-          const { resolveOwnBin } = await import('../dsh-adapter/migrate/bin-path.js')
-          // This file sits at a different depth per layout (src/screens vs
-          // lib/types/screens), so the bin resolves by upward probe — see
-          // bin-path.ts; a fixed dirname count fails on real installs.
-          const bin = resolveOwnBin(dirname(fileURLToPath(import.meta.url)))
-          if (bin === undefined) {
-            channel.notify(t('migrate-spawn-failed'), { color: 'error', timeoutMs: 8000 })
-            return
-          }
-          const child = spawn(process.execPath, [bin, 'migrate', ...parts], {
-            stdio: ['ignore', 'pipe', 'pipe'],
-          })
-          let out = ''
-          const { cleanRenderText } = await import('../dsh-adapter/sanitize.js')
-          const collect = (chunk: Buffer): void => {
-            // Sanitize per line at render time: the child prints
-            // already-cleaned text, but an older/newer CLI copy on the other
-            // side of the bin is out of this build's control (deep-review M2).
-            out += chunk.toString('utf8')
-            // Bound the transcript row: the CLI's own output is per-run
-            // counters, but keep a sane cap so a pathological child cannot
-            // grow it without limit.
-            if (out.length > 64 * 1024) out = out.slice(-64 * 1024)
-          }
-          child.stdout?.on('data', collect)
-          child.stderr?.on('data', collect)
-          child.on('error', () => channel.notify(t('migrate-spawn-failed'), { color: 'error', timeoutMs: 8000 }))
-          child.on('close', code => {
-            const lines = out.split('\n').map(line => cleanRenderText(line, 400)).filter(Boolean)
-            channel.pushLocal('/migrate', lines.length > 0 ? lines : [t('migrate-done')])
-            channel.notify(
-              code === 0 ? t('migrate-done') : t('migrate-failed', { code: code ?? -1 }),
-              code === 0 ? { timeoutMs: 6000 } : { color: 'error', timeoutMs: 10000 },
-            )
-          })
-        })()
+        if (parts.length === 0) {
+          setMigrateRows(null)
+          dispatchOverlay({ type: 'open', overlay: { kind: 'migrate', index: 0 } })
+          void (async () => {
+            const rows = await new Promise<MigratePickerRow[]>(resolve => {
+              setImmediate(() => resolve(collectMigratePickerRows(Date.now())))
+            })
+            setMigrateRows(rows)
+          })()
+          return true
+        }
+        spawnMigrateCli(parts)
         return true
       }
       case 'plugins':
@@ -3256,6 +3306,19 @@ export function Chat({
         // completion-only 分发路径；模型专用技能（userInvocable=false）只关闭。
         // oxlint-disable-next-line typescript/no-unnecessary-condition -- runtime guard: out-of-range index on an empty list
         if (skill?.userInvocable) setHistoryFill(`/${skill.name} `)
+      } else if (key.escape) {
+        dispatchOverlay({ type: 'close' })
+      }
+      return
+    }
+    if (overlay.kind === 'migrate') {
+      const rows = migrateRows ?? []
+      if (key.upArrow || key.downArrow) {
+        dispatchOverlay({ type: 'move', delta: key.upArrow ? -1 : 1, count: rows.length })
+      } else if (plainReturn) {
+        const row = rows[overlay.index]
+        dispatchOverlay({ type: 'close' })
+        if (row !== undefined) spawnMigrateCli([row.agentId])
       } else if (key.escape) {
         dispatchOverlay({ type: 'close' })
       }
@@ -4450,6 +4513,20 @@ export function Chat({
                   }}
                 />
               )}
+            </Box>
+          )}
+          {overlay.kind === 'migrate' && (
+            <Box flexDirection="column" marginTop={1}>
+              <MigratePicker
+                rows={migrateRows ?? []}
+                focusIndex={overlay.index}
+                onPick={(index) => {
+                  const row = (migrateRows ?? [])[index]
+                  if (!row) return
+                  dispatchOverlay({ type: 'close' })
+                  spawnMigrateCli([row.agentId])
+                }}
+              />
             </Box>
           )}
           {overlay.kind === 'skills' && (

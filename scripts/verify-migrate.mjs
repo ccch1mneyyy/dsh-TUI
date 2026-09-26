@@ -303,6 +303,30 @@ const root = mkdtempSync(join(tmpdir(), 'verify-migrate-'))
   check('4f3. 树外起点不误命中', miss === undefined || existsSync(miss), String(miss))
 }
 
+// ── 4g. 近期活动检测器矩阵（纯函数喂夹具：全冷/单热/多热/缺数据）────
+{
+  const { recentAgentsFrom, RECENT_ACTIVITY_WINDOW_MS } = await import('../src/dsh-adapter/migrate/recent-agents.js')
+  const NOW = 1_790_000_000_000
+  const sample = (agentId, minutesAgoOrNull) => ({
+    agentId, label: agentId, newestMtimeMs: minutesAgoOrNull === null ? null : NOW - minutesAgoOrNull * 60_000,
+  })
+  check('4g1. 全冷（超窗）→ 空',
+    recentAgentsFrom([sample('cc', 120), sample('codex', 5867)], NOW).length === 0)
+  check('4g2. 单热 → 一项带 minutesAgo',
+    JSON.stringify(recentAgentsFrom([sample('cc', 5), sample('codex', 300)], NOW))
+      === JSON.stringify([{ agentId: 'cc', label: 'cc', minutesAgo: 5 }]))
+  const multi = recentAgentsFrom([sample('cc', 18), sample('codex', 3), sample('zcode', 10)], NOW)
+  check('4g3. 多热按最近优先排序',
+    multi.map(m => m.agentId).join(',') === 'codex,zcode,cc', multi.map(m => `${m.agentId}:${m.minutesAgo}`).join(' '))
+  check('4g4. 缺数据（null mtime）永不近期',
+    recentAgentsFrom([sample('grok', null)], NOW).length === 0)
+  check('4g5. 未来时间戳（时钟偏移）不算近期',
+    recentAgentsFrom([sample('cc', -5)], NOW).length === 0)
+  check('4g6. 窗口边界：恰 20 分钟算近期',
+    recentAgentsFrom([sample('cc', 20)], NOW).length === 1
+    && recentAgentsFrom([sample('cc', 21)], NOW, RECENT_ACTIVITY_WINDOW_MS).length === 0)
+}
+
 // ── 5. uuid 确定性与区分性 ──────────────────────────────────────────────
 {
   const [first] = fixtureSessions()

@@ -12,7 +12,9 @@ dsh-tui migrate claude-code    # 导入 Claude Code 的全部对话
 dsh-tui migrate codex --dry-run  # 只预览将落盘的内容，不写入
 ```
 
-TUI 内等效入口：`/migrate`（或 `/migrate <agent> [--dry-run]`）。导入在
+TUI 内等效入口：`/migrate`。裸 `/migrate` 弹出**源选择器**——每行一个代理，
+显示可扫描文件数与「X 分钟前刚活动过」标记（最近活跃的排最前），Enter
+导入选中源，Esc 关闭；`/migrate <agent> [--dry-run]` 跳过选择器直接执行。导入在
 子进程中运行，界面不会卡顿；结果经通知流汇报，输出汇入 `/migrate`
 本地行。两个入口走同一套导入逻辑与同一套幂等规则。
 
@@ -56,6 +58,13 @@ TUI 内等效入口：`/migrate`（或 `/migrate <agent> [--dry-run]`）。导�
 编码规则生成），标题、起始时间可读；含思考过程的会话在 TUI 中以
 推理块呈现，可折叠查看。
 
+## 智能迁移提示
+
+TUI 启动约 12 秒后做一次后台检测：任一源在最近 20 分钟内有文件写入
+（以各源会话文件的最新修改时间为信号）时，弹出一次通知「刚刚从xx过来？
+/migrate 来快速迁移」。检测在后台运行（亚秒级），每会话只提示一次；
+`grok-build` 数据缺失时静默跳过。
+
 ## 故障排查
 
 - **`unknown agent`**：源名以 `dsh-tui migrate` 无参输出的名单为准。
@@ -77,4 +86,4 @@ TUI 内等效入口：`/migrate`（或 `/migrate <agent> [--dry-run]`）。导�
   （见[安装与快速开始](getting-started.md)）无关。
 
 实现与验证细节见 `src/dsh-adapter/migrate/` 与
-`scripts/verify-migrate.mjs`（29 项回归，全程跑官方读取链）。
+`scripts/verify-migrate.mjs`（38 项回归，全程跑官方读取链）。
