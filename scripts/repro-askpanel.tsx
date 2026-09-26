@@ -7,6 +7,9 @@
  * output is captured raw and ANSI-stripped (no xterm dependency).
  */
 process.env.FORCE_COLOR = '3'
+// 固定中文 UI：本脚本的断言全部针对 zh 文案（自定义回答/提示行），
+// 不 pin 会随宿主 lang.json 或 locale 漂移（en 机器上必挂）。
+process.env.DSH_TUI_LANG = 'zh'
 
 const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render }, { AskUserQuestionPanel }, { settle, settled, sleep, viewportLines }] = await Promise.all([
   import('node:stream'),

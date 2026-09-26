@@ -227,6 +227,12 @@ node --import tsx/esm scripts/verify-askpanel-layout.tsx
 node --import tsx/esm scripts/repro-toolcards.tsx
 ```
 
+CI 的测试 job 统一设置 `DSH_TUI_LANG=zh`。UI 语言在 import 时按
+`DSH_TUI_LANG` → `~/.dsh-tui/lang.json` → 系统 locale 解析，所以断言界面文案的
+脚本应在动态 import 前自行固定语言（`process.env.DSH_TUI_LANG = 'zh'` 或
+`'en'`，与断言一致）。本地跑尚未固定语言的脚本时，带上 `DSH_TUI_LANG=zh`，
+否则 lang.json 为 en 或 locale 为 `en_US` 的机器会误报失败。
+
 改动共享渲染、`Chat`、提示/问卷布局、工具卡、主题原语或 Ink core 时，三个
 CI 回归都要跑。窄改动还要跑最近的聚焦脚本：
 
