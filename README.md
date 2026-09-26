@@ -27,7 +27,7 @@
 - **Pixel whale pet** — three startup intros, click to wake; freezes after the first task.
 - **Terminal-native UI** — streaming Markdown, tool cards, `/` and `@` completion, `#L12-14` ranges, history search, zh/en UI.
 - **Images** — Kitty/Sixel thumbnails, centered preview with zoom and pan, paste-time fitting, text fallback.
-- **Mermaid diagrams** — ```` ```mermaid ```` fences drawn as Unicode diagrams.
+- **Mermaid diagrams** — ````mermaid ```` fences drawn as Unicode diagrams.
 - **Timeline rail** — every turn clickable; timeline / scrollbar / hidden gutter.
 - **Live state** — activity animation, context bar, TPS, cache hit rate, effort, tokens, Git and session metadata.
 - **One session manager** — `/resume` `/home` `/agentview` `/bg` `⌸`.
@@ -41,10 +41,12 @@ Keys and commands: [Interaction and commands](docs/interaction.en.md). Everythin
 
 ## Preview
 
-<picture>
-  <source media="(max-width: 640px)" srcset="docs/assets/readme/preview-en-mobile.svg">
-  <img src="docs/assets/readme/preview-en.svg" alt="Recorded dsh-TUI session: welcome, completion, help and typing, with animated pixel whale." width="78%">
-</picture>
+<div align="center">
+  <picture>
+    <source media="(max-width: 640px)" srcset="docs/assets/readme/preview-en-mobile.svg">
+    <img src="docs/assets/readme/preview-en.svg" alt="Recorded dsh-TUI session: welcome, completion, help and typing, with animated pixel whale." width="78%">
+  </picture>
+</div>
 
 ## Featured & Listed
 
