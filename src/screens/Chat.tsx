@@ -2158,6 +2158,54 @@ export function Chat({
         setHelpOpen(false)
         channel.pushLocal('/doctor', channel.doctorInfo())
         return true
+      case 'migrate': {
+        // The in-TUI twin of `dsh-tui migrate` (double entry points). The
+        // import itself always runs in a CHILD process through the package
+        // bin: discovery is synchronous disk scanning (real-world scale:
+        // 2000+ conversations), which would freeze the renderer if run
+        // in-process. stdout is collected and rendered through the local
+        // transcript row; the exit code lands as a notification.
+        const parts = rawInput.trim().split(/\s+/).filter(Boolean)
+        setHelpOpen(false)
+        channel.notify(t('migrate-running'), { timeoutMs: 4000 })
+        void (async () => {
+          const { spawn } = await import('node:child_process')
+          const { existsSync } = await import('node:fs')
+          const { dirname, join } = await import('node:path')
+          const { fileURLToPath } = await import('node:url')
+          // Same self-location as src/update.ts: compiled code lives in
+          // lib/types/, so two dirnames up is the package root.
+          const ownDir = dirname(dirname(fileURLToPath(import.meta.url)))
+          const bin = join(ownDir, 'bin', 'dsh-tui.js')
+          if (!existsSync(bin)) {
+            channel.notify(t('migrate-spawn-failed'), { color: 'error', timeoutMs: 8000 })
+            return
+          }
+          const child = spawn(process.execPath, [bin, 'migrate', ...parts], {
+            stdio: ['ignore', 'pipe', 'pipe'],
+          })
+          let out = ''
+          const collect = (chunk: Buffer): void => {
+            out += chunk.toString('utf8')
+            // Bound the transcript row: the CLI's own output is per-run
+            // counters, but keep a sane cap so a pathological child cannot
+            // grow it without limit.
+            if (out.length > 64 * 1024) out = out.slice(-64 * 1024)
+          }
+          child.stdout?.on('data', collect)
+          child.stderr?.on('data', collect)
+          child.on('error', () => channel.notify(t('migrate-spawn-failed'), { color: 'error', timeoutMs: 8000 }))
+          child.on('close', code => {
+            const lines = out.split('\n').map(line => line.trimEnd()).filter(Boolean)
+            channel.pushLocal('/migrate', lines.length > 0 ? lines : [t('migrate-done')])
+            channel.notify(
+              code === 0 ? t('migrate-done') : t('migrate-failed', { code: code ?? -1 }),
+              code === 0 ? { timeoutMs: 6000 } : { color: 'error', timeoutMs: 10000 },
+            )
+          })
+        })()
+        return true
+      }
       case 'plugins':
         // Plugin diagnostics (C-070): trust banner first, then descriptor /
         // grant matrix / ledger tail — or validate+negotiate for

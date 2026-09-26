@@ -153,6 +153,8 @@ dsh-tui migrate codex --dry-run  # preview what would land, write nothing
 - **Read-only source**: migration only reads the foreign agent's local store; artifacts are written through the official `JsonlSessionPersistence` backend, so imported sessions are first-class (openable, continuable).
 - **Idempotent**: one deterministic UUID per source conversation — re-importing skips what is already present instead of stacking duplicates.
 - **Structure preserved**: user/assistant messages and reasoning traces are rebuilt turn by turn; tool traffic is not migrated (source formats cannot replay it faithfully — the contract is "re-read the conversation", not "resume the task").
+In-TUI: `/migrate` (optionally `/migrate <agent> [--dry-run]`) runs the same import in a child process and reports through the notification flow.
+CLI alternative: `dsh-tui migrate ...` from any shell runs the same import.
 - More agents (pi, opencode, …) extend the adapter registry as adapters land; grok-build reads `GROK_HOME` when set.
 
 **VS Code**: use the integrated terminal or the `dsh-tui-vscode` extension. See [VS Code guide](docs/vscode.en.md). **Herdr**: run `dsh-tui` in a [Herdr](https://herdr.dev) pane; `idle` / `working` / `blocked` are reported through its local integration API.
