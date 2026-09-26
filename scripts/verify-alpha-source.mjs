@@ -79,17 +79,22 @@ sourcePaths['@deepseek-ai/dsh-session-persistence-jsonl'] = [
 // flag set — not under this workspace's renderer-tuned options. Its
 // published d.ts is generated from exactly that source, so pin it the same
 // way whenever the persistence seam's graph reaches it. The package is a
-// transitive install (not a direct dependency), so resolve its declaration
-// from the pnpm store entry whose name starts with package@version.
+// transitive install (not a direct dependency): resolve the HIGHEST store
+// entry regardless of version — the alpha lanes check OLDER upstream
+// checkouts against the versions this workspace actually installs, and the
+// format types are shape-stable across those lines.
 {
-  const prefix = `@deepseek-ai+dsh-session-format@${sourceManifest.version}`
+  const prefix = '@deepseek-ai+dsh-session-format@'
   const store = join(tuiRoot, 'node_modules/.pnpm')
-  const entry = existsSync(store)
-    ? readdirSync(store).find(name => name === prefix || name.startsWith(`${prefix}_`))
-    : undefined
-  if (entry !== undefined) {
-    const formatDecl = join(store, entry, 'node_modules/@deepseek-ai/dsh-session-format/lib/types/index.d.ts')
-    if (existsSync(formatDecl)) sourcePaths['@deepseek-ai/dsh-session-format'] = [formatDecl]
+  if (existsSync(store)) {
+    const entry = readdirSync(store)
+      .filter(name => name.startsWith(prefix))
+      .sort()
+      .at(-1)
+    if (entry !== undefined) {
+      const formatDecl = join(store, entry, 'node_modules/@deepseek-ai/dsh-session-format/lib/types/index.d.ts')
+      if (existsSync(formatDecl)) sourcePaths['@deepseek-ai/dsh-session-format'] = [formatDecl]
+    }
   }
 }
 
