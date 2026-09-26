@@ -432,11 +432,20 @@ const MSG = {
       `[dsh-tui] \`update\` 需要 profile 的编译产物，但它缺失或版本过旧、不含 CLI 入口。\n` +
       `请改用手工升级：\n  dsh plugin --profile ${PROFILE} add ${PACKAGE}@latest`,
   },
+  migrateUnavailable: {
+    en:
+      `[dsh-tui] \`migrate\` needs the profile's compiled copy, but it is missing or too old to carry the CLI entry.\n` +
+      `Update first:\n  dsh-tui update`,
+    zh:
+      `[dsh-tui] \`migrate\` 需要 profile 的编译产物，但它缺失或版本过旧、不含 CLI 入口。\n` +
+      `请先升级：\n  dsh-tui update`,
+  },
   helpText: {
     en:
       `Usage: dsh-tui|dst [command] [options] [path|url]\n\n` +
       `Commands:\n` +
       `  update                 Update the ${PROFILE} profile to the latest release\n` +
+      `  migrate [agent]        Import conversations from claude-code/codex/omp (--dry-run to preview)\n` +
       `  doctor                 Pre-flight environment checks (dsh/pnpm/profile/key)\n` +
       `  safe                   Safe mode: read-only diagnostics, inventory, repair guidance\n` +
       `  safe --rescue          Create/verify the clean rescue profile (starts it in a terminal)\n` +
@@ -451,6 +460,7 @@ const MSG = {
       `用法：dsh-tui|dst [命令] [选项] [路径|URL]\n\n` +
       `命令：\n` +
       `  update                 将 ${PROFILE} profile 升级到最新版本\n` +
+      `  migrate [agent]        迁移 claude-code/codex/omp 的对话（--dry-run 预览）\n` +
       `  doctor                 启动前环境诊断（dsh/pnpm/profile/密钥）\n` +
       `  safe                   安全模式：只读诊断、插件清单与修复指引\n` +
       `  safe --rescue          创建/校验干净的救援 profile（有终端时随即启动它）\n` +
@@ -1232,6 +1242,26 @@ if (subcommand === 'update') {
     process.exit(1)
   }
   process.exit(await cliUpdate(PROFILE))
+}
+
+// ─── 子命令：migrate ─────────────────────────────────────────────────────────
+// 跨代理会话迁移（claude-code / codex / omp → DSH sessions）。与 update 同
+// 一条委托路径：动态 import **profile 的**编译产物（瘦壳零 lib 依赖不变），
+// 落盘走上游官方 JsonlSessionPersistence（见 src/dsh-adapter/migrate/）。
+// profile 未初始化时先自举；产物缺失或旧版无 cliMigrate 导出给升级指引。
+if (subcommand === 'migrate') {
+  if (!profileReady()) bootstrapProfile()
+  let cliMigrate
+  try {
+    ;({ cliMigrate } = await import(pathToFileURL(join(profilePkgDir, 'lib', 'types', 'dsh-adapter', 'migrate', 'cli.js')).href))
+  } catch {
+    cliMigrate = undefined
+  }
+  if (typeof cliMigrate !== 'function') {
+    console.error(msg('migrateUnavailable'))
+    process.exit(1)
+  }
+  process.exit(await cliMigrate(process.argv.slice(3)))
 }
 
 // ─── 全局副本：瘦壳角色 ───────────────────────────────────────────────────────
