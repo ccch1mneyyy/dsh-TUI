@@ -13,7 +13,7 @@
  *      新旧消息同在（导入的会话是活的，不是只能看）；
  *   4. 幂等：同批 fixture 二次导入全部 existing，列表数不变；
  *   5. migrationUuid：确定性（同输入同 id）与区分性（不同 agent 不同 id）；
- *   6. adapter 解析冒烟：三家的最小 fixture 行（含 model 提取）。
+ *   6. adapter 解析冒烟：五家的最小 fixture 行（含 model 提取、null 防御）。
  *
  * 运行：node --import tsx/esm scripts/verify-migrate.mjs
  */
@@ -29,6 +29,8 @@ const { migrationUuid } = await import('../src/dsh-adapter/migrate/uuid.js')
 const { claudeCodeAdapter } = await import('../src/dsh-adapter/migrate/adapters/claude-code.js')
 const { codexAdapter } = await import('../src/dsh-adapter/migrate/adapters/codex.js')
 const { ompAdapter } = await import('../src/dsh-adapter/migrate/adapters/omp.js')
+const { zcodeAdapter } = await import('../src/dsh-adapter/migrate/adapters/zcode.js')
+const { grokBuildAdapter } = await import('../src/dsh-adapter/migrate/adapters/grok-build.js')
 
 let checks = 0
 function check(name, ok, extra = '') {
@@ -223,6 +225,43 @@ const root = mkdtempSync(join(tmpdir(), 'verify-migrate-'))
     '',
   ].join('\n'))
 
+  // zcode：`~/.zcode/v2/sessions/<dir>/<taskId>.json` 单对象（meta+messages）
+  const zcodeDir = join(home, '.zcode', 'v2', 'sessions', 't1')
+  mkdirSync(zcodeDir, { recursive: true })
+  // 整个文档为合法 JSON null（不得让 discover 抛未捕获 TypeError）
+  writeFileSync(join(zcodeDir, 'doc-null.json'), 'null')
+  // meta 为合法 JSON null（同上）
+  writeFileSync(join(zcodeDir, 'meta-null.json'), JSON.stringify({ meta: null, messages: [] }))
+  writeFileSync(join(zcodeDir, 'zcode-session.json'), JSON.stringify({
+    meta: { taskId: 'zcode-task-1', workspacePath: '/tmp/zc', createdAt: 1787589672487, title: 'zcode 会话标题' },
+    messages: [
+      // messages 为合法 JSON null（同上）
+      null,
+      { role: 'user', content: null },
+      { role: 'user', content: 'zcode 提问' },
+      { role: 'assistant', content: 'zcode 答复', timestamp: 1787589674000 },
+    ],
+  }))
+  // grok-build：`~/.grok/sessions/<encoded-cwd>/<uuid>/{summary.json,chat_history.jsonl}`
+  const grokDir = join(home, '.grok', 'sessions', '%2Ftmp%2Fgrok', '0192a7f0-1234-7abc-8def-0123456789ab')
+  mkdirSync(grokDir, { recursive: true })
+  writeFileSync(join(grokDir, 'summary.json'), JSON.stringify({
+    info: { id: '0192a7f0-1234-7abc-8def-0123456789ab', cwd: '/tmp/grok' },
+    session_summary: 'grok 会话', created_at: '2026-09-20T10:00:00Z', updated_at: '2026-09-20T10:05:00Z',
+    num_messages: 5, current_model_id: 'grok-4-fast', chat_format_version: 1,
+  }))
+  writeFileSync(join(grokDir, 'chat_history.jsonl'), [
+    'null',
+    JSON.stringify({ type: 'system', content: 'system prompt' }),
+    JSON.stringify({ type: 'user', content: [{ type: 'text', text: 'grok 提问' }] }),
+    // reasoning 兄弟行：附到下一个 assistant turn
+    JSON.stringify({ type: 'reasoning', id: 'rs_1', summary: [{ type: 'summary_text', text: 'grok 思考' }] }),
+    JSON.stringify({ type: 'user', content: [{ type: 'text', text: '合成注入不迁移' }], synthetic_reason: 'system_reminder' }),
+    JSON.stringify({ type: 'user', content: null }),
+    JSON.stringify({ type: 'assistant', content: 'grok 答复', model_id: 'grok-4-fast' }),
+    '',
+  ].join('\n'))
+
   process.env.HOME = home
   const cc = claudeCodeAdapter.discover()
   const ccTurns = cc.sessions[0]?.turns ?? []
@@ -239,6 +278,17 @@ const root = mkdtempSync(join(tmpdir(), 'verify-migrate-'))
   const ompTurns = ompFound.sessions[0]?.turns ?? []
   check('6c. omp 解析（thinking 块）',
     ompFound.sessions.length === 1 && ompTurns.length === 2 && ompTurns[1].reasoning === 'omp 思考')
+  const zcFound = zcodeAdapter.discover()
+  const zcTurns = zcFound.sessions[0]?.turns ?? []
+  check('6d. zcode 解析（单对象 + 元素级 null 跳过）',
+    zcFound.sessions.length === 1 && zcTurns.length === 2
+    && zcFound.sessions[0].cwd === '/tmp/zc' && zcFound.sessions[0].title === 'zcode 会话标题')
+  const gbFound = grokBuildAdapter.discover()
+  const gbTurns = gbFound.sessions[0]?.turns ?? []
+  check('6e. grok-build 解析（reasoning 兄弟行 + synthetic 过滤）',
+    gbFound.sessions.length === 1 && gbTurns.length === 2
+    && gbTurns[1].reasoning === 'grok 思考' && gbTurns[1].model === 'grok-4-fast'
+    && gbFound.sessions[0].cwd === '/tmp/grok')
   rmSync(home, { recursive: true, force: true })
 }
 

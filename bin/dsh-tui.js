@@ -445,7 +445,7 @@ const MSG = {
       `Usage: dsh-tui|dst [command] [options] [path|url]\n\n` +
       `Commands:\n` +
       `  update                 Update the ${PROFILE} profile to the latest release\n` +
-      `  migrate [agent]        Import conversations from claude-code/codex/omp (--dry-run to preview)\n` +
+      `  migrate [agent]        Import conversations from claude-code/codex/omp/zcode/grok-build (--dry-run to preview)\n` +
       `  doctor                 Pre-flight environment checks (dsh/pnpm/profile/key)\n` +
       `  safe                   Safe mode: read-only diagnostics, inventory, repair guidance\n` +
       `  safe --rescue          Create/verify the clean rescue profile (starts it in a terminal)\n` +
@@ -460,7 +460,7 @@ const MSG = {
       `用法：dsh-tui|dst [命令] [选项] [路径|URL]\n\n` +
       `命令：\n` +
       `  update                 将 ${PROFILE} profile 升级到最新版本\n` +
-      `  migrate [agent]        迁移 claude-code/codex/omp 的对话（--dry-run 预览）\n` +
+      `  migrate [agent]        迁移 claude-code/codex/omp/zcode/grok-build 的对话（--dry-run 预览）\n` +
       `  doctor                 启动前环境诊断（dsh/pnpm/profile/密钥）\n` +
       `  safe                   安全模式：只读诊断、插件清单与修复指引\n` +
       `  safe --rescue          创建/校验干净的救援 profile（有终端时随即启动它）\n` +
