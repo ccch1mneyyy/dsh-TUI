@@ -233,6 +233,7 @@ CI 回归都要跑。窄改动还要跑最近的聚焦脚本：
 | 改动区域 | 聚焦验证 |
 | --- | --- |
 | 通用无头屏幕组装 | `pnpm smoke` |
+| 跨代理会话迁移（src/migrate、adapter 解析或事件合成） | `node --import tsx/esm scripts/verify-migrate.mjs` |
 | Channel submit/steer/pending 行为 | `node scripts/verify-submit.mjs` |
 | 回退后编辑重发与历史 Inbox 清理 | `pnpm verify:rewind-edit` |
 | 提示队列行为 | `node scripts/verify-queue.mjs` |
