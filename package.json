@@ -1,6 +1,6 @@
 {
   "name": "@deepseek-harness-tui/dsh-tui",
-  "version": "0.11.0",
+  "version": "0.11.1",
   "description": "Interactive terminal interface for DeepSeek Harness agents, sessions and tools.",
   "keywords": [
     "dsh",
@@ -222,7 +222,10 @@
     "verify:background-extraction": "node --import tsx/esm scripts/verify-background-extraction.ts",
     "verify:plugin-catalog-extraction": "node --import tsx/esm scripts/verify-plugin-catalog-extraction.ts",
     "verify:channel-composition": "node --import tsx/esm scripts/verify-channel-composition.ts",
-    "verify:channel-trace-read": "node --import tsx/esm scripts/verify-channel-trace-read.ts"
+    "verify:channel-trace-read": "node --import tsx/esm scripts/verify-channel-trace-read.ts",
+    "verify:activity-store": "node --import tsx/esm scripts/verify-activity-store.ts",
+    "verify:activity-store-render": "node --import tsx/esm scripts/verify-activity-store-render.tsx",
+    "verify:activity-ownership": "node --import tsx/esm scripts/verify-activity-ownership.ts"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.1",
@@ -365,7 +368,7 @@
     "cli-highlight": "^2.1.11",
     "code-excerpt": "^3.0.0 || ^4.0.0",
     "diff": "^8.0.4",
-    "dsh-working-activity": "^0.4.0",
+    "dsh-working-activity": "^0.5.0",
     "emoji-regex": "^10.0.0",
     "figures": "^6.1.0",
     "get-east-asian-width": "^1.0.0",
