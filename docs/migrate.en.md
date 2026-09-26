@@ -13,7 +13,10 @@ dsh-tui migrate claude-code    # import every Claude Code conversation
 dsh-tui migrate codex --dry-run  # preview what would land, write nothing
 ```
 
-In-TUI equivalent: `/migrate` (or `/migrate <agent> [--dry-run]`). The import
+In-TUI equivalent: `/migrate`. Bare `/migrate` opens a **source picker** —
+one row per agent showing its scannable file count and an "active X min ago"
+badge (most recently active first); Enter imports the focused source, Esc
+closes. `/migrate <agent> [--dry-run]` skips the picker and runs directly. The import
 runs in a child process so the interface never freezes; results arrive
 through the notification flow and the output lands in a `/migrate` local
 row. Both entry points share the same import logic and idempotency rules.
@@ -64,6 +67,14 @@ Browse afterwards with `/resume`: sessions land in per-cwd directories
 conversations with thinking render as collapsible reasoning blocks in the
 TUI.
 
+## Smart migration hint
+
+About 12 seconds after the TUI starts, one background pass checks whether any
+source saw file writes within the last 20 minutes (newest file mtime per
+source) and surfaces a single notification: "Just came from <agent>?
+/migrate imports it quickly". The scan is off the render path (sub-second)
+and fires at most once per session; a source with no data stays silent.
+
 ## Troubleshooting
 
 - **`unknown agent`**: the authoritative source list is what bare
@@ -93,5 +104,5 @@ TUI.
   [Getting started](getting-started.en.md)).
 
 Implementation and verification live in `src/dsh-adapter/migrate/` and
-`scripts/verify-migrate.mjs` (29 checks, all against the official read
+`scripts/verify-migrate.mjs` （38 checks, all against the official read
 chain).
