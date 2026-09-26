@@ -57,6 +57,16 @@ sourcePaths['@deepseek-ai/cordis'] = [
 sourcePaths['@deepseek-ai/schemastery'] = [
   join(tuiRoot, 'node_modules/@deepseek-ai/schemastery/lib/types/index.d.ts'),
 ]
+// The JSONL persistence backend's SOURCE tree depends on native-addon type
+// surfaces (@deepseek-ai/node-addon-system/flock) that do not exist in this
+// workspace, so type-checking it from source here is not possible — and its
+// published d.ts is generated from exactly that source. Pin it to the npm
+// declarations like cordis/schemastery above. First src consumer: the
+// cross-agent migration (src/dsh-adapter/migrate/), which imports the plugin
+// to write imported conversations through the official backend.
+sourcePaths['@deepseek-ai/dsh-session-persistence-jsonl'] = [
+  join(tuiRoot, 'node_modules/@deepseek-ai/dsh-session-persistence-jsonl/lib/types/index.d.ts'),
+]
 
 // HMR is an indirect settings dependency, not a TUI-owned implementation.
 // Compile it with upstream's strict options: our renderer's noImplicitAny=false
