@@ -16,6 +16,7 @@ import { t } from '../i18n.js'
 import { useTheme } from './design-system/ThemeProvider.js'
 import type { ToolBackground } from '../tuiDisplayPrefs.js'
 import { revealLinesOf } from './smoothReveal.js'
+import { primaryComboString } from '../utils/keymap.js'
 
 /**
  * Side-by-side (two-pane) diff view for Edit/Write tool cards.
@@ -401,7 +402,7 @@ export function SplitDiffView({
         )
       })}
       {hidden > 0 && (
-        <Text dimColor>{t('lines-folded-expand', { n: hidden })}</Text>
+        <Text dimColor>{t('lines-folded-expand', { n: hidden, key: primaryComboString('transcript') })}</Text>
       )}
     </Box>
   )

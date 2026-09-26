@@ -11,8 +11,8 @@ import { AlternateScreen, Box, Image, Text, useInput, ScrollBox, type ScrollBoxH
 import * as tuiKit from '../ui.js'
 import { usePageInset } from '../components/PageMargin.js'
 import { POINTER } from '../terminal-utils/figures.js'
-import { isPlainReturnInput, modLabel } from '../utils/modifiers.js'
-import { actionMatches } from '../utils/keymap.js'
+import { isPlainReturnInput } from '../utils/modifiers.js'
+import { actionMatches, effectiveComboDisplay, primaryComboString } from '../utils/keymap.js'
 import { formatTokens } from '../terminal-utils/format.js'
 import { homeDir } from '../utils/paths.js'
 import type { LlmModelInfo, LlmProviderInfo } from '../adapter/ports/channel-view.js'
@@ -2459,7 +2459,7 @@ export function Chat({
         setHelpOpen(false)
         channel.pushLocal('/terminal-setup', [
           t('terminal-setup-hint'),
-          t('terminal-paste-hint', { mod: modLabel }),
+          t('terminal-paste-hint', { keys: effectiveComboDisplay('paste') }),
         ])
         return true
       case 'recap': {
@@ -4007,7 +4007,7 @@ export function Chat({
         <MessageList
           rows={channel.rows}
           failureHintRowId={failureHintRowId}
-          failureHint={t('traj-hint-failure', { key: `${modLabel}t` })}
+          failureHint={t('traj-hint-failure', { key: primaryComboString('trajectory') })}
           expanded={expanded}
           expandedRows={expandedRows}
           selectedId={selectionActive ? selectedId : null}
@@ -4280,7 +4280,7 @@ export function Chat({
               ? undefined
               : {
                   band: wakeBand,
-                  hint: trajectorySeen ? undefined : `${modLabel}t`,
+                  hint: trajectorySeen ? undefined : primaryComboString('trajectory'),
                   tick: Math.floor(wakeTime / 120),
                 }
           }

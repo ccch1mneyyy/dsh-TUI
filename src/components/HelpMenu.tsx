@@ -3,6 +3,7 @@ import { Box, ScrollBox, Text, type ScrollBoxHandle } from '../ui.js'
 import type { LocalCommand } from '../commands.js'
 import { localizedDescription } from '../commands.js'
 import { t } from '../i18n.js'
+import { primaryComboString } from '../utils/keymap.js'
 import { modLabel } from '../utils/modifiers.js'
 
 /**
@@ -46,13 +47,13 @@ export function HelpMenu({
         <Text dimColor>{t('help-this-help')}</Text>
       </Box>
       <Box>
-        <Text dimColor>{t('help-verbose-output', { mod: modLabel })}</Text>
+        <Text dimColor>{t('help-verbose-output', { key: primaryComboString('transcript') })}</Text>
       </Box>
       <Box>
-        <Text dimColor>{t('help-open-trajectory', { mod: modLabel })}</Text>
+        <Text dimColor>{t('help-open-trajectory', { key: primaryComboString('trajectory') })}</Text>
       </Box>
       <Box>
-        <Text dimColor>{t('help-search-history', { mod: modLabel })}</Text>
+        <Text dimColor>{t('help-search-history', { key: primaryComboString('history') })}</Text>
       </Box>
       <Box>
         <Text dimColor>{t('help-interrupt')}</Text>
@@ -61,7 +62,7 @@ export function HelpMenu({
         <Text dimColor>{t('help-exit')}</Text>
       </Box>
       <Box>
-        <Text dimColor>{t('help-redraw', { mod: modLabel })}</Text>
+        <Text dimColor>{t('help-redraw', { key: primaryComboString('redraw') })}</Text>
       </Box>
     </Box>
   )
@@ -86,10 +87,10 @@ export function HelpMenu({
         <Text dimColor>{t('help-cycle-mode')}</Text>
       </Box>
       <Box>
-        <Text dimColor>{t('help-open-editor')}</Text>
+        <Text dimColor>{t('help-open-editor', { key: primaryComboString('editor') })}</Text>
       </Box>
       <Box>
-        <Text dimColor>{t('help-fold-todos', { mod: modLabel })}</Text>
+        <Text dimColor>{t('help-fold-todos', { key: primaryComboString('todoFold') })}</Text>
       </Box>
     </Box>
   )
