@@ -656,6 +656,9 @@ const GROUPS = {
 // 树内每个测量所依据的宽度失效，而没有任何节点被标脏，文本节点会沿用
 // 旧宽度的测量结果，靠 flex 仲裁的行因此由两套布局拼成。
     ["verify-resize-reflow", ['node', '--import', 'tsx/esm', 'scripts/verify-resize-reflow.tsx']],
+// 上下文进度条右对齐回归（#922）：页脚根 Box paddingX={1} ⇒ 内容区实宽
+// columns - 2，bar 也必须按 columns - 2 取宽——右端与状态行右缘逐格比对。
+    ["verify-context-bar-alignment", ['node', '--import', 'tsx/esm', 'scripts/verify-context-bar-alignment.tsx']],
 // Ctrl+T 归属回归：启动上下文面板在屏时该键属于面板（它自己在屏幕上
 // 印着「Ctrl+T 展开」），转录有行之后才归轨迹场景。两者永不同屏——
 // 面板只在首条消息前出现，而那正是轨迹为空的窗口。
