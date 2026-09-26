@@ -32,6 +32,8 @@ export interface HerdrIntegrationOptions {
   readonly reportTimeoutMs?: number
   readonly releaseTimeoutMs?: number
   readonly retryDelaysMs?: readonly number[]
+  /** Milliseconds. Tests pin this so a later report can jump ahead of another pane reporter. */
+  readonly now?: () => number
 }
 
 function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T | undefined> {
@@ -70,7 +72,13 @@ export function attachHerdrIntegration(
       return Promise.reject(new Error('Herdr command could not be started'))
     }
   }
-  let sequence = Date.now() * 1000
+  const now = options.now ?? Date.now
+  let sequence = 0
+  const nextSequence = (): string => {
+    const clock = now() * 1000
+    sequence = clock > sequence ? clock : sequence + 1
+    return String(sequence)
+  }
   let lastConfirmedReport = ''
   let disposed = false
   let running = false
@@ -112,7 +120,7 @@ export function attachHerdrIntegration(
           '--agent', 'dsh-tui',
           '--state', state,
           ...(blocked ? ['--message', 'Waiting for user input'] : []),
-          '--seq', String(++sequence),
+          '--seq', nextSequence(),
         ]), reportTimeoutMs)
         if (disposed) break
         if (result?.code === 0) {
@@ -159,7 +167,7 @@ export function attachHerdrIntegration(
         'pane', 'release-agent', paneId,
         '--source', 'custom:dsh-tui',
         '--agent', 'dsh-tui',
-        '--seq', String(++sequence),
+        '--seq', nextSequence(),
       ])
       disposePromise = withTimeout(release, releaseTimeoutMs).then(() => undefined)
       return disposePromise
