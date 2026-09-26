@@ -128,6 +128,23 @@ export function initialPromptFromCmdlineArgs(args: readonly string[] | undefined
  * so an explicit `dsh-tui` run without a TTY keeps failing loudly, while
  * foreign hosts skip the plugin and let the host boot.
  */
+const CLI_HELP_FLAGS = new Set(['--help', '-h'])
+
+/** `dsh --profile dsh-tui --help` forwards `--help` into this process. */
+export function cliHelpRequested(args: readonly string[]): boolean {
+  return args.some(arg => CLI_HELP_FLAGS.has(arg))
+}
+
+export function cliHelpText(): string {
+  return [
+    '用法：dsh --profile dsh-tui [--help]',
+    '',
+    '--help, -h    打印本说明并退出，不启动界面。',
+    '没有交互终端时，经 dsh-tui 启动器拉起会直接报错。',
+    'Web 或其他图形宿主没有终端时会跳过界面，让宿主自己启动。',
+  ].join('\n')
+}
+
 export type TuiHostMode = 'interactive' | 'invalid-explicit-launch' | 'headless-host'
 
 export function resolveTuiHostMode(
@@ -145,6 +162,10 @@ export function resolveTuiHostMode(
 }
 
 export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, configOwner: Context = ctx): Promise<void> {
+  if (cliHelpRequested(process.argv.slice(2))) {
+    process.stdout.write(`${cliHelpText()}\n`)
+    process.exit(0)
+  }
   const config = configValues<Config>(runtimeConfig)
   // /restart handoff diagnosis: the replacement process is marked by env and
   // logs its boot progress to ~/.dsh-tui/restart.log (ordinary launches stay

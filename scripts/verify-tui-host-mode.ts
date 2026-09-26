@@ -10,7 +10,7 @@
  */
 
 import { Context } from '@deepseek-ai/cordis'
-import { apply, resolveTuiHostMode } from '../src/dsh-adapter/plugin.js'
+import { apply, cliHelpRequested, cliHelpText, resolveTuiHostMode } from '../src/dsh-adapter/plugin.js'
 import type { Config } from '../src/dsh-adapter/index.js'
 
 let failures = 0
@@ -73,6 +73,11 @@ if (prevStandalone === undefined) {
 } else {
   process.env.DSH_TUI_STANDALONE = prevStandalone
 }
+
+check('cli help: --help is recognized', cliHelpRequested(['--profile', 'dsh-tui', '--help']))
+check('cli help: -h is recognized', cliHelpRequested(['-h']))
+check('cli help: ordinary launch is not help', !cliHelpRequested(['--resume', 'abc']))
+check('cli help: text says it exits without the UI', cliHelpText().includes('不启动界面'))
 
 // ── integration: apply() under a non-TTY stdout ────────────────────────────
 // The gate reads `process.stdout.isTTY` directly; override it for the process
