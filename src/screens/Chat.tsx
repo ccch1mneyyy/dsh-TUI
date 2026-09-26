@@ -2170,14 +2170,14 @@ export function Chat({
         channel.notify(t('migrate-running'), { timeoutMs: 4000 })
         void (async () => {
           const { spawn } = await import('node:child_process')
-          const { existsSync } = await import('node:fs')
-          const { dirname, join } = await import('node:path')
+          const { dirname } = await import('node:path')
           const { fileURLToPath } = await import('node:url')
-          // Same self-location as src/update.ts: compiled code lives in
-          // lib/types/, so two dirnames up is the package root.
-          const ownDir = dirname(dirname(fileURLToPath(import.meta.url)))
-          const bin = join(ownDir, 'bin', 'dsh-tui.js')
-          if (!existsSync(bin)) {
+          const { resolveOwnBin } = await import('../dsh-adapter/migrate/bin-path.js')
+          // This file sits at a different depth per layout (src/screens vs
+          // lib/types/screens), so the bin resolves by upward probe — see
+          // bin-path.ts; a fixed dirname count fails on real installs.
+          const bin = resolveOwnBin(dirname(fileURLToPath(import.meta.url)))
+          if (bin === undefined) {
             channel.notify(t('migrate-spawn-failed'), { color: 'error', timeoutMs: 8000 })
             return
           }

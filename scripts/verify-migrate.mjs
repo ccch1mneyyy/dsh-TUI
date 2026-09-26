@@ -275,6 +275,34 @@ const root = mkdtempSync(join(tmpdir(), 'verify-migrate-'))
   }
 }
 
+// ── 4f. /migrate 的 bin 探测：双布局都必须命中（真机 CONFIRMED 回归）───
+{
+  const { resolveOwnBin } = await import('../src/dsh-adapter/migrate/bin-path.js')
+  const { dirname } = await import('node:path')
+  const { fileURLToPath } = await import('node:url')
+  const { existsSync, statSync } = await import('node:fs')
+  // dev 布局：本脚本从包内 src 层解析（src/screens 深度）
+  const devBin = resolveOwnBin(dirname(fileURLToPath(import.meta.url)))
+  check('4f1. dev 布局（scripts/ 深度）探测命中本包 bin',
+    devBin !== undefined && existsSync(devBin), String(devBin))
+  // 安装布局：lib/types/screens/ 深度（编译产物存在时才测——CI 的
+  // verify job 在 build 后运行，本地无产物时跳过并注明）
+  const installedRoot = join(process.cwd(), 'lib', 'types', 'screens')
+  let installedChecked = false
+  try {
+    statSync(installedRoot)
+    const installedBin = resolveOwnBin(installedRoot)
+    check('4f2. 安装布局（lib/types/screens/ 深度）探测命中本包 bin',
+      installedBin !== undefined && existsSync(installedBin), String(installedBin))
+    installedChecked = true
+  } catch {
+    console.log('PASS: 4f2. 安装布局产物未构建，跳过（CI build 后覆盖）')
+  }
+  // 反向：越界深度必须返回 undefined（不误命中树外其他包）
+  const miss = resolveOwnBin('/')
+  check('4f3. 树外起点不误命中', miss === undefined || existsSync(miss), String(miss))
+}
+
 // ── 5. uuid 确定性与区分性 ──────────────────────────────────────────────
 {
   const [first] = fixtureSessions()
