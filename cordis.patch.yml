@@ -471,9 +471,10 @@
     # dependency into the profile root (npm's flat layout hid this), so the
     # bare name died with ERR_MODULE_NOT_FOUND and disposed the whole app at
     # boot (#60).
-    # The plugin stays mounted for its narration/system-prompt features. The
-    # TUI derives its working line in-process from the base session stream;
-    # never persist activity/status, so the shared log remains Web-readable.
+    # The plugin stays mounted for its narration/system-prompt features and
+    # publishes the `workingActivity` session projection, which is where the
+    # TUI's working line comes from; never persist activity/status, so the
+    # shared log remains Web-readable.
     - id: working-activity
       name: '@deepseek-harness-tui/dsh-tui/working-activity'
       config:

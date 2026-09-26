@@ -1,5 +1,5 @@
 /** Host-owned in-process Channel contract. No runtime or upstream imports. */
-import type { ChatRow, AgentStatus, TokenUsage, NotificationItem, ActivityStatus, ChannelGoal, TodoPanelItem, LoadedContext, PendingMessage, ChannelSceneMetadata, SubagentState, SubagentControl, BackgroundJobState, JobControl, StagedImageInput, StagedImageHandle, ComposerImageRef, ComposerSubmission, ExternalCommandOutcome, TranscriptImage, ResumeResult, EffortOption, PermissionPresetSnapshot, PresetOption, LlmModelInfo, LlmProviderInfo, SkillInfo, CredentialStatus, AgentViewRow, AgentViewDispatchResult, BackgroundResult, RawTrajEvent, ChannelSelection } from './channel-view.js'
+import type { ChatRow, AgentStatus, TokenUsage, NotificationItem, ChannelGoal, TodoPanelItem, LoadedContext, PendingMessage, ChannelSceneMetadata, SubagentState, SubagentControl, BackgroundJobState, JobControl, StagedImageInput, StagedImageHandle, ComposerImageRef, ComposerSubmission, ExternalCommandOutcome, TranscriptImage, ResumeResult, EffortOption, PermissionPresetSnapshot, PresetOption, LlmModelInfo, LlmProviderInfo, SkillInfo, CredentialStatus, AgentViewRow, AgentViewDispatchResult, BackgroundResult, RawTrajEvent, ChannelSelection } from './channel-view.js'
 import type { SpinnerMode, ToolBackground, ScrollGutterMode, PageMarginSetting, StatusBarConfig, SessionModeSpec } from './channel-display.js'
 import type { LocalCommand, CommandCompletion, BalanceResult, FileCandidate, RecapOutcome } from './channel-catalog.js'
 import type { TuiRewindMode, SessionTreeData, SessionSummary, PreviewEntry } from './channel-session.js'
@@ -29,6 +29,11 @@ export interface ChannelUi {
    *  the prompt-input border + session label chip accent (cc/sessionColors). */
   readonly sessionColor: string
   readonly agentId: string
+  /** Identity of the session behind the bound agent. Read by session-scoped
+   *  consumers — the activity projection is keyed by session, and the two ids
+   *  are only conventionally equal (both are minted as a `SessionId`), so the
+   *  session must be nameable on its own rather than inferred from the agent. */
+  readonly sessionId: string
   /** TUI-owned generation that changes on every live Agent rebind. */
   readonly agentBindingGeneration: number
   /** `dsh-tui.recapOnOpen` (default on): auto-summarize the session tail
@@ -94,8 +99,6 @@ export interface ChannelUi {
   readonly tps: number | undefined
   /** Per-turn tps samples (sparkline history), oldest first. */
   readonly tpsSamples: readonly { tps: number; at: number }[]
-  /** Latest in-process working-activity snapshot. */
-  readonly workingActivity: ActivityStatus | undefined
   /** Working-activity indicator preset name (`claude`/`moon`/…/`random`). */
   readonly activityFrames: string | undefined
   /** Edit/Write diff presentation preference (`auto`/`split`/`unified`). */
@@ -141,7 +144,8 @@ export interface ChannelUi {
   /** Minimal mode (settings `dsh-tui.minimal`): no header splash, no emoji
    *  glyphs, no decorative colors; code highlight and tool colors stay. */
   readonly minimal: boolean
-  /** Whether the in-process working-activity line is shown (config.activity). */
+  /** Whether the working-activity line is shown (config.activity); the line
+   * itself is read from the plugin's session projection, not this port. */
   readonly activityEnabled: boolean
   /** Whether the segmented context bar row shows in the status footer
    *  (config.contextBar; the status/mode lines are unaffected). */

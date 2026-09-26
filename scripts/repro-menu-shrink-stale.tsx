@@ -104,7 +104,6 @@ function makeChannel() {
     lastUsage: undefined,
     tps: undefined,
     tpsSamples: [],
-    workingActivity: undefined,
     activityFrames: undefined,
     commandCompletions: (q: string) => {
       const token = q.replace(/^\//, '')

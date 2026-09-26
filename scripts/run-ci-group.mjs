@@ -296,8 +296,10 @@ const GROUPS = {
 // approval 行；裸组合与 profile patch 的 policy 表达式逐场景同值
 // （ask / never / win32 never），两个入口语义不漂移。
     ["verify-cordis-approval", ['node', 'scripts/verify-cordis-approval.mjs']],
-// 工作状态由基础事件在进程内派生：阶段、500ms tick、Agent 切换重置。
-    ["verify-working-activity", ['node', 'scripts/verify-working-activity.mjs']],
+// 工作状态现在由 dsh-working-activity 插件的 session projection 拥有：本 app 只读，
+// 不再在进程内折叠。这条静态门禁钉住「唯一 owner」——没有 tracker、没有 status
+// import、没有 sidecar、channel 层不转发活动信号也不持 tick。
+    ["verify-activity-ownership", ['node', '--import', 'tsx/esm', 'scripts/verify-activity-ownership.ts']],
 // TUI 创建及恢复的会话必须持久关联到 Workspace。
     ["verify-workspace-attachment", ['node', 'scripts/verify-workspace-attachment.mjs']],
 // tuiWorkspaces 服务可选化回归（issue #183）：代码层 inject 不含
@@ -472,6 +474,12 @@ const GROUPS = {
   'channel-ui': [
 // L4 composition boundary plus report/metadata lifetime fences.
     ["verify-channel-composition", ['node', '--import', 'tsx/esm', 'scripts/verify-channel-composition.ts']],
+// 状态行的读侧：会话键控、变更通知、宿主发布值的防御性收窄、绑定时的基线读取
+// （投影只在变化时推送，恢复/重连的会话必须自己读一次当前值）。
+    ["verify-activity-store", ['node', '--import', 'tsx/esm', 'scripts/verify-activity-store.ts']],
+// 状态行的渲染面：投影值经 hook 到达屏幕、后台会话不得抢当前行、清空即消失、
+// 两个接缝同时有值时以投影为准（读侧迁移对显示是零变化）。
+    ["verify-activity-store-render", ['node', '--import', 'tsx/esm', 'scripts/verify-activity-store-render.tsx']],
     ["verify-channel-owner-lifecycle", ['node', '--import', 'tsx/esm', 'scripts/verify-channel-owner-lifecycle.ts']],
     ["verify-channel-router-lifecycle", ['node', '--import', 'tsx/esm', 'scripts/verify-channel-router-lifecycle.ts']],
     ["verify-reports-metadata",  ['node', '--import', 'tsx/esm', 'scripts/verify-reports-metadata.ts']],

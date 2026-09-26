@@ -129,10 +129,11 @@ stdout 打印诊断；使用 stderr 的 `DSH_TUI_DEBUG` 或 `DSH_TUI_RENDER_LOG`
 - **上下文进度条**：基于 pi-nano-context 算法（最大余数分段着色 + 多级紧凑读数）。
 - **TPS 仪表**：基于 pi-tps-meter——流式 1/8 块仪表、历史 min-max 火花线、
   按速度语义着色（≥50 绿 / ≥20 黄 / <20 红）。
-- **working-activity**：工作状态行复用
+- **working-activity**：工作状态行由
   [dsh-working-activity](https://github.com/ccch1mneyyy/working-activity)
-  的纯状态机。
-- 进程内从基础会话事件推导，不把 UI 状态写进共享日志。
+  插件折叠并发布为 `workingActivity` 会话投影，本应用只读取该投影
+  （`src/dsh-adapter/activity-store.ts`），不在进程内另行推导，
+  也不把 UI 状态写进共享日志。
 
 ## Inline 与 fullscreen
 

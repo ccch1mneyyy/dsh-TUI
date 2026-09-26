@@ -98,7 +98,6 @@ const channel: any = {
   lastUsage: undefined,
   tps: undefined,
   tpsSamples: [],
-  workingActivity: undefined,
   activityFrames: undefined,
   commandCompletions: [],
   tokens: { input: 120, output: 45 },

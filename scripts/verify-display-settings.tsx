@@ -89,7 +89,6 @@ const baseChannel = {
   gitBranch: 'feat/display-settings-probe',
   displayCwd: 'C:/work/display-project',
   sessionTitle: 'display settings title probe',
-  workingActivity: undefined,
   activityFrames: [],
   contextBarEnabled: true,
   contextSegments: {

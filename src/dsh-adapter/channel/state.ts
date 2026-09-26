@@ -11,6 +11,10 @@ export interface ChannelLaunchOptions {
   provider: string
   effort?: string
   activity?: boolean
+  /** Read the activity projection's current value when a session binds. A
+   *  projection value only arrives on change, so a resumed session needs this
+   *  read to render its line before the next event lands. */
+  seedActivity?: (session: unknown) => void
   activityFrames?: string
   diffLayout?: 'auto' | 'split' | 'unified'
   thinkingFold?: 'preview' | 'full'
@@ -43,14 +47,14 @@ export interface ChannelLaunchOptions {
  */
 export function createInitialChannelView(
   options: ChannelLaunchOptions,
-  input: { agentId: string; mode: ChannelState['mode']; cwdDescription: string },
+  input: { agentId: string; sessionId: string; mode: ChannelState['mode']; cwdDescription: string },
 ): Pick<ChannelState,
   'effortLevels' | 'version' | 'rows' | 'status' | 'sessionTitle' | 'sessionColor' |
-  'agentId' | 'agentBindingGeneration' | 'model' | 'provider' | 'tokens' | 'cwd' |
+  'agentId' | 'sessionId' | 'agentBindingGeneration' | 'model' | 'provider' | 'tokens' | 'cwd' |
   'displayCwd' | 'gitBranch' | 'working' | 'cancelPending' | 'spinnerMode' |
   'responseChars' | 'activeToolCount' | 'turnStart' | 'lastUserText' |
   'notifications' | 'contextWindow' | 'reasoningEffort' | 'mode' | 'modeIndex' |
-  'workingActivity' | 'activityFrames' | 'configuredProvider' | 'configuredModel' |
+  'activityFrames' | 'configuredProvider' | 'configuredModel' |
   'configuredPreset' | 'configuredActivityFrames' | 'configuredLang' | 'diffLayout' |
   'thinkingFold' | 'toolBackground' | 'scrollGutter' | 'pageMargin' |
   'foldTerminalCommand' | 'promptSessionLabel' | 'expandEditor' | 'smoothStreaming' |
@@ -60,12 +64,12 @@ export function createInitialChannelView(
 > {
   return {
     effortLevels: undefined, version: 0, rows: [], selection: undefined, status: 'starting', sessionTitle: '', sessionColor: '',
-    agentId: input.agentId, agentBindingGeneration: 0, model: options.model, provider: options.provider,
+    agentId: input.agentId, sessionId: input.sessionId, agentBindingGeneration: 0, model: options.model, provider: options.provider,
     tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, peak: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, idle: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } },
     cwd: options.cwd, displayCwd: input.cwdDescription, gitBranch: undefined, working: false,
     cancelPending: false, spinnerMode: 'requesting', responseChars: 0, activeToolCount: 0,
     turnStart: 0, lastUserText: '', notifications: [], contextWindow: undefined,
-    reasoningEffort: options.effort, mode: input.mode, modeIndex: 0, workingActivity: undefined,
+    reasoningEffort: options.effort, mode: input.mode, modeIndex: 0,
     activityFrames: normalizeActivityPreset(options.activityFrames), configuredProvider: options.configuredProvider,
     configuredModel: options.configuredModel, configuredPreset: options.configuredPreset,
     configuredActivityFrames: options.configuredActivityFrames, configuredLang: options.configuredLang,

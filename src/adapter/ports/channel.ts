@@ -93,6 +93,10 @@ export interface HostChannelStateSnapshot {
   readonly sessionTitle: string
   readonly sessionColor: string
   readonly agentId: string
+  /** Session identity behind the bound agent, when the host knows one. Optional
+   *  so a minimal/embedded channel can omit it; the working line then simply has
+   *  no session to read a projection for. */
+  readonly sessionId?: string
   readonly agentBindingGeneration: number
   readonly model: string
   readonly provider: string
@@ -108,7 +112,6 @@ export interface HostChannelStateSnapshot {
   readonly lastUserText: string
   readonly tokens: Readonly<Record<string, number>>
   readonly lastUsage?: Readonly<Record<string, number>>
-  readonly workingActivity?: Readonly<Record<string, unknown>>
   readonly activityFrames?: string
   readonly goal?: Readonly<Record<string, unknown>>
   readonly todos: readonly Readonly<Record<string, unknown>>[]
