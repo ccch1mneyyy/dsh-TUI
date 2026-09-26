@@ -24,6 +24,10 @@
  *      dashboard row;
  *   E. workflow members — `tool-workflow/agent-start|end` parent events drive
  *      member rows (they never emit subagent edges) and settle by outcome.
+ *   F. parked live session — restoring the same child run keeps its clock,
+ *      tools, clickable card and event link; a new run still resets them;
+ *   G. list labels — an in-flight child is not reported as archived when the
+ *      service activity lags, and an idle/unknown child is not mislabeled.
  *
  * Run: node --import tsx/esm scripts/verify-subagent-panel-sync.tsx
  */
@@ -39,9 +43,10 @@ process.env.HOME = isolatedHome
 process.env.USERPROFILE = isolatedHome
 mkdirSync(joinPath(isolatedHome, '.dsh-tui'), { recursive: true })
 
-const [{ Context }, { createChannel }, { settled, sleep }] = await Promise.all([
+const [{ Context }, { createChannel }, { createScope, scopeTarget }, { settled, sleep }] = await Promise.all([
   import('@deepseek-ai/cordis'),
   import('../src/dsh-adapter/channel.js'),
+  import('@deepseek-ai/dsh-scope'),
   import('./lib/term-test.mjs'),
 ])
 
@@ -51,7 +56,7 @@ function check(name: string, ok: boolean, extra = ''): void {
   if (!ok) failed += 1
 }
 
-interface FakeChild { session: { id: string; seq: number; events: unknown[]; header: Record<string, unknown> }; options?: { provider?: string; model?: string } }
+interface FakeChild { status?: string; session: { id: string; seq: number; events: unknown[]; header: Record<string, unknown> }; options?: { provider?: string; model?: string } }
 
 function makeHarness(seedEvents: unknown[] = [], warmRegistry?: (registry: Map<string, FakeChild>) => void) {
   const registry = new Map<string, FakeChild>()
@@ -73,14 +78,15 @@ function makeHarness(seedEvents: unknown[] = [], warmRegistry?: (registry: Map<s
     followup() {},
     steer() {},
     inbox: { remove() {} },
-  } as never
-  const channel = createChannel(ctx as never, parent, {
+  }
+  parent.ctx = createScope(ctx, parent).ctx
+  const channel = createChannel(ctx as never, parent as never, {
     model: 'model-00', cwd: '/tmp/demo', provider: 'fake-provider', activity: false,
   })
   const emit = (name: string, ...args: unknown[]) =>
-    (ctx as unknown as { emit(event: string, ...a: unknown[]): void }).emit(name, ...args)
+    (ctx as unknown as { emit(...args: unknown[]): void }).emit(scopeTarget({}, parent), name, ...args)
   return {
-    registry, channel, emit,
+    ctx, registry, channel, emit,
     parentEvent: (event: unknown) => emit('session/event', parentSession, event),
     childEvent: (child: FakeChild, event: unknown) => emit('session/event', child.session, event),
     row: (agentId: string) => channel.rows.find(r => r.kind === 'subagent' && r.subagent?.agentId === agentId)?.subagent,
@@ -90,6 +96,27 @@ function makeHarness(seedEvents: unknown[] = [], warmRegistry?: (registry: Map<s
 
 const catalog = (childId: string, label: string, at: number) =>
   ({ type: 'subagent/catalog', seq: 0, time: at, data: { version: 0, childId, childCreatedAt: at, mode: 'continuable', label } })
+
+// The list service's activity can lag the live agent registry. A value other
+// than `running` must not be presented as proof that a child was archived.
+{
+  const h = makeHarness([catalog('list-child', '列表任务', Date.now() - 60_000)], registry => {
+    registry.set('list-child', { status: 'running', session: { id: 'list-child', seq: 0, events: [], header: {} } })
+  })
+  ;(h.ctx as unknown as { provide(name: string, value: unknown): void }).provide('subagents', {
+    listChildren: async () => [{ id: 'list-child', mode: 'continuable', activity: 'archived' }],
+  })
+  const liveLine = (await h.channel.listSubagents())[0] ?? ''
+  check('G1 列表以当前运行投影为准，不把在跑的子代理写成已归档',
+    liveLine.includes('运行中') && !liveLine.includes('已归档'), liveLine)
+
+  const unknown = makeHarness([catalog('idle-child-list', '历史任务', Date.now() - 60_000)])
+  ;(unknown.ctx as unknown as { provide(name: string, value: unknown): void }).provide('subagents', {
+    listChildren: async () => [{ id: 'idle-child-list', mode: 'continuable', activity: 'idle' }],
+  })
+  const unknownLine = (await unknown.channel.listSubagents())[0] ?? ''
+  check('G2 未知或空闲状态不误报已归档', unknownLine.includes('状态未知'), unknownLine)
+}
 
 // ── A + B: live lifecycle — catalog birth, epoch reset, late-end immunity ──
 {
@@ -216,6 +243,264 @@ const catalog = (childId: string, label: string, at: number) =>
   h.parentEvent({ type: 'tool-workflow/agent-end', seq: 10, time: Date.now(), data: { runId: 'wr-2', seq: 3, outcome: 'cancelled' } })
   check('E3 agent-end 按成员 seq 落地（cancelled）', h.panel('wf-live')?.status === 'cancelled',
     `status=${String(h.panel('wf-live')?.status)}`)
+}
+
+// ── F: production Channel switches and real Cordis scoped delivery (#1019) ──
+function makeSwitchHarness() {
+  const ctx = new Context()
+  type TestAgent = ReturnType<typeof makeAgent>
+  const registry = new Map<string, TestAgent>()
+  const scopes: Array<ReturnType<typeof createScope>> = []
+  const emit = (subject: object, event: string, ...args: unknown[]) =>
+    (ctx as unknown as { emit(...args: unknown[]): void }).emit(scopeTarget({}, subject), event, ...args)
+  function makeAgent(id: string, parent?: { session: { id: string } }, registered = true) {
+    const agent = {
+      id, status: 'running', options: { provider: 'fake-provider', model: 'model-00' }, ctx,
+      session: { id, seq: 0, events: [] as unknown[], header: {
+        createdAt: Date.now(), cwd: '/tmp/demo',
+        ...(parent ? { origin: 'subagent', parentSession: parent.session.id } : {}),
+      } },
+      followup() {}, steer() {}, cancel() {}, whenIdle: async () => {}, inbox: { remove: () => true },
+    }
+    const scope = createScope(ctx, agent, parent ? { parent } : undefined)
+    scopes.push(scope)
+    agent.ctx = scope.ctx
+    if (registered) registry.set(id, agent)
+    return agent
+  }
+  const handle = (agent: TestAgent) => ({ agent, async dispose() {
+    registry.delete(agent.id)
+    agent.status = 'disposed'
+    emit(agent, 'agent/disposed', { agent })
+  } })
+  const a = makeAgent('switch-a')
+  const b = makeAgent('switch-b')
+  const disk = makeAgent('switch-disk', undefined, false)
+  ;(ctx as unknown as { provide(name: string, value: unknown): void }).provide('agents', {
+    get: (id: string) => registry.get(id), list: () => [...registry.values()],
+    create: async ({ sessionId }: { sessionId: string }) => handle(makeAgent(sessionId)),
+    resume: async ({ resumeSessionId }: { resumeSessionId: string }) => {
+      if (resumeSessionId !== disk.id) throw new Error('unexpected disk resume')
+      registry.set(disk.id, disk)
+      return handle(disk)
+    },
+  })
+  const channel = createChannel(ctx, a as never, {
+    model: 'model-00', provider: 'fake-provider', cwd: '/tmp/demo', activity: false, handle: handle(a) as never,
+  })
+  const event = (agent: TestAgent, input: { type: string; data: unknown; time?: number }) => {
+    const value = { time: Date.now(), ...input, seq: agent.session.seq++ }
+    agent.session.events.push(value)
+    emit(agent, 'session/event', agent.session, value)
+    return value
+  }
+  const start = (parent: TestAgent, id: string, runId: string, local = true) =>
+    emit(parent, 'subagent/start', { id, runId, provider: 'worker', local })
+  const end = (parent: TestAgent, id: string, runId: string) =>
+    emit(parent, 'subagent/end', { id, runId, stopReason: 'completed', lastAssistantMessage: [{ type: 'text', text: 'done' }] })
+  const child = (parent: TestAgent, id: string) => {
+    const result = makeAgent(id, parent)
+    event(parent, catalog(id, id, Date.now() - 65_000))
+    return result
+  }
+  const panel = (id: string) => channel.subagents.find(value => value.agentId === id)
+  const tool = (agent: TestAgent, id: string) => event(agent, { type: 'tool/call', data: { callId: id, name: 'Read', arguments: '{}' } })
+  const result = (agent: TestAgent, id: string) => event(agent, { type: 'tool/result', data: { message: { source: { callId: id }, content: [{ type: 'text', text: 'done' }] } } })
+  const frame = (agent: TestAgent, value: object) => emit(agent, 'agent/assistant-stream', { agent, frame: value })
+  return { ctx, a, b, disk, registry, makeAgent, channel, emit, event, start, end, child, panel, tool, result, frame,
+    async close() { channel.releaseContributions(); for (const scope of scopes) await scope.dispose() },
+  }
+}
+
+for (const route of ['background', 'live', 'disk'] as const) {
+  const h = makeSwitchHarness()
+  try {
+    const child = h.child(h.a, `same-${route}`)
+    const clock = Date.now
+    Date.now = () => clock() - 65_000
+    try { h.start(h.a, child.id, 'R1') } finally { Date.now = clock }
+    h.tool(child, 'before')
+    const startedAt = h.panel(child.id)?.startedAt
+    const switchResult = route === 'background' ? await h.channel.backgroundCurrent()
+      : await h.channel.attachToAgent(route === 'live' ? h.b.id : h.disk.id)
+    check(`F-${route}-1 实际切换成功且前台没有后台子卡`, switchResult.ok && h.channel.subagents.length === 0)
+    const rows = h.channel.rows
+    const version = h.channel.version
+    h.result(child, 'before')
+    h.tool(child, 'while-away')
+    h.result(child, 'while-away')
+    check(`F-${route}-2 后台工具事件不修改前台投影或version`, h.channel.rows === rows && h.channel.version === version && h.channel.subagents.length === 0)
+    check(`F-${route}-3 返回成功`, (await h.channel.attachToAgent(h.a.id)).ok)
+    check(`F-${route}-4 同run保留时钟及后台工具结算`, h.panel(child.id)?.startedAt === startedAt
+      && h.panel(child.id)?.runId === 'R1' && h.panel(child.id)?.toolCalls.length === 2
+      && h.panel(child.id)?.toolCalls.every(tool => tool.status === 'completed') === true)
+    check(`F-${route}-5 恢复一张对应仪表盘的卡片`, h.channel.rows.filter(row => row.kind === 'subagent' && row.subagent?.agentId === child.id).length === 1)
+    h.tool(child, 'after')
+    check(`F-${route}-6 恢复后事件仍更新同一子代理`, h.panel(child.id)?.toolCalls.length === 3)
+  } finally { await h.close() }
+}
+
+{
+  const h = makeSwitchHarness()
+  try {
+    const child = h.child(h.a, 'epochs')
+    h.start(h.a, child.id, 'R1')
+    h.tool(child, 'old-tool')
+    await h.channel.attachToAgent(h.b.id)
+    h.start(h.a, child.id, 'R2')
+    h.end(h.a, child.id, 'R1') // delayed old end must not settle the new epoch
+    h.tool(child, 'new-tool')
+    await h.channel.attachToAgent(h.a.id)
+    check('H1 后台新run覆盖R1且迟到end无效', h.panel(child.id)?.runId === 'R2' && h.panel(child.id)?.status === 'running'
+      && h.panel(child.id)?.toolCalls.length === 1 && h.panel(child.id)?.toolCalls[0]?.id === 'new-tool')
+    // Leave again via /bg so the second round is also parked with a handle.
+    await h.channel.backgroundCurrent()
+    h.result(child, 'new-tool')
+    child.status = 'idle'
+    h.end(h.a, child.id, 'R2')
+    await h.channel.attachToAgent(h.a.id)
+    check('H2 后台整轮完成不被恢复成running或unknown', h.panel(child.id)?.status === 'completed'
+      && h.panel(child.id)?.toolCalls[0]?.status === 'completed' && h.panel(child.id)?.summary === 'done')
+  } finally { await h.close() }
+}
+
+for (const settlementWhileAway of [false, true]) {
+  const h = makeSwitchHarness()
+  try {
+    const child = h.child(h.a, `stream-${settlementWhileAway}`)
+    h.start(h.a, child.id, 'R1')
+    h.frame(child, { type: 'start', revision: 1, attemptId: 'A1', turn: 1, step: 1 })
+    h.frame(child, { type: 'chunk', revision: 2, attemptId: 'A1', chunk: { type: 'text-delta', text: 'hello' } })
+    await h.channel.attachToAgent(h.b.id)
+    if (!settlementWhileAway) await h.channel.attachToAgent(h.a.id)
+    const message = h.event(child, { type: 'assistant/message', data: { turn: 1, step: 1, stream: [], message: { content: [{ type: 'text', text: 'hello world' }] } } })
+    h.emit(child, 'session/event', child.session, message)
+    h.frame(child, { type: 'end', revision: 3, attemptId: 'A1', outcome: { kind: 'committed', eventType: 'assistant/message', seq: message.seq } })
+    if (settlementWhileAway) await h.channel.attachToAgent(h.a.id)
+    check(`I1-${settlementWhileAway} 流式settlement及重复事件仅保留一次持久结果`, JSON.stringify(h.panel(child.id)?.output) === JSON.stringify(['hello world']))
+    h.frame(child, { type: 'start', revision: 4, attemptId: 'A2', turn: 1, step: 2 })
+    h.frame(child, { type: 'chunk', revision: 5, attemptId: 'A2', chunk: { type: 'text-delta', text: 'discard me' } })
+    await h.channel.backgroundCurrent()
+    h.event(child, { type: 'assistant/attempt', data: { turn: 1, step: 2, stream: [] } })
+    h.frame(child, { type: 'end', revision: 6, attemptId: 'A2', outcome: { kind: 'abandoned' } })
+    await h.channel.attachToAgent(h.a.id)
+    check(`I2-${settlementWhileAway} 后台撤销attempt不残留临时输出`, JSON.stringify(h.panel(child.id)?.output) === JSON.stringify(['hello world']))
+  } finally { await h.close() }
+}
+
+{
+  const h = makeSwitchHarness()
+  try {
+    const historical = h.child(h.a, 'workflow-reused')
+    h.event(h.a, { type: 'tool-workflow/agent-start', data: { childId: historical.id, runId: 'old-workflow', seq: 0 } })
+    h.event(h.a, { type: 'tool-workflow/agent-end', data: { runId: 'old-workflow', seq: 0, outcome: 'completed' } })
+    h.start(h.a, historical.id, 'fresh-run')
+    await h.channel.attachToAgent(h.b.id)
+    const version = h.channel.version
+    h.event(h.a, { type: 'tool/call', data: { callId: 'task', name: 'task', arguments: '{"description":"后台任务描述"}' } })
+    h.start(h.a, 'external', 'remote-run', false) // no registry entry or catalog
+    h.start(h.a, 'not-registered-yet', 'delayed-run')
+    h.start(h.b, 'foreground-external', 'front-run', false)
+    check('J1 两个真实父scope的外部子代理分离', h.channel.subagents.length === 1 && h.panel('foreground-external')?.runId === 'front-run' && h.panel('external') === undefined)
+    const afterForeground = h.channel.version
+    const late = h.child(h.a, 'late-background')
+    h.start(h.a, late.id, 'late-run')
+    h.tool(late, 'late-tool')
+    const workflow = h.makeAgent('new-workflow', h.a)
+    h.event(h.a, { type: 'tool-workflow/agent-start', data: { childId: workflow.id, runId: 'wf', seq: 0, label: '后台工作流' } })
+    h.event(h.a, { type: 'tool-workflow/agent-end', data: { runId: 'wf', seq: 0, outcome: 'failed' } })
+    const stranger = h.makeAgent('unviewed-peer')
+    h.start(stranger, 'unknown-external', 'stranger-run', false)
+    check('J2 后台新增child/workflow和未知peer不触发前台emit', h.channel.version === afterForeground && h.panel('late-background') === undefined && h.panel('unknown-external') === undefined && afterForeground > version)
+    await h.channel.attachToAgent(h.a.id)
+    check('J3 后台新增子代理/描述/工作流均恢复', h.panel('external')?.description === '后台任务描述'
+      && h.panel('not-registered-yet')?.runId === 'delayed-run'
+      && h.panel(late.id)?.toolCalls.length === 1 && h.panel(workflow.id)?.status === 'failed')
+    check('J4 历史workflow结算不覆盖新的实时run', h.panel(historical.id)?.runId === 'fresh-run' && h.panel(historical.id)?.status === 'running')
+    const completedAt = h.panel(workflow.id)?.completedAt
+    await h.channel.backgroundCurrent()
+    await h.channel.attachToAgent(h.a.id)
+    check('J5 多次恢复不会再次fold历史workflow', h.panel(workflow.id)?.completedAt === completedAt)
+  } finally { await h.close() }
+}
+
+{
+  const h = makeSwitchHarness()
+  try {
+    const child = h.child(h.a, 'viewed-child')
+    h.start(h.a, child.id, 'child-run')
+    h.tool(child, 'nested-tool')
+    await h.channel.attachToAgent(child.id)
+    h.start(child, 'nested-remote', 'nested-run', false)
+    check('K1 嵌套scope的外部子代理归直接父而非祖先', h.panel('nested-remote')?.runId === 'nested-run')
+    h.result(child, 'nested-tool')
+    h.frame(child, { type: 'start', revision: 1, attemptId: 'nested-attempt', turn: 1, step: 1 })
+    h.frame(child, { type: 'chunk', revision: 2, attemptId: 'nested-attempt', chunk: { type: 'text-delta', text: 'preview' } })
+    h.event(child, { type: 'assistant/message', data: { turn: 1, step: 1, stream: [], message: { content: [{ type: 'text', text: 'nested answer' }] } } })
+    await h.channel.attachToAgent(h.a.id)
+    check('K2 前台父/后台child双身份同时消费且不重复', h.panel(child.id)?.toolCalls[0]?.status === 'completed'
+      && JSON.stringify(h.panel(child.id)?.output) === JSON.stringify(['nested answer']) && h.panel('nested-remote') === undefined)
+  } finally { await h.close() }
+}
+
+{
+  const h = makeSwitchHarness()
+  const child = h.child(h.a, 'dispose-child')
+  h.start(h.a, child.id, 'R1')
+  await h.channel.backgroundCurrent()
+  h.emit(h.a, 'agent/disposed', { agent: h.a })
+  h.registry.delete(h.a.id)
+  const before = h.channel.version
+  h.start(h.a, 'post-dispose-remote', 'R2', false)
+  h.tool(child, 'post-dispose')
+  check('L1 已释放后台父的事件不流入前台', h.channel.version === before && h.channel.subagents.length === 0)
+  await h.close()
+  const disposedVersion = h.channel.version
+  h.start(h.b, 'after-owner-dispose', 'R3', false)
+  h.tool(child, 'after-owner-dispose')
+  check('L2 owner释放后订阅全部失效', h.channel.version === disposedVersion)
+}
+
+// A registry-attached child has no Channel-owned handle: its upstream parent
+// still owns its lifetime. Its own child reducer must survive a full round trip.
+for (const route of ['live', 'background', 'disk'] as const) {
+  const h = makeSwitchHarness()
+  try {
+    const child = h.child(h.a, `unowned-${route}`)
+    h.start(h.a, child.id, 'child-run')
+    await h.channel.attachToAgent(child.id)
+    const grandchild = h.child(child, `grandchild-${route}`)
+    h.start(child, grandchild.id, 'grandchild-run')
+    h.start(child, 'external-grandchild', 'external-run', false)
+    h.tool(grandchild, 'grandchild-tool')
+    const startedAt = h.panel(grandchild.id)?.startedAt
+    const result = route === 'background' ? await h.channel.backgroundCurrent()
+      : await h.channel.attachToAgent(route === 'disk' ? h.disk.id : h.a.id)
+    check(`M-${route}-1 无自有handle的子会话可以离开`, result.ok)
+    if (route !== 'live') await h.channel.attachToAgent(h.a.id)
+    h.result(grandchild, 'grandchild-tool')
+    h.end(child, 'external-grandchild', 'external-run')
+    await h.channel.attachToAgent(child.id)
+    check(`M-${route}-2 完整A→子→离开→A→子保留孙任务及后台结算`,
+      h.panel(grandchild.id)?.runId === 'grandchild-run'
+      && h.panel(grandchild.id)?.startedAt === startedAt
+      && h.panel(grandchild.id)?.toolCalls[0]?.status === 'completed'
+      && h.panel('external-grandchild')?.status === 'completed')
+  } finally { await h.close() }
+}
+
+{
+  const h = makeSwitchHarness()
+  try {
+    const unviewedChild = h.child(h.a, 'never-viewed')
+    h.start(h.a, unviewedChild.id, 'child-run')
+    const version = h.channel.version
+    h.start(unviewedChild, 'unviewed-external-grandchild', 'external-run', false)
+    h.end(unviewedChild, 'unviewed-external-grandchild', 'external-run')
+    check('N1 从未查看子会话的外部孙任务不能被唯一祖先scope认领',
+      h.channel.subagents.length === 1 && h.panel('unviewed-external-grandchild') === undefined
+      && h.channel.version === version)
+  } finally { await h.close() }
 }
 
 console.log(failed === 0 ? '\nALL PASS' : `\n${failed} 项失败`)

@@ -198,7 +198,7 @@ for (const label of ['ctx lookup throws', 'agents.get throws']) {
       async abandon(handle) { await handle.dispose() },
       adopt() { throw new Error('must not adopt revoked candidate') },
     } as never,
-    backgroundHandles: new Map(), rowIds: { value: 0 }, resetProjector() {}, resetSubagents() {}, resetJobs() {},
+    backgroundHandles: new Map(), rowIds: { value: 0 }, resetProjector() {}, resetSubagents() {}, parkSubagents() {}, resetJobs() {},
     refreshEffortLevels() {}, bindAgent() {}, refreshCommands() {}, async refreshLoadedContext() {}, async refreshSkillCommands() {},
     clearStagedImages() {}, notifySessionSwitched() {}, notify() {}, notifyAgentView() {},
   })

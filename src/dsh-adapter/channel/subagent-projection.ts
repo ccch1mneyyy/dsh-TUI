@@ -2,6 +2,115 @@ import type { Agent, AssistantStreamFrame } from '@deepseek-ai/dsh-agent'
 import { markChannelReadDirty } from '../../adapter/channel/read-view.js'
 import { SubagentActivityStore, type SubagentState } from '../subagents.js'
 import type { ChannelState, ChatRow, SubagentControl, SubagentRow } from './types.js'
+import { isSubagentToolName } from './projection-helpers.js'
+
+type ProjectionState = Pick<ChannelState, 'rows' | 'subagents' | 'emit' | 'emitStream'>
+interface ProjectionDependencies {
+  rowIds: { value: number }
+  agent(): Agent
+  subagents(): { interrupt?(target: string, reason: unknown): void } | undefined
+  /** Optional child metadata lookup; failures must not suppress spawning. */
+  lookupChild(id: string): { status?: string; session?: unknown; options?: { provider?: string; model?: string } } | undefined
+}
+
+/**
+ * Keep each parked parent's reducer alive, including session links and the
+ * stream attempt/settlement cursor. A display snapshot cannot resume either
+ * a run epoch or an in-flight assistant attempt faithfully.
+ */
+export function createSubagentProjection(getState: () => ProjectionState, deps: ProjectionDependencies) {
+  type Projection = ReturnType<typeof createSessionSubagentProjection>
+  const parked = new Map<Agent, Projection>()
+  const hidden: ProjectionState = { rows: [], subagents: [], emit() {}, emitStream() {} }
+  const make = (): Projection => {
+    const projection = createSessionSubagentProjection(
+      () => active === projection ? getState() : hidden,
+      { ...deps, visible: () => active === projection },
+    )
+    return projection
+  }
+  let active = make()
+  let activeParent = deps.agent()
+  let restored = false
+
+  const childProjection = (id: string, parent?: object | null): Projection | undefined => {
+    // A lifecycle carrier names the DIRECT delegating parent. Its visibility
+    // filter also admits ancestors, which is not evidence of ownership.
+    if (parent != null) return parent === activeParent ? active : parked.get(parent as Agent)
+    for (const projection of parked.values()) if (projection.store.has(id)) return projection
+    if (active.store.has(id)) return active
+    // Legacy unkeyed delivery can still resolve a child through established
+    // catalog membership or the registry's durable parent-session lineage.
+    let session: unknown
+    try { session = deps.lookupChild(id)?.session } catch { /* discovery may arrive later */ }
+    const parentId = (session as { header?: { parentSession?: unknown } } | undefined)?.header?.parentSession
+    if (typeof parentId === 'string') {
+      for (const [parentAgent, projection] of parked) if (String(parentAgent.session.id) === parentId) return projection
+      return String(activeParent.session.id) === parentId ? active : undefined
+    }
+    // Omitted parent is only for direct callers that already scope events.
+    // Transport passes null for an unkeyed event; never guess its ownership.
+    return parent === undefined ? active : undefined
+  }
+  const park = (agent: Agent): void => {
+    active.dropRows()
+    parked.set(agent, active)
+  }
+  const restore = (agent: Agent): void => {
+    const previous = parked.get(agent)
+    if (previous === undefined) return
+    parked.delete(agent)
+    active = previous
+    activeParent = agent
+    restored = true
+    for (const saved of active.store.snapshot()) {
+      if (saved.status !== 'running' && saved.status !== 'starting') continue
+      let child: ReturnType<typeof deps.lookupChild>
+      try { child = deps.lookupChild(saved.agentId) } catch { continue }
+      if (child !== undefined && child.status !== 'running') active.store.patch(saved.agentId, { status: 'unknown' })
+    }
+  }
+  return {
+    get store() { return active.store },
+    get pendingTaskDescriptions() { return active.pendingTaskDescriptions },
+    control: { interrupt: (id: string) => active.control.interrupt(id) },
+    onSessionEvent(session: unknown, event: { type?: string }): boolean {
+      let handled = false
+      if (session === activeParent.session) {
+        active.onParentEvent(event)
+        handled = true
+      }
+      for (const [parent, projection] of parked) {
+        if (session === parent.session) {
+          projection.onParentEvent(event)
+          handled = true
+        }
+        if (projection.onSessionEvent(session, event)) handled = true
+      }
+      return active.onSessionEvent(session, event) || handled
+    },
+    onStreamFrame(agent: unknown, frame: AssistantStreamFrame): boolean {
+      for (const projection of parked.values()) if (projection.onStreamFrame(agent, frame)) return true
+      return active.onStreamFrame(agent, frame)
+    },
+    onStart(info: Parameters<Projection['onStart']>[0], parent?: object | null) { childProjection(info.id, parent)?.onStart(info) },
+    onEnd(info: Parameters<Projection['onEnd']>[0], parent?: object | null) { childProjection(info.id, parent)?.onEnd(info) },
+    onParentEvent: (event: unknown) => active.onParentEvent(event),
+    bootstrapFromLog(events: readonly unknown[]) {
+      // Live parked reducers already consumed this log. Re-folding historical
+      // workflow edges would overwrite the current epoch and its settlement.
+      if (!restored) active.bootstrapFromLog(events)
+      else active.syncNow()
+    },
+    syncNow: () => active.syncNow(),
+    flush: () => active.flush(),
+    dropRows: () => active.dropRows(),
+    park, restore,
+    forget(agent: Agent) { parked.delete(agent) },
+    dispose() { parked.clear(); active.store.reset(); active.dropRows(); active.pendingTaskDescriptions.length = 0 },
+    reset() { active = make(); activeParent = deps.agent(); restored = false; getState().subagents = [] },
+  }
+}
 
 /** Current-session subagent store, row projection and frame-batched stream
  * bridge. The owning channel installs transport subscriptions; this module
@@ -22,15 +131,9 @@ import type { ChannelState, ChatRow, SubagentControl, SubagentRow } from './type
  * Transcript cards are gated to children discovered while LIVE: a resumed
  * session's historical children appear in the dashboard without flooding the
  * replayed transcript with cards that the durable log never contained. */
-export function createSubagentProjection(
-  getState: () => Pick<ChannelState, 'rows' | 'subagents' | 'emit' | 'emitStream'>,
-  deps: {
-    rowIds: { value: number }
-    agent(): Agent
-    subagents(): { interrupt?(target: string, reason: unknown): void } | undefined
-    /** Optional child metadata lookup; failures must not suppress spawning. */
-    lookupChild(id: string): { status?: string; session?: unknown; options?: { provider?: string; model?: string } } | undefined
-  },
+function createSessionSubagentProjection(
+  getState: () => ProjectionState,
+  deps: ProjectionDependencies & { visible(): boolean },
 ) {
   const store = new SubagentActivityStore()
   const rowsByAgentId = new Map<string, ChatRow>()
@@ -68,6 +171,7 @@ export function createSubagentProjection(
   }
   const syncNow = (): void => {
     streamDirty = false
+    if (!deps.visible()) return
     const snapshot = store.snapshot()
     getState().subagents = snapshot
     syncRows(snapshot)
@@ -158,10 +262,18 @@ export function createSubagentProjection(
   /** Parent-session durable discovery events, live or folded from the log. */
   const onParentEvent = (event: unknown, historical = false): void => {
     if (!event || typeof event !== 'object') return
-    const ev = event as { type?: string; data?: { childId?: unknown; childCreatedAt?: unknown; label?: unknown; runId?: unknown; seq?: unknown; outcome?: unknown } }
+    const ev = event as { type?: string; data?: { childId?: unknown; childCreatedAt?: unknown; label?: unknown; runId?: unknown; seq?: unknown; outcome?: unknown; name?: unknown; arguments?: unknown } }
     const data = ev.data ?? {}
     const childId = typeof data.childId === 'string' ? data.childId : undefined
-    if (ev.type === 'subagent/catalog') {
+    if (ev.type === 'tool/call') {
+      if (!historical && typeof data.name === 'string' && isSubagentToolName(data.name) && typeof data.arguments === 'string') {
+        try {
+          const args = JSON.parse(data.arguments) as { description?: unknown }
+          if (typeof args.description === 'string' && args.description) pendingTaskDescriptions.push(args.description)
+        } catch { /* malformed arguments do not describe a child */ }
+      }
+      return
+    } else if (ev.type === 'subagent/catalog') {
       if (childId === undefined) return
       discover(childId, {
         label: typeof data.label === 'string' ? data.label : undefined,

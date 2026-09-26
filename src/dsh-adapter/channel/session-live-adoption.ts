@@ -39,6 +39,8 @@ export function createLiveAgentAdoption(
     rowIds: { value: number }
     resetProjector(): void
     resetSubagents(): void
+    restoreSubagents(agent: Agent): void
+    parkSubagents(agent: Agent): void
     resetJobs(): void
     replay(events: readonly import('@deepseek-ai/dsh-session').SessionEvent[]): void
     settleReplay(): void
@@ -62,8 +64,16 @@ export function createLiveAgentAdoption(
     (committed, disposePrevious) => {
       const previousHandle = committed.handle
       const previousSessionId = String(committed.agent.session.id)
+      const keepPrevious = previousHandle !== undefined
+        && previousHandle.agent !== target
+        && (previousHandle.agent.status === 'running' || agentViewHasTurns(snapshotLiveSessionEvents(previousHandle.agent.session)))
+      // Registry attachment borrows an Agent without taking its upstream
+      // handle. Leaving that view must retain its projection independently
+      // of whether this channel can transfer or dispose the handle.
+      if (committed.agent !== target && (previousHandle === undefined || keepPrevious)) deps.parkSubagents(committed.agent)
       deps.backgroundHandles.delete(String(target.id))
       resetSessionProjection(state, deps.rowIds, deps.resetProjector, deps.resetSubagents, deps.resetJobs)
+      deps.restoreSubagents(target)
       state.status = target.status
       state.agentId = target.id
       state.cwd = target.session.header.cwd ?? state.cwd
@@ -95,9 +105,6 @@ export function createLiveAgentAdoption(
       writeResumeTarget(String(target.id))
       touchSession(target.id)
       state.emit()
-      const keepPrevious = previousHandle !== undefined
-        && previousHandle.agent !== target
-        && (previousHandle.agent.status === 'running' || agentViewHasTurns(snapshotLiveSessionEvents(previousHandle.agent.session)))
       if (previousHandle !== undefined && previousHandle.agent !== target) {
         if (keepPrevious) {
           deps.backgroundHandles.set(previousSessionId, previousHandle)

@@ -1,5 +1,6 @@
-import type { AssistantStreamFrame, ModelSelectionRef } from '@deepseek-ai/dsh-agent'
+import type { Agent, AssistantStreamFrame, ModelSelectionRef } from '@deepseek-ai/dsh-agent'
 import type { Context } from '@deepseek-ai/cordis'
+import { carrierKeyOf } from '@deepseek-ai/dsh-scope'
 import type { InputConvergence } from './input-actions.js'
 import type { ChannelBinding } from './binding.js'
 import type { ChannelOwner } from './owner.js'
@@ -7,11 +8,10 @@ import { type createChannelProjection } from './projection.js'
 import type { ChannelState } from './types.js'
 
 /**
- * The binding event router is the sole subscriber for a foreground Agent.
- * It captures the binding generation at every listener entry; teardown is
- * incremental and retained callbacks check that captured Agent/session pair
- * before touching state. Transcript presentation remains exclusively owned by
- * ChannelProjection.
+ * Foreground transcript listeners capture a binding generation. Child event
+ * listeners instead span the Channel owner, keeping parked reducers current
+ * across rebinds. Both paths own registrations incrementally and fence retained
+ * callbacks; only ChannelProjection presents the foreground transcript.
  */
 export function createBindingEvents(ctx: Context, deps: {
   owner: ChannelOwner
@@ -28,7 +28,13 @@ export function createBindingEvents(ctx: Context, deps: {
   modelActions: { applyPreferredEffort(): Promise<void>; selection: ModelSelectionRef }
   modeActions: { refreshMode(): void; onSessionEvent(session: unknown, event: unknown): void }
   projector: ReturnType<typeof createChannelProjection>
-  subagents: { onSessionEvent(session: unknown, event: unknown): boolean; onStreamFrame?(agent: unknown, frame: AssistantStreamFrame): boolean; onParentEvent?(event: unknown): void; onStart(info: { id: string; runId?: string; provider: string; local?: boolean }): void; onEnd(info: { id: string; runId?: string; stopReason: string; lastAssistantMessage?: unknown[] }): void }
+  subagents: {
+    onSessionEvent(session: unknown, event: unknown): boolean
+    onStreamFrame?(agent: unknown, frame: AssistantStreamFrame): boolean
+    onStart(info: { id: string; runId?: string; provider: string; local?: boolean }, parent: object | null): void
+    onEnd(info: { id: string; runId?: string; stopReason: string; lastAssistantMessage?: unknown[] }, parent: object | null): void
+    forget?(agent: Agent): void
+  }
   agentView: { schedule(): void }
   messageObserver?: { publish(session: unknown, event: unknown): void }
   /** Drop a pre-step attachment registered by this channel for one message id
@@ -37,6 +43,31 @@ export function createBindingEvents(ctx: Context, deps: {
    *  channel.ts always wires it. */
   retireAttachment?(messageId: string): void
 }) {
+  let subagentsInstalled = false
+  const installSubagents = (): void => {
+    if (subagentsInstalled) return
+    subagentsInstalled = true
+    // Child reducers span foreground bindings. One owner subscription keeps
+    // parked stores current; only the active reducer publishes view changes.
+    deps.owner.own(ctx.on('session/event', (session, event) => {
+      if (deps.owner.current()) deps.subagents.onSessionEvent(session, event)
+    }))
+    deps.owner.own(ctx.on('agent/assistant-stream', ({ agent, frame }) => {
+      if (deps.owner.current()) deps.subagents.onStreamFrame?.(agent, frame)
+    }))
+    // Cordis binds the dispatch receiver as `this`. The upstream carrier
+    // names the direct delegating parent, even for external children absent
+    // from agents.get(); its ancestor-inclusive filter cannot identify it.
+    deps.owner.own(ctx.on('subagent/start' as never, (function (this: unknown, info: Parameters<typeof deps.subagents.onStart>[0]) {
+      if (deps.owner.current()) deps.subagents.onStart(info, carrierKeyOf(this) ?? null)
+    }) as never))
+    deps.owner.own(ctx.on('subagent/end' as never, (function (this: unknown, info: Parameters<typeof deps.subagents.onEnd>[0]) {
+      if (deps.owner.current()) deps.subagents.onEnd(info, carrierKeyOf(this) ?? null)
+    }) as never))
+    deps.owner.own(ctx.on('agent/disposed', ({ agent }) => {
+      if (deps.owner.current()) deps.subagents.forget?.(agent)
+    }))
+  }
   const reconcileRetiredProjection = (status: 'idle' | 'disposed'): void => {
     if (!deps.state.working) return
     ctx.logger.warn(`dsh-tui: agent became ${status} while the channel still projected an open turn; releasing volatile UI gates`)
@@ -51,6 +82,7 @@ export function createBindingEvents(ctx: Context, deps: {
   const bind = (): void => {
     try {
       deps.state.agentBindingGeneration = deps.binding.bind()
+      installSubagents()
       deps.inputConvergence.cancelInFlight = false
       deps.inputConvergence.interruptSeq += 1
       deps.activity.start(deps.binding.agent)
@@ -140,13 +172,8 @@ export function createBindingEvents(ctx: Context, deps: {
       on('session/event', (subject, event) => {
         if (!current()) return
         const isMainSession = subject === session
-        if (!isMainSession && deps.subagents.onSessionEvent(subject, event)) return
         if (!isMainSession) return
         deps.messageObserver?.publish(subject, event)
-        // Parent-log discovery events (`subagent/catalog`, workflow member
-        // edges) reach the dashboard through the same firehose; they are not
-        // transcript rows and render below remains untouched by them.
-        deps.subagents.onParentEvent?.(event)
         deps.activity.onSessionEvent(event)
         deps.modeActions.onSessionEvent(subject, event)
         deps.projector.renderEvent(event)
@@ -160,19 +187,10 @@ export function createBindingEvents(ctx: Context, deps: {
       // `assistant/chunk` session events.
       on('agent/assistant-stream', ({ agent: subject, frame }) => {
         if (!current()) return
-        if (subject !== capture.agent) {
-          deps.subagents.onStreamFrame?.(subject, frame)
-          return
-        }
+        if (subject !== capture.agent) return
         deps.projector.renderStreamFrame(frame)
         if (frame.type === 'chunk') deps.state.emitStream()
         else if (frame.type === 'end') deps.state.emit()
-      })
-      on('subagent/start' as never, (info: { id: string; runId?: string; provider: string; local?: boolean }) => {
-        if (current()) deps.subagents.onStart(info)
-      })
-      on('subagent/end' as never, (info: { id: string; stopReason: string; lastAssistantMessage?: unknown[] }) => {
-        if (current()) deps.subagents.onEnd(info)
       })
     } catch (error) {
       deps.owner.dispose()

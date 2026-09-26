@@ -24,7 +24,6 @@ interface ProjectionDependencies {
  agent(): Agent
  rowIds: { value: number }
  resetContextWarning(): void
- pendingTaskDescriptions: string[]
  jobs: Pick<BackgroundJobStore, 'onOutputSeen' | 'onStarted'>
  inputConvergence: Pick<InputConvergence, 'cancelInFlight'>
  checkContextWarning(): void
@@ -757,13 +756,8 @@ export function createChannelProjection(state: ProjectionState, deps: Projection
         // row, so the raw args/result card would only duplicate it. The call
         // still runs - only its transcript rendering is suppressed.
         if (isSubagentToolName(event.data.name)) {
-          try {
-            const args = JSON.parse(event.data.arguments) as { description?: unknown }
-            if (typeof args.description === 'string' && args.description) deps.pendingTaskDescriptions.push(args.description)
-          } catch {
-            // Unparseable args leave the queue untouched; the card falls back
-            // to the provider label.
-          }
+          // The parent-scoped subagent reducer owns pending descriptions,
+          // including delegations made while this transcript is parked.
           break
         }
         // Reasoning that led to a tool call is done thinking — fold the

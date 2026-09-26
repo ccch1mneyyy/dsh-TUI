@@ -199,7 +199,7 @@ const dict = {
   'subagent-oneshot': { zh: '一次性', en: 'one-shot' },
   'subagent-row': { zh: '{{mode}} {{label}}{{activity}} · {{id}}', en: '{{mode}} {{label}}{{activity}} · {{id}}' },
   'subagent-running': { zh: ' 运行中', en: ' running' },
-  'subagent-archived': { zh: ' 已归档', en: ' archived' },
+  'subagent-unknown': { zh: ' 状态未知', en: ' status unknown' },
   'subagent-query-failed': { zh: '查询失败 · {{err}}', en: 'Query failed · {{err}}' },
   'subagent-tools': { zh: '工具', en: 'Tools' },
   'subagent-status-running': { zh: '运行中', en: 'running' },

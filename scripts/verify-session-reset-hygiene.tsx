@@ -89,9 +89,10 @@ const subagentRows = (channel: { rows: Array<{ kind: string }> }) => channel.row
   const emit = (event: string, ...args: unknown[]) =>
     (ctx as unknown as { emit(event: string, ...args: unknown[]): void }).emit(event, ...args)
   const initial = makeAgent('agent-a', 'sess-a')
+  let current = initial
   provide('agents', {
-    get: (id: string) => (id === 'sub-1' ? { session: { id: 'child-sess' }, options: {} } : undefined),
-    create: () => Promise.resolve(makeHandle(makeAgent('agent-b', 'sess-b'))),
+    get: (id: string) => (id === 'sub-1' || id === 'sub-2' ? { session: { id, header: { parentSession: current.session.id, origin: 'subagent' } }, options: {} } : undefined),
+    create: () => { current = makeAgent('agent-b', 'sess-b'); return Promise.resolve(makeHandle(current)) },
   })
   const channel = createChannel(ctx as never, initial as never, {
     model: 'm0', cwd: '/tmp/demo', provider: 'p0', activity: false,
@@ -138,7 +139,7 @@ const subagentRows = (channel: { rows: Array<{ kind: string }> }) => channel.row
   const emit = (event: string, ...args: unknown[]) =>
     (ctx as unknown as { emit(event: string, ...args: unknown[]): void }).emit(event, ...args)
   const initial = makeAgent('agent-c', 'sess-c')
-  const childSession = { id: 'child-c' }
+  const childSession = { id: 'child-c', header: { parentSession: 'sess-c', origin: 'subagent' } }
   provide('agents', {
     get: (id: string) => (id === 'sub-c' ? { session: childSession, options: {} } : undefined),
   })
