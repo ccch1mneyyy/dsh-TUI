@@ -14,10 +14,9 @@ export function isMod(key: { ctrl?: boolean; super?: boolean }): boolean {
 }
 
 /**
- * Display prefix for shortcut labels: "ctrl+" on every platform. Pair with
- * the bare key, e.g. `${modLabel}o`. Cmd stays a matching-only alias on
- * macOS (see isMod): it reaches the app only on extended-keys terminals, so
- * Terminal.app, VS Code's terminal and SSH would show a dead ⌘ hint (#640).
+ * Display prefix for shortcut labels: "ctrl+" everywhere, e.g.
+ * `${modLabel}o`. Cmd is only a macOS matching alias (see isMod); most
+ * terminals never deliver it, so a ⌘ hint would be dead (#640).
  */
 export const modLabel = 'ctrl+'
 
