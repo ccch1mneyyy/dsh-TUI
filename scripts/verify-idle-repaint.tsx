@@ -38,7 +38,7 @@ const [
   { Chat },
   { QuestionStore },
   { render },
-  { sleep },
+  { sleep, viewportLines },
 ] = await Promise.all([
   import('node:stream'),
   import('react'),
@@ -61,6 +61,9 @@ const term = new XTerm({ cols: COLS, rows: ROWS, scrollback: 20000, allowPropose
 
 let frames = 0
 let newlines = 0
+// 窗口内「内容不同」的写入数：只数写入次数的话，画一帧就卡死的界面也能过。
+const distinctWrites = new Set<string>()
+let distinctCount = 0
 class FakeStdout extends Writable {
   columns = COLS
   rows = ROWS
@@ -68,6 +71,10 @@ class FakeStdout extends Writable {
   _write(chunk: unknown, _e: BufferEncoding, cb: () => void) {
     const s = String(chunk)
     frames += 1
+    if (!distinctWrites.has(s)) {
+      distinctWrites.add(s)
+      distinctCount += 1
+    }
     newlines += (s.match(/\n/g) ?? []).length
     term.write(s, () => cb())
   }
@@ -141,6 +148,8 @@ await sleep(SETTLE_MS)
 // 固定窗:pacing 计数窗口从这里开始。
 frames = 0
 newlines = 0
+distinctWrites.clear()
+distinctCount = 0
 const startBaseY = term.buffer.active.baseY
 // 固定窗:墙钟 观察窗本身就是被测语义：一段无输入的静置时间里终端收到了什么。
 // 空转重绘不会停止（鲸鱼闲置动画本来就该继续动），因此没有「等到静止」这个
@@ -154,10 +163,18 @@ check('静置窗口内没有下泄换行', newlines === 0, `LF=${newlines} (${(n
 check('终端回滚缓冲没有增长', baseYGrowth === 0, `+${baseYGrowth} rows`)
 // The UI itself must still be alive: the whale idle planner repaints a few
 // frames per second. A frozen terminal would also score 0 LF, so this check
-// is what keeps the assertion honest.
-check('鲸鱼闲置动画仍在重绘（没有靠冻结界面取巧）', frames > 0, `frames=${frames} (${(frames / seconds).toFixed(1)}/s)`)
+// is what keeps the assertion honest — and it must count writes with DIFFERENT
+// content: a UI that painted once and then froze also has frames > 0.
+check(
+  '鲸鱼闲置动画仍在重绘（没有靠冻结界面取巧）',
+  distinctCount > 1,
+  `frames=${frames} (${(frames / seconds).toFixed(1)}/s), distinct=${distinctCount}`,
+)
 
-const screen = Array.from({ length: ROWS }, (_, y) => term.buffer.active.getLine(y)?.translateToString(true) ?? '').join('\n')
+// 从视口（baseY）读屏，不是从缓冲区首行：inline 模式开场绘制可能已把行推进
+// scrollback，直扫 getLine(0..) 读到的是滚出去的历史画面（见 lib/term-test.mjs
+// 的 viewportLines 说明）。
+const screen = viewportLines(term).join('\n')
 check('静置后的界面仍然完整', screen.includes('DEEPSEEK') || screen.includes('HARNESS') || screen.trim().length > 50, `bytes=${screen.length}`)
 
 console.log(failed === 0 ? '\nALL PASS' : `\n${failed} 项失败`)
