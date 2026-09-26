@@ -2185,7 +2185,11 @@ export function Chat({
             stdio: ['ignore', 'pipe', 'pipe'],
           })
           let out = ''
+          const { cleanRenderText } = await import('../dsh-adapter/sanitize.js')
           const collect = (chunk: Buffer): void => {
+            // Sanitize per line at render time: the child prints
+            // already-cleaned text, but an older/newer CLI copy on the other
+            // side of the bin is out of this build's control (deep-review M2).
             out += chunk.toString('utf8')
             // Bound the transcript row: the CLI's own output is per-run
             // counters, but keep a sane cap so a pathological child cannot
@@ -2196,7 +2200,7 @@ export function Chat({
           child.stderr?.on('data', collect)
           child.on('error', () => channel.notify(t('migrate-spawn-failed'), { color: 'error', timeoutMs: 8000 }))
           child.on('close', code => {
-            const lines = out.split('\n').map(line => line.trimEnd()).filter(Boolean)
+            const lines = out.split('\n').map(line => cleanRenderText(line, 400)).filter(Boolean)
             channel.pushLocal('/migrate', lines.length > 0 ? lines : [t('migrate-done')])
             channel.notify(
               code === 0 ? t('migrate-done') : t('migrate-failed', { code: code ?? -1 }),
