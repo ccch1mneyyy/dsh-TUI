@@ -8,6 +8,7 @@ The root README lists what ships; the details live here. Chinese files have no s
 | 文档 / Doc | 中文 | English | 讲什么 / What it covers |
 | --- | --- | --- | --- |
 | 安装与快速开始 / Install & run | [getting-started.md](getting-started.md) | [getting-started.en.md](getting-started.en.md) | 从安装、启动到排障。 |
+| 会话迁移 / Session migration | [migrate.md](migrate.md) | [migrate.en.md](migrate.en.md) | 从 Claude Code / Codex / OMP / zcode / Grok Build 导入对话历史。 |
 | VS Code | [vscode.md](vscode.md) | [vscode.en.md](vscode.en.md) | 在 VS Code 里跑，配合扩展与 IDE 选区。 |
 
 ## 日常使用 / Using it
