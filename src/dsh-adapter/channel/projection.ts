@@ -18,6 +18,11 @@ import { logForDebugging } from '../../utils/debug.js'
 import { cleanRenderText } from '../sanitize.js'
 import { NOTICE_CELLS } from './decisions.js'
 import { markChannelReadDirty } from '../../adapter/channel/read-view.js'
+import {
+  buildQuestionRecord,
+  parseQuestionRecordAnswers,
+  parseQuestionRecordQuestions,
+} from './question-record.js'
 
 type ProjectionState = Pick<ChannelState, 'rows' | 'thinkingFold' | 'activeToolCount' | 'spinnerMode' | 'goal' | 'contextSegments' | 'tokens' | 'lastUsage' | 'lastUserText' | 'responseChars' | 'tps' | 'cancelPending' | 'working' | 'turnStart' | 'tpsSamples' | 'contextWindow' | 'reasoningEffort' | 'sessionTitle' | 'todos' | 'agentPreset' | 'sessionColor' | 'status' | 'emit'>
 interface ProjectionDependencies {
@@ -69,6 +74,15 @@ export function createChannelProjection(state: ProjectionState, deps: Projection
     | undefined
   /** Tool cards by callId, so tool/result can settle the running card. */
   const toolCards = new Map<string, ChatRow>()
+  /**
+   * `ask_user_question` calls by callId, holding their raw arguments. The ask
+   * renders as the interactive panel rather than a tool card, so its result
+   * has no card to settle — but the answered record is still a transcript
+   * fact and must come from the durable log (issue #1009), never from the
+   * view. Remembering the call lets `tool/result` derive that record on the
+   * live stream AND on every replay (`/resume`, rewind, model switch).
+   */
+  const askCalls = new Map<string, string>()
   /**
    * Session events are delivered live and can also be replayed around a
    * reconnect. A repeated sealed message must not create a second assistant
@@ -296,6 +310,41 @@ export function createChannelProjection(state: ProjectionState, deps: Projection
     }
     reasoning = undefined
     if (folded > 0) logForDebugging(`thinking: folded ${folded} reasoning row(s) at turn settle`)
+  }
+
+  /**
+   * Project one answered `ask_user_question` result into the transcript.
+   *
+   * The row shape reuses what `pushLocal` emits (`local` title + one
+   * `local-output` per line), so rendering, preview clipping and the local
+   * rows' fold exemption all keep their existing behavior. A failed ask
+   * renders the log's own error text — never a fabricated answer (the ask
+   * was cancelled/aborted, so no human ever chose anything).
+   */
+  const projectAskResult = (event: SessionEvent<'tool/result'>, rawArguments: string): void => {
+    const append = (record: { title: string; lines: readonly string[] }): void => {
+      appendRow({ id: deps.rowIds.value, kind: 'local', text: record.title, seq: event.seq })
+      deps.rowIds.value += 1
+      for (const line of record.lines) {
+        appendRow({
+          id: deps.rowIds.value,
+          kind: 'local-output',
+          text: preview(line, LOCAL_OUTPUT_LIMIT),
+          seq: event.seq,
+        })
+        deps.rowIds.value += 1
+      }
+    }
+    if (event.data.error !== undefined || toolResultPayload(event.data.message).isError) {
+      const errorText = toolErrorText(event)
+      append({ title: errorText, lines: [] })
+      return
+    }
+    const answers = parseQuestionRecordAnswers(textOf(toolResultPayload(event.data.message).content))
+    // No parseable answers (unparseable durable payload, or an older host):
+    // `answers: []` still yields the title, so the transcript shows that a
+    // questionnaire happened instead of dropping the fact silently.
+    append(buildQuestionRecord(parseQuestionRecordQuestions(rawArguments), answers ?? []))
   }
 
   /** Recompute the spinner phase from live row/tool state. */
@@ -748,10 +797,14 @@ export function createChannelProjection(state: ProjectionState, deps: Projection
         // The ask-user-question tool renders as the interactive questionnaire
         // panel (DSH user-interaction seam), not as a tool card: the model is
         // parked waiting for the human, so no running card, no active-tool
-        // spinner, no args noise in the transcript. The Q&A summary is pushed
-        // by the TUI once the batch is answered; tool/result for a call with
-        // no card is a no-op below.
-        if (event.data.name === 'ask_user_question') break
+        // spinner, no args noise in the transcript. Only the ARGUMENTS are
+        // remembered: the paired tool/result below projects the answered
+        // record from them (issue #1009), so `/resume`, rewind and replay
+        // rebuild it from the persisted log like every other transcript row.
+        if (event.data.name === 'ask_user_question') {
+          askCalls.set(event.data.callId, event.data.arguments)
+          break
+        }
         // The Task tool's plain card is replaced by the live subagent card
         // (Kimi Code semantics): the delegation itself renders as a subagent
         // row, so the raw args/result card would only duplicate it. The call
@@ -799,7 +852,19 @@ export function createChannelProjection(state: ProjectionState, deps: Projection
         break
       }
       case 'tool/result': {
-        const card = toolCards.get(event.data.message.source.callId)
+        const callId = event.data.message.source.callId
+        const card = toolCards.get(callId)
+        const askArguments = askCalls.get(callId)
+        // A call with no card is usually an ask_user_question (above) — its
+        // interaction lives in the panel, but its OUTCOME still belongs in
+        // the transcript. Project it from the durable log here: consumed
+        // before the card branch so the two can never both fire, and deleted
+        // so a repeated replay of the same result cannot double the record.
+        if (card === undefined && askArguments !== undefined) {
+          projectAskResult(event, askArguments)
+          askCalls.delete(callId)
+          break
+        }
         if (card !== undefined && card.tool !== undefined) {
           const images = transcriptImages(event.data.message.content)
           card.images = images.length === 0 ? undefined : images
@@ -1054,6 +1119,7 @@ export function createChannelProjection(state: ProjectionState, deps: Projection
     sealedReasoning.length = 0
     lastReasoningRow = undefined
     toolCards.clear()
+    askCalls.clear()
     handledAssistantMessages.clear()
     handledAssistantChunks.clear()
     openStep = undefined
