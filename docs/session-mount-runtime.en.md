@@ -104,15 +104,24 @@ mounted:
 }
 ```
 
-The source of truth for ownership is **pid**: while that process exists, the
-record still counts as live.
+The source of truth for ownership is two witnesses, applied in order. The
+**first witness is the pid**: when `process.kill(pid, 0)` fails, the record is
+dead on the spot. The **second witness closes the hole the first cannot** —
+pid reuse: the OS hands a dead owner's pid to an unrelated process (a game
+client, a browser), and the dead record stays "alive" on that process's
+lifespan. So a live pid is not enough either: the record also names a creation
+time test — the publisher was alive when it wrote the record, so a live process
+created later than the record's `startedAt` can only be an impostor, and the
+record counts as dead (see 3.3).
 
 `host` / `instance` are deliberately not part of the record. A home directory
 can be shared over a network, but genuinely deciding across machines needs a
 transport-level protocol, not a field written to a local disk.
 
-Pid reuse only makes a session that is in fact free look occupied (one restart
-fixes it); the opposite error interleaves two writers into one log.
+Together the witnesses still err only toward making a free session look
+occupied (when the creation time cannot be read, the verdict falls back to the
+first witness — never guessed in the other direction); the opposite error
+interleaves two writers into one log.
 
 Write discipline (the pattern already proven in `src/sessionPins.ts`):
 
@@ -125,16 +134,18 @@ Write discipline (the pattern already proven in `src/sessionPins.ts`):
   to notice that the lock is no longer its own, and abandon the commit. On the
   way out, delete only its OWN lock rather than the new holder's.
 - **Only a provably dead holder is reclaimed**:
-  - a lock whose pid is still ALIVE is never taken, however old the file is.
-    Only a dead pid (or a token that cannot be read at all, past
-    `STALE_LOCK_MS` — the create-then-write window) is reclaimable.
+  - a lock whose pid is still ALIVE and whose process was created no later than
+    the lock file's own timestamp (a holder acquires the lock while already
+    running) is never taken, however old the file looks. Only a dead pid (or a
+    token that cannot be read at all, past `STALE_LOCK_MS` — the
+    create-then-write window) is reclaimable.
   - reclaiming on mtime alone steals the lock from a holder that was merely
     paused, and when it resumes it can commit a snapshot derived before the
     steal.
-  - the price is pid REUSE: if an unrelated process recycles a dead holder's
-    pid, that lock can no longer be reclaimed automatically and
-    `session-mounts.lock` has to be removed by hand once every process sharing
-    the data directory has stopped.
+  - pid reuse is no longer an unfixable cost: a token whose pid is alive but
+    whose process was created AFTER the lock was taken can only be an impostor
+    standing in for the dead holder, and the lock is reclaimed like any crash
+    leftover — no manual removal of `session-mounts.lock` is ever needed.
 - **Permissions**: directory `0700`, file `0600`.
 - **Display may be best-effort; granting may not**: the screen reads the ledger
   tolerantly (a damaged document reads as empty — showing fewer rows beats
@@ -143,22 +154,30 @@ Write discipline (the pattern already proven in `src/sessionPins.ts`):
 - **No failure may degrade into "assume nobody holds it"** — that is the one
   unrecoverable mistake.
 
-### 3.3 Liveness has exactly one witness: the pid
+### 3.3 Liveness is two witnesses: the pid, then the creation time
 
-A record is live if and only if `process.kill(pid, 0)` holds (`EPERM` counts as
-alive too).
+First witness: a record is dead when `process.kill(pid, 0)` fails with `ESRCH`;
+`EPERM` counts as alive. This stage catches clean exits and every force kill.
 
 There is **no heartbeat timestamp**: a timestamp is only trustworthy while a
 timer keeps refreshing it, and the process that cannot refresh it is exactly
-the record that should expire.
+the record that should expire. Each witness has one answer of its own.
 
-One witness gives one answer instead of two that can contradict each other.
+The second stage applies only to records whose pid is still alive: read the
+**creation time of the live process** behind that pid (Linux reads `/proc`,
+Windows asks `wmic` once per batch — falling back to PowerShell — with a
+ten-minute per-pid cache) and compare it with the record's `startedAt`. A live
+process created later than `startedAt` plus a slack (60 seconds, absorbing a
+backward clock step) can only be an impostor, and the record counts as dead.
+When the creation time cannot be read, the verdict falls back to the first
+witness — never guessed toward "two writers may interleave".
 
 | Situation | Outcome |
 | --- | --- |
 | Clean exit (including `Ctrl+C`) | The teardown funnel calls `clearOwnMounts()`; the record is deleted and the sessions are mountable by another tui **immediately** |
 | `kill -9` / terminal force-closed / power loss | The pid is gone, so the next read ignores the record |
-| Pid reused | The record reads as occupied until that unrelated process exits |
+| Pid reused (issue #988) | The impostor was created after the record → the record counts as dead, the session is mountable again, and the next write prunes it |
+| Creation time unreadable (platform / permissions) | Falls back to the pid witness → may still read as occupied, same as the old behavior; heals on the next successful query |
 
 The known cost is stated in the module header: this ledger is a **same-machine**
 visibility layer, not the write authority — the host's own session write lock is
@@ -322,8 +341,10 @@ id cannot arise, because even the session store root differs.
 2. **Switching a session never destroys it.** Park, do not `dispose`; a running
    turn is not interrupted by a switch.
 3. **A claim must never be locked forever.** Every record must be reclaimable by
-   "pid gone". A state that requires manual unlocking is forbidden.
-4. **Same-machine scope must stay explicit.** Ownership is pid-only. Do not use
+   "pid gone" or by "pid recycled" (the creation-time witness, see 3.3). A
+   state that requires manual unlocking is forbidden.
+4. **Same-machine scope must stay explicit.** Ownership is a pid plus a
+   creation-time identity, both read from the local machine. Do not use
    a local `host` / `instance` field to pretend the ledger decides across
    machines — two machines sharing a home directory need a transport-level
    protocol, not this layer.
@@ -332,9 +353,10 @@ id cannot arise, because even the session store root differs.
    - Each acquisition writes `<pid>-<nonce>` into the lock file; a holder that
      lost the lock must abandon its commit, and a release may delete only its
      own lock.
-   - A lock whose pid is still alive is NEVER reclaimed, however old the file
-     looks — the accepted cost is a pid-reused lock needing manual removal
-     (see 3.2).
+   - A lock whose pid is alive AND whose identity is intact (the process was
+     created no later than the lock was taken) is NEVER reclaimed, however old
+     the file looks; a lock whose pid was recycled counts as a dead holder and
+     is reclaimed like any crash leftover (see 3.2).
 6. **Display reads tolerantly; deciding reads strictly.**
    - Missing file, corrupt JSON, wrong version, wrong field types — the SCREEN
      reads all of those as empty; cleanup must re-read under the lock rather

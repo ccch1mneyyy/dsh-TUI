@@ -11,15 +11,20 @@
  * the set of sessions it has mounted, and a reader that sees a foreign entry
  * treats the session as OCCUPIED and refuses to mount it.
  *
- * Liveness is one witness, `process.kill(pid, 0)`: it catches a clean exit and
- * a `kill -9`. There is no heartbeat timestamp, because a timestamp only stays
- * truthful while a timer keeps refreshing it, and the process that cannot
- * refresh it is exactly the one whose record should expire. The cost is pid
- * REUSE — a recycled pid keeps a dead owner's record alive — which errs toward
- * refusing a session that is in fact free and costs one restart; the opposite
- * error interleaves two writers into one transcript. This is a same-machine
- * guard only: the host's own session write lock stays the authority that
- * actually separates writers.
+ * Liveness is two witnesses in sequence. The first is `process.kill(pid, 0)`:
+ * it catches a clean exit and a `kill -9`. There is no heartbeat timestamp,
+ * because a timestamp only stays truthful while a timer keeps refreshing it,
+ * and the process that cannot refresh it is exactly the one whose record
+ * should expire. The second witness closes the hole the first one cannot —
+ * pid REUSE, where the OS hands a dead owner's pid to an unrelated process
+ * (a game client, a browser) whose lifetime then keeps the record "alive"
+ * forever: a live pid is only believed when its process was created no later
+ * than the record it allegedly published ({@link processCreationTime}), since
+ * the publisher was alive when it wrote the record and only an impostor can
+ * have been created after that moment. Both witnesses err toward refusing a
+ * session that is in fact free; the opposite error interleaves two writers
+ * into one transcript. This is a same-machine guard only: the host's own
+ * session write lock stays the authority that actually separates writers.
  *
  * Reads never write. Pruning a dead owner happens on the write path, because a
  * reader that wrote its snapshot back could erase a peer's record published
@@ -39,13 +44,14 @@
  * {@link MountFailure}). Only the display surface reads best-effort.
  *
  * The lock is reclaimable only from a holder that is provably gone: its token
- * carries the holder pid, so a lock whose holder is still ALIVE is never stolen
- * from — not even by a peer that finds it old. That closes the window where a
- * paused holder resumed after its lock had been reclaimed and committed a
- * snapshot derived before the steal. The price is pid REUSE on a lock: a
- * recycled pid keeps a dead holder's lock alive, and the remedy is to delete
- * `session-mounts.lock` while every process sharing this data directory is
- * stopped.
+ * carries the holder pid, so a lock whose holder is still ALIVE — and whose
+ * process could actually have taken the lock — is never stolen from, not even
+ * by a peer that finds the file old. That closes the window where a paused
+ * holder resumed after its lock had been reclaimed and committed a snapshot
+ * derived before the steal. A live pid that was created AFTER the lock was
+ * taken is a recycled pid standing in for a dead holder, and its lock is
+ * reclaimed like any other crash leftover — no manual deletion of
+ * `session-mounts.lock` is ever needed.
  */
 
 import {
@@ -60,6 +66,7 @@ import {
   writeFileSync,
   writeSync,
 } from 'node:fs'
+import { spawnSync } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
 import { join } from 'node:path'
 import { DATA_DIR } from './utils/paths.js'
@@ -77,6 +84,24 @@ const MOUNTS_VERSION = 1
  * between creating the file and writing the token into it.
  */
 const STALE_LOCK_MS = 30_000
+
+/**
+ * How much wall-clock distance between a live pid's creation and the record it
+ * allegedly published still counts as the same process. A genuine publisher
+ * was created BEFORE it published, so the margin only has to absorb a backward
+ * clock step (an NTP correction) inside that sub-minute window; an impostor's
+ * creation time lands minutes, hours or whole boots later.
+ */
+const RECYCLE_SLACK_MS = 60_000
+
+/**
+ * How long a queried creation time stays trusted. The creation time of a
+ * process never changes while it lives, so the cache hedges exactly one case:
+ * a pid that dies and is RECYCLED inside the window keeps serving the old
+ * process's answer. That misreads an impostor as the original — today's
+ * behavior, the safe direction — and the refetch after the window heals it.
+ */
+const CREATION_CACHE_MS = 600_000
 
 let temporarySequence = 0
 
@@ -140,6 +165,10 @@ export type MountClaim = { readonly ok: true; readonly fresh: boolean } | MountF
  * Whether a process id is still alive. `process.kill(pid, 0)` sends no signal
  * and throws `ESRCH` when the process is gone; `EPERM` means it exists but is
  * owned by another user, which still counts as alive here.
+ *
+ * This is the CHEAP witness and it cannot stand alone: a pid the OS recycled
+ * to an unrelated process answers "alive" for a record its original owner left
+ * behind. {@link ownerIsLive} adds the identity witness on top of it.
  */
 export function pidAlive(pid: number): boolean {
   if (!Number.isInteger(pid) || pid <= 0) return false
@@ -150,6 +179,246 @@ export function pidAlive(pid: number): boolean {
   } catch (error) {
     return hasCode(error, 'EPERM')
   }
+}
+
+/** Per-pid creation times, as last answered by {@link processCreationTime}. */
+const creationTimes = new Map<number, { readonly value: number | undefined; readonly expiresAt: number }>()
+
+/**
+ * When a process started, as epoch ms — the identity witness behind
+ * {@link ownerIsLive}. A pid alone cannot tell the process that published a
+ * record from a later process the OS handed the same number to; the creation
+ * time can, and it is stable for the pid's whole lifetime.
+ *
+ * `undefined` means "the platform could not say" — an unsupported platform, a
+ * query that failed, or a pid that no longer exists. Callers treat it as "let
+ * the cheap pid witness decide", never as "dead": a mistaken prune is the one
+ * unrecoverable direction.
+ */
+export function processCreationTime(pid: number): number | undefined {
+  if (!Number.isInteger(pid) || pid <= 0) return undefined
+  const cached = creationTimes.get(pid)
+  if (cached !== undefined && cached.expiresAt > Date.now()) return cached.value
+  const value = queryCreationTime(pid)
+  creationTimes.set(pid, { value, expiresAt: Date.now() + CREATION_CACHE_MS })
+  return value
+}
+
+/** Fill the cache for every pid whose entry is missing or stale. */
+function warmCreationTimes(pids: readonly number[]): void {
+  const missing: number[] = []
+  for (const pid of new Set(pids)) {
+    const cached = creationTimes.get(pid)
+    if (cached === undefined || cached.expiresAt <= Date.now()) missing.push(pid)
+  }
+  if (missing.length === 0) return
+  if (process.platform === 'win32') {
+    // One subprocess for the whole batch: a query costs a process spawn on
+    // this platform, and the callers run it on the UI's clock.
+    const answers = queryCreationTimesWindows(missing)
+    for (const pid of missing) {
+      creationTimes.set(pid, { value: answers.get(pid), expiresAt: Date.now() + CREATION_CACHE_MS })
+    }
+    return
+  }
+  for (const pid of missing) {
+    creationTimes.set(pid, { value: queryCreationTime(pid), expiresAt: Date.now() + CREATION_CACHE_MS })
+  }
+}
+
+/**
+ * Batch-fill the cache for every foreign owner the ledger names, BEFORE a
+ * decision path needs the verdicts — a platform query must never run while
+ * the cross-process lock is held, where it would stall every peer.
+ */
+function warmForeignCreationTimes(): void {
+  const pids: number[] = []
+  for (const owner of readMountLedger()) {
+    if (ownerIsSelf(owner) || !pidAlive(owner.pid)) continue
+    pids.push(owner.pid)
+  }
+  if (pids.length > 0) warmCreationTimes(pids)
+}
+
+/** Platform dispatch for {@link processCreationTime}. */
+function queryCreationTime(pid: number): number | undefined {
+  if (process.platform === 'win32') return queryCreationTimesWindows([pid]).get(pid)
+  if (process.platform === 'linux') return queryCreationTimeLinux(pid)
+  if (process.platform === 'darwin') return queryCreationTimeDarwin(pid)
+  return undefined
+}
+
+/** Linux clock tick rate, derived once, in ticks per second. */
+let linuxClockTicksPerSecond: number | undefined
+
+/**
+ * Linux: `/proc/<pid>/stat` records the start time in clock ticks since boot,
+ * and the tick rate is whatever the kernel was built with — not exposed to
+ * Node, so derive it once from pid 1, which started a few ticks after the
+ * counter did: its starttime over `/proc/uptime` seconds is the rate, exact to
+ * about one part per million once the machine has been up a minute.
+ */
+function linuxClockTicks(): number | undefined {
+  if (linuxClockTicksPerSecond !== undefined) return linuxClockTicksPerSecond
+  try {
+    const uptime = Number(readFileSync('/proc/uptime', 'utf8').split(' ')[0])
+    const stat = readFileSync('/proc/1/stat', 'utf8')
+    const ticks = Number(stat.slice(stat.lastIndexOf(')') + 2).split(' ')[19])
+    if (Number.isFinite(uptime) && uptime >= 60 && Number.isFinite(ticks) && ticks > 0) {
+      linuxClockTicksPerSecond = Math.round(ticks / uptime)
+    }
+  } catch {
+    return undefined
+  }
+  return linuxClockTicksPerSecond
+}
+
+/**
+ * Linux: two file reads, no subprocess — field 22 of `/proc/<pid>/stat` (start
+ * time in ticks since boot) plus the boot epoch from `/proc/stat`.
+ */
+function queryCreationTimeLinux(pid: number): number | undefined {
+  try {
+    const stat = readFileSync(`/proc/${pid}/stat`, 'utf8')
+    // Field 2 (comm) may contain spaces and parentheses, so everything after
+    // the LAST ')' is fixed-position: fields[0] is state (field 3), which
+    // puts starttime (field 22) at index 19.
+    const fields = stat.slice(stat.lastIndexOf(')') + 2).split(' ')
+    const ticks = Number(fields[19])
+    const boot = /^btime (\d+)$/m.exec(readFileSync('/proc/stat', 'utf8'))
+    const ticksPerSecond = linuxClockTicks()
+    if (!Number.isFinite(ticks) || boot === null || ticksPerSecond === undefined) return undefined
+    return Number(boot[1]) * 1000 + (ticks * 1000) / ticksPerSecond
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * Windows has no /proc and Node exposes no peer creation time, so the witness
+ * costs one subprocess for the whole batch. `wmic` answers in ~150ms and ships
+ * on the Windows builds this TUI targets; builds that have removed it fall
+ * back to PowerShell, which is slower but always there.
+ */
+function queryCreationTimesWindows(pids: readonly number[]): ReadonlyMap<number, number> {
+  const answers = queryCreationTimesWmic(pids)
+  if (answers !== undefined) return answers
+  // Neither tool answered: an empty map, so every pid reads as "unknown" and
+  // the verdict falls back to the cheap pid witness.
+  return queryCreationTimesPowerShell(pids) ?? new Map()
+}
+
+/**
+ * One `wmic` call for every pid, `/value` output so the parse survives locale
+ * and column-order changes: blocks of `CreationDate=<dmtf>` / `ProcessId=<pid>`
+ * lines, and a pid that does not exist is simply absent. Absence is not an
+ * error — a process that exited between the pid check and this query just has
+ * no answer.
+ */
+function queryCreationTimesWmic(pids: readonly number[]): Map<number, number> | undefined {
+  const where = pids.map(pid => `ProcessId=${pid}`).join(' or ')
+  const attempt = spawnSync(
+    'wmic',
+    ['process', 'where', `(${where})`, 'get', 'ProcessId,CreationDate', '/value'],
+    { encoding: 'utf8', timeout: 10_000, windowsHide: true },
+  )
+  if (attempt.error !== undefined || typeof attempt.stdout !== 'string') return undefined
+  const answers = new Map<number, number>()
+  let creation: number | undefined
+  let pid: number | undefined
+  for (const line of attempt.stdout.split(/\r?\n/)) {
+    const separator = line.indexOf('=')
+    if (separator < 0) continue
+    const key = line.slice(0, separator)
+    const value = line.slice(separator + 1).trim()
+    if (key === 'CreationDate') creation = parseDmtfDateTime(value)
+    else if (key === 'ProcessId') pid = Number(value)
+    if (creation !== undefined && pid !== undefined && Number.isInteger(pid) && pid > 0) {
+      answers.set(pid, creation)
+      creation = undefined
+      pid = undefined
+    }
+  }
+  return answers
+}
+
+/**
+ * The PowerShell fallback, same shape: one call, one line per found process as
+ * `<pid>,<UTC ISO>`. The exit status is ignored on purpose — silenced
+ * not-found pids still set it.
+ */
+function queryCreationTimesPowerShell(pids: readonly number[]): Map<number, number> | undefined {
+  const script =
+    `Get-Process -Id ${pids.join(',')} -ErrorAction SilentlyContinue | ` +
+    `ForEach-Object { $_.Id.ToString() + ',' + $_.StartTime.ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ss.fffZ') }`
+  const attempt = spawnSync(
+    'powershell.exe',
+    ['-NoProfile', '-NonInteractive', '-Command', script],
+    { encoding: 'utf8', timeout: 20_000, windowsHide: true },
+  )
+  if (attempt.error !== undefined || typeof attempt.stdout !== 'string') return undefined
+  const answers = new Map<number, number>()
+  for (const line of attempt.stdout.split(/\r?\n/)) {
+    const match = /^(\d+),(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z)$/.exec(line.trim())
+    if (match === null) continue
+    const epoch = Date.parse(match[2])
+    if (Number.isFinite(epoch)) answers.set(Number(match[1]), epoch)
+  }
+  return answers
+}
+
+/**
+ * WMI's DMTF datetime (`20260925175443.522797+480`): local wall clock with an
+ * explicit UTC offset captured by the kernel, so the instant is exact across
+ * DST and zone changes — the offset that shipped WITH the string is the one
+ * to subtract.
+ */
+function parseDmtfDateTime(value: string): number | undefined {
+  const match = /^(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})(?:\.(\d+))?([+-])(\d{3})$/.exec(value)
+  if (match === null) return undefined
+  const [, year, month, day, hour, minute, second, fraction, sign, offset] = match
+  const milliseconds = fraction === undefined ? 0 : Number(`${fraction}00`.slice(0, 3))
+  const offsetMinutes = Number(offset) * (sign === '-' ? -1 : 1)
+  const epoch =
+    Date.UTC(Number(year), Number(month) - 1, Number(day), Number(hour), Number(minute), Number(second), milliseconds) -
+    offsetMinutes * 60_000
+  return Number.isFinite(epoch) ? epoch : undefined
+}
+
+/**
+ * macOS: `ps -o lstart=` prints the creation time in wall clock (C locale,
+ * e.g. `Wed Sep 24 17:54:43 2026`). Second resolution is what the slack is for.
+ */
+function queryCreationTimeDarwin(pid: number): number | undefined {
+  const attempt = spawnSync('ps', ['-o', 'lstart=', '-p', String(pid)], { encoding: 'utf8', timeout: 5_000 })
+  if (attempt.error !== undefined || typeof attempt.stdout !== 'string') return undefined
+  const match = /^([A-Za-z]{3}) ([A-Za-z]{3})\s+(\d{1,2}) (\d{2}):(\d{2}):(\d{2}) (\d{4})$/.exec(attempt.stdout.trim())
+  if (match === null) return undefined
+  const month = { Jan: 0, Feb: 1, Mar: 2, Apr: 3, May: 4, Jun: 5, Jul: 6, Aug: 7, Sep: 8, Oct: 9, Nov: 10, Dec: 11 }[
+    match[2]
+  ]
+  if (month === undefined) return undefined
+  return new Date(
+    Number(match[7]), month, Number(match[3]), Number(match[4]), Number(match[5]), Number(match[6]),
+  ).getTime()
+}
+
+/**
+ * Whether a published record still names the process that wrote it.
+ *
+ * The pid witness is necessary but not sufficient: a live pid created AFTER
+ * the moment it allegedly published (`startedAt`) is an impostor the OS gave
+ * a dead owner's number to, and its record counts as dead. A live pid created
+ * before `startedAt` — within the slack, so a clock step cannot prune a live
+ * peer — is the publisher; an unreadable creation time falls back to the
+ * cheap witness's answer, which errs toward "occupied".
+ */
+function ownerIsLive(owner: SessionMountOwner): boolean {
+  if (ownerIsSelf(owner)) return true
+  if (!pidAlive(owner.pid)) return false
+  const created = processCreationTime(owner.pid)
+  if (created === undefined) return true
+  return created <= owner.startedAt + RECYCLE_SLACK_MS
 }
 
 /** Parse one record, or undefined when the shape is wrong. */
@@ -245,15 +514,23 @@ export function readMountLedgerStrict(): MountLedgerRead {
 }
 
 /**
- * Which process has each session mounted, considering only owners whose pid is
- * still alive. A session claimed by several live owners keeps the record that
- * started last: the protocol forbids that state, and picking one
- * deterministically beats reporting whichever the file happened to list first.
+ * Which process has each session mounted, considering only owners that are
+ * still the processes which published them — the pid is alive AND was created
+ * no later than its own record ({@link ownerIsLive}). A session claimed by
+ * several live owners keeps the record that started last: the protocol forbids
+ * that state, and picking one deterministically beats reporting whichever the
+ * file happened to list first.
  */
 export function readSessionOwners(): ReadonlyMap<string, SessionMountOwner> {
+  const ledger = readMountLedger()
+  // Warm the identity cache while nothing is decided yet, so the platform
+  // query never lands inside a caller's lock or render tick.
+  warmCreationTimes(
+    ledger.filter(owner => !ownerIsSelf(owner) && pidAlive(owner.pid)).map(owner => owner.pid),
+  )
   const owners = new Map<string, SessionMountOwner>()
-  for (const owner of readMountLedger()) {
-    if (!pidAlive(owner.pid)) continue
+  for (const owner of ledger) {
+    if (!ownerIsLive(owner)) continue
     for (const sessionId of owner.sessionIds) {
       const existing = owners.get(sessionId)
       if (existing === undefined || existing.startedAt < owner.startedAt) owners.set(sessionId, owner)
@@ -332,14 +609,28 @@ function readLockHolderPid(lockPath: string): number | undefined {
  * Whether an existing lock may be removed, and the peer that left it is not
  * coming back.
  *
- * A readable holder pid is the whole verdict: dead holder, reclaim; live
- * holder, leave it alone however old the file is. Only a lock whose token
- * could not be read (the window between `open` and `write`, or a crash inside
- * it) falls back to age.
+ * A readable holder pid is the primary verdict: dead holder, reclaim. A live
+ * holder is left alone — unless its process was created AFTER the lock was
+ * taken, which no genuine holder can have been (a holder acquires the lock
+ * while running), so a live pid created that late is a recycled number
+ * standing in for a dead holder and the lock reclaims like any crash leftover.
+ * Only a lock whose token could not be read (the window between `open` and
+ * `write`, or a crash inside it) falls back to age.
  */
 function lockIsReclaimable(lockPath: string): boolean {
   const holderPid = readLockHolderPid(lockPath)
-  if (holderPid !== undefined) return !pidAlive(holderPid)
+  if (holderPid !== undefined) {
+    if (!pidAlive(holderPid)) return true
+    const created = processCreationTime(holderPid)
+    if (created === undefined) return false
+    let takenAt: number
+    try {
+      takenAt = statSync(lockPath).mtimeMs
+    } catch {
+      return false
+    }
+    return created > takenAt + RECYCLE_SLACK_MS
+  }
   try {
     return Date.now() - statSync(lockPath).mtimeMs > STALE_LOCK_MS
   } catch {
@@ -450,8 +741,8 @@ function releaseLock(lock: HeldLock): void {
  * half-written document, and a crash mid-write leaves the previous ledger
  * intact. CALLERS MUST HOLD THE LOCK: the replacement is rebuilt from a read
  * taken while holding it, so a peer that published since the caller's last read
- * survives, and dead owners are dropped here — the write path is the only place
- * that prunes.
+ * survives, and dead or recycled-pid owners are dropped here — the write path
+ * is the only place that prunes.
  *
  * The read is the STRICT one. Rebuilding from a best-effort read would let a
  * damaged ledger be "repaired" into whatever this process happened to parse,
@@ -470,7 +761,7 @@ function writeLedger(mine: SessionMountOwner | undefined): { ok: true } | MountF
   if (!existing.ok) return { ok: false, reason: 'unavailable', detail: existing.detail }
   try {
     mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 })
-    const records = existing.owners.filter(owner => !ownerIsSelf(owner) && pidAlive(owner.pid))
+    const records = existing.owners.filter(owner => !ownerIsSelf(owner) && ownerIsLive(owner))
     if (mine !== undefined) records.push(mine)
     writeFileSync(
       temporary,
@@ -568,6 +859,9 @@ export function publishMounts(sessionIds: Iterable<string>): boolean {
   }
   for (const sessionId of mountOperations.keys()) ownSessionIds.add(sessionId)
   if (ownStartedAt === undefined) ownStartedAt = now
+  // The write below prunes foreign records with the identity witness; resolve
+  // it before the lock so peers never wait on a platform query.
+  warmForeignCreationTimes()
   const attempt = acquireLock()
   if (!attempt.ok) return false
   const lock = attempt.lock
@@ -599,6 +893,9 @@ export function publishMounts(sessionIds: Iterable<string>): boolean {
  * @returns `ok`, or why the session is not ours.
  */
 export function claimMount(sessionId: string): MountClaim {
+  // Resolve the identity witnesses BEFORE the lock: a platform query inside
+  // the lock would stall every peer for its duration.
+  warmForeignCreationTimes()
   const attempt = acquireLock()
   if (!attempt.ok) {
     return attempt.reason === 'busy'
@@ -614,7 +911,7 @@ export function claimMount(sessionId: string): MountClaim {
     if (!read.ok) return { ok: false, reason: 'unavailable', detail: read.detail }
     const holders: number[] = []
     for (const owner of read.owners) {
-      if (ownerIsSelf(owner) || !pidAlive(owner.pid)) continue
+      if (ownerIsSelf(owner) || !ownerIsLive(owner)) continue
       if (owner.sessionIds.includes(sessionId)) holders.push(owner.pid)
     }
     if (holders.length > 0) return { ok: false, reason: 'occupied', holders }
@@ -660,6 +957,7 @@ export function releaseMount(sessionId: string): boolean {
  * @returns True when the ledger was updated.
  */
 export function clearOwnMounts(): boolean {
+  warmForeignCreationTimes()
   const attempt = acquireLock()
   if (!attempt.ok) return false
   const lock = attempt.lock

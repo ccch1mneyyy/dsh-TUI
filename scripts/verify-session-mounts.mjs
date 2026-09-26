@@ -17,23 +17,34 @@
  *    claim against one writes nothing at all. "Could not check" must never be
  *    reported as "nobody holds it" — that is the one mistake this ledger exists
  *    to prevent, and it is unrecoverable.
- * 5. LOCK POLICY: a lock whose holder pid is ALIVE is never reclaimed, however
- *    old the file looks; a lock whose holder is gone is reclaimed immediately.
+ * 5. LOCK POLICY: a lock whose holder is ALIVE — and whose process could have
+ *    taken the lock — is never reclaimed, however old the file looks; a lock
+ *    whose holder is gone is reclaimed immediately, and so is one whose token
+ *    names a live pid created AFTER the lock was taken (a recycled pid).
  *    The first half is what the old mtime-only rule got wrong (a paused holder
  *    could be stolen from and then commit a snapshot derived before the steal);
  *    the second half is what keeps a crash from needing manual cleanup.
  * 6. RESERVATIONS: an in-flight mount survives a publisher beat that cannot see
  *    its agent yet, and ends explicitly — settle (the roster takes over) or
  *    abandon (the session goes back).
+ * 7. PID REUSE: the issue #988 bug. A dead publisher's record names a pid the
+ *    OS later handed to an unrelated live process (the reporter's Steam), and
+ *    the pid-only witness swore the record was alive forever. The identity
+ *    witness — a live pid created AFTER the record it allegedly published is an
+ *    impostor — makes such a record free, claimable and pruned, without ever
+ *    letting a process created before its record be treated as an impostor.
+ *    The same witness reclaims a lock whose token names a recycled pid.
  *
  * Plus the degradation rule: a malformed or foreign-shaped document still reads
  * as an empty ledger through the DISPLAY reader, because a corrupt cache must
  * never take down a session screen. Only the deciding reader refuses.
  *
- * Ownership is pid-only, so the foreign holder is a REAL second process that
- * PUBLISHES through this same module in the same fake HOME — a staged JSON
- * record written by this process would not prove the cross-process guarantee,
- * and would pass even if publishing never worked.
+ * Ownership is pid plus creation-time identity, so the foreign holder is a
+ * REAL second process that PUBLISHES through this same module in the same fake
+ * HOME — a staged JSON record written by this process would not prove the
+ * cross-process guarantee, and would pass even if publishing never worked.
+ * Section 8 stages the impostor cases raw: a crash leftover is exactly a record
+ * this process did not write.
  *
  * Uses a temp HOME so the real ~/.dsh-tui is never touched. The module reads
  * `homedir()` at import time, so HOME/USERPROFILE are set BEFORE the dynamic
@@ -56,6 +67,7 @@ const {
   occupancyOf,
   ownMounts,
   pidAlive,
+  processCreationTime,
   publishMounts,
   readMountLedger,
   readMountLedgerStrict,
@@ -82,9 +94,9 @@ function writeRaw(owners, version = 1) {
   writeFileSync(LEDGER, JSON.stringify({ version, owners }, null, 2), 'utf8')
 }
 
-/** A peer record with the fields the ledger validates. */
-function peer(pid, sessionIds) {
-  return { pid, startedAt: Date.now(), sessionIds }
+/** A peer record with the fields the ledger validates; a crash leftover's `startedAt` is staged explicitly. */
+function peer(pid, sessionIds, startedAt = Date.now()) {
+  return { pid, startedAt, sessionIds }
 }
 
 /** Poll a condition with a bound instead of a fixed wait. */
@@ -229,8 +241,16 @@ rmSync(LEDGER, { force: true })
 const liveKeeper = spawn(process.execPath, ['-e', 'setInterval(() => {}, 60_000)'], { stdio: 'ignore' })
 const livePid = liveKeeper.pid
 if (!await until(() => pidAlive(livePid))) throw new Error('the live keeper never started')
+const liveKeeperCreated = processCreationTime(livePid)
+if (typeof liveKeeperCreated !== 'number') throw new Error('the live keeper creation time could not be read on this platform')
+// The lock's mtime is staged AFTER its holder's creation — a real lock is
+// always written by a holder that was already running — because an mtime
+// earlier than the holder's birth now reads as a recycled pid (section 8).
+// Dating it past the recycle slack also pins the other half of the rule: age
+// alone never reclaims a lock whose holder identity is intact.
+const oldButConsistent = new Date(liveKeeperCreated + 61_000)
 writeFileSync(LOCK, `${livePid}-liveholder\n`, 'utf8')
-utimesSync(LOCK, longAgo, longAgo)
+utimesSync(LOCK, oldButConsistent, oldButConsistent)
 const blockedByLive = claimMount('locked-sess')
 check('a lock whose holder is ALIVE is never reclaimed', blockedByLive.ok === false && blockedByLive.reason === 'busy')
 check('and the live holder still owns its lock file', existsSync(LOCK))
@@ -301,6 +321,67 @@ check('and the ledger still records us as its holder', readMountLedger().some(
 ))
 releaseMount('shared-sess')
 clearOwnMounts()
+
+// ── 8. Pid reuse: a recycled pid is not a holder (issue #988) ──────────────
+// The cost the pid-only witness accepted: a dead owner's record names a pid
+// the OS later hands to an unrelated live process — the reporter's Steam — and
+// the session reads as "held by Steam" until Steam exits. The identity witness
+// closes it from the cheap side: the publisher was alive when it wrote
+// `startedAt`, so a live pid created AFTER that moment is an impostor and its
+// record reads as dead — free to display, claimable, pruned by the claim's
+// write. The other direction stays sealed: a live process created BEFORE its
+// record could be the real publisher and must keep blocking, so nothing here
+// can ever hand a mounted session to a second writer.
+console.log('pid reuse:')
+const squatter = spawn(process.execPath, ['-e', 'setInterval(() => {}, 60_000)'], { stdio: 'ignore' })
+const squatterPid = squatter.pid
+if (!await until(() => pidAlive(squatterPid))) throw new Error('the squatter never started')
+const squatterCreated = processCreationTime(squatterPid)
+if (typeof squatterCreated !== 'number') throw new Error('the squatter creation time could not be read on this platform')
+check('a live process reports its creation time', squatterCreated <= Date.now())
+check('our own creation time is reported too', typeof processCreationTime(process.pid) === 'number')
+check('a dead pid reports no creation time', processCreationTime(deadPid) === undefined)
+
+// A crash leftover from a publisher that died long before the squatter was
+// even created: the only way that pid is alive now is that it was recycled.
+rmSync(LEDGER, { force: true })
+writeRaw([peer(squatterPid, ['recycled-sess'], squatterCreated - 3_600_000)])
+check('a record older than its live pid is not shown as occupied',
+  occupancyOf('recycled-sess', readSessionOwners()).kind === 'free')
+const recycledClaim = claimMount('recycled-sess')
+check('a session whose only holder is a recycled pid is claimable', recycledClaim.ok === true)
+check('and the recycled record was pruned by the claim write',
+  !readMountLedger().some(owner => owner.pid === squatterPid))
+releaseMount('recycled-sess')
+
+// The safe direction: a live pid created AFTER the record began but BEFORE it
+// was published could be the genuine publisher, and must keep blocking.
+rmSync(LEDGER, { force: true })
+writeRaw([peer(squatterPid, ['genuine-sess'], squatterCreated + 60_000)])
+check('a record newer than its live pid still reads as occupied',
+  occupancyOf('genuine-sess', readSessionOwners()).kind === 'occupied')
+const genuineRefusal = claimMount('genuine-sess')
+check('and still refuses the claim', genuineRefusal.ok === false && genuineRefusal.reason === 'occupied')
+rmSync(LEDGER, { force: true })
+
+// Just inside the slack window a record still counts as its pid's own: the
+// margin exists so a backward clock step cannot prune a live peer.
+writeRaw([peer(squatterPid, ['slack-sess'], squatterCreated - 30_000)])
+check('a record inside the slack window errs toward occupied',
+  occupancyOf('slack-sess', readSessionOwners()).kind === 'occupied')
+clearOwnMounts()
+
+// The lock gets the same witness: a token naming a live pid created after the
+// lock was taken is a recycled holder, and the lock reclaims like a crash
+// leftover instead of demanding the manual lock deletion the pid-only rule
+// accepted.
+writeFileSync(LOCK, `${squatterPid}-recycled\n`, 'utf8')
+utimesSync(LOCK, longAgo, longAgo)
+const reclaimedRecycled = claimMount('locked-recycled')
+check('a lock whose holder pid was recycled is reclaimed', reclaimedRecycled.ok === true)
+releaseMount('locked-recycled')
+squatter.kill()
+if (!await until(() => !pidAlive(squatterPid))) throw new Error('the squatter did not exit')
 
 if (failures > 0) {
   console.error(`\n${failures} check(s) failed`)
