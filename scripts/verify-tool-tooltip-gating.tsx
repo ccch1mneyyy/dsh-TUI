@@ -185,7 +185,7 @@ try {
   instance.rerender(cardTree('huge', { name: 'read', argsText: hugeArgs }))
   // 就绪探针：卡片头部已渲染（超长 args 标题在旧代码上就以跨行 wrap
   // 呈现——此处只断言卡片已上屏；「头部裁剪」由下方标记不可见断言覆盖）。
-  check('场景 C 就绪：超预算 args 头部渲染', await settled(() => screenHas(term, 'Read{')))
+  check('场景 C 就绪：超预算 args 头部渲染', await settled(() => screenHas(term, '读取{')))
   check('场景 C 就绪：480 字符后的标记未上屏', !screenHas(term, 'END-MARKER-98765'))
   hoverText(stdin, term, 'ppp')
   check('C 裁剪 args 悬停后弹出完整内容', await settled(() => screenHas(term, 'END-MARKER-98765')))
@@ -231,7 +231,8 @@ try {
 
   // --- F. 折叠脚本 + 非零退出码：悬停弹完整脚本，附注带退出码 ----------
   //     （元数据只在内容真隐藏的浮层里出现；完全可见时退出码由 body
-  //       的 `Exit code N` 行本身呈现，不重复。）
+  //       的本地化 `退出码 N` 行本身呈现，不重复。正文与浮层的退出码在
+  //       zh 下同文，故浮层元数据以「结束时刻」探测、隐藏以脚本尾行探测。）
   const scriptF = [
     '$items = Get-ChildItem -Recurse',
     '$items | Where-Object { $_.Length -gt 1kb }',
@@ -247,12 +248,12 @@ try {
   }, true))
   check('场景 F 就绪：折叠脚本首行可见', await settled(() => screenHas(term, 'Get-ChildItem -Recurse')))
   check('场景 F 就绪：折叠隐藏了其余行', !screenHas(term, 'Select-Object -First 10 Name'))
-  check('场景 F 就绪：body 直接呈现退出码', await settled(() => screenHas(term, 'Exit code 7')))
+  check('场景 F 就绪：body 直接呈现本地化退出码', await settled(() => screenHas(term, '退出码 7')))
   hoverText(stdin, term, '$items')
   check('F 折叠脚本悬停弹完整命令（含末行）', await settled(() => screenHas(term, 'Select-Object -First 10 Name')))
-  check('F 浮层附注带本地化退出码', await settled(() => screenHas(term, '退出码 7')))
+  check('F 浮层附注带元数据（结束时刻 + 退出码）', await settled(() => screenHas(term, '结束') && screenHas(term, '退出码 7')))
   hover(stdin, 1, 1)
-  check('F 移开即隐藏工具提示', await settled(() => !screenHas(term, '退出码 7')))
+  check('F 移开即隐藏工具提示（脚本尾行消失）', await settled(() => !screenHas(term, 'Select-Object -First 10 Name')))
 
   instance.unmount()
   await sleep(100) // 固定窗:pacing 收尾 flush 节奏，之后不再断言

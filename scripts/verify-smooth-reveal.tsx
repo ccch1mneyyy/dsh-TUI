@@ -15,12 +15,17 @@
  *
  * Run: node --import tsx/esm scripts/verify-smooth-reveal.tsx
  */
+// 注意：静态 import 会提升执行，下面这行 env pin 对本脚本的 i18n 解析
+// 其实无效（i18n.js 在赋值前就已按启动链解析 activeLang；本脚本断言的
+// en 文案此前全靠「折叠提示硬编码英文」蒙混过关，issue #980 修复后暴露）。
+// 权威 pin 是 body 首句的 setLang('en')；此行保留给动态 import 的消费方。
 process.env.DSH_TUI_LANG = 'en'
 process.env.FORCE_COLOR = '3'
 
 import { Writable, PassThrough } from 'node:stream'
 import React from 'react'
 import { render } from '../src/ui.js'
+import { setLang } from '../src/i18n.js'
 import { MessageList } from '../src/components/MessageList.js'
 import { AssistantThinkingMessage } from '../src/components/messages/AssistantThinkingMessage.js'
 import { AssistantToolUseMessage } from '../src/components/messages/AssistantToolUseMessage.js'
@@ -35,6 +40,10 @@ import {
   revealStep,
   resetRevealForTest,
 } from '../src/components/smoothReveal.js'
+
+// env pin 因 import 提升而失效（见上），显式切换到 en——本脚本的断言
+// 全部针对英文文案。
+setLang('en')
 
 const { Terminal: XTerm } = (await import('@xterm/headless')) as unknown as {
   Terminal: typeof import('@xterm/headless').Terminal

@@ -363,6 +363,13 @@ TypeScript 源的脚本在头部声明 `node --import tsx/esm <script>` 形式�
 - 本地 slash 命令在 `src/commands.ts` 声明、`Chat.tsx` 分发；注册表命令运行时
   合并。新增命令时同步更新声明、分发、帮助/文档与 i18n 描述（`src/i18n.ts` 的
   `cmd-desc-<name>`，只写 zh——en 回退声明原文）。
+- 一切界面文案必须走 i18n 字典（`src/i18n.ts` 的 `t(key, params)`，zh/en 双语
+  必填）。不要在组件里硬编码整句英文——即使当前只有两种语言，也别漏走字典：
+  `scripts/verify-i18n.ts` 会拦死键、占位符漂移与字典外的英文整句字面量
+  （issue #980 的漏网形态），`scripts/verify-toolcard-i18n.tsx` 在渲染侧证明
+  文案真的本地化。工具显示名走 `tool-name-*` 家族（在
+  AssistantToolUseMessage 的字面键映射表登记）；新增第三语言的操作清单见
+  i18n.ts 头部注释「Adding a language」。
 - 技能命令不进本地名单：DSH 发现的 user-invocable 技能经注册表合并为直调命令，
   命令名必须是可解析的 kebab-case，且不能与本地命令撞名。
 - `ask_user_question` 必须经 `QuestionStore` 串行化；并发问题刻意 FIFO 呈现，

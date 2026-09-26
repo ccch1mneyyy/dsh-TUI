@@ -11,7 +11,7 @@ import { useTooltip } from '../Tooltip.js'
 import { formatDuration } from '../../terminal-utils/format.js'
 import { formatClock } from '../../trajectory/format.js'
 import { foldLongLines } from '../../utils/fold-long-lines.js'
-import { getLang, t } from '../../i18n.js'
+import { getLang, t, type I18nKey } from '../../i18n.js'
 import type { ToolBackground } from '../../tuiDisplayPrefs.js'
 import type { Theme } from '../../theme.js'
 import type { ClickEvent } from '../../ink/events/click-event.js'
@@ -30,8 +30,8 @@ type Props = {
   isExpanded?: boolean
   /**
    * Mouse click (fullscreen): toggles the row's expansion — same action as
-   * clicking other transcript rows. Also makes the `(ctrl+o to expand)`
-   * hint actionable with the mouse.
+   * clicking other transcript rows. Also makes the localized ctrl+o expand
+   * hint (lines-folded-expand) actionable with the mouse.
    */
   onClick?(event: ClickEvent): void
   /**
@@ -76,24 +76,29 @@ type Props = {
   revealVersion?: number
 }
 
-/** Tool display names: DSH emits lowercase tool ids (`bash`); display common
- *  names with an initial capital and fall back to the id with its first letter
- *  uppercased. */
+/** Tool display names localize through the `tool-name-*` dictionary family
+ *  (i18n.ts): DSH emits lowercase tool ids (`bash`), display names resolve
+ *  per language — proper nouns (Bash, PowerShell) stay identical in zh.
+ *  Unmapped ids (plugins, new upstream tools) fall back to the id with its
+ *  first letter uppercased: that is a name, not copy — there is nothing to
+ *  translate. Keys appear as literals here, so verify-i18n's dead-key scan
+ *  sees them without a DYNAMIC_PREFIXES entry. */
+const TOOL_NAME_KEYS: Record<string, I18nKey> = {
+  bash: 'tool-name-bash',
+  powershell: 'tool-name-powershell',
+  read: 'tool-name-read',
+  glob: 'tool-name-glob',
+  grep: 'tool-name-grep',
+  write: 'tool-name-write',
+  edit: 'tool-name-edit',
+  todo_write: 'tool-name-todo_write',
+  subagent: 'tool-name-subagent',
+  web_search: 'tool-name-web_search',
+}
+
 function displayName(name: string): string {
-  const KNOWN: Record<string, string> = {
-    bash: 'Bash',
-    powershell: 'PowerShell',
-    read: 'Read',
-    glob: 'Glob',
-    grep: 'Grep',
-    write: 'Write',
-    edit: 'Edit',
-    todo_write: 'TodoWrite',
-    subagent: 'Task',
-    web_search: 'WebSearch',
-  }
-  const mapped = KNOWN[name]
-  if (mapped) return mapped
+  const key = TOOL_NAME_KEYS[name]
+  if (key !== undefined) return t(key)
   if (name.length === 0) return name
   return name[0]!.toUpperCase() + name.slice(1)
 }
@@ -216,10 +221,10 @@ function viewLines(view: ToolCallView | ToolResultView): BodyLine[] {
       const out = (('output' in view ? view.output : undefined) ?? '').trimEnd()
       const lines: BodyLine[] = out === '' ? [] : out.split('\n').map(plain)
       if ('exitCode' in view && view.exitCode !== undefined && view.exitCode !== 0) {
-        lines.push({ text: `Exit code ${view.exitCode}`, tone: 'error' })
+        lines.push({ text: t('tool-exit-code', { code: view.exitCode }), tone: 'error' })
       }
       if ('signal' in view && view.signal !== undefined) {
-        lines.push({ text: `Killed by signal ${view.signal}`, tone: 'error' })
+        lines.push({ text: t('tool-killed-signal', { name: String(view.signal) }), tone: 'error' })
       }
       return lines
     }
@@ -230,7 +235,7 @@ function viewLines(view: ToolCallView | ToolResultView): BodyLine[] {
     case 'search': {
       if (view.shape === 'paths') {
         const lines = view.paths.map(plain)
-        if (view.truncated) lines.push(dim(`… (${view.total} total)`))
+        if (view.truncated) lines.push(dim(t('search-results-total', { n: view.total })))
         return lines
       }
       const lines: BodyLine[] = []
@@ -255,7 +260,7 @@ function capLines(lines: BodyLine[], max: number, verbose: boolean): BodyLine[] 
   if (lines.length - max === 1) return lines
   return [
     ...lines.slice(0, max),
-    { ...dim(`… +${lines.length - max} lines (ctrl+o to expand)`), revealOnHover: true },
+    { ...dim(t('lines-folded-expand', { n: lines.length - max })), revealOnHover: true },
   ]
 }
 
@@ -452,7 +457,7 @@ function HeaderTitle({ name, title, isTerminal, folded, displayArgs, argsLanguag
             <>
               <Text>({folded.first})</Text>
               {folded.hiddenLines > 0 && (
-                <Text dimColor>{` … +${folded.hiddenLines} lines (ctrl+o to expand)`}</Text>
+                <Text dimColor>{` ${t('lines-folded-expand', { n: folded.hiddenLines })}`}</Text>
               )}
             </>
           )}
@@ -612,7 +617,7 @@ export function AssistantToolUseMessage({
       body = result.trimEnd().split('\n').map(plain)
     }
     if (isRunning && body.length === 0) {
-      body = [dim(`Running… (${formatDuration(Math.max(0, Date.now() - (tool.startedAt ?? Date.now())))})`)]
+      body = [dim(t('tool-running-elapsed', { duration: formatDuration(Math.max(0, Date.now() - (tool.startedAt ?? Date.now()))) }))]
     }
   }
   const cap = view?.card === 'diff' ? DIFF_BODY_MAX_LINES : TEXT_BODY_MAX_LINES
@@ -653,8 +658,8 @@ export function AssistantToolUseMessage({
   // Hover affordance for the click-to-toggle row: the theme's tool-card blue
   // face marks the call's content area while the pointer dwells (the
   // toolBackground treatment steps up one level to the strong card face), the
-  // collapsed `(ctrl+o to expand)` hint steps from dim to text, the elapsed
-  // clock stops dimming, and a ▾/▴ discloses the row is a toggle.
+  // collapsed fold hint (lines-folded-expand) steps from dim to text, the
+  // elapsed clock stops dimming, and a ▾/▴ discloses the row is a toggle.
   // No layout change: the indicator is a fixed column on the header line, the
   // body never moves.
   const [hovered, setHovered] = React.useState(false)

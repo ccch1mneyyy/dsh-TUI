@@ -38,7 +38,7 @@ function formatCount(value: number): string {
 
 /**
  * Clip every line of `text` longer than `max` characters, appending an
- * inline `… +N chars (ctrl+o to expand)` marker to the clipped line.
+ * inline localized fold marker (`long-line-folded`) to the clipped line.
  *
  * Line boundaries are preserved (never re-flowed, never merged), so the
  * result stays valid input for the markdown renderer and for diff-style

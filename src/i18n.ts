@@ -22,7 +22,36 @@
  * every entry carries zh, and en is optional only for the `cmd-desc-*`
  * family whose en truth lives in the command registry (see {@link tOr}).
  * scripts/verify-i18n.ts adds the checks types cannot express: placeholder
- * parity between languages, single-brace typos, and dead keys.
+ * parity between languages, single-brace typos, dead keys, and English
+ * UI-copy literals outside the dictionary (issue #980's leak shape).
+ *
+ * ## Adding a language (e.g. `ja`) — the full checklist
+ *
+ * The architecture is the standard flat-dict shape; a new language is
+ * translation work plus this mechanical touchpoint list (the compiler and
+ * verify-i18n fail until every step is done — partial translations cannot
+ * ship silently):
+ *
+ *   1. `Lang` union + `LANGS` display order (this file).
+ *   2. `isLang()` — add the literal.
+ *   3. `pluralRules` — add `new Intl.PluralRules('<tag>')`; if the language
+ *      uses CLDR categories beyond one/other (ru/pl/ar…), widen `I18nText`
+ *      to carry them and extend `pickText` accordingly.
+ *   4. Dictionary type below: add `ja?: I18nText` to the `satisfies` shape.
+ *      Decide optionality deliberately: required = compile error per missing
+ *      key (recommended — a half-translated UI is worse than none); optional
+ *      = `t()` renders the raw key for gaps, so also give `t()`/`tOr()` an
+ *      explicit fallback order (e.g. ja → en → key) if you go optional.
+ *   5. scripts/verify-i18n.ts: the completeness loop (§1) hardcodes the
+ *      ['zh','en'] pair — extend it, and re-review FORBIDDEN_LITERALS
+ *      (English sentences stay banned outside the dict; add the new
+ *      language's equivalents only if the leak shape repeats).
+ *   6. Translate the dictionary (~1k keys today); zh comments above each
+ *      key family describe tone/register — keep them.
+ *   7. `detectLocaleLang()` — map the new tag in the OS-locale guess.
+ *   8. Rendered-output regression: extend scripts/verify-toolcard-i18n.tsx
+ *      style fixtures' language passes so the localized strings are proven
+ *      on screen, not just present in the dict.
  */
 
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
@@ -708,6 +737,32 @@ const dict = {
   'tool-tip-failed': { zh: '失败 {{time}}', en: 'failed {{time}}' },
   'tool-tip-exit': { zh: '退出码 {{code}}', en: 'exit {{code}}' },
   'tool-tip-signal': { zh: '信号 {{name}}', en: 'signal {{name}}' },
+
+  // ── 工具卡本体（AssistantToolUseMessage.tsx / SplitDiffView.tsx）─────
+  // 工具名走 `tool-name-*` 家族：displayName() 用字面键映射表查字典（键在
+  // 代码里以字面量出现，无需登记 DYNAMIC_PREFIXES）。bash / powershell 是
+  // 产品名，zh 不译；未登记的 id（插件、上游新增）回退首字母大写——那是
+  // 名字不是文案，没有可翻译的内容。
+  'tool-name-bash': { zh: 'Bash', en: 'Bash' },
+  'tool-name-powershell': { zh: 'PowerShell', en: 'PowerShell' },
+  'tool-name-read': { zh: '读取', en: 'Read' },
+  'tool-name-glob': { zh: '文件搜索', en: 'Glob' },
+  'tool-name-grep': { zh: '内容搜索', en: 'Grep' },
+  'tool-name-write': { zh: '写入', en: 'Write' },
+  'tool-name-edit': { zh: '编辑', en: 'Edit' },
+  'tool-name-todo_write': { zh: '待办清单', en: 'TodoWrite' },
+  'tool-name-subagent': { zh: '子代理', en: 'Task' },
+  'tool-name-web_search': { zh: '联网搜索', en: 'WebSearch' },
+  // 正文错误行与运行中占位（区别于上面 tooltip 的短促小写风格）：
+  'tool-exit-code': { zh: '退出码 {{code}}', en: 'Exit code {{code}}' },
+  'tool-killed-signal': { zh: '被信号 {{name}} 终止', en: 'Killed by signal {{name}}' },
+  'tool-running-elapsed': { zh: '运行中…（{{duration}}）', en: 'Running… ({{duration}})' },
+  // 搜索结果截断行（search 卡 paths 形态）：
+  'search-results-total': { zh: '…（共 {{n}} 条）', en: '… ({{n}} total)' },
+  // 按行折叠的溢出提示：卡片正文行预算（capLines）、终端卡多行命令折叠
+  // （foldTerminalCommand）、分屏 diff 隐藏行（SplitDiffView）。按字符折叠
+  // 的行内标记见 long-line-folded。
+  'lines-folded-expand': { zh: '… +{{n}} 行（ctrl+o 展开）', en: '… +{{n}} lines (ctrl+o to expand)' },
 
   // ── components/SuggestionCard.tsx（/ 命令菜单 · @ 文件菜单）─────────
   'sugg-commands-title': { zh: '命令', en: 'commands' },

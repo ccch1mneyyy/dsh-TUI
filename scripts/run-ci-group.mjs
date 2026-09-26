@@ -410,6 +410,11 @@ const GROUPS = {
 // （开始/结束时刻、耗时、运行中时长）；折叠的终端脚本与超出 480 字符预算
 // 的 args 仍弹完整内容（弹层优先真隐藏内容）。
     ["verify-tool-tooltip-gating", ['node', '--import', 'tsx/esm', 'scripts/verify-tool-tooltip-gating.tsx']],
+// 工具卡 i18n 回归（issue #980）：卡片簇（AssistantToolUseMessage /
+// SplitDiffView）的界面文案——工具名、按行折叠提示、退出码/信号行、
+// 运行中占位、搜索截断——必须在 zh/en 双语都走字典渲染；与 verify-i18n
+// 的字面量 tripwire 互补（那边管源码侧，这边管渲染侧）。
+    ["verify-toolcard-i18n", ['node', '--import', 'tsx/esm', 'scripts/verify-toolcard-i18n.tsx']],
 // 悬停浮层第二批回归：@ 文件补全面板长路径悬停弹全路径（完整可见的短路径
 // 不弹）、会话列表行标题截断悬停弹完整标题+绝对时间+cwd（未截断不重复
 // 标题）、状态栏 model/git 字段悬停明细（provider/ctx 窗口/完整分支）。

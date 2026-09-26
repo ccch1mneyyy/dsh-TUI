@@ -34,7 +34,8 @@ import { TranscriptImages } from './messages/TranscriptImages.js'
  * Transcript rows rendered with the dsh-TUI message layout: user prompts
  * on a grey bubble with a `❯` pointer, assistant text with a `●` bullet and
  * markdown, thinking as a live three-line/full toggle then a settled
- * `⚓ Thinking (ctrl+o to expand)` row, and tool calls as status-dot cards.
+ * `⚓ Thinking` row with the localized ctrl+o expand hint, and tool calls as
+ * status-dot cards.
  * `expanded` (Ctrl+O) shows full reasoning + full tool
  * args/results; `expandedRows` (message-selection mode, Enter) expands single
  * rows; `selectedId` highlights the selected row.

@@ -12,6 +12,7 @@ import { highlightLines, syntaxThemeSignature, type SyntaxRun } from '../termina
 export { chalkFromToken } from '../terminal-utils/syntaxTheme.js'
 export { parseAnsiRuns, highlightLines } from '../terminal-utils/syntaxRuns.js'
 import { getTheme } from '../theme.js'
+import { t } from '../i18n.js'
 import { useTheme } from './design-system/ThemeProvider.js'
 import type { ToolBackground } from '../tuiDisplayPrefs.js'
 import { revealLinesOf } from './smoothReveal.js'
@@ -400,7 +401,7 @@ export function SplitDiffView({
         )
       })}
       {hidden > 0 && (
-        <Text dimColor>{`… +${hidden} lines (ctrl+o to expand)`}</Text>
+        <Text dimColor>{t('lines-folded-expand', { n: hidden })}</Text>
       )}
     </Box>
   )

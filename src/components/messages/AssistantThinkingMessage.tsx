@@ -49,7 +49,8 @@ type Props = {
 }
 
 /**
- * Thinking block: settled rows fold to `⚓ Thinking (ctrl+o to expand)`;
+ * Thinking block: settled rows fold to `⚓ Thinking` plus the localized
+ * ctrl+o expand hint (hint-expand-ctrl-o);
  * streaming rows switch between a three-line preview and the full reasoning
  * text on click. The live leading mark is a rotating braille spinner
  * (`⠋⠙⠹…`, Kimi Code style), settling back to the static anchor (`⚓`). When

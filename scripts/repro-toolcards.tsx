@@ -7,6 +7,9 @@
  * (no channel needed: views are plain data on the row).
  */
 process.env.FORCE_COLOR = '3'
+// 固定英文 UI：本脚本的断言全部针对 en 文案（折叠/退出码/工具名），
+// 不 pin 会随宿主 locale 漂移（zh 机器上这些串已本地化，见 verify-toolcard-i18n）。
+process.env.DSH_TUI_LANG = 'en'
 
 const [{ Writable }, React, { Terminal: XTerm }, { render }, { AssistantToolUseMessage }, { settled, sleep }] = await Promise.all([
   import('node:stream'),

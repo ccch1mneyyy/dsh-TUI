@@ -1,5 +1,5 @@
 /**
- * i18n 字典静态门禁（verify:build 的一环）：类型系统管不到的三类静默失败——
+ * i18n 字典静态门禁（verify:build 的一环）：类型系统管不到的四类静默失败——
  *   1. 语言完整性：非 cmd-desc-* 条目必须同时携带 zh 与 en（cmd-desc-* 的 en
  *      真源在命令注册表，字典只带 zh，见 i18n.ts 的 tOr 注释）；
  *   2. 占位符：单花括号 `{name}` 是 `{{name}}` 的手误，t() 不替换、原样上屏；
@@ -7,7 +7,10 @@
  *      占位符是合法本地化，如 en 单数句去掉 {{n}}，所以只拦"两侧都有但
  *      名字对不上"）；
  *   3. 死 key：src/ 与 scripts/ 里没有任何字面引用、又不属于运行时拼接
- *      前缀家族的条目。拼接家族（tOr(`cmd-desc-${name}`) 等）按前缀放行。
+ *      前缀家族的条目。拼接家族（tOr(`cmd-desc-${name}`) 等）按前缀放行；
+ *   4. 英文文案字面量：整句级 UI 英文（折叠提示、终止信号句）只允许活在
+ *      字典里，src/ 其他文件出现即打回（issue #980 的漏网形态——键已存在
+ *      而组件绕过 t() 硬编码）。scripts/ 的夹具断言 en 输出属合法，不查。
  * 运行：node --import tsx/esm scripts/verify-i18n.ts
  */
 import { execFileSync } from 'node:child_process'
@@ -90,6 +93,20 @@ for (const key of Object.keys(i18nDict)) {
   if (DYNAMIC_PREFIXES.some(p => key.startsWith(p))) continue
   if (!corpus.includes(`'${key}'`) && !corpus.includes(`"${key}"`) && !corpus.includes(`\`${key}\``)) {
     fail(`${key}: 死 key——src/ 与 scripts/ 无引用（运行时拼接的 key 请登记 DYNAMIC_PREFIXES）`)
+  }
+}
+
+// ── 4：英文文案字面量 tripwire（issue #980）─────────────────────────
+// 整句级 UI 英文只允许活在字典里。src/（字典自身除外）出现这些字节 = 有
+// 组件绕过 t() 硬编码（或注释整句引用了文案——注释请引用键名）。
+// 收录标准：句级特异性（不会撞注释/标识符的完整英文句子），一次一族。
+const FORBIDDEN_LITERALS = ['ctrl+o to expand', 'Killed by signal']
+for (const f of files.filter(f => f.startsWith('src'))) {
+  const content = readFileSync(f, 'utf8')
+  for (const literal of FORBIDDEN_LITERALS) {
+    if (content.includes(literal)) {
+      fail(`${f}: 硬编码英文文案 "${literal}"——组件文案请走 t()（i18n.ts 字典）；注释请引用键名而非整句文案`)
+    }
   }
 }
 
