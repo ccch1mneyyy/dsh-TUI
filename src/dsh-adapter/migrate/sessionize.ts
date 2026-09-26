@@ -22,6 +22,7 @@
  * @module @deepseek-harness-tui/dsh-tui/migrate/sessionize
  */
 import { createAssistantMessage, createUserMessage } from '@deepseek-ai/dsh-llm'
+import type { ReasoningBlock, TextBlock } from '@deepseek-ai/dsh-llm'
 import {
   SESSION_FORMAT_VERSION,
   Session,
@@ -40,10 +41,10 @@ export interface SessionizedLog {
 /** Blocks for one migrated message: reasoning first (when the source kept
  *  one), then the visible text. Empty text with reasoning keeps both blocks
  *  honest — the projection renders reasoning as its own collapsible row. */
-function assistantBlocks(turn: MigrationTurn): { type: 'text'; text: string }[] {
-  const blocks: { type: 'text'; text: string }[] = []
+function assistantBlocks(turn: MigrationTurn): (TextBlock | ReasoningBlock)[] {
+  const blocks: (TextBlock | ReasoningBlock)[] = []
   if (turn.reasoning !== undefined && turn.reasoning !== '') {
-    blocks.push({ type: 'reasoning', text: turn.reasoning } as unknown as { type: 'text'; text: string })
+    blocks.push({ type: 'reasoning', text: turn.reasoning })
   }
   if (turn.text !== '') blocks.push({ type: 'text', text: turn.text })
   if (blocks.length === 0) blocks.push({ type: 'text', text: '' })
@@ -69,25 +70,29 @@ export function sessionize(id: SessionId, agentId: string, session: MigrationSes
     isSeeded: false,
   }
   const model = Session.create(id, undefined, header)
+  // Collect each append()'s RETURN (a fully enveloped event) instead of the
+  // deprecated snapshotEvents() bulk read — upstream forbids NEW callers of
+  // the latter, and append already returns seq/time-stamped events.
+  const events: SessionEvent[] = []
   let turnIndex = 0
   let i = 0
   const turns = session.turns
   while (i < turns.length) {
     turnIndex += 1
-    model.append('turn/start', { turn: turnIndex })
+    events.push(model.append('turn/start', { turn: turnIndex }))
     if (turns[i]!.role === 'user') {
-      model.append('user/message', createUserMessage({
+      events.push(model.append('user/message', createUserMessage({
         content: [{ type: 'text', text: turns[i]!.text }],
         source: { kind: 'user' },
-      }), { surfaceOp: 'append' })
+      }), { surfaceOp: 'append' }))
       i += 1
     }
     let step = 0
     while (i < turns.length && turns[i]!.role === 'assistant') {
       step += 1
       const turn = turns[i]!
-      model.append('step/start', { turn: turnIndex, step })
-      model.append('assistant/message', {
+      events.push(model.append('step/start', { turn: turnIndex, step }))
+      events.push(model.append('assistant/message', {
         turn: turnIndex,
         step,
         message: createAssistantMessage({
@@ -100,11 +105,11 @@ export function sessionize(id: SessionId, agentId: string, session: MigrationSes
           },
         }),
         stream: [],
-      }, { surfaceOp: 'append' })
-      model.append('step/end', { turn: turnIndex, step })
+      }, { surfaceOp: 'append' }))
+      events.push(model.append('step/end', { turn: turnIndex, step }))
       i += 1
     }
-    model.append('turn/end', { turn: turnIndex, reason: { kind: 'completed' } })
+    events.push(model.append('turn/end', { turn: turnIndex, reason: { kind: 'completed' } }))
   }
-  return { header: model.header, events: model.snapshotEvents() }
+  return { header: model.header, events }
 }

@@ -2,7 +2,7 @@
  * Cross-agent conversation migration: shared types.
  *
  * An adapter turns one foreign agent's stored conversation into the neutral
- * {@link MigrationSession} shape; the synthesizer (see synthesize.ts) then
+ * {@link MigrationSession} shape; the sessionizer (see sessionize.ts) then
  * emits DSH session events. Adapters are read-only against their source and
  * defensive by default: a malformed line costs that line, never the scan.
  *
@@ -48,4 +48,8 @@ export interface MigrationAdapter {
   roots(): readonly string[]
   /** Scan the roots and normalize every readable conversation. */
   discover(): MigrationDiscovery
+  /** Cheap per-root file count for list mode (no parsing). Implementations
+   *  that cannot count by name alone may omit this and fall back to
+   *  discover() — the count then equals the parsed session total. */
+  count?(): number
 }

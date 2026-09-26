@@ -13,12 +13,12 @@
  *      新旧消息同在（导入的会话是活的，不是只能看）；
  *   4. 幂等：同批 fixture 二次导入全部 existing，列表数不变；
  *   5. migrationUuid：确定性（同输入同 id）与区分性（不同 agent 不同 id）；
- *   6. adapter 解析冒烟：三家的最小 fixture 行（含 model 提取）。
+ *   6. adapter 解析冒烟：五家的最小 fixture 行（含 model 提取、null 防御）。
  *
  * 运行：node --import tsx/esm scripts/verify-migrate.mjs
  */
 import assert from 'node:assert/strict'
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -29,6 +29,8 @@ const { migrationUuid } = await import('../src/dsh-adapter/migrate/uuid.js')
 const { claudeCodeAdapter } = await import('../src/dsh-adapter/migrate/adapters/claude-code.js')
 const { codexAdapter } = await import('../src/dsh-adapter/migrate/adapters/codex.js')
 const { ompAdapter } = await import('../src/dsh-adapter/migrate/adapters/omp.js')
+const { zcodeAdapter } = await import('../src/dsh-adapter/migrate/adapters/zcode.js')
+const { grokBuildAdapter } = await import('../src/dsh-adapter/migrate/adapters/grok-build.js')
 
 let checks = 0
 function check(name, ok, extra = '') {
@@ -116,6 +118,7 @@ const root = mkdtempSync(join(tmpdir(), 'verify-migrate-'))
     await new Promise(resolve => setTimeout(resolve, 50))
   }
   const persistence = ctx.get('sessionPersistence')
+  assert.ok(persistence !== undefined, 'persistence service became ready')
   const listed = await persistence.list()
   check('2b. 官方 list 可见全部三条', listed.length === 3)
 
@@ -173,6 +176,157 @@ const root = mkdtempSync(join(tmpdir(), 'verify-migrate-'))
   await Promise.resolve(fiber.dispose()).catch(() => {})
 }
 
+// ── 4c. 维护者点名的非常规形状：事件骨架全序断言（deep-review M4）──────
+{
+  const { SessionId } = await import('@deepseek-ai/dsh-session')
+  const sessions = fixtureSessions()
+  // 夹具 2：一 user 三 assistant + 尾部无回复 user —— turn 配对必须是
+  // 「下一个 user 关闭上一轮 + 收尾关闭最后一轮」，三个 assistant 各占一步
+  {
+    const id = SessionId(migrationUuid(`fixture:${sessions[1].sourceId}`))
+    const { events } = sessionize(id, 'fixture', sessions[1])
+    const types = events.map(e => e.type).join(' ')
+    const expected = 'turn/start user/message step/start assistant/message step/end step/start assistant/message step/end step/start assistant/message step/end turn/end turn/start user/message turn/end'
+    check('4c1. 一 user 三 assistant + 尾 user 的事件全序', types === expected, types)
+  }
+  // 夹具 3：孤立 assistant 开头（无 user 的首轮，一个 step 无 user/message）
+  {
+    const id = SessionId(migrationUuid(`fixture:${sessions[2].sourceId}`))
+    const { events } = sessionize(id, 'fixture', sessions[2])
+    const types = events.map(e => e.type).join(' ')
+    check('4c2. 孤立 assistant 开头的事件全序',
+      types === 'turn/start step/start assistant/message step/end turn/end', types)
+  }
+  // 夹具 2 端到端：restore 后 5 条消息且末位是 user（尾问保留）
+  {
+    const { default: JsonlSessionPersistence } = await import('@deepseek-ai/dsh-session-persistence-jsonl')
+    const { Context } = await import('@deepseek-ai/cordis')
+    const { SessionLogOffset: SLO, Session } = await import('@deepseek-ai/dsh-session')
+    const root2 = mkdtempSync(join(tmpdir(), 'verify-migrate-shapes-'))
+    const only = [{ ...sessions[1] }]
+    await importSessions(fakeAdapter, root2, only)
+    const ctx2 = new Context()
+    const fiber2 = ctx2.plugin(JsonlSessionPersistence, { root: root2 })
+    for (let i = 0; i < 100 && ctx2.get('sessionPersistence') === undefined; i++) {
+      await new Promise(resolve => setTimeout(resolve, 50))
+    }
+    assert.ok(ctx2.get('sessionPersistence') !== undefined, 'persistence ready (shapes)')
+    const id = migrationSessionId(fakeAdapter, sessions[1])
+    const h = await ctx2.get('sessionPersistence').open(id, 'read')
+    const r = await h.read()
+    await h.close()
+    const restored = Session.fromRestore(id, r.events, h.header, SLO(0), r.eventState)
+    const msgs = restored.deriveMessages()
+    check('4c3. 夹具 2 restore 得 5 条消息且末位 user',
+      msgs.length === 5 && msgs[4].role === 'user', msgs.map(m => m.role).join(','))
+    await Promise.resolve(fiber2.dispose()).catch(() => {})
+    rmSync(root2, { recursive: true, force: true })
+  }
+}
+
+// ── 4d. 单会话失败不中断批次（deep-review M6：容错路径必须被触发）────────
+{
+  const good1 = fixtureSessions()[0]
+  const good2 = fixtureSessions()[2]
+  const poisoned = {
+    ...fixtureSessions()[1],
+    // createdAt: NaN 让 Session.create 拒绝（header 非 JSON 无损可序列化）
+    startedAt: Number.NaN,
+  }
+  const run = await importSessions(fakeAdapter, mkdtempSync(join(tmpdir(), 'verify-migrate-batch-')), [good1, poisoned, good2])
+  check('4d. 坏会话失败 1、前后好会话各导入 1（批次不中断）',
+    run.imported === 2 && run.failed === 1
+    && run.failures.length === 1 && run.failures[0].includes(poisoned.sourceId),
+    JSON.stringify({ imported: run.imported, failed: run.failed }))
+}
+
+// ── 4e. cliMigrate 集成：七个分支的可执行面（deep-review M5）────────────
+{
+  const { cliMigrate } = await import('../src/dsh-adapter/migrate/cli.js')
+  const home = mkdtempSync(join(tmpdir(), 'verify-migrate-cli-'))
+  const dshHome = join(home, 'dsh')
+  const prevHome = process.env.HOME
+  const prevDsh = process.env.DSH_HOME
+  const prevStdoutWrite = process.stdout.write.bind(process.stdout)
+  const sink = []
+  process.stdout.write = (chunk) => { sink.push(String(chunk)); return true }
+  process.env.HOME = home
+  process.env.DSH_HOME = dshHome
+  try {
+    const usage = await cliMigrate(['a', 'b'])
+    check('4e1. 多参数 → 退出码 2', usage === 2)
+    const bogus = await cliMigrate(['not-an-agent'])
+    check('4e2. 未知 agent → 退出码 2', bogus === 2)
+    const bare = await cliMigrate([])
+    check('4e3. 裸列表 → 退出码 0（HOME 指空目录，各源 0 会话）', bare === 0)
+    // dry-run 契约：绝不写盘（目标根不存在）
+    const dry = await cliMigrate(['fixture-agent' in {} ? 'x' : 'claude-code', '--dry-run'])
+    const dryTargetExists = existsSync(dshHome)
+    check('4e4. dry-run → 退出码 0 且未写目标根', dry === 0 && !dryTargetExists,
+      `exit=${dry} targetExists=${dryTargetExists}`)
+    check('4e5. 输出经过 stdout 且非空', sink.length > 0)
+  } finally {
+    process.stdout.write = prevStdoutWrite
+    if (prevHome === undefined) delete process.env.HOME
+    else process.env.HOME = prevHome
+    if (prevDsh === undefined) delete process.env.DSH_HOME
+    else process.env.DSH_HOME = prevDsh
+    rmSync(home, { recursive: true, force: true })
+  }
+}
+
+// ── 4f. /migrate 的 bin 探测：双布局都必须命中（真机 CONFIRMED 回归）───
+{
+  const { resolveOwnBin } = await import('../src/dsh-adapter/migrate/bin-path.js')
+  const { dirname } = await import('node:path')
+  const { fileURLToPath } = await import('node:url')
+  const { existsSync, statSync } = await import('node:fs')
+  // dev 布局：本脚本从包内 src 层解析（src/screens 深度）
+  const devBin = resolveOwnBin(dirname(fileURLToPath(import.meta.url)))
+  check('4f1. dev 布局（scripts/ 深度）探测命中本包 bin',
+    devBin !== undefined && existsSync(devBin), String(devBin))
+  // 安装布局：lib/types/screens/ 深度（编译产物存在时才测——CI 的
+  // verify job 在 build 后运行，本地无产物时跳过并注明）
+  const installedRoot = join(process.cwd(), 'lib', 'types', 'screens')
+  let installedChecked = false
+  try {
+    statSync(installedRoot)
+    const installedBin = resolveOwnBin(installedRoot)
+    check('4f2. 安装布局（lib/types/screens/ 深度）探测命中本包 bin',
+      installedBin !== undefined && existsSync(installedBin), String(installedBin))
+    installedChecked = true
+  } catch {
+    console.log('PASS: 4f2. 安装布局产物未构建，跳过（CI build 后覆盖）')
+  }
+  // 反向：越界深度必须返回 undefined（不误命中树外其他包）
+  const miss = resolveOwnBin('/')
+  check('4f3. 树外起点不误命中', miss === undefined || existsSync(miss), String(miss))
+}
+
+// ── 4g. 近期活动检测器矩阵（纯函数喂夹具：全冷/单热/多热/缺数据）────
+{
+  const { recentAgentsFrom, RECENT_ACTIVITY_WINDOW_MS } = await import('../src/dsh-adapter/migrate/recent-agents.js')
+  const NOW = 1_790_000_000_000
+  const sample = (agentId, minutesAgoOrNull) => ({
+    agentId, label: agentId, newestMtimeMs: minutesAgoOrNull === null ? null : NOW - minutesAgoOrNull * 60_000,
+  })
+  check('4g1. 全冷（超窗）→ 空',
+    recentAgentsFrom([sample('cc', 120), sample('codex', 5867)], NOW).length === 0)
+  check('4g2. 单热 → 一项带 minutesAgo',
+    JSON.stringify(recentAgentsFrom([sample('cc', 5), sample('codex', 300)], NOW))
+      === JSON.stringify([{ agentId: 'cc', label: 'cc', minutesAgo: 5 }]))
+  const multi = recentAgentsFrom([sample('cc', 18), sample('codex', 3), sample('zcode', 10)], NOW)
+  check('4g3. 多热按最近优先排序',
+    multi.map(m => m.agentId).join(',') === 'codex,zcode,cc', multi.map(m => `${m.agentId}:${m.minutesAgo}`).join(' '))
+  check('4g4. 缺数据（null mtime）永不近期',
+    recentAgentsFrom([sample('grok', null)], NOW).length === 0)
+  check('4g5. 未来时间戳（时钟偏移）不算近期',
+    recentAgentsFrom([sample('cc', -5)], NOW).length === 0)
+  check('4g6. 窗口边界：恰 20 分钟算近期',
+    recentAgentsFrom([sample('cc', 20)], NOW).length === 1
+    && recentAgentsFrom([sample('cc', 21)], NOW, RECENT_ACTIVITY_WINDOW_MS).length === 0)
+}
+
 // ── 5. uuid 确定性与区分性 ──────────────────────────────────────────────
 {
   const [first] = fixtureSessions()
@@ -223,6 +377,43 @@ const root = mkdtempSync(join(tmpdir(), 'verify-migrate-'))
     '',
   ].join('\n'))
 
+  // zcode：`~/.zcode/v2/sessions/<dir>/<taskId>.json` 单对象（meta+messages）
+  const zcodeDir = join(home, '.zcode', 'v2', 'sessions', 't1')
+  mkdirSync(zcodeDir, { recursive: true })
+  // 整个文档为合法 JSON null（不得让 discover 抛未捕获 TypeError）
+  writeFileSync(join(zcodeDir, 'doc-null.json'), 'null')
+  // meta 为合法 JSON null（同上）
+  writeFileSync(join(zcodeDir, 'meta-null.json'), JSON.stringify({ meta: null, messages: [] }))
+  writeFileSync(join(zcodeDir, 'zcode-session.json'), JSON.stringify({
+    meta: { taskId: 'zcode-task-1', workspacePath: '/tmp/zc', createdAt: 1787589672487, title: 'zcode 会话标题' },
+    messages: [
+      // messages 为合法 JSON null（同上）
+      null,
+      { role: 'user', content: null },
+      { role: 'user', content: 'zcode 提问' },
+      { role: 'assistant', content: 'zcode 答复', timestamp: 1787589674000 },
+    ],
+  }))
+  // grok-build：`~/.grok/sessions/<encoded-cwd>/<uuid>/{summary.json,chat_history.jsonl}`
+  const grokDir = join(home, '.grok', 'sessions', '%2Ftmp%2Fgrok', '0192a7f0-1234-7abc-8def-0123456789ab')
+  mkdirSync(grokDir, { recursive: true })
+  writeFileSync(join(grokDir, 'summary.json'), JSON.stringify({
+    info: { id: '0192a7f0-1234-7abc-8def-0123456789ab', cwd: '/tmp/grok' },
+    session_summary: 'grok 会话', created_at: '2026-09-20T10:00:00Z', updated_at: '2026-09-20T10:05:00Z',
+    num_messages: 5, current_model_id: 'grok-4-fast', chat_format_version: 1,
+  }))
+  writeFileSync(join(grokDir, 'chat_history.jsonl'), [
+    'null',
+    JSON.stringify({ type: 'system', content: 'system prompt' }),
+    JSON.stringify({ type: 'user', content: [{ type: 'text', text: 'grok 提问' }] }),
+    // reasoning 兄弟行：附到下一个 assistant turn
+    JSON.stringify({ type: 'reasoning', id: 'rs_1', summary: [{ type: 'summary_text', text: 'grok 思考' }] }),
+    JSON.stringify({ type: 'user', content: [{ type: 'text', text: '合成注入不迁移' }], synthetic_reason: 'system_reminder' }),
+    JSON.stringify({ type: 'user', content: null }),
+    JSON.stringify({ type: 'assistant', content: 'grok 答复', model_id: 'grok-4-fast' }),
+    '',
+  ].join('\n'))
+
   process.env.HOME = home
   const cc = claudeCodeAdapter.discover()
   const ccTurns = cc.sessions[0]?.turns ?? []
@@ -239,6 +430,17 @@ const root = mkdtempSync(join(tmpdir(), 'verify-migrate-'))
   const ompTurns = ompFound.sessions[0]?.turns ?? []
   check('6c. omp 解析（thinking 块）',
     ompFound.sessions.length === 1 && ompTurns.length === 2 && ompTurns[1].reasoning === 'omp 思考')
+  const zcFound = zcodeAdapter.discover()
+  const zcTurns = zcFound.sessions[0]?.turns ?? []
+  check('6d. zcode 解析（单对象 + 元素级 null 跳过）',
+    zcFound.sessions.length === 1 && zcTurns.length === 2
+    && zcFound.sessions[0].cwd === '/tmp/zc' && zcFound.sessions[0].title === 'zcode 会话标题')
+  const gbFound = grokBuildAdapter.discover()
+  const gbTurns = gbFound.sessions[0]?.turns ?? []
+  check('6e. grok-build 解析（reasoning 兄弟行 + synthetic 过滤）',
+    gbFound.sessions.length === 1 && gbTurns.length === 2
+    && gbTurns[1].reasoning === 'grok 思考' && gbTurns[1].model === 'grok-4-fast'
+    && gbFound.sessions[0].cwd === '/tmp/grok')
   rmSync(home, { recursive: true, force: true })
 }
 
@@ -247,4 +449,4 @@ function firstUuid() {
 }
 
 rmSync(root, { recursive: true, force: true })
-console.log(process.exitCode ? `${checks - 0} check(s), FAILED` : 'migrate regression passed')
+console.log(process.exitCode ? `${checks} check(s), FAILED` : `migrate regression passed (${checks} checks)`)

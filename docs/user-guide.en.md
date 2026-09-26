@@ -252,6 +252,7 @@ The command menu = built-in commands (50) + DSH registry commands (`/plan` `/goa
 | `/balance` | none | DeepSeek official account balance (free read-only API): summary line + hover detail, click refresh, `×` close |
 | `/config` | none | config sources: `cordis.patch.yml` path, launch method, model routing |
 | `/doctor` | none | environment check |
+| `/migrate` | `[agent] [--dry-run]` | import conversation history from other coding agents (claude-code/codex/omp/zcode/grok-build); runs in a child process — see [Session migration](migrate.en.md) |
 | `/init` | none | create `AGENTS.md` in the working directory (created / exists / failed) |
 | `/agents` | none | subagent list for this session |
 | `/jobs` | none | background-task panel: status/runtime/exit-code tracking, `↑/↓` select, `k` stop; while open, `Esc` **closes only the panel** and won't interrupt the turn (close the panel first, then `Ctrl+C`) |
