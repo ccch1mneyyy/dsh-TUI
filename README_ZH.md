@@ -136,6 +136,8 @@ dsh-tui migrate codex --dry-run  # 只预览将落盘的内容，不写入
 - **保留结构**：用户/助手消息与思考过程（reasoning）按轮次还原；工具调用流量不迁移（源格式不可忠实回放——迁移契约是「重读对话」而非「续跑任务」）
 TUI 内：`/migrate`（或 `/migrate <agent> [--dry-run]`）以子进程运行同一导入，经通知流汇报，不卡界面。
 CLI 形态：任意终端运行 `dsh-tui migrate ...`，与 TUI 内执行同一套导入。
+完整指南：[会话迁移](docs/migrate.md)。
+
 - pi / opencode 等其他代理经 adapter 注册表逐步扩展；grok-build 支持读 `GROK_HOME` 环境变量
 
 **VS Code**：用集成终端，或用 `dsh-tui-vscode` 扩展。见 [VS Code 使用指南](docs/vscode.md)。**Herdr**：在 [Herdr](https://herdr.dev) 窗格运行 `dsh-tui`，经其本地集成 API 报告 `idle` / `working` / `blocked`。
