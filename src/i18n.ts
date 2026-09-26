@@ -550,7 +550,7 @@ const dict = {
   'vim-on': { zh: 'vim 模式已开启（Esc 切 normal，i/a/o 回 insert）', en: 'vim mode on (Esc = normal, i/a/o = insert)' },
   'vim-off': { zh: 'vim 模式已关闭', en: 'vim mode off' },
   'terminal-setup-hint': { zh: '推荐 Windows Terminal（≥110 列、等宽字体、TrueColor）。', en: 'Recommended: Windows Terminal (≥110 columns, monospace, TrueColor).' },
-  'terminal-paste-hint': { zh: '{{mod}}V 或 Alt+V 粘贴文本、文件路径或图片；Ctrl+Shift+V 终端原生粘贴；右键粘贴同样可用；快捷键可在 /settings 修改。', en: '{{mod}}V or Alt+V pastes text, file paths, or images; Ctrl+Shift+V is native terminal paste; right-click paste also works; remappable via /settings.' },
+  'terminal-paste-hint': { zh: '{{keys}} 粘贴文本、文件路径或图片；Ctrl+Shift+V 终端原生粘贴；右键粘贴同样可用；快捷键可在 /settings 修改。', en: '{{keys}} pastes text, file paths, or images; Ctrl+Shift+V is native terminal paste; right-click paste also works; remappable via /settings.' },
   'connect-none': { zh: '当前环境未提供远程连接服务。', en: 'No remote connection service is available in this environment.' },
   'theme-switch-failed': { zh: '主题「{{name}}」切换失败（无法写入 ~/.dsh-tui/theme.json）', en: 'Theme "{{name}}" switch failed (cannot write ~/.dsh-tui/theme.json)' },
   'interrupt-delivered': { zh: '已打断当前回合，{{n}} 条消息立即处理', en: 'Interrupted current turn, {{n}} messages processed immediately' },
@@ -762,7 +762,7 @@ const dict = {
   // 按行折叠的溢出提示：卡片正文行预算（capLines）、终端卡多行命令折叠
   // （foldTerminalCommand）、分屏 diff 隐藏行（SplitDiffView）。按字符折叠
   // 的行内标记见 long-line-folded。
-  'lines-folded-expand': { zh: '… +{{n}} 行（ctrl+o 展开）', en: '… +{{n}} lines (ctrl+o to expand)' },
+  'lines-folded-expand': { zh: '… +{{n}} 行（{{key}} 展开）', en: '… +{{n}} lines ({{key}} to expand)' },
 
   // ── components/SuggestionCard.tsx（/ 命令菜单 · @ 文件菜单）─────────
   'sugg-commands-title': { zh: '命令', en: 'commands' },
@@ -792,21 +792,21 @@ const dict = {
   // ── components/HelpMenu.tsx ─────────────────────────────────────────
   'help-for-commands': { zh: '/ 查看命令', en: '/ for commands' },
   'help-this-help': { zh: '? 查看本帮助', en: '? for this help' },
-  'help-verbose-output': { zh: '{{mod}}o 详细输出', en: '{{mod}}o for verbose output' },
-  'help-open-trajectory': { zh: '{{mod}}t 打开会话轨迹', en: '{{mod}}t to open trajectory' },
-  'help-search-history': { zh: '{{mod}}r 搜索历史', en: '{{mod}}r to search history' },
+  'help-verbose-output': { zh: '{{key}} 详细输出', en: '{{key}} for verbose output' },
+  'help-open-trajectory': { zh: '{{key}} 打开会话轨迹', en: '{{key}} to open trajectory' },
+  'help-search-history': { zh: '{{key}} 搜索历史', en: '{{key}} to search history' },
   'help-interrupt': { zh: 'ctrl+c 打断', en: 'ctrl+c to interrupt' },
   'help-exit': { zh: 'ctrl+d 退出', en: 'ctrl+d to exit' },
-  'help-redraw': { zh: '{{mod}}l 重绘', en: '{{mod}}l to redraw' },
+  'help-redraw': { zh: '{{key}} 重绘', en: '{{key}} to redraw' },
   'help-clear-input': { zh: 'esc 清空输入', en: 'esc to clear input' },
   'help-history-nav': { zh: '↑/↓ 历史', en: '↑/↓ for history' },
   'help-move-cursor': { zh: '←/→ 移动光标', en: '←/→ to move cursor' },
   'help-word-jumps': { zh: '{{mod}}←/→ 按词跳转', en: '{{mod}}←/→ for word jumps' },
   'help-complete-command': { zh: 'tab 补全命令', en: 'tab to complete command' },
   'help-cycle-mode': { zh: 'shift+tab 切换模式', en: 'shift+tab to cycle mode' },
-  'help-open-editor': { zh: 'ctrl+g 打开编辑器', en: 'ctrl+g to open editor' },
-  'help-fold-todos': { zh: '{{mod}}q 折叠待办', en: '{{mod}}q to fold todos' },
-  'goal-todo-fold-hint': { zh: '{{mod}}q 折叠', en: '{{mod}}q to fold' },
+  'help-open-editor': { zh: '{{key}} 打开编辑器', en: '{{key}} to open editor' },
+  'help-fold-todos': { zh: '{{key}} 折叠待办', en: '{{key}} to fold todos' },
+  'goal-todo-fold-hint': { zh: '{{key}} 折叠', en: '{{key}} to fold' },
   'help-commands-title': { zh: '命令：', en: 'commands:' },
   'help-scroll-hint': {
     zh: '↑/↓ 滚动 · PgUp/PgDn 翻页 · Home/End 首尾 · Esc 关闭',
@@ -821,7 +821,7 @@ const dict = {
 
   // ── components/MessageList.tsx ──────────────────────────────────────
   'load-earlier': { zh: ' ↑ 加载更早消息（会话日志完整，/export 导出全文） ', en: ' ↑ load earlier messages (full session log; /export for full text) ' },
-  'show-previous-messages': { zh: ' ctrl+e 显示前 {{n}} 条消息 ', en: ' ctrl+e to show {{n}} previous messages ' },
+  'show-previous-messages': { zh: ' {{key}} 显示前 {{n}} 条消息 ', en: ' {{key}} to show {{n}} previous messages ' },
 
   // ── screens/Chat.tsx (/resume) ──────────────────────────────────────
   'resume-resumed': { zh: '已恢复会话', en: 'Session resumed' },
@@ -901,10 +901,10 @@ const dict = {
   'hint-ext-dialog-input': { zh: '**Enter** 确认 · Esc 取消', en: '**Enter** to confirm · Esc to cancel' },
   'hint-adjust-done': { zh: '**←/→** 调整 · Enter/Esc 完成', en: '**←/→** to adjust · Enter/Esc to done' },
   'hint-history-search': { zh: '↑/↓ 选择 · **Enter** 确认 · Esc 取消', en: '↑/↓ to navigate · **Enter** to select · Esc to cancel' },
-  'hint-expand-ctrl-o': { zh: '（ctrl+o 展开）', en: '(ctrl+o to expand)' },
+  'hint-expand-ctrl-o': { zh: '（{{key}} 展开）', en: '({{key}} to expand)' },
   // 转录里的超长单行（utils/fold-long-lines.ts）：行尾内联标记。鼠标点整行
-  // （工具卡点卡面）即可展开/收起，键盘走 ctrl+o —— 两种都写进文案。
-  'long-line-folded': { zh: '… 已折叠 {{n}} 字符（点击或 ctrl+o 展开）', en: '… {{n}} chars folded (click or ctrl+o to expand)' },
+  // （工具卡点卡面）即可展开/收起，键盘走 transcript 键（默认 ctrl+o）—— 两种都写进文案。
+  'long-line-folded': { zh: '… 已折叠 {{n}} 字符（点击或 {{key}} 展开）', en: '… {{n}} chars folded (click or {{key}} to expand)' },
 
   // ── components/FileActionsPanel.tsx（点击文件路径弹出的操作菜单）──
   'file-actions-title': { zh: '文件操作', en: 'File actions' },
@@ -1055,7 +1055,7 @@ const dict = {
   'question-header-progress': { zh: ' 📋 提问 · 第 {{position}}/{{total}} 题{{remaining}} ', en: ' 📋 Question {{position}}/{{total}} {{remaining}} ' },
   'question-remaining-more': { zh: ' · 还剩 {{n}} 题', en: ' · {{n}} left' },
   'question-hint-type': { zh: '输入回答', en: 'Type answer' },
-  'question-hint-paste': { zh: 'Ctrl+V 粘贴', en: 'Ctrl+V paste' },
+  'question-hint-paste': { zh: '{{key}} 粘贴', en: '{{key}} paste' },
   'question-hint-enter': { zh: 'Enter 提交', en: 'Enter submit' },
   'question-hint-back': { zh: '↑ 返回选项', en: '↑ back to options' },
   'question-hint-esc': { zh: 'Esc 中断', en: 'Esc cancel' },
@@ -1137,7 +1137,7 @@ const dict = {
   'plan-review-fallback-header': { zh: '计划评审', en: 'Plan review' },
   'plan-review-feedback-placeholder': { zh: '输入反馈，告诉模型要改什么…', en: 'Tell the model what to change…' },
   'plan-review-approve-needs-empty': { zh: '请先清空反馈再批准（或在输入行回车提交反馈）', en: 'Clear the feedback to approve (or press Enter on the input row to send it)' },
-  'plan-review-hint': { zh: '↑/↓ 选择 · 1/2 快选 · 打字输入反馈 · Ctrl+V 粘贴 · Enter 提交 · Esc 打断评审', en: '↑/↓ select · 1/2 quick-pick · type feedback · Ctrl+V paste · Enter submit · Esc dismiss' },
+  'plan-review-hint': { zh: '↑/↓ 选择 · 1/2 快选 · 打字输入反馈 · {{paste}} 粘贴 · Enter 提交 · Esc 打断评审', en: '↑/↓ select · 1/2 quick-pick · type feedback · {{paste}} paste · Enter submit · Esc dismiss' },
 
   // ── providerWizard.ts ────────────────────────────────────────────────
   'provider-unavailable': { zh: '/provider 需要经 dsh profile 启动（settings / credentials / llm-pi-ai 服务未挂载）', en: '/provider requires starting through a dsh profile (settings / credentials / llm-pi-ai services not mounted)' },

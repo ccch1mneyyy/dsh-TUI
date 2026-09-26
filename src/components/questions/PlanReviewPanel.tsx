@@ -34,7 +34,7 @@ import { Markdown } from '../Markdown.js'
 import { POINTER } from '../../terminal-utils/figures.js'
 import type { QuestionSelection } from '../../dsh-adapter/questions.js'
 import { isPlainReturnInput } from '../../utils/modifiers.js'
-import { actionMatches } from '../../utils/keymap.js'
+import { actionMatches, comboDisplay, primaryComboString } from '../../utils/keymap.js'
 import { flattenPasteInline } from '../../dsh-adapter/sanitize.js'
 import { readClipboard, type ClipboardRead } from '../../utils/clipboard.js'
 
@@ -472,7 +472,7 @@ export function PlanReviewPanel({
         </Box>
       )}
       <Box marginTop={1}>
-        <Text dimColor>{t('plan-review-hint')}</Text>
+        <Text dimColor>{t('plan-review-hint', { paste: comboDisplay(primaryComboString('paste')) })}</Text>
       </Box>
     </Box>
   )

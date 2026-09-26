@@ -35,7 +35,7 @@ import type { QuestionDraft, QuestionSelection } from '../../dsh-adapter/questio
 import { PlanReviewPanel } from './PlanReviewPanel.js'
 import { QuestionMinimizedBar } from './QuestionMinimizedBar.js'
 import { isPlainReturnInput } from '../../utils/modifiers.js'
-import { actionMatches, effectiveComboDisplay } from '../../utils/keymap.js'
+import { actionMatches, comboDisplay, effectiveComboDisplay, primaryComboString } from '../../utils/keymap.js'
 import { flattenPasteInline } from '../../dsh-adapter/sanitize.js'
 import { readClipboard, type ClipboardRead } from '../../utils/clipboard.js'
 import { listWindow } from '../listWindow.js'
@@ -673,7 +673,7 @@ export function AskUserQuestionPanel({
   const hintParts = inputFocused
     ? [
         t('question-hint-type'),
-        t('question-hint-paste'),
+        t('question-hint-paste', { key: comboDisplay(primaryComboString('paste')) }),
         t('question-hint-enter'),
         ...(options.length > 0 ? [t('question-hint-back')] : []),
         onBack === undefined ? t('question-hint-esc') : t('question-hint-previous'),
@@ -684,7 +684,7 @@ export function AskUserQuestionPanel({
     : [
         t('question-hint-select'),
         ...(multiSelect ? [t('question-hint-multi')] : []),
-        ...(hideCustomInput ? [] : [t('question-hint-paste'), t('question-hint-attach')]),
+        ...(hideCustomInput ? [] : [t('question-hint-paste', { key: comboDisplay(primaryComboString('paste')) }), t('question-hint-attach')]),
         t('question-hint-enter'),
         onBack === undefined ? t('question-hint-esc') : t('question-hint-previous'),
         ...(onBack === undefined ? [] : [t('question-hint-cancel')]),

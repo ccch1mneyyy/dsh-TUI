@@ -29,6 +29,7 @@ import type { ToolBackground } from '../tuiDisplayPrefs.js'
 import { getRevealVersion, revealLengthOf, revealTextOf } from './smoothReveal.js'
 import { useRevealVersion } from '../hooks/useRevealVersion.js'
 import { TranscriptImages } from './messages/TranscriptImages.js'
+import { primaryComboString } from '../utils/keymap.js'
 
 /**
  * Transcript rows rendered with the dsh-TUI message layout: user prompts
@@ -1189,7 +1190,7 @@ export function MessageList({
         <ClickableDivider title={t('load-earlier')} onClick={onLoadOlder} />
       )}
       {!showAll && hiddenCount > 0 && (
-        <ClickableDivider title={t('show-previous-messages', { n: hiddenCount })} onClick={onToggleAll} />
+        <ClickableDivider title={t('show-previous-messages', { n: hiddenCount, key: primaryComboString('showAll') })} onClick={onToggleAll} />
       )}
       {topPad > 0 && <Box height={topPad} flexShrink={0} />}
       {visibleRows
@@ -1677,7 +1678,7 @@ function TranscriptRow({
             <Text dimColor italic color={compactHovered ? 'text' : undefined}>
               <Text color={compactHovered ? 'text' : undefined}>∴</Text>
               {' '}{t('compact-summary-folded')} · {compactPreview(displayText)}{' '}
-              {t('hint-expand-ctrl-o')}
+              {t('hint-expand-ctrl-o', { key: primaryComboString('transcript') })}
             </Text>
           )}
         </Box>
