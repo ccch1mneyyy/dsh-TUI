@@ -249,6 +249,15 @@ export function useSessionSupervisor(input: SessionSupervisorInput) {
    * store per workspace click would be both slower and inconsistent between
    * the two panes.
    *
+   * The listing itself is snapshot-then-refresh: the previous listing's
+   * result is painted synchronously (clearing the loading placeholder) before
+   * the listing — which the adapter serves from its memo whenever the
+   * consistency window and file fingerprints allow — resolves and corrects
+   * it. A picker open therefore never waits on the enumeration pipeline, and
+   * a first open in a fresh process (no snapshot yet) degrades to the plain
+   * wait it always was. `bypass` (Ctrl+L) skips the memo read for an
+   * explicit "re-list now".
+   *
    * The ledger read degrades to an EMPTY rail when the host does not expose it,
    * instead of failing the whole reload: `/bg` opens this screen, and a host
    * written before the workspace ledger existed (the older in-repo regressions
@@ -256,7 +265,21 @@ export function useSessionSupervisor(input: SessionSupervisorInput) {
    * screen and lose the session listing with it. The session list is the half
    * this screen cannot work without, so it must survive a missing ledger.
    */
-  const reload = useCallback(async (): Promise<void> => {
+  const reload = useCallback(async (options?: { bypass?: boolean }): Promise<void> => {
+    if (options?.bypass !== true && typeof channel.cachedPersistedSessions === 'function') {
+      // The snapshot seam is a host-provided optional: a throwing one must not
+      // take the refresh down with it (reload's callers do not all catch), so
+      // a failure here degrades to the plain wait the seam replaces.
+      try {
+        const snapshot = channel.cachedPersistedSessions()
+        if (snapshot !== undefined) {
+          setSessions(snapshot)
+          setLoading(false)
+        }
+      } catch {
+        // No snapshot this time; the refresh below still runs.
+      }
+    }
     // The two reads are independent, and the session listing is the half this
     // screen cannot work without: a registry that rejects (bare composition,
     // unmounted service, a provider throwing) must not take the history down
@@ -265,7 +288,7 @@ export function useSessionSupervisor(input: SessionSupervisorInput) {
     await Promise.all([
       (async (): Promise<void> => {
         try {
-          setSessions(await channel.listSessions())
+          setSessions(await channel.listSessions(options))
           setNotice(current => (current?.tone === 'error' ? undefined : current))
         } catch (error) {
           setNotice({ text: t('home-sessions-failed', { err: message(error) }), tone: 'error' })

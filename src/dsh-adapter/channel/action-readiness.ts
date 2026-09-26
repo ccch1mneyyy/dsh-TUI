@@ -119,7 +119,7 @@ export function createChannelActionMethods(
     sideQuestion: (question, options) => getReadyActions().sideQuestion(question, options),
     listFileCandidates: (query, options) => getReadyActions().listFileCandidates(query, options),
     listFiles: () => getReadyActions().listFiles(),
-    listSessions: () => getReadyActions().listSessions(),
+    listSessions: options => getReadyActions().listSessions(options),
     previewSession: sessionId => getReadyActions().previewSession(sessionId),
     bindApprovalStore: store => getReadyActions().bindApprovalStore(store),
     agentViewRows: () => getReadyActions().agentViewRows(),

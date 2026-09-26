@@ -235,12 +235,22 @@ async function openSupervisor(
     /** True when the registry read itself fails (service missing / throwing). */
     registryRejects?: boolean
     registryAbsent?: boolean
+    /** The host's listing-memo snapshot seam (issue #987), when it has one. */
+    snapshot?: readonly unknown[]
+    /** True when the snapshot seam throws — the refresh must survive it. */
+    snapshotThrows?: boolean
+    /** True to hold the refresh listing back until the handle releases it. */
+    holdListing?: boolean
   },
-): Promise<{ write: (data: string) => void; lines: () => string[]; calls: readonly string[]; close: () => void }> {
+): Promise<{ write: (data: string) => void; lines: () => string[]; calls: readonly string[]; close: () => void; releaseListing: () => void }> {
   const screen = new XTerm({ cols: COLS, rows: ROWS, scrollback: 0, allowProposedApi: true })
   const out = new FakeStdout(screen)
   const input = new FakeStdin()
   const ownCalls: string[] = []
+  let releaseListing: () => void = () => {}
+  const listingGate = overrides.holdListing === true
+    ? new Promise<void>(resolve => { releaseListing = resolve })
+    : undefined
   const ownChannel = {
     version: 0,
     cwd: overrides.cwd,
@@ -252,7 +262,16 @@ async function openSupervisor(
         return overrides.registry
       },
     }),
-    listSessions: async () => overrides.sessions ?? sessions,
+    ...(overrides.snapshot !== undefined || overrides.snapshotThrows === true ? {
+      cachedPersistedSessions: () => {
+        if (overrides.snapshotThrows === true) throw new Error('host snapshot boom')
+        return overrides.snapshot
+      },
+    } : {}),
+    listSessions: async () => {
+      if (listingGate !== undefined) await listingGate
+      return overrides.sessions ?? sessions
+    },
     resumeTo: async (id: string) => {
       ownCalls.push(`resumeTo:${id}`)
       return { ok: true }
@@ -298,6 +317,7 @@ async function openSupervisor(
     lines: () => viewportLines(screen),
     calls: ownCalls,
     close: () => { app.unmount() },
+    releaseListing,
   }
 }
 // Wait for the listing effect to land AND the frame to paint. The first
@@ -683,6 +703,47 @@ console.log('a registry that FAILS does not take the history with it')
     absent.lines().join('\n'),
   )
   absent.close()
+  app.close()
+}
+
+console.log('the listing memo snapshot paints before the refresh resolves')
+{
+  // The snapshot-then-refresh seam (issue #987): the host's previous listing
+  // is painted synchronously — the loading placeholder never waits out the
+  // enumeration — and the refresh (held back here until released) corrects it.
+  const snap = [session({ id: 'snap-one', title: { text: 'snapshot session', source: 'prompt' } })]
+  const app = await openSupervisor({ registry, cwd: alphaDir, snapshot: snap, holdListing: true })
+  const shown = () => app.lines().join('\n')
+  check(
+    'the snapshot rows render while the refresh is still pending',
+    await settled(() => shown().includes('snapshot session'), { timeoutMs: 6_000 }),
+    shown(),
+  )
+  check(
+    'the snapshot clears the loading placeholder',
+    !shown().includes('Loading sessions'),
+    shown(),
+  )
+  app.releaseListing()
+  check(
+    'the refresh replaces the snapshot once it lands',
+    await settled(() => shown().includes('free session') && !shown().includes('snapshot session'), { timeoutMs: 6_000 }),
+    shown(),
+  )
+  app.close()
+}
+
+console.log('a throwing snapshot seam does not take the refresh down')
+{
+  // The seam is a host-provided optional: a hostile implementation must not
+  // turn reload() into a rejection — the refresh degrades to the plain wait.
+  const app = await openSupervisor({ registry, cwd: alphaDir, snapshotThrows: true })
+  const shown = () => app.lines().join('\n')
+  check(
+    'the listing still settles after the snapshot throw',
+    await settled(() => shown().includes('free session'), { timeoutMs: 6_000 }),
+    shown(),
+  )
   app.close()
 }
 console.log(failures === 0 ? '\nAll session-supervisor checks passed.' : `\n${failures} check(s) failed.`)

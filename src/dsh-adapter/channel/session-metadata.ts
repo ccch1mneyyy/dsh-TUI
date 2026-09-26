@@ -6,7 +6,8 @@ import { t } from '../../i18n.js'
 import { appendSessionTitle, deleteSessionLog } from '../compat/index.js'
 import { snapshotLiveSessionEvents } from '../compat/liveSession.js'
 import { collectRecentActivity, parseRecapResponse, RECAP_RECENT_CHARS, wrapRecapPrompt } from '../recap.js'
-import { listSummaries, locateSession, previewSession, type SessionSource, type SessionSummary } from '../sessions/index.js'
+import { listSummariesCached, invalidateListedSessions } from '../sessions/cache.js'
+import { locateSession, previewSession, type SessionSource, type SessionSummary } from '../sessions/index.js'
 import { runSideQuestion, wrapSideQuestion } from '../sideQuestion.js'
 import type { ChannelOwner } from './owner.js'
 import type { CredentialStatus, SideQuestionLlm } from './types.js'
@@ -50,14 +51,14 @@ export function createSessionMetadataActions(ctx: Context, deps: {
   const withOwnerSignal = (signal?: AbortSignal): AbortSignal =>
     signal === undefined ? deps.owner.signal : AbortSignal.any([signal, deps.owner.signal])
 
-  const listSessions = async (): Promise<readonly SessionSummary[]> => {
+  const listSessions = async (options?: { bypass?: boolean }): Promise<readonly SessionSummary[]> => {
     const capture = deps.binding.capture()
     const source = persistence()
     if (!source) {
       if (current(capture)) deps.setPersistedSessions([])
       return []
     }
-    const summaries = await listSummaries(source)
+    const summaries = await listSummariesCached(source, options)
     if (!current(capture)) return []
     deps.setPersistedSessions(summaries)
     return summaries
@@ -191,6 +192,9 @@ export function createSessionMetadataActions(ctx: Context, deps: {
     const capture = deps.binding.capture()
     if (!current(capture)) return
     capture.agent.session.append('session/title', { title })
+    // The title event changed the log's revision, not any cache file; drop the
+    // memo so the next listing re-derives instead of serving the old title.
+    invalidateListedSessions()
     deps.setSessionTitle(title)
     deps.emit()
   }
@@ -206,6 +210,8 @@ export function createSessionMetadataActions(ctx: Context, deps: {
     const capture = deps.binding.capture()
     if (sessionId === capture.agent.session.id || !current(capture)) return false
     if (deleteSessionLog(sessionId) !== 'deleted' || !current(capture)) return false
+    // The log is gone but no cache file moved; the memo must not keep listing it.
+    invalidateListedSessions()
     forgetSession(sessionId)
     deps.forgetAgentView(sessionId)
     if (readResumeTarget() === sessionId) clearResumeTarget()
@@ -216,6 +222,9 @@ export function createSessionMetadataActions(ctx: Context, deps: {
     if (!current(capture)) return false
     if (sessionId === capture.agent.session.id) { renameSession(title); return true }
     if (appendSessionTitle(sessionId, title) !== 'appended' || !current(capture)) return false
+    // The title event changed the log's revision, not any cache file; drop the
+    // memo so the next listing re-derives instead of serving the old title.
+    invalidateListedSessions()
     touchSession(sessionId)
     return true
   }

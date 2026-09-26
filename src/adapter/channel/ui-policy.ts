@@ -86,6 +86,7 @@ export const CHANNEL_UI_EFFECTS = Object.freeze({
   'listFileCandidates': 'read-only',
   'listFiles': 'read-only',
   'listSessions': 'read-only',
+  'cachedPersistedSessions': 'read-only',
   'previewSession': 'read-only',
   'setResumeTarget': 'mutate',
   'renameSession': 'mutate',

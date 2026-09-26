@@ -94,11 +94,11 @@ import { getHostRenderers, type TuiRendererRuntime } from './renderers.js'
 import { cleanRenderText } from './sanitize.js'
 import { getHostSceneRuntime, type TuiSceneRuntime } from './scenes.js'
 import {
-  listSummaries,
   noteBranch,
   type SessionSource,
   type SessionSummary
 } from './sessions/index.js'
+import { cachedListedSessions, listSummariesCached } from './sessions/cache.js'
 import {
   buildSessionTree,
   liveTailWindow,
@@ -125,7 +125,7 @@ const CONTEXT_WARNING_BUFFER_TOKENS = 20_000
 async function listSessionsSnapshot(ctx: Context): Promise<readonly SessionSummary[]> {
   const persistence = ctx.get('sessionPersistence') as SessionSource | undefined
   if (!persistence) return []
-  return listSummaries(persistence)
+  return listSummariesCached(persistence)
 }
 
 /**
@@ -562,6 +562,12 @@ function createChannelWithOwner(
       // Immutable per-append snapshot (dsh-session caches the frozen array);
       // reads follow agent swaps (/resume /rewind /new) automatically.
       return snapshotLiveSessionEvents(binding.agent.session)
+    },
+    cachedPersistedSessions() {
+      // The listing memo's synchronous snapshot (sessions/cache.ts). A pure
+      // read over already-listed data, so it sits on the state directly
+      // rather than behind the construction-readiness action gate.
+      return cachedListedSessions()
     },
   }
 

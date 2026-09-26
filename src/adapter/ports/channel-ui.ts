@@ -448,8 +448,14 @@ export interface ChannelUi {
   /** Backward-compatible top-level/recursive listing. */
   listFiles(): Promise<readonly string[]>
   /** Every session the persistence backend stores, classified and unfiltered
-   *  — the browser (`/resume`) decides which of them a given view shows. */
-  listSessions(): Promise<readonly SessionSummary[]>
+   *  — the browser (`/resume`) decides which of them a given view shows.
+   *  Served from the listing memo when its consistency window and file
+   *  fingerprints allow it; `bypass` forces a fresh listing (Ctrl+L). */
+  listSessions(options?: { bypass?: boolean }): Promise<readonly SessionSummary[]>
+  /** The previous listing's result, synchronously — the snapshot the
+   *  session supervisor paints before its refresh resolves. Undefined
+   *  before this process has listed at all. */
+  cachedPersistedSessions(): readonly SessionSummary[] | undefined
   /** Trailing exchanges of a persisted session, for the browser's preview. */
   previewSession(sessionId: string): Promise<readonly PreviewEntry[]>
   /** Mark a session for `dsh-tui --resume` on the next launch. */

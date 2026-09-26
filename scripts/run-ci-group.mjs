@@ -386,6 +386,13 @@ const GROUPS = {
 // 日志、标题来源判定、revision 命中/失效（钉住 revision 改写日志作
 // 判据）、索引自愈与剪枝、**终态等价**（增量索引 == 全新构建）。
     ["verify-session-index", ['node', 'scripts/verify-session-index.mjs']],
+// /resume 列表 memo 回归（issue #987）：进程级单槽 memo 的每一扇失效门
+// （TTL 过期、session-index.json/last-used.json (mtime,size) 指纹、显式
+// invalidate、bypass）都必须重新跑 source，命中必须同数组身份且 source
+// 计数不增；并发合并为一次 source、抛错源钉住 []。末场景走真实 channel
+// facade 的 B1 钉子：活会话 /rename 后紧接的 listSessions 必须立即见到
+// 新标题（append 的日志变更无指纹可见，缺显式失效必红）。
+    ["verify-session-listing-memo", ['node', 'scripts/verify-session-listing-memo.mjs']],
 // 空会话须完整读取后才能判定：截断/损坏、帧数上限、纯图片输入与旧缓存
 // 不得隐藏真实历史或进入清理名单；真实 JSONL 重开验证落盘后的可见性。
     ['verify-session-emptiness', ['node', '--import', 'tsx/esm', 'scripts/verify-session-emptiness.ts']],

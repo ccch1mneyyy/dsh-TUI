@@ -270,7 +270,8 @@ export function SessionSupervisor({
       return
     }
     if (isMod(key) && input === 'l') {
-      void reload()
+      // An explicit reload: skip the adapter's listing memo and re-derive.
+      void reload({ bypass: true })
       return
     }
     if (isMod(key) && input === 'x') {

@@ -39,6 +39,16 @@ import type { TitleSource } from './types.js'
  */
 const SCHEMA_VERSION = 3
 
+/**
+ * Guardrail on the parsed index, far above any real history: a polluted or
+ * runaway store (the file lives under the user's home, outside every
+ * writer's control) must not pull the TUI's memory with it on read. When the
+ * file holds more, revision-less entries go first and the file's own tail
+ * last — entries lost here are re-derived on the next listing, so this is a
+ * cap, not a correctness path.
+ */
+const INDEX_ENTRY_CAP = 10_000
+
 const INDEX_FILE = join(DATA_DIR, 'session-index.json')
 
 /** Facts derived from a log at one revision. */
@@ -140,11 +150,20 @@ export function readIndex(): SessionIndex {
   if (file['version'] !== SCHEMA_VERSION && file['version'] !== 2) return index
   const entries = file['entries']
   if (entries === null || typeof entries !== 'object') return index
+  const parsedEntries: [string, IndexEntry][] = []
   for (const [id, value] of Object.entries(entries as Record<string, unknown>)) {
     const entry = readEntry(value, file['version'] === SCHEMA_VERSION)
-    if (entry !== undefined) index.set(id, entry)
+    if (entry !== undefined) parsedEntries.push([id, entry])
   }
-  return index
+  if (parsedEntries.length > INDEX_ENTRY_CAP) {
+    const withDerived = parsedEntries.filter(([, entry]) => entry.derived !== undefined)
+    const branchOnly = parsedEntries.filter(([, entry]) => entry.derived === undefined)
+    return new Map([
+      ...withDerived.slice(0, INDEX_ENTRY_CAP),
+      ...branchOnly.slice(0, Math.max(0, INDEX_ENTRY_CAP - withDerived.length)),
+    ])
+  }
+  return new Map(parsedEntries)
 }
 
 /**
