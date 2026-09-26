@@ -24,6 +24,21 @@ import type { TuiWorkspaceEntry, TuiWorkspaceTarget } from '../../workspaces.js'
 import type { ChannelUi as Channel } from '../../adapter/channel/ui-policy.js'
 import { RAIL_CHROME_ROWS, WORKSPACE_ROW_LINES, RAIL_MIN_TOTAL_COLUMNS, RAIL_WIDTH_MIN, RAIL_WIDTH_MAX, SESSION_ROW_LINES, SESSION_PANE_CHROME_ROWS, MenuAction, MENU_ACTIONS, MENU_WIDTH, MENU_HEIGHT, MENU_LABEL_KEYS, SupervisorLiveState, RailEntry, UNREGISTERED_RAIL_ID, message, samePath, sessionMatchesQuery } from './model.js'
 
+/**
+ * The last listing this process saw, carried across mounts of this screen.
+ *
+ * A snapshot, not a source of truth: it only decides what the screen paints
+ * before the fresh listing lands; the listing every open re-runs stays the
+ * truth and corrects every stale title, order and deletion on arrival, so
+ * the stale window is one listing's duration and a failed listing never
+ * writes here — the screen keeps the previous list beside its error notice.
+ *
+ * One immutable array reference, replaced wholesale per successful listing —
+ * no timers, handles or subscriptions — and concurrent instances writing the
+ * same store data last-write-wins, harmlessly.
+ */
+let lastListing: readonly SessionSummary[] | undefined
+
 /** Everything the screen owns that the model needs to read. */
 export interface SessionSupervisorInput {
   readonly channel: Channel
@@ -50,8 +65,10 @@ export function useSessionSupervisor(input: SessionSupervisorInput) {
   const { channel, home, onOpenSession, onNewSession, onStopSession, liveStateOf, columns, rows } = input
 
   const [entries, setEntries] = useState<readonly RailEntry[]>([])
-  const [sessions, setSessions] = useState<readonly SessionSummary[]>([])
-  const [loading, setLoading] = useState(true)
+  // Lazy so a non-empty snapshot from a previous mount paints as the first
+  // frame; no or empty snapshot keeps today's loading path.
+  const [sessions, setSessions] = useState<readonly SessionSummary[]>(() => lastListing ?? [])
+  const [loading, setLoading] = useState(() => lastListing === undefined || lastListing.length === 0)
   const [notice, setNotice] = useState<{ text: string; tone: 'info' | 'error' } | undefined>(undefined)
   /** Live status and occupancy are re-read on their own clock, not the listing's. */
   const [pulse, setPulse] = useState(0)
@@ -265,7 +282,10 @@ export function useSessionSupervisor(input: SessionSupervisorInput) {
     await Promise.all([
       (async (): Promise<void> => {
         try {
-          setSessions(await channel.listSessions())
+          // Recorded only after success: a failed listing keeps the previous snapshot.
+          const fresh = await channel.listSessions()
+          lastListing = fresh
+          setSessions(fresh)
           setNotice(current => (current?.tone === 'error' ? undefined : current))
         } catch (error) {
           setNotice({ text: t('home-sessions-failed', { err: message(error) }), tone: 'error' })

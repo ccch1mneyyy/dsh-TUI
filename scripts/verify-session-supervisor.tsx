@@ -18,6 +18,12 @@
  * Plus the pure behaviours the screen leans on: the search predicate, and the
  * rail's window math.
  *
+ * It also pins the snapshot-then-refresh first paint (issue #987): a mount
+ * paints the previous listing's rows instead of a loading placeholder, and
+ * the fresh listing corrects them wholesale when it lands. A failed listing
+ * keeps the previous snapshot beside its error notice — only a successful
+ * listing ever writes the snapshot.
+ *
  * Renders the real `SessionSupervisor` into an in-memory terminal with a stub
  * channel, then drives it with real stdin bytes (SGR mouse reports).
  *
@@ -180,47 +186,6 @@ const liveState = {
   'live-one': { status: 'working' as const, live: true, current: true, summary: 'doing work' },
 }
 
-const terminal = new XTerm({ cols: COLS, rows: ROWS, scrollback: 0, allowProposedApi: true })
-const stdout = new FakeStdout(terminal)
-const stdin = new FakeStdin()
-const instance = await render(
-  <ThemeProvider theme="dark">
-    {/* The alternate screen is what turns mouse tracking on; without it the
-        renderer drops every click before hit-testing (see AlternateScreen). */}
-    <AlternateScreen>
-      <SessionSupervisor
-        channel={channel}
-        home={sandbox}
-        onClose={() => { calls.push('close') }}
-        onOpenSession={async (id) => {
-          await (channel as unknown as { resumeTo(id: string): Promise<{ ok: boolean }> }).resumeTo(id)
-          return true
-        }}
-        // Same path Chat.tsx wires: the screen resolves the workspace target,
-        // the host switches to it and starts the session there.
-        onNewSession={async (target) => {
-          await (channel as unknown as { switchWorkspace(t: unknown): Promise<boolean> }).switchWorkspace(target)
-          return true
-        }}
-        onStopSession={async (id) => {
-          await (channel as unknown as { stopBackgroundAgent(id: string): Promise<boolean> }).stopBackgroundAgent(id)
-          return true
-        }}
-        approval={null}
-        onApprove={() => {}}
-        liveStateOf={(id) => liveState[id as keyof typeof liveState]}
-      />
-    </AlternateScreen>
-  </ThemeProvider>,
-  {
-    stdin: stdin as never,
-    stdout: stdout as never,
-    stderr: new FakeStderr() as never,
-    exitOnCtrlC: false,
-    patchConsole: false,
-  },
-)
-
 /**
  * A second, independent screen on the SAME fake home, for the cases whose
  * assertions need a different registry (an empty one, and one longer than the
@@ -235,6 +200,10 @@ async function openSupervisor(
     /** True when the registry read itself fails (service missing / throwing). */
     registryRejects?: boolean
     registryAbsent?: boolean
+    /** Held unresolved to keep the listing in flight (the snapshot cases). */
+    deferListSessions?: Promise<void>
+    /** True when the listing itself fails (store error) — the snapshot cases. */
+    listSessionsRejects?: boolean
   },
 ): Promise<{ write: (data: string) => void; lines: () => string[]; calls: readonly string[]; close: () => void }> {
   const screen = new XTerm({ cols: COLS, rows: ROWS, scrollback: 0, allowProposedApi: true })
@@ -252,7 +221,11 @@ async function openSupervisor(
         return overrides.registry
       },
     }),
-    listSessions: async () => overrides.sessions ?? sessions,
+    listSessions: async () => {
+      if (overrides.listSessionsRejects === true) throw new Error('session store unavailable')
+      if (overrides.deferListSessions !== undefined) await overrides.deferListSessions
+      return overrides.sessions ?? sessions
+    },
     resumeTo: async (id: string) => {
       ownCalls.push(`resumeTo:${id}`)
       return { ok: true }
@@ -300,6 +273,162 @@ async function openSupervisor(
     close: () => { app.unmount() },
   }
 }
+
+// ── snapshot-then-refresh (issue #987) ─────────────────────────────────────
+//
+// What a mount paints BEFORE the fresh listing lands. These segments are
+// ORDER-SENSITIVE and must stay ahead of the main instance below: the
+// module-level snapshot lives for the WHOLE process, so the cold-start case
+// (no snapshot at all) is observable only on the first mount, and every later
+// mount inherits the snapshot the previous one left. Each segment closes its
+// own app before the next one mounts.
+
+/** The loading placeholder the pane shows while the listing is in flight (i18n en). */
+const LOADING_PLACEHOLDER = 'Loading sessions…'
+
+console.log('snapshot-then-refresh:')
+{
+  // Cold start: no snapshot exists yet, so the screen keeps today's loading
+  // path — the placeholder shows and no session row is invented.
+  let resolveGate!: () => void
+  const gate = new Promise<void>(resolve => { resolveGate = resolve })
+  const app = await openSupervisor({ registry, cwd: alphaDir, deferListSessions: gate })
+  check(
+    'cold open shows the loading placeholder before the listing lands',
+    await settled(() => app.lines().join('\n').includes(LOADING_PLACEHOLDER)),
+    app.lines().join('\n'),
+  )
+  check(
+    'cold open shows no session row before the listing lands',
+    !app.lines().join('\n').includes('free session'),
+    app.lines().join('\n'),
+  )
+  resolveGate()
+  check(
+    'the landing listing replaces the placeholder with real rows',
+    await settled(() => {
+      const shown = app.lines().join('\n')
+      return shown.includes('free session') && !shown.includes(LOADING_PLACEHOLDER)
+    }),
+    app.lines().join('\n'),
+  )
+  app.close()
+}
+{
+  // Snapshot first paint: a second mount whose listing is held back paints the
+  // previous listing's rows immediately — a non-empty snapshot skips the
+  // placeholder — and the fresh listing corrects them wholesale when it lands.
+  let resolveGate!: () => void
+  const gate = new Promise<void>(resolve => { resolveGate = resolve })
+  // The same listing with one title renamed on disk (same id): the snapshot
+  // shows the OLD title, the fresh listing corrects it.
+  const renamed = [
+    session({ id: 'free-one', title: { text: 'renamed on disk', source: 'prompt' }, updatedAt: now - 1_000 }),
+    sessions[1],
+    sessions[2],
+  ]
+  const app = await openSupervisor({ registry, cwd: alphaDir, deferListSessions: gate, sessions: renamed })
+  check(
+    'a non-empty snapshot paints its rows without the loading placeholder',
+    await settled(() => {
+      const shown = app.lines().join('\n')
+      return shown.includes('free session') && !shown.includes(LOADING_PLACEHOLDER)
+    }),
+    app.lines().join('\n'),
+  )
+  resolveGate()
+  check(
+    'the fresh listing corrects a stale snapshot title',
+    await settled(() => {
+      const shown = app.lines().join('\n')
+      return shown.includes('renamed on disk') && !shown.includes('free session')
+    }),
+    app.lines().join('\n'),
+  )
+  app.close()
+}
+{
+  // Normalization: leave the snapshot equal to the stub data the main
+  // instance's assertions below were written against, so its first frame
+  // already carries the final listing content and every existing check stays
+  // timing-independent.
+  const app = await openSupervisor({ registry, cwd: alphaDir })
+  await settled(() => app.lines().join('\n').includes('free session'))
+  app.close()
+}
+{
+  // A failed listing keeps the previous snapshot: the stale rows stay beside
+  // the error notice instead of dropping to an empty list, and the failure
+  // never writes the snapshot — the next mount still paints from it while its
+  // own listing is in flight. Only a successful listing may write.
+  const app = await openSupervisor({ registry, cwd: alphaDir, listSessionsRejects: true })
+  check(
+    'a failed listing keeps the previous snapshot rows beside the error notice',
+    await settled(() => {
+      const shown = app.lines().join('\n')
+      return shown.includes('free session') && shown.includes('Failed to load sessions')
+        && !shown.includes(LOADING_PLACEHOLDER)
+    }),
+    app.lines().join('\n'),
+  )
+  app.close()
+  let resolveGate!: () => void
+  const gate = new Promise<void>(resolve => { resolveGate = resolve })
+  const next = await openSupervisor({ registry, cwd: alphaDir, deferListSessions: gate })
+  check(
+    'the failed listing never wrote the snapshot (the next mount paints it)',
+    await settled(() => {
+      const shown = next.lines().join('\n')
+      return shown.includes('free session') && !shown.includes(LOADING_PLACEHOLDER)
+    }),
+    next.lines().join('\n'),
+  )
+  resolveGate()
+  await settled(() => next.lines().join('\n').includes('free session'))
+  next.close()
+}
+
+const terminal = new XTerm({ cols: COLS, rows: ROWS, scrollback: 0, allowProposedApi: true })
+const stdout = new FakeStdout(terminal)
+const stdin = new FakeStdin()
+const instance = await render(
+  <ThemeProvider theme="dark">
+    {/* The alternate screen is what turns mouse tracking on; without it the
+        renderer drops every click before hit-testing (see AlternateScreen). */}
+    <AlternateScreen>
+      <SessionSupervisor
+        channel={channel}
+        home={sandbox}
+        onClose={() => { calls.push('close') }}
+        onOpenSession={async (id) => {
+          await (channel as unknown as { resumeTo(id: string): Promise<{ ok: boolean }> }).resumeTo(id)
+          return true
+        }}
+        // Same path Chat.tsx wires: the screen resolves the workspace target,
+        // the host switches to it and starts the session there.
+        onNewSession={async (target) => {
+          await (channel as unknown as { switchWorkspace(t: unknown): Promise<boolean> }).switchWorkspace(target)
+          return true
+        }}
+        onStopSession={async (id) => {
+          await (channel as unknown as { stopBackgroundAgent(id: string): Promise<boolean> }).stopBackgroundAgent(id)
+          return true
+        }}
+        approval={null}
+        onApprove={() => {}}
+        liveStateOf={(id) => liveState[id as keyof typeof liveState]}
+      />
+    </AlternateScreen>
+  </ThemeProvider>,
+  {
+    stdin: stdin as never,
+    stdout: stdout as never,
+    stderr: new FakeStderr() as never,
+    exitOnCtrlC: false,
+    patchConsole: false,
+  },
+)
+
 // Wait for the listing effect to land AND the frame to paint. The first
 // condition is what makes this robust: the screen names the terminal's own
 // workspace in the pane header only after `listSessions()` resolved, so polling
