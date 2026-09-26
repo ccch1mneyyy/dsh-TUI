@@ -256,6 +256,12 @@ export function effectiveComboString(action: ShortcutActionId): string {
   return effectiveCombos(action).map(combo => combo.raw).join(', ')
 }
 
+/** First effective combo, lowercase ('ctrl+o'): the inline-hint form, so
+ *  hints follow remaps (#1028). */
+export function primaryComboString(action: ShortcutActionId): string {
+  return effectiveCombos(action)[0]?.raw ?? ''
+}
+
 /** Modifier token → display label ('ctrl' → 'Ctrl'). */
 const COMBO_MODIFIER_LABELS: Readonly<Record<string, string>> = {
   ctrl: 'Ctrl',
