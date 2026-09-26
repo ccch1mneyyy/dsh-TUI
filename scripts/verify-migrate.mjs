@@ -22,7 +22,7 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-const { Session, SessionId, SessionLogOffset } = await import('@deepseek-ai/dsh-session')
+const { Session, SessionId, SessionLogOffset, SESSION_FORMAT_VERSION } = await import('@deepseek-ai/dsh-session')
 const { importSessions, migrationSessionId } = await import('../src/dsh-adapter/migrate/index.js')
 const { sessionize } = await import('../src/dsh-adapter/migrate/sessionize.js')
 const { migrationUuid } = await import('../src/dsh-adapter/migrate/uuid.js')
@@ -86,7 +86,7 @@ const fakeAdapter = { id: 'fixture', label: 'Fixture', roots: () => [], discover
   const id = SessionId(migrationUuid(`fixture:${first.sourceId}`))
   const { header, events } = sessionize(id, 'fixture', first)
   const types = events.map(event => event.type)
-  check('1a. header 携带 cwd 与当前格式版本', header.cwd === first.cwd && header.version === 3, `v${header.version}`)
+  check('1a. header 携带 cwd 与当前格式版本', header.cwd === first.cwd && header.version === SESSION_FORMAT_VERSION, `v${header.version}`)
   check('1b. turn 配对：2 轮 = 2×start + 2×end',
     types.filter(t => t === 'turn/start').length === 2 && types.filter(t => t === 'turn/end').length === 2)
   check('1c. 一 user 一 assistant 的常规轮',
