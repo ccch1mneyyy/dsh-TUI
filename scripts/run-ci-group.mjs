@@ -32,7 +32,8 @@
  *     CI 那一次失败的原始帧字节才是证据。
  */
 import { spawnSync } from 'node:child_process'
-import { appendFileSync, mkdirSync, rmSync, statSync } from 'node:fs'
+import { appendFileSync, mkdirSync, mkdtempSync, rmSync, statSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 const env = { NODE_ENV: 'production', ...process.env }
@@ -798,12 +799,28 @@ for (const entry of group) {
   console.log('\n===== ' + name + ' =====')
   const renderLog = join(RENDER_LOG_DIR, name + '.log')
   rmSync(renderLog, { force: true })
+  // One throwaway HOME per script: fixtures used to share the machine's real
+  // home, so a script that submits text left entries in
+  // `~/.dsh-tui/history.jsonl` for whatever ran next — and `↑` walks that file
+  // (#986), which turned one script's leftovers into the next script's
+  // assertion failure. A local group run must also never write the runner's
+  // own history. `HOME`/`USERPROFILE` sit after `env` (which carries the real
+  // ones) so the real home can never win; an entry may still override them
+  // through its own `extraEnv`.
+  const scriptHome = mkdtempSync(join(tmpdir(), 'dsh-tui-group-home-'))
   const startedAt = performance.now()
   const r = spawnSync(argv[0], argv.slice(1), {
-    env: { DSH_TUI_RENDER_LOG: renderLog, ...env, ...(extraEnv ?? {}) },
+    env: {
+      DSH_TUI_RENDER_LOG: renderLog,
+      ...env,
+      HOME: scriptHome,
+      USERPROFILE: scriptHome,
+      ...(extraEnv ?? {}),
+    },
     stdio: 'inherit',
     shell: false,
   })
+  rmSync(scriptHome, { recursive: true, force: true })
   const seconds = (performance.now() - startedAt) / 1000
   const failed = r.status !== 0
   results.push({ name, failed, status: r.status, seconds })
