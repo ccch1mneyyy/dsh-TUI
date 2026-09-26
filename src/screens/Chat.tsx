@@ -29,6 +29,7 @@ import { sessionCwdMatches, type ChatRow, type ComposerImageRef, type EffortOpti
 import type { QuestionStore } from '../dsh-adapter/questions.js'
 import { TuiDialogStore } from '../dsh-adapter/dialogs.js'
 import { TuiStatusStore, type TuiStatusViewUi } from '../dsh-adapter/status.js'
+import { ActivityStore, useActivity } from '../dsh-adapter/activity-store.js'
 import type { TranscriptImage } from '../dsh-adapter/transcript-images.js'
 import type { TuiShortcutHost } from '../dsh-adapter/shortcuts.js'
 import type { TuiThemeHost } from '../dsh-adapter/themes.js'
@@ -255,6 +256,8 @@ let fallbackApprovalStore: ApprovalStore | undefined
  */
 let fallbackDialogStore: TuiDialogStore | undefined
 let fallbackStatusStore: TuiStatusStore | undefined
+/** Standalone mounts (tests, bare embeds) without the composition root's store. */
+let fallbackActivityStore: ActivityStore | undefined
 
 /** Identity of one caret-preview dismissal: the token (its title) on the
  *  image, so the same image staged twice is dismissed per token. */
@@ -268,6 +271,7 @@ export function Chat({
   approvalStore,
   extensionDialogs,
   extensionStatus,
+  activityStore,
   extensionShortcuts,
   themeHost,
   onExit,
@@ -297,6 +301,8 @@ export function Chat({
   extensionDialogs?: TuiDialogStore
   /** Plugin text and bounded rich status contributions. */
   extensionStatus?: TuiStatusStore
+  /** Session-scoped activity values published by the working-activity plugin. */
+  activityStore?: ActivityStore
   /** Host-only keyboard shortcut dispatch path. */
   extensionShortcuts?: TuiShortcutHost
   /** Optional runtime theme host; static JSON themes work without it. */
@@ -388,6 +394,11 @@ export function Chat({
   // Plugin status contributions: text keys join into one line; bounded rich
   // views keep their own rows immediately above the prompt.
   const statusContributions = extensionStatus ?? (fallbackStatusStore ??= new TuiStatusStore())
+  // The working line: the working-activity plugin's published value for THIS
+  // session, read from its session projection. No projection value (plugin
+  // absent, or nothing published yet) simply means the classic spinner below.
+  const activityValues = activityStore ?? (fallbackActivityStore ??= new ActivityStore())
+  const workingActivity = useActivity(activityValues, channel.sessionId)
   const subscribeStatus = React.useCallback(
     (listener: () => void) => statusContributions.subscribe(listener),
     [statusContributions],
@@ -4079,9 +4090,9 @@ export function Chat({
         {channel.working &&
           (channel.activityEnabled &&
           !channel.minimal &&
-          channel.workingActivity !== undefined &&
-          channel.workingActivity.line !== '' &&
-          channel.workingActivity.phase !== 'idle' ? (
+          workingActivity !== undefined &&
+          workingActivity.line !== '' &&
+          workingActivity.phase !== 'idle' ? (
             // The working-activity line replaces the random-verb spinner
             // while a turn runs: the plugin's live line (thinking copy /
             // running tool / narration) is the status, with the spinner
@@ -4092,7 +4103,7 @@ export function Chat({
             // part of the transcript, aligned with the `❯` prompt below.
               <Box marginTop={1}>
                 <ActivityLine
-                  activity={channel.workingActivity}
+                  activity={workingActivity}
                   activityFrames={channel.activityFrames}
                   warnPct={activityWarnPct}
                   warnDanger={activityWarnPct !== undefined && activityWarnPct >= 95}
@@ -4273,6 +4284,7 @@ export function Chat({
         />
         <StatusLine
           channel={channel}
+          activity={workingActivity}
           selectionActive={selectionActive}
           helpOpen={helpOpen}
           wake={

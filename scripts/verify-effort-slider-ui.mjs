@@ -98,7 +98,6 @@ function makeChannel(options = {}) {
     notifications,
     contextWindow: undefined,
     reasoningEffort: 'high',
-    workingActivity: undefined,
     activityEnabled: false,
     contextBarEnabled: true,
     // Status footer fields: the assertions below watch the mode label, so

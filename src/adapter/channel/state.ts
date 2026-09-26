@@ -30,6 +30,9 @@ export function projectChannelState(channel: Channel): HostChannelStateSnapshot 
     sessionTitle: channel.sessionTitle,
     sessionColor: channel.sessionColor,
     agentId: channel.agentId,
+    // Omitted rather than `undefined`: the projected snapshot must be a JSON
+    // value end to end, and an explicit undefined is not one.
+    ...(channel.sessionId === undefined ? {} : { sessionId: channel.sessionId }),
     agentBindingGeneration: channel.agentBindingGeneration,
     model: channel.model,
     provider: channel.provider,
@@ -45,7 +48,6 @@ export function projectChannelState(channel: Channel): HostChannelStateSnapshot 
     lastUserText: channel.lastUserText,
     tokens: asNumberRecord(channel.tokens),
     ...(channel.lastUsage === undefined ? {} : { lastUsage: asNumberRecord(channel.lastUsage) }),
-    ...(channel.workingActivity === undefined ? {} : { workingActivity: asRecord(channel.workingActivity) }),
     ...(channel.activityFrames === undefined ? {} : { activityFrames: channel.activityFrames }),
     ...(channel.goal === undefined ? {} : { goal: asRecord(channel.goal) }),
     todos: Object.freeze(channel.todos.map(todo => Object.freeze({ ...todo }))),

@@ -74,7 +74,7 @@ function makeSel(): SelState {
   return {
     anchor: null, focus: null, isDragging: false, anchorSpan: null,
     scrolledOffAbove: [], scrolledOffBelow: [], scrolledOffAboveSW: [], scrolledOffBelowSW: [],
-    lastPressHadAlt: false, coveredFingerprint: null, coveredGeometry: null, stale: false,
+    lastPressHadAlt: false, coveredFingerprint: null, coveredText: null, coveredGeometry: null, stale: false,
   } as unknown as SelState
 }
 
@@ -185,8 +185,8 @@ function putRaw(s: Screen, col: number, row: number, charId: number, width: numb
   refreshSelectionFingerprint(sel, screen, false)
   if (!sel.stale) check('F. precondition: stale latched', false)
   clearSelection(sel)
-  check('F. clearSelection resets fingerprint and stale',
-    sel.coveredFingerprint === null && sel.coveredGeometry === null && !sel.stale)
+  check('F. clearSelection resets fingerprint, text baseline and stale',
+    sel.coveredFingerprint === null && sel.coveredText === null && sel.coveredGeometry === null && !sel.stale)
   // A fresh startSelection must also reset both fields — not just rely on
   // clearSelection having run first (CodeRabbit: the assertion would keep
   // passing if startSelection silently stopped resetting). Re-latch stale
@@ -199,8 +199,8 @@ function putRaw(s: Screen, col: number, row: number, charId: number, width: numb
   if (!sel.stale) check('F. precondition 2: stale re-latched', false)
   startSelection(sel, 0, 2)
   updateSelection(sel, 9, 2)
-  check('F2. startSelection resets fingerprint and stale',
-    sel.coveredFingerprint === null && sel.coveredGeometry === null && !sel.stale)
+  check('F2. startSelection resets fingerprint, text baseline and stale',
+    sel.coveredFingerprint === null && sel.coveredText === null && sel.coveredGeometry === null && !sel.stale)
 }
 
 // ── G. stale 是提交层守卫，不改变读取层 ─────────────────────────────────
@@ -426,8 +426,30 @@ function putRaw(s: Screen, col: number, row: number, charId: number, width: numb
   const base = getSelectedText(sel, screen)
   screen.softWrap[4] = 9 // 自己那行的 wrap 位（joinRows 的换行判定）
   const tripped = refreshSelectionFingerprint(sel, screen, false)
-  check('L5. last screen row: own softWrap still hashed, out-of-range row+1 read is safe',
-    tripped && sel.stale && base === 'Z')
+  check('L5. last screen row: out-of-range row+1 read is safe',
+    !tripped && !sel.stale && base === 'Z')
+  check('L5b. ... because a single-row selection own wrap bit cannot change the copy',
+    getSelectedText(sel, screen) === base)
+}
+
+// ── L6. 下一行 wrap 从 0 翻成「超出选区末列」：拷贝字节不变，不许误伤 ─────
+// 生产现场（repro-drag-select-streaming 的流式并发场景）：选区列被非空白字符
+// 填满时，wrap 位翻转只影响「尾部空白是否 trim」，而此处没有可 trim 的空白 →
+// 哈希变、拷贝文本一模一样。旧实现只看哈希就锁 stale → 拒绝复制
+// （「选区内容已变化，已取消复制」），用户明明选着正确的文本。
+{
+  const screen = makeScreen(5, 12)
+  const sel = makeSel()
+  startSelection(sel, 0, 2)
+  updateSelection(sel, 8, 2) // 选中第 2 行第 0..8 列，正好 9 格
+  for (const [i, ch] of [...'ARKER_ABC'].entries()) putText(screen, i, 2, ch) // 每格一个非空白字符
+  refreshSelectionFingerprint(sel, screen, false)
+  const before = getSelectedText(sel, screen)
+  screen.softWrap[3] = 40 // 0 → 40（> colEnd + 1），只改 trim 开关
+  const after = getSelectedText(sel, screen)
+  const tripped = refreshSelectionFingerprint(sel, screen, false)
+  check('L6. a next-row wrap flip that cannot change the copy is not refused',
+    before === after && before === 'ARKER_ABC' && !tripped && !sel.stale)
 }
 
 console.log(failures === 0 ? 'selection stale-guard regression passed' : `${failures} failure(s)`)

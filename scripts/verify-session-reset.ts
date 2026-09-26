@@ -20,7 +20,6 @@ const state = {
   tps: 1,
   tpsSamples: [1],
   lastUsage: { input: 1 },
-  workingActivity: { line: 'old' },
   contextSegments: { system: 1 },
 } as never
 const rowIds = { value: 9 }

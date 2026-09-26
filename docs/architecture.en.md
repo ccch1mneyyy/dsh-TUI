@@ -119,10 +119,12 @@ Do not print diagnostics to an active TUI's stdout; use stderr
 - **TPS meter**: based on pi-tps-meter — a streaming 1/8-block gauge,
   historical min-max sparkline, and speed-based semantic colors (≥50 green /
   ≥20 yellow / <20 red).
-- **working-activity**: the working-status line reuses the pure state machine
-  of [dsh-working-activity](https://github.com/ccch1mneyyy/working-activity).
-- It derives in-process from base session events without writing UI state
-  into the shared log.
+- **working-activity**: the plugin
+  [dsh-working-activity](https://github.com/ccch1mneyyy/working-activity)
+  folds the working-status line and publishes it as the `workingActivity`
+  session projection; this app only reads that projection
+  (`src/dsh-adapter/activity-store.ts`) — no in-process derivation, and no
+  UI state written to the shared log.
 
 ## Inline and fullscreen modes
 

@@ -17,12 +17,12 @@ export function createBindingEvents(ctx: Context, deps: {
   owner: ChannelOwner
   binding: ChannelBinding
   state: ChannelState
-  activity: {
-    start(agent: ChannelBinding['agent']): void
-    stop(): void
-    onAgentStatus(status: ChannelBinding['agent']['status']): unknown
-    onSessionEvent(event: unknown): unknown
-  }
+  /** Read the activity projection's current value for a freshly bound session.
+   *  A projection value only arrives when it changes, so a resumed or
+   *  reattached session needs this read to show its line before the next event.
+   *  The line's semantics live in the working-activity plugin: this app folds
+   *  nothing itself and forwards no events. */
+  seedActivity?(session: unknown): void
   inputConvergence: InputConvergence
   selection: ModelSelectionRef
   modelActions: { applyPreferredEffort(): Promise<void>; selection: ModelSelectionRef }
@@ -53,7 +53,7 @@ export function createBindingEvents(ctx: Context, deps: {
       deps.state.agentBindingGeneration = deps.binding.bind()
       deps.inputConvergence.cancelInFlight = false
       deps.inputConvergence.interruptSeq += 1
-      deps.activity.start(deps.binding.agent)
+      deps.seedActivity?.(deps.binding.agent.session)
       deps.modelActions.selection.current = undefined
       deps.modelActions.selection.assembled = undefined
       if (deps.binding.agent.options?.model === undefined && deps.state.provider !== '' && deps.state.model !== '') {
@@ -107,14 +107,12 @@ export function createBindingEvents(ctx: Context, deps: {
       on('agent/status', ({ agent: subject, status }) => {
         if (!current() || subject !== capture.agent) return
         deps.state.status = status
-        deps.activity.onAgentStatus(status)
         if (status === 'idle') reconcileRetiredProjection('idle')
         deps.state.emit()
       })
       on('agent/disposed', ({ agent: subject }) => {
         if (!current() || subject !== capture.agent) return
         deps.state.status = 'disposed'
-        deps.activity.stop()
         reconcileRetiredProjection('disposed')
         deps.state.emit()
       })
@@ -147,7 +145,6 @@ export function createBindingEvents(ctx: Context, deps: {
         // edges) reach the dashboard through the same firehose; they are not
         // transcript rows and render below remains untouched by them.
         deps.subagents.onParentEvent?.(event)
-        deps.activity.onSessionEvent(event)
         deps.modeActions.onSessionEvent(subject, event)
         deps.projector.renderEvent(event)
         if (event.type === 'assistant/chunk') deps.state.emitStream()

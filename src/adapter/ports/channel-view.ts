@@ -291,9 +291,6 @@ export interface NotificationItem {
   timeoutMs: number
 }
 
-/** In-process working-line snapshot derived from the base session stream. */
-export type ActivityStatus = ActivityState
-
 /**
  * Durable same-session goal projection surfaced on the channel (see
  * {@link Channel['goal']}). Mirrors the goal domain's `GoalSnapshot` +
@@ -620,7 +617,6 @@ export type BackgroundResult =
   | { readonly ok: false }
 
 export type AgentStatus = 'idle' | 'running'
-export interface ActivityState { readonly phase: 'idle' | 'waiting' | 'thinking' | 'tool' | 'done'; readonly line: string; readonly label?: string; readonly detail?: string; readonly phrase?: string; readonly toolCount: number; readonly turnElapsedMs: number; readonly phaseStartedAt: number }
 export interface LlmModelInfo { provider: string; id: string; name: string; description?: string; inputModalities?: readonly string[] }
 export interface LlmProviderInfo { id: string; name: string }
 export interface LlmDiscoveredModel { id: string; name?: string; contextWindow?: number; maxTokens?: number }

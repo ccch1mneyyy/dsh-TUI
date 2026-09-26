@@ -114,8 +114,12 @@ investigated.
 
 ## Live activity row
 
-`dsh-working-activity` is installed with the package and inserted by its patch.
-Override only the existing ID when tuning it:
+`dsh-working-activity` is installed with the package and inserted by its
+patch. The working line reads the plugin's `workingActivity` session
+projection, which requires `dsh-working-activity` ≥ 0.5.0 — that release
+replaced the old `activity/status` event outlet with the projection, so
+older plugin versions produce no working line. Override only the existing
+ID when tuning it:
 
 ```yaml
 - id: working-activity

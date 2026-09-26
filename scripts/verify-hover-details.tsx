@@ -187,7 +187,6 @@ try {
     backgroundJobs: [],
     contextSegments: {},
     working: false,
-    workingActivity: undefined,
     activityFrames: [],
     goal: undefined,
     sessionTitle: undefined,
