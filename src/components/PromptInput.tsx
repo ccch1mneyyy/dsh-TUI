@@ -32,7 +32,7 @@ import type {
 } from '../dsh-adapter/channel.js'
 import type { TranscriptImage } from '../dsh-adapter/transcript-images.js'
 import { isHiddenCommandName, parseCommandName } from '../commands.js'
-import { appendHistory } from '../history.js'
+import { appendHistory, HISTORY_LIMIT, loadHistoryOldestFirst } from '../history.js'
 import { mentionAtCaret } from '../utils/mentions.js'
 import { preserveSelection, type FileCandidate } from '../utils/fileSuggestions.js'
 import { isMod } from '../utils/modifiers.js'
@@ -49,8 +49,6 @@ import {
   type PromptDraftCache,
   type PromptDraftImage,
 } from './promptDraftCache.js'
-
-const HISTORY_LIMIT = 50
 
 /**
  * Visible text of the session-entry control at the head of the input row:
@@ -730,6 +728,8 @@ export function PromptInput({
   const history = React.useRef<PromptHistoryEntry[]>([])
   const historyIndex = React.useRef(-1)
   const historyDraft = React.useRef<PromptHistoryEntry>({ text: '', images: [] })
+  /** The persisted history is read lazily, once per mount (see seedHistory). */
+  const historySeeded = React.useRef(false)
   /** Visible `[Image #N]` labels are presentation only; this sidecar carries
    * the non-reusable capability for the current draft. History/rewind text
    * restored without this map can never bind to a later image by accident. */
@@ -1301,7 +1301,26 @@ export function PromptInput({
     }
   }
 
+  /**
+   * Seed the walk with the persisted history (issue #986). `↑`/`↓` used to
+   * see only what this process submitted, so a restart lost every earlier
+   * entry. Seeding before the first push keeps ONE chronological list —
+   * persisted entries first, this run's submits behind them — instead of two
+   * lists to merge at recall time. Restored text carries no image capability
+   * (the file stores text only), which is also what keeps a recalled entry
+   * from binding to a later staged image by accident.
+   */
+  const seedHistory = (): void => {
+    if (historySeeded.current) return
+    historySeeded.current = true
+    history.current = loadHistoryOldestFirst().map(entry => ({ text: entry.text, images: [] }))
+    historyIndex.current = -1
+  }
+
   const rememberHistory = (text: string, images: readonly ComposerImageRef[]): void => {
+    // Both entries into the walk (a submit and ↑) must see the persisted
+    // prefix, so seed here rather than merging two lists later.
+    seedHistory()
     history.current.push({
       text,
       images: images.map(image => ({ ...image })),
@@ -2304,6 +2323,7 @@ export function PromptInput({
         )
         return
       }
+      seedHistory()
       if (history.current.length === 0) return
       if (historyIndex.current < 0) {
         historyDraft.current = {

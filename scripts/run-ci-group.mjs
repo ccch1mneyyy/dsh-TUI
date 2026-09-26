@@ -363,6 +363,11 @@ const GROUPS = {
 // 输入历史草稿回归（issue #287）：首次 ↑ 保存未提交草稿，遍历历史后
 // ↓ 回到末尾必须恢复原文，重复越界不能把草稿清空。
     ["verify-prompt-history-draft", ['node', 'scripts/verify-prompt-history-draft.mjs']],
+// 输入历史持久化回归（issue #986）：↑/↓ 必须走磁盘上的 history.jsonl——
+// 冷启动后第一次 ↑ 召回的是最新一条（文件是追加序，漏了反转会翻出最旧的）、
+// 能一路走到最旧并在那里钳住、本次进程提交的条目排在持久化条目之后且
+// 接缝处不重复、重新挂载（重启）后仍能召回。
+    ["verify-prompt-history-persist", ['node', 'scripts/verify-prompt-history-persist.mjs']],
 // 文件补全回归（issue #278）：CMake 构建目录与任意大型兄弟目录不得
 // 独占 100 条全局预算，普通深层源码也不能被固定深度静默截断。
     ["verify-file-completion", ['node', 'scripts/verify-file-completion.mjs']],
