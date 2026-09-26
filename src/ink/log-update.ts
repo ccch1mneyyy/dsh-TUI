@@ -1164,6 +1164,13 @@ function moveCursorTo(screen: VirtualScreen, targetX: number, targetY: number) {
     const dy = targetY - prev.y
     const inPendingWrap = prev.x >= screen.viewportWidth
 
+    // Already there (and not in pending wrap): nothing to emit. Without this
+    // the patch below is returned for a zero-length move, which is a non-empty
+    // diff — it costs a content-free write on every frame that only re-parks
+    // the cursor (exactly what the inline idle tail now does, see #995), and it
+    // breaks fixtures that assert on the final stdout chunk.
+    if (!inPendingWrap && dx === 0 && dy === 0) return [[], { dx: 0, dy: 0 }]
+
     // If we're in pending wrap state (cursor.x >= width), use CR
     // to reset to column 0 on the current line without advancing
     // to the next line, then issue the cursor movement.
