@@ -80,6 +80,18 @@ export type SelectionState = {
    *  user highlighted. Null until the first frame observes the
    *  selection. */
   coveredFingerprint: number | null
+  /** The text `getSelectedText` emitted for `coveredFingerprint`'s frame.
+   *  The fingerprint is a cheap per-frame pre-filter: it hashes the covered
+   *  cells plus the two soft-wrap inputs that decide how those cells lay out,
+   *  so it can move while the COPIED TEXT stays byte-identical (flipping the
+   *  next row's wrap bit from 0 to a value past the selection's last column
+   *  only toggles trailing-blank trimming, which is invisible when the
+   *  selected columns are already full). Judging staleness on that hash alone
+   *  refused legitimate copies — "content under the selection changed; copy
+   *  cancelled" while a streaming tail wrote somewhere else entirely. The
+   *  verdict therefore re-checks the emitted text, exactly the bytes the copy
+   *  would ship, and only latches when THEY differ. Null until baselined. */
+  coveredText: string | null
   /** Geometry key (start/end row:col) the fingerprint was taken at. Any
    *  user-driven geometry change (drag motion, word/line extension,
    *  keyboard pan, multi-click) re-baselines instead of judging — the
@@ -108,6 +120,7 @@ export function createSelectionState(): SelectionState {
     scrolledOffBelowSW: [],
     lastPressHadAlt: false,
     coveredFingerprint: null,
+    coveredText: null,
     coveredGeometry: null,
     stale: false,
   }
@@ -142,6 +155,7 @@ export function startSelection(
   s.dragBounds = undefined
   s.lastPressHadAlt = false
   s.coveredFingerprint = null
+  s.coveredText = null
   s.coveredGeometry = null
   s.stale = false
 }
@@ -219,6 +233,7 @@ export function clearSelection(s: SelectionState): void {
   s.dragBounds = undefined
   s.lastPressHadAlt = false
   s.coveredFingerprint = null
+  s.coveredText = null
   s.coveredGeometry = null
   s.stale = false
 }
@@ -1194,6 +1209,22 @@ function joinRows(
  * at ~0.05ms for a full 200x50 selection (~0.14ms at 200x200), i.e. no
  * worse than hashing the ids themselves.
  *
+ * The hash is only a PRE-FILTER; the verdict is the copied text. Hashing the
+ * wrap inputs keeps a cheap screen-signature, but those inputs can move while
+ * the bytes a copy would ship stay identical: flipping the next row's wrap bit
+ * from 0 to a value past the selection's last column only toggles
+ * trailing-blank trimming, which is invisible when the selected columns are
+ * already full (measured live: a streaming tail wrote a row far below the
+ * highlight, the wrap bookkeeping moved, and the guard refused a legitimate
+ * copy — the "content under the selection changed" toast with the highlight
+ * still sitting on exactly the right text). So when the hash moves, this
+ * compares `getSelectedText` against the baselined text and latches only when
+ * THE BYTES differ — the same expression the copy itself ships, which makes
+ * the verdict complete (no real replacement is missed) and sound (no
+ * unchanged text is refused). The text is compared, not stored per frame: the
+ * extraction runs on a geometry change (once per drag motion) and on a
+ * suspected change, never on the steady-state frame.
+ *
  * @param s - the selection state to fingerprint.
  * @param screen - the frame's screen buffer.
  * @param coordinated - true when this frame translated the selection
@@ -1210,6 +1241,7 @@ export function refreshSelectionFingerprint(
   const b = selectionBounds(s)
   if (!b) {
     s.coveredFingerprint = null
+    s.coveredText = null
     s.coveredGeometry = null
     return false
   }
@@ -1221,6 +1253,7 @@ export function refreshSelectionFingerprint(
   if (geometry !== s.coveredGeometry) {
     s.coveredGeometry = geometry
     s.coveredFingerprint = null
+    s.coveredText = null
   }
   const { cells, noSelect, width, height, charPool, softWrap } = screen
   let h = 0x811c9dc5
@@ -1269,12 +1302,26 @@ export function refreshSelectionFingerprint(
     h = Math.imul(h ^ 0x27d4eb2f ^ wrapClamp, 0x165667b1)
   }
   if (s.coveredFingerprint === null) {
-    // First frame observing this selection: baseline, no verdict.
+    // First frame observing this selection: baseline, no verdict. The text is
+    // captured here too — it is the ground truth the next hash change is
+    // judged against, and it can only be read while the baselined frame is
+    // still on screen.
     s.coveredFingerprint = h
+    s.coveredText = getSelectedText(s, screen)
     return false
   }
   if (h === s.coveredFingerprint) return false
+  // The hash moved: decide on the emitted text, not on the hash. A wrap-bit
+  // flip below the selection (or any other term that does not change the
+  // bytes the copy would ship) must not refuse a legitimate copy.
+  const text = getSelectedText(s, screen)
+  if (text === s.coveredText) {
+    // Same bytes, different layout bookkeeping: accept and re-baseline.
+    s.coveredFingerprint = h
+    return false
+  }
   s.coveredFingerprint = h
+  s.coveredText = text
   if (coordinated) return false
   s.stale = true
   return true
