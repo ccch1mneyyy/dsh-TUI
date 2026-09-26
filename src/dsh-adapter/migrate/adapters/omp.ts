@@ -49,6 +49,9 @@ function readOne(path: string): MigrationSession | undefined {
     } catch {
       continue
     }
+    // A legal `null` (or scalar) line is not a record; reading .type on it
+    // would throw and kill the whole scan (codex adversarial review).
+    if (entry === null || typeof entry !== 'object') continue
     const time = toMillis(entry.timestamp)
     if (entry.type === 'session' || entry.type === 'title') {
       if (typeof entry.cwd === 'string' && entry.cwd !== '') cwd = entry.cwd
