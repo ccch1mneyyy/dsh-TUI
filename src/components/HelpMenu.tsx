@@ -12,8 +12,8 @@ import { modLabel } from '../utils/modifiers.js'
  * commands plus plugin-registered ones from the DSH registry (plan/goal/…).
  * Skill entries (user-invocable skills merged for `/` completion, issue
  * #86) are hidden — a skills directory can hold dozens of entries and the
- * menu is for chrome commands. Modifier labels follow the platform
- * convention: ⌘ on macOS, ctrl elsewhere.
+ * menu is for chrome commands. Modifier labels always read ctrl+ (see
+ * modLabel): Ctrl works in every terminal, ⌘ is only a macOS alias.
  */
 export function HelpMenu({
   commands,
