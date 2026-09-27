@@ -62,10 +62,10 @@ function frame(): Screen {
   assert.equal(getSelectedText(selection(3, 0, 4, 0), screen), '$x^2$', 'touching part of an image copies all of it')
   assert.equal(
     getSelectedText(selection(0, 0, 19, 4), screen),
-    'a $x^2$ b\n  $$\n\\frac{a}{b}\n$$\ntail',
-    'a multi-row image copies once (after the blank cells left of it); its lower rows add no empty lines',
+    'a $x^2$ b\n$$\n\\frac{a}{b}\n$$\ntail',
+    'a multi-row image copies once, without the indent left of it; its lower rows add no empty lines',
   )
-  assert.equal(getSelectedText(selection(0, 2, 19, 4), screen), '  $$\n\\frac{a}{b}\n$$\ntail', 'starting inside the block still copies it whole')
+  assert.equal(getSelectedText(selection(0, 2, 19, 4), screen), '$$\n\\frac{a}{b}\n$$\ntail', 'starting inside the block still copies it whole')
 }
 
 {
@@ -73,10 +73,10 @@ function frame(): Screen {
   const previous = frame()
   const next = createScreen(20, 5, stylePool, charPool, hyperlinkPool)
   blitRegion(next, previous, 0, 0, 20, 5)
-  assert.equal(getSelectedText(selection(0, 0, 19, 4), next), 'a $x^2$ b\n  $$\n\\frac{a}{b}\n$$\ntail', 'a blitted frame keeps its copy regions')
+  assert.equal(getSelectedText(selection(0, 0, 19, 4), next), 'a $x^2$ b\n$$\n\\frac{a}{b}\n$$\ntail', 'a blitted frame keeps its copy regions')
   // Scrolling shifts regions with their rows.
   shiftRows(next, 0, 4, 1)
-  assert.equal(getSelectedText(selection(0, 0, 19, 3), next), '  $$\n\\frac{a}{b}\n$$\ntail', 'scrolling shifts copy regions with the cells')
+  assert.equal(getSelectedText(selection(0, 0, 19, 3), next), '$$\n\\frac{a}{b}\n$$\ntail', 'scrolling shifts copy regions with the cells')
 }
 
 {

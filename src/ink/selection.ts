@@ -1158,7 +1158,12 @@ function extractRowText(
     if (region !== 0) {
       if (!emitted.has(region)) {
         emitted.add(region)
-        line += screen.copyTexts?.get(region) ?? ''
+        const text = screen.copyTexts?.get(region) ?? ''
+        // A multi-line region (a block formula's source) starts its own
+        // lines: blank cells before it are layout indent, which would
+        // otherwise land on its first line only.
+        if (text.includes('\n') && line.trim() === '') line = ''
+        line += text
         copiedRegion = true
       } else {
         sawEmittedRegion = true
