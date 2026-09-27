@@ -13,6 +13,7 @@ import { t } from '../i18n.js'
 import { stringWidth } from '../ink/stringWidth.js'
 import { supportsHyperlinks } from '../ink/supports-hyperlinks.js'
 import { createHyperlink } from '../terminal-utils/hyperlink.js'
+import type { UsageStats } from '../usageStats.js'
 
 /** 一个节日彩蛋：当天要用的上下两排词。 */
 export interface SplashEgg {
@@ -58,21 +59,8 @@ export function pickSplashEgg(now: Date = new Date()): SplashEgg | null {
 /** 求 star 标语指向的仓库。 */
 export const SPLASH_STAR_URL = 'https://github.com/ccch1mneyyy/dsh-TUI'
 
-/** 求 star 标语的命中概率：1/20。 */
-export const SPLASH_STAR_CHANCE = 0.05
-
 /** 链接显示文本（比裸 URL 短，整行还能按鲸鱼居中）；退化时 `createHyperlink` 会换成 URL。 */
 const SPLASH_STAR_LABEL = 'GitHub'
-
-/**
- * 掷一次「这次 mount 要不要显示求 star 标语」。
- * @param chance - 命中概率（0..1；测试缝可传 0/1 强制不命中/命中）。
- * @param random - 随机源（测试缝，默认 `Math.random`）。
- * @returns 命中为 true。
- */
-export function pickSplashStar(chance: number = SPLASH_STAR_CHANCE, random: () => number = Math.random): boolean {
-  return random() < chance
-}
 
 /** 求 star 标语那一行的三段：链接前文案 + 链接 + 链接后文案。 */
 export interface SplashStarLine {
@@ -87,13 +75,18 @@ export interface SplashStarLine {
 }
 
 /**
- * 组装求 star 标语那一行。文案走 i18n 字典（中英齐全），链接指向 `SPLASH_STAR_URL`。
- * @param options - `supportsHyperlinks` 是终端能力的测试缝（默认问真实终端）。
+ * 组装求 star 标语那一行。文案走 i18n 字典（中英齐全），行里的 `{hours}`/`{launches}`
+ * 在这里换成本机**实测**的累计值——所以同一档里程碑在不同机器上读起来不一样。
+ * @param options - `usage` 是本机累计用量；`supportsHyperlinks` 是终端能力的测试缝。
  * @returns 三段文案与整行可见宽度。
  */
-export function splashStarLine(options?: { supportsHyperlinks?: boolean }): SplashStarLine {
-  const supported = options?.supportsHyperlinks ?? supportsHyperlinks()
+export function splashStarLine(options: { usage: UsageStats; supportsHyperlinks?: boolean }): SplashStarLine {
+  const supported = options.supportsHyperlinks ?? supportsHyperlinks()
+  const hours = Math.max(1, Math.round(options.usage.totalMs / 3_600_000))
+  const launches = Math.max(1, options.usage.launches)
   const lead = t('logo-star-lead')
+    .replace('{hours}', String(hours))
+    .replace('{launches}', String(launches))
   // 不支持 OSC 8 时上屏的是裸 URL（比 `GitHub` 长出 30+ 列），再加尾巴整行就会超出内容宽
   // 被折成两行——那种终端上省掉尾巴：URL 本身已经说明去哪，少一句邀请比折行好看。
   const tail = supported ? t('logo-star-tail') : ''

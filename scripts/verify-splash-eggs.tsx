@@ -19,7 +19,7 @@ const [
   React,
   { renderBigText, bigTextWidth },
   { SPLASH_FONTS, splashFontById, withTagline },
-  { pickSplashEgg, pickSplashStar, splashStarLine, SPLASH_STAR_URL, SPLASH_STAR_CHANCE },
+  { pickSplashEgg, splashStarLine, SPLASH_STAR_URL },
   { OSC8_START, OSC8_END },
   { stringWidth },
   { renderToScreen },
@@ -174,18 +174,16 @@ check(
   SPLASH_FONTS.every(font => [...'DEEPSEEK' + 'HARNESS'].every(letter => (font.glyphs[letter] ?? []).length === 5)),
 )
 
-// ── ④ 求 star 标语 ────────────────────────────────────────────────────────
+// ── ④ 求 star 标语（**触发条件**在 `verify-usage-stats` 里，这里只管那一行怎么拼）──
+const SAMPLE_USAGE = { launches: 103, totalMs: 26 * 3_600_000, celebrated: 0 }
 check(
-  '概率默认 1/20 且可注入',
-  SPLASH_STAR_CHANCE === 1 / 20 &&
-    pickSplashStar(1, () => 0.999) &&
-    !pickSplashStar(0, () => 0) &&
-    pickSplashStar(0.05, () => 0.049) &&
-    !pickSplashStar(0.05, () => 0.05),
-  `${SPLASH_STAR_CHANCE}`,
+  '文案里的 {hours}/{launches} 换成本机实测值',
+  splashStarLine({ usage: SAMPLE_USAGE }).lead.includes('26') &&
+    splashStarLine({ usage: SAMPLE_USAGE }).lead.includes('103'),
+  splashStarLine({ usage: SAMPLE_USAGE }).lead,
 )
 
-const rich = splashStarLine({ supportsHyperlinks: true })
+const rich = splashStarLine({ supportsHyperlinks: true, usage: SAMPLE_USAGE })
 const richText = rich.lead + rich.link + rich.tail
 check('链接指向仓库（常量没被改错）', SPLASH_STAR_URL === REPO_URL, SPLASH_STAR_URL)
 check(
@@ -200,7 +198,7 @@ check('命中时显示的是短标签而不是裸 URL', rich.link.includes('GitH
 check('整行宽度按可见文本算（OSC 8 不占列）', stringWidth(richText) === rich.width, `${stringWidth(richText)} vs ${rich.width}`)
 check('宽度不是沿用 logo-tagline 的', rich.width > stringWidth('探索未至之境！') && rich.width !== stringWidth('Explore the uncharted!'))
 
-const plain = splashStarLine({ supportsHyperlinks: false })
+const plain = splashStarLine({ supportsHyperlinks: false, usage: SAMPLE_USAGE })
 check(
   '终端不支持超链接时退化成纯文本 URL',
   plain.link === REPO_URL && !plain.link.includes('\x1b') && !plain.link.includes(OSC8_START),
@@ -331,7 +329,7 @@ const centeredPad = (visible: number): number => Math.max(0, Math.round(WHALE_CE
       Math.random = original
     }
   }
-  const once = countRolls(view(<LogoV2 {...baseProps} egg={null} starChance={0.5} />))
+  const once = countRolls(view(<LogoV2 {...baseProps} egg={null} starChance={1} />))
   // `useLayoutEffect` 里自更新 + 每次渲染都换 `model`：commit 后再渲染一轮，
   // LogoV2 拿到新 props 必须重渲染——这才是真实"重绘"（窗口 resize 同路径）。
   const Remount = (): React.ReactElement => {
@@ -339,13 +337,13 @@ const centeredPad = (visible: number): number => Math.max(0, Math.round(WHALE_CE
     React.useLayoutEffect(() => {
       setPass(1)
     }, [])
-    return <LogoV2 {...baseProps} model={`pass-${pass}`} egg={null} starChance={0.5} />
+    return <LogoV2 {...baseProps} model={`pass-${pass}`} egg={null} starChance={1} />
   }
   const twice = countRolls(view(<Remount />))
   check('重渲染真的发生了（否则上面那条断言是空转）', twice.rows.some(line => line.includes('pass-1')), 'pass-1 在屏上')
   check(
-    '概率按 mount 钉一次（重渲染不重掷）',
-    twice.rolls === once.rolls && twice.rows.every(line => !line.includes('GitHub')),
+    '里程碑只在 mount 时判一次（重渲染不会把那一行甩掉）',
+    once.rows.some(line => line.includes('GitHub')) && twice.rows.some(line => line.includes('GitHub')),
     `单次渲染 ${once.rolls} 次随机 → 重渲染后 ${twice.rolls} 次`,
   )
 }

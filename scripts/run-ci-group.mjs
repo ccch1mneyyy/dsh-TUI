@@ -121,6 +121,8 @@ const GROUPS = {
 // 两行等宽 + 下排居中取最紧解）与 1/20 的求 star 标语（OSC 8 成对 + URL 正确、
 // 缩进按该行实际宽度重算、不支持超链接时退化成纯文本 URL），并挂真实 LogoV2 读屏。
     ["verify-splash-eggs", ['node', '--import', 'tsx/esm', 'scripts/verify-splash-eggs.tsx']],
+    // 求 star 的触发条件（累计启动次数 / 累计在线时长的里程碑阶梯、账本坏文件兜底）：
+    ["verify-usage-stats", ['node', '--import', 'tsx/esm', 'scripts/verify-usage-stats.mjs']],
 // settled 子代理卡片不得永久持有动画时钟（空闲帧归零回归）：
 // 曾以 120ms/卡片持续驱动 React commit，N 张相位错开合成 ~30ms
 // 均匀帧 cadence。
