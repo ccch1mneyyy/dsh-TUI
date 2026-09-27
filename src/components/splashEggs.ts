@@ -94,7 +94,9 @@ export interface SplashStarLine {
 export function splashStarLine(options?: { supportsHyperlinks?: boolean }): SplashStarLine {
   const supported = options?.supportsHyperlinks ?? supportsHyperlinks()
   const lead = t('logo-star-lead')
-  const tail = t('logo-star-tail')
+  // 不支持 OSC 8 时上屏的是裸 URL（比 `GitHub` 长出 30+ 列），再加尾巴整行就会超出内容宽
+  // 被折成两行——那种终端上省掉尾巴：URL 本身已经说明去哪，少一句邀请比折行好看。
+  const tail = supported ? t('logo-star-tail') : ''
   const link = createHyperlink(SPLASH_STAR_URL, SPLASH_STAR_LABEL, { supportsHyperlinks: supported })
   return {
     lead,
