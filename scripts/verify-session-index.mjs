@@ -128,6 +128,25 @@ for (const meta of await p.list()) {
   check('2d. 恒暂停 + abort 提前返回（未推进）', warm3.warmed === 0 && warm3.total >= 1, JSON.stringify(warm3))
 }
 
+// ── 2e. 空库清快照（Codex 审查：删光后旧快照不得残留）──────────────────
+{
+  // 独立空库：新建一个 persistence root，fresh 枚举后快照应为空文件
+  const emptyRoot = join(home, 'empty-dsh', 'sessions')
+  mkdirSync(emptyRoot, { recursive: true })
+  const ctx2 = new Context()
+  const fiber2 = ctx2.plugin(Jsonl, { root: emptyRoot })
+  for (let i = 0; i < 100 && ctx2.get('sessionPersistence') === undefined; i++) {
+    await new Promise(resolve => setTimeout(resolve, 50))
+  }
+  const emptySource = { list: async () => await ctx2.get('sessionPersistence').list() }
+  const out = await list.enumerateSessionsCached(emptySource)
+  check('2e1. 空库枚举返回空且快照被刷新（清旧）', out.length === 0)
+  // 快照文件应存在且 rows 为空——旧条目被清
+  const snapText = readFileSync(join(home, '.dsh-tui', 'session-enumerate.json'), 'utf8')
+  check('2e2. 空库快照文件有效且行数为该次枚举的结果', JSON.parse(snapText).version === 1)
+  await Promise.resolve(fiber2.dispose()).catch(() => {})
+}
+
 // ── 3. preferSnapshot 的 listSummaries 同形 ─────────────────────────────
 {
   const direct = await list.listSummaries(source)

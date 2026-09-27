@@ -18,7 +18,7 @@
  *
  * @module @deepseek-harness-tui/dsh-tui/sessions/list
  */
-import { readFileSync as snapshotRead, writeFileSync as snapshotWrite, mkdirSync as snapshotMkdir } from 'node:fs'
+import { mkdirSync as snapshotMkdir, readFileSync as snapshotRead, renameSync, rmSync, writeFileSync as snapshotWrite } from 'node:fs'
 import { basename, join } from 'node:path'
 import {
   digestSession,
@@ -146,14 +146,22 @@ function readEnumerateSnapshot(): readonly SnapshotRow[] | undefined {
 }
 
 function writeEnumerateSnapshot(listed: readonly Listed[], source: SessionSource): void {
+  // Atomic like writeIndex (tmp + rename): the two-phase refresh and the
+  // background warmer can both be mid-fresh-enumeration at the same time,
+  // and a reader must never observe a half-written snapshot — a torn file
+  // would silently cost every subsequent open its fast path until the next
+  // successful write.
+  const temporary = `${ENUMERATE_SNAPSHOT_FILE}.${process.pid}.tmp`
   try {
     snapshotMkdir(DATA_DIR, { recursive: true })
-    snapshotWrite(ENUMERATE_SNAPSHOT_FILE, JSON.stringify({
+    snapshotWrite(temporary, JSON.stringify({
       version: ENUMERATE_SNAPSHOT_VERSION,
       rows: listed.map(entry => ({ header: entry.header, path: locate(source, entry.raw, entry.header.id) })),
     }))
+    renameSync(temporary, ENUMERATE_SNAPSHOT_FILE)
   } catch {
     // A read-only home costs the next open its fast path, nothing else.
+    try { rmSync(temporary, { force: true }) } catch { /* best-effort */ }
   }
 }
 
@@ -188,7 +196,10 @@ export async function enumerateSessionsCached(
     if (snap !== undefined) return snap
   }
   const listed = await enumerateSessions(source, options.signal)
-  if (listed.length > 0) writeEnumerateSnapshot(listed, source)
+  // An EMPTY store also refreshes the snapshot: skipping the write would
+  // leave a stale snapshot serving deleted sessions on every subsequent
+  // fast-path open.
+  writeEnumerateSnapshot(listed, source)
   return listed
 }
 
@@ -242,15 +253,19 @@ export async function warmSessionIndex(
       if (aborted()) return { warmed: warmedSoFar(before), total }
       await new Promise(resolve => setTimeout(resolve, 1000))
     }
-    const indexSizeBefore = readIndex().size
+    // Snapshot the progress counters BEFORE the round: comparing a
+    // post-round read against itself (the bug this replaces) made the
+    // equality test a tautology — the warmer gave up after one round even
+    // when the title-scan budget had left most of a large store unwarmed.
+    const sizeBefore = readIndex().size
+    const completeCountBefore = countComplete(readIndex())
     try {
       await listSummaries(source, { signal: options.signal })
     } catch {
       break
     }
-    const indexSizeAfter = readIndex().size
-    const completeAfter = countComplete(readIndex())
-    if (completeBefore(readIndex()) === completeAfter && indexSizeAfter === indexSizeBefore) break
+    const progressed = readIndex().size !== sizeBefore || countComplete(readIndex()) !== completeCountBefore
+    if (!progressed) break
     await new Promise(resolve => setTimeout(resolve, WARMER_BATCH_PAUSE_MS * 4))
   }
   return { warmed: Math.min(warmedSoFar(before), total), total }
@@ -260,10 +275,6 @@ function countComplete(index: SessionIndex): number {
   let n = 0
   for (const entry of index.values()) if (entry.derived?.titleComplete === true) n += 1
   return n
-}
-
-function completeBefore(index: SessionIndex): number {
-  return countComplete(index)
 }
 
 function warmedSoFar(previous: SessionIndex): number {

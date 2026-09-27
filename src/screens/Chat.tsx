@@ -3463,7 +3463,7 @@ export function Chat({
                 channel.notify(failureText, { color: 'error', timeoutMs: 8000 })
               }
             }
-          })
+          }).catch(() => undefined)
           return
         }
         setMigrateRows(null)

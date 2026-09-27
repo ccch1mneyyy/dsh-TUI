@@ -85,13 +85,18 @@ export function createAgentViewProjection(
     // enumerates 2000+ headers in seconds; the snapshot makes the screen
     // usable immediately), then a fresh enumeration replaces it and notifies
     // again. Session-screen opens feel instant; staleness lasts one refresh.
-    void deps.listPersisted({ preferSnapshot: true }).then(rows => {
+    // Sequence guard: the snapshot phase can resolve AFTER the fresh phase
+    // (its derivation is disk-cheap but not free); letting it overwrite
+    // would regress the list to stale rows until the next refresh.
+    let freshDone = false
+    void deps.listPersisted().then(rows => {
+      freshDone = true
       if (disposed || !deps.owner.current()) return
       persistedRows = rows
       notify()
     }).catch(() => undefined)
-    void deps.listPersisted().then(rows => {
-      if (disposed || !deps.owner.current()) return
+    void deps.listPersisted({ preferSnapshot: true }).then(rows => {
+      if (disposed || !deps.owner.current() || freshDone) return
       persistedRows = rows
       notify()
     }).catch(() => undefined)
