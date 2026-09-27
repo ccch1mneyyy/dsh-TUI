@@ -158,6 +158,8 @@ Full guide: [Session migration](docs/migrate.en.md).
 
 While the model is working: `Enter` steers, `Tab` queues a follow-up, `Ctrl+Enter` interrupts and sends.
 
+On native Windows, fragmented Win32 input records are reassembled across short input delays instead of appearing as numeric protocol text. Incomplete records have a bounded recovery window (1 second); standalone `Esc` keeps its normal response time.
+
 Mouse (fullscreen): drag to select and copy, double/triple click to select a word or line, click tool cards, timeline ticks and `[Image #N]` previews.
 
 Full reference: [Interaction and commands](docs/interaction.en.md).

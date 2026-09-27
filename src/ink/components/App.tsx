@@ -14,6 +14,7 @@ import { DragEvent } from "../events/drag-event.js";
 import type { DOMElement } from "../dom.js";
 import {
 	INITIAL_STATE,
+	type KeyParseState,
 	type ParsedInput,
 	type ParsedKey,
 	type ParsedMouse,
@@ -217,7 +218,10 @@ export default class App extends PureComponent<Props, State> {
 	// raw mode until all components don't need it anymore
 	rawModeEnabledCount = 0;
 	internal_eventEmitter = new EventEmitter();
-	keyParseState = INITIAL_STATE;
+	keyParseState: KeyParseState = {
+		...INITIAL_STATE,
+		win32InputMode: supportsWin32InputMode(),
+	};
 	// Timer for flushing incomplete escape sequences
 	incompleteEscapeTimer: NodeJS.Timeout | null = null;
 	// Deferred XTVERSION probe (setImmediate). Cleared on unmount so the

@@ -15,6 +15,7 @@
  *     the Ins/Home cluster — tcell encoding)
  *  5. UTF-16 surrogate pairs across records, incl. state-pollution guards
  *  6. repeat-count expansion, keyup/modifier swallowing
+ *  7. record fragments across escape flushes, expiry and resynchronization
  *
  * Run with: node --import tsx/esm scripts/verify-win32-input.tsx
  * Exits 1 on the first failed assertion (CI gate).
@@ -26,6 +27,7 @@ import {
   type ParsedInput,
 } from '../src/ink/parse-keypress.js'
 import { supportsWin32InputMode } from '../src/ink/terminal.js'
+import { InputEvent } from '../src/ink/events/input-event.js'
 
 type KeySummary = {
   kind: string
@@ -247,7 +249,7 @@ check('dedicated Insert (ENHANCED_KEY, Uc=0) stays insert', new Feeder().feed(`$
   check('the orphaned low half is then dropped, not combined', f.feed(`${CSI}49;2;56832;1;32;1_`), [])
 }
 {
-  // INITIAL_STATE is a shared singleton (App.tsx seeds the parser with it) —
+  // INITIAL_STATE is a shared singleton (also usable directly by callers) —
   // a pending high surrogate must not leak into it.
   const [keys, st] = parseMultipleKeypresses(INITIAL_STATE, `${CSI}49;2;55357;1;32;1_`)
   check('high surrogate via INITIAL_STATE yields no key', summarize(keys), [])
@@ -460,6 +462,175 @@ for (const [label, bridge] of [
   f.feed(bridge)
   check(`no surrogate bridge across ${label}`, f.feed(altUpPayload(56832)), [])
 }
+
+// --- 10. record framing across the escape timer (#827) -----------------------
+// App supplies the capability flag before the first record. Drive exactly
+// the parser -> InputEvent path; null represents the escape timer, without
+// relying on wall-clock sleeps or a Windows-only test runner.
+function fragments(chunks: Array<string | null>, enabled = true): {
+  keys: ParsedInput[]
+  state: KeyParseState
+  text: string
+} {
+  let state: KeyParseState = { ...INITIAL_STATE, win32InputMode: enabled }
+  const keys: ParsedInput[] = []
+  for (const chunk of chunks) {
+    const [out, next] = parseMultipleKeypresses(state, chunk)
+    state = next
+    keys.push(...out)
+  }
+  return {
+    keys,
+    state,
+    text: keys.flatMap(key => key.kind === 'key' ? new InputEvent(key).input : []).join(''),
+  }
+}
+
+const SHIFT_RECORD = `${CSI}16;42;0;1;16;1_`
+const A_RECORD = `${CSI}65;30;97;1;0;1_`
+const CJK_RECORD = `${CSI}0;0;22269;1;0;1_`
+for (const record of [
+  SHIFT_RECORD, A_RECORD, CJK_RECORD, `${CSI}65;30;97;0;0;1_`,
+  `${CSI}13;28;13;1;16;1_`, `${CSI}88;45;120;1;0;3_`,
+  `${CSI}189;12;95;1;16;1_`, `${CSI};;97;1_`,
+]) {
+  const expected = fragments([record])
+  for (let split = 1; split < record.length; split++) {
+    const actual = fragments([record.slice(0, split), null, null, record.slice(split)])
+    // A raw lone ESC still releases promptly. Its continuation can recover
+    // text, but cannot undo an already dispatched Escape event.
+    const keys = split === 1 ? actual.keys.slice(1) : actual.keys
+    check(`flush split ${split}/${record.length}: ${JSON.stringify(record)}`,
+      summarize(keys), summarize(expected.keys))
+    checkBoolean('InputEvent text matches intact record', actual.text === expected.text, true)
+  }
+}
+checkBoolean('reported Shift prefix is protected without an explicit mode flag',
+  fragments([SHIFT_RECORD.slice(0, -1), null, '_'], false).keys.length === 0, true)
+checkBoolean('record framing does not mutate INITIAL_STATE',
+  INITIAL_STATE.win32InputMode === undefined && INITIAL_STATE.win32InputStartedAt === undefined, true)
+checkBoolean('complete record enables framing for subsequent early splits',
+  fragments([SHIFT_RECORD, `${CSI}6`, null, '5;30;97;1;0;1_'], false).text === 'a', true)
+checkBoolean('recovered complete tail also enables subsequent framing',
+  fragments([SHIFT_RECORD.slice(1), `${CSI}6`, null, '5;30;97;1;0;1_'], false).text === 'a', true)
+
+{
+  const tail = CJK_RECORD.slice(1)
+  const result = fragments(['\x1b', null, ...[...tail].flatMap(ch => [ch, null])])
+  checkBoolean('ESC-less tail may fragment at every byte, across repeated flushes', result.text === '国', true)
+}
+checkBoolean('recovered tail preserves batched ordinary suffix and following record',
+  fragments(['\x1b', null, '[65;30;', null, '97;1;0;1__suffix' + CJK_RECORD]).text === 'a_suffix国', true)
+checkBoolean('fresh ESC discards an abandoned record before the next record',
+  fragments([SHIFT_RECORD.slice(0, -1), null, A_RECORD]).text === 'a', true)
+checkBoolean('fresh ESC after numeric continuation discards the old record',
+  fragments([`${CSI}16;`, null, '42;0;' + A_RECORD]).text === 'a', true)
+checkBoolean('unrelated text abandons a held record without eating that text',
+  fragments([SHIFT_RECORD.slice(0, -1), null, 'hello_']).text === 'hello_', true)
+
+for (const sequence of [
+  '\x1b[1;2A', '\x1b[13;2u', '\x1b[27;2;13~', '\x1b[6;20;10t',
+  '\x1b[25~', '\x1b[57358u', '\x1b[27;2;57358~',
+  '\x1b[<0;2;3M', '\x1b[M !!', '\x1b[?1;0c',
+]) {
+  for (const split of [2, sequence.length - 1]) {
+    // For non-numeric protocols only the shared ESC[ prefix uses the
+    // Win32 grace; their own mid-report timeouts retain existing behavior.
+    const chunks: Array<string | null> = [sequence.slice(0, split), sequence.slice(split)]
+    if (split === 2 || /^\x1b\[[\d;]*$/.test(chunks[0]!)) chunks.splice(1, 0, null)
+    const actual = fragments(chunks)
+    const expected = fragments([sequence])
+    check(`non-Win32 CSI survives split ${split}: ${JSON.stringify(sequence)}`,
+      summarize(actual.keys), summarize(expected.keys))
+    checkBoolean('non-Win32 InputEvent text is unchanged', actual.text === expected.text, true)
+  }
+}
+for (const text of ['_', '[', '[123', '[1;2', 'hello_']) {
+  checkBoolean(`ordinary text stays literal: ${JSON.stringify(text)}`,
+    fragments([text, null]).text === text, true)
+}
+checkBoolean('non-Win32 Escape then bracket text remains literal',
+  fragments(['\x1b', null, '[123', null], false).text === '[123', true)
+checkBoolean('unrelated input clears orphan ESC provenance',
+  fragments(['\x1b', null, 'x', '[123', null]).text === 'x[123', true)
+checkBoolean('bracketed paste preserves protocol-shaped literal text',
+  fragments(['\x1b[200~', SHIFT_RECORD.slice(0, -1), '_', '\x1b[201~']).text === SHIFT_RECORD.slice(1), true)
+checkBoolean('paste opener and record-shaped payload in one read do not start a record deadline',
+  fragments(['\x1b[200~' + SHIFT_RECORD.slice(0, -1)]).state.win32InputStartedAt === undefined, true)
+checkBoolean('a literal pasted ESC flush is not orphan keyboard ESC provenance',
+  fragments(['\x1b[200~\x1b', null, '[123', null]).text === '[123', true)
+{
+  const surrogateRecords = [
+    `${CSI}49;2;55357;1;0;1_`, `${CSI}49;2;55357;0;0;1_`, `${CSI}49;2;56832;1;0;1_`,
+  ]
+  checkBoolean('UTF-16 surrogate state survives record-internal flushes and keyup',
+    fragments(surrogateRecords.flatMap(record => [record.slice(0, -1), null, '_'])).text === '😀', true)
+}
+
+{
+  // Every record of a decomposed paste is itself split before its final
+  // byte. A record-grace flush must not prematurely finalize the paste or
+  // release a held start/end marker as real keyboard events.
+  const records = (P2_OPEN + P2_BODY + P2_CLOSE).match(/\x1b\[[\d;]*_/g)!
+  const chunks = records.flatMap(record => [record.slice(0, -1), null, null, '_'])
+  checkPaste('decomposed paste survives record-internal flushes', summarize(fragments(chunks).keys), 'a\nb')
+}
+for (const protocol of ['\x1b[<0;32;5M', '\x1b[?1;0c']) {
+  const encoded = [...protocol].map(ch => pasteRecs(0, ch.charCodeAt(0))).join('')
+  const records = encoded.match(/\x1b\[[\d;]*_/g)!
+  const actual = fragments(records.flatMap(record => [record.slice(0, -1), null, '_']))
+  checkBoolean(`synthesized protocol survives record-internal flushes: ${JSON.stringify(protocol)}`,
+    JSON.stringify(actual.keys) === JSON.stringify(fragments([encoded]).keys), true)
+}
+{
+  const originalNow = Date.now
+  let now = 10000
+  Date.now = () => now
+  try {
+    let [, state] = parseMultipleKeypresses({ ...INITIAL_STATE, win32InputMode: true }, `${CSI}65;`)
+    const startedAt = state.win32InputStartedAt
+    for (const chunk of [null, '30;', null, '97;1;0;1', null]) {
+      now += 150
+      const [keys, next] = parseMultipleKeypresses(state, chunk)
+      state = next
+      check('quiet flushes and fragments do not release a partial record', summarize(keys), [])
+      checkBoolean('continuations do not renew the record deadline', state.win32InputStartedAt === startedAt, true)
+    }
+    now = 11000
+    const [expired, next] = parseMultipleKeypresses(state, null)
+    check('expired record is discarded, not dispatched', summarize(expired), [])
+    checkBoolean('expiry clears the buffer and timer sentinel', next.incomplete === '', true)
+    check('ordinary underscore after expiry is not swallowed',
+      summarize(parseMultipleKeypresses(next, '_')[0]), summarize(fragments(['_']).keys))
+
+    // Expiry is also checked on input, not only on quiet flushes.
+    now = 20000
+    ;[, state] = parseMultipleKeypresses({ ...INITIAL_STATE, win32InputMode: true }, `${CSI}65;`)
+    now = 21000
+    const [typed] = parseMultipleKeypresses(state, '123')
+    check('continuous input cannot keep an expired hold alive', summarize(typed), summarize(fragments(['123']).keys))
+
+    now = 30000
+    ;[, state] = parseMultipleKeypresses({ ...INITIAL_STATE, win32InputMode: true }, `${CSI}65;`)
+    now = 30900
+    ;[, state] = parseMultipleKeypresses(state, '30;97;1;0;1_' + `${CSI}16;`)
+    now = 31100
+    const [flushed, refreshed] = parseMultipleKeypresses(state, null)
+    check('a new record in the same read gets its own deadline', summarize(flushed), [])
+    checkBoolean('the new prefix remains buffered', refreshed.incomplete === `${CSI}16;`, true)
+
+    now = 40000
+    ;[, state] = parseMultipleKeypresses({ ...INITIAL_STATE, win32InputMode: true }, '\x1b')
+    ;[, state] = parseMultipleKeypresses(state, null)
+    now = 41000
+    const [literal] = parseMultipleKeypresses(state, '[123')
+    check('expired orphan ESC does not capture later bracket text', summarize(literal), summarize(fragments(['[123']).keys))
+  } finally {
+    Date.now = originalNow
+  }
+}
+checkBoolean('oversized incomplete record has bounded storage',
+  fragments([`${CSI}${'1'.repeat(80)}`, null]).state.incomplete === '', true)
 
 if (failures > 0) {
   console.error(`\n${failures} assertion(s) failed`)
