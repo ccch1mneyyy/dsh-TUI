@@ -8,6 +8,7 @@ import { dirname, join, parse, resolve } from 'node:path'
 import { tmpdir } from 'node:os'
 import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
+import { rcompare, valid } from 'semver'
 import ts from 'typescript'
 
 const EXPECTED_UPSTREAM_VERSION = process.env.DSH_HARNESS_EXPECTED_VERSION ?? '0.1.7-rc.2'
@@ -79,23 +80,35 @@ sourcePaths['@deepseek-ai/dsh-session-persistence-jsonl'] = [
 // flag set — not under this workspace's renderer-tuned options. Its
 // published d.ts is generated from exactly that source, so pin it the same
 // way whenever the persistence seam's graph reaches it. The package is a
-// transitive install (not a direct dependency): resolve the HIGHEST store
-// entry regardless of version — the alpha lanes check OLDER upstream
-// checkouts against the versions this workspace actually installs, and the
-// format types are shape-stable across those lines.
+// transitive install (not a direct dependency), so the declaration is found
+// by scanning the pnpm store — ranked by each entry's OWN package.json
+// version, never by directory name: pnpm shortens a store name past
+// `virtual-store-dir-max-length` to `<name>_<hash>` (60 chars on Windows,
+// 120 elsewhere), leaving no version in the name at all, and a lexicographic
+// sort ranks 0.1.7-rc.2 above 0.1.7-rc.10. The alpha lanes check OLDER
+// upstream checkouts against the versions this workspace actually installs,
+// and the format types are shape-stable across those lines, so the newest
+// installed declaration is the right pin.
 {
-  const prefix = '@deepseek-ai+dsh-session-format@'
   const store = join(tuiRoot, 'node_modules/.pnpm')
+  const candidates = []
   if (existsSync(store)) {
-    const entry = readdirSync(store)
-      .filter(name => name.startsWith(prefix))
-      .sort()
-      .at(-1)
-    if (entry !== undefined) {
-      const formatDecl = join(store, entry, 'node_modules/@deepseek-ai/dsh-session-format/lib/types/index.d.ts')
-      if (existsSync(formatDecl)) sourcePaths['@deepseek-ai/dsh-session-format'] = [formatDecl]
+    for (const entry of readdirSync(store)) {
+      const pkg = join(store, entry, 'node_modules/@deepseek-ai/dsh-session-format')
+      const manifest = join(pkg, 'package.json')
+      const declaration = join(pkg, 'lib/types/index.d.ts')
+      if (!existsSync(manifest) || !existsSync(declaration)) continue
+      try {
+        const version = valid(JSON.parse(readFileSync(manifest, 'utf8')).version)
+        if (version !== null) candidates.push({ version, declaration })
+      } catch {
+        // Unreadable manifest: not a candidate; the pin simply stays unset.
+      }
     }
   }
+  candidates.sort((a, b) => rcompare(a.version, b.version))
+  const newest = candidates[0]
+  if (newest !== undefined) sourcePaths['@deepseek-ai/dsh-session-format'] = [newest.declaration]
 }
 
 // HMR is an indirect settings dependency, not a TUI-owned implementation.

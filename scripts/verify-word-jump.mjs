@@ -36,6 +36,12 @@ import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { Writable, PassThrough } from 'node:stream'
+// Redirect HOME/USERPROFILE into a throwaway sandbox before the app modules
+// load: this fixture submits text, and `rememberHistory` persists it into
+// `~/.dsh-tui/history.jsonl` — writing the developer's real input history from
+// a test would both leak fixture strings into `↑`/Ctrl+R and (at the 200-entry
+// cap) evict their real entries.
+import './lib/fake-home.mjs'
 import React from 'react'
 import { settled, sleep } from './lib/term-test.mjs'
 

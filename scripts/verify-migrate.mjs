@@ -438,7 +438,11 @@ const root = mkdtempSync(join(tmpdir(), 'verify-migrate-'))
     '',
   ].join('\n'))
 
+  // Adapters resolve their roots through os.homedir(), which reads
+  // USERPROFILE (not HOME) on Windows: setting only HOME silently pointed the
+  // scan at the REAL home there and failed 6a–6c on every Windows checkout.
   process.env.HOME = home
+  process.env.USERPROFILE = home
   const cc = claudeCodeAdapter.discover()
   const ccTurns = cc.sessions[0]?.turns ?? []
   check('6a. claude-code 解析（字符串 user + thinking + model）',

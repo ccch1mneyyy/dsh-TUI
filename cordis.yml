@@ -207,8 +207,9 @@
 - id: command-goal
   name: '@deepseek-ai/dsh-command-goal'
 
-# Live working line narration support. dsh-tui computes the visible status
-# in-process from base session events; activity/status is never persisted.
+# Working line plugin: folds the session stream into the `workingActivity`
+# session projection (≥0.5.0), which the TUI reads as its working-status
+# line; activity/status events are never persisted.
 # Mounted through @deepseek-harness-tui/dsh-tui's `./working-activity`
 # re-export (not the bare `dsh-working-activity` name) so the row resolves
 # from install layouts that never link transitive dependencies into the

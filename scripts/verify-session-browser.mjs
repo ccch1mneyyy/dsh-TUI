@@ -186,7 +186,6 @@ function makeChannel() {
     notifications: [],
     contextWindow: undefined,
     reasoningEffort: 'high',
-    workingActivity: undefined,
     activityEnabled: false,
     contextBarEnabled: true,
     agentPreset: 'standard',

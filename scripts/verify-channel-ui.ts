@@ -711,7 +711,7 @@ for (const method of ['writeProfile', 'mutateProfile', 'removeProfile'] as const
   const first = initial[0]!
   historicalReads = 0
   for (let i = 0; i < 8; i++) {
-    raw.workingActivity = { phase: 'thinking', text: `activity ${i}` } as never
+    raw.activityFrames = `frame ${i}` as never
     raw.emitStream()
     await tick()
     assert.equal(mount.channel.rows[0], first, 'activity stream retains unchanged historical row')

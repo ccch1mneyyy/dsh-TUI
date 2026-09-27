@@ -8,13 +8,24 @@
  * touches so `/resume` can sort most-recently-used first (DSH session
  * headers carry only `createdAt`).
  */
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { DATA_DIR } from './utils/paths.js'
 
 const DIR = DATA_DIR
 const RESUME_FILE = join(DIR, 'resume.txt')
 const LAST_USED_FILE = join(DIR, 'last-used.json')
+let lastUsedStamp: string | undefined
+let lastUsedCache: Readonly<Record<string, number>> | undefined
+
+function lastUsedFileStamp(): string | undefined {
+  try {
+    const stats = statSync(LAST_USED_FILE)
+    return `${stats.dev}:${stats.ino}:${stats.size}:${stats.mtimeMs}:${stats.ctimeMs}`
+  } catch {
+    return undefined
+  }
+}
 /**
  * The agent view's OWN ledger: session-id → epoch-ms of the moments this TUI
  * dispatched, backgrounded, or attached to a session FROM the agent view.
@@ -91,10 +102,14 @@ export function resumeTargetFromArgv(argv: readonly string[]): string | undefine
  * @returns The parsed map; best effort, an unreadable file yields {}.
  */
 export function readLastUsed(): Readonly<Record<string, number>> {
+  const stamp = lastUsedFileStamp()
+  if (lastUsedCache !== undefined && lastUsedStamp === stamp) return lastUsedCache
   try {
     const parsed = JSON.parse(readFileSync(LAST_USED_FILE, 'utf8')) as unknown
     if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
-      return {}
+      lastUsedCache = {}
+      lastUsedStamp = stamp
+      return lastUsedCache
     }
     const record = parsed as Record<string, unknown>
     const result: Record<string, number> = {}
@@ -103,9 +118,13 @@ export function readLastUsed(): Readonly<Record<string, number>> {
         result[id] = value
       }
     }
+    lastUsedCache = result
+    lastUsedStamp = stamp
     return result
   } catch {
-    return {}
+    lastUsedCache = {}
+    lastUsedStamp = stamp
+    return lastUsedCache
   }
 }
 
@@ -119,6 +138,8 @@ export function touchSession(sessionId: string): void {
     ensureDir()
     const lastUsed = { ...readLastUsed(), [sessionId]: Date.now() }
     writeFileSync(LAST_USED_FILE, JSON.stringify(lastUsed))
+    lastUsedCache = lastUsed
+    lastUsedStamp = lastUsedFileStamp()
   } catch {
     // Best effort — MRU ordering is a nicety.
   }
@@ -136,6 +157,8 @@ export function forgetSession(sessionId: string): void {
     delete lastUsed[sessionId]
     ensureDir()
     writeFileSync(LAST_USED_FILE, JSON.stringify(lastUsed))
+    lastUsedCache = lastUsed
+    lastUsedStamp = lastUsedFileStamp()
   } catch {
     // Best effort — a stale entry only skews sort order.
   }

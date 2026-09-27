@@ -50,6 +50,7 @@ function makeFakeChannel() {
     sessionTitle: 'workspace',
     sessionColor: '',
     agentId: 'session-1',
+    sessionId: 'session-1',
     agentBindingGeneration: 3,
     model: 'deepseek',
     provider: 'local',
@@ -70,7 +71,6 @@ function makeFakeChannel() {
     lastUsage: { input: 10, output: 20, cacheRead: 0, cacheWrite: 0 },
     tps: 10,
     tpsSamples: [],
-    workingActivity: undefined,
     activityFrames: 'claude',
     diffLayout: 'auto',
     thinkingFold: 'preview',
@@ -278,7 +278,9 @@ passive.dispose()
 // not have its read-only features promoted to live by the Kernel.
 {
   const badStateChannel = makeFakeChannel()
-  badStateChannel.workingActivity = { fn: () => undefined }
+  // Any non-JSON value on the projected state does it; `goal` is a real snapshot
+  // field (the working line moved to a session projection and left the port).
+  badStateChannel.goal = { fn: () => undefined }
   const badStateCtx = new Context()
   badStateCtx.logger.warn = () => undefined
   registerTuiChannel(badStateCtx, badStateChannel)

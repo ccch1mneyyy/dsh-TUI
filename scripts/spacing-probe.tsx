@@ -9,7 +9,7 @@
  */
 process.env.FORCE_COLOR = '3'
 
-const [{ PassThrough, Writable }, React, { render }, { Chat }, { QuestionStore }, figures, width, activity] =
+const [{ PassThrough, Writable }, React, { render }, { Chat }, { QuestionStore }, figures, width, activity, { ActivityStore }] =
   await Promise.all([
     import('node:stream'),
     import('react'),
@@ -19,6 +19,7 @@ const [{ PassThrough, Writable }, React, { render }, { Chat }, { QuestionStore }
     import('../src/terminal-utils/figures.js'),
     import('../src/ink/stringWidth.js'),
     import('../src/components/activityFrames.js'),
+    import('../src/dsh-adapter/activity-store.js'),
   ])
 const { THINKING_SPINNER_FRAMES, THINKING_SETTLED_MARKER } = figures
 const { stringWidth } = width
@@ -71,11 +72,13 @@ const channel = {
   status: 'idle',
   sessionTitle: 'probe',
   agentId: 'probe',
+  // Chat reads the working line from the session projection store, keyed by
+  // session id; the store below carries the value this probe wants on screen.
+  sessionId: 'spacing-probe',
   model: 'deepseek-v4-flash',
   tokens: { input: 120, output: 45 },
   contextWindow: 1000000,
   reasoningEffort: 'max',
-  workingActivity: { phase: 'tool', line: '正在查看 src/dsh-adapter/channel.ts · 总12s', toolCount: 2, turnElapsedMs: 12000 },
   activityFrames: 'moon8',
   contextBarEnabled: true,
   lastUsage: { input: 12000, output: 356, cacheRead: 3400, cacheWrite: 1200 },
@@ -125,8 +128,21 @@ const channel = {
 
 const stdout = new FakeStdout()
 const questionStore = new QuestionStore()
+// The working line is host data now: seed the store the way a live session
+// would (the projection pushes values for the session being shown).
+const activityStore = new ActivityStore()
+activityStore.update('spacing-probe', {
+  phase: 'tool',
+  line: '正在查看 src/dsh-adapter/channel.ts · 总12s',
+  live: true,
+  toolCount: 2,
+  phaseStartedAt: Date.now() - 12_000,
+  turnStartedAt: Date.now() - 12_000,
+  updatedAt: Date.now(),
+  lang: 'zh',
+})
 const instance = await render(
-  <Chat channel={channel} questionStore={questionStore} onExit={() => {}} />,
+  <Chat channel={channel} questionStore={questionStore} activityStore={activityStore} onExit={() => {}} />,
   {
     stdout,
     stdin: new FakeStdin(),

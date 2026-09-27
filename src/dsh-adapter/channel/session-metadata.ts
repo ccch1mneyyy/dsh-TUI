@@ -3,7 +3,7 @@ import { createUserMessage, type Message } from '@deepseek-ai/dsh-llm'
 import type { Context } from '@deepseek-ai/cordis'
 import { clearResumeTarget, forgetSession, readResumeTarget, touchSession, writeResumeTarget } from '../../sessionHistory.js'
 import { t } from '../../i18n.js'
-import { appendSessionTitle, deleteSessionLog } from '../compat/index.js'
+import { appendSessionTitle, deleteSessionLog, userTitleData } from '../compat/index.js'
 import { snapshotLiveSessionEvents } from '../compat/liveSession.js'
 import { collectRecentActivity, parseRecapResponse, RECAP_RECENT_CHARS, wrapRecapPrompt } from '../recap.js'
 import { listSummaries, locateSession, previewSession, type SessionSource, type SessionSummary } from '../sessions/index.js'
@@ -50,14 +50,22 @@ export function createSessionMetadataActions(ctx: Context, deps: {
   const withOwnerSignal = (signal?: AbortSignal): AbortSignal =>
     signal === undefined ? deps.owner.signal : AbortSignal.any([signal, deps.owner.signal])
 
-  const listSessions = async (): Promise<readonly SessionSummary[]> => {
+  let listingGeneration = 0
+  const listSessions = async (onEnriched?: (summary: SessionSummary) => void): Promise<readonly SessionSummary[]> => {
+    const generation = ++listingGeneration
     const capture = deps.binding.capture()
     const source = persistence()
     if (!source) {
       if (current(capture)) deps.setPersistedSessions([])
       return []
     }
-    const summaries = await listSummaries(source)
+    let summaries: readonly SessionSummary[] = []
+    summaries = await listSummaries(source, deps.owner.signal, enriched => {
+      if (!current(capture) || generation !== listingGeneration) return
+      summaries = summaries.map(row => row.id === enriched.id ? enriched : row)
+      deps.setPersistedSessions(summaries)
+      onEnriched?.(enriched)
+    })
     if (!current(capture)) return []
     deps.setPersistedSessions(summaries)
     return summaries
@@ -190,7 +198,9 @@ export function createSessionMetadataActions(ctx: Context, deps: {
   const renameSession = (title: string): void => {
     const capture = deps.binding.capture()
     if (!current(capture)) return
-    capture.agent.session.append('session/title', { title })
+    // Live rename: the same strict-reader-required payload the offline append
+    // writes — a `{ title }`-only event made the log unopenable (issue #1006).
+    capture.agent.session.append('session/title', userTitleData(title))
     deps.setSessionTitle(title)
     deps.emit()
   }

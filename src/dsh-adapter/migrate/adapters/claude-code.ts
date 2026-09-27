@@ -9,7 +9,7 @@
  */
 import { readdirSync, readFileSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
 import type { MigrationAdapter, MigrationDiscovery, MigrationSession, MigrationTurn } from '../types.js'
 import { countEntries } from './scan.js'
 
@@ -61,7 +61,10 @@ function readOne(path: string, fallbackCwd: string): MigrationSession | undefine
   } catch {
     return undefined
   }
-  const sourceId = path.split('/').pop()?.replace(/\.jsonl$/u, '') ?? path
+  // basename(), not split('/'): join() produces `\` separators on Windows, so
+  // splitting on '/' would leave the WHOLE absolute path as the id — and the
+  // id is the dedupe key (moving the source store would re-import everything).
+  const sourceId = basename(path).replace(/\.jsonl$/u, '')
   let startedAt = 0
   let turns: MigrationTurn[] = []
   let lineCwd: string | undefined

@@ -11,7 +11,8 @@
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { isPresetName, normalizeActivityPreset } from './components/activityFrames.js'
-import { parseWorkingActivityConfig, type WorkingActivityConfig } from 'dsh-working-activity/config'
+import { featureOn, FEATURE_FLAGS, parseWorkingActivityConfig, type WorkingActivityConfig } from 'dsh-working-activity/config'
+import type { Config as MountedActivityConfig } from 'dsh-working-activity'
 import { DATA_DIR } from './utils/paths.js'
 
 const PREFS_DIR = DATA_DIR
@@ -58,6 +59,60 @@ export function readActivityConfig(dir: string = PREFS_DIR): WorkingActivityConf
     return parseWorkingActivityConfig(readFileSync(join(dir, 'working-activity.json'), 'utf8')).config
   } catch {
     return undefined
+  }
+}
+
+/**
+ * Fold the parsed user file into the mounted working-activity plugin config.
+ *
+ * The line's semantics moved into the plugin, but the file this app's own UI
+ * writes (`/activity`, the settings panel) is still where a user's feature
+ * switches live — without this fold they were parsed and silently dropped.
+ * Precedence keeps the old contract: an explicit row value wins over the
+ * file, the file fills everything the row leaves at its schema default. The
+ * flags come through `featureOn`, so the file's `mode: minimal` turns them
+ * off exactly as it did when the deleted channel sidecar built its tracker.
+ * (The sidecar also hardcoded `detailLimit: 40`, which is the plugin's own
+ * schema default — nothing to fold.)
+ *
+ * The plugin schema materializes its defaults before `apply` sees the config,
+ * so "equal to the default" is the honest reading of "the row did not set
+ * this key"; a row value explicitly set to the default is indistinguishable
+ * from an unset one and the file wins there. None of these keys are set by
+ * the shipped rows.
+ * @param config - Schema-resolved row config for the mounted plugin.
+ * @param file - Parsed user preferences (undefined when unreadable/absent).
+ * @returns the config to mount the plugin with.
+ */
+export function mergeActivityPreferences(
+  config: MountedActivityConfig,
+  file: WorkingActivityConfig | undefined,
+): MountedActivityConfig {
+  if (file === undefined) return config
+  // Every flag the PLUGIN honours (its own FEATURE_FLAGS list), not a local
+  // copy: when the plugin grows or trims switches, the file folds through
+  // without this seam growing a stale mirror. `phrases` rides the top-level
+  // switch below instead.
+  const fileFeatures = Object.fromEntries(
+    FEATURE_FLAGS.filter(name => name !== 'phrases').map(name => [name, featureOn(file, name)]),
+  )
+  return {
+    ...config,
+    // `phrases: false` in the row is the one spelling that cannot mean
+    // "unset" (the default is true), so it is the only one that overrides.
+    phrases: config.phrases === false ? false : featureOn(file, 'phrases'),
+    // Per flag: a row entry wins (see the schema-default note above).
+    features: { ...fileFeatures, ...config.features },
+    customPhrases: config.customPhrases !== undefined && config.customPhrases.length > 0
+      ? config.customPhrases
+      : [...(file.customPhrases ?? [])],
+    customActions: config.customActions !== undefined && Object.keys(config.customActions).length > 0
+      ? config.customActions
+      : Object.fromEntries(Object.entries(file.customActions ?? {}).map(([name, phrases]) => [name, [...phrases]])),
+    showTokPerSec: config.showTokPerSec === true ? true : file.showTokPerSec ?? false,
+    workRemindAt: config.workRemindAt !== undefined && config.workRemindAt !== 0
+      ? config.workRemindAt
+      : file.workRemindAt ?? 0,
   }
 }
 
