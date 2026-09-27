@@ -10,6 +10,7 @@ import { getTheme } from '../theme.js'
 import { useTheme } from './design-system/ThemeProvider.js'
 import { parseRGB } from './Spinner/spinnerUtils.js'
 import { renderBigText } from './bigfont.js'
+import { COLUMN_GAP, WHALE_BOX_WIDTH, resolveSplashLayout } from './splashLayout.js'
 import { stringWidth } from '../ink/stringWidth.js'
 import { BRAND, FLASH, ICE, PALE, sweep } from './shimmer.js'
 import { STANDARD_FRAME_INDEX, WhaleArt } from './Whale.js'
@@ -40,16 +41,6 @@ const VERSION = (() => {
   }
 })()
 
-/** Below this width the whale hides and the header goes text-only. */
-const WHALE_MIN_COLUMNS = 64
-
-/**
- * Fixed whale box width: the tail-wag frames reach 4 columns further right
- * than the standard pose, and a pinned width keeps the text column from
- * shifting sideways during the opening animation.
- */
-const FULL_WHALE_WIDTH = 40
-
 /**
  * Center of the whale art's bounding box: sprite columns 3..34 (center
  * 18.5) of the 40-wide box. The welcome tagline is indented so its own
@@ -79,10 +70,13 @@ function capitalize(text: string): string {
  *
  * Layout: the 13-row pixel whale beside a text column of matching height —
  * the `✦ dsh-TUI` wordmark with version, the `DEEPSEEK`/`HARNESS` tagline in
- * the 5-row block font (brand-blue → ice gradient), the model/effort and
+ * the 5-row block font (brand-blue → ice gradient, a blank row between the
+ * two words, both stretched to the same width), the model/effort and
  * cwd in plain text (no brand-color highlight), the startup tip, and below
  * the whale the welcome tagline, centered under the art, in ice
- * blue. Narrow terminals drop the whale and keep the text column.
+ * blue. Narrow terminals climb down the `resolveSplashLayout` ladder —
+ * whale + big text, then the big text alone, then the whale alone, then one
+ * plain title line.
  */
 export function LogoV2({
   model,
@@ -189,7 +183,8 @@ export function LogoV2({
   const wordmarkShimmerRGB = parseRGB(theme.accentShimmer) ?? ICE
   const taglineRGB = parseRGB(theme.activity) ?? ICE
 
-  const showWhale = whale && columns >= WHALE_MIN_COLUMNS
+  // 窄终端阶梯：鲸鱼 + 大字 → 纯大字 → 纯鲸鱼 → 一行纯文字。
+  const { showWhale, showBigTitle, showPlainTitle } = resolveSplashLayout(columns, { whale })
 
   // Welcome-phase idle behaviors (settings `dsh-tui.whaleIdle`): fin
   // flutters, tail thumps and blinks while idle, and a sleep-Z loop after
@@ -270,11 +265,13 @@ export function LogoV2({
     : 2
 
   const bigDeepSeek = renderBigText('DEEPSEEK', t, wordmarkRGB, taglineRGB, FLASH, 60)
-  const bigHarness = renderBigText('HARNESS', t, taglineRGB, PALE, FLASH, 60)
+  // HARNESS is the shorter word: 7 glyphs at 8 columns (kerning 2) span the
+  // same 56 columns as DEEPSEEK's 8 at 7, so the two rows line up as a block.
+  const bigHarness = renderBigText('HARNESS', t, taglineRGB, PALE, FLASH, 60, 2)
 
   return (
     <Box ref={ref} flexDirection="column" marginTop={1}>
-      <Box flexDirection="row" gap={2} width="100%" alignItems="center">
+      <Box flexDirection="row" gap={COLUMN_GAP} width="100%" alignItems="center">
         {showWhale && (
           <Box
             flexShrink={0}
@@ -297,52 +294,67 @@ export function LogoV2({
             <WhaleArt
               frameIndex={frameIndex}
               pose={settled && whaleIdle && !whaleFrozen ? (idlePose ?? RESTING_POSE) : undefined}
-              width={FULL_WHALE_WIDTH}
+              width={WHALE_BOX_WIDTH}
             />
           </Box>
         )}
-        <Box flexDirection="column" flexShrink={1}>
-          <Text wrap="truncate-end">
-            {sweep('✦ dsh-TUI', t, wordmarkRGB, wordmarkShimmerRGB, 60)}
-            <Text dimColor>{'  v' + VERSION}</Text>
-          </Text>
-          {bigDeepSeek.map((row, index) => (
-            <Text key={`ds-${index}`} wrap="truncate-end">
-              {row}
+        {/* 鲸鱼独占一档（大字放不下、又还得下鲸鱼）：文字列只剩几列，画出来
+            只会是 `✦ dsh…` 这种残句——整列不画，开屏就留鲸鱼 + 下面的标语。 */}
+        {(showBigTitle || showPlainTitle) && (
+          <Box flexDirection="column" flexShrink={1}>
+            <Text wrap="truncate-end">
+              {sweep('✦ dsh-TUI', t, wordmarkRGB, wordmarkShimmerRGB, 60)}
+              <Text dimColor>{'  v' + VERSION}</Text>
             </Text>
-          ))}
-          {bigHarness.map((row, index) => (
-            <Text key={`h-${index}`} wrap="truncate-end">
-              {row}
+            {showBigTitle ? (
+              <>
+                {bigDeepSeek.map((row, index) => (
+                  <Text key={`ds-${index}`} wrap="truncate-end">
+                    {row}
+                  </Text>
+                ))}
+                <Box height={1} />
+                {bigHarness.map((row, index) => (
+                  <Text key={`h-${index}`} wrap="truncate-end">
+                    {row}
+                  </Text>
+                ))}
+              </>
+            ) : (
+              showPlainTitle && (
+                <Text color="accent" bold wrap="truncate-end">
+                  DeepSeek Harness
+                </Text>
+              )
+            )}
+            <Text wrap="truncate-end">
+              {model}
+              {effort !== undefined && <Text dimColor>{' · ' + capitalize(effort) + ' effort'}</Text>}
             </Text>
-          ))}
-          <Text wrap="truncate-end">
-            {model}
-            {effort !== undefined && <Text dimColor>{' · ' + capitalize(effort) + ' effort'}</Text>}
-          </Text>
-          <Text dimColor wrap="truncate-end">
-            {cwd}
-          </Text>
-          <Text wrap="truncate-end">
-            <Text dimColor>{tr('logo-tip-prefix')}</Text>
-            {getLang() === 'zh' ? randomTip.zh : randomTip.en}
-            <Text dimColor>{' · /tips ' + tr('logo-tip-more')}</Text>
-          </Text>
-          {driftLine != null && (
-            <Text color="warning" wrap="wrap">
-              ⚠{' '}
-              {tOr(
-                `logo-drift-${driftLine.kind}`,
-                `The dsh engine (${driftLine.versions.join(' / ')}) does not match the validated ${UPSTREAM_VALIDATED_VERSION}; reinstall via npm i -g @deepseek-ai/dsh@${UPSTREAM_VALIDATED_VERSION}.`,
-                {
-                  installed: driftLine.versions.join(' / '),
-                  validated: UPSTREAM_VALIDATED_VERSION,
-                  primary: UPSTREAM_VALIDATED_VERSION,
-                },
-              )}
+            <Text dimColor wrap="truncate-end">
+              {cwd}
             </Text>
-          )}
-        </Box>
+            <Text wrap="truncate-end">
+              <Text dimColor>{tr('logo-tip-prefix')}</Text>
+              {getLang() === 'zh' ? randomTip.zh : randomTip.en}
+              <Text dimColor>{' · /tips ' + tr('logo-tip-more')}</Text>
+            </Text>
+            {driftLine != null && (
+              <Text color="warning" wrap="wrap">
+                ⚠{' '}
+                {tOr(
+                  `logo-drift-${driftLine.kind}`,
+                  `The dsh engine (${driftLine.versions.join(' / ')}) does not match the validated ${UPSTREAM_VALIDATED_VERSION}; reinstall via npm i -g @deepseek-ai/dsh@${UPSTREAM_VALIDATED_VERSION}.`,
+                  {
+                    installed: driftLine.versions.join(' / '),
+                    validated: UPSTREAM_VALIDATED_VERSION,
+                    primary: UPSTREAM_VALIDATED_VERSION,
+                  },
+                )}
+              </Text>
+            )}
+          </Box>
+        )}
       </Box>
       <Box marginTop={1} paddingLeft={welcomePad}>
         <Text>{sweep(tagline, t, taglineRGB, FLASH, 60)}</Text>

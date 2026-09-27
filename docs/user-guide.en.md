@@ -38,7 +38,7 @@ dsh-tui
 
 1. **Pixel whale header** (~3.4 s intro animation, then frozen): `✦ dsh-TUI` version,
    `DEEPSEEK / HARNESS` big text, current model and effort, working directory, and a
-   **startup hint** (`/model` · `/help` · `Tab`). Hidden below 64 columns.
+   **startup hint** (`/model` · `/help` · `Tab`). Narrow terminals climb down a ladder (see 5.1).
    When the dsh engine is out of the verified range, a **⚠ version-drift warning**
    appears with the align command.
 2. **Bottom status bar**: working-status row, context bar, TPS gauge, and other live
@@ -411,10 +411,13 @@ An empty session shows the whale logo area at the top (scrolls away with the con
 - **Welcome idle animation** (`whaleIdle`, default on): fin, blink, tail wag, sleeps with Z after 10 s idle; **click to show a heart and wake it**.
 - After the first agent task, it freezes to a static frame (`/new` re-enters the welcome period).
 - Text column right of the whale: `✦ dsh-TUI v版本号` →
-  `DEEPSEEK / HARNESS` big text → current model + effort → working directory → startup hint line.
+  `DEEPSEEK / HARNESS` big text (bold glyphs, both rows the same width, one blank row between) →
+  current model + effort → working directory → startup hint line.
 - Out of the verified range, a **⚠ version-drift warning** appears (with the align command).
 - Centered tagline under the whale: `探索未至之境！`.
-- The whale is hidden **below 64 columns**.
+- Narrow terminals climb down a ladder on the **content-area** width: **≥ 97 columns** whale + big
+  text; **55–96** the big text alone (the whale goes first); **40–54** the whale alone; **< 40** a
+  single plain `DeepSeek Harness` line.
 - Pixel whale art and idle behavior ported from [dsh-ui-whale](https://github.com/lhh010/dsh-ui-whale) (author
   [@lhh010](https://github.com/lhh010)), with thanks.
 
