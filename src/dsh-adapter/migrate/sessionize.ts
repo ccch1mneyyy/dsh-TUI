@@ -21,7 +21,7 @@
  *
  * @module @deepseek-harness-tui/dsh-tui/migrate/sessionize
  */
-import { createAssistantMessage, createUserMessage } from '@deepseek-ai/dsh-llm'
+import { createAssistantMessage, createSystemMessage, createUserMessage } from '@deepseek-ai/dsh-llm'
 import type { ReasoningBlock, TextBlock } from '@deepseek-ai/dsh-llm'
 import {
   SESSION_FORMAT_VERSION,
@@ -77,37 +77,102 @@ export function sessionize(id: SessionId, agentId: string, session: MigrationSes
   let turnIndex = 0
   let i = 0
   const turns = session.turns
+  // The protected surface head (an EMPTY system/message at surface node 0)
+  // must precede EVERY other surface event — a surface starting at a user
+  // message fails the host's protected-head contract on read-back (probe
+  // verified on 0.1.7-rc.2: head-after-user is corrupt on restore), and
+  // dsh-chat-import hit the same wall on host continuation. Empty content
+  // projects to no message; the host's real system prompt replaces it on
+  // first reply. It seats inside the conversation's FIRST step; a
+  // user-only conversation never opens a step and stays headless (legal —
+  // the host requires no head when no step ever ran).
+  let headWritten = false
   while (i < turns.length) {
     turnIndex += 1
     events.push(model.append('turn/start', { turn: turnIndex }))
+    // First-turn user messages open their step EARLY so the head precedes
+    // the user text; that step then also carries the turn's assistant
+    // replies (one step per migrated turn on the first turn).
+    let headStepOpen = false
     if (turns[i]!.role === 'user') {
+      if (!headWritten) {
+        events.push(model.append('step/start', { turn: turnIndex, step: 1 }))
+        events.push(model.append('system/message', {
+          turn: turnIndex,
+          step: 1,
+          message: createSystemMessage(''),
+        }, { surfaceOp: 'append' }))
+        headWritten = true
+        headStepOpen = true
+      }
       events.push(model.append('user/message', createUserMessage({
         content: [{ type: 'text', text: turns[i]!.text }],
         source: { kind: 'user' },
       }), { surfaceOp: 'append' }))
       i += 1
     }
-    let step = 0
-    while (i < turns.length && turns[i]!.role === 'assistant') {
-      step += 1
-      const turn = turns[i]!
-      events.push(model.append('step/start', { turn: turnIndex, step }))
-      events.push(model.append('assistant/message', {
-        turn: turnIndex,
-        step,
-        message: createAssistantMessage({
-          content: assistantBlocks(turn),
-          // createAssistantMessage stamps `kind: 'model'` itself; the
-          // caller-visible provenance is provider + model only.
-          source: {
-            provider: `migrated:${agentId}`,
-            model: turn.model ?? agentId,
-          },
-        }),
-        stream: [],
-      }, { surfaceOp: 'append' }))
-      events.push(model.append('step/end', { turn: turnIndex, step }))
-      i += 1
+    if (i < turns.length && turns[i]!.role === 'assistant') {
+      if (headStepOpen) {
+        // The head's step/start already fired: the assistant replies join
+        // the same step, then it closes.
+        while (i < turns.length && turns[i]!.role === 'assistant') {
+          const turn = turns[i]!
+          events.push(model.append('assistant/message', {
+            turn: turnIndex,
+            step: 1,
+            message: createAssistantMessage({
+              content: assistantBlocks(turn),
+              source: {
+                provider: `migrated:${agentId}`,
+                model: turn.model ?? agentId,
+              },
+            }),
+            stream: [],
+          }, { surfaceOp: 'append' }))
+          i += 1
+        }
+        events.push(model.append('step/end', { turn: turnIndex, step: 1 }))
+      } else {
+        // Later turns (or a leading-assistant head turn): one step per
+        // assistant message; the FIRST step/start of the conversation also
+        // seats the head when it has not been written yet (a leading
+        // assistant turn has no user text to precede).
+        let step = 0
+        while (i < turns.length && turns[i]!.role === 'assistant') {
+          step += 1
+          const turn = turns[i]!
+          events.push(model.append('step/start', { turn: turnIndex, step }))
+          if (!headWritten) {
+            events.push(model.append('system/message', {
+              turn: turnIndex,
+              step,
+              message: createSystemMessage(''),
+            }, { surfaceOp: 'append' }))
+            headWritten = true
+          }
+          events.push(model.append('assistant/message', {
+            turn: turnIndex,
+            step,
+            message: createAssistantMessage({
+              content: assistantBlocks(turn),
+              // createAssistantMessage stamps `kind: 'model'` itself; the
+              // caller-visible provenance is provider + model only.
+              source: {
+                provider: `migrated:${agentId}`,
+                model: turn.model ?? agentId,
+              },
+            }),
+            stream: [],
+          }, { surfaceOp: 'append' }))
+          events.push(model.append('step/end', { turn: turnIndex, step }))
+          i += 1
+        }
+      }
+    } else if (headStepOpen) {
+      // First turn = a lone user message with no reply: the head's step
+      // still must close before turn/end (probe: leaving it open corrupts
+      // the stored log for the official reader).
+      events.push(model.append('step/end', { turn: turnIndex, step: 1 }))
     }
     events.push(model.append('turn/end', { turn: turnIndex, reason: { kind: 'completed' } }))
   }

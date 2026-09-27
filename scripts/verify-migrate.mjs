@@ -92,7 +92,7 @@ const fakeAdapter = { id: 'fixture', label: 'Fixture', roots: () => [], discover
   check('1b. turn 配对：2 轮 = 2×start + 2×end',
     types.filter(t => t === 'turn/start').length === 2 && types.filter(t => t === 'turn/end').length === 2)
   check('1c. 一 user 一 assistant 的常规轮',
-    types.join(' ') === 'turn/start user/message step/start assistant/message step/end turn/end turn/start user/message step/start assistant/message step/end turn/end',
+    types.join(' ') === 'turn/start step/start system/message user/message assistant/message step/end turn/end turn/start user/message step/start assistant/message step/end turn/end',
     types.join(','))
   const assistant = events.find(event => event.type === 'assistant/message')
   const blocks = assistant?.data?.message?.content ?? []
@@ -186,7 +186,7 @@ const root = mkdtempSync(join(tmpdir(), 'verify-migrate-'))
     const id = SessionId(migrationUuid(`fixture:${sessions[1].sourceId}`))
     const { events } = sessionize(id, 'fixture', sessions[1])
     const types = events.map(e => e.type).join(' ')
-    const expected = 'turn/start user/message step/start assistant/message step/end step/start assistant/message step/end step/start assistant/message step/end turn/end turn/start user/message turn/end'
+    const expected = 'turn/start step/start system/message user/message assistant/message assistant/message assistant/message step/end turn/end turn/start user/message turn/end'
     check('4c1. 一 user 三 assistant + 尾 user 的事件全序', types === expected, types)
   }
   // 夹具 3：孤立 assistant 开头（无 user 的首轮，一个 step 无 user/message）
@@ -194,8 +194,8 @@ const root = mkdtempSync(join(tmpdir(), 'verify-migrate-'))
     const id = SessionId(migrationUuid(`fixture:${sessions[2].sourceId}`))
     const { events } = sessionize(id, 'fixture', sessions[2])
     const types = events.map(e => e.type).join(' ')
-    check('4c2. 孤立 assistant 开头的事件全序',
-      types === 'turn/start step/start assistant/message step/end turn/end', types)
+    check('4c2. 孤立 assistant 开头的事件全序（含 head）',
+      types === 'turn/start step/start system/message assistant/message step/end turn/end', types)
   }
   // 夹具 2 端到端：restore 后 5 条消息且末位是 user（尾问保留）
   {
@@ -222,6 +222,42 @@ const root = mkdtempSync(join(tmpdir(), 'verify-migrate-'))
     await Promise.resolve(fiber2.dispose()).catch(() => {})
     rmSync(root2, { recursive: true, force: true })
   }
+}
+
+// ── 4c4. 全形状落盘读回（真机 P0 回归：形状差异只在读侧暴露）──────────
+{
+  const { default: JsonlSessionPersistence } = await import('@deepseek-ai/dsh-session-persistence-jsonl')
+  const { Context } = await import('@deepseek-ai/cordis')
+  const { SessionLogOffset: SLO, Session } = await import('@deepseek-ai/dsh-session')
+  const root3 = mkdtempSync(join(tmpdir(), 'verify-migrate-all-shapes-'))
+  await importSessions(fakeAdapter, root3, fixtureSessions())
+  const ctx3 = new Context()
+  const fiber3 = ctx3.plugin(JsonlSessionPersistence, { root: root3 })
+  for (let i2 = 0; i2 < 100 && ctx3.get('sessionPersistence') === undefined; i2++) {
+    await new Promise(resolve => setTimeout(resolve, 50))
+  }
+  assert.ok(ctx3.get('sessionPersistence') !== undefined, 'persistence ready (all shapes)')
+  const shapes = [
+    { idx: 0, label: '常规两轮（head 同步 user）', wantMessages: 4 },
+    { idx: 1, label: '一 user 三 assistant + 尾 user', wantMessages: 5 },
+    { idx: 2, label: '孤立 assistant 开头（head 在首个 step 内）', wantMessages: 1 },
+  ]
+  let shapeOk = 0
+  for (const shape of shapes) {
+    const session = fixtureSessions()[shape.idx]
+    const id3 = migrationSessionId(fakeAdapter, session)
+    const h3 = await ctx3.get('sessionPersistence').open(id3, 'read')
+    const r3 = await h3.read()
+    await h3.close()
+    const restored3 = Session.fromRestore(id3, r3.events, h3.header, SLO(0), r3.eventState)
+    const msgs3 = restored3.deriveMessages()
+    const hasHead = r3.events.some(e => e.type === 'system/message')
+    if (msgs3.length === shape.wantMessages && hasHead) shapeOk++
+    else console.log('     形状不符:', shape.label, msgs3.length, '/', shape.wantMessages, 'head=', hasHead)
+  }
+  check('4c4. 三种形状全部落盘→官方读回→投影（含 head）', shapeOk === 3, shapeOk + '/3')
+  await Promise.resolve(fiber3.dispose()).catch(() => {})
+  rmSync(root3, { recursive: true, force: true })
 }
 
 // ── 4d. 单会话失败不中断批次（deep-review M6：容错路径必须被触发）────────
