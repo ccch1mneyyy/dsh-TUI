@@ -17,7 +17,10 @@ import {
   createCellRun,
   extractHyperlinkFromStyles,
   filterOutHyperlinkStyles,
+  allocateCopyRegionId,
+  clearCopyRegionSpan,
   markCopyRegion,
+  pruneCopyTexts,
   markNoSelectRegion,
   OSC8_PREFIX,
   shadeRegion,
@@ -347,7 +350,11 @@ type CopyRegionOperation = {
   type: 'copyRegion'
   region: Rectangle
   text: string
+  id: number
 }
+
+/** One copy region id per image node for its lifetime (see SelectionState.copiedRegions). */
+const copyRegionIds = new WeakMap<DOMElement, number>()
 
 /**
  * Single-slot cache for the one over-long line that grows every frame during
@@ -948,7 +955,11 @@ export default class Output {
       // An image's backing cells are blank; one with copy text (a formula's
       // source) copies as that text, any other image is left out of copies.
       const copyText = node.attributes['imageCopyText']
-      if (typeof copyText === 'string' && copyText !== '') this.operations.push({ type: 'copyRegion', region, text: copyText })
+      if (typeof copyText === 'string' && copyText !== '') {
+        let id = copyRegionIds.get(node)
+        if (id === undefined) copyRegionIds.set(node, id = allocateCopyRegionId())
+        this.operations.push({ type: 'copyRegion', region, text: copyText, id })
+      }
       else this.noSelect(region)
     }
     if (this.imageReady) this.imageBackingEnds.set(node, this.operations.length)
@@ -1139,6 +1150,15 @@ export default class Output {
           continue
         }
 
+        case 'copyRegion': {
+          // In paint order: anything written over the image later (a menu,
+          // an overlay) clears the cells it covers, so a copy reads what is
+          // visible there rather than the formula beneath.
+          const { x, y, width, height } = operation.region
+          markCopyRegion(screen, x, y, width, height, operation.text, operation.id)
+          continue
+        }
+
         case 'shade': {
           // Honour the active clip like a write: a backdrop inside an
           // overflow-hidden ancestor must not shade cells outside it.
@@ -1217,6 +1237,9 @@ export default class Output {
               this.packedOwner,
             )
             writeCells += contentEnd - x
+            if (screen.copyTexts !== undefined && screen.copyTexts.size > 0) {
+              clearCopyRegionSpan(screen, lineY, x, contentEnd)
+            }
             // See Screen.softWrap docstring for the encoding. contentEnd
             // from writeLineToScreen is tab-expansion-aware, unlike
             // x+stringWidth(line) which treats tabs as width 0.
@@ -1241,14 +1264,15 @@ export default class Output {
       if (operation.type === 'noSelect') {
         const { x, y, width, height } = operation.region
         markNoSelectRegion(screen, x, y, width, height)
-      } else if (operation.type === 'copyRegion') {
-        const { x, y, width, height } = operation.region
-        markCopyRegion(screen, x, y, width, height, operation.text)
       } else if (operation.type === 'softWrapRow') {
         // Applied after the writes, which reset the flags of rows they touch.
         if (operation.y > 0 && operation.y < screen.height) screen.softWrap[operation.y] = Math.max(1, operation.contentEnd)
       }
     }
+
+    // Blits carry the previous frame's region texts; keep only the ones a
+    // cell still references, or the map grows by every redrawn formula.
+    pruneCopyTexts(screen)
 
     // Log blit/write ratio for debugging - high write count suggests blitting isn't working
     const totalCells = blitCells + writeCells

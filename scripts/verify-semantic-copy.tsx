@@ -10,7 +10,7 @@ import assert from 'node:assert/strict'
 import { createNode, setAttribute } from '../src/ink/dom.js'
 import Output from '../src/ink/output.js'
 import { blitRegion, CharPool, createScreen, HyperlinkPool, shiftRows, StylePool, type Screen } from '../src/ink/screen.js'
-import { getSelectedText, startSelection, updateSelection, type SelectionState } from '../src/ink/selection.js'
+import { captureScrolledRows, getSelectedText, startSelection, updateSelection, type SelectionState } from '../src/ink/selection.js'
 import type { TerminalImageSource } from '../src/ink/terminal-image.js'
 
 const source: TerminalImageSource = { data: new Uint8Array(4 * 4), width: 2, height: 2 }
@@ -92,6 +92,47 @@ function frame(): Screen {
   const joined = output.get()
   assert.equal(joined.softWrap[1], 8, 'the continuation records where the previous row ends')
   assert.equal(getSelectedText(selection(0, 0, 19, 1), joined), 'wrapped line $y$', 'a wrapped row joins its predecessor on copy')
+}
+
+{
+  // Drag-to-scroll: rows scrolled out are captured as text before they go.
+  // A formula split between captured and visible rows copies once.
+  const screen = frame()
+  const s = selection(0, 0, 19, 4)
+  captureScrolledRows(s, screen, 0, 2, 'above')
+  s.anchor = { col: 0, row: 3 }
+  assert.equal(getSelectedText(s, screen), 'a $x^2$ b\n$$\n\\frac{a}{b}\n$$\ntail', 'a formula scrolled half out during a drag copies once')
+}
+
+{
+  // Something painted over an image later (a menu, an overlay) is what
+  // copies there, not the formula beneath it.
+  const screen = createScreen(20, 2, stylePool, charPool, hyperlinkPool)
+  const output = new Output({ width: 20, height: 2, stylePool, screen, terminalImages: true })
+  const block = image('$$\nz\n$$')
+  output.write(0, 0, ' '.repeat(10) + '\n' + ' '.repeat(10))
+  assert.equal(output.image(block, 0, 0, 10, 2, source), true)
+  output.imageBacking(block)
+  output.write(0, 1, 'MENU')
+  const covered = output.get()
+  assert.equal(getSelectedText(selection(0, 1, 3, 1), covered), 'MENU', 'an overlay covering a formula copies as itself')
+  assert.equal(getSelectedText(selection(0, 0, 9, 0), covered), '$$\nz\n$$', 'the uncovered part of the formula still copies its source')
+}
+
+{
+  // Region texts do not pile up while a formula is blitted frame after frame
+  // and another one is repainted every frame.
+  let previous = frame()
+  for (let index = 0; index < 50; index++) {
+    const next = createScreen(20, 5, stylePool, charPool, hyperlinkPool)
+    const output = new Output({ width: 20, height: 5, stylePool, screen: next, terminalImages: true })
+    output.blit(previous, 0, 1, 20, 3)
+    const inline = image(`$n_{${index}}$`)
+    assert.equal(output.image(inline, 0, 0, 3, 1, source), true)
+    output.imageBacking(inline)
+    previous = output.get()
+  }
+  assert.ok(previous.copyTexts!.size <= 2, `only live regions keep their text (got ${previous.copyTexts!.size})`)
 }
 
 console.log('Semantic copy verified: inline and block image sources, once per selection, no blank rows, blit and scroll, decorative images excluded, wrap continuations')

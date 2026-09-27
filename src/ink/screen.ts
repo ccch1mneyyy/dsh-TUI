@@ -1969,8 +1969,17 @@ function diffDifferentWidth(
   return false
 }
 
-/** Copy region ids are unique across frames, so blitted regions never collide. */
 let nextCopyRegionId = 1
+
+/**
+ * A fresh copy region id. Ids are unique for the process, so regions blitted
+ * from an earlier frame never collide with new ones.
+ */
+export function allocateCopyRegionId(): number {
+  const id = nextCopyRegionId
+  nextCopyRegionId = nextCopyRegionId >= 0x7fffffff ? 1 : nextCopyRegionId + 1
+  return id
+}
 
 /**
  * Mark a rectangular region that copies as `text` (see Screen.copyRegion).
@@ -1983,10 +1992,9 @@ export function markCopyRegion(
   width: number,
   height: number,
   text: string,
+  id: number,
 ): void {
   if (screen.copyRegion === undefined) return
-  const id = nextCopyRegionId
-  nextCopyRegionId = nextCopyRegionId >= 0x7fffffff ? 1 : nextCopyRegionId + 1
   const maxX = Math.min(x + width, screen.width)
   const maxY = Math.min(y + height, screen.height)
   const stride = screen.width
@@ -1995,6 +2003,27 @@ export function markCopyRegion(
     screen.copyRegion.fill(id, rowStart + Math.max(0, x), rowStart + maxX)
   }
   ;(screen.copyTexts ??= new Map()).set(id, text)
+}
+
+/** Cells [from, to) of `row` no longer belong to any copy region. */
+export function clearCopyRegionSpan(screen: Screen, row: number, from: number, to: number): void {
+  if (screen.copyRegion === undefined || row < 0 || row >= screen.height) return
+  const rowStart = row * screen.width
+  screen.copyRegion.fill(0, rowStart + Math.max(0, from), rowStart + Math.min(to, screen.width))
+}
+
+/** Drop region texts no cell references any more. */
+export function pruneCopyTexts(screen: Screen): void {
+  const texts = screen.copyTexts
+  if (texts === undefined || texts.size === 0 || screen.copyRegion === undefined) return
+  const live = new Set<number>()
+  const cells = screen.copyRegion
+  const size = screen.width * screen.height
+  for (let index = 0; index < size; index++) {
+    const id = cells[index]!
+    if (id !== 0) live.add(id)
+  }
+  for (const id of texts.keys()) if (!live.has(id)) texts.delete(id)
 }
 
 /**

@@ -99,6 +99,12 @@ export type SelectionState = {
    *  guard only ever indicts a STATIONARY highlight whose text was
    *  swapped underneath. Owned by refreshSelectionFingerprint. */
   coveredGeometry: string | null
+  /**
+   * Copy regions (formula images) whose text rows captured during drag-to-
+   * scroll already hold. Region ids are stable per image node, so the rows
+   * still on screen do not copy the same formula again.
+   */
+  copiedRegions?: Set<number>
   /** Sticky once the covered rows changed without follow coordination.
    *  Commit-time copy (copySelectionNoClear) refuses and clears instead
    *  of shipping the replaced text. Cleared on start/clear. */
@@ -151,6 +157,7 @@ export function startSelection(
   s.scrolledOffBelow = []
   s.scrolledOffAboveSW = []
   s.scrolledOffBelowSW = []
+  s.copiedRegions = undefined
   s.virtualAnchorRow = undefined
   s.virtualFocusRow = undefined
   s.dragBounds = undefined
@@ -229,6 +236,7 @@ export function clearSelection(s: SelectionState): void {
   s.scrolledOffBelow = []
   s.scrolledOffAboveSW = []
   s.scrolledOffBelowSW = []
+  s.copiedRegions = undefined
   s.virtualAnchorRow = undefined
   s.virtualFocusRow = undefined
   s.dragBounds = undefined
@@ -1381,7 +1389,7 @@ export function getSelectedText(s: SelectionState, screen: Screen): string {
     joinRows(lines, s.scrolledOffAbove[i]!, s.scrolledOffAboveSW[i])
   }
 
-  const emitted = new Set<number>()
+  const emitted = new Set<number>(s.copiedRegions)
   for (let row = start.row; row <= end.row; row++) {
     const rowStart = row === start.row ? start.col : 0
     const rowEnd = row === end.row ? end.col : screen.width - 1
@@ -1443,7 +1451,10 @@ export function captureScrolledRows(
     const colStart = row === start.row ? start.col : 0
     const colEnd = row === end.row ? end.col : width - 1
     const screenRow = row - screenRowOffset
-    captured.push(extractRowText(screen, screenRow, colStart, colEnd) ?? '')
+    const text = extractRowText(screen, screenRow, colStart, colEnd, (s.copiedRegions ??= new Set()))
+    // A row holding only an already-copied region adds no line (as on screen).
+    if (text === undefined) continue
+    captured.push(text)
     capturedSW.push(sw[screenRow]! > 0)
   }
 
