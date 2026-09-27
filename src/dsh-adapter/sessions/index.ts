@@ -31,3 +31,4 @@ export type {
   SessionTitle,
   TitleSource,
 } from './types.js'
+export { warmSessionIndex, enumerateSessionsCached, snapshotListed } from './list.js'

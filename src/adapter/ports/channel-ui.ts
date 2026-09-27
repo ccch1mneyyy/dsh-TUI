@@ -450,6 +450,9 @@ export interface ChannelUi {
   /** Every session the persistence backend stores, classified and unfiltered
    *  — the browser (`/resume`) decides which of them a given view shows. */
   listSessions(): Promise<readonly SessionSummary[]>
+  /** Background low-power derivation-index warmer (see sessions/list.ts);
+   *  resolves with warm progress, undefined when no persistence is mounted. */
+  warmSessionIndex(options?: { shouldPause?: () => boolean }): Promise<{ warmed: number, total: number } | undefined>
   /** Trailing exchanges of a persisted session, for the browser's preview. */
   previewSession(sessionId: string): Promise<readonly PreviewEntry[]>
   /** Mark a session for `dsh-tui --resume` on the next launch. */

@@ -390,8 +390,10 @@ const GROUPS = {
     ["verify-session-kinds", ['node', 'scripts/verify-session-kinds.mjs']],
 // 会话索引引擎：结构化走帧、定界读与全量解码等价、损坏帧不吃掉整个
 // 日志、标题来源判定、revision 命中/失效（钉住 revision 改写日志作
-// 判据）、索引自愈与剪枝、**终态等价**（增量索引 == 全新构建）。
-    ["verify-session-index", ['node', 'scripts/verify-session-index.mjs']],
+// 判据）、索引自愈与剪枝、**终态等价**（增量索引 == 全新构建）；以及
+// 膨胀库 resume 提速三件——枚举磁盘快照往返/preferSnapshot 零后端调用/
+// 预热整轮收敛幂等与挂起中止（脚本 import TS 源，需 tsx 跑）。
+    ["verify-session-index", ['node', '--import', 'tsx/esm', 'scripts/verify-session-index.mjs']],
 // 空会话须完整读取后才能判定：截断/损坏、帧数上限、纯图片输入与旧缓存
 // 不得隐藏真实历史或进入清理名单；真实 JSONL 重开验证落盘后的可见性。
     ['verify-session-emptiness', ['node', '--import', 'tsx/esm', 'scripts/verify-session-emptiness.ts']],

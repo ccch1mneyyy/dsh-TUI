@@ -18,7 +18,8 @@
  *
  * @module @deepseek-harness-tui/dsh-tui/sessions/list
  */
-import { basename } from 'node:path'
+import { readFileSync as snapshotRead, writeFileSync as snapshotWrite, mkdirSync as snapshotMkdir } from 'node:fs'
+import { basename, join } from 'node:path'
 import {
   digestSession,
   recoverAppendedTitle,
@@ -29,6 +30,7 @@ import { fileFacts } from './frames.js'
 import { classify, readHeader, type RawSessionHeader } from './header.js'
 import { findSessionLogFile, resolveLocatedPath } from '../compat/sessionLog.js'
 import { readIndex, writeIndex, type DerivedEntry, type SessionIndex } from './store.js'
+import { DATA_DIR } from '../../utils/paths.js'
 import type { SessionSummary } from './types.js'
 import { readLastUsed } from '../../sessionHistory.js'
 
@@ -97,6 +99,178 @@ export async function enumerateSessions(source: SessionSource, signal?: AbortSig
   return []
 }
 
+/**
+ * Enumerated-sessions disk snapshot: the upstream `listSnapshots()` walk is
+ * the dominant cost of a session-screen open (headers of EVERY stored
+ * session, ~3ms each — a migrated store with 2000+ sessions pays ~7s, every
+ * open, in-process). The snapshot lets a fresh process paint the screen from
+ * the last walk immediately and refresh in the background, and the idle
+ * warmer below keeps both the snapshot and the derivation index warm so the
+ * background refresh converges instead of re-paying the cold cost.
+ *
+ * Best-effort like the index: a corrupt or missing file reads as absent.
+ */
+const ENUMERATE_SNAPSHOT_FILE = join(DATA_DIR, 'session-enumerate.json')
+const ENUMERATE_SNAPSHOT_VERSION = 1
+
+/** Headers persisted by the last completed enumeration, newest info the
+ *  backend gave. Revision tokens are NOT kept: they describe "did this log
+ *  change since" and go stale the moment another client writes — a snapshot
+ *  row therefore always re-derives against the live file identity. */
+interface SnapshotRow {
+  readonly header: RawSessionHeader
+  /** Artifact path from the enumeration that wrote this row; snapshot
+   *  consumers hand it back through their stub source's locate(). */
+  readonly path: string | undefined
+}
+
+function readEnumerateSnapshot(): readonly SnapshotRow[] | undefined {
+  try {
+    const parsed: unknown = JSON.parse(snapshotRead(ENUMERATE_SNAPSHOT_FILE, 'utf8'))
+    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return undefined
+    const version = (parsed as { version?: unknown }).version
+    const rows = (parsed as { rows?: unknown }).rows
+    if (version !== ENUMERATE_SNAPSHOT_VERSION || !Array.isArray(rows)) return undefined
+    const typed: SnapshotRow[] = []
+    for (const row of rows) {
+      if (row === null || typeof row !== 'object' || Array.isArray(row)) continue
+      const header = readHeader((row as { header?: unknown }).header)
+      if (header === undefined) continue
+      const path = (row as { path?: unknown }).path
+      typed.push({ header, path: typeof path === 'string' ? path : undefined })
+    }
+    return typed
+  } catch {
+    return undefined
+  }
+}
+
+function writeEnumerateSnapshot(listed: readonly Listed[], source: SessionSource): void {
+  try {
+    snapshotMkdir(DATA_DIR, { recursive: true })
+    snapshotWrite(ENUMERATE_SNAPSHOT_FILE, JSON.stringify({
+      version: ENUMERATE_SNAPSHOT_VERSION,
+      rows: listed.map(entry => ({ header: entry.header, path: locate(source, entry.raw, entry.header.id) })),
+    }))
+  } catch {
+    // A read-only home costs the next open its fast path, nothing else.
+  }
+}
+
+/** The snapshot as listing input: bare entries (no revision ⇒ re-derive
+ *  against file facts, same as a pre-0.1.5 backend) with cached derivations
+ *  supplying the titles. */
+export function snapshotListed(): Listed[] | undefined {
+  const rows = readEnumerateSnapshot()
+  return rows === undefined
+    ? undefined
+    : rows.map(row => ({
+      header: row.header,
+      // The snapshot's stored path rides in `raw`: a stub source's locate()
+      // hands it back, giving the derivation pass its file facts.
+      raw: { path: row.path },
+      revision: undefined,
+    }))
+}
+
+/**
+ * Enumerate with the disk-snapshot fast path: with `preferSnapshot` the
+ * last completed walk paints instantly and NO backend call is made (the
+ * caller follows up with a fresh pass); without it the backend is enumerated
+ * and the snapshot is refreshed for the next fast-path consumer.
+ */
+export async function enumerateSessionsCached(
+  source: SessionSource,
+  options: { preferSnapshot?: boolean, signal?: AbortSignal } = {},
+): Promise<Listed[]> {
+  if (options.preferSnapshot === true) {
+    const snap = snapshotListed()
+    if (snap !== undefined) return snap
+  }
+  const listed = await enumerateSessions(source, options.signal)
+  if (listed.length > 0) writeEnumerateSnapshot(listed, source)
+  return listed
+}
+
+function fileFactsOf(entry: Listed, source: SessionSource): ReturnType<typeof fileFacts> | undefined {
+  const path = locate(source, entry.raw, entry.header.id)
+  return path === undefined ? undefined : fileFacts(path)
+}
+
+/** How many entries a warmer batch may derive before yielding. */
+const WARMER_BATCH = 64
+/** Idle gap between warmer batches (low-power duty cycling). */
+const WARMER_BATCH_PAUSE_MS = 200
+
+export interface WarmProgress {
+  readonly warmed: number
+  readonly total: number
+}
+
+/**
+ * Background low-power index warmer: repeated FULL listings with pauses.
+ *
+ * Each round is one ordinary `listSummaries()` — it derives exactly the
+ * entries whose revision/title-completeness miss the index, under that
+ * listing's own title-recovery byte budget (a natural throttle), and writes
+ * the merged index (carry semantics: hits survive). Rounds pause between
+ * each other (`shouldPause` idles them under a working turn); progress
+ * persists in the index, so an interrupted warm resumes next run. Converges
+ * when a round adds no new complete entries.
+ *
+ * A previous per-batch stub design was wrong: a batch's writeIndex REPLACES
+ * the whole file, so late batches erased earlier ones' entries.
+ */
+export async function warmSessionIndex(
+  source: SessionSource,
+  options: { signal?: AbortSignal, shouldPause?: () => boolean } = {},
+): Promise<WarmProgress> {
+  const before = readIndex()
+  const total = await (async () => {
+    try {
+      return (await enumerateSessions(source, options.signal)).filter(entry => {
+        const cached = before.get(entry.header.id)
+        return cached === undefined || cached.derived === undefined || cached.derived.titleComplete !== true
+      }).length
+    } catch {
+      return 0
+    }
+  })()
+  const aborted = (): boolean => options.signal?.aborted === true
+  for (let round = 0; round < 64 && !aborted(); round++) {
+    while (options.shouldPause?.() === true) {
+      if (aborted()) return { warmed: warmedSoFar(before), total }
+      await new Promise(resolve => setTimeout(resolve, 1000))
+    }
+    const indexSizeBefore = readIndex().size
+    try {
+      await listSummaries(source, { signal: options.signal })
+    } catch {
+      break
+    }
+    const indexSizeAfter = readIndex().size
+    const completeAfter = countComplete(readIndex())
+    if (completeBefore(readIndex()) === completeAfter && indexSizeAfter === indexSizeBefore) break
+    await new Promise(resolve => setTimeout(resolve, WARMER_BATCH_PAUSE_MS * 4))
+  }
+  return { warmed: Math.min(warmedSoFar(before), total), total }
+}
+
+function countComplete(index: SessionIndex): number {
+  let n = 0
+  for (const entry of index.values()) if (entry.derived?.titleComplete === true) n += 1
+  return n
+}
+
+function completeBefore(index: SessionIndex): number {
+  return countComplete(index)
+}
+
+function warmedSoFar(previous: SessionIndex): number {
+  return countComplete(readIndex()) - countComplete(previous)
+}
+
+
 /** Pull a bare header out of one pre-0.1.5 `list()` element. */
 function bareListed(raw: unknown): Listed | undefined {
   const header = readHeader(raw)
@@ -146,11 +320,12 @@ function locate(source: SessionSource, raw: unknown, sessionId: string): string 
  */
 export async function listSummaries(
   source: SessionSource,
-  signal?: AbortSignal,
+  options: { preferSnapshot?: boolean, signal?: AbortSignal } = {},
 ): Promise<readonly SessionSummary[]> {
+  const signal = options.signal
   let listed: Listed[]
   try {
-    listed = await enumerateSessions(source, signal)
+    listed = await enumerateSessionsCached(source, options)
   } catch {
     return []
   }

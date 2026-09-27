@@ -122,10 +122,10 @@ const CONTEXT_WARNING_BUFFER_TOKENS = 20_000
  * @param ctx - The channel's context.
  * @returns Classified summaries, most recently active first.
  */
-async function listSessionsSnapshot(ctx: Context): Promise<readonly SessionSummary[]> {
+async function listSessionsSnapshot(ctx: Context, options: { preferSnapshot?: boolean } = {}): Promise<readonly SessionSummary[]> {
   const persistence = ctx.get('sessionPersistence') as SessionSource | undefined
   if (!persistence) return []
-  return listSummaries(persistence)
+  return listSummaries(persistence, options)
 }
 
 /**
@@ -579,7 +579,7 @@ function createChannelWithOwner(
     configuredModel: options.configuredModel,
     provider: options.provider, model: options.model,
     notify,
-    listPersisted: () => listSessionsSnapshot(ctx),
+    listPersisted: (options?: { preferSnapshot?: boolean }) => listSessionsSnapshot(ctx, options),
     createDetached: createDetachedHandle,
     sessionSwitchVetoed: (kind, sessionId) => sessionSwitchVetoed(kind, sessionId),
     adoptLive: target => adoptLiveAgent(target),
@@ -981,6 +981,7 @@ function createChannelWithOwner(
     listFileCandidates: fileActions.listFileCandidates,
     listFiles: fileActions.listFiles,
     listSessions: sessionMetadataActions.listSessions,
+    warmSessionIndex: sessionMetadataActions.warmSessionIndex,
     previewSession: sessionMetadataActions.previewSession,
     bindApprovalStore: agentView.bindApprovalStore,
     agentViewRows: agentView.rows,

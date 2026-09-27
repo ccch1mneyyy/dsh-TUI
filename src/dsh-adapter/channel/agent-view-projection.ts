@@ -48,7 +48,7 @@ export function createAgentViewProjection(
     provider: string
     model: string
     notify(text: string, options?: { color?: 'error' | 'warning'; timeoutMs?: number }): unknown
-    listPersisted(): Promise<readonly SessionSummary[]>
+    listPersisted(options?: { preferSnapshot?: boolean }): Promise<readonly SessionSummary[]>
     createDetached(create: () => Promise<AgentHandle>): Promise<{ handle: AgentHandle; transfer(): void; release(): Promise<void> }>
     sessionSwitchVetoed(kind: 'agent-view', targetSessionId?: string): Promise<boolean>
     adoptLive(target: Agent): Promise<ResumeResult>
@@ -81,6 +81,15 @@ export function createAgentViewProjection(
     }, 300)
   }
   const refreshPersisted = (): void => {
+    // Two-phase load: the DISK snapshot paints instantly (a migrated store
+    // enumerates 2000+ headers in seconds; the snapshot makes the screen
+    // usable immediately), then a fresh enumeration replaces it and notifies
+    // again. Session-screen opens feel instant; staleness lasts one refresh.
+    void deps.listPersisted({ preferSnapshot: true }).then(rows => {
+      if (disposed || !deps.owner.current()) return
+      persistedRows = rows
+      notify()
+    }).catch(() => undefined)
     void deps.listPersisted().then(rows => {
       if (disposed || !deps.owner.current()) return
       persistedRows = rows

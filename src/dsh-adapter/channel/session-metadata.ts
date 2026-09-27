@@ -6,7 +6,7 @@ import { t } from '../../i18n.js'
 import { appendSessionTitle, deleteSessionLog } from '../compat/index.js'
 import { snapshotLiveSessionEvents } from '../compat/liveSession.js'
 import { collectRecentActivity, parseRecapResponse, RECAP_RECENT_CHARS, wrapRecapPrompt } from '../recap.js'
-import { listSummaries, locateSession, previewSession, type SessionSource, type SessionSummary } from '../sessions/index.js'
+import { listSummaries, locateSession, previewSession, warmSessionIndex as warmSessionIndexEntries, type SessionSource, type SessionSummary } from '../sessions/index.js'
 import { runSideQuestion, wrapSideQuestion } from '../sideQuestion.js'
 import type { ChannelOwner } from './owner.js'
 import type { CredentialStatus, SideQuestionLlm } from './types.js'
@@ -61,6 +61,16 @@ export function createSessionMetadataActions(ctx: Context, deps: {
     if (!current(capture)) return []
     deps.setPersistedSessions(summaries)
     return summaries
+  }
+
+  /** Background low-power index warmer over the REAL persistence source:
+   *  one fresh enumeration (refreshing the disk snapshot) then incremental
+   *  batched re-derivation of missing index entries. Runs after startup; a
+   *  working turn idles it via `shouldPause`; owner teardown aborts it. */
+  const warmSessionIndex = async (options: { shouldPause?: () => boolean } = {}): Promise<{ warmed: number, total: number } | undefined> => {
+    const source = persistence()
+    if (!source) return undefined
+    return warmSessionIndexEntries(source, { signal: withOwnerSignal(), shouldPause: options.shouldPause })
   }
 
   const preview = async (sessionId: string) => {
@@ -221,7 +231,7 @@ export function createSessionMetadataActions(ctx: Context, deps: {
   }
 
   return {
-    listSessions, previewSession: preview, listSkills, describeCredential,
+    listSessions, warmSessionIndex, previewSession: preview, listSkills, describeCredential,
     sideQuestion, recapRecent, setResumeTarget: writeResumeTarget,
     renameSession, setSessionColor, deleteSession, renameSessionTo,
   }

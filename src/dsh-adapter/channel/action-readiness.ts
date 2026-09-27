@@ -42,6 +42,7 @@ export type ChannelActionDelegates = Pick<ChannelState,
   | 'listFileCandidates'
   | 'listFiles'
   | 'listSessions'
+  | 'warmSessionIndex'
   | 'previewSession'
   | 'bindApprovalStore'
   | 'agentViewRows'
@@ -120,6 +121,7 @@ export function createChannelActionMethods(
     listFileCandidates: (query, options) => getReadyActions().listFileCandidates(query, options),
     listFiles: () => getReadyActions().listFiles(),
     listSessions: () => getReadyActions().listSessions(),
+    warmSessionIndex: (options?: { shouldPause?: () => boolean }) => getReadyActions().warmSessionIndex(options),
     previewSession: sessionId => getReadyActions().previewSession(sessionId),
     bindApprovalStore: store => getReadyActions().bindApprovalStore(store),
     agentViewRows: () => getReadyActions().agentViewRows(),

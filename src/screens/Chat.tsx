@@ -472,10 +472,16 @@ export function Chat({
   // frozen snapshot of the checked rows.
   const [migrateChecked, setMigrateChecked] = React.useState<ReadonlySet<string>>(new Set())
   const [migratePending, setMigratePending] = React.useState<readonly MigratePickerRow[]>([])
-  // Smart-hint arming: while the migration hint notification is up, a bare
-  // Enter (empty prompt, no overlay) jumps straight into the picker with
-  // that source pre-checked (PRD #4). Any other key disarms.
-  const [migrateHintAgent, setMigrateHintAgent] = React.useState<string | null>(null)
+  // Smart-hint arming: while a hint notification is up, a bare Enter (empty
+  // prompt, no overlay) acts on it — 'migrate' opens the picker with that
+  // source pre-checked; 'continue' resumes the newest already-imported
+  // foreign session in place. Any other key disarms.
+  const [migrateHint, setMigrateHint] = React.useState<{
+    kind: 'migrate' | 'continue'
+    agentId: string
+    label: string
+    sessionId?: string
+  } | null>(null)
   // Chat and PromptInput both receive one parsed stdin batch. Keep the
   // permission focus synchronous so arrow+Enter in the same batch uses the
   // post-arrow row rather than the previous render's index.
@@ -1292,33 +1298,89 @@ export function Chat({
   // The copy clears the highlight and posts a transient notification.
   // Smart migration hint (product ask): ~12s after mount, one background
   // pass over the foreign-agent stores; when a source was active inside the
-  // 20-minute window, surface the user's own wording once per session. The
-  // file-level mtime scan is the counter's walk shape (sub-second) and runs
-  // off the render path; failures read as "no data" and stay silent.
+  // 20-minute window, surface ONE of two sibling hints once per session:
+  // 'continue' when that newest conversation is already imported (Enter
+  // resumes it in place), 'migrate' otherwise (Enter opens the pre-checked
+  // picker). The file-level mtime scan is the counter's walk shape
+  // (sub-second) and runs off the render path; failures read as "no data"
+  // and stay silent.
   const migrateHintShownRef = React.useRef(false)
   React.useEffect(() => {
     if (migrateHintShownRef.current) return
     const timer = setTimeout(() => {
       migrateHintShownRef.current = true
       void (async () => {
-        const newest = await new Promise<readonly ActivitySample[]>(resolve => {
-          setImmediate(() => resolve(collectActivitySamples(
-            MIGRATION_ADAPTERS,
-            adapter => MIGRATE_SCAN_SPECS[adapter.id],
-          )))
-        })
+        const newest = await collectActivitySamples(
+          MIGRATION_ADAPTERS,
+          adapter => MIGRATE_SCAN_SPECS[adapter.id],
+        )
         const top = recentAgentsFrom(newest, Date.now())[0]
-        if (top !== undefined) {
-          channel.notify(t('migrate-hint-notify', { agent: top.label }), { timeoutMs: 10000 })
-          // PRD #4: while the hint is up, a bare Enter (empty prompt, no
-          // overlay) jumps into the picker with this source pre-checked;
-          // the global key layer below consumes it, anything else disarms.
-          setMigrateHintAgent(top.agentId)
-          setTimeout(() => setMigrateHintAgent(current => current === top.agentId ? null : current), 10_000)
+        if (top === undefined) return
+        const sample = newest.find(candidate => candidate.agentId === top.agentId)
+        // Identify WHICH conversation is hot and whether it is imported:
+        // the deterministic migration id makes the check a directory-name
+        // existence scan under the session store (two readdir levels).
+        const { defaultSessionRoot } = await import('../dsh-adapter/migrate/index.js')
+        const adapter = MIGRATION_ADAPTERS.find(candidate => candidate.id === top.agentId)
+        let sessionId: string | undefined
+        if (adapter !== undefined && sample?.newestFile !== null && sample?.newestFile !== undefined) {
+          const extractors: Record<string, (path: string) => string | undefined> = {}
+          try {
+            const mods = await Promise.all([
+              import('../dsh-adapter/migrate/adapters/claude-code.js'),
+              import('../dsh-adapter/migrate/adapters/codex.js'),
+              import('../dsh-adapter/migrate/adapters/omp.js'),
+              import('../dsh-adapter/migrate/adapters/zcode.js'),
+              import('../dsh-adapter/migrate/adapters/grok-build.js'),
+            ])
+            extractors['claude-code'] = mods[0].sourceIdFromFile
+            extractors['codex'] = mods[1].sourceIdFromFile
+            extractors['omp'] = mods[2].sourceIdFromFile
+            extractors['zcode'] = mods[3].sourceIdFromFile
+            extractors['grok-build'] = mods[4].sourceIdFromFile
+          } catch {
+            // Without the extractors the hint degrades to 'migrate'.
+          }
+          const extract = extractors[top.agentId]
+          const sourceId = extract !== undefined ? extract(sample.newestFile) : undefined
+          if (sourceId !== undefined) {
+            const { migrationUuid } = await import('../dsh-adapter/migrate/uuid.js')
+            const candidate = migrationUuid(`${top.agentId}:${sourceId}`)
+            const { importedSessionExists } = await import('../dsh-adapter/migrate/picker.js')
+            if (importedSessionExists(defaultSessionRoot(), candidate)) sessionId = candidate
+          }
         }
+        const kind = sessionId !== undefined ? 'continue' : 'migrate'
+        channel.notify(
+          t(kind === 'continue' ? 'migrate-hint-continue' : 'migrate-hint-notify', { agent: top.label }),
+          { timeoutMs: 10_000 },
+        )
+        setMigrateHint({ kind, agentId: top.agentId, label: top.label, sessionId })
+        setTimeout(() => setMigrateHint(current => current === null || current.agentId !== top.agentId
+          ? current
+          : null), 10_000)
       })()
     }, 12_000)
     return () => clearTimeout(timer)
+  }, [channel])
+
+  // Background low-power index warmer (product ask: migration can bloat the
+  // store to 2000+ sessions and every cold /resume open re-pays the full
+  // header walk + derivation). ~25s after mount — after the migration hint —
+  // one fresh enumeration refreshes the disk snapshot and then re-derives
+  // MISSING index entries in 64-session batches with 200ms pauses; a working
+  // turn idles it (checked between batches) and progress survives via the
+  // index, so the next run resumes where this one stopped. Silent by the
+  // render-quiet rule.
+  React.useEffect(() => {
+    const controller = new AbortController()
+    const timer = setTimeout(() => {
+      void channel.warmSessionIndex({ shouldPause: () => channel.working }).catch(() => undefined)
+    }, 25_000)
+    return () => {
+      clearTimeout(timer)
+      controller.abort()
+    }
   }, [channel])
 
   useCopyOnSelect(
@@ -2315,9 +2377,7 @@ export function Chat({
         setMigrateRows(null)
         dispatchOverlay({ type: 'open', overlay: { kind: 'migrate', index: 0 } })
         void (async () => {
-          const rows = await new Promise<MigratePickerRow[]>(resolve => {
-            setImmediate(() => resolve(collectMigratePickerRows(Date.now())))
-          })
+          const rows = await collectMigratePickerRows(Date.now())
           setMigrateRows(rows)
         })()
         return true
@@ -3373,25 +3433,48 @@ export function Chat({
       }
       return
     }
-    // Armed migration hint (PRD #4): bare Enter while the hint notification
-    // is up (no overlay, nothing typed) jumps into the picker with the
-    // hinted source pre-checked; every other key disarms silently.
-    if (migrateHintAgent !== null && overlay.kind === 'none') {
+    // Armed hint: bare Enter while the notification is up acts on it —
+    // 'migrate' opens the picker pre-checked, 'continue' resumes the newest
+    // already-imported foreign session in place (the same channel.resumeTo
+    // path the session supervisor uses); every other key disarms silently.
+    // The gate chain is the ONLY defense: empty prompt (a draft Enter must
+    // submit, not switch sessions), sticky scroll (Enter while scrolled up
+    // means "back to bottom", not "resume foreign"), no message-selection
+    // mode (Enter there expands a row). The useInput guards above already
+    // returned for every modal/screen state.
+    if (migrateHint !== null && overlay.kind === 'none'
+      && !promptControllerRef.current?.hasText()
+      && isSticky
+      && !selectionActive) {
+      const hint = migrateHint
+      setMigrateHint(null)
       if (plainReturn) {
-        const agent = migrateHintAgent
-        setMigrateHintAgent(null)
+        if (hint.kind === 'continue' && hint.sessionId !== undefined) {
+          void channel.resumeTo(hint.sessionId).then(result => {
+            if (result.ok) {
+              channel.notify(t('resume-resumed'))
+              suppressLogoIntroRef.current = true
+              repaintTranscript()
+            } else {
+              // Same contract as the supervisor's resume: 'cancelled' maps
+              // to undefined and stays SILENT by design.
+              const failureText = resumeFailureText(result)
+              if (failureText !== undefined) {
+                channel.notify(failureText, { color: 'error', timeoutMs: 8000 })
+              }
+            }
+          })
+          return
+        }
         setMigrateRows(null)
-        setMigrateChecked(new Set([agent]))
+        setMigrateChecked(new Set([hint.agentId]))
         dispatchOverlay({ type: 'open', overlay: { kind: 'migrate', index: 0 } })
         void (async () => {
-          const rows = await new Promise<MigratePickerRow[]>(resolve => {
-            setImmediate(() => resolve(collectMigratePickerRows(Date.now())))
-          })
+          const rows = await collectMigratePickerRows(Date.now())
           setMigrateRows(rows)
         })()
         return
       }
-      setMigrateHintAgent(null)
     }
     if (overlay.kind === 'migrate') {
       const rows = migrateRows ?? []
