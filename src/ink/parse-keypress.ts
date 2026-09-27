@@ -5,7 +5,7 @@
  * then interprets sequences as keypresses.
  */
 import { Buffer } from 'buffer'
-import { PASTE_END, PASTE_START } from './termio/csi.js'
+import { isCSIFinal, isCSIIntermediate, isCSIParam, PASTE_END, PASTE_START } from './termio/csi.js'
 import { createTokenizer, type Tokenizer } from './termio/tokenize.js'
 
 // eslint-disable-next-line no-control-regex
@@ -15,6 +15,12 @@ const META_KEY_CODE_RE = /^(?:\x1b)([a-zA-Z0-9])$/
 const FN_KEY_RE =
   // eslint-disable-next-line no-control-regex
   /^(?:\x1b+)(O|N|\[|\[\[)(?:(\d+)(?:;(\d+))?([~^$])|(?:1;)?(\d+)?([a-zA-Z]))/
+
+// Complete CSI framing, including sequences outside our keyboard vocabulary.
+// Keep their identity so InputEvent's unknown-code guard suppresses protocol
+// bytes rather than stripping ESC and inserting the parameters as text.
+// eslint-disable-next-line no-control-regex
+const COMPLETE_CSI_RE = /^\x1b\[[\x30-\x3f]*[\x20-\x2f]*[\x40-\x7e]$/
 
 // CSI u (kitty keyboard protocol): ESC [ codepoint [; modifier] u
 // Example: ESC[13;2u = Shift+Enter, ESC[27u = Escape (no modifiers)
@@ -922,12 +928,15 @@ export function parseMultipleKeypresses(
   if (isRecordPrefix(pending) && inputString) {
     const continuation = /^[\d;]*/.exec(inputString)![0]
     const final = inputString[continuation.length]
-    // Short prefixes also belong to Kitty/function keys, paste markers,
-    // mouse reports and terminal responses. Leave their disambiguation to
-    // the tokenizer; only a recognizable record body can reject other text.
+    const code = final?.charCodeAt(0)
+    // A numeric prefix is not proof of Win32 framing: even four or more
+    // parameters can belong to another CSI. Let the tokenizer consume valid
+    // parameter/intermediate/final bytes; only an invalid continuation can
+    // abandon the old frame. A bare ASCII letter may therefore end the CSI,
+    // not start user text. Native Win32 typing supplies a fresh ESC record.
     if (
-      final === '\x1b' ||
-      (final !== undefined && final !== '_' && WIN32_INPUT_BODY_PREFIX_RE.test(pending))
+      code !== undefined &&
+      !isCSIParam(code) && !isCSIIntermediate(code) && !isCSIFinal(code)
     ) {
       tokenizer.reset()
       win32InputStartedAt = undefined
@@ -1845,6 +1854,10 @@ function parseKeypress(s: string = ''): ParsedKey {
       return createNavKey(s, 'left', true)
     case '\u001b[1;5C':
       return createNavKey(s, 'right', true)
+  }
+
+  if (!key.name && !key.code && COMPLETE_CSI_RE.test(s)) {
+    key.code = s.slice(1)
   }
 
   return key

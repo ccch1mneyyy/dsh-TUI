@@ -525,8 +525,55 @@ checkBoolean('fresh ESC discards an abandoned record before the next record',
   fragments([SHIFT_RECORD.slice(0, -1), null, A_RECORD]).text === 'a', true)
 checkBoolean('fresh ESC after numeric continuation discards the old record',
   fragments([`${CSI}16;`, null, '42;0;' + A_RECORD]).text === 'a', true)
-checkBoolean('unrelated text abandons a held record without eating that text',
-  fragments([SHIFT_RECORD.slice(0, -1), null, 'hello_']).text === 'hello_', true)
+checkBoolean('ordinary Win32 typing abandons a held record without eating text',
+  fragments([SHIFT_RECORD.slice(0, -1), null,
+    [...'hello_'].map(ch => `${CSI}231;0;${ch.charCodeAt(0)};1;0;1_`).join(''),
+  ]).text === 'hello_', true)
+checkBoolean('a non-CSI continuation abandons the record without eating Unicode text',
+  fragments([SHIFT_RECORD.slice(0, -1), null, '你好_']).text === '你好_', true)
+
+// A raw 'h' after a numeric CSI prefix is a valid final byte, even if the
+// sender intended "abandoned record + hello_". The byte stream cannot tell
+// those apart. Preserve the CSI as one protocol event, suppress its input,
+// and keep the suffix; never guess differently based on read boundaries.
+for (const chunks of [
+  [SHIFT_RECORD.slice(0, -1) + 'hello_'],
+  [SHIFT_RECORD.slice(0, -1), 'hello_'],
+  [SHIFT_RECORD.slice(0, -1), null, 'h', 'ello_'],
+]) {
+  const result = fragments(chunks)
+  const protocol = result.keys[0]
+  checkBoolean('ambiguous CSI final stays attached to its prefix',
+    protocol?.kind === 'key' && protocol.sequence === SHIFT_RECORD.slice(0, -1) + 'h', true)
+  checkBoolean('unknown CSI contributes no protocol text; suffix survives', result.text === 'ello_', true)
+}
+
+// The review's four-parameter prefix is also a legal incomplete Win32
+// record. A non-underscore final must resolve it as CSI, not a typed letter.
+for (const sequence of [
+  '\x1b[1;2;3;1A', '\x1b[1;2;3;1h', '\x1b[1;2;3;1u',
+  '\x1b[1;2;3;1~', '\x1b[1;2;3;1$y', '\x1b[1;2;3;1:2A',
+]) {
+  for (const enabled of [false, true]) {
+    const intact = fragments([sequence], enabled)
+    const protocol = intact.keys[0]
+    checkBoolean('unknown CSI retains its complete sequence and protocol code',
+      intact.keys.length === 1 && protocol?.kind === 'key' &&
+      protocol.sequence === sequence && protocol.code === sequence.slice(1), true)
+    checkBoolean(`unknown CSI is not editable text: ${JSON.stringify(sequence)}`, intact.text === '', true)
+    for (let split = 1; split < sequence.length; split++) {
+      const actual = fragments([sequence.slice(0, split), sequence.slice(split)], enabled)
+      checkBoolean(`CSI event is chunk invariant (mode=${enabled}, split=${split})`,
+        JSON.stringify(actual.keys) === JSON.stringify(intact.keys), true)
+    }
+    const prefix = '\x1b[1;2;3;1'
+    const flushed = fragments([prefix, null, sequence.slice(prefix.length)], enabled)
+    checkBoolean(`CSI final after flush keeps the original event (mode=${enabled})`,
+      JSON.stringify(flushed.keys) === JSON.stringify(intact.keys) && flushed.text === '', true)
+  }
+  checkPaste('unknown CSI inside bracketed paste stays literal',
+    summarize(fragments(['\x1b[200~', sequence, '\x1b[201~']).keys), sequence)
+}
 
 for (const sequence of [
   '\x1b[1;2A', '\x1b[13;2u', '\x1b[27;2;13~', '\x1b[6;20;10t',
