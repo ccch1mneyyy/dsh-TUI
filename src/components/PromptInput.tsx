@@ -121,7 +121,9 @@ const WIN32_RECORD_RESIDUE = /\u001b\[\d*(?:;\d*){5}_/gu
  * The same record with its ESC byte missing: what a record split across
  * reads leaves behind when the escape timer flushed the prefix before the
  * tail arrived. Printable, so it is stripped only from paste payloads
- * ({@link sanitizePastedText}); typed text keeps its bytes.
+ * ({@link sanitizePastedText}) — and only when the same payload also carries
+ * a full ESC-bearing record as in-payload evidence of that split; typed text
+ * and literal clipboard/bracketed-paste bytes are left untouched.
  */
 const WIN32_RECORD_RESIDUE_TAIL = /\[\d*(?:;\d*){5}_/gu
 
@@ -146,9 +148,18 @@ export function sanitizeEditableText(text: string): string {
  * normalizing. The tail is printable, so it survives `sanitizeEditableText`'s
  * control probe untouched; typed text keeps it because only a paste payload
  * can carry a partial record.
+ *
+ * The five separators only prove the *shape*, not that a record was split:
+ * a user can legitimately paste the literal `[13;28;13;1;0;1_`. Strip the
+ * ESC-less form only when the same payload also carries a full ESC-bearing
+ * record — only then is there in-payload evidence of a split stream.
+ * Otherwise the bytes are ordinary text and must survive verbatim.
  */
 export function sanitizePastedText(text: string): string {
-  return sanitizeEditableText(text.replace(WIN32_RECORD_RESIDUE_TAIL, ''))
+  // Probe with String#match: the /g detection regex carries lastIndex state
+  // across `.test` calls, so a previous success could skip a later match.
+  const hasRecordStream = text.match(WIN32_RECORD_RESIDUE) !== null
+  return sanitizeEditableText(hasRecordStream ? text.replace(WIN32_RECORD_RESIDUE_TAIL, '') : text)
 }
 
 const COMPOSER_IMAGE_TOKEN = /\[Image #\d+\]/gu
