@@ -75,8 +75,13 @@ check('字体数量 >= 2（轮换才有意义）', SPLASH_FONTS.length >= 2, `${
 
 // ── ④ 窄终端阶梯（用基准款算阈值） ────────────────────────────────────────
 const font = SPLASH_FONTS[0]!
-const titleWidth = bigTextWidth(font, font.tagline.top, font.tagline.topKerning)
+// 阈值口径 = **画出来**的列数（ink + 末尾那格字距）。按 ink 宽判「放得下」会在恰好
+// 卡阈值时触发 Ink 的 `truncate-end`，把最后一个字形换成 `…`。
+const inkWidth = bigTextWidth(font, font.tagline.top, font.tagline.topKerning)
+const titleWidth = inkWidth + font.tagline.topKerning
 const bothWidth = titleWidth + COLUMN_GAP + WHALE_BOX_WIDTH
+const paintedWidth = (f: typeof font): number =>
+  bigTextWidth(f, f.tagline.top, f.tagline.topKerning) + f.tagline.topKerning
 const tier = (l: { showWhale: boolean; showBigTitle: boolean; showPlainTitle: boolean }): string =>
   `${l.showWhale ? 'W' : ''}${l.showBigTitle ? 'T' : ''}${l.showPlainTitle ? 'P' : ''}`
 const ladder: readonly (readonly [number, boolean, string])[] = [
@@ -104,14 +109,18 @@ for (const width of [10, WHALE_BOX_WIDTH - 1, WHALE_BOX_WIDTH, titleWidth - 1, t
   )
 }
 // 宽体字身更宽，阈值必须跟着走（不能写死 97）。
-const widest = [...SPLASH_FONTS].sort(
-  (a, b) => bigTextWidth(b, b.tagline.top, b.tagline.topKerning) - bigTextWidth(a, a.tagline.top, a.tagline.topKerning),
-)[0]!
+const widest = [...SPLASH_FONTS].sort((a, b) => paintedWidth(b) - paintedWidth(a))[0]!
 check(
   '阶梯阈值随字体字身宽度变',
   resolveSplashLayout(bothWidth, { whale: true, font: widest }).showWhale ===
-    (bigTextWidth(widest, widest.tagline.top, widest.tagline.topKerning) + COLUMN_GAP + WHALE_BOX_WIDTH <= bothWidth),
-  `最宽字体 ${widest.id} = ${bigTextWidth(widest, widest.tagline.top, widest.tagline.topKerning)} 列`,
+    (paintedWidth(widest) + COLUMN_GAP + WHALE_BOX_WIDTH <= bothWidth),
+  `最宽字体 ${widest.id} = ${paintedWidth(widest)} 列（画出来）`,
+)
+// 卡在阈值的两侧：恰好等于画出来的宽度才放大字，少一列就不放——否则末字会被 `…` 吃掉。
+check(
+  `恰好 ${paintedWidth(font)} 列放大字、${paintedWidth(font) - 1} 列不放`,
+  resolveSplashLayout(paintedWidth(font), { whale: false, font }).showBigTitle &&
+    !resolveSplashLayout(paintedWidth(font) - 1, { whale: false, font }).showBigTitle,
 )
 
 // ── ⑤ 按天轮换 ────────────────────────────────────────────────────────────

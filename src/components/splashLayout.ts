@@ -45,7 +45,11 @@ export function resolveSplashLayout(
   options: { whale: boolean; font: SplashFont },
 ): SplashLayout {
   const { font } = options
-  const titleWidth = bigTextWidth(font, font.tagline.top, font.tagline.topKerning)
+  // 阈值按**画出来**的列数算：每行末尾还会画出一格字距，而 `bigTextWidth` 只算到
+  // 最后一个字形。按 ink 宽判「放得下」，会在恰好卡阈值时让 Ink 走 `truncate-end`
+  // ——最后一个字形被换成 `…`（可达边界：基准款 55 列即复现）。末尾那一格是空白，
+  // 少画一格不可惜，字形被吃掉才可惜。
+  const titleWidth = bigTextWidth(font, font.tagline.top, font.tagline.topKerning) + font.tagline.topKerning
   const fitsTitle = columns >= titleWidth
   const showWhale =
     options.whale &&
