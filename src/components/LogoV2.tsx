@@ -277,9 +277,10 @@ export function LogoV2({
 
   // 两行标题各自用字体声明的字距；下排再按 `bottomIndent` 居中——
   // 两者一起保证画出来的列数相等（见 splashFonts 的 tagline 契约）。
+  // 字体若自带配色（半立体那款的灰阶）就用它，否则沿用主题的 accent→activity。
   const { top, bottom, topKerning, bottomKerning, bottomIndent } = font.tagline
-  const bigDeepSeek = renderBigText(font, top, t, wordmarkRGB, taglineRGB, FLASH, 60, topKerning)
-  const bigHarness = renderBigText(font, bottom, t, taglineRGB, PALE, FLASH, 60, bottomKerning, bottomIndent)
+  const bigDeepSeek = renderBigText(font, top, t, font.palette?.from ?? wordmarkRGB, font.palette?.to ?? taglineRGB, FLASH, 60, topKerning)
+  const bigHarness = renderBigText(font, bottom, t, font.palette?.from ?? taglineRGB, font.palette?.to ?? PALE, FLASH, 60, bottomKerning, bottomIndent)
 
   return (
     <Box ref={ref} flexDirection="column" marginTop={1}>
