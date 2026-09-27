@@ -43,6 +43,7 @@ const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render }, { Traj
 const { miniWakeWidth } = await import('../src/components/trajectory/MiniWake.js')
 const traj = await import('../src/dsh-adapter/trajectory/index.js')
 const instances = (await import('../src/ink/instances.js')).default
+const { TIPS } = await import('../src/tips.js')
 
 let failed = 0
 function check(name: string, ok: boolean, extra = ''): void {
@@ -51,6 +52,29 @@ function check(name: string, ok: boolean, extra = ''): void {
 }
 
 // ───────────────────────── harness ──────────────────────────────────────────
+
+/** Pin a startup tip only for the initial mount; never leak the random stub. */
+async function renderWithTip(
+  node: React.ReactNode,
+  options: Parameters<typeof render>[1],
+  tipId: string,
+): ReturnType<typeof render> {
+  const tipIndex = TIPS.findIndex(tip => tip.id === tipId)
+  if (tipIndex < 0) throw new Error(`missing ${tipId} fixture`)
+  const random = Math.random
+  try {
+    Math.random = () => (tipIndex + 0.5) / TIPS.length
+    return await render(node, options)
+  } finally {
+    Math.random = random
+  }
+}
+
+/** Locale is pinned zh. Match the footer's prefix, not text quoted by a tip.
+ * A narrow header can truncate away /tips; geometry must not decide identity. */
+function idleShortcutHintRows(text: string): string[] {
+  return text.split('\n').filter(line => /^\s*\? 查看快捷键(?:\s|$)/.test(line))
+}
 
 function makeHarness(cols: number, rows: number, scrollback = 200) {
   const term = new XTerm({ cols, rows, scrollback, allowProposedApi: true })
@@ -620,44 +644,54 @@ function makeChannel(overrides: Record<string, unknown> = {}): Record<string, un
       durationMs: 120,
     },
   }
-  const instance = await render(
-    React.createElement(Chat, {
-      channel: makeChannel({
-        traceEvents: () => EVENTS,
-        statusBar: {
-          ...makeChannel().statusBar as Record<string, unknown>,
-          shortcutHint: true,
-        },
-        // One row only: the harness terminal is short, and a longer
-        // transcript scrolls the failed card out of the visible window.
-        rows: [failedRow],
-      }) as never,
-      questionStore: new QuestionStore() as never,
-      onExit: () => {},
-      fullscreen: false,
-      // Deterministic: never read the developer's own prefs file.
-      trajectorySeen: false,
-    }),
+  const tree = React.createElement(Chat, {
+    channel: makeChannel({
+      traceEvents: () => EVENTS,
+      statusBar: {
+        ...makeChannel().statusBar as Record<string, unknown>,
+        shortcutHint: true,
+      },
+      // One row only: the harness terminal is short, and a longer
+      // transcript scrolls the failed card out of the visible window.
+      rows: [failedRow],
+    }) as never,
+    questionStore: new QuestionStore() as never,
+    onExit: () => {},
+    fullscreen: false,
+    // Deterministic: never read the developer's own prefs file.
+    trajectorySeen: false,
+  })
+  // Reproduce the CI collision: this startup tip quotes the status hint verbatim.
+  const instance = await renderWithTip(
+    tree,
     { stdout: stdout as never, stdin: stdin as never, stderr: stdout as never, exitOnCtrlC: false, patchConsole: false },
+    'disp-statusbar-hint',
   )
   for (const value of instances.values()) instances.set(process.stdout, value)
 
-  check('the startup tip teaches the trajectory key', await settled(() => /ctrl\+t|⌘t/.test(screen())), '')
-  // The script pins DSH_TUI_LANG=zh, so the hint reads `? 查看快捷键`.
+  check('the startup tip fixture quotes the idle shortcut hint', await settled(() =>
+    screen().split('\n').some(line => line.includes('/tips') && line.includes('? 查看快捷键'))))
+  check('the conversation exposes the trajectory key', await settled(() => /ctrl\+t|⌘t/.test(screen())), '')
+  // Count ALL footer matches: using find() here would hide a real duplicate.
+  const countIdleShortcutHints = (text: string): number =>
+    (idleShortcutHintRows(text).join('\n').match(/\? 查看快捷键/g) ?? []).length
+  const tipLine = '提示：空闲时 "? 查看快捷键" 常驻提示也是底栏开关 · /tips 更多技巧'
+  const clippedTipLine = '提示：空闲时 "? 查看快捷键" 常驻提示也是底栏开关 · …'
+  check('a startup tip cannot mask a missing status hint', countIdleShortcutHints(tipLine) === 0)
+  check('a clipped startup tip cannot mask a missing status hint', countIdleShortcutHints(clippedTipLine) === 0)
+  check('duplicate status hints are still counted',
+    countIdleShortcutHints(`${tipLine}\n${clippedTipLine}\n? 查看快捷键\n? 查看快捷键`) === 2)
+  const misalignedHint = ' ? 查看快捷键 ▁█'
+  check('misaligned footers remain visible to the geometry assertion',
+    idleShortcutHintRows(`${clippedTipLine}\n${misalignedHint}`)[0] === misalignedHint)
   check('the idle shortcuts hint appears exactly once',
-    await settled(() => (screen().match(/\? 查看快捷键/g) ?? []).length === 1),
-    `${(screen().match(/\? 查看快捷键/g) ?? []).length}`)
+    await settled(() => countIdleShortcutHints(screen()) === 1),
+    `${countIdleShortcutHints(screen())}`)
 
-  // B — the wake strip lives on the hint row, and every assertion below is
-  // scoped to that row on purpose: the startup tip also names the key, so a
-  // whole-screen search could not tell the two channels apart. The `/tips`
-  // guard is the same discipline: the logo tip line always ends with
-  // "… · /tips 更多技巧" and 1-in-90 tips (keys-help) even contains
-  // "快捷键", which made the finder grab the TIP row, never the status row
-  // (CI flake, verify-trace-scene ladder step). The status line never
-  // contains "/tips", so excluding it pins the finder to the real hint row.
+  // B — scope the wake and key assertions to the same positively identified
+  // footer as the count above, even if a header tip loses its /tips suffix.
   const hintRowOf = (text: string): string =>
-    text.split('\n').find(line => !line.includes('/tips') && (line.includes('shortcuts') || line.includes('快捷键'))) ?? ''
+    idleShortcutHintRows(text)[0] ?? ''
   check('the status line carries a live wake strip', await settled(() => /[▁▂▃▄▅▆▇█]/.test(hintRowOf(screen()))),
     hintRowOf(screen()).trim().slice(-42))
   check('the key hint rides beside the strip while unseen', await settled(() => /ctrl\+t|⌘t/.test(hintRowOf(screen()))),
@@ -709,7 +743,7 @@ function makeChannel(overrides: Record<string, unknown> = {}): Record<string, un
   const LADDER = [84, 100, 126, 150, 184]
   for (const cols of LADDER) {
     const { stdout, stdin, screen, term } = makeHarness(cols, 34, 200)
-    const instance = await render(
+    const instance = await renderWithTip(
       React.createElement(Chat, {
         channel: makeChannel({
           traceEvents: () => EVENTS,
@@ -728,17 +762,19 @@ function makeChannel(overrides: Record<string, unknown> = {}): Record<string, un
         trajectorySeen: true,
       }),
       { stdout: stdout as never, stdin: stdin as never, stderr: stdout as never, exitOnCtrlC: false, patchConsole: false },
+      'disp-keymap',
     )
     for (const value of instances.values()) instances.set(process.stdout, value)
-    // Same `/tips` guard as hintRowOf above: the glyph class includes the
-    // middle dot, and the logo tip line ("… · /tips 更多技巧") always has
-    // one — when the random startup tip happens to contain "快捷键"
-    // (keys-help, 1/90) the finder matched the TIP row and this check
-    // failed as "wake sits … ends at 104" after polling to exhaustion.
-    const findHintRow = (): string | undefined => screen().split('\n').find(line =>
-      /[▁▂▃▄▅▆▇█▶·]/.test(line)
-      && !line.includes('/tips')
-      && (line.includes('shortcuts') || line.includes('快捷键')))
+    if (cols === 100) {
+      check('the 100-column tip fixture loses its /tips suffix', await settled(() =>
+        screen().split('\n').some(line => line.includes('提示：/settings')
+          && line.includes('shortcuts') && line.includes('快捷键')
+          && line.includes('·') && line.trimEnd().endsWith('…') && !line.includes('/tips'))))
+    }
+    // A truncated tip can contain both "shortcuts" and · without /tips.
+    // Select the real footer independently of the width we are about to test.
+    const findHintRow = (): string | undefined => idleShortcutHintRows(screen()).find(line =>
+      /[▁▂▃▄▅▆▇█▶·]/.test(line))
     // The settle predicate is exactly the disjunction of the two branch
     // assertions below, which re-derive from the settled screen — no weaker
     // wait condition can diverge from what is checked.

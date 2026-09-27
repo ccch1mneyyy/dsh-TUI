@@ -1,7 +1,7 @@
 import React from 'react'
 import { marked, type Token } from 'marked'
 import Box from '../ink/components/Box.js'
-import { formatToken, stripPromptXMLTags } from '../terminal-utils/markdown.js'
+import { configureMarked, formatToken, stripPromptXMLTags } from '../terminal-utils/markdown.js'
 import { t } from '../i18n.js'
 import { isStandaloneToken, Markdown } from './Markdown.js'
 
@@ -54,8 +54,8 @@ type StableBoundary = {
   safe: boolean
   /** Empty display rows before a following text block. */
   gap: number
-  /** Standalone nodes (tables, mermaid diagrams) use Markdown's fixed node
-   *  gap instead of text newline spacing. */
+  /** Standalone nodes (tables, mermaid diagrams, math blocks) use Markdown's
+   *  fixed node gap instead of text newline spacing. */
   endsWithNode: boolean
   /** Whitespace after a standalone node becomes a zero-height node between two of them. */
   trailingEmptyTextNode: boolean
@@ -217,6 +217,9 @@ export function StreamingMarkdown({
   const prefixEndsWithNodeRef = React.useRef(false)
   const prefixTrailingEmptyTextRef = React.useRef(false)
 
+  // The boundary lex below must see the same tokenizer extensions (math
+  // blocks) as the Markdown children, or the two disagree on block edges.
+  configureMarked()
   const stripped = stripPromptXMLTags(children)
 
   // Reset if text was replaced (defensive; normally unmount handles this)

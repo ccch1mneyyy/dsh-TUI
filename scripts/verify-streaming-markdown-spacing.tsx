@@ -119,6 +119,21 @@ const cases: readonly {
     stages: ['| a |\n| - |\n| 1 |', '| a |\n| - |\n| 1 |\n\n```mermaid\nflowchart LR\n  A --> B\n```'],
   },
   {
+    name: 'incremental prose-to-math-block gap (through a pending block)',
+    source: 'alpha\n\n$$\n\\frac{a}{b}\n$$',
+    stages: ['alpha', 'alpha\n\n$$', 'alpha\n\n$$\n\\frac{a}', 'alpha\n\n$$\n\\frac{a}{b}\n$$'],
+  },
+  {
+    name: 'incremental math-block-to-prose gap',
+    source: '$$\n\\frac{a}{b}\n$$\n\ntail',
+    stages: ['$$\n\\frac{a}{b}\n$$', '$$\n\\frac{a}{b}\n$$\n\ntail'],
+  },
+  {
+    name: 'incremental math-block-to-table gap',
+    source: '$$\nx^2\n$$\n\n| a |\n| - |\n| 1 |',
+    stages: ['$$\nx^2\n$$', '$$\nx^2\n$$\n\n| a |\n| - |\n| 1 |'],
+  },
+  {
     name: 'invisible definition spacing',
     source: 'alpha\n\n[ref]: /x\n\nbeta',
     stages: ['alpha', 'alpha\n\n[ref]: /x', 'alpha\n\n[ref]: /x\n\nbeta'],

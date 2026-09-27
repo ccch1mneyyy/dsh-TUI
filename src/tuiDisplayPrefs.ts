@@ -200,3 +200,11 @@ const mermaidDiagramsStore = createLiveSetting<boolean>(true, value => value !==
 export const subscribeMermaidDiagrams = mermaidDiagramsStore.subscribe
 export const getMermaidDiagrams = mermaidDiagramsStore.get
 export const applyMermaidDiagrams = mermaidDiagramsStore.apply
+
+/** Whether LaTeX math in replies renders as Unicode (settings
+ *  `dsh-tui.latexMath`, default on). Only an explicit `false` keeps the TeX
+ *  source. Read at render time, so settled transcript blocks re-render. */
+const latexMathStore = createLiveSetting<boolean>(true, value => value !== false)
+export const subscribeLatexMath = latexMathStore.subscribe
+export const getLatexMath = latexMathStore.get
+export const applyLatexMath = latexMathStore.apply

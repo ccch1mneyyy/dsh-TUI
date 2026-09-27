@@ -310,6 +310,13 @@ const dict = {
     zh: '压缩进行中，已取消并切换会话',
     en: 'In-flight compaction cancelled for the session switch',
   },
+  // 压缩状态行（prompt 上方的 spinner 槽位）。压缩只暴露两个可观测阶段：
+  // 首块输出前是在重放上下文（无可计数），之后才有生成量。
+  'compact-phase-prefill': { zh: '读取上下文…', en: 'reading context…' },
+  'compact-esc-cancel': { zh: 'Esc 取消', en: 'Esc cancels' },
+  'compact-cancelled': { zh: '压缩已取消', en: 'Compaction cancelled' },
+  // 回合进行中的自动压缩：工作 spinner 上的后缀（只此一词，别抢行）。
+  'compact-badge': { zh: '压缩中', en: 'compacting' },
   'turn-failed': { zh: '回合出错{{detail}}', en: 'Turn error{{detail}}' },
 
   // ── dsh-adapter/promptDebug.ts（/debug-prompt 成功提示）─────────────

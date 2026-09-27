@@ -586,6 +586,18 @@ jobs:
       - name: Smoke-import compiled entry
         run: node -e "import('./lib/types/index.js').then(() => console.log('entry import ok')).catch(e => { console.error(e); process.exit(1) })"
 
+      # Regression for the macOS Unix-domain socket path limit.
+      # Force an intentionally long TMPDIR: before the Darwin-specific
+      # short-temp-root fix, verify-inject-channel would derive its fake HOME
+      # from this path and eventually fail with EINVAL while binding the socket.
+      - name: Injection channel with long macOS TMPDIR
+        if: runner.os == 'macOS'
+        run: |
+          LONG_TMPDIR="/tmp/dsh-tui-ci-$(printf 'x%.0s' {1..70})"
+          mkdir -p "$LONG_TMPDIR"
+          TMPDIR="$LONG_TMPDIR" \
+            node --import tsx/esm scripts/verify-inject-channel.mjs
+
       # 安全模式的启动器门禁在观察档里也跑一遍：脚本自带 POSIX/Windows 两套
       # dsh 替身，本就不依赖 lib/ 产物。放进这里的理由是 required 的
       # input-terminal 组只在 ubuntu 跑，而 bin/dsh-tui.js 有 Windows 专属

@@ -457,6 +457,7 @@ dsh-tui 自身区块在 0.1.7 写入当前 profile 的 `cordis.patch.yml`，旧�
 | smoothStreaming | 流式平滑输出（默认开）：回复/思考/工具卡正文按 ~30fps 匀速揭示；回放/历史完整直出 |
 | toolBackground | 工具卡背景强调：none / subtle / strong |
 | mermaidDiagrams | Mermaid 图表（默认开）：回复中的 ```` ```mermaid ```` 代码块画成字符图，流式期间逐步成形；比终端宽或类型不支持的图保留源码并注明所需列数。立即生效 |
+| latexMath | LaTeX 公式（默认开）：回复中的 `$…$`、`\(…\)` 行内公式与 `$$…$$`、`\[…\]` 块级公式转成 Unicode 文本，块级公式里的分数与上下限竖排；不支持、仍在流式输出或比终端宽的公式保留源码（过宽的块级公式先退成单行）。价格（`$5`）、shell 变量（`$HOME`）与代码里的 `$` 不受影响。立即生效 |
 | scrollGutter | 转录边栏：timeline（轮次时间线，默认）/ scrollbar（比例滚动条）/ hidden。立即生效 |
 | pageMargin | 页边距：整屏相对终端四边向里缩。预设 none / slim / normal（默认）/ roomy，或自定义 `NxM`（细节见下）。立即生效 |
 | foldTerminalCommand | 折叠终端命令（默认关）：终端卡（Bash/PowerShell）多行命令折成首行 + 计数；`Ctrl+O` 或点击卡片展开 |

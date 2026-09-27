@@ -51,7 +51,7 @@ export function createInitialChannelView(
 ): Pick<ChannelState,
   'effortLevels' | 'version' | 'rows' | 'status' | 'sessionTitle' | 'sessionColor' |
   'agentId' | 'sessionId' | 'agentBindingGeneration' | 'model' | 'provider' | 'tokens' | 'cwd' |
-  'displayCwd' | 'gitBranch' | 'working' | 'cancelPending' | 'spinnerMode' |
+  'displayCwd' | 'gitBranch' | 'working' | 'compaction' | 'cancelPending' | 'spinnerMode' |
   'responseChars' | 'activeToolCount' | 'turnStart' | 'lastUserText' |
   'notifications' | 'contextWindow' | 'reasoningEffort' | 'mode' | 'modeIndex' |
   'activityFrames' | 'configuredProvider' | 'configuredModel' |
@@ -67,6 +67,7 @@ export function createInitialChannelView(
     agentId: input.agentId, sessionId: input.sessionId, agentBindingGeneration: 0, model: options.model, provider: options.provider,
     tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, peak: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, idle: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } },
     cwd: options.cwd, displayCwd: input.cwdDescription, gitBranch: undefined, working: false,
+    compaction: undefined,
     cancelPending: false, spinnerMode: 'requesting', responseChars: 0, activeToolCount: 0,
     turnStart: 0, lastUserText: '', notifications: [], contextWindow: undefined,
     reasoningEffort: options.effort, mode: input.mode, modeIndex: 0,

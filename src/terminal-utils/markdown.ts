@@ -24,6 +24,14 @@ import type { CliHighlight } from './cliHighlight.js'
 import { logForDebugging } from '../utils/debug.js'
 import { createHyperlink } from './hyperlink.js'
 import { fileLinkUrl, linkifyFilePaths, looksLikeFilePath } from '../utils/fileTarget.js'
+import { getLatexMath } from '../tuiDisplayPrefs.js'
+import {
+  isMathBlockToken,
+  isMathToken,
+  MATH_MARKDOWN_EXTENSIONS,
+  renderInlineMath,
+  type MathToken,
+} from './math.js'
 
 // '\n' is used unconditionally — os.EOL is '\r\n' on Windows, and the stray
 // '\r' breaks the character-to-segment mapping in applyStylesToWrappedText,
@@ -70,7 +78,9 @@ let markedInitialized = false
  * Configure the shared `marked` instance once. Strikethrough parsing is
  * disabled so that `~100` renders literally instead of as deleted text —
  * models use `~` far more often for "approximate" than for real
- * strikethrough.
+ * strikethrough. LaTeX math becomes `math`/`mathBlock` tokens (see
+ * math.ts). Every lexer caller — Markdown and StreamingMarkdown's boundary
+ * lex — must run this first so both agree on block boundaries.
  */
 export function configureMarked(): void {
   if (markedInitialized) return
@@ -82,6 +92,7 @@ export function configureMarked(): void {
         return undefined
       },
     },
+    extensions: [...MATH_MARKDOWN_EXTENSIONS],
   })
 }
 
@@ -234,6 +245,10 @@ function dispatch(token: Token, state: RenderState): string {
   if (isToken(token, 'text')) return renderText(token, state)
   if (isToken(token, 'table')) return renderTable(token, state)
   if (isToken(token, 'escape')) return token.text
+  if (isMathToken(token)) return renderInlineMathToken(token)
+  // Top-level math blocks are standalone MathBlock nodes; this path only
+  // sees blocks nested in list items / blockquotes (or formatToken callers).
+  if (isMathBlockToken(token)) return renderNestedMathBlock(token)
   if (isToken(token, 'def') || isToken(token, 'del') || isToken(token, 'html')) {
     // Link definitions, strikethrough, and raw HTML carry no ANSI
     // representation.
@@ -241,6 +256,22 @@ function dispatch(token: Token, state: RenderState): string {
   }
   // Unknown / extension token types render as nothing.
   return ''
+}
+
+/** Inline math as single-line Unicode; the exact source when it has none
+ *  or rendering is switched off. */
+function renderInlineMathToken(token: MathToken): string {
+  return (getLatexMath() ? renderInlineMath(token.text) : undefined) ?? token.raw
+}
+
+/**
+ * A math block inside a list item or blockquote has no width of its own to
+ * lay out a 2D formula against (and would be cut by the container prefix),
+ * so it gets the single-line form, else its source.
+ */
+function renderNestedMathBlock(token: MathToken): string {
+  const rendered = getLatexMath() && !token.pending ? renderInlineMath(token.text) : undefined
+  return (rendered ?? token.raw.trim()) + EOL
 }
 
 function renderBlockquote(token: Tokens.Blockquote, state: RenderState): string {

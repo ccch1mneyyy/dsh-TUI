@@ -292,6 +292,28 @@ export interface NotificationItem {
 }
 
 /**
+ * The session's in-flight compaction (`/compact`, or the automatic pressure
+ * compaction at a turn boundary), as the status row above the prompt renders
+ * it. The host exposes no proportional progress: a compaction is one model
+ * call between two durable session events, so this carries only what is
+ * observable — when the bracket opened, whether that call has started
+ * producing output, how much it has produced, and whether this process may
+ * abort it.
+ */
+export interface CompactionStatus {
+  /** Wall-clock ms when the compaction bracket opened. */
+  readonly startedAt: number
+  /** `prefill` until the summarizer's first output chunk: replaying the
+   *  conversation prefix is a long silent phase with nothing to count.
+   *  `summary` once output is streaming. */
+  readonly phase: 'prefill' | 'summary'
+  /** Output chars streamed by the compaction model call (see `phase`). */
+  readonly outputChars: number
+  /** True only for a compaction this process started, so only it may abort. */
+  readonly cancellable: boolean
+}
+
+/**
  * Durable same-session goal projection surfaced on the channel (see
  * {@link Channel['goal']}). Mirrors the goal domain's `GoalSnapshot` +
  * replay counters; declared locally so the UI needs no dsh-goal dependency.

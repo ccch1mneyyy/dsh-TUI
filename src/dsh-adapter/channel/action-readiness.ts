@@ -59,6 +59,7 @@ export type ChannelActionDelegates = Pick<ChannelState,
   | 'deleteSession'
   | 'renameSessionTo'
   | 'compact'
+  | 'cancelCompact'
   | 'runExternalCommand'
   | 'runExternalCommandOutcome'
   | 'pushLocal'
@@ -137,6 +138,7 @@ export function createChannelActionMethods(
     deleteSession: sessionId => getReadyActions().deleteSession(sessionId),
     renameSessionTo: (sessionId, title) => getReadyActions().renameSessionTo(sessionId, title),
     compact: () => getReadyActions().compact(),
+    cancelCompact: () => getReadyActions().cancelCompact(),
     runExternalCommand: (name, rawInput) => getReadyActions().runExternalCommand(name, rawInput),
     runExternalCommandOutcome: (name, rawInput, images) => getReadyActions().runExternalCommandOutcome(name, rawInput, images),
     pushLocal: (title, lines) => getReadyActions().pushLocal(title, lines),

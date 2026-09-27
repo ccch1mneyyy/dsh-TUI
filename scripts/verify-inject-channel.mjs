@@ -24,7 +24,14 @@ import { join } from 'node:path'
 
 // Point DATA_DIR at a temp home BEFORE importing the module (paths.ts reads
 // homedir at import time).
-const tmpHome = mkdtempSync(join(tmpdir(), 'dsh-inject-'))
+// On macOS, tmpdir() expands to the long /var/folders/.../T path, which can
+// push the UNIX socket path past Darwin’s limit.
+const tempRoot =
+  process.platform === 'darwin'
+    ? '/tmp'
+    : tmpdir()
+
+const tmpHome = mkdtempSync(join(tempRoot, 'dsh-inject-'))
 process.env.HOME = tmpHome
 process.env.USERPROFILE = tmpHome
 

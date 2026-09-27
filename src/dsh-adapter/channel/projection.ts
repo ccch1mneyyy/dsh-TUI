@@ -19,7 +19,7 @@ import { cleanRenderText } from '../sanitize.js'
 import { NOTICE_CELLS } from './decisions.js'
 import { markChannelReadDirty } from '../../adapter/channel/read-view.js'
 
-type ProjectionState = Pick<ChannelState, 'rows' | 'thinkingFold' | 'activeToolCount' | 'spinnerMode' | 'goal' | 'contextSegments' | 'tokens' | 'lastUsage' | 'lastUserText' | 'responseChars' | 'tps' | 'cancelPending' | 'working' | 'turnStart' | 'tpsSamples' | 'contextWindow' | 'reasoningEffort' | 'sessionTitle' | 'todos' | 'agentPreset' | 'sessionColor' | 'status' | 'emit'>
+type ProjectionState = Pick<ChannelState, 'rows' | 'thinkingFold' | 'activeToolCount' | 'spinnerMode' | 'goal' | 'contextSegments' | 'tokens' | 'lastUsage' | 'lastUserText' | 'responseChars' | 'tps' | 'cancelPending' | 'working' | 'compaction' | 'turnStart' | 'tpsSamples' | 'contextWindow' | 'reasoningEffort' | 'sessionTitle' | 'todos' | 'agentPreset' | 'sessionColor' | 'status' | 'emit'>
 interface ProjectionDependencies {
  agent(): Agent
  rowIds: { value: number }
@@ -489,7 +489,7 @@ export function createChannelProjection(state: ProjectionState, deps: Projection
         // than disappearing with the other injected context.
         if (isCompactionCheckpointSource(event.data.source)) {
           const summary = textOf(event.data.content)
-          appendRow({ id: deps.rowIds.value, kind: 'notice', text: 'Session summary is ready' })
+          appendRow({ id: deps.rowIds.value, kind: 'notice', text: t('compact-done') })
           deps.rowIds.value += 1
           if (summary) {
             appendRow({ id: deps.rowIds.value, kind: 'compact', text: summary })
@@ -1015,6 +1015,31 @@ export function createChannelProjection(state: ProjectionState, deps: Projection
         if ((event as { type: string }).type === 'session/color') {
           const data = event.data as unknown as { color?: unknown }
           state.sessionColor = typeof data.color === 'string' ? data.color : ''
+          break
+        }
+        // The compaction bracket is a plugin-appended event pair (not part of
+        // dsh-session's typed map). Opening it here rather than in the manual
+        // path is what makes an AUTOMATIC pressure compaction visible too: the
+        // host writes `compaction/start` before the summarizer runs and
+        // `compaction/end` once the checkpoint is committed or abandoned.
+        // A manual request already installed its own cancellable row, so this
+        // only fills the gap for one this process did not start.
+        if ((event as { type: string }).type === 'compaction/start') {
+          // Replay is settled history, and a process killed between start and
+          // end leaves an unmatched start in the log: painting a row for it
+          // would show a compaction that nothing will ever clear.
+          if (!replaying && state.compaction === undefined) {
+            state.compaction = {
+              startedAt: typeof event.time === 'number' ? event.time : Date.now(),
+              phase: 'prefill',
+              outputChars: 0,
+              cancellable: false,
+            }
+          }
+          break
+        }
+        if ((event as { type: string }).type === 'compaction/end') {
+          state.compaction = undefined
           break
         }
         // Custom plugin events (tuiRenderers seam): a registered renderer

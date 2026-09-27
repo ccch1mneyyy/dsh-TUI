@@ -28,6 +28,7 @@
 - **Terminal-native UI** — streaming Markdown, tool cards, `/` and `@` completion, `#L12-14` ranges, history search, zh/en UI.
 - **Images** — Kitty/Sixel thumbnails, centered preview with zoom and pan, paste-time fitting, text fallback.
 - **Mermaid diagrams** — ````mermaid ```` fences drawn as Unicode diagrams.
+- **LaTeX math** — `$…$` and `$$…$$` formulas rendered as Unicode, fractions and limits stacked in display blocks.
 - **Timeline rail** — every turn clickable; timeline / scrollbar / hidden gutter.
 - **Live state** — activity animation, context bar, TPS, cache hit rate, effort, tokens, Git and session metadata.
 - **One session manager** — `/resume` `/home` `/agentview` `/bg` `⌸`.
