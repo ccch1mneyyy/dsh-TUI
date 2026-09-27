@@ -13,18 +13,23 @@ import type { MigratePickerRow } from '../dsh-adapter/migrate/picker.js'
  * checkbox, the scannable file count, and a recent-activity badge. Keys
  * (Chat owns the logic): space toggles the focused source, `a` selects
  * all/none, Enter proceeds to the confirmation layer with the checked set
- * (the focused row when nothing is checked), Esc closes.
+ * (the focused row when nothing is checked), Esc closes. While the rows are
+ * still being collected it says so — the scan takes a moment on real stores
+ * and "no sources available" would be a lie in that window.
  */
 export function MigratePicker({
   rows,
   focusIndex,
   checked,
+  loading = false,
   onPick,
 }: {
   rows: readonly MigratePickerRow[]
   focusIndex: number
   /** Checked agent ids (multi-select state lives in Chat). */
   checked: ReadonlySet<string>
+  /** Rows still loading: render the scanning line, not the empty state. */
+  loading?: boolean
   /** Mouse pick (fullscreen): toggle the clicked row's checked state. */
   onPick?: (index: number) => void
 }): React.ReactNode {
@@ -44,7 +49,9 @@ export function MigratePicker({
             {t('picker-title-migrate')}
           </Text>
         </Box>
-        {rows.length === 0 ? (
+        {loading ? (
+          <Text dimColor>{t('migrate-picker-scanning')}</Text>
+        ) : rows.length === 0 ? (
           <Text dimColor>{t('migrate-picker-empty')}</Text>
         ) : (
           rows.slice(start, end).map((row, index) => {

@@ -2,7 +2,7 @@
  * verify-migrate — 跨代理会话迁移回归（fixture 驱动，不依赖本机数据）。
  *
  * 第一版 PR 的教训：只验「头行合法」是假绿。本回归全程跑真实读取链——
- * 覆盖 src/migrate/：
+ * 覆盖 src/dsh-adapter/migrate/：
  *   1. sessionize：官方 Session.append 生成的事件骨架（turn 配对 = 下一个
  *      user 关闭上一轮 + 收尾关闭最后一轮）、reasoning 块保留、header
  *      cwd/version、CJK 与 emoji 原样进入事件；
@@ -13,7 +13,11 @@
  *      新旧消息同在（导入的会话是活的，不是只能看）；
  *   4. 幂等：同批 fixture 二次导入全部 existing，列表数不变；
  *   5. migrationUuid：确定性（同输入同 id）与区分性（不同 agent 不同 id）；
- *   6. adapter 解析冒烟：五家的最小 fixture 行（含 model 提取、null 防御）。
+ *   6. adapter 解析冒烟：五家的最小 fixture 行（含 model 提取、null 防御、
+ *      sourceId 必须是裸文件名——幂等键不随源目录移动）；
+ *   7. /migrate 命令分类矩阵（pure）：fresh 会话的直接入口、--dry-run 与
+ *      多参数语义必须与 CLI 一致。
+ * 运行面的交互回归见 scripts/verify-migrate-command.tsx（挂真实 Chat）。
  *
  * 运行：node --import tsx/esm scripts/verify-migrate.mjs
  */
@@ -246,11 +250,16 @@ const root = mkdtempSync(join(tmpdir(), 'verify-migrate-'))
   const home = mkdtempSync(join(tmpdir(), 'verify-migrate-cli-'))
   const dshHome = join(home, 'dsh')
   const prevHome = process.env.HOME
+  const prevProfile = process.env.USERPROFILE
   const prevDsh = process.env.DSH_HOME
   const prevStdoutWrite = process.stdout.write.bind(process.stdout)
   const sink = []
   process.stdout.write = (chunk) => { sink.push(String(chunk)); return true }
+  // Both variables: the adapters read os.homedir(), which is HOME on POSIX
+  // and USERPROFILE on Windows — setting only HOME made this section scan the
+  // real home there instead of the fixture.
   process.env.HOME = home
+  process.env.USERPROFILE = home
   process.env.DSH_HOME = dshHome
   try {
     const usage = await cliMigrate(['a', 'b'])
@@ -264,11 +273,21 @@ const root = mkdtempSync(join(tmpdir(), 'verify-migrate-'))
     const dryTargetExists = existsSync(dshHome)
     check('4e4. dry-run → 退出码 0 且未写目标根', dry === 0 && !dryTargetExists,
       `exit=${dry} targetExists=${dryTargetExists}`)
-    check('4e5. 输出经过 stdout 且非空', sink.length > 0)
+    // 4e5 只算本次调用产生的 stdout：check() 自己走 console.log 写同一个
+    // 被替换的 write，之前用 sink.length > 0 断言等于恒真（假通过）。
+    const beforeCli = sink.length
+    await cliMigrate(['claude-code', '--dry-run'])
+    check('4e5. cliMigrate 自身写出 stdout', sink.length > beforeCli,
+      `${beforeCli} → ${sink.length}`)
+    // 裸 --dry-run 与 TUI 同语义：预览必须先指明源，不能静默退化成列表。
+    const bareDry = await cliMigrate(['--dry-run'])
+    check('4e6. 裸 --dry-run → 退出码 2（与 TUI 的“请指明源”一致）', bareDry === 2)
   } finally {
     process.stdout.write = prevStdoutWrite
     if (prevHome === undefined) delete process.env.HOME
     else process.env.HOME = prevHome
+    if (prevProfile === undefined) delete process.env.USERPROFILE
+    else process.env.USERPROFILE = prevProfile
     if (prevDsh === undefined) delete process.env.DSH_HOME
     else process.env.DSH_HOME = prevDsh
     rmSync(home, { recursive: true, force: true })
@@ -286,21 +305,20 @@ const root = mkdtempSync(join(tmpdir(), 'verify-migrate-'))
   check('4f1. dev 布局（scripts/ 深度）探测命中本包 bin',
     devBin !== undefined && existsSync(devBin), String(devBin))
   // 安装布局：lib/types/screens/ 深度（编译产物存在时才测——CI 的
-  // verify job 在 build 后运行，本地无产物时跳过并注明）
+  // verify job 在 build 后运行；本地无产物时是 SKIP，不是 PASS）
   const installedRoot = join(process.cwd(), 'lib', 'types', 'screens')
-  let installedChecked = false
   try {
     statSync(installedRoot)
     const installedBin = resolveOwnBin(installedRoot)
     check('4f2. 安装布局（lib/types/screens/ 深度）探测命中本包 bin',
       installedBin !== undefined && existsSync(installedBin), String(installedBin))
-    installedChecked = true
   } catch {
-    console.log('PASS: 4f2. 安装布局产物未构建，跳过（CI build 后覆盖）')
+    console.log('SKIP: 4f2. 安装布局产物未构建（CI build 后覆盖；不计入 check 数）')
   }
-  // 反向：越界深度必须返回 undefined（不误命中树外其他包）
+  // 反向：越界深度必须返回 undefined。resolveOwnBin 只返回 existsSync 通过
+  // 的候选，所以旧的 `miss === undefined || existsSync(miss)` 恒真——空转断言。
   const miss = resolveOwnBin('/')
-  check('4f3. 树外起点不误命中', miss === undefined || existsSync(miss), String(miss))
+  check('4f3. 树外起点不误命中', miss === undefined, String(miss))
 }
 
 // ── 4g. 近期活动检测器矩阵（纯函数喂夹具：全冷/单热/多热/缺数据）────
@@ -327,9 +345,9 @@ const root = mkdtempSync(join(tmpdir(), 'verify-migrate-'))
     && recentAgentsFrom([sample('cc', 21)], NOW, RECENT_ACTIVITY_WINDOW_MS).length === 0)
 }
 
-// ── 4h. 交互返工数据层：确认行构造 + 子进程汇报计数解析（PRD #2/#3）────
+// ── 4h. 交互返工数据层：子进程汇报计数解析（PRD #3）────────────────────
 {
-  const { parseImportSummary, confirmSummaryLines } = await import('../src/dsh-adapter/migrate/picker.js')
+  const { parseImportSummary } = await import('../src/dsh-adapter/migrate/picker.js')
   const out = [
     '[zcode] importing 60 conversation(s) into /x',
     '[zcode] imported 60',
@@ -343,12 +361,27 @@ const root = mkdtempSync(join(tmpdir(), 'verify-migrate-'))
     && parsed[1].agentId === 'omp' && parsed[1].imported === 0 && parsed[1].existing === 1366)
   check('4h2. 无汇总输出 → 空数组（P2：不再误报完成）',
     parseImportSummary('[claude-code] 848 session file(s) to scan').length === 0)
-  const rows = [
-    { agentId: 'zcode', label: 'zcode', count: 60 },
-    { agentId: 'omp', label: 'OMP', count: 1375 },
-  ]
-  check('4h3. 确认层逐行构造',
-    JSON.stringify(confirmSummaryLines(rows)) === JSON.stringify(['zcode: 60', 'OMP: 1375']))
+}
+
+// ── 4i. /migrate 命令分类矩阵（入口真源是注册表，不是选择器缓存）──────
+{
+  const { resolveMigrateCommand } = await import('../src/dsh-adapter/migrate/picker.js')
+  const KNOWN = ['claude-code', 'codex', 'omp', 'zcode', 'grok-build']
+  const kinds = raw => JSON.stringify(resolveMigrateCommand(raw, KNOWN))
+  // fresh 会话（picker 从未打开、rows 为空）也必须直接可用——旧实现从选择器
+  // 缓存里查 agent，导致这个入口首次调用永远报“未知迁移源”。
+  check('4i1. fresh 会话 /migrate claude-code → 直接确认（不看选择器缓存）',
+    kinds(' claude-code') === JSON.stringify({ kind: 'import', agentId: 'claude-code', dryRun: false }))
+  check('4i2. 裸 /migrate → 打开选择器',
+    kinds('') === JSON.stringify({ kind: 'picker' }))
+  check('4i3. 未知源 → unknown（消费方报未知迁移源）',
+    kinds(' nope') === JSON.stringify({ kind: 'unknown', agentId: 'nope' }))
+  check('4i4. /migrate --dry-run → 明确要源，不再报“未知源 --dry-run”',
+    kinds(' --dry-run') === JSON.stringify({ kind: 'dry-run-needs-source' }))
+  check('4i5. /migrate zcode --dry-run → 只预览该源',
+    kinds(' zcode --dry-run') === JSON.stringify({ kind: 'import', agentId: 'zcode', dryRun: true }))
+  check('4i6. 两个源 → usage（与 CLI 的退出码 2 同语义，不再静默取第一个）',
+    kinds(' claude-code codex') === JSON.stringify({ kind: 'usage' }))
 }
 
 // ── 5. uuid 确定性与区分性 ──────────────────────────────────────────────
@@ -469,6 +502,16 @@ const root = mkdtempSync(join(tmpdir(), 'verify-migrate-'))
     gbFound.sessions.length === 1 && gbTurns.length === 2
     && gbTurns[1].reasoning === 'grok 思考' && gbTurns[1].model === 'grok-4-fast'
     && gbFound.sessions[0].cwd === '/tmp/grok')
+  // sourceId 是幂等键的一部分（UUIDv5 输入）：它必须是裸文件名，不能把源目录
+  // 带进来——join() 在 Windows 产出 `\`，旧实现的 split('/') 会退化成整条绝对
+  // 路径，源目录一移动就重复导入。本断言在 Windows 抓得住这个回归。
+  const ids = [cc.sessions[0], codexFound.sessions[0], ompFound.sessions[0], zcFound.sessions[0], gbFound.sessions[0]]
+    .map(session => session.sourceId)
+  check('6f. 五家 sourceId 都是裸文件名（不带路径分隔符，跨平台稳定）',
+    ids.every(id => typeof id === 'string' && id !== '' && !/[\\/]/u.test(id)), ids.join(' | '))
+  check('6g. claude-code/omp 的 sourceId 取到夹具 uuid 本身（而非路径原文）',
+    cc.sessions[0].sourceId === firstUuid() && ompFound.sessions[0].sourceId === firstUuid(),
+    `${cc.sessions[0].sourceId} | ${ompFound.sessions[0].sourceId}`)
   rmSync(home, { recursive: true, force: true })
 }
 

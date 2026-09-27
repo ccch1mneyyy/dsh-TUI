@@ -111,6 +111,7 @@ with that source pre-checked; any other key dismisses it.
   package-rename migration from `dsh-cc-tui` (see
   [Getting started](getting-started.en.md)).
 
-Implementation and verification live in `src/dsh-adapter/migrate/` and
-`scripts/verify-migrate.mjs` （38 checks, all against the official read
-chain).
+Implementation and verification live in `src/dsh-adapter/migrate/`,
+`scripts/verify-migrate.mjs` (48 checks, all against the official read chain)
+and `scripts/verify-migrate-command.tsx` (the `/migrate` interaction
+regression, mounted against the real Chat screen).

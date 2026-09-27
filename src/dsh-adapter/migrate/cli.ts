@@ -8,6 +8,9 @@
  *   dsh-tui migrate <agent>             # import every conversation found from that agent
  *   dsh-tui migrate <agent> --dry-run   # show what would land, write nothing
  *
+ * One agent per run, and `--dry-run` always names one: both are usage errors
+ * rather than silent fallbacks, matching the TUI's `/migrate` entry points.
+ *
  * Every string that originated OUTSIDE this machine (source ids, cwds, error
  * text embedding them) passes through cleanRenderText before printing: a
  * hostile session file must not be able to drive terminal escape sequences
@@ -53,6 +56,13 @@ async function cliMigrateInner(argv: readonly string[]): Promise<number> {
   }
   const wanted = words[0]
   if (wanted === undefined) {
+    // `--dry-run` previews ONE source, so it needs one named: without this the
+    // flag fell through to the listing below and was silently ignored (the
+    // TUI's `/migrate --dry-run` says the same thing).
+    if (dryRun) {
+      process.stderr.write('usage: dsh-tui migrate <agent> --dry-run\n')
+      return MIGRATE_CLI_USAGE_EXIT
+    }
     // Bare `migrate` only reports; importing requires an explicit agent.
     for (const adapter of MIGRATION_ADAPTERS) {
       // Name-only count when the adapter offers one: list mode must not pay

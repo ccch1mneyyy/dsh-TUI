@@ -90,5 +90,6 @@ TUI 启动约 12 秒后做一次后台检测：任一源在最近 20 分钟内�
 - 术语：迁移（migrate）指本功能；与「从 dsh-cc-tui 更名迁移」
   （见[安装与快速开始](getting-started.md)）无关。
 
-实现与验证细节见 `src/dsh-adapter/migrate/` 与
-`scripts/verify-migrate.mjs`（38 项回归，全程跑官方读取链）。
+实现与验证细节见 `src/dsh-adapter/migrate/`、
+`scripts/verify-migrate.mjs`（48 项回归，全程跑官方读取链）与
+`scripts/verify-migrate-command.tsx`（挂真实 Chat 的 `/migrate` 交互回归）。

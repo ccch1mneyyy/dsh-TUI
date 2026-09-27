@@ -71,10 +71,7 @@ export function collectNewestMtime(
   fileMatch: (name: string) => boolean,
   maxDepth: number,
 ): number | null {
-  // Runtime guard for JS callers (the .mjs verify scripts): a missing
-  // matcher would dereference undefined inside the walk; reading as
-  // "matches nothing" keeps the null-means-no-data contract.
-  const match = fileMatch ?? (() => false)
+  const match = fileMatch
   let newest: number | null = null
   const walk = (dir: string, depth: number): void => {
     if (depth > maxDepth) return

@@ -1,9 +1,10 @@
 /**
- * Data collection for the `/migrate` source picker.
+ * Data collection for the `/migrate` source picker, plus the command
+ * classifier and the child-report parser.
  *
  * Combines the name-only scan count (list mode's fast path) with the
  * recent-activity detector into the row shape the picker renders. Pure data:
- * no React, no Cordis — Chat imports this one function and owns all UI.
+ * no React, no Cordis — Chat imports these helpers and owns all UI.
  *
  * @module @deepseek-harness-tui/dsh-tui/migrate/picker
  */
@@ -79,10 +80,35 @@ export function parseImportSummary(stdout: string): ImportSummary[] {
 }
 
 /**
- * Confirmation-layer lines for the checked sources (PRD #2): one row per
- * source with its scannable count and the repeat-safe note. Pure so the
- * verify suite can assert the exact shape.
+ * Classify one `/migrate` command line (the text AFTER the command word) into
+ * the action Chat must take. Pure and registry-driven on purpose: whether a
+ * command is valid must never depend on the picker having been opened first
+ * (`migrateRows` is empty on a fresh mount, which used to make every
+ * `/migrate <agent>` report an unknown source), and the CLI keeps the same
+ * one-source rule (`dsh-tui migrate a b` is a usage error there too).
+ *
+ * @param rawInput - arguments after `/migrate`, e.g. `" claude-code --dry-run"`.
+ * @param knownAgentIds - the adapter registry's ids (see MIGRATION_ADAPTERS).
  */
-export function confirmSummaryLines(rows: readonly MigratePickerRow[]): string[] {
-  return rows.map(row => `${row.label}: ${row.count}`)
+export function resolveMigrateCommand(rawInput: string, knownAgentIds: readonly string[]): MigrateCommand {
+  const words = rawInput.trim().split(/\s+/u).filter(Boolean)
+  const dryRun = words.includes('--dry-run')
+  const agents = words.filter(word => word !== '--dry-run')
+  // One source per invocation: the CLI rejects a second word, and silently
+  // importing only the first would hide which selection the user asked for.
+  if (agents.length > 1) return { kind: 'usage' }
+  const wanted = agents[0]
+  if (wanted === undefined) return dryRun ? { kind: 'dry-run-needs-source' } : { kind: 'picker' }
+  if (!knownAgentIds.includes(wanted)) return { kind: 'unknown', agentId: wanted }
+  return { kind: 'import', agentId: wanted, dryRun }
 }
+
+/** What one `/migrate` line asks for. */
+export type MigrateCommand =
+  | { readonly kind: 'picker' }
+  | { readonly kind: 'import', readonly agentId: string, readonly dryRun: boolean }
+  | { readonly kind: 'unknown', readonly agentId: string }
+  /** More than one source named: rejected, like the CLI's usage error. */
+  | { readonly kind: 'usage' }
+  /** `--dry-run` with no source: previewing needs to know what to preview. */
+  | { readonly kind: 'dry-run-needs-source' }

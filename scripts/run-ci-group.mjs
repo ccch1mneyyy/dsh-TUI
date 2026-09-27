@@ -292,12 +292,17 @@ const GROUPS = {
     ["verify-prompt-history-queue-retract", ['node', 'scripts/verify-prompt-history-queue-retract.mjs']],
   ],
   'session-workspace': [
-// 跨代理会话迁移回归（claude-code/codex/omp → DSH sessions）：全程跑官方
-// 读取链——Session.append 生成骨架（turn 配对/reasoning/provenance）、
-// JsonlSessionPersistence 落盘、open+fromRestore+deriveMessages 逐消息
-// 断言（CJK/emoji 无损）、restore 作 seed 续聊写回、uuid v5 幂等、
-// 三 adapter fixture 解析（含 model 提取）。
+// 跨代理会话迁移回归（claude-code/codex/omp/zcode/grok-build → DSH sessions）：
+// 全程跑官方读取链——Session.append 生成骨架（turn 配对/reasoning/
+// provenance）、JsonlSessionPersistence 落盘、open+fromRestore+
+// deriveMessages 逐消息断言（CJK/emoji 无损）、restore 作 seed 续聊写回、
+// uuid v5 幂等、五 adapter fixture 解析（含 sourceId 只取裸文件名）、
+// /migrate 命令分类矩阵。
     ["verify-migrate", ['node', '--import', 'tsx/esm', 'scripts/verify-migrate.mjs']],
+// /migrate 交互回归（挂真实 Chat）：fresh 会话直接 `/migrate <agent>` 必须
+// 打开确认层（旧实现查 picker 行缓存，缓存为空时一律报未知源）、未知源仍
+// 被拒、`--dry-run` 要源、多源报 usage、重开选择器清空上一轮勾选。
+    ["verify-migrate-command", ['node', '--import', 'tsx/esm', 'scripts/verify-migrate-command.tsx']],
 // 审批服务配置回归（issue #49 尾巴）：裸组合 cordis.yml 必须挂载
 // approval 行；裸组合与 profile patch 的 policy 表达式逐场景同值
 // （ask / never / win32 never），两个入口语义不漂移。
