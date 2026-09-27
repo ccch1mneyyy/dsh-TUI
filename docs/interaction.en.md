@@ -116,6 +116,8 @@ text and newlines, and is never mistaken for an Enter key. To keep rendering, cl
 mapping, and selection geometry consistent:
 
 - Terminal ANSI controls are stripped on entry.
+- A multi-line paste no longer leaves a stray `_`: when a Windows terminal delivers the paste as win32-input-mode records, the residue (`ESC[Vk;Sc;Uc;Kd;Cs;Rc_`, or the ESC-less tail left by a split record) is stripped whole on entry. Only the five-separator record grammar matches, so genuine underscores and bracket text that merely resembles a record are untouched.
+- Pasted CRLF collapses: a CR+LF pair produces one newline instead of two; LF-only and lone CR keep their previous behavior.
 - Tabs are expanded to spaces on entry.
 
 ### Fullscreen draft editor (`Ctrl+Shift+E` / `⛶`)

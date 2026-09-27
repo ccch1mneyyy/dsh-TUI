@@ -205,6 +205,11 @@ const GROUPS = {
 // Uc 优先、代理对与 keyup 交错、Rc 重复展开、conhost 拆散粘贴重组、
 // Alt+numpad 两轮合成。
     ["verify-win32-input", ['node', '--import', 'tsx/esm', 'scripts/verify-win32-input.tsx']],
+// 粘贴记录残留清洗回归（issue #1090）：win32 记录残留（带 ESC 的完整形态
+// 与记录拆散后无 ESC 的尾部形态）必须在入口整体剥离、不留下 `_`；真实
+// 下划线、仅形似的方括号文本、普通 bracketed paste 与既有 ANSI/CRLF
+// 归一化零误伤。
+    ["verify-paste-residue", ['node', '--import', 'tsx/esm', 'scripts/verify-paste-residue.tsx']],
 // win32 协议重组回归：conhost 把 SGR/X10 鼠标报告与终端回复（DA1 等）
 // 合成成逐字符 CSI Vk;Sc;Uc;Kd;Cs;Rc 记录时，必须跨块重组回完整协议
 // 事件而不是逐键泄漏进输入框；截断的鼠标候选在 flush 时丢弃，单独
