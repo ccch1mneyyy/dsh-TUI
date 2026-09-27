@@ -32,7 +32,6 @@ type ResumeState = Pick<
   | 'working'
   | 'status'
   | 'agentId'
-  | 'sessionId'
   | 'cwd'
   | 'displayCwd'
   | 'agentPreset'
@@ -119,7 +118,6 @@ export function createSessionResumeActions(
     resetSessionProjection(state, deps.rowIds, deps.resetProjector, deps.resetSubagents, deps.resetJobs)
     state.status = handle.agent.status
     state.agentId = handle.agent.id
-    state.sessionId = handle.agent.session.id
     state.agentPreset = agentPreset
     if (route !== undefined) {
       state.provider = route.provider
@@ -384,32 +382,38 @@ export function createSessionResumeActions(
       if (!reserved.ok) return reserved.result
       reservation = reserved.reservation
     }
-    if (await deps.sessionSwitchVetoed('resume', sessionId)) {
-      reservation?.abandon()
-      return { ok: false, reason: 'cancelled' }
+    let handedOff = false
+    try {
+      if (await deps.sessionSwitchVetoed('resume', sessionId)) {
+        return { ok: false, reason: 'cancelled' }
+      }
+      await deps.settleCompaction()
+      if (!deps.binding.isCurrent(adoption) || deps.binding.agent.session !== entrySession) {
+        return { ok: false, reason: 'cancelled' }
+      }
+      // The target was read BEFORE those awaits. Re-read it in BOTH directions:
+      // the registry can have replaced or dropped that agent while we yielded
+      // (adopting the captured object would hand the screen a session nothing
+      // owns any more), and it can also have GROWN one — a peer action mounting
+      // this very session here means the disk path below would resume a log this
+      // process is already driving. `agent-view-projection.attach` has always made
+      // the first check.
+      const liveNow = agents.get?.(SessionId(sessionId))
+      if (liveNow !== live) {
+        return { ok: false, reason: 'cancelled' }
+      }
+      // A live target is adopted in place — the same path `/agentview` uses, so
+      // the session being left is parked rather than disposed of. Only a target
+      // with no live agent here goes back to the persistence backend.
+      if (live !== undefined) return deps.adoptLive(live)
+      handedOff = true
+      return resume(sessionId, 'agent-view', true, adoption, entrySession, reservation)
+    } finally {
+      // Once handed to resume(), that function owns settle/abandon for the
+      // reservation. Every earlier return or thrown setup hook must release it
+      // here, otherwise a failed attempt leaves the session falsely occupied.
+      if (!handedOff) reservation?.abandon()
     }
-    await deps.settleCompaction()
-    if (!deps.binding.isCurrent(adoption) || deps.binding.agent.session !== entrySession) {
-      reservation?.abandon()
-      return { ok: false, reason: 'cancelled' }
-    }
-    // The target was read BEFORE those awaits. Re-read it in BOTH directions:
-    // the registry can have replaced or dropped that agent while we yielded
-    // (adopting the captured object would hand the screen a session nothing
-    // owns any more), and it can also have GROWN one — a peer action mounting
-    // this very session here means the disk path below would resume a log this
-    // process is already driving. `agent-view-projection.attach` has always made
-    // the first check.
-    const liveNow = agents.get?.(SessionId(sessionId))
-    if (liveNow !== live) {
-      reservation?.abandon()
-      return { ok: false, reason: 'cancelled' }
-    }
-    // A live target is adopted in place — the same path `/agentview` uses, so
-    // the session being left is parked rather than disposed of. Only a target
-    // with no live agent here goes back to the persistence backend.
-    if (live !== undefined) return deps.adoptLive(live)
-    return resume(sessionId, 'agent-view', true, adoption, entrySession, reservation)
   }
 
   const newSessionWithTarget = async (target?: NewSessionTarget): Promise<boolean> => {
