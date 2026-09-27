@@ -94,7 +94,7 @@ const WHALE_OUTLINE = '\x1b[38;2;20;38;96m'
 
 // `ready`（可选）：call site 断言里比默认文字条件更强的正向条件必须并入
 // 等待谓词（#561 弱条件分叉），否则 settle 等到文字就返回、断言到旧帧。
-async function renderHeader({ columns, whale, ready }) {
+async function renderHeader({ columns, whale, ready, expect }) {
   const stdout = new FakeOutput(columns)
   const stderr = new FakeOutput(columns)
   const props = { model: 'whale-model-probe', cwd: '/whale/cwd' }
@@ -113,11 +113,12 @@ async function renderHeader({ columns, whale, ready }) {
       patchConsole: false,
     },
   )
+  // 默认等「文字列画出来了」；纯鲸鱼档没有文字列，用 expect 换掉这个前提。
+  const settled = expect ?? (plain => plain.includes('dsh-TUI') && plain.includes('whale-model-probe'))
   await settle(() => {
     const raw = stdout.writes.join('')
     const plain = stripAnsi(raw)
-    return plain.includes('dsh-TUI') && plain.includes('whale-model-probe')
-      && (ready === undefined || ready(raw))
+    return settled(plain) && (ready === undefined || ready(raw))
   })
   const raw = stdout.writes.join('')
   await instance.unmount()
@@ -167,6 +168,21 @@ check('narrow terminal drops the whale and falls back to the plain title', () =>
   assert.ok(!narrowDefault.raw.includes(WHALE_OUTLINE), 'whale should hide when the art no longer fits')
   assert.ok(narrowDefault.plain.includes('dsh-TUI'), 'text logo missing')
   assert.ok(narrowDefault.plain.includes('whale-model-probe'), 'header details missing')
+})
+
+// 阶梯独有的一档：48 列时大字放不下（最窄的 classic/slab 也要 54 列）、鲸鱼还放得下
+// ——只渲染鲸鱼，文字列整列不画（画出来只会是 `✦ dsh…` 这种残句）。对任何一款轮换
+// 字体都是这一档，所以这与"今天轮到哪款字体"无关。
+const WHALE_ONLY_COLUMNS = 48
+const whaleOnly = await renderHeader({
+  columns: WHALE_ONLY_COLUMNS,
+  expect: plain => !plain.includes('dsh-TUI'),
+  ready: raw => raw.includes(WHALE_OUTLINE),
+})
+check('whale-only tier renders the art and drops the whole text column', () => {
+  assert.ok(whaleOnly.raw.includes(WHALE_OUTLINE), 'whale missing in the whale-only tier')
+  assert.ok(!whaleOnly.plain.includes('dsh-TUI'), 'text column should not render in the whale-only tier')
+  assert.ok(!whaleOnly.plain.includes('whale-model-probe'), 'header details should not render either')
 })
 
 console.log(`\nAll ${checks} whale-toggle checks passed.`)
