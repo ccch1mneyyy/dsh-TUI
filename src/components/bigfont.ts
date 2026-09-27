@@ -17,14 +17,14 @@ export interface Rgb {
 
 /** Glyph rows are 5 columns wide; `·` is a transparent cell. */
 const GLYPHS: Record<string, readonly [string, string, string, string, string]> = {
-  D: ['█▀▀▀▄', '█···█', '█···█', '█···█', '█▄▄▄▀'],
-  E: ['█▀▀▀▀', '█····', '█▀▀▀·', '█····', '█▄▄▄▄'],
-  P: ['█▀▀▀▄', '█···█', '█▄▄▄▀', '█····', '█····'],
-  S: ['█▀▀▀▀', '█····', '·▀▀▀▄', '····█', '█▄▄▄▀'],
-  K: ['█···█', '█·█··', '██···', '█·█··', '█···█'],
-  H: ['█···█', '█···█', '█▀▀▀█', '█···█', '█···█'],
-  A: ['·▄▀▄·', '█···█', '█▀▀▀█', '█···█', '█···█'],
-  R: ['█▀▀▀▄', '█···█', '█▄▄▄▀', '█·█··', '█···█'],
+  D: ['████·', '█···█', '█···█', '█···█', '████·'],
+  E: ['█████', '█····', '████·', '█····', '█████'],
+  P: ['████·', '█···█', '████·', '█····', '█····'],
+  S: ['·████', '█····', '·███·', '····█', '████·'],
+  K: ['█···█', '█··█·', '███··', '█··█·', '█···█'],
+  H: ['█···█', '█···█', '█████', '█···█', '█···█'],
+  A: ['·███·', '█···█', '█████', '█···█', '█···█'],
+  R: ['████·', '█···█', '████·', '█··█·', '█···█'],
   N: ['█···█', '██··█', '█·█·█', '█··██', '█···█'],
 }
 
@@ -36,8 +36,8 @@ const FALLBACK: readonly [string, string, string, string, string] = [
   '▀▀▀▀▀',
 ]
 
-/** Per-glyph advance (5 glyph columns + 1 kerning column). */
-const ADVANCE = 6
+/** Two clear cells between letters keep their silhouettes separate. */
+const LETTER_GAP = 2
 /** Space between words. */
 const WORD_GAP = 2
 /** Sweep highlight window width, in terminal columns. */
@@ -45,6 +45,14 @@ const SWEEP_WINDOW = 8
 
 const esc = (rgb: Rgb): string => `\x1b[38;2;${rgb.r};${rgb.g};${rgb.b}m`
 const RESET = '\x1b[39m'
+
+/** Exact display width, including word/letter gaps but no trailing padding. */
+export function bigTextWidth(text: string): number {
+  const characters = Array.from(text)
+  return characters.reduce((width, ch, index) =>
+    width + (ch === ' ' ? WORD_GAP : 5)
+      + (index > 0 && ch !== ' ' && characters[index - 1] !== ' ' ? LETTER_GAP : 0), 0)
+}
 
 /**
  * Render `text` in the 5-row block font. The gradient runs `from` → `to`
@@ -67,7 +75,7 @@ export function renderBigText(
   flash: Rgb,
   stepMs = 60,
 ): string[] {
-  const width = text.length * ADVANCE + (text.includes(' ') ? WORD_GAP - 1 : 0)
+  const width = bigTextWidth(text)
   const cycle = width + SWEEP_WINDOW * 2
   const sweepStart = (Math.floor(time / stepMs) % cycle) - SWEEP_WINDOW
   const pulse = (Math.sin(time / (stepMs * 2)) + 1) / 2
@@ -100,14 +108,19 @@ export function renderBigText(
       out += ch
       x += 1
     }
+    let previous = ' '
     for (const ch of text) {
       if (ch === ' ') {
         for (let i = 0; i < WORD_GAP; i++) emit(' ')
+        previous = ch
         continue
+      }
+      if (previous !== ' ') {
+        for (let i = 0; i < LETTER_GAP; i++) emit(' ')
       }
       const glyph = GLYPHS[ch] ?? FALLBACK
       for (const cell of glyph[row]) emit(cell)
-      emit(' ')
+      previous = ch
     }
     if (current !== '') out += RESET
     rows.push(out)

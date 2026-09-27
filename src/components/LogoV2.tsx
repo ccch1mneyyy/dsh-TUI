@@ -9,7 +9,7 @@ import { Box, Text, useAnimationFrame, useTerminalSize } from '../ui.js'
 import { getTheme } from '../theme.js'
 import { useTheme } from './design-system/ThemeProvider.js'
 import { parseRGB } from './Spinner/spinnerUtils.js'
-import { renderBigText } from './bigfont.js'
+import { bigTextWidth, renderBigText } from './bigfont.js'
 import { stringWidth } from '../ink/stringWidth.js'
 import { BRAND, FLASH, ICE, PALE, sweep } from './shimmer.js'
 import { STANDARD_FRAME_INDEX, WhaleArt } from './Whale.js'
@@ -82,7 +82,8 @@ function capitalize(text: string): string {
  * the 5-row block font (brand-blue → ice gradient), the model/effort and
  * cwd in plain text (no brand-color highlight), the startup tip, and below
  * the whale the welcome tagline, centered under the art, in ice
- * blue. Narrow terminals drop the whale and keep the text column.
+ * blue. When the art font cannot fit, use a complete plain-text title.
+ * Narrow terminals drop the whale and keep the text column.
  */
 export function LogoV2({
   model,
@@ -190,6 +191,8 @@ export function LogoV2({
   const taglineRGB = parseRGB(theme.activity) ?? ICE
 
   const showWhale = whale && columns >= WHALE_MIN_COLUMNS
+  const textColumns = columns - (showWhale ? FULL_WHALE_WIDTH + 2 : 0)
+  const showBigTitle = textColumns >= bigTextWidth('DEEPSEEK')
 
   // Welcome-phase idle behaviors (settings `dsh-tui.whaleIdle`): fin
   // flutters, tail thumps and blinks while idle, and a sleep-Z loop after
@@ -306,16 +309,22 @@ export function LogoV2({
             {sweep('✦ dsh-TUI', t, wordmarkRGB, wordmarkShimmerRGB, 60)}
             <Text dimColor>{'  v' + VERSION}</Text>
           </Text>
-          {bigDeepSeek.map((row, index) => (
-            <Text key={`ds-${index}`} wrap="truncate-end">
-              {row}
-            </Text>
-          ))}
-          {bigHarness.map((row, index) => (
-            <Text key={`h-${index}`} wrap="truncate-end">
-              {row}
-            </Text>
-          ))}
+          <Box flexDirection="column" marginBottom={1}>
+            {showBigTitle ? (
+              <>
+                {bigDeepSeek.map((row, index) => (
+                  <Text key={`ds-${index}`} wrap="truncate-end">{row}</Text>
+                ))}
+                <Box flexDirection="column" marginTop={1}>
+                  {bigHarness.map((row, index) => (
+                    <Text key={`h-${index}`} wrap="truncate-end">{row}</Text>
+                  ))}
+                </Box>
+              </>
+            ) : (
+              <Text color="accent" bold wrap="wrap">DeepSeek Harness</Text>
+            )}
+          </Box>
           <Text wrap="truncate-end">
             {model}
             {effort !== undefined && <Text dimColor>{' · ' + capitalize(effort) + ' effort'}</Text>}

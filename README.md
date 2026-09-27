@@ -25,6 +25,8 @@
 ## Highlights
 
 - **Pixel whale pet** — three startup intros, click to wake; freezes after the first task.
+  Block lettering has more breathing room, keeps its original colors and gradients,
+  and switches to a readable plain-text title when the large title cannot fit.
 - **Terminal-native UI** — streaming Markdown, tool cards, `/` and `@` completion, `#L12-14` ranges, history search, zh/en UI.
 - **Images** — Kitty/Sixel thumbnails, centered preview with zoom and pan, paste-time fitting, text fallback.
 - **Mermaid diagrams** — ````mermaid ```` fences drawn as Unicode diagrams.
