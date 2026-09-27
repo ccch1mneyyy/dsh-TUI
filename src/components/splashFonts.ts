@@ -6,11 +6,15 @@
  * 家族感来自共用骨架。`classic`（老的 5 列空心字）与 `slab`（PR #1058 的实心横笔
  * 设计，作者 zdjmrq）是独立设计，各自成表。
  *
- * 契约（`scripts/verify-splash-layout.ts` 逐款钉死）：
+ * 契约（`scripts/verify-splash-layout.ts` / `verify-splash-eggs.tsx` 逐款钉死）：
  * - 每款 5 行；每个字形、每个 fallback 行的显示宽度都等于 `glyphWidth`；
  * - 两行标题画出来的列数必须**相等**（靠 tagline 的字距 + `bottomIndent` 撑）；
  * - 缺字走 `fallback` 而不是抛错，且不改变字身宽度。
+ *
+ * 字形覆盖两层：正常词 `DEEPSEEK`/`HARNESS`，以及节日彩蛋词用到的 `I M Y W`
+ * （`splashEggs.ts` 的日期表）。
  */
+import { bigTextWidth, paintedWidth } from './bigfont.js'
 
 /** 透明格用 `·` 表示。 */
 export type GlyphRows = readonly string[]
@@ -49,6 +53,11 @@ const BOLD_GLYPHS: GlyphTable = {
   A: ['·▄▀▀▄·', '██··██', '██▀▀██', '██··██', '██··██'],
   R: ['██▀▀▄▄', '██··██', '██▄▄▀▀', '██·██·', '██··██'],
   N: ['██··██', '███·██', '██·███', '██··██', '██··██'],
+  // 彩蛋字母（HAPPINESS / MERRY / NEW YEAR）：与 `N` 的斜笔同一套画法。
+  I: ['▀▀██▀▀', '··██··', '··██··', '··██··', '▄▄██▄▄'],
+  M: ['██··██', '██████', '██▀▀██', '██··██', '██··██'],
+  Y: ['██··██', '██··██', '▀▀██▀▀', '··██··', '··██··'],
+  W: ['██··██', '██··██', '██▄▄██', '██████', '██··██'],
 }
 const BOLD_FALLBACK: GlyphRows = ['▄▄▄▄▄▄', '██··██', '██··██', '██··██', '▀▀▀▀▀▀']
 
@@ -63,6 +72,11 @@ const CLASSIC_GLYPHS: GlyphTable = {
   A: ['·▄▀▄·', '█···█', '█▀▀▀█', '█···█', '█···█'],
   R: ['█▀▀▀▄', '█···█', '█▄▄▄▀', '█·█··', '█···█'],
   N: ['█···█', '██··█', '█·█·█', '█··██', '█···█'],
+  // 彩蛋字母：5 列 1 格笔画，与 `N` 同骨架。
+  I: ['▀▀█▀▀', '··█··', '··█··', '··█··', '▄▄█▄▄'],
+  M: ['█···█', '██·██', '█·█·█', '█···█', '█···█'],
+  Y: ['█···█', '█···█', '·█·█·', '··█··', '··█··'],
+  W: ['█···█', '█···█', '█·█·█', '██·██', '█···█'],
 }
 const CLASSIC_FALLBACK: GlyphRows = ['▄▄▄▄▄', '█···█', '█···█', '█···█', '▀▀▀▀▀']
 
@@ -77,6 +91,11 @@ const SLAB_GLYPHS: GlyphTable = {
   A: ['·███·', '█···█', '█████', '█···█', '█···█'],
   R: ['████·', '█···█', '████·', '█··█·', '█···█'],
   N: ['█···█', '██··█', '█·█·█', '█··██', '█···█'],
+  // 彩蛋字母：方角实心（没有 `▀`/`▄` 半格）。
+  I: ['█████', '··█··', '··█··', '··█··', '█████'],
+  M: ['█···█', '██·██', '█·█·█', '█···█', '█···█'],
+  Y: ['█···█', '█···█', '·█·█·', '··█··', '··█··'],
+  W: ['█···█', '█···█', '█·█·█', '██·██', '█···█'],
 }
 const SLAB_FALLBACK: GlyphRows = ['▄▄▄▄▄', '█···█', '█···█', '█···█', '▀▀▀▀▀']
 
@@ -126,24 +145,57 @@ const STENCIL: RowTransform = (row, y, rows) => {
   }).join('')
 }
 
+/** 一对词的字距解。 */
+interface TaglineKernings {
+  topKerning: number
+  bottomKerning: number
+  bottomIndent: number
+}
+
 /**
- * 字距：让两行标题画出来的列数相等——上排 8 字、下排 7 字，解得
- * `glyphWidth = 7·bottomKerning - 8·topKerning`；撑不到整数解时用 `bottomIndent`
- * 把下排居中（`wide` 8 列就落在这一档）。
- * @param glyphWidth - 字身宽度（列）。
- * @returns 两排的字距与下排缩进。
+ * 字距上限。当前词表最大用到 7（8 列字身 × `MERRY`），再大字形之间就空得能走人；
+ * 撞到上限还解不出来时走下面的兜底分支，而不是把字距一直放大。
  */
-function taglineFor(glyphWidth: number): { topKerning: number; bottomKerning: number; bottomIndent: number } {
-  for (let topKerning = 0; topKerning <= 4; topKerning++) {
-    const bottomKerning = (glyphWidth + 8 * topKerning) / 7
-    if (Number.isInteger(bottomKerning) && bottomKerning <= 4 && bottomKerning >= topKerning) {
-      return { topKerning, bottomKerning, bottomIndent: 0 }
+const MAX_KERNING = 8
+
+/**
+ * 解一对词的标题字距：让两行**画出来的列数相等**，且下排墨迹在上排墨迹下居中
+ * （左右留白差 ≤ 1 列）。词长不再写死——旧的 `taglineFor` 把「上排 8 字、下排
+ * 7 字」代进方程解，彩蛋词长度不同（9 / 5 / 7 字）就解不动了。
+ *
+ * 契约（`painted` 含末尾字距留白，`ink` 不含）：
+ *   painted(top, tk) = painted(bottom, bk) + indent        （indent ≥ 0，两行等宽）
+ *   |ink(top, tk) − ink(bottom, bk) − 2·indent| ≤ 1        （下排墨迹居中）
+ * 相减即 `|indent − (bk − tk)| ≤ 1`——所以缩进不是自由变量，字距才是。
+ *
+ * 选解顺序：先要求两行相邻字形之间都至少留 1 列（字身相接会糊成一片），再按
+ * `tk + bk` 从小到大取第一个满足契约的解——字距最紧、画面最不松散。个别
+ * (字身宽, 词长) 组合（如 8 列的 `wide` × 9 字的 `HAPPINESS`）只解得出下排零字距，
+ * 那时才退到允许 0：契约（等宽 + 居中）优先于美观。
+ * @param glyphWidth - 字身宽度（列）。
+ * @param top - 上排词。
+ * @param bottom - 下排词（可含空格，空格宽度由 `paintedWidth` 算）。
+ * @returns 两排字距与下排缩进。
+ */
+function solveTagline(glyphWidth: number, top: string, bottom: string): TaglineKernings {
+  const metrics = { glyphWidth }
+  // 兜底：契约在字距上限内无解时，宁可居中差一点，也不让开屏抛错（当前词表不可达）。
+  let closest: (TaglineKernings & { error: number }) | null = null
+  for (const minKerning of [1, 0]) {
+    for (let sum = minKerning * 2; sum <= MAX_KERNING * 2; sum++) {
+      for (let topKerning = minKerning; topKerning <= Math.min(sum - minKerning, MAX_KERNING); topKerning++) {
+        const bottomKerning = sum - topKerning
+        const bottomIndent = paintedWidth(metrics, top, topKerning) - paintedWidth(metrics, bottom, bottomKerning)
+        if (bottomIndent < 0) continue
+        const error = Math.abs(
+          bigTextWidth(metrics, top, topKerning) - bigTextWidth(metrics, bottom, bottomKerning) - 2 * bottomIndent,
+        )
+        if (error <= 1) return { topKerning, bottomKerning, bottomIndent }
+        if (closest === null || error < closest.error) closest = { topKerning, bottomKerning, bottomIndent, error }
+      }
     }
   }
-  const topKerning = 1
-  const bottomKerning = 2
-  const indent = 8 * (glyphWidth + topKerning) - 7 * (glyphWidth + bottomKerning)
-  return { topKerning, bottomKerning, bottomIndent: Math.max(0, indent) }
+  return closest ?? { topKerning: 1, bottomKerning: 1, bottomIndent: 0 }
 }
 
 const TOP_WORD = 'DEEPSEEK'
@@ -151,7 +203,20 @@ const BOTTOM_WORD = 'HARNESS'
 
 const font = (id: string, label: string, glyphs: GlyphTable, fallback: GlyphRows): SplashFont => {
   const glyphWidth = [...(glyphs.D ?? fallback)[0] ?? ''].length
-  return { id, label, glyphWidth, glyphs, fallback, tagline: { top: TOP_WORD, bottom: BOTTOM_WORD, ...taglineFor(glyphWidth) } }
+  return { id, label, glyphWidth, glyphs, fallback, tagline: { top: TOP_WORD, bottom: BOTTOM_WORD, ...solveTagline(glyphWidth, TOP_WORD, BOTTOM_WORD) } }
+}
+
+/**
+ * 换一副标题词（节日彩蛋用）：字形、字身宽度、id 都不变，只按新词重解字距。
+ * 布局阈值（`resolveSplashLayout`）与渲染都读字体自己的 `tagline`，所以派生对象
+ * 可以直接顶替原字体——窄终端阶梯一行都不用改。
+ * @param font - 基准字体。
+ * @param top - 上排词。
+ * @param bottom - 下排词。
+ * @returns 换词后的字体描述符。
+ */
+export function withTagline(font: SplashFont, top: string, bottom: string): SplashFont {
+  return { ...font, tagline: { top, bottom, ...solveTagline(font.glyphWidth, top, bottom) } }
 }
 
 /**

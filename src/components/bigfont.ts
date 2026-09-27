@@ -16,6 +16,15 @@ export interface Rgb {
   b: number
 }
 
+/**
+ * 画字量宽只需要字身宽度——`SplashFont` 天然满足，`splashFonts.ts` 解字距时
+ * 手里只有宽度，也能直接复用同一套算术。
+ */
+export interface GlyphMetrics {
+  /** 字身宽度（列）。 */
+  readonly glyphWidth: number
+}
+
 /** 词组之间的间隔列数。 */
 const WORD_GAP = 2
 /** 扫光窗口宽度（列）。 */
@@ -27,14 +36,14 @@ const esc = (rgb: Rgb): string => `\x1b[38;2;${rgb.r};${rgb.g};${rgb.b}m`
 const RESET = '\x1b[39m'
 
 /**
- * `text` 在该字体、该字距下画出来的列数（含末尾那格字距留白）——与渲染循环
- * 用同一套算术，放在这里以免两处漂移。
- * @param font - 字体描述符。
+ * `text` 在该字身宽度、该字距下画出来的列数（含末尾那格字距留白）——与渲染循环
+ * 用同一套算术，放在这里以免两处漂移（`splashFonts.ts` 解字距时也读它）。
+ * @param font - 字体度量（只用到字身宽度）。
  * @param text - 要量的文本。
  * @param kerning - 每个字形之后补的空列数。
  * @returns 画出来的列数。
  */
-function paintedWidth(font: SplashFont, text: string, kerning: number): number {
+export function paintedWidth(font: GlyphMetrics, text: string, kerning: number): number {
   let width = 0
   for (const ch of text) width += ch === ' ' ? WORD_GAP : font.glyphWidth + kerning
   return width
@@ -44,12 +53,12 @@ function paintedWidth(font: SplashFont, text: string, kerning: number): number {
  * `text` 的显示宽度：含字距、**不含**最后一个字形之后的留白。开屏用它判断
  * 某个词还放不放得下（配合鲸鱼），`verify-splash-layout` 会把它与实际画出的
  * 列数对齐钉死。
- * @param font - 字体描述符。
+ * @param font - 字体度量（只用到字身宽度）。
  * @param text - 要量的文本（只有字体表里定义的字母有字形）。
  * @param kerning - 每个字形之后的空列数（默认 1）。
  * @returns 显示宽度（终端列）。
  */
-export function bigTextWidth(font: SplashFont, text: string, kerning = 1): number {
+export function bigTextWidth(font: GlyphMetrics, text: string, kerning = 1): number {
   const characters = Array.from(text)
   if (characters.length === 0) return 0
   const trailing = characters[characters.length - 1] === ' ' ? WORD_GAP : kerning

@@ -11,7 +11,8 @@ import { useTheme } from './design-system/ThemeProvider.js'
 import { parseRGB } from './Spinner/spinnerUtils.js'
 import { renderBigText } from './bigfont.js'
 import { COLUMN_GAP, WHALE_BOX_WIDTH, resolveSplashLayout } from './splashLayout.js'
-import { pickSplashFont, splashFontById, type SplashFont } from './splashFonts.js'
+import { withTagline, pickSplashFont, splashFontById, type SplashFont } from './splashFonts.js'
+import { pickSplashEgg, pickSplashStar, splashStarLine, type SplashEgg } from './splashEggs.js'
 import { stringWidth } from '../ink/stringWidth.js'
 import { BRAND, FLASH, ICE, PALE, sweep } from './shimmer.js'
 import { STANDARD_FRAME_INDEX, WhaleArt } from './Whale.js'
@@ -80,6 +81,12 @@ function capitalize(text: string): string {
  * whale + big text, then the big text alone, then the whale alone, then one
  * plain title line. The face rotates by local date (`pickSplashFont`), so a
  * given day always shows the same one.
+ *
+ * Two easter eggs sit on top of that layout without changing it (both live in
+ * `splashEggs.ts`): the holiday word pair swaps the two big-text words on its
+ * date (`MERRY` on 12/25, …), and a 1-in-20 roll replaces the welcome tagline
+ * with a clickable "star us on GitHub" line whose indent is recomputed from
+ * its own width.
  */
 export function LogoV2({
   model,
@@ -93,6 +100,8 @@ export function LogoV2({
   whaleIdle = true,
   working = false,
   drift,
+  egg,
+  starChance,
 }: {
   model: string
   effort?: string | undefined
@@ -106,6 +115,13 @@ export function LogoV2({
   fontId?: string | undefined
   /** Test seam: pin the startup tip line (probes need a deterministic tip). */
   tip?: Tip
+  /** Test seam: pin the holiday word pair instead of reading the local date
+   * (`null` forces the normal words; `undefined` — production — rolls by
+   * date). See `splashEggs.ts`. */
+  egg?: SplashEgg | null
+  /** Test seam: pin the star tagline's chance (1 forces the egg, 0 suppresses
+   * it; production rolls `SPLASH_STAR_CHANCE` once per mount). */
+  starChance?: number
   /** Show the pixel whale art (settings `dsh-tui.whale`); off → text-only header. */
   whale?: boolean
   /** Welcome-phase idle whale behaviors — fin flutters, tail thumps,
@@ -194,8 +210,13 @@ export function LogoV2({
   const [dailyFont] = React.useState<SplashFont>(() => pickSplashFont())
   const font = fontId === undefined ? dailyFont : splashFontById(fontId)
 
+  // 节日彩蛋：本地日期整天恒定，每次 mount 只判一次（照 pickSplashFont 的写法）。
+  // 只换词——字身宽度不变、字距按新词重解，所以阶梯阈值也跟着当天真实标题宽度走。
+  const [dailyEgg] = React.useState<SplashEgg | null>(() => (egg === undefined ? pickSplashEgg() : egg))
+  const titleFont = dailyEgg === null ? font : withTagline(font, dailyEgg.top, dailyEgg.bottom)
+
   // 窄终端阶梯：鲸鱼 + 大字 → 纯大字 → 纯鲸鱼 → 一行纯文字（阈值随字体字身宽度变）。
-  const { showWhale, showBigTitle, showPlainTitle } = resolveSplashLayout(columns, { whale, font })
+  const { showWhale, showBigTitle, showPlainTitle } = resolveSplashLayout(columns, { whale, font: titleFont })
 
   // Welcome-phase idle behaviors (settings `dsh-tui.whaleIdle`): fin
   // flutters, tail thumps and blinks while idle, and a sleep-Z loop after
@@ -260,6 +281,10 @@ export function LogoV2({
   const t = settled ? 0 : time
 
   const tagline = tr('logo-tagline')
+  // 求 star 彩蛋：概率每次 mount 只掷一次——切语言/改窗口/重绘都不重掷，
+  // 否则那一行会自己闪进闪出。`starChance` 是测试缝（0/1 强制不中/命中）。
+  const [starred] = React.useState<boolean>(() => pickSplashStar(starChance))
+  const starLine = starred ? splashStarLine() : null
   // One random tip per mount: the settled header must not re-roll on every
   // repaint (language switch, terminal resize), or the line would flicker.
   // `tip` is a test seam; production always passes undefined and rolls.
@@ -270,16 +295,21 @@ export function LogoV2({
   const [driftLine] = React.useState<UpstreamDriftSummary | null | undefined>(() =>
     drift === undefined ? upstreamDriftSummary() : drift,
   )
-  // Indent that centers the tagline under the whale art's bounding box.
+  // Indent that centers the tagline under the whale art's bounding box, from
+  // the width the line ACTUALLY shows: the star easter egg renders a longer
+  // line than `logo-tagline`, so reusing the tagline's width would push it
+  // visibly off-center.
+  const welcomeWidth = starLine === null ? stringWidth(tagline) : starLine.width
   const welcomePad = showWhale
-    ? Math.max(0, Math.round(WHALE_CENTER - stringWidth(tagline) / 2))
+    ? Math.max(0, Math.round(WHALE_CENTER - welcomeWidth / 2))
     : 2
 
   // 两行标题各自用字体声明的字距；下排再按 `bottomIndent` 居中——
   // 两者一起保证画出来的列数相等（见 splashFonts 的 tagline 契约）。
-  const { top, bottom, topKerning, bottomKerning, bottomIndent } = font.tagline
-  const bigDeepSeek = renderBigText(font, top, t, wordmarkRGB, taglineRGB, FLASH, 60, topKerning)
-  const bigHarness = renderBigText(font, bottom, t, taglineRGB, PALE, FLASH, 60, bottomKerning, bottomIndent)
+  // 节日彩蛋换的就是这里的两排词（`titleFont` 已按当天词对重解字距）。
+  const { top, bottom, topKerning, bottomKerning, bottomIndent } = titleFont.tagline
+  const bigDeepSeek = renderBigText(titleFont, top, t, wordmarkRGB, taglineRGB, FLASH, 60, topKerning)
+  const bigHarness = renderBigText(titleFont, bottom, t, taglineRGB, PALE, FLASH, 60, bottomKerning, bottomIndent)
 
   return (
     <Box ref={ref} flexDirection="column" marginTop={1}>
@@ -369,7 +399,15 @@ export function LogoV2({
         )}
       </Box>
       <Box marginTop={1} paddingLeft={welcomePad}>
-        <Text>{sweep(tagline, t, taglineRGB, FLASH, 60)}</Text>
+        {starLine === null ? (
+          <Text>{sweep(tagline, t, taglineRGB, FLASH, 60)}</Text>
+        ) : (
+          <Text>
+            {sweep(starLine.lead, t, taglineRGB, FLASH, 60)}
+            {starLine.link}
+            {sweep(starLine.tail, t, taglineRGB, FLASH, 60)}
+          </Text>
+        )}
       </Box>
     </Box>
   )

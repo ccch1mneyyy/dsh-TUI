@@ -117,6 +117,10 @@ const GROUPS = {
 // 开屏头部契约：大字 5 行高且等宽（8×7 = 7×8）、bigTextWidth 与实际画出的列数
 // 一致；窄终端按「鲸鱼+大字 → 纯大字 → 纯鲸鱼 → 纯文字」逐档降级，档位无空档。
     ["verify-splash-layout", ['node', '--import', 'tsx/esm', 'scripts/verify-splash-layout.ts']],
+// 开屏彩蛋契约：节日换词（每款字体都要有 HAPPINESS/MERRY/NEW YEAR 的全部字形，
+// 两行等宽 + 下排居中取最紧解）与 1/20 的求 star 标语（OSC 8 成对 + URL 正确、
+// 缩进按该行实际宽度重算、不支持超链接时退化成纯文本 URL），并挂真实 LogoV2 读屏。
+    ["verify-splash-eggs", ['node', '--import', 'tsx/esm', 'scripts/verify-splash-eggs.tsx']],
 // settled 子代理卡片不得永久持有动画时钟（空闲帧归零回归）：
 // 曾以 120ms/卡片持续驱动 React commit，N 张相位错开合成 ~30ms
 // 均匀帧 cadence。
