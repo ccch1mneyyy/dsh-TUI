@@ -189,7 +189,60 @@ const XTVERSION_RE = /^\x1bP>\|(.*?)(?:\x07|\x1b\\)$/s
 // eslint-disable-next-line no-control-regex
 const SGR_MOUSE_RE = /^\x1b\[<(\d+);(\d+);(\d+)([Mm])$/
 
+/**
+ * Terminal control sequences that must never survive into a paste payload.
+ *
+ * A desktop file DROP reaches the TUI as terminal bytes, not as text: Windows
+ * Terminal / OpenConsole hand a dropped path over as an OSC 8 hyperlink
+ * (`ESC ] 8 ; <params> ; file:///… ST`), and a `DECSET 9001` (win32-input-mode)
+ * host additionally decomposes that payload into per-character key records
+ * (see the decomposed-paste matcher below). Those records carry the ESC bytes,
+ * which `parseWin32KeyEvent` maps to an `escape` key, so the reassembler
+ * collected the sequence body as paste text with every ESC removed — the
+ * prompt then showed `[16;42;0;1;16;1…` instead of a path. Stripping the
+ * sequences from the assembled payload removes the middleman: the plain path
+ * survives (or nothing does), and no fragment can reach the draft.
+ */
+// eslint-disable-next-line no-control-regex -- deliberate: paste payloads carry terminal sequences
+const OSC_IN_PASTE = /\u001b\][^\u0007\u001b]*(?:\u0007|\u001b\\)?/gu
+/** CSI (colors, motions) — never meaningful inside pasted text. */
+// eslint-disable-next-line no-control-regex
+const CSI_IN_PASTE = /\u001b\[[0-9;:?<=>]*[ -/]*[@-~]/gu
+/**
+ * Any remaining ESC, taken with ONE following character. The bodies above
+ * already consumed their own terminators, so what is left is an unterminated
+ * or non-CSI/OSC sequence; the payload is terminal bytes, never user text, so
+ * dropping the pair is the conservative choice.
+ */
+// eslint-disable-next-line no-control-regex
+const ESC_IN_PASTE = /\u001b[\s\S]?/gu
+/**
+ * C0 controls that carry no editable meaning. TAB, CR/LF and DEL survive: the
+ * first three are the composer's to normalize, and DEL is a pre-existing
+ * paste-payload contract (`verify-keys.tsx` pins that a bracketed paste keeps
+ * its embedded DEL as data rather than letting it delete).
+ *
+ * The C1 band (U+0080–U+009F) is deliberately NOT stripped: stdin is decoded
+ * as UTF-8, so a C1 code point here is a character the user pasted, not a
+ * terminal byte, and the composer's own contract keeps it.
+ */
+// eslint-disable-next-line no-control-regex
+const INERT_IN_PASTE = /[\u0000-\u0008\u000b\u000c\u000e-\u001f]/gu
+
+/** Ordered strip for one paste payload — see {@link OSC_IN_PASTE}. */
+function cleanPastePayload(content: string): string {
+  return content
+    .replace(OSC_IN_PASTE, '')
+    .replace(CSI_IN_PASTE, '')
+    .replace(ESC_IN_PASTE, '')
+    .replace(INERT_IN_PASTE, '')
+}
+
 function createPasteKey(content: string): ParsedKey {
+  // Terminal control sequences are stripped at the ONE choke point every
+  // paste path goes through (VT bracketed paste, the decomposed win32 paste,
+  // and both flush paths), so no caller has to remember to do it.
+  const text = cleanPastePayload(content)
   return {
     kind: 'key',
     name: '',
@@ -199,8 +252,8 @@ function createPasteKey(content: string): ParsedKey {
     shift: false,
     option: false,
     super: false,
-    sequence: content,
-    raw: content,
+    sequence: text,
+    raw: text,
     isPasted: true,
   }
 }

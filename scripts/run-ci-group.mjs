@@ -236,6 +236,13 @@ const GROUPS = {
 // 事件而不是逐键泄漏进输入框；截断的鼠标候选在 flush 时丢弃，单独
 // Escape/未知 CSI/物理键不受影响。
     ["verify-win32-protocol", ['node', '--import', 'tsx/esm', 'scripts/verify-win32-protocol.ts']],
+// 拖放文件粘贴回归：Windows 把拖入的文件名作为 OSC 8 超链接
+// （ESC ] 8 ; params ; file:///… ST）送入，win32-input-mode 还会把它拆成
+// 逐字符记录——ESC 被当协议消费后，OSC 参数残渣（[16;42;0;1;16;1…）会
+// 落进输入框。粘贴载荷必须剥掉完整序列与残留 ESC，载荷里不得再出现 ESC
+// 字节或 file:// 文本；同时 TAB/CR/LF/DEL 与既有粘贴契约不变，file:// URI
+// 仍能解码成路径进入图片/附件管线。
+    ["verify-paste-drop", ['node', '--import', 'tsx/esm', 'scripts/verify-paste-drop.ts']],
 // 退出漏斗回归（issue #12）：上下文 teardown 不得走到进程退出。
     ["verify-teardown-exit", ['node', '--import', 'tsx/esm', 'scripts/verify-teardown-exit.tsx']],
 // 退出 resume marker 回归（issue #42）：仅有实际消息或 pending 操作时保留 marker。
