@@ -112,6 +112,8 @@ export default class Ink {
     getSnapshot: (): boolean => this.altScreenActive && (this.kittyGraphicsSupported || this.sixelGraphicsSupported) &&
       !this.isPaused && !this.terminalQueriesSuspended && !this.isUnmounted,
     getCellSize: () => this.measuredImageCellSize,
+    getProtocol: (): 'kitty' | 'sixel' | undefined =>
+      !this.terminalImages.getSnapshot() ? undefined : this.kittyGraphicsSupported ? 'kitty' : 'sixel',
     request: (): (() => void) => {
       if (this.isUnmounted) return noop;
       this.terminalImageRequests += 1;

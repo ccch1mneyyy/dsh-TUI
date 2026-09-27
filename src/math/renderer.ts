@@ -70,7 +70,13 @@ export type MathRenderResult =
   | { readonly ok: true; readonly raster: MathRaster }
   | { readonly ok: false; readonly failure: MathFailureCode }
 
-type Vector = { readonly svg: string; readonly widthEx: number; readonly heightEx: number }
+type Vector = {
+  readonly svg: string
+  readonly widthEx: number
+  readonly heightEx: number
+  /** Baseline offset MathJax reports; kept for inline baseline alignment. */
+  readonly verticalAlignEx: number
+}
 type VectorResult = Vector | { readonly failure: MathFailureCode }
 
 /** LRU bounded by entry count and by the summed weight of its values. */
@@ -150,8 +156,8 @@ async function typeset(tex: string, display: boolean): Promise<VectorResult> {
   if (engine === undefined) return { failure: 'backend-unavailable' }
   let result: VectorResult
   try {
-    const { svg, widthEx, heightEx } = engine.convert(tex, display)
-    result = { svg, widthEx, heightEx }
+    const { svg, widthEx, heightEx, verticalAlignEx } = engine.convert(tex, display)
+    result = { svg, widthEx, heightEx, verticalAlignEx }
   } catch {
     result = { failure: 'tex-error' }
   }

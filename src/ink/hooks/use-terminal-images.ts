@@ -5,10 +5,25 @@ interface TerminalImages {
   subscribe(listener: () => void): () => void
   getSnapshot(): boolean
   getCellSize?(): TerminalCellSize | undefined
+  getProtocol?(): TerminalImageProtocolName | undefined
   request(): () => void
 }
 
+/** The graphics protocol the renderer paints images with. */
+export type TerminalImageProtocolName = 'kitty' | 'sixel'
+
 const noCellSize = (): undefined => undefined
+const noProtocol = (): undefined => undefined
+
+/**
+ * The protocol images are painted with, or undefined without graphics.
+ * Kitty places an image over arbitrary cells (inline formulas need that);
+ * Sixel paints its pixels with the frame and suits block-level images.
+ */
+export function useTerminalImageProtocol(): TerminalImageProtocolName | undefined {
+  const images = useContext(TerminalImagesContext)
+  return useSyncExternalStore(images.subscribe, images.getProtocol ?? noProtocol)
+}
 
 /** Only measured pixels qualify for an original-pixel (100%) image view. */
 export function useTerminalImageCellSize(): TerminalCellSize | undefined {

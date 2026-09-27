@@ -310,7 +310,7 @@ export function StreamingMarkdown({
   }
 
   if (blocks.definitions) {
-    return <Markdown dimColor={dimColor} cacheTokens={false}>{stripped}</Markdown>
+    return <Markdown dimColor={dimColor} inlineMathImages={false} cacheTokens={false}>{stripped}</Markdown>
   }
 
   const stablePrefix = prefixRef.current
@@ -344,17 +344,17 @@ export function StreamingMarkdown({
     <Box flexDirection="column">
       {blocks.blocks.map((block, index) => (
         <Box key={index} flexDirection="column" marginTop={block.gap}>
-          <Markdown dimColor={dimColor}>{block.text}</Markdown>
+          <Markdown dimColor={dimColor} inlineMathImages={false}>{block.text}</Markdown>
         </Box>
       ))}
       {prefixTail && (
         <Box key="prefix" flexDirection="column" marginTop={blocks.tailGap}>
-          <Markdown dimColor={dimColor}>{prefixTail}</Markdown>
+          <Markdown dimColor={dimColor} inlineMathImages={false}>{prefixTail}</Markdown>
         </Box>
       )}
       {hasDistinctSuffix && (
         <Box key="suffix" flexDirection="column" marginTop={boundaryGap}>
-          <Markdown dimColor={dimColor} cacheTokens={false}>{unstableSuffix}</Markdown>
+          <Markdown dimColor={dimColor} inlineMathImages={false} cacheTokens={false}>{unstableSuffix}</Markdown>
         </Box>
       )}
     </Box>

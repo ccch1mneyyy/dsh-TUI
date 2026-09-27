@@ -4,10 +4,11 @@ import { Box, Text } from '../ui.js'
 import { configureMarked, formatToken, stripPromptXMLTags } from '../terminal-utils/markdown.js'
 import { getCliHighlightPromise, type CliHighlight } from '../terminal-utils/cliHighlight.js'
 import { isMermaidLang } from '../terminal-utils/mermaid.js'
-import { isMathBlockToken } from '../terminal-utils/math.js'
+import { isMathBlockToken, isMathToken } from '../terminal-utils/math.js'
 import { getMathRendering, subscribeMathRendering } from '../tuiDisplayPrefs.js'
 import { MarkdownTable } from './MarkdownTable.js'
 import { MermaidDiagram } from './MermaidDiagram.js'
+import { InlineMathParagraph } from './InlineMathParagraph.js'
 import { MathBlock } from './MathBlock.js'
 
 /**
@@ -29,6 +30,12 @@ type Props = {
   dimColor?: boolean
   /** 为 false 时跳过 token 缓存（流式尾部的内容逐帧变化，缓存必然失效） */
   cacheTokens?: boolean
+  /**
+   * Whether paragraphs may show inline math as images (`mathRendering:
+   * image`). Streaming text passes false: a paragraph switching to images
+   * mid-stream would re-wrap under the reader; the settled message switches.
+   */
+  inlineMathImages?: boolean
 }
 
 // ---- token 缓存 ----
@@ -112,6 +119,14 @@ export function isStandaloneToken(token: Token): boolean {
   return token.type === 'table' || isMermaidToken(token) || isMathBlockToken(token)
 }
 
+/** Whether a paragraph holds inline math anywhere in its inline tokens. */
+function hasInlineMath(token: Token): boolean {
+  for (const child of (token as { tokens?: Token[] }).tokens ?? []) {
+    if (isMathToken(child) || hasInlineMath(child)) return true
+  }
+  return false
+}
+
 function isMermaidToken(token: Token): token is Tokens.Code {
   return token.type === 'code' && isMermaidLang((token as Tokens.Code).lang)
 }
@@ -124,10 +139,12 @@ function renderTokensToNodes(
   tokens: Token[],
   highlight: CliHighlight | null,
   dimColor: boolean,
+  inlineMathImages: boolean,
 ): React.ReactNode[] {
   const nodes: React.ReactNode[] = []
   let ansiText = ''
   let textParts: string[] = []
+  let afterOwnNode = false
 
   const flushAnsiText = (): void => {
     if (!ansiText && textParts.length === 0) return
@@ -156,6 +173,8 @@ function renderTokensToNodes(
   }
 
   for (const token of tokens) {
+    const ownNodeBefore = afterOwnNode
+    afterOwnNode = false
     if (token.type === 'table') {
       flushAnsiText()
       nodes.push(
@@ -165,6 +184,14 @@ function renderTokensToNodes(
           highlight={highlight}
         />,
       )
+    } else if (inlineMathImages && token.type === 'paragraph' && hasInlineMath(token)) {
+      flushAnsiText()
+      nodes.push(<InlineMathParagraph key={nodes.length} token={token as Tokens.Paragraph} highlight={highlight} />)
+      afterOwnNode = true
+    } else if (ownNodeBefore && token.type === 'space') {
+      // The blank line after a paragraph that became its own node is the
+      // column gap now; as text it would flush as an empty node (an extra
+      // gap row). In a text run the same newline is trimmed at the flush.
     } else if (isMathBlockToken(token)) {
       flushAnsiText()
       nodes.push(<MathBlock key={nodes.length} token={token} dimColor={dimColor} />)
@@ -204,7 +231,7 @@ function renderTokensToNodes(
  * block — the dominant long-output stall (string-width via wrap-ansi, 60%+
  * of CPU in streaming profiles).
  */
-function MarkdownImpl({ children, dimColor = false, cacheTokens = true }: Props): React.ReactNode {
+function MarkdownImpl({ children, dimColor = false, cacheTokens = true, inlineMathImages = true }: Props): React.ReactNode {
   const [highlight, setHighlight] = React.useState<CliHighlight | null>(null)
   // Inline math is baked into the ANSI text, so the switch must invalidate
   // the memo below (MathBlock nodes subscribe on their own).
@@ -228,8 +255,10 @@ function MarkdownImpl({ children, dimColor = false, cacheTokens = true }: Props)
       lexWithCache(source, cacheTokens),
       highlight,
       dimColor,
+      // Dimmed text (thinking) cannot dim an image, so it keeps Unicode.
+      inlineMathImages && mathRendering === 'image' && !dimColor,
     )
-  }, [children, dimColor, highlight, cacheTokens, mathRendering])
+  }, [children, dimColor, highlight, cacheTokens, mathRendering, inlineMathImages])
 
   return (
     <Box flexDirection="column" gap={1}>
@@ -247,5 +276,6 @@ export const Markdown = React.memo(
   (prev, next) =>
     prev.children === next.children &&
     prev.dimColor === next.dimColor &&
-    prev.cacheTokens === next.cacheTokens,
+    prev.cacheTokens === next.cacheTokens &&
+    prev.inlineMathImages === next.inlineMathImages,
 )
