@@ -16,10 +16,12 @@ import { join } from 'node:path'
 process.env.FORCE_COLOR = '3'
 process.env.DSH_TUI_LANG = 'zh'
 // adapter 走 os.homedir()（Windows 读 USERPROFILE）：两个都指到空夹具目录，
-// 扫描既不碰真实数据，也保证各源计数为 0、启动提示检测无信号。
+// 扫描既不碰真实数据，也保证各源计数为 0、启动提示检测无信号。grok-build 还
+// 认 GROK_HOME，一并钉到夹具下的 .grok（否则挂载后的活动检测会扫真实会话库）。
 const fixtureHome = mkdtempSync(join(tmpdir(), 'verify-migrate-command-'))
 process.env.HOME = fixtureHome
 process.env.USERPROFILE = fixtureHome
+process.env.GROK_HOME = join(fixtureHome, '.grok')
 
 const [{ PassThrough, Writable }, React, { render }, { Chat }, { QuestionStore }, { LOCAL_COMMANDS }] = await Promise.all([
   import('node:stream'),
@@ -225,6 +227,28 @@ const UNKNOWN = '未知迁移源'
   const reopened = chat.since(mark)
   check('5a. 重开渲染出源行（行缓存不是空态）', reopened.includes('Claude Code'))
   check('5b. 重开 picker 不残留上一轮勾选', !reopened.includes('[x]'), reopened.replace(/\s+/gu, ' ').slice(0, 120))
+  await chat.unmount()
+}
+
+// ── 6. direct 入口的确认层 Esc 回 picker：勾选必须与确认内容一致 ────────
+// 空夹具家目录下没有近期活动 → 行序＝注册表序（claude-code, codex, …），
+// 所以「↓ + 空格」勾的是 Codex。随后 `/migrate claude-code` 的确认层说的是
+// claude-code；Esc 回 picker 时若还挂着 Codex 的勾，用户看到的与刚确认的就
+// 不是同一件事（Enter 会导入 Codex）。direct 分支因此把勾选钉成该单源——
+// 断言按下 Enter 后确认层列的到底是哪个源（行为，而非渲染细节）。
+{
+  const chat = await mountChat()
+  await chat.run('/migrate')
+  await chat.keys(['\u001b[B', ' '])
+  await chat.keys([ESC])
+  await chat.run('/migrate claude-code')
+  await chat.keys([ESC])
+  const mark = chat.mark()
+  await chat.keys(['\r'])
+  const after = chat.since(mark)
+  check('6a. Esc 回 picker 后 Enter 导入的是刚确认的那个源', after.includes('Claude Code'),
+    after.replace(/\s+/gu, ' ').slice(0, 160))
+  check('6b. 早先勾的 Codex 不再残留', !after.includes('Codex'))
   await chat.unmount()
 }
 

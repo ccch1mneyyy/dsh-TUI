@@ -1609,6 +1609,18 @@ export function Chat({
     const result = await execFileNoThrow(process.execPath, [bin, 'migrate', ...parts], {
       timeout: MIGRATE_CHILD_TIMEOUT_MS,
     })
+    // A killed child reports `code: null` and whatever it managed to print; put
+    // the reason on the record so the transcript does not read as a silent
+    // failure. Nothing at all (no code, no output) means it never really ran.
+    if (result.code === null) {
+      return {
+        code: null,
+        out: `${result.stdout}${result.stderr}${t('migrate-child-timeout', { minutes: MIGRATE_CHILD_TIMEOUT_MS / 60_000 })}\n`,
+      }
+    }
+    if (result.code === 1 && result.stdout === '' && result.stderr === '') {
+      channel.notify(t('migrate-spawn-failed'), { color: 'error', timeoutMs: 8000 })
+    }
     // stdout carries the per-source report, stderr the usage/error lines;
     // both belong in the /migrate transcript row.
     return { code: result.code, out: `${result.stdout}${result.stderr}` }
@@ -1641,7 +1653,14 @@ export function Chat({
           )
         }
       }
-      channel.pushLocal('/migrate', allOut.length > 0 ? allOut : [dryRun ? t('migrate-all-previewed', { n: rows.length }) : t('migrate-all-done', { n: rows.length })])
+      // The transcript row is this run's record. When a source failed AND no
+      // child output was captured at all (killed by the timeout, or never
+      // spawned), the success wording would contradict the notification right
+      // above it — report the failure here too.
+      const fallbackLine = failures > 0
+        ? t('migrate-failed', { n: failures })
+        : t(dryRun ? 'migrate-all-previewed' : 'migrate-all-done', { n: rows.length })
+      channel.pushLocal('/migrate', allOut.length > 0 ? allOut : [fallbackLine])
       channel.notify(
         failures === 0
           ? t(dryRun ? 'migrate-all-previewed' : 'migrate-all-done', { n: rows.length })
@@ -2326,6 +2345,10 @@ export function Chat({
               return
             }
             setMigratePending([row])
+            // Pin the checked set to the source this confirmation is about:
+            // Esc returns to the picker, and a stale set from an earlier visit
+            // would there contradict what the confirmation just showed.
+            setMigrateChecked(new Set([row.agentId]))
             dispatchOverlay({ type: 'open', overlay: { kind: 'migrate-confirm' } })
           })()
           return true

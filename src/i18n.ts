@@ -342,6 +342,7 @@ const dict = {
   'copy-refused-stale': { zh: '选区内容已变化，已取消复制', en: 'Content under the selection changed; copy cancelled' },
   'migrate-failed': { zh: '{{n}} 个源导入失败，详见输出', en: '{{n}} source(s) failed — see the output' },
   'migrate-spawn-failed': { zh: '无法启动迁移子进程（找不到本包 bin）', en: 'Could not start the migration child process (package bin not found)' },
+  'migrate-child-timeout': { zh: '（子进程超过 {{minutes}} 分钟未结束，已终止）', en: '(the child ran past {{minutes}} minutes and was terminated)' },
   'migrate-usage': { zh: '一次只能迁移一个源：/migrate <agent> [--dry-run]', en: 'One source per run: /migrate <agent> [--dry-run]' },
   'migrate-dry-run-needs-source': { zh: '请指明要预览的源：/migrate <agent> --dry-run', en: 'Name the source to preview: /migrate <agent> --dry-run' },
   'picker-title-migrate': { zh: '迁移哪个代理的对话？', en: 'Import conversations from which agent?' },

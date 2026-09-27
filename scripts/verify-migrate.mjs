@@ -22,7 +22,7 @@
  * 运行：node --import tsx/esm scripts/verify-migrate.mjs
  */
 import assert from 'node:assert/strict'
-import { existsSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -252,42 +252,58 @@ const root = mkdtempSync(join(tmpdir(), 'verify-migrate-'))
   const prevHome = process.env.HOME
   const prevProfile = process.env.USERPROFILE
   const prevDsh = process.env.DSH_HOME
+  const prevGrok = process.env.GROK_HOME
   const prevStdoutWrite = process.stdout.write.bind(process.stdout)
   const sink = []
   process.stdout.write = (chunk) => { sink.push(String(chunk)); return true }
-  // Both variables: the adapters read os.homedir(), which is HOME on POSIX
+  // HOME + USERPROFILE: the adapters read os.homedir(), which is HOME on POSIX
   // and USERPROFILE on Windows — setting only HOME made this section scan the
-  // real home there instead of the fixture.
+  // real home there instead of the fixture. GROK_HOME overrides the grok-build
+  // roots on top of homedir(), so it is pinned to the fixture's own `.grok`
+  // path: a dev machine that sets it must not leak its real store into the run.
   process.env.HOME = home
   process.env.USERPROFILE = home
+  process.env.GROK_HOME = join(home, '.grok')
   process.env.DSH_HOME = dshHome
+  // This section swaps process.stdout.write to measure the CLI's own output,
+  // and check() logs through console.log — straight into the sink. Report
+  // through stderr instead: a failing 4e case must leave evidence in the log
+  // (stderr is not captured here), otherwise the run ends with a bare
+  // "FAILED" and no line saying which case broke.
+  const checkCli = (name, ok, extra = '') => {
+    checks += 1
+    if (!ok) process.exitCode = 1
+    process.stderr.write(`${ok ? 'PASS' : 'FAIL'}: ${name}${extra ? `  (${extra})` : ''}\n`)
+  }
   try {
     const usage = await cliMigrate(['a', 'b'])
-    check('4e1. 多参数 → 退出码 2', usage === 2)
+    checkCli('4e1. 多参数 → 退出码 2', usage === 2)
     const bogus = await cliMigrate(['not-an-agent'])
-    check('4e2. 未知 agent → 退出码 2', bogus === 2)
+    checkCli('4e2. 未知 agent → 退出码 2', bogus === 2)
     const bare = await cliMigrate([])
-    check('4e3. 裸列表 → 退出码 0（HOME 指空目录，各源 0 会话）', bare === 0)
+    checkCli('4e3. 裸列表 → 退出码 0（HOME 指空目录，各源 0 会话）', bare === 0)
     // dry-run 契约：绝不写盘（目标根不存在）
     const dry = await cliMigrate(['fixture-agent' in {} ? 'x' : 'claude-code', '--dry-run'])
     const dryTargetExists = existsSync(dshHome)
-    check('4e4. dry-run → 退出码 0 且未写目标根', dry === 0 && !dryTargetExists,
+    checkCli('4e4. dry-run → 退出码 0 且未写目标根', dry === 0 && !dryTargetExists,
       `exit=${dry} targetExists=${dryTargetExists}`)
     // 4e5 只算本次调用产生的 stdout：check() 自己走 console.log 写同一个
     // 被替换的 write，之前用 sink.length > 0 断言等于恒真（假通过）。
     const beforeCli = sink.length
     await cliMigrate(['claude-code', '--dry-run'])
-    check('4e5. cliMigrate 自身写出 stdout', sink.length > beforeCli,
+    checkCli('4e5. cliMigrate 自身写出 stdout', sink.length > beforeCli,
       `${beforeCli} → ${sink.length}`)
     // 裸 --dry-run 与 TUI 同语义：预览必须先指明源，不能静默退化成列表。
     const bareDry = await cliMigrate(['--dry-run'])
-    check('4e6. 裸 --dry-run → 退出码 2（与 TUI 的“请指明源”一致）', bareDry === 2)
+    checkCli('4e6. 裸 --dry-run → 退出码 2（与 TUI 的“请指明源”一致）', bareDry === 2)
   } finally {
     process.stdout.write = prevStdoutWrite
     if (prevHome === undefined) delete process.env.HOME
     else process.env.HOME = prevHome
     if (prevProfile === undefined) delete process.env.USERPROFILE
     else process.env.USERPROFILE = prevProfile
+    if (prevGrok === undefined) delete process.env.GROK_HOME
+    else process.env.GROK_HOME = prevGrok
     if (prevDsh === undefined) delete process.env.DSH_HOME
     else process.env.DSH_HOME = prevDsh
     rmSync(home, { recursive: true, force: true })
@@ -474,8 +490,12 @@ const root = mkdtempSync(join(tmpdir(), 'verify-migrate-'))
   // Adapters resolve their roots through os.homedir(), which reads
   // USERPROFILE (not HOME) on Windows: setting only HOME silently pointed the
   // scan at the REAL home there and failed 6a–6c on every Windows checkout.
+  // grok-build additionally honors GROK_HOME, so that override is pinned to
+  // the fixture's own `.grok` directory (otherwise a host that sets it would
+  // have 6e read the real store).
   process.env.HOME = home
   process.env.USERPROFILE = home
+  process.env.GROK_HOME = join(home, '.grok')
   const cc = claudeCodeAdapter.discover()
   const ccTurns = cc.sessions[0]?.turns ?? []
   check('6a. claude-code 解析（字符串 user + thinking + model）',
@@ -512,6 +532,18 @@ const root = mkdtempSync(join(tmpdir(), 'verify-migrate-'))
   check('6g. claude-code/omp 的 sourceId 取到夹具 uuid 本身（而非路径原文）',
     cc.sessions[0].sourceId === firstUuid() && ompFound.sessions[0].sourceId === firstUuid(),
     `${cc.sessions[0].sourceId} | ${ompFound.sessions[0].sourceId}`)
+  // 平台无关守卫：sourceId 不许用 split('/') 从路径里抠文件名——join() 在
+  // Windows 产 `\`，那种写法只在 POSIX 正确，而 required CI 组全在 Linux 上
+  // 跑（6f/6g 在 Linux 抓不到这个回归）。本断言在任何平台都有效；只看代码行，
+  // 注释里解释这条规矩本身不算违规。
+  const adapterDir = join(import.meta.dirname, '..', 'src/dsh-adapter/migrate/adapters')
+  const offenders = ['claude-code.ts', 'codex.ts', 'omp.ts', 'zcode.ts', 'grok-build.ts']
+    .filter(name => readFileSync(join(adapterDir, name), 'utf8')
+      .split('\n')
+      .filter(line => !/^\s*(?:\/\/|\*|\/\*)/u.test(line))
+      .some(line => /\.split\(\s*'\/'\s*\)/u.test(line)))
+  check('6h. adapter 不用 split(\'/\') 取文件名（跨平台 sourceId 守卫）',
+    offenders.length === 0, offenders.join(','))
   rmSync(home, { recursive: true, force: true })
 }
 

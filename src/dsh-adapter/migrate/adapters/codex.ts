@@ -8,7 +8,7 @@
  */
 import { readdirSync, readFileSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
 import type { MigrationAdapter, MigrationDiscovery, MigrationSession, MigrationTurn } from '../types.js'
 import { countEntries } from './scan.js'
 
@@ -35,7 +35,9 @@ function readOne(path: string): MigrationSession | undefined {
     return undefined
   }
   const match = /rollout-.*-([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$/u.exec(path)
-  const sourceId = match?.[1] ?? path
+  // Fallback is the bare file name, never the whole path: the id is the dedupe
+  // key, so an absolute path would make it depend on where the store lives.
+  const sourceId = match?.[1] ?? basename(path)
   let cwd: string | undefined
   let startedAt = 0
   let lastModel: string | undefined
