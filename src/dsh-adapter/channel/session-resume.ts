@@ -32,6 +32,7 @@ type ResumeState = Pick<
   | 'working'
   | 'status'
   | 'agentId'
+  | 'sessionId'
   | 'cwd'
   | 'displayCwd'
   | 'agentPreset'
@@ -118,6 +119,7 @@ export function createSessionResumeActions(
     resetSessionProjection(state, deps.rowIds, deps.resetProjector, deps.resetSubagents, deps.resetJobs)
     state.status = handle.agent.status
     state.agentId = handle.agent.id
+    state.sessionId = handle.agent.session.id
     state.agentPreset = agentPreset
     if (route !== undefined) {
       state.provider = route.provider

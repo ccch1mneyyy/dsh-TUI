@@ -38,6 +38,7 @@ import {
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { zstdCompressSync } from 'node:zlib'
+import { settled } from './lib/term-test.mjs'
 
 const root = mkdtempSync(join(tmpdir(), 'dsh-tui-index-'))
 const home = mkdtempSync(join(tmpdir(), 'dsh-tui-index-home-'))
@@ -231,7 +232,7 @@ check(
 // Regression: a large startup/context prefix can push both the first prompt
 // and its auto title beyond the cheap head window; later activity can also push
 // them outside the tail. The initial digest is honestly inconclusive, then the
-// exceptional progressive scan in listSummaries recovers and caches the title.
+// background progressive scan recovers and caches the title after listing.
 // The cwd is a path whose basename is identical on every platform (a backslash
 // path would collapse to the whole string as basename on POSIX and break CI).
 const delayedOpening = []
@@ -260,8 +261,14 @@ const delayedSource = (revision) => ({
   listSnapshots: async () => [{ header: delayedHeader, revision }],
   locate: () => ({ kind: 'jsonl', path: delayedFile }),
 })
-const delayedSummary = (await listSummaries(delayedSource('delayed-r1')))[0]
-check('progressive recovery restores the real cross-directory title', delayedSummary.title, {
+let recoveredDelayed
+const delayedSummary = (await listSummaries(delayedSource('delayed-r1'), undefined, row => { recoveredDelayed = row }))[0]
+check('the list returns its usable fallback before deep recovery', delayedSummary.title, {
+  text: 'dsh-tui',
+  source: 'fallback',
+})
+ok('deep recovery eventually publishes the updated row', await settled(() => recoveredDelayed !== undefined))
+check('progressive recovery restores the real cross-directory title', recoveredDelayed.title, {
   text: '跨目录会话标题',
   source: 'auto',
 })
@@ -308,6 +315,31 @@ const runFile = seed(
 )
 check('a delegated run carries the label it was started under', digestSession(runFile, '/proj').label, 'consistency audit')
 
+// One changed revision folds all newly appended metadata, including a first
+// human prompt in a previously empty run. Noise pushes the changes past the
+// bounded tail, so a fresh cheap digest cannot accidentally satisfy the check.
+const deltaFile = seed('delta', [[{ type: 'sandbox/mode', data: { mode: 'workspace-write' } }]])
+const deltaHeader = { id: 'delta', cwd: '/proj', createdAt: 1 }
+let deltaRevision = 'delta-r1'
+const deltaSource = {
+  listSnapshots: async () => [{ header: deltaHeader, revision: deltaRevision }],
+  locate: () => ({ kind: 'jsonl', path: deltaFile }),
+}
+check('delta fixture starts empty', (await listSummaries(deltaSource))[0].hasPrompt, false)
+appendFileSync(deltaFile, encode([
+  [userPrompt('first appended prompt')],
+  [{ type: 'request/context', data: { model: 'new-route' } }],
+  [{ type: 'subagent/descriptor', data: { label: 'new label' } }],
+  [manualTitle('suffix title', 9)],
+  ...Array.from({ length: 260 }, (_, i) => [{ type: 'plugin/noise', data: { text: filler(700), seq: i } }]),
+]))
+deltaRevision = 'delta-r2'
+const delta = (await listSummaries(deltaSource))[0]
+check('suffix scan sees a first human prompt', delta.hasPrompt, true)
+check('suffix scan sees the last route', delta.model, 'new-route')
+check('suffix scan sees the delegated label', delta.label, 'new label')
+check('suffix scan sees a title outside the cheap tail', delta.title, { text: 'suffix title', source: 'renamed' })
+
 const previewFile = seed('preview', [
   [userPrompt('first question', 1)],
   [{ type: 'assistant/message', seq: 2, time: 5, data: { message: { role: 'assistant', content: [{ type: 'reasoning', text: 'thinking' }, { type: 'text', text: 'first answer' }] } } }],
@@ -350,8 +382,12 @@ const pinned = {
       header,
       revision: header.id === 'auto' ? pinnedRevision : `fixed-${header.id}`,
     })),
-  locate: meta => ({ kind: 'jsonl', path: join(root, '--proj--', meta.id, 'session.jsonl.zstd') }),
+  locate: meta => {
+    pinnedLocates++
+    return { kind: 'jsonl', path: join(root, '--proj--', meta.id, 'session.jsonl.zstd') }
+  },
 }
+let pinnedLocates = 0
 
 rmSync(INDEX_FILE, { force: true })
 const pinnedFirst = await listSummaries(pinned)
@@ -367,6 +403,7 @@ writeFileSync(
 )
 
 const cached = await listSummaries(pinned)
+check('unchanged revisions skip every locate and stat path', pinnedLocates, 3)
 check(
   'an unchanged revision means an unchanged entry — the log was not re-read',
   cached.find(s => s.id === 'auto').title.text,
@@ -416,7 +453,20 @@ check('and is valid again afterwards', readIndex().size, 3)
 writeFileSync(INDEX_FILE, JSON.stringify({ version: 999, entries: { auto: { derived: { revision: 'x' } } } }))
 const upgraded = await listSummaries(source)
 check('an index from another schema version is discarded, not misread', upgraded.length, 3)
-ok('and rewritten at the current version', JSON.parse(readFileSync(INDEX_FILE, 'utf8')).version === 3)
+ok('and rewritten at the current version', JSON.parse(readFileSync(INDEX_FILE, 'utf8')).version === 4)
+
+// A version-3 index contains useful derivations but no cached mtime. It should
+// cost one metadata lookup per entry to upgrade, not a complete log digest.
+const v3 = JSON.parse(readFileSync(INDEX_FILE, 'utf8'))
+v3.version = 3
+for (const entry of Object.values(v3.entries)) delete entry.derived?.modifiedAt
+writeFileSync(INDEX_FILE, JSON.stringify(v3))
+const v3Source = {
+  listSnapshots: async () => headers().map(header => ({ header, revision: v3.entries[header.id].derived.revision })),
+  locate: meta => ({ kind: 'jsonl', path: join(root, '--proj--', meta.id, 'session.jsonl.zstd') }),
+}
+check('version-3 derivations are reused while adding mtime', (await listSummaries(v3Source)).find(s => s.id === 'auto').title.text, 'SECOND REWRITE')
+ok('the upgraded index stores mtime', typeof readIndex().get('auto')?.derived?.modifiedAt === 'number')
 
 // ── 5. Final-state equivalence ──────────────────────────────────────────
 // An index grown across a sequence of changes must equal one built fresh at
@@ -458,6 +508,24 @@ check(
   viaSnapshots.map(s => [s.id, s.title.text]).sort(),
   fromCold.map(s => [s.id, s.title.text]).sort(),
 )
+
+// Two reloads can overlap; the older one must not replace the newer index.
+const overlapFile = seed('overlap', [[userPrompt('overlap')]])
+const overlapHeader = { id: 'overlap', cwd: '/proj', createdAt: 1 }
+let releaseOlder
+let overlapCalls = 0
+const overlapSource = {
+  listSnapshots: () => ++overlapCalls === 1
+    ? new Promise(resolve => { releaseOlder = () => resolve([{ header: overlapHeader, revision: 'older' }]) })
+    : Promise.resolve([{ header: overlapHeader, revision: 'newer' }]),
+  locate: () => ({ kind: 'jsonl', path: overlapFile }),
+}
+const olderListing = listSummaries(overlapSource)
+ok('the older listing is in flight', await settled(() => releaseOlder !== undefined))
+await listSummaries(overlapSource)
+releaseOlder()
+await olderListing
+check('a late listing cannot overwrite a newer revision', readIndex().get('overlap')?.derived?.revision, 'newer')
 check('a backend that lists nothing yields nothing', (await listSummaries({})).length, 0)
 check('a backend that throws yields nothing rather than propagating', (await listSummaries({ list: async () => { throw new Error('boom') } })).length, 0)
 

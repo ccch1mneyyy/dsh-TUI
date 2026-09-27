@@ -32,7 +32,8 @@
  *     CI 那一次失败的原始帧字节才是证据。
  */
 import { spawnSync } from 'node:child_process'
-import { appendFileSync, mkdirSync, rmSync, statSync } from 'node:fs'
+import { appendFileSync, mkdirSync, mkdtempSync, rmSync, statSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 const env = { NODE_ENV: 'production', ...process.env }
@@ -284,6 +285,11 @@ const GROUPS = {
 // verify-composer-draft-handoff；在途 staging 围栏在 verify:build 链的
 // verify-image-preview。完整 8 场景矩阵见 PR #942 历史。
     ["verify-composer-draft-screen-switch", ['node', '--import', 'tsx/esm', 'scripts/verify-composer-draft-screen-switch.tsx']],
+// 队列召回撤回回归（issue #986 后半）：↑ 走位召回的文本若仍挂在 pending 里，
+// 必须把那条排队副本撤下来（否则改完重发等于同一句发两遍）——可撤时队列少一条
+// 且有提示、已被本轮取走时如实报「撤不回来」且副本留在队列、文本不匹配的排队
+// 项一律不动。
+    ["verify-prompt-history-queue-retract", ['node', 'scripts/verify-prompt-history-queue-retract.mjs']],
   ],
   'session-workspace': [
 // 跨代理会话迁移回归（claude-code/codex/omp → DSH sessions）：全程跑官方
@@ -296,8 +302,10 @@ const GROUPS = {
 // approval 行；裸组合与 profile patch 的 policy 表达式逐场景同值
 // （ask / never / win32 never），两个入口语义不漂移。
     ["verify-cordis-approval", ['node', 'scripts/verify-cordis-approval.mjs']],
-// 工作状态由基础事件在进程内派生：阶段、500ms tick、Agent 切换重置。
-    ["verify-working-activity", ['node', 'scripts/verify-working-activity.mjs']],
+// 工作状态现在由 dsh-working-activity 插件的 session projection 拥有：本 app 只读，
+// 不再在进程内折叠。这条静态门禁钉住「唯一 owner」——没有 tracker、没有 status
+// import、没有 sidecar、channel 层不转发活动信号也不持 tick。
+    ["verify-activity-ownership", ['node', '--import', 'tsx/esm', 'scripts/verify-activity-ownership.ts']],
 // TUI 创建及恢复的会话必须持久关联到 Workspace。
     ["verify-workspace-attachment", ['node', 'scripts/verify-workspace-attachment.mjs']],
 // tuiWorkspaces 服务可选化回归（issue #183）：代码层 inject 不含
@@ -323,6 +331,12 @@ const GROUPS = {
 // 会话标题回归：选择器标题宽容读取（带未标记第三方事件的日志
 // 不能让标题退化成目录名），/rename 的最后一条 session/title 优先。
     ["verify-session-titles", ['node', 'scripts/verify-session-titles.mjs']],
+// session/title 载荷形状回归（issue #1006）：真存储栈 e2e——离线写入器
+// （/fork + 选择器改名）与实时 /rename 共用的 userTitleData 必须带
+// messageSeqs/source，否则严格读取把整份日志判损坏（stored log is
+// corrupt: title messageSeqs requires an array）而会话再也 resume 不了；
+// 同一夹具塞旧形状 `{ title }` 必须仍被拒（红态自证，回退修复即失败）。
+    ["verify-session-title-payload", ['node', 'scripts/verify-session-title-payload.mjs']],
 // resume 遗留事件注册回归（issue #153）：真实存储栈 e2e——注册前
 // load() 抛 SessionFormatUnsupportedError（原样复现 issue）、注册后
 // 放行；日志字节与 0600 权限绝不被改写；非白名单未知类型保持拒读
@@ -369,6 +383,11 @@ const GROUPS = {
 // 输入历史草稿回归（issue #287）：首次 ↑ 保存未提交草稿，遍历历史后
 // ↓ 回到末尾必须恢复原文，重复越界不能把草稿清空。
     ["verify-prompt-history-draft", ['node', 'scripts/verify-prompt-history-draft.mjs']],
+// 输入历史持久化回归（issue #986）：↑/↓ 必须走磁盘上的 history.jsonl——
+// 冷启动后第一次 ↑ 召回的是最新一条（文件是追加序，漏了反转会翻出最旧的）、
+// 能一路走到最旧并在那里钳住、本次进程提交的条目排在持久化条目之后且
+// 接缝处不重复、重新挂载（重启）后仍能召回。
+    ["verify-prompt-history-persist", ['node', 'scripts/verify-prompt-history-persist.mjs']],
 // 文件补全回归（issue #278）：CMake 构建目录与任意大型兄弟目录不得
 // 独占 100 条全局预算，普通深层源码也不能被固定深度静默截断。
     ["verify-file-completion", ['node', 'scripts/verify-file-completion.mjs']],
@@ -461,6 +480,12 @@ const GROUPS = {
   'channel-ui': [
 // L4 composition boundary plus report/metadata lifetime fences.
     ["verify-channel-composition", ['node', '--import', 'tsx/esm', 'scripts/verify-channel-composition.ts']],
+// 状态行的读侧：会话键控、变更通知、宿主发布值的防御性收窄、绑定时的基线读取
+// （投影只在变化时推送，恢复/重连的会话必须自己读一次当前值）。
+    ["verify-activity-store", ['node', '--import', 'tsx/esm', 'scripts/verify-activity-store.ts']],
+// 状态行的渲染面：投影值经 hook 到达屏幕、后台会话不得抢当前行、清空即消失、
+// 两个接缝同时有值时以投影为准（读侧迁移对显示是零变化）。
+    ["verify-activity-store-render", ['node', '--import', 'tsx/esm', 'scripts/verify-activity-store-render.tsx']],
     ["verify-channel-owner-lifecycle", ['node', '--import', 'tsx/esm', 'scripts/verify-channel-owner-lifecycle.ts']],
     ["verify-channel-router-lifecycle", ['node', '--import', 'tsx/esm', 'scripts/verify-channel-router-lifecycle.ts']],
     ["verify-reports-metadata",  ['node', '--import', 'tsx/esm', 'scripts/verify-reports-metadata.ts']],
@@ -788,12 +813,28 @@ for (const entry of group) {
   console.log('\n===== ' + name + ' =====')
   const renderLog = join(RENDER_LOG_DIR, name + '.log')
   rmSync(renderLog, { force: true })
+  // One throwaway HOME per script: fixtures used to share the machine's real
+  // home, so a script that submits text left entries in
+  // `~/.dsh-tui/history.jsonl` for whatever ran next — and `↑` walks that file
+  // (#986), which turned one script's leftovers into the next script's
+  // assertion failure. A local group run must also never write the runner's
+  // own history. `HOME`/`USERPROFILE` sit after `env` (which carries the real
+  // ones) so the real home can never win; an entry may still override them
+  // through its own `extraEnv`.
+  const scriptHome = mkdtempSync(join(tmpdir(), 'dsh-tui-group-home-'))
   const startedAt = performance.now()
   const r = spawnSync(argv[0], argv.slice(1), {
-    env: { DSH_TUI_RENDER_LOG: renderLog, ...env, ...(extraEnv ?? {}) },
+    env: {
+      DSH_TUI_RENDER_LOG: renderLog,
+      ...env,
+      HOME: scriptHome,
+      USERPROFILE: scriptHome,
+      ...(extraEnv ?? {}),
+    },
     stdio: 'inherit',
     shell: false,
   })
+  rmSync(scriptHome, { recursive: true, force: true })
   const seconds = (performance.now() - startedAt) / 1000
   const failed = r.status !== 0
   results.push({ name, failed, status: r.status, seconds })

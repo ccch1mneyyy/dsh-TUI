@@ -46,4 +46,5 @@ export {
   readSessionTitleFromLog,
   type SessionLogRead,
   sessionsRoots,
+  userTitleData,
 } from './sessionLog.js'

@@ -24,8 +24,18 @@ declare module 'react' {
 // `session/title` records are appended by the optional dsh-session-title
 // plugin; declare the record here so the channel can render it without that
 // dependency (mirrors the plugin's own merge-extensible augmentation).
+//
+// The payload is the full upstream `SessionTitleEventData`: the strict v4
+// reader rejects a log whose `session/title` lacks `messageSeqs`/`source`
+// (`title messageSeqs requires an array`, issue #1006), so both TUI writers
+// build it through `userTitleData()`. `messageSeqs` is empty exactly when
+// `source.kind === 'user'`.
 declare module '@deepseek-ai/dsh-session' {
   interface SessionEventMap {
-    'session/title': { title: string }
+    'session/title': {
+      readonly title: string
+      readonly messageSeqs: number[]
+      readonly source: { readonly kind: 'fallback' | 'provider' | 'user'; readonly provider?: string; readonly model?: unknown }
+    }
   }
 }

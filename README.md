@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/assets/logo.svg" alt="dsh-TUI - DeepSeek Harness terminal interface" width="560">
+  <img src="docs/assets/readme/logo-en.svg" alt="dsh-TUI animated whale logo" width="560">
 </p>
 
 <p align="center">
@@ -27,7 +27,7 @@
 - **Pixel whale pet** — three startup intros, click to wake; freezes after the first task.
 - **Terminal-native UI** — streaming Markdown, tool cards, `/` and `@` completion, `#L12-14` ranges, history search, zh/en UI.
 - **Images** — Kitty/Sixel thumbnails, centered preview with zoom and pan, paste-time fitting, text fallback.
-- **Mermaid diagrams** — ```` ```mermaid ```` fences drawn as Unicode diagrams.
+- **Mermaid diagrams** — ````mermaid ```` fences drawn as Unicode diagrams.
 - **Timeline rail** — every turn clickable; timeline / scrollbar / hidden gutter.
 - **Live state** — activity animation, context bar, TPS, cache hit rate, effort, tokens, Git and session metadata.
 - **One session manager** — `/resume` `/home` `/agentview` `/bg` `⌸`.
@@ -42,20 +42,10 @@ Keys and commands: [Interaction and commands](docs/interaction.en.md). Everythin
 ## Preview
 
 <div align="center">
-  <table>
-    <tr>
-      <td align="center" valign="middle" width="50%">
-        <img src="screenshots/splash.png" alt="dsh-TUI conversation with the pixel-whale header" width="480">
-        <br>
-        <strong>Conversation with the pixel-whale header</strong>
-      </td>
-      <td align="center" valign="middle" width="50%">
-        <img src="screenshots/ide-selection-badge.png" alt="IDE selection badge: live line count under the prompt" width="480">
-        <br>
-        <strong>Live IDE selection badge</strong>
-      </td>
-    </tr>
-  </table>
+  <picture>
+    <source media="(max-width: 640px)" srcset="docs/assets/readme/preview-en-mobile.svg">
+    <img src="docs/assets/readme/preview-en.svg" alt="Recorded dsh-TUI session: welcome, completion, help and typing, with animated pixel whale." width="78%">
+  </picture>
 </div>
 
 ## Featured & Listed
@@ -170,6 +160,8 @@ Full reference: [Interaction and commands](docs/interaction.en.md).
 ## Built-in Commands
 
 `/resume` · `/home` · `/agentview` · `/bg` · `⌸` open the same session manager: workspace rail, live state, filter, ★ pins. Also `/model` `/new` `/compact` `/export` `/btw` `/tree` `/fork` `/rewind` `/settings` `/status` `/cost` `/jobs` `/skills` `/mcp` `/login` `/update`.
+
+The session manager paints the last successful list immediately while it checks the persistence store for changes. Titles that require a deeper log scan appear first with a fallback name and update in place when recovery finishes.
 
 **Background sessions**: `/bg` or `←` on an empty prompt; `Esc` returns. They run in this process and stop when the TUI exits. Logs survive.
 

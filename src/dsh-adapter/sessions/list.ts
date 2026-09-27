@@ -1,7 +1,7 @@
 /**
  * Building the session list.
  *
- * One resolution path produces one complete, honestly-classified record per
+ * One resolution path produces one usable, honestly-classified record per
  * stored session — every kind, empties included — and callers decide what to
  * show. That split is deliberate: the old picker filtered while it resolved,
  * so "hide sub-agent runs" and "resolve a title" were the same pass and
@@ -9,10 +9,9 @@
  * toggle sub-agent runs into view, or offer to clean up boot artifacts,
  * without re-deriving anything.
  *
- * Cost: one `stat` per session always, plus one bounded log read per session
- * whose revision moved since the last listing. On a warm index that is zero
- * log reads. A log whose opening prompt exceeds the cheap window takes one
- * progressive, memory-bounded recovery scan and caches the result. The path
+ * Cost: backend enumeration plus a revision comparison per session. Only a
+ * changed revision needs artifact I/O, and append-only changes read the new
+ * suffix. Incomplete titles are recovered after the list is returned. The path
  * this replaces decompressed every frame of the twenty most recent logs on
  * every open — 3.9 s over a 31 MB history.
  *
@@ -20,20 +19,22 @@
  */
 import { basename } from 'node:path'
 import {
+  digestAppendedSuffix,
   digestSession,
-  recoverAppendedTitle,
-  recoverSessionTitle,
   sessionTitleAnchor,
 } from './digest.js'
 import { fileFacts } from './frames.js'
+import { scheduleTitleRecovery, titleRecoveryNeedsWork } from './recovery.js'
 import { classify, readHeader, type RawSessionHeader } from './header.js'
 import { findSessionLogFile, resolveLocatedPath } from '../compat/sessionLog.js'
-import { readIndex, writeIndex, type DerivedEntry, type SessionIndex } from './store.js'
+import { indexFileStamp, readIndex, writeIndex, type DerivedEntry, type SessionIndex } from './store.js'
 import type { SessionSummary } from './types.js'
 import { readLastUsed } from '../../sessionHistory.js'
 
-/** Compressed bytes one listing may spend on full-log title recovery scans. */
-const TITLE_SCAN_BUDGET_BYTES = 16 * 1024 * 1024
+/** A late overlapping listing must not write an older index over a newer one. */
+const listingVersions = new WeakMap<SessionSource, number>()
+/** Large append batches use bounded windows, then background title recovery. */
+const FOREGROUND_SUFFIX_BYTES = 2 * 1024 * 1024
 
 /**
  * The slice of `ctx.sessionPersistence` this module uses.
@@ -147,7 +148,10 @@ function locate(source: SessionSource, raw: unknown, sessionId: string): string 
 export async function listSummaries(
   source: SessionSource,
   signal?: AbortSignal,
+  onEnriched?: (summary: SessionSummary) => void,
 ): Promise<readonly SessionSummary[]> {
+  const version = (listingVersions.get(source) ?? 0) + 1
+  listingVersions.set(source, version)
   let listed: Listed[]
   try {
     listed = await enumerateSessions(source, signal)
@@ -165,6 +169,7 @@ export async function listSummaries(
     children.set(parent, (children.get(parent) ?? 0) + 1)
   }
 
+  const indexStamp = indexFileStamp()
   const index = readIndex()
   const next: SessionIndex = new Map()
   const lastUsed = readLastUsed()
@@ -175,94 +180,117 @@ export async function listSummaries(
     cached: ReturnType<typeof index.get>
     derived: DerivedEntry | undefined
   }> = []
-  // Full-log recovery scans are charged against one budget per listing and run
-  // most-recent-first, so a cold cache after an upgrade improves incrementally
-  // instead of decompressing the whole history in one open.
-  const scanWork: Array<{ id: string; path: string; bytes: number; updatedAt: number }> = []
+  const recordsById = new Map<string, typeof records[number]>()
+  const earlyEnrichments = new Map<string, DerivedEntry>()
+  let summariesReady = false
+  const notifyEnriched = (id: string, enriched: DerivedEntry): void => {
+    if (!summariesReady) {
+      earlyEnrichments.set(id, enriched)
+      return
+    }
+    const record = recordsById.get(id)
+    if (record === undefined || record.derived?.revision !== enriched.revision) return
+    record.derived = enriched
+    onEnriched?.(summaryOf(record))
+  }
+  const scanWork: Array<{
+    id: string
+    revision: string
+    path: string
+    bytes: number
+    modifiedAt: number
+    identity: string
+    priority: number
+  }> = []
 
   for (const { header, raw, revision } of listed) {
     const cached = index.get(header.id)
-    const path = locate(source, raw, header.id)
-    const facts = path === undefined ? undefined : fileFacts(path)
-    // Falls back to the file's own identity when the backend offered no token.
-    const token = revision ?? (facts === undefined ? undefined : `${facts.bytes}:${facts.modifiedAt}`)
-
-    let derived: DerivedEntry | undefined
-    if (
-      cached?.derived !== undefined &&
-      token !== undefined &&
-      cached.derived.revision === token &&
-      cached.derived.titleComplete
-    ) {
-      derived = cached.derived
-    } else if (path !== undefined && token !== undefined) {
-      const digest = digestSession(path, header.cwd ?? '')
-      let title = digest.title
-      const hasPrompt = digest.hasPrompt
-      let titleComplete = digest.titleComplete === true
-      const previous = cached?.derived
-
-      // Across an append-only revision, validate the old EOF neighborhood then
-      // scan only the new frames. This preserves an older authoritative title
-      // without trusting file size alone, and still observes a newly appended
-      // rename even when later output pushed it outside the cheap tail window.
-      // Only title evidence carries forward: a formerly empty session can
-      // have acquired its first human message in the appended suffix.
-      if (
-        !titleComplete &&
-        previous !== undefined &&
-        facts !== undefined &&
-        previous.identity !== undefined &&
-        previous.identity === facts.identity &&
-        previous.anchor !== undefined &&
-        facts.bytes >= previous.bytes
-      ) {
-        const oldAnchor = await sessionTitleAnchor(path, previous.bytes, signal)
-        if (oldAnchor === previous.anchor) {
-          if (facts.bytes === previous.bytes && previous.titleComplete) {
-            title = previous.title.length === 0
-              ? undefined
-              : { text: previous.title, source: previous.titleSource }
-            titleComplete = true
-          } else if (facts.bytes > previous.bytes) {
-            const appended = await recoverAppendedTitle(path, previous.bytes, facts.bytes, signal)
-            if (appended.title !== undefined) title = appended.title
-            if (appended.complete && (appended.title !== undefined || previous.titleComplete)) {
-              if (appended.title === undefined) {
-                title = previous.title.length === 0
-                  ? undefined
-                  : { text: previous.title, source: previous.titleSource }
+    let facts: ReturnType<typeof fileFacts>
+    let derived = cached?.derived
+    let path: string | undefined
+    if (revision !== undefined && derived?.revision === revision && derived.modifiedAt === undefined) {
+      // Schema v3 held the same derived facts but not mtime. Upgrade that
+      // record with one metadata read rather than re-decoding its log.
+      path = locate(source, raw, header.id)
+      facts = path === undefined ? undefined : fileFacts(path)
+      derived = { ...derived, modifiedAt: facts?.modifiedAt ?? 0 }
+      changed = true
+    }
+    // The backend's opaque revision is authoritative. A hit does not even
+    // resolve a path; incomplete titles are handled by the recovery queue.
+    if (revision === undefined || derived === undefined || derived.revision !== revision) {
+      path = locate(source, raw, header.id)
+      facts = path === undefined ? undefined : fileFacts(path)
+      // Older persistence implementations provide no revision. Their one
+      // metadata read per entry remains necessary to detect changes.
+      const token = revision ?? (facts === undefined ? undefined : `${facts.bytes}:${facts.modifiedAt}`)
+      if (token === undefined || derived?.revision !== token) {
+        derived = undefined
+        if (cached?.derived !== undefined) changed = true
+        if (path !== undefined && token !== undefined) {
+          const previous = cached?.derived
+          const appendGrowth = (
+            facts !== undefined && previous?.identity !== undefined &&
+            previous.identity === facts.identity && previous.anchor !== undefined &&
+            facts.bytes > previous.bytes &&
+            await sessionTitleAnchor(path, previous.bytes, signal) === previous.anchor
+          )
+          if (appendGrowth && facts !== undefined && previous !== undefined && facts.bytes - previous.bytes <= FOREGROUND_SUFFIX_BYTES) {
+            const suffix = await digestAppendedSuffix(path, previous.bytes, facts.bytes, signal)
+            if (suffix.complete) {
+              derived = {
+                revision: token,
+                bytes: facts.bytes,
+                modifiedAt: facts.modifiedAt,
+                identity: facts.identity,
+                anchor: await sessionTitleAnchor(path, facts.bytes, signal),
+                title: suffix.title?.text ?? previous.title,
+                titleSource: suffix.title?.source ?? previous.titleSource,
+                titleComplete: suffix.title !== undefined || previous.titleComplete,
+                hasPrompt: previous.hasPrompt || suffix.hasHumanPrompt,
+                model: suffix.model ?? previous.model,
+                label: suffix.label ?? previous.label,
               }
-              titleComplete = true
             }
           }
+          if (derived === undefined) {
+            const digest = digestSession(path, header.cwd ?? '')
+            const carried = appendGrowth && digest.titleComplete !== true ? previous : undefined
+            derived = {
+              revision: token,
+              bytes: facts?.bytes ?? 0,
+              modifiedAt: facts?.modifiedAt,
+              identity: facts?.identity,
+              anchor: facts === undefined ? undefined : await sessionTitleAnchor(path, facts.bytes, signal),
+              title: carried?.title ?? digest.title?.text ?? '',
+              titleSource: carried?.titleSource ?? digest.title?.source ?? 'fallback',
+              titleComplete: digest.titleComplete === true,
+              hasPrompt: digest.hasPrompt,
+              model: digest.model ?? carried?.model,
+              label: digest.label ?? carried?.label,
+            }
+          }
+          changed = true
         }
       }
-
-      derived = {
-        revision: token,
-        bytes: facts?.bytes ?? 0,
-        identity: facts?.identity,
-        anchor: facts === undefined ? undefined : await sessionTitleAnchor(path, facts.bytes, signal),
-        title: title?.text ?? '',
-        titleSource: title?.source ?? 'fallback',
-        titleComplete,
-        hasPrompt,
-        model: digest.model,
-        label: digest.label,
-      }
-      changed = true
-      if (
-        !titleComplete &&
-        facts !== undefined &&
-        signal?.aborted !== true
-      ) {
-        const createdAt = header.createdAt ?? facts.modifiedAt
+    }
+    if (
+      derived !== undefined && !derived.titleComplete && signal?.aborted !== true &&
+      titleRecoveryNeedsWork(header.id, derived.revision, enriched => notifyEnriched(header.id, enriched))
+    ) {
+      // A revision hit still may need enrichment, but locating that rare log
+      // stays off the ordinary warm path once recovery has been scheduled.
+      if (path === undefined) path = locate(source, raw, header.id)
+      if (facts === undefined && path !== undefined) facts = fileFacts(path)
+      if (path !== undefined && facts !== undefined && derived.bytes === facts.bytes) {
         scanWork.push({
           id: header.id,
+          revision: derived.revision,
           path,
           bytes: facts.bytes,
-          updatedAt: Math.max(facts.modifiedAt, lastUsed[header.id] ?? 0, createdAt),
+          modifiedAt: facts.modifiedAt,
+          identity: facts.identity,
+          priority: Math.max(facts.modifiedAt, lastUsed[header.id] ?? 0, header.createdAt ?? 0),
         })
       }
     }
@@ -272,60 +300,16 @@ export async function listSummaries(
     if (derived !== undefined || cached?.branch !== undefined) {
       next.set(header.id, { derived, branch: cached?.branch })
     }
-    records.push({ header, facts, cached, derived })
+    const record = { header, facts, cached, derived }
+    records.push(record)
+    recordsById.set(header.id, record)
   }
-  const recordsById = new Map(records.map(record => [record.header.id, record]))
-
-  // Phase 2: full-log title recovery, most-recent-first, under one byte budget.
-  scanWork.sort((left, right) => right.updatedAt - left.updatedAt)
-  let scanBudget = TITLE_SCAN_BUDGET_BYTES
-  for (const work of scanWork) {
-    if (scanBudget <= 0) break
-    let recovered: Awaited<ReturnType<typeof recoverSessionTitle>> | undefined
-    try {
-      recovered = await recoverSessionTitle(work.path, work.bytes, signal)
-    } catch {
-      continue
-    }
-    if (recovered === undefined) continue
-    scanBudget -= work.bytes
-    const entry = next.get(work.id)
-    if (entry?.derived === undefined) continue
-    const base = entry.derived
-    if (recovered.title === undefined && recovered.complete) {
-      // A conclusive no-title scan with no prompt anywhere is a boot artifact;
-      // otherwise the opening prompt stands in as the title.
-      next.set(work.id, {
-        ...entry,
-        derived: {
-          ...base,
-          title: '',
-          titleSource: 'fallback',
-          titleComplete: recovered.complete,
-          hasPrompt: recovered.hasPrompt ?? base.hasPrompt,
-        },
-      })
-    } else {
-      next.set(work.id, {
-        ...entry,
-        derived: {
-          ...base,
-          title: recovered.title?.text ?? base.title,
-          titleSource: recovered.title?.source ?? base.titleSource,
-          titleComplete: recovered.complete,
-          hasPrompt: recovered.hasPrompt ?? base.hasPrompt,
-        },
-      })
-    }
-    const record = recordsById.get(work.id)
-    if (record !== undefined) record.derived = next.get(work.id)!.derived
-  }
-
   // Entries for sessions the backend no longer lists are dropped here; that is
   // the whole of the cache's garbage collection, and it runs on every listing.
-  if (changed || next.size !== index.size) writeIndex(next)
+  const newest = listingVersions.get(source) === version
+  if (newest && (changed || next.size !== index.size) && indexFileStamp() === indexStamp) writeIndex(next)
 
-  const summaries: SessionSummary[] = records.map(({ header, facts, cached, derived }) => ({
+  const summaryOf = ({ header, facts, cached, derived }: typeof records[number]): SessionSummary => ({
     id: header.id,
     kind: classify(header),
     title: {
@@ -336,9 +320,9 @@ export async function listSummaries(
       source: derived?.titleSource ?? 'fallback',
     },
     cwd: header.cwd ?? '',
-    createdAt: header.createdAt ?? facts?.modifiedAt ?? 0,
-    updatedAt: Math.max(facts?.modifiedAt ?? 0, lastUsed[header.id] ?? 0, header.createdAt ?? 0),
-    bytes: facts?.bytes,
+    createdAt: header.createdAt ?? derived?.modifiedAt ?? facts?.modifiedAt ?? 0,
+    updatedAt: Math.max(derived?.modifiedAt ?? facts?.modifiedAt ?? 0, lastUsed[header.id] ?? 0, header.createdAt ?? 0),
+    bytes: derived?.bytes ?? facts?.bytes,
     // Without a readable artifact nothing can be proven empty, and hiding a
     // real session is the worse error — so an unreadable log is listed.
     hasPrompt: derived?.hasPrompt ?? true,
@@ -347,7 +331,19 @@ export async function listSummaries(
     label: derived?.label,
     branch: cached?.branch,
     childCount: children.get(header.id) ?? 0,
-  }))
+  })
+  for (const [id, enriched] of earlyEnrichments) {
+    const record = recordsById.get(id)
+    if (record?.derived?.revision === enriched.revision) record.derived = enriched
+  }
+  const summaries: SessionSummary[] = records.map(summaryOf)
+  summariesReady = true
+
+  if (newest) {
+    for (const work of scanWork) {
+      scheduleTitleRecovery(work, derived => notifyEnriched(work.id, derived))
+    }
+  }
 
   // A total order, not just a sort key. `updatedAt` is dominated by the log's
   // mtime, and sessions written inside the same millisecond tie on it — which

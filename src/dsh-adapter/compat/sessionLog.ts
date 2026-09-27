@@ -1203,6 +1203,25 @@ function firstTextOfContent(content: unknown): string | undefined {
 }
 
 /**
+ * Payload of an explicit user rename — the shape upstream
+ * `SessionTitleService.rename()` writes. The strict reader requires BOTH
+ * fields on every `session/title` event: `messageSeqs` must be an array, and
+ * empty exactly when the user supplied the title (`source.kind === 'user'`).
+ * A `{ title }`-only payload makes the whole log unopenable
+ * (`title messageSeqs requires an array`, issue #1006). The live `/rename`
+ * and this module's offline append share this builder so the two writers
+ * cannot drift apart again.
+ * @param title - New display title (already trimmed by the caller).
+ */
+export function userTitleData(title: string): {
+  title: string
+  messageSeqs: number[]
+  source: { kind: 'user' }
+} {
+  return { title, messageSeqs: [], source: { kind: 'user' } }
+}
+
+/**
  * Append a `session/title` event to a persisted session's log — the
  * `/resume` picker rename for a NON-LIVE session (the live one goes through
  * `session.append` in the channel). The backend flushes by appending zstd
@@ -1232,13 +1251,14 @@ export function appendSessionTitle(sessionId: string, title: string): 'appended'
       const seq = event['seq']
       if (typeof seq === 'number' && seq > maxSeq) maxSeq = seq
     }
-    // Same envelope shape as a manual /rename append ({ title } only); the
-    // seed validator asks only for type/seq/time/data on non-message types.
+    // Same payload a manual /rename appends ({@link userTitleData}); the
+    // strict reader validates the SHAPE of every event, not just the
+    // envelope keys the seed validator asks for.
     const event = {
       type: 'session/title',
       seq: maxSeq + 1,
       time: Date.now(),
-      data: { title },
+      data: userTitleData(title),
     }
     const frame = zstdCompressSync(Buffer.from(JSON.stringify(event) + '\n', 'utf8'))
     appendFileSync(file, frame)

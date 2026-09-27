@@ -1,7 +1,6 @@
 import { createSessionTreeReader } from './channel/session-tree.js'
 import { createInputDelivery } from './channel/input-delivery.js'
 import { createChannelBinding } from './channel/binding.js'
-import { createChannelActivity } from './channel/activity.js'
 import { createCommandCompletions } from './channel/command-completions.js'
 import { createLocalActions } from './channel/local-actions.js'
 import { createDetachedHandleFactory } from './channel/lifetime-resources.js'
@@ -78,7 +77,7 @@ import { createPreferences } from './channel/preferences.js'
 import { createSettingsHosts } from './channel/settings-host.js'
 import { createChannelOwner, registerChannelOwner } from './channel/owner.js'
 import { ARGS_PREVIEW_LIMIT, foldBack, harnessToolResultView, LOCAL_OUTPUT_LIMIT, prepareReplayEvents, preview, RESULT_PREVIEW_LIMIT, toolErrorText } from './channel/transcript.js'
-import type { ActivityStatus, AgentViewRow, Channel, ChannelGoal, ChannelImageBlock, ChannelState, ChatRow, CredentialStatus, EffortOption, JobControl, LoadedContextEntry, LoadedContextFile, LoadedContextSkill, LoadedContextTool, MentionFs, NotificationItem, PendingMessage, PresetOption, ResumeResult, StagedImageInput, SubagentControl, SubagentRow, TodoPanelItem, ToolCallView, ToolResultView, ToolsRegistryLike } from './channel/types.js'
+import type { AgentViewRow, Channel, ChannelGoal, ChannelImageBlock, ChannelState, ChatRow, CredentialStatus, EffortOption, JobControl, LoadedContextEntry, LoadedContextFile, LoadedContextSkill, LoadedContextTool, MentionFs, NotificationItem, PendingMessage, PresetOption, ResumeResult, StagedImageInput, SubagentControl, SubagentRow, TodoPanelItem, ToolCallView, ToolResultView, ToolsRegistryLike } from './channel/types.js'
 import { estimateTokens, isTokenDelta, tokenDeltaChars, usageOutputTokens } from './channel/usage.js'
 import { getHostCommandTrees } from './command-trees.js'
 import { installDecisionGuard, markDecisionDispatchTopology } from './decision-guard.js'
@@ -493,6 +492,7 @@ function createChannelWithOwner(
     },
     ...createInitialChannelView(options, {
       agentId: binding.agent.id,
+      sessionId: binding.agent.session.id,
       mode: sessionModes[0]!,
       cwdDescription: workspaceService.describe(options.cwd).description ?? options.cwd,
     }),
@@ -720,9 +720,6 @@ function createChannelWithOwner(
   state.status = binding.agent.status
   state.emit()
 
-  // The activity sidecar owns its tracker and interval; it never projects transcript facts.
-  const activity = createChannelActivity(ctx, state, owner, options.activity !== false)
-
   modelActions = createModelActions(ctx, state, {
     owner,
     binding,
@@ -758,7 +755,6 @@ function createChannelWithOwner(
     refreshSkillCommands,
     clearStagedImages,
     dropModelCompletion: () => modelActions.dropModelNodeCache(),
-    onModelSwitch: model => activity.onModelSwitch(model),
     notify,
   })
 
@@ -790,7 +786,7 @@ function createChannelWithOwner(
     owner,
     binding,
     state,
-    activity,
+    seedActivity: options.seedActivity,
     inputConvergence,
     selection,
     modelActions,
@@ -910,7 +906,6 @@ function createChannelWithOwner(
     agent: () => binding.agent,
     withDecisionPending,
     notify,
-    onComplete: () => activity.onCompact(),
   })
   settleManualCompaction = manualCompaction.settle
   compactManualSession = manualCompaction.compact
@@ -1083,8 +1078,6 @@ function createChannelWithOwner(
           // only show a branch for sessions this install actually used — which
           // is exactly what the column claims.
           noteBranch(binding.agent.session.id, branch)
-          // Feed the working line so git tools can show ` · git <branch>`.
-          activity.onGitBranch(branch)
           state.emit()
         }
       })
@@ -1102,5 +1095,5 @@ function createChannelWithOwner(
 export type { ChannelLaunchOptions } from './channel/state.js'
 export { expandMentions } from './channel/mentions.js'
 export { sessionCwdMatches } from './channel/paths.js'
-export type { ActivityStatus, AgentViewDispatchResult, AgentViewRow, AgentViewStatus, BackgroundResult, Channel, ChannelGoal, ChannelState, ChatRow, ComposerImageRef, ComposerSubmission, CredentialStatus, EffortOption, ExternalCommandOutcome, JobControl, JobRow, LoadedContext, LoadedContextEntry, LoadedContextFile, LoadedContextSkill, LoadedContextTool, MentionAttachments, MentionExpansion, MentionFs, NotificationItem, PendingMessage, PermissionPresetAvailability, PermissionPresetCurrent, PermissionPresetOption, PermissionPresetSnapshot, PresetOption, ResumeResult, SkillInfo, StagedImageHandle, StagedImageInput, SubagentControl, SubagentRow, TodoPanelItem, TokenBucket, TokenUsage, ToolCallView, ToolFileDiff, ToolResultView, ToolRow, ToolViewPresenter, TranscriptImage } from './channel/types.js'
+export type { AgentViewDispatchResult, AgentViewRow, AgentViewStatus, BackgroundResult, Channel, ChannelGoal, ChannelState, ChatRow, ComposerImageRef, ComposerSubmission, CredentialStatus, EffortOption, ExternalCommandOutcome, JobControl, JobRow, LoadedContext, LoadedContextEntry, LoadedContextFile, LoadedContextSkill, LoadedContextTool, MentionAttachments, MentionExpansion, MentionFs, NotificationItem, PendingMessage, PermissionPresetAvailability, PermissionPresetCurrent, PermissionPresetOption, PermissionPresetSnapshot, PresetOption, ResumeResult, SkillInfo, StagedImageHandle, StagedImageInput, SubagentControl, SubagentRow, TodoPanelItem, TokenBucket, TokenUsage, ToolCallView, ToolFileDiff, ToolResultView, ToolRow, ToolViewPresenter, TranscriptImage } from './channel/types.js'
 export { emptyTokenUsage } from './channel/usage.js'

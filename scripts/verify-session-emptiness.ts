@@ -87,7 +87,8 @@ try {
   await test('progressive recovery can still prove a long boot-only log empty', async () => {
     const { path, source } = fixture('long-boot', Array.from({ length: HEAD_MAX_FRAMES }, () => frame([policy])))
     assert.equal(digestSession(path, cwd).hasPrompt, true, 'bounded read is inconclusive')
-    assert.equal((await listSummaries(source))[0]!.hasPrompt, false, 'complete recovery proves empty')
+    assert.equal((await listSummaries(source))[0]!.hasPrompt, true, 'foreground keeps incomplete evidence visible')
+    assert.equal(await settled(() => readIndex().get('long-boot')?.derived?.hasPrompt === false), true, 'background recovery proves empty')
   })
   for (const titled of [false, true]) {
     await test(`frame limit, title=${titled}: a small log is not necessarily empty`, async () => {

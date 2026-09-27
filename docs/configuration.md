@@ -102,7 +102,10 @@ Config；旧版仍使用 `~/.dsh/settings.yaml`。不要把旧文件路径当成
 
 ## 工作状态行
 
-`dsh-working-activity` 随包安装，并由本包 patch 插入。只需要按 ID 覆盖参数：
+`dsh-working-activity` 随包安装，并由本包 patch 插入。工作状态行读的是该插件
+（≥ 0.5.0）发布的 `workingActivity` 会话投影——0.5.0 起事件出口
+（`activity/status`）已由投影取代，旧版插件不会产生工作状态行。只需要按 ID
+覆盖参数：
 
 ```yaml
 - id: working-activity
