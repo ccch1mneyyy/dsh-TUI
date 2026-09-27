@@ -306,10 +306,11 @@ export function LogoV2({
 
   // 两行标题各自用字体声明的字距；下排再按 `bottomIndent` 居中——
   // 两者一起保证画出来的列数相等（见 splashFonts 的 tagline 契约）。
-  // 节日彩蛋换的就是这里的两排词（`titleFont` 已按当天词对重解字距）。
+  // 节日彩蛋换的就是这里的两排词（`titleFont` 已按当天词对重解字距）；字体若自带
+  // 配色（半立体那款的灰阶）就用它，否则沿用主题的 accent→activity。
   const { top, bottom, topKerning, bottomKerning, bottomIndent } = titleFont.tagline
-  const bigDeepSeek = renderBigText(titleFont, top, t, wordmarkRGB, taglineRGB, FLASH, 60, topKerning)
-  const bigHarness = renderBigText(titleFont, bottom, t, taglineRGB, PALE, FLASH, 60, bottomKerning, bottomIndent)
+  const bigDeepSeek = renderBigText(titleFont, top, t, titleFont.palette?.from ?? wordmarkRGB, titleFont.palette?.to ?? taglineRGB, FLASH, 60, topKerning)
+  const bigHarness = renderBigText(titleFont, bottom, t, titleFont.palette?.from ?? taglineRGB, titleFont.palette?.to ?? PALE, FLASH, 60, bottomKerning, bottomIndent)
 
   return (
     <Box ref={ref} flexDirection="column" marginTop={1}>
