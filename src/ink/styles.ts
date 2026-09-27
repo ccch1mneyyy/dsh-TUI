@@ -434,6 +434,16 @@ export type Styles = {
    * doesn't pick up leading whitespace from middle rows.
    */
   readonly noSelect?: boolean | 'from-left-edge'
+
+  /**
+   * This one-row box continues the line of the row above it: the break
+   * between them is a wrap, not a newline, so a fullscreen copy joins the
+   * two rows (as it does for wrapped <Text>). The value is the width of the
+   * row above, in columns from this box's left edge — where that row's
+   * content ends. For rows laid out outside <Text> (a paragraph with inline
+   * images); selection-only, no effect on painting.
+   */
+  readonly softWrapContinuation?: number
 }
 
 const applyPositionStyles = (node: LayoutNode, style: Styles): void => {

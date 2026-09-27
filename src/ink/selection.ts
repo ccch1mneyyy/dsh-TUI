@@ -1136,16 +1136,35 @@ function extractRowText(
   row: number,
   colStart: number,
   colEnd: number,
-): string {
+  emitted: Set<number> = new Set(),
+): string | undefined {
   const noSelect = screen.noSelect
+  const copyRegion = screen.copyRegion
   const rowOff = row * screen.width
   const contentEnd = row + 1 < screen.height ? screen.softWrap[row + 1]! : 0
   const lastCol = contentEnd > 0 ? Math.min(colEnd, contentEnd - 1) : colEnd
   let line = ''
+  // Whether this row touched a region an earlier row already copied (the
+  // lower rows of a block formula image) and copied no new one.
+  let sawEmittedRegion = false
+  let copiedRegion = false
   for (let col = colStart; col <= lastCol; col++) {
     // Skip cells marked noSelect (gutters, line numbers, diff sigils).
     // Check before cellAt to avoid the decode cost for excluded cells.
     if (noSelect[rowOff + col] === 1) continue
+    // A copy region (a formula image) copies its text once, at the first
+    // selected cell, however many of its cells the selection covers.
+    const region = copyRegion?.[rowOff + col] ?? 0
+    if (region !== 0) {
+      if (!emitted.has(region)) {
+        emitted.add(region)
+        line += screen.copyTexts?.get(region) ?? ''
+        copiedRegion = true
+      } else {
+        sawEmittedRegion = true
+      }
+      continue
+    }
     const cell = cellAt(screen, col, row)
     if (!cell) continue
     // Skip spacer tails (second half of wide chars) — the head already
@@ -1158,6 +1177,9 @@ function extractRowText(
     }
     line += cell.char
   }
+  // A row holding only blank cells beside an already-copied region adds no
+  // line (the region's text carried its own line breaks).
+  if (sawEmittedRegion && !copiedRegion && line.trim() === '') return undefined
   return contentEnd > 0 ? line : line.replace(/\s+$/, '')
 }
 
@@ -1354,10 +1376,13 @@ export function getSelectedText(s: SelectionState, screen: Screen): string {
     joinRows(lines, s.scrolledOffAbove[i]!, s.scrolledOffAboveSW[i])
   }
 
+  const emitted = new Set<number>()
   for (let row = start.row; row <= end.row; row++) {
     const rowStart = row === start.row ? start.col : 0
     const rowEnd = row === end.row ? end.col : screen.width - 1
-    joinRows(lines, extractRowText(screen, row, rowStart, rowEnd), sw[row]! > 0)
+    const text = extractRowText(screen, row, rowStart, rowEnd, emitted)
+    // A row holding nothing but an already-copied region adds no line.
+    if (text !== undefined) joinRows(lines, text, sw[row]! > 0)
   }
 
   for (let i = 0; i < s.scrolledOffBelow.length; i++) {
@@ -1413,7 +1438,7 @@ export function captureScrolledRows(
     const colStart = row === start.row ? start.col : 0
     const colEnd = row === end.row ? end.col : width - 1
     const screenRow = row - screenRowOffset
-    captured.push(extractRowText(screen, screenRow, colStart, colEnd))
+    captured.push(extractRowText(screen, screenRow, colStart, colEnd) ?? '')
     capturedSW.push(sw[screenRow]! > 0)
   }
 

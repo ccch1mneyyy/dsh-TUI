@@ -1105,6 +1105,10 @@ function renderNodeToOutput(
         })
       }
 
+      if (node.style.softWrapContinuation !== undefined) {
+        output.softWrapRow(Math.floor(y), Math.floor(x) + node.style.softWrapContinuation)
+      }
+
       const overflowX = node.style.overflowX ?? node.style.overflow
       const overflowY = node.style.overflowY ?? node.style.overflow
       const clipHorizontally = overflowX === 'hidden' || overflowX === 'scroll'

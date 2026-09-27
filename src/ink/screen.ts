@@ -612,6 +612,17 @@ export type Screen = Size & {
   noSelect: Uint8Array
 
   /**
+   * Per-cell copy region id (0 = none) and the text each id copies as.
+   * A region stands for content that is not text in its cells — a formula
+   * drawn as a terminal image — so a selection touching it copies the
+   * region's text once instead of its (blank) cells. Reset, blitted and
+   * shifted exactly like noSelect. Optional: hand-built test screens omit
+   * it.
+   */
+  copyRegion?: Int32Array
+  copyTexts?: Map<number, string>
+
+  /**
    * Per-ROW soft-wrap continuation marker. softWrap[r]=N>0 means row r
    * is a word-wrap continuation of row r-1 (the `\n` before it was
    * inserted by wrapAnsi, not in the source), and row r-1's written
@@ -729,6 +740,8 @@ export function createScreen(
     emptyStyleId: styles.none,
     damage: undefined,
     noSelect: new Uint8Array(size),
+    copyRegion: new Int32Array(size),
+    copyTexts: new Map(),
     softWrap: new Int32Array(height),
   }
 }
@@ -768,6 +781,7 @@ export function resetScreen(
     screen.cells = new Int32Array(buf)
     screen.cells64 = new BigInt64Array(buf)
     screen.noSelect = new Uint8Array(size)
+    screen.copyRegion = new Int32Array(size)
   }
   if (screen.softWrap.length < height) {
     screen.softWrap = new Int32Array(height)
@@ -776,6 +790,10 @@ export function resetScreen(
   // Reset all cells — single fill call, no loop
   screen.cells64.fill(EMPTY_CELL_VALUE, 0, size)
   screen.noSelect.fill(0, 0, size)
+  if (screen.copyRegion === undefined || screen.copyRegion.length < size) screen.copyRegion = new Int32Array(size)
+  else screen.copyRegion.fill(0, 0, size)
+  screen.copyTexts ??= new Map()
+  screen.copyTexts.clear()
   screen.softWrap.fill(0, 0, height)
 
   // Update dimensions
@@ -1312,6 +1330,16 @@ export function blitRegion(
   const dstCells = dst.cells
   const srcNoSel = src.noSelect
   const dstNoSel = dst.noSelect
+  // Copy regions travel with their cells; their texts are copied along
+  // (only when the source frame has any, so the common blit stays as is).
+  const copyRegions = src.copyTexts !== undefined && src.copyTexts.size > 0 &&
+    src.copyRegion !== undefined && dst.copyRegion !== undefined
+    ? { src: src.copyRegion, dst: dst.copyRegion }
+    : undefined
+  if (copyRegions) {
+    dst.copyTexts ??= new Map()
+    for (const [id, text] of src.copyTexts!) dst.copyTexts.set(id, text)
+  }
 
   // softWrap is per-row — copy the row range regardless of stride/width.
   // Partial-width blits still carry the row's wrap provenance since the
@@ -1330,6 +1358,7 @@ export function blitRegion(
     const nsStart = regionY * src.width
     const nsLen = (maxY - regionY) * src.width
     dstNoSel.set(srcNoSel.subarray(nsStart, nsStart + nsLen), nsStart)
+    if (copyRegions) copyRegions.dst.set(copyRegions.src.subarray(nsStart, nsStart + nsLen), nsStart)
   } else {
     // Per-row copy for partial-width or mismatched-stride regions
     let srcRowCI = regionY * srcStride + (regionX << 1)
@@ -1339,6 +1368,7 @@ export function blitRegion(
     for (let y = regionY; y < maxY; y++) {
       dstCells.set(srcCells.subarray(srcRowCI, srcRowCI + rowBytes), dstRowCI)
       dstNoSel.set(srcNoSel.subarray(srcRowNS, srcRowNS + rowLen), dstRowNS)
+      if (copyRegions) copyRegions.dst.set(copyRegions.src.subarray(srcRowNS, srcRowNS + rowLen), dstRowNS)
       srcRowCI += srcStride
       dstRowCI += dstStride
       srcRowNS += src.width
@@ -1510,11 +1540,13 @@ export function shiftRows(
   const w = screen.width
   const cells64 = screen.cells64
   const noSel = screen.noSelect
+  const copy = screen.copyRegion
   const sw = screen.softWrap
   const absN = Math.abs(n)
   if (absN > bottom - top) {
     cells64.fill(EMPTY_CELL_VALUE, top * w, (bottom + 1) * w)
     noSel.fill(0, top * w, (bottom + 1) * w)
+    copy?.fill(0, top * w, (bottom + 1) * w)
     sw.fill(0, top, bottom + 1)
     return
   }
@@ -1522,17 +1554,21 @@ export function shiftRows(
     // SU: row top+n..bottom → top..bottom-n; clear bottom-n+1..bottom
     cells64.copyWithin(top * w, (top + n) * w, (bottom + 1) * w)
     noSel.copyWithin(top * w, (top + n) * w, (bottom + 1) * w)
+    copy?.copyWithin(top * w, (top + n) * w, (bottom + 1) * w)
     sw.copyWithin(top, top + n, bottom + 1)
     cells64.fill(EMPTY_CELL_VALUE, (bottom - n + 1) * w, (bottom + 1) * w)
     noSel.fill(0, (bottom - n + 1) * w, (bottom + 1) * w)
+    copy?.fill(0, (bottom - n + 1) * w, (bottom + 1) * w)
     sw.fill(0, bottom - n + 1, bottom + 1)
   } else {
     // SD: row top..bottom+n → top-n..bottom; clear top..top-n-1
     cells64.copyWithin((top - n) * w, top * w, (bottom + n + 1) * w)
     noSel.copyWithin((top - n) * w, top * w, (bottom + n + 1) * w)
+    copy?.copyWithin((top - n) * w, top * w, (bottom + n + 1) * w)
     sw.copyWithin(top - n, top, bottom + n + 1)
     cells64.fill(EMPTY_CELL_VALUE, top * w, (top - n) * w)
     noSel.fill(0, top * w, (top - n) * w)
+    copy?.fill(0, top * w, (top - n) * w)
     sw.fill(0, top, top - n)
   }
 }
@@ -1931,6 +1967,34 @@ function diffDifferentWidth(
   }
 
   return false
+}
+
+/** Copy region ids are unique across frames, so blitted regions never collide. */
+let nextCopyRegionId = 1
+
+/**
+ * Mark a rectangular region that copies as `text` (see Screen.copyRegion).
+ * Clamps to screen bounds; like noSelect it affects selection only.
+ */
+export function markCopyRegion(
+  screen: Screen,
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+  text: string,
+): void {
+  if (screen.copyRegion === undefined) return
+  const id = nextCopyRegionId
+  nextCopyRegionId = nextCopyRegionId >= 0x7fffffff ? 1 : nextCopyRegionId + 1
+  const maxX = Math.min(x + width, screen.width)
+  const maxY = Math.min(y + height, screen.height)
+  const stride = screen.width
+  for (let row = Math.max(0, y); row < maxY; row++) {
+    const rowStart = row * stride
+    screen.copyRegion.fill(id, rowStart + Math.max(0, x), rowStart + maxX)
+  }
+  ;(screen.copyTexts ??= new Map()).set(id, text)
 }
 
 /**

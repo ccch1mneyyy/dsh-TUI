@@ -54,7 +54,7 @@ export function MathBlock({ token, dimColor, forceWidth }: Props): React.ReactNo
   const graphics = useTerminalImages(wantImage)
   const cellSize = useTerminalImageCellSize()
   const [themeName] = useTheme()
-  const color = hexColor(getTheme(themeName).text)
+  const color = themeInkHex(getTheme(themeName).text)
   const request: MathRenderRequest | undefined = wantImage && graphics && cellSize !== undefined && color !== undefined
     ? { tex: token.text, display: true, color, cellSize, maxColumns: budget, maxRows: IMAGE_MAX_ROWS }
     : undefined
@@ -74,7 +74,7 @@ export function MathBlock({ token, dimColor, forceWidth }: Props): React.ReactNo
       lines.every(line => stringWidth(line) <= raster.columns)
     return (
       <Box paddingLeft={INDENT_WIDTH}>
-        <Image presentation="transcript" source={raster.source} width={raster.columns} height={raster.rows} alt={token.text}>
+        <Image presentation="transcript" source={raster.source} width={raster.columns} height={raster.rows} alt={token.text} copyText={token.raw.trim()}>
           <Box width={raster.columns} height={raster.rows} overflow="hidden">
             <Text dimColor wrap={stackedFits ? 'truncate' : 'wrap'}>
               {stackedFits ? lines.join('\n') : renderInlineMath(token.text) ?? token.text}
@@ -134,7 +134,7 @@ function requestKey(request: MathRenderRequest): string {
 }
 
 /** A theme color as `#rrggbb`, or undefined for ANSI names the image cannot match. */
-function hexColor(color: string): string | undefined {
+export function themeInkHex(color: string): string | undefined {
   if (/^#[0-9a-f]{6}$/i.test(color)) return color
   const match = /^rgb\(\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})\s*\)$/.exec(color)
   if (match === null) return undefined

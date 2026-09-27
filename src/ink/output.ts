@@ -17,6 +17,7 @@ import {
   createCellRun,
   extractHyperlinkFromStyles,
   filterOutHyperlinkStyles,
+  markCopyRegion,
   markNoSelectRegion,
   OSC8_PREFIX,
   shadeRegion,
@@ -208,6 +209,8 @@ export type Operation =
   | ClearOperation
   | ShadeOperation
   | NoSelectOperation
+  | CopyRegionOperation
+  | SoftWrapRowOperation
   | ShiftOperation
 
 /**
@@ -330,6 +333,20 @@ type ClearOperation = {
 type NoSelectOperation = {
   type: 'noSelect'
   region: Rectangle
+}
+
+/** Row `y` continues the row above, whose content ends at `contentEnd`. */
+type SoftWrapRowOperation = {
+  type: 'softWrapRow'
+  y: number
+  contentEnd: number
+}
+
+/** A region that copies as `text` (see Screen.copyRegion); paints nothing. */
+type CopyRegionOperation = {
+  type: 'copyRegion'
+  region: Rectangle
+  text: string
 }
 
 /**
@@ -741,6 +758,11 @@ export default class Output {
    * the mark wins regardless of what's blitted into the region.
    * @param region - the region to mark.
    */
+  /** Mark row `y` as a wrap continuation (see Styles.softWrapContinuation). */
+  softWrapRow(y: number, contentEnd: number): void {
+    this.operations.push({ type: 'softWrapRow', y, contentEnd })
+  }
+
   noSelect(region: Rectangle): void {
     this.operations.push({ type: 'noSelect', region })
   }
@@ -922,7 +944,12 @@ export default class Output {
     const placement = this.imagePlacements.find(image => image.node === node)
     if (placement) {
       const visible = placement.clip ?? placement
-      this.noSelect({ x: visible.x, y: visible.y, width: visible.columns, height: visible.rows })
+      const region = { x: visible.x, y: visible.y, width: visible.columns, height: visible.rows }
+      // An image's backing cells are blank; one with copy text (a formula's
+      // source) copies as that text, any other image is left out of copies.
+      const copyText = node.attributes['imageCopyText']
+      if (typeof copyText === 'string' && copyText !== '') this.operations.push({ type: 'copyRegion', region, text: copyText })
+      else this.noSelect(region)
     }
     if (this.imageReady) this.imageBackingEnds.set(node, this.operations.length)
   }
@@ -1214,6 +1241,12 @@ export default class Output {
       if (operation.type === 'noSelect') {
         const { x, y, width, height } = operation.region
         markNoSelectRegion(screen, x, y, width, height)
+      } else if (operation.type === 'copyRegion') {
+        const { x, y, width, height } = operation.region
+        markCopyRegion(screen, x, y, width, height, operation.text)
+      } else if (operation.type === 'softWrapRow') {
+        // Applied after the writes, which reset the flags of rows they touch.
+        if (operation.y > 0 && operation.y < screen.height) screen.softWrap[operation.y] = Math.max(1, operation.contentEnd)
       }
     }
 

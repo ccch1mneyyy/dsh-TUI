@@ -18,6 +18,11 @@ export interface ImageProps {
   readonly height: number
   /** Text alternative. Use an empty string for a decorative image. */
   readonly alt: string
+  /**
+   * What a fullscreen copy yields for this image, e.g. a formula's source.
+   * Without it the image's cells are left out of copied text.
+   */
+  readonly copyText?: string
   /** Opt into Sixel for a modal or scrollable transcript. Default keeps Kitty only. */
   readonly presentation?: 'preview' | 'transcript'
   /** Same-size terminal-cell fallback rendered when graphics are unavailable. */
@@ -36,6 +41,7 @@ export default function Image({
   width,
   height,
   alt,
+  copyText,
   presentation,
   children,
 }: ImageProps): React.ReactNode {
@@ -50,6 +56,7 @@ export default function Image({
       imageHeight={image?.height}
       imageAlt={alternative}
       imagePresentation={presentation}
+      imageCopyText={copyText}
       style={{
         width: columns,
         height: rows,
