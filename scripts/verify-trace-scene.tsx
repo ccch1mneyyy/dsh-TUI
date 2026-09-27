@@ -43,6 +43,7 @@ const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render }, { Traj
 const { miniWakeWidth } = await import('../src/components/trajectory/MiniWake.js')
 const traj = await import('../src/dsh-adapter/trajectory/index.js')
 const instances = (await import('../src/ink/instances.js')).default
+const { TIPS } = await import('../src/tips.js')
 
 let failed = 0
 function check(name: string, ok: boolean, extra = ''): void {
@@ -620,33 +621,54 @@ function makeChannel(overrides: Record<string, unknown> = {}): Record<string, un
       durationMs: 120,
     },
   }
-  const instance = await render(
-    React.createElement(Chat, {
-      channel: makeChannel({
-        traceEvents: () => EVENTS,
-        statusBar: {
-          ...makeChannel().statusBar as Record<string, unknown>,
-          shortcutHint: true,
-        },
-        // One row only: the harness terminal is short, and a longer
-        // transcript scrolls the failed card out of the visible window.
-        rows: [failedRow],
-      }) as never,
-      questionStore: new QuestionStore() as never,
-      onExit: () => {},
-      fullscreen: false,
-      // Deterministic: never read the developer's own prefs file.
-      trajectorySeen: false,
-    }),
-    { stdout: stdout as never, stdin: stdin as never, stderr: stdout as never, exitOnCtrlC: false, patchConsole: false },
-  )
+  const tree = React.createElement(Chat, {
+    channel: makeChannel({
+      traceEvents: () => EVENTS,
+      statusBar: {
+        ...makeChannel().statusBar as Record<string, unknown>,
+        shortcutHint: true,
+      },
+      // One row only: the harness terminal is short, and a longer
+      // transcript scrolls the failed card out of the visible window.
+      rows: [failedRow],
+    }) as never,
+    questionStore: new QuestionStore() as never,
+    onExit: () => {},
+    fullscreen: false,
+    // Deterministic: never read the developer's own prefs file.
+    trajectorySeen: false,
+  })
+  // Reproduce the CI collision on every run: this startup tip quotes the
+  // status hint verbatim. Pin only the initial mount, then restore randomness.
+  const tipIndex = TIPS.findIndex(tip => tip.id === 'disp-statusbar-hint')
+  if (tipIndex < 0) throw new Error('missing disp-statusbar-hint fixture')
+  const random = Math.random
+  let instance: Awaited<ReturnType<typeof render>>
+  try {
+    Math.random = () => (tipIndex + 0.5) / TIPS.length
+    instance = await render(
+      tree,
+      { stdout: stdout as never, stdin: stdin as never, stderr: stdout as never, exitOnCtrlC: false, patchConsole: false },
+    )
+  } finally {
+    Math.random = random
+  }
   for (const value of instances.values()) instances.set(process.stdout, value)
 
-  check('the startup tip teaches the trajectory key', await settled(() => /ctrl\+t|⌘t/.test(screen())), '')
-  // The script pins DSH_TUI_LANG=zh, so the hint reads `? 查看快捷键`.
+  check('the startup tip fixture quotes the idle shortcut hint', await settled(() =>
+    screen().split('\n').some(line => line.includes('/tips') && line.includes('? 查看快捷键'))))
+  check('the conversation exposes the trajectory key', await settled(() => /ctrl\+t|⌘t/.test(screen())), '')
+  // Exclude the header's tip, but count ALL remaining matches: using find()
+  // here would hide a genuinely duplicated status hint. Locale is pinned zh.
+  const countIdleShortcutHints = (text: string): number =>
+    (text.split('\n').filter(line => !line.includes('/tips')).join('\n').match(/\? 查看快捷键/g) ?? []).length
+  const tipLine = `${TIPS[tipIndex]!.zh} · /tips 更多技巧`
+  check('a startup tip cannot mask a missing status hint', countIdleShortcutHints(tipLine) === 0)
+  check('duplicate status hints are still counted',
+    countIdleShortcutHints(`${tipLine}\n? 查看快捷键\n? 查看快捷键`) === 2)
   check('the idle shortcuts hint appears exactly once',
-    await settled(() => (screen().match(/\? 查看快捷键/g) ?? []).length === 1),
-    `${(screen().match(/\? 查看快捷键/g) ?? []).length}`)
+    await settled(() => countIdleShortcutHints(screen()) === 1),
+    `${countIdleShortcutHints(screen())}`)
 
   // B — the wake strip lives on the hint row, and every assertion below is
   // scoped to that row on purpose: the startup tip also names the key, so a
