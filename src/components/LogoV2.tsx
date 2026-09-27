@@ -11,6 +11,7 @@ import { useTheme } from './design-system/ThemeProvider.js'
 import { parseRGB } from './Spinner/spinnerUtils.js'
 import { renderBigText } from './bigfont.js'
 import { COLUMN_GAP, WHALE_BOX_WIDTH, resolveSplashLayout } from './splashLayout.js'
+import { pickSplashFont, splashFontById, type SplashFont } from './splashFonts.js'
 import { stringWidth } from '../ink/stringWidth.js'
 import { BRAND, FLASH, ICE, PALE, sweep } from './shimmer.js'
 import { STANDARD_FRAME_INDEX, WhaleArt } from './Whale.js'
@@ -71,12 +72,14 @@ function capitalize(text: string): string {
  * Layout: the 13-row pixel whale beside a text column of matching height —
  * the `✦ dsh-TUI` wordmark with version, the `DEEPSEEK`/`HARNESS` tagline in
  * the 5-row block font (brand-blue → ice gradient, a blank row between the
- * two words, both stretched to the same width), the model/effort and
+ * two words, both stretched to the same width — see `splashFonts.ts` for the
+ * eight faces and the per-face kerning), the model/effort and
  * cwd in plain text (no brand-color highlight), the startup tip, and below
  * the whale the welcome tagline, centered under the art, in ice
  * blue. Narrow terminals climb down the `resolveSplashLayout` ladder —
  * whale + big text, then the big text alone, then the whale alone, then one
- * plain title line.
+ * plain title line. The face rotates by local date (`pickSplashFont`), so a
+ * given day always shows the same one.
  */
 export function LogoV2({
   model,
@@ -85,6 +88,7 @@ export function LogoV2({
   skipIntro = false,
   intro,
   tip,
+  fontId,
   whale = true,
   whaleIdle = true,
   working = false,
@@ -97,6 +101,9 @@ export function LogoV2({
   skipIntro?: boolean
   /** Test seam: pin the intro animation instead of rolling one at startup. */
   intro?: WhaleIntroId
+  /** Big-text face id (settings `dsh-tui.splashFont`); undefined → the
+   * date-rotated `pickSplashFont()`. */
+  fontId?: string | undefined
   /** Test seam: pin the startup tip line (probes need a deterministic tip). */
   tip?: Tip
   /** Show the pixel whale art (settings `dsh-tui.whale`); off → text-only header. */
@@ -183,8 +190,12 @@ export function LogoV2({
   const wordmarkShimmerRGB = parseRGB(theme.accentShimmer) ?? ICE
   const taglineRGB = parseRGB(theme.activity) ?? ICE
 
-  // 窄终端阶梯：鲸鱼 + 大字 → 纯大字 → 纯鲸鱼 → 一行纯文字。
-  const { showWhale, showBigTitle, showPlainTitle } = resolveSplashLayout(columns, { whale })
+  // 按天轮换的大字字体：同一天内恒定、隔天换一款；`fontId`（设置项）可 pin 住一款。
+  const [dailyFont] = React.useState<SplashFont>(() => pickSplashFont())
+  const font = fontId === undefined ? dailyFont : splashFontById(fontId)
+
+  // 窄终端阶梯：鲸鱼 + 大字 → 纯大字 → 纯鲸鱼 → 一行纯文字（阈值随字体字身宽度变）。
+  const { showWhale, showBigTitle, showPlainTitle } = resolveSplashLayout(columns, { whale, font })
 
   // Welcome-phase idle behaviors (settings `dsh-tui.whaleIdle`): fin
   // flutters, tail thumps and blinks while idle, and a sleep-Z loop after
@@ -264,10 +275,11 @@ export function LogoV2({
     ? Math.max(0, Math.round(WHALE_CENTER - stringWidth(tagline) / 2))
     : 2
 
-  const bigDeepSeek = renderBigText('DEEPSEEK', t, wordmarkRGB, taglineRGB, FLASH, 60)
-  // HARNESS is the shorter word: 7 glyphs at 8 columns (kerning 2) span the
-  // same 56 columns as DEEPSEEK's 8 at 7, so the two rows line up as a block.
-  const bigHarness = renderBigText('HARNESS', t, taglineRGB, PALE, FLASH, 60, 2)
+  // 两行标题各自用字体声明的字距；下排再按 `bottomIndent` 居中——
+  // 两者一起保证画出来的列数相等（见 splashFonts 的 tagline 契约）。
+  const { top, bottom, topKerning, bottomKerning, bottomIndent } = font.tagline
+  const bigDeepSeek = renderBigText(font, top, t, wordmarkRGB, taglineRGB, FLASH, 60, topKerning)
+  const bigHarness = renderBigText(font, bottom, t, taglineRGB, PALE, FLASH, 60, bottomKerning, bottomIndent)
 
   return (
     <Box ref={ref} flexDirection="column" marginTop={1}>

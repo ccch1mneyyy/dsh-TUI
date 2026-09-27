@@ -1,18 +1,23 @@
 /**
- * 开屏头部两条契约：
- * ① 大字排版——DEEPSEEK / HARNESS 必须都是 5 行高、且**等宽**（8×7 = 7×8），
- *    否则右边缘参差；`bigTextWidth` 这个判定真源必须等于实际画出来的列数。
- * ② 窄终端阶梯——`resolveSplashLayout` 必须按「鲸鱼+大字 → 纯大字 → 纯鲸鱼 →
- *    一行纯文字」的顺序降级，档位边界不许出现空档或两档同时成立。
+ * 开屏头部契约，逐款字体钉死：
+ * ① 字形——每款 5 行、每个字形与 fallback 行的宽度都等于 glyphWidth、覆盖
+ *    `DEEPSEEK`/`HARNESS` 用到的全部字母（缺一个就会在开屏上出现空心方块）；
+ * ② 两行标题——画出来的列数必须相等，且下排靠 `bottomIndent` 居中（左右留白差 ≤ 1 列）；
+ * ③ `bigTextWidth` 必须等于实际画出的列数（去掉末尾字距留白）——布局判定与画面同源；
+ * ④ 窄终端阶梯按「鲸鱼+大字 → 纯大字 → 纯鲸鱼 → 一行纯文字」降级，档位无空档；
+ * ⑤ 按天轮换——同一天内恒定、连续 N 天覆盖全部字体、未知 id 退回基准款。
  * Run: node --import tsx/esm scripts/verify-splash-layout.ts
  */
 import { bigTextWidth, renderBigText } from '../src/components/bigfont.js'
 import { COLUMN_GAP, WHALE_BOX_WIDTH, resolveSplashLayout } from '../src/components/splashLayout.js'
+import { SPLASH_FONTS, pickSplashFont, splashFontById } from '../src/components/splashFonts.js'
 
 const ACCENT = { r: 63, g: 108, b: 196 }
 const PALE = { r: 211, g: 225, b: 254 }
 /** SGR only — the block font paints with truecolor foreground sequences. */
 const SGR = /\x1b\[[0-9;]*m/g
+/** 开屏实际用到的字母；每款字体都必须有。 */
+const LETTERS = [...new Set([...'DEEPSEEK', ...'HARNESS'])]
 
 let failed = 0
 const check = (name: string, ok: boolean, detail = ''): void => {
@@ -22,40 +27,58 @@ const check = (name: string, ok: boolean, detail = ''): void => {
 
 const columns = (row: string): number => [...row.replace(SGR, '')].length
 
-// ── ① 大字排版 ────────────────────────────────────────────────────────────
-// 与开屏完全相同的两次调用（见 LogoV2）：DEEPSEEK 默认字距，HARNESS 加宽到 2。
-const deepseek = renderBigText('DEEPSEEK', 0, ACCENT, ACCENT, PALE, 60)
-const harness = renderBigText('HARNESS', 0, ACCENT, PALE, PALE, 60, 2)
-const dsColumns = columns(deepseek[0] ?? '')
-const hnColumns = columns(harness[0] ?? '')
+// ── ①②③ 逐款字体 ─────────────────────────────────────────────────────────
+for (const font of SPLASH_FONTS) {
+  const { top, bottom, topKerning, bottomKerning, bottomIndent } = font.tagline
+  const topRows = renderBigText(font, top, 0, ACCENT, ACCENT, PALE, 60, topKerning)
+  const bottomRows = renderBigText(font, bottom, 0, ACCENT, PALE, PALE, 60, bottomKerning, bottomIndent)
+  const topWidth = columns(topRows[0] ?? '')
+  const bottomWidth = columns(bottomRows[0] ?? '')
+  const inkTop = bigTextWidth(font, top, topKerning)
+  const inkBottom = bigTextWidth(font, bottom, bottomKerning)
 
-check('block font renders five rows per word', deepseek.length === 5 && harness.length === 5)
-check(
-  'both tagline rows come out the same width',
-  dsColumns === hnColumns && deepseek.every((row, i) => columns(row) === columns(harness[i] ?? '')),
-  `DEEPSEEK ${dsColumns} vs HARNESS ${hnColumns}`,
-)
-check(
-  'each row paints ink only (no tab / line break leaks into a row)',
-  [...deepseek, ...harness].every(row => !/[\t\n\r]/.test(row)),
-)
-// 布局判定用的宽度必须就是画出来的宽度（去掉末尾那一格字距留白）。
-check(
-  'bigTextWidth matches the painted width',
-  bigTextWidth('DEEPSEEK') === dsColumns - 1 && bigTextWidth('HARNESS', 2) === hnColumns - 2,
-  `DEEPSEEK ${bigTextWidth('DEEPSEEK')} / HARNESS ${bigTextWidth('HARNESS', 2)}`,
-)
+  check(`[${font.id}] 两行都是 5 行`, topRows.length === 5 && bottomRows.length === 5)
+  check(
+    `[${font.id}] 两行画出来的列数相等`,
+    topWidth === bottomWidth && topRows.every((row, i) => columns(row) === columns(bottomRows[i] ?? '')),
+    `${topWidth} vs ${bottomWidth}`,
+  )
+  check(
+    `[${font.id}] 下排居中（左右留白差 ≤ 1 列）`,
+    Math.abs(inkTop - inkBottom - 2 * bottomIndent) <= 1,
+    `ink ${inkTop}/${inkBottom} indent ${bottomIndent}`,
+  )
+  check(
+    `[${font.id}] bigTextWidth 等于实际画出的列数`,
+    bigTextWidth(font, top, topKerning) === topWidth - topKerning &&
+      bigTextWidth(font, bottom, bottomKerning) === bottomWidth - bottomIndent - bottomKerning,
+  )
+  check(
+    `[${font.id}] 字形与 fallback 都是 glyphWidth 宽`,
+    [...Object.values(font.glyphs), font.fallback].every(rows =>
+      rows.length === 5 && rows.every(row => [...row.replace(SGR, '')].length === font.glyphWidth),
+    ),
+    `${font.glyphWidth} 列`,
+  )
+  check(
+    `[${font.id}] 覆盖 DEEPSEEK/HARNESS 的全部字母`,
+    LETTERS.every(letter => (font.glyphs[letter] ?? []).length === 5),
+    LETTERS.join(''),
+  )
+  // 缺字退化成 fallback 而不是抛错，且不改变字身宽度。
+  const unknown = renderBigText(font, 'Ø', 0, ACCENT, ACCENT, PALE, 60, topKerning)
+  check(`[${font.id}] 缺字走 fallback 且宽度不变`, columns(unknown[0] ?? '') === font.glyphWidth + topKerning)
+}
 
-// 陌生字符退化成空心方块而不是抛错，且不改变字身宽度（打错字不能让版面位移）。
-const unknown = renderBigText('Ø', 0, ACCENT, ACCENT, PALE, 60)
-const single = renderBigText('D', 0, ACCENT, ACCENT, PALE, 60)
-check('an unknown letter falls back to a box', unknown.length === 5 && unknown.join('').includes('█'))
-check('the fallback box keeps the glyph advance', columns(unknown[0] ?? '') === columns(single[0] ?? ''))
+check('字体 id 唯一', new Set(SPLASH_FONTS.map(font => font.id)).size === SPLASH_FONTS.length)
+check('字体数量 >= 2（轮换才有意义）', SPLASH_FONTS.length >= 2, `${SPLASH_FONTS.length} 款`)
 
-// ── ② 窄终端阶梯 ──────────────────────────────────────────────────────────
-const titleWidth = bigTextWidth('DEEPSEEK')
+// ── ④ 窄终端阶梯（用基准款算阈值） ────────────────────────────────────────
+const font = SPLASH_FONTS[0]!
+const titleWidth = bigTextWidth(font, font.tagline.top, font.tagline.topKerning)
 const bothWidth = titleWidth + COLUMN_GAP + WHALE_BOX_WIDTH
-
+const tier = (l: { showWhale: boolean; showBigTitle: boolean; showPlainTitle: boolean }): string =>
+  `${l.showWhale ? 'W' : ''}${l.showBigTitle ? 'T' : ''}${l.showPlainTitle ? 'P' : ''}`
 const ladder: readonly (readonly [number, boolean, string])[] = [
   [bothWidth + 30, true, 'WT'],
   [bothWidth, true, 'WT'],
@@ -68,29 +91,45 @@ const ladder: readonly (readonly [number, boolean, string])[] = [
   [titleWidth - 1, false, 'P'],
   [bothWidth + 30, false, 'T'],
 ]
-const tier = (showWhale: boolean, showBigTitle: boolean, showPlainTitle: boolean): string =>
-  `${showWhale ? 'W' : ''}${showBigTitle ? 'T' : ''}${showPlainTitle ? 'P' : ''}`
-
 for (const [width, whale, expected] of ladder) {
-  const layout = resolveSplashLayout(width, { whale })
-  const actual = tier(layout.showWhale, layout.showBigTitle, layout.showPlainTitle)
-  check(
-    `${width} 列${whale ? '' : '（关掉鲸鱼）'} → ${expected}`,
-    actual === expected,
-    actual === expected ? `边界 ${bothWidth}/${titleWidth}/${WHALE_BOX_WIDTH}` : `得到 ${actual}`,
-  )
+  const actual = tier(resolveSplashLayout(width, { whale, font }))
+  check(`${width} 列${whale ? '' : '（关掉鲸鱼）'} → ${expected}`, actual === expected, `得到 ${actual}`)
 }
-// 纯文字档只允许出现在「大字和鲸鱼都放不下」的宽度上，且任何宽度都不会什么都不画。
-for (const width of [10, WHALE_BOX_WIDTH - 1, WHALE_BOX_WIDTH, titleWidth - 1, titleWidth, bothWidth - 1, bothWidth, 200]) {
-  const { showWhale, showBigTitle, showPlainTitle } = resolveSplashLayout(width, { whale: true })
+for (const width of [10, WHALE_BOX_WIDTH - 1, WHALE_BOX_WIDTH, titleWidth - 1, titleWidth, bothWidth, 300]) {
+  const layout = resolveSplashLayout(width, { whale: true, font })
   check(
     `${width} 列：纯文字档只在两样都放不下时出现，且必定画点什么`,
-    showPlainTitle === (!showWhale && !showBigTitle) && (showWhale || showBigTitle || showPlainTitle),
+    layout.showPlainTitle === (!layout.showWhale && !layout.showBigTitle) &&
+      (layout.showWhale || layout.showBigTitle || layout.showPlainTitle),
   )
 }
+// 宽体字身更宽，阈值必须跟着走（不能写死 97）。
+const widest = [...SPLASH_FONTS].sort(
+  (a, b) => bigTextWidth(b, b.tagline.top, b.tagline.topKerning) - bigTextWidth(a, a.tagline.top, a.tagline.topKerning),
+)[0]!
+check(
+  '阶梯阈值随字体字身宽度变',
+  resolveSplashLayout(bothWidth, { whale: true, font: widest }).showWhale ===
+    (bigTextWidth(widest, widest.tagline.top, widest.tagline.topKerning) + COLUMN_GAP + WHALE_BOX_WIDTH <= bothWidth),
+  `最宽字体 ${widest.id} = ${bigTextWidth(widest, widest.tagline.top, widest.tagline.topKerning)} 列`,
+)
+
+// ── ⑤ 按天轮换 ────────────────────────────────────────────────────────────
+const sameDay = [new Date(2026, 3, 1, 0, 1), new Date(2026, 3, 1, 23, 59)]
+check(
+  '同一天内（跨时刻）恒定',
+  pickSplashFont(sameDay[0]).id === pickSplashFont(sameDay[1]).id,
+  pickSplashFont(sameDay[0]).id,
+)
+const days = Array.from({ length: SPLASH_FONTS.length }, (_, i) => new Date(2026, 3, 1 + i))
+const rolled = new Set(days.map(day => pickSplashFont(day).id))
+check(`连续 ${SPLASH_FONTS.length} 天覆盖全部字体`, rolled.size === SPLASH_FONTS.length, [...rolled].join(','))
+check('隔天会换一款', pickSplashFont(new Date(2026, 3, 1)).id !== pickSplashFont(new Date(2026, 3, 2)).id)
+check('未知 id 退回基准款', splashFontById('nope').id === SPLASH_FONTS[0]!.id)
+check('按 id 取到对应字体', splashFontById('classic').id === 'classic')
 
 if (failed > 0) {
   console.error(`verify-splash-layout: ${failed} check(s) failed`)
   process.exit(1)
 }
-console.log('verify-splash-layout OK')
+console.log(`verify-splash-layout OK (${SPLASH_FONTS.length} 款字体)`)

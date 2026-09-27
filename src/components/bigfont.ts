@@ -1,113 +1,93 @@
 import { interpolateColor } from './Spinner/spinnerUtils.js'
+import type { SplashFont } from './splashFonts.js'
 
 /**
- * A 5-row block font for the header tagline, painted with a horizontal
- * color gradient plus a moving highlight window (the same sweep cadence as
- * the wordmark shimmer — see the `stepMs` parameter). Glyphs are 6 columns
- * wide with 2-column stems (bold weight; the half-block bars stay one pixel
- * thick so the rounded corners of the letterforms survive); only the letters
- * the tagline needs are defined, and unknown characters fall back to a
- * hollow box so a typo fails visibly instead of crashing the splash.
+ * 5 行点阵大字的画布：横向颜色渐变 + 一道从左往右扫的高光（节奏与 `✦ dsh-TUI`
+ * 字标的扫光一致，见 `stepMs`）。字形与度量来自 `splashFonts.ts` 的字体描述符，
+ * 这里只负责"把某款字体画出来"——所以加字体是加数据，不是改画布。
+ *
+ * 缺字走字体自带的 `fallback` 空心方块：打错字要看得见，而不是让开屏崩掉。
  */
 
+/** 颜色通道。 */
 export interface Rgb {
   r: number
   g: number
   b: number
 }
 
-/** Glyph rows are 6 columns wide; `·` is a transparent cell. */
-const GLYPHS: Record<string, readonly [string, string, string, string, string]> = {
-  D: ['██▀▀▄▄', '██··██', '██··██', '██··██', '██▄▄▀▀'],
-  E: ['██▀▀▀▀', '██····', '██▀▀▀·', '██····', '██▄▄▄▄'],
-  P: ['██▀▀▄▄', '██··██', '██▄▄▀▀', '██····', '██····'],
-  S: ['██▀▀▀▀', '██····', '·▀▀▀▀▄', '····██', '██▄▄▄▀'],
-  K: ['██··██', '██·██·', '███···', '██·██·', '██··██'],
-  H: ['██··██', '██··██', '██▀▀██', '██··██', '██··██'],
-  A: ['·▄▀▀▄·', '██··██', '██▀▀██', '██··██', '██··██'],
-  R: ['██▀▀▄▄', '██··██', '██▄▄▀▀', '██·██·', '██··██'],
-  N: ['██··██', '███·██', '██·███', '██··██', '██··██'],
-}
-
-const FALLBACK: readonly [string, string, string, string, string] = [
-  '▄▄▄▄▄▄',
-  '██··██',
-  '██··██',
-  '██··██',
-  '▀▀▀▀▀▀',
-]
-
-/** Glyph box width, in terminal columns. */
-const GLYPH_WIDTH = 6
-/** Blank columns emitted after each glyph unless the caller asks otherwise. */
-const DEFAULT_KERNING = 1
-/** Space between words. */
+/** 词组之间的间隔列数。 */
 const WORD_GAP = 2
-/** Sweep highlight window width, in terminal columns. */
+/** 扫光窗口宽度（列）。 */
 const SWEEP_WINDOW = 8
+/** 一行字画几行。 */
+const ROWS = 5
 
 const esc = (rgb: Rgb): string => `\x1b[38;2;${rgb.r};${rgb.g};${rgb.b}m`
 const RESET = '\x1b[39m'
 
 /**
- * Columns `text` paints at `kerning`, trailing padding included — the same
- * arithmetic the render loop performs, kept in one place so the two cannot drift.
- * @param text - Text to measure.
- * @param kerning - Blank columns emitted after each glyph.
- * @returns Painted column count.
+ * `text` 在该字体、该字距下画出来的列数（含末尾那格字距留白）——与渲染循环
+ * 用同一套算术，放在这里以免两处漂移。
+ * @param font - 字体描述符。
+ * @param text - 要量的文本。
+ * @param kerning - 每个字形之后补的空列数。
+ * @returns 画出来的列数。
  */
-function paintedWidth(text: string, kerning: number): number {
+function paintedWidth(font: SplashFont, text: string, kerning: number): number {
   let width = 0
-  for (const ch of text) width += ch === ' ' ? WORD_GAP : GLYPH_WIDTH + kerning
+  for (const ch of text) width += ch === ' ' ? WORD_GAP : font.glyphWidth + kerning
   return width
 }
 
 /**
- * Exact display width of `text`: word/letter gaps included, the padding after
- * the last glyph excluded. The splash uses this to decide whether a word still
- * fits beside the whale, and `verify-splash-layout` pins it against the paint.
- * @param text - Text to measure (only D, E, P, S, K, H, A, R, N have glyphs).
- * @param kerning - Blank columns after each glyph (default 1).
- * @returns Display width in terminal columns.
+ * `text` 的显示宽度：含字距、**不含**最后一个字形之后的留白。开屏用它判断
+ * 某个词还放不放得下（配合鲸鱼），`verify-splash-layout` 会把它与实际画出的
+ * 列数对齐钉死。
+ * @param font - 字体描述符。
+ * @param text - 要量的文本（只有字体表里定义的字母有字形）。
+ * @param kerning - 每个字形之后的空列数（默认 1）。
+ * @returns 显示宽度（终端列）。
  */
-export function bigTextWidth(text: string, kerning = DEFAULT_KERNING): number {
+export function bigTextWidth(font: SplashFont, text: string, kerning = 1): number {
   const characters = Array.from(text)
   if (characters.length === 0) return 0
   const trailing = characters[characters.length - 1] === ' ' ? WORD_GAP : kerning
-  return paintedWidth(text, kerning) - trailing
+  return paintedWidth(font, text, kerning) - trailing
 }
 
 /**
- * Render `text` in the 5-row block font. The gradient runs `from` → `to`
- * across the full line width; a SWEEP_WINDOW-wide highlight mixed toward
- * `flash` travels left to right (one column per `stepMs`, matching the
- * wordmark shimmer's cadence). Returns 5 ANSI rows.
- * @param text - Text to render; only D, E, P, S, K, H, A, R, N have glyphs, unknown letters fall back to a hollow box.
- * @param time - Elapsed time in milliseconds; drives the sweep position and the brightness pulse.
- * @param from - Gradient start color at the left edge.
- * @param to - Gradient end color at the right edge.
- * @param flash - Highlight color mixed into the moving sweep window.
- * @param stepMs - Milliseconds per column of sweep advance (default 60).
- * @param kerning - Blank columns after each glyph (default 1). Callers widen the
- * tighter word with 2 so both tagline rows come out the same total width.
- * @returns Five ANSI rows, one per block-font line.
+ * 用某款字体渲染 `text`：渐变从 `from` 走到 `to`，一段 SWEEP_WINDOW 宽的高光
+ * 混向 `flash` 并随时间从左扫到右。返回 5 行 ANSI。
+ * @param font - 字体描述符（字形 + 字身宽度 + fallback）。
+ * @param text - 要渲染的文本；缺字的字母退化成 fallback 方块。
+ * @param time - 毫秒；决定扫光位置与脉动亮度（定格时传 0）。
+ * @param from - 渐变起点色（最左列）。
+ * @param to - 渐变终点色（最右列）。
+ * @param flash - 扫光窗口混入的高光色。
+ * @param stepMs - 扫光每前进一列的毫秒数（默认 60）。
+ * @param kerning - 每个字形之后的空列数（默认 1）。两行标题靠它撑到等宽。
+ * @param indent - 每行左侧缩进列数（下排居中用，默认 0）。
+ * @returns 5 行 ANSI，每行是点阵字的一行。
  */
 export function renderBigText(
+  font: SplashFont,
   text: string,
   time: number,
   from: Rgb,
   to: Rgb,
   flash: Rgb,
   stepMs = 60,
-  kerning = DEFAULT_KERNING,
+  kerning = 1,
+  indent = 0,
 ): string[] {
-  const width = paintedWidth(text, kerning)
+  const width = paintedWidth(font, text, kerning) + indent
   const cycle = width + SWEEP_WINDOW * 2
   const sweepStart = (Math.floor(time / stepMs) % cycle) - SWEEP_WINDOW
   const pulse = (Math.sin(time / (stepMs * 2)) + 1) / 2
 
   const rows: string[] = []
-  for (let row = 0; row < 5; row++) {
+  for (let row = 0; row < ROWS; row++) {
     let out = ''
     let current = ''
     let x = 0
@@ -134,13 +114,14 @@ export function renderBigText(
       out += ch
       x += 1
     }
+    for (let i = 0; i < indent; i++) emit(' ')
     for (const ch of text) {
       if (ch === ' ') {
         for (let i = 0; i < WORD_GAP; i++) emit(' ')
         continue
       }
-      const glyph = GLYPHS[ch] ?? FALLBACK
-      for (const cell of glyph[row]) emit(cell)
+      const glyph = font.glyphs[ch] ?? font.fallback
+      for (const cell of glyph[row] ?? '') emit(cell)
       for (let i = 0; i < kerning; i++) emit(' ')
     }
     if (current !== '') out += RESET

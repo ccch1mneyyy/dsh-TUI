@@ -413,6 +413,8 @@ An empty session shows the whale logo area at the top (scrolls away with the con
 - Text column right of the whale: `✦ dsh-TUI v版本号` →
   `DEEPSEEK / HARNESS` big text (bold glyphs, both rows the same width, one blank row between) →
   current model + effort → working directory → startup hint line.
+- The big-text face rotates by **local date** (eight faces: bold / square / bevel / wide / dot /
+  stencil / classic / slab): the same day always shows the same one, independent of launch time.
 - Out of the verified range, a **⚠ version-drift warning** appears (with the align command).
 - Centered tagline under the whale: `探索未至之境！`.
 - Narrow terminals climb down a ladder on the **content-area** width: **≥ 97 columns** whale + big

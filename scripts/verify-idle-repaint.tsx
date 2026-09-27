@@ -25,7 +25,9 @@ process.env.TERM_PROGRAM = 'kitty'
 process.env.DSH_TUI_THEME = 'dark'
 process.env.DSH_TUI_LANG = 'en'
 
-const COLS = 108
+// 宽度要容得下**当天那款**轮换字体与鲸鱼并排：最宽的 `wide`（8 列字身）需要
+// 40 + 2 + 71 = 113 列，否则会走阶梯的"纯大字"档、鲸鱼不渲染，这条回归就失去了前提。
+const COLS = 120
 const ROWS = 34
 const SETTLE_MS = 6000
 const WINDOW_MS = 15000
