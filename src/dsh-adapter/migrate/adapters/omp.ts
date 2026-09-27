@@ -8,7 +8,7 @@
  */
 import { readdirSync, readFileSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
 import type { MigrationAdapter, MigrationDiscovery, MigrationSession, MigrationTurn } from '../types.js'
 
 interface ContentBlock { readonly type?: unknown, readonly text?: unknown }
@@ -35,8 +35,11 @@ function readOne(path: string): MigrationSession | undefined {
   } catch {
     return undefined
   }
-  const nameMatch = /^[\dT:.Z-]*_([0-9a-zA-Z-]+)\.jsonl$/u.exec(path.split('/').pop() ?? '')
-  const sourceId = nameMatch?.[1] ?? path
+  // basename(): join() is `\`-separated on Windows, where split('/') returned
+  // the whole path and the fallback id stopped being stable across moves.
+  const file = basename(path)
+  const nameMatch = /^[\dT:.Z-]*_([0-9a-zA-Z-]+)\.jsonl$/u.exec(file)
+  const sourceId = nameMatch?.[1] ?? file
   let cwd: string | undefined
   let startedAt = 0
   let title: string | undefined

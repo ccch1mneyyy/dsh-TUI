@@ -42,9 +42,6 @@ export function migrationSessionId(adapter: MigrationAdapter, session: Migration
   return SessionId(migrationUuid(`${adapter.id}:${session.sourceId}`))
 }
 
-/** What happened to one conversation during an import run. */
-export type ImportOutcome = 'imported' | 'existing' | 'failed'
-
 /** Structural slice of the persistence service this module consumes. */
 interface PersistenceService {
   create(header: unknown): Promise<SessionWriteHandle>
