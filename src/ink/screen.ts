@@ -1330,15 +1330,15 @@ export function blitRegion(
   const dstCells = dst.cells
   const srcNoSel = src.noSelect
   const dstNoSel = dst.noSelect
-  // Copy regions travel with their cells; their texts are copied along
-  // (only when the source frame has any, so the common blit stays as is).
-  const copyRegions = src.copyTexts !== undefined && src.copyTexts.size > 0 &&
-    src.copyRegion !== undefined && dst.copyRegion !== undefined
-    ? { src: src.copyRegion, dst: dst.copyRegion }
-    : undefined
-  if (copyRegions) {
+  // Copy regions travel with their cells — zeros included, so a blitted
+  // overlay clears the region of a formula painted beneath it earlier in
+  // this frame — and their texts come along.
+  const copyRegions = dst.copyRegion === undefined
+    ? undefined
+    : { src: src.copyRegion, dst: dst.copyRegion }
+  if (src.copyTexts !== undefined && src.copyTexts.size > 0) {
     dst.copyTexts ??= new Map()
-    for (const [id, text] of src.copyTexts!) dst.copyTexts.set(id, text)
+    for (const [id, text] of src.copyTexts) dst.copyTexts.set(id, text)
   }
 
   // softWrap is per-row — copy the row range regardless of stride/width.
@@ -1358,7 +1358,10 @@ export function blitRegion(
     const nsStart = regionY * src.width
     const nsLen = (maxY - regionY) * src.width
     dstNoSel.set(srcNoSel.subarray(nsStart, nsStart + nsLen), nsStart)
-    if (copyRegions) copyRegions.dst.set(copyRegions.src.subarray(nsStart, nsStart + nsLen), nsStart)
+    if (copyRegions) {
+      if (copyRegions.src) copyRegions.dst.set(copyRegions.src.subarray(nsStart, nsStart + nsLen), nsStart)
+      else copyRegions.dst.fill(0, nsStart, nsStart + nsLen)
+    }
   } else {
     // Per-row copy for partial-width or mismatched-stride regions
     let srcRowCI = regionY * srcStride + (regionX << 1)
@@ -1368,7 +1371,10 @@ export function blitRegion(
     for (let y = regionY; y < maxY; y++) {
       dstCells.set(srcCells.subarray(srcRowCI, srcRowCI + rowBytes), dstRowCI)
       dstNoSel.set(srcNoSel.subarray(srcRowNS, srcRowNS + rowLen), dstRowNS)
-      if (copyRegions) copyRegions.dst.set(copyRegions.src.subarray(srcRowNS, srcRowNS + rowLen), dstRowNS)
+      if (copyRegions) {
+        if (copyRegions.src) copyRegions.dst.set(copyRegions.src.subarray(srcRowNS, srcRowNS + rowLen), dstRowNS)
+        else copyRegions.dst.fill(0, dstRowNS, dstRowNS + rowLen)
+      }
       srcRowCI += srcStride
       dstRowCI += dstStride
       srcRowNS += src.width

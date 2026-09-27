@@ -10,7 +10,7 @@ import assert from 'node:assert/strict'
 import { createNode, setAttribute } from '../src/ink/dom.js'
 import Output from '../src/ink/output.js'
 import { blitRegion, CharPool, createScreen, HyperlinkPool, shiftRows, StylePool, type Screen } from '../src/ink/screen.js'
-import { captureScrolledRows, getSelectedText, startSelection, updateSelection, type SelectionState } from '../src/ink/selection.js'
+import { captureScrolledRows, getSelectedText, shiftSelectionForViewportResize, startSelection, updateSelection, type SelectionState } from '../src/ink/selection.js'
 import type { TerminalImageSource } from '../src/ink/terminal-image.js'
 
 const source: TerminalImageSource = { data: new Uint8Array(4 * 4), width: 2, height: 2 }
@@ -133,6 +133,39 @@ function frame(): Screen {
     previous = output.get()
   }
   assert.ok(previous.copyTexts!.size <= 2, `only live regions keep their text (got ${previous.copyTexts!.size})`)
+}
+
+{
+  // A viewport that shrinks under a live selection (a bottom panel opens)
+  // captures the covered rows; restoring it pops them again. Captures keep
+  // one entry per physical row, formula rows included, so the copy is the
+  // same afterwards — the formula neither lost nor repeated.
+  const screen = frame()
+  const whole = getSelectedText(selection(0, 0, 19, 4), screen)
+  for (const [shrunk, restored] of [[1, 4], [0, 2], [0, 4]] as const) {
+    const s = selection(0, 0, 19, 4)
+    shiftSelectionForViewportResize(s, screen, 0, 4, 0, shrunk)
+    shiftSelectionForViewportResize(s, screen, 0, shrunk, 0, restored)
+    assert.equal(getSelectedText(s, screen), whole, `viewport 0..4 → 0..${shrunk} → 0..${restored} copies the same text`)
+  }
+}
+
+{
+  // A clean overlay blitted over a formula from a frame without regions
+  // clears the formula's region under it.
+  const menu = createScreen(20, 2, stylePool, charPool, hyperlinkPool)
+  const menuOutput = new Output({ width: 20, height: 2, stylePool, screen: menu })
+  menuOutput.write(0, 0, 'MENU')
+  const menuFrame = menuOutput.get()
+  const screen = createScreen(20, 2, stylePool, charPool, hyperlinkPool)
+  const output = new Output({ width: 20, height: 2, stylePool, screen, terminalImages: true })
+  const inline = image('$x$')
+  output.write(0, 0, ' '.repeat(10))
+  assert.equal(output.image(inline, 0, 0, 10, 1, source), true)
+  output.imageBacking(inline)
+  output.blit(menuFrame, 0, 0, 4, 1)
+  const covered = output.get()
+  assert.equal(getSelectedText(selection(0, 0, 3, 0), covered), 'MENU', 'a blitted overlay copies as itself')
 }
 
 console.log('Semantic copy verified: inline and block image sources, once per selection, no blank rows, blit and scroll, decorative images excluded, wrap continuations')

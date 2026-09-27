@@ -99,12 +99,6 @@ export type SelectionState = {
    *  guard only ever indicts a STATIONARY highlight whose text was
    *  swapped underneath. Owned by refreshSelectionFingerprint. */
   coveredGeometry: string | null
-  /**
-   * Copy regions (formula images) whose text rows captured during drag-to-
-   * scroll already hold. Region ids are stable per image node, so the rows
-   * still on screen do not copy the same formula again.
-   */
-  copiedRegions?: Set<number>
   /** Sticky once the covered rows changed without follow coordination.
    *  Commit-time copy (copySelectionNoClear) refuses and clears instead
    *  of shipping the replaced text. Cleared on start/clear. */
@@ -157,7 +151,6 @@ export function startSelection(
   s.scrolledOffBelow = []
   s.scrolledOffAboveSW = []
   s.scrolledOffBelowSW = []
-  s.copiedRegions = undefined
   s.virtualAnchorRow = undefined
   s.virtualFocusRow = undefined
   s.dragBounds = undefined
@@ -236,7 +229,6 @@ export function clearSelection(s: SelectionState): void {
   s.scrolledOffBelow = []
   s.scrolledOffAboveSW = []
   s.scrolledOffBelowSW = []
-  s.copiedRegions = undefined
   s.virtualAnchorRow = undefined
   s.virtualFocusRow = undefined
   s.dragBounds = undefined
@@ -1144,40 +1136,27 @@ function extractRowText(
   row: number,
   colStart: number,
   colEnd: number,
-  emitted: Set<number> = new Set(),
-): string | undefined {
+): string {
   const noSelect = screen.noSelect
   const copyRegion = screen.copyRegion
   const rowOff = row * screen.width
   const contentEnd = row + 1 < screen.height ? screen.softWrap[row + 1]! : 0
   const lastCol = contentEnd > 0 ? Math.min(colEnd, contentEnd - 1) : colEnd
   let line = ''
-  // Whether this row touched a region an earlier row already copied (the
-  // lower rows of a block formula image) and copied no new one.
-  let sawEmittedRegion = false
-  let copiedRegion = false
+  let lastRegion = 0
   for (let col = colStart; col <= lastCol; col++) {
     // Skip cells marked noSelect (gutters, line numbers, diff sigils).
     // Check before cellAt to avoid the decode cost for excluded cells.
     if (noSelect[rowOff + col] === 1) continue
-    // A copy region (a formula image) copies its text once, at the first
-    // selected cell, however many of its cells the selection covers.
+    // A copy region (a formula image) becomes one marker per row it spans;
+    // resolveCopyRegions later keeps its text once per selection.
     const region = copyRegion?.[rowOff + col] ?? 0
     if (region !== 0) {
-      if (!emitted.has(region)) {
-        emitted.add(region)
-        const text = screen.copyTexts?.get(region) ?? ''
-        // A multi-line region (a block formula's source) starts its own
-        // lines: blank cells before it are layout indent, which would
-        // otherwise land on its first line only.
-        if (text.includes('\n') && line.trim() === '') line = ''
-        line += text
-        copiedRegion = true
-      } else {
-        sawEmittedRegion = true
-      }
+      if (region !== lastRegion) line += regionMarker(region, screen.copyTexts?.get(region) ?? '')
+      lastRegion = region
       continue
     }
+    lastRegion = 0
     const cell = cellAt(screen, col, row)
     if (!cell) continue
     // Skip spacer tails (second half of wide chars) — the head already
@@ -1190,10 +1169,62 @@ function extractRowText(
     }
     line += cell.char
   }
-  // A row holding only blank cells beside an already-copied region adds no
-  // line (the region's text carried its own line breaks).
-  if (sawEmittedRegion && !copiedRegion && line.trim() === '') return undefined
   return contentEnd > 0 ? line : line.replace(/\s+$/, '')
+}
+
+/*
+ * Copy regions inside extracted row text. A row (on screen or captured
+ * during drag-to-scroll) keeps a marker per region it touches, so captured
+ * rows stay one entry per physical row; resolveCopyRegions turns markers
+ * into text only when the selection is serialized, in reading order.
+ */
+const REGION_OPEN = '\uFFF9'
+const REGION_TEXT = '\uFFFA'
+const REGION_CLOSE = '\uFFFB'
+const REGION_MARKER = /\uFFF9(\d+)\uFFFA([^\uFFFB]*)\uFFFB/g
+
+function regionMarker(id: number, text: string): string {
+  return `${REGION_OPEN}${id}${REGION_TEXT}${text.replaceAll(REGION_CLOSE, '')}${REGION_CLOSE}`
+}
+
+/**
+ * Resolve region markers across all rows of a selection: a region's text
+ * appears once, at its first row in reading order; a row holding nothing
+ * but blank cells and regions already copied (the lower rows of a block
+ * formula image) is dropped; and a multi-line region starts its own line,
+ * without the indent left of it.
+ */
+function resolveCopyRegions(rows: readonly { text: string; sw: boolean }[]): { text: string; sw: boolean }[] {
+  const emitted = new Set<number>()
+  const resolved: { text: string; sw: boolean }[] = []
+  for (const row of rows) {
+    if (!row.text.includes(REGION_OPEN)) {
+      resolved.push(row)
+      continue
+    }
+    let copied = false
+    let repeated = false
+    let text = ''
+    let at = 0
+    for (const match of row.text.matchAll(REGION_MARKER)) {
+      text += row.text.slice(at, match.index)
+      at = match.index + match[0].length
+      const id = Number(match[1])
+      if (emitted.has(id)) {
+        repeated = true
+        continue
+      }
+      emitted.add(id)
+      copied = true
+      const regionText = match[2]!
+      if (regionText.includes('\n') && text.trim() === '') text = ''
+      text += regionText
+    }
+    text += row.text.slice(at)
+    if (repeated && !copied && text.trim() === '') continue
+    resolved.push({ text, sw: row.sw })
+  }
+  return resolved
 }
 
 /** Accumulator for selected text that merges soft-wrapped rows back
@@ -1385,22 +1416,22 @@ export function getSelectedText(s: SelectionState, screen: Screen): string {
   const sw = screen.softWrap
   const lines: string[] = []
 
+  const rows: { text: string; sw: boolean }[] = []
   for (let i = 0; i < s.scrolledOffAbove.length; i++) {
-    joinRows(lines, s.scrolledOffAbove[i]!, s.scrolledOffAboveSW[i])
+    rows.push({ text: s.scrolledOffAbove[i]!, sw: s.scrolledOffAboveSW[i] === true })
   }
 
-  const emitted = new Set<number>(s.copiedRegions)
   for (let row = start.row; row <= end.row; row++) {
     const rowStart = row === start.row ? start.col : 0
     const rowEnd = row === end.row ? end.col : screen.width - 1
-    const text = extractRowText(screen, row, rowStart, rowEnd, emitted)
-    // A row holding nothing but an already-copied region adds no line.
-    if (text !== undefined) joinRows(lines, text, sw[row]! > 0)
+    rows.push({ text: extractRowText(screen, row, rowStart, rowEnd), sw: sw[row]! > 0 })
   }
 
   for (let i = 0; i < s.scrolledOffBelow.length; i++) {
-    joinRows(lines, s.scrolledOffBelow[i]!, s.scrolledOffBelowSW[i])
+    rows.push({ text: s.scrolledOffBelow[i]!, sw: s.scrolledOffBelowSW[i] === true })
   }
+
+  for (const row of resolveCopyRegions(rows)) joinRows(lines, row.text, row.sw)
 
   return lines.join('\n')
 }
@@ -1451,10 +1482,7 @@ export function captureScrolledRows(
     const colStart = row === start.row ? start.col : 0
     const colEnd = row === end.row ? end.col : width - 1
     const screenRow = row - screenRowOffset
-    const text = extractRowText(screen, screenRow, colStart, colEnd, (s.copiedRegions ??= new Set()))
-    // A row holding only an already-copied region adds no line (as on screen).
-    if (text === undefined) continue
-    captured.push(text)
+    captured.push(extractRowText(screen, screenRow, colStart, colEnd))
     capturedSW.push(sw[screenRow]! > 0)
   }
 

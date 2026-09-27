@@ -353,7 +353,10 @@ type CopyRegionOperation = {
   id: number
 }
 
-/** One copy region id per image node for its lifetime (see SelectionState.copiedRegions). */
+/**
+ * One copy region id per image node for its lifetime, so rows captured
+ * during drag-to-scroll and rows still on screen name the same formula.
+ */
 const copyRegionIds = new WeakMap<DOMElement, number>()
 
 /**
