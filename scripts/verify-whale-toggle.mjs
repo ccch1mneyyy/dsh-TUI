@@ -144,22 +144,27 @@ check('setWhale(true) restores the default view', () => {
 })
 
 // Real LogoHeader -> LogoV2 rendering: default, explicit opt-out, and narrow fallback.
-const wideDefault = await renderHeader({ columns: 100, ready: raw => raw.includes(WHALE_OUTLINE) })
+// 宽度按**阶梯**取，不按字体取：120 列放得下任何一款轮换字体与鲸鱼并排
+// （最宽的 wide 需要 40 + 2 + 71 = 113 列），35 列连大字都放不下——这样断言
+// 与「今天轮到哪款字体」无关。
+const BOTH_FIT_COLUMNS = 120
+const NOTHING_FITS_COLUMNS = 35
+const wideDefault = await renderHeader({ columns: BOTH_FIT_COLUMNS, ready: raw => raw.includes(WHALE_OUTLINE) })
 check('wide LogoHeader shows whale by default', () => {
   assert.ok(wideDefault.raw.includes(WHALE_OUTLINE), 'whale palette marker missing')
   assert.ok(wideDefault.plain.includes('dsh-TUI'), 'text logo missing')
 })
 
-const wideDisabled = await renderHeader({ columns: 100, whale: false })
+const wideDisabled = await renderHeader({ columns: BOTH_FIT_COLUMNS, whale: false })
 check('LogoHeader forwards whale=false while preserving the text logo', () => {
   assert.ok(!wideDisabled.raw.includes(WHALE_OUTLINE), 'whale palette marker still rendered')
   assert.ok(wideDisabled.plain.includes('dsh-TUI'), 'text logo missing')
   assert.ok(wideDisabled.plain.includes('whale-model-probe'), 'header details missing')
 })
 
-const narrowDefault = await renderHeader({ columns: 63 })
-check('narrow terminal hides whale but preserves the text logo', () => {
-  assert.ok(!narrowDefault.raw.includes(WHALE_OUTLINE), 'whale should hide below 64 columns')
+const narrowDefault = await renderHeader({ columns: NOTHING_FITS_COLUMNS })
+check('narrow terminal drops the whale and falls back to the plain title', () => {
+  assert.ok(!narrowDefault.raw.includes(WHALE_OUTLINE), 'whale should hide when the art no longer fits')
   assert.ok(narrowDefault.plain.includes('dsh-TUI'), 'text logo missing')
   assert.ok(narrowDefault.plain.includes('whale-model-probe'), 'header details missing')
 })
