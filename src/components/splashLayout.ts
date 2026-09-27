@@ -24,6 +24,8 @@ export const COLUMN_GAP = 2
 
 /** 判定用的词：两个字里最宽的那个。 */
 const TITLE_PROBE = 'DEEPSEEK'
+/** 该词末尾那格字距（`taglineFor` 给基准款算出来的 topKerning）——它也会画出来。 */
+const TITLE_PROBE_KERNING = 1
 
 /** 一行开屏头部在该宽度下要渲染哪些部件。 */
 export interface SplashLayout {
@@ -42,7 +44,11 @@ export interface SplashLayout {
  * @returns 该宽度下要渲染的部件。
  */
 export function resolveSplashLayout(columns: number, options: { whale: boolean }): SplashLayout {
-  const titleWidth = bigTextWidth(TITLE_PROBE)
+  // 阈值按**画出来**的列数算：每行末尾还会画出一格字距（`TITLE_PROBE_KERNING`），
+  // 而 `bigTextWidth` 只算到最后一个字形。按 ink 宽判「放得下」，恰好卡阈值时渲染行
+  // 会比可用宽度多 1 列 → Ink 走 `truncate-end`，把最后一个字形换成 `…`。
+  // 末尾那格是空白，少画一格无损观感；字形被吃才是事故。
+  const titleWidth = bigTextWidth(TITLE_PROBE, TITLE_PROBE_KERNING) + TITLE_PROBE_KERNING
   const fitsTitle = columns >= titleWidth
   const showWhale =
     options.whale &&

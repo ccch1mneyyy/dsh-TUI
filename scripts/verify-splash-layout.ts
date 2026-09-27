@@ -53,7 +53,10 @@ check('an unknown letter falls back to a box', unknown.length === 5 && unknown.j
 check('the fallback box keeps the glyph advance', columns(unknown[0] ?? '') === columns(single[0] ?? ''))
 
 // ── ② 窄终端阶梯 ──────────────────────────────────────────────────────────
-const titleWidth = bigTextWidth('DEEPSEEK')
+// 阈值口径 = **画出来**的列数（ink + 末尾那格字距）。按 ink 宽判「放得下」会在恰好
+// 卡阈值时触发 Ink 的 `truncate-end`，把最后一个字形换成 `…`。
+const TITLE_KERNING = 1
+const titleWidth = bigTextWidth('DEEPSEEK', TITLE_KERNING) + TITLE_KERNING
 const bothWidth = titleWidth + COLUMN_GAP + WHALE_BOX_WIDTH
 
 const ladder: readonly (readonly [number, boolean, string])[] = [
