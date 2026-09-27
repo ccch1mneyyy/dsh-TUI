@@ -692,8 +692,10 @@ const dict = {
   // Star easter egg (bottom welcome line on ~1/20 of mounts, see
   // components/splashEggs.ts): the sentence is split around the repo
   // hyperlink — lead + link + tail — so both halves are translatable and
-  // the rendered width can be measured for centering.
-  'logo-star-lead': { zh: '谢谢使用！源码在 ', en: 'Thanks! dsh-TUI is open source on ' },
+  // the rendered width can be measured for centering. English stays short
+  // on purpose: without OSC 8 support the link degrades to the 38-column
+  // URL, and lead+URL+tail has to fit an 80-column terminal without wrapping.
+  'logo-star-lead': { zh: '谢谢使用！源码在 ', en: 'Thanks! Source is on ' },
   'logo-star-tail': { zh: '，欢迎点个 star', en: ' — a star is welcome' },
   'logo-tip-prefix': { zh: '提示：', en: 'Tip: ' },
   'logo-tip-more': { zh: '更多技巧', en: 'more tips' },
