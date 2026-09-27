@@ -71,6 +71,21 @@ export function attachHerdrIntegration(
     }
   }
   let sequence = Date.now() * 1000
+  /**
+   * Re-anchors to the current time on every call instead of drifting by one
+   * from a single attach-time seed. A sibling process that attaches later
+   * seeds its own sequence from its own (later) attach time, which
+   * permanently outranks this instance's small per-report increments -
+   * Herdr then discards every subsequent report from this instance forever
+   * (#970). Re-anchoring lets this instance's next report reclaim a higher
+   * sequence once real time has advanced past the sibling's attach time,
+   * the same scheme Herdr's own Pi integration already uses.
+   */
+  const nextReportSeq = (): number => {
+    const candidate = Date.now() * 1000
+    sequence = candidate > sequence ? candidate : sequence + 1
+    return sequence
+  }
   let lastConfirmedReport = ''
   let disposed = false
   let running = false
@@ -112,7 +127,7 @@ export function attachHerdrIntegration(
           '--agent', 'dsh-tui',
           '--state', state,
           ...(blocked ? ['--message', 'Waiting for user input'] : []),
-          '--seq', String(++sequence),
+          '--seq', String(nextReportSeq()),
         ]), reportTimeoutMs)
         if (disposed) break
         if (result?.code === 0) {
@@ -159,7 +174,7 @@ export function attachHerdrIntegration(
         'pane', 'release-agent', paneId,
         '--source', 'custom:dsh-tui',
         '--agent', 'dsh-tui',
-        '--seq', String(++sequence),
+        '--seq', String(nextReportSeq()),
       ])
       disposePromise = withTimeout(release, releaseTimeoutMs).then(() => undefined)
       return disposePromise

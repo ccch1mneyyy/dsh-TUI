@@ -69,10 +69,22 @@ class TestBlockingStore extends ObservableState {
     },
   })
 
+  // The sequence is re-anchored to the current time on every report (#970
+  // fix below), not incremented by exactly one, so each report's `--seq` is
+  // asserted separately as "an integer strictly greater than the last one"
+  // rather than as an exact `initialSequence + N` value.
+  const seqs: number[] = []
+  const assertNextSeq = (args: readonly string[] | undefined): number => {
+    const seq = Number(args?.at(-1))
+    assert.ok(Number.isSafeInteger(seq), 'sequence should be an integer')
+    assert.ok(seqs.length === 0 || seq > seqs[seqs.length - 1]!, 'sequence must strictly increase per report')
+    seqs.push(seq)
+    return seq
+  }
+
   assert.ok(integration, 'Herdr environment should enable the integration')
   await integration.settled()
-  const initialSequence = Number(calls[0]?.args.at(10))
-  assert.ok(Number.isSafeInteger(initialSequence), 'sequence should be an integer')
+  const initialSequence = assertNextSeq(calls[0]?.args)
   assert.ok(initialSequence >= 1_000_000_000_000, 'sequence should be seeded from the current time')
   assert.deepEqual(calls, [{
     file: 'C:\\Tools\\herdr.exe',
@@ -94,7 +106,7 @@ class TestBlockingStore extends ObservableState {
     '--source', 'custom:dsh-tui',
     '--agent', 'dsh-tui',
     '--state', 'working',
-    '--seq', String(initialSequence + 1),
+    '--seq', String(assertNextSeq(calls[1]?.args)),
   ])
 
   questions.snapshot = { key: 'question-1' }
@@ -106,7 +118,7 @@ class TestBlockingStore extends ObservableState {
     '--agent', 'dsh-tui',
     '--state', 'blocked',
     '--message', 'Waiting for user input',
-    '--seq', String(initialSequence + 2),
+    '--seq', String(assertNextSeq(calls[2]?.args)),
   ])
 
   approvals.snapshot = { key: 'approval-1' }
@@ -140,7 +152,7 @@ class TestBlockingStore extends ObservableState {
     'pane', 'release-agent', 'w1:p2',
     '--source', 'custom:dsh-tui',
     '--agent', 'dsh-tui',
-    '--seq', String(initialSequence + 5),
+    '--seq', String(assertNextSeq(calls[5]?.args)),
   ])
   await integration.dispose()
   assert.equal(calls.length, 6, 'dispose must be idempotent')
@@ -360,7 +372,66 @@ class TestBlockingStore extends ObservableState {
 }
 
 // -----------------------------------------------------------------------------
-// 7. Gating: disabled integration when env vars are missing/invalid
+// 7. [Bug] A later-attached sibling must not permanently starve an earlier
+//    instance's sequence (#970)
+// -----------------------------------------------------------------------------
+{
+  const sleep = (ms: number): Promise<void> => new Promise(resolve => setTimeout(resolve, ms))
+
+  const channelA = new TestChannel()
+  const callsA: Array<{ file: string; args: readonly string[] }> = []
+  const integrationA = attachHerdrIntegration({
+    channel: channelA,
+    questions: new TestBlockingStore(),
+    approvals: new TestBlockingStore(),
+    env: { HERDR_ENV: '1', HERDR_BIN_PATH: 'herdr', HERDR_PANE_ID: 'w1:p2' },
+    run: async (file, args) => {
+      callsA.push({ file, args })
+      return { code: 0, stdout: '', stderr: '' }
+    },
+  })
+  assert.ok(integrationA)
+  await integrationA.settled()
+  const seqA1 = Number(callsA[0]?.args.at(-1))
+
+  // Real time must advance measurably before a sibling attaches, the same
+  // way a second dsh-tui process launched moments later would.
+  await sleep(8)
+
+  const channelB = new TestChannel()
+  const callsB: Array<{ file: string; args: readonly string[] }> = []
+  const integrationB = attachHerdrIntegration({
+    channel: channelB,
+    questions: new TestBlockingStore(),
+    approvals: new TestBlockingStore(),
+    env: { HERDR_ENV: '1', HERDR_BIN_PATH: 'herdr', HERDR_PANE_ID: 'w1:p2' },
+    run: async (file, args) => {
+      callsB.push({ file, args })
+      return { code: 0, stdout: '', stderr: '' }
+    },
+  })
+  assert.ok(integrationB)
+  await integrationB.settled()
+  const seqB1 = Number(callsB[0]?.args.at(-1))
+  assert.ok(seqB1 > seqA1, 'a later-attached sibling seeds a higher sequence, as before')
+
+  await sleep(8)
+
+  // The bug: instance A's next report, sent after B has already reported,
+  // must still outrank B's last-seen sequence. `++sequence` only drifted
+  // A's counter by one, permanently losing to B's time-anchored seed.
+  channelA.working = true
+  channelA.emit()
+  await integrationA.settled()
+  const seqA2 = Number(callsA[1]?.args.at(-1))
+  assert.ok(seqA2 > seqB1, 'an earlier instance must not be starved forever by a later-attached sibling (#970)')
+
+  await integrationA.dispose()
+  await integrationB.dispose()
+}
+
+// -----------------------------------------------------------------------------
+// 8. Gating: disabled integration when env vars are missing/invalid
 // -----------------------------------------------------------------------------
 for (const env of [
   {},
