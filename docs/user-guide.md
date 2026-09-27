@@ -253,7 +253,7 @@ dsh-tui
 
 | 命令 | 参数 | 作用 |
 |---|---|---|
-| `/model` | 无 | 模型选择器；**切换 = fork 会话续聊**（历史保留、仅换路由），选择持久化到 `~/.dsh-tui/model.json` |
+| `/model` | 无 | 模型选择器；**切换 = fork 会话续聊**（历史保留、仅换路由；还没有人说过话的会话不记分支，保留首个 prompt 的自动标题），选择持久化到 `~/.dsh-tui/model.json` |
 | `/effort` | `status` / `<id>` | 推理强度：无参滑杆（`←/→` 实时调整）；`status` 当前档位；`<id>` 直接设定。持久化 `~/.dsh-tui/effort.json`；新会话起始档看 /settings 的 `effortDefault`（§5.3） |
 | `/thinking` | 无 | 扩展思考显示开关（流式时思考逐条展开） |
 | `/tokens` | 无 | token 用量 + 上下文百分比 |

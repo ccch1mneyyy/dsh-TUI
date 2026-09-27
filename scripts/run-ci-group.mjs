@@ -576,6 +576,10 @@ const GROUPS = {
 // 丢上下文"事故根因）；persistence 类失败与通用失败分开提示。
     ["verify-compact-switch", ['node', '--import', 'tsx/esm', 'scripts/verify-compact-switch.tsx']],
     ["verify-live-session", ['node', '--import', 'tsx/esm', 'scripts/verify-live-session.ts']],
+// 血缘 × 自动标题回归：/model 在还没有人说过话的会话上不得写 parentSession
+// （上游 first-prompt 标题 provider 只为无 parent 的会话生成标题，fork 永不
+// 重试）；已有对话的源仍必须保留分支血缘，既有 /model 语义不得被削掉。
+    ["verify-session-title-lineage", ['node', '--import', 'tsx/esm', 'scripts/verify-session-title-lineage.ts']],
     ["verify-session-v3", ['node', '--import', 'tsx/esm', 'scripts/verify-session-v3.ts']],
     ["verify-session-tree-generations", ['node', '--import', 'tsx/esm', 'scripts/verify-session-tree-generations.ts']],
 // 裸 ● 空行回归：纯思考/纯工具步骤（无文本块）的 assistant/message

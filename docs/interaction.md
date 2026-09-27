@@ -427,6 +427,7 @@ Windows `dsh-tui.cmd --resume` 使用 `~/.dsh-tui/resume.txt` 中最后选择的
 `/model` 通过在当前历史末尾 fork 会话来切换模型，因为 DSH 没有原位换模型 API。
 
 - 旧会话仍保留在 `/resume` 中。
+- 还没有人说过话的会话不记分支：此时换模型得到的是一个不写 `parentSession` 的独立会话（继承同一份会话脚手架前缀），这样你随后打的第一个真实 prompt 仍能触发自动生成会话标题；已经对话过的会话照旧记血缘。
 
 `/preset` 只允许空白会话原地切换。
 

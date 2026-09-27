@@ -380,6 +380,8 @@ A full-screen scene (no scrollback pollution) over the whole session timeline:
 
 `/model` switches through a session fork at the end of current history, because DSH has no in-place model-switch API. The old session remains in `/resume`.
 
+- A session nobody has typed into records no branch: switching models there yields an independent session with no `parentSession` (inheriting the same session-scaffolding prefix), so the first real prompt you send still triggers automatic session-title generation. A session that already holds a conversation keeps its lineage as before.
+
 - `/preset` switches in place only for a blank session. In a started session, the choice becomes the default for the next `/new` or launch.
 
 See [Configuration](configuration.en.md#agent-presets).
