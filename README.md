@@ -173,6 +173,14 @@ Incomplete records are held for a bounded recovery window (1 second from first c
 
 A session's very first record can still leave residue if it is split before its record-specific shape forms; once any record has been decoded, every split position is covered. Inside the recovery window, literal input starting with `[digit;…` cannot be told apart from a protocol prefix — it may be held, or re-joined to a preceding `Esc`. To type it, wait for the window to close, or avoid that shape right after `Esc`.
 
+Terminal replies that arrive split are reassembled the same way (native Windows ConPTY is the common source): while the app has a query it sent but has not yet had answered — still queued, or sent within the last second — an unfinished DA1 / DA2 / DSR / DECRPM / XTVERSION tail is held across that input delay and consumed as the reply it completes instead of entering the prompt as protocol text.
+
+That claim is evidence-gated, and this is the difference from earlier builds: with no query in flight nothing is claimed, so a literal `[?61;4c` typed right after `Esc` still enters the prompt exactly as before.
+
+The window is bounded like the record hold (1 second from first capture, never extended by later input; 64 bytes max); past either bound it ends, and bytes still shaped like an unfinished reply prefix are dropped rather than shown.
+
+Inside that window, with a query genuinely in flight, same-shaped literal input can still be claimed as a reply; to type it, wait for the window to close (about a second), or avoid that shape while a query is outstanding.
+
 Mouse (fullscreen): drag to select and copy, double/triple click to select a word or line, click tool cards, timeline ticks and `[Image #N]` previews.
 
 **Pasting**: native and bracketed paste keeps ordinary text and newlines, and never submits itself on arrival. On Windows terminals that deliver a paste as win32-input-mode key records, the residue is stripped at the entry point (a multi-line paste no longer leaves stray `_`) and pasted CRLF collapses to a single newline; genuine underscores and bracketed-paste text are untouched.
