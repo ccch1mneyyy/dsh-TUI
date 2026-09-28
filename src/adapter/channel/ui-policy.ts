@@ -9,7 +9,7 @@ type MethodKeys<T> = { [K in keyof T]: T[K] extends (...args: never[]) => unknow
 export type ChannelPreferences = Pick<ChannelUi,
   | 'setDiffLayout' | 'setThinkingFold' | 'setToolBackground' | 'setScrollGutter'
   | 'setPageMargin' | 'setFoldTerminalCommand' | 'setPromptSessionLabel'
-  | 'setExpandEditor' | 'setSmoothStreaming' | 'setStatusBar' | 'setWhale' | 'setWhaleIdle' | 'setWhaleGirl' | 'setMinimal'
+  | 'setExpandEditor' | 'setSmoothStreaming' | 'setStatusBar' | 'setWhale' | 'setWhaleIdle' | 'setWhaleGirl' | 'setMinimal' | 'setSplashFont'
 >
 export const CHANNEL_UI_EFFECTS = Object.freeze({
   'setDiffLayout': 'mutate',
@@ -24,6 +24,7 @@ export const CHANNEL_UI_EFFECTS = Object.freeze({
   'setStatusBar': 'mutate',
   'setWhale': 'mutate',
   'setWhaleIdle': 'mutate',
+  'setSplashFont': 'mutate',
   'setWhaleGirl': 'mutate',
   'setMinimal': 'mutate',
   'commandCompletions': 'mutate',
@@ -164,6 +165,7 @@ export const CHANNEL_UI_PROPERTIES = [
   'statusBar',
   'whale',
   'whaleIdle',
+  'splashFont',
   'whaleGirl',
   'minimal',
   'activityEnabled',

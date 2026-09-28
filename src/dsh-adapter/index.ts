@@ -11,6 +11,7 @@ import Schema from '@deepseek-ai/schemastery'
 import type { SessionModeSpec } from '../sessionModes.js'
 import { DEFAULT_STATUS_BAR, normalizePageMargin, type MathRendering, type PageMarginSetting, type ScrollGutterMode, type StatusBarConfig, type ToolBackground } from '../tuiDisplayPrefs.js'
 import { SHORTCUT_ACTIONS, type ShortcutActionId } from '../utils/keymap.js'
+import { normalizeSplashFont, type SplashFontSetting } from '../components/splashFonts.js'
 import { editableConfig, type RuntimeConfig } from './compat/settings.js'
 
 export const name = 'dsh-tui'
@@ -60,6 +61,11 @@ export interface Config {
   /** Show the header whale and its idle animation. */
   whale?: boolean
   whaleIdle?: boolean
+  /** Big-text face on the header splash (settings `dsh-tui.splashFont`):
+   *  `daily` (the default) rotates by local date, any other value is a font
+   *  id from `components/splashFonts.ts` (`bold`/`square`/…) pinning that one
+   *  face. An unknown value falls back to `daily`. */
+  splashFont?: SplashFontSetting
   /** Swap the header's pixel whale for the static maid portrait. */
   whaleGirl?: boolean
   /** Reduce decorative header content and colors. */
@@ -147,6 +153,10 @@ export interface Config {
   mathRendering?: MathRendering
   /** @deprecated Use `mathRendering`; `false` still means `source`. */
   latexMath?: boolean
+  /** Auto recap on open (settings `dsh-tui.recapOnOpen`): opening or resuming a
+   *  session summarizes its recent activity into a dim line at the bottom of
+   *  the transcript. On by default; off leaves `/recap` as the manual path. */
+  recapOnOpen?: boolean
   /** Status-footer field visibility and compact presentation preferences. */
   statusBar?: Partial<StatusBarConfig>
   /** Built-in action-shortcut overrides (`paste: 'alt+v'`), keyed by action
@@ -176,6 +186,17 @@ export const Config: Schema<Config, RuntimeConfig<Config>> = editableConfig<Conf
   effortDefault: Schema.string().required(false),
   whale: Schema.boolean().default(true),
   whaleIdle: Schema.boolean().default(true),
+  // The face registry grows with new releases, so this is a transform rather
+  // than a union: any string parses and junk lands on `daily` at parse time
+  // (a union would fail the whole boot on a stale id). The `/settings` field
+  // offers exactly the registry's ids. The default is deliberately NOT a
+  // `.default()` here — the volatile wrapper swallows it (same shape as
+  // pageMargin, whose unset value also reads `undefined`), so `daily` comes
+  // from `normalizeSplashFont` at every read site.
+  splashFont: Schema.transform(
+    Schema.string(),
+    value => normalizeSplashFont(value),
+  ),
   whaleGirl: Schema.boolean().default(false),
   minimal: Schema.boolean().default(false),
   activity: Schema.boolean().default(true),
@@ -203,6 +224,11 @@ export const Config: Schema<Config, RuntimeConfig<Config>> = editableConfig<Conf
   mermaidDiagrams: Schema.boolean().default(true),
   mathRendering: Schema.union(['auto', 'image', 'unicode', 'source']),
   latexMath: Schema.boolean(),
+  // No `.default()` on purpose (the volatile wrapper swallows it; same rule as
+  // splashFont): an unset key must stay distinguishable from an explicit
+  // `false`, and the read site already treats undefined as on
+  // (`describe().value.recapOnOpen !== false`, see channel.ts).
+  recapOnOpen: Schema.boolean(),
   statusBar: Schema.object({
     compact: Schema.boolean().default(DEFAULT_STATUS_BAR.compact),
     model: Schema.boolean().default(DEFAULT_STATUS_BAR.model),
@@ -240,7 +266,7 @@ export const Config: Schema<Config, RuntimeConfig<Config>> = editableConfig<Conf
 }), [
   'diffLayout', 'thinkingFold', 'toolBackground', 'scrollGutter', 'pageMargin',
   'foldTerminalCommand', 'promptSessionLabel', 'expandEditor', 'smoothStreaming',
-  'mermaidDiagrams', 'mathRendering', 'latexMath', 'effortDefault', 'statusBar', 'whale', 'whaleIdle', 'whaleGirl', 'minimal',
+  'mermaidDiagrams', 'mathRendering', 'latexMath', 'recapOnOpen', 'effortDefault', 'statusBar', 'whale', 'whaleIdle', 'whaleGirl', 'splashFont', 'minimal',
   'lang', 'fullscreen', 'terminalImages', 'shortcuts',
 ])
 

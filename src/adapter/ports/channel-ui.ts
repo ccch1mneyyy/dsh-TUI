@@ -1,6 +1,6 @@
 /** Host-owned in-process Channel contract. No runtime or upstream imports. */
 import type { ChatRow, AgentStatus, TokenUsage, NotificationItem, ChannelGoal, TodoPanelItem, LoadedContext, PendingMessage, ChannelSceneMetadata, SubagentState, SubagentControl, BackgroundJobState, JobControl, StagedImageInput, StagedImageHandle, ComposerImageRef, ComposerSubmission, ExternalCommandOutcome, TranscriptImage, ResumeResult, EffortOption, PermissionPresetSnapshot, PresetOption, LlmModelInfo, LlmProviderInfo, SkillInfo, CredentialStatus, AgentViewRow, AgentViewDispatchResult, BackgroundResult, RawTrajEvent, ChannelSelection, CompactionStatus } from './channel-view.js'
-import type { SpinnerMode, ToolBackground, ScrollGutterMode, PageMarginSetting, StatusBarConfig, SessionModeSpec } from './channel-display.js'
+import type { SpinnerMode, ToolBackground, ScrollGutterMode, PageMarginSetting, StatusBarConfig, SessionModeSpec, SplashFontSetting } from './channel-display.js'
 import type { LocalCommand, CommandCompletion, BalanceResult, FileCandidate, RecapOutcome } from './channel-catalog.js'
 import type { TuiRewindMode, SessionTreeData, SessionSummary, PreviewEntry } from './channel-session.js'
 import type { TuiWorkspaceTarget, TuiWorkspaceCommand, TuiWorkspaceCommandResult, TuiWorkspaceEntry } from './channel-workspace.js'
@@ -150,6 +150,10 @@ export interface ChannelUi {
   readonly whaleGirl: boolean
   /** Apply an idle-whale-behavior change (see the public Channel type). */
   setWhaleIdle(enabled: boolean): void
+  /** Big-text face on the header splash (settings `dsh-tui.splashFont`):
+   *  `daily` (the default) rotates by local date, any other id pins that one
+   *  face — see `components/splashFonts.ts` for the registry. */
+  readonly splashFont: SplashFontSetting
   /** Apply a maid-portrait change (see the public Channel type). */
   setWhaleGirl(enabled: boolean): void
   /** Minimal mode (settings `dsh-tui.minimal`): no header splash, no emoji
@@ -586,5 +590,6 @@ export interface ChannelUi {
   setSmoothStreaming(enabled: boolean): void
   setStatusBar(config: Partial<StatusBarConfig>): void
   setWhale(visible: boolean): void
+  setSplashFont(setting: SplashFontSetting): void
   setMinimal(enabled: boolean): void
 }

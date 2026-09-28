@@ -219,6 +219,11 @@ const GROUPS = {
 // Uc 优先、代理对与 keyup 交错、Rc 重复展开、conhost 拆散粘贴重组、
 // Alt+numpad 两轮合成。
     ["verify-win32-input", ['node', '--import', 'tsx/esm', 'scripts/verify-win32-input.tsx']],
+// 粘贴记录残留清洗回归（issue #1090）：win32 记录残留（带 ESC 的完整形态
+// 与记录拆散后无 ESC 的尾部形态）必须在入口整体剥离、不留下 `_`；真实
+// 下划线、仅形似的方括号文本、普通 bracketed paste 与既有 ANSI/CRLF
+// 归一化零误伤。
+    ["verify-paste-residue", ['node', '--import', 'tsx/esm', 'scripts/verify-paste-residue.tsx']],
 // win32 协议重组回归：conhost 把 SGR/X10 鼠标报告与终端回复（DA1 等）
 // 合成成逐字符 CSI Vk;Sc;Uc;Kd;Cs;Rc 记录时，必须跨块重组回完整协议
 // 事件而不是逐键泄漏进输入框；截断的鼠标候选在 flush 时丢弃，单独
@@ -534,6 +539,10 @@ const GROUPS = {
 // 选区消费（text 优先/磁盘回退/截断计数/replay 指示回扫）。
     ["verify-ide-channel", ['node', '--import', 'tsx/esm', 'scripts/verify-ide-channel.tsx']],
     ["verify-whale-toggle", ['node', '--import', 'tsx/esm', 'scripts/verify-whale-toggle.mjs']],
+// 开屏大字字体设置（splashFont）：每个 id 解析到自己那款、daily 交回按天轮换、
+// 非法值回落 daily、channel 往返、/settings 选项覆盖全部取值、Config 默认值，
+// 以及 fontId 缝真的换脸（经典款上屏/方板款不在场）。
+    ["verify-splash-font-setting", ['node', '--import', 'tsx/esm', 'scripts/verify-splash-font-setting.mjs']],
 // 开屏鲸鱼三选一（classic 组合开场/heart/sleep）：帧表完整性（22 帧
 // 含 heart/sleep 新调色）、序列合法性（standard 起止/纯自家行为帧、
 // classic 仍捆绑眨眼+喷水+摆尾）、随机选取 API 覆盖/钳制/每次挂载
@@ -572,6 +581,10 @@ const GROUPS = {
 // 丢上下文"事故根因）；persistence 类失败与通用失败分开提示。
     ["verify-compact-switch", ['node', '--import', 'tsx/esm', 'scripts/verify-compact-switch.tsx']],
     ["verify-live-session", ['node', '--import', 'tsx/esm', 'scripts/verify-live-session.ts']],
+// 血缘 × 自动标题回归：/model 在还没有人说过话的会话上不得写 parentSession
+// （上游 first-prompt 标题 provider 只为无 parent 的会话生成标题，fork 永不
+// 重试）；已有对话的源仍必须保留分支血缘，既有 /model 语义不得被削掉。
+    ["verify-session-title-lineage", ['node', '--import', 'tsx/esm', 'scripts/verify-session-title-lineage.ts']],
     ["verify-session-v3", ['node', '--import', 'tsx/esm', 'scripts/verify-session-v3.ts']],
     ["verify-session-tree-generations", ['node', '--import', 'tsx/esm', 'scripts/verify-session-tree-generations.ts']],
 // 裸 ● 空行回归：纯思考/纯工具步骤（无文本块）的 assistant/message
@@ -690,6 +703,9 @@ const GROUPS = {
 // 树内每个测量所依据的宽度失效，而没有任何节点被标脏，文本节点会沿用
 // 旧宽度的测量结果，靠 flex 仲裁的行因此由两套布局拼成。
     ["verify-resize-reflow", ['node', '--import', 'tsx/esm', 'scripts/verify-resize-reflow.tsx']],
+// 上下文进度条右对齐回归（#922）：页脚根 Box paddingX={1} ⇒ 内容区实宽
+// columns - 2，bar 也必须按 columns - 2 取宽——右端与状态行右缘逐格比对。
+    ["verify-context-bar-alignment", ['node', '--import', 'tsx/esm', 'scripts/verify-context-bar-alignment.tsx']],
 // Ctrl+T 归属回归：启动上下文面板在屏时该键属于面板（它自己在屏幕上
 // 印着「Ctrl+T 展开」），转录有行之后才归轨迹场景。两者永不同屏——
 // 面板只在首条消息前出现，而那正是轨迹为空的窗口。

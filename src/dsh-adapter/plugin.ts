@@ -66,6 +66,7 @@ import { getHostSettingsSections, getLocalSettingsSectionsHost, type TuiSettings
 import { compositionRoot, withHostRootCapability } from './host-access.js'
 import { render, ThemeProvider, AlternateScreen } from '../ui.js'
 import { PageMargin } from '../components/PageMargin.js'
+import { SPLASH_FONT_OPTIONS, normalizeSplashFont } from '../components/splashFonts.js'
 import instances from '../ink/instances.js'
 import { cursorMove, DISABLE_KITTY_KEYBOARD, DISABLE_MODIFY_OTHER_KEYS, DISABLE_WIN32_INPUT_MODE } from '../ink/termio/csi.js'
 import { DBP, DFE, DISABLE_MOUSE_TRACKING, EXIT_ALT_SCREEN, SHOW_CURSOR } from '../ink/termio/dec.js'
@@ -97,16 +98,26 @@ let lastBootedFullscreen: boolean | undefined
 let lastBootedTerminalImages: boolean | undefined
 
 /**
- * Extract the startup prompt from raw app argv. `--resume <session>` selects
- * a persisted session and must not leak its id into the conversation.
+ * Extract the startup prompt from raw app argv, excluding session selectors
+ * and Web startup flag values. `--trusted-host` consumes multiple authorities
+ * up to the next flag; none of them are prompt text (issue #882). An app-level
+ * `--` ends flag parsing; all following tokens are literal prompt text.
  */
 export function initialPromptFromCmdlineArgs(args: readonly string[] | undefined): string {
   if (args === undefined) return ''
   const promptArgs: string[] = []
   for (let i = 0; i < args.length; i += 1) {
     const arg = args[i]!
-    if (arg === '--resume') {
+    if (arg === '--') {
+      promptArgs.push(...args.slice(i + 1))
+      break
+    }
+    if (arg === '--resume' || arg === '--host' || arg === '--port') {
       if (args[i + 1] !== undefined && !args[i + 1]!.startsWith('-')) i += 1
+      continue
+    }
+    if (arg === '--trusted-host') {
+      while (args[i + 1] !== undefined && !args[i + 1]!.startsWith('-')) i += 1
       continue
     }
     if (arg.startsWith('--resume=')) continue
@@ -456,8 +467,11 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
   const meta = { cwd: sessionCwd }
   // Launch-time resume target: the env handoff (launchers like naive-dsh) wins;
   // `dsh --profile tui` forwards `--resume` verbatim instead, so fall back to
-  // parsing the forwarded app args (matching the standalone bin).
-  const launchSessionId = config.sessionId ?? resumeTargetFromArgv(process.argv.slice(2))
+  // the same app-argv snapshot as the initial prompt. Raw process.argv also
+  // contains the DSH launcher's own -- and is only a legacy embedder fallback.
+  const cmdline = (ctx as { cmdlineArgs?: { get?: () => readonly string[]; args?: readonly string[] } }).cmdlineArgs
+  const cmdlineArgs = cmdline?.get?.() ?? cmdline?.args
+  const launchSessionId = config.sessionId ?? resumeTargetFromArgv(cmdlineArgs ?? process.argv.slice(2))
   const { agent, handle, agentPreset, route: createdRoute } = await resolveAgent(
     ctx,
     launchSessionId,
@@ -559,6 +573,9 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
     // 启动种子：与上面各显示偏好同款（设置服务的 boot apply 会再对一次
     // 值，setWhaleGirl 对同值是 no-op，不会多通知）。
     whaleGirl: config.whaleGirl,
+    // 开屏大字字体：cordis.yml 这一层的值（未设置时 undefined → 通道归一化成
+    // `daily`）；/settings 的改动由 applySplashFont 实时接上。
+    splashFont: config.splashFont,
     handle,
   })
   // Register the live Channel for the adapter Kernel. The Channel driver
@@ -701,6 +718,13 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
         // Maid portrait instead of the pixel whale in the header splash;
         // off by default — the portrait is static (no idle animation).
         whaleGirl: Schema.boolean().default(false),
+        // No schema default (same rule as foldTerminalCommand below): a
+        // default here would come back from scope.get()/watch() and shadow an
+        // explicit cordis.yml `splashFont` while the user layer is unset.
+        // applySplashFont resolves `?? config.splashFont` and normalizes it
+        // (undefined → daily), so cordis.yml stays decisive and junk lands on
+        // daily.
+        splashFont: Schema.string(),
         // Minimal mode: strips the header splash, emoji glyphs, and
         // decorative colors; code highlight and tool colors stay.
         minimal: Schema.boolean().default(false),
@@ -731,6 +755,9 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
       whale?: boolean
       whaleIdle?: boolean
       whaleGirl?: boolean
+      /** Raw user-layer value: junk is normalized at the apply site (the
+       *  settings schema is a plain string, see applySplashFont). */
+      splashFont?: string
       minimal?: boolean
       fullscreen?: boolean
       terminalImages?: boolean
@@ -763,6 +790,12 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
     /** Apply the maid-portrait setting: live-swap the header art. */
     const applyWhaleGirl = (value: { whaleGirl?: boolean }): void => {
       channel.setWhaleGirl(value.whaleGirl ?? false)
+    }
+    /** 开屏大字字体（`dsh-tui.splashFont`）：`daily` 按本地日期轮换，其余 pin
+     *  住一款；设置用户层优先于 cordis.yml，非法值回落 `daily`。 */
+    const applySplashFont = (value: Pick<SettingsValue, 'splashFont'>): void => {
+      if (shadow) return
+      channel.setSplashFont(normalizeSplashFont(value.splashFont ?? config.splashFont))
     }
     const applyMinimal = (value: { minimal?: boolean }): void => {
       if (shadow) return
@@ -843,6 +876,7 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
       applyWhale(next)
       applyWhaleIdle(next)
       applyWhaleGirl(next)
+      applySplashFont(next)
       applyMinimal(next)
       applyLang(next)
       applyDisplay(next)
@@ -1442,6 +1476,22 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
           kind: 'boolean',
         },
         {
+          path: ['splashFont'],
+          label: 'Splash font',
+          descriptions: { zh: '开屏大字字体' },
+          hint: 'Big-text face on the header splash. Daily rotates by local date (default); pick a face to pin that one. Applies immediately.',
+          hintDescriptions: { zh: '开屏头部的大字字面。按天轮换（默认）随本地日期换款；选某一款即固定那一款。立即生效。' },
+          kind: 'select',
+          // 选项直接由注册表推（含中英标签）：加一款字体就自动出现在面板里。
+          options: SPLASH_FONT_OPTIONS,
+          format(value: unknown): string {
+            // Unset in settings.yaml: show the effective resolution
+            // (cordis.yml → daily) instead of a blank — same rule as the
+            // `fullscreen` field.
+            return normalizeSplashFont(value ?? config.splashFont)
+          },
+        },
+        {
           path: ['minimal'],
           label: 'Minimal mode',
           descriptions: { zh: '极简模式' },
@@ -1489,13 +1539,11 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
   }
   // Positional command-line arguments are the initial prompt (issue #53):
   // `dsh-tui "run the tests"` forwards positionals through the dsh CLI,
-  // which mounts them as ctx.cmdlineArgs. The service shape drifted across
-  // dsh-cmdline builds — `{ get() }` is the current contract, older builds
-  // exposed `{ args }` — so read both. Submit once the channel exists;
-  // delivery goes through the normal pending/inbox chain, so no special
-  // timing is needed; flag-shaped leftovers are not prompt text.
-  const cmdline = (ctx as { cmdlineArgs?: { get?: () => readonly string[]; args?: readonly string[] } }).cmdlineArgs
-  const cmdlineArgs = cmdline?.get?.() ?? cmdline?.args
+  // which mounts them as ctx.cmdlineArgs. Reuse the snapshot read for resume
+  // selection above, supporting both `{ get() }` and legacy `{ args }` hosts.
+  // Submit once the channel exists; delivery goes through the normal pending/inbox
+  // chain, so no special timing is needed. The parser separates startup flags
+  // from literal prompt text.
   const initialPrompt = initialPromptFromCmdlineArgs(cmdlineArgs)
   if (initialPrompt) submitChannel(initialPrompt)
   // Attach the stderr reporter to the live channel and flush anything a
@@ -1657,7 +1705,7 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
   const openHomeOnBoot = !homeSeen
     && launchSessionId === undefined
     && requestedWorkspace === undefined
-    && initialPromptFromCmdlineArgs(process.argv.slice(2)) === ''
+    && initialPrompt === ''
   const chat = React.createElement(Chat, {
     channel,
     renderScene: createChannelSceneOutlet(() => rawChannel.pluginScene),

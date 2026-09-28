@@ -34,7 +34,7 @@ import { Markdown } from '../Markdown.js'
 import { POINTER } from '../../terminal-utils/figures.js'
 import type { QuestionSelection } from '../../dsh-adapter/questions.js'
 import { isPlainReturnInput } from '../../utils/modifiers.js'
-import { actionMatches } from '../../utils/keymap.js'
+import { actionMatches, comboDisplay, primaryComboString } from '../../utils/keymap.js'
 import { flattenPasteInline } from '../../dsh-adapter/sanitize.js'
 import { readClipboard, type ClipboardRead } from '../../utils/clipboard.js'
 
@@ -453,13 +453,22 @@ export function PlanReviewPanel({
           </Box>
           <Box flexDirection="row" marginLeft={1}>
             {feedback === '' && !inputFocused ? (
-              <Text ref={caretRef} dimColor>{t('plan-review-feedback-placeholder')}</Text>
+              // Same IME contract as AskUserQuestionPanel's input row: the
+              // anchor cell must carry the plain answer-text style, because
+              // the terminal renders the preedit with THAT cell's attributes.
+              // A dim placeholder under the anchor made pinyin dim, and the
+              // suggestion-colored caret made it blue (reported on the ask
+              // panel; this panel shares the input contract).
+              <>
+                <Text ref={caretRef}>{' '}</Text>
+                <Text dimColor>{t('plan-review-feedback-placeholder')}</Text>
+              </>
             ) : (
               <>
                 <Text wrap="wrap">{feedbackPoints.slice(0, cursor).join('')}</Text>
                 {inputFocused
                   ? <Text ref={caretRef} inverse>{cursorChar}</Text>
-                  : <Text ref={caretRef} color="suggestion">▏</Text>}
+                  : <Text ref={caretRef}>▏</Text>}
                 <Text wrap="wrap">{feedbackPoints.slice(inputFocused ? cursor + 1 : cursor).join('')}</Text>
               </>
             )}
@@ -472,7 +481,7 @@ export function PlanReviewPanel({
         </Box>
       )}
       <Box marginTop={1}>
-        <Text dimColor>{t('plan-review-hint')}</Text>
+        <Text dimColor>{t('plan-review-hint', { paste: comboDisplay(primaryComboString('paste')) })}</Text>
       </Box>
     </Box>
   )

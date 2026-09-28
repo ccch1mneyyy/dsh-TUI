@@ -54,6 +54,7 @@ class TestBlockingStore extends ObservableState {
   const approvals = new TestBlockingStore()
   const calls: Array<{ file: string; args: readonly string[] }> = []
 
+  const clock = 1_700_000_000_000
   const integration = attachHerdrIntegration({
     channel,
     questions,
@@ -63,6 +64,7 @@ class TestBlockingStore extends ObservableState {
       HERDR_BIN_PATH: 'C:\\Tools\\herdr.exe',
       HERDR_PANE_ID: 'w1:p2',
     },
+    now: () => clock,
     run: async (file, args) => {
       calls.push({ file, args })
       return { code: 0, stdout: '', stderr: '' }
@@ -144,6 +146,41 @@ class TestBlockingStore extends ObservableState {
   ])
   await integration.dispose()
   assert.equal(calls.length, 6, 'dispose must be idempotent')
+}
+
+// A later clock sample must replace the startup anchor. Incrementing by one
+// leaves this process behind any reporter that attached afterwards.
+{
+  const channel = new TestChannel()
+  const questions = new TestBlockingStore()
+  const approvals = new TestBlockingStore()
+  const calls: Array<{ file: string; args: readonly string[] }> = []
+  let clock = 1_700_000_000_000
+  const integration = attachHerdrIntegration({
+    channel,
+    questions,
+    approvals,
+    env: {
+      HERDR_ENV: '1',
+      HERDR_BIN_PATH: 'herdr',
+      HERDR_PANE_ID: 'w1:p2',
+    },
+    now: () => clock,
+    run: async (file, args) => {
+      calls.push({ file, args })
+      return { code: 0, stdout: '', stderr: '' }
+    },
+  })
+  await integration!.settled()
+  const first = Number(calls[0]?.args.at(-1))
+  clock += 60_000
+  channel.working = true
+  channel.emit()
+  await integration!.settled()
+  const second = Number(calls[1]?.args.at(-1))
+  assert.equal(second, clock * 1000)
+  assert.ok(second > first + 1, 'a later report must jump to the new clock, not startup+1')
+  await integration!.dispose()
 }
 
 // -----------------------------------------------------------------------------

@@ -1,5 +1,5 @@
-# 控制 GitHub Release 页 "Generate release notes" / `gh release create
-# --generate-notes` 生成的 What's Changed 清单。署名约定见
+# 控制 GitHub 自动生成的 What's Changed 清单（publish.yml 的 release job、
+# Release 页 "Generate release notes" 都读它）。署名约定见
 # docs/contributing.md 的 Release note 一节。
 changelog:
   exclude:

@@ -61,6 +61,7 @@ Config；旧版仍使用 `~/.dsh/settings.yaml`。不要把旧文件路径当成
 | `effort` | 配置层通常为 `max` | 每个请求实际生效的推理等级（按运行时模型档位校验，非法档位静默回落默认；兼作顶栏启动显示）。优先级：/settings 的 `effortDefault`（`auto` 时让位）> 本字段 > `/effort` 持久化选择（`~/.dsh-tui/effort.json`）> 模型默认 |
 | `effortDefault` | 未设置 | 新会话默认推理强度；`auto` 让位给 `effort`，可经 `/settings` 修改 |
 | `whale` / `whaleIdle` | `true` / `true` | 标题鲸鱼与欢迎页鲸鱼闲置动画 |
+| `splashFont` | `daily` | 开屏大字字体：`daily` 按本地日期轮换（默认），其余取字体 id（`bold` / `square` / `bevel` / `wide` / `dot` / `stencil` / `classic` / `slab`）pin 住那一款；非法值回落 `daily`。也可经 `/settings` 修改 |
 | `whaleGirl` | `false` | 把标题的像素鲸鱼换成女仆娘：**最优先**真图（Kitty/Sixel）；不支持时回落字符画版女仆娘 |
 | `minimal` | `false` | 精简标题装饰与配色 |
 | `modes` | 内置三档 | Shift+Tab 会话模式循环（plan/sandbox/approval 原子组合）；缺省为 默认 → 计划 → 完全访问 |

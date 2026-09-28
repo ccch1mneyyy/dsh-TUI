@@ -16,6 +16,7 @@
  *   combos (including remaps) join the set the plugin registry refuses
  * - drafts: parseComboDraft accepts multi-combo lists, rejects junk, and
  *   draftComboConflicts catches cross-action + fixed-reserved collisions
+ * - hints: help menu and fold markers show the effective (remapped) combo
  *
  * Live Chat check (headless, real useInput path): pressing ESC v (Alt+V)
  * must trigger the clipboard paste branch — the 'v' must NOT be typed into
@@ -31,6 +32,8 @@ const { Terminal: XTerm } = xtermHeadless
 import { render } from '../lib/types/ui.js'
 import { Chat } from '../lib/types/screens/Chat.js'
 import { setLang } from '../lib/types/i18n.js'
+import { HelpMenu } from '../lib/types/components/HelpMenu.js'
+import { foldLongLines } from '../lib/types/utils/fold-long-lines.js'
 import {
   actionMatches,
   draftComboConflicts,
@@ -39,6 +42,7 @@ import {
   isFixedReserved,
   parseCombo,
   parseComboDraft,
+  primaryComboString,
   reservedActionCombos,
   resetKeymapOverrides,
   setKeymapOverrides,
@@ -117,6 +121,31 @@ check('no conflict: showAll restating its fixed-reserved default ctrl+e', !draft
 check('conflict: showAll claiming ctrl+a (dashboard owns it)', draftComboConflicts('showAll', ['ctrl+a']))
 check('conflict: dashboard claiming ctrl+e (showAll owns it)', draftComboConflicts('dashboard', ['ctrl+e']))
 check('conflict: another action cannot borrow the fixed ctrl+u', draftComboConflicts('dashboard', ['ctrl+u']))
+resetKeymapOverrides()
+
+// ---- hints follow remaps ----------------------------------------------------
+setLang('en')
+check('hint: default transcript key is ctrl+o', primaryComboString('transcript') === 'ctrl+o', primaryComboString('transcript'))
+check('hint: default fold marker names ctrl+o', foldLongLines('x'.repeat(1100)).text.includes('ctrl+o'))
+setKeymapOverrides({ transcript: 'alt+o, ctrl+o', history: 'alt+r' })
+check('hint: primary combo is the first remapped entry', primaryComboString('transcript') === 'alt+o', primaryComboString('transcript'))
+{
+  const folded = foldLongLines('x'.repeat(1100)).text
+  check('hint: fold marker follows the transcript remap', folded.includes('alt+o to expand'), folded.slice(-60))
+}
+{
+  const helpTerm = new XTerm({ cols: 110, rows: 20, scrollback: 0, allowProposedApi: true })
+  const helpOut = new Writable({ write(chunk, _enc, cb) { helpTerm.write(String(chunk), cb) } })
+  helpOut.columns = 110
+  helpOut.rows = 20
+  helpOut.isTTY = true
+  const helpApp = await render(React.createElement(HelpMenu, { commands: [] }), { stdout: helpOut, exitOnCtrlC: false, patchConsole: false })
+  const helpScreen = () => viewportLines(helpTerm, 20).join('\n')
+  check('hint: help menu shows remapped verbose-output key', await settled(() => helpScreen().includes('alt+o for verbose output')), helpScreen())
+  check('hint: help menu shows remapped history key', helpScreen().includes('alt+r to search history'))
+  check('hint: help menu keeps unmapped defaults', helpScreen().includes('ctrl+t to open trajectory'))
+  helpApp.unmount()
+}
 resetKeymapOverrides()
 
 // ---- live Chat: Alt+V triggers the paste branch ---------------------------

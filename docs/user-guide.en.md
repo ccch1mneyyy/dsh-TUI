@@ -264,7 +264,7 @@ The command menu = built-in commands (50) + DSH registry commands (`/plan` `/goa
 
 | Command | Args | Effect |
 |---|---|---|
-| `/model` | none | model selector; **switching = fork the session** (history kept, only routing changes), choice persisted to `~/.dsh-tui/model.json` |
+| `/model` | none | model selector; **switching = fork the session** (history kept, only routing changes; a session nobody has typed into records no branch, keeping automatic titles for its first prompt), choice persisted to `~/.dsh-tui/model.json` |
 | `/effort` | `status` / `<id>` | reasoning effort: no-arg slider (`←/→` adjust); `status` current level; `<id>` set directly. Persisted to `~/.dsh-tui/effort.json`; new-session start level follows /settings `effortDefault` (§5.3) |
 | `/thinking` | none | extended-thinking display toggle (thinking expands item by item while streaming) |
 | `/tokens` | none | token usage + context percentage |
@@ -417,11 +417,14 @@ An empty session shows the whale logo area at the top (scrolls away with the con
   current model + effort → working directory → startup hint line.
 - The big-text face rotates by **local date** (eight faces: bold / square / bevel / wide / dot /
   stencil / classic / slab): the same day always shows the same one, independent of launch time.
+  To keep one face, pick it in `/settings → Splash font` (`splashFont`) — choosing a specific face
+  pins it, choosing `Daily rotation` (the default) restores the rotation; it applies immediately.
 - Out of the verified range, a **⚠ version-drift warning** appears (with the align command).
 - Centered tagline under the whale: `探索未至之境！`.
 - Narrow terminals climb down a ladder on the **content-area** width: **≥ 97 columns** whale + big
   text; **55–96** the big text alone (the whale goes first); **40–54** the whale alone; **< 40** a
-  single plain `DeepSeek Harness` line.
+  single plain `DeepSeek Harness` line. The thresholds follow the face width (97 columns is the
+  6-column faces; the widest, `wide`, needs 113, and the 5-column `classic`/`slab` fit at 96).
 - Pixel whale art and idle behavior ported from [dsh-ui-whale](https://github.com/lhh010/dsh-ui-whale) (author
   [@lhh010](https://github.com/lhh010)), with thanks.
 
@@ -472,6 +475,7 @@ Common items below, full list on the /settings screen:
 | terminalImages | terminal image preview (default on, needs terminal support); takes effect after `/restart`. Off shows text only and skips preview decode, sending images to the model is unaffected |
 | whale | pixel whale header (default on); three intro animations picked per launch (classic/heart/sleep), `/deepseek` egg re-rolls |
 | whaleIdle | whale welcome idle animation (default on): fin/tail/blink, sleeps with Z after 10 s idle; click for a heart. Freezes after the first task |
+| splashFont | big-text face on the header splash: Daily rotation (default, changes with the local date) / bold / square / bevel / wide / dot matrix / stencil / thin (classic) / slab. Picking a face pins it; picking Daily rotation restores the rotation. Applies immediately |
 | whaleGirl | maid portrait (default off): swaps the header's pixel whale for the author-drawn maid as a **real raster** (Kitty/Sixel); falls back to the pixel whale without graphics support |
 | diffLayout | Edit/Write diff layout: auto (two columns ≥110 cols) / split / unified |
 | thinkingFold | thinking block: preview (2-3 line preview + folded when settled) / full (expanded to end of turn) |

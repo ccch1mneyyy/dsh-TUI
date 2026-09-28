@@ -18,6 +18,7 @@ import { createSettingsHosts } from '../src/dsh-adapter/channel/settings-host.ts
 import { SettingsForm } from '../src/dsh-adapter/settingsEditor.ts'
 import TuiSettingsSectionsRuntime, { getHostSettingsSections, getLocalSettingsSectionsHost } from '../src/dsh-adapter/settings-sections.ts'
 import { DEFAULT_PAGE_MARGIN, DEFAULT_STATUS_BAR, isPageMarginMode, normalizePageMargin, parsePageMarginSpec } from '../src/tuiDisplayPrefs.ts'
+import { SPLASH_FONTS, SPLASH_FONT_OPTIONS, normalizeSplashFont } from '../src/components/splashFonts.ts'
 import { getLang, isLang } from '../src/i18n.ts'
 import { SHORTCUT_ACTIONS, setKeymapOverrides, resetKeymapOverrides, effectiveComboString, parseComboDraft, draftComboConflicts } from '../src/utils/keymap.ts'
 
@@ -32,6 +33,22 @@ assert.equal(Config.dict.fullscreen.meta.volatile === true, modernSchema)
 for (const field of ['sessionId', 'model', 'provider', 'cwd', 'preset']) {
   assert.notEqual(Config.dict[field].meta.volatile, true, `${field} cannot change without agent lifecycle handling`)
 }
+
+/**
+ * Mirror of the host write gate (`isVolatilePath` in @deepseek-ai/dsh-settings):
+ * only a path whose schema carries `meta.volatile` at some level accepts a
+ * settings write. Kept inline so the assertion tracks exactly what
+ * `settings.mutate` will accept.
+ */
+function isVolatilePath(schema, path) {
+  if (schema?.meta?.volatile) return true
+  const [key, ...rest] = path
+  const child = key === undefined ? undefined : schema?.dict?.[key]
+  return child !== undefined && isVolatilePath(child, rest)
+}
+// Negative control: an intentionally non-volatile route must fail the walker,
+// so a walker that always returns true cannot satisfy the guard below.
+assert.equal(isVolatilePath(Config, ['sessionId']), false)
 
 let update
 const ctx = { on(event, handler) {
@@ -196,7 +213,7 @@ if (modernSchema) for (const registry of ['service', 'local']) for (const entryI
     const unregister = registerSection({
       configOwner: owner, Config, resolveSettingsNamespace, settingsSections: sections,
       config: configValues(runtime), SHORTCUT_ACTIONS, effectiveComboString, parseComboDraft, draftComboConflicts,
-      getLang, DEFAULT_PAGE_MARGIN, isPageMarginMode, parsePageMarginSpec,
+      getLang, DEFAULT_PAGE_MARGIN, isPageMarginMode, parsePageMarginSpec, SPLASH_FONT_OPTIONS, normalizeSplashFont,
       bootedFullscreen: true, terminalImagesDisabledByEnv: false,
       readEffortPref: () => undefined, // Do not read the developer's persisted preferences.
     })
@@ -217,16 +234,46 @@ if (modernSchema) for (const registry of ['service', 'local']) for (const entryI
     const form = new SettingsForm(host, view, section.fields)
     assert.equal(form.available, true, 'real describe() supplies the editable TUI section')
     assert.equal(form.field(diffField).text, 'split', 'the settings page shows the effective value')
+    // 开屏大字字体（splashFont）：面板选项直接由字体注册表推，所以这里同时钉住
+    // 「选项覆盖全部合法取值」「未设置时显示生效值（daily）」与「每一位都能被选中
+    // 并真的存进 profile」——select 的 parse 只认 options 里的值，写不进别的。
+    const splashField = section.fields.find(field => field.path.length === 1 && field.path[0] === 'splashFont')
+    assert.ok(splashField, `${registry}: the production section exposes splashFont`)
+    assert.equal(splashField.kind, 'select')
+    assert.deepEqual(splashField.options.map(option => option.value), ['daily', ...SPLASH_FONTS.map(font => font.id)])
+    assert.equal(form.field(splashField).text, 'daily', 'unset splashFont shows the effective daily rotation')
+    for (const option of splashField.options) {
+      form.edit(splashField, option.value)
+      assert.equal(form.field(splashField).invalid, false, `${registry}: splashFont option ${option.value} is selectable`)
+    }
     const descriptor = root.settings.describe().find(view => view.ns === ns)
     assert.deepEqual(Object.keys(descriptor.schema.refs[descriptor.schema.uid].dict).sort(), Object.keys(Config.dict).filter(key => Config.dict[key].meta.volatile === true).sort())
+    // 面板注册表（plugin.ts 的 fields）与 Config 的 volatile 白名单是两份手写
+    // 清单：少写一处，面板照样显示、改动却报 `Config field "x" is not
+    // volatile`。这条 guard 一次钉住全部注册 path（recapOnOpen 就是这么漏掉的）。
+    for (const field of section.fields) {
+      assert.equal(isVolatilePath(Config, field.path), true, `${registry}: registered field ${field.path.join('.')} must be volatile on Config`)
+    }
+    // 打开会话自动总结（recapOnOpen）：可写之外还要真的存得进、读得回。
+    // channel.autoRecapOnOpen 读的是 describe().value.recapOnOpen !== false，漏掉
+    // Config 声明时它恒为 undefined，于是自动回顾永远关不掉。
+    const recapField = section.fields.find(field => field.path.length === 1 && field.path[0] === 'recapOnOpen')
+    assert.ok(recapField, `${registry}: the production section exposes recapOnOpen`)
+    assert.equal(form.field(recapField).text, 'true', 'unset recapOnOpen shows the effective on')
     observed.length = 0
     form.edit(diffField, 'unified')
+    form.edit(splashField, 'classic')
+    form.edit(recapField, 'false')
+    assert.equal(form.field(recapField).invalid, false, `${registry}: recapOnOpen accepts a boolean edit`)
     const saved = await form.save()
     assert.equal(saved, true, `form save uses the real settings mutation path: ${form.failureMessage}`)
     assert.equal(configValues(runtime).diffLayout, 'unified')
+    assert.equal(configValues(runtime).splashFont, 'classic', 'the panel persists the picked face')
+    assert.equal(configValues(runtime).recapOnOpen, false, 'the panel persists the recap switch')
     assert.equal(owner.fiber, ownerFiber, 'editing settings does not remount the agent owner')
     assert.equal(observed.length, 1)
     assert.equal(host.listNamespaces().find(view => view.ns === ns).value.diffLayout, 'unified')
+    assert.equal(host.listNamespaces().find(view => view.ns === ns).value.recapOnOpen, false, 'describe() projects the recap switch for the channel read site')
     observed.length = 0
     await root.loader.update(entryId, { config: { diffLayout: 'unified', fullscreen: false, shortcuts: {} } })
     await root.loader.await()

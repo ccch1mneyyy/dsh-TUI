@@ -7,7 +7,7 @@ import { appendSessionTitle, deleteSessionLog, userTitleData } from '../compat/i
 import { snapshotLiveSessionEvents } from '../compat/liveSession.js'
 import { collectRecentActivity, parseRecapResponse, RECAP_RECENT_CHARS, wrapRecapPrompt } from '../recap.js'
 import { listSummaries, locateSession, previewSession, type SessionSource, type SessionSummary } from '../sessions/index.js'
-import { runSideQuestion, wrapSideQuestion } from '../sideQuestion.js'
+import { openStepToolCallIds, runSideQuestion, splitUnresolvedToolCalls, wrapSideQuestion } from '../sideQuestion.js'
 import type { ChannelOwner } from './owner.js'
 import type { CredentialStatus, SideQuestionLlm } from './types.js'
 import { isUserInvocable } from '@deepseek-ai/dsh-skill'
@@ -159,11 +159,14 @@ export function createSessionMetadataActions(ctx: Context, deps: {
     const llm = ctx.get('llm') as SideQuestionLlm | undefined
     if (!llm) return { answer: null, error: t('btw-llm-unavailable') }
     const signal = withOwnerSignal(options?.signal)
+    // /btw can land mid-step; see splitUnresolvedToolCalls.
+    const running = openStepToolCallIds(snapshotLiveSessionEvents(capture.agent.session))
+    const history = splitUnresolvedToolCalls(capture.agent.session.deriveMessages(), running)
     const outcome = await runSideQuestion({
       stream: llm.stream.bind(llm),
       options: llmRequest(capture, [
-        ...capture.agent.session.deriveMessages(),
-        createUserMessage({ content: [{ type: 'text', text: wrapSideQuestion(question) }], source: { kind: 'dsh-tui-btw' } }),
+        ...history.messages,
+        createUserMessage({ content: [{ type: 'text', text: wrapSideQuestion(question, history.pending) }], source: { kind: 'dsh-tui-btw' } }),
       ], true, signal),
       // Do not let an old session append streamed UI facts after a switch.
       onText: delta => { if (current(capture) && !options?.signal?.aborted) options?.onText?.(delta) },

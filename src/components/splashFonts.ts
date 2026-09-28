@@ -11,10 +11,19 @@
  * - 两行标题画出来的列数必须**相等**（靠 tagline 的字距 + `bottomIndent` 撑）；
  * - 缺字走 `fallback` 而不是抛错，且不改变字身宽度。
  *
+ * 选择：设置项 `dsh-tui.splashFont` 取 `daily`（默认，按本地日期轮换）或某款 id；
+ * `normalizeSplashFont` 是唯一的归一化入口（非法值一律回落 `daily`）。面板选项
+ * 由注册表直接推（含中英标签），所以加一款字体不需要第二份清单。
+ *
  * 字形覆盖两层：正常词 `DEEPSEEK`/`HARNESS`，以及节日彩蛋词用到的 `I M Y W`
  * （`splashEggs.ts` 的日期表）。
  */
+import type { SplashFontId, SplashFontSetting } from '../adapter/ports/channel-display.js'
 import { bigTextWidth, paintedWidth } from './bigfont.js'
+
+// 取值类型住在端口的显示偏好词汇表里（ports 目录不许 import 到目录外），这里
+// 转出去：设置链（Config / channel / /settings 面板）只认这一个入口。
+export type { SplashFontId, SplashFontSetting } from '../adapter/ports/channel-display.js'
 
 import type { Rgb } from './bigfont.js'
 
@@ -25,10 +34,12 @@ export type GlyphTable = Readonly<Record<string, GlyphRows>>
 
 /** 一款开屏大字字体。 */
 export interface SplashFont {
-  /** 稳定 id（设置项 `dsh-tui.splashFont` 用）。 */
-  readonly id: string
-  /** 一句中文说明，给设置面板/预览用。 */
+  /** 稳定 id（设置项 `dsh-tui.splashFont` 用；取值域见端口的 `SplashFontId`）。 */
+  readonly id: SplashFontId
+  /** 一句中文说明，给设置面板/预览用（面板的 zh 侧）。 */
   readonly label: string
+  /** 同一句的英文（面板的 en 侧；`label` 只服务 zh）。 */
+  readonly labelEn: string
   /** 字身宽度（列）。 */
   readonly glyphWidth: number
   readonly glyphs: GlyphTable
@@ -228,9 +239,25 @@ function solveTagline(glyphWidth: number, top: string, bottom: string): TaglineK
 const TOP_WORD = 'DEEPSEEK'
 const BOTTOM_WORD = 'HARNESS'
 
-const font = (id: string, label: string, glyphs: GlyphTable, fallback: GlyphRows): SplashFont => {
-  const glyphWidth = [...(glyphs.D ?? fallback)[0] ?? ''].length
-  return { id, label, glyphWidth, glyphs, fallback, tagline: { top: TOP_WORD, bottom: BOTTOM_WORD, ...solveTagline(glyphWidth, TOP_WORD, BOTTOM_WORD) } }
+/** 一款字体的非几何数据：中英标签 + 字形表。 */
+interface FaceData {
+  readonly zh: string
+  readonly en: string
+  readonly glyphs: GlyphTable
+  readonly fallback: GlyphRows
+}
+
+const font = (id: SplashFontId, face: FaceData): SplashFont => {
+  const glyphWidth = [...(face.glyphs.D ?? face.fallback)[0] ?? ''].length
+  return {
+    id,
+    label: face.zh,
+    labelEn: face.en,
+    glyphWidth,
+    glyphs: face.glyphs,
+    fallback: face.fallback,
+    tagline: { top: TOP_WORD, bottom: BOTTOM_WORD, ...solveTagline(glyphWidth, TOP_WORD, BOTTOM_WORD) },
+  }
 }
 
 /**
@@ -250,18 +277,70 @@ export function withTagline(font: SplashFont, top: string, bottom: string): Spla
 const BEVEL_PALETTE = { from: { r: 214, g: 214, b: 214 }, to: { r: 104, g: 104, b: 104 } }
 
 /**
- * 日常轮换池。顺序就是"按天轮换"的取模顺序；彩蛋词/彩蛋字体不进这里，
- * 它们只在各自日期覆盖（见 `pickSplashFont` 的调用方）。
+ * 字体表：键就是 id（`Record<SplashFontId, …>` 保证不多不少，加一款字体必须先
+ * 进端口的 id 联合）。**书写顺序就是"按天轮换"的取模顺序**；彩蛋词/彩蛋字体不
+ * 进这里，它们只在各自日期覆盖（见 `pickSplashFont` 的调用方）。
  */
-export const SPLASH_FONTS: readonly SplashFont[] = [
-  font('bold', '加粗（默认）', BOLD_GLYPHS, BOLD_FALLBACK),
-  font('square', '方角实心', applyTable(BOLD_GLYPHS, SQUARE), applyRows(BOLD_FALLBACK, SQUARE)),
-  { ...font('bevel', '半立体', applyTable(BOLD_GLYPHS, BEVEL), applyRows(BOLD_FALLBACK, BEVEL)), palette: BEVEL_PALETTE },
-  font('wide', '宽体', applyTable(BOLD_GLYPHS, WIDE), applyRows(BOLD_FALLBACK, WIDE)),
-  font('dot', '点阵灰度', applyTable(BOLD_GLYPHS, DOT), applyRows(BOLD_FALLBACK, DOT)),
-  font('stencil', '镂空模板', applyTable(BOLD_GLYPHS, STENCIL), applyRows(BOLD_FALLBACK, STENCIL)),
-  font('classic', '细笔（经典）', CLASSIC_GLYPHS, CLASSIC_FALLBACK),
-  font('slab', '方板（实心横笔）', SLAB_GLYPHS, SLAB_FALLBACK),
+const SPLASH_FONT_TABLE: Record<SplashFontId, SplashFont> = {
+  bold: font('bold', { zh: '加粗（基准款）', en: 'Bold (base)', glyphs: BOLD_GLYPHS, fallback: BOLD_FALLBACK }),
+  square: font('square', { zh: '方角实心', en: 'Square solid', glyphs: applyTable(BOLD_GLYPHS, SQUARE), fallback: applyRows(BOLD_FALLBACK, SQUARE) }),
+  bevel: { ...font('bevel', { zh: '半立体', en: 'Bevel', glyphs: applyTable(BOLD_GLYPHS, BEVEL), fallback: applyRows(BOLD_FALLBACK, BEVEL) }), palette: BEVEL_PALETTE },
+  wide: font('wide', { zh: '宽体', en: 'Wide', glyphs: applyTable(BOLD_GLYPHS, WIDE), fallback: applyRows(BOLD_FALLBACK, WIDE) }),
+  dot: font('dot', { zh: '点阵灰度', en: 'Dot matrix', glyphs: applyTable(BOLD_GLYPHS, DOT), fallback: applyRows(BOLD_FALLBACK, DOT) }),
+  stencil: font('stencil', { zh: '镂空模板', en: 'Stencil', glyphs: applyTable(BOLD_GLYPHS, STENCIL), fallback: applyRows(BOLD_FALLBACK, STENCIL) }),
+  classic: font('classic', { zh: '细笔（经典）', en: 'Thin (classic)', glyphs: CLASSIC_GLYPHS, fallback: CLASSIC_FALLBACK }),
+  slab: font('slab', { zh: '方板（实心横笔）', en: 'Slab (solid bars)', glyphs: SLAB_GLYPHS, fallback: SLAB_FALLBACK }),
+}
+
+/** 轮换池（渲染侧只读这一份；表的书写顺序即轮换顺序）。 */
+export const SPLASH_FONTS: readonly SplashFont[] = Object.values(SPLASH_FONT_TABLE)
+
+/** 设置项 `dsh-tui.splashFont` 的默认值：按本地日期轮换。 */
+export const SPLASH_FONT_DAILY = 'daily' satisfies SplashFontSetting
+
+/**
+ * 值是否是合法设置（`daily` 或注册表里的 id）。
+ * @param value - 不可信来源的值（cordis.yml / settings 用户层）。
+ */
+export function isSplashFontSetting(value: unknown): value is SplashFontSetting {
+  return typeof value === 'string'
+    && (value === SPLASH_FONT_DAILY || SPLASH_FONTS.some(font => font.id === value))
+}
+
+/**
+ * 归一化不可信来源的设置值：合法值原样通过，其余回落 `daily`（默认行为）。
+ * 不退回"某一款"是刻意的——写错的 id 若悄悄变成某款字体，用户会以为设置生效了。
+ * @param value - 不可信来源的值；`undefined`（未设置）也走默认。
+ */
+export function normalizeSplashFont(value: unknown): SplashFontSetting {
+  return isSplashFontSetting(value) ? value : SPLASH_FONT_DAILY
+}
+
+/**
+ * 设置值 → `LogoV2` 的 `fontId` 缝：`daily` 交回按天轮换（`undefined`），其余
+ * 原样交给注册表。**不要**把设置值直接塞进 `fontId`——`splashFontById('daily')`
+ * 取不到会静默退回基准款，用户看到的就是"轮换变成了加粗"。
+ * @param setting - 归一化后的设置值。
+ * @returns 要 pin 的字体 id；`undefined` 表示按天轮换。
+ */
+export function splashFontIdOf(setting: SplashFontSetting): string | undefined {
+  return setting === SPLASH_FONT_DAILY ? undefined : setting
+}
+
+/** 一款字体在 `/settings` 里的选项（面板字段的形状子集）。 */
+export interface SplashFontOption {
+  readonly value: SplashFontSetting
+  readonly label: string
+  readonly descriptions: { readonly zh: string }
+}
+
+/**
+ * `/settings` 的字体选项：`daily` 在前，其余按轮换顺序跟着注册表走——加一款字体
+ * 就自动出现在面板里，不漏项。标签的 en 侧取 `labelEn`、zh 侧取 `label`。
+ */
+export const SPLASH_FONT_OPTIONS: readonly SplashFontOption[] = [
+  { value: SPLASH_FONT_DAILY, label: 'Daily rotation (default)', descriptions: { zh: '按天轮换（默认）' } },
+  ...SPLASH_FONTS.map(font => ({ value: font.id, label: font.labelEn, descriptions: { zh: font.label } })),
 ]
 
 /** 找不到 id 时退回基准款（设置项写错不该让开屏挂掉）。 */

@@ -3,17 +3,34 @@ name: Publish
 # 发版入口：推送 v* 标签（git tag v0.4.2 && git push origin v0.4.2）。
 # 首次发布继续使用仓库 Secrets 中的 NPM_TOKEN 鉴权；标签版本号必须与
 # package.json 的 version 一致。OIDC 仅用于生成 npm provenance。
+# After npm publish, the release job creates the GitHub Release with
+# generated notes. Backfill an existing tag without publishing:
+# Actions → Publish → Run workflow → tag.
 on:
   push:
     tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing tag to create/update the GitHub Release for (skips npm publish)'
+        required: true
+        type: string
 
 permissions:
   contents: read
-  id-token: write
+
+# One run per tag at a time (tag push vs. manual backfill).
+concurrency:
+  group: publish-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
 
 jobs:
   npm:
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
     env:
       # Gate scripts assert zh UI copy (same convention as CI).
       DSH_TUI_LANG: zh
@@ -115,3 +132,131 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           DISTTAG_FLAG: ${{ steps.disttag.outputs.flag }}
+
+  # Create or update the GitHub Release with generated notes (What's Changed,
+  # New Contributors, Full Changelog; .github/release.yml excludes bots).
+  # Optional hand-written summary: .github/release-notes/<tag>.md at the tag.
+  # Generated notes follow a marker comment so reruns and backfills stay idempotent.
+  release:
+    needs: npm
+    if: ${{ !cancelled() && (needs.npm.result == 'success' || (github.event_name == 'workflow_dispatch' && needs.npm.result == 'skipped')) }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+      missing-assets: ${{ steps.assets.outputs.missing }}
+    steps:
+      - name: Resolve tag
+        id: tag
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          tag="${INPUT_TAG:-$GITHUB_REF_NAME}"
+          case "$tag" in
+            v[0-9]*) ;;
+            *) echo "not a release tag: $tag"; exit 1 ;;
+          esac
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      # Checking out the tag also fails fast when a dispatched tag does not exist.
+      - uses: actions/checkout@v7
+        with:
+          ref: refs/tags/${{ steps.tag.outputs.tag }}
+
+      - name: Create or update GitHub Release
+        id: notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          set -euo pipefail
+          marker='<!-- dsh-tui:generated-notes -->'
+          summary=".github/release-notes/$TAG.md"
+          err="$RUNNER_TEMP/view.err"
+          generated="$RUNNER_TEMP/generated.md"
+          notes="$RUNNER_TEMP/notes.md"
+
+          if body="$(gh release view "$TAG" --json body --jq .body 2>"$err")"; then
+            exists=true
+          elif grep -q 'release not found' "$err"; then
+            exists=false
+            body=''
+          else
+            cat "$err"
+            exit 1
+          fi
+
+          # Done before: our marker, or a What's Changed list from a manual
+          # `--generate-notes` (a bare Full Changelog link does not count).
+          if [ "$exists" = true ] && {
+            printf '%s\n' "$body" | grep -qF "$marker" ||
+            printf '%s\n' "$body" | grep -qE "^## What's Changed"
+          }; then
+            echo "Release $TAG already has generated notes; leaving the body untouched"
+            exit 0
+          fi
+
+          # Same Release Notes API that `gh release create --generate-notes` uses.
+          { echo "$marker"; gh api "repos/$GH_REPO/releases/generate-notes" -f tag_name="$TAG" --jq .body; } > "$generated"
+          if [ -n "$(printf '%s' "$body" | tr -d '[:space:]')" ]; then
+            # Keep the maintainer's hand-written body; append below it.
+            { printf '%s\n\n' "$body"; cat "$generated"; } > "$notes"
+          elif [ -f "$summary" ]; then
+            { cat "$summary"; printf '\n\n'; cat "$generated"; } > "$notes"
+          else
+            cp "$generated" "$notes"
+          fi
+
+          if [ "$exists" = true ]; then
+            gh release edit "$TAG" --notes-file "$notes"
+            echo "updated Release $TAG notes"
+          else
+            gh release create "$TAG" --verify-tag --title "$TAG" --notes-file "$notes"
+            echo "created Release $TAG"
+          fi
+
+      # Tag pushes (including "Re-run all jobs") rebuild bundles whenever the
+      # Release lacks any asset listed in its SHA256SUMS. Backfills only touch notes.
+      - name: Check release assets
+        id: assets
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          set -euo pipefail
+          sums="$RUNNER_TEMP/SHA256SUMS"
+          # Only finished, non-empty uploads count: a failed upload (e.g. a
+          # 502) can leave a same-named asset in state "starter" with size 0.
+          have="$(gh release view "$TAG" --json assets --jq '.assets[] | select(.state == "uploaded" and .size > 0) | .name')"
+          if ! grep -qxF SHA256SUMS <<<"$have" \
+            || ! gh release download "$TAG" --pattern SHA256SUMS --output "$sums" --clobber \
+            || [ ! -s "$sums" ]; then
+            echo "SHA256SUMS not uploaded on Release $TAG; bundles needed"
+            echo "missing=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          missing=false
+          while read -r _ name; do
+            [ -n "$name" ] || continue
+            if ! grep -qxF "$name" <<<"$have"; then
+              echo "missing asset: $name"
+              missing=true
+            fi
+          done < "$sums"
+          echo "missing=$missing" >> "$GITHUB_OUTPUT"
+
+  # A Release created with github.token does not fire `release: published`,
+  # so bundles are built here. release-bundle.yml serializes uploads per tag,
+  # so a maintainer's release:published run and this call do not overlap.
+  bundle:
+    needs: release
+    if: needs.release.outputs.missing-assets == 'true'
+    permissions:
+      contents: write
+    uses: ./.github/workflows/release-bundle.yml
+    with:
+      tag: ${{ needs.release.outputs.tag }}

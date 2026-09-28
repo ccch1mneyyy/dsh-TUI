@@ -76,13 +76,14 @@ export function readResumeTarget(): string | undefined {
  * `dsh --profile tui` boot path forwards these args to the booted app
  * verbatim and never parses them into DSH_TUI_RESUME_SESSION, so the
  * in-profile plugin reads them itself. A bare flag with no id defers to the
- * exit-time marker, exactly like the bin.
- * @param argv - the app arguments (typically `process.argv.slice(2)`).
+ * exit-time marker, exactly like the bin. An app-level `--` ends option parsing.
+ * @param argv - the app arguments from cmdlineArgs, after the host's own options.
  * @returns The requested session id, or undefined when none was given.
  */
 export function resumeTargetFromArgv(argv: readonly string[]): string | undefined {
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]
+    if (a === '--') break
     if (a === '--resume' || a === '-c' || a === '--continue' || a.startsWith('--resume=')) {
       let sessionId = ''
       if (a.startsWith('--resume=')) {

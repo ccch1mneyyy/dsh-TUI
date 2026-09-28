@@ -110,7 +110,15 @@ TUI 启动后会在后台检查新版本，不阻塞首帧。有更新时输入 
 | `dsh-tui safe` | 只读诊断、插件清单与修复指引；`safe --rescue` 创建干净的救援 profile |
 | `dsh-tui version` · `dsh-tui help` | 启动器与 profile 版本、用法；没装 dsh 时这两条也能用 |
 
-其余参数转发给 `dsh --profile dsh-tui`。安全模式：[安装与快速开始](docs/getting-started.md)。
+前置 DSH 选项（如 `--dump-config`、`--patch <路径>`）原样转发，
+其余参数交给 `dsh --profile dsh-tui` 中的应用。使用
+`dsh-tui -- --resume=sid-1 ./notes` 可将 `--resume=sid-1 ./notes` 作为字面提示词，
+不选择恢复会话或工作区。直接调用 DSH 时，使用
+`dsh --profile dsh-tui -- -- --resume=sid-1 ./notes`：第一个 `--` 属于 DSH，
+第二个属于应用。宿主选项可以放在字面提示词之前：
+`dsh-tui --patch ./overlay.yml -- --resume=sid-1` 会应用补丁，
+并将 `--resume=sid-1` 作为提示词发送，而不恢复该会话。
+安全模式：[安装与快速开始](docs/getting-started.md)。
 
 ### 迁移其他编程代理的对话（`dsh-tui migrate`）
 
@@ -140,6 +148,8 @@ CLI 形态：任意终端运行 `dsh-tui migrate ...`，与 TUI 内执行同一�
 模型工作时：`Enter` 加塞、`Tab` 排队、`Ctrl+Enter` 打断并立即发送。
 
 鼠标（全屏）：拖选即复制、双击/三击选词选行、点工具卡、时间轴刻度与 `[Image #N]` 预览。
+
+**粘贴**：终端原生与 bracketed paste 保留普通文本与换行，粘贴内容到达时不会被误当 `Enter` 提交。Windows 终端以 win32-input-mode 键记录投递粘贴时，记录残留会在入口被整体剥离（多行粘贴不再留下零散 `_`），粘贴的 CRLF 折叠为单个换行；普通文本中的真实下划线与 bracketed paste 内容不受影响。
 
 完整参考：[交互与命令](docs/interaction.md)。
 
@@ -171,7 +181,7 @@ TUI 只负责交互与呈现：会话日志是唯一事实源，模型、工具�
 ## 已知限制
 
 - 注入的插件上下文没有独立展示，计入上下文分段。
-- `/model` 靠 fork 切换会话；旧会话留在 `/resume`。
+- `/model` 靠 fork 切换会话；旧会话留在 `/resume`（还没人说过话的会话不记分支，换完模型第一个 prompt 仍能自动生成标题）。
 - `Ctrl+V` 需要平台剪贴板工具；不支持的位图格式直接拒绝。
 - 后台会话活在本进程内，TUI 退出即停止。
 - `/thinking` 不持久化；`/compact` 在 `minimal` 预设下不可用；`/update` 需 `dsh --profile` 启动，回合运行中会被拒绝。
