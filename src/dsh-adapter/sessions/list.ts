@@ -18,6 +18,7 @@
  * @module @deepseek-harness-tui/dsh-tui/sessions/list
  */
 import { basename } from 'node:path'
+import { beginListingSnapshot } from './snapshot.js'
 import {
   digestAppendedSuffix,
   digestSession,
@@ -32,7 +33,7 @@ import type { SessionSummary } from './types.js'
 import { readLastUsed } from '../../sessionHistory.js'
 
 /** A late overlapping listing must not write an older index over a newer one. */
-const listingVersions = new WeakMap<SessionSource, number>()
+const listingVersions = new WeakMap<object | symbol, number>()
 /** Large append batches use bounded windows, then background title recovery. */
 const FOREGROUND_SUFFIX_BYTES = 2 * 1024 * 1024
 
@@ -44,6 +45,11 @@ const FOREGROUND_SUFFIX_BYTES = 2 * 1024 * 1024
  * degrades is worth more than one that throws.
  */
 export interface SessionSource {
+  /** Public provider configuration scopes optional disk snapshots. */
+  readonly name?: string
+  readonly config?: unknown
+  /** Stable through Context proxies, unlike the service wrapper object. */
+  readonly identity?: symbol
   /** Headers plus per-log change tokens — the contract built for this. */
   listSnapshots?: (signal?: AbortSignal) => Promise<readonly unknown[]>
   /** Headers alone, for a backend or version without snapshots. */
@@ -90,7 +96,11 @@ export async function enumerateSessions(source: SessionSource, signal?: AbortSig
     return snapshots.map(readSnapshot).filter((entry): entry is Listed => entry !== undefined)
   }
   if (typeof source.list === 'function') {
-    const headers = await source.list(signal)
+    // Handle-based providers take an options object; legacy providers took a
+    // bare signal. identity is part of the handle-based service contract.
+    const headers = typeof source.identity === 'symbol'
+      ? await (source.list as (options?: { signal?: AbortSignal }) => Promise<readonly unknown[]>).call(source, { signal })
+      : await source.list(signal)
     return headers
       .map((raw): Listed | undefined => readSnapshot(raw) ?? bareListed(raw))
       .filter((entry): entry is Listed => entry !== undefined)
@@ -149,15 +159,16 @@ export async function listSummaries(
   source: SessionSource,
   signal?: AbortSignal,
   onEnriched?: (summary: SessionSummary) => void,
+  onPartial?: (summaries: readonly SessionSummary[]) => void,
 ): Promise<readonly SessionSummary[]> {
-  const version = (listingVersions.get(source) ?? 0) + 1
-  listingVersions.set(source, version)
-  let listed: Listed[]
-  try {
-    listed = await enumerateSessions(source, signal)
-  } catch {
-    return []
-  }
+  const identity = source.identity ?? source
+  const version = (listingVersions.get(identity) ?? 0) + 1
+  listingVersions.set(identity, version)
+  const saveSnapshot = beginListingSnapshot(source)
+  // A failed enumeration is not a successful empty store. Let the screen keep
+  // its snapshot beside an error instead of erasing it (including on disk).
+  const listed = await enumerateSessions(source, signal)
+  signal?.throwIfAborted()
 
   // Children are counted from the same listing rather than by walking logs:
   // lineage lives in the header, so a parent's sub-agent count is free.
@@ -173,6 +184,10 @@ export async function listSummaries(
   const index = readIndex()
   const next: SessionIndex = new Map()
   const lastUsed = readLastUsed()
+  // Recent conversations lead cold partial batches; backend directory order
+  // must not keep the useful rows behind thousands of old delegated runs.
+  const activity = (entry: Listed): number => Math.max(index.get(entry.header.id)?.derived?.modifiedAt ?? 0, lastUsed[entry.header.id] ?? 0, entry.header.createdAt ?? 0)
+  listed.sort((a, b) => activity(b) - activity(a))
   let changed = false
   const records: Array<{
     header: RawSessionHeader
@@ -180,6 +195,29 @@ export async function listSummaries(
     cached: ReturnType<typeof index.get>
     derived: DerivedEntry | undefined
   }> = []
+  const summaryOf = ({ header, facts, cached, derived }: typeof records[number]): SessionSummary => ({
+    id: header.id,
+    kind: classify(header),
+    title: {
+      text:
+        derived?.title !== undefined && derived.title.length > 0
+          ? derived.title
+          : basename(header.cwd ?? '') || header.id.slice(0, 8),
+      source: derived?.titleSource ?? 'fallback',
+    },
+    cwd: header.cwd ?? '',
+    createdAt: header.createdAt ?? derived?.modifiedAt ?? facts?.modifiedAt ?? 0,
+    updatedAt: Math.max(derived?.modifiedAt ?? facts?.modifiedAt ?? 0, lastUsed[header.id] ?? 0, header.createdAt ?? 0),
+    bytes: derived?.bytes ?? facts?.bytes,
+    // Without a readable artifact nothing can be proven empty, and hiding a
+    // real session is the worse error — so an unreadable log is listed.
+    hasPrompt: derived?.hasPrompt ?? true,
+    agentPreset: header.agentPreset,
+    model: derived?.model,
+    label: derived?.label,
+    branch: cached?.branch,
+    childCount: children.get(header.id) ?? 0,
+  })
   const recordsById = new Map<string, typeof records[number]>()
   const earlyEnrichments = new Map<string, DerivedEntry>()
   let summariesReady = false
@@ -198,8 +236,7 @@ export async function listSummaries(
     revision: string
     path: string
     bytes: number
-    modifiedAt: number
-    identity: string
+    stamp: string
     priority: number
   }> = []
 
@@ -223,8 +260,18 @@ export async function listSummaries(
       facts = path === undefined ? undefined : fileFacts(path)
       // Older persistence implementations provide no revision. Their one
       // metadata read per entry remains necessary to detect changes.
-      const token = revision ?? (facts === undefined ? undefined : `${facts.bytes}:${facts.modifiedAt}`)
-      if (token === undefined || derived?.revision !== token) {
+      const token = revision ?? facts?.stamp
+      if (facts !== undefined && derived?.artifactStamp === facts.stamp) {
+        // Historical logical revisions include the whole corpus. Our digest
+        // reads only this artifact. Retain the original revision as well so
+        // unrelated appends cannot restart title recovery or reset its backoff.
+        // Only fallback text depends on the freshly enumerated header.
+        const fallback = basename(header.cwd ?? '')
+        if (derived.titleSource === 'fallback' && derived.title !== fallback) {
+          derived = { ...derived, title: fallback }
+          changed = true
+        }
+      } else if (token === undefined || derived?.revision !== token) {
         derived = undefined
         if (cached?.derived !== undefined) changed = true
         if (path !== undefined && token !== undefined) {
@@ -243,6 +290,7 @@ export async function listSummaries(
                 bytes: facts.bytes,
                 modifiedAt: facts.modifiedAt,
                 identity: facts.identity,
+                artifactStamp: facts.stamp,
                 anchor: await sessionTitleAnchor(path, facts.bytes, signal),
                 title: suffix.title?.text ?? previous.title,
                 titleSource: suffix.title?.source ?? previous.titleSource,
@@ -261,6 +309,7 @@ export async function listSummaries(
               bytes: facts?.bytes ?? 0,
               modifiedAt: facts?.modifiedAt,
               identity: facts?.identity,
+              artifactStamp: facts?.stamp,
               anchor: facts === undefined ? undefined : await sessionTitleAnchor(path, facts.bytes, signal),
               title: carried?.title ?? digest.title?.text ?? '',
               titleSource: carried?.titleSource ?? digest.title?.source ?? 'fallback',
@@ -288,8 +337,7 @@ export async function listSummaries(
           revision: derived.revision,
           path,
           bytes: facts.bytes,
-          modifiedAt: facts.modifiedAt,
-          identity: facts.identity,
+          stamp: facts.stamp,
           priority: Math.max(facts.modifiedAt, lastUsed[header.id] ?? 0, header.createdAt ?? 0),
         })
       }
@@ -303,35 +351,20 @@ export async function listSummaries(
     const record = { header, facts, cached, derived }
     records.push(record)
     recordsById.set(header.id, record)
+    // Yield even for a cold index: scanning many individually bounded logs
+    // must not freeze the renderer. Partial rows are never saved as a snapshot.
+    if (records.length % 32 === 0) {
+      if (listingVersions.get(identity) === version) onPartial?.(records.map(summaryOf).sort(compareSummaries))
+      await new Promise<void>(resolve => setImmediate(resolve))
+      signal?.throwIfAborted()
+    }
   }
   // Entries for sessions the backend no longer lists are dropped here; that is
   // the whole of the cache's garbage collection, and it runs on every listing.
-  const newest = listingVersions.get(source) === version
+  signal?.throwIfAborted()
+  const newest = listingVersions.get(identity) === version
   if (newest && (changed || next.size !== index.size) && indexFileStamp() === indexStamp) writeIndex(next)
 
-  const summaryOf = ({ header, facts, cached, derived }: typeof records[number]): SessionSummary => ({
-    id: header.id,
-    kind: classify(header),
-    title: {
-      text:
-        derived?.title !== undefined && derived.title.length > 0
-          ? derived.title
-          : basename(header.cwd ?? '') || header.id.slice(0, 8),
-      source: derived?.titleSource ?? 'fallback',
-    },
-    cwd: header.cwd ?? '',
-    createdAt: header.createdAt ?? derived?.modifiedAt ?? facts?.modifiedAt ?? 0,
-    updatedAt: Math.max(derived?.modifiedAt ?? facts?.modifiedAt ?? 0, lastUsed[header.id] ?? 0, header.createdAt ?? 0),
-    bytes: derived?.bytes ?? facts?.bytes,
-    // Without a readable artifact nothing can be proven empty, and hiding a
-    // real session is the worse error — so an unreadable log is listed.
-    hasPrompt: derived?.hasPrompt ?? true,
-    agentPreset: header.agentPreset,
-    model: derived?.model,
-    label: derived?.label,
-    branch: cached?.branch,
-    childCount: children.get(header.id) ?? 0,
-  })
   for (const [id, enriched] of earlyEnrichments) {
     const record = recordsById.get(id)
     if (record?.derived?.revision === enriched.revision) record.derived = enriched
@@ -350,12 +383,14 @@ export async function listSummaries(
   // would leave their relative order down to whatever the backend happened to
   // enumerate first, so the same history could list differently twice in a
   // row. Creation time breaks the tie, and the id breaks that.
-  return summaries.sort(
-    (left, right) =>
-      right.updatedAt - left.updatedAt ||
-      right.createdAt - left.createdAt ||
-      (left.id < right.id ? -1 : left.id > right.id ? 1 : 0),
-  )
+  summaries.sort(compareSummaries)
+  if (newest) saveSnapshot(summaries)
+  return summaries
+}
+
+function compareSummaries(left: SessionSummary, right: SessionSummary): number {
+  return right.updatedAt - left.updatedAt || right.createdAt - left.createdAt ||
+    (left.id < right.id ? -1 : left.id > right.id ? 1 : 0)
 }
 
 /**

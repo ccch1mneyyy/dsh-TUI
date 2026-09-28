@@ -8,6 +8,7 @@ import { snapshotLiveSessionEvents } from '../compat/liveSession.js'
 import { collectRecentActivity, parseRecapResponse, RECAP_RECENT_CHARS, wrapRecapPrompt } from '../recap.js'
 import { listSummaries, locateSession, previewSession, type SessionSource, type SessionSummary } from '../sessions/index.js'
 import { openStepToolCallIds, runSideQuestion, splitUnresolvedToolCalls, wrapSideQuestion } from '../sideQuestion.js'
+import { readListingSnapshot } from '../sessions/snapshot.js'
 import type { ChannelOwner } from './owner.js'
 import type { CredentialStatus, SideQuestionLlm } from './types.js'
 import { isUserInvocable } from '@deepseek-ai/dsh-skill'
@@ -51,7 +52,20 @@ export function createSessionMetadataActions(ctx: Context, deps: {
     signal === undefined ? deps.owner.signal : AbortSignal.any([signal, deps.owner.signal])
 
   let listingGeneration = 0
-  const listSessions = async (onEnriched?: (summary: SessionSummary) => void): Promise<readonly SessionSummary[]> => {
+  let lastListing: { source: SessionSource | symbol; rows: readonly SessionSummary[] } | undefined
+  const remember = (source: SessionSource, rows: readonly SessionSummary[]): void => {
+    lastListing = { source: source.identity ?? source, rows }
+  }
+  const cachedSessions = (): readonly SessionSummary[] | undefined => {
+    const source = persistence()
+    if (source === undefined) return undefined
+    // Providers without a durable scope still keep same-instance reopen fast.
+    // A replaced service never inherits this in-memory view.
+    return lastListing?.source === (source.identity ?? source)
+      ? lastListing.rows
+      : readListingSnapshot(source)
+  }
+  const listSessions = async (onEnriched?: (summary: SessionSummary) => void, onPartial?: (rows: readonly SessionSummary[]) => void): Promise<readonly SessionSummary[]> => {
     const generation = ++listingGeneration
     const capture = deps.binding.capture()
     const source = persistence()
@@ -63,10 +77,14 @@ export function createSessionMetadataActions(ctx: Context, deps: {
     summaries = await listSummaries(source, deps.owner.signal, enriched => {
       if (!current(capture) || generation !== listingGeneration) return
       summaries = summaries.map(row => row.id === enriched.id ? enriched : row)
+      remember(source, summaries)
       deps.setPersistedSessions(summaries)
       onEnriched?.(enriched)
+    }, rows => {
+      if (current(capture) && generation === listingGeneration) onPartial?.(rows)
     })
-    if (!current(capture)) return []
+    if (!current(capture) || generation !== listingGeneration) return []
+    remember(source, summaries)
     deps.setPersistedSessions(summaries)
     return summaries
   }
@@ -234,7 +252,7 @@ export function createSessionMetadataActions(ctx: Context, deps: {
   }
 
   return {
-    listSessions, previewSession: preview, listSkills, describeCredential,
+    cachedSessions, listSessions, previewSession: preview, listSkills, describeCredential,
     sideQuestion, recapRecent, setResumeTarget: writeResumeTarget,
     renameSession, setSessionColor, deleteSession, renameSessionTo,
   }

@@ -473,7 +473,9 @@ export interface ChannelUi {
   listFiles(): Promise<readonly string[]>
   /** Every session the persistence backend stores, classified and unfiltered
    *  — the browser (`/resume`) decides which of them a given view shows. */
-  listSessions(onEnriched?: (summary: SessionSummary) => void): Promise<readonly SessionSummary[]>
+  /** Last successful source-scoped listing for first paint; never authoritative. */
+  cachedSessions(): readonly SessionSummary[] | undefined
+  listSessions(onEnriched?: (summary: SessionSummary) => void, onPartial?: (rows: readonly SessionSummary[]) => void): Promise<readonly SessionSummary[]>
   /** Trailing exchanges of a persisted session, for the browser's preview. */
   previewSession(sessionId: string): Promise<readonly PreviewEntry[]>
   /** Mark a session for `dsh-tui --resume` on the next launch. */

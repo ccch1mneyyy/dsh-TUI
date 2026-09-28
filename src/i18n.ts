@@ -434,6 +434,7 @@ const dict = {
   'home-sessions-count': { zh: '{{n}} 个会话', en: { one: '{{n}} session', other: '{{n}} sessions' } },
   'home-no-sessions': { zh: '这个工作区还没有会话 · Enter 新建一个', en: 'No sessions in this workspace yet · Enter starts one' },
   'home-sessions-loading': { zh: '正在读取会话…', en: 'Loading sessions…' },
+  'home-sessions-refreshing': { zh: '后台刷新中', en: 'refreshing' },
   'home-sessions-failed': { zh: '读取会话失败 · {{err}}', en: 'Failed to load sessions · {{err}}' },
   'home-hint-list': { zh: '**←/→** 切换栏位 · **↑/↓** 选择 · **Enter** 编辑 · Ctrl+N 新建 · Esc 进入会话', en: '**←/→** switch pane · **↑/↓** move · **Enter** edit · Ctrl+N new · Esc enter the session' },
   'home-hint-menu': { zh: '**↑/↓** 选择 · **Enter** 确认 · Esc 关闭', en: '**↑/↓** move · **Enter** confirm · Esc close' },

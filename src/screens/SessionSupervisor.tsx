@@ -101,6 +101,7 @@ export function SessionSupervisor({
     entries,
     sessions,
     loading,
+    refreshing,
     notice,
     setNotice,
     query,
@@ -445,7 +446,7 @@ export function SessionSupervisor({
               <Text color="remember" bold>{truncateWidth(` ${t('home-sessions-title', { name: selected?.title ?? t('supervisor-title') })}`, Math.max(4, sessionWidth - 3))}</Text>
               <Text dimColor>
                 {`  ${truncateWidth(
-                  t('supervisor-counts', { working: workingCount, live: liveCount, total: visibleSessions.length }),
+                  t('supervisor-counts', { working: workingCount, live: liveCount, total: visibleSessions.length }) + (refreshing ? ` · ${t('home-sessions-refreshing')}` : ''),
                   Math.max(4, sessionWidth - 3),
                 )}`}
               </Text>

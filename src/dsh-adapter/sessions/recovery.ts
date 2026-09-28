@@ -8,8 +8,7 @@ interface RecoveryWork {
   readonly revision: string
   readonly path: string
   readonly bytes: number
-  readonly modifiedAt: number
-  readonly identity: string
+  readonly stamp: string
   readonly priority: number
   readonly listeners: Set<(derived: DerivedEntry) => void>
 }
@@ -51,10 +50,7 @@ async function recover(work: RecoveryWork): Promise<void> {
   try {
     const recovered = await recoverSessionTitle(work.path, work.bytes)
     const facts = fileFacts(work.path)
-    if (
-      facts === undefined || facts.bytes !== work.bytes ||
-      facts.modifiedAt !== work.modifiedAt || facts.identity !== work.identity
-    ) return
+    if (facts?.stamp !== work.stamp) return
     if (!recovered.complete) {
       deferRetry(work)
       return

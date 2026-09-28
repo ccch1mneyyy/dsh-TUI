@@ -527,7 +527,8 @@ releaseOlder()
 await olderListing
 check('a late listing cannot overwrite a newer revision', readIndex().get('overlap')?.derived?.revision, 'newer')
 check('a backend that lists nothing yields nothing', (await listSummaries({})).length, 0)
-check('a backend that throws yields nothing rather than propagating', (await listSummaries({ list: async () => { throw new Error('boom') } })).length, 0)
+await assert.rejects(() => listSummaries({ list: async () => { throw new Error('boom') } }), /boom/, 'failed enumeration must not masquerade as a successful empty list')
+checks++
 
 rmSync(root, { recursive: true, force: true })
 rmSync(home, { recursive: true, force: true })

@@ -980,6 +980,7 @@ function createChannelWithOwner(
     sideQuestion: sessionMetadataActions.sideQuestion,
     listFileCandidates: fileActions.listFileCandidates,
     listFiles: fileActions.listFiles,
+    cachedSessions: sessionMetadataActions.cachedSessions,
     listSessions: sessionMetadataActions.listSessions,
     previewSession: sessionMetadataActions.previewSession,
     bindApprovalStore: agentView.bindApprovalStore,

@@ -41,6 +41,7 @@ export type ChannelActionDelegates = Pick<ChannelState,
   | 'sideQuestion'
   | 'listFileCandidates'
   | 'listFiles'
+  | 'cachedSessions'
   | 'listSessions'
   | 'previewSession'
   | 'bindApprovalStore'
@@ -120,7 +121,8 @@ export function createChannelActionMethods(
     sideQuestion: (question, options) => getReadyActions().sideQuestion(question, options),
     listFileCandidates: (query, options) => getReadyActions().listFileCandidates(query, options),
     listFiles: () => getReadyActions().listFiles(),
-    listSessions: onEnriched => getReadyActions().listSessions(onEnriched),
+    cachedSessions: () => getReadyActions().cachedSessions(),
+    listSessions: (onEnriched, onPartial) => getReadyActions().listSessions(onEnriched, onPartial),
     previewSession: sessionId => getReadyActions().previewSession(sessionId),
     bindApprovalStore: store => getReadyActions().bindApprovalStore(store),
     agentViewRows: () => getReadyActions().agentViewRows(),

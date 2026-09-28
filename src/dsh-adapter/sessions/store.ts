@@ -6,9 +6,10 @@
  * service already hands out the exact token needed to avoid it:
  * `listSnapshots()` returns, per session, an opaque revision that changes
  * whenever the stored log changes. An entry whose revision still matches is
- * reused verbatim; anything else is re-derived. Steady state is therefore zero
- * log reads, and a session edited by another client (the store is shared with
- * dsh web) invalidates itself without any coordination.
+ * reused verbatim. A changed logical revision can still reuse a summary when
+ * its physical artifact stamp matches: historical revisions also depend on
+ * other sessions, whereas these derived fields read only the located file.
+ * A session edited by another client invalidates its artifact stamp.
  *
  * The revision is treated as opaque, as its contract requires. It happens to
  * be stat-derived today, but parsing it to shortcut a `stat` would couple this
@@ -16,10 +17,9 @@
  * per-session files is used.
  *
  * Two halves live in one entry because they have different lifetimes:
- * `derived` facts come from the log and die with the revision, while `branch`
- * is a local note about how this install used the session and no log change
- * can invalidate it. Keeping them in one record with one governing revision
- * field makes that boundary explicit instead of implied.
+ * `derived` facts come from the log and are checked against its revision or
+ * physical artifact stamp. `branch` is a local note about how this install
+ * used the session and no log change can invalidate it.
  *
  * Every operation is best-effort. The index is a cache: a corrupt file, a
  * losing concurrent write, or a read-only home directory costs a re-derivation
@@ -66,6 +66,8 @@ export interface DerivedEntry {
   readonly modifiedAt: number | undefined
   /** Physical file identity; a replacement invalidates append-only evidence. */
   readonly identity: string | undefined
+  /** Optional in older indexes; certifies only the physical-file-derived summary. */
+  readonly artifactStamp?: string
   /** Old EOF neighborhood hash, paired with the backend's append-only contract. */
   readonly anchor: string | undefined
   readonly title: string
@@ -132,6 +134,7 @@ function readEntry(value: unknown, derivedValid: boolean): IndexEntry | undefine
       bytes,
       modifiedAt: typeof modifiedAt === 'number' ? modifiedAt : undefined,
       identity: typeof identity === 'string' ? identity : undefined,
+      artifactStamp: typeof derived['artifactStamp'] === 'string' ? derived['artifactStamp'] : undefined,
       anchor: typeof anchor === 'string' ? anchor : undefined,
       title,
       titleSource,
@@ -194,11 +197,11 @@ export function readIndex(): SessionIndex {
  * A concurrent writer may win the rename; the loser's derivations are simply
  * recomputed next time.
  *
- * @param index - The index to store. Entries are written in insertion order.
+ * @param index - The index to store. Stable id order ignores scan scheduling.
  */
 export function writeIndex(index: SessionIndex): void {
   const entries: Record<string, unknown> = {}
-  for (const [id, entry] of index) {
+  for (const [id, entry] of [...index].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)) {
     entries[id] = {
       ...(entry.derived === undefined ? {} : { derived: entry.derived }),
       ...(entry.branch === undefined ? {} : { branch: entry.branch }),

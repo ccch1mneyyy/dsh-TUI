@@ -75,6 +75,7 @@ export const CHANNEL_METHOD_FEATURES: Readonly<Record<string, string>> = Object.
   listPresets: 'presets',
   switchPreset: 'presets',
   listSkills: 'skills',
+  cachedSessions: 'session-history',
   listSessions: 'session-history',
   previewSession: 'session-history',
   deleteSession: 'session-history',

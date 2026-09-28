@@ -271,8 +271,23 @@ and still reports success.
 ## 4. Refresh cost
 
 Occupancy and live status are two in-memory/small-file reads, deliberately
-separate from "re-list the sessions" (one `stat` per session plus a
-revision-keyed digest cache):
+separate from re-listing sessions (backend enumeration plus cached summaries).
+Summaries first reuse matching backend revisions. A changed revision triggers
+a check of the artifact identity, size, and high-resolution modification/change
+times. Historical revisions can change with the whole corpus; unchanged files
+retain their summaries and title-recovery progress. Appends, rewrites, and
+replacements invalidate that reuse. Older indexes without an artifact stamp
+re-read on their next revision miss.
+
+Successful complete JSONL listings are also saved privately under
+`~/.dsh-tui/session-lists/`, scoped by backend, absolute root, and encoding.
+After restart the first frame uses this snapshot while the count line says
+“refreshing”. Resume and occupancy checks still use the runtime; a cached row
+is not authorization. Failed refreshes retain the previous list beside an
+error; a successful empty list clears the snapshot. Unknown backends, relative
+roots, and corrupt snapshots do not reuse it. The first upgrade or an absent
+snapshot still needs backend enumeration, then derives recent rows first in
+yielding batches. Only the final complete result is saved.
 
 | Data | Source | Cadence |
 | --- | --- | --- |

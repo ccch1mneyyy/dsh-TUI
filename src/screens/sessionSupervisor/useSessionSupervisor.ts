@@ -100,12 +100,20 @@ export function useSessionSupervisor(input: SessionSupervisorInput) {
 
   const [entries, setEntries] = useState<readonly RailEntry[]>([])
   // Lazy so a non-empty snapshot from this channel's previous mount paints as
-  // the first frame; no or empty snapshot keeps today's loading path.
-  const [sessions, setSessions] = useState<readonly SessionSummary[]>(() => snapshotSlot(channel).rows ?? [])
+  // the first frame, including after restart; undefined alone means unknown.
+  const [sessions, setSessions] = useState<readonly SessionSummary[]>(() => {
+    const slot = snapshotSlot(channel)
+    // Recheck the provider's scope on every mount (including service replacement).
+    if (typeof channel.cachedSessions === 'function') {
+      try { slot.rows = channel.cachedSessions() } catch { slot.rows = undefined }
+    }
+    return slot.rows ?? []
+  })
   const [loading, setLoading] = useState(() => {
     const snapshot = snapshotSlot(channel).rows
-    return snapshot === undefined || snapshot.length === 0
+    return snapshot === undefined
   })
+  const [refreshing, setRefreshing] = useState(true)
   const [notice, setNotice] = useState<{ text: string; tone: 'info' | 'error' } | undefined>(undefined)
   /** Live status and occupancy are re-read on their own clock, not the listing's. */
   const [pulse, setPulse] = useState(0)
@@ -317,6 +325,7 @@ export function useSessionSupervisor(input: SessionSupervisorInput) {
     // rows the newer listing has already corrected.
     const slot = snapshotSlot(channel)
     const generation = ++slot.requestGeneration
+    setRefreshing(true)
 
     // The two reads are independent, and the session listing is the half this
     // screen cannot work without: a registry that rejects (bare composition,
@@ -330,6 +339,12 @@ export function useSessionSupervisor(input: SessionSupervisorInput) {
             if (slot.requestGeneration !== generation) return
             slot.rows = slot.rows?.map(row => row.id === enriched.id ? enriched : row)
             setSessions(current => current.map(row => row.id === enriched.id ? enriched : row))
+          }, partial => {
+            // Keep a complete cached list over a partial cold scan. With no
+            // snapshot, show useful rows now rather than waiting for every log.
+            if (slot.requestGeneration !== generation || slot.rows !== undefined) return
+            setSessions(partial)
+            setLoading(false)
           })
           // Recorded only after success: a failed listing keeps the previous
           // snapshot, and only the newest reload may write it.
@@ -357,7 +372,10 @@ export function useSessionSupervisor(input: SessionSupervisorInput) {
         }
       })(),
     ])
-    if (slot.requestGeneration === generation) setLoading(false)
+    if (slot.requestGeneration === generation) {
+      setLoading(false)
+      setRefreshing(false)
+    }
   }, [channel])
 
   React.useEffect(() => {
@@ -683,6 +701,7 @@ export function useSessionSupervisor(input: SessionSupervisorInput) {
     entries,
     sessions,
     loading,
+    refreshing,
     notice,
     setNotice,
     query,
