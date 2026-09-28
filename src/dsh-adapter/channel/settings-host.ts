@@ -200,6 +200,9 @@ export function createSettingsHosts(ctx: Context, assertActive: () => void = () 
           const providers = section?.providers
           if (providers === undefined || typeof providers !== 'object' || providers === null) return []
           const catalog = catalogMembers()
+          const resolvedSection = settingsValue(settings, 'llm-pi-ai') as
+            | { providers?: Record<string, unknown> }
+            | undefined
           return Object.entries(providers).flatMap(([route, profile]) => {
             // The settings section is user-editable, so a `providers.<route>`
             // entry may be null or a scalar; skip anything that is not a plain
@@ -214,6 +217,12 @@ export function createSettingsHosts(ctx: Context, assertActive: () => void = () 
             const api = typeof stored.api === 'string' && stored.api !== ''
               ? stored.api
               : undefined
+            const resolved = resolvedSection?.providers?.[route]
+            const headers = typeof resolved === 'object' && resolved !== null
+              ? (resolved as Record<string, unknown>).headers
+              : undefined
+            const hasCustomHeaders = typeof headers === 'object' && headers !== null
+              && !Array.isArray(headers) && Object.keys(headers).length > 0
             // Keep the raw model entries: a model-list re-selection must
             // rewrite kept ids with their stored objects, so per-model fields
             // this wizard never learned about survive the edit.
@@ -233,6 +242,7 @@ export function createSettingsHosts(ctx: Context, assertActive: () => void = () 
               shadowed: ref !== '' && process.env[ref] !== undefined,
               ...(baseURL !== undefined ? { baseURL } : {}),
               ...(api !== undefined ? { api } : {}),
+              ...(hasCustomHeaders ? { hasCustomHeaders: true } : {}),
               ...(models !== undefined ? { models } : {}),
               ...(modelEntries !== undefined && modelEntries.length > 0
                 ? { modelEntries }

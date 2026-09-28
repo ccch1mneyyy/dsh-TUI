@@ -289,7 +289,9 @@ providers without a restart.
   disclosed capacities once enabled; already-enabled models are pre-checked
   and only an explicit un-check removes one. A catalog route without a
   baseURL shows the snapshot only, with the origin noted in the question
-  detail.
+  detail. Catalog routes with no single known protocol or custom request
+  headers also explain the limitation and stay on the snapshot, rather than
+  saving endpoint-only models into an unverifiable profile.
 
 Where it writes:
 

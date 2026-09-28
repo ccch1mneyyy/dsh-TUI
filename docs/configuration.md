@@ -251,7 +251,9 @@ Profile 模式不再使用旧的 `DSH_TUI_COMPACT_RATIO`、`DSH_TUI_COMPACT_RETA
   只要该路由存有 baseURL（或正在添加时填了端点），再用已存密钥实时探测
   `GET {baseURL}/models` 并合并——仅线上有的新模型标「线上新增」，勾选后
   写入其披露的容量字段；已有模型预勾选，只有显式取消勾选才会移除。无
-  baseURL 的 catalog 路由只显示目录快照并在问题详情中注明。
+  baseURL 的 catalog 路由只显示目录快照并在问题详情中注明。协议不唯一或
+  配置了自定义请求头的 catalog 路由也会明确提示并回退到目录快照，不把线上
+  新模型写入无法验证的 profile。
 - 逐项菜单细节见[用户指南](user-guide.md)。
 
 写入位置：

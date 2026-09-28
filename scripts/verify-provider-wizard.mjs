@@ -78,6 +78,11 @@
  * 38. the add flow on a catalog route with a typed baseURL merges the same
  *    way, and the written profile carries capacities only for the
  *    endpoint-only id.
+ * 39. mixed-protocol catalogs skip the unsafe live probe and reject free-typed
+ *    endpoint-only ids.
+ * 40. catalog routes with custom headers explicitly fall back to the snapshot.
+ * 41. a failed catalog lookup never lets live capacities enter the profile.
+ * 42. the Anthropic catalog uses the anthropic-messages live probe protocol.
  *
  * Run with plain node against the compiled lib (after `pnpm build`):
  * `node scripts/verify-provider-wizard.mjs`
@@ -276,6 +281,11 @@ const MENU_DELETE = { selected: [t('provider-opt-edit-delete')] }
   check('1 catalog: transcript summary pushed without the key',
     calls.pushed.length === 1
       && calls.pushed[0].lines.every(line => !line.includes('sk-test-key')))
+  check('1 catalog: confirm detail is a preview, not a success line',
+    (calls.details.confirm ?? '').includes(t('provider-line-route', { route: 'deepseek' }))
+      && !(calls.details.confirm ?? '').includes(t('provider-line-action-added', { route: 'deepseek' }))
+      && (calls.details.confirm ?? '').includes(t('provider-line-keyref-preview', { ref: 'DEEPSEEK_API_KEY' })),
+    calls.details.confirm)
 }
 
 // 2. catalog, no models picked: models omitted, switch question skipped.
@@ -794,6 +804,10 @@ function oauthStub(behavior = {}) {
   check('23 delete: transcript notes the removed key',
     calls.pushed[0]?.lines.includes(t('provider-line-deleted-key', { ref: 'MY-ROUTE_KEY' })) === true,
     JSON.stringify(calls.pushed[0]?.lines))
+  check('23 delete: confirm detail is a preview, not a success line',
+    (calls.details['delete-confirm'] ?? '').includes(t('provider-line-route', { route: 'deepseek' }))
+      && !(calls.details['delete-confirm'] ?? '').includes(t('provider-line-action-deleted', { route: 'deepseek' })),
+    calls.details['delete-confirm'])
 }
 
 // 24. delete via the edit menu, env-shadowed key: profile removed, credential
@@ -1270,7 +1284,7 @@ function oauthStub(behavior = {}) {
   check('34 catalog+baseURL: catalog request then live request (no provider field)',
     eq(calls.discoverRequests, [
       { provider: 'deepseek' },
-      { baseURL: 'https://relay.example/v1', apiKey: 'sk-old' },
+      { baseURL: 'https://relay.example/v1', api: 'openai-completions', apiKey: 'sk-old' },
     ]), JSON.stringify(calls.discoverRequests))
   check('34 catalog+baseURL: merged rows, catalog first, live-only appended',
     eq(Object.keys(calls.optionDescriptions.models ?? {}), ['deepseek-chat', 'deepseek-v2-alpha']),
@@ -1396,7 +1410,7 @@ function oauthStub(behavior = {}) {
   check('38 add catalog+baseURL: catalog request then live request carrying the typed key',
     eq(calls.discoverRequests, [
       { provider: 'deepseek' },
-      { baseURL: 'https://relay.example/v1', apiKey: 'sk-new' },
+      { baseURL: 'https://relay.example/v1', api: 'openai-completions', apiKey: 'sk-new' },
     ]), JSON.stringify(calls.discoverRequests))
   check('38 add catalog+baseURL: profile narrows models, endpoint-only id carries capacities',
     eq(calls.profiles, [['deepseek', {
@@ -1411,6 +1425,117 @@ function oauthStub(behavior = {}) {
   check('38 add catalog+baseURL: live-only row tagged new on endpoint',
     (calls.optionDescriptions.models?.['deepseek-v2-alpha'] ?? '').includes(t('provider-row-model-new')),
     JSON.stringify(calls.optionDescriptions.models))
+}
+
+// 39. A mixed-protocol catalog (for example openrouter) has no safe protocol
+// for an unnamed live probe. Keep the installed catalog, do not accept a
+// free-typed endpoint-only id, and do not attach endpoint capacities.
+{
+  const { deps, calls } = makeDeps({
+    'action': ACTION_EDIT,
+    'edit-provider': { selected: ['openrouter'] },
+    'edit-menu': MENU_MODELS,
+    'models': { selected: ['or-known'], custom: 'or-online-only' },
+  }, {
+    configured: [{ route: 'openrouter', ref: 'OPENROUTER_API_KEY', shadowed: false, isCatalog: true, baseURL: 'https://openrouter.example/v1', models: [] }],
+    storedCredentials: { OPENROUTER_API_KEY: 'sk-old' },
+    discover: request => request.provider !== undefined
+      ? [{ id: 'or-known', contextWindow: 1000000 }]
+      : [{ id: 'or-online-only', contextWindow: 2000000 }],
+  })
+  const outcome = await runProviderWizard(deps)
+  check('39 mixed catalog: outcome updated from snapshot', outcome === 'updated', outcome)
+  check('39 mixed catalog: live probe is skipped without a known protocol',
+    eq(calls.discoverRequests, [{ provider: 'openrouter' }]),
+    JSON.stringify(calls.discoverRequests))
+  check('39 mixed catalog: explicit warning explains the fallback',
+    calls.notifications.some(n => n.color === 'warning' && n.text === t('provider-live-fetch-unavailable')),
+    JSON.stringify(calls.notifications))
+  check('39 mixed catalog: endpoint-only custom id is not written',
+    eq(calls.mutations, [['openrouter', [{ op: 'set', path: ['models'], value: [{ id: 'or-known' }] }]]]),
+    JSON.stringify(calls.mutations))
+}
+
+// 40. A catalog route with custom headers cannot safely use the anonymous
+// live-discovery request because the upstream seam cannot carry those headers.
+{
+  const { deps, calls } = makeDeps({
+    'action': ACTION_EDIT,
+    'edit-provider': { selected: ['deepseek'] },
+    'edit-menu': MENU_MODELS,
+    'models': { selected: ['deepseek-chat'] },
+  }, {
+    configured: [{ route: 'deepseek', ref: 'DEEPSEEK_API_KEY', shadowed: false, isCatalog: true, baseURL: 'https://relay.example/v1', hasCustomHeaders: true, models: [] }],
+    storedCredentials: { DEEPSEEK_API_KEY: 'sk-old' },
+    discover: request => request.provider !== undefined
+      ? [{ id: 'deepseek-chat' }]
+      : [{ id: 'deepseek-v2-alpha', contextWindow: 2000000 }],
+  })
+  const outcome = await runProviderWizard(deps)
+  check('40 custom headers: outcome updated from snapshot', outcome === 'updated', outcome)
+  check('40 custom headers: live probe is skipped',
+    eq(calls.discoverRequests, [{ provider: 'deepseek' }]),
+    JSON.stringify(calls.discoverRequests))
+  check('40 custom headers: warning explains the fallback',
+    calls.notifications.some(n => n.color === 'warning' && n.text === t('provider-live-fetch-unavailable')),
+    JSON.stringify(calls.notifications))
+}
+
+// 41. If the installed catalog lookup fails but the endpoint responds, keep
+// the live rows selectable while treating catalog membership as unknown:
+// no "new" badge and no endpoint capacities are persisted.
+{
+  const { deps, calls } = makeDeps({
+    'action': ACTION_EDIT,
+    'edit-provider': { selected: ['openai'] },
+    'edit-menu': MENU_MODELS,
+    'models': { selected: ['gpt-live-only'] },
+  }, {
+    configured: [{ route: 'openai', ref: 'OPENAI_API_KEY', shadowed: false, isCatalog: true, baseURL: 'https://relay.example/v1', models: [] }],
+    storedCredentials: { OPENAI_API_KEY: 'sk-old' },
+    discover: request => request.provider !== undefined
+      ? Promise.reject(new Error('catalog unavailable'))
+      : [{ id: 'gpt-live-only', contextWindow: 2000000, maxTokens: 65536 }],
+  })
+  const outcome = await runProviderWizard(deps)
+  check('41 catalog lookup failure: outcome updated from live rows', outcome === 'updated', outcome)
+  check('41 catalog lookup failure: live probe carries explicit known protocol',
+    eq(calls.discoverRequests, [
+      { provider: 'openai' },
+      { baseURL: 'https://relay.example/v1', api: 'openai-responses', apiKey: 'sk-old' },
+    ]), JSON.stringify(calls.discoverRequests))
+  check('41 catalog lookup failure: warning and no false snapshot detail',
+    calls.notifications.some(n => n.color === 'warning' && n.text === t('provider-catalog-fetch-failed'))
+      && calls.details.models === undefined,
+    JSON.stringify({ notifications: calls.notifications, detail: calls.details.models }))
+  check('41 catalog lookup failure: unknown membership does not persist capacities',
+    eq(calls.mutations, [['openai', [{ op: 'set', path: ['models'], value: [{ id: 'gpt-live-only' }] }]]]),
+    JSON.stringify(calls.mutations))
+}
+
+// 42. Anthropic is one of the explicitly verified catalog protocols: the
+// live probe must carry anthropic-messages so the upstream adapter uses
+// x-api-key/anthropic-version rather than the OpenAI bearer default.
+{
+  const { deps, calls } = makeDeps({
+    'action': ACTION_EDIT,
+    'edit-provider': { selected: ['anthropic'] },
+    'edit-menu': MENU_MODELS,
+    'models': { selected: ['claude-live-only'] },
+  }, {
+    configured: [{ route: 'anthropic', ref: 'ANTHROPIC_API_KEY', shadowed: false, isCatalog: true, baseURL: 'https://relay.example', models: [] }],
+    storedCredentials: { ANTHROPIC_API_KEY: 'sk-ant' },
+    discover: request => request.provider !== undefined
+      ? [{ id: 'claude-known' }]
+      : [{ id: 'claude-live-only', contextWindow: 2000000 }],
+  })
+  const outcome = await runProviderWizard(deps)
+  check('42 anthropic catalog: outcome updated', outcome === 'updated', outcome)
+  check('42 anthropic catalog: live probe carries anthropic-messages',
+    eq(calls.discoverRequests, [
+      { provider: 'anthropic' },
+      { baseURL: 'https://relay.example', api: 'anthropic-messages', apiKey: 'sk-ant' },
+    ]), JSON.stringify(calls.discoverRequests))
 }
 
 console.log(failed === 0 ? '\nAll provider-wizard checks passed' : `\n${failed} check(s) FAILED`)
