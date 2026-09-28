@@ -472,5 +472,52 @@ function putRaw(s: Screen, col: number, row: number, charId: number, width: numb
   check('M3. an image still waiting on its raster does not exempt its fallback cells', !plain(7, 3) && !plain(8, 3))
 }
 
+// ── N. Region metadata is part of the bytes a copy ships ──────────────
+// An image's cells are blank, so a formula swapped under a stationary
+// highlight (same id, same cells, different source) hashed identically while
+// the copy changed underneath. The fingerprint now covers the region ids at
+// their cells plus the text those ids stand for — these checks pin both
+// directions: a real source change must latch, and a repainted node or an
+// unreferenced text must not refuse a legitimate copy.
+{
+  const withRegion = (id: number, text: string, cols = 12): Screen => {
+    const screen = makeScreen(4, cols)
+    screen.copyRegion = new Int32Array(cols * 4)
+    screen.copyTexts = new Map<number, string>([[id, text]])
+    screen.copyRegion.fill(id, cols, cols * 2) // row 1
+    return screen
+  }
+  const screen = withRegion(1, '$x$')
+  const sel = makeSel()
+  startSelection(sel, 0, 1)
+  updateSelection(sel, 4, 1)
+  refreshSelectionFingerprint(sel, screen, false)
+  const baseline = getSelectedText(sel, screen)
+  check('N1. a region copies its source', baseline === '$x$', baseline)
+
+  screen.copyTexts!.set(1, '$y$') // same id, same blank cells, new source
+  const tripped = refreshSelectionFingerprint(sel, screen, false)
+  check('N2. a swapped formula source trips the guard',
+    tripped && sel.stale && getSelectedText(sel, screen) === '$y$')
+
+  // New id, same source (a repainted node): hash moves, bytes do not.
+  const repainted = withRegion(7, '$x$')
+  const sel2 = makeSel()
+  startSelection(sel2, 0, 1)
+  updateSelection(sel2, 4, 1)
+  refreshSelectionFingerprint(sel2, repainted, false)
+  repainted.copyRegion!.fill(8, repainted.width, repainted.width * 2)
+  repainted.copyTexts!.set(8, '$x$')
+  const refusedRepaint = refreshSelectionFingerprint(sel2, repainted, false)
+  check('N3. a repainted region with the same source is not refused',
+    !refusedRepaint && !sel2.stale && getSelectedText(sel2, repainted) === '$x$')
+
+  // A text kept for an id no cell references (a prune that has not run yet).
+  repainted.copyTexts!.set(9, 'unreferenced')
+  const refusedExtra = refreshSelectionFingerprint(sel2, repainted, false)
+  check('N4. an unreferenced region text does not refuse the copy',
+    !refusedExtra && !sel2.stale && getSelectedText(sel2, repainted) === '$x$')
+}
+
 console.log(failures === 0 ? 'selection stale-guard regression passed' : `${failures} failure(s)`)
 process.exit(failures === 0 ? 0 : 1)
