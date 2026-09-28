@@ -1357,11 +1357,13 @@ export function refreshSelectionFingerprint(
       // A copy region (a formula image) is content too: its cells are blank,
       // so without this term a formula swapped under a stationary highlight
       // would hash identically while the copied SOURCE changed. Fold the id
-      // in at its position; the region TEXT follows after the cell loops.
+      // in at its position, under its own constant so an id can never stand
+      // in for a neighbouring cell's code unit; the region TEXT follows after
+      // the cell loops.
       const region = copyRegion?.[rowOff + col] ?? 0
       if (region !== 0) {
         coveredRegions.add(region)
-        h = Math.imul(h ^ region, 0x9e3779b9)
+        h = Math.imul(h ^ 0x7feb352d ^ region, 0x9e3779b9)
       }
       // Resolve the id through the pool and hash the actual characters —
       // the exact string getSelectedText would emit for this cell. Two
@@ -1394,9 +1396,17 @@ export function refreshSelectionFingerprint(
   // The bytes a region contributes live outside the cells (Screen.copyTexts),
   // so they are hashed here — in id order, after the position terms above, so
   // a changed source moves the hash and the byte verdict below can refuse it.
+  //
+  // Ids and text code units are both folded as plain numbers, and an image id
+  // is free to equal a code unit (id 65 next to a source starting with "A"):
+  // without a delimiter, `id 65 + "AY"` hashed exactly like `id 1, "XA"` plus
+  // `id 65, "Y"`, and the guard missed that swap. Fold the id under its own
+  // constant and length-delimit the text. (This is a fingerprint, not a
+  // bijection — the byte comparison below is the verdict.)
   for (const id of [...coveredRegions].sort((a, b) => a - b)) {
-    h = Math.imul(h ^ id, 0x01000193)
     const regionText = copyTexts?.get(id) ?? ''
+    h = Math.imul(h ^ 0x7feb352d ^ id, 0x01000193)
+    h = Math.imul(h ^ regionText.length, 0x01000193)
     for (let k = 0; k < regionText.length; k++) {
       h = Math.imul(h ^ regionText.charCodeAt(k), 0x01000193)
     }

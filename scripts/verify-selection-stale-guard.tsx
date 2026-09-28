@@ -517,6 +517,27 @@ function putRaw(s: Screen, col: number, row: number, charId: number, width: numb
   const refusedExtra = refreshSelectionFingerprint(sel2, repainted, false)
   check('N4. an unreferenced region text does not refuse the copy',
     !refusedExtra && !sel2.stale && getSelectedText(sel2, repainted) === '$x$')
+
+  // Ids and text code units are both numbers in the hash stream. An id is
+  // free to equal a code unit (65 next to a source starting with "A"), and
+  // without a delimiter `id 65 + "AY"` hashed exactly like `id 1, "XA"` plus
+  // `id 65, "Y"` — a real source swap the guard missed.
+  const boundary = makeScreen(2, 8)
+  boundary.copyRegion = new Int32Array(boundary.width * boundary.height)
+  boundary.copyTexts = new Map<number, string>([[1, 'X'], [65, 'AY']])
+  boundary.copyRegion[0] = 1 // row 0, col 0
+  boundary.copyRegion[2] = 65 // row 0, col 2
+  const sel3 = makeSel()
+  startSelection(sel3, 0, 0)
+  updateSelection(sel3, 7, 0)
+  refreshSelectionFingerprint(sel3, boundary, false)
+  const beforeSwap = getSelectedText(sel3, boundary)
+  boundary.copyTexts.set(1, 'XA')
+  boundary.copyTexts.set(65, 'Y')
+  const trippedCollision = refreshSelectionFingerprint(sel3, boundary, false)
+  check('N5. an id cannot impersonate a neighbouring region source',
+    beforeSwap === 'X AY' && trippedCollision && sel3.stale && getSelectedText(sel3, boundary) === 'XA Y',
+    `${beforeSwap} -> ${getSelectedText(sel3, boundary)}`)
 }
 
 console.log(failures === 0 ? 'selection stale-guard regression passed' : `${failures} failure(s)`)
