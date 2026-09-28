@@ -2016,7 +2016,7 @@ export function PromptInput({
               return
             }
             if (content.kind === 'unavailable') {
-              channel.notify(t('input-clipboard-unavailable'), { color: 'warning' })
+              channel.notify(t(content.wsl === true ? 'input-clipboard-unavailable-wsl' : 'input-clipboard-unavailable'), { color: 'warning' })
               return
             }
             if (content.kind === 'image') {

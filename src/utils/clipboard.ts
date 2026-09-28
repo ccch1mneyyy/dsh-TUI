@@ -13,7 +13,11 @@
  *   connects — an installed tool whose session is unreachable (stale
  *   WAYLAND_DISPLAY/DISPLAY) falls through to the next candidate.
  *   `text/uri-list` offers become file paths, `image/*` offers are
- *   exported to a temp file whose path is inserted.
+ *   exported to a temp file whose path is inserted. A Windows bitmap copy
+ *   offered as `image/bmp` (WSLg) is converted to PNG first.
+ * - **WSL**: when the Linux tools find nothing usable, `powershell.exe`
+ *   reads the Windows clipboard (Explorer files → `wslpath`, bitmaps → PNG
+ *   over stdout, else text).
  *
  * Priority is always files → image → text (a screenshot copy offers only an
  * image; a file-manager copy offers a file list; everything else falls
@@ -35,12 +39,14 @@
  */
 
 import { execFile, spawn } from 'node:child_process'
-import { existsSync, rmSync } from 'node:fs'
+import { existsSync, readFileSync, rmSync } from 'node:fs'
 import { chmod, mkdtemp, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { bmpToPng } from './bmp.js'
 import { execFileNoThrow } from './execFileNoThrow.js'
+import { imagePathMediaType } from './pastedImagePath.js'
 
 /** Timeout for every clipboard helper invocation (ms). */
 const CLIPBOARD_TIMEOUT = 3000
@@ -60,9 +66,10 @@ export type ClipboardContent =
  * `null` when the clipboard holds nothing usable (empty or read failure),
  * or `{ kind: 'unavailable' }` when no clipboard backend can be reached at
  * all (Linux/Unix without wl-paste/xclip/xsel, or none of the installed
- * ones connecting to a live session).
+ * ones connecting to a live session). `wsl` marks the WSL flavour, where
+ * the Windows-side PowerShell fallback was also unreachable.
  */
-export type ClipboardRead = ClipboardContent | { kind: 'unavailable' } | null
+export type ClipboardRead = ClipboardContent | { kind: 'unavailable'; wsl?: boolean } | null
 
 /**
  * Parse `text/uri-list` clipboard content into local file paths. Lines are
@@ -244,14 +251,16 @@ async function imageTempPath(mime: string): Promise<string | null> {
  * and a non-zero/null code.
  * @param file - The executable to spawn.
  * @param args - Command-line arguments.
+ * @param timeout - Kill deadline in ms.
  * @returns Exit code and captured stdout bytes.
  */
 function spawnForBuffer(
   file: string,
   args: readonly string[],
+  timeout = CLIPBOARD_TIMEOUT,
 ): Promise<{ code: number | null; stdout: Buffer }> {
   return new Promise(resolve => {
-    const child = spawn(file, [...args], { timeout: CLIPBOARD_TIMEOUT })
+    const child = spawn(file, [...args], { timeout })
     const chunks: Buffer[] = []
     child.stdout.on('data', (chunk: Buffer) => chunks.push(chunk))
     child.on('error', () => resolve({ code: 1, stdout: Buffer.concat(chunks) }))
@@ -278,10 +287,24 @@ async function captureLinuxImage(
       : ['-selection', 'clipboard', '-o', '-t', mime]
   const result = await spawnForBuffer(tool, args)
   if (result.code !== 0 || result.stdout.length === 0) return null
+  // A Windows bitmap copy (WSLg) arrives as image/bmp, which the attachment
+  // profile rejects: convert to PNG, keeping the BMP bytes when it cannot be.
+  const png = /^image\/(?:x-ms-)?bmp$/iu.test(mime) ? await bmpToPng(result.stdout) : null
+  return writeImageExport(png === null ? mime : 'image/png', png ?? result.stdout)
+}
+
+/**
+ * Write exported image bytes exclusively (`wx`, mode 0600) to a fresh path
+ * in the private image directory.
+ * @param mime - The MIME type deciding the file extension.
+ * @param bytes - The image bytes.
+ * @returns The written path, or null when the directory or write failed.
+ */
+async function writeImageExport(mime: string, bytes: Buffer): Promise<string | null> {
   const path = await imageTempPath(mime)
   if (path === null) return null
   try {
-    await writeFile(path, result.stdout, { flag: 'wx', mode: 0o600 })
+    await writeFile(path, bytes, { flag: 'wx', mode: 0o600 })
   } catch {
     return null
   }
@@ -419,13 +442,40 @@ async function readWithLinuxTool(
 }
 
 /**
- * Read the clipboard on Linux/Unix: try each candidate paste tool in
- * session order, skipping ones that are not installed and falling through
- * ones that fail for any reason other than a genuinely empty selection.
+ * Read the clipboard on Linux/Unix through the paste tools, plus the
+ * Windows clipboard via PowerShell when running inside WSL.
  * @returns The clipboard content, null when empty/unreadable, or
  *   'unavailable' when every installed tool failed.
  */
 async function readClipboardLinux(): Promise<ClipboardRead> {
+  const outcome = await readClipboardLinuxTools()
+  if (!isWsl()) return outcome
+  // WSL: the Linux tools only see what WSLg bridges (text, and images as
+  // BMP). Ask Windows itself when they found nothing, could not connect, or
+  // exported an image the attachment profile cannot stage.
+  const usable =
+    outcome !== null &&
+    outcome.kind !== 'unavailable' &&
+    !(outcome.kind === 'image' && imagePathMediaType(outcome.path) === undefined)
+  if (usable) return outcome
+  const windows = await readClipboardWsl()
+  if (windows !== null) {
+    // The unstageable Linux export is superseded; only the returned path is
+    // unlinked after staging.
+    if (outcome !== null && outcome.kind === 'image') rmSync(outcome.path, { force: true })
+    return windows
+  }
+  return outcome !== null && outcome.kind === 'unavailable' ? { kind: 'unavailable', wsl: true } : outcome
+}
+
+/**
+ * Try each candidate paste tool in session order, skipping ones that are
+ * not installed and falling through ones that fail for any reason other
+ * than a genuinely empty selection.
+ * @returns The clipboard content, null when empty/unreadable, or
+ *   'unavailable' when every installed tool failed.
+ */
+async function readClipboardLinuxTools(): Promise<ClipboardRead> {
   const order = linuxCandidateOrder()
   // The cached winner goes first; a backend error evicts it below and the
   // remaining candidates re-probe.
@@ -446,6 +496,84 @@ async function readClipboardLinux(): Promise<ClipboardRead> {
   // Nothing installed at all, or every installed tool failed — both read
   // as "no usable clipboard" to the caller.
   return { kind: 'unavailable' }
+}
+
+// /proc kernel signature of WSL, read once; the env markers are checked on
+// every call because sudo/ssh sessions may drop them.
+let wslKernel: boolean | undefined
+let wslOverride: boolean | undefined
+
+/** True when running inside WSL (env markers, else the kernel release). */
+function isWsl(): boolean {
+  if (wslOverride !== undefined) return wslOverride
+  if (process.env.WSL_DISTRO_NAME || process.env.WSL_INTEROP) return true
+  if (wslKernel === undefined) {
+    try {
+      wslKernel = /microsoft|wsl/iu.test(readFileSync('/proc/sys/kernel/osrelease', 'utf8'))
+    } catch {
+      wslKernel = false
+    }
+  }
+  return wslKernel
+}
+
+/** Windows PowerShell may take a while to cold-start through WSL interop. */
+const WSL_POWERSHELL_TIMEOUT = 10_000
+
+/**
+ * PowerShell script for the WSL fallback: Explorer file drops as `FILE:`
+ * lines, a bitmap as one `IMAGE64:` PNG line (bytes travel over stdout, so
+ * no Windows↔WSL path translation for the export), else `TEXT64:` text.
+ * @returns The complete -Command script.
+ */
+function buildWslPsScript(): string {
+  return [
+    "$ErrorActionPreference='SilentlyContinue'",
+    '[Console]::OutputEncoding=[System.Text.Encoding]::UTF8',
+    '$files=$null',
+    'try { $files = Get-Clipboard -Format FileDropList -ErrorAction Stop } catch {}',
+    'if($files){foreach($f in $files){Write-Output ("FILE:"+$f.FullName)}}',
+    '$saved=$false',
+    'if(-not $files){try { Add-Type -AssemblyName System.Drawing; $img=Get-Clipboard -Format Image -ErrorAction Stop; if($img){$ms=New-Object System.IO.MemoryStream; $img.Save($ms,[System.Drawing.Imaging.ImageFormat]::Png); $img.Dispose(); Write-Output ("IMAGE64:"+[Convert]::ToBase64String($ms.ToArray())); $saved=$true} } catch {} }',
+    'if(-not $files -and -not $saved){$t=Get-Clipboard -Raw; if($null -ne $t){Write-Output ("TEXT64:"+[Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($t)))}}',
+  ].join('; ')
+}
+
+/**
+ * Read the Windows clipboard from inside WSL through `powershell.exe`
+ * (Windows interop). Copied files come back as WSL paths via `wslpath`.
+ * @returns The content, or null when interop is unavailable or the
+ *   clipboard holds nothing usable.
+ */
+async function readClipboardWsl(): Promise<ClipboardContent | null> {
+  const result = await spawnForBuffer(
+    'powershell.exe',
+    ['-NoProfile', '-NonInteractive', '-Command', buildWslPsScript()],
+    WSL_POWERSHELL_TIMEOUT,
+  )
+  if (result.code !== 0) return null
+  const files: string[] = []
+  const texts: string[] = []
+  let image: Buffer | null = null
+  for (const line of result.stdout.toString('utf8').split(/\r?\n/)) {
+    if (line.startsWith('FILE:')) files.push(line.slice(5))
+    else if (line.startsWith('IMAGE64:')) image = Buffer.from(line.slice(8), 'base64')
+    else if (line.startsWith('TEXT64:')) texts.push(Buffer.from(line.slice(7), 'base64').toString('utf8'))
+  }
+  if (files.length > 0) {
+    const paths: string[] = []
+    for (const file of files) {
+      const converted = await execFileNoThrow('wslpath', ['-u', file], { timeout: 2000 })
+      const path = converted.stdout.trim()
+      if (converted.code === 0 && path.length > 0) paths.push(path)
+    }
+    return paths.length > 0 ? { kind: 'files', paths } : null
+  }
+  if (image !== null && image.length > 0) {
+    const path = await writeImageExport('image/png', image)
+    if (path !== null) return { kind: 'image', path }
+  }
+  return texts.length > 0 ? { kind: 'text', text: texts.join('\n') } : null
 }
 
 /**
@@ -602,6 +730,16 @@ export function readClipboard(): Promise<ClipboardRead> {
  */
 export function _resetLinuxPasteCache(): void {
   linuxPaste = undefined
+  wslKernel = undefined
+}
+
+/**
+ * Force the WSL detection result (undefined restores real detection). Kept
+ * apart from {@link _resetLinuxPasteCache} so a cache reset never drops it.
+ * @internal test-only
+ */
+export function _setWslOverride(value: boolean | undefined): void {
+  wslOverride = value
 }
 
 /**
