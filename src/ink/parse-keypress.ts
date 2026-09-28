@@ -905,6 +905,14 @@ export type KeyParseState = {
    * terminal sequence. The next text chunk may be that sequence's delayed tail.
    */
   terminalResponseTailAfterEscFlushAt?: number
+  /**
+   * Host-injected, read-only in-flight evidence for terminal-query replies:
+   * the host saw a query either still queued or sent within its bounded
+   * window, so a response tail may legitimately arrive. Absent means false —
+   * without an injection the parser never claims a response tail, which keeps
+   * the pre-gate behavior for direct callers.
+   */
+  terminalQueryInFlight?: boolean
   // Internal tokenizer instance
   _tokenizer?: Tokenizer
 }
@@ -1367,6 +1375,9 @@ export function parseMultipleKeypresses(
     // The host gate rides along: App replaces its state with this object on
     // every read, and the hold must stay closed for the whole session.
     win32Capable: prevState.win32Capable,
+    // Same host-injected contract for the query provenance: read-only here,
+    // re-injected by App on every input call, so it is never stale.
+    terminalQueryInFlight: prevState.terminalQueryInFlight,
     win32InputMode,
     win32InputStartedAt,
     win32EscFlushedAt,

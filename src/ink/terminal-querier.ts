@@ -221,6 +221,29 @@ export class TerminalQuerier {
     return this.suspended
   }
 
+  /**
+   * In-flight evidence for the input parser (read-only observation): true
+   * while at least one query or flush sentinel is still waiting for its
+   * reply. Purely observational — queue semantics are untouched.
+   */
+  get hasPending(): boolean {
+    return this.queue.length > 0
+  }
+
+  /**
+   * In-flight evidence for the input parser (read-only observation):
+   * `Date.now()` of the most recent `send()`, or undefined when nothing has
+   * been sent. A reply can outlive its promise (a flush() sentinel may have
+   * resolved it already), so callers pair this timestamp with a bounded
+   * window instead of relying on {@link hasPending} alone.
+   */
+  get lastSentAt(): number | undefined {
+    return this.lastQuerySentAt
+  }
+
+  /** Timestamp backing {@link lastSentAt}; stamped by every send(). */
+  private lastQuerySentAt: number | undefined = undefined
+
   private holdRawMode(): () => void {
     this.setRawMode?.(true)
     return () => this.setRawMode?.(false)
@@ -250,6 +273,7 @@ export class TerminalQuerier {
         resolve: r => resolve(r as T | undefined),
         releaseRawMode: this.holdRawMode(),
       })
+      this.lastQuerySentAt = Date.now()
       this.stdout.write(query.request)
     })
   }
