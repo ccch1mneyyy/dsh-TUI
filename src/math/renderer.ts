@@ -2,7 +2,7 @@
  * LaTeX → terminal-image raster: MathJax typesets TeX to SVG, sharp renders
  * the SVG to RGBA sized in whole terminal cells.
  *
- * The typeset-image backend behind `mathRendering: auto` (#1051). Nothing
+ * The typeset-image backend behind `mathRendering: image` (#1051). Nothing
  * here decides whether an image is shown — callers fall back to the Unicode
  * renderer on any failure — and nothing here knows a terminal protocol: the
  * result is a TerminalImageSource plus its cell box. Every failure is a

@@ -8,7 +8,7 @@
  */
 import assert from 'node:assert/strict'
 import { readdirSync, readFileSync } from 'node:fs'
-import { join, relative } from 'node:path'
+import { join, relative, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { planFormulaLayout } from '../src/math/layout.js'
 import { clearMathRenderCaches, mathRenderStats, renderMathRaster } from '../src/math/renderer.js'
@@ -148,7 +148,9 @@ const sources = (directory: string): string[] => readdirSync(directory, { withFi
 })
 for (const file of sources(join(root, 'src'))) {
   const text = readFileSync(file, 'utf8')
-  const name = relative(root, file)
+  // POSIX separators, so the whitelist reads identically on Windows (where
+  // relative() returns backslashes) and on CI.
+  const name = relative(root, file).split(sep).join('/')
   for (const line of text.split('\n')) {
     if (!line.includes('@dsh-tui-vendor/mathjax-tex-svg')) continue
     const allowed = name === 'src/math/renderer.ts' &&
