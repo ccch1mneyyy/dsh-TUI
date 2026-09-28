@@ -151,6 +151,10 @@ export interface Config {
    *  Unsupported, still-streaming, or too-wide formulas keep their source.
    *  On by default; off always shows the source. */
   latexMath?: boolean
+  /** Auto recap on open (settings `dsh-tui.recapOnOpen`): opening or resuming a
+   *  session summarizes its recent activity into a dim line at the bottom of
+   *  the transcript. On by default; off leaves `/recap` as the manual path. */
+  recapOnOpen?: boolean
   /** Status-footer field visibility and compact presentation preferences. */
   statusBar?: Partial<StatusBarConfig>
   /** Built-in action-shortcut overrides (`paste: 'alt+v'`), keyed by action
@@ -217,6 +221,11 @@ export const Config: Schema<Config, RuntimeConfig<Config>> = editableConfig<Conf
   smoothStreaming: Schema.boolean().default(true),
   mermaidDiagrams: Schema.boolean().default(true),
   latexMath: Schema.boolean().default(true),
+  // No `.default()` on purpose (the volatile wrapper swallows it; same rule as
+  // splashFont): an unset key must stay distinguishable from an explicit
+  // `false`, and the read site already treats undefined as on
+  // (`describe().value.recapOnOpen !== false`, see channel.ts).
+  recapOnOpen: Schema.boolean(),
   statusBar: Schema.object({
     compact: Schema.boolean().default(DEFAULT_STATUS_BAR.compact),
     model: Schema.boolean().default(DEFAULT_STATUS_BAR.model),
@@ -254,7 +263,7 @@ export const Config: Schema<Config, RuntimeConfig<Config>> = editableConfig<Conf
 }), [
   'diffLayout', 'thinkingFold', 'toolBackground', 'scrollGutter', 'pageMargin',
   'foldTerminalCommand', 'promptSessionLabel', 'expandEditor', 'smoothStreaming',
-  'mermaidDiagrams', 'latexMath', 'effortDefault', 'statusBar', 'whale', 'whaleIdle', 'whaleGirl', 'splashFont', 'minimal',
+  'mermaidDiagrams', 'latexMath', 'recapOnOpen', 'effortDefault', 'statusBar', 'whale', 'whaleIdle', 'whaleGirl', 'splashFont', 'minimal',
   'lang', 'fullscreen', 'terminalImages', 'shortcuts',
 ])
 
