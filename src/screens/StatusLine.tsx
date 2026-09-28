@@ -8,10 +8,13 @@ import { estimateSessionCostCny, estimateSessionCostSplitCny, isDeepSeekOfficial
 import { ActivityLine, contextPressurePct, type ActivityLineValue } from '../components/ActivityLine.js'
 import { GoalStatusChip } from '../components/GoalTodoPanel.js'
 import { formatJobDuration, type BackgroundJobState } from '../dsh-adapter/jobs.js'
+import type { SubagentState } from '../dsh-adapter/subagents.js'
 
 /** Stable fallback for stubbed channels: verify/repro harnesses render the
  *  real Chat with partial channel literals that predate the jobs field. */
 const NO_BACKGROUND_JOBS: readonly BackgroundJobState[] = []
+/** Same stub-channel fallback for the subagents field. */
+const NO_SUBAGENTS: readonly SubagentState[] = []
 import type { ChannelUi as Channel } from '../adapter/channel/ui-policy.js'
 import type { SelectionSnapshot } from '../dsh-adapter/ide-channel.js'
 import { modeDisplayName } from '../sessionModes.js'
@@ -84,6 +87,7 @@ type HoverTarget =
   | 'cost'
   | 'goal'
   | 'jobs'
+  | 'subagents'
   | 'model'
   | 'git'
   | 'sessionId'
@@ -334,6 +338,25 @@ const selectionBadge = formatSelectionBadge(channel.selection)
           </Text>
         ),
       }
+  // Live subagent chip: running/starting children of this session, shown only
+  // while non-zero — same transient-state philosophy as the jobs chip (a
+  // silent zero is not information, so no preference gate). The label spells
+  // "sub-agents" instead of a bare count so it can't be mistaken for the
+  // jobs chip's `● N`; hover lists who they are with elapsed times.
+  const liveSubagents = (channel.subagents ?? NO_SUBAGENTS).filter(
+    sub => sub.status === 'running' || sub.status === 'starting',
+  )
+  const subagentsPart: FieldPart | undefined = liveSubagents.length === 0
+    ? undefined
+    : {
+        key: 'subagents',
+        id: 'subagents',
+        node: (
+          <Text color="toolDotTask">
+            {`${liveSubagents.length} ${liveSubagents.length === 1 ? 'sub-agent' : 'sub-agents'}`}
+          </Text>
+        ),
+      }
   const leftFields: FieldPart[] = [
     ...(statusBar.model
       ? [{ key: 'model', id: 'model' as const, node: <Text color="inactiveShimmer">{channel.model}</Text> }]
@@ -394,6 +417,9 @@ const selectionBadge = formatSelectionBadge(channel.selection)
           node: <GoalStatusChip goal={channel.goal} minimal={channel.minimal} />,
         }]
       : []),
+    // Live sub-agent count: session-level in-flight work outranks repo and
+    // location details, same ranking the goal chip earns.
+    ...(subagentsPart !== undefined ? [subagentsPart] : []),
     ...(statusBar.gitBranch && channel.gitBranch
       ? [
           {
@@ -717,6 +743,21 @@ function buildHoverDetail(
         <Text wrap="truncate">
           {dim('jobs ')}
           {shown.map(job => `${job.id} ${job.label} (${formatJobDuration(job)})`).join(' · ')}
+          {rest > 0 ? ` · +${rest}` : ''}
+        </Text>
+      )
+    }
+    case 'subagents': {
+      const live = (channel.subagents ?? NO_SUBAGENTS).filter(
+        sub => sub.status === 'running' || sub.status === 'starting',
+      )
+      if (live.length === 0) return null
+      const shown = live.slice(0, 3)
+      const rest = live.length - shown.length
+      return (
+        <Text wrap="truncate">
+          {dim('sub-agents ')}
+          {shown.map(sub => `${sub.description} (${formatJobDuration({ startedAt: sub.startedAt, finishedAt: sub.completedAt })})`).join(' · ')}
           {rest > 0 ? ` · +${rest}` : ''}
         </Text>
       )
