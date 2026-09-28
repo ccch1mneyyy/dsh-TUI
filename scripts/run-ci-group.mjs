@@ -720,7 +720,9 @@ const GROUPS = {
     ["repro-collapse-shrink", ['node', '--import', 'tsx/esm', 'scripts/repro-collapse-shrink.tsx']],
 // /provider 向导回归：catalog/custom 两分支的 profile 形状、凭据回滚
 // （覆盖时恢复旧 key 而非误删）、env shadow 跳过、rc.6 兼容守卫、
-// hideCustomInput 逐题标记。
+// hideCustomInput 逐题标记；模型列表编辑的双通道发现（内置目录 + 无
+// provider 字段的端点实拉）合并、线上新增标记、目录外 id 容量写入、
+// 实拉失败降级与匿名探测请求形状。
     ["verify-provider-wizard", ['node', 'scripts/verify-provider-wizard.mjs']],
 // /login 凭据状态回归（issue #213）：只通过 credentials.describe()
 // 展示 configured/source/writable，managed key 不得误报或泄露值。

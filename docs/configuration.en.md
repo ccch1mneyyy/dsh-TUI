@@ -281,6 +281,15 @@ providers without a restart.
   `••••••`.
 - Only non-environment keys are written to the store; a key shared with
   another provider is kept on delete.
+- Editing the model list re-fetches the candidates: a built-in catalog route
+  starts from the installed catalog snapshot and, whenever the route stores a
+  baseURL (or the add flow just collected one), also probes
+  `GET {baseURL}/models` live with the stored key and merges the listings —
+  ids only the endpoint advertises are tagged as new and carry their
+  disclosed capacities once enabled; already-enabled models are pre-checked
+  and only an explicit un-check removes one. A catalog route without a
+  baseURL shows the snapshot only, with the origin noted in the question
+  detail.
 
 Where it writes:
 

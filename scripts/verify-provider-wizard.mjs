@@ -62,6 +62,22 @@
  * 32. a targeted edit of a stored profile that carries unknown fields:
  *    mutateProfile receives only the changed path — the untouched fields
  *    never enter the op list (#1).
+ * 34. a catalog route with a stored baseURL is discovered TWICE — the
+ *    installed catalog (rich metadata) plus a live endpoint probe (no
+ *    `provider` field, so the upstream seam cannot short-circuit to the
+ *    static catalog); rows merge with live-only ids tagged new, and an
+ *    endpoint-only id carries its disclosed capacities into the write
+ *    while a catalog-covered id stays plain `{id}`.
+ * 35. a catalog route without a baseURL stays on the installed-catalog
+ *    listing: exactly one discovery request, no credential resolved, and
+ *    the models question notes the snapshot origin.
+ * 36. a live probe that fails for a catalog+baseURL route degrades to the
+ *    catalog rows with a warning — not to the manual-id fallback.
+ * 37. a custom route with no resolvable key probes anonymously: the
+ *    discovery request OMITS apiKey instead of sending an empty string.
+ * 38. the add flow on a catalog route with a typed baseURL merges the same
+ *    way, and the written profile carries capacities only for the
+ *    endpoint-only id.
  *
  * Run with plain node against the compiled lib (after `pnpm build`):
  * `node scripts/verify-provider-wizard.mjs`
@@ -90,8 +106,10 @@ const CANCEL = new UserQuestionError('the user cancelled ask_user_question', 'AS
  *   [spec, spec, ...]          successive answers for a question asked more
  *                              than once in a run; the last spec repeats if
  *                              the list runs out
- * Discovery is stubbed via `options.discovered` (array) or
- * `options.discoverThrows`; env shadow via `options.shadow`.
+ * Discovery is stubbed via `options.discovered` (array),
+ * `options.discoverThrows`, or `options.discover` (a per-request responder
+ * receiving the request and returning rows or throwing — use it to answer
+ * the catalog and live probes differently); env shadow via `options.shadow`.
  */
 function makeDeps(script, options = {}) {
   const calls = {
@@ -104,6 +122,8 @@ function makeDeps(script, options = {}) {
     pushed: [],
     switches: [],
     asks: [],
+    /** every discoverModels request, in order (shape regressions). */
+    discoverRequests: [],
     /** question id → hideCustomInput flag as submitted (panel contract). */
     hideFlags: {},
     /** question id → option descriptions, for catalog row-shape regressions. */
@@ -144,7 +164,9 @@ function makeDeps(script, options = {}) {
         .map(row => row.route)
     },
     routeExists: () => false,
-    discoverModels: async () => {
+    discoverModels: async request => {
+      calls.discoverRequests.push(request)
+      if (options.discover) return options.discover(request)
       if (options.discoverThrows) throw new Error('connection refused')
       return options.discovered ?? []
     },
@@ -1225,6 +1247,170 @@ function oauthStub(behavior = {}) {
   check('28b patch shape: single op, path is exactly [baseURL]',
     calls.mutations[0][1].length === 1 && eq(op.path, ['baseURL']) && op.op === 'set',
     JSON.stringify(calls.mutations))
+}
+
+// 34. a catalog route with a stored baseURL is discovered twice (catalog +
+// live probe with no `provider` field), merged with live-only ids tagged,
+// and the write gives endpoint-only ids their disclosed capacities.
+{
+  const { deps, calls } = makeDeps({
+    'action': ACTION_EDIT,
+    'edit-provider': { selected: ['deepseek'] },
+    'edit-menu': MENU_MODELS,
+    'models': { selected: ['deepseek-chat', 'deepseek-v2-alpha'] },
+  }, {
+    configured: [{ route: 'deepseek', ref: 'DEEPSEEK_API_KEY', shadowed: false, isCatalog: true, baseURL: 'https://relay.example/v1', models: ['deepseek-chat'], modelEntries: [{ id: 'deepseek-chat' }] }],
+    storedCredentials: { DEEPSEEK_API_KEY: 'sk-old' },
+    discover: request => request.provider !== undefined
+      ? [{ id: 'deepseek-chat', name: 'DeepSeek Chat', contextWindow: 1000000 }]
+      : [{ id: 'deepseek-chat' }, { id: 'deepseek-v2-alpha', contextWindow: 2000000, maxTokens: 65536 }],
+  })
+  const outcome = await runProviderWizard(deps)
+  check('34 catalog+baseURL: outcome updated', outcome === 'updated', outcome)
+  check('34 catalog+baseURL: catalog request then live request (no provider field)',
+    eq(calls.discoverRequests, [
+      { provider: 'deepseek' },
+      { baseURL: 'https://relay.example/v1', apiKey: 'sk-old' },
+    ]), JSON.stringify(calls.discoverRequests))
+  check('34 catalog+baseURL: merged rows, catalog first, live-only appended',
+    eq(Object.keys(calls.optionDescriptions.models ?? {}), ['deepseek-chat', 'deepseek-v2-alpha']),
+    JSON.stringify(Object.keys(calls.optionDescriptions.models ?? {})))
+  check('34 catalog+baseURL: live-only row tagged new on endpoint',
+    (calls.optionDescriptions.models?.['deepseek-v2-alpha'] ?? '').includes(t('provider-row-model-new')),
+    JSON.stringify(calls.optionDescriptions.models))
+  check('34 catalog+baseURL: catalog row keeps catalog metadata with compact capacity',
+    calls.optionDescriptions.models?.['deepseek-chat'] === 'DeepSeek Chat · 1M',
+    JSON.stringify(calls.optionDescriptions.models))
+  check('34 catalog+baseURL: endpoint-only id carries disclosed capacities, catalog id stays plain',
+    eq(calls.mutations, [['deepseek', [{ op: 'set', path: ['models'], value: [
+      { id: 'deepseek-chat' },
+      { id: 'deepseek-v2-alpha', contextWindow: 2000000, maxTokens: 65536 },
+    ] }]]]),
+    JSON.stringify(calls.mutations))
+  check('34 catalog+baseURL: summary leads with the models-updated action line',
+    calls.pushed[0]?.lines[0] === t('provider-line-action-updated-models', { route: 'deepseek' }),
+    JSON.stringify(calls.pushed[0]?.lines))
+  check('34 catalog+baseURL: models line carries the added delta',
+    calls.pushed[0]?.lines.some(line => line.includes(t('provider-models-delta-added', { n: 1 }))),
+    JSON.stringify(calls.pushed[0]?.lines))
+}
+
+// 35. a catalog route without a baseURL stays on the installed catalog:
+// one discovery request, no credential resolution, snapshot note in detail.
+{
+  const { deps, calls } = makeDeps({
+    'action': ACTION_EDIT,
+    'edit-provider': { selected: ['deepseek'] },
+    'edit-menu': MENU_MODELS,
+    'models': { selected: ['deepseek-chat', 'deepseek-reasoner'] },
+  }, {
+    configured: [{ route: 'deepseek', ref: 'DEEPSEEK_API_KEY', shadowed: false, isCatalog: true, models: ['deepseek-chat'], modelEntries: [{ id: 'deepseek-chat' }] }],
+    storedCredentials: { DEEPSEEK_API_KEY: 'sk-old' },
+    discover: request => request.provider !== undefined
+      ? [{ id: 'deepseek-chat' }, { id: 'deepseek-reasoner' }]
+      : [],
+  })
+  const outcome = await runProviderWizard(deps)
+  check('35 catalog no baseURL: outcome updated', outcome === 'updated', outcome)
+  check('35 catalog no baseURL: exactly one catalog discovery request, no live probe',
+    eq(calls.discoverRequests, [{ provider: 'deepseek' }]),
+    JSON.stringify(calls.discoverRequests))
+  check('35 catalog no baseURL: credential never resolved for a catalog-only listing',
+    !calls.asks.includes('apikey')
+      && calls.discoverRequests.every(request => request.apiKey === undefined),
+    JSON.stringify(calls.discoverRequests))
+  check('35 catalog no baseURL: models question notes the catalog snapshot origin',
+    calls.details.models === t('provider-catalog-snapshot-note', { n: 2 }),
+    JSON.stringify(calls.details.models))
+}
+
+// 36. a failing live probe on a catalog+baseURL route degrades to the
+// catalog rows with a warning — the manual-id fallback stays reserved for
+// a total discovery failure.
+{
+  const { deps, calls } = makeDeps({
+    'action': ACTION_EDIT,
+    'edit-provider': { selected: ['deepseek'] },
+    'edit-menu': MENU_MODELS,
+    'models': { selected: ['deepseek-chat'] },
+  }, {
+    configured: [{ route: 'deepseek', ref: 'DEEPSEEK_API_KEY', shadowed: false, isCatalog: true, baseURL: 'https://relay.example/v1', models: [] }],
+    storedCredentials: { DEEPSEEK_API_KEY: 'sk-old' },
+    discover: request => {
+      if (request.provider !== undefined) return [{ id: 'deepseek-chat' }]
+      throw new Error('connection refused')
+    },
+  })
+  const outcome = await runProviderWizard(deps)
+  check('36 live probe failure: outcome updated from catalog rows', outcome === 'updated', outcome)
+  check('36 live probe failure: warning says the live fetch failed',
+    calls.notifications.some(n => n.color === 'warning' && n.text === t('provider-live-fetch-failed')),
+    JSON.stringify(calls.notifications))
+  check('36 live probe failure: no manual-id fallback asked',
+    !calls.asks.includes('models-fallback'), JSON.stringify(calls.asks))
+  check('36 live probe failure: catalog rows still selectable',
+    Object.keys(calls.optionDescriptions.models ?? {}).includes('deepseek-chat'),
+    JSON.stringify(calls.optionDescriptions.models))
+}
+
+// 37. a custom route whose key cannot be resolved probes anonymously: the
+// request OMITS apiKey (an empty string is a hard invalid-credential
+// upstream, an absent field is an unauthenticated probe).
+{
+  const { deps, calls } = makeDeps({
+    'action': ACTION_EDIT,
+    'edit-provider': { selected: ['acme-gateway'] },
+    'edit-menu': MENU_MODELS,
+    'models': { selected: ['acme-large'] },
+  }, {
+    configured: [{ route: 'acme-gateway', ref: 'ACME_GATEWAY_API_KEY', shadowed: false, isCatalog: false, baseURL: 'https://gw.example/v1', api: 'openai-completions', models: [] }],
+    discover: () => [{ id: 'acme-large' }],
+  })
+  const outcome = await runProviderWizard(deps)
+  check('37 no resolvable key: outcome updated', outcome === 'updated', outcome)
+  check('37 no resolvable key: single live request omits apiKey entirely',
+    eq(calls.discoverRequests, [{ baseURL: 'https://gw.example/v1', api: 'openai-completions' }]),
+    JSON.stringify(calls.discoverRequests))
+}
+
+// 38. the add flow on a catalog route with a typed baseURL merges catalog
+// and live listings; the written profile carries capacities only for the
+// endpoint-only id.
+{
+  const { deps, calls } = makeDeps({
+    'mode': MODE_CATALOG,
+    'catalog': { selected: ['deepseek'] },
+    'baseurl-choice': { selected: [t('provider-opt-baseurl-input')] },
+    'baseurl': { custom: 'https://relay.example/v1' },
+    'apikey': { custom: 'sk-new' },
+    'models': { selected: ['deepseek-chat', 'deepseek-v2-alpha'] },
+    'confirm': CONFIRM_WRITE,
+    'switch': KEEP_MODEL,
+  }, {
+    discover: request => request.provider !== undefined
+      ? [{ id: 'deepseek-chat', name: 'DeepSeek Chat', contextWindow: 1000000 }]
+      : [{ id: 'deepseek-chat' }, { id: 'deepseek-v2-alpha', contextWindow: 2000000 }],
+  })
+  const outcome = await runProviderWizard(deps)
+  check('38 add catalog+baseURL: outcome added', outcome === 'added', outcome)
+  check('38 add catalog+baseURL: catalog request then live request carrying the typed key',
+    eq(calls.discoverRequests, [
+      { provider: 'deepseek' },
+      { baseURL: 'https://relay.example/v1', apiKey: 'sk-new' },
+    ]), JSON.stringify(calls.discoverRequests))
+  check('38 add catalog+baseURL: profile narrows models, endpoint-only id carries capacities',
+    eq(calls.profiles, [['deepseek', {
+      apiKeyEnv: 'DEEPSEEK_API_KEY',
+      baseURL: 'https://relay.example/v1',
+      models: [
+        { id: 'deepseek-chat' },
+        { id: 'deepseek-v2-alpha', contextWindow: 2000000 },
+      ],
+    }]]),
+    JSON.stringify(calls.profiles))
+  check('38 add catalog+baseURL: live-only row tagged new on endpoint',
+    (calls.optionDescriptions.models?.['deepseek-v2-alpha'] ?? '').includes(t('provider-row-model-new')),
+    JSON.stringify(calls.optionDescriptions.models))
 }
 
 console.log(failed === 0 ? '\nAll provider-wizard checks passed' : `\n${failed} check(s) FAILED`)
