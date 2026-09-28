@@ -57,20 +57,37 @@
 # Preserve the TUI's opt-in privacy stance across the 0.1.2 base default
 # change to FEEDBACK_ONLY. An explicit DSH_TELEMETRY_MODE still wins. This
 # restates the whole 0.1.2 config because include patches replace config
-# objects rather than merging them.
+# objects rather than merging them. The 0.2.0 base moved the collector to
+# dsh-otel-collector; older cohorts keep the endpoint their base shipped, so
+# the default URL follows the installed package version.
 - id: session-telemetry-otel
-  config:
-    mode: !!js process.env.DSH_TELEMETRY_MODE || 'DISABLED'
-    shutdownTimeoutMillis: 3000
-    exporter:
-      url: !!js process.env.DSH_TELEMETRY_OTLP_URL ?? 'https://harness-telemetry.deepseeksvc.com/v1/logs'
-      compression: gzip
-      timeoutMillis: 1000
-    processor:
-      scheduledDelayMillis: 10000
-      maxQueueSize: 2048
-      maxExportBatchSize: 2048
-      exportTimeoutMillis: 1500
+  config: !!js >-
+    (() => {
+      let url = 'https://dsh-otel-collector.deepseeksvc.com/v1/logs'
+      try {
+        const require = process.getBuiltinModule('node:module').createRequire(ctx.baseUrl)
+        const fs = process.getBuiltinModule('node:fs')
+        const manifest = require.resolve('@deepseek-ai/dsh-session-telemetry-otel/package.json')
+        const version = String(JSON.parse(fs.readFileSync(manifest, 'utf8')).version ?? '')
+        const match = /^(\d+)\.(\d+)\./u.exec(version)
+        if (match !== null && Number(match[1]) === 0 && Number(match[2]) < 2) url = 'https://harness-telemetry.deepseeksvc.com/v1/logs'
+      } catch {}
+      return {
+        mode: process.env.DSH_TELEMETRY_MODE || 'DISABLED',
+        shutdownTimeoutMillis: 3000,
+        exporter: {
+          url: process.env.DSH_TELEMETRY_OTLP_URL ?? url,
+          compression: 'gzip',
+          timeoutMillis: 1000,
+        },
+        processor: {
+          scheduledDelayMillis: 10000,
+          maxQueueSize: 2048,
+          maxExportBatchSize: 2048,
+          exportTimeoutMillis: 1500,
+        },
+      }
+    })()
 
 # The 0.1.2 base sends the active Loader package inventory on official
 # DeepSeek requests by default. TUI keeps that diagnostic metadata opt-in.
@@ -427,12 +444,9 @@
         # 想退回 inline 主屏（终端原生滚动/选择）：/settings 全屏开关或 cordis.yml
         # `fullscreen: false`——显式选择始终优先于默认。
         fullscreen: true
-        # 在支持的终端预览图片；/settings 可关闭，重启生效。
+        # 以下为 /settings 可改的显示设置；每项说明与默认值见应用内 /settings 屏。
         terminalImages: true
-        # Edit/Write diff 呈现：auto（≥110 列双栏对照，窄屏统一式）/
-        # split（强制双栏）/ unified（强制统一式）。/settings 屏可实时改。
         # diffLayout: auto
-        # 回复中的 ```mermaid 代码块画成字符图；false 保留源码。/settings 可实时改。
         # mermaidDiagrams: true
         # 回复中 LaTeX 公式的显示方式：auto（默认，目前为 Unicode）/ image（支持图形的终端里块级公式显示为图片）/ unicode / source（保留源码）。/settings 可实时改。
         # mathRendering: auto

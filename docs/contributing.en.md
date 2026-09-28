@@ -571,7 +571,8 @@ guide owns detailed contracts such as the toolchain and verification matrix.
 
 | If you change | Keep these in sync |
 | --- | --- |
-| Plugin config or environment behavior | `src/index.ts`, runtime consumer, `cordis.patch.yml`, `cordis.yml`, `README.md`, `README_ZH.md` |
+| A /settings setting (new, or changed text) | Written once in `src/settings/definitions.ts` (en/zh label and help, kind, options; keys sorted); the Config schema lives in `src/dsh-adapter/index.ts`, runtime format/parse stays on the field in `src/dsh-adapter/plugin.ts`. `pnpm compile` generates `lib/settings.json`, shipped in the npm package, and the website's settings reference is built from it; `verify:settings` checks the definitions. Until that reference is live, the settings table in `docs/user-guide{,.en}.md` still needs its row |
+| Other plugin config or environment behavior | `src/dsh-adapter/index.ts`, runtime consumer, `cordis.patch.yml`, `cordis.yml` (comments: example values and essential semantics only), `README.md`, `README_ZH.md` |
 | Slash commands or shortcuts | `src/commands.ts`, `src/screens/Chat.tsx`, help/input components, both READMEs, relevant skill mapping/tests |
 | Theme contract, plugin seam, or persisted theme behavior | `src/theme.ts`, `src/themeCatalog.ts`, `src/dsh-adapter/themes.ts`, all palettes, theme provider/picker, custom-theme parser, theme verification, both READMEs, plugin docs |
 | Session/channel behavior | `src/dsh-adapter/channel.ts`, affected UI projections, compiled output, focused channel/replay regression |

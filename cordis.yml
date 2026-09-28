@@ -61,9 +61,8 @@
     # wl-copy/xclip/xsel 兜底）、滚轮滚动、双击选词/三击选行。false 则退回
     # inline 渲染, 鼠标交给终端模拟器原生选择。
     fullscreen: true
-    # 在支持的终端预览图片；/settings 可关闭，重启生效。
+    # 以下为 /settings 可改的显示设置；每项说明与默认值见应用内 /settings 屏。
     terminalImages: true
-    # 回复中的 ```mermaid 代码块画成字符图；false 保留源码。/settings 可实时改。
     # mermaidDiagrams: true
     # 回复中 LaTeX 公式的显示方式：auto（默认，目前为 Unicode）/ image（支持图形的终端里块级公式显示为图片）/ unicode / source（保留源码）。/settings 可实时改。
     # mathRendering: auto

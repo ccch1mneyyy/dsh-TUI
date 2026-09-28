@@ -427,7 +427,8 @@ TypeScript 源的脚本在头部声明 `node --import tsx/esm <script>` 形式�
 
 | 改动 | 需要同步 |
 | --- | --- |
-| 插件配置或环境行为 | `src/index.ts`、运行时消费、`cordis.patch.yml`、`cordis.yml`、`README.md`、`README_ZH.md` |
+| /settings 可改的设置（新增/改说明） | 只在 `src/settings/definitions.ts` 写一次（中英标题与说明、类型、选项；按 key 排序），Config Schema 在 `src/dsh-adapter/index.ts`，运行时 format/parse 留在 `src/dsh-adapter/plugin.ts` 的字段里。`pnpm compile` 生成随 npm 包发布的 `lib/settings.json`，官网设置参考由它生成；`verify:settings` 检查定义完整。官网参考上线前，`docs/user-guide{,.en}.md` 的设置表仍需同步一行 |
+| 其他插件配置或环境行为 | `src/dsh-adapter/index.ts`、运行时消费、`cordis.patch.yml`、`cordis.yml`（注释只写示例值与必要语义）、`README.md`、`README_ZH.md` |
 | Slash 命令或快捷键 | `src/commands.ts`、`src/screens/Chat.tsx`、帮助/输入组件、双 README、相关技能映射/测试 |
 | 主题契约、插件接缝或持久化主题行为 | `src/theme.ts`、`src/themeCatalog.ts`、`src/dsh-adapter/themes.ts`、所有色板、主题 provider/picker、自定义主题解析器、主题验证、双 README、插件文档 |
 | 会话/channel 行为 | `src/dsh-adapter/channel.ts`、受影响的 UI 投影、编译产物、聚焦 channel/回放回归 |

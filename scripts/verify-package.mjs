@@ -1,3 +1,6 @@
+import { spawnSync } from 'node:child_process'
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 import { readFile } from 'node:fs/promises'
 
 const input = await new Promise((resolve, reject) => {
@@ -81,6 +84,16 @@ for (const section of ['dependencies', 'optionalDependencies', 'devDependencies'
     }
   }
 }
+
+// The website's settings reference reads this file from the exact published
+// version; it must describe the version it ships in.
+const settingsJson = JSON.parse(readFileSync(new URL('../lib/settings.json', import.meta.url), 'utf8'))
+if (settingsJson.schemaVersion !== 1 || settingsJson.packageVersion !== manifest.version) {
+  throw new Error(`lib/settings.json is stale (schemaVersion ${settingsJson.schemaVersion}, packageVersion ${settingsJson.packageVersion}, manifest ${manifest.version}); rerun pnpm compile`)
+}
+// …and exactly what the compiled definitions produce (same version, edited text).
+const settingsCheck = spawnSync(process.execPath, [fileURLToPath(new URL('./gen-settings-json.mjs', import.meta.url)), '--check'], { encoding: 'utf8' })
+if (settingsCheck.status !== 0) throw new Error(settingsCheck.stderr.trim() || 'lib/settings.json check failed')
 
 await import(new URL(`../${manifest.main}`, import.meta.url))
 const invariant = await import(new URL('../lib/types/dsh-adapter/invariant.js', import.meta.url))

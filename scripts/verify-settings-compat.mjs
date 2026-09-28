@@ -21,6 +21,7 @@ import { DEFAULT_PAGE_MARGIN, DEFAULT_STATUS_BAR, isPageMarginMode, normalizePag
 import { SPLASH_FONTS, SPLASH_FONT_OPTIONS, normalizeSplashFont } from '../src/components/splashFonts.ts'
 import { getLang, isLang } from '../src/i18n.ts'
 import { SHORTCUT_ACTIONS, setKeymapOverrides, resetKeymapOverrides, effectiveComboString, parseComboDraft, draftComboConflicts } from '../src/utils/keymap.ts'
+import { SETTING_GROUPS, SHORTCUT_FIELD_META, settingField } from '../src/settings/definitions.ts'
 
 const modernSchema = typeof Schema.boolean().volatile === 'function'
 const parsed = Config({ fullscreen: false, whale: false, effortDefault: 'high', statusBar: { model: false } })
@@ -212,7 +213,7 @@ if (modernSchema) for (const registry of ['service', 'local']) for (const entryI
     const ownerFiber = owner.fiber
     const unregister = registerSection({
       configOwner: owner, Config, resolveSettingsNamespace, settingsSections: sections,
-      config: configValues(runtime), SHORTCUT_ACTIONS, effectiveComboString, parseComboDraft, draftComboConflicts,
+      config: configValues(runtime), SHORTCUT_ACTIONS, SHORTCUT_FIELD_META, SETTING_GROUPS, settingField, effectiveComboString, parseComboDraft, draftComboConflicts,
       getLang, DEFAULT_PAGE_MARGIN, isPageMarginMode, parsePageMarginSpec, SPLASH_FONT_OPTIONS, normalizeSplashFont,
       bootedFullscreen: true, terminalImagesDisabledByEnv: false,
       readEffortPref: () => undefined, // Do not read the developer's persisted preferences.

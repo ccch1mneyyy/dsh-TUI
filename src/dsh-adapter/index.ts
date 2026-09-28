@@ -13,6 +13,7 @@ import { DEFAULT_STATUS_BAR, normalizePageMargin, type MathRendering, type PageM
 import { SHORTCUT_ACTIONS, type ShortcutActionId } from '../utils/keymap.js'
 import { normalizeSplashFont, type SplashFontSetting } from '../components/splashFonts.js'
 import { editableConfig, type RuntimeConfig } from './compat/settings.js'
+import { EDITABLE_CONFIG_KEYS } from '../settings/definitions.js'
 
 export const name = 'dsh-tui'
 // `tuiWorkspaces` must stay OUT of this code-level inject (issue #183): the
@@ -263,12 +264,7 @@ export const Config: Schema<Config, RuntimeConfig<Config>> = editableConfig<Conf
       permission: Schema.string().required(false),
     }),
   ).required(false),
-}), [
-  'diffLayout', 'thinkingFold', 'toolBackground', 'scrollGutter', 'pageMargin',
-  'foldTerminalCommand', 'promptSessionLabel', 'expandEditor', 'smoothStreaming',
-  'mermaidDiagrams', 'mathRendering', 'latexMath', 'recapOnOpen', 'effortDefault', 'statusBar', 'whale', 'whaleIdle', 'whaleGirl', 'splashFont', 'minimal',
-  'lang', 'fullscreen', 'terminalImages', 'shortcuts',
-])
+}), EDITABLE_CONFIG_KEYS as readonly (keyof Config)[])
 
 /**
  * Start the interactive TUI front door, delegating to the JSX implementation
