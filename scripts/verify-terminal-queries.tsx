@@ -11,7 +11,11 @@ import { PassThrough, Writable } from 'node:stream'
 import React, { useEffect } from 'react'
 import { AlternateScreen, render, renderSync, Text, useInput, useStdin } from '../src/ui.js'
 import instances from '../src/ink/instances.js'
-import { INITIAL_STATE, parseMultipleKeypresses } from '../src/ink/parse-keypress.js'
+import {
+  INITIAL_STATE,
+  parseMultipleKeypresses,
+  type ParsedInput,
+} from '../src/ink/parse-keypress.js'
 import { oscColor, TerminalQuerier } from '../src/ink/terminal-querier.js'
 import { supportsDecrqmProbe } from '../src/ink/terminal.js'
 import { settled, sleep } from './lib/term-test.mjs'
@@ -282,43 +286,168 @@ assert.equal(
   'conforming terminals must keep the alt-screen DECRQM probe',
 )
 
+// -- Late reply tails: host evidence x reply shape x 1s window (AC-1..AC-5) --
+//
 // Windows ConPTY can split a DA1 reply across a timeout boundary: the ESC
 // is flushed as a standalone key, and the remaining `[?61;...c` text must
-// still be recognized as the terminal response rather than leaking into the
-// prompt. This is the bug fixed in parse-keypress.ts.
+// still be claimed as the terminal response rather than leaking into the
+// prompt. A claim needs ALL THREE of host-injected in-flight evidence, a
+// reply shape, and the bounded window (parse-keypress.ts). The evidence is
+// read-only and absent means false, so these direct-driver cases inject it.
+const DA1_TAIL = '[?61;4;6;7;14;21;22;23;24;28;32;42;52c'
+const DA1_REPLY = `\x1b${DA1_TAIL}`
+// Split point used by AC-4/AC-5: the reply cut after `ESC[?61;4;6`.
+const DA1_SPLIT = 9
+const inFlight = { ...INITIAL_STATE, terminalQueryInFlight: true }
+
+// AC-1 · a lone ESC is flushed first and the DA1 tail arrives inside the window.
 {
-  let state = INITIAL_STATE
+  let state = inFlight
   let parsed
   ;[parsed, state] = parseMultipleKeypresses(state, '\x1b')
-  assert.deepEqual(parsed, [], 'the leading ESC should stay pending until the flush')
+  assert.deepEqual(parsed, [], 'AC-1: the leading ESC should stay pending until the flush')
   ;[parsed, state] = parseMultipleKeypresses(state, null)
-  assert.equal(parsed[0]?.kind, 'key', 'the timeout flush should release a lone Escape key')
-  ;[parsed] = parseMultipleKeypresses(state, '[?61;4;6;7;14;21;22;23;24;28;32;42;52c')
-  assert.equal(parsed.length, 1, 'the late DA1 tail should stay a single parsed item')
-  assert.equal(parsed[0]?.kind, 'response', 'the late DA1 tail must stay a terminal response')
-  assert.equal(parsed[0]?.response.type, 'da1', 'the late DA1 tail must not leak as input text')
+  assert.equal(parsed[0]?.kind, 'key', 'AC-1: the timeout flush should release a lone Escape key')
+  ;[parsed] = parseMultipleKeypresses(state, DA1_TAIL)
+  assert.equal(parsed.length, 1, 'AC-1: the late DA1 tail should stay a single parsed item')
+  assert.equal(parsed[0]?.kind, 'response', 'AC-1: the late DA1 tail must stay a terminal response')
+  assert.equal(parsed[0]?.response.type, 'da1', 'AC-1: the DA1 tail must not leak as input text')
 }
 
+// AC-2 · every reply-specific split position survives 0..2 quiet flushes and
+// still yields exactly one da1 response with no text leak. Cuts start after
+// the `ESC[?` introducer: the bare `ESC[` prefix is deliberately outside the
+// shape gate (holding it swallowed literal `ESC[`+letter input, #1073 review),
+// so a flush exactly on that byte cannot be claimed by the T03 design.
 {
-  const [parsed] = parseMultipleKeypresses(
-    INITIAL_STATE,
-    '[?61;4;6;7;14;21;22;23;24;28;32;42;52c',
+  const feed = (chunks: Array<string | null>): ParsedInput[] => {
+    let state = inFlight
+    const out: ParsedInput[] = []
+    for (const chunk of chunks) {
+      const [parsed, next] = parseMultipleKeypresses(state, chunk)
+      out.push(...parsed)
+      state = next
+    }
+    return out
+  }
+  const checkDa1 = (chunks: Array<string | null>, label: string): void => {
+    const parsed = feed(chunks)
+    assert.equal(parsed.length, 1, `${label}: the split reply must yield exactly one item`)
+    assert.equal(parsed[0]?.kind, 'response', `${label}: the reply must not leak into the body`)
+    assert.equal(parsed[0]?.response.type, 'da1', `${label}: the reply must be claimed as da1`)
+  }
+  checkDa1([DA1_REPLY], 'AC-2 (0 flushes)')
+  for (let cut = 3; cut < DA1_REPLY.length; cut++) {
+    checkDa1([DA1_REPLY.slice(0, cut), null, DA1_REPLY.slice(cut)], `AC-2 (1 flush at ${cut})`)
+  }
+  for (let first = 3; first < DA1_REPLY.length - 1; first++) {
+    for (let second = first + 1; second < DA1_REPLY.length; second++) {
+      checkDa1(
+        [
+          DA1_REPLY.slice(0, first),
+          null,
+          DA1_REPLY.slice(first, second),
+          null,
+          DA1_REPLY.slice(second),
+        ],
+        `AC-2 (2 flushes at ${first},${second})`,
+      )
+    }
+  }
+}
+
+// AC-3 · the control that got #796 rejected: without in-flight evidence the
+// same bytes stay literal, both as a whole block and after a lone-ESC flush.
+for (const injected of [undefined, false] as const) {
+  const label = injected === undefined ? 'absent' : 'false'
+  const seeded =
+    injected === undefined ? INITIAL_STATE : { ...INITIAL_STATE, terminalQueryInFlight: false }
+  const [whole] = parseMultipleKeypresses(seeded, DA1_TAIL)
+  assert.equal(whole.length, 1, `AC-3 (${label}): the literal DA1 tail should stay one key`)
+  assert.equal(whole[0]?.kind, 'key', `AC-3 (${label}): the literal tail must not be a response`)
+  assert.equal(
+    whole[0]?.sequence,
+    DA1_TAIL,
+    `AC-3 (${label}): the literal tail must reach the body`,
   )
-  assert.equal(parsed.length, 1, 'literal DA1-shaped input should stay visible')
-  assert.equal(parsed[0]?.kind, 'key', 'literal DA1-shaped input must not be a terminal response')
-}
 
-{
-  let state = INITIAL_STATE
+  let state = seeded
   let parsed
-  ;[, state] = parseMultipleKeypresses(state, '\x1b')
-  ;[, state] = parseMultipleKeypresses(state, null)
-  ;[parsed] = parseMultipleKeypresses(
-    { ...state, terminalResponseTailAfterEscFlushAt: Date.now() - 2000 },
-    '[?61;4;6;7;14;21;22;23;24;28;32;42;52c',
+  ;[parsed, state] = parseMultipleKeypresses(state, '\x1b')
+  assert.deepEqual(parsed, [], `AC-3 (${label}): the leading ESC should stay pending`)
+  ;[parsed, state] = parseMultipleKeypresses(state, null)
+  assert.equal(parsed[0]?.kind, 'key', `AC-3 (${label}): the lone ESC flush should stay a key`)
+  ;[parsed] = parseMultipleKeypresses(state, DA1_TAIL)
+  assert.equal(parsed.length, 1, `AC-3 (${label}): the post-ESC tail should stay one key`)
+  assert.equal(parsed[0]?.kind, 'key', `AC-3 (${label}): the post-ESC tail must stay literal`)
+  assert.equal(
+    parsed[0]?.sequence,
+    DA1_TAIL,
+    `AC-3 (${label}): the post-ESC tail must reach the body`,
   )
-  assert.equal(parsed.length, 1, 'expired DA1-shaped input should stay visible')
-  assert.equal(parsed[0]?.kind, 'key', 'expired DA1-shaped input must not be a terminal response')
+}
+
+// AC-4 · the 1s window against a controlled clock: once the window start is
+// pushed past 1000ms, neither the re-attach nor the hold path claims again
+// (same Date.now fixture as verify-win32-input.tsx).
+{
+  const originalNow = Date.now
+  let now = 1_000_000
+  Date.now = () => now
+  try {
+    let state = inFlight
+    let parsed
+    ;[, state] = parseMultipleKeypresses(state, '\x1b')
+    ;[parsed, state] = parseMultipleKeypresses(state, null)
+    assert.equal(parsed[0]?.kind, 'key', 'AC-4: the flush should arm the re-attach window')
+    now += 1_500
+    ;[parsed] = parseMultipleKeypresses(state, DA1_TAIL)
+    assert.equal(parsed[0]?.kind, 'key', 'AC-4: an expired re-attach window must stay literal')
+    assert.equal(parsed[0]?.sequence, DA1_TAIL, 'AC-4: the expired tail must stay literal text')
+
+    now += 10_000
+    state = inFlight
+    ;[parsed, state] = parseMultipleKeypresses(state, DA1_REPLY.slice(0, DA1_SPLIT))
+    assert.deepEqual(parsed, [], 'AC-4: the reply prefix should stay pending before the flush')
+    ;[parsed, state] = parseMultipleKeypresses(state, null)
+    assert.deepEqual(parsed, [], 'AC-4: the flush inside the window should hold the reply prefix')
+    now += 1_500
+    ;[parsed] = parseMultipleKeypresses(state, DA1_REPLY.slice(DA1_SPLIT))
+    assert.equal(parsed[0]?.kind, 'key', 'AC-4: an expired hold must not claim the continuation')
+    assert.equal(
+      parsed[0]?.sequence,
+      DA1_REPLY.slice(DA1_SPLIT),
+      'AC-4: the released tail must reach the body',
+    )
+  } finally {
+    Date.now = originalNow
+  }
+}
+
+// AC-5 · the reply shapes parseTerminalResponse() knows, each split across a
+// flush while evidence is injected, must claim their own response type.
+{
+  const shapes: Array<[string, string, number, string]> = [
+    ['DA1', DA1_REPLY, DA1_SPLIT, 'da1'],
+    ['DA2', '\x1b[>0;276;0c', 4, 'da2'],
+    ['DSR (DECXCPR)', '\x1b[?3;1R', 4, 'cursorPosition'],
+    ['DECRPM', '\x1b[?25;1$y', 5, 'decrpm'],
+    ['XTVERSION', '\x1bP>|xterm.js(5.5.0)\x1b\\', 8, 'xtversion'],
+    ['kitty flags', '\x1b[?1u', 3, 'kittyKeyboard'],
+    ['pixel size', '\x1b[4;600;800t', 5, 'terminalPixelSize'],
+  ]
+  for (const [name, sequence, cut, type] of shapes) {
+    let state = inFlight
+    let parsed
+    ;[parsed, state] = parseMultipleKeypresses(state, sequence.slice(0, cut))
+    assert.deepEqual(parsed, [], `AC-5 ${name}: the leading fragment must stay pending`)
+    ;[parsed, state] = parseMultipleKeypresses(state, null)
+    assert.deepEqual(parsed, [], `AC-5 ${name}: the flush must hold the reply prefix`)
+    ;[parsed] = parseMultipleKeypresses(state, sequence.slice(cut))
+    assert.equal(parsed.length, 1, `AC-5 ${name}: the completed reply must stay a single item`)
+    assert.equal(parsed[0]?.kind, 'response', `AC-5 ${name}: the reply must not leak as input text`)
+    assert.equal(parsed[0]?.response.type, type, `AC-5 ${name}: expected a ${type} response`)
+  }
 }
 
 console.log('PASS: late DA1 tails stay in the terminal-response lane')
