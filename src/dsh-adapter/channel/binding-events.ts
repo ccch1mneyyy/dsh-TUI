@@ -4,6 +4,7 @@ import type { InputConvergence } from './input-actions.js'
 import type { ChannelBinding } from './binding.js'
 import type { ChannelOwner } from './owner.js'
 import { type createChannelProjection } from './projection.js'
+import { isTokenDelta, tokenDeltaChars } from './usage.js'
 import type { ChannelState } from './types.js'
 
 /**
@@ -171,6 +172,35 @@ export function createBindingEvents(ctx: Context, deps: {
       on('subagent/end' as never, (info: { id: string; stopReason: string; lastAssistantMessage?: unknown[] }) => {
         if (current()) deps.subagents.onEnd(info)
       })
+      /**
+       * Live compaction progress. The summarizer is one `ctx.llm.stream()`
+       * call, so its chunks are the only work signal a compaction has between
+       * `compaction/start` and `compaction/end` (dsh-llm tags the call
+       * `purpose: 'compaction'`, and a manual one runs while the session is
+       * idle, so it cannot be confused with the foreground turn's stream).
+       * Everything else passes through untouched: the original iterable is
+       * returned for any other purpose or session.
+       */
+      const disposeCompactionStream = ctx.on('llm/stream', (options, next) => {
+        const stream = next()
+        if (options.purpose !== 'compaction') return stream
+        if (options.sessionId === undefined || String(options.sessionId) !== String(session.id)) return stream
+        return (async function* compactionStream() {
+          for await (const chunk of stream) {
+            const compaction = deps.state.compaction
+            if (compaction !== undefined && isTokenDelta(chunk)) {
+              deps.state.compaction = {
+                ...compaction,
+                phase: 'summary',
+                outputChars: compaction.outputChars + tokenDeltaChars(chunk),
+              }
+              deps.state.emitStream()
+            }
+            yield chunk
+          }
+        })()
+      })
+      register(disposeCompactionStream)
     } catch (error) {
       deps.owner.dispose()
       throw error

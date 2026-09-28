@@ -445,6 +445,7 @@ function createChannelWithOwner(
   // installed after ChannelState initialization below.
   let settleManualCompaction!: () => Promise<void>
   let compactManualSession!: () => void
+  let cancelManualCompaction!: () => void
   let forkSessionAction!: () => Promise<boolean>
   let rewindToAction!: (row: ChatRow, mode?: string | null) => Promise<string | null>
   let rewindToNodeAction!: (sessionId: string, seq: number, mode?: 'rewind' | 'fork') => Promise<string | null>
@@ -909,6 +910,7 @@ function createChannelWithOwner(
   })
   settleManualCompaction = manualCompaction.settle
   compactManualSession = manualCompaction.compact
+  cancelManualCompaction = manualCompaction.cancel
   backgroundCurrentAction = createBackgroundCurrentAction(ctx, state, {
     configuredPreset: options.configuredPreset,
     configuredProvider: options.configuredProvider,
@@ -993,6 +995,7 @@ function createChannelWithOwner(
     deleteSession: sessionMetadataActions.deleteSession,
     renameSessionTo: sessionMetadataActions.renameSessionTo,
     compact: compactManualSession,
+    cancelCompact: cancelManualCompaction,
     runExternalCommand: externalCommands.invokeText,
     runExternalCommandOutcome: externalCommands.invoke,
     pushLocal: localActions.pushLocal,

@@ -3,7 +3,7 @@ import { Box, Text } from '../ui.js'
 import type { ChannelUi as Channel } from '../adapter/channel/ui-policy.js'
 import type { ChannelGoal, TodoPanelItem } from '../dsh-adapter/channel.js'
 import { t } from '../i18n.js'
-import { modLabel } from '../utils/modifiers.js'
+import { primaryComboString } from '../utils/keymap.js'
 
 /** Maximum todo rows shown before the overflow line. */
 const MAX_TODOS = 8
@@ -249,7 +249,7 @@ export function GoalTodoPanel({
               )}
               {/* Fold affordance under the list — only while expanded; the
                   collapsed line already IS the folded state. */}
-              <Text dimColor>  {t('goal-todo-fold-hint', { mod: modLabel })}</Text>
+              <Text dimColor>  {t('goal-todo-fold-hint', { key: primaryComboString('todoFold') })}</Text>
             </Box>
           )}
         </Box>

@@ -1,6 +1,6 @@
 /** Host-owned in-process Channel contract. No runtime or upstream imports. */
-import type { ChatRow, AgentStatus, TokenUsage, NotificationItem, ChannelGoal, TodoPanelItem, LoadedContext, PendingMessage, ChannelSceneMetadata, SubagentState, SubagentControl, BackgroundJobState, JobControl, StagedImageInput, StagedImageHandle, ComposerImageRef, ComposerSubmission, ExternalCommandOutcome, TranscriptImage, ResumeResult, EffortOption, PermissionPresetSnapshot, PresetOption, LlmModelInfo, LlmProviderInfo, SkillInfo, CredentialStatus, AgentViewRow, AgentViewDispatchResult, BackgroundResult, RawTrajEvent, ChannelSelection } from './channel-view.js'
-import type { SpinnerMode, ToolBackground, ScrollGutterMode, PageMarginSetting, StatusBarConfig, SessionModeSpec } from './channel-display.js'
+import type { ChatRow, AgentStatus, TokenUsage, NotificationItem, ChannelGoal, TodoPanelItem, LoadedContext, PendingMessage, ChannelSceneMetadata, SubagentState, SubagentControl, BackgroundJobState, JobControl, StagedImageInput, StagedImageHandle, ComposerImageRef, ComposerSubmission, ExternalCommandOutcome, TranscriptImage, ResumeResult, EffortOption, PermissionPresetSnapshot, PresetOption, LlmModelInfo, LlmProviderInfo, SkillInfo, CredentialStatus, AgentViewRow, AgentViewDispatchResult, BackgroundResult, RawTrajEvent, ChannelSelection, CompactionStatus } from './channel-view.js'
+import type { SpinnerMode, ToolBackground, ScrollGutterMode, PageMarginSetting, StatusBarConfig, SessionModeSpec, SplashFontSetting } from './channel-display.js'
 import type { LocalCommand, CommandCompletion, BalanceResult, FileCandidate, RecapOutcome } from './channel-catalog.js'
 import type { TuiRewindMode, SessionTreeData, SessionSummary, PreviewEntry } from './channel-session.js'
 import type { TuiWorkspaceTarget, TuiWorkspaceCommand, TuiWorkspaceCommandResult, TuiWorkspaceEntry } from './channel-workspace.js'
@@ -67,6 +67,12 @@ export interface ChannelUi {
   readonly gitBranch: string | undefined
   /** True between turn/start and turn/end — drives the working spinner. */
   readonly working: boolean
+  /** In-flight compaction of this session's history, or undefined when none
+   *  is running (see {@link CompactionStatus}). Required-and-undefined rather
+   *  than optional: the effect inventory maps over `keyof ChannelUi`, and an
+   *  optional member widens that key union with `undefined`, which breaks the
+   *  `Record` constraint on the inventory itself. */
+  readonly compaction: CompactionStatus | undefined
   /** True while a user-requested abort (Ctrl+C/Esc interrupt) has not yet
    *  converged — no turn/start or turn/end has retired the aborted turn.
    *  Chat uses it so a repeated Ctrl+C during a stuck abort force-exits. */
@@ -139,8 +145,17 @@ export interface ChannelUi {
   readonly whale: boolean
   /** Idle whale behaviors switch (settings `dsh-tui.whaleIdle`). */
   readonly whaleIdle: boolean
+  /** Swap the header's pixel whale for the static maid portrait (settings
+   * `dsh-tui.whaleGirl`; off by default). */
+  readonly whaleGirl: boolean
   /** Apply an idle-whale-behavior change (see the public Channel type). */
   setWhaleIdle(enabled: boolean): void
+  /** Big-text face on the header splash (settings `dsh-tui.splashFont`):
+   *  `daily` (the default) rotates by local date, any other id pins that one
+   *  face — see `components/splashFonts.ts` for the registry. */
+  readonly splashFont: SplashFontSetting
+  /** Apply a maid-portrait change (see the public Channel type). */
+  setWhaleGirl(enabled: boolean): void
   /** Minimal mode (settings `dsh-tui.minimal`): no header splash, no emoji
    *  glyphs, no decorative colors; code highlight and tool colors stay. */
   readonly minimal: boolean
@@ -479,6 +494,10 @@ export interface ChannelUi {
   renameSessionTo(sessionId: string, title: string): Promise<boolean>
   /** Manually compact the session history (`/compact`); no-op notify when the leaf lacks a compaction service. */
   compact(): void
+  /** Abort an in-flight manual compaction (`Esc` while it runs). No-op when
+   *  none is running or the running one belongs to another process/host: only
+   *  this channel's own request carries an abort signal it may fire. */
+  cancelCompact(): void
   /** Render a multi-line local report in the transcript (`/status`,
    *  `/doctor`, …): a `local` row plus one `local-output` row per line. */
   pushLocal(title: string, lines: readonly string[]): void
@@ -571,5 +590,6 @@ export interface ChannelUi {
   setSmoothStreaming(enabled: boolean): void
   setStatusBar(config: Partial<StatusBarConfig>): void
   setWhale(visible: boolean): void
+  setSplashFont(setting: SplashFontSetting): void
   setMinimal(enabled: boolean): void
 }

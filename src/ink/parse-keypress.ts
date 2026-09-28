@@ -591,6 +591,13 @@ export type Win32PasteState = {
   held: ParsedKey[]
   /** collected paste content while active */
   buffer: string
+  /**
+   * True when the last character appended to `buffer` came from a CR record
+   * (Uc=13). Classic conhost spells a pasted CRLF break as a CR record
+   * followed by an LF record (Uc=10); the LF half must fold into the CR's
+   * newline instead of appending a second one (issue #1090).
+   */
+  lastWasCarriageReturn: boolean
 }
 
 // Character spellings of CSI 200~ / CSI 201~ as key records: the ESC char
@@ -625,6 +632,42 @@ function win32RecordChar(key: ParsedKey): string | undefined {
 }
 
 /**
+ * Uc field of the raw win32 record behind `key`, or undefined when the key
+ * did not come from one (the decomposed stream also carries plain keys).
+ */
+function win32RecordUc(key: ParsedKey): number | undefined {
+  const match = WIN32_INPUT_RE.exec(key.raw ?? '')
+  if (!match) return undefined
+  const field = match[1]!.split(';')[2]
+  return field === undefined || field === '' ? 0 : parseInt(field, 10)
+}
+
+/**
+ * Append one paste-body key to the decomposed-paste buffer. Classic conhost
+ * spells a pasted CRLF break as two records — CR (Uc=13) then LF (Uc=10) —
+ * and the LF must fold into the CR's newline instead of appending a second
+ * one (issue #1090). Only a CR record arms the fold, so LF-only text, a lone
+ * CR, and ordinary characters (including a real `_`) keep their bytes.
+ */
+function appendWin32PasteChar(state: Win32PasteState, key: ParsedKey): void {
+  const ch = win32RecordChar(key)
+  if (ch === undefined) return
+  if (ch !== '\n') {
+    state.lastWasCarriageReturn = false
+    state.buffer += ch
+    return
+  }
+  const uc = win32RecordUc(key)
+  if (uc === 10 && state.lastWasCarriageReturn) {
+    // LF record closing the CRLF pair: the CR already emitted the newline.
+    state.lastWasCarriageReturn = false
+    return
+  }
+  state.lastWasCarriageReturn = uc === 13
+  state.buffer += '\n'
+}
+
+/**
  * Feed one translated win32 key through the decomposed-paste matcher.
  * Returns the keys to emit (empty while holding a candidate prefix or
  * collecting paste content).
@@ -645,12 +688,14 @@ function feedWin32Paste(state: Win32PasteState, key: ParsedKey): ParsedKey[] {
       if (!state.active) {
         state.active = true
         state.buffer = ''
+        state.lastWasCarriageReturn = false
         return []
       }
       // End marker complete: the whole paste as a single event.
       const paste = createPasteKey(state.buffer)
       state.active = false
       state.buffer = ''
+      state.lastWasCarriageReturn = false
       return [paste]
     }
     return []
@@ -664,14 +709,14 @@ function feedWin32Paste(state: Win32PasteState, key: ParsedKey): ParsedKey[] {
     state.held = []
     state.matched = 0
     if (state.active) {
-      for (const k of held) state.buffer += win32RecordChar(k) ?? ''
+      for (const k of held) appendWin32PasteChar(state, k)
       return feedWin32Paste(state, key)
     }
     return [...held, ...feedWin32Paste(state, key)]
   }
 
   if (state.active) {
-    state.buffer += win32RecordChar(key) ?? ''
+    appendWin32PasteChar(state, key)
     return []
   }
   return [key]
@@ -975,6 +1020,7 @@ export function parseMultipleKeypresses(
     matched: 0,
     held: [],
     buffer: '',
+    lastWasCarriageReturn: false,
   }
   const win32Protocol: Win32ProtocolState = prevState.win32Protocol ?? {
     held: [],
@@ -1238,10 +1284,12 @@ export function parseMultipleKeypresses(
     win32Paste.buffer = ''
     win32Paste.held = []
     win32Paste.matched = 0
+    win32Paste.lastWasCarriageReturn = false
   } else if (isFlush && !deferFlush && win32Paste.held.length > 0) {
     keys.push(...win32Paste.held)
     win32Paste.held = []
     win32Paste.matched = 0
+    win32Paste.lastWasCarriageReturn = false
   }
 
   // A quiet timeout ends a synthesized protocol candidate. Incomplete mouse

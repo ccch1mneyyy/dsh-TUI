@@ -388,6 +388,84 @@ function checkPaste(label: string, keys: KeySummary[], expectedSeq: string): voi
   checkPaste('supplementary-plane char survives the paste buffer', f.feed(P2_OPEN + emoji + P2_CLOSE), '😀')
 }
 
+// --- 8b. CRLF folding inside a decomposed paste (#1090) -----------------------
+//
+// Classic conhost spells a pasted CRLF break as two records: a real
+// VK_RETURN CR record (Uc=13) and the synthesized LF record (Uc=10) that
+// CharToKeyEvents emits for the '\n' half. Both translate to 'return', so
+// without folding the paste gains one blank line per CRLF. The LF half
+// arrives Vk=0 from CharToKeyEvents; hosts that promote it keep Uc=10 with
+// Vk=13, so both shapes are covered here.
+
+const CR = pasteRecs(13, 13)
+const LF_SYNTH = pasteRecs(0, 10)
+const LF_VK = pasteRecs(13, 10)
+const CRLF = CR + LF_SYNTH
+
+{
+  const f = new Feeder()
+  checkPaste(
+    'decomposed CRLF paste yields one newline',
+    f.feed(P2_OPEN + pasteRecs(65, 97) + CRLF + pasteRecs(66, 98) + P2_CLOSE),
+    'a\nb',
+  )
+}
+{
+  const f = new Feeder()
+  const body = pasteRecs(65, 97) + CRLF + pasteRecs(66, 98) + CR + LF_VK + pasteRecs(67, 99)
+  checkPaste('multi-line CRLF paste keeps one newline per break', f.feed(P2_OPEN + body + P2_CLOSE), 'a\nb\nc')
+}
+{
+  const f = new Feeder()
+  check('CR record ends the chunk with the paste buffer intact', f.feed(P2_OPEN + pasteRecs(65, 97) + CR), [])
+  checkPaste('LF in the next chunk folds into the buffered CR', f.feed(LF_SYNTH + pasteRecs(66, 98) + P2_CLOSE), 'a\nb')
+}
+{
+  const f = new Feeder()
+  checkPaste(
+    'LF-only record without a CR stays one newline',
+    f.feed(P2_OPEN + pasteRecs(65, 97) + LF_SYNTH + pasteRecs(66, 98) + P2_CLOSE),
+    'a\nb',
+  )
+}
+{
+  const f = new Feeder()
+  checkPaste('a lone CR record stays one newline', f.feed(P2_OPEN + pasteRecs(65, 97) + CR + pasteRecs(66, 98) + P2_CLOSE), 'a\nb')
+}
+{
+  const f = new Feeder()
+  checkPaste(
+    'CR followed by ordinary text does not fold',
+    f.feed(P2_OPEN + pasteRecs(65, 97) + CR + pasteRecs(95, 95) + pasteRecs(66, 98) + P2_CLOSE),
+    'a\n_b',
+  )
+}
+{
+  const f = new Feeder()
+  checkPaste(
+    'CR CR LF folds only the CRLF pair',
+    f.feed(P2_OPEN + pasteRecs(65, 97) + CR + CR + LF_SYNTH + pasteRecs(66, 98) + P2_CLOSE),
+    'a\n\nb',
+  )
+}
+{
+  const f = new Feeder()
+  checkPaste(
+    'CR LF LF keeps the unpaired second LF',
+    f.feed(P2_OPEN + pasteRecs(65, 97) + CR + LF_SYNTH + LF_SYNTH + pasteRecs(66, 98) + P2_CLOSE),
+    'a\n\nb',
+  )
+}
+{
+  const f = new Feeder()
+  checkPaste(
+    'ordinary punctuation in a paste body is untouched',
+    f.feed(P2_OPEN + pasteRecs(95, 95) + pasteRecs(91, 91) + pasteRecs(93, 93) + P2_CLOSE),
+    '_[]',
+  )
+}
+
+
 // --- 9. Alt+numpad Unicode input (payload rides on the Alt keyup) -------------
 //
 // Feature_UseNumpadEventsForClipboardInput: Alt-down, digit records without

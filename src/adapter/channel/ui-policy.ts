@@ -9,7 +9,7 @@ type MethodKeys<T> = { [K in keyof T]: T[K] extends (...args: never[]) => unknow
 export type ChannelPreferences = Pick<ChannelUi,
   | 'setDiffLayout' | 'setThinkingFold' | 'setToolBackground' | 'setScrollGutter'
   | 'setPageMargin' | 'setFoldTerminalCommand' | 'setPromptSessionLabel'
-  | 'setExpandEditor' | 'setSmoothStreaming' | 'setStatusBar' | 'setWhale' | 'setWhaleIdle' | 'setMinimal'
+  | 'setExpandEditor' | 'setSmoothStreaming' | 'setStatusBar' | 'setWhale' | 'setWhaleIdle' | 'setWhaleGirl' | 'setMinimal' | 'setSplashFont'
 >
 export const CHANNEL_UI_EFFECTS = Object.freeze({
   'setDiffLayout': 'mutate',
@@ -24,6 +24,8 @@ export const CHANNEL_UI_EFFECTS = Object.freeze({
   'setStatusBar': 'mutate',
   'setWhale': 'mutate',
   'setWhaleIdle': 'mutate',
+  'setSplashFont': 'mutate',
+  'setWhaleGirl': 'mutate',
   'setMinimal': 'mutate',
   'commandCompletions': 'mutate',
   'runExternalCommand': 'mutate',
@@ -94,6 +96,7 @@ export const CHANNEL_UI_EFFECTS = Object.freeze({
   'deleteSession': 'mutate',
   'renameSessionTo': 'mutate',
   'compact': 'mutate',
+  'cancelCompact': 'mutate',
   'pushLocal': 'mutate',
   'mcpStatus': 'read-only',
   'exportSession': 'mutate',
@@ -135,6 +138,7 @@ export const CHANNEL_UI_PROPERTIES = [
   'displayCwd',
   'gitBranch',
   'working',
+  'compaction',
   'cancelPending',
   'spinnerMode',
   'responseChars',
@@ -161,6 +165,8 @@ export const CHANNEL_UI_PROPERTIES = [
   'statusBar',
   'whale',
   'whaleIdle',
+  'splashFont',
+  'whaleGirl',
   'minimal',
   'activityEnabled',
   'contextBarEnabled',

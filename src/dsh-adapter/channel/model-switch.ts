@@ -12,6 +12,7 @@ import { attachSessionToWorkspace } from '../workspace.js'
 import type { createChannelBinding } from './binding.js'
 import type { ChannelOwner } from './owner.js'
 import { resetSessionProjection } from './session-reset.js'
+import { childRecordsLineage } from './session-lineage.js'
 import type { ChannelState } from './types.js'
 
 type Binding = ReturnType<typeof createChannelBinding>
@@ -69,7 +70,10 @@ export function createModelSwitchAction(
         runtimeSession: deps.binding.agent.session,
         inheritedCount: seed.length,
         cwd: state.cwd,
-        parentSession: deps.binding.agent.session.id,
+        // A session nobody has typed into has no conversation to relate, and
+        // lineage would cost its first real prompt the generated title — the
+        // child stands as its own root instead (session-lineage.ts).
+        parentSession: childRecordsLineage(seed) ? deps.binding.agent.session.id : undefined,
         agentPreset: composed.agentPreset,
         agentOptions: { provider, model },
         setup: composed.setup,

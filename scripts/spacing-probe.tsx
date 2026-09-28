@@ -252,10 +252,12 @@ check(
   contentLines.some(l => l.includes('C:/code/demo-project')),
   'cwd row',
 )
+// 底部欢迎语那一行 1/20 的 mount 会被求 star 彩蛋顶掉（components/splashEggs.ts），
+// 所以"欢迎语在屏上"要认两种文案，否则这条探针会随机变红。
 check(
   'header welcome',
-  contentLines.some(l => l.includes('探索未至之境')),
-  '探索未至之境！',
+  contentLines.some(l => l.includes('探索未至之境') || l.includes('谢谢使用')),
+  '探索未至之境！ / 谢谢使用！…',
 )
 check(
   'header tip line',

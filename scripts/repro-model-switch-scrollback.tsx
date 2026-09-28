@@ -174,7 +174,10 @@ const instance = await render(
   { stdout: stdoutObj, stdin, stderr: new FakeStderr(), exitOnCtrlC: false, patchConsole: false },
 )
 
-const SPLASH = '探索未至之境'
+// Splash 的唯一标记用字标（`✦ dsh-TUI`）而不是底部欢迎语：欢迎语在 1/20 的
+// mount 上会被求 star 彩蛋顶掉（components/splashEggs.ts），拿它当标记会让这条
+// 回归随机变红。字标是启动画里恒定出现、且只有启动画才有的那一串。
+const SPLASH = '✦ dsh-TUI'
 const HIST0 = '历史问题 0：检查一下构建配置'
 const HIST1 = '历史回答 1：'
 // boot 落定：轮询到 splash 与历史行都上屏再断言（原固定 1200ms 在慢

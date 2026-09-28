@@ -83,6 +83,7 @@ export const CHANNEL_METHOD_FEATURES: Readonly<Record<string, string>> = Object.
   resumeTo: 'session-history',
   newSession: 'session-lifecycle',
   compact: 'session-lifecycle',
+  cancelCompact: 'session-lifecycle',
   submit: 'session-input',
   steer: 'session-input',
   cancel: 'session-input',

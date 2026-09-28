@@ -18,6 +18,14 @@ on:
         description: '上传到哪个 tag（默认：最新 release）'
         required: false
         type: string
+  # Called by publish.yml when the tag's Release lacks assets (a Release
+  # created with github.token does not fire `release: published`).
+  workflow_call:
+    inputs:
+      tag:
+        description: 'Tag whose Release receives the bundles'
+        required: true
+        type: string
 
 permissions:
   contents: write
@@ -25,9 +33,16 @@ permissions:
 jobs:
   bundle:
     runs-on: ubuntu-latest
+    # One upload per tag at a time (release:published vs. publish.yml call);
+    # the later run re-uploads with --clobber.
+    concurrency:
+      group: release-bundle-${{ inputs.tag || github.event.release.tag_name || github.ref_name }}
+      cancel-in-progress: false
     steps:
+      # Build from the tag so bundles carry that tag's package.json version.
       - uses: actions/checkout@v7
         with:
+          ref: ${{ inputs.tag && format('refs/tags/{0}', inputs.tag) || github.ref }}
           submodules: recursive
 
       # 版本来自 package.json 的 packageManager 字段，不在此内联 pin。
@@ -45,6 +60,22 @@ jobs:
         run: |
           bash -n dist-bundle/dsh-tui-setup/install.sh
           pwsh -NoProfile -Command "[scriptblock]::Create((Get-Content -Raw -Encoding UTF8 'dist-bundle/dsh-tui-setup/install.ps1')) | Out-Null"
+
+      # The standalone build installs this version from npm, and a fresh
+      # publish can take several minutes to become resolvable.
+      - name: Wait for the version on npm
+        run: |
+          version="$(node -p "require('./package.json').version")"
+          for i in $(seq 1 30); do
+            if npm view "@deepseek-harness-tui/dsh-tui@$version" version >/dev/null 2>&1; then
+              echo "@deepseek-harness-tui/dsh-tui@$version is on npm"
+              exit 0
+            fi
+            echo "waiting for @deepseek-harness-tui/dsh-tui@$version on npm ($i/30)"
+            sleep 30
+          done
+          echo "@deepseek-harness-tui/dsh-tui@$version not on npm after 15 minutes"
+          exit 1
 
       - name: Generate standalone portable bundles
         run: node scripts/make-standalone-bundle.mjs --out dist-standalone
@@ -70,7 +101,7 @@ jobs:
           # workflow_dispatch 的 inputs.tag 是用户输入，直接内插等于把
           # `"$(curl …)"` 类 payload 拼进命令行（表达式注入）。
           RELEASE_TAG: ${{ github.event.release.tag_name }}
-          INPUT_TAG: ${{ github.event.inputs.tag }}
+          INPUT_TAG: ${{ inputs.tag }}
         run: |
           tag="$RELEASE_TAG"
           [ -z "$tag" ] && tag="$INPUT_TAG"

@@ -308,6 +308,38 @@ await wheel(false, 20)
       `right-half=${JSON.stringify(screenLines().filter(l => l.includes('问题 2')).slice(0, 2))}`)
     check('预览卡圆角边框', await settled(() => screenLines().some(l => l.slice(55, 97).includes('╭') || l.slice(55, 97).includes('╮')
       || l.slice(55, 97).includes('╰') || l.slice(55, 97).includes('╯'))))
+    // 浮层必须整块不透明（SOP §7.3「弹窗自身不透明、边框无黑块」）：卡片
+    // 矩形内每一格（边框行、padding 格、文本格）都是同一个面底色。缺
+    // backgroundColor 时卡片是透明的，下层转录的底色从文字的左右漏出来
+    // ——真机截图里卡内同时混着终端默认底与蓝色消息块，两行文本漏的颜色
+    // 还不一样（2026-09-22 主人报告）。
+    {
+      const buf = term.buffer.active
+      const rowsText = screenLines()
+      const topRow = rowsText.findIndex(l => l.slice(55, COLS).includes('╭'))
+      const bottomRow = topRow < 0 ? -1 : rowsText.findIndex((l, i) => i > topRow && l.slice(55, COLS).includes('╰'))
+      const lineAt = (y: number) => buf.getLine(buf.baseY + y)
+      const colOf = (y: number, glyph: string): number =>
+        Array.from({ length: COLS }, (_, x) => x).find(x => lineAt(y)?.getCell(x)?.getChars() === glyph) ?? -1
+      const left = topRow < 0 ? -1 : colOf(topRow, '╭')
+      const right = topRow < 0 ? -1 : colOf(topRow, '╮')
+      // 逐格判「是否终端默认底」而不是拿一个哨兵色比：默认底时
+      // getBgColor() 返回 -1（且 isBgDefault() 为真），把它当成一个普通
+      // 色值去比对会得到「整卡一致」的假绿——没底色的卡片正好每格都是 -1。
+      let surface: number | null = null
+      let leaks = 0
+      for (let y = topRow; y >= 0 && y <= bottomRow; y++) {
+        for (let x = left; x >= 0 && x <= right; x++) {
+          const cell = lineAt(y)?.getCell(x)
+          if (!cell || cell.isBgDefault()) leaks += 1
+          else if (surface === null) surface = cell.getBgColor()
+          else if (cell.getBgColor() !== surface) leaks += 1
+        }
+      }
+      check('预览卡整块同一底色（不透明）',
+        topRow >= 0 && bottomRow > topRow && left >= 0 && right > left && leaks === 0 && surface !== null,
+        `rows=${topRow}..${bottomRow} x=${left}..${right} surface=${surface === null ? 'n/a' : surface.toString(16)} leaks=${leaks}`)
+    }
     // 移开：回到转译区中部（无 handler 的文本上）
     await hoverAt(30, 20)
     check('移开后预览卡消失', await settled(() => !screenLines().some(l => l.slice(55, 97).includes('╭') || l.slice(55, 97).includes('╮'))),

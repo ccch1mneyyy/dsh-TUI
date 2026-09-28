@@ -116,6 +116,8 @@ text and newlines, and is never mistaken for an Enter key. To keep rendering, cl
 mapping, and selection geometry consistent:
 
 - Terminal ANSI controls are stripped on entry.
+- A multi-line paste no longer leaves a stray `_`: when a Windows terminal delivers the paste as win32-input-mode records, the residue (`ESC[Vk;Sc;Uc;Kd;Cs;Rc_`, or the ESC-less tail left by a split record) is stripped whole on entry. Only the five-separator record grammar matches, so genuine underscores and bracket text that merely resembles a record are untouched.
+- Pasted CRLF collapses: a CR+LF pair produces one newline instead of two; LF-only and lone CR keep their previous behavior.
 - Tabs are expanded to spaces on entry.
 
 ### Fullscreen draft editor (`Ctrl+Shift+E` / `⛶`)
@@ -379,6 +381,8 @@ A full-screen scene (no scrollback pollution) over the whole session timeline:
 ### Model and preset
 
 `/model` switches through a session fork at the end of current history, because DSH has no in-place model-switch API. The old session remains in `/resume`.
+
+- A session nobody has typed into records no branch: switching models there yields an independent session with no `parentSession` (inheriting the same session-scaffolding prefix), so the first real prompt you send still triggers automatic session-title generation. A session that already holds a conversation keeps its lineage as before.
 
 - `/preset` switches in place only for a blank session. In a started session, the choice becomes the default for the next `/new` or launch.
 

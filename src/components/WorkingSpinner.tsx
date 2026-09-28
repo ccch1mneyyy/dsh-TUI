@@ -23,6 +23,7 @@ export function WorkingSpinner({
   totalPausedMsRef,
   pauseStartTimeRef,
   thinkingStatus,
+  suffix,
 }: {
   mode: SpinnerMode
   hasActiveTools: boolean
@@ -33,6 +34,9 @@ export function WorkingSpinner({
   totalPausedMsRef: React.RefObject<number>
   pauseStartTimeRef: React.RefObject<number | null>
   thinkingStatus: 'thinking' | number | null
+  /** Extra leading field (e.g. the auto-compaction badge) shown before the
+   *  timer/token counters; omitted for an ordinary turn. */
+  suffix?: string
 }): React.ReactNode {
   const { columns } = useTerminalSize()
 
@@ -54,7 +58,7 @@ export function WorkingSpinner({
         loadingStartTimeRef={loadingStartTimeRef}
         totalPausedMsRef={totalPausedMsRef}
         pauseStartTimeRef={pauseStartTimeRef}
-        spinnerSuffix={null}
+        spinnerSuffix={suffix === undefined ? null : suffix}
         verbose
         columns={columns}
         thinkingStatus={thinkingStatus}

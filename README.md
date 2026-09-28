@@ -129,7 +129,15 @@ source builds, and troubleshooting, including migration from the former
 | `dsh-tui safe` | Read-only diagnostics, plugin inventory and repair guidance; `safe --rescue` builds a clean rescue profile |
 | `dsh-tui version` · `dsh-tui help` | Launcher and profile versions and usage; both work even without a `dsh` install |
 
-Other arguments go to `dsh --profile dsh-tui`. Safe mode: [Getting started](docs/getting-started.en.md).
+Leading DSH options such as `--dump-config` and `--patch <path>` are forwarded
+unchanged; other arguments go to the app in `dsh --profile dsh-tui`. Use
+`dsh-tui -- --resume=sid-1 ./notes` to send `--resume=sid-1 ./notes` as literal
+prompt text, without selecting a session or workspace. When invoking DSH
+directly, use `dsh --profile dsh-tui -- -- --resume=sid-1 ./notes`: the first
+`--` belongs to DSH, the second to the app. Host options can precede a literal
+prompt: `dsh-tui --patch ./overlay.yml -- --resume=sid-1` applies the overlay
+and sends `--resume=sid-1` as prompt text without resuming that session.
+Safe mode: [Getting started](docs/getting-started.en.md).
 
 ### Importing conversations from other agents (`dsh-tui migrate`)
 
@@ -164,6 +172,8 @@ Unrecognized complete CSI sequences are not inserted as text. After a damaged CS
 
 Mouse (fullscreen): drag to select and copy, double/triple click to select a word or line, click tool cards, timeline ticks and `[Image #N]` previews.
 
+**Pasting**: native and bracketed paste keeps ordinary text and newlines, and never submits itself on arrival. On Windows terminals that deliver a paste as win32-input-mode key records, the residue is stripped at the entry point (a multi-line paste no longer leaves stray `_`) and pasted CRLF collapses to a single newline; genuine underscores and bracketed-paste text are untouched.
+
 Full reference: [Interaction and commands](docs/interaction.en.md).
 
 ## Built-in Commands
@@ -194,7 +204,7 @@ Runtime path, module boundaries, performance notes and persistence locations: [A
 ## Known Limitations
 
 - Injected plugin context has no standalone display; it counts into the context segments.
-- `/model` switches by forking the session; the old session stays in `/resume`.
+- `/model` switches by forking the session; the old session stays in `/resume` (a session nobody has typed into records no branch, so your first prompt there still gets a generated title).
 - `Ctrl+V` needs platform clipboard tools; unsupported bitmap formats are rejected.
 - A background session lives inside this process and stops when the TUI exits.
 - `/thinking` is not persisted; `/compact` is unavailable under the `minimal` preset; `/update` needs a `dsh --profile` launch and is refused while a turn is running.

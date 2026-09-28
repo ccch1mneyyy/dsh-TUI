@@ -310,6 +310,13 @@ const dict = {
     zh: '压缩进行中，已取消并切换会话',
     en: 'In-flight compaction cancelled for the session switch',
   },
+  // 压缩状态行（prompt 上方的 spinner 槽位）。压缩只暴露两个可观测阶段：
+  // 首块输出前是在重放上下文（无可计数），之后才有生成量。
+  'compact-phase-prefill': { zh: '读取上下文…', en: 'reading context…' },
+  'compact-esc-cancel': { zh: 'Esc 取消', en: 'Esc cancels' },
+  'compact-cancelled': { zh: '压缩已取消', en: 'Compaction cancelled' },
+  // 回合进行中的自动压缩：工作 spinner 上的后缀（只此一词，别抢行）。
+  'compact-badge': { zh: '压缩中', en: 'compacting' },
   'turn-failed': { zh: '回合出错{{detail}}', en: 'Turn error{{detail}}' },
 
   // ── dsh-adapter/promptDebug.ts（/debug-prompt 成功提示）─────────────
@@ -573,7 +580,7 @@ const dict = {
   'vim-on': { zh: 'vim 模式已开启（Esc 切 normal，i/a/o 回 insert）', en: 'vim mode on (Esc = normal, i/a/o = insert)' },
   'vim-off': { zh: 'vim 模式已关闭', en: 'vim mode off' },
   'terminal-setup-hint': { zh: '推荐 Windows Terminal（≥110 列、等宽字体、TrueColor）。', en: 'Recommended: Windows Terminal (≥110 columns, monospace, TrueColor).' },
-  'terminal-paste-hint': { zh: '{{mod}}V 或 Alt+V 粘贴文本、文件路径或图片；Ctrl+Shift+V 终端原生粘贴；右键粘贴同样可用；快捷键可在 /settings 修改。', en: '{{mod}}V or Alt+V pastes text, file paths, or images; Ctrl+Shift+V is native terminal paste; right-click paste also works; remappable via /settings.' },
+  'terminal-paste-hint': { zh: '{{keys}} 粘贴文本、文件路径或图片；Ctrl+Shift+V 终端原生粘贴；右键粘贴同样可用；快捷键可在 /settings 修改。', en: '{{keys}} pastes text, file paths, or images; Ctrl+Shift+V is native terminal paste; right-click paste also works; remappable via /settings.' },
   'connect-none': { zh: '当前环境未提供远程连接服务。', en: 'No remote connection service is available in this environment.' },
   'theme-switch-failed': { zh: '主题「{{name}}」切换失败（无法写入 ~/.dsh-tui/theme.json）', en: 'Theme "{{name}}" switch failed (cannot write ~/.dsh-tui/theme.json)' },
   'interrupt-delivered': { zh: '已打断当前回合，{{n}} 条消息立即处理', en: 'Interrupted current turn, {{n}} messages processed immediately' },
@@ -689,6 +696,54 @@ const dict = {
 
   // ── components/LogoV2.tsx ───────────────────────────────────────────
   'logo-tagline': { zh: '探索未至之境！', en: 'Explore the uncharted!' },
+  // Star easter egg (bottom welcome line on ~1/20 of mounts, see
+  // components/splashEggs.ts): the sentence is split around the repo
+  // hyperlink — lead + link + tail — so both halves are translatable and
+  // the rendered width can be measured for centering. English stays short
+  // on purpose: without OSC 8 support the link degrades to the 38-column
+  // URL, and lead+URL+tail has to fit an 80-column terminal without wrapping.
+  // 开屏求 star 彩蛋（splashEggs.ts + LogoV2）：平时是 logo-tagline，跨里程碑
+  // 时换成"标题 + 数字 + 求星"三行，标题先出、其余两行每秒跟一行。
+  'logo-star-title': { zh: '鲸鱼娘好像在等一颗小星星…… ☆', en: 'The whale girl seems to be waiting for a little star… ☆' },
+  'logo-star-caught': { zh: '鲸鱼娘捡到一颗小星星啦 ✨', en: 'The whale girl caught a little star ✨' },
+  'logo-star-stats': { zh: '已陪你 {{hours}} 小时 · 第 {{launches}} 次打开', en: '{{hours}}h together · launch #{{launches}}' },
+  'logo-star-ask': { zh: '喜欢 dshTUI 的话，顺手点亮一颗 {{star}}？（点这一行或 {{key}} 一键支持）', en: 'If you like dsh-TUI, would you light a {{star}}? (click this line or {{key}})' },
+  'cmd-desc-star': { zh: '给这个项目点个 star（用 gh 一键）' },
+  'star-ok': { zh: '已 star，谢谢！', en: 'Starred — thank you!' },
+  'star-no-gh': {
+    zh: '没找到 gh（GitHub CLI），已经替你在浏览器里打开仓库页：{{url}}。装一个 gh 就能一键 star：https://cli.github.com',
+    en: 'gh (GitHub CLI) is not installed, so I opened the repo page in your browser: {{url}}. Install gh for one-key starring: https://cli.github.com',
+  },
+  'star-not-authed': {
+    zh: 'gh 还没登录，已经替你在浏览器里打开仓库页：{{url}}。想一键 star 就先跑 gh auth login',
+    en: 'gh is not logged in, so I opened the repo page in your browser: {{url}}. Run gh auth login for one-key starring',
+  },
+  'star-failed': {
+    zh: '一键 star 没成功：{{detail}}（也可以直接在浏览器里打开 {{url}}）',
+    en: 'One-key star failed: {{detail}} (or open {{url}} in a browser)',
+  },
+  // 99h / 999 次的"求 star"开屏弹窗（StarPrompt.tsx）。正文是维护者定的
+  // 原话——诚恳、不催；标题按里程碑取"小时"或"次启动"。**每一行都是
+  // 一行**（48 列内不折行），所以排版与作者写的断句完全一致。
+  'star-modal-title-hours': { zh: '🐳 已经陪你 {{hours}} 小时了！', en: '🐳 {{hours}} hours together!' },
+  'star-modal-title-launches': { zh: '🐳 已经陪你 {{launches}} 次启动了！', en: '🐳 {{launches}} launches together!' },
+  'star-modal-body-1': { zh: '不知不觉，dshTUI 已经陪你走了这么久啦。', en: 'Before you noticed, dsh-TUI had already come this far with you.' },
+  'star-modal-body-2': { zh: '如果它有让你的 DSH 更好用一点、', en: 'If it made your DSH a little more usable,' },
+  'star-modal-body-3': { zh: '更顺手一点，或者只是让你开心了一点——', en: 'a little smoother — or just made you smile —' },
+  'star-modal-body-4': { zh: '那就送鲸鱼娘一颗小小的 Star 吧 ⭐', en: 'treat the whale girl to a tiny Star ⭐' },
+  'star-modal-body-5': { zh: '每一颗 Star，都会变成我们继续折腾', en: 'Every Star becomes fuel for us to keep tinkering' },
+  'star-modal-body-6': { zh: '和把 dshTUI 做得更好的动力！', en: 'and to keep making dsh-TUI better!' },
+  'star-modal-star': { zh: '投喂一颗 Star ⭐', en: 'Feed a Star ⭐' },
+  'star-modal-open': { zh: '在浏览器中打开 GitHub', en: 'Open GitHub in the browser' },
+  'star-modal-working': { zh: '正在点 star…', en: 'Starring…' },
+  'star-modal-hint': { zh: '↑↓ 选择 · **Enter** 确认 · **Esc** 下次一定 (´;ω;`)', en: '↑↓ choose · **Enter** confirm · **Esc** next time (´;ω;`)' },
+  // star 成功后的庆祝态（星光 + 鲸鱼喷水），几秒后卡片自己收场。
+  'star-modal-thanks-title': { zh: '🌟 收到 Star 啦！', en: '🌟 Star received!' },
+  'star-modal-thanks-1': { zh: '鲸鱼娘成功接住了一颗小星星 ~', en: 'The whale girl caught a little star ~' },
+  'star-modal-thanks-2': { zh: '谢谢你的支持！', en: 'Thank you for your support!' },
+  'star-modal-thanks-3': { zh: '这颗 Star 会变成 dshTUI 继续成长的动力。', en: 'This Star becomes fuel for dsh-TUI to keep growing.' },
+  'star-modal-thanks-4': { zh: '希望以后，它也能继续陪你走很久。', en: 'May it keep you company for a long time to come.' },
+  'star-modal-thanks-hint': { zh: '**Enter** / **Esc** 关闭', en: '**Enter** / **Esc** to close' },
   'logo-tip-prefix': { zh: '提示：', en: 'Tip: ' },
   'logo-tip-more': { zh: '更多技巧', en: 'more tips' },
   // Upstream-drift notice (merged one-liner under the tip; copy explains
@@ -785,7 +840,7 @@ const dict = {
   // 按行折叠的溢出提示：卡片正文行预算（capLines）、终端卡多行命令折叠
   // （foldTerminalCommand）、分屏 diff 隐藏行（SplitDiffView）。按字符折叠
   // 的行内标记见 long-line-folded。
-  'lines-folded-expand': { zh: '… +{{n}} 行（ctrl+o 展开）', en: '… +{{n}} lines (ctrl+o to expand)' },
+  'lines-folded-expand': { zh: '… +{{n}} 行（{{key}} 展开）', en: '… +{{n}} lines ({{key}} to expand)' },
 
   // ── components/SuggestionCard.tsx（/ 命令菜单 · @ 文件菜单）─────────
   'sugg-commands-title': { zh: '命令', en: 'commands' },
@@ -815,21 +870,21 @@ const dict = {
   // ── components/HelpMenu.tsx ─────────────────────────────────────────
   'help-for-commands': { zh: '/ 查看命令', en: '/ for commands' },
   'help-this-help': { zh: '? 查看本帮助', en: '? for this help' },
-  'help-verbose-output': { zh: '{{mod}}o 详细输出', en: '{{mod}}o for verbose output' },
-  'help-open-trajectory': { zh: '{{mod}}t 打开会话轨迹', en: '{{mod}}t to open trajectory' },
-  'help-search-history': { zh: '{{mod}}r 搜索历史', en: '{{mod}}r to search history' },
+  'help-verbose-output': { zh: '{{key}} 详细输出', en: '{{key}} for verbose output' },
+  'help-open-trajectory': { zh: '{{key}} 打开会话轨迹', en: '{{key}} to open trajectory' },
+  'help-search-history': { zh: '{{key}} 搜索历史', en: '{{key}} to search history' },
   'help-interrupt': { zh: 'ctrl+c 打断', en: 'ctrl+c to interrupt' },
   'help-exit': { zh: 'ctrl+d 退出', en: 'ctrl+d to exit' },
-  'help-redraw': { zh: '{{mod}}l 重绘', en: '{{mod}}l to redraw' },
+  'help-redraw': { zh: '{{key}} 重绘', en: '{{key}} to redraw' },
   'help-clear-input': { zh: 'esc 清空输入', en: 'esc to clear input' },
   'help-history-nav': { zh: '↑/↓ 历史', en: '↑/↓ for history' },
   'help-move-cursor': { zh: '←/→ 移动光标', en: '←/→ to move cursor' },
   'help-word-jumps': { zh: '{{mod}}←/→ 按词跳转', en: '{{mod}}←/→ for word jumps' },
   'help-complete-command': { zh: 'tab 补全命令', en: 'tab to complete command' },
   'help-cycle-mode': { zh: 'shift+tab 切换模式', en: 'shift+tab to cycle mode' },
-  'help-open-editor': { zh: 'ctrl+g 打开编辑器', en: 'ctrl+g to open editor' },
-  'help-fold-todos': { zh: '{{mod}}q 折叠待办', en: '{{mod}}q to fold todos' },
-  'goal-todo-fold-hint': { zh: '{{mod}}q 折叠', en: '{{mod}}q to fold' },
+  'help-open-editor': { zh: '{{key}} 打开编辑器', en: '{{key}} to open editor' },
+  'help-fold-todos': { zh: '{{key}} 折叠待办', en: '{{key}} to fold todos' },
+  'goal-todo-fold-hint': { zh: '{{key}} 折叠', en: '{{key}} to fold' },
   'help-commands-title': { zh: '命令：', en: 'commands:' },
   'help-scroll-hint': {
     zh: '↑/↓ 滚动 · PgUp/PgDn 翻页 · Home/End 首尾 · Esc 关闭',
@@ -844,7 +899,7 @@ const dict = {
 
   // ── components/MessageList.tsx ──────────────────────────────────────
   'load-earlier': { zh: ' ↑ 加载更早消息（会话日志完整，/export 导出全文） ', en: ' ↑ load earlier messages (full session log; /export for full text) ' },
-  'show-previous-messages': { zh: ' ctrl+e 显示前 {{n}} 条消息 ', en: ' ctrl+e to show {{n}} previous messages ' },
+  'show-previous-messages': { zh: ' {{key}} 显示前 {{n}} 条消息 ', en: ' {{key}} to show {{n}} previous messages ' },
 
   // ── screens/Chat.tsx (/resume) ──────────────────────────────────────
   'resume-resumed': { zh: '已恢复会话', en: 'Session resumed' },
@@ -924,10 +979,10 @@ const dict = {
   'hint-ext-dialog-input': { zh: '**Enter** 确认 · Esc 取消', en: '**Enter** to confirm · Esc to cancel' },
   'hint-adjust-done': { zh: '**←/→** 调整 · Enter/Esc 完成', en: '**←/→** to adjust · Enter/Esc to done' },
   'hint-history-search': { zh: '↑/↓ 选择 · **Enter** 确认 · Esc 取消', en: '↑/↓ to navigate · **Enter** to select · Esc to cancel' },
-  'hint-expand-ctrl-o': { zh: '（ctrl+o 展开）', en: '(ctrl+o to expand)' },
+  'hint-expand-ctrl-o': { zh: '（{{key}} 展开）', en: '({{key}} to expand)' },
   // 转录里的超长单行（utils/fold-long-lines.ts）：行尾内联标记。鼠标点整行
-  // （工具卡点卡面）即可展开/收起，键盘走 ctrl+o —— 两种都写进文案。
-  'long-line-folded': { zh: '… 已折叠 {{n}} 字符（点击或 ctrl+o 展开）', en: '… {{n}} chars folded (click or ctrl+o to expand)' },
+  // （工具卡点卡面）即可展开/收起，键盘走 transcript 键（默认 ctrl+o）—— 两种都写进文案。
+  'long-line-folded': { zh: '… 已折叠 {{n}} 字符（点击或 {{key}} 展开）', en: '… {{n}} chars folded (click or {{key}} to expand)' },
 
   // ── components/FileActionsPanel.tsx（点击文件路径弹出的操作菜单）──
   'file-actions-title': { zh: '文件操作', en: 'File actions' },
@@ -1078,7 +1133,7 @@ const dict = {
   'question-header-progress': { zh: ' 📋 提问 · 第 {{position}}/{{total}} 题{{remaining}} ', en: ' 📋 Question {{position}}/{{total}} {{remaining}} ' },
   'question-remaining-more': { zh: ' · 还剩 {{n}} 题', en: ' · {{n}} left' },
   'question-hint-type': { zh: '输入回答', en: 'Type answer' },
-  'question-hint-paste': { zh: 'Ctrl+V 粘贴', en: 'Ctrl+V paste' },
+  'question-hint-paste': { zh: '{{key}} 粘贴', en: '{{key}} paste' },
   'question-hint-enter': { zh: 'Enter 提交', en: 'Enter submit' },
   'question-hint-back': { zh: '↑ 返回选项', en: '↑ back to options' },
   'question-hint-esc': { zh: 'Esc 中断', en: 'Esc cancel' },
@@ -1160,7 +1215,7 @@ const dict = {
   'plan-review-fallback-header': { zh: '计划评审', en: 'Plan review' },
   'plan-review-feedback-placeholder': { zh: '输入反馈，告诉模型要改什么…', en: 'Tell the model what to change…' },
   'plan-review-approve-needs-empty': { zh: '请先清空反馈再批准（或在输入行回车提交反馈）', en: 'Clear the feedback to approve (or press Enter on the input row to send it)' },
-  'plan-review-hint': { zh: '↑/↓ 选择 · 1/2 快选 · 打字输入反馈 · Ctrl+V 粘贴 · Enter 提交 · Esc 打断评审', en: '↑/↓ select · 1/2 quick-pick · type feedback · Ctrl+V paste · Enter submit · Esc dismiss' },
+  'plan-review-hint': { zh: '↑/↓ 选择 · 1/2 快选 · 打字输入反馈 · {{paste}} 粘贴 · Enter 提交 · Esc 打断评审', en: '↑/↓ select · 1/2 quick-pick · type feedback · {{paste}} paste · Enter submit · Esc dismiss' },
 
   // ── providerWizard.ts ────────────────────────────────────────────────
   'provider-unavailable': { zh: '/provider 需要经 dsh profile 启动（settings / credentials / llm-pi-ai 服务未挂载）', en: '/provider requires starting through a dsh profile (settings / credentials / llm-pi-ai services not mounted)' },

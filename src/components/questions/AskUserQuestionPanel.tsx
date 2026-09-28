@@ -35,7 +35,7 @@ import type { QuestionDraft, QuestionSelection } from '../../dsh-adapter/questio
 import { PlanReviewPanel } from './PlanReviewPanel.js'
 import { QuestionMinimizedBar } from './QuestionMinimizedBar.js'
 import { isPlainReturnInput } from '../../utils/modifiers.js'
-import { actionMatches, effectiveComboDisplay } from '../../utils/keymap.js'
+import { actionMatches, comboDisplay, effectiveComboDisplay, primaryComboString } from '../../utils/keymap.js'
 import { flattenPasteInline } from '../../dsh-adapter/sanitize.js'
 import { readClipboard, type ClipboardRead } from '../../utils/clipboard.js'
 import { listWindow } from '../listWindow.js'
@@ -584,13 +584,27 @@ export function AskUserQuestionPanel({
         )}
         <Text dimColor>：</Text>
         {customText === '' && !inputFocused ? (
-          <Text ref={caretRef} dimColor>{t('question-direct-input')}</Text>
+          // The IME anchor must sit on a cell styled exactly like the answer
+          // text the user is about to commit: the terminal draws the preedit
+          // at the physical cursor USING THAT CELL'S STYLE, so an anchor over
+          // the dim placeholder turned pinyin dim, and one on the suggestion-
+          // colored caret turned it blue (reported from a real session).
+          // Hence a bare leading cell takes the anchor — no color prop, same
+          // "terminal default foreground" the typed run gets — and the
+          // placeholder starts one column later.
+          <>
+            <Text ref={caretRef}>{' '}</Text>
+            <Text dimColor>{t('question-direct-input')}</Text>
+          </>
         ) : (
           <>
             <Text wrap="wrap">{textPoints.slice(0, customCursor).join('')}</Text>
+            {/* Focused keeps the inverse block caret (same contract as the
+                composer's value box): the preedit then renders inverted,
+                which reads as "the block is filling with text". */}
             {inputFocused
               ? <Text ref={caretRef} inverse>{cursorChar}</Text>
-              : <Text ref={caretRef} color="suggestion">▏</Text>}
+              : <Text ref={caretRef}>▏</Text>}
             <Text wrap="wrap">{textPoints.slice(inputFocused ? customCursor + 1 : customCursor).join('')}</Text>
           </>
         )}
@@ -673,7 +687,7 @@ export function AskUserQuestionPanel({
   const hintParts = inputFocused
     ? [
         t('question-hint-type'),
-        t('question-hint-paste'),
+        t('question-hint-paste', { key: comboDisplay(primaryComboString('paste')) }),
         t('question-hint-enter'),
         ...(options.length > 0 ? [t('question-hint-back')] : []),
         onBack === undefined ? t('question-hint-esc') : t('question-hint-previous'),
@@ -684,7 +698,7 @@ export function AskUserQuestionPanel({
     : [
         t('question-hint-select'),
         ...(multiSelect ? [t('question-hint-multi')] : []),
-        ...(hideCustomInput ? [] : [t('question-hint-paste'), t('question-hint-attach')]),
+        ...(hideCustomInput ? [] : [t('question-hint-paste', { key: comboDisplay(primaryComboString('paste')) }), t('question-hint-attach')]),
         t('question-hint-enter'),
         onBack === undefined ? t('question-hint-esc') : t('question-hint-previous'),
         ...(onBack === undefined ? [] : [t('question-hint-cancel')]),
