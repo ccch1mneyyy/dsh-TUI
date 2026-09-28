@@ -239,7 +239,8 @@ type WriteOperation = {
    * means line i is a continuation of line i-1 (the `\n` before it was
    * inserted by word-wrap, not in the source). Index 0 is always false.
    * Undefined means the producer didn't track wrapping (e.g. fills,
-   * raw-ansi) — the screen's per-row bitmap is left untouched.
+   * raw-ansi): the rows it paints are marked "not a continuation", since it
+   * replaced whatever was there — see the write case in `get()`.
    */
   softWrap?: boolean[]
 }
@@ -1167,6 +1168,17 @@ export default class Output {
           continue
         }
 
+        case 'softWrapRow': {
+          // Paint order: the marker lands where the producer asked for it, and
+          // the write case above resets it when a later operation repaints that
+          // row. (This used to run in a pass after every write, which let a
+          // marker outlive an overlay that overwrote the row.)
+          if (operation.y > 0 && operation.y < screen.height) {
+            screen.softWrap[operation.y] = Math.max(1, operation.contentEnd)
+          }
+          continue
+        }
+
         case 'copyRegion': {
           // In paint order: anything written over the image later (a menu,
           // an overlay) clears the cells it covers, so a copy reads what is
@@ -1264,6 +1276,13 @@ export default class Output {
               const isSW = softWrap[swFrom + offsetY] === true
               swBits[lineY] = isSW ? prevContentEnd : 0
               prevContentEnd = contentEnd
+            } else {
+              // Paint order: a producer that doesn't track wrapping (fills,
+              // raw-ansi, overlays) still replaces the row it paints, so a
+              // continuation marker an earlier softWrapRow set for this row
+              // is stale — keep it and a copy would glue the overlay's text
+              // onto the previous line.
+              swBits[lineY] = 0
             }
             offsetY++
           }
@@ -1281,9 +1300,6 @@ export default class Output {
       if (operation.type === 'noSelect') {
         const { x, y, width, height } = operation.region
         markNoSelectRegion(screen, x, y, width, height)
-      } else if (operation.type === 'softWrapRow') {
-        // Applied after the writes, which reset the flags of rows they touch.
-        if (operation.y > 0 && operation.y < screen.height) screen.softWrap[operation.y] = Math.max(1, operation.contentEnd)
       }
     }
 

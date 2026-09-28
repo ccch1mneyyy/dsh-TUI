@@ -97,6 +97,20 @@ function frame(): Screen {
 }
 
 {
+  // Paint order: whatever repaints the row after the marker was set wins, so
+  // an overlay drawn over a wrapped row is not glued onto the previous line.
+  const screen = createScreen(20, 2, stylePool, charPool, hyperlinkPool)
+  const output = new Output({ width: 20, height: 2, stylePool, screen, terminalImages: true })
+  output.write(0, 0, 'wrapped ')
+  output.write(0, 1, 'line ')
+  output.softWrapRow(1, 8)
+  output.write(0, 1, 'menu ')
+  const repainted = output.get()
+  assert.equal(repainted.softWrap[1], 0, 'a later write over the marked row clears the continuation')
+  assert.equal(getSelectedText(selection(0, 0, 19, 1), repainted), 'wrapped\nmenu', 'overlay text is not joined onto the previous line')
+}
+
+{
   // Drag-to-scroll: rows scrolled out are captured as text before they go.
   // A formula split between captured and visible rows copies once.
   const screen = frame()
