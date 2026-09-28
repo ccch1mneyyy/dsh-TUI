@@ -407,21 +407,25 @@ function family() {
     const located: string[] = []
     // Channel construction fires the agent-view background refresh, which
     // legitimately locates EVERY stored session — including U — to build its
-    // own rows. Record only while the TREE runs, so this asserts the tree's
-    // reads (the invariant under test) instead of racing the refresh.
-    let recording = false
+    // own rows, and it settles inside the same await window as the tree
+    // build. Hold exactly that first listing back (it is fire-and-forget, so
+    // a pending promise is harmless) so the recording below reflects only
+    // the tree's own reads; the tree's later enumerations answer normally.
+    let listCalls = 0
+    const gatedListing = () => {
+      listCalls += 1
+      return listCalls === 1 ? new Promise<readonly unknown[]>(() => {}) : Promise.resolve(logicalHeaders)
+    }
     const fileChannel = makeTreeChannel({
-      list: () => Promise.resolve(logicalHeaders),
+      list: gatedListing,
       locate(raw: unknown) {
         const id = String((raw as { id?: unknown }).id ?? '')
-        if (recording) located.push(id)
+        located.push(id)
         const path = paths.get(id)
         return path === undefined ? { kind: 'jsonl', path: join(root, 'missing', id) } : { kind: 'jsonl', path }
       },
     })
-    recording = true
     const fileTree = await fileChannel.buildSessionTree()
-    recording = false
     assertColdTree('cold tree JSONL physical cut', fileTree)
     check(
       'cold tree live path keeps inherited session title',
@@ -431,14 +435,17 @@ function family() {
     check('cold tree JSONL does not touch unrelated same-cwd session', !located.includes('U'), located.join(','))
 
     const inspected: string[] = []
-    let inspecting = false
     const logs = new Map<string, readonly Ev[]>([['R', rootEvents], ['F1', f1Events]])
+    let memoryListCalls = 0
     const memoryChannel = makeTreeChannel({
-      list: () => Promise.resolve(logicalHeaders),
+      list: () => {
+        memoryListCalls += 1
+        return memoryListCalls === 1 ? new Promise<readonly unknown[]>(() => {}) : Promise.resolve(logicalHeaders)
+      },
       locate: () => ({ kind: 'memory' }),
       inspect(id: unknown) {
         const key = String(id)
-        if (inspecting) inspected.push(key)
+        inspected.push(key)
         const events = logs.get(key) ?? []
         return Promise.resolve({
           events,
@@ -446,9 +453,7 @@ function family() {
         })
       },
     })
-    inspecting = true
     const memoryTree = await memoryChannel.buildSessionTree()
-    inspecting = false
     assertColdTree('cold tree non-file inspect cut', memoryTree)
     check(
       'cold tree non-file inspect keeps inherited session title',
