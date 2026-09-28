@@ -93,7 +93,14 @@ const SGR_MOUSE_TAIL_PREFIX_RE = /^\[<\d+;\d+;\d+[Mm]/
 // the deadline bounds this ambiguity. It runs on every call so continuous
 // input cannot starve it into a de-facto immortal hold.
 const MOUSE_TAIL_HOLD_GRACE_MS = 1000
+// How long an unfinished terminal-reply prefix may be held for its
+// continuation, and how many bytes of it may accumulate. Same caliber as the
+// win32 record hold above: measured from FIRST capture (later flushes must not
+// renew it), deadline checked on every parse call, and an over-limit or
+// expired hold is released by tokenizer.reset() — protocol bytes are dropped
+// rather than leaked into the prompt.
 const TERMINAL_RESPONSE_TAIL_GRACE_MS = 1000
+const TERMINAL_RESPONSE_MAX_LENGTH = 64
 
 // dwControlKeyState modifier bits (others — NUMLOCK_ON 0x20, CAPSLOCK_ON
 // 0x80, ENHANCED_KEY 0x100 — are state indicators, not pressed modifiers)
@@ -244,6 +251,25 @@ export type TerminalResponse =
   /** XTVERSION: terminal name/version string (answer to CSI > 0 q).
    *  Example values: "xterm.js(5.5.0)", "ghostty 1.2.0", "iTerm2 3.6". */
   | { type: 'xtversion'; name: string }
+
+// Unfinished prefixes of every reply shape parseTerminalResponse() knows.
+// MUST be kept in sync with the pattern list above: a reply type added there
+// needs an alternative here too, or a ConPTY-split tail of that shape is
+// released at the flush and leaks into the prompt as literal text.
+//   ESC [ ? …              DA1 / kitty flags / DECXCPR / DECRPM
+//   ESC [ ? … $            DECRPM's `$y` intermediate byte
+//   ESC [ > …              DA2
+//   ESC [ digits [; digits]  DSR (row;col) and XTWINOPS pixel-size replies
+//   ESC [ … $              a `$`-intermediate CSI awaiting its final byte
+//   ESC P > | …            XTVERSION (DCS)
+// Only PREFIXES are matched; completeness is always decided by
+// parseTerminalResponse(), never by this regex. Introducer-only prefixes
+// (`ESC [`, `ESC P`) are deliberately excluded: they are indistinguishable
+// from ordinary key input, and holding the bare `ESC [` swallowed
+// `ESC[`+letter input in the #1073 review.
+// eslint-disable-next-line no-control-regex
+const TERMINAL_RESPONSE_PREFIX_RE =
+  /^(?:\x1b\[\?[\d;]*\$?|\x1b\[>[\d;]*|\x1b\[[\d;]*\$|\x1b\[\d+(?:;\d+)*|\x1bP>\|)/
 
 /**
  * Try to recognize a sequence token as a terminal response.
@@ -906,6 +932,13 @@ export type KeyParseState = {
    */
   terminalResponseTailAfterEscFlushAt?: number
   /**
+   * Date.now() of the FIRST capture of the reply prefix currently held open
+   * across flushes (see TERMINAL_RESPONSE_TAIL_GRACE_MS). Later flushes and
+   * continuations never renew it; the hold is released — bytes dropped — once
+   * it expires. Parser-maintained, like mouseTailHoldAt; never host-injected.
+   */
+  terminalResponseHoldAt?: number
+  /**
    * Host-injected, read-only in-flight evidence for terminal-query replies:
    * the host saw a query either still queued or sent within its bounded
    * window, so a response tail may legitimately arrive. Absent means false —
@@ -981,6 +1014,16 @@ export function parseMultipleKeypresses(
   const isRecordPrefix = (value: string): boolean =>
     !inPaste && WIN32_INPUT_PREFIX_RE.test(value) &&
     (WIN32_INPUT_BODY_PREFIX_RE.test(value) || win32HoldAllowed)
+  // A buffer that is already reply-specific (TERMINAL_RESPONSE_PREFIX_RE) is
+  // eligible to be held open for its continuation — but only with the
+  // host-injected in-flight-query evidence (D1). Record framing is judged
+  // first (D6): every numeric CSI prefix the record branch can frame belongs
+  // to it, and this predicate never re-labels one. The evidence is read-only
+  // here and defaults to false, so a direct caller that never injects it
+  // never holds (D7 / AC-3). Paste payloads stay literal, exactly like the
+  // record branch above.
+  const isResponsePrefix = (value: string): boolean =>
+    !isRecordPrefix(value) && !inPaste && TERMINAL_RESPONSE_PREFIX_RE.test(value)
 
   if (win32InputStartedAt !== undefined && now - win32InputStartedAt >= WIN32_INPUT_GRACE_MS) {
     tokenizer.reset()
@@ -988,6 +1031,18 @@ export function parseMultipleKeypresses(
   }
   if (win32EscFlushedAt !== undefined && now - win32EscFlushedAt >= WIN32_INPUT_GRACE_MS) {
     win32EscFlushedAt = undefined
+  }
+  // Same deadline discipline for the reply-prefix hold: first capture only,
+  // checked on every call (not just on flush, so continuous input cannot
+  // starve it), and released by resetting the tokenizer — bytes dropped, the
+  // same caliber as the win32 record hold, never leaked into the prompt.
+  let terminalResponseHoldAt = prevState.terminalResponseHoldAt
+  if (
+    terminalResponseHoldAt !== undefined &&
+    now - terminalResponseHoldAt >= TERMINAL_RESPONSE_TAIL_GRACE_MS
+  ) {
+    if (isResponsePrefix(tokenizer.buffer())) tokenizer.reset()
+    terminalResponseHoldAt = undefined
   }
   if (inputString && win32EscFlushedAt !== undefined) {
     // Only the immediate continuation of an actual ESC flush may acquire
@@ -1020,11 +1075,30 @@ export function parseMultipleKeypresses(
     }
   }
 
-  let deferFlush = isFlush && isRecordPrefix(tokenizer.buffer())
-  if (deferFlush && tokenizer.buffer().length > WIN32_INPUT_MAX_LENGTH) {
+  // Two independent reasons to keep the tokenizer's buffer across a flush:
+  // the #1142 record frame (win32), and an unfinished reply prefix when the
+  // host reports a query in flight (D1 × D2). Each keeps its own bound (D6);
+  // an over-limit buffer is dropped exactly like #1142 drops an oversized
+  // record frame.
+  const recordPrefix = isRecordPrefix(tokenizer.buffer())
+  // Evidence is re-read on every call, never latched: once the host stops
+  // reporting a query in flight, the hold ends and the buffer is released by
+  // the old path (no evidence, no claim) — only the injected read-only flag
+  // can open or keep a reply hold.
+  const claimsResponsePrefix =
+    (prevState.terminalQueryInFlight ?? false) && isResponsePrefix(tokenizer.buffer())
+  let deferFlush = isFlush && (recordPrefix || claimsResponsePrefix)
+  if (
+    deferFlush &&
+    tokenizer.buffer().length >
+      (recordPrefix ? WIN32_INPUT_MAX_LENGTH : TERMINAL_RESPONSE_MAX_LENGTH)
+  ) {
     tokenizer.reset()
     deferFlush = false
   }
+  // First capture only: later flushes (App re-arms its timer while
+  // `incomplete` is set) must not renew the deadline.
+  if (deferFlush && claimsResponsePrefix) terminalResponseHoldAt ??= now
   const tokens = isFlush
     ? deferFlush ? [] : tokenizer.flush()
     : tokenizer.feed(inputString)
@@ -1066,7 +1140,15 @@ export function parseMultipleKeypresses(
   let mouseTailHoldAt: number | undefined = prevState.mouseTailHoldAt
   const terminalResponseTailAfterEscFlushAt =
     prevState.terminalResponseTailAfterEscFlushAt
+  // Re-attach (D3b, handed over from #796): a lone Escape was genuinely
+  // flushed, so the next text token may be the rest of a reply that lost its
+  // introducer. Claim it only inside the bounded window AND with the
+  // host-injected in-flight evidence — the missing gate CodeRabbit flagged on
+  // #796. The shape test for this complete token is parseTerminalResponse()
+  // itself (its pattern list IS the reply-shape list); a miss stays literal
+  // text, and without injected evidence this branch never fires (AC-3).
   const mayRecoverTerminalResponseTail =
+    (prevState.terminalQueryInFlight ?? false) &&
     terminalResponseTailAfterEscFlushAt !== undefined &&
     Date.now() - terminalResponseTailAfterEscFlushAt <= TERMINAL_RESPONSE_TAIL_GRACE_MS
 
@@ -1278,6 +1360,10 @@ export function parseMultipleKeypresses(
         // stale hold so it cannot merge the NEXT fragment into a phantom event.
         mouseTailHold = undefined
         mouseTailHoldAt = undefined
+        // #796 re-attach: put the flushed introducer back, then let the one
+        // reply-shape authority decide. A miss — or no injected evidence —
+        // keeps the token literal: shape alone never swallows input (AC-3),
+        // and the claim rides the existing querier.onResponse channel (D5).
         const response = mayRecoverTerminalResponseTail
           ? parseTerminalResponse('\x1b' + token.value)
           : null
@@ -1354,6 +1440,26 @@ export function parseMultipleKeypresses(
   // recovery of the coords is not worth one more branch — a mouse event
   // with guessed terminators would dispatch phantom clicks.
 
+  // The reply-prefix hold lives only while the tokenizer still retains a
+  // reply-shaped prefix: completion, release or reset all end it, so the
+  // NEXT hold captures its own first-capture deadline.
+  if (terminalResponseHoldAt !== undefined && !isResponsePrefix(tokenizer.buffer())) {
+    terminalResponseHoldAt = undefined
+  }
+
+  // A REAL lone-Escape flush — an Escape emitted as its own key, not the ESC
+  // introducer of a buffered sequence. Only this opens the #796 re-attach
+  // window; the window alone is not evidence (D1), and a direct caller that
+  // never injects the provenance keeps the pre-change behavior.
+  const escapeFlushedNow =
+    isFlush &&
+    keys.some(
+      key =>
+        key.kind === 'key' &&
+        key.name === 'escape' &&
+        key.sequence === '\x1b',
+    )
+
   // Build new state
   const newState: KeyParseState = {
     mode: inPaste ? 'IN_PASTE' : 'NORMAL',
@@ -1387,16 +1493,8 @@ export function parseMultipleKeypresses(
     win32Protocol,
     mouseTailHold,
     mouseTailHoldAt,
-    terminalResponseTailAfterEscFlushAt:
-      isFlush &&
-      keys.some(
-        key =>
-          key.kind === 'key' &&
-          key.name === 'escape' &&
-          key.sequence === '\x1b',
-      )
-        ? Date.now()
-        : undefined,
+    terminalResponseHoldAt,
+    terminalResponseTailAfterEscFlushAt: escapeFlushedNow ? Date.now() : undefined,
     _tokenizer: tokenizer,
   }
 
