@@ -360,6 +360,19 @@ type CopyRegionOperation = {
 const copyRegionIds = new WeakMap<DOMElement, number>()
 
 /**
+ * Copy text reaches the clipboard without passing through cells, so it never
+ * met the render path's control-character rules. Drop C0/C1 (newlines
+ * excepted: a block formula's source is multi-line) and the
+ * interlinear-annotation code points, which the copy pipeline reserves for
+ * its own row metadata.
+ */
+const COPY_TEXT_STRIP = /[\u0000-\u0009\u000b-\u001f\u007f-\u009f\uFFF9-\uFFFB]/g
+
+function cleanCopyText(value: string): string {
+  return value.replace(COPY_TEXT_STRIP, '')
+}
+
+/**
  * Single-slot cache for the one over-long line that grows every frame during
  * streaming (the current stream tail). CharCache excludes such lines
  * (MAX_CACHEABLE_LINE) because a cached entry is used for exactly one frame
@@ -958,10 +971,11 @@ export default class Output {
       // An image's backing cells are blank; one with copy text (a formula's
       // source) copies as that text, any other image is left out of copies.
       const copyText = node.attributes['imageCopyText']
-      if (typeof copyText === 'string' && copyText !== '') {
+      const copied = typeof copyText === 'string' ? cleanCopyText(copyText) : ''
+      if (copied !== '') {
         let id = copyRegionIds.get(node)
         if (id === undefined) copyRegionIds.set(node, id = allocateCopyRegionId())
-        this.operations.push({ type: 'copyRegion', region, text: copyText, id })
+        this.operations.push({ type: 'copyRegion', region, text: copied, id })
       }
       else this.noSelect(region)
     }

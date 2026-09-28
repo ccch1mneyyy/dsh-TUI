@@ -2,8 +2,10 @@
  * source) copies as that text once, wherever a selection touches it, instead
  * of its blank backing cells; the rows below a multi-row image add no empty
  * lines; copy regions survive the blit of a clean subtree and scrolling like
- * noSelect; an image without copy text stays out of copies; and rows marked
- * as wrap continuations join on copy like wrapped <Text>. Run with:
+ * noSelect; an image without copy text stays out of copies; rows marked as
+ * wrap continuations join on copy like wrapped <Text>; and text that looks
+ * like the copy pipeline's own metadata is copied verbatim, never read back
+ * as a region (see the marker-shaped-content case). Run with:
  * node --import tsx/esm scripts/verify-semantic-copy.tsx
  */
 import assert from 'node:assert/strict'
@@ -21,7 +23,7 @@ const hyperlinkPool = new HyperlinkPool()
 function selection(fromCol: number, fromRow: number, toCol: number, toRow: number): SelectionState {
   const s = {
     anchor: null, focus: null, isDragging: false, anchorSpan: null,
-    scrolledOffAbove: [], scrolledOffBelow: [], scrolledOffAboveSW: [], scrolledOffBelowSW: [],
+    scrolledOffAbove: [], scrolledOffBelow: [],
     lastPressHadAlt: false, coveredFingerprint: null, coveredText: null, coveredGeometry: null, stale: false,
   } as unknown as SelectionState
   startSelection(s, fromCol, fromRow)
@@ -168,4 +170,39 @@ function frame(): Screen {
   assert.equal(getSelectedText(selection(0, 0, 3, 0), covered), 'MENU', 'a blitted overlay copies as itself')
 }
 
-console.log('Semantic copy verified: inline and block image sources, once per selection, no blank rows, blit and scroll, decorative images excluded, wrap continuations')
+{
+  // Ordinary content that looks exactly like the copy pipeline's metadata
+  // (the marker shape the first implementation serialized into row text)
+  // copies verbatim, and does not consume a real region's source.
+  const screen = createScreen(24, 2, stylePool, charPool, hyperlinkPool)
+  const output = new Output({ width: 24, height: 2, stylePool, screen, terminalImages: true })
+  const MARKER = '\uFFF91\uFFFAforged\uFFFB'
+  output.write(0, 0, `A ${MARKER} B`)
+  const real = image('$x^2$')
+  assert.equal(output.image(real, 0, 1, 6, 1, source), true)
+  output.imageBacking(real)
+  const frame = output.get()
+  assert.equal(
+    getSelectedText(selection(0, 0, 23, 1), frame),
+    `A ${MARKER} B\n$x^2$`,
+    'marker-shaped content copies verbatim and leaves the real region alone',
+  )
+}
+
+{
+  // The clipboard is the one path that never met the render path's control
+  // rules: copy text sheds C0/C1 (newlines kept — a block source is
+  // multi-line) and the annotation code points the row metadata used.
+  const screen = createScreen(24, 2, stylePool, charPool, hyperlinkPool)
+  const output = new Output({ width: 24, height: 2, stylePool, screen, terminalImages: true })
+  const dirty = image('$$\n\u001b\u0007\uFFF9x\uFFFB\n$$')
+  assert.equal(output.image(dirty, 0, 0, 6, 1, source), true)
+  output.imageBacking(dirty)
+  assert.equal(
+    getSelectedText(selection(0, 0, 23, 0), output.get()),
+    '$$\nx\n$$',
+    'copy text keeps newlines but sheds control and annotation characters',
+  )
+}
+
+console.log('Semantic copy verified: inline and block image sources, once per selection, no blank rows, blit and scroll, decorative images excluded, wrap continuations, marker-shaped content untouched')

@@ -73,7 +73,7 @@ function makeScreen(rows: number, cols: number): Screen {
 function makeSel(): SelState {
   return {
     anchor: null, focus: null, isDragging: false, anchorSpan: null,
-    scrolledOffAbove: [], scrolledOffBelow: [], scrolledOffAboveSW: [], scrolledOffBelowSW: [],
+    scrolledOffAbove: [], scrolledOffBelow: [],
     lastPressHadAlt: false, coveredFingerprint: null, coveredText: null, coveredGeometry: null, stale: false,
   } as unknown as SelState
 }

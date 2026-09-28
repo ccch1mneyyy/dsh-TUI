@@ -48,6 +48,7 @@ import {
   shiftSelectionForViewportTranslation,
   updateSelection,
   type ScrollEvent,
+  type SelectionRow,
   type SelectionState,
 } from '../src/ink/selection.js'
 
@@ -74,6 +75,16 @@ function check(name: string, actual: unknown, expected: unknown): void {
 /** One synthetic transcript line tagged `O{row}` (pre frame) / `N{row}` (post frame). */
 function rowText(tag: string): string {
   return `${tag} transcript`
+}
+
+/** An accumulator entry: extracted text + its wrap bit + any copy regions. */
+function row(text: string, sw = false): SelectionRow {
+  return { text, sw, regions: [] }
+}
+
+/** Accumulator entries are compared by the text they contribute. */
+function texts(rows: readonly SelectionRow[]): string[] {
+  return rows.map(entry => entry.text)
 }
 
 /**
@@ -191,14 +202,14 @@ function applyFollowDrain(
     row: 9,
   })
   check('C1 virtual anchor tracks the pre-clamp row', sel.virtualAnchorRow, 11)
-  check('C1 bottom band (pill rows) captured from the PRE frame', sel.scrolledOffBelow, [
+  check('C1 bottom band (pill rows) captured from the PRE frame', texts(sel.scrolledOffBelow), [
     rowText('O10'),
     rowText('O11'),
   ])
 
   // Same frame's wheel drain — anchor is in-viewport again, follow resumes:
   applyFollowDrain(sel, pre, -2, 1, 9)
-  check('C1 drain captured the bottom edge band', sel.scrolledOffBelow, [
+  check('C1 drain captured the bottom edge band', texts(sel.scrolledOffBelow), [
     rowText('O08'),
     rowText('O09'),
     rowText('O10'),
@@ -237,8 +248,7 @@ function applyFollowDrain(
     rowText('O09'),
     rowText('O10'),
     rowText('O11'),
-  ]
-  sel.scrolledOffBelowSW = [false, false, false, false]
+  ].map(entry => row(entry))
 
   // Pill + header unmount: viewport re-widens [1..9] → [0..11], no scroll.
   const post = buildScreen({
@@ -249,7 +259,7 @@ function applyFollowDrain(
     11: rowText('O09'),
   })
   shiftSelectionForViewportResize(sel, post, 1, 9, 0, 11)
-  check('C2 re-widening popped the returned rows from the accumulator', sel.scrolledOffBelow, [
+  check('C2 re-widening popped the returned rows from the accumulator', texts(sel.scrolledOffBelow), [
     rowText('O10'),
     rowText('O11'),
   ])
@@ -280,11 +290,10 @@ function applyFollowDrain(
   const pre = buildScreen({ 0: rowText('O00') })
   const sel = makeSelection({ col: 0, row: 0 }, { col: 5, row: 4 }, true)
   sel.virtualAnchorRow = -2
-  sel.scrolledOffAbove = [rowText('O-2'), rowText('O-1')]
-  sel.scrolledOffAboveSW = [false, false]
+  sel.scrolledOffAbove = [rowText('O-2'), rowText('O-1')].map(entry => row(entry))
 
   shiftSelectionForViewportResize(sel, pre, 0, 11, 1, 11)
-  check('C3 top band captured above the debt', sel.scrolledOffAbove, [
+  check('C3 top band captured above the debt', texts(sel.scrolledOffAbove), [
     rowText('O-2'),
     rowText('O-1'),
     rowText('O00'),
@@ -300,7 +309,7 @@ function applyFollowDrain(
   const sel = makeSelection({ col: 3, row: 10 }, { col: 6, row: 11 }, false)
   shiftSelectionForViewportResize(sel, pre, 0, 11, 0, 9)
   check('C4 selection cleared when both ends are under the band', hasSelection(sel), false)
-  check('C4 accumulators discarded with the selection', sel.scrolledOffBelow, [])
+  check('C4 accumulators discarded with the selection', texts(sel.scrolledOffBelow), [])
 }
 
 // ── Case 5: bare press (no drag motion yet, focus null) + pill mounts —
@@ -338,12 +347,11 @@ function applyFollowDrain(
 {
   const pre = buildScreen({ 5: rowText('O05'), 6: rowText('O06') })
   const sel = makeSelection({ col: 3, row: 5 }, { col: 6, row: 6 }, false)
-  sel.scrolledOffBelow = [rowText('O07')]
-  sel.scrolledOffBelowSW = [false]
+  sel.scrolledOffBelow = [rowText('O07')].map(entry => row(entry))
   // new viewport [12..11]: height 0, top > bottom.
   shiftSelectionForViewportResize(sel, pre, 0, 11, 12, 11)
   check('C8 selection cleared on collapsed new viewport', hasSelection(sel), false)
-  check('C8 accumulators discarded with the selection', sel.scrolledOffBelow, [])
+  check('C8 accumulators discarded with the selection', texts(sel.scrolledOffBelow), [])
   check('C8 endpoints nulled', sel.anchor, null)
 }
 
@@ -373,17 +381,15 @@ function applyFollowDrain(
 // ── Case 11: released selection follows a positive viewport translation ──
 {
   const sel = makeSelection({ col: 2, row: 3 }, { col: 8, row: 6 }, false)
-  sel.scrolledOffAbove = [rowText('A-1')]
-  sel.scrolledOffAboveSW = [false]
-  sel.scrolledOffBelow = [rowText('B10')]
-  sel.scrolledOffBelowSW = [false]
-  const beforeAbove = [...sel.scrolledOffAbove]
-  const beforeBelow = [...sel.scrolledOffBelow]
+  sel.scrolledOffAbove = [rowText('A-1')].map(entry => row(entry))
+  sel.scrolledOffBelow = [rowText('B10')].map(entry => row(entry))
+  const beforeAbove = texts(sel.scrolledOffAbove)
+  const beforeBelow = texts(sel.scrolledOffBelow)
   const cleared = shiftSelectionForViewportTranslation(sel, 2, 0, 9, 2, 11)
   check('C11 released anchor follows translation', sel.anchor, { col: 2, row: 5 })
   check('C11 released focus follows translation', sel.focus, { col: 8, row: 8 })
-  check('C11 translation preserves above accumulator', sel.scrolledOffAbove, beforeAbove)
-  check('C11 translation preserves below accumulator', sel.scrolledOffBelow, beforeBelow)
+  check('C11 translation preserves above accumulator', texts(sel.scrolledOffAbove), beforeAbove)
+  check('C11 translation preserves below accumulator', texts(sel.scrolledOffBelow), beforeBelow)
   check('C11 translation does not clear active selection', cleared, false)
 }
 
@@ -429,11 +435,11 @@ function applyFollowDrain(
   check('C15 translated anchor is inside the new viewport', sel.anchor, { col: W - 1, row: 10 })
   applyFollowDrain(sel, screen, -2, 1, 10, 1)
   check('C15 wheel drain continues from the translated anchor', sel.virtualAnchorRow, 12)
-  check('C15 wheel drain maps capture rows to the PRE frame', sel.scrolledOffBelow, [
+  check('C15 wheel drain maps capture rows to the PRE frame', texts(sel.scrolledOffBelow), [
     rowText('O08'),
     rowText('O09'),
   ])
-  check('C15 wheel drain does not capture the adjacent PRE row', sel.scrolledOffBelow.includes(rowText('O10')), false)
+  check('C15 wheel drain does not capture the adjacent PRE row', texts(sel.scrolledOffBelow).includes(rowText('O10')), false)
   check('C15 focus remains at the mouse after both changes', sel.focus, { col: 0, row: 5 })
 }
 
