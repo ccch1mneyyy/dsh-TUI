@@ -10,9 +10,13 @@
  * Queue semantics mirror the official dsh-tui chat/questions machine: asks
  * arrive one at a time in practice (the tool blocks until answered), but
  * concurrent asks from subagents are drained FIFO.
+ *
+ * This store owns the INTERACTION only. The answered-questionnaire transcript
+ * record is a projection fact: it is folded from the persisted
+ * `tool/result` (`channel/question-record.ts`, issue #1009), never pushed from
+ * here, so it survives `/resume`, rewind and replay.
  */
 
-import { t } from '../i18n.js'
 import { compositionRoot } from './host-access.js'
 import {
   assertCapabilityShadowPolicy,
@@ -53,9 +57,10 @@ interface PendingQuestion {
   /** Uncommitted panel state by question index, used when navigating back. */
   readonly drafts: Array<QuestionDraft | undefined>
   /**
-   * Redact answer text in the transcript summary (e.g. a wizard asking for
-   * an API key): the summary lines show `••••••` instead of the raw text so
-   * secrets never reach the transcript or an `/export` dump.
+   * Redact answer text in the answered-questionnaire transcript record (e.g.
+   * a wizard asking for an API key): the record lines show `••••••` instead
+   * of the raw text so secrets never reach the transcript or an `/export`
+   * dump. Only LOCAL wizards set it — the model-side ask carries no such flag.
    */
   readonly redact?: boolean
   resolve: (answer: AskUserQuestionAnswer) => void
@@ -78,12 +83,6 @@ export interface QuestionSnapshot {
   readonly draft?: QuestionDraft
   /** Whether Esc should navigate to the previous question. */
   readonly canGoBack: boolean
-}
-
-/** Completed batch summary, pushed into the transcript by the caller. */
-export interface QuestionSummary {
-  readonly title: string
-  readonly lines: readonly string[]
 }
 
 const questionStores = new WeakMap<object, QuestionStore>()
@@ -109,12 +108,6 @@ const ASK_ABORTED = 'ASK_ABORTED'
  */
 const ASK_CANCELLED = 'ASK_CANCELLED'
 
-/** Truncate a long answer line for the transcript summary. */
-function clip(text: string, max = 140): string {
-  if (text.length <= max) return text
-  return `${text.slice(0, max)}…`
-}
-
 function isDefined<T>(value: T | undefined): value is T {
   return value !== undefined
 }
@@ -128,27 +121,6 @@ function copyDraft(draft: QuestionDraft): QuestionDraft {
 
 function selectionFromAnswer(answer: AskUserQuestionAnswerItem): QuestionDraft {
   return copyDraft(answer)
-}
-
-function buildSummary(pending: PendingQuestion): QuestionSummary {
-  const lines = pending.request.questions.flatMap((question, index) => {
-    const answer = pending.answers[index]
-    if (answer === undefined) return []
-    const text = pending.redact
-      ? '••••••'
-      : (() => {
-          const labels = answer.selected.join('、')
-          return answer.custom !== undefined && answer.custom !== ''
-            ? labels === '' ? answer.custom : `${labels}：${answer.custom}`
-            : labels
-        })()
-    return `· ${question.question} → ${clip(text)}`
-  })
-  const total = pending.request.questions.length
-  return {
-    title: t('questionnaire-answered', { total }),
-    lines,
-  }
 }
 
 /**
@@ -167,8 +139,6 @@ export class QuestionStore {
   private active: PendingQuestion | undefined
   private readonly listeners = new Set<() => void>()
   private batchSeq = 0
-  /** Completed batch summaries, drained by the TUI into the transcript. */
-  private summaries: QuestionSummary[] = []
   /**
    * Cached snapshot: useSyncExternalStore requires a stable reference while
    * nothing changed (a fresh object per call would loop re-renders).
@@ -193,16 +163,6 @@ export class QuestionStore {
    */
   getSnapshot(): QuestionSnapshot | null {
     return this.snapshotCache
-  }
-
-  /**
-   * Take (and clear) every completed batch summary for the transcript.
-   * @returns The summaries collected since the last take.
-   */
-  takeSummaries(): QuestionSummary[] {
-    const summaries = this.summaries
-    this.summaries = []
-    return summaries
   }
 
   private emit(): void {
@@ -239,8 +199,8 @@ export class QuestionStore {
    * model runs the `ask_user_question` tool, and by local wizards (e.g.
    * `/provider`) driving the same panel.
    * @param request - The ask request: questions plus optional abort signal.
-   * @param options - `redact` hides answer text from the transcript summary
-   *   (use for batches that collect secrets such as API keys).
+   * @param options - `redact` hides answer text from the answered-questionnaire
+   *   transcript record (use for batches that collect secrets such as API keys).
    * @returns A promise settling with the collected answers when the user
    *   submits the batch, or rejecting when the ask is interrupted.
    */
@@ -306,12 +266,13 @@ export class QuestionStore {
     pending.drafts[pending.index] = copyDraft(selection)
     pending.index += 1
     if (pending.index >= pending.request.questions.length) {
-      // Batch complete: settle the harness promise, remember a transcript
-      // summary, and drain the next queued ask if any.
+      // Batch complete: settle the harness promise and drain the next queued
+      // ask if any. The transcript record is NOT written here — it is
+      // projected from the persisted `tool/result` (issue #1009), so it
+      // survives `/resume`, rewind and every replay.
       const answers = pending.answers.filter(isDefined)
       this.active = undefined
       pending.resolve({ answers })
-      this.summaries.push(buildSummary(pending))
       this.startNext()
     }
     this.rebuildSnapshot()

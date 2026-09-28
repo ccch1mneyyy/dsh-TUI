@@ -249,8 +249,8 @@ The command menu = built-in commands (50) + DSH registry commands (`/plan` `/goa
 |---|---|---|
 | `/context` | none | loaded-context detail (instructions/runtime context/skills/tools etc.) |
 | `/status` | none | model+effort, working/idle, session id, dir+git branch, token, cache hit rate, context percentage, session title |
-| `/cost` | none | token usage + cache hit rate (DSH provides no cost metering) |
-| `/balance` | none | DeepSeek official account balance (free read-only API): summary line + hover detail, click refresh, `×` close |
+| `/cost` | none | token usage + cache hit rate + a session estimate (subagent usage included) split into main/subagent; unofficial or unlisted models show tokens only and are marked unpriced (**an estimate — the platform bill is authoritative**) |
+| `/balance` | none | DeepSeek official account balance (free read-only API): summary line + hover detail (same session-estimate split: main/subagent/unpriced), click refresh, `×` close |
 | `/config` | none | config sources: `cordis.patch.yml` path, launch method, model routing |
 | `/doctor` | none | environment check |
 | `/migrate` | `[agent] [--dry-run]` | import conversation history from other coding agents (claude-code/codex/omp/zcode/grok-build); runs in a child process — see [Session migration](migrate.en.md) |
@@ -446,8 +446,10 @@ An empty session shows the whale logo area at the top (scrolls away with the con
 
 **Row 2 — status field row** (each field toggled separately, see `/settings`)
 - left group: model → TPS → thinking → mode → ctx → cache hit rate → tokens (`1.2k→340` input→output) →
-  cost (`≈¥0.05 谷`, **an estimate, the platform bill is authoritative**,
-  official models only)
+  cost (`≈¥0.05 谷`, **a session estimate** that includes subagent usage, priced per
+  each agent's model × peak/idle × cache components; hover splits main ¥ / subagent ¥ / unpriced N tok;
+  unofficial or unlisted models show tokens only and are marked unpriced;
+  **the platform bill is authoritative**)
 - right group: git branch → working directory (basename only in compact mode) → session title → short session ID (`#` + first 8 chars, for `--resume`)
 - `statusBar.compact` merges the two sides into one row.
 - Default on: compact, model, thinking, cwd, contextUsage, cache, cost, goal, contextBar.

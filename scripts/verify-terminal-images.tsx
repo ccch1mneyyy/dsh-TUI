@@ -410,6 +410,15 @@ assert.equal(refusedManager.handleResponse(952, 'ENOENT'), false, 'ENOENT right 
 assert.equal(refusedManager.reconcile([refusedPlacement]), '', 'no further uploads or placements')
 clock += 60_000
 assert.equal(refusedManager.handleResponse(952, 'ENOENT'), false, 'an abandoned image stays abandoned')
+// A clear drops what the terminal held, including the verdict: the image is
+// re-sent and may recover once more, but the refusal window still applies.
+refusedManager.invalidateAll()
+assert.match(refusedManager.reconcile([refusedPlacement]), /a=t,t=d,f=32,[^;]*i=952,/u, 'a clear re-sends an abandoned image')
+assert.equal(refusedManager.handleResponse(952, 'ENOENT'), true, 'after a clear, an eviction recovers again')
+assert.match(refusedManager.reconcile([refusedPlacement]), /a=t,t=d,f=32,[^;]*i=953,/u)
+clock += 100
+assert.equal(refusedManager.handleResponse(953, 'ENOENT'), false, 'a refusal right after that retry abandons it again')
+assert.equal(refusedManager.reconcile([refusedPlacement]), '', 'still no upload loop')
 // A later, ordinary eviction of a healthy image still recovers.
 const evictedManager = new KittyGraphicsManager({ firstImageId: 961, now: () => clock })
 const evictedPlacement = { ...placement, node: createNode('ink-image') }

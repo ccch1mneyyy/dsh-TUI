@@ -39,20 +39,18 @@ export const DEEPSEEK_MODEL_PRICES: Readonly<Record<string, DeepSeekModelPrice>>
     inputHit: [0.02, 0.04],
     output: [4.0, 8.0],
   },
+  // issue #857：官方已按 Flash 价计费 V4.1-Flash 的正式 id 与 vision 实验 id；
+  // V4-Pro 已下线，不再保留价目行（未收录 → priceForModel 返回 undefined，
+  // 界面只展示 token、不给金额）。
   'deepseek-v4-flash': {
-    inputMiss: [1.5, 3.0],
-    inputHit: [0.05, 0.10],
-    output: [4.5, 9.0],
-  },
-  'deepseek-v4-pro': {
-    inputMiss: [4.5, 9.0],
-    inputHit: [0.15, 0.30],
-    output: [13.5, 27.0],
+    inputMiss: [1.0, 2.0],
+    inputHit: [0.02, 0.04],
+    output: [4.0, 8.0],
   },
   'deepseek-v4-flash-vision-exp': {
-    inputMiss: [1.5, 3.0],
-    inputHit: [0.05, 0.10],
-    output: [4.5, 9.0],
+    inputMiss: [1.0, 2.0],
+    inputHit: [0.02, 0.04],
+    output: [4.0, 8.0],
   },
 }
 
@@ -183,4 +181,170 @@ export function estimateSessionCostCny(
   model: string,
 ): number | undefined {
   return estimateSessionCostSplitCny(tokens, model)?.total
+}
+
+/** 一笔增量 usage（durable assistant/message.usage 的计价字段）。 */
+export type CostUsageDelta = Partial<CostTokenTotals>
+
+/** 空的峰谷分桶（新模型 / 新会话累计起点）。 */
+export function emptyCostBuckets(): CostTokenBuckets {
+  return {
+    peak: { ...EMPTY_TOTALS },
+    idle: { ...EMPTY_TOTALS },
+  }
+}
+
+/** 深拷贝分桶，供快照镜像（调用方拿到后修改不得影响累计源）。 */
+export function cloneCostBuckets(buckets: CostTokenBuckets): CostTokenBuckets {
+  return {
+    peak: { ...(buckets.peak ?? EMPTY_TOTALS) },
+    idle: { ...(buckets.idle ?? EMPTY_TOTALS) },
+  }
+}
+
+/**
+ * 把一笔 usage 按计价时段累加进分桶（in-place）。durable 事件按发生时刻
+ * 落桶，峰/谷单价不同；cacheRead/cacheWrite 作为分项保留（cacheRead 计价
+ * 时按命中价，见 costSplit）。
+ */
+export function addUsageToCostBuckets(
+  buckets: CostTokenBuckets,
+  usage: CostUsageDelta,
+  peak: boolean,
+): void {
+  const bucket = peak ? buckets.peak : buckets.idle
+  bucket.input += usage.input ?? 0
+  bucket.output += usage.output ?? 0
+  bucket.cacheRead += usage.cacheRead ?? 0
+  bucket.cacheWrite += usage.cacheWrite ?? 0
+}
+
+/** 一笔待计价用量：provider 决定官方与否，model 查价目，buckets 为峰谷分桶。 */
+export interface CostBucketEntry {
+  readonly provider: string
+  readonly model: string
+  readonly buckets: CostTokenBuckets
+  /** 展示分侧（主会话 / 子代理）；缺省按主会话处理（兼容旧调用）。 */
+  readonly scope?: 'main' | 'subagent'
+}
+
+/** 多模型桶计价选项。 */
+export interface EstimateCostOptions {
+  /** 默认 true：非官方 provider 一律不估价（只计入 unpriced）。false 时
+   *  非官方 provider 也按 model 价目估算（调用方自担口径）。 */
+  readonly officialOnly?: boolean
+}
+
+/** 多模型桶计价结果：金额按展示分侧拆解，未计价 token 单独上报。 */
+export interface SessionCostEstimate {
+  /** 已计价总额（元）＝ main + subagent。 */
+  readonly total: number
+  /** 主会话部分（元）。 */
+  readonly main: number
+  /** 子代理部分（元）。 */
+  readonly subagent: number
+  /** 高峰时段部分（元）。 */
+  readonly peak: number
+  /** 空闲时段部分（元）。 */
+  readonly idle: number
+  /** 未能计价的用量 token（非官方 provider / 价目未收录）：只展示，不计金额。 */
+  readonly unpricedTokens: number
+}
+
+/** 分桶里的计价 token 总数（input 含 cacheRead，与既有显示口径一致）。 */
+function bucketTokenTotal(buckets: CostTokenBuckets): number {
+  const peak = buckets.peak ?? EMPTY_TOTALS
+  const idle = buckets.idle ?? EMPTY_TOTALS
+  return peak.input + peak.output + idle.input + idle.output
+}
+
+/**
+ * 多模型桶计价纯函数：逐条目查价求和，金额按 scope 拆成主会话/子代理，
+ * 非官方 provider 或未收录模型计入 unpriced（只上报 token，不给金额）。
+ * 所有条目都是零 token 时返回 undefined（调用方不显示金额）。
+ * 空 provider 表示旧快照/测试桩（生产契约里 provider 恒有）——不武断视为
+ * 非官方，按 model 价目估算，避免既有展示静默少算。
+ */
+export function estimateCostFromBucketsCny(
+  entries: readonly CostBucketEntry[],
+  options: EstimateCostOptions = {},
+): SessionCostEstimate | undefined {
+  const officialOnly = options.officialOnly !== false
+  let total = 0
+  let main = 0
+  let subagent = 0
+  let peak = 0
+  let idle = 0
+  let unpricedTokens = 0
+  let tokenCount = 0
+  for (const entry of entries) {
+    const tokens = bucketTokenTotal(entry.buckets)
+    tokenCount += tokens
+    const priceable = !officialOnly
+      || entry.provider === ''
+      || isDeepSeekOfficialProvider(entry.provider)
+    const price = priceable ? priceForModel(entry.model) : undefined
+    if (price === undefined) {
+      unpricedTokens += tokens
+      continue
+    }
+    const split = costSplit(entry.buckets, price)
+    const amount = (split.peak + split.idle) / 1_000_000
+    total += amount
+    peak += split.peak / 1_000_000
+    idle += split.idle / 1_000_000
+    if (entry.scope === 'subagent') subagent += amount
+    else main += amount
+  }
+  if (tokenCount <= 0) return undefined
+  return { total, main, subagent, peak, idle, unpricedTokens }
+}
+
+/** 费用估算输入：主会话按模型桶 + 子代理按 (provider, model) 桶。 */
+export interface SessionCostInput {
+  /** 主会话当前 provider（主会话条目的官方判定；空串 = 旧快照）。 */
+  readonly provider: string
+  /** 主会话按模型分桶（ChannelState.mainCost）。 */
+  readonly main?: Readonly<Record<string, CostTokenBuckets>> | undefined
+  /** 子代理按 (provider, model) 分桶（ChannelState.subagentCost）。 */
+  readonly subagents?: readonly {
+    readonly provider: string
+    readonly model: string
+    readonly buckets: CostTokenBuckets
+  }[] | undefined
+  /** main 缺失/为空时的回退 token（旧快照/测试桩没有 mainCost 时用
+   *  channel.tokens + 当前模型，保持既有展示不消失）。 */
+  readonly fallbackTokens?: CostTokenBuckets | undefined
+  readonly fallbackModel?: string | undefined
+}
+
+/**
+ * 汇总一次费用估算的输入条目：主会话按模型分桶优先；没有分桶的旧快照
+ * 回退到 `channel.tokens` + 当前模型（不叠加，避免双计）；子代理条目
+ * 追加在后。纯函数，不修改入参。
+ */
+export function collectSessionCostEntries(input: SessionCostInput): CostBucketEntry[] {
+  const entries: CostBucketEntry[] = []
+  const main = input.main ?? {}
+  const mainModels = Object.keys(main)
+  if (mainModels.length > 0) {
+    for (const model of mainModels) {
+      const buckets = main[model]
+      if (buckets !== undefined) entries.push({ provider: input.provider, model, buckets, scope: 'main' })
+    }
+  } else if (input.fallbackTokens !== undefined && input.fallbackModel !== undefined && input.fallbackModel !== '') {
+    entries.push({ provider: input.provider, model: input.fallbackModel, buckets: input.fallbackTokens, scope: 'main' })
+  }
+  for (const subagent of input.subagents ?? []) {
+    entries.push({ provider: subagent.provider, model: subagent.model, buckets: subagent.buckets, scope: 'subagent' })
+  }
+  return entries
+}
+
+/** collectSessionCostEntries + estimateCostFromBucketsCny 的展示侧捷径。 */
+export function estimateSessionCostSnapshotCny(
+  input: SessionCostInput,
+  options: EstimateCostOptions = {},
+): SessionCostEstimate | undefined {
+  return estimateCostFromBucketsCny(collectSessionCostEntries(input), options)
 }

@@ -33,6 +33,7 @@ export function createBackgroundCurrentAction(
     rowIds: { value: number }
     resetProjector(): void
     resetSubagents(): void
+    parkSubagents(agent: AgentHandle['agent']): void
     resetJobs(): void
     refreshEffortLevels(): void
     bindAgent(): void
@@ -93,6 +94,7 @@ export function createBackgroundCurrentAction(
       try {
         const result = deps.binding.adopt<BackgroundResult>(handle, adoption, (previous, disposePrevious) => {
           const previousSessionId = String(previous.agent.session.id)
+          deps.parkSubagents(previous.agent)
           if (previous.handle !== undefined) {
             deps.backgroundHandles.set(previousSessionId, previous.handle)
             disposePrevious('park')

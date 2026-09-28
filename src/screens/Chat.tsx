@@ -66,6 +66,7 @@ import { AutoRecapRow } from '../components/AutoRecapRow.js'
 import { CompactionStatusRow } from '../components/CompactionStatusRow.js'
 import { BalanceReportRow } from '../components/BalanceReportRow.js'
 import type { BalanceResult } from '../deepseekBalance.js'
+import { estimateSessionCostSnapshotCny } from '../deepseekPricing.js'
 import { LoadedContextPanel } from '../components/LoadedContextPanel.js'
 import { StatusLine } from './StatusLine.js'
 import { WorkingSpinner, useThinkingStatus } from '../components/WorkingSpinner.js'
@@ -117,7 +118,6 @@ import instances from '../ink/instances.js'
 import { useAnimationFrame } from '../ink/hooks/use-animation-frame.js'
 import { useExternalVersion } from '../hooks/useExternalVersion.js'
 import { TrajectoryScene } from './TrajectoryScene.js'
-import { resumeFailureText } from '../sessions/resumeFailure.js'
 import { markHomeSeen } from '../homePrefs.js'
 import { extendTrajectory, projectWave, type TrajBuild } from '../dsh-adapter/trajectory/index.js'
 import { miniWakeWidth } from '../components/trajectory/MiniWake.js'
@@ -443,18 +443,6 @@ export function Chat({
       channel.notify(t('ext-shortcut-failed', { combo }), { color: 'error', timeoutMs: 4000 })
     })
   }, [extensionShortcuts, channel])
-  // When a questionnaire batch completes, fold a Q&A summary into the
-  // transcript (the tool card itself is hidden from the message list).
-  const questionOpenRef = React.useRef(questionSnapshot !== null)
-  React.useEffect(() => {
-    const wasOpen = questionOpenRef.current
-    questionOpenRef.current = questionSnapshot !== null
-    if (wasOpen && questionSnapshot === null) {
-      for (const summary of questionStore.takeSummaries()) {
-        channel.pushLocal(summary.title, summary.lines)
-      }
-    }
-  }, [channel, questionSnapshot, questionStore])
   const [expanded, setExpanded] = React.useState(false)
   const [helpOpen, setHelpOpen] = React.useState(false)
   const [handle, setHandle] = React.useState<ScrollBoxHandle | null>(null)
@@ -893,14 +881,14 @@ export function Chat({
    * renders with stale folds/expansion/selection — the "entered a freshly
    * dispatched session and it renders wrong" bug. Reset the same set `/new`
    * resets, plus the search overlay and the side question, and repaint the
-   * transcript from the top.
+   * transcript pinned to the bottom so rewinds and model switches can continue.
    */
   const repaintTranscript = (): void => {
     const ink = instances.get(process.stdout) ?? instances.values().next().value
     // Wait one task so React commits the new session's tree before the
     // scrollback clear repaints (same pattern as `/new`).
     setTimeout(() => {
-      handle?.scrollTo(0)
+      handle?.scrollToBottom()
       ink?.clearScrollbackAndRedraw()
     }, 0)
   }
@@ -2412,7 +2400,28 @@ export function Chat({
           const rate = total > 0 ? ((usage.cacheRead / total) * 100).toFixed(1) : '0.0'
           lines.push(t('cost-cache-hit-rate', { rate, read: formatTokens(usage.cacheRead), write: formatTokens(usage.cacheWrite) }))
         }
-        lines.push(t('cost-note'))
+        // 金额与拆解：主会话按模型分桶 + 子代理按各自 (provider, model) 分桶；
+        // 全部未计价时只报 token 并标注未计价，不显示 ¥0.00 金额行（DESIGN D4/D6）。
+        const estimate = estimateSessionCostSnapshotCny({
+          provider: channel.provider,
+          main: channel.mainCost,
+          subagents: channel.subagentCost,
+          fallbackTokens: channel.tokens,
+          fallbackModel: channel.model,
+        })
+        // 金额行与末尾口径共用同一判定：有已计价金额才显示金额行与"估算非账单"
+        // 文案；无金额（无用量 / 全部未计价）只解释 token（#1089）。
+        const hasAmount = estimate !== undefined && estimate.total > 0
+        if (estimate !== undefined) {
+          if (hasAmount) {
+            lines.push(t('cost-session-estimate', { cost: estimate.total.toFixed(2) }))
+            lines.push(`${t('cost-split-main', { cost: estimate.main.toFixed(2) })} · ${t('cost-split-subagent', { cost: estimate.subagent.toFixed(2) })}`)
+          }
+          if (estimate.unpricedTokens > 0) {
+            lines.push(t('cost-unpriced', { tokens: formatTokens(estimate.unpricedTokens) }))
+          }
+        }
+        lines.push(t(hasAmount ? 'cost-note' : 'cost-note-no-amount'))
         setHelpOpen(false)
         channel.pushLocal('/cost', lines)
         return true
@@ -4199,18 +4208,16 @@ export function Chat({
         approval={approvalSnapshot}
         onApprove={outcome => approvals.decide(outcome)}
         onOpenSession={async (sessionId) => {
+          // A refusal is reported by the screen itself (see `openSession`):
+          // the composer that draws channel notifications is not mounted here.
           const result = await channel.resumeTo(sessionId)
-          if (!result.ok) {
-            const text = resumeFailureText(result)
-            if (text !== undefined) channel.notify(text, { color: 'error', timeoutMs: 8000 })
-            return false
-          }
+          if (!result.ok) return result
           channel.notify(t('resume-resumed'))
           suppressLogoIntroRef.current = true
           setAgentViewReturnId(undefined)
           setSupervisorOpen(false)
           repaintTranscript()
-          return true
+          return result
         }}
         onNewSession={async (target) => {
           const ok = await channel.switchWorkspace(target)
@@ -4611,6 +4618,9 @@ export function Chat({
             refreshing={balance.refreshing}
             tokens={channel.tokens}
             model={channel.model}
+            provider={channel.provider}
+            mainCost={channel.mainCost}
+            subagentCost={channel.subagentCost}
             onRefresh={runBalance}
             onDismiss={() => setBalance(null)}
           />

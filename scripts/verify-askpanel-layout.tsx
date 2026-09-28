@@ -10,6 +10,7 @@
  */
 export {} // 模块边界：避免顶层 await/全局名与其他 verify 脚本冲突
 
+import './lib/default-lang-zh.mjs'
 process.env.FORCE_COLOR = '3'
 // 固定中文 UI：本脚本的断言全部针对 zh 文案（自定义回答/提示行），
 // 不 pin 会随宿主 lang.json 或 locale 漂移（en 机器上必挂）。

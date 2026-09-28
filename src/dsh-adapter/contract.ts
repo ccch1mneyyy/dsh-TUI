@@ -77,6 +77,7 @@ export const UPSTREAM_BLESSED_PACKAGES = [
   '@deepseek-ai/dsh-llm',
   '@deepseek-ai/dsh-llm-pi-ai',
   '@deepseek-ai/dsh-persona',
+  '@deepseek-ai/dsh-scope',
   '@deepseek-ai/dsh-session',
   '@deepseek-ai/dsh-settings',
   '@deepseek-ai/dsh-skill',

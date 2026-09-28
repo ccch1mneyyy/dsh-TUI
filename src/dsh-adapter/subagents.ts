@@ -1,11 +1,19 @@
 import type { AssistantStreamFrame } from '@deepseek-ai/dsh-agent'
+import { addUsageToCostBuckets, cloneCostBuckets, emptyCostBuckets, isDeepSeekOfficialProvider, isPeakHour, priceForModel } from '../deepseekPricing.js'
 import { toolResultPayload } from './compat/messages.js'
-import type { SubagentState, SubagentStatus, SubagentOutputLine, SubagentOutputKind, SubagentToolCall, SubagentTokenUsage } from '../adapter/ports/channel-view.js'
-export type { SubagentState, SubagentStatus, SubagentOutputLine, SubagentOutputKind, SubagentToolCall, SubagentTokenUsage } from '../adapter/ports/channel-view.js'
+import type { CostTokenBuckets, SubagentCostEntry, SubagentState, SubagentStatus, SubagentOutputLine, SubagentOutputKind, SubagentToolCall, SubagentTokenUsage } from '../adapter/ports/channel-view.js'
+export type { SubagentState, SubagentStatus, SubagentOutputLine, SubagentOutputKind, SubagentToolCall, SubagentTokenUsage, SubagentCostEntry } from '../adapter/ports/channel-view.js'
 
 
 const MAX_OUTPUT_EVENTS = 160
 const MAX_OUTPUT_LINES = 160
+
+/** 子代理 durable 用量的费用快照：entries 供多模型计价，unpriced 是
+ *  非官方/未收录用量的独立副本（展示与回归断言用）。 */
+export interface SubagentCostSnapshot {
+  entries: SubagentCostEntry[]
+  unpriced: CostTokenBuckets
+}
 
 interface AssistantOutputStream {
   revision: number
@@ -23,6 +31,12 @@ export class SubagentActivityStore {
   private sessionToAgent = new Map<unknown, string>()
   private listeners = new Set<() => void>()
   private streams = new Map<string, AssistantOutputStream>()
+  /** 会话级 durable usage 费用桶，key = `${provider}\u0000${model}`。 */
+  private costByModel = new Map<string, SubagentCostEntry>()
+  /** 非官方 provider / 未收录模型的用量副本（只展示 token，不计金额）。 */
+  private costUnpriced = emptyCostBuckets()
+  /** 每个 agent 已消费的最大 durable 事件 seq（同一事件重投不重复计费）。 */
+  private costSeq = new Map<string, number>()
 
   private commitLine(agentId: string, kind: SubagentOutputKind, text: string): void {
     const state = this.states.get(agentId)
@@ -228,7 +242,7 @@ export class SubagentActivityStore {
 
   onSessionEvent(agentId: string, event: unknown): void {
     if (!event || typeof event !== 'object') return
-    const ev = event as { type?: string; seq?: number; data?: any }
+    const ev = event as { type?: string; seq?: number; time?: unknown; data?: any }
     const data = ev.data ?? {}
     switch (ev.type) {
       case 'assistant/chunk': {
@@ -240,7 +254,12 @@ export class SubagentActivityStore {
       }
       case 'assistant/message': {
         if (Array.isArray(data.stream)) this.settleAssistant(agentId, data.message?.content, data.turn, data.step, ev.seq)
-        if (data.usage) this.setTokens(agentId, data.usage)
+        if (data.usage) {
+          this.setTokens(agentId, data.usage)
+          // durable usage 才进费用累计：live assistant/chunk 的 usage 只更新
+          // 展示 token（见 setTokens 调用点），两路同时到达也只计这一路。
+          this.accumulateCost(agentId, data.usage, ev.time, ev.seq)
+        }
         break
       }
       case 'assistant/attempt': {
@@ -315,6 +334,72 @@ export class SubagentActivityStore {
     this.notify()
   }
 
+  /** durable usage 的计价字段；全零/非法返回 undefined（不建零桶）。 */
+  private costDeltaOf(usage: unknown): { input: number; output: number; cacheRead: number; cacheWrite: number } | undefined {
+    if (usage === null || typeof usage !== 'object') return undefined
+    const value = usage as {
+      inputTokens?: unknown
+      outputTokens?: unknown
+      cacheReadTokens?: unknown
+      cacheWriteTokens?: unknown
+      input?: unknown
+      output?: unknown
+    }
+    const count = (raw: unknown): number => typeof raw === 'number' && Number.isFinite(raw) && raw > 0 ? raw : 0
+    const delta = {
+      input: count(value.inputTokens ?? value.input),
+      output: count(value.outputTokens ?? value.output),
+      cacheRead: count(value.cacheReadTokens),
+      cacheWrite: count(value.cacheWriteTokens),
+    }
+    if (delta.input === 0 && delta.output === 0 && delta.cacheRead === 0 && delta.cacheWrite === 0) return undefined
+    return delta
+  }
+
+  /** 一笔 durable usage 按发生时刻落 peak/idle 桶，model/provider 取事件
+   *  发生时的子代理身份；非官方/未收录同时进 unpriced 副本。
+   *
+   *  `seq` 是同一 binding 内的事件序号：重放/回放把同一条 durable 事件再投
+   *  一次时只计第一笔（重投即双计会让"并入子代理"的估算凭空变大）。判据与
+   *  `settleAssistant` 的 `settledSeq` 同源但**各自独立**——两处都要消费
+   *  同一个 seq，共用字段会让后消费的那处被前一处挡掉。 */
+  private accumulateCost(agentId: string, usage: unknown, time: unknown, seq?: unknown): void {
+    const state = this.states.get(agentId)
+    const delta = this.costDeltaOf(usage)
+    if (state === undefined || delta === undefined) return
+    if (typeof seq === 'number') {
+      const consumed = this.costSeq.get(agentId)
+      if (consumed !== undefined && seq <= consumed) return
+      this.costSeq.set(agentId, seq)
+    }
+    const provider = state.provider ?? 'subagent'
+    const model = state.model ?? provider
+    const key = `${provider}\u0000${model}`
+    let entry = this.costByModel.get(key)
+    if (entry === undefined) {
+      entry = { provider, model, buckets: emptyCostBuckets() }
+      this.costByModel.set(key, entry)
+    }
+    const at = typeof time === 'number' ? new Date(time) : new Date()
+    const peak = isPeakHour(at)
+    addUsageToCostBuckets(entry.buckets, delta, peak)
+    if (!isDeepSeekOfficialProvider(provider) || priceForModel(model) === undefined) {
+      addUsageToCostBuckets(this.costUnpriced, delta, peak)
+    }
+  }
+
+  /** durable 用量的费用快照（深拷贝）：entries 供计价，unpriced 供展示。 */
+  costSnapshot(): SubagentCostSnapshot {
+    return {
+      entries: Array.from(this.costByModel.values()).map(entry => ({
+        provider: entry.provider,
+        model: entry.model,
+        buckets: cloneCostBuckets(entry.buckets),
+      })),
+      unpriced: cloneCostBuckets(this.costUnpriced),
+    }
+  }
+
   onCompleted(agentId: string, summary?: string, stopReason = 'completed', endedAt?: number): void { this.finish(agentId, 'completed', stopReason, summary, endedAt) }
   onFailed(agentId: string, error: string, endedAt?: number): void { this.finish(agentId, 'failed', error, undefined, endedAt) }
   onCancelled(agentId: string, reason = 'cancelled', summary?: string, endedAt?: number): void { this.finish(agentId, 'cancelled', reason, summary, endedAt) }
@@ -344,11 +429,15 @@ export class SubagentActivityStore {
 
   /** Drop all tracked subagents and session links (session swap: the old
    * session's children were disposed with their parent — nothing may keep
-   * routing events of a session the channel no longer projects). */
+   * routing events of a session the channel no longer projects). The
+   * session-scoped cost buckets reset with them. */
   reset(): void {
     this.states.clear()
     this.sessionToAgent.clear()
     this.streams.clear()
+    this.costByModel.clear()
+    this.costUnpriced = emptyCostBuckets()
+    this.costSeq.clear()
     this.notify()
   }
 

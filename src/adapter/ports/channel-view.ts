@@ -280,6 +280,31 @@ export interface TokenBucket {
   cacheWrite: number
 }
 
+/** 一个模型的峰谷计价桶（与 {@link TokenUsage} 的 peak/idle 同构）。 */
+export interface CostTokenBuckets {
+  peak: TokenBucket
+  idle: TokenBucket
+}
+
+/**
+ * 本会话主会话用量按模型分桶（费用估算输入，见 estimateCostFromBucketsCny）。
+ * `channel.tokens` 的语义与既有显示不变；本字段只服务计价，会话中途换模型时
+ * 历史用量留在原模型桶，不会被新模型重估。
+ */
+export interface SessionCostByModel {
+  [model: string]: CostTokenBuckets
+}
+
+/**
+ * 子代理 durable 用量按 (provider, model) 分桶——子代理各自模型不同，价格
+ * 也就不同；未计价判定由计价纯函数按 provider/model 完成。
+ */
+export interface SubagentCostEntry {
+  provider: string
+  model: string
+  buckets: CostTokenBuckets
+}
+
 /** A transient status message shown above the prompt input. */
 export interface NotificationItem {
   id: number

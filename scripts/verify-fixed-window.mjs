@@ -2,7 +2,7 @@
 /**
  * 固定 sleep 防回流门禁（issue #569，接在 verify:build 链里）。
  *
- * 扫描 scripts/run-ci-group.mjs 登记的全部脚本：每个 `sleep(` 调用点必须
+ * 扫描 scripts/run-ci-group.mjs 及语言矩阵登记的全部脚本：每个 `sleep(` 调用点必须
  * 带 `固定窗:<类别>` 标签（类别定义见 scripts/lib/term-test.mjs 头部）。
  * 标签位置二选一：
  *   - 同行尾注释：      `await sleep(300) // 固定窗:墙钟 等 250ms 节流冷却`
@@ -27,7 +27,10 @@ import { resolve, relative } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const ROOT = resolve(fileURLToPath(import.meta.url), '../..')
-const REGISTRY = resolve(ROOT, 'scripts/run-ci-group.mjs')
+const REGISTRIES = [
+  'scripts/run-ci-group.mjs',
+  'scripts/verify-regression-language.mjs',
+]
 const BASELINE = resolve(ROOT, 'scripts/fixed-window.baseline.json')
 
 const TAGS = ['探针', '墙钟', 'pacing', '待迁移']
@@ -42,9 +45,11 @@ const writeBaseline = argv.includes('--write-baseline')
 const explicit = argv.filter(a => !a.startsWith('--'))
 
 function registeredScripts() {
-  const src = readFileSync(REGISTRY, 'utf8')
   const found = new Set()
-  for (const m of src.matchAll(/scripts\/([A-Za-z0-9_.\/-]+\.(?:mjs|tsx|ts|js))/g)) found.add(m[1])
+  for (const registry of REGISTRIES) {
+    const src = readFileSync(resolve(ROOT, registry), 'utf8')
+    for (const m of src.matchAll(/scripts\/([A-Za-z0-9_.\/-]+\.(?:mjs|tsx|ts|js))/g)) found.add(m[1])
+  }
   return [...found].sort().map(f => resolve(ROOT, 'scripts', f))
 }
 

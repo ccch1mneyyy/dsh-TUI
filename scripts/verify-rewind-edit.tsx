@@ -4,6 +4,7 @@
  * inbox fixture follows 0.1.5's full-log projection (inherited insertions are
  * pending again when rewind cuts off the matching claim). Covers repeated
  * rewinds, next-turn/next-step cancellation and restore from the child log.
+ * Long retained history must stay at the bottom after rewind/model switches.
  * No model calls or user-profile writes.
  * Run: node --import tsx/esm scripts/verify-rewind-edit.tsx
  */
@@ -34,18 +35,18 @@ const [{ render, AlternateScreen }, { Chat }, { QuestionStore }, { createChannel
   import('../src/adapter/channel/ui.js'),
 ])
 
-function appendReply(session: Session, turn: number, message: UserMessage): void {
+function appendReply(session: Session, turn: number, message: UserMessage, text = 'Done'): void {
   session.append('step/start', { turn, step: 1 })
   session.append('user/message', message, { surfaceOp: 'append' })
   session.append('assistant/message', {
     turn, step: 1, stream: [],
-    message: createAssistantMessage({ source: { provider: 'fake', model: 'model' }, content: [{ type: 'text', text: 'Done' }] }),
+    message: createAssistantMessage({ source: { provider: 'fake', model: 'model' }, content: [{ type: 'text', text }] }),
   }, { surfaceOp: 'append' })
   session.append('step/end', { turn, step: 1 })
   session.append('turn/end', { turn, reason: { kind: 'completed' } })
 }
 
-async function verify(fullscreen: boolean, columns: number, entry: 'slash' | 'escape' | 'tree'): Promise<void> {
+async function verify(fullscreen: boolean, columns: number, entry: 'slash' | 'escape' | 'tree' | 'model'): Promise<void> {
   const terminal = new xterm.Terminal({ cols: columns, rows: 30, allowProposedApi: true })
   const stdout = Object.assign(new Writable({
     write(chunk, _encoding, callback) { terminal.write(String(chunk), callback) },
@@ -113,7 +114,9 @@ async function verify(fullscreen: boolean, columns: number, entry: 'slash' | 'es
     ...Session.create(SessionId('source')).header, createdAt: 1, cwd: home,
   })
   source.append('turn/start', { turn: 1 })
-  appendReply(source, 1, createUserMessage({ source: { kind: 'user' }, content: [{ type: 'text', text: '你好' }] }))
+  const retainedTail = 'RETAINED-TAIL'
+  const retainedReply = [...Array.from({ length: terminal.rows + 10 }, (_, i) => `Retained line ${i}`), retainedTail].join('\n')
+  appendReply(source, 1, createUserMessage({ source: { kind: 'user' }, content: [{ type: 'text', text: '你好' }] }), retainedReply)
   source.append('agent/inbox/spliced', {
     target: 'next-step', start: 0, inserted: [createUserMessage({
       source: { kind: 'plugin', plugin: 'probe' }, content: [{ type: 'text', text: 'Old step context' }],
@@ -156,7 +159,20 @@ async function verify(fullscreen: boolean, columns: number, entry: 'slash' | 'es
     stdin.write('\r')
   }
   try {
-    assert.ok(await settled(() => shows('你好')), 'initial transcript rendered')
+    assert.ok(await settled(() => shows(retainedTail) && !shows('你好')), 'long history starts at the bottom with its head offscreen')
+    if (entry === 'model') {
+      const previousAgentId = channel.agentId
+      assert.equal(await channel.switchModel('fake', 'other-model'), true, 'model switch succeeds')
+      assert.notEqual(channel.agentId, previousAgentId, 'model switch adopts a new agent')
+      assert.equal(channel.model, 'other-model')
+      assert.ok(await settled(() => shows('other-model')), 'new model is rendered before editing its draft')
+      stdin.write('draft after model switch')
+      assert.ok(await settled(() => promptShows('draft after model switch') && shows(retainedTail)), 'model switch and typing keep the transcript tail visible')
+      await sleep(150) // 固定窗:探针 延迟重绘不得把已经落底的模型切换视图拉回顶部
+      assert.ok(shows(retainedTail), 'model switch remains at the bottom after delayed repaint')
+      console.log(`PASS model switch/typing stays at bottom (${fullscreen ? 'fullscreen' : 'inline'}, ${columns} columns)`)
+      return
+    }
     stdin.write('hi')
     assert.ok(await settled(() => promptShows('hi')), 'original draft typed')
     await enter()
@@ -194,6 +210,7 @@ async function verify(fullscreen: boolean, columns: number, entry: 'slash' | 'es
         await enter()
       }
       assert.ok(await settled(() => forks.length === round + 1 && promptShows(prompt)), 'selected prompt restored')
+      assert.ok(await settled(() => shows(retainedTail)), 'rewind shows the bottom of the retained history')
       const child = forks[round]!
       const canceled = child.ownEvents().flatMap(event => event.type === 'agent/inbox/spliced' && event.data.outcome === 'canceled' ? [event.data.target] : [])
       assert.deepEqual(canceled, round === 0 ? ['next-step', 'next-turn'] : ['next-turn'], 'restored queues canceled in the child')
@@ -203,11 +220,13 @@ async function verify(fullscreen: boolean, columns: number, entry: 'slash' | 'es
       stdin.write('hihi')
       const edited = prompt + 'hihi'
       assert.ok(await settled(() => promptShows(edited)), 'edited text is visible')
+      await sleep(150) // 固定窗:探针 回填后继续编辑和延迟重绘不得让转录离开底部
+      assert.ok(shows(retainedTail), 'editing after rewind keeps the retained tail visible')
       await enter()
       assert.ok(await settled(() => delivered.length >= round + 2), 'edited prompt delivered')
       assert.deepEqual(delivered.map(item => item.text), round === 0 ? ['hi', 'hihihi'] : ['hi', 'hihihi', 'hihihihihi'], 'exactly one delivery per Enter, with no historical replay')
       assert.equal(delivered.at(-1)?.session, child, 'delivery targets the rewound session')
-      assert.ok(await settled(() => shows(edited)), 'edited user message rendered')
+      assert.ok(await settled(() => shows(edited) && shows('Done')), 'resending follows the new reply to the bottom')
       assert.deepEqual(child.deriveMessages().filter(message => message.role === 'user').map(message => message.content[0]), [
         { type: 'text', text: '你好' }, { type: 'text', text: edited },
       ], 'the selected original message is absent from the fork')
@@ -225,11 +244,20 @@ async function verify(fullscreen: boolean, columns: number, entry: 'slash' | 'es
 }
 
 try {
+  let failures = 0
   for (const fullscreen of [false, true]) {
     for (const columns of [40, 80]) {
-      for (const entry of ['slash', 'escape', 'tree'] as const) await verify(fullscreen, columns, entry)
+      for (const entry of ['slash', 'escape', 'tree', 'model'] as const) {
+        try {
+          await verify(fullscreen, columns, entry)
+        } catch (error) {
+          failures++
+          console.error(`FAIL (${fullscreen ? 'fullscreen' : 'inline'}, ${columns} columns, ${entry})`, error)
+        }
+      }
     }
   }
+  assert.equal(failures, 0, `${failures} rewind/model scenarios failed`)
 } finally {
   rmSync(home, { recursive: true, force: true })
 }

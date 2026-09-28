@@ -8,6 +8,8 @@ import { createChannelBinding } from '../src/dsh-adapter/channel/binding.js'
 import { createBindingEvents } from '../src/dsh-adapter/channel/binding-events.js'
 import { createModeActions } from '../src/dsh-adapter/channel/mode-actions.js'
 import { createChannelOwner } from '../src/dsh-adapter/channel/owner.js'
+import { scopeTarget } from '@deepseek-ai/dsh-scope'
+import { createSubagentProjection } from '../src/dsh-adapter/channel/subagent-projection.js'
 
 type Deferred<T> = { promise: Promise<T>; resolve(value: T): void }
 const deferred = <T>(): Deferred<T> => {
@@ -55,6 +57,10 @@ const state = {
 const selection: { current?: any; assembled?: any } = {}
 let projected = 0
 let childStarts = 0
+const childState = { rows: [], subagents: [], emit() { childStarts += 1 }, emitStream() {} }
+const subagents = createSubagentProjection(() => childState, {
+  rowIds: { value: 0 }, agent: () => binding.agent, subagents: () => undefined, lookupChild: () => undefined,
+})
 const events = createBindingEvents(ctx as never, {
   owner, binding, state: state as never,
   activity: { start() {}, stop() {}, onAgentStatus() {}, onSessionEvent() {} },
@@ -62,20 +68,33 @@ const events = createBindingEvents(ctx as never, {
   modelActions: { selection, async applyPreferredEffort() {} },
   modeActions: { refreshMode() {}, onSessionEvent() {} },
   projector: { renderEvent() { projected += 1 }, settleStreaming() {}, updateSpinnerMode() {} } as never,
-  subagents: { onSessionEvent() { return false }, onStart() { childStarts += 1 }, onEnd() {} },
+  subagents,
   agentView: { schedule() {} },
 })
 events.bind()
 const oldStatus = listeners.get('agent/status')![0]!
-const oldSession = listeners.get('session/event')![0]!
+const oldSession = listeners.get('session/event')!.at(-1)!
 const oldChild = listeners.get('subagent/start')![0]!
 const oldAssembly = assemblyListeners[0]!
 const assemblyGate = deferred<{ variables: Record<string, unknown> }>()
 selection.current = { provider: 'old', model: 'old-model' }
 const oldAssemblyResult = oldAssembly({}, {}, () => assemblyGate.promise)
 
-binding.switchTo(agentB as never, undefined, () => events.bind())
-binding.switchTo(agentA as never, undefined, () => events.bind())
+binding.switchTo(agentB as never, undefined, () => {
+  subagents.park(agentA as never)
+  subagents.reset()
+  events.bind()
+})
+assert.equal(listeners.get('subagent/start')?.length, 1, 'rebind does not duplicate owner subscriptions')
+oldChild.call(scopeTarget({}, agentA), { id: 'background-child', provider: 'p' })
+assert.equal(childStarts, 0, 'parent-scoped background child does not publish foreground changes')
+binding.switchTo(agentA as never, undefined, () => {
+  subagents.reset()
+  subagents.restore(agentA as never)
+  subagents.bootstrapFromLog([])
+  events.bind()
+})
+assert.equal(subagents.store.get('background-child')?.status, 'running', 'owner listener kept the explicitly routed background child')
 selection.assembled = { provider: 'new', model: 'new-model' }
 oldStatus({ agent: agentA, status: 'disposed' })
 oldSession(agentA.session, { type: 'assistant/chunk' })
@@ -84,15 +103,18 @@ assemblyGate.resolve({ variables: {} })
 await oldAssemblyResult
 assert.equal(state.status, 'idle', 'retained ABA status callback cannot mutate current state')
 assert.equal(projected, 0, 'retained ABA session callback cannot project into current binding')
-assert.equal(childStarts, 0, 'retained ABA child callback cannot mutate current child projection')
+assert.equal(childStarts, 0, 'unscoped unknown child cannot mutate current projection after ABA')
+oldChild.call(scopeTarget({}, agentA), { id: 'current-child', provider: 'p' })
+assert.equal(childStarts, 1, 'owner callback remains live after ABA only with an explicit parent')
 assert.deepEqual(selection.assembled, { provider: 'new', model: 'new-model' }, 'old assembly continuation cannot overwrite current selection')
 
 owner.dispose()
 oldStatus({ agent: agentA, status: 'disposed' })
 oldSession(agentA.session, { type: 'assistant/chunk' })
-oldChild({ id: 'postdispose', provider: 'p' })
+oldChild.call(scopeTarget({}, agentA), { id: 'postdispose', provider: 'p' })
 assert.equal(projected, 0, 'post-dispose retained session callback is inert')
-assert.equal(childStarts, 0, 'post-dispose retained child callback is inert')
+assert.equal(childStarts, 1, 'post-dispose retained child callback is inert')
+assert.equal(listeners.get('subagent/start')?.length, 0, 'owner teardown removes the child subscription')
 
 // Registration is incremental: request install throws after assemble succeeds,
 // and owner teardown still disposes the already-installed listener immediately.

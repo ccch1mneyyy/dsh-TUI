@@ -1,9 +1,10 @@
 /**
  * Regression gate for mixed dsh-web + dsh-tui profiles.
  *
- * The installed web-app is always checked. A source checkout supplies the
- * source-authoritative prerelease baseline; CI requires it instead of silently
- * skipping it.
+ * The installed web-app is always checked. A source checkout named by
+ * DSH_HARNESS_SOURCE_ROOT supplies the source-authoritative prerelease
+ * baseline (opt-in, never discovered: a stale sibling tree would fail the gate
+ * on a version nobody targets); CI requires it instead of silently skipping it.
  * Scoped TUI host rows must never collide with either bundle generation and
  * must yield to every official row that generation owns.
  */
@@ -33,14 +34,14 @@ const baselines = [{
   webPath: installedWebPath,
 }]
 
-const sourceRoot = process.env.DSH_HARNESS_SOURCE_ROOT === undefined
-  ? fileURLToPath(new URL('../../deepseek-harness/', import.meta.url))
+const sourceRoot = !process.env.DSH_HARNESS_SOURCE_ROOT
+  ? undefined
   : resolve(process.env.DSH_HARNESS_SOURCE_ROOT)
-const sourceWebPath = join(sourceRoot, 'packages/bundle/web-app/cordis.patch.yml')
-const sourceWebManifest = join(sourceRoot, 'packages/bundle/web-app/package.json')
-const sourceBasePath = join(sourceRoot, 'packages/bundle/base/cordis.patch.yml')
+const sourceWebPath = sourceRoot === undefined ? '' : join(sourceRoot, 'packages/bundle/web-app/cordis.patch.yml')
+const sourceWebManifest = sourceRoot === undefined ? '' : join(sourceRoot, 'packages/bundle/web-app/package.json')
+const sourceBasePath = sourceRoot === undefined ? '' : join(sourceRoot, 'packages/bundle/base/cordis.patch.yml')
 const requireSourceBaseline = process.env.DSH_REQUIRE_ALPHA_BASELINE === '1'
-if (existsSync(sourceWebPath) && existsSync(sourceWebManifest) && existsSync(sourceBasePath)) {
+if (sourceRoot !== undefined && existsSync(sourceWebPath) && existsSync(sourceWebManifest) && existsSync(sourceBasePath)) {
   const sourceWebVersion = JSON.parse(readFileSync(sourceWebManifest, 'utf8')).version
   if (requireSourceBaseline && sourceWebVersion !== '0.1.7-rc.2') {
     throw new Error(`required source baseline is 0.1.7-rc.2, got ${sourceWebVersion}`)
@@ -54,7 +55,7 @@ if (existsSync(sourceWebPath) && existsSync(sourceWebManifest) && existsSync(sou
     webPath: sourceWebPath,
   })
 } else if (requireSourceBaseline) {
-  throw new Error(`required source baseline missing under ${sourceRoot}`)
+  throw new Error(`required source baseline missing under ${sourceRoot ?? '(DSH_HARNESS_SOURCE_ROOT unset)'}`)
 }
 
 const tuiPatches = loadPatch(tuiPath)

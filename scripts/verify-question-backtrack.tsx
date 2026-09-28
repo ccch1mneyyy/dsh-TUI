@@ -21,6 +21,7 @@ const [
   { render },
   { AskUserQuestionPanel },
   { QuestionStore },
+  { buildQuestionRecord },
   { settle, settled },
 ] = await Promise.all([
   import('node:stream'),
@@ -29,17 +30,17 @@ const [
   import('../src/ui.js'),
   import('../src/components/questions/AskUserQuestionPanel.js'),
   import('../src/dsh-adapter/questions.js'),
+  import('../src/dsh-adapter/channel/question-record.js'),
   import('./lib/term-test.mjs'),
 ])
 
 // ── Store state machine ────────────────────────────────────────────────
+const questions = [
+  { id: 'q1', question: '第一题', options: [{ label: 'A' }, { label: 'C' }] },
+  { id: 'q2', question: '第二题', options: [{ label: 'B' }, { label: 'D' }] },
+]
 const store = new QuestionStore()
-const answerPromise = store.ask({
-  questions: [
-    { id: 'q1', question: '第一题', options: [{ label: 'A' }, { label: 'C' }] },
-    { id: 'q2', question: '第二题', options: [{ label: 'B' }, { label: 'D' }] },
-  ],
-} as never)
+const answerPromise = store.ask({ questions } as never)
 
 assert.equal(store.getSnapshot()?.position, 1)
 assert.equal(store.getSnapshot()?.canGoBack, false)
@@ -59,16 +60,19 @@ assert.equal(store.getSnapshot()?.position, 2)
 assert.deepEqual(store.getSnapshot()?.draft, { selected: ['B'], custom: 'partial draft' })
 
 store.answerCurrent({ selected: ['D'] })
-assert.deepEqual(await answerPromise, {
+const settledAnswers = await answerPromise
+assert.deepEqual(settledAnswers, {
   answers: [
     { id: 'q1', selected: ['C'] },
     { id: 'q2', selected: ['D'] },
   ],
 })
-const [summary] = store.takeSummaries()
-assert.ok(summary?.lines.some(line => line.includes('第一题') && line.includes('C')))
-assert.ok(summary?.lines.some(line => line.includes('第二题') && line.includes('D')))
-assert.ok(!summary?.lines.some(line => line.includes('A') || line.includes('partial draft')))
+// 最终作答记录由持久化 tool/result 载荷里的 answers 折叠而来（#1009）：
+// 同一批问题 + 同一份 answers 必须得到与旧 store 摘要相同的记录。
+const record = buildQuestionRecord(questions, settledAnswers.answers)
+assert.ok(record.lines.some(line => line.includes('第一题') && line.includes('C')))
+assert.ok(record.lines.some(line => line.includes('第二题') && line.includes('D')))
+assert.ok(!record.lines.some(line => line.includes('A') || line.includes('partial draft')))
 
 // ── Panel restoration and Esc routing ──────────────────────────────────
 const terminal = new Terminal({ cols: 90, rows: 30, scrollback: 0, allowProposedApi: true })

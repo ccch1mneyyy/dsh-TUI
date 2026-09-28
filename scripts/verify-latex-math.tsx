@@ -177,6 +177,18 @@ assert.deepEqual(mathTexts('$$x^2$$ trails prose\n\nnext'), ['math:x^2'], 'a $$ 
     ['mathBlock:x^2'],
     'a run closes only on a run of the same length',
   )
+  // An escaped backtick is literal text (CommonMark): it can neither open nor
+  // close a code span, so it must not hide a following block formula.
+  assert.deepEqual(
+    mathTexts('Use \\` literal\n$$\nx^2\n$$\nand `done`'),
+    ['mathBlock:x^2'],
+    'an escaped backtick opens no code span',
+  )
+  assert.deepEqual(
+    mathTexts('Use `open\n$$\nx^2\n$$\n\\` close'),
+    ['mathBlock:x^2'],
+    'an escaped backtick closes no code span',
+  )
 }
 
 // Settings: `latexMath: false` from pre-mathRendering layers still means source.
@@ -407,6 +419,9 @@ for (const source of [
   'Use `this syntax:\n$$\nx^2\n$$\n` here.',
   // A backtick that never closes stays literal and the formula stays a block.
   'Use `literal\n$$\nx^2\n$$\n\nAfter.',
+  // An escaped backtick never opens or closes a span, so the formula stays a
+  // block at every streaming boundary too.
+  'Use \\` literal\n$$\nx^2\n$$\nand `done`',
 ]) {
   const stages = Array.from({ length: source.length }, (_, index) => source.slice(0, index + 1))
   assert.deepEqual(

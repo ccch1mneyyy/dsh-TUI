@@ -254,11 +254,27 @@ function tokenizeBlockMath(source: string): MathToken | undefined {
 }
 
 /**
+ * Backtick runs that can act as CommonMark code-span delimiters, in order.
+ * A run preceded by an odd number of backslashes is escaped and stays literal
+ * text, so it neither opens nor closes a span.
+ */
+function backtickRuns(text: string): string[] {
+  const runs: string[] = []
+  for (const match of text.matchAll(/`+/g)) {
+    const start = match.index
+    let backslashes = 0
+    while (start - backslashes - 1 >= 0 && text[start - backslashes - 1] === '\\') backslashes++
+    if (backslashes % 2 === 0) runs.push(match[0])
+  }
+  return runs
+}
+
+/**
  * Lengths of the backtick runs in `text` that no later run of the same
  * length closes (CommonMark: such a run is literal text, for now).
  */
 function unmatchedBacktickRuns(text: string): number[] {
-  const runs = text.match(/`+/g) ?? []
+  const runs = backtickRuns(text)
   const unmatched: number[] = []
   for (let open = 0; open < runs.length; open++) {
     let close = open + 1
@@ -283,7 +299,7 @@ function insideOpenCodeSpan(text: string, at: number): boolean {
   const rest = text.slice(at)
   const paragraphEnd = rest.search(/\n[ \t]*\n/)
   const after = paragraphEnd < 0 ? rest : rest.slice(0, paragraphEnd)
-  const closers = new Set((after.match(/`+/g) ?? []).map(run => run.length))
+  const closers = new Set(backtickRuns(after).map(run => run.length))
   return open.some(length => closers.has(length))
 }
 

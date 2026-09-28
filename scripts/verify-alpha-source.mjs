@@ -1,7 +1,7 @@
 /**
  * Type-check the TUI directly against the source-authoritative newest
- * DeepSeek Harness prerelease. CI pins the checkout SHA; local runs may point
- * DSH_HARNESS_SOURCE_ROOT at a checkout or use ../deepseek-harness.
+ * DeepSeek Harness prerelease. CI pins the checkout SHA; local runs point
+ * DSH_HARNESS_SOURCE_ROOT at a checkout of the expected tag.
  */
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join, parse, resolve } from 'node:path'
@@ -13,7 +13,11 @@ import ts from 'typescript'
 
 const EXPECTED_UPSTREAM_VERSION = process.env.DSH_HARNESS_EXPECTED_VERSION ?? '0.1.7-rc.2'
 const tuiRoot = resolve(import.meta.dirname, '..')
-const sourceRoot = resolve(process.env.DSH_HARNESS_SOURCE_ROOT ?? join(tuiRoot, '../deepseek-harness'))
+if (!process.env.DSH_HARNESS_SOURCE_ROOT) {
+  console.error(`DSH_HARNESS_SOURCE_ROOT is unset: point it at a deepseek-harness checkout of dsh-v${EXPECTED_UPSTREAM_VERSION}`)
+  process.exit(1)
+}
+const sourceRoot = resolve(process.env.DSH_HARNESS_SOURCE_ROOT)
 const sourceManifestPath = join(sourceRoot, 'package.json')
 if (!existsSync(sourceManifestPath)) {
   console.error(`upstream source checkout missing: ${sourceRoot}`)

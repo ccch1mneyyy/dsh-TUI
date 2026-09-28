@@ -1,35 +1,37 @@
-## 变更摘要 / Summary
+Closes #<!-- issue 号；改动代码的 PR 必须关联 issue。纯文档 PR、或维护者打了 no-issue-needed 标签的 PR 可删掉这一行 -->
 
-<!-- 一两句说明改了什么、为什么。行为变更请写清楚用户可见的差异。 -->
+## Why the change
 
-## 关联 / Related
+<!-- 一句话：这个 PR 解决什么问题、合并后能做什么。 -->
 
-<!-- Closes #123 / Discussion 链接；纯内部改动可留空。 -->
+## Special things to note
 
-## 变更类型 / Type
+<!-- 1–3 条给 reviewer 的提醒：兼容约束、迁移、刻意不做的事、出人意料的决定。没有就写「- 无。」 -->
 
-- [ ] fix — 修复缺陷
-- [ ] feat — 新增能力
-- [ ] docs — 仅文档
-- [ ] refactor / perf — 不改变外部行为
-- [ ] ci / chore — 构建、工作流、仓库维护
+## Change outline
 
-## 验证 / Verification
+<!--
+用最少的图示讲清实现的形状，每个图配一句短说明，不写逐文件流水账：
+- 浅层文件树：改了哪些职责（```diff，新增行用 +）
+- 调用链 / 控制流 / 数据流的变化（```diff）
+- 关键类型或配置形状（完整代码块）
+- 终端可见的改动：贴一段无头渲染出的真实屏幕文本（```text），这就是截图
+已有形状的改动用 diff，大部分是新东西就给完整形状；和这个 PR 无关的图不要放。
+-->
 
-<!-- 贴出实际跑过的命令与结果。没跑就别勾。 -->
+## Verification
 
-- [ ] `pnpm build`（compile + 全部构建门禁）
-- [ ] 按改动面选的聚焦回归脚本（对照表见 [docs/contributing.md](../docs/contributing.md)）
-- [ ] 终端可见改动：在 inline 与 fullscreen 两种模式、窄终端宽度下手动演练过
+<!-- 只写真跑过的命令与结果；按改动面选的聚焦回归见 docs/contributing.md。没做的（例如真实终端 inline/fullscreen/窄屏演练）直接写没做。 -->
 
 ```text
-<!-- 命令与输出 -->
+
 ```
 
-## 自查 / Checklist
-
-- [ ] 只改了 `src/`，没有手改或提交 `lib/` 下的生成产物
-- [ ] 官方 `@deepseek-ai/*` 的 import 仍只出现在 `src/dsh-adapter/` 内
-- [ ] 行为、配置、快捷键与限制的改动已在 `README.md`（英文）与 `README_ZH.md`（中文）双语同步
-- [ ] 改了 `cordis.patch.yml` 的话，`patch-surface.snapshot.json` 已同步
-- [ ] 只暂存了显式路径，没有用 `git add .` / `git add -A`
+<!--
+提交前自查（不必勾选，确认即可）：
+- 只改 src/，没有手改或提交 lib/
+- 官方 @deepseek-ai/* 的 import 仍只在 src/dsh-adapter/ 内
+- 行为、配置、快捷键、限制的改动已在 README.md 与 README_ZH.md 同步
+- 改了 cordis.patch.yml 的话，patch-surface.snapshot.json 已同步
+- 只暂存了显式路径
+-->

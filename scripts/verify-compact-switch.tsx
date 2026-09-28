@@ -25,6 +25,7 @@ import { join } from 'node:path'
 const reproHome = mkdtempSync(join(tmpdir(), 'dshtui-compact-switch-'))
 process.env.HOME = reproHome
 process.env.USERPROFILE = reproHome
+process.env.DSH_TUI_LANG = 'zh' // 中文通知断言必须在 i18n import 前固定语言。
 
 const [{ createChannel }, { settled }] = await Promise.all([
   import('../src/dsh-adapter/channel.js'),

@@ -53,7 +53,7 @@ SubagentActivityStore.prototype.snapshot = function (...args: []) {
 } as typeof SubagentActivityStore.prototype.snapshot
 
 // ── harness：真实 cordis root + 假 agents 服务（含 get） ──
-const childSession = { id: 'child-session', seq: 0, events: [], header: {} }
+const childSession = { id: 'child-session', seq: 0, events: [], header: { parentSession: 'parent-session', origin: 'subagent' } }
 const ctx = new Context()
 ;(ctx as unknown as { provide(name: string, value: unknown): () => void }).provide('agents', {
   get(id: string) {

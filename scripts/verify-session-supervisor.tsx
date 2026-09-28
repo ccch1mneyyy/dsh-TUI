@@ -72,10 +72,10 @@ const RAIL_ENTRIES = 24
 const GHOST_DIR = join(tmpdir(), 'dsh-tui-supervisor-ghost')
 
 class FakeStdout extends Writable {
-  columns = COLS
-  rows = ROWS
   isTTY = true
   constructor(private readonly terminal: InstanceType<typeof XTerm>) { super() }
+  get columns(): number { return this.terminal.cols }
+  get rows(): number { return this.terminal.rows }
   _write(chunk: unknown, _encoding: BufferEncoding, callback: () => void): void {
     this.terminal.write(String(chunk), callback)
   }
@@ -201,6 +201,10 @@ interface StubChannelConfig {
   /** True when the registry read itself fails (service missing / throwing). */
   readonly registryRejects?: boolean
   readonly registryAbsent?: boolean
+  /** What the host's open path reports; defaults to a successful mount. */
+  readonly openResult?: { ok: true } | { ok: false; reason: 'failed'; error: string } | { ok: false; reason: 'cancelled' }
+  /** Terminal width for this screen; {@link COLS} by default. */
+  readonly cols?: number
 }
 
 /** How the NEXT listing call behaves; a case swaps it between mounts. */
@@ -229,13 +233,14 @@ interface StubChannel {
   /** Listings that finished, resolved or rejected: the deterministic "the
    *  held-back answer really landed" signal, instead of a fixed sleep. */
   landed: number
+  readonly config: StubChannelConfig
   enrich?: (row: never) => void
 }
 
 /** Build one stub channel over the shared fixtures. */
 function makeChannel(config: StubChannelConfig): StubChannel {
   const calls: string[] = []
-  const stub: StubChannel = { channel: undefined as never, calls, plan: {}, landed: 0 }
+  const stub: StubChannel = { channel: undefined as never, calls, plan: {}, landed: 0, config }
   stub.channel = {
     version: 0,
     cwd: config.cwd,
@@ -289,7 +294,7 @@ interface SupervisorScreen {
  * Mounting the SAME stub twice is what a reopen of one channel looks like.
  */
 async function mountSupervisor(target: StubChannel): Promise<SupervisorScreen> {
-  const screen = new XTerm({ cols: COLS, rows: ROWS, scrollback: 0, allowProposedApi: true })
+  const screen = new XTerm({ cols: target.config.cols ?? COLS, rows: ROWS, scrollback: 0, allowProposedApi: true })
   const out = new FakeStdout(screen)
   const input = new FakeStdin()
   const app = await render(
@@ -304,7 +309,7 @@ async function mountSupervisor(target: StubChannel): Promise<SupervisorScreen> {
             // channel, which is where "did Enter open the RIGHT row" is
             // observable.
             await (target.channel as unknown as { resumeTo(id: string): Promise<{ ok: boolean }> }).resumeTo(id)
-            return true
+            return target.config.openResult ?? { ok: true }
           }}
           onNewSession={async () => true}
           onStopSession={async () => true}
@@ -560,7 +565,7 @@ const instance = await render(
         onClose={() => { calls.push('close') }}
         onOpenSession={async (id) => {
           await (channel as unknown as { resumeTo(id: string): Promise<{ ok: boolean }> }).resumeTo(id)
-          return true
+          return { ok: true }
         }}
         // Same path Chat.tsx wires: the screen resolves the workspace target,
         // the host switches to it and starts the session there.
@@ -971,6 +976,85 @@ console.log('a registry that FAILS does not take the history with it')
   )
   absent.close()
   app.close()
+}
+console.log('a refused open shows its REASON on this screen (#939)')
+{
+  // The screen replaces the conversation, so the composer that draws channel
+  // notifications is not mounted: the reason has to reach THIS screen's own
+  // notice, in full, on the final frame — at every width the pane can take.
+  const REASON = 'provider desktop unreachable: connect ECONNREFUSED 127.0.0.1:8080 while restoring the recorded model route'
+  for (const cols of [8, 19, 40, 80, 120]) {
+    const app = await openSupervisor({
+      registry,
+      cwd: alphaDir,
+      cols,
+      openResult: { ok: false, reason: 'failed', error: REASON },
+    })
+    await settled(() => app.lines().join('\n').includes('free session'), { timeoutMs: 6_000 })
+    app.write('\x1b[C') // → the list pane
+    await sleep(50) // 固定窗:pacing 按键步间：焦点切换无可观测锚点
+    app.write('\x1b[B') // past the new-session card onto the first session
+    await sleep(50) // 固定窗:pacing 按键步间：焦点切换无可观测锚点
+    app.write('\r')
+    const joined = (): string => app.lines().map(line => line.trim()).join(' ')
+    const flat = (): string => joined().replace(/\s+/gu, '')
+    // Three rows of a very narrow pane cannot hold the whole sentence; what
+    // must survive there is the START of the reason, not only the title.
+    const probe = cols < 40 ? 'provider' : 'ECONNREFUSED'
+    const shown = await settled(() => flat().includes(probe), { timeoutMs: 4_000 })
+    check(`${cols} cols: the refusal reaches resumeTo`, app.calls.some(call => call.startsWith('resumeTo:')), app.calls.join(', '))
+    // At 8 columns nothing on this screen is legible (title and rows clip to
+    // 8 cells); the case stays for the spill check, not for the wording.
+    if (cols >= 19) check(`${cols} cols: the failure reason is on the screen`, shown, app.lines().join('\n'))
+    check(`${cols} cols: no pointer to an unmounted notification`, !joined().includes('notification below'), app.lines().join('\n'))
+    if (cols >= 80) {
+      // The rail shares these rows, so read the notice from its own column.
+      const lines = app.lines()
+      const top = lines.findIndex(line => line.includes('Could not enter'))
+      const left = top < 0 ? 0 : lines[top].indexOf('Could not enter')
+      const notice = lines.slice(top, top + 3).map(line => line.slice(left).trim()).join(' ')
+      check(`${cols} cols: the whole reason is readable`, top >= 0 && notice.includes(REASON), notice)
+    }
+    // The renderer clips at the pane edge rather than spilling, so row widths
+    // prove nothing: a clipped notice is caught by its TEXT. Read back in
+    // order, the notice rows must be one unbroken prefix of the message, and
+    // a message that did not fit must say so with the trailing ellipsis.
+    {
+      const lines = app.lines()
+      // The full phrase when it fits on a row (the rail may sit to its left);
+      // on the narrowest panes only its first word does.
+      const whole = lines.findIndex(line => line.includes('Could not enter'))
+      const top = whole >= 0 ? whole : lines.findIndex(line => line.trimStart().startsWith('Could'))
+      const left = top < 0 ? 0 : lines[top].indexOf('Could')
+      const rows: string[] = []
+      for (let y = top; top >= 0 && y < top + 3 && y < lines.length; y++) {
+        const row = lines[y].slice(left).trim()
+        if (row === '' || row.includes('switch pane')) break
+        rows.push(row)
+      }
+      const shownFlat = rows.join('').replace(/\s+/gu, '')
+      const message = `Could not enter free session · ${REASON}`.replace(/\s+/gu, '')
+      const cut = shownFlat.endsWith('…')
+      const body = cut ? shownFlat.slice(0, -1) : shownFlat
+      check(
+        `${cols} cols: the notice is never silently clipped`,
+        body.length > 0 && message.startsWith(body) && (cut || body === message),
+        `${rows.join(' | ')}\n${lines.join('\n')}`,
+      )
+    }
+    app.close()
+  }
+  const cancelled = await openSupervisor({ registry, cwd: alphaDir, openResult: { ok: false, reason: 'cancelled' } })
+  await settled(() => cancelled.lines().join('\n').includes('free session'), { timeoutMs: 6_000 })
+  cancelled.write('\x1b[C')
+  await sleep(50) // 固定窗:pacing 按键步间：焦点切换无可观测锚点
+  cancelled.write('\x1b[B')
+  await sleep(50) // 固定窗:pacing 按键步间：焦点切换无可观测锚点
+  cancelled.write('\r')
+  await settled(() => cancelled.calls.length > 0, { timeoutMs: 4_000 })
+  await sleep(200) // 固定窗:探针 取消的打开不得在此后画出提示
+  check('a cancelled open stays silent', !cancelled.lines().join('\n').includes('Could not enter'), cancelled.lines().join('\n'))
+  cancelled.close()
 }
 
 console.log('background title recovery updates the existing row')

@@ -458,10 +458,11 @@ check('Esc clears a live query rather than leaving the screen',
   flat(screen()).slice(0, 200))
 
 // ── resume failure ─────────────────────────────────────────────────────────
-// The stub's mount always fails with a REAL error string. The host (Chat) owns
-// the reason and renders it through the shared `resumeFailureText`, so the
-// screen must keep that sentence intact and stay up — never collapse into "the
-// model is working", which is what misreported every failure before.
+// The stub's mount always fails with a REAL error string. The screen replaces
+// the conversation, so the composer that draws channel notifications is not
+// mounted: the reason must appear in the screen's own notice (#939), intact,
+// and the screen must stay up — never collapse into "the model is working",
+// which is what misreported every failure before.
 await clickText('gamma')
 const failureShown = await settled(() =>
   /corrupt session log: seq gap in committed region/.test(flat(screen())))
@@ -472,12 +473,10 @@ check('a failed resume stays on the session screen',
   /Sessions in tmp/.test(flat(s)), flat(s).slice(0, 200))
 check('the screen names the session it could not enter',
   /Could not enter gamma/.test(flat(s)), flat(s).slice(-260))
-// The reason travels through the shared `resumeFailureText` and out on the
-// channel's notification seam — the host's wording, not a re-derived one.
-check('the real resume failure reached the notification seam, not a generic one',
-  channel.notifications.some((n) =>
-    /corrupt session log: seq gap in committed region/.test(n.text)),
-  JSON.stringify(channel.notifications.map((n) => n.text)))
+// The mount's own error text is on THIS screen — a pointer to a notification
+// that no mounted component draws is what #939 reported.
+check('the real resume failure is shown on the session screen, not a generic one',
+  failureShown && !/notification below/.test(flat(s)), flat(s).slice(-260))
 check('it does not misreport the failure as a running model',
   !/model is working/.test(flat(s)) &&
     !channel.notifications.some((n) => /model is working/.test(n.text)),

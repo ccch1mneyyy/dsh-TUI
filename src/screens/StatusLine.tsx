@@ -4,7 +4,7 @@ import type { Color } from '../ink/styles.js'
 import { formatTokens } from '../terminal-utils/format.js'
 import { t } from '../i18n.js'
 import { formatContextUsage, DEFAULT_STATUS_BAR, normalizeStatusBar, type StatusBarConfig } from '../tuiDisplayPrefs.js'
-import { estimateSessionCostCny, estimateSessionCostSplitCny, isDeepSeekOfficialProvider, isPeakHour } from '../deepseekPricing.js'
+import { estimateSessionCostSnapshotCny, isDeepSeekOfficialProvider, isPeakHour } from '../deepseekPricing.js'
 import { ActivityLine, contextPressurePct, type ActivityLineValue } from '../components/ActivityLine.js'
 import { GoalStatusChip } from '../components/GoalTodoPanel.js'
 import { formatJobDuration, type BackgroundJobState } from '../dsh-adapter/jobs.js'
@@ -13,6 +13,9 @@ import { formatJobDuration, type BackgroundJobState } from '../dsh-adapter/jobs.
  *  real Chat with partial channel literals that predate the jobs field. */
 const NO_BACKGROUND_JOBS: readonly BackgroundJobState[] = []
 import type { ChannelUi as Channel } from '../adapter/channel/ui-policy.js'
+/** 同上：partial channel 字面量可能早于 mainCost/subagentCost 字段（R4 兼容）。 */
+const NO_MAIN_COST: Channel['mainCost'] = {}
+const NO_SUBAGENT_COST: Channel['subagentCost'] = []
 import type { SelectionSnapshot } from '../dsh-adapter/ide-channel.js'
 import { modeDisplayName } from '../sessionModes.js'
 import { MiniWake } from '../components/trajectory/MiniWake.js'
@@ -352,24 +355,37 @@ const selectionBadge = formatSelectionBadge(channel.selection)
           ),
         }]
       : []),
-    // Estimated session spend (≈¥): only for official DeepSeek providers
-    // whose model has a known price, and only once the estimate is non-zero
-    // (a fresh session showing ¥0.00 is noise). The trailing 峰/谷 marker
-    // shows the current billing window. Hover shows the breakdown.
+    // Estimated session spend (≈¥): only for official DeepSeek providers.
+    // Visible once there is a priced amount or at least one unpriced token (a
+    // fresh, fully priced zero session keeps hiding ¥0.00 as noise; unpriced
+    // usage still needs the 未计价 marker). The estimate merges the main
+    // session (by model) with the subagents' own durable usage, so delegating
+    // work no longer silently undercounts. The trailing 峰/谷 marker shows
+    // the current billing window; the total>0 shape is unchanged. Hover shows
+    // the breakdown.
     ...(statusBar.cost && isDeepSeekOfficialProvider(channel.provider)
       ? (() => {
-        const estimate = estimateSessionCostCny(channel.tokens, channel.model)
-        return estimate === undefined || estimate <= 0
-          ? []
-          : [{
+        const estimate = estimateSessionCostSnapshotCny({
+          provider: channel.provider,
+          main: channel.mainCost ?? NO_MAIN_COST,
+          subagents: channel.subagentCost ?? NO_SUBAGENT_COST,
+          fallbackTokens: channel.tokens,
+          fallbackModel: channel.model,
+        })
+        return estimate !== undefined && (estimate.total > 0 || estimate.unpricedTokens > 0)
+          ? [{
               key: 'cost',
               id: 'cost' as const,
               node: (
                 <Text color="inactiveShimmer">
-                  {t('status-cost-label')}¥{estimate.toFixed(2)} {t(isPeakHour() ? 'cost-now-peak' : 'cost-now-idle')}
+                  {t('status-cost-label')}
+                  {estimate.total > 0
+                    ? <>¥{estimate.total.toFixed(2)} {t(isPeakHour() ? 'cost-now-peak' : 'cost-now-idle')}</>
+                    : <> {t('cost-unpriced', { tokens: formatTokens(estimate.unpricedTokens) })}</>}
                 </Text>
               ),
             }]
+          : []
       })()
       : []),
   ]
@@ -688,14 +704,28 @@ function buildHoverDetail(
       )
     }
     case 'cost': {
-      const split = estimateSessionCostSplitCny(channel.tokens, channel.model)
-      if (split === undefined) return null
+      const estimate = estimateSessionCostSnapshotCny({
+        provider: channel.provider,
+        main: channel.mainCost ?? NO_MAIN_COST,
+        subagents: channel.subagentCost ?? NO_SUBAGENT_COST,
+        fallbackTokens: channel.tokens,
+        fallbackModel: channel.model,
+      })
+      // Same visibility contract as the field: a priced amount or unpriced
+      // tokens (with the 未计价 row) both warrant the breakdown; the old
+      // total>0 gate hid the only explanation for an all-unpriced session.
+      if (estimate === undefined || (estimate.total <= 0 && estimate.unpricedTokens <= 0)) return null
       const { input, output, cacheRead } = channel.tokens
       return (
         <Text wrap="truncate">
-          {dim('≈¥')}{split.total.toFixed(2)} · {dim('peak ')}¥{split.peak.toFixed(2)}
-          {' · '}{dim('idle ')}¥{split.idle.toFixed(2)} · {dim('in ')}{formatTokens(input)}
+          {dim('≈¥')}{estimate.total.toFixed(2)} · {dim('peak ')}¥{estimate.peak.toFixed(2)}
+          {' · '}{dim('idle ')}¥{estimate.idle.toFixed(2)} · {dim('in ')}{formatTokens(input)}
           {' · '}{dim('out ')}{formatTokens(output)} · {dim('cache ')}{formatTokens(cacheRead)}
+          {' · '}{t('cost-split-main', { cost: estimate.main.toFixed(2) })}
+          {' · '}{t('cost-split-subagent', { cost: estimate.subagent.toFixed(2) })}
+          {estimate.unpricedTokens > 0
+            ? <>{' · '}{t('cost-unpriced', { tokens: formatTokens(estimate.unpricedTokens) })}</>
+            : null}
           {' · '}{t('status-cost-note')}
         </Text>
       )

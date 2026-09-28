@@ -387,6 +387,29 @@ check('full StatusLine renders context bar and deterministic trajectory wake', (
   assert.ok(/[▁▂▃▄▅▆▇█]/.test(full), `missing trajectory glyph in:\n${full}`)
 })
 
+// StatusLine ≈¥ field reads the per-model cost buckets (#1089): it appears for
+// an official provider with a known price, and the statusBar.cost switch hides it.
+const costProbe = {
+  provider: 'deepseek',
+  mainCost: {
+    'deepseek-v4-flash': {
+      peak: { input: 1_000_000, output: 0, cacheRead: 0, cacheWrite: 0 },
+      idle: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    },
+  },
+}
+const withCost = await renderStatus(costProbe)
+check('status line renders the session cost estimate for a priced model', () => {
+  assert.ok(withCost.includes('≈¥2.00'), `missing cost estimate in:\n${withCost}`)
+})
+const withoutCost = await renderStatus({
+  ...costProbe,
+  statusBar: { ...DEFAULT_STATUS_BAR, cost: false },
+})
+check('statusBar.cost switch still hides the cost field', () => {
+  assert.ok(!withoutCost.includes('≈¥'), `unexpected cost estimate in:\n${withoutCost}`)
+})
+
 // Tool background normalization and terminal ANSI output.
 check('normalizeToolBackground accepts the three modes and falls back to none', () => {
   assert.equal(normalizeToolBackground('none'), 'none')

@@ -238,8 +238,8 @@ dsh-tui
 |---|---|---|
 | `/context` | 无 | 已加载上下文明细（指令/运行时上下文/技能/工具等） |
 | `/status` | 无 | 模型+effort、工作/空闲、会话 id、目录+git 分支、token、缓存命中率、上下文百分比、会话标题 |
-| `/cost` | 无 | token 用量 + 缓存命中率（DSH 不提供费用计量） |
-| `/balance` | 无 | DeepSeek 官方账户余额（免费只读接口）：摘要行 + hover 明细，点击刷新、`×` 关闭 |
+| `/cost` | 无 | token 用量 + 缓存命中率 + 本会话估算（并入子代理）与「主会话/子代理」拆解；非官方/未收录模型只显示 token 并标注未计价（**估算是参考，以平台账单为准**） |
+| `/balance` | 无 | DeepSeek 官方账户余额（免费只读接口）：摘要行 + hover 明细（同款本会话估算拆解：主会话/子代理/未计价），点击刷新、`×` 关闭 |
 | `/config` | 无 | 配置来源：`cordis.patch.yml` 路径、启动方式、模型路由 |
 | `/doctor` | 无 | 环境自检 |
 | `/migrate` | `[agent] [--dry-run]` | 从其他编程代理（claude-code/codex/omp/zcode/grok-build）导入对话历史，子进程运行不卡界面，详见[会话迁移](migrate.md) |
@@ -427,7 +427,9 @@ dsh-TUI 不预装通用技能；`/skills` 浏览 DSH 发现的技能，可直调
 
 **Row 2 — 状态字段行**（每个字段独立开关，见 `/settings`）
 - 左组：模型 → TPS → thinking → mode → ctx → cache 缓存命中率 → tokens（`1.2k→340` 输入→输出）→
-  cost（`≈¥0.05 谷`，**估算是参考，以平台账单为准**，仅官方模型显示）
+  cost（`≈¥0.05 谷`，**本会话估算**：包含子代理用量，按各自模型 × 峰值/空闲 × 缓存分项计价；
+  hover 拆「主会话 ¥ / 子代理 ¥ / 未计价 N tok」；非官方/未收录模型只显示 token 并标注未计价；
+  **估算是参考，以平台账单为准**）
 - 右组：git 分支 → 工作目录（紧凑模式仅 basename）→ 会话标题 → 短会话 ID（`#` + 前 8 位，方便 `--resume` 定位）
 - `statusBar.compact` 时左右合并为单行。
 - 默认开：compact、model、thinking、cwd、contextUsage、cache、cost、goal、contextBar。

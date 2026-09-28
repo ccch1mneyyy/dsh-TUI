@@ -17,6 +17,7 @@
 export {} // 模块边界：避免顶层 await/全局名与其他 verify 脚本冲突
 
 process.env.FORCE_COLOR = '3'
+process.env.DSH_TUI_LANG = 'zh' // 光标定位使用中文「自定义回答」行，不能随宿主语言漂移。
 
 const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render }, { AskUserQuestionPanel }, { HistorySearchDialog }, { SearchBox }] = await Promise.all([
   import('node:stream'),

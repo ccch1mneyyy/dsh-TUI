@@ -44,7 +44,7 @@ UI 层(`screens/`、`components/`、`ink/`、`hooks/`、`utils/`、`terminal-uti
 确认差异后执行 `node --import tsx/esm scripts/verify-patch-surface.ts --snapshot`
 重新生成快照。`pnpm run verify:web-coexistence` 会把 dsh-tui patch 与官方
 web-app patch 按 include 语义合成一遍,直接拦截 loader entry id 复用;
-当相邻 `deepseek-harness` 源码存在时还会额外校验其 base + web patch。
+设置 `DSH_HARNESS_SOURCE_ROOT` 指向官方源码 checkout 时还会额外校验其 base + web patch（CI 的 `alpha-compat` lane 总是设置）。
 
 ## 升级流程
 

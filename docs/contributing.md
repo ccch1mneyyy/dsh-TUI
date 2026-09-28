@@ -25,7 +25,8 @@
   - 名单只允许提交 PR，不授予 write，也不预审功能范围。
   - 维护者 reopen 一次已关闭的 PR 可作为例外；其他人 reopen 会被再次关闭。
   - base 指向 `main`。保持改动聚焦：一个 PR 只做一个逻辑改动。
-    标题用中文或中英对照，描述写清动机、改动点与验证方式。
+    标题用中文或中英对照，描述按 [PR 模板](../.github/PULL_REQUEST_TEMPLATE.md)
+    写清动机、改动形状与验证方式；Agent 发 PR 使用 `.agents/skills/pr`。
   - **改动代码的 PR 必须关联 issue**：描述里写一行 `Closes #<issue 号>`，
     或用侧边栏 Development 关联。CI 的 `issue-link` 组会检查，没有关联即判失败。
   - CI 判定为纯文档的改动不需要关联（路径分流见“验证”）。
@@ -227,11 +228,20 @@ node --import tsx/esm scripts/verify-askpanel-layout.tsx
 node --import tsx/esm scripts/repro-toolcards.tsx
 ```
 
-CI 的测试 job 统一设置 `DSH_TUI_LANG=zh`。UI 语言在 import 时按
-`DSH_TUI_LANG` → `~/.dsh-tui/lang.json` → 系统 locale 解析，所以断言界面文案的
-脚本应在动态 import 前自行固定语言（`process.env.DSH_TUI_LANG = 'zh'` 或
-`'en'`，与断言一致）。本地跑尚未固定语言的脚本时，带上 `DSH_TUI_LANG=zh`，
-否则 lang.json 为 en 或 locale 为 `en_US` 的机器会误报失败。
+CI 的测试 job 设置 `DSH_TUI_LANG=zh` 作为兜底，但独立执行的回归不能依赖它；
+本地跑尚未固定语言的脚本时，带上 `DSH_TUI_LANG=zh`，否则 lang.json 为 en 或
+locale 为 `en_US` 的机器会误报失败。UI 语言在 import 时按 `DSH_TUI_LANG` →
+`~/.dsh-tui/lang.json` → 系统 locale 解析。断言或定位界面文案的脚本（包括
+「不出现某文案」的否定断言）必须自行固定与断言一致的语言：动态 import 前写
+`process.env.DSH_TUI_LANG = 'zh'` / `'en'`；静态 import 的中文脚本把
+`import './lib/default-lang-zh.mjs'` 放在其他 import 前。不要用 `??=` 保留宿主值，
+也不要按宿主语言选择不同断言。已逐场景调用 `setLang` 的双语回归和仅用中文作
+输入数据的宽度/剪贴板等测试不需要重复设置。
+`node scripts/verify-regression-language.mjs`（先构建，已接入 `channel-ui` CI 组）
+在临时 HOME 下覆盖与脚本预期语言相反的 locale、持久化偏好和环境变量三种启动条件，
+同时保护中文正向断言和英文否定断言。`verify-ime-cursor`、`repro-suggestion-click`
+和 `verify-queue` 的语言修复保留，但在既有固定等待迁移完成前仅独立运行，不进入 CI 矩阵。
+诊断探针不作为此回归组全量执行；需要固定中文输出时显式带上 `DSH_TUI_LANG=zh`。
 
 改动共享渲染、`Chat`、提示/问卷布局、工具卡、主题原语或 Ink core 时，三个
 CI 回归都要跑。窄改动还要跑最近的聚焦脚本：
@@ -269,7 +279,8 @@ TypeScript 源的脚本在头部声明 `node --import tsx/esm <script>` 形式�
 
 - 保留的固定 `sleep(` 必须带机读标签 `固定窗:探针` / `固定窗:墙钟` /
   `固定窗:pacing`（定义见该文件头部），写在 sleep 同行尾注释或紧贴上方注释里。
-- `verify:fixed-window` 门禁扫描 `scripts/run-ci-group.mjs` 登记的脚本，无标签即失败。
+- `verify:fixed-window` 门禁扫描 `scripts/run-ci-group.mjs` 与
+  `scripts/verify-regression-language.mjs` 登记的脚本（含矩阵子进程），无标签即失败。
 - `固定窗:待迁移` 是存量技术债（清零跟踪 #791），按文件计数锁在
   `scripts/fixed-window.baseline.json`：任一文件增加即失败，旧债减少不能抵消。
 - 清掉一处后用 `--write-baseline` 重写基线并一起提交。新代码不得使用。

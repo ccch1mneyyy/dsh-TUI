@@ -1,5 +1,5 @@
 /** Host-owned in-process Channel contract. No runtime or upstream imports. */
-import type { ChatRow, AgentStatus, TokenUsage, NotificationItem, ChannelGoal, TodoPanelItem, LoadedContext, PendingMessage, ChannelSceneMetadata, SubagentState, SubagentControl, BackgroundJobState, JobControl, StagedImageInput, StagedImageHandle, ComposerImageRef, ComposerSubmission, ExternalCommandOutcome, TranscriptImage, ResumeResult, EffortOption, PermissionPresetSnapshot, PresetOption, LlmModelInfo, LlmProviderInfo, SkillInfo, CredentialStatus, AgentViewRow, AgentViewDispatchResult, BackgroundResult, RawTrajEvent, ChannelSelection, CompactionStatus } from './channel-view.js'
+import type { ChatRow, AgentStatus, TokenUsage, SessionCostByModel, SubagentCostEntry, NotificationItem, ChannelGoal, TodoPanelItem, LoadedContext, PendingMessage, ChannelSceneMetadata, SubagentState, SubagentControl, BackgroundJobState, JobControl, StagedImageInput, StagedImageHandle, ComposerImageRef, ComposerSubmission, ExternalCommandOutcome, TranscriptImage, ResumeResult, EffortOption, PermissionPresetSnapshot, PresetOption, LlmModelInfo, LlmProviderInfo, SkillInfo, CredentialStatus, AgentViewRow, AgentViewDispatchResult, BackgroundResult, RawTrajEvent, ChannelSelection, CompactionStatus } from './channel-view.js'
 import type { SpinnerMode, ToolBackground, ScrollGutterMode, PageMarginSetting, StatusBarConfig, SessionModeSpec, SplashFontSetting } from './channel-display.js'
 import type { LocalCommand, CommandCompletion, BalanceResult, FileCandidate, RecapOutcome } from './channel-catalog.js'
 import type { TuiRewindMode, SessionTreeData, SessionSummary, PreviewEntry } from './channel-session.js'
@@ -59,6 +59,11 @@ export interface ChannelUi {
   readonly configuredLang: string | undefined
   /** Running token totals across the session's assistant messages. */
   readonly tokens: TokenUsage
+  /** 本会话主会话用量按模型分桶（费用估算输入）。与 `tokens` 并行累计，
+   *  既有 `tokens` 语义与显示不变；会话中途换模型时历史用量留在原模型桶。 */
+  readonly mainCost: SessionCostByModel
+  /** 子代理 durable 用量按 (provider, model) 分桶快照（费用估算输入）。 */
+  readonly subagentCost: readonly SubagentCostEntry[]
   /** Working directory of the session. */
   readonly cwd: string
   /** Human-facing cwd (remote POSIX path/URI instead of a host alias). */

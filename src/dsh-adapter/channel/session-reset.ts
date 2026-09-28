@@ -10,6 +10,8 @@ export type SessionResetState = Pick<
   | 'sessionTitle'
   | 'sessionColor'
   | 'tokens'
+  | 'mainCost'
+  | 'subagentCost'
   | 'responseChars'
   | 'activeToolCount'
   | 'lastUserText'
@@ -54,6 +56,10 @@ export function resetSessionProjection(
     peak: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     idle: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
   }
+  // 会话级费用累计与 tokens 同生命周期：换会话/换模型/rewind 一律清零后
+  // 由 replay 重建（模型切换的 replay 会按 request/header 还原各请求模型）。
+  state.mainCost = {}
+  state.subagentCost = []
   state.responseChars = 0
   state.activeToolCount = 0
   state.lastUserText = ''

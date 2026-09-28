@@ -20,8 +20,9 @@
  * Run: node --import tsx/esm scripts/repro-external-editor.tsx
  */
 process.env.FORCE_COLOR = '3'
+process.env.DSH_TUI_LANG = 'en' // rewind 英文标题的否定断言不能因中文 UI 而假绿。
 
-const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { writeFileSync, mkdtempSync, rmSync }, { tmpdir }, { join }, { render }, { Chat }, { QuestionStore }, termTest] = await Promise.all([
+const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { writeFileSync, mkdtempSync, rmSync }, { tmpdir }, { join }, { render }, { Chat }, { QuestionStore }, { getLang }, termTest] = await Promise.all([
   import('node:stream'),
   import('react'),
   import('@xterm/headless'),
@@ -31,6 +32,7 @@ const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { writeFileSync, m
   import('../src/ui.js'),
   import('../src/screens/Chat.js'),
   import('../src/dsh-adapter/questions.js'),
+  import('../src/i18n.js'),
   import('./lib/term-test.mjs'),
 ])
 
@@ -164,6 +166,7 @@ await sleep(600)
 
 check('bug1: transcript 历史消息仍可见（全量重绘）', screenHas('transcript-anchor'))
 check('bug2: 输入框内容完整（未被 ESC 清空）', screenHas('什么是cordis EDITED'))
+check('bug2: rewind 英文否定断言的语言前置条件', getLang() === 'en', getLang())
 check('bug2: rewind 选择器未被残留双击 Esc 打开', !screenHas('Pick a message to rewind'))
 check('bug3: 终端应答残片未落入界面', !screenHas('48;93') && !screenHas('2453'))
 

@@ -134,6 +134,8 @@ export const CHANNEL_UI_PROPERTIES = [
   'configuredActivityFrames',
   'configuredLang',
   'tokens',
+  'mainCost',
+  'subagentCost',
   'cwd',
   'displayCwd',
   'gitBranch',

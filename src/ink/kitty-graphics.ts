@@ -327,9 +327,17 @@ export class KittyGraphicsManager {
     return true
   }
 
-  /** A clear/screen swap invalidated terminal-side data; resend next frame. */
+  /**
+   * A clear/screen swap invalidated terminal-side data; resend next frame.
+   * The terminal state an abandoned image was judged against is gone too, so
+   * it gets a fresh ENOENT budget; one clear still buys at most one retry.
+   */
   invalidateAll(): void {
-    for (const image of this.images.values()) image.uploaded = false
+    for (const image of this.images.values()) {
+      image.uploaded = false
+      image.abandoned = false
+      image.reuploadedAt = 0
+    }
     for (const state of this.placements.values()) {
       state.placed = false
     }

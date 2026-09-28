@@ -24,6 +24,7 @@ import { readSessionOwners, type SessionMountOwner } from '../sessionMounts.js'
 import type { SessionSummary } from '../dsh-adapter/sessions/index.js'
 import type { TuiWorkspaceEntry, TuiWorkspaceTarget } from '../workspaces.js'
 import type { ChannelUi as Channel } from '../adapter/channel/ui-policy.js'
+import type { ResumeResult } from '../adapter/ports/channel-view.js'
 import { useSessionSupervisor } from './sessionSupervisor/useSessionSupervisor.js'
 import { RAIL_CHROME_ROWS, WORKSPACE_ROW_LINES, RAIL_MIN_TOTAL_COLUMNS, RAIL_WIDTH_MIN, RAIL_WIDTH_MAX, SESSION_ROW_LINES, SESSION_PANE_CHROME_ROWS, MenuAction, MENU_ACTIONS, MENU_WIDTH, MENU_HEIGHT, MENU_LABEL_KEYS, SupervisorLiveState, RailEntry, UNREGISTERED_RAIL_ID, message, samePath, sessionMatchesQuery } from './sessionSupervisor/model.js'
 export { sessionMatchesQuery }
@@ -73,7 +74,7 @@ export function SessionSupervisor({
   /** Leave the screen and show the conversation. */
   onClose(): void
   /** Mount a persisted session (the channel's unified resume path). */
-  onOpenSession(sessionId: string): Promise<boolean>
+  onOpenSession(sessionId: string): Promise<ResumeResult>
   /** Start a fresh session in the workspace at `path`. */
   onNewSession(target: TuiWorkspaceTarget): Promise<boolean>
   /** Stop a background session of this terminal; false when it is not ours. */
@@ -136,6 +137,7 @@ export function SessionSupervisor({
     sessionWidth,
     railEntryCapacity,
     sessionListHeight,
+    noticeRows,
     persistPin,
     selectEntry,
     openSession,
@@ -539,10 +541,10 @@ export function SessionSupervisor({
               )
             })}
           </ink-box>
-          <Box flexShrink={0} height={1} overflow="hidden">
-            <Text color={notice?.tone === 'error' ? 'error' : 'success'}>
-              {notice === undefined ? ' ' : ` ${truncateWidth(notice.text, Math.max(0, sessionWidth - 3))}`}
-            </Text>
+          <Box flexShrink={0} flexDirection="column" height={noticeRows.length} overflow="hidden">
+            {noticeRows.map((line, index) => (
+              <Text key={index} color={notice?.tone === 'error' ? 'error' : 'success'}>{` ${line}`}</Text>
+            ))}
           </Box>
           <Box flexShrink={0}>
             <Text dimColor italic>
