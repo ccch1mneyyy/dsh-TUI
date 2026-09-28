@@ -517,6 +517,10 @@ plus the startup-level `effort` key.
   - `DSH_TUI_IMAGE_PROTOCOL=auto|kitty|sixel|none` overrides the protocol.
 - `DSH_TUI_DISABLE_TERMINAL_IMAGES=1` forces preview off.
   - tmux/screen, non-TTY, and accessibility mode show text only; sending images to the model is unaffected.
+- **Pasting clipboard images (Ctrl+V / Alt+V)**: on Linux one of `wl-paste` (wl-clipboard), `xclip` or `xsel` is required.
+  - WSL: WSLg exposes a Windows bitmap as `image/bmp`; dsh-tui converts it to PNG before attaching.
+  - When those tools find nothing, it falls back to `powershell.exe` (needs Windows interop) to read the
+    Windows clipboard: screenshots, files copied in Explorer, and text.
 - Environment check: `/doctor`.
 
 ### 5.5 Safe mode and rescue profile (`dsh-tui safe`)

@@ -497,6 +497,10 @@ provider / model / cwd / preset / workspace / sessionId / modes，
   - `DSH_TUI_IMAGE_PROTOCOL=auto|kitty|sixel|none` 覆盖协议。
 - `DSH_TUI_DISABLE_TERMINAL_IMAGES=1` 强制关闭。
   - tmux/screen、非 TTY、无障碍模式下只显示文字，不影响把图片发给模型。
+- **粘贴剪贴板图片（Ctrl+V / Alt+V）**：Linux 需要 `wl-paste`（wl-clipboard）、`xclip` 或 `xsel` 之一。
+  - WSL：WSLg 把 Windows 位图暴露为 `image/bmp`，dsh-tui 会转成 PNG 再附加。
+  - 上面的工具读不到时，回退到 `powershell.exe`（需要 Windows interop）读取 Windows 剪贴板，
+    支持截图、资源管理器复制的文件与文本。
 - 环境自检：`/doctor`。
 
 ### 5.5 安全模式与救援 profile（`dsh-tui safe`）
