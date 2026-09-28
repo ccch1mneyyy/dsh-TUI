@@ -459,7 +459,12 @@ async function readClipboardLinux(): Promise<ClipboardRead> {
     !(outcome.kind === 'image' && imagePathMediaType(outcome.path) === undefined)
   if (usable) return outcome
   const windows = await readClipboardWsl()
-  if (windows !== null) return windows
+  if (windows !== null) {
+    // The unstageable Linux export is superseded; only the returned path is
+    // unlinked after staging.
+    if (outcome !== null && outcome.kind === 'image') rmSync(outcome.path, { force: true })
+    return windows
+  }
   return outcome !== null && outcome.kind === 'unavailable' ? { kind: 'unavailable', wsl: true } : outcome
 }
 
@@ -496,9 +501,11 @@ async function readClipboardLinuxTools(): Promise<ClipboardRead> {
 // /proc kernel signature of WSL, read once; the env markers are checked on
 // every call because sudo/ssh sessions may drop them.
 let wslKernel: boolean | undefined
+let wslOverride: boolean | undefined
 
 /** True when running inside WSL (env markers, else the kernel release). */
 function isWsl(): boolean {
+  if (wslOverride !== undefined) return wslOverride
   if (process.env.WSL_DISTRO_NAME || process.env.WSL_INTEROP) return true
   if (wslKernel === undefined) {
     try {
@@ -724,6 +731,15 @@ export function readClipboard(): Promise<ClipboardRead> {
 export function _resetLinuxPasteCache(): void {
   linuxPaste = undefined
   wslKernel = undefined
+}
+
+/**
+ * Force the WSL detection result (undefined restores real detection). Kept
+ * apart from {@link _resetLinuxPasteCache} so a cache reset never drops it.
+ * @internal test-only
+ */
+export function _setWslOverride(value: boolean | undefined): void {
+  wslOverride = value
 }
 
 /**

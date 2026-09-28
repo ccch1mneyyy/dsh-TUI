@@ -38,7 +38,7 @@
  * Run: node scripts/verify-clipboard.mjs
  */
 
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { inflateSync } from 'node:zlib'
@@ -56,6 +56,7 @@ const {
   formatClipboardInsert,
   readClipboard,
   _resetLinuxPasteCache,
+  _setWslOverride,
 } = await import('../lib/types/utils/clipboard.js')
 const { bmpToPng } = await import('../lib/types/utils/bmp.js')
 
@@ -292,10 +293,12 @@ if (process.platform === 'linux') {
     WSL_DISTRO_NAME: process.env.WSL_DISTRO_NAME,
     WSL_INTEROP: process.env.WSL_INTEROP,
   }
-  // Never inherit a real WSL marker: the non-WSL scenarios must stay non-WSL.
+  // Each scenario pins WSL detection explicitly (the host itself may be WSL,
+  // where /proc/sys/kernel/osrelease would otherwise leak in).
   delete process.env.WSL_DISTRO_NAME
   delete process.env.WSL_INTEROP
   const restoreEnv = () => {
+    _setWslOverride(undefined)
     for (const [key, value] of Object.entries(savedEnv)) {
       if (value === undefined) delete process.env[key]
       else process.env[key] = value
@@ -305,8 +308,7 @@ if (process.platform === 'linux') {
     _resetLinuxPasteCache()
     if (ps === undefined) delete process.env.STUB_PS
     else process.env.STUB_PS = ps
-    if (wsl) process.env.WSL_DISTRO_NAME = 'Ubuntu-verify'
-    else delete process.env.WSL_DISTRO_NAME
+    _setWslOverride(wsl)
     if (wl === undefined) delete process.env.STUB_WL
     else process.env.STUB_WL = wl
     if (xclip === undefined) delete process.env.STUB_XCLIP
@@ -610,6 +612,19 @@ printf '%s\n' "$2" | /usr/bin/sed -e 's|^C:|/mnt/c|' -e 's|\\|/|g'
       `got ${JSON.stringify(r)}`,
     )
 
+    // The unstageable .bmp the Linux tool exported is unlinked once PowerShell
+    // supersedes it (r is the previous scenario's image in the same dir).
+    const exportDir = dirname(r.path)
+    const bmpsIn = () => readdirSync(exportDir).filter(f => f.endsWith('.bmp'))
+    const bmpsBefore = bmpsIn()
+    scenario('wsl-badbmp-cleanup', { wl: 'badbmp', ps: 'image', wsl: true })
+    r = await readClipboard()
+    check(
+      'integration: WSL fallback removes the superseded .bmp export',
+      r !== null && r.kind === 'image' && r.path.endsWith('.png') && same(bmpsIn(), bmpsBefore),
+      `before ${JSON.stringify(bmpsBefore)} after ${JSON.stringify(bmpsIn())}`,
+    )
+
     scenario('wsl-files', { wl: 'empty', ps: 'files', wsl: true })
     r = await readClipboard()
     check(
@@ -623,6 +638,18 @@ printf '%s\n' "$2" | /usr/bin/sed -e 's|^C:|/mnt/c|' -e 's|\\|/|g'
     r = await readClipboard()
     check(
       'integration: WSL empty read → PowerShell text',
+      r !== null && r.kind === 'text' && r.text === 'win text',
+      `got ${JSON.stringify(r)}`,
+    )
+
+    // Real detection (no override): the WSL_DISTRO_NAME env marker alone.
+    scenario('wsl-env-marker', { wl: 'empty', ps: 'text' })
+    _setWslOverride(undefined)
+    process.env.WSL_DISTRO_NAME = 'Ubuntu-verify'
+    r = await readClipboard()
+    delete process.env.WSL_DISTRO_NAME
+    check(
+      'integration: WSL_DISTRO_NAME marker enables the PowerShell fallback',
       r !== null && r.kind === 'text' && r.text === 'win text',
       `got ${JSON.stringify(r)}`,
     )
