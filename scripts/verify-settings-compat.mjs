@@ -20,6 +20,9 @@ import TuiSettingsSectionsRuntime, { getHostSettingsSections, getLocalSettingsSe
 import { DEFAULT_PAGE_MARGIN, DEFAULT_STATUS_BAR, isPageMarginMode, normalizePageMargin, parsePageMarginSpec } from '../src/tuiDisplayPrefs.ts'
 import { getLang, isLang } from '../src/i18n.ts'
 import { SHORTCUT_ACTIONS, setKeymapOverrides, resetKeymapOverrides, effectiveComboString, parseComboDraft, draftComboConflicts } from '../src/utils/keymap.ts'
+// Module-level bindings the extracted `bindSettings` / section-registration
+// source references; `new Function` only sees what this list hands it.
+import { DEFAULT_WELCOME_ART, WELCOME_ART_IDS, WELCOME_ART_MODES } from '../src/components/welcomeArt.ts'
 
 const modernSchema = typeof Schema.boolean().volatile === 'function'
 const parsed = Config({ fullscreen: false, whale: false, effortDefault: 'high', statusBar: { model: false } })
@@ -182,6 +185,7 @@ if (modernSchema) for (const registry of ['service', 'local']) for (const entryI
           ctx: runtimeCtx, configOwner: ctx, runtimeConfig, config: configValues(runtimeConfig), Schema, SHORTCUT_ACTIONS,
           DEFAULT_STATUS_BAR, normalizePageMargin, isLang, Config, configValues, createSettingsScope, resolveSettingsNamespace, setKeymapOverrides,
           bootedFullscreen: true, bootedTerminalImages: true,
+          WELCOME_ART_IDS, DEFAULT_WELCOME_ART,
           t: key => key, notifyChannel: message => notices.push(message), channel: { notify: message => notices.push(message) },
           observe: value => observed.push(value),
           capture(settingsCtx, scope, apply) { child = settingsCtx; liveScope = scope; applyShortcuts = apply },
@@ -198,6 +202,7 @@ if (modernSchema) for (const registry of ['service', 'local']) for (const entryI
       config: configValues(runtime), SHORTCUT_ACTIONS, effectiveComboString, parseComboDraft, draftComboConflicts,
       getLang, DEFAULT_PAGE_MARGIN, isPageMarginMode, parsePageMarginSpec,
       bootedFullscreen: true, terminalImagesDisabledByEnv: false,
+      WELCOME_ART_MODES,
       readEffortPref: () => undefined, // Do not read the developer's persisted preferences.
     })
     root.effect(() => unregister)
@@ -214,6 +219,17 @@ if (modernSchema) for (const registry of ['service', 'local']) for (const entryI
     const view = host.listNamespaces().find(view => view.ns === ns)
     const diffField = section.fields.find(field => field.path.length === 1 && field.path[0] === 'diffLayout')
     assert.ok(diffField, 'the production section exposes diffLayout')
+    // The welcome-art picker: one registry row per design, and a save must
+    // reach the runtime config through the same path the /settings screen uses.
+    const artField = section.fields.find(field => field.path.length === 1 && field.path[0] === 'welcomeArt')
+    assert.ok(artField, 'the production section exposes welcomeArt')
+    assert.equal(artField.kind, 'select', 'welcomeArt is a picker, not a free-text field')
+    assert.deepEqual(
+      artField.options.map(option => option.value),
+      WELCOME_ART_MODES.map(mode => mode.id),
+      'the picker lists every registered design, in registry order',
+    )
+    assert.equal(configValues(runtime).welcomeArt, DEFAULT_WELCOME_ART, 'the runtime config starts on the shipped default')
     const form = new SettingsForm(host, view, section.fields)
     assert.equal(form.available, true, 'real describe() supplies the editable TUI section')
     assert.equal(form.field(diffField).text, 'split', 'the settings page shows the effective value')
@@ -227,6 +243,12 @@ if (modernSchema) for (const registry of ['service', 'local']) for (const entryI
     assert.equal(owner.fiber, ownerFiber, 'editing settings does not remount the agent owner')
     assert.equal(observed.length, 1)
     assert.equal(host.listNamespaces().find(view => view.ns === ns).value.diffLayout, 'unified')
+    observed.length = 0
+    form.edit(artField, 'heavy')
+    assert.equal(await form.save(), true, `welcomeArt save uses the real settings mutation path: ${form.failureMessage}`)
+    assert.equal(configValues(runtime).welcomeArt, 'heavy', 'the selected design reaches the runtime config without a restart')
+    assert.equal(observed.length, 1, 'one owner event per settings commit')
+    assert.equal(host.listNamespaces().find(view => view.ns === ns).value.welcomeArt, 'heavy')
     observed.length = 0
     await root.loader.update(entryId, { config: { diffLayout: 'unified', fullscreen: false, shortcuts: {} } })
     await root.loader.await()

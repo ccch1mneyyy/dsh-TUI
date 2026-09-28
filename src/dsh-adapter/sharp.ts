@@ -13,6 +13,8 @@
  * module resolves to `undefined`; callers keep their text fallback.
  */
 import { createRequire } from 'node:module'
+import { homedir } from 'node:os'
+import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 
 export type SharpModule = Awaited<typeof import('sharp')>['default']
@@ -33,6 +35,15 @@ export function loadSharp(): Promise<SharpModule | undefined> {
 export function sharpCandidatePaths(): string[] {
   const local = createRequire(import.meta.url)
   const paths: string[] = []
+  // Desktop Harness keeps its shared dependencies beside profile directories.
+  // A profile may contain an incomplete optional sharp install, so try the
+  // already-working host copy before the profile-local one.
+  try {
+    const dshHome = process.env.DSH_HOME ?? join(homedir(), '.dsh')
+    paths.push(createRequire(join(dshHome, 'profiles', 'package.json')).resolve('sharp'))
+  } catch {
+    // A standalone CLI install may have no shared profile dependency tree.
+  }
   try {
     const anchor = local.resolve('@deepseek-ai/dsh-session/package.json')
     paths.push(createRequire(anchor).resolve('sharp'))

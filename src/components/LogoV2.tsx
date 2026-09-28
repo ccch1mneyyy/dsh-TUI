@@ -5,16 +5,25 @@ import { upstreamDriftSummary, UPSTREAM_VALIDATED_VERSION, type UpstreamDriftSum
 import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { Box, Text, useAnimationFrame, useTerminalSize } from '../ui.js'
-import { getTheme } from '../theme.js'
+import { Box, Image, Text, useAnimationFrame, useTerminalImages, useTerminalSize } from '../ui.js'
+import { getTheme, isLightThemeActive } from '../theme.js'
 import { useTheme } from './design-system/ThemeProvider.js'
 import { parseRGB } from './Spinner/spinnerUtils.js'
-import { renderBigText } from './bigfont.js'
 import { stringWidth } from '../ink/stringWidth.js'
-import { BRAND, FLASH, ICE, PALE, sweep } from './shimmer.js'
+import { BRAND, FLASH, ICE, sweep } from './shimmer.js'
 import { STANDARD_FRAME_INDEX, WhaleArt } from './Whale.js'
 import { OPENING_SEQUENCES, pickOpeningSequence, WHALE_FRAME_INDEX, type OpeningStep, type WhaleIntroId } from './whaleFrames.js'
 import { RESTING_POSE, type WhaleLayerPose } from './whaleLayers.js'
+import { wordmarkWidth, type WordmarkStyle } from './wordmark.js'
+import {
+  cellFallbackOf,
+  DEFAULT_WELCOME_ART,
+  IMAGE_MIN_COLUMNS,
+  welcomeArtMode,
+  type WelcomeArtId,
+} from './welcomeArt.js'
+import { loadWelcomeArtPair, type WelcomeImagePair } from './welcomeImage.js'
+import { pixelWordmark, rainbowPixels } from './welcomePixels.js'
 import {
   initialWhaleIdleState,
   nextWhaleIdleStep,
@@ -77,12 +86,20 @@ function capitalize(text: string): string {
  * on the standard pose, sweep highlights parked off-screen, clock
  * unsubscribed, zero timers.
  *
- * Layout: the 13-row pixel whale beside a text column of matching height —
- * the `✦ dsh-TUI` wordmark with version, the `DEEPSEEK`/`HARNESS` tagline in
- * the 5-row block font (brand-blue → ice gradient), the model/effort and
- * cwd in plain text (no brand-color highlight), the startup tip, and below
- * the whale the welcome tagline, centered under the art, in ice
- * blue. Narrow terminals drop the whale and keep the text column.
+ * Which art the header draws is the `welcomeArt` setting: every design is a
+ * row in `welcomeArt.ts`, and the row's `art` field picks the path —
+ * `cell` (the block-font wordmark beside the pixel whale), `image` (a PNG
+ * whale beside a PNG wordmark) or `scene` (native transparent rainbow pixels). The selected mode wins outright: a `cell` mode never grows a PNG
+ * header, and an `image` mode falls back to its own block-font wordmark —
+ * not to another mode's PNG — when the terminal is too narrow.
+ *
+ * Layout (cell and image paths): the 13-row pixel whale beside a text
+ * column of matching height — the `✦ dsh-TUI` wordmark with version, the
+ * welcome wordmark in the 5-row block font, the model/effort and cwd in
+ * plain text (no brand-color highlight), the startup tip, and below the
+ * whale the welcome tagline, centered under the art, in ice blue. When the
+ * art font cannot fit, use a complete plain-text title. Narrow terminals
+ * drop the whale and keep the text column.
  */
 export function LogoV2({
   model,
@@ -95,6 +112,8 @@ export function LogoV2({
   whaleIdle = true,
   working = false,
   drift,
+  welcomeArt = DEFAULT_WELCOME_ART,
+  pose,
 }: {
   model: string
   effort?: string | undefined
@@ -105,7 +124,7 @@ export function LogoV2({
   intro?: WhaleIntroId
   /** Test seam: pin the startup tip line (probes need a deterministic tip). */
   tip?: Tip
-  /** Show the pixel whale art (settings `dsh-tui.whale`); off → text-only header. */
+  /** Show the whale art (settings `dsh-tui.whale`); off → text-only header. */
   whale?: boolean
   /** Welcome-phase idle whale behaviors — fin flutters, tail thumps,
    * sleep after inactivity (settings `dsh-tui.whaleIdle`; on by default —
@@ -120,6 +139,11 @@ export function LogoV2({
   /** Test seam: pin/suppress the upstream-drift notice (`null` forces it off;
    * `undefined` — the production default — auto-detects the install). */
   drift?: UpstreamDriftSummary | null
+  /** Header art mode (settings `dsh-tui.welcomeArt`); see `welcomeArt.ts`. */
+  welcomeArt?: WelcomeArtId
+  /** Test seam: pin the settled whale pose (probes capture the sleeping whale
+   * without waiting out the idle timer). */
+  pose?: WhaleLayerPose
 }): React.ReactNode {
   // One intro per logo mount: the production path rolls (startup splash
   // and each /deepseek replay roll independently), the `intro` seam pins
@@ -185,11 +209,42 @@ export function LogoV2({
   const theme = getTheme(themeName)
   const { columns } = useTerminalSize()
 
+  const mode = welcomeArtMode(welcomeArt)
   const wordmarkRGB = parseRGB(theme.accent) ?? BRAND
   const wordmarkShimmerRGB = parseRGB(theme.accentShimmer) ?? ICE
   const taglineRGB = parseRGB(theme.activity) ?? ICE
 
   const showWhale = whale && columns >= WHALE_MIN_COLUMNS
+  const textColumns = columns - (showWhale ? FULL_WHALE_WIDTH + 2 : 0)
+  // The mode decides the shape; the size only decides whether it fits.
+  const wantsImage = mode.art === 'image' && showWhale && columns >= IMAGE_MIN_COLUMNS
+  const wantsScene = mode.art === 'scene' && showWhale
+  const graphicsAvailable = useTerminalImages(wantsImage)
+  const [welcomeImages, setWelcomeImages] = React.useState<(WelcomeImagePair & { modeId: WelcomeArtId }) | null>(null)
+  React.useEffect(() => {
+    if (!wantsImage || mode.art !== 'image') return
+    let active = true
+    setWelcomeImages(null)
+    void loadWelcomeArtPair(mode.whale, mode.wordmark).then(images => {
+      if (active) setWelcomeImages({ ...images, modeId: mode.id })
+    }, () => { /* The cell-art wordmark remains the fallback. */ })
+    return () => { active = false }
+  }, [wantsImage, mode])
+  // Both PNG paths replace the cell art only once the intro has settled, so
+  // the opening whale animation still plays; until then (and whenever the
+  // load fails) the block-font header is the fallback.
+  const showImage = settled && wantsImage && welcomeImages !== null && welcomeImages.modeId === mode.id
+  const showScene = settled && wantsScene
+
+  // A pinned pose is a still, so it also turns the welcome-phase idle
+  // behaviors off — the two cannot both own the settled whale.
+  const pinnedFrame = mode.art === 'cell' ? (mode.whaleFrame ?? (mode.id === 'deepsleep' ? WHALE_FRAME_INDEX.sleep5 : undefined)) : undefined
+  const idleEnabled = whaleIdle
+    && pinnedFrame === undefined
+    && !whaleFrozen
+    && !showImage
+    && !showScene
+  const idleWhale = settled && showWhale && idleEnabled
 
   // Welcome-phase idle behaviors (settings `dsh-tui.whaleIdle`): fin
   // flutters, tail thumps and blinks while idle, and a sleep-Z loop after
@@ -206,7 +261,7 @@ export function LogoV2({
   const pendingHeartRef = React.useRef(false)
   const tickRef = React.useRef<(() => void) | null>(null)
   React.useEffect(() => {
-    if (!settled || !whaleIdle || !showWhale || whaleFrozen) {
+    if (!idleWhale) {
       setIdlePose(null)
       tickRef.current = null
       return
@@ -239,7 +294,7 @@ export function LogoV2({
       tickRef.current = null
       if (timer !== undefined) clearTimeout(timer)
     }
-  }, [settled, whaleIdle, showWhale, working, whaleFrozen])
+  }, [idleWhale, working])
   // Render priority: the layered planner pose owns the settled header while
   // it runs (hearts and blinks compose over the body planes). Otherwise a
   // click heart plays as whole heart frames over the intro — or over the
@@ -248,7 +303,7 @@ export function LogoV2({
     ? (INTRO_HEART_PASS[heartSeq] ?? STANDARD_FRAME_INDEX)
     : !settled
       ? sequence[step].frame
-      : STANDARD_FRAME_INDEX
+      : pinnedFrame ?? STANDARD_FRAME_INDEX
   // Frozen clock for the settled header: t=0 parks every sweep highlight
   // off-screen, leaving the static gradient behind.
   const t = settled ? 0 : time
@@ -269,8 +324,64 @@ export function LogoV2({
     ? Math.max(0, Math.round(WHALE_CENTER - stringWidth(tagline) / 2))
     : 2
 
-  const bigDeepSeek = renderBigText('DEEPSEEK', t, wordmarkRGB, taglineRGB, FLASH, 60)
-  const bigHarness = renderBigText('HARNESS', t, taglineRGB, PALE, FLASH, 60)
+  // Block-font wordmark for `cell` modes, and the narrow-terminal fallback for
+  // every other shape.
+  const wordmarkStyle: WordmarkStyle = mode.art === 'cell' ? mode.wordmark : cellFallbackOf(mode)
+  const showBigTitle = !showImage && !showScene && textColumns >= wordmarkWidth(wordmarkStyle)
+  const pixelTitle = pixelWordmark(wordmarkStyle, frameIndex)
+
+  const badge = (
+    <Text wrap="truncate-end">
+      {sweep('✦ dsh-TUI', t, wordmarkRGB, wordmarkShimmerRGB, 60)}
+      <Text dimColor>{'  v' + VERSION}</Text>
+    </Text>
+  )
+  const infoLines = (
+    <>
+      <Text wrap="truncate-end">
+        {model}
+        {effort !== undefined && <Text dimColor>{' · ' + capitalize(effort) + ' effort'}</Text>}
+      </Text>
+      <Text dimColor wrap="truncate-end">
+        {cwd}
+      </Text>
+      <Text wrap="truncate-end">
+        <Text dimColor>{tr('logo-tip-prefix')}</Text>
+        {getLang() === 'zh' ? randomTip.zh : randomTip.en}
+        <Text dimColor>{' · /tips ' + tr('logo-tip-more')}</Text>
+      </Text>
+      {driftLine != null && (
+        <Text color="warning" wrap="wrap">
+          ⚠{' '}
+          {tOr(
+            `logo-drift-${driftLine.kind}`,
+            `The dsh engine (${driftLine.versions.join(' / ')}) does not match the validated ${UPSTREAM_VALIDATED_VERSION}; reinstall via npm i -g @deepseek-ai/dsh@${UPSTREAM_VALIDATED_VERSION}.`,
+            {
+              installed: driftLine.versions.join(' / '),
+              validated: UPSTREAM_VALIDATED_VERSION,
+              primary: UPSTREAM_VALIDATED_VERSION,
+            },
+          )}
+        </Text>
+      )}
+    </>
+  )
+
+  // The native scene includes whale, rainbow and outline lettering; metadata stays live.
+  if (showScene) {
+    const scene = rainbowPixels(columns - 2, isLightThemeActive(themeName))
+    return (
+      <Box ref={ref} flexDirection="column" marginTop={1} width="100%">
+        <Box flexDirection="column">
+          {scene.map((row, index) => <Text key={index} wrap="truncate-end">{row}</Text>)}
+        </Box>
+        <Box flexDirection="column" marginTop={1}>
+          {badge}
+          {infoLines}
+        </Box>
+      </Box>
+    )
+  }
 
   return (
     <Box ref={ref} flexDirection="column" marginTop={1}>
@@ -284,7 +395,7 @@ export function LogoV2({
               // click on its next tick — run that tick immediately so the
               // heart shows instantly instead of after the current delay.
               // Intro: the whole-frame heart pass above.
-              if (whaleFrozen) return
+              if (whaleFrozen || showImage) return
               if (settled && whaleIdle) {
                 pendingHeartRef.current = true
                 tickRef.current?.()
@@ -294,54 +405,42 @@ export function LogoV2({
               }
             }}
           >
-            <WhaleArt
-              frameIndex={frameIndex}
-              pose={settled && whaleIdle && !whaleFrozen ? (idlePose ?? RESTING_POSE) : undefined}
-              width={FULL_WHALE_WIDTH}
-            />
+            {showImage ? (
+              <Image presentation="preview" source={graphicsAvailable ? welcomeImages.whale.source : undefined} width={40} height={13} alt={`${mode.labelZh} 鲸鱼`}>
+                <Box flexDirection="column">{welcomeImages.whale.rows.map((row, index) => <Text key={index}>{row}</Text>)}</Box>
+              </Image>
+            ) : (
+              <WhaleArt
+                frameIndex={frameIndex}
+                pose={pose ?? (idleWhale ? (idlePose ?? RESTING_POSE) : undefined)}
+                width={FULL_WHALE_WIDTH}
+              />
+            )}
           </Box>
         )}
         <Box flexDirection="column" flexShrink={1}>
-          <Text wrap="truncate-end">
-            {sweep('✦ dsh-TUI', t, wordmarkRGB, wordmarkShimmerRGB, 60)}
-            <Text dimColor>{'  v' + VERSION}</Text>
-          </Text>
-          {bigDeepSeek.map((row, index) => (
-            <Text key={`ds-${index}`} wrap="truncate-end">
-              {row}
-            </Text>
-          ))}
-          {bigHarness.map((row, index) => (
-            <Text key={`h-${index}`} wrap="truncate-end">
-              {row}
-            </Text>
-          ))}
-          <Text wrap="truncate-end">
-            {model}
-            {effort !== undefined && <Text dimColor>{' · ' + capitalize(effort) + ' effort'}</Text>}
-          </Text>
-          <Text dimColor wrap="truncate-end">
-            {cwd}
-          </Text>
-          <Text wrap="truncate-end">
-            <Text dimColor>{tr('logo-tip-prefix')}</Text>
-            {getLang() === 'zh' ? randomTip.zh : randomTip.en}
-            <Text dimColor>{' · /tips ' + tr('logo-tip-more')}</Text>
-          </Text>
-          {driftLine != null && (
-            <Text color="warning" wrap="wrap">
-              ⚠{' '}
-              {tOr(
-                `logo-drift-${driftLine.kind}`,
-                `The dsh engine (${driftLine.versions.join(' / ')}) does not match the validated ${UPSTREAM_VALIDATED_VERSION}; reinstall via npm i -g @deepseek-ai/dsh@${UPSTREAM_VALIDATED_VERSION}.`,
-                {
-                  installed: driftLine.versions.join(' / '),
-                  validated: UPSTREAM_VALIDATED_VERSION,
-                  primary: UPSTREAM_VALIDATED_VERSION,
-                },
-              )}
-            </Text>
+          {badge}
+          {showImage && !graphicsAvailable && (
+            <Text dimColor wrap="truncate-end">{getLang() === 'zh'
+              ? '简化预览 · 高清显示需要支持图片的全屏终端'
+              : 'Simplified preview · full quality needs fullscreen terminal graphics'}</Text>
           )}
+          <Box flexDirection="column" marginBottom={1}>
+            {showImage ? (
+              <Image presentation="preview" source={graphicsAvailable ? welcomeImages.wordmark.source : undefined} width={48} height={12} alt={`${mode.labelZh} 字标`}>
+                <Box flexDirection="column">{welcomeImages.wordmark.rows.map((row, index) => <Text key={index}>{row}</Text>)}</Box>
+              </Image>
+            ) : showBigTitle ? (
+              <>
+                {pixelTitle.map((row, index) => (
+                  <Text key={index} wrap="truncate-end">{row}</Text>
+                ))}
+              </>
+            ) : (
+              <Text color="accent" bold wrap="wrap">DeepSeek Harness</Text>
+            )}
+          </Box>
+          {infoLines}
         </Box>
       </Box>
       <Box marginTop={1} paddingLeft={welcomePad}>

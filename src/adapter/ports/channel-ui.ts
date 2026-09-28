@@ -1,6 +1,6 @@
 /** Host-owned in-process Channel contract. No runtime or upstream imports. */
 import type { ChatRow, AgentStatus, TokenUsage, NotificationItem, ChannelGoal, TodoPanelItem, LoadedContext, PendingMessage, ChannelSceneMetadata, SubagentState, SubagentControl, BackgroundJobState, JobControl, StagedImageInput, StagedImageHandle, ComposerImageRef, ComposerSubmission, ExternalCommandOutcome, TranscriptImage, ResumeResult, EffortOption, PermissionPresetSnapshot, PresetOption, LlmModelInfo, LlmProviderInfo, SkillInfo, CredentialStatus, AgentViewRow, AgentViewDispatchResult, BackgroundResult, RawTrajEvent, ChannelSelection } from './channel-view.js'
-import type { SpinnerMode, ToolBackground, ScrollGutterMode, PageMarginSetting, StatusBarConfig, SessionModeSpec } from './channel-display.js'
+import type { SpinnerMode, ToolBackground, ScrollGutterMode, PageMarginSetting, StatusBarConfig, SessionModeSpec, WelcomeArtId } from './channel-display.js'
 import type { LocalCommand, CommandCompletion, BalanceResult, FileCandidate, RecapOutcome } from './channel-catalog.js'
 import type { TuiRewindMode, SessionTreeData, SessionSummary, PreviewEntry } from './channel-session.js'
 import type { TuiWorkspaceTarget, TuiWorkspaceCommand, TuiWorkspaceCommandResult, TuiWorkspaceEntry } from './channel-workspace.js'
@@ -137,6 +137,9 @@ export interface ChannelUi {
   readonly statusBar: Readonly<StatusBarConfig>
   /** Whether the header's pixel whale art shows (settings `dsh-tui.whale`). */
   readonly whale: boolean
+  /** Welcome-header art mode (settings `dsh-tui.welcomeArt`); see
+   *  `components/welcomeArt.ts` for the registry behind each id. */
+  readonly welcomeArt: WelcomeArtId
   /** Idle whale behaviors switch (settings `dsh-tui.whaleIdle`). */
   readonly whaleIdle: boolean
   /** Apply an idle-whale-behavior change (see the public Channel type). */
@@ -571,5 +574,6 @@ export interface ChannelUi {
   setSmoothStreaming(enabled: boolean): void
   setStatusBar(config: Partial<StatusBarConfig>): void
   setWhale(visible: boolean): void
+  setWelcomeArt(id: WelcomeArtId): void
   setMinimal(enabled: boolean): void
 }

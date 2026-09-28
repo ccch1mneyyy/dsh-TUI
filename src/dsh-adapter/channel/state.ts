@@ -1,7 +1,8 @@
 import type { AgentHandle } from '@deepseek-ai/dsh-agent'
 import type { SessionModeSpec } from '../../sessionModes.js'
-import { normalizePageMargin, normalizeScrollGutter, normalizeStatusBar, normalizeToolBackground, type PageMarginSetting, type ScrollGutterMode, type StatusBarConfig, type ToolBackground } from '../../tuiDisplayPrefs.js'
+import { normalizePageMargin, normalizeScrollGutter, normalizeStatusBar, normalizeToolBackground, type PageMarginSetting, type ScrollGutterMode, type StatusBarConfig, type ToolBackground, type WelcomeArtId } from '../../tuiDisplayPrefs.js'
 import { normalizeActivityPreset } from '../../components/activityFrames.js'
+import { DEFAULT_WELCOME_ART, isWelcomeArtId } from '../../components/welcomeArt.js'
 import type { ChannelState } from './types.js'
 
 /** Launch configuration belongs to channel construction, not the composition root. */
@@ -28,6 +29,8 @@ export interface ChannelLaunchOptions {
   statusBar?: Partial<StatusBarConfig>
   whale?: boolean
   whaleIdle?: boolean
+  /** Welcome-header art mode; unknown values fall back to the shipped default. */
+  welcomeArt?: WelcomeArtId
   minimal?: boolean
   contextBar?: boolean
   configuredPreset?: string
@@ -58,7 +61,7 @@ export function createInitialChannelView(
   'configuredPreset' | 'configuredActivityFrames' | 'configuredLang' | 'diffLayout' |
   'thinkingFold' | 'toolBackground' | 'scrollGutter' | 'pageMargin' |
   'foldTerminalCommand' | 'promptSessionLabel' | 'expandEditor' | 'smoothStreaming' |
-  'statusBar' | 'whale' | 'whaleIdle' | 'minimal' | 'activityEnabled' | 'contextBarEnabled' |
+  'statusBar' | 'whale' | 'whaleIdle' | 'welcomeArt' | 'minimal' | 'activityEnabled' | 'contextBarEnabled' |
   'agentPreset' | 'goal' | 'todos' | 'loadedContext' | 'pending' | 'commandList' |
   'lastUsage' | 'tps' | 'tpsSamples' | 'contextSegments' | 'subagents' | 'backgroundJobs' | 'selection'
 > {
@@ -78,7 +81,9 @@ export function createInitialChannelView(
     pageMargin: normalizePageMargin(options.pageMargin), foldTerminalCommand: options.foldTerminalCommand === true,
     promptSessionLabel: options.promptSessionLabel === true, expandEditor: options.expandEditor !== false,
     smoothStreaming: options.smoothStreaming !== false, statusBar: normalizeStatusBar(options.statusBar),
-    whale: options.whale !== false, whaleIdle: options.whaleIdle !== false, minimal: options.minimal === true, activityEnabled: options.activity !== false,
+    whale: options.whale !== false, whaleIdle: options.whaleIdle !== false,
+    welcomeArt: isWelcomeArtId(options.welcomeArt) ? options.welcomeArt : DEFAULT_WELCOME_ART,
+    minimal: options.minimal === true, activityEnabled: options.activity !== false,
     contextBarEnabled: options.contextBar !== false, agentPreset: options.agentPreset, goal: undefined,
     todos: [], loadedContext: undefined, pending: [], commandList: [], lastUsage: undefined,
     tps: undefined, tpsSamples: [], contextSegments: { system: 0, prompt: 0, assistant: 0, thinking: 0, tools: 0 },

@@ -4254,6 +4254,7 @@ export function Chat({
           cwd={channel.displayCwd}
           whale={channel.whale}
           whaleIdle={channel.whaleIdle && whaleArtVisible}
+          welcomeArt={channel.welcomeArt}
           working={channel.working}
           // Resuming a long session skips the ~3.4s opening animation: it
           // keeps firing low-frequency React commits that compete with the

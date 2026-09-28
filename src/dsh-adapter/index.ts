@@ -9,7 +9,8 @@
 import type { Context } from '@deepseek-ai/cordis'
 import Schema from '@deepseek-ai/schemastery'
 import type { SessionModeSpec } from '../sessionModes.js'
-import { DEFAULT_STATUS_BAR, normalizePageMargin, type PageMarginSetting, type ScrollGutterMode, type StatusBarConfig, type ToolBackground } from '../tuiDisplayPrefs.js'
+import { DEFAULT_STATUS_BAR, normalizePageMargin, type PageMarginSetting, type ScrollGutterMode, type StatusBarConfig, type ToolBackground, type WelcomeArtId } from '../tuiDisplayPrefs.js'
+import { DEFAULT_WELCOME_ART, WELCOME_ART_IDS } from '../components/welcomeArt.js'
 import { SHORTCUT_ACTIONS, type ShortcutActionId } from '../utils/keymap.js'
 import { editableConfig, type RuntimeConfig } from './compat/settings.js'
 
@@ -60,6 +61,9 @@ export interface Config {
   /** Show the header whale and its idle animation. */
   whale?: boolean
   whaleIdle?: boolean
+  /** Welcome-header art mode (`components/welcomeArt.ts`); an unknown value
+   *  falls back to the shipped default. Editable live from `/settings`. */
+  welcomeArt?: WelcomeArtId
   /** Reduce decorative header content and colors. */
   minimal?: boolean
   /** Show the live working line derived in-process from base session events. */
@@ -165,6 +169,9 @@ export const Config: Schema<Config, RuntimeConfig<Config>> = editableConfig<Conf
   effortDefault: Schema.string().required(false),
   whale: Schema.boolean().default(true),
   whaleIdle: Schema.boolean().default(true),
+  // Every welcome-header design, one registry row each (welcomeArt.ts); the
+  // default row is what the header already showed before the setting existed.
+  welcomeArt: Schema.union([...WELCOME_ART_IDS]).default(DEFAULT_WELCOME_ART),
   minimal: Schema.boolean().default(false),
   activity: Schema.boolean().default(true),
   activityFrames: Schema.string().required(false),
@@ -226,7 +233,7 @@ export const Config: Schema<Config, RuntimeConfig<Config>> = editableConfig<Conf
 }), [
   'diffLayout', 'thinkingFold', 'toolBackground', 'scrollGutter', 'pageMargin',
   'foldTerminalCommand', 'promptSessionLabel', 'expandEditor', 'smoothStreaming',
-  'mermaidDiagrams', 'effortDefault', 'statusBar', 'whale', 'whaleIdle', 'minimal',
+  'mermaidDiagrams', 'effortDefault', 'statusBar', 'whale', 'whaleIdle', 'welcomeArt', 'minimal',
   'lang', 'fullscreen', 'terminalImages', 'shortcuts',
 ])
 

@@ -66,6 +66,7 @@ import { getHostSettingsSections, getLocalSettingsSectionsHost, type TuiSettings
 import { compositionRoot, withHostRootCapability } from './host-access.js'
 import { render, ThemeProvider, AlternateScreen } from '../ui.js'
 import { PageMargin } from '../components/PageMargin.js'
+import { DEFAULT_WELCOME_ART, WELCOME_ART_IDS, WELCOME_ART_MODES, type WelcomeArtId } from '../components/welcomeArt.js'
 import instances from '../ink/instances.js'
 import { cursorMove, DISABLE_KITTY_KEYBOARD, DISABLE_MODIFY_OTHER_KEYS, DISABLE_WIN32_INPUT_MODE } from '../ink/termio/csi.js'
 import { DBP, DFE, DISABLE_MOUSE_TRACKING, EXIT_ALT_SCREEN, SHOW_CURSOR } from '../ink/termio/dec.js'
@@ -690,6 +691,9 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
         // the idle-wakeup gate stays: an explicit `false` keeps the settled
         // header timer-free.
         whaleIdle: Schema.boolean().default(true),
+        // Welcome-header art (see welcomeArt.ts). Every design is a registry
+        // row; the default row reproduces the header shipped before this key.
+        welcomeArt: Schema.union([...WELCOME_ART_IDS]).default(DEFAULT_WELCOME_ART),
         // Minimal mode: strips the header splash, emoji glyphs, and
         // decorative colors; code highlight and tool colors stay.
         minimal: Schema.boolean().default(false),
@@ -719,6 +723,7 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
       lang?: 'zh' | 'en'
       whale?: boolean
       whaleIdle?: boolean
+      welcomeArt?: WelcomeArtId
       minimal?: boolean
       fullscreen?: boolean
       terminalImages?: boolean
@@ -745,6 +750,14 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
     /** Apply the idle-whale-behavior setting: live-toggle the channel flag. */
     const applyWhaleIdle = (value: { whaleIdle?: boolean }): void => {
       channel.setWhaleIdle(value.whaleIdle ?? true)
+    }
+    /** Apply the header-art setting: swap the splash design in place. The
+     *  registry rejects unknown ids, so a stale settings.yaml value from an
+     *  older install keeps the shipped default instead of blanking the
+     *  header. */
+    const applyWelcomeArt = (value: { welcomeArt?: WelcomeArtId }): void => {
+      if (shadow) return
+      if (value.welcomeArt !== undefined) channel.setWelcomeArt(value.welcomeArt)
     }
     const applyMinimal = (value: { minimal?: boolean }): void => {
       if (shadow) return
@@ -823,6 +836,7 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
       applyLayout(next)
       applyWhale(next)
       applyWhaleIdle(next)
+      applyWelcomeArt(next)
       applyMinimal(next)
       applyLang(next)
       applyDisplay(next)
@@ -1392,6 +1406,19 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
           hint: 'Welcome-phase idle behaviors: after the intro the whale flutters its fins, thumps its tail, and dozes off when idle; clicking wakes a dozing whale and pops a heart. The first agent turn freezes it to the static standard frame.',
           hintDescriptions: { zh: '欢迎期闲置行为：开屏后鲸鱼娘摆鱼鳍、偶尔拍尾巴，空闲会睡着冒 Z；点击唤醒睡着的鲸鱼娘并冒爱心。开始第一个任务后定格为静态标准帧。' },
           kind: 'boolean',
+        },
+        {
+          path: ['welcomeArt'],
+          label: 'Welcome header art',
+          descriptions: { zh: '欢迎页头图方案' },
+          hint: 'Which design the startup splash draws. The block-font rows share the classic DEEPSEEK / HARNESS wordmark (three of them freeze the whale on one pose); the PNG rows draw a transparent whale and wordmark image and fall back to the DEEP SLEEP wordmark on terminals narrower than 92 columns; the rainbow row is one whole-header scene picked by the active theme. Applies immediately.',
+          hintDescriptions: { zh: '开屏头部用哪套设计。块字行共用经典 DEEPSEEK / HARNESS 字标（其中三行把鲸鱼定格在某个姿态）；PNG 行画透明鲸鱼 + 字标图，终端窄于 92 列时回落到 DEEP SLEEP 字标；彩虹行是整屏场景，按当前主题取深/浅版。立即生效。' },
+          kind: 'select',
+          options: WELCOME_ART_MODES.map(mode => ({
+            value: mode.id,
+            label: mode.codename === undefined ? mode.label : `${mode.codename} · ${mode.label}`,
+            descriptions: { zh: mode.labelZh },
+          })),
         },
         {
           path: ['minimal'],

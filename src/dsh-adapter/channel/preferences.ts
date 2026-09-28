@@ -1,8 +1,9 @@
 import { setMinimalMode } from '../../minimalMode.js'
 import { normalizePageMargin, normalizeScrollGutter, normalizeStatusBar, normalizeToolBackground, type StatusBarConfig } from '../../tuiDisplayPrefs.js'
+import { isWelcomeArtId, type WelcomeArtId } from '../../components/welcomeArt.js'
 import type { ChannelState } from '../channel/types.js'
 
-export function createPreferences(getState: () => Pick<ChannelState, 'diffLayout' | 'thinkingFold' | 'toolBackground' | 'scrollGutter' | 'pageMargin' | 'foldTerminalCommand' | 'promptSessionLabel' | 'expandEditor' | 'smoothStreaming' | 'statusBar' | 'whale' | 'whaleIdle' | 'minimal' | 'emit'>): Pick<ChannelState, 'setDiffLayout' | 'setThinkingFold' | 'setToolBackground' | 'setScrollGutter' | 'setPageMargin' | 'setFoldTerminalCommand' | 'setPromptSessionLabel' | 'setExpandEditor' | 'setSmoothStreaming' | 'setStatusBar' | 'setWhale' | 'setWhaleIdle' | 'setMinimal'> {
+export function createPreferences(getState: () => Pick<ChannelState, 'diffLayout' | 'thinkingFold' | 'toolBackground' | 'scrollGutter' | 'pageMargin' | 'foldTerminalCommand' | 'promptSessionLabel' | 'expandEditor' | 'smoothStreaming' | 'statusBar' | 'whale' | 'whaleIdle' | 'welcomeArt' | 'minimal' | 'emit'>): Pick<ChannelState, 'setDiffLayout' | 'setThinkingFold' | 'setToolBackground' | 'setScrollGutter' | 'setPageMargin' | 'setFoldTerminalCommand' | 'setPromptSessionLabel' | 'setExpandEditor' | 'setSmoothStreaming' | 'setStatusBar' | 'setWhale' | 'setWhaleIdle' | 'setWelcomeArt' | 'setMinimal'> {
   return {
 
     setDiffLayout(layout) {
@@ -93,6 +94,13 @@ export function createPreferences(getState: () => Pick<ChannelState, 'diffLayout
       const state = getState()
       if (enabled === state.whaleIdle) return
       state.whaleIdle = enabled
+      state.emit()
+    },
+
+    setWelcomeArt(id: WelcomeArtId) {
+      const state = getState()
+      if (!isWelcomeArtId(id) || id === state.welcomeArt) return
+      state.welcomeArt = id
       state.emit()
     },
 

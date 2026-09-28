@@ -1,5 +1,6 @@
 import type { ToolBackground, ScrollGutterMode, PageMarginSetting, PageMarginMode, PageMarginSpec, StatusBarConfig } from './adapter/ports/channel-display.js'
 export type { ToolBackground, ScrollGutterMode, PageMarginSetting, PageMarginMode, PageMarginSpec, StatusBarConfig } from './adapter/ports/channel-display.js'
+export type { WelcomeArtId } from './adapter/ports/channel-display.js'
 
 
 /** Defaults keep the essential route/context information visible. */

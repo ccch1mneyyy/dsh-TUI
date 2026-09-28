@@ -16,6 +16,27 @@ export type SpinnerMode =
 export type ToolBackground = 'none' | 'subtle' | 'strong'
 
 /**
+ * Which welcome-header art the splash draws (settings `dsh-tui.welcomeArt`).
+ * `components/welcomeArt.ts` owns the registry — labels, assets and the
+ * render path each id resolves to — so this union is only the port-facing
+ * shape of that key. Adding a design means adding a registry row and the id
+ * here; nothing else branches on the value.
+ */
+export type WelcomeArtId =
+  | 'classic'
+  | 'spout'
+  | 'heart'
+  | 'sleep'
+  | 'deepsleep'
+  | 'rainbow'
+  | 'isobath'
+  | 'dots'
+  | 'crystal'
+  | 'glitch'
+  | 'heavy'
+  | 'relief'
+
+/**
  * What the fullscreen transcript's right gutter shows:
  *  - `timeline`: Grok-style turn rail — one tick per user turn (conversation
  *    order, not scroll proportion), active turn highlighted, click to jump;

@@ -25,6 +25,11 @@
 ## Highlights
 
 - **Pixel whale pet** — three startup intros, click to wake; freezes after the first task.
+  Choose twelve header designs in `/settings → Welcome header art` (`dsh-tui.welcomeArt`, default `classic`).
+  Modes 01–06 use transparent square-pixel art. Modes 07–12 retain the original transparent PNGs,
+  displayed at full quality on fullscreen Kitty/Sixel terminals at least 92 columns wide.
+  Other terminals show a labeled simplified cell preview, which cannot preserve every fine line or dot;
+  narrow layouts use a readable text title. [Numbered black/white previews](docs/welcome-art.md).
 - **Terminal-native UI** — streaming Markdown, tool cards, `/` and `@` completion, `#L12-14` ranges, history search, zh/en UI.
 - **Images** — Kitty/Sixel thumbnails, centered preview with zoom and pan, paste-time fitting, text fallback.
 - **Mermaid diagrams** — ````mermaid ```` fences drawn as Unicode diagrams.

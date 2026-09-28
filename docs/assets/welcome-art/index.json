@@ -1,0 +1,146 @@
+[
+  {
+    "number": "01",
+    "id": "classic",
+    "art": "cell",
+    "codename": null,
+    "label": "Classic header",
+    "labelZh": "原版 · 标准姿态",
+    "shots": {
+      "dark": "docs/assets/welcome-art/01-classic-dark.png",
+      "light": "docs/assets/welcome-art/01-classic-light.png"
+    }
+  },
+  {
+    "number": "02",
+    "id": "spout",
+    "art": "cell",
+    "codename": null,
+    "label": "Classic header · water spout",
+    "labelZh": "喷水",
+    "shots": {
+      "dark": "docs/assets/welcome-art/02-spout-dark.png",
+      "light": "docs/assets/welcome-art/02-spout-light.png"
+    }
+  },
+  {
+    "number": "03",
+    "id": "heart",
+    "art": "cell",
+    "codename": null,
+    "label": "Classic header · heart",
+    "labelZh": "爱心",
+    "shots": {
+      "dark": "docs/assets/welcome-art/03-heart-dark.png",
+      "light": "docs/assets/welcome-art/03-heart-light.png"
+    }
+  },
+  {
+    "number": "04",
+    "id": "sleep",
+    "art": "cell",
+    "codename": null,
+    "label": "Classic header · dozing",
+    "labelZh": "睡觉",
+    "shots": {
+      "dark": "docs/assets/welcome-art/04-sleep-dark.png",
+      "light": "docs/assets/welcome-art/04-sleep-light.png"
+    }
+  },
+  {
+    "number": "05",
+    "id": "deepsleep",
+    "art": "cell",
+    "codename": null,
+    "label": "DEEP SLEEP wordmark",
+    "labelZh": "睡眠字形 DEEP SLEEP",
+    "shots": {
+      "dark": "docs/assets/welcome-art/05-deepsleep-dark.png",
+      "light": "docs/assets/welcome-art/05-deepsleep-light.png"
+    }
+  },
+  {
+    "number": "06",
+    "id": "rainbow",
+    "art": "scene",
+    "codename": "彩虹鲸鱼 × DSH",
+    "label": "Rainbow whale × DSH",
+    "labelZh": "彩虹鲸鱼 × DSH",
+    "shots": {
+      "dark": "docs/assets/welcome-art/06-rainbow-dark.png",
+      "light": "docs/assets/welcome-art/06-rainbow-light.png"
+    }
+  },
+  {
+    "number": "07",
+    "id": "isobath",
+    "art": "image",
+    "codename": "16",
+    "label": "16 · ISOBATH",
+    "labelZh": "16 · 等深",
+    "shots": {
+      "dark": "docs/assets/welcome-art/07-isobath-dark.png",
+      "light": "docs/assets/welcome-art/07-isobath-light.png"
+    }
+  },
+  {
+    "number": "08",
+    "id": "dots",
+    "art": "image",
+    "codename": "06A+",
+    "label": "06A+ · Dot matrix",
+    "labelZh": "06A+ · 加密点阵",
+    "shots": {
+      "dark": "docs/assets/welcome-art/08-dots-dark.png",
+      "light": "docs/assets/welcome-art/08-dots-light.png"
+    }
+  },
+  {
+    "number": "09",
+    "id": "crystal",
+    "art": "image",
+    "codename": "R5U",
+    "label": "R5U · Crystal facets",
+    "labelZh": "R5U · 晶体切面",
+    "shots": {
+      "dark": "docs/assets/welcome-art/09-crystal-dark.png",
+      "light": "docs/assets/welcome-art/09-crystal-light.png"
+    }
+  },
+  {
+    "number": "10",
+    "id": "glitch",
+    "art": "image",
+    "codename": "R1U",
+    "label": "R1U · Signal glitch",
+    "labelZh": "R1U · 信号故障",
+    "shots": {
+      "dark": "docs/assets/welcome-art/10-glitch-dark.png",
+      "light": "docs/assets/welcome-art/10-glitch-light.png"
+    }
+  },
+  {
+    "number": "11",
+    "id": "heavy",
+    "art": "image",
+    "codename": "R3",
+    "label": "R3 · Heavy glitch",
+    "labelZh": "R3 · 强烈故障",
+    "shots": {
+      "dark": "docs/assets/welcome-art/11-heavy-dark.png",
+      "light": "docs/assets/welcome-art/11-heavy-light.png"
+    }
+  },
+  {
+    "number": "12",
+    "id": "relief",
+    "art": "image",
+    "codename": "07",
+    "label": "07 · Pixel relief DSH",
+    "labelZh": "07 · 浮雕像素 DSH",
+    "shots": {
+      "dark": "docs/assets/welcome-art/12-relief-dark.png",
+      "light": "docs/assets/welcome-art/12-relief-light.png"
+    }
+  }
+]

@@ -97,6 +97,7 @@
     "./package.json": "./package.json"
   },
   "files": [
+    "assets/welcome",
     "bin",
     "lib",
     "cordis.patch.yml",

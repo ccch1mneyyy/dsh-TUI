@@ -18,6 +18,7 @@ import { noteFrameCause, noteListGeometry } from '../ink/geometry-trace.js'
 import { getTerminalFlushTick } from '../ink/flush-tick.js'
 import { TurnInterruptedRow } from './TurnInterruptedRow.js'
 import { LogoV2 } from './LogoV2.js'
+import type { WelcomeArtId } from '../tuiDisplayPrefs.js'
 import { StreamingMarkdown } from './StreamingMarkdown.js'
 import { MessageMetadata } from './messages/MessageMetadata.js'
 import { stripNarration } from '../utils/narration.js'
@@ -1733,6 +1734,7 @@ export function LogoHeader({
   whaleIdle = true,
   working = false,
   skipIntro = false,
+  welcomeArt,
 }: {
   model: string
   effort?: string | undefined
@@ -1744,13 +1746,16 @@ export function LogoHeader({
   /** Jump straight to the settled header (long-session resume: the ~3.4s
    *  opening animation competes with transcript mount batches). */
   skipIntro?: boolean
+  /** Header art mode (settings `dsh-tui.welcomeArt`); undefined keeps the
+   *  shipped default. */
+  welcomeArt?: WelcomeArtId
 }): React.ReactNode {
   // Minimal mode drops the whole splash (whale art AND wordmark) — only the
   // transcript and a bare status bar remain.
   if (isMinimalMode()) return null
   return (
     <Box flexDirection="column" marginBottom={1}>
-      <LogoV2 model={model} effort={effort} cwd={cwd} whale={whale} whaleIdle={whaleIdle} working={working} skipIntro={skipIntro} />
+      <LogoV2 model={model} effort={effort} cwd={cwd} whale={whale} whaleIdle={whaleIdle} working={working} skipIntro={skipIntro} welcomeArt={welcomeArt} />
     </Box>
   )
 }
