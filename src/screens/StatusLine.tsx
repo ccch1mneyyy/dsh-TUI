@@ -677,10 +677,21 @@ function buildHoverDetail(
     case 'cache': {
       const rate = formatCacheHitRate(usage)
       if (usage === undefined || rate === undefined) return null
+      // The cache split is optional on the wire (`cacheReadTokens?` /
+      // `cacheWriteTokens?`), and a route that never writes the prompt cache
+      // reports a zero or omits the field — every DeepSeek route does one or
+      // the other. A zero component says nothing the rate does not, and
+      // rendering the absence as `0` asserts a number no provider sent.
       return (
         <Text wrap="truncate">
-          {dim('cache ')}{rate} · {dim('read ')}{formatTokens(usage.cacheRead)} ·{' '}
-          {dim('write ')}{formatTokens(usage.cacheWrite)} · {dim('input ')}{formatTokens(usage.input)}
+          {dim('cache ')}{rate}
+          {usage.cacheRead > 0
+            ? <>{' · '}{dim('read ')}{formatTokens(usage.cacheRead)}</>
+            : null}
+          {usage.cacheWrite > 0
+            ? <>{' · '}{dim('write ')}{formatTokens(usage.cacheWrite)}</>
+            : null}
+          {' · '}{dim('input ')}{formatTokens(usage.input)}
         </Text>
       )
     }

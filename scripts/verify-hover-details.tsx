@@ -8,6 +8,8 @@
  *     未截断时浮层不重复标题（只带时间 + cwd）。
  *  H. 状态栏 model/git 字段：悬停 model 弹 provider + ctx 窗口明细；
  *     悬停 git 弹完整分支名（原地明细行契约，与 tps/cost 同款）。
+ *  H2. 状态栏 cache 字段：明细只列非零的缓存分项——DeepSeek 路由从不上报
+ *     缓存写入（write 恒 0 或整键缺席），旧代码把它写成「write 0」。
  *  I. 上下文进度条：条上不再有任何文字（内容类型只由颜色表达，唯一的
  *     文本是最右占比）；整条一个悬停目标，悬停任意位置弹【全部内容类型
  *     + free】的色块+数字明细——条没有标签，这行就是它的 legend。
@@ -80,6 +82,7 @@ const { FileSuggestions } = await import('../src/components/FileSuggestions.js')
 const { SessionListRow } = await import('../src/components/sessions/SessionListRow.js')
 const { StatusLine } = await import('../src/screens/StatusLine.js')
 const { formatAbsolute } = await import('../src/sessions/format.js')
+const { formatTokens } = await import('../src/terminal-utils/format.js')
 
 try {
   const COLS = 50
@@ -216,6 +219,54 @@ try {
     await settled(() => screenHas(term, 'git test-branch-long')))
   check('H 明细随悬停目标切换（model 明细已离开）',
     await settled(() => !screenHas(term, 'provider test-provider')))
+  hover(stdin, 1, 1)
+
+  // --- H2. cache 字段悬停：为零/缺席的缓存分项不进明细 --------------------
+  // 实证（本机 500 个会话日志、133 个 provider 会话）：官方 deepseek-official
+  // 与第三方 commandcode 两条 DeepSeek 路由的 cacheWriteTokens 恒为 0 或整键
+  // 缺席（官方 4368 条记录里 0 条为正），旧代码把两者都渲染成「write 0」——
+  // 等于宣称一个 provider 从未给过的数字。现在 read/write 只在 > 0 时出现，
+  // 命中率与 input 始终在（footer 字段本身不变）。
+  const CACHE_USAGE = { input: 2_217, output: 325, cacheRead: 18_432, cacheWrite: 0 }
+  const cacheTree = (lastUsage: typeof CACHE_USAGE) => (
+    <AlternateScreen>
+      <Box flexDirection="column">
+        <KeySink />
+        <StatusLine
+          channel={{ ...channelStub, statusBar: { cache: true }, lastUsage } as never}
+        />
+        <tooltip.TooltipLayer />
+      </Box>
+    </AlternateScreen>
+  )
+  instance.rerender(cacheTree(CACHE_USAGE))
+  check('场景 H2 就绪：cache 字段（命中率）在屏', await settled(() => screenHas(term, '缓存')))
+  hoverText(stdin, term, '缓存')
+  {
+    const read = `read ${formatTokens(CACHE_USAGE.cacheRead)}`
+    const input = `input ${formatTokens(CACHE_USAGE.input)}`
+    check('H2 cacheWrite=0 时明细不给 write，read/input 仍在',
+      await settled(() => screenHas(term, read) && screenHas(term, input) && !screenHas(term, 'write')),
+      `${read} / ${input}`)
+  }
+  {
+    const WRITE_USAGE = { ...CACHE_USAGE, cacheWrite: 6_000 }
+    instance.rerender(cacheTree(WRITE_USAGE))
+    check('场景 H2b 就绪：cache 字段仍在屏', await settled(() => screenHas(term, '缓存')))
+    hoverText(stdin, term, '缓存')
+    const write = `write ${formatTokens(WRITE_USAGE.cacheWrite)}`
+    check('H2 cacheWrite>0 时明细给出 write', await settled(() => screenHas(term, write)), write)
+  }
+  {
+    const COLD_USAGE = { input: 4_228, output: 15, cacheRead: 0, cacheWrite: 0 }
+    instance.rerender(cacheTree(COLD_USAGE))
+    check('场景 H2c 就绪：cache 字段仍在屏', await settled(() => screenHas(term, '缓存')))
+    hoverText(stdin, term, '缓存')
+    const input = `input ${formatTokens(COLD_USAGE.input)}`
+    check('H2 冷启动（read/write 皆 0）明细只给 input',
+      await settled(() => screenHas(term, input) && !screenHas(term, 'read') && !screenHas(term, 'write')),
+      input)
+  }
   hover(stdin, 1, 1)
 
   // --- I. 上下文进度条：无标签 + 整条悬停给全量明细 ----------------------

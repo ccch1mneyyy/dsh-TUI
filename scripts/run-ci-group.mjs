@@ -484,7 +484,8 @@ const GROUPS = {
     ["verify-toolcard-i18n", ['node', '--import', 'tsx/esm', 'scripts/verify-toolcard-i18n.tsx']],
 // 悬停浮层第二批回归：@ 文件补全面板长路径悬停弹全路径（完整可见的短路径
 // 不弹）、会话列表行标题截断悬停弹完整标题+绝对时间+cwd（未截断不重复
-// 标题）、状态栏 model/git 字段悬停明细（provider/ctx 窗口/完整分支）。
+// 标题）、状态栏 model/git 字段悬停明细（provider/ctx 窗口/完整分支）、
+// cache 字段悬停明细只列非零缓存分项（DeepSeek 路由不上报缓存写入）。
     ["verify-hover-details", ['node', '--import', 'tsx/esm', 'scripts/verify-hover-details.tsx']],
 // 便携包更新解压链安全回归：Windows 解压优先 tar.exe 数组参数，回退
 // Expand-Archive 的两个路径按 PowerShell 约定把 ' 双写为 ''——路径派生
