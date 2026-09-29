@@ -78,12 +78,6 @@ const SUPPORTS_SUSPEND = process.platform !== "win32";
 // but short enough that the first scroll after reattach works.
 const STDIN_RESUME_GAP_MS = 5000;
 
-// In-flight window for the parser's query-provenance evidence (DESIGN D1).
-// A reply can outlive its promise — a flush() sentinel resolves a query that
-// the terminal then still answers ("unsupported" was wrong) — so a query
-// sent within this window keeps counting as in flight after its promise has
-// settled. Keyed off querier.lastSentAt; never claims on its own.
-const TERMINAL_QUERY_IN_FLIGHT_MS = 1000;
 type Props = {
 	readonly children: ReactNode;
 	readonly stdin: NodeJS.ReadStream;
@@ -613,17 +607,18 @@ export default class App extends PureComponent<Props, State> {
 
 	// Process input through the parser and handle the results
 	processInput = (input: string | Buffer | null): void => {
-		// Host-injected provenance (#1142 pattern): the parser only claims a
-		// terminal-response tail when we actually asked the terminal something.
+		// Host-injected query evidence (#1142 pattern): the parser only claims
+		// a terminal-response tail when a query of the matching expected type
+		// is genuinely awaiting an answer. This is the live query lifecycle,
+		// not a recency window — a settled query stops authorizing at once.
 		// Injected per call — newState replaces the whole state object, so a
 		// value stored once would go stale. Read-only for the parser.
-		const terminalQueryInFlight =
-			this.querier.hasPending ||
-			(this.querier.lastSentAt !== undefined &&
-				Date.now() - this.querier.lastSentAt <= TERMINAL_QUERY_IN_FLIGHT_MS);
+		const terminalExpectedResponseTypes = [
+			...this.querier.pendingResponseTypes,
+		];
 		// Parse input using our state machine
 		const [keys, newState] = parseMultipleKeypresses(
-			{ ...this.keyParseState, terminalQueryInFlight },
+			{ ...this.keyParseState, terminalExpectedResponseTypes },
 			input,
 		);
 		// Gesture latch: a parser-captured SGR mouse prefix (mouseTailHold

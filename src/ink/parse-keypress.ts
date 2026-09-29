@@ -361,6 +361,101 @@ function parseTerminalResponse(s: string): TerminalResponse | null {
   return null
 }
 
+// Unfinished prefixes of the reply shapes parseTerminalResponse() accepts,
+// paired with the response type they can still complete into. This is the
+// shape half of the claim gate: a held reply fragment is only joined to its
+// continuation while one of these types is actually expected by a pending
+// query (terminalExpectedResponseTypes). The patterns are deliberately
+// tighter than TERMINAL_RESPONSE_PREFIX_RE: `?` + two params can still grow
+// into a DA1 but never into a DECRPM (`?mode;status$y` has exactly two
+// params), so a DA1-shaped fragment is released as literal text as soon as
+// only DECRPM is in flight. `parseTerminalResponse` remains the only
+// authority on completeness.
+// eslint-disable-next-line no-control-regex
+const INCOMPLETE_RESPONSE_PREFIXES: ReadonlyArray<
+  readonly [TerminalResponse['type'], RegExp]
+> = [
+  // DA1: any `?`-parameter list (including the bare introducer).
+  ['da1', /^\x1b\[\?[\d;]*$/],
+  // DECRPM: `?mode;status` before the `$` intermediate, then the same before
+  // `$` + final.
+  ['decrpm', /^\x1b\[\?\d*(?:;\d*)?$/],
+  ['decrpm', /^\x1b\[\?\d+;\d+\$$/],
+  // Kitty flags and DECXCPR: one `?` + at most two numeric params.
+  ['kittyKeyboard', /^\x1b\[\?\d*$/],
+  ['cursorPosition', /^\x1b\[\?\d*(?:;\d*)?$/],
+  // DA2: any `>`-parameter list.
+  ['da2', /^\x1b\[>[\d;]*$/],
+  // XTWINOPS: `6;h;w t` / `4;h;w t`, up to the final byte.
+  ['terminalPixelSize', /^\x1b\[[46](?:;\d*){0,2}$/],
+  // XTVERSION payload, up to the ST terminator.
+  ['xtversion', /^\x1bP>\|[^\x1b]*$/],
+]
+
+/**
+ * Response types an unfinished reply-shaped candidate could still complete
+ * into, judged from its introducer and parameter bytes alone. Empty means
+ * the bytes cannot become a known reply (either a final byte already ended a
+ * different sequence, or the shape is unknown) and must stay literal.
+ * @param candidate - the inbound bytes, with the ESC introducer synthesized.
+ * @returns the types a continuation could still produce.
+ */
+function possibleResponseTypes(
+  candidate: string,
+): Set<TerminalResponse['type']> {
+  const types = new Set<TerminalResponse['type']>()
+  for (const [type, pattern] of INCOMPLETE_RESPONSE_PREFIXES) {
+    if (pattern.test(candidate)) types.add(type)
+  }
+  return types
+}
+
+/**
+ * Whether an unfinished candidate can still become a response the host is
+ * currently waiting for. Both halves are required: an in-flight query of the
+ * matching type, and a shape that can still produce it.
+ */
+function expectsResponseType(
+  candidate: string,
+  expected: ReadonlySet<TerminalResponse['type']>,
+): boolean {
+  for (const type of possibleResponseTypes(candidate)) {
+    if (expected.has(type)) return true
+  }
+  return false
+}
+
+/**
+ * Find the shortest complete terminal response at the head of a post-flush
+ * tail whose introducer ESC was already flushed as a key. The caller
+ * synthesizes the ESC back; `parseTerminalResponse` decides completeness, so
+ * only a type the host expects is claimed and trailing bytes are left for
+ * ordinary parsing.
+ * @param tail - fragment without its ESC introducer.
+ * @param expected - response types of the queries still awaiting a reply.
+ * @returns the claimed response and how many bytes of `tail` it consumed, or
+ *   undefined when no expected reply completes at the head.
+ */
+function claimExpectedResponseHead(
+  tail: string,
+  expected: ReadonlySet<TerminalResponse['type']>,
+): { response: TerminalResponse; consumed: number } | undefined {
+  const limit = Math.min(tail.length, TERMINAL_RESPONSE_MAX_LENGTH)
+  for (let consumed = 2; consumed <= limit; consumed++) {
+    const head = '\x1b' + tail.slice(0, consumed)
+    const response = parseTerminalResponse(head)
+    if (response) {
+      return expected.has(response.type)
+        ? { response, consumed }
+        : undefined
+    }
+    // A head that can no longer become an expected reply ends the scan:
+    // longer candidates extend a shape that is already closed or unknown.
+    if (!expectsResponseType(head, expected)) return undefined
+  }
+  return undefined
+}
+
 function splitNumericParams(params: string): number[] {
   if (!params) return []
   return params.split(';').map(p => parseInt(p, 10))
@@ -941,13 +1036,25 @@ export type KeyParseState = {
    */
   terminalResponseHoldAt?: number
   /**
-   * Host-injected, read-only in-flight evidence for terminal-query replies:
-   * the host saw a query either still queued or sent within its bounded
-   * window, so a response tail may legitimately arrive. Absent means false —
-   * without an injection the parser never claims a response tail, which keeps
-   * the pre-gate behavior for direct callers.
+   * Parser-maintained reply fragment held across calls after its introducer
+   * ESC was already flushed as a standalone key (a ConPTY split that lands
+   * mid-tail). The fragment has the synthesized ESC removed; the next text
+   * chunk may complete it. It lives only inside the
+   * terminalResponseTailAfterEscFlushAt window and is dropped — never
+   * emitted as text — once that window closes, the evidence disappears or
+   * the fragment stops being reply-shaped.
    */
-  terminalQueryInFlight?: boolean
+  terminalResponseReattachTail?: string
+  /**
+   * Host-injected, read-only in-flight evidence for terminal-query replies:
+   * the response types of the queries still awaiting a reply
+   * (querier.pendingResponseTypes). A reply is only claimed while one of
+   * these types is both expected and shape-compatible with the bytes; an
+   * absent or empty list means no evidence, so the parser never claims a
+   * response tail and direct callers keep the pre-gate behavior. The host
+   * re-injects it on every call, so a settled query stops counting at once.
+   */
+  terminalExpectedResponseTypes?: readonly TerminalResponse['type'][]
   // Internal tokenizer instance
   _tokenizer?: Tokenizer
 }
@@ -1016,14 +1123,23 @@ export function parseMultipleKeypresses(
   const isRecordPrefix = (value: string): boolean =>
     !inPaste && WIN32_INPUT_PREFIX_RE.test(value) &&
     (WIN32_INPUT_BODY_PREFIX_RE.test(value) || win32HoldAllowed)
+  // Evidence is the live query lifecycle, not a recency window: the host
+  // injects the response types of the queries still awaiting an answer, and
+  // a reply is only ever claimed when its shape can complete into one of
+  // them. Read-only here and re-read on every call, so a query that settles
+  // (matched reply, sentinel drain, dispose) stops authorizing immediately.
+  const expectedResponseTypes = new Set(
+    prevState.terminalExpectedResponseTypes ?? [],
+  )
+  const hasQueryEvidence = expectedResponseTypes.size > 0
   // A buffer that is already reply-specific (TERMINAL_RESPONSE_PREFIX_RE) is
   // eligible to be held open for its continuation — but only with the
-  // host-injected in-flight-query evidence (D1). Record framing is judged
-  // first (D6): every numeric CSI prefix the record branch can frame belongs
-  // to it, and this predicate never re-labels one. The evidence is read-only
-  // here and defaults to false, so a direct caller that never injects it
-  // never holds (D7 / AC-3). Paste payloads stay literal, exactly like the
-  // record branch above.
+  // host-injected in-flight-query evidence (D1) AND a shape/type match (D2).
+  // Record framing is judged first (D6): every numeric CSI prefix the record
+  // branch can frame belongs to it, and this predicate never re-labels one.
+  // Without evidence nothing is held, so a direct caller that never injects
+  // it keeps the pre-gate behavior (D7 / AC-3). Paste payloads stay literal,
+  // exactly like the record branch above.
   const isResponsePrefix = (value: string): boolean =>
     !isRecordPrefix(value) && !inPaste && TERMINAL_RESPONSE_PREFIX_RE.test(value)
 
@@ -1084,11 +1200,13 @@ export function parseMultipleKeypresses(
   // record frame.
   const recordPrefix = isRecordPrefix(tokenizer.buffer())
   // Evidence is re-read on every call, never latched: once the host stops
-  // reporting a query in flight, the hold ends and the buffer is released by
-  // the old path (no evidence, no claim) — only the injected read-only flag
-  // can open or keep a reply hold.
+  // reporting a query in flight — or the buffer's shape can no longer
+  // complete into a response type it expects — the hold ends and the buffer
+  // is released by the old path (no evidence, no claim).
   const claimsResponsePrefix =
-    (prevState.terminalQueryInFlight ?? false) && isResponsePrefix(tokenizer.buffer())
+    hasQueryEvidence &&
+    isResponsePrefix(tokenizer.buffer()) &&
+    expectsResponseType(tokenizer.buffer(), expectedResponseTypes)
   let deferFlush = isFlush && (recordPrefix || claimsResponsePrefix)
   if (
     deferFlush &&
@@ -1142,19 +1260,25 @@ export function parseMultipleKeypresses(
   let mouseTailHoldAt: number | undefined = prevState.mouseTailHoldAt
   const terminalResponseTailAfterEscFlushAt =
     prevState.terminalResponseTailAfterEscFlushAt
+  // Fragment of a reply whose introducer ESC was already flushed as a key,
+  // held across calls until the rest of its shape arrives (see
+  // KeyParseState.terminalResponseReattachTail).
+  let terminalResponseReattachTail: string | undefined =
+    prevState.terminalResponseReattachTail
   // Re-attach (D3b, handed over from #796): a lone Escape was genuinely
-  // flushed, so the next text token may be the rest of a reply that lost its
-  // introducer. Claim it only inside the bounded window AND with the
-  // host-injected in-flight evidence — the missing gate CodeRabbit flagged on
-  // #796. The shape test for this complete token is parseTerminalResponse()
-  // itself (its pattern list IS the reply-shape list); a miss stays literal
-  // text, and without injected evidence this branch never fires (AC-3).
+  // flushed, so a text token inside the window may be the rest of a reply
+  // that lost its introducer. Claim it only inside the bounded window AND
+  // with a query in flight whose expected response type the shape can still
+  // complete into — the missing gate CodeRabbit flagged on #796.
+  // parseTerminalResponse() remains the completeness authority; bytes whose
+  // shape matches no expected type stay literal, and without injected
+  // evidence this branch never fires (AC-3).
   // Bounded by TIME, not by "the next call": a burst can interleave a chunk
   // between the flush and the tail (another reply answering an earlier query,
   // or a keystroke), and the real-ConPTY dry run leaked the tail when that
   // chunk closed the window early.
   const mayRecoverTerminalResponseTail =
-    (prevState.terminalQueryInFlight ?? false) &&
+    hasQueryEvidence &&
     terminalResponseTailAfterEscFlushAt !== undefined &&
     Date.now() - terminalResponseTailAfterEscFlushAt <= TERMINAL_RESPONSE_TAIL_GRACE_MS
   // Carry that stamp under the same discipline while it is still in-window,
@@ -1163,6 +1287,10 @@ export function parseMultipleKeypresses(
   const carryTailAfterEscFlush = mayRecoverTerminalResponseTail
     ? terminalResponseTailAfterEscFlushAt
     : undefined
+  // A closed window also drops the fragment it was holding: those bytes
+  // cannot be joined to a reply any more, and protocol-shaped bytes are
+  // dropped rather than shown.
+  if (carryTailAfterEscFlush === undefined) terminalResponseReattachTail = undefined
 
   // Hard deadline, checked at the top of EVERY call — not only on flush.
   // Continuous input keeps cancelling and re-arming App's 50ms flush timer,
@@ -1190,6 +1318,9 @@ export function parseMultipleKeypresses(
   for (let qi = 0; qi < tokenQueue.length; qi++) {
     const token = tokenQueue[qi]!
     if (token.type === 'sequence') {
+      // The wire carried an ESC-led event between the held fragment and this
+      // token: a reply's fragments are contiguous, so the fragment is dead.
+      terminalResponseReattachTail = undefined
       if (token.value === PASTE_START) {
         inPaste = true
         pasteBuffer = ''
@@ -1285,6 +1416,7 @@ export function parseMultipleKeypresses(
         // a held prefix's report is dead. Discard before recovering.
         mouseTailHold = undefined
         mouseTailHoldAt = undefined
+        terminalResponseReattachTail = undefined
         // A delayed win32-input-mode continuation can arrive after App's
         // escape timer has already flushed its ESC prefix. Recover complete
         // record tails so their protocol bytes do not leak into the prompt.
@@ -1318,6 +1450,7 @@ export function parseMultipleKeypresses(
         // protocol bytes into the prompt as an ordinary key.
         mouseTailHold = undefined
         mouseTailHoldAt = undefined
+        terminalResponseReattachTail = undefined
         const resynthesized = '\x1b' + token.value
         const mouse = parseMouseEvent(resynthesized)
         keys.push(mouse ?? parseKeypress(resynthesized))
@@ -1334,6 +1467,7 @@ export function parseMultipleKeypresses(
         // protocol prefix, a win32 tail, or ordinary typing. The prefix
         // regex (no $ anchor) matches the report at the head; the suffix
         // is whatever follows.
+        terminalResponseReattachTail = undefined
         const combined = mouseTailHold + token.value
         const m = combined.match(SGR_MOUSE_TAIL_PREFIX_RE)!
         const reportEnd = m[0].length
@@ -1364,6 +1498,7 @@ export function parseMultipleKeypresses(
         // discards the hold once its grace expires. The regex demands `<` +
         // digits, which no realistic typed text produces as a single text
         // token.
+        terminalResponseReattachTail = undefined
         if (mouseTailHold === undefined) mouseTailHoldAt = Date.now()
         mouseTailHold = (mouseTailHold ?? '') + token.value
       } else {
@@ -1372,17 +1507,50 @@ export function parseMultipleKeypresses(
         // stale hold so it cannot merge the NEXT fragment into a phantom event.
         mouseTailHold = undefined
         mouseTailHoldAt = undefined
-        // #796 re-attach: put the flushed introducer back, then let the one
-        // reply-shape authority decide. A miss — or no injected evidence —
-        // keeps the token literal: shape alone never swallows input (AC-3),
-        // and the claim rides the existing querier.onResponse channel (D5).
-        const response = mayRecoverTerminalResponseTail
-          ? parseTerminalResponse('\x1b' + token.value)
-          : null
-        if (response) {
-          keys.push({ kind: 'response', sequence: '\x1b' + token.value, response })
+        // #796 re-attach + post-flush reassembly: put the flushed introducer
+        // back, then let the one reply-shape authority decide. A fragment
+        // held from an earlier call is joined with this token first, so a
+        // tail that is itself split again (`[?61;4;6` then `;14;21;22c`) is
+        // reassembled instead of falling into the prompt in pieces. A claim
+        // needs BOTH a pending query of the matching expected type and a
+        // shape that can still complete into it; anything else keeps the
+        // token literal (AC-3) and drops a stale fragment rather than
+        // leaking protocol bytes.
+        const candidate = (terminalResponseReattachTail ?? '') + token.value
+        const claimed = mayRecoverTerminalResponseTail
+          ? claimExpectedResponseHead(candidate, expectedResponseTypes)
+          : undefined
+        if (claimed) {
+          terminalResponseReattachTail = undefined
+          keys.push({
+            kind: 'response',
+            sequence: '\x1b' + candidate.slice(0, claimed.consumed),
+            response: claimed.response,
+          })
+          // Trailing bytes beyond the completed reply are ordinary input
+          // (the terminal batched the tail with the next keystrokes).
+          const suffix = candidate.slice(claimed.consumed)
+          if (suffix) tokenQueue.splice(qi + 1, 0, { type: 'text', value: suffix })
+        } else if (
+          mayRecoverTerminalResponseTail &&
+          candidate.length <= TERMINAL_RESPONSE_MAX_LENGTH &&
+          expectsResponseType('\x1b' + candidate, expectedResponseTypes)
+        ) {
+          // Still an open expected reply prefix — hold it for the next call.
+          terminalResponseReattachTail = candidate
         } else {
-          keys.push(parseKeypress(token.value))
+          // The held fragment (if any) cannot be completed; drop it and give
+          // the fresh bytes their own chance to start a reply prefix.
+          terminalResponseReattachTail = undefined
+          if (
+            mayRecoverTerminalResponseTail &&
+            token.value.length <= TERMINAL_RESPONSE_MAX_LENGTH &&
+            expectsResponseType('\x1b' + token.value, expectedResponseTypes)
+          ) {
+            terminalResponseReattachTail = token.value
+          } else {
+            keys.push(parseKeypress(token.value))
+          }
         }
       }
     }
@@ -1471,6 +1639,9 @@ export function parseMultipleKeypresses(
         key.name === 'escape' &&
         key.sequence === '\x1b',
     )
+  // A fresh lone-Escape flush opens a NEW window: a fragment held against
+  // the old one cannot be part of a reply whose introducer just arrived.
+  if (escapeFlushedNow) terminalResponseReattachTail = undefined
 
   // Build new state
   const newState: KeyParseState = {
@@ -1493,9 +1664,9 @@ export function parseMultipleKeypresses(
     // The host gate rides along: App replaces its state with this object on
     // every read, and the hold must stay closed for the whole session.
     win32Capable: prevState.win32Capable,
-    // Same host-injected contract for the query provenance: read-only here,
+    // Same host-injected contract for the query evidence: read-only here,
     // re-injected by App on every input call, so it is never stale.
-    terminalQueryInFlight: prevState.terminalQueryInFlight,
+    terminalExpectedResponseTypes: prevState.terminalExpectedResponseTypes,
     win32InputMode,
     win32InputStartedAt,
     win32EscFlushedAt,
@@ -1506,6 +1677,7 @@ export function parseMultipleKeypresses(
     mouseTailHold,
     mouseTailHoldAt,
     terminalResponseHoldAt,
+    terminalResponseReattachTail,
     // A fresh lone-Escape flush re-arms the window; otherwise the carried
     // stamp keeps it open (see carryTailAfterEscFlush above).
     terminalResponseTailAfterEscFlushAt: escapeFlushedNow
