@@ -42,6 +42,18 @@ export const SETTING_DEFINITIONS = {
       { value: 'unified', label: 'Unified', descriptions: { zh: '统一式' } },
     ],
   },
+  'diffStyle': {
+    label: 'Diff style',
+    descriptions: { zh: 'diff 样式' },
+    group: 'conversation',
+    hint: 'Edit/Write diff look: default −/+ rows, or ▌ bars with tinted rows (removals above additions).',
+    hintDescriptions: { zh: 'Edit/Write diff 外观：默认 −/+ 行，或 ▌ 竖条加整行底色（删除在上、新增在下）。' },
+    kind: 'select',
+    options: [
+      { value: 'default', label: 'Default', descriptions: { zh: '默认' } },
+      { value: 'bars', label: 'Bars', descriptions: { zh: '竖条' } },
+    ],
+  },
   'effortDefault': {
     label: 'Default reasoning effort',
     descriptions: { zh: '默认推理强度' },

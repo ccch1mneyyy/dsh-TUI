@@ -8,6 +8,9 @@
  * 3. 70 cols (below SPLIT_DIFF_MIN_COLS): the card falls back to the
  *    unified view
  * 4. a new-file Write (oldText null) fills only the right pane
+ * 7. diffStyle `bars`: unified rows carry a colored ▌
+ *    bar and row tint, removals precede additions per block, context shows
+ *    once; the split layout swaps its −/+ markers for the same bar
  *
  * Exits non-zero on the first failed assertion (CI convention).
  */
@@ -52,7 +55,7 @@ const editTool = {
 }
 
 /** Boot one headless terminal at the given width and render the card. */
-async function renderAt(cols, tool, diffLayout = 'auto', toolBackground = 'none') {
+async function renderAt(cols, tool, diffLayout = 'auto', toolBackground = 'none', diffStyle = 'default') {
   const rows = 30
   const term = new XTerm({ cols, rows, scrollback: 0, allowProposedApi: true })
   class FakeStdout extends Writable {
@@ -62,7 +65,7 @@ async function renderAt(cols, tool, diffLayout = 'auto', toolBackground = 'none'
     _write(chunk, _e, cb) { term.write(String(chunk), cb) }
   }
   const app = await render(
-    React.createElement(AssistantToolUseMessage, { tool, marginTopOnTurn: false, verbose: false, diffLayout, toolBackground }),
+    React.createElement(AssistantToolUseMessage, { tool, marginTopOnTurn: false, verbose: false, diffLayout, toolBackground, diffStyle }),
     { stdout: new FakeStdout(), debug: true, exitOnCtrlC: false },
   )
   // 固定窗:pacing cli-highlight 首次使用才懒加载，其后的补色重绘没有
@@ -224,6 +227,67 @@ async function renderAt(cols, tool, diffLayout = 'auto', toolBackground = 'none'
   const lightColor = lightRuns?.[0]?.find(run => run.text === 'def')?.color
   check('主题签名不同缓存不串色', darkColor !== undefined && lightColor !== undefined && darkColor !== lightColor,
     `dark=${darkColor} light=${lightColor}`)
+}
+
+// ---- 7. diffStyle bars
+{
+  const { lines, screen, bgAt, fgAt } = await renderAt(70, editTool, 'auto', 'none', 'bars')
+  const s = screen()
+  check('bars：无经典 - /+ 行', !s.includes('- def shout') && !s.includes('+ def shout'))
+  const delRow = lines.findIndex(line => line.includes('def shout(text):'))
+  const addRow = lines.findIndex(line => line.includes('def shout(text, mark="!"):'))
+  check('bars：删除行在新增行之上', delRow >= 0 && addRow > delRow)
+  check('bars：改动行带 ▌', delRow >= 0 && addRow >= 0 && lines[delRow]!.includes('▌') && lines[addRow]!.includes('▌'))
+  const ctxRows = lines.filter(line => line.includes('# tail'))
+  check('bars：上下文只出现一次且无 ▌', ctxRows.length === 1 && !ctxRows[0]!.includes('▌'), JSON.stringify(ctxRows))
+  if (delRow >= 0 && addRow >= 0) {
+    const delBar = lines[delRow]!.indexOf('▌')
+    const addBar = lines[addRow]!.indexOf('▌')
+    check('bars：删除条为红词色', fgAt(delBar, delRow) === 0xb26671, `fg=${fgAt(delBar, delRow).toString(16)}`)
+    check('bars：新增条为绿词色', fgAt(addBar, addRow) === 0x57956b, `fg=${fgAt(addBar, addRow).toString(16)}`)
+    check('bars：删除行暗红底', bgAt(delBar + 2, delRow) === 0x362b2c, `bg=${bgAt(delBar + 2, delRow).toString(16)}`)
+    check('bars：新增行暗绿底（行尾）', bgAt(60, addRow) === 0x2b352c, `bg=${bgAt(60, addRow).toString(16)}`)
+    const markX = lines[addRow]!.indexOf('mark="!"')
+    check('bars：改动词组亮绿', markX > 0 && fgAt(markX, addRow) === 0x57956b, `fg=${fgAt(Math.max(markX, 0), addRow).toString(16)}`)
+  }
+}
+{
+  const blockTool = {
+    ...editTool,
+    callId: 'c5',
+    callView: {
+      card: 'diff',
+      title: 'Edit /tmp/b.py',
+      diffs: [{ path: '/tmp/b.py', oldText: 'alpha\nbeta\nkeep', newText: 'ALPHA2\nBETA2\nkeep' }],
+    },
+  }
+  const { lines } = await renderAt(70, blockTool, 'auto', 'none', 'bars')
+  const order = ['alpha', 'beta', 'ALPHA2', 'BETA2', 'keep'].map(text => lines.findIndex(line => line.includes(text)))
+  check('bars：同块先全部删除再全部新增', order.every((row, i) => row >= 0 && (i === 0 || row > order[i - 1]!)), JSON.stringify(order))
+}
+{
+  const { lines, screen } = await renderAt(120, editTool, 'auto', 'none', 'bars')
+  const pairRow = lines.findIndex(line => line.includes('def shout(text):') && line.includes('def shout(text, mark="!"):'))
+  check('bars + 宽屏：仍为双栏', pairRow >= 0 && lines[pairRow]!.includes('│'))
+  check('bars + 双栏：标记为 ▌ 而非 −/+', pairRow >= 0 && (lines[pairRow]!.match(/▌/g) ?? []).length === 2 && !screen().includes('−'))
+}
+{
+  const tailTool = {
+    ...editTool,
+    callId: 'c6',
+    callView: {
+      card: 'diff',
+      title: 'Edit /tmp/t.py',
+      diffs: [{ path: '/tmp/t.py', oldText: 'x = 1\nend', newText: 'x = 2\nend\nmore' }],
+    },
+  }
+  const { lines } = await renderAt(70, tailTool, 'auto', 'none', 'bars')
+  const endRows = lines.filter(line => /\bend\b/.test(line))
+  check('末行无换行：共享末行仍为上下文', endRows.length === 1 && !endRows[0]!.includes('▌'), JSON.stringify(endRows))
+}
+{
+  const { screen } = await renderAt(70, editTool, 'auto', 'none', 'default')
+  check('default 风格保持经典统一式', screen().includes('- def shout(text):') && !screen().includes('▌'))
 }
 
 console.log(failures === 0 ? 'repro-diff-split: all assertions passed' : `repro-diff-split: ${failures} FAILED`)

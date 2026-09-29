@@ -40,6 +40,9 @@ import { primaryComboString } from '../utils/keymap.js'
  * One source line = one terminal row (truncate, never wrap): the two panes
  * must stay row-aligned, and a wrapped long line would tear the pairing.
  * Tabs become 3 spaces so column math holds.
+ *
+ * {@link UnifiedDiffView} is the `bars` diff style's
+ * single-column sibling over the same alignment and highlighting.
  */
 
 /** One styled run inside a pane line. */
@@ -169,7 +172,10 @@ function lcsPairs(oldLines: readonly string[], newLines: readonly string[]): [nu
  *  render-time concern over the visible slice). */
 function alignFileDiff(fileIndex: number, oldText: string | null, newText: string): DiffRow[] {
   const rows: DiffRow[] = []
-  const parts = JsDiff.diffLines(expandTabs(oldText ?? ''), expandTabs(newText))
+  // Hunk texts carry no final newline: terminate both so a shared last old
+  // line still matches its twin when the new side continues past it.
+  const terminate = (text: string): string => (text === '' || text.endsWith('\n') ? text : `${text}\n`)
+  const parts = JsDiff.diffLines(terminate(expandTabs(oldText ?? '')), terminate(expandTabs(newText)))
   let oldIndex = 0
   let newIndex = 0
   for (let i = 0; i < parts.length; i++) {
@@ -236,7 +242,27 @@ function alignFileDiff(fileIndex: number, oldText: string | null, newText: strin
   return rows
 }
 
+/** Single-column order: each changed block lists all removals, then all
+ *  additions (a change pair splits into its two sides); context stays once. */
+function unifiedOrder(rows: readonly DiffRow[]): DiffRow[] {
+  const out: DiffRow[] = []
+  let adds: DiffRow[] = []
+  for (const row of rows) {
+    if (row.kind === 'context') {
+      out.push(...adds, row)
+      adds = []
+      continue
+    }
+    if (row.oldWords !== undefined) out.push({ kind: 'del', fileIndex: row.fileIndex, oldIndex: row.oldIndex, oldWords: row.oldWords })
+    if (row.newWords !== undefined) adds.push({ kind: 'add', fileIndex: row.fileIndex, newIndex: row.newIndex, newWords: row.newWords })
+  }
+  out.push(...adds)
+  return out
+}
+
 // --- rendering --------------------------------------------------------------
+
+type PaneSide = { readonly segments: readonly Segment[] }
 
 function PaneLine({
   side,
@@ -245,13 +271,16 @@ function PaneLine({
   tone,
   toolBackground,
   padLeft = false,
+  bars = false,
 }: {
-  readonly side: { readonly segments: readonly Segment[] } | undefined
+  readonly side: PaneSide | undefined
   readonly kind: DiffRow['kind']
   readonly width: number
   readonly tone: 'old' | 'new'
   readonly toolBackground: ToolBackground
   readonly padLeft?: boolean
+  /** `bars` diff style: a colored ▌ replaces the dim −/+ marker. */
+  readonly bars?: boolean
 }): React.ReactNode {
   const ordinaryBackground = toolBackground === 'subtle'
     ? 'toolCardBackgroundDim'
@@ -269,11 +298,12 @@ function PaneLine({
   const wordColor = tone === 'old' ? 'diffRemovedWord' : 'diffAddedWord'
   // Status gutter instead of line numbers: ToolFileDiff has no file
   // offsets, and an invented number misleads (issue #250, P2-3).
-  const marker = kind === 'context' ? ' ' : tone === 'old' ? '−' : '+'
+  const marker = kind === 'context' ? ' ' : bars ? '▌' : tone === 'old' ? '−' : '+'
   const prefix = padLeft ? ` ${marker}` : marker
+  const barColor = bars && kind !== 'context' ? wordColor : undefined
   return (
     <Box width={width} flexShrink={0} backgroundColor={backgroundColor}>
-      <Text dimColor backgroundColor={backgroundColor}>{`${prefix} `}</Text>
+      <Text color={barColor} dimColor={barColor === undefined} backgroundColor={backgroundColor}>{`${prefix} `}</Text>
       {side === undefined ? (
         <Text backgroundColor={backgroundColor}> </Text>
       ) : (
@@ -295,16 +325,9 @@ function PaneLine({
   )
 }
 
-export function SplitDiffView({
-  diffs,
-  width,
-  maxRows,
-  verbose,
-  toolBackground = 'none',
-  reveal,
-}: {
+type DiffViewProps = {
   readonly diffs: readonly ToolFileDiff[]
-  /** Content width available to the whole two-pane block (divider included). */
+  /** Content width available to the whole block (split divider included). */
   readonly width: number
   /** Row budget when not verbose; overflow folds into one hint row. */
   readonly maxRows: number
@@ -318,7 +341,20 @@ export function SplitDiffView({
    * the reveal.
    */
   readonly reveal?: { readonly key: string }
-}): React.ReactNode {
+}
+
+type ViewRow = DiffRow | { readonly separator: string }
+
+/** Shared body of both views: align (per-file `order`), cap, reveal, and
+ *  per-row segments with syntax runs merged over word flags. */
+function useDiffRows(
+  { diffs, maxRows, verbose, reveal }: DiffViewProps,
+  order: (rows: DiffRow[]) => DiffRow[],
+): {
+  readonly shown: readonly ViewRow[]
+  readonly hidden: number
+  readonly sides: (row: DiffRow) => { readonly old?: PaneSide; readonly next?: PaneSide }
+} {
   const [hl, setHl] = React.useState<CliHighlight | null>(null)
   React.useEffect(() => {
     let mounted = true
@@ -336,7 +372,7 @@ export function SplitDiffView({
 
   // Alignment is text-only and capped BEFORE styling: the highlighter and
   // word-diff work lands only on the visible slice (issue #250, P2-8).
-  const rows: (DiffRow | { readonly separator: string })[] = []
+  const rows: ViewRow[] = []
   let prevPath: string | undefined
   diffs.forEach((diff, fileIndex) => {
     if (diffs.length > 1) {
@@ -344,7 +380,7 @@ export function SplitDiffView({
       else rows.push({ separator: '⋯' })
     }
     prevPath = diff.path
-    rows.push(...alignFileDiff(fileIndex, diff.oldText, diff.newText))
+    rows.push(...order(alignFileDiff(fileIndex, diff.oldText, diff.newText)))
   })
 
   const totalRows = rows.length
@@ -358,8 +394,6 @@ export function SplitDiffView({
     : visible.length
   const shown = revealedRows >= visible.length ? visible : visible.slice(0, revealedRows)
 
-  const paneWidth = Math.max(20, Math.floor((width - 1) / 2))
-
   // Whole-hunk highlight per file (multi-line lexer state preserved);
   // only the visible rows merge syntax runs with word flags below.
   const fileSyntax = diffs.map(diff => {
@@ -370,40 +404,92 @@ export function SplitDiffView({
     }
   })
 
+  const sides = (row: DiffRow) => {
+    const syntax = fileSyntax[row.fileIndex]
+    const oldRuns = row.oldIndex !== undefined ? syntax?.old?.[row.oldIndex] : undefined
+    const newRuns = row.newIndex !== undefined ? syntax?.next?.[row.newIndex] : undefined
+    return {
+      old: row.oldWords === undefined
+        ? undefined
+        : { segments: oldRuns !== undefined ? mergeRuns(oldRuns, row.oldWords) : row.oldWords },
+      next: row.newWords === undefined
+        ? undefined
+        : { segments: newRuns !== undefined ? mergeRuns(newRuns, row.newWords) : row.newWords },
+    }
+  }
+  return { shown, hidden, sides }
+}
+
+const identityOrder = (rows: DiffRow[]): DiffRow[] => rows
+
+function FoldHint({ hidden }: { readonly hidden: number }): React.ReactNode {
+  return hidden > 0
+    ? <Text dimColor>{t('lines-folded-expand', { n: hidden, key: primaryComboString('transcript') })}</Text>
+    : null
+}
+
+function SeparatorRow({ separator, width }: { readonly separator: string; readonly width: number }): React.ReactNode {
+  return (
+    <Box width={width}>
+      <Text dimColor wrap="truncate">
+        {separator === '⋯' ? '⋯' : `  ${separator}`}
+      </Text>
+    </Box>
+  )
+}
+
+export function SplitDiffView(props: DiffViewProps & {
+  /** `bars` diff style: ▌ markers instead of −/+. */
+  readonly bars?: boolean
+}): React.ReactNode {
+  const { width, toolBackground = 'none', bars = false } = props
+  const { shown, hidden, sides } = useDiffRows(props, identityOrder)
+  const paneWidth = Math.max(20, Math.floor((width - 1) / 2))
+
   return (
     <Box flexDirection="column" width={paneWidth * 2 + 1}>
       {shown.map((row, index) => {
-        if ('separator' in row) {
-          return (
-            <Box key={index} width={paneWidth * 2 + 1}>
-              <Text dimColor wrap="truncate">
-                {row.separator === '⋯' ? '⋯' : `  ${row.separator}`}
-              </Text>
-            </Box>
-          )
-        }
-        const syntax = fileSyntax[row.fileIndex]
-        const oldRuns = row.oldIndex !== undefined ? syntax?.old?.[row.oldIndex] : undefined
-        const newRuns = row.newIndex !== undefined ? syntax?.next?.[row.newIndex] : undefined
-        const oldSide = row.oldWords === undefined
-          ? undefined
-          : { segments: oldRuns !== undefined ? mergeRuns(oldRuns, row.oldWords) : row.oldWords }
-        const newSide = row.newWords === undefined
-          ? undefined
-          : { segments: newRuns !== undefined ? mergeRuns(newRuns, row.newWords) : row.newWords }
+        if ('separator' in row) return <SeparatorRow key={index} separator={row.separator} width={paneWidth * 2 + 1} />
+        const side = sides(row)
         return (
           <Box key={index} flexDirection="row">
-            <PaneLine side={oldSide} kind={row.kind === 'add' ? 'context' : row.kind} tone="old" width={paneWidth} toolBackground={toolBackground} />
+            <PaneLine side={side.old} kind={row.kind === 'add' ? 'context' : row.kind} tone="old" width={paneWidth} toolBackground={toolBackground} bars={bars} />
             <Box width={1} flexShrink={0}>
               <Text dimColor>│</Text>
             </Box>
-            <PaneLine side={newSide} kind={row.kind === 'del' ? 'context' : row.kind} tone="new" width={paneWidth} toolBackground={toolBackground} padLeft />
+            <PaneLine side={side.next} kind={row.kind === 'del' ? 'context' : row.kind} tone="new" width={paneWidth} toolBackground={toolBackground} padLeft bars={bars} />
           </Box>
         )
       })}
-      {hidden > 0 && (
-        <Text dimColor>{t('lines-folded-expand', { n: hidden, key: primaryComboString('transcript') })}</Text>
-      )}
+      <FoldHint hidden={hidden} />
+    </Box>
+  )
+}
+
+/** Single-column `bars` view: ▌ + row tint on changed lines, word-level
+ *  highlights on paired lines, context once, one source line per row. */
+export function UnifiedDiffView(props: DiffViewProps): React.ReactNode {
+  const { width, toolBackground = 'none' } = props
+  const { shown, hidden, sides } = useDiffRows(props, unifiedOrder)
+
+  return (
+    <Box flexDirection="column" width={width}>
+      {shown.map((row, index) => {
+        if ('separator' in row) return <SeparatorRow key={index} separator={row.separator} width={width} />
+        const side = sides(row)
+        return (
+          <PaneLine
+            key={index}
+            side={row.kind === 'del' ? side.old : side.next}
+            kind={row.kind}
+            tone={row.kind === 'del' ? 'old' : 'new'}
+            width={width}
+            toolBackground={toolBackground}
+            bars
+          />
+        )
+      })}
+      <FoldHint hidden={hidden} />
     </Box>
   )
 }

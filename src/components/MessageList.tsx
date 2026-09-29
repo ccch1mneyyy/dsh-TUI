@@ -204,6 +204,7 @@ function signatureParts(
   thinkingVisible: boolean,
   thinkingFold: string,
   diffLayout: string,
+  diffStyle: string,
   foldTerminalCommand: boolean,
   model: string,
   failureHintRowId: number | null | undefined,
@@ -240,6 +241,7 @@ function signatureParts(
         expanded,
         expandedRows.has(row.id),
         diffLayout,
+        diffStyle,
         // Terminal header folding changes the header's height the same way
         // diffLayout changes the body's — without it, a /settings toggle
         // leaves already-mounted tool cards at their stale cached height.
@@ -346,6 +348,7 @@ export function MessageList({
   onToggleStreamView = NOOP_TOGGLE_STREAM_VIEW,
   model,
   diffLayout = 'auto',
+  diffStyle = 'default',
   thinkingFold = 'preview',
   jobGroupFold = 'auto',
   toolBackground = 'none',
@@ -383,6 +386,8 @@ export function MessageList({
   model: string
   /** Edit/Write diff presentation preference (forwarded to tool cards). */
   diffLayout?: 'auto' | 'split' | 'unified'
+  /** Edit/Write diff look (forwarded to tool cards). */
+  diffStyle?: 'default' | 'bars'
   /** Thinking-block display mode from channel (`preview`/`full`). */
   thinkingFold?: 'preview' | 'full'
   /** Grouping/folding of consecutive job-card runs (settings
@@ -847,6 +852,7 @@ export function MessageList({
         thinkingVisible,
         thinkingFold,
         diffLayout,
+        diffStyle,
         foldTerminalCommand,
         model,
         failureHintRowId,
@@ -1439,6 +1445,7 @@ export function MessageList({
               expanded={expanded}
               model={model}
               diffLayout={diffLayout}
+              diffStyle={diffStyle}
               thinkingFold={thinkingFold}
               toolBackground={toolBackground}
               foldTerminalCommand={foldTerminalCommand}
@@ -1515,6 +1522,8 @@ type MemoRowProps = {
   model: string
   /** Edit/Write diff presentation preference (forwarded to tool cards). */
   diffLayout: 'auto' | 'split' | 'unified'
+  /** Edit/Write diff look (forwarded to tool cards). */
+  diffStyle: 'default' | 'bars'
   /** Smooth streaming reveal (forwarded to thinking/tool renderers). */
   smoothStreaming: boolean
   /** Live-arrived row flag (drives tool-card reveal participation). */
@@ -1602,6 +1611,7 @@ function TranscriptRow({
   expanded,
   model,
   diffLayout,
+  diffStyle,
   smoothStreaming,
   fresh,
   revealVersion,
@@ -1829,6 +1839,7 @@ function TranscriptRow({
             isExpanded={isExpanded}
             footnote={toolFootnote}
             diffLayout={diffLayout}
+            diffStyle={diffStyle}
             toolBackground={toolBackground}
             smoothReveal={smoothStreaming}
             fresh={fresh}
