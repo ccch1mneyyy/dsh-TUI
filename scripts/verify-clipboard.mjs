@@ -274,6 +274,13 @@ const same = (a, b) => JSON.stringify(a) === JSON.stringify(b)
     dib.writeUInt32LE(1, 32) // biClrUsed: a red table entry precedes the blue pixel
     const withTable = Buffer.concat([dib.subarray(0, 40), Buffer.from([0, 0, 255, 0]), dib.subarray(40)])
     check(`bmpToPng: ${bpp}-bit DIB with a colour table → null`, (await bmpToPng(withTable)) === null)
+
+    const file = Buffer.alloc(14)
+    file.write('BM', 0, 'ascii')
+    file.writeUInt32LE(14 + 40 + 4, 10) // bfOffBits skips the colour entry
+    const png = await bmpToPng(Buffer.concat([file, withTable]))
+    check(`bmpToPng: ${bpp}-bit file with a colour table uses bfOffBits`,
+      png !== null && same(readPng(png)?.rows, [[[0, 0, 255]]]))
   }
   const beforePixels = Buffer.from(good)
   beforePixels.writeUInt32LE(1, 10) // bfOffBits points inside the BMP file header
@@ -417,12 +424,14 @@ exit 1
     join(stubDir, 'powershell.exe'),
     String.raw`#!/bin/sh
 [ -n "$STUB_PS_MARK" ] && : > "$STUB_PS_MARK"
+if [ -n "$STUB_PS_ATTEMPTS" ]; then
+  count=0
+  [ -f "$STUB_PS_ATTEMPTS" ] && count=$(/bin/cat "$STUB_PS_ATTEMPTS")
+  count=$((count + 1)); printf '%s' "$count" > "$STUB_PS_ATTEMPTS"
+fi
 case "$STUB_PS" in
   image) printf 'IMAGE64:%s\r\n' "$(printf 'PNG\211\252binary' | /usr/bin/base64 | /usr/bin/tr -d '\n')";;
   busy)
-    count=0
-    [ -f "$STUB_PS_ATTEMPTS" ] && count=$(/bin/cat "$STUB_PS_ATTEMPTS")
-    count=$((count + 1)); printf '%s' "$count" > "$STUB_PS_ATTEMPTS"
     if [ "$count" -lt 3 ]; then exit 75; fi
     printf 'TEXT64:%s\r\n' "$(printf 'win text' | /usr/bin/base64 | /usr/bin/tr -d '\n')";;
   alwaysbusy) exit 75;;
@@ -672,12 +681,16 @@ printf '%s\n' "$2" | /usr/bin/sed -e 's|^C:|/mnt/c|' -e 's|\\|/|g'
     r = await readClipboard()
     check('integration: transient busy retries and returns text',
       r?.kind === 'text' && r.text === 'win text' && readFileSync(attemptsFile, 'utf8') === '3')
+    writeFileSync(attemptsFile, '0')
     scenario('wsl-alwaysbusy', { wl: 'empty', ps: 'alwaysbusy', wsl: true })
     r = await readClipboard()
-    check('integration: persistent busy stops after three attempts', r === null)
+    check('integration: persistent busy stops after three attempts',
+      r === null && readFileSync(attemptsFile, 'utf8') === '3')
+    writeFileSync(attemptsFile, '0')
     scenario('wsl-empty', { wl: 'empty', ps: 'empty', wsl: true })
     r = await readClipboard()
-    check('integration: empty clipboard is not retried', r === null)
+    check('integration: empty clipboard is not retried',
+      r === null && readFileSync(attemptsFile, 'utf8') === '1')
     scenario('wsl-noisy', { wl: 'empty', ps: 'noisy', wsl: true })
     r = await readClipboard()
     check('integration: full stderr pipe does not block paste', r?.kind === 'text' && r.text === 'win text')

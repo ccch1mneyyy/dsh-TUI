@@ -88,9 +88,9 @@ export async function bmpToPng(bmp: Buffer): Promise<Buffer | null> {
   const height = Math.abs(rawHeight)
   if (width <= 0 || height === 0 || width * height > MAX_PIXELS) return null
   if (bpp !== 24 && bpp !== 32) return null
-  // High-colour DIBs may still carry a colour table. Without a file offset
-  // its length is ambiguous; do not decode the table as the first pixel.
-  if (bmp.readUInt32LE(dib + 32) !== 0) return null // biClrUsed
+  // High-colour DIBs may still carry a colour table. Without a file header
+  // its length is ambiguous; a BMP file instead locates pixels via bfOffBits.
+  if (!hasFileHeader && bmp.readUInt32LE(dib + 32) !== 0) return null // biClrUsed
   if (compression !== BI_RGB && compression !== BI_BITFIELDS && compression !== BI_ALPHABITFIELDS) return null
   if (bpp === 24 && compression !== BI_RGB) return null
 
