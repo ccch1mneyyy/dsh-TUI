@@ -255,6 +255,11 @@ export const Config: Schema<Config, RuntimeConfig<Config>> = editableConfig<Conf
     contextUsage: Schema.boolean().default(DEFAULT_STATUS_BAR.contextUsage),
     cache: Schema.boolean().default(DEFAULT_STATUS_BAR.cache),
     tokens: Schema.boolean().default(DEFAULT_STATUS_BAR.tokens),
+    // Session cost estimate (≈¥) beside the token totals; StatusLine gates the
+    // chip on it. The slot must be declared here: schemastery drops an
+    // undeclared key on the way back in, so the /settings row would read
+    // "(unset)" and every edit would silently revert.
+    cost: Schema.boolean().default(DEFAULT_STATUS_BAR.cost),
     tps: Schema.boolean().default(DEFAULT_STATUS_BAR.tps),
     gitBranch: Schema.boolean().default(DEFAULT_STATUS_BAR.gitBranch),
     sessionTitle: Schema.boolean().default(DEFAULT_STATUS_BAR.sessionTitle),
