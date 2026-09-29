@@ -162,14 +162,12 @@ export function linkifyFilePaths(
   wrap: (path: string, display: string) => string,
 ): string {
   return text.replace(PATH_SPAN_RE, (match, offset, full) => {
-    // The slash-anchor branch would otherwise match inside URLs
-    // (`https:/…` matches `/…`): a span glued to a scheme colon or a `//`
-    // run is part of a URL, never a path. offset is available because the
-    // regex has no capture groups.
-    if (offset > 0) {
-      const prev = full[offset - 1]!
-      if (prev === ':' || prev === '/') return match
-    }
+    // A candidate must start at a text boundary, not inside another token:
+    // `/idle/needs-input` in `working/idle/needs-input` otherwise looks like
+    // an absolute path (#1181). Colons and slashes are not boundaries, so
+    // URL interiors stay excluded too. Quotes/opening delimiters and `=`
+    // still allow standalone anchored paths in prose and assignments.
+    if (offset > 0 && !/[\s<>"'`|([{=]/u.test(full[offset - 1]!)) return match
     const display = match.replace(/[.,;:!?]+$/u, '')
     if (display === '' || !looksLikeFilePath(display)) return match
     return wrap(display, display) + match.slice(display.length)

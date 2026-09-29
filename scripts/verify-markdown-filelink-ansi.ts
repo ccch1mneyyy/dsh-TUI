@@ -17,6 +17,11 @@ process.env.TERM_PROGRAM = 'kitty'
 const { default: chalk } = await import('chalk')
 const { applyMarkdown } = await import('../src/terminal-utils/markdown.js')
 const { createHyperlink } = await import('../src/terminal-utils/hyperlink.js')
+const React = await import('react')
+const { Markdown } = await import('../src/components/Markdown.js')
+const { StreamingMarkdown } = await import('../src/components/StreamingMarkdown.js')
+const { renderToScreen } = await import('../src/ink/render-to-screen.js')
+const { cellAtIndex } = await import('../src/ink/screen.js')
 
 let failures = 0
 let checks = 0
@@ -30,6 +35,50 @@ const prevLevel = chalk.level
 chalk.level = 3 // truecolor（38;2;r;g;b）；level 2 会把 rgb 降级成 256 色
 
 try {
+  // Ordinary slash-delimited prose must not acquire an OSC 8 file target.
+  // Exercise the real Markdown text path, not just looksLikeFilePath.
+  for (const text of ['working/idle/needs-input state,', '2024/01/15', '工作/空闲/等待输入']) {
+    const prose = applyMarkdown(text)
+    check(`正文不产生文件链接：${text}`, !prose.includes('dsh-file:'), JSON.stringify(prose))
+  }
+  const mixed = applyMarkdown('working/idle/needs-input state, see src/utils/fileTarget.ts')
+  check(
+    '正文误匹配被拒绝后仍识别后续真实路径',
+    !mixed.includes('dsh-file:%2Fidle') && mixed.includes('dsh-file:src%2Futils%2FfileTarget.ts'),
+    JSON.stringify(mixed),
+  )
+  const explicit = applyMarkdown('[working/idle/needs-input](file:///tmp/state)')
+  check(
+    '显式 Markdown 文件链接保留原目标且不嵌套自动链接',
+    explicit.includes('file:///tmp/state') && !explicit.includes('dsh-file:'),
+    JSON.stringify(explicit),
+  )
+
+  const source = 'working/idle/needs-input state,\n\nsrc/utils/fileTarget.ts'
+  for (const [name, Component] of [['Markdown', Markdown], ['StreamingMarkdown', StreamingMarkdown]] as const) {
+    for (const width of [24, 80]) {
+      const { screen, height } = renderToScreen(React.createElement(Component, { children: source }), width)
+      const cells = Array.from({ length: width * height }, (_, index) => cellAtIndex(screen, index))
+      const linked = cells.filter(cell => cell.hyperlink !== undefined)
+      check(
+        `${name} ${width} 列屏幕保留完整正文`,
+        cells.map(cell => cell.char).join('').replace(/\s/gu, '') === source.replace(/\s/gu, ''),
+      )
+      check(
+        `${name} ${width} 列屏幕仅真实路径可点击`,
+        linked.length > 0 &&
+          linked.every(cell => cell.hyperlink === 'dsh-file:src%2Futils%2FfileTarget.ts') &&
+          linked.map(cell => cell.char).join('') === 'src/utils/fileTarget.ts',
+      )
+      if (Component === Markdown && width === 80) {
+        const rows = Array.from({ length: height }, (_, row) =>
+          cells.slice(row * width, (row + 1) * width).map(cell => cell.char).join('').trimEnd(),
+        )
+        console.log(`Rendered screen (${width} columns):\n${rows.join('\n')}`)
+      }
+    }
+  }
+
   // ── renderCodeSpan 端到端：路径内联代码 ─────────────────────────────
   const out = applyMarkdown('看 `src/dsh-adapter/plugin.ts` 这个文件')
   const bareSgr = (out.match(/\[38;2;/g) ?? []).length
