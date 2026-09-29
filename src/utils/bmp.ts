@@ -88,6 +88,9 @@ export async function bmpToPng(bmp: Buffer): Promise<Buffer | null> {
   const height = Math.abs(rawHeight)
   if (width <= 0 || height === 0 || width * height > MAX_PIXELS) return null
   if (bpp !== 24 && bpp !== 32) return null
+  // High-colour DIBs may still carry a colour table. Without a file offset
+  // its length is ambiguous; do not decode the table as the first pixel.
+  if (bmp.readUInt32LE(dib + 32) !== 0) return null // biClrUsed
   if (compression !== BI_RGB && compression !== BI_BITFIELDS && compression !== BI_ALPHABITFIELDS) return null
   if (bpp === 24 && compression !== BI_RGB) return null
 
@@ -110,7 +113,9 @@ export async function bmpToPng(bmp: Buffer): Promise<Buffer | null> {
   if (bpp === 32 && (redMask === 0 || greenMask === 0 || blueMask === 0)) return null
 
   const declaredOffset = hasFileHeader ? bmp.readUInt32LE(10) : 0
-  const pixelOffset = declaredOffset > 0 ? declaredOffset : dib + headerSize + maskBytes
+  const minimumOffset = dib + headerSize + maskBytes
+  if (hasFileHeader && declaredOffset < minimumOffset) return null
+  const pixelOffset = hasFileHeader ? declaredOffset : minimumOffset
   const stride = Math.floor((bpp * width + 31) / 32) * 4
   if (pixelOffset + stride * height > bmp.length) return null
 
