@@ -80,6 +80,7 @@ export interface ChannelLaunchOptions {
    *  `'dsh-tui'` (direct `createChannel` embedders and fixtures). */
   settingsNs?: string
   diffLayout?: 'auto' | 'split' | 'unified'
+  diffStyle?: 'default' | 'bars'
   /** Seed the upstream auto-retry policy (upstream-retry.ts) on the
    *  llm-pi-ai route the bound session actually uses, when that route
    *  declares no retryPolicy. Absent means enabled (the Config schema's
@@ -188,7 +189,7 @@ export function createInitialChannelView(
   'responseChars' | 'activeToolCount' | 'turnStart' | 'lastUserText' |
   'notifications' | 'contextWindow' | 'reasoningEffort' | 'mode' | 'modeIndex' |
   'activityFrames' | 'configuredProvider' | 'configuredModel' |
-  'configuredPreset' | 'configuredActivityFrames' | 'configuredLang' | 'diffLayout' |
+  'configuredPreset' | 'configuredActivityFrames' | 'configuredLang' | 'diffLayout' | 'diffStyle' |
   'thinkingFold' | 'jobGroupFold' | 'toolBackground' | 'scrollGutter' | 'pageMargin' |
   'foldTerminalCommand' | 'turnUsageRow' | 'promptSessionLabel' | 'expandEditor' | 'smoothStreaming' |
   'statusBar' | 'whale' | 'whaleIdle' | 'splashFont' | 'brand' | 'minimalUi' | 'activityEnabled' | 'contextBarEnabled' |
@@ -208,7 +209,7 @@ export function createInitialChannelView(
     activityFrames: normalizeActivityPreset(options.activityFrames), configuredProvider: options.configuredProvider,
     configuredModel: options.configuredModel, configuredPreset: options.configuredPreset,
     configuredActivityFrames: options.configuredActivityFrames, configuredLang: options.configuredLang,
-    diffLayout: options.diffLayout ?? 'auto', thinkingFold: options.thinkingFold ?? 'preview',
+    diffLayout: options.diffLayout ?? 'auto', diffStyle: options.diffStyle === 'bars' ? 'bars' : 'default', thinkingFold: options.thinkingFold ?? 'preview',
     jobGroupFold: normalizeJobGroupFold(options.jobGroupFold),
     toolBackground: normalizeToolBackground(options.toolBackground), scrollGutter: normalizeScrollGutter(options.scrollGutter),
     pageMargin: normalizePageMargin(options.pageMargin), foldTerminalCommand: options.foldTerminalCommand === true,
