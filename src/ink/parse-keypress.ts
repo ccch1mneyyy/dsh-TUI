@@ -1032,7 +1032,8 @@ export type KeyParseState = {
    * Date.now() of the FIRST capture of the reply prefix currently held open
    * across flushes (see TERMINAL_RESPONSE_TAIL_GRACE_MS). Later flushes and
    * continuations never renew it; the hold is released — bytes dropped — once
-   * it expires. Parser-maintained, like mouseTailHoldAt; never host-injected.
+   * it expires or its in-flight claim disappears. Parser-maintained, like
+   * mouseTailHoldAt; never host-injected.
    */
   terminalResponseHoldAt?: number
   /**
@@ -1201,8 +1202,9 @@ export function parseMultipleKeypresses(
   const recordPrefix = isRecordPrefix(tokenizer.buffer())
   // Evidence is re-read on every call, never latched: once the host stops
   // reporting a query in flight — or the buffer's shape can no longer
-  // complete into a response type it expects — the hold ends and the buffer
-  // is released by the old path (no evidence, no claim).
+  // complete into a response type it expects — the claim ends. A captured
+  // hold is then dropped by the release branch below instead of being
+  // flushed into the body (no evidence, no claim).
   const claimsResponsePrefix =
     hasQueryEvidence &&
     isResponsePrefix(tokenizer.buffer()) &&
@@ -1219,8 +1221,25 @@ export function parseMultipleKeypresses(
   // First capture only: later flushes (App re-arms its timer while
   // `incomplete` is set) must not renew the deadline.
   if (deferFlush && claimsResponsePrefix) terminalResponseHoldAt ??= now
+  // A captured hold can lose its authorization before the flush: the host
+  // re-injects the pending set on every call, so a query that settles (or a
+  // shape that evolves out of the expected types) turns claimsResponsePrefix
+  // false. Falling back to tokenizer.flush() there would hand the buffered
+  // reply prefix to parseKeypress() as a key/literal text. Drop it like the
+  // expiry path instead and end the hold. Both the captured timestamp and
+  // the reply shape are required: bytes that were never held keep the
+  // pre-gate release semantics (AC-3).
+  const releaseResponseHold =
+    isFlush &&
+    terminalResponseHoldAt !== undefined &&
+    isResponsePrefix(tokenizer.buffer()) &&
+    !claimsResponsePrefix
+  if (releaseResponseHold) {
+    tokenizer.reset()
+    terminalResponseHoldAt = undefined
+  }
   const tokens = isFlush
-    ? deferFlush ? [] : tokenizer.flush()
+    ? deferFlush || releaseResponseHold ? [] : tokenizer.flush()
     : tokenizer.feed(inputString)
   if (isFlush && !inPaste && tokens.some(token => token.value === '\x1b')) {
     win32EscFlushedAt = now

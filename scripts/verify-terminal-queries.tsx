@@ -698,6 +698,92 @@ for (const label of ['split', 'whole'] as const) {
   await sentinelDone
 }
 
+// ⑤ · CodeRabbit #1177 (hotfix): a hold whose query settles BEFORE its flush.
+// App re-injects terminalExpectedResponseTypes on every call, so a settled
+// query drops the evidence while the tokenizer still buffers the reply
+// prefix. deferFlush then becomes false, and the old path
+// (tokenizer.flush() -> parseKeypress()) dispatched the protocol prefix as a
+// key/literal text. The flush must drop those bytes instead — the same
+// caliber as the expiry path, and never anywhere near the body.
+{
+  let state = inFlight
+  let parsed
+  ;[parsed, state] = parseMultipleKeypresses(state, DA1_REPLY.slice(0, DA1_SPLIT))
+  assert.deepEqual(parsed, [], '⑤ the reply prefix must stay buffered before the flush')
+  ;[parsed, state] = parseMultipleKeypresses(state, null)
+  assert.deepEqual(parsed, [], '⑤ the evidenced flush must hold the reply prefix')
+  assert.notEqual(
+    state.terminalResponseHoldAt,
+    undefined,
+    '⑤ the hold must record its first-capture deadline',
+  )
+
+  // The query settles (App re-injects the now-empty pending set) and the
+  // re-armed flush timer fires with no claim left.
+  ;[parsed, state] = parseMultipleKeypresses(
+    { ...state, terminalExpectedResponseTypes: [] },
+    null,
+  )
+  assert.deepEqual(
+    parsed,
+    [],
+    '⑤ a hold that lost its query evidence must not dispatch the protocol prefix as keys',
+  )
+  assert.equal(state.incomplete, '', '⑤ the dropped prefix must leave nothing to re-arm on')
+  assert.equal(
+    state.terminalResponseHoldAt,
+    undefined,
+    '⑤ the dropped hold must clear its deadline',
+  )
+}
+
+// ⑤b · control: the drop is gated on the reply shape. Bytes that never were a
+// reply prefix (the bare `ESC[` introducer, deliberately outside the shape
+// gate per the #1073 review) keep the pre-existing flush semantics even after
+// the evidence disappears — the fix must not swallow ordinary input.
+{
+  let state = withEvidence(['da1'])
+  let parsed
+  ;[parsed, state] = parseMultipleKeypresses(state, '\x1b[')
+  assert.deepEqual(parsed, [], '⑤b the bare introducer must stay buffered before the flush')
+  assert.equal(
+    state.terminalResponseHoldAt,
+    undefined,
+    '⑤b a non-reply shape must never open a hold',
+  )
+  ;[parsed] = parseMultipleKeypresses(
+    { ...state, terminalExpectedResponseTypes: [] },
+    null,
+  )
+  assert.equal(parsed.length, 1, '⑤b a non-reply-shaped buffer must still flush')
+  assert.equal(parsed[0]?.kind, 'key', '⑤b the flushed fragment must stay an ordinary key')
+  assert.equal(parsed[0]?.sequence, '\x1b[', '⑤b the fragment must reach the body unchanged')
+}
+
+// ⑤c · control: a reply-shaped buffer that never captured a hold (no evidence
+// from the start) keeps the pre-gate literal release. Absent/empty evidence
+// means "never claimed", so the release branch must stay bound to a captured
+// hold timestamp instead of dropping every reply-shaped flush blindly.
+{
+  let state = withEvidence([])
+  let parsed
+  ;[parsed, state] = parseMultipleKeypresses(state, DA1_REPLY.slice(0, DA1_SPLIT))
+  assert.deepEqual(parsed, [], '⑤c an evidence-less prefix must stay buffered until the flush')
+  assert.equal(
+    state.terminalResponseHoldAt,
+    undefined,
+    '⑤c no hold may be captured without evidence',
+  )
+  ;[parsed] = parseMultipleKeypresses(state, null)
+  assert.equal(parsed.length, 1, '⑤c the unheld prefix must still flush')
+  assert.equal(parsed[0]?.kind, 'key', '⑤c the unheld prefix must stay literal')
+  assert.equal(
+    parsed[0]?.sequence,
+    DA1_REPLY.slice(0, DA1_SPLIT),
+    '⑤c the unheld prefix must reach the body unchanged',
+  )
+}
+
 console.log('PASS: late DA1 tails stay in the terminal-response lane')
 
 if (realTermProgram === undefined) delete process.env.TERM_PROGRAM
