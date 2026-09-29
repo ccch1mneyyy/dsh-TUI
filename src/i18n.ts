@@ -452,6 +452,9 @@ const dict = {
   // ── screens/SessionSupervisor.tsx（三合一会话管理：/resume /agentview /home）─
   'supervisor-title': { zh: '会话管理', en: 'Sessions' },
   'supervisor-unregistered': { zh: '未登记的工作区', en: 'Unregistered' },
+  'supervisor-history-only': { zh: '仅历史', en: 'History only' },
+  'supervisor-workspace-groups': { zh: '工作区 {{registered}} · 历史目录 {{history}}', en: 'Workspaces {{registered}} · History {{history}}' },
+  'supervisor-workspace-removed': { zh: '工作区登记已移除；目录与历史会话仍保留', en: 'Workspace registration removed; directory and past sessions remain' },
   'supervisor-no-matches': { zh: '没有匹配的会话 · Esc 清空筛选', en: 'No sessions match · Esc clears the filter' },
   'supervisor-subtitle': { zh: '本终端托管多个会话 · 切换不中断', en: 'This terminal hosts several sessions · switching does not stop them' },
   'supervisor-filter-placeholder': { zh: '输入以搜索会话…', en: 'Type to search sessions…' },

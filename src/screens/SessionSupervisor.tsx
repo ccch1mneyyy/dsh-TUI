@@ -541,7 +541,12 @@ export function SessionSupervisor({
             }}
           >
             <Box height={1} flexShrink={0} overflow="hidden" paddingX={1}>
-              <Text dimColor>{truncateWidth(t('home-section-workspaces', { n: railEntries.length }), railWidth - 2)}</Text>
+              <Text dimColor>{truncateWidth(
+                railEntries.length === entries.length
+                  ? t('home-section-workspaces', { n: entries.length })
+                  : t('supervisor-workspace-groups', { registered: entries.length, history: railEntries.length - entries.length }),
+                railWidth - 2,
+              )}</Text>
             </Box>
             {!loading && railEntries.length === 0 && (
               <Box paddingX={1}>
@@ -557,6 +562,7 @@ export function SessionSupervisor({
                   path={entry.path}
                   home={home}
                   sessionCount={countOf(entry)}
+                  historyOnly={entry.from === 'unregistered'}
                   present={entry.present}
                   selected={selected !== undefined && selected.id === entry.id}
                   focused={activePane === 'rail' && railFocus === absolute}

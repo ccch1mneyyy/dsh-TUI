@@ -627,7 +627,10 @@ export function useSessionSupervisor(input: SessionSupervisorInput) {
   const removeEntry = useCallback((path: string): void => {
     void channel.removeWorkspace(path)
       .then((ok) => {
-        if (ok) return reload()
+        if (ok) {
+          report(t('supervisor-workspace-removed'), 'info')
+          return reload()
+        }
         report(t('workspace-remove-unknown', { target: path }), 'error')
         return undefined
       })

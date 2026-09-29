@@ -275,6 +275,8 @@ function diskCacheCell(read: () => readonly unknown[] | undefined): CacheCell {
 interface StubChannelConfig {
   readonly registry: readonly unknown[]
   readonly cwd: string
+  /** Simulate a successful host registry removal without touching user data. */
+  readonly removeWorkspace?: (path: string) => boolean
   /** Rows the listing answers with; the shared stub listing by default. */
   readonly sessions?: readonly unknown[]
   /** True when the registry read itself fails (service missing / throwing). */
@@ -403,6 +405,10 @@ function makeChannel(config: StubChannelConfig): StubChannel {
     switchWorkspace: async () => true,
     resolveWorkspace: async (reference: string) => ({ cwd: reference, uri: reference, label: reference, kind: 'local', badge: 'LOCAL' }),
     stopBackgroundAgent: async () => true,
+    removeWorkspace: async (path: string) => {
+      calls.push(`removeWorkspace:${path}`)
+      return config.removeWorkspace?.(path) ?? false
+    },
     notify: () => {},
     subscribe: () => () => {},
   } as never
@@ -1466,6 +1472,36 @@ console.log('an unregistered directory does not hide its sessions')
     !/No workspaces yet/.test(shown()),
     shown(),
   )
+  app.close()
+}
+
+console.log('removing a registration keeps its history visibly distinct (#1040)')
+{
+  const records = [{ id: 'w-alpha', path: alphaDir, title: 'Alpha', present: true, sessionCount: 0 }]
+  const app = await openSupervisor({
+    registry: records,
+    cwd: alphaDir,
+    removeWorkspace: path => {
+      const index = records.findIndex(record => record.path === path)
+      if (index < 0) return false
+      records.splice(index, 1)
+      return true
+    },
+  })
+  const shown = () => app.lines().join('\n')
+  check('registered directory starts without a history label',
+    await settled(() => shown().includes('Workspaces (1)') && !shown().includes('History only'), { timeoutMs: 6_000 }), shown())
+  app.write('\r')
+  await settled(() => shown().includes('Remove from list'))
+  app.write('\u001b[B\u001b[B\u001b[B\r')
+  await settled(() => shown().includes('Remove workspace'))
+  app.write('\r')
+  check('successful removal is acknowledged and the rail distinguishes history',
+    await settled(() => shown().includes('Workspace registration removed')
+      && shown().includes('Workspaces 0 · History 1')
+      && shown().includes('History only · alpha'), { timeoutMs: 6_000 }), shown())
+  check('past sessions stay reachable after registration removal', shown().includes('free session'), shown())
+  check('the host removal action ran once', app.calls.filter(call => call === `removeWorkspace:${alphaDir}`).length === 1)
   app.close()
 }
 
