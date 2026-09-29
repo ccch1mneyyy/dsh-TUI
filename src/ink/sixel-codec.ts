@@ -5,6 +5,15 @@ import { isTerminalImageSource, TERMINAL_IMAGE_MAX_EDGE, TERMINAL_IMAGE_MAX_BYTE
   SIXEL_MAX_ENCODED_BYTES, SIXEL_CACHE_BYTES, SIXEL_CACHE_ENTRIES } from './terminal-image.js'
 import type { TerminalImageSource } from './terminal-image.js'
 
+/**
+ * Coverage a transparent raster needs before a pixel is painted. Sixel alpha
+ * is binary and this encoder keeps only fully opaque pixels, so anti-aliased
+ * edges would otherwise be dropped outright and thin every glyph stroke to a
+ * hairline; promoting coverage keeps the artwork's visual weight. Biased
+ * below 0.5 because formula strokes are thin to begin with.
+ */
+const TRANSPARENT_COVERAGE_THRESHOLD = 64
+
 export interface SixelCrop {
   readonly left: number
   readonly top: number
@@ -16,7 +25,18 @@ export interface SixelEncodeRequest {
   readonly source: TerminalImageSource
   readonly width: number
   readonly height: number
-  readonly background: string
+  /**
+   * Colour the transparent pixels composite onto. Required unless {@link ink}
+   * is set: Sixel has no alpha of its own, so anything that is not a
+   * single-colour ink mask has to be blended onto a real colour first.
+   */
+  readonly background?: string
+  /**
+   * Emit the raster transparent (the DCS background select already means "no
+   * action") and promote coverage to a hard mask, so only covered pixels are
+   * painted and whatever the terminal shows behind them stays visible.
+   */
+  readonly transparent?: boolean
   readonly presentation?: 'preview' | 'transcript'
   readonly crop?: SixelCrop
 }
@@ -57,7 +77,7 @@ function validateRasterBounds(request: Omit<SixelEncodeRequest, 'source'>): void
   const maxBytes = request.presentation === 'preview' ? TERMINAL_IMAGE_PREVIEW_MAX_BYTES : TERMINAL_IMAGE_MAX_BYTES
   if (!Number.isSafeInteger(width) || !Number.isSafeInteger(height) ||
       width < 1 || height < 1 || width > maxEdge || height > maxEdge ||
-      width * height * 4 > maxBytes || background.length > 64) {
+      width * height * 4 > maxBytes || (background !== undefined && background.length > 64)) {
     throw new Error('Invalid Sixel raster bounds')
   }
 }
@@ -68,7 +88,11 @@ async function prepareSixel(request: SixelEncodeRequest): Promise<PreparedSixel>
   if (!isTerminalImageSource(source, request.presentation)) throw new Error('Invalid Sixel source')
   const sharp = await loadSharp()
   if (sharp === undefined) throw new Error('Image decoder unavailable')
-  const fill = resolveBackground(background)
+  // An ink mask is emitted transparent; every other raster composites onto a
+  // colour first, because Sixel cannot express partial alpha and blending is
+  // what keeps soft edges (shadows, translucent panels) smooth.
+  const transparent = request.transparent === true
+  const fill = transparent ? undefined : resolveBackground(background ?? '#000000')
   // The manager already fits the source aspect for large previews, so 'fill'
   // avoids a one-pixel letterbox stripe there.
   const highResolution = width > TERMINAL_IMAGE_MAX_EDGE || height > TERMINAL_IMAGE_MAX_EDGE
@@ -78,17 +102,29 @@ async function prepareSixel(request: SixelEncodeRequest): Promise<PreparedSixel>
   // in 11–133 ms. The indexed PNG round trip is how sharp exposes its palette.
   // effort 1 keeps every colour within one level of the source, while effort
   // 10 costs seconds on noisy images.
-  const indexed = await sharp(source.data, {
+  const sized = sharp(source.data, {
     raw: { width: source.width, height: source.height, channels: 4 },
   })
-    .flatten({ background: fill })
-    .resize({ width, height, fit: highResolution ? 'fill' : 'contain', background: fill })
+  const indexed = await (fill === undefined ? sized : sized.flatten({ background: fill }))
+    .resize({
+      width,
+      height,
+      fit: highResolution ? 'fill' : 'contain',
+      background: fill ?? { r: 0, g: 0, b: 0, alpha: 0 },
+    })
     .toColourspace('srgb')
     .ensureAlpha()
     .png({ palette: true, colours: 256, dither: 0, effort: 1, compressionLevel: 1 })
     .toBuffer()
   const data = await sharp(indexed).ensureAlpha().raw().toBuffer()
   if (data.byteLength !== width * height * 4) throw new Error('Invalid quantized raster size')
+  if (transparent) {
+    // Binary ink: anything below the coverage threshold becomes fully
+    // transparent, everything above becomes solid.
+    for (let index = 3; index < data.length; index += 4) {
+      data[index] = data[index]! >= TRANSPARENT_COVERAGE_THRESHOLD ? 255 : 0
+    }
+  }
   const palette = new Set<number>()
   for (let index = 0; index < data.length; index += 4) {
     palette.add((data[index]! << 16) | (data[index + 1]! << 8) | data[index + 2]!)

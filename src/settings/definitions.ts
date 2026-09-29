@@ -19,6 +19,7 @@ export const SETTING_DEFINITIONS = {
   'diffLayout': {
     label: 'Diff layout',
     descriptions: { zh: 'diff 布局' },
+    group: 'conversation',
     hint: 'Edit/Write tool cards: auto picks by terminal width, or force one layout.',
     hintDescriptions: { zh: 'Edit/Write 工具卡的 diff 呈现：auto 按终端宽度选择，或强制一种布局。' },
     kind: 'select',
@@ -31,6 +32,7 @@ export const SETTING_DEFINITIONS = {
   'effortDefault': {
     label: 'Default reasoning effort',
     descriptions: { zh: '默认推理强度' },
+    group: 'conversation',
     hint: 'Reasoning-effort level new sessions start on; the current session applies it to its next request too, when the model offers the tier (an unlisted level falls back to the model default). Auto = follow the cordis.yml `effort` pin, then the persisted /effort choice, then the model default.',
     hintDescriptions: { zh: '新会话起始的推理强度档位；模型提供该档位时，当前会话的下一请求也会应用（模型不提供的档位会静默回落到模型默认）。自动 = 依次跟随 cordis.yml 的 effort 配置、持久化的 /effort 选择、模型默认档。' },
     kind: 'select',
@@ -45,6 +47,7 @@ export const SETTING_DEFINITIONS = {
   'expandEditor': {
     label: 'Fullscreen draft editor',
     descriptions: { zh: '全屏草稿编辑' },
+    group: 'conversation',
     hint: 'On: the ⛶ affordance in the input row and the expand-editor shortcut (default Ctrl+Shift+E) expand the draft into a whole-screen editor (Enter = newline, Ctrl+Enter = send). Off: both entry points disappear. On by default.',
     hintDescriptions: { zh: '开启：输入行尾 ⛶ 按钮与全屏编辑快捷键（默认 Ctrl+Shift+E）把草稿展开成整屏编辑器（Enter 换行、Ctrl+Enter 发送）。关闭：两个入口都不显示。默认开启。' },
     kind: 'boolean',
@@ -52,6 +55,7 @@ export const SETTING_DEFINITIONS = {
   'foldTerminalCommand': {
     label: 'Fold terminal command',
     descriptions: { zh: '折叠终端命令' },
+    group: 'conversation',
     hint: 'Terminal cards (Bash/PowerShell): collapse a multi-line command header to its first line + count; Ctrl+O or a click expands it.',
     hintDescriptions: { zh: '终端卡（Bash/PowerShell）：多行命令头部折叠为首行 + 计数；Ctrl+O 或点击卡片展开。' },
     kind: 'boolean',
@@ -59,13 +63,27 @@ export const SETTING_DEFINITIONS = {
   'fullscreen': {
     label: 'Fullscreen mode',
     descriptions: { zh: '全屏模式' },
+    group: 'appearance',
     hint: 'On: app takes the whole screen (vim/less style), in-app mouse. Off: native scrollback; full-page screens keep the mouse. Restart to apply.',
     hintDescriptions: { zh: '开启：接管整个终端（同 vim/less），应用内鼠标；关闭：终端原生滚动选择；整屏页两种模式都有鼠标。重启生效。' },
     kind: 'boolean',
   },
+  'imageBacking': {
+    label: 'Photo image background',
+    descriptions: { zh: '图片底色' },
+    group: 'rendering',
+    hint: "What sits behind photos and illustrations in the chat. Transparent paints only the pixels of the image itself — the terminal background or wallpaper shows through at anti-aliased edges and transparent corners; Terminal colour composites onto the terminal background first, which keeps soft edges smooth (Sixel has no partial alpha). Applies immediately.",
+    hintDescriptions: { zh: '聊天里的照片/插图背后垫什么。透明：只画图片自己的像素，抗锯齿边缘和透明圆角处透出终端底色或壁纸；终端底色：先合成到终端背景色上，柔和边缘更平滑（Sixel 没有部分透明）。立即生效。' },
+    kind: 'select',
+    options: [
+      { value: 'transparent', label: 'Transparent', descriptions: { zh: '透明（透出终端背景）' } },
+      { value: 'terminal', label: 'Terminal colour', descriptions: { zh: '合成到终端底色' } },
+    ],
+  },
   'lang': {
     label: 'Language',
     descriptions: { zh: '界面语言' },
+    group: 'appearance',
     hint: 'UI language for the whole interface — applies immediately and is saved.',
     hintDescriptions: { zh: '整个界面的显示语言——立即生效并保存。' },
     kind: 'select',
@@ -74,11 +92,37 @@ export const SETTING_DEFINITIONS = {
       { value: 'en', label: 'English', descriptions: { zh: '英文' } },
     ],
   },
+  'mathImageBacking': {
+    label: 'Formula image background',
+    descriptions: { zh: '公式图片底色' },
+    group: 'math',
+    hint: 'What sits behind a formula rendered as an image. Transparent paints only the formula and lets the terminal background (a wallpaper included) show through; Terminal colour composites it onto the terminal background first, which is calmer on busy backgrounds and keeps anti-aliased edges smooth (Sixel has no partial alpha). Applies immediately.',
+    hintDescriptions: { zh: '公式渲染成图片时背后垫什么。透明：只画公式本身，终端底色或壁纸直接透出来；终端底色：先合成到终端背景色上，在花哨的背景上更稳，抗锯齿边缘也更平滑（Sixel 没有部分透明）。立即生效。' },
+    kind: 'select',
+    options: [
+      { value: 'transparent', label: 'Transparent', descriptions: { zh: '透明（透出终端背景）' } },
+      { value: 'terminal', label: 'Terminal colour', descriptions: { zh: '合成到终端底色' } },
+    ],
+  },
+  'mathImageScale': {
+    label: 'Formula image size',
+    descriptions: { zh: '公式图片大小' },
+    group: 'math',
+    hint: 'How large a display formula is set when it renders as an image (LaTeX math → Image, both on this page). Text size matches the body text; Large and Extra large set display math bigger, which also hands the terminal more device pixels for its strokes — the only sharpness lever a terminal image has. Inline formulas are unaffected: their single row of cells caps the resolution. Applies immediately.',
+    hintDescriptions: { zh: '块级公式渲染成图片时的大小（配合 LaTeX 公式的「图片」）。与正文同尺寸：和正文一样大；放大 / 更大：显示公式排得更大，终端也因此有更多像素画笔画，观感更锐利——这是终端图片唯一的清晰度杠杆。行内公式不受影响（只能占一行，像素上限被卡死）。立即生效。' },
+    kind: 'select',
+    options: [
+      { value: 'auto', label: 'Text size', descriptions: { zh: '与正文同尺寸' } },
+      { value: 'large', label: 'Large', descriptions: { zh: '放大' } },
+      { value: 'xlarge', label: 'Extra large', descriptions: { zh: '更大' } },
+    ],
+  },
   'mathRendering': {
     label: 'LaTeX math',
     descriptions: { zh: 'LaTeX 公式' },
-    hint: 'How LaTeX math in replies ($…$, \\(…\\), $$…$$, \\[…\\]) renders. Auto: the best available renderer — today Unicode text with symbols, sub/superscripts, stacked fractions and limits, matrices, cases. Image: typeset block formulas as images in terminals with graphics support (Kitty, Ghostty, WezTerm, iTerm2…); Unicode elsewhere and for inline math. Unicode: always Unicode text. Source: keep the TeX as written. Unsupported, still-streaming, or too-wide formulas keep their source. Applies immediately.',
-    hintDescriptions: { zh: '回复中的 LaTeX 公式（$…$、\\(…\\)、$$…$$、\\[…\\]）怎么显示。自动：用当前最好的渲染方式——目前是 Unicode 文本（符号、上下标、竖排的分数与上下限、矩阵、分段函数）。图片：在支持图形的终端（Kitty、Ghostty、WezTerm、iTerm2 等）里把块级公式排版成图片，其他终端与行内公式仍用 Unicode。Unicode：固定用 Unicode 文本。源码：保留原始 TeX。不支持、仍在流式输出或比终端宽的公式保留源码。立即生效。' },
+    group: 'math',
+    hint: 'How LaTeX math in replies ($…$, \\(…\\), $$…$$, \\[…\\]) renders. Auto: the best available renderer — today Unicode text with symbols, sub/superscripts, stacked fractions and limits, matrices, cases. Image: typeset block formulas and eligible one-row inline formulas as images when the terminal has graphics — Kitty (Kitty, Ghostty, WezTerm, iTerm2…) or Sixel (Windows Terminal 1.22+, xterm, foot, WezTerm); Unicode elsewhere and for formulas that do not fit. Unicode: always Unicode text. Source: keep the TeX as written. Unsupported, still-streaming, or too-wide formulas keep their source. Applies immediately.',
+    hintDescriptions: { zh: '回复中的 LaTeX 公式（$…$、\\(…\\)、$$…$$、\\[…\\]）怎么显示。自动：用当前最好的渲染方式——目前是 Unicode 文本（符号、上下标、竖排的分数与上下限、矩阵、分段函数）。图片：终端支持图形时把块级公式与能压入一行的行内公式排版成图片——Kitty（Kitty、Ghostty、WezTerm、iTerm2 等）或 Sixel（Windows Terminal 1.22+、xterm、foot、WezTerm）；其他终端与放不下的公式用 Unicode。Unicode：固定用 Unicode 文本。源码：保留原始 TeX。不支持、仍在流式输出或比终端宽的公式保留源码。立即生效。' },
     kind: 'select',
     options: [
       { value: 'auto', label: 'Auto', descriptions: { zh: '自动' } },
@@ -90,6 +134,7 @@ export const SETTING_DEFINITIONS = {
   'mermaidDiagrams': {
     label: 'Mermaid diagrams',
     descriptions: { zh: 'Mermaid 图表' },
+    group: 'rendering',
     hint: 'Render ```mermaid fences in replies as box-drawing diagrams (flowchart, sequence, state, class, ER, pie, mindmap, timeline, gitGraph). Diagrams wider than the terminal, or of an unsupported type, keep the fenced source. Applies immediately. On by default.',
     hintDescriptions: { zh: '把回复中的 ```mermaid 代码块画成字符图（flowchart、sequence、state、class、ER、pie、mindmap、timeline、gitGraph）。比终端宽或类型不支持的图保留源码。立即生效。默认开启。' },
     kind: 'boolean',
@@ -97,6 +142,7 @@ export const SETTING_DEFINITIONS = {
   'minimal': {
     label: 'Minimal mode',
     descriptions: { zh: '极简模式' },
+    group: 'appearance',
     hint: 'Hide the header splash, emoji glyphs, and decorative colors; code highlight and tool colors stay. Trims the status bar to model + cwd.',
     hintDescriptions: { zh: '隐藏开屏头部、emoji 状态符与装饰性配色；代码高亮与工具配色保留，底栏只留模型与目录。' },
     kind: 'boolean',
@@ -104,6 +150,7 @@ export const SETTING_DEFINITIONS = {
   'pageMargin': {
     label: 'Page margin',
     descriptions: { zh: '页边距' },
+    group: 'appearance',
     hint: 'Inset the whole UI from the terminal edges. ←/→ cycles presets (none / slim / normal / roomy); Enter types a custom spec `NxM`: N columns per side, M rows top/bottom (e.g. 3x1, max 8x4; a bare `N` keeps rows at 1). Empty resets to the default `normal`. Applies immediately.',
     hintDescriptions: { zh: '让整个界面相对终端四边内缩。←/→ 循环预设（none / slim / normal / roomy）；Enter 输入自定义 `NxM`：左右各 N 列、上下各 M 行（如 3x1，上限 8x4；只填 N 则上下保持 1 行）。清空恢复默认 normal。立即生效。' },
     kind: 'text',
@@ -117,6 +164,7 @@ export const SETTING_DEFINITIONS = {
   'promptSessionLabel': {
     label: 'Session name chip',
     descriptions: { zh: '会话名标签' },
+    group: 'conversation',
     hint: 'Show the session name on the prompt top border, right corner. Off by default.',
     hintDescriptions: { zh: '在输入框顶边框右上角显示会话名。默认关闭。' },
     kind: 'boolean',
@@ -124,6 +172,7 @@ export const SETTING_DEFINITIONS = {
   'recapOnOpen': {
     label: 'Auto recap on open',
     descriptions: { zh: '打开会话时自动总结' },
+    group: 'conversation',
     hint: 'On: opening/resuming a session automatically summarizes its recent activity into a dim line at the bottom of the transcript (hover/click to view or apply the suggested title). Off: use /recap manually.',
     hintDescriptions: { zh: '开启：打开/恢复会话时自动把最近活动总结成一行灰字显示在会话底部（可悬停/点击查看或应用建议标题）；关闭：手动使用 /recap。' },
     kind: 'boolean',
@@ -131,6 +180,7 @@ export const SETTING_DEFINITIONS = {
   'scrollGutter': {
     label: 'Transcript gutter',
     descriptions: { zh: '转录边栏' },
+    group: 'appearance',
     hint: 'Right gutter of the fullscreen transcript: per-turn timeline ticks, a proportional scrollbar, or nothing.',
     hintDescriptions: { zh: '全屏转录区右侧边栏：按轮次的时间线节点、比例滚动条，或留空。' },
     kind: 'select',
@@ -143,6 +193,7 @@ export const SETTING_DEFINITIONS = {
   'smoothStreaming': {
     label: 'Smooth streaming',
     descriptions: { zh: '流式平滑输出' },
+    group: 'conversation',
     hint: 'Reveal live replies, expanded thinking, and tool-call bodies through an even ~30fps flow instead of per-burst jumps; one-shot non-streaming replies paint as a flow too. Replay/history always paints complete. On by default.',
     hintDescriptions: { zh: '把实时回复、展开的思考与工具卡正文按 ~30fps 匀速揭示，不再随供应商突发一跳一跳；一次性到达的非流式回复也会平滑打出。回放/历史内容始终完整直出。默认开启。' },
     kind: 'boolean',
@@ -150,6 +201,7 @@ export const SETTING_DEFINITIONS = {
   'splashFont': {
     label: 'Splash font',
     descriptions: { zh: '开屏大字字体' },
+    group: 'splash',
     hint: 'Big-text face on the header splash. Daily rotates by local date (default); pick a face to pin that one. Applies immediately.',
     hintDescriptions: { zh: '开屏头部的大字字面。按天轮换（默认）随本地日期换款；选某一款即固定那一款。立即生效。' },
     kind: 'select',
@@ -302,6 +354,7 @@ export const SETTING_DEFINITIONS = {
   'terminalImages': {
     label: 'Terminal image previews',
     descriptions: { zh: '终端图片预览' },
+    group: 'rendering',
     hint: 'Preview images in supported terminals. Use /restart to apply. Sending images is unaffected.',
     hintDescriptions: { zh: '在支持的终端中预览图片。修改后用 /restart 生效；不影响向模型发送图片。' },
     kind: 'boolean',
@@ -309,6 +362,7 @@ export const SETTING_DEFINITIONS = {
   'thinkingFold': {
     label: 'Thinking display',
     descriptions: { zh: '思考块展示' },
+    group: 'conversation',
     hint: 'Preview shows 2-3 live lines; Full stays expanded until turn end. Click a streaming block to switch between preview and full.',
     hintDescriptions: { zh: '预览模式显示 2-3 行动态思考；展开模式保持至轮末。点击流式思考块可在预览与全文间切换。' },
     kind: 'select',
@@ -320,6 +374,7 @@ export const SETTING_DEFINITIONS = {
   'toolBackground': {
     label: 'Tool background',
     descriptions: { zh: '工具卡背景' },
+    group: 'appearance',
     hint: 'Choose whether tool-call cards add no, subtle, or strong background emphasis.',
     hintDescriptions: { zh: '选择工具调用卡片不添加、轻微或明显的背景强调。' },
     kind: 'select',
@@ -332,6 +387,7 @@ export const SETTING_DEFINITIONS = {
   'whale': {
     label: 'Header art',
     descriptions: { zh: '标题图形 logo' },
+    group: 'splash',
     hint: 'Show the header splash art — the pixel whale, or the maid portrait when the setting below is on. Off leaves a text-only header.',
     hintDescriptions: { zh: '开屏头部显示图形 logo：像素鲸鱼（打开下方「女仆娘立绘」时显示女仆娘）。关闭则只留文字标题。' },
     kind: 'boolean',
@@ -339,6 +395,7 @@ export const SETTING_DEFINITIONS = {
   'whaleGirl': {
     label: 'Maid portrait',
     descriptions: { zh: '女仆娘立绘' },
+    group: 'splash',
     hint: 'Swap the header splash\'s pixel whale for the author-designed maid portrait, rendered FIRST as a real raster through the terminal image protocols (Kitty/Sixel); terminals without graphics support fall back to the character-art maid.',
     hintDescriptions: { zh: '把开屏头部的像素鲸鱼换成项目作者绘制的女仆娘立绘，最优先走终端图像协议（Kitty/Sixel）的真图渲染；终端不支持时回落到字符画版女仆娘。' },
     kind: 'boolean',
@@ -346,6 +403,7 @@ export const SETTING_DEFINITIONS = {
   'whaleIdle': {
     label: 'Welcome whale idle',
     descriptions: { zh: '鲸鱼娘闲置动画（欢迎期）' },
+    group: 'splash',
     hint: 'Welcome-phase idle behaviors: after the intro the whale flutters its fins, thumps its tail, and dozes off when idle; clicking wakes a dozing whale and pops a heart. The first agent turn freezes it to the static standard frame.',
     hintDescriptions: { zh: '欢迎期闲置行为：开屏后鲸鱼娘摆鱼鳍、偶尔拍尾巴，空闲会睡着冒 Z；点击唤醒睡着的鲸鱼娘并冒爱心。开始第一个任务后定格为静态标准帧。' },
     kind: 'boolean',
@@ -354,11 +412,24 @@ export const SETTING_DEFINITIONS = {
 
 export type SettingKey = keyof typeof SETTING_DEFINITIONS
 
-/** /settings subpages; fields without a group sit on the main page ("general"). */
+/**
+ * Topic groups for /settings, in root-page order. Two presentations share
+ * this list: 'inline' groups render their fields directly on the root page
+ * under a small header (shallow topics — hiding a handful of fields behind
+ * a navigation row costs more clicks than the ordering buys), 'page' groups
+ * render one navigation row and keep their fields a level down (deep,
+ * cohesive domains: the formula trio, the status-bar block, the shortcut
+ * remaps). Every built-in setting names one of these (verified by
+ * scripts/verify-settings-definitions.ts); a field without a group would
+ * render on the root under "general". */
 export const SETTING_GROUPS = [
-  { id: 'status-bar', title: 'Status bar', descriptions: { zh: '底栏设置' } },
-  { id: 'shortcuts', title: 'Shortcuts', descriptions: { zh: '快捷键' } },
-  { id: 'session', title: 'Session', descriptions: { zh: '会话' } },
+  { id: 'appearance', mode: 'inline', title: 'Appearance', descriptions: { zh: '外观与布局' } },
+  { id: 'splash', mode: 'inline', title: 'Splash', descriptions: { zh: '开屏与吉祥物' } },
+  { id: 'conversation', mode: 'inline', title: 'Conversation', descriptions: { zh: '对话与输入' } },
+  { id: 'rendering', mode: 'inline', title: 'Rendering', descriptions: { zh: '图表与图片' } },
+  { id: 'math', mode: 'page', title: 'Formula', descriptions: { zh: '公式设置' } },
+  { id: 'status-bar', mode: 'page', title: 'Status bar', descriptions: { zh: '底栏设置' } },
+  { id: 'shortcuts', mode: 'page', title: 'Shortcuts', descriptions: { zh: '快捷键' } },
 ] as const
 
 /**

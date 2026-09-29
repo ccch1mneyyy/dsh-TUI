@@ -88,7 +88,21 @@ const stageBundledDshAuth = async () => {
 await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`)
 const restoreDshAuth = await stageBundledDshAuth()
 try {
-  const result = spawnSync(command, args, {
+  // The rewritten manifest is, by design, out of sync with pnpm-lock.yaml
+  // (workspace:* dependencies become exact optionalDependencies). npm runs
+  // prepare -> compile against the rewritten manifest inside this window,
+  // and the pnpm sub-installs in that chain then die on
+  // ERR_PNPM_OUTDATED_LOCKFILE (frozen in CI). The check cannot be disabled
+  // via env either: npm strips unknown npm_config_* variables from the
+  // environment it hands to scripts ("npm warn Unknown env config
+  // verify-deps-before-run"). The publishing job has already run the full
+  // install + compile + package gates on the pristine manifest, so the
+  // publish itself skips lifecycle scripts; packing collects the built
+  // lib/ and the staged bundles exactly as before.
+  const npmArgs = command === 'npm' && args[0] === 'publish'
+    ? ['publish', '--ignore-scripts', ...args.slice(1)]
+    : args
+  const result = spawnSync(command, npmArgs, {
     cwd: projectRoot,
     encoding: 'utf8',
     shell: process.platform === 'win32' && command === 'npm',

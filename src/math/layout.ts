@@ -12,6 +12,16 @@ import type { TerminalCellSize } from '../ink/terminal-image.js'
 /** Pixels per ex at the base scale, as a fraction of the cell height. */
 export const BASE_EX_TO_CELL_HEIGHT = 0.5
 /**
+ * Display formulas set larger than the body text, like LaTeX (settings
+ * `mathImageScale`): at one ex per 0.72 cell heights the glyph strokes get
+ * roughly 45% more device pixels, which is what a terminal-drawn ink mask
+ * needs to read as clean rather than thin. Inline formulas keep the base
+ * scale — their single row of cells clamps the resolution anyway.
+ */
+export const LARGE_DISPLAY_EX_TO_CELL_HEIGHT = 0.72
+/** The next step up: about 80% more pixels than the base scale. */
+export const XLARGE_DISPLAY_EX_TO_CELL_HEIGHT = 0.9
+/**
  * Below this fraction of the base scale the formula is unreadable as an
  * image; the caller keeps the Unicode rendering instead of shrinking further.
  */
@@ -24,6 +34,8 @@ export interface FormulaSize {
 
 export interface FormulaConstraints {
   readonly cellSize: TerminalCellSize
+  /** Pixels per ex as a fraction of the cell height; defaults to the base scale. */
+  readonly baseExToCellHeight?: number
   readonly maxColumns: number
   readonly maxRows: number
   /** Transparent margin around the ink, in device-independent pixels. */
@@ -60,7 +72,7 @@ export function planFormulaLayout(
   ) {
     return 'invalid-dimensions'
   }
-  const basePixelsPerEx = cellSize.height * BASE_EX_TO_CELL_HEIGHT
+  const basePixelsPerEx = cellSize.height * (constraints.baseExToCellHeight ?? BASE_EX_TO_CELL_HEIGHT)
   const availableWidth = maxColumns * cellSize.width - bleed * 2
   const availableHeight = maxRows * cellSize.height - bleed * 2
   if (availableWidth <= 0 || availableHeight <= 0) return 'too-small'
@@ -69,7 +81,10 @@ export function planFormulaLayout(
     availableWidth / size.widthEx,
     availableHeight / size.heightEx,
   )
-  if (pixelsPerEx < basePixelsPerEx * MIN_SCALE_FRACTION) return 'too-small'
+  // Legibility is absolute, not relative to what the caller asked for: the
+  // floor stays on the base scale so a larger display request shrinks back to
+  // a readable size instead of flipping formulas to the Unicode fallback.
+  if (pixelsPerEx < cellSize.height * BASE_EX_TO_CELL_HEIGHT * MIN_SCALE_FRACTION) return 'too-small'
 
   const contentWidth = size.widthEx * pixelsPerEx
   const contentHeight = size.heightEx * pixelsPerEx

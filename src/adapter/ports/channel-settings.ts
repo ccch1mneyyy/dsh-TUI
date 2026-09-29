@@ -207,6 +207,15 @@ export interface TuiSettingsGroup {
   title: string
   /** Provider-owned translations for the title. */
   descriptions?: LocalizedDescriptions
+  /**
+   * Root-page presentation. 'page' (the default) renders one navigation
+   * row that opens the group's fields on a subpage — for deep, cohesive
+   * domains. 'inline' renders the fields directly on the root page under
+   * a small header — for shallow topics where a subpage round-trip costs
+   * more clicks than the ordering buys. Subpage navigation (Esc back,
+   * focus reset) only exists for 'page' groups.
+   */
+  mode?: 'inline' | 'page'
 }
 
 export interface TuiSettingsField {

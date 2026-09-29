@@ -90,6 +90,10 @@ const GROUPS = {
 // 卡片边框行——下滚到底丢 ╰──╯、上滚到顶丢 ╭─ 标题；窗口必须贴住列表
 // 物理边界（根页/group 子页/极小视口下焦点永不被钉边挤出）。
     ["verify-settings-scroll", ['node', '--import', 'tsx/esm', 'scripts/verify-settings-scroll.tsx']],
+// /settings 根页分组呈现回归：inline 组字段平铺根页（标题行不可聚焦，
+// 焦点序跳过标题直达字段），page 组与无 mode 的旧默认仍走子页；空的
+// inline 组不渲染孤儿标题。
+    ["verify-settings-root-inline", ['node', '--import', 'tsx/esm', 'scripts/verify-settings-root-inline.tsx']],
     ["repro-inline-scrollback", ['node', '--import', 'tsx/esm', 'scripts/repro-inline-scrollback.tsx']],
     ["repro-inline-thirdparty", ['node', '--import', 'tsx/esm', 'scripts/repro-inline-thirdparty.tsx']],
 // 安全回归：OSC 出口控制字符剥离 + 超链接 scheme 门禁（安全审查
@@ -128,6 +132,9 @@ const GROUPS = {
     // 女仆娘立绘（whaleGirl 设置 + 头部换画/阶梯契约）与 99h/999 次"求 star"
     // 开屏弹窗（挂真实 Chat：弹一次/记账/Esc 关且关后不抢键/忙时不弹不记账）：
     ["verify-whale-girl", ['node', '--import', 'tsx/esm', 'scripts/verify-whale-girl.tsx']],
+// 标题女仆娘立绘透明回归：假 Windows Terminal（DA1→Sixel）下立绘以
+// transparent 放置、无衬底色——只画她自己的像素，壁纸从周围透出来。
+    ["verify-maid-portrait-transparent", ['node', '--import', 'tsx/esm', 'scripts/verify-maid-portrait-transparent.tsx']],
 // settled 子代理卡片不得永久持有动画时钟（空闲帧归零回归）：
 // 曾以 120ms/卡片持续驱动 React commit，N 张相位错开合成 ~30ms
 // 均匀帧 cadence。

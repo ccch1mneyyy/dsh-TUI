@@ -809,6 +809,7 @@ const dict = {
   'input-editor-failed': { zh: '外部编辑器失败：{{name}}', en: 'External editor failed: {{name}}' },
   'input-clipboard-read-failed': { zh: '读取剪贴板失败', en: 'Failed to read the clipboard' },
   'input-clipboard-unavailable': { zh: '无法读取剪贴板：没有可用的 wl-paste / xclip / xsel（未安装或会话不可连接）', en: 'Cannot read clipboard: no usable wl-paste / xclip / xsel (not installed or session unreachable)' },
+  'input-clipboard-unavailable-wsl': { zh: '无法读取剪贴板：WSL 下请安装 wl-clipboard（需要 WSLg），或启用 Windows interop 以调用 powershell.exe', en: 'Cannot read clipboard: in WSL install wl-clipboard (needs WSLg) or enable Windows interop so powershell.exe is reachable' },
   'input-image-pasted': { zh: '已粘贴图片 {{token}}', en: 'Pasted image {{token}}' },
   'input-image-pasted-adjusted': { zh: '已粘贴图片 {{token}}（{{detail}}）', en: 'Pasted image {{token}} ({{detail}})' },
   'input-image-detail-resized': { zh: '已缩放至 {{width}}×{{height}}', en: 'resized to {{width}}×{{height}}' },

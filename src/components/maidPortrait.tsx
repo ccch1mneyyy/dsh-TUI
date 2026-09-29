@@ -93,10 +93,9 @@ function centerOnCanvas(source: TerminalImageSource, width: number, height: numb
 
 /**
  * Trim fully-transparent borders (the art's canvas margins) with a small
- * transparent pad. Sixel has no alpha — raster pixels composite onto an
- * opaque backing — so untrimmed padding would show as an empty frame around
- * the character; trimming hands the terminal the artwork itself and lets
- * the same cell box draw her larger.
+ * transparent pad. Sixel cannot express partial alpha, so the pad is dropped
+ * by the coverage mask at encode time; trimming first hands the terminal the
+ * artwork itself and lets the same cell box draw her larger.
  */
 function trimTransparent(source: TerminalImageSource, pad = 4): TerminalImageSource {
   const { data, width, height } = source
@@ -163,7 +162,9 @@ export const MAID_BOX_CENTER = 19.5
  * The portrait as an Ink component: a `width × height` cell box (aspect-fit
  * from the real cell metrics so pixels stay square), centered horizontally
  * by the caller's slot. `presentation` follows the surface — `'transcript'`
- * opts into Sixel for the scrollable header, `'preview'` for modal cards.
+ * opts into Sixel for the scrollable header, `'preview'` for modal cards —
+ * and the portrait always floats `transparent`: her trimmed silhouette sits
+ * on whatever the terminal shows, with no backing rectangle behind it.
  */
 export function MaidPortrait({
   source,
@@ -192,6 +193,7 @@ export function MaidPortrait({
   }
   return (
     <Image
+      transparent
       source={source}
       width={width}
       height={height}

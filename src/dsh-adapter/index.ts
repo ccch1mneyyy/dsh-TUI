@@ -9,7 +9,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import Schema from '@deepseek-ai/schemastery'
 import type { SessionModeSpec } from '../sessionModes.js'
-import { DEFAULT_STATUS_BAR, normalizePageMargin, type MathRendering, type PageMarginSetting, type ScrollGutterMode, type StatusBarConfig, type ToolBackground } from '../tuiDisplayPrefs.js'
+import { DEFAULT_STATUS_BAR, normalizePageMargin, type ImageBacking, type MathImageBacking, type MathImageScale, type MathRendering, type PageMarginSetting, type ScrollGutterMode, type StatusBarConfig, type ToolBackground } from '../tuiDisplayPrefs.js'
 import { SHORTCUT_ACTIONS, type ShortcutActionId } from '../utils/keymap.js'
 import { normalizeSplashFont, type SplashFontSetting } from '../components/splashFonts.js'
 import { editableConfig, type RuntimeConfig } from './compat/settings.js'
@@ -152,6 +152,20 @@ export interface Config {
    *  matrices, cases; `unicode` pins it; `source` always shows the TeX.
    *  Unsupported, still-streaming, or too-wide formulas keep their source. */
   mathRendering?: MathRendering
+  /** Display-formula image size (settings `dsh-tui.mathImageScale`), used
+   *  with `mathRendering: image`: `auto` matches the body text, `large` and
+   *  `xlarge` set display math bigger — which also hands the terminal more
+   *  device pixels per stroke, the only sharpness lever a terminal image has.
+   *  Inline formulas keep the base scale. */
+  mathImageScale?: MathImageScale
+  /** Formula-image backing (settings `dsh-tui.mathImageBacking`): `transparent`
+   *  paints only the formula and lets the terminal background show through;
+   *  `terminal` composites it onto the terminal's background colour. */
+  mathImageBacking?: MathImageBacking
+  /** Transcript-image backing (settings `dsh-tui.imageBacking`): `transparent`
+   *  floats photos and illustrations on whatever the terminal shows;
+   *  `terminal` composites them onto the terminal's background colour. */
+  imageBacking?: ImageBacking
   /** @deprecated Use `mathRendering`; `false` still means `source`. */
   latexMath?: boolean
   /** Auto recap on open (settings `dsh-tui.recapOnOpen`): opening or resuming a
@@ -224,6 +238,9 @@ export const Config: Schema<Config, RuntimeConfig<Config>> = editableConfig<Conf
   smoothStreaming: Schema.boolean().default(true),
   mermaidDiagrams: Schema.boolean().default(true),
   mathRendering: Schema.union(['auto', 'image', 'unicode', 'source']),
+  mathImageScale: Schema.union(['auto', 'large', 'xlarge']),
+  mathImageBacking: Schema.union(['transparent', 'terminal']),
+  imageBacking: Schema.union(['transparent', 'terminal']),
   latexMath: Schema.boolean(),
   // No `.default()` on purpose (the volatile wrapper swallows it; same rule as
   // splashFont): an unset key must stay distinguishable from an explicit

@@ -819,6 +819,7 @@ export default class Output {
       return false
     }
     const presentation = node.attributes.imagePresentation
+    const transparent = node.attributes.imageTransparent === 'transparent'
     // Both protocols crop a partially visible content image to its visible
     // cells (Sixel re-encodes the slice, Kitty places a source rectangle), so
     // scrolling past a viewport edge never flips it to its text fallback.
@@ -861,6 +862,7 @@ export default class Output {
       rows: height,
       source,
       ...(presentation === 'preview' || presentation === 'transcript' ? { presentation } : {}),
+      ...(transparent ? { transparent: true } : {}),
       ...(canCrop ? { clip: { x: visibleLeft, y: visibleTop, columns: visibleRight - visibleLeft, rows: visibleBottom - visibleTop } } : {}),
       ...(background !== undefined ? { background } : {}),
     }
@@ -981,6 +983,15 @@ export default class Output {
       else this.noSelect(region)
     }
     if (this.imageReady) this.imageBackingEnds.set(node, this.operations.length)
+  }
+
+  /**
+   * The admitted placement's backing colour, or undefined when the raster
+   * composites transparently: its cells are then blanks, not a painted
+   * surface, so whatever the terminal shows behind the UI stays visible.
+   */
+  imagePlacementBackground(node: DOMElement): string | undefined {
+    return this.imagePlacements.find(image => image.node === node)?.background
   }
 
   /**

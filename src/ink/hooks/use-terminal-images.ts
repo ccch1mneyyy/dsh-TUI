@@ -17,8 +17,11 @@ const noProtocol = (): undefined => undefined
 
 /**
  * The protocol images are painted with, or undefined without graphics.
- * Kitty places an image over arbitrary cells (inline formulas need that);
- * Sixel paints its pixels with the frame and suits block-level images.
+ *
+ * Kitty provides persistent placements; Sixel paints rasters into the
+ * renderer-managed transcript surface. Both may host inline media as long as
+ * the placement joins the normal image lifecycle (a `presentation` of
+ * `'transcript'` or `'preview'`), which is the real capability boundary.
  */
 export function useTerminalImageProtocol(): TerminalImageProtocolName | undefined {
   const images = useContext(TerminalImagesContext)

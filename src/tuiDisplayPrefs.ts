@@ -242,3 +242,72 @@ const mathRenderingStore = createLiveSetting<MathRendering>('auto', normalizeMat
 export const subscribeMathRendering = mathRenderingStore.subscribe
 export const getMathRendering = mathRenderingStore.get
 export const applyMathRendering = mathRenderingStore.apply
+
+/**
+ * How large a display formula is set when it renders as an image (settings
+ * `dsh-tui.mathImageScale`): `auto` matches the body text, `large` and
+ * `xlarge` set display math bigger. Size is the only sharpness lever a
+ * terminal image has — the raster is drawn one device pixel per pixel, so a
+ * larger formula is literally more pixels per stroke. Inline formulas keep the
+ * base scale: their single row of cells caps the resolution.
+ */
+export type MathImageScale = 'auto' | 'large' | 'xlarge'
+const MATH_IMAGE_SCALES = new Set<MathImageScale>(['auto', 'large', 'xlarge'])
+
+export function normalizeMathImageScale(value: unknown): MathImageScale {
+  return typeof value === 'string' && MATH_IMAGE_SCALES.has(value as MathImageScale)
+    ? value as MathImageScale
+    : 'auto'
+}
+
+/** Read at render time, so settled transcript blocks re-render on change. */
+const mathImageScaleStore = createLiveSetting<MathImageScale>('auto', normalizeMathImageScale)
+export const subscribeMathImageScale = mathImageScaleStore.subscribe
+export const getMathImageScale = mathImageScaleStore.get
+export const applyMathImageScale = mathImageScaleStore.apply
+
+/**
+ * What sits behind a formula image (settings `dsh-tui.mathImageBacking`):
+ * `transparent` paints only the formula's own pixels, so the terminal
+ * background (a wallpaper included) shows through; `terminal` composites it
+ * onto the terminal's background colour first, which is the calmer choice on
+ * busy backgrounds and the only one that keeps soft anti-aliased edges smooth
+ * (Sixel has no partial alpha).
+ */
+export type MathImageBacking = 'transparent' | 'terminal'
+const MATH_IMAGE_BACKINGS = new Set<MathImageBacking>(['transparent', 'terminal'])
+
+export function normalizeMathImageBacking(value: unknown): MathImageBacking {
+  return typeof value === 'string' && MATH_IMAGE_BACKINGS.has(value as MathImageBacking)
+    ? value as MathImageBacking
+    : 'transparent'
+}
+
+const mathImageBackingStore = createLiveSetting<MathImageBacking>('transparent', normalizeMathImageBacking)
+export const subscribeMathImageBacking = mathImageBackingStore.subscribe
+export const getMathImageBacking = mathImageBackingStore.get
+export const applyMathImageBacking = mathImageBackingStore.apply
+
+/**
+ * What sits behind a transcript photo or illustration (settings
+ * `dsh-tui.imageBacking`): `transparent` paints only the raster's own
+ * pixels, so the terminal background (a wallpaper included) shows through
+ * at anti-aliased edges and transparent corners — Sixel's binary alpha
+ * drops their softest pixels, so edges trade a little smoothness for the
+ * float; `terminal` composites onto the terminal's background colour
+ * first (smooth edges on any background). Photographs are mostly opaque,
+ * so the visible difference lives at the edges.
+ */
+export type ImageBacking = 'transparent' | 'terminal'
+const IMAGE_BACKINGS = new Set<ImageBacking>(['transparent', 'terminal'])
+
+export function normalizeImageBacking(value: unknown): ImageBacking {
+  return typeof value === 'string' && IMAGE_BACKINGS.has(value as ImageBacking)
+    ? value as ImageBacking
+    : 'transparent'
+}
+
+const imageBackingStore = createLiveSetting<ImageBacking>('transparent', normalizeImageBacking)
+export const subscribeImageBacking = imageBackingStore.subscribe
+export const getImageBacking = imageBackingStore.get
+export const applyImageBacking = imageBackingStore.apply

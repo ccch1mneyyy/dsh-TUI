@@ -54,6 +54,12 @@ export interface MathRenderRequest {
   /** Largest cell box the formula may occupy; it shrinks to fit, never grows. */
   readonly maxColumns: number
   readonly maxRows: number
+  /**
+   * Pixels per ex as a fraction of the cell height. Display formulas pass
+   * {@link DISPLAY_EX_TO_CELL_HEIGHT} so they are set larger than the body
+   * text; inline formulas keep the base scale.
+   */
+  readonly baseExToCellHeight?: number
 }
 
 export interface MathRaster {
@@ -207,6 +213,7 @@ async function rasterize(vector: Vector, request: MathRenderRequest, color: stri
       cellSize: request.cellSize,
       maxColumns: request.maxColumns,
       maxRows: request.maxRows,
+      ...(request.baseExToCellHeight === undefined ? {} : { baseExToCellHeight: request.baseExToCellHeight }),
       bleed,
       maxEdge: TERMINAL_IMAGE_MAX_EDGE,
       maxBytes: TERMINAL_IMAGE_MAX_BYTES,
@@ -269,6 +276,7 @@ function prepare(request: MathRenderRequest): PreparedRequest {
     request.cellSize.height,
     request.maxColumns,
     request.maxRows,
+    request.baseExToCellHeight ?? '',
     tex,
   ].join('\u0000')
   return { key, tex, color }
