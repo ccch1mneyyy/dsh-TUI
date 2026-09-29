@@ -5,6 +5,7 @@
  * then interprets sequences as keypresses.
  */
 import { Buffer } from 'buffer'
+import { fileURLToPath } from 'node:url'
 import { isCSIFinal, isCSIIntermediate, isCSIParam, PASTE_END, PASTE_START } from './termio/csi.js'
 import { createTokenizer, type Tokenizer } from './termio/tokenize.js'
 
@@ -196,53 +197,52 @@ const SGR_MOUSE_RE = /^\x1b\[<(\d+);(\d+);(\d+)([Mm])$/
  * Terminal / OpenConsole hand a dropped path over as an OSC 8 hyperlink
  * (`ESC ] 8 ; <params> ; file:///… ST`), and a `DECSET 9001` (win32-input-mode)
  * host additionally decomposes that payload into per-character key records
- * (see the decomposed-paste matcher below). Those records carry the ESC bytes,
- * which `parseWin32KeyEvent` maps to an `escape` key, so the reassembler
- * collected the sequence body as paste text with every ESC removed — the
- * prompt then showed `[16;42;0;1;16;1…` instead of a path. Stripping the
- * sequences from the assembled payload removes the middleman: the plain path
- * survives (or nothing does), and no fragment can reach the draft.
+ * (see the decomposed-paste matcher below). The hyperlink itself is RESTORED
+ * to its local path before this hygiene runs (see `createPasteKey` and the
+ * OSC 8 block below); what is stripped here is the rest of the protocol
+ * shapes a paste payload can carry.
+ *
+ * Scope (DESIGN D3, narrowed by measurement): complete OSC sequences and C0
+ * bytes with no editing meaning. CSI sequences and bare ESC bytes are
+ * deliberately KEPT — a bracketed paste's payload is user data, and PR #1142
+ * pins that protocol-shaped literal text (`ESC[1;2;3;1A`) survives
+ * byte-for-byte (`scripts/verify-win32-input.tsx`); the wide strip
+ * (CSI + residual ESC) proved mutually exclusive with that contract.
  */
 // eslint-disable-next-line no-control-regex -- deliberate: paste payloads carry terminal sequences
 const OSC_IN_PASTE = /\u001b\][^\u0007\u001b]*(?:\u0007|\u001b\\)?/gu
-/** CSI (colors, motions) — never meaningful inside pasted text. */
-// eslint-disable-next-line no-control-regex
-const CSI_IN_PASTE = /\u001b\[[0-9;:?<=>]*[ -/]*[@-~]/gu
 /**
- * Any remaining ESC, taken with ONE following character. The bodies above
- * already consumed their own terminators, so what is left is an unterminated
- * or non-CSI/OSC sequence; the payload is terminal bytes, never user text, so
- * dropping the pair is the conservative choice.
- */
-// eslint-disable-next-line no-control-regex
-const ESC_IN_PASTE = /\u001b[\s\S]?/gu
-/**
- * C0 controls that carry no editable meaning. TAB, CR/LF and DEL survive: the
- * first three are the composer's to normalize, and DEL is a pre-existing
- * paste-payload contract (`verify-keys.tsx` pins that a bracketed paste keeps
- * its embedded DEL as data rather than letting it delete).
+ * C0 controls that carry no editable meaning. TAB (0x09), LF (0x0a), CR
+ * (0x0d) and DEL (0x7f) survive: the first three are the composer's to
+ * normalize, and DEL is a pre-existing paste-payload contract
+ * (`verify-keys.tsx` pins that a paste keeps its embedded DEL as data
+ * rather than letting it delete).
+ *
+ * ESC (0x1b) is deliberately NOT in the set: an ESC byte in a payload is
+ * protocol-shaped literal text under the #1142 bracketed-paste contract (see
+ * the strip-scope note above), and the ESC bytes of a real drop belong to the
+ * OSC 8 frame claimed before this strip.
  *
  * The C1 band (U+0080–U+009F) is deliberately NOT stripped: stdin is decoded
  * as UTF-8, so a C1 code point here is a character the user pasted, not a
  * terminal byte, and the composer's own contract keeps it.
  */
 // eslint-disable-next-line no-control-regex
-const INERT_IN_PASTE = /[\u0000-\u0008\u000b\u000c\u000e-\u001f]/gu
+const INERT_IN_PASTE = /[\u0000-\u0008\u000b\u000c\u000e-\u001a\u001c-\u001f]/gu
 
 /** Ordered strip for one paste payload — see {@link OSC_IN_PASTE}. */
 function cleanPastePayload(content: string): string {
-  return content
-    .replace(OSC_IN_PASTE, '')
-    .replace(CSI_IN_PASTE, '')
-    .replace(ESC_IN_PASTE, '')
-    .replace(INERT_IN_PASTE, '')
+  return content.replace(OSC_IN_PASTE, '').replace(INERT_IN_PASTE, '')
 }
 
 function createPasteKey(content: string): ParsedKey {
-  // Terminal control sequences are stripped at the ONE choke point every
-  // paste path goes through (VT bracketed paste, the decomposed win32 paste,
-  // and both flush paths), so no caller has to remember to do it.
-  const text = cleanPastePayload(content)
+  // Order is a contract (D6/D1): a complete OSC 8 drop frame is RESTORED to
+  // its local path BEFORE the payload hygiene — hygiene strips the very OSC
+  // frame the drop is encoded in. Every paste path goes through this ONE
+  // choke point (VT bracketed paste, the decomposed win32 paste, and both
+  // flush paths), so no caller has to remember the order.
+  const dropPath = osc8DropPath(content)
+  const text = dropPath === null ? cleanPastePayload(content) : pastePayloadForPath(dropPath)
   return {
     kind: 'key',
     name: '',
@@ -256,6 +256,138 @@ function createPasteKey(content: string): ParsedKey {
     raw: text,
     isPasted: true,
   }
+}
+
+// -- OSC 8 drop frames -------------------------------------------------------
+//
+// Windows hands a dropped file over as an OSC 8 hyperlink:
+//
+//   ESC ] 8 ; <params> ; <URI> ( BEL | ST )
+//
+// `params` is the hyperlink attribute list (`id=16:42`, or empty for the form
+// this TUI itself emits) and the URI is everything after the SECOND `;` — a
+// URI may legally contain `;`, params may not.
+//
+// A frame is claimed in the fixed decision order (D6) by
+// `claimProtocolSequence`, and — when the frame set was already reassembled
+// into one paste body (win32 decomposed paste / VT bracketed paste) — by
+// `createPasteKey` before the payload hygiene runs.
+
+/** OSC 8 introducer: `ESC ] 8 ;`. */
+const OSC8_FRAME_PREFIX = '\x1b]8;'
+/**
+ * Longest OSC 8 frame the record accumulator will hold. A drop URI is a local
+ * path plus percent-encoding, and the composer's own pasted-path cap is 4096
+ * chars (`MAX_PASTED_PATH_CHARS`), so anything beyond this cannot become a
+ * usable path and must not extend a hold indefinitely.
+ */
+const OSC8_FRAME_MAX_LENGTH = 4096
+
+type Osc8Frame = {
+  /** Frame URI — '' for a hyperlink CLOSE frame (`ESC ] 8 ; ; …`). */
+  uri: string
+  /** Offset just past the frame, terminator included when present. */
+  end: number
+}
+
+/**
+ * Read one OSC 8 frame at `offset`. Returns null when the bytes there are not
+ * an OSC 8 frame, or when the URI is followed by anything other than a frame
+ * terminator (BEL 0x07 / ST `ESC \`) or the start of the next frame.
+ *
+ * The "next frame" shape matters because the win32 record translator drops
+ * BEL outright (a synthesized Uc=7 record carries no key meaning), so a
+ * decomposed drop can lose its BEL terminator before the payload is
+ * reassembled. A lone frame with neither a terminator nor a successor stays
+ * unclaimed: the tail of a truncated stream must not be read as a path.
+ */
+function readOsc8Frame(payload: string, offset: number): Osc8Frame | null {
+  if (!payload.startsWith(OSC8_FRAME_PREFIX, offset)) return null
+  const paramsEnd = payload.indexOf(';', offset + OSC8_FRAME_PREFIX.length)
+  if (paramsEnd === -1) return null
+  const uriStart = paramsEnd + 1
+  let uriEnd = uriStart
+  while (uriEnd < payload.length && payload[uriEnd] !== '\u0007' && payload[uriEnd] !== '\x1b') {
+    uriEnd++
+  }
+  const uri = payload.slice(uriStart, uriEnd)
+  if (payload[uriEnd] === '\u0007') return { uri, end: uriEnd + 1 }
+  if (payload.startsWith('\x1b\\', uriEnd)) return { uri, end: uriEnd + 2 }
+  if (payload.startsWith(OSC8_FRAME_PREFIX, uriEnd)) return { uri, end: uriEnd }
+  return null
+}
+
+/**
+ * The local path a payload restores to, or null when the payload is NOT a
+ * pure OSC 8 frame set or its URI is not a decodable LOCAL file URL. Called
+ * with one complete sequence (the decision chain) or with a whole reassembled
+ * paste body (the choke point).
+ *
+ * Fail-closed rules (DESIGN D4 / AC-4):
+ * - only `file://` URIs are restored — other schemes fall through to the
+ *   normal response/prose handling;
+ * - a URI carrying whitespace is multiple tokens, not one path, and is
+ *   refused (the same conservative contract as `parsePastedImagePath`);
+ * - more than one distinct URI is a multi-file drop, which v1 does not
+ *   cover: fail closed rather than silently keep only the first file;
+ * - a remote authority (`file://server/share/…`) or a decode failure is
+ *   never silently reinterpreted as a local path;
+ * - a payload with any trailing non-OSC-8 bytes is NOT a drop and is left to
+ *   the hygiene path, so prose that merely quotes a link keeps its text.
+ */
+function osc8DropPath(payload: string): string | null {
+  let offset = 0
+  let uri: string | undefined
+  while (offset < payload.length) {
+    const frame = readOsc8Frame(payload, offset)
+    if (frame === null || frame.end <= offset) return null
+    if (frame.uri !== '') {
+      if (uri !== undefined && uri !== frame.uri) return null
+      uri = frame.uri
+    }
+    offset = frame.end
+  }
+  if (uri === undefined || /\s/u.test(uri)) return null
+  return localPathOfFileUri(uri)
+}
+
+/**
+ * `file://` URI → local path (percent-escapes decoded by `fileURLToPath`), or
+ * null when the URI is not a local file URL or decoding fails.
+ */
+function localPathOfFileUri(uri: string): string | null {
+  if (!/^file:\/\//iu.test(uri)) return null
+  let url: URL
+  try {
+    url = new URL(uri)
+  } catch {
+    return null
+  }
+  // A non-empty authority is a remote share (UNC): refuse it instead of
+  // letting `fileURLToPath` reinterpret it as a local path on hosts that
+  // ignore the authority. `localhost` is this machine.
+  if (url.host !== '' && url.host !== 'localhost') return null
+  try {
+    return fileURLToPath(url)
+  } catch {
+    return null
+  }
+}
+
+/**
+ * The paste payload for a restored drop path. `parsePastedImagePath` accepts
+ * exactly one whitespace-free token, or the whole payload quoted — and a drop
+ * is ONE unambiguous file, so a path containing whitespace is handed over in
+ * the quoted single-token form the composer already documents
+ * (`@"my dir/a.ts"` is the mention spelling of the same shape). A path no
+ * quote can represent (a literal `"`) stays bare: the composer then inserts
+ * it verbatim, which is the pre-existing fail-closed behaviour for ambiguous
+ * tokens. Windows paths cannot contain `"`, so on this platform the quoted
+ * form is exactly the decoded path.
+ */
+function pastePayloadForPath(path: string): string {
+  if (!/[\s"]/u.test(path)) return path
+  return path.includes('"') ? path : `"${path}"`
 }
 
 /** DECRPM status values (response to DECRQM) */
@@ -796,16 +928,106 @@ function synthesizedWin32Char(key: ParsedKey): string | undefined {
   return win32RecordChar(key)
 }
 
-function parseReassembledWin32Protocol(sequence: string): ParsedInput | null {
+/**
+ * The ONE decision chain for a complete reassembled terminal sequence. The
+ * order is a contract (DESIGN D6) and must not be permuted:
+ *
+ *   1. OSC 8 drop frame — a dropped file's hyperlink. It must win over the
+ *      OSC response shape in step 2, which also matches `ESC ] 8 ; …` and
+ *      used to swallow the whole link as a bogus terminal reply (#1067).
+ *   2. terminal response — DECRPM/DA/OSC replies to our own queries
+ *      (#1177's type-bound claiming).
+ *   3. mouse report — SGR (1006), with the X10 report as the legacy
+ *      compatibility fallback.
+ *
+ * A sequence that falls through all three is a record body or a keypress, and
+ * only the caller can tell which (`parseReassembledWin32Protocol` for records,
+ * the token loop for VT input), so that dispatch stays with the caller.
+ */
+function claimProtocolSequence(sequence: string): ParsedInput | null {
+  const dropPath = osc8DropPath(sequence)
+  if (dropPath !== null) {
+    // Hand the local path to the ONE paste choke point (D2), so the existing
+    // image stage / `@` reference pipeline sees a normal paste.
+    return createPasteKey(pastePayloadForPath(dropPath))
+  }
+
   const response = parseTerminalResponse(sequence)
   if (response) return { kind: 'response', sequence, response }
 
-  const mouse = parseMouseEvent(sequence) ?? parseX10MouseEvent(sequence)
-  if (mouse) return mouse
+  return parseMouseEvent(sequence) ?? parseX10MouseEvent(sequence)
+}
+
+function parseReassembledWin32Protocol(sequence: string): ParsedInput | null {
+  // Fixed decision order (D6) — see claimProtocolSequence.
+  const claimed = claimProtocolSequence(sequence)
+  if (claimed) return claimed
 
   if (SGR_MOUSE_RE.test(sequence) || (sequence.length === 6 && sequence.startsWith('\x1b[M'))) {
     return parseKeypress(sequence)
   }
+  return null
+}
+
+/** Release every key held for the current candidate sequence. */
+function releaseWin32ProtocolHold(state: Win32ProtocolState): ParsedKey[] {
+  const held = state.held
+  state.held = []
+  state.sequence = ''
+  return held
+}
+
+/**
+ * Resolve one accumulated protocol candidate. An array is the dispatch result
+ * (empty while the frame is still incomplete); null means the bytes are not a
+ * protocol shape we may hold, and the caller releases its keys.
+ *
+ * Order and bounds are the existing contract (#1142/#1177) with the OSC 8
+ * drop frame (D1) added FIRST: under win32-input-mode a drop can arrive as
+ * per-character synthesized records without bracketed-paste markers, so the
+ * hyperlink has to be reassembled here, ahead of any response/mouse claim.
+ * Holding past the introducer also keeps it away from
+ * `parseTerminalResponse`, whose OSC shape would otherwise take
+ * `ESC ] 8 ; …` as a bogus reply and swallow the dropped path (#1067).
+ * The OSC terminator is BEL or ST with its own length cap: a BEL record has
+ * no key meaning and is dropped by the translator, so a decomposed frame can
+ * lose its BEL — such a frame is released by the flush bound like any other
+ * abandoned sequence.
+ */
+function resolveWin32ProtocolCandidate(
+  state: Win32ProtocolState,
+  sequence: string,
+  ch: string,
+): ParsedInput[] | null {
+  if (sequence === '\x1b' || sequence === '\x1b[') return []
+
+  if (sequence.startsWith('\x1b]')) {
+    const terminated = sequence.endsWith('\u0007') || sequence.endsWith('\x1b\\')
+    if (!terminated) return sequence.length <= OSC8_FRAME_MAX_LENGTH ? [] : null
+    const held = releaseWin32ProtocolHold(state)
+    const parsed = parseReassembledWin32Protocol(sequence)
+    return parsed ? [parsed] : held
+  }
+
+  if (!sequence.startsWith('\x1b[') || sequence.length > 64) return null
+
+  if (sequence.startsWith('\x1b[M')) {
+    if (sequence.length < 6) return []
+    const held = releaseWin32ProtocolHold(state)
+    const parsed = sequence.length === 6
+      ? parseReassembledWin32Protocol(sequence)
+      : null
+    return parsed ? [parsed] : held
+  }
+
+  const code = ch.charCodeAt(0)
+  if ((code >= 0x20 && code <= 0x3f)) return []
+  if (code >= 0x40 && code <= 0x7e) {
+    const held = releaseWin32ProtocolHold(state)
+    const parsed = parseReassembledWin32Protocol(sequence)
+    return parsed ? [parsed] : held
+  }
+
   return null
 }
 
@@ -822,50 +1044,16 @@ function feedWin32Protocol(
   }
 
   if (ch === undefined) {
-    const held = state.held
-    state.held = []
-    state.sequence = ''
+    const held = releaseWin32ProtocolHold(state)
     return [...held, ...feedWin32Protocol(state, key)]
   }
 
   state.held.push(key)
   state.sequence += ch
-  const sequence = state.sequence
-
-  if (sequence === '\x1b' || sequence === '\x1b[') return []
-
-  if (!sequence.startsWith('\x1b[') || sequence.length > 64) {
-    const held = state.held
-    state.held = []
-    state.sequence = ''
-    return held
-  }
-
-  if (sequence.startsWith('\x1b[M')) {
-    if (sequence.length < 6) return []
-    const held = state.held
-    state.held = []
-    state.sequence = ''
-    const parsed = sequence.length === 6
-      ? parseReassembledWin32Protocol(sequence)
-      : null
-    return parsed ? [parsed] : held
-  }
-
-  const code = ch.charCodeAt(0)
-  if ((code >= 0x20 && code <= 0x3f)) return []
-  if (code >= 0x40 && code <= 0x7e) {
-    const held = state.held
-    state.held = []
-    state.sequence = ''
-    const parsed = parseReassembledWin32Protocol(sequence)
-    return parsed ? [parsed] : held
-  }
-
-  const held = state.held
-  state.held = []
-  state.sequence = ''
-  return held
+  return (
+    resolveWin32ProtocolCandidate(state, state.sequence, ch) ??
+    releaseWin32ProtocolHold(state)
+  )
 }
 
 function feedWin32Input(
@@ -1174,46 +1362,39 @@ export function parseMultipleKeypresses(
             }
           }
         } else {
-          const response = parseTerminalResponse(token.value)
-          if (response) {
-            // Terminal reply (DECRPM, DA, …) — same dead-report proof.
+          // Fixed decision order (D6) for one complete token — see
+          // claimProtocolSequence: OSC 8 drop → terminal reply → mouse.
+          // SGR mouse comes first (1006); X10 (legacy 1000/1002 without SGR)
+          // is the compatibility fallback. Wheel falls through to
+          // parseKeypress, which turns it into a wheel key WITH the pointer
+          // coordinates for position-based routing.
+          const claimed = claimProtocolSequence(token.value)
+          if (claimed !== null) {
+            // Any claim — drop, terminal reply or complete mouse report — is
+            // a protocol boundary: a held prefix belongs to an older, dead
+            // report. Discard it BEFORE it can merge the next fragment into
+            // a phantom event.
             mouseTailHold = undefined
             mouseTailHoldAt = undefined
-            keys.push({ kind: 'response', sequence: token.value, response })
+            keys.push(claimed)
+          } else if (SGR_MOUSE_PREFIX_RE.test(token.value.replace(/^\x1b/, ''))) {
+            // Flush-truncated SGR mouse report: the tokenizer's flush
+            // emitted the buffered prefix (ESC still attached) as a
+            // sequence token. It is protocol bytes mid-report, not a key —
+            // strip the ESC, hold for the continuation (the text-token
+            // branch above completes it), and never let it fall through
+            // to parseKeypress, where it would leak into the prompt.
+            // A fresh prefix REPLACES any stale hold instead of appending:
+            // the new report's arrival proves the old one's tail never
+            // came (`[<0;18` + `[<64;…` concatenated parses as garbage).
+            mouseTailHold = token.value.replace(/^\x1b/, '')
+            mouseTailHoldAt = Date.now()
           } else {
-            // SGR first (1006); X10 (legacy 1000/1002 without SGR) as the
-            // compatibility fallback for clicks/drags. Wheel falls through
-            // to parseKeypress, which turns it into a wheel key WITH the
-            // pointer coordinates for position-based routing.
-            const mouse =
-              parseMouseEvent(token.value) ??
-              parseX10MouseEvent(token.value)
-            if (mouse) {
-              // A complete report arrived — any held prefix belongs to an
-              // older, dead report. Discard it BEFORE it can merge the next
-              // fragment into a phantom event.
-              mouseTailHold = undefined
-              mouseTailHoldAt = undefined
-              keys.push(mouse)
-            } else if (SGR_MOUSE_PREFIX_RE.test(token.value.replace(/^\x1b/, ''))) {
-              // Flush-truncated SGR mouse report: the tokenizer's flush
-              // emitted the buffered prefix (ESC still attached) as a
-              // sequence token. It is protocol bytes mid-report, not a key —
-              // strip the ESC, hold for the continuation (the text-token
-              // branch above completes it), and never let it fall through
-              // to parseKeypress, where it would leak into the prompt.
-              // A fresh prefix REPLACES any stale hold instead of appending:
-              // the new report's arrival proves the old one's tail never
-              // came (`[<0;18` + `[<64;…` concatenated parses as garbage).
-              mouseTailHold = token.value.replace(/^\x1b/, '')
-              mouseTailHoldAt = Date.now()
-            } else {
-              // Ordinary key sequence (arrows, function keys, …) — still an
-              // ESC protocol start, so a held prefix's report is dead.
-              mouseTailHold = undefined
-              mouseTailHoldAt = undefined
-              keys.push(parseKeypress(token.value))
-            }
+            // Ordinary key sequence (arrows, function keys, …) — still an
+            // ESC protocol start, so a held prefix's report is dead.
+            mouseTailHold = undefined
+            mouseTailHoldAt = undefined
+            keys.push(parseKeypress(token.value))
           }
         }
       }
