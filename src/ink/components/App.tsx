@@ -9,6 +9,7 @@ import { logMouseDebug } from "../../utils/debug.js";
 import { logError } from "../../utils/log.js";
 import { EventEmitter } from "../events/emitter.js";
 import { InputEvent } from "../events/input-event.js";
+import instances from "../instances.js";
 import { TerminalFocusEvent } from "../events/terminal-focus-event.js";
 import { DragEvent } from "../events/drag-event.js";
 import type { DOMElement } from "../dom.js";
@@ -199,6 +200,22 @@ const MULTI_CLICK_DISTANCE = 1;
 type State = {
 	readonly error?: Error;
 };
+
+/**
+ * App-side protocol-candidate latch input (fed to Ink's
+ * onProtocolCandidateChange). A gated parser (mouseReportingActive === true)
+ * may hold a bare `ESC[` head in the tokenizer before the flush moves it into
+ * mouseTailHold; under the gate that buffer is SGR-report-shaped too. A closed
+ * gate cannot receive reports, and an absent gate (direct callers) keeps the
+ * original `ESC[<`-only test.
+ */
+function hasMouseProtocolCandidate(state: KeyParseState): boolean {
+	if (state.mouseTailHold !== undefined) return true;
+	if (state.mouseReportingActive === true)
+		return state.incomplete.startsWith("\x1b[");
+	if (state.mouseReportingActive === false) return false;
+	return state.incomplete.startsWith("\x1b[<");
+}
 
 // Root component for all Ink apps
 // It renders stdin and stdout contexts, so that children can access them if needed
@@ -606,8 +623,22 @@ export default class App extends PureComponent<Props, State> {
 
 	// Process input through the parser and handle the results
 	processInput = (input: string | Buffer | null): void => {
+		// SGR head-claim provenance (ADR-0007 D2) — the ONLY injection point.
+		// Re-read Ink's live altScreenMouseTracking on every chunk because
+		// <AlternateScreen> flips it on mount/unmount; a stale value would
+		// either swallow literal input (stale true) or leak a report head
+		// (stale false). The renderer lookup mirrors <AlternateScreen>'s
+		// instances.get() resolution; no renderer → false (inline / no
+		// mouse tracking → pre-gate behavior).
+		const renderer =
+			instances.get(this.props.stdout) ??
+			(instances.size === 1 ? instances.values().next().value : undefined);
+		const prevState: KeyParseState = {
+			...this.keyParseState,
+			mouseReportingActive: renderer?.isAltScreenMouseTracking === true,
+		};
 		// Parse input using our state machine
-		const [keys, newState] = parseMultipleKeypresses(this.keyParseState, input);
+		const [keys, newState] = parseMultipleKeypresses(prevState, input);
 		// Gesture latch: a parser-captured SGR mouse prefix (mouseTailHold
 		// transitioned to a value, or the tokenizer's `incomplete` buffer
 		// starts with an SGR prefix) is byte-level evidence of a mouse event
@@ -622,8 +653,8 @@ export default class App extends PureComponent<Props, State> {
 		// a flush can move the prefix from `incomplete` into `mouseTailHold`
 		// (or back), and treating either transition alone as a falling edge
 		// would drop the latch mid-report.
-		const hadCandidate = this.keyParseState.mouseTailHold !== undefined || this.keyParseState.incomplete.startsWith('\x1b[<');
-		const hasCandidate = newState.mouseTailHold !== undefined || newState.incomplete.startsWith('\x1b[<');
+		const hadCandidate = hasMouseProtocolCandidate(prevState);
+		const hasCandidate = hasMouseProtocolCandidate(newState);
 		if (!hadCandidate && hasCandidate) {
 			this.props.onProtocolCandidateChange?.(true);
 		} else if (hadCandidate && !hasCandidate) {

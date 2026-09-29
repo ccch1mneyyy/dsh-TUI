@@ -1379,6 +1379,16 @@ export default class Ink {
   get isAltScreenActive(): boolean {
     return this.altScreenActive;
   }
+  /**
+   * Read-only source of truth for "this host may receive SGR mouse reports":
+   * true only while <AlternateScreen mouseTracking> is in effect. App injects
+   * it into KeyParseState.mouseReportingActive on every processInput
+   * (ADR-0007 D2); the parser only reads it. Public so instances.get()
+   * callers can access it, mirroring the selection field above.
+   */
+  get isAltScreenMouseTracking(): boolean {
+    return this.altScreenMouseTracking;
+  }
 
   /**
    * Re-assert terminal modes after a gap (>5s stdin silence or event-loop
