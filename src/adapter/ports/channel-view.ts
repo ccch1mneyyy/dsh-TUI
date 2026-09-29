@@ -143,6 +143,9 @@ export interface SubagentRow {
   agentId: string
   runId?: string
   description: string
+  /** Durable creation mode from the kernel catalog event; absent before the
+   *  parent log's `subagent/catalog` fact arrives (bus-only discovery). */
+  mode?: 'one-shot' | 'continuable' | 'unknown'
   provider?: string
   model?: string
   effort?: string
@@ -162,6 +165,9 @@ export interface SubagentState {
   agentId: string
   runId?: string
   description: string
+  /** Durable creation mode from `subagent/catalog` (one-shot burns out;
+   *  continuable survives epochs and can take later prompts). */
+  mode?: 'one-shot' | 'continuable' | 'unknown'
   provider?: string
   model?: string
   effort?: string

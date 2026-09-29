@@ -1215,6 +1215,8 @@ const dict = {
   'subagent-dashboard-hint-basic': { zh: '↑/↓ 浏览 · Esc 关闭', en: '↑/↓ browse · Esc close' },
   'subagent-dashboard-hint-detail': { zh: '↑/↓ 选择 · Enter 查看详情 · Esc 关闭', en: '↑/↓ select · Enter view detail · Esc close' },
   'subagent-card-prefix': { zh: '子代理：', en: 'Subagent: ' },
+  'subagent-mode-continuable': { zh: '♻ 可继续', en: '♻ continuable' },
+  'subagent-mode-one-shot': { zh: '◇ 一次性', en: '◇ one-shot' },
   'subagent-tab-summary': { zh: '摘要', en: 'Summary' },
   'subagent-no-summary': { zh: '暂无摘要', en: 'No summary yet' },
   'subagent-no-tools': { zh: '暂无工具调用', en: 'No tool calls' },
