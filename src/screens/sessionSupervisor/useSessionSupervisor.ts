@@ -24,7 +24,7 @@ import type { TuiWorkspaceEntry, TuiWorkspaceTarget } from '../../workspaces.js'
 import type { ChannelUi as Channel } from '../../adapter/channel/ui-policy.js'
 import type { ResumeResult } from '../../adapter/ports/channel-view.js'
 import { resumeFailureText } from '../../sessions/resumeFailure.js'
-import { RAIL_CHROME_ROWS, WORKSPACE_ROW_LINES, RAIL_MIN_TOTAL_COLUMNS, RAIL_WIDTH_MIN, RAIL_WIDTH_MAX, SESSION_ROW_LINES, SESSION_PANE_CHROME_ROWS, noticeLines, MenuAction, MENU_ACTIONS, MENU_WIDTH, MENU_HEIGHT, MENU_LABEL_KEYS, SupervisorLiveState, RailEntry, UNREGISTERED_RAIL_ID, message, samePath, sessionMatchesQuery } from './model.js'
+import { RAIL_CHROME_ROWS, WORKSPACE_ROW_LINES, RAIL_MIN_TOTAL_COLUMNS, RAIL_WIDTH_MIN, RAIL_WIDTH_MAX, SESSION_ROW_LINES, SESSION_PANE_CHROME_ROWS, noticeLines, menuActionsFor, SupervisorLiveState, RailEntry, UNREGISTERED_RAIL_ID, message, samePath, sessionMatchesQuery } from './model.js'
 
 /**
  * The last successful listing, per channel, carried across mounts of this
@@ -662,7 +662,8 @@ export function useSessionSupervisor(input: SessionSupervisorInput) {
 
   const activateMenu = useCallback((entry: RailEntry, item: number): void => {
     closeMenu()
-    const action: MenuAction = MENU_ACTIONS[item] ?? 'edit'
+    const action = menuActionsFor(entry)[item]
+    if (action === undefined) return
     if (action === 'edit') selectEntry(entry)
     else if (action === 'new') newSessionIn(entry)
     // The fallback group is not a registration, so there is no ledger row to

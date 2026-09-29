@@ -403,7 +403,10 @@ function makeChannel(config: StubChannelConfig): StubChannel {
     },
     ...(config.foreign === undefined ? {} : foreignFacade(config.foreign, calls)),
     switchWorkspace: async () => true,
-    resolveWorkspace: async (reference: string) => ({ cwd: reference, uri: reference, label: reference, kind: 'local', badge: 'LOCAL' }),
+    resolveWorkspace: async (reference: string) => {
+      calls.push(`resolveWorkspace:${reference}`)
+      return { cwd: reference, uri: reference, label: reference, kind: 'local', badge: 'LOCAL' }
+    },
     stopBackgroundAgent: async () => true,
     removeWorkspace: async (path: string) => {
       calls.push(`removeWorkspace:${path}`)
@@ -455,6 +458,8 @@ interface SupervisorScreen {
   lines: () => string[]
   /** One real SGR click on the first occurrence of `needle`. */
   click: (needle: string) => Promise<void>
+  /** One real SGR right click on the first occurrence of `needle`. */
+  rightClick: (needle: string) => Promise<void>
   /**
    * True when `text` was written to the terminal at ANY point, even when a
    * later frame erased it again. `lines()` reads the final composition, so a
@@ -516,6 +521,13 @@ async function mountSupervisor(target: StubChannel): Promise<SupervisorScreen> {
       if (found === null) throw new Error(`text not found: ${needle}`)
       input.write(`\u001b[<0;${found.col + 1};${found.row + 1}M\u001b[<0;${found.col + 1};${found.row + 1}m`)
       await sleep(120) // 固定窗:pacing 输入泵需要一轮事件循环把点击交给解析器
+    },
+    rightClick: async (needle: string) => {
+      await settled(() => findText(screen, needle) !== null)
+      const found = findText(screen, needle)
+      if (found === null) throw new Error(`text not found: ${needle}`)
+      input.write(`\u001b[<2;${found.col + 1};${found.row + 1}M\u001b[<2;${found.col + 1};${found.row + 1}m`)
+      await sleep(120) // 固定窗:pacing 输入泵需要一轮事件循环把右键交给解析器
     },
     saw: (text: string) => out.painted.join('').includes(text),
     calls: target.calls,
@@ -1502,6 +1514,29 @@ console.log('removing a registration keeps its history visibly distinct (#1040)'
       && shown().includes('History only · alpha'), { timeoutMs: 6_000 }), shown())
   check('past sessions stay reachable after registration removal', shown().includes('free session'), shown())
   check('the host removal action ran once', app.calls.filter(call => call === `removeWorkspace:${alphaDir}`).length === 1)
+  app.close()
+}
+
+console.log('history-only rows offer no registration-only actions (#1041)')
+{
+  const app = await openSupervisor({ registry: [], cwd: alphaDir })
+  const shown = () => app.lines().join('\n')
+  await settled(() => shown().includes('History only · alpha'))
+  app.write('\r')
+  check('keyboard menu omits rename and remove on a history row',
+    await settled(() => shown().includes('New session here')
+      && !shown().includes('Rename workspace') && !shown().includes('Remove from list')), shown())
+  app.write('\u001b[A\r') // Up wraps from Edit to New in the two-action menu.
+  check('keyboard can activate the last available action',
+    await settled(() => app.calls.includes(`resolveWorkspace:${alphaDir}`)), app.calls.join(', '))
+  await app.rightClick('History only · alpha')
+  check('right click opens the same reduced menu',
+    await settled(() => shown().includes('New session here')
+      && !shown().includes('Rename workspace') && !shown().includes('Remove from list')), shown())
+  await app.click('New session here')
+  check('mouse activates an available action without invoking removal',
+    await settled(() => app.calls.filter(call => call === `resolveWorkspace:${alphaDir}`).length === 2)
+      && !app.calls.some(call => call.startsWith('removeWorkspace:')), app.calls.join(', '))
   app.close()
 }
 

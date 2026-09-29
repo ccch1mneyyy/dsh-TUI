@@ -185,6 +185,7 @@ Full reference: [Interaction and commands](docs/interaction.en.md).
 
 The session manager paints the last successful list immediately while it checks the persistence store for changes. Titles that require a deeper log scan appear first with a fallback name and update in place when recovery finishes.
 Removing a workspace registration keeps its sessions accessible under a "History only" directory in the rail.
+History-only directories offer edit and new-session actions; rename and remove are available for registered workspaces.
 
 **Background sessions**: `/bg` or `←` on an empty prompt; `Esc` returns. They run in this process and stop when the TUI exits. Logs survive.
 
