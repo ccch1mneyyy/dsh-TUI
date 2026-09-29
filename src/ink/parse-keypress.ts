@@ -388,8 +388,8 @@ const INCOMPLETE_RESPONSE_PREFIXES: ReadonlyArray<
   ['da2', /^\x1b\[>[\d;]*$/],
   // XTWINOPS: `6;h;w t` / `4;h;w t`, up to the final byte.
   ['terminalPixelSize', /^\x1b\[[46](?:;\d*){0,2}$/],
-  // XTVERSION payload, up to the ST terminator.
-  ['xtversion', /^\x1bP>\|[^\x1b]*$/],
+  // XTVERSION: `P>` can still gain `|` and a payload; ST's ESC may flush.
+  ['xtversion', /^\x1bP>(?:\|[^\x1b]*(?:\x1b)?)?$/],
 ]
 
 /**
@@ -1337,8 +1337,36 @@ export function parseMultipleKeypresses(
   for (let qi = 0; qi < tokenQueue.length; qi++) {
     const token = tokenQueue[qi]!
     if (token.type === 'sequence') {
-      // The wire carried an ESC-led event between the held fragment and this
-      // token: a reply's fragments are contiguous, so the fragment is dead.
+      // Once the DCS introducer ESC has timed out, the tokenizer emits an
+      // XTVERSION tail as text but its ST/BEL terminator as a sequence. Join
+      // that terminator before treating it as an unrelated key. A lone ST
+      // introducer ESC may itself time out before the trailing backslash.
+      const heldTail = terminalResponseReattachTail
+      if (
+        heldTail !== undefined &&
+        heldTail.startsWith('P>|') &&
+        mayRecoverTerminalResponseTail &&
+        expectedResponseTypes.has('xtversion')
+      ) {
+        if (token.value === '\x1b' && heldTail.length + 3 <= TERMINAL_RESPONSE_MAX_LENGTH) {
+          terminalResponseReattachTail = heldTail + '\x1b'
+          win32EscFlushedAt = undefined
+          continue
+        }
+        if (token.value === '\x1b\\' || token.value === '\x07') {
+          const sequence = '\x1b' + heldTail + token.value
+          const response = sequence.length <= TERMINAL_RESPONSE_MAX_LENGTH
+            ? parseTerminalResponse(sequence)
+            : null
+          if (response?.type === 'xtversion') {
+            terminalResponseReattachTail = undefined
+            keys.push({ kind: 'response', sequence, response })
+            continue
+          }
+        }
+      }
+      // An unrelated sequence between the held fragment and its terminator
+      // proves the reply died; do not merge it with later input.
       terminalResponseReattachTail = undefined
       if (token.value === PASTE_START) {
         inPaste = true

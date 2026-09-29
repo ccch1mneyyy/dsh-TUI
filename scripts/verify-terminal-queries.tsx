@@ -501,6 +501,37 @@ for (const [label, seeded] of [
   }
 }
 
+// AC-5b · after the DCS introducer ESC was flushed, the tokenizer emits
+// XTVERSION's ST/BEL terminator as its own sequence token. It must complete
+// the held text tail, even when the ST introducer ESC also times out.
+for (const [label, chunks] of [
+  ['ST in one read', ['P>|xterm.js(5.5.0)\x1b\\']],
+  ['ST after body', ['P>|xterm.js(5.5.0)', '\x1b\\']],
+  ['ST ESC timeout', ['P>|xterm.js(5.5.0)', '\x1b', null, '\\']],
+  ['split BEL', ['P>|xterm.js(5.5.0)', '\x07']],
+] as const) {
+  let state = withEvidence(['xtversion'])
+  ;[, state] = parseMultipleKeypresses(state, '\x1b')
+  const [escape, afterFlush] = parseMultipleKeypresses(state, null)
+  assert.equal(escape[0]?.kind, 'key', `AC-5b ${label}: the lone ESC should flush`)
+  state = afterFlush
+  const out: ParsedInput[] = []
+  for (const chunk of chunks) {
+    const [parsed, next] = parseMultipleKeypresses(state, chunk)
+    out.push(...parsed)
+    state = next
+  }
+  assert.deepEqual(summarizeInput(out), ['response:xtversion'], `AC-5b ${label}: the terminator completes the reply`)
+  assert.equal(
+    out[0]?.kind === 'response' && out[0].response.type === 'xtversion'
+      ? out[0].response.name
+      : undefined,
+    'xterm.js(5.5.0)',
+    `AC-5b ${label}: the full terminal name survives reassembly`,
+  )
+  assert.equal(state.terminalResponseReattachTail, undefined, `AC-5b ${label}: the hold must clear`)
+}
+
 // ① · CodeRabbit #1177 pre-merge gap: the tail after the ESC flush is
 // ITSELF split again (`[?61;4;6` → `;14;21;22c`). The re-attach window must
 // reassemble it across calls; neither fragment may reach the draft.
