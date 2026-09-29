@@ -554,6 +554,10 @@ const GROUPS = {
     ['verify-agent-lifecycle-compat', ['node', 'scripts/verify-agent-lifecycle-compat.mjs']],
     ['verify-bundled-presets', ['node', 'scripts/verify-bundled-presets.mjs']],
     ['verify-preset-startup', ['node', 'scripts/verify-preset-startup.mjs']],
+// 随包用户手册（guide/）：副本与 docs/ 逐字节一致 + SKILL.md 能被内核加载 +
+// 发布面与启动器真的把它带上。npm 包原本不含任何用户文档，用户机器上的 AI
+// 无从"查手册回答"；这条门禁保证手册在包内且没漂移。
+    ['verify-guide', ['node', 'scripts/verify-guide.mjs']],
     ['verify-message-compat', ['node', 'scripts/verify-message-compat.mjs']],
     ['verify-settings-compat', ['node', '--import', 'tsx/esm', 'scripts/verify-settings-compat.mjs']],
 // 设置读点的 ns 归属（issue #1124）：分区注册与写入用 Config owner 的 Loader id

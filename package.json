@@ -106,7 +106,8 @@
     "dsh-ecosystem-spec/registry",
     "dsh-ecosystem-spec/protocols",
     "dsh-ecosystem-spec/schemas",
-    "presets"
+    "presets",
+    "guide"
   ],
   "engines": {
     "node": "^22.19 || >=24"
