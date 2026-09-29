@@ -215,7 +215,7 @@ const SGR_MOUSE_RE = /^\x1b\[<(\d+);(\d+);(\d+)([Mm])$/
  * exclusive with the #1142 contract.
  */
 // eslint-disable-next-line no-control-regex -- deliberate: paste payloads carry terminal sequences
-const OSC_IN_PASTE = /\u001b\][^\u0007\u001b]*(?:\u0007|\u001b\\)?/gu
+const OSC_IN_PASTE = /\u001b\][^\u0007\u001b]*(?:\u0007|\u001b\\)/gu
 /**
  * Strip the protocol frames one paste payload can carry — see
  * {@link OSC_IN_PASTE} for the exact scope.

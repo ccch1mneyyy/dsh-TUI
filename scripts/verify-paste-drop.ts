@@ -306,6 +306,12 @@ const OSC8_CLOSE_ST = `${ESC}]8;;${ST}`
 }
 
 {
+  const body = `before ${ESC}]0;unfinished after`
+  const stream = win32Marker(`${ESC}[200~`) + win32Records(body) + win32Marker(`${ESC}[201~`)
+  check('an unterminated OSC does not swallow following paste text', pastes(feed([stream]))[0], body)
+}
+
+{
   const items = feed([`${ESC}[200~\ttab\r\nline${ESC}[201~`])
   check('TAB and CR/LF survive for the composer', pastes(items)[0], '\ttab\r\nline')
 }
