@@ -4850,6 +4850,8 @@ export function Chat({
                   band: wakeBand,
                   hint: trajectorySeen ? undefined : primaryComboString('trajectory'),
                   tick: Math.floor(wakeTime / 120),
+                  onOpen: openScene,
+                  hoverHint: primaryComboString('trajectory'),
                 }
           }
         />
