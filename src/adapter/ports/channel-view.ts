@@ -52,6 +52,8 @@ export interface ChatRow {
   images?: readonly TranscriptImage[]
   /** True while an assistant step is still streaming chunks. */
   streaming?: boolean
+  /** Keep a settled reasoning row expanded until the current turn ends. */
+  thinkingOpen?: boolean
   /** Present on `tool` rows; the card model. */
   tool?: ToolRow
   /** Present on `subagent` rows; the subagent state snapshot. */

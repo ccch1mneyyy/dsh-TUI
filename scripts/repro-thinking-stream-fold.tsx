@@ -9,7 +9,8 @@
  *   1. 初始：固定三行最新思考预览；
  *   2. 点击头部 → 展开完整正文；
  *   3. 再点 → 收回三行预览（而不是隐藏正文）；
- *   4. full 默认全文，点击同样只收为三行预览。
+ *   4. full 默认全文，点击同样只收为三行预览；
+ *   5. 步骤落定后保持全文，但标题立即停止旋转，turn 结束再折叠。
  *
  * 运行：node --import tsx/esm scripts/repro-thinking-stream-fold.tsx
  */
@@ -17,7 +18,7 @@ process.env.FORCE_COLOR = '3'
 process.env.DSH_TUI_THEME = 'dark'
 process.env.DSH_TUI_LANG = 'zh'
 
-const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render, AlternateScreen, Text }, { Chat }, { QuestionStore }, { LOCAL_COMMANDS }, { settled }, { THINKING_SPINNER_FRAMES }, { t }] = await Promise.all([
+const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render, AlternateScreen, Text }, { Chat }, { QuestionStore }, { LOCAL_COMMANDS }, { settled }, { THINKING_SPINNER_FRAMES, THINKING_SETTLED_MARKER }, { t }] = await Promise.all([
   import('node:stream'),
   import('react'),
   import('@xterm/headless'),
@@ -160,6 +161,29 @@ stdin.write(`\x1b[<0;6;${fullHeaderIdx + 1}m`)
 await waitFor(() => bodyLines(lines()) === 3)
 ls = lines()
 check('full 设置点击后收为三行预览', bodyLines(ls) === 3, `body=${bodyLines(ls)}`)
+
+// 再展开，然后模拟当前 step 已落定、整个 turn 仍在工具阶段。
+await sleep(600) // 固定窗:墙钟 同上，等过 500ms 多击判定窗再点第二次
+const fullPreviewHeaderIdx = headerRow(ls)
+stdin.write(`\x1b[<0;6;${fullPreviewHeaderIdx + 1}M`)
+stdin.write(`\x1b[<0;6;${fullPreviewHeaderIdx + 1}m`)
+await waitFor(() => bodyLines(lines()) >= 10)
+const reasoningRow = channel.rows[0]
+reasoningRow.streaming = false
+reasoningRow.thinkingOpen = true
+reasoningRow.durationMs = 35_000
+channel.version += 1
+for (const listener of listeners) listener()
+await waitFor(() => lines().some(line => line.includes(`${THINKING_SETTLED_MARKER} ${t('thinking-label')} · 35s`)))
+ls = lines()
+check('步骤落定后标题改为静态标记', headerRow(ls) === -1)
+check('步骤落定后 full 正文仍保持展开', bodyLines(ls) >= 10, `body=${bodyLines(ls)}`)
+
+reasoningRow.thinkingOpen = false
+channel.version += 1
+for (const listener of listeners) listener()
+await waitFor(() => bodyLines(lines()) === 0)
+check('turn 结束后 full 正文折叠', bodyLines(lines()) === 0, `body=${bodyLines(lines())}`)
 
 await inst.unmount()
 console.log(failed === 0 ? '\nALL PASS' : `\n${failed} 项失败`)

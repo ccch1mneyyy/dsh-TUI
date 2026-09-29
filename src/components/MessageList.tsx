@@ -208,7 +208,7 @@ function signatureParts(
     case 'reasoning':
       // thinkingFold (preview vs full), its per-row live override, and the
       // visibility filter all change the card's height.
-      signatureScratch.push(row.streaming === true, expanded, expandedRows.has(row.id), streamViewToggledRows.has(row.id), thinkingVisible, thinkingFold)
+      signatureScratch.push(row.streaming === true, row.thinkingOpen === true, expanded, expandedRows.has(row.id), streamViewToggledRows.has(row.id), thinkingVisible, thinkingFold)
       break
     case 'tool': {
       const tool = row.tool
@@ -1242,6 +1242,7 @@ export function MessageList({
               executionTarget={row.executionTarget}
               selectionAttached={row.selectionAttached}
               streaming={displayStreaming}
+              thinkingOpen={row.thinkingOpen === true}
               durationMs={row.durationMs}
               time={row.time}
               marginTopOnTurn={marginTopOnTurn}
@@ -1315,6 +1316,7 @@ type MemoRowProps = {
   /** Session cwd for the indicator's display-path relativization (T-FIX-01). */
   sessionCwd: string | undefined
   streaming: boolean
+  thinkingOpen: boolean
   durationMs: number | undefined
   time: number | undefined
   marginTopOnTurn: boolean
@@ -1400,6 +1402,7 @@ function TranscriptRow({
   selectionAttached,
   sessionCwd,
   streaming,
+  thinkingOpen,
   durationMs,
   time,
   marginTopOnTurn,
@@ -1456,8 +1459,8 @@ function TranscriptRow({
     if (event.cellIsBlank) return
     onToggleRow(rowId)
   }, [onToggleRow, rowId])
-  // 流式 reasoning 行：点击在三行预览/全文间切换。它反转 thinkingFold
-  // 的默认值，落定后语义自动回到 foldOnClick。
+  // 当前回合仍展开的 reasoning 行：点击在三行预览/全文间切换。它反转
+  // thinkingFold 的默认值，回合落定后语义自动回到 foldOnClick。
   const streamViewOnClick = React.useCallback((event: ClickEvent): void => {
     if (event.cellIsBlank) return
     onToggleStreamView(rowId)
@@ -1572,7 +1575,8 @@ function TranscriptRow({
     case 'reasoning': {
       // The setting chooses the live default; a row click reverses it. Global
       // or per-row transcript expansion always wins and shows the full text.
-      const streamPreview = streaming && !expanded && !isExpanded &&
+      const turnOpen = streaming || thinkingOpen
+      const streamPreview = turnOpen && !expanded && !isExpanded &&
         (streamViewToggled ? thinkingFold === 'full' : thinkingFold === 'preview')
       return (
         <Box flexDirection="column" ref={ref}>
@@ -1583,11 +1587,11 @@ function TranscriptRow({
             streaming={streaming}
             preview={streamPreview}
             // Settled rows keep the fold-on-settle default and expand via
-            // expandedRows/Ctrl+O; a live row is always preview or full.
-            verbose={isExpanded || expanded || (streaming && !streamPreview)}
+            // expandedRows/Ctrl+O; a current-turn row is preview or full.
+            verbose={isExpanded || expanded || (turnOpen && !streamPreview)}
             durationMs={durationMs}
             isSelected={isSelected}
-            onClick={streaming ? streamViewOnClick : foldOnClick}
+            onClick={turnOpen ? streamViewOnClick : foldOnClick}
           />
         </Box>
       )
