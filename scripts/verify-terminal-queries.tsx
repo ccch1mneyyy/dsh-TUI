@@ -5,6 +5,13 @@
  * Also covers the DECRQM probe gate: macOS Terminal.app prints the trailing
  * `p` of `CSI ? 1049 $ p` as literal text, so the alt-screen health probe
  * must be skipped there and kept everywhere else.
+ *
+ * The tail half of the file pins the reply-claim gate: a post-flush reply
+ * tail is only held/claimed while a query of the matching expected response
+ * type is genuinely in flight, the shape can still complete into it, and the
+ * bounded 1s window is open. That includes the pre-merge gap where the tail
+ * after the ESC flush is itself split again, the type-mismatch control, and
+ * the removed lastSentAt recency fallback driven through a real querier.
  */
 import assert from 'node:assert/strict'
 import { PassThrough, Writable } from 'node:stream'
@@ -14,9 +21,11 @@ import instances from '../src/ink/instances.js'
 import {
   INITIAL_STATE,
   parseMultipleKeypresses,
+  type KeyParseState,
   type ParsedInput,
+  type TerminalResponse,
 } from '../src/ink/parse-keypress.js'
-import { oscColor, TerminalQuerier } from '../src/ink/terminal-querier.js'
+import { decrqm, oscColor, TerminalQuerier } from '../src/ink/terminal-querier.js'
 import { supportsDecrqmProbe } from '../src/ink/terminal.js'
 import { settled, sleep } from './lib/term-test.mjs'
 
@@ -286,19 +295,35 @@ assert.equal(
   'conforming terminals must keep the alt-screen DECRQM probe',
 )
 
-// -- Late reply tails: host evidence x reply shape x 1s window (AC-1..AC-5) --
+// -- Late reply tails: host evidence × reply type × 1s window (AC-1..AC-5) --
 //
 // Windows ConPTY can split a DA1 reply across a timeout boundary: the ESC
 // is flushed as a standalone key, and the remaining `[?61;...c` text must
 // still be claimed as the terminal response rather than leaking into the
-// prompt. A claim needs ALL THREE of host-injected in-flight evidence, a
-// reply shape, and the bounded window (parse-keypress.ts). The evidence is
-// read-only and absent means false, so these direct-driver cases inject it.
+// prompt. A claim needs ALL THREE of a query genuinely in flight, an
+// expected response type its shape can still complete into, and the bounded
+// window (parse-keypress.ts). The evidence is read-only and absent means
+// false, so these direct-driver cases inject it.
 const DA1_TAIL = '[?61;4;6;7;14;21;22;23;24;28;32;42;52c'
 const DA1_REPLY = `\x1b${DA1_TAIL}`
 // Split point used by AC-4/AC-5: the reply cut after `ESC[?61;4;6`.
 const DA1_SPLIT = 9
-const inFlight = { ...INITIAL_STATE, terminalQueryInFlight: true }
+const withEvidence = (
+  types: ReadonlyArray<TerminalResponse['type']>,
+): KeyParseState => ({
+  ...INITIAL_STATE,
+  terminalExpectedResponseTypes: types,
+})
+const inFlight = withEvidence(['da1'])
+/** Compact one-line summary for the claim-gate regressions. */
+const summarizeInput = (parsed: ParsedInput[]): string[] =>
+  parsed.map(item =>
+    item.kind === 'key'
+      ? `key:${item.sequence ?? ''}`
+      : item.kind === 'response'
+        ? `response:${item.response.type}`
+        : `mouse:${item.button}`,
+  )
 
 // AC-1 · a lone ESC is flushed first and the DA1 tail arrives inside the window.
 {
@@ -384,10 +409,10 @@ const inFlight = { ...INITIAL_STATE, terminalQueryInFlight: true }
 
 // AC-3 · the control that got #796 rejected: without in-flight evidence the
 // same bytes stay literal, both as a whole block and after a lone-ESC flush.
-for (const injected of [undefined, false] as const) {
-  const label = injected === undefined ? 'absent' : 'false'
-  const seeded =
-    injected === undefined ? INITIAL_STATE : { ...INITIAL_STATE, terminalQueryInFlight: false }
+for (const [label, seeded] of [
+  ['absent', INITIAL_STATE],
+  ['empty', withEvidence([])],
+] as const) {
   const [whole] = parseMultipleKeypresses(seeded, DA1_TAIL)
   assert.equal(whole.length, 1, `AC-3 (${label}): the literal DA1 tail should stay one key`)
   assert.equal(whole[0]?.kind, 'key', `AC-3 (${label}): the literal tail must not be a response`)
@@ -451,9 +476,9 @@ for (const injected of [undefined, false] as const) {
 }
 
 // AC-5 · the reply shapes parseTerminalResponse() knows, each split across a
-// flush while evidence is injected, must claim their own response type.
+// flush while evidence for its own type is injected, must claim that type.
 {
-  const shapes: Array<[string, string, number, string]> = [
+  const shapes: Array<[string, string, number, TerminalResponse['type']]> = [
     ['DA1', DA1_REPLY, DA1_SPLIT, 'da1'],
     ['DA2', '\x1b[>0;276;0c', 4, 'da2'],
     ['DSR (DECXCPR)', '\x1b[?3;1R', 4, 'cursorPosition'],
@@ -463,7 +488,7 @@ for (const injected of [undefined, false] as const) {
     ['pixel size', '\x1b[4;600;800t', 5, 'terminalPixelSize'],
   ]
   for (const [name, sequence, cut, type] of shapes) {
-    let state = inFlight
+    let state = withEvidence([type])
     let parsed
     ;[parsed, state] = parseMultipleKeypresses(state, sequence.slice(0, cut))
     assert.deepEqual(parsed, [], `AC-5 ${name}: the leading fragment must stay pending`)
@@ -474,6 +499,203 @@ for (const injected of [undefined, false] as const) {
     assert.equal(parsed[0]?.kind, 'response', `AC-5 ${name}: the reply must not leak as input text`)
     assert.equal(parsed[0]?.response.type, type, `AC-5 ${name}: expected a ${type} response`)
   }
+}
+
+// ① · CodeRabbit #1177 pre-merge gap: the tail after the ESC flush is
+// ITSELF split again (`[?61;4;6` → `;14;21;22c`). The re-attach window must
+// reassemble it across calls; neither fragment may reach the draft.
+{
+  let state = inFlight
+  let parsed
+  ;[parsed, state] = parseMultipleKeypresses(state, '\x1b')
+  assert.deepEqual(parsed, [], '① the leading ESC should stay pending until the flush')
+  ;[parsed, state] = parseMultipleKeypresses(state, null)
+  assert.equal(parsed[0]?.kind, 'key', '① the timeout flush should release a lone Escape key')
+  ;[parsed, state] = parseMultipleKeypresses(state, '[?61;4;6')
+  assert.deepEqual(
+    parsed,
+    [],
+    '① the first tail fragment must not reach the body',
+  )
+  assert.equal(
+    state.terminalResponseReattachTail,
+    '[?61;4;6',
+    '① the first tail fragment must be held for its continuation',
+  )
+  ;[parsed, state] = parseMultipleKeypresses(state, ';14;21;22c')
+  assert.deepEqual(
+    summarizeInput(parsed),
+    ['response:da1'],
+    '① the rejoined tail must be claimed as one DA1 response, not literal text',
+  )
+  assert.equal(
+    parsed[0]?.kind === 'response' ? parsed[0].sequence : undefined,
+    '\x1b[?61;4;6;14;21;22c',
+    '① the claimed sequence must be the full reassembled reply',
+  )
+  assert.equal(
+    state.terminalResponseReattachTail,
+    undefined,
+    '① the hold must clear once the reply completes',
+  )
+}
+
+// ①b · the completion can share a chunk with trailing input: the reply is
+// claimed and the suffix stays ordinary text (SGR-tail streaming parity).
+{
+  let state = inFlight
+  let parsed
+  ;[parsed, state] = parseMultipleKeypresses(state, '\x1b')
+  ;[parsed, state] = parseMultipleKeypresses(state, null)
+  ;[parsed, state] = parseMultipleKeypresses(state, '[?61;4')
+  assert.deepEqual(parsed, [], '①b the first fragment must be held')
+  ;[parsed] = parseMultipleKeypresses(state, ';6;14;21;22cXY')
+  assert.deepEqual(
+    summarizeInput(parsed),
+    ['response:da1', 'key:XY'],
+    '①b the completed reply must be claimed and the suffix kept literal',
+  )
+}
+
+// ② · a mismatched expected type never claims: with only a DECRPM query in
+// flight, a DA1-shaped tail stays literal — both when it is reassembled from
+// two fragments and when it arrives whole. A claim is bound to the query
+// lifecycle AND the expected response type, not to "a query was sent".
+for (const label of ['split', 'whole'] as const) {
+  let state = withEvidence(['decrpm'])
+  let parsed
+  ;[parsed, state] = parseMultipleKeypresses(state, '\x1b')
+  assert.deepEqual(parsed, [], `② (${label}) the leading ESC should stay pending`)
+  ;[parsed, state] = parseMultipleKeypresses(state, null)
+  assert.equal(parsed[0]?.kind, 'key', `② (${label}) the flush should release the Escape`)
+  const out: ParsedInput[] = []
+  for (const chunk of label === 'split'
+    ? ['[?61;4;6', ';14;21;22c']
+    : [DA1_TAIL]) {
+    const [chunkParsed, next] = parseMultipleKeypresses(state, chunk)
+    out.push(...chunkParsed)
+    state = next
+  }
+  assert.deepEqual(
+    out.map(item => (item.kind === 'key' ? item.sequence : item.kind)),
+    label === 'split'
+      ? ['[?61;4;6', ';14;21;22c']
+      : [DA1_TAIL],
+    `② (${label}) the DA1 tail must stay literal while only DECRPM is expected`,
+  )
+  assert.equal(
+    state.terminalResponseReattachTail,
+    undefined,
+    `② (${label}) no fragment may survive a type mismatch`,
+  )
+}
+
+// ②b · the same gate still claims the shape it IS waiting for: a DECRPM tail
+// split across the flush is reassembled into the expected response.
+{
+  let state = withEvidence(['decrpm'])
+  let parsed
+  ;[parsed, state] = parseMultipleKeypresses(state, '\x1b')
+  ;[parsed, state] = parseMultipleKeypresses(state, null)
+  ;[parsed, state] = parseMultipleKeypresses(state, '[?25;1')
+  assert.deepEqual(parsed, [], '②b the DECRPM prefix must be held')
+  ;[parsed] = parseMultipleKeypresses(state, '$y')
+  assert.deepEqual(
+    summarizeInput(parsed),
+    ['response:decrpm'],
+    '②b the expected DECRPM reply must be claimed',
+  )
+}
+
+// ③ · the removed `lastSentAt ≤ 1s` fallback: evidence is the live query
+// lifecycle. While a real querier query is awaiting its reply the host
+// injects its type; once the flush sentinel drains it (queue empty) the same
+// bytes that would have been claimed inside the old recency window must stay
+// literal — being sent recently no longer authorizes anything.
+{
+  const lifecycleStdout = new FakeStdout()
+  const lifecycle = new TerminalQuerier(lifecycleStdout)
+  const pendingDecrpm = lifecycle.send(decrqm(2026))
+  void lifecycle.flush()
+  assert.deepEqual(
+    [...lifecycle.pendingResponseTypes].sort(),
+    ['da1', 'decrpm'],
+    '③ an open query plus its flush sentinel must inject decrpm and da1',
+  )
+  assert.equal(lifecycle.hasPending, true, '③ the queue must still hold both entries')
+
+  lifecycle.onResponse({ type: 'da1', params: [61, 4] })
+  assert.equal(await pendingDecrpm, undefined, '③ the sentinel must drain the unanswered query')
+  assert.equal(lifecycle.hasPending, false, '③ the queue must be empty after the sentinel')
+  assert.equal(
+    lifecycle.pendingResponseTypes.size,
+    0,
+    '③ a settled query must stop counting as evidence',
+  )
+
+  let state: KeyParseState = {
+    ...INITIAL_STATE,
+    terminalExpectedResponseTypes: [...lifecycle.pendingResponseTypes],
+  }
+  let parsed
+  ;[parsed, state] = parseMultipleKeypresses(state, '\x1b')
+  ;[parsed, state] = parseMultipleKeypresses(state, null)
+  ;[parsed] = parseMultipleKeypresses(state, DA1_TAIL)
+  assert.deepEqual(
+    summarizeInput(parsed),
+    [`key:${DA1_TAIL}`],
+    '③ a tail after the query settled must stay literal (no time-window fallback)',
+  )
+  lifecycle.dispose()
+}
+
+// ④ · end-to-end through the real querier: with only a DECRPM query in
+// flight the DA1 tail stays literal (mismatched type), while a pending
+// flush() sentinel — whose reply IS this DA1 tail — still claims it.
+{
+  const mismatchQuerier = new TerminalQuerier(new FakeStdout())
+  void mismatchQuerier.send(decrqm(2026))
+  assert.deepEqual(
+    [...mismatchQuerier.pendingResponseTypes],
+    ['decrpm'],
+    '④ an unanswered DECRPM query must inject only decrpm',
+  )
+  let state: KeyParseState = {
+    ...INITIAL_STATE,
+    terminalExpectedResponseTypes: [...mismatchQuerier.pendingResponseTypes],
+  }
+  let parsed
+  ;[parsed, state] = parseMultipleKeypresses(state, '\x1b')
+  ;[parsed, state] = parseMultipleKeypresses(state, null)
+  ;[parsed] = parseMultipleKeypresses(state, DA1_TAIL)
+  assert.deepEqual(
+    summarizeInput(parsed),
+    [`key:${DA1_TAIL}`],
+    '④ a DA1 tail must stay literal while only DECRPM is expected',
+  )
+  mismatchQuerier.dispose()
+
+  const sentinelQuerier = new TerminalQuerier(new FakeStdout())
+  const sentinelDone = sentinelQuerier.flush()
+  assert.deepEqual(
+    [...sentinelQuerier.pendingResponseTypes],
+    ['da1'],
+    '④ a flush sentinel must inject the DA1 expectation it resolves on',
+  )
+  state = {
+    ...INITIAL_STATE,
+    terminalExpectedResponseTypes: [...sentinelQuerier.pendingResponseTypes],
+  }
+  ;[parsed, state] = parseMultipleKeypresses(state, '\x1b')
+  ;[parsed, state] = parseMultipleKeypresses(state, null)
+  ;[parsed] = parseMultipleKeypresses(state, DA1_TAIL)
+  assert.deepEqual(
+    summarizeInput(parsed),
+    ['response:da1'],
+    '④ a split sentinel DA1 reply must still be claimed',
+  )
+  sentinelQuerier.dispose()
+  await sentinelDone
 }
 
 console.log('PASS: late DA1 tails stay in the terminal-response lane')
