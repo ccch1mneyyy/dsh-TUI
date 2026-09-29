@@ -2,6 +2,7 @@ import React from 'react'
 import { Box, Text, useAnimationFrame, useTerminalSize } from '../../ui.js'
 import { formatJobDuration, type BackgroundJobStatus } from '../../dsh-adapter/jobs.js'
 import type { JobRow } from '../../dsh-adapter/channel.js'
+import type { BackgroundJobOutputLine } from '../../adapter/ports/channel-view.js'
 import type { Theme } from '../../theme.js'
 import { t } from '../../i18n.js'
 import { stringWidth } from '../../ink/stringWidth.js'
@@ -80,7 +81,15 @@ export function JobCard({ job, marginTopOnTurn, onClick }: {
   const [hovered, setHovered] = React.useState(false)
   const clickable = onClick !== undefined
   const rowWidth = Math.max(20, (columns ?? 80) - WATERFALL_GUTTER)
-  const activity = settled ? [] : job.outputLines.slice(-WATERFALL_ROWS)
+  // Waterfall entries: gap banners interleave as their own rows, then the
+  // window keeps the LAST WATERFALL_ROWS entries so a banner never pushes a
+  // fresher line out — the card stays constant-height.
+  const waterfall: Array<{ kind: 'line'; line: BackgroundJobOutputLine } | { kind: 'gap' }> = []
+  for (const line of settled ? [] : job.outputLines) {
+    if (line.gapBefore === true) waterfall.push({ kind: 'gap' })
+    waterfall.push({ kind: 'line', line })
+  }
+  const activity = waterfall.slice(-WATERFALL_ROWS)
   // A settled job's terminal detail ('exit code: 0') rides the header; a
   // failed/killed one also keeps it as the explanatory tail line.
   const headerDetail = job.detail !== undefined && job.detail !== '' ? job.detail : undefined
@@ -116,17 +125,31 @@ export function JobCard({ job, marginTopOnTurn, onClick }: {
       <Text>{clipLine(job.label, labelWidth)}</Text>
       <Text dimColor>·</Text>
       <Text dimColor>{duration}</Text>
+      {!settled && job.progress !== undefined && job.progress !== '' && (
+        <><Text dimColor>·</Text><Text color="accent">{clipLine(job.progress, 24)}</Text></>
+      )}
       {headerDetail !== undefined && <><Text dimColor>·</Text><Text dimColor>{headerDetail}</Text></>}
       <Text dimColor>·</Text>
       <Text color={info.color}>{info.label}</Text>
     </Box>
-    {!settled && activity.length > 0 && activity.map((line, index) => (
+    {!settled && activity.length > 0 && activity.map((entry, index) => (
       // key 不含 time（同 SubagentMessage 的约定）：内容更新走 in-place
       // diff，避免每个 tick 都 unmount+mount。瀑布只在有镜像输出时出现
       // （后台任务静默是常态——无输出时卡片就是头行，不摆空 gutter）。
-      <Text key={`${job.id}-wf-${index}`} dimColor wrap="truncate">
-        {`  │ ${clipLine(line, rowWidth)}`}
-      </Text>
+      entry.kind === 'gap' ? (
+        <Text key={`${job.id}-wf-gap-${index}`} dimColor italic wrap="truncate">
+          {`  · ${clipLine(t('jobs-output-gap'), rowWidth)}`}
+        </Text>
+      ) : (
+        <Text
+          key={`${job.id}-wf-${index}`}
+          color={entry.line.channel === 'stderr' ? 'error' : undefined}
+          dimColor={entry.line.channel !== 'stderr'}
+          wrap="truncate"
+        >
+          {`  │ ${clipLine(entry.line.text, rowWidth)}`}
+        </Text>
+      )
     ))}
     {settled && job.status !== 'completed' && headerDetail !== undefined && (
       <Text dimColor wrap="truncate">{`  └ ${clipLine(headerDetail, rowWidth)}`}</Text>

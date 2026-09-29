@@ -43,6 +43,7 @@ export function createJobProjection(
         label: job.label,
         status: job.status,
         ...(job.detail === undefined ? {} : { detail: job.detail }),
+        ...(job.progress === undefined ? {} : { progress: job.progress }),
         startedAt: job.startedAt,
         ...(job.finishedAt === undefined ? {} : { finishedAt: job.finishedAt }),
         outputLines: job.outputLines,
@@ -78,7 +79,10 @@ export function createJobProjection(
       if (!jobs?.kill) return false
       const job = store.get(id)
       try {
-        jobs.kill(id, deps.agent(), 'dsh-tui /jobs panel')
+        // The kernel fence compares job.owner.id === caller, so the caller
+        // MUST be the session id string — the Agent object matches nothing
+        // and every owned-job kill would throw "another session".
+        jobs.kill(id, sessionCaller(), 'dsh-tui /jobs panel')
       } catch {
         return false
       }
@@ -87,6 +91,16 @@ export function createJobProjection(
       }
       return true
     },
+  }
+
+  /**
+   * Caller identity for the kernel fence: the owning session id string
+   * (`Agent.id`). The registry compares `job.owner.id === caller`, so the
+   * Agent object the channel holds is only good for extracting the id.
+   */
+  const sessionCaller = (): string | undefined => {
+    const agent = deps.agent() as { id?: string } | undefined
+    return agent?.id
   }
 
   /**
@@ -107,10 +121,22 @@ export function createJobProjection(
       // replaced service, nor invoke any store/row work after owner disposal.
       if (!current()) return
       try {
-        const snapshot = jobs.list(deps.agent())
+        const snapshot = jobs.list(sessionCaller())
         if (!current()) return
         store.replace(snapshot)
       } catch { /* optional service is disposing */ }
+    }
+    /** One kernel `output` event: pull the ring increment past our cursor. */
+    const pullOutput = (id: string): void => {
+      if (!current()) return
+      if (jobs.readAt === undefined) return
+      const cursor = store.kernelCursorOf(id)
+      if (cursor === undefined) return
+      try {
+        const read = jobs.readAt(id, cursor, sessionCaller())
+        if (!current()) return
+        store.onKernelOutput(id, read)
+      } catch { /* job gone or fenced mid-pull; roster refresh follows */ }
     }
     // Publish the attachment identity before subscription: registries are
     // allowed to synchronously deliver their current snapshot from on*().
@@ -139,6 +165,19 @@ export function createJobProjection(
     attachmentToken = token
     attachmentCurrent = current
     try {
+      const bus = jobs.events
+      if (bus !== undefined && typeof bus.subscribe === 'function') {
+        // Kernel bus: lifecycle commits re-read the roster; output events
+        // pull non-consuming readAt increments with the store's own cursor.
+        const owner = sessionCaller()
+        disposers.push(bus.subscribe(owner === undefined ? { owners: 'all' } : { owner }, event => {
+          if (!current()) return
+          try {
+            if (event.type === 'output') pullOutput(event.id)
+            else refresh()
+          } catch { /* contained per-event; the next event re-syncs */ }
+        }))
+      }
       if (typeof jobs.onJobsChanged === 'function') disposers.push(jobs.onJobsChanged(refresh))
       if (typeof jobs.onJobDone === 'function') disposers.push(jobs.onJobDone(refresh))
       releaseOwner = deps.owner.own(detach)

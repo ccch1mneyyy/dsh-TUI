@@ -93,17 +93,63 @@ console.log('--- A: BackgroundJobStore units ---')
   const job1 = store.get('pwsh-1')
   check(
     'A4 镜像输出去空行 + 去 [status:] 尾缀',
-    job1?.outputLines.join('|') === 'line A|line B',
+    (job1?.outputLines ?? []).map(line => line.text).join('|') === 'line A|line B',
     JSON.stringify(job1?.outputLines),
   )
   store.onOutputSeen('pwsh-1', Array.from({ length: 40 }, (_, i) => `tail ${i}`).join('\n'))
   check(
     'A4 输出尾部有界',
-    job1?.outputLines.length === JOBS_MAX_OUTPUT_LINES && job1?.outputLines.at(-1) === 'tail 39',
+    job1?.outputLines.length === JOBS_MAX_OUTPUT_LINES && job1?.outputLines.at(-1)?.text === 'tail 39',
     `len=${job1?.outputLines.length}`,
   )
   store.onOutputSeen('unknown-job', 'x')
   check('A4 未知任务镜像被忽略', store.get('unknown-job') === undefined)
+
+  // A7 内核 output 环摄取：通道标签、跨 chunk 行拼接、gap 标记、游标推进。
+  {
+    const kernelStore = new BackgroundJobStore()
+    kernelStore.replace([{
+      id: 'pwsh-9', kind: 'pwsh', label: 'stream cmd', status: 'running', startedAt: 0,
+      output: { total: 0, earliest: 0 },
+    }])
+    kernelStore.onKernelOutput('pwsh-9', {
+      chunks: [
+        { at: 0, text: 'partial without new', channel: 'stdout' },
+        { at: 21, text: 'line end\n', channel: 'stdout' },
+      ],
+      next: 29,
+    })
+    check(
+      'A7 跨 chunk 行拼接（无换行尾暂存）',
+      kernelStore.get('pwsh-9')?.outputLines.length === 1
+        && kernelStore.get('pwsh-9')?.outputLines[0]?.text === 'partial without newline end',
+      JSON.stringify(kernelStore.get('pwsh-9')?.outputLines),
+    )
+    check('A7 游标推进到 next', kernelStore.kernelCursorOf('pwsh-9') === 29, String(kernelStore.kernelCursorOf('pwsh-9')))
+    check('A7 总字节跟踪', kernelStore.get('pwsh-9')?.outputTotalBytes === 29, String(kernelStore.get('pwsh-9')?.outputTotalBytes))
+    kernelStore.onKernelOutput('pwsh-9', {
+      chunks: [
+        { at: 29, text: 'warn line\n', channel: 'stderr', gapBefore: true },
+        { at: 39, text: 'narration\n', channel: 'log' },
+      ],
+      next: 49,
+    })
+    const klines = kernelStore.get('pwsh-9')?.outputLines ?? []
+    check(
+      'A7 通道标签落行（stderr/log）',
+      klines.some(line => line.channel === 'stderr' && line.text === 'warn line')
+        && klines.some(line => line.channel === 'log' && line.text === 'narration'),
+      JSON.stringify(klines),
+    )
+    check(
+      'A7 gapBefore 标记在丢失后首行',
+      klines.find(line => line.channel === 'stderr')?.gapBefore === true,
+      JSON.stringify(klines),
+    )
+    check('A7 丢失标记置位 outputDropped', kernelStore.get('pwsh-9')?.outputDropped === true)
+    kernelStore.onKernelOutput('pwsh-9', { chunks: [], next: 49, lossy: true })
+    check('A7 空增量 lossy 不清丢失标记', kernelStore.get('pwsh-9')?.outputDropped === true)
+  }
 
   const big = new BackgroundJobStore()
   big.replace(
@@ -228,7 +274,7 @@ const NOW = Date.now()
   })
   check(
     'B2 job_output 结果镜像进卡行',
-    await settled(() => jobRows(channel)[0]?.job?.outputLines.join('|') === 'build step 1 ok|build step 2 ok'),
+    await settled(() => (jobRows(channel)[0]?.job?.outputLines ?? []).map(line => line.text).join('|') === 'build step 1 ok|build step 2 ok'),
     JSON.stringify(jobRows(channel)[0]?.job?.outputLines),
   )
   check(
@@ -318,6 +364,121 @@ const NOW = Date.now()
 }
 
 // ---------------------------------------------------------------------------
+// Group B2 — 内核事件总线集成（events.subscribe + readAt 非消费增量）
+// ---------------------------------------------------------------------------
+console.log('--- B2: kernel event bus integration ---')
+{
+  const ctx2 = new Context()
+  const provide2 = (ctx2 as unknown as { provide(name: string, value: unknown): void }).provide.bind(ctx2)
+  provide2('agents', {
+    get: () => undefined,
+    create: () => Promise.resolve(makeHandle(makeAgent('agent-k', 'sess-k'))),
+  })
+
+  /** 内核形状的假注册表：events 总线 + 环形 readAt（字节偏移切片）。 */
+  const ring: string[] = []
+  const listeners = new Set<(event: Record<string, unknown>) => void>()
+  const shots = new Map<string, Record<string, unknown>>()
+  let nextByte = 0
+  const append = (text: string, channel?: string, gapBefore?: boolean): void => {
+    ring.push((gapBefore ? '\u0000' : '') + JSON.stringify({ at: nextByte, text, ...(channel ? { channel } : {}), ...(gapBefore ? { gapBefore: true } : {}) }))
+    nextByte += text.length
+    for (const listener of listeners) listener({ type: 'output', id: 'pwsh-7', total: nextByte })
+  }
+  const kernelRuntime = {
+    list: (caller?: string) => {
+      if (caller !== 'agent-k-id') throw new Error('fence: caller must be the session id string')
+      return [...shots.values()]
+    },
+    kill: (id: string, caller?: string) => {
+      if (caller !== 'agent-k-id') throw new Error('fence: caller must be the session id string')
+      return 'requested'
+    },
+    events: {
+      subscribe: (_filter: unknown, listener: (event: Record<string, unknown>) => void) => {
+        listeners.add(listener as (event: Record<string, unknown>) => void)
+        return () => { listeners.delete(listener as (event: Record<string, unknown>) => void) }
+      },
+    },
+    readAt: (id: string, from: number) => {
+      if (id !== 'pwsh-7') throw new Error('unknown job')
+      const chunks: Array<{ at: number; text: string; channel?: string; gapBefore?: true }> = []
+      let next = from
+      for (const raw of ring) {
+        const gap = raw.startsWith('\u0000')
+        const chunk = JSON.parse(gap ? raw.slice(1) : raw) as { at: number; text: string; channel?: string }
+        if (chunk.at < from) continue
+        chunks.push({ ...chunk, ...(gap ? { gapBefore: true } : {}) })
+        next = chunk.at + chunk.text.length
+      }
+      return { chunks, next }
+    },
+  }
+  provide2('jobs', kernelRuntime)
+  const kernelAgent = makeAgent('agent-k', 'sess-k')
+  // 会话 id 字符串才是围栏口径（Agent.id）；FakeAgent.id 字段直接充当。
+  ;(kernelAgent as unknown as { id: string }).id = 'agent-k-id'
+  const channel2 = createChannel(ctx2 as never, kernelAgent as never, {
+    model: 'm0', cwd: '/tmp/demo', provider: 'p0', activity: false,
+  })
+
+  shots.set('pwsh-7', {
+    id: 'pwsh-7', kind: 'pwsh', label: 'kernel stream', status: 'running', startedAt: NOW,
+    progress: '2/5', output: { total: 0, earliest: 0 },
+  })
+  for (const listener of listeners) listener({ type: 'registered', job: shots.get('pwsh-7') })
+  check('B2a 内核 registered 事件建卡', await settled(() => channel2.backgroundJobs.length === 1))
+  check(
+    'B2a roster 携带 progress 进度行',
+    await settled(() => channel2.backgroundJobs[0]?.progress === '2/5'),
+    String(channel2.backgroundJobs[0]?.progress),
+  )
+
+  append('kernel line 1\n', 'stdout')
+  append('kernel warn\n', 'stderr')
+  check(
+    'B2b output 事件拉取增量（通道落行）',
+    await settled(() => {
+      const lines = channel2.backgroundJobs[0]?.outputLines ?? []
+      return lines.some(line => line.text === 'kernel line 1')
+        && lines.some(line => line.text === 'kernel warn' && line.channel === 'stderr')
+    }),
+    JSON.stringify(channel2.backgroundJobs[0]?.outputLines),
+  )
+  check(
+    'B2b 非消费游标推进（cursor 跟踪字节）',
+    await settled(() => channel2.backgroundJobs[0]?.outputTotalBytes === 'kernel line 1\nkernel warn\n'.length),
+    String(channel2.backgroundJobs[0]?.outputTotalBytes),
+  )
+
+  append('after gap\n', 'stdout', true)
+  check(
+    'B2c gapBefore → 丢失标记 + 行级 gap 标记',
+    await settled(() => channel2.backgroundJobs[0]?.outputDropped === true
+      && (channel2.backgroundJobs[0]?.outputLines ?? []).some(line => line.text === 'after gap' && line.gapBefore === true)),
+    JSON.stringify(channel2.backgroundJobs[0]?.outputLines),
+  )
+
+  shots.set('pwsh-7', {
+    id: 'pwsh-7', kind: 'pwsh', label: 'kernel stream', status: 'completed', detail: 'exit code: 0',
+    startedAt: NOW, finishedAt: Date.now(), output: { total: nextByte, earliest: 0 },
+  })
+  const notices2 = channel2.notifications.length
+  for (const listener of listeners) listener({ type: 'settled', job: shots.get('pwsh-7'), cause: 'producer', awaited: false })
+  check(
+    'B2d settled 事件 → 完成 toast',
+    await settled(() => channel2.notifications.length > notices2
+      && channel2.notifications.some(item => item.text.includes('pwsh-7'))),
+    JSON.stringify(channel2.notifications.map(item => item.text)),
+  )
+
+  check(
+    'B2e kill 以会话 id 字符串过围栏',
+    channel2.jobControl.kill('pwsh-7') === true,
+  )
+}
+
+// ---------------------------------------------------------------------------
 // Group C — 渲染冒烟
 // ---------------------------------------------------------------------------
 console.log('--- C: render smoke ---')
@@ -364,7 +525,7 @@ async function withTerminal(
 const runningJob = {
   id: 'pwsh-1', kind: 'pwsh', label: 'gh run watch 42', status: 'running' as const,
   command: 'gh pr checks --watch 42',
-  startedAt: Date.now() - 65_000, outputLines: ['build step 1 ok', 'build step 2 ok'],
+  startedAt: Date.now() - 65_000, outputLines: [{ text: 'build step 1 ok' }, { text: 'build step 2 ok' }],
 }
 await withTerminal(
   () => React.createElement(JobCard, { job: runningJob, marginTopOnTurn: false }),

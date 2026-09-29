@@ -48,7 +48,18 @@ function clipLine(text: string, maxWidth: number): string {
   return index < text.length ? `${text.slice(0, index)}…` : text
 }
 
-function JobRowLine({ job, focused }: { job: BackgroundJobState; focused: boolean }): React.ReactNode {
+function isTerminalStatus(status: BackgroundJobStatus): boolean {
+  return status === 'completed' || status === 'killed' || status === 'failed'
+}
+
+/** 12.3 KB / 1.4 MB — byte counter for the detail block. */
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+}
+
+function JobRowLine({ job, focused, onFocus }: { job: BackgroundJobState; focused: boolean; onFocus?: () => void }): React.ReactNode {
   const { columns } = useTerminalSize()
   const info = statusInfo(job.status)
   const duration = formatJobDuration(job)
@@ -57,7 +68,7 @@ function JobRowLine({ job, focused }: { job: BackgroundJobState; focused: boolea
   // — the label takes the rest and hard-clips instead of wrapping.
   const labelWidth = Math.max(10, (columns ?? 80) - 46)
   return (
-    <Box flexDirection="column">
+    <Box flexDirection="column" onClick={onFocus}>
       <Box flexDirection="row" gap={1}>
         <Text color={focused ? 'accent' : undefined}>{focused ? '❯' : ' '}</Text>
         <Text color={info.color}>{info.glyph}</Text>
@@ -66,6 +77,9 @@ function JobRowLine({ job, focused }: { job: BackgroundJobState; focused: boolea
         <Text dimColor>{job.kind}</Text>
         <Text dimColor>·</Text>
         <Text bold={focused}>{clipLine(job.label, labelWidth)}</Text>
+        {!isTerminalStatus(job.status) && job.progress !== undefined && job.progress !== '' && (
+          <><Text dimColor>·</Text><Text color="accent">{clipLine(job.progress, 20)}</Text></>
+        )}
         <Box flexGrow={1} />
         <Text dimColor>{duration}</Text>
         {detail !== undefined && <><Text dimColor>·</Text><Text dimColor>{detail}</Text></>}
@@ -88,11 +102,34 @@ function JobRowLine({ job, focused }: { job: BackgroundJobState; focused: boolea
             {job.finishedAt !== undefined ? ` · ${t('jobs-panel-finished')} ${timeOf(job.finishedAt)}` : ''}
             {job.lastOutputAt !== undefined ? ` · ${t('jobs-panel-output-at')} ${timeOf(job.lastOutputAt)}` : ''}
           </Text>
+          {(job.outputTotalBytes !== undefined || job.outputDropped === true) && (
+            <Text dimColor wrap="truncate">
+              {job.outputTotalBytes !== undefined
+                ? `    ${t('jobs-output-bytes', { bytes: formatBytes(job.outputTotalBytes) })}${job.outputDropped === true ? ` · ${t('jobs-output-dropped')}` : ''}`
+                : `    ${t('jobs-output-dropped')}`}
+            </Text>
+          )}
+          {job.spillPaths !== undefined && job.spillPaths.length > 0 && (
+            <Text dimColor wrap="truncate">
+              {`    ${t('jobs-output-spill', { path: job.spillPaths[job.spillPaths.length - 1] ?? '' })}`}
+            </Text>
+          )}
           {job.outputLines.length > 0 ? (
             job.outputLines.map((line, index) => (
-              <Text key={`${job.id}-detail-${index}`} dimColor wrap="truncate">
-                {`    │ ${clipLine(line, Math.max(10, labelWidth + 24))}`}
-              </Text>
+              <React.Fragment key={`${job.id}-detail-${index}`}>
+                {line.gapBefore === true && (
+                  <Text dimColor italic wrap="truncate">
+                    {`    · ${clipLine(t('jobs-output-gap'), Math.max(10, labelWidth + 24))}`}
+                  </Text>
+                )}
+                <Text
+                  color={line.channel === 'stderr' ? 'error' : undefined}
+                  dimColor={line.channel !== 'stderr'}
+                  wrap="truncate"
+                >
+                  {`    │ ${clipLine(line.text, Math.max(10, labelWidth + 24))}`}
+                </Text>
+              </React.Fragment>
             ))
           ) : (
             <Text dimColor wrap="truncate">
@@ -199,7 +236,14 @@ export function JobsPanel({ jobs, onClose, onKill }: JobsPanelProps): React.Reac
               <Box marginTop={1}><Text dimColor>{t('jobs-panel-empty-hint')}</Text></Box>
             </Box>
           ) : (
-            jobs.map((job, index) => <JobRowLine key={job.id} job={job} focused={index === focus} />)
+            jobs.map((job, index) => (
+              <JobRowLine
+                key={job.id}
+                job={job}
+                focused={index === focus}
+                onFocus={() => setFocusIndex(index)}
+              />
+            ))
           )}
         </ScrollBox>
       </Box>
