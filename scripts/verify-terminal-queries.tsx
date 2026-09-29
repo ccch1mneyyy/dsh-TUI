@@ -314,6 +314,32 @@ const inFlight = { ...INITIAL_STATE, terminalQueryInFlight: true }
   assert.equal(parsed[0]?.response.type, 'da1', 'AC-1: the DA1 tail must not leak as input text')
 }
 
+// AC-1b · that re-attach window is bounded by TIME, not by "the next call":
+// a burst can interleave a chunk between the lone-ESC flush and the tail
+// (another reply for a query sent in the same batch, or a keystroke, or the
+// record hold above letting go). The real-ConPTY dry run leaked the tail when
+// that interleaved chunk closed the window a call early.
+{
+  let state = inFlight
+  let parsed
+  ;[parsed, state] = parseMultipleKeypresses(state, '\x1b')
+  ;[parsed, state] = parseMultipleKeypresses(state, null)
+  assert.equal(parsed[0]?.kind, 'key', 'AC-1b: the flush should release the lone Escape')
+  ;[parsed, state] = parseMultipleKeypresses(state, '\x1b[?1;2c')
+  assert.equal(parsed[0]?.kind, 'response', 'AC-1b: the interleaved reply is claimed on its own')
+  ;[parsed] = parseMultipleKeypresses(state, DA1_TAIL)
+  assert.equal(parsed[0]?.kind, 'response', 'AC-1b: an interleaved chunk must not close the window')
+  assert.equal(parsed[0]?.response.type, 'da1', 'AC-1b: the late DA1 tail is still the reply')
+  // Same bytes with no query in flight stay literal: the window is evidence-gated.
+  let bare = INITIAL_STATE
+  ;[parsed, bare] = parseMultipleKeypresses(bare, '\x1b')
+  ;[parsed, bare] = parseMultipleKeypresses(bare, null)
+  ;[parsed, bare] = parseMultipleKeypresses(bare, '\x1b[?1;2c')
+  ;[parsed] = parseMultipleKeypresses(bare, DA1_TAIL)
+  assert.equal(parsed[0]?.kind, 'key', 'AC-1b: without evidence the window never opens')
+  assert.equal(parsed[0]?.sequence, DA1_TAIL, 'AC-1b: the unevidenced tail reaches the body')
+}
+
 // AC-2 · every reply-specific split position survives 0..2 quiet flushes and
 // still yields exactly one da1 response with no text leak. Cuts start after
 // the `ESC[?` introducer: the bare `ESC[` prefix is deliberately outside the

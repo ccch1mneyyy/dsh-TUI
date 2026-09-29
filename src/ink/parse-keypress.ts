@@ -927,8 +927,10 @@ export type KeyParseState = {
    */
   mouseTailHoldAt?: number
   /**
-   * Date.now() of the flush that emitted a lone Escape key from an incomplete
-   * terminal sequence. The next text chunk may be that sequence's delayed tail.
+   * Date.now() of the most recent flush that emitted a lone Escape key from an
+   * incomplete terminal sequence. Any text chunk inside the window may be that
+   * sequence's delayed tail — the bound is time (TERMINAL_RESPONSE_TAIL_GRACE_MS),
+   * not just the chunk that follows the flush.
    */
   terminalResponseTailAfterEscFlushAt?: number
   /**
@@ -1147,10 +1149,20 @@ export function parseMultipleKeypresses(
   // #796. The shape test for this complete token is parseTerminalResponse()
   // itself (its pattern list IS the reply-shape list); a miss stays literal
   // text, and without injected evidence this branch never fires (AC-3).
+  // Bounded by TIME, not by "the next call": a burst can interleave a chunk
+  // between the flush and the tail (another reply answering an earlier query,
+  // or a keystroke), and the real-ConPTY dry run leaked the tail when that
+  // chunk closed the window early.
   const mayRecoverTerminalResponseTail =
     (prevState.terminalQueryInFlight ?? false) &&
     terminalResponseTailAfterEscFlushAt !== undefined &&
     Date.now() - terminalResponseTailAfterEscFlushAt <= TERMINAL_RESPONSE_TAIL_GRACE_MS
+  // Carry that stamp under the same discipline while it is still in-window,
+  // and drop it once it expires (or the evidence is gone) so no stale window
+  // survives — the #1142 record window above carries its own stamp the same way.
+  const carryTailAfterEscFlush = mayRecoverTerminalResponseTail
+    ? terminalResponseTailAfterEscFlushAt
+    : undefined
 
   // Hard deadline, checked at the top of EVERY call — not only on flush.
   // Continuous input keeps cancelling and re-arming App's 50ms flush timer,
@@ -1494,7 +1506,11 @@ export function parseMultipleKeypresses(
     mouseTailHold,
     mouseTailHoldAt,
     terminalResponseHoldAt,
-    terminalResponseTailAfterEscFlushAt: escapeFlushedNow ? Date.now() : undefined,
+    // A fresh lone-Escape flush re-arms the window; otherwise the carried
+    // stamp keeps it open (see carryTailAfterEscFlush above).
+    terminalResponseTailAfterEscFlushAt: escapeFlushedNow
+      ? Date.now()
+      : carryTailAfterEscFlush,
     _tokenizer: tokenizer,
   }
 
