@@ -177,6 +177,8 @@ const OSC8_CLOSE_ST = `${ESC}]8;;${ST}`
   // pasted body is reassembled into one payload before hygiene runs).
   check('tokenized drop restores the dropped path', payload, DROPPED_PAYLOAD)
   check('tokenized drop leaves no sequence fragment', residueOf(payload), null)
+  // AC-8: direct URI → path → image-stage chain for this arrival form too.
+  check('tokenized drop stages through the image pipeline', parsePastedImagePath(payload), DROPPED)
 }
 
 // --- 3b. bare decomposed drop, no bracketed-paste markers -------------------
@@ -193,7 +195,10 @@ const OSC8_CLOSE_ST = `${ESC}]8;;${ST}`
   check(
     'bare decomposed drop leaks no protocol fragment as text',
     items.some(
-      item => item.kind === 'key' && item.isPasted !== true && (item.sequence ?? '').includes(']8;'),
+      item =>
+        item.kind === 'key' &&
+        item.isPasted !== true &&
+        /\]8;|file:\/\//u.test(item.sequence ?? ''),
     ),
     false,
   )
@@ -237,6 +242,13 @@ const OSC8_CLOSE_ST = `${ESC}]8;;${ST}`
 {
   check('a remote OSC 8 authority is not restored', pastes(feed([`${ESC}]8;;file://server/share/a.png${ST}`])), [])
   check('a non-file OSC 8 URI is not restored', pastes(feed([`${ESC}]8;;https://example.com/a.png${ST}`])), [])
+  // AC-4 fail-closed on an undecodable percent-escape (DESIGN D2/D4): no
+  // fabricated path; the frame is still stripped as protocol residue.
+  check(
+    'a malformed percent-escaped file:// URI is not restored',
+    pastes(feed([`${ESC}[200~${ESC}]8;;file:///C:/tmp/%ZZ.png${ST}${ESC}[201~`]))[0] ?? '',
+    '',
+  )
   check(
     'a multi-token OSC 8 URI is not restored',
     pastes(feed([`${ESC}]8;;file:///C:/a.png file:///C:/b.png${ST}`])),
@@ -275,6 +287,15 @@ const OSC8_CLOSE_ST = `${ESC}]8;;${ST}`
 }
 
 {
+  // The other OSC terminator (ST) is a distinct input shape for hygiene.
+  check(
+    'an ST-terminated OSC is stripped too',
+    pastes(feed([`${ESC}[200~a${ESC}]0;title${ST}b${ESC}[201~`]))[0],
+    'ab',
+  )
+}
+
+{
   const items = feed([`${ESC}[200~\ttab\r\nline${ESC}[201~`])
   check('TAB and CR/LF survive for the composer', pastes(items)[0], '\ttab\r\nline')
 }
@@ -290,6 +311,15 @@ const OSC8_CLOSE_ST = `${ESC}]8;;${ST}`
   // not a terminal byte (see INERT_IN_PASTE).
   check('DEL survives a paste payload', pastes(feed([`${ESC}[200~a\u007fb${ESC}[201~`]))[0], 'a\u007fb')
   check('C1 text survives a paste payload', pastes(feed([`${ESC}[200~a\u0085b${ESC}[201~`]))[0], 'a\u0085b')
+}
+
+{
+  // AC-3 literals: real underscores and bracket text stay byte-for-byte.
+  check(
+    'literal underscores and bracket text survive',
+    pastes(feed([`${ESC}[200~keep_this_[1;2;3;1]_text${ESC}[201~`]))[0],
+    'keep_this_[1;2;3;1]_text',
+  )
 }
 
 {
