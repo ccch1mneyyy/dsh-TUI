@@ -10,7 +10,10 @@
  * 4. a new-file Write (oldText null) fills only the right pane
  * 7. diffStyle `bars`: unified rows carry a colored ▌
  *    bar and row tint, removals precede additions per block, context shows
- *    once; the split layout swaps its −/+ markers for the same bar
+ *    once; the split layout swaps its −/+ markers for the same bar; both use
+ *    the full-strength diffAdded/diffRemoved row tint
+ * 8. hover under toolBackground `subtle`: context rows take the root's hover
+ *    card face (no striping) while changed rows keep their diff tint
  *
  * Exits non-zero on the first failed assertion (CI convention).
  */
@@ -19,7 +22,7 @@ process.env.FORCE_COLOR = '3'
 // module import resolves the startup lang (env > persisted > locale).
 process.env.DSH_TUI_LANG = 'en'
 
-const [{ Writable }, React, { Terminal: XTerm }, { render }, { AssistantToolUseMessage }, { getCliHighlightPromise }, { parseAnsiRuns, chalkFromToken, highlightLines }, { sleep }] = await Promise.all([
+const [{ PassThrough, Writable }, React, { Terminal: XTerm }, ui, { AssistantToolUseMessage }, { getCliHighlightPromise }, { parseAnsiRuns, chalkFromToken, highlightLines }, { sleep }] = await Promise.all([
   import('node:stream'),
   import('react'),
   import('@xterm/headless'),
@@ -29,6 +32,7 @@ const [{ Writable }, React, { Terminal: XTerm }, { render }, { AssistantToolUseM
   import('../src/components/SplitDiffView.js'),
   import('./lib/term-test.mjs'),
 ])
+const { render } = ui
 
 let failures = 0
 const check = (name: string, ok: boolean, extra = '') => {
@@ -245,8 +249,8 @@ async function renderAt(cols, tool, diffLayout = 'auto', toolBackground = 'none'
     const addBar = lines[addRow]!.indexOf('▌')
     check('bars：删除条为红词色', fgAt(delBar, delRow) === 0xb26671, `fg=${fgAt(delBar, delRow).toString(16)}`)
     check('bars：新增条为绿词色', fgAt(addBar, addRow) === 0x57956b, `fg=${fgAt(addBar, addRow).toString(16)}`)
-    check('bars：删除行暗红底', bgAt(delBar + 2, delRow) === 0x362b2c, `bg=${bgAt(delBar + 2, delRow).toString(16)}`)
-    check('bars：新增行暗绿底（行尾）', bgAt(60, addRow) === 0x2b352c, `bg=${bgAt(60, addRow).toString(16)}`)
+    check('bars：删除行红底', bgAt(delBar + 2, delRow) === 0x3e2a2c, `bg=${bgAt(delBar + 2, delRow).toString(16)}`)
+    check('bars：新增行绿底（行尾）', bgAt(60, addRow) === 0x27392c, `bg=${bgAt(60, addRow).toString(16)}`)
     const markX = lines[addRow]!.indexOf('mark="!"')
     check('bars：改动词组亮绿', markX > 0 && fgAt(markX, addRow) === 0x57956b, `fg=${fgAt(Math.max(markX, 0), addRow).toString(16)}`)
   }
@@ -266,10 +270,15 @@ async function renderAt(cols, tool, diffLayout = 'auto', toolBackground = 'none'
   check('bars：同块先全部删除再全部新增', order.every((row, i) => row >= 0 && (i === 0 || row > order[i - 1]!)), JSON.stringify(order))
 }
 {
-  const { lines, screen } = await renderAt(120, editTool, 'auto', 'none', 'bars')
+  const { lines, screen, bgAt } = await renderAt(120, editTool, 'auto', 'none', 'bars')
   const pairRow = lines.findIndex(line => line.includes('def shout(text):') && line.includes('def shout(text, mark="!"):'))
   check('bars + 宽屏：仍为双栏', pairRow >= 0 && lines[pairRow]!.includes('│'))
   check('bars + 双栏：标记为 ▌ 而非 −/+', pairRow >= 0 && (lines[pairRow]!.match(/▌/g) ?? []).length === 2 && !screen().includes('−'))
+  if (pairRow >= 0) {
+    const dividerX = lines[pairRow]!.indexOf('│')
+    check('bars + 双栏：两栏改动行为非 dimmed 红/绿底', bgAt(6, pairRow) === 0x3e2a2c && bgAt(dividerX + 4, pairRow) === 0x27392c,
+      `bg=${bgAt(6, pairRow).toString(16)}/${bgAt(dividerX + 4, pairRow).toString(16)}`)
+  }
 }
 {
   const tailTool = {
@@ -284,6 +293,50 @@ async function renderAt(cols, tool, diffLayout = 'auto', toolBackground = 'none'
   const { lines } = await renderAt(70, tailTool, 'auto', 'none', 'bars')
   const endRows = lines.filter(line => /\bend\b/.test(line))
   check('末行无换行：共享末行仍为上下文', endRows.length === 1 && !endRows[0]!.includes('▌'), JSON.stringify(endRows))
+}
+{
+  // 8. Hover: SGR mode-1003 motion reaches the card only when stdin has a
+  //    useInput subscriber (mirrors Chat).
+  const cols = 70
+  const rows = 12
+  const term = new XTerm({ cols, rows, scrollback: 0, allowProposedApi: true })
+  class FakeStdout extends Writable {
+    columns = cols
+    rows = rows
+    isTTY = true
+    _write(chunk, _e, cb) { term.write(String(chunk), cb) }
+  }
+  class FakeStdin extends PassThrough {
+    isTTY = true
+    setRawMode() { return this }
+    ref() { return this }
+    unref() { return this }
+  }
+  const stdin = new FakeStdin()
+  const KeySink = () => { ui.useInput(() => {}); return null }
+  const app = await render(
+    React.createElement(ui.AlternateScreen, null, React.createElement(ui.Box, { flexDirection: 'column' },
+      React.createElement(KeySink),
+      React.createElement(AssistantToolUseMessage, { tool: editTool, marginTopOnTurn: false, verbose: false, diffStyle: 'bars', toolBackground: 'subtle', onClick: () => {} }),
+    )),
+    { stdout: new FakeStdout(), stdin, stderr: new FakeStdout(), exitOnCtrlC: false, patchConsole: false },
+  )
+  await sleep(900) // 固定窗:pacing 同 renderAt，等语法高亮补色
+  const buf = term.buffer.active
+  const lineAt = (y) => buf.getLine(y)?.translateToString(true) ?? ''
+  const bgAt = (x, y) => (buf.getLine(y)?.getCell(x)?.getBgColor() ?? 0) & 0xffffff
+  let ctxRow = -1
+  let addRow = -1
+  for (let y = 0; y < rows; y++) {
+    if (lineAt(y).includes('# tail')) ctxRow = y
+    if (lineAt(y).includes('mark="!"')) addRow = y
+  }
+  check('hover 前 subtle：上下文行浅档底', ctxRow >= 0 && bgAt(40, ctxRow) === 0x1c2330, `bg=${bgAt(40, Math.max(ctxRow, 0)).toString(16)}`)
+  stdin.write(`\x1b[<35;10;${ctxRow + 1}M`)
+  await sleep(300) // 固定窗:pacing hover 重绘
+  check('hover：上下文行随卡片 hover 底色', ctxRow >= 0 && bgAt(40, ctxRow) === 0x242b3a, `bg=${bgAt(40, Math.max(ctxRow, 0)).toString(16)}`)
+  check('hover：新增行保留绿底', addRow >= 0 && bgAt(60, addRow) === 0x27392c, `bg=${bgAt(60, Math.max(addRow, 0)).toString(16)}`)
+  app.unmount()
 }
 {
   const { screen } = await renderAt(70, editTool, 'auto', 'none', 'default')

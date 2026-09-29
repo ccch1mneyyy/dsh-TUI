@@ -287,14 +287,14 @@ function PaneLine({
     : toolBackground === 'strong'
       ? 'toolCardBackground'
       : undefined
-  // Additions/removals keep their semantic tint; unchanged and empty panes
-  // inherit the configured ordinary tool-card surface.
+  // Additions/removals keep their semantic tint (stronger under `bars`);
+  // unchanged and empty panes inherit the configured ordinary surface.
   const backgroundColor =
     kind === 'context'
       ? ordinaryBackground
       : tone === 'old'
-        ? 'diffRemovedDimmed'
-        : 'diffAddedDimmed'
+        ? bars ? 'diffRemoved' : 'diffRemovedDimmed'
+        : bars ? 'diffAdded' : 'diffAddedDimmed'
   const wordColor = tone === 'old' ? 'diffRemovedWord' : 'diffAddedWord'
   // Status gutter instead of line numbers: ToolFileDiff has no file
   // offsets, and an invented number misleads (issue #250, P2-3).

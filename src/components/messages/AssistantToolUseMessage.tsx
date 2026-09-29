@@ -653,14 +653,6 @@ export function AssistantToolUseMessage({
     : rendered.length
   const shownLines: BodyLine[] =
     revealedLineCount >= rendered.length ? rendered : rendered.slice(0, revealedLineCount)
-  // Nested split-diff context panes must also yield to interaction highlights.
-  // `none` leaves them transparent so the selected/expanded root shows through.
-  const ordinaryToolBackground = isSelected || isExpanded ? 'none' : toolBackground
-  const ordinaryBackground = ordinaryToolBackground === 'subtle'
-    ? 'toolCardBackgroundDim'
-    : ordinaryToolBackground === 'strong'
-      ? 'toolCardBackground'
-      : undefined
   // Hover affordance for the click-to-toggle row: the theme's tool-card blue
   // face marks the call's content area while the pointer dwells (the
   // toolBackground treatment steps up one level to the strong card face), the
@@ -670,6 +662,14 @@ export function AssistantToolUseMessage({
   // body never moves.
   const [hovered, setHovered] = React.useState(false)
   const hoverTint = interactive && hovered && !isSelected
+  // Nested split-diff context panes must also yield to interaction highlights.
+  // `none` leaves them transparent so the selected/hovered/expanded root shows through.
+  const ordinaryToolBackground = isSelected || isExpanded || hoverTint ? 'none' : toolBackground
+  const ordinaryBackground = ordinaryToolBackground === 'subtle'
+    ? 'toolCardBackgroundDim'
+    : ordinaryToolBackground === 'strong'
+      ? 'toolCardBackground'
+      : undefined
 
   return (
     <Box

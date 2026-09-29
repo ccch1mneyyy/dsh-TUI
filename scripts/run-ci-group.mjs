@@ -73,6 +73,9 @@ const GROUPS = {
 // 代码块 tab 缩进背景回归（issue #606）：tab 展开须继承单元格样式，否则
 // 无背景的空格被 diff 跳过，在 tmux/Windows Terminal 深色底下显示为黑块。
     ["verify-code-block-tab-background", ['node', '--import', 'tsx/esm', 'scripts/verify-code-block-tab-background.tsx']],
+// chalk 色深探测：VS Code / Windows Terminal（WT_SESSION）从 256 色提到真彩，
+// tmux 仍钳回 256——否则暗色 diff/卡片底色全部塌缩成同一灰阶。
+    ["verify-chalk-truecolor-boost", ['node', '--import', 'tsx/esm', 'scripts/verify-chalk-truecolor-boost.ts']],
 // 思考块流式视图回归：preview 固定三行且点击切全文/再点收回，full
 // 默认值反向但仍不进入 0 行正文；增量 Markdown 与整段渲染的块间距
 // 一致（真实段落空行保留，代码块后不凭空多一行）。
