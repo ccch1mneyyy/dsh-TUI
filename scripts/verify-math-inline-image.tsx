@@ -8,24 +8,28 @@
  *
  * Markdown: in image mode without graphics a paragraph with inline math is
  * cell-for-cell identical to the Unicode rendering at 80/40/20 columns (CJK
- * and a wrapped link included); with Kitty graphics and a cell size it
- * switches to rows of text pieces and one-row image slots, keeping every
- * formula whole, and falls back when a formula cannot fit one row; while
- * streaming it stays on the Unicode path. Run with:
+ * and a wrapped link included); with Kitty or Sixel graphics and a cell
+ * size it switches to rows of text pieces and one-row image slots, keeping
+ * every formula whole, and falls back when a formula cannot fit one row;
+ * while streaming it stays on the Unicode path. Run with:
  * node --import tsx/esm scripts/verify-math-inline-image.tsx
  */
 process.env.FORCE_COLOR = '3'
 process.env.DSH_TUI_LANG = 'en'
 
 import assert from 'node:assert/strict'
-import { Writable } from 'node:stream'
+import { PassThrough, Writable } from 'node:stream'
 import React from 'react'
 import stripAnsi from 'strip-ansi'
 import xterm from '@xterm/headless'
-import { render, Box } from '../src/ui.js'
+import { AlternateScreen, Box, render, useInput } from '../src/ui.js'
 import { Markdown } from '../src/components/Markdown.js'
 import { StreamingMarkdown } from '../src/components/StreamingMarkdown.js'
 import { TerminalImagesContext } from '../src/ink/hooks/use-terminal-images.js'
+import { ThemeProvider } from '../src/components/design-system/ThemeProvider.js'
+import { setMathPreviewOpener, type MathPreviewRequest } from '../src/components/mathPreview.js'
+import instances from '../src/ink/instances.js'
+import type { TerminalImagePlacement } from '../src/ink/terminal-image.js'
 import wrapText from '../src/ink/wrap-text.js'
 import { inlineMediaPlaceholder as slot, layoutInlineMedia } from '../src/math/inline-layout.js'
 import { applyMathRendering } from '../src/tuiDisplayPrefs.js'
@@ -79,18 +83,17 @@ import { applyMathRendering } from '../src/tuiDisplayPrefs.js'
 // ── Markdown ───────────────────────────────────────────────────────────
 
 const CELL = { width: 10, height: 20 }
-function images(available: boolean) {
+function images(available: boolean, protocol: 'kitty' | 'sixel' = 'kitty') {
   return {
     subscribe: () => () => {},
     getSnapshot: () => available,
     getCellSize: () => CELL,
-    getProtocol: () => (available ? 'kitty' as const : undefined),
+    getProtocol: () => (available ? protocol : undefined),
     request: () => () => {},
   }
 }
 
-async function screenOf(element: React.ReactElement, columns: number, graphics = images(false)): Promise<string[]> {
-  const rows = 24
+async function screenOf(element: React.ReactElement, columns: number, graphics = images(false), rows = 24): Promise<string[]> {
   const term = new xterm.Terminal({ cols: columns, rows, scrollback: 0, allowProposedApi: true })
   class Out extends Writable {
     columns = columns
@@ -134,15 +137,20 @@ for (const width of [80, 40, 20]) {
 
 applyMathRendering('image')
 {
-  const unicode = await screenOf(<Markdown>{DOCUMENT}</Markdown>, 60)
-  const imaged = await screenOf(<Markdown>{DOCUMENT}</Markdown>, 60, images(true))
+  // Tall enough that the larger display-formula images do not scroll the
+  // document: paragraph spacing is what the blank-line count compares.
+  const unicode = await screenOf(<Markdown>{DOCUMENT}</Markdown>, 60, images(false), 48)
+  const imaged = await screenOf(<Markdown>{DOCUMENT}</Markdown>, 60, images(true), 48)
   assert.notDeepEqual(imaged, unicode, 'with Kitty graphics the paragraphs switch to image slots')
   // Headless terminals paint each slot's fallback: the Unicode formula cut
   // to the slot, so every formula is still present and none spans two rows.
   for (const fragment of ['ax²', 'x₁', 'α+β']) {
     assert.ok(imaged.some(line => line.includes(fragment)), `slot for ${fragment} is present`)
   }
-  assert.equal(imaged.filter(line => line === '').length, unicode.filter(line => line === '').length, 'the blank lines between blocks are unchanged')
+  // A taller image box may add blank rows of its own, but the document's
+  // paragraph spacing must never be swallowed by the image path.
+  assert.ok(imaged.filter(line => line === '').length >= unicode.filter(line => line === '').length,
+    'the image path does not swallow paragraph spacing')
 }
 {
   // While streaming, paragraphs stay on the Unicode path.
@@ -154,5 +162,120 @@ applyMathRendering('image')
   assert.deepEqual(inlineRows(streaming), inlineRows(unicode), 'streaming text keeps inline math as Unicode')
 }
 
+{
+  // A Sixel terminal (Windows Terminal 1.22+, xterm, foot, WezTerm…) lays out
+  // the same one-row slots as Kitty: the protocol gate admits both, and the
+  // slot carries the transcript presentation Sixel encoding requires.
+  const kitty = await screenOf(<Markdown>{DOCUMENT}</Markdown>, 60, images(true, 'kitty'))
+  const sixel = await screenOf(<Markdown>{DOCUMENT}</Markdown>, 60, images(true, 'sixel'))
+  assert.deepEqual(sixel, kitty, 'a Sixel terminal lays out the same inline image slots as Kitty')
+  for (const fragment of ['ax²', 'x₁', 'α+β']) {
+    assert.ok(sixel.some(line => line.includes(fragment)), `Sixel slot for ${fragment} is present`)
+  }
+}
+
+// ── Real Sixel host: a fake Windows Terminal ───────────────────────────
+// The fixture above proves the protocol gate; this proves the whole path end
+// to end: DA1 "?61;4;…c" selects Sixel (Windows Terminal's default conformance
+// level honours background select 1, so a raster with no backing really is
+// transparent) and both slots reach the frame as unbacked transcript
+// placements instead of painting a colour slab around the formula.
+{
+  applyMathRendering('image')
+  class Input extends PassThrough {
+    isTTY = true
+    setRawMode(): this { return this }
+    ref(): this { return this }
+    unref(): this { return this }
+  }
+  class Output extends Writable {
+    isTTY = true
+    columns = 60
+    rows = 20
+    data = ''
+    _write(chunk: unknown, _encoding: BufferEncoding, done: () => void): void {
+      const text = String(chunk)
+      this.data += text
+      const reply = text === '\x1b[c' ? '\x1b[?61;4;28c'
+        : text === '\x1b[?80$p' ? '\x1b[?80;1$y'
+          : text === '\x1b[16t' ? '\x1b[6;20;10t'
+            : text === '\x1b[14t' ? '\x1b[4;400;600t'
+              : /^\x1b\]11;\?/.test(text) ? '\x1b]11;rgb:ffff/ffff/ffff\x1b\\' : ''
+      if (reply) queueMicrotask(() => input.write(reply))
+      done()
+    }
+  }
+  const input = new Input()
+  const output = new Output()
+  const stderr = new Writable({ write(_chunk: unknown, _encoding: BufferEncoding, done: () => void): void { done() } })
+  function InputLease(): null {
+    useInput(() => {})
+    return null
+  }
+  const MATH = 'Inline $E=mc^2$ formula.\n\n$$\n\\begin{pmatrix} a & b \\\\ c & d \\end{pmatrix}\n$$'
+  // Publish the opener before the first paint: the math components decide
+  // whether to wrap their slot in a click target at render time.
+  const opened: MathPreviewRequest[] = []
+  setMathPreviewOpener(request => { opened.push(request) })
+  const app = await render(
+    <AlternateScreen>
+      <ThemeProvider theme="light">
+        <Box width={60} flexDirection="column">
+          <InputLease />
+          <Markdown>{MATH}</Markdown>
+        </Box>
+      </ThemeProvider>
+    </AlternateScreen>,
+    {
+      stdin: input as unknown as NodeJS.ReadStream,
+      stdout: output as unknown as NodeJS.WriteStream,
+      stderr,
+      exitOnCtrlC: false,
+      patchConsole: false,
+      terminalImages: true,
+    },
+  )
+  const host = instances.get(output as unknown as NodeJS.WriteStream) as unknown as {
+    frontFrame: { images?: readonly TerminalImagePlacement[] }
+  }
+  const placements = (): readonly TerminalImagePlacement[] => host.frontFrame.images ?? []
+  // Wait for both slots: the block raster can settle a frame after the inline
+  // one, and a bare inline wait turns the block assertion into a race.
+  const settled = (): boolean =>
+    placements().some(value => value.presentation === 'transcript' && value.rows === 1) &&
+    placements().some(value => value.presentation === 'transcript' && value.rows > 1)
+  const deadline = Date.now() + 10_000
+  while (!settled() && Date.now() < deadline) {
+    await new Promise(resolve => setTimeout(resolve, 20))
+  }
+  const seen = JSON.stringify(placements().map(value => [value.presentation, value.rows, value.background]))
+  const inline = placements().find(value => value.presentation === 'transcript' && value.rows === 1)
+  const block = placements().find(value => value.presentation === 'transcript' && value.rows > 1)
+  assert.ok(inline, 'inline formula reaches the frame as a one-row transcript image: ' + seen)
+  assert.ok(block, 'block formula reaches the frame as a transcript image: ' + seen)
+  // Sixel has no alpha, so any backing colour paints a slab around the
+  // formula: both slots must composite transparently instead and let the
+  // terminal's own background (or wallpaper) show through.
+  assert.equal(inline.background, undefined, 'the inline slot paints no background slab')
+  assert.equal(block.background, undefined, 'the block slot paints no background slab')
+  assert.equal(inline.transparent, true, 'formulas float transparent, so Sixel emits them without a backing')
+  assert.equal(block.transparent, true, 'block formulas carry the same flag')
+  assert.ok(!output.data.includes('a=t'), 'no Kitty upload on a Sixel terminal')
+
+  // Clicking a formula image hands its TeX and its live raster to the preview
+  // host, which is what opens the zoom card in the app.
+  input.write(`\x1b[<0;${inline.x + 1};${inline.y + 1}M\x1b[<0;${inline.x + 1};${inline.y + 1}m`)
+  const clickDeadline = Date.now() + 5_000
+  while (opened.length === 0 && Date.now() < clickDeadline) {
+    await new Promise(resolve => setTimeout(resolve, 20))
+  }
+  setMathPreviewOpener(undefined)
+  assert.equal(opened.length, 1, 'clicking the inline slot opens exactly one preview')
+  assert.equal(opened[0]!.tex, 'E=mc^2', 'the preview carries the clicked formula source')
+  assert.equal(opened[0]!.request.maxRows, 1, 'and the request that produced the one-row slot')
+  assert.ok(opened[0]!.source.width > 0, 'with the live raster as the fallback pixels')
+  await app.unmount()
+}
+
 applyMathRendering('auto')
-console.log('Inline math images verified: layout parity, whole formulas, balanced styles, continuations, no-graphics parity at 80/40/20, Kitty slots, streaming stays Unicode')
+console.log('Inline math images verified: layout parity, whole formulas, balanced styles, continuations, no-graphics parity at 80/40/20, Kitty and Sixel slots, streaming stays Unicode, and a fake Windows Terminal gets unbacked transcript placements')

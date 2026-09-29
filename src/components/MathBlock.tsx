@@ -4,9 +4,11 @@ import { useTerminalSize } from '../ink/hooks/use-terminal-size.js'
 import { stringWidth } from '../ink/stringWidth.js'
 import { peekMathRaster, renderMathRaster, type MathRaster, type MathRenderRequest } from '../math/renderer.js'
 import { getTheme } from '../theme.js'
+import { LARGE_DISPLAY_EX_TO_CELL_HEIGHT, XLARGE_DISPLAY_EX_TO_CELL_HEIGHT } from '../math/layout.js'
 import { renderDisplayMath, renderInlineMath, type MathToken } from '../terminal-utils/math.js'
-import { getMathRendering, subscribeMathRendering } from '../tuiDisplayPrefs.js'
-import { useTheme } from './design-system/ThemeProvider.js'
+import { getMathImageBacking, getMathImageScale, getMathRendering, subscribeMathImageBacking, subscribeMathImageScale, subscribeMathRendering } from '../tuiDisplayPrefs.js'
+import { useTerminalBackground, useTheme } from './design-system/ThemeProvider.js'
+import { useMathPreviewOpener } from './mathPreview.js'
 
 /**
  * A `$$…$$` / `\[…\]` block rendered as display-mode Unicode: fractions and
@@ -43,6 +45,17 @@ type Props = {
 
 export function MathBlock({ token, dimColor, forceWidth }: Props): React.ReactNode {
   const mode = React.useSyncExternalStore(subscribeMathRendering, getMathRendering)
+  // Display size is a user choice now (settings `mathImageScale`): bigger
+  // images are also the only way a terminal gets more pixels per stroke.
+  const imageScale = React.useSyncExternalStore(subscribeMathImageScale, getMathImageScale)
+  const exToCellHeight = imageScale === 'xlarge'
+    ? XLARGE_DISPLAY_EX_TO_CELL_HEIGHT
+    : imageScale === 'large' ? LARGE_DISPLAY_EX_TO_CELL_HEIGHT : undefined
+  // What sits behind the formula: transparent (only its own pixels) or the
+  // terminal's own background colour, composited first.
+  const backdrop = React.useSyncExternalStore(subscribeMathImageBacking, getMathImageBacking)
+  const composited = backdrop === 'terminal'
+  const terminalBackground = useTerminalBackground()
   const enabled = mode !== 'source'
   const { columns } = useTerminalSize()
   const width = Math.max(0, forceWidth ?? columns)
@@ -56,31 +69,55 @@ export function MathBlock({ token, dimColor, forceWidth }: Props): React.ReactNo
   const [themeName] = useTheme()
   const color = themeInkHex(getTheme(themeName).text)
   const request: MathRenderRequest | undefined = wantImage && graphics && cellSize !== undefined && color !== undefined
-    ? { tex: token.text, display: true, color, cellSize, maxColumns: budget, maxRows: IMAGE_MAX_ROWS }
+    ? {
+        tex: token.text, display: true, color, cellSize, maxColumns: budget, maxRows: IMAGE_MAX_ROWS,
+        ...(exToCellHeight === undefined ? {} : { baseExToCellHeight: exToCellHeight }),
+      }
     : undefined
   const raster = useMathRaster(request)
+  const previewMath = useMathPreviewOpener()
 
   // Layout is width-independent; a resize only re-checks the fit.
   const lines = React.useMemo(
     () => (renderable ? renderDisplayMath(token.text) : undefined),
     [renderable, token.text],
   )
-  if (raster !== undefined) {
+  if (raster !== undefined && request !== undefined) {
     // What the box shows when the renderer does not place the image (e.g. a
     // Kitty image partly scrolled out before cropping is available): the
     // stacked Unicode layout when it fits the box, else the one-line form
     // wrapped across it, so every visible row of the box carries the formula.
     const stackedFits = lines !== undefined && lines.length <= raster.rows &&
       lines.every(line => stringWidth(line) <= raster.columns)
+    const painted = (
+      <Image {...(composited ? {} : { transparent: true })} presentation="transcript" source={raster.source} width={raster.columns} height={raster.rows} alt={token.text} copyText={token.raw.trim()}>
+        <Box width={raster.columns} height={raster.rows} overflow="hidden">
+          <Text dimColor wrap={stackedFits ? 'truncate' : 'wrap'}>
+            {stackedFits ? lines.join('\n') : renderInlineMath(token.text) ?? token.text}
+          </Text>
+        </Box>
+      </Image>
+    )
+    // A composited formula needs a real surface: the slot carries the terminal
+    // background, so both the placement and its cells use that colour.
+    const image = composited
+      ? (
+        <Box width={raster.columns} height={raster.rows} flexShrink={0} backgroundColor={terminalBackground}>
+          {painted}
+        </Box>
+      )
+      : painted
     return (
       <Box paddingLeft={INDENT_WIDTH}>
-        <Image presentation="transcript" source={raster.source} width={raster.columns} height={raster.rows} alt={token.text} copyText={token.raw.trim()}>
-          <Box width={raster.columns} height={raster.rows} overflow="hidden">
-            <Text dimColor wrap={stackedFits ? 'truncate' : 'wrap'}>
-              {stackedFits ? lines.join('\n') : renderInlineMath(token.text) ?? token.text}
-            </Text>
-          </Box>
-        </Image>
+        {previewMath === undefined
+          ? image
+          : (
+            // A click opens the preview card instead of toggling the row or
+            // starting a selection underneath (same contract as thumbnails).
+            <Box onClick={event => { event.stopImmediatePropagation(); previewMath({ tex: token.text, request, source: raster.source }) }}>
+              {image}
+            </Box>
+          )}
       </Box>
     )
   }
@@ -130,7 +167,7 @@ function useMathRaster(request: MathRenderRequest | undefined): MathRaster | und
 }
 
 function requestKey(request: MathRenderRequest): string {
-  return [request.tex, request.color, request.cellSize.width, request.cellSize.height, request.maxColumns, request.maxRows].join('\u0000')
+  return [request.tex, request.color, request.cellSize.width, request.cellSize.height, request.maxColumns, request.maxRows, request.baseExToCellHeight ?? ''].join('\u0000')
 }
 
 /** A theme color as `#rrggbb`, or undefined for ANSI names the image cannot match. */

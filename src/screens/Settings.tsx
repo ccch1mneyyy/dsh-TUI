@@ -33,6 +33,35 @@ type FocusEntry =
   | { kind: 'field'; ns: string; field: TuiSettingsField }
   | { kind: 'group'; ns: string; group: TuiSettingsGroup }
 
+/**
+ * One planned row of a section's root page, shared by the focus list and
+ * the renderer so the two can never disagree about order: an inline group
+ * contributes a header (not focusable) plus its fields right on the root
+ * page, a page group contributes one navigation row into its subpage.
+ * Ungrouped fields (plugin sections) come first, like before.
+ */
+type RootRow =
+  | { kind: 'header'; group: TuiSettingsGroup }
+  | { kind: 'field'; field: TuiSettingsField }
+  | { kind: 'page'; group: TuiSettingsGroup }
+
+function rootRowsFor(section: TuiSettingsSection): RootRow[] {
+  const rows: RootRow[] = section.fields
+    .filter(field => field.group === undefined)
+    .map(field => ({ kind: 'field' as const, field }))
+  for (const group of section.groups ?? []) {
+    if (group.mode === 'inline') {
+      const fields = section.fields.filter(field => field.group === group.id)
+      if (fields.length === 0) continue
+      rows.push({ kind: 'header', group })
+      for (const field of fields) rows.push({ kind: 'field', field })
+    } else {
+      rows.push({ kind: 'page', group })
+    }
+  }
+  return rows
+}
+
 /** One rendered block with its height, for focus-follow windowing. */
 interface RenderEntry {
   key: string
@@ -155,6 +184,20 @@ function GroupRow({
       <Box flexGrow={1} />
       {/* 右缘 = › 本身，恒贴右；宽度差由 flex spacer 向左吸收。 */}
       <Text color={focused ? 'suggestion' : 'subtle'}>{'›'}</Text>
+    </Box>
+  )
+}
+
+/**
+ * A non-focusable topic header on the root page — the inline twin of
+ * GroupRow: it names the run of fields below it instead of hiding them
+ * on a subpage. One line, dim, indented to the label column so the rows
+ * below keep their pointer gutter and value chips aligned.
+ */
+function GroupHeaderRow({ title }: { title: string }): React.ReactNode {
+  return (
+    <Box flexDirection="row" height={1} flexShrink={0} overflow="hidden">
+      <Text dimColor>{'  '}{title}</Text>
     </Box>
   )
 }
@@ -366,12 +409,11 @@ export function Settings({
     ? activeSection.fields
       .filter(field => field.group === activeGroupSpec.id)
       .map(field => ({ kind: 'field', ns: activeSection.ns, field }))
-    : sections.flatMap(section => [
-      ...section.fields
-        .filter(field => field.group === undefined)
-        .map(field => ({ kind: 'field' as const, ns: section.ns, field })),
-      ...(section.groups ?? []).map(group => ({ kind: 'group' as const, ns: section.ns, group })),
-    ])
+    : sections.flatMap(section => rootRowsFor(section).flatMap((row): FocusEntry[] => {
+      if (row.kind === 'field') return [{ kind: 'field', ns: section.ns, field: row.field }]
+      if (row.kind === 'page') return [{ kind: 'group', ns: section.ns, group: row.group }]
+      return []
+    }))
   const effFocus = Math.min(focusIndex, Math.max(0, focusable.length - 1))
   const focused = focusable.length === 0 ? undefined : focusable[effFocus]
 
@@ -671,10 +713,24 @@ export function Settings({
           />
         ),
       })
-      for (const field of section.fields) {
-        if (field.group === undefined) addField(section, field)
-      }
-      for (const group of section.groups ?? []) {
+      for (const row of rootRowsFor(section)) {
+        if (row.kind === 'header') {
+          entries.push({
+            key: `header:${section.ns}:${row.group.id}`,
+            lines: 1,
+            node: (
+              <CardRow>
+                <GroupHeaderRow title={pick(row.group.title, row.group.descriptions)} />
+              </CardRow>
+            ),
+          })
+          continue
+        }
+        if (row.kind === 'field') {
+          addField(section, row.field)
+          continue
+        }
+        const group = row.group
         const isFocused = focused?.kind === 'group' && focused.ns === section.ns && focused.group === group
         const index = focusCursor
         focusCursor += 1

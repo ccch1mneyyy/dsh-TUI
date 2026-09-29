@@ -32,6 +32,15 @@ import { TuiDialogStore } from '../dsh-adapter/dialogs.js'
 import { TuiStatusStore, type TuiStatusViewUi } from '../dsh-adapter/status.js'
 import { ActivityStore, useActivity } from '../dsh-adapter/activity-store.js'
 import type { TranscriptImage } from '../dsh-adapter/transcript-images.js'
+import { rasterToPng, setMathPreviewOpener, type MathPreviewRequest } from '../components/mathPreview.js'
+import { renderMathRaster, type MathRenderRequest } from '../math/renderer.js'
+
+/** Formula preview rasters are re-typeset at this cell scale (2× the
+ *  transcript's) so the card's 100–800% zoom stays sharp instead of upscaling
+ *  the inline pixels. Bounded like the other image budgets. */
+const MATH_PREVIEW_SCALE = 2
+const MATH_PREVIEW_MAX_COLUMNS = 480
+const MATH_PREVIEW_MAX_ROWS = 64
 import type { TuiShortcutHost } from '../dsh-adapter/shortcuts.js'
 import type { TuiThemeHost } from '../dsh-adapter/themes.js'
 import type { TuiRewindMode } from '../dsh-adapter/extension-events.js'
@@ -1063,6 +1072,41 @@ export function Chat({
       overlay: { kind: 'image-preview', image, gallery, index, ...(title === undefined ? {} : { title }) },
     })
   }, [channel])
+
+  /** A clicked formula opens the same card as a transcript image. The raster
+   *  is re-typeset at double the cell size, so 100% is a sharper formula
+   *  rather than an upscaled one; when that re-render fails (too wide, TeX
+   *  rejected) the pixels already on screen stand in. */
+  const openMathPreview = React.useCallback((preview: MathPreviewRequest): void => {
+    const scaled: MathRenderRequest = {
+      ...preview.request,
+      cellSize: {
+        width: preview.request.cellSize.width * MATH_PREVIEW_SCALE,
+        height: preview.request.cellSize.height * MATH_PREVIEW_SCALE,
+      },
+      maxColumns: Math.min(preview.request.maxColumns * MATH_PREVIEW_SCALE, MATH_PREVIEW_MAX_COLUMNS),
+      maxRows: Math.min(preview.request.maxRows * MATH_PREVIEW_SCALE, MATH_PREVIEW_MAX_ROWS),
+    }
+    const image: TranscriptImage = {
+      id: `math:${preview.tex}`,
+      width: preview.source.width,
+      height: preview.source.height,
+      name: preview.tex,
+      mediaType: 'image/png',
+      read: async () => {
+        const rendered = await renderMathRaster(scaled)
+        return rasterToPng(rendered.ok ? rendered.raster.source : preview.source)
+      },
+    }
+    openImagePreview(image, preview.tex)
+  }, [openImagePreview])
+
+  // The math components live deep inside the transcript, so the opener is
+  // published rather than threaded through every message row's props.
+  React.useEffect(() => {
+    setMathPreviewOpener(openMathPreview)
+    return () => setMathPreviewOpener(undefined)
+  }, [openMathPreview])
   // Agent-binding generation is monotonic across every agent replacement
   // and bumps before the replacement emit, closing the ABA hole where a
   // resumed session reuses the same id. Partial test/embed channels fall

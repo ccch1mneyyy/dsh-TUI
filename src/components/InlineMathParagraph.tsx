@@ -10,12 +10,14 @@ import { getTheme } from '../theme.js'
 import type { CliHighlight } from '../terminal-utils/cliHighlight.js'
 import { formatToken } from '../terminal-utils/markdown.js'
 import { isMathToken, renderInlineMath, type MathToken } from '../terminal-utils/math.js'
-import { useTheme } from './design-system/ThemeProvider.js'
+import { useTerminalBackground, useTheme } from './design-system/ThemeProvider.js'
 import { themeInkHex } from './MathBlock.js'
+import { getMathImageBacking, subscribeMathImageBacking } from '../tuiDisplayPrefs.js'
+import { useMathPreviewOpener } from './mathPreview.js'
 
 /**
  * A top-level paragraph whose inline formulas show as terminal images
- * (`mathRendering: image`, Kitty graphics, a measured cell size).
+ * (`mathRendering: image`, Kitty or Sixel graphics, a measured cell size).
  *
  * It renders exactly like the plain <Text> paragraph until it can switch
  * whole: the paragraph's width is measured, and every formula has settled
@@ -44,10 +46,14 @@ export function InlineMathParagraph({ token, highlight }: Props): React.ReactNod
   const cellSize = useTerminalImageCellSize()
   const [themeName] = useTheme()
   const color = themeInkHex(getTheme(themeName).text)
+  const previewMath = useMathPreviewOpener()
+  const backdrop = React.useSyncExternalStore(subscribeMathImageBacking, getMathImageBacking)
+  const composited = backdrop === 'terminal'
+  const terminalBackground = useTerminalBackground()
   const width = useMeasuredWidth()
 
   const requests = React.useMemo((): MathRenderRequest[] | undefined => {
-    if (!graphics || protocol !== 'kitty' || cellSize === undefined || color === undefined) return undefined
+    if (!graphics || (protocol !== 'kitty' && protocol !== 'sixel') || cellSize === undefined || color === undefined) return undefined
     if (width.value === undefined || formulas.length === 0) return undefined
     return formulas.map(formula => ({
       tex: formula.text, display: false, color, cellSize, maxColumns: width.value!, maxRows: 1,
@@ -100,12 +106,30 @@ export function InlineMathParagraph({ token, highlight }: Props): React.ReactNod
               }
               const { formula, raster } = layout.media[piece.index]!
               // Keyed by the formula slot, so an unchanged layout keeps the
-              // same image node (Kitty placements follow node identity).
-              return (
-                <Image key={`m${piece.index}:${raster.key}`} source={raster.source} width={piece.columns} height={1} alt={formula.text} copyText={formula.raw}>
+              // same image node (placements follow node identity). The
+              // transcript presentation is what lets Sixel paint the one-row
+              // slot at all, and crops instead of dropping it at a viewport
+              // edge — the same contract block formulas use.
+              const formulaRequest = requests?.[piece.index]
+              const painted = (
+                <Image {...(composited ? {} : { transparent: true })} presentation="transcript" source={raster.source} width={piece.columns} height={1} alt={formula.text} copyText={formula.raw}>
                   <Text dimColor wrap="truncate">{renderInlineMath(formula.text) ?? formula.raw}</Text>
                 </Image>
               )
+              const image = composited
+                ? (
+                  <Box width={piece.columns} height={1} flexShrink={0} backgroundColor={terminalBackground}>
+                    {painted}
+                  </Box>
+                )
+                : painted
+              return previewMath === undefined || formulaRequest === undefined
+                ? <React.Fragment key={`m${piece.index}:${raster.key}`}>{image}</React.Fragment>
+                : (
+                  <Box key={`m${piece.index}:${raster.key}`} onClick={event => { event.stopImmediatePropagation(); previewMath({ tex: formula.text, request: formulaRequest, source: raster.source }) }}>
+                    {image}
+                  </Box>
+                )
             })}
           </Box>
         ))}

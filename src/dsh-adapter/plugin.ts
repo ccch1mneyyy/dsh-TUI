@@ -39,7 +39,7 @@ import { readHomePrefs } from '../homePrefs.js'
 import { resolveSessionCwd } from '../utils/workspaceRoot.js'
 import { beginRestartAttempt, checkForTuiUpdate, installedTuiVersion, isBootDeadlockTarget, isStandaloneRuntime, isVersionNewer, logRestartEvent, resolveDshProfileName, resolveTuiUpdateTarget, restartTui, updateTuiAndRestart, writeHandoffNotice } from '../update.js'
 import { getLang, isLang, resolveStartupLang, setLang, t, writeLangPref } from '../i18n.js'
-import { DEFAULT_PAGE_MARGIN, DEFAULT_STATUS_BAR, applyMathRendering, applyMermaidDiagrams, type MathRendering, applyPageMargin, isPageMarginMode, normalizePageMargin, normalizeScrollGutter, normalizeStatusBar, normalizeToolBackground, parsePageMarginSpec, resolveMathRendering, type PageMarginSetting, type ScrollGutterMode, type StatusBarConfig, type ToolBackground } from '../tuiDisplayPrefs.js'
+import { DEFAULT_PAGE_MARGIN, DEFAULT_STATUS_BAR, applyImageBacking, applyMathImageBacking, applyMathImageScale, applyMathRendering, applyMermaidDiagrams, type ImageBacking, type MathImageBacking, type MathImageScale, type MathRendering, applyPageMargin, isPageMarginMode, normalizePageMargin, normalizeScrollGutter, normalizeStatusBar, normalizeToolBackground, parsePageMarginSpec, resolveMathRendering, type PageMarginSetting, type ScrollGutterMode, type StatusBarConfig, type ToolBackground } from '../tuiDisplayPrefs.js'
 import {
   draftComboConflicts,
   effectiveComboString,
@@ -616,6 +616,9 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
   applyPageMargin(config.pageMargin)
   applyMermaidDiagrams(config.mermaidDiagrams)
   applyMathRendering(resolveMathRendering({}, config))
+  applyMathImageScale(config.mathImageScale ?? 'auto')
+  applyMathImageBacking(config.mathImageBacking ?? 'transparent')
+  applyImageBacking(config.imageBacking ?? 'transparent')
   // Plugin toasts ride the channel's own notification surface: the runtime
   // already sanitized/rate-limited the delivery, the sink only forwards.
   // Without the extensions row (tuiToast absent) plugin toasts are dropped
@@ -689,6 +692,12 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
         mermaidDiagrams: Schema.boolean(),
         // Same no-default rule: resolveMathRendering falls back to cordis.yml.
         mathRendering: Schema.union(['auto', 'image', 'unicode', 'source']),
+        // Display-formula image size; unset keeps the base (text) scale.
+        mathImageScale: Schema.union(['auto', 'large', 'xlarge']),
+        // Formula-image backing; unset keeps the transparent default.
+        mathImageBacking: Schema.union(['transparent', 'terminal']),
+        // Transcript-image backing (photos); unset keeps the transparent default.
+        imageBacking: Schema.union(['transparent', 'terminal']),
         // Pre-`mathRendering` user layers; `false` still resolves to `source`.
         latexMath: Schema.boolean(),
         // No default on purpose: unset keeps the boot chain decisive
@@ -777,6 +786,9 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
       smoothStreaming?: boolean
       mermaidDiagrams?: boolean
       mathRendering?: MathRendering
+      mathImageScale?: MathImageScale
+      mathImageBacking?: MathImageBacking
+      imageBacking?: ImageBacking
       latexMath?: boolean
       statusBar?: Partial<StatusBarConfig>
       shortcuts?: Partial<Record<ShortcutActionId, string>>
@@ -844,6 +856,9 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
       channel.setSmoothStreaming(value.smoothStreaming ?? config.smoothStreaming ?? true)
       applyMermaidDiagrams(value.mermaidDiagrams ?? config.mermaidDiagrams)
       applyMathRendering(resolveMathRendering(value, config))
+      applyMathImageScale(value.mathImageScale ?? config.mathImageScale ?? 'auto')
+      applyMathImageBacking(value.mathImageBacking ?? config.mathImageBacking ?? 'transparent')
+      applyImageBacking(value.imageBacking ?? config.imageBacking ?? 'transparent')
       channel.setStatusBar(normalizeStatusBar(value.statusBar ?? config.statusBar))
     }
     // Legacy user scopes layer over cordis.yml. Modern Config is already
@@ -1069,6 +1084,15 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
         },
         {
           ...settingField('mathRendering'),
+        },
+        {
+          ...settingField('mathImageScale'),
+        },
+        {
+          ...settingField('mathImageBacking'),
+        },
+        {
+          ...settingField('imageBacking'),
         },
         {
           ...settingField('recapOnOpen'),

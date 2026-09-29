@@ -7,7 +7,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { Box, Text, useAnimationFrame, useTerminalImages, useTerminalSize } from '../ui.js'
 import { getTheme } from '../theme.js'
-import { useTheme, useTerminalBackground } from './design-system/ThemeProvider.js'
+import { useTheme } from './design-system/ThemeProvider.js'
 import { parseRGB } from './Spinner/spinnerUtils.js'
 import { renderBigText } from './bigfont.js'
 import { COLUMN_GAP, WHALE_BOX_WIDTH, resolveSplashLayout } from './splashLayout.js'
@@ -229,7 +229,6 @@ export function LogoV2({
   const starLinePreview = process.env.DSH_TUI_STAR_LINE === '1'
   const [themeName] = useTheme()
   /** 终端真底色（Sixel 不透明衬底；见渲染处的注释）。 */
-  const terminalBackground = useTerminalBackground()
   const theme = getTheme(themeName)
   const { columns } = useTerminalSize()
 
@@ -447,18 +446,17 @@ export function LogoV2({
             {whaleGirl ? (
               // 槽位**与文字列严格等高**（textColumnRows）：真图与字符画女仆
               // 娘共用同一个盒，真图解码完成换画时头部高度不跳，视觉上两者
-              // 齐平、谁也不多出一截。显式底色**必须是终端真底色**（OSC 11
-              // 的回答；见 useTerminalBackground）——Sixel
-              // 没有 alpha，透明像素得合成到某个不透明衬底上，用错颜色就会
-              // 出现一整块突兀的色块（theme.background 是徽标填充色，不是
-              // 终端底色）。最优先永远是真图，字符画只是协议不可用时的保底。
+              // 齐平、谁也不多出一截。真图**不带衬底**（transparent）：立绘
+              // 自己裁掉了画布留白，Sixel 只画被她覆盖的像素，终端底色/壁纸
+              // 从她周围透出来——以前那块底色是「没有 alpha 只能合成」的旧约束
+              // 留下的，现在不需要了。最优先永远是真图，字符画只是协议不可用
+              // 时的保底。
               <Box
                 width={WHALE_BOX_WIDTH}
                 height={textColumnRows}
                 flexDirection="row"
                 justifyContent="center"
                 alignItems="center"
-                backgroundColor={terminalBackground}
               >
                 {maidImageActive ? (
                   <MaidPortrait

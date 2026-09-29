@@ -1064,8 +1064,12 @@ function renderNodeToOutput(
       // repaints.
       const imageWidth = Math.floor(width)
       const imageHeight = Math.floor(height)
+      // Sixel paints the raster OVER the cells only when the placement has a
+      // backing colour to composite onto. A transparent placement (no
+      // background) keeps the Kitty rule instead: blank cells, so a wallpaper
+      // or translucent terminal shows through around the ink.
       const backingColor = output.opaqueImageBacking
-        ? node.style.backgroundColor ?? inheritedBackgroundColor
+        ? output.imagePlacementBackground(node) as Color | undefined
         : undefined
       const imageLine = ' '.repeat(imageWidth)
       const fillLine = backingColor === undefined

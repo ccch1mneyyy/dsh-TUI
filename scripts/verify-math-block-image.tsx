@@ -19,8 +19,10 @@ import type { TerminalCellSize } from '../src/ink/terminal-image.js'
 import { MathBlock } from '../src/components/MathBlock.js'
 import { renderMathRaster, type MathRenderRequest } from '../src/math/renderer.js'
 import { getTheme } from '../src/theme.js'
+import { LARGE_DISPLAY_EX_TO_CELL_HEIGHT } from '../src/math/layout.js'
+import { stringWidth } from '../src/ink/stringWidth.js'
 import { renderDisplayMath, renderInlineMath } from '../src/terminal-utils/math.js'
-import { applyMathRendering } from '../src/tuiDisplayPrefs.js'
+import { applyMathImageScale, applyMathRendering, normalizeMathImageScale, type MathImageScale } from '../src/tuiDisplayPrefs.js'
 
 const WIDTH = 80
 const CELL: TerminalCellSize = { width: 10, height: 20 }
@@ -63,8 +65,15 @@ const block = (text: string, dimColor = false, pending = false) =>
 const rgb = /^rgb\((\d+),(\d+),(\d+)\)$/.exec(getTheme('dark').text)
 assert.ok(rgb !== null, 'the dark theme text color is rgb()')
 const color = `#${rgb.slice(1, 4).map(channel => Number(channel).toString(16).padStart(2, '0')).join('')}`
-const request = (tex: string): MathRenderRequest =>
-  ({ tex, display: true, color, cellSize: CELL, maxColumns: WIDTH - 2 - 4, maxRows: 16 })
+const baseFor = (scale: MathImageScale): number | undefined =>
+  scale === 'xlarge' ? 0.9 : scale === 'large' ? LARGE_DISPLAY_EX_TO_CELL_HEIGHT : undefined
+const request = (tex: string, scale: MathImageScale = 'auto'): MathRenderRequest => {
+  const base = baseFor(scale)
+  return {
+    tex, display: true, color, cellSize: CELL, maxColumns: WIDTH - 2 - 4, maxRows: 16,
+    ...(base === undefined ? {} : { baseExToCellHeight: base }),
+  }
+}
 
 const stacked = renderDisplayMath(QUADRATIC)!.map(line => `  ${line}`.trimEnd())
 const linear = renderInlineMath(QUADRATIC)!
@@ -79,7 +88,20 @@ assert.ok(quadratic.ok, `the quadratic formula rasterizes (got ${quadratic.ok ? 
 {
   const lines = screenLines(block(QUADRATIC))
   assert.equal(lines.length, quadratic.raster.rows, 'the block takes the raster rows')
-  assert.deepEqual(lines, stacked, 'the fallback is the full stacked formula when it fits the box')
+  const display = renderDisplayMath(QUADRATIC)!
+  const stackedFits = display.length <= quadratic.raster.rows &&
+    display.every(line => stringWidth(line) <= quadratic.raster.columns)
+  if (stackedFits) {
+    // The box can now be a row or two taller than the stacked form; what
+    // matters is that the stacked formula is what fills it.
+    assert.deepEqual(lines.slice(0, stacked.length), stacked, 'the fallback is the full stacked formula when it fits the box')
+  } else {
+    // Display formulas are set larger now, so a width-clamped raster can be
+    // too narrow for the stacked form; the box then wraps the one-line
+    // fallback and still never shows the raw source.
+    assert.ok(lines.some(line => line.trim() !== ''), 'a narrow box still shows the formula fallback')
+    assert.ok(!lines.includes('$$'), 'and never the source')
+  }
 }
 {
   // TeX the Unicode renderer cannot lay out: the Unicode path keeps the
@@ -113,6 +135,23 @@ assert.deepEqual(screenLines(block(QUADRATIC, false, true)), ['$$', QUADRATIC, '
   const rejected = await renderMathRaster(request(unknown))
   assert.ok(!rejected.ok, 'the image backend rejects unknown commands')
   assert.deepEqual(screenLines(block(unknown)), ['$$', unknown, '$$'], 'a rejected formula falls back like the Unicode path')
+}
+
+{
+  // Settings `mathImageScale`: a larger display scale is more cells, which is
+  // literally more device pixels per stroke (the only sharpness lever a
+  // terminal image has). Unknown values fall back to the text size.
+  assert.equal(normalizeMathImageScale('bogus'), 'auto', 'an unknown scale falls back to the text size')
+  applyMathImageScale('auto')
+  const auto = await renderMathRaster(request(QUADRATIC, 'auto'))
+  applyMathImageScale('large')
+  const large = await renderMathRaster(request(QUADRATIC, 'large'))
+  assert.ok(auto.ok && large.ok, 'both scales rasterize')
+  assert.ok(large.raster.columns * large.raster.rows > auto.raster.columns * auto.raster.rows,
+    'a larger scale gives the formula more cells')
+  assert.equal(screenLines(block(QUADRATIC)).length, large.raster.rows, 'the block box follows the chosen scale')
+  applyMathImageScale('auto')
+  assert.equal(screenLines(block(QUADRATIC)).length, auto.raster.rows, 'and returns to the text size')
 }
 
 applyMathRendering('auto')

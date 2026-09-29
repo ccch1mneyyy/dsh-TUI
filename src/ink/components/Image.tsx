@@ -25,6 +25,14 @@ export interface ImageProps {
   readonly copyText?: string
   /** Opt into Sixel for a modal or scrollable transcript. Default keeps Kitty only. */
   readonly presentation?: 'preview' | 'transcript'
+  /**
+   * Float on whatever the terminal shows behind the image: the raster is
+   * emitted without a backing colour and its coverage becomes a hard mask
+   * (Sixel has no partial alpha). Formulas and artwork with transparent
+   * margins use this; photographs and anything sitting on a painted surface
+   * leave it unset and composite onto that surface instead.
+   */
+  readonly transparent?: boolean
   /** Same-size terminal-cell fallback rendered when graphics are unavailable. */
   readonly children?: ReactNode
 }
@@ -43,6 +51,7 @@ export default function Image({
   alt,
   copyText,
   presentation,
+  transparent,
   children,
 }: ImageProps): React.ReactNode {
   const [columns, rows] = normalizeSize(width, height)
@@ -57,6 +66,7 @@ export default function Image({
       imageAlt={alternative}
       imagePresentation={presentation}
       imageCopyText={copyText}
+      imageTransparent={transparent === true ? 'transparent' : undefined}
       style={{
         width: columns,
         height: rows,

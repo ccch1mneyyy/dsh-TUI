@@ -98,9 +98,11 @@ const document = {
   packageVersion: pkg.version,
   namespace: 'dsh-tui',
   // Section titles for the groups settings name; "general" is the main page.
+  // `mode` mirrors the /settings root page: inline groups render their
+  // fields directly under a header, page groups sit behind a subpage row.
   groups: [
-    { id: 'general', label: { en: 'General', zh: '通用' } },
-    ...SETTING_GROUPS.map(group => ({ id: group.id, label: { en: group.title, zh: group.descriptions.zh } })),
+    { id: 'general', mode: 'inline', label: { en: 'General', zh: '通用' } },
+    ...SETTING_GROUPS.map(group => ({ id: group.id, mode: group.mode ?? 'page', label: { en: group.title, zh: group.descriptions.zh } })),
   ],
   settings,
 }

@@ -68,6 +68,42 @@ await boundsCache.render({ assetKey: 'large-bounds', request: { source, width: 1
 await assert.rejects(boundsCache.render({ assetKey: 'large-bounds', request: { width: 1200, height: 2, background: '#ffffff' } }),
   'cache hits must not bypass the ordinary source presentation budget')
 await assert.rejects(encodeSixel({ source: { ...source, data: new Uint8Array(1) }, width: 2, height: 2, background: '#000000' }))
+// Transparent rasters go out as-is: the DCS keeps background select 1 ("no
+// action") and empty areas are never painted, so a sixel terminal shows its
+// own background (a wallpaper included) through a formula or through the
+// transparent margins of an illustration. Everything else still composites
+// onto a colour, because Sixel cannot express the partial alpha that keeps
+// shadows and translucent panels smooth.
+{
+  const clearSource: TerminalImageSource = { width: 2, height: 2, data: new Uint8Array(16) }
+  const clear = await encodeSixel({ source: clearSource, width: 2, height: 2, transparent: true })
+  assert.match(clear.data, /^\x1bP0;1;q/u, 'a transparent raster keeps the no-action background select')
+  const body = /^\x1bP0;1;q([\s\S]*)\x1b\\$/u.exec(clear.data)![1]
+  const onMagenta = new Uint8Array(decode(body, { fillColor: 0xffff00ff }).data32.buffer)
+  const onGreen = new Uint8Array(decode(body, { fillColor: 0xff00ff00 }).data32.buffer)
+  assert.deepEqual([...onMagenta.slice(0, 4)], [255, 0, 255, 255], 'empty pixels take whatever the terminal fills with')
+  assert.deepEqual([...onGreen.slice(0, 4)], [0, 255, 0, 255], 'so they stay unpainted instead of baked to one colour')
+  // Coverage is binary (see TRANSPARENT_INK_THRESHOLD): dropping anti-aliased
+  // pixels outright is what thinned formula strokes to hairlines.
+  const edge: TerminalImageSource = { width: 1, height: 1, data: new Uint8Array([52, 57, 69, 128]) }
+  const strongest = await encodeSixel({ source: edge, width: 1, height: 1, transparent: true })
+  const strongestBody = /^\x1bP0;1;q([\s\S]*)\x1b\\$/u.exec(strongest.data)![1]
+  const strongestPixel = [...new Uint8Array(decode(strongestBody, { fillColor: 0xffff00ff }).data32.buffer).slice(0, 4)]
+  // The palette round trip may shift a channel by a level; the point is that a
+  // partially covered pixel survives as solid ink instead of vanishing.
+  assert.equal(strongestPixel[3], 255, 'coverage above the threshold becomes solid ink')
+  assert.ok(Math.abs(strongestPixel[0]! - 52) <= 2 && Math.abs(strongestPixel[1]! - 57) <= 2,
+    `and keeps the ink colour (${strongestPixel.join(',')})`)
+  const faint: TerminalImageSource = { width: 1, height: 1, data: new Uint8Array([52, 57, 69, 32]) }
+  const faintest = await encodeSixel({ source: faint, width: 1, height: 1, transparent: true })
+  const faintestBody = /^\x1bP0;1;q([\s\S]*)\x1b\\$/u.exec(faintest.data)![1]
+  assert.deepEqual([...new Uint8Array(decode(faintestBody, { fillColor: 0xffff00ff }).data32.buffer).slice(0, 4)],
+    [255, 0, 255, 255], 'and coverage below it stays transparent')
+  const painted = await encodeSixel({ source: clearSource, width: 2, height: 2, background: '#ffffff' })
+  assert.ok(painted.data.length > clear.data.length, 'a backing colour still paints the whole raster')
+  const defaulted = await encodeSixel({ source: clearSource, width: 2, height: 2 })
+  assert.ok(defaulted.data.length > clear.data.length, 'a raster that is not transparent always paints a backing')
+}
 const tail = decodeRaster((await encodeSixel({ source, width: 13, height: 7, background: '#123456' })).data)
 assert.equal(tail.width, 13)
 assert.equal(tail.height, 7, 'last six-pixel band must not extend raster dimensions')

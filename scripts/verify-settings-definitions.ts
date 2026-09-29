@@ -14,7 +14,7 @@ import { spawnSync } from 'node:child_process'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { Config } from '../src/dsh-adapter/index.js'
-import { EDITABLE_CONFIG_KEYS, SETTING_DEFINITIONS } from '../src/settings/definitions.js'
+import { EDITABLE_CONFIG_KEYS, SETTING_DEFINITIONS, SETTING_GROUPS } from '../src/settings/definitions.js'
 
 const root = fileURLToPath(new URL('../', import.meta.url))
 const plugin = readFileSync(`${root}src/dsh-adapter/plugin.ts`, 'utf8')
@@ -40,6 +40,39 @@ const PREVIOUSLY_EDITABLE = [
   'lang', 'fullscreen', 'terminalImages', 'shortcuts',
 ]
 assert.deepEqual(PREVIOUSLY_EDITABLE.filter(key => !EDITABLE_CONFIG_KEYS.includes(key)), [], 'every previously editable key is still editable')
+
+// Groups are the /settings topics: a field may only name a declared group,
+// every declared group must hold at least one field (an empty group is dead
+// UI), and the formula settings sit together behind one entry.
+const groupIds = SETTING_GROUPS.map(group => group.id)
+assert.equal(new Set(groupIds).size, groupIds.length, 'group ids are unique')
+const grouped = Object.entries(SETTING_DEFINITIONS).filter(([, definition]) => definition.group !== undefined)
+assert.deepEqual([...new Set(grouped.map(([, definition]) => definition.group))].filter(id => !groupIds.includes(id!)), [],
+  'every definition group names a declared SETTING_GROUPS entry')
+// The shortcut remaps are declared in plugin.ts, not in the definitions file,
+// so a declared group may legitimately be filled from there. (Not every
+// declared group is checked for content: sections registered by plugins carry
+// their own fields and are not visible here.)
+assert.deepEqual(
+  ['mathRendering', 'mathImageScale', 'mathImageBacking'].map(key => SETTING_DEFINITIONS[key as keyof typeof SETTING_DEFINITIONS].group),
+  ['math', 'math', 'math'],
+  'the formula settings sit together on the Formula subpage',
+)
+// Root-page presentation: shallow topics render inline under a header (no
+// navigation round-trip), deep domains keep a subpage. Every group declares
+// which it is, and the Formula page is a product decision — a dedicated
+// subpage for the formula settings was asked for explicitly.
+assert.deepEqual(SETTING_GROUPS.filter(group => group.mode !== 'inline' && group.mode !== 'page').map(group => group.id), [],
+  'every group declares a root-page presentation (inline|page)')
+assert.equal(SETTING_GROUPS.find(group => group.id === 'math')?.mode, 'page',
+  'the Formula group keeps its dedicated subpage')
+// Every built-in setting still names a group, so the root page keeps its
+// topic headers and nothing regresses to an unlabeled row.
+assert.deepEqual(
+  Object.entries(SETTING_DEFINITIONS).filter(([, definition]) => definition.group === undefined).map(([key]) => key),
+  [],
+  'every built-in setting names a group',
+)
 
 const generated = spawnSync(process.execPath, [`${root}scripts/gen-settings-json.mjs`, '--check'], { encoding: 'utf8' })
 assert.equal(generated.status, 0, `settings.json generation fails:\n${generated.stderr}`)
