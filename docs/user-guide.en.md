@@ -601,6 +601,7 @@ Common items below, full list on the /settings screen. Most topics (**Appearance
 | splashFont | big-text face on the header splash: Daily rotation (default, changes with the local date) / bold / square / bevel / wide / dot matrix / stencil / thin (classic) / slab. Picking a face pins it; picking Daily rotation restores the rotation. Applies immediately |
 | whaleGirl | maid portrait (default off): swaps the header's pixel whale for the author-drawn maid as a **real raster** (Kitty/Sixel); falls back to the pixel whale without graphics support |
 | diffLayout | Edit/Write diff layout: auto (two columns ≥110 cols) / split / unified |
+| diffStyle | Edit/Write diff look: default (−/+ rows) / bars (▌ bars + tinted rows, removals above additions) |
 | thinkingFold | thinking block: preview (2-3 line preview + folded when settled) / full (expanded to end of turn) |
 | btw.contextBudget | Total character budget of recent Q/A pairs carried into a `/btw` follow-up (default 24000, range 1000-200000); oldest whole pairs are dropped first. Applies immediately |
 | btw.contextTurns | Number of most recent completed Q/A pairs explicitly carried into a `/btw` follow-up (default 4, range 1-8); older pairs stay in the thread and panel but are omitted from the request. Applies immediately |

@@ -723,6 +723,7 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
     // Edit/Write diff presentation (schema default 'auto'); the /settings
     // screen edits this key live through the dsh-tui namespace.
     diffLayout: config.diffLayout,
+    diffStyle: config.diffStyle,
     thinkingFold: config.thinkingFold,
     jobGroupFold: config.jobGroupFold,
     toolBackground: config.toolBackground,
@@ -865,6 +866,7 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
       tuiSettingsNs,
       Schema.object({
         diffLayout: Schema.union(['auto', 'split', 'unified']).default('auto'),
+        diffStyle: Schema.union(['default', 'bars']).default('default'),
         thinkingFold: Schema.union(['preview', 'full']).default('preview'),
         jobGroupFold: Schema.union(['auto', 'always', 'never']).default('auto'),
         toolBackground: Schema.union(['none', 'subtle', 'strong']).default('none'),
@@ -1000,6 +1002,7 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
     )
     type SettingsValue = {
       diffLayout?: 'auto' | 'split' | 'unified'
+      diffStyle?: 'default' | 'bars'
       lang?: 'zh' | 'en'
       whale?: boolean
       whaleIdle?: boolean
@@ -1053,7 +1056,9 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
       shortcuts?: Partial<Record<ShortcutActionId, string>>
     }
     const applyLayout = (value: SettingsValue): void => {
-      if (!shadow) channel.setDiffLayout(value.diffLayout ?? config.diffLayout ?? 'auto')
+      if (shadow) return
+      channel.setDiffLayout(value.diffLayout ?? config.diffLayout ?? 'auto')
+      channel.setDiffStyle(value.diffStyle ?? config.diffStyle ?? 'default')
     }
     const applyWhale = (value: { whale?: boolean }): void => {
       if (shadow) return
@@ -1309,6 +1314,9 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
         },
         {
           ...settingField('diffLayout'),
+        },
+        {
+          ...settingField('diffStyle'),
         },
         {
           ...settingField('thinkingFold'),

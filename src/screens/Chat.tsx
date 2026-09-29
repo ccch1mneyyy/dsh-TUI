@@ -6441,6 +6441,7 @@ export function Chat({
           onToggleStreamView={toggleStreamView}
           model={channel.modelDisplay ?? channel.model}
           diffLayout={channel.diffLayout}
+          diffStyle={channel.diffStyle}
           thinkingFold={channel.thinkingFold}
           jobGroupFold={channel.jobGroupFold}
           toolBackground={channel.toolBackground}
