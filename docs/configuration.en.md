@@ -66,7 +66,7 @@ A complete common override looks like this:
 | `whale` / `whaleIdle` | `true` / `true` | Header whale and welcome-page idle animation |
 | `splashFont` | `daily` | Big-text face on the header splash: `daily` rotates by local date (the default), any other value is a face id (`bold` / `square` / `bevel` / `wide` / `dot` / `stencil` / `classic` / `slab`) pinning that one; an unknown value falls back to `daily`. Also editable through `/settings` |
 | `whaleGirl` | `false` | Swap the header's pixel whale for the maid: real raster FIRST (Kitty/Sixel); falls back to the character-art maid without them |
-| `minimal` | `false` | Reduce header decoration and colors |
+| `minimal` | `false` | Minimal UI (极简界面): reduce header decoration and colors. **A display switch only** — a different thing from the kernel's `minimal` agent preset under `preset` below (that one decides which tools the model can use) |
 | `modes` | built-in trio | Shift+Tab session-mode cycle (plan/sandbox/approval atom bundles); defaults to default → plan → full-access |
 | `activity` | `true` | Show the live activity row |
 | `activityFrames` | `moon8` | Activity animation preset; `/activity` changes it at runtime. A legacy saved value of `claude` is read as `moon8`, and the picker no longer offers that legacy preset |
@@ -142,9 +142,14 @@ preset registry: `@deepseek-ai/dsh-agent-preset-registry` on 0.1.7, or
 | --- | --- | --- |
 | `standard` | Standard (default) | Editing, shell, search, skills, planning, goals, subagents, and workflows |
 | `ptc` (0.1.2) / `code` (legacy 0.1.1) | PTC | Standard plus the PTC SDK presentation for composing operations in TypeScript; both names resolve compatibly across versions |
-| `minimal` | Minimal | Persistent Bash and `str_replace_editor` only, without compaction |
+| `minimal` | Minimal | Kernel agent preset: a single persistent-shell tool (bash on POSIX, pwsh on Windows), with no compaction, no plan mode and no runtime context. `str_replace_editor` has been opt-in since 0.1.3-alpha.2, so this preset does not include it |
 | `cordis` | Creation | Standard plus runtime inspection and plugin-experimentation tools |
-| `liangshen` | Liangshen mode | Minimal's two-tool surface first for root and delegated agents, the full catalog after the first tool call, and a fresh anchor after compaction |
+| `liangshen` | Liangshen mode | Minimal's minimal tool surface first for root and delegated agents, the full catalog after the first tool call, and a fresh anchor after compaction |
+
+> ⚠️ Do not confuse the 「极简模式」 (Minimal) preset here with `/settings → Appearance → 极简界面`
+> (Minimal UI, config key `dsh-tui.minimal`): the preset is a **kernel agent preset** and changes
+> which tools the model can see and call, while Minimal UI only trims interface decoration
+> (header splash, emoji glyphs, decorative colors, footer fields) and has no effect on capability.
 
 ### Selecting and switching
 

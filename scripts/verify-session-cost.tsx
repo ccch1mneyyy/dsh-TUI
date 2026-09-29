@@ -475,7 +475,7 @@ function makeProjector(state: Record<string, unknown>): { renderEvent: (event: u
   // 官方 provider + 未收录模型：token 有，金额恒为 0，unpricedTokens=150。
   const UNPRICED_MODEL = 'gpt-4o-unpriced-probe'
   const channel = {
-    minimal: false,
+    minimalUi: false,
     statusBar: { cost: true },
     provider: 'deepseek',
     model: 'unpriced-probe-model',

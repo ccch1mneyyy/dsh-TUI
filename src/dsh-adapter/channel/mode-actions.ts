@@ -11,6 +11,35 @@ import type { createChannelBinding } from './binding.js'
 type Binding = ReturnType<typeof createChannelBinding>
 type ModeState = Pick<ChannelState, 'mode' | 'modeIndex' | 'emit'>
 
+/**
+ * Fail-soft reporting for a session-mode write. The mutation path reaches
+ * kernel-owned state (`session.append`, `approval.setPolicy` → the agent
+ * inbox) that can legitimately refuse while a turn is publishing, and the
+ * keyboard entry point (`Shift+Tab`) cannot await it — a rejection there
+ * becomes an unhandledRejection, which the process guard treats as fatal and
+ * which kills the TUI with the session still open. A refused switch is a
+ * user-visible outcome, not a crash: log it, say so in the status line, and
+ * re-derive the indicator from the durable log so the UI cannot keep showing
+ * a mode the session never entered. Shared by the base actions and the
+ * permission-aware composition so both report the same way.
+ */
+export function reportModeSwitchFailure(
+  ctx: Context,
+  notify: ChannelState['notify'],
+  refreshMode: () => void,
+  error: unknown,
+): void {
+  const message = error instanceof Error ? error.message : String(error)
+  ctx.logger.warn(`dsh-tui: session mode switch failed: ${message}`)
+  notify(t('mode-switch-failed', { err: message }), { color: 'error', timeoutMs: 8000 })
+  try {
+    refreshMode()
+  } catch {
+    // Re-deriving the indicator is best effort — the failure itself is
+    // already reported, and a broken fold must not become a second throw.
+  }
+}
+
 /** Durable session-mode folds and transitions. Construction is inert; root wires it after state construction. */
 export function createModeActions(
   ctx: Context,
@@ -159,8 +188,18 @@ const prePlanModeSpec = (log: readonly SessionEvent[]): SessionModeSpec | undefi
     }
   }
 
-/** Apply the configured atoms; an explicit exit owns its target mode. */
-  const applyMode = async (spec: SessionModeSpec, capture = binding.capture()): Promise<void> => {
+/** Apply the configured atoms; an explicit exit owns its target mode.
+ *  Never rejects: a refused kernel write is reported, not thrown (see
+ *  {@link reportModeSwitchFailure}). */
+  const applyMode = async (spec: SessionModeSpec, capture?: ModeCapture): Promise<void> => {
+    try {
+      await applyModeUnsafe(spec, capture ?? binding.capture())
+    } catch (error) {
+      reportModeSwitchFailure(ctx, notify, refreshMode, error)
+    }
+  }
+
+  const applyModeUnsafe = async (spec: SessionModeSpec, capture: ModeCapture): Promise<void> => {
     if (!current(capture)) return
     // This action writes durable session policy. The runtime snapshot comes
     // from composition and is immutable for this Channel lifetime, so an
@@ -227,10 +266,16 @@ const prePlanModeSpec = (log: readonly SessionEvent[]): SessionModeSpec | undefi
  *  from the mode DERIVED from the session log (never a stored index), so
  *  manual `/plan` use can never desync the cycle. */
   const cycleMode = async (): Promise<void> => {
-    const capture = binding.capture()
-    if (!current(capture)) return
-    const index = deriveModeIndex(snapshotLiveSessionEvents(capturedSession(capture)))
-    await applyMode(sessionModes[(index + 1) % sessionModes.length]!, capture)
+    try {
+      const capture = binding.capture()
+      if (!current(capture)) return
+      const index = deriveModeIndex(snapshotLiveSessionEvents(capturedSession(capture)))
+      await applyMode(sessionModes[(index + 1) % sessionModes.length]!, capture)
+    } catch (error) {
+      // The fold/capture ahead of the write can fail too (a dead binding, an
+      // unreadable log); same contract as the write itself — report it.
+      reportModeSwitchFailure(ctx, notify, refreshMode, error)
+    }
   }
 
   const onSessionEvent = (session: Agent['session'], event: SessionEvent): void => {

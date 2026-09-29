@@ -357,8 +357,8 @@ export const TIPS: readonly Tip[] = [
   {
     id: 'cmd-preset',
     group: 'commands',
-    zh: '/preset 切换 agent 预设（standard/ptc 等）',
-    en: '/preset switches presets: standard/ptc/minimal/cordis/liangshen',
+    zh: '/preset 切换内核 Agent 预设（standard/ptc 等）',
+    en: '/preset switches the kernel agent preset: standard/ptc/minimal/cordis/liangshen',
   },
   {
     id: 'cmd-preset-liangshen',
@@ -689,6 +689,12 @@ export const TIPS: readonly Tip[] = [
     en: 'In /settings, diffLayout switches split/unified diff',
   },
   {
+    id: 'disp-minimal-ui',
+    group: 'display',
+    zh: '/settings「极简界面」只精简装饰；内核「极简模式」预设减少模型可用工具',
+    en: 'Minimal UI (/settings) trims decorations only; the kernel Minimal preset cuts the model\'s tools',
+  },
+  {
     id: 'disp-settings-save',
     group: 'display',
     zh: '/settings 改动自动保存，Esc 直接退出',
@@ -861,8 +867,8 @@ export const TIPS: readonly Tip[] = [
   {
     id: 'pit-minimal',
     group: 'pitfalls',
-    zh: 'minimal preset 下 /compact 与问卷不可用',
-    en: '/compact and questions are unavailable under minimal preset',
+    zh: '内核「极简模式」预设下 /compact 与问卷不可用（与「极简界面」无关）',
+    en: 'Under the kernel Minimal preset /compact and questions are off (not the Minimal UI switch)',
   },
   {
     id: 'pit-mouse-mode',

@@ -165,8 +165,6 @@ export function createExternalCommandInvoker(
     rawInput: string,
     imageRefs: readonly ComposerImageRef[] = [],
   ): Promise<ExternalCommandOutcome | undefined> => {
-    const capture = deps.capture()
-    assertCapabilityShadowPolicy('host.commands.invoke', deps.runtime.mode as never, deps.runtime.slices)
     const service = deps.commandService
     if (service === undefined) return undefined
     const commandAgent = deps.agent()
@@ -176,6 +174,14 @@ export function createExternalCommandInvoker(
     // apply another scope's owner policy.
     const definition = service.find(commandAgent, name)
     try {
+      // The channel-lifetime capture and the shadow/capability policy check
+      // live INSIDE the try: both can throw (a lease that ended between
+      // keystrokes, a shadow-mode denial), and `invoke` is an async action
+      // whose callers treat a rejection as unhandled — the same refusal must
+      // degrade to the settled `{ kind: 'error' }` outcome every other
+      // failure below uses.
+      const capture = deps.capture()
+      assertCapabilityShadowPolicy('host.commands.invoke', deps.runtime.mode as never, deps.runtime.slices)
       const signal = new AbortController().signal
       const line = `/${name}${rawInput}`
       const batch = await registryCommandImages(

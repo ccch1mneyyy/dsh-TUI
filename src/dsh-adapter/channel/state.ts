@@ -41,7 +41,9 @@ export interface ChannelLaunchOptions {
   /** Maid portrait for the header splash (settings `dsh-tui.whaleGirl`;
    * off by default). */
   whaleGirl?: boolean
-  minimal?: boolean
+  /** Minimal UI (settings key `dsh-tui.minimal`, 极简界面 / "Minimal UI"):
+   *  purely a decoration switch. NOT the kernel agent preset `minimal`. */
+  minimalUi?: boolean
   contextBar?: boolean
   configuredPreset?: string
   configuredProvider?: string
@@ -71,8 +73,8 @@ export function createInitialChannelView(
   'configuredPreset' | 'configuredActivityFrames' | 'configuredLang' | 'diffLayout' |
   'thinkingFold' | 'toolBackground' | 'scrollGutter' | 'pageMargin' |
   'foldTerminalCommand' | 'promptSessionLabel' | 'expandEditor' | 'smoothStreaming' |
-  'statusBar' | 'whale' | 'whaleIdle' | 'splashFont' | 'minimal' | 'activityEnabled' | 'contextBarEnabled' |
-  'statusBar' | 'whale' | 'whaleIdle' | 'whaleGirl' | 'minimal' | 'activityEnabled' | 'contextBarEnabled' |
+  'statusBar' | 'whale' | 'whaleIdle' | 'splashFont' | 'minimalUi' | 'activityEnabled' | 'contextBarEnabled' |
+  'statusBar' | 'whale' | 'whaleIdle' | 'whaleGirl' | 'minimalUi' | 'activityEnabled' | 'contextBarEnabled' |
   'agentPreset' | 'goal' | 'todos' | 'loadedContext' | 'pending' | 'commandList' |
   'lastUsage' | 'tps' | 'tpsSamples' | 'contextSegments' | 'mainCost' | 'subagentCost' | 'subagents' | 'backgroundJobs' | 'selection'
 > {
@@ -93,7 +95,7 @@ export function createInitialChannelView(
     pageMargin: normalizePageMargin(options.pageMargin), foldTerminalCommand: options.foldTerminalCommand === true,
     promptSessionLabel: options.promptSessionLabel === true, expandEditor: options.expandEditor !== false,
     smoothStreaming: options.smoothStreaming !== false, statusBar: normalizeStatusBar(options.statusBar),
-    whale: options.whale !== false, whaleIdle: options.whaleIdle !== false, whaleGirl: options.whaleGirl === true, splashFont: normalizeSplashFont(options.splashFont), minimal: options.minimal === true, activityEnabled: options.activity !== false,
+    whale: options.whale !== false, whaleIdle: options.whaleIdle !== false, whaleGirl: options.whaleGirl === true, splashFont: normalizeSplashFont(options.splashFont), minimalUi: options.minimalUi === true, activityEnabled: options.activity !== false,
     contextBarEnabled: options.contextBar !== false, agentPreset: options.agentPreset, goal: undefined,
     todos: [], loadedContext: undefined, pending: [], commandList: [], lastUsage: undefined,
     tps: undefined, tpsSamples: [], contextSegments: { system: 0, prompt: 0, assistant: 0, thinking: 0, tools: 0 },

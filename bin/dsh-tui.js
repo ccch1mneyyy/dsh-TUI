@@ -751,6 +751,23 @@ const rescueEnv = () => {
   return env
 }
 
+// 安全模式「重试正常启动」的环境（菜单选项 1，首启 fallback 与 `safe` 共用）：
+// 崩溃往往发生在 TUI 的退出漏斗之前，此时 `~/.dsh-tui/resume.txt` 是"用户上
+// 一刻在哪个会话"的唯一线索（TUI 侧崩溃分支也会写它，见
+// src/dsh-adapter/plugin.ts 的退出漏斗）。不带这个变量重试等于开一个新的空会话
+// ——正是「会话丢了」的观感。已经显式设了该变量（用户自己 `--resume`）则不覆盖；
+// 指针缺失/不可读时保持冷启动语义。
+const resumeEnvForRetry = () => {
+  if (process.env.DSH_TUI_RESUME_SESSION !== undefined) return process.env
+  let target = ''
+  try {
+    target = readFileSync(join(homedir(), '.dsh-tui', 'resume.txt'), 'utf8').trim()
+  } catch {
+    // 没有历史会话可恢复——静默冷启动。
+  }
+  return target === '' ? process.env : { ...process.env, DSH_TUI_RESUME_SESSION: target }
+}
+
 // TTY 判定：询问与菜单都要求 stdin/stdout 均可交互（readline 需要 stdin，
 // 菜单可读需要 stdout）；任一非 TTY（脚本/管道/headless 宿主）走降级。
 const isInteractive = () => Boolean(process.stdin.isTTY && process.stdout.isTTY)
@@ -1071,7 +1088,7 @@ const settleFirstResult = async (result, firstArgs) => {
   if (result.kind === 'error') {
     console.error(msg('launchFailed')(result.error))
     if (isInteractive()) {
-      if (await askSafeEntry(1)) process.exit(await runSafeSession({ pendingExitCode: 1, retryDsh: () => startDshSession(firstArgs) }))
+      if (await askSafeEntry(1)) process.exit(await runSafeSession({ pendingExitCode: 1, retryDsh: () => startDshSession(firstArgs, PROFILE, resumeEnvForRetry()) }))
     } else {
       console.error(msg('safeHint')(1))
     }
@@ -1082,7 +1099,7 @@ const settleFirstResult = async (result, firstArgs) => {
     console.error(msg('profileExited')(result.code))
     if (isInteractive()) {
       if (await askSafeEntry(result.code)) {
-        process.exit(await runSafeSession({ pendingExitCode: result.code, retryDsh: () => startDshSession(firstArgs) }))
+        process.exit(await runSafeSession({ pendingExitCode: result.code, retryDsh: () => startDshSession(firstArgs, PROFILE, resumeEnvForRetry()) }))
       }
     } else {
       console.error(msg('safeHint')(result.code))

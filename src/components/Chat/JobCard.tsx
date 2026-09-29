@@ -5,7 +5,7 @@ import type { JobRow } from '../../dsh-adapter/channel.js'
 import type { Theme } from '../../theme.js'
 import { t } from '../../i18n.js'
 import { stringWidth } from '../../ink/stringWidth.js'
-import { isMinimalMode } from '../../minimalMode.js'
+import { isMinimalUiMode } from '../../minimalUiMode.js'
 
 /** The waterfall window mirrors the subagent card: a constant-height region. */
 const WATERFALL_ROWS = 3
@@ -19,18 +19,18 @@ const WATERFALL_GUTTER = 4
  *  U+2699 is East-Asian Ambiguous: ink measures it 1 cell while CJK
  *  terminal fonts paint it 2, so the following text overlaps the glyph. */
 function statusInfo(status: BackgroundJobStatus): { glyph: string; label: string; color: keyof Theme | undefined } {
-  const minimal = isMinimalMode()
+  const minimalUi = isMinimalUiMode()
   switch (status) {
     case 'completed':
-      return { glyph: '✓', label: t('jobs-status-completed'), color: minimal ? undefined : 'success' }
+      return { glyph: '✓', label: t('jobs-status-completed'), color: minimalUi ? undefined : 'success' }
     case 'failed':
-      return { glyph: '✗', label: t('jobs-status-failed'), color: minimal ? undefined : 'error' }
+      return { glyph: '✗', label: t('jobs-status-failed'), color: minimalUi ? undefined : 'error' }
     case 'killed':
-      return { glyph: '✗', label: t('jobs-status-killed'), color: minimal ? undefined : 'error' }
+      return { glyph: '✗', label: t('jobs-status-killed'), color: minimalUi ? undefined : 'error' }
     case 'stopping':
-      return { glyph: '●', label: t('jobs-status-stopping'), color: minimal ? undefined : 'warning' }
+      return { glyph: '●', label: t('jobs-status-stopping'), color: minimalUi ? undefined : 'warning' }
     default:
-      return { glyph: '●', label: t('jobs-status-running'), color: minimal ? undefined : 'warning' }
+      return { glyph: '●', label: t('jobs-status-running'), color: minimalUi ? undefined : 'warning' }
   }
 }
 

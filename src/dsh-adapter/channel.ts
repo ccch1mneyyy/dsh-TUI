@@ -500,6 +500,15 @@ function createChannelWithOwner(
       mode: sessionModes[0]!,
       cwdDescription: workspaceService.describe(options.cwd).description ?? options.cwd,
     }),
+    // Deprecated pre-rename alias of `minimalUi`. An accessor is required here
+    // (a field set in createInitialChannelView would be copied by the spread
+    // into a stale data property). Read-only on purpose: the only supported
+    // write path is `setMinimalUi()` / its `setMinimal()` alias, and the
+    // frozen `ChannelUi` view third-party scenes receive exposes it read-only
+    // anyway.
+    get minimal(): boolean {
+      return state.minimalUi
+    },
     commandList: LOCAL_COMMANDS,
     ...actionMethods,
     subagentControl,

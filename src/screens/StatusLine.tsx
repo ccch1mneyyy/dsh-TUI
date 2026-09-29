@@ -53,20 +53,20 @@ import type { WaveBand } from '../dsh-adapter/types.js'
  */
 
 /**
- * Minimal mode's footer config. It ignores every SAVED preference (built from
+ * The minimal UI's footer config. It ignores every SAVED preference (built from
  * scratch rather than `normalizeStatusBar(channel.statusBar)`) and pins the
  * DECORATION switches OFF — the shared defaults are free to change
- * (`contextBar` became default-on in 2026-09) and minimal mode must not follow
+ * (`contextBar` became default-on in 2026-09) and the minimal UI must not follow
  * them into the footer.
  *
- * The metric fields keep their `DEFAULT_STATUS_BAR` values on purpose: minimal
- * mode has ALWAYS shown the default-on metrics (thinking / contextUsage /
+ * The metric fields keep their `DEFAULT_STATUS_BAR` values on purpose: the
+ * minimal UI has ALWAYS shown the default-on metrics (thinking / contextUsage /
  * cache / cost / goal) next to model + cwd — that predates the long-line fold
  * and the context-bar flip, and trimming them further is a product decision,
  * not a regression fix. Module scope: one frozen object, no per-render
  * allocation.
  */
-const MINIMAL_STATUS_BAR: StatusBarConfig = Object.freeze({
+const MINIMAL_UI_STATUS_BAR: StatusBarConfig = Object.freeze({
   ...DEFAULT_STATUS_BAR,
   compact: true,
   model: true,
@@ -184,10 +184,10 @@ export function StatusLine({
     onMouseLeave: () => setHover(current => (current === id ? null : current)),
   }), [])
 
-  const statusBar: StatusBarConfig = channel.minimal
-    // Minimal mode overrides every field switch: model + cwd only, so the
+  const statusBar: StatusBarConfig = channel.minimalUi
+    // The minimal UI overrides every field switch: model + cwd only, so the
     // footer can never grow decorations regardless of saved preferences.
-    ? MINIMAL_STATUS_BAR
+    ? MINIMAL_UI_STATUS_BAR
     : normalizeStatusBar(channel.statusBar)
   // Provider workspaces expose a remote display path alongside a host alias;
   // only the local target has identical cwd/displayCwd values to fold.
@@ -407,7 +407,7 @@ const selectionBadge = formatSelectionBadge(channel.selection)
       ? [{
           key: 'goal',
           id: 'goal' as const,
-          node: <GoalStatusChip goal={channel.goal} minimal={channel.minimal} />,
+          node: <GoalStatusChip goal={channel.goal} minimal={channel.minimalUi} />,
         }]
       : []),
     ...(statusBar.gitBranch && channel.gitBranch
@@ -504,10 +504,10 @@ const selectionBadge = formatSelectionBadge(channel.selection)
   // on hover is what made the footer grow mid-gesture and shoved the
   // transcript up (user feedback). Idle it may sit blank: a stable footer
   // outranks a reclaimable row, and hovering only ever swaps this line's
-  // content. Minimal mode keeps the old contract — no hover details, the
+  // content. The minimal UI keeps the old contract — no hover details, the
   // row appears only for real content (which its defaults never produce).
   const showSupplementalRow =
-    (!channel.minimal && (hasStatusFields || barVisible)) ||
+    (!channel.minimalUi && (hasStatusFields || barVisible)) ||
     showActivity ||
     showTrajectory ||
     hint !== ''

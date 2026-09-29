@@ -140,11 +140,11 @@ export const SETTING_DEFINITIONS = {
     kind: 'boolean',
   },
   'minimal': {
-    label: 'Minimal mode',
-    descriptions: { zh: '极简模式' },
+    label: 'Minimal UI',
+    descriptions: { zh: '极简界面' },
     group: 'appearance',
-    hint: 'Hide the header splash, emoji glyphs, and decorative colors; code highlight and tool colors stay. Trims the status bar to model + cwd.',
-    hintDescriptions: { zh: '隐藏开屏头部、emoji 状态符与装饰性配色；代码高亮与工具配色保留，底栏只留模型与目录。' },
+    hint: 'Interface only: hide the header splash, emoji glyphs and decorative colors, and trim the status bar to model + cwd; code highlight and tool colors stay. NOT the agent preset — the kernel\'s own `minimal` preset is a separate, model-facing choice that decides which tools the model can use (see /preset).',
+    hintDescriptions: { zh: '只精简界面：隐藏开屏头部、emoji 状态符与装饰性配色，底栏只留模型与目录；代码高亮与工具配色保留。这是界面开关，不是 Agent 预设——模型能用哪些工具由内核预设决定（见 /preset）。' },
     kind: 'boolean',
   },
   'pageMargin': {
