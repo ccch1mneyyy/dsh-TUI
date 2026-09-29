@@ -90,19 +90,23 @@ const restoreDshAuth = await stageBundledDshAuth()
 try {
   // The rewritten manifest is, by design, out of sync with pnpm-lock.yaml
   // (workspace:* dependencies become exact optionalDependencies). npm runs
-  // prepare -> compile inside this window, and any root-workspace pnpm
-  // invocation there (build:mathjax's "pnpm --filter ... run build") trips
-  // pnpm's verify-deps-before-run: it sees the "stale" lockfile and tries a
-  // remedial install, which is frozen in CI and fails the publish
-  // (ERR_PNPM_OUTDATED_LOCKFILE). The dependency tree on disk is the one
-  // the outer job just installed and compiled against, so the check adds
-  // nothing here — disable it for the spawned command only.
-  const result = spawnSync(command, args, {
+  // prepare -> compile against the rewritten manifest inside this window,
+  // and the pnpm sub-installs in that chain then die on
+  // ERR_PNPM_OUTDATED_LOCKFILE (frozen in CI). The check cannot be disabled
+  // via env either: npm strips unknown npm_config_* variables from the
+  // environment it hands to scripts ("npm warn Unknown env config
+  // verify-deps-before-run"). The publishing job has already run the full
+  // install + compile + package gates on the pristine manifest, so the
+  // publish itself skips lifecycle scripts; packing collects the built
+  // lib/ and the staged bundles exactly as before.
+  const npmArgs = command === 'npm' && args[0] === 'publish'
+    ? ['publish', '--ignore-scripts', ...args.slice(1)]
+    : args
+  const result = spawnSync(command, npmArgs, {
     cwd: projectRoot,
     encoding: 'utf8',
     shell: process.platform === 'win32' && command === 'npm',
     stdio: ['ignore', 'pipe', 'pipe'],
-    env: { ...process.env, npm_config_verify_deps_before_run: 'false' },
   })
   if (result.stdout) process.stdout.write(result.stdout)
   if (result.stderr) process.stderr.write(result.stderr)
