@@ -37,10 +37,13 @@ const MAX_PASTED_PATH_CHARS = 4096
  *   copy — Warp and friends forward file copies as plain path text; the
  *   backslash separators decode literally in the bare-token branch)
  * - a `file://` URL, quoted or bare: the URI half of the OSC 8 hyperlink a
- *   Windows drag-and-drop emits. Once the escape bytes are stripped (see
- *   `cleanPastePayload` in `ink/parse-keypress.ts`) the URL is what is left,
- *   so decoding it here re-attaches the drop to the image pipeline instead of
- *   inserting `file:///C:/…` as prose.
+ *   Windows drag-and-drop emits. The drop frame is recognized and decoded
+ *   before this parser runs — `readOsc8Frame` / `osc8DropPath` /
+ *   `localPathOfFileUri` in `ink/parse-keypress.ts` require a complete frame
+ *   set and hand the composer an already-decoded local path — so this branch
+ *   covers a URI that reaches the paste as literal text; decoding it here
+ *   re-attaches the drop to the image pipeline instead of inserting
+ *   `file:///C:/…` as prose.
  *
  * The decoded path must be absolute (or `~/…`, expanded) and carry a
  * supported image extension. Everything else — multiple tokens, relative
