@@ -2274,7 +2274,18 @@ export function PromptInput({
     // indentation arm so the expanded editor participates in the cycle too —
     // the parser reports backtab as key.tab + key.shift.
     if (key.tab && key.shift) {
-      void channel.cycleMode()
+      // The key is consumed either way. `cycleMode` is best-effort inside the
+      // channel, but a dropped rejection here would be an unhandledRejection
+      // (the process guard rethrows everything that is not React #185), and
+      // an unhandled rejection kills the TUI with the session still open —
+      // so the caller keeps a catch of its own rather than `void`ing the
+      // promise (the sibling `/permission` entry point does the same).
+      void channel.cycleMode().catch((error: unknown) => {
+        channel.notify(t('mode-switch-failed', { err: error instanceof Error ? error.message : String(error) }), {
+          color: 'error',
+          timeoutMs: 8000,
+        })
+      })
       return
     }
     // Expanded editor: plain Tab inserts indentation; Shift+Tab was handled

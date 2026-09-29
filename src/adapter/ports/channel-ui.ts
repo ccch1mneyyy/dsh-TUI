@@ -167,8 +167,26 @@ export interface ChannelUi {
   readonly splashFont: SplashFontSetting
   /** Apply a maid-portrait change (see the public Channel type). */
   setWhaleGirl(enabled: boolean): void
-  /** Minimal mode (settings `dsh-tui.minimal`): no header splash, no emoji
-   *  glyphs, no decorative colors; code highlight and tool colors stay. */
+  /** Minimal UI (settings key `dsh-tui.minimal`, labeled 极简界面 /
+   *  "Minimal UI"): no header splash, no emoji glyphs, no decorative colors;
+   *  code highlight and tool colors stay. This is the INTERFACE switch and
+   *  has nothing to do with the kernel's agent preset `minimal` (极简模式 /
+   *  "Minimal"), which changes the model-facing tool catalog. */
+  readonly minimalUi: boolean
+  /** @deprecated Pre-rename alias of {@link minimalUi}; reads the same flag.
+   *  Kept because plugin scenes receive this port through
+   *  `TuiSceneProps.channel` (a published surface). Use `minimalUi`.
+   *
+   *  REMOVAL: v0.12 — the first minor after the rename shipped in v0.11.2,
+   *  which is the one-minor deprecation window `docs/plugins.md` promises for
+   *  a frozen seam. Delete `minimal` (and `setMinimal()` below, plus the
+   *  `'setMinimal': 'mutate'` row in `adapter/channel/ui-policy.ts`) in
+   *  v0.12, gated on one concrete audit: scan the scene-plugin consumption
+   *  surface — this repo's `src/**` re-exports and every plugin reached
+   *  through `TuiSceneProps.channel` on the dsh-tui-ecosystem org — for a
+   *  read of `.minimal` or a call to `.setMinimal(`. Zero consumer hits →
+   *  delete in v0.12; a hit found at that cut is migrated in the same
+   *  release instead of pushing the removal out again. */
   readonly minimal: boolean
   /** Whether the working-activity line is shown (config.activity); the line
    * itself is read from the plugin's session projection, not this port. */
@@ -613,5 +631,13 @@ export interface ChannelUi {
   setStatusBar(config: Partial<StatusBarConfig>): void
   setWhale(visible: boolean): void
   setSplashFont(setting: SplashFontSetting): void
+  /** Apply a minimal-UI change (see the public Channel type). */
+  setMinimalUi(enabled: boolean): void
+  /** @deprecated Pre-rename alias of {@link setMinimalUi}. Kept for plugin
+   *  scenes that call `channel.setMinimal()`; use `setMinimalUi`.
+   *
+   *  REMOVAL: v0.12, under the same audit as `minimal` above — a scene-plugin
+   *  consumption scan of `.minimal` / `.setMinimal(` with zero remaining
+   *  callers. */
   setMinimal(enabled: boolean): void
 }

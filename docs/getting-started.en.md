@@ -154,7 +154,9 @@ diagnostics, a profile plugin inventory, and repair guidance.
     startup hang (a spawn failure counts as exit code 1).
 - **Read-only**: diagnostics, inventory, and guidance never change state. Two
   exceptions:
-  - Retry normal startup.
+  - Retry normal startup; when `~/.dsh-tui/resume.txt` holds a pointer it is
+    passed along (`DSH_TUI_RESUME_SESSION`), so a retry after a crash returns
+    to the session you were in instead of a blank one.
   - Create/reuse the rescue profile, writing only to
     `$DSH_HOME/profiles/dsh-tui-safe/`.
   Note: every dsh launch writes `$DSH_HOME/profiles/node_modules` fallback

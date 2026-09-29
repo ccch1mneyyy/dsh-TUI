@@ -6,7 +6,7 @@ import { t } from '../i18n.js'
 import { Divider } from './design-system/Divider.js'
 import { ExitButton } from './SubagentDashboard.js'
 import { isPlainReturnInput } from '../utils/modifiers.js'
-import { isMinimalMode } from '../minimalMode.js'
+import { isMinimalUiMode } from '../minimalUiMode.js'
 import { stringWidth } from '../ink/stringWidth.js'
 
 export interface JobsPanelProps {
@@ -17,18 +17,18 @@ export interface JobsPanelProps {
 }
 
 function statusInfo(status: BackgroundJobStatus): { glyph: string; label: string; color: keyof Theme | undefined } {
-  const minimal = isMinimalMode()
+  const minimalUi = isMinimalUiMode()
   switch (status) {
     case 'completed':
-      return { glyph: minimal ? '✓' : '●', label: t('jobs-status-completed'), color: minimal ? undefined : 'success' }
+      return { glyph: minimalUi ? '✓' : '●', label: t('jobs-status-completed'), color: minimalUi ? undefined : 'success' }
     case 'failed':
-      return { glyph: minimal ? '×' : '●', label: t('jobs-status-failed'), color: minimal ? undefined : 'error' }
+      return { glyph: minimalUi ? '×' : '●', label: t('jobs-status-failed'), color: minimalUi ? undefined : 'error' }
     case 'killed':
-      return { glyph: minimal ? '×' : '●', label: t('jobs-status-killed'), color: minimal ? undefined : 'error' }
+      return { glyph: minimalUi ? '×' : '●', label: t('jobs-status-killed'), color: minimalUi ? undefined : 'error' }
     case 'stopping':
-      return { glyph: minimal ? '·' : '●', label: t('jobs-status-stopping'), color: minimal ? undefined : 'warning' }
+      return { glyph: minimalUi ? '·' : '●', label: t('jobs-status-stopping'), color: minimalUi ? undefined : 'warning' }
     default:
-      return { glyph: minimal ? '·' : '●', label: t('jobs-status-running'), color: minimal ? undefined : 'warning' }
+      return { glyph: minimalUi ? '·' : '●', label: t('jobs-status-running'), color: minimalUi ? undefined : 'warning' }
   }
 }
 

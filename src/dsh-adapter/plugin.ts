@@ -72,6 +72,7 @@ import instances from '../ink/instances.js'
 import { cursorMove, DISABLE_KITTY_KEYBOARD, DISABLE_MODIFY_OTHER_KEYS, DISABLE_WIN32_INPUT_MODE } from '../ink/termio/csi.js'
 import { DBP, DFE, DISABLE_MOUSE_TRACKING, EXIT_ALT_SCREEN, SHOW_CURSOR } from '../ink/termio/dec.js'
 import { CLEAR_ITERM2_PROGRESS, CLEAR_TAB_STATUS, supportsTabStatus, wrapForMultiplexer } from '../ink/termio/osc.js'
+import { fatalReasonForExit, registerProcessGuardFatalSink } from '../ink/update-overflow-guard.js'
 
 /**
  * Interactive TUI front door for DeepSeek Harness agents.
@@ -316,10 +317,10 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
   const userQuestions = ctx.get('userQuestions') ?? new UserQuestionService(ctx)
   ctx.plugin(toolAskUser)
   // The host-level tool mount above is intentional for the TUI and for user
-  // presets, but the official Minimal preset is a strict two-tool trajectory
-  // (persistent bash + str_replace_editor). Filter only that preset at the
-  // final assembly boundary. Reading the session on every assembly also makes
-  // blank-session /preset switches and resumed sessions behave correctly.
+  // presets, but the official Minimal preset is a single-tool trajectory (one
+  // persistent shell: bash on POSIX, pwsh on Windows). Filter only that preset
+  // at the final assembly boundary. Reading the session on every assembly also
+  // makes blank-session /preset switches and resumed sessions behave correctly.
   ctx.on('system-prompt/assemble', async (_assembly, context, next) => {
     const assembled = await next()
     const presetId = context.agent === undefined ? undefined : runningPresetOf(context.agent.session)
@@ -739,8 +740,9 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
         // (undefined → daily), so cordis.yml stays decisive and junk lands on
         // daily.
         splashFont: Schema.string(),
-        // Minimal mode: strips the header splash, emoji glyphs, and
-        // decorative colors; code highlight and tool colors stay.
+        // Minimal UI (极简界面, settings key `minimal` — never renamed): strips
+        // the header splash, emoji glyphs, and decorative colors; code highlight
+        // and tool colors stay. Unrelated to the kernel agent preset `minimal`.
         minimal: Schema.boolean().default(false),
         // No default on purpose: an unset `lang` keeps the field showing
         // the effective language (see the section's format below) and lets
@@ -814,9 +816,11 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
       if (shadow) return
       channel.setSplashFont(normalizeSplashFont(value.splashFont ?? config.splashFont))
     }
-    const applyMinimal = (value: { minimal?: boolean }): void => {
+    const applyMinimalUi = (value: { minimal?: boolean }): void => {
       if (shadow) return
-      channel.setMinimal(value.minimal ?? false)
+      // `value.minimal` is the persisted settings key (never renamed); the
+      // channel member is the minimal-UI flag, NOT the kernel preset.
+      channel.setMinimalUi(value.minimal ?? false)
     }
     // Renderer settings are resolved before mount; later edits wait for restart.
     const applyRendererSettings = (value: SettingsValue): void => {
@@ -897,7 +901,7 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
       applyWhaleIdle(next)
       applyWhaleGirl(next)
       applySplashFont(next)
-      applyMinimal(next)
+      applyMinimalUi(next)
       applyLang(next)
       applyDisplay(next)
       applyEffortDefault(next)
@@ -1282,6 +1286,23 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
       if (error !== undefined) {
         const message = error instanceof Error ? error.message : String(error)
         ctx.logger.error(`dsh-tui: exit after error: ${message}`)
+        // A crash must leave the resume marker a clean exit would leave: the
+        // launcher's next start (and its safe-mode retry) then reopens the
+        // session the user was actually in instead of a blank one. Only the
+        // resumable case writes — unlike the clean-exit branch below, a crash
+        // never CLEARS a marker, so a session the user still has cannot be
+        // dropped by a failure that happened before the first message landed.
+        try {
+          if (isExitResumable({
+            pendingCount: channel.pending.length,
+            liveAgent: ctx.agents.get(SessionId(channel.agentId)),
+            startupAgent: agent,
+          })) {
+            writeResumeTarget(channel.agentId)
+          }
+        } catch {
+          // Resume persistence is best effort and must never block the exit.
+        }
         void finishExit(
           ctx,
           instance,
@@ -1366,6 +1387,26 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
     },
   })
   const handleExit = funnel.handleExit
+
+  // Process-level crash backstop (see installNestedUpdateOverflowProcessGuard):
+  // an uncaught exception or unhandled rejection that is NOT the React #185
+  // overflow would otherwise take Node's default path and kill the process
+  // before this funnel runs — no resume marker, no terminal restore, and the
+  // launcher's "entered safe mode" prompt on what looks like a lost session.
+  // Route it through the same teardown a fatal RENDER error uses: unmount,
+  // `dsh-tui crashed: …`, dispose, exit 1. Fail loud stays intact — the funnel
+  // returns false when it has already settled or the tree is being torn down
+  // (host recompose), and the guard then rethrows to Node's default crash.
+  // DSH_TUI_NO_185_PROCESS_GUARD=1 skips the guard entirely, leaving process
+  // error policy to the host exactly as before.
+  registerProcessGuardFatalSink((error, origin) => {
+    // An undefined reason (`Promise.reject()`, `throw undefined`) must not reach
+    // the funnel as-is: `error !== undefined` is what selects the crash path, so
+    // a bare undefined would exit 0 while this sink claims the process.
+    const fatal = fatalReasonForExit(error, origin)
+    ctx.logger.error(`dsh-tui: fatal ${origin}: ${fatal instanceof Error ? fatal.message : String(fatal)}`)
+    return handleExit(fatal)
+  })
 
   // External injection controller: Chat fills it with `{ append, submit }`
   // every render; the injection socket (opened below) drives it. A ref rather
@@ -1569,6 +1610,10 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
   ctx.effect(() => () => {
     logMouseDebug('apply teardown')
     funnel.markTeardown()
+    // Drop the crash backstop with this mount: a torn-down funnel cannot own
+    // the process, so a later fatal error falls back to Node's default crash
+    // instead of reaching a disposed ctx.
+    registerProcessGuardFatalSink(undefined)
     rawChannel.releaseContributions()
     instance?.unmount()
   })
@@ -1789,7 +1834,14 @@ async function resolveAgent(
  * is always observed). Exported for scripts/verify-teardown-exit.tsx.
  */
 export function createExitFunnel(deps: { onUserExit: (error?: unknown) => void }): {
-  handleExit: (error?: unknown) => void
+  /**
+   * Settle the exit once.
+   * @returns true when this call ran the user-exit path (the funnel now owns
+   *  the process), false when it was already settled or the tree is being
+   *  torn down. A process-level crash backstop must fall back to Node's
+   *  default crash on false instead of swallowing the error.
+   */
+  handleExit: (error?: unknown) => boolean
   markTeardown: () => void
 } {
   let exited = false
@@ -1799,10 +1851,11 @@ export function createExitFunnel(deps: { onUserExit: (error?: unknown) => void }
       teardown = true
     },
     handleExit: (error?: unknown) => {
-      if (teardown) return
-      if (exited) return
+      if (teardown) return false
+      if (exited) return false
       exited = true
       deps.onUserExit(error)
+      return true
     },
   }
 }

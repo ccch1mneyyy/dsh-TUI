@@ -366,9 +366,10 @@ Full-screen view of the whole session timeline (doesn't pollute scrollback); key
 - `/model`: selector. **Switching = fork the session** (history kept, only routing changes, the old session stays in `/resume`);
   persisted to `~/.dsh-tui/model.json`.
 - Switching is rejected mid-turn.
-- `/preset` options: `standard` (default full features), `ptc`, `minimal` (bash+editor only, no compaction),
+- `/preset` options: `standard` (default full features), `ptc`, `minimal` (the kernel's Minimal preset: one persistent-shell tool only, no compaction, no plan mode),
   `cordis`, `liangshen` (Liangshen mode).
   **A session that already has messages can't switch** (blank-only): the choice only becomes the default for the next `/new`.
+  This is a **kernel agent preset** deciding which tools the model can use; `/settings → Minimal UI` (极简界面) on the display side is unrelated.
 - Cycle session mode with `Shift+Tab`: default (workspace-write + approval) → plan (read-only) →
   full (danger-full-access).
 - Third-party permission presets follow in registry order at the end.
@@ -476,6 +477,7 @@ Common items below, full list on the /settings screen. Most topics (**Appearance
 |---|---|
 | lang | UI language zh/en (locked when DSH_TUI_LANG is pinned) |
 | fullscreen | fullscreen mode (default on); takes effect after `/restart` |
+| minimal | Minimal UI (default off): hide the header splash, emoji glyphs and decorative colors, and trim the footer to model + cwd; code highlight and tool colors stay. **An interface switch** with no effect on model capability — do not confuse it with the kernel Minimal agent preset in `/preset` |
 | terminalImages | terminal image preview (default on, needs terminal support); takes effect after `/restart`. Off shows text only and skips preview decode, sending images to the model is unaffected |
 | imageBacking | image backing (default `transparent`, same **Rendering** topic as the row above): what sits behind chat photos and illustrations. Transparent paints only the pixels of the image itself — the terminal background or wallpaper shows at anti-aliased edges and transparent corners; Terminal colour composites onto the terminal background for smooth soft edges. Applies immediately |
 | whale | pixel whale header (default on); three intro animations picked per launch (classic/heart/sleep), `/deepseek` egg re-rolls |

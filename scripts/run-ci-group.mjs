@@ -316,6 +316,15 @@ const GROUPS = {
 // 且有提示、已被本轮取走时如实报「撤不回来」且副本留在队列、文本不匹配的排队
 // 项一律不动。
     ["verify-prompt-history-queue-retract", ['node', 'scripts/verify-prompt-history-queue-retract.mjs']],
+// Shift+Tab 会话模式回归（真实 PromptInput + `\x1b[Z`）：一次按键恰好一次
+// cycleMode、不吃发送/排队；并钉住按键入口的失败契约——桩返回 rejected
+// promise 时入口必须自己兜住（通知 + 无 unhandledRejection + 处理器仍活），
+// 这条在缺 `.catch` 时必红。
+    ["verify-shift-tab-mode", ['node', 'scripts/verify-shift-tab-mode.mjs']],
+// 注：verify-permission-modes 不在此登记。该脚本在基线（dd413712）上本就有
+// 22 处失败（Shift+Tab 循环相关的动态 preset / 官方命令路径整段未过），
+// 与本次改动无关；把它放进阻塞组会直接红掉 input-terminal。等脚本自身修好
+// 后再单独登记。
   ],
   'session-workspace': [
 // 跨代理会话迁移回归（claude-code/codex/omp/zcode/grok-build → DSH sessions）：

@@ -13,7 +13,7 @@ import { AssistantThinkingMessage } from './messages/AssistantThinkingMessage.js
 import { AssistantToolUseMessage } from './messages/AssistantToolUseMessage.js'
 import { SubagentMessage } from './Chat/SubagentMessage.js'
 import { JobCard } from './Chat/JobCard.js'
-import { isMinimalMode } from '../minimalMode.js'
+import { isMinimalUiMode } from '../minimalUiMode.js'
 import { noteFrameCause, noteListGeometry } from '../ink/geometry-trace.js'
 import { getTerminalFlushTick } from '../ink/flush-tick.js'
 import { TurnInterruptedRow } from './TurnInterruptedRow.js'
@@ -1766,9 +1766,9 @@ export function LogoHeader({
    *  opening animation competes with transcript mount batches). */
   skipIntro?: boolean
 }): React.ReactNode {
-  // Minimal mode drops the whole splash (whale art AND wordmark) — only the
+  // The minimal UI drops the whole splash (whale art AND wordmark) — only the
   // transcript and a bare status bar remain.
-  if (isMinimalMode()) return null
+  if (isMinimalUiMode()) return null
   return (
     <Box flexDirection="column" marginBottom={1}>
       <LogoV2 model={model} effort={effort} cwd={cwd} fontId={fontId} whale={whale} whaleIdle={whaleIdle} whaleGirl={whaleGirl} starred={starred} onStarClick={onStarClick} working={working} skipIntro={skipIntro} />

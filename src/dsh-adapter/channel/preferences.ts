@@ -1,9 +1,19 @@
-import { setMinimalMode } from '../../minimalMode.js'
+import { setMinimalUiMode } from '../../minimalUiMode.js'
 import { normalizeSplashFont, type SplashFontSetting } from '../../components/splashFonts.js'
 import { normalizePageMargin, normalizeScrollGutter, normalizeStatusBar, normalizeToolBackground, type StatusBarConfig } from '../../tuiDisplayPrefs.js'
 import type { ChannelState } from '../channel/types.js'
 
-export function createPreferences(getState: () => Pick<ChannelState, 'diffLayout' | 'thinkingFold' | 'toolBackground' | 'scrollGutter' | 'pageMargin' | 'foldTerminalCommand' | 'promptSessionLabel' | 'expandEditor' | 'smoothStreaming' | 'statusBar' | 'whale' | 'whaleIdle' | 'whaleGirl' | 'splashFont' | 'minimal' | 'emit'>): Pick<ChannelState, 'setDiffLayout' | 'setThinkingFold' | 'setToolBackground' | 'setScrollGutter' | 'setPageMargin' | 'setFoldTerminalCommand' | 'setPromptSessionLabel' | 'setExpandEditor' | 'setSmoothStreaming' | 'setStatusBar' | 'setWhale' | 'setWhaleIdle' | 'setWhaleGirl' | 'setSplashFont' | 'setMinimal'> {
+/** The single minimal-UI write path: module store + channel field + one
+ *  revision. `setMinimalUi` and its deprecated `setMinimal` alias share it. */
+function applyMinimalUi(getState: () => Pick<ChannelState, 'minimalUi' | 'emit'>, enabled: boolean): void {
+  const state = getState()
+  setMinimalUiMode(enabled)
+  if (enabled === state.minimalUi) return
+  state.minimalUi = enabled
+  state.emit()
+}
+
+export function createPreferences(getState: () => Pick<ChannelState, 'diffLayout' | 'thinkingFold' | 'toolBackground' | 'scrollGutter' | 'pageMargin' | 'foldTerminalCommand' | 'promptSessionLabel' | 'expandEditor' | 'smoothStreaming' | 'statusBar' | 'whale' | 'whaleIdle' | 'whaleGirl' | 'splashFont' | 'minimalUi' | 'emit'>): Pick<ChannelState, 'setDiffLayout' | 'setThinkingFold' | 'setToolBackground' | 'setScrollGutter' | 'setPageMargin' | 'setFoldTerminalCommand' | 'setPromptSessionLabel' | 'setExpandEditor' | 'setSmoothStreaming' | 'setStatusBar' | 'setWhale' | 'setWhaleIdle' | 'setWhaleGirl' | 'setSplashFont' | 'setMinimalUi' | 'setMinimal'> {
   return {
 
     setDiffLayout(layout) {
@@ -112,12 +122,14 @@ export function createPreferences(getState: () => Pick<ChannelState, 'diffLayout
       state.emit()
     },
 
+    setMinimalUi(enabled) {
+      applyMinimalUi(getState, enabled)
+    },
+
+    /** @deprecated Pre-rename alias of setMinimalUi (kept for plugin scenes
+     *  and older embedders that call `channel.setMinimal()`). */
     setMinimal(enabled) {
-      const state = getState()
-      setMinimalMode(enabled)
-      if (enabled === state.minimal) return
-      state.minimal = enabled
-      state.emit()
+      applyMinimalUi(getState, enabled)
     }
   }
 }

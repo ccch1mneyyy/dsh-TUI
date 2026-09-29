@@ -81,7 +81,7 @@ function makeFakeChannel() {
     expandEditor: true,
     statusBar: {},
     whale: true,
-    minimal: false,
+    minimalUi: false,
     activityEnabled: true,
     contextBarEnabled: true,
     goal: undefined,

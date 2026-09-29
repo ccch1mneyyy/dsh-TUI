@@ -707,7 +707,7 @@ dsh-TUI 不预装通用技能；技能内容与发现规则由 DSH 及当前组�
   - 服务已挂载但损坏、为空或不一致时标记 unavailable 并 fail closed。
   - 退出计划模式先恢复进入前的 sandbox/approval，再还原进入前所在的权限预设（registry 仍提供时）。
 - `/lang` 切换中英界面语言（见「界面语言」）。
-- `/compact` 压缩会话历史；minimal preset（仅 bash+编辑器）下不可用。
+- `/compact` 压缩会话历史；内核「极简模式」预设（Agent preset `minimal`，只有一个持久 shell 工具）下不可用——与界面设置的「极简界面」无关。
 - `/thinking` 扩展思考显示开关，仅本次界面状态、**不持久化**。
 - 启动后后台检查 npm 新版本，发现更新时提示。
   - 检测遵循 npm registry 配置（`NPM_CONFIG_REGISTRY` 或 `~/.npmrc`）。

@@ -9,7 +9,7 @@ type MethodKeys<T> = { [K in keyof T]: T[K] extends (...args: never[]) => unknow
 export type ChannelPreferences = Pick<ChannelUi,
   | 'setDiffLayout' | 'setThinkingFold' | 'setToolBackground' | 'setScrollGutter'
   | 'setPageMargin' | 'setFoldTerminalCommand' | 'setPromptSessionLabel'
-  | 'setExpandEditor' | 'setSmoothStreaming' | 'setStatusBar' | 'setWhale' | 'setWhaleIdle' | 'setWhaleGirl' | 'setMinimal' | 'setSplashFont'
+  | 'setExpandEditor' | 'setSmoothStreaming' | 'setStatusBar' | 'setWhale' | 'setWhaleIdle' | 'setWhaleGirl' | 'setMinimalUi' | 'setMinimal' | 'setSplashFont'
 >
 export const CHANNEL_UI_EFFECTS = Object.freeze({
   'setDiffLayout': 'mutate',
@@ -26,6 +26,8 @@ export const CHANNEL_UI_EFFECTS = Object.freeze({
   'setWhaleIdle': 'mutate',
   'setSplashFont': 'mutate',
   'setWhaleGirl': 'mutate',
+  'setMinimalUi': 'mutate',
+  // Deprecated pre-rename alias of setMinimalUi (see the port's doc comment).
   'setMinimal': 'mutate',
   'commandCompletions': 'mutate',
   'runExternalCommand': 'mutate',
@@ -174,6 +176,8 @@ export const CHANNEL_UI_PROPERTIES = [
   'whaleIdle',
   'splashFont',
   'whaleGirl',
+  'minimalUi',
+  // Deprecated pre-rename alias of minimalUi (see the port's doc comment).
   'minimal',
   'activityEnabled',
   'contextBarEnabled',

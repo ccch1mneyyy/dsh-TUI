@@ -155,7 +155,8 @@ dsh 意外结束时，安全模式提供只读的环境诊断、profile 插件�
   - 提示仅出现在交互终端；脚本/管道只加一行提示、退出码不变。
   - 只覆盖最终 dsh 子进程的非零退出码，不含启动挂起（启动失败按退出码 1）。
 - **只读边界**：诊断/清单/指引不改状态。两个例外：
-  - 重试正常启动。
+  - 重试正常启动；若 `~/.dsh-tui/resume.txt` 里有指针则一并带上
+    （`DSH_TUI_RESUME_SESSION`），崩溃后重试会回到当时所在会话而不是新空会话。
   - 创建/复用救援 profile，只写 `$DSH_HOME/profiles/dsh-tui-safe/`。
   注：每次 dsh 启动仍会写 `$DSH_HOME/profiles/node_modules` 回退链接与
   pnpm 全局 store（非安全模式引入）。

@@ -7,7 +7,7 @@ import { ExitButton } from './SubagentDashboard.js'
 import { isPlainReturnInput } from '../utils/modifiers.js'
 import { toolNameColor } from './messages/AssistantToolUseMessage.js'
 import { getCliHighlightPromise } from '../terminal-utils/cliHighlight.js'
-import { isMinimalMode } from '../minimalMode.js'
+import { isMinimalUiMode } from '../minimalUiMode.js'
 import type { Theme } from '../theme.js'
 
 function formatDuration(ms: number): string {
@@ -23,12 +23,12 @@ function formatTimestamp(ts: number): string {
 }
 
 function statusGlyph(status: SubagentState['status']): { glyph: string; color: keyof Theme | undefined; label: string } {
-  const minimal = isMinimalMode()
-  if (status === 'completed') return { glyph: minimal ? '✓' : '🟢', color: minimal ? undefined : 'success', label: 'done' }
-  if (status === 'failed') return { glyph: minimal ? '×' : '🔴', color: minimal ? undefined : 'error', label: 'failed' }
-  if (status === 'cancelled') return { glyph: minimal ? '×' : '🔴', color: minimal ? undefined : 'error', label: 'cancelled' }
-  if (status === 'unknown') return { glyph: minimal ? '·' : '⚪', color: minimal ? undefined : 'subtle', label: 'history' }
-  return { glyph: minimal ? '·' : '🟡', color: minimal ? undefined : 'warning', label: 'running' }
+  const minimalUi = isMinimalUiMode()
+  if (status === 'completed') return { glyph: minimalUi ? '✓' : '🟢', color: minimalUi ? undefined : 'success', label: 'done' }
+  if (status === 'failed') return { glyph: minimalUi ? '×' : '🔴', color: minimalUi ? undefined : 'error', label: 'failed' }
+  if (status === 'cancelled') return { glyph: minimalUi ? '×' : '🔴', color: minimalUi ? undefined : 'error', label: 'cancelled' }
+  if (status === 'unknown') return { glyph: minimalUi ? '·' : '⚪', color: minimalUi ? undefined : 'subtle', label: 'history' }
+  return { glyph: minimalUi ? '·' : '🟡', color: minimalUi ? undefined : 'warning', label: 'running' }
 }
 
 const PAGES = ['summary', 'output', 'tools'] as const
