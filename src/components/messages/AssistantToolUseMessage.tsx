@@ -923,14 +923,6 @@ export function AssistantToolUseMessage({
   const shownLines: BodyLine[] = liveLines.length === 0 || revealedLines.length < rendered.length
     ? revealedLines
     : [...lines, ...liveLines, ...rendered.slice(lines.length)]
-  // Nested split-diff context panes must also yield to interaction highlights.
-  // `none` leaves them transparent so the selected/expanded root shows through.
-  const ordinaryToolBackground = isSelected || isExpanded ? 'none' : toolBackground
-  const ordinaryBackground = ordinaryToolBackground === 'subtle'
-    ? 'toolCardBackgroundDim'
-    : ordinaryToolBackground === 'strong'
-      ? 'toolCardBackground'
-      : undefined
   // Hover affordance for the click-to-toggle row: the theme's tool-card blue
   // face marks the call's content area while the pointer dwells (the
   // toolBackground treatment steps up one level to the strong card face), the
@@ -944,6 +936,14 @@ export function AssistantToolUseMessage({
   // 显示为「已唤醒 <短id>」；没有明确状态时注明送达状态未知。
   const sendMessageState = sendMessage === undefined ? undefined : sendMessageCardState(tool)
   const sendMessageResumed = sendMessage === undefined ? undefined : sendMessageResumedOf(tool)
+  // Nested split-diff context panes must also yield to interaction highlights.
+  // `none` leaves them transparent so the selected/hovered/expanded root shows through.
+  const ordinaryToolBackground = isSelected || isExpanded || hoverTint ? 'none' : toolBackground
+  const ordinaryBackground = ordinaryToolBackground === 'subtle'
+    ? 'toolCardBackgroundDim'
+    : ordinaryToolBackground === 'strong'
+      ? 'toolCardBackground'
+      : undefined
 
   return (
     <Box
