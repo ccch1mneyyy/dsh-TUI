@@ -202,37 +202,33 @@ const SGR_MOUSE_RE = /^\x1b\[<(\d+);(\d+);(\d+)([Mm])$/
  * OSC 8 block below); what is stripped here is the rest of the protocol
  * shapes a paste payload can carry.
  *
- * Scope (DESIGN D3, narrowed by measurement): complete OSC sequences and C0
- * bytes with no editing meaning. CSI sequences and bare ESC bytes are
- * deliberately KEPT — a bracketed paste's payload is user data, and PR #1142
- * pins that protocol-shaped literal text (`ESC[1;2;3;1A`) survives
- * byte-for-byte (`scripts/verify-win32-input.tsx`); the wide strip
- * (CSI + residual ESC) proved mutually exclusive with that contract.
+ * Scope (DESIGN D3, narrowed by measurement): COMPLETE OSC sequences only.
+ * CSI sequences, bare ESC bytes and C0 control bytes are deliberately KEPT —
+ * a bracketed paste's payload is user data. PR #1142 pins that protocol-shaped
+ * literal text (`ESC[1;2;3;1A`) survives byte-for-byte
+ * (`scripts/verify-win32-input.tsx`), and the whole C0 band belongs to the
+ * COMPOSER: every single-line paste ingress flattens C0/C1 to a SPACE
+ * (`flattenPasteInline`), so a C0 byte dropped here does not sanitize
+ * anything — it deletes the space the composer owes
+ * (`scripts/verify-question-paste.tsx` 1a/1c pin that flattening, TAB/CR/LF
+ * and DEL included). The wide strip (CSI + residual ESC) proved mutually
+ * exclusive with the #1142 contract.
  */
 // eslint-disable-next-line no-control-regex -- deliberate: paste payloads carry terminal sequences
 const OSC_IN_PASTE = /\u001b\][^\u0007\u001b]*(?:\u0007|\u001b\\)?/gu
 /**
- * C0 controls that carry no editable meaning. TAB (0x09), LF (0x0a), CR
- * (0x0d) and DEL (0x7f) survive: the first three are the composer's to
- * normalize, and DEL is a pre-existing paste-payload contract
- * (`verify-keys.tsx` pins that a paste keeps its embedded DEL as data
- * rather than letting it delete).
+ * Strip the protocol frames one paste payload can carry — see
+ * {@link OSC_IN_PASTE} for the exact scope.
  *
- * ESC (0x1b) is deliberately NOT in the set: an ESC byte in a payload is
- * protocol-shaped literal text under the #1142 bracketed-paste contract (see
- * the strip-scope note above), and the ESC bytes of a real drop belong to the
- * OSC 8 frame claimed before this strip.
- *
- * The C1 band (U+0080–U+009F) is deliberately NOT stripped: stdin is decoded
- * as UTF-8, so a C1 code point here is a character the user pasted, not a
- * terminal byte, and the composer's own contract keeps it.
+ * This is the LAST step of the paste choke point, and it is deliberately the
+ * only one: no C0/C1 byte is removed here, because removal is lossy where the
+ * composer is not (it flattens those bytes to spaces). The registration that
+ * briefly added an inert-C0 strip here was the CI regression that
+ * `scripts/verify-question-paste.tsx` 1a/1c caught; `verify-paste-drop`
+ * re-pins the surviving side of that contract.
  */
-// eslint-disable-next-line no-control-regex
-const INERT_IN_PASTE = /[\u0000-\u0008\u000b\u000c\u000e-\u001a\u001c-\u001f]/gu
-
-/** Ordered strip for one paste payload — see {@link OSC_IN_PASTE}. */
 function cleanPastePayload(content: string): string {
-  return content.replace(OSC_IN_PASTE, '').replace(INERT_IN_PASTE, '')
+  return content.replace(OSC_IN_PASTE, '')
 }
 
 function createPasteKey(content: string): ParsedKey {

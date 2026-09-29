@@ -239,9 +239,11 @@ const GROUPS = {
 // 拖放文件粘贴回归：Windows 把拖入的文件名作为 OSC 8 超链接
 // （ESC ] 8 ; params ; file:///… ST）送入，win32-input-mode 还会把它拆成
 // 逐字符记录——ESC 被当协议消费后，OSC 参数残渣（[16;42;0;1;16;1…）会
-// 落进输入框。粘贴载荷必须剥掉完整序列与残留 ESC，载荷里不得再出现 ESC
-// 字节或 file:// 文本；同时 TAB/CR/LF/DEL 与既有粘贴契约不变，file:// URI
-// 仍能解码成路径进入图片/附件管线。
+// 落进输入框。粘贴载荷只剥「完整 OSC 帧」（含终止符）：恢复后的拖放载荷
+// 里不得再出现 ESC 字节或 file:// 文本；CSI/ESC 字面文本与全部 C0 控制字节
+// （含 TAB/CR/LF/DEL）按原样交给 composer 压平（T05 hotfix：parser 侧删
+// C0 会吃掉 composer 应得的空格），file:// URI 仍能解码成路径进入图片/
+// 附件管线。
     ["verify-paste-drop", ['node', '--import', 'tsx/esm', 'scripts/verify-paste-drop.ts']],
 // 退出漏斗回归（issue #12）：上下文 teardown 不得走到进程退出。
     ["verify-teardown-exit", ['node', '--import', 'tsx/esm', 'scripts/verify-teardown-exit.tsx']],

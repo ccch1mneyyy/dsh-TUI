@@ -25,10 +25,13 @@
  * single-token form (quoted when it contains whitespace), so the existing
  * image stage / `@` pipeline accepts it (`parsePastedImagePath`).
  *
- * Also covers the paste-payload contract itself, as narrowed in T02: complete
- * OSC sequences and inert C0 bytes never survive into a paste key, while TAB,
- * CR/LF, DEL, C1 text and protocol-SHAPED LITERAL TEXT (a bracketed paste's
- * `ESC[31m`) do — the composer owns line-ending normalization, and PR #1142
+ * Also covers the paste-payload contract itself, as narrowed in T02 and
+ * re-pinned in the T05 hotfix: a paste key loses COMPLETE OSC sequences and
+ * nothing else. TAB, CR/LF, DEL, every other C0 control, C1 text and
+ * protocol-SHAPED LITERAL TEXT (a bracketed paste's `ESC[31m`) all survive —
+ * control-char FLATTENING (C0/C1 → space) is the composer's job
+ * (`flattenPasteInline`, pinned by `verify-question-paste.tsx` 1a/1c), so a
+ * parser-side delete would drop the space the composer owes, and PR #1142
  * pins that a paste's protocol-shaped bytes stay byte-identical
  * (`verify-win32-input.tsx`).
  *
@@ -278,12 +281,19 @@ const OSC8_CLOSE_ST = `${ESC}]8;;${ST}`
 
 {
   const items = feed([`${ESC}[200~a${ESC}[31mb${BEL}c${ESC}]0;title${BEL}d${ESC}[201~`])
-  // Narrowed hygiene (T02 / DESIGN D3): complete OSC and inert C0 are
-  // stripped, but protocol-SHAPED LITERAL text — the SGR `ESC[31m` here — is
-  // the user's data and survives, exactly as PR #1142 pins for bracketed
-  // paste (`verify-win32-input.tsx`). The wide strip (CSI + residual ESC)
-  // proved mutually exclusive with that contract.
-  check('OSC/BEL are stripped; literal CSI survives (#1142)', pastes(items)[0], `a${ESC}[31mbcd`)
+  // Narrowed hygiene (T02 / DESIGN D3, re-pinned by the T05 hotfix): the
+  // parser strips COMPLETE OSC frames only — the OSC 0 frame below goes away
+  // with its BEL terminator. Everything that is not a complete frame is the
+  // user's data: the protocol-SHAPED SGR `ESC[31m` survives exactly as
+  // PR #1142 pins for bracketed paste (`verify-win32-input.tsx`), and so does
+  // the payload's own bare BEL, because control-char flattening (BEL → space)
+  // belongs to the composer (see the C0 check below). The wide strip
+  // (CSI + residual ESC) proved mutually exclusive with the #1142 contract.
+  check(
+    'complete OSC frames are stripped; literal CSI and bare BEL survive (#1142)',
+    pastes(items)[0],
+    `a${ESC}[31mb${BEL}cd`,
+  )
 }
 
 {
@@ -302,13 +312,25 @@ const OSC8_CLOSE_ST = `${ESC}]8;;${ST}`
 
 {
   const items = feed([`${ESC}[200~\u0000\u0007\u0008keep${ESC}[201~`])
-  check('inert C0 controls are dropped', pastes(items)[0], 'keep')
+  // T05 hotfix, CONTROL GROUP (was: "inert C0 controls are dropped"). The
+  // assertion is kept, and deliberately inverted, because the old expectation
+  // was the regression: a parser-side C0 delete loses the byte, while the
+  // single-line paste ingress the payload is bound for flattens it to a SPACE
+  // (`flattenPasteInline`) — `verify-question-paste.tsx` 1a/1c measure exactly
+  // that (a chunk paste's newline/BEL/TAB become spaces, and Enter carries the
+  // flattened text). Keeping the check in the INVERTED direction still guards
+  // this file's intent — "no protocol frame survives into a paste key, and
+  // where the parser is not the owner it must not touch the bytes" — and the
+  // hygiene half stays pinned by the OSC/DEL/C1 checks around it.
+  check('C0 controls survive the parser for the composer to flatten', pastes(items)[0], '\u0000\u0007\u0008keep')
 }
 
 {
-  // DEL and the C1 band are NOT stripped: DEL is a pinned paste-payload
-  // contract, and a C1 code point in a UTF-8-decoded payload is user text,
-  // not a terminal byte (see INERT_IN_PASTE).
+  // DEL and the C1 band survive too — one ordering rule for the whole paste
+  // payload: the parser owns complete OSC frames (see OSC_IN_PASTE), the
+  // composer owns every control char it can flatten (C0/C1 → space), and DEL
+  // is a pre-existing paste-payload contract (`verify-keys.tsx` pins that a
+  // paste keeps its embedded DEL as data rather than letting it delete).
   check('DEL survives a paste payload', pastes(feed([`${ESC}[200~a\u007fb${ESC}[201~`]))[0], 'a\u007fb')
   check('C1 text survives a paste payload', pastes(feed([`${ESC}[200~a\u0085b${ESC}[201~`]))[0], 'a\u0085b')
 }
