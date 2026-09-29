@@ -321,6 +321,13 @@ const GROUPS = {
 // promise 时入口必须自己兜住（通知 + 无 unhandledRejection + 处理器仍活），
 // 这条在缺 `.catch` 时必红。
     ["verify-shift-tab-mode", ['node', 'scripts/verify-shift-tab-mode.mjs']],
+// SGR 鼠标上报分片回归（issue #1160 macOS→SSH 会话重启后、#1120 WSL2 + dsh web）：
+// 穷举一条 `ESC[<btn;col;rowM/m` 上报的 2-way / 3-way 切点（每个切点后一次
+// escape flush），断言草稿收到的文本里不出现上报字节（修复前 cut=2/3 与 3-way
+// 的 a=1/2/3 家族会整条泄漏）；另覆盖 provenance=false 的反吞噬表（字面 `[<`、
+// `[<35;10`、Esc 后接 `[` 必须原样通过）与 hold 上界/到期释放（>1000ms 或 >64B
+// 必须把持有字节按普通键回放，不丢字节、不重复）。
+    ["verify-mouse-report-fragments", ['node', '--import', 'tsx/esm', 'scripts/verify-mouse-report-fragments.tsx']],
 // 注：verify-permission-modes 不在此登记。该脚本在基线（dd413712）上本就有
 // 22 处失败（Shift+Tab 循环相关的动态 preset / 官方命令路径整段未过），
 // 与本次改动无关；把它放进阻塞组会直接红掉 input-terminal。等脚本自身修好
