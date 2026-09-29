@@ -7,6 +7,7 @@ import type { Theme } from '../../theme.js'
 import { t } from '../../i18n.js'
 import { stringWidth } from '../../ink/stringWidth.js'
 import { isMinimalUiMode } from '../../minimalUiMode.js'
+import { ProgressBar } from '../design-system/ProgressBar.js'
 
 /** The waterfall window mirrors the subagent card: a constant-height region. */
 const WATERFALL_ROWS = 3
@@ -33,6 +34,27 @@ function statusInfo(status: BackgroundJobStatus): { glyph: string; label: string
     default:
       return { glyph: '●', label: t('jobs-status-running'), color: minimalUi ? undefined : 'warning' }
   }
+}
+
+/**
+ * Producer progress as the design system's bar: `n/m` draws a 5-cell
+ * sub-cell-accurate `ProgressBar` (same primitive the rest of the TUI uses)
+ * plus the raw counter; any other shape passes through verbatim. Exported for
+ * the /jobs panel so both surfaces read the same.
+ */
+export function JobProgress({ progress }: { progress: string }): React.ReactNode {
+  const match = /^(\d+)\s*\/\s*(\d+)$/.exec(progress.trim())
+  const current = match === null ? Number.NaN : Number(match[1])
+  const total = match === null ? Number.NaN : Number(match[2])
+  if (!Number.isFinite(current) || !Number.isFinite(total) || total <= 0) {
+    return <Text color="accent" wrap="truncate-end">{progress}</Text>
+  }
+  return (
+    <Box flexDirection="row" gap={1}>
+      <ProgressBar ratio={Math.min(current, total) / total} width={5} fillColor="accent" emptyColor="inactive" />
+      <Text color="accent">{progress.trim()}</Text>
+    </Box>
+  )
 }
 
 /** Hard single-line clip by display width — a wrapped waterfall row would
@@ -95,11 +117,9 @@ export function JobCard({ job, marginTopOnTurn, onClick }: {
   const headerDetail = job.detail !== undefined && job.detail !== '' ? job.detail : undefined
   const headerName = `${t('jobs-card-prefix')}${job.id}`
   const duration = formatJobDuration(job)
-  const fixedHeader = [
-    info.glyph, headerName, '·', job.kind, '·', '', '·', duration,
-    ...(headerDetail === undefined ? [] : ['·', headerDetail]), '·', info.label,
-  ].join(' ')
-  const labelWidth = Math.max(0, (columns ?? 80) - stringWidth(fixedHeader))
+  // Only a LIVE job carries a progress chip; a settled one has dropped it, so
+  // reserving width for it unconditionally would clip the label for nothing.
+  const liveProgress = settled || job.progress === undefined || job.progress === '' ? undefined : job.progress
 
   // 点击打开 /jobs 面板；hover 不刷整行背景（转录视觉保持安静），只把
   // 状态 glyph 提亮为品牌色作为可点指示。无外层缩进：任务卡是上方工具
@@ -114,23 +134,29 @@ export function JobCard({ job, marginTopOnTurn, onClick }: {
     onMouseEnter={clickable ? () => setHovered(true) : undefined}
     onMouseLeave={clickable ? () => setHovered(false) : undefined}
   >
+    {/* Fixed columns around ONE flexible label: the label truncates instead
+      * of wrapping, so the header grid holds at any width and with or without
+      * the progress chip (the old header reserved a hand-counted width and
+      * overflowed by exactly the chip's width). */}
     <Box flexDirection="row" gap={1}>
       <Text color={hovered && clickable ? 'accent' : info.color}>{info.glyph}</Text>
-      <Text bold color={hovered && clickable ? 'accent' : undefined}>
-        {headerName}
-      </Text>
-      <Text dimColor>·</Text>
-      <Text dimColor>{job.kind}</Text>
-      <Text dimColor>·</Text>
-      <Text>{clipLine(job.label, labelWidth)}</Text>
-      <Text dimColor>·</Text>
-      <Text dimColor>{duration}</Text>
-      {!settled && job.progress !== undefined && job.progress !== '' && (
-        <><Text dimColor>·</Text><Text color="accent">{clipLine(job.progress, 24)}</Text></>
+      <Box flexShrink={0}>
+        <Text bold color={hovered && clickable ? 'accent' : undefined}>
+          {headerName}
+        </Text>
+      </Box>
+      <Box flexShrink={0}><Text dimColor>{job.kind}</Text></Box>
+      <Box flexGrow={1} flexShrink={1}>
+        <Text wrap="truncate-end">{job.label}</Text>
+      </Box>
+      {liveProgress !== undefined && (
+        <Box width={12} flexShrink={0}>
+          <JobProgress progress={liveProgress} />
+        </Box>
       )}
-      {headerDetail !== undefined && <><Text dimColor>·</Text><Text dimColor>{headerDetail}</Text></>}
-      <Text dimColor>·</Text>
-      <Text color={info.color}>{info.label}</Text>
+      <Box flexShrink={0}><Text dimColor>{duration}</Text></Box>
+      {headerDetail !== undefined && <Box flexShrink={0}><Text dimColor wrap="truncate-end">{headerDetail}</Text></Box>}
+      <Box flexShrink={0}><Text color={info.color}>{info.label}</Text></Box>
     </Box>
     {!settled && activity.length > 0 && activity.map((entry, index) => (
       // key 不含 time（同 SubagentMessage 的约定）：内容更新走 in-place

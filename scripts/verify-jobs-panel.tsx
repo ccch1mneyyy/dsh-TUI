@@ -36,6 +36,7 @@ const [
   { JobsPanel },
   { Chat },
   { QuestionStore },
+  { createJobProjection },
 ] = await Promise.all([
   import('@deepseek-ai/cordis'),
   import('../src/dsh-adapter/channel.js'),
@@ -47,6 +48,7 @@ const [
   import('../src/components/JobsPanel.js'),
   import('../src/screens/Chat.js'),
   import('../src/dsh-adapter/questions.js'),
+  import('../src/dsh-adapter/channel/job-projection.js'),
 ])
 const { Writable, PassThrough } = await import('node:stream')
 const { Terminal: XTerm } = (await import('@xterm/headless')) as unknown as {
@@ -208,7 +210,7 @@ function makeAgent(id: string, sessionId: string): FakeAgent {
 }
 const makeHandle = (agent: FakeAgent) => ({ agent, dispose: () => Promise.resolve() })
 
-function makeFakeJobs(): {
+function makeFakeJobs(currentOwner: () => string | undefined = () => undefined): {
   runtime: Record<string, unknown>
   register(snap: Record<string, unknown>): void
   update(snap: Record<string, unknown>): void
@@ -216,6 +218,10 @@ function makeFakeJobs(): {
   kills: string[]
 } {
   const snapshots = new Map<string, Record<string, unknown>>()
+  // 内核口径：`list(caller)` 只返回 `owner === undefined || owner.id === caller`
+  // 的任务。假注册表原先忽略 caller 一律全返，于是「切会话后按新会话重读」
+  // 这条路在夹具里永远看不到为空——真实内核会过滤掉上一个会话的任务。
+  const owners = new Map<string, string | undefined>()
   const changed = new Set<(owner: unknown) => void>()
   const done = new Set<(snap: unknown, owner: unknown) => void>()
   const kills: string[] = []
@@ -223,12 +229,12 @@ function makeFakeJobs(): {
   return {
     kills,
     runtime: {
-      list: () => [...snapshots.values()],
+      list: (caller?: string) => [...snapshots.values()].filter(snap => owners.get(String(snap.id)) === undefined || owners.get(String(snap.id)) === caller),
       kill: (id: string) => { kills.push(id); return 'requested' },
       onJobsChanged: (listener: (owner: unknown) => void) => { changed.add(listener); return () => changed.delete(listener) },
       onJobDone: (listener: (snap: unknown, owner: unknown) => void) => { done.add(listener); return () => done.delete(listener) },
     },
-    register(snap) { snapshots.set(snap.id as string, snap); fire() },
+    register(snap) { snapshots.set(snap.id as string, snap); owners.set(String(snap.id), currentOwner()); fire() },
     update(snap) { snapshots.set(snap.id as string, snap); fire() },
     remove(id) { snapshots.delete(id); fire() },
   }
@@ -247,7 +253,8 @@ const NOW = Date.now()
     get: () => undefined,
     create: () => Promise.resolve(makeHandle(makeAgent('agent-b', 'sess-b'))),
   })
-  const fake = makeFakeJobs()
+  // 本组所有注册都发生在 /new 之前，归属于初始 agent。
+  const fake = makeFakeJobs(() => initial.id)
   provide('jobs', fake.runtime)
   const channel = createChannel(ctx as never, initial as never, {
     model: 'm0', cwd: '/tmp/demo', provider: 'p0', activity: false,
@@ -479,6 +486,75 @@ console.log('--- B2: kernel event bus integration ---')
 }
 
 // ---------------------------------------------------------------------------
+// Group B3 — 会话换绑：订阅不得冻结在启动会话上
+// ---------------------------------------------------------------------------
+console.log('--- B3: session rebind (the roster must follow the binding) ---')
+{
+  // 现场：dsh-tui 启动先建一个全新会话，随后才恢复用户会话。jobs 投影在
+  // 「服务注入」时 attach——那一刻若把订阅过滤器钉死成启动会话，内核之后会按
+  // owner 丢弃全部事件，refresh 永不触发，面板永远停在 attach 时的空名册。
+  const bootJob = { id: 'boot-job', kind: 'bash', label: 'boot work', status: 'running' as const, startedAt: 1 }
+  const userJob = { id: 'user-job', kind: 'pwsh', label: 'user work', status: 'running' as const, startedAt: 2 }
+  const calls: string[] = []
+  const subs: Array<{ filter: Record<string, unknown>; listener: (event: Record<string, unknown>) => void }> = []
+  const kernelJobs = {
+    list(caller?: string) {
+      calls.push(String(caller))
+      if (caller === 'sess-boot') return [bootJob]
+      if (caller === 'sess-user') return [userJob]
+      return []
+    },
+    kill() {},
+    readAt() { return { chunks: [], next: 0 } },
+    events: {
+      subscribe(filter: Record<string, unknown>, listener: (event: Record<string, unknown>) => void) {
+        subs.push({ filter, listener })
+        return () => {}
+      },
+    },
+  }
+  /** 内核投递口径：`ownerId !== filter.owner` 的事件直接丢弃。 */
+  const emit = (event: Record<string, unknown>, ownerId: string): void => {
+    for (const sub of subs) {
+      if ('owner' in sub.filter && sub.filter.owner !== ownerId) continue
+      sub.listener(event)
+    }
+  }
+  let bound: { id: string } = { id: 'sess-boot' }
+  const state = { backgroundJobs: [], rows: [], emit() {} }
+  const projection = createJobProjection(
+    () => state as never,
+    {
+      owner: { current: () => true, own: () => () => {} },
+      notify: () => {},
+      rowIds: { value: 0 },
+      agent: () => bound as never,
+      steer: () => {},
+    },
+  )
+  const ids = (): string => projection.store.snapshot().map(job => job.id).join(',')
+  projection.attach(kernelJobs as never)
+  check('B3a 订阅不带 owner 过滤（带则换绑后事件全被内核丢弃）',
+    subs.length === 1 && !('owner' in (subs[0]?.filter ?? {})), JSON.stringify(subs.map(sub => sub.filter)))
+  check('B3b 挂载即按当前会话读名册', calls.length === 1 && calls[0] === 'sess-boot', calls.join(','))
+  projection.reanchor()
+  check('B3c 会话未变时 reanchor 不重复读（挂载只读一次）', calls.length === 1, calls.join(','))
+
+  bound = { id: 'sess-user' }
+  projection.reanchor()
+  check('B3d 换绑后按新会话重读且旧名册被替换',
+    calls.at(-1) === 'sess-user' && ids() === 'user-job', `${calls.join(',')} → ${ids()}`)
+
+  const beforeEvent = calls.length
+  emit({ type: 'registered', job: userJob }, 'sess-user')
+  check('B3e 换绑后本会话事件仍能触发刷新（反证：订阅没被冻结）',
+    calls.length === beforeEvent + 1 && calls.at(-1) === 'sess-user', calls.join(','))
+  emit({ type: 'output', id: 'boot-job', total: 10 }, 'sess-other')
+  check('B3f 他人会话的输出事件被围栏挡住（不崩、不污染名册）',
+    calls.length === beforeEvent + 1 && ids() === 'user-job', `${calls.join(',')} → ${ids()}`)
+}
+
+// ---------------------------------------------------------------------------
 // Group C — 渲染冒烟
 // ---------------------------------------------------------------------------
 console.log('--- C: render smoke ---')
@@ -584,7 +660,7 @@ await withTerminal(
     await sleep(150)
     const text = screen()
     check('C3 面板标题与两行任务', text.includes('Background Jobs') && text.includes('pwsh-1') && text.includes('bash-2'))
-    check('C3 面板含操作提示', text.includes('kill focused job'), text.split('\n').at(-3) ?? '')
+    check('C3 面板含操作提示', text.includes('press k twice'), text.split('\n').at(-3) ?? '')
     // 聚焦第一行（默认）→ 详情块展开：完整任务名 + 开始时间 + 输出尾巴。
     check('C3 聚焦行详情含完整任务名与开始时间', text.includes('gh run watch 42') && text.includes('started'), text.split('\n').slice(0, 8).join('|'))
     check('C3 聚焦行详情含完整命令', text.includes('command') && text.includes('gh pr checks --watch 42'), text.split('\n').slice(0, 8).join('|'))

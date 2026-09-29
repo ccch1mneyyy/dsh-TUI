@@ -22,6 +22,8 @@ export function createJobProjection(
 ) {
   const jobRowsByJobId = new Map<string, ChatRow>()
   let jobsRuntime: JobsRuntime | undefined
+  /** The live attachment's conditional roster re-read (see `reanchor`). */
+  let reanchorActive: (() => void) | undefined
   let detachActive: (() => void) | undefined
   let attachmentToken: symbol | undefined
   let attachmentCurrent = (): boolean => false
@@ -116,15 +118,31 @@ export function createJobProjection(
     let detached = false
     let detach: () => void
     const current = (): boolean => !detached && attachmentToken === token && detachActive === detach && jobsRuntime === jobs && deps.owner.current()
+    // The caller the roster was last read with. `reanchor` compares against it
+    // so a bind that did NOT change the session stays a no-op — mounting binds
+    // the channel's own agent immediately after the service attaches, and
+    // re-reading there would be a second, redundant list().
+    let lastCaller: string | undefined
+    let callerKnown = false
     const refresh = (): void => {
       // Check before list(): retained callbacks must not touch a revoked or
       // replaced service, nor invoke any store/row work after owner disposal.
       if (!current()) return
       try {
-        const snapshot = jobs.list(sessionCaller())
+        const caller = sessionCaller()
+        lastCaller = caller
+        callerKnown = true
+        const snapshot = jobs.list(caller)
         if (!current()) return
         store.replace(snapshot)
       } catch { /* optional service is disposing */ }
+    }
+    /** Re-read only when the bound session actually changed. */
+    const reanchorThis = (): void => {
+      if (callerKnown && sessionCaller() === lastCaller) return
+      dropRows()
+      store.reset()
+      refresh()
     }
     /** One kernel `output` event: pull the ring increment past our cursor. */
     const pullOutput = (id: string): void => {
@@ -153,6 +171,7 @@ export function createJobProjection(
         attachmentCurrent = () => false
       }
       if (jobsRuntime === jobs) jobsRuntime = undefined
+      if (reanchorActive === reanchorThis) reanchorActive = undefined
       for (const dispose of disposers.splice(0)) dispose?.()
       // A service-context detach happens before channel teardown on remount;
       // release its Channel owner entry now rather than retaining one cleanup
@@ -164,13 +183,23 @@ export function createJobProjection(
     detachActive = detach
     attachmentToken = token
     attachmentCurrent = current
+    reanchorActive = reanchorThis
     try {
       const bus = jobs.events
       if (bus !== undefined && typeof bus.subscribe === 'function') {
         // Kernel bus: lifecycle commits re-read the roster; output events
         // pull non-consuming readAt increments with the store's own cursor.
-        const owner = sessionCaller()
-        disposers.push(bus.subscribe(owner === undefined ? { owners: 'all' } : { owner }, event => {
+        // Subscribe to EVERY owner on purpose: this filter is captured at
+        // attach, but the channel still rebinds afterwards (dsh-tui opens a
+        // fresh session at boot and only then resumes the user's), and a filter
+        // frozen to the boot session starves the panel for good — the kernel
+        // drops every foreign-owner event, refresh() never runs again and the
+        // roster stays at the empty list read during attach. Nothing extra is
+        // exposed by widening it: the roster read is list(caller) and the ring
+        // pull is readAt(id, cursor, caller), both fenced with the caller AT
+        // CALL TIME, so another session's jobs fall out (and a foreign ring
+        // read throws into the contained catch).
+        disposers.push(bus.subscribe({ owners: 'all' }, event => {
           if (!current()) return
           try {
             if (event.type === 'output') pullOutput(event.id)
@@ -192,5 +221,13 @@ export function createJobProjection(
   const dropRows = (): void => { jobRowsByJobId.clear() }
   const reset = (): void => { dropRows(); store.reset() }
 
-  return { store, control, attach, dropRows, reset }
+  /**
+   * Re-anchor after the live agent changed. `reset()` runs while the OLD
+   * binding is still installed (resetSessionProjection precedes bindAgent), so
+   * it can only clear; the re-read has to happen here, once the new agent is
+   * bound, or the next session's jobs would only appear on its first event.
+   */
+  const reanchor = (): void => { reanchorActive?.() }
+
+  return { store, control, attach, dropRows, reset, reanchor }
 }
