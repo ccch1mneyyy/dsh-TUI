@@ -34,6 +34,7 @@ import { createSkillCatalog } from './channel/skill-catalog.js'
 import { createBackgroundCurrentAction } from './channel/background-action.js'
 import { createSubagentProjection } from './channel/subagent-projection.js'
 import { createChannelNotifications } from './channel/notifications.js'
+import { createAttachedContextRegistry } from './channel/attached-context.js'
 import { createSelectionAttachments } from './channel/ide-selection.js'
 import { IdeChannel, ideLockDir, type SelectionSnapshot } from './ide-channel.js'
 import type { Context } from '@deepseek-ai/cordis'
@@ -346,10 +347,16 @@ function createChannelWithOwner(
     void ideChannel.rebind(state.cwd).catch(() => {})
   }
   const selectionAttachments = createSelectionAttachments()
+  // "Send to Chat" (side-panel §6.7): staged panel contexts are a session-scoped
+  // projection like the selection above — the registry writes through the live
+  // state (so the shared `session-projection reset` clears them with everything
+  // else) and the submit path takes them off in one step.
+  const contextRegistry = createAttachedContextRegistry(() => state, () => state.emit())
   const composer = createComposerImages(ctx, owner, { generation: () => state.agentBindingGeneration })
   const inputDelivery = createInputDelivery(ctx, owner, binding, () => state,
     (...args) => notify(...args), trackPending, untrackPending, composer,
-    () => currentSelection, (messageId, info) => selectionAttachments.remember(messageId, info))
+    () => currentSelection, (messageId, info) => selectionAttachments.remember(messageId, info),
+    () => contextRegistry.consume())
   const { dispatchUserText, deliverUserText, retireAttachment, withDecisionPending, clearStagedImages } = inputDelivery
   /**
    * The `tui/session-switch` decision event (pi's `session_before_switch`),
@@ -521,6 +528,11 @@ function createChannelWithOwner(
     discardStagedImage: composer.discardStagedImage,
     stagedImage: composer.stagedImage,
     stagedImageLimits: composer.stagedImageLimits,
+    // "Send to Chat" projection + actions (see `contextRegistry` above; its
+    // methods close over the registry's own state, so they carry no `this`).
+    attachedContexts: [],
+    attachContext: contextRegistry.attach,
+    detachContext: contextRegistry.detach,
     /**
      * The `tui/rewind-prompt` decision event (pi's `session_before_fork`):
      * fired when the rewind picker confirms a message, before any fork

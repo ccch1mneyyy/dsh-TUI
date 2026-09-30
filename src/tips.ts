@@ -37,8 +37,8 @@ export const TIPS: readonly Tip[] = [
   {
     id: 'keys-esc-levels',
     group: 'keys',
-    zh: 'Esc 逐层收：帮助 → 图片预览 → 命令/文件菜单 → 清选区 → 清空',
-    en: 'Esc peels layers: help → image preview → command/file menus → selection → clear input',
+    zh: 'Esc 逐层收：帮助 → 图片预览 → 命令/文件菜单 → 清选区 → 清附加 → 清空',
+    en: 'Esc peels layers: help → image preview → command/file menus → selection → attached context → clear input',
   },
   {
     id: 'keys-ctrl-o',

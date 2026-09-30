@@ -319,3 +319,87 @@ const imageBackingStore = createLiveSetting<ImageBacking>('transparent', normali
 export const subscribeImageBacking = imageBackingStore.subscribe
 export const getImageBacking = imageBackingStore.get
 export const applyImageBacking = imageBackingStore.apply
+
+// ── Side panel (侧栏) ────────────────────────────────────────────────
+// Settings `dsh-tui.sidePanel.*`. These are module-level live stores (not
+// channel state): the layout needs them above the channel's version bump —
+// a Ctrl+B toggle must re-render Chat even though nothing about the
+// session changed — and /settings + cordis.yml write through the same
+// apply* functions (plugin's applyDisplay mirrors them here, exactly like
+// pageMargin). Key toggles are session-level: they move the live store but
+// never write the user settings layer, so a restart returns to the
+// configured default.
+
+/** Panel id grammar (plugins register under a `plugin:sub` namespace). */
+export const SIDE_PANEL_ID_PATTERN = /^[a-z][a-z0-9_-]*(:[a-z][a-z0-9_-]*)*$/
+
+export const DEFAULT_SIDE_PANEL_IDS = 'todo,jobs,agents'
+
+function normalizeBoolean(value: unknown, fallback: boolean): boolean {
+  return typeof value === 'boolean' ? value : fallback
+}
+
+/** Chat fraction of the content width; junk collapses to the default and
+ *  the value is sanity-clamped (geometry clamps further per width). */
+export function normalizeSidePanelRatio(value: unknown): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return 0.68
+  return Math.min(0.95, Math.max(0.1, value))
+}
+
+/** Comma-separated enabled-panel ids: tokens that fail the id grammar are
+ *  dropped (a typo must never wedge the layout); unknown-but-well-formed
+ *  ids survive — a plugin may register them later in the session. */
+export function normalizeSidePanelPanels(value: unknown): string {
+  if (typeof value !== 'string') return DEFAULT_SIDE_PANEL_IDS
+  const seen = new Set<string>()
+  for (const token of value.split(',')) {
+    const id = token.trim().toLowerCase()
+    if (id !== '' && SIDE_PANEL_ID_PATTERN.test(id)) seen.add(id)
+  }
+  return seen.size > 0 ? [...seen].join(',') : DEFAULT_SIDE_PANEL_IDS
+}
+
+/** Enabled panel ids in PanelBar order. */
+export function parseSidePanelIds(value: string): readonly string[] {
+  return normalizeSidePanelPanels(value).split(',')
+}
+
+const sidePanelSplitEnabledStore = createLiveSetting<boolean>(true, value => normalizeBoolean(value, true))
+export const subscribeSidePanelSplitEnabled = sidePanelSplitEnabledStore.subscribe
+export const getSidePanelSplitEnabled = sidePanelSplitEnabledStore.get
+export const applySidePanelSplitEnabled = sidePanelSplitEnabledStore.apply
+
+const sidePanelOpenStore = createLiveSetting<boolean>(false, value => normalizeBoolean(value, false))
+export const subscribeSidePanelOpen = sidePanelOpenStore.subscribe
+export const getSidePanelOpen = sidePanelOpenStore.get
+export const applySidePanelOpen = sidePanelOpenStore.apply
+
+const sidePanelRatioStore = createLiveSetting<number>(0.68, normalizeSidePanelRatio)
+export const subscribeSidePanelRatio = sidePanelRatioStore.subscribe
+export const getSidePanelRatio = sidePanelRatioStore.get
+export const applySidePanelRatio = sidePanelRatioStore.apply
+
+const sidePanelPanelsStore = createLiveSetting<string>(DEFAULT_SIDE_PANEL_IDS, normalizeSidePanelPanels)
+export const subscribeSidePanelPanels = sidePanelPanelsStore.subscribe
+export const getSidePanelPanels = sidePanelPanelsStore.get
+export const applySidePanelPanels = sidePanelPanelsStore.apply
+
+/**
+ * Companion 皮肤（设置 `dsh-tui.companion.skin`）：内置 'deepy'（默认，
+ * assets/deepy 素材包）与 'whale'（开屏像素鲸鱼同款分层动画）；插件
+ * 皮肤 id（'plugin:sub' 命名空间）随 Phase 7 开放注册后同样可写——
+ * 未注册/未知的 id 一律回退 deepy，不阻断启动。
+ */
+export type CompanionSkinSetting = string
+export const COMPANION_SKIN_IDS = ['deepy', 'whale'] as const
+export const DEFAULT_COMPANION_SKIN: CompanionSkinSetting = 'deepy'
+
+export function normalizeCompanionSkin(value: unknown): CompanionSkinSetting {
+  if (typeof value === 'string' && (COMPANION_SKIN_IDS as readonly string[]).includes(value)) return value
+  return DEFAULT_COMPANION_SKIN
+}
+
+const companionSkinStore = createLiveSetting<CompanionSkinSetting>(DEFAULT_COMPANION_SKIN, normalizeCompanionSkin)
+export const subscribeCompanionSkin = companionSkinStore.subscribe
+export const getCompanionSkin = companionSkinStore.get
+export const applyCompanionSkin = companionSkinStore.apply

@@ -33,12 +33,22 @@ the authoritative status and compatibility agreement live in the
 | Tier | Seams |
 | --- | --- |
 | Stable candidate (shape frozen; breaking changes go through a minor-version deprecation warning before removal) | VI settings sections · VIII full-screen scenes · X managed dialogs · XI status line · XII keyboard shortcuts · XIII entry renderers |
-| Experimental (may still shift with dsh-std / admission-spec evolution) | IX decision events · toast notifications (`ctx.tuiToast`, new) |
+| Experimental (may still shift with dsh-std / admission-spec evolution) | IX decision events · toast notifications (`ctx.tuiToast`, new) · **Side panels (`ctx.tuiPanels`, full panel + compact row, experimental)** |
 | Upstream-tracked (stability owned by the cordis / dsh mechanisms underneath) | I session events · II official prompt slots · III bundled skills · IV themes · V system-prompt sections · VII profile composition |
 
 Also an experimental public surface:
 
 - `@deepseek-harness-tui/dsh-tui/api` (types-only entry).
+- **Side panels (experimental, §18)**: `ctx.tuiPanels.register({ apiVersion:
+  1, id, title, icon?, component | compact })` registers a right-sidebar
+  panel (the host prefixes `<pluginId>:`; ≤4 panels per plugin, ≤32 globally;
+  `open()` is rate-limited to once per 5s; 3 consecutive crashes disable the
+  panel for the session). Of the two render slots — the full panel
+  (`component`) and the compact row (`compact`, 1–3 lines) — **compact is
+  descriptor-validated only this phase and not mounted yet**; `sendToChat`
+  requires the `panels.chat.attach` grant (a later version) and currently
+  always returns `false` with a one-time hint. Types live at
+  `@deepseek-harness-tui/dsh-tui/panels` and `./api`.
 - The `@deepseek-harness-tui/dsh-tui/test-utils` subpath and
   `ctx.tuiPluginHost.grants.corrupt` were removed in the adapter layering
   refactor (#705).

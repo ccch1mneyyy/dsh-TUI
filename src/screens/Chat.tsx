@@ -73,6 +73,11 @@ import type { PromptDraftCache } from '../components/promptDraftCache.js'
 import type { InjectController } from '../dsh-adapter/inject-channel.js'
 import { PromptEditorLayer, usePromptEditorOpen } from '../components/PromptEditor.js'
 import { GoalTodoPanel } from '../components/GoalTodoPanel.js'
+import { useSidePanel } from '../components/sidePanel/useSidePanel.js'
+import { jobsFocusStore } from '../components/sidePanel/jobsFocusStore.js'
+import { SidePanelLayout } from '../components/sidePanel/SidePanelLayout.js'
+import { SidePanelColumn } from '../components/sidePanel/SidePanelColumn.js'
+import { PanelPicker, usePanelPickerRows } from '../components/sidePanel/PanelPicker.js'
 import { AutoRecapRow } from '../components/AutoRecapRow.js'
 import { CompactionStatusRow } from '../components/CompactionStatusRow.js'
 import { BalanceReportRow } from '../components/BalanceReportRow.js'
@@ -1031,11 +1036,37 @@ export function Chat({
    *  (open the panel AT that job), cleared on close so the keyboard/command
    *  path reopens at the top. */
   const [jobsPanelFocusId, setJobsPanelFocusId] = React.useState<string | null>(null)
+  // Side-panel routing needs the controller, which is created further down;
+  // a ref keeps this identity-stable callback fresh anyway.
+  const sidePanelRef = React.useRef<{
+    split: boolean
+    enabledPanelIds: readonly string[]
+    openPanel: (id: string, opts?: { focus?: boolean }) => void
+  } | null>(null)
   // MessageList forwards these open handlers to every memoized row. Their
   // identities must survive token/metrics updates, including for tool rows.
   const openJobsPanel = React.useCallback((focusId?: string) => {
+    const sidePanel = sidePanelRef.current
+    // Split mode: open the jobs side panel at the requested job (the focus
+    // lane carries the id; a fresh nonce refocuses even for the same id).
+    if (sidePanel !== null && sidePanel.split && sidePanel.enabledPanelIds.includes('jobs')) {
+      if (typeof focusId === 'string' && focusId !== '') jobsFocusStore.request(focusId)
+      sidePanel.openPanel('jobs', { focus: true })
+      return
+    }
+    // Narrow / inline fallback: the full-screen overlay (unchanged).
     if (typeof focusId === 'string' && focusId !== '') setJobsPanelFocusId(focusId)
     setJobsPanelOpen(true)
+  }, [])
+  /** Ctrl+A / detail 回退：侧栏分栏且 agents 已启用时打开右栏 Panel（内部
+   *  dashboard ↔ detail 二级路由自己管）；窄屏 / inline 保留整屏形态。 */
+  const openSubagentDashboard = React.useCallback((): void => {
+    const sidePanel = sidePanelRef.current
+    if (sidePanel !== null && sidePanel.split && sidePanel.enabledPanelIds.includes('agents')) {
+      sidePanel.openPanel('agents', { focus: true })
+      return
+    }
+    setSubagentDashboardOpen(true)
   }, [])
   /** Detail view for a specific subagent (opened from dashboard). */
   const [subagentDetailId, setSubagentDetailId] = React.useState<string | null>(null)
@@ -2805,11 +2836,50 @@ export function Chat({
         else channel.notify(t('agentsmd-created', { result }))
         return true
       }
-      case 'jobs':
+      case 'jobs': {
         setHelpOpen(false)
-        setJobsPanelFocusId(null)
-        setJobsPanelOpen(true)
+        // Split mode routes to the side panel; narrow terminals keep the
+        // full-screen overlay.
+        if (sidePanel.split && sidePanel.enabledPanelIds.includes('jobs')) {
+          sidePanel.openPanel('jobs', { focus: true })
+        } else {
+          setJobsPanelFocusId(null)
+          setJobsPanelOpen(true)
+        }
         return true
+      }
+      case 'panel': {
+        setHelpOpen(false)
+        // 无参 → 面板选择器（overlay 互斥结构内）；有参 → 侧栏命令分发。
+        if (rawInput.trim() === '' && sidePanel.splitAvailable && panelPickerRows.length > 0) {
+          const current = panelPickerRows.findIndex(row => row.id === sidePanel.activePanelId)
+          dispatchOverlay({ type: 'open', overlay: { kind: 'panel', index: Math.max(0, current) } })
+          return true
+        }
+        if (sidePanel.command(rawInput)) return true
+        // 分栏不可用（窄屏 / inline / 编辑器展开 / splitEnabled=false）
+        // 或参数未知时的整屏回退与兜底：已知面板走整屏形态，其余消费
+        // 掉并提示——绝不原样返回 false，否则 PromptInput 会把
+        // "/panel …" 当普通消息发给模型。
+        const arg = rawInput.trim().toLowerCase()
+        const target = arg === '' || arg === 'focus' || arg === 'toggle' || arg === 'zoom'
+          ? sidePanel.activePanelId
+          : arg
+        if (target === 'jobs') {
+          setJobsPanelFocusId(null)
+          setJobsPanelOpen(true)
+          return true
+        }
+        if (target === 'agents') {
+          setSubagentDashboardOpen(true)
+          return true
+        }
+        if (arg === 'toggle' || arg === 'focus' || arg === 'zoom' || arg === '' || target !== undefined) {
+          channel.notify(t('panel-unavailable-hint'))
+          return true
+        }
+        return false
+      }
       case 'agents':
         setHelpOpen(false)
         void channel.listSubagents().then((lines) => {
@@ -3283,7 +3353,22 @@ export function Chat({
    */
   const { columns: terminalColumns } = useTerminalSize()
   const pageInsetX = usePageInset().x
-  const wakeWidth = miniWakeWidth(terminalColumns)
+  // 侧栏控制器：几何（chatColumns/panelColumns）、焦点与键盘分发都在
+  // 这个 hook 里（设计文档 §16.5——Chat 只多一次调用、一处键盘让位、
+  // 一条 runCommand case）。编辑器展开时几何强制 collapsed。
+  const sidePanel = useSidePanel({
+    columns: terminalColumns,
+    fullscreen,
+    editorOpen: promptEditorOpen,
+  })
+  // openJobsPanel（在上方、identity 稳定）经 ref 读取最新控制器。
+  sidePanelRef.current = sidePanel
+  // 聊天列宽：收起时 = 内容区全宽（与现状逐字节一致），分栏时 = 左栏宽。
+  // 所有显式下传的宽度（gutter / 图片预览区 / wake 条）都改用它；转录
+  // 子树则经 SidePanelLayout 的 TerminalSizeContext 覆盖自动拿到。
+  const chatColumns = sidePanel.chatColumns
+  const wakeWidth = miniWakeWidth(chatColumns)
+  const panelPickerRows = usePanelPickerRows(sidePanel)
   const wakeBand = React.useMemo(
         () =>
       wakeWidth === 0
@@ -3519,7 +3604,10 @@ export function Chat({
     // Events only arrive with mouse tracking on; inline mode never sees
     // them, so this is a no-op there.
     if (key.wheelUp || key.wheelDown) {
-      if (helpOpen) return
+      // 焦点在右栏时滚轮不回落到转录：落在面板矩形上的滚轮已由命中
+      // 测试路由给面板自己的 ScrollBox，到达这里的兜底事件不应在
+      // 用户操作右栏时误滚左栏。
+      if (helpOpen || sidePanel.focus === 'panel') return
       // Any open transient dialog is modal to the wheel; the one exception
       // mirrors the render gate — a workspace picker whose target list has
       // not landed paints nothing, so wheel-through keeps scrolling.
@@ -3555,7 +3643,8 @@ export function Chat({
     // pending. The panels bind ↑/↓/Space/Tab/Enter/Esc and never these keys,
     // so paging cannot steal anything from them.
     if ((key.pageUp || key.pageDown) && fullscreen) {
-      if (helpOpen) return
+      // 焦点在右栏时 PgUp/PgDn 属于活动面板（经侧栏键盘分发）。
+      if (helpOpen || sidePanel.focus === 'panel') return
       const overlayModal =
         overlay.kind !== 'none' &&
         (overlay.kind !== 'workspace-picker' || workspaceTargets.length > 0)
@@ -3591,6 +3680,11 @@ export function Chat({
       }
       return
     }
+    // 侧栏键盘分发（v2.1 优先级）：上面的审批 / 问卷 / 对话框守卫仍然
+    // 最先，其次是侧栏全局快捷键（Ctrl+B / Alt+Z，两种焦点都生效），
+    // 然后焦点在右栏时一切按键归侧栏——活动面板的业务键优先，宿主
+    // 回退键（←/→ 切面板、z、+/-、Esc 回聊天）兜底。
+    if (sidePanel.handleKey(input, key, event)) return
     const returnCandidate = isPlainReturnInput(input, key)
     const returnNow = Date.now()
     const plainReturn = returnCandidate && returnNow - lastModalEnterAtRef.current >= 80
@@ -4028,6 +4122,18 @@ export function Chat({
       }
       return
     }
+    if (overlay.kind === 'panel') {
+      if (key.upArrow || key.downArrow) {
+        dispatchOverlay({ type: 'move', delta: key.upArrow ? -1 : 1, count: panelPickerRows.length })
+      } else if (plainReturn) {
+        const row = panelPickerRows[overlay.index]
+        dispatchOverlay({ type: 'close' })
+        if (row !== undefined) sidePanel.openPanel(row.id, { focus: true })
+      } else if (key.escape) {
+        dispatchOverlay({ type: 'close' })
+      }
+      return
+    }
     if (overlay.kind === 'theme') {
       const options = getThemeOptions(themeHost)
       if (key.upArrow || key.downArrow) {
@@ -4180,11 +4286,12 @@ export function Chat({
       return
     }
     if (actionMatches('dashboard', input, key)) {
-      // The subagent dashboard key (default Ctrl+A) opens the dashboard.
-      // Consume the key: without the stop the prompt editor's readline
-      // binding ALSO fires (Ctrl+A moves the caret to line start), so one
-      // press both opens the overlay and jumps the cursor.
-      setSubagentDashboardOpen(true)
+      // The subagent dashboard key (default Ctrl+A) opens the dashboard —
+      // split mode routes it to the agents side panel instead. Consume the
+      // key: without the stop the prompt editor's readline binding ALSO
+      // fires (Ctrl+A moves the caret to line start), so one press both
+      // opens the view and jumps the cursor.
+      openSubagentDashboard()
       event.stopImmediatePropagation()
       return
     }
@@ -4724,9 +4831,9 @@ export function Chat({
   if (subagentDetailId !== null) {
     const subagent = channel.subagents.find(s => s.agentId === subagentDetailId)
     if (!subagent) {
-      // Agent not found, go back to dashboard
+      // Agent not found, go back to the dashboard (side panel when split).
       setSubagentDetailId(null)
-      setSubagentDashboardOpen(true)
+      openSubagentDashboard()
       return null
     }
     const scene = (
@@ -4820,6 +4927,7 @@ export function Chat({
     workspaceTargetCount: workspaceTargets.length,
     effortOptionCount: effortOptions.length,
     presetOptionCount: presetOptions.length,
+    panelCount: panelPickerRows.length,
   }) && !(overlay.kind === 'permission'
     && (approvalSnapshot !== null || questionSnapshot !== null || dialogSnapshot !== null))
 
@@ -4845,8 +4953,8 @@ export function Chat({
   // the transcript viewport height from the ScrollBox handle and the content
   // column width. The full-screen (editor-open) placement uses the terminal.
   const imagePreviewRegion = promptEditorOpen
-    ? { columns: terminalColumns, rows: terminalRows }
-    : { columns: terminalColumns, rows: handle?.getViewportHeight() ?? terminalRows }
+    ? { columns: chatColumns, rows: terminalRows }
+    : { columns: chatColumns, rows: handle?.getViewportHeight() ?? terminalRows }
   const imagePreviewNode = activePreview !== null && (activePreview.peek || imagePreviewOwned)
     ? (
       <ImagePreviewOverlay
@@ -4866,6 +4974,27 @@ export function Chat({
 
   return (
     <Box ref={wakeTickRef} flexDirection="column" flexGrow={1} width="100%">
+      {/* 分栏布局：geometry 为 null（收起 / 窄屏 / inline / 编辑器展开）
+          时 SidePanelLayout 原样渲染 children，与现状逐字节一致；分栏时
+          左栏拿到 chatColumns 的 TerminalSizeContext 覆盖与出血边界。 */}
+      <SidePanelLayout
+        geometry={sidePanel.geometry}
+        focus={sidePanel.focus}
+        onActivateChat={sidePanel.focusChat}
+        onActivatePanel={sidePanel.focusPanel}
+        side={
+          <SidePanelColumn
+            width={sidePanel.panelColumns}
+            controller={sidePanel}
+            channel={channel}
+            activity={workingActivity}
+            attention={{
+              approvals: approvalSnapshot !== null ? 1 : 0,
+              questions: questionSnapshot !== null ? 1 : 0,
+            }}
+          />
+        }
+      >
       {!isSticky && timeline.activeId !== null && (
         <PinnedTurnHeader
           text={anchorUserText || null}
@@ -4891,7 +5020,7 @@ export function Chat({
           (structural chrome convention: dividers and the rail bleed, text
           and cards keep the content column). No explicit width: cross-axis
           stretch with the margin yields exactly content+margin. */}
-      <Box flexDirection="row" flexGrow={1} flexShrink={1} marginRight={-pageInsetX}>
+      <Box flexDirection="row" flexGrow={1} flexShrink={1} marginRight={sidePanel.split ? 0 : -pageInsetX}>
         <ScrollBox ref={setHandle} flexDirection="column" flexGrow={1} flexShrink={1} stickyScroll>
         <LogoHeader
           key={logoNonce}
@@ -4974,7 +5103,7 @@ export function Chat({
           const gutter = normalizeScrollGutter(channel.scrollGutter)
           if (gutter === 'hidden') return null
           if (gutter === 'scrollbar') {
-            return <ScrollbarGutter handle={handle} terminalWidth={terminalColumns} />
+            return <ScrollbarGutter handle={handle} terminalWidth={chatColumns} />
           }
           return (
             <TimelineRail
@@ -4983,7 +5112,7 @@ export function Chat({
               activeId={timeline.activeId}
               upId={timeline.upId}
               downId={timeline.downId}
-              terminalWidth={terminalColumns}
+              terminalWidth={chatColumns}
               hoverEnabled={!promptSelectionActive}
               onRevealTurn={revealAndSeekRow}
             />
@@ -5050,11 +5179,15 @@ export function Chat({
             activityPreset={activitySlot ? channel.activityFrames : undefined}
           />
         )}
-        <GoalTodoPanel
-          channel={channel}
-          collapsed={todoCollapsed}
-          onToggle={() => setTodoCollapsed(previous => !previous)}
-        />
+        {/* 分栏且 todo Panel 已启用时，Goal/Todo 由右栏 Panel 承载，
+            底部 chrome 不再挂载（窄屏 / inline / 未启用时保留现状）。 */}
+        {!(sidePanel.split && sidePanel.enabledPanelIds.includes('todo')) && (
+          <GoalTodoPanel
+            channel={channel}
+            collapsed={todoCollapsed}
+            onToggle={() => setTodoCollapsed(previous => !previous)}
+          />
+        )}
         {recap !== null && recap.auto && !recap.expanded && (
           <AutoRecapRow
             summary={recap.summary}
@@ -5413,6 +5546,20 @@ export function Chat({
               />
             </Box>
           )}
+          {overlay.kind === 'panel' && panelPickerRows.length > 0 && (
+            <Box flexDirection="column" marginTop={1}>
+              <PanelPicker
+                rows={panelPickerRows}
+                focusIndex={overlay.index}
+                activeId={sidePanel.activePanelId}
+                onPick={(index) => {
+                  const row = panelPickerRows[index]
+                  dispatchOverlay({ type: 'close' })
+                  if (row !== undefined) sidePanel.openPanel(row.id, { focus: true })
+                }}
+              />
+            </Box>
+          )}
           {overlay.kind === 'effort' && effortOptions.length > 1 && (
             <Box flexDirection="column" marginTop={1}>
               <EffortSlider
@@ -5575,15 +5722,17 @@ export function Chat({
         )}
         </Box>
       </Box>
-      {/* Tooltip 悬停浮层：absolute 零布局高度，挂在根 Box 最后确保盖在
-          其余内容之上（yoga 的 absolute 相对父级，根 Box 原点即屏原点，
-          指针 anchor 的屏幕坐标可直接使用）。订阅模块级 store，锚点/
-          内容由各处的 useTooltip hover props 写入；resize 时自行隐藏
-          （几何失效）。 */}
+      {/* Tooltip 悬停浮层：absolute 零布局高度，挂在聊天栏内最后（v2.1
+          surface 边界）——它读到的是聊天列宽，clamp 后永远不会越过中缝
+          压进右栏；yoga 的 absolute 相对父级，聊天栏原点即内容区原点，
+          指针 anchor 的屏幕坐标换算（anchorCol - inset.x）保持正确。
+          订阅模块级 store，锚点/内容由各处 useTooltip hover props 写入；
+          resize 时自行隐藏（几何失效）。 */}
       <TooltipLayer
         invalidationKey={`${overlay.kind}:${dialogOverlayOpen}:${btw !== null}`}
         subscribeInvalidation={subscribeTooltipInvalidation}
       />
+      </SidePanelLayout>
       {/* 全屏草稿编辑浮层：必须挂在 TooltipLayer 之后，才能盖住包括
           状态栏在内的全部普通后绘兄弟。内容由 PromptInput 经 module
           store 发布（见 PromptEditor.tsx）。图片预览是唯一有意后绘于它
