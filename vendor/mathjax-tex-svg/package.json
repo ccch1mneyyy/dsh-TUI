@@ -1,0 +1,29 @@
+{
+  "name": "@dsh-tui-vendor/mathjax-tex-svg",
+  "version": "0.0.0",
+  "private": true,
+  "description": "MathJax 3 TeX-to-SVG subset bundled for dsh-tui's math image renderer.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "main": "./lib/index.mjs",
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "default": "./lib/index.mjs"
+    }
+  },
+  "types": "./index.d.ts",
+  "files": [
+    "lib",
+    "index.d.ts",
+    "LICENSE",
+    "NOTICE"
+  ],
+  "scripts": {
+    "build": "node build.mjs"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2",
+    "mathjax-full": "3.2.2"
+  }
+}

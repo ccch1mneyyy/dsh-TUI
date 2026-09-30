@@ -270,12 +270,14 @@ async function runAddFlow(
 
   // ── 5. model discovery (draft credential, nothing persisted) ───────
   notify(t('provider-discovery-running'))
-  const discovered = await host.discoverModels({
+  const discovery = await discoverRouteModels(host, {
     ...(isCatalog ? { provider: route } : {}),
     ...(baseURL !== undefined && baseURL !== '' ? { baseURL } : {}),
     ...(api !== undefined ? { api } : {}),
-    apiKey: apiKey ?? '',
-  }).catch(() => [])
+    ...(apiKey !== undefined && apiKey !== '' ? { apiKey } : {}),
+  })
+  const discovered = discovery.rows
+  notifyDiscoveryStatus(notify, discovery)
 
   // ── 6. model selection ─────────────────────────────────────────────
   let models: string[] = []
@@ -286,17 +288,22 @@ async function runAddFlow(
       questions: [optionQuestion('models', t('provider-q-models'),
         discovered.map(model => ({
           label: model.id,
-          description: [
-            model.name ?? '',
-            model.contextWindow !== undefined ? `${model.contextWindow}` : '',
-          ].filter(part => part !== '').join(' · ') || undefined,
+          description: modelRowDescription(
+            model,
+            isCatalog && discovery.catalog === 'fetched' && !discovery.catalogIds.has(model.id),
+          ),
         })),
-        { multiSelect: true },
+        {
+          multiSelect: true,
+          ...(isCatalog && discovery.reason === 'no-base-url'
+            ? { detail: t('provider-catalog-snapshot-note', { n: discovered.length }) }
+            : {}),
+        },
       )],
     })
     models = mergeModelIds(
       answerSelected(modelsAnswer, 'models'),
-      answerText(modelsAnswer, 'models'),
+      modelCustomInput(modelsAnswer, isCatalog, discovery, notify),
     )
   } else {
     notify(t('provider-discovery-failed'), { color: 'warning' })
@@ -318,11 +325,14 @@ async function runAddFlow(
 
   // ── 7. confirm ─────────────────────────────────────────────────────
   const summaryLines = buildSummaryLines({
-    route, ref, shadowed, baseURL, api, models, isCatalog, keyLine,
+    route, action: 'added', ref, shadowed, baseURL, api, models, isCatalog, keyLine,
+  })
+  const previewLines = buildSummaryLines({
+    route, action: 'preview', ref, shadowed, baseURL, api, models, isCatalog, keyLine,
   })
   const detail = host.routeExists(route)
-    ? `${summaryLines.join('\n')}\n${t('provider-route-exists-warning')}`
-    : summaryLines.join('\n')
+    ? `${previewLines.join('\n')}\n${t('provider-route-exists-warning')}`
+    : previewLines.join('\n')
   const confirmAnswer = await ask({
     questions: [optionQuestion('confirm', t('provider-q-confirm'), [
       { label: t('provider-opt-confirm-write') },
@@ -345,7 +355,16 @@ async function runAddFlow(
     await host.writeCredential(ref, apiKey)
     wroteCredential = true
   }
-  const profile = buildProfile({ isCatalog, ref, baseURL, api, models, discoveredById })
+  const profile = buildProfile({
+    isCatalog,
+    ref,
+    baseURL,
+    api,
+    models,
+    discoveredById,
+    catalogIds: discovery.catalogIds,
+    catalogDiscovery: discovery.catalog,
+  })
   try {
     await host.writeProfile(route, profile)
   } catch (error) {
@@ -530,6 +549,7 @@ async function editApiKey(
   await host.writeCredential(provider.ref, value)
   pushLocal('/provider', buildSummaryLines({
     route: provider.route,
+    action: 'updated',
     ref: provider.ref,
     shadowed: provider.shadowed,
     baseURL: provider.baseURL,
@@ -558,6 +578,7 @@ async function patchProfileField(
   await host.mutateProfile(provider.route, [{ op: 'set', path, value }])
   pushLocal('/provider', buildSummaryLines({
     route: provider.route,
+    action: 'updated',
     ref: provider.ref,
     shadowed: provider.shadowed,
     baseURL: change.baseURL ?? provider.baseURL,
@@ -632,16 +653,27 @@ async function editModelList(
   const { host, ask, notify, pushLocal } = deps
   const isCatalog = provider.isCatalog
   const previous = provider.models ?? []
-  const key = provider.ref !== ''
+  // The credential is read only when a live probe will use it: a catalog
+  // A route without a usable live probe (no endpoint, unsupported catalog
+  // protocol, or custom headers the upstream seam cannot carry) stays on the
+  // installed-catalog listing, so no secret is resolved for nothing.
+  const endpointKnown = provider.baseURL !== undefined && provider.baseURL !== ''
+  const liveProbePossible = endpointKnown
+    && !provider.hasCustomHeaders
+    && (!isCatalog || provider.api !== undefined || catalogLiveApi(provider.route) !== undefined)
+  const key = provider.ref !== '' && liveProbePossible
     ? (provider.shadowed ? host.envValue(provider.ref) : await host.readCredential(provider.ref))
     : undefined
   notify(t('provider-discovery-running'))
-  const discovered = await host.discoverModels({
+  const discovery = await discoverRouteModels(host, {
     ...(isCatalog ? { provider: provider.route } : {}),
-    ...(provider.baseURL !== undefined && provider.baseURL !== '' ? { baseURL: provider.baseURL } : {}),
+    ...(provider.baseURL !== undefined ? { baseURL: provider.baseURL } : {}),
     ...(provider.api !== undefined ? { api: provider.api } : {}),
-    apiKey: key ?? '',
-  }).catch(() => [])
+    ...(provider.hasCustomHeaders ? { hasCustomHeaders: true } : {}),
+    ...(key !== undefined ? { apiKey: key } : {}),
+  })
+  const discovered = discovery.rows
+  notifyDiscoveryStatus(notify, discovery)
 
   let models: string[]
   let discoveredById = new Map<string, LlmDiscoveredModel>()
@@ -657,18 +689,18 @@ async function editModelList(
     }
   } else {
     discoveredById = new Map(discovered.map(model => [model.id, model] as const))
-    // Existing models the endpoint no longer advertises (renamed, beta
-    // pulled, transient discovery gap) must still appear in the panel,
-    // pre-checked and marked: options built from `discovered` alone would
-    // silently drop them on an Enter-through confirm, destroying their
-    // stored entries and the unmodeled per-model fields. Only an explicit
-    // un-check removes one.
+    // Existing models neither the catalog nor the endpoint advertises
+    // (renamed, beta pulled, transient discovery gap) must still appear in
+    // the panel, pre-checked and marked: options built from `discovered`
+    // alone would silently drop them on an Enter-through confirm,
+    // destroying their stored entries and the unmodeled per-model fields.
+    // Only an explicit un-check removes one.
     const optionRows = discovered.map(model => ({
       label: model.id,
-      description: [
-        model.name ?? '',
-        model.contextWindow !== undefined ? `${model.contextWindow}` : '',
-      ].filter(part => part !== '').join(' · ') || undefined,
+      description: modelRowDescription(
+        model,
+        isCatalog && discovery.catalog === 'fetched' && !discovery.catalogIds.has(model.id),
+      ),
     }))
     const missingRows = previous
       .filter(id => !discoveredById.has(id))
@@ -679,12 +711,18 @@ async function editModelList(
     const modelsAnswer = await ask({
       questions: [optionQuestion('models', t('provider-q-models'),
         [...optionRows, ...missingRows],
-        { multiSelect: true, defaultSelected: previous },
+        {
+          multiSelect: true,
+          defaultSelected: previous,
+          ...(isCatalog && discovery.reason === 'no-base-url'
+            ? { detail: t('provider-catalog-snapshot-note', { n: discovered.length }) }
+            : {}),
+        },
       )],
     })
     models = mergeModelIds(
       answerSelected(modelsAnswer, 'models'),
-      answerText(modelsAnswer, 'models'),
+      modelCustomInput(modelsAnswer, isCatalog, discovery, notify),
     )
   }
 
@@ -698,8 +736,11 @@ async function editModelList(
     return 'cancelled'
   }
   // The new `models` value: a kept id re-enters its stored entry verbatim;
-  // a newly enabled one is built from the discovery row (plain `{id}` on a
-  // catalog route, where the catalog itself carries the capabilities).
+  // a newly enabled one is built from the discovery row. An id the installed
+  // catalog covers stays plain `{id}` (the catalog carries the capabilities
+  // and would be overridden by entry fields); an endpoint-only id takes the
+  // capacities the live listing disclosed, falling back to the route
+  // defaults upstream when the endpoint said nothing.
   const storedById = new Map((provider.modelEntries ?? [])
     .flatMap(entry => typeof entry['id'] === 'string' ? [[entry['id'], entry] as const] : []))
   const modelsValue = models.map(id => {
@@ -708,7 +749,9 @@ async function editModelList(
     const discovered = discoveredById.get(id)
     return {
       id,
-      ...(isCatalog || discovered === undefined ? {} : {
+      ...((isCatalog && (
+        discovery.catalog !== 'fetched' || discovery.catalogIds.has(id)
+      )) || discovered === undefined ? {} : {
         ...(discovered.contextWindow !== undefined
           ? { contextWindow: discovered.contextWindow }
           : {}),
@@ -723,6 +766,7 @@ async function editModelList(
   ])
   pushLocal('/provider', buildSummaryLines({
     route: provider.route,
+    action: 'updated-models',
     ref: provider.ref,
     shadowed: provider.shadowed,
     baseURL: provider.baseURL,
@@ -732,6 +776,10 @@ async function editModelList(
     keyLine: provider.ref !== ''
       ? t('provider-line-key-kept', { ref: provider.ref })
       : t('provider-line-key-none'),
+    delta: {
+      added: models.filter(id => !previous.includes(id)),
+      removed: previous.filter(id => !models.includes(id)),
+    },
   }))
   notify(t('provider-edit-success', { route: provider.route }), { color: 'success' })
   return 'updated'
@@ -769,7 +817,7 @@ async function deleteConfiguredProvider(
   const sharers = provider.ref === ''
     ? []
     : host.listRefUsers(provider.ref, provider.route)
-  const lines = buildDeleteSummary(provider)
+  const previewLines = buildDeleteSummary(provider)
   let confirmAnswer: AskUserQuestionAnswer
   try {
     confirmAnswer = await ask({
@@ -778,8 +826,8 @@ async function deleteConfiguredProvider(
         { label: t('provider-opt-confirm-cancel') },
       ], {
         detail: sharers.length > 0
-          ? `${lines.join('\n')}\n${t('provider-delete-shared-warning', { ref: provider.ref, routes: sharers.join(', ') })}`
-          : lines.join('\n'),
+          ? `${previewLines.join('\n')}\n${t('provider-delete-shared-warning', { ref: provider.ref, routes: sharers.join(', ') })}`
+          : previewLines.join('\n'),
         hideCustomInput: true,
       })],
     })
@@ -805,7 +853,10 @@ async function deleteConfiguredProvider(
 
   // The catalog changed from here on: report 'deleted' whatever the
   // credential cleanup below does, so the caller invalidates completions.
-  const pushedLines = [...lines]
+  const pushedLines = [
+    t('provider-line-action-deleted', { route: provider.route }),
+    ...previewLines.slice(1),
+  ]
   let keyCleanupFailed = false
   if (provider.ref !== '') {
     if (provider.shadowed) {
@@ -868,11 +919,13 @@ function providerRowDescription(provider: ConfiguredProvider): string {
  *  and models lines; no credential values are ever rendered). */
 function buildDeleteSummary(provider: ConfiguredProvider): string[] {
   const lines = [t('provider-line-route', { route: provider.route })]
-  if (provider.baseURL !== undefined) lines.push(t('provider-line-baseurl', { url: provider.baseURL }))
-  if (provider.api !== undefined) lines.push(t('provider-line-protocol', { api: provider.api }))
-  lines.push(provider.models !== undefined && provider.models.length > 0
-    ? t('provider-line-models', { models: provider.models.join(', ') })
-    : t('provider-line-models-catalog'))
+  if (provider.baseURL !== undefined && provider.baseURL !== '') {
+    const endpoint = t('provider-line-endpoint', { url: provider.baseURL })
+    lines.push(provider.api !== undefined && provider.api !== ''
+      ? `${endpoint} · ${provider.api}`
+      : endpoint)
+  }
+  lines.push(modelsSummaryLine(provider.models ?? [], undefined))
   if (provider.ref !== '') {
     lines.push(provider.shadowed
       ? t('provider-line-keyref-env', { ref: provider.ref })
@@ -884,7 +937,9 @@ function buildDeleteSummary(provider: ConfiguredProvider): string[] {
 /** Masked state line for one provider row in the OAuth pick question. */
 function oauthStateDescription(status: OAuthProviderStatus): string {
   if (status.signedIn) {
-    return t('provider-oauth-state-in', { time: new Date(status.expiresAt ?? 0).toISOString() })
+    return status.expiresAt === undefined
+      ? t('provider-oauth-state-in-no-expiry')
+      : t('provider-oauth-state-in', { time: new Date(status.expiresAt).toISOString() })
   }
   return status.expired
     ? t('provider-oauth-state-expired')
@@ -943,7 +998,9 @@ async function runOAuthWizard(
     pushLocal('/provider', [
       t('provider-line-oauth-provider', { provider: result.provider }),
       t('provider-line-oauth-flow', { flow: result.oauthLabel }),
-      t('provider-line-oauth-expires', { time: new Date(result.expiresAt).toISOString() }),
+      ...(result.expiresAt === undefined
+        ? []
+        : [t('provider-line-oauth-expires', { time: new Date(result.expiresAt).toISOString() })]),
       t('provider-switch-hint'),
     ])
     notify(t('provider-oauth-login-ok', { provider: result.provider }), { color: 'success' })
@@ -985,8 +1042,171 @@ function mergeModelIds(selected: readonly string[], custom: string): string[] {
   return ids
 }
 
+function modelCustomInput(
+  answer: AskUserQuestionAnswer,
+  isCatalog: boolean,
+  discovery: RouteDiscovery,
+  notify: ProviderWizardDeps['notify'],
+): string {
+  const custom = answerText(answer, 'models')
+  if (custom !== '' && isCatalog && discovery.reason === 'unsupported-catalog') {
+    notify(t('provider-catalog-models-only'), { color: 'warning' })
+    return ''
+  }
+  return custom
+}
+
+/** How the live endpoint probe of one discovery pass went. */
+export type RouteDiscoveryLive = 'fetched' | 'failed' | 'unavailable'
+export type RouteDiscoveryCatalog = 'fetched' | 'failed' | 'unavailable'
+export type RouteDiscoveryReason =
+  | 'no-base-url'
+  | 'unsupported-catalog'
+  | 'custom-headers'
+
+/** One route-model discovery pass, ready for the selection panel. */
+export interface RouteDiscovery {
+  /** Merged rows: installed-catalog rows first (rich metadata), then
+   *  endpoint-only ids in the order the endpoint advertised them. */
+  readonly rows: readonly LlmDiscoveredModel[]
+  /** Ids covered by the installed catalog (their rows carry catalog truth). */
+  readonly catalogIds: ReadonlySet<string>
+  /** Whether the installed catalog lookup was authoritative. */
+  readonly catalog: RouteDiscoveryCatalog
+  readonly live: RouteDiscoveryLive
+  readonly reason?: RouteDiscoveryReason
+}
+
+/**
+ * Discover the models of one route or draft in two passes.
+ *
+ * The upstream discovery seam answers a request that names a catalog
+ * `provider` from the installed static catalog without touching the network.
+ * A live probe therefore omits `provider`, but only when this adapter can
+ * supply a stable protocol and the route has no custom headers (the upstream
+ * seam cannot carry the named route's headers into an anonymous request).
+ * The listings merge: an id present in both resolves to its catalog row,
+ * endpoint-only ids append — those are the new models the wizard can surface.
+ *
+ * The `apiKey` field is omitted rather than sent empty when no key is
+ * knowable: an empty string is a hard invalid-credential upstream, while an
+ * absent field probes anonymously (a local gateway that needs no auth still
+ * lists its models).
+ */
+async function discoverRouteModels(
+  host: ProviderSetupHost,
+  draft: {
+    provider?: string
+    baseURL?: string
+    api?: string
+    apiKey?: string
+    hasCustomHeaders?: boolean
+  },
+): Promise<RouteDiscovery> {
+  const catalogResult = draft.provider !== undefined
+    ? await host.discoverModels({ provider: draft.provider }).then(
+      rows => ({ rows, catalog: 'fetched' as const }),
+      () => ({ rows: [] as const, catalog: 'failed' as const }),
+    )
+    : { rows: [] as const, catalog: 'unavailable' as const }
+  const catalogRows = catalogResult.rows
+  const catalogIds = new Set(catalogRows.map(row => row.id))
+  if (draft.baseURL === undefined || draft.baseURL === '') {
+    return {
+      rows: catalogRows,
+      catalogIds,
+      catalog: catalogResult.catalog,
+      live: 'unavailable',
+      reason: 'no-base-url',
+    }
+  }
+  if (draft.hasCustomHeaders) {
+    return {
+      rows: catalogRows,
+      catalogIds,
+      catalog: catalogResult.catalog,
+      live: 'unavailable',
+      reason: 'custom-headers',
+    }
+  }
+  const api = draft.api ?? (draft.provider !== undefined
+    ? catalogLiveApi(draft.provider)
+    : undefined)
+  if (draft.provider !== undefined && api === undefined) {
+    return {
+      rows: catalogRows,
+      catalogIds,
+      catalog: catalogResult.catalog,
+      live: 'unavailable',
+      reason: 'unsupported-catalog',
+    }
+  }
+  const live = await host.discoverModels({
+    baseURL: draft.baseURL,
+    ...(api !== undefined && api !== '' ? { api } : {}),
+    ...(draft.apiKey !== undefined && draft.apiKey !== '' ? { apiKey: draft.apiKey } : {}),
+  }).then(
+    rows => ({ rows, live: 'fetched' as const }),
+    () => ({ rows: [] as const, live: 'failed' as const }),
+  )
+  return {
+    rows: [...catalogRows, ...live.rows.filter(row => !catalogIds.has(row.id))],
+    catalogIds,
+    catalog: catalogResult.catalog,
+    live: live.live,
+  }
+}
+
+/** Catalog routes whose protocol is stable enough for an un-named live probe. */
+const CATALOG_LIVE_APIS: Readonly<Record<string, typeof PROVIDER_PROTOCOLS[number]>> = {
+  deepseek: 'openai-completions',
+  openai: 'openai-responses',
+  anthropic: 'anthropic-messages',
+}
+
+function catalogLiveApi(provider: string): typeof PROVIDER_PROTOCOLS[number] | undefined {
+  return CATALOG_LIVE_APIS[provider]
+}
+
+function notifyDiscoveryStatus(
+  notify: ProviderWizardDeps['notify'],
+  discovery: RouteDiscovery,
+): void {
+  if (discovery.catalog === 'failed') {
+    notify(t('provider-catalog-fetch-failed'), { color: 'warning' })
+  }
+  if (discovery.live === 'failed') {
+    notify(t('provider-live-fetch-failed'), { color: 'warning' })
+  } else if (discovery.reason === 'unsupported-catalog' || discovery.reason === 'custom-headers') {
+    notify(t('provider-live-fetch-unavailable'), { color: 'warning' })
+  }
+}
+
+/** Compact capacity rendering for picker rows: 1000000 → 1M, 384000 → 384k. */
+function formatCapacity(n: number): string {
+  if (n >= 1_000_000 && n % 1_000_000 === 0) return `${n / 1_000_000}M`
+  if (n >= 1_000 && n % 1_000 === 0) return `${n / 1_000}k`
+  return `${n}`
+}
+
+/**
+ * Picker-row description for one discovered model. `isNew` tags an id the
+ * installed catalog does not ship — it came from the live endpoint probe and
+ * is the thing the user is most likely looking for.
+ */
+function modelRowDescription(model: LlmDiscoveredModel, isNew: boolean): string | undefined {
+  const parts = [
+    ...(isNew ? [t('provider-row-model-new')] : []),
+    ...(model.name !== undefined && model.name !== '' ? [model.name] : []),
+    ...(model.contextWindow !== undefined ? [formatCapacity(model.contextWindow)] : []),
+  ]
+  return parts.length > 0 ? parts.join(' · ') : undefined
+}
+
 function buildSummaryLines(input: {
   route: string
+  /** Outcome verb for the first line (what this run actually did). */
+  action: 'added' | 'updated' | 'updated-models' | 'preview'
   ref: string
   shadowed: boolean
   baseURL: string | undefined
@@ -995,19 +1215,56 @@ function buildSummaryLines(input: {
   isCatalog: boolean
   /** Key line override (kept / updated / env); add mode derives it. */
   keyLine?: string
+  /** Model-list delta against the previously enabled set (model-list edits). */
+  delta?: { added: readonly string[]; removed: readonly string[] }
 }): string[] {
-  const lines = [t('provider-line-route', { route: input.route })]
-  lines.push(input.keyLine ?? (input.shadowed
+  const lines = [input.action === 'preview'
+    ? t('provider-line-route', { route: input.route })
+    : input.action === 'added'
+    ? t('provider-line-action-added', { route: input.route })
+    : input.action === 'updated-models'
+      ? t('provider-line-action-updated-models', { route: input.route })
+      : t('provider-line-action-updated', { route: input.route })]
+  lines.push((input.action === 'preview' && !input.shadowed && input.ref !== ''
+    ? t('provider-line-keyref-preview', { ref: input.ref })
+    : undefined) ?? input.keyLine ?? (input.shadowed
     ? t('provider-line-keyref-env', { ref: input.ref })
     : t('provider-line-keyref', { ref: input.ref })))
   if (input.baseURL !== undefined && input.baseURL !== '') {
-    lines.push(t('provider-line-baseurl', { url: input.baseURL }))
+    // The wire protocol rides the endpoint line: it only ever varies per
+    // endpoint, and a lone protocol row reads as filler.
+    const endpoint = t('provider-line-endpoint', { url: input.baseURL })
+    lines.push(input.api !== undefined && input.api !== ''
+      ? `${endpoint} · ${input.api}`
+      : endpoint)
   }
-  if (input.api !== undefined) lines.push(t('provider-line-protocol', { api: input.api }))
-  lines.push(input.models.length > 0
-    ? t('provider-line-models', { models: input.models.join(', ') })
-    : t('provider-line-models-catalog'))
+  lines.push(modelsSummaryLine(input.models, input.delta))
   return lines
+}
+
+/** `Models: …` line with an optional (added · removed) delta suffix. */
+function modelsSummaryLine(
+  models: readonly string[],
+  delta: { added: readonly string[]; removed: readonly string[] } | undefined,
+): string {
+  const base = models.length > 0
+    ? t('provider-line-models', { models: models.join(', ') })
+    : t('provider-line-models-catalog')
+  if (delta === undefined) return base
+  const parts: string[] = []
+  if (delta.added.length > 0) parts.push(t('provider-models-delta-added', { n: delta.added.length }))
+  if (delta.removed.length > 0) parts.push(t('provider-models-delta-removed', { n: delta.removed.length }))
+  return parts.length === 0 ? base
+    : `${base}${t('provider-models-delta-wrap', { parts: parts.join(' · ') })}`
+}
+
+/** Capacity fields for one discovered row, when the listing disclosed them. */
+function capsOf(model: LlmDiscoveredModel | undefined): Record<string, number> {
+  if (model === undefined) return {}
+  return {
+    ...(model.contextWindow !== undefined ? { contextWindow: model.contextWindow } : {}),
+    ...(model.maxTokens !== undefined ? { maxTokens: model.maxTokens } : {}),
+  }
 }
 
 function buildProfile(input: {
@@ -1017,6 +1274,8 @@ function buildProfile(input: {
   api: string | undefined
   models: readonly string[]
   discoveredById: ReadonlyMap<string, LlmDiscoveredModel>
+  catalogIds: ReadonlySet<string>
+  catalogDiscovery: RouteDiscoveryCatalog
 }): Record<string, unknown> {
   const profile: Record<string, unknown> = {}
   // Preserve the profile's credential shape: an empty ref (no apiKeyEnv)
@@ -1025,24 +1284,23 @@ function buildProfile(input: {
   if (input.baseURL !== undefined && input.baseURL !== '') profile['baseURL'] = input.baseURL
   if (input.isCatalog) {
     // `models` replaces the catalog when present; omit it to keep the whole
-    // catalog served.
+    // catalog served. An id the installed catalog covers stays plain `{id}`
+    // (the catalog carries versioned capabilities); an endpoint-only id
+    // carries what the live listing disclosed.
     if (input.models.length > 0) {
-      profile['models'] = input.models.map(id => ({ id }))
+      profile['models'] = input.models.map(id => ({
+        id,
+        ...((input.catalogDiscovery !== 'fetched' || input.catalogIds.has(id))
+          ? {}
+          : capsOf(input.discoveredById.get(id))),
+      }))
     }
     return profile
   }
   profile['api'] = input.api
-  profile['models'] = input.models.map(id => {
-    const discovered = input.discoveredById.get(id)
-    return {
-      id,
-      ...(discovered?.contextWindow !== undefined
-        ? { contextWindow: discovered.contextWindow }
-        : {}),
-      ...(discovered?.maxTokens !== undefined
-        ? { maxTokens: discovered.maxTokens }
-        : {}),
-    }
-  })
+  profile['models'] = input.models.map(id => ({
+    id,
+    ...capsOf(input.discoveredById.get(id)),
+  }))
   return profile
 }

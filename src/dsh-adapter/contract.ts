@@ -2,9 +2,9 @@
  * Upstream compatibility contract.
  *
  * The TUI is validated against a set of upstream prerelease lines — the
- * current primary (0.1.7-rc.2) plus older lines kept in backward
- * compatibility across the 0.1.5, 0.1.3, 0.1.2, 0.1.1 and 0.1.0 release
- * families.
+ * current primary (0.2.0-rc.2) plus older lines kept in backward
+ * compatibility across the 0.1.7, 0.1.5, 0.1.3, 0.1.2, 0.1.1 and 0.1.0
+ * release families.
  * Every official package this adapter touches is blessed here; anything
  * else must go through upstream channels or the adapter, never the UI.
  *
@@ -17,13 +17,14 @@ import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 
 /** Primary validated upstream line (newest). */
-export const UPSTREAM_VALIDATED_VERSION = '0.1.7-rc.2'
+export const UPSTREAM_VALIDATED_VERSION = '0.2.0-rc.2'
 
 /**
  * Explicitly supported upstream prerelease lines, oldest first.
  *
- * 0.1.7-rc.2 = primary continuous-CI line; 0.1.7-rc.1 = previous 0.1.7
- * build (mapped compatibility); 0.1.5-rc.1/alpha.2/alpha.1 = mapped
+ * 0.2.0-rc.2 = primary continuous-CI line; 0.2.0-rc.1 and
+ * 0.1.7-rc.2/rc.1 = previous
+ * family (mapped compatibility); 0.1.5-rc.1/alpha.2/alpha.1 = mapped
  * compatibility lines (source-checked when the primary line moves);
  * 0.1.3-alpha.2 = compatibility line (the only 0.1.3 build on npm);
  * 0.1.2-rc.1 = previous family (full CI coverage); 0.1.2-alpha.3–alpha.5 =
@@ -51,6 +52,8 @@ export const UPSTREAM_VALIDATED_VERSIONS = [
   '0.1.5-rc.1',
   '0.1.7-rc.1',
   '0.1.7-rc.2',
+  '0.2.0-rc.1',
+  '0.2.0-rc.2',
 ] as const
 
 /**
@@ -74,9 +77,12 @@ export const UPSTREAM_BLESSED_PACKAGES = [
   '@deepseek-ai/dsh-ptc-runtime-node',
   '@deepseek-ai/dsh-commands',
   '@deepseek-ai/dsh-cordis-host-runner',
+  '@deepseek-ai/dsh-deepseek-account',
+  '@deepseek-ai/dsh-host-webserver',
   '@deepseek-ai/dsh-llm',
   '@deepseek-ai/dsh-llm-pi-ai',
   '@deepseek-ai/dsh-persona',
+  '@deepseek-ai/dsh-scope',
   '@deepseek-ai/dsh-session',
   '@deepseek-ai/dsh-settings',
   '@deepseek-ai/dsh-skill',
@@ -107,6 +113,8 @@ export interface UpstreamDriftEntry {
 const OPTIONAL_RUNTIME_PACKAGES = new Set<string>([
   '@deepseek-ai/dsh-agent-preset-registry',
   '@deepseek-ai/dsh-ptc-runtime-node',
+  '@deepseek-ai/dsh-deepseek-account',
+  '@deepseek-ai/dsh-host-webserver',
   '@deepseek-ai/dsh-web-app',
 ])
 

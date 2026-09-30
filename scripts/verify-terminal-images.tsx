@@ -33,6 +33,7 @@ import {
 } from '../src/ink/screen.js'
 import {
   kittyGraphics,
+  TerminalQuerier,
   terminalCellSizePixels,
   terminalWindowSizePixels,
 } from '../src/ink/terminal-querier.js'
@@ -209,7 +210,7 @@ assert.match(first, /a=t,t=d,f=32/u)
 assert.match(first, /a=p,i=101,p=1,c=6,r=3,z=-2147483648,C=1/u)
 assert.match(
   first,
-  /\x1b\[4;3H\x1b_Ga=p,i=101,p=1,c=6,r=3,z=-2147483648,C=1,q=2;/u,
+  /\x1b\[4;3H\x1b_Ga=p,i=101,p=1,c=6,r=3,z=-2147483648,C=1,q=1;/u,
   'the sole display action must follow the target-cell cursor placement',
 )
 assert.equal(
@@ -257,7 +258,188 @@ assert.match(
   invalidated,
   new RegExp(`a=p,i=${replacementImageId},p=1,c=6,r=3,z=-2147483648,C=1`, 'u'),
 )
-assert.match(manager.reconcile([]), new RegExp(`a=d,d=I,i=${replacementImageId}`, 'u'))
+const unplaced = manager.reconcile([])
+assert.match(
+  unplaced,
+  new RegExp(`a=d,d=i,i=${replacementImageId},p=1`, 'u'),
+  'a node leaving the frame deletes only its placement',
+)
+assert.doesNotMatch(unplaced, /a=d,d=I/u, 'image data stays uploaded while dormant')
+const replacedAgain = manager.reconcile([replacementPlacement])
+assert.doesNotMatch(replacedAgain, /\x1b_Ga=[tT],/u, 'a dormant image comes back without a re-upload')
+assert.match(
+  replacedAgain,
+  new RegExp(`a=p,i=${replacementImageId},p=\\d+,c=6,r=3`, 'u'),
+  'a dormant image comes back with one placement command',
+)
+
+// Partially visible images: the placement covers only the visible cells and
+// shows the matching source rectangle of the already uploaded raster.
+const cropManager = new KittyGraphicsManager({ firstImageId: 701 })
+const cropNode = createNode('ink-image')
+const cropPlacement = { ...placement, node: cropNode, presentation: 'transcript' as const }
+const cropFull = cropManager.reconcile([cropPlacement])
+const cropSize = /a=t,t=d,f=32,s=(\d+),v=(\d+)/u.exec(cropFull)
+assert.ok(cropSize, 'the full raster uploads once')
+const [cropWidth, cropHeight] = [Number(cropSize![1]), Number(cropSize![2])]
+const topClipped = cropManager.reconcile([{ ...cropPlacement, clip: { x: 2, y: 4, columns: 6, rows: 2 } }])
+assert.doesNotMatch(topClipped, /\x1b_Ga=[tT],/u, 'cropping never re-uploads')
+assert.match(
+  topClipped,
+  new RegExp(`\\x1b\\[5;3H\\x1b_Ga=p,i=701,p=\\d+,c=6,r=2,x=0,y=${Math.floor(cropHeight / 3)},w=${cropWidth},h=${cropHeight - Math.floor(cropHeight / 3)},`, 'u'),
+  'a top-clipped image is placed at its first visible row with the lower source rows',
+)
+const bottomClipped = cropManager.reconcile([{ ...cropPlacement, clip: { x: 2, y: 3, columns: 6, rows: 1 } }])
+assert.match(
+  bottomClipped,
+  new RegExp(`\\x1b\\[4;3H\\x1b_Ga=p,i=701,p=\\d+,c=6,r=1,x=0,y=0,w=${cropWidth},h=${Math.ceil(cropHeight / 3)},`, 'u'),
+  'a bottom-clipped image shows its top source rows',
+)
+assert.equal(
+  cropManager.reconcile([{ ...cropPlacement, clip: { x: 2, y: 3, columns: 6, rows: 1 } }]),
+  '',
+  'an unchanged crop emits nothing',
+)
+const unclipped = cropManager.reconcile([cropPlacement])
+assert.match(unclipped, /a=p,i=701,p=\d+,c=6,r=3,z=/u, 'scrolling fully back into view drops the source rectangle')
+assert.doesNotMatch(unclipped, /\x1b_Ga=[tT],/u)
+
+// Retention budget: dormant images beyond the count bound are evicted
+// least-recently-used, releasing their terminal-side data exactly once.
+const retentionManager = new KittyGraphicsManager({ firstImageId: 501 })
+const retentionNodes = Array.from({ length: 130 }, () => createNode('ink-image'))
+const retentionSources = retentionNodes.map((_, index) => {
+  const data = source.data.slice()
+  data[0] = index & 0xff
+  data[1] = index >> 8
+  return { ...source, data }
+})
+let scrolled = ''
+for (let index = 0; index < retentionNodes.length; index++) {
+  scrolled += retentionManager.reconcile([{ ...placement, node: retentionNodes[index]!, source: retentionSources[index]! }])
+}
+scrolled += retentionManager.reconcile([])
+assert.equal(
+  [...scrolled.matchAll(/a=d,d=I,i=(\d+)/gu)].map(match => Number(match[1])).join(','),
+  '501,502',
+  'only the two least-recently-used dormant images beyond 128 are released',
+)
+assert.doesNotMatch(
+  retentionManager.reconcile([{ ...placement, node: retentionNodes[129]!, source: retentionSources[129]! }]),
+  /\x1b_Ga=[tT],/u,
+  'a recently used dormant image is re-placed without re-upload',
+)
+assert.match(
+  retentionManager.reconcile([{ ...placement, node: retentionNodes[0]!, source: retentionSources[0]! }]),
+  /a=t,t=d,f=32/u,
+  'an evicted image uploads again when it returns',
+)
+retentionManager.setCellSize({ width: 10, height: 20 })
+assert.match(
+  retentionManager.reconcile([]),
+  /a=d,d=I,i=/u,
+  'variants fitted for a previous cell geometry are released, never kept dormant',
+)
+
+// Byte budget: fewer than 128 dormant images can still exceed the decoded
+// byte bound (4 MiB each); the least-recently-used ones are released first,
+// and touching an old image refreshes it so a newer one goes instead.
+const byteManager = new KittyGraphicsManager({ firstImageId: 801, cellSize: { width: 8, height: 16 } })
+const bigSource = (index: number): TerminalImageSource => {
+  const data = new Uint8Array(1024 * 1024 * 4)
+  data[0] = index
+  return { data, width: 1024, height: 1024 }
+}
+const bigNodes = Array.from({ length: 17 }, () => createNode('ink-image'))
+const bigPlacement = (index: number): TerminalImagePlacement => ({
+  node: bigNodes[index]!,
+  x: 0,
+  y: 0,
+  columns: 128,
+  rows: 64,
+  source: bigSource(index),
+  presentation: 'transcript',
+})
+const bigPlacements = bigNodes.map((_, index) => bigPlacement(index))
+let byteOutput = ''
+for (let index = 0; index < 16; index++) byteOutput += byteManager.reconcile([bigPlacements[index]!])
+assert.doesNotMatch(byteOutput, /a=d,d=I/u, '16 × 4 MiB stays within the 64 MiB byte bound')
+byteOutput = byteManager.reconcile([bigPlacements[0]!])
+assert.doesNotMatch(byteOutput, /\x1b_Ga=[tT],/u, 'touching the oldest dormant image re-places it without upload')
+byteOutput = byteManager.reconcile([bigPlacements[16]!])
+assert.deepEqual(
+  [...byteOutput.matchAll(/a=d,d=I,i=(\d+)/gu)].map(match => Number(match[1])),
+  [802],
+  'the 17th image evicts the least recently used (802), not the refreshed oldest (801)',
+)
+
+// Terminal-side eviction: a terminal quota smaller than our budget can drop a
+// dormant image. Placements report failures (q=1); ENOENT re-uploads it.
+const lostManager = new KittyGraphicsManager({ firstImageId: 901 })
+const lostNode = createNode('ink-image')
+const lostPlacement = { ...placement, node: lostNode }
+assert.match(lostManager.reconcile([lostPlacement]), /a=p,i=901,[^;]*,C=1,q=1;/u, 'placements do not suppress failures')
+lostManager.reconcile([])
+assert.equal(lostManager.handleResponse(901, 'OK'), false, 'OK replies are ignored')
+assert.equal(lostManager.handleResponse(999, 'ENOENT:not found'), false, 'unknown ids are ignored')
+const lostReplaced = lostManager.reconcile([lostPlacement])
+assert.doesNotMatch(lostReplaced, /\x1b_Ga=[tT],/u)
+assert.equal(lostManager.handleResponse(901, 'ENOENT:No image with id: 901 found'), true, 'ENOENT requests a repaint')
+const lostRestored = lostManager.reconcile([lostPlacement])
+assert.match(lostRestored, /a=t,t=d,f=32,[^;]*i=902,/u, 'the evicted image is uploaded again under a fresh id')
+assert.match(lostRestored, /a=p,i=902,/u, 'and placed again')
+assert.match(lostRestored, /a=d,d=I,i=901,/u, 'the old id is deleted: a stale ENOENT can arrive after the terminal was re-sent 901')
+assert.ok(lostRestored.indexOf('a=d,d=I,i=901') < lostRestored.indexOf('i=902'), 'before the new id is uploaded')
+assert.doesNotMatch(lostManager.reconcile([lostPlacement]), /d=I,i=901/u, 'and only once')
+assert.equal(lostManager.handleResponse(901, 'ENOENT'), false, 'late replies for the old id are ignored')
+lostManager.invalidateAll()
+assert.equal(lostManager.handleResponse(902, 'ENOENT'), false, 'an image already pending upload needs no second repaint')
+
+// A terminal that refuses an image outright (bigger than its whole quota)
+// answers every placement with ENOENT: one re-upload, then no loop.
+let clock = 10_000
+const refusedManager = new KittyGraphicsManager({ firstImageId: 951, now: () => clock })
+const refusedPlacement = { ...placement, node: createNode('ink-image') }
+refusedManager.reconcile([refusedPlacement])
+assert.equal(refusedManager.handleResponse(951, 'ENOENT'), true, 'the first ENOENT re-uploads')
+assert.match(refusedManager.reconcile([refusedPlacement]), /a=t,t=d,f=32,[^;]*i=952,/u)
+clock += 100
+assert.equal(refusedManager.handleResponse(951, 'ENOENT'), false, 'a second placement of the old id answering late is not a failed re-upload')
+clock += 100
+assert.equal(refusedManager.handleResponse(952, 'ENOENT'), false, 'ENOENT right after the re-upload stops retrying')
+assert.equal(refusedManager.reconcile([refusedPlacement]), '', 'no further uploads or placements')
+clock += 60_000
+assert.equal(refusedManager.handleResponse(952, 'ENOENT'), false, 'an abandoned image stays abandoned')
+// A clear drops what the terminal held, including the verdict: the image is
+// re-sent and may recover once more, but the refusal window still applies.
+refusedManager.invalidateAll()
+assert.match(refusedManager.reconcile([refusedPlacement]), /a=t,t=d,f=32,[^;]*i=952,/u, 'a clear re-sends an abandoned image')
+assert.equal(refusedManager.handleResponse(952, 'ENOENT'), true, 'after a clear, an eviction recovers again')
+assert.match(refusedManager.reconcile([refusedPlacement]), /a=t,t=d,f=32,[^;]*i=953,/u)
+clock += 100
+assert.equal(refusedManager.handleResponse(953, 'ENOENT'), false, 'a refusal right after that retry abandons it again')
+assert.equal(refusedManager.reconcile([refusedPlacement]), '', 'still no upload loop')
+// A later, ordinary eviction of a healthy image still recovers.
+const evictedManager = new KittyGraphicsManager({ firstImageId: 961, now: () => clock })
+const evictedPlacement = { ...placement, node: createNode('ink-image') }
+evictedManager.reconcile([evictedPlacement])
+assert.equal(evictedManager.handleResponse(961, 'ENOENT'), true)
+evictedManager.reconcile([evictedPlacement])
+clock += 30_000
+assert.equal(evictedManager.handleResponse(962, 'ENOENT'), true, 'an eviction long after a successful re-upload recovers again')
+assert.match(evictedManager.deleteAll(), /a=d,d=I,i=962,.*a=d,d=I,i=963,/su, 'exit deletes a retired id that no frame has deleted yet')
+
+// The querier forwards replies that answer no pending query.
+{
+  const unsolicited: string[] = []
+  const querier = new TerminalQuerier(new PassThrough() as unknown as NodeJS.WriteStream)
+  querier.onUnsolicited = response => unsolicited.push(response.type)
+  const [replies] = parseMultipleKeypresses(INITIAL_STATE, '\x1b_Gi=901,p=3;ENOENT:gone\x1b\\')
+  if (replies[0]?.kind !== 'response') throw new Error('Kitty error reply was not parsed')
+  assert.deepEqual(replies[0].response, { type: 'kittyGraphics', imageId: 901, status: 'ENOENT:gone' })
+  querier.onResponse(replies[0].response)
+  assert.deepEqual(unsolicited, ['kittyGraphics'])
+}
 
 const sharedManager = new KittyGraphicsManager({ firstImageId: 201 })
 const sharedNodeA = createNode('ink-image')
@@ -325,10 +507,13 @@ const removeSharedPeer = sharedManager.reconcile([
 ])
 assert.match(removeSharedPeer, /a=d,d=i,i=\d+,p=\d+/u)
 assert.doesNotMatch(removeSharedPeer, /a=d,d=I/u)
+const removeLastPeer = sharedManager.reconcile([])
+assert.match(removeLastPeer, /a=d,d=i,i=\d+,p=\d+/u, 'the last placement is deleted')
+assert.doesNotMatch(removeLastPeer, /a=d,d=I/u, 'shared data stays uploaded while dormant')
 assert.equal(
-  [...sharedManager.reconcile([]).matchAll(/a=d,d=I,i=\d+/gu)].length,
+  [...sharedManager.deleteAll().matchAll(/a=d,d=I,i=\d+/gu)].length,
   1,
-  'the last placement must release shared terminal image data exactly once',
+  'deleteAll releases shared terminal image data exactly once',
 )
 
 const query = kittyGraphics(31)
@@ -943,15 +1128,20 @@ assert.ok(
   await settled(
     () =>
       stdout.output.slice(beforeFallbackRestore).includes('▓▓▓▓') &&
-      stdout.output.slice(beforeFallbackRestore).includes('a=d,d=I,i='),
+      /a=d,d=i,i=\d+,p=\d+/u.test(stdout.output.slice(beforeFallbackRestore)),
   ),
-  'removing a source must restore fallback cells and delete its image',
+  'removing a source must restore fallback cells and delete its placement',
 )
 const beforeRestore = stdout.output.length
 instance.rerender(tree)
 assert.ok(
-  await settled(() => stdout.output.slice(beforeRestore).includes('a=t,t=d,f=32')),
-  'restoring a source must upload it again',
+  await settled(() => stdout.output.slice(beforeRestore).includes('a=p,i=')),
+  'restoring a source must place it again',
+)
+assert.doesNotMatch(
+  stdout.output.slice(beforeRestore),
+  /a=t,t=d,f=32/u,
+  'restoring a source reuses the uploaded image instead of re-sending it',
 )
 const beforeHandoff = stdout.output.length
 const queriesBeforeHandoff = cellSizeQueryCount()

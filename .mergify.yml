@@ -1,0 +1,43 @@
+# Mergify 合并队列——`main` 的合并由它执行。
+#
+# 为什么需要队列：`main` 的 ruleset 要求「分支必须最新」，两个 PR 各自绿了也会
+# 互相顶掉，现在靠人工 update-branch → 等 CI → 点合并。队列把这条流水线自动化：
+# 更新到最新 main → 在临时 PR 上重跑 CI → 合并。
+#
+# 只有一条车道：PR 拿到 1 个 approving review 后自动入队。合并条件由 base 分支上
+# 的 ruleset 注入（批准、ci-gate、评论已解决、批准最后一次推送），与手动合并同一
+# 把尺。队列不放水，也不做任何绕过批准的通道——急修走 `gh pr merge --admin`，
+# 只有 admin 能做，留痕在 PR 上。
+#
+# 公开仓库走 Mergify 的 Open Source 档（$0，含 Merge Queue）。
+
+merge_protections_settings:
+  # 自动入队。`#` 开头的条件在 YAML 里必须加引号，否则会被当成注释。
+  # 生效前提：在 Mergify dashboard 里为这个仓库打开 Merge Protections。
+  auto_merge_conditions:
+    - "#approved-reviews-by >= 1"
+
+merge_queue:
+  # 一次只跑一条：CI 重（build + 四个回归组 + platform smoke），串行最省、
+  # 也最接近现在的人工合并节奏。想提速再抬 max_parallel_checks。
+  mode: serial
+  max_parallel_checks: 1
+
+queue_rules:
+  - name: approved
+    merge_method: squash # 与仓库既有习惯一致：一个 PR 一个提交
+    batch_size: 1 # 不做批量合并（batch_size > 1 是付费档能力，这里也不需要）
+    # 队列 CI 跑在临时 PR 上，不改 PR 自己的分支：in-place 会挡掉 dependabot
+    # 与改 workflow 的 fork PR，也会因为推分支而让批准失效。max_checks_retries
+    # 大于 0 正好关掉 in-place；顺带让队列里 CI 红一次先自动重跑（0 = 关闭）。
+    max_checks_retries: 1
+    queue_conditions:
+      - base = main
+      - -draft
+      - -conflict
+      - check-success = ci-gate # PR 自己先绿，再排进队列
+      - label != on hold # 批准了但想先别合：打这个标签
+    merge_conditions:
+      # ruleset 注入的批准 / 评论已解决 / 批准最后一次推送会叠加在这里；
+      # 显式写一遍 ci-gate，是为了「CI 绿」不依赖注入的实现细节。
+      - check-success = ci-gate

@@ -1,9 +1,10 @@
 /**
  * Regression gate for mixed dsh-web + dsh-tui profiles.
  *
- * The installed web-app is always checked. A source checkout supplies the
- * source-authoritative prerelease baseline; CI requires it instead of silently
- * skipping it.
+ * The installed web-app is always checked. A source checkout named by
+ * DSH_HARNESS_SOURCE_ROOT supplies the source-authoritative prerelease
+ * baseline (opt-in, never discovered: a stale sibling tree would fail the gate
+ * on a version nobody targets); CI requires it instead of silently skipping it.
  * Scoped TUI host rows must never collide with either bundle generation and
  * must yield to every official row that generation owns.
  */
@@ -33,17 +34,17 @@ const baselines = [{
   webPath: installedWebPath,
 }]
 
-const sourceRoot = process.env.DSH_HARNESS_SOURCE_ROOT === undefined
-  ? fileURLToPath(new URL('../../deepseek-harness/', import.meta.url))
+const sourceRoot = !process.env.DSH_HARNESS_SOURCE_ROOT
+  ? undefined
   : resolve(process.env.DSH_HARNESS_SOURCE_ROOT)
-const sourceWebPath = join(sourceRoot, 'packages/bundle/web-app/cordis.patch.yml')
-const sourceWebManifest = join(sourceRoot, 'packages/bundle/web-app/package.json')
-const sourceBasePath = join(sourceRoot, 'packages/bundle/base/cordis.patch.yml')
+const sourceWebPath = sourceRoot === undefined ? '' : join(sourceRoot, 'packages/bundle/web-app/cordis.patch.yml')
+const sourceWebManifest = sourceRoot === undefined ? '' : join(sourceRoot, 'packages/bundle/web-app/package.json')
+const sourceBasePath = sourceRoot === undefined ? '' : join(sourceRoot, 'packages/bundle/base/cordis.patch.yml')
 const requireSourceBaseline = process.env.DSH_REQUIRE_ALPHA_BASELINE === '1'
-if (existsSync(sourceWebPath) && existsSync(sourceWebManifest) && existsSync(sourceBasePath)) {
+if (sourceRoot !== undefined && existsSync(sourceWebPath) && existsSync(sourceWebManifest) && existsSync(sourceBasePath)) {
   const sourceWebVersion = JSON.parse(readFileSync(sourceWebManifest, 'utf8')).version
-  if (requireSourceBaseline && sourceWebVersion !== '0.1.7-rc.2') {
-    throw new Error(`required source baseline is 0.1.7-rc.2, got ${sourceWebVersion}`)
+  if (requireSourceBaseline && sourceWebVersion !== '0.2.0-rc.2') {
+    throw new Error(`required source baseline is 0.2.0-rc.2, got ${sourceWebVersion}`)
   }
   const resolver = prepareUpstreamSourceResolver(sourceRoot)
   baselines.push({
@@ -54,7 +55,7 @@ if (existsSync(sourceWebPath) && existsSync(sourceWebManifest) && existsSync(sou
     webPath: sourceWebPath,
   })
 } else if (requireSourceBaseline) {
-  throw new Error(`required source baseline missing under ${sourceRoot}`)
+  throw new Error(`required source baseline missing under ${sourceRoot ?? '(DSH_HARNESS_SOURCE_ROOT unset)'}`)
 }
 
 const tuiPatches = loadPatch(tuiPath)
@@ -75,6 +76,7 @@ const shared = [
   { id: 'agent-presets', name: '@deepseek-ai/dsh-agent-presets' },
   { id: 'agent-preset-registry', name: '@deepseek-ai/dsh-agent-preset-registry' },
   { id: 'cordis-host-runner', name: '@deepseek-ai/dsh-cordis-host-runner' },
+  { id: 'webserver', name: '@deepseek-ai/dsh-host-webserver' },
 ]
 
 for (const baseline of baselines) {
@@ -104,6 +106,8 @@ for (const baseline of baselines) {
   const hasSubagentModelSelectionSettings = resolvePackage(
     '@deepseek-ai/dsh-tool-subagent/model-selection-settings',
   ) !== undefined
+  const hasWebServer = resolvePackage('@deepseek-ai/dsh-host-webserver/package.json') !== undefined
+  const accountRow = { options: { id: 'deepseek-account', name: '@deepseek-ai/dsh-deepseek-account-platform' }, disabled: false }
   const basePatches = baseline.basePath === undefined ? [] : loadPatch(baseline.basePath)
   const webPatches = loadPatch(baseline.webPath)
   assert.ok(Array.isArray(basePatches), `${baseline.label}: base patch must be a top-level list`)
@@ -129,6 +133,7 @@ for (const baseline of baselines) {
   )
 
   for (const { id, name } of shared) {
+    const entries = id === 'webserver' ? [accountRow] : []
     const officialExpected = officialRows.some(row => row?.id === id && row?.name === name)
     const official = composed.find(row => row?.id === id && row?.name === name)
     assert.equal(Boolean(official), officialExpected, `${baseline.label}: official ${id} ownership drifted`)
@@ -144,13 +149,24 @@ for (const baseline of baselines) {
     const unavailable = id === 'agent-preset-registry' ? !hasRegistry
       : (id === 'agent-presets' || id === 'code-runtime') ? hasRegistry
         : id === 'subagent-model-selection-settings' ? !hasSubagentModelSelectionSettings
+        : id === 'webserver' ? !hasWebServer
           : false
-    assert.equal(Boolean(evaluateFor(baseline, tuiRow.disabled)), unavailable,
+    assert.equal(Boolean(evaluateFor(baseline, tuiRow.disabled, entries)), unavailable,
       `${baseline.label}: ${scopedId} must follow the installed package generation`)
-    assert.equal(Boolean(evaluateFor(baseline, tuiRow.disabled, [{ options: { id, name }, disabled: false }])), true,
+    assert.equal(Boolean(evaluateFor(baseline, tuiRow.disabled, [...entries, { options: { id, name }, disabled: false }])), true,
       `${baseline.label}: ${scopedId} must yield to an enabled official row`)
-    assert.equal(Boolean(evaluateFor(baseline, tuiRow.disabled, [{ options: { id, name }, disabled: true }])), unavailable,
+    assert.equal(Boolean(evaluateFor(baseline, tuiRow.disabled, [...entries, { options: { id, name }, disabled: true }])), unavailable,
       `${baseline.label}: a disabled official row does not own ${scopedId}`)
+    if (id === 'webserver') {
+      assert.ok(tuiRow.disabled.includes("require.resolve('@deepseek-ai/dsh-host-webserver/package.json')"),
+        `${baseline.label}: ${scopedId} must probe its own Host package`)
+      assert.equal(Boolean(evaluateFor(baseline, tuiRow.disabled)), true,
+        `${baseline.label}: ${scopedId} must stay disabled without an account service row`)
+      assert.equal(Boolean(evaluateFor(baseline, tuiRow.disabled, [{ ...accountRow, disabled: true }])), true,
+        `${baseline.label}: ${scopedId} must stay disabled when the account service row is disabled`)
+      assert.deepEqual(tuiRow.config, { host: '127.0.0.1', port: 0 },
+        `${baseline.label}: TUI-only callback listener must bind an OS-assigned loopback port`)
+    }
     if (id === 'subagent-model-selection-settings') {
       assert.ok(
         tuiRow.disabled.includes("require.resolve('@deepseek-ai/dsh-tool-subagent/model-selection-settings')"),

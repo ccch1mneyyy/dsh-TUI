@@ -198,12 +198,14 @@ export function decodeFrames(buffer: Buffer, frames: readonly FrameRange[]): Log
   return lines
 }
 
-/** A file's size and last-write time, read once for both. */
+/** File metadata and physical generation from one stat observation. */
 export interface FileFacts {
   readonly bytes: number
   readonly modifiedAt: number
   /** Physical file identity; replacement must not inherit append-only evidence. */
   readonly identity: string
+  /** Physical generation of the bytes, independent of the backend logical revision. */
+  readonly stamp: string
 }
 
 /**
@@ -212,11 +214,12 @@ export interface FileFacts {
  */
 export function fileFacts(path: string): FileFacts | undefined {
   try {
-    const stats = statSync(path)
+    const stats = statSync(path, { bigint: true })
     return {
-      bytes: stats.size,
-      modifiedAt: stats.mtimeMs,
-      identity: `${stats.dev}:${stats.ino}:${stats.birthtimeMs}`,
+      bytes: Number(stats.size),
+      modifiedAt: Number(stats.mtimeNs) / 1e6,
+      identity: `${stats.dev}:${stats.ino}:${stats.birthtimeNs}`,
+      stamp: `${stats.dev}:${stats.ino}:${stats.birthtimeNs}:${stats.size}:${stats.mtimeNs}:${stats.ctimeNs}`,
     }
   } catch {
     return undefined

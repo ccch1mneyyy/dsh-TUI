@@ -10,7 +10,11 @@
  */
 export {} // 模块边界：避免顶层 await/全局名与其他 verify 脚本冲突
 
+import './lib/default-lang-zh.mjs'
 process.env.FORCE_COLOR = '3'
+// 固定中文 UI：本脚本的断言全部针对 zh 文案（自定义回答/提示行），
+// 不 pin 会随宿主 lang.json 或 locale 漂移（en 机器上必挂）。
+process.env.DSH_TUI_LANG = 'zh'
 
 const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render }, { Chat }, { QuestionStore }, { settle, settled, sleep }] = await Promise.all([
   import('node:stream'),
@@ -100,13 +104,6 @@ function makeChannel(transcriptRows: unknown[], listeners?: Set<() => void>) {
     activityEnabled: true,
     contextBarEnabled: true,
     activityFrames: [],
-    workingActivity: {
-      phase: 'asking',
-      line: '提问中',
-      toolCount: 0,
-      turnElapsedMs: 80_000,
-      phaseStartedAt: Date.now() - 80_000,
-    },
     subscribe: listeners
       ? (l: () => void) => { listeners.add(l); return () => { listeners.delete(l) } }
       : () => () => {},
@@ -178,7 +175,6 @@ for (const [name, rows] of [['短会话', shortRows], ['长高录', tallRows]] a
   let worst = ''
   let worstMissing = -1
   for (let tick = 0; tick < 20; tick++) {
-    ;(channel.workingActivity as { turnElapsedMs: number }).turnElapsedMs += 1000
     channel.responseChars += 1
     channel.version += 1
     for (const l of [...listeners]) l()

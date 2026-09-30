@@ -73,8 +73,8 @@ function makeScreen(rows: number, cols: number): Screen {
 function makeSel(): SelState {
   return {
     anchor: null, focus: null, isDragging: false, anchorSpan: null,
-    scrolledOffAbove: [], scrolledOffBelow: [], scrolledOffAboveSW: [], scrolledOffBelowSW: [],
-    lastPressHadAlt: false, coveredFingerprint: null, coveredGeometry: null, stale: false,
+    scrolledOffAbove: [], scrolledOffBelow: [],
+    lastPressHadAlt: false, coveredFingerprint: null, coveredText: null, coveredGeometry: null, stale: false,
   } as unknown as SelState
 }
 
@@ -185,8 +185,8 @@ function putRaw(s: Screen, col: number, row: number, charId: number, width: numb
   refreshSelectionFingerprint(sel, screen, false)
   if (!sel.stale) check('F. precondition: stale latched', false)
   clearSelection(sel)
-  check('F. clearSelection resets fingerprint and stale',
-    sel.coveredFingerprint === null && sel.coveredGeometry === null && !sel.stale)
+  check('F. clearSelection resets fingerprint, text baseline and stale',
+    sel.coveredFingerprint === null && sel.coveredText === null && sel.coveredGeometry === null && !sel.stale)
   // A fresh startSelection must also reset both fields — not just rely on
   // clearSelection having run first (CodeRabbit: the assertion would keep
   // passing if startSelection silently stopped resetting). Re-latch stale
@@ -199,8 +199,8 @@ function putRaw(s: Screen, col: number, row: number, charId: number, width: numb
   if (!sel.stale) check('F. precondition 2: stale re-latched', false)
   startSelection(sel, 0, 2)
   updateSelection(sel, 9, 2)
-  check('F2. startSelection resets fingerprint and stale',
-    sel.coveredFingerprint === null && sel.coveredGeometry === null && !sel.stale)
+  check('F2. startSelection resets fingerprint, text baseline and stale',
+    sel.coveredFingerprint === null && sel.coveredText === null && sel.coveredGeometry === null && !sel.stale)
 }
 
 // ── G. stale 是提交层守卫，不改变读取层 ─────────────────────────────────
@@ -426,8 +426,118 @@ function putRaw(s: Screen, col: number, row: number, charId: number, width: numb
   const base = getSelectedText(sel, screen)
   screen.softWrap[4] = 9 // 自己那行的 wrap 位（joinRows 的换行判定）
   const tripped = refreshSelectionFingerprint(sel, screen, false)
-  check('L5. last screen row: own softWrap still hashed, out-of-range row+1 read is safe',
-    tripped && sel.stale && base === 'Z')
+  check('L5. last screen row: out-of-range row+1 read is safe',
+    !tripped && !sel.stale && base === 'Z')
+  check('L5b. ... because a single-row selection own wrap bit cannot change the copy',
+    getSelectedText(sel, screen) === base)
+}
+
+// ── L6. 下一行 wrap 从 0 翻成「超出选区末列」：拷贝字节不变，不许误伤 ─────
+// 生产现场（repro-drag-select-streaming 的流式并发场景）：选区列被非空白字符
+// 填满时，wrap 位翻转只影响「尾部空白是否 trim」，而此处没有可 trim 的空白 →
+// 哈希变、拷贝文本一模一样。旧实现只看哈希就锁 stale → 拒绝复制
+// （「选区内容已变化，已取消复制」），用户明明选着正确的文本。
+{
+  const screen = makeScreen(5, 12)
+  const sel = makeSel()
+  startSelection(sel, 0, 2)
+  updateSelection(sel, 8, 2) // 选中第 2 行第 0..8 列，正好 9 格
+  for (const [i, ch] of [...'ARKER_ABC'].entries()) putText(screen, i, 2, ch) // 每格一个非空白字符
+  refreshSelectionFingerprint(sel, screen, false)
+  const before = getSelectedText(sel, screen)
+  screen.softWrap[3] = 40 // 0 → 40（> colEnd + 1），只改 trim 开关
+  const after = getSelectedText(sel, screen)
+  const tripped = refreshSelectionFingerprint(sel, screen, false)
+  check('L6. a next-row wrap flip that cannot change the copy is not refused',
+    before === after && before === 'ARKER_ABC' && !tripped && !sel.stale)
+}
+
+// ── M. Highlight leaves painted terminal images visible ───────────────
+// Kitty draws images below cells with a non-default background, so a
+// highlighted cell over an image hides it: selecting across a formula
+// image used to turn it into a blank box.
+{
+  const { applySelectionOverlay } = await import('../src/ink/selection.js')
+  const { cellAtIndex } = await import('../src/ink/screen.js')
+  const screen = makeScreen(4, 10)
+  const pool = new StylePool()
+  const sel = makeSel()
+  startSelection(sel, 0, 0)
+  updateSelection(sel, 9, 3)
+  const image = { node: {} as never, x: 2, y: 1, columns: 4, rows: 2, source: { data: new Uint8Array(4), width: 1, height: 1 } }
+  applySelectionOverlay(screen, sel, pool, [image, { ...image, x: 7, y: 3, columns: 2, rows: 1, graphicsReady: false }])
+  const plain = (col: number, row: number) => cellAtIndex(screen, row * screen.width + col).styleId === 0
+  check('M1. cells under a painted image keep their style', plain(2, 1) && plain(5, 2))
+  check('M2. cells around the image are still highlighted', !plain(1, 1) && !plain(6, 2) && !plain(0, 0))
+  check('M3. an image still waiting on its raster does not exempt its fallback cells', !plain(7, 3) && !plain(8, 3))
+}
+
+// ── N. Region metadata is part of the bytes a copy ships ──────────────
+// An image's cells are blank, so a formula swapped under a stationary
+// highlight (same id, same cells, different source) hashed identically while
+// the copy changed underneath. The fingerprint now covers the region ids at
+// their cells plus the text those ids stand for — these checks pin both
+// directions: a real source change must latch, and a repainted node or an
+// unreferenced text must not refuse a legitimate copy.
+{
+  const withRegion = (id: number, text: string, cols = 12): Screen => {
+    const screen = makeScreen(4, cols)
+    screen.copyRegion = new Int32Array(cols * 4)
+    screen.copyTexts = new Map<number, string>([[id, text]])
+    screen.copyRegion.fill(id, cols, cols * 2) // row 1
+    return screen
+  }
+  const screen = withRegion(1, '$x$')
+  const sel = makeSel()
+  startSelection(sel, 0, 1)
+  updateSelection(sel, 4, 1)
+  refreshSelectionFingerprint(sel, screen, false)
+  const baseline = getSelectedText(sel, screen)
+  check('N1. a region copies its source', baseline === '$x$', baseline)
+
+  screen.copyTexts!.set(1, '$y$') // same id, same blank cells, new source
+  const tripped = refreshSelectionFingerprint(sel, screen, false)
+  check('N2. a swapped formula source trips the guard',
+    tripped && sel.stale && getSelectedText(sel, screen) === '$y$')
+
+  // New id, same source (a repainted node): hash moves, bytes do not.
+  const repainted = withRegion(7, '$x$')
+  const sel2 = makeSel()
+  startSelection(sel2, 0, 1)
+  updateSelection(sel2, 4, 1)
+  refreshSelectionFingerprint(sel2, repainted, false)
+  repainted.copyRegion!.fill(8, repainted.width, repainted.width * 2)
+  repainted.copyTexts!.set(8, '$x$')
+  const refusedRepaint = refreshSelectionFingerprint(sel2, repainted, false)
+  check('N3. a repainted region with the same source is not refused',
+    !refusedRepaint && !sel2.stale && getSelectedText(sel2, repainted) === '$x$')
+
+  // A text kept for an id no cell references (a prune that has not run yet).
+  repainted.copyTexts!.set(9, 'unreferenced')
+  const refusedExtra = refreshSelectionFingerprint(sel2, repainted, false)
+  check('N4. an unreferenced region text does not refuse the copy',
+    !refusedExtra && !sel2.stale && getSelectedText(sel2, repainted) === '$x$')
+
+  // Ids and text code units are both numbers in the hash stream. An id is
+  // free to equal a code unit (65 next to a source starting with "A"), and
+  // without a delimiter `id 65 + "AY"` hashed exactly like `id 1, "XA"` plus
+  // `id 65, "Y"` — a real source swap the guard missed.
+  const boundary = makeScreen(2, 8)
+  boundary.copyRegion = new Int32Array(boundary.width * boundary.height)
+  boundary.copyTexts = new Map<number, string>([[1, 'X'], [65, 'AY']])
+  boundary.copyRegion[0] = 1 // row 0, col 0
+  boundary.copyRegion[2] = 65 // row 0, col 2
+  const sel3 = makeSel()
+  startSelection(sel3, 0, 0)
+  updateSelection(sel3, 7, 0)
+  refreshSelectionFingerprint(sel3, boundary, false)
+  const beforeSwap = getSelectedText(sel3, boundary)
+  boundary.copyTexts.set(1, 'XA')
+  boundary.copyTexts.set(65, 'Y')
+  const trippedCollision = refreshSelectionFingerprint(sel3, boundary, false)
+  check('N5. an id cannot impersonate a neighbouring region source',
+    beforeSwap === 'X AY' && trippedCollision && sel3.stale && getSelectedText(sel3, boundary) === 'XA Y',
+    `${beforeSwap} -> ${getSelectedText(sel3, boundary)}`)
 }
 
 console.log(failures === 0 ? 'selection stale-guard regression passed' : `${failures} failure(s)`)

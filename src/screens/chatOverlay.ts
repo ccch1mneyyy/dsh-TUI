@@ -58,6 +58,8 @@ export type ChatOverlay =
     }
   | { kind: 'model'; index: number }
   | { kind: 'skills'; index: number }
+  | { kind: 'migrate'; index: number }
+  | { kind: 'migrate-confirm' }
   | { kind: 'activity'; index: number }
   | { kind: 'color'; index: number }
   | { kind: 'effort'; index: number }
@@ -198,6 +200,7 @@ export function chatOverlayReducer(state: ChatOverlay, action: ChatOverlayAction
         || state.kind === 'workspace-flow'
         || state.kind === 'model'
         || state.kind === 'skills'
+        || state.kind === 'migrate'
         || state.kind === 'activity'
         || state.kind === 'color'
         || state.kind === 'effort'

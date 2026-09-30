@@ -23,6 +23,7 @@ Cordis profile
 | --- | --- |
 | `src/index.ts` | Cordis plugin name, injection declaration, config interface, and Schema; keep the entry small and lazy |
 | `src/dsh-adapter/plugin.ts` | TTY guard, service assembly, Agent create/resume, React mount, and the single cleanup funnel |
+| `src/dsh-adapter/oauth/`, `src/oauth.ts` | pi-ai subscription OAuth routes, `/auth` command, credential store, and question bridge; DeepSeek account sign-in delegates to the Host, and the public subpath only forwards to the internal implementation |
 | `src/dsh-adapter/questions-answerer.ts` / `preset-resolution.ts` | Prerelease dispatch for user questions and agent presets; consumers stay unaware of upstream version branches |
 | `src/dsh-adapter/channel.ts` | Channel composition root: options/services, owner/binding, specialist wiring, one install, final start/release, and compatibility exports |
 | `src/workspaces.ts` | Local-path fallback and generic workspace-provider registry; it must contain no provider protocol, copy, or dependency |
@@ -34,6 +35,16 @@ Cordis profile
 | `src/ink/` | Ink-based renderer, terminal protocol, events, selection, and Yoga bridge; sensitive infrastructure |
 | `src/native-ts/yoga-layout/` | Pure JS/TS layout implementation |
 | `cordis.patch.yml` | Profile bundle layer, service rows, overrides, and mount ordering |
+
+The standard profile still mounts the internal `./oauth` entry as the
+`dsh-tui-auth` Cordis row before the TUI, with row-level
+`inject: [llm, commands]` preserving registration order. The TUI consumes
+status and actions through `ctx.dshAuth`; it does not implement model or OAuth
+protocols. pi-ai subscriptions keep their existing credential location and
+use the host's pi-ai flows; the DeepSeek account route delegates PKCE,
+credentials, and model routing to `ctx.deepseekAccount`. The TUI-only
+`dsh-tui-webserver` row supplies its browser callback. Bare `cordis.yml`
+does not insert these rows and has a different topology.
 
 The `channel.ts` responsibilities are split across these files:
 
@@ -119,10 +130,12 @@ Do not print diagnostics to an active TUI's stdout; use stderr
 - **TPS meter**: based on pi-tps-meter — a streaming 1/8-block gauge,
   historical min-max sparkline, and speed-based semantic colors (≥50 green /
   ≥20 yellow / <20 red).
-- **working-activity**: the working-status line reuses the pure state machine
-  of [dsh-working-activity](https://github.com/ccch1mneyyy/working-activity).
-- It derives in-process from base session events without writing UI state
-  into the shared log.
+- **working-activity**: the plugin
+  [dsh-working-activity](https://github.com/ccch1mneyyy/working-activity)
+  folds the working-status line and publishes it as the `workingActivity`
+  session projection; this app only reads that projection
+  (`src/dsh-adapter/activity-store.ts`) — no in-process derivation, and no
+  UI state written to the shared log.
 
 ## Inline and fullscreen modes
 

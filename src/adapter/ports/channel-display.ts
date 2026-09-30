@@ -45,6 +45,20 @@ export type PageMarginMode = 'none' | 'slim' | 'normal' | 'roomy'
  *  (e.g. `3x1`). */
 export type PageMarginSpec = `${number}x${number}`
 
+/**
+ * Face ids registered for the header splash's big text. The art and metrics
+ * live in `components/splashFonts.ts`, whose registry is keyed by this union
+ * — so a face declared here without a table entry is a compile error there.
+ */
+export type SplashFontId = 'bold' | 'square' | 'bevel' | 'wide' | 'dot' | 'stencil' | 'classic' | 'slab'
+
+/**
+ * Stored big-text setting (settings `dsh-tui.splashFont`): `daily` (the
+ * default) rotates by local date; any other member pins that one face.
+ * Normalization back to `daily` belongs to `components/splashFonts.ts`.
+ */
+export type SplashFontSetting = 'daily' | SplashFontId
+
 /** Individually selectable fields in the status footer. */
 export interface StatusBarConfig {
   /** Prefer the compact, single-line presentation when space permits. */

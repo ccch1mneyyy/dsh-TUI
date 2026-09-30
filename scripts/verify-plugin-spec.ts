@@ -32,6 +32,16 @@ const specDir = join(root, 'dsh-ecosystem-spec')
 const load = (relative: string) => JSON.parse(readFileSync(join(specDir, relative), 'utf8'))
 const fixture = (name: string) => load(`conformance/fixtures/${name}`)
 
+/**
+ * 复制 vendored spec 做「篡改必败」夹具。**必须 `dereference: true`**：在
+ * junction / symlink 形态的 checkout 下（例如用 junction 接子模块的 git
+ * worktree），`cpSync` 默认只把链接本身复制过去，于是那份"拷贝"仍指向真目录，
+ * 夹具的 `writeFileSync` 会写坏工作区里的真 spec——实测复现过：同一份链接，
+ * `dereference: false` 时源文件被改写成 TAMPERED，`true` 时保持原样。
+ * @param to - 目标目录（临时夹具根下的 spec 副本）。
+ */
+const copySpec = (to: string): void => cpSync(specDir, to, { recursive: true, dereference: true })
+
 const data = loadSpecData(specDir)
 if (!data) {
   console.error('vendored spec data unreadable (dsh-ecosystem-spec/)')
@@ -200,7 +210,7 @@ negotiateCase(
 // --- 4. 篡改必败（fail-closed 自检） ---------------------------------------
 const tamperedRoot = mkdtempSync(join(tmpdir(), 'dsh-plugin-spec-tamper-'))
 try {
-  cpSync(specDir, join(tamperedRoot, 'dsh-ecosystem-spec'), { recursive: true })
+  copySpec(join(tamperedRoot, 'dsh-ecosystem-spec'))
   const privateEntry = data.registry.definitions[0]
   const target = join(tamperedRoot, 'dsh-ecosystem-spec', privateEntry.profile)
   writeFileSync(target, `${readFileSync(target, 'utf8')}\n`)
@@ -215,7 +225,7 @@ try {
 const malformedRoot = mkdtempSync(join(tmpdir(), 'dsh-plugin-spec-malformed-'))
 try {
   const malformedSpecDir = join(malformedRoot, 'dsh-ecosystem-spec')
-  cpSync(specDir, malformedSpecDir, { recursive: true })
+  copySpec(malformedSpecDir)
   const registryFile = join(malformedSpecDir, 'registry', 'registry-0.15.json')
   const registry = JSON.parse(readFileSync(registryFile, 'utf8')) as Record<string, unknown>
   registry.facetApiVersions = {}
@@ -228,7 +238,7 @@ try {
 const policyTamperRoot = mkdtempSync(join(tmpdir(), 'dsh-plugin-spec-policy-tamper-'))
 try {
   const policySpecDir = join(policyTamperRoot, 'dsh-ecosystem-spec')
-  cpSync(specDir, policySpecDir, { recursive: true })
+  copySpec(policySpecDir)
   const permissionsFile = join(policySpecDir, 'registry', 'permissions-0.1.json')
   const permissions = JSON.parse(readFileSync(permissionsFile, 'utf8')) as {
     permissions: Array<{ name: string; default: string }>

@@ -39,8 +39,10 @@ async function mount(fullscreen: boolean, animated = false) {
     }
   }
   const stdout = new Output()
+  // pin 住字体：这条回归测的是 ConPTY 面/重绘，不是字体轮换——不 pin 的话
+  // 碰上 `wide`（需要 113 列）那天鲸鱼会走阶梯被撤掉，断言就失去前提。
   const logo = <LogoV2 model="STATIC-MODEL" cwd="/static/cwd" effort="max"
-    intro="classic" skipIntro={!animated} whaleIdle={false} drift={null}
+    intro="classic" skipIntro={!animated} whaleIdle={false} drift={null} fontId="bold"
     tip={{ id: 'surface', group: 'display', zh: 'STATIC-TIP', en: 'STATIC-TIP' }} />
   const instance = await render(fullscreen ? <AlternateScreen>{logo}</AlternateScreen> : logo, {
     stdout: stdout as unknown as NodeJS.WriteStream,

@@ -6,8 +6,11 @@
  * between rc.2 and alpha.1. Dynamic disabled conditions are evaluated from
  * each baseline's package root so the snapshot records effective ownership,
  * not the raw YAML representation. The installed package is always checked; a
- * source-authoritative prerelease tree is checked too when present. CI sets
- * DSH_REQUIRE_ALPHA_BASELINE=1 so that baseline can never be skipped.
+ * source-authoritative prerelease tree is checked too when
+ * DSH_HARNESS_SOURCE_ROOT points at one. The checkout is opt-in, never
+ * discovered: a stale sibling tree would otherwise fail the gate on a version
+ * nobody targets. CI sets DSH_REQUIRE_ALPHA_BASELINE=1 so that baseline can
+ * never be skipped.
  *
  * Run via `node --import tsx/esm scripts/verify-patch-surface.ts`.
  */
@@ -150,19 +153,21 @@ if (installedManifest !== undefined) {
   ))
 }
 
-const sourceRoot = resolve(process.env.DSH_HARNESS_SOURCE_ROOT ?? resolve(root, '../deepseek-harness'))
-const sourceManifest = join(sourceRoot, 'packages/bundle/web-app/package.json')
-const sourcePatch = join(sourceRoot, 'packages/bundle/web-app/cordis.patch.yml')
+const sourceRoot = !process.env.DSH_HARNESS_SOURCE_ROOT
+  ? undefined
+  : resolve(process.env.DSH_HARNESS_SOURCE_ROOT)
+const sourceManifest = sourceRoot === undefined ? '' : join(sourceRoot, 'packages/bundle/web-app/package.json')
+const sourcePatch = sourceRoot === undefined ? '' : join(sourceRoot, 'packages/bundle/web-app/cordis.patch.yml')
 const requireSourceBaseline = process.env.DSH_REQUIRE_ALPHA_BASELINE === '1'
-if (existsSync(sourceManifest) && existsSync(sourcePatch)) {
+if (sourceRoot !== undefined && existsSync(sourceManifest) && existsSync(sourcePatch)) {
   const resolver = prepareUpstreamSourceResolver(sourceRoot)
   const source = baseline('source', sourceManifest, sourcePatch, resolver.baseUrl)
-  if (requireSourceBaseline && source.version !== '0.1.7-rc.2') {
-    throw new Error(`required source baseline is 0.1.7-rc.2, got ${source.version}`)
+  if (requireSourceBaseline && source.version !== '0.2.0-rc.2') {
+    throw new Error(`required source baseline is 0.2.0-rc.2, got ${source.version}`)
   }
   baselines.push(source)
 } else if (requireSourceBaseline) {
-  throw new Error(`required source baseline missing under ${sourceRoot}`)
+  throw new Error(`required source baseline missing under ${sourceRoot ?? '(DSH_HARNESS_SOURCE_ROOT unset)'}`)
 }
 
 const ownSurface = {

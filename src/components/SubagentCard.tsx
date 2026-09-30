@@ -2,7 +2,7 @@ import React, { useState } from 'react'
 import { Box, Text } from '../ui.js'
 import type { SubagentState } from '../dsh-adapter/subagents.js'
 import { t } from '../i18n.js'
-import { isMinimalMode } from '../minimalMode.js'
+import { isMinimalUiMode } from '../minimalUiMode.js'
 import type { ClickEvent } from '../ink/events/click-event.js'
 
 function formatDuration(ms: number): string {
@@ -29,12 +29,12 @@ export function SubagentCard({ subagent, focused, onClick }: SubagentCardProps):
   // the card mid-gesture and reshuffle the whole dashboard list (user
   // feedback: hover must never change layout). The hover tint stays.
   const liveLine = running ? subagent.output[subagent.output.length - 1] : undefined
-  const minimal = isMinimalMode()
-  const glyph = running ? (minimal ? '·' : '🟡')
-    : subagent.status === 'unknown' ? (minimal ? '·' : '⚪')
-    : subagent.status === 'failed' || subagent.status === 'cancelled' ? (minimal ? '×' : '🔴')
-    : (minimal ? '✓' : '🟢')
-  const glyphColor = minimal ? undefined
+  const minimalUi = isMinimalUiMode()
+  const glyph = running ? (minimalUi ? '·' : '🟡')
+    : subagent.status === 'unknown' ? (minimalUi ? '·' : '⚪')
+    : subagent.status === 'failed' || subagent.status === 'cancelled' ? (minimalUi ? '×' : '🔴')
+    : (minimalUi ? '✓' : '🟢')
+  const glyphColor = minimalUi ? undefined
     : running ? 'warning' as const
     : subagent.status === 'unknown' ? 'subtle' as const
     : subagent.status === 'failed' || subagent.status === 'cancelled' ? 'error' as const
@@ -52,6 +52,12 @@ export function SubagentCard({ subagent, focused, onClick }: SubagentCardProps):
     <Box flexDirection="row" gap={1}>
       <Text color={glyphColor}>{glyph}</Text>
       <Text bold color={focused ? 'accent' : undefined}>{`${t('subagent-card-prefix')}${subagent.description}`}</Text>
+      {subagent.mode === 'continuable' && (
+        <Text color={focused ? 'accent' : 'warning'}>{t('subagent-mode-continuable')}</Text>
+      )}
+      {subagent.mode === 'one-shot' && (
+        <Text dimColor>{t('subagent-mode-one-shot')}</Text>
+      )}
       <Text>
         <Text dimColor>{' · '}</Text>
         <Text>{subagent.model ?? subagent.provider ?? 'default'}</Text>

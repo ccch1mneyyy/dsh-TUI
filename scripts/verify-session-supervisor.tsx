@@ -18,6 +18,39 @@
  * Plus the pure behaviours the screen leans on: the search predicate, and the
  * rail's window math.
  *
+ * It also pins the snapshot-then-refresh first paint (issue #987): a mount
+ * paints its channel's previous listing instead of a loading placeholder, and
+ * the fresh listing corrects it wholesale when it lands. A rejected listing
+ * keeps the previous snapshot beside its error notice — only a successful
+ * listing ever writes the snapshot, and only the newest reload may (a listing
+ * that lands late must not repaint over a newer one).
+ *
+ * The snapshot is keyed by the CHANNEL, so every case below owns one: a case
+ * that wants a carried-over first frame mounts the SAME stub twice, and a case
+ * that wants a cold one builds a fresh stub. No case inherits another's rows,
+ * and none of them depends on where it sits in this file.
+ *
+ * A restart is the case that paragraph cannot cover: the in-memory slot is
+ * gone, so the first frame comes from the channel's on-disk cache
+ * (`cachedSessions()`), synchronously, before the listing promise can answer.
+ * Those cases read the PAINTED stream (`saw`), because a placeholder that
+ * lived for a single frame is overwritten in the viewport and would read as a
+ * pass there. The same section pins what a cache may NOT do: an empty cached
+ * listing paints the empty state instead of the placeholder, a rejected
+ * listing leaves the painted rows (and the cache) alone, and a superseded
+ * answer never rolls the screen back. Before any cache exists the channel can
+ * hand over a partial enumeration (the second callback of `listSessions`) so
+ * a cold scan stops showing nothing, and a partial answer from a superseded
+ * call must not repaint.
+ *
+ * The source tabs (other coding agents' conversations) are pinned too: the
+ * strip renders only when a source has data and degrades by width (subtitle
+ * first, then trailing tabs into `+N`, never the active one); a click or
+ * Tab / Shift+Tab switches source and clears the query; a source tab groups
+ * by directory, filters by title and cwd, and Enter imports then opens the
+ * deterministic id — a second Enter opens the existing copy; a conversation
+ * whose directory is gone reports it and opens nothing.
+ *
  * Renders the real `SessionSupervisor` into an in-memory terminal with a stub
  * channel, then drives it with real stdin bytes (SGR mouse reports).
  *
@@ -27,7 +60,7 @@ process.env.FORCE_COLOR = '3'
 process.env.DSH_TUI_THEME = 'dark'
 process.env.DSH_TUI_LANG = 'en'
 
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, mkdirSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { PassThrough, Writable } from 'node:stream'
@@ -37,11 +70,21 @@ import fakeHome from './lib/fake-home.mjs'
 import { findText, settled, sleep, viewportLines, writeParsed } from './lib/term-test.mjs'
 
 const { Terminal: XTerm } = xterm
-const [{ render, ThemeProvider, AlternateScreen }, { SessionSupervisor, sessionMatchesQuery, railWindowTop }] =
-  await Promise.all([
-    import('../src/ui.js'),
-    import('../src/screens/SessionSupervisor.js'),
-  ])
+const [
+  { render, ThemeProvider, AlternateScreen },
+  { SessionSupervisor, sessionMatchesQuery, railWindowTop },
+  { layoutSourceTabs },
+  { groupForeignRows, foreignRowMatchesQuery, FOREIGN_UNKNOWN_GROUP },
+  // The REAL persistent listing cache, so one case can put actual bytes under
+  // this run's fake home and prove the screen paints them.
+  { beginListingSnapshot, readListingSnapshot },
+] = await Promise.all([
+  import('../src/ui.js'),
+  import('../src/screens/SessionSupervisor.js'),
+  import('../src/components/sessions/SourceTabs.js'),
+  import('../src/screens/sessionSupervisor/useForeignSessions.js'),
+  import('../src/dsh-adapter/sessions/snapshot.js'),
+])
 
 let failures = 0
 function check(name: string, ok: boolean, detail = ''): void {
@@ -60,11 +103,20 @@ const RAIL_ENTRIES = 24
 const GHOST_DIR = join(tmpdir(), 'dsh-tui-supervisor-ghost')
 
 class FakeStdout extends Writable {
-  columns = COLS
-  rows = ROWS
   isTTY = true
+  /**
+   * Every chunk ever handed to the terminal, in order — what was PAINTED, not
+   * what the composed screen happens to show now. A single frame of
+   * placeholder text is overwritten by the next frame and is therefore
+   * invisible in the viewport, so "the cache was never awaited" can only be
+   * asserted here.
+   */
+  readonly painted: string[] = []
   constructor(private readonly terminal: InstanceType<typeof XTerm>) { super() }
+  get columns(): number { return this.terminal.cols }
+  get rows(): number { return this.terminal.rows }
   _write(chunk: unknown, _encoding: BufferEncoding, callback: () => void): void {
+    this.painted.push(String(chunk))
     this.terminal.write(String(chunk), callback)
   }
 }
@@ -159,6 +211,10 @@ const channel = {
   agentId: 'live-one',
   listWorkspaceRegistry: async () => registry,
   listSessions: async () => sessions,
+  // Deliberately NO `cachedSessions`: this fixture is the older host, whose
+  // rows live in the hook's in-memory slot — the path the main body below
+  // drives with real keystrokes and mouse reports. A stub that answered
+  // `undefined` from the method would clear that slot on every mount.
   resumeTo: async (id: string) => {
     calls.push(`resumeTo:${id}`)
     return { ok: true }
@@ -180,6 +236,840 @@ const liveState = {
   'live-one': { status: 'working' as const, live: true, current: true, summary: 'doing work' },
 }
 
+/**
+ * The persistent listing cache a stub channel reads through
+ * `cachedSessions()`.
+ *
+ * A mutable cell rather than a plain array because it stands in for the FILE:
+ * two stubs sharing one cell are two processes over the same store, and a stub
+ * that lists successfully writes the cell the way the channel writes the file.
+ * `undefined` rows model an install that has never written one.
+ */
+interface CacheCell {
+  rows: readonly unknown[] | undefined
+}
+
+/** A cache cell holding `rows`, as a previous process left it. */
+function cacheCell(rows?: readonly unknown[]): CacheCell {
+  return { rows }
+}
+
+/**
+ * A cell that reads through to a REAL snapshot file instead of holding rows.
+ *
+ * Every access re-reads, so a stub built over it is scoped by what is on disk —
+ * never by a previous mount of this screen. The setter is inert on purpose: the
+ * stub models a channel write by assigning the cell, and for a real file the
+ * writer is `beginListingSnapshot`, not the model.
+ * @param read - Reads the rows a fresh channel would be scoped by.
+ * @returns The cell a stub's `cachedSessions()` answers from.
+ */
+function diskCacheCell(read: () => readonly unknown[] | undefined): CacheCell {
+  return {
+    get rows(): readonly unknown[] | undefined { return read() },
+    set rows(_rows: readonly unknown[] | undefined) { /* the file owns the rows; see above */ },
+  }
+}
+
+/** What one stub channel answers with, and how its reads fail. */
+interface StubChannelConfig {
+  readonly registry: readonly unknown[]
+  readonly cwd: string
+  /** Rows the listing answers with; the shared stub listing by default. */
+  readonly sessions?: readonly unknown[]
+  /** True when the registry read itself fails (service missing / throwing). */
+  readonly registryRejects?: boolean
+  readonly registryAbsent?: boolean
+  /** What the host's open path reports; defaults to a successful mount. */
+  readonly openResult?: { ok: true } | { ok: false; reason: 'failed'; error: string } | { ok: false; reason: 'cancelled' }
+  /** Terminal width for this screen; {@link COLS} by default. */
+  readonly cols?: number
+  /**
+   * The persistent cache this channel reads.
+   *
+   * Omitting it omits the `cachedSessions` METHOD as well, and that is not a
+   * detail of the fixture: the hook re-scopes its in-memory slot from that
+   * read on EVERY mount, so a stub that had the method and answered
+   * `undefined` would clear the slot the reopen cases carry their rows in.
+   * A host older than the cache read is exactly a channel without it.
+   */
+  readonly cache?: CacheCell
+  /** Foreign sources the channel's facade answers with; absent = no facade. */
+  readonly foreign?: ForeignStubConfig
+}
+
+/** What the stub's foreign-session facade answers with. */
+interface ForeignStubConfig {
+  readonly sources: readonly { agentId: string; label: string }[]
+  readonly rows: Readonly<Record<string, readonly ForeignRowFixture[]>>
+  /** Held unresolved to keep an import in flight (the import-after-close case). */
+  importGate?: Promise<void>
+}
+
+interface ForeignRowFixture {
+  readonly agentId: string
+  readonly key: string
+  readonly title: string
+  readonly cwd: string
+  readonly updatedAt: number
+}
+
+/** How the NEXT listing call behaves; a case swaps it between mounts. */
+interface ListingPlan {
+  /** Held unresolved to keep the listing in flight (the snapshot cases). */
+  readonly defer?: Promise<void>
+  /** Reject instead of answering — a channel listing rejection. */
+  readonly reject?: boolean
+  /** Rows to answer with; the shared stub listing by default. */
+  readonly sessions?: readonly unknown[]
+}
+
+/**
+ * One stub channel: its own identity, its own call log, its own listing plan.
+ *
+ * The screen's snapshot is keyed by the channel, so a case controls its first
+ * frame by building a fresh channel (a cold screen) or by mounting the same
+ * one twice (rows carried over) — never by another case's leftovers.
+ */
+interface StubChannel {
+  /** Passed as the screen's channel; `never` so the JSX site needs no cast. */
+  channel: never
+  readonly calls: string[]
+  /** Behaviour of the next listing call. */
+  plan: ListingPlan
+  /** Listings that finished, resolved or rejected: the deterministic "the
+   *  held-back answer really landed" signal, instead of a fixed sleep. */
+  landed: number
+  readonly config: StubChannelConfig
+  enrich?: (row: never) => void
+  /** The progress callback of the newest listing call, when the screen asked
+   *  for one (`listSessions(onEnriched, onPartial)`). */
+  onPartial?: (rows: readonly unknown[]) => void
+}
+
+/** Build one stub channel over the shared fixtures. */
+function makeChannel(config: StubChannelConfig): StubChannel {
+  const calls: string[] = []
+  const stub: StubChannel = { channel: undefined as never, calls, plan: {}, landed: 0, config }
+  /**
+   * This stub's own listing generation, mirroring the real channel: the
+   * backend keeps exactly this guard (`channel/session-metadata.ts`), so a
+   * superseded listing never publishes to the cache it writes either.
+   */
+  let listingGeneration = 0
+  stub.channel = {
+    version: 0,
+    cwd: config.cwd,
+    working: false,
+    agentId: 'live-one',
+    ...(config.registryAbsent === true ? {} : {
+      listWorkspaceRegistry: async () => {
+        if (config.registryRejects === true) throw new Error('workspace service unavailable')
+        return config.registry
+      },
+    }),
+    ...(config.cache === undefined ? {} : {
+      // Synchronous by contract: the screen paints its first frame from this,
+      // before any listing promise can resolve. See StubChannelConfig.cache
+      // for why the method exists only when a cache was configured.
+      cachedSessions: () => config.cache?.rows,
+    }),
+    listSessions: async (
+      onEnriched?: (row: never) => void,
+      onPartial?: (rows: readonly unknown[]) => void,
+    ) => {
+      const generation = ++listingGeneration
+      stub.enrich = onEnriched
+      stub.onPartial = onPartial
+      // Read per call, not per channel: a case swaps the plan between mounts.
+      const plan = stub.plan
+      if (plan.reject === true) {
+        stub.landed++
+        throw new Error('session listing rejected')
+      }
+      if (plan.defer !== undefined) await plan.defer
+      stub.landed++
+      const answered = plan.sessions ?? config.sessions ?? sessions
+      // Only a successful listing writes the persistent cache, and only while
+      // it is still the newest one — a late answer is not the store's state.
+      if (config.cache !== undefined && generation === listingGeneration) config.cache.rows = answered
+      return answered
+    },
+    resumeTo: async (id: string) => {
+      calls.push(`resumeTo:${id}`)
+      return { ok: true }
+    },
+    ...(config.foreign === undefined ? {} : foreignFacade(config.foreign, calls)),
+    switchWorkspace: async () => true,
+    resolveWorkspace: async (reference: string) => ({ cwd: reference, uri: reference, label: reference, kind: 'local', badge: 'LOCAL' }),
+    stopBackgroundAgent: async () => true,
+    notify: () => {},
+    subscribe: () => () => {},
+  } as never
+  return stub
+}
+
+/**
+ * The foreign-session facade over fixtures. Import mimics the real importer's
+ * contract: a missing directory refuses, the first import creates, a repeat
+ * finds the copy; the id is derived from the source key, never random.
+ */
+function foreignFacade(config: ForeignStubConfig, calls: string[]): Record<string, unknown> {
+  const imported = new Set<string>()
+  const rowsOf = (agentId: string): readonly ForeignRowFixture[] => config.rows[agentId] ?? []
+  return {
+    listForeignSources: async () => {
+      calls.push('probe')
+      return config.sources
+    },
+    // Rows stream as the scan finds them, then the whole list resolves.
+    listForeignSessions: async (agentId: string, onRow?: (row: ForeignRowFixture) => void) => {
+      calls.push(`scan:${agentId}`)
+      for (const row of rowsOf(agentId)) onRow?.(row)
+      return rowsOf(agentId)
+    },
+    importForeignSession: async (agentId: string, key: string) => {
+      calls.push(`import:${agentId}:${key}`)
+      if (config.importGate !== undefined) await config.importGate
+      const row = rowsOf(agentId).find(candidate => candidate.key === key)
+      if (row === undefined) return { kind: 'failed', reason: 'missing' }
+      if (row.cwd !== '' && !existsSync(row.cwd)) return { kind: 'cwd-missing', cwd: row.cwd }
+      const sessionId = `foreign-${row.key}`
+      const created = !imported.has(sessionId)
+      imported.add(sessionId)
+      calls.push(`${created ? 'created' : 'existing'}:${sessionId}`)
+      return { kind: 'ready', sessionId, created }
+    },
+  }
+}
+
+/** A mounted screen over one stub channel. */
+interface SupervisorScreen {
+  write: (data: string) => void
+  lines: () => string[]
+  /** One real SGR click on the first occurrence of `needle`. */
+  click: (needle: string) => Promise<void>
+  /**
+   * True when `text` was written to the terminal at ANY point, even when a
+   * later frame erased it again. `lines()` reads the final composition, so a
+   * placeholder that lived for one frame is invisible there.
+   */
+  saw: (text: string) => boolean
+  calls: readonly string[]
+  close: () => void
+}
+
+/**
+ * One screen over one stub channel, on its own terminal: each case's frame
+ * stays independent (a shared window would carry the previous case's rows into
+ * the next), including the cases whose assertions need a different registry
+ * (an empty one, and one longer than the rail can show).
+ *
+ * Mounting the SAME stub twice is what a reopen of one channel looks like.
+ */
+async function mountSupervisor(target: StubChannel): Promise<SupervisorScreen> {
+  const screen = new XTerm({ cols: target.config.cols ?? COLS, rows: ROWS, scrollback: 0, allowProposedApi: true })
+  const out = new FakeStdout(screen)
+  const input = new FakeStdin()
+  const app = await render(
+    <ThemeProvider theme="dark">
+      <AlternateScreen>
+        <SessionSupervisor
+          channel={target.channel}
+          home={sandbox}
+          onClose={() => {}}
+          onOpenSession={async (id) => {
+            // Same path Chat.tsx wires: the screen hands the row's id to the
+            // channel, which is where "did Enter open the RIGHT row" is
+            // observable.
+            await (target.channel as unknown as { resumeTo(id: string): Promise<{ ok: boolean }> }).resumeTo(id)
+            return target.config.openResult ?? { ok: true }
+          }}
+          onNewSession={async () => true}
+          onStopSession={async () => true}
+          approval={null}
+          onApprove={() => {}}
+          liveStateOf={(id) => liveState[id as keyof typeof liveState]}
+        />
+      </AlternateScreen>
+    </ThemeProvider>,
+    {
+      stdin: input as never,
+      stdout: out as never,
+      stderr: new FakeStderr() as never,
+      exitOnCtrlC: false,
+      patchConsole: false,
+    },
+  )
+  return {
+    write: (data: string) => { input.write(data) },
+    lines: () => viewportLines(screen),
+    click: async (needle: string) => {
+      await settled(() => findText(screen, needle) !== null)
+      const found = findText(screen, needle)
+      if (found === null) throw new Error(`text not found: ${needle}`)
+      input.write(`\u001b[<0;${found.col + 1};${found.row + 1}M\u001b[<0;${found.col + 1};${found.row + 1}m`)
+      await sleep(120) // 固定窗:pacing 输入泵需要一轮事件循环把点击交给解析器
+    },
+    saw: (text: string) => out.painted.join('').includes(text),
+    calls: target.calls,
+    close: () => { app.unmount() },
+  }
+}
+
+/** A screen over a channel of its own, for the cases that mount once. */
+async function openSupervisor(config: StubChannelConfig): Promise<SupervisorScreen> {
+  return mountSupervisor(makeChannel(config))
+}
+
+// ── snapshot-then-refresh (issue #987) ─────────────────────────────────────
+//
+// What a mount paints BEFORE the fresh listing lands. The snapshot lives on
+// the channel, so every case below owns one: a case that wants rows carried
+// over mounts the SAME stub twice, and a case that wants a cold screen builds
+// a fresh stub. Nothing here depends on the order of these blocks.
+
+/** The loading placeholder the pane shows while the listing is in flight (i18n en). */
+const LOADING_PLACEHOLDER = 'Loading sessions…'
+
+/** A gate this test opens by hand, to hold one listing in flight. */
+function deferred(): { promise: Promise<void>; resolve: () => void } {
+  let resolve!: () => void
+  const promise = new Promise<void>(done => { resolve = done })
+  return { promise, resolve }
+}
+
+/** The same listing with one title renamed on disk (same id): a carried-over
+ *  snapshot shows the OLD title, the fresh listing corrects it. */
+const renamedSessions = [
+  session({ id: 'free-one', title: { text: 'renamed on disk', source: 'prompt' }, updatedAt: now - 1_000 }),
+  sessions[1],
+  sessions[2],
+]
+
+console.log('snapshot-then-refresh:')
+{
+  // Cold start on a fresh channel: no snapshot exists yet, so the screen keeps
+  // today's loading path — the placeholder shows and no session row is invented.
+  const target = makeChannel({ registry, cwd: alphaDir })
+  const gate = deferred()
+  target.plan = { defer: gate.promise }
+  const app = await mountSupervisor(target)
+  check(
+    'cold open shows the loading placeholder before the listing lands',
+    await settled(() => app.lines().join('\n').includes(LOADING_PLACEHOLDER)),
+    app.lines().join('\n'),
+  )
+  check(
+    'cold open shows no session row before the listing lands',
+    !app.lines().join('\n').includes('free session'),
+    app.lines().join('\n'),
+  )
+  gate.resolve()
+  check(
+    'the landing listing replaces the placeholder with real rows',
+    await settled(() => {
+      const shown = app.lines().join('\n')
+      return shown.includes('free session') && !shown.includes(LOADING_PLACEHOLDER)
+    }),
+    app.lines().join('\n'),
+  )
+  app.close()
+}
+{
+  // Snapshot first paint: the SAME channel reopened while its listing is held
+  // back paints the previous listing's rows immediately — a non-empty snapshot
+  // skips the placeholder — and the fresh listing corrects them wholesale when
+  // it lands.
+  const target = makeChannel({ registry, cwd: alphaDir })
+  const first = await mountSupervisor(target)
+  await settled(() => first.lines().join('\n').includes('free session'))
+  first.close()
+
+  const gate = deferred()
+  target.plan = { defer: gate.promise, sessions: renamedSessions }
+  const app = await mountSupervisor(target)
+  check(
+    'a non-empty snapshot paints its rows without the loading placeholder',
+    await settled(() => {
+      const shown = app.lines().join('\n')
+      return shown.includes('free session') && !shown.includes(LOADING_PLACEHOLDER)
+    }),
+    app.lines().join('\n'),
+  )
+  gate.resolve()
+  check(
+    'the fresh listing corrects a stale snapshot title',
+    await settled(() => {
+      const shown = app.lines().join('\n')
+      return shown.includes('renamed on disk') && !shown.includes('free session')
+    }),
+    app.lines().join('\n'),
+  )
+  app.close()
+}
+{
+  // A REJECTED channel listing keeps the previous snapshot: the stale rows stay
+  // beside the error notice instead of dropping to an empty list, and the
+  // rejection never writes the snapshot — the next mount still paints from it
+  // while its own listing is in flight. Only a successful listing may write.
+  //
+  // Rejection here is the channel's own (`listSessions` itself throws), which
+  // is what the hook can observe; a backend enumeration failure is folded into
+  // an empty list inside `listSummaries` and reaches this screen as success.
+  const target = makeChannel({ registry, cwd: alphaDir })
+  const first = await mountSupervisor(target)
+  await settled(() => first.lines().join('\n').includes('free session'))
+  first.close()
+
+  target.plan = { reject: true }
+  const app = await mountSupervisor(target)
+  check(
+    'a rejected channel listing keeps the previous snapshot rows beside the error notice',
+    await settled(() => {
+      const shown = app.lines().join('\n')
+      return shown.includes('free session') && shown.includes('Failed to load sessions')
+        && !shown.includes(LOADING_PLACEHOLDER)
+    }),
+    app.lines().join('\n'),
+  )
+  app.close()
+
+  const gate = deferred()
+  target.plan = { defer: gate.promise }
+  const next = await mountSupervisor(target)
+  check(
+    'the rejected listing never wrote the snapshot (the next mount paints it)',
+    await settled(() => {
+      const shown = next.lines().join('\n')
+      return shown.includes('free session') && !shown.includes(LOADING_PLACEHOLDER)
+    }),
+    next.lines().join('\n'),
+  )
+  gate.resolve()
+  await settled(() => target.landed >= 3, { timeoutMs: 4_000 })
+  next.close()
+}
+{
+  // The newest reload wins. `Ctrl+L` re-runs the listing while a slower one is
+  // still in flight — an earlier press, or the previous mount's — and the
+  // older answer landing afterwards must not repaint over the newer rows, nor
+  // become the next mount's snapshot.
+  const target = makeChannel({ registry, cwd: alphaDir })
+  const gate = deferred()
+  target.plan = { defer: gate.promise }
+  const app = await mountSupervisor(target)
+  check(
+    'an in-flight listing holds the first paint',
+    await settled(() => app.lines().join('\n').includes(LOADING_PLACEHOLDER)),
+    app.lines().join('\n'),
+  )
+
+  target.plan = { sessions: renamedSessions }
+  app.write('\u000c') // Ctrl+L: the documented manual re-listing
+  check(
+    'the newer listing paints the rows it answered with',
+    await settled(() => {
+      const shown = app.lines().join('\n')
+      return shown.includes('renamed on disk') && !shown.includes('free session')
+    }),
+    app.lines().join('\n'),
+  )
+
+  gate.resolve()
+  const shown = (): string => app.lines().join('\n')
+  await settled(() => target.landed >= 2, { timeoutMs: 4_000 })
+  // This assertion is about a repaint that must NOT happen, so there is no
+  // positive anchor to poll for: let one render cycle pass first, and only
+  // then read the frame.
+  await sleep(150) // 固定窗:pacing 等陈旧 listing 的一次重绘窗口（没有可轮询的正向锚点）
+  check(
+    'the older listing landing late does not repaint over the newer one',
+    shown().includes('renamed on disk') && !shown().includes('free session'),
+    shown(),
+  )
+  app.close()
+
+  const reopen = deferred()
+  target.plan = { defer: reopen.promise }
+  const again = await mountSupervisor(target)
+  check(
+    'and the late listing did not become the snapshot either',
+    await settled(() => {
+      const rows = again.lines().join('\n')
+      return rows.includes('renamed on disk') && !rows.includes('free session')
+    }),
+    again.lines().join('\n'),
+  )
+  reopen.resolve()
+  await settled(() => target.landed >= 3, { timeoutMs: 4_000 })
+  again.close()
+}
+{
+  // A snapshot belongs to its own channel: a screen opened on a DIFFERENT
+  // channel must not paint another channel's rows while its own listing is in
+  // flight, even though both answer from the same store here.
+  const other = makeChannel({ registry, cwd: alphaDir })
+  const first = await mountSupervisor(other)
+  await settled(() => first.lines().join('\n').includes('free session'))
+  first.close()
+
+  const target = makeChannel({ registry, cwd: alphaDir })
+  const gate = deferred()
+  target.plan = { defer: gate.promise }
+  const app = await mountSupervisor(target)
+  check(
+    'a different channel does not paint the previous channel snapshot',
+    await settled(() => app.lines().join('\n').includes(LOADING_PLACEHOLDER)),
+    app.lines().join('\n'),
+  )
+  check(
+    'and shows none of its rows',
+    !app.lines().join('\n').includes('free session'),
+    app.lines().join('\n'),
+  )
+  gate.resolve()
+  await settled(() => target.landed >= 1, { timeoutMs: 4_000 })
+  app.close()
+}
+
+// ── the persistent snapshot: what a RESTART paints first ───────────────────
+//
+// The snapshot above lives on the channel and dies with the process, so a
+// cold start had nothing to paint and sat on the placeholder until a whole
+// listing landed — the empty /resume wait after a restart. The channel now
+// answers cachedSessions() synchronously from its own on-disk cache, so a
+// fresh channel (no in-memory slot to reuse) paints real rows on its FIRST
+// frame. That is why these cases read the PAINTED stream: a placeholder that
+// lived for exactly one frame is overwritten in the viewport and would look
+// like a pass there.
+
+/** What the pane shows once a listing succeeded and found nothing. */
+const EMPTY_STATE = 'No sessions in this workspace yet'
+
+console.log('persistent snapshot: a fresh channel paints the disk cache first')
+{
+  // No in-memory slot exists for this channel — it IS a restart — and the
+  // listing is held open, so everything asserted here happens before any
+  // promise could have answered.
+  const cache = cacheCell(sessions)
+  const target = makeChannel({ registry, cwd: alphaDir, cache })
+  const gate = deferred()
+  target.plan = { defer: gate.promise, sessions: renamedSessions }
+  const app = await mountSupervisor(target)
+  check(
+    'a fresh channel paints the cached rows while the listing is in flight',
+    await settled(() => app.lines().join('\n').includes('free session')),
+    app.lines().join('\n'),
+  )
+  check('the listing really is still unresolved', target.landed === 0, 'landed: ' + target.landed)
+  check('no loading placeholder was ever painted on this mount', !app.saw(LOADING_PLACEHOLDER))
+  // The refresh is still running under the cached rows, and it is reported ON
+  // the counts line rather than on a line of its own — so the rows it is
+  // refreshing must not move while it shows.
+  const countsLine = (): string => app.lines().find(line => line.includes('working ·')) ?? ''
+  const heldRow = (): number => app.lines().findIndex(line => line.includes('held session'))
+  await settled(() => heldRow() >= 0)
+  const heldBefore = heldRow()
+  check(
+    'the counts line reports the refresh that is still running',
+    countsLine().includes('refreshing'),
+    countsLine(),
+  )
+  gate.resolve()
+  check(
+    'the fresh listing still corrects the cached rows',
+    await settled(() => {
+      const shown = app.lines().join('\n')
+      return shown.includes('renamed on disk') && !shown.includes('free session')
+    }),
+    app.lines().join('\n'),
+  )
+  check('the refresh marker clears once the listing landed', !countsLine().includes('refreshing'), countsLine())
+  check(
+    'the marker took no row: the cached rows keep their place',
+    heldRow() === heldBefore && heldBefore >= 0,
+    'before: ' + String(heldBefore) + ' after: ' + String(heldRow()),
+  )
+  app.close()
+}
+{
+  // The same first paint, with the cache coming from the REAL module instead
+  // of a hand-built cell: `beginListingSnapshot` writes the actual file under
+  // this run's fake home, and the stub reads straight through
+  // `readListingSnapshot`. Every access re-reads the disk, and the channel is
+  // brand new, so no row painted here can be a previous mount's memory.
+  // The snapshot is the size a real install carries, because the FIRST frame is
+  // the thing under study and a three-row list cannot speak for it. The three
+  // rows above stay first and newest; the bulk is synthetic — independent ids,
+  // older timestamps, no real conversation content copied from anywhere. Only
+  // this case grows: every other fixture keeps its short list, so a failure
+  // elsewhere still reads as itself.
+  const SNAPSHOT_ROWS = 1655
+  const bulk = Array.from({ length: SNAPSHOT_ROWS - sessions.length }, (_, index) => session({
+    id: 'bulk-' + String(index),
+    title: { text: 'bulk session ' + String(index), source: 'prompt' },
+    updatedAt: now - 60_000 - index,
+  }))
+  const snapshotRows = [...sessions, ...bulk]
+  const source = { name: 'session-persistence-jsonl', config: { root: sandbox } }
+  beginListingSnapshot(source)(snapshotRows)
+  check(
+    'the snapshot module round-trips ' + String(SNAPSHOT_ROWS) + ' rows through a real file',
+    readListingSnapshot(source)?.length === SNAPSHOT_ROWS,
+    String(readListingSnapshot(source)?.length ?? -1),
+  )
+
+  const cache: CacheCell = diskCacheCell(() => readListingSnapshot(source))
+  const target = makeChannel({ registry, cwd: alphaDir, cache })
+  const gate = deferred()
+  target.plan = { defer: gate.promise }
+
+  const mountedAt = performance.now()
+  const app = await mountSupervisor(target)
+  const painted = await settled(() => app.lines().join('\n').includes('free session'))
+  const firstFrameMs = performance.now() - mountedAt
+  // Reported for a human reading the log, deliberately NOT an assertion: this
+  // machine's load decides it, and a threshold here would be a flake source.
+  console.log('info   mount → cached rows on screen at ' + String(SNAPSHOT_ROWS) + ' sessions: ' + firstFrameMs.toFixed(1) + ' ms')
+
+  const rowIndex = (needle: string): number => app.lines().findIndex(line => line.includes(needle))
+  check('a disk-scoped channel paints the real snapshot first', painted, app.lines().join('\n'))
+  check(
+    'the three real rows are still the three FIRST rows',
+    rowIndex('live session') >= 0 && rowIndex('live session') < rowIndex('free session') && rowIndex('free session') < rowIndex('held session'),
+    'rows: ' + String(rowIndex('live session')) + '/' + String(rowIndex('free session')) + '/' + String(rowIndex('held session')),
+  )
+  check('the fresh listing is still unresolved', target.landed === 0, 'landed: ' + target.landed)
+  check('and the placeholder never reaches the screen', !app.saw(LOADING_PLACEHOLDER))
+  // Left unresolved on purpose: this case owns the FIRST frame. The cell also
+  // ignores the stub's model of a write — the file owns the rows (diskCacheCell).
+  app.close()
+}
+{
+  // A cache that recorded a SUCCESSFUL empty listing is not the same thing as
+  // no cache at all: there is nothing to wait for, so the pane shows its empty
+  // state instead of the placeholder a cold install sits on.
+  const cache = cacheCell([])
+  const target = makeChannel({ registry, cwd: alphaDir, cache })
+  const gate = deferred()
+  target.plan = { defer: gate.promise, sessions }
+  const app = await mountSupervisor(target)
+  check(
+    'an empty cache paints the empty state, not the placeholder',
+    await settled(() => app.lines().join('\n').includes(EMPTY_STATE)),
+    app.lines().join('\n'),
+  )
+  check('an empty cache invents no session row', !app.lines().join('\n').includes('free session'))
+  check('the placeholder was never painted for an empty cache', !app.saw(LOADING_PLACEHOLDER))
+  gate.resolve()
+  await settled(() => target.landed >= 1, { timeoutMs: 4_000 })
+  app.close()
+}
+{
+  // The store emptied after the cache was written (the user deleted the
+  // sessions). The successful empty listing must clear the painted rows AND
+  // the cache: rows left on screen would be deleted sessions shown as real,
+  // and a cache left holding them would resurrect them on the next restart,
+  // where only another listing could correct them.
+  const cache = cacheCell(sessions)
+  const target = makeChannel({ registry, cwd: alphaDir, cache })
+  const gate = deferred()
+  target.plan = { defer: gate.promise, sessions: [] }
+  const app = await mountSupervisor(target)
+  check(
+    'the cached rows are on screen while the listing is in flight',
+    await settled(() => app.lines().join('\n').includes('free session')),
+    app.lines().join('\n'),
+  )
+  gate.resolve()
+  check(
+    'a successful EMPTY listing clears the cached rows',
+    await settled(() => {
+      const shown = app.lines().join('\n')
+      return !shown.includes('free session') && shown.includes(EMPTY_STATE)
+    }),
+    app.lines().join('\n'),
+  )
+  app.close()
+
+  const after = deferred()
+  const restarted = makeChannel({ registry, cwd: alphaDir, cache })
+  restarted.plan = { defer: after.promise }
+  const next = await mountSupervisor(restarted)
+  check(
+    'a restart over that cache paints the empty state, not the deleted rows',
+    await settled(() => {
+      const shown = next.lines().join('\n')
+      return !shown.includes('free session') && shown.includes(EMPTY_STATE)
+    }),
+    next.lines().join('\n'),
+  )
+  check('and never falls back to the placeholder', !next.saw(LOADING_PLACEHOLDER))
+  after.resolve()
+  await settled(() => restarted.landed >= 1, { timeoutMs: 4_000 })
+  next.close()
+}
+{
+  // A rejected listing writes nothing: the cached rows stay beside the error
+  // notice, and a restart still reads them. A failure is not an empty store.
+  const cache = cacheCell(sessions)
+  const target = makeChannel({ registry, cwd: alphaDir, cache })
+  target.plan = { reject: true }
+  const app = await mountSupervisor(target)
+  check(
+    'a rejected listing keeps the cached rows beside the error notice',
+    await settled(() => {
+      const shown = app.lines().join('\n')
+      return shown.includes('free session') && shown.includes('Failed to load sessions')
+    }),
+    app.lines().join('\n'),
+  )
+  check('the placeholder was never painted for a cached failure', !app.saw(LOADING_PLACEHOLDER))
+  app.close()
+
+  const gate = deferred()
+  const restarted = makeChannel({ registry, cwd: alphaDir, cache })
+  restarted.plan = { defer: gate.promise }
+  const next = await mountSupervisor(restarted)
+  check(
+    'a restart after the failure still paints the cached rows',
+    await settled(() => next.lines().join('\n').includes('free session')),
+    next.lines().join('\n'),
+  )
+  check('and does not fall back to the placeholder', !next.saw(LOADING_PLACEHOLDER))
+  gate.resolve()
+  await settled(() => restarted.landed >= 1, { timeoutMs: 4_000 })
+  next.close()
+}
+{
+  // A restart paints the cache, then Ctrl+L starts a newer listing while the
+  // first is still in flight. The older answer landing late must not roll the
+  // screen back, and must not become what the next restart reads.
+  const cache = cacheCell(sessions)
+  const target = makeChannel({ registry, cwd: alphaDir, cache })
+  const gate = deferred()
+  target.plan = { defer: gate.promise }
+  const app = await mountSupervisor(target)
+  check(
+    'the restart opens on the cached rows',
+    await settled(() => app.lines().join('\n').includes('free session')),
+    app.lines().join('\n'),
+  )
+
+  target.plan = { sessions: renamedSessions }
+  app.write('\u000c') // Ctrl+L: the documented manual re-listing
+  check(
+    'the newer listing paints the rows it answered with',
+    await settled(() => app.lines().join('\n').includes('renamed on disk')),
+    app.lines().join('\n'),
+  )
+
+  gate.resolve()
+  await settled(() => target.landed >= 2, { timeoutMs: 4_000 })
+  await sleep(150) // 固定窗:pacing 等陈旧 listing 的一次重绘窗口（没有可轮询的正向锚点）
+  check(
+    'the older listing landing late does not roll the screen back',
+    app.lines().join('\n').includes('renamed on disk') && !app.lines().join('\n').includes('free session'),
+    app.lines().join('\n'),
+  )
+  app.close()
+
+  const reopen = deferred()
+  const again = makeChannel({ registry, cwd: alphaDir, cache })
+  again.plan = { defer: reopen.promise }
+  const restarted = await mountSupervisor(again)
+  check(
+    'a restart over that cache paints the newer rows',
+    await settled(() => restarted.lines().join('\n').includes('renamed on disk')),
+    restarted.lines().join('\n'),
+  )
+  check('and not the superseded ones', !restarted.lines().join('\n').includes('free session'))
+  reopen.resolve()
+  await settled(() => again.landed >= 1, { timeoutMs: 4_000 })
+  restarted.close()
+}
+
+// ── progress: the first enumeration, before the listing can resolve ────────
+//
+// With no cache there is nothing to paint, so a cold mount shows the
+// placeholder. The channel can hand over the summaries it has already
+// enumerated while the expensive half (titles, artifacts) is still running:
+// that partial answer must clear the placeholder, must not be mistaken for the
+// final listing, and must never outlive the call that produced it.
+
+/** Summaries as the early enumeration sees them: right ids, stale titles. */
+const partialSessions = [
+  session({ id: 'free-one', title: { text: 'partial listing', source: 'prompt' }, updatedAt: now - 1_000 }),
+  sessions[1],
+  sessions[2],
+]
+
+console.log('progress: a partial enumeration paints before the listing resolves')
+{
+  const target = makeChannel({ registry, cwd: alphaDir })
+  const gate = deferred()
+  target.plan = { defer: gate.promise, sessions: renamedSessions }
+  const app = await mountSupervisor(target)
+  check(
+    'a cold mount with no cache waits on the placeholder',
+    await settled(() => app.lines().join('\n').includes(LOADING_PLACEHOLDER)),
+    app.lines().join('\n'),
+  )
+  const partial = target.onPartial
+  check('the screen asked the channel for progress', typeof partial === 'function')
+  partial?.(partialSessions)
+  check(
+    'the partial listing clears the placeholder',
+    await settled(() => {
+      const shown = app.lines().join('\n')
+      return shown.includes('partial listing') && !shown.includes(LOADING_PLACEHOLDER)
+    }),
+    app.lines().join('\n'),
+  )
+  check('the real listing is still unresolved', target.landed === 0, 'landed: ' + target.landed)
+
+  gate.resolve()
+  check(
+    'the fresh listing replaces the partial rows',
+    await settled(() => {
+      const shown = app.lines().join('\n')
+      return shown.includes('renamed on disk') && !shown.includes('partial listing')
+    }),
+    app.lines().join('\n'),
+  )
+  check('the partial rows do not come back', !app.lines().join('\n').includes('partial listing'))
+  app.close()
+}
+{
+  // A partial answer belongs to the call that produced it. Once a newer
+  // listing has landed, a progress emit from the superseded one must not
+  // repaint — the same generation rule the listing answers themselves obey.
+  const target = makeChannel({ registry, cwd: alphaDir })
+  const gate = deferred()
+  target.plan = { defer: gate.promise }
+  const app = await mountSupervisor(target)
+  await settled(() => app.lines().join('\n').includes(LOADING_PLACEHOLDER))
+  const stale = target.onPartial
+  target.plan = { sessions: renamedSessions }
+  app.write('\u000c') // Ctrl+L: a newer listing
+  check(
+    'the newer listing lands',
+    await settled(() => app.lines().join('\n').includes('renamed on disk')),
+    app.lines().join('\n'),
+  )
+  stale?.(partialSessions)
+  await sleep(150) // 固定窗:pacing 等一次可能的重绘，无正向锚点
+  check(
+    'a stale progress emit does not repaint the screen',
+    !app.lines().join('\n').includes('partial listing'),
+    app.lines().join('\n'),
+  )
+  gate.resolve()
+  await settled(() => target.landed >= 2, { timeoutMs: 4_000 })
+  app.close()
+}
+
 const terminal = new XTerm({ cols: COLS, rows: ROWS, scrollback: 0, allowProposedApi: true })
 const stdout = new FakeStdout(terminal)
 const stdin = new FakeStdin()
@@ -194,7 +1084,7 @@ const instance = await render(
         onClose={() => { calls.push('close') }}
         onOpenSession={async (id) => {
           await (channel as unknown as { resumeTo(id: string): Promise<{ ok: boolean }> }).resumeTo(id)
-          return true
+          return { ok: true }
         }}
         // Same path Chat.tsx wires: the screen resolves the workspace target,
         // the host switches to it and starts the session there.
@@ -221,85 +1111,6 @@ const instance = await render(
   },
 )
 
-/**
- * A second, independent screen on the SAME fake home, for the cases whose
- * assertions need a different registry (an empty one, and one longer than the
- * rail can show). Separate terminals keep each case's frame independent — a
- * shared window would carry the previous case's rows into the next.
- */
-async function openSupervisor(
-  overrides: {
-    registry: readonly unknown[]
-    cwd: string
-    sessions?: readonly unknown[]
-    /** True when the registry read itself fails (service missing / throwing). */
-    registryRejects?: boolean
-    registryAbsent?: boolean
-  },
-): Promise<{ write: (data: string) => void; lines: () => string[]; calls: readonly string[]; close: () => void }> {
-  const screen = new XTerm({ cols: COLS, rows: ROWS, scrollback: 0, allowProposedApi: true })
-  const out = new FakeStdout(screen)
-  const input = new FakeStdin()
-  const ownCalls: string[] = []
-  const ownChannel = {
-    version: 0,
-    cwd: overrides.cwd,
-    working: false,
-    agentId: 'live-one',
-    ...(overrides.registryAbsent === true ? {} : {
-      listWorkspaceRegistry: async () => {
-        if (overrides.registryRejects === true) throw new Error('workspace service unavailable')
-        return overrides.registry
-      },
-    }),
-    listSessions: async () => overrides.sessions ?? sessions,
-    resumeTo: async (id: string) => {
-      ownCalls.push(`resumeTo:${id}`)
-      return { ok: true }
-    },
-    switchWorkspace: async () => true,
-    resolveWorkspace: async (reference: string) => ({ cwd: reference, uri: reference, label: reference, kind: 'local', badge: 'LOCAL' }),
-    stopBackgroundAgent: async () => true,
-    notify: () => {},
-    subscribe: () => () => {},
-  } as never
-  const app = await render(
-    <ThemeProvider theme="dark">
-      <AlternateScreen>
-        <SessionSupervisor
-          channel={ownChannel}
-          home={sandbox}
-          onClose={() => {}}
-          onOpenSession={async (id) => {
-            // Same path Chat.tsx wires: the screen hands the row's id to the
-            // channel, which is where "did Enter open the RIGHT row" is
-            // observable.
-            await (ownChannel as unknown as { resumeTo(id: string): Promise<{ ok: boolean }> }).resumeTo(id)
-            return true
-          }}
-          onNewSession={async () => true}
-          onStopSession={async () => true}
-          approval={null}
-          onApprove={() => {}}
-          liveStateOf={(id) => liveState[id as keyof typeof liveState]}
-        />
-      </AlternateScreen>
-    </ThemeProvider>,
-    {
-      stdin: input as never,
-      stdout: out as never,
-      stderr: new FakeStderr() as never,
-      exitOnCtrlC: false,
-      patchConsole: false,
-    },
-  )
-  return {
-    write: (data: string) => { input.write(data) },
-    lines: () => viewportLines(screen),
-    calls: ownCalls,
-    close: () => { app.unmount() },
-  }
-}
 // Wait for the listing effect to land AND the frame to paint. The first
 // condition is what makes this robust: the screen names the terminal's own
 // workspace in the pane header only after `listSessions()` resolved, so polling
@@ -683,6 +1494,461 @@ console.log('a registry that FAILS does not take the history with it')
     absent.lines().join('\n'),
   )
   absent.close()
+  app.close()
+}
+console.log('a refused open shows its REASON on this screen (#939)')
+{
+  // The screen replaces the conversation, so the composer that draws channel
+  // notifications is not mounted: the reason has to reach THIS screen's own
+  // notice, in full, on the final frame — at every width the pane can take.
+  const REASON = 'provider desktop unreachable: connect ECONNREFUSED 127.0.0.1:8080 while restoring the recorded model route'
+  for (const cols of [8, 19, 40, 80, 120]) {
+    const app = await openSupervisor({
+      registry,
+      cwd: alphaDir,
+      cols,
+      openResult: { ok: false, reason: 'failed', error: REASON },
+    })
+    await settled(() => app.lines().join('\n').includes('free session'), { timeoutMs: 6_000 })
+    app.write('\x1b[C') // → the list pane
+    await sleep(50) // 固定窗:pacing 按键步间：焦点切换无可观测锚点
+    app.write('\x1b[B') // past the new-session card onto the first session
+    await sleep(50) // 固定窗:pacing 按键步间：焦点切换无可观测锚点
+    app.write('\r')
+    const joined = (): string => app.lines().map(line => line.trim()).join(' ')
+    const flat = (): string => joined().replace(/\s+/gu, '')
+    // Three rows of a very narrow pane cannot hold the whole sentence; what
+    // must survive there is the START of the reason, not only the title.
+    const probe = cols < 40 ? 'provider' : 'ECONNREFUSED'
+    const shown = await settled(() => flat().includes(probe), { timeoutMs: 4_000 })
+    check(`${cols} cols: the refusal reaches resumeTo`, app.calls.some(call => call.startsWith('resumeTo:')), app.calls.join(', '))
+    // At 8 columns nothing on this screen is legible (title and rows clip to
+    // 8 cells); the case stays for the spill check, not for the wording.
+    if (cols >= 19) check(`${cols} cols: the failure reason is on the screen`, shown, app.lines().join('\n'))
+    check(`${cols} cols: no pointer to an unmounted notification`, !joined().includes('notification below'), app.lines().join('\n'))
+    if (cols >= 80) {
+      // The rail shares these rows, so read the notice from its own column.
+      const lines = app.lines()
+      const top = lines.findIndex(line => line.includes('Could not enter'))
+      const left = top < 0 ? 0 : lines[top].indexOf('Could not enter')
+      const notice = lines.slice(top, top + 3).map(line => line.slice(left).trim()).join(' ')
+      check(`${cols} cols: the whole reason is readable`, top >= 0 && notice.includes(REASON), notice)
+    }
+    // The renderer clips at the pane edge rather than spilling, so row widths
+    // prove nothing: a clipped notice is caught by its TEXT. Read back in
+    // order, the notice rows must be one unbroken prefix of the message, and
+    // a message that did not fit must say so with the trailing ellipsis.
+    {
+      const lines = app.lines()
+      // The full phrase when it fits on a row (the rail may sit to its left);
+      // on the narrowest panes only its first word does.
+      const whole = lines.findIndex(line => line.includes('Could not enter'))
+      const top = whole >= 0 ? whole : lines.findIndex(line => line.trimStart().startsWith('Could'))
+      const left = top < 0 ? 0 : lines[top].indexOf('Could')
+      const rows: string[] = []
+      for (let y = top; top >= 0 && y < top + 3 && y < lines.length; y++) {
+        const row = lines[y].slice(left).trim()
+        if (row === '' || row.includes('switch pane')) break
+        rows.push(row)
+      }
+      const shownFlat = rows.join('').replace(/\s+/gu, '')
+      const message = `Could not enter free session · ${REASON}`.replace(/\s+/gu, '')
+      const cut = shownFlat.endsWith('…')
+      const body = cut ? shownFlat.slice(0, -1) : shownFlat
+      check(
+        `${cols} cols: the notice is never silently clipped`,
+        body.length > 0 && message.startsWith(body) && (cut || body === message),
+        `${rows.join(' | ')}\n${lines.join('\n')}`,
+      )
+    }
+    app.close()
+  }
+  const cancelled = await openSupervisor({ registry, cwd: alphaDir, openResult: { ok: false, reason: 'cancelled' } })
+  await settled(() => cancelled.lines().join('\n').includes('free session'), { timeoutMs: 6_000 })
+  cancelled.write('\x1b[C')
+  await sleep(50) // 固定窗:pacing 按键步间：焦点切换无可观测锚点
+  cancelled.write('\x1b[B')
+  await sleep(50) // 固定窗:pacing 按键步间：焦点切换无可观测锚点
+  cancelled.write('\r')
+  await settled(() => cancelled.calls.length > 0, { timeoutMs: 4_000 })
+  await sleep(200) // 固定窗:探针 取消的打开不得在此后画出提示
+  check('a cancelled open stays silent', !cancelled.lines().join('\n').includes('Could not enter'), cancelled.lines().join('\n'))
+  cancelled.close()
+}
+
+console.log('background title recovery updates the existing row')
+{
+  const target = makeChannel({ registry, cwd: alphaDir })
+  const app = await mountSupervisor(target)
+  check('the foreground row is visible', await settled(() => app.lines().join('\n').includes('free session')))
+  target.enrich?.(session({ id: 'free-one', title: { text: 'recovered title', source: 'auto' }, updatedAt: now - 1_000 }))
+  check('background metadata repaints the row', await settled(() => app.lines().join('\n').includes('recovered title')))
+  app.close()
+}
+// ── source tabs: other coding agents' conversations ──────────────────────
+
+const foreignRow = (over: Partial<ForeignRowFixture> & { key: string }): ForeignRowFixture => ({
+  agentId: 'claude-code',
+  title: over.key,
+  cwd: alphaDir,
+  updatedAt: now - 10_000,
+  ...over,
+})
+const claudeRows = [
+  foreignRow({ key: 'cc-1', title: 'fix the parser', updatedAt: now - 5_000 }),
+  foreignRow({ key: 'cc-2', title: 'write the docs', updatedAt: now - 9_000 }),
+  // Newest overall, in a directory that no longer exists: the group sorts
+  // first, but the rail still opens on the terminal's own directory.
+  foreignRow({ key: 'cc-3', title: 'ghost chat', cwd: GHOST_DIR, updatedAt: now - 2_000 }),
+  foreignRow({ key: 'cc-4', title: 'no directory', cwd: '', updatedAt: now - 20_000 }),
+]
+const codexRows = [foreignRow({ agentId: 'codex', key: 'cx-1', title: 'codex refactor', updatedAt: now - 7_000 })]
+const foreignConfig: ForeignStubConfig = {
+  sources: [
+    // The strip keeps the channel's order (registry order in the real host).
+    { agentId: 'claude-code', label: 'Claude Code' },
+    { agentId: 'codex', label: 'Codex' },
+  ],
+  rows: { 'claude-code': claudeRows, codex: codexRows },
+}
+
+console.log('source tabs: pure layout and grouping')
+{
+  const tabs = [
+    { id: 'dsh', label: 'DSH' },
+    { id: 'a', label: 'Claude Code' },
+    { id: 'b', label: 'Codex' },
+    { id: 'c', label: 'Grok Build' },
+  ]
+  // Cells are ` label `; the `│` after DSH costs one more.
+  const full = 5 + 1 + 13 + 7 + 12
+  const wide = layoutSourceTabs(tabs, 'dsh', full)
+  check('a wide strip shows every tab', wide.shown.length === 4 && wide.hidden.length === 0)
+  const narrow = layoutSourceTabs(tabs, 'dsh', full - 1)
+  check(
+    'a narrow strip folds trailing tabs into +N',
+    narrow.hidden.map(tab => tab.id).join(',') === 'c' && narrow.shown.map(tab => tab.id).join(',') === 'dsh,a,b',
+    JSON.stringify(narrow),
+  )
+  const keepActive = layoutSourceTabs(tabs, 'c', 5 + 1 + 12 + 4)
+  check(
+    'the active tab never folds',
+    keepActive.shown.some(tab => tab.id === 'c') && keepActive.hidden.length === 2,
+    JSON.stringify(keepActive),
+  )
+  const tiny = layoutSourceTabs(tabs, 'b', 3)
+  check(
+    'with no room at all only the active tab is drawn',
+    tiny.shown.map(tab => tab.id).join(',') === 'b' && tiny.hidden.length === 3,
+    JSON.stringify(tiny),
+  )
+
+  const groups = groupForeignRows(claudeRows as never, [{ ...registry[1]!, from: 'registry' }] as never)
+  check('conversations group by directory', groups.length === 3, JSON.stringify(groups.map(group => group.key)))
+  check('groups sort by their newest conversation', groups[0]!.rows[0]!.key === 'cc-3')
+  check(
+    'a registered directory keeps its DSH title',
+    groups.find(group => group.path === alphaDir)?.title === 'Alpha',
+  )
+  check(
+    'a directory with no record lands in the unknown group',
+    groups.find(group => group.key === FOREIGN_UNKNOWN_GROUP)?.rows[0]?.key === 'cc-4',
+  )
+  check('a vanished directory is marked missing', groups.find(group => group.path === GHOST_DIR)?.present === false)
+  check('foreign search matches the title', foreignRowMatchesQuery(claudeRows[0] as never, 'parser'))
+  check('foreign search matches the directory', foreignRowMatchesQuery(claudeRows[0] as never, 'alpha'))
+  check('foreign search rejects a non-match', !foreignRowMatchesQuery(claudeRows[0] as never, 'zzzz'))
+}
+
+console.log('source tabs: no strip without sources')
+{
+  const app = await openSupervisor({ registry, cwd: alphaDir })
+  await settled(() => app.lines().join('\n').includes('Sessions in Alpha'))
+  check('a channel without the facade draws no tab strip', !app.lines()[0]!.includes('DSH'), app.lines()[0])
+  check('and keeps the subtitle', app.lines()[0]!.includes('switching does not stop them'), app.lines()[0])
+  app.close()
+}
+
+console.log('source tabs: strip, switching and import')
+{
+  const app = await openSupervisor({ registry, cwd: alphaDir, foreign: foreignConfig })
+  const shown = (): string => app.lines().join('\n')
+  const header = (): string => app.lines()[0] ?? ''
+  await settled(() => shown().includes('Sessions in Alpha') && header().includes('Claude Code'))
+  check('the strip renders in the header', /DSH\s*│\s*Claude Code\s+Codex/u.test(header()), header())
+  check('the screen opens on the DSH tab', shown().includes('free session'), shown())
+  check('the DSH hints name the Tab key', shown().includes('Tab switch source'), shown())
+
+  await app.click('Claude Code')
+  check(
+    'clicking a tab switches to that source',
+    await settled(() => shown().includes('Claude Code · sessions in Alpha')),
+    shown(),
+  )
+  check('the source was scanned', app.calls.includes('scan:claude-code'), app.calls.join(', '))
+  check('the DSH rows are gone', !shown().includes('free session'), shown())
+  check(
+    'the rail groups the source by directory',
+    shown().includes('dsh-tui-supervisor-ghost') && shown().includes('Unknown directory'),
+    shown(),
+  )
+  check('the list shows the selected directory only', shown().includes('fix the parser') && !shown().includes('ghost chat'), shown())
+  check('there is no new-session card', !shown().includes('+ New session'), shown())
+
+  const cursorOn = (title: string): boolean => app.lines().some(line => line.includes(title) && line.includes('❯'))
+  app.write('\u001b[C')
+  check('→ lands the cursor on the first row (no card at 0)', await settled(() => cursorOn('fix the parser')), shown())
+  for (const character of 'docs') {
+    app.write(character)
+    await sleep(60) // 固定窗:pacing 逐字投喂：整串一次写入时首字符会被当作导航键吞掉
+  }
+  check(
+    'typing filters by title',
+    await settled(() => shown().includes('write the docs') && !shown().includes('fix the parser')),
+    shown(),
+  )
+  check('the filtered cursor stands on a real row', await settled(() => cursorOn('write the docs')), shown())
+  await sleep(120) // 固定窗:pacing Enter 处理步间，无可观测锚点
+  app.write('\r')
+  check(
+    'Enter imports, then opens the deterministic id',
+    await settled(() => app.calls.includes('resumeTo:foreign-cc-2'), { timeoutMs: 4_000 }),
+    app.calls.join(', '),
+  )
+  check(
+    'the import ran before the open',
+    app.calls.indexOf('created:foreign-cc-2') >= 0
+      && app.calls.indexOf('created:foreign-cc-2') < app.calls.indexOf('resumeTo:foreign-cc-2'),
+    app.calls.join(', '),
+  )
+  await sleep(120) // 固定窗:pacing 第二次 Enter 前等导入的防重入标记释放
+  app.write('\r')
+  check(
+    'a second Enter opens the existing copy without creating another',
+    await settled(() => app.calls.filter(call => call === 'resumeTo:foreign-cc-2').length === 2, { timeoutMs: 4_000 })
+      && app.calls.includes('existing:foreign-cc-2')
+      && app.calls.filter(call => call === 'created:foreign-cc-2').length === 1,
+    app.calls.join(', '),
+  )
+
+  app.write('\t')
+  check(
+    'Tab moves to the next source',
+    await settled(() => shown().includes('Codex · sessions in Alpha')),
+    shown(),
+  )
+  check('switching source clears the query', shown().includes('codex refactor'), shown())
+  app.write('\u001b[Z')
+  check(
+    'Shift+Tab moves back',
+    await settled(() => shown().includes('Claude Code · sessions in Alpha') && shown().includes('fix the parser')),
+    shown(),
+  )
+  check('the query stays cleared on the way back', shown().includes('fix the parser') && shown().includes('write the docs'), shown())
+  check('a revisited source is listed afresh (nothing kept across tabs)', app.calls.filter(call => call === 'scan:claude-code').length === 2, app.calls.join(', '))
+  check('opening the screen probed the sources once', app.calls.filter(call => call === 'probe').length === 1, app.calls.join(', '))
+
+  await app.click('dsh-tui-supervisor-ghost')
+  check('clicking a rail group selects it', await settled(() => shown().includes('ghost chat')), shown())
+  const opened = app.calls.filter(call => call.startsWith('resumeTo')).length
+  await app.click('ghost chat')
+  check(
+    'a conversation whose directory is gone reports it',
+    await settled(() => shown().includes('working directory no longer exists'), { timeoutMs: 4_000 }),
+    shown(),
+  )
+  check(
+    'and opens nothing',
+    app.calls.filter(call => call.startsWith('resumeTo')).length === opened,
+    app.calls.join(', '),
+  )
+
+  app.write('\u001b[Z')
+  await settled(() => shown().includes('Sessions in Alpha'))
+  check('Shift+Tab from the first source returns to DSH', shown().includes('free session'), shown())
+  app.close()
+}
+
+console.log('source tabs: a slow import respects where the user went meanwhile')
+{
+  // An import of a large conversation takes seconds. Closing the screen while
+  // it runs is the user saying "not now": the import may finish, but it must
+  // not pull the terminal into that session afterwards.
+  let release!: () => void
+  const gate = new Promise<void>(resolve => { release = resolve })
+  const app = await openSupervisor({ registry, cwd: alphaDir, foreign: { ...foreignConfig, importGate: gate } })
+  const shown = (): string => app.lines().join('\n')
+  await settled(() => (app.lines()[0] ?? '').includes('Claude Code'))
+  await app.click('Claude Code')
+  await settled(() => shown().includes('fix the parser'))
+  await app.click('fix the parser')
+  check(
+    'the import started and says so',
+    await settled(() => app.calls.includes('import:claude-code:cc-1') && shown().includes('Importing fix the parser')),
+    shown(),
+  )
+  app.close()
+  release()
+  await settled(() => app.calls.includes('created:foreign-cc-1'), { timeoutMs: 4_000 })
+  await sleep(150) // 固定窗:pacing 断言的是不该发生的打开，没有正向锚点可轮询
+  check(
+    'closing the screen before the import landed opens nothing',
+    !app.calls.some(call => call.startsWith('resumeTo')),
+    app.calls.join(', '),
+  )
+}
+{
+  // A notice belongs to the tab that asked: a failure landing after the user
+  // moved to another source must not show up under it.
+  let release!: () => void
+  const gate = new Promise<void>(resolve => { release = resolve })
+  const app = await openSupervisor({ registry, cwd: alphaDir, foreign: { ...foreignConfig, importGate: gate } })
+  const shown = (): string => app.lines().join('\n')
+  await settled(() => (app.lines()[0] ?? '').includes('Claude Code'))
+  await app.click('Claude Code')
+  await app.click('dsh-tui-supervisor-ghost')
+  await settled(() => shown().includes('ghost chat'))
+  await app.click('ghost chat')
+  await settled(() => app.calls.includes('import:claude-code:cc-3'))
+  app.write('\t')
+  await settled(() => shown().includes('Codex · sessions in Alpha'))
+  release()
+  await sleep(200) // 固定窗:pacing 断言的是不该出现的提示，没有正向锚点可轮询
+  check(
+    'an import failure that lands on another tab stays off it',
+    shown().includes('codex refactor') && !shown().includes('working directory no longer exists'),
+    shown(),
+  )
+  app.close()
+}
+
+console.log('source tabs: width degradation in the header')
+{
+  // Enough sources that the strip cannot fit next to the subtitle, and then
+  // not even on its own: the subtitle goes, then the tail folds into `+N`.
+  const many = Array.from({ length: 8 }, (_, index) => ({
+    agentId: `src-${index}`,
+    label: `Source Number ${index}`,
+  }))
+  const app = await openSupervisor({
+    registry,
+    cwd: alphaDir,
+    foreign: {
+      sources: many,
+      rows: Object.fromEntries(many.map(source => [source.agentId, [foreignRow({ agentId: source.agentId, key: `${source.agentId}-row`, title: `row of ${source.label}` })]])),
+    },
+  })
+  const header = (): string => app.lines()[0] ?? ''
+  await settled(() => header().includes('Source Number 0'))
+  check('a crowded header drops the subtitle', !header().includes('switching does not stop them'), header())
+  const fold = /\+(\d+)/u.exec(header())
+  check('trailing tabs fold into +N', fold !== null && Number(fold[1]) > 0, header())
+  check('the last source is folded away', !header().includes('Source Number 7'), header())
+  await app.click(`+${fold?.[1] ?? ''}`)
+  check(
+    'clicking +N lists the folded tabs',
+    await settled(() => app.lines().join('\n').includes('Source Number 7')),
+    app.lines().join('\n'),
+  )
+  await app.click('Source Number 7')
+  check(
+    'picking a folded tab activates it, and it stays drawn',
+    await settled(() => app.lines().join('\n').includes('row of Source Number 7') && header().includes('Source Number 7')),
+    app.lines().join('\n'),
+  )
+  app.close()
+}
+
+// ── the cache read re-scopes the in-memory slot on every mount ─────────────
+//
+// The slot is keyed by the CHANNEL, so it would otherwise outlive the provider
+// it describes: the same Channel object can be re-bound to another store
+// (service replacement, a workspace switch) between two mounts of this screen.
+// Every mount that HAS the cache read re-scopes the slot from it, so a
+// different snapshot paints — and `undefined`, "this provider's scope cannot
+// be read", clears the rows the previous mount left behind. A channel WITHOUT
+// the read keeps the slot: that is the pre-persistence path the reopen cases
+// above still drive, not something a configured cache may break.
+
+console.log('the cache read re-scopes the slot on every mount')
+{
+  // The scope changed under the same channel: another process listed, or the
+  // channel was re-bound to another store. The mount must paint what the scope
+  // says NOW, not the rows this channel's previous mount left in memory.
+  const cache = cacheCell(sessions)
+  const target = makeChannel({ registry, cwd: alphaDir, cache })
+  const first = await mountSupervisor(target)
+  check(
+    'the first mount paints the scope it was given',
+    await settled(() => first.lines().join('\n').includes('free session')),
+    first.lines().join('\n'),
+  )
+  first.close()
+
+  cache.rows = renamedSessions
+  const gate = deferred()
+  target.plan = { defer: gate.promise }
+  const app = await mountSupervisor(target)
+  check(
+    'a remount paints the re-scoped rows, not the ones this channel already had',
+    await settled(() => {
+      const shown = app.lines().join('\n')
+      return shown.includes('renamed on disk') && !shown.includes('free session')
+    }),
+    app.lines().join('\n'),
+  )
+  gate.resolve()
+  await settled(() => target.landed >= 2, { timeoutMs: 4_000 })
+  app.close()
+}
+{
+  // An unreadable scope is not a missing method: it clears the slot, so the
+  // mount shows the loading path rather than rows belonging to a store this
+  // channel no longer describes.
+  const cache = cacheCell(sessions)
+  const target = makeChannel({ registry, cwd: alphaDir, cache })
+  const first = await mountSupervisor(target)
+  await settled(() => first.lines().join('\n').includes('free session'))
+  first.close()
+
+  cache.rows = undefined
+  const gate = deferred()
+  target.plan = { defer: gate.promise }
+  const app = await mountSupervisor(target)
+  check(
+    'an unreadable scope clears the previous mount rows',
+    await settled(() => app.lines().join('\n').includes(LOADING_PLACEHOLDER)),
+    app.lines().join('\n'),
+  )
+  check('and none of the stale rows are painted', !app.lines().join('\n').includes('free session'))
+  gate.resolve()
+  check(
+    'the listing then paints the scope it reads',
+    await settled(() => app.lines().join('\n').includes('free session'), { timeoutMs: 4_000 }),
+    app.lines().join('\n'),
+  )
+  app.close()
+}
+
+{
+  // The contrast, and the reason the stub above omits the method rather than
+  // answering `undefined`: a channel with NO cache read keeps its slot, so a
+  // reopen still paints the previous listing instead of the placeholder.
+  const target = makeChannel({ registry, cwd: alphaDir })
+  const first = await mountSupervisor(target)
+  await settled(() => first.lines().join('\n').includes('free session'))
+  first.close()
+  const gate = deferred()
+  target.plan = { defer: gate.promise }
+  const app = await mountSupervisor(target)
+  check(
+    'a channel without the cache read still reopens on its in-memory rows',
+    await settled(() => app.lines().join('\n').includes('free session')),
+    app.lines().join('\n'),
+  )
+  check('and shows no placeholder for them', !app.saw(LOADING_PLACEHOLDER))
+  gate.resolve()
+  await settled(() => target.landed >= 2, { timeoutMs: 4_000 })
   app.close()
 }
 console.log(failures === 0 ? '\nAll session-supervisor checks passed.' : `\n${failures} check(s) failed.`)

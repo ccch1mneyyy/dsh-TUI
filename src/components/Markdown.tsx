@@ -4,15 +4,20 @@ import { Box, Text } from '../ui.js'
 import { configureMarked, formatToken, stripPromptXMLTags } from '../terminal-utils/markdown.js'
 import { getCliHighlightPromise, type CliHighlight } from '../terminal-utils/cliHighlight.js'
 import { isMermaidLang } from '../terminal-utils/mermaid.js'
+import { isMathBlockToken, isMathToken } from '../terminal-utils/math.js'
+import { getMathRendering, subscribeMathRendering } from '../tuiDisplayPrefs.js'
 import { MarkdownTable } from './MarkdownTable.js'
 import { MermaidDiagram } from './MermaidDiagram.js'
+import { InlineMathParagraph } from './InlineMathParagraph.js'
+import { MathBlock } from './MathBlock.js'
 
 /**
  * Markdown 渲染组件：marked 分词 + ANSI 格式化。
  *
  * 表格 token 交给 MarkdownTable 渲染为带边框的 flexbox 布局，mermaid
- * 代码块交给 MermaidDiagram 画成 box-drawing 图（两者都需要终端宽度，
- * 所以是独立节点而不是 ANSI 字符串）；
+ * 代码块交给 MermaidDiagram 画成 box-drawing 图，`$$` 公式块交给
+ * MathBlock 排成多行 Unicode（三者都需要终端宽度，所以是独立节点而不是
+ * ANSI 字符串）；行内公式在 formatToken 里转成单行 Unicode；
  * 其余块级内容由 formatToken 转成 ANSI 字符串，按块边界分批放进
  * Text（只去整段首尾空白）。代码块高亮由 cli-highlight 异步提供，
  * 加载完成后自动触发一次重渲染。无 markdown 语法的纯文本走快速
@@ -25,6 +30,12 @@ type Props = {
   dimColor?: boolean
   /** 为 false 时跳过 token 缓存（流式尾部的内容逐帧变化，缓存必然失效） */
   cacheTokens?: boolean
+  /**
+   * Whether paragraphs may show inline math as images (`mathRendering:
+   * image`). Streaming text passes false: a paragraph switching to images
+   * mid-stream would re-wrap under the reader; the settled message switches.
+   */
+  inlineMathImages?: boolean
 }
 
 // ---- token 缓存 ----
@@ -44,15 +55,12 @@ const TEXT_BLOCK_BUDGET = 8192
 const tokenCache = new Map<string, Token[]>()
 let tokenCacheChars = 0
 
-// 语法探针：命中任意 markdown 结构标记才值得走 lexer；内容过长时
-// 只探测开头一段，纯文本直接跳过约 3ms 的 lexer 调用。
-const MD_SYNTAX_MARKERS = /[#*`|[>\-_~]|\n\n|^\d+\. |\n\d+\. /
-const SYNTAX_PROBE_WINDOW = 500
+// 语法探针：全文都没有结构标记时才跳过 lexer，不能仅凭纯文本前缀
+// 忽略后面的公式或 Markdown。`$` 与 `\` 覆盖 LaTeX 公式定界符。
+const MD_SYNTAX_MARKERS = /[#*`|[>\-_~$\\]|\n\n|^\d+\. |\n\d+\. /
 
 function looksLikePlainText(s: string): boolean {
-  const probe =
-    s.length > SYNTAX_PROBE_WINDOW ? s.slice(0, SYNTAX_PROBE_WINDOW) : s
-  return !MD_SYNTAX_MARKERS.test(probe)
+  return !MD_SYNTAX_MARKERS.test(s)
 }
 
 function lexWithCache(content: string, allowCache: boolean): Token[] {
@@ -108,7 +116,15 @@ function lexWithCache(content: string, allowCache: boolean): Token[] {
  * rather than the newline-derived spacing of text blocks.
  */
 export function isStandaloneToken(token: Token): boolean {
-  return token.type === 'table' || isMermaidToken(token)
+  return token.type === 'table' || isMermaidToken(token) || isMathBlockToken(token)
+}
+
+/** Whether a paragraph holds inline math anywhere in its inline tokens. */
+function hasInlineMath(token: Token): boolean {
+  for (const child of (token as { tokens?: Token[] }).tokens ?? []) {
+    if (isMathToken(child) || hasInlineMath(child)) return true
+  }
+  return false
 }
 
 function isMermaidToken(token: Token): token is Tokens.Code {
@@ -116,17 +132,19 @@ function isMermaidToken(token: Token): token is Tokens.Code {
 }
 
 /**
- * 把 lexer 产出的 token 列表转成 React 节点序列：table 与 mermaid 块独立
- * 渲染，其余 token 的 ANSI 文本按完整块分批拼接，只去整段首尾空白。
+ * 把 lexer 产出的 token 列表转成 React 节点序列：table、mermaid 与公式块
+ * 独立渲染，其余 token 的 ANSI 文本按完整块分批拼接，只去整段首尾空白。
  */
 function renderTokensToNodes(
   tokens: Token[],
   highlight: CliHighlight | null,
   dimColor: boolean,
+  inlineMathImages: boolean,
 ): React.ReactNode[] {
   const nodes: React.ReactNode[] = []
   let ansiText = ''
   let textParts: string[] = []
+  let afterOwnNode = false
 
   const flushAnsiText = (): void => {
     if (!ansiText && textParts.length === 0) return
@@ -155,6 +173,8 @@ function renderTokensToNodes(
   }
 
   for (const token of tokens) {
+    const ownNodeBefore = afterOwnNode
+    afterOwnNode = false
     if (token.type === 'table') {
       flushAnsiText()
       nodes.push(
@@ -164,6 +184,17 @@ function renderTokensToNodes(
           highlight={highlight}
         />,
       )
+    } else if (inlineMathImages && token.type === 'paragraph' && hasInlineMath(token)) {
+      flushAnsiText()
+      nodes.push(<InlineMathParagraph key={nodes.length} token={token as Tokens.Paragraph} highlight={highlight} />)
+      afterOwnNode = true
+    } else if (ownNodeBefore && token.type === 'space') {
+      // The blank line after a paragraph that became its own node is the
+      // column gap now; as text it would flush as an empty node (an extra
+      // gap row). In a text run the same newline is trimmed at the flush.
+    } else if (isMathBlockToken(token)) {
+      flushAnsiText()
+      nodes.push(<MathBlock key={nodes.length} token={token} dimColor={dimColor} />)
     } else if (isMermaidToken(token)) {
       flushAnsiText()
       nodes.push(
@@ -200,8 +231,11 @@ function renderTokensToNodes(
  * block — the dominant long-output stall (string-width via wrap-ansi, 60%+
  * of CPU in streaming profiles).
  */
-function MarkdownImpl({ children, dimColor = false, cacheTokens = true }: Props): React.ReactNode {
+function MarkdownImpl({ children, dimColor = false, cacheTokens = true, inlineMathImages = true }: Props): React.ReactNode {
   const [highlight, setHighlight] = React.useState<CliHighlight | null>(null)
+  // Inline math is baked into the ANSI text, so the switch must invalidate
+  // the memo below (MathBlock nodes subscribe on their own).
+  const mathRendering = React.useSyncExternalStore(subscribeMathRendering, getMathRendering)
 
   React.useEffect(() => {
     let mounted = true
@@ -221,8 +255,10 @@ function MarkdownImpl({ children, dimColor = false, cacheTokens = true }: Props)
       lexWithCache(source, cacheTokens),
       highlight,
       dimColor,
+      // Dimmed text (thinking) cannot dim an image, so it keeps Unicode.
+      inlineMathImages && mathRendering === 'image' && !dimColor,
     )
-  }, [children, dimColor, highlight, cacheTokens])
+  }, [children, dimColor, highlight, cacheTokens, mathRendering, inlineMathImages])
 
   return (
     <Box flexDirection="column" gap={1}>
@@ -240,5 +276,6 @@ export const Markdown = React.memo(
   (prev, next) =>
     prev.children === next.children &&
     prev.dimColor === next.dimColor &&
-    prev.cacheTokens === next.cacheTokens,
+    prev.cacheTokens === next.cacheTokens &&
+    prev.inlineMathImages === next.inlineMathImages,
 )

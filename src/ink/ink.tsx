@@ -35,7 +35,7 @@ import { selectTerminalImageProtocol } from './terminal-image-protocol.js';
 import { nodeCache } from './node-cache.js';
 import { optimize } from './optimizer.js';
 import Output from './output.js';
-import type { ParsedKey } from './parse-keypress.js';
+import type { ParsedKey, TerminalResponse } from './parse-keypress.js';
 import reconciler, { dispatcher, getLastCommitMs, getLastYogaMs, isDebugRepaintsEnabled, recordYogaMs, resetProfileCounters } from './reconciler.js';
 import renderNodeToOutput, { consumeFollowScroll, consumeViewportResizes, didLayoutShift } from './render-node-to-output.js';
 import { applyPositionedHighlight, type MatchPosition, scanPositions } from './render-to-screen.js';
@@ -112,6 +112,8 @@ export default class Ink {
     getSnapshot: (): boolean => this.altScreenActive && (this.kittyGraphicsSupported || this.sixelGraphicsSupported) &&
       !this.isPaused && !this.terminalQueriesSuspended && !this.isUnmounted,
     getCellSize: () => this.measuredImageCellSize,
+    getProtocol: (): 'kitty' | 'sixel' | undefined =>
+      !this.terminalImages.getSnapshot() ? undefined : this.kittyGraphicsSupported ? 'kitty' : 'sixel',
     request: (): (() => void) => {
       if (this.isUnmounted) return noop;
       this.terminalImageRequests += 1;
@@ -919,7 +921,7 @@ export default class Ink {
     if (this.altScreenActive) {
       selActive = hasSelection(this.selection);
       if (selActive) {
-        applySelectionOverlay(frame.screen, this.selection, this.stylePool);
+        applySelectionOverlay(frame.screen, this.selection, this.stylePool, frame.images);
       }
       // Commit-consistency guard: hash the rows under the highlight on the
       // frame the copy would actually read. An uncoordinated change since
@@ -2596,7 +2598,19 @@ export default class Ink {
   };
   private setAppRef(app: App | null): void {
     this.app = app;
+    if (app !== null) app.querier.onUnsolicited = this.handleUnsolicitedResponse;
   }
+  /**
+   * Kitty placements report failures; an ENOENT means the terminal evicted a
+   * dormant image under a quota smaller than our retention budget. Repaint so
+   * the next reconcile uploads it again.
+   */
+  private handleUnsolicitedResponse = (response: TerminalResponse): void => {
+    if (response.type !== 'kittyGraphics' || this.isUnmounted) return;
+    if (this.kittyGraphicsManager.handleResponse(response.imageId, response.status)) {
+      this.scheduleRender();
+    }
+  };
   render(node: ReactNode): void {
     this.currentNode = node;
     const tree = <App ref={this.setAppRef} stdin={this.options.stdin} stdout={this.options.stdout} stderr={this.options.stderr} exitOnCtrlC={this.options.exitOnCtrlC} onExit={this.unmount} terminalColumns={this.terminalColumns} terminalRows={this.terminalRows} selection={this.selection} onSelectionChange={this.notifySelectionChange} onClickAt={this.dispatchClick} onContextMenuAt={this.dispatchContextMenu} onHoverAt={this.dispatchHover} onWheelAt={this.dispatchWheelAt} getHyperlinkAt={this.getHyperlinkAt} onOpenHyperlink={this.openHyperlink} onMultiClick={this.handleMultiClick} onSelectionDrag={this.handleSelectionDrag} onDragTargetAt={this.findDragTargetAt} onDragDispatch={this.dispatchDrag} onPointerGestureChange={this.setPointerGestureActive} onProtocolCandidateChange={this.setProtocolCandidateActive} onReleaseTail={this.drainReleaseTail} onClickProbe={this.clickProbeAtBatchTail} onStdinResume={this.reassertTerminalModes} onTerminalFocus={this.handleTerminalFocusProbe} onCursorDeclaration={this.setCursorDeclaration} dispatchKeyboardEvent={this.dispatchKeyboardEvent}>

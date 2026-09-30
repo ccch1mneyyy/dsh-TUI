@@ -25,7 +25,7 @@ process.env.USERPROFILE = isolatedHome
 mkdirSync(joinPath(isolatedHome, '.dsh-tui'), { recursive: true })
 
 const [
-  { swallowNestedUpdateOverflow, isNestedUpdateOverflow, callWithUpdateOverflowGuard, resetUpdateOverflowGuardForTest, installNestedUpdateOverflowProcessGuard, registerOverflowQuench },
+  { swallowNestedUpdateOverflow, isNestedUpdateOverflow, callWithUpdateOverflowGuard, resetUpdateOverflowGuardForTest, installNestedUpdateOverflowProcessGuard, registerOverflowQuench, fatalReasonForExit },
   { createClock },
   { Context },
   { createChannel },
@@ -220,6 +220,20 @@ console.log('--- B: hotspots ---')
   term.dispose()
   check('B4 真实渲染零干扰（守卫不破坏正常动画）', alive, `frames=${frames}`)
   resetRevealForTest()
+}
+
+// B6 致命原因规范化：`Promise.reject()` / `throw undefined` 交给退出漏斗时必须是
+// 非 undefined 的错误——漏斗用 `error !== undefined` 选崩溃路径，undefined 会走
+// 干净退出（exit 0），而 sink 却已声明接管进程（CodeRabbit 在 PR #1174 指出）。
+{
+  const fromRejection = fatalReasonForExit(undefined, 'unhandledRejection')
+  const fromThrow = fatalReasonForExit(undefined, 'uncaughtException')
+  const defined = new Error('boom')
+  const nonError = { code: 'EBOOM' }
+  check('B6 undefined 拒绝原因被规范化为 Error', fromRejection instanceof Error && fromRejection.message.includes('unhandledRejection'))
+  check('B6 undefined 未捕获原因被规范化为 Error', fromThrow instanceof Error && fromThrow.message.includes('uncaughtException'))
+  check('B6 已定义原因按引用原样透传', fatalReasonForExit(defined, 'uncaughtException') === defined)
+  check('B6 非 Error 的已定义原因不被包装', fatalReasonForExit(nonError, 'unhandledRejection') === nonError)
 }
 
 console.log(failed === 0 ? '\nALL PASS' : `\n${failed} FAILED`)

@@ -31,7 +31,7 @@ const [
   { settle, screenHas, findText, viewportLines, sleep },
   { stringWidth },
   { fetchBalance },
-  { estimateSessionCostCny, estimateSessionCostSplitCny, isDeepSeekOfficialProvider, isPeakHour, priceForModel },
+  { estimateSessionCostCny, estimateSessionCostSplitCny, estimateCostFromBucketsCny, isDeepSeekOfficialProvider, isPeakHour, priceForModel },
 ] = await Promise.all([
   import('node:stream'),
   import('react'),
@@ -181,9 +181,12 @@ check('isPeakHour 周日北京 10:00 → 空闲', !isPeakHour(new Date('2026-08-
 
 {
   const flash = priceForModel('deepseek-v4-flash')
-  check('priceForModel 精确匹配 flash', flash !== undefined && flash.output[1] === 9.0)
+  check('priceForModel 精确匹配 flash（#857 Flash 价）', flash !== undefined && flash.output[1] === 8.0
+    && flash.inputMiss[1] === 2.0 && flash.inputHit[1] === 0.04, JSON.stringify(flash))
   const vision = priceForModel('deepseek-v4-flash-vision-exp')
-  check('priceForModel 最长前缀匹配 vision（flash 价）', vision !== undefined && vision.output[1] === 9.0)
+  check('priceForModel 最长前缀匹配 vision（flash 价）', vision !== undefined && vision.output[1] === 8.0
+    && vision.inputMiss[1] === 2.0, JSON.stringify(vision))
+  check('priceForModel v4-pro 已下线（未收录）', priceForModel('deepseek-v4-pro') === undefined)
   check('priceForModel 未知模型', priceForModel('gpt-4o') === undefined)
 }
 
@@ -196,34 +199,34 @@ const buckets = (peak: Partial<import('../src/deepseekPricing.js').CostTokenTota
 })
 
 {
-  // 高峰桶 1M 输入（未命中）→ 3.0 元（flash 高峰未命中价）
+  // 高峰桶 1M 输入（未命中）→ 2.0 元（#857 Flash 高峰未命中价）
   const cost = estimateSessionCostCny(buckets({ input: 1_000_000 }), 'deepseek-v4-flash')
-  check('估算 高峰桶 1M 输入未命中 = 3.0', cost !== undefined && Math.abs(cost - 3.0) < 1e-9, `cost=${cost}`)
+  check('估算 高峰桶 1M 输入未命中 = 2.0', cost !== undefined && Math.abs(cost - 2.0) < 1e-9, `cost=${cost}`)
 }
 {
-  // 空闲桶 1M 输入（未命中）→ 1.5 元（flash 空闲未命中价）
+  // 空闲桶 1M 输入（未命中）→ 1.0 元（#857 Flash 空闲未命中价）
   const cost = estimateSessionCostCny(buckets({}, { input: 1_000_000 }), 'deepseek-v4-flash')
-  check('估算 空闲桶 1M 输入未命中 = 1.5', cost !== undefined && Math.abs(cost - 1.5) < 1e-9, `cost=${cost}`)
+  check('估算 空闲桶 1M 输入未命中 = 1.0', cost !== undefined && Math.abs(cost - 1.0) < 1e-9, `cost=${cost}`)
 }
 {
-  // 跨时段会话：高峰 0.2M + 空闲 0.8M 输入 → 0.2×3.0 + 0.8×1.5 = 1.8
+  // 跨时段会话：高峰 0.2M + 空闲 0.8M 输入 → 0.2×2.0 + 0.8×1.0 = 1.2
   const cost = estimateSessionCostCny(buckets({ input: 200_000 }, { input: 800_000 }), 'deepseek-v4-flash')
-  check('估算 跨时段分桶各按对应单价 = 1.8', cost !== undefined && Math.abs(cost - 1.8) < 1e-9, `cost=${cost}`)
+  check('估算 跨时段分桶各按对应单价 = 1.2', cost !== undefined && Math.abs(cost - 1.2) < 1e-9, `cost=${cost}`)
 }
 {
-  // 缓存命中计价：高峰桶 1M 输入其中 0.8M 命中 → 0.2×3.0 + 0.8×0.10 = 0.68
+  // 缓存命中计价：高峰桶 1M 输入其中 0.8M 命中 → 0.2×2.0 + 0.8×0.04 = 0.432
   const cost = estimateSessionCostCny(buckets({ input: 1_000_000, cacheRead: 800_000 }), 'deepseek-v4-flash')
-  check('估算 缓存命中按命中价 = 0.68', cost !== undefined && Math.abs(cost - 0.68) < 1e-9, `cost=${cost}`)
+  check('估算 缓存命中按命中价 = 0.432', cost !== undefined && Math.abs(cost - 0.432) < 1e-9, `cost=${cost}`)
 }
 {
-  // 输出计价：空闲桶 0.5M 输出 → 0.5×4.5 = 2.25（vision 同 flash 价）
+  // 输出计价：空闲桶 0.5M 输出 → 0.5×4.0 = 2.0（vision 同 flash 价）
   const cost = estimateSessionCostCny(buckets({}, { output: 500_000 }), 'deepseek-v4-flash-vision-exp')
-  check('估算 输出按输出价（vision 前缀）= 2.25', cost !== undefined && Math.abs(cost - 2.25) < 1e-9, `cost=${cost}`)
+  check('估算 输出按输出价（vision 前缀）= 2.0', cost !== undefined && Math.abs(cost - 2.0) < 1e-9, `cost=${cost}`)
 }
 {
   // 拆分函数：高峰/空闲各自金额
   const split = estimateSessionCostSplitCny(buckets({ input: 1_000_000 }, { input: 1_000_000 }), 'deepseek-v4-flash')
-  check('估算拆分 peak=3.0 idle=1.5 total=4.5', split !== undefined && Math.abs(split.peak - 3.0) < 1e-9 && Math.abs(split.idle - 1.5) < 1e-9 && Math.abs(split.total - 4.5) < 1e-9, `split=${JSON.stringify(split)}`)
+  check('估算拆分 peak=2.0 idle=1.0 total=3.0', split !== undefined && Math.abs(split.peak - 2.0) < 1e-9 && Math.abs(split.idle - 1.0) < 1e-9 && Math.abs(split.total - 3.0) < 1e-9, `split=${JSON.stringify(split)}`)
 }
 {
   // 缓存写超 input 的异常值钳制（防御）
@@ -237,6 +240,40 @@ const buckets = (peak: Partial<import('../src/deepseekPricing.js').CostTokenTota
 {
   const cost = estimateSessionCostCny(buckets({ input: 1_000 }), 'gpt-4o')
   check('估算 未知模型 → undefined', cost === undefined, `cost=${cost}`)
+}
+
+// --- deepseekPricing：多模型桶计价（#1089 修复核心） ---
+
+{
+  // 主会话与子代理各自模型、各自峰谷/cache 分桶，金额按 scope 分侧求和。
+  const estimate = estimateCostFromBucketsCny([
+    { provider: 'deepseek', model: 'deepseek-v4-flash', buckets: buckets({ input: 1_000_000 }), scope: 'main' },
+    {
+      provider: 'deepseek-official',
+      model: 'deepseek-flash',
+      buckets: buckets({}, { input: 500_000, output: 250_000, cacheRead: 100_000, cacheWrite: 50_000 }),
+      scope: 'subagent',
+    },
+  ])
+  // 主：1M×2.0 = 2.0；子：(0.5M−0.1M)×1.0 + 0.1M×0.02 + 0.25M×4.0 = 1.402
+  check('多模型桶：main/subagent/total 分侧求和 = 2.0/1.402/3.402', estimate !== undefined
+    && Math.abs(estimate.main - 2.0) < 1e-9 && Math.abs(estimate.subagent - 1.402) < 1e-9
+    && Math.abs(estimate.total - 3.402) < 1e-9 && estimate.unpricedTokens === 0, JSON.stringify(estimate))
+}
+{
+  // 非官方 provider / 未收录模型：金额为 0，但 token 计入 unpriced（AC-A6）。
+  const unpriced = estimateCostFromBucketsCny([
+    { provider: 'kimi-coding', model: 'kimi-k2', buckets: buckets({ input: 500, output: 100 }), scope: 'subagent' },
+    { provider: 'deepseek-official', model: 'deepseek-v4-pro', buckets: buckets({ input: 300 }), scope: 'subagent' },
+  ])
+  check('多模型桶：未计价金额为 0、token 仍上报 900', unpriced !== undefined
+    && unpriced.total === 0 && unpriced.main === 0 && unpriced.subagent === 0
+    && unpriced.unpricedTokens === 900, JSON.stringify(unpriced))
+}
+{
+  check('多模型桶：全零条目 → undefined', estimateCostFromBucketsCny([
+    { provider: 'deepseek', model: 'deepseek-v4-flash', buckets: buckets({}, {}) },
+  ]) === undefined)
 }
 
 // --- deepseekPricing：官方 provider 判定 ---
@@ -321,6 +358,32 @@ function makeChannel() {
       peak: { input: 400, output: 2000, cacheRead: 300, cacheWrite: 40 },
       idle: { input: 834, output: 3678, cacheRead: 600, cacheWrite: 60 },
     },
+    // 多模型/子代理快照（#1089）：主会话与 tokens 同桶，子代理一条官方计价 +
+    // 一条第三方未计价，hover 应给出拆分与 unpriced 标注。
+    mainCost: {
+      'deepseek-v4-flash': {
+        peak: { input: 400, output: 2000, cacheRead: 300, cacheWrite: 40 },
+        idle: { input: 834, output: 3678, cacheRead: 600, cacheWrite: 60 },
+      },
+    },
+    subagentCost: [
+      {
+        provider: 'deepseek-official',
+        model: 'deepseek-v4-flash',
+        buckets: {
+          peak: { input: 1_000_000, output: 0, cacheRead: 0, cacheWrite: 0 },
+          idle: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        },
+      },
+      {
+        provider: 'kimi-coding',
+        model: 'kimi-k2',
+        buckets: {
+          peak: { input: 500, output: 100, cacheRead: 0, cacheWrite: 0 },
+          idle: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        },
+      },
+    ],
     cwd: '/tmp',
     displayCwd: '/tmp',
     gitBranch: 'main',
@@ -334,7 +397,6 @@ function makeChannel() {
     notifications: [],
     contextWindow: undefined,
     reasoningEffort: 'max',
-    workingActivity: undefined,
     activityEnabled: false,
     contextBarEnabled: true,
     agentPreset: 'standard',
@@ -449,6 +511,8 @@ if (summaryPos !== null) {
 await settle(() => screenHas(term, '总额 ¥110.00'))
 check('hover 显示币种拆分', screenHas(term, '总额 ¥110.00') && screenHas(term, '赠送 ¥10.00') && screenHas(term, '充值 ¥100.00'))
 check('hover 显示 token 与花费估算', screenHas(term, '本会话 tokens 1.2k in → 5.7k out · ≈¥'))
+check('hover 显示主会话/子代理拆解', screenHas(term, '主会话 ¥') && screenHas(term, '子代理 ¥'))
+check('hover 标注未计价 token', screenHas(term, '未计价 600 tok'))
 check('hover 显示刷新 chip', screenHas(term, '点击刷新'))
 check('hover 显示关闭 chip', screenHas(term, '×'))
 check('hover 显示口径说明', screenHas(term, '余额查询免费'))

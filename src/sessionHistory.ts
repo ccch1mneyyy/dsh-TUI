@@ -8,13 +8,24 @@
  * touches so `/resume` can sort most-recently-used first (DSH session
  * headers carry only `createdAt`).
  */
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { DATA_DIR } from './utils/paths.js'
 
 const DIR = DATA_DIR
 const RESUME_FILE = join(DIR, 'resume.txt')
 const LAST_USED_FILE = join(DIR, 'last-used.json')
+let lastUsedStamp: string | undefined
+let lastUsedCache: Readonly<Record<string, number>> | undefined
+
+function lastUsedFileStamp(): string | undefined {
+  try {
+    const stats = statSync(LAST_USED_FILE)
+    return `${stats.dev}:${stats.ino}:${stats.size}:${stats.mtimeMs}:${stats.ctimeMs}`
+  } catch {
+    return undefined
+  }
+}
 /**
  * The agent view's OWN ledger: session-id → epoch-ms of the moments this TUI
  * dispatched, backgrounded, or attached to a session FROM the agent view.
@@ -65,13 +76,14 @@ export function readResumeTarget(): string | undefined {
  * `dsh --profile tui` boot path forwards these args to the booted app
  * verbatim and never parses them into DSH_TUI_RESUME_SESSION, so the
  * in-profile plugin reads them itself. A bare flag with no id defers to the
- * exit-time marker, exactly like the bin.
- * @param argv - the app arguments (typically `process.argv.slice(2)`).
+ * exit-time marker, exactly like the bin. An app-level `--` ends option parsing.
+ * @param argv - the app arguments from cmdlineArgs, after the host's own options.
  * @returns The requested session id, or undefined when none was given.
  */
 export function resumeTargetFromArgv(argv: readonly string[]): string | undefined {
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]
+    if (a === '--') break
     if (a === '--resume' || a === '-c' || a === '--continue' || a.startsWith('--resume=')) {
       let sessionId = ''
       if (a.startsWith('--resume=')) {
@@ -91,10 +103,14 @@ export function resumeTargetFromArgv(argv: readonly string[]): string | undefine
  * @returns The parsed map; best effort, an unreadable file yields {}.
  */
 export function readLastUsed(): Readonly<Record<string, number>> {
+  const stamp = lastUsedFileStamp()
+  if (lastUsedCache !== undefined && lastUsedStamp === stamp) return lastUsedCache
   try {
     const parsed = JSON.parse(readFileSync(LAST_USED_FILE, 'utf8')) as unknown
     if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
-      return {}
+      lastUsedCache = {}
+      lastUsedStamp = stamp
+      return lastUsedCache
     }
     const record = parsed as Record<string, unknown>
     const result: Record<string, number> = {}
@@ -103,9 +119,13 @@ export function readLastUsed(): Readonly<Record<string, number>> {
         result[id] = value
       }
     }
+    lastUsedCache = result
+    lastUsedStamp = stamp
     return result
   } catch {
-    return {}
+    lastUsedCache = {}
+    lastUsedStamp = stamp
+    return lastUsedCache
   }
 }
 
@@ -119,6 +139,8 @@ export function touchSession(sessionId: string): void {
     ensureDir()
     const lastUsed = { ...readLastUsed(), [sessionId]: Date.now() }
     writeFileSync(LAST_USED_FILE, JSON.stringify(lastUsed))
+    lastUsedCache = lastUsed
+    lastUsedStamp = lastUsedFileStamp()
   } catch {
     // Best effort — MRU ordering is a nicety.
   }
@@ -136,6 +158,8 @@ export function forgetSession(sessionId: string): void {
     delete lastUsed[sessionId]
     ensureDir()
     writeFileSync(LAST_USED_FILE, JSON.stringify(lastUsed))
+    lastUsedCache = lastUsed
+    lastUsedStamp = lastUsedFileStamp()
   } catch {
     // Best effort — a stale entry only skews sort order.
   }

@@ -37,15 +37,18 @@ try {
   const cmakeFiles = join(fixture, 'build_u22', 'CMakeFiles')
   const cmakePresetFiles = join(fixture, 'cmake-build-debug', 'CMakeFiles')
   const sourceDir = join(fixture, 'src')
+  const nestedDir = join(sourceDir, 'nested')
   await mkdir(cmakeFiles, { recursive: true })
   await mkdir(cmakePresetFiles, { recursive: true })
   await mkdir(sourceDir)
+  await mkdir(nestedDir)
   await Promise.all([
     ...Array.from({ length: 120 }, (_, index) =>
       writeFile(join(cmakeFiles, `artifact-${String(index).padStart(3, '0')}.o`), ''),
     ),
     writeFile(join(cmakePresetFiles, 'compiler_depend.make'), ''),
     writeFile(join(sourceDir, 'main.cpp'), 'int main() {}\n'),
+    writeFile(join(nestedDir, 'nested.cpp'), 'int nested() {}\n'),
   ])
 
   const ctx = {
@@ -63,6 +66,18 @@ try {
   })
 
   const files = await channel.listFiles()
+  const windowsStyleListing = await channel.listFileCandidates(`${fixture}\\src\\`)
+  assert.ok(
+    windowsStyleListing.some(entry => entry.path === `${fixture}\\src\\main.cpp`),
+    `Windows file completion should preserve the typed separator:\n${windowsStyleListing.map(entry => entry.path).join('\n')}`,
+  )
+  console.log('PASS: Windows path completion preserves typed separators')
+  const windowsStyleDirectoryListing = await channel.listFileCandidates(`${fixture}\\src\\`)
+  assert.ok(
+    windowsStyleDirectoryListing.some(entry => entry.path === `${fixture}\\src\\nested\\`),
+    `directory completion should preserve the typed separator:\n${windowsStyleDirectoryListing.map(entry => entry.path).join('\n')}`,
+  )
+  console.log('PASS: Windows directory completion preserves the trailing separator')
   assert.ok(
     files.includes('src/main.cpp'),
     `source file was crowded out by generated files:\n${files.join('\n')}`,

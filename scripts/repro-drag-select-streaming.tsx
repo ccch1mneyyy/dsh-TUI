@@ -81,6 +81,8 @@ for (let i = 0; i < 40; i++) {
 }
 
 const listeners = new Set<() => void>()
+/** 通知原文（「已复制 N 个字符」/「选区内容已变化，已取消复制」），失败时随断言一起打印。 */
+const notifications: string[] = []
 const channel: any = {
   // 探针确定性：鲸鱼欢迎期闲置动画（默认开）不进本探针的测量窗口。
   whaleIdle: false,
@@ -88,10 +90,13 @@ const channel: any = {
   model: 'deepseek-v4-flash', provider: 'deepseek', reasoningEffort: 'max', effortLevels: [],
   tokens: { input: 0, output: 0 }, cwd: '/tmp/demo', displayCwd: '/tmp/demo', gitBranch: 'main',
   working: false, spinnerMode: 'requesting', responseChars: 0, activeToolCount: 0, turnStart: 0,
-  pending: [], commandList: LOCAL_COMMANDS, notifications: [], mode: { plan: false, sandbox: undefined },
+  pending: [], commandList: LOCAL_COMMANDS, notifications, mode: { plan: false, sandbox: undefined },
   activityFrames: 'moon8', agentPreset: undefined, subagents: [],
   subscribe(cb: () => void) { listeners.add(cb); return () => listeners.delete(cb) },
-  submit: () => {}, cancel: () => {}, clear: () => {}, notify: () => {},
+  submit: () => {}, cancel: () => {}, clear: () => {},
+  // 记录通知：复制成功是「已复制 N 个字符」，提交层守卫拒绝是「选区内容已变化，
+  // 已取消复制」。失败时把两者一起打出来，下一次不需要再从帧日志反推原因。
+  notify: (message: unknown) => { notifications.push(String(message)) },
   listModels: () => Promise.resolve([]), listSessions: () => Promise.resolve([]),
   deleteSession: () => Promise.resolve(true), renameSessionTo: () => Promise.resolve(true),
   setResumeTarget: () => {}, loadOlder: () => {}, mcpStatus: () => [], pushLocal: () => {},
@@ -146,11 +151,12 @@ async function dragOver(marker: string, a: number, b: number): Promise<void> {
 
 // ── 对照组：静息（sticky 底部），拖选尾部标记 ──
 writes.length = 0
+notifications.length = 0
 await dragOver(TMARK, 2, 10)
 {
   const expect = TMARK.slice(2, 10 + 1)
   check('静息拖选 → OSC 52 携带完整选中文本', await settled(() => osc52Payloads().includes(expect)),
-    `payloads=${JSON.stringify(osc52Payloads())} expect="${expect}"`)
+    `payloads=${JSON.stringify(osc52Payloads())} expect="${expect}" notes=${JSON.stringify(notifications)}`)
 }
 
 // ── 回归组：上滚阅读到中部历史 + 尾部流式并发 ──
@@ -169,6 +175,7 @@ await sleep(400)
 }
 
 writes.length = 0
+notifications.length = 0
 const streamRow = chatRows[chatRows.length - 1]!
 streamRow.streaming = true
 const origText = streamRow.text
@@ -201,18 +208,19 @@ await sleep(400)
 {
   const expect = HMARK.slice(3, 11 + 1)
   check('流式并发时拖选 → OSC 52 携带完整选中文本', await settled(() => osc52Payloads().includes(expect)),
-    `payloads=${JSON.stringify(osc52Payloads())} expect="${expect}"`)
+    `payloads=${JSON.stringify(osc52Payloads())} expect="${expect}" notes=${JSON.stringify(notifications)}`)
 }
 
 // ── 附加：流式结束后（静息）再拖一次，看是否恢复 ──
 writes.length = 0
+notifications.length = 0
 // 固定窗:pacing 给上一次选区/复制状态一个静息收尾窗口，无单一可观测条件。
 await sleep(200)
 try {
   await dragOver(HMARK, 3, 11)
   const expect = HMARK.slice(3, 11 + 1)
   check('流式结束后拖选 → 恢复完整', await settled(() => osc52Payloads().includes(expect)),
-    `payloads=${JSON.stringify(osc52Payloads())} expect="${expect}"`)
+    `payloads=${JSON.stringify(osc52Payloads())} expect="${expect}" notes=${JSON.stringify(notifications)}`)
 } catch (e) {
   check('流式结束后标记行仍可见', false, String(e))
 }

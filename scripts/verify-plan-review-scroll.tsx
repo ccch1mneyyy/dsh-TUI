@@ -189,6 +189,25 @@ function dump(label: string, shot: string) {
   check('direct: plan head is visible', initial.includes(HEAD))
   check('direct: plan tail is windowed out', !initial.includes(TAIL) && !initial.includes(LATE))
   if (!pinnedOk || initial.includes(TAIL)) dump('DIRECT INITIAL', initial)
+  // IME 锚点格（插入点）必须是「与正文同款样式」的一格空白：终端在物理
+  // 光标那一格上绘制拼音并继承该格样式，锚点压在 dim 占位符上拼音会变暗
+  // （同源缺陷在 AskUserQuestionPanel 上真机复现过，repro-askpanel 已钉住；
+  // 本面板共用同一输入契约）。插入点 = `✎` 那格之后（pencil 1 格 + margin 1 格）。
+  {
+    const buf = term.buffer.active
+    let pencilRow = -1
+    let pencilX = -1
+    for (let y = 0; y < ROWS && pencilRow < 0; y++) {
+      const line = buf.getLine(buf.baseY + y)
+      for (let x = 0; x < COLS; x++) {
+        if (line?.getCell(x)?.getChars() === '✎') { pencilRow = y; pencilX = x; break }
+      }
+    }
+    const anchor = pencilRow < 0 ? undefined : buf.getLine(buf.baseY + pencilRow)?.getCell(pencilX + 2)
+    check('direct: 反馈输入行的插入点格是正文样式空白（IME 锚点）',
+      anchor !== undefined && (anchor.getChars() === '' || anchor.getChars() === ' ') && anchor.isFgDefault(),
+      `pencil=(${pencilRow},${pencilX}) chars=${JSON.stringify(anchor?.getChars())} fgDefault=${anchor?.isFgDefault()}`)
+  }
 
   wheelAt(stdin, term, 'down', 80)
   let scrolled = ''

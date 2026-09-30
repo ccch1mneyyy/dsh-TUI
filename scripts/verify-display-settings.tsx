@@ -89,7 +89,6 @@ const baseChannel = {
   gitBranch: 'feat/display-settings-probe',
   displayCwd: 'C:/work/display-project',
   sessionTitle: 'display settings title probe',
-  workingActivity: undefined,
   activityFrames: [],
   contextBarEnabled: true,
   contextSegments: {
@@ -277,14 +276,14 @@ check('compact StatusLine shows the context bar by default', () => {
   assert.ok(/^\s*206k\/266k 77\.4%$/.test(barRow), `unexpected context-bar row:\n${barRow}`)
 })
 
-const minimalMode = await renderStatus({ minimal: true })
-check('minimal StatusLine stays free of the context bar', () => {
-  // Minimal mode pins its decoration switches OFF instead of inheriting them:
+const minimalUi = await renderStatus({ minimalUi: true })
+check('minimal UI StatusLine stays free of the context bar', () => {
+  // The minimal UI pins its decoration switches OFF instead of inheriting them:
   // the default flip above must not leak a bar row into the trimmed footer.
   // Its ctx field spells the percentage '77%' (compact), so the bar's own
   // one-decimal readout is the marker that must be absent.
-  assert.ok(!minimalMode.includes('77.4%'), `unexpected context-bar readout in:\n${minimalMode}`)
-  assert.ok(!minimalMode.includes('system'), `unexpected context-bar segment in:\n${minimalMode}`)
+  assert.ok(!minimalUi.includes('77.4%'), `unexpected context-bar readout in:\n${minimalUi}`)
+  assert.ok(!minimalUi.includes('system'), `unexpected context-bar segment in:\n${minimalUi}`)
 })
 
 const withSessionId = await renderStatus({
@@ -386,6 +385,29 @@ check('full StatusLine renders context bar and deterministic trajectory wake', (
   const barRow = full.split('\n')[0] ?? ''
   assert.ok(/^\s*206k\/266k 77\.4%$/.test(barRow), `unexpected context-bar row:\n${barRow}`)
   assert.ok(/[▁▂▃▄▅▆▇█]/.test(full), `missing trajectory glyph in:\n${full}`)
+})
+
+// StatusLine ≈¥ field reads the per-model cost buckets (#1089): it appears for
+// an official provider with a known price, and the statusBar.cost switch hides it.
+const costProbe = {
+  provider: 'deepseek',
+  mainCost: {
+    'deepseek-v4-flash': {
+      peak: { input: 1_000_000, output: 0, cacheRead: 0, cacheWrite: 0 },
+      idle: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    },
+  },
+}
+const withCost = await renderStatus(costProbe)
+check('status line renders the session cost estimate for a priced model', () => {
+  assert.ok(withCost.includes('≈¥2.00'), `missing cost estimate in:\n${withCost}`)
+})
+const withoutCost = await renderStatus({
+  ...costProbe,
+  statusBar: { ...DEFAULT_STATUS_BAR, cost: false },
+})
+check('statusBar.cost switch still hides the cost field', () => {
+  assert.ok(!withoutCost.includes('≈¥'), `unexpected cost estimate in:\n${withoutCost}`)
 })
 
 // Tool background normalization and terminal ANSI output.

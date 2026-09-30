@@ -57,20 +57,43 @@
 # Preserve the TUI's opt-in privacy stance across the 0.1.2 base default
 # change to FEEDBACK_ONLY. An explicit DSH_TELEMETRY_MODE still wins. This
 # restates the whole 0.1.2 config because include patches replace config
-# objects rather than merging them.
+# objects rather than merging them. The 0.2.0 base moved the collector to
+# dsh-otel-collector and added maxRequestBytes; older cohorts keep the
+# endpoint (and the key set) their base shipped, so both follow the
+# installed package version.
 - id: session-telemetry-otel
-  config:
-    mode: !!js process.env.DSH_TELEMETRY_MODE || 'DISABLED'
-    shutdownTimeoutMillis: 3000
-    exporter:
-      url: !!js process.env.DSH_TELEMETRY_OTLP_URL ?? 'https://harness-telemetry.deepseeksvc.com/v1/logs'
-      compression: gzip
-      timeoutMillis: 1000
-    processor:
-      scheduledDelayMillis: 10000
-      maxQueueSize: 2048
-      maxExportBatchSize: 2048
-      exportTimeoutMillis: 1500
+  config: !!js >-
+    (() => {
+      let url = 'https://dsh-otel-collector.deepseeksvc.com/v1/logs'
+      let modern = false
+      try {
+        const require = process.getBuiltinModule('node:module').createRequire(ctx.baseUrl)
+        const fs = process.getBuiltinModule('node:fs')
+        const manifest = require.resolve('@deepseek-ai/dsh-session-telemetry-otel/package.json')
+        const version = String(JSON.parse(fs.readFileSync(manifest, 'utf8')).version ?? '')
+        const match = /^(\d+)\.(\d+)\./u.exec(version)
+        modern = match === null || Number(match[1]) > 0 || Number(match[2]) >= 2
+        if (!modern) url = 'https://harness-telemetry.deepseeksvc.com/v1/logs'
+      } catch {}
+      return {
+        mode: process.env.DSH_TELEMETRY_MODE || 'DISABLED',
+        shutdownTimeoutMillis: 3000,
+        // 0.2.0's base config caps one request at 4 MB; the older plugin's
+        // schema has no such key, so only a probed 0.2+ host gets it.
+        ...(modern ? { maxRequestBytes: 4000000 } : {}),
+        exporter: {
+          url: process.env.DSH_TELEMETRY_OTLP_URL ?? url,
+          compression: 'gzip',
+          timeoutMillis: 1000,
+        },
+        processor: {
+          scheduledDelayMillis: 10000,
+          maxQueueSize: 2048,
+          maxExportBatchSize: 2048,
+          exportTimeoutMillis: 1500,
+        },
+      }
+    })()
 
 # The 0.1.2 base sends the active Loader package inventory on official
 # DeepSeek requests by default. TUI keeps that diagnostic metadata opt-in.
@@ -386,11 +409,30 @@
       name: '@deepseek-ai/dsh-cordis-host-runner'
       disabled: !!js "[...ctx.loader.entries()].some(entry => entry.options.id === 'cordis-host-runner' && entry.options.name === '@deepseek-ai/dsh-cordis-host-runner' && !entry.disabled)"
 
-    # Subscription OAuth sign-in (bundled dsh-auth dependency): mounts the
-    # ChatGPT/Codex, Claude Pro/Max and SuperGrok provider routes plus the
-    # /auth command; the TUI's /provider wizard gains its OAuth branch from
-    # the ctx.dshAuth service this row provides. Entry-level inject only —
-    # the plugin module's own inject is empty so a stale patch cannot
+    # DeepSeek account sign-in uses the Host-owned /oauth/callback route. A
+    # TUI-only profile needs a loopback listener; a mixed Web+TUI profile
+    # reuses Web's official webserver instead of opening a second one. Hosts
+    # without an enabled account service row leave this listener disabled.
+    - id: dsh-tui-webserver
+      name: '@deepseek-ai/dsh-host-webserver'
+      disabled: !!js >-
+        (() => {
+          const require = process.getBuiltinModule('node:module').createRequire(ctx.baseUrl)
+          try { require.resolve('@deepseek-ai/dsh-host-webserver/package.json') } catch { return true }
+          const entries = [...ctx.loader.entries()]
+          return !entries.some(entry => entry.options.name === '@deepseek-ai/dsh-deepseek-account-platform' && !entry.disabled)
+            || entries.some(entry => entry.options.id === 'webserver' && entry.options.name === '@deepseek-ai/dsh-host-webserver' && !entry.disabled)
+        })()
+      config:
+        host: 127.0.0.1
+        port: 0
+
+    # Built-in subscription OAuth sign-in: mounts available pi-ai routes
+    # (ChatGPT/Codex, Claude, Grok; newer pi-ai adds OpenAI direct and Meta)
+    # plus the /auth command. Its facade also delegates DeepSeek sign-in to
+    # the Host-owned account service when available. The TUI's /provider
+    # wizard gains its OAuth branch from ctx.dshAuth. Entry-level inject only —
+    # the internal module's own inject is empty so a stale patch cannot
     # deadlock a composition lacking these services (#183 pattern).
     - id: dsh-tui-auth
       name: '@deepseek-harness-tui/dsh-tui/oauth'
@@ -427,13 +469,12 @@
         # 想退回 inline 主屏（终端原生滚动/选择）：/settings 全屏开关或 cordis.yml
         # `fullscreen: false`——显式选择始终优先于默认。
         fullscreen: true
-        # 在支持的终端预览图片；/settings 可关闭，重启生效。
+        # 以下为 /settings 可改的显示设置；每项说明与默认值见应用内 /settings 屏。
         terminalImages: true
-        # Edit/Write diff 呈现：auto（≥110 列双栏对照，窄屏统一式）/
-        # split（强制双栏）/ unified（强制统一式）。/settings 屏可实时改。
         # diffLayout: auto
-        # 回复中的 ```mermaid 代码块画成字符图；false 保留源码。/settings 可实时改。
         # mermaidDiagrams: true
+        # 回复中 LaTeX 公式的显示方式：auto（默认，目前为 Unicode）/ image（支持图形的终端里块级公式显示为图片）/ unicode / source（保留源码）。/settings 可实时改。
+        # mathRendering: auto
         # 每个请求实际生效的推理强度，按当前路由的 adapter 档位校验
         #（deepseek: off/low/high/max）；非法值回落 adapter 默认。
         effort: max
@@ -471,9 +512,10 @@
     # dependency into the profile root (npm's flat layout hid this), so the
     # bare name died with ERR_MODULE_NOT_FOUND and disposed the whole app at
     # boot (#60).
-    # The plugin stays mounted for its narration/system-prompt features. The
-    # TUI derives its working line in-process from the base session stream;
-    # never persist activity/status, so the shared log remains Web-readable.
+    # The plugin stays mounted for its narration/system-prompt features and
+    # publishes the `workingActivity` session projection, which is where the
+    # TUI's working line comes from; never persist activity/status, so the
+    # shared log remains Web-readable.
     - id: working-activity
       name: '@deepseek-harness-tui/dsh-tui/working-activity'
       config:

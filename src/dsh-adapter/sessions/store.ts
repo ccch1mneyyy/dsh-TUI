@@ -6,9 +6,10 @@
  * service already hands out the exact token needed to avoid it:
  * `listSnapshots()` returns, per session, an opaque revision that changes
  * whenever the stored log changes. An entry whose revision still matches is
- * reused verbatim; anything else is re-derived. Steady state is therefore zero
- * log reads, and a session edited by another client (the store is shared with
- * dsh web) invalidates itself without any coordination.
+ * reused verbatim. A changed logical revision can still reuse a summary when
+ * its physical artifact stamp matches: historical revisions also depend on
+ * other sessions, whereas these derived fields read only the located file.
+ * A session edited by another client invalidates its artifact stamp.
  *
  * The revision is treated as opaque, as its contract requires. It happens to
  * be stat-derived today, but parsing it to shortcut a `stat` would couple this
@@ -16,10 +17,9 @@
  * per-session files is used.
  *
  * Two halves live in one entry because they have different lifetimes:
- * `derived` facts come from the log and die with the revision, while `branch`
- * is a local note about how this install used the session and no log change
- * can invalidate it. Keeping them in one record with one governing revision
- * field makes that boundary explicit instead of implied.
+ * `derived` facts come from the log and are checked against its revision or
+ * physical artifact stamp. `branch` is a local note about how this install
+ * used the session and no log change can invalidate it.
  *
  * Every operation is best-effort. The index is a cache: a corrupt file, a
  * losing concurrent write, or a read-only home directory costs a re-derivation
@@ -27,28 +27,48 @@
  *
  * @module @deepseek-harness-tui/dsh-tui/sessions/store
  */
-import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { DATA_DIR } from '../../utils/paths.js'
 import type { TitleSource } from './types.js'
 
 /**
- * Bumped when derived facts change shape or meaning. Version 2 could cache
- * incomplete reads as empty: discard those derivations, retaining only the
- * branch notes that cannot be recovered from the session log.
+ * Bumped for cached mtime. Version 3 derivations remain readable and receive
+ * that field on their next listing; version 2 could cache incomplete reads as
+ * empty, so only its branch notes survive.
  */
-const SCHEMA_VERSION = 3
+const SCHEMA_VERSION = 4
 
 const INDEX_FILE = join(DATA_DIR, 'session-index.json')
+let loadedStamp: string | undefined
+let loadedIndex: SessionIndex | undefined
+
+function indexStamp(): string | undefined {
+  try {
+    const stats = statSync(INDEX_FILE)
+    return `${stats.dev}:${stats.ino}:${stats.size}:${stats.mtimeMs}:${stats.ctimeMs}`
+  } catch {
+    return undefined
+  }
+}
+
+/** Cheap file generation check for asynchronous listing writes. */
+export function indexFileStamp(): string | undefined {
+  return indexStamp()
+}
 
 /** Facts derived from a log at one revision. */
 export interface DerivedEntry {
   readonly revision: string
   /** Artifact size at this observation; append growth can retain older title evidence. */
   readonly bytes: number
+  /** Last-write time observed with this revision, for the revision-only path. */
+  readonly modifiedAt: number | undefined
   /** Physical file identity; a replacement invalidates append-only evidence. */
   readonly identity: string | undefined
-  /** Hash of the previous EOF neighborhood, validating append-only carry-forward. */
+  /** Optional in older indexes; certifies only the physical-file-derived summary. */
+  readonly artifactStamp?: string
+  /** Old EOF neighborhood hash, paired with the backend's append-only contract. */
   readonly anchor: string | undefined
   readonly title: string
   readonly titleSource: TitleSource
@@ -86,6 +106,7 @@ function readEntry(value: unknown, derivedValid: boolean): IndexEntry | undefine
   const derived = raw as Record<string, unknown>
   const revision = derived['revision']
   const bytes = derived['bytes']
+  const modifiedAt = derived['modifiedAt']
   const identity = derived['identity']
   const anchor = derived['anchor']
   const title = derived['title']
@@ -96,6 +117,7 @@ function readEntry(value: unknown, derivedValid: boolean): IndexEntry | undefine
     typeof bytes !== 'number' ||
     !Number.isFinite(bytes) ||
     bytes < 0 ||
+    (modifiedAt !== undefined && (typeof modifiedAt !== 'number' || !Number.isFinite(modifiedAt))) ||
     (identity !== undefined && typeof identity !== 'string') ||
     (anchor !== undefined && typeof anchor !== 'string') ||
     typeof title !== 'string' ||
@@ -110,7 +132,9 @@ function readEntry(value: unknown, derivedValid: boolean): IndexEntry | undefine
     derived: {
       revision,
       bytes,
+      modifiedAt: typeof modifiedAt === 'number' ? modifiedAt : undefined,
       identity: typeof identity === 'string' ? identity : undefined,
+      artifactStamp: typeof derived['artifactStamp'] === 'string' ? derived['artifactStamp'] : undefined,
       anchor: typeof anchor === 'string' ? anchor : undefined,
       title,
       titleSource,
@@ -124,27 +148,45 @@ function readEntry(value: unknown, derivedValid: boolean): IndexEntry | undefine
 
 /**
  * Load the cache.
- * @returns The parsed index; old derived facts are discarded for a rebuild.
- *   Version 2 retains branch notes; unrecognized files yield an empty index.
+ * @returns The parsed index; version 3 derivations are upgraded lazily and
+ *   version 2 retains branch notes only.
  */
 export function readIndex(): SessionIndex {
+  const stamp = indexStamp()
+  if (loadedIndex !== undefined && loadedStamp === stamp) return new Map(loadedIndex)
   const index: SessionIndex = new Map()
   let parsed: unknown
   try {
     parsed = JSON.parse(readFileSync(INDEX_FILE, 'utf8'))
   } catch {
-    return index
+    loadedStamp = stamp
+    loadedIndex = index
+    return new Map(index)
   }
-  if (parsed === null || typeof parsed !== 'object') return index
+  if (parsed === null || typeof parsed !== 'object') {
+    loadedStamp = stamp
+    loadedIndex = index
+    return new Map(index)
+  }
   const file = parsed as Record<string, unknown>
-  if (file['version'] !== SCHEMA_VERSION && file['version'] !== 2) return index
+  if (file['version'] !== SCHEMA_VERSION && file['version'] !== 3 && file['version'] !== 2) {
+    loadedStamp = stamp
+    loadedIndex = index
+    return new Map(index)
+  }
   const entries = file['entries']
-  if (entries === null || typeof entries !== 'object') return index
+  if (entries === null || typeof entries !== 'object') {
+    loadedStamp = stamp
+    loadedIndex = index
+    return new Map(index)
+  }
   for (const [id, value] of Object.entries(entries as Record<string, unknown>)) {
-    const entry = readEntry(value, file['version'] === SCHEMA_VERSION)
+    const entry = readEntry(value, file['version'] === SCHEMA_VERSION || file['version'] === 3)
     if (entry !== undefined) index.set(id, entry)
   }
-  return index
+  loadedStamp = stamp
+  loadedIndex = index
+  return new Map(index)
 }
 
 /**
@@ -155,11 +197,11 @@ export function readIndex(): SessionIndex {
  * A concurrent writer may win the rename; the loser's derivations are simply
  * recomputed next time.
  *
- * @param index - The index to store. Entries are written in insertion order.
+ * @param index - The index to store. Stable id order ignores scan scheduling.
  */
 export function writeIndex(index: SessionIndex): void {
   const entries: Record<string, unknown> = {}
-  for (const [id, entry] of index) {
+  for (const [id, entry] of [...index].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)) {
     entries[id] = {
       ...(entry.derived === undefined ? {} : { derived: entry.derived }),
       ...(entry.branch === undefined ? {} : { branch: entry.branch }),
@@ -174,6 +216,8 @@ export function writeIndex(index: SessionIndex): void {
     mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 })
     writeFileSync(temporary, JSON.stringify({ version: SCHEMA_VERSION, entries }), { mode: 0o600 })
     renameSync(temporary, INDEX_FILE)
+    loadedStamp = indexStamp()
+    loadedIndex = new Map(index)
   } catch {
     try {
       rmSync(temporary, { force: true })

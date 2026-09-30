@@ -12,9 +12,40 @@
 
 import { clamp } from './layout/geometry.js'
 import type { Screen, StylePool } from './screen.js'
+import type { TerminalImagePlacement } from './terminal-image.js'
 import { CellWidth, cellAt, cellAtIndex, setCellStyleId } from './screen.js'
 
 type Point = { col: number; row: number }
+
+/**
+ * One copy region a screen row touches: a rectangle whose cells are not
+ * text (a formula drawn as a terminal image) together with the text it
+ * stands for. The text is the formula's SOURCE (see Image.copyText) and is
+ * inserted at `at`, a character offset into the row's own text.
+ */
+export type SelectionRegion = {
+  readonly at: number
+  /** Stable id of the region (Screen.copyRegion). */
+  readonly id: number
+  readonly text: string
+}
+
+/**
+ * Text extracted from one screen row plus the copy regions it touched.
+ * Regions travel OUTSIDE `text` on purpose: a row's characters are model
+ * output, so nothing in them may be re-read as metadata (an earlier design
+ * serialized regions into the text and let ordinary content impersonate
+ * them — see getSelectedText).
+ */
+export type SelectionRow = {
+  readonly text: string
+  /** The row continues the previous one: the `\n` came from word-wrap, not
+   *  from the source. Captured at extraction time because the screen's
+   *  softWrap bitmap shifts with content. */
+  readonly sw: boolean
+  /** Region insertions, ascending by `at`. */
+  readonly regions: readonly SelectionRegion[]
+}
 
 /**
  * Selection state for fullscreen mode: the anchor/focus cell pair plus
@@ -33,23 +64,16 @@ export type SelectionState = {
    *  even when dragging backward past it. Null ⇔ char mode. The kind
    *  tells extendSelection whether to snap to word or line boundaries. */
   anchorSpan: { lo: Point; hi: Point; kind: 'word' | 'line' } | null
-  /** Text from rows that scrolled out ABOVE the viewport during
-   *  drag-to-scroll. The screen buffer only holds the current viewport,
-   *  so without this accumulator, dragging down past the bottom edge
-   *  loses the top of the selection once the anchor clamps. Prepended
-   *  to the on-screen text by getSelectedText. Reset on start/clear. */
-  scrolledOffAbove: string[]
-  /** Symmetric: rows scrolled out BELOW when dragging up. Appended. */
-  scrolledOffBelow: string[]
-  /** Soft-wrap bits parallel to scrolledOffAbove — true means the row
-   *  is a continuation of the one before it (the `\n` was inserted by
-   *  word-wrap, not in the source). Captured alongside the text at
-   *  scroll time since the screen's softWrap bitmap shifts with content.
-   *  getSelectedText uses these to join wrapped rows back into logical
-   *  lines. */
-  scrolledOffAboveSW: boolean[]
-  /** Parallel to scrolledOffBelow. */
-  scrolledOffBelowSW: boolean[]
+  /** Rows that scrolled out ABOVE the viewport during drag-to-scroll, as
+   *  extracted rows (text + wrap bit + copy regions). The screen buffer
+   *  only holds the current viewport, so without this accumulator,
+   *  dragging down past the bottom edge loses the top of the selection
+   *  once the anchor clamps. Prepended to the on-screen rows by
+   *  getSelectedText. Reset on start/clear. Newest at the end. */
+  scrolledOffAbove: SelectionRow[]
+  /** Symmetric: rows scrolled out BELOW when dragging up. Appended;
+   *  newest at the front. */
+  scrolledOffBelow: SelectionRow[]
   /** Pre-clamp anchor row. Set when shiftSelection clamps anchor so a
    *  reverse scroll can restore the true position and pop accumulators.
    *  Without this, PgDn (clamps anchor) → PgUp leaves anchor at the wrong
@@ -80,6 +104,18 @@ export type SelectionState = {
    *  user highlighted. Null until the first frame observes the
    *  selection. */
   coveredFingerprint: number | null
+  /** The text `getSelectedText` emitted for `coveredFingerprint`'s frame.
+   *  The fingerprint is a cheap per-frame pre-filter: it hashes the covered
+   *  cells plus the two soft-wrap inputs that decide how those cells lay out,
+   *  so it can move while the COPIED TEXT stays byte-identical (flipping the
+   *  next row's wrap bit from 0 to a value past the selection's last column
+   *  only toggles trailing-blank trimming, which is invisible when the
+   *  selected columns are already full). Judging staleness on that hash alone
+   *  refused legitimate copies — "content under the selection changed; copy
+   *  cancelled" while a streaming tail wrote somewhere else entirely. The
+   *  verdict therefore re-checks the emitted text, exactly the bytes the copy
+   *  would ship, and only latches when THEY differ. Null until baselined. */
+  coveredText: string | null
   /** Geometry key (start/end row:col) the fingerprint was taken at. Any
    *  user-driven geometry change (drag motion, word/line extension,
    *  keyboard pan, multi-click) re-baselines instead of judging — the
@@ -104,10 +140,9 @@ export function createSelectionState(): SelectionState {
     anchorSpan: null,
     scrolledOffAbove: [],
     scrolledOffBelow: [],
-    scrolledOffAboveSW: [],
-    scrolledOffBelowSW: [],
     lastPressHadAlt: false,
     coveredFingerprint: null,
+    coveredText: null,
     coveredGeometry: null,
     stale: false,
   }
@@ -135,13 +170,12 @@ export function startSelection(
   s.anchorSpan = null
   s.scrolledOffAbove = []
   s.scrolledOffBelow = []
-  s.scrolledOffAboveSW = []
-  s.scrolledOffBelowSW = []
   s.virtualAnchorRow = undefined
   s.virtualFocusRow = undefined
   s.dragBounds = undefined
   s.lastPressHadAlt = false
   s.coveredFingerprint = null
+  s.coveredText = null
   s.coveredGeometry = null
   s.stale = false
 }
@@ -212,13 +246,12 @@ export function clearSelection(s: SelectionState): void {
   s.anchorSpan = null
   s.scrolledOffAbove = []
   s.scrolledOffBelow = []
-  s.scrolledOffAboveSW = []
-  s.scrolledOffBelowSW = []
   s.virtualAnchorRow = undefined
   s.virtualFocusRow = undefined
   s.dragBounds = undefined
   s.lastPressHadAlt = false
   s.coveredFingerprint = null
+  s.coveredText = null
   s.coveredGeometry = null
   s.stale = false
 }
@@ -621,13 +654,11 @@ export function shiftSelection(
     // scrolledOffAbove pushes newest at the end (closest to on-screen).
     const drop = oldAboveDebt - newAboveDebt
     s.scrolledOffAbove.length -= drop
-    s.scrolledOffAboveSW.length = s.scrolledOffAbove.length
   }
   if (newBelowDebt < oldBelowDebt) {
     // scrolledOffBelow unshifts newest at the front (closest to on-screen).
     const drop = oldBelowDebt - newBelowDebt
     s.scrolledOffBelow.splice(0, drop)
-    s.scrolledOffBelowSW.splice(0, drop)
   }
   // Invariant: accumulator length ≤ debt. If the accumulator exceeds debt,
   // the excess is stale — e.g., moveFocus cleared virtualFocusRow without
@@ -641,13 +672,10 @@ export function shiftSelection(
     // Above pushes newest at END → keep END.
     s.scrolledOffAbove =
       newAboveDebt > 0 ? s.scrolledOffAbove.slice(-newAboveDebt) : []
-    s.scrolledOffAboveSW =
-      newAboveDebt > 0 ? s.scrolledOffAboveSW.slice(-newAboveDebt) : []
   }
   if (s.scrolledOffBelow.length > newBelowDebt) {
     // Below unshifts newest at FRONT → keep FRONT.
     s.scrolledOffBelow = s.scrolledOffBelow.slice(0, newBelowDebt)
-    s.scrolledOffBelowSW = s.scrolledOffBelowSW.slice(0, newBelowDebt)
   }
   // Clamp col depends on which EDGE (not dRow direction): virtual tracking
   // means a top-clamped point can stay top-clamped during a dRow>0 reverse
@@ -997,13 +1025,10 @@ export function shiftSelectionForViewportResize(
   if (newBottom > oldBottom && s.scrolledOffBelow.length > 0) {
     const drop = Math.min(newBottom - oldBottom, s.scrolledOffBelow.length)
     s.scrolledOffBelow.splice(0, drop)
-    s.scrolledOffBelowSW.splice(0, drop)
   }
   if (newTop < oldTop && s.scrolledOffAbove.length > 0) {
     const drop = Math.min(oldTop - newTop, s.scrolledOffAbove.length)
-    const keep = s.scrolledOffAbove.length - drop
-    s.scrolledOffAbove.length = keep
-    s.scrolledOffAboveSW.length = keep
+    s.scrolledOffAbove.length -= drop
   }
   if (newTop > oldTop) captureScrolledRows(s, screen, oldTop, newTop - 1, 'above')
   if (newBottom < oldBottom)
@@ -1111,25 +1136,41 @@ export function isCellSelected(
   return true
 }
 
-/** Extract text from one screen row. When the next row is a soft-wrap
- *  continuation (screen.softWrap[row+1]>0), clamp to that content-end
- *  column and skip the trailing trim so the word-separator space survives
- *  the join. See Screen.softWrap for why the clamp is necessary. */
+/** Extract text from one screen row, plus the copy regions it touches.
+ *  When the next row is a soft-wrap continuation (screen.softWrap[row+1]>0),
+ *  clamp to that content-end column and skip the trailing trim so the
+ *  word-separator space survives the join. See Screen.softWrap for why the
+ *  clamp is necessary. */
 function extractRowText(
   screen: Screen,
   row: number,
   colStart: number,
   colEnd: number,
-): string {
+): SelectionRow {
   const noSelect = screen.noSelect
+  const copyRegion = screen.copyRegion
   const rowOff = row * screen.width
   const contentEnd = row + 1 < screen.height ? screen.softWrap[row + 1]! : 0
   const lastCol = contentEnd > 0 ? Math.min(colEnd, contentEnd - 1) : colEnd
   let line = ''
+  const regions: SelectionRegion[] = []
+  let lastRegion = 0
   for (let col = colStart; col <= lastCol; col++) {
     // Skip cells marked noSelect (gutters, line numbers, diff sigils).
     // Check before cellAt to avoid the decode cost for excluded cells.
     if (noSelect[rowOff + col] === 1) continue
+    // A copy region (a formula image) contributes one entry per run of its
+    // cells: the text it stands for, at the offset those cells occupy here.
+    // resolveCopyRegions inserts it once per selection.
+    const region = copyRegion?.[rowOff + col] ?? 0
+    if (region !== 0) {
+      if (region !== lastRegion) {
+        regions.push({ at: line.length, id: region, text: screen.copyTexts?.get(region) ?? '' })
+      }
+      lastRegion = region
+      continue
+    }
+    lastRegion = 0
     const cell = cellAt(screen, col, row)
     if (!cell) continue
     // Skip spacer tails (second half of wide chars) — the head already
@@ -1142,7 +1183,59 @@ function extractRowText(
     }
     line += cell.char
   }
-  return contentEnd > 0 ? line : line.replace(/\s+$/, '')
+  // The trailing trim may only eat blanks written AFTER the last region: a
+  // region's cells are content (a formula's box), so the space separating it
+  // from the text before it survives. The markers this replaced were never
+  // whitespace, which is what used to protect that space.
+  const tail = regions.length > 0 ? regions[regions.length - 1]!.at : 0
+  return {
+    text: contentEnd > 0 ? line : line.slice(0, tail) + line.slice(tail).replace(/\s+$/, ''),
+    sw: screen.softWrap[row]! > 0,
+    regions,
+  }
+}
+
+/**
+ * Apply the copy regions of the extracted rows: a region's text appears
+ * once, at its first row in reading order; a row holding nothing but blank
+ * cells and regions already copied (the lower rows of a block formula
+ * image) is dropped; and a multi-line region starts its own line, without
+ * the indent left of it.
+ *
+ * Regions arrive as data (id + offset + text), never as characters inside
+ * `text`: a row's characters are model output, and nothing in them may be
+ * read back as metadata.
+ */
+function resolveCopyRegions(rows: readonly SelectionRow[]): { text: string; sw: boolean }[] {
+  const emitted = new Set<number>()
+  const resolved: { text: string; sw: boolean }[] = []
+  for (const row of rows) {
+    if (row.regions.length === 0) {
+      resolved.push({ text: row.text, sw: row.sw })
+      continue
+    }
+    let copied = false
+    let repeated = false
+    let text = ''
+    let at = 0
+    for (const region of row.regions) {
+      const start = Math.min(region.at, row.text.length)
+      text += row.text.slice(at, start)
+      at = start
+      if (emitted.has(region.id)) {
+        repeated = true
+        continue
+      }
+      emitted.add(region.id)
+      copied = true
+      if (region.text.includes('\n') && text.trim() === '') text = ''
+      text += region.text
+    }
+    text += row.text.slice(at)
+    if (repeated && !copied && text.trim() === '') continue
+    resolved.push({ text, sw: row.sw })
+  }
+  return resolved
 }
 
 /** Accumulator for selected text that merges soft-wrapped rows back
@@ -1194,6 +1287,22 @@ function joinRows(
  * at ~0.05ms for a full 200x50 selection (~0.14ms at 200x200), i.e. no
  * worse than hashing the ids themselves.
  *
+ * The hash is only a PRE-FILTER; the verdict is the copied text. Hashing the
+ * wrap inputs keeps a cheap screen-signature, but those inputs can move while
+ * the bytes a copy would ship stay identical: flipping the next row's wrap bit
+ * from 0 to a value past the selection's last column only toggles
+ * trailing-blank trimming, which is invisible when the selected columns are
+ * already full (measured live: a streaming tail wrote a row far below the
+ * highlight, the wrap bookkeeping moved, and the guard refused a legitimate
+ * copy — the "content under the selection changed" toast with the highlight
+ * still sitting on exactly the right text). So when the hash moves, this
+ * compares `getSelectedText` against the baselined text and latches only when
+ * THE BYTES differ — the same expression the copy itself ships, which makes
+ * the verdict complete (no real replacement is missed) and sound (no
+ * unchanged text is refused). The text is compared, not stored per frame: the
+ * extraction runs on a geometry change (once per drag motion) and on a
+ * suspected change, never on the steady-state frame.
+ *
  * @param s - the selection state to fingerprint.
  * @param screen - the frame's screen buffer.
  * @param coordinated - true when this frame translated the selection
@@ -1210,6 +1319,7 @@ export function refreshSelectionFingerprint(
   const b = selectionBounds(s)
   if (!b) {
     s.coveredFingerprint = null
+    s.coveredText = null
     s.coveredGeometry = null
     return false
   }
@@ -1221,8 +1331,12 @@ export function refreshSelectionFingerprint(
   if (geometry !== s.coveredGeometry) {
     s.coveredGeometry = geometry
     s.coveredFingerprint = null
+    s.coveredText = null
   }
   const { cells, noSelect, width, height, charPool, softWrap } = screen
+  const copyRegion = screen.copyRegion
+  const copyTexts = screen.copyTexts
+  const coveredRegions = new Set<number>()
   let h = 0x811c9dc5
   for (let row = b.start.row; row <= b.end.row; row++) {
     if (row < 0 || row >= height) continue
@@ -1240,6 +1354,17 @@ export function refreshSelectionFingerprint(
       // no text of their own.
       if ((cells[ci + 1]! & 3) >= CellWidth.SpacerTail) continue
       if (noSelect![rowOff + col] === 1) continue
+      // A copy region (a formula image) is content too: its cells are blank,
+      // so without this term a formula swapped under a stationary highlight
+      // would hash identically while the copied SOURCE changed. Fold the id
+      // in at its position, under its own constant so an id can never stand
+      // in for a neighbouring cell's code unit; the region TEXT follows after
+      // the cell loops.
+      const region = copyRegion?.[rowOff + col] ?? 0
+      if (region !== 0) {
+        coveredRegions.add(region)
+        h = Math.imul(h ^ 0x7feb352d ^ region, 0x9e3779b9)
+      }
       // Resolve the id through the pool and hash the actual characters —
       // the exact string getSelectedText would emit for this cell. Two
       // pools holding the same glyph hash identically, so a generational
@@ -1268,13 +1393,45 @@ export function refreshSelectionFingerprint(
     const wrapClamp = contentEnd > 0 ? Math.min(colEnd, contentEnd - 1) + 1 : 0
     h = Math.imul(h ^ 0x27d4eb2f ^ wrapClamp, 0x165667b1)
   }
+  // The bytes a region contributes live outside the cells (Screen.copyTexts),
+  // so they are hashed here — in id order, after the position terms above, so
+  // a changed source moves the hash and the byte verdict below can refuse it.
+  //
+  // Ids and text code units are both folded as plain numbers, and an image id
+  // is free to equal a code unit (id 65 next to a source starting with "A"):
+  // without a delimiter, `id 65 + "AY"` hashed exactly like `id 1, "XA"` plus
+  // `id 65, "Y"`, and the guard missed that swap. Fold the id under its own
+  // constant and length-delimit the text. (This is a fingerprint, not a
+  // bijection — the byte comparison below is the verdict.)
+  for (const id of [...coveredRegions].sort((a, b) => a - b)) {
+    const regionText = copyTexts?.get(id) ?? ''
+    h = Math.imul(h ^ 0x7feb352d ^ id, 0x01000193)
+    h = Math.imul(h ^ regionText.length, 0x01000193)
+    for (let k = 0; k < regionText.length; k++) {
+      h = Math.imul(h ^ regionText.charCodeAt(k), 0x01000193)
+    }
+  }
   if (s.coveredFingerprint === null) {
-    // First frame observing this selection: baseline, no verdict.
+    // First frame observing this selection: baseline, no verdict. The text is
+    // captured here too — it is the ground truth the next hash change is
+    // judged against, and it can only be read while the baselined frame is
+    // still on screen.
     s.coveredFingerprint = h
+    s.coveredText = getSelectedText(s, screen)
     return false
   }
   if (h === s.coveredFingerprint) return false
+  // The hash moved: decide on the emitted text, not on the hash. A wrap-bit
+  // flip below the selection (or any other term that does not change the
+  // bytes the copy would ship) must not refuse a legitimate copy.
+  const text = getSelectedText(s, screen)
+  if (text === s.coveredText) {
+    // Same bytes, different layout bookkeeping: accept and re-baseline.
+    s.coveredFingerprint = h
+    return false
+  }
   s.coveredFingerprint = h
+  s.coveredText = text
   if (coordinated) return false
   s.stale = true
   return true
@@ -1299,22 +1456,24 @@ export function getSelectedText(s: SelectionState, screen: Screen): string {
   const b = selectionBounds(s)
   if (!b) return ''
   const { start, end } = b
-  const sw = screen.softWrap
   const lines: string[] = []
 
+  const rows: SelectionRow[] = []
   for (let i = 0; i < s.scrolledOffAbove.length; i++) {
-    joinRows(lines, s.scrolledOffAbove[i]!, s.scrolledOffAboveSW[i])
+    rows.push(s.scrolledOffAbove[i]!)
   }
 
   for (let row = start.row; row <= end.row; row++) {
     const rowStart = row === start.row ? start.col : 0
     const rowEnd = row === end.row ? end.col : screen.width - 1
-    joinRows(lines, extractRowText(screen, row, rowStart, rowEnd), sw[row]! > 0)
+    rows.push(extractRowText(screen, row, rowStart, rowEnd))
   }
 
   for (let i = 0; i < s.scrolledOffBelow.length; i++) {
-    joinRows(lines, s.scrolledOffBelow[i]!, s.scrolledOffBelowSW[i])
+    rows.push(s.scrolledOffBelow[i]!)
   }
+
+  for (const row of resolveCopyRegions(rows)) joinRows(lines, row.text, row.sw)
 
   return lines.join('\n')
 }
@@ -1358,22 +1517,18 @@ export function captureScrolledRows(
   if (lo > hi) return
 
   const width = screen.width
-  const sw = screen.softWrap
-  const captured: string[] = []
-  const capturedSW: boolean[] = []
+  const captured: SelectionRow[] = []
   for (let row = lo; row <= hi; row++) {
     const colStart = row === start.row ? start.col : 0
     const colEnd = row === end.row ? end.col : width - 1
     const screenRow = row - screenRowOffset
     captured.push(extractRowText(screen, screenRow, colStart, colEnd))
-    capturedSW.push(sw[screenRow]! > 0)
   }
 
   if (side === 'above') {
     // Newest rows go at the bottom of the above-accumulator (closest to
     // the on-screen content in reading order).
     s.scrolledOffAbove.push(...captured)
-    s.scrolledOffAboveSW.push(...capturedSW)
     // We just captured the top of the selection. The anchor (=start when
     // dragging down) is now pointing at content that will scroll out; its
     // col constraint was applied to the captured row. Reset to col 0 so
@@ -1392,7 +1547,6 @@ export function captureScrolledRows(
     // Newest rows go at the TOP of the below-accumulator — they're
     // closest to the on-screen content.
     s.scrolledOffBelow.unshift(...captured)
-    s.scrolledOffBelowSW.unshift(...capturedSW)
     if (s.anchor && s.anchor.row === end.row && hi === end.row) {
       s.anchor = { col: width - 1, row: s.anchor.row }
       if (s.anchorSpan) {
@@ -1429,12 +1583,14 @@ export function applySelectionOverlay(
   screen: Screen,
   selection: SelectionState,
   stylePool: StylePool,
+  images: readonly TerminalImagePlacement[] = [],
 ): void {
   const b = selectionBounds(selection)
   if (!b) return
   const { start, end } = b
   const width = screen.width
   const noSelect = screen.noSelect
+  const covered = imageCoveredCells(images, width, screen.height)
   for (let row = start.row; row <= end.row && row < screen.height; row++) {
     const colStart = row === start.row ? start.col : 0
     const colEnd = row === end.row ? Math.min(end.col, width - 1) : width - 1
@@ -1445,8 +1601,37 @@ export function applySelectionOverlay(
       // clear they're not part of the copy. Surrounding selectable cells
       // still highlight so the selection extent remains visible.
       if (noSelect[idx] === 1) continue
+      // Skip cells a terminal image is painted over: Kitty draws images
+      // below cells with a non-default background, so a highlighted cell
+      // would hide the image (a selected formula turned into a blank box).
+      if (covered?.has(idx) === true) continue
       const cell = cellAtIndex(screen, idx)
       setCellStyleId(screen, col, row, stylePool.withSelectionBg(cell.styleId))
     }
   }
+}
+
+/**
+ * Screen cell indexes under terminal images that are actually painted this
+ * frame (not waiting on a raster, not fully covered by a later overlay), or
+ * undefined when there are none.
+ */
+function imageCoveredCells(
+  images: readonly TerminalImagePlacement[],
+  width: number,
+  height: number,
+): Set<number> | undefined {
+  let covered: Set<number> | undefined
+  for (const image of images) {
+    if (image.graphicsReady === false || image.occludedFully === true) continue
+    const rect = image.clip ?? image
+    const top = Math.max(0, Math.floor(rect.y))
+    const left = Math.max(0, Math.floor(rect.x))
+    const bottom = Math.min(height, Math.floor(rect.y) + rect.rows)
+    const right = Math.min(width, Math.floor(rect.x) + rect.columns)
+    for (let row = top; row < bottom; row++) {
+      for (let col = left; col < right; col++) (covered ??= new Set()).add(row * width + col)
+    }
+  }
+  return covered
 }

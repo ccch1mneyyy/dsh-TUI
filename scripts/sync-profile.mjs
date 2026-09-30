@@ -1,18 +1,22 @@
 #!/usr/bin/env node
 /**
- * sync-profile.mjs — 把当前工作区产物同步到活动 dsh-tui profile，让
- * `dsh-tui` 直接跑的就是本仓库这份代码（改完即测）。
+ * sync-profile.mjs — 把当前工作区产物同步到已安装的 dsh-tui 包。
  *
- * 同步范围 = package.json `files` 列表（bin/、lib/、cordis.patch.yml、
- * dsh-ecosystem-spec/{registry,protocols,schemas}、presets、skills），
- * 与发布包完全一致。逐文件比较 hash，只复制有差异的文件；不删除 profile
+ * 同步范围 = package.json `files` 列表（bin/、lib/、assets/、cordis*.yml、
+ * dsh-ecosystem-spec/{registry,protocols,schemas}、presets、guide），与发布包
+ * 完全一致（guide/ 是随包用户手册，见 scripts/build-guide.mjs）。逐文件比较
+ * hash，只复制有差异的文件；不删除 profile
  * 里多余的依赖文件（node_modules 等由 dsh plugin 管理）。
  *
  * 用法：
- *   node scripts/sync-profile.mjs            # 对比并同步（打印变更清单）
- *   node scripts/sync-profile.mjs --check    # 只对比，不改动（退出码 2 = 有差异）
+ *   node scripts/sync-profile.mjs                   # 同步 profile 内的包
+ *   node scripts/sync-profile.mjs --target <目录>   # 同步指定的安装包
+ *   node scripts/sync-profile.mjs --check           # 只对比，不改动（退出码 2 = 有差异）
  *
  * profile 定位：$DSH_HOME/profiles/dsh-tui（未设置时按上游默认 ~/.dsh）。
+ * DSH 优先从自己的安装目录解析同名 bundle；全局安装了 dsh-tui 时，
+ * profile 内的副本不会生效。用 `dsh --profile dsh-tui --dump-config`
+ * 确认实际 bundle，再通过 --target 同步那份安装包。
  */
 import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync } from 'node:fs'
 import { createHash } from 'node:crypto'
@@ -26,6 +30,11 @@ const PACKAGE = '@deepseek-harness-tui/dsh-tui'
 const PROFILE = 'dsh-tui'
 
 const checkOnly = process.argv.includes('--check')
+const targetIndex = process.argv.indexOf('--target')
+const target = targetIndex < 0 ? undefined : process.argv[targetIndex + 1]
+if (targetIndex >= 0 && (target === undefined || target.startsWith('--'))) {
+  throw new Error('--target needs an installed package directory')
+}
 
 function sha256(file) {
   const hash = createHash('sha256')
@@ -51,12 +60,11 @@ const dshHome = process.env.DSH_HOME
   ? resolve(process.env.DSH_HOME)
   : join(homedir(), '.dsh')
 const profileDir = join(dshHome, 'profiles', PROFILE)
-const installed = join(profileDir, 'node_modules', PACKAGE)
+const installed = target === undefined ? join(profileDir, 'node_modules', PACKAGE) : resolve(target)
 
 if (!existsSync(join(installed, 'package.json'))) {
-  console.error(`[sync-profile] profile 未安装：${installed}`)
-  console.error(`  （首次请先运行 dsh-tui 让它自举，或手工：`)
-  console.error(`   dsh plugin --profile ${PROFILE} add ${PACKAGE}@${pkg.version}）`)
+  console.error(`[sync-profile] 目标包未安装：${installed}`)
+  console.error(`  profile 安装可运行 dsh plugin --profile ${PROFILE} add ${PACKAGE}@${pkg.version}`)
   process.exit(1)
 }
 
@@ -79,11 +87,11 @@ for (const rel of rels) {
 
 console.log(`[sync-profile] ${PACKAGE}@${pkg.version}`)
 console.log(`[sync-profile] worktree: ${root}`)
-console.log(`[sync-profile] profile:  ${installed}`)
+console.log(`[sync-profile] target:   ${installed}`)
 console.log(`[sync-profile] 对比 ${rels.length} 个发布文件，${changed.length} 个有差异`)
 
 if (changed.length === 0) {
-  console.log('[sync-profile] profile 已与 worktree 一致 ✅')
+  console.log('[sync-profile] 目标包已与 worktree 一致 ✅')
   process.exit(0)
 }
 

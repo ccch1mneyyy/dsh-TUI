@@ -52,7 +52,7 @@ class FakeStdin extends PassThrough {
 
 const SECRET_SENTINEL = 'test-secret-must-not-appear'
 
-function makeChannel(status: unknown) {
+function makeChannel(status: unknown, oauth?: readonly unknown[]) {
   return {
     version: 0,
     whaleIdle: false, // 探针确定性：鲸鱼闲置动画不进测量窗口
@@ -80,7 +80,6 @@ function makeChannel(status: unknown) {
     lastUsage: undefined,
     tps: undefined,
     tpsSamples: [],
-    workingActivity: undefined,
     activityFrames: 'moon8',
     activityEnabled: false,
     contextBarEnabled: true,
@@ -110,9 +109,7 @@ function makeChannel(status: unknown) {
       return status
     },
     listModels: () => Promise.resolve([]),
-    // No dsh-auth-style plugin in this harness: /login renders exactly its
-    // pre-plugin lines (the OAuth account section stays absent).
-    oauthProviderStatuses: async () => undefined,
+    oauthProviderStatuses: async () => oauth,
     commandCompletions(input: string) {
       const prefix = input.replace(/^\//u, '').trim().toLowerCase()
       return this.commandList
@@ -141,8 +138,8 @@ function makeChannel(status: unknown) {
   }
 }
 
-async function runLogin(status: unknown) {
-  const channel = makeChannel(status)
+async function runLogin(status: unknown, oauth?: readonly unknown[]) {
+  const channel = makeChannel(status, oauth)
   const stdin = new FakeStdin()
   const instance = await render(
     <Chat channel={channel as never} questionStore={new QuestionStore()} />,
@@ -189,11 +186,20 @@ assert.ok(unavailable.some(line => line.includes('service unavailable')), 'missi
 const rejected = await runLogin(new Error('credential backend unavailable'))
 assert.ok(rejected.some(line => line.includes('service unavailable')), 'describe failure must degrade safely')
 
-for (const lines of [configured, missing, unavailable, rejected]) {
+const account = await runLogin({ configured: false, writable: true }, [{
+  provider: 'deepseek-account', label: 'DeepSeek Account', oauthLabel: 'DeepSeek',
+  loginLabel: 'Sign in with DeepSeek', signedIn: true, expiresAt: undefined, expired: false,
+}])
+assert.ok(account.some(line => line.includes('deepseek-account — signed in')),
+  'Host-owned DeepSeek grant must render as signed in')
+assert.ok(account.every(line => !line.includes('1970') && !line.includes('token expires')),
+  'non-expiring DeepSeek grant must not render a fabricated token expiry')
+
+for (const lines of [configured, missing, unavailable, rejected, account]) {
   assert.ok(
     lines.every(line => !line.includes(SECRET_SENTINEL)),
     'credential values must never enter /login output',
   )
 }
 
-console.log('/login credential status verified (configured, missing, unavailable, rejected)')
+console.log('/login credential status verified (configured, missing, unavailable, rejected, DeepSeek account)')

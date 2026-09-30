@@ -14,17 +14,19 @@
  * profile dependency — and from its real location `dsh-working-activity`
  * resolves under every package-manager layout.
  *
- * `publish` is forced off at this mount point: the TUI derives its working
- * line in-process (issue #143) and never wants activity/status snapshots in
- * the session log — they make the shared JSONL unreadable for Web (issue
- * #153). A stale global-launcher patch (≤0.6.x, resolved anchor-first by
- * the dsh CLI) still carries `publish: true` on this row, which re-enabled
- * the pollution even on an up-to-date profile install. A local `apply`
- * shadows the star re-export, so the row config can never turn publishing
- * back on; a log-replaying consumer mounts the bare package instead.
+ * `publish` is forced off at this mount point: the TUI reads its working
+ * line from the plugin's `workingActivity` session projection and never
+ * wants activity/status snapshots in the session log — they make the shared
+ * JSONL unreadable for Web (issue #153). A stale global-launcher patch
+ * (≤0.6.x, resolved anchor-first by the dsh CLI) still carries
+ * `publish: true` on this row, which re-enabled the pollution even on an
+ * up-to-date profile install. A local `apply` shadows the star re-export, so
+ * the row config can never turn publishing back on; a log-replaying
+ * consumer mounts the bare package instead.
  * @module @deepseek-harness-tui/dsh-tui/working-activity
  */
 import { apply as mountedApply } from 'dsh-working-activity'
+import { mergeActivityPreferences, readActivityConfig } from './activityPrefs.js'
 
 export * from 'dsh-working-activity'
 
@@ -32,6 +34,11 @@ export * from 'dsh-working-activity'
 // @deepseek-ai/cordis here would violate the adapter boundary gate.
 type MountedContext = Parameters<typeof mountedApply>[0]
 
-export const apply = (ctx: MountedContext, config: Parameters<typeof mountedApply>[1]): void => {
-  mountedApply(ctx, { ...config, publish: false })
+export const apply = (ctx: MountedContext, config: Parameters<typeof mountedApply>[1] = {}): void => {
+  // The user's own file (~/.dsh-tui/working-activity.json — what /activity
+  // and the settings panel write) folds in under the row: an explicit row
+  // value wins, otherwise the file's feature switches, phrases, tok-per-sec
+  // and work reminder reach the plugin, as they did when the line was folded
+  // in-process.
+  mountedApply(ctx, { ...mergeActivityPreferences(config, readActivityConfig()), publish: false })
 }

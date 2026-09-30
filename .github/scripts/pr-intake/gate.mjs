@@ -6,6 +6,8 @@ const GITHUB_ACTIONS_BOT_ID = 41898282
 const CI_ONLY_PR_AUTHOR_IDS = new Set([
   49699333, // dependabot[bot]
   41898282, // github-actions[bot]
+  37929162, // mergify[bot]——合并队列的临时 PR（draft，只在上面跑一次 CI 就关，
+  // 见 .mergify.yml；关掉它等于把队列的临时 PR 当成外人 PR 秒关）
 ])
 const COMMENT_MARKER = '<!-- dsh-tui-pr-gate -->'
 

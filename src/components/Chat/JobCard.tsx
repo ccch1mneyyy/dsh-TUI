@@ -2,10 +2,12 @@ import React from 'react'
 import { Box, Text, useAnimationFrame, useTerminalSize } from '../../ui.js'
 import { formatJobDuration, type BackgroundJobStatus } from '../../dsh-adapter/jobs.js'
 import type { JobRow } from '../../dsh-adapter/channel.js'
+import type { BackgroundJobOutputLine } from '../../adapter/ports/channel-view.js'
 import type { Theme } from '../../theme.js'
 import { t } from '../../i18n.js'
 import { stringWidth } from '../../ink/stringWidth.js'
-import { isMinimalMode } from '../../minimalMode.js'
+import { isMinimalUiMode } from '../../minimalUiMode.js'
+import { ProgressBar } from '../design-system/ProgressBar.js'
 
 /** The waterfall window mirrors the subagent card: a constant-height region. */
 const WATERFALL_ROWS = 3
@@ -19,19 +21,40 @@ const WATERFALL_GUTTER = 4
  *  U+2699 is East-Asian Ambiguous: ink measures it 1 cell while CJK
  *  terminal fonts paint it 2, so the following text overlaps the glyph. */
 function statusInfo(status: BackgroundJobStatus): { glyph: string; label: string; color: keyof Theme | undefined } {
-  const minimal = isMinimalMode()
+  const minimalUi = isMinimalUiMode()
   switch (status) {
     case 'completed':
-      return { glyph: '✓', label: t('jobs-status-completed'), color: minimal ? undefined : 'success' }
+      return { glyph: '✓', label: t('jobs-status-completed'), color: minimalUi ? undefined : 'success' }
     case 'failed':
-      return { glyph: '✗', label: t('jobs-status-failed'), color: minimal ? undefined : 'error' }
+      return { glyph: '✗', label: t('jobs-status-failed'), color: minimalUi ? undefined : 'error' }
     case 'killed':
-      return { glyph: '✗', label: t('jobs-status-killed'), color: minimal ? undefined : 'error' }
+      return { glyph: '✗', label: t('jobs-status-killed'), color: minimalUi ? undefined : 'error' }
     case 'stopping':
-      return { glyph: '●', label: t('jobs-status-stopping'), color: minimal ? undefined : 'warning' }
+      return { glyph: '●', label: t('jobs-status-stopping'), color: minimalUi ? undefined : 'warning' }
     default:
-      return { glyph: '●', label: t('jobs-status-running'), color: minimal ? undefined : 'warning' }
+      return { glyph: '●', label: t('jobs-status-running'), color: minimalUi ? undefined : 'warning' }
   }
+}
+
+/**
+ * Producer progress as the design system's bar: `n/m` draws a 5-cell
+ * sub-cell-accurate `ProgressBar` (same primitive the rest of the TUI uses)
+ * plus the raw counter; any other shape passes through verbatim. Exported for
+ * the /jobs panel so both surfaces read the same.
+ */
+export function JobProgress({ progress }: { progress: string }): React.ReactNode {
+  const match = /^(\d+)\s*\/\s*(\d+)$/.exec(progress.trim())
+  const current = match === null ? Number.NaN : Number(match[1])
+  const total = match === null ? Number.NaN : Number(match[2])
+  if (!Number.isFinite(current) || !Number.isFinite(total) || total <= 0) {
+    return <Text color="accent" wrap="truncate-end">{progress}</Text>
+  }
+  return (
+    <Box flexDirection="row" gap={1}>
+      <ProgressBar ratio={Math.min(current, total) / total} width={5} fillColor="accent" emptyColor="inactive" />
+      <Text color="accent">{progress.trim()}</Text>
+    </Box>
+  )
 }
 
 /** Hard single-line clip by display width — a wrapped waterfall row would
@@ -80,17 +103,23 @@ export function JobCard({ job, marginTopOnTurn, onClick }: {
   const [hovered, setHovered] = React.useState(false)
   const clickable = onClick !== undefined
   const rowWidth = Math.max(20, (columns ?? 80) - WATERFALL_GUTTER)
-  const activity = settled ? [] : job.outputLines.slice(-WATERFALL_ROWS)
+  // Waterfall entries: gap banners interleave as their own rows, then the
+  // window keeps the LAST WATERFALL_ROWS entries so a banner never pushes a
+  // fresher line out — the card stays constant-height.
+  const waterfall: Array<{ kind: 'line'; line: BackgroundJobOutputLine } | { kind: 'gap' }> = []
+  for (const line of settled ? [] : job.outputLines) {
+    if (line.gapBefore === true) waterfall.push({ kind: 'gap' })
+    waterfall.push({ kind: 'line', line })
+  }
+  const activity = waterfall.slice(-WATERFALL_ROWS)
   // A settled job's terminal detail ('exit code: 0') rides the header; a
   // failed/killed one also keeps it as the explanatory tail line.
   const headerDetail = job.detail !== undefined && job.detail !== '' ? job.detail : undefined
   const headerName = `${t('jobs-card-prefix')}${job.id}`
   const duration = formatJobDuration(job)
-  const fixedHeader = [
-    info.glyph, headerName, '·', job.kind, '·', '', '·', duration,
-    ...(headerDetail === undefined ? [] : ['·', headerDetail]), '·', info.label,
-  ].join(' ')
-  const labelWidth = Math.max(0, (columns ?? 80) - stringWidth(fixedHeader))
+  // Only a LIVE job carries a progress chip; a settled one has dropped it, so
+  // reserving width for it unconditionally would clip the label for nothing.
+  const liveProgress = settled || job.progress === undefined || job.progress === '' ? undefined : job.progress
 
   // 点击打开 /jobs 面板；hover 不刷整行背景（转录视觉保持安静），只把
   // 状态 glyph 提亮为品牌色作为可点指示。无外层缩进：任务卡是上方工具
@@ -105,28 +134,48 @@ export function JobCard({ job, marginTopOnTurn, onClick }: {
     onMouseEnter={clickable ? () => setHovered(true) : undefined}
     onMouseLeave={clickable ? () => setHovered(false) : undefined}
   >
+    {/* Fixed columns around ONE flexible label: the label truncates instead
+      * of wrapping, so the header grid holds at any width and with or without
+      * the progress chip (the old header reserved a hand-counted width and
+      * overflowed by exactly the chip's width). */}
     <Box flexDirection="row" gap={1}>
       <Text color={hovered && clickable ? 'accent' : info.color}>{info.glyph}</Text>
-      <Text bold color={hovered && clickable ? 'accent' : undefined}>
-        {headerName}
-      </Text>
-      <Text dimColor>·</Text>
-      <Text dimColor>{job.kind}</Text>
-      <Text dimColor>·</Text>
-      <Text>{clipLine(job.label, labelWidth)}</Text>
-      <Text dimColor>·</Text>
-      <Text dimColor>{duration}</Text>
-      {headerDetail !== undefined && <><Text dimColor>·</Text><Text dimColor>{headerDetail}</Text></>}
-      <Text dimColor>·</Text>
-      <Text color={info.color}>{info.label}</Text>
+      <Box flexShrink={0}>
+        <Text bold color={hovered && clickable ? 'accent' : undefined}>
+          {headerName}
+        </Text>
+      </Box>
+      <Box flexShrink={0}><Text dimColor>{job.kind}</Text></Box>
+      <Box flexGrow={1} flexShrink={1}>
+        <Text wrap="truncate-end">{job.label}</Text>
+      </Box>
+      {liveProgress !== undefined && (
+        <Box width={12} flexShrink={0}>
+          <JobProgress progress={liveProgress} />
+        </Box>
+      )}
+      <Box flexShrink={0}><Text dimColor>{duration}</Text></Box>
+      {headerDetail !== undefined && <Box flexShrink={0}><Text dimColor wrap="truncate-end">{headerDetail}</Text></Box>}
+      <Box flexShrink={0}><Text color={info.color}>{info.label}</Text></Box>
     </Box>
-    {!settled && activity.length > 0 && activity.map((line, index) => (
+    {!settled && activity.length > 0 && activity.map((entry, index) => (
       // key 不含 time（同 SubagentMessage 的约定）：内容更新走 in-place
       // diff，避免每个 tick 都 unmount+mount。瀑布只在有镜像输出时出现
       // （后台任务静默是常态——无输出时卡片就是头行，不摆空 gutter）。
-      <Text key={`${job.id}-wf-${index}`} dimColor wrap="truncate">
-        {`  │ ${clipLine(line, rowWidth)}`}
-      </Text>
+      entry.kind === 'gap' ? (
+        <Text key={`${job.id}-wf-gap-${index}`} dimColor italic wrap="truncate">
+          {`  · ${clipLine(t('jobs-output-gap'), rowWidth)}`}
+        </Text>
+      ) : (
+        <Text
+          key={`${job.id}-wf-${index}`}
+          color={entry.line.channel === 'stderr' ? 'error' : undefined}
+          dimColor={entry.line.channel !== 'stderr'}
+          wrap="truncate"
+        >
+          {`  │ ${clipLine(entry.line.text, rowWidth)}`}
+        </Text>
+      )
     ))}
     {settled && job.status !== 'completed' && headerDetail !== undefined && (
       <Text dimColor wrap="truncate">{`  └ ${clipLine(headerDetail, rowWidth)}`}</Text>

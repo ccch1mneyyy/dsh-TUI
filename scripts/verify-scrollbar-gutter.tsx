@@ -124,7 +124,10 @@ function cellAt(y: number, col: number): string {
  */
 function gutterRange(): [number, number] {
   const lines = screenLines()
-  const top = /^❯/.test(lines[0]!.trimEnd()) ? 1 : 0
+  // 置顶提示行在上滚期间一直占着第 0 行，没有已滚出的 prompt 时留白
+  // （logo 占顶即如此），所以不能只凭 ❯ 判断；它与「回到底部」pill 同为
+  // !isSticky chrome，同帧装卸。
+  const top = /^❯/.test(lines[0]!.trimEnd()) || bottomPillVisible() ? 1 : 0
   let boxTop = -1
   for (let y = ROWS - 1; y >= 0; y--) {
     if (lines[y]!.trimEnd().endsWith('╭') || lines[y]!.trimStart().startsWith('╭')) { boxTop = y; break }

@@ -61,10 +61,11 @@
     # wl-copy/xclip/xsel 兜底）、滚轮滚动、双击选词/三击选行。false 则退回
     # inline 渲染, 鼠标交给终端模拟器原生选择。
     fullscreen: true
-    # 在支持的终端预览图片；/settings 可关闭，重启生效。
+    # 以下为 /settings 可改的显示设置；每项说明与默认值见应用内 /settings 屏。
     terminalImages: true
-    # 回复中的 ```mermaid 代码块画成字符图；false 保留源码。/settings 可实时改。
     # mermaidDiagrams: true
+    # 回复中 LaTeX 公式的显示方式：auto（默认，目前为 Unicode）/ image（支持图形的终端里块级公式显示为图片）/ unicode / source（保留源码）。/settings 可实时改。
+    # mathRendering: auto
     # Reasoning effort applied to every request, validated against the live
     # route's adapter levels. An unlisted level falls back to the adapter
     # default; this wins over the persisted /effort choice and seeds the
@@ -207,8 +208,9 @@
 - id: command-goal
   name: '@deepseek-ai/dsh-command-goal'
 
-# Live working line narration support. dsh-tui computes the visible status
-# in-process from base session events; activity/status is never persisted.
+# Working line plugin: folds the session stream into the `workingActivity`
+# session projection (≥0.5.0), which the TUI reads as its working-status
+# line; activity/status events are never persisted.
 # Mounted through @deepseek-harness-tui/dsh-tui's `./working-activity`
 # re-export (not the bare `dsh-working-activity` name) so the row resolves
 # from install layouts that never link transitive dependencies into the

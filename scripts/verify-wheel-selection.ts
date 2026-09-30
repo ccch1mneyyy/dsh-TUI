@@ -32,6 +32,7 @@ import {
   hasSelection,
   pickFollowForSelection,
   shiftSelectionForFollow,
+  type SelectionRow,
   type SelectionState,
 } from '../src/ink/selection.js'
 
@@ -57,6 +58,11 @@ function check(name: string, actual: unknown, expected: unknown): void {
 
 function rowText(row: number): string {
   return `row-${String(row).padStart(2, '0')} content`
+}
+
+/** Accumulator entries are compared by the text they contribute. */
+function texts(rows: readonly SelectionRow[]): string[] {
+  return rows.map(entry => entry.text)
 }
 
 function buildScreen(): Screen {
@@ -88,8 +94,6 @@ function makeSelection(
     anchorSpan: null,
     scrolledOffAbove: [],
     scrolledOffBelow: [],
-    scrolledOffAboveSW: [],
-    scrolledOffBelowSW: [],
     lastPressHadAlt: false,
   }
 }
@@ -124,7 +128,7 @@ function applyScroll(
   })
   check('T1 virtual anchor row tracks pre-clamp position', sel.virtualAnchorRow, 1)
   check('T1 focus shifted up', sel.focus, { col: 6, row: 5 })
-  check('T1 scrolledOffAbove captured anchor row (col-constrained)', sel.scrolledOffAbove, [
+  check('T1 scrolledOffAbove captured anchor row (col-constrained)', texts(sel.scrolledOffAbove), [
     'ow-04 content',
   ])
   check(
@@ -151,7 +155,7 @@ function applyScroll(
   check('T2 anchor restored (virtual debt popped)', sel.anchor, { col: 0, row: 4 })
   check('T2 virtual anchor cleared', sel.virtualAnchorRow, undefined)
   check('T2 focus restored', sel.focus, { col: 6, row: 8 })
-  check('T2 below accumulator empty (selection never reached bottom edge)', sel.scrolledOffBelow, [])
+  check('T2 below accumulator empty (selection never reached bottom edge)', texts(sel.scrolledOffBelow), [])
 }
 
 // ── Test 3: multi-frame drain (2 frames of +2) accumulates like one +4 ──
@@ -164,7 +168,7 @@ function applyScroll(
   check('T3 anchor', sel.anchor, { col: 0, row: 2 })
   check('T3 virtual anchor', sel.virtualAnchorRow, 0)
   check('T3 focus', sel.focus, { col: 6, row: 4 })
-  check('T3 captured rows 2-3 across drain frames', sel.scrolledOffAbove, [
+  check('T3 captured rows 2-3 across drain frames', texts(sel.scrolledOffAbove), [
     'ow-02 content',
     'row-03 content',
   ])

@@ -12,11 +12,12 @@ import { attachSessionToWorkspace } from '../workspace.js'
 import type { createChannelBinding } from './binding.js'
 import type { ChannelOwner } from './owner.js'
 import { resetSessionProjection } from './session-reset.js'
+import { childRecordsLineage } from './session-lineage.js'
 import type { ChannelState } from './types.js'
 
 type Binding = ReturnType<typeof createChannelBinding>
 type SwitchState = Parameters<typeof resetSessionProjection>[0] & Pick<ChannelState,
-  'cwd' | 'working' | 'status' | 'agentId' | 'agentPreset' | 'provider' | 'model' | 'contextWindow' | 'effortLevels' | 'reasoningEffort' | 'emit'>
+  'cwd' | 'working' | 'status' | 'agentId' | 'sessionId' | 'agentPreset' | 'provider' | 'model' | 'contextWindow' | 'effortLevels' | 'reasoningEffort' | 'emit'>
 
 /** Model-route adoption transaction. It settles compaction before its fork snapshot and owns the post-commit reset. */
 export function createModelSwitchAction(
@@ -38,7 +39,6 @@ export function createModelSwitchAction(
     refreshSkillCommands(): Promise<void>
     clearStagedImages(): void
     dropModelCompletion(): void
-    onModelSwitch(model: string): void
     notify: ChannelState['notify']
   },
 ) {
@@ -70,7 +70,10 @@ export function createModelSwitchAction(
         runtimeSession: deps.binding.agent.session,
         inheritedCount: seed.length,
         cwd: state.cwd,
-        parentSession: deps.binding.agent.session.id,
+        // A session nobody has typed into has no conversation to relate, and
+        // lineage would cost its first real prompt the generated title — the
+        // child stands as its own root instead (session-lineage.ts).
+        parentSession: childRecordsLineage(seed) ? deps.binding.agent.session.id : undefined,
         agentPreset: composed.agentPreset,
         agentOptions: { provider, model },
         setup: composed.setup,
@@ -85,6 +88,7 @@ export function createModelSwitchAction(
         resetSessionProjection(state, deps.rowIds, deps.resetProjector, deps.resetSubagents, deps.resetJobs)
         state.status = handle.agent.status
         state.agentId = handle.agent.id
+        state.sessionId = handle.agent.session.id
         state.agentPreset = composed.agentPreset
         state.provider = provider
         state.model = model
@@ -101,7 +105,6 @@ export function createModelSwitchAction(
         // order).
         deps.clearStagedImages()
         deps.bindAgent()
-        deps.onModelSwitch(model)
         deps.refreshCommands()
         void deps.refreshLoadedContext()
         void deps.refreshSkillCommands()

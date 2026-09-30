@@ -62,6 +62,14 @@ export interface TerminalImagePlacement {
   /** Visible terminal cells, while x/y/columns/rows retain the full layout box. */
   readonly clip?: { readonly x: number; readonly y: number; readonly columns: number; readonly rows: number }
   readonly background?: string
+  /**
+   * Float on the terminal: the raster paints only its covered pixels and
+   * leaves the rest untouched, instead of compositing onto a backing colour.
+   * Sixel cannot express partial alpha, so coverage is promoted to a hard
+   * mask at encode time. Formulas and artwork with transparent margins use
+   * this.
+   */
+  readonly transparent?: boolean
   /** False while a protocol-specific raster is pending or unavailable. */
   readonly graphicsReady?: boolean
   /** Later paint operations cover part of this raster's visible cells. */

@@ -10,7 +10,9 @@
  *  2. 注入后污染确实发生（错误行叠在 UI 上）——这是前置条件而非失败，
  *     污染不发生说明场景没搭对；
  *  3. 触发 stdin-gap 重锚（reassertTerminalModes → requestViewportReanchor
- *     → 视口就地重画）后，视口内容恢复与干净基准一致（自愈）。
+ *     → 视口就地重画）后，转录内容恢复与干净基准一致（自愈）。比对只取
+ *     转录切片：开屏头部一类装饰行会随物理滚动在窗口边界进出一行，不
+ *     参与比对（理由见文末断言处）。
  * 运行：node --import tsx/esm scripts/repro-inline-thirdparty.tsx
  */
 process.env.FORCE_COLOR = '3'
@@ -154,23 +156,41 @@ for (let y = 0; y < ROWS; y++) {
 const strayAfterHeal = healed.some(l => l.includes('[5764] Error') || l.includes('[35540] Usage'))
 check('自愈：视口无第三方残留行', !strayAfterHeal)
 check('自愈：全部 12 条要点回到视口', Array.from({ length: 12 }, (_, i) => `概览要点第 ${i + 1} 条`).every(t => healed.some(l => l.includes(t))))
-// 内容序列比较（strip 空行）：注入造成的 2 行物理滚动不可逆——那 2 行
-// 已进 scrollback——自愈后的视口内容正确但整体位置平移。用户看到的是
-// 非空行序列，平移无感；断言序列一致即自愈完成。
+// 转录切片比较：只比「转录内容」，不比整个视口的非空行序列。
+//
+// 视口是比帧更高的滑动窗口，注入的第三方输出消耗物理行后会把窗口相对帧
+// 顶推走一行（那 2 行已进 scrollback、不可逆），所以断言口径不该包含「哪
+// 一行装饰性头部恰好落在窗口边界内」。开屏头部（标题/大字/提示）正是这样
+// 的装饰行：帧铺满 40 行视口时，被顶出窗口的那一行就是标题行（✦ dsh-TUI
+// v0.1.0）——#1061 在大字之间插了一行空白后帧高 +1，于是整条非空序列从
+// 第 0 项起错位一格、H 多一行，而转录本身逐行一致（把视口拉高到 60 行，
+// 干净基准与自愈后逐字节相同）。
+//
+// 切片取「转录首行（用户消息）→ 末行（第 12 条要点）」：转录错位/丢行/
+// 重复仍然必红（首尾锚点即边界，长度与逐行内容都必须相等），装饰性头部
+// 在窗口边界的进出不再被误判为自愈失败。任一锚点缺失 → null 直接判负，
+// 杜绝「两边都切空」的假通过。
 const seq = (ls: string[]) => ls.filter(l => l.trim() !== '')
-const goldenSeq = seq(golden)
-const healedSeq = seq(healed)
-const seqEqual = goldenSeq.length === healedSeq.length && goldenSeq.every((l, i) => l === healedSeq[i])
+const transcript = (ls: string[]) => {
+  const s = seq(ls)
+  const first = s.findIndex(l => l.includes('❯ 给我一个项目概览'))
+  const last = s.findIndex(l => l.includes('概览要点第 12 条'))
+  return first >= 0 && last >= first ? s.slice(first, last + 1) : null
+}
+const goldenSeq = transcript(golden)
+const healedSeq = transcript(healed)
+const seqEqual = goldenSeq !== null && healedSeq !== null
+  && goldenSeq.length === healedSeq.length && goldenSeq.every((l, i) => l === healedSeq[i])
 if (!seqEqual) {
-  console.log('=== 序列差异 ===')
-  for (let i = 0; i < Math.max(goldenSeq.length, healedSeq.length); i++) {
-    if ((goldenSeq[i] ?? '') !== (healedSeq[i] ?? '')) {
-      console.log(`序${String(i).padStart(2)} G|${goldenSeq[i]}`)
-      console.log(`     H|${healedSeq[i]}`)
+  console.log('=== 转录切片差异 ===')
+  for (let i = 0; i < Math.max(goldenSeq?.length ?? 0, healedSeq?.length ?? 0); i++) {
+    if ((goldenSeq?.[i] ?? '') !== (healedSeq?.[i] ?? '')) {
+      console.log(`序${String(i).padStart(2)} G|${goldenSeq?.[i]}`)
+      console.log(`     H|${healedSeq?.[i]}`)
     }
   }
 }
-check('自愈：视口内容序列与干净基准一致', seqEqual, `G=${goldenSeq.length} 行 H=${healedSeq.length} 行（绝对行位可平移）`)
+check('自愈：转录内容序列与干净基准一致', seqEqual, `G=${goldenSeq?.length ?? '锚点缺失'} 行 H=${healedSeq?.length ?? '锚点缺失'} 行（绝对行位可平移）`)
 
 console.log(failed === 0 ? '\nALL PASS（第三方污染经 stdin-gap 重锚自愈）' : `\n${failed} 项失败`)
 await instance.unmount()

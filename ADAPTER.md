@@ -12,10 +12,10 @@ UI 层(`screens/`、`components/`、`ink/`、`hooks/`、`utils/`、`terminal-uti
 
 ## 上游契约
 
-- 校验版本线:主 `0.1.7-rc.2`,兼容 `0.1.7-rc.1` / `0.1.5-rc.1` / `0.1.5-alpha.2` / `0.1.5-alpha.1` / `0.1.3-alpha.2` / `0.1.2-rc.1` / `0.1.2-alpha.5` / `0.1.2-alpha.4` / `0.1.2-alpha.3` / `0.1.1-rc.2` / `0.1.1-rc.1` / `0.1.0-rc.8` / `0.1.0-rc.7` / `0.1.0-rc.6`
+- 校验版本线:主 `0.2.0-rc.2`,兼容 `0.2.0-rc.1` / `0.1.7-rc.2` / `0.1.7-rc.1` / `0.1.5-rc.1` / `0.1.5-alpha.2` / `0.1.5-alpha.1` / `0.1.3-alpha.2` / `0.1.2-rc.1` / `0.1.2-alpha.5` / `0.1.2-alpha.4` / `0.1.2-alpha.3` / `0.1.1-rc.2` / `0.1.1-rc.1` / `0.1.0-rc.8` / `0.1.0-rc.7` / `0.1.0-rc.6`
   (`src/dsh-adapter/contract.ts` 的 `UPSTREAM_VALIDATED_VERSIONS`;特性门控用
   `installedMeetsVersion(pkg, 'x.y.z-<alpha|beta|rc>.n')` 跨家族、跨预发布通道比较,老安装上优雅降级)
-- peer 范围:`^0.1.0-rc.6 || ^0.1.1-rc.1 || 0.1.2-alpha.3 || 0.1.2-alpha.4 || 0.1.2-alpha.5 || 0.1.2-rc.1 || 0.1.3-alpha.2 || 0.1.5-alpha.1 || 0.1.5-alpha.2 || 0.1.5-rc.1 || 0.1.7-rc.1 || 0.1.7-rc.2`(新命名的 registry/PTC 包仅声明 `0.1.7-rc.1 || 0.1.7-rc.2`;契约外版本启动时打 drift 警告;新增预发布一律用精确 OR,不用 caret)
+- peer 范围:`^0.1.0-rc.6 || ^0.1.1-rc.1 || 0.1.2-alpha.3 || 0.1.2-alpha.4 || 0.1.2-alpha.5 || 0.1.2-rc.1 || 0.1.3-alpha.2 || 0.1.5-alpha.1 || 0.1.5-alpha.2 || 0.1.5-rc.1 || 0.1.7-rc.1 || 0.1.7-rc.2 || 0.2.0-rc.1 || 0.2.0-rc.2`(新命名的 registry/PTC 包仅声明 `0.1.7-rc.1 || 0.1.7-rc.2 || 0.2.0-rc.1 || 0.2.0-rc.2`;契约外版本启动时打 drift 警告;新增预发布一律用精确 OR,不用 caret)
 - 白名单包:blessed list(harness 包按完整版本号校验,框架包 cordis/schemastery 按 major 校验)
 - 启动时:检测到 drift 打 warning;CI 上 `pnpm run verify:contract` 直接失败
 
@@ -28,11 +28,13 @@ UI 层(`screens/`、`components/`、`ink/`、`hooks/`、`utils/`、`terminal-uti
   服务由 base 提供，模型可见的工具仍由 preset 控制；与 web-app 的差异见快照。
 - **config overrides**:8 行(原有 6 行加 session-telemetry-otel /
   plugin-package-inventory-deepseek),后两行保持 TUI 的隐私默认
-- **inserts**:18 行(dsh-tui、working-activity、dsh-tui-auth、六个插件互通行,以及
+- **inserts**:19 行(dsh-tui、working-activity、内置 OAuth 入口 dsh-tui-auth、DeepSeek 账号回调的 dsh-tui-webserver、六个插件互通行,以及
   dsh-tui-storage、dsh-tui-storage-json、dsh-tui-storage-domain、
   dsh-tui-workspace、dsh-tui-code-runtime、dsh-tui-subagent-model-selection-settings、
   dsh-tui-agent-presets、dsh-tui-agent-preset-registry、dsh-tui-cordis-host-runner)。这些 host-plane 行使用 dsh-tui 作用域 id,
   并在检测到官方同 id/name 行已存在时自行 disabled,因此可安全共存。
+  `dsh-tui-webserver` 会探测 webserver 包及已启用的宿主账号服务行；缺少账号服务的旧宿主禁用该行，
+  新宿主在 TUI-only profile 下监听 loopback 动态端口，并在 Web 混合 profile 中让位官方 `webserver`。
   `dsh-tui-subagent-model-selection-settings` 还直接探测自己的包子路径,
   不依赖可被用户禁用的 inventory 行;预设 roster 在 rc.2 显式恢复 dsh CLI
   roots,0.1.2 线则省略 roots 并使用包内 `includeShippedRoot`
@@ -44,11 +46,11 @@ UI 层(`screens/`、`components/`、`ink/`、`hooks/`、`utils/`、`terminal-uti
 确认差异后执行 `node --import tsx/esm scripts/verify-patch-surface.ts --snapshot`
 重新生成快照。`pnpm run verify:web-coexistence` 会把 dsh-tui patch 与官方
 web-app patch 按 include 语义合成一遍,直接拦截 loader entry id 复用;
-当相邻 `deepseek-harness` 源码存在时还会额外校验其 base + web patch。
+设置 `DSH_HARNESS_SOURCE_ROOT` 指向官方源码 checkout 时还会额外校验其 base + web patch（CI 的 `alpha-compat` lane 总是设置）。
 
 ## 升级流程
 
-- dev 树由 `pnpm-workspace.yaml` 的 overrides 钉在 `0.1.7-rc.2`,
+- dev 树由 `pnpm-workspace.yaml` 的 overrides 钉在 `0.2.0-rc.2`,
   CI `alpha-compat` lane 还对同版上游 tag 的固定 SHA 做源码类型与 patch 合成校验。
   旧 SQLite 迁移工具的依赖闭包单独锁在 `vendor/sqlite-island`。
 - `contract.ts` 是唯一真源:主验证线原地替换、不累积;`package.json` 的

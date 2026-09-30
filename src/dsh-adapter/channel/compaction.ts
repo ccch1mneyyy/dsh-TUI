@@ -11,7 +11,7 @@ interface ManualCompaction {
   settled: Promise<void>
 }
 
-type CompactionState = Pick<ChannelState, 'agentId' | 'cwd' | 'working'>
+type CompactionState = Pick<ChannelState, 'agentId' | 'cwd' | 'working' | 'compaction' | 'emit'>
 type Notify = ChannelState['notify']
 
 /** Owns the one manual compaction transaction that must settle before a switch. */
@@ -23,11 +23,13 @@ export function createManualCompaction(
     agent(): Agent
     withDecisionPending<T>(name: string, pending: Promise<T>): Promise<T>
     notify: Notify
-    onComplete(): void
   },
 ) {
   let active: ManualCompaction | undefined
   const cancelled = new WeakSet<AbortController>()
+  /** Aborts the user asked for (Esc / Ctrl+C) rather than an ownership change:
+   *  only those are reported as a cancellation instead of a failure. */
+  const userCancelled = new WeakSet<AbortController>()
 
   const settle = async (): Promise<void> => {
     const transaction = active
@@ -93,14 +95,27 @@ export function createManualCompaction(
           deps.notify(t('compact-while-working'), { color: 'warning' })
           return
         }
-        deps.notify(t('compact-working'))
+        // The status row replaces the old 4s toast: a real compaction runs for
+        // tens of seconds (measured: median ~25s, p90 ~70s), and the toast was
+        // gone for all but the first four of them.
+        const row = {
+          startedAt: Date.now(),
+          phase: 'prefill' as const,
+          outputChars: 0,
+          cancellable: true,
+        }
+        state.compaction = row
+        state.emit()
         try {
           // Compact the entry agent, never a later binding read after await.
           const result = await compactService.compactNow(originAgent, controller.signal)
           if (!isCurrent()) return
           deps.notify(result ? t('compact-done') : t('compact-nothing'))
-          if (result) deps.onComplete()
         } catch (error: unknown) {
+          if (userCancelled.has(controller)) {
+            if (isCurrent()) deps.notify(t('compact-cancelled'))
+            return
+          }
           if (!isCurrent() || cancelled.has(controller)) return
           if ((error as { code?: unknown }).code === 'persistence') {
             deps.notify(t('compact-flush-failed'), { color: 'warning', timeoutMs: 12000 })
@@ -122,6 +137,13 @@ export function createManualCompaction(
       } finally {
         finished = true
         releaseOwner()
+        // The durable `compaction/end` event already cleared the row on every
+        // path that reached the host; this covers the ones that never did
+        // (vetoed decision, unavailable service, a throw before the bracket).
+        if (state.compaction?.cancellable === true) {
+          state.compaction = undefined
+          state.emit()
+        }
         const currentTransaction = active as ManualCompaction | undefined
         if (currentTransaction?.controller === controller) active = undefined
       }
@@ -132,5 +154,13 @@ export function createManualCompaction(
     if (!finished) active = { controller, settled }
   }
 
-  return { compact, settle }
+  /** Abort the in-flight manual compaction the user asked to stop. */
+  const cancel = (): void => {
+    const transaction = active
+    if (transaction === undefined) return
+    userCancelled.add(transaction.controller)
+    transaction.controller.abort(new Error('user cancelled compaction'))
+  }
+
+  return { compact, settle, cancel }
 }

@@ -184,6 +184,7 @@ export type ShortcutActionId =
   | 'redraw'
   | 'todoFold'
   | 'expandEditor'
+  | 'star'
 
 export interface ShortcutActionSpec {
   readonly id: ShortcutActionId
@@ -210,6 +211,9 @@ export const SHORTCUT_ACTIONS: readonly ShortcutActionSpec[] = [
   { id: 'todoFold', defaults: ['ctrl+q'] },
   { id: 'questionFold', defaults: ['ctrl+k'] },
   { id: 'expandEditor', defaults: ['ctrl+shift+e'] },
+  // 开屏标语里的"一键 star"：与 `/star`、弹窗按钮同一个动作（gh api PUT）。
+  // 用 alt 组合是为了不跟输入框抢字母键。
+  { id: 'star', defaults: ['alt+s'] },
 ]
 
 const DEFAULT_COMBO_MAP: ReadonlyMap<ShortcutActionId, readonly ParsedCombo[]> = new Map(
@@ -254,6 +258,12 @@ export function effectiveCombos(action: ShortcutActionId): readonly ParsedCombo[
 /** Effective combos as display strings (`ctrl+v, alt+v`). */
 export function effectiveComboString(action: ShortcutActionId): string {
   return effectiveCombos(action).map(combo => combo.raw).join(', ')
+}
+
+/** First effective combo, lowercase ('ctrl+o'): the inline-hint form, so
+ *  hints follow remaps (#1028). */
+export function primaryComboString(action: ShortcutActionId): string {
+  return effectiveCombos(action)[0]?.raw ?? ''
 }
 
 /** Modifier token → display label ('ctrl' → 'Ctrl'). */

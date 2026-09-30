@@ -32,6 +32,7 @@ type ResumeState = Pick<
   | 'working'
   | 'status'
   | 'agentId'
+  | 'sessionId'
   | 'cwd'
   | 'displayCwd'
   | 'agentPreset'
@@ -89,6 +90,7 @@ export function createSessionResumeActions(
     rowIds: { value: number }
     resetProjector(): void
     resetSubagents(): void
+    parkSubagents(agent: Agent): void
     resetJobs(): void
     replay(events: readonly SessionEvent[]): void
     settleReplay(): void
@@ -118,6 +120,7 @@ export function createSessionResumeActions(
     resetSessionProjection(state, deps.rowIds, deps.resetProjector, deps.resetSubagents, deps.resetJobs)
     state.status = handle.agent.status
     state.agentId = handle.agent.id
+    state.sessionId = handle.agent.session.id
     state.agentPreset = agentPreset
     if (route !== undefined) {
       state.provider = route.provider
@@ -215,6 +218,9 @@ export function createSessionResumeActions(
       // normal return is a commit, which is what the outer finally keys on.
       const result = deps.binding.adopt<ResumeResult>(handle, adoption, (committedBinding, disposePrevious) => {
         const previousSessionId = String(committedBinding.agent.session.id)
+        const keepPrevious = keepCurrent && committedBinding.handle !== undefined
+          && (committedBinding.handle.agent.status === 'running' || agentViewHasTurns(snapshotLiveSessionEvents(committedBinding.handle.agent.session)))
+        if (keepCurrent && (committedBinding.handle === undefined || keepPrevious)) deps.parkSubagents(committedBinding.agent)
         state.cwd = handle.agent.session.header.cwd ?? state.cwd
         state.displayCwd = deps.describeWorkspace(state.cwd).description ?? state.cwd
         deps.resetIdeSelection()
@@ -226,8 +232,6 @@ export function createSessionResumeActions(
         writeResumeTarget(sessionId)
         touchSession(sessionId)
         state.emit()
-        const keepPrevious = keepCurrent && committedBinding.handle !== undefined
-          && (committedBinding.handle.agent.status === 'running' || agentViewHasTurns(snapshotLiveSessionEvents(committedBinding.handle.agent.session)))
         if (committedBinding.handle !== undefined) {
           if (keepPrevious) {
             deps.backgroundHandles.set(previousSessionId, committedBinding.handle)

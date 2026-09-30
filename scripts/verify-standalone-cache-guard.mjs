@@ -35,6 +35,14 @@ function check(name, condition, detail = '') {
 const require = createRequire(import.meta.url)
 const cacheGuard = require('../standalone/cacheGuard.cjs')
 
+// entry.mjs reaches the guard through a createRequire'd literal path, which
+// pkg's static tracer does not follow — the file must be listed in
+// pkg.config.json "scripts" or the compiled exe dies at boot with
+// "Cannot find module './cacheGuard.cjs'" (shipped broken v0.10.0–v0.11.2).
+const pkgConfig = JSON.parse(readFileSync(new URL('../standalone/pkg.config.json', import.meta.url), 'utf8'))
+check('pkg.config.json 把 cacheGuard.cjs 编进快照（scripts 清单）',
+  Array.isArray(pkgConfig.scripts) && pkgConfig.scripts.includes('cacheGuard.cjs'))
+
 check('cacheGuard.cjs 可加载且导出清单/ensureRuntime/runtimeReady',
   typeof cacheGuard.MANIFEST_ENTRIES === 'object' && Array.isArray(cacheGuard.MANIFEST_ENTRIES)
     && cacheGuard.MANIFEST_ENTRIES.length >= 8

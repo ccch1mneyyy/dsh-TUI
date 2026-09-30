@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/assets/logo.svg" alt="dsh-TUI - DeepSeek Harness terminal interface" width="560">
+  <img src="docs/assets/readme/logo-en.svg" alt="dsh-TUI animated whale logo" width="560">
 </p>
 
 <p align="center">
@@ -27,13 +27,16 @@
 - **Pixel whale pet** — three startup intros, click to wake; freezes after the first task.
 - **Terminal-native UI** — streaming Markdown, tool cards, `/` and `@` completion, `#L12-14` ranges, history search, zh/en UI.
 - **Images** — Kitty/Sixel thumbnails, centered preview with zoom and pan, paste-time fitting, text fallback.
-- **Mermaid diagrams** — ```` ```mermaid ```` fences drawn as Unicode diagrams.
+- **Mermaid diagrams** — ````mermaid ```` fences drawn as Unicode diagrams.
+- **LaTeX math** — `$…$` and `$$…$$` formulas as Unicode text, fractions and limits stacked in display blocks; `mathRendering: image` typesets block and one-row inline formulas as terminal images on graphics terminals.
 - **Timeline rail** — every turn clickable; timeline / scrollbar / hidden gutter.
-- **Live state** — activity animation, context bar, TPS, cache hit rate, effort, tokens, Git and session metadata.
+- **Live state** — activity animation, context bar, TPS, cache hit rate, effort, tokens, session cost estimate (main + subagents), Git and session metadata.
 - **One session manager** — `/resume` `/home` `/agentview` `/bg` `⌸`.
 - **Session workflow** — `/new` `/compact` `/export` `/btw`, model hot-switch, fork, rewind, vim, fullscreen draft editor.
 - **IDE selection channel** — a VS Code selection lands in the prompt.
 - **DSH integrations** — presets, skills, MCP, goals, todos, subagents, questionnaires.
+- **Account sign-in** — the standard profile offers pi-ai OAuth for ChatGPT/Codex, Claude, and Grok (plus OpenAI direct and Meta Muse when available), and Host-owned DeepSeek browser sign-in as `deepseek-account` on DSH 0.2.0-rc.1+. Use `/provider` or `/auth` without another plugin.
+  A profile-only update from a global TUI patch that already mounts `dsh-tui-auth` can still start the official loopback callback listener on demand; fixed-port SSH forwarding still requires the global package to be aligned.
 - **Extensions** — browser interaction, computer use and more.
 - **Built for long sessions** — event-driven projection, virtualization, bounded caches.
 
@@ -42,20 +45,10 @@ Keys and commands: [Interaction and commands](docs/interaction.en.md). Everythin
 ## Preview
 
 <div align="center">
-  <table>
-    <tr>
-      <td align="center" valign="middle" width="50%">
-        <img src="screenshots/splash.png" alt="dsh-TUI conversation with the pixel-whale header" width="480">
-        <br>
-        <strong>Conversation with the pixel-whale header</strong>
-      </td>
-      <td align="center" valign="middle" width="50%">
-        <img src="screenshots/ide-selection-badge.png" alt="IDE selection badge: live line count under the prompt" width="480">
-        <br>
-        <strong>Live IDE selection badge</strong>
-      </td>
-    </tr>
-  </table>
+  <picture>
+    <source media="(max-width: 640px)" srcset="docs/assets/readme/preview-en-mobile.svg">
+    <img src="docs/assets/readme/preview-en.svg" alt="Recorded dsh-TUI session: welcome, completion, help and typing, with animated pixel whale." width="78%">
+  </picture>
 </div>
 
 ## Featured & Listed
@@ -89,10 +82,13 @@ daily** (TypeScript).
 ## Quick Start
 
 Prerequisites: [Node.js](https://nodejs.org/en) and
-[deepseek-harness](https://github.com/deepseek-ai/deepseek-harness), with
-`DEEPSEEK_API_KEY` configured.
+[deepseek-harness](https://github.com/deepseek-ai/deepseek-harness).
+The `deepseek-official` API-key route needs `DEEPSEEK_API_KEY`. On DSH
+0.2.0-rc.1+, the standard profile can instead use `/auth login deepseek-account`
+and select the separate account route through `/model`. Other supported
+accounts can sign in through `/provider` or `/auth` after startup.
 
-The primary compatibility target is DSH `0.1.7-rc.2`. This adapter supports its
+The primary compatibility target is DSH `0.2.0-rc.2`. This adapter supports its
 Shell API, V4 session messages, declarative presets, and profile-backed settings;
 older supported hosts retain their compatibility paths. See [configuration](docs/configuration.en.md).
 
@@ -138,7 +134,35 @@ source builds, and troubleshooting, including migration from the former
 | `dsh-tui safe` | Read-only diagnostics, plugin inventory and repair guidance; `safe --rescue` builds a clean rescue profile |
 | `dsh-tui version` · `dsh-tui help` | Launcher and profile versions and usage; both work even without a `dsh` install |
 
-Other arguments go to `dsh --profile dsh-tui`. Safe mode: [Getting started](docs/getting-started.en.md).
+Leading DSH options such as `--dump-config` and `--patch <path>` are forwarded
+unchanged; other arguments go to the app in `dsh --profile dsh-tui`. Use
+`dsh-tui -- --resume=sid-1 ./notes` to send `--resume=sid-1 ./notes` as literal
+prompt text, without selecting a session or workspace. When invoking DSH
+directly, use `dsh --profile dsh-tui -- -- --resume=sid-1 ./notes`: the first
+`--` belongs to DSH, the second to the app. Host options can precede a literal
+prompt: `dsh-tui --patch ./overlay.yml -- --resume=sid-1` applies the overlay
+and sends `--resume=sid-1` as prompt text without resuming that session.
+Safe mode: [Getting started](docs/getting-started.en.md).
+
+### Importing conversations from other agents (`dsh-tui migrate`)
+
+Bring Claude Code, Codex, OMP, zcode, or Grok Build conversation histories into the DSH session store, then browse and resume them by their original working directory via `/resume`:
+
+```sh
+dsh-tui migrate                # list importable counts per agent (writes nothing)
+dsh-tui migrate claude-code    # import every Claude Code conversation (likewise codex / omp / zcode / grok-build)
+dsh-tui migrate codex --dry-run  # preview what would land, write nothing
+```
+
+- **Read-only source**: migration only reads the foreign agent's local store; artifacts are written through the official `JsonlSessionPersistence` backend, so imported sessions are first-class (openable, continuable).
+- **Idempotent**: one deterministic UUID per source conversation — re-importing skips what is already present instead of stacking duplicates.
+- **Structure preserved**: user/assistant messages, reasoning traces, tool calls with their results, and the source's context compactions (as native compaction checkpoints) are rebuilt turn by turn; harness-injected machine text opens no turn. An imported session can pick the work straight up.
+In-TUI browsing: the session screen (`/resume`) shows a tab per agent that has conversations; picking one imports just that conversation and opens it.
+In-TUI: `/migrate` (optionally `/migrate <agent> [--dry-run]`) runs the same import in a child process and reports through the notification flow.
+CLI alternative: `dsh-tui migrate ...` from any shell runs the same import.
+Full guide: [Session migration](docs/migrate.en.md).
+
+- More agents (pi, opencode, …) extend the adapter registry as adapters land; grok-build reads `GROK_HOME` when set.
 
 **VS Code**: use the integrated terminal or the `dsh-tui-vscode` extension. See [VS Code guide](docs/vscode.en.md). **Herdr**: run `dsh-tui` in a [Herdr](https://herdr.dev) pane; `idle` / `working` / `blocked` are reported through its local integration API.
 
@@ -148,13 +172,33 @@ Other arguments go to `dsh --profile dsh-tui`. Safe mode: [Getting started](docs
 
 While the model is working: `Enter` steers, `Tab` queues a follow-up, `Ctrl+Enter` interrupts and sends.
 
+On native Windows, fragmented Win32 input records are reassembled across short input delays instead of appearing as numeric protocol text. The platform check only reports that this machine might run the private mode (win32-input-mode); a bare `ESC[` fragment is held only after one record has actually been decoded, while a fragment whose own shape is already record-specific holds on its own (which is how even the first record can survive a split). Windows terminals that never enter the mode (mintty, GitBash) therefore keep the classic VT path: a lone `Esc` keeps its normal response time, and a letter typed after a timed-out `ESC[` is not swallowed.
+
+Incomplete records are held for a bounded recovery window (1 second from first capture, never extended by later input; 64 bytes max); past either bound the hold ends and input is handled as before. Unrecognized complete CSI sequences are not inserted as text; after a damaged CSI prefix, a bare ASCII letter can be consumed as its terminator, while normal Win32 key records and bracketed-paste text retain their own boundaries.
+
+A session's very first record can still leave residue if it is split before its record-specific shape forms; once any record has been decoded, every split position is covered. Inside the recovery window, literal input starting with `[digit;…` cannot be told apart from a protocol prefix — it may be held, or re-joined to a preceding `Esc`. To type it, wait for the window to close, or avoid that shape right after `Esc`.
+
+Terminal replies that arrive split are reassembled the same way (native Windows ConPTY is the common source): while the app still has a query awaiting its answer, an unfinished DA1 / DA2 / DSR / DECRPM / XTVERSION tail — even one split again after the introducer `Esc` was flushed — is held across input delays, but only while its shape can still complete into the response type that query expects. It is then consumed as the reply it completes instead of entering the prompt as protocol text.
+
+That claim is evidence-gated, and this is the difference from earlier builds: no query awaiting an answer means nothing is claimed, so a literal `[?61;4c` typed right after `Esc` still enters the prompt exactly as before.
+
+The window is bounded like the record hold (about a second, never extended by later input; 64 bytes max); past either bound it ends, and bytes still shaped like an unfinished reply prefix are dropped rather than shown.
+
+Inside that window, with a query of the matching response type outstanding, same-shaped literal input can still be claimed as a reply; to type it, wait for the window to close (about a second), or avoid that shape while a query is outstanding.
+
 Mouse (fullscreen): drag to select and copy, double/triple click to select a word or line, click tool cards, timeline ticks and `[Image #N]` previews.
+
+**Pasting**: native and bracketed paste keeps ordinary text and newlines, and never submits itself on arrival. On Windows terminals that deliver a paste as win32-input-mode key records, the residue is stripped at the entry point (a multi-line paste no longer leaves stray `_`) and pasted CRLF collapses to a single newline; genuine underscores and bracketed-paste text are untouched.
+
+**Dropped files**: a native Windows desktop drop (Windows Terminal / OpenConsole) arrives as an OSC 8 hyperlink; the parser restores its `file://` URI to a decoded local path before paste hygiene runs, so the `]8;id=…;` parameter bytes never reach the draft. Image paths enter the existing image staging pipeline; other files are inserted as a referenceable path (a path containing whitespace arrives in the composer's quoted `"…"` single-token form). Only `file://` URIs are restored, and it is fail-closed: a remote authority/UNC, a payload carrying several distinct URIs, or a URI that carries several tokens is refused and stays literal text rather than guessed.
 
 Full reference: [Interaction and commands](docs/interaction.en.md).
 
 ## Built-in Commands
 
-`/resume` · `/home` · `/agentview` · `/bg` · `⌸` open the same session manager: workspace rail, live state, filter, ★ pins. Also `/model` `/new` `/compact` `/export` `/btw` `/tree` `/fork` `/rewind` `/settings` `/status` `/cost` `/jobs` `/skills` `/mcp` `/login` `/update`.
+`/resume` · `/home` · `/agentview` · `/bg` · `⌸` open the same session manager: workspace rail, live state, filter, ★ pins. Also `/model` `/new` `/compact` `/export` `/btw` `/tree` `/fork` `/rewind` `/settings` `/status` `/cost` `/jobs` `/skills` `/mcp` `/provider` `/auth` `/login` `/update`.
+
+The session manager paints the last successful list immediately while it checks the persistence store for changes. Titles that require a deeper log scan appear first with a fallback name and update in place when recovery finishes.
 
 **Background sessions**: `/bg` or `←` on an empty prompt; `Esc` returns. They run in this process and stop when the TUI exits. Logs survive.
 
@@ -178,10 +222,12 @@ Runtime path, module boundaries, performance notes and persistence locations: [A
 ## Known Limitations
 
 - Injected plugin context has no standalone display; it counts into the context segments.
-- `/model` switches by forking the session; the old session stays in `/resume`.
+- `/model` switches by forking the session; the old session stays in `/resume` (a session nobody has typed into records no branch, so your first prompt there still gets a generated title).
 - `Ctrl+V` needs platform clipboard tools; unsupported bitmap formats are rejected.
+- A dropped file is restored from its OSC 8 `file://` URI alone: multi-file drops, non-Windows terminal drop encodings and terminator-less truncated frames are not covered, and the hyperlink's own display name is never used.
 - A background session lives inside this process and stops when the TUI exits.
-- `/thinking` is not persisted; `/compact` is unavailable under the `minimal` preset; `/update` needs a `dsh --profile` launch and is refused while a turn is running.
+- `/thinking` is not persisted; `/compact` is unavailable under the kernel's `minimal` agent preset (极简模式, one persistent-shell tool) — a different thing from the `/settings → Minimal UI` (极简界面) display switch; `/update` needs a `dsh --profile` launch and is refused while a turn is running.
+- The status-bar `≈¥` and `/cost` are session estimates that include subagent usage (priced per each agent's model × peak/idle × cache components); unofficial or unlisted models show tokens only and are marked unpriced. **The platform bill is authoritative.**
 
 Full list: [Architecture and limitations → Known limitations](docs/architecture.en.md#known-limitations).
 

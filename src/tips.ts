@@ -357,8 +357,8 @@ export const TIPS: readonly Tip[] = [
   {
     id: 'cmd-preset',
     group: 'commands',
-    zh: '/preset 切换 agent 预设（standard/ptc 等）',
-    en: '/preset switches presets: standard/ptc/minimal/cordis/liangshen',
+    zh: '/preset 切换内核 Agent 预设（standard/ptc 等）',
+    en: '/preset switches the kernel agent preset: standard/ptc/minimal/cordis/liangshen',
   },
   {
     id: 'cmd-preset-liangshen',
@@ -549,6 +549,12 @@ export const TIPS: readonly Tip[] = [
     en: 'Typing on a question row submits option + custom text',
   },
   {
+    id: 'flow-question-arrows',
+    group: 'workflow',
+    zh: '多题问卷用 ←/→ 换题，不提交；输入行要先把光标移到行首或行尾',
+    en: 'In a multi-question ask, ←/→ switches questions without submitting; on the input row the caret must already be at the edge',
+  },
+  {
     id: 'flow-question-fold',
     group: 'workflow',
     zh: '问卷面板 Ctrl+K 或点标题行折叠；挂起时 Esc/Ctrl+C 先展开，不直接取消',
@@ -681,6 +687,12 @@ export const TIPS: readonly Tip[] = [
     group: 'display',
     zh: '/settings 里 diffLayout 切双栏/单栏 diff',
     en: 'In /settings, diffLayout switches split/unified diff',
+  },
+  {
+    id: 'disp-minimal-ui',
+    group: 'display',
+    zh: '/settings「极简界面」只精简装饰；内核「极简模式」预设减少模型可用工具',
+    en: 'Minimal UI (/settings) trims decorations only; the kernel Minimal preset cuts the model\'s tools',
   },
   {
     id: 'disp-settings-save',
@@ -855,8 +867,8 @@ export const TIPS: readonly Tip[] = [
   {
     id: 'pit-minimal',
     group: 'pitfalls',
-    zh: 'minimal preset 下 /compact 与问卷不可用',
-    en: '/compact and questions are unavailable under minimal preset',
+    zh: '内核「极简模式」预设下 /compact 与问卷不可用（与「极简界面」无关）',
+    en: 'Under the kernel Minimal preset /compact and questions are off (not the Minimal UI switch)',
   },
   {
     id: 'pit-mouse-mode',

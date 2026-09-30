@@ -17,6 +17,10 @@ import {
   createCellRun,
   extractHyperlinkFromStyles,
   filterOutHyperlinkStyles,
+  allocateCopyRegionId,
+  clearCopyRegionSpan,
+  markCopyRegion,
+  pruneCopyTexts,
   markNoSelectRegion,
   OSC8_PREFIX,
   shadeRegion,
@@ -208,6 +212,8 @@ export type Operation =
   | ClearOperation
   | ShadeOperation
   | NoSelectOperation
+  | CopyRegionOperation
+  | SoftWrapRowOperation
   | ShiftOperation
 
 /**
@@ -233,7 +239,8 @@ type WriteOperation = {
    * means line i is a continuation of line i-1 (the `\n` before it was
    * inserted by word-wrap, not in the source). Index 0 is always false.
    * Undefined means the producer didn't track wrapping (e.g. fills,
-   * raw-ansi) — the screen's per-row bitmap is left untouched.
+   * raw-ansi): the rows it paints are marked "not a continuation", since it
+   * replaced whatever was there — see the write case in `get()`.
    */
   softWrap?: boolean[]
 }
@@ -330,6 +337,40 @@ type ClearOperation = {
 type NoSelectOperation = {
   type: 'noSelect'
   region: Rectangle
+}
+
+/** Row `y` continues the row above, whose content ends at `contentEnd`. */
+type SoftWrapRowOperation = {
+  type: 'softWrapRow'
+  y: number
+  contentEnd: number
+}
+
+/** A region that copies as `text` (see Screen.copyRegion); paints nothing. */
+type CopyRegionOperation = {
+  type: 'copyRegion'
+  region: Rectangle
+  text: string
+  id: number
+}
+
+/**
+ * One copy region id per image node for its lifetime, so rows captured
+ * during drag-to-scroll and rows still on screen name the same formula.
+ */
+const copyRegionIds = new WeakMap<DOMElement, number>()
+
+/**
+ * Copy text reaches the clipboard without passing through cells, so it never
+ * met the render path's control-character rules. Drop C0/C1 (newlines
+ * excepted: a block formula's source is multi-line) and the
+ * interlinear-annotation code points, which the copy pipeline reserves for
+ * its own row metadata.
+ */
+const COPY_TEXT_STRIP = /[\u0000-\u0009\u000b-\u001f\u007f-\u009f\uFFF9-\uFFFB]/g
+
+function cleanCopyText(value: string): string {
+  return value.replace(COPY_TEXT_STRIP, '')
 }
 
 /**
@@ -741,6 +782,11 @@ export default class Output {
    * the mark wins regardless of what's blitted into the region.
    * @param region - the region to mark.
    */
+  /** Mark row `y` as a wrap continuation (see Styles.softWrapContinuation). */
+  softWrapRow(y: number, contentEnd: number): void {
+    this.operations.push({ type: 'softWrapRow', y, contentEnd })
+  }
+
   noSelect(region: Rectangle): void {
     this.operations.push({ type: 'noSelect', region })
   }
@@ -773,7 +819,11 @@ export default class Output {
       return false
     }
     const presentation = node.attributes.imagePresentation
-    const canCrop = this.imageReady !== undefined && (presentation === 'preview' || presentation === 'transcript')
+    const transparent = node.attributes.imageTransparent === 'transparent'
+    // Both protocols crop a partially visible content image to its visible
+    // cells (Sixel re-encodes the slice, Kitty places a source rectangle), so
+    // scrolling past a viewport edge never flips it to its text fallback.
+    const canCrop = this.terminalImagesEnabled && (presentation === 'preview' || presentation === 'transcript')
     if (!canCrop && (
       left < 0 ||
       top < 0 ||
@@ -812,6 +862,7 @@ export default class Output {
       rows: height,
       source,
       ...(presentation === 'preview' || presentation === 'transcript' ? { presentation } : {}),
+      ...(transparent ? { transparent: true } : {}),
       ...(canCrop ? { clip: { x: visibleLeft, y: visibleTop, columns: visibleRight - visibleLeft, rows: visibleBottom - visibleTop } } : {}),
       ...(background !== undefined ? { background } : {}),
     }
@@ -830,8 +881,9 @@ export default class Output {
    */
   reuseImages(node: DOMElement): boolean {
     // A scrollable image's current clip is only known inside its ScrollBox.
-    // Descend first rather than admitting stale placements from an ancestor blit.
-    if (this.imageReady && this.previousImages.some(p => isNodeInSubtree(p.node, node))) return false
+    // Descend first rather than admitting stale placements from an ancestor
+    // blit: a crop computed without that clip would spill past the viewport.
+    if (this.terminalImagesEnabled && this.previousImages.some(p => isNodeInSubtree(p.node, node))) return false
     let reusedAll = true
     for (const placement of this.previousImages) {
       if (!isNodeInSubtree(placement.node, node)) continue
@@ -918,9 +970,28 @@ export default class Output {
     const placement = this.imagePlacements.find(image => image.node === node)
     if (placement) {
       const visible = placement.clip ?? placement
-      this.noSelect({ x: visible.x, y: visible.y, width: visible.columns, height: visible.rows })
+      const region = { x: visible.x, y: visible.y, width: visible.columns, height: visible.rows }
+      // An image's backing cells are blank; one with copy text (a formula's
+      // source) copies as that text, any other image is left out of copies.
+      const copyText = node.attributes['imageCopyText']
+      const copied = typeof copyText === 'string' ? cleanCopyText(copyText) : ''
+      if (copied !== '') {
+        let id = copyRegionIds.get(node)
+        if (id === undefined) copyRegionIds.set(node, id = allocateCopyRegionId())
+        this.operations.push({ type: 'copyRegion', region, text: copied, id })
+      }
+      else this.noSelect(region)
     }
     if (this.imageReady) this.imageBackingEnds.set(node, this.operations.length)
+  }
+
+  /**
+   * The admitted placement's backing colour, or undefined when the raster
+   * composites transparently: its cells are then blanks, not a painted
+   * surface, so whatever the terminal shows behind the UI stays visible.
+   */
+  imagePlacementBackground(node: DOMElement): string | undefined {
+    return this.imagePlacements.find(image => image.node === node)?.background
   }
 
   /**
@@ -1108,6 +1179,26 @@ export default class Output {
           continue
         }
 
+        case 'softWrapRow': {
+          // Paint order: the marker lands where the producer asked for it, and
+          // the write case above resets it when a later operation repaints that
+          // row. (This used to run in a pass after every write, which let a
+          // marker outlive an overlay that overwrote the row.)
+          if (operation.y > 0 && operation.y < screen.height) {
+            screen.softWrap[operation.y] = Math.max(1, operation.contentEnd)
+          }
+          continue
+        }
+
+        case 'copyRegion': {
+          // In paint order: anything written over the image later (a menu,
+          // an overlay) clears the cells it covers, so a copy reads what is
+          // visible there rather than the formula beneath.
+          const { x, y, width, height } = operation.region
+          markCopyRegion(screen, x, y, width, height, operation.text, operation.id)
+          continue
+        }
+
         case 'shade': {
           // Honour the active clip like a write: a backdrop inside an
           // overflow-hidden ancestor must not shade cells outside it.
@@ -1186,6 +1277,9 @@ export default class Output {
               this.packedOwner,
             )
             writeCells += contentEnd - x
+            if (screen.copyTexts !== undefined && screen.copyTexts.size > 0) {
+              clearCopyRegionSpan(screen, lineY, x, contentEnd)
+            }
             // See Screen.softWrap docstring for the encoding. contentEnd
             // from writeLineToScreen is tab-expansion-aware, unlike
             // x+stringWidth(line) which treats tabs as width 0.
@@ -1193,6 +1287,13 @@ export default class Output {
               const isSW = softWrap[swFrom + offsetY] === true
               swBits[lineY] = isSW ? prevContentEnd : 0
               prevContentEnd = contentEnd
+            } else {
+              // Paint order: a producer that doesn't track wrapping (fills,
+              // raw-ansi, overlays) still replaces the row it paints, so a
+              // continuation marker an earlier softWrapRow set for this row
+              // is stale — keep it and a copy would glue the overlay's text
+              // onto the previous line.
+              swBits[lineY] = 0
             }
             offsetY++
           }
@@ -1212,6 +1313,10 @@ export default class Output {
         markNoSelectRegion(screen, x, y, width, height)
       }
     }
+
+    // Blits carry the previous frame's region texts; keep only the ones a
+    // cell still references, or the map grows by every redrawn formula.
+    pruneCopyTexts(screen)
 
     // Log blit/write ratio for debugging - high write count suggests blitting isn't working
     const totalCells = blitCells + writeCells

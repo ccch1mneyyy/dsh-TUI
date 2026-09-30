@@ -7,7 +7,8 @@ import { appendSessionTitle, deleteSessionLog, userTitleData } from '../compat/i
 import { snapshotLiveSessionEvents } from '../compat/liveSession.js'
 import { collectRecentActivity, parseRecapResponse, RECAP_RECENT_CHARS, wrapRecapPrompt } from '../recap.js'
 import { listSummaries, locateSession, previewSession, type SessionSource, type SessionSummary } from '../sessions/index.js'
-import { runSideQuestion, wrapSideQuestion } from '../sideQuestion.js'
+import { openStepToolCallIds, runSideQuestion, splitUnresolvedToolCalls, wrapSideQuestion } from '../sideQuestion.js'
+import { readListingSnapshot } from '../sessions/snapshot.js'
 import type { ChannelOwner } from './owner.js'
 import type { CredentialStatus, SideQuestionLlm } from './types.js'
 import { isUserInvocable } from '@deepseek-ai/dsh-skill'
@@ -50,15 +51,40 @@ export function createSessionMetadataActions(ctx: Context, deps: {
   const withOwnerSignal = (signal?: AbortSignal): AbortSignal =>
     signal === undefined ? deps.owner.signal : AbortSignal.any([signal, deps.owner.signal])
 
-  const listSessions = async (): Promise<readonly SessionSummary[]> => {
+  let listingGeneration = 0
+  let lastListing: { source: SessionSource | symbol; rows: readonly SessionSummary[] } | undefined
+  const remember = (source: SessionSource, rows: readonly SessionSummary[]): void => {
+    lastListing = { source: source.identity ?? source, rows }
+  }
+  const cachedSessions = (): readonly SessionSummary[] | undefined => {
+    const source = persistence()
+    if (source === undefined) return undefined
+    // Providers without a durable scope still keep same-instance reopen fast.
+    // A replaced service never inherits this in-memory view.
+    return lastListing?.source === (source.identity ?? source)
+      ? lastListing.rows
+      : readListingSnapshot(source)
+  }
+  const listSessions = async (onEnriched?: (summary: SessionSummary) => void, onPartial?: (rows: readonly SessionSummary[]) => void): Promise<readonly SessionSummary[]> => {
+    const generation = ++listingGeneration
     const capture = deps.binding.capture()
     const source = persistence()
     if (!source) {
       if (current(capture)) deps.setPersistedSessions([])
       return []
     }
-    const summaries = await listSummaries(source)
-    if (!current(capture)) return []
+    let summaries: readonly SessionSummary[] = []
+    summaries = await listSummaries(source, deps.owner.signal, enriched => {
+      if (!current(capture) || generation !== listingGeneration) return
+      summaries = summaries.map(row => row.id === enriched.id ? enriched : row)
+      remember(source, summaries)
+      deps.setPersistedSessions(summaries)
+      onEnriched?.(enriched)
+    }, rows => {
+      if (current(capture) && generation === listingGeneration) onPartial?.(rows)
+    })
+    if (!current(capture) || generation !== listingGeneration) return []
+    remember(source, summaries)
     deps.setPersistedSessions(summaries)
     return summaries
   }
@@ -151,11 +177,14 @@ export function createSessionMetadataActions(ctx: Context, deps: {
     const llm = ctx.get('llm') as SideQuestionLlm | undefined
     if (!llm) return { answer: null, error: t('btw-llm-unavailable') }
     const signal = withOwnerSignal(options?.signal)
+    // /btw can land mid-step; see splitUnresolvedToolCalls.
+    const running = openStepToolCallIds(snapshotLiveSessionEvents(capture.agent.session))
+    const history = splitUnresolvedToolCalls(capture.agent.session.deriveMessages(), running)
     const outcome = await runSideQuestion({
       stream: llm.stream.bind(llm),
       options: llmRequest(capture, [
-        ...capture.agent.session.deriveMessages(),
-        createUserMessage({ content: [{ type: 'text', text: wrapSideQuestion(question) }], source: { kind: 'dsh-tui-btw' } }),
+        ...history.messages,
+        createUserMessage({ content: [{ type: 'text', text: wrapSideQuestion(question, history.pending) }], source: { kind: 'dsh-tui-btw' } }),
       ], true, signal),
       // Do not let an old session append streamed UI facts after a switch.
       onText: delta => { if (current(capture) && !options?.signal?.aborted) options?.onText?.(delta) },
@@ -223,7 +252,7 @@ export function createSessionMetadataActions(ctx: Context, deps: {
   }
 
   return {
-    listSessions, previewSession: preview, listSkills, describeCredential,
+    cachedSessions, listSessions, previewSession: preview, listSkills, describeCredential,
     sideQuestion, recapRecent, setResumeTarget: writeResumeTarget,
     renameSession, setSessionColor, deleteSession, renameSessionTo,
   }

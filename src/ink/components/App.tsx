@@ -14,6 +14,7 @@ import { DragEvent } from "../events/drag-event.js";
 import type { DOMElement } from "../dom.js";
 import {
 	INITIAL_STATE,
+	type KeyParseState,
 	type ParsedInput,
 	type ParsedKey,
 	type ParsedMouse,
@@ -76,6 +77,7 @@ const SUPPORTS_SUSPEND = process.platform !== "win32";
 // but no signal reaches us. 5s is well above normal inter-keystroke gaps
 // but short enough that the first scroll after reattach works.
 const STDIN_RESUME_GAP_MS = 5000;
+
 type Props = {
 	readonly children: ReactNode;
 	readonly stdin: NodeJS.ReadStream;
@@ -217,7 +219,11 @@ export default class App extends PureComponent<Props, State> {
 	// raw mode until all components don't need it anymore
 	rawModeEnabledCount = 0;
 	internal_eventEmitter = new EventEmitter();
-	keyParseState = INITIAL_STATE;
+	keyParseState: KeyParseState = {
+		...INITIAL_STATE,
+		// Capability gate only — the parser lights up once it decodes a record.
+		win32Capable: supportsWin32InputMode(),
+	};
 	// Timer for flushing incomplete escape sequences
 	incompleteEscapeTimer: NodeJS.Timeout | null = null;
 	// Deferred XTVERSION probe (setImmediate). Cleared on unmount so the
@@ -601,8 +607,20 @@ export default class App extends PureComponent<Props, State> {
 
 	// Process input through the parser and handle the results
 	processInput = (input: string | Buffer | null): void => {
+		// Host-injected query evidence (#1142 pattern): the parser only claims
+		// a terminal-response tail when a query of the matching expected type
+		// is genuinely awaiting an answer. This is the live query lifecycle,
+		// not a recency window — a settled query stops authorizing at once.
+		// Injected per call — newState replaces the whole state object, so a
+		// value stored once would go stale. Read-only for the parser.
+		const terminalExpectedResponseTypes = [
+			...this.querier.pendingResponseTypes,
+		];
 		// Parse input using our state machine
-		const [keys, newState] = parseMultipleKeypresses(this.keyParseState, input);
+		const [keys, newState] = parseMultipleKeypresses(
+			{ ...this.keyParseState, terminalExpectedResponseTypes },
+			input,
+		);
 		// Gesture latch: a parser-captured SGR mouse prefix (mouseTailHold
 		// transitioned to a value, or the tokenizer's `incomplete` buffer
 		// starts with an SGR prefix) is byte-level evidence of a mouse event

@@ -139,10 +139,12 @@ export async function resolvePersistedRoute(ctx: Context, sessionId: SessionId):
 }
 
 /**
- * Keep the official Minimal preset's model-facing contract at exactly two
- * tools. The TUI mounts ask_user_question at the host layer so every other
- * preset (including user presets) can use its questionnaire UI; host-layer
- * tools otherwise merge into Minimal's scoped catalog as a third tool.
+ * Keep the official Minimal preset's model-facing catalog minimal. The preset
+ * itself declares exactly one persistent shell tool (bash on POSIX, pwsh on
+ * Windows), while the TUI mounts ask_user_question at the host layer so every
+ * other preset (including user presets) can use its questionnaire UI —
+ * that host-layer tool otherwise merges into Minimal's scoped catalog as an
+ * extra tool.
  *
  * This is a per-assembly filter rather than a startup-time decision because
  * one TUI process can resume, create, or recompose sessions under different

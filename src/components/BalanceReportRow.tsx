@@ -3,8 +3,9 @@ import { Box, Text } from '../ui.js'
 import { Divider } from './design-system/Divider.js'
 import { t } from '../i18n.js'
 import type { BalanceResult } from '../deepseekBalance.js'
-import { estimateSessionCostSplitCny, isPeakHour, priceForModel } from '../deepseekPricing.js'
+import { estimateSessionCostSnapshotCny, isPeakHour, priceForModel } from '../deepseekPricing.js'
 import type { TokenUsage } from '../dsh-adapter/channel.js'
+import type { ChannelUi } from '../adapter/channel/ui-policy.js'
 import { formatTokens } from '../terminal-utils/format.js'
 
 /**
@@ -18,6 +19,9 @@ export function BalanceReportRow({
   refreshing,
   tokens,
   model,
+  provider,
+  mainCost,
+  subagentCost,
   onRefresh,
   onDismiss,
 }: {
@@ -25,10 +29,17 @@ export function BalanceReportRow({
   result: BalanceResult | null
   /** 查询在途（刷新时摘要不动，明细区显示加载行）。 */
   refreshing: boolean
-  /** 会话累计 token（hover 明细里的花费估算输入）。 */
+  /** 会话累计 token（hover 明细里的花费估算输入；没有 mainCost 的旧快照
+   *  回退到这份总量 + 当前模型）。 */
   tokens: TokenUsage
   /** 当前模型 id（花费估算的单价匹配）。 */
   model: string
+  /** 当前 provider（主会话用量的官方判定）。 */
+  provider: string
+  /** 主会话按模型分桶（费用估算输入；旧快照缺省时回退 tokens）。 */
+  mainCost?: ChannelUi['mainCost']
+  /** 子代理按 (provider, model) 分桶（费用估算输入）。 */
+  subagentCost?: ChannelUi['subagentCost']
   /** 点击报告行：重新查询余额。 */
   onRefresh: () => void
   /** 点击 ×：关闭报告。 */
@@ -51,7 +62,13 @@ export function BalanceReportRow({
     })
   })()
 
-  const estimate = estimateSessionCostSplitCny(tokens, model)
+  const estimate = estimateSessionCostSnapshotCny({
+    provider,
+    main: mainCost,
+    subagents: subagentCost,
+    fallbackTokens: tokens,
+    fallbackModel: model,
+  })
 
   const detailLines = (() => {
     if (result === null) return []
@@ -86,7 +103,7 @@ export function BalanceReportRow({
         output: price.output[rateIndex].toFixed(1),
       }))
     }
-    if (estimate !== undefined) {
+    if (estimate !== undefined && estimate.total > 0) {
       lines.push(t('balance-hover-tokens', {
         input: formatTokens(tokens.input),
         output: formatTokens(tokens.output),
@@ -96,6 +113,14 @@ export function BalanceReportRow({
         peakName: t('cost-peak-name'),
         idleName: t('cost-idle-name'),
       }))
+    }
+    // 拆解口径（DESIGN D6）：主会话 / 子代理各按自身模型分组计价；无法计价
+    // 的用量只报 token，让"估算偏低"变成可见事实而不是静默少算。
+    if (estimate !== undefined) {
+      lines.push(`${t('cost-split-main', { cost: estimate.main.toFixed(2) })} · ${t('cost-split-subagent', { cost: estimate.subagent.toFixed(2) })}`)
+      if (estimate.unpricedTokens > 0) {
+        lines.push(t('cost-unpriced', { tokens: formatTokens(estimate.unpricedTokens) }))
+      }
     }
     return lines
   })()

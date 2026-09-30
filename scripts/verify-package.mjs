@@ -1,4 +1,8 @@
+import { spawnSync } from 'node:child_process'
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 import { readFile } from 'node:fs/promises'
+import { GUIDE_DIR, guideFiles } from './guide-sources.mjs'
 
 const input = await new Promise((resolve, reject) => {
   let value = ''
@@ -49,6 +53,12 @@ for (const presetFile of [
 ]) {
   if (!packed.has(presetFile)) throw new Error(`packaged preset file missing from tarball: ${presetFile}`)
 }
+// 随包用户手册必须真的进 tarball：它是 npm 用户机器上唯一的一份手册，
+// 少了 guide/ 就等于"AI 无从查起"。（`skills/` 仍按 #613 的结论不打包。）
+for (const guideFile of ['SKILL.md', ...guideFiles()]) {
+  const entry = `${GUIDE_DIR}/${guideFile}`
+  if (!packed.has(entry)) throw new Error(`packaged user guide missing from tarball: ${entry}`)
+}
 for (const path of packed) {
   const lower = path.toLowerCase()
   if (lower.includes('plugin-spec/')
@@ -81,6 +91,16 @@ for (const section of ['dependencies', 'optionalDependencies', 'devDependencies'
     }
   }
 }
+
+// The website's settings reference reads this file from the exact published
+// version; it must describe the version it ships in.
+const settingsJson = JSON.parse(readFileSync(new URL('../lib/settings.json', import.meta.url), 'utf8'))
+if (settingsJson.schemaVersion !== 1 || settingsJson.packageVersion !== manifest.version) {
+  throw new Error(`lib/settings.json is stale (schemaVersion ${settingsJson.schemaVersion}, packageVersion ${settingsJson.packageVersion}, manifest ${manifest.version}); rerun pnpm compile`)
+}
+// …and exactly what the compiled definitions produce (same version, edited text).
+const settingsCheck = spawnSync(process.execPath, [fileURLToPath(new URL('./gen-settings-json.mjs', import.meta.url)), '--check'], { encoding: 'utf8' })
+if (settingsCheck.status !== 0) throw new Error(settingsCheck.stderr.trim() || 'lib/settings.json check failed')
 
 await import(new URL(`../${manifest.main}`, import.meta.url))
 const invariant = await import(new URL('../lib/types/dsh-adapter/invariant.js', import.meta.url))

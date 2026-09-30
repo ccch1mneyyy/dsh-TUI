@@ -39,7 +39,7 @@ import { readHomePrefs } from '../homePrefs.js'
 import { resolveSessionCwd } from '../utils/workspaceRoot.js'
 import { beginRestartAttempt, checkForTuiUpdate, installedTuiVersion, isBootDeadlockTarget, isStandaloneRuntime, isVersionNewer, logRestartEvent, resolveDshProfileName, resolveTuiUpdateTarget, restartTui, updateTuiAndRestart, writeHandoffNotice } from '../update.js'
 import { getLang, isLang, resolveStartupLang, setLang, t, writeLangPref } from '../i18n.js'
-import { DEFAULT_PAGE_MARGIN, DEFAULT_STATUS_BAR, applyMermaidDiagrams, applyPageMargin, isPageMarginMode, normalizePageMargin, normalizeScrollGutter, normalizeStatusBar, normalizeToolBackground, parsePageMarginSpec, type PageMarginSetting, type ScrollGutterMode, type StatusBarConfig, type ToolBackground } from '../tuiDisplayPrefs.js'
+import { DEFAULT_PAGE_MARGIN, DEFAULT_STATUS_BAR, applyImageBacking, applyMathImageBacking, applyMathImageScale, applyMathRendering, applyMermaidDiagrams, type ImageBacking, type MathImageBacking, type MathImageScale, type MathRendering, applyPageMargin, isPageMarginMode, normalizePageMargin, normalizeScrollGutter, normalizeStatusBar, normalizeToolBackground, parsePageMarginSpec, resolveMathRendering, type PageMarginSetting, type ScrollGutterMode, type StatusBarConfig, type ToolBackground } from '../tuiDisplayPrefs.js'
 import {
   draftComboConflicts,
   effectiveComboString,
@@ -56,19 +56,24 @@ import { startSessionMountHeartbeat } from './session-mount-heartbeat.js'
 import { reserveMount } from '../sessionMounts.js'
 import { getHostDialogStore, type TuiDialogRuntime } from './dialogs.js'
 import { getHostStatusStore, type TuiStatusRuntime } from './status.js'
+import { createActivityStore } from './activity-store.js'
 import { getHostToastStore, type TuiToastRuntime } from './toast.js'
 import { getHostShortcuts, type TuiShortcutRuntime } from './shortcuts.js'
 import { getHostThemes, type TuiThemeRuntime } from './themes.js'
+import type { DshAuthService } from './oauth/service.js'
 import { attachSessionToWorkspace } from './workspace.js'
 import { createLocalWorkspaceRuntime, getHostWorkspaceRuntime } from './workspaces.js'
 import { getHostSettingsSections, getLocalSettingsSectionsHost, type TuiSettingsField, type TuiSettingsSectionsRuntime } from './settings-sections.js'
 import { compositionRoot, withHostRootCapability } from './host-access.js'
 import { render, ThemeProvider, AlternateScreen } from '../ui.js'
 import { PageMargin } from '../components/PageMargin.js'
+import { normalizeSplashFont } from '../components/splashFonts.js'
+import { SETTING_GROUPS, SHORTCUT_FIELD_META, settingField } from '../settings/definitions.js'
 import instances from '../ink/instances.js'
 import { cursorMove, DISABLE_KITTY_KEYBOARD, DISABLE_MODIFY_OTHER_KEYS, DISABLE_WIN32_INPUT_MODE } from '../ink/termio/csi.js'
 import { DBP, DFE, DISABLE_MOUSE_TRACKING, EXIT_ALT_SCREEN, SHOW_CURSOR } from '../ink/termio/dec.js'
 import { CLEAR_ITERM2_PROGRESS, CLEAR_TAB_STATUS, supportsTabStatus, wrapForMultiplexer } from '../ink/termio/osc.js'
+import { fatalReasonForExit, registerProcessGuardFatalSink } from '../ink/update-overflow-guard.js'
 
 /**
  * Interactive TUI front door for DeepSeek Harness agents.
@@ -96,16 +101,26 @@ let lastBootedFullscreen: boolean | undefined
 let lastBootedTerminalImages: boolean | undefined
 
 /**
- * Extract the startup prompt from raw app argv. `--resume <session>` selects
- * a persisted session and must not leak its id into the conversation.
+ * Extract the startup prompt from raw app argv, excluding session selectors
+ * and Web startup flag values. `--trusted-host` consumes multiple authorities
+ * up to the next flag; none of them are prompt text (issue #882). An app-level
+ * `--` ends flag parsing; all following tokens are literal prompt text.
  */
 export function initialPromptFromCmdlineArgs(args: readonly string[] | undefined): string {
   if (args === undefined) return ''
   const promptArgs: string[] = []
   for (let i = 0; i < args.length; i += 1) {
     const arg = args[i]!
-    if (arg === '--resume') {
+    if (arg === '--') {
+      promptArgs.push(...args.slice(i + 1))
+      break
+    }
+    if (arg === '--resume' || arg === '--host' || arg === '--port') {
       if (args[i + 1] !== undefined && !args[i + 1]!.startsWith('-')) i += 1
+      continue
+    }
+    if (arg === '--trusted-host') {
+      while (args[i + 1] !== undefined && !args[i + 1]!.startsWith('-')) i += 1
       continue
     }
     if (arg.startsWith('--resume=')) continue
@@ -303,10 +318,10 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
   const userQuestions = ctx.get('userQuestions') ?? new UserQuestionService(ctx)
   ctx.plugin(toolAskUser)
   // The host-level tool mount above is intentional for the TUI and for user
-  // presets, but the official Minimal preset is a strict two-tool trajectory
-  // (persistent bash + str_replace_editor). Filter only that preset at the
-  // final assembly boundary. Reading the session on every assembly also makes
-  // blank-session /preset switches and resumed sessions behave correctly.
+  // presets, but the official Minimal preset is a single-tool trajectory (one
+  // persistent shell: bash on POSIX, pwsh on Windows). Filter only that preset
+  // at the final assembly boundary. Reading the session on every assembly also
+  // makes blank-session /preset switches and resumed sessions behave correctly.
   ctx.on('system-prompt/assemble', async (_assembly, context, next) => {
     const assembled = await next()
     const presetId = context.agent === undefined ? undefined : runningPresetOf(context.agent.session)
@@ -455,8 +470,11 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
   const meta = { cwd: sessionCwd }
   // Launch-time resume target: the env handoff (launchers like naive-dsh) wins;
   // `dsh --profile tui` forwards `--resume` verbatim instead, so fall back to
-  // parsing the forwarded app args (matching the standalone bin).
-  const launchSessionId = config.sessionId ?? resumeTargetFromArgv(process.argv.slice(2))
+  // the same app-argv snapshot as the initial prompt. Raw process.argv also
+  // contains the DSH launcher's own -- and is only a legacy embedder fallback.
+  const cmdline = (ctx as { cmdlineArgs?: { get?: () => readonly string[]; args?: readonly string[] } }).cmdlineArgs
+  const cmdlineArgs = cmdline?.get?.() ?? cmdline?.args
+  const launchSessionId = config.sessionId ?? resumeTargetFromArgv(cmdlineArgs ?? process.argv.slice(2))
   const { agent, handle, agentPreset, route: createdRoute } = await resolveAgent(
     ctx,
     launchSessionId,
@@ -477,7 +495,20 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
     // reads the same records. There is deliberately no rail-side "add a
     // workspace" control any more: a terminal's launch directory is the whole
     // registration story.
-    const attached = await attachSessionToWorkspace(ctx, meta.cwd, agent.session.id)
+    //
+    // A RESUMED session is accounted where its OWN header cwd lives, never
+    // where this terminal was launched. The launch directory can be an
+    // ANCESTOR of the resumed session's: launching in `~/projects` and
+    // resuming a session recorded in `~/projects/app` accounts the same
+    // session in both workspaces, and the next boot dies inside
+    // `validateStoredState` ("session ... is accounted by both workspace
+    // ..."), which leaves `workspaceRegistry` unactivated and the whole TUI
+    // pending forever. Ownership must therefore agree with the `cwd:` handed
+    // to `createChannel` below, which already prefers the persisted header.
+    // Fresh sessions record `meta.cwd` at creation, so the launch directory
+    // still registers through them.
+    const ownershipCwd = agent.session.header.cwd ?? meta.cwd
+    const attached = await attachSessionToWorkspace(ctx, ownershipCwd, agent.session.id)
     if (!attached) {
       ctx.logger.warn(
         `dsh-tui: session "${agent.session.id}" has no workspace ownership because workspaceRegistry is not mounted`,
@@ -496,8 +527,27 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
   // validated startup resolution, on resume the route the target session's
   // own records carry (a complete cordis.yml pin wins over them).
   const displayRoute = createdRoute ?? startupRoute
+  // Read side of the activity projection: filled by the working-activity
+  // plugin's unit, read by the status line. Created BEFORE the channel on
+  // purpose — `createChannel` binds its agent synchronously while it is still
+  // being constructed, and that bind seeds this store (see `seedActivity`
+  // below), so a store declared after the channel is still in its temporal
+  // dead zone when the first seed arrives and takes the whole boot down with
+  // it. One store per process; a composition without the projection service
+  // simply leaves it empty. `activity: false` is a static config-time switch
+  // (the runtime `/activity` command only changes the preset), so a hidden
+  // line attaches nothing at all — no feed, no 500ms tick.
+  const activityStore = createActivityStore(ctx, config.activity !== false)
   const rawChannel = createChannel(ctx, agent, {
+    // The namespace this boot actually registered the settings section under
+    // (the Config owner's Loader id; custom ids are supported). Chat and the
+    // channel's own settings reads look the section up by it.
+    settingsNs: tuiSettingsNs,
     model: displayRoute.model,
+    // The activity projection only pushes on change; read the current value as
+    // soon as this session binds so a resumed or reattached session renders its
+    // line immediately instead of waiting for the next event.
+    seedActivity: session => activityStore.seed(session),
     // A RESUMED session keeps its persisted header cwd (issue #96 review):
     // pre-upgrade sessions recorded the launch directory, and re-resolving
     // from the current launch directory would split @ expansion / file
@@ -540,6 +590,12 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
     expandEditor: config.expandEditor,
     smoothStreaming: config.smoothStreaming,
     statusBar: config.statusBar,
+    // 启动种子：与上面各显示偏好同款（设置服务的 boot apply 会再对一次
+    // 值，setWhaleGirl 对同值是 no-op，不会多通知）。
+    whaleGirl: config.whaleGirl,
+    // 开屏大字字体：cordis.yml 这一层的值（未设置时 undefined → 通道归一化成
+    // `daily`）；/settings 的改动由 applySplashFont 实时接上。
+    splashFont: config.splashFont,
     handle,
   })
   // Register the live Channel for the adapter Kernel. The Channel driver
@@ -570,10 +626,14 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
   // the channel version bump (which re-renders everything below Chat)
   // cannot drive it. Seed the store from config before the tree mounts;
   // applyDisplay below mirrors every settings change into it live. The
-  // mermaid switch rides the same kind of store (Markdown is memoized by
-  // content, so no prop reaches the diagram component).
+  // mermaid and LaTeX switches ride the same kind of store (Markdown is
+  // memoized by content, so no prop reaches the diagram/formula nodes).
   applyPageMargin(config.pageMargin)
   applyMermaidDiagrams(config.mermaidDiagrams)
+  applyMathRendering(resolveMathRendering({}, config))
+  applyMathImageScale(config.mathImageScale ?? 'auto')
+  applyMathImageBacking(config.mathImageBacking ?? 'transparent')
+  applyImageBacking(config.imageBacking ?? 'transparent')
   // Plugin toasts ride the channel's own notification surface: the runtime
   // already sanitized/rate-limited the delivery, the sink only forwards.
   // Without the extensions row (tuiToast absent) plugin toasts are dropped
@@ -645,6 +705,16 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
         smoothStreaming: Schema.boolean(),
         // Same no-default rule: applyDisplay resolves `?? config.mermaidDiagrams ?? true`.
         mermaidDiagrams: Schema.boolean(),
+        // Same no-default rule: resolveMathRendering falls back to cordis.yml.
+        mathRendering: Schema.union(['auto', 'image', 'unicode', 'source']),
+        // Display-formula image size; unset keeps the base (text) scale.
+        mathImageScale: Schema.union(['auto', 'large', 'xlarge']),
+        // Formula-image backing; unset keeps the transparent default.
+        mathImageBacking: Schema.union(['transparent', 'terminal']),
+        // Transcript-image backing (photos); unset keeps the transparent default.
+        imageBacking: Schema.union(['transparent', 'terminal']),
+        // Pre-`mathRendering` user layers; `false` still resolves to `source`.
+        latexMath: Schema.boolean(),
         // No default on purpose: unset keeps the boot chain decisive
         // (applyEffortDefault hands `undefined` to channel.setDefaultEffort,
         // which resolves cordis.yml `effort` → effort.json → adapter default).
@@ -674,8 +744,19 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
         // the idle-wakeup gate stays: an explicit `false` keeps the settled
         // header timer-free.
         whaleIdle: Schema.boolean().default(true),
-        // Minimal mode: strips the header splash, emoji glyphs, and
-        // decorative colors; code highlight and tool colors stay.
+        // Maid portrait instead of the pixel whale in the header splash;
+        // off by default — the portrait is static (no idle animation).
+        whaleGirl: Schema.boolean().default(false),
+        // No schema default (same rule as foldTerminalCommand below): a
+        // default here would come back from scope.get()/watch() and shadow an
+        // explicit cordis.yml `splashFont` while the user layer is unset.
+        // applySplashFont resolves `?? config.splashFont` and normalizes it
+        // (undefined → daily), so cordis.yml stays decisive and junk lands on
+        // daily.
+        splashFont: Schema.string(),
+        // Minimal UI (极简界面, settings key `minimal` — never renamed): strips
+        // the header splash, emoji glyphs, and decorative colors; code highlight
+        // and tool colors stay. Unrelated to the kernel agent preset `minimal`.
         minimal: Schema.boolean().default(false),
         // No default on purpose: an unset `lang` keeps the field showing
         // the effective language (see the section's format below) and lets
@@ -703,6 +784,10 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
       lang?: 'zh' | 'en'
       whale?: boolean
       whaleIdle?: boolean
+      whaleGirl?: boolean
+      /** Raw user-layer value: junk is normalized at the apply site (the
+       *  settings schema is a plain string, see applySplashFont). */
+      splashFont?: string
       minimal?: boolean
       fullscreen?: boolean
       terminalImages?: boolean
@@ -716,6 +801,11 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
       expandEditor?: boolean
       smoothStreaming?: boolean
       mermaidDiagrams?: boolean
+      mathRendering?: MathRendering
+      mathImageScale?: MathImageScale
+      mathImageBacking?: MathImageBacking
+      imageBacking?: ImageBacking
+      latexMath?: boolean
       statusBar?: Partial<StatusBarConfig>
       shortcuts?: Partial<Record<ShortcutActionId, string>>
     }
@@ -730,9 +820,21 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
     const applyWhaleIdle = (value: { whaleIdle?: boolean }): void => {
       channel.setWhaleIdle(value.whaleIdle ?? true)
     }
-    const applyMinimal = (value: { minimal?: boolean }): void => {
+    /** Apply the maid-portrait setting: live-swap the header art. */
+    const applyWhaleGirl = (value: { whaleGirl?: boolean }): void => {
+      channel.setWhaleGirl(value.whaleGirl ?? false)
+    }
+    /** 开屏大字字体（`dsh-tui.splashFont`）：`daily` 按本地日期轮换，其余 pin
+     *  住一款；设置用户层优先于 cordis.yml，非法值回落 `daily`。 */
+    const applySplashFont = (value: Pick<SettingsValue, 'splashFont'>): void => {
       if (shadow) return
-      channel.setMinimal(value.minimal ?? false)
+      channel.setSplashFont(normalizeSplashFont(value.splashFont ?? config.splashFont))
+    }
+    const applyMinimalUi = (value: { minimal?: boolean }): void => {
+      if (shadow) return
+      // `value.minimal` is the persisted settings key (never renamed); the
+      // channel member is the minimal-UI flag, NOT the kernel preset.
+      channel.setMinimalUi(value.minimal ?? false)
     }
     // Renderer settings are resolved before mount; later edits wait for restart.
     const applyRendererSettings = (value: SettingsValue): void => {
@@ -771,6 +873,10 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
       channel.setExpandEditor(value.expandEditor ?? config.expandEditor ?? true)
       channel.setSmoothStreaming(value.smoothStreaming ?? config.smoothStreaming ?? true)
       applyMermaidDiagrams(value.mermaidDiagrams ?? config.mermaidDiagrams)
+      applyMathRendering(resolveMathRendering(value, config))
+      applyMathImageScale(value.mathImageScale ?? config.mathImageScale ?? 'auto')
+      applyMathImageBacking(value.mathImageBacking ?? config.mathImageBacking ?? 'transparent')
+      applyImageBacking(value.imageBacking ?? config.imageBacking ?? 'transparent')
       channel.setStatusBar(normalizeStatusBar(value.statusBar ?? config.statusBar))
     }
     // Legacy user scopes layer over cordis.yml. Modern Config is already
@@ -807,7 +913,9 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
       applyLayout(next)
       applyWhale(next)
       applyWhaleIdle(next)
-      applyMinimal(next)
+      applyWhaleGirl(next)
+      applySplashFont(next)
+      applyMinimalUi(next)
       applyLang(next)
       applyDisplay(next)
       applyEffortDefault(next)
@@ -861,80 +969,7 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
   // one or more ctrl+/alt+ combos (comma-separated); blank restores the
   // default, and a combo another action or a fixed editor binding already
   // owns is refused as invalid so remaps can never silently shadow.
-  const shortcutFieldMeta: Record<ShortcutActionId, { label: string; zh: string; hintEn: (defaults: string) => string; hintZh: (defaults: string) => string }> = {
-    paste: {
-      label: 'Paste shortcut',
-      zh: '粘贴快捷键',
-      hintEn: d => `Clipboard paste (text, file paths, images). Default: ${d}. Alt+V works where the terminal eats Ctrl+V.`,
-      hintZh: d => `剪贴板粘贴（文本、文件路径、图片）。默认 ${d}。终端吞掉 Ctrl+V 时可用 Alt+V。`,
-    },
-    history: {
-      label: 'History search shortcut',
-      zh: '历史搜索快捷键',
-      hintEn: d => `Open the prompt-history search. Default: ${d}.`,
-      hintZh: d => `打开输入历史搜索。默认 ${d}。`,
-    },
-    editor: {
-      label: 'External editor shortcut',
-      zh: '外部编辑器快捷键',
-      hintEn: d => `Edit the draft in $VISUAL/$EDITOR. Default: ${d}.`,
-      hintZh: d => `在 $VISUAL/$EDITOR 外部编辑器中编辑草稿。默认 ${d}。`,
-    },
-    transcript: {
-      label: 'Transcript mode shortcut',
-      zh: '转录模式快捷键',
-      hintEn: d => `Toggle expanded transcript mode. Default: ${d}.`,
-      hintZh: d => `切换展开转录模式。默认 ${d}。`,
-    },
-    trajectory: {
-      label: 'Trajectory scene shortcut',
-      zh: '轨迹场景快捷键',
-      hintEn: d => `Open the trajectory scene. Default: ${d}.`,
-      hintZh: d => `打开轨迹场景。默认 ${d}。`,
-    },
-    dashboard: {
-      label: 'Subagent dashboard shortcut',
-      zh: '子代理面板快捷键',
-      hintEn: d => `Open the subagent dashboard. Default: ${d}.`,
-      hintZh: d => `打开子代理面板。默认 ${d}。`,
-    },
-    contextPanel: {
-      label: 'Loaded-context panel shortcut',
-      zh: '加载上下文面板快捷键',
-      hintEn: d => `Toggle the startup loaded-context panel. Default: ${d}.`,
-      hintZh: d => `切换启动时的已加载上下文面板。默认 ${d}。`,
-    },
-    showAll: {
-      label: 'Show-all shortcut',
-      zh: '显示全部消息快捷键',
-      hintEn: d => `Toggle show-all-messages. Default: ${d}.`,
-      hintZh: d => `切换显示全部消息。默认 ${d}。`,
-    },
-    redraw: {
-      label: 'Redraw shortcut',
-      zh: '终端重绘快捷键',
-      hintEn: d => `Clear and repaint the terminal. Default: ${d}.`,
-      hintZh: d => `清空并重绘终端。默认 ${d}。`,
-    },
-    todoFold: {
-      label: 'Todo fold shortcut',
-      zh: '待办折叠快捷键',
-      hintEn: d => `Fold/unfold the goal/todo panel. Default: ${d}.`,
-      hintZh: d => `折叠/展开目标与待办面板。默认 ${d}。`,
-    },
-    questionFold: {
-      label: 'Question panel fold shortcut',
-      zh: '提问面板折叠快捷键',
-      hintEn: d => `Fold/unfold the pending question panel. Default: ${d}.`,
-      hintZh: d => `折叠/展开等待回答的提问面板。默认 ${d}。`,
-    },
-    expandEditor: {
-      label: 'Fullscreen editor shortcut',
-      zh: '全屏草稿编辑快捷键',
-      hintEn: d => `Toggle the fullscreen draft editor (Enter inserts a newline, Ctrl+Enter sends). Default: ${d}.`,
-      hintZh: d => `切换全屏草稿编辑器（Enter 换行、Ctrl+Enter 发送）。默认 ${d}。`,
-    },
-  }
+  const shortcutFieldMeta = SHORTCUT_FIELD_META
   const shortcutFields: TuiSettingsField[] = SHORTCUT_ACTIONS.map(action => {
     const meta = shortcutFieldMeta[action.id]
     const defaults = action.defaults.join(', ')
@@ -971,23 +1006,10 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
     const unregister = settingsSections.register({
       ns: tuiSettingsNs,
       title: 'dsh-tui',
-      groups: [
-        { id: 'status-bar', title: 'Status bar', descriptions: { zh: '底栏设置' } },
-        { id: 'shortcuts', title: 'Shortcuts', descriptions: { zh: '快捷键' } },
-        { id: 'session', title: 'Session', descriptions: { zh: '会话' } },
-      ],
+      groups: [...SETTING_GROUPS],
       fields: [
         {
-          path: ['lang'],
-          label: 'Language',
-          descriptions: { zh: '界面语言' },
-          hint: 'UI language for the whole interface — applies immediately and is saved.',
-          hintDescriptions: { zh: '整个界面的显示语言——立即生效并保存。' },
-          kind: 'select',
-          options: [
-            { value: 'zh', label: '中文', descriptions: { zh: '中文' } },
-            { value: 'en', label: 'English', descriptions: { zh: '英文' } },
-          ],
+          ...settingField('lang'),
           format(value: unknown): string {
             // Unset in settings.yaml: show the effective UI language
             // (env / cordis.yml / lang.json resolution) instead of a
@@ -996,15 +1018,7 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
           },
         },
         {
-          path: ['fullscreen'],
-          label: 'Fullscreen mode',
-          descriptions: { zh: '全屏模式' },
-          // 故意不用 "alt-screen" 这类终端术语：读者要的是行为差异。鼠标
-          // 两种模式都可用（整屏页面自带鼠标跟踪），别让描述暗示关掉就
-          // 没有鼠标——最常见的误解。长度对齐既有最长 hint（单行假设）。
-          hint: 'On: app takes the whole screen (vim/less style), in-app mouse. Off: native scrollback; full-page screens keep the mouse. Restart to apply.',
-          hintDescriptions: { zh: '开启：接管整个终端（同 vim/less），应用内鼠标；关闭：终端原生滚动选择；整屏页两种模式都有鼠标。重启生效。' },
-          kind: 'boolean',
+          ...settingField('fullscreen'),
           format(value: unknown): string {
             // Unset in settings.yaml: show what THIS session booted with
             // (the cordis.yml resolution) instead of a misleading false.
@@ -1012,7 +1026,7 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
           },
         },
         {
-          path: ['terminalImages'],
+          ...settingField('terminalImages'),
           label: terminalImagesDisabledByEnv ? 'Image previews (forced off)' : 'Terminal image previews',
           descriptions: { zh: terminalImagesDisabledByEnv ? '图片预览（环境强制关闭）' : '终端图片预览' },
           hint: terminalImagesDisabledByEnv
@@ -1023,77 +1037,26 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
               ? '勾选框保存预览偏好；移除 DSH_TUI_DISABLE_TERMINAL_IMAGES 后重新启动才能显示图片。'
               : '在支持的终端中预览图片。修改后用 /restart 生效；不影响向模型发送图片。',
           },
-          kind: 'boolean',
           format(value: unknown): string {
             // The editor toggles this value; runtime overrides must not replace the preference.
             return String(value ?? config.terminalImages ?? true)
           },
         },
         {
-          path: ['diffLayout'],
-          label: 'Diff layout',
-          descriptions: { zh: 'diff 布局' },
-          hint: 'Edit/Write tool cards: auto picks by terminal width, or force one layout.',
-          hintDescriptions: { zh: 'Edit/Write 工具卡的 diff 呈现：auto 按终端宽度选择，或强制一种布局。' },
-          kind: 'select',
-          options: [
-            { value: 'auto', label: 'Auto (by width)', descriptions: { zh: '自动（按宽度）' } },
-            { value: 'split', label: 'Side-by-side', descriptions: { zh: '双栏对照' } },
-            { value: 'unified', label: 'Unified', descriptions: { zh: '统一式' } },
-          ],
+          ...settingField('diffLayout'),
         },
         {
-          path: ['thinkingFold'],
-          label: 'Thinking display',
-          descriptions: { zh: '思考块展示' },
-          hint: 'Preview shows 2-3 live lines; Full stays expanded until turn end. Click a streaming block to switch between preview and full.',
-          hintDescriptions: { zh: '预览模式显示 2-3 行动态思考；展开模式保持至轮末。点击流式思考块可在预览与全文间切换。' },
-          kind: 'select',
-          options: [
-            { value: 'preview', label: 'Preview (2-3 lines)', descriptions: { zh: '预览（2-3 行）' } },
-            { value: 'full', label: 'Full until turn end', descriptions: { zh: '展开至轮末' } },
-          ],
+          ...settingField('thinkingFold'),
         },
         {
-          path: ['toolBackground'],
-          label: 'Tool background',
-          descriptions: { zh: '工具卡背景' },
-          hint: 'Choose whether tool-call cards add no, subtle, or strong background emphasis.',
-          hintDescriptions: { zh: '选择工具调用卡片不添加、轻微或明显的背景强调。' },
-          kind: 'select',
-          options: [
-            { value: 'none', label: 'None', descriptions: { zh: '无' } },
-            { value: 'subtle', label: 'Subtle', descriptions: { zh: '轻微' } },
-            { value: 'strong', label: 'Strong', descriptions: { zh: '明显' } },
-          ],
+          ...settingField('toolBackground'),
         },
         {
-          path: ['scrollGutter'],
-          label: 'Transcript gutter',
-          descriptions: { zh: '转录边栏' },
-          hint: 'Right gutter of the fullscreen transcript: per-turn timeline ticks, a proportional scrollbar, or nothing.',
-          hintDescriptions: { zh: '全屏转录区右侧边栏：按轮次的时间线节点、比例滚动条，或留空。' },
-          kind: 'select',
-          options: [
-            { value: 'timeline', label: 'Turn timeline', descriptions: { zh: '轮次时间线' } },
-            { value: 'scrollbar', label: 'Scrollbar', descriptions: { zh: '滚动条' } },
-            { value: 'hidden', label: 'Hidden', descriptions: { zh: '隐藏' } },
-          ],
+          ...settingField('scrollGutter'),
         },
         {
-          path: ['pageMargin'],
-          label: 'Page margin',
-          descriptions: { zh: '页边距' },
-          hint: 'Inset the whole UI from the terminal edges. ←/→ cycles presets (none / slim / normal / roomy); Enter types a custom spec `NxM`: N columns per side, M rows top/bottom (e.g. 3x1, max 8x4; a bare `N` keeps rows at 1). Empty resets to the default `normal`. Applies immediately.',
-          hintDescriptions: { zh: '让整个界面相对终端四边内缩。←/→ 循环预设（none / slim / normal / roomy）；Enter 输入自定义 `NxM`：左右各 N 列、上下各 M 行（如 3x1，上限 8x4；只填 N 则上下保持 1 行）。清空恢复默认 normal。立即生效。' },
-          kind: 'text',
+          ...settingField('pageMargin'),
           placeholder: 'normal',
-          options: [
-            { value: 'none', label: 'None', descriptions: { zh: '无' } },
-            { value: 'slim', label: 'Slim', descriptions: { zh: '窄' } },
-            { value: 'normal', label: 'Normal', descriptions: { zh: '常规' } },
-            { value: 'roomy', label: 'Roomy', descriptions: { zh: '宽' } },
-          ],
           format(value: unknown): string {
             return String(value ?? config.pageMargin ?? DEFAULT_PAGE_MARGIN)
           },
@@ -1106,12 +1069,7 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
           },
         },
         {
-          path: ['foldTerminalCommand'],
-          label: 'Fold terminal command',
-          descriptions: { zh: '折叠终端命令' },
-          hint: 'Terminal cards (Bash/PowerShell): collapse a multi-line command header to its first line + count; Ctrl+O or a click expands it.',
-          hintDescriptions: { zh: '终端卡（Bash/PowerShell）：多行命令头部折叠为首行 + 计数；Ctrl+O 或点击卡片展开。' },
-          kind: 'boolean',
+          ...settingField('foldTerminalCommand'),
           format(value: unknown): string {
             // Unset in settings.yaml: show the effective resolution (cordis.yml
             // → off) instead of a blank — same rule as `fullscreen`'s field.
@@ -1119,75 +1077,50 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
           },
         },
         {
-          path: ['promptSessionLabel'],
-          label: 'Session name chip',
-          descriptions: { zh: '会话名标签' },
-          hint: 'Show the session name on the prompt top border, right corner. Off by default.',
-          hintDescriptions: { zh: '在输入框顶边框右上角显示会话名。默认关闭。' },
-          kind: 'boolean',
+          ...settingField('promptSessionLabel'),
         },
         {
-          path: ['expandEditor'],
-          label: 'Fullscreen draft editor',
-          descriptions: { zh: '全屏草稿编辑' },
-          hint: 'On: the ⛶ affordance in the input row and the expand-editor shortcut (default Ctrl+Shift+E) expand the draft into a whole-screen editor (Enter = newline, Ctrl+Enter = send). Off: both entry points disappear. On by default.',
-          hintDescriptions: { zh: '开启：输入行尾 ⛶ 按钮与全屏编辑快捷键（默认 Ctrl+Shift+E）把草稿展开成整屏编辑器（Enter 换行、Ctrl+Enter 发送）。关闭：两个入口都不显示。默认开启。' },
-          kind: 'boolean',
+          ...settingField('expandEditor'),
           format(value: unknown): string {
             // Unset in settings.yaml: the effective default is on.
             return String(typeof value === 'boolean' ? value : config.expandEditor !== false)
           },
         },
         {
-          path: ['smoothStreaming'],
-          label: 'Smooth streaming',
-          descriptions: { zh: '流式平滑输出' },
-          hint: 'Reveal live replies, expanded thinking, and tool-call bodies through an even ~30fps flow instead of per-burst jumps; one-shot non-streaming replies paint as a flow too. Replay/history always paints complete. On by default.',
-          hintDescriptions: { zh: '把实时回复、展开的思考与工具卡正文按 ~30fps 匀速揭示，不再随供应商突发一跳一跳；一次性到达的非流式回复也会平滑打出。回放/历史内容始终完整直出。默认开启。' },
-          kind: 'boolean',
+          ...settingField('smoothStreaming'),
           format(value: unknown): string {
             // Unset in settings.yaml: the effective default is on.
             return String(typeof value === 'boolean' ? value : config.smoothStreaming !== false)
           },
         },
         {
-          path: ['mermaidDiagrams'],
-          label: 'Mermaid diagrams',
-          descriptions: { zh: 'Mermaid 图表' },
-          hint: 'Render ```mermaid fences in replies as box-drawing diagrams (flowchart, sequence, state, class, ER, pie, mindmap, timeline, gitGraph). Diagrams wider than the terminal, or of an unsupported type, keep the fenced source. Applies immediately. On by default.',
-          hintDescriptions: { zh: '把回复中的 ```mermaid 代码块画成字符图（flowchart、sequence、state、class、ER、pie、mindmap、timeline、gitGraph）。比终端宽或类型不支持的图保留源码。立即生效。默认开启。' },
-          kind: 'boolean',
+          ...settingField('mermaidDiagrams'),
           format(value: unknown): string {
             // Unset in settings.yaml: the effective default is on.
             return String(typeof value === 'boolean' ? value : config.mermaidDiagrams !== false)
           },
         },
         {
-          path: ['recapOnOpen'],
-          label: 'Auto recap on open',
-          descriptions: { zh: '打开会话时自动总结' },
-          hint: 'On: opening/resuming a session automatically summarizes its recent activity into a dim line at the bottom of the transcript (hover/click to view or apply the suggested title). Off: use /recap manually.',
-          hintDescriptions: { zh: '开启：打开/恢复会话时自动把最近活动总结成一行灰字显示在会话底部（可悬停/点击查看或应用建议标题）；关闭：手动使用 /recap。' },
-          kind: 'boolean',
+          ...settingField('mathRendering'),
+        },
+        {
+          ...settingField('mathImageScale'),
+        },
+        {
+          ...settingField('mathImageBacking'),
+        },
+        {
+          ...settingField('imageBacking'),
+        },
+        {
+          ...settingField('recapOnOpen'),
           format(value: unknown): string {
             // Unset in settings.yaml: the default is on.
             return value === undefined || value === null ? 'true' : String(value)
           },
         },
         {
-          path: ['effortDefault'],
-          label: 'Default reasoning effort',
-          descriptions: { zh: '默认推理强度' },
-          hint: 'Reasoning-effort level new sessions start on; the current session applies it to its next request too, when the model offers the tier (an unlisted level falls back to the model default). Auto = follow the cordis.yml `effort` pin, then the persisted /effort choice, then the model default.',
-          hintDescriptions: { zh: '新会话起始的推理强度档位；模型提供该档位时，当前会话的下一请求也会应用（模型不提供的档位会静默回落到模型默认）。自动 = 依次跟随 cordis.yml 的 effort 配置、持久化的 /effort 选择、模型默认档。' },
-          kind: 'select',
-          options: [
-            { value: 'auto', label: 'Auto (model default)', descriptions: { zh: '自动（模型默认）' } },
-            { value: 'off', label: 'Off', descriptions: { zh: '关闭' } },
-            { value: 'low', label: 'Low', descriptions: { zh: '低' } },
-            { value: 'high', label: 'High', descriptions: { zh: '高' } },
-            { value: 'max', label: 'Max', descriptions: { zh: '最高' } },
-          ],
+          ...settingField('effortDefault'),
           format(value: unknown): string {
             // Unset in settings.yaml: show what a boot would actually start
             // on (the cordis effort pin → the persisted /effort choice)
@@ -1200,190 +1133,79 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
         },
         ...shortcutFields,
         {
-          path: ['statusBar', 'compact'],
-          label: 'Compact status bar',
-          descriptions: { zh: '紧凑状态栏' },
-          hint: 'Prefer the compact status presentation when terminal space allows.',
-          hintDescriptions: { zh: '终端空间允许时优先使用紧凑状态栏布局。' },
-          group: 'status-bar',
-          kind: 'boolean',
+          ...settingField('statusBar.compact'),
         },
         {
-          path: ['statusBar', 'model'],
-          label: 'Show model',
-          descriptions: { zh: '显示模型' },
-          hint: 'Show the live model id in the status bar.',
-          hintDescriptions: { zh: '在状态栏显示当前模型标识。' },
-          group: 'status-bar',
-          kind: 'boolean',
+          ...settingField('statusBar.model'),
         },
         {
-          path: ['statusBar', 'thinking'],
-          label: 'Show thinking',
-          descriptions: { zh: '显示思考' },
-          hint: 'Show the live reasoning effort or thinking mode.',
-          hintDescriptions: { zh: '显示当前推理强度或思考模式。' },
-          group: 'status-bar',
-          kind: 'boolean',
+          ...settingField('statusBar.thinking'),
         },
         {
-          path: ['statusBar', 'cwd'],
-          label: 'Show working directory',
-          descriptions: { zh: '显示工作目录' },
-          hint: 'Show the session working directory.',
-          hintDescriptions: { zh: '显示当前会话的工作目录。' },
-          group: 'status-bar',
-          kind: 'boolean',
+          ...settingField('statusBar.cwd'),
         },
         {
-          path: ['statusBar', 'contextUsage'],
-          label: 'Show context usage',
-          descriptions: { zh: '显示上下文用量' },
-          hint: 'Show current context-window consumption.',
-          hintDescriptions: { zh: '显示当前上下文窗口占用情况。' },
-          group: 'status-bar',
-          kind: 'boolean',
+          ...settingField('statusBar.contextUsage'),
         },
         {
-          path: ['statusBar', 'cache'],
-          label: 'Show cache',
-          descriptions: { zh: '显示缓存' },
-          hint: 'Show prompt-cache hit information.',
-          hintDescriptions: { zh: '显示提示词缓存命中信息。' },
-          group: 'status-bar',
-          kind: 'boolean',
+          ...settingField('statusBar.cache'),
         },
         {
-          path: ['statusBar', 'tokens'],
-          label: 'Show token totals',
-          descriptions: { zh: '显示 Token 总量' },
-          hint: 'Show running input and output token totals.',
-          hintDescriptions: { zh: '显示累计输入与输出 Token。' },
-          group: 'status-bar',
-          kind: 'boolean',
+          ...settingField('statusBar.tokens'),
         },
         {
-          path: ['statusBar', 'cost'],
-          label: 'Show session cost estimate',
-          descriptions: { zh: '显示本会话花费估算' },
-          hint: 'Show the estimated session spend (≈¥) next to the token totals. Only appears for official DeepSeek providers whose model has a known price; the estimate follows the official per-million-token rates (peak/idle hours) and is not a bill.',
-          hintDescriptions: { zh: '在 Token 总量旁显示本会话花费估算（≈¥）。仅在使用 DeepSeek 官方 API key 且模型有已知单价时显示；按官方每百万 token 单价（高峰/空闲时段）估算，非账单。' },
-          group: 'status-bar',
-          kind: 'boolean',
+          ...settingField('statusBar.cost'),
         },
         {
-          path: ['statusBar', 'tps'],
-          label: 'Show output speed',
-          descriptions: { zh: '显示输出速度' },
-          hint: 'Show live and recent tokens-per-second metrics.',
-          hintDescriptions: { zh: '显示实时及近期每秒 Token 指标。' },
-          group: 'status-bar',
-          kind: 'boolean',
+          ...settingField('statusBar.tps'),
         },
         {
-          path: ['statusBar', 'gitBranch'],
-          label: 'Show git branch',
-          descriptions: { zh: '显示 Git 分支' },
-          hint: 'Show the current git branch when available.',
-          hintDescriptions: { zh: '可用时显示当前 Git 分支。' },
-          group: 'status-bar',
-          kind: 'boolean',
+          ...settingField('statusBar.gitBranch'),
         },
         {
-          path: ['statusBar', 'sessionTitle'],
-          label: 'Show session title',
-          descriptions: { zh: '显示会话标题' },
-          hint: 'Show the current session title.',
-          hintDescriptions: { zh: '显示当前会话标题。' },
-          group: 'status-bar',
-          kind: 'boolean',
+          ...settingField('statusBar.sessionTitle'),
         },
         {
-          path: ['statusBar', 'sessionId'],
-          label: 'Show session id',
-          descriptions: { zh: '显示会话 ID' },
-          hint: 'Show the short session id (# + first 8 chars) — it matches the session log filename for --resume.',
-          hintDescriptions: { zh: '显示短会话 ID（# + 前 8 位）——与日志文件名对应，方便 --resume 定位。' },
-          group: 'status-bar',
-          kind: 'boolean',
+          ...settingField('statusBar.sessionId'),
         },
         {
-          path: ['statusBar', 'goal'],
-          label: 'Show goal status',
-          descriptions: { zh: '显示 Goal 状态' },
-          hint: 'Show a compact goal chip (phase glyph + rounds) in the status footer while a goal exists.',
-          hintDescriptions: { zh: '存在 Goal 时，在底部状态栏显示紧凑的 Goal 状态（阶段符号与轮次）。' },
-          group: 'status-bar',
-          kind: 'boolean',
+          ...settingField('statusBar.goal'),
         },
         {
-          path: ['statusBar', 'mode'],
-          label: 'Show session mode',
-          descriptions: { zh: '显示会话模式' },
-          hint: 'Show the active non-default session mode.',
-          hintDescriptions: { zh: '显示当前启用的非默认会话模式。' },
-          group: 'status-bar',
-          kind: 'boolean',
+          ...settingField('statusBar.mode'),
         },
         {
-          path: ['statusBar', 'contextBar'],
-          label: 'Show context progress bar',
-          descriptions: { zh: '显示上下文进度条' },
-          hint: 'Show the segmented context progress bar on its own footer row.',
-          hintDescriptions: { zh: '在底部单独一行显示分段上下文进度条。' },
-          group: 'status-bar',
-          kind: 'boolean',
+          ...settingField('statusBar.contextBar'),
         },
         {
-          path: ['statusBar', 'activity'],
-          label: 'Show activity summary',
-          descriptions: { zh: '显示活动摘要' },
-          hint: 'Show the idle working-activity summary.',
-          hintDescriptions: { zh: '显示空闲时的工作活动摘要。' },
-          group: 'status-bar',
-          kind: 'boolean',
+          ...settingField('statusBar.activity'),
         },
         {
-          path: ['statusBar', 'trajectory'],
-          label: 'Show trajectory strip',
-          descriptions: { zh: '显示轨迹条' },
-          hint: 'Show the animated mini trajectory strip at the footer edge.',
-          hintDescriptions: { zh: '在状态栏边缘显示动态迷你轨迹条。' },
-          group: 'status-bar',
-          kind: 'boolean',
+          ...settingField('statusBar.trajectory'),
         },
         {
-          path: ['statusBar', 'shortcutHint'],
-          label: 'Show shortcut reminder',
-          descriptions: { zh: '显示快捷键提示' },
-          hint: 'Control only the idle `? for shortcuts` reminder; pressing ? and the Esc shortcut hints are unaffected.',
-          hintDescriptions: { zh: '仅控制空闲时的 `? for shortcuts` 提示；按 ? 打开快捷键以及 Esc 快捷提示均不受影响。' },
-          group: 'status-bar',
-          kind: 'boolean',
+          ...settingField('statusBar.shortcutHint'),
         },
         {
-          path: ['whale'],
-          label: 'Whale art',
-          descriptions: { zh: '鲸鱼娘' },
-          hint: 'Show the pixel whale in the header splash.',
-          hintDescriptions: { zh: '开屏头部显示像素鲸鱼娘。' },
-          kind: 'boolean',
+          ...settingField('whale'),
         },
         {
-          path: ['whaleIdle'],
-          label: 'Welcome whale idle',
-          descriptions: { zh: '鲸鱼娘闲置动画（欢迎期）' },
-          hint: 'Welcome-phase idle behaviors: after the intro the whale flutters its fins, thumps its tail, and dozes off when idle; clicking wakes a dozing whale and pops a heart. The first agent turn freezes it to the static standard frame.',
-          hintDescriptions: { zh: '欢迎期闲置行为：开屏后鲸鱼娘摆鱼鳍、偶尔拍尾巴，空闲会睡着冒 Z；点击唤醒睡着的鲸鱼娘并冒爱心。开始第一个任务后定格为静态标准帧。' },
-          kind: 'boolean',
+          ...settingField('whaleIdle'),
         },
         {
-          path: ['minimal'],
-          label: 'Minimal mode',
-          descriptions: { zh: '极简模式' },
-          hint: 'Hide the header splash, emoji glyphs, and decorative colors; code highlight and tool colors stay. Trims the status bar to model + cwd.',
-          hintDescriptions: { zh: '隐藏开屏头部、emoji 状态符与装饰性配色；代码高亮与工具配色保留，底栏只留模型与目录。' },
-          kind: 'boolean',
+          ...settingField('whaleGirl'),
+        },
+        {
+          ...settingField('splashFont'),
+          format(value: unknown): string {
+            // Unset in settings.yaml: show the effective resolution
+            // (cordis.yml → daily) instead of a blank — same rule as the
+            // `fullscreen` field.
+            return normalizeSplashFont(value ?? config.splashFont)
+          },
+        },
+        {
+          ...settingField('minimal'),
         },
       ],
     })
@@ -1425,13 +1247,11 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
   }
   // Positional command-line arguments are the initial prompt (issue #53):
   // `dsh-tui "run the tests"` forwards positionals through the dsh CLI,
-  // which mounts them as ctx.cmdlineArgs. The service shape drifted across
-  // dsh-cmdline builds — `{ get() }` is the current contract, older builds
-  // exposed `{ args }` — so read both. Submit once the channel exists;
-  // delivery goes through the normal pending/inbox chain, so no special
-  // timing is needed; flag-shaped leftovers are not prompt text.
-  const cmdline = (ctx as { cmdlineArgs?: { get?: () => readonly string[]; args?: readonly string[] } }).cmdlineArgs
-  const cmdlineArgs = cmdline?.get?.() ?? cmdline?.args
+  // which mounts them as ctx.cmdlineArgs. Reuse the snapshot read for resume
+  // selection above, supporting both `{ get() }` and legacy `{ args }` hosts.
+  // Submit once the channel exists; delivery goes through the normal pending/inbox
+  // chain, so no special timing is needed. The parser separates startup flags
+  // from literal prompt text.
   const initialPrompt = initialPromptFromCmdlineArgs(cmdlineArgs)
   if (initialPrompt) submitChannel(initialPrompt)
   // Attach the stderr reporter to the live channel and flush anything a
@@ -1480,6 +1300,23 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
       if (error !== undefined) {
         const message = error instanceof Error ? error.message : String(error)
         ctx.logger.error(`dsh-tui: exit after error: ${message}`)
+        // A crash must leave the resume marker a clean exit would leave: the
+        // launcher's next start (and its safe-mode retry) then reopens the
+        // session the user was actually in instead of a blank one. Only the
+        // resumable case writes — unlike the clean-exit branch below, a crash
+        // never CLEARS a marker, so a session the user still has cannot be
+        // dropped by a failure that happened before the first message landed.
+        try {
+          if (isExitResumable({
+            pendingCount: channel.pending.length,
+            liveAgent: ctx.agents.get(SessionId(channel.agentId)),
+            startupAgent: agent,
+          })) {
+            writeResumeTarget(channel.agentId)
+          }
+        } catch {
+          // Resume persistence is best effort and must never block the exit.
+        }
         void finishExit(
           ctx,
           instance,
@@ -1565,6 +1402,26 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
   })
   const handleExit = funnel.handleExit
 
+  // Process-level crash backstop (see installNestedUpdateOverflowProcessGuard):
+  // an uncaught exception or unhandled rejection that is NOT the React #185
+  // overflow would otherwise take Node's default path and kill the process
+  // before this funnel runs — no resume marker, no terminal restore, and the
+  // launcher's "entered safe mode" prompt on what looks like a lost session.
+  // Route it through the same teardown a fatal RENDER error uses: unmount,
+  // `dsh-tui crashed: …`, dispose, exit 1. Fail loud stays intact — the funnel
+  // returns false when it has already settled or the tree is being torn down
+  // (host recompose), and the guard then rethrows to Node's default crash.
+  // DSH_TUI_NO_185_PROCESS_GUARD=1 skips the guard entirely, leaving process
+  // error policy to the host exactly as before.
+  registerProcessGuardFatalSink((error, origin) => {
+    // An undefined reason (`Promise.reject()`, `throw undefined`) must not reach
+    // the funnel as-is: `error !== undefined` is what selects the crash path, so
+    // a bare undefined would exit 0 while this sink claims the process.
+    const fatal = fatalReasonForExit(error, origin)
+    ctx.logger.error(`dsh-tui: fatal ${origin}: ${fatal instanceof Error ? fatal.message : String(fatal)}`)
+    return handleExit(fatal)
+  })
+
   // External injection controller: Chat fills it with `{ append, submit }`
   // every render; the injection socket (opened below) drives it. A ref rather
   // than a prop callback so the socket handler always reaches the live Chat.
@@ -1593,7 +1450,7 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
   const openHomeOnBoot = !homeSeen
     && launchSessionId === undefined
     && requestedWorkspace === undefined
-    && initialPromptFromCmdlineArgs(process.argv.slice(2)) === ''
+    && initialPrompt === ''
   const chat = React.createElement(Chat, {
     channel,
     renderScene: createChannelSceneOutlet(() => rawChannel.pluginScene),
@@ -1605,7 +1462,12 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
     // shortcuts). Soft-consumed: absent the row (stale patch, bare embed),
     // Chat falls back to inert stores and no shortcut registry.
     extensionDialogs: getHostDialogStore(ctx.get('tuiDialogs') as TuiDialogRuntime | undefined),
+    bonusNotices: (ctx.get('dshAuth') as DshAuthService | undefined)?.coupons,
     extensionStatus: getHostStatusStore(ctx.get('tuiStatus') as TuiStatusRuntime | undefined),
+    // The working line's semantics belong to the dsh-working-activity plugin's
+    // session projection; this store is the read side of that seam, so the TUI
+    // no longer runs a second activity tracker of its own.
+    activityStore,
     extensionShortcuts: getHostShortcuts(ctx.get('tuiShortcuts') as TuiShortcutRuntime | undefined),
     themeHost,
     // Full-screen surfaces inside Chat — the trajectory scene and the session
@@ -1763,6 +1625,10 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
   ctx.effect(() => () => {
     logMouseDebug('apply teardown')
     funnel.markTeardown()
+    // Drop the crash backstop with this mount: a torn-down funnel cannot own
+    // the process, so a later fatal error falls back to Node's default crash
+    // instead of reaching a disposed ctx.
+    registerProcessGuardFatalSink(undefined)
     rawChannel.releaseContributions()
     instance?.unmount()
   })
@@ -1983,7 +1849,14 @@ async function resolveAgent(
  * is always observed). Exported for scripts/verify-teardown-exit.tsx.
  */
 export function createExitFunnel(deps: { onUserExit: (error?: unknown) => void }): {
-  handleExit: (error?: unknown) => void
+  /**
+   * Settle the exit once.
+   * @returns true when this call ran the user-exit path (the funnel now owns
+   *  the process), false when it was already settled or the tree is being
+   *  torn down. A process-level crash backstop must fall back to Node's
+   *  default crash on false instead of swallowing the error.
+   */
+  handleExit: (error?: unknown) => boolean
   markTeardown: () => void
 } {
   let exited = false
@@ -1993,10 +1866,11 @@ export function createExitFunnel(deps: { onUserExit: (error?: unknown) => void }
       teardown = true
     },
     handleExit: (error?: unknown) => {
-      if (teardown) return
-      if (exited) return
+      if (teardown) return false
+      if (exited) return false
       exited = true
       deps.onUserExit(error)
+      return true
     },
   }
 }

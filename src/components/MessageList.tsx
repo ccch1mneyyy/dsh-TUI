@@ -13,7 +13,7 @@ import { AssistantThinkingMessage } from './messages/AssistantThinkingMessage.js
 import { AssistantToolUseMessage } from './messages/AssistantToolUseMessage.js'
 import { SubagentMessage } from './Chat/SubagentMessage.js'
 import { JobCard } from './Chat/JobCard.js'
-import { isMinimalMode } from '../minimalMode.js'
+import { isMinimalUiMode } from '../minimalUiMode.js'
 import { noteFrameCause, noteListGeometry } from '../ink/geometry-trace.js'
 import { getTerminalFlushTick } from '../ink/flush-tick.js'
 import { TurnInterruptedRow } from './TurnInterruptedRow.js'
@@ -29,6 +29,7 @@ import type { ToolBackground } from '../tuiDisplayPrefs.js'
 import { getRevealVersion, revealLengthOf, revealTextOf } from './smoothReveal.js'
 import { useRevealVersion } from '../hooks/useRevealVersion.js'
 import { TranscriptImages } from './messages/TranscriptImages.js'
+import { primaryComboString } from '../utils/keymap.js'
 
 /**
  * Transcript rows rendered with the dsh-TUI message layout: user prompts
@@ -965,6 +966,7 @@ export function MessageList({
   // post-commit, only when the signature changes.
   let timelineTurns: TimelineTurn[] = []
   let activeTurnIndex: number | null = null
+  let pinnedTurnIndex: number | null = null
   let upTurnIndex: number | null = null
   let downTurnIndex: number | null = null
   const timelineMemoRef = React.useRef<{ key: string; turns: TimelineTurn[] } | null>(null)
@@ -1050,10 +1052,15 @@ export function MessageList({
       }
     }
     if (timelineTurns.length > 0 && activeTurnIndex === null) activeTurnIndex = 0
+    if (activeTurnIndex !== null) {
+      const active = timelineTurns[activeTurnIndex]!
+      if (active.folded === true || active.top < viewTop) pinnedTurnIndex = activeTurnIndex
+    }
   }
   const timeline: TimelineSnapshot = {
     turns: timelineTurns,
     activeId: activeTurnIndex === null ? null : timelineTurns[activeTurnIndex]!.id,
+    pinnedId: pinnedTurnIndex === null ? null : timelineTurns[pinnedTurnIndex]!.id,
     upId: upTurnIndex === null ? null : timelineTurns[upTurnIndex]!.id,
     downId: downTurnIndex === null ? null : timelineTurns[downTurnIndex]!.id,
   }
@@ -1073,6 +1080,7 @@ export function MessageList({
     if (
       prev !== null &&
       prev.activeId === timeline.activeId &&
+      prev.pinnedId === timeline.pinnedId &&
       prev.upId === timeline.upId &&
       prev.downId === timeline.downId &&
       prev.turns.length === timeline.turns.length &&
@@ -1189,7 +1197,7 @@ export function MessageList({
         <ClickableDivider title={t('load-earlier')} onClick={onLoadOlder} />
       )}
       {!showAll && hiddenCount > 0 && (
-        <ClickableDivider title={t('show-previous-messages', { n: hiddenCount })} onClick={onToggleAll} />
+        <ClickableDivider title={t('show-previous-messages', { n: hiddenCount, key: primaryComboString('showAll') })} onClick={onToggleAll} />
       )}
       {topPad > 0 && <Box height={topPad} flexShrink={0} />}
       {visibleRows
@@ -1677,7 +1685,7 @@ function TranscriptRow({
             <Text dimColor italic color={compactHovered ? 'text' : undefined}>
               <Text color={compactHovered ? 'text' : undefined}>∴</Text>
               {' '}{t('compact-summary-folded')} · {compactPreview(displayText)}{' '}
-              {t('hint-expand-ctrl-o')}
+              {t('hint-expand-ctrl-o', { key: primaryComboString('transcript') })}
             </Text>
           )}
         </Box>
@@ -1729,28 +1737,41 @@ export function LogoHeader({
   model,
   effort,
   cwd,
+  fontId,
   whale = true,
   whaleIdle = true,
+  whaleGirl = false,
+  starred = false,
+  onStarClick,
   working = false,
   skipIntro = false,
 }: {
   model: string
   effort?: string | undefined
   cwd: string
+  /** Big-text face pin (settings `dsh-tui.splashFont`; `undefined` leaves
+   *  `LogoV2` on its date rotation). Passed through to LogoV2. */
+  fontId?: string | undefined
   whale?: boolean
   /** Idle whale behaviors + working signal (passed through to LogoV2). */
   whaleIdle?: boolean
+  /** Maid portrait swap (passed through to LogoV2; settings `dsh-tui.whaleGirl`). */
+  whaleGirl?: boolean
+  /** 求 star 标语行被点击（一键 star；host 不传则不可点）。 */
+  onStarClick?: () => void
+  /** 本次会话已 star（彩蛋换「捡到星星」版）。 */
+  starred?: boolean
   working?: boolean
   /** Jump straight to the settled header (long-session resume, or
    *  `dsh-tui.whale: false`, which must not play the opening splash). */
   skipIntro?: boolean
 }): React.ReactNode {
-  // Minimal mode drops the whole splash (whale art AND wordmark) — only the
+  // The minimal UI drops the whole splash (whale art AND wordmark) — only the
   // transcript and a bare status bar remain.
-  if (isMinimalMode()) return null
+  if (isMinimalUiMode()) return null
   return (
     <Box flexDirection="column" marginBottom={1}>
-      <LogoV2 model={model} effort={effort} cwd={cwd} whale={whale} whaleIdle={whaleIdle} working={working} skipIntro={skipIntro || !whale} />
+      <LogoV2 model={model} effort={effort} cwd={cwd} fontId={fontId} whale={whale} whaleIdle={whaleIdle} whaleGirl={whaleGirl} starred={starred} onStarClick={onStarClick} working={working} skipIntro={skipIntro || !whale} />
     </Box>
   )
 }

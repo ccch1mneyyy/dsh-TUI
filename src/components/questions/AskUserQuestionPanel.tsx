@@ -35,10 +35,15 @@ import type { QuestionDraft, QuestionSelection } from '../../dsh-adapter/questio
 import { PlanReviewPanel } from './PlanReviewPanel.js'
 import { QuestionMinimizedBar } from './QuestionMinimizedBar.js'
 import { isPlainReturnInput } from '../../utils/modifiers.js'
-import { actionMatches, effectiveComboDisplay } from '../../utils/keymap.js'
+import { actionMatches, comboDisplay, effectiveComboDisplay, primaryComboString } from '../../utils/keymap.js'
 import { flattenPasteInline } from '../../dsh-adapter/sanitize.js'
 import { readClipboard, type ClipboardRead } from '../../utils/clipboard.js'
 import { listWindow } from '../listWindow.js'
+
+/** Unmodified arrows switch questions; Ctrl/Alt/Super/Shift stay caret motion. */
+function isPlainArrow(key: { ctrl?: boolean; meta?: boolean; super?: boolean; shift?: boolean }): boolean {
+  return key.ctrl !== true && key.meta !== true && key.super !== true && key.shift !== true
+}
 
 const CHECKED = '◉'
 const UNCHECKED = '○'
@@ -86,8 +91,20 @@ export type AskUserQuestionPanelProps = {
   readonly onAnswer: (selection: QuestionSelection) => void
   /** Esc on the first question / Ctrl+C — aborts the whole ask. */
   readonly onCancel: () => void
-  /** Esc on later questions — navigates to the previous question. */
+  /**
+   * Esc, when the host wants to decide back-vs-cancel from the live store.
+   * A same-batch → then Esc still runs on the panel mounted for question 1,
+   * whose `onBack` is absent; this callback sees that → already advanced.
+   */
+  readonly onEscape?: (draft: QuestionDraft) => void
+  /** Esc / ← on later questions — navigates to the previous question. */
   readonly onBack?: (draft: QuestionDraft) => void
+  /**
+   * → — navigates to the next question without submitting. On the free-text
+   * row this only fires when the caret is already at the end, so ←/→ keep
+   * editing the answer.
+   */
+  readonly onForward?: (draft: QuestionDraft) => void
   /**
    * Test seam: clipboard reader for the Ctrl+V paste arm. Defaults to the
    * real cross-platform reader (PowerShell/pbpaste/wl-paste…); headless
@@ -120,7 +137,9 @@ export function AskUserQuestionPanel({
   initialDraft,
   onAnswer,
   onCancel,
+  onEscape,
   onBack,
+  onForward,
   readClipboardOverride,
   collapsed = false,
   onExpand,
@@ -161,6 +180,11 @@ export function AskUserQuestionPanel({
   const [checked, setChecked] = React.useState<ReadonlySet<number>>(
     () => new Set(multiSelect ? selectedIndices : []),
   )
+  // Same stdin batch, same closure: Space / ↑ / ↓ must be visible to a
+  // following → before React commits. Refs are the draft source; state
+  // only repaints.
+  const focusRef = React.useRef(initialFocus)
+  const checkedRef = React.useRef<ReadonlySet<number>>(new Set(multiSelect ? selectedIndices : []))
   const [customText, setCustomText] = React.useState(initialCustom)
   const [customCursor, setCustomCursor] = React.useState(() => [...initialCustom].length)
   // Synchronous source of truth for the handlers (see the module header):
@@ -189,6 +213,28 @@ export function AskUserQuestionPanel({
   const [attached, setAttached] = React.useState<string | null>(
     () => initialCustom !== '' && !multiSelect ? (initialSelected[0] ?? null) : null,
   )
+  const attachedRef = React.useRef<string | null>(
+    initialCustom !== '' && !multiSelect ? (initialSelected[0] ?? null) : null,
+  )
+  const placeFocus = (index: number): void => {
+    focusRef.current = index
+    setFocusIndex(index)
+  }
+  const placeChecked = (next: ReadonlySet<number>): void => {
+    checkedRef.current = next
+    setChecked(next)
+  }
+  const toggleCheckedAt = (index: number): void => {
+    const next = new Set(checkedRef.current)
+    if (next.has(index)) next.delete(index)
+    else next.add(index)
+    placeChecked(next)
+  }
+  const placeAttached = (value: string | null): void => {
+    attachedRef.current = value
+    setAttached(value)
+  }
+  const onInputRow = (): boolean => !hideCustomInput && focusRef.current === options.length
   const [error, setError] = React.useState<string | null>(null)
 
   const inputFocused = !hideCustomInput && focusIndex === options.length
@@ -225,7 +271,7 @@ export function AskUserQuestionPanel({
 
   const moveFocus = (delta: 1 | -1): void => {
     if (rowCount <= 1) return
-    setFocusIndex(index => (index + delta + rowCount) % rowCount)
+    placeFocus((focusRef.current + delta + rowCount) % rowCount)
     setError(null)
   }
 
@@ -242,7 +288,7 @@ export function AskUserQuestionPanel({
     if (at <= 0) return
     points.splice(at - 1, 1)
     const next = points.join('')
-    if (next === '') setAttached(null)
+    if (next === '') placeAttached(null)
     applyText(next, at - 1)
   }
 
@@ -265,7 +311,7 @@ export function AskUserQuestionPanel({
     const at = atCaret ? cursorRef.current : points.length
     points.splice(at, 0, ...text)
     applyText(points.join(''), at + [...text].length)
-    if (!atCaret && !multiSelect) setAttached(options[focusIndex]?.label ?? null)
+    if (!atCaret && !multiSelect) placeAttached(options[focusRef.current]?.label ?? null)
     return 'ok'
   }
 
@@ -309,7 +355,7 @@ export function AskUserQuestionPanel({
   }
 
   const checkedLabels = (): string[] =>
-    [...checked].sort((a, b) => a - b).map(index => options[index]?.label)
+    [...checkedRef.current].sort((a, b) => a - b).map(index => options[index]?.label)
       .filter((label): label is string => label !== undefined)
 
   /** Enter on a real option: the option(s) plus whatever the input row holds. */
@@ -324,7 +370,7 @@ export function AskUserQuestionPanel({
       onAnswer({ selected, ...(text !== '' ? { custom: text } : {}) })
       return
     }
-    const label = options[focusIndex]?.label
+    const label = options[focusRef.current]?.label
     if (label === undefined) {
       setError(t('question-select-or-answer'))
       return
@@ -349,17 +395,17 @@ export function AskUserQuestionPanel({
       setError(t('question-type-answer-first'))
       return
     }
-    onAnswer({ selected: attached !== null ? [attached] : [], custom: text })
+    onAnswer({ selected: attachedRef.current !== null ? [attachedRef.current] : [], custom: text })
   }
 
   /** Capture the visible answer state before navigating away. */
   const currentDraft = (): QuestionDraft => {
     const selected = multiSelect
       ? checkedLabels()
-      : inputFocused
-        ? (attached === null ? [] : [attached])
+      : onInputRow()
+        ? (attachedRef.current === null ? [] : [attachedRef.current])
         : (() => {
-            const label = options[focusIndex]?.label
+            const label = options[focusRef.current]?.label
             return label === undefined ? [] : [label]
           })()
     return {
@@ -389,7 +435,8 @@ export function AskUserQuestionPanel({
       return
     }
     if (key.escape) {
-      if (onBack !== undefined) onBack(currentDraft())
+      if (onEscape !== undefined) onEscape(currentDraft())
+      else if (onBack !== undefined) onBack(currentDraft())
       else onCancel()
       return
     }
@@ -417,7 +464,7 @@ export function AskUserQuestionPanel({
       return
     }
 
-    if (inputFocused) {
+    if (onInputRow()) {
       if (key.upArrow) {
         moveFocus(-1)
         return
@@ -440,17 +487,28 @@ export function AskUserQuestionPanel({
         if (at < points.length) {
           points.splice(at, 1)
           const next = points.join('')
-          if (next === '') setAttached(null)
+          if (next === '') placeAttached(null)
           applyText(next, at)
         }
         return
       }
       if (key.leftArrow) {
+        // Plain ← at the start of the answer switches questions; anywhere
+        // else (and modified arrows) stays a caret step.
+        if (isPlainArrow(key) && cursorRef.current === 0 && onBack !== undefined) {
+          onBack(currentDraft())
+          return
+        }
         applyText(textRef.current, Math.max(0, cursorRef.current - 1))
         return
       }
       if (key.rightArrow) {
-        applyText(textRef.current, Math.min([...textRef.current].length, cursorRef.current + 1))
+        const length = [...textRef.current].length
+        if (isPlainArrow(key) && cursorRef.current >= length && onForward !== undefined) {
+          onForward(currentDraft())
+          return
+        }
+        applyText(textRef.current, Math.min(length, cursorRef.current + 1))
         return
       }
       if (key.home) {
@@ -482,18 +540,21 @@ export function AskUserQuestionPanel({
       moveFocus(1)
       return
     }
+    if (key.leftArrow && isPlainArrow(key)) {
+      if (onBack !== undefined) onBack(currentDraft())
+      return
+    }
+    if (key.rightArrow && isPlainArrow(key)) {
+      if (onForward !== undefined) onForward(currentDraft())
+      return
+    }
     if (key.tab && !hideCustomInput) {
-      setFocusIndex(options.length)
+      placeFocus(options.length)
       setError(null)
       return
     }
     if (input === ' ' && multiSelect) {
-      setChecked(previous => {
-        const next = new Set(previous)
-        if (next.has(focusIndex)) next.delete(focusIndex)
-        else next.add(focusIndex)
-        return next
-      })
+      toggleCheckedAt(focusRef.current)
       return
     }
     if (isPlainReturnInput(input, key)) {
@@ -509,7 +570,7 @@ export function AskUserQuestionPanel({
     // attaches this option's label so Enter carries label + text (#9).
     if (!hideCustomInput && !key.ctrl && !key.meta && !key.super && input) {
       appendText(input)
-      if (!multiSelect) setAttached(options[focusIndex]?.label ?? null)
+      if (!multiSelect) placeAttached(options[focusRef.current]?.label ?? null)
     }
   })
 
@@ -529,7 +590,7 @@ export function AskUserQuestionPanel({
   /** Mouse: click the input row to focus it (same as Tab). */
   const focusInputRow = (): void => {
     if (hideCustomInput) return
-    setFocusIndex(options.length)
+    placeFocus(options.length)
     setError(null)
   }
   /**
@@ -540,12 +601,7 @@ export function AskUserQuestionPanel({
    */
   const clickOption = (index: number): void => {
     if (multiSelect) {
-      setChecked(previous => {
-        const next = new Set(previous)
-        if (next.has(index)) next.delete(index)
-        else next.add(index)
-        return next
-      })
+      toggleCheckedAt(index)
       return
     }
     const label = options[index]?.label
@@ -584,13 +640,27 @@ export function AskUserQuestionPanel({
         )}
         <Text dimColor>：</Text>
         {customText === '' && !inputFocused ? (
-          <Text ref={caretRef} dimColor>{t('question-direct-input')}</Text>
+          // The IME anchor must sit on a cell styled exactly like the answer
+          // text the user is about to commit: the terminal draws the preedit
+          // at the physical cursor USING THAT CELL'S STYLE, so an anchor over
+          // the dim placeholder turned pinyin dim, and one on the suggestion-
+          // colored caret turned it blue (reported from a real session).
+          // Hence a bare leading cell takes the anchor — no color prop, same
+          // "terminal default foreground" the typed run gets — and the
+          // placeholder starts one column later.
+          <>
+            <Text ref={caretRef}>{' '}</Text>
+            <Text dimColor>{t('question-direct-input')}</Text>
+          </>
         ) : (
           <>
             <Text wrap="wrap">{textPoints.slice(0, customCursor).join('')}</Text>
+            {/* Focused keeps the inverse block caret (same contract as the
+                composer's value box): the preedit then renders inverted,
+                which reads as "the block is filling with text". */}
             {inputFocused
               ? <Text ref={caretRef} inverse>{cursorChar}</Text>
-              : <Text ref={caretRef} color="suggestion">▏</Text>}
+              : <Text ref={caretRef}>▏</Text>}
             <Text wrap="wrap">{textPoints.slice(inputFocused ? customCursor + 1 : customCursor).join('')}</Text>
           </>
         )}
@@ -673,10 +743,11 @@ export function AskUserQuestionPanel({
   const hintParts = inputFocused
     ? [
         t('question-hint-type'),
-        t('question-hint-paste'),
+        t('question-hint-paste', { key: comboDisplay(primaryComboString('paste')) }),
         t('question-hint-enter'),
         ...(options.length > 0 ? [t('question-hint-back')] : []),
         onBack === undefined ? t('question-hint-esc') : t('question-hint-previous'),
+        ...(onBack !== undefined || onForward !== undefined ? [t('question-hint-switch-input')] : []),
         ...(onBack === undefined ? [] : [t('question-hint-cancel')]),
         ...(multiSelect && checked.size > 0 ? [t('question-hint-selected', { n: checked.size })] : []),
         t('question-fold-hint', { combo: foldCombo }),
@@ -684,9 +755,10 @@ export function AskUserQuestionPanel({
     : [
         t('question-hint-select'),
         ...(multiSelect ? [t('question-hint-multi')] : []),
-        ...(hideCustomInput ? [] : [t('question-hint-paste'), t('question-hint-attach')]),
+        ...(hideCustomInput ? [] : [t('question-hint-paste', { key: comboDisplay(primaryComboString('paste')) }), t('question-hint-attach')]),
         t('question-hint-enter'),
         onBack === undefined ? t('question-hint-esc') : t('question-hint-previous'),
+        ...(onBack !== undefined || onForward !== undefined ? [t('question-hint-switch')] : []),
         ...(onBack === undefined ? [] : [t('question-hint-cancel')]),
         ...(multiSelect && checked.size > 0 ? [t('question-hint-selected', { n: checked.size })] : []),
         t('question-fold-hint', { combo: foldCombo }),

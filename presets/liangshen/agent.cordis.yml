@@ -1,5 +1,8 @@
 # The `anchored-standard` experimental preset: Standard capabilities with the
-# Minimal mode system-prompt condition used by the V4 trajectory evaluation.
+# system-prompt condition of the KERNEL agent preset `minimal` (极简模式 /
+# "Minimal") used by the V4 trajectory evaluation. That name belongs to the
+# kernel agent preset ONLY — it is not the TUI's /settings 「极简界面」
+# (Minimal UI) display switch, which just trims interface decoration.
 #
 # This file is an AGENT-PLANE composition. The roster mounts it ONCE under a
 # standing scope; every session naming it joins by scope parentage, so the

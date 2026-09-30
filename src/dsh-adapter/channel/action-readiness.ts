@@ -41,8 +41,12 @@ export type ChannelActionDelegates = Pick<ChannelState,
   | 'sideQuestion'
   | 'listFileCandidates'
   | 'listFiles'
+  | 'cachedSessions'
   | 'listSessions'
   | 'previewSession'
+  | 'listForeignSources'
+  | 'listForeignSessions'
+  | 'importForeignSession'
   | 'bindApprovalStore'
   | 'agentViewRows'
   | 'subscribeAgentView'
@@ -59,6 +63,7 @@ export type ChannelActionDelegates = Pick<ChannelState,
   | 'deleteSession'
   | 'renameSessionTo'
   | 'compact'
+  | 'cancelCompact'
   | 'runExternalCommand'
   | 'runExternalCommandOutcome'
   | 'pushLocal'
@@ -119,8 +124,12 @@ export function createChannelActionMethods(
     sideQuestion: (question, options) => getReadyActions().sideQuestion(question, options),
     listFileCandidates: (query, options) => getReadyActions().listFileCandidates(query, options),
     listFiles: () => getReadyActions().listFiles(),
-    listSessions: () => getReadyActions().listSessions(),
+    cachedSessions: () => getReadyActions().cachedSessions(),
+    listSessions: (onEnriched, onPartial) => getReadyActions().listSessions(onEnriched, onPartial),
     previewSession: sessionId => getReadyActions().previewSession(sessionId),
+    listForeignSources: () => getReadyActions().listForeignSources(),
+    listForeignSessions: (agentId, onRow) => getReadyActions().listForeignSessions(agentId, onRow),
+    importForeignSession: (agentId, key) => getReadyActions().importForeignSession(agentId, key),
     bindApprovalStore: store => getReadyActions().bindApprovalStore(store),
     agentViewRows: () => getReadyActions().agentViewRows(),
     subscribeAgentView: listener => getReadyActions().subscribeAgentView(listener),
@@ -137,6 +146,7 @@ export function createChannelActionMethods(
     deleteSession: sessionId => getReadyActions().deleteSession(sessionId),
     renameSessionTo: (sessionId, title) => getReadyActions().renameSessionTo(sessionId, title),
     compact: () => getReadyActions().compact(),
+    cancelCompact: () => getReadyActions().cancelCompact(),
     runExternalCommand: (name, rawInput) => getReadyActions().runExternalCommand(name, rawInput),
     runExternalCommandOutcome: (name, rawInput, images) => getReadyActions().runExternalCommandOutcome(name, rawInput, images),
     pushLocal: (title, lines) => getReadyActions().pushLocal(title, lines),

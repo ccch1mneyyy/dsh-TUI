@@ -91,10 +91,12 @@ try {
       "await import('@deepseek-harness-tui/dsh-tui')",
       "await import('@deepseek-harness-tui/dsh-tui/extensions')",
       "await import('./node_modules/@deepseek-harness-tui/dsh-tui/node_modules/@dsh-std/manifest')",
+      // The math image backend's bundled MathJax must load and typeset.
+      "{ const { createTexToSvg } = await import('./node_modules/@deepseek-harness-tui/dsh-tui/node_modules/@dsh-tui-vendor/mathjax-tex-svg'); if (!createTexToSvg().convert('x^2', false).svg.startsWith('<svg')) throw new Error('MathJax bundle did not typeset') }",
     ].join(';'),
   ], temporaryRoot)
 
-  console.log('bun package install OK (root, extensions, and bundled @dsh-std runtime imported)')
+  console.log('bun package install OK (root, extensions, bundled @dsh-std runtime and MathJax bundle imported)')
 } finally {
   await rm(temporaryRoot, { recursive: true, force: true })
 }

@@ -5,10 +5,28 @@ interface TerminalImages {
   subscribe(listener: () => void): () => void
   getSnapshot(): boolean
   getCellSize?(): TerminalCellSize | undefined
+  getProtocol?(): TerminalImageProtocolName | undefined
   request(): () => void
 }
 
+/** The graphics protocol the renderer paints images with. */
+export type TerminalImageProtocolName = 'kitty' | 'sixel'
+
 const noCellSize = (): undefined => undefined
+const noProtocol = (): undefined => undefined
+
+/**
+ * The protocol images are painted with, or undefined without graphics.
+ *
+ * Kitty provides persistent placements; Sixel paints rasters into the
+ * renderer-managed transcript surface. Both may host inline media as long as
+ * the placement joins the normal image lifecycle (a `presentation` of
+ * `'transcript'` or `'preview'`), which is the real capability boundary.
+ */
+export function useTerminalImageProtocol(): TerminalImageProtocolName | undefined {
+  const images = useContext(TerminalImagesContext)
+  return useSyncExternalStore(images.subscribe, images.getProtocol ?? noProtocol)
+}
 
 /** Only measured pixels qualify for an original-pixel (100%) image view. */
 export function useTerminalImageCellSize(): TerminalCellSize | undefined {

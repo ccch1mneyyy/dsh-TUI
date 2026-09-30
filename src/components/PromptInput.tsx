@@ -107,15 +107,59 @@ const isBigInput = (text: string): boolean =>
  */
 const EDITABLE_CONTROL = /[\u0000-\u0009\u000b-\u001f\u007f]/u
 
-/** Normalize editable text so no terminal control characters remain in state. */
-function sanitizeEditableText(text: string): string {
+/**
+ * Raw win32-input-mode records (`CSI Vk;Sc;Uc;Kd;Cs;Rc _`) that reached the
+ * editable buffer as text instead of being translated. `stripAnsi` consumes
+ * the record head and leaves its terminating `_` in the draft — the stray
+ * underscore users see after a multi-line paste (issue #1090). Only the full
+ * record grammar (exactly five `;` separators) matches, so a real `_` and
+ * ordinary bracket text survive untouched.
+ */
+const WIN32_RECORD_RESIDUE = /\u001b\[\d*(?:;\d*){5}_/gu
+
+/**
+ * The same record with its ESC byte missing: what a record split across
+ * reads leaves behind when the escape timer flushed the prefix before the
+ * tail arrived. Printable, so it is stripped only from paste payloads
+ * ({@link sanitizePastedText}) — and only when the same payload also carries
+ * a full ESC-bearing record as in-payload evidence of that split; typed text
+ * and literal clipboard/bracketed-paste bytes are left untouched.
+ */
+const WIN32_RECORD_RESIDUE_TAIL = /\[\d*(?:;\d*){5}_/gu
+
+/**
+ * Normalize editable text so no terminal control characters remain in state.
+ */
+export function sanitizeEditableText(text: string): string {
   // Fast path for ordinary and multi-line drafts: newline is intentionally
-  // absent from the probe, so a large clean paste returns without regex work.
+  // absent from the probe, so large clean text returns without the
+  // stripAnsi/control-normalization passes.
   if (!EDITABLE_CONTROL.test(text)) return text
-  return stripAnsi(text)
+  // Record residue goes first: `stripAnsi` would consume the CSI head and
+  // leave only the terminating `_` behind.
+  return stripAnsi(text.replace(WIN32_RECORD_RESIDUE, ''))
     .replace(/\r\n?/gu, '\n')
     .replace(/\t/gu, '        ')
     .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/gu, '')
+}
+
+/**
+ * Paste-payload ingress: strip the ESC-less tail of a split record before
+ * normalizing. The tail is printable, so it survives `sanitizeEditableText`'s
+ * control probe untouched; typed text keeps it because only a paste payload
+ * can carry a partial record.
+ *
+ * The five separators only prove the *shape*, not that a record was split:
+ * a user can legitimately paste the literal `[13;28;13;1;0;1_`. Strip the
+ * ESC-less form only when the same payload also carries a full ESC-bearing
+ * record — only then is there in-payload evidence of a split stream.
+ * Otherwise the bytes are ordinary text and must survive verbatim.
+ */
+export function sanitizePastedText(text: string): string {
+  // Probe with String#match: the /g detection regex carries lastIndex state
+  // across `.test` calls, so a previous success could skip a later match.
+  const hasRecordStream = text.match(WIN32_RECORD_RESIDUE) !== null
+  return sanitizeEditableText(hasRecordStream ? text.replace(WIN32_RECORD_RESIDUE_TAIL, '') : text)
 }
 
 const COMPOSER_IMAGE_TOKEN = /\[Image #\d+\]/gu
@@ -1908,7 +1952,7 @@ export function PromptInput({
     // Newlines remain data — they are NOT Enter — so this branch runs before
     // the whole-line submit rule.
     if (event?.isPasted && input.length > 0) {
-      const text = sanitizeEditableText(input.replace(/\r\n/g, '\n').replace(/\r/g, '\n'))
+      const text = sanitizePastedText(input.replace(/\r\n/g, '\n').replace(/\r/g, '\n'))
       // Desktop drops reach the TUI as pasted text (Ghostty forwards
       // Shell.escape(path) through the PTY with no drop boundary). Only a
       // paste that IS one unambiguous existing local image path stages as
@@ -1972,7 +2016,7 @@ export function PromptInput({
               return
             }
             if (content.kind === 'unavailable') {
-              channel.notify(t('input-clipboard-unavailable'), { color: 'warning' })
+              channel.notify(t(content.wsl === true ? 'input-clipboard-unavailable-wsl' : 'input-clipboard-unavailable'), { color: 'warning' })
               return
             }
             if (content.kind === 'image') {
@@ -2059,7 +2103,7 @@ export function PromptInput({
             if (!draftImageLeaseIsCurrent(lease)) return
             // Insert against the LIVE input state: the read above resolved
             // asynchronously and the user may have typed while waiting.
-            const text = sanitizeEditableText(formatClipboardInsert(content))
+            const text = sanitizePastedText(formatClipboardInsert(content))
             const { at } = insertClipboardAtCaret(text)
             // Same fold as bracketed paste — but never inside the expanded
             // editor (plain text there, see the isPasted branch).
@@ -2230,7 +2274,18 @@ export function PromptInput({
     // indentation arm so the expanded editor participates in the cycle too —
     // the parser reports backtab as key.tab + key.shift.
     if (key.tab && key.shift) {
-      void channel.cycleMode()
+      // The key is consumed either way. `cycleMode` is best-effort inside the
+      // channel, but a dropped rejection here would be an unhandledRejection
+      // (the process guard rethrows everything that is not React #185), and
+      // an unhandled rejection kills the TUI with the session still open —
+      // so the caller keeps a catch of its own rather than `void`ing the
+      // promise (the sibling `/permission` entry point does the same).
+      void channel.cycleMode().catch((error: unknown) => {
+        channel.notify(t('mode-switch-failed', { err: error instanceof Error ? error.message : String(error) }), {
+          color: 'error',
+          timeoutMs: 8000,
+        })
+      })
       return
     }
     // Expanded editor: plain Tab inserts indentation; Shift+Tab was handled

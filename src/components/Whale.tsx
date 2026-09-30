@@ -34,25 +34,31 @@ const ERASE_TO_EOL = '\x1b[K'
 const BG_DEFAULT = '\x1b[49m'
 
 /**
- * Render one frame to ANSI rows (one per sprite row pair) under its own
- * palette. Consecutive cells sharing one style are run-length encoded; every
- * row spans the full sprite width (transparent cells write plain spaces, so
- * the blank cells of a diff region are re-output and overwrite whatever the
- * previous frame painted there), and each row closes with an erase-to-EOL:
- * the text pipeline may trim trailing whitespace, and the erase guarantees
- * the terminal itself clears every cell past the row's last glyph — no
- * ghost pixels can survive a frame switch.
+ * Half-block row encoder for true-color letter-grid sprites (the pixel
+ * whale's frames): `pixel(x, y)` returns the color of sprite cell (x, y)
+ * or `undefined` for transparent.
+ *
+ * Render one sprite to ANSI rows (one per sprite row pair). Consecutive
+ * cells sharing one style are run-length encoded; every row spans the full
+ * sprite width (transparent cells write plain spaces, so the blank cells of
+ * a diff region are re-output and overwrite whatever the previous frame
+ * painted there), and each row closes with an erase-to-EOL: the text
+ * pipeline may trim trailing whitespace, and the erase guarantees the
+ * terminal itself clears every cell past the row's last glyph — no ghost
+ * pixels can survive a frame switch.
  */
-export function renderSpriteRows(sprite: readonly string[], palette: Record<string, Rgb | undefined>): string[] {
+export function renderCellRows(
+  width: number,
+  height: number,
+  pixel: (x: number, y: number) => Rgb | undefined,
+): string[] {
   const rows: string[] = []
-  for (let r = 0; r < sprite.length; r += 2) {
-    const upper = sprite[r]
-    const lower = sprite[r + 1] ?? ''
+  for (let y = 0; y < height; y += 2) {
     let out = ''
     let current = ''
-    for (let x = 0; x < upper.length; x++) {
-      const up = palette[upper[x]]
-      const lo = palette[lower[x]]
+    for (let x = 0; x < width; x++) {
+      const up = pixel(x, y)
+      const lo = pixel(x, y + 1)
       let seq: string
       let ch: string
       if (up !== undefined && lo !== undefined) {
@@ -86,6 +92,15 @@ export function renderSpriteRows(sprite: readonly string[], palette: Record<stri
     rows.push(row + ERASE_TO_EOL)
   }
   return rows
+}
+
+/**
+ * Render one letter-grid frame to ANSI rows under its own palette — the
+ * thin adapter over {@link renderCellRows} the whale frames use.
+ */
+export function renderSpriteRows(sprite: readonly string[], palette: Record<string, Rgb | undefined>): string[] {
+  const width = sprite.reduce((max, row) => Math.max(max, row.length), 0)
+  return renderCellRows(width, sprite.length, (x, y) => palette[sprite[y]?.[x] ?? ''])
 }
 
 /** Pre-rendered ANSI rows for every whale frame, computed once at module load. */

@@ -17,6 +17,7 @@ import type { Theme } from '../../theme.js'
 import type { ClickEvent } from '../../ink/events/click-event.js'
 import { revealLinesOf, snapReveal } from '../smoothReveal.js'
 import { useRevealVersion } from '../../hooks/useRevealVersion.js'
+import { primaryComboString } from '../../utils/keymap.js'
 
 type Props = {
   tool: ToolRow
@@ -260,7 +261,7 @@ function capLines(lines: BodyLine[], max: number, verbose: boolean): BodyLine[] 
   if (lines.length - max === 1) return lines
   return [
     ...lines.slice(0, max),
-    { ...dim(t('lines-folded-expand', { n: lines.length - max })), revealOnHover: true },
+    { ...dim(t('lines-folded-expand', { n: lines.length - max, key: primaryComboString('transcript') })), revealOnHover: true },
   ]
 }
 
@@ -457,7 +458,7 @@ function HeaderTitle({ name, title, isTerminal, folded, displayArgs, argsLanguag
             <>
               <Text>({folded.first})</Text>
               {folded.hiddenLines > 0 && (
-                <Text dimColor>{` ${t('lines-folded-expand', { n: folded.hiddenLines })}`}</Text>
+                <Text dimColor>{` ${t('lines-folded-expand', { n: folded.hiddenLines, key: primaryComboString('transcript') })}`}</Text>
               )}
             </>
           )}

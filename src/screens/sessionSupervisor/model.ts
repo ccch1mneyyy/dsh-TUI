@@ -9,7 +9,10 @@
 
 import type { SessionSummary } from '../../dsh-adapter/sessions/index.js'
 import type { TuiWorkspaceEntry } from '../../workspaces.js'
+import wrapAnsi from 'wrap-ansi'
 import { normalizeWorkspaceCwd } from '../../sessions/view.js'
+import { truncateWidth } from '../../sessions/format.js'
+import { stringWidth } from '../../ink/stringWidth.js'
 
 /**
  * Rows the left rail always keeps: the section header, the hint line, and the
@@ -30,6 +33,28 @@ export const RAIL_WIDTH_MAX = 38
 export const SESSION_ROW_LINES = 2
 /** Chrome the right pane spends on banner, filter, new-session card, notice and hints. */
 export const SESSION_PANE_CHROME_ROWS = 8
+/**
+ * Most rows the notice may grow to. A mount refusal carries the adapter's own
+ * error text, which is routinely longer than one row; three rows show it in
+ * full on ordinary widths without letting it push the list off the screen.
+ */
+export const NOTICE_MAX_LINES = 3
+
+/**
+ * The notice wrapped to `width` display columns, at most
+ * {@link NOTICE_MAX_LINES} rows, the last one ellipsised when text remains.
+ * Always at least one row, so an empty notice still holds its place.
+ */
+export function noticeLines(text: string | undefined, width: number): string[] {
+  if (text === undefined || width <= 0) return ['']
+  const rows = wrapAnsi(text, width, { hard: true, trim: true }).split('\n')
+  if (rows.length <= NOTICE_MAX_LINES) return rows
+  const kept = rows.slice(0, NOTICE_MAX_LINES)
+  const last = kept[NOTICE_MAX_LINES - 1] ?? ''
+  // The ellipsis marks the cut even when the kept row is short of `width`.
+  kept[NOTICE_MAX_LINES - 1] = stringWidth(last) < width ? `${last}…` : truncateWidth(`${last}…`, width)
+  return kept
+}
 
 export type MenuAction = 'edit' | 'new' | 'rename' | 'remove'
 export const MENU_ACTIONS: readonly MenuAction[] = ['edit', 'new', 'rename', 'remove']

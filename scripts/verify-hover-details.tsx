@@ -172,7 +172,7 @@ try {
 
   // --- H. 状态栏字段：model/git 悬停明细 ---------------------------------
   const channelStub = {
-    minimal: false,
+    minimalUi: false,
     statusBar: { gitBranch: true },
     model: 'TM',
     provider: 'test-provider',
@@ -187,7 +187,6 @@ try {
     backgroundJobs: [],
     contextSegments: {},
     working: false,
-    workingActivity: undefined,
     activityFrames: [],
     goal: undefined,
     sessionTitle: undefined,

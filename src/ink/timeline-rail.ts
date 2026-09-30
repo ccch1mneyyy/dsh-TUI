@@ -71,6 +71,11 @@ export interface TimelineSnapshot {
   /** Turn owning the viewport top row; first turn while pre-turn content
    *  owns the top; null only when there are no turns. */
   activeId: number | null
+  /** Turn the sticky header names: the active turn once its prompt has
+   *  scrolled out above the viewport top (or is folded away); null while
+   *  that prompt, or pre-turn content such as the logo, is still on the
+   *  top row, where naming it would repeat text already on screen. */
+  pinnedId: number | null
   /** ▲ target (strictly above the top), null at the first turn. */
   upId: number | null
   /** ▼ target (below the top and reachable), null at the end. */

@@ -6,17 +6,22 @@
  * 轮：占据视口顶行的轮次（顶部锚定，Grok timeline 语义 —— prompt 顶在
  * 视口顶之上/恰在顶行的最后一轮；logo 等前置内容占顶时取第一轮）。
  * 与时间线 rail 的 ━━ 高亮同源（同一个 MessageList 上报），两者永不分歧。
+ * 但置顶头只在该轮 prompt 已滚出视口顶时才写字：prompt 自己还在顶行、
+ * 或 logo 占顶时写字就是把屏幕上已有的内容再显示一遍（还挤掉 logo 首行）。
+ * 这时置顶行留白而不收起，视口高度不变，滚动不会跟着跳一行。
  *
  * 断言（全屏 headless xterm，默认 100×40；DSH_TEST_COLUMNS=60 验证窄终端）：
  *   1. 初始钉底：无置顶头（第 0 行不以 ❯ 开头）；
  *   2. 上滚后：置顶头 = 顶部锚定轮 —— 视口首内容为 回复 k 时恰为 问题 k；
- *      首内容为 问题 M 时为 M-1 或 M（prompt 自身顶到视口顶行 = M，
- *      其上仅剩 1 行 margin 空行 = M-1）；
+ *      首内容为 问题 M 时留白或为 M-1（prompt 自身顶到视口顶行 = 留白，
+ *      其上仅剩 1 行 margin 空行 = M-1）；置顶头永不重复视口首行的 prompt；
  *   3. 继续上滚：跟随变化，且永不为屏幕上看不到的“最后一条”；
  *   4. 逐格下滚：每步都与顶部锚定轮一致；
- *   5. 点击置顶头：被钉消息跳到视口顶部（转译区首行附近出现该消息）；
- *   6. 滚回底部：重新钉底，置顶头消失；
- *   7. 多行 user 的置顶摘要压成一行并截断，不向左侧出血，原文保留换行。
+ *   5. 点击置顶头：被钉消息跳到视口顶部（转译区首行附近出现该消息），
+ *      置顶行随之留白；
+ *   6. 滚到最顶（logo 占顶）：置顶行留白，不钉第一轮；
+ *   7. 滚回底部：重新钉底，置顶头消失；
+ *   8. 多行 user 的置顶摘要压成一行并截断，不向左侧出血，原文保留换行。
  *
  * 运行：node --import tsx/esm scripts/verify-sticky-anchor.tsx
  */
@@ -176,9 +181,9 @@ function atBottomEnd(): boolean {
 /**
  * 断言置顶头 = 顶部锚定轮（占据视口顶行的轮次）。屏幕侧推断：
  *  - 首内容为 回复 k → 该答案属于第 k 轮，prompt k 必在顶上方 → 头 = k；
- *  - 首内容为 问题 M → prompt 恰在视口顶行（头 = M）或其上只剩 1 行
- *    margin 空行（prompt 文字顶还在顶行下方 1 行 → 头 = M-1）；
- *  - M = 1 时恒为 1（前置内容占顶 → 第一轮兜底）；
+ *  - 首内容为 问题 M → prompt 恰在视口顶行（头留白：prompt 就在眼前）或其上
+ *    只剩 1 行 margin 空行（prompt 文字顶还在顶行下方 1 行 → 头 = M-1）；
+ *  - M = 1 时恒留白（前置内容占顶，没有滚过去的 prompt）；
  *  - 真·钉底（末行已可见）时头合法隐藏。
  */
 function assertHeaderFollowsViewport(label: string): number | null {
@@ -201,13 +206,15 @@ function assertHeaderFollowsViewport(label: string): number | null {
     return null
   }
   const expected = first.isPrompt
-    ? (first.turn === 1 ? [1] : [first.turn - 1, first.turn])
+    ? (first.turn === 1 ? [] : [first.turn - 1])
     : [first.turn]
   const headerTurn = header?.match(/问题 (\d+)/)
   const got = headerTurn ? Number(headerTurn[1]) : null
-  check(`${label}: 置顶头 = 顶部锚定轮（期望 ∈ {${expected.join('/')}}）`,
-    header !== null && got !== null && expected.includes(got),
+  check(`${label}: 置顶头 = 顶部锚定轮（期望 ∈ {${[...expected, ...(first.isPrompt ? ['留白'] : [])].join('/')}}）`,
+    header === null ? first.isPrompt : got !== null && expected.includes(got),
     `首内容=${first.isPrompt ? '问题' : '回复'} ${first.turn} header=${JSON.stringify(header)}`)
+  check(`${label}: 置顶头不重复视口首行的 prompt`, !(first.isPrompt && got === first.turn),
+    `首内容=问题 ${first.turn} header=${JSON.stringify(header)}`)
   if (!expected.includes(8)) {
     check(`${label}: 置顶头 ≠ 最后一条消息`, got === null || got !== 8, `header=${JSON.stringify(header)}`)
   }
@@ -247,8 +254,8 @@ check('下滚过程中至少观察到一次置顶头跟随', seenAny)
     const before = screenLines().slice(1, 6).map(l => l.trimEnd())
     await clickHeader()
     const after = screenLines().slice(1, 6).map(l => l.trimEnd())
-    check('点击后: 置顶头仍显示原消息', headerText()?.includes(`问题 ${top}`) === true,
-      `header=${JSON.stringify(headerText())}`)
+    check('点击后: 置顶行留白，不再重复顶行的原消息', headerText() === null && screenLines()[0]!.trim() === '',
+      `line0=${JSON.stringify(screenLines()[0]!.trimEnd().slice(0, 20))}`)
     check('点击后: 原消息跳到转译区顶部', after[0]?.includes(`问题 ${top}`) || after[1]?.includes(`问题 ${top}`) || after[2]?.includes(`问题 ${top}`),
       `before=${JSON.stringify(before[0])} after=${JSON.stringify(after[0])}`)
   } else {
@@ -256,8 +263,28 @@ check('下滚过程中至少观察到一次置顶头跟随', seenAny)
   }
 }
 
-// ── 6. 滚回底部：重新钉底，置顶头消失 ──
-await wheel(false, 30)
+// ── 6. 滚到最顶：logo 占顶，置顶行留白（窄终端折行更高，滚到画面不再变化）──
+for (let i = 0, prev = ''; i < 200; i++) {
+  await wheel(true, 5)
+  const now = screenLines().join('\n')
+  if (now === prev) break
+  prev = now
+}
+{
+  const lines = screenLines()
+  const firstPrompt = lines.findIndex(l => /问题 1\b/u.test(l))
+  check('最顶: 置顶行留白，不钉第一轮', headerText() === null && lines[0]!.trim() === '',
+    `line0=${JSON.stringify(lines[0]!.trimEnd().slice(0, 20))}`)
+  check('最顶: 第一轮 prompt 不在顶行（logo 占顶）', firstPrompt > 1, `firstPrompt=${firstPrompt}`)
+}
+
+// ── 7. 滚回底部：重新钉底，置顶头消失（上一步滚到了最顶，多滚一些）──
+for (let i = 0, prev = ''; i < 200 && !atBottomEnd(); i++) {
+  await wheel(false, 5)
+  const now = screenLines().join('\n')
+  if (now === prev) break
+  prev = now
+}
 const headerAfterBottom = headerText()
 check('滚回底部后置顶头消失', headerAfterBottom === null, `line0=${JSON.stringify(screenLines()[0]!.trimEnd().slice(0, 20))}`)
 check('滚回底部后末尾消息可见', screenLines().some(l => l.includes('问题 8')))

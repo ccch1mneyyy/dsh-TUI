@@ -32,7 +32,9 @@ development contract for humans and coding agents working on `@deepseek-harness-
     Reopening by anyone else is closed again.
   - Open the pull request against `main`. Keep changes focused: one logical
     change per PR, with a Chinese or bilingual title and a description that
-    covers motivation, what changed, and how it was verified.
+    follows the [PR template](../.github/PULL_REQUEST_TEMPLATE.md): motivation,
+    the shape of the change, and how it was verified. Agents open PRs with
+    `.agents/skills/pr`.
   - **A pull request that changes code must link an issue**: add a `Closes #<issue>`
     line to the description, or link it through the Development sidebar. The
     `issue-link` CI group checks this and fails without a link.
@@ -62,6 +64,31 @@ The feature proposal flow applies only to pull requests opened on or after
 
 
 
+### Merge queue
+
+Merges into `main` go through [Mergify](https://mergify.com)'s merge queue,
+configured in [`.mergify.yml`](../.mergify.yml): a pull request enters the queue
+once it has one approving review, and the queue updates it onto the latest
+`main`, re-runs CI on a temporary pull request, and merges it when green. The
+merge conditions are injected from the ruleset on the base branch (approval,
+`ci-gate`, resolved threads, approval of the last push), the same bar as a
+manual merge. The queue gives nothing away and offers no path around the
+approval requirement; an urgent merge is still `gh pr merge --admin`, which
+only an admin can run.
+
+The queue only takes pull requests whose base is `main`: a stacked pull request
+is not queued until it is retargeted. An approved pull request you want to hold
+back takes the `on hold` label. The temporary pull requests the queue creates
+(`mergify/merge-queue/*`) are drafts that run CI once and close; `pr-gate` and
+`issue-link` both let them through as bots.
+
+The matching ruleset decision: *Require branches to be up to date before
+merging* is off on `main`. It conflicts with the queue — the queue tests a
+temporary pull request, so GitHub sees the original one as out of date and
+refuses the merge — while testing the merged state on the latest `main` is
+exactly what the queue does for you. Approval, `ci-gate` and resolved threads
+are still enforced by GitHub, and Mergify is **not** on any bypass list.
+
 ## Scope
 
 This file applies to the entire repository. It is the shared development
@@ -84,6 +111,10 @@ boundaries and helpers over introducing parallel abstractions.
   lazy handoff to the runtime plugin.
 - `src/dsh-adapter/plugin.ts`: TTY validation, service registration, agent creation/resume,
   React tree mounting, and terminal/process teardown.
+- `src/dsh-adapter/oauth/`: pi-ai subscription OAuth provider routes, the
+  `/auth` command, credential store, and user-questions bridge; DeepSeek
+  account authorization delegates to the Host service. Mounted through the
+  `src/oauth.ts` subpath entry.
 - `src/dsh-adapter/questions-answerer.ts` and `preset-resolution.ts`: isolate
   upstream prerelease dispatch for user questions and agent presets so version
   branches do not spread into bootstrap or channel actions.
@@ -186,8 +217,8 @@ seam.
   ```
 
   In an existing checkout, run `git submodule update --init --recursive` first.
-  `vendor/dsh-std` and `dsh-auth` are workspace / `link:` dependencies, so the
-  install always fails while those submodules are empty.
+  `vendor/dsh-std` is a workspace dependency, so installation fails while that
+  submodule is empty.
 
 - `pnpm-lock.yaml` is the single lockfile. npm consumers do not read a
   dependency's lockfile, so `package-lock.json` has been removed (follow-up of
@@ -288,8 +319,8 @@ CI separately routes changes using the path allowlist in
   the actual local verification scope.
 
 `verify:build` also checks source hygiene, renderer primitives, theme and
-activity preference migrations, status animations, table layout, and
-side-question behavior.
+activity preference migrations, status animations, table layout, mermaid
+diagrams, and side-question behavior.
 
 - Source hygiene rejects the listed naming and compiled-input regressions.
 - It is not a source-provenance or license audit.
@@ -305,6 +336,28 @@ node --import tsx/esm scripts/repro-askpanel.tsx
 node --import tsx/esm scripts/verify-askpanel-layout.tsx
 node --import tsx/esm scripts/repro-toolcards.tsx
 ```
+
+CI test jobs set `DSH_TUI_LANG=zh` as a fallback, but standalone regressions
+must not depend on it. When running a script that does not pin yet, prefix
+`DSH_TUI_LANG=zh` locally; otherwise a machine with an `en` lang.json or an
+`en_US` locale reports false failures. At import time, UI language resolves from
+`DSH_TUI_LANG` → `~/.dsh-tui/lang.json` → the OS locale. Scripts asserting or
+locating UI copy (including assertions that text is absent) must pin the
+matching language: set `process.env.DSH_TUI_LANG = 'zh'` / `'en'` before
+dynamic imports; Chinese-copy scripts with static imports should put
+`import './lib/default-lang-zh.mjs'` before all other imports. Do not use `??=`
+to preserve the host value or choose assertions based on the host language.
+Bilingual regressions already calling `setLang` per scenario and tests using
+Chinese only as input data (width, clipboard, etc.) need no redundant pin.
+`node scripts/verify-regression-language.mjs` (build first; included in the
+`channel-ui` CI group) tests locale, saved preference, and environment
+overrides opposing each script's expected language, each with a temporary
+HOME. This protects both Chinese positive assertions and English negative
+assertions. The language fixes in `verify-ime-cursor`, `repro-suggestion-click`,
+and `verify-queue` remain, but those scripts run only standalone until their
+legacy fixed waits are migrated; they are not included in the CI matrix.
+Diagnostic probes are not run wholesale by this regression group; pass `DSH_TUI_LANG=zh`
+explicitly when their output needs to be Chinese.
 
 Run all three CI regressions for changes to shared rendering, `Chat`, prompt or
 question layout, tool cards, theme primitives, or the Ink core. For a narrow
@@ -329,6 +382,9 @@ change, also run the closest focused script:
 | Hover event performance (complete interest boundaries, no-interest rect fast path, frame/multi-root invalidation) | `node --import tsx/esm scripts/verify-hover-coalesce.tsx` |
 | Prompt-input mouse selection editing (drag/Shift+click/double-click word select, delete/replace, layered Esc, Ctrl+C copy, CJK wide cells, fold-side clamping) | `node --import tsx/esm scripts/verify-input-selection.tsx` |
 | Sixel encoding, worker cache, thumbnail/preview lifecycle | `node --import tsx/esm scripts/verify-terminal-images-sixel.tsx`, `node --import tsx/esm scripts/verify-sixel-transcript.tsx`; timing comparison `node --import tsx/esm scripts/bench-sixel-encode.tsx` |
+| Standalone Markdown nodes (tables, mermaid diagrams) and streaming block spacing | `pnpm verify:table-layout`, `pnpm verify:mermaid-diagram`, `node --import tsx/esm scripts/verify-streaming-markdown-spacing.tsx` |
+| Cross-process session mount ledger (failure behavior, strict reads, lock recovery, reservations) | `pnpm verify:session-mounts` |
+| Unsent-draft handoff across screens (snapshot, cursor, image bindings, ownership) | `pnpm verify:composer-draft-handoff`; end-to-end screen switching also `node scripts/verify-session-browser.mjs` |
 
 Most focused scripts invoked with plain `node` import `lib/types/`; run
 `pnpm build` first. Scripts that import TypeScript sources declare the
@@ -345,7 +401,8 @@ Regression scripts take their wait primitives from `scripts/lib/term-test.mjs`:
   header), in a trailing comment on the same line or in the comment block
   directly above.
 - The `verify:fixed-window` gate scans every script registered in
-  `scripts/run-ci-group.mjs` and fails on an untagged call.
+  `scripts/run-ci-group.mjs` and `scripts/verify-regression-language.mjs`
+  (including matrix child processes), and fails on an untagged call.
 - `固定窗:待迁移` marks pre-existing debt (burn-down tracked in issue #791),
   pinned per file in `scripts/fixed-window.baseline.json`: any file going up
   fails, and old debt going down never offsets it.
@@ -543,16 +600,17 @@ guide owns detailed contracts such as the toolchain and verification matrix.
 
 | If you change | Keep these in sync |
 | --- | --- |
-| Plugin config or environment behavior | `src/index.ts`, runtime consumer, `cordis.patch.yml`, `cordis.yml`, `README.md`, `README_ZH.md` |
+| A /settings setting (new, or changed text) | Written once in `src/settings/definitions.ts` (en/zh label and help, kind, options; keys sorted); the Config schema lives in `src/dsh-adapter/index.ts`, runtime format/parse stays on the field in `src/dsh-adapter/plugin.ts`. `pnpm compile` generates `lib/settings.json`, shipped in the npm package, and the website's settings reference is built from it; `verify:settings` checks the definitions. Until that reference is live, the settings table in `docs/user-guide{,.en}.md` still needs its row |
+| Other plugin config or environment behavior | `src/dsh-adapter/index.ts`, runtime consumer, `cordis.patch.yml`, `cordis.yml` (comments: example values and essential semantics only), `README.md`, `README_ZH.md` |
 | Slash commands or shortcuts | `src/commands.ts`, `src/screens/Chat.tsx`, help/input components, both READMEs, relevant skill mapping/tests |
 | Theme contract, plugin seam, or persisted theme behavior | `src/theme.ts`, `src/themeCatalog.ts`, `src/dsh-adapter/themes.ts`, all palettes, theme provider/picker, custom-theme parser, theme verification, both READMEs, plugin docs |
 | Session/channel behavior | `src/dsh-adapter/channel.ts`, affected UI projections, compiled output, focused channel/replay regression |
 | Renderer/layout behavior | `src/ink/` or Yoga source, compiled output, CI regressions, focused scroll/resize/PTY probe |
 | Skill discovery or presentation | DSH adapter, slash-command merge, `/skills`, and focused regressions; maintainer-only skills live in `.agents/skills/` and must stay out of npm |
 | User-facing documented behavior | Chinese and English READMEs, plus config comments/help text where applicable |
-| Contribution intake or PR gate | `docs/contributing.md`, `docs/contributing.en.md`, `.github/workflows/pr-gate.yml`, `.github/scripts/pr-intake/`, `.github/APPROVED_CONTRIBUTORS` |
+| Contribution intake or PR gate | `.mergify.yml`, `docs/contributing.md`, `docs/contributing.en.md`, `.github/workflows/pr-gate.yml`, `.github/scripts/pr-intake/`, `.github/APPROVED_CONTRIBUTORS` |
 | Package version or dependency | `package.json`, `pnpm-lock.yaml`, generated/published artifacts as applicable; do not churn the legacy npm lock incidentally |
-| Upstream validated-line bump | `src/dsh-adapter/contract.ts`, both peer and dev ranges in `package.json`, bundled `dsh-auth/package.json` and `dsh-auth/pnpm-lock.yaml`, `pnpm-workspace.yaml`, the upstream SHA in the `alpha-compat` job of `.github/workflows/ci.yml`, the version constants in `scripts/verify-{alpha-source,patch-surface,web-coexistence,upstream-contract}`, `patch-surface.snapshot.json`, `ADAPTER.md`, `docs/user-guide.md`; steps in the upgrade section of [ADAPTER.md](../ADAPTER.md) |
+| Upstream validated-line bump | `src/dsh-adapter/contract.ts`, `src/dsh-adapter/oauth/`, both peer and dev ranges in `package.json`, `pnpm-workspace.yaml`, the upstream SHA in the `alpha-compat` job of `.github/workflows/ci.yml`, the version constants in `scripts/verify-{alpha-source,patch-surface,web-coexistence,upstream-contract}`, `patch-surface.snapshot.json`, `ADAPTER.md`, `docs/user-guide.md`; steps in the upgrade section of [ADAPTER.md](../ADAPTER.md) |
 
 ## Git And Release Safety
 
@@ -571,11 +629,24 @@ guide owns detailed contracts such as the toolchain and verification matrix.
   tag whose version exactly matches `package.json`, then builds, runs focused
   regressions, and publishes to npm.
   - Treat version changes and tags as release operations, not routine cleanup.
-- Release notes credit contributors. Create GitHub Releases with
-  `gh release create vX.Y.Z --notes-file notes.md --generate-notes`.
-  - The hand-written summary comes first, and GitHub appends What's Changed
-    (PR title + author + link), New Contributors, and the Full Changelog;
-    `.github/release.yml` excludes bots from the generated list.
+- Release notes credit contributors, and GitHub Releases are not created by
+  hand: after npm publish, `publish.yml` creates the tag's Release with notes
+  from the GitHub Release Notes API: What's Changed (PR title + author +
+  link), New Contributors, and the Full Changelog; `.github/release.yml`
+  excludes bots from the generated list. When the Release lacks any asset
+  listed in its `SHA256SUMS`, the same run builds and uploads the release
+  bundles (a rerun fills them in too).
+  - Optional hand-written summary: commit `.github/release-notes/vX.Y.Z.md`
+    before tagging, and the generated notes follow it. Without that file the
+    Release carries the generated notes only.
+  - The generated notes start with a `<!-- dsh-tui:generated-notes -->`
+    marker. If the Release already exists (a rerun, or a maintainer created it
+    first), the job updates instead of failing: a body with that marker or a
+    `## What's Changed` heading is left alone; any other body gets the
+    generated notes appended below it and is never replaced.
+  - To backfill notes for an existing tag, run Actions → Publish → Run
+    workflow with that tag. It only touches the notes; it skips npm publish
+    and bundle builds.
   - In the hand-written summary, entries from external contributors end with
     `(#PR by @user)`; the maintainer's own entries are unmarked.
   - Write bare `#123` and `@user` — GitHub renders them as links.

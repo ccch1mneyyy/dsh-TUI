@@ -1,18 +1,23 @@
 /**
  * Type-check the TUI directly against the source-authoritative newest
- * DeepSeek Harness prerelease. CI pins the checkout SHA; local runs may point
- * DSH_HARNESS_SOURCE_ROOT at a checkout or use ../deepseek-harness.
+ * DeepSeek Harness prerelease. CI pins the checkout SHA; local runs point
+ * DSH_HARNESS_SOURCE_ROOT at a checkout of the expected tag.
  */
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join, parse, resolve } from 'node:path'
 import { tmpdir } from 'node:os'
 import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
+import { rcompare, valid } from 'semver'
 import ts from 'typescript'
 
-const EXPECTED_UPSTREAM_VERSION = process.env.DSH_HARNESS_EXPECTED_VERSION ?? '0.1.7-rc.2'
+const EXPECTED_UPSTREAM_VERSION = process.env.DSH_HARNESS_EXPECTED_VERSION ?? '0.2.0-rc.2'
 const tuiRoot = resolve(import.meta.dirname, '..')
-const sourceRoot = resolve(process.env.DSH_HARNESS_SOURCE_ROOT ?? join(tuiRoot, '../deepseek-harness'))
+if (!process.env.DSH_HARNESS_SOURCE_ROOT) {
+  console.error(`DSH_HARNESS_SOURCE_ROOT is unset: point it at a deepseek-harness checkout of dsh-v${EXPECTED_UPSTREAM_VERSION}`)
+  process.exit(1)
+}
+const sourceRoot = resolve(process.env.DSH_HARNESS_SOURCE_ROOT)
 const sourceManifestPath = join(sourceRoot, 'package.json')
 if (!existsSync(sourceManifestPath)) {
   console.error(`upstream source checkout missing: ${sourceRoot}`)
@@ -57,6 +62,58 @@ sourcePaths['@deepseek-ai/cordis'] = [
 sourcePaths['@deepseek-ai/schemastery'] = [
   join(tuiRoot, 'node_modules/@deepseek-ai/schemastery/lib/types/index.d.ts'),
 ]
+// The JSONL persistence backend's SOURCE tree depends on native-addon type
+// surfaces (@deepseek-ai/node-addon-system/flock) that do not exist in this
+// workspace, so type-checking it from source here is not possible — and its
+// published d.ts is generated from exactly that source. The same holds for
+// its base package: the persistence seam's declarations are published per
+// release, and the seam's source-tree graph drags session-format source in,
+// whose index-signature style does not compile under this workspace's
+// renderer-tuned options. Pin both to the npm declarations like
+// cordis/schemastery above. First src consumer: the cross-agent migration
+// (src/dsh-adapter/migrate/), which imports the plugin to write imported
+// conversations through the official backend.
+sourcePaths['@deepseek-ai/dsh-session-persistence'] = [
+  join(tuiRoot, 'node_modules/@deepseek-ai/dsh-session-persistence/lib/types/index.d.ts'),
+]
+sourcePaths['@deepseek-ai/dsh-session-persistence-jsonl'] = [
+  join(tuiRoot, 'node_modules/@deepseek-ai/dsh-session-persistence-jsonl/lib/types/index.d.ts'),
+]
+// The format family's source tree uses optional-field headers against a
+// string index signature, which only compiles under upstream's own strict
+// flag set — not under this workspace's renderer-tuned options. Its
+// published d.ts is generated from exactly that source, so pin it the same
+// way whenever the persistence seam's graph reaches it. The package is a
+// transitive install (not a direct dependency), so the declaration is found
+// by scanning the pnpm store — ranked by each entry's OWN package.json
+// version, never by directory name: pnpm shortens a store name past
+// `virtual-store-dir-max-length` to `<name>_<hash>` (60 chars on Windows,
+// 120 elsewhere), leaving no version in the name at all, and a lexicographic
+// sort ranks 0.1.7-rc.2 above 0.1.7-rc.10. The alpha lanes check OLDER
+// upstream checkouts against the versions this workspace actually installs,
+// and the format types are shape-stable across those lines, so the newest
+// installed declaration is the right pin.
+{
+  const store = join(tuiRoot, 'node_modules/.pnpm')
+  const candidates = []
+  if (existsSync(store)) {
+    for (const entry of readdirSync(store)) {
+      const pkg = join(store, entry, 'node_modules/@deepseek-ai/dsh-session-format')
+      const manifest = join(pkg, 'package.json')
+      const declaration = join(pkg, 'lib/types/index.d.ts')
+      if (!existsSync(manifest) || !existsSync(declaration)) continue
+      try {
+        const version = valid(JSON.parse(readFileSync(manifest, 'utf8')).version)
+        if (version !== null) candidates.push({ version, declaration })
+      } catch {
+        // Unreadable manifest: not a candidate; the pin simply stays unset.
+      }
+    }
+  }
+  candidates.sort((a, b) => rcompare(a.version, b.version))
+  const newest = candidates[0]
+  if (newest !== undefined) sourcePaths['@deepseek-ai/dsh-session-format'] = [newest.declaration]
+}
 
 // HMR is an indirect settings dependency, not a TUI-owned implementation.
 // Compile it with upstream's strict options: our renderer's noImplicitAny=false
@@ -84,7 +141,6 @@ if (process.platform === 'win32' && parse(sourceRoot).root !== typeRoot) {
 }
 const projects = [
   { label: 'dsh-tui', config: join(tuiRoot, 'tsconfig.json') },
-  { label: 'dsh-auth', config: join(tuiRoot, 'dsh-auth/tsconfig.json') },
 ]
 for (const project of projects) {
   const tempRoot = mkdtempSync(join(tmpdir(), `dsh-tui-alpha-tsc-${project.label}-`))

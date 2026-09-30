@@ -4,8 +4,8 @@ import type { Color } from '../ink/styles.js'
 import { formatTokens } from '../terminal-utils/format.js'
 import { t } from '../i18n.js'
 import { formatContextUsage, DEFAULT_STATUS_BAR, normalizeStatusBar, type StatusBarConfig } from '../tuiDisplayPrefs.js'
-import { estimateSessionCostCny, estimateSessionCostSplitCny, isDeepSeekOfficialProvider, isPeakHour } from '../deepseekPricing.js'
-import { ActivityLine, contextPressurePct } from '../components/ActivityLine.js'
+import { estimateSessionCostSnapshotCny, isDeepSeekOfficialProvider, isPeakHour } from '../deepseekPricing.js'
+import { ActivityLine, contextPressurePct, type ActivityLineValue } from '../components/ActivityLine.js'
 import { GoalStatusChip } from '../components/GoalTodoPanel.js'
 import { formatJobDuration, type BackgroundJobState } from '../dsh-adapter/jobs.js'
 
@@ -13,6 +13,9 @@ import { formatJobDuration, type BackgroundJobState } from '../dsh-adapter/jobs.
  *  real Chat with partial channel literals that predate the jobs field. */
 const NO_BACKGROUND_JOBS: readonly BackgroundJobState[] = []
 import type { ChannelUi as Channel } from '../adapter/channel/ui-policy.js'
+/** 同上：partial channel 字面量可能早于 mainCost/subagentCost 字段（R4 兼容）。 */
+const NO_MAIN_COST: Channel['mainCost'] = {}
+const NO_SUBAGENT_COST: Channel['subagentCost'] = []
 import type { SelectionSnapshot } from '../dsh-adapter/ide-channel.js'
 import { modeDisplayName } from '../sessionModes.js'
 import { MiniWake } from '../components/trajectory/MiniWake.js'
@@ -50,20 +53,20 @@ import type { WaveBand } from '../dsh-adapter/types.js'
  */
 
 /**
- * Minimal mode's footer config. It ignores every SAVED preference (built from
+ * The minimal UI's footer config. It ignores every SAVED preference (built from
  * scratch rather than `normalizeStatusBar(channel.statusBar)`) and pins the
  * DECORATION switches OFF — the shared defaults are free to change
- * (`contextBar` became default-on in 2026-09) and minimal mode must not follow
+ * (`contextBar` became default-on in 2026-09) and the minimal UI must not follow
  * them into the footer.
  *
- * The metric fields keep their `DEFAULT_STATUS_BAR` values on purpose: minimal
- * mode has ALWAYS shown the default-on metrics (thinking / contextUsage /
+ * The metric fields keep their `DEFAULT_STATUS_BAR` values on purpose: the
+ * minimal UI has ALWAYS shown the default-on metrics (thinking / contextUsage /
  * cache / cost / goal) next to model + cwd — that predates the long-line fold
  * and the context-bar flip, and trimming them further is a product decision,
  * not a regression fix. Module scope: one frozen object, no per-render
  * allocation.
  */
-const MINIMAL_STATUS_BAR: StatusBarConfig = Object.freeze({
+const MINIMAL_UI_STATUS_BAR: StatusBarConfig = Object.freeze({
   ...DEFAULT_STATUS_BAR,
   compact: true,
   model: true,
@@ -152,10 +155,14 @@ export function StatusLine({
   selectionActive = false,
   helpOpen = false,
   wake,
+  activity: projectedActivity,
 }: {
   channel: Channel
   selectionActive?: boolean
   helpOpen?: boolean
+  /** Activity value published by the working-activity plugin for this session.
+   *  Preferred over the channel's own copy when the composition provides it. */
+  activity?: ActivityLineValue
   /**
    * The session projected onto the status line's few columns, plus the
    * animation tick and the self-retiring key hint.
@@ -165,7 +172,15 @@ export function StatusLine({
    * than as a count in the corner. Absent in headless embeds, where nothing
    * folds the event log.
    */
-  wake?: { band: WaveBand; hint?: string; tick: number }
+  wake?: {
+    band: WaveBand
+    hint?: string
+    tick: number
+    /** Click target for the strip: opens the trajectory scene. */
+    onOpen?: () => void
+    /** Chord revealed while the pointer rests on the strip. */
+    hoverHint?: string
+  }
 }) {
   const { columns } = useTerminalSize()
   const [themeName] = useTheme()
@@ -177,10 +192,10 @@ export function StatusLine({
     onMouseLeave: () => setHover(current => (current === id ? null : current)),
   }), [])
 
-  const statusBar: StatusBarConfig = channel.minimal
-    // Minimal mode overrides every field switch: model + cwd only, so the
+  const statusBar: StatusBarConfig = channel.minimalUi
+    // The minimal UI overrides every field switch: model + cwd only, so the
     // footer can never grow decorations regardless of saved preferences.
-    ? MINIMAL_STATUS_BAR
+    ? MINIMAL_UI_STATUS_BAR
     : normalizeStatusBar(channel.statusBar)
   // Provider workspaces expose a remote display path alongside a host alias;
   // only the local target has identical cwd/displayCwd values to fold.
@@ -348,24 +363,37 @@ const selectionBadge = formatSelectionBadge(channel.selection)
           ),
         }]
       : []),
-    // Estimated session spend (≈¥): only for official DeepSeek providers
-    // whose model has a known price, and only once the estimate is non-zero
-    // (a fresh session showing ¥0.00 is noise). The trailing 峰/谷 marker
-    // shows the current billing window. Hover shows the breakdown.
+    // Estimated session spend (≈¥): only for official DeepSeek providers.
+    // Visible once there is a priced amount or at least one unpriced token (a
+    // fresh, fully priced zero session keeps hiding ¥0.00 as noise; unpriced
+    // usage still needs the 未计价 marker). The estimate merges the main
+    // session (by model) with the subagents' own durable usage, so delegating
+    // work no longer silently undercounts. The trailing 峰/谷 marker shows
+    // the current billing window; the total>0 shape is unchanged. Hover shows
+    // the breakdown.
     ...(statusBar.cost && isDeepSeekOfficialProvider(channel.provider)
       ? (() => {
-        const estimate = estimateSessionCostCny(channel.tokens, channel.model)
-        return estimate === undefined || estimate <= 0
-          ? []
-          : [{
+        const estimate = estimateSessionCostSnapshotCny({
+          provider: channel.provider,
+          main: channel.mainCost ?? NO_MAIN_COST,
+          subagents: channel.subagentCost ?? NO_SUBAGENT_COST,
+          fallbackTokens: channel.tokens,
+          fallbackModel: channel.model,
+        })
+        return estimate !== undefined && (estimate.total > 0 || estimate.unpricedTokens > 0)
+          ? [{
               key: 'cost',
               id: 'cost' as const,
               node: (
                 <Text color="inactiveShimmer">
-                  {t('status-cost-label')}¥{estimate.toFixed(2)} {t(isPeakHour() ? 'cost-now-peak' : 'cost-now-idle')}
+                  {t('status-cost-label')}
+                  {estimate.total > 0
+                    ? <>¥{estimate.total.toFixed(2)} {t(isPeakHour() ? 'cost-now-peak' : 'cost-now-idle')}</>
+                    : <> {t('cost-unpriced', { tokens: formatTokens(estimate.unpricedTokens) })}</>}
                 </Text>
               ),
             }]
+          : []
       })()
       : []),
   ]
@@ -387,7 +415,7 @@ const selectionBadge = formatSelectionBadge(channel.selection)
       ? [{
           key: 'goal',
           id: 'goal' as const,
-          node: <GoalStatusChip goal={channel.goal} minimal={channel.minimal} />,
+          node: <GoalStatusChip goal={channel.goal} minimal={channel.minimalUi} />,
         }]
       : []),
     ...(statusBar.gitBranch && channel.gitBranch
@@ -439,7 +467,7 @@ const selectionBadge = formatSelectionBadge(channel.selection)
       : statusBar.shortcutHint && !helpOpen
         ? t('statusline-hint-shortcuts')
         : ''
-  const activity = channel.workingActivity
+  const activity = projectedActivity
   const showActivity =
     statusBar.activity &&
     !channel.working &&
@@ -448,7 +476,11 @@ const selectionBadge = formatSelectionBadge(channel.selection)
     activity.phase !== 'idle'
   const showTrajectory = statusBar.trajectory && wake !== undefined
 
-  const barWidth = columns - 4
+  // The root Box below paints paddingX={1} inside width={columns}, so the
+  // content area is `columns - 2` cells wide — size the bar from the same
+  // arithmetic or its right edge falls 2 columns short of the status row's
+  // (the v0.8.0 paddingX 2→1 tightening left the old `columns - 4` stale).
+  const barWidth = columns - 2
   const barColors: { freeFill: Color; freeText: Color } | undefined =
     themeName === 'light'
       ? undefined
@@ -480,10 +512,10 @@ const selectionBadge = formatSelectionBadge(channel.selection)
   // on hover is what made the footer grow mid-gesture and shoved the
   // transcript up (user feedback). Idle it may sit blank: a stable footer
   // outranks a reclaimable row, and hovering only ever swaps this line's
-  // content. Minimal mode keeps the old contract — no hover details, the
+  // content. The minimal UI keeps the old contract — no hover details, the
   // row appears only for real content (which its defaults never produce).
   const showSupplementalRow =
-    (!channel.minimal && (hasStatusFields || barVisible)) ||
+    (!channel.minimalUi && (hasStatusFields || barVisible)) ||
     showActivity ||
     showTrajectory ||
     hint !== ''
@@ -574,7 +606,7 @@ const selectionBadge = formatSelectionBadge(channel.selection)
             {showActivity ? trailer : null}
           </Box>
           {showTrajectory && wake !== undefined ? (
-            <MiniWake band={wake.band} hint={wake.hint} tick={wake.tick} />
+            <MiniWake band={wake.band} hint={wake.hint} tick={wake.tick} onOpen={wake.onOpen} hoverHint={wake.hoverHint} />
           ) : null}
         </Box> : null}
       </Box>
@@ -680,14 +712,28 @@ function buildHoverDetail(
       )
     }
     case 'cost': {
-      const split = estimateSessionCostSplitCny(channel.tokens, channel.model)
-      if (split === undefined) return null
+      const estimate = estimateSessionCostSnapshotCny({
+        provider: channel.provider,
+        main: channel.mainCost ?? NO_MAIN_COST,
+        subagents: channel.subagentCost ?? NO_SUBAGENT_COST,
+        fallbackTokens: channel.tokens,
+        fallbackModel: channel.model,
+      })
+      // Same visibility contract as the field: a priced amount or unpriced
+      // tokens (with the 未计价 row) both warrant the breakdown; the old
+      // total>0 gate hid the only explanation for an all-unpriced session.
+      if (estimate === undefined || (estimate.total <= 0 && estimate.unpricedTokens <= 0)) return null
       const { input, output, cacheRead } = channel.tokens
       return (
         <Text wrap="truncate">
-          {dim('≈¥')}{split.total.toFixed(2)} · {dim('peak ')}¥{split.peak.toFixed(2)}
-          {' · '}{dim('idle ')}¥{split.idle.toFixed(2)} · {dim('in ')}{formatTokens(input)}
+          {dim('≈¥')}{estimate.total.toFixed(2)} · {dim('peak ')}¥{estimate.peak.toFixed(2)}
+          {' · '}{dim('idle ')}¥{estimate.idle.toFixed(2)} · {dim('in ')}{formatTokens(input)}
           {' · '}{dim('out ')}{formatTokens(output)} · {dim('cache ')}{formatTokens(cacheRead)}
+          {' · '}{t('cost-split-main', { cost: estimate.main.toFixed(2) })}
+          {' · '}{t('cost-split-subagent', { cost: estimate.subagent.toFixed(2) })}
+          {estimate.unpricedTokens > 0
+            ? <>{' · '}{t('cost-unpriced', { tokens: formatTokens(estimate.unpricedTokens) })}</>
+            : null}
           {' · '}{t('status-cost-note')}
         </Text>
       )

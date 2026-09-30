@@ -6,6 +6,8 @@ import type { TranscriptImage } from '../../dsh-adapter/transcript-images.js'
 import { makeDecodeTier } from './transcriptImageDecode.js'
 import { cleanRenderText } from '../../dsh-adapter/sanitize.js'
 import { getLang, subscribeLang, t } from '../../i18n.js'
+import { useTerminalBackground } from '../design-system/ThemeProvider.js'
+import { getImageBacking, subscribeImageBacking } from '../../tuiDisplayPrefs.js'
 
 const thumbnailTier = makeDecodeTier(384, 24)
 // One modal at a time: current + previous suffices for instant reopen.
@@ -97,6 +99,14 @@ function TranscriptImagePreview({
     return () => { live = false; controller.abort() }
   }, [image, graphicsAvailable])
 
+  // What sits behind the raster follows `dsh-tui.imageBacking`: photos
+  // may float transparent like formulas (the wallpaper shows at
+  // anti-aliased edges and transparent corners — Sixel's binary alpha drops
+  // their softest pixels) or composite onto the terminal colour, which
+  // keeps soft edges smooth on any background.
+  const backing = React.useSyncExternalStore(subscribeImageBacking, getImageBacking)
+  const composited = backing === 'terminal'
+  const terminalBackground = useTerminalBackground()
   const label = transcriptImageLabel(image)
   const fallback = !graphicsAvailable
     ? t('transcript-image-ready', { name: label })
@@ -106,17 +116,20 @@ function TranscriptImagePreview({
         ? t('transcript-image-loading', { name: label })
         : t('transcript-image-ready', { name: label })
   const preview = (
-    <Image
-      presentation="transcript"
-      source={graphicsAvailable && state.kind === 'ready' ? state.source : undefined}
-      width={width}
-      height={height}
-      alt={label}
-    >
-      <Box width={width} height={height} alignItems="center" justifyContent="center">
-        <Text dimColor wrap="truncate">[{fallback}]</Text>
-      </Box>
-    </Image>
+    <Box backgroundColor={composited ? terminalBackground : undefined}>
+      <Image
+        {...(composited ? {} : { transparent: true })}
+        presentation="transcript"
+        source={graphicsAvailable && state.kind === 'ready' ? state.source : undefined}
+        width={width}
+        height={height}
+        alt={label}
+      >
+        <Box width={width} height={height} alignItems="center" justifyContent="center">
+          <Text dimColor wrap="truncate">[{fallback}]</Text>
+        </Box>
+      </Image>
+    </Box>
   )
   if (onPreview === undefined) return preview
   return (

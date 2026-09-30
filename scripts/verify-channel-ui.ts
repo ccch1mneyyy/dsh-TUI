@@ -107,6 +107,16 @@ function fixture(jobs?: unknown, options: { throwOnEvent?: string; effectCleanup
   bindChannelCommands(raw, mount.channel)
   mount.channel.setWhale(false)
   assert.equal(raw.whale, false)
+  // The minimal-UI flag: `minimal` stays a live deprecated alias of
+  // `minimalUi`, both on the raw state and through the frozen UI projection,
+  // and the deprecated setter still drives the same flag.
+  mount.channel.setMinimalUi(true)
+  assert.equal(raw.minimalUi, true)
+  assert.equal(raw.minimal, true, 'deprecated `minimal` alias reads minimalUi')
+  assert.equal(mount.channel.minimal, true, 'deprecated `minimal` alias survives the UI projection')
+  mount.channel.setMinimal(false)
+  assert.equal(raw.minimalUi, false, 'deprecated `setMinimal` alias writes minimalUi')
+  assert.equal(mount.channel.minimalUi, false)
   mount.channel.submit('hello')
   await tick()
   assert.ok(writes.includes('submit'))
@@ -711,7 +721,7 @@ for (const method of ['writeProfile', 'mutateProfile', 'removeProfile'] as const
   const first = initial[0]!
   historicalReads = 0
   for (let i = 0; i < 8; i++) {
-    raw.workingActivity = { phase: 'thinking', text: `activity ${i}` } as never
+    raw.activityFrames = `frame ${i}` as never
     raw.emitStream()
     await tick()
     assert.equal(mount.channel.rows[0], first, 'activity stream retains unchanged historical row')

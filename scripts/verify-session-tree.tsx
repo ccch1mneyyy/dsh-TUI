@@ -405,8 +405,19 @@ function family() {
     }
 
     const located: string[] = []
+    // Channel construction fires the agent-view background refresh, which
+    // legitimately locates EVERY stored session — including U — to build its
+    // own rows, and it settles inside the same await window as the tree
+    // build. Hold exactly that first listing back (it is fire-and-forget, so
+    // a pending promise is harmless) so the recording below reflects only
+    // the tree's own reads; the tree's later enumerations answer normally.
+    let listCalls = 0
+    const gatedListing = () => {
+      listCalls += 1
+      return listCalls === 1 ? new Promise<readonly unknown[]>(() => {}) : Promise.resolve(logicalHeaders)
+    }
     const fileChannel = makeTreeChannel({
-      list: () => Promise.resolve(logicalHeaders),
+      list: gatedListing,
       locate(raw: unknown) {
         const id = String((raw as { id?: unknown }).id ?? '')
         located.push(id)
@@ -425,8 +436,12 @@ function family() {
 
     const inspected: string[] = []
     const logs = new Map<string, readonly Ev[]>([['R', rootEvents], ['F1', f1Events]])
+    let memoryListCalls = 0
     const memoryChannel = makeTreeChannel({
-      list: () => Promise.resolve(logicalHeaders),
+      list: () => {
+        memoryListCalls += 1
+        return memoryListCalls === 1 ? new Promise<readonly unknown[]>(() => {}) : Promise.resolve(logicalHeaders)
+      },
       locate: () => ({ kind: 'memory' }),
       inspect(id: unknown) {
         const key = String(id)

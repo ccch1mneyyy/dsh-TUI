@@ -1,7 +1,6 @@
 import { createSessionTreeReader } from './channel/session-tree.js'
 import { createInputDelivery } from './channel/input-delivery.js'
 import { createChannelBinding } from './channel/binding.js'
-import { createChannelActivity } from './channel/activity.js'
 import { createCommandCompletions } from './channel/command-completions.js'
 import { createLocalActions } from './channel/local-actions.js'
 import { createDetachedHandleFactory } from './channel/lifetime-resources.js'
@@ -25,6 +24,7 @@ import { createModeActions } from './channel/mode-actions.js'
 import { createFileActions } from './channel/file-actions.js'
 import { createReportActions } from './channel/reports.js'
 import { createSessionMetadataActions } from './channel/session-metadata.js'
+import { createForeignBrowser } from './migrate/browse.js'
 import { markChannelReadDirty } from '../adapter/channel/read-view.js'
 import { createAgentViewProjection } from './channel/agent-view-projection.js'
 import { createJobProjection } from './channel/job-projection.js'
@@ -78,7 +78,7 @@ import { createPreferences } from './channel/preferences.js'
 import { createSettingsHosts } from './channel/settings-host.js'
 import { createChannelOwner, registerChannelOwner } from './channel/owner.js'
 import { ARGS_PREVIEW_LIMIT, foldBack, harnessToolResultView, LOCAL_OUTPUT_LIMIT, prepareReplayEvents, preview, RESULT_PREVIEW_LIMIT, toolErrorText } from './channel/transcript.js'
-import type { ActivityStatus, AgentViewRow, Channel, ChannelGoal, ChannelImageBlock, ChannelState, ChatRow, CredentialStatus, EffortOption, JobControl, LoadedContextEntry, LoadedContextFile, LoadedContextSkill, LoadedContextTool, MentionFs, NotificationItem, PendingMessage, PresetOption, ResumeResult, StagedImageInput, SubagentControl, SubagentRow, TodoPanelItem, ToolCallView, ToolResultView, ToolsRegistryLike } from './channel/types.js'
+import type { AgentViewRow, Channel, ChannelGoal, ChannelImageBlock, ChannelState, ChatRow, CredentialStatus, EffortOption, JobControl, LoadedContextEntry, LoadedContextFile, LoadedContextSkill, LoadedContextTool, MentionFs, NotificationItem, PendingMessage, PresetOption, ResumeResult, StagedImageInput, SubagentControl, SubagentRow, TodoPanelItem, ToolCallView, ToolResultView, ToolsRegistryLike } from './channel/types.js'
 import { estimateTokens, isTokenDelta, tokenDeltaChars, usageOutputTokens } from './channel/usage.js'
 import { getHostCommandTrees } from './command-trees.js'
 import { installDecisionGuard, markDecisionDispatchTopology } from './decision-guard.js'
@@ -209,9 +209,8 @@ function createChannelWithOwner(
       return agents?.get(id)
     },
   })
-  const subagentStore = subagentProjection.store
+  owner.own(() => subagentProjection.dispose())
   const subagentControl = subagentProjection.control
-  const pendingTaskDescriptions = subagentProjection.pendingTaskDescriptions
   // Job projection owns registry callbacks and transcript rows. The optional
   // service attachment has no authority after its injected lifetime ends.
   const jobProjection = createJobProjection(() => state, {
@@ -221,6 +220,7 @@ function createChannelWithOwner(
   const jobControl = jobProjection.control
   const attachJobs = jobProjection.attach
   const resetJobProjection = jobProjection.reset
+  const reanchorJobProjection = jobProjection.reanchor
 
 
   // The DSH slash-command registry (optional service): /plan, /goal and
@@ -446,6 +446,7 @@ function createChannelWithOwner(
   // installed after ChannelState initialization below.
   let settleManualCompaction!: () => Promise<void>
   let compactManualSession!: () => void
+  let cancelManualCompaction!: () => void
   let forkSessionAction!: () => Promise<boolean>
   let rewindToAction!: (row: ChatRow, mode?: string | null) => Promise<string | null>
   let rewindToNodeAction!: (sessionId: string, seq: number, mode?: 'rewind' | 'fork') => Promise<string | null>
@@ -483,19 +484,32 @@ function createChannelWithOwner(
     emitStream: emitter.emitStream,
     ...createSettingsHosts(ctx, owner.assertActive),
     ...createPreferences(() => state),
+    /** Mount-owned settings namespace: the section registers under it, so this
+     *  is the only ns whose section carries the TUI's user layer. */
+    settingsNamespace: options.settingsNs ?? 'dsh-tui',
     get autoRecapOnOpen(): boolean {
       const settings = ctx.get('settings') as
         | { describe(options?: { redactSecrets?: boolean }): readonly { ns: string; value: unknown }[] }
         | undefined
       if (settings === undefined) return false
-      const ns = settings.describe({ redactSecrets: true }).find(entry => entry.ns === 'dsh-tui')
+      const ns = settings.describe({ redactSecrets: true }).find(entry => entry.ns === state.settingsNamespace)
       return (ns?.value as Record<string, unknown> | undefined)?.recapOnOpen !== false
     },
     ...createInitialChannelView(options, {
       agentId: binding.agent.id,
+      sessionId: binding.agent.session.id,
       mode: sessionModes[0]!,
       cwdDescription: workspaceService.describe(options.cwd).description ?? options.cwd,
     }),
+    // Deprecated pre-rename alias of `minimalUi`. An accessor is required here
+    // (a field set in createInitialChannelView would be copied by the spread
+    // into a stale data property). Read-only on purpose: the only supported
+    // write path is `setMinimalUi()` / its `setMinimal()` alias, and the
+    // frozen `ChannelUi` view third-party scenes receive exposes it read-only
+    // anyway.
+    get minimal(): boolean {
+      return state.minimalUi
+    },
     commandList: LOCAL_COMMANDS,
     ...actionMethods,
     subagentControl,
@@ -639,6 +653,7 @@ function createChannelWithOwner(
     runtime: adapterRuntime,
     grantStore: currentGrantStore,
   })
+  const foreignBrowser = createForeignBrowser(() => ctx.get('sessionPersistence'), owner.signal)
   sessionMetadataActions = createSessionMetadataActions(ctx, {
     owner,
     binding,
@@ -682,7 +697,7 @@ function createChannelWithOwner(
   const bash = ctx.get('shell') as ForegroundShell | undefined
 
   const projector = createChannelProjection(state, {
-    agent: () => binding.agent, rowIds, resetContextWarning, pendingTaskDescriptions, jobs: jobStore, inputConvergence,
+    agent: () => binding.agent, rowIds, resetContextWarning, jobs: jobStore, inputConvergence,
     checkContextWarning, notify: (...args) => notify(...args),
     tools: ctx.get('tools') as ToolsRegistryLike | undefined, renderer: rendererRuntime,
     attachments: () => ctx.get('attachments'),
@@ -720,9 +735,6 @@ function createChannelWithOwner(
   state.status = binding.agent.status
   state.emit()
 
-  // The activity sidecar owns its tracker and interval; it never projects transcript facts.
-  const activity = createChannelActivity(ctx, state, owner, options.activity !== false)
-
   modelActions = createModelActions(ctx, state, {
     owner,
     binding,
@@ -758,7 +770,6 @@ function createChannelWithOwner(
     refreshSkillCommands,
     clearStagedImages,
     dropModelCompletion: () => modelActions.dropModelNodeCache(),
-    onModelSwitch: model => activity.onModelSwitch(model),
     notify,
   })
 
@@ -790,7 +801,7 @@ function createChannelWithOwner(
     owner,
     binding,
     state,
-    activity,
+    seedActivity: options.seedActivity,
     inputConvergence,
     selection,
     modelActions,
@@ -801,7 +812,12 @@ function createChannelWithOwner(
     messageObserver,
     retireAttachment,
   })
-  const bindAgent = bindingEvents.bind
+  const rawBindAgent = bindingEvents.bind
+  /** Bind the new agent, then re-anchor the job projection: its event
+   *  subscription is deliberately owner-agnostic, so this is what makes the
+   *  /jobs roster follow a session switch immediately instead of waiting for
+   *  the new session's first job event. */
+  const bindAgent = (): void => { rawBindAgent(); reanchorJobProjection() }
 
   const sessionAdoption = createSessionAdoption(state, {
     binding,
@@ -826,6 +842,8 @@ function createChannelWithOwner(
     rowIds,
     resetProjector: () => projector.reset(),
     resetSubagents: subagentProjection.reset,
+    restoreSubagents: subagentProjection.restore,
+    parkSubagents: subagentProjection.park,
     resetJobs: resetJobProjection,
     replay: replaySessionSeed,
     settleReplay: projector.settleStreaming,
@@ -854,6 +872,7 @@ function createChannelWithOwner(
     // a target already running in this process is re-attached rather than
     // resumed twice from its log (which would mount one log in two places).
     adoptLive: target => adoptLiveAgent(target),
+    parkSubagents: subagentProjection.park,
     backgroundHandles,
     rowIds,
     resetProjector: () => projector.reset(),
@@ -910,10 +929,10 @@ function createChannelWithOwner(
     agent: () => binding.agent,
     withDecisionPending,
     notify,
-    onComplete: () => activity.onCompact(),
   })
   settleManualCompaction = manualCompaction.settle
   compactManualSession = manualCompaction.compact
+  cancelManualCompaction = manualCompaction.cancel
   backgroundCurrentAction = createBackgroundCurrentAction(ctx, state, {
     configuredPreset: options.configuredPreset,
     configuredProvider: options.configuredProvider,
@@ -927,6 +946,7 @@ function createChannelWithOwner(
     rowIds,
     resetProjector: () => projector.reset(),
     resetSubagents: subagentProjection.reset,
+    parkSubagents: subagentProjection.park,
     resetJobs: resetJobProjection,
     refreshEffortLevels: () => modelActions.refreshEffortLevels(),
     bindAgent,
@@ -980,8 +1000,12 @@ function createChannelWithOwner(
     sideQuestion: sessionMetadataActions.sideQuestion,
     listFileCandidates: fileActions.listFileCandidates,
     listFiles: fileActions.listFiles,
+    cachedSessions: sessionMetadataActions.cachedSessions,
     listSessions: sessionMetadataActions.listSessions,
     previewSession: sessionMetadataActions.previewSession,
+    listForeignSources: foreignBrowser.listSources,
+    listForeignSessions: foreignBrowser.listSessions,
+    importForeignSession: foreignBrowser.importSession,
     bindApprovalStore: agentView.bindApprovalStore,
     agentViewRows: agentView.rows,
     subscribeAgentView: agentView.subscribe,
@@ -998,6 +1022,7 @@ function createChannelWithOwner(
     deleteSession: sessionMetadataActions.deleteSession,
     renameSessionTo: sessionMetadataActions.renameSessionTo,
     compact: compactManualSession,
+    cancelCompact: cancelManualCompaction,
     runExternalCommand: externalCommands.invokeText,
     runExternalCommandOutcome: externalCommands.invoke,
     pushLocal: localActions.pushLocal,
@@ -1083,8 +1108,6 @@ function createChannelWithOwner(
           // only show a branch for sessions this install actually used — which
           // is exactly what the column claims.
           noteBranch(binding.agent.session.id, branch)
-          // Feed the working line so git tools can show ` · git <branch>`.
-          activity.onGitBranch(branch)
           state.emit()
         }
       })
@@ -1102,5 +1125,5 @@ function createChannelWithOwner(
 export type { ChannelLaunchOptions } from './channel/state.js'
 export { expandMentions } from './channel/mentions.js'
 export { sessionCwdMatches } from './channel/paths.js'
-export type { ActivityStatus, AgentViewDispatchResult, AgentViewRow, AgentViewStatus, BackgroundResult, Channel, ChannelGoal, ChannelState, ChatRow, ComposerImageRef, ComposerSubmission, CredentialStatus, EffortOption, ExternalCommandOutcome, JobControl, JobRow, LoadedContext, LoadedContextEntry, LoadedContextFile, LoadedContextSkill, LoadedContextTool, MentionAttachments, MentionExpansion, MentionFs, NotificationItem, PendingMessage, PermissionPresetAvailability, PermissionPresetCurrent, PermissionPresetOption, PermissionPresetSnapshot, PresetOption, ResumeResult, SkillInfo, StagedImageHandle, StagedImageInput, SubagentControl, SubagentRow, TodoPanelItem, TokenBucket, TokenUsage, ToolCallView, ToolFileDiff, ToolResultView, ToolRow, ToolViewPresenter, TranscriptImage } from './channel/types.js'
+export type { AgentViewDispatchResult, AgentViewRow, AgentViewStatus, BackgroundResult, Channel, ChannelGoal, ChannelState, ChatRow, ComposerImageRef, ComposerSubmission, CredentialStatus, EffortOption, ExternalCommandOutcome, JobControl, JobRow, LoadedContext, LoadedContextEntry, LoadedContextFile, LoadedContextSkill, LoadedContextTool, MentionAttachments, MentionExpansion, MentionFs, NotificationItem, PendingMessage, PermissionPresetAvailability, PermissionPresetCurrent, PermissionPresetOption, PermissionPresetSnapshot, PresetOption, ResumeResult, SkillInfo, StagedImageHandle, StagedImageInput, SubagentControl, SubagentRow, TodoPanelItem, TokenBucket, TokenUsage, ToolCallView, ToolFileDiff, ToolResultView, ToolRow, ToolViewPresenter, TranscriptImage } from './channel/types.js'
 export { emptyTokenUsage } from './channel/usage.js'
