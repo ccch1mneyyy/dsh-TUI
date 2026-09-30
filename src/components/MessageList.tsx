@@ -282,7 +282,10 @@ function signatureParts(
         row.job === undefined
           ? ''
           : row.job.outputLines.slice(-4).map(line => line.text.length).join(','),
-        group === undefined ? '' : `${group.index}/${group.count}/${group.last ? 'l' : 'm'}`,
+        // Grouped members all render with the same 2-cell rail, so the only
+        // shape inputs are "is it a member", "is it the head" and "is the run
+        // folded" (a folded head paints the summary alone).
+        group !== undefined,
         group?.head === true,
         group?.folded === true,
       )
@@ -655,9 +658,7 @@ export function MessageList({
           ...(out[k]!),
           jobGroup: {
             head: k === i,
-            index: k - i,
             count,
-            last: k === end,
             folded,
             running,
             completed,
@@ -1913,7 +1914,7 @@ function TranscriptRow({
             <JobCard
               job={job}
               marginTopOnTurn={groupHead ? false : marginTopOnTurn}
-              rail={jobGroup === undefined ? undefined : jobGroup.last ? 'tail' : 'mid'}
+              grouped={jobGroup !== undefined}
               // Clicking a card opens the panel focused on THAT job, not the roster head.
               onClick={onOpenJobs === undefined ? undefined : () => onOpenJobs(job.id)}
             />

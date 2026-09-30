@@ -188,7 +188,7 @@ console.log('--- G1: two settled jobs group without folding ---')
     const i2 = idxOf(lines, 'job: pwsh-2')
     check('G1 两张卡都在屏上', i1 >= 0 && i2 >= 0, 'i1=' + i1 + ' i2=' + i2)
     check('G1 组内不留空行（成员相邻）', i2 === i1 + 1, 'i1=' + i1 + ' i2=' + i2)
-    check('G1 成员左侧共用连接线', (lines[i1] ?? '').startsWith('│ ') && (lines[i2] ?? '').startsWith('└ '),
+    check('G1 成员左侧共用连接线', (lines[i1] ?? '').startsWith('│ ') && (lines[i2] ?? '').startsWith('│ '),
       JSON.stringify([lines[i1], lines[i2]]))
     check('G1 两张不触发自动折叠', !frame.screen().includes('background jobs folded'))
     check('G1 组头报已完成数', frame.screen().includes('2 completed'))
@@ -569,9 +569,9 @@ console.log('--- G16: frozen rows survive grouping (session snapshot contract) -
 }
 
 // ---------------------------------------------------------------------------
-// G17 — 长标签折行时，连接线+状态标必须留在首行（flexShrink 回归）
+// G17 — 长标签折行时，状态标必须留在首行（flexShrink 回归）
 // 现场：标签一折行，行就超约束；未加 flexShrink 的 glyph 文本节点被压缩，
-// 把 `└ ✓` 拆成两行，`✓` 孤零零掉到组外（2026-09-30 用户截图实证）。
+// 被挤到下一行、孤零零掉到组外（2026-09-30 用户截图实证）。
 // ---------------------------------------------------------------------------
 console.log('--- G17: a wrapped label keeps the joint+glyph on its own line ---')
 {
@@ -587,7 +587,7 @@ console.log('--- G17: a wrapped label keeps the joint+glyph on its own line ---'
       frame.lines().filter(l => l.trim() !== '').slice(0, 4).join('|'))
     const lines = frame.lines()
     const head = lines.find(l => l.includes('job: pwsh-3')) ?? ''
-    check('G17 尾成员首行同时有连接线与状态标', head.includes('└') && head.includes('✓'), JSON.stringify(head))
+    check('G17 末成员首行也在竖线内且带状态标', head.startsWith('│ ') && head.includes('✓'), JSON.stringify(head))
     check('G17 不出现孤立的字形行', !lines.some(l => /^\s*[✓✗●▾▸]\s*$/.test(l)),
       JSON.stringify(lines.filter(l => l.trim() !== '').slice(0, 8)))
   })
@@ -598,24 +598,27 @@ console.log('--- G17: a wrapped label keeps the joint+glyph on its own line ---'
 // 现场：逐行手写前缀时，折行出来的续行在 label 列内部，没有前缀可加 →
 // 组里第一张卡的续行掉线，链条断开（2026-09-30 用户截图实证）。
 // ---------------------------------------------------------------------------
-console.log('--- G18: the rail stays unbroken across a wrapped label ---')
+console.log('--- G18: every row of the group stays inside the rail ---')
 {
   const longLabel = "gh pr view 1206 --repo ccch1mneyyy/dsh-TUI --json maintainerCanModify,state,headRefName --jq " +
     "'{canModify: .maintainerCanModify, state: .state, head: .headRefName}'"
+  // BOTH members carry a wrapping label, and the LAST one also has a live
+  // output row: the rail must cover all of it (2026-09-30 用户截图实证：
+  // 最后一张的续行掉在竖线外，整组看着散)。
   const rows = [
     jobRow(1, makeJob('pwsh-1', 'completed', { label: longLabel })),
-    jobRow(2, makeJob('pwsh-2', 'completed', { label: 'short one' })),
+    jobRow(2, makeJob('pwsh-2', 'running', { label: longLabel, outputLines: [{ text: 'compiling module a …' }] })),
   ]
   await withTerminal(() => renderList(rows, { jobGroupFold: 'never' }), async frame => {
-    check('G18 折行成员渲染出来', await settled(() => frame.lines().some(l => l.includes('maintainerCanModify'))),
+    check('G18 折行成员渲染出来', await settled(() => frame.lines().some(l => l.includes('compiling module a'))),
       frame.lines().filter(l => l.trim() !== '').slice(0, 5).join('|'))
-    const lines = frame.lines()
-    const head = lines.findIndex(l => l.includes('job: pwsh-1'))
-    check('G18 首行以竖线开头', head >= 0 && (lines[head] ?? '').startsWith('│ '), JSON.stringify(lines[head]))
-    check('G18 折行续行仍带竖线', head >= 0 && (lines[head + 1] ?? '').startsWith('│ '),
-      JSON.stringify([lines[head], lines[head + 1]]))
-    check('G18 尾成员用 └ 收口', lines.some(l => l.startsWith('└ ') && l.includes('job: pwsh-2')),
-      JSON.stringify(lines.filter(l => l.includes('pwsh-2')).slice(0, 2)))
+    const lines = frame.lines().filter(l => l.trim() !== '')
+    const header = lines.findIndex(l => l.includes('background jobs ×2'))
+    const body = header >= 0 ? lines.slice(header + 1) : []
+    check('G18 组内每一行都在竖线内', body.length >= 4 && body.every(l => l.startsWith('│ ')),
+      JSON.stringify(body.slice(0, 8)))
+    check('G18 末行（输出行）同样在竖线内', (body[body.length - 1] ?? '').startsWith('│ '),
+      JSON.stringify(body.slice(-2)))
   })
 }
 
@@ -640,7 +643,7 @@ console.log('--- G19: a live middle member keeps the rail on its output rows ---
     check('G19 输出行在竖线之内', out >= 0 && (lines[out] ?? '').startsWith('│ '), JSON.stringify(lines[out]))
     check('G19 第二行输出同样有线', out >= 0 && (lines[out + 1] ?? '').startsWith('│ '), JSON.stringify(lines[out + 1]))
     const tail = lines.findIndex(l => l.includes('job: pwsh-3'))
-    check('G19 尾成员仍用 └ 收口', tail >= 0 && (lines[tail] ?? '').startsWith('└ '), JSON.stringify(lines[tail]))
+    check('G19 末成员同样在竖线内', tail >= 0 && (lines[tail] ?? '').startsWith('│ '), JSON.stringify(lines[tail]))
   })
 }
 
