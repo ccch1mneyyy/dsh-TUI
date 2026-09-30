@@ -78,6 +78,7 @@ const SUPPORTS_SUSPEND = process.platform !== "win32";
 // but no signal reaches us. 5s is well above normal inter-keystroke gaps
 // but short enough that the first scroll after reattach works.
 const STDIN_RESUME_GAP_MS = 5000;
+
 type Props = {
 	readonly children: ReactNode;
 	readonly stdin: NodeJS.ReadStream;
@@ -633,11 +634,23 @@ export default class App extends PureComponent<Props, State> {
 		const renderer =
 			instances.get(this.props.stdout) ??
 			(instances.size === 1 ? instances.values().next().value : undefined);
+		// Host-injected query evidence (#1142 pattern): the parser only claims
+		// a terminal-response tail when a query of the matching expected type
+		// is genuinely awaiting an answer. This is the live query lifecycle,
+		// not a recency window — a settled query stops authorizing at once.
+		// Injected per call — newState replaces the whole state object, so a
+		// value stored once would go stale. Read-only for the parser.
+		const terminalExpectedResponseTypes = [
+			...this.querier.pendingResponseTypes,
+		];
+		// Both host evidence channels ride the SAME state snapshot, so a
+		// single processInput cannot see one side's evidence without the
+		// other. Parse input using our state machine.
 		const prevState: KeyParseState = {
 			...this.keyParseState,
 			mouseReportingActive: renderer?.isAltScreenMouseTracking === true,
+			terminalExpectedResponseTypes,
 		};
-		// Parse input using our state machine
 		const [keys, newState] = parseMultipleKeypresses(prevState, input);
 		// Gesture latch: a parser-captured SGR mouse prefix (mouseTailHold
 		// transitioned to a value, or the tokenizer's `incomplete` buffer

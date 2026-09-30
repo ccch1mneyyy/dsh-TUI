@@ -1,6 +1,6 @@
 /** Host-owned in-process Channel contract. No runtime or upstream imports. */
 import type { ChatRow, AgentStatus, TokenUsage, SessionCostByModel, SubagentCostEntry, NotificationItem, ChannelGoal, TodoPanelItem, LoadedContext, PendingMessage, ChannelSceneMetadata, SubagentState, SubagentControl, BackgroundJobState, JobControl, StagedImageInput, StagedImageHandle, ComposerImageRef, ComposerSubmission, ExternalCommandOutcome, TranscriptImage, ResumeResult, EffortOption, PermissionPresetSnapshot, PresetOption, LlmModelInfo, LlmProviderInfo, SkillInfo, CredentialStatus, AgentViewRow, AgentViewDispatchResult, BackgroundResult, RawTrajEvent, ChannelSelection, CompactionStatus } from './channel-view.js'
-import type { SpinnerMode, ToolBackground, ScrollGutterMode, PageMarginSetting, StatusBarConfig, SessionModeSpec, SplashFontSetting } from './channel-display.js'
+import type { SpinnerMode, ToolBackground, ScrollGutterMode, PageMarginSetting, StatusBarConfig, SessionModeSpec, SplashFontSetting, JobGroupFoldMode } from './channel-display.js'
 import type { LocalCommand, CommandCompletion, BalanceResult, FileCandidate, RecapOutcome } from './channel-catalog.js'
 import type { TuiRewindMode, SessionTreeData, SessionSummary, PreviewEntry, ForeignSource, ForeignSessionRow, ForeignImportOutcome } from './channel-session.js'
 import type { TuiWorkspaceTarget, TuiWorkspaceCommand, TuiWorkspaceCommandResult, TuiWorkspaceEntry } from './channel-workspace.js'
@@ -123,6 +123,11 @@ export interface ChannelUi {
   /** Thinking-block display (`preview` = 2-3 line live stream + fold per
    *  step; `full` = expanded until turn end). */
   readonly thinkingFold: 'preview' | 'full'
+  /** Grouping/folding of runs of consecutive background-job cards (settings
+   *  `dsh-tui.jobGroupFold`): `auto` folds a settled run of 3+ into its
+   *  summary line, `always` folds any run of 2+, `never` never folds on its
+   *  own (a header click still folds a single run). */
+  readonly jobGroupFold: JobGroupFoldMode
   /** Live tool-card background treatment. */
   readonly toolBackground: ToolBackground
   /** What the fullscreen transcript's right gutter shows (settings
@@ -177,16 +182,17 @@ export interface ChannelUi {
    *  Kept because plugin scenes receive this port through
    *  `TuiSceneProps.channel` (a published surface). Use `minimalUi`.
    *
-   *  REMOVAL: v0.12 — the first minor after the rename shipped in v0.11.2,
-   *  which is the one-minor deprecation window `docs/plugins.md` promises for
-   *  a frozen seam. Delete `minimal` (and `setMinimal()` below, plus the
-   *  `'setMinimal': 'mutate'` row in `adapter/channel/ui-policy.ts`) in
-   *  v0.12, gated on one concrete audit: scan the scene-plugin consumption
-   *  surface — this repo's `src/**` re-exports and every plugin reached
-   *  through `TuiSceneProps.channel` on the dsh-tui-ecosystem org — for a
-   *  read of `.minimal` or a call to `.setMinimal(`. Zero consumer hits →
-   *  delete in v0.12; a hit found at that cut is migrated in the same
-   *  release instead of pushing the removal out again. */
+   *  REMOVAL: v0.13 — the rename and deprecated aliases first ship in
+   *  v0.12.0, leaving one released minor-version deprecation window as
+   *  `docs/plugins.md` promises for a frozen seam. Delete `minimal` (and
+   *  `setMinimal()` below, plus the `'setMinimal': 'mutate'` row in
+   *  `adapter/channel/ui-policy.ts`) in v0.13, gated on one concrete audit:
+   *  scan the scene-plugin consumption surface — this repo's `src/**`
+   *  re-exports and every plugin reached through `TuiSceneProps.channel`
+   *  on the dsh-tui-ecosystem org — for a read of `.minimal` or a call to
+   *  `.setMinimal(`. Zero consumer hits → delete in v0.13; a hit found at
+   *  that cut is migrated in the same release instead of pushing the
+   *  removal out again. */
   readonly minimal: boolean
   /** Whether the working-activity line is shown (config.activity); the line
    * itself is read from the plugin's session projection, not this port. */
@@ -621,6 +627,7 @@ export interface ChannelUi {
   traceEvents(): readonly RawTrajEvent[]
   setDiffLayout(layout: 'auto' | 'split' | 'unified'): void
   setThinkingFold(mode: 'preview' | 'full'): void
+  setJobGroupFold(mode: JobGroupFoldMode): void
   setToolBackground(background: ToolBackground): void
   setScrollGutter(mode: ScrollGutterMode): void
   setPageMargin(setting: PageMarginSetting): void
@@ -636,7 +643,7 @@ export interface ChannelUi {
   /** @deprecated Pre-rename alias of {@link setMinimalUi}. Kept for plugin
    *  scenes that call `channel.setMinimal()`; use `setMinimalUi`.
    *
-   *  REMOVAL: v0.12, under the same audit as `minimal` above — a scene-plugin
+   *  REMOVAL: v0.13, under the same audit as `minimal` above — a scene-plugin
    *  consumption scan of `.minimal` / `.setMinimal(` with zero remaining
    *  callers. */
   setMinimal(enabled: boolean): void

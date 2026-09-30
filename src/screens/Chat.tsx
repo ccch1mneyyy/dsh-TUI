@@ -58,7 +58,8 @@ import { useSelection } from '../ink/hooks/use-selection.js'
 import { NoSelect } from '../ink/components/NoSelect.js'
 import { LogoHeader, MessageList } from '../components/MessageList.js'
 import { splashFontIdOf } from '../components/splashFonts.js'
-import { StarPrompt, type StarAttempt } from '../components/StarPrompt.js'
+import { StarPrompt, WhaleCouponPrompt, type StarAttempt } from '../components/StarPrompt.js'
+import type { WhaleCouponStore } from '../dsh-adapter/oauth/bonus.js'
 import { dueStarModal, markStarAsked, STAR_MILESTONES } from '../usageStats.js'
 import { TimelineRail } from '../components/TimelineRail.js'
 import { ScrollbarGutter } from '../components/ScrollbarGutter.js'
@@ -281,6 +282,8 @@ let fallbackDialogStore: TuiDialogStore | undefined
 let fallbackStatusStore: TuiStatusStore | undefined
 /** Standalone mounts (tests, bare embeds) without the composition root's store. */
 let fallbackActivityStore: ActivityStore | undefined
+const noCouponSubscription = (): (() => void) => () => undefined
+const noCouponSnapshot = (): null => null
 
 /** Identity of one caret-preview dismissal: the token (its title) on the
  *  image, so the same image staged twice is dismissed per token. */
@@ -293,6 +296,7 @@ export function Chat({
   questionStore,
   approvalStore,
   extensionDialogs,
+  bonusNotices,
   extensionStatus,
   activityStore,
   extensionShortcuts,
@@ -323,6 +327,8 @@ export function Chat({
    * park unanswered (their `timeoutMs` is the plugin's guard).
    */
   extensionDialogs?: TuiDialogStore
+  /** Server-confirmed login bonuses awaiting presentation in the TUI. */
+  bonusNotices?: WhaleCouponStore
   /** Plugin text and bounded rich status contributions. */
   extensionStatus?: TuiStatusStore
   /** Session-scoped activity values published by the working-activity plugin. */
@@ -422,6 +428,10 @@ export function Chat({
   const dialogSnapshot = React.useSyncExternalStore(
     listener => dialogs.subscribe(listener),
     () => dialogs.getSnapshot(),
+  )
+  const coupon = React.useSyncExternalStore(
+    bonusNotices?.subscribe ?? noCouponSubscription,
+    bonusNotices?.getSnapshot ?? noCouponSnapshot,
   )
   // Plugin status contributions: text keys join into one line; bounded rich
   // views keep their own rows immediately above the prompt.
@@ -938,9 +948,16 @@ export function Chat({
   /** Subagent dashboard (Ctrl+A): displays active/completed subagents. */
   const [subagentDashboardOpen, setSubagentDashboardOpen] = React.useState(false)
   const [jobsPanelOpen, setJobsPanelOpen] = React.useState(false)
+  /** Job id the panel should focus on open: set by a transcript card click
+   *  (open the panel AT that job), cleared on close so the keyboard/command
+   *  path reopens at the top. */
+  const [jobsPanelFocusId, setJobsPanelFocusId] = React.useState<string | null>(null)
   // MessageList forwards these open handlers to every memoized row. Their
   // identities must survive token/metrics updates, including for tool rows.
-  const openJobsPanel = React.useCallback(() => setJobsPanelOpen(true), [])
+  const openJobsPanel = React.useCallback((focusId?: string) => {
+    if (typeof focusId === 'string' && focusId !== '') setJobsPanelFocusId(focusId)
+    setJobsPanelOpen(true)
+  }, [])
   /** Detail view for a specific subagent (opened from dashboard). */
   const [subagentDetailId, setSubagentDetailId] = React.useState<string | null>(null)
   /**
@@ -2593,6 +2610,7 @@ export function Chat({
       }
       case 'jobs':
         setHelpOpen(false)
+        setJobsPanelFocusId(null)
         setJobsPanelOpen(true)
         return true
       case 'agents':
@@ -2633,7 +2651,9 @@ export function Chat({
                     ...oauth.map(row => t('login-oauth-row', {
                       provider: row.provider,
                       state: row.signedIn
-                        ? t('login-oauth-in', { time: new Date(row.expiresAt ?? 0).toISOString() })
+                        ? row.expiresAt === undefined
+                          ? t('login-oauth-in-no-expiry')
+                          : t('login-oauth-in', { time: new Date(row.expiresAt).toISOString() })
                         : row.expired
                           ? t('login-oauth-expired')
                           : t('login-oauth-signed-out'),
@@ -3224,12 +3244,23 @@ export function Chat({
   }, [])
   /** Deduplicate terminals that report one Enter as parsed Return then raw CR/LF. */
   const lastModalEnterAtRef = React.useRef(0)
+  const couponVisible = coupon !== null && starModal === null
+    && approvalSnapshot === null && dialogSnapshot === null && questionSnapshot === null
+    && overlay.kind === 'none' && btw === null && recap === null
+    && !supervisorOpen && !treeOpen && !settingsOpen && !jobsPanelOpen
+    && !sceneOpen && !subagentDashboardOpen && subagentDetailId === null
+  const markCouponShown = React.useCallback((orderId: Parameters<WhaleCouponStore['shown']>[0]) => {
+    bonusNotices?.shown(orderId)
+  }, [bonusNotices])
+  const closeCoupon = React.useCallback(() => {
+    if (coupon !== null) bonusNotices?.dismiss(coupon.orderId)
+  }, [bonusNotices, coupon])
 
   useInput((input, key, event) => {
     // 开屏"求 star"弹窗开着时键盘全归它（↑/↓/Enter/Esc 由它自己的
     // useInput 处理），滚轮也不许滚动它身后的转录——和下面的整屏界面
     // 同一套让位规则。
-    if (starModal !== null) return
+    if (starModal !== null || couponVisible) return
     // Prompt-slot panels own the keyboard while visible. Their own useInput
     // handles the relevant keys; Chat registered first, so yielding here
     // still lets the panel receive them. PromptInput now stays mounted but
@@ -4380,7 +4411,8 @@ export function Chat({
     const panel = (
       <JobsPanel
         jobs={channel.backgroundJobs ?? []}
-        onClose={() => setJobsPanelOpen(false)}
+        initialFocusId={jobsPanelFocusId ?? undefined}
+        onClose={() => { setJobsPanelOpen(false); setJobsPanelFocusId(null) }}
         onKill={(id) => {
           // Stub channels (verify harnesses) have no jobControl — surface
           // the same failure toast as a refused kill instead of throwing.
@@ -4426,6 +4458,7 @@ export function Chat({
     || btw !== null
     || questionPanelNode !== null
     || starModal !== null
+    || couponVisible
 
   // The trajectory scene replaces the conversation for as long as it is open.
   // Rendering it INSTEAD of (not above) the transcript is what makes it a
@@ -4571,6 +4604,7 @@ export function Chat({
           model={channel.model}
           diffLayout={channel.diffLayout}
           thinkingFold={channel.thinkingFold}
+          jobGroupFold={channel.jobGroupFold}
           toolBackground={channel.toolBackground}
           foldTerminalCommand={channel.foldTerminalCommand}
           smoothStreaming={channel.smoothStreaming}
@@ -4850,6 +4884,8 @@ export function Chat({
                   band: wakeBand,
                   hint: trajectorySeen ? undefined : primaryComboString('trajectory'),
                   tick: Math.floor(wakeTime / 120),
+                  onOpen: openScene,
+                  hoverHint: primaryComboString('trajectory'),
                 }
           }
         />
@@ -5231,6 +5267,9 @@ export function Chat({
           onClose={closeStarModal}
           initialPhase={starModal.phase}
         />
+      )}
+      {couponVisible && coupon !== null && (
+        <WhaleCouponPrompt notice={coupon} onShown={markCouponShown} onClose={closeCoupon} />
       )}
     </Box>
   )

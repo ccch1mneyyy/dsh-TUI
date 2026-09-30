@@ -39,7 +39,7 @@ import { readHomePrefs } from '../homePrefs.js'
 import { resolveSessionCwd } from '../utils/workspaceRoot.js'
 import { beginRestartAttempt, checkForTuiUpdate, installedTuiVersion, isBootDeadlockTarget, isStandaloneRuntime, isVersionNewer, logRestartEvent, resolveDshProfileName, resolveTuiUpdateTarget, restartTui, updateTuiAndRestart, writeHandoffNotice } from '../update.js'
 import { getLang, isLang, resolveStartupLang, setLang, t, writeLangPref } from '../i18n.js'
-import { DEFAULT_PAGE_MARGIN, DEFAULT_STATUS_BAR, applyImageBacking, applyMathImageBacking, applyMathImageScale, applyMathRendering, applyMermaidDiagrams, type ImageBacking, type MathImageBacking, type MathImageScale, type MathRendering, applyPageMargin, isPageMarginMode, normalizePageMargin, normalizeScrollGutter, normalizeStatusBar, normalizeToolBackground, parsePageMarginSpec, resolveMathRendering, type PageMarginSetting, type ScrollGutterMode, type StatusBarConfig, type ToolBackground } from '../tuiDisplayPrefs.js'
+import { DEFAULT_PAGE_MARGIN, DEFAULT_STATUS_BAR, applyImageBacking, applyMathImageBacking, applyMathImageScale, applyMathRendering, applyMermaidDiagrams, type ImageBacking, type MathImageBacking, type MathImageScale, type MathRendering, applyPageMargin, isPageMarginMode, normalizeJobGroupFold, normalizePageMargin, normalizeScrollGutter, normalizeStatusBar, normalizeToolBackground, parsePageMarginSpec, resolveMathRendering, type PageMarginSetting, type ScrollGutterMode, type StatusBarConfig, type ToolBackground } from '../tuiDisplayPrefs.js'
 import {
   draftComboConflicts,
   effectiveComboString,
@@ -60,6 +60,7 @@ import { createActivityStore } from './activity-store.js'
 import { getHostToastStore, type TuiToastRuntime } from './toast.js'
 import { getHostShortcuts, type TuiShortcutRuntime } from './shortcuts.js'
 import { getHostThemes, type TuiThemeRuntime } from './themes.js'
+import type { DshAuthService } from './oauth/service.js'
 import { attachSessionToWorkspace } from './workspace.js'
 import { createLocalWorkspaceRuntime, getHostWorkspaceRuntime } from './workspaces.js'
 import { getHostSettingsSections, getLocalSettingsSectionsHost, type TuiSettingsField, type TuiSettingsSectionsRuntime } from './settings-sections.js'
@@ -494,7 +495,20 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
     // reads the same records. There is deliberately no rail-side "add a
     // workspace" control any more: a terminal's launch directory is the whole
     // registration story.
-    const attached = await attachSessionToWorkspace(ctx, meta.cwd, agent.session.id)
+    //
+    // A RESUMED session is accounted where its OWN header cwd lives, never
+    // where this terminal was launched. The launch directory can be an
+    // ANCESTOR of the resumed session's: launching in `~/projects` and
+    // resuming a session recorded in `~/projects/app` accounts the same
+    // session in both workspaces, and the next boot dies inside
+    // `validateStoredState` ("session ... is accounted by both workspace
+    // ..."), which leaves `workspaceRegistry` unactivated and the whole TUI
+    // pending forever. Ownership must therefore agree with the `cwd:` handed
+    // to `createChannel` below, which already prefers the persisted header.
+    // Fresh sessions record `meta.cwd` at creation, so the launch directory
+    // still registers through them.
+    const ownershipCwd = agent.session.header.cwd ?? meta.cwd
+    const attached = await attachSessionToWorkspace(ctx, ownershipCwd, agent.session.id)
     if (!attached) {
       ctx.logger.warn(
         `dsh-tui: session "${agent.session.id}" has no workspace ownership because workspaceRegistry is not mounted`,
@@ -568,6 +582,7 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
     // screen edits this key live through the dsh-tui namespace.
     diffLayout: config.diffLayout,
     thinkingFold: config.thinkingFold,
+    jobGroupFold: config.jobGroupFold,
     toolBackground: config.toolBackground,
     scrollGutter: config.scrollGutter,
     pageMargin: config.pageMargin,
@@ -666,6 +681,7 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
       Schema.object({
         diffLayout: Schema.union(['auto', 'split', 'unified']).default('auto'),
         thinkingFold: Schema.union(['preview', 'full']).default('preview'),
+        jobGroupFold: Schema.union(['auto', 'always', 'never']).default('auto'),
         toolBackground: Schema.union(['none', 'subtle', 'strong']).default('none'),
         scrollGutter: Schema.union(['timeline', 'scrollbar', 'hidden']).default('timeline'),
         // Preset names AND custom `NxM` specs (the settings field's parse
@@ -778,6 +794,7 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
       fullscreen?: boolean
       terminalImages?: boolean
       thinkingFold?: 'preview' | 'full'
+      jobGroupFold?: 'auto' | 'always' | 'never'
       effortDefault?: string
       toolBackground?: ToolBackground
       scrollGutter?: ScrollGutterMode
@@ -846,6 +863,7 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
     const applyDisplay = (value: SettingsValue): void => {
       if (shadow) return
       channel.setThinkingFold(value.thinkingFold ?? config.thinkingFold ?? 'preview')
+      channel.setJobGroupFold(normalizeJobGroupFold(value.jobGroupFold ?? config.jobGroupFold))
       channel.setToolBackground(normalizeToolBackground(value.toolBackground ?? config.toolBackground))
       channel.setScrollGutter(normalizeScrollGutter(value.scrollGutter ?? config.scrollGutter))
       // Page margin: the channel carries the mode (tests observe it), the
@@ -1033,6 +1051,9 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
         },
         {
           ...settingField('thinkingFold'),
+        },
+        {
+          ...settingField('jobGroupFold'),
         },
         {
           ...settingField('toolBackground'),
@@ -1448,6 +1469,7 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
     // shortcuts). Soft-consumed: absent the row (stale patch, bare embed),
     // Chat falls back to inert stores and no shortcut registry.
     extensionDialogs: getHostDialogStore(ctx.get('tuiDialogs') as TuiDialogRuntime | undefined),
+    bonusNotices: (ctx.get('dshAuth') as DshAuthService | undefined)?.coupons,
     extensionStatus: getHostStatusStore(ctx.get('tuiStatus') as TuiStatusRuntime | undefined),
     // The working line's semantics belong to the dsh-working-activity plugin's
     // session projection; this store is the read side of that seam, so the TUI

@@ -172,7 +172,15 @@ export function StatusLine({
    * than as a count in the corner. Absent in headless embeds, where nothing
    * folds the event log.
    */
-  wake?: { band: WaveBand; hint?: string; tick: number }
+  wake?: {
+    band: WaveBand
+    hint?: string
+    tick: number
+    /** Click target for the strip: opens the trajectory scene. */
+    onOpen?: () => void
+    /** Chord revealed while the pointer rests on the strip. */
+    hoverHint?: string
+  }
 }) {
   const { columns } = useTerminalSize()
   const [themeName] = useTheme()
@@ -598,7 +606,7 @@ const selectionBadge = formatSelectionBadge(channel.selection)
             {showActivity ? trailer : null}
           </Box>
           {showTrajectory && wake !== undefined ? (
-            <MiniWake band={wake.band} hint={wake.hint} tick={wake.tick} />
+            <MiniWake band={wake.band} hint={wake.hint} tick={wake.tick} onOpen={wake.onOpen} hoverHint={wake.hoverHint} />
           ) : null}
         </Box> : null}
       </Box>

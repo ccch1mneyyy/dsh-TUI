@@ -52,6 +52,12 @@ export function SubagentCard({ subagent, focused, onClick }: SubagentCardProps):
     <Box flexDirection="row" gap={1}>
       <Text color={glyphColor}>{glyph}</Text>
       <Text bold color={focused ? 'accent' : undefined}>{`${t('subagent-card-prefix')}${subagent.description}`}</Text>
+      {subagent.mode === 'continuable' && (
+        <Text color={focused ? 'accent' : 'warning'}>{t('subagent-mode-continuable')}</Text>
+      )}
+      {subagent.mode === 'one-shot' && (
+        <Text dimColor>{t('subagent-mode-one-shot')}</Text>
+      )}
       <Text>
         <Text dimColor>{' · '}</Text>
         <Text>{subagent.model ?? subagent.provider ?? 'default'}</Text>

@@ -8,6 +8,7 @@ dsh-TUI 是 DeepSeek Harness 的终端界面插件：零核心改动、纯插件
 src/index.ts        公共 Cordis 插件入口、配置 Schema、对运行时实现的惰性移交
 src/dsh-adapter/plugin.ts  运行时实现：TTY 校验、服务注册、Agent 创建/恢复、React 树挂载与收尾
 src/dsh-adapter/channel.ts  会话事件 → 视图投影 + 非 React 动作面（submit/steer/rewind/resume/切换）
+src/dsh-adapter/oauth/    内置订阅 OAuth：provider 路由、/auth、凭据存储与问卷桥接
 src/screens/        Chat.tsx 交互协调器与状态栏呈现
 src/components/     功能组件；design-system/ 是主题感知原语
 src/themeCatalog.ts  内置、静态 JSON 与运行时插件主题的统一列表/解析

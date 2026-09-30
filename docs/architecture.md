@@ -23,6 +23,7 @@ Cordis profile
 | --- | --- |
 | `src/index.ts` | Cordis 插件名称、注入声明、配置接口与 Schema；保持入口轻量并延迟加载 runtime |
 | `src/dsh-adapter/plugin.ts` | TTY 检查、服务装配、Agent 创建/恢复、React 挂载、统一退出清理 |
+| `src/dsh-adapter/oauth/`、`src/oauth.ts` | pi-ai 订阅 OAuth 路由、`/auth` 命令、凭据存储与问卷桥接；DeepSeek 账号登录委派给宿主服务，公共子入口只转发内部实现 |
 | `src/dsh-adapter/questions-answerer.ts` / `preset-resolution.ts` | user-questions 与 agent-preset 的预发布兼容分派；调用方不感知上游版本分支 |
 | `src/dsh-adapter/channel.ts` | Channel 组合根：options/services、owner/binding、specialist 接线、一次安装、最后启动/释放与兼容导出 |
 | `src/workspaces.ts` | 本地路径 fallback 与通用工作区 provider registry；不得包含任何 provider 的协议、文案或依赖 |
@@ -34,6 +35,13 @@ Cordis profile
 | `src/ink/` | 移植的 Ink renderer、终端协议、事件、选择与 Yoga 桥接；属于敏感底层设施 |
 | `src/native-ts/yoga-layout/` | 纯 JS/TS 布局实现 |
 | `cordis.patch.yml` | profile bundle 层；决定服务行、覆盖关系与挂载顺序 |
+
+标准 profile 仍用 `dsh-tui-auth` Cordis 行在 TUI 前挂载内部 `./oauth` 入口，
+用行级 `inject: [llm, commands]` 保证注册顺序；TUI 经 `ctx.dshAuth` 消费状态和
+动作，不自行实现模型或 OAuth 协议。pi-ai 订阅凭据位置沿用旧版，授权流程由
+宿主的 pi-ai 提供；DeepSeek 账号则经 `ctx.deepseekAccount` 使用宿主的 PKCE、
+凭据和模型路由，TUI-only profile 的 `dsh-tui-webserver` 行提供浏览器回调。
+裸 `cordis.yml` 未插入这些行，拓扑与标准 profile 不同。
 
 `channel.ts` 的职责分布在下列子模块：
 

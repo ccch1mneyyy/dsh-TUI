@@ -409,11 +409,30 @@
       name: '@deepseek-ai/dsh-cordis-host-runner'
       disabled: !!js "[...ctx.loader.entries()].some(entry => entry.options.id === 'cordis-host-runner' && entry.options.name === '@deepseek-ai/dsh-cordis-host-runner' && !entry.disabled)"
 
-    # Subscription OAuth sign-in (bundled dsh-auth dependency): mounts the
-    # ChatGPT/Codex, Claude Pro/Max and SuperGrok provider routes plus the
-    # /auth command; the TUI's /provider wizard gains its OAuth branch from
-    # the ctx.dshAuth service this row provides. Entry-level inject only —
-    # the plugin module's own inject is empty so a stale patch cannot
+    # DeepSeek account sign-in uses the Host-owned /oauth/callback route. A
+    # TUI-only profile needs a loopback listener; a mixed Web+TUI profile
+    # reuses Web's official webserver instead of opening a second one. Hosts
+    # without an enabled account service row leave this listener disabled.
+    - id: dsh-tui-webserver
+      name: '@deepseek-ai/dsh-host-webserver'
+      disabled: !!js >-
+        (() => {
+          const require = process.getBuiltinModule('node:module').createRequire(ctx.baseUrl)
+          try { require.resolve('@deepseek-ai/dsh-host-webserver/package.json') } catch { return true }
+          const entries = [...ctx.loader.entries()]
+          return !entries.some(entry => entry.options.name === '@deepseek-ai/dsh-deepseek-account-platform' && !entry.disabled)
+            || entries.some(entry => entry.options.id === 'webserver' && entry.options.name === '@deepseek-ai/dsh-host-webserver' && !entry.disabled)
+        })()
+      config:
+        host: 127.0.0.1
+        port: 0
+
+    # Built-in subscription OAuth sign-in: mounts available pi-ai routes
+    # (ChatGPT/Codex, Claude, Grok; newer pi-ai adds OpenAI direct and Meta)
+    # plus the /auth command. Its facade also delegates DeepSeek sign-in to
+    # the Host-owned account service when available. The TUI's /provider
+    # wizard gains its OAuth branch from ctx.dshAuth. Entry-level inject only —
+    # the internal module's own inject is empty so a stale patch cannot
     # deadlock a composition lacking these services (#183 pattern).
     - id: dsh-tui-auth
       name: '@deepseek-harness-tui/dsh-tui/oauth'

@@ -159,7 +159,6 @@ jobs:
           if-no-files-found: error
           path: |
             lib/
-            dsh-auth/lib/
             vendor/dsh-std/packages/core/lib/
             vendor/dsh-std/packages/manifest/lib/
             vendor/dsh-std/packages/connection/lib/
@@ -214,6 +213,9 @@ jobs:
       - run: pnpm verify:package
       - run: pnpm verify:bun-package
 
+      # 整合包产物编码契约防复发（.bat CRLF / install.ps1 UTF-8 BOM / install.sh LF）。
+      - run: pnpm verify:installer-bundle
+
   # The newest prerelease is source-checked while CI keeps rc.2 as the installed
   # compatibility baseline. Type-check the adapter and compose both patches
   # against the immutable upstream rc.1 source SHA. Missing source
@@ -233,11 +235,11 @@ jobs:
           submodules: recursive
           persist-credentials: false
 
-      # deepseek-ai/deepseek-harness tag dsh-v0.2.0-rc.1
+      # deepseek-ai/deepseek-harness tag dsh-v0.2.0-rc.2
       - uses: actions/checkout@v7
         with:
           repository: deepseek-ai/deepseek-harness
-          ref: 4878cdabd87d4041bdaff61d04c966883b9fd07a
+          ref: 639ed015397290b3745d163aafe02ffee4aa3f84
           path: .upstream/deepseek-harness
           fetch-depth: 1
           persist-credentials: false
@@ -289,12 +291,6 @@ jobs:
       # rc.1 Session and the real constructor accepts its seed metadata.
       # The ordinary CI groups also keep running the legacy fixture suite.
       - run: TSX_TSCONFIG_PATH="$DSH_HARNESS_SOURCE_ROOT/tsconfig.base.json" pnpm verify:live-session -- --real-upstream
-
-      # dsh-auth 的 48 项 provider 回归此前无任何 lane 执行（build 链只
-      # 构建 dsh-auth 不跑其测试）。build:dsh-auth 已装好依赖与产物，
-      # verify 零额外装配。（勘误：minimal-preset-tools 本就在
-      # verify:build 聚合链里，原 PR 草稿里加的那步是重复执行，已移除。）
-      - run: pnpm --dir dsh-auth verify
 
   # 渲染 · 滚动 · resize · 子代理 · picker——与其余组并行；失败互不遮蔽。
   # needs: build：编译只在 build job 发生一次，本组经 artifact 复用产物。
@@ -605,6 +601,10 @@ jobs:
       # 分支（旧二进制清理、shellQuote/cmd 拼串）——只靠 ubuntu 等于没测。
       - name: Safe-mode launcher gate (cross-platform)
         run: node scripts/verify-safe-mode.mjs
+
+      # 整合包产物编码契约防复发：Windows 上跑全量（含 PS 5.1 解码 + cmd 冒烟），macOS 只跑跨平台组（Windows 专属组显式 SKIP）。
+      - name: Installer bundle encoding contract (cross-platform)
+        run: node scripts/verify-installer-bundle.mjs
 
   # CI 门禁：唯一的 required check 候选。汇总所有分组结果——任何一组失败
   # 或被取消，gate 显式失败并逐组报告状态。if: always() 保证上游失败时

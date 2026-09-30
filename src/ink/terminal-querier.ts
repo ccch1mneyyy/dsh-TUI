@@ -32,6 +32,11 @@ export type TerminalQuery<T extends TerminalResponse = TerminalResponse> = {
   request: string
   /** Recognizes the expected response in the inbound stream */
   match: (r: TerminalResponse) => r is T
+  /** The response type this query can be answered by, declared separately
+   *  from `match` (a predicate cannot be introspected). The input parser
+   *  reads it through {@link TerminalQuerier.pendingResponseTypes} to bind
+   *  an ambiguous reply tail to the queries actually awaiting an answer. */
+  responseType: TerminalResponse['type']
 }
 
 type DecrpmResponse = Extract<TerminalResponse, { type: 'decrpm' }>
@@ -59,6 +64,7 @@ export function decrqm(mode: number): TerminalQuery<DecrpmResponse> {
   return {
     request: csi(`?${mode}$p`),
     match: (r): r is DecrpmResponse => r.type === 'decrpm' && r.mode === mode,
+    responseType: 'decrpm',
   }
 }
 
@@ -72,6 +78,7 @@ export function da1(): TerminalQuery<Da1Response> {
   return {
     request: csi('c'),
     match: (r): r is Da1Response => r.type === 'da1',
+    responseType: 'da1',
   }
 }
 
@@ -83,6 +90,7 @@ export function da2(): TerminalQuery<Da2Response> {
   return {
     request: csi('>c'),
     match: (r): r is Da2Response => r.type === 'da2',
+    responseType: 'da2',
   }
 }
 
@@ -95,6 +103,7 @@ export function kittyKeyboard(): TerminalQuery<KittyResponse> {
   return {
     request: csi('?u'),
     match: (r): r is KittyResponse => r.type === 'kittyKeyboard',
+    responseType: 'kittyKeyboard',
   }
 }
 
@@ -112,6 +121,7 @@ export function kittyGraphics(
     request: `\u001b_Gi=${id},s=1,v=1,a=q,t=d,f=32,o=z;eAFjYGBgAAAABAAB\u001b\\`,
     match: (r): r is KittyGraphicsResponse =>
       r.type === 'kittyGraphics' && r.imageId === id,
+    responseType: 'kittyGraphics',
   }
 }
 
@@ -121,6 +131,7 @@ export function terminalCellSizePixels(): TerminalQuery<TerminalPixelSizeRespons
     request: csi('16t'),
     match: (r): r is TerminalPixelSizeResponse =>
       r.type === 'terminalPixelSize' && r.scope === 'cell',
+    responseType: 'terminalPixelSize',
   }
 }
 
@@ -130,6 +141,7 @@ export function terminalWindowSizePixels(): TerminalQuery<TerminalPixelSizeRespo
     request: csi('14t'),
     match: (r): r is TerminalPixelSizeResponse =>
       r.type === 'terminalPixelSize' && r.scope === 'window',
+    responseType: 'terminalPixelSize',
   }
 }
 
@@ -144,6 +156,7 @@ export function cursorPosition(): TerminalQuery<CursorPosResponse> {
   return {
     request: csi('?6n'),
     match: (r): r is CursorPosResponse => r.type === 'cursorPosition',
+    responseType: 'cursorPosition',
   }
 }
 
@@ -157,6 +170,7 @@ export function oscColor(code: number): TerminalQuery<OscResponse> {
   return {
     request: osc(code, '?'),
     match: (r): r is OscResponse => r.type === 'osc' && r.code === code,
+    responseType: 'osc',
   }
 }
 
@@ -172,6 +186,7 @@ export function xtversion(): TerminalQuery<XtversionResponse> {
   return {
     request: csi('>0q'),
     match: (r): r is XtversionResponse => r.type === 'xtversion',
+    responseType: 'xtversion',
   }
 }
 
@@ -184,6 +199,7 @@ type Pending =
   | {
       kind: 'query'
       match: (r: TerminalResponse) => boolean
+      responseType: TerminalResponse['type']
       resolve: (r: TerminalResponse | undefined) => void
       releaseRawMode: () => void
     }
@@ -221,6 +237,37 @@ export class TerminalQuerier {
     return this.suspended
   }
 
+  /**
+   * In-flight evidence for the input parser (read-only observation): true
+   * while at least one query or flush sentinel is still waiting for its
+   * reply. Purely observational — queue semantics are untouched.
+   */
+  get hasPending(): boolean {
+    return this.queue.length > 0
+  }
+
+  /**
+   * In-flight evidence for the input parser (read-only observation): the
+   * response types of the queries still awaiting a reply, plus `da1` when a
+   * flush() sentinel is still open (DA1 is the reply that resolves it).
+   *
+   * This is bound to the query lifecycle on purpose. A boolean "something
+   * was sent recently" lets any recent query authorize a claim for bytes
+   * that may belong to no query at all, so the parser receives the expected
+   * types instead: a reply tail is only claimed when its shape can complete
+   * into one of them, and a query resolved by a sentinel stops counting the
+   * moment its promise settles. Purely observational — queue semantics are
+   * untouched.
+   */
+  get pendingResponseTypes(): ReadonlySet<TerminalResponse['type']> {
+    const types = new Set<TerminalResponse['type']>()
+    for (const pending of this.queue) {
+      if (pending.kind === 'query') types.add(pending.responseType)
+      else types.add('da1')
+    }
+    return types
+  }
+
   private holdRawMode(): () => void {
     this.setRawMode?.(true)
     return () => this.setRawMode?.(false)
@@ -247,6 +294,7 @@ export class TerminalQuerier {
       this.queue.push({
         kind: 'query',
         match: query.match,
+        responseType: query.responseType,
         resolve: r => resolve(r as T | undefined),
         releaseRawMode: this.holdRawMode(),
       })

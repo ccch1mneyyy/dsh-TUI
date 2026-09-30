@@ -83,6 +83,9 @@ draft、只跑一次 CI 就关，`pr-gate` 与 `issue-link` 都按机器人放�
 - `src/index.ts`：公共 Cordis 插件入口、配置 Schema，与对运行时插件的惰性移交。
 - `src/dsh-adapter/plugin.ts`：TTY 校验、服务注册、Agent 创建/恢复、React 树挂载，以及
   终端/进程的收尾清理。
+- `src/dsh-adapter/oauth/`：pi-ai 订阅 OAuth 的 provider 路由、`/auth` 命令、
+  凭据存储与 user-questions 桥接；DeepSeek 账号授权委派给宿主服务，
+  经 `src/oauth.ts` 子入口挂载。
 - `src/dsh-adapter/questions-answerer.ts` 与 `preset-resolution.ts`：
   隔离 user-questions / agent-preset 的上游预发布兼容分派，避免把版本分支
   散进 bootstrap 与 channel 动作面。
@@ -161,7 +164,7 @@ Cordis config
   字段是 pnpm 版本的唯一真源，CI 与 corepack 都从这里取值。
 - 干净检出安装：先 `git clone --recurse-submodules`（或在已有检出里
   `git submodule update --init --recursive`），再 `pnpm install --frozen-lockfile`。
-  `vendor/dsh-std` 与 `dsh-auth` 是 workspace / `link:` 依赖，子模块为空时安装必失败。
+  `vendor/dsh-std` 是 workspace 依赖，子模块为空时安装必失败。
 - `pnpm-lock.yaml` 是唯一锁文件。npm 消费方不读依赖包的 lockfile，
   `package-lock.json` 已移除（见 #173 后续处理）。
 - 有意改依赖时：用 `pnpm add` 更新 `pnpm-lock.yaml`，检查完整 lockfile diff，
@@ -455,7 +458,7 @@ TypeScript 源的脚本在头部声明 `node --import tsx/esm <script>` 形式�
 | 用户可见的文档化行为 | 中英文 README，外加适用的配置注释/帮助文本 |
 | 贡献入口或 PR 门禁 | `.mergify.yml`、`docs/contributing.md`、`docs/contributing.en.md`、`.github/workflows/pr-gate.yml`、`.github/scripts/pr-intake/`、`.github/APPROVED_CONTRIBUTORS` |
 | 包版本或依赖 | `package.json`、`pnpm-lock.yaml`、适用时的生成/发布产物；不要顺手搅动旧 npm 锁文件 |
-| 上游验证线 bump | `src/dsh-adapter/contract.ts`、`package.json` peer+dev 两组范围、随包内置的 `dsh-auth/package.json` 与 `dsh-auth/pnpm-lock.yaml`、`pnpm-workspace.yaml`、`.github/workflows/ci.yml` alpha-compat 的上游 SHA、`scripts/verify-{alpha-source,patch-surface,web-coexistence,upstream-contract}` 内的版本常量、`patch-surface.snapshot.json`、`ADAPTER.md`、`docs/user-guide.md`；步骤见 [ADAPTER.md](../ADAPTER.md) 升级流程 |
+| 上游验证线 bump | `src/dsh-adapter/contract.ts`、`src/dsh-adapter/oauth/`、`package.json` peer+dev 两组范围、`pnpm-workspace.yaml`、`.github/workflows/ci.yml` alpha-compat 的上游 SHA、`scripts/verify-{alpha-source,patch-surface,web-coexistence,upstream-contract}` 内的版本常量、`patch-surface.snapshot.json`、`ADAPTER.md`、`docs/user-guide.md`；步骤见 [ADAPTER.md](../ADAPTER.md) 升级流程 |
 
 ## Git 与发布安全（Git And Release Safety）
 

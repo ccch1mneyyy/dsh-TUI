@@ -937,7 +937,9 @@ function buildDeleteSummary(provider: ConfiguredProvider): string[] {
 /** Masked state line for one provider row in the OAuth pick question. */
 function oauthStateDescription(status: OAuthProviderStatus): string {
   if (status.signedIn) {
-    return t('provider-oauth-state-in', { time: new Date(status.expiresAt ?? 0).toISOString() })
+    return status.expiresAt === undefined
+      ? t('provider-oauth-state-in-no-expiry')
+      : t('provider-oauth-state-in', { time: new Date(status.expiresAt).toISOString() })
   }
   return status.expired
     ? t('provider-oauth-state-expired')
@@ -996,7 +998,9 @@ async function runOAuthWizard(
     pushLocal('/provider', [
       t('provider-line-oauth-provider', { provider: result.provider }),
       t('provider-line-oauth-flow', { flow: result.oauthLabel }),
-      t('provider-line-oauth-expires', { time: new Date(result.expiresAt).toISOString() }),
+      ...(result.expiresAt === undefined
+        ? []
+        : [t('provider-line-oauth-expires', { time: new Date(result.expiresAt).toISOString() })]),
       t('provider-switch-hint'),
     ])
     notify(t('provider-oauth-login-ok', { provider: result.provider }), { color: 'success' })

@@ -56,7 +56,7 @@ mkdirSync(stubDir, { recursive: true })
 // 成功路径模拟真实安装创建判定文件（DSH_STUB_PKG_VERSION），DSH_STUB_ADD_
 // NOCREATE=1 模拟 no-op 假成功（pnpm 对残缺 profile 的 already-up-to-date
 // 行为：报告成功、什么都不装）。
-writeFileSync(join(stubDir, 'dsh'), '#!/bin/sh\nfor a in "$@"; do printf \'<%s>\' "$a"; done >> "$DSH_STUB_LOG"\nprintf \'\\n\' >> "$DSH_STUB_LOG"\nif [ "$1" = "plugin" ]; then\n  c="$DSH_STUB_LOG.count"\n  n=$(cat "$c" 2>/dev/null || echo 0); n=$((n+1)); echo "$n" > "$c"\n  if [ "$n" -le "${DSH_STUB_ADD_FAILS:-0}" ]; then\n    [ -n "$DSH_STUB_ADD_SIG" ] && printf \'%s\\n\' "$DSH_STUB_ADD_SIG"\n    exit "${DSH_STUB_ADD_EXIT_CODE:-1}"\n  fi\n  if [ -z "$DSH_STUB_ADD_NOCREATE" ]; then\n    d="$DSH_HOME/profiles/dsh-tui/node_modules/@deepseek-harness-tui/dsh-tui"\n    mkdir -p "$d" && printf \'{"version":"%s"}\' "${DSH_STUB_PKG_VERSION:-0.0.0-stub}" > "$d/package.json"\n  fi\n  exit 0\nfi\nif [ "$1" = "--profile" ]; then exit "${DSH_STUB_EXIT:-0}"; fi\nexit 0\n')
+writeFileSync(join(stubDir, 'dsh'), '#!/bin/sh\nfor a in "$@"; do printf \'<%s>\' "$a"; done >> "$DSH_STUB_LOG"\nprintf \'\\n\' >> "$DSH_STUB_LOG"\nprintf \'%s\\n\' "${DSH_BUNDLED_SKILL_DIR-<unset>}" >> "$DSH_STUB_LOG.env"\nif [ "$1" = "plugin" ]; then\n  c="$DSH_STUB_LOG.count"\n  n=$(cat "$c" 2>/dev/null || echo 0); n=$((n+1)); echo "$n" > "$c"\n  if [ "$n" -le "${DSH_STUB_ADD_FAILS:-0}" ]; then\n    [ -n "$DSH_STUB_ADD_SIG" ] && printf \'%s\\n\' "$DSH_STUB_ADD_SIG"\n    exit "${DSH_STUB_ADD_EXIT_CODE:-1}"\n  fi\n  if [ -z "$DSH_STUB_ADD_NOCREATE" ]; then\n    d="$DSH_HOME/profiles/dsh-tui/node_modules/@deepseek-harness-tui/dsh-tui"\n    mkdir -p "$d" && printf \'{"version":"%s"}\' "${DSH_STUB_PKG_VERSION:-0.0.0-stub}" > "$d/package.json"\n  fi\n  exit 0\nfi\nif [ "$1" = "--profile" ]; then exit "${DSH_STUB_EXIT:-0}"; fi\nexit 0\n')
 writeFileSync(join(stubDir, 'pnpm'), '#!/bin/sh\nexit 0\n')
 chmodSync(join(stubDir, 'dsh'), 0o755)
 chmodSync(join(stubDir, 'pnpm'), 0o755)
@@ -66,7 +66,7 @@ chmodSync(join(stubDir, 'pnpm'), 0o755)
 if (isWin) {
   writeFileSync(
     join(stubDir, 'dsh.cmd'),
-    '@echo off\r\nnode -e "const fs=require(\'fs\');const a=process.argv.slice(1);fs.appendFileSync(process.env.DSH_STUB_LOG,a.map(v=>\'<\'+v+\'>\').join(\'\')+\'\\n\');if(a[0]===\'plugin\'){const c=process.env.DSH_STUB_LOG+\'.count\';let n=0;try{n=Number(fs.readFileSync(c,\'utf8\'))||0}catch(e){}n++;fs.writeFileSync(c,String(n));if(n<=Number(process.env.DSH_STUB_ADD_FAILS||0)){if(process.env.DSH_STUB_ADD_SIG)console.log(process.env.DSH_STUB_ADD_SIG);process.exit(Number(process.env.DSH_STUB_ADD_EXIT_CODE||1));}if(!process.env.DSH_STUB_ADD_NOCREATE){const d=process.env.DSH_HOME+\'/profiles/dsh-tui/node_modules/@deepseek-harness-tui/dsh-tui\';fs.mkdirSync(d,{recursive:true});fs.writeFileSync(d+\'/package.json\',JSON.stringify({version:process.env.DSH_STUB_PKG_VERSION||\'0.0.0-stub\'}));}process.exit(0);}process.exit(a[0]===\'--profile\'?Number(process.env.DSH_STUB_EXIT||0):0)" -- %*\r\n@exit /b %errorlevel%\r\n',
+    '@echo off\r\nnode -e "const fs=require(\'fs\');const a=process.argv.slice(1);fs.appendFileSync(process.env.DSH_STUB_LOG,a.map(v=>\'<\'+v+\'>\').join(\'\')+\'\\n\');fs.appendFileSync(process.env.DSH_STUB_LOG+\'.env\',(process.env.DSH_BUNDLED_SKILL_DIR||\'<unset>\')+\'\\n\');if(a[0]===\'plugin\'){const c=process.env.DSH_STUB_LOG+\'.count\';let n=0;try{n=Number(fs.readFileSync(c,\'utf8\'))||0}catch(e){}n++;fs.writeFileSync(c,String(n));if(n<=Number(process.env.DSH_STUB_ADD_FAILS||0)){if(process.env.DSH_STUB_ADD_SIG)console.log(process.env.DSH_STUB_ADD_SIG);process.exit(Number(process.env.DSH_STUB_ADD_EXIT_CODE||1));}if(!process.env.DSH_STUB_ADD_NOCREATE){const d=process.env.DSH_HOME+\'/profiles/dsh-tui/node_modules/@deepseek-harness-tui/dsh-tui\';fs.mkdirSync(d,{recursive:true});fs.writeFileSync(d+\'/package.json\',JSON.stringify({version:process.env.DSH_STUB_PKG_VERSION||\'0.0.0-stub\'}));}process.exit(0);}process.exit(a[0]===\'--profile\'?Number(process.env.DSH_STUB_EXIT||0):0)" -- %*\r\n@exit /b %errorlevel%\r\n',
     'ascii',
   )
   writeFileSync(join(stubDir, 'pnpm.cmd'), '@echo off\r\n@exit /b 0\r\n', 'ascii')
@@ -90,9 +90,19 @@ function setProfileVersion(version) {
 function resetStubLog() {
   writeFileSync(stubLog, '')
   rmSync(`${stubLog}.count`, { force: true })
+  rmSync(`${stubLog}.env`, { force: true })
 }
 function stubCalls() {
   return readFileSync(stubLog, 'utf8').trim().split('\n').filter(Boolean)
+}
+// stub 每次调用记一行 DSH_BUNDLED_SKILL_DIR（未设记 <unset>），单独一个文件，
+// 免得动 argv 日志的逐字节格式。
+function stubEnvs() {
+  try {
+    return readFileSync(`${stubLog}.env`, 'utf8').trim().split('\n').filter(Boolean)
+  } catch {
+    return []
+  }
 }
 
 function runBin(args, extraEnv = {}, { delegating = false } = {}) {
@@ -142,6 +152,18 @@ check('root-refusal: retries exactly once with -w', addCalls().length === 2 && a
 check('root-refusal: retry notice printed', r.stdout.includes('retrying with -w'))
 check('root-refusal: captured refusal replayed to the user', r.stderr.includes('ERR_PNPM_ADDING_TO_ROOT'))
 check('root-refusal: launches after the retry', stubCalls().at(-1) === '<--profile><dsh-tui>' && r.status === 0)
+
+// --- 1.7 随包手册技能根（guide/）：启动器把包内 guide/ 作为
+// DSH_BUNDLED_SKILL_DIR 交给 dsh —— 内核 dsh-skill-filesystem 的 rank 600
+// bundledSkillDir 默认取它，用户机器上的会话这才有手册可查；用户自己设过
+// 该变量时必须保留用户的值。
+setProfileVersion(ownVersion)
+resetStubLog()
+r = runBin([])
+check('guide: packaged guide dir reaches the dsh session', stubEnvs().at(-1) === join(root, 'guide'))
+resetStubLog()
+r = runBin([], { DSH_BUNDLED_SKILL_DIR: '/custom/skills' })
+check('guide: an explicit DSH_BUNDLED_SKILL_DIR wins', stubEnvs().at(-1) === '/custom/skills')
 
 // --- 1.6 无签名的失败：不盲目 -w 重试，按普通安装失败处理 -------------
 setProfileVersion(undefined)

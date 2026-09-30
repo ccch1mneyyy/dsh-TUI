@@ -111,6 +111,10 @@ boundaries and helpers over introducing parallel abstractions.
   lazy handoff to the runtime plugin.
 - `src/dsh-adapter/plugin.ts`: TTY validation, service registration, agent creation/resume,
   React tree mounting, and terminal/process teardown.
+- `src/dsh-adapter/oauth/`: pi-ai subscription OAuth provider routes, the
+  `/auth` command, credential store, and user-questions bridge; DeepSeek
+  account authorization delegates to the Host service. Mounted through the
+  `src/oauth.ts` subpath entry.
 - `src/dsh-adapter/questions-answerer.ts` and `preset-resolution.ts`: isolate
   upstream prerelease dispatch for user questions and agent presets so version
   branches do not spread into bootstrap or channel actions.
@@ -213,8 +217,8 @@ seam.
   ```
 
   In an existing checkout, run `git submodule update --init --recursive` first.
-  `vendor/dsh-std` and `dsh-auth` are workspace / `link:` dependencies, so the
-  install always fails while those submodules are empty.
+  `vendor/dsh-std` is a workspace dependency, so installation fails while that
+  submodule is empty.
 
 - `pnpm-lock.yaml` is the single lockfile. npm consumers do not read a
   dependency's lockfile, so `package-lock.json` has been removed (follow-up of
@@ -606,7 +610,7 @@ guide owns detailed contracts such as the toolchain and verification matrix.
 | User-facing documented behavior | Chinese and English READMEs, plus config comments/help text where applicable |
 | Contribution intake or PR gate | `.mergify.yml`, `docs/contributing.md`, `docs/contributing.en.md`, `.github/workflows/pr-gate.yml`, `.github/scripts/pr-intake/`, `.github/APPROVED_CONTRIBUTORS` |
 | Package version or dependency | `package.json`, `pnpm-lock.yaml`, generated/published artifacts as applicable; do not churn the legacy npm lock incidentally |
-| Upstream validated-line bump | `src/dsh-adapter/contract.ts`, both peer and dev ranges in `package.json`, bundled `dsh-auth/package.json` and `dsh-auth/pnpm-lock.yaml`, `pnpm-workspace.yaml`, the upstream SHA in the `alpha-compat` job of `.github/workflows/ci.yml`, the version constants in `scripts/verify-{alpha-source,patch-surface,web-coexistence,upstream-contract}`, `patch-surface.snapshot.json`, `ADAPTER.md`, `docs/user-guide.md`; steps in the upgrade section of [ADAPTER.md](../ADAPTER.md) |
+| Upstream validated-line bump | `src/dsh-adapter/contract.ts`, `src/dsh-adapter/oauth/`, both peer and dev ranges in `package.json`, `pnpm-workspace.yaml`, the upstream SHA in the `alpha-compat` job of `.github/workflows/ci.yml`, the version constants in `scripts/verify-{alpha-source,patch-surface,web-coexistence,upstream-contract}`, `patch-surface.snapshot.json`, `ADAPTER.md`, `docs/user-guide.md`; steps in the upgrade section of [ADAPTER.md](../ADAPTER.md) |
 
 ## Git And Release Safety
 

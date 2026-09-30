@@ -108,6 +108,12 @@ export interface Config {
    *  preview and folds each step when it settles; `full` keeps thinking
    *  expanded until the whole turn ends. Editable live from `/settings`. */
   thinkingFold?: 'preview' | 'full'
+  /** Grouping/folding of consecutive background-job cards: `auto` (default)
+   *  groups any run of ≥2 adjacent job cards and folds a run of 3+ into its
+   *  summary line once every member settled; `always` folds any run of 2+
+   *  immediately; `never` never folds on its own (a click on the group
+   *  header still folds one run). Editable live from `/settings`. */
+  jobGroupFold?: 'auto' | 'always' | 'never'
   /** Tool-card background strength; defaults to no added background. */
   toolBackground?: ToolBackground
   /** What the fullscreen transcript's right gutter shows (settings
@@ -223,6 +229,7 @@ export const Config: Schema<Config, RuntimeConfig<Config>> = editableConfig<Conf
   preset: Schema.string().required(false),
   diffLayout: Schema.union(['auto', 'split', 'unified']).default('auto'),
   thinkingFold: Schema.union(['preview', 'full']).default('preview'),
+  jobGroupFold: Schema.union(['auto', 'always', 'never']).default('auto'),
   toolBackground: Schema.union(['none', 'subtle', 'strong']).default('none'),
   scrollGutter: Schema.union(['timeline', 'scrollbar', 'hidden']).default('timeline'),
   // Preset names AND custom `NxM` specs must survive validation (a custom

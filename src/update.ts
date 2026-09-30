@@ -1554,8 +1554,8 @@ export async function updateTui(
   const dsh = process.platform === 'win32' ? 'dsh.cmd' : 'dsh'
   const updateArgs = tuiUpdatePluginArgs(profile, targetVersion)
   // pnpm ≥11 hard-fails installs whose dependency tree carries un-allowlisted
-  // build scripts (ERR_PNPM_IGNORED_BUILDS). The dsh-auth chain pulls in
-  // postinstall-only deps (@google/genai/protobufjs via pi-ai), so pre-seed
+  // build scripts (ERR_PNPM_IGNORED_BUILDS). The host's pi-ai adapter pulls in
+  // postinstall-only deps (@google/genai/protobufjs), so pre-seed
   // the profile workspace with explicit `false` entries before pnpm runs.
   const allowBuilds = ensureProfileAllowBuilds(profile)
   if (allowBuilds !== undefined && allowBuilds.added.length > 0) {
@@ -1778,6 +1778,36 @@ export async function cliUpdate(profile: string): Promise<number> {
 }
 
 /**
+ * Release the shared console for the replacement without resetting it.
+ *
+ * A pty's termios is per-DEVICE: destroying this stream would write this
+ * process's saved cooked/ECHO mode back over the replacement's raw mode
+ * (libuv restores orig_termios on tty close; verified on Node 24 — mouse
+ * reports then echo as `^[[<…M` and keys wait for a newline). Detaching —
+ * no readers, paused, unref'd — keeps the mode untouched.
+ *
+ * Two deliberate trade-offs vs the old destroy():
+ * - destroy() doubled as a permanent gate ("a destroyed stream can never be
+ *   resumed"). Readers removed + paused already keep this process out of the
+ *   console's key path (#284/#307), and after the handoff only the
+ *   child-exit listener remains here — nothing re-attaches a reader.
+ * - On exit Node still writes the saved cooked mode back once (atexit
+ *   uv_tty_reset_mode). Fine in the normal order — this process outlives the
+ *   replacement, and the shell wants cooked back anyway; it only bites if
+ *   this process dies while the replacement is still running.
+ *
+ * @param stdin - Console stream to detach; injectable for the regression.
+ */
+export function detachHandoffStdin(
+  stdin: Pick<NodeJS.ReadStream, 'removeAllListeners' | 'pause' | 'unref'> = process.stdin,
+): void {
+  stdin.removeAllListeners('readable')
+  stdin.removeAllListeners('data')
+  stdin.pause()
+  stdin.unref()
+}
+
+/**
  * Restart the running TUI in place and resume the active session — the
  * `/update` restart path minus the pnpm step, for `/restart`. Spawns the
  * same node process with the original argv and the dual-written resume
@@ -1866,10 +1896,12 @@ export async function restartTui(sessionId: string, options: TuiRestartOptions =
     // 1. SAMPLE this process's stdin state every second — if anything
     //    re-attaches a reader after the funnel's detachStdinForHandoff, the
     //    sample (taken before the re-assert below) shows it in the log.
-    // 2. RE-ASSERT the detach and finally destroy the stream: this process
-    //    must never read the shared console again — every keypress belongs
-    //    to the replacement, and a resumed pump here is exactly the
-    //    "restarted TUI sees dropped or swallowed input" failure (#284/#307).
+    // 2. RE-ASSERT the detach — never DESTROY the stream: destroying it
+    //    resets the shared pty and stomps the replacement's raw mode (see
+    //    detachHandoffStdin for the mechanism and trade-offs). This process
+    //    must never read the shared console again — every keypress belongs to
+    //    the replacement, and a resumed pump here is exactly the "restarted
+    //    TUI sees dropped or swallowed input" failure (#284/#307).
     let watchdogTicks = 0
     const watchdog = setInterval(() => {
       watchdogTicks += 1
@@ -1883,23 +1915,13 @@ export async function restartTui(sessionId: string, options: TuiRestartOptions =
         buffered: stdin.readableLength,
       })
       try {
-        stdin.removeAllListeners('readable')
-        stdin.removeAllListeners('data')
-        stdin.pause()
+        detachHandoffStdin(stdin)
       } catch {
         // Diagnosis/mitigation only.
       }
       if (watchdogTicks === 15) {
         clearInterval(watchdog)
-        try {
-          // Terminal safeguard: a destroyed stream can never be resumed by
-          // any late re-attachment. The child holds its own inherited
-          // handle, so closing ours does not affect it.
-          process.stdin.destroy()
-          logRestartEvent('parent: stdin destroyed after watchdog')
-        } catch {
-          // Best effort.
-        }
+        logRestartEvent('parent: stdin detached after watchdog (kept raw, not destroyed)')
       }
     }, 1000)
     watchdog.unref()

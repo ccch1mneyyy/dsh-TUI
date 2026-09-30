@@ -5,6 +5,7 @@
  * then interprets sequences as keypresses.
  */
 import { Buffer } from 'buffer'
+import { fileURLToPath } from 'node:url'
 import { isCSIFinal, isCSIIntermediate, isCSIParam, PASTE_END, PASTE_START } from './termio/csi.js'
 import { createTokenizer, type Tokenizer } from './termio/tokenize.js'
 
@@ -108,6 +109,14 @@ const MOUSE_HEAD_HOLD_MAX_LENGTH = 64
 // the deadline bounds this ambiguity. It runs on every call so continuous
 // input cannot starve it into a de-facto immortal hold.
 const MOUSE_TAIL_HOLD_GRACE_MS = 1000
+// How long an unfinished terminal-reply prefix may be held for its
+// continuation, and how many bytes of it may accumulate. Same caliber as the
+// win32 record hold above: measured from FIRST capture (later flushes must not
+// renew it), deadline checked on every parse call, and an over-limit or
+// expired hold is released by tokenizer.reset() — protocol bytes are dropped
+// rather than leaked into the prompt.
+const TERMINAL_RESPONSE_TAIL_GRACE_MS = 1000
+const TERMINAL_RESPONSE_MAX_LENGTH = 64
 
 // dwControlKeyState modifier bits (others — NUMLOCK_ON 0x20, CAPSLOCK_ON
 // 0x80, ENHANCED_KEY 0x100 — are state indicators, not pressed modifiers)
@@ -204,7 +213,55 @@ const XTVERSION_RE = /^\x1bP>\|(.*?)(?:\x07|\x1b\\)$/s
 // eslint-disable-next-line no-control-regex
 const SGR_MOUSE_RE = /^\x1b\[<(\d+);(\d+);(\d+)([Mm])$/
 
+/**
+ * Terminal control sequences that must never survive into a paste payload.
+ *
+ * A desktop file DROP reaches the TUI as terminal bytes, not as text: Windows
+ * Terminal / OpenConsole hand a dropped path over as an OSC 8 hyperlink
+ * (`ESC ] 8 ; <params> ; file:///… ST`), and a `DECSET 9001` (win32-input-mode)
+ * host additionally decomposes that payload into per-character key records
+ * (see the decomposed-paste matcher below). The hyperlink itself is RESTORED
+ * to its local path before this hygiene runs (see `createPasteKey` and the
+ * OSC 8 block below); what is stripped here is the rest of the protocol
+ * shapes a paste payload can carry.
+ *
+ * Scope (DESIGN D3, narrowed by measurement): COMPLETE OSC sequences only.
+ * CSI sequences, bare ESC bytes and C0 control bytes are deliberately KEPT —
+ * a bracketed paste's payload is user data. PR #1142 pins that protocol-shaped
+ * literal text (`ESC[1;2;3;1A`) survives byte-for-byte
+ * (`scripts/verify-win32-input.tsx`), and the whole C0 band belongs to the
+ * COMPOSER: every single-line paste ingress flattens C0/C1 to a SPACE
+ * (`flattenPasteInline`), so a C0 byte dropped here does not sanitize
+ * anything — it deletes the space the composer owes
+ * (`scripts/verify-question-paste.tsx` 1a/1c pin that flattening, TAB/CR/LF
+ * and DEL included). The wide strip (CSI + residual ESC) proved mutually
+ * exclusive with the #1142 contract.
+ */
+// eslint-disable-next-line no-control-regex -- deliberate: paste payloads carry terminal sequences
+const OSC_IN_PASTE = /\u001b\][^\u0007\u001b]*(?:\u0007|\u001b\\)/gu
+/**
+ * Strip the protocol frames one paste payload can carry — see
+ * {@link OSC_IN_PASTE} for the exact scope.
+ *
+ * This is the LAST step of the paste choke point, and it is deliberately the
+ * only one: no C0/C1 byte is removed here, because removal is lossy where the
+ * composer is not (it flattens those bytes to spaces). The registration that
+ * briefly added an inert-C0 strip here was the CI regression that
+ * `scripts/verify-question-paste.tsx` 1a/1c caught; `verify-paste-drop`
+ * re-pins the surviving side of that contract.
+ */
+function cleanPastePayload(content: string): string {
+  return content.replace(OSC_IN_PASTE, '')
+}
+
 function createPasteKey(content: string): ParsedKey {
+  // Order is a contract (D6/D1): a complete OSC 8 drop frame is RESTORED to
+  // its local path BEFORE the payload hygiene — hygiene strips the very OSC
+  // frame the drop is encoded in. Every paste path goes through this ONE
+  // choke point (VT bracketed paste, the decomposed win32 paste, and both
+  // flush paths), so no caller has to remember the order.
+  const dropPath = osc8DropPath(content)
+  const text = dropPath === null ? cleanPastePayload(content) : pastePayloadForPath(dropPath)
   return {
     kind: 'key',
     name: '',
@@ -214,10 +271,142 @@ function createPasteKey(content: string): ParsedKey {
     shift: false,
     option: false,
     super: false,
-    sequence: content,
-    raw: content,
+    sequence: text,
+    raw: text,
     isPasted: true,
   }
+}
+
+// -- OSC 8 drop frames -------------------------------------------------------
+//
+// Windows hands a dropped file over as an OSC 8 hyperlink:
+//
+//   ESC ] 8 ; <params> ; <URI> ( BEL | ST )
+//
+// `params` is the hyperlink attribute list (`id=16:42`, or empty for the form
+// this TUI itself emits) and the URI is everything after the SECOND `;` — a
+// URI may legally contain `;`, params may not.
+//
+// A frame is claimed in the fixed decision order (D6) by
+// `claimProtocolSequence`, and — when the frame set was already reassembled
+// into one paste body (win32 decomposed paste / VT bracketed paste) — by
+// `createPasteKey` before the payload hygiene runs.
+
+/** OSC 8 introducer: `ESC ] 8 ;`. */
+const OSC8_FRAME_PREFIX = '\x1b]8;'
+/**
+ * Longest OSC 8 frame the record accumulator will hold. A drop URI is a local
+ * path plus percent-encoding, and the composer's own pasted-path cap is 4096
+ * chars (`MAX_PASTED_PATH_CHARS`), so anything beyond this cannot become a
+ * usable path and must not extend a hold indefinitely.
+ */
+const OSC8_FRAME_MAX_LENGTH = 4096
+
+type Osc8Frame = {
+  /** Frame URI — '' for a hyperlink CLOSE frame (`ESC ] 8 ; ; …`). */
+  uri: string
+  /** Offset just past the frame, terminator included when present. */
+  end: number
+}
+
+/**
+ * Read one OSC 8 frame at `offset`. Returns null when the bytes there are not
+ * an OSC 8 frame, or when the URI is followed by anything other than a frame
+ * terminator (BEL 0x07 / ST `ESC \`) or the start of the next frame.
+ *
+ * The "next frame" shape matters because the win32 record translator drops
+ * BEL outright (a synthesized Uc=7 record carries no key meaning), so a
+ * decomposed drop can lose its BEL terminator before the payload is
+ * reassembled. A lone frame with neither a terminator nor a successor stays
+ * unclaimed: the tail of a truncated stream must not be read as a path.
+ */
+function readOsc8Frame(payload: string, offset: number): Osc8Frame | null {
+  if (!payload.startsWith(OSC8_FRAME_PREFIX, offset)) return null
+  const paramsEnd = payload.indexOf(';', offset + OSC8_FRAME_PREFIX.length)
+  if (paramsEnd === -1) return null
+  const uriStart = paramsEnd + 1
+  let uriEnd = uriStart
+  while (uriEnd < payload.length && payload[uriEnd] !== '\u0007' && payload[uriEnd] !== '\x1b') {
+    uriEnd++
+  }
+  const uri = payload.slice(uriStart, uriEnd)
+  if (payload[uriEnd] === '\u0007') return { uri, end: uriEnd + 1 }
+  if (payload.startsWith('\x1b\\', uriEnd)) return { uri, end: uriEnd + 2 }
+  if (payload.startsWith(OSC8_FRAME_PREFIX, uriEnd)) return { uri, end: uriEnd }
+  return null
+}
+
+/**
+ * The local path a payload restores to, or null when the payload is NOT a
+ * pure OSC 8 frame set or its URI is not a decodable LOCAL file URL. Called
+ * with one complete sequence (the decision chain) or with a whole reassembled
+ * paste body (the choke point).
+ *
+ * Fail-closed rules (DESIGN D4 / AC-4):
+ * - only `file://` URIs are restored — other schemes fall through to the
+ *   normal response/prose handling;
+ * - a URI carrying whitespace is multiple tokens, not one path, and is
+ *   refused (the same conservative contract as `parsePastedImagePath`);
+ * - more than one distinct URI is a multi-file drop, which v1 does not
+ *   cover: fail closed rather than silently keep only the first file;
+ * - a remote authority (`file://server/share/…`) or a decode failure is
+ *   never silently reinterpreted as a local path;
+ * - a payload with any trailing non-OSC-8 bytes is NOT a drop and is left to
+ *   the hygiene path, so prose that merely quotes a link keeps its text.
+ */
+function osc8DropPath(payload: string): string | null {
+  let offset = 0
+  let uri: string | undefined
+  while (offset < payload.length) {
+    const frame = readOsc8Frame(payload, offset)
+    if (frame === null || frame.end <= offset) return null
+    if (frame.uri !== '') {
+      if (uri !== undefined && uri !== frame.uri) return null
+      uri = frame.uri
+    }
+    offset = frame.end
+  }
+  if (uri === undefined || /\s/u.test(uri)) return null
+  return localPathOfFileUri(uri)
+}
+
+/**
+ * `file://` URI → local path (percent-escapes decoded by `fileURLToPath`), or
+ * null when the URI is not a local file URL or decoding fails.
+ */
+function localPathOfFileUri(uri: string): string | null {
+  if (!/^file:\/\//iu.test(uri)) return null
+  let url: URL
+  try {
+    url = new URL(uri)
+  } catch {
+    return null
+  }
+  // A non-empty authority is a remote share (UNC): refuse it instead of
+  // letting `fileURLToPath` reinterpret it as a local path on hosts that
+  // ignore the authority. `localhost` is this machine.
+  if (url.host !== '' && url.host !== 'localhost') return null
+  try {
+    return fileURLToPath(url)
+  } catch {
+    return null
+  }
+}
+
+/**
+ * The paste payload for a restored drop path. `parsePastedImagePath` accepts
+ * exactly one whitespace-free token, or the whole payload quoted — and a drop
+ * is ONE unambiguous file, so a path containing whitespace is handed over in
+ * the quoted single-token form the composer already documents
+ * (`@"my dir/a.ts"` is the mention spelling of the same shape). A path no
+ * quote can represent (a literal `"`) stays bare: the composer then inserts
+ * it verbatim, which is the pre-existing fail-closed behaviour for ambiguous
+ * tokens. Windows paths cannot contain `"`, so on this platform the quoted
+ * form is exactly the decoded path.
+ */
+function pastePayloadForPath(path: string): string {
+  if (!/[\s"]/u.test(path)) return path
+  return path.includes('"') ? path : `"${path}"`
 }
 
 /** DECRPM status values (response to DECRQM) */
@@ -258,6 +447,25 @@ export type TerminalResponse =
   /** XTVERSION: terminal name/version string (answer to CSI > 0 q).
    *  Example values: "xterm.js(5.5.0)", "ghostty 1.2.0", "iTerm2 3.6". */
   | { type: 'xtversion'; name: string }
+
+// Unfinished prefixes of every reply shape parseTerminalResponse() knows.
+// MUST be kept in sync with the pattern list above: a reply type added there
+// needs an alternative here too, or a ConPTY-split tail of that shape is
+// released at the flush and leaks into the prompt as literal text.
+//   ESC [ ? …              DA1 / kitty flags / DECXCPR / DECRPM
+//   ESC [ ? … $            DECRPM's `$y` intermediate byte
+//   ESC [ > …              DA2
+//   ESC [ digits [; digits]  DSR (row;col) and XTWINOPS pixel-size replies
+//   ESC [ … $              a `$`-intermediate CSI awaiting its final byte
+//   ESC P > | …            XTVERSION (DCS)
+// Only PREFIXES are matched; completeness is always decided by
+// parseTerminalResponse(), never by this regex. Introducer-only prefixes
+// (`ESC [`, `ESC P`) are deliberately excluded: they are indistinguishable
+// from ordinary key input, and holding the bare `ESC [` swallowed
+// `ESC[`+letter input in the #1073 review.
+// eslint-disable-next-line no-control-regex
+const TERMINAL_RESPONSE_PREFIX_RE =
+  /^(?:\x1b\[\?[\d;]*\$?|\x1b\[>[\d;]*|\x1b\[[\d;]*\$|\x1b\[\d+(?:;\d+)*|\x1bP>\|)/
 
 /**
  * Try to recognize a sequence token as a terminal response.
@@ -347,6 +555,101 @@ function parseTerminalResponse(s: string): TerminalResponse | null {
   }
 
   return null
+}
+
+// Unfinished prefixes of the reply shapes parseTerminalResponse() accepts,
+// paired with the response type they can still complete into. This is the
+// shape half of the claim gate: a held reply fragment is only joined to its
+// continuation while one of these types is actually expected by a pending
+// query (terminalExpectedResponseTypes). The patterns are deliberately
+// tighter than TERMINAL_RESPONSE_PREFIX_RE: `?` + two params can still grow
+// into a DA1 but never into a DECRPM (`?mode;status$y` has exactly two
+// params), so a DA1-shaped fragment is released as literal text as soon as
+// only DECRPM is in flight. `parseTerminalResponse` remains the only
+// authority on completeness.
+// eslint-disable-next-line no-control-regex
+const INCOMPLETE_RESPONSE_PREFIXES: ReadonlyArray<
+  readonly [TerminalResponse['type'], RegExp]
+> = [
+  // DA1: any `?`-parameter list (including the bare introducer).
+  ['da1', /^\x1b\[\?[\d;]*$/],
+  // DECRPM: `?mode;status` before the `$` intermediate, then the same before
+  // `$` + final.
+  ['decrpm', /^\x1b\[\?\d*(?:;\d*)?$/],
+  ['decrpm', /^\x1b\[\?\d+;\d+\$$/],
+  // Kitty flags and DECXCPR: one `?` + at most two numeric params.
+  ['kittyKeyboard', /^\x1b\[\?\d*$/],
+  ['cursorPosition', /^\x1b\[\?\d*(?:;\d*)?$/],
+  // DA2: any `>`-parameter list.
+  ['da2', /^\x1b\[>[\d;]*$/],
+  // XTWINOPS: `6;h;w t` / `4;h;w t`, up to the final byte.
+  ['terminalPixelSize', /^\x1b\[[46](?:;\d*){0,2}$/],
+  // XTVERSION: `P>` can still gain `|` and a payload; ST's ESC may flush.
+  ['xtversion', /^\x1bP>(?:\|[^\x1b]*(?:\x1b)?)?$/],
+]
+
+/**
+ * Response types an unfinished reply-shaped candidate could still complete
+ * into, judged from its introducer and parameter bytes alone. Empty means
+ * the bytes cannot become a known reply (either a final byte already ended a
+ * different sequence, or the shape is unknown) and must stay literal.
+ * @param candidate - the inbound bytes, with the ESC introducer synthesized.
+ * @returns the types a continuation could still produce.
+ */
+function possibleResponseTypes(
+  candidate: string,
+): Set<TerminalResponse['type']> {
+  const types = new Set<TerminalResponse['type']>()
+  for (const [type, pattern] of INCOMPLETE_RESPONSE_PREFIXES) {
+    if (pattern.test(candidate)) types.add(type)
+  }
+  return types
+}
+
+/**
+ * Whether an unfinished candidate can still become a response the host is
+ * currently waiting for. Both halves are required: an in-flight query of the
+ * matching type, and a shape that can still produce it.
+ */
+function expectsResponseType(
+  candidate: string,
+  expected: ReadonlySet<TerminalResponse['type']>,
+): boolean {
+  for (const type of possibleResponseTypes(candidate)) {
+    if (expected.has(type)) return true
+  }
+  return false
+}
+
+/**
+ * Find the shortest complete terminal response at the head of a post-flush
+ * tail whose introducer ESC was already flushed as a key. The caller
+ * synthesizes the ESC back; `parseTerminalResponse` decides completeness, so
+ * only a type the host expects is claimed and trailing bytes are left for
+ * ordinary parsing.
+ * @param tail - fragment without its ESC introducer.
+ * @param expected - response types of the queries still awaiting a reply.
+ * @returns the claimed response and how many bytes of `tail` it consumed, or
+ *   undefined when no expected reply completes at the head.
+ */
+function claimExpectedResponseHead(
+  tail: string,
+  expected: ReadonlySet<TerminalResponse['type']>,
+): { response: TerminalResponse; consumed: number } | undefined {
+  const limit = Math.min(tail.length, TERMINAL_RESPONSE_MAX_LENGTH)
+  for (let consumed = 2; consumed <= limit; consumed++) {
+    const head = '\x1b' + tail.slice(0, consumed)
+    const response = parseTerminalResponse(head)
+    if (response) {
+      return expected.has(response.type)
+        ? { response, consumed }
+        : undefined
+    }
+    // A head that can no longer become an expected reply ends the scan:
+    // longer candidates extend a shape that is already closed or unknown.
+    if (!expectsResponseType(head, expected)) return undefined
+  }
+  return undefined
 }
 
 function splitNumericParams(params: string): number[] {
@@ -758,16 +1061,106 @@ function synthesizedWin32Char(key: ParsedKey): string | undefined {
   return win32RecordChar(key)
 }
 
-function parseReassembledWin32Protocol(sequence: string): ParsedInput | null {
+/**
+ * The ONE decision chain for a complete reassembled terminal sequence. The
+ * order is a contract (DESIGN D6) and must not be permuted:
+ *
+ *   1. OSC 8 drop frame — a dropped file's hyperlink. It must win over the
+ *      OSC response shape in step 2, which also matches `ESC ] 8 ; …` and
+ *      used to swallow the whole link as a bogus terminal reply (#1067).
+ *   2. terminal response — DECRPM/DA/OSC replies to our own queries
+ *      (#1177's type-bound claiming).
+ *   3. mouse report — SGR (1006), with the X10 report as the legacy
+ *      compatibility fallback.
+ *
+ * A sequence that falls through all three is a record body or a keypress, and
+ * only the caller can tell which (`parseReassembledWin32Protocol` for records,
+ * the token loop for VT input), so that dispatch stays with the caller.
+ */
+function claimProtocolSequence(sequence: string): ParsedInput | null {
+  const dropPath = osc8DropPath(sequence)
+  if (dropPath !== null) {
+    // Hand the local path to the ONE paste choke point (D2), so the existing
+    // image stage / `@` reference pipeline sees a normal paste.
+    return createPasteKey(pastePayloadForPath(dropPath))
+  }
+
   const response = parseTerminalResponse(sequence)
   if (response) return { kind: 'response', sequence, response }
 
-  const mouse = parseMouseEvent(sequence) ?? parseX10MouseEvent(sequence)
-  if (mouse) return mouse
+  return parseMouseEvent(sequence) ?? parseX10MouseEvent(sequence)
+}
+
+function parseReassembledWin32Protocol(sequence: string): ParsedInput | null {
+  // Fixed decision order (D6) — see claimProtocolSequence.
+  const claimed = claimProtocolSequence(sequence)
+  if (claimed) return claimed
 
   if (SGR_MOUSE_RE.test(sequence) || (sequence.length === 6 && sequence.startsWith('\x1b[M'))) {
     return parseKeypress(sequence)
   }
+  return null
+}
+
+/** Release every key held for the current candidate sequence. */
+function releaseWin32ProtocolHold(state: Win32ProtocolState): ParsedKey[] {
+  const held = state.held
+  state.held = []
+  state.sequence = ''
+  return held
+}
+
+/**
+ * Resolve one accumulated protocol candidate. An array is the dispatch result
+ * (empty while the frame is still incomplete); null means the bytes are not a
+ * protocol shape we may hold, and the caller releases its keys.
+ *
+ * Order and bounds are the existing contract (#1142/#1177) with the OSC 8
+ * drop frame (D1) added FIRST: under win32-input-mode a drop can arrive as
+ * per-character synthesized records without bracketed-paste markers, so the
+ * hyperlink has to be reassembled here, ahead of any response/mouse claim.
+ * Holding past the introducer also keeps it away from
+ * `parseTerminalResponse`, whose OSC shape would otherwise take
+ * `ESC ] 8 ; …` as a bogus reply and swallow the dropped path (#1067).
+ * The OSC terminator is BEL or ST with its own length cap: a BEL record has
+ * no key meaning and is dropped by the translator, so a decomposed frame can
+ * lose its BEL — such a frame is released by the flush bound like any other
+ * abandoned sequence.
+ */
+function resolveWin32ProtocolCandidate(
+  state: Win32ProtocolState,
+  sequence: string,
+  ch: string,
+): ParsedInput[] | null {
+  if (sequence === '\x1b' || sequence === '\x1b[') return []
+
+  if (sequence.startsWith('\x1b]')) {
+    const terminated = sequence.endsWith('\u0007') || sequence.endsWith('\x1b\\')
+    if (!terminated) return sequence.length <= OSC8_FRAME_MAX_LENGTH ? [] : null
+    const held = releaseWin32ProtocolHold(state)
+    const parsed = parseReassembledWin32Protocol(sequence)
+    return parsed ? [parsed] : held
+  }
+
+  if (!sequence.startsWith('\x1b[') || sequence.length > 64) return null
+
+  if (sequence.startsWith('\x1b[M')) {
+    if (sequence.length < 6) return []
+    const held = releaseWin32ProtocolHold(state)
+    const parsed = sequence.length === 6
+      ? parseReassembledWin32Protocol(sequence)
+      : null
+    return parsed ? [parsed] : held
+  }
+
+  const code = ch.charCodeAt(0)
+  if ((code >= 0x20 && code <= 0x3f)) return []
+  if (code >= 0x40 && code <= 0x7e) {
+    const held = releaseWin32ProtocolHold(state)
+    const parsed = parseReassembledWin32Protocol(sequence)
+    return parsed ? [parsed] : held
+  }
+
   return null
 }
 
@@ -784,50 +1177,16 @@ function feedWin32Protocol(
   }
 
   if (ch === undefined) {
-    const held = state.held
-    state.held = []
-    state.sequence = ''
+    const held = releaseWin32ProtocolHold(state)
     return [...held, ...feedWin32Protocol(state, key)]
   }
 
   state.held.push(key)
   state.sequence += ch
-  const sequence = state.sequence
-
-  if (sequence === '\x1b' || sequence === '\x1b[') return []
-
-  if (!sequence.startsWith('\x1b[') || sequence.length > 64) {
-    const held = state.held
-    state.held = []
-    state.sequence = ''
-    return held
-  }
-
-  if (sequence.startsWith('\x1b[M')) {
-    if (sequence.length < 6) return []
-    const held = state.held
-    state.held = []
-    state.sequence = ''
-    const parsed = sequence.length === 6
-      ? parseReassembledWin32Protocol(sequence)
-      : null
-    return parsed ? [parsed] : held
-  }
-
-  const code = ch.charCodeAt(0)
-  if ((code >= 0x20 && code <= 0x3f)) return []
-  if (code >= 0x40 && code <= 0x7e) {
-    const held = state.held
-    state.held = []
-    state.sequence = ''
-    const parsed = parseReassembledWin32Protocol(sequence)
-    return parsed ? [parsed] : held
-  }
-
-  const held = state.held
-  state.held = []
-  state.sequence = ''
-  return held
+  return (
+    resolveWin32ProtocolCandidate(state, state.sequence, ch) ??
+    releaseWin32ProtocolHold(state)
+  )
 }
 
 function feedWin32Input(
@@ -947,6 +1306,41 @@ export type KeyParseState = {
    * never injects it. Consumed (and cleared) by the next parse call.
    */
   mouseHeadSingleRead?: string
+  /**
+   * Date.now() of the most recent flush that emitted a lone Escape key from an
+   * incomplete terminal sequence. Any text chunk inside the window may be that
+   * sequence's delayed tail — the bound is time (TERMINAL_RESPONSE_TAIL_GRACE_MS),
+   * not just the chunk that follows the flush.
+   */
+  terminalResponseTailAfterEscFlushAt?: number
+  /**
+   * Date.now() of the FIRST capture of the reply prefix currently held open
+   * across flushes (see TERMINAL_RESPONSE_TAIL_GRACE_MS). Later flushes and
+   * continuations never renew it; the hold is released — bytes dropped — once
+   * it expires or its in-flight claim disappears. Parser-maintained, like
+   * mouseTailHoldAt; never host-injected.
+   */
+  terminalResponseHoldAt?: number
+  /**
+   * Parser-maintained reply fragment held across calls after its introducer
+   * ESC was already flushed as a standalone key (a ConPTY split that lands
+   * mid-tail). The fragment has the synthesized ESC removed; the next text
+   * chunk may complete it. It lives only inside the
+   * terminalResponseTailAfterEscFlushAt window and is dropped — never
+   * emitted as text — once that window closes, the evidence disappears or
+   * the fragment stops being reply-shaped.
+   */
+  terminalResponseReattachTail?: string
+  /**
+   * Host-injected, read-only in-flight evidence for terminal-query replies:
+   * the response types of the queries still awaiting a reply
+   * (querier.pendingResponseTypes). A reply is only claimed while one of
+   * these types is both expected and shape-compatible with the bytes; an
+   * absent or empty list means no evidence, so the parser never claims a
+   * response tail and direct callers keep the pre-gate behavior. The host
+   * re-injects it on every call, so a settled query stops counting at once.
+   */
+  terminalExpectedResponseTypes?: readonly TerminalResponse['type'][]
   // Internal tokenizer instance
   _tokenizer?: Tokenizer
 }
@@ -1015,6 +1409,25 @@ export function parseMultipleKeypresses(
   const isRecordPrefix = (value: string): boolean =>
     !inPaste && WIN32_INPUT_PREFIX_RE.test(value) &&
     (WIN32_INPUT_BODY_PREFIX_RE.test(value) || win32HoldAllowed)
+  // Evidence is the live query lifecycle, not a recency window: the host
+  // injects the response types of the queries still awaiting an answer, and
+  // a reply is only ever claimed when its shape can complete into one of
+  // them. Read-only here and re-read on every call, so a query that settles
+  // (matched reply, sentinel drain, dispose) stops authorizing immediately.
+  const expectedResponseTypes = new Set(
+    prevState.terminalExpectedResponseTypes ?? [],
+  )
+  const hasQueryEvidence = expectedResponseTypes.size > 0
+  // A buffer that is already reply-specific (TERMINAL_RESPONSE_PREFIX_RE) is
+  // eligible to be held open for its continuation — but only with the
+  // host-injected in-flight-query evidence (D1) AND a shape/type match (D2).
+  // Record framing is judged first (D6): every numeric CSI prefix the record
+  // branch can frame belongs to it, and this predicate never re-labels one.
+  // Without evidence nothing is held, so a direct caller that never injects
+  // it keeps the pre-gate behavior (D7 / AC-3). Paste payloads stay literal,
+  // exactly like the record branch above.
+  const isResponsePrefix = (value: string): boolean =>
+    !isRecordPrefix(value) && !inPaste && TERMINAL_RESPONSE_PREFIX_RE.test(value)
 
   if (win32InputStartedAt !== undefined && now - win32InputStartedAt >= WIN32_INPUT_GRACE_MS) {
     tokenizer.reset()
@@ -1028,6 +1441,18 @@ export function parseMultipleKeypresses(
   // came from an earlier read's flush, i.e. exactly the two-stroke typing the
   // P2 gate exists for.
   let win32EscPrepended = false
+  // Same deadline discipline for the reply-prefix hold: first capture only,
+  // checked on every call (not just on flush, so continuous input cannot
+  // starve it), and released by resetting the tokenizer — bytes dropped, the
+  // same caliber as the win32 record hold, never leaked into the prompt.
+  let terminalResponseHoldAt = prevState.terminalResponseHoldAt
+  if (
+    terminalResponseHoldAt !== undefined &&
+    now - terminalResponseHoldAt >= TERMINAL_RESPONSE_TAIL_GRACE_MS
+  ) {
+    if (isResponsePrefix(tokenizer.buffer())) tokenizer.reset()
+    terminalResponseHoldAt = undefined
+  }
   if (inputString && win32EscFlushedAt !== undefined) {
     // Only the immediate continuation of an actual ESC flush may acquire
     // a missing introducer. Never capture arbitrary '['-led user text.
@@ -1062,8 +1487,27 @@ export function parseMultipleKeypresses(
     }
   }
 
-  let deferFlush = isFlush && isRecordPrefix(tokenizer.buffer())
-  if (deferFlush && tokenizer.buffer().length > WIN32_INPUT_MAX_LENGTH) {
+  // Two independent reasons to keep the tokenizer's buffer across a flush:
+  // the #1142 record frame (win32), and an unfinished reply prefix when the
+  // host reports a query in flight (D1 × D2). Each keeps its own bound (D6);
+  // an over-limit buffer is dropped exactly like #1142 drops an oversized
+  // record frame.
+  const recordPrefix = isRecordPrefix(tokenizer.buffer())
+  // Evidence is re-read on every call, never latched: once the host stops
+  // reporting a query in flight — or the buffer's shape can no longer
+  // complete into a response type it expects — the claim ends. A captured
+  // hold is then dropped by the release branch below instead of being
+  // flushed into the body (no evidence, no claim).
+  const claimsResponsePrefix =
+    hasQueryEvidence &&
+    isResponsePrefix(tokenizer.buffer()) &&
+    expectsResponseType(tokenizer.buffer(), expectedResponseTypes)
+  let deferFlush = isFlush && (recordPrefix || claimsResponsePrefix)
+  if (
+    deferFlush &&
+    tokenizer.buffer().length >
+      (recordPrefix ? WIN32_INPUT_MAX_LENGTH : TERMINAL_RESPONSE_MAX_LENGTH)
+  ) {
     tokenizer.reset()
     deferFlush = false
   }
@@ -1071,8 +1515,28 @@ export function parseMultipleKeypresses(
   // single-read `ESC[` evidence below cannot be granted to a head whose ESC
   // or `[` was buffered by an earlier call.
   const pendingBeforeFeed = tokenizer.buffer()
+  // First capture only: later flushes (App re-arms its timer while
+  // `incomplete` is set) must not renew the deadline.
+  if (deferFlush && claimsResponsePrefix) terminalResponseHoldAt ??= now
+  // A captured hold can lose its authorization before the flush: the host
+  // re-injects the pending set on every call, so a query that settles (or a
+  // shape that evolves out of the expected types) turns claimsResponsePrefix
+  // false. Falling back to tokenizer.flush() there would hand the buffered
+  // reply prefix to parseKeypress() as a key/literal text. Drop it like the
+  // expiry path instead and end the hold. Both the captured timestamp and
+  // the reply shape are required: bytes that were never held keep the
+  // pre-gate release semantics (AC-3).
+  const releaseResponseHold =
+    isFlush &&
+    terminalResponseHoldAt !== undefined &&
+    isResponsePrefix(tokenizer.buffer()) &&
+    !claimsResponsePrefix
+  if (releaseResponseHold) {
+    tokenizer.reset()
+    terminalResponseHoldAt = undefined
+  }
   const tokens = isFlush
-    ? deferFlush ? [] : tokenizer.flush()
+    ? deferFlush || releaseResponseHold ? [] : tokenizer.flush()
     : tokenizer.feed(inputString)
   // ADR-0007 D4 addendum (F-2): grant the ambiguous `ESC[` head P1-only claim
   // when both bytes were buffered inside this one non-flush read from an empty
@@ -1118,6 +1582,40 @@ export function parseMultipleKeypresses(
   // App's 50ms flush timer, so a per-call flag would still let the SECOND
   // quiet flush kill a press split by >~100ms (observed over SSH).
   let mouseTailHoldAt: number | undefined = prevState.mouseTailHoldAt
+  const terminalResponseTailAfterEscFlushAt =
+    prevState.terminalResponseTailAfterEscFlushAt
+  // Fragment of a reply whose introducer ESC was already flushed as a key,
+  // held across calls until the rest of its shape arrives (see
+  // KeyParseState.terminalResponseReattachTail).
+  let terminalResponseReattachTail: string | undefined =
+    prevState.terminalResponseReattachTail
+  // Re-attach (D3b, handed over from #796): a lone Escape was genuinely
+  // flushed, so a text token inside the window may be the rest of a reply
+  // that lost its introducer. Claim it only inside the bounded window AND
+  // with a query in flight whose expected response type the shape can still
+  // complete into — the missing gate CodeRabbit flagged on #796.
+  // parseTerminalResponse() remains the completeness authority; bytes whose
+  // shape matches no expected type stay literal, and without injected
+  // evidence this branch never fires (AC-3).
+  // Bounded by TIME, not by "the next call": a burst can interleave a chunk
+  // between the flush and the tail (another reply answering an earlier query,
+  // or a keystroke), and the real-ConPTY dry run leaked the tail when that
+  // chunk closed the window early.
+  const mayRecoverTerminalResponseTail =
+    hasQueryEvidence &&
+    terminalResponseTailAfterEscFlushAt !== undefined &&
+    Date.now() - terminalResponseTailAfterEscFlushAt <= TERMINAL_RESPONSE_TAIL_GRACE_MS
+  // Carry that stamp under the same discipline while it is still in-window,
+  // and drop it once it expires (or the evidence is gone) so no stale window
+  // survives — the #1142 record window above carries its own stamp the same way.
+  const carryTailAfterEscFlush = mayRecoverTerminalResponseTail
+    ? terminalResponseTailAfterEscFlushAt
+    : undefined
+  // A closed window also drops the fragment it was holding: those bytes
+  // cannot be joined to a reply any more, and protocol-shaped bytes are
+  // dropped rather than shown.
+  if (carryTailAfterEscFlush === undefined) terminalResponseReattachTail = undefined
+
   // Claim provenance of the current hold (see KeyParseState docs): true =
   // gated (RELEASE on expiry/overflow), false = legacy silent discard,
   // undefined = no hold.
@@ -1211,6 +1709,37 @@ export function parseMultipleKeypresses(
   for (let qi = 0; qi < tokenQueue.length; qi++) {
     const token = tokenQueue[qi]!
     if (token.type === 'sequence') {
+      // Once the DCS introducer ESC has timed out, the tokenizer emits an
+      // XTVERSION tail as text but its ST/BEL terminator as a sequence. Join
+      // that terminator before treating it as an unrelated key. A lone ST
+      // introducer ESC may itself time out before the trailing backslash.
+      const heldTail = terminalResponseReattachTail
+      if (
+        heldTail !== undefined &&
+        heldTail.startsWith('P>|') &&
+        mayRecoverTerminalResponseTail &&
+        expectedResponseTypes.has('xtversion')
+      ) {
+        if (token.value === '\x1b' && heldTail.length + 3 <= TERMINAL_RESPONSE_MAX_LENGTH) {
+          terminalResponseReattachTail = heldTail + '\x1b'
+          win32EscFlushedAt = undefined
+          continue
+        }
+        if (token.value === '\x1b\\' || token.value === '\x07') {
+          const sequence = '\x1b' + heldTail + token.value
+          const response = sequence.length <= TERMINAL_RESPONSE_MAX_LENGTH
+            ? parseTerminalResponse(sequence)
+            : null
+          if (response?.type === 'xtversion') {
+            terminalResponseReattachTail = undefined
+            keys.push({ kind: 'response', sequence, response })
+            continue
+          }
+        }
+      }
+      // An unrelated sequence between the held fragment and its terminator
+      // proves the reply died; do not merge it with later input.
+      terminalResponseReattachTail = undefined
       if (token.value === PASTE_START) {
         inPaste = true
         pasteBuffer = ''
@@ -1252,65 +1781,61 @@ export function parseMultipleKeypresses(
             }
           }
         } else {
-          const response = parseTerminalResponse(token.value)
-          if (response) {
-            // Terminal reply (DECRPM, DA, …) — same dead-report proof.
+          // Fixed decision order (D6) for one complete token — see
+          // claimProtocolSequence: OSC 8 drop (#1178) → terminal reply
+          // (#1177) → mouse (SGR 1006 first, X10 as the legacy 1000/1002
+          // fallback). This parser's SGR head-fragment claim family
+          // (#1160/#1120) lives inside the mouse step, below the complete
+          // claim, and never runs ahead of OSC 8 or a reply. Wheel falls
+          // through to parseKeypress, which turns it into a wheel key WITH
+          // the pointer coordinates for position-based routing.
+          const claimed = claimProtocolSequence(token.value)
+          if (claimed !== null) {
+            // Any claim — drop, terminal reply or complete mouse report — is
+            // a protocol boundary: a held prefix belongs to an older, dead
+            // report. Discard it BEFORE it can merge the next fragment into
+            // a phantom event. A complete report also lights the P2 evidence
+            // window for the ambiguous `[`/`ESC[` heads.
+            if (claimed.kind === 'mouse') lastMouseReportAt = now
             clearMouseTailHold()
-            keys.push({ kind: 'response', sequence: token.value, response })
+            keys.push(claimed)
           } else {
-            // SGR first (1006); X10 (legacy 1000/1002 without SGR) as the
-            // compatibility fallback for clicks/drags. Wheel falls through
-            // to parseKeypress, which turns it into a wheel key WITH the
-            // pointer coordinates for position-based routing.
-            const mouse =
-              parseMouseEvent(token.value) ??
-              parseX10MouseEvent(token.value)
-            if (mouse) {
-              // A complete report arrived — any held prefix belongs to an
-              // older, dead report. Discard it BEFORE it can merge the next
-              // fragment into a phantom event. The report also lights the P2
-              // evidence window for the ambiguous `[`/`ESC[` heads.
-              lastMouseReportAt = now
-              clearMouseTailHold()
-              keys.push(mouse)
+            const head = token.value.replace(/^\x1b/, '')
+            // F-2 transport evidence: `ESC[` buffered in ONE read (see
+            // KeyParseState.mouseHeadSingleRead) grants the P1-only claim.
+            const singleReadHead =
+              token.value === '\x1b[' && prevState.mouseHeadSingleRead === token.value
+            const claim = claimSgrHead(head, singleReadHead)
+            if (
+              claim !== undefined &&
+              (!claim.releasable || head.length <= MOUSE_HEAD_HOLD_MAX_LENGTH)
+            ) {
+              // Flush-truncated SGR head: the tokenizer's flush emitted the
+              // buffered head (ESC still attached) as a sequence token. It
+              // is protocol bytes mid-report, not a key — strip the ESC,
+              // hold for the continuation (the text-token branch below
+              // completes it), and never let it fall through to
+              // parseKeypress, where it would leak into the prompt.
+              // A fresh head REPLACES any stale hold instead of appending:
+              // the new report's arrival proves the old one's tail never
+              // came (`[<0;18` + `[<64;…` concatenated parses as garbage).
+              // F-1: a gated old hold is RELEASED first so its bytes are
+              // neither dropped nor ordered after the new head's bytes.
+              releaseHeldMouseHead()
+              mouseTailHold = head
+              mouseTailHoldAt = now
+              mouseTailHoldReleasable = claim.releasable
+            } else if (claim !== undefined && claim.releasable) {
+              // Over the gated 64B bound: release immediately — never hold,
+              // never drop (ADR-0007 D5).
+              releaseHeldMouseHead()
+              keys.push(parseKeypress(head))
             } else {
-              const head = token.value.replace(/^\x1b/, '')
-              // F-2 transport evidence: `ESC[` buffered in ONE read (see
-              // KeyParseState.mouseHeadSingleRead) grants the P1-only claim.
-              const singleReadHead =
-                token.value === '\x1b[' && prevState.mouseHeadSingleRead === token.value
-              const claim = claimSgrHead(head, singleReadHead)
-              if (
-                claim !== undefined &&
-                (!claim.releasable || head.length <= MOUSE_HEAD_HOLD_MAX_LENGTH)
-              ) {
-                // Flush-truncated SGR head: the tokenizer's flush emitted the
-                // buffered head (ESC still attached) as a sequence token. It
-                // is protocol bytes mid-report, not a key — strip the ESC,
-                // hold for the continuation (the text-token branch below
-                // completes it), and never let it fall through to
-                // parseKeypress, where it would leak into the prompt.
-                // A fresh head REPLACES any stale hold instead of appending:
-                // the new report's arrival proves the old one's tail never
-                // came (`[<0;18` + `[<64;…` concatenated parses as garbage).
-                // F-1: a gated old hold is RELEASED first so its bytes are
-                // neither dropped nor ordered after the new head's bytes.
-                releaseHeldMouseHead()
-                mouseTailHold = head
-                mouseTailHoldAt = now
-                mouseTailHoldReleasable = claim.releasable
-              } else if (claim !== undefined && claim.releasable) {
-                // Over the gated 64B bound: release immediately — never hold,
-                // never drop (ADR-0007 D5).
-                releaseHeldMouseHead()
-                keys.push(parseKeypress(head))
-              } else {
-                // Ordinary key sequence (arrows, function keys, …) — still an
-                // ESC protocol start, so a held head's report is dead. F-1:
-                // a gated hold is RELEASED in arrival order first.
-                releaseHeldMouseHead()
-                keys.push(parseKeypress(token.value))
-              }
+              // Ordinary key sequence (arrows, function keys, …) — still an
+              // ESC protocol start, so a held head's report is dead. F-1:
+              // a gated hold is RELEASED in arrival order first.
+              releaseHeldMouseHead()
+              keys.push(parseKeypress(token.value))
             }
           }
         }
@@ -1322,6 +1847,7 @@ export function parseMultipleKeypresses(
         // Protocol bytes — a live SGR mouse report cannot contain them, so
         // a held prefix's report is dead. Discard before recovering.
         clearMouseTailHold()
+        terminalResponseReattachTail = undefined
         // A delayed win32-input-mode continuation can arrive after App's
         // escape timer has already flushed its ESC prefix. Recover complete
         // record tails so their protocol bytes do not leak into the prompt.
@@ -1354,6 +1880,7 @@ export function parseMultipleKeypresses(
         // (`ESC + hold + complete tail`) parses as garbage and leaks the
         // protocol bytes into the prompt as an ordinary key.
         clearMouseTailHold()
+        terminalResponseReattachTail = undefined
         const resynthesized = '\x1b' + token.value
         const mouse = parseMouseEvent(resynthesized)
         // A real report lights the P2 evidence window for ambiguous heads.
@@ -1372,6 +1899,7 @@ export function parseMultipleKeypresses(
         // protocol prefix, a win32 tail, or ordinary typing. The prefix
         // regex (no $ anchor) matches the report at the head; the suffix
         // is whatever follows.
+        terminalResponseReattachTail = undefined
         const combined = mouseTailHold + token.value
         const m = combined.match(SGR_MOUSE_TAIL_PREFIX_RE)!
         const reportEnd = m[0].length
@@ -1386,48 +1914,104 @@ export function parseMultipleKeypresses(
         if (mouse) lastMouseReportAt = now
         keys.push(mouse ?? parseKeypress(resynthesized))
       } else {
-        // SGR head family: claim a fresh head, extend an active hold, or pass
-        // ordinary text through. `claimSgrHead` pairs shape with evidence; a
-        // hold only survives while `hold + token` remains a legal head prefix
-        // (SGR_MOUSE_HEAD_PREFIX_RE, grammar-locked to SGR_MOUSE_RE), so text
-        // that cannot continue it proves the held report died.
-        const combined = (mouseTailHold ?? '') + token.value
-        const claim = claimSgrHead(token.value)
-        const canExtend =
-          mouseTailHold !== undefined &&
-          SGR_MOUSE_HEAD_PREFIX_RE.test(combined)
-        if (
-          canExtend &&
-          (mouseTailHoldReleasable !== true ||
-            combined.length <= MOUSE_HEAD_HOLD_MAX_LENGTH)
-        ) {
-          // Continuation (`<` after a bare `[`, digits/semicolons after `[<`):
-          // keep the FIRST-capture deadline — flushes must not renew it.
-          mouseTailHold = combined
-        } else if (
-          claim !== undefined &&
-          (!claim.releasable ||
-            token.value.length <= MOUSE_HEAD_HOLD_MAX_LENGTH)
-        ) {
-          // Incomplete SGR head arriving as a text token (ConPTY/SSH split the
-          // report mid-sequence and the flush timer already released the
-          // buffered ESC prefix): hold it for the next chunk instead of
-          // leaking protocol bytes into the prompt. A fresh head REPLACES any
-          // stale hold — two reports never concatenate — so the deadline
-          // restarts from this capture. F-1: a gated old hold is RELEASED
-          // first so its bytes are replayed in arrival order, not dropped.
-          releaseHeldMouseHead()
-          mouseTailHold = token.value
-          mouseTailHoldAt = now
-          mouseTailHoldReleasable = claim.releasable
+        // #1177 terminal-reply re-attach runs first (decision order D6:
+        // reply before mouse): the introducer ESC may already have been
+        // flushed, so this text token — joined with any held fragment — may
+        // be the rest of a reply. The one shape authority
+        // (`claimExpectedResponseHead`) decides completeness, and a claim
+        // needs BOTH a pending query of the matching expected type and a
+        // shape that can still complete into it; anything else keeps the
+        // token literal (AC-3) and drops a stale fragment rather than
+        // leaking protocol bytes.
+        const replyCandidate = (terminalResponseReattachTail ?? '') + token.value
+        const claimedResponse = mayRecoverTerminalResponseTail
+          ? claimExpectedResponseHead(replyCandidate, expectedResponseTypes)
+          : undefined
+        if (claimedResponse) {
+          terminalResponseReattachTail = undefined
+          // A completed reply is a protocol boundary: a held SGR head's
+          // report is dead (same caliber as the sequence-token reply path).
+          clearMouseTailHold()
+          keys.push({
+            kind: 'response',
+            sequence: '\x1b' + replyCandidate.slice(0, claimedResponse.consumed),
+            response: claimedResponse.response,
+          })
+          // Trailing bytes beyond the completed reply are ordinary input
+          // (the terminal batched the tail with the next keystrokes).
+          const suffix = replyCandidate.slice(claimedResponse.consumed)
+          if (suffix) tokenQueue.splice(qi + 1, 0, { type: 'text', value: suffix })
         } else {
-          // The open report is dead (text that cannot continue it) or the
-          // gated 64B bound is exceeded: a gated hold RELEASES its bytes in
-          // arrival order (ADR-0007 D5) so no user input is dropped; legacy
-          // holds keep the pre-gate silent discard. This token then passes
-          // through as ordinary typing.
-          releaseHeldMouseHead()
-          keys.push(parseKeypress(token.value))
+          const replyStillOpen =
+            mayRecoverTerminalResponseTail &&
+            replyCandidate.length <= TERMINAL_RESPONSE_MAX_LENGTH &&
+            expectsResponseType('\x1b' + replyCandidate, expectedResponseTypes)
+          const freshReplyPrefix =
+            mayRecoverTerminalResponseTail &&
+            token.value.length <= TERMINAL_RESPONSE_MAX_LENGTH &&
+            expectsResponseType('\x1b' + token.value, expectedResponseTypes)
+          if (replyStillOpen) {
+            // Still an open expected reply prefix — hold it for the next
+            // call. The reply shape proves any held mouse report is dead, so
+            // the mouse hold is discarded without replay (terminal response
+            // precedes mouse in the decision chain).
+            clearMouseTailHold()
+            terminalResponseReattachTail = replyCandidate
+          } else if (freshReplyPrefix) {
+            // The held fragment (if any) cannot be completed; drop it and
+            // give the fresh bytes their own chance to start a reply prefix.
+            // Again the reply claim ends any mouse hold silently.
+            clearMouseTailHold()
+            terminalResponseReattachTail = token.value
+          } else {
+            // SGR head family: claim a fresh head, extend an active hold, or
+            // pass ordinary text through. `claimSgrHead` pairs shape with
+            // evidence; a hold only survives while `hold + token` remains a
+            // legal head prefix (SGR_MOUSE_HEAD_PREFIX_RE, grammar-locked to
+            // SGR_MOUSE_RE), so text that cannot continue it proves the held
+            // report died.
+            terminalResponseReattachTail = undefined
+            const combined = (mouseTailHold ?? '') + token.value
+            const claim = claimSgrHead(token.value)
+            const canExtend =
+              mouseTailHold !== undefined &&
+              SGR_MOUSE_HEAD_PREFIX_RE.test(combined)
+            if (
+              canExtend &&
+              (mouseTailHoldReleasable !== true ||
+                combined.length <= MOUSE_HEAD_HOLD_MAX_LENGTH)
+            ) {
+              // Continuation (`<` after a bare `[`, digits/semicolons after
+              // `[<`): keep the FIRST-capture deadline — flushes must not
+              // renew it.
+              mouseTailHold = combined
+            } else if (
+              claim !== undefined &&
+              (!claim.releasable ||
+                token.value.length <= MOUSE_HEAD_HOLD_MAX_LENGTH)
+            ) {
+              // Incomplete SGR head arriving as a text token (ConPTY/SSH
+              // split the report mid-sequence and the flush timer already
+              // released the buffered ESC prefix): hold it for the next
+              // chunk instead of leaking protocol bytes into the prompt. A
+              // fresh head REPLACES any stale hold — two reports never
+              // concatenate — so the deadline restarts from this capture.
+              // F-1: a gated old hold is RELEASED first so its bytes are
+              // replayed in arrival order, not dropped.
+              releaseHeldMouseHead()
+              mouseTailHold = token.value
+              mouseTailHoldAt = now
+              mouseTailHoldReleasable = claim.releasable
+            } else {
+              // The open report is dead (text that cannot continue it) or
+              // the gated 64B bound is exceeded: a gated hold RELEASES its
+              // bytes in arrival order (ADR-0007 D5) so no user input is
+              // dropped; legacy holds keep the pre-gate silent discard.
+              // This token then passes through as ordinary typing.
+              releaseHeldMouseHead()
+              keys.push(parseKeypress(token.value))
+            }
+          }
         }
       }
     }
@@ -1497,6 +2081,29 @@ export function parseMultipleKeypresses(
   // of the coords is not attempted — a mouse event with guessed terminators
   // would dispatch phantom clicks.
 
+  // The reply-prefix hold lives only while the tokenizer still retains a
+  // reply-shaped prefix: completion, release or reset all end it, so the
+  // NEXT hold captures its own first-capture deadline.
+  if (terminalResponseHoldAt !== undefined && !isResponsePrefix(tokenizer.buffer())) {
+    terminalResponseHoldAt = undefined
+  }
+
+  // A REAL lone-Escape flush — an Escape emitted as its own key, not the ESC
+  // introducer of a buffered sequence. Only this opens the #796 re-attach
+  // window; the window alone is not evidence (D1), and a direct caller that
+  // never injects the provenance keeps the pre-change behavior.
+  const escapeFlushedNow =
+    isFlush &&
+    keys.some(
+      key =>
+        key.kind === 'key' &&
+        key.name === 'escape' &&
+        key.sequence === '\x1b',
+    )
+  // A fresh lone-Escape flush opens a NEW window: a fragment held against
+  // the old one cannot be part of a reply whose introducer just arrived.
+  if (escapeFlushedNow) terminalResponseReattachTail = undefined
+
   // Build new state
   const newState: KeyParseState = {
     mode: inPaste ? 'IN_PASTE' : 'NORMAL',
@@ -1518,6 +2125,9 @@ export function parseMultipleKeypresses(
     // The host gate rides along: App replaces its state with this object on
     // every read, and the hold must stay closed for the whole session.
     win32Capable: prevState.win32Capable,
+    // Same host-injected contract for the query evidence: read-only here,
+    // re-injected by App on every input call, so it is never stale.
+    terminalExpectedResponseTypes: prevState.terminalExpectedResponseTypes,
     win32InputMode,
     win32InputStartedAt,
     win32EscFlushedAt,
@@ -1536,6 +2146,13 @@ export function parseMultipleKeypresses(
     // head, consumed by the next call (the flush that emits `ESC[`), then
     // cleared because that call feeds nothing.
     mouseHeadSingleRead,
+    terminalResponseHoldAt,
+    terminalResponseReattachTail,
+    // A fresh lone-Escape flush re-arms the window; otherwise the carried
+    // stamp keeps it open (see carryTailAfterEscFlush above).
+    terminalResponseTailAfterEscFlushAt: escapeFlushedNow
+      ? Date.now()
+      : carryTailAfterEscFlush,
     _tokenizer: tokenizer,
   }
 

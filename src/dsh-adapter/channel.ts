@@ -220,6 +220,7 @@ function createChannelWithOwner(
   const jobControl = jobProjection.control
   const attachJobs = jobProjection.attach
   const resetJobProjection = jobProjection.reset
+  const reanchorJobProjection = jobProjection.reanchor
 
 
   // The DSH slash-command registry (optional service): /plan, /goal and
@@ -811,7 +812,12 @@ function createChannelWithOwner(
     messageObserver,
     retireAttachment,
   })
-  const bindAgent = bindingEvents.bind
+  const rawBindAgent = bindingEvents.bind
+  /** Bind the new agent, then re-anchor the job projection: its event
+   *  subscription is deliberately owner-agnostic, so this is what makes the
+   *  /jobs roster follow a session switch immediately instead of waiting for
+   *  the new session's first job event. */
+  const bindAgent = (): void => { rawBindAgent(); reanchorJobProjection() }
 
   const sessionAdoption = createSessionAdoption(state, {
     binding,
@@ -1119,5 +1125,5 @@ function createChannelWithOwner(
 export type { ChannelLaunchOptions } from './channel/state.js'
 export { expandMentions } from './channel/mentions.js'
 export { sessionCwdMatches } from './channel/paths.js'
-export type { AgentViewDispatchResult, AgentViewRow, AgentViewStatus, BackgroundResult, Channel, ChannelGoal, ChannelState, ChatRow, ComposerImageRef, ComposerSubmission, CredentialStatus, EffortOption, ExternalCommandOutcome, JobControl, JobRow, LoadedContext, LoadedContextEntry, LoadedContextFile, LoadedContextSkill, LoadedContextTool, MentionAttachments, MentionExpansion, MentionFs, NotificationItem, PendingMessage, PermissionPresetAvailability, PermissionPresetCurrent, PermissionPresetOption, PermissionPresetSnapshot, PresetOption, ResumeResult, SkillInfo, StagedImageHandle, StagedImageInput, SubagentControl, SubagentRow, TodoPanelItem, TokenBucket, TokenUsage, ToolCallView, ToolFileDiff, ToolResultView, ToolRow, ToolViewPresenter, TranscriptImage } from './channel/types.js'
+export type { AgentViewDispatchResult, AgentViewRow, AgentViewStatus, BackgroundResult, Channel, ChannelGoal, ChannelState, ChatRow, ComposerImageRef, ComposerSubmission, CredentialStatus, EffortOption, ExternalCommandOutcome, JobControl, JobGroupRow, JobRow, LoadedContext, LoadedContextEntry, LoadedContextFile, LoadedContextSkill, LoadedContextTool, MentionAttachments, MentionExpansion, MentionFs, NotificationItem, PendingMessage, PermissionPresetAvailability, PermissionPresetCurrent, PermissionPresetOption, PermissionPresetSnapshot, PresetOption, ResumeResult, SkillInfo, StagedImageHandle, StagedImageInput, SubagentControl, SubagentRow, TodoPanelItem, TokenBucket, TokenUsage, ToolCallView, ToolFileDiff, ToolResultView, ToolRow, ToolViewPresenter, TranscriptImage } from './channel/types.js'
 export { emptyTokenUsage } from './channel/usage.js'
