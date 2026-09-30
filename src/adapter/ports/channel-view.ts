@@ -273,6 +273,8 @@ export interface JobRow {
 export interface JobGroupRow {
   /** Group header row: the only member rendering the title/fold line. */
   head: boolean
+  /** Last member: closes the rounded rail with a `╰` cap line. */
+  last: boolean
   /** Members in the run (≥2 — a lone job card stays ungrouped). */
   count: number
   /** Whole group folded into the header line (meaningful on the head). */
