@@ -307,6 +307,12 @@ const GROUPS = {
 // 下划线、仅形似的方括号文本、普通 bracketed paste 与既有 ANSI/CRLF
 // 归一化零误伤。
     ["verify-paste-residue", ['node', '--import', 'tsx/esm', 'scripts/verify-paste-residue.tsx']],
+// 粘贴载荷完整性回归（ADR-0008）：记录形态文本必须整条消费——尾部剥离不得
+// 切进完整记录（否则 stripAnsi 把孤立 ESC 连同紧随的载荷字符一起吃掉），焊进
+// 载荷自身词内的记录形态必须逐字节保留（证据不足时保持可见，绝不静默删除）；
+// 由 win32 分片记录流装配的载荷按 Uc 解码还原字符（CR+LF 折叠为一个换行），
+// 使 chip 行数 == 载荷真实行数、提交逐字节等于归一后的源载荷。
+    ["verify-paste-integrity", ['node', '--import', 'tsx/esm', 'scripts/verify-paste-integrity.tsx']],
 
 // 拖放文件粘贴回归：Windows 把拖入的文件名作为 OSC 8 超链接
 // （ESC ] 8 ; params ; file:///… ST）送入，win32-input-mode 还会把它拆成
