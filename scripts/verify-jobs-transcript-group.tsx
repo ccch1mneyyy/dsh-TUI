@@ -615,10 +615,11 @@ console.log('--- G18: every row of the group stays inside the rail ---')
     const lines = frame.lines().filter(l => l.trim() !== '')
     const header = lines.findIndex(l => l.includes('background jobs ×2'))
     const body = header >= 0 ? lines.slice(header + 1) : []
-    check('G18 组内每一行都在竖线内', body.length >= 4 && body.every(l => l.startsWith('│ ')),
+    // 组体 = │ 行 + 收口的 ╰（G20 单独钉括号形状）
+    check('G18 组内每一行都在竖线内', body.length >= 5 && body.slice(0, -1).every(l => l.startsWith('│ ')),
       JSON.stringify(body.slice(0, 8)))
-    check('G18 末行（输出行）同样在竖线内', (body[body.length - 1] ?? '').startsWith('│ '),
-      JSON.stringify(body.slice(-2)))
+    check('G18 末行（输出行）同样在竖线内', (body[body.length - 2] ?? '').startsWith('│ '),
+      JSON.stringify(body.slice(-3)))
   })
 }
 
@@ -644,6 +645,39 @@ console.log('--- G19: a live middle member keeps the rail on its output rows ---
     check('G19 第二行输出同样有线', out >= 0 && (lines[out + 1] ?? '').startsWith('│ '), JSON.stringify(lines[out + 1]))
     const tail = lines.findIndex(l => l.includes('job: pwsh-3'))
     check('G19 末成员同样在竖线内', tail >= 0 && (lines[tail] ?? '').startsWith('│ '), JSON.stringify(lines[tail]))
+  })
+}
+
+// ---------------------------------------------------------------------------
+// G20 — 圆角括号：组头 `╭` 起手、尾成员 `╰` 收口、中间每一行都是 `│`；
+// 折叠态则是一条独立摘要行（不带弧，没有身体可括）
+// ---------------------------------------------------------------------------
+console.log('--- G20: the open group is a rounded bracket, the fold line is not ---')
+{
+  const rows = [
+    jobRow(1, makeJob('pwsh-1', 'completed', { label: 'gh pr view 1206 --repo ccch1mneyyy/dsh-TUI --json state,headRefName --jq x' })),
+    jobRow(2, makeJob('pwsh-2', 'running', { label: 'pnpm run build', outputLines: [{ text: 'compiling module a …' }] })),
+  ]
+  await withTerminal(() => renderList(rows, { jobGroupFold: 'never' }), async frame => {
+    check('G20 展开组渲染出来', await settled(() => frame.lines().some(l => l.includes('compiling module a'))),
+      frame.lines().filter(l => l.trim() !== '').slice(0, 6).join('|'))
+    const lines = frame.lines().filter(l => l.trim() !== '')
+    check('G20 组头以 ╭ 起手', (lines[0] ?? '').startsWith('╭ ▾ '), JSON.stringify(lines[0]))
+    check('G20 末行是 ╰ 收口', (lines[lines.length - 1] ?? '').trim() === '╰', JSON.stringify(lines[lines.length - 1]))
+    check('G20 中间每一行都在 │ 之内', lines.slice(1, -1).every(l => l.startsWith('│ ')),
+      JSON.stringify(lines.slice(1, -1)))
+  })
+  // 折叠态：一条摘要行，既无起弧也无收口
+  await withTerminal(() => renderList([
+    jobRow(1, makeJob('pwsh-1', 'completed')),
+    jobRow(2, makeJob('pwsh-2', 'completed')),
+    jobRow(3, makeJob('pwsh-3', 'completed')),
+  ]), async frame => {
+    check('G20 折叠行出现', await settled(() => frame.screen().includes('3 background jobs folded')),
+      frame.lines().filter(l => l.trim() !== '').slice(0, 3).join('|'))
+    const lines = frame.lines().filter(l => l.trim() !== '')
+    check('G20 折叠态不带圆弧', !lines.some(l => l.includes('╭') || l.includes('╰')),
+      JSON.stringify(lines.slice(0, 3)))
   })
 }
 
