@@ -36,6 +36,34 @@ export interface SelectionAttachment {
 }
 
 /**
+ * One context a side panel staged into the composer ("Send to Chat", §6.7):
+ * the panel row's own title plus the model-facing text. The composer renders
+ * a chip per entry above the input row, and the NEXT submission appends the
+ * `<attached-context …>` block — the same one-shot consumption the IDE
+ * selection channel next door performs (a staged context is spent by the
+ * message that carried it).
+ */
+export interface AttachedContext {
+  /** Stable handle minted by the channel (`ctx-N`), used to detach one entry. */
+  readonly id: string
+  /** Where the context came from. Only panels exist today; the discriminant
+   *  is explicit so a future source cannot be mistaken for a panel row. */
+  readonly source: 'panel'
+  /** Identity of the contributing row INSIDE its panel (a job id, a session
+   *  id, …) — paired with `title` it is the replace key. */
+  readonly sourceId: string
+  /** Human-facing label for the composer chip (e.g. `Job #142`). */
+  readonly title: string
+  /** Model-facing body, already capped at `MENTION_MAX_FILE_CHARS`. */
+  readonly content: string
+  /** Length of `content` after the cap — what the model will actually get. */
+  readonly chars: number
+  /** True when the panel's content exceeded the cap and was cut at attach
+   *  time; the block builder then appends the visible `[… truncated]` marker. */
+  readonly truncated: boolean
+}
+
+/**
  * One rendered transcript row. The DSH session log is the source of truth:
  * rows are derived from `session/event` records (and the initial
  * `agent.session.events` replay), never from optimistic local state.

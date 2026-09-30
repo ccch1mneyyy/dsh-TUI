@@ -2881,6 +2881,17 @@ export function PromptInput({
         })
         return
       }
+      // "Send to Chat" chips peel before the draft: the first Esc drops the
+      // contexts panels staged and leaves the typed text untouched, so a second
+      // Esc then clears the input as usual. The press is CONSUMED — this rung
+      // has exactly one meaning, and a running turn must not be interrupted by
+      // the same key that only dropped a chip.
+      const stagedContexts = channel.attachedContexts ?? []
+      if (stagedContexts.length > 0) {
+        event?.stopImmediatePropagation()
+        for (const staged of [...stagedContexts]) channel.detachContext(staged.id)
+        return
+      }
       // A single Esc clears the current input (if any); the double-tap
       // path below handles rewind/clear on an already-empty input. A BIG
       // input folds into a block instead (Esc = the fold toggle; the
@@ -3554,6 +3565,13 @@ export function PromptInput({
   // 顶边框右侧的会话名标签 chip：色随强调色；超宽截断，宽度
   // 随终端列数伸缩但不超过 28 显示单元。默认关闭——`/settings` 的
   // 「会话名标签」开关（dsh-tui.promptSessionLabel）开启后显示。
+  // "Send to Chat" chips (side-panel §6.7): the contexts panels staged for the
+  // next submission, rendered as one strip directly above the prompt border.
+  // Read defensively — hosts and older fixtures mount this composer with a
+  // partial channel stub (Chat guards `agentViewRows` for the same reason),
+  // and a missing projection means "nothing attached". A render-time TypeError
+  // here would be swallowed by ink and silently freeze the screen.
+  const attachedContexts = channel.attachedContexts ?? []
   const sessionTitle = channel.sessionTitle ?? ''
   const topRightLabel: InputBorderLabel | undefined =
     channel.promptSessionLabel === true && sessionTitle !== ''
@@ -3832,6 +3850,32 @@ export function PromptInput({
           </Box>
         )}
       </OverlayAbove>
+      )}
+      {attachedContexts.length > 0 && (
+        // The chip strip sits in the band directly above the prompt border —
+        // the row band the `[Image #N]` tokens occupy inside the input.
+        // Chips lay out side by side and each truncates at the row end, so the
+        // strip is ALWAYS exactly one row tall no matter how many panels stage
+        // a context or how long their titles are.
+        <Box
+          flexDirection="row"
+          width="100%"
+          height={1}
+          overflow="hidden"
+          paddingLeft={2}
+          columnGap={2}
+        >
+          {attachedContexts.map(item => (
+            // Each chip is its own shrinkable cell (ink boxes shrink by
+            // default) so a long title truncates at ITS OWN end instead of
+            // pushing the later chips off the row.
+            <Box key={item.id} overflow="hidden">
+              <Text color={promptAccent} wrap="truncate-end">
+                {t('prompt-attached-context-chip', { title: item.title })}
+              </Text>
+            </Box>
+          ))}
+        </Box>
       )}
       {lastNotification && (
         // position=absolute takes zero layout height so the transcript never

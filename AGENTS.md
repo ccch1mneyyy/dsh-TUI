@@ -11,6 +11,7 @@ src/dsh-adapter/channel.ts  会话事件 → 视图投影 + 非 React 动作面�
 src/dsh-adapter/oauth/    内置订阅 OAuth：provider 路由、/auth、凭据存储与问卷桥接
 src/screens/        Chat.tsx 交互协调器与状态栏呈现
 src/components/     功能组件；design-system/ 是主题感知原语
+src/components/sidePanel/  侧栏分栏（几何、标签栏、PanelHost、键盘接缝）与内置面板适配
 src/themeCatalog.ts  内置、静态 JSON 与运行时插件主题的统一列表/解析
 src/ui.ts           本地渲染器、主题化 Box/Text 与公共 TUI 原语的首选门面
 src/ink/            Ink 系渲染器与终端实现——敏感基础设施，改动聚焦并附专用回归

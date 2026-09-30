@@ -36,6 +36,11 @@ export const CHANNEL_UI_EFFECTS = Object.freeze({
   'openPluginScene': 'mutate',
   'closePluginScene': 'mutate',
   'sideQuestion': 'mutate',
+  // "Send to Chat" (side-panel §6.7): staging/removing a context chip is a
+  // composer mutation; the projection itself is the read-only
+  // `attachedContexts` property below.
+  'attachContext': 'mutate',
+  'detachContext': 'mutate',
   'stagedImageGeneration': 'read-only',
   'stageImage': 'mutate',
   'stageComposerImage': 'mutate',
@@ -197,7 +202,8 @@ export const CHANNEL_UI_PROPERTIES = [
   'mode',
   'modeIndex',
   'agentPreset',
-  'selection'
+  'selection',
+  'attachedContexts'
 ] as const satisfies readonly (keyof ChannelUi)[]
 
 // Both inventories are exhaustive: adding a public property is a compile error

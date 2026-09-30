@@ -73,6 +73,10 @@
       "types": "./lib/types/scenes.d.ts",
       "import": "./lib/types/scenes.js"
     },
+    "./panels": {
+      "types": "./lib/types/panels.d.ts",
+      "import": "./lib/types/panels.js"
+    },
     "./extensions": {
       "types": "./lib/types/extensions.d.ts",
       "import": "./lib/types/extensions.js"
@@ -159,6 +163,7 @@
     "verify:plugin-commands": "node --import tsx/esm scripts/verify-plugin-commands.ts",
     "verify:plugin-negotiation": "node --import tsx/esm scripts/verify-plugin-negotiation.ts",
     "verify:plugin-lifecycle": "node --import tsx/esm scripts/verify-plugin-lifecycle.ts",
+    "verify:plugin-panels": "node --import tsx/esm scripts/verify-plugin-panels.tsx",
     "verify:runtime-themes": "node --import tsx/esm scripts/verify-runtime-themes.ts",
     "verify:tips": "node --import tsx/esm scripts/verify-tips.tsx",
     "verify:thinking-preview": "node --import tsx/esm scripts/verify-thinking-preview.tsx",

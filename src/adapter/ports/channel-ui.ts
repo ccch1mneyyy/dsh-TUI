@@ -1,5 +1,5 @@
 /** Host-owned in-process Channel contract. No runtime or upstream imports. */
-import type { ChatRow, AgentStatus, TokenUsage, SessionCostByModel, SubagentCostEntry, NotificationItem, ChannelGoal, TodoPanelItem, LoadedContext, PendingMessage, ChannelSceneMetadata, SubagentState, SubagentControl, BackgroundJobState, JobControl, StagedImageInput, StagedImageHandle, ComposerImageRef, ComposerSubmission, ExternalCommandOutcome, TranscriptImage, ResumeResult, EffortOption, PermissionPresetSnapshot, PresetOption, LlmModelInfo, LlmProviderInfo, SkillInfo, CredentialStatus, AgentViewRow, AgentViewDispatchResult, BackgroundResult, RawTrajEvent, ChannelSelection, CompactionStatus } from './channel-view.js'
+import type { ChatRow, AgentStatus, TokenUsage, SessionCostByModel, SubagentCostEntry, NotificationItem, ChannelGoal, TodoPanelItem, LoadedContext, PendingMessage, ChannelSceneMetadata, SubagentState, SubagentControl, BackgroundJobState, JobControl, StagedImageInput, StagedImageHandle, ComposerImageRef, ComposerSubmission, ExternalCommandOutcome, TranscriptImage, ResumeResult, EffortOption, PermissionPresetSnapshot, PresetOption, LlmModelInfo, LlmProviderInfo, SkillInfo, CredentialStatus, AgentViewRow, AgentViewDispatchResult, BackgroundResult, RawTrajEvent, ChannelSelection, AttachedContext, CompactionStatus } from './channel-view.js'
 import type { SpinnerMode, ToolBackground, ScrollGutterMode, PageMarginSetting, StatusBarConfig, SessionModeSpec, SplashFontSetting, JobGroupFoldMode } from './channel-display.js'
 import type { LocalCommand, CommandCompletion, BalanceResult, FileCandidate, RecapOutcome } from './channel-catalog.js'
 import type { TuiRewindMode, SessionTreeData, SessionSummary, PreviewEntry, ForeignSource, ForeignSessionRow, ForeignImportOutcome } from './channel-session.js'
@@ -321,6 +321,24 @@ export interface ChannelUi {
     readonly maxImageDimension: number
     readonly maxImagePixels: number
   } | undefined
+  /**
+   * Contexts a side panel staged for the NEXT submission ("Send to Chat",
+   * side-panel design §6.7), oldest first. The composer renders one chip per
+   * entry above the input row; the submission that captures them consumes and
+   * clears the list, and every session-scoped reset (resume / rewind / new /
+   * model switch) empties it with the other session projections.
+   */
+  readonly attachedContexts: readonly AttachedContext[]
+  /**
+   * Stage one panel context on the composer. The body is capped at the shared
+   * `MENTION_MAX_FILE_CHARS` limit when it is staged (`truncated` records the
+   * cut), and a duplicate `sourceId` + `title` REPLACES the existing entry
+   * instead of stacking a second chip.
+   */
+  attachContext(input: { source: 'panel'; sourceId: string; title: string; content: string }): void
+  /** Drop one staged context by its `id` (an unknown id is a no-op). */
+  detachContext(id: string): void
+
   submit(text: string, images?: readonly ComposerImageRef[]): void
   /**
    * Steer a message into the running turn (Codex/pi semantics): injected at
