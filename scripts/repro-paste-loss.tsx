@@ -45,7 +45,21 @@
  * the script runs inside the flow-comet workspace; a plain clone writes
  * nothing (see PROBE_DIR below).
  *
- * Run with: node --import tsx/esm scripts/repro-paste-loss.tsx
+ * Hypothesis discriminants (`--case h1..h5`, DESIGN §2): each case turns one
+ * prediction into a readable row set — h1 delivery-form coverage (matrix
+ * subset, split into transport vs ingress deviation), h2 the ESC-less tail
+ * strip width and the strip ORDER (real `sanitizePastedText` vs
+ * `sanitizeEditableText` vs two local counterfactual replicas) plus the tie
+ * back to the rendered P2c value, h3 chunk boundaries (four extra profiles),
+ * h4 value-vs-submit-vs-chip line counts across the whole matrix, h5 the
+ * selection-copy step's own deviation (insertions vs deletions). Every case
+ * ends in `verdict=agrees|deviates|undecided`; the raw output per hypothesis
+ * goes to probe/verdict/<hN>.txt. The vocabulary is ASCII so the evidence
+ * files stay readable whatever the console code page does.
+ *
+ * Run with: node --import tsx/esm scripts/repro-paste-loss.tsx             # T01 matrix only (unchanged)
+ *           node --import tsx/esm scripts/repro-paste-loss.tsx --all       # matrix + h1..h5
+ *           node --import tsx/esm scripts/repro-paste-loss.tsx --case h2   # one discriminant
  */
 process.env.FORCE_COLOR = '3'
 // The chip stats are parsed as `▸ N lines・M chars`; the parser accepts the zh
@@ -73,9 +87,54 @@ process.env.USERPROFILE = dataDir
  * probe stays read-only (a plain clone must not grow a `.specs/` tree).
  */
 const workspaceRoot = new URL('../../../../', import.meta.url)
+/** Per-delivery snapshots (T01 shape, one file per delivery; the trailing
+ *  separator is part of the banner T01's evidence files recorded). */
 const PROBE_DIR = existsSync(fileURLToPath(new URL('.claude/worktrees', workspaceRoot)))
   ? fileURLToPath(new URL('.specs/dsh-tui-paste-loss-and-plugin-gate/probe/matrix/', workspaceRoot))
   : null
+/** Per-hypothesis raw output (T02): one `<hN>.txt` per discriminant case. */
+const VERDICT_DIR = PROBE_DIR === null ? null : join(PROBE_DIR, '..', 'verdict')
+
+// ── CLI ────────────────────────────────────────────────────────────────────
+
+/** The DESIGN §2 predictions, in order. */
+const CASE_IDS = ['h1', 'h2', 'h3', 'h4', 'h5'] as const
+type CaseId = (typeof CASE_IDS)[number]
+
+const USAGE = 'usage: repro-paste-loss.tsx [--all] [--case h1..h5]...'
+
+/** `--all` = the T01 matrix plus every case; `--case hN` = that case only
+ *  (running only the deliveries it needs); no argument = the T01 matrix
+ *  alone, with its 14 verdict lines and evidence files unchanged. */
+function parseArgs(argv: readonly string[]): { matrix: boolean; cases: CaseId[] } {
+  if (argv.length === 0) return { matrix: true, cases: [] }
+  const cases: CaseId[] = []
+  let matrix = false
+  for (let i = 0; i < argv.length; i += 1) {
+    const arg = argv[i]!
+    if (arg === '--all') {
+      matrix = true
+      for (const id of CASE_IDS) if (!cases.includes(id)) cases.push(id)
+    } else if (arg === '--case' || arg.startsWith('--case=')) {
+      const value = arg.startsWith('--case=') ? arg.slice('--case='.length) : argv[(i += 1)] ?? ''
+      for (const id of value.split(',')) {
+        if (!(CASE_IDS as readonly string[]).includes(id)) {
+          console.error(`unknown case: ${id === '' ? '<empty>' : id} (${USAGE})`)
+          process.exit(2)
+        }
+        if (!cases.includes(id as CaseId)) cases.push(id as CaseId)
+      }
+    } else {
+      console.error(`unknown argument: ${arg} (${USAGE})`)
+      process.exit(2)
+    }
+  }
+  return { matrix, cases }
+}
+
+const cli = parseArgs(process.argv.slice(2))
+/** Echoed into every evidence header, so the raw output names its own run. */
+const commandLine = process.argv.slice(2).join(' ') || '(no arguments: matrix only)'
 
 /**
  * P3 stubs the clipboard by redirecting ONE import specifier. PromptInput
@@ -104,7 +163,7 @@ registerHooks({
   },
 })
 
-const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render, AlternateScreen }, { Chat }, { QuestionStore }, termTest, { startSelection, updateSelection, finishSelection }, { default: inkInstances }, { supportsWin32InputMode }] = await Promise.all([
+const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render, AlternateScreen }, { Chat }, { QuestionStore }, termTest, { startSelection, updateSelection, finishSelection }, { default: inkInstances }, { supportsWin32InputMode }, promptSanitizers] = await Promise.all([
   import('node:stream'),
   import('react'),
   import('@xterm/headless'),
@@ -115,7 +174,12 @@ const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render, Alternat
   import('../src/ink/selection.js'),
   import('../src/ink/instances.js'),
   import('../src/ink/terminal.js'),
+  // The H2 discriminant measures the PRODUCT functions (not a re-implementation):
+  // `Chat` already pulls this module in, so the import costs nothing.
+  import('../src/components/PromptInput.js'),
 ])
+
+const { sanitizePastedText, sanitizeEditableText } = promptSanitizers
 
 const COLS = 110
 const ROWS = 48
@@ -355,6 +419,37 @@ function diffText(expected: string, actual: string): string {
  *  fold it before the payload is inserted). */
 const normalize = (s: string): string => s.replace(/\r\n/gu, '\n').replace(/\r/gu, '\n')
 
+/** `wc -l` with the empty string reading as zero lines. */
+const linesOf = (text: string): number => (text === '' ? 0 : text.split('\n').length)
+
+/**
+ * Exact insert/delete accounting between two strings, via the longest common
+ * subsequence: `deleted` counts the source chars no longer there, `inserted`
+ * the chars that came from nowhere. Exact matters here — a greedy scan would
+ * read "the first char was deleted" as "everything after it was deleted too"
+ * and turn a one-character defect into a four-character one. Iterated by code
+ * point over an ASCII payload, so it is also a byte-level reading here.
+ */
+function align(source: string, actual: string): { inserted: number; deleted: number } {
+  const sourceChars = [...source]
+  const actualChars = [...actual]
+  let previous = new Int32Array(actualChars.length + 1)
+  let current = new Int32Array(actualChars.length + 1)
+  for (let i = 1; i <= sourceChars.length; i += 1) {
+    for (let j = 1; j <= actualChars.length; j += 1) {
+      current[j] = sourceChars[i - 1] === actualChars[j - 1]
+        ? previous[j - 1]! + 1
+        : Math.max(previous[j]!, current[j - 1]!)
+    }
+    const spent = previous
+    previous = current
+    current = spent
+    current.fill(0)
+  }
+  const common = previous[actualChars.length]!
+  return { inserted: actualChars.length - common, deleted: sourceChars.length - common }
+}
+
 /** The fold chip's line/char counts read off the rendered row
  *  (`▸ 10 lines・759 chars` / `▾ 10 行・759 字`); null while no chip is up. */
 function chipOnScreen(): { lines: number; chars: number } | null {
@@ -382,6 +477,9 @@ interface Delivery {
   readonly deliveredText: string
   /** Stable evidence file stem (`<path>[-<variant>]-<payload>`). */
   readonly file: string
+  /** Case-only variant: its verdict line is prefixed `h3-extra` and it writes
+   *  no matrix evidence file (the matrix stays the T01 14-row set). */
+  readonly matrix?: false
   readonly extra: (copied: string, submitted: string) => string[]
 }
 
@@ -448,9 +546,38 @@ for (const payload of [payloads.big, payloads.small]) {
 
 // ── run ────────────────────────────────────────────────────────────────────
 
+/**
+ * H3-only chunk profiles: the matrix already cuts a CRLF pair and a line in
+ * half, so these two push the same payload through the nastiest splits a real
+ * read can produce — one byte per read, and a read that ends inside the
+ * bracket marker itself (H3: per-chunk `\r` / `\n` handling).
+ */
+const perCharChunks = (text: string): string[] => [...text].map(ch => ch)
+const h3ExtraDeliveries: readonly Delivery[] = [payloads.big, payloads.small].flatMap(payload => [
+  {
+    path: 'P1' as const, variant: 'chunked' as const, payload, matrix: false as const,
+    chunks: perCharChunks(`\x1b[200~${payload.crlf}\x1b[201~`), deliveredText: payload.crlf,
+    file: `P1-perchar-${payload.name}`, extra: () => [] as string[],
+  },
+  {
+    path: 'P1' as const, variant: 'chunked' as const, payload, matrix: false as const,
+    chunks: ['\x1b[20', `0~${payload.crlf}\x1b[20`, '1~'], deliveredText: payload.crlf,
+    file: `P1-marker-split-${payload.name}`, extra: () => [] as string[],
+  },
+])
+
+const deliveriesByFile = new Map<string, Delivery>(
+  [...deliveries, ...h3ExtraDeliveries].map(d => [d.file, d]),
+)
+/** The 14 matrix rows, in plan order (h4 reads every one of them). */
+const MATRIX_KEYS: readonly string[] = deliveries.map(d => d.file)
+
 const verdicts: string[] = []
 let harnessFailures = 0
 let probeWrites = 0
+/** Per-hypothesis files written (the `--all` summary reports them apart from
+ *  the matrix ones, so the T01 summary line keeps its original meaning). */
+let hypothesisFiles = 0
 
 function writeEvidence(file: string, body: string): void {
   if (PROBE_DIR === null) return
@@ -513,7 +640,6 @@ async function quiesce(): Promise<void> {
 function verdictLine(
   d: Delivery, value: string, submitted: string, chipLines: number | null, copied: string | null, landed: boolean,
 ): string {
-  const linesOf = (text: string): number => (text === '' ? 0 : text.split('\n').length)
   return [
     `path=${d.path}`, `variant=${d.variant}`, `payload=${d.payload.name}`,
     `valueLines=${linesOf(value)}`, `submitLines=${linesOf(submitted)}`,
@@ -560,8 +686,23 @@ async function copySelectionTransport(d: Delivery): Promise<string> {
   return copied
 }
 
+/** One delivery's readings, kept so later cases reuse them instead of
+ *  re-rendering the same path (the composer is reset between deliveries, so
+ *  re-running would only cost time and risk a different frame). */
+interface DeliveryResult {
+  readonly d: Delivery
+  readonly value: string
+  readonly submitted: string
+  readonly chipLines: number | null
+  readonly copied: string | null
+  readonly verdict: string
+  readonly snapshot: readonly string[]
+}
+
+const results = new Map<string, DeliveryResult>()
+
 /** Deliver one transport, read the verdict off the composer, then submit it. */
-async function runDelivery(d: Delivery): Promise<void> {
+async function runDelivery(d: Delivery): Promise<DeliveryResult> {
   await resetComposer()
   submittedCount = 0
   lastSubmitted = ''
@@ -598,9 +739,371 @@ async function runDelivery(d: Delivery): Promise<void> {
   const submitted = submittedCount > 0 ? lastSubmitted : ''
   if (d.path === 'P3') stubReads += stubCalls
   const verdict = verdictLine(d, value, submitted, chip?.lines ?? null, copied, landed)
-  verdicts.push(verdict)
-  console.log(verdict)
-  writeEvidence(d.file, evidenceBody(d, verdict, value, submitted, copied, snapshot))
+  const result: DeliveryResult = { d, value, submitted, chipLines: chip?.lines ?? null, copied, verdict, snapshot }
+  results.set(d.file, result)
+  if (d.matrix === false) {
+    // Case-only variant: never part of the 14-row matrix block.
+    console.log(`h3-extra ${verdict}`)
+  } else {
+    verdicts.push(verdict)
+    console.log(verdict)
+    writeEvidence(d.file, evidenceBody(d, verdict, value, submitted, copied, snapshot))
+  }
+  return result
+}
+
+/** Run a named delivery once; every later case reuses that reading. */
+async function ensureDelivery(file: string): Promise<DeliveryResult> {
+  const cached = results.get(file)
+  if (cached !== undefined) return cached
+  const d = deliveriesByFile.get(file)
+  if (d === undefined) throw new Error(`unknown delivery: ${file}`)
+  return runDelivery(d)
+}
+
+// ── H1–H5 discriminants (DESIGN §2) ────────────────────────────────────────
+
+/** `agrees` = the prediction held, `deviates` = it did not, `undecided` =
+ *  the run could not separate it (never a silent pass). */
+type CaseVerdict = 'agrees' | 'deviates' | 'undecided'
+
+interface CaseRun {
+  readonly id: CaseId
+  readonly title: string
+  readonly lines: readonly string[]
+  readonly verdict: CaseVerdict
+  readonly reason: string
+}
+
+/** H1 · only the real-Vk and the mixed record streams reproduce the symptom. */
+const H1_KEYS = ['P1-whole-big', 'P1-chunked-big', 'P2a-big', 'P2b-big', 'P2c-big'] as const
+
+async function caseH1(): Promise<CaseRun> {
+  const lines: string[] = ['h1 predict=only-real-vk-and-mixed-record-streams-reproduce']
+  const clean: string[] = []
+  const dirty: string[] = []
+  for (const key of H1_KEYS) {
+    const r = await ensureDelivery(key)
+    const delivered = normalize(r.d.deliveredText)
+    // Split the deviation in two: `transportDiff` is what the transport never
+    // handed over at all, `ingressDiff` what the ingress deleted from what it
+    // did hand over (the H2 signal, measured without blaming the transport).
+    lines.push([
+      `h1 row ${key}`, `valueLines=${linesOf(r.value)}`,
+      `firstDiff=${diffText(r.d.payload.lf, r.submitted === '' ? r.value : r.submitted)}`,
+      `transportDiff=${diffText(r.d.payload.lf, delivered)}`,
+      `ingressDiff=${diffText(delivered, r.value)}`,
+    ].join(' '))
+    if (r.verdict.includes('firstDiff=none')) clean.push(key)
+    else dirty.push(key)
+  }
+  lines.push(`h1 clean=[${clean.join(',')}] dirty=[${dirty.join(',')}]`)
+  let verdict: CaseVerdict = 'undecided'
+  let reason = 'no-delivery-deviated-so-the-form-question-is-unresolved'
+  if (dirty.includes('P2b-big')) {
+    verdict = 'agrees'
+    reason = 'real-vk-record-stream-reproduces-the-symptom'
+  } else if (clean.includes('P2b-big') && clean.includes('P1-chunked-big') && dirty.includes('P2c-big')) {
+    verdict = 'deviates'
+    reason = 'real-vk-and-chunked-forms-deliver-byte-clean-only-payload-carried-record-text-reproduces'
+  }
+  return { id: 'h1', title: 'H1 terminal delivery form coverage (DESIGN 2)', lines, verdict, reason }
+}
+
+/**
+ * H2 counterfactuals — JUDGEMENT ONLY, PRODUCT CODE IS UNTOUCHED. Both keep
+ * the product's arming condition (`hasRecordStream` on the original text) so
+ * each stays a one-variable change:
+ *   ① reorder — strip the full ESC-bearing record BEFORE the ESC-less tail,
+ *      so the tail can no longer split a record from the inside;
+ *   ② anchor  — keep the order, but make the tail regex refuse a match that
+ *      directly follows an ESC (negative lookbehind), i.e. never match the
+ *      record's own `[.._` half.
+ * The two fixes are separable on purpose: ① cannot repair the width of the
+ * rule, ② cannot repair an ESC-less tail that is real payload text — the
+ * experiment has to say which gap each one leaves open (ADR-0008).
+ */
+const RECORD_RE = /\u001b\[\d*(?:;\d*){5}_/gu
+const RECORD_TAIL_RE = /\[\d*(?:;\d*){5}_/gu
+const RECORD_TAIL_NOT_AFTER_ESC_RE = /(?<!\u001b)\[\d*(?:;\d*){5}_/gu
+
+function reorderedSanitizePasted(text: string): string {
+  const hasRecordStream = text.match(RECORD_RE) !== null
+  const withoutRecords = text.replace(RECORD_RE, '')
+  return sanitizeEditableText(hasRecordStream ? withoutRecords.replace(RECORD_TAIL_RE, '') : withoutRecords)
+}
+
+function anchoredSanitizePasted(text: string): string {
+  const hasRecordStream = text.match(RECORD_RE) !== null
+  return sanitizeEditableText(hasRecordStream ? text.replace(RECORD_TAIL_NOT_AFTER_ESC_RE, '') : text)
+}
+
+/** A real conhost CR record — the shape issue #827/#1090 leaked as text. */
+const H2_RECORD_CR = '\u001b[13;28;13;1;0;1_'
+
+interface H2Unit {
+  readonly id: string
+  readonly text: string
+  /** Text that is ordinary payload: the strip must not touch a char of it. */
+  readonly zeroHarm?: true
+}
+
+const H2_UNITS: readonly H2Unit[] = [
+  // The T01 minimal experiment: a full record immediately followed by payload.
+  { id: 'realistic-minimal', text: `${H2_RECORD_CR}ravo` },
+  // The shortest string that satisfies BOTH record grammars: `\d*` allows the
+  // digit groups to be empty, so five bare separators are a valid record.
+  { id: 'grammar-minimal', text: '\u001b[;;;;;_r' },
+  // Payload that itself carries an ESC-less record-shaped word: the width
+  // question (ADR-0002's zero-harm contract), separate from the order one.
+  { id: 'literal-tail-in-payload', text: `${H2_RECORD_CR}x[13;28;13;1;0;1_y` },
+  { id: 'literal-tail-without-record', text: '[13;28;13;1;0;1_y', zeroHarm: true },
+  { id: 'record-then-newline', text: `${H2_RECORD_CR}\nBravo`, zeroHarm: true },
+  { id: 'real-underscore', text: 'Alpha_beta [draft_1] tail_r', zeroHarm: true },
+  { id: 'bracket-lookalike', text: 'array[13;28;13;1;0;1_]x', zeroHarm: true },
+  // Not a one-off: every record in the stream can eat its follower.
+  { id: 'two-records-two-chars', text: `${H2_RECORD_CR}r${H2_RECORD_CR}s` },
+]
+
+interface H2Reading {
+  readonly unit: H2Unit
+  readonly product: string
+  readonly editableOnly: string
+  readonly reordered: string
+  readonly anchored: string
+  readonly defectChars: number
+  readonly reorderedDefect: number
+  readonly anchoredDefect: number
+}
+
+async function caseH2(): Promise<CaseRun> {
+  const lines: string[] = ['h2 predict=mixed-tail-loses-newline-plus-next-char-and-removing-the-strip-restores-it']
+  const readings: H2Reading[] = []
+  let zeroHarmHeld = true
+  for (const unit of H2_UNITS) {
+    const product = sanitizePastedText(unit.text)
+    const editableOnly = sanitizeEditableText(unit.text)
+    const reordered = reorderedSanitizePasted(unit.text)
+    const anchored = anchoredSanitizePasted(unit.text)
+    // `defectChars` = what the paste-only rule deleted ON TOP of the innocent
+    // (typed-text) reading. The record text itself is deleted by both readings,
+    // so this counts exactly the payload characters the rule eats.
+    const defectChars = align(editableOnly, product).deleted
+    const reorderedDefect = align(editableOnly, reordered).deleted
+    const anchoredDefect = align(editableOnly, anchored).deleted
+    readings.push({ unit, product, editableOnly, reordered, anchored, defectChars, reorderedDefect, anchoredDefect })
+    if (unit.zeroHarm === true && defectChars !== 0) zeroHarmHeld = false
+    lines.push([
+      `h2 unit id=${unit.id}`, `chars=${[...unit.text].length}`, `input=${JSON.stringify(unit.text)}`,
+      `product=${JSON.stringify(product)}`, `editableOnly=${JSON.stringify(editableOnly)}`,
+      `reordered=${JSON.stringify(reordered)}`, `anchored=${JSON.stringify(anchored)}`,
+      `defectChars=${defectChars}`, `reorderedDefect=${reorderedDefect}`, `anchoredDefect=${anchoredDefect}`,
+    ].join(' '))
+  }
+
+  // The mechanism in three observed steps, from the real functions: the tail
+  // strip splits the full record open (`ESC` + the tail is removed), the
+  // full-record regex then has nothing left to match, and the orphan ESC is
+  // handed to `stripAnsi` — which eats itself plus the following payload char.
+  const mechanismInput = `${H2_RECORD_CR}ravo`
+  const tailStripped = mechanismInput.replace(RECORD_TAIL_RE, '')
+  lines.push([
+    'h2 mechanism', `input=${JSON.stringify(mechanismInput)}`,
+    `afterTailStrip=${JSON.stringify(tailStripped)}`,
+    `fullRecordLeftForTheRecordRegex=${tailStripped.match(RECORD_RE) !== null}`,
+    `orphanEscPlusFollower=${JSON.stringify(sanitizeEditableText(tailStripped))}`,
+    `product=${JSON.stringify(sanitizePastedText(mechanismInput))}`,
+    `productEqualsTailStripThenEditable=${sanitizePastedText(mechanismInput) === sanitizeEditableText(tailStripped)}`,
+  ].join(' '))
+
+  // Which following characters does the orphan ESC eat? Scan the printable
+  // range instead of quoting a regex class: the set IS the evidence.
+  const eaten: string[] = []
+  const kept: string[] = []
+  for (let code = 33; code <= 126; code += 1) {
+    const ch = String.fromCharCode(code)
+    const defect = align(sanitizeEditableText(`${H2_RECORD_CR}${ch}`), sanitizePastedText(`${H2_RECORD_CR}${ch}`)).deleted
+    if (defect > 0) eaten.push(ch)
+    else kept.push(ch)
+  }
+  lines.push(`h2 scan-follower record+<c> for c in !..~ : eaten=${eaten.length} kept=${kept.length} eatenChars=${JSON.stringify(eaten.join(''))}`)
+
+  // Minimal trigger, derived rather than asserted: the family varies only the
+  // number of bare separators, and only five of them satisfy the grammar.
+  const family = Array.from({ length: 8 }, (_, seps) => `\u001b[${';'.repeat(seps)}_r`)
+  const triggering = family.filter(t => align(sanitizeEditableText(t), sanitizePastedText(t)).deleted > 0)
+  const shortest = triggering[0] ?? ''
+  lines.push(`h2 minimal family=ESC[+<k-semicolons>+_+r k=0..7 candidates=${family.length} triggering=${triggering.length} shortest=${JSON.stringify(shortest)} shortestChars=${[...shortest].length} with-real-record=${JSON.stringify(`${H2_RECORD_CR}r`)} chars=${[...`${H2_RECORD_CR}r`].length}`)
+
+  // Tie the unit-level defect to the rendered symptom: feed the recorded P2c
+  // transport text through the PRODUCT function and compare with the value the
+  // composer actually held. If they are equal, the ingress under test is the
+  // one that produced the on-screen (and on-submit) loss — no other step needed.
+  const p2c = await ensureDelivery('P2c-big')
+  const delivered = normalize(p2c.d.deliveredText)
+  const source = p2c.d.payload.lf
+  const e2eProduct = sanitizePastedText(delivered)
+  const e2eReordered = reorderedSanitizePasted(delivered)
+  const e2eEditableOnly = sanitizeEditableText(delivered)
+  lines.push([
+    'h2 e2e path=P2c-big', `sourceChars=${[...source].length}`, `deliveredChars=${[...delivered].length}`,
+    `renderedValueChars=${[...p2c.value].length}`, `productChars=${[...e2eProduct].length}`,
+    `productMatchesRenderedValue=${e2eProduct === p2c.value}`,
+    `payloadCharsLostProduct=${align(source, e2eProduct).deleted}`,
+    `payloadCharsLostEditableOnly=${align(source, e2eEditableOnly).deleted}`,
+    `payloadCharsLostReordered=${align(source, e2eReordered).deleted}`,
+    `ingressDeletedProduct=${[...delivered].length - [...e2eProduct].length}`,
+    `ingressDeletedReordered=${[...delivered].length - [...e2eReordered].length}`,
+  ].join(' '))
+
+  const defectOf = (id: string): number => readings.find(r => r.unit.id === id)?.defectChars ?? -1
+  const orderDefectProven = defectOf('realistic-minimal') > 0 && defectOf('grammar-minimal') > 0
+  const defectUnits = readings.filter(r => r.defectChars > 0).map(r => `${r.unit.id}:${r.defectChars}`)
+  const orderFixLeft = readings.filter(r => r.reorderedDefect > 0).map(r => `${r.unit.id}:${r.reorderedDefect}`)
+  const anchorFixLeft = readings.filter(r => r.anchoredDefect > 0).map(r => `${r.unit.id}:${r.anchoredDefect}`)
+  lines.push(`h2 fix-compare defectUnits=[${defectUnits.join(',')}] orderFixLeaves=[${orderFixLeft.join(',')}] anchorFixLeaves=[${anchorFixLeft.join(',')}] zeroHarmHeld=${zeroHarmHeld}`)
+
+  let verdict: CaseVerdict = 'undecided'
+  let reason = 'order-defect-not-reproduced-by-the-minimal-inputs'
+  if (orderDefectProven && e2eProduct === p2c.value && zeroHarmHeld) {
+    verdict = 'agrees'
+    reason = 'paste-only-strip-eats-a-payload-char-and-the-product-function-reproduces-the-rendered-value'
+  } else if (!orderDefectProven) {
+    verdict = 'deviates'
+    reason = 'no-order-defect-observed'
+  } else if (!zeroHarmHeld) {
+    reason = 'order-defect-proven-but-a-zero-harm-unit-was-damaged'
+  }
+  return { id: 'h2', title: 'H2 ESC-less tail strip width and strip order (DESIGN 2)', lines, verdict, reason }
+}
+
+/** H3 · a download split across reads changes `\r` / `\n` handling. */
+const H3_KEYS = ['P1-whole-big', 'P1-chunked-big', 'P1-perchar-big', 'P1-marker-split-big', 'P1-perchar-small', 'P1-marker-split-small'] as const
+
+async function caseH3(): Promise<CaseRun> {
+  const lines: string[] = ['h3 predict=chunked-delivery-differs-from-whole-delivery']
+  const dirty: string[] = []
+  for (const key of H3_KEYS) {
+    const r = await ensureDelivery(key)
+    const submitted = r.submitted === '' ? r.value : r.submitted
+    lines.push([
+      `h3 row ${key}`, `reads=${r.d.chunks.length}`, `valueLines=${linesOf(r.value)}`,
+      `submitLines=${linesOf(r.submitted)}`, `chipLines=${r.chipLines ?? 'n/a'}`,
+      `firstDiff=${diffText(r.d.payload.lf, submitted)}`, `crKeptInValue=${r.value.includes('\r')}`,
+    ].join(' '))
+    if (!r.verdict.includes('firstDiff=none')) dirty.push(key)
+  }
+  lines.push(`h3 dirty=[${dirty.join(',')}]`)
+  const chunkedDirty = dirty.filter(key => key !== 'P1-whole-big')
+  const verdict: CaseVerdict = chunkedDirty.length > 0 ? 'agrees' : dirty.length === 0 ? 'deviates' : 'undecided'
+  const reason = chunkedDirty.length > 0
+    ? `chunked-reads-deviate:${chunkedDirty.join(',')}`
+    : 'every-chunk-profile-matches-the-whole-payload-reading'
+  return { id: 'h3', title: 'H3 bracketed paste across chunk boundaries (DESIGN 2)', lines, verdict, reason }
+}
+
+/** H4 · the fold build / submit assembly drops the newlines. */
+async function caseH4(): Promise<CaseRun> {
+  const lines: string[] = ['h4 predict=value-keeps-newlines-while-submitted-does-not']
+  let valueAboveSubmit = 0
+  let submitDiffers = 0
+  let chipAboveValue = 0
+  for (const key of MATRIX_KEYS) {
+    const r = await ensureDelivery(key)
+    const submitVsValue = r.submitted === '' ? 'n/a' : diffText(r.value, r.submitted)
+    if (linesOf(r.value) > linesOf(r.submitted)) valueAboveSubmit += 1
+    if (submitVsValue !== 'n/a' && submitVsValue !== 'none') submitDiffers += 1
+    if (r.chipLines !== null && r.chipLines !== linesOf(r.value)) chipAboveValue += 1
+    lines.push([
+      `h4 row ${key}`, `valueLines=${linesOf(r.value)}`, `submitLines=${linesOf(r.submitted)}`,
+      `chipLines=${r.chipLines ?? 'n/a'}`, `valueKeepsNewlines=${r.value.includes('\n')}`,
+      `submitVsValue=${submitVsValue}`,
+    ].join(' '))
+  }
+  lines.push(`h4 counts rows=${MATRIX_KEYS.length} valueLinesAboveSubmitLines=${valueAboveSubmit} submitDiffersFromValue=${submitDiffers} chipAboveValueLines=${chipAboveValue}`)
+  const verdict: CaseVerdict = valueAboveSubmit === 0 && submitDiffers === 0 ? 'deviates' : 'agrees'
+  const reason = verdict === 'deviates'
+    ? 'submit-assembly-carries-the-value-verbatim-every-line-loss-already-happened-in-the-value'
+    : 'value-and-submit-line-counts-diverge'
+  return { id: 'h4', title: 'H4 fold build and submit assembly (DESIGN 2)', lines, verdict, reason }
+}
+
+/** H5 · the selection copy loses newlines and boundary characters. */
+const H5_KEYS = ['P4-big', 'P4-small'] as const
+
+async function caseH5(): Promise<CaseRun> {
+  const lines: string[] = ['h5 predict=selection-copy-drops-newlines-and-boundary-chars']
+  let pasteLossless = true
+  let copyDeleted = 0
+  let copyInserted = 0
+  for (const key of H5_KEYS) {
+    const r = await ensureDelivery(key)
+    const copied = r.copied ?? ''
+    const submitted = r.submitted === '' ? r.value : r.submitted
+    const copy = align(r.d.payload.lf, copied)
+    if (!r.verdict.includes('pasteDiff=none')) pasteLossless = false
+    copyDeleted += copy.deleted
+    copyInserted += copy.inserted
+    lines.push([
+      `h5 row ${key}`, `sourceChars=${[...r.d.payload.lf].length}`, `copiedChars=${[...copied].length}`,
+      `copyInserted=${copy.inserted}`, `copyDeleted=${copy.deleted}`,
+      `copyFirstDiff=${diffText(r.d.payload.lf, copied)}`, `pasteVsCopied=${diffText(copied, submitted)}`,
+      `pasteVsSource=${diffText(r.d.payload.lf, submitted)}`, `copyStepLossless=${copy.deleted === 0}`,
+    ].join(' '))
+  }
+  lines.push(`h5 counts copyDeletedTotal=${copyDeleted} copyInsertedTotal=${copyInserted} pasteStepLossless=${pasteLossless}`)
+  let verdict: CaseVerdict = 'undecided'
+  let reason = 'copy-deletes-source-chars-while-the-paste-step-is-byte-exact'
+  if (!pasteLossless) {
+    verdict = 'agrees'
+    reason = 'the-p4-delivery-itself-loses-bytes'
+  } else if (copyDeleted === 0) {
+    verdict = 'deviates'
+    reason = 'copy-adds-transcript-chrome-only-and-the-paste-step-is-byte-exact'
+  }
+  return { id: 'h5', title: 'H5 selection copy softWrap / contentEnd clamp (DESIGN 2)', lines, verdict, reason }
+}
+
+const CASES: Record<CaseId, () => Promise<CaseRun>> = { h1: caseH1, h2: caseH2, h3: caseH3, h4: caseH4, h5: caseH5 }
+
+/** The deliveries each case consumes — used to record what it read. */
+const caseUsage: Record<CaseId, readonly string[]> = {
+  h1: H1_KEYS, h2: ['P2c-big'], h3: H3_KEYS, h4: MATRIX_KEYS, h5: H5_KEYS,
+}
+
+/** `<hN>.txt`: the case's own raw output, plus the readings it consumed, so a
+ *  verdict in the report can be re-checked without re-running the probe. */
+function writeCaseEvidence(run: CaseRun): void {
+  if (VERDICT_DIR === null) return
+  const used = caseUsage[run.id].map(key => results.get(key)).filter((r): r is DeliveryResult => r !== undefined)
+  // Focused cases carry the full dumps; h4 reads all 14 rows, whose dumps are
+  // already in probe/matrix/, so it carries their verdict lines instead.
+  const dumps = used.length <= 6
+    ? used.flatMap(r => [
+      `# ${r.d.file} — transport handed over (${[...normalize(r.d.deliveredText)].length} chars):`,
+      JSON.stringify(normalize(r.d.deliveredText)),
+      `# ${r.d.file} — composer value (${[...r.value].length} chars):`,
+      JSON.stringify(r.value),
+      `# ${r.d.file} — submitted (${[...r.submitted].length} chars):`,
+      JSON.stringify(r.submitted),
+      ...(r.copied === null ? [] : [`# ${r.d.file} — copied by the selection (${[...r.copied].length} chars):`, JSON.stringify(r.copied)]),
+    ])
+    : [`# per-delivery dumps: probe/matrix/<file>.txt (${used.length} files)`]
+  const body = [
+    `# paste-loss probe — hypothesis discriminant ${run.id}: ${run.title}`,
+    `# command: node --import tsx/esm scripts/repro-paste-loss.tsx ${commandLine}`,
+    `# platform=${process.platform} node=${process.version} probe=${PROBE_DIR ?? '<skipped>'}`,
+    '# raw output (this case, verbatim):',
+    ...run.lines,
+    '# deliveries this case consumed (verbatim verdict lines):',
+    ...used.map(r => `verdict: ${r.verdict}`),
+    ...dumps,
+    `conclusion: verdict=${run.verdict} reason=${run.reason}`,
+    '',
+  ].join('\n')
+  mkdirSync(VERDICT_DIR, { recursive: true })
+  writeFileSync(join(VERDICT_DIR, `${run.id}.txt`), body)
+  hypothesisFiles += 1
 }
 
 /** Discriminator self-check: the diff must see the historical signature
@@ -642,14 +1145,33 @@ try {
   const ready = await settled(() => composerRef.current !== null && screenHas('❯'), { timeoutMs: 8000 })
   if (!ready) throw new Error('composer never mounted')
 
-  for (const d of deliveries) await runDelivery(d)
+  // The T01 block runs first and prints exactly what it printed before: same
+  // 14 verdict lines, same summary line, same evidence files.
+  if (cli.matrix) {
+    for (const d of deliveries) await runDelivery(d)
 
-  const expected = deliveries.length
-  const dirty = verdicts.filter(v => !v.includes('firstDiff=none')).length
-  console.log(`verdicts=${verdicts.length}/${expected} symptoms=${dirty} p3-stub-reads=${stubReads} probe-files=${probeWrites}`)
-  if (verdicts.length !== expected) {
-    harnessFailures += 1
-    console.error(`harness: ${expected - verdicts.length} delivery(ies) produced no verdict`)
+    const expected = deliveries.length
+    const dirty = verdicts.filter(v => !v.includes('firstDiff=none')).length
+    console.log(`verdicts=${verdicts.length}/${expected} symptoms=${dirty} p3-stub-reads=${stubReads} probe-files=${probeWrites}`)
+    if (verdicts.length !== expected) {
+      harnessFailures += 1
+      console.error(`harness: ${expected - verdicts.length} delivery(ies) produced no verdict`)
+    }
+  }
+
+  // Discriminants last: `--all` lets them reuse the matrix readings, and a
+  // `--case hN` run renders only the deliveries that case needs.
+  const caseRuns: CaseRun[] = []
+  for (const id of cli.cases) {
+    const run = await CASES[id]()
+    caseRuns.push(run)
+    console.log(`--- case ${run.id}: ${run.title} ---`)
+    for (const line of run.lines) console.log(line)
+    console.log(`${run.id} verdict=${run.verdict} reason=${run.reason}`)
+    writeCaseEvidence(run)
+  }
+  if (caseRuns.length > 0) {
+    console.log(`h-cases=${caseRuns.length} h-files=${hypothesisFiles} h-conclusions=${caseRuns.map(r => `${r.id}:${r.verdict}`).join(' ')}`)
   }
 } catch (error: unknown) {
   harnessFailures += 1
