@@ -183,7 +183,8 @@ text and newlines, and is never mistaken for an Enter key. To keep rendering, cl
 mapping, and selection geometry consistent:
 
 - Terminal ANSI controls are stripped on entry.
-- A multi-line paste no longer leaves a stray `_`: when a Windows terminal delivers the paste as win32-input-mode records, the residue (`ESC[Vk;Sc;Uc;Kd;Cs;Rc_`, or the ESC-less tail left by a split record) is stripped whole on entry. Only the five-separator record grammar matches, so genuine underscores and bracket text that merely resembles a record are untouched.
+- A multi-line paste no longer leaves a stray `_`, and no longer drops characters: when a Windows terminal delivers the paste as win32-input-mode records, the key records that leak into the payload (`ESC[Vk;Sc;Uc;Kd;Cs;Rc_`, or the ESC-less tail left by a split record) are decoded back into the characters their `Uc` field encodes — newlines included, through the same CR+LF fold — which is why the chip's line count equals the paste's real line count. Only records with no character meaning (a `Uc=0` synthesized record, a key record with no text) are stripped whole. Characters are never dropped silently.
+- Both stripping and decoding need evidence: complete records are consumed before ESC-less tails (so a record is never sliced open and its orphan ESC never eats the payload character behind it), and a tail must stand alone as its own token — a record-shaped run welded into the payload's own word is kept byte-for-byte (visible residue beats silent loss). Only the five-separator record grammar matches, so genuine underscores and bracket text that merely resembles a record are untouched.
 - Pasted CRLF collapses: a CR+LF pair produces one newline instead of two; LF-only and lone CR keep their previous behavior.
 - Tabs are expanded to spaces on entry.
 
