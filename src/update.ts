@@ -1780,17 +1780,21 @@ export async function cliUpdate(profile: string): Promise<number> {
 /**
  * Release the shared console for the replacement without resetting it.
  *
- * A pty's termios is per-DEVICE and the replacement inherited ours, so this is
- * not a local cleanup: Node writes this process's saved cooked/ECHO mode back
- * when a TTY stream is destroyed, overwriting the child's raw mode (measured on
- * WSL + Windows Terminal: destroy → ECHO on, detach → raw kept). With mouse
- * tracking on, every motion report the child's own tracking provokes is then
- * echoed by the line discipline as visible `^[[<…M` at the prompt row, and
- * typed keys stop being delivered without a newline.
+ * A pty's termios is per-DEVICE: destroying this stream would write this
+ * process's saved cooked/ECHO mode back over the replacement's raw mode
+ * (libuv restores orig_termios on tty close; verified on Node 24 — mouse
+ * reports then echo as `^[[<…M` and keys wait for a newline). Detaching —
+ * no readers, paused, unref'd — keeps the mode untouched.
  *
- * Removing the readers and pausing is what keeps this process out of the
- * console's key path (issue #284/#307); the fd is released when this process
- * exits, and the child holds its own inherited handle either way.
+ * Two deliberate trade-offs vs the old destroy():
+ * - destroy() doubled as a permanent gate ("a destroyed stream can never be
+ *   resumed"). Readers removed + paused already keep this process out of the
+ *   console's key path (#284/#307), and after the handoff only the
+ *   child-exit listener remains here — nothing re-attaches a reader.
+ * - On exit Node still writes the saved cooked mode back once (atexit
+ *   uv_tty_reset_mode). Fine in the normal order — this process outlives the
+ *   replacement, and the shell wants cooked back anyway; it only bites if
+ *   this process dies while the replacement is still running.
  *
  * @param stdin - Console stream to detach; injectable for the regression.
  */
@@ -1892,13 +1896,12 @@ export async function restartTui(sessionId: string, options: TuiRestartOptions =
     // 1. SAMPLE this process's stdin state every second — if anything
     //    re-attaches a reader after the funnel's detachStdinForHandoff, the
     //    sample (taken before the re-assert below) shows it in the log.
-    // 2. RE-ASSERT the detach — never DESTROY the stream: a pty's mode is
-    //    per-device and the replacement inherited ours, so destroying it
-    //    writes this process's saved cooked/ECHO mode back over the child's
-    //    raw mode (see detachHandoffStdin). This process must never read the
-    //    shared console again — every keypress belongs to the replacement, and
-    //    a resumed pump here is exactly the "restarted TUI sees dropped or
-    //    swallowed input" failure (#284/#307).
+    // 2. RE-ASSERT the detach — never DESTROY the stream: destroying it
+    //    resets the shared pty and stomps the replacement's raw mode (see
+    //    detachHandoffStdin for the mechanism and trade-offs). This process
+    //    must never read the shared console again — every keypress belongs to
+    //    the replacement, and a resumed pump here is exactly the "restarted
+    //    TUI sees dropped or swallowed input" failure (#284/#307).
     let watchdogTicks = 0
     const watchdog = setInterval(() => {
       watchdogTicks += 1
