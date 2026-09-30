@@ -80,8 +80,8 @@ dsh-tui
 
 | Key | Action |
 |---|---|
-| `Ctrl+C` | working = interrupt; if the interrupt won't settle, press again = force quit; idle with input = clear input; idle empty input = double-press exit (3 s window) |
-| `Ctrl+D` | working = interrupt (press again if it won't settle = force quit); idle = double-press exit |
+| `Ctrl+C` | working = interrupt + arm the exit window (a toast asks for another press); second press within 3 s = force quit (regardless of settling); idle with input = clear input; idle empty input = double-press exit (3 s window) |
+| `Ctrl+D` | working = interrupt + arm the exit window (second press within 3 s = force quit); idle = double-press exit |
 | `Ctrl+L` (⌘L) | clear screen and force redraw |
 | `Ctrl+O` (⌘O) | expand/collapse details (full thinking, tool args and output) |
 | `Ctrl+E` | in input = cursor to line end; in transcript = expand/collapse hidden old messages |

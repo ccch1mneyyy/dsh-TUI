@@ -3,8 +3,11 @@
  * 1. type text → ctrl+c clears the input, app keeps running
  * 2. ctrl+c on empty input → arms exit ("Press Ctrl+C again to exit")
  * 3. second ctrl+c → exits
- * 4. working → first ctrl+c only interrupts (cancel runs once)
- * 5. working + cancelPending → second ctrl+c force-exits
+ * 4. working → first ctrl+c only interrupts (cancel runs once), arms the exit window
+ * 5. working + cancelPending → next ctrl+c force-exits
+ * 6. stuck turn (abort never converges) → next ctrl+c exits anyway (issue #1214)
+ * 7. an idle-ladder exit arm plus a turn started inside its window → the
+ *    interrupt replaces the arm instead of firing it (review follow-up)
  */
 process.env.FORCE_COLOR = '3'
 // This script asserts English UI copy; pin the language before any
@@ -133,6 +136,49 @@ check('interrupt press does not exit', !exited)
 stdinObj.write('\x03')
 await settle(() => exited)
 check('second ctrl+c while the abort is pending force-exits', exited)
+
+// 6. stuck turn (issue #1214): the abort never converges into cancelPending
+// (a tool call that never settles, a silent stream) — a second ctrl+c within
+// the exit window must still leave instead of re-cancelling forever.
+exited = false
+channel.working = true
+channel.cancelPending = false
+cancels = 0
+channel.cancel = () => {
+  cancels += 1
+  bump0()
+}
+stdinObj.write('\x03')
+await settle(() => cancels === 1)
+check('stuck turn: first ctrl+c interrupts without exiting', cancels === 1 && !exited)
+stdinObj.write('\x03')
+check('stuck turn: second ctrl+c exits regardless of cancelPending', await settled(() => exited))
+
+// 7. review follow-up: an idle-ladder exit arm (empty-input press) must not
+// fire under a turn that starts inside its window — the interrupt replaces
+// it with a fresh arm + notify, and the replaced ladder still exits on its
+// own second press.
+exited = false
+channel.working = false
+channel.cancelPending = false
+cancels = 0
+channel.cancel = () => {
+  cancels += 1
+  channel.cancelPending = true
+  bump0()
+}
+stdinObj.write('\x03')
+const idleArmNotifies = channel.notifications.length
+await settle(() => channel.notifications.length > idleArmNotifies)
+check('idle arm notifies without exiting', !exited && channel.notifications.length > idleArmNotifies)
+channel.working = true
+bump0()
+stdinObj.write('\x03')
+await settle(() => cancels === 1)
+check('interrupt replaces the stale idle arm instead of exiting',
+  cancels === 1 && !exited && channel.notifications.length > idleArmNotifies + 1)
+stdinObj.write('\x03')
+check('the replaced ladder still exits on its own second press', await settled(() => exited))
 
 await instance.unmount()
 process.exit(failed)

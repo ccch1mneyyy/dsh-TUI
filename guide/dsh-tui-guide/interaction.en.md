@@ -20,8 +20,8 @@
 | `Esc` / `Ctrl+C` / `Enter` while an image preview is open | Close the preview and restore the surface underneath; other keys are not passed through |
 | `Left` / `Right` in the image modal | Previous / next image, no wrapping; caret peeks keep arrows with the prompt |
 | `←` (empty input) | Background this session and open the session-management screen (same as `/bg`) |
-| `Ctrl+C` | Interrupt while working; press again while the interrupt is still settling to force-exit<br>clear non-empty idle input; **while idle with a selection in the prompt input, copy it to the clipboard (selection kept for editing)**; press twice on empty input to exit |
-| `Ctrl+D` | Same ladder as `Ctrl+C`: interrupt while working (press again to force-exit if the interrupt stalls); press twice while idle to exit |
+| `Ctrl+C` | Interrupt while working and arm a 3 s exit window (a toast asks for another press); a second press within it force-exits regardless of whether the interrupt settled<br>clear non-empty idle input; **while idle with a selection in the prompt input, copy it to the clipboard (selection kept for editing)**; press twice on empty input to exit |
+| `Ctrl+D` | Same ladder as `Ctrl+C`: interrupt while working (a second press within 3 s force-exits); press twice while idle to exit |
 | `Ctrl+O` | Toggle transcript/verbose detail, including full reasoning and tool arguments/output; also the escape hatch for the **long-line fold** (a single line over 1000 chars is clipped to 1000 with a `… N chars folded` marker — see the user guide §5). Clicking the folded row (or the tool card face) toggles it too |
 | `Ctrl+P` | Toggle the loaded-context panel shown at startup (while it is on screen) |
 | `Ctrl+T` | Open the trajectory scene (same as `/trace`); `q`/`Esc` returns to the conversation |

@@ -1303,6 +1303,11 @@ export function Chat({
   // arrives as stdin data (key.ctrl && input === 'c') — the useInput
   // branch below is the only path; SIGINT is not emitted.
   const exitPendingRef = React.useRef(false)
+  // Which ladder armed the live exit arm. Only meaningful while the arm is
+  // live — every arming refreshes it, so it cannot go stale across arm
+  // generations; the working branch reads it to replace a foreign arm
+  // instead of firing it (see the Ctrl+C handling below).
+  const exitArmSourceRef = React.useRef<'idle' | 'working'>('idle')
   const exitTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null)
   // Live view into the prompt's text for the Ctrl+C rule (clears text when
   // non-empty; the double-press exit only arms on an empty input).
@@ -1455,11 +1460,17 @@ export function Chat({
       injectControllerRef.current = null
     }
   })
-  const requestExit = () => {
+  const requestExit = (source: 'idle' | 'working') => {
     if (exitPendingRef.current) {
+      // Consume the arm before leaving: an exit funnel that returns
+      // (embedded hosts, headless regressions) must not leave a stale arm
+      // that turns the next Ctrl+C into an unconfirmed exit.
+      exitPendingRef.current = false
+      if (exitTimerRef.current) clearTimeout(exitTimerRef.current)
       onExit()
     } else {
       exitPendingRef.current = true
+      exitArmSourceRef.current = source
       channel.notify(t('exit-press-again'))
       exitTimerRef.current = setTimeout(() => {
         exitPendingRef.current = false
@@ -4084,21 +4095,25 @@ export function Chat({
         exitPendingRef.current = false
         if (exitTimerRef.current) clearTimeout(exitTimerRef.current)
       } else if (channel.working) {
-        // First press while working only interrupts. If that abort is still
-        // converging (cancelPending) the next press is the user insisting on
-        // leaving: go straight to the exit funnel. Without this, a stuck turn
-        // (long tool call that never settles, silent stream) swallows every
-        // Ctrl+C forever — raw mode keeps the launcher's SIGINT escape
-        // unreachable until the TUI exits.
-        if (channel.cancelPending) {
-          onExit()
-        } else {
+        // First press while working interrupts and arms the exit window; a
+        // second press within it leaves unconditionally — a stuck turn (long
+        // tool call that never settles, silent stream) must not swallow every
+        // Ctrl+C (issue #1214): raw mode keeps the launcher's SIGINT escape
+        // unreachable until the TUI exits. An abort still converging
+        // (cancelPending) leaves on the first press — the user insisting on
+        // leaving must not depend on the abort converging at all.
+        if (!channel.cancelPending) {
           channel.cancel()
-          // Interrupt replaces any previously armed exit: the next press
-          // must re-confirm instead of exiting out from under the turn.
+        }
+        if (exitPendingRef.current && exitArmSourceRef.current !== 'working') {
+          // The live arm belongs to the idle ladder (an empty-input press
+          // that predates this turn): the interrupt replaces it instead of
+          // firing it — leaving out from under a turn the user just started
+          // is what the pre-#1214 guard prevented.
           exitPendingRef.current = false
           if (exitTimerRef.current) clearTimeout(exitTimerRef.current)
         }
+        requestExit('working')
       } else if (input === 'c' && promptControllerRef.current?.consumeSelectionCopy()) {
         // A mouse selection is active: Ctrl+C copies it to the clipboard
         // (via the prompt controller — Chat's listener registers first) and
@@ -4111,7 +4126,7 @@ export function Chat({
         exitPendingRef.current = false
         if (exitTimerRef.current) clearTimeout(exitTimerRef.current)
       } else {
-        requestExit()
+        requestExit('idle')
       }
     } else if (actionMatches('redraw', input, key)) {
       // Redraw (default Ctrl+L) — clear the physical terminal and
