@@ -1672,9 +1672,9 @@ export function parseMultipleKeypresses(
   /**
    * Single invalidation/RELEASE entry (F-6): a gated hold is replayed as
    * ordinary keys in arrival order (ADR-0007 D5); a legacy hold keeps the
-   * pre-gate silent discard. Every invalidation path outside the protocol
-   * boundaries (complete event / win32 record / terminal response / paste)
-   * funnels through here.
+   * pre-gate silent discard. Every invalidation, including an unrelated
+   * protocol boundary, funnels through here; only successful completion of
+   * the held report clears it without replay.
    */
   const releaseHeldMouseHead = (): void => {
     if (mouseTailHold === undefined) return
@@ -1745,9 +1745,9 @@ export function parseMultipleKeypresses(
         pasteBuffer = ''
         // Bracketed paste is a terminal-controlled mode: report bytes are
         // contiguous on the wire, so a held SGR prefix's report is dead
-        // once paste starts. Discard it — a late `;34M` arriving after the
+        // once paste starts. Release it — a late `;34M` arriving after the
         // paste must not merge into a phantom press.
-        clearMouseTailHold()
+        releaseHeldMouseHead()
       } else if (token.value === PASTE_END) {
         // Always emit a paste key, even for empty pastes. This allows
         // downstream handlers to detect empty pastes (e.g., for clipboard
@@ -1757,7 +1757,7 @@ export function parseMultipleKeypresses(
         pasteBuffer = ''
         // Paste end is a terminal protocol boundary too — a held SGR prefix
         // from before the paste cannot complete now.
-        clearMouseTailHold()
+        releaseHeldMouseHead()
       } else if (inPaste) {
         // Sequences inside paste are treated as literal text
         pasteBuffer += token.value
@@ -1768,7 +1768,7 @@ export function parseMultipleKeypresses(
           // A fresh protocol record proves a held SGR prefix's report died:
           // report bytes are contiguous on the wire, so nothing may
           // interleave between a report's fragments.
-          clearMouseTailHold()
+          releaseHeldMouseHead()
           // win32-input-mode record. null means a swallowed event (keyup,
           // bare modifier, orphaned surrogate) — the sequence is consumed
           // either way and never reaches the VT keypress parser.
@@ -1793,11 +1793,11 @@ export function parseMultipleKeypresses(
           if (claimed !== null) {
             // Any claim — drop, terminal reply or complete mouse report — is
             // a protocol boundary: a held prefix belongs to an older, dead
-            // report. Discard it BEFORE it can merge the next fragment into
+            // report. Release it BEFORE it can merge the next fragment into
             // a phantom event. A complete report also lights the P2 evidence
             // window for the ambiguous `[`/`ESC[` heads.
             if (claimed.kind === 'mouse') lastMouseReportAt = now
-            clearMouseTailHold()
+            releaseHeldMouseHead()
             keys.push(claimed)
           } else {
             const head = token.value.replace(/^\x1b/, '')
@@ -1845,8 +1845,8 @@ export function parseMultipleKeypresses(
         pasteBuffer += token.value
       } else if (WIN32_INPUT_TAILS_RE.test(token.value)) {
         // Protocol bytes — a live SGR mouse report cannot contain them, so
-        // a held prefix's report is dead. Discard before recovering.
-        clearMouseTailHold()
+        // a held prefix's report is dead. Release before recovering.
+        releaseHeldMouseHead()
         terminalResponseReattachTail = undefined
         // A delayed win32-input-mode continuation can arrive after App's
         // escape timer has already flushed its ESC prefix. Recover complete
@@ -1875,11 +1875,11 @@ export function parseMultipleKeypresses(
         // a full [\x20-] range would match typed input like `[MAX]` batched
         // into one read and silently drop it as a phantom click.
         // Any older hold belongs to a DIFFERENT, dead report: a complete
-        // report's arrival proves its tail never came. Discard the stale
+        // report's arrival proves its tail never came. Release the stale
         // hold and resynthesize this tail cleanly — concatenating them
         // (`ESC + hold + complete tail`) parses as garbage and leaks the
         // protocol bytes into the prompt as an ordinary key.
-        clearMouseTailHold()
+        releaseHeldMouseHead()
         terminalResponseReattachTail = undefined
         const resynthesized = '\x1b' + token.value
         const mouse = parseMouseEvent(resynthesized)
@@ -1931,7 +1931,7 @@ export function parseMultipleKeypresses(
           terminalResponseReattachTail = undefined
           // A completed reply is a protocol boundary: a held SGR head's
           // report is dead (same caliber as the sequence-token reply path).
-          clearMouseTailHold()
+          releaseHeldMouseHead()
           keys.push({
             kind: 'response',
             sequence: '\x1b' + replyCandidate.slice(0, claimedResponse.consumed),
@@ -1953,15 +1953,14 @@ export function parseMultipleKeypresses(
           if (replyStillOpen) {
             // Still an open expected reply prefix — hold it for the next
             // call. The reply shape proves any held mouse report is dead, so
-            // the mouse hold is discarded without replay (terminal response
-            // precedes mouse in the decision chain).
-            clearMouseTailHold()
+            // release the old mouse hold before claiming the reply.
+            releaseHeldMouseHead()
             terminalResponseReattachTail = replyCandidate
           } else if (freshReplyPrefix) {
             // The held fragment (if any) cannot be completed; drop it and
             // give the fresh bytes their own chance to start a reply prefix.
-            // Again the reply claim ends any mouse hold silently.
-            clearMouseTailHold()
+            // Again the reply claim releases any old mouse hold.
+            releaseHeldMouseHead()
             terminalResponseReattachTail = token.value
           } else {
             // SGR head family: claim a fresh head, extend an active hold, or

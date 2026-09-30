@@ -213,9 +213,25 @@ function matrix(): void {
 
 // --- (a2) 非续接/替换路径必须 RELEASE（F-1，Critical）------------------------
 // gated hold 在任何作废路径都必须按到达顺序回放，不得静默丢弃；legacy hold 保持
-// 既有语义。四个实测反例 + 两条「新 head 替换旧 hold」路径。
+// 既有语义。覆盖普通文本、新 head 替换和不相关协议边界。
 function nonContinuableRelease(): void {
   const warmed = warmP2()
+  const interleavedMouse = drive(withReporting(true), [
+    `${ESC}[<35;10;10M`,
+    '[',
+    `${ESC}[<35;11;10M`,
+    'x]',
+  ])
+  check(
+    'F-1 鼠标移动夹杂键入 [x] 不丢字节',
+    interleavedMouse.text === '[x]',
+    JSON.stringify(interleavedMouse.text),
+  )
+  check(
+    'F-1 字面输入回放不影响两条 hover',
+    interleavedMouse.keys.filter(key => key.kind === 'mouse').length === 2,
+  )
+
   const typed = drive(warmed, ['[', 't', 'e', 'x', 't', ']'])
   check('F-1 逐字 [text] 非续接文本 RELEASE 不丢字节', typed.text === '[text]', JSON.stringify(typed.text))
 
@@ -262,13 +278,31 @@ function nonContinuableRelease(): void {
     JSON.stringify(arrow.text),
   )
 
-  // (e) 协议边界（完整鼠标上报）仍按既有语义作废 hold：死报告的字节不得回放成文本。
+  // (e) 不相关协议边界结束续接资格，但不能丢掉 gated hold 的字面字节。
   const completeReport = drive(warmed, ['[<35', CLICK])
   check(
-    'F-1 协议边界（完整上报）作废 hold 且不产生文本',
-    completeReport.text === '' && completeReport.keys.some(key => key.kind === 'mouse'),
+    'F-1 完整上报前回放 gated hold 且仍触发 mouse',
+    completeReport.text === '[<35' && completeReport.keys.some(key => key.kind === 'mouse'),
     JSON.stringify(completeReport.text),
   )
+  const legacyReport = drive(INITIAL_STATE, ['[<35', CLICK])
+  check(
+    'F-1 完整上报仍按既有语义丢弃 legacy hold',
+    legacyReport.text === '' && legacyReport.keys.some(key => key.kind === 'mouse'),
+    JSON.stringify(legacyReport.text),
+  )
+
+  const boundaries: Array<[label: string, chunk: string, expected: string]> = [
+    ['orphan mouse', '[<35;11;10M', '[x]'],
+    ['terminal reply', `${ESC}[?1;2c`, '[x]'],
+    ['bracketed paste', `${ESC}[200~p${ESC}[201~`, '[px]'],
+    ['win32 record', `${ESC}[80;25;112;1;0;1_`, '[px]'],
+    ['win32 tail', '[80;25;112;1;0;1_', '[px]'],
+  ]
+  for (const [label, chunk, expected] of boundaries) {
+    const run = drive(warmP2(), ['[', chunk, 'x]'])
+    check(`F-1 ${label} 前回放字面 [`, run.text === expected, JSON.stringify(run.text))
+  }
 }
 
 // --- (c) 反吞噬表 ------------------------------------------------------------
