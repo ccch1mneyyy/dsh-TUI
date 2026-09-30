@@ -188,6 +188,7 @@ export function TooltipLayer({
   subscribeInvalidation?: (listener: () => void) => () => void
 } = {}): React.ReactNode {
   const { columns, rows } = useTerminalSize()
+  const inset = React.useContext(PageInsetContext)
   const terminalFocused = useTerminalFocus()
   const tooltip = React.useSyncExternalStore(subscribeTooltip, getTooltipSnapshot)
   // A text selection and a floating tooltip are mutually exclusive: the copy
@@ -263,7 +264,6 @@ export function TooltipLayer({
   // (the earlier bug) moved the whole card by the page margin — with the
   // default margin one row low and two columns right, so its bottom border
   // landed ON the hovered row and that row's glyphs showed beside the card.
-  const inset = React.useContext(PageInsetContext)
   const anchorRow = tooltip.anchorRow - inset.y
   const anchorCol = tooltip.anchorCol - inset.x
   const topAbove = anchorRow - height

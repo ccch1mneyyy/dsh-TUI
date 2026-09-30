@@ -83,6 +83,7 @@ export type ChatOverlay =
   // cursor and match counters stay in Chat.tsx — they survive the bar
   // closing so n/N keep walking the matches.
   | { kind: 'search' }
+  | { kind: 'goal-details'; sessionId: string; goalId: string }
   | { kind: 'tips' }
   /**
    * 帮助菜单（第八版：用户实测——启动页点「帮助」直接进了聊天页 ✗）。这个

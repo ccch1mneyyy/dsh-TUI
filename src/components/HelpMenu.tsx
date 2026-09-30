@@ -90,6 +90,9 @@ export function HelpMenu({
         <Text dimColor>{t('help-open-editor', { key: primaryComboString('editor') })}</Text>
       </Box>
       <Box>
+        <Text dimColor>{t('help-goal-details', { key: primaryComboString('goalDetails') })}</Text>
+      </Box>
+      <Box>
         <Text dimColor>{t('help-fold-todos', { key: primaryComboString('todoFold') })}</Text>
       </Box>
     </Box>
