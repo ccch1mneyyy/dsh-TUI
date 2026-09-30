@@ -13,7 +13,14 @@
  *   3. a submit made in this process heads the walk, with the persisted
  *      entries behind it in order and each offered exactly once;
  *   4. a remounted composer (a restart) still recalls that submit, because
- *      the file is the source.
+ *      the file is the source;
+ *   5. history is project-scoped: a submit made in workspace A is recalled
+ *      there but never in workspace B, while legacy (unscoped) entries stay
+ *      visible in both;
+ *   6. a workspace switch inside ONE mount (the composer is not remounted)
+ *      re-seeds the walk without losing the draft it started from: `↓`
+ *      returns that draft instead of stepping through the old project's
+ *      list, and `↑` continues in the new project's history.
  *
  * Run after build: `node scripts/verify-prompt-history-persist.mjs`.
  */
@@ -183,6 +190,66 @@ try {
   check('and still reaches the entries persisted before it', await settled(() => second.shows(persisted[2])))
 } finally {
   second.instance.unmount()
+}
+
+const projectA = join(home, 'repo-a')
+const projectB = join(home, 'repo-b')
+channel.cwd = projectA
+const inA = await mountComposer()
+try {
+  inA.stdin.write('submit in project a')
+  await sleep(150) // 固定窗:pacing 等输入回显稳定再回车
+  inA.stdin.write('\r')
+  await settled(() => submitted.includes('submit in project a'))
+  inA.stdin.write(UP)
+  check('project A recalls its own submit', await settled(() => inA.shows('submit in project a')))
+} finally {
+  inA.instance.unmount()
+}
+check(
+  'the project submit is persisted with its project key',
+  await settled(() => readFileSync(historyFile, 'utf8').includes('"project"')),
+)
+
+channel.cwd = projectB
+const inB = await mountComposer()
+try {
+  inB.stdin.write(UP)
+  check('project B skips project A and recalls the newest legacy entry', await settled(() => inB.shows('fresh submit')))
+  check('project B never shows project A input', !inB.shows('submit in project a'))
+} finally {
+  inB.instance.unmount()
+}
+
+channel.cwd = projectA
+const switching = await mountComposer()
+try {
+  switching.stdin.write('draft kept')
+  await sleep(150) // 固定窗:pacing 等输入回显稳定再按键
+  switching.stdin.write(UP)
+  check('a walk in project A recalls its entry', await settled(() => switching.shows('submit in project a')))
+  // One step deeper, so a ↓ still walking A's list would land on A's entry
+  // rather than falling off the end onto the draft by coincidence.
+  switching.stdin.write(UP)
+  check('the walk steps into the older legacy entry', await settled(() => switching.shows('fresh submit')))
+  channel.cwd = projectB
+  switching.stdin.write(DOWN)
+  check(
+    'down after a mid-walk switch restores the draft',
+    await settled(() => switching.shows('draft kept') && !switching.shows('submit in project a')),
+  )
+  switching.stdin.write(UP)
+  check('up after the switch walks project B', await settled(() => switching.shows('fresh submit')))
+  channel.cwd = projectA
+  switching.stdin.write(UP)
+  check(
+    'up after switching back walks project A again',
+    await settled(() => switching.shows('submit in project a') && !switching.shows('fresh submit')),
+  )
+  switching.stdin.write(DOWN)
+  check('the original draft survives two switches', await settled(() => switching.shows('draft kept')))
+} finally {
+  switching.instance.unmount()
   rmSync(home, { recursive: true, force: true })
 }
 

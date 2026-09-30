@@ -773,8 +773,9 @@ export function PromptInput({
   const history = React.useRef<PromptHistoryEntry[]>([])
   const historyIndex = React.useRef(-1)
   const historyDraft = React.useRef<PromptHistoryEntry>({ text: '', images: [] })
-  /** The persisted history is read lazily, once per mount (see seedHistory). */
-  const historySeeded = React.useRef(false)
+  /** The persisted history is read lazily, once per mount and project: the
+   * cwd it was seeded for, so a workspace switch re-seeds (see seedHistory). */
+  const historySeededCwd = React.useRef<string | null>(null)
   /** Visible `[Image #N]` labels are presentation only; this sidecar carries
    * the non-reusable capability for the current draft. History/rewind text
    * restored without this map can never bind to a later image by accident. */
@@ -1354,13 +1355,29 @@ export function PromptInput({
    * persisted entries first, this run's submits behind them — instead of two
    * lists to merge at recall time. Restored text carries no image capability
    * (the file stores text only), which is also what keeps a recalled entry
-   * from binding to a later staged image by accident.
+   * from binding to a later staged image by accident. The walk is scoped to
+   * the channel's workspace cwd, so a workspace switch re-seeds it with that
+   * project's history instead of carrying the previous one over.
+   * @returns Whether the re-seed cut short a walk in progress: the composer
+   * then shows a recalled entry of the previous project while the draft that
+   * walk started from is still held in `historyDraft`.
    */
-  const seedHistory = (): void => {
-    if (historySeeded.current) return
-    historySeeded.current = true
-    history.current = loadHistoryOldestFirst().map(entry => ({ text: entry.text, images: [] }))
+  const seedHistory = (): boolean => {
+    const cwd = channel.cwd ?? ''
+    if (historySeededCwd.current === cwd) return false
+    const interrupted = historyIndex.current >= 0
+    historySeededCwd.current = cwd
+    history.current = loadHistoryOldestFirst(cwd).map(entry => ({ text: entry.text, images: [] }))
     historyIndex.current = -1
+    return interrupted
+  }
+
+  /** End the walk and put back the draft it started from. */
+  const restoreHistoryDraft = (): void => {
+    historyIndex.current = -1
+    updateFoldBlock(null)
+    restoreDraftImages(historyDraft.current)
+    setInput(historyDraft.current.text)
   }
 
   const rememberHistory = (text: string, images: readonly ComposerImageRef[]): void => {
@@ -1373,7 +1390,7 @@ export function PromptInput({
     })
     if (history.current.length > HISTORY_LIMIT) history.current.shift()
     historyIndex.current = -1
-    void appendHistory(text)
+    void appendHistory(text, channel.cwd)
   }
 
   const clearDeliveredDraft = (): void => {
@@ -2404,9 +2421,16 @@ export function PromptInput({
         )
         return
       }
-      seedHistory()
-      if (history.current.length === 0) return
-      if (historyIndex.current < 0) {
+      // A workspace switch mid-walk keeps the draft that walk started from:
+      // the composer shows the previous project's entry, not a new draft.
+      const interrupted = seedHistory()
+      if (history.current.length === 0) {
+        if (interrupted) restoreHistoryDraft()
+        return
+      }
+      if (interrupted) {
+        historyIndex.current = history.current.length - 1
+      } else if (historyIndex.current < 0) {
         historyDraft.current = {
           text: value,
           images: imageRefsFor(value),
@@ -2490,12 +2514,15 @@ export function PromptInput({
         )
         return
       }
+      // A walk cut short by a workspace switch has no position in the new
+      // project's list; ↓ just ends it and returns the draft.
+      if (seedHistory()) {
+        restoreHistoryDraft()
+        return
+      }
       if (historyIndex.current < 0) return
       if (historyIndex.current >= history.current.length - 1) {
-        historyIndex.current = -1
-        updateFoldBlock(null)
-        restoreDraftImages(historyDraft.current)
-        setInput(historyDraft.current.text)
+        restoreHistoryDraft()
       } else {
         historyIndex.current += 1
         const entry = history.current[historyIndex.current]
