@@ -30,12 +30,20 @@
 | 分级 | 接缝 |
 | --- | --- |
 | 稳定候选（形态冻结；如有破坏性变更，先在次版本弃用告警再移除） | 六 设置区块 · 八 全屏场景 · 十 托管对话框 · 十一 状态行 · 十二 键盘快捷键 · 十三 条目渲染器 |
-| 实验性（仍可能随 dsh-std / 准入规范演进调整） | 九 决策事件 · toast 通知（`ctx.tuiToast`，新增） |
+| 实验性（仍可能随 dsh-std / 准入规范演进调整） | 九 决策事件 · toast 通知（`ctx.tuiToast`，新增） · **侧栏 Panel（`ctx.tuiPanels`，full 面板与 compact 行，实验性）** |
 | 跟随上游（稳定性由 cordis / dsh 官方机制决定） | 一 会话事件 · 二 官方 prompt 槽位 · 三 技能打包 · 四 主题 · 五 system prompt 段 · 七 profile 组合 |
 
 另：
 
 - `@deepseek-harness-tui/dsh-tui/api`（纯类型入口）为实验性公开面。
+- **侧栏 Panel（实验性，§18）**：`ctx.tuiPanels.register({ apiVersion: 1,
+  id, title, icon?, component | compact })` 向右侧栏注册面板（宿主自动加
+  `<pluginId>:` 前缀；每插件 ≤4 个、全局 ≤32 个；`open()` 限速每 5s 一次；
+  连续崩溃 3 次本会话禁用）。full 面板（`component`）与 compact 行
+  （`compact`，1–3 行紧凑呈现）两个渲染槽中，**本阶段 compact 仅校验
+  descriptor、尚不挂载渲染**；`sendToChat` 需要 `panels.chat.attach`
+  授权（后续版本），当前恒返回 `false` 并提示一次。类型见
+  `@deepseek-harness-tui/dsh-tui/panels` 与 `./api`。
 - `@deepseek-harness-tui/dsh-tui/test-utils` 子路径与
   `ctx.tuiPluginHost.grants.corrupt` 已随 adapter 分层重构（#705）移除。
 - `grants` 收窄为 `HostGrantFacade`，迁移细节见该 PR。

@@ -213,11 +213,39 @@ const GROUPS = {
 // DEC 2026，所以只撤 DECSTBM、BSU/ESU 保留。断言 zellij 下撤回 + DEC 2026
 // 保留 + 无 zellij 对照，终端环境按场景显式构造（不继承宿主 env，见脚本头注）。
     ["verify-zellij", ['node', '--import', 'tsx/esm', 'scripts/verify-zellij.tsx']],
+// 侧栏 Phase 1 纯函数几何契约：canSplit 92/93 边界、resolveSplit/zoom 的
+// clamp 下限（chat>=64、panel>=28、和+1=列数）、ratio 极端钳制、
+// resolveSidePanelGeometry 开关矩阵、nudgeRatio ±4 列步进与两端钳死。
+    ["verify-side-panel-geometry", ['node', '--import', 'tsx/esm', 'scripts/verify-side-panel-geometry.mjs']],
+// 侧栏 Phase 1 渲染契约：divider 列位置与 ├/│ 接缝、PanelBar 胶囊+徽章、
+// hint 随焦点切换（zh/en）、聊天侧输入框不越缝、zoom 与 93 列最小分栏
+// 不破版、geometry=null 零 diff 直通、resize 终态等价（120→100→120）。
+    ["verify-side-panel-layout", ['node', '--import', 'tsx/esm', 'scripts/verify-side-panel-layout.tsx']],
+// Companion（宠物）面板回归——纯函数层：mood 优先级格（attention 三触发各
+// 自点亮、attention 阻止入睡、celebration 到期回落、activity 缺失/done/idle
+// 退 spinnerMode、sleepAfterMs=0 永不睡）+ stepCompanionMood 的 since 保留与
+// bubble 取值（phrase 优先、label+detail 兜底、idle/sleeping 无 bubble）。
+    ["verify-companion-mood", ['node', '--import', 'tsx/esm', 'scripts/verify-companion-mood.mjs']],
+// Companion pose 层：nextCompanionPoseStep 对 nextWhaleIdleStep 的帧级 parity
+// （8 mood × heart × 50 步 pose+state+delay 逐项相等）、gestures 集合由层姿态
+// 派生（tail+fin 重叠步同时 wag+flutter、静止步空集）、blink/heart/sleepZ 镜像
+// nativeWhalePose、tick=floor(now/120)。
+    ["verify-companion-pose", ['node', '--import', 'tsx/esm', 'scripts/verify-companion-pose.mjs']],
+// Companion 渲染层：♥ tab 登记、宽幅 deepy 半块帧 + 「N 个工具」统计行、窄幅
+// compact（♥+心情标签、无皮肤帧）、display:none 零时钟订阅（计数 ClockContext
+// 代理探针）、SGR 点击艺术区触发 heart pass、Enter poke 显示完整 activity.line、
+// 左栏 §16.6 零 diff（50 次 version bump 重渲染逐行恒等）。
+    ["verify-companion-panel", ['node', '--import', 'tsx/esm', 'scripts/verify-companion-panel.tsx']],
   ],
   'input-terminal': [
 // 按键解析回归（issue #110）：Option+Enter（ESC CR）精确/合并/分块
 // 三种到达形态、CSI-u 与 modifyOtherKeys 的 Shift/Ctrl/Meta+Enter。
     ["verify-keys", ['node', '--import', 'tsx/esm', 'scripts/verify-keys.tsx']],
+// 侧栏 Phase 1 控制器键盘契约（真 stdin 注入）：ctrl+b 三态循环、面板聚焦
+// 时 ←/→ 与 [ ] 循环、数字直达、z 缩放、+/- 调宽（面板+4/chat+4）、plain
+// 键吞掉、ctrl 组合放行、alt+z 全局缩放、窄终端/编辑器打开时无效；含
+// 已知缺陷 tripwire（真 Esc 带 meta 被放行，见脚本头注）。
+    ["verify-side-panel-keys", ['node', '--import', 'tsx/esm', 'scripts/verify-side-panel-keys.tsx']],
 // 终端能力探测回归：延迟 OSC/XTVERSION 回复期间保持 raw mode，
 // 回复只进 querier，不回显成终端残影。
     ["verify-terminal-queries", ['node', '--import', 'tsx/esm', 'scripts/verify-terminal-queries.tsx']],
@@ -585,6 +613,13 @@ const GROUPS = {
 // loopback 对连（token 握手 ACK、错误 token 换下一候选、断连清空）、
 // 选区消费（text 优先/磁盘回退/截断计数/replay 指示回扫）。
     ["verify-ide-channel", ['node', '--import', 'tsx/esm', 'scripts/verify-ide-channel.tsx']],
+// 「Send to Chat」channel 层回归（侧栏设计 §6.7）：attach/detach/consume 的投影
+// 语义（id 自增、重复 sourceId+title 替换、超限截断 + truncated）与
+// <attached-context …> 块形状（转义、截断标记）；真 channel 的提交 payload 经
+// composer 路径附块、提交后 chip 清空、consume-once、真实 /new 切换清空；
+// 真 PromptInput 的 chip 上屏/在输入行上方/多枚横排/超宽单行截断，以及 Esc 分层
+// （第一次只清 chip 不动草稿，第二次才清草稿）。
+    ["verify-attached-context", ['node', '--import', 'tsx/esm', 'scripts/verify-attached-context.tsx']],
     ["verify-whale-toggle", ['node', '--import', 'tsx/esm', 'scripts/verify-whale-toggle.mjs']],
 // 开屏大字字体设置（splashFont）：每个 id 解析到自己那款、daily 交回按天轮换、
 // 非法值回落 daily、channel 往返、/settings 选项覆盖全部取值、Config 默认值，
@@ -613,6 +648,17 @@ const GROUPS = {
 // toast、kill 权限传递、无 jobs 服务降级、/new 重置）、JobCard/JobsPanel
 // 渲染冒烟（三行瀑布、settled 折叠、面板行/提示）。
     ["verify-jobs-panel", ['node', '--import', 'tsx/esm', 'scripts/verify-jobs-panel.tsx']],
+// jobs 侧栏迁移回归：SidePanelColumn/PanelHost 内挂真实 useSidePanel 与假
+// channel——badge（running→info、未见 failed→error、打开清错）、名册渲染、
+// usePanelInput 分派（↓ 移动 / 双 k kill / Esc 让出回聊天）、SGR 点击聚焦、
+// jobsFocusStore 聚焦通道（nonce 重放）。
+    ["verify-jobs-side-panel", ['node', '--import', 'tsx/esm', 'scripts/verify-jobs-side-panel.tsx']],
+// agents 侧栏迁移回归：SubagentDashboard/SubagentDetailScene 的 panel variant
+// 挂在 PanelHost 内——badge（running→info、未见 failed→error、打开清错）、
+// 面板内 dashboard 渲染（1 格外边距 + 分隔线跟随面板列宽）、Enter 进详情、
+// ←/→ 翻页、**详情 Esc 回 dashboard 且焦点仍在右栏**、dashboard Esc 让出回
+// 聊天、二级路由跨切面板保留、x 中断、SGR 点击开卡、名册缺行回落 dashboard。
+    ["verify-agents-side-panel", ['node', '--import', 'tsx/esm', 'scripts/verify-agents-side-panel.tsx']],
 // 连续任务卡成组（JobGroupRow/JobGroupHeader）：组头汇总、组内取消空行与
 // 链式连接线、落定整组折叠、点击/悬停/Ctrl+O 展开、失败数留在折叠行、
 // 非相邻不成组、单卡原样，以及 jobGroupFold=auto/always/never 三档行为。
@@ -804,6 +850,10 @@ const GROUPS = {
 // 插件场景渲染崩溃边界：Thrower 场景必须被 PluginSceneBoundary 接住——
 // onError 精确一次、崩溃场景停止绘制、进程存活；健康场景不受影响。
     ["verify-plugin-scene-boundary", ['node', '--import', 'tsx/esm', 'scripts/verify-plugin-scene-boundary.tsx']],
+// ctx.tuiPanels 全链（§18 Phase 6）：准入/前缀 id/预算/重复 id ledger/
+// open 限速/跨插件所有权/订阅过滤/崩溃禁用/释放撤下 + 无头渲染冒烟
+// （插件面板抛错出错误卡、3 次崩溃出禁用卡、Chat 侧不受影响）。
+    ["verify-plugin-panels", ['node', '--import', 'tsx/esm', 'scripts/verify-plugin-panels.tsx']],
 // 终端点击目标回归（点击链接开浏览器 / 文件路径弹菜单）：路径判定、
 // dsh-file: URL 编解码、相对路径按 cwd 解析、file:// 转换、Windows
 // start 组装——fileTarget.ts / openExternal.ts 的纯函数部分。

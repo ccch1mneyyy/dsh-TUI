@@ -185,6 +185,8 @@ export type ShortcutActionId =
   | 'todoFold'
   | 'expandEditor'
   | 'star'
+  | 'sidePanel'
+  | 'sidePanelZoom'
 
 export interface ShortcutActionSpec {
   readonly id: ShortcutActionId
@@ -214,6 +216,10 @@ export const SHORTCUT_ACTIONS: readonly ShortcutActionSpec[] = [
   // 开屏标语里的"一键 star"：与 `/star`、弹窗按钮同一个动作（gh api PUT）。
   // 用 alt 组合是为了不跟输入框抢字母键。
   { id: 'star', defaults: ['alt+s'] },
+  // 侧栏三态开关：关闭 → 打开并聚焦右栏 → 焦点回 Chat → 关闭（VS Code 同
+  // 键位；tmux 用户的前缀会吞掉 Ctrl+B，可在 /settings → Shortcuts 重映射）。
+  { id: 'sidePanel', defaults: ['ctrl+b'] },
+  { id: 'sidePanelZoom', defaults: ['alt+z'] },
 ]
 
 const DEFAULT_COMBO_MAP: ReadonlyMap<ShortcutActionId, readonly ParsedCombo[]> = new Map(

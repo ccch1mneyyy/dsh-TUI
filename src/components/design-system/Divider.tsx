@@ -5,7 +5,7 @@ import type { DOMElement } from '../../ink/dom.js'
 import measureElement from '../../ink/measure-element.js'
 import { stringWidth } from '../../ink/stringWidth.js'
 import { useTerminalSize } from '../../ink/hooks/use-terminal-size.js'
-import { usePageInset } from '../PageMargin.js'
+import { useSurfaceEdges } from '../SurfaceEdges.js'
 import type { Theme } from '../../theme.js'
 
 type DividerProps = {
@@ -86,13 +86,18 @@ export function Divider({
   bleed = false,
 }: DividerProps): React.ReactNode {
   const { columns } = useTerminalSize()
-  const inset = usePageInset()
-  // Full-bleed: the rule spans the terminal columns, shifted left by the
-  // page inset via a negative margin (the box reaches into the margin
-  // area; the parent does not clip). `columns` here is the CONTENT width
-  // (PageMargin narrows TerminalSizeContext), so +2·inset.x = terminal.
-  const bleedX = bleed ? inset.x : 0
-  const bleedWidth = columns + 2 * bleedX
+  const edges = useSurfaceEdges()
+  // Full-bleed: the rule spans the SURFACE width, shifted left by the
+  // allowed bleed via a negative margin (the box reaches into the margin
+  // area; the parent does not clip). `columns` here is the SURFACE
+  // content width (PageMargin narrows TerminalSizeContext, the side panel
+  // narrows it again per column), and SurfaceEdges says how far past each
+  // side chrome may run: under PageMargin alone that's {x, x} (the whole
+  // terminal); in the split chat column it's {x, 0} — the rule stops at
+  // the divider instead of painting into the panel.
+  const bleedLeft = bleed ? edges.left : 0
+  const bleedRight = bleed ? edges.right : 0
+  const bleedWidth = columns + bleedLeft + bleedRight
   const [measuredWidth, setMeasuredWidth] = useState<number | null>(null)
   const boxRef = useRef<DOMElement | null>(null)
   // Measurement feedback guard: the rule width rendered from
@@ -158,7 +163,7 @@ export function Divider({
     <Box
       ref={boxRef}
       {...(bleed
-        ? { width: bleedWidth, marginLeft: -bleedX }
+        ? { width: bleedWidth, marginLeft: -bleedLeft }
         : width !== undefined
           ? { width }
           : {})}

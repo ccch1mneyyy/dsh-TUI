@@ -39,7 +39,7 @@ import { readHomePrefs } from '../homePrefs.js'
 import { resolveSessionCwd } from '../utils/workspaceRoot.js'
 import { beginRestartAttempt, checkForTuiUpdate, installedTuiVersion, isBootDeadlockTarget, isStandaloneRuntime, isVersionNewer, logRestartEvent, resolveDshProfileName, resolveTuiUpdateTarget, restartTui, updateTuiAndRestart, writeHandoffNotice } from '../update.js'
 import { getLang, isLang, resolveStartupLang, setLang, t, writeLangPref } from '../i18n.js'
-import { DEFAULT_PAGE_MARGIN, DEFAULT_STATUS_BAR, applyImageBacking, applyMathImageBacking, applyMathImageScale, applyMathRendering, applyMermaidDiagrams, type ImageBacking, type MathImageBacking, type MathImageScale, type MathRendering, applyPageMargin, isPageMarginMode, normalizeJobGroupFold, normalizePageMargin, normalizeScrollGutter, normalizeStatusBar, normalizeToolBackground, parsePageMarginSpec, resolveMathRendering, type PageMarginSetting, type ScrollGutterMode, type StatusBarConfig, type ToolBackground } from '../tuiDisplayPrefs.js'
+import { DEFAULT_PAGE_MARGIN, DEFAULT_SIDE_PANEL_IDS, DEFAULT_STATUS_BAR, SIDE_PANEL_ID_PATTERN, applyCompanionSkin, applyImageBacking, applyMathImageBacking, applyMathImageScale, applyMathRendering, applyMermaidDiagrams, type ImageBacking, type MathImageBacking, type MathImageScale, type MathRendering, applyPageMargin, applySidePanelOpen, applySidePanelPanels, applySidePanelRatio, applySidePanelSplitEnabled, isPageMarginMode, normalizeJobGroupFold, normalizePageMargin, normalizeScrollGutter, normalizeSidePanelPanels, normalizeSidePanelRatio, normalizeStatusBar, normalizeToolBackground, parsePageMarginSpec, resolveMathRendering, type PageMarginSetting, type ScrollGutterMode, type StatusBarConfig, type ToolBackground } from '../tuiDisplayPrefs.js'
 import {
   draftComboConflicts,
   effectiveComboString,
@@ -436,6 +436,16 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
       'The bundle patch is older than the installed dsh-tui package — update the globally installed dsh-tui launcher to match the profile (issue #183).',
     )
   }
+  // Same skew guard for the side-panel registry (dsh-tui-panels row): the
+  // tuiPanels runtime is what admits plugin panels into the PanelStore, so
+  // register() warns and returns undefined for every plugin when the row is
+  // absent — say why on profile launches.
+  if (ctx.get('tuiPanels') === undefined && resolveDshProfileName() !== undefined) {
+    ctx.logger.warn(
+      'dsh-tui: tuiPanels service is not mounted; plugin side panels will never register. ' +
+      'The bundle patch is older than the installed dsh-tui package — update the globally installed dsh-tui launcher to match the profile (issue #183).',
+    )
+  }
   // Same skew guard for the plugin-UI services (dsh-tui-extensions row):
   // managed dialogs park unanswered, status contributions never render,
   // shortcuts never match, custom-entry renderers stay invisible, and runtime
@@ -630,6 +640,15 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
   // mermaid and LaTeX switches ride the same kind of store (Markdown is
   // memoized by content, so no prop reaches the diagram/formula nodes).
   applyPageMargin(config.pageMargin)
+  // Side panel (settings `dsh-tui.sidePanel.*`): same reason as pageMargin —
+  // the useSidePanel controller reads these module-level stores ABOVE the
+  // channel's version bump, so a Ctrl+B toggle re-renders Chat without any
+  // session change. applyDisplay below mirrors every settings edit into them.
+  applySidePanelSplitEnabled(config.sidePanel?.splitEnabled)
+  applySidePanelOpen(config.sidePanel?.open)
+  applySidePanelRatio(config.sidePanel?.ratio)
+  applySidePanelPanels(config.sidePanel?.panels)
+  applyCompanionSkin(config.companion?.skin)
   applyMermaidDiagrams(config.mermaidDiagrams)
   applyMathRendering(resolveMathRendering({}, config))
   applyMathImageScale(config.mathImageScale ?? 'auto')
@@ -740,6 +759,22 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
           trajectory: Schema.boolean().default(DEFAULT_STATUS_BAR.trajectory),
           shortcutHint: Schema.boolean().default(DEFAULT_STATUS_BAR.shortcutHint),
         }).default({ ...DEFAULT_STATUS_BAR }),
+        // Side-panel preferences. No schema defaults on purpose (same rule as
+        // foldTerminalCommand/expandEditor above): a default here would come
+        // back from scope.get()/watch() and shadow an explicit cordis.yml
+        // `sidePanel` block while the user layer is unset. applyDisplay
+        // resolves `?? config.sidePanel?.x` and the apply* stores normalize
+        // undefined to the documented defaults (true / false / 0.68 / the
+        // built-in panel trio).
+        sidePanel: Schema.object({
+          splitEnabled: Schema.boolean(),
+          open: Schema.boolean(),
+          ratio: Schema.number(),
+          panels: Schema.string(),
+        }),
+        companion: Schema.object({
+          skin: Schema.string(),
+        }),
         // Header pixel whale art; on unless settings.yaml says otherwise.
         whale: Schema.boolean().default(true),
         // Idle whale behaviors after the intro settles; on by default —
@@ -810,6 +845,17 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
       imageBacking?: ImageBacking
       latexMath?: boolean
       statusBar?: Partial<StatusBarConfig>
+      /** Side-panel preferences; every member is optional, and an unset one
+       *  falls through to cordis.yml and then to the store's own default. */
+      sidePanel?: {
+        splitEnabled?: boolean
+        open?: boolean
+        ratio?: number
+        panels?: string
+      }
+      companion?: {
+        skin?: string
+      }
       shortcuts?: Partial<Record<ShortcutActionId, string>>
     }
     const applyLayout = (value: SettingsValue): void => {
@@ -882,6 +928,15 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
       applyMathImageBacking(value.mathImageBacking ?? config.mathImageBacking ?? 'transparent')
       applyImageBacking(value.imageBacking ?? config.imageBacking ?? 'transparent')
       channel.setStatusBar(normalizeStatusBar(value.statusBar ?? config.statusBar))
+      // Side panel: no channel member — the layout owns module-level stores
+      // (they sit above the channel's version bump), so /settings writes them
+      // directly and useSidePanel's own subscriptions re-lay out at once. An
+      // unset user layer falls back to cordis.yml, then to the store default.
+      applySidePanelSplitEnabled(value.sidePanel?.splitEnabled ?? config.sidePanel?.splitEnabled)
+      applySidePanelOpen(value.sidePanel?.open ?? config.sidePanel?.open)
+      applySidePanelRatio(value.sidePanel?.ratio ?? config.sidePanel?.ratio)
+      applySidePanelPanels(value.sidePanel?.panels ?? config.sidePanel?.panels)
+      applyCompanionSkin(value.companion?.skin ?? config.companion?.skin)
     }
     // Legacy user scopes layer over cordis.yml. Modern Config is already
     // resolved: an unset action must not revive its startup override.
@@ -1192,6 +1247,62 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
         },
         {
           ...settingField('statusBar.shortcutHint'),
+        },
+        {
+          ...settingField('sidePanel.splitEnabled'),
+          format(value: unknown): string {
+            // Unset in the user layer: the effective default is on.
+            return String(typeof value === 'boolean' ? value : config.sidePanel?.splitEnabled !== false)
+          },
+        },
+        {
+          ...settingField('sidePanel.open'),
+          format(value: unknown): string {
+            // Unset in the user layer: the effective default is off.
+            return String(typeof value === 'boolean' ? value : config.sidePanel?.open === true)
+          },
+        },
+        {
+          ...settingField('sidePanel.ratio'),
+          placeholder: '0.68',
+          format(value: unknown): string {
+            // Unset in the user layer: show the effective fraction.
+            const ratio = typeof value === 'number' && Number.isFinite(value) ? value : config.sidePanel?.ratio
+            return String(ratio ?? 0.68)
+          },
+          parse(text: string) {
+            const draft = text.trim()
+            if (draft === '') return { kind: 'clear' }
+            const ratio = Number(draft)
+            // Range gate mirrors the geometry contract (0.1–0.95): an
+            // out-of-range draft would be silently clamped by the store, so
+            // refuse it and let the editor keep the error badge instead.
+            if (!Number.isFinite(ratio) || ratio < 0.1 || ratio > 0.95) return undefined
+            return { kind: 'set', value: ratio }
+          },
+        },
+        {
+          ...settingField('sidePanel.panels'),
+          placeholder: DEFAULT_SIDE_PANEL_IDS,
+          format(value: unknown): string {
+            // Unset in the user layer: show the effective list.
+            return typeof value === 'string' && value.trim() !== ''
+              ? value
+              : config.sidePanel?.panels ?? DEFAULT_SIDE_PANEL_IDS
+          },
+          parse(text: string) {
+            const draft = text.trim()
+            if (draft === '') return { kind: 'clear' }
+            // Strict gate: every token must be a well-formed panel id. The
+            // store would drop a typo silently, so a draft that does not
+            // round-trip is refused instead of saved as something else.
+            const tokens = draft.split(',').map(token => token.trim().toLowerCase()).filter(token => token !== '')
+            if (tokens.length === 0 || tokens.some(token => !SIDE_PANEL_ID_PATTERN.test(token))) return undefined
+            return { kind: 'set', value: normalizeSidePanelPanels(draft) }
+          },
+        },
+        {
+          ...settingField('companion.skin'),
         },
         {
           ...settingField('whale'),

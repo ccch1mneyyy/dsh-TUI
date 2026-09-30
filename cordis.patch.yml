@@ -333,6 +333,12 @@
     - id: dsh-tui-scenes
       name: '@deepseek-harness-tui/dsh-tui/scenes'
 
+    # Optional plugins register side-panel surfaces (sidebar Panel +
+    # compact row, experimental §18) here; admission, budgets and crash
+    # isolation remain owned by the tuiPanels runtime + PanelStore.
+    - id: dsh-tui-panels
+      name: '@deepseek-harness-tui/dsh-tui/panels'
+
     # Plugin-interop anchor (Community Consensus v0.15): the unified grant
     # store, runtime generation id, and Host Descriptor live here; later
     # contract surfaces (plugin storage, message observation, effect
@@ -447,7 +453,7 @@
       name: '@deepseek-harness-tui/dsh-tui'
       # The entry-level dependency augments the plugin's `agents` inject and
       # prevents startup Session creation from racing WorkspaceRegistry init.
-      inject: [workspaceRegistry, agents, tuiWorkspaces, tuiScenes, tuiDialogs, tuiStatus, tuiShortcuts, tuiRenderers, tuiThemes]
+      inject: [workspaceRegistry, agents, tuiWorkspaces, tuiScenes, tuiPanels, tuiDialogs, tuiStatus, tuiShortcuts, tuiRenderers, tuiThemes]
       # `tuiWorkspaces`/`tuiScenes` (and the dsh-tui-extensions services,
       # including `tuiThemes`)
       # live in the entry-level inject ONLY as an ordering (and reload-rebind)

@@ -1,5 +1,6 @@
 import React from 'react'
 import { Box } from '../ui.js'
+import { SurfaceEdgesContext } from './SurfaceEdges.js'
 import {
   TerminalSizeContext,
   type TerminalSize,
@@ -83,6 +84,7 @@ export function PageMargin({
   const inner: TerminalSize = {
     columns: Math.max(1, size.columns - 2 * x),
     rows: Math.max(1, size.rows - 2 * y),
+    screenRows: size.screenRows ?? size.rows,
   }
   const inset: PageInset = {
     x: parentInset.x + x,
@@ -90,7 +92,11 @@ export function PageMargin({
   }
   return (
     <PageInsetContext.Provider value={inset}>
-      <TerminalSizeContext.Provider value={inner}>
+      {/* Default bleed allowance: structural chrome (dividers, the gutter)
+          may run this many columns past the content box per side; the
+          side-panel layout re-provides per column (see SurfaceEdges). */}
+      <SurfaceEdgesContext.Provider value={{ left: inset.x, right: inset.x }}>
+        <TerminalSizeContext.Provider value={inner}>
         <Box
           flexDirection="column"
           flexGrow={1}
@@ -106,7 +112,8 @@ export function PageMargin({
             {children}
           </Box>
         </Box>
-      </TerminalSizeContext.Provider>
+        </TerminalSizeContext.Provider>
+      </SurfaceEdgesContext.Provider>
     </PageInsetContext.Provider>
   )
 }

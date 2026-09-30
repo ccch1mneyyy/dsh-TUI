@@ -219,6 +219,48 @@ changes save automatically, `Esc` exits
 **Double-press Esc time-travel (rewind)**
 List `↑/↓` + `Enter` to confirm · confirm page `Enter` rewind / `Esc` back · only `Esc` responds while a plugin decision is pending
 
+### 2.8 Side panel
+
+`Ctrl+B` (remappable under `/settings` → `Shortcuts`) expands a panel column to the right of the
+chat: a capsule tab bar on top, the active panel in the middle, a key-hint row at the bottom, and a
+one-column seam between the two surfaces.
+
+- **Three states**: **split** (chat ≈ 68% plus the panel; `+`/`-` resize by 4 columns), **collapsed**
+  (the layout is byte-identical to before), **zoom** (the panel takes over and the chat column keeps
+  its minimum width).
+- **When it splits**: `fullscreen` plus a content width of ≥93 columns (≈97 terminal columns at the
+  default page margin); narrow terminals, inline mode and the expanded draft editor fall back —
+  `/jobs` and friends keep their full-screen panels there, while `Ctrl+B` and `/panel` do not split at all.
+- **Focus model**: one keyboard focus at a time; while the panel holds it, its frame and the seam
+  brighten together. `Ctrl+B` is three-state: closed → open and focus the panel; open but
+  chat-focused → focus the panel; panel-focused → close and return to the chat.
+- **Panel keys**: `Esc` steps back to the input (the panel stays open) · `←`/`→` or `[`/`]` switch
+  panels · `1`-`9` jump to the Nth · `z` or `Alt+Z` zoom · `+`/`-` resize (`+` widens the panel by 4 columns) · `↑`/`↓`/`PgUp`/`PgDn`
+  go to the active panel (jobs selects and scrolls with them). Keys the panel does not take never
+  reach the chat, while `Ctrl+C`/`Ctrl+D`/`Ctrl+L` and the other Ctrl combos still do.
+- **Mouse**: click the chat column to focus the chat, click the panel column to focus the panel; the
+  panel column is excluded from drag-selection.
+- **Panels**: `todo` (Goals/Todos — with a split it moves here from above the input), `jobs`
+  (background jobs; clicking a job card in the transcript focuses that job here), `agents`
+  (subagent dashboard and detail: Enter opens the detail, Esc steps back), `companion`
+  (the pet — off by default; add `companion` to `sidePanel.panels` to enable: its mood follows
+  the session, click for a heart, Enter to poke; the `dsh-tui.companion.skin` setting offers
+  deepy (default, the fan-made deepy whale kit) or whale).
+
+| Subcommand | Effect |
+|---|---|
+| `/panel` | Open the panel picker (↑↓ to choose, Enter opens and focuses) |
+| `/panel toggle` | Really open / really close (closing returns focus to the chat) |
+| `/panel focus` | Open and focus the panel |
+| `/panel zoom` | Open and zoom the active panel |
+| `/panel <id>` | Open a panel by id: `todo` / `jobs` / `agents` / `companion` (completion lists the enabled ids) |
+
+- Settings: the **Side panel** group in `/settings`, or
+  `dsh-tui.sidePanel.{splitEnabled,open,ratio,panels}` (see the
+  [configuration reference](configuration.en.md#tui-configuration)).
+- **tmux users**: `Ctrl+B` is tmux's default prefix, so tmux swallows it before the TUI sees it —
+  remap `sidePanel` to another combo (for example `alt+b`) under `/settings` → `Shortcuts`.
+
 ## 3. Command reference
 
 The command menu = built-in commands (50) + DSH registry commands (`/plan` `/goal` etc.) + the skill catalog
@@ -276,6 +318,7 @@ The command menu = built-in commands (50) + DSH registry commands (`/plan` `/goa
 | `/color` | no-arg / `<名>` / `status` / `reset` | session accent color: no-arg opens the palette (`↑/↓` pick, `Enter` apply); `<名>` set directly; `reset` back to default. Colors `red/orange/yellow/green/blue/purple/pink/cyan`, saved per session |
 | `/lang` | `en` / `zh` / `status` | hot-switch UI language. Priority: `DSH_TUI_LANG` > profile config (legacy: settings.yaml user layer > cordis.yml) > persisted |
 | `/vim` | none | **vim editing mode toggle** (see §2.4): input switches to vim keys, per-session, not persisted |
+| `/panel` | `toggle` / `focus` / `zoom` / `<panel id>` | side panel: toggle / focus / zoom / switch panels; states and subcommands in §2.8 |
 
 ### 3.4 Account / policy / extensions
 
@@ -389,7 +432,7 @@ Keys are in §2.7. Key points:
 - `/skills` browses the skill catalog; a direct-call skill joins the command menu as `/name` (dsh-TUI ships no generic skills).
 - `/plan` `/goal` `/feedback` `/permission` come from the DSH registry, merged into the `/` menu.
 - **Goals/Todos panel appears automatically**: when the model writes a goal/todo, it renders above the input
-  (🎯 goal + phase badge + tree todo), no action needed.
+  (🎯 goal + phase badge + tree todo), no action needed; with a split it moves to the `todo` panel on the right (see §2.8).
 
 ### 4.9 MCP / Workspace / other
 
@@ -473,7 +516,7 @@ speed **≥50 green / ≥20 yellow / <20 red**.
 
 `/settings` opens the plugin settings editor; **changes save automatically**, `Esc` exits directly.
 On 0.1.7 the dsh-tui block writes to the active profile's `cordis.patch.yml`; older hosts use the settings.yaml user layer. Most settings apply live; fullscreen and image-preview need `/restart`.
-Common items below, full list on the /settings screen. Most topics (**Appearance**, **Splash**, **Conversation**, **Rendering**) lay their fields right on the root page under small headers — no subpage round-trip to tweak them; only the genuinely block-like domains — **Formula**, **Status bar**, **Shortcuts** — keep a subpage behind one root-page row:
+Common items below, full list on the /settings screen. Most topics (**Appearance**, **Splash**, **Conversation**, **Rendering**) lay their fields right on the root page under small headers — no subpage round-trip to tweak them; only the genuinely block-like domains — **Formula**, **Status bar**, **Side panel**, **Shortcuts** — keep a subpage behind one root-page row:
 
 | Field | Notes |
 |---|---|
