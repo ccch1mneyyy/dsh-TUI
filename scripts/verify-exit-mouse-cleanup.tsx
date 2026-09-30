@@ -29,6 +29,7 @@ import {
   DISABLE_MOUSE_TRACKING,
   ENABLE_MOUSE_TRACKING,
   ENTER_ALT_SCREEN,
+  ESU,
   EXIT_ALT_SCREEN,
   SHOW_CURSOR,
 } from '../src/ink/termio/dec.js'
@@ -200,6 +201,16 @@ const sleep = (ms: number): Promise<void> =>
   if (frameAt !== -1) {
     check('last frame lands before EXIT_ALT_SCREEN', frameAt < cleanup.indexOf(EXIT_ALT_SCREEN))
   }
+
+  // Issue #1214: the cleanup must close an open synchronized-output block
+  // BEFORE the last frame (whose own BSU…ESU pair is intact, so its ESU
+  // cannot count) — an ESU lost to a crash or kill mid-frame otherwise
+  // freezes the terminal, and the alt-screen exit would be applied inside
+  // the still-open block.
+  const frameBsuAt = cleanup.indexOf('\x1b[?2026h')
+  const firstEsuAt = cleanup.indexOf(ESU)
+  check('sync cleanup closes an open sync block first',
+    firstEsuAt !== -1 && (frameBsuAt === -1 || firstEsuAt < frameBsuAt))
 }
 
 // ---------------------------------------------------------------------------

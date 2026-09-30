@@ -54,6 +54,7 @@ import {
 	DISABLE_MOUSE_TRACKING,
 	EBP,
 	EFE,
+	ESU,
 	HIDE_CURSOR,
 	SHOW_CURSOR,
 } from "../termio/dec.js";
@@ -771,9 +772,11 @@ export default class App extends PureComponent<Props, State> {
 		// before suspending. DISABLE_MOUSE_TRACKING is a no-op if tracking
 		// wasn't enabled, so it's safe to emit unconditionally — without
 		// it, SGR mouse sequences would appear as garbled text at the
-		// shell prompt while suspended.
+		// shell prompt while suspended. ESU leads: a process suspended and
+		// then killed inside an open synchronized-output block would leave
+		// the shell frozen in the sync mode (issue #1214).
 		if (this.props.stdout.isTTY) {
-			this.props.stdout.write(SHOW_CURSOR + DFE + DISABLE_MOUSE_TRACKING);
+			this.props.stdout.write(ESU + SHOW_CURSOR + DFE + DISABLE_MOUSE_TRACKING);
 		}
 
 		// Notify the application of suspension. The listener manages its notification

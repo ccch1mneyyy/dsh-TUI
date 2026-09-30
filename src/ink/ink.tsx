@@ -45,7 +45,7 @@ import { applySearchHighlight } from './transcript-highlight.js';
 import { applySelectionOverlay, captureScrolledRows, clearSelection, createSelectionState, extendSelection, type FocusMove, findPlainTextUrlAt, getSelectedText, hasSelection, moveFocus, pickFollowForSelection, refreshSelectionFingerprint, type SelectionState, selectLineAt, selectWordAt, shiftAnchor, shiftSelection, shiftSelectionForFollow, shiftSelectionForViewportResize, shiftSelectionForViewportTranslation, startSelection, updateSelection } from './selection.js';
 import { isDecstbmSafe, SYNC_OUTPUT_SUPPORTED, serializeDiff, supportsDecrqmProbe, supportsExtendedKeys, supportsWin32InputMode, type Terminal, writeDiffToTerminal } from './terminal.js';
 import { CURSOR_HOME, cursorMove, cursorPosition, DISABLE_KITTY_KEYBOARD, DISABLE_MODIFY_OTHER_KEYS, DISABLE_WIN32_INPUT_MODE, ENABLE_KITTY_KEYBOARD, ENABLE_MODIFY_OTHER_KEYS, ENABLE_WIN32_INPUT_MODE, ERASE_SCREEN, ERASE_SCROLLBACK, SGR_RESET } from './termio/csi.js';
-import { DBP, DFE, DISABLE_MOUSE_TRACKING, ENABLE_MOUSE_TRACKING, ENTER_ALT_SCREEN, EXIT_ALT_SCREEN, SHOW_CURSOR } from './termio/dec.js';
+import { DBP, DFE, DISABLE_MOUSE_TRACKING, ENABLE_MOUSE_TRACKING, ENTER_ALT_SCREEN, ESU, EXIT_ALT_SCREEN, SHOW_CURSOR } from './termio/dec.js';
 import { CLEAR_ITERM2_PROGRESS, CLEAR_TAB_STATUS, setClipboard, supportsTabStatus, wrapForMultiplexer } from './termio/osc.js';
 import { decrqm, kittyGraphics, terminalCellSizePixels, terminalWindowSizePixels } from './terminal-querier.js';
 import { TerminalWriteProvider } from './useTerminalNotification.js';
@@ -2668,6 +2668,12 @@ export default class Ink {
       // doesn't declare it, hence the local intersection cast.
       const stdoutWithFd = this.options.stdout as NodeJS.WriteStream & { fd?: number | null };
       const stdoutFd = typeof stdoutWithFd.fd === 'number' ? stdoutWithFd.fd : 1;
+      // Close any open synchronized-output block FIRST (issue #1214): a BSU
+      // whose ESU was lost — a crash or kill mid-frame — freezes the
+      // terminal's display, and the alt-screen exit below would be applied
+      // inside the still-open block, so the freeze would outlive the TUI. A
+      // no-op on terminals that never entered the mode.
+      writeSync(stdoutFd, ESU);
       // The last frame must land on the ALT screen while it is still up:
       // writing it through the async stream would race the synchronous
       // EXIT_ALT_SCREEN below and the frame bytes would arrive AFTER the
