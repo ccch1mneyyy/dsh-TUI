@@ -16,9 +16,18 @@
  * 超限 RELEASE 回放（不吞不重）、P2 过期与宿主注入开关、closed 批量形状
  * 零认领，以及 INITIAL_STATE 全字段不被污染。
  *
+ * T-FIX-01 补强：
+ *  - F-1：gated hold 在任何作废路径（非续接普通文本 / 新 head 替换）按到达顺序
+ *    RELEASE，不再静默丢字节；
+ *  - F-2：单次 read 内形成的 `ESC[`（传输层证据）冷 P2 也可由 P1 claim，跨 read
+ *    累积的 `ESC[` 仍按 D4 需 P2；
+ *  - F-3：scan() 除零文本外必须断言补齐后事件仍触发（mouse / 滚轮 key）；
+ *  - F-4：结构化注入契约断言（App 注入点唯一 + getter + 三态→布尔 + 字段名）。
+ *
  * Run: node --import tsx/esm scripts/verify-mouse-report-fragments.tsx [--controls-only]
  * Exits 1 if any assertion fails (CI gate).
  */
+import { readFileSync } from 'node:fs'
 import {
   INITIAL_STATE,
   parseMultipleKeypresses,
@@ -90,50 +99,176 @@ function check(label: string, ok: boolean, detail = ''): void {
 }
 
 // --- (a)/(b) 2-way / 3-way 切分矩阵 -----------------------------------------
-// 穷举切点，每个切点后调一次 flush。先解析一条完整上报点亮 P2 证据：D4 规定
-// `ESC[`/`[` 形状另需"窗口内出现过真实 kind:'mouse'"才 hold，冷态 cut=2 是 D4
-// 登记的已知边界，不在本矩阵验收内。
+// 穷举切点，每个切点后调一次 flush。全覆盖矩阵用 P2 已点亮状态（D4 规定跨 read
+// 累积的 `ESC[` 仍需 P2）；冷 P2 不再被 warmP2() 静默排除，以显式用例进矩阵：
+// 单次 read 形成的 `ESC[` 由传输层证据（F-2）在 P1 下 claim，跨 read 累积的
+// `ESC[` 仍不 claim、需 P2。
 const SAMPLES = 3
 
-/** 单条上报的切分扫描：泄漏的 2-way 切点 + 3-way 组合（含首次泄漏的文本）。 */
-function scan(state: KeyParseState, report: string): { cuts: number[]; combos: string[] } {
+/** 补齐后必须触发的事件：点击/拖动/释放 → kind:'mouse'；滚轮 → 既有 wheel key 契约。 */
+function completionTriggered(keys: ParsedInput[], wheel: boolean): boolean {
+  return wheel
+    ? keys.some(key => key.kind === 'key' && (key.name === 'wheelup' || key.name === 'wheeldown'))
+    : keys.some(key => key.kind === 'mouse')
+}
+
+/**
+ * 单条上报的切分扫描 F-3：除「补齐后零文本」外，补齐后必须仍有事件触发
+ * （`kind:'mouse'`；滚轮按既有契约是 wheel key）——claim 成功但事件被吞必须红。
+ */
+function scan(state: KeyParseState, report: string, wheel: boolean): { cuts: number[]; combos: string[]; missed: string[] } {
   const cuts: number[] = []
+  const missed: string[] = []
   for (let cut = 1; cut < report.length; cut++) {
-    const text = drive(state, [report.slice(0, cut), null, report.slice(cut)]).text
-    if (text !== '') cuts.push(cut)
+    const run = drive(state, [report.slice(0, cut), null, report.slice(cut)])
+    if (run.text !== '') cuts.push(cut)
+    else if (!completionTriggered(run.keys, wheel)) missed.push(`2-way cut=${cut}`)
   }
   const combos: string[] = []
   for (let a = 1; a < report.length - 1; a++) {
     for (let b = a + 1; b < report.length; b++) {
-      const text = drive(state, [report.slice(0, a), null, report.slice(a, b), null, report.slice(b)]).text
-      if (text !== '') combos.push(`a=${a} b=${b} -> ${JSON.stringify(text)}`)
+      const run = drive(state, [report.slice(0, a), null, report.slice(a, b), null, report.slice(b)])
+      if (run.text !== '') combos.push(`a=${a} b=${b} -> ${JSON.stringify(run.text)}`)
+      else if (!completionTriggered(run.keys, wheel)) missed.push(`3-way a=${a} b=${b}`)
     }
   }
-  return { cuts, combos }
+  return { cuts, combos, missed }
 }
 
 function matrix(): void {
   const state = warmP2()
   let twoTotal = 0
   let twoLeaks = 0
+  let twoMissed = 0
   let threeTotal = 0
   let threeLeaks = 0
+  let threeMissed = 0
   const shape: string[] = []
   for (const [name, report] of REPORTS) {
-    const { cuts, combos } = scan(state, report)
+    const wheel = name === 'wheel'
+    const { cuts, combos, missed } = scan(state, report, wheel)
     twoTotal += report.length - 1
     threeTotal += ((report.length - 2) * (report.length - 1)) / 2
     twoLeaks += cuts.length
     threeLeaks += combos.length
+    twoMissed += missed.filter(item => item.startsWith('2-way')).length
+    threeMissed += missed.filter(item => item.startsWith('3-way')).length
     if (cuts.length > 0 || combos.length > 0) {
       shape.push(`${name}[2-way cut=${cuts.join(',')}；3-way ${combos.length} 组：${combos.slice(0, SAMPLES).join('；')}]`)
     }
   }
-  failures += twoLeaks + threeLeaks
-  console.log(`2-way 切点 ${twoTotal} 个，泄漏 ${twoLeaks} 个`)
-  console.log(`3-way 组合 ${threeTotal} 个，泄漏 ${threeLeaks} 个`)
+  failures += twoLeaks + threeLeaks + twoMissed + threeMissed
+  console.log(`2-way 切点 ${twoTotal} 个，泄漏 ${twoLeaks} 个，补齐后未触发事件 ${twoMissed} 个`)
+  console.log(`3-way 组合 ${threeTotal} 个，泄漏 ${threeLeaks} 个，补齐后未触发事件 ${threeMissed} 个`)
   console.log(`各形状泄漏面 -> ${shape.join(' ')}`)
-  console.log(`切分矩阵失败切点合计 ${twoLeaks + threeLeaks}（DESIGN §0.6.2 验收线 ≥26；修复前必红）`)
+  console.log(`切分矩阵失败切点合计 ${twoLeaks + threeLeaks + twoMissed + threeMissed}（DESIGN §0.6.2 验收线 ≥26；修复前必红）`)
+
+  // --- 冷 P2 显式矩阵（F-2/F-3）---------------------------------------------
+  // 单次 read `ESC[`：两个字节在同一次 read 内由 tokenizer 缓冲形成（进入本次
+  // 调用前缓冲为空）——人类两次击键不会落在同一 read，故这是协议头形态证据，
+  // P1 即可 claim。跨 read 累积的 `ESC[` 不在同一次 read 内形成，仍按 D4 需 P2。
+  const cold = withReporting(true)
+  for (const [name, report] of REPORTS) {
+    const wheel = name === 'wheel'
+    const tail = report.slice(2)
+    const eventName = wheel ? 'wheel key' : 'mouse'
+    const coldHead = drive(cold, [`${ESC}[`, null])
+    check(
+      `冷 P2 单 read ESC[ 由传输证据 claim（${name}）`,
+      coldHead.text === '' && coldHead.state.mouseTailHold === '[',
+      JSON.stringify(coldHead.text),
+    )
+    const coldDone = drive(coldHead.state, [tail])
+    check(
+      `冷 P2 单 read ESC[ 补齐后触发 ${eventName}（${name}）`,
+      coldDone.text === '' && completionTriggered(coldDone.keys, wheel),
+      JSON.stringify(coldDone.text),
+    )
+    const crossHead = drive(cold, [ESC, '[', null])
+    check(
+      `冷 P2 跨 read ESC[ 仍不 claim（需 P2，${name}）`,
+      crossHead.text === '[' && crossHead.state.mouseTailHold === undefined,
+      JSON.stringify(crossHead.text),
+    )
+    const crossTail = drive(crossHead.state, [tail])
+    check(
+      `冷 P2 跨 read ESC[ 补齐后仍落文本（D4 登记边界，${name}）`,
+      crossHead.text + crossTail.text === `[${tail}`,
+      JSON.stringify(crossHead.text + crossTail.text),
+    )
+    const warmCrossHead = drive(warmP2(), [ESC, '[', null])
+    check(
+      `P2 点亮后跨 read ESC[ 可由 P2 claim（${name}）`,
+      warmCrossHead.text === '' && warmCrossHead.state.mouseTailHold === '[',
+      JSON.stringify(warmCrossHead.text),
+    )
+    const warmCrossDone = drive(warmCrossHead.state, [tail])
+    check(
+      `P2 点亮后跨 read ESC[ 补齐触发 ${eventName}（${name}）`,
+      warmCrossDone.text === '' && completionTriggered(warmCrossDone.keys, wheel),
+      JSON.stringify(warmCrossDone.text),
+    )
+  }
+}
+
+// --- (a2) 非续接/替换路径必须 RELEASE（F-1，Critical）------------------------
+// gated hold 在任何作废路径都必须按到达顺序回放，不得静默丢弃；legacy hold 保持
+// 既有语义。四个实测反例 + 两条「新 head 替换旧 hold」路径。
+function nonContinuableRelease(): void {
+  const warmed = warmP2()
+  const typed = drive(warmed, ['[', 't', 'e', 'x', 't', ']'])
+  check('F-1 逐字 [text] 非续接文本 RELEASE 不丢字节', typed.text === '[text]', JSON.stringify(typed.text))
+
+  const escBracket = drive(warmed, [ESC, null, '[', 'a'])
+  check('F-1 Esc→flush→[→a 非续接时 [ 不丢', escBracket.text === '[a', JSON.stringify(escBracket.text))
+
+  const bare = drive(warmed, ['[<', 'a'])
+  check('F-1 hold [< 遇普通文本 RELEASE 不丢', bare.text === '[<a', JSON.stringify(bare.text))
+
+  const digits = drive(warmed, ['[<35;10', 'x'])
+  check('F-1 hold [<35;10 遇普通文本 RELEASE 不丢', digits.text === '[<35;10x', JSON.stringify(digits.text))
+  const afterRelease = drive(digits.state, ['y'])
+  check('F-1 RELEASE 后普通键入不吞不重', afterRelease.text === 'y', JSON.stringify(afterRelease.text))
+
+  // (b) sequence 路径新 head 替换旧 hold：旧字节必须先回放。
+  const held = drive(warmed, ['[<35;10'])
+  check('F-1a 前置 hold 建立（[<35;10）', held.text === '' && held.state.mouseTailHold === '[<35;10', JSON.stringify(held.text))
+  const replacedSequence = drive(held.state, [`${ESC}[<`, null])
+  check(
+    'F-1 sequence 新 head 替换旧 hold 时先回放旧字节',
+    replacedSequence.text === '[<35;10' && replacedSequence.state.mouseTailHold === '[<',
+    JSON.stringify(replacedSequence.text),
+  )
+  const sequenceDone = drive(replacedSequence.state, ['35;99;99M'])
+  check(
+    'F-1 新 head 续接后仍合成 mouse',
+    sequenceDone.text === '' && sequenceDone.keys.some(key => key.kind === 'mouse'),
+    JSON.stringify(sequenceDone.text),
+  )
+
+  // (c) text 路径新 head 替换旧 hold：旧字节与新 head 字节都不得丢。
+  const replacedText = drive(held.state, ['[<', 'x'])
+  check(
+    'F-1 text 新 head 替换旧 hold 时回放旧字节且后续不吞',
+    replacedText.text === '[<35;10[<x',
+    JSON.stringify(replacedText.text),
+  )
+
+  // (d) 其它一般作废（完整按键序列）：gated hold 同样 RELEASE，不静默丢。
+  const arrow = drive(warmed, ['[<35', `${ESC}[A`])
+  check(
+    'F-1 一般作废（完整按键序列）同样 RELEASE 不丢',
+    arrow.text === '[<35' && arrow.keys.some(key => key.kind === 'key' && key.name === 'up'),
+    JSON.stringify(arrow.text),
+  )
+
+  // (e) 协议边界（完整鼠标上报）仍按既有语义作废 hold：死报告的字节不得回放成文本。
+  const completeReport = drive(warmed, ['[<35', CLICK])
+  check(
+    'F-1 协议边界（完整上报）作废 hold 且不产生文本',
+    completeReport.text === '' && completeReport.keys.some(key => key.kind === 'mouse'),
+    JSON.stringify(completeReport.text),
+  )
 }
 
 // --- (c) 反吞噬表 ------------------------------------------------------------
@@ -192,19 +327,19 @@ function holdBounds(): void {
 /** 假时钟起点（任意单调值）；调用方负责保存并恢复真实 Date.now。 */
 const FAKE_EPOCH = 8_000_000
 
-/** 冷 P2 与 P2 过期：`ESC[` 维持既有 Esc+[ 语义；`[<`/`ESC[<` 只依赖 P1。 */
+/** 冷 P2 与 P2 过期：跨 read 累积的 `ESC[` 仍需 P2；`[<`/`ESC[<` 只依赖 P1。 */
 function gatedColdAndExpiry(): void {
   const originalNow = Date.now
   let now = FAKE_EPOCH
   Date.now = () => now
   try {
-    // 冷 P2：注入 true 但没有近期真实上报 —— `[<`/`ESC[<` 仍可由 P1 hold，
-    // `ESC[` 则必须放过（与字面 Esc+[ 的既有语义一致）。
-    const coldEscSeq = drive(withReporting(true), [`${ESC}[`, null])
+    // 冷 P2：注入 true 但没有近期真实上报 —— `[<`/`ESC[<` 仍可由 P1 hold；
+    // 跨 read 累积的 `ESC[` 没有「单次 read 传输证据」，仍必须放过（D4）。
+    const coldAccumulated = drive(withReporting(true), [ESC, '[', null])
     check(
-      'gated 冷 P2 时 ESC[ 不 hold（不放宽既有 Esc+[ 语义）',
-      coldEscSeq.text === '[' && coldEscSeq.state.mouseTailHold === undefined,
-      JSON.stringify(coldEscSeq.text),
+      'gated 冷 P2 时跨 read 累积的 ESC[ 不 hold（仍需 P2）',
+      coldAccumulated.text === '[' && coldAccumulated.state.mouseTailHold === undefined,
+      JSON.stringify(coldAccumulated.text),
     )
     const coldEscThenBracket = drive(withReporting(true), [ESC, null, '['])
     check(
@@ -218,12 +353,13 @@ function gatedColdAndExpiry(): void {
       coldBracketLess.text === '' && coldBracketLess.state.mouseTailHold === '[<',
       JSON.stringify(coldBracketLess.text),
     )
-    // P2 过期（>MOUSE_REPORT_ACTIVITY_MS）：`ESC[` 回到冷态；`[<` 仍只依赖 P1。
+    // P2 过期（>MOUSE_REPORT_ACTIVITY_MS）：跨 read 的 `ESC[` 回到冷态；
+    // `[<` 仍只依赖 P1。
     const warmed = warmP2()
     now += 5_001 // 越过 MOUSE_REPORT_ACTIVITY_MS（5s P2 窗口，ADR-0007 D2）
-    const expired = drive(warmed, [`${ESC}[`, null])
+    const expired = drive(warmed, [ESC, '[', null])
     check(
-      'P2 过期后 ESC[ 不 hold（回到既有语义）',
+      'P2 过期后跨 read 累积的 ESC[ 不 hold（回到既有语义）',
       expired.text === '[' && expired.state.mouseTailHold === undefined,
       JSON.stringify(expired.text),
     )
@@ -338,9 +474,57 @@ function controls(): void {
       INITIAL_STATE.mouseTailHoldAt === undefined &&
       INITIAL_STATE.mouseTailHoldReleasable === undefined &&
       INITIAL_STATE.lastMouseReportAt === undefined &&
-      INITIAL_STATE.mouseReportingActive === undefined,
+      INITIAL_STATE.mouseReportingActive === undefined &&
+      INITIAL_STATE.mouseHeadSingleRead === undefined,
   )
-  check('缺省（未注入证据）等同 provenance=false', drive(INITIAL_STATE, [ESC, null, '[']).text === '[')
+  // F-8 标签修正：缺省（absent）只在 Esc+[ 形态上等同 provenance=false；`[<`+数字
+  // 仍走 base 的 legacy hold（releasable 非 true、到期静默丢弃）。
+  check('缺省（未注入证据）时 Esc+[ 形态等同 closed（不放宽既有语义）', drive(INITIAL_STATE, [ESC, null, '[']).text === '[')
+  const legacySeed = drive(INITIAL_STATE, ['[<35;10'])
+  check(
+    '缺省（未注入证据）时 [<+数字仍进入 legacy hold（releasable 非 true）',
+    legacySeed.text === '' && legacySeed.state.mouseTailHold === '[<35;10' && legacySeed.state.mouseTailHoldReleasable !== true,
+    JSON.stringify(legacySeed.text),
+  )
+  const legacyDone = drive(legacySeed.state, [';10M'])
+  check(
+    '缺省（未注入证据）时 legacy hold 仍可续接为 mouse',
+    legacyDone.text === '' && legacyDone.keys.some(key => key.kind === 'mouse'),
+    JSON.stringify(legacyDone.text),
+  )
+}
+
+// --- (g) 结构化注入契约（F-4）------------------------------------------------
+// 端到端 App 渲染级注入回归留 v2（见 KNOWN-ISSUES.md）；本组把契约的结构面钉住：
+// 注入点唯一、真源 getter 名、三态→布尔映射、字段名与只读透传。改名/退化/缺省
+// 翻转必须红。
+function injectionContract(): void {
+  const repoRoot = new URL('..', import.meta.url)
+  const appSource = readFileSync(new URL('src/ink/components/App.tsx', repoRoot), 'utf8')
+  const inkSource = readFileSync(new URL('src/ink/ink.tsx', repoRoot), 'utf8')
+  const parserSource = readFileSync(new URL('src/ink/parse-keypress.ts', repoRoot), 'utf8')
+
+  const injectionLines = appSource.split('\n').filter(line => line.includes('mouseReportingActive:'))
+  check(
+    'F-4 App 注入点唯一（mouseReportingActive 赋值恰好 1 处）',
+    injectionLines.length === 1,
+    `count=${injectionLines.length}`,
+  )
+  const injection = injectionLines[0] ?? ''
+  check(
+    'F-4 注入映射三态→布尔（renderer?.isAltScreenMouseTracking === true）',
+    injection.includes('isAltScreenMouseTracking') && /===\s*true/.test(injection),
+    injection.trim(),
+  )
+  check(
+    'F-4 ink.tsx getter 名 isAltScreenMouseTracking 唯一且返回 boolean',
+    (inkSource.match(/get isAltScreenMouseTracking\(\): boolean/g) ?? []).length === 1,
+  )
+  check('F-4 KeyParseState 字段名为 mouseReportingActive 且可选 boolean', /mouseReportingActive\?: boolean/.test(parserSource))
+  check(
+    'F-4 解析器只读透传注入字段（newState 原样携带）',
+    parserSource.includes('mouseReportingActive: prevState.mouseReportingActive'),
+  )
 }
 
 const controlsOnly = process.argv.includes('--controls-only')
@@ -348,12 +532,14 @@ if (controlsOnly) {
   controls()
 } else {
   matrix()
+  nonContinuableRelease()
   antiSwallow()
   holdBounds()
   gatedColdAndExpiry()
   gatedHeads()
   gatedOverflow()
   gatedInjectionToggle()
+  injectionContract()
   controls()
 }
 

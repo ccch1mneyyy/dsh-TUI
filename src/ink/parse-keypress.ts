@@ -897,11 +897,13 @@ export type KeyParseState = {
    * Pending prefix of an SGR mouse report that fragmented mid-sequence
    * (ConPTY split a report across reads and App's escape timer flushed the
    * buffered ESC prefix). Holds at most one incomplete `[<btn;col;row` tail;
-   * the next chunk completes it (resynthesis) or it is discarded — typed
-   * `[`-led text never matches the guard pattern and passes through.
+   * the next chunk completes it (resynthesis) or it is invalidated — typed
+   * `[`-led text never matches the guard pattern and passes through. A gated
+   * hold (mouseTailHoldReleasable === true) is RELEASED as ordinary keys on
+   * invalidation (ADR-0007 D5); a legacy hold keeps the pre-gate discard.
    * A hold never survives evidence that its report died: report bytes are
    * contiguous on the wire, so a fresh ESC sequence, a complete mouse
-   * report, or text that cannot continue the pattern all discard it.
+   * report, or text that cannot continue the pattern all invalidate it.
    */
   mouseTailHold?: string
   /**
@@ -935,6 +937,16 @@ export type KeyParseState = {
    * callers that never inject the gate) keep the pre-gate silent discard.
    */
   mouseTailHoldReleasable?: boolean
+  /**
+   * Transport-level evidence for the ambiguous 2-byte `ESC[` head (ADR-0007
+   * D4 addendum): `ESC[` when BOTH bytes were buffered inside ONE non-flush
+   * read starting from an empty tokenizer buffer. Human two-stroke typing
+   * (Esc, then `[`) cannot land in one read, so this is protocol-head shape
+   * evidence that grants the P1 claim without P2; the head accumulated across
+   * reads leaves this unset and still needs P2. Parser-internal only — App
+   * never injects it. Consumed (and cleared) by the next parse call.
+   */
+  mouseHeadSingleRead?: string
   // Internal tokenizer instance
   _tokenizer?: Tokenizer
 }
@@ -1011,6 +1023,11 @@ export function parseMultipleKeypresses(
   if (win32EscFlushedAt !== undefined && now - win32EscFlushedAt >= WIN32_INPUT_GRACE_MS) {
     win32EscFlushedAt = undefined
   }
+  // Tracks the win32 ESC-flush recovery below: a reconstructed `ESC` byte is
+  // NOT transport evidence for the single-read `ESC[` claim (F-2) — the ESC
+  // came from an earlier read's flush, i.e. exactly the two-stroke typing the
+  // P2 gate exists for.
+  let win32EscPrepended = false
   if (inputString && win32EscFlushedAt !== undefined) {
     // Only the immediate continuation of an actual ESC flush may acquire
     // a missing introducer. Never capture arbitrary '['-led user text.
@@ -1018,7 +1035,10 @@ export function parseMultipleKeypresses(
       prevState.mode !== 'IN_PASTE' && tokenizer.buffer() === '' &&
       /^\[(?:[\d;]|$)/.test(inputString) &&
       (WIN32_INPUT_BODY_PREFIX_RE.test('\x1b' + inputString) || win32HoldAllowed)
-    ) inputString = '\x1b' + inputString
+    ) {
+      inputString = '\x1b' + inputString
+      win32EscPrepended = true
+    }
     win32EscFlushedAt = undefined
   }
 
@@ -1047,9 +1067,21 @@ export function parseMultipleKeypresses(
     tokenizer.reset()
     deferFlush = false
   }
+  // Tokenizer buffer entering THIS call — captured before feed so the
+  // single-read `ESC[` evidence below cannot be granted to a head whose ESC
+  // or `[` was buffered by an earlier call.
+  const pendingBeforeFeed = tokenizer.buffer()
   const tokens = isFlush
     ? deferFlush ? [] : tokenizer.flush()
     : tokenizer.feed(inputString)
+  // ADR-0007 D4 addendum (F-2): grant the ambiguous `ESC[` head P1-only claim
+  // when both bytes were buffered inside this one non-flush read from an empty
+  // buffer. Set here, consumed by the flush call that emits it, then cleared
+  // (a flush feeds nothing). Cross-read accumulation leaves it unset → P2.
+  const mouseHeadSingleRead =
+    !isFlush && !win32EscPrepended && pendingBeforeFeed === '' && tokenizer.buffer() === '\x1b['
+      ? '\x1b['
+      : undefined
   if (isFlush && !inPaste && tokens.some(token => token.value === '\x1b')) {
     win32EscFlushedAt = now
   }
@@ -1115,10 +1147,15 @@ export function parseMultipleKeypresses(
   /**
    * Decide whether `body` (a token with any leading ESC stripped) is an SGR
    * report head this parser may hold. `undefined` = ordinary input (no claim);
-   * otherwise `releasable` says whether expiry/overflow RELEASES the bytes
+   * otherwise `releasable` says whether invalidation RELEASES the bytes
    * (gated claim) or silently discards them (legacy shape-specific claim).
+   * `singleReadHead` = the `ESC[` body was formed inside ONE read (transport
+   * evidence, ADR-0007 D4 addendum) and therefore counts as P1 evidence.
    */
-  const claimSgrHead = (body: string): { releasable: boolean } | undefined => {
+  const claimSgrHead = (
+    body: string,
+    singleReadHead = false,
+  ): { releasable: boolean } | undefined => {
     if (mouseClaim === 'closed') return undefined
     if (SGR_MOUSE_PREFIX_RE.test(body))
       return { releasable: mouseClaim === 'gated' }
@@ -1127,10 +1164,31 @@ export function parseMultipleKeypresses(
     if (mouseClaim !== 'gated') return undefined
     if (body === '[<') return { releasable: true }
     // `[`/`ESC[` (D4): without a recent real report this stays ordinary text
-    // (the pre-fix Esc+`[` behavior), so return "no claim", not a legacy hold.
-    if (body === '[') return mouseReportActivityLive() ? { releasable: true } : undefined
+    // (the pre-fix Esc+`[` behavior) unless both bytes arrived in one read —
+    // human two-stroke typing cannot do that (F-2).
+    if (body === '[')
+      return mouseReportActivityLive() || singleReadHead ? { releasable: true } : undefined
     return undefined
   }
+
+  /**
+   * Single invalidation/RELEASE entry (F-6): a gated hold is replayed as
+   * ordinary keys in arrival order (ADR-0007 D5); a legacy hold keeps the
+   * pre-gate silent discard. Every invalidation path outside the protocol
+   * boundaries (complete event / win32 record / terminal response / paste)
+   * funnels through here.
+   */
+  const releaseHeldMouseHead = (): void => {
+    if (mouseTailHold === undefined) return
+    if (mouseTailHoldReleasable === true) keys.push(parseKeypress(mouseTailHold))
+    clearMouseTailHold()
+  }
+  /** Hard deadline + gated size bound, checked at the top of EVERY call. */
+  const shouldReleaseHold = (): boolean =>
+    mouseTailHold !== undefined &&
+    (now - (mouseTailHoldAt ?? 0) > MOUSE_TAIL_HOLD_GRACE_MS ||
+      (mouseTailHoldReleasable === true &&
+        mouseTailHold.length > MOUSE_HEAD_HOLD_MAX_LENGTH))
 
   // Hard deadline + size bound, checked at the top of EVERY call — not only on
   // flush. Continuous input keeps cancelling and re-arming App's 50ms flush
@@ -1138,15 +1196,7 @@ export function parseMultipleKeypresses(
   // its grace would then still merge a late `;34M` (or plain digits) into a
   // phantom report. A gated hold RELEASES its bytes as ordinary keys instead
   // of dropping them (ADR-0007 D5); legacy holds keep the pre-gate discard.
-  if (
-    mouseTailHold !== undefined &&
-    ((mouseTailHoldReleasable === true &&
-      mouseTailHold.length > MOUSE_HEAD_HOLD_MAX_LENGTH) ||
-      now - (mouseTailHoldAt ?? 0) > MOUSE_TAIL_HOLD_GRACE_MS)
-  ) {
-    if (mouseTailHoldReleasable === true) keys.push(parseKeypress(mouseTailHold))
-    clearMouseTailHold()
-  }
+  if (shouldReleaseHold()) releaseHeldMouseHead()
 
   // Mutable token queue: a text token that starts with the completion of
   // the CURRENT hold but carries trailing bytes is split in-place — the
@@ -1225,7 +1275,11 @@ export function parseMultipleKeypresses(
               keys.push(mouse)
             } else {
               const head = token.value.replace(/^\x1b/, '')
-              const claim = claimSgrHead(head)
+              // F-2 transport evidence: `ESC[` buffered in ONE read (see
+              // KeyParseState.mouseHeadSingleRead) grants the P1-only claim.
+              const singleReadHead =
+                token.value === '\x1b[' && prevState.mouseHeadSingleRead === token.value
+              const claim = claimSgrHead(head, singleReadHead)
               if (
                 claim !== undefined &&
                 (!claim.releasable || head.length <= MOUSE_HEAD_HOLD_MAX_LENGTH)
@@ -1239,18 +1293,22 @@ export function parseMultipleKeypresses(
                 // A fresh head REPLACES any stale hold instead of appending:
                 // the new report's arrival proves the old one's tail never
                 // came (`[<0;18` + `[<64;…` concatenated parses as garbage).
+                // F-1: a gated old hold is RELEASED first so its bytes are
+                // neither dropped nor ordered after the new head's bytes.
+                releaseHeldMouseHead()
                 mouseTailHold = head
                 mouseTailHoldAt = now
                 mouseTailHoldReleasable = claim.releasable
               } else if (claim !== undefined && claim.releasable) {
                 // Over the gated 64B bound: release immediately — never hold,
                 // never drop (ADR-0007 D5).
-                clearMouseTailHold()
+                releaseHeldMouseHead()
                 keys.push(parseKeypress(head))
               } else {
                 // Ordinary key sequence (arrows, function keys, …) — still an
-                // ESC protocol start, so a held head's report is dead.
-                clearMouseTailHold()
+                // ESC protocol start, so a held head's report is dead. F-1:
+                // a gated hold is RELEASED in arrival order first.
+                releaseHeldMouseHead()
                 keys.push(parseKeypress(token.value))
               }
             }
@@ -1356,7 +1414,9 @@ export function parseMultipleKeypresses(
           // buffered ESC prefix): hold it for the next chunk instead of
           // leaking protocol bytes into the prompt. A fresh head REPLACES any
           // stale hold — two reports never concatenate — so the deadline
-          // restarts from this capture.
+          // restarts from this capture. F-1: a gated old hold is RELEASED
+          // first so its bytes are replayed in arrival order, not dropped.
+          releaseHeldMouseHead()
           mouseTailHold = token.value
           mouseTailHoldAt = now
           mouseTailHoldReleasable = claim.releasable
@@ -1366,14 +1426,7 @@ export function parseMultipleKeypresses(
           // arrival order (ADR-0007 D5) so no user input is dropped; legacy
           // holds keep the pre-gate silent discard. This token then passes
           // through as ordinary typing.
-          if (
-            mouseTailHold !== undefined &&
-            mouseTailHoldReleasable === true &&
-            combined.length > MOUSE_HEAD_HOLD_MAX_LENGTH
-          ) {
-            keys.push(parseKeypress(mouseTailHold))
-          }
-          clearMouseTailHold()
+          releaseHeldMouseHead()
           keys.push(parseKeypress(token.value))
         }
       }
@@ -1479,6 +1532,10 @@ export function parseMultipleKeypresses(
     mouseTailHold,
     mouseTailHoldAt,
     mouseTailHoldReleasable,
+    // Parser-internal transport evidence: set by the read that buffered the
+    // head, consumed by the next call (the flush that emits `ESC[`), then
+    // cleared because that call feeds nothing.
+    mouseHeadSingleRead,
     _tokenizer: tokenizer,
   }
 
