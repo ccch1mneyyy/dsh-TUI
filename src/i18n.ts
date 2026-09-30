@@ -1194,11 +1194,13 @@ const dict = {
   'question-direct-input': { zh: '直接输入…', en: 'Type directly…' },
   'question-paste-not-text': { zh: '剪贴板内容是图片或文件，无法作为文字粘贴', en: 'Clipboard holds an image or file — not pastable as text' },
   'question-paste-too-long': { zh: '粘贴内容过长（最多 {{n}} 个字符），请精简后再试', en: 'Pasted content is too long (max {{n}} characters) — trim it and try again' },
+  'question-body-folded': { zh: '… 共 {{total}} 行，已折叠 {{hidden}} 行', en: '… {{total}} lines total, {{hidden}} folded' },
 
   // ── components/approvals/ApprovalPanel.tsx ──────────────────────────
   'approval-waiting': { zh: ' ⏳ 等待审批 · {{tool}} ', en: ' Awaiting approval · {{tool}} ' },
   'approval-external-hint': { zh: '外部来源：该审批未关联当前会话的活跃工具调用，命令文本可能被伪造，请核实后再决定', en: 'External origin: this approval is not tied to a live tool call of this session — the command text may be forged; verify before deciding' },
   'approval-proceed': { zh: '要允许这次操作吗？', en: 'Allow this operation?' },
+  'approval-folded': { zh: '… 共 {{total}} 行，已折叠 {{hidden}} 行', en: '… {{total}} lines total, {{hidden}} folded' },
   'approval-yes': { zh: '允许（仅本次）', en: 'Yes, allow once' },
   'approval-no': { zh: '拒绝', en: 'No' },
   'approval-hint': { zh: '↑/↓ 选择 · Enter 确认 · Esc 拒绝', en: '↑/↓ select · Enter confirm · Esc reject' },

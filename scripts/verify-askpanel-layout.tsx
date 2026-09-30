@@ -222,5 +222,69 @@ for (const [name, rows] of [['短会话', shortRows], ['长高录', tallRows]] a
   await sleep(100)
 }
 
+/**
+ * 场景 5（issue #1212 姊妹核查）：30 行问题正文在 80×24 的矮帧里必须折叠成
+ * 「前导行 + 计数标记」，把决策行（焦点选项、内联输入、提示行）留在可见
+ * 视口内。此前正文不计预算：正文越长，选项越被挤出帧底（alt-screen 没有
+ * scrollback 可翻），实测选项行与正文行还会互相覆盖。
+ */
+{
+  const { stdout, stdin, screen } = makeHarness(80, 24)
+  const store = new QuestionStore()
+  const app = await render(
+    React.createElement(Chat, { channel: makeChannel(shortRows), questionStore: store as never, onExit: () => {} }),
+    { stdout, stdin, stderr: stdout, exitOnCtrlC: false, patchConsole: false },
+  )
+  await settle(() => screen().trim().length > 0)
+  const longBody = Array.from({ length: 30 }, (_, i) => `问题正文第 ${i + 1} 行`).join('\n')
+  void store.ask({ questions: [{ ...EXACT_QUESTION, question: longBody }] } as never)
+  const longRequired = ['已折叠', '宅家打游戏/看剧', '自定义回答', '↑/↓ 选择']
+  let shot = ''
+  await settled(() => { shot = screen(); return longRequired.every(part => shot.includes(part)) })
+  const missing = longRequired.filter(part => !shot.includes(part))
+  const unfolded = shot.includes('问题正文第 30 行')
+  if (missing.length === 0 && !unfolded) {
+    console.log('PASS  长正文折叠（80x24：正文折叠、决策行在视口内）')
+  } else {
+    failures++
+    console.log(`FAIL  长正文折叠（80x24）— 缺: ${missing.join(' / ')}${unfolded ? ' / 第 30 行未折叠' : ''}`)
+  }
+  app.unmount()
+  // 固定窗:pacing unmount 后输出 flush 无可观测完成条件。
+  await sleep(100)
+}
+
+/**
+ * 场景 6（issue #1212 姊妹核查）：detail（模型给的补充说明，plan-review 之外的
+ * 自由文本）同样是弹性正文。此前它只被计入预算、从不折叠：30 行 detail 在
+ * 80×24 定高帧里会把选项、内联输入与提示行整段挤出可见视口（alt-screen 无
+ * scrollback 可翻），与场景 5 是同一条「决策行掉出屏幕」的路径。
+ */
+{
+  const { stdout, stdin, screen } = makeHarness(80, 24)
+  const store = new QuestionStore()
+  const app = await render(
+    React.createElement(Chat, { channel: makeChannel(shortRows), questionStore: store as never, onExit: () => {} }),
+    { stdout, stdin, stderr: stdout, exitOnCtrlC: false, patchConsole: false },
+  )
+  await settle(() => screen().trim().length > 0)
+  const longDetail = Array.from({ length: 30 }, (_, i) => `补充说明第 ${i + 1} 行`).join('\n')
+  void store.ask({ questions: [{ ...EXACT_QUESTION, question: '短问题？', detail: longDetail }] } as never)
+  const detailRequired = ['已折叠', '宅家打游戏/看剧', '自定义回答', '↑/↓ 选择']
+  let shot = ''
+  await settled(() => { shot = screen(); return detailRequired.every(part => shot.includes(part)) })
+  const missing = detailRequired.filter(part => !shot.includes(part))
+  const unfolded = shot.includes('补充说明第 30 行')
+  if (missing.length === 0 && !unfolded) {
+    console.log('PASS  长 detail 折叠（80x24：detail 折叠、决策行在视口内）')
+  } else {
+    failures++
+    console.log(`FAIL  长 detail 折叠（80x24）— 缺: ${missing.join(' / ')}${unfolded ? ' / 第 30 行未折叠' : ''}`)
+  }
+  app.unmount()
+  // 固定窗:pacing unmount 后输出 flush 无可观测完成条件。
+  await sleep(100)
+}
+
 console.log(failures === 0 ? '\nALL PASS' : `\n${failures} FAILURES`)
 process.exit(failures === 0 ? 0 : 1)

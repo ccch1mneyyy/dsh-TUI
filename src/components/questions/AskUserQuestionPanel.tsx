@@ -39,6 +39,7 @@ import { actionMatches, comboDisplay, effectiveComboDisplay, primaryComboString 
 import { flattenPasteInline } from '../../dsh-adapter/sanitize.js'
 import { readClipboard, type ClipboardRead } from '../../utils/clipboard.js'
 import { listWindow } from '../listWindow.js'
+import { foldedRows, foldLines, wrapText } from '../foldLines.js'
 
 /** Unmodified arrows switch questions; Ctrl/Alt/Super/Shift stay caret motion. */
 function isPlainArrow(key: { ctrl?: boolean; meta?: boolean; super?: boolean; shift?: boolean }): boolean {
@@ -160,7 +161,7 @@ export function AskUserQuestionPanel({
   const options = question.options ?? []
   const multiSelect = question.multiSelect === true
   const hideCustomInput = question.hideCustomInput === true && options.length > 0
-  const { rows: terminalRows } = useTerminalSize()
+  const { rows: terminalRows, columns: terminalColumns } = useTerminalSize()
   /** Rows: the real options plus the inline input row at the tail. */
   const rowCount = options.length + (hideCustomInput ? 0 : 1)
   // A saved draft wins over the wizard's default selection (returning to a
@@ -240,15 +241,38 @@ export function AskUserQuestionPanel({
   const inputFocused = !hideCustomInput && focusIndex === options.length
   // Chat chrome + panel scaffolding consume twelve rows before the option
   // list: status line, outer/divider/question/list/hint spacing and content.
-  // Optional header/detail/input/error rows are charged explicitly. Long
-  // lists then use fixed one/two-line rows so listWindow's budget is exact;
-  // short questionnaires retain their existing wrapped presentation.
-  const detailRows = question.detail === undefined ? 0 : question.detail.split('\n').length + 1
-  const reservedRows = 12
+  // Optional header/input/error rows are charged explicitly. The question body
+  // and the detail are both elastic like the approval panel's command body
+  // (issue #1212): together they replace the single question row the twelve
+  // assumed and fold to their leading rows plus a count marker when the frame
+  // is too short — a thirty-row question (or detail) must not push the options
+  // (the decision rows) off the fixed-height fullscreen frame. Long lists then
+  // use fixed one/two-line rows so listWindow's budget is exact; short
+  // questionnaires retain their existing wrapped presentation.
+  const fixedRows = 12
     + (question.header === undefined ? 0 : 1)
-    + detailRows
     + (hideCustomInput ? 0 : 1)
     + (error === null ? 0 : 2)
+  const bodyLines = React.useMemo(
+    () => wrapText(question.question, terminalColumns - 4),
+    [question.question, terminalColumns],
+  )
+  const detailLines = React.useMemo(
+    () => (question.detail === undefined ? [] : wrapText(question.detail, terminalColumns - 4)),
+    [question.detail, terminalColumns],
+  )
+  // Rows the elastic pair may take: the frame minus the scaffolding the twelve
+  // counted (-1: the body replaces its single assumed row) minus the four rows
+  // the option list keeps for its windowed focus. The body — the row the user
+  // has to read to answer at all — folds first; the detail takes what is left
+  // and keeps its margin plus its marker whenever it has content at all.
+  const elasticRows = Math.max(terminalRows - fixedRows + 1 - 4, 1)
+  const detailFloor = detailLines.length === 0 ? 0 : 2
+  const bodyView = foldLines(bodyLines, Math.max(elasticRows - detailFloor, 1))
+  const bodyRows = Math.max(foldedRows(bodyView), 1)
+  const detailView = foldLines(detailLines, Math.max(elasticRows - bodyRows - 1, 0))
+  const detailRows = detailView.shown.length === 0 && !detailView.marker ? 0 : foldedRows(detailView) + 1
+  const reservedRows = fixedRows - 1 + bodyRows + detailRows
   const optionBudget = Math.max(terminalRows - reservedRows, 2)
   const optionHeights = options.map(option => option.description === undefined ? 1 : 2)
   const windowedOptions = optionHeights.reduce((sum, height) => sum + height, 0) > optionBudget
@@ -789,15 +813,26 @@ export function AskUserQuestionPanel({
           </Text>
         )}
         <Text bold wrap="wrap">
-          {question.question}
+          {bodyView.shown.join('\n')}
         </Text>
-        {question.detail !== undefined && (
+        {bodyView.marker && (
+          <Text dimColor>
+            {t('question-body-folded', { total: String(bodyLines.length), hidden: String(bodyView.folded) })}
+          </Text>
+        )}
+        {detailRows > 0 && (
           <Box flexDirection="column" marginTop={1}>
-            {question.detail.split('\n').map((line, index) => (
+            {detailView.shown.map((line, index) => (
               <Text key={index} dimColor italic wrap="wrap">
                 {line}
               </Text>
             ))}
+            {detailView.marker && (
+              // The detail shares the body's marker text (issue #1212).
+              <Text dimColor>
+                {t('question-body-folded', { total: String(detailLines.length), hidden: String(detailView.folded) })}
+              </Text>
+            )}
           </Box>
         )}
       </Box>
