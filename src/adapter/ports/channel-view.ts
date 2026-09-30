@@ -58,6 +58,12 @@ export interface ChatRow {
   subagent?: SubagentRow
   /** Present on `job` rows; the background-job state snapshot. */
   job?: JobRow
+  /** Present on `job` rows that share a run of ≥2 consecutive cards: the
+   *  group decoration (chain rail + fold summary). Render-derived state:
+   *  written only onto shallow copies in the transcript's row pre-pass
+   *  (rows may arrive frozen from the session projection), never by the
+   *  projection and never on the shared row objects. */
+  jobGroup?: JobGroupRow
   /** Event wall-clock time (transcript-mode metadata, assistant rows). */
   time?: number
   /** Present on `reasoning` rows once settled: thinking wall-clock duration. */
@@ -246,6 +252,44 @@ export interface JobRow {
   finishedAt?: number
   /** Mirrored output tail feeding the card's three-line waterfall. */
   outputLines: readonly BackgroundJobOutputLine[]
+}
+
+/**
+ * Group decoration for a run of consecutive background-job cards.
+ *
+ * A batch of `run_in_background` calls lands as N adjacent cards (the job
+ * projection pushes the whole roster in one sync) and each one pays a blank
+ * separator line — a pile of near-identical rows for work nobody reads card
+ * by card. The transcript therefore reads ≥2 adjacent job rows as ONE group:
+ * members drop the blank line between them, share a chain rail on the left,
+ * and the group header summarizes the run; once every member settled the
+ * whole group folds into that header line alone (click / Ctrl+O expands).
+ *
+ * Derived state: it rides a per-pass shallow COPY of the row (the shared
+ * rows may arrive frozen from the session projection) so BOTH the renderer
+ * and the height signature can read it, and it is recomputed from scratch
+ * whenever the visible-row window rebuilds.
+ */
+export interface JobGroupRow {
+  /** Group header row: the only member rendering the title/fold line. */
+  head: boolean
+  /** 0-based index inside the group. */
+  index: number
+  /** Members in the run (≥2 — a lone job card stays ungrouped). */
+  count: number
+  /** Last member: the rail closes with └ instead of continuing │. */
+  last: boolean
+  /** Whole group folded into the header line (meaningful on the head). */
+  folded: boolean
+  /** Members still live (running + stopping). */
+  running: number
+  completed: number
+  failed: number
+  killed: number
+  /** Earliest member start. */
+  startedAt: number
+  /** Latest member finish; absent while any member is still live. */
+  endedAt?: number
 }
 
 /**

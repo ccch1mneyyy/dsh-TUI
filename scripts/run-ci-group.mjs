@@ -613,6 +613,10 @@ const GROUPS = {
 // toast、kill 权限传递、无 jobs 服务降级、/new 重置）、JobCard/JobsPanel
 // 渲染冒烟（三行瀑布、settled 折叠、面板行/提示）。
     ["verify-jobs-panel", ['node', '--import', 'tsx/esm', 'scripts/verify-jobs-panel.tsx']],
+// 连续任务卡成组（JobGroupRow/JobGroupHeader）：组头汇总、组内取消空行与
+// 链式连接线、落定整组折叠、点击/悬停/Ctrl+O 展开、失败数留在折叠行、
+// 非相邻不成组、单卡原样，以及 jobGroupFold=auto/always/never 三档行为。
+    ["verify-jobs-transcript-group", ['node', '--import', 'tsx/esm', 'scripts/verify-jobs-transcript-group.tsx']],
 // #185 自愈守卫：React nested-update overflow（Minified error #185）抛出时
 // reconciler 已清零计数器，守卫在 clock.tick / reveal.tick / scrollbox.notify /
 // channel.emit(+emitStream) / selection.notify 等高频 enqueue 热点吸收该类

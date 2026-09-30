@@ -4604,6 +4604,7 @@ export function Chat({
           model={channel.model}
           diffLayout={channel.diffLayout}
           thinkingFold={channel.thinkingFold}
+          jobGroupFold={channel.jobGroupFold}
           toolBackground={channel.toolBackground}
           foldTerminalCommand={channel.foldTerminalCommand}
           smoothStreaming={channel.smoothStreaming}

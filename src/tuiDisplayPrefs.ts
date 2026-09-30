@@ -1,5 +1,5 @@
-import type { ToolBackground, ScrollGutterMode, PageMarginSetting, PageMarginMode, PageMarginSpec, StatusBarConfig } from './adapter/ports/channel-display.js'
-export type { ToolBackground, ScrollGutterMode, PageMarginSetting, PageMarginMode, PageMarginSpec, StatusBarConfig } from './adapter/ports/channel-display.js'
+import type { ToolBackground, ScrollGutterMode, PageMarginSetting, PageMarginMode, PageMarginSpec, StatusBarConfig, JobGroupFoldMode } from './adapter/ports/channel-display.js'
+export type { ToolBackground, ScrollGutterMode, PageMarginSetting, PageMarginMode, PageMarginSpec, StatusBarConfig, JobGroupFoldMode } from './adapter/ports/channel-display.js'
 
 
 /** Defaults keep the essential route/context information visible. */
@@ -29,6 +29,7 @@ export const DEFAULT_STATUS_BAR: Readonly<StatusBarConfig> = Object.freeze({
 })
 
 const TOOL_BACKGROUNDS = new Set<ToolBackground>(['none', 'subtle', 'strong'])
+const JOB_GROUP_FOLDS = new Set<JobGroupFoldMode>(['auto', 'always', 'never'])
 const SCROLL_GUTTERS = new Set<ScrollGutterMode>(['timeline', 'scrollbar', 'hidden'])
 const STATUS_BAR_KEYS = Object.keys(DEFAULT_STATUS_BAR) as (keyof StatusBarConfig)[]
 
@@ -37,6 +38,13 @@ export function normalizeToolBackground(value: unknown): ToolBackground {
   return typeof value === 'string' && TOOL_BACKGROUNDS.has(value as ToolBackground)
     ? value as ToolBackground
     : 'none'
+}
+
+/** Same normalize contract as toolBackground; `auto` is the default. */
+export function normalizeJobGroupFold(value: unknown): JobGroupFoldMode {
+  return typeof value === 'string' && JOB_GROUP_FOLDS.has(value as JobGroupFoldMode)
+    ? value as JobGroupFoldMode
+    : 'auto'
 }
 
 /** Same normalize contract as toolBackground; `timeline` is the default. */

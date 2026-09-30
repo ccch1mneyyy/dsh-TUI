@@ -1264,6 +1264,18 @@ const dict = {
   'jobs-toast-killed': { zh: '后台任务已停止：{{label}}（{{id}} · 用时 {{duration}}）', en: 'Background job killed: {{label}} ({{id}} · {{duration}})' },
   'jobs-kill-failed': { zh: '无法停止任务 {{id}}（任务不存在或任务服务未挂载）', en: 'Could not kill job {{id}} (unknown job or jobs service not mounted)' },
   'jobs-steer-killed': { zh: '我通过 /jobs 面板停止了后台任务 {{id}}（{{label}}）', en: 'I killed background job {{id}} ({{label}}) via the /jobs panel' },
+  // 连续任务卡成组（JobGroupHeader）：一批 run_in_background 连着落下时，
+  // 组头一行汇总整组、组内不再互相空行；全组落定后整组折叠成这一行。
+  'jobs-group-title': { zh: '后台任务 ×{{count}}', en: 'background jobs ×{{count}}' },
+  'jobs-group-folded': { zh: '已折叠 {{count}} 个后台任务', en: '{{count}} background jobs folded' },
+  'jobs-group-running': { zh: '{{count}} 运行中', en: '{{count}} running' },
+  'jobs-group-completed': { zh: '{{count}} 已完成', en: '{{count}} completed' },
+  'jobs-group-failed': { zh: '{{count}} 失败', en: '{{count}} failed' },
+  'jobs-group-killed': { zh: '{{count}} 已停止', en: '{{count}} killed' },
+  'jobs-group-all-completed': { zh: '全部完成', en: 'all completed' },
+  'jobs-group-elapsed': { zh: '合计 {{duration}}', en: '{{duration}} total' },
+  'jobs-group-hint-expand': { zh: '点击展开', en: 'click to expand' },
+  'jobs-group-hint-fold': { zh: '点击折叠', en: 'click to fold' },
 
   // ── components/questions/PlanReviewPanel.tsx ────────────────────────
   'plan-review-fallback-header': { zh: '计划评审', en: 'Plan review' },

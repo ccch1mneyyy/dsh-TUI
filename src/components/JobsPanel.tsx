@@ -117,8 +117,12 @@ function JobRowLine({ job, focused, armed, showProgress, onFocus }: {
         <Box width={9} flexShrink={0}>
           <Text bold={focused} color={focused ? 'accent' : undefined} wrap="truncate-end">{job.id}</Text>
         </Box>
+        {/* The label is the row's flexible column and WRAPS: a long command
+          * folds onto the following lines (hanging under its own column)
+          * instead of collapsing to an ellipsis when the terminal is narrow.
+          * The id, progress, duration and status columns keep their grid. */}
         <Box flexGrow={1} flexShrink={1}>
-          <Text bold={focused} wrap="truncate-end">{job.label}</Text>
+          <Text bold={focused}>{job.label}</Text>
         </Box>
         {showProgress === true && (
           <Box width={11} flexShrink={0} justifyContent="flex-end">
@@ -146,12 +150,16 @@ function JobRowLine({ job, focused, armed, showProgress, onFocus }: {
           {job.command !== undefined && job.command !== '' && job.command !== job.label && (
             <Box flexDirection="row" gap={1}>
               <Box width={7} flexShrink={0}><Text dimColor>{t('jobs-panel-command')}</Text></Box>
-              <Text dimColor wrap="truncate-end">{job.command}</Text>
+              {/* Detail values WRAP: a long command, a long path or a wide
+                * output line must be readable in full here — the panel is the
+                * deep view, and a clipped one-liner was the "a long line shows
+                * nothing" report. */}
+              <Text dimColor>{job.command}</Text>
             </Box>
           )}
           <Box flexDirection="row" gap={1}>
             <Box width={7} flexShrink={0}><Text dimColor>{t('jobs-panel-started')}</Text></Box>
-            <Text dimColor wrap="truncate-end">
+            <Text dimColor>
               {timeOf(job.startedAt)
                 + (job.finishedAt !== undefined ? ` · ${t('jobs-panel-finished')} ${timeOf(job.finishedAt)}` : '')
                 + (job.lastOutputAt !== undefined ? ` · ${t('jobs-panel-output-at')} ${timeOf(job.lastOutputAt)}` : '')}
@@ -160,7 +168,7 @@ function JobRowLine({ job, focused, armed, showProgress, onFocus }: {
           {(job.outputTotalBytes !== undefined || job.outputDropped === true) && (
             <Box flexDirection="row" gap={1}>
               <Box width={7} flexShrink={0}><Text dimColor>{t('jobs-panel-output')}</Text></Box>
-              <Text dimColor wrap="truncate-end">
+              <Text dimColor>
                 {(job.outputTotalBytes !== undefined ? formatBytes(job.outputTotalBytes) : '')
                   + (job.outputDropped === true
                     ? `${job.outputTotalBytes !== undefined ? ' · ' : ''}${t('jobs-output-dropped')}`
@@ -170,7 +178,7 @@ function JobRowLine({ job, focused, armed, showProgress, onFocus }: {
           )}
           {job.spillPaths !== undefined && job.spillPaths.length > 0 && (
             <Box paddingLeft={8}>
-              <Text dimColor wrap="truncate-end">
+              <Text dimColor>
                 {t('jobs-output-spill', { path: job.spillPaths[job.spillPaths.length - 1] ?? '' })}
               </Text>
             </Box>
@@ -184,7 +192,7 @@ function JobRowLine({ job, focused, armed, showProgress, onFocus }: {
                   marginTop={runIndex === 0 ? 0 : 1}
                 >
                   {run.kind === 'gap' && (
-                    <Text dimColor italic wrap="truncate-end">{t('jobs-output-gap')}</Text>
+                    <Text dimColor italic>{t('jobs-output-gap')}</Text>
                   )}
                   {run.kind === 'markdown' && (
                     // stdout prose (a subagent job's report, an agent's
@@ -193,16 +201,16 @@ function JobRowLine({ job, focused, armed, showProgress, onFocus }: {
                     <Markdown cacheTokens>{run.text}</Markdown>
                   )}
                   {run.kind === 'stderr' && (
-                    <Text color="error" wrap="truncate-end">{`│ ${run.text}`}</Text>
+                    <Text color="error">{`│ ${run.text}`}</Text>
                   )}
                   {run.kind === 'log' && (
-                    <Text dimColor italic wrap="truncate-end">{`│ ${run.text}`}</Text>
+                    <Text dimColor italic>{`│ ${run.text}`}</Text>
                   )}
                 </Box>
               ))}
             </Box>
           ) : (
-            <Text dimColor wrap="truncate-end">{t('jobs-panel-no-output-yet')}</Text>
+            <Text dimColor>{t('jobs-panel-no-output-yet')}</Text>
           )}
         </Box>
       )}

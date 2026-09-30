@@ -1,6 +1,6 @@
 /** Host-owned in-process Channel contract. No runtime or upstream imports. */
 import type { ChatRow, AgentStatus, TokenUsage, SessionCostByModel, SubagentCostEntry, NotificationItem, ChannelGoal, TodoPanelItem, LoadedContext, PendingMessage, ChannelSceneMetadata, SubagentState, SubagentControl, BackgroundJobState, JobControl, StagedImageInput, StagedImageHandle, ComposerImageRef, ComposerSubmission, ExternalCommandOutcome, TranscriptImage, ResumeResult, EffortOption, PermissionPresetSnapshot, PresetOption, LlmModelInfo, LlmProviderInfo, SkillInfo, CredentialStatus, AgentViewRow, AgentViewDispatchResult, BackgroundResult, RawTrajEvent, ChannelSelection, CompactionStatus } from './channel-view.js'
-import type { SpinnerMode, ToolBackground, ScrollGutterMode, PageMarginSetting, StatusBarConfig, SessionModeSpec, SplashFontSetting } from './channel-display.js'
+import type { SpinnerMode, ToolBackground, ScrollGutterMode, PageMarginSetting, StatusBarConfig, SessionModeSpec, SplashFontSetting, JobGroupFoldMode } from './channel-display.js'
 import type { LocalCommand, CommandCompletion, BalanceResult, FileCandidate, RecapOutcome } from './channel-catalog.js'
 import type { TuiRewindMode, SessionTreeData, SessionSummary, PreviewEntry, ForeignSource, ForeignSessionRow, ForeignImportOutcome } from './channel-session.js'
 import type { TuiWorkspaceTarget, TuiWorkspaceCommand, TuiWorkspaceCommandResult, TuiWorkspaceEntry } from './channel-workspace.js'
@@ -123,6 +123,11 @@ export interface ChannelUi {
   /** Thinking-block display (`preview` = 2-3 line live stream + fold per
    *  step; `full` = expanded until turn end). */
   readonly thinkingFold: 'preview' | 'full'
+  /** Grouping/folding of runs of consecutive background-job cards (settings
+   *  `dsh-tui.jobGroupFold`): `auto` folds a settled run of 3+ into its
+   *  summary line, `always` folds any run of 2+, `never` never folds on its
+   *  own (a header click still folds a single run). */
+  readonly jobGroupFold: JobGroupFoldMode
   /** Live tool-card background treatment. */
   readonly toolBackground: ToolBackground
   /** What the fullscreen transcript's right gutter shows (settings
@@ -622,6 +627,7 @@ export interface ChannelUi {
   traceEvents(): readonly RawTrajEvent[]
   setDiffLayout(layout: 'auto' | 'split' | 'unified'): void
   setThinkingFold(mode: 'preview' | 'full'): void
+  setJobGroupFold(mode: JobGroupFoldMode): void
   setToolBackground(background: ToolBackground): void
   setScrollGutter(mode: ScrollGutterMode): void
   setPageMargin(setting: PageMarginSetting): void

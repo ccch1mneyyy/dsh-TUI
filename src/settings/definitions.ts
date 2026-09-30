@@ -80,6 +80,19 @@ export const SETTING_DEFINITIONS = {
       { value: 'terminal', label: 'Terminal colour', descriptions: { zh: '合成到终端底色' } },
     ],
   },
+  'jobGroupFold': {
+    label: 'Job card groups',
+    descriptions: { zh: '后台任务分组' },
+    group: 'conversation',
+    hint: 'Consecutive background-job cards render as one group with a summary header. Auto folds a run of 3+ once every job settled; Always folds any run of 2+ right away; Never keeps every card (click the header to fold one run by hand, Ctrl+O to expand all).',
+    hintDescriptions: { zh: '连续的后台任务卡渲染成一组并带汇总头。自动：整组落定且 3 个以上时折叠成一行；总是：2 个以上立即折叠；从不：每张卡都留着（点组头可手工折叠单组，Ctrl+O 展开全部）。' },
+    kind: 'select',
+    options: [
+      { value: 'auto', label: 'Auto (3+ settled)', descriptions: { zh: '自动（落定 3 个以上）' } },
+      { value: 'always', label: 'Always (2+)', descriptions: { zh: '总是（2 个以上）' } },
+      { value: 'never', label: 'Never fold', descriptions: { zh: '从不折叠' } },
+    ],
+  },
   'lang': {
     label: 'Language',
     descriptions: { zh: '界面语言' },
