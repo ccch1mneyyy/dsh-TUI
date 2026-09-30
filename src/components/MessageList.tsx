@@ -18,6 +18,8 @@ import { noteFrameCause, noteListGeometry } from '../ink/geometry-trace.js'
 import { getTerminalFlushTick } from '../ink/flush-tick.js'
 import { TurnInterruptedRow } from './TurnInterruptedRow.js'
 import { LogoV2 } from './LogoV2.js'
+import type { Tip } from '../tips.js'
+import type { WhaleIntroId } from './whaleFrames.js'
 import { StreamingMarkdown } from './StreamingMarkdown.js'
 import { MessageMetadata } from './messages/MessageMetadata.js'
 import { stripNarration } from '../utils/narration.js'
@@ -1745,6 +1747,8 @@ export function LogoHeader({
   onStarClick,
   working = false,
   skipIntro = false,
+  intro,
+  tip,
 }: {
   model: string
   effort?: string | undefined
@@ -1765,13 +1769,18 @@ export function LogoHeader({
   /** Jump straight to the settled header (long-session resume, or
    *  `dsh-tui.whale: false`, which must not play the opening splash). */
   skipIntro?: boolean
+  /** Test seam: pin the opening intro instead of rolling one at startup
+   *  (see `LogoV2`); passed straight through. */
+  intro?: WhaleIntroId
+  /** Test seam: pin the startup tip line (see `LogoV2`); passed straight through. */
+  tip?: Tip
 }): React.ReactNode {
   // The minimal UI drops the whole splash (whale art AND wordmark) — only the
   // transcript and a bare status bar remain.
   if (isMinimalUiMode()) return null
   return (
     <Box flexDirection="column" marginBottom={1}>
-      <LogoV2 model={model} effort={effort} cwd={cwd} fontId={fontId} whale={whale} whaleIdle={whaleIdle} whaleGirl={whaleGirl} starred={starred} onStarClick={onStarClick} working={working} skipIntro={skipIntro || !whale} />
+      <LogoV2 model={model} effort={effort} cwd={cwd} fontId={fontId} whale={whale} whaleIdle={whaleIdle} whaleGirl={whaleGirl} starred={starred} onStarClick={onStarClick} working={working} skipIntro={skipIntro || !whale} intro={intro} tip={tip} />
     </Box>
   )
 }

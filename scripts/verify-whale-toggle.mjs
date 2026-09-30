@@ -15,6 +15,7 @@ const [
   { LogoHeader },
   { createChannel },
   { settle },
+  { TIPS },
 ] = await Promise.all([
   import('node:assert'),
   import('node:stream'),
@@ -23,7 +24,11 @@ const [
   import('../src/components/MessageList.js'),
   import('../src/dsh-adapter/channel.js'),
   import('./lib/term-test.mjs'),
+  import('../src/tips.js'),
 ])
+
+/** 固定的一条 tip：两条 renderHeader 序列要比字节，随机 tip 会让它们无端不同。 */
+const PINNED_TIP = TIPS[0]
 
 let checks = 0
 function check(name, test) {
@@ -94,11 +99,15 @@ const WHALE_OUTLINE = '\x1b[38;2;20;38;96m'
 
 // `ready`（可选）：call site 断言里比默认文字条件更强的正向条件必须并入
 // 等待谓词（#561 弱条件分叉），否则 settle 等到文字就返回、断言到旧帧。
-async function renderHeader({ columns, whale, ready, expect }) {
+// `intro` 钉住开场序列（不钉就是随机 roll）；`probeAfterMs` 在 unmount **之前**
+// 再采一次已写字节——开场是 unmount 后不再产生的定时器帧，只有挂载期间能取到。
+async function renderHeader({ columns, whale, intro, skipIntro, ready, expect, probeAfterMs }) {
   const stdout = new FakeOutput(columns)
   const stderr = new FakeOutput(columns)
-  const props = { model: 'whale-model-probe', cwd: '/whale/cwd' }
+  const props = { model: 'whale-model-probe', cwd: '/whale/cwd', tip: PINNED_TIP }
   if (whale !== undefined) props.whale = whale
+  if (intro !== undefined) props.intro = intro
+  if (skipIntro !== undefined) props.skipIntro = skipIntro
   const instance = await render(
     React.createElement(
       ThemeProvider,
@@ -113,6 +122,15 @@ async function renderHeader({ columns, whale, ready, expect }) {
       patchConsole: false,
     },
   )
+  // 探针从**挂载**起算：settle 落地时间本身随开场长短变化，以它为基准会把
+  // unmount 也推后不同时长，两次采样的字节量就没法比。固定基准后，3.5s 时
+  // 开场（约 2.75s）早已跑完、静止帧不再变化，采样结果只反映开场有没有跑。
+  if (probeAfterMs !== undefined) {
+    await new Promise(resolve => setTimeout(resolve, probeAfterMs))
+    const afterProbe = stdout.writes.join('')
+    await instance.unmount()
+    return { raw: afterProbe, plain: stripAnsi(afterProbe), afterProbe }
+  }
   // 默认等「文字列画出来了」；纯鲸鱼档没有文字列，用 expect 换掉这个前提。
   const settled = expect ?? (plain => plain.includes('dsh-TUI') && plain.includes('whale-model-probe'))
   await settle(() => {
@@ -122,7 +140,7 @@ async function renderHeader({ columns, whale, ready, expect }) {
   })
   const raw = stdout.writes.join('')
   await instance.unmount()
-  return { raw, plain: stripAnsi(raw) }
+  return { raw, plain: stripAnsi(raw), afterProbe: null }
 }
 
 // Channel defaults and live setter semantics.
@@ -161,6 +179,32 @@ check('LogoHeader forwards whale=false while preserving the text logo', () => {
   assert.ok(!wideDisabled.raw.includes(WHALE_OUTLINE), 'whale palette marker still rendered')
   assert.ok(wideDisabled.plain.includes('dsh-TUI'), 'text logo missing')
   assert.ok(wideDisabled.plain.includes('whale-model-probe'), 'header details missing')
+})
+
+// #971：whale=false 只是不画像素鲸鱼，开场计时仍会走完——用户看到的仍是那段开屏
+// （文字列的逐帧入场照放）。鲸鱼关闭时开场帧里没有任何独有颜色，所以这里比的是
+// **和显式 skipIntro 同不同**：两者都是无鲸鱼、直落静止标题的组合，唯一差别就是
+// 有没有在挂载时跑完那串文字帧。钉住 intro 免得撞上随机 roll。
+const introWhaleOff = await renderHeader({
+  columns: BOTH_FIT_COLUMNS,
+  whale: false,
+  intro: 'heart',
+  probeAfterMs: 3500,
+})
+const introSkipped = await renderHeader({
+  columns: BOTH_FIT_COLUMNS,
+  whale: false,
+  intro: 'heart',
+  skipIntro: true,
+  probeAfterMs: 3500,
+})
+check('whale=false mounts the settled header, not a whale-less replay of the intro', () => {
+  assert.equal(
+    introWhaleOff.afterProbe,
+    introSkipped.afterProbe,
+    'whale=false emitted a different frame sequence than an explicitly skipped intro',
+  )
+  assert.ok(introWhaleOff.plain.includes('dsh-TUI'), 'text logo missing')
 })
 
 const narrowDefault = await renderHeader({ columns: NOTHING_FITS_COLUMNS })
