@@ -948,9 +948,16 @@ export function Chat({
   /** Subagent dashboard (Ctrl+A): displays active/completed subagents. */
   const [subagentDashboardOpen, setSubagentDashboardOpen] = React.useState(false)
   const [jobsPanelOpen, setJobsPanelOpen] = React.useState(false)
+  /** Job id the panel should focus on open: set by a transcript card click
+   *  (open the panel AT that job), cleared on close so the keyboard/command
+   *  path reopens at the top. */
+  const [jobsPanelFocusId, setJobsPanelFocusId] = React.useState<string | null>(null)
   // MessageList forwards these open handlers to every memoized row. Their
   // identities must survive token/metrics updates, including for tool rows.
-  const openJobsPanel = React.useCallback(() => setJobsPanelOpen(true), [])
+  const openJobsPanel = React.useCallback((focusId?: string) => {
+    if (typeof focusId === 'string' && focusId !== '') setJobsPanelFocusId(focusId)
+    setJobsPanelOpen(true)
+  }, [])
   /** Detail view for a specific subagent (opened from dashboard). */
   const [subagentDetailId, setSubagentDetailId] = React.useState<string | null>(null)
   /**
@@ -2603,6 +2610,7 @@ export function Chat({
       }
       case 'jobs':
         setHelpOpen(false)
+        setJobsPanelFocusId(null)
         setJobsPanelOpen(true)
         return true
       case 'agents':
@@ -4403,7 +4411,8 @@ export function Chat({
     const panel = (
       <JobsPanel
         jobs={channel.backgroundJobs ?? []}
-        onClose={() => setJobsPanelOpen(false)}
+        initialFocusId={jobsPanelFocusId ?? undefined}
+        onClose={() => { setJobsPanelOpen(false); setJobsPanelFocusId(null) }}
         onKill={(id) => {
           // Stub channels (verify harnesses) have no jobControl — surface
           // the same failure toast as a refused kill instead of throwing.

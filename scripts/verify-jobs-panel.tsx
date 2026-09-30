@@ -670,6 +670,47 @@ await withTerminal(
   },
 )
 
+await withTerminal(
+  () => React.createElement(JobsPanel, {
+    jobs: [
+      runningJob,
+      { id: 'bash-2', kind: 'bash', label: 'pnpm build', status: 'completed' as const, detail: 'exit code: 0', startedAt: NOW - 90_000, finishedAt: NOW - 1000, outputLines: [] },
+      { id: 'subagent-3', kind: 'subagent', label: 'review the regressions', status: 'running' as const, startedAt: NOW - 10_000, outputLines: [] },
+    ],
+    initialFocusId: 'subagent-3',
+    onClose: () => {},
+    onKill: () => {},
+  }),
+  async screen => {
+    await sleep(150) // 固定窗:探针 C4 渲染落定（initialFocusId 聚焦行渲染）
+    const text = screen()
+    const rows = text.split('\n')
+    check(
+      'C4 initialFocusId 聚焦指定任务（非首行）',
+      rows.some(line => line.includes('review the regressions') && line.includes('❯')),
+      rows.filter(line => line.includes('❯') || line.includes('subagent-3')).join('|'),
+    )
+    check(
+      'C4 默认首行不被聚焦',
+      !rows.some(line => line.includes('pwsh-1') && line.includes('❯')),
+      rows.filter(line => line.includes('pwsh-1')).join('|'),
+    )
+  },
+)
+
+await withTerminal(
+  () => React.createElement(JobsPanel, {
+    jobs: [runningJob],
+    initialFocusId: 'gone-job',
+    onClose: () => {},
+    onKill: () => {},
+  }),
+  async screen => {
+    await sleep(150) // 固定窗:探针 C4 渲染落定（回退首行用例）
+    const text = screen()
+    check('C4 未知 initialFocusId 回退首行', text.includes('❯') && text.includes('pwsh-1'))
+  },
+)
 // ---------------------------------------------------------------------------
 // Group D — 按键归属：/jobs 面板打开时 Esc 关面板，不得同时中断对话
 // ---------------------------------------------------------------------------

@@ -12,6 +12,9 @@ import { isMinimalUiMode } from '../minimalUiMode.js'
 
 export interface JobsPanelProps {
   jobs: readonly BackgroundJobState[]
+  /** Focus this job on open (a transcript card click opens the panel AT its
+   *  job); absent or unknown ids fall back to the roster head. */
+  initialFocusId?: string
   onClose: () => void
   /** Kill the focused live job (`job_kill` with the session's authority). */
   onKill: (id: string) => void
@@ -221,8 +224,23 @@ function timeOf(ms: number): string {
  * row expands a detail block (full label, start/finish times, mirrored
  * output tail). The panel is the deep view behind the transcript job cards.
  */
-export function JobsPanel({ jobs, onClose, onKill }: JobsPanelProps): React.ReactNode {
-  const [focusIndex, setFocusIndex] = React.useState(0)
+export function JobsPanel({ jobs, onClose, onKill, initialFocusId }: JobsPanelProps): React.ReactNode {
+  const [focusIndex, setFocusIndex] = React.useState(() => {
+    if (initialFocusId === undefined) return 0
+    const found = jobs.findIndex(job => job.id === initialFocusId)
+    return found >= 0 ? found : 0
+  })
+  // A card click may race the roster: the id can land after the panel opened
+  // (late kernel push), so re-apply once when it first becomes findable.
+  const initialFocusApplied = React.useRef(initialFocusId === undefined)
+  React.useEffect(() => {
+    if (initialFocusApplied.current || initialFocusId === undefined) return
+    const found = jobs.findIndex(job => job.id === initialFocusId)
+    if (found < 0) return
+    initialFocusApplied.current = true
+    setFocusIndex(found)
+    scrollRef.current?.scrollTo(Math.max(0, found - 2))
+  }, [jobs, initialFocusId])
   /** Armed kill: first `k` primes, second within the window confirms; any
    *  navigation or other key disarms. Mirrors the web two-press stop. */
   const [killArmed, setKillArmed] = React.useState<string | undefined>(undefined)
@@ -230,6 +248,16 @@ export function JobsPanel({ jobs, onClose, onKill }: JobsPanelProps): React.Reac
   const { rows } = useTerminalSize()
   // 1s tick keeps live durations counting while the panel is open.
   const [clockRef] = useAnimationFrame(1000)
+
+  // Bring an initial deep focus into view on mount (rows are ~1 line each;
+  // two rows of headroom above reads better than pinning to the top edge).
+  React.useEffect(() => {
+    if (initialFocusId === undefined || initialFocusApplied.current === false) return
+    if (initialFocusId !== undefined && jobs.findIndex(job => job.id === initialFocusId) > 2) {
+      scrollRef.current?.scrollTo(Math.max(0, jobs.findIndex(job => job.id === initialFocusId) - 2))
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- mount-only scroll placement
+  }, [])
 
   const focus = Math.min(focusIndex, Math.max(0, jobs.length - 1))
 

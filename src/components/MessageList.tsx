@@ -398,7 +398,7 @@ export function MessageList({
   /** 打开子代理详情场景（transcript 内点击子代理卡）。 */
   onOpenSubagent?: (agentId: string) => void
   /** 打开 /jobs 后台任务面板（transcript 内点击任务卡）。 */
-  onOpenJobs?: () => void
+  onOpenJobs?: (focusId?: string) => void
   /** 点击工具卡内的文件路径（打开文件操作菜单）。 */
   onOpenFile?: (path: string) => void
   /** Session working directory (fs path, `channel.cwd`): the IDE-selection
@@ -1366,7 +1366,7 @@ type MemoRowProps = {
   /** 是否反转该流式行的 thinkingFold 默认视图。 */
   streamViewToggled: boolean
   onOpenSubagent: ((agentId: string) => void) | undefined
-  onOpenJobs: (() => void) | undefined
+  onOpenJobs: ((focusId?: string) => void) | undefined
   onOpenFile: ((path: string) => void) | undefined
   onPreviewImage: ((image: TranscriptImage) => void) | undefined
   suppressImageGraphics: boolean
@@ -1710,7 +1710,8 @@ function TranscriptRow({
           <JobCard
             job={job}
             marginTopOnTurn={marginTopOnTurn}
-            onClick={onOpenJobs}
+            // Clicking a card opens the panel focused on THAT job, not the roster head.
+            onClick={onOpenJobs === undefined ? undefined : () => onOpenJobs(job.id)}
           />
         </Box>
       )
