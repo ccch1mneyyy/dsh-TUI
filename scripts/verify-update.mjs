@@ -333,7 +333,8 @@ check(
 // ---- pnpm minimumReleaseAgeExclude pre-seed: pnpm ≥11 delays installs of
 // packages published within minimumReleaseAge (24h default) — on release day
 // that gate refuses the exact version /update pins, so the update flow must
-// exempt this package at the exact target before pnpm runs.
+// exempt this package at the exact versions pnpm checks before the swap: the
+// target AND the still-locked old version (issue #1205).
 {
   const DSH_HOME_BACKUP = process.env.DSH_HOME
   const ageScratch = mkdtempSync(join(tmpdir(), 'verify-releaseage-'))
@@ -369,8 +370,8 @@ check(
       JSON.stringify(outcome),
     )
 
-    // Case 3: a stale entry for this package is replaced (no accumulation)
-    // while foreign entries survive.
+    // Case 3: without a second exemption a stale own entry is replaced (no
+    // accumulation) while foreign entries survive.
     writeFileSync(yamlPath, "minimumReleaseAgeExclude:\n  - 'x@1.0.0'\n  - '@deepseek-harness-tui/dsh-tui@0.9.3'\n")
     outcome = ensureProfileReleaseAgeExclude('tui', '0.10.0-beta.1')
     text = readFileSync(yamlPath, 'utf8')
@@ -380,6 +381,88 @@ check(
         text.includes("- 'x@1.0.0'") &&
         text.includes("- '@deepseek-harness-tui/dsh-tui@0.10.0-beta.1'") &&
         !text.includes('0.9.3'),
+      `${JSON.stringify(outcome)} :: ${text}`,
+    )
+
+    // Case 3b: the same entry is KEPT when it is the second exemption
+    // (alsoExempt) — the locked version still inside the release-age window.
+    writeFileSync(yamlPath, "minimumReleaseAgeExclude:\n  - 'x@1.0.0'\n  - '@deepseek-harness-tui/dsh-tui@0.9.3'\n")
+    outcome = ensureProfileReleaseAgeExclude('tui', '0.10.0-beta.1', '0.9.3')
+    text = readFileSync(yamlPath, 'utf8')
+    check(
+      'releaseAge: alsoExempt keeps the locked version alongside the target',
+      outcome !== undefined && outcome.changed === true &&
+        text.includes("- 'x@1.0.0'") &&
+        text.includes("- '@deepseek-harness-tui/dsh-tui@0.9.3'") &&
+        text.includes("- '@deepseek-harness-tui/dsh-tui@0.10.0-beta.1'"),
+      `${JSON.stringify(outcome)} :: ${text}`,
+    )
+
+    // Case 3c: idempotent once both exemptions are present — no rewrite.
+    const bothBefore = readFileSync(yamlPath, 'utf8')
+    outcome = ensureProfileReleaseAgeExclude('tui', '0.10.0-beta.1', '0.9.3')
+    check(
+      'releaseAge: second run with both exemptions is a no-op',
+      outcome !== undefined && outcome.changed === false && readFileSync(yamlPath, 'utf8') === bothBefore,
+      JSON.stringify(outcome),
+    )
+
+    // Case 3d: alsoExempt equal to the target (or empty) adds nothing twice.
+    writeFileSync(yamlPath, "minimumReleaseAgeExclude:\n  - '@deepseek-harness-tui/dsh-tui@0.10.0-beta.1'\n")
+    outcome = ensureProfileReleaseAgeExclude('tui', '0.10.0-beta.1', '0.10.0-beta.1')
+    text = readFileSync(yamlPath, 'utf8')
+    check(
+      'releaseAge: alsoExempt === version keeps a single entry',
+      outcome !== undefined && outcome.changed === false &&
+        (text.match(/@deepseek-harness-tui\/dsh-tui@0\.10\.0-beta\.1/g) ?? []).length === 1,
+      `${JSON.stringify(outcome)} :: ${text}`,
+    )
+    outcome = ensureProfileReleaseAgeExclude('tui', '0.10.0-beta.1', '')
+    check(
+      'releaseAge: empty alsoExempt is ignored',
+      outcome !== undefined && outcome.changed === false && readFileSync(yamlPath, 'utf8') === text,
+      JSON.stringify(outcome),
+    )
+
+    // Case 3e (issue #1205): two releases inside the window — the locked old
+    // version is exempted together with the target, so the lockfile entry
+    // pnpm verifies before the swap installs too. Target-first order is
+    // load-bearing on pnpm 11.7.x, which honours only the first entry per
+    // package (11.21.x applies every entry regardless of order): the target
+    // is the version the swap itself resolves, and the locked version may be
+    // a dev build the registry cannot resolve at all.
+    writeFileSync(yamlPath, "minimumReleaseAgeExclude:\n  - 'x@1.0.0'\n  - '@deepseek-harness-tui/dsh-tui@0.11.2'\n")
+    outcome = ensureProfileReleaseAgeExclude('tui', '0.12.0', '0.11.2')
+    text = readFileSync(yamlPath, 'utf8')
+    check(
+      'releaseAge: same-day double release exempts locked + target (#1205)',
+      outcome !== undefined && outcome.changed === true &&
+        text.includes("- 'x@1.0.0'") &&
+        text.includes("- '@deepseek-harness-tui/dsh-tui@0.11.2'") &&
+        text.includes("- '@deepseek-harness-tui/dsh-tui@0.12.0'") &&
+        text.indexOf("- '@deepseek-harness-tui/dsh-tui@0.12.0'") <
+          text.indexOf("- '@deepseek-harness-tui/dsh-tui@0.11.2'"),
+      `${JSON.stringify(outcome)} :: ${text}`,
+    )
+    const doubleBefore = readFileSync(yamlPath, 'utf8')
+    outcome = ensureProfileReleaseAgeExclude('tui', '0.12.0', '0.11.2')
+    check(
+      'releaseAge: double-release rerun is a no-op',
+      outcome !== undefined && outcome.changed === false && readFileSync(yamlPath, 'utf8') === doubleBefore,
+      JSON.stringify(outcome),
+    )
+
+    // Case 3f: a later update drops the entry the lockfile no longer pins —
+    // the exempt list tracks locked + target, not every version ever exempt.
+    outcome = ensureProfileReleaseAgeExclude('tui', '0.13.0', '0.12.0')
+    text = readFileSync(yamlPath, 'utf8')
+    check(
+      'releaseAge: older own entry dropped once no longer needed',
+      outcome !== undefined && outcome.changed === true &&
+        text.includes("- 'x@1.0.0'") &&
+        text.includes("- '@deepseek-harness-tui/dsh-tui@0.12.0'") &&
+        text.includes("- '@deepseek-harness-tui/dsh-tui@0.13.0'") &&
+        !text.includes('0.11.2'),
       `${JSON.stringify(outcome)} :: ${text}`,
     )
 
