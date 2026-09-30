@@ -67,6 +67,11 @@ A complete common override looks like this:
 | `splashFont` | `daily` | Big-text face on the header splash: `daily` rotates by local date (the default), any other value is a face id (`bold` / `square` / `bevel` / `wide` / `dot` / `stencil` / `classic` / `slab`) pinning that one; an unknown value falls back to `daily`. Also editable through `/settings` |
 | `whaleGirl` | `false` | Swap the header's pixel whale for the maid: real raster FIRST (Kitty/Sixel); falls back to the character-art maid without them |
 | `minimal` | `false` | Minimal UI (极简界面): reduce header decoration and colors. **A display switch only** — a different thing from the kernel's `minimal` agent preset under `preset` below (that one decides which tools the model can use) |
+| `sidePanel.splitEnabled` | `true` (boolean) | Master switch of the split layout: on, `Ctrl+B` and `/panel` open the side column next to the chat; off, neither splits and `/jobs` & co. keep their full-screen panels. Applies immediately |
+| `sidePanel.open` | `false` (boolean) | Whether a session opens with the sidebar already expanded; off by default, so the upgrade leaves the layout as it was. An in-session `Ctrl+B` / `/panel toggle` is not written back here. Applies immediately |
+| `sidePanel.ratio` | `0.68` (number, 0.1–0.95) | Chat column as a fraction of the content width; while the panel has focus, `+`/`-` nudge it live for the current session (not written back). Applies immediately |
+| `sidePanel.panels` | `todo,jobs,agents` (comma-separated text) | Enabled panel ids and their order; a well-formed id no panel claims yet stays in the tab bar for a plugin to register later, a malformed entry is refused. Applies immediately |
+ | `companion.skin` | `deepy` | Skin of the companion-panel pet: `deepy` (default, the deepy whale kit) or `whale` (the splash's layered pixel whale); the panel itself is enabled by adding `companion` to `sidePanel.panels`. Applies immediately |
 | `modes` | built-in trio | Shift+Tab session-mode cycle (plan/sandbox/approval atom bundles); defaults to default → plan → full-access |
 | `activity` | `true` | Show the live activity row |
 | `activityFrames` | `moon8` | Activity animation preset; `/activity` changes it at runtime. A legacy saved value of `claude` is read as `moon8`, and the picker no longer offers that legacy preset |

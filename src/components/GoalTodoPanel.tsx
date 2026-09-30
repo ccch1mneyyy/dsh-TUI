@@ -1,5 +1,5 @@
 import React from 'react'
-import { Box, Text } from '../ui.js'
+import { Box, Text, useAnimationFrame } from '../ui.js'
 import type { ChannelUi as Channel } from '../adapter/channel/ui-policy.js'
 import type { ChannelGoal, TodoPanelItem } from '../dsh-adapter/channel.js'
 import { t } from '../i18n.js'
@@ -114,12 +114,23 @@ export function GoalTodoPanel({
   channel,
   collapsed = false,
   onToggle,
+  variant = 'default',
+  visible = true,
+  maxTodos,
 }: {
   channel: Channel
   /** Fold the whole todo section to its summary header line. */
   collapsed?: boolean
   /** Toggle the fold (click on the header row; shares the hotkey state). */
   onToggle?: () => void
+  /** 'panel' = 侧栏 Todo Panel 形态：更紧凑（去外层 padding 与折叠
+   *  提示行），计时走共享动画时钟（visible=false 时零订阅）。 */
+  variant?: 'default' | 'panel'
+  /** 侧栏 visible 契约：非 active Panel 时 false——暂停本地计时，
+   *  store（channel.goal/todos）照常更新，重新打开直接读最新值。 */
+  visible?: boolean
+  /** 覆盖 MAX_TODOS（panel variant 按宿主高度传入）。 */
+  maxTodos?: number
 }): React.ReactNode {
   const goal = channel.goal
   const allTodos = channel.todos ?? []
@@ -141,15 +152,24 @@ export function GoalTodoPanel({
   const [now, setNow] = React.useState(() => Date.now())
   // Hover tint for the clickable todo fold header (mouse affordance).
   const [headerHovered, setHeaderHovered] = React.useState(false)
+  const goalOpen = goal !== undefined && goal.phase !== 'complete'
+  // Panel 形态：计时挂在共享动画时钟上（ClockProvider 单一定时源，
+  // 终端失焦自动降频），visible=false 时传 null——零订阅。时钟只负责
+  // 驱动重渲染；读数仍按墙钟（Date.now()）算，隐藏期间计时冻结的只是
+  // 显示，重新打开立刻显示真实经过时间（mountPolicy=enabled 下面板
+  // 保持挂载，startRef 不会重置）。
+  const [clockRef] = useAnimationFrame(variant === 'panel' && goalOpen && visible ? 1000 : null)
   React.useEffect(() => {
+    // default 形态保留原来的本地 1s 计时（底部 chrome 的既有行为）。
+    if (variant === 'panel') return
     // Tick only while the goal is open; a complete goal freezes the last
     // elapsed reading instead of counting past the finish line.
     if (goal === undefined || goal.phase === 'complete') return
     const timer = setInterval(() => setNow(Date.now()), 1000)
     return () => clearInterval(timer)
-  }, [goal])
+  }, [goal, variant])
   const elapsed = goal !== undefined && startRef.current !== undefined
-    ? formatDuration(now - startRef.current.at)
+    ? formatDuration((variant === 'panel' ? Date.now() : now) - startRef.current.at)
     : undefined
 
   // All-completed idle snapshot with no goal: nothing left to narrate —
@@ -158,14 +178,21 @@ export function GoalTodoPanel({
   const showTodoSection = allTodos.length > 0 && (channel.working || anyUnfinished || goal !== undefined)
   if (goal === undefined && !showTodoSection) return null
 
-  const visible = todos.slice(0, MAX_TODOS)
-  const hidden = todos.length - visible.length
+  const budget = maxTodos ?? MAX_TODOS
+  const visibleTodos = todos.slice(0, budget)
+  const hidden = todos.length - visibleTodos.length
   // Collapsed preview: the live task when one runs, else the next open row.
   const preview = allTodos.find(todo => todo.status === 'in_progress')
     ?? allTodos.find(todo => todo.status !== 'completed')
 
   return (
-    <Box flexDirection="column" paddingLeft={2} paddingRight={2} paddingTop={1}>
+    <Box
+      ref={variant === 'panel' ? clockRef : undefined}
+      flexDirection="column"
+      paddingLeft={variant === 'panel' ? 1 : 2}
+      paddingRight={variant === 'panel' ? 1 : 2}
+      paddingTop={1}
+    >
       {goal !== undefined && (
         <Box flexDirection="column">
           {/* 行盒显式 height={1}：窄屏下与截断文本同行的布局会被量出虚高
@@ -229,8 +256,8 @@ export function GoalTodoPanel({
           </Box>
           {!collapsed && (
             <Box flexDirection="column">
-              {visible.map((todo, index) => {
-                const last = index === visible.length - 1 && hidden === 0
+              {visibleTodos.map((todo, index) => {
+                const last = index === visibleTodos.length - 1 && hidden === 0
                 return (
                   <Box key={index} flexDirection="row" height={1}>
                     <BranchPrefix last={last} />
@@ -248,8 +275,11 @@ export function GoalTodoPanel({
                 </Box>
               )}
               {/* Fold affordance under the list — only while expanded; the
-                  collapsed line already IS the folded state. */}
-              <Text dimColor>  {t('goal-todo-fold-hint', { key: primaryComboString('todoFold') })}</Text>
+                  collapsed line already IS the folded state. Panel 形态省略：
+                  折叠键归侧栏宿主，底部 hint 行已有说明。 */}
+              {variant !== 'panel' && (
+                <Text dimColor>  {t('goal-todo-fold-hint', { key: primaryComboString('todoFold') })}</Text>
+              )}
             </Box>
           )}
         </Box>

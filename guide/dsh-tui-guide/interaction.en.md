@@ -25,6 +25,8 @@
 | `Ctrl+D` | Same ladder as `Ctrl+C`: interrupt while working (press again to force-exit if the interrupt stalls); press twice while idle to exit |
 | `Ctrl+O` | Toggle transcript/verbose detail, including full reasoning and tool arguments/output; also the escape hatch for the **long-line fold** (a single line over 1000 chars is clipped to 1000 with a `… N chars folded` marker — see the user guide §5). Clicking the folded row (or the tool card face) toggles it too |
 | `Ctrl+P` | Toggle the loaded-context panel shown at startup (while it is on screen) |
+| `Ctrl+B` | Side panel, three states: closed → open and focus the right column; open with the chat focused → focus the right column; panel focused → close and return to the chat. Splits only under `fullscreen` at a content width of ≥93 columns; on narrow terminals and in inline mode the key does nothing (`/jobs` & co. keep their full-screen panels — see the user guide §2.8) |
+| `Alt+Z` | Zoom the active side panel (the chat column keeps its minimum width); press again to restore |
 | `Ctrl+T` | Open the trajectory scene (same as `/trace`); `q`/`Esc` returns to the conversation |
 | `Ctrl+R` | Open input-history search; repeat or press `Down` for the next result |
 | `Ctrl+L` | Clear and force a physical terminal redraw |
@@ -34,8 +36,8 @@
 | `Shift+Up` | Enter message selection; arrows move, `Enter` expands one row, `Esc` exits |
 
 **Remapping shortcuts**: paste, history search, external editor, `Ctrl+O/T/P/R/L`,
-subagent dashboard, show-all, and todo fold are remappable in `/settings` → `dsh-tui` →
-`Shortcuts`.
+side panel (`Ctrl+B`/`Alt+Z`), subagent dashboard, show-all, and todo fold are remappable in
+`/settings` → `dsh-tui` → `Shortcuts`.
 
 - Enter combos like `alt+v`; comma-separate several; leave blank to restore defaults. Saves apply live.
 - Combos that clash with the fixed editing keys or another action are rejected.
@@ -613,7 +615,7 @@ The command menu merges local commands with the DSH command registry. Type `/` t
 **Status**
 
 - `/context`, `/status`, `/cost`, `/balance` — official DeepSeek balance: summary row + hover details, click to refresh.
-- `/config`, `/doctor`, `/init`, `/agents`, `/jobs` — background jobs panel: status/elapsed/exit code, `k` kills.
+- `/config`, `/doctor`, `/init`, `/agents`, `/jobs` — background jobs panel: status/elapsed/exit code, `k` kills; with the split layout on and the terminal wide enough it opens as a right-column panel instead (narrow terminals and inline mode keep the full-screen panel).
 - `/settings`.
 
 **Model and display**
@@ -622,6 +624,7 @@ The command menu merges local commands with the DSH command registry. Type `/` t
   session accent color: bare opens the palette picker, `<name>` sets directly, `status`/`reset`;
   input border + session-name chip at the top-right, per-session; chip off by default, enable
   in `/settings`.
+- `/panel` — side panel: toggle / focus / zoom / switch panels (subcommands in the user guide §2.8).
 - `/lang`.
 
 **Account and policy**
