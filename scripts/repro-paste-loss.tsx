@@ -60,6 +60,13 @@
  * Run with: node --import tsx/esm scripts/repro-paste-loss.tsx             # T01 matrix only (unchanged)
  *           node --import tsx/esm scripts/repro-paste-loss.tsx --all       # matrix + h1..h5
  *           node --import tsx/esm scripts/repro-paste-loss.tsx --case h2   # one discriminant
+ *
+ * Provenance runs (`REPRO_PASTE_LOSS_PROBE_ROOT=<dir>`) send the evidence to
+ * `<dir>/matrix` + `<dir>/verdict`, so checking this fixture out at several
+ * revisions inside ONE working copy can never overwrite another revision's
+ * evidence. On a revision before #1097 the H2 case reports SKIP with the
+ * missing `sanitizePastedText` / `sanitizeEditableText` exports instead of
+ * taking the harness down (see MISSING_SANITIZERS).
  */
 process.env.FORCE_COLOR = '3'
 // The chip stats are parsed as `▸ N lines・M chars`; the parser accepts the zh
@@ -87,11 +94,20 @@ process.env.USERPROFILE = dataDir
  * probe stays read-only (a plain clone must not grow a `.specs/` tree).
  */
 const workspaceRoot = new URL('../../../../', import.meta.url)
+/**
+ * Evidence root override for provenance runs: the same fixture is checked out
+ * at three revisions of ONE working copy, and the default paths hold the
+ * delivery branch's T01/T02 evidence — without an override the last run would
+ * silently overwrite the previous ones. Unset keeps the historical layout.
+ */
+const evidenceRoot = process.env.REPRO_PASTE_LOSS_PROBE_ROOT ?? null
 /** Per-delivery snapshots (T01 shape, one file per delivery; the trailing
  *  separator is part of the banner T01's evidence files recorded). */
-const PROBE_DIR = existsSync(fileURLToPath(new URL('.claude/worktrees', workspaceRoot)))
-  ? fileURLToPath(new URL('.specs/dsh-tui-paste-loss-and-plugin-gate/probe/matrix/', workspaceRoot))
-  : null
+const PROBE_DIR = evidenceRoot !== null
+  ? join(evidenceRoot, 'matrix')
+  : existsSync(fileURLToPath(new URL('.claude/worktrees', workspaceRoot)))
+    ? fileURLToPath(new URL('.specs/dsh-tui-paste-loss-and-plugin-gate/probe/matrix/', workspaceRoot))
+    : null
 /** Per-hypothesis raw output (T02): one `<hN>.txt` per discriminant case. */
 const VERDICT_DIR = PROBE_DIR === null ? null : join(PROBE_DIR, '..', 'verdict')
 
@@ -163,7 +179,7 @@ registerHooks({
   },
 })
 
-const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render, AlternateScreen }, { Chat }, { QuestionStore }, termTest, { startSelection, updateSelection, finishSelection }, { default: inkInstances }, { supportsWin32InputMode }, promptSanitizers] = await Promise.all([
+const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render, AlternateScreen }, { Chat }, { QuestionStore }, termTest, { startSelection, updateSelection, finishSelection }, { default: inkInstances }, { supportsWin32InputMode }] = await Promise.all([
   import('node:stream'),
   import('react'),
   import('@xterm/headless'),
@@ -174,12 +190,36 @@ const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render, Alternat
   import('../src/ink/selection.js'),
   import('../src/ink/instances.js'),
   import('../src/ink/terminal.js'),
-  // The H2 discriminant measures the PRODUCT functions (not a re-implementation):
-  // `Chat` already pulls this module in, so the import costs nothing.
-  import('../src/components/PromptInput.js'),
 ])
 
-const { sanitizePastedText, sanitizeEditableText } = promptSanitizers
+/**
+ * The H2 discriminant measures the PRODUCT functions (not a re-implementation):
+ * `Chat` already pulls this module in, so the import costs nothing. It is
+ * loaded separately and defensively because `sanitizePastedText` — and the
+ * `sanitizeEditableText` EXPORT the H2 baseline compares against — only exist
+ * from #1097 on: on an earlier revision the checks needing them must degrade
+ * to an explicit SKIP (`MISSING_SANITIZERS`), never to a harness crash, which
+ * would leave a revision looking exactly like a clean run.
+ */
+interface PromptSanitizerModule {
+  readonly sanitizePastedText?: (text: string) => string
+  readonly sanitizeEditableText?: (text: string) => string
+}
+let promptSanitizers: PromptSanitizerModule = {}
+let promptSanitizersImportError: string | null = null
+try {
+  promptSanitizers = await import('../src/components/PromptInput.js') as PromptSanitizerModule
+} catch (error: unknown) {
+  promptSanitizersImportError = error instanceof Error ? error.message : String(error)
+}
+const sanitizePastedText = promptSanitizers.sanitizePastedText
+const sanitizeEditableText = promptSanitizers.sanitizeEditableText
+/** H2 symbols this revision does not export — empty from #1097 (bbd2aca8) on,
+ *  both names on any revision before it. */
+const MISSING_SANITIZERS: readonly string[] = [
+  ...(typeof sanitizePastedText === 'function' ? [] : ['sanitizePastedText']),
+  ...(typeof sanitizeEditableText === 'function' ? [] : ['sanitizeEditableText']),
+]
 
 const COLS = 110
 const ROWS = 48
@@ -876,7 +916,36 @@ interface H2Reading {
   readonly anchoredDefect: number
 }
 
+/**
+ * H2 on a revision that predates #1097: every one of its sub-checks reads
+ * `sanitizePastedText` (or the `sanitizeEditableText` export that arrived with
+ * it), so the whole case is a SKIP with its reason, the missing symbols, the
+ * observed export surface and the import error spelled out. A SKIP is data —
+ * it says "this revision cannot answer the question", where a silent omission
+ * or a crashed harness would both read as "no symptom found".
+ */
+function skippedH2(): CaseRun {
+  const surface = Object.keys(promptSanitizers).sort()
+  return {
+    id: 'h2',
+    title: 'H2 ESC-less tail strip width and strip order (DESIGN 2)',
+    lines: [
+      'h2 predict=mixed-tail-loses-newline-plus-next-char-and-removing-the-strip-restores-it',
+      'h2 SKIP scope=whole-case reason=#1097-introduced-symbols-absent-on-this-revision',
+      ...MISSING_SANITIZERS.map(symbol => `h2 SKIP symbol=${symbol} introduced_by=#1097(bbd2aca8)`),
+      'h2 SKIP subchecks=[unit-readings,mechanism-trace,follower-scan,minimal-family,e2e-tie]',
+      `h2 SKIP export-surface specifier=../src/components/PromptInput.js present=[${surface.join(',')}] importError=${promptSanitizersImportError ?? 'none'}`,
+      'h2 SKIP expected=every-subcheck-runs-from-bbd2aca8-on',
+    ],
+    verdict: 'undecided',
+    reason: 'skipped-sanitizer-symbols-absent-on-this-pre-1097-revision',
+  }
+}
+
 async function caseH2(): Promise<CaseRun> {
+  if (MISSING_SANITIZERS.length > 0) return skippedH2()
+  // From here on both sanitizers exist (the guard above is what makes the
+  // direct calls below defined).
   const lines: string[] = ['h2 predict=mixed-tail-loses-newline-plus-next-char-and-removing-the-strip-restores-it']
   const readings: H2Reading[] = []
   let zeroHarmHeld = true
