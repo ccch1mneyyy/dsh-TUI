@@ -173,6 +173,8 @@ A session taken by another terminal shows red with `占用 pid <pid>`
 and can't be entered; it recovers after that terminal exits.
 Fixed items live in `~/.dsh-tui/session-pins.json`.
 The workspace menu has four items: edit / new here / rename / remove from list (**removes the entry only**, directory and session log stay).
+After removal, a directory with past sessions remains in the rail as "History only"; the heading counts registrations and history directories separately, and a success notice confirms the removal.
+A "History only" row offers edit and new here; rename and remove apply only to registered workspaces.
 
 **Image preview** (open by clicking `[Image #N]` in the input or a thumbnail in the transcript)
 
