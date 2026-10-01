@@ -29,6 +29,14 @@
  *      half-leaked record stream through stdin, and the fold chip must report
  *      the SOURCE line count while Enter submits the source byte-for-byte
  *      (L-012: symptom gone AND the function still fires, in one round).
+ *  (h) EITHER LANE — T08's X1d, the mirror of (f): the CR half of the break
+ *      arrived as a TRANSLATED Return while the LF half leaked as record text.
+ *      The newline that Return emitted IS a CR half, and only the assembler
+ *      knows it (the payload text alone cannot say), so the assembler hands
+ *      that provenance over and the leaked LF record folds into it instead of
+ *      printing the break's second `\n`.
+ *  (i) X1d on the PRODUCT: a 2-line source must chip 2 lines and submit
+ *      byte-for-byte — at one boundary, and at three.
  *
  * Run with: node --import tsx/esm scripts/verify-paste-integrity.tsx
  * Exits 1 when any assertion failed (CI gate).
@@ -122,14 +130,26 @@ const tailOf = (ch: string): string => {
 }
 const CR = tailOf('\r')
 const CR_RECORD = `${ESC}${CR}`
+/** The LF half of a break as its own record: RAW it is a TRANSLATED key, the
+ *  same bytes spelled as text are what LEAKS into the payload (X1d). */
+const LF_RECORD = `${ESC}[0;0;10;1;0;1_`
 
+/** Every character of `text` as its OWN synthesized key record — what classic
+ *  conhost emits for a character it does not translate to a virtual key, and
+ *  equally the spelling of a LEAKED record stream: its characters arrive as
+ *  payload characters, so the paste matcher copies the record into the buffer
+ *  instead of the tokenizer translating it into one key. */
+const perCharRecords = (text: string): string =>
+  [...text].map(ch => (ch === ESC ? ESC_CHAR_REC : synthRec(ch))).join('')
 /** The decomposed-paste stream (classic conhost under win32-input-mode): the
- *  marker strings AND the body are synthesized per-character records, so the
- *  parser's decomposed-paste matcher reassembles them into one paste. */
-const decomposedStream = (text: string): string =>
-  markerRecs(`${ESC}[200~`) +
-  [...text].map(ch => (ch === ESC ? ESC_CHAR_REC : synthRec(ch))).join('') +
-  markerRecs(`${ESC}[201~`)
+ *  marker strings plus a body built from parts, so ONE break can put its two
+ *  halves in different lanes. A part is either per-character records
+ *  (`perCharRecords` — payload text, or a leaked record stream) or RAW record
+ *  bytes, which reach the matcher as one TRANSLATED key. */
+const pasteStream = (...parts: readonly string[]): string =>
+  markerRecs(`${ESC}[200~`) + parts.join('') + markerRecs(`${ESC}[201~`)
+/** The decomposed-paste stream of a payload whose every byte is a character. */
+const decomposedStream = (text: string): string => pasteStream(perCharRecords(text))
 
 /** The payload one parse of `input` hands over as a paste, or '' when the
  *  stream produced no paste key at all. */
@@ -245,6 +265,50 @@ check('f6: both halves as records still fold to ONE newline (X1c control)', past
 check('f7: a genuine newline after the fold survives (blank line)', pastePayload(decomposedStream(`alfa${CR_RECORD}\n\nbravo`)), 'alfa\n\nbravo')
 check('f8: an LF after a non-newline character never folds', pastePayload(decomposedStream(`alfa${CR_RECORD}x\nbravo`)), 'alfa\nx\nbravo')
 
+// ── (h) X1d: a LEAKED LF record after a TRANSLATED Return is ONE break ──────
+
+console.log('# (h) X1d: a translated Return + a leaked LF record is the same break')
+/**
+ * The MIRROR of (f), and T08's X1d: here the CR half of each break arrived as
+ * a TRANSLATED Return — raw record bytes, so the matcher itself emitted the
+ * newline — while the LF half of that SAME break leaked into the payload as
+ * record text. Decoding that record then prints the LF half a second time.
+ * Byte provenance cannot be recovered inside the decoder (T-FIX-02 决策与偏离
+ * 1): `alfa\nbravo` and `alfa\n\nbravo` spell the identical payload text, so
+ * only the assembler knows which `\n` its own Return opened.
+ */
+const X1D_LINES = ['alfa', 'bravo', 'charlie', 'delta']
+/** Every break as X1d spells it: translated Return, then the leaked LF record
+ *  and the next line's characters (all payload text to the matcher). */
+const x1dStream = (lines: readonly string[]): string =>
+  pasteStream(
+    ...lines.map((line, i) =>
+      i === 0 ? perCharRecords(line) : CR_RECORD + perCharRecords(`${LF_RECORD}${line}`),
+    ),
+  )
+const x1dMinimum = pastePayload(
+  pasteStream(perCharRecords(X1D_LINES[0]!), CR_RECORD, perCharRecords(`${LF_RECORD}${X1D_LINES[1]!}`)),
+)
+check('h1: a translated Return + a leaked LF record fold to ONE break (minimum)', x1dMinimum, 'alfa\nbravo')
+checkNum('h2: and the payload keeps the source line count', x1dMinimum.split('\n').length, 2)
+check('h3: the real ingress keeps it byte-identical', pasteIngress(x1dMinimum), 'alfa\nbravo')
+const x1dPayload = pastePayload(x1dStream(X1D_LINES))
+check('h4: three boundaries restore the source bytes', x1dPayload, X1D_LINES.join('\n'))
+checkNum('h5: and the restored payload keeps the source line count', x1dPayload.split('\n').length, X1D_LINES.length)
+// Function side + zero harm in the same run (L-012): the breaks that arrive
+// entirely in the translated lane must still fold exactly once, and a genuine
+// newline after such a break may not be swallowed by a stale CR half.
+check(
+  'h6: control — both halves as translated keys still fold to ONE newline',
+  pastePayload(pasteStream(perCharRecords('alfa'), CR_RECORD, LF_RECORD, perCharRecords('bravo'))),
+  'alfa\nbravo',
+)
+check(
+  'h7: control — a genuine newline after a translated break survives',
+  pastePayload(pasteStream(perCharRecords('alfa'), CR_RECORD, LF_RECORD, LF_RECORD, perCharRecords('bravo'))),
+  'alfa\n\nbravo',
+)
+
 // ── (g) on the product: chip lines == source lines, Enter sends the source ──
 
 console.log('# (g) on the product: the fold chip reports the SOURCE lines, Enter sends them')
@@ -312,13 +376,15 @@ type Round = {
   readonly landed: boolean
 }
 
-/** One delivery round: paste -> read value + chip -> Enter -> read submit. */
-async function deliver(buffer: string): Promise<Round> {
+/** One delivery round: paste -> read value + chip -> Enter -> read submit.
+ *  `stream` is the decomposed win32-paste byte stream itself, so a round can
+ *  use the mixed lanes a half-leaked break needs (`pasteStream`). */
+async function deliver(stream: string): Promise<Round> {
   composerRef.current?.clear()
   await settled(() => composerText() === '' && chipOnScreen() === null, { timeoutMs: 3000 })
   submittedCount = 0
   lastSubmitted = ''
-  stdinObj.write(decomposedStream(buffer))
+  stdinObj.write(stream)
   // "Landed" means PAINTED: a 10-char prefix of the first row is what the
   // folded chip's preview shows, so this never slices across a newline.
   const landed = await settled(() => {
@@ -347,6 +413,13 @@ const R_SOURCE = R_ROWS.join('\n')
 /** The same half-leak at three boundaries, on the product's own delivery path. */
 const R_HALF_LEAKED = `${R_ROWS[0]!}${CR}\n${R_ROWS[1]!}${CR_RECORD}\n${R_ROWS[2]!}${CR}\n${R_ROWS[3]!}`
 
+// (i) X1d on the product. 2 rows, each over 300 characters: the fold gate is
+// ≥600 chars, so a 2-LINE source still folds — which is what lets the chip's
+// line count be read on BOTH sides of the fix (3 lines before it).
+const X1D_ROWS = ['november|X1|oscar.', 'papa|X2|quebec.'].map(row => `${row} ${'-'.repeat(330)}`)
+const X1D_SOURCE = X1D_ROWS.join('\n')
+const X1D_STREAM = x1dStream(X1D_ROWS)
+
 let instance: { unmount: () => Promise<void> } | null = null
 try {
   instance = await render(
@@ -357,7 +430,7 @@ try {
   )
   await settled(() => composerRef.current !== null, { timeoutMs: 5000 })
 
-  const halfLeak = await deliver(R_HALF_LEAKED)
+  const halfLeak = await deliver(decomposedStream(R_HALF_LEAKED))
   console.log(`     half-leaked: landed=${halfLeak.landed} valueLines=${halfLeak.value.split('\n').length} chip=${halfLeak.chip === null ? 'none' : `${halfLeak.chip.lines} lines/${halfLeak.chip.chars} chars`} submittedLines=${halfLeak.submitted.split('\n').length}`)
   check('g1: the composer holds the source bytes', halfLeak.value, R_SOURCE)
   checkNum('g2: chip lines == source lines', halfLeak.chip?.lines ?? -1, R_ROWS.length)
@@ -366,9 +439,23 @@ try {
 
   // Function side, same run: a CLEAN 4-row paste must still fold into a chip
   // and still submit in full — the widening may not disturb either.
-  const clean = await deliver(R_SOURCE)
+  const clean = await deliver(decomposedStream(R_SOURCE))
   checkNum('g5: control — a clean 4-row paste still folds', clean.chip?.lines ?? -1, R_ROWS.length)
   check('g6: control — and still submits byte-for-byte', clean.submitted, R_SOURCE)
+
+  // (i) X1d on the product: the mirror leak (translated Return, leaked LF
+  // record) must satisfy the same contract — 2 rows first, then the same
+  // three boundaries (g) uses.
+  const x1dSmall = await deliver(X1D_STREAM)
+  console.log(`     x1d 2-row: landed=${x1dSmall.landed} valueLines=${x1dSmall.value.split('\n').length} chip=${x1dSmall.chip === null ? 'none' : `${x1dSmall.chip.lines} lines/${x1dSmall.chip.chars} chars`} submittedLines=${x1dSmall.submitted.split('\n').length}`)
+  check('i1: the composer holds the source bytes', x1dSmall.value, X1D_SOURCE)
+  checkNum('i2: chip lines == source lines', x1dSmall.chip?.lines ?? -1, X1D_ROWS.length)
+  checkNum('i3: chip chars == source chars', x1dSmall.chip?.chars ?? -1, X1D_SOURCE.length)
+  check('i4: Enter submits the source byte-for-byte', x1dSmall.submitted, X1D_SOURCE)
+
+  const x1dFour = await deliver(x1dStream(R_ROWS))
+  checkNum('i5: three boundaries still report the source lines', x1dFour.chip?.lines ?? -1, R_ROWS.length)
+  check('i6: and Enter still submits the source byte-for-byte', x1dFour.submitted, R_SOURCE)
 } finally {
   await instance?.unmount()
   rmSync(dataDir, { recursive: true, force: true })
