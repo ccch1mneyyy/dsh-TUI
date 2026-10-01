@@ -37,6 +37,7 @@ import { ensureLegacySessionEventTypes, snapshotLiveSessionEvents } from './comp
 import { clearResumeTarget, resumeTargetFromArgv, writeResumeTarget } from '../sessionHistory.js'
 import { initialPromptFromCmdlineArgs } from './startup-args.js'
 import { readHomePrefs } from '../homePrefs.js'
+import { shouldOfferOnboarding } from '../onboardingPrefs.js'
 import { resolveSessionCwd } from '../utils/workspaceRoot.js'
 import { beginRestartAttempt, checkForTuiUpdate, installedTuiVersion, isBootDeadlockTarget, isStandaloneRuntime, isVersionNewer, logRestartEvent, resolveDshProfileName, resolveTuiUpdateTarget, restartTui, updateTuiAndRestart, writeHandoffNotice } from '../update.js'
 import { getLang, isLang, resolveStartupLang, setLang, t, writeLangPref } from '../i18n.js'
@@ -104,6 +105,28 @@ let lastBootedTerminalImages: boolean | undefined
 // Kept importable from here: the startup parser moved to its own dependency-free
 // module so argv probes can load it without the whole plugin graph.
 export { initialPromptFromCmdlineArgs }
+
+/**
+ * Extract the startup prompt from raw app argv, excluding session selectors
+ * and Web startup flag values. `--trusted-host` consumes multiple authorities
+ * up to the next flag; none of them are prompt text (issue #882). An app-level
+ * `--` ends flag parsing; all following tokens are literal prompt text.
+ */
+/**
+ * 落地页 / 首启引导该不该在这次启动出现。
+ *
+ * 只看「用户有没有说要回到哪儿」：`--resume` 目标与首句都算他知道自己要去哪。
+ * **工作区目标不算**——`dst` 默认把 cwd 当工作区目标喂进来，算进去就等于在本机
+ * 最主流的启动方式下把这两个屏永久关掉（实测事故，见调用点的口径注释）。
+ *
+ * @param input.launchSessionId - 本次要恢复的会话（--resume / DSH_TUI_RESUME_SESSION）。
+ * @param input.initialPrompt - 命令行里带的首句提示词（无则空串）。
+ * @returns true 表示这次是「普通启动」。
+ */
+export function isLandingLaunch(input: { launchSessionId?: string; initialPrompt: string }): boolean {
+  return input.launchSessionId === undefined && input.initialPrompt === ''
+}
+
 
 /**
  * How this process should treat the TUI frontend, given the terminal it runs on.
@@ -1429,10 +1452,33 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
    * so a process that dies before the first frame does not consume it.
    */
   const homeSeen = readHomePrefs().seen === true
-  const openHomeOnBoot = !homeSeen
-    && launchSessionId === undefined
-    && requestedWorkspace === undefined
-    && initialPrompt === ''
+  /**
+   * 「普通启动」在这里有两档口径，差在**工作区目标算不算**：
+   *
+   *   - 落地页与首启引导只认「没说要回到哪儿」：没有 resume 目标、没有首句。
+   *   - home（会话与工作区）还多认一条「没说在哪儿干活」——那一屏问的就是这个。
+   *
+   * 工作区目标**不能**进前者的判定：`dst` 那类 launcher 默认把 cwd 当工作区
+   * 目标喂进来（D:/node/dst.cmd 里 set DSH_TUI_WORKSPACE_TARGET=%CD%），一旦
+   * 算进去，落地页在本机最主流的启动方式下**永远不出**——用户实测「既没看到
+   * ob 也没看到 lp」的根因就是这一条。
+   */
+  const noResume = isLandingLaunch({ launchSessionId, initialPrompt })
+  const openHomeOnBoot = !homeSeen && noResume && requestedWorkspace === undefined
+  /**
+   * The launchpad is NOT one-shot the way the workspace home is: every
+   * ordinary launch starts on it, because it is where the first sentence gets
+   * typed rather than a tutorial that retires itself. `DSH_TUI_NO_LAUNCHPAD=1`
+   * is the escape hatch (an automation that wants the old blank conversation
+   * and no dialog in front of it).
+   */
+  const launchpadOnBoot = noResume && process.env.DSH_TUI_NO_LAUNCHPAD !== '1'
+  /**
+   * The first-run guide. Gated on its own preference (not on `homeSeen`): the
+   * two answer different questions, and an install that already knows its
+   * workspace may still never have configured a key.
+   */
+  const onboardingOnBoot = noResume && shouldOfferOnboarding()
   const chat = React.createElement(Chat, {
     channel,
     renderScene: createChannelSceneOutlet(() => rawChannel.pluginScene),
@@ -1440,6 +1486,8 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
     approvalStore,
     injectControllerRef,
     openHomeOnBoot,
+    launchpadOnBoot,
+    onboardingOnBoot,
     // The dsh-tui-extensions row's services (managed dialogs, status line,
     // shortcuts). Soft-consumed: absent the row (stale patch, bare embed),
     // Chat falls back to inert stores and no shortcut registry.

@@ -49,6 +49,18 @@ const GROUPS = {
     ['verify-image-inspection', ['node', '--import', 'tsx/esm', 'scripts/verify-image-inspection.tsx']],
     ['verify-terminal-images-sixel', ['node', '--import', 'tsx/esm', 'scripts/verify-terminal-images-sixel.tsx']],
     ['verify-sixel-transcript', ['node', '--import', 'tsx/esm', 'scripts/verify-sixel-transcript.tsx']],
+// 启动落地页回归：头部（块体大字/鲸鱼/模型/目录）与快捷入口的版面、
+// 高度阶梯（full → no-chips → no-hint → input-only）、受控输入的闭环、
+// 焦点与 Enter 的归属（输入框提交 vs 入口激活）、真鼠标 SGR 点击。
+    ['verify-launchpad', ['node', '--import', 'tsx/esm', 'scripts/verify-launchpad.tsx']],
+// 首次引导向导回归：四步骨架与步骤条降级、凭证/余额文案口径、语言与主题
+// 两个面板的键盘路径、模型/强度/工作区三条切换、招式卡与两个出口
+// （Esc=skipped 不记账，最后一步 Enter=done 才写 onboarding.json）。
+    ['verify-onboarding-wizard', ['node', '--import', 'tsx/esm', 'scripts/verify-onboarding-wizard.tsx']],
+// Chat 集成层：两个屏幕在**真实 Chat** 里的编排契约（/setup 开向导、提交落点、
+// 开整屏界面的动作要先收掉当前屏、覆盖层不收、记账 skipped/done、最小模式、
+// 首启横幅不 stale）。这三类缺陷是单独挂组件的回归测不到的——先有 bug 才有它。
+    ['verify-launchpad-onboarding-chat', ['node', '--import', 'tsx/esm', 'scripts/verify-launchpad-onboarding-chat.tsx']],
 // 带断言的回归：提问面板内联输入（issue #9）+ 工具卡排版
 // （⎿ 缩进、diff 红绿行、信封剥离），失败即非零退出。
     ["repro-askpanel", ['node', '--import', 'tsx/esm', 'scripts/repro-askpanel.tsx']],

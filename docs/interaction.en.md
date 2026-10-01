@@ -69,6 +69,27 @@ subagent dashboard, show-all, and todo fold are remappable in `/settings` → `d
 - Plugins provide the keyboard path for the same action through a slash command or `tuiShortcuts`.
 - A refused rich registration returns `undefined`; an admitted one returns a disposer that removes both the view and its Cordis effect.
 
+### Launchpad and first-run guide
+
+The startup **launchpad** and the **first-run wizard** each own the keyboard; both only hand
+results back to the chat screen and add no new behavior.
+
+- **Launchpad**: printable input goes into the input box (the prefix turns from `❯` to `⌘` when the line
+  starts with `/`), `Backspace`/`Delete`/`←`/`→`/`Home`/`End` edit it; `Enter` submits the whole line
+  **verbatim** to the chat screen (no command decoding here); `↑`/`↓`/`Tab` move focus across the quick
+  actions and `Enter` activates the focused one, while typing returns focus to the input box; `Esc` clears
+  a non-empty line and opens sessions when empty, and `Ctrl+C` on an empty line takes the exit funnel.
+- **Wizard**: `←`/`→` change step (except the effort slider in step 3 and a drilled-in model list, where the
+  horizontal keys belong to the child control), `Tab` switches between the language/theme and
+  model/effort/workspace panes, `↑`/`↓` move the selection; `Enter` runs the step (step 1 = re-check
+  connectivity, step 3 = drill into a provider / switch model / open the workspace picker — **effort is not
+  on Enter**, it is `←`/`→` only and applies as you move); the theme pane previews on cursor move while the
+  **language pane applies on `Enter`**; `Enter` on the last step finishes and records the guide when the
+  focused card is a shortcut card, and tries the command when it is a command card; `Esc` skips
+  (**not recorded**, asked again next launch).
+- **Mouse** (fullscreen): the launchpad's quick actions, the wizard's "Try it" cards and the workspace picker
+  are clickable, and a click lands on the same command path as the keyboard.
+
 ## Editing keys
 
 | Key | Behavior |
