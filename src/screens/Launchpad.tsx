@@ -558,7 +558,9 @@ export function Launchpad({
         )}
         {/* 成组块：宽度与输入框同宽（cardWidth），参数行左对齐框缘、键帽行
             右对齐框缘、Tips 行在组内居中（组居中 ⇒ 屏幕居中）。 */}
-        <Box flexDirection="column" width={cardWidth} marginTop={1}>
+        {/* 词标与输入框之间的呼吸留白（第六版）：默认 2 行，矮屏阶梯先于
+            Tips 撤回 1 行（launchpadLayout 的 heroGapRows）——刻意呼吸，不是遗漏。 */}
+        <Box flexDirection="column" width={cardWidth} marginTop={layout.heroGapRows}>
           {/* 输入框：圆角边框里**只有输入那一行**（第三版：参数行移出框外）。
               边框在焦点回到输入框时提亮——终端里没有指针形状，颜色变化是
               唯一的「这里在等你打字」反馈。光标按闪烁相位切换样式。 */}
@@ -657,8 +659,10 @@ export function Launchpad({
         {/* Tips：`● Tips：` 前缀（圆点橙色 warning）+ 内容 dim，整行居中。
             粘贴提示（空/失败/不可用）临时占用这一行——失败不能静默，
             而行数不变（阶梯预算不动）。 */}
+        {/* 入口行与 Tips 之间的呼吸留白（第六版）：默认 2 行，矮屏先撤它再撤
+            Tips 行本身（launchpadLayout 的 tipGapRows）——刻意呼吸，不是遗漏。 */}
         {(layout.showTip || pasteNotice !== undefined) && (
-          <Box flexShrink={0} alignSelf="center" marginTop={1}>
+          <Box flexShrink={0} alignSelf="center" marginTop={layout.tipGapRows}>
             {pasteNotice === undefined ? (
               <>
                 <Text color="warning">● {t('launchpad-tip-prefix')}</Text>

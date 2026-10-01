@@ -387,7 +387,16 @@ check('A6c 输入卡片只有一层圆角边框（╭ ╰ 各恰好一个，不�
   check('A6g 参数行仍紧贴框、入口行隔一行呼吸留白（hint = param + 2，中间是空行）',
     hint === param + 2 && (lines[param + 1] ?? 'x').trim() === '',
     'hint=' + hint + ' param=' + param + ' mid=' + JSON.stringify(lines[param + 1]))
-  check('A6h Tips 行 = 键帽行 + 2（一行留白后居中收尾）', tip === hint + 2, `tip=${tip} hint=${hint}`)
+  // 第六版：词标（大字末行）与输入框之间隔两行呼吸留白（用户实测要求）。
+  const titleBottom = lines.reduce((acc, l, i) => l.includes('█') ? i : acc, -1)
+  const cardTop = lines.findIndex(l => l.includes('╭'))
+  check('A6g2 词标与输入框之间隔两行呼吸留白（第六版，cardTop = titleBottom + 3）',
+    titleBottom >= 0 && cardTop === titleBottom + 3
+      && (lines[titleBottom + 1] ?? 'x').trim() === '' && (lines[titleBottom + 2] ?? 'x').trim() === '',
+    `titleBottom=${titleBottom} cardTop=${cardTop}`)
+  check('A6h Tips 行 = 入口行 + 3（第六版：两行呼吸留白后居中收尾）',
+    tip === hint + 3 && (lines[hint + 1] ?? 'x').trim() === '' && (lines[hint + 2] ?? 'x').trim() === '',
+    `tip=${tip} hint=${hint} mid1=${JSON.stringify(lines[hint + 1])} mid2=${JSON.stringify(lines[hint + 2])}`)
   check('A6i 整组不钉屏幕底：Tips 与双角铭牌之间仍有留白', tip >= 0 && corner > tip + 1,
     `tip=${tip} corner=${corner}`)
 }
@@ -711,6 +720,13 @@ base.close()
       && at(fullRows + 1).stage === 'full' && at(fullRows + 1).hintsGapRows === 1
       && at(fullRows + 1).totalRows === at(fullRows).totalRows + 1,
     'gap@fullRows=' + at(fullRows).hintsGapRows + ' gap@fullRows+1=' + at(fullRows + 1).hintsGapRows)
+  check('D1c2 第六版两处呼吸（heroGap/tipGap）与参数留白同一批撤：紧凑档 1/1、松档 2/2，恢复顺序 = 参数留白 → 两处呼吸（都在撤 Tips 之前）',
+    at(fullRows).heroGapRows === 1 && at(fullRows).tipGapRows === 1
+      && at(fullRows + 1).heroGapRows === 1 && at(fullRows + 1).hintsGapRows === 1
+      && at(fullRows + 3).heroGapRows === 2 && at(fullRows + 3).tipGapRows === 2
+      && at(fullRows + 3).totalRows === at(fullRows).totalRows + 3,
+    'compact=' + at(fullRows).heroGapRows + '/' + at(fullRows).tipGapRows
+      + ' loose=' + at(fullRows + 3).heroGapRows + '/' + at(fullRows + 3).tipGapRows)
   check('D1d no-tip 同样先撤留白再撤键帽（no-tip 也有留白/紧凑两档）',
     at(noTipRows).stage === 'no-tip' && at(noTipRows).hintsGapRows === 0
       && at(noTipRows + 1).stage === 'no-tip' && at(noTipRows + 1).hintsGapRows === 1,
@@ -1049,6 +1065,15 @@ for (const cols of [120, 100, 72, 60, 48]) {
   check('H6 矮屏撤掉呼吸留白后入口行紧贴参数行（输入框还在，没被留白挤掉）',
     param >= 0 && hint === param + 1 && s.screen().includes('╭'),
     'rows=' + fullGap + ' param=' + param + ' hint=' + hint)
+  // 第六版呼吸也撤干净：紧凑档下词标→输入框回到 1 行留白、入口行→Tips 回到
+  // 1 行留白——撤留白绝不把输入框挤掉（卡片与 Tips 都还在）。
+  const tip = lines.findIndex(l => l.includes('● Tips'))
+  const titleBottom = lines.reduce((acc, l, i) => l.includes('█') ? i : acc, -1)
+  const cardTop = lines.findIndex(l => l.includes('╭'))
+  check('H6b 紧凑档两处呼吸都撤回 1 行（cardTop=titleBottom+2、tip=hint+2），输入框与 Tips 仍在',
+    s.screen().includes('● Tips') && cardTop === titleBottom + 2 && tip === hint + 2
+      && s.screen().includes('╭') && s.screen().includes('❯'),
+    `titleBottom=${titleBottom} cardTop=${cardTop} hint=${hint} tip=${tip}`)
   s.close()
 }
 
