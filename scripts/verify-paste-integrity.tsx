@@ -37,6 +37,13 @@
  *      printing the break's second `\n`.
  *  (i) X1d on the PRODUCT: a 2-line source must chip 2 lines and submit
  *      byte-for-byte — at one boundary, and at three.
+ *  (j) EVERY BOUNDARY — the reported symptom's own form, folded in as CI: the
+ *      10-line / 760-char payload with all 9 line boundaries replaced by record
+ *      text (one ESC-bearing complete record plus eight ESC-less tails), so the
+ *      delivered text carries no literal newline at all. The uat2 A/B case
+ *      (origin/main: valueLines=1, chip `1 lines・745 chars`, deleted=15; HEAD:
+ *      valueLines=10, chip `10 lines・760 chars`, deleted=0), asserted
+ *      in-process AND on the rendered chip / submitted bytes.
  *
  * Run with: node --import tsx/esm scripts/verify-paste-integrity.tsx
  * Exits 1 when any assertion failed (CI gate).
@@ -162,6 +169,45 @@ function pastePayload(input: string): string {
 /** PromptInput.tsx bracketed-paste ingress: CRLF/CR fold, then the sanitizer. */
 const pasteIngress = (text: string): string =>
   sanitizePastedText(text.replace(/\r\n/gu, '\n').replace(/\r/gu, '\n'))
+
+/**
+ * Exact insert/delete accounting between two strings via the longest common
+ * subsequence: `deleted` counts the SOURCE characters no longer there,
+ * `inserted` the characters that came from nowhere. Ported verbatim from the
+ * uat2 fixture's own `align` (`repro-paste-loss.probe.tsx`) so (j) reads the
+ * payload with the SAME measurement the pinned A/B evidence quotes
+ * (`deleted=15` on origin/main, `deleted=0` on HEAD) — a greedy scan would read
+ * "the first character is missing" as "everything after it is missing too".
+ * Iterated by code point over an ASCII payload, so it is also a byte reading.
+ */
+function align(source: string, actual: string): { inserted: number; deleted: number } {
+  const sourceChars = [...source]
+  const actualChars = [...actual]
+  let previous = new Int32Array(actualChars.length + 1)
+  let current = new Int32Array(actualChars.length + 1)
+  for (let i = 1; i <= sourceChars.length; i += 1) {
+    for (let j = 1; j <= actualChars.length; j += 1) {
+      current[j] = sourceChars[i - 1] === actualChars[j - 1]
+        ? previous[j - 1]! + 1
+        : Math.max(previous[j]!, current[j - 1]!)
+    }
+    const spent = previous
+    previous = current
+    current = spent
+    current.fill(0)
+  }
+  const common = previous[actualChars.length]!
+  return { inserted: actualChars.length - common, deleted: sourceChars.length - common }
+}
+
+/** Record residue left VISIBLE: the `_` every record shape terminates with, and
+ *  the ESC byte a half-consumed record leaves behind. A restored payload must
+ *  read zero on both. */
+const residueCount = (text: string): number => [...text].filter(ch => ch === '_' || ch === ESC).length
+
+/** A record-shaped run as painted text (`[Vk;Sc;Uc;Kd;Cs;Rc_`) — the
+ *  underscore residue the #1090 report saw scroll past. */
+const RECORD_SHAPE = /\[\d+;\d+;\d+;\d+;\d+;\d+_/u
 
 // ── (a) order / anchor: a payload character after a record must survive ─────
 
@@ -309,6 +355,63 @@ check(
   'alfa\n\nbravo',
 )
 
+// ── (j) EVERY line boundary replaced by record text: all 10 lines survive ───
+
+console.log('# (j) every line boundary as record text: all 10 lines survive')
+
+/**
+ * The uat2 A/B case in its CI form — and the shape the user reported. The T01
+ * `big` payload (scripts/repro-paste-loss.tsx `WORDS` / `bigLine`: 760 chars
+ * over 10 lines, so the >=600-char fold gate trips) with EVERY one of its 9
+ * line boundaries replaced by record-shaped text, exactly as the fixture's
+ * `leakedPayloadFull` builds it: ONE ESC-bearing complete record (the
+ * `hasRecordStream` arming evidence AND the frame evidence the decode gate
+ * needs) plus eight ESC-less CR tails, four of which also spell the next line's
+ * first character as a tail. The delivered text therefore carries ZERO literal
+ * newlines — the reported ">=600 chars + every break leaked → the chip says
+ * `1 line`" form, and the only shape here where EVERY boundary is record text.
+ *
+ * Reading the red side: reverting ONLY `src/ink/parse-keypress.ts` to
+ * origin/main makes this group read valueLines=1 / chip `1 lines・746 chars` /
+ * deleted=14, where the fixture's FULL origin/main baseline read 745 / 15. The
+ * one extra lost character is defect (a) — the ingress side of that baseline
+ * still carried it, and this regression's ingress is the delivered one.
+ */
+const ALL_BOUNDARY_WORDS = ['Alpha', 'Bravo', 'Charlie', 'Delta', 'Echo', 'Foxtrot', 'Golf', 'Hotel', 'India', 'Juliett']
+/** `Alpha-L1-SENTINEL-A1 … tail-1-----.` — line-start sentinel, uppercase head,
+ *  `.` tail; >=74 chars each, so 10 lines clear the 600-char fold gate. */
+const allBoundaryRow = (i: number): string => {
+  const n = i + 1
+  const head = `${ALL_BOUNDARY_WORDS[i]}-L${n}-SENTINEL-${String.fromCharCode(64 + n)}${n}`
+  const filler = `${String(n).padStart(2, '0')}${'0123456789'.repeat(4)}`
+  return `${`${head} ${filler} tail-${n}`.padEnd(74, '-')}.`
+}
+const ALL_BOUNDARY_ROWS = Array.from({ length: 10 }, (_, i) => allBoundaryRow(i))
+const ALL_BOUNDARY_SOURCE = ALL_BOUNDARY_ROWS.join('\n')
+const ALL_BOUNDARY_LEAKED = ALL_BOUNDARY_ROWS.reduce((acc, line, i) => {
+  if (i === 0) return line
+  if (i === 1) return `${acc}${CR_RECORD}${tailOf(line[0]!)}${line.slice(1)}`
+  if (i % 2 === 0) return `${acc}${CR}${tailOf(line[0]!)}${line.slice(1)}`
+  return `${acc}${CR}${line}`
+}, '')
+/** Every `[13;28;13;1;0;1_` in the delivered form, the ESC-bearing one included
+ *  — the fixture's `crShapedRuns=9 / escBearingCrRecords=1 / escLessCrTails=8`. */
+const allBoundaryCrRuns = ALL_BOUNDARY_LEAKED.split(CR).length - 1
+const ALL_BOUNDARY_STREAM = decomposedStream(ALL_BOUNDARY_LEAKED)
+const allBoundaryValue = pasteIngress(pastePayload(ALL_BOUNDARY_STREAM))
+const allBoundaryLoss = align(ALL_BOUNDARY_SOURCE, allBoundaryValue)
+console.log(`     all-boundary (in-process): deliveredLines=${ALL_BOUNDARY_LEAKED.split('\n').length} valueLines=${allBoundaryValue.split('\n').length} chars=${allBoundaryValue.length}/${ALL_BOUNDARY_SOURCE.length} deleted=${allBoundaryLoss.deleted} inserted=${allBoundaryLoss.inserted}`)
+
+check('j1: all 9 boundaries as record text restore the source byte-for-byte', allBoundaryValue, ALL_BOUNDARY_SOURCE)
+checkNum('j2: and the restored value keeps the source line count (10)', allBoundaryValue.split('\n').length, ALL_BOUNDARY_ROWS.length)
+// Premise guards: without these the case could silently stop being the reported
+// form (a literal newline left in it, or a missing arming record, changes it).
+checkNum('j3: the delivered form carries 0 literal newline characters', [...ALL_BOUNDARY_LEAKED].filter(ch => ch === '\n').length, 0)
+checkNum('j4: the delivered form spells 9 record-shaped runs, ONE per boundary', allBoundaryCrRuns, ALL_BOUNDARY_ROWS.length - 1)
+checkNum('j5: …of which exactly ONE keeps its ESC (the arming evidence)', ALL_BOUNDARY_LEAKED.split(CR_RECORD).length - 1, 1)
+checkNum('j6: the LCS alignment reads deleted == 0 (no source character lost)', allBoundaryLoss.deleted, 0)
+checkNum('j7: the restored value carries no record residue (`_` / ESC)', residueCount(allBoundaryValue), 0)
+
 // ── (g) on the product: chip lines == source lines, Enter sends the source ──
 
 console.log('# (g) on the product: the fold chip reports the SOURCE lines, Enter sends them')
@@ -367,6 +470,15 @@ function chipOnScreen(): { lines: number; chars: number } | null {
     if (m) return { lines: Number(m[1]), chars: Number(m[2]) }
   }
   return null
+}
+
+/** The chip's own painted row — what (j)'s residue check must read, so it reads
+ *  the same row the chip stats come from. Empty while no chip is up. */
+function chipRowOnScreen(): string {
+  for (const row of termTest.viewportLines(term)) {
+    if (/[▸▾] \d+ (?:lines|行)・\d+ (?:chars|字)/u.test(row)) return row
+  }
+  return ''
 }
 
 type Round = {
@@ -456,6 +568,19 @@ try {
   const x1dFour = await deliver(x1dStream(R_ROWS))
   checkNum('i5: three boundaries still report the source lines', x1dFour.chip?.lines ?? -1, R_ROWS.length)
   check('i6: and Enter still submits the source byte-for-byte', x1dFour.submitted, R_SOURCE)
+
+  // (j) on the product: the reported symptom's own shape. Ten rows, 760 chars,
+  // EVERY boundary replaced by record text — the chip must report the source
+  // line count and Enter must send the source bytes (L-012: the symptom gone
+  // AND the function still firing, on the real Chat mount).
+  const allBoundary = await deliver(ALL_BOUNDARY_STREAM)
+  console.log(`     all-boundary (on the product): landed=${allBoundary.landed} valueLines=${allBoundary.value.split('\n').length} chip=${allBoundary.chip === null ? 'none' : `${allBoundary.chip.lines} lines/${allBoundary.chip.chars} chars`} submittedLines=${allBoundary.submitted.split('\n').length} residueRows=${termTest.viewportLines(term).filter(row => RECORD_SHAPE.test(row)).length}`)
+  check('j8: the composer holds the source bytes', allBoundary.value, ALL_BOUNDARY_SOURCE)
+  checkNum('j9: chip lines == source lines (10)', allBoundary.chip?.lines ?? -1, ALL_BOUNDARY_ROWS.length)
+  checkNum('j10: chip chars == source chars', allBoundary.chip?.chars ?? -1, ALL_BOUNDARY_SOURCE.length)
+  check('j11: Enter submits the source byte-for-byte', allBoundary.submitted, ALL_BOUNDARY_SOURCE)
+  checkNum('j12: the painted chip row carries no record residue (`_`)', residueCount(chipRowOnScreen()), 0)
+  checkNum('j13: and no painted row carries a record-shaped run', termTest.viewportLines(term).filter(row => RECORD_SHAPE.test(row)).length, 0)
 } finally {
   await instance?.unmount()
   rmSync(dataDir, { recursive: true, force: true })
