@@ -32,7 +32,7 @@ import type {
 } from '../dsh-adapter/channel.js'
 import type { TranscriptImage } from '../dsh-adapter/transcript-images.js'
 import { isHiddenCommandName, parseCommandName } from '../commands.js'
-import { appendHistory, HISTORY_LIMIT, loadHistoryOldestFirst } from '../history.js'
+import { appendHistory, HISTORY_LIMIT, historyProjectKey, loadHistoryOldestFirst } from '../history.js'
 import { mentionAtCaret } from '../utils/mentions.js'
 import { preserveSelection, type FileCandidate } from '../utils/fileSuggestions.js'
 import { isMod } from '../utils/modifiers.js'
@@ -774,8 +774,10 @@ export function PromptInput({
   const historyIndex = React.useRef(-1)
   const historyDraft = React.useRef<PromptHistoryEntry>({ text: '', images: [] })
   /** The persisted history is read lazily, once per mount and project: the
-   * cwd it was seeded for, so a workspace switch re-seeds (see seedHistory). */
-  const historySeededCwd = React.useRef<string | null>(null)
+   * normalized project key it was seeded for, so a workspace switch re-seeds
+   * (see seedHistory) while a respelled path to the same directory does not.
+   * `null` = never seeded; `''` = seeded without a workspace. */
+  const historySeededProject = React.useRef<string | null>(null)
   /** Visible `[Image #N]` labels are presentation only; this sidecar carries
    * the non-reusable capability for the current draft. History/rewind text
    * restored without this map can never bind to a later image by accident. */
@@ -1356,18 +1358,22 @@ export function PromptInput({
    * lists to merge at recall time. Restored text carries no image capability
    * (the file stores text only), which is also what keeps a recalled entry
    * from binding to a later staged image by accident. The walk is scoped to
-   * the channel's workspace cwd, so a workspace switch re-seeds it with that
-   * project's history instead of carrying the previous one over.
+   * the channel's workspace, keyed the same way the store keys it
+   * (historyProjectKey), so a workspace switch re-seeds it with that
+   * project's history instead of carrying the previous one over — and a
+   * respelled path to the same directory is not a switch.
    * @returns Whether the re-seed cut short a walk in progress: the composer
    * then shows a recalled entry of the previous project while the draft that
    * walk started from is still held in `historyDraft`.
    */
   const seedHistory = (): boolean => {
-    const cwd = channel.cwd ?? ''
-    if (historySeededCwd.current === cwd) return false
+    // The store's own key, not the raw cwd: `/repo` and `/repo/` are one
+    // project, so respelling the path must not look like a workspace switch.
+    const project = historyProjectKey(channel.cwd) ?? ''
+    if (historySeededProject.current === project) return false
     const interrupted = historyIndex.current >= 0
-    historySeededCwd.current = cwd
-    history.current = loadHistoryOldestFirst(cwd).map(entry => ({ text: entry.text, images: [] }))
+    historySeededProject.current = project
+    history.current = loadHistoryOldestFirst(channel.cwd).map(entry => ({ text: entry.text, images: [] }))
     historyIndex.current = -1
     return interrupted
   }
