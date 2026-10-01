@@ -19,9 +19,9 @@ export type CnyPerMillion = readonly [number, number]
 
 /** 一个官方模型的完整价目（人民币/百万 tokens）。 */
 export interface DeepSeekModelPrice {
-  /** 输入（缓存未命中，含写入缓存部分）。 */
+  /** 输入（缓存未命中）单价；缓存写入量按此价另计。 */
   inputMiss: CnyPerMillion
-  /** 输入（缓存命中）。 */
+  /** 输入（缓存命中）单价。 */
   inputHit: CnyPerMillion
   /** 输出。 */
   output: CnyPerMillion
@@ -133,9 +133,11 @@ function costSplit(
   const costOf = (bucket: CostTokenTotals, rateIndex: 0 | 1): number => {
     const input = Math.max(0, bucket.input)
     const output = Math.max(0, bucket.output)
-    const cacheRead = Math.max(0, Math.min(input, bucket.cacheRead))
-    return (input - cacheRead) * price.inputMiss[rateIndex]
+    const cacheRead = Math.max(0, bucket.cacheRead)
+    const cacheWrite = Math.max(0, bucket.cacheWrite)
+    return input * price.inputMiss[rateIndex]
       + cacheRead * price.inputHit[rateIndex]
+      + cacheWrite * price.inputMiss[rateIndex]
       + output * price.output[rateIndex]
   }
   return {
@@ -146,11 +148,12 @@ function costSplit(
 
 /**
  * 估算本会话花费拆分（人民币，元）：高峰桶按高峰价、空闲桶按空闲价。
- * 公式（每桶）：(input − cacheRead) × 输入未命中价 + cacheRead × 输入命中价
- * + output × 输出价；cacheWrite 不单独计价（写入缓存的 token 已计入 input
- * 的未命中部分）。模型未收录或所有 token 均为零时返回 undefined（调用方
- * 不显示金额）。这是**估算**，不是账单——定价可能变动，以 DeepSeek 平台
- * 账单为准。
+ * 公式（每桶）：input × 输入未命中价 + cacheRead × 输入命中价
+ * + cacheWrite × 输入未命中价 + output × 输出价。DSH 的 TokenUsage 契约里
+ * 这四个计数是**互斥分项**——input 即未命中输入，缓存读/写各自另计——所以
+ * 四项直接相加，不做 input 与 cacheRead 之间的抵扣。模型未收录或所有 token
+ * 均为零时返回 undefined（调用方不显示金额）。这是**估算**，不是账单——
+ * 定价可能变动，以 DeepSeek 平台账单为准。
  * @param tokens - 按计价时段分桶的会话累计 token。
  * @param model - 当前模型 id（前缀匹配价目）。
  */
@@ -204,8 +207,8 @@ export function cloneCostBuckets(buckets: CostTokenBuckets): CostTokenBuckets {
 
 /**
  * 把一笔 usage 按计价时段累加进分桶（in-place）。durable 事件按发生时刻
- * 落桶，峰/谷单价不同；cacheRead/cacheWrite 作为分项保留（cacheRead 计价
- * 时按命中价，见 costSplit）。
+ * 落桶，峰/谷单价不同；四个计数按 DSH 的 TokenUsage 契约互斥累加
+ * （cacheRead 计价时按命中价、cacheWrite 按未命中价，见 costSplit）。
  */
 export function addUsageToCostBuckets(
   buckets: CostTokenBuckets,
@@ -251,11 +254,15 @@ export interface SessionCostEstimate {
   readonly unpricedTokens: number
 }
 
-/** 分桶里的计价 token 总数（input 含 cacheRead，与既有显示口径一致）。 */
+/**
+ * 分桶里的计价 token 总数（两桶合计）：DSH 的 TokenUsage 契约里四个计数是
+ * **互斥分项**（input 只含未命中输入，缓存读/写各自另计），故四项全量相加。
+ */
 function bucketTokenTotal(buckets: CostTokenBuckets): number {
   const peak = buckets.peak ?? EMPTY_TOTALS
   const idle = buckets.idle ?? EMPTY_TOTALS
-  return peak.input + peak.output + idle.input + idle.output
+  return peak.input + peak.output + peak.cacheRead + peak.cacheWrite
+    + idle.input + idle.output + idle.cacheRead + idle.cacheWrite
 }
 
 /**
