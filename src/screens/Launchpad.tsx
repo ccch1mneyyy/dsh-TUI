@@ -1,6 +1,7 @@
 import React from 'react'
 import { Box, Text, useInput, useTerminalSize } from '../ui.js'
 import { SearchBox } from '../components/SearchBox.js'
+import { OverlayAbove } from '../components/OverlayAbove.js'
 import { LogoV2 } from '../components/LogoV2.js'
 import { resolveLaunchpadLayout, type LaunchpadLayout } from '../components/launchpadLayout.js'
 import { type LaunchpadAction } from '../components/launchpadActions.js'
@@ -75,6 +76,63 @@ function ActionChip({
   )
 }
 
+/** 参数行的四段身份（第五版：四段各自可点，点开 Chat 既有的选择器 overlay）。 */
+export type LaunchpadParamSegment = 'model' | 'effort' | 'mode' | 'permission'
+
+/** 焦点环里参数段的编码：-2 起按显示顺序递减（-1 是输入框，0.. 是动作入口）。 */
+const paramFocusOf = (segment: LaunchpadParamSegment): number => -2 - PARAM_SEGMENT_ORDER.indexOf(segment)
+/** 焦点值反解参数段；-1（输入框）与动作入口（≥0）都返回 undefined。 */
+function segmentOfFocus(focus: number): LaunchpadParamSegment | undefined {
+  return focus <= -2 ? PARAM_SEGMENT_ORDER[-2 - focus] : undefined
+}
+/** 参数段固定显示顺序（模型 · 思考深度 · 模式 · 权限）。 */
+const PARAM_SEGMENT_ORDER: readonly LaunchpadParamSegment[] = ['model', 'effort', 'mode', 'permission']
+
+/**
+ * 参数行的一个可点段（第五版）：与 ActionChip 同一套鼠标契约——挂得上
+ * onClick 才给 hover 提亮；点击 stopImmediatePropagation（不触发整页的
+ * 收回焦点兜底）；悬停/焦点 = 该段文本提亮（背景高亮 + 主题色），宽度
+ * 不变（不加内边距，参数行的宽度预算按原文算）。
+ */
+function ParamChip({
+  label,
+  colored,
+  focused,
+  onActivate,
+  onHover,
+}: {
+  label: string
+  /** 模型段常亮浅紫（autoAccept）；其余段默认 dim。 */
+  colored?: boolean
+  focused: boolean
+  onActivate: () => void
+  onHover: () => void
+}): React.ReactNode {
+  const [hovered, setHovered] = React.useState(false)
+  const active = hovered || focused
+  return (
+    <Box
+      flexShrink={0}
+      height={1}
+      onMouseEnter={() => { setHovered(true); onHover() }}
+      onMouseLeave={() => { setHovered(false) }}
+      onClick={(event: ClickEvent) => {
+        event.stopImmediatePropagation()
+        onActivate()
+      }}
+    >
+      <Text
+        backgroundColor={active ? 'userMessageBackgroundHover' : undefined}
+        color={focused ? 'suggestion' : colored ? 'autoAccept' : undefined}
+        bold={focused || colored === true}
+        dimColor={!active && colored !== true}
+      >
+        {label}
+      </Text>
+    </Box>
+  )
+}
+
 /**
  * Launchpad —— 每次启动的第一屏（取代旧的"只有鲸鱼标题的空白会话"）。
  *
@@ -89,8 +147,11 @@ function ActionChip({
  *
  *   - 输入框（圆角边框）里**只有输入那一行**；
  *   - 紧贴框下方一行**参数行**（左对齐输入框）：`模型 · 思考深度 · 模式 · 权限`，
- *     四段缺哪段省哪段、全空整行不画；模型名带浅紫主题色（autoAccept）；
- *   - 再下一行**键帽按钮**（整行右对齐，与输入框右缘对齐）；
+ *     四段缺哪段省哪段、全空整行不画；模型段**只显示模型名**（不带 provider/
+ *     前缀）且带浅紫主题色（autoAccept）；第五版起四段**各自可点**，点开 Chat
+ *     既有的选择器（overlayPanel 盖在本屏之上，选中值就地更新这一行）；
+ *   - 隔一行呼吸留白（矮屏阶梯可撤，见 launchpadLayout）再一行**键帽按钮**
+ *     （整行右对齐，与输入框右缘对齐）；
  *   - 再下一行 **`● Tips：`**（居中，圆点橙色 warning）。
  *
  * 屏幕最底的双角铭牌（左 `cwd:branch`、右版本号）保留。
@@ -125,7 +186,9 @@ export function Launchpad({
   onStarClick,
   firstRun,
   actions,
-  provider,
+  overlayPanel,
+  inputPaused = false,
+  onParamPick,
   model,
   effort,
   mode,
@@ -163,12 +226,31 @@ export function Launchpad({
    */
   actions: readonly LaunchpadAction[]
   /**
-   * 框下参数行的四段（第三版：参数行移出输入框、紧贴框下方，左对齐输入框）：
-   * 模型（provider/model）、思考深度（effort）、模式（plan/act）、权限
-   * （permission preset 当前身份）。任一段拿不到就省掉那一段，全拿不到就
-   * 整行不画（成组行矮一行，见 `resolveLaunchpadLayout` 的 `params`）。
+   * 盖在落地页之上的选择器面板（第五版）：Chat 把它既有的 picker overlay
+   * （/model · /effort · /plan · /permission 那套）原样传进来，本屏只负责
+   * 挂载位置——OverlayAbove 锚在输入框卡片顶边、向上展开，选择器吃键盘
+   *（见 `inputPaused`），Esc 关掉它回到落地页，选中的值就地更新参数行。
+   * 不传 = 没有选择器在开（正常落地页形态）。
    */
-  provider?: string | undefined
+  overlayPanel?: React.ReactNode
+  /**
+   * 选择器盖在落地页之上时为 true：本屏的 useInput 整块让位（选择器的按键
+   * 由 Chat 的 overlay 分支处理；未消费的键不许漏进草稿）。
+   */
+  inputPaused?: boolean
+  /**
+   * 参数行四段被点击/回车时交给 Chat 的段身份（第五版）。Chat 把它映射到
+   * 既有命令（model→/model、effort→/effort、mode→/plan、permission→
+   * /permission），打开的就是聊天页同款选择器——本屏不自己造选择器。
+   */
+  onParamPick?: ((segment: LaunchpadParamSegment) => void) | undefined
+  /**
+   * 框下参数行的四段（第三版：参数行移出输入框、紧贴框下方，左对齐输入框）：
+   * 模型（**只显示模型名**，不带 provider/ 前缀——第五版用户要求「两个都放
+   * 太长了」）、思考深度（effort）、模式（plan/act）、权限（permission
+   * preset 当前身份）。任一段拿不到就省掉那一段，全拿不到就整行不画
+   * （成组行矮一行，见 `resolveLaunchpadLayout` 的 `params`）。
+   */
   model?: string | undefined
   effort?: string | undefined
   /** 会话模式（`Chat` 读 `channel.mode.plan`）；缺省不画那一段。 */
@@ -202,7 +284,9 @@ export function Launchpad({
   // 光标偏移只在"输入框有焦点"时才有意义；未给（或焦点在快捷入口行）时
   // 一律按行尾算——这与 `SearchBox` 自己的 `cursorOffset ?? query.length`
   // 同一条约定，两处必须一致，否则退格会从"看不见的位置"删字。
-  const caret = focusIndex >= 0 ? query.length : (cursorOffset ?? query.length)
+  const caret = focusIndex === -1 ? (cursorOffset ?? query.length) : query.length
+  /** 焦点是否在输入框上（-1）；参数段（≤-2）与动作入口（≥0）都不算。 */
+  const inputFocused = focusIndex === -1
 
   // 粘贴的异步落点：剪贴板读回是异步的，读取期间用户可能继续打字——插入必须
   // 用**当时最新**的 query/caret（PromptInput 用 revision 守同一条；这里没有
@@ -245,7 +329,7 @@ export function Launchpad({
   // 出现"必须手动点一下才开始闪"（用户实测）。它其余的语义（SearchBox 的
   // 失焦降级等）保留，只是不再控制闪烁。样式切换、字符不动（模块头注释里
   // 的契约）。定时器 unref——探针宿主不因闪烁挂着事件循环。
-  const inputActive = focusIndex < 0
+  const inputActive = inputFocused
   const [caretPhase, setCaretPhase] = React.useState(true)
   React.useEffect(() => {
     if (!inputActive) {
@@ -257,18 +341,21 @@ export function Launchpad({
     return () => { clearInterval(timer) }
   }, [inputActive])
 
-  // 参数行（第四版：**只画值、不画字段名**——用户原话"为什么还要强调一下模型…
-  // 大家都知道是模型啊，不用画蛇添足"）：`zhipu/glm-5.3  ·  Max  ·  Execute  ·  default`。
-  // 模式值固定 `Plan`/`Execute`（不本地化的产品词）；模型值带浅紫主题色，其余 dim。
-  const paramParts = (() => {
-    const modelLabel = [provider, model].filter(part => part !== undefined && part !== '').join('/')
-    const effortLabel = effort === undefined || effort === '' ? '' : effort.charAt(0).toUpperCase() + effort.slice(1)
-    const modeLabel = mode === 'plan' ? 'Plan' : mode === 'act' ? 'Execute' : ''
-    const parts: { value: string; colored?: boolean }[] = []
-    if (modelLabel !== '') parts.push({ value: modelLabel, colored: true })
-    if (effortLabel !== '') parts.push({ value: effortLabel })
-    if (modeLabel !== '') parts.push({ value: modeLabel })
-    if (permission !== undefined && permission !== '') parts.push({ value: permission })
+  // 参数行（第五版）：**只画值、不画字段名**；模型段**只显示模型名**（去掉
+  // provider/ 前缀——用户原话「两个都放的话就太长了」）：
+  // `glm-5.3  ·  Max  ·  Execute  ·  default`。模式值固定 `Plan`/`Execute`
+  // （不本地化的产品词）；模型值带浅紫主题色，其余 dim。四段各自可点
+  // （onParamPick → Chat 既有的 /model · /effort · /plan · /permission 选择器）。
+  const paramParts: { segment: LaunchpadParamSegment; value: string; colored?: boolean }[] = (() => {
+    const parts: { segment: LaunchpadParamSegment; value: string; colored?: boolean }[] = []
+    if (model !== undefined && model !== '') parts.push({ segment: 'model', value: model, colored: true })
+    if (effort !== undefined && effort !== '') {
+      parts.push({ segment: 'effort', value: effort.charAt(0).toUpperCase() + effort.slice(1) })
+    }
+    if (mode === 'plan' || mode === 'act') {
+      parts.push({ segment: 'mode', value: mode === 'plan' ? 'Plan' : 'Execute' })
+    }
+    if (permission !== undefined && permission !== '') parts.push({ segment: 'permission', value: permission })
     return parts
   })()
   // 宽度自适应：参数行是**单行**（折行会把 F 组的「整句要么完整要么不出现」不
@@ -318,6 +405,9 @@ export function Launchpad({
    * （首屏没有可滚的东西）。
    */
   useInput((input, key, event) => {
+    // 选择器盖在这一屏之上时键盘整块让位（Chat 的 overlay 分支处理；Esc 关
+    // 选择器回到这里）。没有这道闸，选择器分支没消费的键会漏进草稿。
+    if (inputPaused) return
     const composing = key.ctrl || key.meta || key.super
     // 终端原生粘贴（bracketed paste：Ctrl+Shift+V / 右键 / Shift+Insert）：
     // ink 把载荷标成 isPasted 交给 useInput；标记字节（\x1b[200~ / 201~）在
@@ -376,26 +466,34 @@ export function Launchpad({
       return
     }
     if (isPlainReturn(key)) {
-      // 焦点画在哪一格，Enter 就归谁：`❯` 落在键帽行上时激活那一条，
-      // 输入框有焦点（`-1`）时才把整行原文交回 Chat。
-      // `ListItem` 是纯展示原语（`onClick` 只接鼠标），所以键盘这条路
-      // 必须由本屏自己走完——否则入口只能点、不能按，和模块头部
-      // 「每个可点目标都必须有一条键盘路径」的约定不符。
-      const focused = focusIndex >= 0 ? actions[focusIndex] : undefined
-      if (focused === undefined) onSubmit(query)
-      else onAction(focused)
+      // 焦点画在哪一格，Enter 就归谁：参数段（≤-2）点开它对应的选择器、
+      // 动作入口（≥0）激活那一条，输入框有焦点（`-1`）时才把整行原文交回
+      // Chat。键盘路径是仓库硬规矩（每个可点目标都要有），四段参数也不例外。
+      const focusedSegment = segmentOfFocus(focusIndex)
+      if (focusedSegment !== undefined && onParamPick !== undefined) {
+        onParamPick(focusedSegment)
+      } else {
+        const focused = focusIndex >= 0 ? actions[focusIndex] : undefined
+        if (focused === undefined) onSubmit(query)
+        else onAction(focused)
+      }
       event.stopImmediatePropagation()
       return
     }
     if (key.tab || key.upArrow || key.downArrow) {
       if (actions.length === 0) return
       const step = key.upArrow || (key.tab && key.shift) ? -1 : 1
-      // `-1`（输入框）从下方进入：向"上"回到输入框，向"下"落到第一行——
-      // Tab 在输入框上则直接进第一行。
-      // 焦点环 = 输入框（`-1`）+ **画出来的**入口。窄终端里 `fitChips` 会丢掉放不下的
-      // 那几个，按整张动作表绕圈会让 `❯` 指着一个看不见的入口、Enter 触发一个看不见的
-      // 动作。第一行再按 ↑ 回到输入框（环的上一格就是 `-1`），这也是注释里承诺的那条路。
-      const ring = [-1, ...chips.map(chip => chip.index)]
+      // `-1`（输入框）从下方进入：向"上"回到输入框，向"下"落到第一格——
+      // Tab 在输入框上则直接进第一格。
+      // 焦点环 = 输入框（`-1`）+ **画出来的**参数段（第五版，先于入口行——
+      // 参数行在版面上就在入口行上方，↓ 的空间顺序与环顺序一致）+ **画出来的**
+      // 入口。窄终端里 `fitChips`/参数行的宽度裁剪会丢掉放不下的那几个，按
+      // 整张表绕圈会让焦点指着一个看不见的目标、Enter 触发一个看不见的动作。
+      const ring = [
+        -1,
+        ...fittedParams.map(part => paramFocusOf(part.segment)),
+        ...chips.map(chip => chip.index),
+      ]
       const at = ring.indexOf(focusIndex)
       const next = ring[((at >= 0 ? at : 0) + step + ring.length) % ring.length]!
       onFocusChange(next)
@@ -403,7 +501,7 @@ export function Launchpad({
       return
     }
     if (key.leftArrow || key.rightArrow || key.home || key.end) {
-      if (focusIndex >= 0) return
+      if (!inputFocused) return
       const at = caret
       const next = key.home ? 0
         : key.end ? query.length
@@ -414,7 +512,7 @@ export function Launchpad({
       return
     }
     if (key.backspace || key.delete) {
-      if (focusIndex >= 0) return
+      if (!inputFocused) return
       const at = caret
       if (key.backspace) {
         if (at === 0) return
@@ -467,17 +565,17 @@ export function Launchpad({
           <Box
             flexDirection="column"
             borderStyle="round"
-            borderColor={focusIndex < 0 ? 'suggestion' : 'inactive'}
+            borderColor={inputFocused ? 'suggestion' : 'inactive'}
             paddingX={1}
             width={cardWidth}
           >
             <SearchBox
               query={query}
               placeholder={t('launchpad-placeholder')}
-              isFocused={focusIndex < 0}
+              isFocused={inputFocused}
               // 焦点在输入框时按持焦渲染（光标常在、随相位呼吸）；焦点挪到
-              // 动作行时才交回真实的终端焦点标志（那时光标本来就不该画）。
-              isTerminalFocused={focusIndex < 0 ? true : isTerminalFocused}
+              // 参数段/动作行时才交回真实的终端焦点标志（那时光标本来就不该画）。
+              isTerminalFocused={inputFocused ? true : isTerminalFocused}
               // 占位紧跟 ❯ 之后左对齐（用户实测要求；只影响落地页这一处）。
               placeholderAlign="left"
               // 边框由外层卡片画——SearchBox 自己那圈收起来，否则就是框套框。
@@ -485,25 +583,52 @@ export function Launchpad({
               prefix={query.startsWith('/') ? '⌘' : '❯'}
               width={cardWidth - 4}
               cursorOffset={caret}
-              caretBlink={focusIndex < 0 ? caretPhase : true}
+              caretBlink={inputFocused ? caretPhase : true}
             />
           </Box>
-          {/* 参数行：框外、紧贴框下（无空行），左对齐输入框（框缘 + padding 2 格）。 */}
+          {/* 参数行：框外、紧贴框下（无空行），左对齐输入框（框缘 + padding 2 格）。
+              第五版：四段各自可点（ParamChip——挂 onClick 才有 hover 提亮），
+              分隔符（双空格 · 双空格）保持不可点。 */}
           {hasParams && (
-            <Box paddingLeft={2} height={1}>
-              <Text dimColor>
-                {fittedParams.map((part, index) => (
-                  <React.Fragment key={part.value}>
-                    {index > 0 && '  ·  '}
-                    <Text color={part.colored === true ? 'autoAccept' : undefined} bold={part.colored === true}>
+            <Box paddingLeft={2} height={1} flexDirection="row">
+              {fittedParams.map((part, index) => (
+                <React.Fragment key={part.segment}>
+                  {index > 0 && <Text dimColor>{'  ' + String.fromCharCode(183) + '  '}</Text>}
+                  {onParamPick === undefined ? (
+                    <Text
+                      color={part.colored === true ? 'autoAccept' : undefined}
+                      bold={part.colored === true}
+                      dimColor={part.colored !== true}
+                    >
                       {part.value}
                     </Text>
-                  </React.Fragment>
-                ))}
-              </Text>
+                  ) : (
+                    <ParamChip
+                      label={part.value}
+                      colored={part.colored}
+                      focused={focusIndex === paramFocusOf(part.segment)}
+                      onActivate={() => onParamPick(part.segment)}
+                      onHover={() => onFocusChange(paramFocusOf(part.segment))}
+                    />
+                  )}
+                </React.Fragment>
+              ))}
             </Box>
           )}
+          {/* 选择器浮层（第五版）：Chat 传进来的既有 picker overlay 盖在落地页
+              之上——锚在输入框卡片顶边向上展开（与聊天页「picker 紧贴输入框」
+              同一姿态），零布局高度、不推动这一屏的版面。 */}
+          {overlayPanel !== undefined && (
+            <OverlayAbove maxHeight={Math.max(rows - 8, 1)}>{overlayPanel}</OverlayAbove>
+          )}
         </Box>
+        {/* 参数行与入口行之间的呼吸留白（第五版用户实测要求「跟输入框太紧了，
+            留一两行空」）：默认 1 行；矮屏阶梯里先于入口行被撤（见
+            launchpadLayout 的 PARAM_HINTS_GAP_ROWS）。参数行缺席时不画
+            （入口行直接紧贴框底，原契约不变）。 */}
+        {hasParams && layout.showHints && hintsFit && layout.hintsGapRows > 0 && (
+          <Box flexShrink={0} height={1} />
+        )}
         {/* 动作行（第四版纯文字入口）：紧贴参数行（无空行），整行右对齐——
             右缘与输入框右缘对齐。全宽行 + 右 padding = 屏幕与卡片的居中差：入口
             总数可能比卡片宽，钉死在组宽（cardWidth）里会被 yoga 折行（实测），

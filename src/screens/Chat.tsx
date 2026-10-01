@@ -202,6 +202,13 @@ const COMMAND_RESULT_CELLS = 200
  *  file, but a healthy import of thousands of conversations finishes well
  *  inside this; without a cap a wedged child would hang the loop forever. */
 const MIGRATE_CHILD_TIMEOUT_MS = 30 * 60 * 1000
+/**
+ * 落地页参数行四段能点开的既有选择器（第五版）：模型 → /model、思考深度 →
+ * /effort、模式 → /plan、权限预设 → /permission。盖在落地页之上时键盘归
+ * 选择器（见 useInput 的 launchpad 分支注释）；其余 overlay 类型不在此列，
+ * 落地页期间照旧整块让位。
+ */
+const LAUNCHPAD_OVERLAY_KINDS: ReadonlySet<string> = new Set(['model', 'effort', 'plan', 'permission'])
 
 function cleanCommandError(error: unknown): string {
   try {
@@ -656,13 +663,23 @@ export function Chat({
 
   const launchpadShown = launchpadOpen && launchpadVisible()
   /**
+   * 落地页之上是否盖着一个参数选择器（第五版：参数行四段各自可点，点开的
+   * 是聊天页同一套 /model · /effort · /plan · /permission overlay）。这时
+   * 键盘归选择器（Esc 关它回到落地页），渲染也要把 pickerPanels 带进
+   * 落地页分支——不然整屏 early-return 把 overlay 吞了，"点了没反应"。
+   */
+  const launchpadOverlayUp = launchpadShown && LAUNCHPAD_OVERLAY_KINDS.has(overlay.kind)
+  /**
    * 渲染在**覆盖层**（而不是整屏 early-return）的那几个命令。
    *
    * 落地页的快捷入口与向导招式卡的「试一下」都走 `runCommand`，而 supervisor /
    * settings / help 的 early-return 排在两个界面**之后**：不收掉当前界面就是
    * "点了没反应"，状态还滞留着、等界面关掉才突然弹出来。默认收，白名单只留给覆盖层。
    */
-  const overlayCommandNames = React.useMemo(() => new Set(['model']), [])
+  const overlayCommandNames = React.useMemo(
+    () => new Set(['model', 'effort', 'plan', 'permission']),
+    [],
+  )
   /**
    * The first-run guide. Renders above the launchpad (see the prop docs): a
    * launch that needs setup has not answered the launchpad's question yet.
@@ -2009,11 +2026,12 @@ export function Chat({
    *
    *   - a slash command → `runCommand`, the same dispatch a typed command
    *     takes in the composer. The line is NOT submitted to the model.
-   *   - ordinary text  → the draft is parked in `historyFill`, so the composer
-   *     mounts already holding it. The user's first sentence is never sent
-   *     behind their back: they land on the chat screen with the draft in
-   *     front of them, one Enter away (or a click into the input to edit).
-   *   - empty          → nothing to hand over; just show the conversation.
+   *   - ordinary text  → SENT DIRECTLY (fifth revision, user-reported bug:
+   *     "按了回车就直接进入流式输出"). The line rides the composer's own
+   *     submit path (`channel.submit`, which queues through the DSH inbox
+   *     while a turn is running) — no draft is parked anywhere, the composer
+   *     mounts EMPTY because the content is already gone as the first turn.
+   *   - empty          → nothing to send; just show the conversation.
    *
    * History is appended for the two non-empty cases (matching what PromptInput
    * does on submit) so the launchpad's first line is reachable with ↑ later.
@@ -2035,8 +2053,10 @@ export function Chat({
       void runCommand(parsed.name, parsed.rawInput)
       return
     }
-    setHistoryFill(text)
-    channel.notify(t('launchpad-handoff'), { timeoutMs: 4000 })
+    // 直接发送：与 composer 回车同一条提交路径。发出去之后输入框是空的
+    // （内容已作为首轮发出，绝不"既发了又留在框里"），也没有交接提示——
+    // 没有草稿要交，一句"已放进输入框"的 toast 反而是假的。
+    channel.submit(text)
   }, [channel])
 
   /**
@@ -3560,9 +3580,14 @@ export function Chat({
     if (onboardingOpen) return
     // The launchpad owns the whole terminal while it is up — including the
     // plain letters that would otherwise reach the composer, which is exactly
-    // the point: it IS the composer on this screen, and its draft is handed to
-    // the real one on submit (see closeLaunchpad).
-    if (launchpadShown) return
+    // the point: it IS the composer on this screen, and its draft is submitted
+    // directly (see closeLaunchpad). ONE exception (fifth revision): a picker
+    // opened from the param row renders ABOVE the launchpad and therefore owns
+    // the keyboard — fall through to the overlay branches below (Esc closes the
+    // picker back onto the launchpad). The launchpad's own useInput is paused
+    // via inputPaused for exactly this window, so keys the picker does not
+    // consume cannot leak into the draft.
+    if (launchpadShown && !launchpadOverlayUp) return
     // The session tree owns the whole terminal while it is up: plain letters
     // drive its search, clicks and Enter drive its action menu.
     if (treeOpen) return
@@ -4570,7 +4595,367 @@ export function Chat({
     />
   ) : null
   const interruptPanel = approvalPanelNode ?? questionPanelNode
-  const screenOpen = channel.pluginScene !== undefined || supervisorOpen || settingsOpen
+  /**
+   * Transient picker panels (pickers/dialogs) - this JSX feeds TWO mount
+   * points since the fifth launchpad revision: the chat page OverlayAbove
+   * (above the input cluster) and the launchpad itself (above its input
+   * card, see the launchpad branch). Defined once so the two never drift.
+   */
+  const pickerPanels = (
+    <>
+          {overlay.kind === 'thinking' && (
+            <ThinkingToggle
+              currentValue={thinkingVisible}
+              focusIndex={overlay.focus}
+              onPick={(index) => {
+                // 点击行 = 设焦点 + 应用（与 Enter 同一条路径）
+                const visible = index === 0
+                setThinkingVisible(visible)
+                dispatchOverlay({ type: 'close' })
+                channel.notify(t('thinking-toggled', { state: visible ? t('thinking-on') : t('thinking-off') }))
+              }}
+            />
+          )}
+          {overlay.kind === 'workspace-picker' && workspaceTargets.length > 0 && (
+            <Box flexDirection="column" marginTop={1}>
+              <WorkspacePicker
+                targets={workspaceTargets}
+                focusIndex={overlay.index}
+                currentCwd={channel.cwd}
+                onPick={(index) => {
+                  // 点击行 = 切换该行目标（与 Enter 同一条路径）
+                  const target = workspaceTargets[index]
+                  dispatchOverlay({ type: 'close' })
+                  if (target !== undefined) void channel.switchWorkspace(target)
+                }}
+              />
+            </Box>
+          )}
+          {overlay.kind === 'workspace-menu' && (
+            <Box flexDirection="column" marginTop={1}>
+              <WorkspaceMenuPicker
+                options={workspaceMenuOptions}
+                focusIndex={overlay.index}
+                onPick={(index) => {
+                  // 点击行 = 执行该行（与 Enter 同一条路径）
+                  runWorkspaceMenuOption(workspaceMenuOptions[index])
+                }}
+              />
+            </Box>
+          )}
+          {overlay.kind === 'workspace-flow' && (
+            <Box flexDirection="column" marginTop={1}>
+              <WorkspaceFlowPicker
+                title={overlay.flow.title}
+                choices={overlay.flow.choices}
+                focusIndex={overlay.index}
+                busy={overlay.busy}
+                input={overlay.input}
+                onPick={(index) => {
+                  // 点击行 = 设焦点 + 执行分支（与 Enter 同一条路径）；
+                  // busy/输入态在组件侧禁点
+                  const choice = overlay.flow.choices[index]
+                  if (choice === undefined) return
+                  dispatchOverlay({ type: 'set-index', kind: 'workspace-flow', index })
+                  runWorkspaceFlowAction(signal => choice.choose(signal))
+                }}
+              />
+            </Box>
+          )}
+          {overlay.kind === 'model' && (
+            <Box flexDirection="column" marginTop={1}>
+              {models.length === 0 ? (
+                <ModelPickerLoading />
+              ) : activeModelGroup === undefined ? (
+                <ModelPicker
+                  groups={modelGroups}
+                  focusIndex={overlay.index}
+                  currentProvider={channel.provider}
+                  onPick={(index) => {
+                    // 点击分组行 = 进入该组（与 Enter 同一条路径）
+                    const group = modelGroups[index]
+                    if (!group) return
+                    setModelGroup(group.provider)
+                    if (group.provider === RECENTS_GROUP_PROVIDER) {
+                      dispatchOverlay({ type: 'set-index', kind: 'model', index: 0 })
+                      return
+                    }
+                    const landing = modelPickerLanding(
+                      models.filter(model => model.provider === group.provider),
+                      channel.provider,
+                      channel.model,
+                    )
+                    dispatchOverlay({ type: 'set-index', kind: 'model', index: landing.index })
+                  }}
+                />
+              ) : (
+                <ModelPicker
+                  models={groupModels}
+                  groupLabel={activeModelGroup === RECENTS_GROUP_PROVIDER
+                    ? t('picker-group-recent')
+                    : modelGroups.find(group => group.provider === activeModelGroup)?.label}
+                  showBack={modelGroups.length > 1 && !modelPickerDirect}
+                  showProviderPrefix={activeModelGroup === RECENTS_GROUP_PROVIDER}
+                  focusIndex={overlay.index}
+                  currentModel={`${channel.provider}/${channel.model}`}
+                  onPick={(index) => {
+                    // 点击行 = 应用该行模型（与 Enter 同一条路径）
+                    const model = groupModels[index]
+                    if (!model) return
+                    dispatchOverlay({ type: 'close' })
+                    void switchModelRecorded(model.provider, model.id, model.name)
+                  }}
+                />
+              )}
+            </Box>
+          )}
+          {overlay.kind === 'migrate' && (
+            <Box flexDirection="column" marginTop={1}>
+              <MigratePicker
+                rows={migrateRows ?? []}
+                focusIndex={overlay.index}
+                checked={migrateChecked}
+                loading={migrateRows === null}
+                onPick={(index) => {
+                  const row = (migrateRows ?? [])[index]
+                  if (!row) return
+                  setMigrateChecked(current => {
+                    const next = new Set(current)
+                    if (next.has(row.agentId)) next.delete(row.agentId)
+                    else next.add(row.agentId)
+                    return next
+                  })
+                }}
+              />
+            </Box>
+          )}
+          {overlay.kind === 'migrate-confirm' && (
+            <Box flexDirection="column" marginTop={1}>
+              <MigrateConfirm rows={migratePending} />
+            </Box>
+          )}
+          {overlay.kind === 'skills' && (
+            <Box flexDirection="column" marginTop={1}>
+              {skillsList === null ? (
+                <SkillsPickerLoading />
+              ) : (
+                <SkillsPicker
+                  skills={skillsList}
+                  focusIndex={overlay.index}
+                  onPick={(index) => {
+                    const skill = skillsList[index]
+                    if (!skill) return
+                    dispatchOverlay({ type: 'close' })
+                    if (skill.userInvocable) setHistoryFill(`/${skill.name} `)
+                  }}
+                />
+              )}
+            </Box>
+          )}
+          {overlay.kind === 'activity' && (
+            <Box flexDirection="column" marginTop={1}>
+              <ActivityPicker
+                focusIndex={overlay.index}
+                currentPreset={channel.activityFrames}
+                onPick={(index) => {
+                  dispatchOverlay({ type: 'close' })
+                  const name = PRESET_NAMES[index]
+                  if (name) channel.setActivityFrames(name)
+                }}
+              />
+            </Box>
+          )}
+          {overlay.kind === 'color' && (
+            <Box flexDirection="column" marginTop={1}>
+              <ColorPicker
+                focusIndex={overlay.index}
+                currentColor={channel.sessionColor}
+                onPick={(index) => {
+                  dispatchOverlay({ type: 'close' })
+                  const name = SESSION_COLOR_NAMES[index]
+                  if (name) {
+                    channel.setSessionColor(name)
+                    channel.notify(t('color-set', { name }), { color: 'success' })
+                  }
+                }}
+              />
+            </Box>
+          )}
+          {overlay.kind === 'panel' && panelPickerRows.length > 0 && (
+            <Box flexDirection="column" marginTop={1}>
+              <PanelPicker
+                rows={panelPickerRows}
+                focusIndex={overlay.index}
+                activeId={sidePanel.activePanelId}
+                onPick={(index) => {
+                  const row = panelPickerRows[index]
+                  dispatchOverlay({ type: 'close' })
+                  if (row !== undefined) sidePanel.openPanel(row.id, { focus: true })
+                }}
+              />
+            </Box>
+          )}
+          {overlay.kind === 'effort' && effortOptions.length > 1 && (
+            <Box flexDirection="column" marginTop={1}>
+              <EffortSlider
+                options={effortOptions}
+                focusIndex={overlay.index}
+                currentId={channel.reasoningEffort}
+                // 点击档位 = 移到该档并即时应用（与 ←/→ 同语义）
+                onPick={(index) => {
+                  dispatchOverlay({ type: 'set-index', kind: 'effort', index })
+                  const option = effortOptions[index]
+                  if (option) void channel.setEffort(option.id)
+                }}
+              />
+            </Box>
+          )}
+          {overlay.kind === 'preset' && presetOptions.length > 0 && (
+            <Box flexDirection="column" marginTop={1}>
+              <PresetPicker
+                presets={presetOptions}
+                focusIndex={overlay.index}
+                currentPreset={channel.agentPreset}
+                onPick={(index) => {
+                  dispatchOverlay({ type: 'close' })
+                  const option = presetOptions[index]
+                  if (option) void channel.switchPreset(option.id)
+                }}
+              />
+            </Box>
+          )}
+          {overlay.kind === 'permission' && overlay.snapshot.options.length > 0 && (
+            <Box flexDirection="column" marginTop={1}>
+              <PermissionsPicker
+                options={overlay.snapshot.options}
+                focusIndex={overlay.index}
+                currentValue={overlay.snapshot.current?.value}
+                cwd={channel.cwd}
+                onPick={(index) => {
+                  if (approvalSnapshot !== null || questionSnapshot !== null || dialogSnapshot !== null) return
+                  const option = overlay.snapshot.options[index]
+                  dispatchOverlay({ type: 'close' })
+                  if (option !== undefined) void runPermissionCommand(` ${option.value}`)
+                }}
+              />
+            </Box>
+          )}
+          {overlay.kind === 'plan' && (
+            <Box flexDirection="column" marginTop={1}>
+              <PlanPicker
+                focusIndex={overlay.index}
+                currentOn={channel.mode.plan === true}
+                onPick={(index) => {
+                  dispatchOverlay({ type: 'close' })
+                  const on = index === 0
+                  void runExternalCommand('plan', on ? '' : ' off')
+                }}
+              />
+            </Box>
+          )}
+          {overlay.kind === 'lang' && (
+            <Box flexDirection="column" marginTop={1}>
+              <LangPicker
+                focusIndex={overlay.index}
+                currentLang={getLang()}
+                onPick={(index) => {
+                  const lang = LANGS[index]
+                  if (lang === undefined) return
+                  dispatchOverlay({ type: 'close' })
+                  applyLang(lang)
+                }}
+              />
+            </Box>
+          )}
+          {overlay.kind === 'theme' && (
+            <Box flexDirection="column" marginTop={1}>
+              <ThemePicker
+                focusIndex={overlay.index}
+                currentTheme={themeName}
+                themeHost={themeHost}
+                onPick={(index) => {
+                  dispatchOverlay({ type: 'close' })
+                  const name = getThemeOptions(themeHost)[index]?.value
+                  if (name !== undefined) {
+                    const ok = setTheme(name)
+                    channel.notify(
+                      ok ? t('theme-switched-saved', { name }) : t('theme-switch-failed', { name }),
+                      { color: ok ? 'success' : 'error' },
+                    )
+                  }
+                }}
+              />
+            </Box>
+          )}
+          {overlay.kind === 'history' && (
+            <Box flexDirection="column" marginTop={1}>
+              <HistorySearchDialog
+                query={overlay.query}
+                cursorOffset={overlay.cursor}
+                matches={historyMatches}
+                focusIndex={overlay.focus}
+                onPick={(index) => {
+                  // 点击行 = 填入该历史命令（与 Enter 同路径）
+                  const entry = historyMatches[index]
+                  if (entry) {
+                    setHistoryFill(entry.text)
+                    dispatchOverlay({ type: 'close' })
+                  }
+                }}
+              />
+            </Box>
+          )}
+          {overlay.kind === 'rewind' && (
+            <Box flexDirection="column" marginTop={1}>
+              <RewindPicker
+                rows={rewindRows}
+                focusIndex={overlay.index}
+                confirmRow={overlay.confirm}
+                modes={overlay.modes}
+                modeIndex={overlay.modeIndex}
+                busy={overlay.busy}
+                onPickRow={(index) => {
+                  // 列表页点击只选中：进入确认态保留键盘 Enter 显式触发
+                  dispatchOverlay({ type: 'set-index', kind: 'rewind', index })
+                }}
+                onConfirm={() => {
+                  // 确认页即显式确认层，点击直接执行（与 Enter 同路径）
+                  const row = overlay.confirm
+                  if (row === null) return
+                  dispatchOverlay({ type: 'close' })
+                  void performRewind(row)
+                }}
+                onPickMode={(index) => {
+                  // 模式列表点击直接执行该模式（与 Enter 同路径）
+                  const row = overlay.confirm
+                  if (row === null) return
+                  // 模式页仅当 modes 非空才渲染，这里空安全取值
+                  const mode = index === 0 ? null : (overlay.modes?.[index - 1]?.id ?? null)
+                  dispatchOverlay({ type: 'close' })
+                  void performRewind(row, mode)
+                }}
+              />
+            </Box>
+          )}
+          {overlay.kind === 'file-actions' && (
+            <Box flexDirection="column" marginTop={1}>
+              <FileActionsPanel
+                path={overlay.path}
+                isDir={overlay.isDir}
+                focusIndex={overlay.index}
+                onPick={(index) => {
+                  // 点击行直接执行该动作（与 Enter 同路径）
+                  const path = overlay.path
+                  dispatchOverlay({ type: 'close' })
+                  runFileAction(index, path)
+                }}
+              />
+            </Box>
+          )}
+          {overlay.kind === 'search' && <TranscriptSearch query={searchQuery} cursorOffset={searchCursor} count={searchCount} current={searchCurrent} />}
+    </>
+  )
+    const screenOpen = channel.pluginScene !== undefined || supervisorOpen || settingsOpen
     || subagentDetailId !== null || subagentDashboardOpen || sceneOpen
     || launchpadShown || onboardingOpen
   if (interruptPanel !== null && screenOpen) {
@@ -4647,9 +5032,12 @@ export function Chat({
    *
    * An early return like every other screen, and it sits above the session
    * browser: a launch lands here first, and only the actions the user picks
-   * decide which screen comes next. Submitting hands the draft to the chat
-   * screen (which owns the composer); the quick actions dispatch through the
-   * same `runCommand` a typed slash command takes.
+   * decide which screen comes next. Submitting sends the line directly through
+   * the composer's own submit path; the quick actions dispatch through the
+   * same `runCommand` a typed slash command takes; and a picker opened
+   * from the param row (model/effort/plan/permission) renders ABOVE this
+   * screen via `pickerPanels` + `inputPaused` — closing it with
+   * Esc lands back here, with the picked value already reflected in the row.
    */
   if (launchpadShown) {
     // 参数行的「模式/权限」两段（第三版）：模式看 channel.mode.plan；权限看
@@ -4692,6 +5080,16 @@ export function Chat({
         onStarClick={runStarAction}
         firstRun={onboardingPending}
         actions={launchpadActions}
+        // 参数行四段点开的既有选择器（第五版）：pickerPanels 与聊天页共用
+        // 同一份 JSX，盖在落地页之上；选择器开着时落地页键盘让位（inputPaused）。
+        overlayPanel={launchpadOverlayUp ? pickerPanels : undefined}
+        inputPaused={launchpadOverlayUp}
+        onParamPick={(segment) => {
+          // 四段 → 既有命令：model→/model、effort→/effort、mode→/plan、
+          // permission→/permission。全部在 overlayCommandNames 白名单里，
+          // 落地页不收，选择器盖上来。
+          void runCommand(segment === 'mode' ? 'plan' : segment, '')
+        }}
         onQueryChange={(text, cursor) => {
           setLaunchpadDraft(text)
           setLaunchpadCaret(cursor)
@@ -4716,7 +5114,6 @@ export function Chat({
           setSupervisorOpen(true)
         }}
         onBlankClick={() => setLaunchpadFocus(-1)}
-              provider={channel.provider}
         model={channel.model}
         effort={channel.reasoningEffort}
         mode={channel.mode.plan === true ? 'plan' : 'act'}
@@ -5368,356 +5765,7 @@ export function Chat({
             挂载：见 dialogOverlayOpen 注释。 */}
         {dialogOverlayOpen && (
         <OverlayAbove maxHeight={Math.max(terminalRows - 8, 1)}>
-          {overlay.kind === 'thinking' && (
-            <ThinkingToggle
-              currentValue={thinkingVisible}
-              focusIndex={overlay.focus}
-              onPick={(index) => {
-                // 点击行 = 设焦点 + 应用（与 Enter 同一条路径）
-                const visible = index === 0
-                setThinkingVisible(visible)
-                dispatchOverlay({ type: 'close' })
-                channel.notify(t('thinking-toggled', { state: visible ? t('thinking-on') : t('thinking-off') }))
-              }}
-            />
-          )}
-          {overlay.kind === 'workspace-picker' && workspaceTargets.length > 0 && (
-            <Box flexDirection="column" marginTop={1}>
-              <WorkspacePicker
-                targets={workspaceTargets}
-                focusIndex={overlay.index}
-                currentCwd={channel.cwd}
-                onPick={(index) => {
-                  // 点击行 = 切换该行目标（与 Enter 同一条路径）
-                  const target = workspaceTargets[index]
-                  dispatchOverlay({ type: 'close' })
-                  if (target !== undefined) void channel.switchWorkspace(target)
-                }}
-              />
-            </Box>
-          )}
-          {overlay.kind === 'workspace-menu' && (
-            <Box flexDirection="column" marginTop={1}>
-              <WorkspaceMenuPicker
-                options={workspaceMenuOptions}
-                focusIndex={overlay.index}
-                onPick={(index) => {
-                  // 点击行 = 执行该行（与 Enter 同一条路径）
-                  runWorkspaceMenuOption(workspaceMenuOptions[index])
-                }}
-              />
-            </Box>
-          )}
-          {overlay.kind === 'workspace-flow' && (
-            <Box flexDirection="column" marginTop={1}>
-              <WorkspaceFlowPicker
-                title={overlay.flow.title}
-                choices={overlay.flow.choices}
-                focusIndex={overlay.index}
-                busy={overlay.busy}
-                input={overlay.input}
-                onPick={(index) => {
-                  // 点击行 = 设焦点 + 执行分支（与 Enter 同一条路径）；
-                  // busy/输入态在组件侧禁点
-                  const choice = overlay.flow.choices[index]
-                  if (choice === undefined) return
-                  dispatchOverlay({ type: 'set-index', kind: 'workspace-flow', index })
-                  runWorkspaceFlowAction(signal => choice.choose(signal))
-                }}
-              />
-            </Box>
-          )}
-          {overlay.kind === 'model' && (
-            <Box flexDirection="column" marginTop={1}>
-              {models.length === 0 ? (
-                <ModelPickerLoading />
-              ) : activeModelGroup === undefined ? (
-                <ModelPicker
-                  groups={modelGroups}
-                  focusIndex={overlay.index}
-                  currentProvider={channel.provider}
-                  onPick={(index) => {
-                    // 点击分组行 = 进入该组（与 Enter 同一条路径）
-                    const group = modelGroups[index]
-                    if (!group) return
-                    setModelGroup(group.provider)
-                    if (group.provider === RECENTS_GROUP_PROVIDER) {
-                      dispatchOverlay({ type: 'set-index', kind: 'model', index: 0 })
-                      return
-                    }
-                    const landing = modelPickerLanding(
-                      models.filter(model => model.provider === group.provider),
-                      channel.provider,
-                      channel.model,
-                    )
-                    dispatchOverlay({ type: 'set-index', kind: 'model', index: landing.index })
-                  }}
-                />
-              ) : (
-                <ModelPicker
-                  models={groupModels}
-                  groupLabel={activeModelGroup === RECENTS_GROUP_PROVIDER
-                    ? t('picker-group-recent')
-                    : modelGroups.find(group => group.provider === activeModelGroup)?.label}
-                  showBack={modelGroups.length > 1 && !modelPickerDirect}
-                  showProviderPrefix={activeModelGroup === RECENTS_GROUP_PROVIDER}
-                  focusIndex={overlay.index}
-                  currentModel={`${channel.provider}/${channel.model}`}
-                  onPick={(index) => {
-                    // 点击行 = 应用该行模型（与 Enter 同一条路径）
-                    const model = groupModels[index]
-                    if (!model) return
-                    dispatchOverlay({ type: 'close' })
-                    void switchModelRecorded(model.provider, model.id, model.name)
-                  }}
-                />
-              )}
-            </Box>
-          )}
-          {overlay.kind === 'migrate' && (
-            <Box flexDirection="column" marginTop={1}>
-              <MigratePicker
-                rows={migrateRows ?? []}
-                focusIndex={overlay.index}
-                checked={migrateChecked}
-                loading={migrateRows === null}
-                onPick={(index) => {
-                  const row = (migrateRows ?? [])[index]
-                  if (!row) return
-                  setMigrateChecked(current => {
-                    const next = new Set(current)
-                    if (next.has(row.agentId)) next.delete(row.agentId)
-                    else next.add(row.agentId)
-                    return next
-                  })
-                }}
-              />
-            </Box>
-          )}
-          {overlay.kind === 'migrate-confirm' && (
-            <Box flexDirection="column" marginTop={1}>
-              <MigrateConfirm rows={migratePending} />
-            </Box>
-          )}
-          {overlay.kind === 'skills' && (
-            <Box flexDirection="column" marginTop={1}>
-              {skillsList === null ? (
-                <SkillsPickerLoading />
-              ) : (
-                <SkillsPicker
-                  skills={skillsList}
-                  focusIndex={overlay.index}
-                  onPick={(index) => {
-                    const skill = skillsList[index]
-                    if (!skill) return
-                    dispatchOverlay({ type: 'close' })
-                    if (skill.userInvocable) setHistoryFill(`/${skill.name} `)
-                  }}
-                />
-              )}
-            </Box>
-          )}
-          {overlay.kind === 'activity' && (
-            <Box flexDirection="column" marginTop={1}>
-              <ActivityPicker
-                focusIndex={overlay.index}
-                currentPreset={channel.activityFrames}
-                onPick={(index) => {
-                  dispatchOverlay({ type: 'close' })
-                  const name = PRESET_NAMES[index]
-                  if (name) channel.setActivityFrames(name)
-                }}
-              />
-            </Box>
-          )}
-          {overlay.kind === 'color' && (
-            <Box flexDirection="column" marginTop={1}>
-              <ColorPicker
-                focusIndex={overlay.index}
-                currentColor={channel.sessionColor}
-                onPick={(index) => {
-                  dispatchOverlay({ type: 'close' })
-                  const name = SESSION_COLOR_NAMES[index]
-                  if (name) {
-                    channel.setSessionColor(name)
-                    channel.notify(t('color-set', { name }), { color: 'success' })
-                  }
-                }}
-              />
-            </Box>
-          )}
-          {overlay.kind === 'panel' && panelPickerRows.length > 0 && (
-            <Box flexDirection="column" marginTop={1}>
-              <PanelPicker
-                rows={panelPickerRows}
-                focusIndex={overlay.index}
-                activeId={sidePanel.activePanelId}
-                onPick={(index) => {
-                  const row = panelPickerRows[index]
-                  dispatchOverlay({ type: 'close' })
-                  if (row !== undefined) sidePanel.openPanel(row.id, { focus: true })
-                }}
-              />
-            </Box>
-          )}
-          {overlay.kind === 'effort' && effortOptions.length > 1 && (
-            <Box flexDirection="column" marginTop={1}>
-              <EffortSlider
-                options={effortOptions}
-                focusIndex={overlay.index}
-                currentId={channel.reasoningEffort}
-                // 点击档位 = 移到该档并即时应用（与 ←/→ 同语义）
-                onPick={(index) => {
-                  dispatchOverlay({ type: 'set-index', kind: 'effort', index })
-                  const option = effortOptions[index]
-                  if (option) void channel.setEffort(option.id)
-                }}
-              />
-            </Box>
-          )}
-          {overlay.kind === 'preset' && presetOptions.length > 0 && (
-            <Box flexDirection="column" marginTop={1}>
-              <PresetPicker
-                presets={presetOptions}
-                focusIndex={overlay.index}
-                currentPreset={channel.agentPreset}
-                onPick={(index) => {
-                  dispatchOverlay({ type: 'close' })
-                  const option = presetOptions[index]
-                  if (option) void channel.switchPreset(option.id)
-                }}
-              />
-            </Box>
-          )}
-          {overlay.kind === 'permission' && overlay.snapshot.options.length > 0 && (
-            <Box flexDirection="column" marginTop={1}>
-              <PermissionsPicker
-                options={overlay.snapshot.options}
-                focusIndex={overlay.index}
-                currentValue={overlay.snapshot.current?.value}
-                cwd={channel.cwd}
-                onPick={(index) => {
-                  if (approvalSnapshot !== null || questionSnapshot !== null || dialogSnapshot !== null) return
-                  const option = overlay.snapshot.options[index]
-                  dispatchOverlay({ type: 'close' })
-                  if (option !== undefined) void runPermissionCommand(` ${option.value}`)
-                }}
-              />
-            </Box>
-          )}
-          {overlay.kind === 'plan' && (
-            <Box flexDirection="column" marginTop={1}>
-              <PlanPicker
-                focusIndex={overlay.index}
-                currentOn={channel.mode.plan === true}
-                onPick={(index) => {
-                  dispatchOverlay({ type: 'close' })
-                  const on = index === 0
-                  void runExternalCommand('plan', on ? '' : ' off')
-                }}
-              />
-            </Box>
-          )}
-          {overlay.kind === 'lang' && (
-            <Box flexDirection="column" marginTop={1}>
-              <LangPicker
-                focusIndex={overlay.index}
-                currentLang={getLang()}
-                onPick={(index) => {
-                  const lang = LANGS[index]
-                  if (lang === undefined) return
-                  dispatchOverlay({ type: 'close' })
-                  applyLang(lang)
-                }}
-              />
-            </Box>
-          )}
-          {overlay.kind === 'theme' && (
-            <Box flexDirection="column" marginTop={1}>
-              <ThemePicker
-                focusIndex={overlay.index}
-                currentTheme={themeName}
-                themeHost={themeHost}
-                onPick={(index) => {
-                  dispatchOverlay({ type: 'close' })
-                  const name = getThemeOptions(themeHost)[index]?.value
-                  if (name !== undefined) {
-                    const ok = setTheme(name)
-                    channel.notify(
-                      ok ? t('theme-switched-saved', { name }) : t('theme-switch-failed', { name }),
-                      { color: ok ? 'success' : 'error' },
-                    )
-                  }
-                }}
-              />
-            </Box>
-          )}
-          {overlay.kind === 'history' && (
-            <Box flexDirection="column" marginTop={1}>
-              <HistorySearchDialog
-                query={overlay.query}
-                cursorOffset={overlay.cursor}
-                matches={historyMatches}
-                focusIndex={overlay.focus}
-                onPick={(index) => {
-                  // 点击行 = 填入该历史命令（与 Enter 同路径）
-                  const entry = historyMatches[index]
-                  if (entry) {
-                    setHistoryFill(entry.text)
-                    dispatchOverlay({ type: 'close' })
-                  }
-                }}
-              />
-            </Box>
-          )}
-          {overlay.kind === 'rewind' && (
-            <Box flexDirection="column" marginTop={1}>
-              <RewindPicker
-                rows={rewindRows}
-                focusIndex={overlay.index}
-                confirmRow={overlay.confirm}
-                modes={overlay.modes}
-                modeIndex={overlay.modeIndex}
-                busy={overlay.busy}
-                onPickRow={(index) => {
-                  // 列表页点击只选中：进入确认态保留键盘 Enter 显式触发
-                  dispatchOverlay({ type: 'set-index', kind: 'rewind', index })
-                }}
-                onConfirm={() => {
-                  // 确认页即显式确认层，点击直接执行（与 Enter 同路径）
-                  const row = overlay.confirm
-                  if (row === null) return
-                  dispatchOverlay({ type: 'close' })
-                  void performRewind(row)
-                }}
-                onPickMode={(index) => {
-                  // 模式列表点击直接执行该模式（与 Enter 同路径）
-                  const row = overlay.confirm
-                  if (row === null) return
-                  // 模式页仅当 modes 非空才渲染，这里空安全取值
-                  const mode = index === 0 ? null : (overlay.modes?.[index - 1]?.id ?? null)
-                  dispatchOverlay({ type: 'close' })
-                  void performRewind(row, mode)
-                }}
-              />
-            </Box>
-          )}
-          {overlay.kind === 'file-actions' && (
-            <Box flexDirection="column" marginTop={1}>
-              <FileActionsPanel
-                path={overlay.path}
-                isDir={overlay.isDir}
-                focusIndex={overlay.index}
-                onPick={(index) => {
-                  // 点击行直接执行该动作（与 Enter 同路径）
-                  const path = overlay.path
-                  dispatchOverlay({ type: 'close' })
-                  runFileAction(index, path)
-                }}
-              />
-            </Box>
-          )}
-          {overlay.kind === 'search' && <TranscriptSearch query={searchQuery} cursorOffset={searchCursor} count={searchCount} current={searchCurrent} />}
+          {pickerPanels}
         </OverlayAbove>
         )}
         </Box>

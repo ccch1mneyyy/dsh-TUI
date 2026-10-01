@@ -77,10 +77,16 @@ The startup **launchpad** and the **first-run wizard** each own the keyboard; bo
 results back to the chat screen and add no new behavior.
 
 - **Launchpad**: printable input goes into the input box (the prefix turns from `❯` to `⌘` when the line
-  starts with `/`), `Backspace`/`Delete`/`←`/`→`/`Home`/`End` edit it; `Enter` submits the whole line
-  **verbatim** to the chat screen (no command decoding here); `↑`/`↓`/`Tab` move focus across the quick
-  actions and `Enter` activates the focused one, while typing returns focus to the input box; `Esc` clears
+  starts with `/`), `Backspace`/`Delete`/`←`/`→`/`Home`/`End` edit it; `Enter` **sends** the line
+  straight away (a leading `/` local command still takes the command table and never reaches the model);
+  `↑`/`↓`/`Tab` walk the focus ring (input box → the four param segments under the box → the quick
+  actions) and `Enter` activates the focused one, while typing returns focus to the input box; `Esc` clears
   a non-empty line and opens sessions when empty, and `Ctrl+C` on an empty line takes the exit funnel.
+- **Launchpad param row** (under the box: model · effort · mode · permission, model shown as the bare model
+  name): each segment is **clickable** and opens the very same picker the chat page uses (`/model` ·
+  `/effort` · `/plan` · `/permission`); the picker renders **above** the launchpad and owns the keyboard
+  (`Esc` closes it back onto the launchpad), the picked value updates the row in place and the typed draft
+  is untouched.
 - **Wizard**: `←`/`→` change step (except the effort slider in step 3 and a drilled-in model list, where the
   horizontal keys belong to the child control), `Tab` switches between the language/theme and
   model/effort/workspace panes, `↑`/`↓` move the selection; `Enter` runs the step (step 1 = re-check

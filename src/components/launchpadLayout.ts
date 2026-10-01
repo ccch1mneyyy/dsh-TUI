@@ -11,10 +11,13 @@ import type { SplashFont } from './splashFonts.js'
  * **整块撤**，顺序从最可省到最不可省：
  *
  *   ① full       —— 头部 + 输入框 + 紧贴框下的成组三行（参数/键帽/Tips）+ 双角铭牌
- *   ② no-tip     —— 撤 Tips 行（最可省的一句闲话）
- *   ③ no-hints   —— 撤键帽按钮行（鼠标的礼貌；命令名本身还在 `/` 里）
- *   ④ no-art     —— 撤立绘（13 行，最占地方的那块），只留词标
- *   ⑤ input-only —— 只留词标 + 输入框 + 双角铭牌（最矮的终端也要能敲进去第一句）
+ *   ② full-紧凑  —— 撤参数行与入口行之间的呼吸留白（第五版：用户实测
+ *                   「跟输入框太紧了，留一两行空」——留白是刻意的呼吸感，
+ *                   不是遗漏；矮屏先撤它再撤键帽行）
+ *   ③ no-tip     —— 撤 Tips 行（最可省的一句闲话）；留白同样可再撤
+ *   ④ no-hints   —— 撤键帽按钮行（鼠标的礼貌；命令名本身还在 `/` 里）
+ *   ⑤ no-art     —— 撤立绘（13 行，最占地方的那块），只留词标
+ *   ⑥ input-only —— 只留词标 + 输入框 + 双角铭牌（最矮的终端也要能敲进去第一句）
  *
  * 双角铭牌（工作路径:分支 / 版本号）钉在最底一行，是这一屏唯一不随阶梯消失的
  * 装饰——它把整块界面扎在终端底边上。
@@ -49,7 +52,15 @@ const HERO_TO_CARD_GAP = 1
 /** LogoV2 根盒自带的 marginTop——真实占一行，阶梯预算必须算进去，否则恰好卡
  *  阈值时卡片会被挤掉最后一行（夹具实证）。 */
 const HERO_TOP_MARGIN = 1
-/** 键帽按钮行：紧贴参数行（或框底），不留空行。 */
+/**
+ * 参数行与入口行之间的呼吸留白（第五版，2026-10 用户实测「跟输入框太紧了，
+ * 留一两行空」）：默认 1 行。**这行留白是刻意的版面呼吸感，不是遗漏**——
+ * 别在重构时把它当成 bug 修掉。只在参数行画出来时才存在（参数全空时入口行
+ * 直接紧贴框底，原契约不变）。矮屏阶梯里它的取舍顺序排在 Tips 之后、
+ * 键帽行之前：先撤留白、再撤键帽行，绝不让这行呼吸把输入框挤掉。
+ */
+const PARAM_HINTS_GAP_ROWS = 1
+/** 键帽按钮行：参数行之下、隔一行呼吸留白（矮屏可撤，见 PARAM_HINTS_GAP_ROWS）。 */
 const HINTS_ROWS = 1
 /** Tips 行：自身 1 行 + 上方 1 行留白。 */
 const TIP_BLOCK_ROWS = 2
@@ -75,6 +86,11 @@ export interface LaunchpadLayout {
   readonly showHints: boolean
   /** 居中 Tips 行（成组行的第三行）。 */
   readonly showTip: boolean
+  /**
+   * 参数行与入口行之间的呼吸留白行数（0 或 1）：默认 1；矮屏阶梯里排在
+   * Tips 之后、键帽行之前被撤掉。参数行缺席时恒 0（没有可隔开的两行）。
+   */
+  readonly hintsGapRows: number
   /** 双角铭牌行（永远画：它是这一屏的底边锚点）。 */
   readonly showCorners: boolean
   /** 输入框卡片占的行数（边框 2 + 输入 1，恒 3）。 */
@@ -117,26 +133,33 @@ export function resolveLaunchpadLayout(
   // 头部整块（含根盒 marginTop）实际占的行数：阶梯与 totalRows 都按它算。
   const heroBlockRows = showHero ? heroRows + HERO_TOP_MARGIN : 0
 
-  // 第三版行数预算：输入框（恒 3）+ 框下成组行（参数 1 + 键帽 1 + Tips 2）+
-  // 双角铭牌 2。撤的顺序保持「从最可省到最不可省」：Tips → 键帽 → 立绘。
+  // 第五版行数预算：输入框（恒 3）+ 框下成组行（参数 1 + 呼吸留白 0/1 +
+  // 键帽 1 + Tips 2）+ 双角铭牌 2。撤的顺序「从最可省到最不可省」：
+  // Tips → 呼吸留白 → 键帽 → 立绘（撤留白永远排在撤键帽之前）。
   const paramRows = options.params === true ? PARAM_ROWS : 0
+  const gapRows = paramRows > 0 ? PARAM_HINTS_GAP_ROWS : 0
   const cardRows = CARD_ROWS
   const withArt = artRows > 0 ? artRows + 1 : 0
   const core = heroBlockRows + HERO_TO_CARD_GAP + cardRows + paramRows + CORNERS_BLOCK_ROWS
   // 每一档的总行数。顺序即从最全的往下掉：先试最全的，放不下就往下掉。
-  const stages: readonly (readonly [LaunchpadStage, number])[] = [
-    ['full', core + HINTS_ROWS + TIP_BLOCK_ROWS],
-    ['no-tip', core + HINTS_ROWS],
-    ['no-hints', core],
-    ['no-art', core - withArt],
-    ['input-only', core - withArt],
+  // full / no-tip 各带两个变体：留白在（默认）与留白已撤（矮一行的紧凑档）。
+  const stages: readonly { stage: LaunchpadStage; gap: boolean; rows: number }[] = [
+    { stage: 'full', gap: true, rows: core + gapRows + HINTS_ROWS + TIP_BLOCK_ROWS },
+    { stage: 'full', gap: false, rows: core + HINTS_ROWS + TIP_BLOCK_ROWS },
+    { stage: 'no-tip', gap: true, rows: core + gapRows + HINTS_ROWS },
+    { stage: 'no-tip', gap: false, rows: core + HINTS_ROWS },
+    { stage: 'no-hints', gap: false, rows: core },
+    { stage: 'no-art', gap: false, rows: core - withArt },
+    { stage: 'input-only', gap: false, rows: core - withArt },
   ]
   // 默认落到最省的那一档：终端矮到连它都放不下时，宁可溢出也不把输入框藏起来
   // ——这一屏存在的理由就是能敲进去第一句。
   let stage: LaunchpadStage = 'input-only'
+  let keepGap = false
   for (const candidate of stages) {
-    if (candidate[1] <= rows) {
-      stage = candidate[0]
+    if (candidate.rows <= rows) {
+      stage = candidate.stage
+      keepGap = candidate.gap
       break
     }
   }
@@ -145,7 +168,9 @@ export function resolveLaunchpadLayout(
   const heroBlockFinal = showHero ? heroRowsFinal + HERO_TOP_MARGIN : 0
   const showHints = stage === 'full' || stage === 'no-tip'
   const showTip = stage === 'full'
-  const total = (showTip ? TIP_BLOCK_ROWS : 0) + (showHints ? HINTS_ROWS : 0) + heroBlockFinal
+  // 留白只画在「参数行 ↔ 入口行」之间：两行都在且这一档保住了留白才算数。
+  const hintsGapRows = showHints && keepGap ? gapRows : 0
+  const total = (showTip ? TIP_BLOCK_ROWS : 0) + hintsGapRows + (showHints ? HINTS_ROWS : 0) + heroBlockFinal
     + HERO_TO_CARD_GAP + cardRows + paramRows + CORNERS_BLOCK_ROWS
   return {
     stage,
@@ -157,6 +182,7 @@ export function resolveLaunchpadLayout(
     showHero,
     showHints,
     showTip,
+    hintsGapRows,
     showCorners: true,
     cardRows,
     heroRows: heroRowsFinal,
