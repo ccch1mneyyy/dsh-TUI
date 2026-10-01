@@ -4,7 +4,7 @@
  * Run: node scripts/verify-source-hygiene.mjs
  */
 import { readdirSync, readFileSync } from 'node:fs'
-import { resolve, relative } from 'node:path'
+import { resolve, relative, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const root = fileURLToPath(new URL('../', import.meta.url))
@@ -15,7 +15,11 @@ const collect = directory => readdirSync(directory, { withFileTypes: true }).fla
 })
 const rules = [
   ['private internal link', /anthropic\.slack\.com|slack\.com\/archives/],
-  ['foreign runtime environment variable', /CLAUDE_CODE_[A-Z_]+/],
+  // The Claude backend spawns the real CLI and must set or scrub its env
+  // (docs/agent-backend-design.md §4.3), so that backend, its maintainer
+  // probes and its design log may name those variables; everywhere else the
+  // rule keeps guarding #804.
+  ['foreign runtime environment variable', /CLAUDE_CODE_[A-Z_]+/, ['src/backends/claude/', 'scripts/probes/', 'docs/agent-backend-design.md', 'docs/agent-backend-progress.md']],
   ['embedded source map in source', /sourceMappingURL=data:/],
   ['compiler-generated component input', /(?:from\s*|import\s*\()['"]react\/compiler-runtime['"]|react\.early_return_sentinel|react\.memo_cache_sentinel/],
   ['retired helper namespace', /(?:src\/|\.\.\/|types\/)cc\/|cc\.d\.ts/],
@@ -35,8 +39,10 @@ const retiredNaming = /\b(?:CC_TUI_[A-Z_]+|DSH_CC_[A-Z_]+)\b/
 const failures = []
 for (const file of files) {
   const lines = readFileSync(file, 'utf8').split(/\r?\n/)
+  const path = relative(root, file).split(sep).join('/')
+  const active = rules.filter(([, , exempt]) => !exempt?.some(prefix => path.startsWith(prefix)))
   for (const [index, line] of lines.entries()) {
-    for (const [label, pattern] of rules) {
+    for (const [label, pattern] of active) {
       if (pattern.test(line)) failures.push(`${relative(root, file)}:${index + 1}: ${label}`)
     }
   }

@@ -4,8 +4,10 @@
  * This is a P0/P1 gate skeleton:
  * - ports/ may not import @deepseek-ai, @dsh-std or dsh-ecosystem-spec.
  * - kernel/ may not import @deepseek-ai or @dsh-std directly.
- * - upstream/ may import @deepseek-ai in the future, but must not import
- *   @dsh-std or dsh-ecosystem-spec private protocol.
+ * - upstream/ must not import @dsh-std or dsh-ecosystem-spec private
+ *   protocol. @deepseek-ai/* is confined to src/dsh-adapter/ by
+ *   verify-adapter-boundary.ts (design §8.0 rule table), so upstream/ may not
+ *   import it either; its drivers wrap dsh-tui's own Cordis services.
  * - standard/ may import @dsh-std and dsh-ecosystem-spec, but never
  *   @deepseek-ai.
  * - legacy shim paths are verified absent.

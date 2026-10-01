@@ -2,13 +2,17 @@
 
 ## 边界规则
 
-官方 `@deepseek-ai/*` 包只允许在 `src/dsh-adapter/` 内被 import。
-UI 层(`screens/`、`components/`、`ink/`、`hooks/`、`utils/`、`terminal-utils/`)
-一律通过 adapter 的 facade(`src/dsh-adapter/types.ts` 的类型 re-export、
-`channel.ts`/`plugin.ts` 等运行期服务)间接接触上游。
+厂商包只允许在各自目录内被 import:`@deepseek-ai/*` 仅 `src/dsh-adapter/`,
+`@anthropic-ai/*` 仅 `src/backends/claude/`,`@agentclientprotocol/*` 仅 `src/backends/acp/`,
+`@dsh-std/*` 仅 `src/adapter/standard/` 与 `src/dsh-adapter/`。中立层 `src/agent/`、`src/channel/`
+不得 import 厂商包、`src/dsh-adapter/` 与 `src/backends/`(`src/agent/` 也不得 import `src/channel/`)。
+UI 层(`screens/`、`components/`、`hooks/`、`ink/`)不得 import `src/backends/`,从 `src/dsh-adapter/`
+只取类型,经 adapter 的 facade(`src/dsh-adapter/types.ts` 的类型 re-export、`channel.ts`/`plugin.ts`
+等运行期服务)间接接触上游;存量值 import 登记在 `scripts/adapter-boundary.allowlist.json`,只减不增。
+`native.dsh`/`native.claude`/`native.acp` 只能在对应后端目录内访问。
 
-门禁:`pnpm run verify:boundary`(扫描全部源码,发现越界 import 即失败;
-已挂进 `build`)。
+门禁:`pnpm run verify:boundary`(按 [多后端方案](docs/agent-backend-design.md) §8.0 规则表扫描全部源码的
+真实 import,发现越界即失败;已挂进 `build`)。
 
 ## 上游契约
 

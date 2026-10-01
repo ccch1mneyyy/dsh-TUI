@@ -283,7 +283,7 @@ export type AgentEvent =
 | `parentCallId` | 无（子代理另有事件） | `parent_tool_use_id` |
 | `agentId` | 子 Agent id | `task_id`（= `canUseTool.agentID`，`[acp]` 验证过的不成文约定） |
 
-`TurnEndReason`：`{kind:'completed'} | {kind:'aborted'} | {kind:'interrupted'} | {kind:'error', message, category?} | {kind:'blocked', detail}`（DSH 的 `TurnEndReason` 直接映射；Claude：`result.subtype==='success'&&!is_error`→completed；`terminal_reason∈{aborted_streaming,aborted_tools}`→aborted；`is_error`→error；`error_max_turns/_budget/_structured_output`→blocked）。
+`TurnEndReason`：`{kind:'completed'} | {kind:'aborted'} | {kind:'interrupted'} | {kind:'error', message, category?} | {kind:'blocked', detail}`（DSH 的 `TurnEndReason` 直接映射；Claude：`result.subtype==='success'&&!is_error`→completed；`terminal_reason∈{aborted_streaming,aborted_tools}`→aborted；`is_error`→error；`error_max_turns/_budget/_structured_output`→blocked）。**实测修正 (Phase 0)**：`priority:'now'` 中断的 turn 是 `subtype:'success'` + `terminal_reason:'aborted_*'`，所以 `terminal_reason` 要先于 `subtype` 判定（§4.4）。
 
 ### 3.4 AgentSession / AgentBackend / Capabilities（TS 草图）
 
@@ -420,7 +420,7 @@ DSH specialist 挂载规则：`createChannel(ctx, session, options)` 内部 `if 
 | `perTaskStopAffordance` | `true` | 让 `interrupt()` 不杀后台任务；TUI 提供逐任务 stop `[d.ts]` |
 | `enableFileCheckpointing` | `true` | `rewindFiles` 需要 `[P1]` dryRun 成功 |
 | `includeHookEvents` | `false` | 噪音 |
-| `env` | `{ ...process.env, CLAUDE_AGENT_SDK_CLIENT_APP: 'dsh-tui/<version>', CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS: '1' }`，并**删除** `CLAUDECODE`、`CLAUDE_CODE_ENTRYPOINT`、`CLAUDE_CODE_SESSION_ID`、`CLAUDE_CODE_MESSAGING_*`（dsh-tui 本身可能运行在 Claude Code 终端里，`[P1]` 本机 env 即如此） | `env` **整体替换**子进程环境 `[d.ts]`；`session_state_changed` 在 2.1.88 源码里受该 env 门控 `[hist]`，`[acp]` 亦设置，P3-1 确认 |
+| `env` | `{ ...process.env, CLAUDE_AGENT_SDK_CLIENT_APP: 'dsh-tui/<version>', CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS: '1' }`，并**删除** `CLAUDECODE`、`CLAUDE_CODE_ENTRYPOINT`、`CLAUDE_CODE_SESSION_ID`、`CLAUDE_CODE_MESSAGING_*`（dsh-tui 本身可能运行在 Claude Code 终端里，`[P1]` 本机 env 即如此） | `env` **整体替换**子进程环境 `[d.ts]`；`session_state_changed` 在 2.1.88 源码里受该 env 门控 `[hist]`，`[acp]` 亦设置。**实测修正 (Phase 0, P3-1)**：设置该 env 后 CLI 2.1.287 发出 `system/session_state_changed`（未设置的 P1/P2 一次都没有）：`running` 在 idle→running 时发、早于 `command_lifecycle queued`；`idle` 在 `result` 与 `command_lifecycle completed` 之后 0–5ms；背靠背的 turn 之间不回 `idle`。保留该 env；`requires_action` 本次未触发（工具被 CLI 规则直接放行，没走 `canUseTool`），留给 Phase 3 权限探针 |
 | `pathToClaudeCodeExecutable` | §4.2 | |
 | `stderr` | 回调 → `logForDebugging` + 去重后 `notify`（复用 `childStderr.ts` 的 reporter） | TUI 渲染期 stdout/stderr 必须安静（AGENTS.md 红线）；子进程 stderr 若继承会污染 alt-screen |
 | `model` | 省略（跟随 settings.model）或 TUI 持久化的 `/model` 选择 | 保真 |
@@ -456,12 +456,20 @@ submit(text) → inbox.push({type:'user', message:{role:'user',content}, parent_
   └ `system/session_state_changed{state:'idle'}`：仅当设置 env `CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS=1`（[acp] 这样做；本仓库 Phase 2 探针 P3-1 验证是否需要）作为"无 result 的兜底"
 ```
 
+> **实测修正 (Phase 0, P2-1)**：`command_lifecycle` 实测状态 `queued`/`started`/`completed`/`cancelled`（未见 `discarded`/`refused`）。
+> 用户发起的 turn：`queued` → `started`（+2–8ms）→ 本 turn 的 `system/init`（`started` 之后 13–28ms，冷启动首个 turn 462ms）→
+> `system/status{requesting}` → 首个 `stream_event` → … → `result` → `completed`（`result` 之后 0–5ms）。即 **`started` 早于每 turn 的 `init`**，
+> 以 `started` 开 turn 成立。但 `started` 不总是新 turn：被 `priority:'next'` 并入运行中 turn 的消息，在工具轮次结束后才 `started`，
+> **不重发 `init`**、turn 继续，该消息也**没有** SDK `user` 回显；它的 `completed` 比 `result` 早约 3ms，`result.user_message_uuids` 列出该 turn
+> 并入的全部 uuid（`user_message_uuid` 为首条）。被 `now` 中断的 turn，其已 `started` 的命令在中断后的 `result` 之后收到 `cancelled`。
+
 规则：
 
-- **turn 的开启**：翻译器在"没有打开的 turn"时收到以下任一消息即开 turn：`command_lifecycle.started`（origin user，带 userMessageId）、`system/status requesting`、`stream_event message_start`、`assistant`。系统发起的 turn（`result.origin.kind ∈ task-notification|peer|coordinator|observer|…` `[acp]`）标 `origin:'notification'`，UI 在 user 行位置渲染一条 `notice`（"后台任务完成，模型继续处理"），而不是伪造用户气泡。
-- **turn 的关闭**：`result`。`subtype:'success' && !is_error` → completed；`terminal_reason ∈ {aborted_streaming, aborted_tools}` → aborted（`[P1][P2]`，此时 `subtype:'error_during_execution'`，`errors` 含 `[ede_diagnostic]…`，**不**当错误显示）；`is_error` 其他 → error（`result` 文本是错误消息）；`error_max_turns/_budget_usd/_structured_output_retries` → blocked。
-- **pending 队列**：以 `command_lifecycle` 为准；`interrupt()` 回执 `still_queued`（`[P1]`）校正；`removePending` 在 `interrupt_cancel_queued_v1` 可用时调 `interrupt({cancel_queued:true})`（`[d.ts]`），否则提示不支持（SDK 公共 API 未暴露 `cancel_async_message`——施工探针 P3-2 确认 `Query` 上是否有未声明方法，否则 `removePending` 返回 false）。
+- **turn 的开启**：翻译器在"没有打开的 turn"时收到以下任一消息即开 turn：`command_lifecycle.started`（origin user，带 userMessageId）、`system/status requesting`、`stream_event message_start`、`assistant`。系统发起的 turn（`result.origin.kind ∈ task-notification|peer|coordinator|observer|…` `[acp]`）标 `origin:'notification'`，UI 在 user 行位置渲染一条 `notice`（"后台任务完成，模型继续处理"），而不是伪造用户气泡。**实测修正 (Phase 0)**：turn 已打开时收到的 `started` 是"并入当前 turn"，只落用户行、不开新 turn。
+- **turn 的关闭**：`result`。`subtype:'success' && !is_error` → completed；`terminal_reason ∈ {aborted_streaming, aborted_tools}` → aborted（`[P1][P2]`，此时 `subtype:'error_during_execution'`，`errors` 含 `[ede_diagnostic]…`，**不**当错误显示）；`is_error` 其他 → error（`result` 文本是错误消息）；`error_max_turns/_budget_usd/_structured_output_retries` → blocked。**实测修正 (Phase 0, P3-3)**：`priority:'now'` 中断的 turn 以 `result{subtype:'success', is_error:false, terminal_reason:'aborted_streaming'|'aborted_tools'}` 结束（`interrupt()` 才是 `error_during_execution`），且不发 `[Request interrupted by user]` 回显——**先判 `terminal_reason`，再判 `subtype`**，否则会被当成 completed。
+- **pending 队列**：以 `command_lifecycle` 为准；`interrupt()` 回执 `still_queued`（`[P1]`）校正；`removePending` 在 `interrupt_cancel_queued_v1` 可用时调 `interrupt({cancel_queued:true})`（`[d.ts]`），否则提示不支持（SDK 公共 API 未暴露 `cancel_async_message`——施工探针 P3-2 确认 `Query` 上是否有未声明方法，否则 `removePending` 返回 false）。**实测 (Phase 0)**：0.3.287 运行时 `Query` 原型上有未声明的 `cancelAsyncMessage`（只列举、未调用；签名与回执留给 Phase 3 探针）。
 - **submit 放置语义映射**（`SDKUserMessage.priority: 'now'|'next'|'later'` `[d.ts]`；2.1.88 源码 `[hist]`：`now` 中止进行中的工作、`next` 在下一个工具轮次后并入当前 turn、`later` 等 turn 结束）：`turn` → 普通 push；`steer`（DSH 的"下一步边界"语义）→ `priority:'next'`；`followup` → `priority:'later'`；`now`（`interruptAndDeliver`）→ `priority:'now'`（或 `await q.interrupt()` 后 push，二选一由探针 P3-3 决定）。注意 `[acp]` 用 `now` 做 steering，且 2.1.286 起 steer 会把正在前台运行的工具转后台——施工前必须用 P3-3 确认 `next` 的现行语义。
+  **实测修正 (Phase 0, P3-3，CLI 2.1.287 / haiku)**：`next` 在前台工具运行时发送 → 工具照常跑完，消息在该工具轮次后**并入同一 turn**（无新 `init`，一个 `result`、`num_turns:3`，模型照做），与 DSH steer 的"下一步边界"一致，`steer → next` 成立；`next` 在纯文本流式（无后续工具轮次）时发送 → 当前 turn 正常完成，消息随后作为**独立新 turn** 运行（此时等同 followup）。`now` 在文本流式时发送 → 约 10ms 内中断（`assistant.aborted:true` 带已流出的前缀，`aborted_streaming`，原命令 `cancelled`），随即以 `now` 消息开新 turn；`now` 在前台 Bash 运行时发送 → **既不杀也不转后台**该工具（`task_started.is_backgrounded:false`），等它跑完（本次 6.6s）后以 `aborted_tools` 结束、原命令 `cancelled`、计划中的下一个工具不再执行，再开新 turn。裁定：`now`（`interruptAndDeliver`）→ `priority:'now'`（一次原子操作，lifecycle 报告被取消的命令）；代价是前台工具期间的投递延迟 = 工具剩余时长，若 Phase 2 手动演练不可接受，再探 `interrupt()` 对前台工具的效果。未观察到"steer 把前台工具转后台"。
 - **用户行的落地时机**：不乐观插入。以 `command_lifecycle.started`（需 `msg_lifecycle_v1`）为准；CLI 不支持时退回 `extraArgs: { 'replay-user-messages': '' }` 让 CLI 回显我们的消息（`SDKUserMessageReplay{isReplay:true, uuid}` `[d.ts][acp]`），以回显为准。
 - **idle 兜底与强制取消**：`[acp]` 经验——`idle` 可能滞后到下一 turn 的回显之后（#773），被打断的 turn 可能永远没有 `result`（#825），`query.next()` 可能挂起（#680）。TUI 采用：`cancel()` 后 30s 内未见 `result`/`idle` → 投影器强制 `turn.end{aborted}` + `notice`，并把会话标为 `requires-action`。
 - **多会话/parked**：每个 Claude 会话 = 一个 CLI 子进程（约 230–260MB `[d.ts prewarm 注释]`）。`agent-view`/`/bg` 的"进程内后台会话"对 Claude 有效但有上限：`ClaudeBackend.limits.maxLiveSessions = 3`（可配置），超出时 `parked` 会话改为 `close()` 并在再次 attach 时 `resume`（历史从 store 回放）。
@@ -523,7 +531,7 @@ CLI ──can_use_tool──▶ SDK ──canUseTool(toolName, input, opts)─�
 | `system/task_progress{usage{total_tokens,tool_uses,duration_ms}, last_tool_name, summary}` | `subagent.progress` |
 | `system/task_updated{patch{status,...}}` | `subagent.progress`/`task.update` |
 | `system/task_notification{status, summary, usage, output_file}` | `subagent.end`（status completed/failed/stopped→cancelled）或 `task.end` |
-| `system/task_started{task_type:'local_bash'|'local_workflow'|…}` | `task.start{kind: shell|workflow|monitor, command: description, background: is_backgrounded, outputFile}` |
+| `system/task_started{task_type:'local_bash'|'local_workflow'|…}` | `task.start{kind: shell|workflow|monitor, command: description, background: is_backgrounded, outputFile}`。**实测修正 (Phase 0)**：前台 Bash 跑满约 3s 也会发 `task_started{is_backgrounded:false}`，结束时发 `task_notification{status:'completed', output_file:''}`；`is_backgrounded:false` 的不建后台任务卡（只作工具卡的 `tool.progress`），否则每条稍慢的命令都会冒出 jobs chip |
 | `system/background_tasks_changed{tasks[]}` | `tasks.snapshot`（REPLACE 语义；缺席的子代理/任务若无 end 事件则标 `unknown`） |
 | `tool_progress{tool_use_id, elapsed_time_seconds, parent_tool_use_id, subagent_type, subagent_retry}` | `tool.progress`（心跳 id `*-heartbeat-*` 忽略 `[acp]`） |
 | hooks `SubagentStop{agent_id, agent_transcript_path}` | 不依赖（我们不注册 hooks）；resume 时用 `listSubagents + getSubagentMessages` |

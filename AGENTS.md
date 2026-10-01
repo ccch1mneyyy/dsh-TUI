@@ -50,7 +50,7 @@ pnpm smoke                      # 通用无头屏幕组装冒烟
 
 ## 上游边界与契约
 
-- 官方 `@deepseek-ai/*` 包只允许在 `src/dsh-adapter/` 内 import；UI 层（`screens/`、`components/`、`ink/`、`hooks/`、`utils/`、`terminal-utils/`）一律通过 adapter facade 间接接触上游。`pnpm run verify:boundary` 扫描全部源码，发现越界即失败。
+- 厂商包按目录隔离：`@deepseek-ai/*` 只在 `src/dsh-adapter/`，`@anthropic-ai/*` 只在 `src/backends/claude/`，`@agentclientprotocol/*` 只在 `src/backends/acp/`，`@dsh-std/*` 只在 `src/adapter/standard/` 与 `src/dsh-adapter/`；`src/agent/`、`src/channel/` 不碰厂商包、`src/dsh-adapter/` 与 `src/backends/`；UI 层（`screens/`、`components/`、`hooks/`、`ink/`）不 import `src/backends/`，从 `src/dsh-adapter/` 只取类型（存量值 import 登记在 `scripts/adapter-boundary.allowlist.json`，只减不增）；`native.<后端>` 只在对应后端目录访问。`pnpm run verify:boundary` 扫描全部源码，越界即失败；规则表见 [ADAPTER.md](ADAPTER.md)。
 - 校验版本线、peer 范围与 blessed 包清单在 `src/dsh-adapter/contract.ts`；本地检测到 drift 打警告，CI 上 `verify:contract` 直接失败。
 - 运行时或发布类型引用的 `@deepseek-ai/*` 框架包必须同时是 peer 与 dev 依赖（`verify:manifest-deps` 门禁）；仅测试/脚本使用的框架包只进 dev 依赖。
 - `cordis.patch.yml` 对官方行的干预已快照到 `patch-surface.snapshot.json`，改动需保持同步（`verify:patch-surface` 门禁）。

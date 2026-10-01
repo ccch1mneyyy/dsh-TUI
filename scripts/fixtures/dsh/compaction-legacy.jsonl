@@ -1,0 +1,37 @@
+{"type":"request/header","seq":0,"time":1767583800000,"data":{"header":{"config":{"provider":"fixture","model":"fixture-legacy"},"system":"Legacy system prompt carried in the header."},"reason":"initial"}}
+{"type":"turn/start","seq":1,"time":1767583800020,"data":{"turn":1}}
+{"type":"user/message","seq":2,"time":1767583800040,"data":{"id":"msg-u1","role":"user","content":[{"type":"text","text":"Say hello."}],"source":{"kind":"user"}},"surfaceOp":"append"}
+{"type":"step/start","seq":3,"time":1767583800060,"data":{"turn":1,"step":1}}
+{"type":"assistant/chunk","seq":4,"time":1767583800080,"data":{"turn":1,"step":1,"chunk":{"type":"reasoning-delta","index":0,"text":"Greeting "}}}
+{"type":"assistant/chunk","seq":5,"time":1767583800130,"data":{"turn":1,"step":1,"chunk":{"type":"reasoning-delta","index":0,"text":"the user."}}}
+{"type":"assistant/chunk","seq":6,"time":1767583800180,"data":{"turn":1,"step":1,"chunk":{"type":"text-delta","index":1,"text":"Hello"}}}
+{"type":"assistant/chunk","seq":7,"time":1767583800280,"data":{"turn":1,"step":1,"chunk":{"type":"text-delta","index":1,"text":"Hello, wor"}}}
+{"type":"assistant/chunk","seq":8,"time":1767583800780,"data":{"turn":1,"step":1,"chunk":{"type":"text-delta","index":1,"text":"world!"}}}
+{"type":"assistant/chunk","seq":9,"time":1767583800830,"data":{"turn":1,"step":1,"chunk":{"type":"text-delta","index":1,"text":"world!"}}}
+{"type":"assistant/message","seq":10,"time":1767583800880,"data":{"turn":1,"step":1,"message":{"id":"msg-a1","role":"assistant","content":[{"type":"reasoning","text":"Greeting the user."},{"type":"text","text":"Hello, world!"}],"source":{"kind":"model","provider":"fixture","model":"fixture-legacy"}},"usage":{"inputTokens":100,"outputTokens":5}},"surfaceOp":"append"}
+{"type":"step/end","seq":11,"time":1767583800900,"data":{"turn":1,"step":1}}
+{"type":"turn/end","seq":12,"time":1767583800920,"data":{"turn":1,"reason":{"kind":"completed"}}}
+{"type":"turn/start","seq":13,"time":1767583800940,"data":{"turn":2}}
+{"type":"user/message","seq":14,"time":1767583800960,"data":{"id":"msg-u2","role":"user","content":[{"type":"text","text":"Compact the history now."}],"source":{"kind":"user"}},"surfaceOp":"append"}
+{"type":"compaction/start","seq":15,"time":1767583800980,"data":{"compactionId":"compact-1","turn":2}}
+{"type":"compaction/summary","seq":16,"time":1767583801000,"data":{"compactionId":"compact-1","summary":[{"type":"text","text":"The user greeted the agent; the agent said hello."}],"shadowedRange":{"start":2,"end":10},"shadowedSeqs":[2,10],"shadowedTokenCount":420,"provider":"fixture","model":"fixture-legacy"},"ignorable":true}
+{"type":"user/message","seq":17,"time":1767583801020,"data":{"id":"msg-c1","role":"user","content":[{"type":"text","text":"This is an automatically generated checkpoint condensing an earlier span of the conversation.\n\n<compacted-summary>"},{"type":"text","text":"The user greeted the agent; the agent said hello."},{"type":"text","text":"</compacted-summary>"}],"source":{"kind":"compact-checkpoint","compactionId":"compact-1"}},"surfaceOp":{"op":"replace","startSeq":2,"endSeq":10},"sourceEventSeqs":[15,16,2,10]}
+{"type":"compaction/end","seq":18,"time":1767583801040,"data":{"compactionId":"compact-1","turn":2}}
+{"type":"turn/end","seq":19,"time":1767583801060,"data":{"turn":2,"reason":{"kind":"max-tokens"}}}
+{"type":"user/message","seq":20,"time":1767583801080,"data":{"id":"msg-c2","role":"user","content":[{"type":"text","text":"Legacy checkpoint summary text."}],"source":{"kind":"plugin","plugin":"compact"}},"surfaceOp":{"op":"replace","startSeq":14,"endSeq":14},"sourceEventSeqs":[14]}
+{"type":"fixture-plugin/note","seq":21,"time":1767583801100,"data":{"title":"Fixture note","lines":["first plugin line","second plugin line"]},"ignorable":true}
+{"type":"other-plugin/ping","seq":22,"time":1767583801120,"data":{"at":1},"ignorable":true}
+{"type":"turn/start","seq":23,"time":1767583801140,"data":{"turn":3}}
+{"type":"user/message","seq":24,"time":1767583801160,"data":{"id":"msg-u3","role":"user","content":[{"type":"text","text":"Continue."}],"source":{"kind":"user"}},"surfaceOp":"append"}
+{"type":"step/start","seq":25,"time":1767583801180,"data":{"turn":3,"step":1}}
+{"type":"developer/message","seq":26,"time":1767583801200,"data":{"turn":3,"step":1,"message":{"id":"msg-d1","role":"developer","content":[{"type":"tool-addition","toolName":"read_file"}],"source":{"kind":"tools"}},"headerSeq":0},"surfaceOp":"append"}
+{"type":"assistant/message","seq":27,"time":1767583801220,"data":{"turn":3,"step":1,"message":{"id":"msg-a3","role":"assistant","content":[{"type":"text","text":"Continuing."}],"source":{"kind":"model","provider":"fixture","model":"fixture-legacy"}},"usage":{"inputTokens":60,"outputTokens":3,"cacheReadTokens":30}},"surfaceOp":"append"}
+{"type":"step/end","seq":28,"time":1767583801240,"data":{"turn":3,"step":1}}
+{"type":"turn/end","seq":29,"time":1767583801260,"data":{"turn":3,"reason":{"kind":"blocked"}}}
+{"type":"turn/start","seq":30,"time":1767583801280,"data":{"turn":4}}
+{"type":"user/message","seq":31,"time":1767583801300,"data":{"id":"msg-u4","role":"user","content":[{"type":"text","text":"One more thing."}],"source":{"kind":"user"}},"surfaceOp":"append"}
+{"type":"step/start","seq":32,"time":1767583801320,"data":{"turn":4,"step":1}}
+{"type":"assistant/chunk","seq":33,"time":1767583801340,"data":{"turn":4,"step":1,"chunk":{"type":"reasoning-delta","index":0,"text":"Thinking about the tail"}}}
+{"type":"assistant/chunk","seq":34,"time":1767583801360,"data":{"turn":4,"step":1,"chunk":{"type":"text-delta","index":1,"text":"Partial tail"}}}
+{"type":"compaction/start","seq":35,"time":1767583801380,"data":{"compactionId":"compact-2","turn":4}}
+{"type":"turn/end","seq":36,"time":1767583801400,"data":{"turn":4,"reason":{"kind":"interrupted"}}}
