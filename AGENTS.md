@@ -36,9 +36,9 @@ lib/                由 src/ 生成的产物——忽略入库、随 npm 分发�
 
 ```sh
 pnpm install --frozen-lockfile  # pnpm 11；Node ^22.19 || >=24（CI 用 Node 24）
-pnpm compile                    # 干净编译 src/ → lib/types/（先删整个 lib/）
+pnpm compile                    # 干净编译 src/ → lib/types/（先删整个 lib/；vendor 构建未变则跳过）
 pnpm build                      # compile + 全部构建门禁
-pnpm verify:build               # 构建门禁（边界/契约/patch surface/plugin 系列等），不重复编译
+pnpm verify:build               # 构建门禁（边界/契约/patch surface/plugin 系列等），并行、不重复编译；--jobs 1 串行排查
 pnpm verify:package             # npm tarball 目标完整 + 入口 smoke import
 pnpm smoke                      # 通用无头屏幕组装冒烟
 ```

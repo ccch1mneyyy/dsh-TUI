@@ -33,6 +33,8 @@ import type { TerminalImagePlacement } from '../src/ink/terminal-image.js'
 import wrapText from '../src/ink/wrap-text.js'
 import { inlineMediaPlaceholder as slot, layoutInlineMedia } from '../src/math/inline-layout.js'
 import { applyMathRendering } from '../src/tuiDisplayPrefs.js'
+import { mathRendersInFlight } from '../src/math/renderer.js'
+import { settle } from './lib/term-test.mjs'
 
 // ── layoutInlineMedia ──────────────────────────────────────────────────
 
@@ -110,7 +112,19 @@ async function screenOf(element: React.ReactElement, columns: number, graphics =
     { stdout: new Out() as NodeJS.WriteStream, exitOnCtrlC: false, patchConsole: false },
   )
   await new Promise(resolve => setTimeout(resolve, 600)) // 固定窗:墙钟 (raster settle)
-  const screen = Array.from({ length: rows }, (_, y) => term.buffer.active.getLine(y)?.translateToString(true).trimEnd() ?? '')
+  const read = () => Array.from({ length: rows }, (_, y) => term.buffer.active.getLine(y)?.translateToString(true).trimEnd() ?? '')
+  // The first formula loads MathJax and sharp, which can outlast that window on
+  // a busy machine: also wait for every in-flight render, then for the screen
+  // to hold still across two reads, so the image-slot relayout has painted.
+  await settle(() => mathRendersInFlight() === 0)
+  let previous: string | undefined
+  await settle(() => {
+    const current = read().join('\n')
+    const still = current === previous
+    previous = current
+    return still
+  }, { stepMs: 100 })
+  const screen = read()
   await app.unmount()
   term.dispose()
   while (screen.length > 0 && screen[screen.length - 1] === '') screen.pop()

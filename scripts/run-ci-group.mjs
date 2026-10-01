@@ -8,11 +8,17 @@
  *
  * 用法（ci.yml 中每个测试组一条）：
  *   - run: node scripts/run-ci-group.mjs render-scroll
- *   - run: node scripts/run-ci-group.mjs render-scroll --shard 1/2
+ *   - run: node scripts/run-ci-group.mjs render-scroll --shard 1/3
  *
- * --shard i/n：只跑本组按登记顺序 round-robin 取到第 i 片的条目（第 i、
- * i+n、i+2n… 项），ci.yml 用 matrix 把大组拆成并行 job；不带 --shard 即整组。
- * 新增测试只登记 GROUPS，不必改分片。--list 只打印本片条目不运行。
+ * --shard i/n：只跑本组第 i 片的条目，ci.yml 用 matrix 把大组拆成并行 job；
+ * 不带 --shard 即整组。分片按耗时装箱（最长处理时间优先：条目按预计耗时
+ * 从长到短，逐条放进当前最轻的一片），各片预计耗时几乎相等；片内仍按登记
+ * 顺序运行。预计耗时来自同目录的 ci-group-timings.json（本地整组实测），
+ * 表里没有的新条目按本组中位数估算。这张表只决定条目落在哪一片，不决定
+ * 跑哪些条目：每条恰好落在一片里（下方断言），表过时只会让各片不够均衡，
+ * 不会漏跑。新增测试只登记 GROUPS，不必改分片。
+ * --list 只打印本片条目与预计耗时，不运行。--record-timings 在跑完后把本次
+ * 通过条目的实测耗时写回 ci-group-timings.json（重新均衡分片时用）。
  *
  * 组定义在下方 GROUPS 表：名称 + 完整 argv + 可选附加 env。所有条目默认
  * NODE_ENV=production：产品入口本就强制生产版 React，dev 版 reconciler 每次
@@ -32,7 +38,7 @@
  *     CI 那一次失败的原始帧字节才是证据。
  */
 import { spawnSync } from 'node:child_process'
-import { appendFileSync, mkdirSync, mkdtempSync, rmSync, statSync } from 'node:fs'
+import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -874,13 +880,15 @@ if (!wholeGroup) {
   process.exit(2)
 }
 
-/** 解析 --shard i/n（缺省 1/1）与 --list。参数非法一律 exit 2，不能静默跑整组。 */
+/** 解析 --shard i/n（缺省 1/1）、--list 与 --record-timings。参数非法一律 exit 2，不能静默跑整组。 */
 const flags = process.argv.slice(3)
 let shard = { index: 1, count: 1 }
 let listOnly = false
+let recordTimings = false
 for (let i = 0; i < flags.length; i++) {
   const flag = flags[i]
   if (flag === '--list') { listOnly = true; continue }
+  if (flag === '--record-timings') { recordTimings = true; continue }
   const value = flag === '--shard' ? flags[++i] : flag.startsWith('--shard=') ? flag.slice('--shard='.length) : undefined
   const m = value === undefined ? null : /^([1-9]\d*)\/([1-9]\d*)$/.exec(value)
   if (flag !== '--shard' && !flag.startsWith('--shard=')) {
@@ -893,7 +901,28 @@ for (let i = 0; i < flags.length; i++) {
   }
   shard = { index: Number(m[1]), count: Number(m[2]) }
 }
-const group = wholeGroup.filter((_, i) => i % shard.count === shard.index - 1)
+const TIMINGS_FILE = new URL('./ci-group-timings.json', import.meta.url)
+const timings = JSON.parse(readFileSync(TIMINGS_FILE, 'utf8'))
+const measured = timings[groupName] ?? {}
+const known = wholeGroup.map(([name]) => measured[name]).filter(s => typeof s === 'number' && s > 0).sort((a, b) => a - b)
+const fallbackSeconds = known.length > 0 ? known[Math.floor(known.length / 2)] : 1
+const estimate = name => typeof measured[name] === 'number' && measured[name] > 0 ? measured[name] : fallbackSeconds
+
+// 最长处理时间优先装箱：同耗时按登记顺序，同负载取编号小的片——同一份输入
+// 在每个 matrix job 里算出同一个划分。
+const owner = new Array(wholeGroup.length)
+const loads = new Array(shard.count).fill(0)
+for (const i of wholeGroup.map((_, i) => i).sort((a, b) => estimate(wholeGroup[b][0]) - estimate(wholeGroup[a][0]) || a - b)) {
+  let lightest = 0
+  for (let s = 1; s < shard.count; s++) if (loads[s] < loads[lightest]) lightest = s
+  owner[i] = lightest
+  loads[lightest] += estimate(wholeGroup[i][0])
+}
+if (owner.some(s => !(s >= 0 && s < shard.count))) {
+  console.error('[run-ci-group] 分片划分内部错误：有条目未分配到任何片')
+  process.exit(2)
+}
+const group = wholeGroup.filter((_, i) => owner[i] === shard.index - 1)
 const label = shard.count === 1 ? groupName : groupName + ' ' + shard.index + '/' + shard.count
 // 分片数超过组内条目数时后面的片是空的：exit 0 会报"全部 0 项通过"，ci.yml 里
 // 一个写错的 matrix 就能让整片静默变绿。空片判配置错误，与非法参数同级。
@@ -903,8 +932,9 @@ if (group.length === 0) {
 }
 
 if (listOnly) {
-  console.log(label + '（' + group.length + '/' + wholeGroup.length + ' 项）')
-  for (const [name] of group) console.log('  ' + name)
+  console.log(label + '（' + group.length + '/' + wholeGroup.length + ' 项，预计 ' + loads[shard.index - 1].toFixed(0) + 's；各片 '
+    + loads.map(s => s.toFixed(0) + 's').join(' / ') + '）')
+  for (const [name] of group) console.log('  ' + name + '  ~' + estimate(name).toFixed(1) + 's' + (name in measured ? '' : '（无实测，按中位数）'))
   process.exit(0)
 }
 
@@ -972,6 +1002,17 @@ if (process.env.GITHUB_STEP_SUMMARY) {
     ...rows.map(r => '| ' + (r.failed ? '✗ exit ' + r.status : '✓') + ' | ' + r.name + ' | ' + fmt(r.seconds) + ' |'),
     '',
   ].join('\n'))
+}
+
+if (recordTimings) {
+  const next = JSON.parse(readFileSync(TIMINGS_FILE, 'utf8'))
+  const entries = { ...(next[groupName] ?? {}) }
+  for (const r of results) if (!r.failed) entries[r.name] = Math.round(r.seconds * 10) / 10
+  // 只保留仍登记在组里的条目，按名字排序，diff 可读。
+  const names = new Set(wholeGroup.map(([name]) => name))
+  next[groupName] = Object.fromEntries(Object.keys(entries).filter(n => names.has(n)).sort().map(n => [n, entries[n]]))
+  writeFileSync(TIMINGS_FILE, JSON.stringify(next, null, 2) + '\n')
+  console.log('[run-ci-group] 已写回 ' + groupName + ' 的实测耗时（' + results.filter(r => !r.failed).length + ' 项）')
 }
 
 const failedList = results.filter(r => r.failed)
