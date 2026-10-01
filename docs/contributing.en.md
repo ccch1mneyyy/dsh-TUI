@@ -260,6 +260,19 @@ pnpm build
 - This removes the complete `lib/` directory, runs `tsc -p tsconfig.json` to
   emit `src/` into `lib/types/`, and then checks the adapter boundary, upstream
   contract, and patch surface.
+- The vendored builds that compile depends on (`vendor/dsh-std`,
+  `vendor/mathjax-tex-svg`) go through `scripts/build-vendor.mjs`: a target is
+  skipped only when its inputs (submodule sources, lockfiles, build command,
+  Node version) and every output file match the last successful build byte for
+  byte, and rebuilt otherwise; `node scripts/build-vendor.mjs --force` rebuilds
+  unconditionally. The fingerprints live in
+  `node_modules/.cache/dsh-tui/vendor-build.json`.
+- `verify:build` runs every gate in parallel, one per CPU, each under its own
+  throwaway HOME, printing each gate's output as one block.
+  `pnpm verify:build --jobs 1` (or `DSH_TUI_VERIFY_JOBS=1`) runs them
+  serially with live output for debugging a single gate. A gate must not depend
+  on state another gate left behind; one that truly needs the machine to itself
+  goes into `SERIAL` in `scripts/run-verify-build.mjs`, with the reason.
 - The `prepare` lifecycle serves **source-checkout bootstrapping only** (it
   fails fast when the vendored submodules are absent — see scripts/prepare-guard.mjs).
 - Git URL dependency installs have been triply blocked since vendoring
@@ -324,6 +337,11 @@ diagrams, and side-question behavior.
 
 - Source hygiene rejects the listed naming and compiled-input regressions.
 - It is not a source-provenance or license audit.
+
+CI shards each test group by the measured durations in
+`scripts/ci-group-timings.json` (every script lands in exactly one shard; the
+table only affects balance). New scripts need no table entry; to rebalance, run
+the whole group once with `node scripts/run-ci-group.mjs <group> --record-timings`.
 
 CI runs these commands after installation:
 
