@@ -1638,12 +1638,8 @@ const dict = {
   },
 
   // （launchpad-cwd-prefix 已删：2026-10 落地页改版删掉了底部工作目录行。）
-  // 落地页把首句原文交接给聊天页时的一句确认——用户按下 Enter 后看到的不
-  // 是"内容消失了"，而是"它在输入框里等你"。
-  'launchpad-handoff': {
-    zh: '首句已放进输入框，按 Enter 发送',
-    en: 'Your first line is in the composer — press Enter to send',
-  },
+  // （launchpad-handoff 已删：第五版起落地页回车直接发送（channel.submit），
+  //  没有草稿要交接，那句"已放进输入框"的提示反而是假的。）
 
   // ── screens/Onboarding.tsx（首次引导：四步把常用配置配好）────────────────
   'onboarding-title': { zh: '欢迎使用 dsh-TUI', en: 'Welcome to dsh-TUI' },

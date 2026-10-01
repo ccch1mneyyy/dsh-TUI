@@ -91,11 +91,16 @@ const plainText = (frames: readonly string[]) => frames.join('')
   .replace(/\x1b\[[0-9;?]*[a-zA-Z]/g, '')
   .replace(/\x1b\][^\x07]*\x07/g, '')
 
-/** 桩 channel：Chat 只读它渲染要用的面（形状取自 verify-whale-girl 的 smoke 夹具）。 */
+/**
+ * 桩 channel：Chat 只读它渲染要用的面（形状取自 verify-whale-girl 的 smoke 夹具）。
+ * 第五版扩展：参数行四段点开的选择器（/model · /effort · /plan · /permission）
+ * 需要可变的 model/effort/mode/权限现状 + subscribe 通知（值就地更新靠它重渲染）。
+ */
 function makeChannel(over: Record<string, unknown> = {}) {
   const notifications: string[] = []
   const calls: string[] = []
-  const channel = {
+  const listeners: Array<() => void> = []
+  const channel: Record<string, unknown> = {
     version: 0,
     whaleIdle: false,
     whale: false,
@@ -123,26 +128,83 @@ function makeChannel(over: Record<string, unknown> = {}) {
     lastUserText: '',
     pending: [],
     notifications,
-    commandList: LOCAL_COMMANDS,
+    // plan / permission 由 dsh-base 注册为 external 命令（选择器打开的前提）。
+    commandList: [...LOCAL_COMMANDS, { name: 'plan', external: true }, { name: 'permission', external: true }],
     contextSegments: { system: 0, prompt: 0, assistant: 0, thinking: 0, tools: 0 },
-    subscribe: () => () => {},
+    subscribe(fn: () => void) { listeners.push(fn); return () => {} },
     submit(text: string) { calls.push('submit:' + text) },
     steer() {},
     cancel() {},
     clear() {},
     notify(text: string) { notifications.push(text) },
-    listModels: () => Promise.resolve([{ provider: 'deepseek', id: 'deepseek-chat', name: 'deepseek-chat' }]),
+    listModels: () => Promise.resolve([
+      { provider: 'deepseek', id: 'deepseek-chat', name: 'deepseek-chat' },
+      { provider: 'deepseek', id: 'deepseek-reasoner', name: 'deepseek-reasoner' },
+    ]),
     listProviders: () => Promise.resolve([{ id: 'deepseek', name: 'DeepSeek' }]),
-    listEfforts: () => Promise.resolve({ efforts: [{ id: 'high', name: 'High' }], defaultEffort: 'high' }),
+    // ≥2 档 effort 才会开滑杆（1 档时 listEfforts 侧直接 notify 不开选择器）。
+    listEfforts: () => Promise.resolve({
+      efforts: [{ id: 'high', name: 'High' }, { id: 'max', name: 'Max' }],
+      defaultEffort: 'high',
+    }),
     listWorkspaces: () => Promise.resolve([]),
     describeCredential: () => Promise.resolve({ configured: true, source: 'env', writable: false }),
     balanceInfo: () => Promise.resolve({ ok: true, isAvailable: true, balances: [{ currency: 'CNY', total: 110 }] }),
-    setEffort: async () => true,
-    switchModel: async () => true,
+    setEffort: async (id: string) => {
+      channel.reasoningEffort = id
+      calls.push('effort:' + id)
+      bump()
+      return true
+    },
+    switchModel: async (provider: string, id: string) => {
+      channel.provider = provider
+      channel.model = id
+      calls.push('switch:' + provider + '/' + id)
+      bump()
+      return true
+    },
     switchWorkspace: async () => true,
     listSessions: () => [],
     setResumeTarget: () => {},
+    // 权限名册（runtime）：/permission 选择器的数据源；写路径走 external 命令。
+    permissionCurrent: 'default',
+    permissionPresets: () => ({
+      availability: 'runtime',
+      options: [
+        { value: 'default', name: 'default' },
+        { value: 'strict', name: 'strict' },
+      ],
+      current: { value: channel.permissionCurrent, name: channel.permissionCurrent, kind: 'preset' },
+    }),
+    runPermissionPreset: async (value: string) => {
+      const clean = value.trim()
+      if (clean === '') return false
+      channel.permissionCurrent = clean
+      calls.push('permission:' + clean)
+      bump()
+      return true
+    },
+    runExternalCommandOutcome: async (name: string, rawInput: string) => {
+      if (name === 'plan') {
+        channel.mode = { plan: rawInput.trim() !== 'off' }
+        calls.push('plan:' + ((channel.mode as { plan: boolean }).plan ? 'on' : 'off'))
+        bump()
+        return { kind: 'success' as const, text: '', consumeDraft: true as const }
+      }
+      if (name === 'permission') {
+        const clean = rawInput.trim() === '' ? 'default' : rawInput.trim()
+        channel.permissionCurrent = clean
+        calls.push('permission:' + clean)
+        bump()
+        return { kind: 'success' as const, text: '', consumeDraft: true as const }
+      }
+      return undefined
+    },
     ...over,
+  }
+  function bump(): void {
+    channel.version = (channel.version as number) + 1
+    for (const fn of listeners) fn()
   }
   return { channel, notifications, calls }
 }
@@ -201,17 +263,31 @@ const WIZARD_MARK = '第 1 / 4 步'
   await chat.unmount()
 }
 
-// ── B. 提交首句的落点（首启：会话浏览器也开着） ─────────────────────────────
+// ── B. 提交首句的落点（第五版：回车直接发送，与 composer 回车同一条路径）──────
 {
   const chat = await mountChat({ launchpadOnBoot: true, openHomeOnBoot: true })
   check('B1 落地页盖在会话浏览器之上', await settled(() => chat.screen().includes('说点什么')))
   await chat.type('你好')
   await chat.send('\r')
   check('B2 提交后不再显示落地页', await settled(() => !chat.screen().includes('说点什么')))
-  check('B3 也不再显示会话浏览器（草稿要落在眼前的对话里）',
+  check('B3 也不再显示会话浏览器（首句刚发进眼前的对话里）',
     await settled(() => !chat.screen().includes('工作区')) , chat.screen().slice(0, 240))
-  check('B4 首句进了输入框（草稿交回，不是被吞）', await settled(() => chat.screen().includes('你好')))
-  check('B5 交接提示发过一条', chat.notifications.some(n => n.length > 0), JSON.stringify(chat.notifications))
+  check('B4 首句直接发送：fake channel 的 submit 被调用、参数就是那行原文',
+    chat.calls.includes('submit:你好'), JSON.stringify(chat.calls))
+  check('B5 发出去之后不留草稿（输入框是空的，没有"已放进输入框"的假交接提示）',
+    !chat.notifications.some(n => n.includes('输入框')) && !chat.notifications.some(n => n.includes('Enter 发送')),
+    JSON.stringify(chat.notifications))
+  await chat.unmount()
+}
+{
+  // 行首 / 的本地命令仍走命令表（不触发模型提交）。
+  const chat = await mountChat({ launchpadOnBoot: true })
+  await settled(() => chat.screen().includes('说点什么'))
+  await chat.type('/help')
+  await chat.send('\r')
+  check('B6 命令行走命令表：不触发 channel.submit（本地命令不发模型）',
+    await settled(() => !chat.screen().includes('说点什么')) && !chat.calls.some(c => c.startsWith('submit:')),
+    JSON.stringify(chat.calls))
   await chat.unmount()
 }
 
@@ -219,7 +295,8 @@ const WIZARD_MARK = '第 1 / 4 步'
 {
   const chat = await mountChat({ launchpadOnBoot: true })
   await settled(() => chat.screen().includes('说点什么'))
-  await chat.send('\u001b[B') // 焦点落到第一条入口（第四版常态档第一位 = 历史会话）
+  // 第五版焦点环 = 输入框 → 参数四段 → 入口：↓×5 才落到第一条入口（历史会话）。
+  for (let i = 0; i < 5; i++) await chat.send('\u001b[B')
   await chat.send('\r')
   check('C1 历史会话：落地页收掉、会话管理真上屏（动作有可见效果）',
     await settled(() => !chat.screen().includes('说点什么') && chat.screen().includes('新建会话')),
@@ -227,16 +304,93 @@ const WIZARD_MARK = '第 1 / 4 步'
   await chat.unmount()
 }
 
-// ── D. 覆盖层动作不收落地页 ───────────────────────────────────────────────
+// ── D/J. 参数行四段点开既有选择器（第五版：盖在落地页之上、键盘可达、
+//          选完就地更新、Esc 回落地页、草稿不动）────────────────────────────
 {
+  // 模型段（也是旧 D1 的加强版：不止落地页留着，选择器真的画出来了）。
+  const chat = await mountChat({ launchpadOnBoot: true })
+  await settled(() => chat.screen().includes('说点什么'))
+  await chat.send('\u001b[B') // 焦点到参数行第一段（模型）
+  await chat.send('\r')
+  check('D1 模型段点开 /model 选择器：盖在落地页之上（两屏同帧可见、键盘可达）',
+    await settled(() => chat.screen().includes('说点什么')
+      && chat.screen().includes('deepseek-reasoner')), chat.screen().slice(0, 300))
+  // ↑/↓ 走到另一个模型，Enter 切换：值就地更新、仍停在落地页。
+  await chat.send('\u001b[B')
+  await chat.send('\r')
+  check('D2 选择器里 Enter 切换模型：参数行就地更新（provider 前缀不回来）、落地页不收',
+    await settled(() => chat.calls.includes('switch:deepseek/deepseek-reasoner')
+      && chat.screen().includes('deepseek-reasoner') && chat.screen().includes('说点什么')),
+    JSON.stringify(chat.calls))
+  await chat.unmount()
+}
+{
+  // Esc 关选择器回落地页；草稿一字不动。
+  const chat = await mountChat({ launchpadOnBoot: true })
+  await settled(() => chat.screen().includes('说点什么'))
+  await chat.type('半句话')
+  await chat.send('\u001b[B')
+  await chat.send('\r')
+  await settled(() => chat.screen().includes('deepseek-reasoner'))
+  await chat.send('\x1b')
+  check('D3 Esc 关掉选择器回到落地页（半句话草稿原样在）',
+    await settled(() => chat.screen().includes('半句话')
+      && !chat.screen().includes('deepseek-reasoner')), chat.screen().slice(0, 240))
+  // 落地页自己的 Esc 语义不变：有字先清空。
+  await chat.send('\x1b')
+  check('D4 选择器关掉后落地页 Esc 语义不变（有字先清空、不去看会话）',
+    await settled(() => !chat.screen().includes('半句话') && chat.screen().includes('说点什么')),
+    chat.screen().slice(0, 200))
+  await chat.unmount()
+}
+{
+  // 思考深度段：滑杆选择器（←/→ 即时应用），参数行就地更新。
+  const chat = await mountChat({ launchpadOnBoot: true })
+  await settled(() => chat.screen().includes('说点什么'))
+  await chat.send('\u001b[B')
+  await chat.send('\u001b[B') // 第二段 = 思考深度
+  await chat.send('\r')
+  await settled(() => chat.screen().includes('Max')) // 滑杆的档位表上屏（High/Max 两档）
+  await chat.send('\u001b[C') // → 即时应用下一档（max）
+  await chat.send('\x1b') // Esc 关滑杆回落地页
+  check('J1 思考深度段点开 /effort 滑杆：→ 即时应用、参数行就地更新、Esc 回落地页',
+    await settled(() => chat.calls.includes('effort:max')
+      && chat.screen().includes('Max') && chat.screen().includes('说点什么')),
+    JSON.stringify(chat.calls))
+  await chat.unmount()
+}
+{
+  // 模式段：/plan 选择器，Enter 切到 Plan，参数行就地更新。
   const chat = await mountChat({ launchpadOnBoot: true })
   await settled(() => chat.screen().includes('说点什么'))
   await chat.send('\u001b[B')
   await chat.send('\u001b[B')
-  await chat.send('\u001b[B') // 第三条 = 模型（覆盖层）
+  await chat.send('\u001b[B') // 第三段 = 模式
   await chat.send('\r')
-  check('D1 切换模型：落地页留着（覆盖层渲染在它之上）',
-    await settled(() => chat.screen().includes('说点什么')), chat.screen().slice(0, 240))
+  await settled(() => chat.screen().includes('Plan'))
+  await chat.send('\u001b[A') // ↑ 到 Plan 行（初始焦点在当前档 Execute）
+  await chat.send('\r')
+  check('J2 模式段点开 /plan 选择器：Enter 切 Plan、参数行就地更新（Execute→Plan）',
+    await settled(() => chat.calls.includes('plan:on')
+      && chat.screen().includes('Plan') && chat.screen().includes('说点什么')),
+    JSON.stringify(chat.calls))
+  await chat.unmount()
+}
+{
+  // 权限段：/permission 选择器（runtime 名册），Enter 换预设、就地更新。
+  const chat = await mountChat({ launchpadOnBoot: true })
+  await settled(() => chat.screen().includes('说点什么'))
+  await chat.send('\u001b[B')
+  await chat.send('\u001b[B')
+  await chat.send('\u001b[B')
+  await chat.send('\u001b[B') // 第四段 = 权限
+  await chat.send('\r')
+  await settled(() => chat.screen().includes('strict'))
+  await chat.send('\u001b[B') // ↓ 到 strict（初始焦点在当前 default）
+  await chat.send('\r')
+  check('J3 权限段点开 /permission 选择器：Enter 换预设、参数行就地更新（default→strict）',
+    await settled(() => chat.calls.some(c => c.startsWith('permission:strict'))
+      && chat.screen().includes('说点什么')), JSON.stringify(chat.calls))
   await chat.unmount()
 }
 

@@ -43,7 +43,7 @@ import { stringWidth } from '../src/ink/stringWidth.js'
 
 const { Terminal: XTerm } = xterm
 const [
-  { render, ThemeProvider, AlternateScreen },
+  { render, ThemeProvider, AlternateScreen, Text },
   { Launchpad, fitChips, prevBoundary, nextBoundary },
   { resolveLaunchpadLayout },
   { resolveLaunchpadActions, truncateContinueTitle, LAUNCHPAD_CONTINUE_TITLE_MAX },
@@ -80,8 +80,8 @@ const ROWS = 40
 const CWD = '/tmp/verify-launchpad'
 const BRANCH = 'main'
 const VERSION = '9.9.9'
-/** 第四版参数行：只画值、双空格 + · + 双空格分隔，模式值是产品词 Execute/Plan。 */
-const PARAM_LINE = 'zhipu/glm-5.3  ·  Max  ·  Execute  ·  default'
+/** 第五版参数行：只画值、模型段**只显示模型名**（无 provider/ 前缀）。 */
+const PARAM_LINE = 'glm-5.3  ·  Max  ·  Execute  ·  default'
 /** 夹具固定 bold 字面：大字 needle 与阶梯阈值都不随当天轮换的字体漂。 */
 const FONT = splashFontById('bold')
 
@@ -128,6 +128,10 @@ interface OpenOptions {
   actions?: readonly ReturnType<typeof resolveLaunchpadActions>[number][]
   /** 终端焦点标志；false = 模拟"从未收到 focus 事件"（光标仍必须自动呼吸）。 */
   terminalFocused?: boolean
+  /** 传一个探针面板给 overlayPanel（第五版：选择器盖在落地页之上）。 */
+  overlayPanel?: boolean
+  /** 模拟"选择器开着"（第五版：本屏键盘整块让位）。 */
+  inputPaused?: boolean
 }
 
 async function openLaunchpad(events: Ev[], options: OpenOptions = {}) {
@@ -157,7 +161,9 @@ async function openLaunchpad(events: Ev[], options: OpenOptions = {}) {
         fontId="bold"
         firstRun={options.firstRun ?? false}
         actions={options.actions ?? DEFAULT_ACTIONS}
-        provider={params ? 'zhipu' : undefined}
+        overlayPanel={options.overlayPanel === true ? <Text>PICKER-PROBE 选择器探针</Text> : undefined}
+        inputPaused={options.inputPaused === true}
+        onParamPick={(segment) => { events.push({ type: 'param', value: segment }) }}
         model={params ? 'glm-5.3' : undefined}
         effort={params ? 'max' : undefined}
         mode={params ? 'act' : undefined}
@@ -359,23 +365,28 @@ check('A6c 输入卡片只有一层圆角边框（╭ ╰ 各恰好一个，不�
   const top = rowOf(base.term, '╭')
   const bottom = rowOf(base.term, '╰')
   const input = rowOf(base.term, '❯')
-  const param = rowOf(base.term, 'zhipu/glm-5.3')
+  const param = rowOf(base.term, 'glm-5.3')
   check('A6d 参数行移出输入框：框里只有输入行，参数行紧贴 ╰ 下一行',
     top < input && input < bottom && param === bottom + 1,
     [`╭=${top}`, `❯=${input}`, `param=${param}`, `╰=${bottom}`].join(' '))
   check('A6e 参数行文案 = 模型 · 思考深度 · 模式 · 权限（四段，模型名带浅紫）',
     param >= 0 && base.screen().includes(PARAM_LINE), PARAM_LINE)
+  check('A6e2 模型段只显示模型名（无 provider/ 前缀，参数行没有斜杠）',
+    param >= 0 && !(viewportLines(base.term)[param] ?? '').includes('/') && !base.screen().includes('zhipu'),
+    (viewportLines(base.term)[param] ?? '').trim())
   // 左对齐输入框：参数行行首 = 卡片左缘 + 2（边框 1 + padding 1）。
   const cardLeft = leftGap((viewportLines(base.term).find(l => l.includes('╭')) ?? ''))
   check('A6f 参数行左对齐输入框（行首 = 卡片左缘 + 2）',
     Math.abs(leftGap(viewportLines(base.term)[param] ?? '') - (cardLeft + 2)) <= 1,
     `paramLeft=${leftGap(viewportLines(base.term)[param] ?? '')} cardLeft=${cardLeft}`)
-  // 成组紧贴：参数行 → 键帽行紧贴（无空行）；整组不钉屏幕底（Tips 与铭牌之间留白）。
+  // 第五版：参数行与入口行之间隔一行呼吸留白（用户实测要求；矮屏阶梯可撤）。
   const lines = viewportLines(base.term)
   const hint = lines.findIndex(l => l.includes(CONTINUE_LABEL))
   const tip = lines.findIndex(l => l.includes('● Tips'))
   const corner = lines.findIndex((l, i) => i > tip && l.includes(CWD))
-  check('A6g 键帽行紧贴参数行（成组，无空行）', hint === param + 1, `hint=${hint} param=${param}`)
+  check('A6g 参数行仍紧贴框、入口行隔一行呼吸留白（hint = param + 2，中间是空行）',
+    hint === param + 2 && (lines[param + 1] ?? 'x').trim() === '',
+    'hint=' + hint + ' param=' + param + ' mid=' + JSON.stringify(lines[param + 1]))
   check('A6h Tips 行 = 键帽行 + 2（一行留白后居中收尾）', tip === hint + 2, `tip=${tip} hint=${hint}`)
   check('A6i 整组不钉屏幕底：Tips 与双角铭牌之间仍有留白', tip >= 0 && corner > tip + 1,
     `tip=${tip} corner=${corner}`)
@@ -563,15 +574,19 @@ base.close()
   const ev: Ev[] = []
   const s = await openLaunchpad(ev)
   await s.send('\u001b[B')
-  check('C1 ↓ 从输入框落到第一条标签', last(ev, 'focus')?.value === 0, JSON.stringify(last(ev, 'focus')))
-  await s.send('\u001b[B')
-  check('C2 再 ↓ 走到第二条', last(ev, 'focus')?.value === 1)
-  await s.send('\u001b[A')
-  check('C3 ↑ 退回第一条', last(ev, 'focus')?.value === 0)
-  await s.send('\u001b[A')
-  check('C3b 第一条再 ↑ 回到输入框（环的上一格就是 -1）', last(ev, 'focus')?.value === -1,
+  check('C1 ↓ 从输入框落到参数行第一段（模型，focus=-2）', last(ev, 'focus')?.value === -2,
     JSON.stringify(last(ev, 'focus')))
   await s.send('\u001b[B')
+  check('C2 再 ↓ 走到第二段（思考深度，focus=-3）', last(ev, 'focus')?.value === -3)
+  await s.send('\u001b[A')
+  check('C3 ↑ 退回第一段', last(ev, 'focus')?.value === -2)
+  await s.send('\u001b[A')
+  check('C3b 第一段再 ↑ 回到输入框（环的上一格就是 -1）', last(ev, 'focus')?.value === -1,
+    JSON.stringify(last(ev, 'focus')))
+  // 环顺序 = 输入框 → 参数四段 → 入口（第五版）：连 ↓ 穿过参数行落到第一条入口。
+  for (let i = 0; i < 5; i++) await s.send('\u001b[B')
+  check('C3c 连 ↓ 穿过参数行落到第一条入口（focus=0）', last(ev, 'focus')?.value === 0,
+    JSON.stringify(last(ev, 'focus')))
   await s.send('\r')
   check('C4 焦点在入口上时 Enter 走 onAction（不是提交输入框）',
     last(ev, 'action')?.value === 'continue' && last(ev, 'submit') === undefined,
@@ -613,16 +628,16 @@ base.close()
   const ev: Ev[] = []
   const s = await openLaunchpad(ev)
   await s.send('\t')
-  check('C8 Tab 从输入框落到第一条标签（脚本头部声称的 Tab 路径）',
-    last(ev, 'focus')?.value === 0, JSON.stringify(ev.slice(-2)))
+  check('C8 Tab 从输入框落到参数行第一段（模型，focus=-2）',
+    last(ev, 'focus')?.value === -2, JSON.stringify(ev.slice(-2)))
   const beforeBlank = ev.length
   await s.send('\t')
-  check('C9 再 Tab 前进一条', last(ev, 'focus')?.value === 1, JSON.stringify(ev.slice(beforeBlank)))
-  // 焦点环只含**画出来的**键帽：120 列下 ? 与 /settings 都被裁掉（键帽比纯文字
-  // 宽 3 格），画到第 5 颗（/lang，index 4）。从 index 1 再 Tab 4 次：2→3→4→-1，
-  // 绕回输入框，而不是落到看不见的 ? / settings。
-  for (let i = 0; i < 3; i++) await s.send('\t')
-  check('C9b Tab 绕完四条入口回到输入框（-1）',
+  check('C9 再 Tab 前进一段（思考深度，focus=-3）', last(ev, 'focus')?.value === -3,
+    JSON.stringify(ev.slice(beforeBlank)))
+  // 焦点环 = 输入框 + 参数四段 + 画出来的入口（120 列四条全画）。从 -3 再
+  // Tab 6 次：-4→-5→0→1→2→3→-1，绕回输入框。
+  for (let i = 0; i < 7; i++) await s.send('\t')
+  check('C9b Tab 绕完参数行与四条入口回到输入框（-1）',
     last(ev, 'focus')?.value === -1, JSON.stringify(last(ev, 'focus')))
   s.close()
 }
@@ -688,6 +703,18 @@ base.close()
     full.totalRows > noTip.totalRows && noTip.totalRows > noHints.totalRows
       && noHints.totalRows > noArt.totalRows && noArt.totalRows === only.totalRows,
     [full.totalRows, noTip.totalRows, noHints.totalRows, noArt.totalRows, only.totalRows].join(','))
+  // 第五版呼吸留白：full 默认带 1 行留白；矮一行先撤留白（stage 仍是 full），
+  // 再矮才撤 Tips——撤留白永远排在撤 Tips / 撤键帽之前。
+  // firstRow('full') 命中的是**紧凑 full**（留白已撤）：阶梯里 full+留白比它高一行。
+  check('D1c full 默认带呼吸留白；矮一行先撤留白（gap 1→0，stage 仍 full）',
+    at(fullRows).stage === 'full' && at(fullRows).hintsGapRows === 0
+      && at(fullRows + 1).stage === 'full' && at(fullRows + 1).hintsGapRows === 1
+      && at(fullRows + 1).totalRows === at(fullRows).totalRows + 1,
+    'gap@fullRows=' + at(fullRows).hintsGapRows + ' gap@fullRows+1=' + at(fullRows + 1).hintsGapRows)
+  check('D1d no-tip 同样先撤留白再撤键帽（no-tip 也有留白/紧凑两档）',
+    at(noTipRows).stage === 'no-tip' && at(noTipRows).hintsGapRows === 0
+      && at(noTipRows + 1).stage === 'no-tip' && at(noTipRows + 1).hintsGapRows === 1,
+    'gap@noTipRows=' + at(noTipRows).hintsGapRows + ' gap@noTipRows+1=' + at(noTipRows + 1).hintsGapRows)
   check('D2 full 档：立绘 + 大字 + 键位标签 + Tips + 铭牌全在，且真放得下',
     full.showWhale && full.showBigTitle && full.showHints && full.showTip && full.showCorners
       && full.totalRows <= fullRows,
@@ -707,10 +734,11 @@ base.close()
     only.stage === 'input-only' && !only.showWhale && !only.showHints && !only.showTip
       && only.showHero && only.showCorners,
     'stage=' + only.stage + ' total=' + only.totalRows + ' rows=' + onlyRows)
-  check('D5c params 缺席时整屏矮一行（框下参数行不画；卡片恒 3 行）',
+  check('D5c params 缺席时整屏矮两行（参数行 + 只为它存在的呼吸留白；卡片恒 3 行）',
     resolveLaunchpadLayout(COLS, ROWS, { whale: true, font: FONT, params: true }).totalRows
-      - resolveLaunchpadLayout(COLS, ROWS, { whale: true, font: FONT, params: false }).totalRows === 1
-      && resolveLaunchpadLayout(COLS, ROWS, { whale: true, font: FONT, params: false }).cardRows === 3)
+      - resolveLaunchpadLayout(COLS, ROWS, { whale: true, font: FONT, params: false }).totalRows === 2
+      && resolveLaunchpadLayout(COLS, ROWS, { whale: true, font: FONT, params: false }).cardRows === 3
+      && resolveLaunchpadLayout(COLS, ROWS, { whale: true, font: FONT, params: false }).hintsGapRows === 0)
 }
 {
   const at = (rows: number) => resolveLaunchpadLayout(COLS, rows, { whale: true, font: FONT, params: true })
@@ -850,7 +878,7 @@ for (const cols of [120, 100, 72, 60, 48]) {
   // 半句检测：标签/文案的前半出现在屏上、却找不到完整串 = 被切断。
   // 参数行按**段**判（模型/思考深度/模式/权限）：窄屏下尾部段按宽度省掉是
   // 契约行为（launchpadLayout 的单行预算），整句判据会把合法省段误判成切断。
-  const PARAM_SEGMENTS = ['zhipu/glm-5.3', 'Max', 'Execute', 'default']
+  const PARAM_SEGMENTS = ['glm-5.3', 'Max', 'Execute', 'default']
   const wholes = [...CHIP_LABELS, ...TIP_TEXTS, ...PARAM_SEGMENTS]
   const cut = wholes.filter(text => {
     const half = text.slice(0, Math.ceil(text.length / 2))
@@ -938,6 +966,90 @@ for (const cols of [120, 100, 72, 60, 48]) {
     await settled(() => !normal.screen().includes('快速配置') && !normal.screen().includes('配置 provider')),
     normal.screen().slice(0, 100))
   normal.close()
+}
+
+// ── H. 第五版专项：参数行四段可点 + 选择器盖在落地页之上 ─────────────────
+{
+  // 键盘路径（仓库硬规矩：每个可点目标都要有键盘路径）：↓ 走到段、Enter 打开。
+  const cases: [string, number][] = [['model', 1], ['effort', 2], ['mode', 3], ['permission', 4]]
+  for (const [segment, downs] of cases) {
+    const ev: Ev[] = []
+    const s = await openLaunchpad(ev)
+    for (let i = 0; i < downs; i++) await s.send('\u001b[B')
+    await s.send('\r')
+    check('H1 Enter 打开 ' + segment + ' 段（键盘路径；环顺序 模型→深度→模式→权限）',
+      last(ev, 'param')?.value === segment && last(ev, 'submit') === undefined,
+      JSON.stringify(last(ev, 'param')))
+    s.close()
+  }
+}
+{
+  // 鼠标路径：真 SGR 点击每一段——四段各自落到自己的 onParamPick。
+  const ev: Ev[] = []
+  const s = await openLaunchpad(ev)
+  await settled(() => findCell(s.term, 'glm-5.3') !== null)
+  const picks: string[] = []
+  for (const needle of ['glm-5.3', 'Max', 'Execute', 'default']) {
+    await s.click(needle)
+    picks.push(needle + '→' + String(last(ev, 'param')?.value))
+  }
+  check('H2 点击四段各自触发对应 onParamPick（不是永远第一段）',
+    last(ev, 'param')?.value === 'permission' && ev.filter(e => e.type === 'param').length === 4,
+    picks.join(' '))
+  s.close()
+}
+{
+  // hover（mode 1003 motion，无按键）→ ParamChip 的 onMouseEnter → 焦点移到该段。
+  const ev: Ev[] = []
+  const s = await openLaunchpad(ev)
+  await settled(() => findCell(s.term, 'Max') !== null)
+  const target = findCell(s.term, 'Max')!
+  const before = ev.length
+  s.input.write('\u001b[<35;' + target.col + ';' + target.row + 'M')
+  check('H3 悬停参数段即移焦点（思考深度 = focus -3）',
+    await settled(() => last(ev, 'focus')?.value === -3), JSON.stringify(ev.slice(before)))
+  s.close()
+}
+{
+  // 选择器盖在落地页之上：overlayPanel 探针上屏、且在输入框卡片**上方**。
+  const ev: Ev[] = []
+  const s = await openLaunchpad(ev, { overlayPanel: true })
+  check('H4 选择器面板盖在落地页之上（探针在屏上、且位于输入框卡片上方）',
+    await settled(() => s.screen().includes('PICKER-PROBE 选择器探针'))
+      && rowOf(s.term, 'PICKER-PROBE') >= 0 && rowOf(s.term, 'PICKER-PROBE') < rowOf(s.term, '╭'),
+    'probe=' + rowOf(s.term, 'PICKER-PROBE') + ' card=' + rowOf(s.term, '╭'))
+  check('H4b 选择器开着时落地页仍在（参数行/输入框都没被踢出去）',
+    s.screen().includes('说点什么') && s.screen().includes(PARAM_LINE))
+  s.close()
+}
+{
+  // inputPaused：选择器开着时本屏键盘整块让位——按键不落进草稿。
+  const ev: Ev[] = []
+  const s = await openLaunchpad(ev, { inputPaused: true })
+  const before = ev.length
+  s.input.write('x')
+  // 固定窗:让位 无事件可观测（静默本身是被测语义）。
+  await new Promise(resolve => setTimeout(resolve, 150))
+  check('H5 inputPaused 时按键不进草稿（事件零增长）', ev.length === before,
+    JSON.stringify(ev.slice(before)))
+  s.close()
+}
+{
+  // 矮屏撤留白后的真挂载形态：紧凑 full 档下入口行回到紧贴参数行（param+1）。
+  const at = (rows: number) => resolveLaunchpadLayout(COLS, rows, { whale: true, font: FONT, params: true })
+  let fullGap = 1
+  while (fullGap <= 80 && at(fullGap).stage !== 'full') fullGap++
+  // fullGap = 紧凑 full 的阈值（留白已撤）：入口行应回到紧贴参数行。
+  const ev: Ev[] = []
+  const s = await openLaunchpad(ev, { rows: fullGap })
+  await settled(() => s.screen().includes(CONTINUE_LABEL))
+  const lines = viewportLines(s.term)
+  const param = lines.findIndex(l => l.includes('glm-5.3'))
+  const hint = lines.findIndex(l => l.includes(CONTINUE_LABEL))
+  check('H6 矮屏撤掉呼吸留白后入口行紧贴参数行（输入框还在，没被留白挤掉）',
+    param >= 0 && hint === param + 1 && s.screen().includes('╭'),
+    'rows=' + fullGap + ' param=' + param + ' hint=' + hint)
+  s.close()
 }
 
 if (failures === 0) console.log(`\nverify-launchpad: ${checks} checks, all passed`)
