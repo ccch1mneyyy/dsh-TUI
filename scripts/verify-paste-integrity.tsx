@@ -19,17 +19,52 @@
  *      newlines back (measurement: even a strip-free ingress still loses 5
  *      payload characters), so the decode lives at the ONE paste choke point
  *      (`createPasteKey`) and the ingress never has to guess.
+ *  (f) ADJACENT BREAK — the seam T08's independent review found (X1): when ONE
+ *      half of a CRLF break leaked as record TEXT and the other half still
+ *      arrived as a REAL newline, that break decoded into two `\n` (a 4-line
+ *      source became 7 lines). The bytes between two records are payload text,
+ *      but an LF among them is the LF HALF of a break, so it goes through the
+ *      same `foldNewline` the record lane uses.
+ *  (g) The same shape on the PRODUCT: a real `Chat` mount delivers the
+ *      half-leaked record stream through stdin, and the fold chip must report
+ *      the SOURCE line count while Enter submits the source byte-for-byte
+ *      (L-012: symptom gone AND the function still fires, in one round).
  *
  * Run with: node --import tsx/esm scripts/verify-paste-integrity.tsx
- * Exits 1 on the first failed assertion (CI gate).
+ * Exits 1 when any assertion failed (CI gate).
  */
-import { sanitizeEditableText, sanitizePastedText } from '../src/components/PromptInput.js'
-import {
-  INITIAL_STATE,
-  parseMultipleKeypresses,
-  type KeyParseState,
-  type ParsedInput,
-} from '../src/ink/parse-keypress.js'
+process.env.FORCE_COLOR = '3'
+// (g) reads the fold chip's stats row off the screen; pin the copy it matches.
+process.env.DSH_TUI_LANG = 'en'
+// HOME/USERPROFILE must be redirected BEFORE any src module is imported —
+// DATA_DIR-derived paths resolve at import time and (g)'s Enter press submits
+// through the real history path. Repo helper, the same isolation its sibling
+// Chat-mounted probes use.
+const { default: dataDir } = await import('./lib/fake-home.mjs')
+
+const [
+  { sanitizeEditableText, sanitizePastedText },
+  { INITIAL_STATE, parseMultipleKeypresses },
+  { rmSync },
+  { PassThrough, Writable },
+  React,
+  { Terminal: XTerm },
+  { render, AlternateScreen },
+  { Chat },
+  { QuestionStore },
+  termTest,
+] = await Promise.all([
+  import('../src/components/PromptInput.js'),
+  import('../src/ink/parse-keypress.js'),
+  import('node:fs'),
+  import('node:stream'),
+  import('react'),
+  import('@xterm/headless'),
+  import('../src/ui.js'),
+  import('../src/screens/Chat.js'),
+  import('../src/dsh-adapter/questions.js'),
+  import('./lib/term-test.mjs'),
+])
 
 let failures = 0
 
@@ -99,8 +134,8 @@ const decomposedStream = (text: string): string =>
 /** The payload one parse of `input` hands over as a paste, or '' when the
  *  stream produced no paste key at all. */
 function pastePayload(input: string): string {
-  const [keys]: [ParsedInput[], KeyParseState] = parseMultipleKeypresses(INITIAL_STATE, input)
-  const paste = keys.find((k: ParsedInput) => k.kind === 'key' && k.isPasted)
+  const [keys] = parseMultipleKeypresses(INITIAL_STATE, input)
+  const paste = keys.find(k => k.kind === 'key' && k.isPasted)
   return paste && paste.kind === 'key' ? paste.sequence : ''
 }
 
@@ -184,6 +219,160 @@ check('e1: the parser restores the payload text from the record stream', payload
 check('e2: the real ingress keeps the restored payload byte-identical', value, SOURCE)
 checkNum('e3: value line count equals the payload line count', value.split('\n').length, LINES.length)
 checkNum('e4: no payload character is missing', value.length, SOURCE.length)
+
+// ── (f) X1: a record next to a real newline is still ONE break ──────────────
+
+console.log('# (f) X1: record text adjacent to a real newline is ONE break')
+const X1_LINES = ['alfa', 'bravo', 'charlie', 'delta']
+/**
+ * The half-leaked #827 shape T08's review reproduced (X1a minimum / X1b at
+ * three boundaries): the CR half of each break leaked as record TEXT — one
+ * ESC-bearing record and two ESC-less tails — while the LF half still arrived
+ * as a real newline. `foldNewline` is the ONE newline rule, so each such LF
+ * must fold into the newline its CR half already emitted.
+ */
+const HALF_LEAKED = `${X1_LINES[0]!}${CR}\n${X1_LINES[1]!}${CR_RECORD}\n${X1_LINES[2]!}${CR}\n${X1_LINES[3]!}`
+const HALF_LEAKED_SOURCE = X1_LINES.join('\n')
+const halfLeakedPayload = pastePayload(decomposedStream(HALF_LEAKED))
+check('f1: a CR record text + a real newline fold to ONE break (minimum)', pastePayload(decomposedStream(`alfa${CR_RECORD}\nbravo`)), 'alfa\nbravo')
+check('f2: three half-leaked boundaries restore the source bytes', halfLeakedPayload, HALF_LEAKED_SOURCE)
+checkNum('f3: and the restored payload keeps the source line count', halfLeakedPayload.split('\n').length, X1_LINES.length)
+check('f4: the real ingress keeps that payload byte-identical', pasteIngress(halfLeakedPayload), HALF_LEAKED_SOURCE)
+check('f5: the LF half of the LAST break folds at the tail too', pastePayload(decomposedStream(`alfa${CR_RECORD}\n`)), 'alfa\n')
+// Function side + zero harm in the same run (L-012): the shapes that must
+// change do change, and the widening may not swallow a genuine break.
+check('f6: both halves as records still fold to ONE newline (X1c control)', pastePayload(decomposedStream(`alfa${CR_RECORD}[0;0;10;1;0;1_bravo`)), 'alfa\nbravo')
+check('f7: a genuine newline after the fold survives (blank line)', pastePayload(decomposedStream(`alfa${CR_RECORD}\n\nbravo`)), 'alfa\n\nbravo')
+check('f8: an LF after a non-newline character never folds', pastePayload(decomposedStream(`alfa${CR_RECORD}x\nbravo`)), 'alfa\nx\nbravo')
+
+// ── (g) on the product: chip lines == source lines, Enter sends the source ──
+
+console.log('# (g) on the product: the fold chip reports the SOURCE lines, Enter sends them')
+
+const COLS = 110
+const ROWS = 48
+const LAND_MS = 4000
+const SUBMIT_MS = 4000
+const term = new XTerm({ cols: COLS, rows: ROWS, scrollback: 50, allowProposedApi: true })
+
+class FakeStdout extends Writable {
+  columns = COLS
+  rows = ROWS
+  isTTY = true
+  _write(chunk: unknown, _e: BufferEncoding, cb: () => void) { term.write(String(chunk), cb) }
+}
+class FakeStderr extends Writable {
+  isTTY = true
+  _write(_c: unknown, _e: BufferEncoding, cb: () => void) { cb() }
+}
+class FakeStdin extends PassThrough {
+  isTTY = true
+  setRawMode() { return this }
+  ref() { return this }
+  unref() { return this }
+}
+const stdinObj = new FakeStdin()
+
+const listeners = new Set<() => void>()
+let submittedCount = 0
+let lastSubmitted = ''
+const channel: any = {
+  whale: false, whaleIdle: false, version: 0, rows: [] as unknown[],
+  status: 'idle', sessionTitle: 'paste-integrity', agentId: 'paste-integrity', model: 'deepseek-v4-flash',
+  mode: { plan: false }, reasoningEffort: 'max', tokens: { input: 1, output: 1 },
+  cwd: '/tmp/demo', displayCwd: '/tmp/demo', gitBranch: 'main', working: false,
+  spinnerMode: 'requesting', responseChars: 0, activeToolCount: 0, turnStart: Date.now(),
+  lastUserText: '', pending: [], commandList: [], notifications: [],
+  subscribe(cb: () => void) { listeners.add(cb); return () => listeners.delete(cb) },
+  submit(text: string) { lastSubmitted = text; submittedCount += 1; bump() },
+  cancel: () => {}, clear: () => {},
+  notify(msg: string) { channel.notifications.push(msg); bump() },
+  listModels: () => Promise.resolve([]), listSessions: () => [], setResumeTarget: () => {},
+  loadOlder: () => {}, mcpStatus: () => [], stagedImage: () => undefined, discardStagedImage: () => {},
+}
+const bump = () => { channel.version++; for (const cb of listeners) cb() }
+
+/** Chat exposes its PromptController slot here (repro-paste-loss.tsx seam). */
+const composerRef: { current: { text(): string; clear(): void } | null } = { current: null }
+const composerText = (): string => composerRef.current?.text() ?? ''
+const { settled } = termTest
+/** `▸ 4 lines・671 chars` (en) or `▸ 4 行・671 字` (zh), as PromptInput paints it. */
+function chipOnScreen(): { lines: number; chars: number } | null {
+  for (const row of termTest.viewportLines(term)) {
+    const m = /[▸▾] (\d+) (?:lines|行)・(\d+) (?:chars|字)/u.exec(row)
+    if (m) return { lines: Number(m[1]), chars: Number(m[2]) }
+  }
+  return null
+}
+
+type Round = {
+  readonly value: string
+  readonly submitted: string
+  readonly chip: { lines: number; chars: number } | null
+  readonly landed: boolean
+}
+
+/** One delivery round: paste -> read value + chip -> Enter -> read submit. */
+async function deliver(buffer: string): Promise<Round> {
+  composerRef.current?.clear()
+  await settled(() => composerText() === '' && chipOnScreen() === null, { timeoutMs: 3000 })
+  submittedCount = 0
+  lastSubmitted = ''
+  stdinObj.write(decomposedStream(buffer))
+  // "Landed" means PAINTED: a 10-char prefix of the first row is what the
+  // folded chip's preview shows, so this never slices across a newline.
+  const landed = await settled(() => {
+    const current = composerText()
+    if (current === '') return false
+    const probe = current.split('\n')[0]!.slice(0, 10)
+    return probe !== '' && termTest.screenHas(term, probe)
+  }, { timeoutMs: LAND_MS })
+  const value = composerText()
+  const chip = chipOnScreen()
+  stdinObj.write('\r')
+  let sent = await settled(() => submittedCount > 0, { timeoutMs: 900 })
+  if (!sent) {
+    stdinObj.write('\r')
+    sent = await settled(() => submittedCount > 0, { timeoutMs: SUBMIT_MS })
+  }
+  return { value, submitted: submittedCount > 0 ? lastSubmitted : '', chip, landed }
+}
+
+// 4 rows, each over 160 characters: the fold gate is ≥6 lines OR ≥600 chars
+// (FOLD_MIN_CHARS), so a 4-line source still folds — which is what lets the
+// chip's line count be read on BOTH sides of the fix (7 lines before it).
+const R_ROWS = ['quebec|R1|romeo.', 'sierra|R2|tango.', 'uniform|R3|victor.', 'whiskey|R4|xray.']
+  .map(row => `${row} ${'-'.repeat(150)}`)
+const R_SOURCE = R_ROWS.join('\n')
+/** The same half-leak at three boundaries, on the product's own delivery path. */
+const R_HALF_LEAKED = `${R_ROWS[0]!}${CR}\n${R_ROWS[1]!}${CR_RECORD}\n${R_ROWS[2]!}${CR}\n${R_ROWS[3]!}`
+
+let instance: { unmount: () => Promise<void> } | null = null
+try {
+  instance = await render(
+    <AlternateScreen>
+      <Chat channel={channel} questionStore={new QuestionStore()} promptControllerRef={composerRef as never} onExit={() => {}} />
+    </AlternateScreen>,
+    { stdout: new FakeStdout(), stdin: stdinObj, stderr: new FakeStderr(), exitOnCtrlC: false, patchConsole: false },
+  )
+  await settled(() => composerRef.current !== null, { timeoutMs: 5000 })
+
+  const halfLeak = await deliver(R_HALF_LEAKED)
+  console.log(`     half-leaked: landed=${halfLeak.landed} valueLines=${halfLeak.value.split('\n').length} chip=${halfLeak.chip === null ? 'none' : `${halfLeak.chip.lines} lines/${halfLeak.chip.chars} chars`} submittedLines=${halfLeak.submitted.split('\n').length}`)
+  check('g1: the composer holds the source bytes', halfLeak.value, R_SOURCE)
+  checkNum('g2: chip lines == source lines', halfLeak.chip?.lines ?? -1, R_ROWS.length)
+  checkNum('g3: chip chars == source chars', halfLeak.chip?.chars ?? -1, R_SOURCE.length)
+  check('g4: Enter submits the source byte-for-byte', halfLeak.submitted, R_SOURCE)
+
+  // Function side, same run: a CLEAN 4-row paste must still fold into a chip
+  // and still submit in full — the widening may not disturb either.
+  const clean = await deliver(R_SOURCE)
+  checkNum('g5: control — a clean 4-row paste still folds', clean.chip?.lines ?? -1, R_ROWS.length)
+  check('g6: control — and still submits byte-for-byte', clean.submitted, R_SOURCE)
+} finally {
+  await instance?.unmount()
+  rmSync(dataDir, { recursive: true, force: true })
+}
 
 if (failures > 0) {
   console.error(`\n${failures} assertion(s) failed`)
