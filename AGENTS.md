@@ -64,6 +64,7 @@ pnpm smoke                      # 通用无头屏幕组装冒烟
 - **渲染安静**：TUI 活动期间不加 `console.log` 或 stdout 诊断；用 opt-in 的 stderr/调试路径（`DSH_TUI_DEBUG`、`DSH_TUI_RENDER_LOG`）。
 - **TypeScript**：纯 ESM，相对导入用 `.js` 后缀；纯类型依赖优先 `import type`；不因 Ink 系渲染器的放宽而引入 `any`，用 `unknown` 收窄；遵循现有两空格、单引号、无分号风格，不批量格式化渲染器文件。
 - **终端宽度是显示单元宽度**，不是 JS 字符串长度；考虑 ANSI 转义、组合字符、emoji 与东亚宽字符，用仓库的宽度/切片/换行辅助函数。
+- **尺寸只有一个来源**：`ink/` 之外一律经 `useTerminalSize()` 取尺寸（页边距、分栏会逐层收窄它），不直接读 `stdout.columns/rows` 或自行监听 resize；确需物理终端的，登记进 `verify:terminal-size-source` 的 `ALLOWED` 并写明理由。
 - **双语文档同步**：行为、配置、快捷键与限制在 `README.md`（英文默认）与 `README_ZH.md`（中文）两版同步。插件配置、slash 命令、主题、渲染器、技能发现的跨文件同步清单见 [docs/contributing.md](docs/contributing.md)。
 - **密钥**：交互启动读取 `DEEPSEEK_API_KEY`；诊断只能报告是否已设置，绝不泄露完整值。
 - **PR**：创建或更新 PR（包括改写描述）一律使用 `.agents/skills/pr`。

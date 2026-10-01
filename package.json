@@ -190,6 +190,7 @@
     "verify:migrate-sessions": "node --import tsx/esm scripts/verify-migrate-sessions.ts",
     "verify:source-hygiene": "node scripts/verify-source-hygiene.mjs",
     "verify:renderer-primitives": "node --import tsx/esm scripts/verify-renderer-primitives.tsx",
+    "verify:terminal-size-source": "node scripts/verify-terminal-size-source.mjs",
     "verify:product-migration": "node --import tsx/esm scripts/verify-product-migration.ts",
     "verify:spinner-identity": "node --import tsx/esm scripts/verify-spinner-identity.ts",
     "verify:table-layout": "node --import tsx/esm scripts/verify-table-layout.tsx",

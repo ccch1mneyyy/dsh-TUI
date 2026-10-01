@@ -242,8 +242,9 @@ CI 另按 `.github/workflows/ci.yml` 的 `changes` 路径白名单分流：`AGEN
 `.agents/skills/` 和源码中的注释不在文档豁免内，仍会触发代码门禁。本地无需
 重建不代表 CI 会跳过；提交时保留所需门禁并如实说明本地验证范围。
 
-`verify:build` 也检查源码输入卫生、渲染原语、主题与活动偏好迁移、状态动画、
-表格布局、mermaid 图表、LaTeX 公式和侧问行为。源码卫生检查只拦截已列明的命名与编译产物回归，不替代
+`verify:build` 也检查源码输入卫生、渲染原语、终端尺寸来源（`ink/` 之外只经
+`useTerminalSize()`）、主题与活动偏好迁移、状态动画、表格布局、mermaid 图表、
+LaTeX 公式和侧问行为。源码卫生检查只拦截已列明的命名与编译产物回归，不替代
 来源或许可证审计。
 
 CI 的测试组按 `scripts/ci-group-timings.json` 的实测耗时分片（每条恰好落在
