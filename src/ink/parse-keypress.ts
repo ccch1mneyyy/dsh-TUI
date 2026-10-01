@@ -320,6 +320,10 @@ function decodedRecordChar(uc: number, pending: { high?: number }): string | und
  * matcher (every byte arrived as a key record, so the record stream is the
  * payload's own origin), and the payload itself carries a complete ESC-bearing
  * record as frame evidence. Anything else keeps its literal bytes.
+ *
+ * Newlines reach {@link foldNewline} from BOTH lanes — a record's own Uc, and
+ * an LF byte inside the payload text between records (T08's X1: the two halves
+ * of one break may arrive as one of each) — so the rule stays single.
  */
 function decodeWin32RecordText(payload: string): string {
   if (!WIN32_RECORD_FRAME_RE.test(payload)) return payload
@@ -330,10 +334,13 @@ function decodeWin32RecordText(payload: string): string {
   for (const match of payload.matchAll(WIN32_RECORD_TEXT_RE)) {
     const start = match.index
     if (start > cursor) {
-      // Bytes between two records are payload text: copied verbatim, and they
-      // disarm the CR+LF fold exactly as a non-newline character does.
-      out += payload.slice(cursor, start)
-      lastWasCarriageReturn = false
+      // Bytes between two records are payload text, but an LF among them is
+      // the LF HALF of a break: it goes through the ONE rule
+      // ({@link appendPayloadText} → {@link foldNewline}) instead of being
+      // printed beside the newline a CR record already emitted.
+      const literal = appendPayloadText({ text: out, lastWasCarriageReturn }, payload.slice(cursor, start))
+      out = literal.text
+      lastWasCarriageReturn = literal.lastWasCarriageReturn
     }
     cursor = start + match[0].length
     const field = (index: number): number => {
@@ -361,7 +368,9 @@ function decodeWin32RecordText(payload: string): string {
     out += ch
     lastWasCarriageReturn = false
   }
-  return out + payload.slice(cursor)
+  // The tail after the last record is payload text like any run between two
+  // records, and it reaches the SAME rule for the same reason.
+  return appendPayloadText({ text: out, lastWasCarriageReturn }, payload.slice(cursor)).text
 }
 
 /**
@@ -1092,13 +1101,14 @@ type NewlineFold = {
 }
 
 /**
- * ADR-0002 decision 2 as ONE rule, shared by both win32 newline producers (the
- * decomposed matcher's {@link appendWin32PasteChar} and the payload decoder
- * {@link decodeWin32RecordText}) so the two can never disagree: a pasted CRLF
- * break arrives as a CR record (Uc=13) followed by an LF record (Uc=10), and
- * the LF half folds into the newline the CR already produced. Only a CR arms
- * the fold, so LF-only text, a lone CR, and ordinary characters (including a
- * real `_`) keep their bytes.
+ * ADR-0002 decision 2 as ONE rule, shared by every win32 newline path — the
+ * decomposed matcher's {@link appendWin32PasteChar}, the payload decoder
+ * {@link decodeWin32RecordText}, and the payload TEXT that decoder copies
+ * between records ({@link appendPayloadText}) — so they can never disagree: a
+ * pasted CRLF break arrives as a CR half (Uc=13) followed by an LF half
+ * (Uc=10), and the LF half folds into the newline the CR already produced.
+ * Only a CR arms the fold, so LF-only text, a lone CR, and ordinary characters
+ * (including a real `_`) keep their bytes.
  */
 function foldNewline(fold: NewlineFold, uc: number | undefined): NewlineFold {
   if (uc === 10 && fold.lastWasCarriageReturn) {
@@ -1106,6 +1116,36 @@ function foldNewline(fold: NewlineFold, uc: number | undefined): NewlineFold {
     return { text: fold.text, lastWasCarriageReturn: false }
   }
   return { text: `${fold.text}\n`, lastWasCarriageReturn: uc === 13 }
+}
+
+/**
+ * Append one run of payload TEXT — the bytes between two records, or the tail
+ * after the last one — through {@link foldNewline}, so an LF in it folds into
+ * the break a CR half already opened instead of printing a second newline for
+ * the same break.
+ *
+ * The two halves of a break may arrive in either lane (ADR-0002 decision 2):
+ * T08's independent review (X1) read a payload whose CR half leaked as record
+ * text while the LF half was still a real newline, and this copy path — the
+ * one newline site that bypassed the rule — turned that ONE break into two
+ * lines (4-line source → 7 lines, chip 7 lines, AC-3②). Every other byte keeps
+ * its bytes and disarms the fold exactly as before, including a literal CR:
+ * its own CRLF fold belongs to the ingress, not to the decoder.
+ */
+function appendPayloadText(fold: NewlineFold, text: string): NewlineFold {
+  let out = fold.text
+  let lastWasCarriageReturn = fold.lastWasCarriageReturn
+  for (const ch of text) {
+    if (ch !== '\n') {
+      out += ch
+      lastWasCarriageReturn = false
+      continue
+    }
+    const folded = foldNewline({ text: out, lastWasCarriageReturn }, 10)
+    out = folded.text
+    lastWasCarriageReturn = folded.lastWasCarriageReturn
+  }
+  return { text: out, lastWasCarriageReturn }
 }
 
 /**
