@@ -1622,20 +1622,20 @@ const dict = {
   },
   // Tips 前缀（第三版：● 彩色圆点 + Tips： 前缀，整行居中）。
   'launchpad-tip-prefix': { zh: 'Tips：', en: 'Tips: ' },
-  // 状态驱动的四个动作位（第四版：resolveLaunchpadActions 决定放什么）。
-  // （launchpad-action-theme / -lang / -settings 三键已删：它们属于 Settings，
-  // 落地页永远不出现——verify-i18n 的死键检查同步收口。）
+  // 入口行（第七版：四格 = Continue(条件) · 会话与工作区 · 设置 · 条件位）。
+  // （launchpad-action-theme / -lang 三键早已删；第六版的 -sessions / -workspace
+  // / -doctor / -setup / -setup-provider 五键随第七版合并/移除一并删除——
+  // 历史会话与工作区合并成 -sessions-workspace，doctor 入口退役，首启由
+  // 引导向导承担。verify-i18n 的死键检查同步收口。）
   'launchpad-action-continue': { zh: '继续上次', en: 'Continue' },
   'launchpad-action-continue-titled': { zh: '继续「{{title}}」', en: 'Continue "{{title}}"' },
-  'launchpad-action-sessions': { zh: '历史会话', en: 'Sessions' },
-  'launchpad-action-workspace': { zh: '工作区', en: 'Workspace' },
-  // （launchpad-action-model 已删，2026-10 第六版设计 3：模型切换在参数行
-  // 第一段已有选择器，入口行的 Model 位换成 Doctor（环境体检）。）
-  'launchpad-action-doctor': { zh: '环境体检', en: 'Doctor' },
+  'launchpad-action-sessions-workspace': { zh: '会话与工作区', en: 'Sessions & workspaces' },
+  'launchpad-action-settings': { zh: '设置', en: 'Settings' },
   'launchpad-action-help': { zh: '帮助', en: 'Help' },
-  // 条件按钮：只在首启 / 配置问题时出现（onboarding 完成且配置正常后永久消失）。
-  'launchpad-action-setup': { zh: '快速配置', en: 'Quick Setup' },
-  'launchpad-action-setup-provider': { zh: '配置 provider', en: 'Set up provider' },
+  // 条件位（优先级 jobs > update > star > help，见 launchpadActions.ts）。
+  'launchpad-action-jobs': { zh: '后台任务', en: 'Background jobs' },
+  'launchpad-action-update': { zh: '有新版本', en: 'Update available' },
+  'launchpad-action-star': { zh: '投喂一颗 Star', en: 'Feed us a star' },
   // Continue 的失败/空态（Chat 的 /continue 分支）：绝不静默。
   'launchpad-continue-none': {
     zh: '没有可继续的会话，已打开历史会话列表',

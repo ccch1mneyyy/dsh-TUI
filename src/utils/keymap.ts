@@ -191,6 +191,8 @@ export type ShortcutActionId =
   | 'trajectory'
   | 'dashboard'
   | 'contextPanel'
+  /** 落地页「继续上次会话」一键（第七版）：只在启动页生效，聊天页不绑。 */
+  | 'continue'
   | 'showAll'
   | 'questionFold'
   | 'redraw'
@@ -227,6 +229,10 @@ export const SHORTCUT_ACTIONS: readonly ShortcutActionSpec[] = [
   { id: 'trajectory', defaults: ['ctrl+t'] },
   { id: 'dashboard', defaults: ['ctrl+a'] },
   { id: 'contextPanel', defaults: ['ctrl+p'] },
+  // 落地页 Continue：alt+r（resume 语义）。占用核对（SHORTCUT_ACTIONS defaults ∪
+  // FIXED_RESERVED_COMBOS）：ctrl 系 v/r/g/o/t/a/p/e/l/q/k/b/c/d/u/w/j/left/right/return
+  // 全占，alt 系只有 v/s/z/return/up 在册——alt+r 空闲，且不与输入框抢字母键。
+  { id: 'continue', defaults: ['alt+r'] },
   { id: 'showAll', defaults: ['ctrl+e'] },
   { id: 'redraw', defaults: ['ctrl+l'] },
   { id: 'todoFold', defaults: ['ctrl+q'] },

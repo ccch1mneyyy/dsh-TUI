@@ -552,6 +552,12 @@ export const SHORTCUT_FIELD_META: Record<ShortcutActionId, { label: string; zh: 
     hintEn: d => `Toggle the startup loaded-context panel. Default: ${d}.`,
     hintZh: d => `切换启动时的已加载上下文面板。默认 ${d}。`,
   },
+  continue: {
+    label: 'Continue last session shortcut',
+    zh: '继续上次会话快捷键',
+    hintEn: d => `On the launchpad, resume the most recent session. Default: ${d}. Only bound while the launchpad is up.`,
+    hintZh: d => `在启动页上继续最近一条会话。默认 ${d}。仅在启动页生效。`,
+  },
   showAll: {
     label: 'Show-all shortcut',
     zh: '显示全部消息快捷键',

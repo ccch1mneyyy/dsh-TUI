@@ -77,8 +77,13 @@ const HINTS_ROWS = 1
 const TIP_BLOCK_ROWS = 3
 /** 矮屏撤呼吸后的紧档（自身 1 + 留白 1）。 */
 const TIP_BLOCK_ROWS_TIGHT = 2
-/** 双角铭牌：自身 1 行 + 上方 1 行留白。 */
-const CORNERS_BLOCK_ROWS = 2
+/**
+ * 双角铭牌：自身 2 行 + 上方 1 行留白。自身 2 行是第七版**版本号竖排**带来
+ * 的——右下角两行（`dsh-tui v…` 在上、`dsh-core v…` 在下），左下目录铭牌仍
+ * 1 行、与第一行顶对齐。内核版本读不到时右侧只画 1 行（预算按 2 行上限算，
+ * 矮屏阶梯的取舍顺序不变：先撤装饰、绝不让输入框被挤掉）。
+ */
+const CORNERS_BLOCK_ROWS = 3
 
 /** 该尺寸下渲染哪一档。 */
 export type LaunchpadStage = 'full' | 'no-tip' | 'no-hints' | 'no-art' | 'input-only'

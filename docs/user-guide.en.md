@@ -49,10 +49,17 @@ dsh-tui
    **startup hint**; the header here is **frozen from the first frame** — the intro animation is
    left to the transcript header once you are in the chat), a **real input box** underneath
    (type your first sentence here; Enter carries it into the chat screen), and a row of
-   **quick actions** (first-run guide / sessions & workspaces / model / theme / language /
-   help & shortcuts / settings). Move with `↑/↓` or `Tab`, activate with `Enter`, or just click;
+   **quick actions** (v7 four slots: `Continue "…"` — shortcut `Alt+R`, the slot is simply absent
+   when there is nothing to continue · `Sessions & workspaces` — history and workspaces are the
+   same `/home` screen, merged into one entry · `Settings` · a **conditional slot** — `Background
+   jobs` while jobs are running, `Update available` when a newer release is detected, `Feed us a
+   star` once usage milestones are reached and you never starred, falling back to `Help`).
+   Move with `↑/↓` or `Tab`, activate with `Enter`, or just click;
    short terminals drop whole blocks (quick actions → hint line → input only) and narrow ones
-   climb down the ladder in 5.1. When the dsh engine is out of the verified range, a
+   climb down the ladder in 5.1. Full screens opened from this screen (sessions & workspaces /
+   settings / background jobs / the first-run guide) render **above the launchpad** — `Esc` closes
+   them back onto the launchpad (draft, params and focus intact); the only way off the launchpad
+   into the chat is submitting a non-command line with Enter. When the dsh engine is out of the verified range, a
    **⚠ version-drift warning** appears with the align command.
 3. **Bottom status bar**: working-status row, context bar, TPS gauge, and other live
    indicators (see [5. UI and status bar](#5-ui-and-status-bar)).
@@ -141,6 +148,7 @@ Unrecognized keys are ignored, `Esc` does nothing, clear with `Ctrl+C`/`dd`.
 | `Shift+Tab` | cycle session mode (default → plan → full access); mounted third-party permission presets follow in registry order at the end of the cycle |
 | `Shift+↑` | message selection mode (`↑/↓` move, `Enter` expand one, `Esc` exit) |
 | `Ctrl+T` (⌘T) | open the trace scene (same as `/trace`) |
+| `Alt+R` | on the launchpad, **continue the most recent session** (same as the `Continue "…"` entry; bound only while the launchpad is up, no-op when there is nothing to continue). Remappable in `/settings` |
 | `Alt+S` | one-key star (same as `/star`; the splash's star line is clickable too). Remappable in `/settings`; a short "the whale girl catches the star" celebration plays on success. Replay it any time with `DSH_TUI_STAR_MODAL=1 dsh-tui`; preview the splash star line with `DSH_TUI_STAR_LINE=1 dsh-tui` (preview env vars, ledger untouched) |
 
 ### 2.6 Mouse (fullscreen mode; drag/double-click/triple-click select-and-copy)

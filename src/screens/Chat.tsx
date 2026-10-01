@@ -1,6 +1,7 @@
 import React from 'react'
 import { t, getLang, setLang, isLang, writeLangPref, readLangPref, subscribeLang, LANGS, type Lang } from '../i18n.js'
-import { installedTuiVersion } from '../update.js'
+import { checkForTuiUpdate, installedTuiVersion } from '../update.js'
+import { installedKernelVersion } from '../dsh-adapter/contract.js'
 import { readThemePref } from '../themePrefs.js'
 import { readPresetPref } from '../presetPrefs.js'
 import { readModelPref } from '../modelPrefs.js'
@@ -61,7 +62,7 @@ import { LogoHeader, MessageList } from '../components/MessageList.js'
 import { splashFontIdOf } from '../components/splashFonts.js'
 import { StarPrompt, WhaleCouponPrompt, type StarAttempt } from '../components/StarPrompt.js'
 import type { WhaleCouponStore } from '../dsh-adapter/oauth/bonus.js'
-import { dueStarModal, markStarAsked, STAR_MILESTONES } from '../usageStats.js'
+import { dueStarModal, markStarAsked, pendingStarMilestone, readUsage, STAR_MILESTONES } from '../usageStats.js'
 import { TimelineRail } from '../components/TimelineRail.js'
 import { ScrollbarGutter } from '../components/ScrollbarGutter.js'
 import type { TimelineSnapshot } from '../ink/timeline-rail.js'
@@ -208,7 +209,12 @@ const MIGRATE_CHILD_TIMEOUT_MS = 30 * 60 * 1000
  * 选择器（见 useInput 的 launchpad 分支注释）；其余 overlay 类型不在此列，
  * 落地页期间照旧整块让位。
  */
-const LAUNCHPAD_OVERLAY_KINDS: ReadonlySet<string> = new Set(['model', 'effort', 'plan', 'preset', 'permission'])
+const LAUNCHPAD_OVERLAY_KINDS: ReadonlySet<string> = new Set([
+  'model', 'effort', 'plan', 'preset', 'permission',
+  // 第七版：左下角工作目录铭牌点开的工作区菜单（及其二级选择器/流程层）
+  // 也是「盖在落地页之上」的姿态——同一套 pickerPanels 挂载，Esc 回落地页。
+  'workspace-menu', 'workspace-picker', 'workspace-flow',
+])
 
 function cleanCommandError(error: unknown): string {
   try {
@@ -631,7 +637,13 @@ export function Chat({
    * on" has not been answered yet. Every later launch starts on the chat
    * screen, and the screen stays reachable.
    */
-  const [supervisorOpen, setSupervisorOpen] = React.useState(openHomeOnBoot === true)
+  // 第七版：启动页在开时**不再**预开会话浏览器。旧姿态是「先收落地页再开
+  // 整屏」，浏览器必须提前藏在下面；现在整屏（会话/设置/任务面板）盖在
+  // 落地页**之上**、Esc 退回落地页，按需打开即可——boot 时同时为真反而会
+  // 让浏览器盖住落地页（渲染顺序见各 early-return）。
+  const [supervisorOpen, setSupervisorOpen] = React.useState(
+    openHomeOnBoot === true && launchpadOnBoot !== true,
+  )
   /**
    * The launchpad: the landing page every ordinary launch starts on.
    *
@@ -660,6 +672,12 @@ export function Chat({
    * 而它在一个进程里不会变——mount 时读一次就够。
    */
   const tuiVersion = React.useMemo(() => installedTuiVersion(), [])
+  /**
+   * 内核（dsh）版本（第七版：落地页右下角双版本铭牌）。真实来源见
+   * `contract.installedKernelVersion`（宿主 CLI 的 manifest，回落内核线包）；
+   * 两级都读不到 = undefined → 铭牌只画 TUI 段，绝不编造。
+   */
+  const kernelVersion = React.useMemo(() => installedKernelVersion(), [])
 
   const launchpadShown = launchpadOpen && launchpadVisible()
   /**
@@ -680,6 +698,39 @@ export function Chat({
     () => new Set(['model', 'effort', 'plan', 'preset', 'permission']),
     [],
   )
+  /**
+   * 打开**整屏界面**的命令（第七版）：从落地页触发这些命令时**不收掉落地页**
+   * ——整屏盖在落地页之上渲染（它们的 early-return 排在落地页分支之前），
+   * Esc 退出整屏回到落地页（草稿/参数/焦点原样保留）。这是「从启动页进入
+   * 对话页的唯一路径 = Enter 提交一条非命令消息」的落地：任何返回键都不再
+   * 把人甩到对话页。其余命令（star / update / help / 转录输出类）的反馈在
+   * 对话页，仍按旧约收掉落地页再执行。
+   */
+  const launchpadScreenCommands = React.useMemo(
+    () => new Set(['home', 'resume', 'agentview', 'settings', 'jobs', 'tree', 'agents', 'setup', 'bg', 'background']),
+    [],
+  )
+  /**
+   * 落地页条件位②（有新版本）：`checkForTuiUpdate()`（与 /update 同一条
+   * 判定，src/update.ts）在启动页第一次挂起时后台探一次——registry 延迟
+   * 不许拖慢第一帧；失败/离线静默为 false（绝不放假按钮）。
+   */
+  const [launchpadUpdateAvailable, setLaunchpadUpdateAvailable] = React.useState(false)
+  const launchpadUpdateProbedRef = React.useRef(false)
+  React.useEffect(() => {
+    if (!launchpadShown || launchpadUpdateProbedRef.current) return
+    launchpadUpdateProbedRef.current = true
+    void checkForTuiUpdate().then(update => {
+      setLaunchpadUpdateAvailable(update !== undefined)
+    }).catch(() => undefined)
+  }, [launchpadShown])
+  /**
+   * 落地页条件位③（投喂一颗 Star）：与开屏求 star 弹窗**同一口径**——
+   * `usageStats`（~/.dsh-tui/usage.json）里有未报过的已达档里程碑
+   * （`pendingStarMilestone`，首档 24h）且本进程尚未 star 成功。star 成功
+   * 后（`starred` 翻真）按钮立即消失；记账过的档不再纠缠。
+   */
+
   /**
    * The first-run guide. Renders above the launchpad (see the prop docs): a
    * launch that needs setup has not answered the launchpad's question yet.
@@ -735,6 +786,18 @@ export function Chat({
    * `null` 显式关闭，传 actions 覆写两个按钮（不跑真 gh、不开真浏览器）。 */
   /** 本次会话是否已经 star 成功（开屏彩蛋标题切「捡到小星星啦」）。 */
   const [starred, setStarred] = React.useState(false)
+  /**
+   * 落地页条件位③（投喂一颗 Star）：与开屏求 star 弹窗**同一口径**——
+   * `usageStats`（~/.dsh-tui/usage.json）里有未报过的已达档里程碑
+   * （`pendingStarMilestone`，首档 24h）且本进程尚未 star 成功。star 成功
+   * 后（`starred` 翻真）按钮立即消失；记账过的档不再纠缠。readUsage 是
+   * 文件读，只在 starred 翻真或测试缝变化时重算，不逐帧读盘。
+   */
+  const launchpadStarDue = React.useMemo(
+    () => !starred && pendingStarMilestone(readUsage(starPrompt?.dir)) !== null,
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- dir 经测试缝注入
+    [starred, starPrompt],
+  )
   const [starModal, setStarModal] = React.useState<{ index: number; phase: 'ask' | 'done' } | null>(null)
   // 单发闩：只在第一个"安静的开屏视口"上武装定时器。700ms 窗口内整屏
   // 界面打开 → cleanup 掐掉定时器且**不再重臂**（记账只发生在回调里，
@@ -2745,7 +2808,8 @@ export function Chat({
         if (latest === undefined) {
           channel.notify(t('launchpad-continue-none'), { color: 'error', timeoutMs: 6000 })
           agentViewOpenSessionRef.current = channel.agentId
-          setLaunchpadOpen(false)
+          // 第七版：无可继续会话时浏览器盖在落地页之上（不收落地页）——Esc
+          // 回启动页，与合并入口「会话与工作区」同一条姿态。
           setSupervisorOpen(true)
           return true
         }
@@ -2774,8 +2838,10 @@ export function Chat({
         // it has already decided the wizard is what they want. It reuses the
         // same screen and the same `onClose`, so completing it here also
         // (re)writes the one-shot marker.
+        // 第七版：向导的 early-return 在落地页**之前**，天然盖在落地页之上；
+        // 不再收掉落地页——Esc/跳过/完成都回到启动页（旧姿态收掉落地页后，
+        // 向导关掉就落到对话页，正是用户报的 bug 形态之一）。
         setHelpOpen(false)
-        setLaunchpadOpen(false)
         setOnboardingOpen(true)
         return true
       }
@@ -5052,134 +5118,6 @@ export function Chat({
     return fullscreen ? node : <AlternateScreen>{node}</AlternateScreen>
   }
 
-  /**
-   * The launchpad — the landing page an ordinary launch starts on.
-   *
-   * An early return like every other screen, and it sits above the session
-   * browser: a launch lands here first, and only the actions the user picks
-   * decide which screen comes next. Submitting sends the line directly through
-   * the composer's own submit path; the quick actions dispatch through the
-   * same `runCommand` a typed slash command takes; and a picker opened
-   * from the param row (model/effort/plan/permission) renders ABOVE this
-   * screen via `pickerPanels` + `inputPaused` — closing it with
-   * Esc lands back here, with the picked value already reflected in the row.
-   */
-  if (launchpadShown) {
-    // 参数行的「模式/权限」两段（第三版）：模式看 channel.mode.plan；权限看
-    // permissionPresets() 的当前身份——只认 runtime 名册，legacy/unavailable 与
-    // 抛错都按「拿不到」处理（缺省不画那一段，两段都可选）。
-    let launchpadPermission: string | undefined
-    try {
-      const snapshot = channel.permissionPresets()
-      launchpadPermission = snapshot.availability === 'runtime' ? snapshot.current?.name : undefined
-    } catch {
-      launchpadPermission = undefined
-    }
-    // 第四版动作表：状态快照全部来自既有数据源——
-    //   - onboardingPending（onboarding.json，引导完成即永久消失）；
-    //   - configProblem = cordis.yml 的 provider 键没配（channel.configuredProvider
-    //     为空 = "没有可用 provider / 模型配置缺失"的启动期真信号）；
-    //   - lastSessionTitle = agentViewRows（含持久化名册）里最近一条非当前会话
-    //     的标题——listing 是异步的，落地前没有 Continue、落地后自动长出来。
-    const resumableRows = agentViewRows
-      .filter(row => !row.current && row.id !== channel.agentId && row.title.trim() !== '')
-    const latestRow = resumableRows.reduce<typeof resumableRows[number] | undefined>(
-      (best, row) => (best === undefined || row.updatedAt > best.updatedAt ? row : best), undefined)
-    const launchpadActions = resolveLaunchpadActions({
-      onboardingPending,
-      configProblem: channel.configuredProvider === undefined || channel.configuredProvider === '',
-      lastSessionTitle: latestRow?.title,
-      gitBranch: channel.gitBranch,
-    })
-    const node = (
-      <Launchpad
-        query={launchpadDraft}
-        cursorOffset={launchpadCaret}
-        focusIndex={launchpadFocus}
-        isTerminalFocused={terminalFocused}
-        whale={channel.whale}
-        whaleIdle={channel.whaleIdle}
-        whaleGirl={channel.whaleGirl}
-        fontId={splashFontIdOf(channel.splashFont)}
-        starred={starred}
-        onStarClick={runStarAction}
-        firstRun={onboardingPending}
-        actions={launchpadActions}
-        // 参数行四段点开的既有选择器（第五版）：pickerPanels 与聊天页共用
-        // 同一份 JSX，盖在落地页之上；选择器开着时落地页键盘让位（inputPaused）。
-        overlayPanel={launchpadOverlayUp ? pickerPanels : undefined}
-        inputPaused={launchpadOverlayUp}
-        onParamPick={(segment) => {
-          // 四段 → 既有命令：model→/model、effort→/effort、preset→/preset、
-          // permission→/permission。全部在 overlayCommandNames 白名单里，
-          // 落地页不收，选择器盖上来。
-          // BUG 3（点另一段直接切换）：/effort 的选择器是异步 open-if（when:
-          // ['none']），盖着别的选择器时会被丢弃——这就是"点了没反应"的根因。
-          // 先把屏上的参数选择器收掉再开新的，一个在屏、且就是点的那段。
-          if (overlay.kind !== 'none' && overlay.kind !== segment) {
-            dispatchOverlay({ type: 'close' })
-          }
-          void runCommand(segment, '')
-        }}
-        onQueryChange={(text, cursor) => {
-          setLaunchpadDraft(text)
-          setLaunchpadCaret(cursor)
-        }}
-        onSubmit={closeLaunchpad}
-        onFocusChange={setLaunchpadFocus}
-        onAction={(action) => {
-          // 除覆盖层（模型 / 主题 / 语言渲染在落地页**之上**，见 overlayCommandNames）
-          // 以外，动作打开的都是**整屏界面**，而 supervisor / settings / help 的 early-return
-          // 全排在落地页之后——不收掉落地页就是"点了没反应"。默认收，白名单只留给覆盖层。
-          if (!overlayCommandNames.has(action.command)) setLaunchpadOpen(false)
-          void runCommand(action.command, '')
-        }}
-        onEscape={(intent) => {
-          if (intent === 'exit') {
-            requestExit()
-            return
-          }
-          // 空输入按 Esc：这一屏的"下一步"通常是去挑工作区/会话。
-          agentViewOpenSessionRef.current = channel.agentId
-          setLaunchpadOpen(false)
-          setSupervisorOpen(true)
-        }}
-        onBlankClick={() => {
-          // BUG 3（点别处关掉选择器）：沿用"点空白收回焦点"的兜底路径——
-          // 有参数选择器盖在落地页之上时，空白点击先把选择器收掉（焦点照旧
-          // 收回输入框）。选择器内部的点击已被 Launchpad 的浮层包装拦住
-          // 冒泡，不会走到这里。
-          if (overlay.kind !== 'none') dispatchOverlay({ type: 'close' })
-          setLaunchpadFocus(-1)
-        }}
-        model={channel.model}
-        effort={channel.reasoningEffort}
-        preset={
-          channel.agentPreset === undefined
-            ? undefined
-            : presetOptions.find(option => option.id === channel.agentPreset)?.name ?? channel.agentPreset
-        }
-        permission={launchpadPermission}
-        commands={
-          launchpadOverlayUp || !launchpadDraft.startsWith('/')
-            ? undefined
-            : channel.commandCompletions(launchpadDraft)
-        }
-        onCommandPick={(commandLine) => {
-          // 补全面板选中（Enter/Tab/点击）：走 runCommand，与快捷入口同一条
-          // 白名单口径——覆盖层命令不收落地页，其余收掉再执行。
-          const parsed = parseCommandName(commandLine)
-          if (parsed === undefined) return
-          if (!overlayCommandNames.has(parsed.name)) setLaunchpadOpen(false)
-          void runCommand(parsed.name, parsed.rawInput)
-        }}
-        cwd={channel.displayCwd}
-        branch={channel.gitBranch}
-        tuiVersion={tuiVersion}
-      />
-    )
-    return fullscreen ? node : <AlternateScreen>{node}</AlternateScreen>
-  }
 
   /**
    * The session supervisor: a screen in the same sense as the tree — an early
@@ -5221,6 +5159,15 @@ export function Chat({
           suppressLogoIntroRef.current = true
           setAgentViewReturnId(undefined)
           setSupervisorOpen(false)
+          // 第七版：明确选中一个会话 = 有意导航（与 Esc「退出」相对）——浏览页
+          // 与盖在它底下的落地页**一起收**，人落在那个会话的聊天页。只收浏览页
+          // 会露出启动页，正是用户实测的「选完会话还是回到启动页」。落地页的
+          // 草稿/焦点也按 closeLaunchpad 同一口径清掉（进入的是别的会话，旧草稿
+          // 不该跟过去）。
+          setLaunchpadOpen(false)
+          setLaunchpadFocus(-1)
+          setLaunchpadDraft('')
+          setLaunchpadCaret(0)
           repaintTranscript()
           return result
         }}
@@ -5230,6 +5177,11 @@ export function Chat({
             suppressLogoIntroRef.current = true
             setAgentViewReturnId(undefined)
             setSupervisorOpen(false)
+            // 同 onOpenSession：新建/切工作区会话也是有意导航，落地页一并收。
+            setLaunchpadOpen(false)
+            setLaunchpadFocus(-1)
+            setLaunchpadDraft('')
+            setLaunchpadCaret(0)
             repaintTranscript()
           }
           return ok
@@ -5367,6 +5319,150 @@ export function Chat({
   if (sceneOpen) {
     const scene = <TrajectoryScene channel={channel} build={trajectory} onClose={closeScene} />
     return fullscreen ? scene : <AlternateScreen>{scene}</AlternateScreen>
+  }
+
+  /**
+   * The launchpad — the landing page an ordinary launch starts on.
+   *
+   * 第七版渲染姿态：early-return 排在**所有整屏界面（会话浏览器 / 设置 /
+   * 任务面板 / 家谱 / 子代理 / 轨迹场景）之后**——从落地页打开的整屏盖在
+   * 落地页之上，Esc 退出整屏回到这里（草稿/参数/焦点原样保留）。硬约束：
+   * 从启动页进入对话页的唯一路径是**提交一条非命令消息**（Enter 发送）；
+   * 任何 Esc/返回都回到启动页。参数行点开的选择器经 `pickerPanels` +
+   * `inputPaused` 渲染在本屏之上，Esc 关掉它也回到这里。
+   */
+  if (launchpadShown) {
+    // 参数行的「模式/权限」两段（第三版）：模式看 channel.mode.plan；权限看
+    // permissionPresets() 的当前身份——只认 runtime 名册，legacy/unavailable 与
+    // 抛错都按「拿不到」处理（缺省不画那一段，两段都可选）。
+    let launchpadPermission: string | undefined
+    try {
+      const snapshot = channel.permissionPresets()
+      launchpadPermission = snapshot.availability === 'runtime' ? snapshot.current?.name : undefined
+    } catch {
+      launchpadPermission = undefined
+    }
+    // 第七版动作表：状态快照全部来自既有数据源（详见 launchpadActions.ts）——
+    //   - lastSessionTitle = agentViewRows（含持久化名册）里最近一条非当前会话
+    //     的标题——listing 是异步的，落地前没有 Continue、落地后自动长出来；
+    //   - jobsRunning / updateAvailable / starDue = 条件位三连（后台任务面 /
+    //     checkForTuiUpdate / usageStats 里程碑口径）。
+    const resumableRows = agentViewRows
+      .filter(row => !row.current && row.id !== channel.agentId && row.title.trim() !== '')
+    const latestRow = resumableRows.reduce<typeof resumableRows[number] | undefined>(
+      (best, row) => (best === undefined || row.updatedAt > best.updatedAt ? row : best), undefined)
+    const launchpadActions = resolveLaunchpadActions({
+      lastSessionTitle: latestRow?.title,
+      // 条件位①：后台任务面是真数据（JobsPanel 同一个 channel.backgroundJobs），
+      // running/stopping 都算「在跑」。
+      jobsRunning: (channel.backgroundJobs ?? []).some(
+        job => job.status === 'running' || job.status === 'stopping',
+      ),
+      updateAvailable: launchpadUpdateAvailable,
+      starDue: launchpadStarDue,
+    })
+    const node = (
+      <Launchpad
+        query={launchpadDraft}
+        cursorOffset={launchpadCaret}
+        focusIndex={launchpadFocus}
+        isTerminalFocused={terminalFocused}
+        whale={channel.whale}
+        whaleIdle={channel.whaleIdle}
+        whaleGirl={channel.whaleGirl}
+        fontId={splashFontIdOf(channel.splashFont)}
+        starred={starred}
+        onStarClick={runStarAction}
+        firstRun={onboardingPending}
+        actions={launchpadActions}
+        // 参数行四段点开的既有选择器（第五版）：pickerPanels 与聊天页共用
+        // 同一份 JSX，盖在落地页之上；选择器开着时落地页键盘让位（inputPaused）。
+        overlayPanel={launchpadOverlayUp ? pickerPanels : undefined}
+        inputPaused={launchpadOverlayUp}
+        onParamPick={(segment) => {
+          // 四段 → 既有命令：model→/model、effort→/effort、preset→/preset、
+          // permission→/permission。全部在 overlayCommandNames 白名单里，
+          // 落地页不收，选择器盖上来。
+          // BUG 3（点另一段直接切换）：/effort 的选择器是异步 open-if（when:
+          // ['none']），盖着别的选择器时会被丢弃——这就是"点了没反应"的根因。
+          // 先把屏上的参数选择器收掉再开新的，一个在屏、且就是点的那段。
+          if (overlay.kind !== 'none' && overlay.kind !== segment) {
+            dispatchOverlay({ type: 'close' })
+          }
+          void runCommand(segment, '')
+        }}
+        onQueryChange={(text, cursor) => {
+          setLaunchpadDraft(text)
+          setLaunchpadCaret(cursor)
+        }}
+        onSubmit={closeLaunchpad}
+        onFocusChange={setLaunchpadFocus}
+        onAction={(action) => {
+          // 第七版姿态：覆盖层命令（overlayCommandNames）盖在落地页之上；
+          // **整屏命令**（launchpadScreenCommands：会话与工作区 / 设置 / 后台
+          // 任务 / 家谱 / 子代理 / 引导）也盖在落地页之上——落地页不收，
+          // Esc 退出整屏回到落地页（草稿/参数/焦点都在）。其余命令（star /
+          // update / help——反馈在对话页的转录/通知/帮助面板）仍收掉落地页
+          // 再执行，这是用户主动执行命令，不是「返回」。
+          if (!launchpadScreenCommands.has(action.command) && !overlayCommandNames.has(action.command)) {
+            setLaunchpadOpen(false)
+          }
+          void runCommand(action.command, '')
+        }}
+        onEscape={(intent) => {
+          if (intent === 'exit') {
+            requestExit()
+            return
+          }
+          // 空输入按 Esc：这一屏的"下一步"通常是去挑工作区/会话。第七版：
+          // 会话浏览器**盖在落地页之上**（落地页不收）——Esc 退出浏览器回到
+          // 落地页，绝不落到对话页。
+          agentViewOpenSessionRef.current = channel.agentId
+          setSupervisorOpen(true)
+        }}
+        onBlankClick={() => {
+          // BUG 3（点别处关掉选择器）：沿用"点空白收回焦点"的兜底路径——
+          // 有参数选择器盖在落地页之上时，空白点击先把选择器收掉（焦点照旧
+          // 收回输入框）。选择器内部的点击已被 Launchpad 的浮层包装拦住
+          // 冒泡，不会走到这里。
+          if (overlay.kind !== 'none') dispatchOverlay({ type: 'close' })
+          setLaunchpadFocus(-1)
+        }}
+        model={channel.model}
+        effort={channel.reasoningEffort}
+        preset={
+          channel.agentPreset === undefined
+            ? undefined
+            : presetOptions.find(option => option.id === channel.agentPreset)?.name ?? channel.agentPreset
+        }
+        permission={launchpadPermission}
+        commands={
+          launchpadOverlayUp || !launchpadDraft.startsWith('/')
+            ? undefined
+            : channel.commandCompletions(launchpadDraft)
+        }
+        onCommandPick={(commandLine) => {
+          // 补全面板选中（Enter/Tab/点击）：走 runCommand，与快捷入口同一条
+          // 白名单口径——覆盖层与整屏命令（第七版 launchpadScreenCommands）
+          // 不收落地页（盖在它之上），其余收掉再执行。
+          const parsed = parseCommandName(commandLine)
+          if (parsed === undefined) return
+          if (!overlayCommandNames.has(parsed.name) && !launchpadScreenCommands.has(parsed.name)) {
+            setLaunchpadOpen(false)
+          }
+          void runCommand(parsed.name, parsed.rawInput)
+        }}
+        cwd={channel.displayCwd}
+        branch={channel.gitBranch}
+        tuiVersion={tuiVersion}
+        kernelVersion={kernelVersion}
+        // 左下角工作目录铭牌（第七版）：点开/回车开既有 /workspace 菜单——
+        // workspace-menu 在 LAUNCHPAD_OVERLAY_KINDS 里，选择器盖在落地页之上，
+        // Esc 回落地页（与参数行选择器同一姿态），不新造面板。
+        onOpenWorkspace={() => { void runCommand('workspace', '') }}
+      />
+    )
+    return fullscreen ? node : <AlternateScreen>{node}</AlternateScreen>
   }
 
   // 浮层整体挂载条件：与内部各面板的可见条件同值（数据门在

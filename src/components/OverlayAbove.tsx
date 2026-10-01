@@ -63,10 +63,18 @@ export function useOverlayListRows(frameRows: number): number {
 export function OverlayAbove({
   children,
   maxHeight,
+  transparent = false,
 }: {
   children: React.ReactNode
   /** 调用方声明的上限；实际还会被钳到锚点上方的可画行数。 */
   maxHeight?: number | undefined
+  /**
+   * 透明宿主（第七版：落地页侧专用）：不铺 occlusionColor、不做 opaque 空格
+   * 填充——浮层只留边框/文字/选中态，背景透出宿主屏（启动页的立绘与大字；
+   * 立绘是 Kitty 负 z 图像，occlusion 一触发就是整块 toolCardBackground 白底）。
+   * 聊天页姿态不变：那边的底是转录文本，遮挡图像的 occlusion 语义仍然需要。
+   */
+  transparent?: boolean
 }): React.ReactNode {
   const ref = React.useRef<DOMElement | null>(null)
   const terminal = useTerminalSize()
@@ -112,8 +120,7 @@ export function OverlayAbove({
       // occlusionColor keeps the overlay terminal-transparent in the
       // common frame and only paints the surface while an image actually
       // sits behind this rect — see Styles.occlusionColor.
-      occlusionColor="toolCardBackground"
-      opaque
+      {...(transparent ? {} : { occlusionColor: 'toolCardBackground' as const, opaque: true })}
       {...(effectiveMaxHeight === undefined ? {} : { maxHeight: effectiveMaxHeight })}
     >
       {/* flexShrink={0}：内容超高时让 overflow 从顶部裁整行，而不是被 yoga
