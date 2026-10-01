@@ -4,12 +4,12 @@
  * 此前没有任何脚本钉住它。
  *
  * 覆盖：
- *   A. 两者都不存在：只有 profile 补丁一条 config 行，legacy 根配置不出现（两侧
- *      一致，且都不带 ✓）；
+ *   A. 两者都不存在（`DSH_HOME` 指向临时目录）：只有 profile 补丁一条 config 行，
+ *      legacy 根配置不出现，两侧一致且都不带 ✓，也都不会指向写死的 `~/.dsh`；
  *   B. 用户保留了 legacy 根配置：两侧都列出它并标 ✓，config 行两条；
- *   C. profile 补丁存在：两侧都标 ✓；
- *   D. `$DSH_HOME` 不是 `~/.dsh`：profile 补丁行落在 `$DSH_HOME` 下，两侧都不再
- *      出现写死的 `~/.dsh/profiles/dsh-tui/...`。
+ *   C. profile 补丁存在：两侧都标 ✓，候选集合完全相同；
+ *   D. `DSH_HOME` 设成空串：两侧都按「未设置」回落到 `~/.dsh`（启动器用 `||`；
+ *      空串若被当成路径，TUI 会报出相对路径 `profiles/dsh-tui/...`）。
  *
  * 背景见 `bin/dsh-tui.js` 的 runDoctorChecks 与 `src/dsh-adapter/channel/reports.ts`
  * 的 doctorInfo 注释：`~/.dsh-tui/cordis.yml` 是裸组合（`dsh --config cordis.yml`）
@@ -41,7 +41,9 @@ process.env.DSH_TUI_LANG = 'zh'
 
 const legacyConfig = join(userHome, '.dsh-tui', 'cordis.yml')
 const profileConfig = join(dshHome, 'profiles', 'dsh-tui', 'cordis.patch.yml')
-const hardcodedProfileConfig = join(userHome, '.dsh', 'profiles', 'dsh-tui', 'cordis.patch.yml')
+// 旧版 TUI 写死的那条 ~/.dsh 路径：`DSH_HOME` 有效时不该出现（§A），
+// `DSH_HOME` 为空串时才该是两侧共同的回落结果（§D）。
+const homeDotDshProfileConfig = join(userHome, '.dsh', 'profiles', 'dsh-tui', 'cordis.patch.yml')
 
 const { createReportActions } = await import('../src/dsh-adapter/channel/reports.js')
 
@@ -68,7 +70,7 @@ const check = (name: string, ok: boolean, detail = '') => {
 const cliLines = (): string[] => {
   const probe = spawnSync(process.execPath, [bin, 'doctor'], {
     encoding: 'utf8',
-    env: { ...process.env, HOME: userHome, USERPROFILE: userHome, DSH_HOME: dshHome, DSH_TUI_LANG: 'zh' },
+    env: { ...process.env, HOME: userHome, USERPROFILE: userHome, DSH_HOME: process.env.DSH_HOME ?? dshHome, DSH_TUI_LANG: 'zh' },
   })
   return String(probe.stdout ?? '').split('\n').filter(line => line !== '')
 }
@@ -88,7 +90,7 @@ const expectConfigs = (side: string, lines: string[], expected: string[]): strin
 const expectNoHardcoded = (side: string, lines: string[]): void => {
   check(
     `${side}: 不再指向写死的 ~/.dsh/profiles/dsh-tui/cordis.patch.yml`,
-    !lines.some(line => line.includes(hardcodedProfileConfig)),
+    !lines.some(line => line.includes(homeDotDshProfileConfig)),
     lines.filter(line => line.includes('cordis.patch.yml')).join(' | '),
   )
 }
@@ -158,6 +160,26 @@ const expectNoHardcoded = (side: string, lines: string[]): void => {
     cliConfigs.length === tuiConfigs.length &&
       [legacyConfig, profileConfig].every(path => cliConfigs.some(line => line.includes(path)) && tuiConfigs.some(line => line.includes(path))),
     `${cliConfigs.join(' | ')}  ::  ${tuiConfigs.join(' | ')}`)
+}
+
+// ── D. `DSH_HOME` 设成空串：两侧都按「未设置」回落到 ~/.dsh ──────────────────
+{
+  // `DSH_HOME=` 是脚本里写「变量可能为空」的常见形态。启动器用 `||` 回落
+  // （bin/dsh-tui.js:504），TUI 侧若用 `??` 就会把空串当路径，退化成相对路径
+  // `profiles/dsh-tui/cordis.patch.yml`——同一条「不许分叉」的契约在这里也要成立。
+  process.env.DSH_HOME = ''
+  const cli = cliLines()
+  const tui = tuiLines()
+  const cliConfigs = expectConfigs('CLI', cli, [legacyConfig, homeDotDshProfileConfig])
+  const tuiConfigs = expectConfigs('TUI', tui, [legacyConfig, homeDotDshProfileConfig])
+  check(
+    '空 DSH_HOME 按未设置处理：两侧都回落到 ~/.dsh',
+    cliConfigs.length === 2 && tuiConfigs.length === 2 &&
+      [legacyConfig, homeDotDshProfileConfig].every(path =>
+        cliConfigs.some(line => line.includes(path)) && tuiConfigs.some(line => line.includes(path))),
+    `${cliConfigs.join(' | ')}  ::  ${tuiConfigs.join(' | ')}`,
+  )
+  process.env.DSH_HOME = dshHome
 }
 
 rmSync(tmp, { recursive: true, force: true })

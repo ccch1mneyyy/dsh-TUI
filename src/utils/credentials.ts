@@ -16,7 +16,11 @@ import { join } from 'node:path'
 
 /** The DSH home that owns the credential store, following the launcher's rule. */
 export function dshHomeDir(): string {
-  return process.env.DSH_HOME ?? join(homedir(), '.dsh')
+  // `||`, not `??`: the launcher resolves the same root as
+  // `process.env.DSH_HOME || join(homedir(), '.dsh')` (bin/dsh-tui.js), so an
+  // empty `DSH_HOME=` — a common way to spell "unset" in scripts — must fall
+  // back here too instead of turning every path into a relative one.
+  return process.env.DSH_HOME || join(homedir(), '.dsh')
 }
 
 /**
