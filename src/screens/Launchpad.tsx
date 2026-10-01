@@ -2,6 +2,7 @@ import React from 'react'
 import { Box, Text, useInput, useTerminalSize } from '../ui.js'
 import { SearchBox } from '../components/SearchBox.js'
 import { OverlayAbove } from '../components/OverlayAbove.js'
+import { CommandSuggestions } from '../components/CommandSuggestions.js'
 import { LogoV2 } from '../components/LogoV2.js'
 import { resolveLaunchpadLayout, type LaunchpadLayout } from '../components/launchpadLayout.js'
 import { type LaunchpadAction } from '../components/launchpadActions.js'
@@ -26,13 +27,15 @@ export type { LaunchpadAction } from '../components/launchpadActions.js'
 const CARET_BLINK_MS = 550
 
 /**
- * 纯文字入口（2026-10 第四版：用户否掉了键帽形态——"要不做按钮了 就放一个文字
- * 但是鼠标移过去有 hover 这一个方形矩形会高亮"）。
+ * 纯文字入口（2026-10 第六版修订：用户否掉了背景方块高亮——"高光有点 low 而且
+ * 鼠标移开之后居然不会消失，我希望换成字体高光，比如移到字体上变蓝加粗"）。
  *
  * - 入口只渲染**一个标签文本**（无键位前缀、无边框、无指针字符 ❯）；
- * - 悬停/焦点 = 该入口所占的那块矩形**整体高亮**（userMessageBackgroundHover
- *   背景铺满标签两侧各一格的内边距，菜单选中那种方块感）——这是唯一的交互
- *   反馈；未悬停时就是普通 dim 文字；
+ * - 悬停/焦点 = **文字高光**：主题蓝（suggestion）+ 加粗，不再铺背景方块；
+ *   未悬停时就是普通 dim 文字；
+ * - **移入/移出都要复原**（上一版的真 bug）：`onMouseEnter` 悬停并带焦点，
+ *   `onMouseLeave` 撤悬停；焦点是悬停带进来的（`focused` 为真）就一并交还
+ *   输入框——否则"hover 设了焦点、离开没人清"，高亮就赖着不走了；
  * - **恒 1 行高**：标签是纯字符串、单个 Text 渲染，绝无"键帽一行/标签一行"
  *   上下分离（上一版嵌套 span 在真终端上被实测抓到竖排成两行）；
  * - 鼠标契约照仓库规矩：挂得上 `onClick` 才给 hover 反馈；点击
@@ -44,11 +47,14 @@ function ActionChip({
   focused,
   onActivate,
   onHover,
+  onHoverLeave,
 }: {
   label: string
   focused: boolean
   onActivate: () => void
   onHover: () => void
+  /** 移出时若焦点是悬停带进来的，交还输入框（BUG 2：移开必须复原）。 */
+  onHoverLeave: () => void
 }): React.ReactNode {
   const [hovered, setHovered] = React.useState(false)
   const active = hovered || focused
@@ -57,17 +63,17 @@ function ActionChip({
       flexShrink={0}
       height={1}
       onMouseEnter={() => { setHovered(true); onHover() }}
-      onMouseLeave={() => { setHovered(false) }}
+      onMouseLeave={() => { setHovered(false); onHoverLeave() }}
       onClick={(event: ClickEvent) => {
         event.stopImmediatePropagation()
         onActivate()
       }}
     >
-      {/* 单个 Text、纯字符串子节点：高亮矩形由背景色铺出（含两侧各一格内边距）。 */}
+      {/* 单个 Text、纯字符串子节点；两侧各一格空格只是间距（fitChips 的宽度
+          预算同源 +2），不再是背景方块的内边距。 */}
       <Text
-        backgroundColor={active ? 'userMessageBackgroundHover' : undefined}
-        color={focused ? 'suggestion' : undefined}
-        bold={focused}
+        color={active ? 'suggestion' : undefined}
+        bold={active}
         dimColor={!active}
       >
         {` ${label} `}
@@ -76,23 +82,35 @@ function ActionChip({
   )
 }
 
-/** 参数行的四段身份（第五版：四段各自可点，点开 Chat 既有的选择器 overlay）。 */
-export type LaunchpadParamSegment = 'model' | 'effort' | 'mode' | 'permission'
+/**
+ * 参数行的四段身份（第五版：四段各自可点，点开 Chat 既有的选择器 overlay；
+ * 第六版设计 1：`mode` 段换成 `preset`——用户说的"模式"是 Standard/PTC/极简
+ * 那套 agent preset（channel.agentPreset + /preset 名册），不是 plan/act）。
+ */
+export type LaunchpadParamSegment = 'model' | 'effort' | 'preset' | 'permission'
 
 /** 焦点环里参数段的编码：-2 起按显示顺序递减（-1 是输入框，0.. 是动作入口）。 */
 const paramFocusOf = (segment: LaunchpadParamSegment): number => -2 - PARAM_SEGMENT_ORDER.indexOf(segment)
 /** 焦点值反解参数段；-1（输入框）与动作入口（≥0）都返回 undefined。 */
 function segmentOfFocus(focus: number): LaunchpadParamSegment | undefined {
-  return focus <= -2 ? PARAM_SEGMENT_ORDER[-2 - focus] : undefined
+  return focus <= -2 && focus > TIPS_FOCUS ? PARAM_SEGMENT_ORDER[-2 - focus] : undefined
 }
-/** 参数段固定显示顺序（模型 · 思考深度 · 模式 · 权限）。 */
-const PARAM_SEGMENT_ORDER: readonly LaunchpadParamSegment[] = ['model', 'effort', 'mode', 'permission']
+/**
+ * Tips 行在焦点环里的编码（第六版设计 2）：参数段最深到 -5，Tips 取 -6。
+ * 键盘路径是仓库硬规矩——Tips 可点击轮换，就必须有不含鼠标的等价操作
+ * （焦点落到 Tips 行 + Enter = 切下一条，与点击同一条 rotateTip）。
+ */
+const TIPS_FOCUS = -6
+/** 参数段固定显示顺序（模型 · 思考深度 · 模式(preset) · 权限）。 */
+const PARAM_SEGMENT_ORDER: readonly LaunchpadParamSegment[] = ['model', 'effort', 'preset', 'permission']
 
 /**
- * 参数行的一个可点段（第五版）：与 ActionChip 同一套鼠标契约——挂得上
- * onClick 才给 hover 提亮；点击 stopImmediatePropagation（不触发整页的
- * 收回焦点兜底）；悬停/焦点 = 该段文本提亮（背景高亮 + 主题色），宽度
- * 不变（不加内边距，参数行的宽度预算按原文算）。
+ * 参数行的一个可点段（第五版；第六版与 ActionChip 同步改成文字高光）：
+ * 同一套鼠标契约——挂得上 onClick 才给 hover 提亮；点击
+ * stopImmediatePropagation（不触发整页的收回焦点兜底）；悬停/焦点 =
+ * 该段文字变主题蓝 + 加粗（不铺背景方块），宽度不变（不加内边距，
+ * 参数行的宽度预算按原文算）；onMouseLeave 复原并交还悬停带进的焦点
+ * （与 ActionChip 的 BUG 2 修复同一条规则）。
  */
 function ParamChip({
   label,
@@ -100,6 +118,7 @@ function ParamChip({
   focused,
   onActivate,
   onHover,
+  onHoverLeave,
 }: {
   label: string
   /** 模型段常亮浅紫（autoAccept）；其余段默认 dim。 */
@@ -107,6 +126,8 @@ function ParamChip({
   focused: boolean
   onActivate: () => void
   onHover: () => void
+  /** 移出时若焦点是悬停带进来的，交还输入框（BUG 2：移开必须复原）。 */
+  onHoverLeave: () => void
 }): React.ReactNode {
   const [hovered, setHovered] = React.useState(false)
   const active = hovered || focused
@@ -115,16 +136,15 @@ function ParamChip({
       flexShrink={0}
       height={1}
       onMouseEnter={() => { setHovered(true); onHover() }}
-      onMouseLeave={() => { setHovered(false) }}
+      onMouseLeave={() => { setHovered(false); onHoverLeave() }}
       onClick={(event: ClickEvent) => {
         event.stopImmediatePropagation()
         onActivate()
       }}
     >
       <Text
-        backgroundColor={active ? 'userMessageBackgroundHover' : undefined}
-        color={focused ? 'suggestion' : colored ? 'autoAccept' : undefined}
-        bold={focused || colored === true}
+        color={active ? 'suggestion' : colored ? 'autoAccept' : undefined}
+        bold={active || colored === true}
         dimColor={!active && colored !== true}
       >
         {label}
@@ -157,9 +177,12 @@ function ParamChip({
  * 屏幕最底的双角铭牌（左 `cwd:branch`、右版本号）保留。
  *
  * **输入框在这一屏是唯一有状态的部件**：用户敲进去的东西必须原样带进聊天页，
- * 否则"第一屏输入的字"就被这一屏吞了。所以这里不在本地解码任何命令——整行
- * 原样交给 `onSubmit`，由 `Chat` 走它既有的补全/命令表路径。本地只读一点：
- * 行首是不是 `/`，用来把输入框左边的提示符从 `❯` 换成 `⌘`。
+ * 否则"第一屏输入的字"就被这一屏吞了。第六版起行首 `/` 会弹出**命令补全面板**
+ * （`commands`/`onCommandPick` 两缝，数据与组件都与聊天页 composer 同源），
+ * 面板选中直接执行命令；面板没收掉时整行仍原样交给 `onSubmit`，由 `Chat`
+ * 走它既有的命令表判定（合并命令表，含 registry 命令）再决定 runCommand 或
+ * 发送。本地只读一点：行首是不是 `/`，用来把输入框左边的提示符从 `❯` 换成
+ * `⌘`。
  *
  * 光标闪烁：只在输入框有焦点（`focusIndex < 0`）且终端持有焦点时跑，
  * 约 550ms 一个相位；**相位只切换样式**（inverse ↔ inverse+dim，见
@@ -191,8 +214,10 @@ export function Launchpad({
   onParamPick,
   model,
   effort,
-  mode,
+  preset,
   permission,
+  commands,
+  onCommandPick,
   clipboardReader = readClipboard,
   cwd,
   branch,
@@ -240,23 +265,37 @@ export function Launchpad({
   inputPaused?: boolean
   /**
    * 参数行四段被点击/回车时交给 Chat 的段身份（第五版）。Chat 把它映射到
-   * 既有命令（model→/model、effort→/effort、mode→/plan、permission→
+   * 既有命令（model→/model、effort→/effort、preset→/preset、permission→
    * /permission），打开的就是聊天页同款选择器——本屏不自己造选择器。
    */
   onParamPick?: ((segment: LaunchpadParamSegment) => void) | undefined
   /**
    * 框下参数行的四段（第三版：参数行移出输入框、紧贴框下方，左对齐输入框）：
    * 模型（**只显示模型名**，不带 provider/ 前缀——第五版用户要求「两个都放
-   * 太长了」）、思考深度（effort）、模式（plan/act）、权限（permission
-   * preset 当前身份）。任一段拿不到就省掉那一段，全拿不到就整行不画
-   * （成组行矮一行，见 `resolveLaunchpadLayout` 的 `params`）。
+   * 太长了」）、思考深度（effort）、模式（第六版设计 1：agent preset 的
+   * 显示名，如 Standard/PTC/极简——`Chat` 读 `channel.agentPreset` 那套）、
+   * 权限（permission preset 当前身份）。任一段拿不到就省掉那一段，全拿不到
+   * 就整行不画（成组行矮一行，见 `resolveLaunchpadLayout` 的 `params`）。
    */
   model?: string | undefined
   effort?: string | undefined
-  /** 会话模式（`Chat` 读 `channel.mode.plan`）；缺省不画那一段。 */
-  mode?: 'plan' | 'act' | undefined
+  /** 当前 agent preset 的显示名（Standard/PTC/极简…）；缺省不画那一段。 */
+  preset?: string | undefined
   /** 当前权限预设名（`Chat` 读 `channel.permissionPresets()` 的当前身份）；缺省不画。 */
   permission?: string | undefined
+  /**
+   * 命令补全面板的数据源（第六版 BUG 1）：行首 / 时 Chat 传
+   * `channel.commandCompletions(query)` 的结果进来——与聊天页 composer 的
+   * 补全**同一个来源、同一个组件**（CommandSuggestions），本屏不另造一套。
+   * 不传（或空数组）= 不画面板（孤立回归夹具的默认形态）。
+   */
+  commands?: readonly (import('../commands.js').LocalCommand & { descriptionKey?: string; commandLine?: string })[] | undefined
+  /**
+   * 补全面板选中一条（Enter/Tab/点击）时交给 Chat 的**完整命令行**
+   * （如 /setup 加尾随空格）。Chat 走 runCommand 执行——与聊天页选中命令
+   * 同一条路径，绝不是 submit。
+   */
+  onCommandPick?: ((commandLine: string) => void) | undefined
   /**
    * 剪贴板读取缝（测试打桩用；生产走 `utils/clipboard` 的 `readClipboard`，
    * Chat 不传这一项）。签名与 `readClipboard` 一致。
@@ -287,6 +326,33 @@ export function Launchpad({
   const caret = focusIndex === -1 ? (cursorOffset ?? query.length) : query.length
   /** 焦点是否在输入框上（-1）；参数段（≤-2）与动作入口（≥0）都不算。 */
   const inputFocused = focusIndex === -1
+
+  // ── 命令补全面板（第六版 BUG 1）──────────────────────────────────────────
+  // 与聊天页 composer 同一套契约：行首 / + 有候选 → 面板上屏；↑/↓ 移选中、
+  // Enter/Tab/点击执行选中命令、Esc 只收面板（不清草稿——用户可能只是想
+  // 看一眼）。`dismissedFor` 记住"这条 query 被收过"：Esc 之后继续打字
+  // （query 变了）面板自然回来，与 PromptInput 的补全行为同源。
+  const [paletteIndex, setPaletteIndex] = React.useState(0)
+  const [paletteDismissedFor, setPaletteDismissedFor] = React.useState('')
+  const paletteCommands = commands !== undefined && query.startsWith('/') && query !== paletteDismissedFor
+    ? commands
+    : []
+  const paletteOpen = inputFocused && paletteCommands.length > 0 && onCommandPick !== undefined
+  const paletteSelectedIndex = Math.min(paletteIndex, Math.max(0, paletteCommands.length - 1))
+  const paletteSelected = paletteCommands[paletteSelectedIndex]
+  const pickCommand = (commandLine: string): void => {
+    setPaletteDismissedFor(query)
+    if (onCommandPick !== undefined) onCommandPick(commandLine)
+  }
+
+  // ── Tips 轮换（第六版设计 2）─────────────────────────────────────────────
+  // 轮换顺序（注释即契约）：launchpad-tip → launchpad-tip-2 → launchpad-tip-3
+  // → 回到 launchpad-tip。首启（launchpad-first-run）**优先级最高**：firstRun
+  // 为真时整行只显示那一句、不参与轮换（引导没跑完之前别的 Tips 都是噪音）。
+  // 点击 Tips 行或把焦点落到 Tips（Enter）都切下一条。
+  const TIP_KEYS = ['launchpad-tip', 'launchpad-tip-2', 'launchpad-tip-3'] as const
+  const [tipIndex, setTipIndex] = React.useState(0)
+  const rotateTip = (): void => { setTipIndex(index => (index + 1) % TIP_KEYS.length) }
 
   // 粘贴的异步落点：剪贴板读回是异步的，读取期间用户可能继续打字——插入必须
   // 用**当时最新**的 query/caret（PromptInput 用 revision 守同一条；这里没有
@@ -341,19 +407,20 @@ export function Launchpad({
     return () => { clearInterval(timer) }
   }, [inputActive])
 
-  // 参数行（第五版）：**只画值、不画字段名**；模型段**只显示模型名**（去掉
-  // provider/ 前缀——用户原话「两个都放的话就太长了」）：
-  // `glm-5.3  ·  Max  ·  Execute  ·  default`。模式值固定 `Plan`/`Execute`
-  // （不本地化的产品词）；模型值带浅紫主题色，其余 dim。四段各自可点
-  // （onParamPick → Chat 既有的 /model · /effort · /plan · /permission 选择器）。
+  // 参数行（第五版；第六版设计 1 改 preset 段）：**只画值、不画字段名**；
+  // 模型段**只显示模型名**（去掉 provider/ 前缀——用户原话「两个都放的话就
+  // 太长了」）：`glm-5.3  ·  Max  ·  Standard  ·  default`。模式段显示 agent
+  // preset 的显示名（Standard/PTC/极简…，Chat 从 preset 名册解析后传入）；
+  // 模型值带浅紫主题色，其余 dim。四段各自可点（onParamPick → Chat 既有的
+  // /model · /effort · /preset · /permission 选择器）。
   const paramParts: { segment: LaunchpadParamSegment; value: string; colored?: boolean }[] = (() => {
     const parts: { segment: LaunchpadParamSegment; value: string; colored?: boolean }[] = []
     if (model !== undefined && model !== '') parts.push({ segment: 'model', value: model, colored: true })
     if (effort !== undefined && effort !== '') {
       parts.push({ segment: 'effort', value: effort.charAt(0).toUpperCase() + effort.slice(1) })
     }
-    if (mode === 'plan' || mode === 'act') {
-      parts.push({ segment: 'mode', value: mode === 'plan' ? 'Plan' : 'Execute' })
+    if (preset !== undefined && preset !== '') {
+      parts.push({ segment: 'preset', value: preset })
     }
     if (permission !== undefined && permission !== '') parts.push({ segment: 'permission', value: permission })
     return parts
@@ -451,6 +518,28 @@ export function Launchpad({
       event.stopImmediatePropagation()
       return
     }
+    // 命令补全面板（第六版 BUG 1）：面板开着时 ↑/↓/Enter/Tab/Esc 全归面板——
+    // 与聊天页 composer 的补全菜单同一套键位。Enter/Tab/点击 = 执行选中命令
+    // （onCommandPick → Chat 的 runCommand，绝不 submit）；Esc 只收面板，
+    // 草稿一字不动（用户可能只是想看一眼有什么命令）。
+    if (paletteOpen && paletteSelected !== undefined) {
+      if (key.upArrow || key.downArrow) {
+        const count = paletteCommands.length
+        setPaletteIndex(previous => (previous + (key.downArrow ? 1 : -1) + count) % count)
+        event.stopImmediatePropagation()
+        return
+      }
+      if (key.tab || isPlainReturn(key)) {
+        pickCommand(paletteSelected.commandLine ?? '/' + paletteSelected.name + ' ')
+        event.stopImmediatePropagation()
+        return
+      }
+      if (key.escape) {
+        setPaletteDismissedFor(query)
+        event.stopImmediatePropagation()
+        return
+      }
+    }
     if (key.escape) {
       // 空输入时 Esc 去看会话（首屏最常见的下一步）；已经有字就只清空它,
       // 免得辛苦打的半句话被一次性丢掉。
@@ -466,11 +555,14 @@ export function Launchpad({
       return
     }
     if (isPlainReturn(key)) {
-      // 焦点画在哪一格，Enter 就归谁：参数段（≤-2）点开它对应的选择器、
-      // 动作入口（≥0）激活那一条，输入框有焦点（`-1`）时才把整行原文交回
-      // Chat。键盘路径是仓库硬规矩（每个可点目标都要有），四段参数也不例外。
+      // 焦点画在哪一格，Enter 就归谁：Tips 行（-6）切下一条 Tip、参数段（≤-2）
+      // 点开它对应的选择器、动作入口（≥0）激活那一条，输入框有焦点（`-1`）时
+      // 才把整行原文交回 Chat。键盘路径是仓库硬规矩（每个可点目标都要有），
+      // 四段参数与可点击的 Tips 行也不例外。
       const focusedSegment = segmentOfFocus(focusIndex)
-      if (focusedSegment !== undefined && onParamPick !== undefined) {
+      if (focusIndex === TIPS_FOCUS) {
+        rotateTip()
+      } else if (focusedSegment !== undefined && onParamPick !== undefined) {
         onParamPick(focusedSegment)
       } else {
         const focused = focusIndex >= 0 ? actions[focusIndex] : undefined
@@ -487,12 +579,15 @@ export function Launchpad({
       // Tab 在输入框上则直接进第一格。
       // 焦点环 = 输入框（`-1`）+ **画出来的**参数段（第五版，先于入口行——
       // 参数行在版面上就在入口行上方，↓ 的空间顺序与环顺序一致）+ **画出来的**
-      // 入口。窄终端里 `fitChips`/参数行的宽度裁剪会丢掉放不下的那几个，按
+      // 入口 + Tips 行（第六版设计 2，环的最后一格——它在版面上就在入口行下方）。
+      // 窄终端里 `fitChips`/参数行的宽度裁剪会丢掉放不下的那几个，按
       // 整张表绕圈会让焦点指着一个看不见的目标、Enter 触发一个看不见的动作。
+      const tipsFocusable = layout.showTip && pasteNotice === undefined && !firstRun
       const ring = [
         -1,
         ...fittedParams.map(part => paramFocusOf(part.segment)),
         ...chips.map(chip => chip.index),
+        ...(tipsFocusable ? [TIPS_FOCUS] : []),
       ]
       const at = ring.indexOf(focusIndex)
       const next = ring[((at >= 0 ? at : 0) + step + ring.length) % ring.length]!
@@ -611,6 +706,9 @@ export function Launchpad({
                       focused={focusIndex === paramFocusOf(part.segment)}
                       onActivate={() => onParamPick(part.segment)}
                       onHover={() => onFocusChange(paramFocusOf(part.segment))}
+                      onHoverLeave={() => {
+                        if (focusIndex === paramFocusOf(part.segment)) onFocusChange(-1)
+                      }}
                     />
                   )}
                 </React.Fragment>
@@ -621,7 +719,34 @@ export function Launchpad({
               之上——锚在输入框卡片顶边向上展开（与聊天页「picker 紧贴输入框」
               同一姿态），零布局高度、不推动这一屏的版面。 */}
           {overlayPanel !== undefined && (
-            <OverlayAbove maxHeight={Math.max(rows - 8, 1)}>{overlayPanel}</OverlayAbove>
+            <OverlayAbove maxHeight={Math.max(rows - 8, 1)}>
+              {/* BUG 3：浮层内部的点击（选行/拖滑杆）不算“点空白”——拦住冒泡，
+                  只有浮层之外的点击才走整页 onBlankClick 的关面板兜底。 */}
+              <Box onClick={(event: ClickEvent) => { event.stopImmediatePropagation() }}>
+                {overlayPanel}
+              </Box>
+            </OverlayAbove>
+          )}
+          {/* 命令补全面板（第六版 BUG 1）：聊天页同一个 CommandSuggestions 组件、
+              同一个锚点姿态（输入框卡片顶边向上展开）。面板里的点击同样拦住
+              冒泡（点命令行 = 选中执行，不是“点空白”）。 */}
+          {overlayPanel === undefined && paletteOpen && paletteSelected !== undefined && (
+            <OverlayAbove maxHeight={Math.max(rows - 8, 1)}>
+              <Box onClick={(event: ClickEvent) => { event.stopImmediatePropagation() }}>
+                <CommandSuggestions
+                  commands={paletteCommands}
+                  selectedIndex={paletteSelectedIndex}
+                  columns={columns}
+                  query={query}
+                  onPick={(index) => {
+                    const command = paletteCommands[index]
+                    if (command !== undefined) {
+                      pickCommand(command.commandLine ?? '/' + command.name + ' ')
+                    }
+                  }}
+                />
+              </Box>
+            </OverlayAbove>
           )}
         </Box>
         {/* 参数行与入口行之间的呼吸留白（第五版用户实测要求「跟输入框太紧了，
@@ -652,6 +777,9 @@ export function Launchpad({
                 focused={focusIndex === index}
                 onActivate={() => onAction(actions[index]!)}
                 onHover={() => onFocusChange(index)}
+                onHoverLeave={() => {
+                  if (focusIndex === index) onFocusChange(-1)
+                }}
               />
             ))}
           </Box>
@@ -662,11 +790,27 @@ export function Launchpad({
         {/* 入口行与 Tips 之间的呼吸留白（第六版）：默认 2 行，矮屏先撤它再撤
             Tips 行本身（launchpadLayout 的 tipGapRows）——刻意呼吸，不是遗漏。 */}
         {(layout.showTip || pasteNotice !== undefined) && (
-          <Box flexShrink={0} alignSelf="center" marginTop={layout.tipGapRows}>
+          <Box
+            flexShrink={0}
+            alignSelf="center"
+            marginTop={layout.tipGapRows}
+            // 第六版设计 2：点击 Tips 行切到下一条（循环）。首启句与粘贴提示
+            // 不参与轮换（首启优先级最高；提示是临时占用）。点击拦住冒泡——
+            // 点 Tips 不是“点空白”。
+            {...(pasteNotice === undefined && !firstRun
+              ? { onClick: (event: ClickEvent) => { event.stopImmediatePropagation(); rotateTip() } }
+              : {})}
+          >
             {pasteNotice === undefined ? (
               <>
                 <Text color="warning">● {t('launchpad-tip-prefix')}</Text>
-                <Text dimColor>{firstRun ? t('launchpad-first-run') : t('launchpad-tip')}</Text>
+                <Text
+                  color={focusIndex === TIPS_FOCUS ? 'suggestion' : undefined}
+                  bold={focusIndex === TIPS_FOCUS}
+                  dimColor={focusIndex !== TIPS_FOCUS}
+                >
+                  {firstRun ? t('launchpad-first-run') : t(TIP_KEYS[tipIndex] as never)}
+                </Text>
               </>
             ) : (
               <Text color="warning">● {pasteNotice}</Text>

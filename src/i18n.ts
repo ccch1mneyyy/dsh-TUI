@@ -1609,6 +1609,17 @@ const dict = {
     zh: '输入 / 看全部命令，/setup 可随时重跑引导',
     en: 'Type / for every command; /setup re-runs the guide anytime',
   },
+  // 第六版设计 2：Tips 可点击轮换（点击/焦点+Enter 切下一条，循环）。
+  // 轮换顺序 = launchpad-tip → launchpad-tip-2 → launchpad-tip-3 → 回到首条；
+  // 首启那一条（launchpad-first-run）优先级最高，不参与轮换。
+  'launchpad-tip-2': {
+    zh: 'Ctrl+V 直接粘贴，Esc 清空后按 Esc 去看历史会话',
+    en: 'Ctrl+V pastes; Esc clears the draft, then Esc again opens sessions',
+  },
+  'launchpad-tip-3': {
+    zh: '参数行四段都能点：模型 · 思考深度 · 模式 · 权限',
+    en: 'Every param chip is clickable: model · effort · mode · permission',
+  },
   // Tips 前缀（第三版：● 彩色圆点 + Tips： 前缀，整行居中）。
   'launchpad-tip-prefix': { zh: 'Tips：', en: 'Tips: ' },
   // 状态驱动的四个动作位（第四版：resolveLaunchpadActions 决定放什么）。
@@ -1618,7 +1629,9 @@ const dict = {
   'launchpad-action-continue-titled': { zh: '继续「{{title}}」', en: 'Continue "{{title}}"' },
   'launchpad-action-sessions': { zh: '历史会话', en: 'Sessions' },
   'launchpad-action-workspace': { zh: '工作区', en: 'Workspace' },
-  'launchpad-action-model': { zh: '模型', en: 'Model' },
+  // （launchpad-action-model 已删，2026-10 第六版设计 3：模型切换在参数行
+  // 第一段已有选择器，入口行的 Model 位换成 Doctor（环境体检）。）
+  'launchpad-action-doctor': { zh: '环境体检', en: 'Doctor' },
   'launchpad-action-help': { zh: '帮助', en: 'Help' },
   // 条件按钮：只在首启 / 配置问题时出现（onboarding 完成且配置正常后永久消失）。
   'launchpad-action-setup': { zh: '快速配置', en: 'Quick Setup' },

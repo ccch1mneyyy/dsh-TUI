@@ -77,16 +77,24 @@ The startup **launchpad** and the **first-run wizard** each own the keyboard; bo
 results back to the chat screen and add no new behavior.
 
 - **Launchpad**: printable input goes into the input box (the prefix turns from `❯` to `⌘` when the line
-  starts with `/`), `Backspace`/`Delete`/`←`/`→`/`Home`/`End` edit it; `Enter` **sends** the line
-  straight away (a leading `/` local command still takes the command table and never reaches the model);
+  starts with `/`), `Backspace`/`Delete`/`←`/`→`/`Home`/`End` edit it; a leading `/` opens the
+  **command palette** (the same data source and component as the chat composer: `↑`/`↓` move the selection,
+  `Enter`/`Tab`/click **run** the selected command, `Esc` dismisses only the palette and keeps the draft);
+  with the palette dismissed, `Enter` **sends** the line straight away (a leading `/` line — including
+  plugin/registry commands — goes through the chat page's merged command table and never reaches the model);
   `↑`/`↓`/`Tab` walk the focus ring (input box → the four param segments under the box → the quick
-  actions) and `Enter` activates the focused one, while typing returns focus to the input box; `Esc` clears
+  actions → the Tips line) and `Enter` activates the focused one (`Enter` on the Tips line rotates the
+  tip), while typing returns focus to the input box; `Esc` clears
   a non-empty line and opens sessions when empty, and `Ctrl+C` on an empty line takes the exit funnel.
-- **Launchpad param row** (under the box: model · effort · mode · permission, model shown as the bare model
-  name): each segment is **clickable** and opens the very same picker the chat page uses (`/model` ·
-  `/effort` · `/plan` · `/permission`); the picker renders **above** the launchpad and owns the keyboard
+- **Launchpad param row** (under the box: model · effort · mode · permission; model shows the bare model
+  name and mode shows the agent preset's display name — Standard/PTC/minimal…): each segment is
+  **clickable** and opens the very same picker the chat page uses (`/model` · `/effort` · `/preset` ·
+  `/permission`); the picker renders **above** the launchpad and owns the keyboard
   (`Esc` closes it back onto the launchpad), the picked value updates the row in place and the typed draft
-  is untouched.
+  is untouched; clicking inside the picker selects, **clicking elsewhere closes it and clicking another
+  segment switches to that picker**.
+- **Tips line**: click to rotate (three tips cycle; the first-run tip has top priority and never rotates);
+  keyboard path = focus ring + `Enter`.
 - **Wizard**: `←`/`→` change step (except the effort slider in step 3 and a drilled-in model list, where the
   horizontal keys belong to the child control), `Tab` switches between the language/theme and
   model/effort/workspace panes, `↑`/`↓` move the selection; `Enter` runs the step (step 1 = re-check
@@ -95,8 +103,9 @@ results back to the chat screen and add no new behavior.
   **language pane applies on `Enter`**; `Enter` on the last step finishes and records the guide when the
   focused card is a shortcut card, and tries the command when it is a command card; `Esc` skips
   (**not recorded**, asked again next launch).
-- **Mouse** (fullscreen): the launchpad's quick actions, the wizard's "Try it" cards and the workspace picker
-  are clickable, and a click lands on the same command path as the keyboard.
+- **Mouse** (fullscreen): the launchpad's quick actions (hover = the label turns accent-blue and bold,
+  leaving restores the dim look), param segments, command palette, Tips line, the wizard's "Try it" cards
+  and the workspace picker are clickable, and a click lands on the same command path as the keyboard.
 
 ## Editing keys
 
