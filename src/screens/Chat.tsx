@@ -1,5 +1,6 @@
 import React from 'react'
 import { t, getLang, setLang, isLang, writeLangPref, readLangPref, subscribeLang, LANGS, type Lang } from '../i18n.js'
+import { installedTuiVersion } from '../update.js'
 import { readThemePref } from '../themePrefs.js'
 import { readPresetPref } from '../presetPrefs.js'
 import { readModelPref } from '../modelPrefs.js'
@@ -129,6 +130,12 @@ import { useAnimationFrame } from '../ink/hooks/use-animation-frame.js'
 import { useExternalVersion } from '../hooks/useExternalVersion.js'
 import { TrajectoryScene } from './TrajectoryScene.js'
 import { markHomeSeen } from '../homePrefs.js'
+import { markOnboardingDone } from '../onboardingPrefs.js'
+import { Launchpad, launchpadVisible, type LaunchpadAction } from './Launchpad.js'
+import { resolveLaunchpadActions } from '../components/launchpadActions.js'
+import { Onboarding } from './Onboarding.js'
+import { appendHistory } from '../history.js'
+import { isHiddenCommandName, isLocalCommandName, parseCommandName } from '../commands.js'
 import { extendTrajectory, projectWave, type TrajBuild } from '../dsh-adapter/trajectory/index.js'
 import { miniWakeWidth } from '../components/trajectory/MiniWake.js'
 import { readTrajectorySeen, writeTrajectorySeen } from '../trajectoryPrefs.js'
@@ -310,6 +317,8 @@ export function Chat({
   promptControllerRef: promptControllerRefProp,
   renderScene,
   openHomeOnBoot,
+  launchpadOnBoot,
+  onboardingOnBoot,
   starPrompt,
 }: {
   channel: Channel
@@ -376,6 +385,27 @@ export function Chat({
    * installation, and tests need it deterministic.
    */
   openHomeOnBoot?: boolean
+  /**
+   * Show the Launchpad as this session's first frame.
+   *
+   * Same shape of decision as `openHomeOnBoot` and answered by the same
+   * ordinary-launch test (no `--resume`, no workspace target, no first
+   * prompt) — a resumed conversation belongs to a user who already said
+   * where they want to be, and a landing page in front of it would be the
+   * TUI second-guessing them. Unlike the workspace home this is NOT one-shot:
+   * every ordinary launch lands here, because the page is the place where the
+   * first sentence gets typed, not a tutorial that retires itself.
+   */
+  launchpadOnBoot?: boolean
+  /**
+   * Offer the first-run guide as this session's first frame.
+   *
+   * The host owns the decision (it reads `~/.dsh-tui/onboarding.json`); this
+   * prop only carries the verdict, exactly like `openHomeOnBoot`. It renders
+   * ABOVE the launchpad: the wizard answers "is this thing even wired up",
+   * which is upstream of "what do I want to do first".
+   */
+  onboardingOnBoot?: boolean
   /**
    * Test seam for the startup star modal (usage milestones 99h / 999
    * launches): `null` disables the modal outright; `dir` points the usage
@@ -590,6 +620,55 @@ export function Chat({
    * screen, and the screen stays reachable.
    */
   const [supervisorOpen, setSupervisorOpen] = React.useState(openHomeOnBoot === true)
+  /**
+   * The launchpad: the landing page every ordinary launch starts on.
+   *
+   * Seeded from `launchpadOnBoot`, and the screen that closes it is the one
+   * that decides what comes next — a submitted line hands over to the chat
+   * screen, an action hands over to whatever surface that action opens.
+   */
+  const [launchpadOpen, setLaunchpadOpen] = React.useState(launchpadOnBoot === true)
+  /**
+   * The launchpad's draft. It lives HERE, not inside the screen, because the
+   * screen unmounts the moment the user submits: a draft owned by an
+   * unmounting component would be lost in exactly the transition it exists
+   * to carry.
+   */
+  const [launchpadDraft, setLaunchpadDraft] = React.useState('')
+  const [launchpadCaret, setLaunchpadCaret] = React.useState(0)
+  const [launchpadFocus, setLaunchpadFocus] = React.useState(-1)
+  /**
+   * 这一帧到底出不出落地页：状态开着还不够，minimal 模式（`dsh-tui.minimal`）
+   * 下它整块不存在——`minimalMode.ts` 的标志由 channel 在设置落地后写入，
+   * 建 state 时读不到，所以判定必须放在**渲染期**读（与其它 minimal 门同一口径）。
+   * 键盘守卫、渲染分支与"有没有整屏界面"的判定都认这一个值，三者不会分叉。
+   */
+  /**
+   * 右下角铭牌的版本号：`installedTuiVersion()` 每次都要读一遍 package.json，
+   * 而它在一个进程里不会变——mount 时读一次就够。
+   */
+  const tuiVersion = React.useMemo(() => installedTuiVersion(), [])
+
+  const launchpadShown = launchpadOpen && launchpadVisible()
+  /**
+   * 渲染在**覆盖层**（而不是整屏 early-return）的那几个命令。
+   *
+   * 落地页的快捷入口与向导招式卡的「试一下」都走 `runCommand`，而 supervisor /
+   * settings / help 的 early-return 排在两个界面**之后**：不收掉当前界面就是
+   * "点了没反应"，状态还滞留着、等界面关掉才突然弹出来。默认收，白名单只留给覆盖层。
+   */
+  const overlayCommandNames = React.useMemo(() => new Set(['model']), [])
+  /**
+   * The first-run guide. Renders above the launchpad (see the prop docs): a
+   * launch that needs setup has not answered the launchpad's question yet.
+   */
+  const [onboardingOpen, setOnboardingOpen] = React.useState(onboardingOnBoot === true)
+  /**
+   * 落地页那条"第一次用？跑一遍引导"的横幅认的是**还欠一次引导**，而不是启动快照：
+   * 完成（写进 onboarding.json）之后立刻收掉；跳过刻意保留——没记账，下次启动还会问，
+   * 横幅说的正是这件事。
+   */
+  const [onboardingPending, setOnboardingPending] = React.useState(onboardingOnBoot === true)
   /** `/tree` opens the session family tree (pi's Session Tree): every rewind
    *  fork stitched back onto the message it diverged from, hover previews,
    *  and per-node rewind/fork/adopt actions. Like the supervisor, a screen. */
@@ -646,7 +725,7 @@ export function Chat({
   React.useEffect(() => {
     if (starModalArmedRef.current) return
     if (starPrompt === null) return
-    if (supervisorOpen || treeOpen || settingsOpen || channel.working) return
+    if (supervisorOpen || treeOpen || settingsOpen || launchpadShown || onboardingOpen || channel.working) return
     starModalArmedRef.current = true
     // 让开屏先画半秒：弹窗压在介绍动画之上，而不是同抢第一帧。
     const timer = setTimeout(() => {
@@ -664,7 +743,7 @@ export function Chat({
     }, 700)
     return () => { clearTimeout(timer) }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- 只在整屏界面开合时重判；闩保证只武装一次
-  }, [supervisorOpen, treeOpen, settingsOpen])
+  }, [supervisorOpen, treeOpen, settingsOpen, launchpadShown, onboardingOpen])
   /** `/star` 命令、开屏标语的点击/`Alt+S` 共用的一键动作：异步跑 gh，界面
    * 全程不阻塞，结果回来按四类各报一句（成功 / 没装 gh / 没登录 / 失败）。
    * `starPrompt.onStar` 存在时走同一条测试缝（夹具因此不会真的去 star）。 */
@@ -1023,6 +1102,34 @@ export function Chat({
       }).catch(() => undefined)
     }
   }, [agentViewReturnId, channel, repaintTranscript])
+
+  /**
+   * Leave the first-run guide.
+   *
+   * `done` writes the one-shot marker; `skipped` deliberately does NOT — the
+   * user has not answered, and a later launch is exactly when they might.
+   * Both cases land on the launchpad rather than the transcript: the wizard
+   * interrupted a launch, so the launch resumes where it left off.
+   *
+   * The write is best-effort by design (`markOnboardingDone` returns false
+   * when the data directory is unwritable); a read-only install gets one more
+   * offer next launch, which is the recoverable end of the trade.
+   */
+  const closeOnboarding = React.useCallback((outcome: 'skipped' | 'done'): void => {
+    setOnboardingOpen(false)
+    if (outcome === 'done') {
+      const written = markOnboardingDone()
+      setOnboardingPending(false)
+      channel.notify(t(written ? 'onboarding-finished' : 'onboarding-write-failed'), {
+        color: written ? 'success' : 'warning',
+        timeoutMs: written ? 3000 : 6000,
+      })
+    } else {
+      channel.notify(t('onboarding-skipped'), { timeoutMs: 4000 })
+    }
+  }, [channel])
+
+
   /** The startup summary gives way to transcript rows after the first local command or message. */
   const loadedContextVisible = channel.rows.length === 0 && channel.loadedContext !== undefined
   /** Startup context panel: collapsed by default, toggled with Ctrl+P. */
@@ -1864,6 +1971,49 @@ export function Chat({
     })()
   }
 
+  /**
+   * Close the launchpad and hand the draft to the chat screen.
+   *
+   * THREE cases, and they are genuinely different:
+   *
+   *   - a slash command → `runCommand`, the same dispatch a typed command
+   *     takes in the composer. The line is NOT submitted to the model.
+   *   - ordinary text  → the draft is parked in `historyFill`, so the composer
+   *     mounts already holding it. The user's first sentence is never sent
+   *     behind their back: they land on the chat screen with the draft in
+   *     front of them, one Enter away (or a click into the input to edit).
+   *   - empty          → nothing to hand over; just show the conversation.
+   *
+   * History is appended for the two non-empty cases (matching what PromptInput
+   * does on submit) so the launchpad's first line is reachable with ↑ later.
+   */
+  const closeLaunchpad = React.useCallback((submit: string): void => {
+    const text = submit.trim()
+    setLaunchpadOpen(false)
+    // 首启时 openHomeOnBoot 与落地页同时为真：会话浏览器已经开着、只是被落地页盖住。
+    // 提交首句后必须把它收掉，否则用户落到浏览器而不是"草稿就在眼前的对话"，
+    // 与本函数 doc 承诺的落点直接矛盾。
+    setSupervisorOpen(false)
+    setLaunchpadFocus(-1)
+    setLaunchpadDraft('')
+    setLaunchpadCaret(0)
+    if (text === '') return
+    void appendHistory(text)
+    const parsed = text.startsWith('/') ? parseCommandName(text) : undefined
+    if (parsed !== undefined && (isLocalCommandName(parsed.name) || isHiddenCommandName(parsed.name))) {
+      void runCommand(parsed.name, parsed.rawInput)
+      return
+    }
+    setHistoryFill(text)
+    channel.notify(t('launchpad-handoff'), { timeoutMs: 4000 })
+  }, [channel])
+
+  /**
+   * The screen's command dispatcher. Every entry point reaches this one
+   * closure — PromptInput's `onRunCommand`, the completion menu, this screen's
+   * own `/` cases, and the launchpad handoff above. There is deliberately no
+   * second dispatcher for the landing page.
+   */
   const runCommand = (
     name: string,
     rawInput = '',
@@ -2504,6 +2654,53 @@ export function Chat({
         // reads sections + namespaces from the channel itself.
         setHelpOpen(false)
         setSettingsOpen(true)
+        return true
+      }
+      case 'continue': {
+        // 落地页第四版的 Continue（最高频动作）：继续**最近一条可继续会话**。
+        // 数据是真的——`agentViewRows`（含持久化名册，listing 落地后含全部历史）
+        // 里挑 updatedAt 最新的非当前行；没有可继续的就去会话名册挑，失败也不
+        // 静默（notify + 打开 supervisor 让用户自己挑），绝不点了个没反应。
+        setHelpOpen(false)
+        const candidates = agentViewRows.filter(row =>
+          !row.current && row.id !== channel.agentId && row.title.trim() !== '')
+        const latest = candidates.reduce<(typeof candidates)[number] | undefined>(
+          (acc, row) => (acc === undefined || row.updatedAt > acc.updatedAt ? row : acc), undefined)
+        if (latest === undefined) {
+          channel.notify(t('launchpad-continue-none'), { color: 'error', timeoutMs: 6000 })
+          agentViewOpenSessionRef.current = channel.agentId
+          setLaunchpadOpen(false)
+          setSupervisorOpen(true)
+          return true
+        }
+        setLaunchpadOpen(false)
+        void channel.resumeTo(latest.id)
+          .then((result) => {
+            if (!result.ok) {
+              channel.notify(t('launchpad-continue-failed'), { color: 'error', timeoutMs: 8000 })
+              agentViewOpenSessionRef.current = channel.agentId
+              setSupervisorOpen(true)
+              return
+            }
+            channel.notify(t('resume-resumed'))
+            suppressLogoIntroRef.current = true
+            setAgentViewReturnId(undefined)
+            repaintTranscript()
+          })
+          .catch(() => {
+            channel.notify(t('launchpad-continue-failed'), { color: 'error', timeoutMs: 8000 })
+          })
+        return true
+      }
+      case 'setup': {
+        // `/setup` re-runs the first-run guide. Unlike the boot path this is
+        // an EXPLICIT request, so it opens unconditionally — a user who typed
+        // it has already decided the wizard is what they want. It reuses the
+        // same screen and the same `onClose`, so completing it here also
+        // (re)writes the one-shot marker.
+        setHelpOpen(false)
+        setLaunchpadOpen(false)
+        setOnboardingOpen(true)
         return true
       }
       case 'star': {
@@ -3271,6 +3468,16 @@ export function Chat({
       || overlay.kind === 'tips'
       || (recap !== null && (!recap.auto || recap.expanded))
     ) return
+    // The first-run guide owns the whole terminal while it is up: it is a
+    // wizard with its own step navigation, its own focus ring inside the
+    // pickers it borrows, and no free-text input at all. Registered ABOVE the
+    // launchpad because it renders above it.
+    if (onboardingOpen) return
+    // The launchpad owns the whole terminal while it is up — including the
+    // plain letters that would otherwise reach the composer, which is exactly
+    // the point: it IS the composer on this screen, and its draft is handed to
+    // the real one on submit (see closeLaunchpad).
+    if (launchpadShown) return
     // The session tree owns the whole terminal while it is up: plain letters
     // drive its search, clicks and Enter drive its action menu.
     if (treeOpen) return
@@ -4258,6 +4465,7 @@ export function Chat({
   const interruptPanel = approvalPanelNode ?? questionPanelNode
   const screenOpen = channel.pluginScene !== undefined || supervisorOpen || settingsOpen
     || subagentDetailId !== null || subagentDashboardOpen || sceneOpen
+    || launchpadShown || onboardingOpen
   if (interruptPanel !== null && screenOpen) {
     const node = (
       <Box flexDirection="column" width="100%" paddingX={1}>
@@ -4292,6 +4500,124 @@ export function Chat({
       >
         {renderScene ? renderScene(pluginScene.id, channel) : <Text>Scene unavailable: {pluginScene.id}</Text>}
       </PluginSceneBoundary>
+    )
+    return fullscreen ? node : <AlternateScreen>{node}</AlternateScreen>
+  }
+
+  /**
+   * The first-run guide — the FIRST frame of a fresh installation.
+   *
+   * It sits above every other screen because it answers a question that comes
+   * before all of them: "is this thing wired up at all". A launch that needs
+   * setup has nothing useful to show behind a browser or a landing page.
+   *
+   * `activeModel` is deliberately undefined here: the wizard's model step
+   * switches models through `channel.switchModel`, which is the same path the
+   * chat screen uses, so a switch made inside the wizard is already live when
+   * the user lands on the launcher.
+   */
+  if (onboardingOpen) {
+    const node = (
+      <Onboarding
+        channel={channel}
+        themeHost={themeHost}
+        onClose={closeOnboarding}
+        onApplyLang={applyLang}
+        onRunCommand={(name) => {
+          // 与落地页的 onAction 同一条规则：打开整屏界面的命令要先把向导收掉。
+          // 走 `closeOnboarding('skipped')` 而不是直接置 false——用户是去试命令、
+          // 没答完引导，按 skipped 的口径不记账（下次启动还会问）。
+          if (!overlayCommandNames.has(name)) closeOnboarding('skipped')
+          void runCommand(name, '')
+        }}
+      />
+    )
+    return fullscreen ? node : <AlternateScreen>{node}</AlternateScreen>
+  }
+
+  /**
+   * The launchpad — the landing page an ordinary launch starts on.
+   *
+   * An early return like every other screen, and it sits above the session
+   * browser: a launch lands here first, and only the actions the user picks
+   * decide which screen comes next. Submitting hands the draft to the chat
+   * screen (which owns the composer); the quick actions dispatch through the
+   * same `runCommand` a typed slash command takes.
+   */
+  if (launchpadShown) {
+    // 参数行的「模式/权限」两段（第三版）：模式看 channel.mode.plan；权限看
+    // permissionPresets() 的当前身份——只认 runtime 名册，legacy/unavailable 与
+    // 抛错都按「拿不到」处理（缺省不画那一段，两段都可选）。
+    let launchpadPermission: string | undefined
+    try {
+      const snapshot = channel.permissionPresets()
+      launchpadPermission = snapshot.availability === 'runtime' ? snapshot.current?.name : undefined
+    } catch {
+      launchpadPermission = undefined
+    }
+    // 第四版动作表：状态快照全部来自既有数据源——
+    //   - onboardingPending（onboarding.json，引导完成即永久消失）；
+    //   - configProblem = cordis.yml 的 provider 键没配（channel.configuredProvider
+    //     为空 = "没有可用 provider / 模型配置缺失"的启动期真信号）；
+    //   - lastSessionTitle = agentViewRows（含持久化名册）里最近一条非当前会话
+    //     的标题——listing 是异步的，落地前没有 Continue、落地后自动长出来。
+    const resumableRows = agentViewRows
+      .filter(row => !row.current && row.id !== channel.agentId && row.title.trim() !== '')
+    const latestRow = resumableRows.reduce<typeof resumableRows[number] | undefined>(
+      (best, row) => (best === undefined || row.updatedAt > best.updatedAt ? row : best), undefined)
+    const launchpadActions = resolveLaunchpadActions({
+      onboardingPending,
+      configProblem: channel.configuredProvider === undefined || channel.configuredProvider === '',
+      lastSessionTitle: latestRow?.title,
+      gitBranch: channel.gitBranch,
+    })
+    const node = (
+      <Launchpad
+        query={launchpadDraft}
+        cursorOffset={launchpadCaret}
+        focusIndex={launchpadFocus}
+        isTerminalFocused={terminalFocused}
+        whale={channel.whale}
+        whaleIdle={channel.whaleIdle}
+        whaleGirl={channel.whaleGirl}
+        fontId={splashFontIdOf(channel.splashFont)}
+        starred={starred}
+        onStarClick={runStarAction}
+        firstRun={onboardingPending}
+        actions={launchpadActions}
+        onQueryChange={(text, cursor) => {
+          setLaunchpadDraft(text)
+          setLaunchpadCaret(cursor)
+        }}
+        onSubmit={closeLaunchpad}
+        onFocusChange={setLaunchpadFocus}
+        onAction={(action) => {
+          // 除覆盖层（模型 / 主题 / 语言渲染在落地页**之上**，见 overlayCommandNames）
+          // 以外，动作打开的都是**整屏界面**，而 supervisor / settings / help 的 early-return
+          // 全排在落地页之后——不收掉落地页就是"点了没反应"。默认收，白名单只留给覆盖层。
+          if (!overlayCommandNames.has(action.command)) setLaunchpadOpen(false)
+          void runCommand(action.command, '')
+        }}
+        onEscape={(intent) => {
+          if (intent === 'exit') {
+            requestExit()
+            return
+          }
+          // 空输入按 Esc：这一屏的"下一步"通常是去挑工作区/会话。
+          agentViewOpenSessionRef.current = channel.agentId
+          setLaunchpadOpen(false)
+          setSupervisorOpen(true)
+        }}
+        onBlankClick={() => setLaunchpadFocus(-1)}
+              provider={channel.provider}
+        model={channel.model}
+        effort={channel.reasoningEffort}
+        mode={channel.mode.plan === true ? 'plan' : 'act'}
+        permission={launchpadPermission}
+        cwd={channel.displayCwd}
+        branch={channel.gitBranch}
+        tuiVersion={tuiVersion}
+      />
     )
     return fullscreen ? node : <AlternateScreen>{node}</AlternateScreen>
   }

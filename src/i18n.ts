@@ -1555,6 +1555,141 @@ const dict = {
     en: '**j/k** page · **enter/esc** collapse · **q** exit',
   },
   'traj-hint-failure': { zh: '{{key}} 看完整轨迹', en: '{{key}} for the full trajectory' },
+
+  // ── screens/Launchpad.tsx（开屏落地页：取代旧的"只有标题的空白会话"）───────
+  // 落地页是"启动后第一屏"：大标题与吉祥物居中、输入框在下、再往下是
+  // 信息与快捷入口。用户真正发出第一条内容后才进聊天页，所以这里的
+  // 文案要短、要是动作而不是说明。
+  'launchpad-placeholder': { zh: '说点什么，或输入 / 看命令…', en: 'Say something, or type / for commands…' },
+  // （launchpad-param-*-label / launchpad-param-mode-* 六键已删：2026-10 第四版
+  // 参数行只画值不画字段名——用户原话"大家都知道是模型啊，不用画蛇添足"；
+  // 模式值固定产品词 Plan/Execute，不再本地化。）
+  'launchpad-tip': {
+    zh: '输入 / 看全部命令，/setup 可随时重跑引导',
+    en: 'Type / for every command; /setup re-runs the guide anytime',
+  },
+  // Tips 前缀（第三版：● 彩色圆点 + Tips： 前缀，整行居中）。
+  'launchpad-tip-prefix': { zh: 'Tips：', en: 'Tips: ' },
+  // 状态驱动的四个动作位（第四版：resolveLaunchpadActions 决定放什么）。
+  // （launchpad-action-theme / -lang / -settings 三键已删：它们属于 Settings，
+  // 落地页永远不出现——verify-i18n 的死键检查同步收口。）
+  'launchpad-action-continue': { zh: '继续上次', en: 'Continue' },
+  'launchpad-action-continue-titled': { zh: '继续「{{title}}」', en: 'Continue "{{title}}"' },
+  'launchpad-action-sessions': { zh: '历史会话', en: 'Sessions' },
+  'launchpad-action-workspace': { zh: '工作区', en: 'Workspace' },
+  'launchpad-action-model': { zh: '模型', en: 'Model' },
+  'launchpad-action-help': { zh: '帮助', en: 'Help' },
+  // 条件按钮：只在首启 / 配置问题时出现（onboarding 完成且配置正常后永久消失）。
+  'launchpad-action-setup': { zh: '快速配置', en: 'Quick Setup' },
+  'launchpad-action-setup-provider': { zh: '配置 provider', en: 'Set up provider' },
+  // Continue 的失败/空态（Chat 的 /continue 分支）：绝不静默。
+  'launchpad-continue-none': {
+    zh: '没有可继续的会话，已打开历史会话列表',
+    en: 'No session to continue — opened the session list',
+  },
+  'launchpad-continue-failed': {
+    zh: '继续上次会话失败，已打开历史会话列表',
+    en: 'Could not resume the last session — opened the session list',
+  },
+  'launchpad-first-run': {
+    zh: '第一次用 dsh-TUI？花一分钟跑一遍引导，把 API Key、语言、主题、模型一次配好。',
+    en: 'New to dsh-TUI? One minute of setup wires up your API key, language, theme and model.',
+  },
+
+  // （launchpad-cwd-prefix 已删：2026-10 落地页改版删掉了底部工作目录行。）
+  // 落地页把首句原文交接给聊天页时的一句确认——用户按下 Enter 后看到的不
+  // 是"内容消失了"，而是"它在输入框里等你"。
+  'launchpad-handoff': {
+    zh: '首句已放进输入框，按 Enter 发送',
+    en: 'Your first line is in the composer — press Enter to send',
+  },
+
+  // ── screens/Onboarding.tsx（首次引导：四步把常用配置配好）────────────────
+  'onboarding-title': { zh: '欢迎使用 dsh-TUI', en: 'Welcome to dsh-TUI' },
+  'onboarding-step-progress': { zh: '第 {{n}} / {{total}} 步', en: 'Step {{n}} of {{total}}' },
+  'onboarding-step-apikey-title': { zh: 'API Key 与连通性', en: 'API key and connectivity' },
+  'onboarding-step-apikey-desc': {
+    zh: '确认 DEEPSEEK_API_KEY 已就位，并真的连一次服务端。',
+    en: 'Confirm DEEPSEEK_API_KEY is in place and actually reach the API.',
+  },
+  'onboarding-step-look-title': { zh: '语言与主题', en: 'Language and theme' },
+  'onboarding-step-look-desc': {
+    zh: '换成你顺眼的语言和配色；移动光标即可实时预览。',
+    en: 'Pick the language and colors you like — moving the cursor previews them live.',
+  },
+  'onboarding-step-model-title': { zh: '模型与工作区', en: 'Model and workspace' },
+  'onboarding-step-model-desc': {
+    zh: '定下默认模型、推理强度，以及这次要在哪个目录里干活。',
+    en: 'Choose the default model, reasoning effort, and the directory to work in.',
+  },
+  'onboarding-step-keys-title': { zh: '快捷键与招式', en: 'Shortcuts and commands' },
+  'onboarding-step-keys-desc': {
+    zh: '几个最省时间的键和最常用的命令，每一张都能直接点开试试。',
+    en: 'The few keys and commands that save the most time — click any card to try it.',
+  },
+  // 第一步：凭证与连通性。分流口径与 adapter 的 CredentialStatus /
+  // BalanceResult 一一对应，排查建议按原因分开给，而不是一句"检查网络"。
+  'onboarding-key-checking': { zh: '正在读取凭证…', en: 'Reading credentials…' },
+  'onboarding-key-configured': { zh: '已检测到 DEEPSEEK_API_KEY', en: 'DEEPSEEK_API_KEY detected' },
+  'onboarding-key-source-env': { zh: '来源：环境变量', en: 'Source: environment variable' },
+  'onboarding-key-source-config': { zh: '来源：配置文件', en: 'Source: config file' },
+  'onboarding-key-source-unknown': { zh: '来源：未知', en: 'Source: unknown' },
+  'onboarding-key-missing': { zh: '还没检测到 DEEPSEEK_API_KEY', en: 'No DEEPSEEK_API_KEY yet' },
+  'onboarding-key-shape': { zh: '形如 sk-…（只判断存在与否，永远不显示完整值）', en: 'Looks like sk-… (presence only — the value is never printed)' },
+  'onboarding-key-howto-env': { zh: '设置一个环境变量再重启：', en: 'Set an environment variable and restart:' },
+  'onboarding-key-howto-config': { zh: '或写进 dsh 的配置里：', en: 'Or put it in the dsh config:' },
+  'onboarding-key-retry': { zh: '重新检查', en: 'Check again' },
+  'onboarding-conn-running': { zh: '正在连接 DeepSeek…', en: 'Connecting to DeepSeek…' },
+  'onboarding-conn-ok': { zh: '连通正常', en: 'Connected' },
+  'onboarding-conn-models': { zh: '{{count}} 个可用模型', en: '{{count}} models available' },
+  'onboarding-conn-balance': { zh: '余额 {{amount}}', en: 'Balance {{amount}}' },
+  'onboarding-conn-balance-none': { zh: '本次没有返回余额信息', en: 'No balance returned this time' },
+  'onboarding-conn-fail-no-key': { zh: '没有可用的凭证，连通性检查没法开始', en: 'No usable credential, so the check cannot start' },
+  'onboarding-conn-fail-network': { zh: '网络不通：检查代理、防火墙或离线环境', en: 'Network unreachable: check proxy, firewall or offline setup' },
+  'onboarding-conn-fail-unauthorized': { zh: '凭证被拒绝：检查 key 是否复制完整、是否已失效', en: 'Credential rejected: check the key is complete and still valid' },
+  'onboarding-conn-fail-http': { zh: '服务端返回 HTTP {{status}}：稍后重试', en: 'Server returned HTTP {{status}}: retry shortly' },
+  'onboarding-conn-fail-invalid': { zh: '返回内容无法解析：可能被代理或网关改写', en: 'Unparseable response: a proxy or gateway may be rewriting it' },
+  'onboarding-conn-fail-unknown': { zh: '连通性检查没通过', en: 'The connectivity check did not pass' },
+  'onboarding-look-preview-note': { zh: '移动光标即时预览；选中即保存', en: 'Moving the cursor previews live; picking saves it' },
+  'onboarding-model-workspace': { zh: '工作区', en: 'Workspace' },
+  'onboarding-model-workspace-note': { zh: '切换工作区会新建一个会话', en: 'Switching the workspace starts a new session' },
+  'onboarding-model-loading': { zh: '正在读取模型列表…', en: 'Loading the model list…' },
+  'onboarding-model-empty': { zh: '没有读到可用模型（可先跳过，用 /provider 配置）', en: 'No models available yet (skip, then configure with /provider)' },
+  'onboarding-model-back': { zh: '← 返回分组（Esc）', en: '← Back to providers (Esc)' },
+  'onboarding-model-switch-failed': { zh: '模型「{{name}}」切换失败', en: 'Could not switch to model "{{name}}"' },
+  'onboarding-model-switched': { zh: '默认模型已切换为 {{name}}', en: 'Default model switched to {{name}}' },
+  'onboarding-effort-switched': { zh: '推理强度已设为 {{name}}', en: 'Reasoning effort set to {{name}}' },
+  'onboarding-workspace-switched': { zh: '工作区已切换：{{name}}', en: 'Workspace switched: {{name}}' },
+  'onboarding-workspace-failed': { zh: '工作区「{{name}}」切换失败', en: 'Could not switch to workspace "{{name}}"' },
+  // 第四步：招式卡。每张卡 = 一句"它能干什么" + 一行可点/可读的键或命令。
+  'onboarding-cards-title': { zh: '先记这六张，够用很久', en: 'Six cards that cover most of it' },
+  'onboarding-card-cmd-title': { zh: '命令菜单', en: 'Command menu' },
+  'onboarding-card-cmd-desc': { zh: '输入 / 打开全部命令，Tab 补全', en: 'Type / for every command, Tab to complete' },
+  'onboarding-card-help-title': { zh: '帮助与快捷键', en: 'Help and shortcuts' },
+  'onboarding-card-help-desc': { zh: '一张表看懂全部键位', en: 'Every key in one table' },
+  'onboarding-card-model-title': { zh: '换模型', en: 'Switch model' },
+  'onboarding-card-model-desc': { zh: '列出全部 provider 与模型', en: 'List every provider and model' },
+  'onboarding-card-sessions-title': { zh: '会话与工作区', en: 'Sessions and workspaces' },
+  'onboarding-card-sessions-desc': { zh: '找回旧会话、换工作区、后台并行', en: 'Reopen old sessions, switch workspace, work in parallel' },
+  'onboarding-card-rewind-title': { zh: '回退一步', en: 'Rewind' },
+  'onboarding-card-rewind-desc': { zh: '退回到任意一条消息重来', en: 'Go back to any earlier message' },
+  'onboarding-card-interrupt-title': { zh: '打断与后台', en: 'Interrupt and background' },
+  'onboarding-card-interrupt-desc': { zh: '停下手上的活；或把它丢到后台继续跑', en: 'Stop the current turn, or push it to the background' },
+  'onboarding-card-try': { zh: '试一下', en: 'Try it' },
+  'onboarding-card-tried': { zh: '已经试过', en: 'Tried' },
+  // 收尾
+  'onboarding-hint': {
+    zh: '**←/→** 换步骤 · **Enter** 执行这一步 / 下一步 · **Esc** 跳过引导',
+    en: '**←/→** step · **Enter** act on this step / go next · **Esc** skip the guide',
+  },
+  'onboarding-hint-last': { zh: '**Enter** 完成 · **Esc** 跳过引导', en: '**Enter** finish · **Esc** skip the guide' },
+  'onboarding-skipped': { zh: '已跳过首次引导，随时可用 /setup 重跑', en: 'Setup skipped — run /setup whenever you like' },
+  'onboarding-finished': { zh: '引导完成', en: 'Setup complete' },
+  'onboarding-write-failed': {
+    zh: '这次引导没能记进 ~/.dsh-tui/onboarding.json，下次启动可能还会再问一次',
+    en: 'Could not record the guide in ~/.dsh-tui/onboarding.json, so it may ask again next launch',
+  },
+  'cmd-desc-setup': { zh: '重跑首次引导（API Key / 语言主题 / 模型工作区 / 快捷键）' },
 } as const satisfies Record<string, { zh: I18nText; en?: I18nText }>
 
 export type I18nKey = keyof typeof dict

@@ -36,21 +36,34 @@ dsh-tui
 
 ### 1.2 What you see on first launch
 
-1. **Pixel whale header** (~3.4 s intro animation, then frozen): `✦ dsh-TUI` version,
-   `DEEPSEEK / HARNESS` big text, current model and effort, working directory, and a
-   **startup hint** (`/model` · `/help` · `Tab`). Narrow terminals climb down a ladder (see 5.1).
-   When the dsh engine is out of the verified range, a **⚠ version-drift warning**
-   appears with the align command.
-2. **Bottom status bar**: working-status row, context bar, TPS gauge, and other live
+1. **First-run guide** (whenever the guide has not been completed yet — a fresh install, or a
+   guide that bumped its own version): a four-step wizard — **API key & connectivity → language &
+   theme → model & workspace → shortcuts & moves**. `←/→` change step, `Tab` switches between the
+   two panes, `↑/↓` move the selection, `Enter` runs the step, `Esc` skips. **Skipping is not
+   recorded** (you are asked again next launch); the last step only counts as finished — and writes
+   the marker — when `Enter` lands on a **shortcut card** (on a command card `Enter` tries the command).
+   Re-run it any time with `/setup`.
+2. **Launchpad** (the first screen of an **ordinary launch** — no `--resume`, no workspace target,
+   no prompt; `DSH_TUI_NO_LAUNCHPAD=1` skips it entirely): the pixel-whale header (`✦ dsh-TUI`
+   version, `DEEPSEEK / HARNESS` big text, current model and effort, working directory, and a
+   **startup hint**; the header here is **frozen from the first frame** — the intro animation is
+   left to the transcript header once you are in the chat), a **real input box** underneath
+   (type your first sentence here; Enter carries it into the chat screen), and a row of
+   **quick actions** (first-run guide / sessions & workspaces / model / theme / language /
+   help & shortcuts / settings). Move with `↑/↓` or `Tab`, activate with `Enter`, or just click;
+   short terminals drop whole blocks (quick actions → hint line → input only) and narrow ones
+   climb down the ladder in 5.1. When the dsh engine is out of the verified range, a
+   **⚠ version-drift warning** appears with the align command.
+3. **Bottom status bar**: working-status row, context bar, TPS gauge, and other live
    indicators (see [5. UI and status bar](#5-ui-and-status-bar)).
-3. **Startup hint line**: one fixed line under the logo:
+4. **Startup hint line**: one fixed line under the logo:
    `提示：<随机小技巧> · /tips 更多技巧` — changes each launch.
    `/tips` opens the full tips panel (`↑/↓` scroll, `Esc` close).
-4. **First normal launch** (no `--resume`, no workspace, no prompt) enters the
-   **session manager** to pick a workspace. `~/.dsh-tui/home.json` records "seen"
-   so later launches go straight to chat. Open it any time with `/resume`, `/home`,
-   `/agentview`, `/bg`, or `⌸` at the start of the input line.
-5. Type `/` for the command menu, `?` for the shortcut help.
+5. **First normal launch** (no `--resume`, no workspace, no prompt) reaches the
+   **session manager** after the launchpad to pick a workspace. `~/.dsh-tui/home.json`
+   records "seen" so later launches go straight to chat. Open it any time with `/resume`,
+   `/home`, `/agentview`, `/bg`, or `⌸` at the start of the input line.
+6. Type `/` for the command menu, `?` for the shortcut help.
 
 ### 1.3 Core mental model
 
@@ -225,7 +238,7 @@ List `↑/↓` + `Enter` to confirm · confirm page `Enter` rewind / `Esc` back 
 
 ## 3. Command reference
 
-The command menu = built-in commands (50) + DSH registry commands (`/plan` `/goal` etc.) + the skill catalog
+The command menu = built-in commands (58, aliases included) + DSH registry commands (`/plan` `/goal` etc.) + the skill catalog
 (completion only, hidden from the `/help` menu). `/lang` switches the UI and command descriptions between English and Chinese.
 
 ### 3.1 Session
@@ -264,6 +277,7 @@ The command menu = built-in commands (50) + DSH registry commands (`/plan` `/goa
 | `/agents` | none | subagent list for this session |
 | `/jobs` | none | background-task panel: status/runtime/exit-code tracking, `↑/↓` select, `k` stop; while open, `Esc` **closes only the panel** and won't interrupt the turn (close the panel first, then `Ctrl+C`) |
 | `/settings` | none | open the plugin settings editor (namespace read/edit) |
+| `/setup` | none | re-run the first-run guide (API key / language+theme / model+workspace / shortcuts) — same screen as the very first launch |
 | `/help` | none | shortcut + command help menu (`?` entry) |
 
 ### 3.3 Model / display

@@ -76,6 +76,8 @@ export function SearchBox({
   width,
   cursorOffset,
   borderless = false,
+  caretBlink = true,
+  placeholderAlign = 'right',
 }: {
   query: string
   placeholder?: string
@@ -85,6 +87,20 @@ export function SearchBox({
   width?: number | string
   cursorOffset?: number
   borderless?: boolean
+  /**
+   * 空输入 + 焦点态那一行里占位文案的对齐（2026-10 落地页第四版新增）：
+   * `right`（缺省，历史行为）贴框右缘；`left` 紧跟 `前缀 + 块状光标` 之后。
+   * 共享组件——聊天页/选择器不传此 prop，渲染与从前逐字节一致。
+   */
+  placeholderAlign?: 'left' | 'right'
+  /**
+   * 光标闪烁相位（true = 实、false = 暗）。落地页传入（约 550ms 一相位）；
+   * 缺省 true 恒实——其它使用方（选择器搜索等）保持不闪。
+   *
+   * 契约：闪烁**只切换样式**（inverse ↔ inverse+dim），绝不增删字符——
+   * 无头回归读的是视口纯文本，样式相位对它不可见，断言不会随相位抖动。
+   */
+  caretBlink?: boolean
 }): React.ReactNode {
   const offset = cursorOffset ?? query.length
   const borderStyle = borderless ? undefined : 'round'
@@ -152,7 +168,8 @@ export function SearchBox({
       content = isTerminalFocused ? (
         <>
           <Text>{win.before}</Text>
-          <Text inverse>{win.at}</Text>
+          {/* 闪烁相位：dim 样式切换，字符常在（见 caretBlink 的契约注释）。 */}
+          <Text inverse dimColor={!caretBlink}>{win.at}</Text>
           {win.after !== '' && <Text>{win.after}</Text>}
         </>
       ) : (
@@ -176,14 +193,22 @@ export function SearchBox({
       width={width}
     >
       {inlineCaret ? (
-        <Box flexDirection="row" width="100%">
-          <Text>{prefix} </Text>
-          <Text inverse> </Text>
-          <Box flexGrow={1} />
-          <Text dimColor wrap="truncate">
-            {placeholder}
-          </Text>
-        </Box>
+        placeholderAlign === 'left' ? (
+          <Box flexDirection="row" width="100%">
+            <Text>{prefix} </Text>
+            <Text inverse dimColor={!caretBlink}> </Text>
+            <Text dimColor wrap="truncate">{placeholder}</Text>
+          </Box>
+        ) : (
+          <Box flexDirection="row" width="100%">
+            <Text>{prefix} </Text>
+            <Text inverse dimColor={!caretBlink}> </Text>
+            <Box flexGrow={1} />
+            <Text dimColor wrap="truncate">
+              {placeholder}
+            </Text>
+          </Box>
+        )
       ) : (
         <Text dimColor={!isFocused} wrap="truncate-end">
           {prefix} {content}

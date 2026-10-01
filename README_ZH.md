@@ -24,6 +24,7 @@
 ## 功能亮点
 
 - **像素鲸鱼娘** — 开屏三选一动画，点击唤醒；开始第一个任务后定格。
+- **落地页与首次引导** — 每次启动先落在带**真输入框**的落地页（大字 + 鲸鱼 + 快捷入口，窄/矮终端自动整块降级）；首次运行走四步向导（API Key / 语言主题 / 模型工作区 / 快捷键），`/setup` 随时重跑。
 - **终端原生界面** — 流式 Markdown、工具卡、`/` 与 `@` 补全、`#L12-14` 行区间、历史搜索、中英界面。
 - **图片** — Kitty/Sixel 缩略图，居中大图可缩放平移，粘贴前按限额适配，无图形时文字回退。
 - **Mermaid 图表** — ```` ```mermaid ```` 代码块画成 Unicode 字符图。
@@ -178,7 +179,7 @@ CLI 形态：任意终端运行 `dsh-tui migrate ...`，与 TUI 内执行同一�
 
 ## 内置命令
 
-`/resume` · `/home` · `/agentview` · `/bg` · `⌸` 打开同一个会话管理界面：工作区栏、实时状态、筛选、★ 固定。另有 `/model` `/new` `/compact` `/export` `/btw` `/tree` `/fork` `/rewind` `/settings` `/status` `/cost` `/jobs` `/skills` `/mcp` `/provider` `/auth` `/login` `/update`。
+`/resume` · `/home` · `/agentview` · `/bg` · `⌸` 打开同一个会话管理界面：工作区栏、实时状态、筛选、★ 固定。另有 `/model` `/new` `/compact` `/export` `/btw` `/tree` `/fork` `/rewind` `/settings` `/setup` `/status` `/cost` `/jobs` `/skills` `/mcp` `/provider` `/auth` `/login` `/update`。
 
 会话管理界面会立即显示上次成功读取的列表，同时核对持久化存储的变化。需要深度扫描日志的标题会先显示回退名称，恢复完成后在原行更新。
 移除工作区登记后，其历史会话仍可从侧栏的「仅历史」目录进入。

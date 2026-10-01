@@ -60,6 +60,7 @@ export const LOCAL_COMMANDS: LocalCommand[] = [
   { name: 'config', description: 'Show the dsh-tui configuration source' },
   { name: 'reload', description: 'Reload preference files from disk and apply live' },
   { name: 'settings', description: 'View and edit plugin settings' },
+  { name: 'setup', description: 'Re-run the first-run guide (API key / language + theme / model + workspace / shortcuts)' },
   { name: 'star', description: 'Star this project on GitHub (one-key via the gh CLI)' },
   { name: 'doctor', description: 'Run environment checks' },
   { name: 'migrate', description: 'Import conversations from other coding agents (claude-code / codex / omp / zcode / grok-build)' },
