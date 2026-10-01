@@ -1902,11 +1902,6 @@ function TranscriptRow({
       // line, members hang off the shared rail, and a FOLDED run keeps only
       // that summary (its members were dropped from the window upstream).
       const groupHead = jobGroup !== undefined && jobGroup.head
-      // The rounded bracket: the head's summary line opens with `╭` and the
-      // last member closes it with a `╰` cap — every line between them carries
-      // the `│` rail (the body border), so the run reads as ONE rounded block.
-      // The cap costs exactly one row while the group is open.
-      const groupTail = jobGroup !== undefined && jobGroup.last && !jobGroup.folded
       return (
         <Box
           flexDirection="column"
@@ -1916,27 +1911,18 @@ function TranscriptRow({
           marginTop={groupHead && marginTopOnTurn ? 1 : 0}
           ref={ref}
         >
-          {groupHead && <JobGroupHeader group={jobGroup} onToggle={toggleJobGroup} corner={!jobGroup.folded} />}
+          {groupHead && <JobGroupHeader group={jobGroup} onToggle={toggleJobGroup} />}
           {groupHead && jobGroup.folded ? null : (
             <JobCard
               job={job}
               marginTopOnTurn={groupHead ? false : marginTopOnTurn}
-              grouped={jobGroup !== undefined}
+              // The bracket hugs the CARDS: the summary line above stays
+              // outside it, and the head/last member round the two ends in
+              // place (no extra cap row) — see JobCard's `rail` prop.
+              rail={jobGroup === undefined ? undefined : { open: jobGroup.head, close: jobGroup.last }}
               // Clicking a card opens the panel focused on THAT job, not the roster head.
               onClick={onOpenJobs === undefined ? undefined : () => onOpenJobs(job.id)}
             />
-          )}
-          {groupTail && (
-            // The cap is clickable too (fold the run from either end); blank
-            // cells stay inert so dragging a selection across it is safe.
-            <Box
-              onClick={(event: ClickEvent): void => {
-                if (event.cellIsBlank) return
-                toggleJobGroup()
-              }}
-            >
-              <Text color="inactive">╰</Text>
-            </Box>
           )}
         </Box>
       )

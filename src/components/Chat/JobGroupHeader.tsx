@@ -21,19 +21,16 @@ type Chip = { key: string; text: string; color: 'warning' | 'error' | 'success' 
  * and brightens on hover — the same mouse gesture the job cards use — and
  * Ctrl+O expands every group at once.
  *
- * An OPEN group starts its rounded rail here (`╭`): together with the `│`
- * body borders and the `╰` cap the last member renders, the run reads as one
- * bracket instead of a loose pile of cards.
+ * The summary line sits OUTSIDE the group's rail: the cards below it carry
+ * the bracket (`╭` on the first card, `╰` on the last), so this line reads as
+ * the run's title rather than its first row.
  *
  * Failures stay LOUD while folded: the failed/killed counts are painted in
  * the error color, because folding must never bury a job that died.
  */
-export function JobGroupHeader({ group, onToggle, corner }: {
+export function JobGroupHeader({ group, onToggle }: {
   group: JobGroupRow
   onToggle?(): void
-  /** Open the rounded rail in front of the title (`╭`); off when folded —
-   *  the fold line stands alone, there is no body to bracket. */
-  corner?: boolean
 }): React.ReactNode {
   const minimalUi = isMinimalUiMode()
   const [hovered, setHovered] = React.useState(false)
@@ -75,7 +72,7 @@ export function JobGroupHeader({ group, onToggle, corner }: {
       onMouseLeave={clickable ? (): void => setHovered(false) : undefined}
     >
       <Text color={hovered && clickable && !minimalUi ? 'accent' : 'inactive'}>
-        {corner === true ? '╭ ' : null}{group.folded ? '▸' : '▾'}
+        {group.folded ? '▸' : '▾'}
       </Text>
       <Text
         wrap="truncate-end"
