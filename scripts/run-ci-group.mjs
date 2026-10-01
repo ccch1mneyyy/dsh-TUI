@@ -293,6 +293,10 @@ const GROUPS = {
 // 控制面只读（文件系统快照）、插件清单解析矩阵、fallback 触发矩阵
 // （非 TTY）、doctor 提取行为等价（完整期望值 golden）。
     ["verify-safe-mode", ['node', 'scripts/verify-safe-mode.mjs']],
+// doctor 配置候选项一致性：legacy 根配置 `~/.dsh-tui/cordis.yml` 只在存在时
+// 出现（profile 安装不使用它），profile 补丁跟随 `$DSH_HOME ?? ~/.dsh`，且
+// CLI 与 TUI 内 /doctor 两个入口对同一份磁盘状态给出同一组候选路径。
+    ["verify-doctor-config-paths", ['node', '--import', 'tsx/esm', 'scripts/verify-doctor-config-paths.ts']],
 // 剪贴板回归：text/uri-list 严格 URL 解析（远程 authority 拒绝、
 // query/fragment 剥离、畸形转义保留）、image/text MIME 挑选、插入格式化；
 // stub PATH 假 wl-paste/xclip 集成——CJK 跨 chunk、gnome verb 行、

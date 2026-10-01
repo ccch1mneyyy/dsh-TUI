@@ -275,15 +275,32 @@ const cleanManifest = {
     `✗ pnpm: 未找到——安装/升级需要它：  npm install -g pnpm`,
     `✗ profile: 未安装——运行一次 \`dsh-tui\` 即可自举  (${join(emptyHome, 'profiles', 'dsh-tui')})`,
     `✗ DEEPSEEK_API_KEY: 未设置——环境变量与 DSH 凭据库中都没有 DEEPSEEK_API_KEY`,
-    `✗ config: ${join(fakeUserHome, '.dsh-tui', 'cordis.yml')}  缺失`,
+    // 裸组合时代的根配置 ~/.dsh-tui/cordis.yml 不再恒报 ✗：profile 安装不使用
+    // 它，也没有任何代码读它，缺席是常态（只有它存在时才列出）。
     `✗ config: ${join(emptyHome, 'profiles', 'dsh-tui', 'cordis.patch.yml')}  缺失`,
   ]
   const actual = r.stdout.split('\n').filter(l => l !== '')
   check(
-    'doctor 输出逐行等于期望值（提取前 golden，之后任何任务不得漂移）',
+    'doctor 输出逐行等于期望值（空 profile 场景：legacy 根配置不再出现）',
     r.status === 1 && actual.length === expected.length && expected.every((l, i) => l === actual[i]),
     `lines=${actual.length}`,
   )
+}
+{
+  // 用户确实保留了 legacy 根配置时仍要可见——从「恒报 ✗ 的噪音」变成
+  // 「存在才出现的 ✓」，线索不丢。
+  const legacyDir = join(fakeUserHome, '.dsh-tui')
+  const legacyFile = join(legacyDir, 'cordis.yml')
+  mkdirSync(legacyDir, { recursive: true })
+  writeFileSync(legacyFile, '[]')
+  const lines = run(['doctor']).stdout.split('\n').filter(l => l !== '')
+  check('legacy 根配置存在时以 ✓ 列出', lines.includes(`✓ config: ${legacyFile}`), `${lines.length} lines`)
+  check(
+    'config 行只剩 legacy ✓ 与 profile 补丁两条',
+    lines.filter(l => l.includes('config:')).length === 2,
+    lines.filter(l => l.includes('config:')).join(' | '),
+  )
+  rmSync(legacyDir, { recursive: true, force: true })
 }
 
 // --- fallback 触发矩阵（非 TTY：spawnSync 默认管道，stdin 非 TTY）--------------
