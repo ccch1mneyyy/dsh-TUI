@@ -210,8 +210,8 @@ const GROUPS = {
 // （scrollToBottom 补画完成后的锚定终态），不再落屏外。
     ["repro-resume-position", ['node', '--import', 'tsx/esm', 'scripts/repro-resume-position.tsx']],
 // 全屏转录键盘翻页回归：PgUp/PgDn 一次一页、到底按 at-bottom 契约重粘；
-// help 浮层让位、问询面板不让位（面板在转录下方且不消费这对键）、inline
-// 模式不接管（历史在终端原生 scrollback）、窄终端行为一致。
+// help 与展开问卷接管分页，折叠问卷交还转录，滚轮仍按位置路由；inline
+// 转录不接管（历史在终端原生 scrollback）、窄终端行为一致。
     ["verify-transcript-paging", ['node', 'scripts/verify-transcript-paging.mjs']],
 // zellij 兼容回归（DECSTBM 硬件滚动撤回）：zellij 的 CSI T 只在光标位于
 // 滚动区内时移动行，而渲染器把光标停在整屏最后一行（每个 ScrollBox 之下），
