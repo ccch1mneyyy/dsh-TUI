@@ -1532,27 +1532,52 @@ for (const cols of [120, 100, 72, 60, 48]) {
   s2.close()
 }
 
-// ── O. 第七版：落地页浮层无底色（透明宿主）──────────────────────────────
+// ── O. 第七版：落地页浮层 = 干净镂空（遮挡不叠加、无底色）──────────────
 {
-  // 差分判据：不开浮层 vs 开高浮层（探针行 + 6 行空白，盖住大字若干行），
-  // 含 █ 的行数必须不变——透明宿主不擦任何背景格；旧的 opaque/occlusion
-  // 姿态会把浮层矩形内的背景格刷成空白（真终端里就是那块 toolCardBackground
-  // 白底），行数应下跌。
+  // 形态（用户实测两轮定的）：浮层矩形内**每一格都被空格占位**——宿主屏的
+  // 字形（大字/立绘字符画）不得残留（防重影）；但**不发背景色 SGR**（无白底；
+  // Kitty 立绘图像仍从终端默认背景透出）。判据用高探针（探针行 + 6 行空白）：
   const plain = await openLaunchpad([])
   await settled(() => plain.screen().includes('██▀▀▄▄ ██▀▀▀▀'))
-  const baseline = viewportLines(plain.term).filter(l => l.includes('█')).length
+  const baseline = viewportLines(plain.term)
+  const baselineArtRows = baseline.filter(l => l.includes('█')).length
   plain.close()
   const withOverlay = await openLaunchpad([], { overlayPanelTall: true })
   await settled(() => withOverlay.screen().includes('PICKER-PROBE'))
-  const withOverlayLines = viewportLines(withOverlay.term)
-  const after = withOverlayLines.filter(l => l.includes('█')).length
-  check('O1 浮层盖在大字上不擦背景（透明宿主：含 █ 的行数与无浮层时一致）',
-    baseline > 0 && after === baseline,
-    `baseline=${baseline} withOverlay=${after}`)
-  check('O2 探针面板真的在屏上（盖在输入框上方）',
-    withOverlayLines.findIndex(l => l.includes('PICKER-PROBE')) >= 0
-      && withOverlayLines.findIndex(l => l.includes('PICKER-PROBE')) < withOverlayLines.findIndex(l => l.includes('╭')),
-    '')
+  const lines = viewportLines(withOverlay.term)
+  const probeRow = lines.findIndex(l => l.includes('PICKER-PROBE'))
+  const cardRow = lines.findIndex(l => l.includes('╭'))
+  // 探针浮层 = probeRow..cardRow-1（锚在卡片顶边向上展开、紧贴）。
+  const overlayRows: number[] = []
+  for (let r = probeRow; r >= 0 && r < cardRow; r++) overlayRows.push(r)
+  const occluded = overlayRows.filter(r => lines[r]!.includes('PICKER-PROBE') === false)
+  check('O1 遮挡不变量：浮层矩形内没有启动页的字形（空白行不含 █/▀/▄，防重影）',
+    probeRow >= 0 && cardRow > probeRow && occluded.length > 0
+      && occluded.every(r => !lines[r]!.includes('█') && !lines[r]!.includes('▀') && !lines[r]!.includes('▄')),
+    `probe=${probeRow} card=${cardRow} blankRows=${JSON.stringify(occluded.map(r => lines[r]!.trim()))}`)
+  check('O1b 探针面板真的在屏上（盖在输入框上方），且大字在浮层之外原样在',
+    probeRow >= 0 && probeRow < cardRow && lines.filter(l => l.includes('█')).length < baselineArtRows,
+    `artRows=${lines.filter(l => l.includes('█')).length}/${baselineArtRows}`)
+  {
+    // 无底色不变量：浮层区域内的格子背景是终端默认（无背景色块）。xterm 的
+    // BufferCell.isBgDefault() 是判据；不透明旧姿态会带 toolCardBackground。
+    const row = occluded[0] ?? -1
+    const line = row >= 0 ? withOverlay.term.buffer.active.getLine(row) : undefined
+    let bgDefault = false
+    let checked = 0
+    if (line !== undefined) {
+      for (let col = 0; col < COLS; col++) {
+        const cell = line.getCell(col)
+        if (cell === undefined) continue
+        checked += 1
+        if (cell.isBgDefault()) bgDefault = true
+        else { bgDefault = false; break }
+      }
+    }
+    check('O2 无底色不变量：浮层空白行的格子背景全是终端默认（没有色块）',
+      row >= 0 && checked > 0 && bgDefault,
+      `row=${row} checked=${checked}`)
+  }
   withOverlay.close()
 }
 

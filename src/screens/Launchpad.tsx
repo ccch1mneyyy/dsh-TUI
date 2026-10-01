@@ -818,8 +818,9 @@ export function Launchpad({
           {/* 选择器浮层（第五版）：Chat 传进来的既有 picker overlay 盖在落地页
               之上——锚在输入框卡片顶边向上展开（与聊天页「picker 紧贴输入框」
               同一姿态），零布局高度、不推动这一屏的版面。第七版：transparent——
-              落地页这一侧的浮层不铺底色（occlusion/off 填充都关），背景透出
-              立绘与大字；聊天页的同一批选择器不受影响（那边不传 transparent）。 */}
+              落地页这一侧的浮层是**干净的镂空**（遮挡不叠加）：矩形内空格占位
+              遮掉宿主字形、不发背景色（无白底），Kitty 立绘图像仍从默认背景
+              透出；聊天页的同一批选择器不受影响（那边不传 transparent）。 */}
           {overlayPanel !== undefined && (
             <OverlayAbove maxHeight={Math.max(rows - 8, 1)} transparent>
               {/* BUG 3：浮层内部的点击（选行/拖滑杆）不算“点空白”——拦住冒泡，

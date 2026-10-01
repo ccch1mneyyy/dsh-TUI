@@ -641,6 +641,8 @@ const WIZARD_MARK = '第 1 / 4 步'
   const chat = await mountChat({ launchpadOnBoot: true })
   check('Q0 Q1 夹具挂起来了（落地页上屏）', await settled(() => chat.screen().includes('说点什么')),
     chat.screen().slice(0, 200))
+  // 第七版镂空浮层的恢复契约：关掉浮层后，启动页原样回来（大字行逐字节一致）。
+  const heroBefore = chat.screen().split('\n').filter(l => l.includes('█'))
   await chat.type('/model')
   await settled(() => chat.screen().includes('model'))
   await chat.send('\r') // 面板选中 /model → runCommand（不是 submit）
@@ -658,6 +660,17 @@ const WIZARD_MARK = '第 1 / 4 步'
     await settled(() => chat.screen().includes('⌘') && chat.screen().includes('/model')
       && !chat.screen().includes('deepseek-reasoner') && !chat.screen().includes('最近使用')),
     chat.screen().slice(0, 240))
+  {
+    const heroAfter = chat.screen().split('\n').filter(l => l.includes('█'))
+    // 行尾的重绘空白（ink 只写有变化的格子，被浮层擦过的尾格补成空格）不算
+    // 内容差异——判「内容逐字节一致」：trimEnd 后完全相等、行数不变。
+    const heroBeforeT = heroBefore.map(l => l.replace(/\s+$/u, ''))
+    const heroAfterT = heroAfter.map(l => l.replace(/\s+$/u, ''))
+    const diffIndex = heroAfterT.findIndex((l, i) => l !== heroBeforeT[i])
+    check('Q1c 关掉浮层后启动页原样恢复（大字行内容逐字节一致，无残留字形/空缺）',
+      heroBefore.length > 0 && heroAfter.length === heroBefore.length && diffIndex === -1,
+      `firstDiff@${diffIndex}: ${JSON.stringify(heroBeforeT[diffIndex])} -> ${JSON.stringify(heroAfterT[diffIndex])}`)
+  }
   await chat.unmount()
 }
 {
