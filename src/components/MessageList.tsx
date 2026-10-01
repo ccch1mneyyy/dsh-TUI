@@ -274,6 +274,10 @@ function signatureParts(
       const group = row.jobGroup
       signatureScratch.push(
         row.job?.status ?? '',
+        // The label drives the card's height: it wraps inside its column and
+        // the rail is painted per line, so a label that lands later (the
+        // kernel fills it in after launch) must invalidate the cached height.
+        row.job?.label?.length ?? 0,
         row.job?.outputLines.length ?? 0,
         row.job?.detail?.length ?? 0,
         row.job?.progress?.length ?? 0,
