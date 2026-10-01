@@ -13,7 +13,8 @@
 
 import React from 'react'
 import { t } from '../../i18n.js'
-import { Box, Text, useInput } from '../../ui.js'
+import { Box, Text, ScrollBox, useInput } from '../../ui.js'
+import { INTERACTION_PANEL_PADDING, useInteractionViewport } from '../../hooks/useInteractionViewport.js'
 import { isPlainReturnInput } from '../../utils/modifiers.js'
 import { Divider } from '../design-system/Divider.js'
 import { POINTER } from '../../terminal-utils/figures.js'
@@ -25,28 +26,65 @@ export type ApprovalPanelProps = {
   /** True when the asking agent is NOT the attached session — a background
    *  (agent view) session's ask, answered from the same single panel. */
   readonly background?: boolean
+  /** Available rows, including panel spacing; hosts reserve their chrome. */
+  readonly maxHeight?: number
+  /** Restore the selection when the host moves a pending panel. */
+  readonly initialFocusIndex?: number
+  readonly onFocusChange?: (index: number) => void
   readonly onDecide: (outcome: 'allowed-once' | 'rejected') => void
 }
 
 const OUTCOMES = ['allowed-once', 'rejected'] as const
 
-export function ApprovalPanel({ approval, background = false, onDecide }: ApprovalPanelProps): React.ReactNode {
-  const [focusIndex, setFocusIndex] = React.useState(0)
+export function ApprovalPanel({ approval, background = false, maxHeight, initialFocusIndex = 0, onFocusChange, onDecide }: ApprovalPanelProps): React.ReactNode {
+  const [focusIndex, setFocusIndex] = React.useState(initialFocusIndex === 1 ? 1 : 0)
+  const focusRef = React.useRef(focusIndex)
+  const moveFocus = (delta: number): void => {
+    const index = (focusRef.current + delta + OUTCOMES.length) % OUTCOMES.length
+    focusRef.current = index
+    setFocusIndex(index)
+    onFocusChange?.(index)
+  }
   // Hover highlight per decision row (mouse affordance; the click handler
   // below mirrors the keyboard Enter on the focused row).
   const [hoverIndex, setHoverIndex] = React.useState(-1)
+  const { panelRef, scrollRef, contentWidth, budget, lineCount, scrollInput } = useInteractionViewport(maxHeight)
+  const optionLabels = [t('approval-yes'), t('approval-no')]
+  const backgroundLabel = background
+    ? t('approval-background-agent', { id: approval.agentId.slice(0, 8) })
+    : undefined
+  const externalLabel = approval.external === true ? `[external] ${t('approval-external-hint')}` : undefined
+  const detailRows = (backgroundLabel === undefined ? 0 : lineCount(backgroundLabel))
+    + (externalLabel === undefined ? 0 : lineCount(externalLabel))
+    + (approval.command === undefined ? 0 : lineCount(approval.command, Math.max(1, contentWidth - 4)))
+    + (approval.reason === undefined ? 0 : lineCount(approval.reason))
+  const controlRows = 1 /* divider */ + lineCount(t('approval-proceed'))
+    + optionLabels.reduce((sum, label, index) => sum + lineCount(`${index + 1}. ${label}`, Math.max(1, contentWidth - 1)), 0)
+    + lineCount(t('approval-hint'))
+  // Reserve the controls first, as Codex's selection popup does. On short
+  // terminals drop decorative gaps before reducing the readable body.
+  // https://github.com/openai/codex/blob/995138d71ac06b9df5996f049e69dea414ad9764/codex-rs/tui/src/bottom_pane/list_selection_view.rs
+  const gap = budget >= controlRows + 8 ? 1 : 0
+  const bodyBudget = Math.max(1, budget - controlRows - 5 * gap)
+  const scrollable = detailRows > bodyBudget
+  const detailHeight = Math.max(1, Math.min(detailRows,
+    bodyBudget - (scrollable ? lineCount(t('approval-scroll-hint')) : 0)))
 
-  useInput((input, key) => {
+  useInput((input, key, event) => {
+    if (scrollInput(key)) {
+      event.stopImmediatePropagation()
+      return
+    }
     if (key.escape || (key.ctrl && input === 'c')) {
       onDecide('rejected')
       return
     }
     if (key.upArrow) {
-      setFocusIndex(index => (index + OUTCOMES.length - 1) % OUTCOMES.length)
+      moveFocus(-1)
       return
     }
     if (key.downArrow) {
-      setFocusIndex(index => (index + 1) % OUTCOMES.length)
+      moveFocus(1)
       return
     }
     if (input === '1' || input === '2') {
@@ -54,39 +92,32 @@ export function ApprovalPanel({ approval, background = false, onDecide }: Approv
       return
     }
     if (isPlainReturnInput(input, key)) {
-      onDecide(OUTCOMES[focusIndex]!)
+      onDecide(OUTCOMES[focusRef.current]!)
     }
   }, { isActive: true })
 
-  const optionLabels = [t('approval-yes'), t('approval-no')]
-
   return (
-    <Box flexDirection="column" marginTop={1} paddingLeft={2} paddingRight={2} width="100%">
+    <Box ref={panelRef} flexDirection="column" marginTop={gap} paddingX={INTERACTION_PANEL_PADDING} width="100%" flexShrink={0}>
       <Divider color="permission" title={t('approval-waiting', { tool: approval.toolName })} />
-      <Box flexDirection="column" marginTop={1}>
-        {background && (
-          <Text color="warning">
-            {t('approval-background-agent', { id: approval.agentId.slice(0, 8) })}
-          </Text>
-        )}
-        {approval.external === true && (
-          <Text color="warning" wrap="wrap">[external] {t('approval-external-hint')}</Text>
-        )}
-        {approval.command !== undefined && (
-          <Box flexDirection="column" paddingX={2}>
-            <Text dimColor wrap="wrap">
-              {approval.command}
-            </Text>
-          </Box>
-        )}
-        {approval.reason !== undefined && (
-          <Text dimColor wrap="wrap">
-            {approval.reason}
-          </Text>
+      <Box flexDirection="column" marginTop={gap} flexShrink={0}>
+        {detailRows > 0 && (
+          <>
+            {scrollable && <Text dimColor wrap="wrap">{t('approval-scroll-hint')}</Text>}
+            <ScrollBox ref={scrollRef} flexDirection="column" height={detailHeight} flexShrink={0}>
+              {backgroundLabel !== undefined && <Text color="warning" wrap="wrap">{backgroundLabel}</Text>}
+              {externalLabel !== undefined && <Text color="warning" wrap="wrap">{externalLabel}</Text>}
+              {approval.command !== undefined && (
+                <Box flexDirection="column" paddingX={2} flexShrink={0}>
+                  <Text dimColor wrap="wrap">{approval.command}</Text>
+                </Box>
+              )}
+              {approval.reason !== undefined && <Text dimColor wrap="wrap">{approval.reason}</Text>}
+            </ScrollBox>
+          </>
         )}
         <Text dimColor>{t('approval-proceed')}</Text>
       </Box>
-      <Box flexDirection="column" marginTop={1}>
+      <Box flexDirection="column" marginTop={gap} flexShrink={0}>
         {optionLabels.map((label, index) => {
           const focused = index === focusIndex
           const hovered = index === hoverIndex
@@ -94,7 +125,8 @@ export function ApprovalPanel({ approval, background = false, onDecide }: Approv
             <Box
               key={label}
               flexDirection="row"
-              marginTop={focused ? 1 : 0}
+              marginTop={focused ? gap : 0}
+              flexShrink={0}
               onClick={() => onDecide(OUTCOMES[index]!)}
               onMouseEnter={() => setHoverIndex(index)}
               onMouseLeave={() => setHoverIndex(current => (current === index ? -1 : current))}
@@ -112,7 +144,7 @@ export function ApprovalPanel({ approval, background = false, onDecide }: Approv
           )
         })}
       </Box>
-      <Box marginTop={1}>
+      <Box marginTop={gap} flexShrink={0}>
         <Text dimColor>{t('approval-hint')}</Text>
       </Box>
     </Box>

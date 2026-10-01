@@ -513,6 +513,7 @@ When the model invokes the questionnaire tool, its panel temporarily owns the ke
 | --- | --- |
 | `Up/Down` | Move through options |
 | `Space` | Toggle a multi-select option |
+| `PgUp` / `PgDn` | Scroll the expanded question details and options without changing the selection |
 | `Tab` | Switch to a custom text answer |
 | `Enter` | Submit the current question |
 | `Left` / `Right` | Switch questions and keep the current draft (does not submit). On the free-text row, arrows still move the caret; they switch questions only when the caret is already at the start or end |
@@ -520,6 +521,8 @@ When the model invokes the questionnaire tool, its panel temporarily owns the ke
 | `Esc` (from question 1) | Cancel the whole batch; the model receives `ASK_CANCELLED` |
 | `Ctrl+C` | Cancel the whole batch from any question; the model receives `ASK_CANCELLED` (a harness-side abort still reports `ASK_ABORTED`) |
 | `Ctrl+K` | Fold/unfold the ask_user_question questionnaire panel (the ask keeps waiting; while folded, `Esc`/`Ctrl+C` expand first) |
+
+The custom answer input stays visible while question details and options scroll above it; the mouse wheel works over the panel when mouse tracking is enabled. Long answers scroll horizontally around the caret. When status and task rows leave too little room, the questionnaire temporarily takes the screen and preserves the answer and selection across resizing.
 
 The last row is a free-form input line:
 
@@ -559,11 +562,14 @@ owns the keyboard (when a questionnaire is also pending, approval takes priority
 | Key | Behavior |
 | --- | --- |
 | `Up/Down` | Move through options |
+| `PgUp` / `PgDn` | Scroll the command and reason without changing the decision |
 | `1` / `2` | Allow (this time only) / deny |
 | `Enter` | Submit the focused item |
 | `Esc` / `Ctrl+C` | Deny (fail closed) |
 
 The protocol offers only "allow once / deny" — there is **no "always allow"**.
+
+Allow, deny and keyboard hints stay visible while long commands and reasons scroll in a separate area; use the mouse wheel over the panel when mouse tracking is enabled. On short terminals or over another screen, approval temporarily takes the screen and restores the previous view after the decision.
 
 ## Slash commands
 

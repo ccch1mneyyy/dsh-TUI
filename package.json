@@ -239,7 +239,9 @@
     "verify:channel-trace-read": "node --import tsx/esm scripts/verify-channel-trace-read.ts",
     "verify:activity-store": "node --import tsx/esm scripts/verify-activity-store.ts",
     "verify:activity-store-render": "node --import tsx/esm scripts/verify-activity-store-render.tsx",
-    "verify:activity-ownership": "node --import tsx/esm scripts/verify-activity-ownership.ts"
+    "verify:activity-ownership": "node --import tsx/esm scripts/verify-activity-ownership.ts",
+    "verify:question-scroll": "node --import tsx/esm scripts/verify-question-scroll.tsx",
+    "verify:approval-scroll": "node --import tsx/esm scripts/verify-approval-scroll.tsx"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.1",

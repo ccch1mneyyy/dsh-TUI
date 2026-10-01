@@ -22,10 +22,9 @@
  *                     paging must not be stolen (mirrors the wheel no-op).
  *  - help open      → Chat yields these keys to PromptInput's help viewport,
  *                     so the transcript behind must not move.
- *  - question panel → does NOT yield: the panel mounts below the transcript
- *                     (replacing the prompt, never covering it) and binds no
- *                     paging keys, so the wheel-parity contract holds — the
- *                     transcript pages while a decision is pending.
+ *  - question panel → expanded questions own paging for their bounded body;
+ *                     the transcript stays still, but a wheel over it still
+ *                     scrolls it. Folding returns paging to the transcript.
  *  - narrow 70x24   → margins and the gutter shrink the transcript width,
  *                     paging behavior is unchanged.
  *
@@ -39,7 +38,7 @@ import { render, ThemeProvider, AlternateScreen } from '../lib/types/ui.js'
 import { PageMargin } from '../lib/types/components/PageMargin.js'
 import { Chat } from '../lib/types/screens/Chat.js'
 import { setLang } from '../lib/types/i18n.js'
-import { screenHas, settled, settle, sleep } from './lib/term-test.mjs'
+import { screenHas, settled, settle, sleep, findText, viewportLines } from './lib/term-test.mjs'
 
 let failed = 0
 function check(name, ok, extra = '') {
@@ -146,6 +145,7 @@ function makeChannel() {
  *  open the AskUserQuestionPanel through Chat's actual useSyncExternalStore. */
 function makeQuestionStore() {
   let snapshot = null
+  let questionSeq = 0
   const listeners = new Set()
   return {
     subscribe: l => {
@@ -154,10 +154,11 @@ function makeQuestionStore() {
     },
     getSnapshot: () => snapshot,
     answerCurrent() {},
-    arm() {
+    arm(detail) {
+      const key = `q${++questionSeq}`
       snapshot = {
-        key: 'q1',
-        question: { id: 'q1', question: 'PICK-ONE-ANCHOR', options: [{ label: 'A' }, { label: 'B' }] },
+        key,
+        question: { id: key, question: 'PICK-ONE-ANCHOR', detail, options: [{ label: 'A' }, { label: 'B' }] },
         position: 1,
         total: 1,
         answered: 0,
@@ -276,28 +277,62 @@ if (helpShown) {
   await settle(() => !screenHas(full.term, 'PgUp/PgDn page'))
 }
 
-// The question panel must NOT take these keys away: it mounts BELOW the
-// transcript (replacing the prompt, never covering it), and the wheel branch
-// scrolls the still-visible transcript in exactly this state. Lock that
-// wheel parity in: with a question pending, PgUp pages the transcript and
-// the panel stays exactly where it is.
+// Expanded questions own paging, even when the body is short enough to fit.
+// Pointer coordinates still route a wheel over the transcript to that box.
 full.questionStore.arm()
 const panelShown = await settled(() => screenHas(full.term, 'PICK-ONE-ANCHOR'), { timeoutMs: 3000 })
 check('fullscreen: question panel opens through the store', panelShown)
 if (panelShown) {
-  const panelVisible = screenHas(full.term, 'PICK-ONE-ANCHOR')
+  const transcriptRows = () => viewportLines(full.term).filter(line => /row\d{3}/.test(line)).join('\n')
+  const beforePaging = transcriptRows()
+  check('fullscreen: expanded question leaves transcript rows visible', beforePaging !== '')
+  for (const key of [PGUP, PGDN]) {
+    full.stdin.write(key)
+    // 固定窗:探针 观察未滚动的不变量，轮询既成立的条件会立即返回。
+    await sleep(400)
+    check(`fullscreen: expanded question owns ${key === PGUP ? 'PgUp' : 'PgDn'}`, transcriptRows() === beforePaging)
+  }
+  const point = findText(full.term, marker(LAST))
+  check('fullscreen: visible transcript provides a wheel target', point !== null)
+  if (point !== null) {
+    full.stdin.write(`\x1b[<64;${point.col + 1};${point.row + 1}M`.repeat(4))
+    check('fullscreen: wheel over transcript still scrolls with question expanded',
+      await settled(() => !screenHas(full.term, marker(LAST))))
+    check('fullscreen: transcript wheel leaves the question visible', screenHas(full.term, 'PICK-ONE-ANCHOR'))
+    full.stdin.write(`\x1b[<65;${point.col + 1};${point.row + 1}M`.repeat(8))
+    check('fullscreen: transcript wheel returns to the tail with question expanded',
+      await settled(() => screenHas(full.term, marker(LAST))))
+  }
+
+  full.stdin.write('\x0b') // Default Ctrl+K folds the question without answering.
+  check('fullscreen: question folds without closing the store',
+    await settled(() => !screenHas(full.term, 'PgUp/PgDn page') && screenHas(full.term, 'PICK-ONE-ANCHOR')))
   full.stdin.write(PGUP)
-  const pagedWithPanel = await settled(() => !screenHas(full.term, marker(LAST)))
-  check('fullscreen: question panel open — PgUp still pages the transcript', pagedWithPanel)
-  check('fullscreen: question panel open — the panel is undisturbed', screenHas(full.term, 'PICK-ONE-ANCHOR') === panelVisible)
+  check('fullscreen: folded question returns PgUp to the transcript',
+    await settled(() => !screenHas(full.term, marker(LAST))))
+  const backDown = await pageUntil(full.term, full.stdin, PGDN, () => screenHas(full.term, marker(LAST)), 3)
+  check('fullscreen: folded question returns PgDn to the transcript', backDown > 0 && screenHas(full.term, marker(LAST)))
 }
-// Return to the tail before closing: the panel scenario left the view one
-// page up, and the final assertions read the bottom of the transcript.
-const backDown = await pageUntil(full.term, full.stdin, PGDN, () => screenHas(full.term, marker(LAST)), 3)
-check('fullscreen: paged home before closing the panel', backDown > 0 || screenHas(full.term, marker(LAST)))
 full.questionStore.disarm()
 const panelClosed = await settled(() => !screenHas(full.term, 'PICK-ONE-ANCHOR'), { timeoutMs: 3000 })
 check('fullscreen: question panel closes cleanly', panelClosed)
+
+// An overflowing question must page its body in both directions. Folding
+// afterwards exposes the transcript and proves those keys did not page it.
+const detailHead = 'QUESTION-PAGE-HEAD'
+const detailTail = 'QUESTION-PAGE-TAIL'
+full.questionStore.arm([detailHead, ...Array.from({ length: 40 }, (_, i) => `Detail ${i}`), detailTail].join('\n'))
+check('fullscreen: long question initially shows its first detail',
+  await settled(() => screenHas(full.term, detailHead) && !screenHas(full.term, detailTail)))
+const detailDown = await pageUntil(full.term, full.stdin, PGDN, () => screenHas(full.term, detailTail))
+check('fullscreen: expanded question PgDn reaches its last detail', detailDown > 0 && screenHas(full.term, detailTail))
+const detailUp = await pageUntil(full.term, full.stdin, PGUP, () => screenHas(full.term, detailHead))
+check('fullscreen: expanded question PgUp returns to its first detail', detailUp > 0 && screenHas(full.term, detailHead))
+full.stdin.write('\x0b')
+check('fullscreen: question body paging preserves the transcript tail',
+  await settled(() => !screenHas(full.term, 'PgUp/PgDn page') && screenHas(full.term, marker(60))))
+full.questionStore.disarm()
+await settle(() => !screenHas(full.term, 'PICK-ONE-ANCHOR'))
 await full.instance.unmount()
 
 // ---- inline: the terminal owns these keys ----

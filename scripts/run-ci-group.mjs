@@ -210,8 +210,8 @@ const GROUPS = {
 // （scrollToBottom 补画完成后的锚定终态），不再落屏外。
     ["repro-resume-position", ['node', '--import', 'tsx/esm', 'scripts/repro-resume-position.tsx']],
 // 全屏转录键盘翻页回归：PgUp/PgDn 一次一页、到底按 at-bottom 契约重粘；
-// help 浮层让位、问询面板不让位（面板在转录下方且不消费这对键）、inline
-// 模式不接管（历史在终端原生 scrollback）、窄终端行为一致。
+// help 与展开问卷接管分页，折叠问卷交还转录，滚轮仍按位置路由；inline
+// 转录不接管（历史在终端原生 scrollback）、窄终端行为一致。
     ["verify-transcript-paging", ['node', 'scripts/verify-transcript-paging.mjs']],
 // zellij 兼容回归（DECSTBM 硬件滚动撤回）：zellij 的 CSI T 只在光标位于
 // 滚动区内时移动行，而渲染器把光标停在整屏最后一行（每个 ScrollBox 之下），
@@ -822,6 +822,10 @@ const GROUPS = {
 // 长 plan-review 正文回归（issue #413）：24 行终端里 40 段 plan 不得把
 // Approve/反馈顶出屏外；滚轮必须滚 plan body（直接面板 + 挂进 Chat）。
     ["verify-plan-review-scroll", ['node', '--import', 'tsx/esm', 'scripts/verify-plan-review-scroll.tsx']],
+// 审批正文的有界滚动：长命令/说明、内联/全屏、窄窗口、resize 和中断设置屏。
+    ['verify-approval-scroll', ['node', '--import', 'tsx/esm', 'scripts/verify-approval-scroll.tsx']],
+// 提问正文/选项滚动与固定自定义输入：窄窗口、待办、长回答、缩放与键盘提交。
+    ['verify-question-scroll', ['node', '--import', 'tsx/esm', 'scripts/verify-question-scroll.tsx']],
 // 插件场景渲染崩溃边界：Thrower 场景必须被 PluginSceneBoundary 接住——
 // onError 精确一次、崩溃场景停止绘制、进程存活；健康场景不受影响。
     ["verify-plugin-scene-boundary", ['node', '--import', 'tsx/esm', 'scripts/verify-plugin-scene-boundary.tsx']],
