@@ -8,7 +8,8 @@
  *      工作目录/启动提示/欢迎语（它们各有更低频的位置：参数进卡片、目录与
  *      版本进双角铭牌）。居中主体 = 头部 + **复合卡片**：圆角边框（只有一层，
  *      不框套框）里只有输入行（SearchBox borderless），参数条移出框外紧贴框下
- *      ——第四版只画值不画字段名：`zhipu/glm-5.3  ·  Max  ·  Execute  ·  default`
+ *      ——第四版只画值不画字段名（第六版模式段 = preset 显示名）：
+ *      `glm-5.3  ·  Max  ·  Standard  ·  default`
  *      （任一段拿不到就省掉，全空整条不画）。框下再一行**纯文字动作入口**
  *      （ActionChip：无键帽/键位前缀/指针，悬停或焦点 = 整块矩形高亮，恒 1 行高，
  *      整行右对齐输入框右缘）；居中 Tips 行（● 前置圆点，首启 warning 色 +
@@ -80,8 +81,9 @@ const ROWS = 40
 const CWD = '/tmp/verify-launchpad'
 const BRANCH = 'main'
 const VERSION = '9.9.9'
-/** 第五版参数行：只画值、模型段**只显示模型名**（无 provider/ 前缀）。 */
-const PARAM_LINE = 'glm-5.3  ·  Max  ·  Execute  ·  default'
+/** 第五版参数行：只画值、模型段**只显示模型名**（无 provider/ 前缀）。
+ * 第六版设计 1：模式段换成 agent preset 的显示名（Standard/PTC/极简…）。 */
+const PARAM_LINE = 'glm-5.3  ·  Max  ·  Standard  ·  default'
 /** 夹具固定 bold 字面：大字 needle 与阶梯阈值都不随当天轮换的字体漂。 */
 const FONT = splashFontById('bold')
 
@@ -130,6 +132,12 @@ interface OpenOptions {
   terminalFocused?: boolean
   /** 传一个探针面板给 overlayPanel（第五版：选择器盖在落地页之上）。 */
   overlayPanel?: boolean
+  /** 命令补全面板数据源（第六版 BUG 1）：给了才会弹面板。 */
+  commands?: readonly { name: string; description: string; commandLine?: string }[]
+  /** 命令补全面板数据源（第六版 BUG 1）：给了才会弹面板。 */
+  commands?: readonly { name: string; description: string; commandLine?: string }[]
+  /** 命令补全面板数据源（第六版 BUG 1）：给了才会弹面板。 */
+  commands?: readonly { name: string; description: string; commandLine?: string }[]
   /** 模拟"选择器开着"（第五版：本屏键盘整块让位）。 */
   inputPaused?: boolean
 }
@@ -166,8 +174,10 @@ async function openLaunchpad(events: Ev[], options: OpenOptions = {}) {
         onParamPick={(segment) => { events.push({ type: 'param', value: segment }) }}
         model={params ? 'glm-5.3' : undefined}
         effort={params ? 'max' : undefined}
-        mode={params ? 'act' : undefined}
+        preset={params ? 'Standard' : undefined}
         permission={params ? 'default' : undefined}
+        commands={options.commands}
+        onCommandPick={(commandLine) => { events.push({ type: 'command', value: commandLine }) }}
         cwd={corners ? CWD : undefined}
         branch={corners ? BRANCH : undefined}
         tuiVersion={corners ? VERSION : undefined}
@@ -336,7 +346,7 @@ check('A2 模型串只出现在参数条那一行（头部不画模型行）',
       && !hintRow.includes('?') && !hintRow.includes('▸') && !hintRow.includes('❯'),
     hintRow.trim().slice(0, 80))
   check('A4c 四个入口在同一行、行高恒 1（每个标签整屏只出现在这一行）',
-    rowHasAll(hintRow, [CONTINUE_LABEL, '历史会话', '工作区', '模型'])
+    rowHasAll(hintRow, [CONTINUE_LABEL, '历史会话', '工作区', '环境体检'])
       && lines.filter(l => l.includes(CONTINUE_LABEL)).length === 1
       && lines.filter(l => l.includes('历史会话')).length === 1
       && lines.filter(l => l.includes('工作区')).length === 1,
@@ -369,7 +379,7 @@ check('A6c 输入卡片只有一层圆角边框（╭ ╰ 各恰好一个，不�
   check('A6d 参数行移出输入框：框里只有输入行，参数行紧贴 ╰ 下一行',
     top < input && input < bottom && param === bottom + 1,
     [`╭=${top}`, `❯=${input}`, `param=${param}`, `╰=${bottom}`].join(' '))
-  check('A6e 参数行文案 = 模型 · 思考深度 · 模式 · 权限（四段，模型名带浅紫）',
+  check('A6e 参数行文案 = 模型 · 思考深度 · 模式(preset) · 权限（四段，模型名带浅紫）',
     param >= 0 && base.screen().includes(PARAM_LINE), PARAM_LINE)
   check('A6e2 模型段只显示模型名（无 provider/ 前缀，参数行没有斜杠）',
     param >= 0 && !(viewportLines(base.term)[param] ?? '').includes('/') && !base.screen().includes('zhipu'),
@@ -622,15 +632,21 @@ base.close()
   s.close()
 }
 {
-  // hover（mode 1003 motion，无按键）→ HintChip 的 onMouseEnter → onFocusChange
+  // hover（mode 1003 motion，无按键）→ ActionChip 的 onMouseEnter → onFocusChange；
+  // 移出（BUG 2：移开必须复原）→ onMouseLeave 把悬停带进的焦点交还输入框。
   const ev: Ev[] = []
   const s = await openLaunchpad(ev)
-  await settled(() => findCell(s.term, '模型') !== null)
-  const target = findCell(s.term, '模型')!
+  await settled(() => findCell(s.term, '环境体检') !== null)
+  const target = findCell(s.term, '环境体检')!
   const beforeHover = ev.length
   s.input.write(`\u001b[<35;${target.col};${target.row}M`)
-  check('C7b 鼠标悬停入口即移焦点（mode 1003，无需点击；模型 = 第 4 条）',
+  check('C7b 鼠标悬停入口即移焦点（mode 1003，无需点击；环境体检 = 第 4 条）',
     await settled(() => last(ev, 'focus')?.value === 3), JSON.stringify(ev.slice(beforeHover)))
+  // 移到入口行之外的空白格（大字区）：onMouseLeave 必须把焦点交还输入框。
+  const blank = findCell(s.term, '██▀▀▄▄')!
+  s.input.write(`\u001b[<35;${blank.col};${blank.row}M`)
+  check('C7c 鼠标移开后焦点复原（悬停带进的焦点交还输入框，BUG 2 回归）',
+    await settled(() => last(ev, 'focus')?.value === -1), JSON.stringify(ev.slice(beforeHover)))
   s.close()
 }
 {
@@ -643,10 +659,13 @@ base.close()
   await s.send('\t')
   check('C9 再 Tab 前进一段（思考深度，focus=-3）', last(ev, 'focus')?.value === -3,
     JSON.stringify(ev.slice(beforeBlank)))
-  // 焦点环 = 输入框 + 参数四段 + 画出来的入口（120 列四条全画）。从 -3 再
-  // Tab 6 次：-4→-5→0→1→2→3→-1，绕回输入框。
+  // 焦点环 = 输入框 + 参数四段 + 画出来的入口 + Tips 行（第六版设计 2，环尾）。
+  // 从 -3 再 Tab 7 次：-4→-5→0→1→2→3→-6（Tips），第 8 次绕回输入框。
   for (let i = 0; i < 7; i++) await s.send('\t')
-  check('C9b Tab 绕完参数行与四条入口回到输入框（-1）',
+  check('C9b Tab 走到环尾的 Tips 行（focus=-6，可点击目标进了焦点环）',
+    last(ev, 'focus')?.value === -6, JSON.stringify(last(ev, 'focus')))
+  await s.send('\t')
+  check('C9c 再 Tab 绕回输入框（-1）',
     last(ev, 'focus')?.value === -1, JSON.stringify(last(ev, 'focus')))
   s.close()
 }
@@ -657,8 +676,8 @@ base.close()
   await s.send('\r')
   await settled(() => last(ev, 'action') !== undefined)
   const beforeBlank = ev.length
-  // 点 Tips 行（普通 Text，没有自己的 onClick）：事件冒泡到根盒才会走 onBlankClick。
-  await s.click('输入 / 看全部命令')
+  // 点大字区的空白格（Tips 行第六版起可点击轮换、会拦住冒泡，不再算空白）。
+  await s.click('██▀▀▄▄')
   check('C10 空白点击（onBlankClick）把焦点收回输入框',
     last(ev, 'blank') !== undefined, JSON.stringify(ev.slice(beforeBlank)))
   s.close()
@@ -814,12 +833,12 @@ base.close()
 {
   // 表驱动回归：每个状态一行，钉死四个位置放什么、为什么（详见 launchpadActions.ts 的优先级表）。
   const rows: readonly { name: string; state: Record<string, unknown>; ids: readonly string[]; commands: readonly string[]; firstLabelKey?: string }[] = [
-    { name: '首启（引导未完成）', state: { onboardingPending: true, configProblem: false }, ids: ['setup', 'workspace', 'model', 'help'], commands: ['setup', 'workspace', 'model', 'help'], firstLabelKey: 'launchpad-action-setup' },
-    { name: '配置问题（provider 未配）', state: { onboardingPending: false, configProblem: true }, ids: ['setup', 'sessions', 'workspace', 'model'], commands: ['setup', 'home', 'workspace', 'model'], firstLabelKey: 'launchpad-action-setup-provider' },
-    { name: '有上次会话', state: { onboardingPending: false, configProblem: false, lastSessionTitle: '修个登录页' }, ids: ['continue', 'sessions', 'workspace', 'model'], commands: ['continue', 'home', 'workspace', 'model'] },
-    { name: '常态（无上次会话）', state: { onboardingPending: false, configProblem: false }, ids: ['sessions', 'workspace', 'model', 'help'], commands: ['home', 'workspace', 'model', 'help'] },
-    { name: 'Git 项目（有分支）', state: { onboardingPending: false, configProblem: false, lastSessionTitle: 'x', gitBranch: 'main' }, ids: ['continue', 'sessions', 'workspace', 'model'], commands: ['continue', 'home', 'workspace', 'model'] },
-    { name: '刚升级（无数据源）', state: { onboardingPending: false, configProblem: false, lastSessionTitle: 'x', justUpgraded: true }, ids: ['continue', 'sessions', 'workspace', 'model'], commands: ['continue', 'home', 'workspace', 'model'] },
+    { name: '首启（引导未完成）', state: { onboardingPending: true, configProblem: false }, ids: ['setup', 'workspace', 'doctor', 'help'], commands: ['setup', 'workspace', 'doctor', 'help'], firstLabelKey: 'launchpad-action-setup' },
+    { name: '配置问题（provider 未配）', state: { onboardingPending: false, configProblem: true }, ids: ['setup', 'sessions', 'workspace', 'doctor'], commands: ['setup', 'home', 'workspace', 'doctor'], firstLabelKey: 'launchpad-action-setup-provider' },
+    { name: '有上次会话', state: { onboardingPending: false, configProblem: false, lastSessionTitle: '修个登录页' }, ids: ['continue', 'sessions', 'workspace', 'doctor'], commands: ['continue', 'home', 'workspace', 'doctor'] },
+    { name: '常态（无上次会话）', state: { onboardingPending: false, configProblem: false }, ids: ['sessions', 'workspace', 'doctor', 'help'], commands: ['home', 'workspace', 'doctor', 'help'] },
+    { name: 'Git 项目（有分支）', state: { onboardingPending: false, configProblem: false, lastSessionTitle: 'x', gitBranch: 'main' }, ids: ['continue', 'sessions', 'workspace', 'doctor'], commands: ['continue', 'home', 'workspace', 'doctor'] },
+    { name: '刚升级（无数据源）', state: { onboardingPending: false, configProblem: false, lastSessionTitle: 'x', justUpgraded: true }, ids: ['continue', 'sessions', 'workspace', 'doctor'], commands: ['continue', 'home', 'workspace', 'doctor'] },
   ]
   for (const row of rows) {
     const actions = resolveLaunchpadActions(row.state as never)
@@ -894,7 +913,7 @@ for (const cols of [120, 100, 72, 60, 48]) {
   // 半句检测：标签/文案的前半出现在屏上、却找不到完整串 = 被切断。
   // 参数行按**段**判（模型/思考深度/模式/权限）：窄屏下尾部段按宽度省掉是
   // 契约行为（launchpadLayout 的单行预算），整句判据会把合法省段误判成切断。
-  const PARAM_SEGMENTS = ['glm-5.3', 'Max', 'Execute', 'default']
+  const PARAM_SEGMENTS = ['glm-5.3', 'Max', 'Standard', 'default']
   const wholes = [...CHIP_LABELS, ...TIP_TEXTS, ...PARAM_SEGMENTS]
   const cut = wholes.filter(text => {
     const half = text.slice(0, Math.ceil(text.length / 2))
@@ -919,7 +938,7 @@ for (const cols of [120, 100, 72, 60, 48]) {
   const cardLeft = leftGap(cardRow)
   const cardWidth = Math.max(24, Math.min(48 - 4, 72))
   check('G1 入口被裁掉后整行仍右对齐（行尾 = 卡片右缘 ±1，且被裁的不画半句）',
-    hintRow !== '' && !hintRow.includes('模型') && Math.abs(stringWidth(hintRow.replace(/\s+$/u, '')) - (cardLeft + cardWidth)) <= 1,
+    hintRow !== '' && !hintRow.includes('环境体检') && Math.abs(stringWidth(hintRow.replace(/\s+$/u, '')) - (cardLeft + cardWidth)) <= 1,
     `rowEnd=${stringWidth(hintRow.replace(/\s+$/u, ''))} cardRight=${cardLeft + cardWidth} ${hintRow.trim()}`)
   check('G2 裁剪后行高仍恒 1（三个入口同在一行、各只出现一次）',
     rowHasAll(hintRow, [CONTINUE_LABEL, '历史会话', '工作区'])
@@ -987,13 +1006,13 @@ for (const cols of [120, 100, 72, 60, 48]) {
 // ── H. 第五版专项：参数行四段可点 + 选择器盖在落地页之上 ─────────────────
 {
   // 键盘路径（仓库硬规矩：每个可点目标都要有键盘路径）：↓ 走到段、Enter 打开。
-  const cases: [string, number][] = [['model', 1], ['effort', 2], ['mode', 3], ['permission', 4]]
+  const cases: [string, number][] = [['model', 1], ['effort', 2], ['preset', 3], ['permission', 4]]
   for (const [segment, downs] of cases) {
     const ev: Ev[] = []
     const s = await openLaunchpad(ev)
     for (let i = 0; i < downs; i++) await s.send('\u001b[B')
     await s.send('\r')
-    check('H1 Enter 打开 ' + segment + ' 段（键盘路径；环顺序 模型→深度→模式→权限）',
+    check('H1 Enter 打开 ' + segment + ' 段（键盘路径；环顺序 模型→深度→模式(preset)→权限）',
       last(ev, 'param')?.value === segment && last(ev, 'submit') === undefined,
       JSON.stringify(last(ev, 'param')))
     s.close()
@@ -1005,7 +1024,7 @@ for (const cols of [120, 100, 72, 60, 48]) {
   const s = await openLaunchpad(ev)
   await settled(() => findCell(s.term, 'glm-5.3') !== null)
   const picks: string[] = []
-  for (const needle of ['glm-5.3', 'Max', 'Execute', 'default']) {
+  for (const needle of ['glm-5.3', 'Max', 'Standard', 'default']) {
     await s.click(needle)
     picks.push(needle + '→' + String(last(ev, 'param')?.value))
   }
@@ -1074,6 +1093,159 @@ for (const cols of [120, 100, 72, 60, 48]) {
     s.screen().includes('● Tips') && cardTop === titleBottom + 2 && tip === hint + 2
       && s.screen().includes('╭') && s.screen().includes('❯'),
     `titleBottom=${titleBottom} cardTop=${cardTop} hint=${hint} tip=${tip}`)
+  s.close()
+}
+
+// ── K. 第六版 BUG 1：行首 / 弹命令补全面板（与聊天页同源组件/数据） ────────
+{
+  // 输入 / 即上面板：候选来自 commands（Chat 传 channel.commandCompletions）。
+  const ev: Ev[] = []
+  const s = await openLaunchpad(ev, {
+    commands: [
+      { name: 'setup', description: 'Re-run the first-run guide', commandLine: '/setup ' },
+      { name: 'help', description: 'Show shortcuts', commandLine: '/help ' },
+    ],
+  })
+  await s.send('/')
+  check('K1 行首 / 弹出命令补全面板（候选上屏：setup/help 都在）',
+    await settled(() => s.screen().includes('setup') && s.screen().includes('help')),
+    s.screen().slice(0, 160))
+  // 面板选中（Enter）= 执行命令（onCommandPick），不是 submit。
+  await s.send('\r')
+  check('K2 面板开着时 Enter 执行选中命令（onCommandPick，绝不 submit）',
+    last(ev, 'command')?.value === '/setup ' && last(ev, 'submit') === undefined,
+    JSON.stringify(ev.slice(-2)))
+  s.close()
+}
+{
+  // ↓ 移选中、Enter 执行第二条；Tab 与 Enter 同路径。
+  const ev: Ev[] = []
+  const s = await openLaunchpad(ev, {
+    commands: [
+      { name: 'setup', description: 'Re-run the first-run guide', commandLine: '/setup ' },
+      { name: 'help', description: 'Show shortcuts', commandLine: '/help ' },
+    ],
+  })
+  await s.send('/')
+  await s.send('\u001b[B')
+  await s.send('\r')
+  check('K3 ↓ 移到第二条、Enter 执行那一条', last(ev, 'command')?.value === '/help ',
+    JSON.stringify(last(ev, 'command')))
+  s.close()
+  const ev2: Ev[] = []
+  const s2 = await openLaunchpad(ev2, {
+    commands: [{ name: 'setup', description: 'Re-run the first-run guide', commandLine: '/setup ' }],
+  })
+  await s2.send('/')
+  await s2.send('\t')
+  check('K4 Tab 也是执行选中命令（与聊天页补全菜单同键位）',
+    last(ev2, 'command')?.value === '/setup ' && last(ev2, 'submit') === undefined,
+    JSON.stringify(ev2.slice(-2)))
+  s2.close()
+}
+{
+  // Esc 只收面板（草稿不动）；收掉后 Enter 才走 onSubmit 原文。
+  const ev: Ev[] = []
+  const s = await openLaunchpad(ev, {
+    commands: [{ name: 'help', description: 'Show shortcuts', commandLine: '/help ' }],
+  })
+  await s.send('/he')
+  await settled(() => s.screen().includes('help'))
+  await s.send('\u001b')
+  check('K5 Esc 只收面板（草稿一字不动，面板消失）',
+    await settled(() => !s.screen().includes('Show shortcuts')) && last(ev, 'query')?.value === '/he',
+    JSON.stringify(last(ev, 'query')))
+  await s.send('\r')
+  check('K6 面板收掉后 Enter 回到原文提交路径（onSubmit 收到 /he）',
+    last(ev, 'submit')?.value === '/he' && last(ev, 'command') === undefined,
+    JSON.stringify(last(ev, 'submit')))
+  s.close()
+}
+{
+  // BUG 1 回归②（组件层）：普通文本即使给了 commands 也走 submit、绝不 onCommandPick。
+  const ev: Ev[] = []
+  const s = await openLaunchpad(ev, {
+    commands: [{ name: 'setup', description: 'Re-run the first-run guide', commandLine: '/setup ' }],
+  })
+  await s.send('h')
+  await s.send('i')
+  await s.send('\r')
+  check('K7 普通文本走 onSubmit（命令路径不触发）',
+    last(ev, 'submit')?.value === 'hi' && last(ev, 'command') === undefined,
+    JSON.stringify(ev.slice(-2)))
+  s.close()
+}
+{
+  // 鼠标：点面板里的命令行 = 选中执行（与 Enter 同路径）。
+  const ev: Ev[] = []
+  const s = await openLaunchpad(ev, {
+    commands: [{ name: 'setup', description: 'Re-run the first-run guide', commandLine: '/setup ' }],
+  })
+  await s.send('/')
+  await s.click('setup')
+  check('K8 点击面板命令行执行该命令（不是点空白）',
+    last(ev, 'command')?.value === '/setup ' && last(ev, 'blank') === undefined,
+    JSON.stringify(ev.slice(-2)))
+  s.close()
+}
+
+// ── L. 第六版设计 2：Tips 可点击轮换（键盘路径 = 焦点环 + Enter） ──────────
+{
+  const ev: Ev[] = []
+  const s = await openLaunchpad(ev)
+  await settled(() => s.screen().includes('输入 / 看全部命令'))
+  await s.click('输入 / 看全部命令')
+  check('L1 点击 Tips 切到第二条（launchpad-tip-2 上屏）',
+    await settled(() => s.screen().includes('Ctrl+V 直接粘贴')), s.screen().slice(0, 160))
+  await s.click('Ctrl+V 直接粘贴')
+  check('L2 再点切到第三条（launchpad-tip-3 上屏）',
+    await settled(() => s.screen().includes('参数行四段都能点')), '')
+  await s.click('参数行四段都能点')
+  check('L3 第三次点击循环回第一条',
+    await settled(() => s.screen().includes('输入 / 看全部命令')), '')
+  s.close()
+}
+{
+  // 键盘路径（仓库硬规矩）：焦点环走到 Tips（-6）+ Enter = 切下一条。
+  const ev: Ev[] = []
+  const s = await openLaunchpad(ev)
+  // 环 = 输入框 → 参数四段 → 入口四条 → Tips（-6）：从 -1 数 9 步 Tab。
+  for (let i = 0; i < 9; i++) await s.send('\t')
+  await settled(() => last(ev, 'focus')?.value === -6)
+  await s.send('\r')
+  check('L4 焦点在 Tips 行上 Enter 切下一条（与点击同一条 rotateTip）',
+    await settled(() => s.screen().includes('Ctrl+V 直接粘贴')) && last(ev, 'submit') === undefined,
+    s.screen().slice(0, 160))
+  s.close()
+}
+{
+  // 首启句优先级最高：不参与轮换，点击不切。
+  const ev: Ev[] = []
+  const s = await openLaunchpad(ev, { firstRun: true })
+  await settled(() => s.screen().includes('第一次用 dsh-TUI'))
+  await s.click('第一次用 dsh-TUI')
+  // 固定窗:首启不轮换 无事件可观测（不切本身是被测语义），等一拍再读屏。
+  await new Promise(resolve => setTimeout(resolve, 150))
+  check('L5 首启句不参与轮换（点击后仍是那一句，不切到别的 Tip）',
+    s.screen().includes('第一次用 dsh-TUI') && !s.screen().includes('Ctrl+V 直接粘贴'),
+    s.screen().slice(0, 160))
+  s.close()
+}
+
+// ── M. 第六版 BUG 3：浮层的点击语义（里面不算空白、外面算） ────────────────
+{
+  // 浮层内部点击：拦住冒泡，不触发整页 onBlankClick（否则选行=既选又关）。
+  const ev: Ev[] = []
+  const s = await openLaunchpad(ev, { overlayPanel: true })
+  await settled(() => s.screen().includes('PICKER-PROBE'))
+  const before = ev.length
+  await s.click('PICKER-PROBE')
+  check('M1 点击选择器浮层内部不触发空白兜底（选行不是点空白）',
+    last(ev, 'blank') === undefined, JSON.stringify(ev.slice(before)))
+  // 浮层之外的点击：走空白兜底（Chat 侧据此关掉选择器，见 onboarding-chat 回归）。
+  await s.click('██▀▀▄▄')
+  check('M2 点击浮层之外的空白触发 onBlankClick（Chat 用它关选择器）',
+    last(ev, 'blank') !== undefined, JSON.stringify(ev.slice(before)))
   s.close()
 }
 

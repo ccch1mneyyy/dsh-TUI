@@ -3,10 +3,11 @@ import { stringWidth } from '../ink/stringWidth.js'
 /**
  * 落地页的一个动作入口（第四版：状态驱动的"下一步建议"）。
  *
- * 动作仍然全部走**既有命令名**（`continue` / `home` / `workspace` / `model` /
- * `setup` / `help`）——这一屏不新增行为，它只是把"当前状态下最可能的下一步"
- * 摆到台面上。知道了名字，键盘用户直接敲；鼠标用户点一下，两条路落到同一个
- * `runCommand`。
+ * 动作仍然全部走**既有命令名**（`continue` / `home` / `workspace` /
+ * `doctor` / `setup` / `help`——第六版设计 3：`model` 位换成 `doctor`，
+ * 模型切换由参数行第一段承担）——这一屏不新增行为，它只是把"当前状态下
+ * 最可能的下一步"摆到台面上。知道了名字，键盘用户直接敲；鼠标用户点一下，
+ * 两条路落到同一个 `runCommand`。
  */
 export interface LaunchpadAction {
   /** 稳定的行标识（焦点、`key` 都用它）。 */
@@ -91,11 +92,17 @@ const WORKSPACE: LaunchpadAction = {
   labelKey: 'launchpad-action-workspace',
   command: 'workspace',
 }
-/** Model（切换模型）。 */
-const MODEL: LaunchpadAction = {
-  id: 'model',
-  labelKey: 'launchpad-action-model',
-  command: 'model',
+/**
+ * Doctor（环境体检，第六版设计 3 换掉原 Model 位）：真执行——`runCommand`
+ * 的 `doctor` 分支把 `channel.doctorInfo()` 打进转录（API key、终端能力、
+ * 路径一屏看清）。为什么选它：模型切换已经在参数行第一段（还开了选择器），
+ * 入口行的"模型"是重复位；而落地页恰是"启动第一屏"，环境有问题在这里体检
+ * 最及时；help 已在另外两个状态占位，不再重复。
+ */
+const DOCTOR: LaunchpadAction = {
+  id: 'doctor',
+  labelKey: 'launchpad-action-doctor',
+  command: 'doctor',
 }
 /** Help（? 快捷键与命令）。 */
 const HELP: LaunchpadAction = {
@@ -123,10 +130,10 @@ const SET_UP_PROVIDER: LaunchpadAction = {
  *
  * | 状态 | 动作表 | 为什么 |
  * |---|---|---|
- * | 首启（引导未完成） | Quick Setup · Workspace · Model · Help | 刚安装最该做的是跑一遍引导；还没有历史可继续，Sessions 让位给 Help（装完最常查的就是键位表） |
- * | 配置问题 | Set up provider · Sessions · Workspace · Model | provider 缺失必须第一位修；其余三个常驻位保持不动，修完刷新即回常态 |
- * | 有上次会话 | Continue "<标题>" · Sessions · Workspace · Model | Continue 是最高频动作（用户原话）；Git 分支**不**占据一位——仓库没有切分支的可执行路径 |
- * | 常态（无上次会话） | Sessions · Workspace · Model · Help | 没有可继续的就去看历史；Help 补第四位 |
+ * | 首启（引导未完成） | Quick Setup · Workspace · Doctor · Help | 刚安装最该做的是跑一遍引导；还没有历史可继续，Sessions 让位给 Help（装完最常查的就是键位表） |
+ * | 配置问题 | Set up provider · Sessions · Workspace · Doctor | provider 缺失必须第一位修；Doctor 位在配置有疑时正好顺手体检 |
+ * | 有上次会话 | Continue "<标题>" · Sessions · Workspace · Doctor | Continue 是最高频动作（用户原话）；Git 分支**不**占据一位——仓库没有切分支的可执行路径 |
+ * | 常态（无上次会话） | Sessions · Workspace · Doctor · Help | 没有可继续的就去看历史；Help 补第四位 |
  *
  * `theme` / `lang` / `settings` **永远不在表里**（它们属于 Settings，落地页
  * 不设 Settings 按钮）；`setup` 只在上表前两行出现，onboarding 完成且配置
@@ -136,14 +143,14 @@ const SET_UP_PROVIDER: LaunchpadAction = {
  */
 export function resolveLaunchpadActions(state: LaunchpadActionState): readonly LaunchpadAction[] {
   if (state.onboardingPending) {
-    return [QUICK_SETUP, WORKSPACE, MODEL, HELP]
+    return [QUICK_SETUP, WORKSPACE, DOCTOR, HELP]
   }
   if (state.configProblem) {
-    return [SET_UP_PROVIDER, SESSIONS, WORKSPACE, MODEL]
+    return [SET_UP_PROVIDER, SESSIONS, WORKSPACE, DOCTOR]
   }
   const title = truncateContinueTitle(state.lastSessionTitle ?? '')
   if (title !== '') {
-    return [{ ...CONTINUE, labelKey: 'launchpad-action-continue-titled', values: { title } }, SESSIONS, WORKSPACE, MODEL]
+    return [{ ...CONTINUE, labelKey: 'launchpad-action-continue-titled', values: { title } }, SESSIONS, WORKSPACE, DOCTOR]
   }
-  return [SESSIONS, WORKSPACE, MODEL, HELP]
+  return [SESSIONS, WORKSPACE, DOCTOR, HELP]
 }

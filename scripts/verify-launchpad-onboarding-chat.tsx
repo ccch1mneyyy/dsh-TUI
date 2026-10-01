@@ -30,12 +30,13 @@ import React from 'react'
 import fakeHome from './lib/fake-home.mjs' // 必须最先：DATA_DIR 在 import 时定死
 import xterm from '@xterm/headless'
 import { settle, settled, viewportLines } from './lib/term-test.mjs'
+import { stringWidth } from '../src/ink/stringWidth.js'
 const { Terminal: XTerm } = xterm
 
 const [
   { render, Box, ThemeProvider },
   { Chat },
-  { LOCAL_COMMANDS },
+  { LOCAL_COMMANDS, completeCommands },
   { QuestionStore },
   { setMinimalUiMode },
   { readOnboardingPrefs },
@@ -86,6 +87,16 @@ class FakeStdin extends PassThrough {
   unref() { return this }
 }
 
+/** 目标文本的终端列号（1 起，SGR 鼠标用；按显示宽度换算，CJK 双宽点得准）。 */
+function findCell(term: InstanceType<typeof XTerm>, needle: string): { col: number; row: number } | null {
+  const lines = viewportLines(term)
+  for (let row = 0; row < lines.length; row++) {
+    const at = lines[row]!.indexOf(needle)
+    if (at >= 0) return { col: stringWidth(lines[row]!.slice(0, at)) + 1, row: row + 1 }
+  }
+  return null
+}
+
 const plainText = (frames: readonly string[]) => frames.join('')
   .replace(/\x1b\[(\d+)C/g, (_m: string, n: string) => ' '.repeat(Number(n)))
   .replace(/\x1b\[[0-9;?]*[a-zA-Z]/g, '')
@@ -93,8 +104,10 @@ const plainText = (frames: readonly string[]) => frames.join('')
 
 /**
  * 桩 channel：Chat 只读它渲染要用的面（形状取自 verify-whale-girl 的 smoke 夹具）。
- * 第五版扩展：参数行四段点开的选择器（/model · /effort · /plan · /permission）
- * 需要可变的 model/effort/mode/权限现状 + subscribe 通知（值就地更新靠它重渲染）。
+ * 第五版扩展：参数行四段点开的选择器（/model · /effort · /preset · /permission）
+ * 需要可变的 model/effort/preset/权限现状 + subscribe 通知（值就地更新靠它重渲染）。
+ * 第六版扩展：命令补全面板（commandCompletions——直接用仓库的 completeCommands
+ * 过滤同一张 commandList，与聊天页同源）+ agent preset 名册（/preset 段数据源）。
  */
 function makeChannel(over: Record<string, unknown> = {}) {
   const notifications: string[] = []
@@ -130,6 +143,22 @@ function makeChannel(over: Record<string, unknown> = {}) {
     notifications,
     // plan / permission 由 dsh-base 注册为 external 命令（选择器打开的前提）。
     commandList: [...LOCAL_COMMANDS, { name: 'plan', external: true }, { name: 'permission', external: true }],
+    // 命令补全面板（第六版 BUG 1）：与 composer 同源——completeCommands 过滤
+    // 合并命令表（含上面的 registry 命令 plan）。
+    commandCompletions: (input: string) => completeCommands(input, channel.commandList as never) as never,
+    // agent preset（第六版设计 1：参数行"模式"段 = preset 显示名）。
+    agentPreset: 'standard',
+    listPresets: async () => [
+      { id: 'standard', name: 'Standard', isDefault: true },
+      { id: 'ptc', name: 'PTC', isDefault: false },
+      { id: 'minimal', name: '极简', isDefault: false },
+    ],
+    switchPreset: async (id: string) => {
+      channel.agentPreset = id
+      calls.push('preset:' + id)
+      bump()
+      return true
+    },
     contextSegments: { system: 0, prompt: 0, assistant: 0, thinking: 0, tools: 0 },
     subscribe(fn: () => void) { listeners.push(fn); return () => {} },
     submit(text: string) { calls.push('submit:' + text) },
@@ -245,7 +274,19 @@ async function mountChat(flags: Flags, over: Record<string, unknown> = {}) {
     await settle(() => stdout.frames.length > before, { timeoutMs: 400 })
   }
   const type = async (text: string) => { for (const ch of text) await send(ch) }
-  return { term, stdout, stdin, notifications, calls, screen, send, type, unmount: async () => { await instance.unmount() } }
+  /** SGR 鼠标点击（列号按显示宽度换算，CJK 双宽才点得准）。 */
+  const click = async (needle: string): Promise<void> => {
+    await settled(() => {
+      const cell = findCell(term, needle)
+      return cell === null ? false : cell
+    })
+    const cell = findCell(term, needle)
+    if (cell === null) throw new Error('click target not on screen: ' + needle)
+    const before = stdout.frames.length
+    stdin.write(`\u001b[<0;${cell.col};${cell.row}M\u001b[<0;${cell.col};${cell.row}m`)
+    await settle(() => stdout.frames.length > before, { timeoutMs: 400 })
+  }
+  return { term, stdout, stdin, notifications, calls, screen, send, type, click, unmount: async () => { await instance.unmount() } }
 }
 
 const LAUNCHPAD_MARK = '说点什么，或输入 /' + ' 看命令…'
@@ -270,8 +311,11 @@ const WIZARD_MARK = '第 1 / 4 步'
   await chat.type('你好')
   await chat.send('\r')
   check('B2 提交后不再显示落地页', await settled(() => !chat.screen().includes('说点什么')))
+  // xterm 视口残留：新帧比落地页矮时底部行不清（'工作区' 那行会赖一拍）。
+  // 敲一个键逼一帧全量重绘，B3 断的才是稳定终态而不是帧时序。
+  await chat.send('x')
   check('B3 也不再显示会话浏览器（首句刚发进眼前的对话里）',
-    await settled(() => !chat.screen().includes('工作区')) , chat.screen().slice(0, 240))
+    await settled(() => !chat.screen().includes('工作区')), chat.screen().slice(0, 240))
   check('B4 首句直接发送：fake channel 的 submit 被调用、参数就是那行原文',
     chat.calls.includes('submit:你好'), JSON.stringify(chat.calls))
   check('B5 发出去之后不留草稿（输入框是空的，没有"已放进输入框"的假交接提示）',
@@ -360,19 +404,20 @@ const WIZARD_MARK = '第 1 / 4 步'
   await chat.unmount()
 }
 {
-  // 模式段：/plan 选择器，Enter 切到 Plan，参数行就地更新。
+  // 模式段（第六版设计 1：agent preset，不是 plan/act）：/preset 选择器，
+  // Enter 切到 PTC，参数行就地更新（Standard→PTC）。
   const chat = await mountChat({ launchpadOnBoot: true })
-  await settled(() => chat.screen().includes('说点什么'))
+  await settled(() => chat.screen().includes('Standard'))
   await chat.send('\u001b[B')
   await chat.send('\u001b[B')
-  await chat.send('\u001b[B') // 第三段 = 模式
+  await chat.send('\u001b[B') // 第三段 = 模式（preset）
   await chat.send('\r')
-  await settled(() => chat.screen().includes('Plan'))
-  await chat.send('\u001b[A') // ↑ 到 Plan 行（初始焦点在当前档 Execute）
+  await settled(() => chat.screen().includes('PTC'))
+  await chat.send('\u001b[B') // ↓ 到 PTC（初始焦点在当前 Standard）
   await chat.send('\r')
-  check('J2 模式段点开 /plan 选择器：Enter 切 Plan、参数行就地更新（Execute→Plan）',
-    await settled(() => chat.calls.includes('plan:on')
-      && chat.screen().includes('Plan') && chat.screen().includes('说点什么')),
+  check('J2 模式段点开 /preset 选择器：Enter 切 PTC、参数行就地更新（Standard→PTC）',
+    await settled(() => chat.calls.includes('preset:ptc')
+      && chat.screen().includes('PTC') && chat.screen().includes('说点什么')),
     JSON.stringify(chat.calls))
   await chat.unmount()
 }
@@ -466,6 +511,78 @@ const WIZARD_MARK = '第 1 / 4 步'
     isLandingLaunch({ initialPrompt: '跑一下测试' }) === false)
   check('I4 工作区目标在签名里根本不存在（这条判定再也收不到它）',
     isLandingLaunch.length <= 1)
+}
+
+// ── N. 第六版 BUG 1：命令识别接上 composer 的合并命令表 ──────────────────
+{
+  // registry 命令（plan 由 dsh-base 注册，不在 LOCAL_COMMANDS）：旧判定
+  // isLocalCommandName 认不出它 → 整行 channel.submit 发给模型（用户实测bug）。
+  const chat = await mountChat({ launchpadOnBoot: true })
+  await settled(() => chat.screen().includes('说点什么'))
+  await chat.type('/plan')
+  await chat.send('\r')
+  check('N1 registry 命令 /plan 走命令表：plan 选择器盖上来、绝不 submit',
+    await settled(() => chat.screen().includes('计划模式') && chat.screen().includes('⌘'))
+    && !chat.calls.some(c => c.startsWith('submit:')),
+    JSON.stringify(chat.calls))
+  await chat.unmount()
+}
+{
+  // 表里没有的 / 开头行与聊天页 Enter 同语义：当普通消息发送（不吞、不静默）。
+  const chat = await mountChat({ launchpadOnBoot: true })
+  await settled(() => chat.screen().includes('说点什么'))
+  await chat.type('/nosuchcmd')
+  // 未知命令没有候选 → 面板本就不开，Enter 直接走提交判定。
+  await chat.send('\r')
+  check('N2 未知 / 命令当普通消息发送（与聊天页 Enter 同一条 submit 路径）',
+    await settled(() => !chat.screen().includes('说点什么'))
+    && chat.calls.includes('submit:/nosuchcmd'),
+    JSON.stringify(chat.calls))
+  await chat.unmount()
+}
+{
+  // 补全面板（第六版 BUG 1）：行首 / 弹面板，Enter 执行选中命令（不 submit）。
+  const chat = await mountChat({ launchpadOnBoot: true })
+  await settled(() => chat.screen().includes('说点什么'))
+  await chat.type('/pre')
+  check('N3 输入 / 弹出命令补全面板（/pre 过滤出 preset）',
+    await settled(() => chat.screen().includes('preset')), chat.screen().slice(0, 200))
+  await chat.send('\r')
+  check('N4 面板选中即执行：/preset 选择器盖在落地页之上（无 submit）',
+    await settled(() => chat.screen().includes('PTC') && chat.screen().includes('⌘'))
+    && !chat.calls.some(c => c.startsWith('submit:')),
+    JSON.stringify(chat.calls))
+  await chat.unmount()
+}
+
+// ── P. 第六版 BUG 3：选择器点空白关闭、点另一段直接切换 ───────────────────
+{
+  // 点空白 → 关掉选择器（复用落地页"点空白"兜底：onBlankClick 里 close overlay）。
+  const chat = await mountChat({ launchpadOnBoot: true })
+  await settled(() => chat.screen().includes('说点什么'))
+  await chat.send('\u001b[B') // 参数行第一段（模型）
+  await chat.send('\r')
+  await settled(() => chat.screen().includes('deepseek-reasoner'))
+  await chat.click('╭') // 点输入卡片边框（浮层之外的"空白"）
+  check('P1 点空白关掉模型选择器（落地页仍在、列表消失）',
+    await settled(() => !chat.screen().includes('deepseek-reasoner')
+      && chat.screen().includes('说点什么')),
+    chat.screen().slice(0, 200))
+  await chat.unmount()
+}
+{
+  // 点另一个参数段 → 直接切到那个选择器（不是叠加、不是无反应）。
+  const chat = await mountChat({ launchpadOnBoot: true })
+  await settled(() => chat.screen().includes('说点什么'))
+  await chat.send('\u001b[B')
+  await chat.send('\r')
+  await settled(() => chat.screen().includes('deepseek-reasoner'))
+  await chat.click('High') // 参数行的思考深度段
+  check('P2 开着模型选择器时点思考深度段：切成 effort 滑杆（且只有一个选择器在屏）',
+    await settled(() => !chat.screen().includes('deepseek-reasoner')
+      && chat.screen().includes('Max') && chat.screen().includes('说点什么')),
+    chat.screen().slice(0, 240))
+  await chat.unmount()
 }
 
 if (failures === 0) console.log(`\nverify-launchpad-onboarding-chat: ${checks} checks, all passed`)

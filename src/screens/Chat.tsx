@@ -208,7 +208,7 @@ const MIGRATE_CHILD_TIMEOUT_MS = 30 * 60 * 1000
  * 选择器（见 useInput 的 launchpad 分支注释）；其余 overlay 类型不在此列，
  * 落地页期间照旧整块让位。
  */
-const LAUNCHPAD_OVERLAY_KINDS: ReadonlySet<string> = new Set(['model', 'effort', 'plan', 'permission'])
+const LAUNCHPAD_OVERLAY_KINDS: ReadonlySet<string> = new Set(['model', 'effort', 'plan', 'preset', 'permission'])
 
 function cleanCommandError(error: unknown): string {
   try {
@@ -677,7 +677,7 @@ export function Chat({
    * "点了没反应"，状态还滞留着、等界面关掉才突然弹出来。默认收，白名单只留给覆盖层。
    */
   const overlayCommandNames = React.useMemo(
-    () => new Set(['model', 'effort', 'plan', 'permission']),
+    () => new Set(['model', 'effort', 'plan', 'preset', 'permission']),
     [],
   )
   /**
@@ -863,6 +863,19 @@ export function Chat({
   const workspaceFlowAbortRef = React.useRef<AbortController | null>(null)
   /** `/preset` agent-preset roster (issue #8): loads async, persists. */
   const [presetOptions, setPresetOptions] = React.useState<readonly PresetOption[]>([])
+  /**
+   * 落地页参数行的模式段（第六版设计 1）显示 preset 的**显示名**
+   * （Standard/PTC/极简…），名册是异步的——落地页出来时顺手预热一次
+   * （空名册不写；失败静默，段缺省不画）。/preset 自己的加载路径不动。
+   */
+  React.useEffect(() => {
+    if (!launchpadShown || presetOptions.length > 0) return
+    let cancelled = false
+    channel.listPresets()
+      .then(list => { if (!cancelled && list.length > 0) setPresetOptions(list) })
+      .catch(() => {})
+    return () => { cancelled = true }
+  }, [launchpadShown, presetOptions.length, channel])
   /** `/effort` adapter levels: load async before the slider opens. */
   const [effortOptions, setEffortOptions] = React.useState<readonly EffortOption[]>([])
   const [themeName, setTheme] = useTheme()
@@ -2026,6 +2039,11 @@ export function Chat({
    *
    *   - a slash command → `runCommand`, the same dispatch a typed command
    *     takes in the composer. The line is NOT submitted to the model.
+   *     Recognition is the composer's OWN rule (第六版 BUG 1 修复): the merged
+   *     command list (locals + plugin/registry commands via channel.commandList)
+   *     decides whether the line is a command — isLocalCommandName alone missed
+   *     registry-only names (e.g. /plan, /goal), which then fell through to
+   *     channel.submit and went to the model as a user message.
    *   - ordinary text  → SENT DIRECTLY (fifth revision, user-reported bug:
    *     "按了回车就直接进入流式输出"). The line rides the composer's own
    *     submit path (`channel.submit`, which queues through the DSH inbox
@@ -2049,7 +2067,14 @@ export function Chat({
     if (text === '') return
     void appendHistory(text)
     const parsed = text.startsWith('/') ? parseCommandName(text) : undefined
-    if (parsed !== undefined && (isLocalCommandName(parsed.name) || isHiddenCommandName(parsed.name))) {
+    // 与 composer 的 tryRunCommand 同一条判定：合并命令表（LOCAL_COMMANDS +
+    // channel.commandList 的插件/registry 命令）里有名字才是命令；hidden
+    // 命令照旧认。判定之外的 / 开头行才走 submit（与聊天页 Enter 行为一致）。
+    if (parsed !== undefined && (
+      isLocalCommandName(parsed.name)
+      || isHiddenCommandName(parsed.name)
+      || channel.commandList.some(entry => entry.name === parsed.name)
+    )) {
       void runCommand(parsed.name, parsed.rawInput)
       return
     }
@@ -5085,10 +5110,16 @@ export function Chat({
         overlayPanel={launchpadOverlayUp ? pickerPanels : undefined}
         inputPaused={launchpadOverlayUp}
         onParamPick={(segment) => {
-          // 四段 → 既有命令：model→/model、effort→/effort、mode→/plan、
+          // 四段 → 既有命令：model→/model、effort→/effort、preset→/preset、
           // permission→/permission。全部在 overlayCommandNames 白名单里，
           // 落地页不收，选择器盖上来。
-          void runCommand(segment === 'mode' ? 'plan' : segment, '')
+          // BUG 3（点另一段直接切换）：/effort 的选择器是异步 open-if（when:
+          // ['none']），盖着别的选择器时会被丢弃——这就是"点了没反应"的根因。
+          // 先把屏上的参数选择器收掉再开新的，一个在屏、且就是点的那段。
+          if (overlay.kind !== 'none' && overlay.kind !== segment) {
+            dispatchOverlay({ type: 'close' })
+          }
+          void runCommand(segment, '')
         }}
         onQueryChange={(text, cursor) => {
           setLaunchpadDraft(text)
@@ -5113,11 +5144,35 @@ export function Chat({
           setLaunchpadOpen(false)
           setSupervisorOpen(true)
         }}
-        onBlankClick={() => setLaunchpadFocus(-1)}
+        onBlankClick={() => {
+          // BUG 3（点别处关掉选择器）：沿用"点空白收回焦点"的兜底路径——
+          // 有参数选择器盖在落地页之上时，空白点击先把选择器收掉（焦点照旧
+          // 收回输入框）。选择器内部的点击已被 Launchpad 的浮层包装拦住
+          // 冒泡，不会走到这里。
+          if (overlay.kind !== 'none') dispatchOverlay({ type: 'close' })
+          setLaunchpadFocus(-1)
+        }}
         model={channel.model}
         effort={channel.reasoningEffort}
-        mode={channel.mode.plan === true ? 'plan' : 'act'}
+        preset={
+          channel.agentPreset === undefined
+            ? undefined
+            : presetOptions.find(option => option.id === channel.agentPreset)?.name ?? channel.agentPreset
+        }
         permission={launchpadPermission}
+        commands={
+          launchpadOverlayUp || !launchpadDraft.startsWith('/')
+            ? undefined
+            : channel.commandCompletions(launchpadDraft)
+        }
+        onCommandPick={(commandLine) => {
+          // 补全面板选中（Enter/Tab/点击）：走 runCommand，与快捷入口同一条
+          // 白名单口径——覆盖层命令不收落地页，其余收掉再执行。
+          const parsed = parseCommandName(commandLine)
+          if (parsed === undefined) return
+          if (!overlayCommandNames.has(parsed.name)) setLaunchpadOpen(false)
+          void runCommand(parsed.name, parsed.rawInput)
+        }}
         cwd={channel.displayCwd}
         branch={channel.gitBranch}
         tuiVersion={tuiVersion}
