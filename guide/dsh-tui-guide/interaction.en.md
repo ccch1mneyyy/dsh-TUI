@@ -77,7 +77,12 @@ The startup **launchpad** and the **first-run wizard** each own the keyboard; bo
 results back to the chat screen and add no new behavior.
 
 - **Launchpad**: printable input goes into the input box (the prefix turns from `❯` to `⌘` when the line
-  starts with `/`), `Backspace`/`Delete`/`←`/`→`/`Home`/`End` edit it; a leading `/` opens the
+  starts with `/`), `Backspace`/`Delete`/`←`/`→`/`Home`/`End` edit it; the caret is an **inverse block
+  sitting on the current character** (inverse on that one character; an inverse blank cell at end of
+  line), blinking is a pure style toggle (inverse ↔ regular, ~550ms per phase) and never occupies an
+  extra cell or eats a character; `Alt+R` continues the most recent session (= the first entry row slot,
+  bound only on this screen, no-op when there is nothing to continue, remappable in `/settings`);
+  a leading `/` opens the
   **command palette** (the same data source and component as the chat composer: `↑`/`↓` move the selection,
   `Enter`/`Tab`/click **run** the selected command, `Esc` dismisses only the palette and keeps the draft);
   with the palette dismissed, `Enter` **sends** the line straight away (a leading `/` line — including
@@ -93,8 +98,26 @@ results back to the chat screen and add no new behavior.
   (`Esc` closes it back onto the launchpad), the picked value updates the row in place and the typed draft
   is untouched; clicking inside the picker selects, **clicking elsewhere closes it and clicking another
   segment switches to that picker**.
+- **Entry row (v7, four slots)**: `Continue "…"` (Alt+R; the slot is absent when there is nothing to
+  continue) · `Sessions & workspaces` (`/home` — history and workspaces merged into one entry) ·
+  `Settings` (`/settings`) · a **conditional slot** (priority: background jobs running → `Background
+  jobs`; update detected → `Update available`; usage milestone reached and never starred → `Feed us a
+  star`; fallback `Help`). Full screens opened from the launchpad (sessions & workspaces / settings /
+  background jobs / the family tree / the wizard) render **above the launchpad** — `Esc` closes them
+  back onto the launchpad (draft, params and focus intact); **the only way off the launchpad into the
+  chat is submitting a non-command line with Enter**. Overlays on the launchpad side (pickers, the
+  command palette) use a **transparent host** — no fill, the splash art shows through (the chat page's
+  pickers are unaffected).
 - **Tips line**: click to rotate (three tips cycle; the first-run tip has top priority and never rotates);
-  keyboard path = focus ring + `Enter`.
+  keyboard path = focus ring + `Enter`; as of v7 it also **auto-rotates** (~10s per tip; a manual
+  rotate resets the timer) — the switch changes only the text, never the row height or centering.
+- **Corner plates (v7)**: the bottom-left working directory is **clickable** — it opens the existing
+  `/workspace` menu (rendered above the launchpad; `Esc` returns to the launchpad), keyboard path =
+  the focus ring's last slot + `Enter`, hover/focus = text highlight; the bottom-right plate shows
+  **two versions stacked vertically**: `dsh-tui v<TUI>` on the first row, `dsh-core v<kernel>` on
+  the second (the kernel version is read from the host/kernel package manifests; only the TUI row
+  is drawn when neither resolves), both right-aligned with the cwd plate top-aligned to the first
+  row, truncated per the existing truncate-middle contract on narrow terminals.
 - **Wizard**: `←`/`→` change step (except the effort slider in step 3 and a drilled-in model list, where the
   horizontal keys belong to the child control), `Tab` switches between the language/theme and
   model/effort/workspace panes, `↑`/`↓` move the selection; `Enter` runs the step (step 1 = re-check

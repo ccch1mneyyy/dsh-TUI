@@ -3,9 +3,8 @@ import { stringWidth } from '../ink/stringWidth.js'
 /**
  * 落地页的一个动作入口（第四版：状态驱动的"下一步建议"）。
  *
- * 动作仍然全部走**既有命令名**（`continue` / `home` / `workspace` /
- * `doctor` / `setup` / `help`——第六版设计 3：`model` 位换成 `doctor`，
- * 模型切换由参数行第一段承担）——这一屏不新增行为，它只是把"当前状态下
+ * 动作仍然全部走**既有命令名**（第七版表：continue / home / settings /
+ * jobs / update / star / help）——这一屏不新增行为，它只是把"当前状态下
  * 最可能的下一步"摆到台面上。知道了名字，键盘用户直接敲；鼠标用户点一下，
  * 两条路落到同一个 `runCommand`。
  */
@@ -23,34 +22,25 @@ export interface LaunchpadAction {
 /**
  * resolveLaunchpadActions 的输入——一次启动的状态快照。
  *
- * 每个字段都来自**既有**数据源（不造假）：
- *   - `onboardingPending`：`onboardingPrefs.shouldOfferOnboarding`（`Chat`
- *     在 boot 时拿到的 `onboardingOnBoot` 及完成后的回落状态）；
- *   - `configProblem`：cordis.yml 里 `provider` 键没配（`channel.
- *     configuredProvider` 为空）——"没有可用 provider / 模型配置缺失"的
- *     启动期真信号；
+ * 第七版：每个字段都来自**既有**数据源（不造假）：
  *   - `lastSessionTitle`：会话名册（`channel.agentViewRows`，含持久化会话）
- *     里最近一条**可继续**会话的标题；
- *   - `gitBranch`：`channel.gitBranch`。**只作记录**，不影响输出（见下）；
- *   - `justUpgraded`：仓库里没有"上次运行版本"的持久化标记，也没有可执行的
- *     What's New 页面——保留字段但**没有任何调用方会传**，传了也不会生成
- *     `What's New` 按钮（宁可少一个入口，不放假动作）。
+ *     里最近一条**可继续**会话的标题；没有就没有 Continue（不放假动作）；
+ *   - `jobsRunning`：`channel.backgroundJobs` 里有 running/stopping 的任务；
+ *   - `updateAvailable`：`checkForTuiUpdate()`（src/update.ts，与 /update
+ *     同一条判定）在启动页挂起时异步探得的新版本；
+ *   - `starDue`：`usageStats`（~/.dsh-tui/usage.json）有**未报过的**已达档
+ *     里程碑（首档 24h）且本进程尚未 star 成功——口径与开屏求 star 弹窗
+ *     完全一致（pendingStarMilestone + starred）。
  */
 export interface LaunchpadActionState {
-  /** 首启：引导（onboarding）还没完成。 */
-  readonly onboardingPending: boolean
-  /** 检测到配置问题（没有可用 provider / 模型配置缺失）。 */
-  readonly configProblem: boolean
-  /** 最近一条可继续会话的标题；没有（或为空）视为"无历史"。 */
+  /** 最近一条可继续会话的标题；没有（或为空）视为"无历史"，整格不画。 */
   readonly lastSessionTitle?: string | undefined
-  /**
-   * 当前目录的 Git 分支。**不影响动作表**：仓库里没有"切分支"的可执行
-   * 路径，用户举例里的 `Branch` 没有落地（报告里如实列出）；保留在状态
-   * 里是为了契约显式——调用方传了也不许凭空长出一个点不动的按钮。
-   */
-  readonly gitBranch?: string | undefined
-  /** 刚升级过。无数据源、无条件按钮，见 {@link LaunchpadActionState}。 */
-  readonly justUpgraded?: boolean | undefined
+  /** 有后台任务在跑（条件位①）。 */
+  readonly jobsRunning: boolean
+  /** 检测到可用更新（条件位②）。 */
+  readonly updateAvailable: boolean
+  /** 用量到档且从未 star（条件位③）。 */
+  readonly starDue: boolean
 }
 
 /** Continue 标题的截断上限（显示宽度，含截断省略号）。 */
@@ -80,77 +70,87 @@ const CONTINUE: LaunchpadAction = {
   labelKey: 'launchpad-action-continue',
   command: 'continue',
 }
-/** Sessions（esc 那条路：/home 会话名册）。 */
-const SESSIONS: LaunchpadAction = {
-  id: 'sessions',
-  labelKey: 'launchpad-action-sessions',
+/**
+ * 会话与工作区（第七版合并入口）：历史会话与工作区本来就是同一个界面
+ * （`/home` 的会话名册 = 工作区首页，见 Chat 的 resume/home/agentview 合一
+ * 注释），两个按钮进同一个页面——用户实测后要求合并只留一个。命令用
+ * 既有的 `home` 那条。
+ */
+const SESSIONS_WORKSPACE: LaunchpadAction = {
+  id: 'sessions-workspace',
+  labelKey: 'launchpad-action-sessions-workspace',
   command: 'home',
 }
-/** Workspace（切换项目/工作目录）。 */
-const WORKSPACE: LaunchpadAction = {
-  id: 'workspace',
-  labelKey: 'launchpad-action-workspace',
-  command: 'workspace',
+/** Settings（用户拍板的第三格）。 */
+const SETTINGS: LaunchpadAction = {
+  id: 'settings',
+  labelKey: 'launchpad-action-settings',
+  command: 'settings',
 }
-/**
- * Doctor（环境体检，第六版设计 3 换掉原 Model 位）：真执行——`runCommand`
- * 的 `doctor` 分支把 `channel.doctorInfo()` 打进转录（API key、终端能力、
- * 路径一屏看清）。为什么选它：模型切换已经在参数行第一段（还开了选择器），
- * 入口行的"模型"是重复位；而落地页恰是"启动第一屏"，环境有问题在这里体检
- * 最及时；help 已在另外两个状态占位，不再重复。
- */
-const DOCTOR: LaunchpadAction = {
-  id: 'doctor',
-  labelKey: 'launchpad-action-doctor',
-  command: 'doctor',
+/** 条件位①：有后台任务在跑。 */
+const JOBS: LaunchpadAction = {
+  id: 'jobs',
+  labelKey: 'launchpad-action-jobs',
+  command: 'jobs',
 }
-/** Help（? 快捷键与命令）。 */
+/** 条件位②：检测到可用更新。 */
+const UPDATE: LaunchpadAction = {
+  id: 'update',
+  labelKey: 'launchpad-action-update',
+  command: 'update',
+}
+/** 条件位③：用量到档且从未 star。 */
+const STAR: LaunchpadAction = {
+  id: 'star',
+  labelKey: 'launchpad-action-star',
+  command: 'star',
+}
+/** Help（? 快捷键与命令）——条件位的兜底。 */
 const HELP: LaunchpadAction = {
   id: 'help',
   labelKey: 'launchpad-action-help',
   command: 'help',
 }
-/** 首启条件按钮：Quick Setup。 */
-const QUICK_SETUP: LaunchpadAction = {
-  id: 'setup',
-  labelKey: 'launchpad-action-setup',
-  command: 'setup',
-}
-/** 配置问题条件按钮：Set up provider。 */
-const SET_UP_PROVIDER: LaunchpadAction = {
-  id: 'setup',
-  labelKey: 'launchpad-action-setup-provider',
-  command: 'setup',
-}
 
 /**
- * 落地页第四版的核心纯函数：按状态快照决定四个位置放什么。
+ * 落地页第七版的核心纯函数：按状态快照决定入口行放什么。
  *
- * 优先级表（每行"为什么这样排"）：
+ * 版面（用户拍板的四格；第一格条件性缺席）：
  *
- * | 状态 | 动作表 | 为什么 |
- * |---|---|---|
- * | 首启（引导未完成） | Quick Setup · Workspace · Doctor · Help | 刚安装最该做的是跑一遍引导；还没有历史可继续，Sessions 让位给 Help（装完最常查的就是键位表） |
- * | 配置问题 | Set up provider · Sessions · Workspace · Doctor | provider 缺失必须第一位修；Doctor 位在配置有疑时正好顺手体检 |
- * | 有上次会话 | Continue "<标题>" · Sessions · Workspace · Doctor | Continue 是最高频动作（用户原话）；Git 分支**不**占据一位——仓库没有切分支的可执行路径 |
- * | 常态（无上次会话） | Sessions · Workspace · Doctor · Help | 没有可继续的就去看历史；Help 补第四位 |
+ *   1. `继续「<标题>」` —— 有可继续会话才画（无历史不放假动作）；
+ *      快捷键 Alt+R（keymap 的 `continue` 动作，见 utils/keymap.ts）。
+ *   2. `会话与工作区` —— 历史会话 + 工作区合并入口；命令用既有 `home`。
+ *   3. `设置` —— /settings。
+ *   4. 条件位，**按优先级取第一个成立者**（同时成立时高优先级胜出，
+ *      回归按这张优先级表驱动）：
+ *        ① jobsRunning → `后台任务`（/jobs）
+ *        ② updateAvailable → `有新版本`（/update，走既有更新路径）
+ *        ③ starDue → `投喂一颗 Star`（/star）
+ *        ④ 都不成立 → `帮助`（/help）兜底。
  *
- * `theme` / `lang` / `settings` **永远不在表里**（它们属于 Settings，落地页
- * 不设 Settings 按钮）；`setup` 只在上表前两行出现，onboarding 完成且配置
- * 正常后永久消失。输出恒 ≤4 条。
+ * 第六版的 doctor 入口已删（第七版）：它的输出属于转录区，天然把人带进
+ * 对话页，不适合留在"Esc 必须回启动页"的这一屏；首启/配置问题专属按钮
+ * 也随之退役——首启由引导向导（盖在落地页之上）承担，provider 配置经
+ * 向导或 /settings 可达。输出恒 ≤4 条。
  *
  * 纯函数：不改入参、不读环境、同样输入恒同样输出——表驱动回归钉死每个状态。
  */
 export function resolveLaunchpadActions(state: LaunchpadActionState): readonly LaunchpadAction[] {
-  if (state.onboardingPending) {
-    return [QUICK_SETUP, WORKSPACE, DOCTOR, HELP]
-  }
-  if (state.configProblem) {
-    return [SET_UP_PROVIDER, SESSIONS, WORKSPACE, DOCTOR]
-  }
+  const conditional = state.jobsRunning
+    ? JOBS
+    : state.updateAvailable
+      ? UPDATE
+      : state.starDue
+        ? STAR
+        : HELP
   const title = truncateContinueTitle(state.lastSessionTitle ?? '')
   if (title !== '') {
-    return [{ ...CONTINUE, labelKey: 'launchpad-action-continue-titled', values: { title } }, SESSIONS, WORKSPACE, DOCTOR]
+    return [
+      { ...CONTINUE, labelKey: 'launchpad-action-continue-titled', values: { title } },
+      SESSIONS_WORKSPACE,
+      SETTINGS,
+      conditional,
+    ]
   }
-  return [SESSIONS, WORKSPACE, DOCTOR, HELP]
+  return [SESSIONS_WORKSPACE, SETTINGS, conditional]
 }

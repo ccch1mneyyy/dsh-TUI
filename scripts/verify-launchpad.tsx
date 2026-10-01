@@ -21,11 +21,11 @@
  *   C. 动作入口：纯文字标签（无键帽）；真 SGR 点击触发动作、悬停移焦点并
  *      整块高亮；↑/↓/Tab 焦点环 = 输入框(-1) + **画出来的**入口（第一行再 ↑
  *      回输入框）；整行右对齐（含 fitChips 裁掉尾部后的窄屏）；行高恒 1。
- *   D. 纯函数：resolveLaunchpadActions 表驱动（首启/配置问题/有上次会话/常态/
- *      git 分支/刚升级 每状态一行，钉位置与理由）、truncateContinueTitle 边界、
- *      fitChips 不切半个标签、阶梯阈值（full → no-tip → no-hints → no-art →
- *      input-only，字段 showWhale/showBigTitle/showHero/showHints/showTip/
- *      showCorners/cardRows）。theme/lang/settings 永不出现。
+ *   D. 纯函数：resolveLaunchpadActions 表驱动（第七版四格：Continue(条件) ·
+ *      会话与工作区 · 设置 · 条件位 jobs>update>star>help 优先级，单独/
+ *      多重/全不成立各一行）、truncateContinueTitle 边界、fitChips 不切半个
+ *      标签、阶梯阈值（full → no-tip → no-hints → no-art → input-only）。
+ *      theme/lang/doctor 永不出现；settings 固定在第三格。
  *   E. 宽度不变量：120/100/72/60/48 列下任何一行都不超宽；标签/Tips/参数条
  *      要么完整出现在同一行、要么整条不出现（不许被切断的半句）。
  *
@@ -44,7 +44,7 @@ import { stringWidth } from '../src/ink/stringWidth.js'
 
 const { Terminal: XTerm } = xterm
 const [
-  { render, ThemeProvider, AlternateScreen, Text },
+  { render, ThemeProvider, AlternateScreen, Text, Box },
   { Launchpad, fitChips, prevBoundary, nextBoundary },
   { resolveLaunchpadLayout },
   { resolveLaunchpadActions, truncateContinueTitle, LAUNCHPAD_CONTINUE_TITLE_MAX },
@@ -60,10 +60,16 @@ const [
   ),
 ])
 
-/** 夹具的默认状态：有上次会话（常态最常见的一档，动作表 = Continue·Sessions·Workspace·Model）。 */
-const DEFAULT_ACTIONS = resolveLaunchpadActions({ onboardingPending: false, configProblem: false, lastSessionTitle: '修个登录页' })
-/** 默认档四个入口的屏上标签（zh）。 */
+/** 夹具的默认状态：有上次会话 + 条件位全不成立（动作表 = Continue·会话与工作区·设置·帮助）。 */
+const DEFAULT_ACTIONS = resolveLaunchpadActions({ lastSessionTitle: '修个登录页', jobsRunning: false, updateAvailable: false, starDue: false })
+/** 默认档四个入口的屏上标签（zh，第七版四格）。 */
 const CONTINUE_LABEL = '继续「修个登录页」'
+const SESSIONS_WORKSPACE_LABEL = '会话与工作区'
+const SETTINGS_LABEL = '设置'
+const HELP_LABEL = '帮助'
+const JOBS_LABEL = '后台任务'
+const UPDATE_LABEL = '有新版本'
+const STAR_LABEL = '投喂一颗 Star'
 
 let failures = 0
 let checks = 0
@@ -132,6 +138,8 @@ interface OpenOptions {
   terminalFocused?: boolean
   /** 传一个探针面板给 overlayPanel（第五版：选择器盖在落地页之上）。 */
   overlayPanel?: boolean
+  /** 高探针面板（第七版：透明浮层回归）——探针行 + 6 行空白，盖住大字若干行。 */
+  overlayPanelTall?: boolean
   /** 命令补全面板数据源（第六版 BUG 1）：给了才会弹面板。 */
   commands?: readonly { name: string; description: string; commandLine?: string }[]
   /** 命令补全面板数据源（第六版 BUG 1）：给了才会弹面板。 */
@@ -140,6 +148,12 @@ interface OpenOptions {
   commands?: readonly { name: string; description: string; commandLine?: string }[]
   /** 模拟"选择器开着"（第五版：本屏键盘整块让位）。 */
   inputPaused?: boolean
+  /** Tips 自动轮换间隔（第七版；短间隔确定性驱动相位）。 */
+  tipRotateMs?: number
+  /** 接上左下角铭牌的 onOpenWorkspace（true = 记 workspace 事件）。 */
+  cornerWorkspace?: boolean
+  /** 内核版本（第七版双版本铭牌）。 */
+  kernelVersion?: string
 }
 
 async function openLaunchpad(events: Ev[], options: OpenOptions = {}) {
@@ -169,7 +183,18 @@ async function openLaunchpad(events: Ev[], options: OpenOptions = {}) {
         fontId="bold"
         firstRun={options.firstRun ?? false}
         actions={options.actions ?? DEFAULT_ACTIONS}
-        overlayPanel={options.overlayPanel === true ? <Text>PICKER-PROBE 选择器探针</Text> : undefined}
+        overlayPanel={options.overlayPanel === true ? <Text>PICKER-PROBE 选择器探针</Text>
+          : options.overlayPanelTall === true ? (
+            <Box flexDirection="column">
+              <Text>PICKER-PROBE 选择器探针</Text>
+              <Text> </Text>
+              <Text> </Text>
+              <Text> </Text>
+              <Text> </Text>
+              <Text> </Text>
+              <Text> </Text>
+            </Box>
+          ) : undefined}
         inputPaused={options.inputPaused === true}
         onParamPick={(segment) => { events.push({ type: 'param', value: segment }) }}
         model={params ? 'glm-5.3' : undefined}
@@ -178,6 +203,9 @@ async function openLaunchpad(events: Ev[], options: OpenOptions = {}) {
         permission={params ? 'default' : undefined}
         commands={options.commands}
         onCommandPick={(commandLine) => { events.push({ type: 'command', value: commandLine }) }}
+        tipRotateMs={options.tipRotateMs}
+        kernelVersion={options.kernelVersion}
+        onOpenWorkspace={options.cornerWorkspace === true ? () => { events.push({ type: 'workspace' }) } : undefined}
         cwd={corners ? CWD : undefined}
         branch={corners ? BRANCH : undefined}
         tuiVersion={corners ? VERSION : undefined}
@@ -345,11 +373,14 @@ check('A2 模型串只出现在参数条那一行（头部不画模型行）',
     !hintRow.includes('/setup') && !hintRow.includes('esc') && !hintRow.includes('/model')
       && !hintRow.includes('?') && !hintRow.includes('▸') && !hintRow.includes('❯'),
     hintRow.trim().slice(0, 80))
-  check('A4c 四个入口在同一行、行高恒 1（每个标签整屏只出现在这一行）',
-    rowHasAll(hintRow, [CONTINUE_LABEL, '历史会话', '工作区', '环境体检'])
+  check('A4c 四个入口在同一行、行高恒 1（每个标签整屏只出现在这一行；第七版四格）',
+    rowHasAll(hintRow, [CONTINUE_LABEL, SESSIONS_WORKSPACE_LABEL, SETTINGS_LABEL, HELP_LABEL])
       && lines.filter(l => l.includes(CONTINUE_LABEL)).length === 1
-      && lines.filter(l => l.includes('历史会话')).length === 1
-      && lines.filter(l => l.includes('工作区')).length === 1,
+      && lines.filter(l => l.includes(SESSIONS_WORKSPACE_LABEL)).length === 1
+      && lines.filter(l => l.includes(SETTINGS_LABEL)).length === 1
+      // 合并/移除契约：旧入口（历史会话、工作区分立、环境体检）绝不再出现。
+      && !base.screen().includes('历史会话') && !base.screen().includes('环境体检')
+      && viewportLines(base.term).filter(l => l.includes('工作区')).every(l => l.includes(SESSIONS_WORKSPACE_LABEL)),
     hintRow.trim().slice(0, 90))
   check('A4d theme/lang/settings 不出现在落地页（属于 Settings，永不在入口行）',
     !base.screen().includes('换主题') && !base.screen().includes('界面语言'),
@@ -421,7 +452,7 @@ base.close()
     .slice(rowOf(plain.term, '╭') + 1, rowOf(plain.term, '╰'))
   check('A7b 四段全空时参数行整条不画（框里只有输入行，框下一行就是入口行）',
     !plain.screen().includes('·') && between.length === 1 && between[0]!.includes('❯')
-      && viewportLines(plain.term)[rowOf(plain.term, '╰') + 1]!.includes('历史会话'),
+      && viewportLines(plain.term)[rowOf(plain.term, '╰') + 1]!.includes(SETTINGS_LABEL),
     JSON.stringify(between))
   plain.close()
 }
@@ -625,7 +656,7 @@ base.close()
   check('C6 真鼠标点击入口 → onAction(同一条命令)',
     last(ev, 'action')?.value === 'continue', JSON.stringify(ev.slice(before)))
   const afterClick = ev.length
-  await s.click('历史会话')
+  await s.click(SESSIONS_WORKSPACE_LABEL)
   // 点击不带 motion 事件，所以这里只钉"动作落在被点的那一条"（hover 另有用例）。
   check('C7 点第二条入口 → 动作落到那一条（不是永远第一条）',
     last(ev, 'action')?.value === 'home', JSON.stringify(ev.slice(afterClick)))
@@ -636,11 +667,11 @@ base.close()
   // 移出（BUG 2：移开必须复原）→ onMouseLeave 把悬停带进的焦点交还输入框。
   const ev: Ev[] = []
   const s = await openLaunchpad(ev)
-  await settled(() => findCell(s.term, '环境体检') !== null)
-  const target = findCell(s.term, '环境体检')!
+  await settled(() => findCell(s.term, HELP_LABEL) !== null)
+  const target = findCell(s.term, HELP_LABEL)!
   const beforeHover = ev.length
   s.input.write(`\u001b[<35;${target.col};${target.row}M`)
-  check('C7b 鼠标悬停入口即移焦点（mode 1003，无需点击；环境体检 = 第 4 条）',
+  check('C7b 鼠标悬停入口即移焦点（mode 1003，无需点击；帮助 = 第 4 条）',
     await settled(() => last(ev, 'focus')?.value === 3), JSON.stringify(ev.slice(beforeHover)))
   // 移到入口行之外的空白格（大字区）：onMouseLeave 必须把焦点交还输入框。
   const blank = findCell(s.term, '██▀▀▄▄')!
@@ -690,16 +721,18 @@ base.close()
   check('C11 光标边界不落在代理对中间', prev === 1 && next === 3, 'prev=' + prev + ' next=' + next)
 }
 {
-  // 第四版：入口是纯文字标签，没有键帽键位——任何状态下都不该出现 theme/lang/settings。
+  // 第七版：入口是纯文字标签，没有键帽键位——任何状态下都不该出现 theme/lang；
+  // settings 由第三格承担（用户拍板），doctor 已移除。
   const all = [
-    resolveLaunchpadActions({ onboardingPending: true, configProblem: false }),
-    resolveLaunchpadActions({ onboardingPending: false, configProblem: true }),
-    resolveLaunchpadActions({ onboardingPending: false, configProblem: false, lastSessionTitle: 'x' }),
-    resolveLaunchpadActions({ onboardingPending: false, configProblem: false }),
+    resolveLaunchpadActions({ lastSessionTitle: 'x', jobsRunning: false, updateAvailable: false, starDue: false }),
+    resolveLaunchpadActions({ jobsRunning: true, updateAvailable: false, starDue: false }),
+    resolveLaunchpadActions({ jobsRunning: false, updateAvailable: true, starDue: false }),
+    resolveLaunchpadActions({ jobsRunning: false, updateAvailable: false, starDue: true }),
+    resolveLaunchpadActions({ jobsRunning: true, updateAvailable: true, starDue: true }),
   ].flat()
   const commands = new Set(all.map(a => a.command))
-  check('C12 theme/lang/settings 永不在动作表（全状态枚举）',
-    !commands.has('theme') && !commands.has('lang') && !commands.has('settings'),
+  check('C12 theme/lang/doctor 永不在动作表（全状态枚举；settings 在第三格是第七版契约）',
+    !commands.has('theme') && !commands.has('lang') && !commands.has('doctor'),
     [...commands].join(','))
 }
 
@@ -831,14 +864,20 @@ base.close()
 
 // ── E. 纯函数（resolveLaunchpadActions 表驱动 + fitChips + 截断）──────────────
 {
-  // 表驱动回归：每个状态一行，钉死四个位置放什么、为什么（详见 launchpadActions.ts 的优先级表）。
+  // 表驱动回归（第七版）：每行钉死入口行放什么；条件位按优先级表驱动——
+  // 单独成立、多个同时成立、全不成立三类都要钉（详见 launchpadActions.ts）。
+  const BASE = { lastSessionTitle: '修个登录页', jobsRunning: false, updateAvailable: false, starDue: false }
   const rows: readonly { name: string; state: Record<string, unknown>; ids: readonly string[]; commands: readonly string[]; firstLabelKey?: string }[] = [
-    { name: '首启（引导未完成）', state: { onboardingPending: true, configProblem: false }, ids: ['setup', 'workspace', 'doctor', 'help'], commands: ['setup', 'workspace', 'doctor', 'help'], firstLabelKey: 'launchpad-action-setup' },
-    { name: '配置问题（provider 未配）', state: { onboardingPending: false, configProblem: true }, ids: ['setup', 'sessions', 'workspace', 'doctor'], commands: ['setup', 'home', 'workspace', 'doctor'], firstLabelKey: 'launchpad-action-setup-provider' },
-    { name: '有上次会话', state: { onboardingPending: false, configProblem: false, lastSessionTitle: '修个登录页' }, ids: ['continue', 'sessions', 'workspace', 'doctor'], commands: ['continue', 'home', 'workspace', 'doctor'] },
-    { name: '常态（无上次会话）', state: { onboardingPending: false, configProblem: false }, ids: ['sessions', 'workspace', 'doctor', 'help'], commands: ['home', 'workspace', 'doctor', 'help'] },
-    { name: 'Git 项目（有分支）', state: { onboardingPending: false, configProblem: false, lastSessionTitle: 'x', gitBranch: 'main' }, ids: ['continue', 'sessions', 'workspace', 'doctor'], commands: ['continue', 'home', 'workspace', 'doctor'] },
-    { name: '刚升级（无数据源）', state: { onboardingPending: false, configProblem: false, lastSessionTitle: 'x', justUpgraded: true }, ids: ['continue', 'sessions', 'workspace', 'doctor'], commands: ['continue', 'home', 'workspace', 'doctor'] },
+    { name: '常态（条件位全不成立 → 帮助兜底）', state: BASE, ids: ['continue', 'sessions-workspace', 'settings', 'help'], commands: ['continue', 'home', 'settings', 'help'] },
+    { name: '条件位①单独成立（jobs）', state: { ...BASE, jobsRunning: true }, ids: ['continue', 'sessions-workspace', 'settings', 'jobs'], commands: ['continue', 'home', 'settings', 'jobs'] },
+    { name: '条件位②单独成立（update）', state: { ...BASE, updateAvailable: true }, ids: ['continue', 'sessions-workspace', 'settings', 'update'], commands: ['continue', 'home', 'settings', 'update'] },
+    { name: '条件位③单独成立（star）', state: { ...BASE, starDue: true }, ids: ['continue', 'sessions-workspace', 'settings', 'star'], commands: ['continue', 'home', 'settings', 'star'] },
+    { name: '①+②同时成立：①胜（jobs > update）', state: { ...BASE, jobsRunning: true, updateAvailable: true }, ids: ['continue', 'sessions-workspace', 'settings', 'jobs'], commands: ['continue', 'home', 'settings', 'jobs'] },
+    { name: '②+③同时成立：②胜（update > star）', state: { ...BASE, updateAvailable: true, starDue: true }, ids: ['continue', 'sessions-workspace', 'settings', 'update'], commands: ['continue', 'home', 'settings', 'update'] },
+    { name: '①+③同时成立：①胜（jobs > star）', state: { ...BASE, jobsRunning: true, starDue: true }, ids: ['continue', 'sessions-workspace', 'settings', 'jobs'], commands: ['continue', 'home', 'settings', 'jobs'] },
+    { name: '①②③全成立：①胜', state: { ...BASE, jobsRunning: true, updateAvailable: true, starDue: true }, ids: ['continue', 'sessions-workspace', 'settings', 'jobs'], commands: ['continue', 'home', 'settings', 'jobs'] },
+    { name: '无上次会话（Continue 整格缺席，条件位照常）', state: { jobsRunning: false, updateAvailable: false, starDue: false }, ids: ['sessions-workspace', 'settings', 'help'], commands: ['home', 'settings', 'help'] },
+    { name: '无上次会话 × 条件位①', state: { jobsRunning: true, updateAvailable: false, starDue: false }, ids: ['sessions-workspace', 'settings', 'jobs'], commands: ['home', 'settings', 'jobs'] },
   ]
   for (const row of rows) {
     const actions = resolveLaunchpadActions(row.state as never)
@@ -851,17 +890,17 @@ base.close()
     }
   }
   // 纯函数：不改入参（深冻结夹具，若函数原地写会抛 TypeError）。
-  const frozen = Object.freeze({ onboardingPending: false, configProblem: false, lastSessionTitle: '冻结标题' })
+  const frozen = Object.freeze({ lastSessionTitle: '冻结标题', jobsRunning: false, updateAvailable: false, starDue: false })
   const fromFrozen = resolveLaunchpadActions(frozen)
   check('E2 纯函数：不改入参（冻结状态对象直解）',
     fromFrozen.length === 4 && frozen.lastSessionTitle === '冻结标题',
     JSON.stringify(fromFrozen.map(a => a.id)))
   // Continue 带标题：标签键 + 插值；标题超宽截断（含省略号、显示宽度封顶）。
-  const titled = resolveLaunchpadActions({ onboardingPending: false, configProblem: false, lastSessionTitle: '修个登录页' })
+  const titled = resolveLaunchpadActions({ lastSessionTitle: '修个登录页', jobsRunning: false, updateAvailable: false, starDue: false })
   check('E3 有上次会话时 Continue 带标题（labelKey = continue-titled，values.title）',
     titled[0]?.labelKey === 'launchpad-action-continue-titled' && titled[0]?.values?.title === '修个登录页',
     JSON.stringify(titled[0]))
-  const long = resolveLaunchpadActions({ onboardingPending: false, configProblem: false, lastSessionTitle: '这是一个特别特别特别特别特别长的会话标题' })
+  const long = resolveLaunchpadActions({ lastSessionTitle: '这是一个特别特别特别特别特别长的会话标题', jobsRunning: false, updateAvailable: false, starDue: false })
   check('E4 超宽标题截断到省略号（宽度 ≤ 上限、尾部是 …）',
     (long[0]?.values?.title ?? '').endsWith('…') && stringWidth(long[0]?.values?.title ?? '') <= LAUNCHPAD_CONTINUE_TITLE_MAX,
     JSON.stringify(long[0]?.values?.title))
@@ -871,12 +910,8 @@ base.close()
     JSON.stringify([truncateContinueTitle(''), truncateContinueTitle('短标题'), truncateContinueTitle('a\nb')]))
   // 空标题 = 无历史：落到常态档（没有点了没反应的 Continue）。
   check('E6 lastSessionTitle 为空白 = 无历史（不造 Continue，落常态档）',
-    resolveLaunchpadActions({ onboardingPending: false, configProblem: false, lastSessionTitle: '   ' })[0]?.id === 'sessions',
-    resolveLaunchpadActions({ onboardingPending: false, configProblem: false, lastSessionTitle: '   ' }).map(a => a.id).join(','))
-  // 首启优先于配置问题（引导覆盖面更广，先跑引导）。
-  check('E7 首启 × 配置问题同时成立：按首启档（Quick Setup 第一位）',
-    resolveLaunchpadActions({ onboardingPending: true, configProblem: true })[0]?.labelKey === 'launchpad-action-setup',
-    '')
+    resolveLaunchpadActions({ lastSessionTitle: '   ', jobsRunning: false, updateAvailable: false, starDue: false })[0]?.id === 'sessions-workspace',
+    resolveLaunchpadActions({ lastSessionTitle: '   ', jobsRunning: false, updateAvailable: false, starDue: false }).map(a => a.id).join(','))
 }
 {
   const labels = DEFAULT_ACTIONS.map(a => t(a.labelKey as never, a.values as never))
@@ -928,24 +963,48 @@ for (const cols of [120, 100, 72, 60, 48]) {
 
 // ── G. 第四版专项：裁剪后仍右对齐、行高恒 1、自动闪烁、占位左对齐 ─────────
 {
-  // 48 列：fitChips 裁掉"模型"，剩下三条**仍然右对齐输入框右缘**。
+  // 48 列：fitChips 裁掉尾部（帮助），剩下三条**仍然右对齐输入框右缘**。
   const ev: Ev[] = []
   const s = await openLaunchpad(ev, { columns: 48 })
-  await settled(() => s.screen().includes('历史会话'))
+  await settled(() => s.screen().includes(SESSIONS_WORKSPACE_LABEL))
   const lines = viewportLines(s.term)
   const hintRow = lines.find(l => l.includes(CONTINUE_LABEL)) ?? ''
   const cardRow = lines.find(l => l.includes('╭')) ?? ''
   const cardLeft = leftGap(cardRow)
   const cardWidth = Math.max(24, Math.min(48 - 4, 72))
   check('G1 入口被裁掉后整行仍右对齐（行尾 = 卡片右缘 ±1，且被裁的不画半句）',
-    hintRow !== '' && !hintRow.includes('环境体检') && Math.abs(stringWidth(hintRow.replace(/\s+$/u, '')) - (cardLeft + cardWidth)) <= 1,
+    hintRow !== '' && !hintRow.includes(HELP_LABEL) && Math.abs(stringWidth(hintRow.replace(/\s+$/u, '')) - (cardLeft + cardWidth)) <= 1,
     `rowEnd=${stringWidth(hintRow.replace(/\s+$/u, ''))} cardRight=${cardLeft + cardWidth} ${hintRow.trim()}`)
   check('G2 裁剪后行高仍恒 1（三个入口同在一行、各只出现一次）',
-    rowHasAll(hintRow, [CONTINUE_LABEL, '历史会话', '工作区'])
+    rowHasAll(hintRow, [CONTINUE_LABEL, SESSIONS_WORKSPACE_LABEL, SETTINGS_LABEL])
       && lines.filter(l => l.includes(CONTINUE_LABEL)).length === 1
-      && lines.filter(l => l.includes('历史会话')).length === 1,
+      && lines.filter(l => l.includes(SESSIONS_WORKSPACE_LABEL)).length === 1,
     hintRow.trim())
   s.close()
+}
+{
+  // 第七版：条件位切换不许破坏这一排的对齐/行高契约——jobs/update/star/help
+  // 四种条件位各挂一次，入口行仍然恒 1 行、右对齐输入框右缘、四格齐整。
+  const variants: [string, string, Record<string, unknown>][] = [
+    ['jobs', JOBS_LABEL, { jobsRunning: true, updateAvailable: false, starDue: false }],
+    ['update', UPDATE_LABEL, { jobsRunning: false, updateAvailable: true, starDue: false }],
+    ['star', STAR_LABEL, { jobsRunning: false, updateAvailable: false, starDue: true }],
+    ['help', HELP_LABEL, { jobsRunning: false, updateAvailable: false, starDue: false }],
+  ]
+  for (const [kind, label, state] of variants) {
+    const s = await openLaunchpad([], { actions: resolveLaunchpadActions({ lastSessionTitle: '修个登录页', ...(state as never) }) })
+    await settled(() => s.screen().includes(label))
+    const lines = viewportLines(s.term)
+    const hintRow = lines.find(l => l.includes(label)) ?? ''
+    const cardLeft = leftGap(lines.find(l => l.includes('╭')) ?? '')
+    const cardRight = cardLeft + Math.max(24, Math.min(COLS - 4, 72))
+    check(`G2b 条件位=${kind}：四格同一行、行高恒 1、仍右对齐（对齐/行高契约不随条件位漂）`,
+      rowHasAll(hintRow, [CONTINUE_LABEL, SESSIONS_WORKSPACE_LABEL, SETTINGS_LABEL, label])
+        && lines.filter(l => l.includes(label)).length === 1
+        && Math.abs(stringWidth(hintRow.replace(/\s+$/u, '')) - cardRight) <= 1,
+      `${kind} ${hintRow.trim().slice(0, 90)}`)
+    s.close()
+  }
 }
 {
   // 自动呼吸：**不注入任何 focus 事件**（isTerminalFocused=false）时，光标
@@ -982,23 +1041,14 @@ for (const cols of [120, 100, 72, 60, 48]) {
 }
 
 {
-  // 首启/配置问题的条件按钮真的渲染（onboarding 完成且配置正常后永久消失）。
-  const first = await openLaunchpad([], { firstRun: true, actions: resolveLaunchpadActions({ onboardingPending: true, configProblem: false }) })
-  check('G6 首启：Quick Setup 是第一位入口（引导完成后不再出现）',
-    await settled(() => first.screen().includes('快速配置')
-      && (viewportLines(first.term).find(l => l.includes('快速配置')) ?? '').includes('工作区')),
-    first.screen().slice(0, 100))
-  first.close()
-  const broken = await openLaunchpad([], { actions: resolveLaunchpadActions({ onboardingPending: false, configProblem: true }) })
-  check('G7 配置问题：Set up provider 是第一位入口（其余三位不变）',
-    await settled(() => broken.screen().includes('配置 provider')
-      && (viewportLines(broken.term).find(l => l.includes('配置 provider')) ?? '').includes('历史会话')),
-    broken.screen().slice(0, 100))
-  broken.close()
+  // 第七版：doctor / setup / setup-provider 入口退役——任何状态下都不再渲染
+  // （首启由引导向导承担，provider 配置经向导或 /settings 可达）。
   const evn: Ev[] = []
-  const normal = await openLaunchpad(evn)
-  check('G8 常态：没有 setup 条件按钮（onboarding 完成且配置正常 → 永久消失）',
-    await settled(() => !normal.screen().includes('快速配置') && !normal.screen().includes('配置 provider')),
+  const normal = await openLaunchpad(evn, { firstRun: true })
+  check('G6 首启档也没有快速配置/provider 条件按钮（引导向导盖在落地页之上承担首启）',
+    await settled(() => normal.screen().includes(CONTINUE_LABEL)
+      && !normal.screen().includes('快速配置') && !normal.screen().includes('配置 provider')
+      && !normal.screen().includes('环境体检')),
     normal.screen().slice(0, 100))
   normal.close()
 }
@@ -1247,6 +1297,285 @@ for (const cols of [120, 100, 72, 60, 48]) {
   check('M2 点击浮层之外的空白触发 onBlankClick（Chat 用它关选择器）',
     last(ev, 'blank') !== undefined, JSON.stringify(ev.slice(before)))
   s.close()
+}
+
+
+// ── N. 第七版：光标压在字身上（VS Code 式反显块）──────────────────────────
+{
+  // ① 行尾打字：刚输入的字符与光标**同时可见**（EN + ZH 各一次）。判据用
+  //    终端格级属性：行里既有非反显的字符格、又有反显格（行尾反显空格），
+  //    且视口纯文本里字符原样在（没有被光标顶掉/吃掉）。
+  const cellScan = (s: ReturnType<typeof openLaunchpad>, ch: string) => {
+    const lines = viewportLines(s.term)
+    for (let row = 0; row < lines.length; row++) {
+      if (!lines[row]!.includes(ch)) continue
+      const line = s.term.buffer.active.getLine(row)!
+      let charPlain = false
+      let inverseCell = false
+      for (let col = 0; col < s.term.cols; col++) {
+        const cell = line.getCell(col)
+        if (cell === undefined) continue
+        if (cell.getChars() === ch && !cell.isInverse()) charPlain = true
+        if (cell.isInverse()) inverseCell = true
+      }
+      return { charPlain, inverseCell, text: lines[row]!.trim() }
+    }
+    return { charPlain: false, inverseCell: false, text: '' }
+  }
+  {
+    const ev: Ev[] = []
+    const s = await openLaunchpad(ev)
+    await settled(() => s.screen().includes('❯'))
+    await s.send('a')
+    const en = cellScan(s, 'a')
+    check('N1 行尾打英文字：字符与光标同时可见（字符格非反显 + 行内存在反显格 = 行尾反显空格）',
+      en.charPlain && en.inverseCell && en.text.includes('a'),
+      JSON.stringify(en))
+    await s.send('好')
+    const zh = cellScan(s, '好')
+    check('N1b 行尾打中文：宽字符与光标同时可见（不被劈半、不被吃掉）',
+      zh.charPlain && zh.inverseCell && zh.text.includes('好'),
+      JSON.stringify(zh))
+    s.close()
+  }
+  {
+    // ② 行中光标：反显块**压在当前字符身上**（对那一个字符 inverse），
+    //    前后字符常规显示、一个都不消失；视口纯文本逐字符等于原文
+    //    （绝不另起一格画方块、绝不增删字符）。
+    const ev: Ev[] = []
+    const s = await openLaunchpad(ev, { query: 'abc' })
+    await settled(() => s.screen().includes('abc'))
+    await s.send('\u001b[D')
+    await s.send('\u001b[D')
+    const lines = viewportLines(s.term)
+    const row = lines.findIndex(l => l.includes('abc'))
+    check('N2 行中光标压在字身上（b 反显，a/c 常规可见，文本逐字符不变）',
+      row >= 0 && (() => {
+        const line = s.term.buffer.active.getLine(row)!
+        let aPlain = false; let bInverse = false; let cPlain = false
+        for (let col = 0; col < s.term.cols; col++) {
+          const cell = line.getCell(col)
+          if (cell === undefined) continue
+          if (cell.getChars() === 'a') aPlain = !cell.isInverse()
+          if (cell.getChars() === 'b') bInverse = cell.isInverse()
+          if (cell.getChars() === 'c') cPlain = !cell.isInverse()
+        }
+        return aPlain && bInverse && cPlain && (lines[row]!.trim().includes('abc'))
+      })(),
+      row >= 0 ? lines[row]!.trim() : 'row not found')
+    s.close()
+  }
+  // ③ 闪烁相位逐字节不变已由 A11 钉死（相位只切样式）；此处补「反显 ↔ 常规」
+  //    的相位语义：相位帧数 ≥2 已由 G3 钉死，不重复挂机。
+  {
+    // ④ 空输入（第七版重做）：光标压在**占位文本的第一个字符**身上——行内
+    //    文本与「无光标」逐字节相同（没有多出来的块字符格），首字符带反显。
+    const ev: Ev[] = []
+    const s = await openLaunchpad(ev)
+    await settled(() => s.screen().includes('说点什么'))
+    const lines = viewportLines(s.term)
+    const row = lines.findIndex(l => l.includes('说点什么'))
+    const ph = '说点什么，或输入 / 看命令…'
+    check('N3 空输入：光标压在占位首字身上（行文本与无光标逐字节相同，首字符反显）',
+      row >= 0 && (() => {
+        const text = lines[row]!.trimEnd()
+        // 逐字节契约：行里就是 前缀 + 空格 + 占位原文，没有额外格子。
+        if (!text.includes('❯ ' + ph)) return false
+        const line = s.term.buffer.active.getLine(row)!
+        let firstInverse = false
+        for (let col = 0; col < s.term.cols; col++) {
+          const cell = line.getCell(col)
+          if (cell === undefined) continue
+          if (cell.getChars() === '说') firstInverse = cell.isInverse()
+        }
+        return firstInverse
+      })(),
+      row >= 0 ? lines[row]!.trim() : 'row not found')
+    s.close()
+  }
+  {
+    // ⑤ 失焦不消失（用户原话「哪怕焦点没了也不消失」）：从不注入 focus 事件
+    //    （terminalFocused:false）光标仍在——输入行里存在反显格。
+    const ev: Ev[] = []
+    const s = await openLaunchpad(ev, { terminalFocused: false })
+    await settled(() => s.screen().includes('说点什么'))
+    const lines = viewportLines(s.term)
+    const row = lines.findIndex(l => l.includes('说点什么'))
+    check('N4 无 focus 事件光标仍在（反显格存在；闪烁帧数由 G3 另行钉死）',
+      row >= 0 && (() => {
+        const line = s.term.buffer.active.getLine(row)!
+        for (let col = 0; col < s.term.cols; col++) {
+          const cell = line.getCell(col)
+          if (cell !== undefined && cell.isInverse()) return true
+        }
+        return false
+      })(),
+      row >= 0 ? lines[row]!.trim() : 'row not found')
+    s.close()
+  }
+  {
+    // ⑥ 行尾反显空格不额外占格：反显格紧贴最后一个字符之后，且那一格是空格
+    //    （不是把某个字符顶掉），其后没有别的非空内容。
+    const ev: Ev[] = []
+    const s = await openLaunchpad(ev)
+    await settled(() => s.screen().includes('❯'))
+    await s.send('ab')
+    await settled(() => s.screen().includes('ab'))
+    const lines = viewportLines(s.term)
+    const row = lines.findIndex(l => l.includes('ab'))
+    check('N5 行尾光标 = 紧贴末字符的反显空格（不占文本格、不吃字符）',
+      row >= 0 && (() => {
+        const raw = lines[row]!
+        // 行 = 缩进 + │ + ' ❯ ab ' + 空格 + 右边框：行首到 ab 全是 ASCII
+        //（空格/│/❯ 都是单宽），字符串下标 == 终端列号。
+        if (!raw.includes('❯ ab')) return false
+        const at = raw.indexOf('ab')
+        const line = s.term.buffer.active.getLine(row)!
+        const caretCell = line.getCell(at + 2)
+        const beyond = line.getCell(at + 3)
+        return caretCell !== undefined && caretCell.isInverse()
+          && (caretCell.getChars() === '' || caretCell.getChars() === ' ')
+          // 反显空格之后就是普通空白（没有被顶出来的字符），行没有被撑动。
+          && beyond !== undefined && !beyond.isInverse() && (beyond.getChars() === '' || beyond.getChars() === ' ')
+      })(),
+      row >= 0 ? lines[row]!.trim() : 'row not found')
+    s.close()
+  }
+}
+
+// ── R. 第七版追加：Tips 自动轮换 · 左下角铭牌可点 · 双版本铭牌 ────────────
+{
+  // Tips 自动轮换：短间隔（300ms）注入，跨一次自动轮换后文案换到下一条、
+  // **Tips 行之外的行逐字节不变**（呼吸感不许带来布局抖动）。手动切换后计时
+  // 重置：点击切一条，紧接着的一个自动窗口内不再跳（间隔远大于测试窗口时钉
+  // 死为「点击后 tipIndex 不被自动轮换立刻改掉」——这里用 5s 间隔 + 点击 +
+  // 800ms 窗口验证不被跳走）。
+  const TIP_A = '输入 / 看全部命令'
+  const TIP_B = 'Ctrl+V 直接粘贴'
+  {
+    const ev: Ev[] = []
+    const s = await openLaunchpad(ev, { tipRotateMs: 300 })
+    await settled(() => s.screen().includes(TIP_A))
+    const before = viewportLines(s.term)
+    const tipRowBefore = before.findIndex(l => l.includes('● Tips：'))
+    // 固定窗:Tips轮换 轮换本身是被测语义（无完成事件可轮询），按 >2 个间隔等。
+    await new Promise(resolve => setTimeout(resolve, 800))
+    const after = viewportLines(s.term)
+    const tipRowAfter = after.findIndex(l => l.includes('● Tips：'))
+    const othersSame = before.every((line, i) => i === tipRowBefore || after[i] === line)
+    // 慢 runner 上 800ms 窗口可能跨过两个 300ms 相位，接受 B 或 C（换到
+    // 「下一条」的顺序语义由 R2 的手动单步钉死）。
+    check('R1 Tips 自动轮换：文案换成下一批之一，Tips 行位置不变（仍在同一行号）',
+      tipRowBefore >= 0 && tipRowAfter === tipRowBefore
+        && (after[tipRowAfter]!.includes(TIP_B) || after[tipRowAfter]!.includes('参数行四段都能点'))
+        && before[tipRowBefore] !== after[tipRowAfter],
+      `before=${JSON.stringify(before[tipRowBefore])} after=${JSON.stringify(after[tipRowAfter])}`)
+    check('R1b 自动轮换零布局抖动：Tips 行之外的行逐字节不变', othersSame,
+      before.map((l, i) => after[i] === l ? '' : `${i}: ${JSON.stringify(l)} -> ${JSON.stringify(after[i])}`).filter(x => x !== '').join(' ; '))
+    s.close()
+  }
+  {
+    // 手动切换重置计时：5s 间隔下点击切到某条，800ms 窗口内不被自动轮换跳走。
+    const ev: Ev[] = []
+    const s = await openLaunchpad(ev, { tipRotateMs: 5000 })
+    await settled(() => s.screen().includes(TIP_A))
+    await s.click('● Tips：')
+    await settled(() => s.screen().includes(TIP_B))
+    // 固定窗:手动重置 计时重置是被测语义，窗口须显著小于间隔。
+    await new Promise(resolve => setTimeout(resolve, 800))
+    check('R2 手动切换后计时重置（800ms 窗口内不被 5s 自动轮换跳走）',
+      s.screen().includes(TIP_B) && !s.screen().includes('参数行四段都能点'),
+      s.screen().slice(0, 120))
+    s.close()
+  }
+}
+{
+  // 左下角工作目录铭牌：真鼠标点击 → onOpenWorkspace；键盘路径 = 焦点环末格
+  // （-1 → 参数4 → 入口4 → Tips → 铭牌，Tab×11）+ Enter 同一条回调。
+  const ev: Ev[] = []
+  const s = await openLaunchpad(ev, { cornerWorkspace: true })
+  await settled(() => s.screen().includes(CWD))
+  const before = ev.length
+  await s.click(CWD)
+  check('R3 点击左下角工作目录铭牌 → onOpenWorkspace（既有 /workspace 路径）',
+    last(ev, 'workspace') !== undefined, JSON.stringify(ev.slice(before)))
+  // 环 = -1 → 参数4（-2..-5）→ 入口4（0..3）→ Tips（-6）→ 铭牌（-7）：Tab×10。
+  for (let i = 0; i < 10; i++) await s.send('\t')
+  const beforeKb = ev.length
+  await s.send('\r')
+  check('R3b 键盘路径：焦点环走到铭牌（环末格）+ Enter → 同一条回调',
+    last(ev, 'workspace') !== undefined && last(ev, 'focus')?.value === -7,
+    JSON.stringify(ev.slice(beforeKb)))
+  s.close()
+}
+{
+  // 双版本铭牌（第七版定稿：**竖排两行**）：第一行 dsh-tui、第二行 dsh-core，
+  // 两行都右对齐；内核读不到时右侧只有第一行（降级不编造）。底部带 2 行后，
+  // 输入框在任何档位都不被挤掉（input-only 档由 D 组钉死；这里再钉 corners 行数）。
+  const s = await openLaunchpad([], { kernelVersion: '0.2.0-rc.2' })
+  await settled(() => s.screen().includes('dsh-core v0.2.0-rc.2'))
+  const lines = viewportLines(s.term)
+  const tuiRow = lines.findIndex(l => l.includes(`dsh-tui v${VERSION}`))
+  const kernelRow = lines.findIndex(l => l.includes('dsh-core v0.2.0-rc.2'))
+  check('R4 右下角双版本竖排：TUI 在上、内核在下，两行相邻且都靠右',
+    tuiRow >= 0 && kernelRow === tuiRow + 1
+      && Math.abs(rightGap(lines[tuiRow]!, COLS) - rightGap(lines[kernelRow]!, COLS)) <= 1,
+    `tui=${JSON.stringify(lines[tuiRow]?.trimEnd())} kernel=${JSON.stringify(lines[kernelRow]?.trimEnd())}`)
+  check('R4b 左下目录铭牌与版本第一行顶对齐（同一块铭牌带，一高一低不许）',
+    tuiRow >= 0 && (lines[tuiRow]!.includes(CWD) || lines[tuiRow]!.trim() === ''),
+    JSON.stringify(lines[tuiRow]?.trimEnd()))
+  s.close()
+  const s2 = await openLaunchpad([])
+  await settled(() => s2.screen().includes(`dsh-tui v${VERSION}`))
+  check('R4c 内核版本缺省：只画 TUI 一行（不编造内核号）',
+    !s2.screen().includes('dsh-core v'), s2.screen().slice(-120))
+  s2.close()
+}
+
+// ── O. 第七版：落地页浮层无底色（透明宿主）──────────────────────────────
+{
+  // 差分判据：不开浮层 vs 开高浮层（探针行 + 6 行空白，盖住大字若干行），
+  // 含 █ 的行数必须不变——透明宿主不擦任何背景格；旧的 opaque/occlusion
+  // 姿态会把浮层矩形内的背景格刷成空白（真终端里就是那块 toolCardBackground
+  // 白底），行数应下跌。
+  const plain = await openLaunchpad([])
+  await settled(() => plain.screen().includes('██▀▀▄▄ ██▀▀▀▀'))
+  const baseline = viewportLines(plain.term).filter(l => l.includes('█')).length
+  plain.close()
+  const withOverlay = await openLaunchpad([], { overlayPanelTall: true })
+  await settled(() => withOverlay.screen().includes('PICKER-PROBE'))
+  const withOverlayLines = viewportLines(withOverlay.term)
+  const after = withOverlayLines.filter(l => l.includes('█')).length
+  check('O1 浮层盖在大字上不擦背景（透明宿主：含 █ 的行数与无浮层时一致）',
+    baseline > 0 && after === baseline,
+    `baseline=${baseline} withOverlay=${after}`)
+  check('O2 探针面板真的在屏上（盖在输入框上方）',
+    withOverlayLines.findIndex(l => l.includes('PICKER-PROBE')) >= 0
+      && withOverlayLines.findIndex(l => l.includes('PICKER-PROBE')) < withOverlayLines.findIndex(l => l.includes('╭')),
+    '')
+  withOverlay.close()
+}
+
+// ── P. 第七版：Continue 的 Alt+R 快捷键 ────────────────────────────────
+{
+  const ev: Ev[] = []
+  const s = await openLaunchpad(ev)
+  await settled(() => s.screen().includes(CONTINUE_LABEL))
+  const before = ev.length
+  await s.send('\u001br')
+  check('P1 Alt+R 触发 Continue（keymap 的 continue 动作，默认 alt+r）',
+    last(ev, 'action')?.value === 'continue' && last(ev, 'submit') === undefined,
+    JSON.stringify(ev.slice(before)))
+  s.close()
+  const ev2: Ev[] = []
+  const s2 = await openLaunchpad(ev2, { actions: resolveLaunchpadActions({ jobsRunning: false, updateAvailable: false, starDue: false }) })
+  await settled(() => s2.screen().includes(SESSIONS_WORKSPACE_LABEL))
+  const before2 = ev2.length
+  await s2.send('\u001br')
+  check('P2 没有可继续会话时 Alt+R 不放假动作（无 action，也不把 r 漏进草稿）',
+    last(ev2, 'action') === undefined && last(ev2, 'query') === undefined,
+    JSON.stringify(ev2.slice(before2)))
+  s2.close()
 }
 
 if (failures === 0) console.log(`\nverify-launchpad: ${checks} checks, all passed`)

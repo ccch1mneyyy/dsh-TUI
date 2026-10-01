@@ -5,11 +5,12 @@
  * 夹具"照抄"Chat 的接线——接线一旦漂移，那边照绿。这一层专钉漂移，案例全部来自
  * 真实缺陷（审查 B 轮在人肉读码时发现的那三条都出在这里）：
  *
- *   A. `/setup` 打开向导：落地页里敲 `/setup` 回车 → 向导上屏、落地页收掉。
- *   B. 提交首句的落点：首启（openHomeOnBoot 与落地页同真）提交一句 → 落在对话页、
- *      草稿就在输入框里、会话浏览器**不再盖着**（它本来开着，只是被落地页盖住）。
- *   C. 会开整屏界面的快捷入口：会话与工作区 / 设置 / 快捷键 → 先把落地页收掉，
- *      否则目标屏的 early-return 排在落地页之后，点了等于没反应。
+ *   A. `/setup` 打开向导：落地页里敲 `/setup` 回车 → 向导盖在落地页之上；
+ *      Esc 跳过**回到落地页**（第七版：不再收掉落地页落到对话页）。
+ *   B. 提交首句的落点：提交一句 → 落在对话页、草稿就在输入框里、会话浏览器
+ *      不再盖着（第七版起 boot 不预开浏览器，落地页是第一屏）。
+ *   C. 会开整屏界面的快捷入口（第七版：**盖在落地页之上**，Esc 回落地页——
+ *      从启动页进入对话页的唯一路径 = Enter 提交一条非命令消息）。
  *   D. 覆盖层动作（模型 / 主题 / 语言）不收落地页。
  *   E. 记账：向导里 Esc（跳过）**不写** onboarding.json；→→→Enter 走完才写。
  *   F. 最小模式：落地页整体不存在（launchpadVisible 真的接在渲染链上）。
@@ -177,6 +178,11 @@ function makeChannel(over: Record<string, unknown> = {}) {
       defaultEffort: 'high',
     }),
     listWorkspaces: () => Promise.resolve([]),
+    // Settings 整屏（第七版 C2：从落地页打开设置）只需要这三条缝；host
+    // 给 undefined = 渲染「设置不可用」提示（真 channel 由 dsh-adapter 提供）。
+    settingsHost: () => undefined,
+    settingsSections: () => [],
+    subscribeSettingsSections: () => () => {},
     describeCredential: () => Promise.resolve({ configured: true, source: 'env', writable: false }),
     balanceInfo: () => Promise.resolve({ ok: true, isAvailable: true, balances: [{ currency: 'CNY', total: 110 }] }),
     setEffort: async (id: string) => {
@@ -298,8 +304,15 @@ const WIZARD_MARK = '第 1 / 4 步'
   check('A1 普通启动落在落地页', await settled(() => chat.screen().includes('说点什么')))
   await chat.type('/setup')
   await chat.send('\r')
-  check('A2 落地页里 /setup 打开向导（落地页同时收掉）',
+  check('A2 落地页里 /setup 打开向导（向导盖在落地页之上）',
     await settled(() => chat.screen().includes(WIZARD_MARK) && !chat.screen().includes('说点什么')),
+    chat.screen().slice(0, 200))
+  // 第七版：Esc 跳过向导必须**回到落地页**（不再收掉落地页落到对话页）。
+  // 草稿 '/setup' 还在输入框里（前缀 ⌘）——落地页状态原样保留。
+  await chat.send('\x1b')
+  check('A2b 向导 Esc 跳过回到落地页（不是对话页；草稿 /setup 原样在）',
+    await settled(() => chat.screen().includes('⌘') && chat.screen().includes('/setup')
+      && !chat.screen().includes(WIZARD_MARK)),
     chat.screen().slice(0, 200))
   await chat.unmount()
 }
@@ -307,7 +320,8 @@ const WIZARD_MARK = '第 1 / 4 步'
 // ── B. 提交首句的落点（第五版：回车直接发送，与 composer 回车同一条路径）──────
 {
   const chat = await mountChat({ launchpadOnBoot: true, openHomeOnBoot: true })
-  check('B1 落地页盖在会话浏览器之上', await settled(() => chat.screen().includes('说点什么')))
+  check('B1 落地页是第一屏（第七版：boot 不预开会话浏览器）',
+    await settled(() => chat.screen().includes('说点什么') && !chat.screen().includes('新建会话')),)
   await chat.type('你好')
   await chat.send('\r')
   check('B2 提交后不再显示落地页', await settled(() => !chat.screen().includes('说点什么')))
@@ -335,15 +349,50 @@ const WIZARD_MARK = '第 1 / 4 步'
   await chat.unmount()
 }
 
-// ── C. 会开整屏界面的快捷入口（回归：曾经点了没反应） ───────────────────────
+// ── C. 会开整屏界面的快捷入口（第七版：盖在落地页之上，Esc 回落地页）────────
 {
+  // 合并入口「会话与工作区」（home 那条）：打开后盖在落地页之上。
   const chat = await mountChat({ launchpadOnBoot: true })
   await settled(() => chat.screen().includes('说点什么'))
-  // 第五版焦点环 = 输入框 → 参数四段 → 入口：↓×5 才落到第一条入口（历史会话）。
+  // 焦点环 = 输入框 → 参数四段 → 入口：↓×5 落到第一条入口（会话与工作区）。
   for (let i = 0; i < 5; i++) await chat.send('\u001b[B')
   await chat.send('\r')
-  check('C1 历史会话：落地页收掉、会话管理真上屏（动作有可见效果）',
+  check('C1 会话与工作区：会话管理上屏、盖在落地页之上（动作有可见效果）',
     await settled(() => !chat.screen().includes('说点什么') && chat.screen().includes('新建会话')),
+    chat.screen().slice(0, 300))
+  // 第七版硬约束回归①：从启动页开会话浏览 → Esc → 仍在启动页（不是对话页）。
+  await chat.send('\x1b')
+  check('C1b 会话浏览 Esc 退出 → 回到启动页（草稿/参数/焦点都在，不是对话页）',
+    await settled(() => chat.screen().includes('说点什么') && !chat.screen().includes('新建会话')),
+    chat.screen().slice(0, 300))
+  await chat.unmount()
+}
+{
+  // 设置入口（第三格）：Settings 整屏盖在落地页之上，Esc 回启动页。
+  const chat = await mountChat({ launchpadOnBoot: true })
+  await settled(() => chat.screen().includes('说点什么'))
+  for (let i = 0; i < 6; i++) await chat.send('\u001b[B') // 第二条入口 = 设置
+  await chat.send('\r')
+  check('C2 设置入口：Settings 上屏、盖在落地页之上',
+    await settled(() => !chat.screen().includes('说点什么') && chat.screen().length > 0),
+    chat.screen().slice(0, 200))
+  await chat.send('\x1b')
+  check('C2b Settings Esc → 回到启动页',
+    await settled(() => chat.screen().includes('说点什么')), chat.screen().slice(0, 200))
+  await chat.unmount()
+}
+{
+  // 空输入 Esc（去会话浏览的那条路）：同样盖在落地页之上、Esc 回启动页——
+  // 用户实测 bug 原话：「ESC 退出来之后直接进入对话页面了，而不是启动页」。
+  const chat = await mountChat({ launchpadOnBoot: true })
+  await settled(() => chat.screen().includes('说点什么'))
+  await chat.send('\x1b')
+  check('C3 空输入 Esc 打开会话浏览（盖在落地页之上）',
+    await settled(() => !chat.screen().includes('说点什么') && chat.screen().includes('新建会话')),
+    chat.screen().slice(0, 300))
+  await chat.send('\x1b')
+  check('C3b 会话浏览 Esc → 回到启动页（绝不落到对话页）',
+    await settled(() => chat.screen().includes('说点什么') && !chat.screen().includes('新建会话')),
     chat.screen().slice(0, 300))
   await chat.unmount()
 }
@@ -585,6 +634,118 @@ const WIZARD_MARK = '第 1 / 4 步'
   await chat.unmount()
 }
 
+
+// ── Q. 第七版：命令面板开 /model、Continue 快捷键、条件位真接线 ────────────
+{
+  // 面板选中 /model：模型选择器盖在落地页之上，Esc 回**启动页**（回归③）。
+  const chat = await mountChat({ launchpadOnBoot: true })
+  check('Q0 Q1 夹具挂起来了（落地页上屏）', await settled(() => chat.screen().includes('说点什么')),
+    chat.screen().slice(0, 200))
+  await chat.type('/model')
+  await settled(() => chat.screen().includes('model'))
+  await chat.send('\r') // 面板选中 /model → runCommand（不是 submit）
+  // 注意：query 还是 '/model'，所以输入行是 ⌘ 前缀（占位不显示）——「落地页
+  // 还在」的判据用输入卡片（⌘ /model），不是占位文案。选择器首屏可能是分组
+  // 视图（本套件前面的用例写过「最近使用」名册）也可能是模型列表，两个标记
+  // 任一在屏即算选择器真的盖了上来。
+  check('Q1 面板执行 /model：选择器盖在落地页之上（无 submit）',
+    await settled(() => (chat.screen().includes('deepseek-reasoner') || chat.screen().includes('最近使用'))
+      && chat.screen().includes('⌘') && chat.screen().includes('/model'))
+      && !chat.calls.some(c => c.startsWith('submit:')),
+    chat.screen().slice(0, 240))
+  await chat.send('\x1b')
+  check('Q1b 选择器 Esc → 回到启动页（不是对话页；草稿 /model 原样在）',
+    await settled(() => chat.screen().includes('⌘') && chat.screen().includes('/model')
+      && !chat.screen().includes('deepseek-reasoner') && !chat.screen().includes('最近使用')),
+    chat.screen().slice(0, 240))
+  await chat.unmount()
+}
+{
+  // Continue + Alt+R（keymap 的 continue 动作）：agentViewRows 有可继续会话时
+  // 入口出现，Alt+R 直接 resumeTo（与点击同一条 runCommand 路径）。
+  const rows = [{
+    id: 's1', title: '上个会话', current: false, live: false,
+    status: 'idle', updatedAt: 2, summary: '',
+  }]
+  const chat2calls: string[] = []
+  const chat = await mountChat({ launchpadOnBoot: true }, {
+    agentViewRows: () => rows,
+    subscribeAgentView: (fn: () => void) => { fn; return () => {} },
+    resumeTo: async (id: string) => { chat2calls.push('resume:' + id); return { ok: true } },
+  } as never)
+  check('Q2 有可继续会话：Continue 入口带标题出现在入口行第一位',
+    await settled(() => chat.screen().includes('继续「上个会话」')),
+    chat.screen().slice(0, 200))
+  await chat.send('\u001br') // Alt+R
+  check('Q2b Alt+R 直接继续那条会话（resumeTo 被调、离开启动页进会话）',
+    await settled(() => chat2calls.includes('resume:s1') && !chat.screen().includes('说点什么')),
+    JSON.stringify(chat2calls))
+  await chat.unmount()
+}
+{
+  // 条件位①：有后台任务在跑 → 第四格是「后台任务」，Enter 打开任务面板
+  // （盖在落地页之上），Esc 回启动页。
+  const chat = await mountChat({ launchpadOnBoot: true }, {
+    backgroundJobs: [{
+      id: 'pwsh-1', kind: 'pwsh', label: 'pnpm test', status: 'running',
+      startedAt: 1, outputLines: [],
+    }],
+  } as never)
+  check('Q3 有后台任务在跑：条件位显示「后台任务」（优先级①）',
+    await settled(() => chat.screen().includes('后台任务') && !chat.screen().includes('帮助')),
+    chat.screen().slice(0, 200))
+  for (let i = 0; i < 7; i++) await chat.send('\u001b[B') // 第三条入口 = 后台任务
+  await chat.send('\r')
+  check('Q3b 后台任务入口：任务面板上屏、盖在落地页之上',
+    await settled(() => !chat.screen().includes('说点什么') && chat.screen().includes('pnpm test')),
+    chat.screen().slice(0, 240))
+  await chat.send('\x1b')
+  check('Q3c 任务面板 Esc → 回到启动页',
+    await settled(() => chat.screen().includes('说点什么')), chat.screen().slice(0, 200))
+  await chat.unmount()
+}
+
+
+{
+  // 第七版硬约束（澄清版）：从启动页开会话浏览 → **明确选中一个会话** = 有意导航，
+  // 必须真的进入那个会话的聊天页（浏览页与落地页都不在屏上）；同场景 Esc 则回
+  // 启动页（C1b/C3b 已钉）——两条判据是"选中目标"还是"退出"，不许互相挡。
+  const rows = [{
+    id: 's9', title: '目标会话', current: false, live: false,
+    status: 'idle', updatedAt: 9, summary: '',
+  }]
+  const q4calls: string[] = []
+  const chat = await mountChat({ launchpadOnBoot: true }, {
+    agentViewRows: () => rows,
+    subscribeAgentView: (fn: () => void) => { fn; return () => {} },
+    resumeTo: async (id: string) => { q4calls.push('resume:' + id); return { ok: true } },
+  } as never)
+  await settled(() => chat.screen().includes('说点什么'))
+  await chat.send('\x1b') // 空输入 Esc → 会话浏览盖在启动页之上
+  await settled(() => chat.screen().includes('目标会话'))
+  await chat.click('目标会话')
+  check('Q4 选中会话 = 有意导航：resumeTo 打开该会话、浏览页与启动页都收掉、落在对话页',
+    await settled(() => q4calls.includes('resume:s9')
+      && !chat.screen().includes('说点什么') && !chat.screen().includes('目标会话')),
+    JSON.stringify(q4calls) + ' :: ' + chat.screen().slice(0, 200))
+  await chat.unmount()
+}
+
+{
+  // 第七版：左下角工作目录铭牌 → 既有 /workspace 菜单盖在落地页之上，Esc 回
+  // 落地页（与参数行选择器同一姿态；不新造面板）。
+  const chat = await mountChat({ launchpadOnBoot: true })
+  await settled(() => chat.screen().includes('说点什么'))
+  await chat.click('C:/code/demo-project')
+  check('Q5 点击工作目录铭牌：Workspace 菜单盖在落地页之上（不新造面板）',
+    await settled(() => chat.screen().includes('Workspace 操作') && chat.screen().includes('说点什么')),
+    chat.screen().slice(0, 240))
+  await chat.send('\x1b')
+  check('Q5b 菜单 Esc → 回到启动页',
+    await settled(() => !chat.screen().includes('Workspace 操作') && chat.screen().includes('说点什么')),
+    chat.screen().slice(0, 200))
+  await chat.unmount()
+}
 if (failures === 0) console.log(`\nverify-launchpad-onboarding-chat: ${checks} checks, all passed`)
 else console.error(`\nverify-launchpad-onboarding-chat: ${failures} of ${checks} checks FAILED`)
 process.exit(failures === 0 ? 0 : 1)

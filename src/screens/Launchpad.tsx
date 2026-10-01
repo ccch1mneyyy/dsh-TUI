@@ -11,6 +11,7 @@ import { t } from '../i18n.js'
 import { isMinimalUiMode } from '../minimalUiMode.js'
 import { stringWidth } from '../ink/stringWidth.js'
 import { isPlainReturn } from '../utils/modifiers.js'
+import { actionMatches } from '../utils/keymap.js'
 import { formatClipboardInsert, readClipboard, type ClipboardRead } from '../utils/clipboard.js'
 import {
   collapseToSingleLine,
@@ -101,6 +102,15 @@ function segmentOfFocus(focus: number): LaunchpadParamSegment | undefined {
  * （焦点落到 Tips 行 + Enter = 切下一条，与点击同一条 rotateTip）。
  */
 const TIPS_FOCUS = -6
+/**
+ * 左下角工作目录铭牌在焦点环里的编码（第七版）：Tips 之后、环的最后一格。
+ * 铭牌可点开工作区切换，键盘路径走焦点环 + Enter（仓库硬规矩：每个可点
+ * 目标都要有不含鼠标的等价操作；复用环而不是另绑一个键，焦点环的语义
+ * （↑/↓/Tab 与版面顺序一致）自动覆盖它）。
+ */
+const CWD_CORNER_FOCUS = -7
+/** Tips 自动轮换的默认间隔（第七版：用户要「呼吸感」；手动切换后计时重置）。 */
+const TIP_ROTATE_MS = 10_000
 /** 参数段固定显示顺序（模型 · 思考深度 · 模式(preset) · 权限）。 */
 const PARAM_SEGMENT_ORDER: readonly LaunchpadParamSegment[] = ['model', 'effort', 'preset', 'permission']
 
@@ -146,6 +156,50 @@ function ParamChip({
         color={active ? 'suggestion' : colored ? 'autoAccept' : undefined}
         bold={active || colored === true}
         dimColor={!active && colored !== true}
+      >
+        {label}
+      </Text>
+    </Box>
+  )
+}
+
+/**
+ * 左下角工作目录铭牌（第七版：可点开工作区切换）。样式契约与 ActionChip/
+ * ParamChip 同一套——悬停/焦点 = **文字高光**（主题蓝 + 加粗，不铺背景方块），
+ * 恒 1 行高，截断仍走 truncate-middle（窄屏不撑爆）；点击拦住冒泡（不是
+ * 「点空白」）；键盘路径 = 焦点环（环的末格）+ Enter，与点击同一条回调。
+ */
+function CornerChip({
+  label,
+  focused,
+  onActivate,
+  onHover,
+  onHoverLeave,
+}: {
+  label: string
+  focused: boolean
+  onActivate: () => void
+  onHover: () => void
+  onHoverLeave: () => void
+}): React.ReactNode {
+  const [hovered, setHovered] = React.useState(false)
+  const active = hovered || focused
+  return (
+    <Box
+      flexShrink={1}
+      height={1}
+      onMouseEnter={() => { setHovered(true); onHover() }}
+      onMouseLeave={() => { setHovered(false); onHoverLeave() }}
+      onClick={(event: ClickEvent) => {
+        event.stopImmediatePropagation()
+        onActivate()
+      }}
+    >
+      <Text
+        color={active ? 'suggestion' : undefined}
+        bold={active}
+        dimColor={!active}
+        wrap="truncate-middle"
       >
         {label}
       </Text>
@@ -219,6 +273,12 @@ export function Launchpad({
   commands,
   onCommandPick,
   clipboardReader = readClipboard,
+  /** Tips 自动轮换间隔（第七版；测试缝：无头回归注入短间隔确定性驱动相位）。 */
+  tipRotateMs = TIP_ROTATE_MS,
+  /** 左下角工作目录铭牌被点击/回车时交给 Chat（开既有的 /workspace 工作区菜单）。 */
+  onOpenWorkspace,
+  /** 内核（dsh）版本——右下角与 TUI 版本并列显示；读不到就不画内核段。 */
+  kernelVersion,
   cwd,
   branch,
   tuiVersion,
@@ -301,10 +361,16 @@ export function Launchpad({
    * Chat 不传这一项）。签名与 `readClipboard` 一致。
    */
   clipboardReader?: () => Promise<ClipboardRead>
+  /** Tips 自动轮换间隔（第七版；测试缝，生产用默认 10s）。 */
+  tipRotateMs?: number
+  /** 左下角工作目录铭牌被点击/焦点环 Enter 时交给 Chat（开 /workspace 菜单）。 */
+  onOpenWorkspace?: (() => void) | undefined
+  /** 内核（dsh）版本（contract.installedKernelVersion 的真实读数）；缺省只画 TUI 段。 */
+  kernelVersion?: string | undefined
   /** 双角铭牌：左下角的工作路径与分支。 */
   cwd?: string | undefined
   branch?: string | undefined
-  /** 双角铭牌：右下角的版本号。 */
+  /** 双角铭牌：右下角的 TUI 版本号。 */
   tuiVersion?: string | undefined
   onFocusChange: (index: number) => void
   onAction: (action: LaunchpadAction) => void
@@ -441,7 +507,11 @@ export function Launchpad({
   const hasParams = fittedParams.length > 0
   // 双角铭牌：像两枚低调的机械铭牌，把整块界面扎在终端底边上。
   const cornerLeft = [cwd, branch].filter(part => part !== undefined && part !== '').join(':')
-  const cornerRight = tuiVersion === undefined || tuiVersion === '' ? undefined : `dsh-tui v${tuiVersion}`
+  // 右下角双版本（第七版，竖排两行）：第一行 TUI、第二行内核（dsh-core）。
+  // 内核版本来自 contract.installedKernelVersion 的真实读数（宿主 CLI 或内核
+  // 线包的 manifest），读不到就只画 TUI 一行——绝不编造。
+  const tuiPart = tuiVersion === undefined || tuiVersion === '' ? undefined : `dsh-tui v${tuiVersion}`
+  const kernelPart = kernelVersion === undefined || kernelVersion === '' ? undefined : `dsh-core v${kernelVersion}`
   const cardWidth = Math.max(24, Math.min(columns - 4, 72))
 
   const layout: LaunchpadLayout = resolveLaunchpadLayout(columns, rows, {
@@ -450,6 +520,18 @@ export function Launchpad({
     whaleGirl,
     font: launchpadFont(fontId),
   })
+  // Tips 自动轮换（第七版，用户要「呼吸感」）：约 10s 一换，与点击/焦点+Enter
+  // 的手动切换**并存**——手动切换改 tipIndex，本 effect 以 tipIndex 为依赖，
+  // 重臂即计时重置（刚点完不会立刻被自动轮换跳走）。只在 Tips 行真的在画、
+  // 且不是首启句/粘贴提示时跑；本组件被整屏盖住时随之卸载，定时器自然停。
+  // 切换只改那一行文本（TIP_KEYS 查表），行高与居中位置不变——无布局抖动。
+  const tipsAutoRotatable = layout.showTip && pasteNotice === undefined && !firstRun
+  React.useEffect(() => {
+    if (!tipsAutoRotatable) return
+    const timer = setInterval(() => { setTipIndex(index => (index + 1) % TIP_KEYS.length) }, tipRotateMs)
+    ;(timer as { unref?: () => void }).unref?.()
+    return () => { clearInterval(timer) }
+  }, [tipsAutoRotatable, tipRotateMs, tipIndex])
   // 一行装得下几个动作：装不下的**不画**（不是截断）——半个标签比少一个
   // 入口更难懂。键盘仍能走到全部入口，丢掉的只是鼠标的礼貌。
   // 第四版标签就是**纯文字**（无键帽/键位前缀）；带插值的（Continue 标题）由 t() 解。
@@ -518,6 +600,17 @@ export function Launchpad({
       event.stopImmediatePropagation()
       return
     }
+    // 第七版：Continue 的专属快捷键（keymap 的 `continue` 动作，默认 Alt+R，
+    // 可经 /settings → Shortcuts 重映射）。只在这一屏生效（聊天页不绑这条）；
+    // actions 里没有 continue（无可继续会话）时不放假动作——按下即忽略。
+    if (actionMatches('continue', input, key)) {
+      const continueAction = actions.find(action => action.id === 'continue')
+      if (continueAction !== undefined) {
+        onAction(continueAction)
+        event.stopImmediatePropagation()
+        return
+      }
+    }
     // 命令补全面板（第六版 BUG 1）：面板开着时 ↑/↓/Enter/Tab/Esc 全归面板——
     // 与聊天页 composer 的补全菜单同一套键位。Enter/Tab/点击 = 执行选中命令
     // （onCommandPick → Chat 的 runCommand，绝不 submit）；Esc 只收面板，
@@ -562,6 +655,9 @@ export function Launchpad({
       const focusedSegment = segmentOfFocus(focusIndex)
       if (focusIndex === TIPS_FOCUS) {
         rotateTip()
+      } else if (focusIndex === CWD_CORNER_FOCUS && onOpenWorkspace !== undefined) {
+        // 左下角工作目录铭牌（第七版）：Enter = 打开既有 /workspace 菜单。
+        onOpenWorkspace()
       } else if (focusedSegment !== undefined && onParamPick !== undefined) {
         onParamPick(focusedSegment)
       } else {
@@ -583,11 +679,14 @@ export function Launchpad({
       // 窄终端里 `fitChips`/参数行的宽度裁剪会丢掉放不下的那几个，按
       // 整张表绕圈会让焦点指着一个看不见的目标、Enter 触发一个看不见的动作。
       const tipsFocusable = layout.showTip && pasteNotice === undefined && !firstRun
+      // 左下角铭牌（第七版）：画得出来且接了 onOpenWorkspace 才进环（末格）。
+      const cornerFocusable = layout.showCorners && cornerLeft !== '' && onOpenWorkspace !== undefined
       const ring = [
         -1,
         ...fittedParams.map(part => paramFocusOf(part.segment)),
         ...chips.map(chip => chip.index),
         ...(tipsFocusable ? [TIPS_FOCUS] : []),
+        ...(cornerFocusable ? [CWD_CORNER_FOCUS] : []),
       ]
       const at = ring.indexOf(focusIndex)
       const next = ring[((at >= 0 ? at : 0) + step + ring.length) % ring.length]!
@@ -669,9 +768,10 @@ export function Launchpad({
             <SearchBox
               query={query}
               placeholder={t('launchpad-placeholder')}
-              isFocused={inputFocused}
-              // 焦点在输入框时按持焦渲染（光标常在、随相位呼吸）；焦点挪到
-              // 参数段/动作行时才交回真实的终端焦点标志（那时光标本来就不该画）。
+              // 第七版（用户原话「光标永远不消失 哪怕焦点没了也不消失」）：
+              // 只要这一屏在，输入光标**常在**——焦点挪到参数段/入口行只影响
+              // 外框提亮（inputFocused），不再当光标的开关。
+              isFocused
               isTerminalFocused={inputFocused ? true : isTerminalFocused}
               // 占位紧跟 ❯ 之后左对齐（用户实测要求；只影响落地页这一处）。
               placeholderAlign="left"
@@ -717,9 +817,11 @@ export function Launchpad({
           )}
           {/* 选择器浮层（第五版）：Chat 传进来的既有 picker overlay 盖在落地页
               之上——锚在输入框卡片顶边向上展开（与聊天页「picker 紧贴输入框」
-              同一姿态），零布局高度、不推动这一屏的版面。 */}
+              同一姿态），零布局高度、不推动这一屏的版面。第七版：transparent——
+              落地页这一侧的浮层不铺底色（occlusion/off 填充都关），背景透出
+              立绘与大字；聊天页的同一批选择器不受影响（那边不传 transparent）。 */}
           {overlayPanel !== undefined && (
-            <OverlayAbove maxHeight={Math.max(rows - 8, 1)}>
+            <OverlayAbove maxHeight={Math.max(rows - 8, 1)} transparent>
               {/* BUG 3：浮层内部的点击（选行/拖滑杆）不算“点空白”——拦住冒泡，
                   只有浮层之外的点击才走整页 onBlankClick 的关面板兜底。 */}
               <Box onClick={(event: ClickEvent) => { event.stopImmediatePropagation() }}>
@@ -731,7 +833,7 @@ export function Launchpad({
               同一个锚点姿态（输入框卡片顶边向上展开）。面板里的点击同样拦住
               冒泡（点命令行 = 选中执行，不是“点空白”）。 */}
           {overlayPanel === undefined && paletteOpen && paletteSelected !== undefined && (
-            <OverlayAbove maxHeight={Math.max(rows - 8, 1)}>
+            <OverlayAbove maxHeight={Math.max(rows - 8, 1)} transparent>
               <Box onClick={(event: ClickEvent) => { event.stopImmediatePropagation() }}>
                 <CommandSuggestions
                   commands={paletteCommands}
@@ -818,11 +920,32 @@ export function Launchpad({
           </Box>
         )}
       </Box>
-      {/* 双角铭牌：左下工作路径:分支、右下版本号——低调，但把界面扎在底边上。 */}
+      {/* 双角铭牌（第七版：右下版本号**竖排两行**，用户原话「版本号做成竖向
+          堆叠」）：左下目录铭牌仍 1 行、与第一行**顶对齐**（同一块铭牌带，不散）；
+          第一行 = dsh-tui、第二行 = dsh-core（内核读不到时右侧只有第一行）。 */}
       {layout.showCorners && (
-        <Box flexShrink={0} flexDirection="row" justifyContent="space-between">
-          <Text dimColor wrap="truncate-middle">{cornerLeft}</Text>
-          <Text dimColor wrap="truncate-middle">{cornerRight ?? ''}</Text>
+        <Box flexShrink={0} flexDirection="column">
+          <Box flexShrink={0} flexDirection="row" justifyContent="space-between" height={1}>
+            {cornerLeft !== '' && onOpenWorkspace !== undefined ? (
+              <CornerChip
+                label={cornerLeft}
+                focused={focusIndex === CWD_CORNER_FOCUS}
+                onActivate={onOpenWorkspace}
+                onHover={() => onFocusChange(CWD_CORNER_FOCUS)}
+                onHoverLeave={() => {
+                  if (focusIndex === CWD_CORNER_FOCUS) onFocusChange(-1)
+                }}
+              />
+            ) : (
+              <Text dimColor wrap="truncate-middle">{cornerLeft}</Text>
+            )}
+            <Text dimColor wrap="truncate-middle">{tuiPart ?? ''}</Text>
+          </Box>
+          {kernelPart !== undefined && (
+            <Box flexShrink={0} flexDirection="row" justifyContent="flex-end" height={1}>
+              <Text dimColor wrap="truncate-middle">{kernelPart}</Text>
+            </Box>
+          )}
         </Box>
       )}
     </Box>
