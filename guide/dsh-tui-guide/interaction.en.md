@@ -106,8 +106,9 @@ results back to the chat screen and add no new behavior.
   background jobs / the family tree / the wizard) render **above the launchpad** — `Esc` closes them
   back onto the launchpad (draft, params and focus intact); **the only way off the launchpad into the
   chat is submitting a non-command line with Enter**. Overlays on the launchpad side (pickers, the
-  command palette) use a **transparent host** — no fill, the splash art shows through (the chat page's
-  pickers are unaffected).
+  command palette) are a **clean cutout** — every cell in the overlay rect is space-filled (host
+  glyphs never bleed through), yet no background color is emitted (no white block; Kitty splash
+  art still shows through the terminal-default cells; the chat page's pickers are unaffected).
 - **Tips line**: click to rotate (three tips cycle; the first-run tip has top priority and never rotates);
   keyboard path = focus ring + `Enter`; as of v7 it also **auto-rotates** (~10s per tip; a manual
   rotate resets the timer) — the switch changes only the text, never the row height or centering.
