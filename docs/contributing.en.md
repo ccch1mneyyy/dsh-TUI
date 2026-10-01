@@ -331,7 +331,8 @@ CI separately routes changes using the path allowlist in
 - A local rebuild exemption does not skip CI; preserve required gates and report
   the actual local verification scope.
 
-`verify:build` also checks source hygiene, renderer primitives, theme and
+`verify:build` also checks source hygiene, renderer primitives, the terminal
+size source (outside `ink/`, only through `useTerminalSize()`), theme and
 activity preference migrations, status animations, table layout, mermaid
 diagrams, and side-question behavior.
 
