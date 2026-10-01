@@ -75,7 +75,10 @@ class FakeStdout extends Writable {
   columns = COLS
   rows = ROWS
   isTTY = true
-  constructor(private term: InstanceType<typeof XTerm>) { super() }
+  constructor(private term: InstanceType<typeof XTerm>, cols = COLS) {
+    super()
+    this.columns = cols
+  }
   _write(chunk: unknown, _encoding: unknown, callback: () => void): void {
     this.term.write(String(chunk), callback)
   }
@@ -95,9 +98,14 @@ interface Frame {
   term: InstanceType<typeof XTerm>
 }
 
-async function withTerminal(make: () => React.ReactNode, run: (frame: Frame) => Promise<void>): Promise<void> {
-  const term = new XTerm({ cols: COLS, rows: ROWS, scrollback: 0, allowProposedApi: true })
-  const stdout = new FakeStdout(term) as unknown as NodeJS.WriteStream
+async function withTerminal(
+  make: () => React.ReactNode,
+  run: (frame: Frame) => Promise<void>,
+  // 列宽可覆盖：成组的竖线是逐行自绘的，宽度一变就要重新核对行数
+  cols = COLS,
+): Promise<void> {
+  const term = new XTerm({ cols, rows: ROWS, scrollback: 0, allowProposedApi: true })
+  const stdout = new FakeStdout(term, cols) as unknown as NodeJS.WriteStream
   const stdin = new Input()
   const instance = await render(make(), {
     stdout,
@@ -188,7 +196,8 @@ console.log('--- G1: two settled jobs group without folding ---')
     const i2 = idxOf(lines, 'job: pwsh-2')
     check('G1 两张卡都在屏上', i1 >= 0 && i2 >= 0, 'i1=' + i1 + ' i2=' + i2)
     check('G1 组内不留空行（成员相邻）', i2 === i1 + 1, 'i1=' + i1 + ' i2=' + i2)
-    check('G1 成员左侧共用连接线', (lines[i1] ?? '').startsWith('│ ') && (lines[i2] ?? '').startsWith('│ '),
+    // 两张卡 = 括号的两端：首张 `╭` 起手、末张 `╰` 收口，正文都在括号内
+    check('G1 成员共用同一条连接线', (lines[i1] ?? '').startsWith('╭ ') && (lines[i2] ?? '').startsWith('╰ '),
       JSON.stringify([lines[i1], lines[i2]]))
     check('G1 两张不触发自动折叠', !frame.screen().includes('background jobs folded'))
     check('G1 组头报已完成数', frame.screen().includes('2 completed'))
@@ -594,9 +603,10 @@ console.log('--- G17: a wrapped label keeps the joint+glyph on its own line ---'
 }
 
 // ---------------------------------------------------------------------------
-// G18 — 成员标签折行时竖线不得断开（竖线由 body 的左边框画，覆盖每一行）
+// G18 — 组内每一行都必须在竖线内（竖线由卡片逐行自绘：标签折行数由
+// 组件自己算准，见 JobCard 的 `rail`）
 // 现场：逐行手写前缀时，折行出来的续行在 label 列内部，没有前缀可加 →
-// 组里第一张卡的续行掉线，链条断开（2026-09-30 用户截图实证）。
+// 组里第一张卡的续行掉线（2026-09-30 用户截图实证）。
 // ---------------------------------------------------------------------------
 console.log('--- G18: every row of the group stays inside the rail ---')
 {
@@ -615,11 +625,13 @@ console.log('--- G18: every row of the group stays inside the rail ---')
     const lines = frame.lines().filter(l => l.trim() !== '')
     const header = lines.findIndex(l => l.includes('background jobs ×2'))
     const body = header >= 0 ? lines.slice(header + 1) : []
-    // 组体 = │ 行 + 收口的 ╰（G20 单独钉括号形状）
-    check('G18 组内每一行都在竖线内', body.length >= 5 && body.slice(0, -1).every(l => l.startsWith('│ ')),
+    // 组体 = ╭ 首行 + │ 中间若干 + ╰ 末行（G20 单独钉括号形状）
+    check('G18 组内每一行都在竖线内', body.length >= 5 && body.slice(1, -1).every(l => l.startsWith('│ ')),
       JSON.stringify(body.slice(0, 8)))
-    check('G18 末行（输出行）同样在竖线内', (body[body.length - 2] ?? '').startsWith('│ '),
+    check('G18 末行（输出行）仍带连接线', (body[body.length - 2] ?? '').startsWith('│ '),
       JSON.stringify(body.slice(-3)))
+    check('G18 末行以 ╰ 收口且带正文', (body[body.length - 1] ?? '').startsWith('╰ ') &&
+      (body[body.length - 1] ?? '').trim().length > 2, JSON.stringify(body.slice(-2)))
   })
 }
 
@@ -644,13 +656,13 @@ console.log('--- G19: a live middle member keeps the rail on its output rows ---
     check('G19 输出行在竖线之内', out >= 0 && (lines[out] ?? '').startsWith('│ '), JSON.stringify(lines[out]))
     check('G19 第二行输出同样有线', out >= 0 && (lines[out + 1] ?? '').startsWith('│ '), JSON.stringify(lines[out + 1]))
     const tail = lines.findIndex(l => l.includes('job: pwsh-3'))
-    check('G19 末成员同样在竖线内', tail >= 0 && (lines[tail] ?? '').startsWith('│ '), JSON.stringify(lines[tail]))
+    check('G19 末成员在竖线内收口', tail >= 0 && (lines[tail] ?? '').startsWith('╰ '), JSON.stringify(lines[tail]))
   })
 }
 
 // ---------------------------------------------------------------------------
-// G20 — 圆角括号：组头 `╭` 起手、尾成员 `╰` 收口、中间每一行都是 `│`；
-// 折叠态则是一条独立摘要行（不带弧，没有身体可括）
+// G20 — 圆角括号只括任务卡：摘要行在括号外，第一张卡 `╭` 起手、最后一张卡
+// 的最后一行 `╰` 收口（收口落在正文行上，不额外占行）；折叠态是独立摘要行
 // ---------------------------------------------------------------------------
 console.log('--- G20: the open group is a rounded bracket, the fold line is not ---')
 {
@@ -662,10 +674,14 @@ console.log('--- G20: the open group is a rounded bracket, the fold line is not 
     check('G20 展开组渲染出来', await settled(() => frame.lines().some(l => l.includes('compiling module a'))),
       frame.lines().filter(l => l.trim() !== '').slice(0, 6).join('|'))
     const lines = frame.lines().filter(l => l.trim() !== '')
-    check('G20 组头以 ╭ 起手', (lines[0] ?? '').startsWith('╭ ▾ '), JSON.stringify(lines[0]))
-    check('G20 末行是 ╰ 收口', (lines[lines.length - 1] ?? '').trim() === '╰', JSON.stringify(lines[lines.length - 1]))
-    check('G20 中间每一行都在 │ 之内', lines.slice(1, -1).every(l => l.startsWith('│ ')),
-      JSON.stringify(lines.slice(1, -1)))
+    // 摘要行在括号 OUTSIDE：括号只括任务卡
+    check('G20 组头在括号外', (lines[0] ?? '').startsWith('▾ '), JSON.stringify(lines[0]))
+    check('G20 第一张卡以 ╭ 起手', (lines[1] ?? '').startsWith('╭ '), JSON.stringify(lines[1]))
+    const last = lines[lines.length - 1] ?? ''
+    check('G20 末行以 ╰ 收口且带正文（不额外占行）', last.startsWith('╰ ') && last.trim().length > 2,
+      JSON.stringify(last))
+    check('G20 中间每一行都在 │ 之内', lines.slice(2, -1).every(l => l.startsWith('│ ')),
+      JSON.stringify(lines.slice(2, -1)))
   })
   // 折叠态：一条摘要行，既无起弧也无收口
   await withTerminal(() => renderList([
@@ -679,6 +695,40 @@ console.log('--- G20: the open group is a rounded bracket, the fold line is not 
     check('G20 折叠态不带圆弧', !lines.some(l => l.includes('╭') || l.includes('╰')),
       JSON.stringify(lines.slice(0, 3)))
   })
+}
+
+// ---------------------------------------------------------------------------
+// G21 — 竖线逐行自绘的宽度不变式：任何列宽下，括号都必须正好括住卡片
+// 首行（标签折行数、瀑布行数、尾行都由 JobCard 自己算 // 算错就会漏画或多画）
+// ---------------------------------------------------------------------------
+console.log('--- G21: the hand-painted bracket fits the cards at every width ---')
+{
+  const longLabel = 'gh pr checks 1216 --watch --interval 30 2>&1 | Select-Object -Last 40'
+  const rows = [
+    jobRow(1, makeJob('pwsh-1', 'completed', { label: longLabel })),
+    jobRow(2, makeJob('pwsh-2', 'running', {
+      label: longLabel + " ; gh pr view 1216 --json state,mergeable --jq '{state}'",
+      outputLines: [{ text: 'compiling module a …' }, { text: 'compiling module b …' }],
+    })),
+  ]
+  for (const cols of [60, 80, 140]) {
+    await withTerminal(() => renderList(rows, { jobGroupFold: 'never' }), async frame => {
+      const ok = await settled(() => frame.lines().some(l => l.includes('compiling module b')))
+      const lines = frame.lines().filter(l => l.trim() !== '')
+      const header = lines.findIndex(l => l.includes('background jobs ×2'))
+      const body = header >= 0 ? lines.slice(header + 1) : []
+      check(`G21 ${cols} 列：组体渲染出来`, ok && body.length >= 5,
+        'cols=' + cols + ' ' + JSON.stringify(body.slice(0, 6)))
+      // 每一行都以括号字形开头（漏画 = 该行以空格开头；多画 = 该行只有字形没有正文）
+      check(`G21 ${cols} 列：每行都在括号内`,
+        body.length >= 5 && body.slice(1, -1).every(l => l.startsWith('│ ')) &&
+        (body[0] ?? '').startsWith('╭ ') && (body[body.length - 1] ?? '').startsWith('╰ '),
+        'cols=' + cols + ' ' + JSON.stringify(body))
+      check(`G21 ${cols} 列：收口行带正文（没有空行）`,
+        (body[body.length - 1] ?? '').trim().length > 2 && !body.some(l => /^[│╭╰]\s*$/.test(l)),
+        'cols=' + cols + ' ' + JSON.stringify(body.slice(-2)))
+    }, cols)
+  }
 }
 
 if (failed > 0) {
