@@ -6,6 +6,7 @@ import type { BackgroundJobOutputChannel, BackgroundJobOutputLine } from '../../
 import type { Theme } from '../../theme.js'
 import { t } from '../../i18n.js'
 import wrapText from '../../ink/wrap-text.js'
+import { stringWidth } from '../../ink/stringWidth.js'
 import { isMinimalUiMode } from '../../minimalUiMode.js'
 import { ProgressBar } from '../design-system/ProgressBar.js'
 
@@ -115,18 +116,24 @@ function waterfallWindow(
  * tail of the agent's own job_output results as they stream through the
  * transcript.
  *
- * `grouped` marks the card as a member of a job GROUP (see JobGroupRow):
- * the card gets a 2-cell chain column on its left, drawn as the body box's
- * LEFT BORDER so it spans every line of the card — a wrapped label or a
- * wrapped output row keeps one unbroken rail, and the brace runs unbroken
- * from the first member to the last. A lone card renders as before.
+ * `rail` marks the card as a member of a job GROUP (see JobGroupRow): the
+ * card gets a 2-cell chain column on its left, and `rail.open` / `rail.close`
+ * round its ends (`╭` on the first line, `╰` on the last) so the run reads as
+ * one bracket from the first card to the last — the group's summary line stays
+ * OUTSIDE it. A lone card renders as before.
+ *
+ * The rail is drawn per line, which means this component owns the card's
+ * HEIGHT: the label is pre-wrapped against an explicit column width (so the
+ * wrap count is known, not guessed from the flex result), and the rail column
+ * paints exactly that many glyphs. Both use ink's own `wrapText`/`stringWidth`,
+ * so the pre-wrap breaks where the renderer would have broken.
  */
-export function JobCard({ job, marginTopOnTurn, onClick, grouped }: {
+export function JobCard({ job, marginTopOnTurn, onClick, rail }: {
   job: JobRow
   marginTopOnTurn: boolean
   onClick?(): void
-  /** Member of a job GROUP: draws the shared chain rail on its left. */
-  grouped?: boolean | undefined
+  /** Job GROUP member: shared chain rail, optionally rounded at either end. */
+  rail?: { open?: boolean; close?: boolean } | undefined
 }): React.ReactNode {
   const settled = job.status === 'completed' || job.status === 'failed' || job.status === 'killed'
   // 动画订阅仅限存活卡片：settled 后退订共享 clock（同 SubagentMessage 的
@@ -136,11 +143,13 @@ export function JobCard({ job, marginTopOnTurn, onClick, grouped }: {
   const info = statusInfo(job.status)
   const [hovered, setHovered] = React.useState(false)
   const clickable = onClick !== undefined
-  // A grouped card spends two columns on the rail — the body's left border
-  // plus its 1-cell padding. The waterfall must be wrapped against the width
-  // that is actually left, or every row would wrap a second time inside ink
-  // and the window would grow past its constant height.
-  const rowWidth = Math.max(20, (columns ?? 80) - WATERFALL_GUTTER - (grouped === true ? 2 : 0))
+  const grouped = rail !== undefined
+  const cardColumns = columns ?? 80
+  // A grouped card spends two columns on the rail — the glyph column plus its
+  // 1-cell gutter. Every width below is measured against that, or the rows
+  // would wrap a second time inside ink and the card would grow past the
+  // height the rail was painted for.
+  const rowWidth = Math.max(20, cardColumns - WATERFALL_GUTTER - (grouped ? 2 : 0))
   // Waterfall entries: gap banners interleave as their own rows, then the
   // window keeps the LAST WATERFALL_ROWS entries so a banner never pushes a
   // fresher line out — the card stays constant-height.
@@ -158,6 +167,40 @@ export function JobCard({ job, marginTopOnTurn, onClick, grouped }: {
   // Only a LIVE job carries a progress chip; a settled one has dropped it, so
   // reserving width for it unconditionally would clip the label for nothing.
   const liveProgress = settled || job.progress === undefined || job.progress === '' ? undefined : job.progress
+
+  // A grouped card paints its rail line by line, so its HEIGHT must be known
+  // before the render: measure every fixed column and pre-wrap the label into
+  // whatever is left. The label column is then given that width EXPLICITLY —
+  // never a flex leftover — so the pre-wrapped line count is exactly what the
+  // renderer paints (both sides use ink's own wrapText/stringWidth, so the
+  // breaks match the ones a plain wrapping Text would have chosen).
+  const railBody = settled && job.status !== 'completed' && headerDetail !== undefined
+  const fixedWidths = [
+    stringWidth(info.glyph),
+    stringWidth(headerName),
+    stringWidth(job.kind),
+    ...(liveProgress === undefined ? [] : [12]),
+    stringWidth(duration),
+    ...(headerDetail === undefined ? [] : [stringWidth(headerDetail)]),
+    stringWidth(info.label),
+  ]
+  // One gap between each pair of columns: (fixed + label) - 1 = fixed count.
+  const labelWidth = Math.max(
+    8,
+    cardColumns - (grouped ? 2 : 0) - fixedWidths.reduce((sum, width) => sum + width, 0) - fixedWidths.length,
+  )
+  // wrapText returns the wrapped STRING (newline separated), so the line
+  // count comes straight out of it.
+  const labelLines = grouped ? wrapText(job.label, labelWidth, 'wrap').split('\n') : undefined
+  const contentLines = (labelLines?.length ?? 1) + activity.length + (railBody ? 1 : 0)
+  const railGlyphs: string[] = []
+  if (grouped) {
+    for (let index = 0; index < contentLines; index++) {
+      const opens = index === 0 && rail?.open === true
+      const closes = index === contentLines - 1 && rail?.close === true
+      railGlyphs.push(opens ? '╭' : closes ? '╰' : '│')
+    }
+  }
 
   // 点击打开 /jobs 面板；hover 不刷整行背景（转录视觉保持安静），只把
   // 状态 glyph 提亮为品牌色作为可点指示。无外层缩进：任务卡是上方工具
@@ -192,9 +235,15 @@ export function JobCard({ job, marginTopOnTurn, onClick, grouped }: {
       {/* The label is the one flexible column: it WRAPS here (a long
         * command stays readable instead of vanishing into an ellipsis in a
         * narrow terminal) while every other column keeps its fixed width. */}
-      <Box flexGrow={1} flexShrink={1}>
-        <Text>{job.label}</Text>
-      </Box>
+      {labelLines === undefined ? (
+        <Box flexGrow={1} flexShrink={1}>
+          <Text>{job.label}</Text>
+        </Box>
+      ) : (
+        <Box width={labelWidth} flexShrink={0} flexDirection="column">
+          {labelLines.map((line, index) => <Text key={index}>{line}</Text>)}
+        </Box>
+      )}
       {liveProgress !== undefined && (
         <Box width={12} flexShrink={0}>
           <JobProgress progress={liveProgress} />
@@ -225,7 +274,7 @@ export function JobCard({ job, marginTopOnTurn, onClick, grouped }: {
         </Text>
       )
     ))}
-    {settled && job.status !== 'completed' && headerDetail !== undefined && (
+    {railBody && (
       <Text dimColor>{`  └ ${headerDetail}`}</Text>
     )}
     </>
@@ -239,20 +288,17 @@ export function JobCard({ job, marginTopOnTurn, onClick, grouped }: {
     onMouseEnter={clickable ? () => setHovered(true) : undefined}
     onMouseLeave={clickable ? () => setHovered(false) : undefined}
   >
-    {grouped === true ? (
-      <Box
-        flexDirection="column"
-        borderStyle="single"
-        // 这个实现里边框默认四边全画，要靠 `false` 逐边关掉：只要左边。
-        borderTop={false}
-        borderBottom={false}
-        borderRight={false}
-        borderColor="inactive"
-        paddingLeft={1}
-        // The border is the shared rail: it spans the whole card, so wrapped
-        // label rows and output rows stay inside it (see `grouped`).
-      >
-        {body}
+    {grouped ? (
+      // The rail is a column of glyphs painted per line — one `│` per card
+      // line, `╭`/`╰` on the ends a group asked for — with the body hanging
+      // one gutter cell to its right (same 2-cell offset as before).
+      <Box flexDirection="row">
+        <Box width={1} flexShrink={0}>
+          <Text color="inactive">{railGlyphs.join('\n')}</Text>
+        </Box>
+        <Box flexDirection="column" flexGrow={1} paddingLeft={1}>
+          {body}
+        </Box>
       </Box>
     ) : body}
   </Box>
