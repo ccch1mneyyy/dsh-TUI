@@ -10,6 +10,7 @@ import { planReload, type ReloadKind } from '../reload.js'
 import { AlternateScreen, Box, Image, Text, useInput, ScrollBox, type ScrollBoxHandle, useTheme, useTerminalSize } from '../ui.js'
 import * as tuiKit from '../ui.js'
 import { usePageInset } from '../components/PageMargin.js'
+import { isInteractionScrollKey } from '../hooks/useInteractionViewport.js'
 import { POINTER } from '../terminal-utils/figures.js'
 import { isPlainReturnInput } from '../utils/modifiers.js'
 import { actionMatches, effectiveComboDisplay, primaryComboString } from '../utils/keymap.js'
@@ -46,10 +47,11 @@ import type { TuiThemeHost } from '../dsh-adapter/themes.js'
 import type { TuiRewindMode } from '../dsh-adapter/extension-events.js'
 import { runProviderWizard } from '../dsh-adapter/providerWizard.js'
 import { ApprovalStore } from '../dsh-adapter/approvals.js'
-import { AskUserQuestionPanel } from '../components/questions/AskUserQuestionPanel.js'
+import { AskUserQuestionPanel, type QuestionPanelState } from '../components/questions/AskUserQuestionPanel.js'
 import { ApprovalPanel } from '../components/approvals/ApprovalPanel.js'
 import { ExtensionDialog } from '../components/ExtensionDialog.js'
 import type { DOMElement } from '../ink/dom.js'
+import measureElement from '../ink/measure-element.js'
 import { useSearchHighlight } from '../ink/hooks/use-search-highlight.js'
 import { useTerminalTitle } from '../ink/hooks/use-terminal-title.js'
 import { useTerminalFocus } from '../ink/hooks/use-terminal-focus.js'
@@ -766,11 +768,25 @@ export function Chat({
   const [effortOptions, setEffortOptions] = React.useState<readonly EffortOption[]>([])
   const [themeName, setTheme] = useTheme()
   const { rows: terminalRows } = useTerminalSize()
+  const interactionChromeRef = React.useRef<DOMElement | null>(null)
+  const interactionFooterRef = React.useRef<DOMElement | null>(null)
+  const approvalFocusRef = React.useRef({ key: '', index: 0 })
+  const questionPanelStateRef = React.useRef<{ key: string; state?: QuestionPanelState }>({ key: '' })
+  const [interactionReservedRows, setInteractionReservedRows] = React.useState(6)
+  React.useLayoutEffect(() => {
+    if (interactionChromeRef.current === null || interactionFooterRef.current === null) return
+    const reserved = measureElement(interactionChromeRef.current).height + measureElement(interactionFooterRef.current).height
+    if (reserved !== interactionReservedRows) setInteractionReservedRows(reserved)
+  })
   const [showAllMessages, setShowAllMessages] = React.useState(false)
   /** Scope the fold to this question: an aborted ask can promote its queued
    *  successor without ever publishing an idle (null) snapshot. */
   const [minimizedQuestionKey, setMinimizedQuestionKey] = React.useState<string | null>(null)
   const questionMinimized = questionSnapshot !== null && minimizedQuestionKey === questionSnapshot.key
+  // One predicate governs both scroll ownership and the short-screen route.
+  // Folded questions and plan review retain their own presentation policy.
+  const interactionHasViewport = approvalSnapshot !== null || (questionSnapshot !== null
+    && !questionMinimized && questionSnapshot.question.intent?.kind !== 'plan-review')
   /** Fold state for the GoalTodoPanel todo section (ctrl/cmd+q or click). */
   const [todoCollapsed, setTodoCollapsed] = React.useState(false)
   const [thinkingVisible, setThinkingVisible] = React.useState(true)
@@ -3294,7 +3310,10 @@ export function Chat({
     // CLOSE the scene also reached the chat:cancel branch below whenever a
     // turn was in flight — closing the view and killing the turn in one key.
     if (sceneOpen || channel.pluginScene !== undefined) return
-    // Mouse wheel scrolls the transcript even while a question/approval/
+    // Bounded interaction paging and fallback wheel input belong to its body.
+    // Position-first wheel routing still lets the visible transcript scroll.
+    if (interactionHasViewport && isInteractionScrollKey(key)) return
+    // Mouse wheel scrolls the transcript even while a question/
     // dialog panel is open — those panels own arrow/Enter/Esc keys, but the
     // transcript above them should still be scrollable in fullscreen mode.
     //
@@ -3341,12 +3360,9 @@ export function Chat({
     // tree, settings, scenes, dashboards) already claimed the keyboard — those
     // surfaces page their own lists with these keys.
     //
-    // The question/approval/dialog panels deliberately do NOT yield: like the
-    // wheel branch above (whose comment spells this out), those panels mount
-    // BELOW the transcript — replacing the prompt, not covering it — so the
-    // transcript above them stays visible and scrollable while a decision is
-    // pending. The panels bind ↑/↓/Space/Tab/Enter/Esc and never these keys,
-    // so paging cannot steal anything from them.
+    // Folded questions and dialogs leave paging with the visible transcript.
+    // Expanded bounded panels already claimed it above; position-first mouse
+    // routing still lets the transcript scroll while a decision is pending.
     if ((key.pageUp || key.pageDown) && fullscreen) {
       if (helpOpen) return
       const overlayModal =
@@ -4196,11 +4212,21 @@ export function Chat({
   // covered screen is unmounted, exactly like the chat-state prompt slot.
   // The panel elements are shared with the prompt-slot chain below so the
   // two mount sites cannot drift.
+  const screenOpen = channel.pluginScene !== undefined || supervisorOpen || treeOpen || settingsOpen || jobsPanelOpen
+    || subagentDetailId !== null || subagentDashboardOpen || sceneOpen
+  // A dense footer can leave no readable interaction viewport. Interrupt the
+  // conversation just like a settings screen, preserving Chat's state.
+  const interactionNeedsScreen = interactionHasViewport && terminalRows - interactionReservedRows < 10
+  const interactionMaxHeight = screenOpen || interactionNeedsScreen
+    ? terminalRows : Math.max(1, terminalRows - interactionReservedRows)
   const approvalPanelNode = approvalSnapshot !== null ? (
     <ApprovalPanel
       key={approvalSnapshot.key}
       approval={approvalSnapshot}
       background={approvalSnapshot.agentId !== channel.agentId}
+      maxHeight={interactionMaxHeight}
+      initialFocusIndex={approvalFocusRef.current.key === approvalSnapshot.key ? approvalFocusRef.current.index : 0}
+      onFocusChange={index => { approvalFocusRef.current = { key: approvalSnapshot.key, index } }}
       onDecide={outcome => approvals.decide(outcome)}
     />
   ) : null
@@ -4212,6 +4238,9 @@ export function Chat({
       total={questionSnapshot.total}
       answered={questionSnapshot.answered}
       initialDraft={questionSnapshot.draft}
+      maxHeight={interactionMaxHeight}
+      initialState={questionPanelStateRef.current.key === questionSnapshot.key ? questionPanelStateRef.current.state : undefined}
+      onStateChange={state => { questionPanelStateRef.current = { key: questionSnapshot.key, state } }}
       onAnswer={selection => {
         if (!questionStore.stillCurrent(questionSnapshot.key)) return
         questionStore.answerCurrent(selection)
@@ -4256,9 +4285,7 @@ export function Chat({
     />
   ) : null
   const interruptPanel = approvalPanelNode ?? questionPanelNode
-  const screenOpen = channel.pluginScene !== undefined || supervisorOpen || settingsOpen
-    || subagentDetailId !== null || subagentDashboardOpen || sceneOpen
-  if (interruptPanel !== null && screenOpen) {
+  if (interruptPanel !== null && (screenOpen || interactionNeedsScreen)) {
     const node = (
       <Box flexDirection="column" width="100%" paddingX={1}>
         {interruptPanel}
@@ -4669,6 +4696,7 @@ export function Chat({
           let flex shrink squeeze these fixed-height rows — the ScrollBox
           above absorbs all overflow (it is the scroll container). */}
       <Box flexDirection="column" flexShrink={0}>
+        <Box ref={interactionChromeRef} flexDirection="column" flexShrink={0}>
         {showPill && (
           <NewMessagesPill
             count={unseenCount}
@@ -4779,6 +4807,7 @@ export function Chat({
             </Box>
           </PluginStatusViewBoundary>
         ))}
+        </Box>
         {/* 输入簇：可替换输入行链 + 状态行 + 瞬态浮层。浮层锚点收窄到本簇
             顶边（= 输入行顶边），picker 紧贴输入框向上展开，盖住其上
             todo/spinner/转录尾部行（用户接受的取舍），自身零布局高度、
@@ -4883,6 +4912,7 @@ export function Chat({
           caretPreviewOpen={peekPreview !== null}
           onDismissCaretPreview={dismissPeek}
         />
+        <Box ref={interactionFooterRef} flexDirection="column" flexShrink={0}>
         <StatusLine
           channel={channel}
           activity={workingActivity}
@@ -4900,6 +4930,7 @@ export function Chat({
                 }
           }
         />
+        </Box>
         {/* 瞬态面板浮层：absolute + bottom:'100%' 钉在输入簇 Box 顶边（=
             输入行顶边），紧贴输入框向上覆盖其上 todo/spinner/转录尾部行，
             自身零布局高度。in-flow 挂载会让帧高随面板开关涨落，把帧顶行滚进

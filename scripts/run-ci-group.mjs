@@ -822,6 +822,10 @@ const GROUPS = {
 // 长 plan-review 正文回归（issue #413）：24 行终端里 40 段 plan 不得把
 // Approve/反馈顶出屏外；滚轮必须滚 plan body（直接面板 + 挂进 Chat）。
     ["verify-plan-review-scroll", ['node', '--import', 'tsx/esm', 'scripts/verify-plan-review-scroll.tsx']],
+// 审批正文的有界滚动：长命令/说明、内联/全屏、窄窗口、resize 和中断设置屏。
+    ['verify-approval-scroll', ['node', '--import', 'tsx/esm', 'scripts/verify-approval-scroll.tsx']],
+// 提问正文/选项滚动与固定自定义输入：窄窗口、待办、长回答、缩放与键盘提交。
+    ['verify-question-scroll', ['node', '--import', 'tsx/esm', 'scripts/verify-question-scroll.tsx']],
 // 插件场景渲染崩溃边界：Thrower 场景必须被 PluginSceneBoundary 接住——
 // onError 精确一次、崩溃场景停止绘制、进程存活；健康场景不受影响。
     ["verify-plugin-scene-boundary", ['node', '--import', 'tsx/esm', 'scripts/verify-plugin-scene-boundary.tsx']],

@@ -132,6 +132,11 @@ async function mount(fullscreen: boolean) {
       assert.ok(point, 'expanded fold header is visible')
       press(`\x1b[<0;${point.col + 1};${point.row + 1}M\x1b[<0;${point.col + 1};${point.row + 1}m`)
     },
+    scrollTranscript() {
+      const point = findText(term, 'TRANSCRIPT-058')
+      assert.ok(point, 'transcript wheel target is visible')
+      press(`\x1b[<64;${point.col + 1};${point.row + 1}M`.repeat(20))
+    },
     async dispose() {
       await app.unmount()
       questions.rejectAll()
@@ -155,7 +160,10 @@ for (const fullscreen of [false, true]) {
       await h.waitFor(() => h.has('APPROVAL-REASON'), 'approval visible')
       if (fullscreen && key === ENTER) {
         await h.waitFor(() => h.has('TRANSCRIPT-059'), 'transcript starts at bottom')
-        h.press('\x1b[5~')
+        // Paging now belongs to the visible approval. Position-first wheel
+        // input still scrolls the transcript, preserving this exit test's
+        // original coverage with the conversation away from the bottom.
+        h.scrollTranscript()
         await h.waitFor(() => !h.has('TRANSCRIPT-059'), 'transcript scrolled up')
       }
       h.press(key)
