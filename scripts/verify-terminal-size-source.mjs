@@ -16,7 +16,8 @@
  * match):
  *   - `.columns` / `.rows` / `.getWindowSize` on anything named stdout/stderr
  *     (process.stdout, a destructured stdout, this.stdout, opts.stderr, …),
- *     dotted, optional-chained or bracketed;
+ *     dotted, optional-chained or bracketed, or destructured out of it
+ *     (`const { rows } = process.stdout`, `const { stdout: { columns } } = …`);
  *   - `.on|once|addListener|prependListener('resize', …)` on stdout/stderr and
  *     `process.on('SIGWINCH', …)`;
  *   - any use of a `useStdoutDimensions` hook.
@@ -25,9 +26,10 @@
  * belongs in src/ink/.
  *
  * ALLOWED lists the few reads outside src/ink/ that are physical on purpose,
- * each with its reason. An entry matches one file and one exact expression,
- * so a new read in the same file still fails, and an entry whose read is gone
- * fails too — the list can only shrink.
+ * each with its reason. An entry exempts exactly one read: one file, one exact
+ * expression, one occurrence. Any other read in that file still fails (a
+ * second identical one included), and an entry whose read is gone fails
+ * too — the list can only shrink.
  *
  * The matcher checks itself against known-bad and known-good snippets first,
  * so a gate that silently stopped matching fails instead of passing.
@@ -75,6 +77,26 @@ function isStream(node) {
   return name !== undefined && STREAMS.has(name)
 }
 
+/** The key a binding element reads: `{ rows }`, `{ rows: h }`, `{ 'rows': h }`. */
+function bindingKey(element) {
+  const key = element.propertyName ?? element.name
+  if (ts.isIdentifier(key) || ts.isStringLiteralLike(key)) return key.text
+  return undefined
+}
+
+/** Whether an object binding pattern destructures a stdio stream. */
+function destructuresStream(pattern) {
+  const parent = pattern.parent
+  // const { rows } = process.stdout
+  if (ts.isVariableDeclaration(parent) && parent.initializer) return isStream(parent.initializer)
+  // const { stdout: { columns } } = useStdout()
+  if (ts.isBindingElement(parent)) {
+    const key = bindingKey(parent)
+    return key !== undefined && STREAMS.has(key)
+  }
+  return false
+}
+
 /** Every direct terminal-size read in one source text, as { line, text, why }. */
 function findReads(fileName, text) {
   const kind = fileName.endsWith('.tsx') ? ts.ScriptKind.TSX : ts.ScriptKind.TS
@@ -88,6 +110,12 @@ function findReads(fileName, text) {
     const name = memberName(node)
     if (name !== undefined && SIZE_MEMBERS.has(name) && isStream(node.expression)) {
       report(node, `reads the real terminal's ${name}`)
+    }
+    if (ts.isObjectBindingPattern(node) && destructuresStream(node)) {
+      for (const element of node.elements) {
+        const key = bindingKey(element)
+        if (key !== undefined && SIZE_MEMBERS.has(key)) report(element, `destructures the real terminal's ${key}`)
+      }
     }
     if (ts.isCallExpression(node)) {
       const callee = node.expression
@@ -121,6 +149,9 @@ const MUST_FLAG = [
   "stdout.once('resize', relayout)",
   "process.on('SIGWINCH', relayout)",
   'const { columns } = useStdoutDimensions()',
+  'const { columns } = process.stdout',
+  'const { rows: height } = stdout',
+  'const { stdout: { columns } } = useStdout()',
 ]
 const MUST_PASS = [
   'const { columns, rows } = useTerminalSize()',
@@ -131,6 +162,9 @@ const MUST_PASS = [
   "process.on('exit', cleanup)",
   "emitter.on('resize', relayout)",
   "const isTty = process.stdout.isTTY",
+  'const { columns } = useTerminalSize()',
+  'const { isTTY } = process.stdout',
+  'const { stdout } = useStdout()',
 ]
 const selfCheck = [
   ...MUST_FLAG.filter(snippet => findReads('probe.tsx', snippet).length !== 1).map(s => `not flagged: ${s}`),
@@ -156,16 +190,37 @@ function sources(dir, out = []) {
   return out
 }
 
+/**
+ * Split one file's reads into exempted and violating ones. Each allowance
+ * exempts a single read; `used` collects the allowances that did.
+ */
+function applyAllowances(rel, hits, allowed, used) {
+  const violating = []
+  for (const hit of hits) {
+    const allowance = allowed.find(entry => entry.file === rel && entry.text === hit.text && !used.has(entry))
+    if (allowance) used.add(allowance)
+    else violating.push({ rel, ...hit })
+  }
+  return violating
+}
+
+// Self-check of the allowance accounting: a second identical read in an
+// allowed file must not ride on the same entry.
+{
+  const probe = { file: 'probe.tsx', text: 'stdout.rows', reason: 'self-check' }
+  const hits = findReads('probe.tsx', 'const a = stdout.rows\nconst b = stdout.rows')
+  if (applyAllowances('probe.tsx', hits, [probe], new Set()).length !== 1) {
+    console.error('verify-terminal-size-source: an ALLOWED entry exempted more than one read')
+    process.exit(1)
+  }
+}
+
 const files = sources(SRC)
 const violations = []
 const usedAllowances = new Set()
 for (const file of files) {
   const rel = relative(ROOT, file).split(sep).join('/')
-  for (const hit of findReads(rel, readFileSync(file, 'utf8'))) {
-    const allowance = ALLOWED.find(entry => entry.file === rel && entry.text === hit.text)
-    if (allowance) usedAllowances.add(allowance)
-    else violations.push({ rel, ...hit })
-  }
+  violations.push(...applyAllowances(rel, findReads(rel, readFileSync(file, 'utf8')), ALLOWED, usedAllowances))
 }
 const stale = ALLOWED.filter(entry => !usedAllowances.has(entry))
 if (stale.length > 0) {
