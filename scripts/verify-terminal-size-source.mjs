@@ -77,10 +77,12 @@ function isStream(node) {
   return name !== undefined && STREAMS.has(name)
 }
 
-/** The key a binding element reads: `{ rows }`, `{ rows: h }`, `{ 'rows': h }`. */
+/** The key a binding element reads: `{ rows }`, `{ rows: h }`, `{ 'rows': h }`, `{ ['rows']: h }`. */
 function bindingKey(element) {
   const key = element.propertyName ?? element.name
   if (ts.isIdentifier(key) || ts.isStringLiteralLike(key)) return key.text
+  // A literal computed key is still a static read; dynamic keys are not followed.
+  if (ts.isComputedPropertyName(key) && ts.isStringLiteralLike(key.expression)) return key.expression.text
   return undefined
 }
 
@@ -152,6 +154,7 @@ const MUST_FLAG = [
   'const { columns } = process.stdout',
   'const { rows: height } = stdout',
   'const { stdout: { columns } } = useStdout()',
+  "const { ['rows']: height } = process.stdout",
 ]
 const MUST_PASS = [
   'const { columns, rows } = useTerminalSize()',
