@@ -1205,6 +1205,8 @@ const dict = {
   'approval-yes': { zh: '允许（仅本次）', en: 'Yes, allow once' },
   'approval-no': { zh: '拒绝', en: 'No' },
   'approval-hint': { zh: '↑/↓ 选择 · Enter 确认 · Esc 拒绝', en: '↑/↓ select · Enter confirm · Esc reject' },
+  'approval-scroll-hint': { zh: 'PgUp/PgDn 翻页 · 滚轮滚动正文', en: 'PgUp/PgDn page · wheel scrolls details' },
+  'question-scroll-hint': { zh: 'PgUp/PgDn 翻页 · 滚轮滚动', en: 'PgUp/PgDn page · wheel scrolls' },
 
   // ── components/Subagent*.tsx ────────────────────────────────────────
   'subagent-model': { zh: '模型', en: 'Model' },

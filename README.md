@@ -298,6 +298,10 @@ Everything, bilingual: [docs/README.md](docs/README.md).
 
 No sandbox of its own: dsh-TUI uses the active DSH profile's filesystem, shell, sandbox and approval policies. Permission presets come from the DSH `permissionPresets` registry.
 
+Approval prompts keep **Allow once** and **Reject** visible while long commands and reasons scroll in a bounded area. Use **PgUp/PgDn** to read the details in inline or fullscreen mode, or the mouse wheel over the approval panel when mouse tracking is enabled. **↑/↓** select an option; **Enter** confirms and **Esc** rejects. When other panels leave too little room, the approval temporarily takes the screen; the conversation returns after the decision.
+
+Questionnaires keep the custom answer input visible while the question details and options scroll with **PgUp/PgDn** or the mouse wheel. **↑/↓** reveal the focused option, and **Tab** focuses the custom answer. Long answers scroll horizontally around the caret. Narrow windows and dense status panels preserve the answer and selection when the questionnaire temporarily takes the screen.
+
 Details: [Permissions and security boundary](docs/architecture.en.md#permissions-and-security-boundary).
 
 ## Acknowledgments
