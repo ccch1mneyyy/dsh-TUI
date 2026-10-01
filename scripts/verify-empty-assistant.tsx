@@ -9,14 +9,16 @@
  *  3. 空文本但 streaming 的 assistant 行保留（live dot 是“正在回答”信号）；
  *  4. 落定翻转（streaming true→false 原地写、rows 身份不变）后过滤生效；
  *  5. 用户/通知等其他空文本行不受影响（kind 限定 assistant）。
+ *  6. 仅含 ⏵ 状态行的已结束回复保留原文，流式结束与历史渲染一致。
  *
  * 运行：node --import tsx/esm scripts/verify-empty-assistant.tsx
+ * 可选：--inline --narrow --smooth，覆盖显示模式、窄屏与平滑输出。
  */
 process.env.FORCE_COLOR = '3'
 process.env.DSH_TUI_THEME = 'dark'
 process.env.DSH_TUI_LANG = 'zh'
 
-const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render, AlternateScreen }, { Chat }, { QuestionStore }, { LOCAL_COMMANDS, completeCommands }, { settled, sleep }] = await Promise.all([
+const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render, AlternateScreen }, { Chat }, { QuestionStore }, { LOCAL_COMMANDS, completeCommands }, { settled, sleep }, { stripNarration }] = await Promise.all([
   import('node:stream'),
   import('react'),
   import('@xterm/headless'),
@@ -25,16 +27,27 @@ const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render, Alternat
   import('../src/dsh-adapter/questions.js'),
   import('../src/commands.js'),
   import('./lib/term-test.mjs'),
+  import('../src/utils/narration.js'),
 ])
 
-const COLS = 100, ROWS = 40
+const fullscreen = !process.argv.includes('--inline')
+const COLS = process.argv.includes('--narrow') ? 48 : 100, ROWS = 40
 let failed = 0
 function check(name: string, ok: boolean, extra = '') {
   console.log(`${ok ? 'PASS' : 'FAIL'}: ${name}${extra ? `  (${extra})` : ''}`)
   if (!ok) failed += 1
 }
 
-const term = new XTerm({ cols: COLS, rows: ROWS, scrollback: 0, allowProposedApi: true })
+const narration = '⏵ Waiting for your request'
+check('流式叙述交给状态栏', stripNarration(narration) === '')
+for (const text of [narration, `  ${narration}\n\n  \t`, `${narration}\r\n`]) {
+  check('已结束的叙述-only 原文完整保留', stripNarration(text, true) === text)
+}
+check('状态行后有正文时仍去掉状态行', stripNarration(`${narration}\n\nHello!`, true) === 'Hello!')
+check('普通回复不变', stripNarration('Hello!', true) === 'Hello!')
+check('空白回复保持空白', stripNarration('  \n', true).trim() === '')
+
+const term = new XTerm({ cols: COLS, rows: ROWS, scrollback: 1000, allowProposedApi: true })
 class FakeStdout extends Writable {
   columns = COLS; rows = ROWS; isTTY = true
   _write(chunk: unknown, _e: BufferEncoding, cb: () => void) { term.write(String(chunk), cb) }
@@ -61,10 +74,8 @@ const rows: any[] = [
   { id: 0, kind: 'user', text: '帮我跑一下测试' },
   // 空文本 settled assistant（PR #383 的 bug 形状：模型直接调工具）
   { id: 1, kind: 'assistant', text: '', streaming: false },
-  // 叙述-only settled assistant（narrate 契约：⏵ 行 + 直接调工具）。
-  // 原文非空但渲染层 stripNarration 剥成空——旧过滤器测原文漏放行，
-  // 渲染成工具卡上方的孤立 ●（用户实测报告的形状）。
-  { id: 6, kind: 'assistant', text: '⏵ 正在跑测试', streaming: false },
+  // 原文非空的已结束回复不能因只有状态行就从转录中消失。
+  { id: 6, kind: 'assistant', text: '⏵ 正在跑测试', streaming: false, fresh: true },
   { id: 2, kind: 'tool', text: '', tool: { callId: 't1', name: 'Bash', argsText: '{"command": "npm test"}', argsFull: '{}', status: 'ok', startedAt: 0, durationMs: 42, resultText: 'all 12 tests passed' } },
   // ⏵ 行 + 正文：叙述被剥但正文必须完整保留（不能误过滤）
   { id: 7, kind: 'assistant', text: '⏵ 正在分析结果\n\n工具结果看起来全部通过 REALBODY2-END', streaming: false },
@@ -77,6 +88,7 @@ const listeners = new Set<() => void>()
 const channel: any = {
   // 探针确定性：鲸鱼欢迎期闲置动画（默认开）不进本探针的测量窗口。
   whaleIdle: false,
+  smoothStreaming: process.argv.includes('--smooth'),
   version: 0, rows, status: 'idle', sessionTitle: 'probe', agentId: 'probe',
   model: 'deepseek-v4-flash', provider: 'deepseek', reasoningEffort: 'max', effortLevels: [],
   tokens: { input: 0, output: 0 }, cwd: '/tmp/demo', displayCwd: '/tmp/demo', gitBranch: 'main',
@@ -93,16 +105,18 @@ const channel: any = {
   commandCompletions: (input: string) => completeCommands(input),
 }
 
+const chat = <Chat channel={channel} questionStore={new QuestionStore()} fullscreen={fullscreen} />
 const inst = await render(
-  <AlternateScreen><Chat channel={channel} questionStore={new QuestionStore()} fullscreen /></AlternateScreen>,
+  fullscreen ? <AlternateScreen>{chat}</AlternateScreen> : chat,
   { stdout: stdout as any, stdin: stdin as any, stderr: stderr as any, exitOnCtrlC: false, patchConsole: false },
 )
 {
-  // 正向条件各自 settled；负向（孤立 ●/⏵ 不出现）在正向全部落定后的
+  // 正向条件各自 settled；负向（孤立 ● 不出现）在正向全部落定后的
   // 同帧同步判定——对空帧轮询「不存在」会立即真、等于没测。
   check('工具卡正常渲染', await settled(() => screenLines().some(l => l.includes('Bash'))), '')
   check('真实正文正常渲染', await settled(() => screenLines().join('\n').includes('REALBODY-END')), '')
   check('⏵ 行 + 正文混合行保留正文', await settled(() => screenLines().join('\n').includes('REALBODY2-END')), '')
+  check('叙述-only settled 行保留', await settled(() => screenLines().join('\n').includes('⏵ 正在跑测试')), '')
   check('空文本 streaming 行保留（live dot）', await settled(() => {
     const ls = screenLines()
     const t = ls.findIndex(l => l.includes('Bash'))
@@ -116,7 +130,7 @@ const inst = await render(
   const dotAboveTool = toolRow >= 0 && lines.slice(0, toolRow).some(l => /^●\s*$/.test(l))
   check('空 settled assistant 行被过滤（工具卡上方无孤立 ●）', !dotAboveTool,
     `toolRow=${toolRow}`)
-  check('叙述-only settled 行被过滤（⏵ 行不渲染、上方无孤立 ●）', !screen.includes('⏵') && !dotAboveTool, '')
+  check('混合回复的状态行仍不渲染', !screen.includes('正在分析结果'), '')
 }
 
 // 落定翻转：streaming true → false 原地写（rows 身份/长度不变）。
@@ -129,6 +143,17 @@ channel.emit()
     `lone dots=${loneDotLines(screenLines()).length}`)
   check('翻转后真实正文仍在', screenLines().join('\n').includes('REALBODY-END'), '')
 }
+// 同一行原地落定：先只由状态栏展示叙述，结束后转录必须显示完整回复。
+streamRow.text = narration
+streamRow.streaming = true
+channel.emit()
+check('叙述-only 流式行保留 live dot', await settled(() => loneDotLines(screenLines()).length > 0))
+check('流式叙述不重复显示在转录', !screenLines().join('\n').includes(narration))
+streamRow.streaming = false
+channel.working = false
+channel.emit()
+check('叙述-only 回复结束后可见', await settled(() => screenLines().join('\n').includes(narration)))
+check('结束后无孤立 ●', loneDotLines(screenLines()).length === 0)
 // 用户空文本行不受影响（kind 限定）：一个空 user 行仍渲染其气泡形状
 rows.push({ id: 5, kind: 'user', text: '' })
 channel.emit()
@@ -136,6 +161,7 @@ channel.emit()
 // 测不到「没有崩掉」——留一个观察窗让潜在崩溃显形。
 await sleep(400)
 check('空 user 行不受 assistant 过滤影响（无崩溃、界面存活）', screenLines().some(l => l.includes('❯')))
+check('后续用户行不使叙述-only 历史回复消失', screenLines().join('\n').includes(narration))
 
 await inst.unmount()
 console.log(failed === 0 ? '\nALL PASS' : `\n${failed} 项失败`)

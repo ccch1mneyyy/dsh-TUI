@@ -192,6 +192,9 @@ Agent 预设、主题、MCP 服务器、环境变量：[配置参考](docs/confi
 
 ## 工作原理
 
+回复开头的 `⏵` 工作状态行显示在实时状态区，不重复显示在正文中。
+如果已结束的回复只有这一行，转录会保留原文，避免整条回复消失。
+
 ```text
 dsh profile → dsh-base → dsh-TUI Cordis patch → agent preset + DSH services
   → session/event → Channel projection → React components → Ink/Yoga renderer → terminal

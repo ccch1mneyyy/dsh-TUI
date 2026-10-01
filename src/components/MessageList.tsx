@@ -90,7 +90,7 @@ const NOOP_TOGGLE_STREAM_VIEW = (_rowId: number): void => {}
 // "non-streaming delivery becomes a smooth flow" contract).
 
 function assistantRevealText(row: ChatRow, enabled: boolean): string {
-  const stripped = stripNarration(row.text)
+  const stripped = stripNarration(row.text, row.streaming !== true)
   return revealTextOf(`a${row.id}`, stripped, {
     enabled,
     active: row.streaming === true || row.fresh === true,
@@ -104,7 +104,7 @@ function reasoningRevealText(row: ChatRow, enabled: boolean): string {
 /** Display length only (layout signature; no slice allocation). */
 function revealDisplayLen(row: ChatRow, enabled: boolean): number {
   if (row.kind === 'assistant') {
-    const stripped = stripNarration(row.text)
+    const stripped = stripNarration(row.text, row.streaming !== true)
     return revealLengthOf(`a${row.id}`, stripped, {
       enabled,
       active: row.streaming === true || row.fresh === true,
@@ -542,16 +542,12 @@ export function MessageList({
     // that is STILL STREAMING keeps its place even with empty text — the
     // live dot is the "model is answering" affordance and content may yet
     // arrive.
-    // The emptiness test must match what RENDERING shows: the `⏵`
-    // self-narration line (dsh-working-activity narrate contract) is
-    // stripped at render (stripNarration below), so a narration-only step —
-    // thinking, `⏵ …` line, straight to a tool call — has non-empty raw
-    // text but RENDERS as that same lone `●`. Test the stripped text, or
-    // the raw-text check lets the dot through forever.
+    // Settled narration-only replies keep their text; only truly empty
+    // bodies are filtered. Use the same display text as the render path.
     const rendersEmptyAssistant = (row: ChatRow): boolean =>
       row.kind === 'assistant' &&
       row.streaming !== true &&
-      stripNarration(row.text ?? '').trim() === '' &&
+      stripNarration(row.text ?? '', true).trim() === '' &&
       (row.images?.length ?? 0) === 0
     let hasEmptyAssistant = false
     for (const row of sliced) {
@@ -1401,14 +1397,14 @@ export function MessageList({
           let displayText = row.text
           let displayStreaming = row.streaming === true
           if (row.kind === 'assistant' && smoothStreaming) {
-            const stripped = stripNarration(row.text)
+            const stripped = stripNarration(row.text, row.streaming !== true)
             displayText = revealTextOf(`a${row.id}`, stripped, {
               enabled: true,
               active: displayStreaming || row.fresh === true,
             })
             displayStreaming = displayStreaming || displayText.length !== stripped.length
           } else if (row.kind === 'assistant') {
-            displayText = stripNarration(row.text)
+            displayText = stripNarration(row.text, row.streaming !== true)
           } else if (row.kind === 'reasoning' && smoothStreaming) {
             displayText = revealTextOf(`r${row.id}`, row.text, { enabled: true, active: displayStreaming })
           }
@@ -1725,10 +1721,7 @@ function TranscriptRow({
             <Text color="text">●</Text>
           </Box>
           <Box flexDirection="column">
-            {/* The ⏵ self-narration line (working-activity narrate contract)
-              is stripped here: the live working line on the status bar
-              already shows it. */}
-            <StreamingMarkdown>{stripNarration(displayText)}</StreamingMarkdown>
+            <StreamingMarkdown>{displayText}</StreamingMarkdown>
             {images !== undefined && <TranscriptImages images={images} indent={0} onPreview={onPreviewImage} suppressGraphics={suppressImageGraphics} />}
           </Box>
         </Box>
@@ -1751,7 +1744,7 @@ function TranscriptRow({
             </Box>
           )}
           <AssistantTextMessage
-            text={stripNarration(displayText)}
+            text={displayText}
             marginTopOnTurn={marginTopOnTurn}
             isSelected={isSelected}
             isExpanded={isExpanded}

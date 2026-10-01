@@ -214,6 +214,10 @@ Agent presets, themes, MCP servers, environment variables: [Configuration](docs/
 
 ## How It Works
 
+A leading `⏵` work-status line is shown in the live status area instead of the
+transcript body. If a settled reply contains only that line, the transcript keeps
+the original text so the response remains visible.
+
 ```text
 dsh profile → dsh-base → dsh-TUI Cordis patch → agent preset + DSH services
   → session/event → Channel projection → React components → Ink/Yoga renderer → terminal
