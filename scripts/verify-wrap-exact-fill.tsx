@@ -61,6 +61,8 @@ function select(screen: Screen, fromCol: number, fromRow: number, toCol: number,
   const { screen } = renderToScreen(<Box width={9} paddingRight={2}><Text>aaa the PR.</Text></Box>, 9)
   assert.deepEqual(rows(screen, 9), ['aaa the', 'PR.'])
   assert.equal(select(screen, 0, 0, 8, 1), 'aaa the PR.')
+  assert.equal(select(screen, 8, 0, 8, 0), '', 'a selection confined to padding copies no separator')
+  assert.equal(select(screen, 8, 0, 2, 1), 'PR.', 'starting in padding copies only the next row')
 }
 
 // Multi-segment text: styles stay on their own characters past the gap.
