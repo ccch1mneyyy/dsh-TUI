@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect } from 'react'
+import { useEffect, useLayoutEffect, useRef } from 'react'
 import { useEventCallback } from 'usehooks-ts'
 import type { InputEvent, Key } from '../events/input-event.js'
 import { isInputSuppressed } from '../input-suppression.js'
@@ -14,6 +14,18 @@ type Options = {
    * @default true
    */
   isActive?: boolean
+
+  /**
+   * Register ahead of every listener already attached instead of behind
+   * them. Listener order is otherwise mount order, and React runs child
+   * effects before their parent's — so a parent whose shortcuts must
+   * shadow a child's bindings via `stopImmediatePropagation()` would sit
+   * behind that child on first mount and ahead of it only after the child
+   * remounts. Read once at mount.
+   *
+   * @default false
+   */
+  prepend?: boolean
 }
 
 /**
@@ -91,8 +103,12 @@ const useInput = (inputHandler: Handler, options: Options = {}): void => {
     }
   })
 
+  // Mount-time value, per the option's contract: a later change must not
+  // re-register the listener and move its slot.
+  const prepend = useRef(options.prepend === true).current
   useEffect(() => {
-    internal_eventEmitter?.on('input', handleData)
+    if (prepend) internal_eventEmitter?.prependListener('input', handleData)
+    else internal_eventEmitter?.on('input', handleData)
 
     return () => {
       internal_eventEmitter?.removeListener('input', handleData)

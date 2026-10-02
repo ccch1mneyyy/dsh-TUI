@@ -1526,24 +1526,116 @@ export function clearRegion(
 }
 
 /**
+ * Count the DISTINCT columns outside [x1, x2) that hold any non-empty cell
+ * in rows [top, bottom] — the "flank" a full-width row shift would displace.
+ * The DECSTBM scroll fast path uses this to decide whether the hardware
+ * scroll is worth the diff repair it forces on those columns (blank page
+ * margins and the 1-2 column gutter rail are cheap; a whole sibling column
+ * is not). Short-circuits per column on the first painted cell.
+ * @param screen - the screen to inspect.
+ * @param top - the first row (inclusive).
+ * @param bottom - the last row (inclusive).
+ * @param x1 - the start (inclusive) of the excluded column range.
+ * @param x2 - the end (exclusive) of the excluded column range.
+ */
+export function countPaintedFlankColumns(
+  screen: Screen,
+  top: number,
+  bottom: number,
+  x1: number,
+  x2: number,
+): number {
+  const y1 = Math.max(0, top)
+  const y2 = Math.min(screen.height - 1, bottom)
+  if (y2 < y1) return 0
+  const left = Math.max(0, x1)
+  const right = Math.min(screen.width, x2)
+  let count = 0
+  for (let x = 0; x < left; x += 1) {
+    for (let y = y1; y <= y2; y += 1) {
+      if (!isEmptyCellAt(screen, x, y)) { count += 1; break }
+    }
+  }
+  for (let x = right; x < screen.width; x += 1) {
+    for (let y = y1; y <= y2; y += 1) {
+      if (!isEmptyCellAt(screen, x, y)) { count += 1; break }
+    }
+  }
+  return count
+}
+
+/**
  * Shift full-width rows within [top, bottom] (inclusive, 0-indexed) by n.
  * n > 0 shifts UP (simulating CSI n S); n < 0 shifts DOWN (CSI n T).
  * Vacated rows are cleared. Does NOT update damage. Both cells and the
  * noSelect bitmap are shifted so text-selection markers stay aligned when
  * this is applied to next.screen during scroll fast path.
+ *
+ * With columnX/columnWidth the shift applies only to that column slice of
+ * each row (the DECSTBM fast path for a scroll container narrower than the
+ * screen: the terminal's hardware scroll moves WHOLE rows, so the previous
+ * frame is simulated full-width by the caller, while this model-side shift
+ * keeps the columns outside the box at their correct places — the frame
+ * diff then repairs them on the terminal). A column-scoped shift leaves the
+ * per-row softWrap flags alone: they describe the whole row and the flanks'
+ * wrap state is still live.
  * @param screen - the screen to shift.
  * @param top - the first row of the shifted range (inclusive).
  * @param bottom - the last row of the shifted range (inclusive).
  * @param n - the shift in rows; positive shifts up, negative shifts down.
+ * @param columnX - optional start column (inclusive) of a column-scoped shift.
+ * @param columnWidth - optional width of the column-scoped slice.
  */
 export function shiftRows(
   screen: Screen,
   top: number,
   bottom: number,
   n: number,
+  columnX?: number,
+  columnWidth?: number,
 ): void {
   if (n === 0 || top < 0 || bottom >= screen.height || top > bottom) return
   const w = screen.width
+  if (columnX !== undefined || columnWidth !== undefined) {
+    const x1 = Math.max(0, Math.floor(columnX ?? 0))
+    const x2 = Math.min(w, x1 + Math.floor(columnWidth ?? w))
+    if (x2 <= x1) return
+    const cells64 = screen.cells64
+    const noSel = screen.noSelect
+    const copy = screen.copyRegion
+    const span = x2 - x1
+    const absN = Math.abs(n)
+    const clearSlice = (r: number): void => {
+      const base = r * w + x1
+      cells64.fill(EMPTY_CELL_VALUE, base, base + span)
+      noSel.fill(0, base, base + span)
+      copy?.fill(0, base, base + span)
+    }
+    if (absN > bottom - top) {
+      for (let r = top; r <= bottom; r += 1) clearSlice(r)
+      return
+    }
+    if (n > 0) {
+      for (let r = top; r <= bottom - n; r += 1) {
+        const dst = r * w + x1
+        const src = (r + n) * w + x1
+        cells64.copyWithin(dst, src, src + span)
+        noSel.copyWithin(dst, src, src + span)
+        copy?.copyWithin(dst, src, src + span)
+      }
+      for (let r = bottom - n + 1; r <= bottom; r += 1) clearSlice(r)
+    } else {
+      for (let r = bottom; r >= top - n; r -= 1) {
+        const dst = r * w + x1
+        const src = (r + n) * w + x1
+        cells64.copyWithin(dst, src, src + span)
+        noSel.copyWithin(dst, src, src + span)
+        copy?.copyWithin(dst, src, src + span)
+      }
+      for (let r = top; r < top - n; r += 1) clearSlice(r)
+    }
+    return
+  }
   const cells64 = screen.cells64
   const noSel = screen.noSelect
   const copy = screen.copyRegion

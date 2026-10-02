@@ -1,5 +1,7 @@
 import React from 'react'
 import { t, getLang, setLang, isLang, writeLangPref, readLangPref, subscribeLang, LANGS, type Lang } from '../i18n.js'
+import { checkForTuiUpdate, installedTuiVersion } from '../update.js'
+import { installedKernelVersion } from '../dsh-adapter/contract.js'
 import { readThemePref } from '../themePrefs.js'
 import { readPresetPref } from '../presetPrefs.js'
 import { readModelPref } from '../modelPrefs.js'
@@ -60,7 +62,7 @@ import { LogoHeader, MessageList } from '../components/MessageList.js'
 import { splashFontIdOf } from '../components/splashFonts.js'
 import { StarPrompt, WhaleCouponPrompt, type StarAttempt } from '../components/StarPrompt.js'
 import type { WhaleCouponStore } from '../dsh-adapter/oauth/bonus.js'
-import { dueStarModal, markStarAsked, STAR_MILESTONES } from '../usageStats.js'
+import { dueStarModal, markStarAsked, pendingStarMilestone, readUsage, STAR_MILESTONES } from '../usageStats.js'
 import { TimelineRail } from '../components/TimelineRail.js'
 import { ScrollbarGutter } from '../components/ScrollbarGutter.js'
 import type { TimelineSnapshot } from '../ink/timeline-rail.js'
@@ -72,6 +74,11 @@ import type { PromptDraftCache } from '../components/promptDraftCache.js'
 import type { InjectController } from '../dsh-adapter/inject-channel.js'
 import { PromptEditorLayer, usePromptEditorOpen } from '../components/PromptEditor.js'
 import { GoalTodoPanel } from '../components/GoalTodoPanel.js'
+import { useSidePanel } from '../components/sidePanel/useSidePanel.js'
+import { jobsFocusStore } from '../components/sidePanel/jobsFocusStore.js'
+import { SidePanelLayout } from '../components/sidePanel/SidePanelLayout.js'
+import { SidePanelColumn } from '../components/sidePanel/SidePanelColumn.js'
+import { PanelPicker, usePanelPickerRows } from '../components/sidePanel/PanelPicker.js'
 import { AutoRecapRow } from '../components/AutoRecapRow.js'
 import { CompactionStatusRow } from '../components/CompactionStatusRow.js'
 import { BalanceReportRow } from '../components/BalanceReportRow.js'
@@ -79,9 +86,11 @@ import type { BalanceResult } from '../deepseekBalance.js'
 import { estimateSessionCostSnapshotCny } from '../deepseekPricing.js'
 import { LoadedContextPanel } from '../components/LoadedContextPanel.js'
 import { StatusLine } from './StatusLine.js'
+import { channelContextOccupancy } from './StatusMetrics.js'
 import { WorkingSpinner, useThinkingStatus } from '../components/WorkingSpinner.js'
 import { ActivityLine, contextPressurePct } from '../components/ActivityLine.js'
 import { ModelPicker } from '../components/ModelPicker.js'
+import { HelpMenu } from '../components/HelpMenu.js'
 import { PluginSceneBoundary } from '../components/PluginSceneBoundary.js'
 import { PluginStatusViewBoundary } from '../components/PluginStatusViewBoundary.js'
 import { ImagePreviewOverlay } from '../components/ImagePreviewOverlay.js'
@@ -129,6 +138,12 @@ import { useAnimationFrame } from '../ink/hooks/use-animation-frame.js'
 import { useExternalVersion } from '../hooks/useExternalVersion.js'
 import { TrajectoryScene } from './TrajectoryScene.js'
 import { markHomeSeen } from '../homePrefs.js'
+import { markOnboardingDone } from '../onboardingPrefs.js'
+import { Launchpad, launchpadVisible, type LaunchpadAction } from './Launchpad.js'
+import { resolveLaunchpadActions } from '../components/launchpadActions.js'
+import { Onboarding } from './Onboarding.js'
+import { appendHistory } from '../history.js'
+import { isHiddenCommandName, isLocalCommandName, parseCommandName } from '../commands.js'
 import { extendTrajectory, projectWave, type TrajBuild } from '../dsh-adapter/trajectory/index.js'
 import { miniWakeWidth } from '../components/trajectory/MiniWake.js'
 import { readTrajectorySeen, writeTrajectorySeen } from '../trajectoryPrefs.js'
@@ -190,6 +205,21 @@ const COMMAND_RESULT_CELLS = 200
  *  file, but a healthy import of thousands of conversations finishes well
  *  inside this; without a cap a wedged child would hang the loop forever. */
 const MIGRATE_CHILD_TIMEOUT_MS = 30 * 60 * 1000
+/**
+ * 落地页参数行四段能点开的既有选择器（第五版）：模型 → /model、思考深度 →
+ * /effort、模式 → /plan、权限预设 → /permission。盖在落地页之上时键盘归
+ * 选择器（见 useInput 的 launchpad 分支注释）；其余 overlay 类型不在此列，
+ * 落地页期间照旧整块让位。
+ */
+const LAUNCHPAD_OVERLAY_KINDS: ReadonlySet<string> = new Set([
+  'model', 'effort', 'plan', 'preset', 'permission',
+  // 第七版：左下角工作目录铭牌点开的工作区菜单（及其二级选择器/流程层）
+  // 也是「盖在落地页之上」的姿态——同一套 pickerPanels 挂载，Esc 回落地页。
+  'workspace-menu', 'workspace-picker', 'workspace-flow',
+  // 第八版：帮助入口也走「盖在落地页之上」的浮层姿态（overlay kind 'help'，
+  // HelpMenu 经 pickerPanels 挂进 OverlayAbove）——不再收掉落地页进对话页。
+  'help',
+])
 
 function cleanCommandError(error: unknown): string {
   try {
@@ -231,6 +261,27 @@ const NO_ROWS: readonly ChatRow[] = []
 /** `max` → `Max` (effort levels arrive lower-case from the adapter). */
 function capitalize(text: string): string {
   return text.length === 0 ? text : text[0].toUpperCase() + text.slice(1)
+}
+
+/**
+ * The occupancy line `/tokens` and `/status` print.
+ *
+ * Occupancy has ONE source (see `dsh-adapter/context-occupancy.ts`): this is
+ * the same reading the footer's ctx field, the segmented bar and the
+ * context-low warning use — never the session's cumulative uncached input,
+ * which is a different quantity by orders of magnitude.
+ * @param channel - Live channel surface.
+ * @returns The localized line, or `undefined` when no window is known.
+ */
+function contextOccupancyLine(channel: Channel): string | undefined {
+  const occupancy = channelContextOccupancy(channel)
+  if (occupancy === undefined || occupancy.contextWindow === undefined || occupancy.contextWindow <= 0) return undefined
+  const percent = Math.max(0, Math.min(100, Math.round((occupancy.usedTokens / occupancy.contextWindow) * 100)))
+  return t('context-occupancy', {
+    percent,
+    used: formatTokens(occupancy.usedTokens),
+    window: formatTokens(occupancy.contextWindow),
+  })
 }
 
 /** Terminal-title spinner frames. */
@@ -310,6 +361,8 @@ export function Chat({
   promptControllerRef: promptControllerRefProp,
   renderScene,
   openHomeOnBoot,
+  launchpadOnBoot,
+  onboardingOnBoot,
   starPrompt,
 }: {
   channel: Channel
@@ -376,6 +429,27 @@ export function Chat({
    * installation, and tests need it deterministic.
    */
   openHomeOnBoot?: boolean
+  /**
+   * Show the Launchpad as this session's first frame.
+   *
+   * Same shape of decision as `openHomeOnBoot` and answered by the same
+   * ordinary-launch test (no `--resume`, no workspace target, no first
+   * prompt) — a resumed conversation belongs to a user who already said
+   * where they want to be, and a landing page in front of it would be the
+   * TUI second-guessing them. Unlike the workspace home this is NOT one-shot:
+   * every ordinary launch lands here, because the page is the place where the
+   * first sentence gets typed, not a tutorial that retires itself.
+   */
+  launchpadOnBoot?: boolean
+  /**
+   * Offer the first-run guide as this session's first frame.
+   *
+   * The host owns the decision (it reads `~/.dsh-tui/onboarding.json`); this
+   * prop only carries the verdict, exactly like `openHomeOnBoot`. It renders
+   * ABOVE the launchpad: the wizard answers "is this thing even wired up",
+   * which is upstream of "what do I want to do first".
+   */
+  onboardingOnBoot?: boolean
   /**
    * Test seam for the startup star modal (usage milestones 99h / 999
    * launches): `null` disables the modal outright; `dir` points the usage
@@ -589,7 +663,120 @@ export function Chat({
    * on" has not been answered yet. Every later launch starts on the chat
    * screen, and the screen stays reachable.
    */
-  const [supervisorOpen, setSupervisorOpen] = React.useState(openHomeOnBoot === true)
+  // 第七版：启动页在开时**不再**预开会话浏览器。旧姿态是「先收落地页再开
+  // 整屏」，浏览器必须提前藏在下面；现在整屏（会话/设置/任务面板）盖在
+  // 落地页**之上**、Esc 退回落地页，按需打开即可——boot 时同时为真反而会
+  // 让浏览器盖住落地页（渲染顺序见各 early-return）。
+  const [supervisorOpen, setSupervisorOpen] = React.useState(
+    openHomeOnBoot === true && launchpadOnBoot !== true,
+  )
+  /**
+   * The launchpad: the landing page every ordinary launch starts on.
+   *
+   * Seeded from `launchpadOnBoot`, and the screen that closes it is the one
+   * that decides what comes next — a submitted line hands over to the chat
+   * screen, an action hands over to whatever surface that action opens.
+   */
+  const [launchpadOpen, setLaunchpadOpen] = React.useState(launchpadOnBoot === true)
+  /**
+   * The launchpad's draft. It lives HERE, not inside the screen, because the
+   * screen unmounts the moment the user submits: a draft owned by an
+   * unmounting component would be lost in exactly the transition it exists
+   * to carry.
+   */
+  const [launchpadDraft, setLaunchpadDraft] = React.useState('')
+  const [launchpadCaret, setLaunchpadCaret] = React.useState(0)
+  const [launchpadFocus, setLaunchpadFocus] = React.useState(-1)
+  /**
+   * 「整屏盖启动页」的显式授权（第七版防御位，用户实测回归：启动页一闪而过
+   * 被顶掉）。整屏分支排在落地页**之前**，任何一处状态在开机后被异步置真
+   * （杂散输入/宿主事件/未来新代码）都会把落地页挤掉。授权位只有**从落地页
+   * 出发的交互**（入口行/空输入 Esc/目录铭牌/命令面板里的整屏命令、Continue
+   * 的兜底浏览器）才置真；覆盖屏全部收起时自动落 false。开机后即便某个整屏
+   * 状态被误置真，落地页仍在最上层——「浮层可以盖、整屏必须经授权」。
+   */
+  const launchpadCoverRef = React.useRef(false)
+  /**
+   * 这一帧到底出不出落地页：状态开着还不够，minimal 模式（`dsh-tui.minimal`）
+   * 下它整块不存在——`minimalMode.ts` 的标志由 channel 在设置落地后写入，
+   * 建 state 时读不到，所以判定必须放在**渲染期**读（与其它 minimal 门同一口径）。
+   * 键盘守卫、渲染分支与"有没有整屏界面"的判定都认这一个值，三者不会分叉。
+   */
+  /**
+   * 右下角铭牌的版本号：`installedTuiVersion()` 每次都要读一遍 package.json，
+   * 而它在一个进程里不会变——mount 时读一次就够。
+   */
+  const tuiVersion = React.useMemo(() => installedTuiVersion(), [])
+  /**
+   * 内核（dsh）版本（第七版：落地页右下角双版本铭牌）。真实来源见
+   * `contract.installedKernelVersion`（宿主 CLI 的 manifest，回落内核线包）；
+   * 两级都读不到 = undefined → 铭牌只画 TUI 段，绝不编造。
+   */
+  const kernelVersion = React.useMemo(() => installedKernelVersion(), [])
+
+  const launchpadShown = launchpadOpen && launchpadVisible()
+  /**
+   * 落地页之上是否盖着一个参数选择器（第五版：参数行四段各自可点，点开的
+   * 是聊天页同一套 /model · /effort · /plan · /permission overlay）。这时
+   * 键盘归选择器（Esc 关它回到落地页），渲染也要把 pickerPanels 带进
+   * 落地页分支——不然整屏 early-return 把 overlay 吞了，"点了没反应"。
+   */
+  const launchpadOverlayUp = launchpadShown && LAUNCHPAD_OVERLAY_KINDS.has(overlay.kind)
+  /**
+   * 渲染在**覆盖层**（而不是整屏 early-return）的那几个命令。
+   *
+   * 落地页的快捷入口与向导招式卡的「试一下」都走 `runCommand`，而 supervisor /
+   * settings / help 的 early-return 排在两个界面**之后**：不收掉当前界面就是
+   * "点了没反应"，状态还滞留着、等界面关掉才突然弹出来。默认收，白名单只留给覆盖层。
+   */
+  const overlayCommandNames = React.useMemo(
+    () => new Set(['model', 'effort', 'plan', 'preset', 'permission']),
+    [],
+  )
+  /**
+   * 打开**整屏界面**的命令（第七版）：从落地页触发这些命令时**不收掉落地页**
+   * ——整屏盖在落地页之上渲染（它们的 early-return 排在落地页分支之前），
+   * Esc 退出整屏回到落地页（草稿/参数/焦点原样保留）。这是「从启动页进入
+   * 对话页的唯一路径 = Enter 提交一条非命令消息」的落地：任何返回键都不再
+   * 把人甩到对话页。其余命令（star / update / help / 转录输出类）的反馈在
+   * 对话页，仍按旧约收掉落地页再执行。
+   */
+  const launchpadScreenCommands = React.useMemo(
+    () => new Set(['home', 'resume', 'agentview', 'settings', 'jobs', 'tree', 'agents', 'setup', 'bg', 'background']),
+    [],
+  )
+  /**
+   * 落地页条件位②（有新版本）：`checkForTuiUpdate()`（与 /update 同一条
+   * 判定，src/update.ts）在启动页第一次挂起时后台探一次——registry 延迟
+   * 不许拖慢第一帧；失败/离线静默为 false（绝不放假按钮）。
+   */
+  const [launchpadUpdateAvailable, setLaunchpadUpdateAvailable] = React.useState(false)
+  const launchpadUpdateProbedRef = React.useRef(false)
+  React.useEffect(() => {
+    if (!launchpadShown || launchpadUpdateProbedRef.current) return
+    launchpadUpdateProbedRef.current = true
+    void checkForTuiUpdate().then(update => {
+      setLaunchpadUpdateAvailable(update !== undefined)
+    }).catch(() => undefined)
+  }, [launchpadShown])
+  /**
+   * 落地页条件位③（投喂一颗 Star）：与开屏求 star 弹窗**同一口径**——
+   * `usageStats`（~/.dsh-tui/usage.json）里有未报过的已达档里程碑
+   * （`pendingStarMilestone`，首档 24h）且本进程尚未 star 成功。star 成功
+   * 后（`starred` 翻真）按钮立即消失；记账过的档不再纠缠。
+   */
+
+  /**
+   * The first-run guide. Renders above the launchpad (see the prop docs): a
+   * launch that needs setup has not answered the launchpad's question yet.
+   */
+  const [onboardingOpen, setOnboardingOpen] = React.useState(onboardingOnBoot === true)
+  /**
+   * 落地页那条"第一次用？跑一遍引导"的横幅认的是**还欠一次引导**，而不是启动快照：
+   * 完成（写进 onboarding.json）之后立刻收掉；跳过刻意保留——没记账，下次启动还会问，
+   * 横幅说的正是这件事。
+   */
+  const [onboardingPending, setOnboardingPending] = React.useState(onboardingOnBoot === true)
   /** `/tree` opens the session family tree (pi's Session Tree): every rewind
    *  fork stitched back onto the message it diverged from, hover previews,
    *  and per-node rewind/fork/adopt actions. Like the supervisor, a screen. */
@@ -634,6 +821,18 @@ export function Chat({
    * `null` 显式关闭，传 actions 覆写两个按钮（不跑真 gh、不开真浏览器）。 */
   /** 本次会话是否已经 star 成功（开屏彩蛋标题切「捡到小星星啦」）。 */
   const [starred, setStarred] = React.useState(false)
+  /**
+   * 落地页条件位③（投喂一颗 Star）：与开屏求 star 弹窗**同一口径**——
+   * `usageStats`（~/.dsh-tui/usage.json）里有未报过的已达档里程碑
+   * （`pendingStarMilestone`，首档 24h）且本进程尚未 star 成功。star 成功
+   * 后（`starred` 翻真）按钮立即消失；记账过的档不再纠缠。readUsage 是
+   * 文件读，只在 starred 翻真或测试缝变化时重算，不逐帧读盘。
+   */
+  const launchpadStarDue = React.useMemo(
+    () => !starred && pendingStarMilestone(readUsage(starPrompt?.dir)) !== null,
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- dir 经测试缝注入
+    [starred, starPrompt],
+  )
   const [starModal, setStarModal] = React.useState<{ index: number; phase: 'ask' | 'done' } | null>(null)
   // 单发闩：只在第一个"安静的开屏视口"上武装定时器。700ms 窗口内整屏
   // 界面打开 → cleanup 掐掉定时器且**不再重臂**（记账只发生在回调里，
@@ -646,7 +845,7 @@ export function Chat({
   React.useEffect(() => {
     if (starModalArmedRef.current) return
     if (starPrompt === null) return
-    if (supervisorOpen || treeOpen || settingsOpen || channel.working) return
+    if (supervisorOpen || treeOpen || settingsOpen || launchpadShown || onboardingOpen || channel.working) return
     starModalArmedRef.current = true
     // 让开屏先画半秒：弹窗压在介绍动画之上，而不是同抢第一帧。
     const timer = setTimeout(() => {
@@ -664,7 +863,7 @@ export function Chat({
     }, 700)
     return () => { clearTimeout(timer) }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- 只在整屏界面开合时重判；闩保证只武装一次
-  }, [supervisorOpen, treeOpen, settingsOpen])
+  }, [supervisorOpen, treeOpen, settingsOpen, launchpadShown, onboardingOpen])
   /** `/star` 命令、开屏标语的点击/`Alt+S` 共用的一键动作：异步跑 gh，界面
    * 全程不阻塞，结果回来按四类各报一句（成功 / 没装 gh / 没登录 / 失败）。
    * `starPrompt.onStar` 存在时走同一条测试缝（夹具因此不会真的去 star）。 */
@@ -762,10 +961,30 @@ export function Chat({
   const workspaceFlowAbortRef = React.useRef<AbortController | null>(null)
   /** `/preset` agent-preset roster (issue #8): loads async, persists. */
   const [presetOptions, setPresetOptions] = React.useState<readonly PresetOption[]>([])
+  /**
+   * 落地页参数行的模式段（第六版设计 1）显示 preset 的**显示名**
+   * （Standard/PTC/极简…），名册是异步的——落地页出来时顺手预热一次
+   * （空名册不写；失败静默，段缺省不画）。/preset 自己的加载路径不动。
+   */
+  React.useEffect(() => {
+    if (!launchpadShown || presetOptions.length > 0) return
+    let cancelled = false
+    channel.listPresets()
+      .then(list => { if (!cancelled && list.length > 0) setPresetOptions(list) })
+      .catch(() => {})
+    return () => { cancelled = true }
+  }, [launchpadShown, presetOptions.length, channel])
   /** `/effort` adapter levels: load async before the slider opens. */
   const [effortOptions, setEffortOptions] = React.useState<readonly EffortOption[]>([])
   const [themeName, setTheme] = useTheme()
   const { rows: terminalRows } = useTerminalSize()
+  /**
+   * 帮助盖屏（第八版，overlay kind 'help'）的滚动视口：HelpMenu 自带
+   * ScrollBox，键盘（↑/↓/PgUp/PgDn/Home/End）由 Chat 的 overlay 分支驱动。
+   * 视口预算与 PromptInput 的 helpViewportHeight 同式（PR #446 的口径）。
+   */
+  const helpCoverScrollRef = React.useRef<ScrollBoxHandle | null>(null)
+  const helpCoverViewportHeight = Math.max(3, Math.min(terminalRows - 7, 15))
   const [showAllMessages, setShowAllMessages] = React.useState(false)
   /** Scope the fold to this question: an aborted ask can promote its queued
    *  successor without ever publishing an idle (null) snapshot. */
@@ -952,11 +1171,39 @@ export function Chat({
    *  (open the panel AT that job), cleared on close so the keyboard/command
    *  path reopens at the top. */
   const [jobsPanelFocusId, setJobsPanelFocusId] = React.useState<string | null>(null)
+  // Side-panel routing needs the controller, which is created further down;
+  // a ref keeps this identity-stable callback fresh anyway.
+  const sidePanelRef = React.useRef<{
+    split: boolean
+    enabledPanelIds: readonly string[]
+    openPanel: (id: string, opts?: { focus?: boolean }) => void
+    /** 切到整屏前把键盘交还聊天：从整屏返回时不会**落在面板里**吞掉输入。 */
+    focusChat: () => void
+  } | null>(null)
   // MessageList forwards these open handlers to every memoized row. Their
   // identities must survive token/metrics updates, including for tool rows.
   const openJobsPanel = React.useCallback((focusId?: string) => {
+    const sidePanel = sidePanelRef.current
+    // Split mode: open the jobs side panel at the requested job (the focus
+    // lane carries the id; a fresh nonce refocuses even for the same id).
+    if (sidePanel !== null && sidePanel.split && sidePanel.enabledPanelIds.includes('jobs')) {
+      if (typeof focusId === 'string' && focusId !== '') jobsFocusStore.request(focusId)
+      sidePanel.openPanel('jobs', { focus: true })
+      return
+    }
+    // Narrow / inline fallback: the full-screen overlay (unchanged).
     if (typeof focusId === 'string' && focusId !== '') setJobsPanelFocusId(focusId)
     setJobsPanelOpen(true)
+  }, [])
+  /** Ctrl+A / detail 回退：侧栏分栏且 agents 已启用时打开右栏 Panel（内部
+   *  dashboard ↔ detail 二级路由自己管）；窄屏 / inline 保留整屏形态。 */
+  const openSubagentDashboard = React.useCallback((): void => {
+    const sidePanel = sidePanelRef.current
+    if (sidePanel !== null && sidePanel.split && sidePanel.enabledPanelIds.includes('agents')) {
+      sidePanel.openPanel('agents', { focus: true })
+      return
+    }
+    setSubagentDashboardOpen(true)
   }, [])
   /** Detail view for a specific subagent (opened from dashboard). */
   const [subagentDetailId, setSubagentDetailId] = React.useState<string | null>(null)
@@ -986,13 +1233,57 @@ export function Chat({
     setSceneOpen(false)
   }, [])
 
-  /** Open the scene, mark failures seen, and retire the key hint for good. */
-  const openScene = React.useCallback(() => {
+  /**
+   * 整屏分支的「盖启动页」闸门（第七版防御位，用户实测回归：启动页一闪
+   * 而过被顶掉）。落地页在屏上时，只有**经 `launchpadCoverRef` 授权**
+   * （= 从落地页出发的交互打开）的整屏才盖它；否则该整屏状态被无视
+   * （渲染落到落地页），启动页永远不被开机期的杂散状态挤掉。落地页不在
+   * 屏上时闸门恒开（普通姿态与从前逐字节一致）。
+   *
+   * ⚠ 这一段必须排在组件**所有** early-return 之前（hooks 规则）：曾放在
+   * onboarding/interrupt 分支之后，向导一开就少跑这个 effect，React 直接
+   * 报 hooks 乱序（verify-launchpad-onboarding-chat A2/E5/H2 全红）。
+   */
+  const launchpadGate = (): boolean => !launchpadShown || launchpadCoverRef.current
+  // 覆盖屏全部收起时收回授权：下一次打开必须再经过落地页自己的交互。
+  const launchpadCoverScreenUp = supervisorOpen || treeOpen || settingsOpen
+    || jobsPanelOpen || subagentDashboardOpen || subagentDetailId !== null || sceneOpen
+  React.useEffect(() => {
+    if (!launchpadCoverScreenUp) launchpadCoverRef.current = false
+  }, [launchpadCoverScreenUp])
+  /**
+   * 从落地页出发的交互要开整屏前先授权（配合 `launchpadGate`）：调用点只在
+   * 落地页自己的回调里（onAction / onCommandPick / onEscape 的会话浏览路）。
+   * 异步误置真的整屏状态没有这道授权 → 闸门挡下，落地页留在最上层。
+   */
+  const authorizeLaunchpadCover = (): void => { launchpadCoverRef.current = true }
+
+  /**
+   * Open the trajectory, mark failures seen, and retire the key hint for good.
+   *
+   * Ctrl+T and `/trace` share this one entry point, and it is SPLIT-AWARE the
+   * same way `/jobs` and `/agents` already are: while the sidebar is
+   * rendering, the trajectory opens as the `trajectory` panel inside it
+   * instead of taking the whole screen. `options.fullscreen` is the escape
+   * hatch the panel's own ⤢ button uses — without it that button would route
+   * straight back into the panel it is trying to leave.
+   */
+  const openScene = React.useCallback((options?: { readonly fullscreen?: boolean }) => {
     seenFailuresRef.current = trajectoryRef.current?.counts.errors ?? 0
     setTrajectorySeen(previous => {
       if (!previous) writeTrajectorySeen()
       return true
     })
+    const controller = sidePanelRef.current
+    if (
+      options?.fullscreen !== true
+      && controller !== null
+      && controller.split
+      && controller.enabledPanelIds.includes('trajectory')
+    ) {
+      controller.openPanel('trajectory', { focus: true })
+      return
+    }
     setSceneOpen(true)
   }, [])
 
@@ -1023,6 +1314,34 @@ export function Chat({
       }).catch(() => undefined)
     }
   }, [agentViewReturnId, channel, repaintTranscript])
+
+  /**
+   * Leave the first-run guide.
+   *
+   * `done` writes the one-shot marker; `skipped` deliberately does NOT — the
+   * user has not answered, and a later launch is exactly when they might.
+   * Both cases land on the launchpad rather than the transcript: the wizard
+   * interrupted a launch, so the launch resumes where it left off.
+   *
+   * The write is best-effort by design (`markOnboardingDone` returns false
+   * when the data directory is unwritable); a read-only install gets one more
+   * offer next launch, which is the recoverable end of the trade.
+   */
+  const closeOnboarding = React.useCallback((outcome: 'skipped' | 'done'): void => {
+    setOnboardingOpen(false)
+    if (outcome === 'done') {
+      const written = markOnboardingDone()
+      setOnboardingPending(false)
+      channel.notify(t(written ? 'onboarding-finished' : 'onboarding-write-failed'), {
+        color: written ? 'success' : 'warning',
+        timeoutMs: written ? 3000 : 6000,
+      })
+    } else {
+      channel.notify(t('onboarding-skipped'), { timeoutMs: 4000 })
+    }
+  }, [channel])
+
+
   /** The startup summary gives way to transcript rows after the first local command or message. */
   const loadedContextVisible = channel.rows.length === 0 && channel.loadedContext !== undefined
   /** Startup context panel: collapsed by default, toggled with Ctrl+P. */
@@ -1864,6 +2183,71 @@ export function Chat({
     })()
   }
 
+  /**
+   * Close the launchpad and hand the draft to the chat screen.
+   *
+   * THREE cases, and they are genuinely different:
+   *
+   *   - a slash command → `runCommand`, the same dispatch a typed command
+   *     takes in the composer. The line is NOT submitted to the model.
+   *     Recognition is the composer's OWN rule (第六版 BUG 1 修复): the merged
+   *     command list (locals + plugin/registry commands via channel.commandList)
+   *     decides whether the line is a command — isLocalCommandName alone missed
+   *     registry-only names (e.g. /plan, /goal), which then fell through to
+   *     channel.submit and went to the model as a user message.
+   *   - ordinary text  → SENT DIRECTLY (fifth revision, user-reported bug:
+   *     "按了回车就直接进入流式输出"). The line rides the composer's own
+   *     submit path (`channel.submit`, which queues through the DSH inbox
+   *     while a turn is running) — no draft is parked anywhere, the composer
+   *     mounts EMPTY because the content is already gone as the first turn.
+   *   - empty          → nothing to send; just show the conversation.
+   *
+   * History is appended for the two non-empty cases (matching what PromptInput
+   * does on submit) so the launchpad's first line is reachable with ↑ later.
+   */
+  const closeLaunchpad = React.useCallback((submit: string): void => {
+    const text = submit.trim()
+    setLaunchpadOpen(false)
+    // 首启时 openHomeOnBoot 与落地页同时为真：会话浏览器已经开着、只是被落地页盖住。
+    // 提交首句后必须把它收掉，否则用户落到浏览器而不是"草稿就在眼前的对话"，
+    // 与本函数 doc 承诺的落点直接矛盾。
+    setSupervisorOpen(false)
+    setLaunchpadFocus(-1)
+    setLaunchpadDraft('')
+    setLaunchpadCaret(0)
+    if (text === '') return
+    void appendHistory(text)
+    const parsed = text.startsWith('/') ? parseCommandName(text) : undefined
+    // 第八版：/help 在落地页上也是盖屏浮层（补全面板被 Esc 收掉后直接
+    // Enter 的那条路）——不收落地页、不进对话页。聊天页里 /help 的行为
+    // 不变（那边不走这个回调）。
+    if (parsed !== undefined && parsed.name === 'help' && launchpadOpen) {
+      dispatchOverlay({ type: 'open', overlay: { kind: 'help' } })
+      return
+    }
+    // 与 composer 的 tryRunCommand 同一条判定：合并命令表（LOCAL_COMMANDS +
+    // channel.commandList 的插件/registry 命令）里有名字才是命令；hidden
+    // 命令照旧认。判定之外的 / 开头行才走 submit（与聊天页 Enter 行为一致）。
+    if (parsed !== undefined && (
+      isLocalCommandName(parsed.name)
+      || isHiddenCommandName(parsed.name)
+      || channel.commandList.some(entry => entry.name === parsed.name)
+    )) {
+      void runCommand(parsed.name, parsed.rawInput)
+      return
+    }
+    // 直接发送：与 composer 回车同一条提交路径。发出去之后输入框是空的
+    // （内容已作为首轮发出，绝不"既发了又留在框里"），也没有交接提示——
+    // 没有草稿要交，一句"已放进输入框"的 toast 反而是假的。
+    channel.submit(text)
+  }, [channel, launchpadOpen])
+
+  /**
+   * The screen's command dispatcher. Every entry point reaches this one
+   * closure — PromptInput's `onRunCommand`, the completion menu, this screen's
+   * own `/` cases, and the launchpad handoff above. There is deliberately no
+   * second dispatcher for the landing page.
+   */
   const runCommand = (
     name: string,
     rawInput = '',
@@ -2155,9 +2539,26 @@ export function Chat({
         setSelectedId(null)
         setSelectionActive(false)
         return true
-      case 'compact':
-        channel.compact()
+      case 'compact': {
+        // The TUI's own transaction is the primary path: it owns the
+        // `tui/compact` decision event, the progress row with live token
+        // count, Esc cancellation, and the settle before a session switch
+        // (issue #1092) — the official `dsh-command-compact` command has none
+        // of that. A composition that mounts no compaction service falls back
+        // to the registry command; one with neither says WHY up front instead
+        // of looking usable and failing on use (channel/capabilities.ts).
+        const compact = channel.capabilities().compact
+        if (compact.route === 'local') {
+          channel.compact()
+          return true
+        }
+        if (compact.route === 'registry') return runExternalCommand('compact', rawInput, images)
+        channel.notify(
+          t('capability-unavailable', { name: 'compact', reason: t(compact.reasonKey) }),
+          { color: 'warning', timeoutMs: 8000 },
+        )
         return true
+      }
       case 'trace':
         // `/trace` is kept as the discoverable spelling of Ctrl+T: the
         // command menu is where a user finds out the trajectory exists.
@@ -2315,16 +2716,33 @@ export function Chat({
         })
         return true
       case 'tokens': {
-        const usage = t('tokens-usage', { in: formatTokens(channel.tokens.input), out: formatTokens(channel.tokens.output) })
-        if (channel.contextWindow === undefined) {
-          channel.notify(usage)
-        } else {
-          const percent = Math.max(
-            0,
-            Math.min(100, Math.round((channel.tokens.input / channel.contextWindow) * 100)),
-          )
-          channel.notify(t('tokens-usage-context', { usage, percent }))
+        // Three separately-labelled facts, never two measures side by side:
+        // what THIS request uploaded (the provider's mutually-exclusive prompt
+        // buckets), what the session has accumulated (the token counters), and
+        // how full the window is (the channel's single occupancy reading — the
+        // same number the footer and the context-low warning show).
+        const usage = channel.lastUsage
+        const lines: string[] = []
+        if (usage !== undefined) {
+          const upload = usage.input + usage.cacheRead + usage.cacheWrite
+          const rate = upload > 0 ? ((usage.cacheRead / upload) * 100).toFixed(1) : '0.0'
+          lines.push(t('tokens-request-upload', {
+            upload: formatTokens(upload),
+            input: formatTokens(usage.input),
+            read: formatTokens(usage.cacheRead),
+            write: formatTokens(usage.cacheWrite),
+            rate,
+          }))
         }
+        lines.push(t('tokens-session-breakdown', {
+          input: formatTokens(channel.tokens.input),
+          output: formatTokens(channel.tokens.output),
+          read: formatTokens(channel.tokens.cacheRead),
+          write: formatTokens(channel.tokens.cacheWrite),
+        }))
+        const occupancyLine = contextOccupancyLine(channel)
+        if (occupancyLine !== undefined) lines.push(occupancyLine)
+        channel.notify(lines.join('\n'))
         return true
       }
       case 'resume':
@@ -2337,7 +2755,20 @@ export function Chat({
        * commands is about muscle memory, not about three surfaces — every one
        * of them lands here, on the same runtime.
        */
-      case 'home':
+      case 'home': {
+        setHelpOpen(false)
+        // Split-aware, like /trace and /jobs: while the sidebar is rendering
+        // and the workspace panel is enabled, the workspace view opens THERE.
+        // The panel's own ⤢ goes back to the full-screen home.
+        const controller = sidePanelRef.current
+        if (controller !== null && controller.split && controller.enabledPanelIds.includes('workspace')) {
+          controller.openPanel('workspace', { focus: true })
+          return true
+        }
+        agentViewOpenSessionRef.current = channel.agentId
+        setSupervisorOpen(true)
+        return true
+      }
       case 'agentview': {
         setHelpOpen(false)
         // The screen opens immediately and loads its own list. Waiting for the
@@ -2432,23 +2863,23 @@ export function Chat({
         return true
       case 'status': {
         const usage = channel.lastUsage
-        const pct =
-          channel.contextWindow === undefined
-            ? undefined
-            : Math.max(0, Math.min(100, Math.round((channel.tokens.input / channel.contextWindow) * 100)))
         const lines: string[] = [
           `${t('status-model', { model: channel.model })}${channel.reasoningEffort ? ` · ${capitalize(channel.reasoningEffort)} effort` : ''}`,
           `${t('status-state', { state: channel.working ? t('status-working') : t('status-idle') })}`,
           `${t('status-session', { id: channel.agentId })}`,
           `${t('status-dir', { cwd: channel.displayCwd })}${channel.gitBranch ? ` · ${channel.gitBranch}` : ''}`,
-          `Tokens ${formatTokens(channel.tokens.input)} in → ${formatTokens(channel.tokens.output)} out`,
+          t('tokens-session-total', {
+            input: formatTokens(channel.tokens.input),
+            output: formatTokens(channel.tokens.output),
+          }),
         ]
         if (usage !== undefined) {
           const total = usage.input + usage.cacheRead + usage.cacheWrite
           const rate = total > 0 ? ((usage.cacheRead / total) * 100).toFixed(1) : '0.0'
           lines.push(t('cost-cache-rate', { rate, read: formatTokens(usage.cacheRead), write: formatTokens(usage.cacheWrite) }))
         }
-        if (pct !== undefined) lines.push(t('cost-context', { pct }))
+        const occupancyLine = contextOccupancyLine(channel)
+        if (occupancyLine !== undefined) lines.push(occupancyLine)
         if (channel.sessionTitle) lines.push(t('status-title', { title: channel.sessionTitle }))
         setHelpOpen(false)
         channel.pushLocal('/status', lines)
@@ -2457,7 +2888,10 @@ export function Chat({
       case 'cost': {
         const usage = channel.lastUsage
         const lines = [
-          `Tokens ${formatTokens(channel.tokens.input)} in → ${formatTokens(channel.tokens.output)} out`,
+          t('tokens-session-total', {
+            input: formatTokens(channel.tokens.input),
+            output: formatTokens(channel.tokens.output),
+          }),
         ]
         if (usage !== undefined) {
           const total = usage.input + usage.cacheRead + usage.cacheWrite
@@ -2504,6 +2938,56 @@ export function Chat({
         // reads sections + namespaces from the channel itself.
         setHelpOpen(false)
         setSettingsOpen(true)
+        return true
+      }
+      case 'continue': {
+        // 落地页第四版的 Continue（最高频动作）：继续**最近一条可继续会话**。
+        // 数据是真的——`agentViewRows`（含持久化名册，listing 落地后含全部历史）
+        // 里挑 updatedAt 最新的非当前行；没有可继续的就去会话名册挑，失败也不
+        // 静默（notify + 打开 supervisor 让用户自己挑），绝不点了个没反应。
+        setHelpOpen(false)
+        const candidates = agentViewRows.filter(row =>
+          !row.current && row.id !== channel.agentId && row.title.trim() !== '')
+        const latest = candidates.reduce<(typeof candidates)[number] | undefined>(
+          (acc, row) => (acc === undefined || row.updatedAt > acc.updatedAt ? row : acc), undefined)
+        if (latest === undefined) {
+          channel.notify(t('launchpad-continue-none'), { color: 'error', timeoutMs: 6000 })
+          agentViewOpenSessionRef.current = channel.agentId
+          // 第七版：无可继续会话时浏览器盖在落地页之上（不收落地页）——Esc
+          // 回启动页，与合并入口「会话与工作区」同一条姿态。
+          setSupervisorOpen(true)
+          return true
+        }
+        setLaunchpadOpen(false)
+        void channel.resumeTo(latest.id)
+          .then((result) => {
+            if (!result.ok) {
+              channel.notify(t('launchpad-continue-failed'), { color: 'error', timeoutMs: 8000 })
+              agentViewOpenSessionRef.current = channel.agentId
+              setSupervisorOpen(true)
+              return
+            }
+            channel.notify(t('resume-resumed'))
+            suppressLogoIntroRef.current = true
+            setAgentViewReturnId(undefined)
+            repaintTranscript()
+          })
+          .catch(() => {
+            channel.notify(t('launchpad-continue-failed'), { color: 'error', timeoutMs: 8000 })
+          })
+        return true
+      }
+      case 'setup': {
+        // `/setup` re-runs the first-run guide. Unlike the boot path this is
+        // an EXPLICIT request, so it opens unconditionally — a user who typed
+        // it has already decided the wizard is what they want. It reuses the
+        // same screen and the same `onClose`, so completing it here also
+        // (re)writes the one-shot marker.
+        // 第七版：向导的 early-return 在落地页**之前**，天然盖在落地页之上；
+        // 不再收掉落地页——Esc/跳过/完成都回到启动页（旧姿态收掉落地页后，
+        // 向导关掉就落到对话页，正是用户报的 bug 形态之一）。
+        setHelpOpen(false)
+        setOnboardingOpen(true)
         return true
       }
       case 'star': {
@@ -2608,11 +3092,50 @@ export function Chat({
         else channel.notify(t('agentsmd-created', { result }))
         return true
       }
-      case 'jobs':
+      case 'jobs': {
         setHelpOpen(false)
-        setJobsPanelFocusId(null)
-        setJobsPanelOpen(true)
+        // Split mode routes to the side panel; narrow terminals keep the
+        // full-screen overlay.
+        if (sidePanel.split && sidePanel.enabledPanelIds.includes('jobs')) {
+          sidePanel.openPanel('jobs', { focus: true })
+        } else {
+          setJobsPanelFocusId(null)
+          setJobsPanelOpen(true)
+        }
         return true
+      }
+      case 'panel': {
+        setHelpOpen(false)
+        // 无参 → 面板选择器（overlay 互斥结构内）；有参 → 侧栏命令分发。
+        if (rawInput.trim() === '' && sidePanel.splitAvailable && panelPickerRows.length > 0) {
+          const current = panelPickerRows.findIndex(row => row.id === sidePanel.activePanelId)
+          dispatchOverlay({ type: 'open', overlay: { kind: 'panel', index: Math.max(0, current) } })
+          return true
+        }
+        if (sidePanel.command(rawInput)) return true
+        // 分栏不可用（窄屏 / inline / 编辑器展开 / splitEnabled=false）
+        // 或参数未知时的整屏回退与兜底：已知面板走整屏形态，其余消费
+        // 掉并提示——绝不原样返回 false，否则 PromptInput 会把
+        // "/panel …" 当普通消息发给模型。
+        const arg = rawInput.trim().toLowerCase()
+        const target = arg === '' || arg === 'focus' || arg === 'toggle' || arg === 'zoom'
+          ? sidePanel.activePanelId
+          : arg
+        if (target === 'jobs') {
+          setJobsPanelFocusId(null)
+          setJobsPanelOpen(true)
+          return true
+        }
+        if (target === 'agents') {
+          setSubagentDashboardOpen(true)
+          return true
+        }
+        if (arg === 'toggle' || arg === 'focus' || arg === 'zoom' || arg === '' || target !== undefined) {
+          channel.notify(t('panel-unavailable-hint'))
+          return true
+        }
+        return false
+      }
       case 'agents':
         setHelpOpen(false)
         void channel.listSubagents().then((lines) => {
@@ -2736,9 +3259,12 @@ export function Chat({
         // Registered by dsh-plan-mode: bare `/plan` opens an on/off picker
         // marked with the current state instead of toggling blindly; Enter
         // dispatches `/plan` or `/plan off`. Arguments pass through verbatim
-        // (`/plan off`), and an unmounted row falls back to the default
-        // external path.
-        const mounted = channel.commandList.some(command => command.external && command.name === 'plan')
+        // (`/plan off`). Availability comes from the shared capability facts
+        // (the same read Shift+Tab uses), not from a second command-list
+        // scan; with no registry command the line falls through to the model,
+        // exactly as before.
+        const plan = channel.capabilities().plan
+        const mounted = plan.route !== 'none'
         const parts = rawInput.trim().split(/\s+/).filter(Boolean)
         if (mounted && parts.length === 0) {
           setHelpOpen(false)
@@ -3086,7 +3612,60 @@ export function Chat({
    */
   const { columns: terminalColumns } = useTerminalSize()
   const pageInsetX = usePageInset().x
-  const wakeWidth = miniWakeWidth(terminalColumns)
+  // 侧栏控制器：几何（chatColumns/panelColumns）、焦点与键盘分发都在
+  // 这个 hook 里（设计文档 §16.5——Chat 只多一次调用、一处键盘让位、
+  // 一条 runCommand case）。编辑器展开时几何强制 collapsed。
+  const sidePanel = useSidePanel({
+    columns: terminalColumns,
+    fullscreen,
+    editorOpen: promptEditorOpen,
+  })
+  /**
+   * 「全屏」出口（PanelBar 的 ⤢）：把侧栏里那个面板的内容切到它原本的整屏
+   * 形态。只映射**真的有整屏对应物**的面板 id（能力位 capabilities.fullscreen
+   * 决定按钮画不画，这里决定点了去哪）；没映射到的 id 静默无操作——按钮与
+   * 落地页、键盘入口共用同一个状态位，所以从整屏返回时侧栏还在原处。
+   */
+  const openPanelFullscreen = React.useCallback((panelId: string): void => {
+    if (panelId === 'jobs') {
+      sidePanelRef.current?.focusChat()
+      setJobsPanelOpen(true)
+      return
+    }
+    if (panelId === 'agents') {
+      sidePanelRef.current?.focusChat()
+      setSubagentDashboardOpen(true)
+      return
+    }
+    if (panelId === 'trajectory') {
+      sidePanelRef.current?.focusChat()
+      // 强制整屏：默认的 openScene 在分屏下会路由回面板（见它的注释）。
+      openScene({ fullscreen: true })
+      return
+    }
+    if (panelId === 'workspace') {
+      sidePanelRef.current?.focusChat()
+      setSupervisorOpen(true)
+    }
+  }, [openScene])
+  // openJobsPanel（在上方、identity 稳定）经 ref 读取最新控制器。
+  sidePanelRef.current = sidePanel
+  /**
+   * 宠物「代言」判定：分屏开着且 companion 是活动面板时，新通知由宠物头顶
+   * 气泡说出，输入框上方的 toast 不再重复同一条。error 色恒不压制（可能
+   * 要行动）。渲染期读控制器状态——与气泡同一提交，无先闪后消的竞态。
+   */
+  const petSaysNotices = React.useCallback(
+    (item: Channel['notifications'][number]): boolean =>
+      item.color !== 'error' && sidePanel.split && sidePanel.activePanelId === 'companion',
+    [sidePanel.split, sidePanel.activePanelId],
+  )
+  // 聊天列宽：收起时 = 内容区全宽（与现状逐字节一致），分栏时 = 左栏宽。
+  // 所有显式下传的宽度（gutter / 图片预览区 / wake 条）都改用它；转录
+  // 子树则经 SidePanelLayout 的 TerminalSizeContext 覆盖自动拿到。
+  const chatColumns = sidePanel.chatColumns
+  const wakeWidth = miniWakeWidth(chatColumns)
+  const panelPickerRows = usePanelPickerRows(sidePanel)
   const wakeBand = React.useMemo(
         () =>
       wakeWidth === 0
@@ -3271,6 +3850,21 @@ export function Chat({
       || overlay.kind === 'tips'
       || (recap !== null && (!recap.auto || recap.expanded))
     ) return
+    // The first-run guide owns the whole terminal while it is up: it is a
+    // wizard with its own step navigation, its own focus ring inside the
+    // pickers it borrows, and no free-text input at all. Registered ABOVE the
+    // launchpad because it renders above it.
+    if (onboardingOpen) return
+    // The launchpad owns the whole terminal while it is up — including the
+    // plain letters that would otherwise reach the composer, which is exactly
+    // the point: it IS the composer on this screen, and its draft is submitted
+    // directly (see closeLaunchpad). ONE exception (fifth revision): a picker
+    // opened from the param row renders ABOVE the launchpad and therefore owns
+    // the keyboard — fall through to the overlay branches below (Esc closes the
+    // picker back onto the launchpad). The launchpad's own useInput is paused
+    // via inputPaused for exactly this window, so keys the picker does not
+    // consume cannot leak into the draft.
+    if (launchpadShown && !launchpadOverlayUp) return
     // The session tree owns the whole terminal while it is up: plain letters
     // drive its search, clicks and Enter drive its action menu.
     if (treeOpen) return
@@ -3312,7 +3906,10 @@ export function Chat({
     // Events only arrive with mouse tracking on; inline mode never sees
     // them, so this is a no-op there.
     if (key.wheelUp || key.wheelDown) {
-      if (helpOpen) return
+      // 焦点在右栏时滚轮不回落到转录：落在面板矩形上的滚轮已由命中
+      // 测试路由给面板自己的 ScrollBox，到达这里的兜底事件不应在
+      // 用户操作右栏时误滚左栏。
+      if (helpOpen || sidePanel.focus === 'panel') return
       // Any open transient dialog is modal to the wheel; the one exception
       // mirrors the render gate — a workspace picker whose target list has
       // not landed paints nothing, so wheel-through keeps scrolling.
@@ -3348,7 +3945,8 @@ export function Chat({
     // pending. The panels bind ↑/↓/Space/Tab/Enter/Esc and never these keys,
     // so paging cannot steal anything from them.
     if ((key.pageUp || key.pageDown) && fullscreen) {
-      if (helpOpen) return
+      // 焦点在右栏时 PgUp/PgDn 属于活动面板（经侧栏键盘分发）。
+      if (helpOpen || sidePanel.focus === 'panel') return
       const overlayModal =
         overlay.kind !== 'none' &&
         (overlay.kind !== 'workspace-picker' || workspaceTargets.length > 0)
@@ -3384,6 +3982,11 @@ export function Chat({
       }
       return
     }
+    // 侧栏键盘分发（v2.1 优先级）：上面的审批 / 问卷 / 对话框守卫仍然
+    // 最先，其次是侧栏全局快捷键（Ctrl+B / Alt+Z，两种焦点都生效），
+    // 然后焦点在右栏时一切按键归侧栏——活动面板的业务键优先，宿主
+    // 回退键（←/→ 切面板、z、+/-、Esc 回聊天）兜底。
+    if (sidePanel.handleKey(input, key, event)) return
     const returnCandidate = isPlainReturnInput(input, key)
     const returnNow = Date.now()
     const plainReturn = returnCandidate && returnNow - lastModalEnterAtRef.current >= 80
@@ -3464,6 +4067,27 @@ export function Chat({
     }
     if (expanded && input === 'N' && searchQuery && searchCount > 0 && !key.ctrl && !key.meta && !key.super) {
       setSearchCurrent(i => (i <= 0 ? searchCount - 1 : i - 1))
+      event.stopImmediatePropagation()
+      return
+    }
+    if (overlay.kind === 'help') {
+      // 帮助盖屏（第八版）：Esc/Ctrl+C/Enter 收起回落地页；纵向导航归这个
+      // 视口（与 PromptInput 的 helpOpen 分支同一套键位），其余按键模态吞掉
+      // ——绝不漏进落地页草稿。
+      const page = Math.max(1, helpCoverViewportHeight - 2)
+      if (key.upArrow || key.wheelUp) {
+        helpCoverScrollRef.current?.scrollBy(key.wheelUp ? -3 : -1)
+      } else if (key.downArrow || key.wheelDown) {
+        helpCoverScrollRef.current?.scrollBy(key.wheelDown ? 3 : 1)
+      } else if (key.pageUp || key.pageDown) {
+        helpCoverScrollRef.current?.scrollBy(key.pageUp ? -page : page)
+      } else if (key.home) {
+        helpCoverScrollRef.current?.scrollTo(0)
+      } else if (key.end) {
+        helpCoverScrollRef.current?.scrollTo(Number.MAX_SAFE_INTEGER)
+      } else if (key.escape || (key.ctrl && (input === 'c' || input === 'd')) || plainReturn) {
+        dispatchOverlay({ type: 'close' })
+      }
       event.stopImmediatePropagation()
       return
     }
@@ -3821,6 +4445,18 @@ export function Chat({
       }
       return
     }
+    if (overlay.kind === 'panel') {
+      if (key.upArrow || key.downArrow) {
+        dispatchOverlay({ type: 'move', delta: key.upArrow ? -1 : 1, count: panelPickerRows.length })
+      } else if (plainReturn) {
+        const row = panelPickerRows[overlay.index]
+        dispatchOverlay({ type: 'close' })
+        if (row !== undefined) sidePanel.openPanel(row.id, { focus: true })
+      } else if (key.escape) {
+        dispatchOverlay({ type: 'close' })
+      }
+      return
+    }
     if (overlay.kind === 'theme') {
       const options = getThemeOptions(themeHost)
       if (key.upArrow || key.downArrow) {
@@ -3973,11 +4609,12 @@ export function Chat({
       return
     }
     if (actionMatches('dashboard', input, key)) {
-      // The subagent dashboard key (default Ctrl+A) opens the dashboard.
-      // Consume the key: without the stop the prompt editor's readline
-      // binding ALSO fires (Ctrl+A moves the caret to line start), so one
-      // press both opens the overlay and jumps the cursor.
-      setSubagentDashboardOpen(true)
+      // The subagent dashboard key (default Ctrl+A) opens the dashboard —
+      // split mode routes it to the agents side panel instead. Consume the
+      // key: without the stop the prompt editor's readline binding ALSO
+      // fires (Ctrl+A moves the caret to line start), so one press both
+      // opens the view and jumps the cursor.
+      openSubagentDashboard()
       event.stopImmediatePropagation()
       return
     }
@@ -3989,7 +4626,7 @@ export function Chat({
       return
     }
     if (actionMatches('history', input, key) && !helpOpen) {
-      setHistoryEntries(loadHistory())
+      setHistoryEntries(loadHistory(channel.cwd))
       dispatchOverlay({
         type: 'open',
         overlay: { kind: 'history', query: '', cursor: 0, focus: 0 },
@@ -4009,6 +4646,10 @@ export function Chat({
         setSelectionActive(false)
         setSelectedId(null)
       }
+    } else if (key.escape && promptControllerRef.current?.consumeEscape()) {
+      // Selection/editor Esc stays with the composer even though Chat's
+      // global listener runs first. Consume it before interrupting the turn.
+      event.stopImmediatePropagation()
     } else if (key.escape && channel.working && !helpOpen && !promptControllerRef.current?.vimActive()) {
       // Esc interrupts a running turn (the prompt input
       // only sees esc when idle, where it has the double-tap-clear meaning).
@@ -4157,11 +4798,18 @@ export function Chat({
       // (wired to the toast below).
       event.stopImmediatePropagation()
     }
+  }, {
+    // Chat's global layer must see every key before the composer and the
+    // panels it hosts (the handler's yield guards and readline shadowing
+    // both assume it), whether or not they mounted in the same
+    // commit — child effects run first, so append order would put a
+    // first-mount PromptInput ahead of Chat (#1155).
+    prepend: true,
   })
 
   // Working-activity line (spinner slot): context-pressure prefix shares the
-  // StatusLine thresholds (amber ≥ 80, red ≥ 95).
-  const activityWarnPct = contextPressurePct(channel.lastUsage, channel.contextWindow)
+  // StatusLine thresholds (amber ≥ 80, red ≥ 95) and its occupancy source.
+  const activityWarnPct = contextPressurePct(channelContextOccupancy(channel))
 
   // Who owns the spinner slot: with the working-activity line on, that slot
   // draws the user's `/activity` preset, so the compaction row borrows the same
@@ -4245,659 +4893,33 @@ export function Chat({
     />
   ) : null
   const interruptPanel = approvalPanelNode ?? questionPanelNode
-  const screenOpen = channel.pluginScene !== undefined || supervisorOpen || settingsOpen
-    || subagentDetailId !== null || subagentDashboardOpen || sceneOpen
-  if (interruptPanel !== null && screenOpen) {
-    const node = (
-      <Box flexDirection="column" width="100%" paddingX={1}>
-        {interruptPanel}
-      </Box>
-    )
-    return fullscreen ? node : <AlternateScreen>{node}</AlternateScreen>
-  }
-
-  // A plugin scene (dsh-tui-scenes) takes the whole terminal the same way
-  // the trajectory scene does, and sits at the TOP of this return chain:
-  // an open() landing while the session browser or the trajectory scene is
-  // up must still take the screen (and the keyboard, via the useInput guard
-  // above), not queue silently behind them. Closing the plugin scene lands
-  // back on whatever screen was up before, so these early returns read as a
-  // stack. The component comes from the registry, so its identity is stable
-  // across renders and its hook state survives re-renders; it receives the
-  // TUI's own React + ui kit because a plugin importing its own React copy
-  // would die on the first hook call under this reconciler.
-  // The scene is third-party code, so it renders inside a boundary: a render
-  // crash reports to the transcript and closes the scene instead of taking
-  // the whole TUI down through ink's app-level boundary.
-  const pluginScene = channel.pluginScene
-  if (pluginScene !== undefined) {
-    const node = (
-      <PluginSceneBoundary
-        id={pluginScene.id}
-        onError={(id, error) => {
-          channel.notify(t('plugin-scene-crashed', { id, err: error.message }), { color: 'error' })
-          channel.closePluginScene()
-        }}
-      >
-        {renderScene ? renderScene(pluginScene.id, channel) : <Text>Scene unavailable: {pluginScene.id}</Text>}
-      </PluginSceneBoundary>
-    )
-    return fullscreen ? node : <AlternateScreen>{node}</AlternateScreen>
-  }
-
   /**
-   * The session supervisor: a screen in the same sense as the tree — an early
-   * return after every hook above has run, so there is no transcript
-   * underneath to repaint or bled through.
-   *
-   * It sits ABOVE the session tree because it is the surface a launch can
-   * start on (`openHomeOnBoot`): a first launch has no conversation to come
-   * back to, and every action it offers either mounts a session (which closes
-   * it) or starts a new one.
-   *
-   * Behind it, every session this terminal hosts keeps running — that is the
-   * runtime the screen describes, not an implementation detail of it. A turn
-   * that was in flight when the user opened this screen is still in flight
-   * while they read the list, which is why closing the screen only repaints
-   * the transcript when the attached session actually changed.
+   * Transient picker panels (pickers/dialogs) - this JSX feeds TWO mount
+   * points since the fifth launchpad revision: the chat page OverlayAbove
+   * (above the input cluster) and the launchpad itself (above its input
+   * card, see the launchpad branch). Defined once so the two never drift.
    */
-  if (supervisorOpen) {
-    /**
-     * Live state per session, from the channel's own agent-view projection.
-     * Reading the projection rather than a parallel source is what keeps this
-     * screen and the attention hints in the composer footer from disagreeing
-     * about which session is waiting for input.
-     */
-    const agentRowOf = (sessionId: string) => agentViewRows.find(row => row.id === sessionId)
-    const supervisorNode = (
-      <SessionSupervisor
-        channel={channel}
-        home={homeDir()}
-        onClose={closeHome}
-        approval={approvalSnapshot}
-        onApprove={outcome => approvals.decide(outcome)}
-        onOpenSession={async (sessionId) => {
-          // A refusal is reported by the screen itself (see `openSession`):
-          // the composer that draws channel notifications is not mounted here.
-          const result = await channel.resumeTo(sessionId)
-          if (!result.ok) return result
-          channel.notify(t('resume-resumed'))
-          suppressLogoIntroRef.current = true
-          setAgentViewReturnId(undefined)
-          setSupervisorOpen(false)
-          repaintTranscript()
-          return result
-        }}
-        onNewSession={async (target) => {
-          const ok = await channel.switchWorkspace(target)
-          if (ok) {
-            suppressLogoIntroRef.current = true
-            setAgentViewReturnId(undefined)
-            setSupervisorOpen(false)
-            repaintTranscript()
-          }
-          return ok
-        }}
-        onStopSession={async (sessionId) => channel.stopBackgroundAgent?.(sessionId) ?? false}
-        liveStateOf={(sessionId) => {
-          const row = agentRowOf(sessionId)
-          return row === undefined
-            ? undefined
-            : { status: row.status, live: row.live, current: row.current, summary: row.summary }
-        }}
-      />
-    )
-    // Inline hosts enter the alternate screen for the duration; full-screen
-    // hosts are already in it and must not nest a second one.
-    return fullscreen ? supervisorNode : <AlternateScreen>{supervisorNode}</AlternateScreen>
-  }
-
-  // The session tree follows the browser's rule exactly: it REPLACES the
-  // conversation (an early return after every hook above has run), so there
-  // is no transcript underneath to be repainted or bled through. The dropped
-  // turn's prompt returns through the same fill path a rewind picker uses.
-  if (treeOpen) {
-    const tree = (
-      <SessionTree
-        channel={channel}
-        currentSessionId={channel.agentId}
-        onClose={() => setTreeOpen(false)}
-        onRestoreText={(text) => {
-          // The tree rewound to a node and is handing that turn's prompt back,
-          // exactly like the picker does. It belongs to the binding the tree
-          // action just created.
-          pendingFillRef.current = String(channel.agentId)
-          setHistoryFill(text)
-        }}
-      />
-    )
-    return fullscreen ? tree : <AlternateScreen>{tree}</AlternateScreen>
-  }
-
-  // The settings screen follows the browser's rule exactly: it REPLACES the
-  // conversation (an early return after every hook above has run), so there
-  // is no transcript underneath to be repainted or bled through.
-  if (settingsOpen) {
-    const screen = <Settings channel={channel} onClose={() => setSettingsOpen(false)} />
-    return fullscreen ? screen : <AlternateScreen>{screen}</AlternateScreen>
-  }
-
-  // Subagent detail scene: displays detailed view of a specific subagent.
-  // Like the browser and settings, it replaces the conversation entirely.
-  if (subagentDetailId !== null) {
-    const subagent = channel.subagents.find(s => s.agentId === subagentDetailId)
-    if (!subagent) {
-      // Agent not found, go back to dashboard
-      setSubagentDetailId(null)
-      setSubagentDashboardOpen(true)
-      return null
-    }
-    const scene = (
-      <SubagentDetailScene
-        subagent={subagent}
-        onInterrupt={(id) => channel.subagentControl.interrupt(id)}
-        onBack={() => {
-          setSubagentDetailId(null)
-          setSubagentDashboardOpen(true)
-        }}
-      />
-    )
-    return fullscreen ? scene : <AlternateScreen>{scene}</AlternateScreen>
-  }
-
-  // Jobs panel: background jobs (running/killed) with kill/inspect actions.
-  // Like the browser and settings, it replaces the conversation entirely.
-  if (jobsPanelOpen) {
-    const panel = (
-      <JobsPanel
-        jobs={channel.backgroundJobs ?? []}
-        initialFocusId={jobsPanelFocusId ?? undefined}
-        onClose={() => { setJobsPanelOpen(false); setJobsPanelFocusId(null) }}
-        onKill={(id) => {
-          // Stub channels (verify harnesses) have no jobControl — surface
-          // the same failure toast as a refused kill instead of throwing.
-          if (channel.jobControl?.kill(id) !== true) {
-            channel.notify(t('jobs-kill-failed', { id }), { color: 'error' })
-          }
-        }}
-      />
-    )
-    return fullscreen ? panel : <AlternateScreen>{panel}</AlternateScreen>
-  }
-
-  // Subagent dashboard: displays all active and completed subagents.
-  // Like the browser and settings, it replaces the conversation entirely.
-  if (subagentDashboardOpen) {
-    const dashboard = (
-      <SubagentDashboard
-        subagents={[...channel.subagents]}
-        onSelect={(id) => {
-          setSubagentDashboardOpen(false)
-          setSubagentDetailId(id)
-        }}
-        onClose={() => setSubagentDashboardOpen(false)}
-      />
-    )
-    return fullscreen ? dashboard : <AlternateScreen>{dashboard}</AlternateScreen>
-  }
-
-  /** Prompt input is inert while a modal dialog owns the keyboard. The
-   *  overlay union covers every picker/dialog and /tips in one check;
-   *  message-selection mode and the /btw panel live outside it. */
-  const promptSelectionActive =
-    selectionActive || overlay.kind !== 'none' || btw !== null
-
-  // These panels replace the visible composer, but PromptInput remains
-  // mounted (suspended) so an async registry command cannot lose its exact
-  // text/image draft while it waits for a user decision.
-  const promptReplacementOpen =
-    approvalPanelNode !== null
-    || dialogSnapshot !== null
-    || overlay.kind === 'tips'
-    || (recap !== null && (!recap.auto || recap.expanded))
-    || btw !== null
-    || questionPanelNode !== null
-    || starModal !== null
-    || couponVisible
-
-  // The trajectory scene replaces the conversation for as long as it is open.
-  // Rendering it INSTEAD of (not above) the transcript is what makes it a
-  // screen rather than an overlay: it owns the full viewport, and the
-  // conversation's own frame is never resized while it is up. Chat stays
-  // mounted, so every hook above has already run and no state is lost.
-  // `<AlternateScreen>` is skipped when the app is already fullscreen —
-  // nesting it would emit a second DEC 1049, and its unmount would drop the
-  // whole app back to the main screen.
-  if (sceneOpen) {
-    const scene = <TrajectoryScene channel={channel} build={trajectory} onClose={closeScene} />
-    return fullscreen ? scene : <AlternateScreen>{scene}</AlternateScreen>
-  }
-
-  // 浮层整体挂载条件：与内部各面板的可见条件同值（数据门在
-  // dialogOverlayVisible 里逐面板镜像）。关闭时把整个 absolute 浮层从树里
-  // 移除——渲染器的"移除 absolute 节点"检测只看被移除子树自身的
-  // style.position（dom.ts collectRemovedRects），若浮层常驻、只移除其
-  // 普通子节点，blit 解毒不触发，被覆盖的转录行会在 blit-skip 后留空
-  // （Esc 关 picker 一片空白的根因）。
-  const dialogOverlayOpen = dialogOverlayVisible(overlay, {
-    workspaceTargetCount: workspaceTargets.length,
-    effortOptionCount: effortOptions.length,
-    presetOptionCount: presetOptions.length,
-  }) && !(overlay.kind === 'permission'
-    && (approvalSnapshot !== null || questionSnapshot !== null || dialogSnapshot !== null))
-
-  // The sticky header pins the turn owning the viewport top row once its
-  // prompt has scrolled out above it (timeline.pinnedId, reported by
-  // MessageList) — scrolled up to an old turn, it carries THAT turn's
-  // prompt, not the latest one. The row stays while scrolled up and goes
-  // blank when nothing is pinned, so the viewport never shifts under it.
-  // channel.rows is a live in-place array, so the lookup is per-render.
-  const anchorUserRowId = timeline.pinnedId
-  const anchorUserText =
-    anchorUserRowId === null
-      ? null
-      : channel.rows.find(row => row.id === anchorUserRowId)?.text ?? null
-
-  // Modal image preview, shared by the composer's [Image #N] tokens and the
-  // transcript thumbnails. It normally lives INSIDE the transcript row, so
-  // the card centers over the conversation and the sticky header, prompt
-  // and status rows stay visible. While the fullscreen draft editor is open
-  // it moves to the root, after PromptEditorLayer, so it still paints above
-  // the editor (the editor state stays put; closing the preview restores it).
-  // The layer needs its region before its first paint (see the component):
-  // the transcript viewport height from the ScrollBox handle and the content
-  // column width. The full-screen (editor-open) placement uses the terminal.
-  const imagePreviewRegion = promptEditorOpen
-    ? { columns: terminalColumns, rows: terminalRows }
-    : { columns: terminalColumns, rows: handle?.getViewportHeight() ?? terminalRows }
-  const imagePreviewNode = activePreview !== null && (activePreview.peek || imagePreviewOwned)
-    ? (
-      <ImagePreviewOverlay
-        image={activePreview.image}
-        title={activePreview.title}
-        navigation={previewGallery.length > 1 && previewIndex >= 0 ? {
-          index: previewIndex, total: previewGallery.length,
-          onPrevious: () => stepPreview(-1), onNext: () => stepPreview(1),
-        } : undefined}
-        onClose={activePreview.peek
-          ? () => setPeekSuppressed(peekKey(activePreview.image, activePreview.title))
-          : () => dispatchOverlay({ type: 'close-if', kind: 'image-preview' })}
-        region={imagePreviewRegion}
-      />
-    )
-    : null
-
-  return (
-    <Box ref={wakeTickRef} flexDirection="column" flexGrow={1} width="100%">
-      {!isSticky && timeline.activeId !== null && (
-        <PinnedTurnHeader
-          text={anchorUserText || null}
-          onClick={() => {
-            // Click snaps the pinned prompt to the viewport top. Jump by the
-            // SAME content coordinate the
-            // rail's tick uses (timeline turn top = the prompt TEXT top):
-            // the element-based seek lands the row wrapper's margin at the
-            // top instead — one row shy of the text top the anchor rule
-            // compares against — and the header would flip to the previous
-            // turn immediately after the click.
-            const turn = timeline.turns.find(t => t.id === anchorUserRowId)
-            if (turn) handle?.scrollTo(turn.top)
-            else if (anchorUserRowId !== null) seekRow(anchorUserRowId)
-            else handle?.scrollToBottom()
-          }}
-        />
-      )}
-      {/* Transcript row. Under PageMargin the negative right margin makes
-          the row stretch past the content column to the terminal edge —
-          the gutter (timeline rail / scrollbar) thus lands at the very
-          edge while the transcript TEXT stays inside the page margin
-          (structural chrome convention: dividers and the rail bleed, text
-          and cards keep the content column). No explicit width: cross-axis
-          stretch with the margin yields exactly content+margin. */}
-      <Box flexDirection="row" flexGrow={1} flexShrink={1} marginRight={-pageInsetX}>
-        <ScrollBox ref={setHandle} flexDirection="column" flexGrow={1} flexShrink={1} stickyScroll>
-        <LogoHeader
-          key={logoNonce}
-          model={channel.model}
-          effort={channel.reasoningEffort}
-          cwd={channel.displayCwd}
-          // 大字字面（设置项 `dsh-tui.splashFont`）：`daily` 交回按天轮换
-          // （`undefined`），其余 pin 住一款。
-          fontId={splashFontIdOf(channel.splashFont)}
-          whale={channel.whale}
-          whaleIdle={channel.whaleIdle && whaleArtVisible}
-          whaleGirl={channel.whaleGirl}
-          starred={starred}
-          onStarClick={runStarAction}
-          working={channel.working}
-          // Resuming a long session skips the ~3.4s opening animation: it
-          // keeps firing low-frequency React commits that compete with the
-          // transcript mount batches (and the first wheel events) for the
-          // frame budget right when the user wants to read history. Fresh
-          // sessions keep the full intro; restored ones settle instantly.
-          // A remount after a whole screen closed also settles instantly
-          // (see suppressLogoIntroRef).
-          skipIntro={suppressLogoIntroRef.current || channel.rows.length > 30}
-        />
-        {/* The startup loaded-context panel: before the first message the
-            transcript is empty, so the inventory of what this conversation
-            will load (system prompt, workspace instructions, skills, tools)
-            sits at the top, collapsed to a summary line and expandable with
-            Ctrl+P; the first rows take over. */}
-        {loadedContextVisible && (
-          <LoadedContextPanel
-            context={channel.loadedContext}
-            open={loadedContextOpen}
-            onToggle={toggleLoadedContext}
-          />
-        )}
-        <MessageList
-          rows={channel.rows}
-          failureHintRowId={failureHintRowId}
-          failureHint={t('traj-hint-failure', { key: primaryComboString('trajectory') })}
-          expanded={expanded}
-          expandedRows={expandedRows}
-          selectedId={selectionActive ? selectedId : null}
-          onToggleRow={toggleRowExpanded}
-          streamViewToggledRows={streamViewToggledRows}
-          onToggleStreamView={toggleStreamView}
-          model={channel.model}
-          diffLayout={channel.diffLayout}
-          thinkingFold={channel.thinkingFold}
-          jobGroupFold={channel.jobGroupFold}
-          toolBackground={channel.toolBackground}
-          foldTerminalCommand={channel.foldTerminalCommand}
-          smoothStreaming={channel.smoothStreaming}
-          activityFrames={channel.activityFrames}
-          showAll={showAllMessages}
-          thinkingVisible={thinkingVisible}
-          historyPaintEnabled={!fullscreen}
-          onToggleAll={() =>{  setShowAllMessages(previous => !previous) }}
-          onLoadOlder={() => channel.loadOlder()}
-          registerRowRef={registerRowRef}
-          scrollHandle={handle}
-          forceMountRowId={forceMountRowId}
-          newSinceRowId={isSticky ? null : lastSeenRowIdRef.current}
-          onUnseenCount={setUnseenCount}
-          onTimeline={setTimeline}
-          onOpenSubagent={setSubagentDetailId}
-          onOpenJobs={openJobsPanel}
-          onOpenFile={openFileActions}
-          sessionCwd={channel.cwd}
-          onPreviewImage={openImagePreview}
-          suppressImageGraphics={activePreview !== null}
-        />
-        </ScrollBox>
-        {(() => {
-          // Gutter mode (settings `dsh-tui.scrollGutter`): the timeline
-          // rail (default), the proportional scrollbar, or nothing. The
-          // slot keeps its 2 columns in both rendered modes (Qwen's
-          // permanent-gutter rule — an appearing/disappearing gutter
-          // changes the transcript width and rewraps everything).
-          const gutter = normalizeScrollGutter(channel.scrollGutter)
-          if (gutter === 'hidden') return null
-          if (gutter === 'scrollbar') {
-            return <ScrollbarGutter handle={handle} terminalWidth={terminalColumns} />
-          }
-          return (
-            <TimelineRail
-              handle={handle}
-              turns={timeline.turns}
-              activeId={timeline.activeId}
-              upId={timeline.upId}
-              downId={timeline.downId}
-              terminalWidth={terminalColumns}
-              hoverEnabled={!promptSelectionActive}
-              onRevealTurn={revealAndSeekRow}
-            />
-          )
-        })()}
-        {!promptEditorOpen && imagePreviewNode}
-      </Box>
-      {/* Bottom chrome (pill, spinners, dialogs, prompt, statusline): never
-          let flex shrink squeeze these fixed-height rows — the ScrollBox
-          above absorbs all overflow (it is the scroll container). */}
-      <Box flexDirection="column" flexShrink={0}>
-        {showPill && (
-          <NewMessagesPill
-            count={unseenCount}
-            onClick={() => handle?.scrollToBottom()}
-          />
-        )}
-        {channel.working &&
-          (activitySlot &&
-          workingActivity !== undefined &&
-          workingActivity.line !== '' &&
-          workingActivity.phase !== 'idle' ? (
-            // The working-activity line replaces the random-verb spinner
-            // while a turn runs: the plugin's live line (thinking copy /
-            // running tool / narration) is the status, with the spinner
-            // slot's token counter preserved as a suffix. Only real activity
-            // data replaces the spinner — before the first event, or with
-            // `activity: false`, the classic spinner still renders. The line
-            // hugs the left edge (no padding) so the self-narration reads as
-            // part of the transcript, aligned with the `❯` prompt below.
-              <Box marginTop={1}>
-                <ActivityLine
-                  activity={workingActivity}
-                  activityFrames={channel.activityFrames}
-                  warnPct={activityWarnPct}
-                  warnDanger={activityWarnPct !== undefined && activityWarnPct >= 95}
-                  // Upload = real tokens of the last request; download =
-                  // the animated chars/4 estimate, matching the classic
-                  // spinner's counter (the suffix used raw chars before,
-                  // inflating the reading next to a real upload number). An
-                  // automatic compaction mid-turn badges THIS line too — it is
-                  // the spinner slot whenever real activity data exists.
-                  suffix={`${lastUploadTokens > 0 ? ` · ↑ ${formatTokens(lastUploadTokens)}` : ''} · ↓ ${formatTokens(Math.round(channel.responseChars / 4))} tokens${compactionBadge === undefined ? '' : ` · ${compactionBadge}`}`}
-                />
-              </Box>
-            ) : (
-              <WorkingSpinner
-                mode={channel.spinnerMode}
-                hasActiveTools={channel.activeToolCount > 0}
-                responseLengthRef={responseLengthRef}
-                uploadTokensRef={uploadTokensRef}
-                loadingStartTimeRef={loadingStartTimeRef}
-                totalPausedMsRef={totalPausedMsRef}
-                pauseStartTimeRef={pauseStartTimeRef}
-                thinkingStatus={thinkingStatus}
-                suffix={compactionBadge}
+  const pickerPanels = (
+    <>
+          {overlay.kind === 'help' && (
+            <Box flexDirection="column" marginBottom={1}>
+              <HelpMenu
+                commands={channel.commandList}
+                viewportHeight={helpCoverViewportHeight}
+                viewportWidth={chatColumns}
+                scrollRef={helpCoverScrollRef}
+                onCommandPick={(name) => {
+                  // 点击命令行 = 把 /name 填进落地页草稿（聊天页 Tab 补全的
+                  // 鼠标等价），浮层收起、人还在启动页（第八版：不许进对话页）。
+                  dispatchOverlay({ type: 'close' })
+                  const filled = '/' + name + ' '
+                  setLaunchpadDraft(filled)
+                  setLaunchpadCaret(filled.length)
+                  setLaunchpadFocus(-1)
+                }}
               />
-            ))}
-        {!channel.working && channel.compaction !== undefined && (
-          // Manual `/compact` runs while the session is idle: the row takes the
-          // spinner slot so the screen never looks frozen for its ~25-70s.
-          <CompactionStatusRow
-            compaction={channel.compaction}
-            activityPreset={activitySlot ? channel.activityFrames : undefined}
-          />
-        )}
-        <GoalTodoPanel
-          channel={channel}
-          collapsed={todoCollapsed}
-          onToggle={() => setTodoCollapsed(previous => !previous)}
-        />
-        {recap !== null && recap.auto && !recap.expanded && (
-          <AutoRecapRow
-            summary={recap.summary}
-            streaming={!recap.done}
-            onExpand={() => setRecap(prev => (prev ? { ...prev, expanded: true } : prev))}
-            onDismiss={() => closeRecap()}
-          />
-        )}
-        {balance !== null && (
-          <BalanceReportRow
-            result={balance.result}
-            refreshing={balance.refreshing}
-            tokens={channel.tokens}
-            model={channel.model}
-            provider={channel.provider}
-            mainCost={channel.mainCost}
-            subagentCost={channel.subagentCost}
-            onRefresh={runBalance}
-            onDismiss={() => setBalance(null)}
-          />
-        )}
-        {statusEntries.length > 0 && (
-          // Plugin status contributions (tuiStatus seam): one joined line,
-          // truncated by the Text wrap contract — the host owns the layout,
-          // plugins own only their text.
-          <Text dimColor wrap="truncate">
-            {statusEntries.map(entry => entry.text).join(' · ')}
-          </Text>
-        )}
-        {activePreview === null && statusViews.map(view => (
-          <PluginStatusViewBoundary
-            key={`${view.key}:${view.registrationId}`}
-            viewKey={view.key}
-            onError={(key, error) => statusContributions.reportViewError(key, error)}
-          >
-            <Box
-              flexDirection="column"
-              flexShrink={0}
-              maxHeight={view.maxRows}
-              overflow="hidden"
-            >
-              <Box flexDirection="column" flexShrink={0}>
-                {React.createElement(view.component, {
-                  React,
-                  ui: STATUS_VIEW_UI,
-                })}
-              </Box>
             </Box>
-          </PluginStatusViewBoundary>
-        ))}
-        {/* 输入簇：可替换输入行链 + 状态行 + 瞬态浮层。浮层锚点收窄到本簇
-            顶边（= 输入行顶边），picker 紧贴输入框向上展开，盖住其上
-            todo/spinner/转录尾部行（用户接受的取舍），自身零布局高度、
-            不推动帧布局。 */}
-        <Box flexDirection="column" flexShrink={0}>
-        {approvalPanelNode !== null ? (
-          approvalPanelNode
-        ) : dialogSnapshot !== null ? (
-          <ExtensionDialog
-            key={dialogSnapshot.key}
-            dialog={dialogSnapshot}
-            onDecide={value => dialogs.decide(dialogSnapshot.key, value)}
-            onCancel={() => dialogs.cancel(dialogSnapshot.key)}
-          />
-        ) : overlay.kind === 'tips' ? (
-          <Box flexDirection="column" marginTop={1}>
-            <TipsPanel onClose={() => dispatchOverlay({ type: 'close-if', kind: 'tips' })} />
-          </Box>
-        ) : recap !== null && (!recap.auto || recap.expanded) ? (
-          <Box flexDirection="column" marginTop={1}>
-            <RecapPanel
-              summary={recap.summary}
-              title={recap.title}
-              error={recap.error}
-              streaming={!recap.done}
-              titleApplied={recap.titleApplied}
-              onClose={() => {
-                // An expanded auto recap collapses back to its dim row;
-                // a manual /recap closes outright.
-                if (recap.auto) {
-                  setRecap(prev => (prev ? { ...prev, expanded: false } : prev))
-                } else {
-                  closeRecap()
-                }
-              }}
-              onCopy={() => {
-                void setClipboard(recap.summary ?? '').then(raw => { if (raw) writeRaw?.(raw) })
-                channel.notify(t('copied-chars', { n: (recap.summary ?? '').length }), { timeoutMs: 1500 })
-              }}
-              onApplyTitle={() => {
-                if (recap.title === undefined || recap.titleApplied) return
-                channel.renameSession(recap.title)
-                setRecap(prev => (prev ? { ...prev, titleApplied: true } : prev))
-                channel.notify(t('recap-title-applied-notify', { title: recap.title }), { color: 'success' })
-              }}
-            />
-          </Box>
-        ) : btw !== null ? (
-          <Box flexDirection="column" marginTop={1}>
-            <BtwPanel
-              question={btw.question}
-              answer={btw.answer}
-              error={btw.error}
-              streaming={!btw.done}
-              onClose={closeBtw}
-              onCopy={() => {
-                void setClipboard(btw.answer ?? '').then(raw => { if (raw) writeRaw?.(raw) })
-                channel.notify(t('copied-chars', { n: (btw.answer ?? '').length }), { timeoutMs: 1500 })
-              }}
-            />
-          </Box>
-        ) : questionPanelNode !== null ? (
-          questionPanelNode
-        ) : null}
-        <PromptInput
-          key="prompt-input"
-          channel={channel}
-          suspended={promptReplacementOpen}
-          draftCache={promptDraftRef.current}
-          helpOpen={helpOpen}
-          onToggleHelp={() =>{  setHelpOpen(previous => !previous) }}
-          onRunCommand={runCommand}
-          selectionActive={promptSelectionActive}
-          fillText={historyFill}
-          onFillConsumed={() => setHistoryFill(null)}
-          onRewindRequest={openRewind}
-          onBackgroundRequest={backgroundToAgentView}
-          // The 🏠 at the head of the input row opens the same session screen
-          // `/resume` and `/agentview` open — one surface, three doors. It is
-          // gated on this prop rather than a setting, so hosts that mount the
-          // prompt without a session screen (and the layout regressions that
-          // pin the row's column budget) keep the row they had.
-          onOpenSessions={() => {
-            agentViewOpenSessionRef.current = channel.agentId
-            setSupervisorOpen(true)
-          }}
-          backgroundAgentsNeedingInput={
-            // Only the real channel supplies the seam; pre-agent-view test
-            // stubs must not grow the footer row (layout-dependent
-            // regressions pin the visible row count). The footer only
-            // renders while some session actually waits (N > 0): a
-            // permanent idle row would steal a transcript row on every
-            // real channel — one row is enough to scroll the startup
-            // header fully off a short terminal, pausing its viewport
-            // clock and shifting every row-count layout invariant.
-            channel.agentViewRows !== undefined && backgroundAgentsNeedingInput > 0
-              ? backgroundAgentsNeedingInput
-              : undefined
-          }
-          controllerRef={promptControllerRef}
-          onCaretImage={handleCaretImage}
-          caretPreviewOpen={peekPreview !== null}
-          onDismissCaretPreview={dismissPeek}
-        />
-        <StatusLine
-          channel={channel}
-          activity={workingActivity}
-          selectionActive={selectionActive}
-          helpOpen={helpOpen}
-          wake={
-            wakeBand === undefined
-              ? undefined
-              : {
-                  band: wakeBand,
-                  hint: trajectorySeen ? undefined : primaryComboString('trajectory'),
-                  tick: Math.floor(wakeTime / 120),
-                  onOpen: openScene,
-                  hoverHint: primaryComboString('trajectory'),
-                }
-          }
-        />
-        {/* 瞬态面板浮层：absolute + bottom:'100%' 钉在输入簇 Box 顶边（=
-            输入行顶边），紧贴输入框向上覆盖其上 todo/spinner/转录尾部行，
-            自身零布局高度。in-flow 挂载会让帧高随面板开关涨落，把帧顶行滚进
-            scrollback 并在关闭重绘时二次写入（每切一次 /model 多一份启动画
-            的根因）。浮层盖住 todo 是刻意取舍（贴输入框优先）；maxHeight
-            预留 prompt/statusline 行，防短会话高列表探出帧顶。整体条件
-            挂载：见 dialogOverlayOpen 注释。 */}
-        {dialogOverlayOpen && (
-        <OverlayAbove maxHeight={Math.max(terminalRows - 8, 1)}>
+          )}
           {overlay.kind === 'thinking' && (
             <ThinkingToggle
               currentValue={thinkingVisible}
@@ -5076,6 +5098,20 @@ export function Chat({
               />
             </Box>
           )}
+          {overlay.kind === 'panel' && panelPickerRows.length > 0 && (
+            <Box flexDirection="column" marginTop={1}>
+              <PanelPicker
+                rows={panelPickerRows}
+                focusIndex={overlay.index}
+                activeId={sidePanel.activePanelId}
+                onPick={(index) => {
+                  const row = panelPickerRows[index]
+                  dispatchOverlay({ type: 'close' })
+                  if (row !== undefined) sidePanel.openPanel(row.id, { focus: true })
+                }}
+              />
+            </Box>
+          )}
           {overlay.kind === 'effort' && effortOptions.length > 1 && (
             <Box flexDirection="column" marginTop={1}>
               <EffortSlider
@@ -5234,19 +5270,929 @@ export function Chat({
             </Box>
           )}
           {overlay.kind === 'search' && <TranscriptSearch query={searchQuery} cursorOffset={searchCursor} count={searchCount} current={searchCurrent} />}
+    </>
+  )
+    const screenOpen = channel.pluginScene !== undefined || supervisorOpen || settingsOpen
+    || subagentDetailId !== null || subagentDashboardOpen || sceneOpen
+    || launchpadShown || onboardingOpen
+  if (interruptPanel !== null && screenOpen) {
+    const node = (
+      <Box flexDirection="column" width="100%" paddingX={1}>
+        {interruptPanel}
+      </Box>
+    )
+    return fullscreen ? node : <AlternateScreen>{node}</AlternateScreen>
+  }
+
+  // A plugin scene (dsh-tui-scenes) takes the whole terminal the same way
+  // the trajectory scene does, and sits at the TOP of this return chain:
+  // an open() landing while the session browser or the trajectory scene is
+  // up must still take the screen (and the keyboard, via the useInput guard
+  // above), not queue silently behind them. Closing the plugin scene lands
+  // back on whatever screen was up before, so these early returns read as a
+  // stack. The component comes from the registry, so its identity is stable
+  // across renders and its hook state survives re-renders; it receives the
+  // TUI's own React + ui kit because a plugin importing its own React copy
+  // would die on the first hook call under this reconciler.
+  // The scene is third-party code, so it renders inside a boundary: a render
+  // crash reports to the transcript and closes the scene instead of taking
+  // the whole TUI down through ink's app-level boundary.
+  const pluginScene = channel.pluginScene
+  if (pluginScene !== undefined) {
+    const node = (
+      <PluginSceneBoundary
+        id={pluginScene.id}
+        onError={(id, error) => {
+          channel.notify(t('plugin-scene-crashed', { id, err: error.message }), { color: 'error' })
+          channel.closePluginScene()
+        }}
+      >
+        {renderScene ? renderScene(pluginScene.id, channel) : <Text>Scene unavailable: {pluginScene.id}</Text>}
+      </PluginSceneBoundary>
+    )
+    return fullscreen ? node : <AlternateScreen>{node}</AlternateScreen>
+  }
+
+  /**
+   * The first-run guide — the FIRST frame of a fresh installation.
+   *
+   * It sits above every other screen because it answers a question that comes
+   * before all of them: "is this thing wired up at all". A launch that needs
+   * setup has nothing useful to show behind a browser or a landing page.
+   *
+   * `activeModel` is deliberately undefined here: the wizard's model step
+   * switches models through `channel.switchModel`, which is the same path the
+   * chat screen uses, so a switch made inside the wizard is already live when
+   * the user lands on the launcher.
+   */
+  if (onboardingOpen) {
+    const node = (
+      <Onboarding
+        channel={channel}
+        themeHost={themeHost}
+        onClose={closeOnboarding}
+        onApplyLang={applyLang}
+        onRunCommand={(name) => {
+          // 与落地页的 onAction 同一条规则：打开整屏界面的命令要先把向导收掉。
+          // 走 `closeOnboarding('skipped')` 而不是直接置 false——用户是去试命令、
+          // 没答完引导，按 skipped 的口径不记账（下次启动还会问）。
+          if (!overlayCommandNames.has(name)) closeOnboarding('skipped')
+          void runCommand(name, '')
+        }}
+      />
+    )
+    return fullscreen ? node : <AlternateScreen>{node}</AlternateScreen>
+  }
+
+
+  /**
+   * The session supervisor: a screen in the same sense as the tree — an early
+   * return after every hook above has run, so there is no transcript
+   * underneath to repaint or bled through.
+   *
+   * It sits ABOVE the session tree because it is the surface a launch can
+   * start on (`openHomeOnBoot`): a first launch has no conversation to come
+   * back to, and every action it offers either mounts a session (which closes
+   * it) or starts a new one.
+   *
+   * Behind it, every session this terminal hosts keeps running — that is the
+   * runtime the screen describes, not an implementation detail of it. A turn
+   * that was in flight when the user opened this screen is still in flight
+   * while they read the list, which is why closing the screen only repaints
+   * the transcript when the attached session actually changed.
+   */
+  if (supervisorOpen && launchpadGate()) {
+    /**
+     * Live state per session, from the channel's own agent-view projection.
+     * Reading the projection rather than a parallel source is what keeps this
+     * screen and the attention hints in the composer footer from disagreeing
+     * about which session is waiting for input.
+     */
+    const agentRowOf = (sessionId: string) => agentViewRows.find(row => row.id === sessionId)
+    const supervisorNode = (
+      <SessionSupervisor
+        channel={channel}
+        home={homeDir()}
+        onClose={closeHome}
+        approval={approvalSnapshot}
+        onApprove={outcome => approvals.decide(outcome)}
+        onOpenSession={async (sessionId) => {
+          // A refusal is reported by the screen itself (see `openSession`):
+          // the composer that draws channel notifications is not mounted here.
+          const result = await channel.resumeTo(sessionId)
+          if (!result.ok) return result
+          channel.notify(t('resume-resumed'))
+          suppressLogoIntroRef.current = true
+          setAgentViewReturnId(undefined)
+          setSupervisorOpen(false)
+          // 第七版：明确选中一个会话 = 有意导航（与 Esc「退出」相对）——浏览页
+          // 与盖在它底下的落地页**一起收**，人落在那个会话的聊天页。只收浏览页
+          // 会露出启动页，正是用户实测的「选完会话还是回到启动页」。落地页的
+          // 草稿/焦点也按 closeLaunchpad 同一口径清掉（进入的是别的会话，旧草稿
+          // 不该跟过去）。
+          setLaunchpadOpen(false)
+          setLaunchpadFocus(-1)
+          setLaunchpadDraft('')
+          setLaunchpadCaret(0)
+          repaintTranscript()
+          return result
+        }}
+        onNewSession={async (target) => {
+          const ok = await channel.switchWorkspace(target)
+          if (ok) {
+            suppressLogoIntroRef.current = true
+            setAgentViewReturnId(undefined)
+            setSupervisorOpen(false)
+            // 同 onOpenSession：新建/切工作区会话也是有意导航，落地页一并收。
+            setLaunchpadOpen(false)
+            setLaunchpadFocus(-1)
+            setLaunchpadDraft('')
+            setLaunchpadCaret(0)
+            repaintTranscript()
+          }
+          return ok
+        }}
+        onStopSession={async (sessionId) => channel.stopBackgroundAgent?.(sessionId) ?? false}
+        liveStateOf={(sessionId) => {
+          const row = agentRowOf(sessionId)
+          return row === undefined
+            ? undefined
+            : { status: row.status, live: row.live, current: row.current, summary: row.summary }
+        }}
+      />
+    )
+    // Inline hosts enter the alternate screen for the duration; full-screen
+    // hosts are already in it and must not nest a second one.
+    return fullscreen ? supervisorNode : <AlternateScreen>{supervisorNode}</AlternateScreen>
+  }
+
+  // The session tree follows the browser's rule exactly: it REPLACES the
+  // conversation (an early return after every hook above has run), so there
+  // is no transcript underneath to be repainted or bled through. The dropped
+  // turn's prompt returns through the same fill path a rewind picker uses.
+  if (treeOpen && launchpadGate()) {
+    const tree = (
+      <SessionTree
+        channel={channel}
+        currentSessionId={channel.agentId}
+        onClose={() => setTreeOpen(false)}
+        onRestoreText={(text) => {
+          // The tree rewound to a node and is handing that turn's prompt back,
+          // exactly like the picker does. It belongs to the binding the tree
+          // action just created.
+          pendingFillRef.current = String(channel.agentId)
+          setHistoryFill(text)
+        }}
+      />
+    )
+    return fullscreen ? tree : <AlternateScreen>{tree}</AlternateScreen>
+  }
+
+  // The settings screen follows the browser's rule exactly: it REPLACES the
+  // conversation (an early return after every hook above has run), so there
+  // is no transcript underneath to be repainted or bled through.
+  if (settingsOpen && launchpadGate()) {
+    const screen = <Settings channel={channel} onClose={() => setSettingsOpen(false)} />
+    return fullscreen ? screen : <AlternateScreen>{screen}</AlternateScreen>
+  }
+
+  // Subagent detail scene: displays detailed view of a specific subagent.
+  // Like the browser and settings, it replaces the conversation entirely.
+  if (subagentDetailId !== null && launchpadGate()) {
+    const subagent = channel.subagents.find(s => s.agentId === subagentDetailId)
+    if (!subagent) {
+      // Agent not found, go back to the dashboard (side panel when split).
+      setSubagentDetailId(null)
+      openSubagentDashboard()
+      return null
+    }
+    const scene = (
+      <SubagentDetailScene
+        subagent={subagent}
+        onInterrupt={(id) => channel.subagentControl.interrupt(id)}
+        onBack={() => {
+          setSubagentDetailId(null)
+          setSubagentDashboardOpen(true)
+        }}
+      />
+    )
+    return fullscreen ? scene : <AlternateScreen>{scene}</AlternateScreen>
+  }
+
+  // Jobs panel: background jobs (running/killed) with kill/inspect actions.
+  // Like the browser and settings, it replaces the conversation entirely.
+  if (jobsPanelOpen && launchpadGate()) {
+    const panel = (
+      <JobsPanel
+        jobs={channel.backgroundJobs ?? []}
+        initialFocusId={jobsPanelFocusId ?? undefined}
+        onClose={() => { setJobsPanelOpen(false); setJobsPanelFocusId(null) }}
+        onKill={(id) => {
+          // Stub channels (verify harnesses) have no jobControl — surface
+          // the same failure toast as a refused kill instead of throwing.
+          if (channel.jobControl?.kill(id) !== true) {
+            channel.notify(t('jobs-kill-failed', { id }), { color: 'error' })
+          }
+        }}
+      />
+    )
+    return fullscreen ? panel : <AlternateScreen>{panel}</AlternateScreen>
+  }
+
+  // Subagent dashboard: displays all active and completed subagents.
+  // Like the browser and settings, it replaces the conversation entirely.
+  if (subagentDashboardOpen && launchpadGate()) {
+    const dashboard = (
+      <SubagentDashboard
+        subagents={[...channel.subagents]}
+        onSelect={(id) => {
+          setSubagentDashboardOpen(false)
+          setSubagentDetailId(id)
+        }}
+        onClose={() => setSubagentDashboardOpen(false)}
+      />
+    )
+    return fullscreen ? dashboard : <AlternateScreen>{dashboard}</AlternateScreen>
+  }
+
+  /** Prompt input is inert while a modal dialog owns the keyboard. The
+   *  overlay union covers every picker/dialog and /tips in one check;
+   *  message-selection mode and the /btw panel live outside it. */
+  const promptSelectionActive =
+    selectionActive || overlay.kind !== 'none' || btw !== null
+
+  // These panels replace the visible composer, but PromptInput remains
+  // mounted (suspended) so an async registry command cannot lose its exact
+  // text/image draft while it waits for a user decision.
+  const promptReplacementOpen =
+    approvalPanelNode !== null
+    || dialogSnapshot !== null
+    || overlay.kind === 'tips'
+    || (recap !== null && (!recap.auto || recap.expanded))
+    || btw !== null
+    || questionPanelNode !== null
+    || starModal !== null
+    || couponVisible
+
+  // The trajectory scene replaces the conversation for as long as it is open.
+  // Rendering it INSTEAD of (not above) the transcript is what makes it a
+  // screen rather than an overlay: it owns the full viewport, and the
+  // conversation's own frame is never resized while it is up. Chat stays
+  // mounted, so every hook above has already run and no state is lost.
+  // `<AlternateScreen>` is skipped when the app is already fullscreen —
+  // nesting it would emit a second DEC 1049, and its unmount would drop the
+  // whole app back to the main screen.
+  if (sceneOpen && launchpadGate()) {
+    const scene = <TrajectoryScene channel={channel} build={trajectory} onClose={closeScene} />
+    return fullscreen ? scene : <AlternateScreen>{scene}</AlternateScreen>
+  }
+
+  /**
+   * The launchpad — the landing page an ordinary launch starts on.
+   *
+   * 第七版渲染姿态：early-return 排在**所有整屏界面（会话浏览器 / 设置 /
+   * 任务面板 / 家谱 / 子代理 / 轨迹场景）之后**——从落地页打开的整屏盖在
+   * 落地页之上，Esc 退出整屏回到这里（草稿/参数/焦点原样保留）。硬约束：
+   * 从启动页进入对话页的唯一路径是**提交一条非命令消息**（Enter 发送）；
+   * 任何 Esc/返回都回到启动页。参数行点开的选择器经 `pickerPanels` +
+   * `inputPaused` 渲染在本屏之上，Esc 关掉它也回到这里。
+   */
+  if (launchpadShown) {
+    // 参数行的「模式/权限」两段（第三版）：模式看 channel.mode.plan；权限看
+    // permissionPresets() 的当前身份——只认 runtime 名册，legacy/unavailable 与
+    // 抛错都按「拿不到」处理（缺省不画那一段，两段都可选）。
+    let launchpadPermission: string | undefined
+    try {
+      const snapshot = channel.permissionPresets()
+      launchpadPermission = snapshot.availability === 'runtime' ? snapshot.current?.name : undefined
+    } catch {
+      launchpadPermission = undefined
+    }
+    // 第七版动作表：状态快照全部来自既有数据源（详见 launchpadActions.ts）——
+    //   - lastSessionTitle = agentViewRows（含持久化名册）里最近一条非当前会话
+    //     的标题——listing 是异步的，落地前没有 Continue、落地后自动长出来；
+    //   - jobsRunning / updateAvailable / starDue = 条件位三连（后台任务面 /
+    //     checkForTuiUpdate / usageStats 里程碑口径）。
+    const resumableRows = agentViewRows
+      .filter(row => !row.current && row.id !== channel.agentId && row.title.trim() !== '')
+    const latestRow = resumableRows.reduce<typeof resumableRows[number] | undefined>(
+      (best, row) => (best === undefined || row.updatedAt > best.updatedAt ? row : best), undefined)
+    const launchpadActions = resolveLaunchpadActions({
+      lastSessionTitle: latestRow?.title,
+      // 条件位①：后台任务面是真数据（JobsPanel 同一个 channel.backgroundJobs），
+      // running/stopping 都算「在跑」。
+      jobsRunning: (channel.backgroundJobs ?? []).some(
+        job => job.status === 'running' || job.status === 'stopping',
+      ),
+      updateAvailable: launchpadUpdateAvailable,
+      starDue: launchpadStarDue,
+    })
+    const node = (
+      <Launchpad
+        query={launchpadDraft}
+        cursorOffset={launchpadCaret}
+        focusIndex={launchpadFocus}
+        isTerminalFocused={terminalFocused}
+        whale={channel.whale}
+        whaleIdle={channel.whaleIdle}
+        whaleGirl={channel.whaleGirl}
+        fontId={splashFontIdOf(channel.splashFont)}
+        starred={starred}
+        onStarClick={runStarAction}
+        firstRun={onboardingPending}
+        actions={launchpadActions}
+        // 参数行四段点开的既有选择器（第五版）：pickerPanels 与聊天页共用
+        // 同一份 JSX，盖在落地页之上；选择器开着时落地页键盘让位（inputPaused）。
+        overlayPanel={launchpadOverlayUp ? pickerPanels : undefined}
+        inputPaused={launchpadOverlayUp}
+        onParamPick={(segment) => {
+          // 四段 → 既有命令：model→/model、effort→/effort、preset→/preset、
+          // permission→/permission。全部在 overlayCommandNames 白名单里，
+          // 落地页不收，选择器盖上来。
+          // 第八版切换式（用户原话「点一下是展开 再点一下收起来」）：**同一段**
+          // 再点/再按 Enter = 收起（展开 ↔ 收起，键盘与鼠标同一条 onParamPick）。
+          // 点另一段仍直接切换，点空白/Esc 仍收起（上一版契约不回退）。
+          if (overlay.kind === segment) {
+            dispatchOverlay({ type: 'close' })
+            return
+          }
+          // BUG 3（点另一段直接切换）：/effort 的选择器是异步 open-if（when:
+          // ['none']），盖着别的选择器时会被丢弃——这就是"点了没反应"的根因。
+          // 先把屏上的参数选择器收掉再开新的，一个在屏、且就是点的那段。
+          if (overlay.kind !== 'none') {
+            dispatchOverlay({ type: 'close' })
+          }
+          void runCommand(segment, '')
+        }}
+        onQueryChange={(text, cursor) => {
+          setLaunchpadDraft(text)
+          setLaunchpadCaret(cursor)
+        }}
+        onSubmit={closeLaunchpad}
+        onFocusChange={setLaunchpadFocus}
+        onAction={(action) => {
+          // 第八版（用户实测：「刚点帮助，不知道为什么直接进入聊天页面了」）：
+          // 帮助**不属于**离开启动页的两条路（Enter 发非命令消息 / 会话浏览
+          // 里选中会话）——它盖在落地页之上（overlay kind 'help'），再点同一
+          // 入口 = 收起（与参数段同一条切换语义）。
+          if (action.command === 'help') {
+            dispatchOverlay(overlay.kind === 'help'
+              ? { type: 'close' }
+              : { type: 'open', overlay: { kind: 'help' } })
+            return
+          }
+          // 第七版姿态：覆盖层命令（overlayCommandNames）盖在落地页之上；
+          // **整屏命令**（launchpadScreenCommands：会话与工作区 / 设置 / 后台
+          // 任务 / 家谱 / 子代理 / 引导）也盖在落地页之上——落地页不收，
+          // Esc 退出整屏回到落地页（草稿/参数/焦点都在）。整屏要先过
+          // launchpadGate 的授权位（防御：异步误置的整屏状态盖不走启动页）。
+          // 其余命令（star / update——反馈在对话页的转录/通知）仍收掉落地页
+          // 再执行，这是用户主动执行命令，不是「返回」。
+          if (launchpadScreenCommands.has(action.command)) {
+            authorizeLaunchpadCover()
+          } else if (!overlayCommandNames.has(action.command)) {
+            setLaunchpadOpen(false)
+          }
+          void runCommand(action.command, '')
+        }}
+        onEscape={(intent) => {
+          if (intent === 'exit') {
+            requestExit()
+            return
+          }
+          // 空输入按 Esc：这一屏的"下一步"通常是去挑工作区/会话。第七版：
+          // 会话浏览器**盖在落地页之上**（落地页不收）——Esc 退出浏览器回到
+          // 落地页，绝不落到对话页。这是从落地页出发的交互：过闸门授权。
+          agentViewOpenSessionRef.current = channel.agentId
+          authorizeLaunchpadCover()
+          setSupervisorOpen(true)
+        }}
+        onBlankClick={() => {
+          // BUG 3（点别处关掉选择器）：沿用"点空白收回焦点"的兜底路径——
+          // 有参数选择器盖在落地页之上时，空白点击先把选择器收掉（焦点照旧
+          // 收回输入框）。选择器内部的点击已被 Launchpad 的浮层包装拦住
+          // 冒泡，不会走到这里。
+          if (overlay.kind !== 'none') dispatchOverlay({ type: 'close' })
+          setLaunchpadFocus(-1)
+        }}
+        model={channel.model}
+        effort={channel.reasoningEffort}
+        preset={
+          channel.agentPreset === undefined
+            ? undefined
+            : presetOptions.find(option => option.id === channel.agentPreset)?.name ?? channel.agentPreset
+        }
+        permission={launchpadPermission}
+        commands={
+          launchpadOverlayUp || !launchpadDraft.startsWith('/')
+            ? undefined
+            : channel.commandCompletions(launchpadDraft)
+        }
+        onCommandPick={(commandLine) => {
+          // 补全面板选中（Enter/Tab/点击）：走 runCommand，与快捷入口同一条
+          // 白名单口径——覆盖层与整屏命令（第七版 launchpadScreenCommands）
+          // 不收落地页（盖在它之上），其余收掉再执行。/help 与快捷入口同一条
+          // 拦截：盖屏浮层，不进对话页（第八版）。
+          const parsed = parseCommandName(commandLine)
+          if (parsed === undefined) return
+          if (parsed.name === 'help') {
+            dispatchOverlay({ type: 'open', overlay: { kind: 'help' } })
+            return
+          }
+          if (launchpadScreenCommands.has(parsed.name)) {
+            authorizeLaunchpadCover()
+          } else if (!overlayCommandNames.has(parsed.name)) {
+            setLaunchpadOpen(false)
+          }
+          void runCommand(parsed.name, parsed.rawInput)
+        }}
+        cwd={channel.displayCwd}
+        branch={channel.gitBranch}
+        tuiVersion={tuiVersion}
+        kernelVersion={kernelVersion}
+        // 左下角工作目录铭牌（第七版）：点开/回车开既有 /workspace 菜单——
+        // workspace-menu 在 LAUNCHPAD_OVERLAY_KINDS 里，选择器盖在落地页之上，
+        // Esc 回落地页（与参数行选择器同一姿态），不新造面板。
+        onOpenWorkspace={() => { void runCommand('workspace', '') }}
+      />
+    )
+    return fullscreen ? node : <AlternateScreen>{node}</AlternateScreen>
+  }
+
+  // 浮层整体挂载条件：与内部各面板的可见条件同值（数据门在
+  // dialogOverlayVisible 里逐面板镜像）。关闭时把整个 absolute 浮层从树里
+  // 移除——渲染器的"移除 absolute 节点"检测只看被移除子树自身的
+  // style.position（dom.ts collectRemovedRects），若浮层常驻、只移除其
+  // 普通子节点，blit 解毒不触发，被覆盖的转录行会在 blit-skip 后留空
+  // （Esc 关 picker 一片空白的根因）。
+  const dialogOverlayOpen = dialogOverlayVisible(overlay, {
+    workspaceTargetCount: workspaceTargets.length,
+    effortOptionCount: effortOptions.length,
+    presetOptionCount: presetOptions.length,
+    panelCount: panelPickerRows.length,
+  }) && !(overlay.kind === 'permission'
+    && (approvalSnapshot !== null || questionSnapshot !== null || dialogSnapshot !== null))
+
+  // The sticky header pins the turn owning the viewport top row once its
+  // prompt has scrolled out above it (timeline.pinnedId, reported by
+  // MessageList) — scrolled up to an old turn, it carries THAT turn's
+  // prompt, not the latest one. The row stays while scrolled up and goes
+  // blank when nothing is pinned, so the viewport never shifts under it.
+  // channel.rows is a live in-place array, so the lookup is per-render.
+  const anchorUserRowId = timeline.pinnedId
+  const anchorUserText =
+    anchorUserRowId === null
+      ? null
+      : channel.rows.find(row => row.id === anchorUserRowId)?.text ?? null
+
+  // Modal image preview, shared by the composer's [Image #N] tokens and the
+  // transcript thumbnails. It normally lives INSIDE the transcript row, so
+  // the card centers over the conversation and the sticky header, prompt
+  // and status rows stay visible. While the fullscreen draft editor is open
+  // it moves to the root, after PromptEditorLayer, so it still paints above
+  // the editor (the editor state stays put; closing the preview restores it).
+  // The layer needs its region before its first paint (see the component):
+  // the transcript viewport height from the ScrollBox handle and the content
+  // column width. The full-screen (editor-open) placement uses the terminal.
+  const imagePreviewRegion = promptEditorOpen
+    ? { columns: chatColumns, rows: terminalRows }
+    : { columns: chatColumns, rows: handle?.getViewportHeight() ?? terminalRows }
+  const imagePreviewNode = activePreview !== null && (activePreview.peek || imagePreviewOwned)
+    ? (
+      <ImagePreviewOverlay
+        image={activePreview.image}
+        title={activePreview.title}
+        navigation={previewGallery.length > 1 && previewIndex >= 0 ? {
+          index: previewIndex, total: previewGallery.length,
+          onPrevious: () => stepPreview(-1), onNext: () => stepPreview(1),
+        } : undefined}
+        onClose={activePreview.peek
+          ? () => setPeekSuppressed(peekKey(activePreview.image, activePreview.title))
+          : () => dispatchOverlay({ type: 'close-if', kind: 'image-preview' })}
+        region={imagePreviewRegion}
+      />
+    )
+    : null
+
+  return (
+    <Box ref={wakeTickRef} flexDirection="column" flexGrow={1} width="100%">
+      {/* 分栏布局：geometry 为 null（收起 / 窄屏 / inline / 编辑器展开）
+          时 SidePanelLayout 原样渲染 children，与现状逐字节一致；分栏时
+          左栏拿到 chatColumns 的 TerminalSizeContext 覆盖与出血边界。 */}
+      <SidePanelLayout
+        geometry={sidePanel.geometry}
+        focus={sidePanel.focus}
+        onActivateChat={sidePanel.focusChat}
+        onActivatePanel={sidePanel.focusPanel}
+        side={
+          <SidePanelColumn
+            width={sidePanel.panelColumns}
+            controller={sidePanel}
+            channel={channel}
+            activity={workingActivity}
+            attention={{
+              approvals: approvalSnapshot !== null ? 1 : 0,
+              questions: questionSnapshot !== null ? 1 : 0,
+            }}
+            trajectory={trajectory}
+            onExpand={openPanelFullscreen}
+          />
+        }
+      >
+      {!isSticky && timeline.activeId !== null && (
+        <PinnedTurnHeader
+          text={anchorUserText || null}
+          onClick={() => {
+            // Click snaps the pinned prompt to the viewport top. Jump by the
+            // SAME content coordinate the
+            // rail's tick uses (timeline turn top = the prompt TEXT top):
+            // the element-based seek lands the row wrapper's margin at the
+            // top instead — one row shy of the text top the anchor rule
+            // compares against — and the header would flip to the previous
+            // turn immediately after the click.
+            const turn = timeline.turns.find(t => t.id === anchorUserRowId)
+            if (turn) handle?.scrollTo(turn.top)
+            else if (anchorUserRowId !== null) seekRow(anchorUserRowId)
+            else handle?.scrollToBottom()
+          }}
+        />
+      )}
+      {/* Transcript row. Under PageMargin the negative right margin makes
+          the row stretch past the content column to the terminal edge —
+          the gutter (timeline rail / scrollbar) thus lands at the very
+          edge while the transcript TEXT stays inside the page margin
+          (structural chrome convention: dividers and the rail bleed, text
+          and cards keep the content column). No explicit width: cross-axis
+          stretch with the margin yields exactly content+margin. */}
+      <Box flexDirection="row" flexGrow={1} flexShrink={1} marginRight={sidePanel.split ? 0 : -pageInsetX}>
+        <ScrollBox ref={setHandle} flexDirection="column" flexGrow={1} flexShrink={1} stickyScroll>
+        <LogoHeader
+          key={logoNonce}
+          model={channel.model}
+          effort={channel.reasoningEffort}
+          cwd={channel.displayCwd}
+          // 大字字面（设置项 `dsh-tui.splashFont`）：`daily` 交回按天轮换
+          // （`undefined`），其余 pin 住一款。
+          fontId={splashFontIdOf(channel.splashFont)}
+          whale={channel.whale}
+          whaleIdle={channel.whaleIdle && whaleArtVisible}
+          whaleGirl={channel.whaleGirl}
+          starred={starred}
+          onStarClick={runStarAction}
+          working={channel.working}
+          // Resuming a long session skips the ~3.4s opening animation: it
+          // keeps firing low-frequency React commits that compete with the
+          // transcript mount batches (and the first wheel events) for the
+          // frame budget right when the user wants to read history. Fresh
+          // sessions keep the full intro; restored ones settle instantly.
+          // A remount after a whole screen closed also settles instantly
+          // (see suppressLogoIntroRef).
+          skipIntro={suppressLogoIntroRef.current || channel.rows.length > 30}
+        />
+        {/* The startup loaded-context panel: before the first message the
+            transcript is empty, so the inventory of what this conversation
+            will load (system prompt, workspace instructions, skills, tools)
+            sits at the top, collapsed to a summary line and expandable with
+            Ctrl+P; the first rows take over. */}
+        {loadedContextVisible && (
+          <LoadedContextPanel
+            context={channel.loadedContext}
+            open={loadedContextOpen}
+            onToggle={toggleLoadedContext}
+          />
+        )}
+        <MessageList
+          rows={channel.rows}
+          failureHintRowId={failureHintRowId}
+          failureHint={t('traj-hint-failure', { key: primaryComboString('trajectory') })}
+          expanded={expanded}
+          expandedRows={expandedRows}
+          selectedId={selectionActive ? selectedId : null}
+          onToggleRow={toggleRowExpanded}
+          streamViewToggledRows={streamViewToggledRows}
+          onToggleStreamView={toggleStreamView}
+          model={channel.model}
+          diffLayout={channel.diffLayout}
+          thinkingFold={channel.thinkingFold}
+          jobGroupFold={channel.jobGroupFold}
+          toolBackground={channel.toolBackground}
+          foldTerminalCommand={channel.foldTerminalCommand}
+          smoothStreaming={channel.smoothStreaming}
+          activityFrames={channel.activityFrames}
+          showAll={showAllMessages}
+          thinkingVisible={thinkingVisible}
+          historyPaintEnabled={!fullscreen}
+          onToggleAll={() =>{  setShowAllMessages(previous => !previous) }}
+          onLoadOlder={() => channel.loadOlder()}
+          registerRowRef={registerRowRef}
+          scrollHandle={handle}
+          forceMountRowId={forceMountRowId}
+          newSinceRowId={isSticky ? null : lastSeenRowIdRef.current}
+          onUnseenCount={setUnseenCount}
+          onTimeline={setTimeline}
+          onOpenSubagent={setSubagentDetailId}
+          onOpenJobs={openJobsPanel}
+          onOpenFile={openFileActions}
+          sessionCwd={channel.cwd}
+          onPreviewImage={openImagePreview}
+          suppressImageGraphics={activePreview !== null}
+        />
+        </ScrollBox>
+        {(() => {
+          // Gutter mode (settings `dsh-tui.scrollGutter`): the timeline
+          // rail (default), the proportional scrollbar, or nothing. The
+          // slot keeps its 2 columns in both rendered modes (Qwen's
+          // permanent-gutter rule — an appearing/disappearing gutter
+          // changes the transcript width and rewraps everything).
+          const gutter = normalizeScrollGutter(channel.scrollGutter)
+          if (gutter === 'hidden') return null
+          if (gutter === 'scrollbar') {
+            return <ScrollbarGutter handle={handle} terminalWidth={chatColumns} />
+          }
+          return (
+            <TimelineRail
+              handle={handle}
+              turns={timeline.turns}
+              activeId={timeline.activeId}
+              upId={timeline.upId}
+              downId={timeline.downId}
+              terminalWidth={chatColumns}
+              hoverEnabled={!promptSelectionActive}
+              onRevealTurn={revealAndSeekRow}
+            />
+          )
+        })()}
+        {!promptEditorOpen && imagePreviewNode}
+      </Box>
+      {/* Bottom chrome (pill, spinners, dialogs, prompt, statusline): never
+          let flex shrink squeeze these fixed-height rows — the ScrollBox
+          above absorbs all overflow (it is the scroll container). */}
+      <Box flexDirection="column" flexShrink={0}>
+        {showPill && (
+          <NewMessagesPill
+            count={unseenCount}
+            onClick={() => handle?.scrollToBottom()}
+          />
+        )}
+        {channel.working &&
+          (activitySlot &&
+          workingActivity !== undefined &&
+          workingActivity.line !== '' &&
+          workingActivity.phase !== 'idle' ? (
+            // The working-activity line replaces the random-verb spinner
+            // while a turn runs: the plugin's live line (thinking copy /
+            // running tool / narration) is the status, with the spinner
+            // slot's token counter preserved as a suffix. Only real activity
+            // data replaces the spinner — before the first event, or with
+            // `activity: false`, the classic spinner still renders. The line
+            // hugs the left edge (no padding) so the self-narration reads as
+            // part of the transcript, aligned with the `❯` prompt below.
+              <Box marginTop={1}>
+                <ActivityLine
+                  activity={workingActivity}
+                  activityFrames={channel.activityFrames}
+                  warnPct={activityWarnPct}
+                  warnDanger={activityWarnPct !== undefined && activityWarnPct >= 95}
+                  // Upload = real tokens of the last request; download =
+                  // the animated chars/4 estimate, matching the classic
+                  // spinner's counter (the suffix used raw chars before,
+                  // inflating the reading next to a real upload number). An
+                  // automatic compaction mid-turn badges THIS line too — it is
+                  // the spinner slot whenever real activity data exists.
+                  suffix={`${lastUploadTokens > 0 ? ` · ↑ ${formatTokens(lastUploadTokens)}` : ''} · ↓ ${formatTokens(Math.round(channel.responseChars / 4))} tokens${compactionBadge === undefined ? '' : ` · ${compactionBadge}`}`}
+                />
+              </Box>
+            ) : (
+              <WorkingSpinner
+                mode={channel.spinnerMode}
+                hasActiveTools={channel.activeToolCount > 0}
+                responseLengthRef={responseLengthRef}
+                uploadTokensRef={uploadTokensRef}
+                loadingStartTimeRef={loadingStartTimeRef}
+                totalPausedMsRef={totalPausedMsRef}
+                pauseStartTimeRef={pauseStartTimeRef}
+                thinkingStatus={thinkingStatus}
+                suffix={compactionBadge}
+              />
+            ))}
+        {!channel.working && channel.compaction !== undefined && (
+          // Manual `/compact` runs while the session is idle: the row takes the
+          // spinner slot so the screen never looks frozen for its ~25-70s.
+          <CompactionStatusRow
+            compaction={channel.compaction}
+            activityPreset={activitySlot ? channel.activityFrames : undefined}
+          />
+        )}
+        {/* 分栏且 todo Panel 已启用时，Goal/Todo 由右栏 Panel 承载，
+            底部 chrome 不再挂载（窄屏 / inline / 未启用时保留现状）。 */}
+        {!(sidePanel.split && sidePanel.enabledPanelIds.includes('todo')) && (
+          <GoalTodoPanel
+            channel={channel}
+            collapsed={todoCollapsed}
+            onToggle={() => setTodoCollapsed(previous => !previous)}
+          />
+        )}
+        {recap !== null && recap.auto && !recap.expanded && (
+          <AutoRecapRow
+            summary={recap.summary}
+            streaming={!recap.done}
+            onExpand={() => setRecap(prev => (prev ? { ...prev, expanded: true } : prev))}
+            onDismiss={() => closeRecap()}
+          />
+        )}
+        {balance !== null && (
+          <BalanceReportRow
+            result={balance.result}
+            refreshing={balance.refreshing}
+            tokens={channel.tokens}
+            model={channel.model}
+            provider={channel.provider}
+            mainCost={channel.mainCost}
+            subagentCost={channel.subagentCost}
+            onRefresh={runBalance}
+            onDismiss={() => setBalance(null)}
+          />
+        )}
+        {statusEntries.length > 0 && (
+          // Plugin status contributions (tuiStatus seam): one joined line,
+          // truncated by the Text wrap contract — the host owns the layout,
+          // plugins own only their text.
+          <Text dimColor wrap="truncate">
+            {statusEntries.map(entry => entry.text).join(' · ')}
+          </Text>
+        )}
+        {activePreview === null && statusViews.map(view => (
+          <PluginStatusViewBoundary
+            key={`${view.key}:${view.registrationId}`}
+            viewKey={view.key}
+            onError={(key, error) => statusContributions.reportViewError(key, error)}
+          >
+            <Box
+              flexDirection="column"
+              flexShrink={0}
+              maxHeight={view.maxRows}
+              overflow="hidden"
+            >
+              <Box flexDirection="column" flexShrink={0}>
+                {React.createElement(view.component, {
+                  React,
+                  ui: STATUS_VIEW_UI,
+                })}
+              </Box>
+            </Box>
+          </PluginStatusViewBoundary>
+        ))}
+        {/* 输入簇：可替换输入行链 + 状态行 + 瞬态浮层。浮层锚点收窄到本簇
+            顶边（= 输入行顶边），picker 紧贴输入框向上展开，盖住其上
+            todo/spinner/转录尾部行（用户接受的取舍），自身零布局高度、
+            不推动帧布局。 */}
+        <Box flexDirection="column" flexShrink={0}>
+        {approvalPanelNode !== null ? (
+          approvalPanelNode
+        ) : dialogSnapshot !== null ? (
+          <ExtensionDialog
+            key={dialogSnapshot.key}
+            dialog={dialogSnapshot}
+            onDecide={value => dialogs.decide(dialogSnapshot.key, value)}
+            onCancel={() => dialogs.cancel(dialogSnapshot.key)}
+          />
+        ) : overlay.kind === 'tips' ? (
+          <Box flexDirection="column" marginTop={1}>
+            <TipsPanel onClose={() => dispatchOverlay({ type: 'close-if', kind: 'tips' })} />
+          </Box>
+        ) : recap !== null && (!recap.auto || recap.expanded) ? (
+          <Box flexDirection="column" marginTop={1}>
+            <RecapPanel
+              summary={recap.summary}
+              title={recap.title}
+              error={recap.error}
+              streaming={!recap.done}
+              titleApplied={recap.titleApplied}
+              onClose={() => {
+                // An expanded auto recap collapses back to its dim row;
+                // a manual /recap closes outright.
+                if (recap.auto) {
+                  setRecap(prev => (prev ? { ...prev, expanded: false } : prev))
+                } else {
+                  closeRecap()
+                }
+              }}
+              onCopy={() => {
+                void setClipboard(recap.summary ?? '').then(raw => { if (raw) writeRaw?.(raw) })
+                channel.notify(t('copied-chars', { n: (recap.summary ?? '').length }), { timeoutMs: 1500 })
+              }}
+              onApplyTitle={() => {
+                if (recap.title === undefined || recap.titleApplied) return
+                channel.renameSession(recap.title)
+                setRecap(prev => (prev ? { ...prev, titleApplied: true } : prev))
+                channel.notify(t('recap-title-applied-notify', { title: recap.title }), { color: 'success' })
+              }}
+            />
+          </Box>
+        ) : btw !== null ? (
+          <Box flexDirection="column" marginTop={1}>
+            <BtwPanel
+              question={btw.question}
+              answer={btw.answer}
+              error={btw.error}
+              streaming={!btw.done}
+              onClose={closeBtw}
+              onCopy={() => {
+                void setClipboard(btw.answer ?? '').then(raw => { if (raw) writeRaw?.(raw) })
+                channel.notify(t('copied-chars', { n: (btw.answer ?? '').length }), { timeoutMs: 1500 })
+              }}
+            />
+          </Box>
+        ) : questionPanelNode !== null ? (
+          questionPanelNode
+        ) : null}
+        <PromptInput
+          key="prompt-input"
+          channel={channel}
+          suspended={promptReplacementOpen}
+          // 宠物面板是活动面板时，通知由它的头顶气泡「说出来」，输入框上方
+          // 不再重复弹同一条（error 色除外——可能要行动的信号永远走 toast）。
+          // 渲染期判定（split + activePanelId），与气泡同一次提交切换，不会
+          // 先闪一帧 toast 再消失。
+          toastSuppressed={petSaysNotices}
+          draftCache={promptDraftRef.current}
+          helpOpen={helpOpen}
+          onToggleHelp={() =>{  setHelpOpen(previous => !previous) }}
+          onRunCommand={runCommand}
+          selectionActive={promptSelectionActive}
+          fillText={historyFill}
+          onFillConsumed={() => setHistoryFill(null)}
+          onRewindRequest={openRewind}
+          onBackgroundRequest={backgroundToAgentView}
+          // The 🏠 at the head of the input row opens the same session screen
+          // `/resume` and `/agentview` open — one surface, three doors. It is
+          // gated on this prop rather than a setting, so hosts that mount the
+          // prompt without a session screen (and the layout regressions that
+          // pin the row's column budget) keep the row they had.
+          onOpenSessions={() => {
+            agentViewOpenSessionRef.current = channel.agentId
+            setSupervisorOpen(true)
+          }}
+          backgroundAgentsNeedingInput={
+            // Only the real channel supplies the seam; pre-agent-view test
+            // stubs must not grow the footer row (layout-dependent
+            // regressions pin the visible row count). The footer only
+            // renders while some session actually waits (N > 0): a
+            // permanent idle row would steal a transcript row on every
+            // real channel — one row is enough to scroll the startup
+            // header fully off a short terminal, pausing its viewport
+            // clock and shifting every row-count layout invariant.
+            channel.agentViewRows !== undefined && backgroundAgentsNeedingInput > 0
+              ? backgroundAgentsNeedingInput
+              : undefined
+          }
+          controllerRef={promptControllerRef}
+          onCaretImage={handleCaretImage}
+          caretPreviewOpen={peekPreview !== null}
+          onDismissCaretPreview={dismissPeek}
+        />
+        <StatusLine
+          channel={channel}
+          activity={workingActivity}
+          selectionActive={selectionActive}
+          helpOpen={helpOpen}
+          wake={
+            wakeBand === undefined
+              ? undefined
+              : {
+                  band: wakeBand,
+                  hint: trajectorySeen ? undefined : primaryComboString('trajectory'),
+                  tick: Math.floor(wakeTime / 120),
+                  onOpen: openScene,
+                  hoverHint: primaryComboString('trajectory'),
+                }
+          }
+        />
+        {/* 瞬态面板浮层：absolute + bottom:'100%' 钉在输入簇 Box 顶边（=
+            输入行顶边），紧贴输入框向上覆盖其上 todo/spinner/转录尾部行，
+            自身零布局高度。in-flow 挂载会让帧高随面板开关涨落，把帧顶行滚进
+            scrollback 并在关闭重绘时二次写入（每切一次 /model 多一份启动画
+            的根因）。浮层盖住 todo 是刻意取舍（贴输入框优先）；maxHeight
+            预留 prompt/statusline 行，防短会话高列表探出帧顶。整体条件
+            挂载：见 dialogOverlayOpen 注释。 */}
+        {dialogOverlayOpen && (
+        <OverlayAbove maxHeight={Math.max(terminalRows - 8, 1)}>
+          {pickerPanels}
         </OverlayAbove>
         )}
         </Box>
       </Box>
-      {/* Tooltip 悬停浮层：absolute 零布局高度，挂在根 Box 最后确保盖在
-          其余内容之上（yoga 的 absolute 相对父级，根 Box 原点即屏原点，
-          指针 anchor 的屏幕坐标可直接使用）。订阅模块级 store，锚点/
-          内容由各处的 useTooltip hover props 写入；resize 时自行隐藏
-          （几何失效）。 */}
+      {/* Tooltip 悬停浮层：absolute 零布局高度，挂在聊天栏内最后（v2.1
+          surface 边界）——它读到的是聊天列宽，clamp 后永远不会越过中缝
+          压进右栏；yoga 的 absolute 相对父级，聊天栏原点即内容区原点，
+          指针 anchor 的屏幕坐标换算（anchorCol - inset.x）保持正确。
+          订阅模块级 store，锚点/内容由各处 useTooltip hover props 写入；
+          resize 时自行隐藏（几何失效）。 */}
       <TooltipLayer
         invalidationKey={`${overlay.kind}:${dialogOverlayOpen}:${btw !== null}`}
         subscribeInvalidation={subscribeTooltipInvalidation}
       />
+      </SidePanelLayout>
       {/* 全屏草稿编辑浮层：必须挂在 TooltipLayer 之后，才能盖住包括
           状态栏在内的全部普通后绘兄弟。内容由 PromptInput 经 module
           store 发布（见 PromptEditor.tsx）。图片预览是唯一有意后绘于它

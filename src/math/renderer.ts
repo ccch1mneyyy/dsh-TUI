@@ -141,6 +141,11 @@ const inflight = new Map<string, Promise<MathRenderResult>>()
 /** Cache counters, for tests and debug output. */
 export const mathRenderStats = { vectorHits: 0, vectorMisses: 0, rasterHits: 0, rasterMisses: 0 }
 
+/** Formula renders still running (tests wait for 0 before reading the screen). */
+export function mathRendersInFlight(): number {
+  return inflight.size
+}
+
 let converter: Promise<TexToSvg | undefined> | undefined
 
 function loadConverter(): Promise<TexToSvg | undefined> {

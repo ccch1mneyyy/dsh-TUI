@@ -276,13 +276,16 @@ pnpm build
 pnpm smoke
 ```
 
-The repository has two submodules; `vendor/dsh-std` is required to install:
+The repository has a single submodule, and it is required to install:
 
 - `vendor/dsh-std`: its `packages/*` are listed as workspace packages in
   `pnpm-workspace.yaml`.
-- `dsh-ecosystem-spec`: the ecosystem specification used by contract checks.
 
-Without `--recurse-submodules` these directories stay empty and
+The TUI Profile (plugin admission and private protocol definitions) lives in
+`tui-profile/` as **plain files** (no longer a submodule); it is checked out and
+revised together with this repository and is what the contract checks read.
+
+Without `--recurse-submodules` that directory stays empty and
 `pnpm install --frozen-lockfile` fails outright. For a checkout that was
 already cloned:
 

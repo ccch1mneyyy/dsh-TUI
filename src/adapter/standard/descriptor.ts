@@ -323,7 +323,7 @@ export function buildHostDescriptor(options: HostDescriptorOptions): HostDescrip
       : publishableLifecycles(options.lifecycles, warnings, dropped)
 
   if (data === undefined) {
-    warnings.push('admission profile unavailable (dsh-ecosystem-spec/); advertising an empty protocol surface')
+    warnings.push('admission profile unavailable (tui-profile/); advertising an empty protocol surface')
   } else {
     const index = createContractIndex(data.registry, data.permissions)
     for (const item of selected) {

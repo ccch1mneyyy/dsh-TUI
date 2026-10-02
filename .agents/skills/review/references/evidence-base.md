@@ -29,7 +29,7 @@ renderer/context 实例归属及禁止模块全局共享以红线 12 为唯一�
 除 references/contract-gates.md 与红线外，查同 PR 改白名单/扫描目录/预期结果自放行；聚合 gate 对上游 failed/cancelled/空输出是否 fail-open；执行 fork 或处理 PR body/diff 的 job 是否持 secrets/写凭据；自定义 session event 是否在当前官方/legacy 白名单，严格读是否拒整日志；白名单测试直比上游全集、不手抄或只扫单个类型声明；模型可控路径/URL/截图/文件是否越工作区/网络/外服边界。
 
 ## D1｜核心仓库准入与 spec 先行｜❌
-先判是否应入核心：host API/协议坐标/双端传输语义先走 dsh-ecosystem-spec/ 当前提案/征求意见流程；外部插件正式准入并查安装/权限/网络/凭据/外传/真实组合测试；装饰/动效优先插件、核心仅最小接口；引入第三方源码须证相对零依赖/现有实现增量价值及长期维护；视觉标识/治理裁量须仓库 owner 明确拍板。
+先判是否应入核心：host API/协议坐标/双端传输语义先改仓内 `tui-profile/` 正文（随本仓代码修订，无独立 RFC/征求意见流程）并同步 `registry/` profileHash、`protocols/` 常量、`src/adapter/spec` 派生常量与 conformance fixture；外部插件正式准入并查安装/权限/网络/凭据/外传/真实组合测试；装饰/动效优先插件、核心仅最小接口；引入第三方源码须证相对零依赖/现有实现增量价值及长期维护；视觉标识/治理裁量须仓库 owner 明确拍板。
 
 ## D2｜PR 原子性、查重与并行协调｜❌/⚠️
 一 PR 一主题，剔本地配置/上游同步树/在途实验/顺手修复/无关格式化；与 main、open PR、已合入方案查重，明确重复方案被谁取代；同区域并行 PR 明合并顺序及 rebase/cherry-pick 归属；堆叠 PR 明各修复所属层。混杂 diff 严重度唯一真源为红线 13。

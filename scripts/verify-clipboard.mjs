@@ -14,7 +14,7 @@
  *
  * BMP → PNG (bmpToPng): 24-bit bottom-up, 32-bit top-down, BITFIELDS with
  * a live alpha mask kept as RGBA, a dead alpha byte kept opaque, headerless
- * DIB, and truncated/unsupported bitmaps → null
+ * DIB, and truncated/unsupported/colour-table bitmaps → null
  *
  * Stubbed-tool integration (Linux only — PATH is pointed at a temp dir of
  * fake wl-paste/xclip binaries):
@@ -33,7 +33,8 @@
  * - WSL (env marker): an empty/unreachable/BMP-undecodable Linux read falls
  *   through to powershell.exe — image bytes, files via wslpath, text — and
  *   everything unreachable → 'unavailable' with wsl:true; outside WSL
- *   powershell.exe is never spawned
+ *   powershell.exe is never spawned. Busy clipboard retries; empty does not;
+ *   noisy stderr drains and a SIGTERM-resistant helper has a hard deadline.
  *
  * Run: node scripts/verify-clipboard.mjs
  */
@@ -268,6 +269,25 @@ const same = (a, b) => JSON.stringify(a) === JSON.stringify(b)
   const paletted = Buffer.from(good)
   paletted.writeUInt16LE(8, 14 + 14)
   check('bmpToPng: 8-bit palette bitmap → null', (await bmpToPng(paletted)) === null)
+  for (const bpp of [24, 32]) {
+    const dib = makeBmp({ rows: [[B]], bpp, fileHeader: false })
+    dib.writeUInt32LE(1, 32) // biClrUsed: a red table entry precedes the blue pixel
+    const withTable = Buffer.concat([dib.subarray(0, 40), Buffer.from([0, 0, 255, 0]), dib.subarray(40)])
+    check(`bmpToPng: ${bpp}-bit DIB with a colour table → null`, (await bmpToPng(withTable)) === null)
+
+    const file = Buffer.alloc(14)
+    file.write('BM', 0, 'ascii')
+    file.writeUInt32LE(14 + 40 + 4, 10) // bfOffBits skips the colour entry
+    const png = await bmpToPng(Buffer.concat([file, withTable]))
+    check(`bmpToPng: ${bpp}-bit file with a colour table uses bfOffBits`,
+      png !== null && same(readPng(png)?.rows, [[[0, 0, 255]]]))
+  }
+  const beforePixels = Buffer.from(good)
+  beforePixels.writeUInt32LE(1, 10) // bfOffBits points inside the BMP file header
+  check('bmpToPng: offset inside file header → null', (await bmpToPng(beforePixels)) === null)
+  const inDib = Buffer.from(good)
+  inDib.writeUInt32LE(14 + 20, 10)
+  check('bmpToPng: offset inside DIB header → null', (await bmpToPng(inDib)) === null)
   const huge = Buffer.from(good)
   huge.writeInt32LE(1_000_000, 14 + 4)
   huge.writeInt32LE(1_000_000, 14 + 8)
@@ -289,6 +309,7 @@ if (process.platform === 'linux') {
     STUB_XCLIP: process.env.STUB_XCLIP,
     STUB_PS: process.env.STUB_PS,
     STUB_PS_MARK: process.env.STUB_PS_MARK,
+    STUB_PS_ATTEMPTS: process.env.STUB_PS_ATTEMPTS,
     STUB_BMP_FILE: process.env.STUB_BMP_FILE,
     WSL_DISTRO_NAME: process.env.WSL_DISTRO_NAME,
     WSL_INTEROP: process.env.WSL_INTEROP,
@@ -403,8 +424,20 @@ exit 1
     join(stubDir, 'powershell.exe'),
     String.raw`#!/bin/sh
 [ -n "$STUB_PS_MARK" ] && : > "$STUB_PS_MARK"
+if [ -n "$STUB_PS_ATTEMPTS" ]; then
+  count=0
+  [ -f "$STUB_PS_ATTEMPTS" ] && count=$(/bin/cat "$STUB_PS_ATTEMPTS")
+  count=$((count + 1)); printf '%s' "$count" > "$STUB_PS_ATTEMPTS"
+fi
 case "$STUB_PS" in
   image) printf 'IMAGE64:%s\r\n' "$(printf 'PNG\211\252binary' | /usr/bin/base64 | /usr/bin/tr -d '\n')";;
+  busy)
+    if [ "$count" -lt 3 ]; then exit 75; fi
+    printf 'TEXT64:%s\r\n' "$(printf 'win text' | /usr/bin/base64 | /usr/bin/tr -d '\n')";;
+  alwaysbusy) exit 75;;
+  empty) exit 0;;
+  noisy) /usr/bin/yes noise | /usr/bin/head -c 131072 >&2; printf 'TEXT64:%s\r\n' "$(printf 'win text' | /usr/bin/base64 | /usr/bin/tr -d '\n')";;
+  hang) exec ${JSON.stringify(process.execPath)} -e 'process.on("SIGTERM",()=>{});setInterval(()=>{},1000)' ;;
   files) printf '%s\r\n' 'FILE:C:\shots\a b.png' 'FILE:C:\notes\n.txt';;
   text) printf 'TEXT64:%s\r\n' "$(printf 'win text' | /usr/bin/base64 | /usr/bin/tr -d '\n')";;
   *) exit 1;;
@@ -641,6 +674,31 @@ printf '%s\n' "$2" | /usr/bin/sed -e 's|^C:|/mnt/c|' -e 's|\\|/|g'
       r !== null && r.kind === 'text' && r.text === 'win text',
       `got ${JSON.stringify(r)}`,
     )
+
+    const attemptsFile = join(stubDir, 'ps-attempts')
+    process.env.STUB_PS_ATTEMPTS = attemptsFile
+    scenario('wsl-busy', { wl: 'empty', ps: 'busy', wsl: true })
+    r = await readClipboard()
+    check('integration: transient busy retries and returns text',
+      r?.kind === 'text' && r.text === 'win text' && readFileSync(attemptsFile, 'utf8') === '3')
+    writeFileSync(attemptsFile, '0')
+    scenario('wsl-alwaysbusy', { wl: 'empty', ps: 'alwaysbusy', wsl: true })
+    r = await readClipboard()
+    check('integration: persistent busy stops after three attempts',
+      r === null && readFileSync(attemptsFile, 'utf8') === '3')
+    writeFileSync(attemptsFile, '0')
+    scenario('wsl-empty', { wl: 'empty', ps: 'empty', wsl: true })
+    r = await readClipboard()
+    check('integration: empty clipboard is not retried',
+      r === null && readFileSync(attemptsFile, 'utf8') === '1')
+    scenario('wsl-noisy', { wl: 'empty', ps: 'noisy', wsl: true })
+    r = await readClipboard()
+    check('integration: full stderr pipe does not block paste', r?.kind === 'text' && r.text === 'win text')
+    scenario('wsl-hang', { wl: 'empty', ps: 'hang', wsl: true })
+    const started = Date.now()
+    r = await readClipboard()
+    check('integration: SIGTERM-resistant helper has a hard deadline',
+      r === null && Date.now() - started < 15_000, `elapsed ${Date.now() - started}ms`)
 
     // Real detection (no override): the WSL_DISTRO_NAME env marker alone.
     scenario('wsl-env-marker', { wl: 'empty', ps: 'text' })

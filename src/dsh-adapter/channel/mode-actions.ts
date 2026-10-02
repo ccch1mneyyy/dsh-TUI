@@ -1,11 +1,13 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
+import type { CommandRoute } from '../../adapter/ports/channel-capabilities.js'
 import { t } from '../../i18n.js'
 import { modeDisplayName, type SessionModeSpec } from '../../sessionModes.js'
 import { assertShadowPolicy, type AdapterRuntimeOptions } from '../../adapter/kernel/runtime.js'
 import type { ChannelState } from './types.js'
 import { snapshotLiveSessionEvents } from '../compat/liveSession.js'
+import { agentCapabilityEvidence, resolveAgentCapabilities } from './capabilities.js'
 import type { createChannelBinding } from './binding.js'
 
 type Binding = ReturnType<typeof createChannelBinding>
@@ -49,12 +51,16 @@ export function createModeActions(
     runtime: AdapterRuntimeOptions
     binding: Pick<Binding, 'agent' | 'capture' | 'isCurrent'>
     sessionModes: readonly SessionModeSpec[]
-    commandService?: { find(agent: Agent, name: string): unknown }
     executeRegistryCommand(name: string, input: string): Promise<string | undefined>
     notify: ChannelState['notify']
   },
 ) {
-  const { owner, runtime, binding, sessionModes, commandService, executeRegistryCommand, notify } = deps
+  const { owner, runtime, binding, sessionModes, executeRegistryCommand, notify } = deps
+  /** `/plan` is registry-only: read the shared capability facts for the agent
+   *  instead of this module keeping its own registry lookup (the same fact
+   *  `/plan` dispatch and the command-list annotation use). */
+  const planRoute = (agent: Agent): CommandRoute =>
+    resolveAgentCapabilities(agentCapabilityEvidence(ctx, agent)).plan.route
   type ModeCapture = ReturnType<Binding['capture']>
   const current = (capture: ModeCapture): boolean => owner.current() && binding.isCurrent(capture)
   const capturedSession = (capture: ModeCapture) => capture.agent.session
@@ -222,7 +228,7 @@ const prePlanModeSpec = (log: readonly SessionEvent[]): SessionModeSpec | undefi
     explicitPlanExits.delete(session)
   }
   if (spec.plan !== undefined && (planMode?.get?.(agent).pending ?? planActive) !== spec.plan) {
-    if (commandService?.find(agent, 'plan') === undefined) {
+    if (planRoute(agent) === 'none') {
       notify(t('mode-plan-unavailable'), { color: 'warning' })
       return
     }

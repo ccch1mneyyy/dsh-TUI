@@ -2,7 +2,7 @@
  * Static gate for the TUI Host Ports boundary.
  *
  * Uses the TypeScript compiler AST (not plain string matching) to enforce:
- * - ports/ has no imports from @deepseek-ai, @dsh-std, dsh-ecosystem-spec, or
+ * - ports/ has no imports from @deepseek-ai, @dsh-std, tui-profile, or
  *   outside the ports directory;
  * - no Host Port method accepts caller-supplied owner/principal/activation
  *   identity;
@@ -49,8 +49,8 @@ const FORBIDDEN_PARAMETER_NAMES = new Set([
 const FORBIDDEN_MODULE_PREFIXES = [
   '@deepseek-ai/',
   '@dsh-std/',
-  '#dsh-ecosystem-spec',
-  'dsh-ecosystem-spec/',
+  '#tui-profile',
+  'tui-profile/',
 ]
 
 function collectFiles(dir: string): string[] {

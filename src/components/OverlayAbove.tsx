@@ -63,10 +63,21 @@ export function useOverlayListRows(frameRows: number): number {
 export function OverlayAbove({
   children,
   maxHeight,
+  transparent = false,
 }: {
   children: React.ReactNode
   /** 调用方声明的上限；实际还会被钳到锚点上方的可画行数。 */
   maxHeight?: number | undefined
+  /**
+   * 透明宿主（第七版：落地页侧专用）：**干净的镂空，不是混合**——只关掉
+   * occlusionColor（那是立绘图像在浮层后面时触发的 toolCardBackground 整块
+   * 白底，用户截图报的「整块白底」就是它），**保留 opaque 的空格垫底**：
+   * 浮层矩形内每一格都被空格占位（宿主屏的字形——大字/立绘字符画——被完全
+   * 遮掉，绝不重影），但不发任何背景色 SGR（终端默认背景；Kitty 负 z 立绘
+   * 图像仍从默认背景格里透出来，这正是「透出启动页」想要的）。
+   * 聊天页姿态不变：那边的底是转录文本，遮挡图像的 occlusion 语义仍然需要。
+   */
+  transparent?: boolean
 }): React.ReactNode {
   const ref = React.useRef<DOMElement | null>(null)
   const terminal = useTerminalSize()
@@ -112,8 +123,7 @@ export function OverlayAbove({
       // occlusionColor keeps the overlay terminal-transparent in the
       // common frame and only paints the surface while an image actually
       // sits behind this rect — see Styles.occlusionColor.
-      occlusionColor="toolCardBackground"
-      opaque
+      {...(transparent ? { opaque: true } : { occlusionColor: 'toolCardBackground' as const, opaque: true })}
       {...(effectiveMaxHeight === undefined ? {} : { maxHeight: effectiveMaxHeight })}
     >
       {/* flexShrink={0}：内容超高时让 overflow 从顶部裁整行，而不是被 yoga

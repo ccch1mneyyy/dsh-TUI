@@ -23,6 +23,10 @@ export type SessionResetState = Pick<
   | 'tpsSamples'
   | 'lastUsage'
   | 'contextSegments'
+  /** Staged "Send to Chat" contexts belong to the composer that staged them:
+   *  an adopted session must never carry the previous conversation's chips
+   *  (or hand its model a panel context the user staged elsewhere). */
+  | 'attachedContexts'
 >
 
 /**
@@ -72,6 +76,7 @@ export function resetSessionProjection(
   state.tps = undefined
   state.tpsSamples = []
   state.lastUsage = undefined
+  state.attachedContexts = []
   state.contextSegments = {
     system: 0,
     prompt: 0,

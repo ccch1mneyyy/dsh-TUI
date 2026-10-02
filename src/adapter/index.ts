@@ -6,7 +6,7 @@
  * - kernel/    runtime/lifecycle/ownership/host-facade/diagnostics
  * - upstream/  future-only home for @deepseek-ai/* drivers
  * - standard/  canonical @dsh-std/* + TUI admission/descriptor/grants
- * - spec/      thin dsh-ecosystem-spec / conformance loading layer
+ * - spec/      thin tui-profile / conformance loading layer
  *
  * Existing public subpaths and Cordis service names are unchanged during this
  * incremental migration.

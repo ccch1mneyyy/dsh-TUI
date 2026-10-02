@@ -23,6 +23,7 @@ export function HomeWorkspaceRow({
   path,
   home,
   sessionCount,
+  historyOnly = false,
   present,
   selected,
   focused,
@@ -36,6 +37,8 @@ export function HomeWorkspaceRow({
   /** Home directory, for collapsing the path to `~`. */
   home: string
   sessionCount: number
+  /** Derived from session history, without a workspace registration. */
+  historyOnly?: boolean
   /** False when the recorded directory no longer exists. */
   present: boolean
   /** Whether this workspace's sessions are the ones on the right. */
@@ -57,7 +60,8 @@ export function HomeWorkspaceRow({
   // the pane, the missing directory is not).
   const count = t('home-sessions-count', { n: sessionCount })
   const badge = present ? count : `${t('home-workspace-missing')} · ${count}`
-  const heading = spreadRow(`${selected ? '▣' : '▢'} ${title}`, `${selected ? '✓ ' : ''}${badge}`, body)
+  const name = historyOnly ? `${t('supervisor-history-only')} · ${title}` : title
+  const heading = spreadRow(`${selected ? '▣' : '▢'} ${name}`, `${selected ? '✓ ' : ''}${badge}`, body)
   const detail = formatProject(path, home)
   // The cursor (green) outranks the selection ring (green); both outrank the
   // idle colour. Blue is not part of this ladder at all — see the background.

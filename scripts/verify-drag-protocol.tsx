@@ -45,7 +45,7 @@ const [
   { default: AppCtor, handleMouseEvent },
   { createNode },
   { nodeCache },
-  { createSelectionState, hasSelection, updateSelection },
+  { createSelectionState, hasSelection, startSelection, updateSelection },
   { dispatchDragEvent, findDragTarget },
   { default: instances },
   { settle, settled, sleep },
@@ -125,6 +125,9 @@ function makeFakeApp(dragTarget?: unknown): {
       getHyperlinkAt: () => undefined,
       onOpenHyperlink: () => {},
       onMultiClick: () => {},
+      onSelectionStart: (col: number, row: number) => {
+        startSelection(selection, col, row)
+      },
       onSelectionDrag: (col: number, row: number) => {
         selectionDrags.push(col, row)
         updateSelection(selection, col, row)

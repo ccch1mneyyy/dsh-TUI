@@ -260,6 +260,19 @@ pnpm build
 - This removes the complete `lib/` directory, runs `tsc -p tsconfig.json` to
   emit `src/` into `lib/types/`, and then checks the adapter boundary, upstream
   contract, and patch surface.
+- The vendored builds that compile depends on (`vendor/dsh-std`,
+  `vendor/mathjax-tex-svg`) go through `scripts/build-vendor.mjs`: a target is
+  skipped only when its inputs (submodule sources, lockfiles, build command,
+  Node version) and every output file match the last successful build byte for
+  byte, and rebuilt otherwise; `node scripts/build-vendor.mjs --force` rebuilds
+  unconditionally. The fingerprints live in
+  `node_modules/.cache/dsh-tui/vendor-build.json`.
+- `verify:build` runs every gate in parallel, one per CPU, each under its own
+  throwaway HOME, printing each gate's output as one block.
+  `pnpm verify:build --jobs 1` (or `DSH_TUI_VERIFY_JOBS=1`) runs them
+  serially with live output for debugging a single gate. A gate must not depend
+  on state another gate left behind; one that truly needs the machine to itself
+  goes into `SERIAL` in `scripts/run-verify-build.mjs`, with the reason.
 - The `prepare` lifecycle serves **source-checkout bootstrapping only** (it
   fails fast when the vendored submodules are absent — see scripts/prepare-guard.mjs).
 - Git URL dependency installs have been triply blocked since vendoring
@@ -318,12 +331,18 @@ CI separately routes changes using the path allowlist in
 - A local rebuild exemption does not skip CI; preserve required gates and report
   the actual local verification scope.
 
-`verify:build` also checks source hygiene, renderer primitives, theme and
+`verify:build` also checks source hygiene, renderer primitives, the terminal
+size source (outside `ink/`, only through `useTerminalSize()`), theme and
 activity preference migrations, status animations, table layout, mermaid
 diagrams, and side-question behavior.
 
 - Source hygiene rejects the listed naming and compiled-input regressions.
 - It is not a source-provenance or license audit.
+
+CI shards each test group by the measured durations in
+`scripts/ci-group-timings.json` (every script lands in exactly one shard; the
+table only affects balance). New scripts need no table entry; to rebalance, run
+the whole group once with `node scripts/run-ci-group.mjs <group> --record-timings`.
 
 CI runs these commands after installation:
 
@@ -371,6 +390,7 @@ change, also run the closest focused script:
 | Prompt queue behavior | `node scripts/verify-queue.mjs` |
 | Goal/todo projection and rendering | `node scripts/verify-channel-goal-todo.mjs` and `node scripts/verify-goal-todo.mjs` |
 | Compaction and folded transcript rows | `node scripts/verify-compact.mjs` |
+| Command capability facts (compaction / plan / questionnaire / pruner routing and the Help + `/` unavailable marking) | `pnpm verify:agent-capabilities` |
 | Compaction × session-switch lifecycle (cancel before the fork snapshot, persistence-classified toast) | `node --import tsx/esm scripts/verify-compact-switch.tsx` |
 | Theme loading, persistence, and runtime plugin seam | `node --import tsx/esm scripts/verify-themes.mjs`, `node --import tsx/esm scripts/verify-runtime-themes.ts` |
 | Default-reasoning-effort and similar preference chains (effortPrefs / settings defaults) | `node --import tsx/esm scripts/verify-effort-default.ts` |

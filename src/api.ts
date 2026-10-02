@@ -90,6 +90,17 @@ export type {
 } from './plugin-host.js'
 export type { TuiSceneProps, TuiSceneDescriptor } from './scenes.js'
 export type {
+  TuiPanelDescriptor,
+  TuiPanelProps,
+  TuiPanelCompactProps,
+  TuiPanelHostApi,
+  TuiPanelSnapshot,
+  TuiPanelKeyEvent,
+} from './panels.js'
+// The single curated runtime value (a frozen integer contract marker); the
+// rest of this module stays types-only.
+export { TUI_PANEL_API_VERSION } from './panels.js'
+export type {
   TuiSettingsFieldKind,
   TuiSettingsFieldOption,
   TuiSettingsGroup,

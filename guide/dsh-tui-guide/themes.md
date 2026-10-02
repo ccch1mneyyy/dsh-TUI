@@ -141,7 +141,7 @@ export function apply(ctx: Context): void {
 - 旧 profile 没有 `tuiThemes` 时插件静默降级，静态主题不受影响。
 
 完整的可覆盖键、旧键映射与注册契约见
-[终端交互生态插件准入与开发指南](https://github.com/T-Auto/dsh-ecosystem-spec/blob/main/docs/plugin-admission-and-development.md)。
+[终端交互生态插件准入与开发指南](../tui-profile/docs/plugin-admission-and-development.md)。
 
 ## 颜色格式
 
