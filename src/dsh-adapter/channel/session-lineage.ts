@@ -1,9 +1,10 @@
 /**
  * Lineage decision consulted by `/model` only.
  *
- * `/rewind` and the `/tree` branch also re-create the live session as a child,
- * but they always record `parentSession` and do not call this helper. A blank
- * log cannot reach them (`boundary < 0`). This module is not their gate.
+ * `/rewind`, `/fork` and the `/tree` branch also re-create the live session as
+ * a child, but they always record `parentSession` and do not call this
+ * helper. A blank log cannot reach them (`boundary < 0`). This module is not
+ * their gate.
  *
  * The decision is load-bearing beyond grouping. Upstream's automatic session
  * title only ever runs on a session WITHOUT a parent: `dsh-session-title`
@@ -17,10 +18,9 @@
  * `fallbackMaxBytes`).
  *
  * A session with no human message has no conversation for the lineage to
- * describe, so its replacement stands as its own root — the same independent-
- * conversation choice `/fork` already makes (`session-fork.ts`), for the same
- * reason. The seeded prefix is unaffected either way: the child still inherits
- * the source's session scaffolding verbatim.
+ * describe, so its replacement stands as its own root. The seeded prefix is
+ * unaffected either way: the child still inherits the source's session
+ * scaffolding verbatim.
  *
  * @module
  */

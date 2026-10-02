@@ -71,9 +71,9 @@ export function createForkSessionAction(
         runtimeSession: source,
         inheritedCount: seed.length,
         cwd: state.cwd,
-        // NO parentSession: a /fork copy is an independent conversation
-        // (kimi-code semantics), not a rewind branch — recording lineage
-        // would fold it into the source's family in /resume.
+        // The inherited prefix carries the source's delivery markers, and
+        // the log reader only accepts them under a recorded parent (#1271).
+        parentSession: source.id,
         agentPreset: forkComposed.agentPreset,
         agentOptions: { provider: state.provider, model: state.model },
         setup: forkComposed.setup,
