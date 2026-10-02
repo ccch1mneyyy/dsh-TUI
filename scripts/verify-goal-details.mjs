@@ -45,10 +45,14 @@ function makeChannel() {
   }
   return channel
 }
-for (const lang of ['en', 'zh']) for (const fullscreen of [true, false]) {
+const { applySidePanelOpen, applySidePanelPanels } = await import('../src/tuiDisplayPrefs.js')
+for (const lang of ['en', 'zh']) for (const mode of ['fullscreen', 'inline', 'split']) {
+  const fullscreen = mode !== 'inline'
+  applySidePanelOpen(mode === 'split')
+  applySidePanelPanels('todo')
   setLang(lang)
   const title = t('goal-details-title')
-  const io = makeTerm()
+  const io = makeTerm(mode === 'split' ? 120 : 90)
   const channel = makeChannel()
   const questionStore = new QuestionStore()
   const chat = React.createElement(Chat, {
@@ -56,8 +60,29 @@ for (const lang of ['en', 'zh']) for (const fullscreen of [true, false]) {
   })
   const app = await render(fullscreen ? React.createElement(AlternateScreen, null, chat) : chat,
     { stdout: io.stdout, stderr: io.stderr, stdin: io.stdin, exitOnCtrlC: false, patchConsole: false })
-  const label = `${lang}/${fullscreen ? 'fullscreen' : 'inline'}`
+  const label = `${lang}/${mode}`
   check(`${label}: goal summary renders`, await settled(() => io.screen().includes('GOAL_HEAD')))
+  if (mode === 'split') {
+    io.stdin.write('\x02')
+    check(`${label}: panel takes keyboard focus`, await settled(() => io.screen().includes(t('panel-hint-focused').split(' · ')[0])))
+    io.stdin.write('\x1bg')
+    check(`${label}: focused panel allows goal shortcut`, await settled(() => io.screen().includes(title)))
+    io.stdin.write('\x1b')
+    await settle(() => !io.screen().includes(title))
+    io.stdin.write('\x1b')
+    await settle(() => !io.screen().includes(title))
+    const goalHit = findText(io.term, 'GOAL_HEAD')
+    io.stdin.write(`\x1b[<0;${goalHit.col + 1};${goalHit.row + 1}M\x1b[<0;${goalHit.col + 1};${goalHit.row + 1}m`)
+    check(`${label}: side-panel goal click opens details`, await settled(() => io.screen().includes(title)))
+    io.stdin.write('\x1b[F')
+    check(`${label}: goal tail reachable beside panel`, await settled(() => io.screen().includes('GOAL_TAIL')))
+    io.stdin.write('\x1b')
+    await settle(() => !io.screen().includes(title))
+    io.stdin.write('\x1b')
+    await settle(() => io.screen().includes(t('panel-hint-unfocused')))
+    applySidePanelOpen(false)
+    await settle(() => (findText(io.term, 'GOAL_HEAD')?.col ?? 120) < 60)
+  }
   io.stdin.write('draft')
   await settle(() => io.screen().includes('draft'))
   if (fullscreen) {
@@ -121,6 +146,7 @@ for (const lang of ['en', 'zh']) for (const fullscreen of [true, false]) {
   await questionResult
   await app.unmount(); io.term.dispose()
 }
+applySidePanelOpen(false)
 // Hover is registered on the goal text only; fitting goals stay tooltip-silent.
 {
   setLang('en')
