@@ -531,7 +531,9 @@ export default class App extends PureComponent<Props, State> {
 				);
 			}
 		}
-		stdin.setEncoding("utf8");
+		// Only once: each setEncoding() swaps in a fresh StringDecoder and drops
+		// the half of a CJK char still buffered from the last chunk (#1227).
+		if (stdin.readableEncoding !== "utf8") stdin.setEncoding("utf8");
 		if (isEnabled) {
 			// Ensure raw mode is enabled only once
 			if (this.rawModeEnabledCount === 0) {
