@@ -91,15 +91,18 @@ export function claudeEmits(type: AgentEventType): boolean {
     case 'notice':
     case 'rate-limit':
       return true
-    // Phase 3+ (permission/question bridges, effort, context usage) or not a
-    // Claude concept (DSH goals, presets, request headers, system prompt
-    // text, plugin events, compaction summary progress, task output reads).
-    case 'session.color':
-    case 'assistant.attempt.end':
+    // Emitted by the session's permission bridge (permissions.ts), not by
+    // this translator: the prompts arrive through `canUseTool`.
     case 'permission.request':
     case 'permission.settled':
     case 'question.request':
     case 'question.settled':
+      return true
+    // Later phases (effort, context usage) or not a Claude concept (DSH
+    // goals, presets, request headers, system prompt text, plugin events,
+    // compaction summary progress, task output reads).
+    case 'session.color':
+    case 'assistant.attempt.end':
     case 'task.output':
     case 'compaction.progress':
     case 'context.usage':
@@ -172,6 +175,34 @@ function userText(content: unknown): string | undefined {
   return undefined
 }
 
+/**
+ * The result text of an answered `AskUserQuestion`, in the shape the shared
+ * projector folds into the answered-questionnaire record (the `{answers:
+ * [{selected}]}` JSON the DSH `ask_user_question` tool persists, matched to
+ * the questions by order). The answers come from the structured result
+ * (`answers: {question: text}`) or, failing that, the CLI's
+ * `"question"="answer"` sentence; anything unreadable keeps the raw text (a
+ * title-only record).
+ */
+function questionRecordText(input: unknown, structured: unknown, raw: string): string {
+  const questions = arr(rec(input)?.questions).map(item => str(rec(item)?.question) ?? '')
+  if (questions.length === 0) return raw
+  let answers: Rec | undefined = rec(rec(structured)?.answers)
+  if (answers === undefined) {
+    const parsed: Record<string, string> = {}
+    for (const match of raw.matchAll(/"([^"]*)"="([^"]*)"/gu)) parsed[match[1]!] = match[2]!
+    answers = parsed
+  }
+  const found = answers
+  if (Object.keys(found).length === 0) return raw
+  return JSON.stringify({
+    answers: questions.map(question => {
+      const value = str(found[question])
+      return { selected: value === undefined ? [] : [value] }
+    }),
+  })
+}
+
 /** Create one translator; it serves exactly one session's stream. */
 export function createClaudeTranslator(options: ClaudeTranslatorOptions) {
   const now = options.now ?? Date.now
@@ -204,6 +235,9 @@ export function createClaudeTranslator(options: ClaudeTranslatorOptions) {
    * its card settles with the tool result).
    */
   const taskKinds = new Map<string, 'agent' | 'job' | 'foreground'>()
+  /** Why the CLI auto-denied a call (`system/permission_denied`), until its
+   *  error result lands on the card. */
+  const deniedReasons = new Map<string, string>()
 
   const nextSeq = (): number => ++seq
 
@@ -444,6 +478,10 @@ export function createClaudeTranslator(options: ClaudeTranslatorOptions) {
           if (callId === undefined || name === undefined) break
           const input = block.input
           openCalls.set(callId, { name, input })
+          // Plan-mode tools render as a mode change and the plan-review
+          // panel, never as a card: no call, and their result below only
+          // reports the outcome.
+          if (claudeToolRole(name) === 'plan') break
           const presentation = presentClaudeToolCall(name, input, options.cwd)
           out.push({
             type: 'tool.call',
@@ -479,6 +517,16 @@ export function createClaudeTranslator(options: ClaudeTranslatorOptions) {
     return out
   }
 
+  /** What a settled plan-mode tool means for the transcript and the mode. */
+  const planOutcome = (name: string, isError: boolean): AgentEvent[] => {
+    if (name === 'EnterPlanMode') {
+      if (isError || init?.permissionMode === 'plan') return []
+      if (init !== undefined) init = { ...init, permissionMode: 'plan' }
+      return [{ type: 'mode.changed', modeId: 'plan' }]
+    }
+    return [{ type: 'notice', level: 'info', text: t(isError ? 'claude-plan-kept' : 'claude-plan-approved') }]
+  }
+
   const translateUser = (message: Rec): AgentEvent[] => {
     const body = rec(message.message)
     const content = body?.content
@@ -509,7 +557,19 @@ export function createClaudeTranslator(options: ClaudeTranslatorOptions) {
         const call = openCalls.get(callId)
         openCalls.delete(callId)
         const isError = block.is_error === true
-        const text = toolResultText(block.content)
+        const rawText = toolResultText(block.content)
+        if (call !== undefined && claudeToolRole(call.name) === 'plan') {
+          out.push(...planOutcome(call.name, isError))
+          continue
+        }
+        // An auto-denied call: its card names the deciding component's reason.
+        const denied = deniedReasons.get(callId)
+        deniedReasons.delete(callId)
+        const text = isError && denied !== undefined && !rawText.includes(denied)
+          ? `${rawText}${rawText === '' ? '' : '\n'}${t('claude-denied-reason', { reason: denied })}`
+          : call !== undefined && claudeToolRole(call.name) === 'question' && !isError
+            ? questionRecordText(call.input, structured, rawText)
+            : rawText
         const presentation = call === undefined ? undefined : presentClaudeToolResult(call.name, call.input, { isError, text, structured }, options.cwd)
         out.push({
           type: 'tool.result',
@@ -700,8 +760,17 @@ export function createClaudeTranslator(options: ClaudeTranslatorOptions) {
         })
         return [{ type: 'tasks.snapshot', taskIds: ids }]
       }
-      case 'permission_denied':
-        return [{ type: 'notice', level: 'warning', text: str(message.message) ?? t('claude-permission-denied', { tool: str(message.tool_name) ?? '' }), ...(str(message.tool_use_id) === undefined ? {} : { callId: str(message.tool_use_id) }) }]
+      case 'permission_denied': {
+        const callId = str(message.tool_use_id)
+        const reason = str(message.decision_reason) ?? str(message.message) ?? ''
+        if (callId !== undefined && reason !== '' && openCalls.has(callId)) deniedReasons.set(callId, reason)
+        return [{
+          type: 'notice',
+          level: 'warning',
+          text: reason === '' ? t('claude-permission-denied', { tool: str(message.tool_name) ?? '' }) : t('claude-permission-denied-reason', { tool: str(message.tool_name) ?? '', reason }),
+          ...(callId === undefined ? {} : { callId }),
+        }]
+      }
       case 'api_retry':
         return [{ type: 'notice', level: 'notice', key: 'api-retry', text: t('claude-api-retry', { attempt: String(num(message.attempt) ?? '?'), max: String(num(message.max_retries) ?? '?') }) }]
       case 'informational':

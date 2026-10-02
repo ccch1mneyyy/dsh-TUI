@@ -1,20 +1,20 @@
 /**
- * Ask-user-question store — the UI-side half of the DSH user-interaction
- * seam (`ctx.userQuestions`). The harness's model-facing
- * `ask_user_question` tool calls `UserQuestionService.ask()`, which
- * forwards to the provider registered here; this store parks the request,
- * surfaces one question at a time to the TUI questionnaire, and settles the
- * harness promise when the user answers,
- * cancels, or the owning tool's abort signal fires.
+ * The DSH binding of the shared ask-user-question store
+ * (`src/channel/questions.ts`) — the UI-side half of the DSH
+ * user-interaction seam (`ctx.userQuestions`). The harness's model-facing
+ * `ask_user_question` tool calls `UserQuestionService.ask()`, which forwards
+ * to the provider registered here; the store parks the request, surfaces one
+ * question at a time to the TUI questionnaire, and settles the harness
+ * promise when the user answers, cancels, or the owning tool's abort signal
+ * fires.
  *
- * Queue semantics mirror the official dsh-tui chat/questions machine: asks
- * arrive one at a time in practice (the tool blocks until answered), but
- * concurrent asks from subagents are drained FIFO.
- *
- * This store owns the INTERACTION only. The answered-questionnaire transcript
- * record is a projection fact: it is folded from the persisted
- * `tool/result` (`channel/question-record.ts`, issue #1009), never pushed from
- * here, so it survives `/resume`, rewind and replay.
+ * The store itself is backend-neutral and lives in the channel layer; this
+ * module keeps the DSH protocol facts: interruptions reject with the
+ * protocol's `UserQuestionError` (dsh-plan-mode keys on its `ASK_CANCELLED`
+ * code to tell "the user dismissed the review to speak instead" from a
+ * harness abort), asks and answers carry the official types, and the store
+ * is bound to the composition root for the presentation Port bridge.
+ * Existing importers keep this path (compatibility re-exports below).
  */
 
 import { compositionRoot } from './host-access.js'
@@ -26,65 +26,29 @@ import {
 import {
   UserQuestionError,
   type AskUserQuestionAnswer,
-  type AskUserQuestionAnswerItem,
-  type AskUserQuestionItem,
   type AskUserQuestionRequest,
 } from '@deepseek-ai/dsh-user-questions'
+import { QuestionStore as SharedQuestionStore } from '../channel/questions.js'
 
-/** One answered question as the panel submits it: selected option labels
- *  plus optional free-text (the dsh protocol's "Other" answer). */
-export interface QuestionSelection {
-  readonly selected: string[]
-  readonly custom?: string
-}
+export type { QuestionDraft, QuestionSelection, QuestionSnapshot } from '../channel/questions.js'
 
-/**
- * In-progress answer state kept while navigating between questions. Drafts
- * are deliberately separate from committed answers: leaving a question
- * should preserve what the user typed without making it count as answered.
- */
-export type QuestionDraft = QuestionSelection
+/** The shared store, rejecting interruptions with the DSH protocol error. */
+export class QuestionStore extends SharedQuestionStore {
+  constructor(runtime: AdapterRuntimeOptions = defaultAdapterRuntime()) {
+    super({ runtime, interruption: (message, code) => new UserQuestionError(message, code) })
+  }
 
-/** One queued or active ask, with its running answers. */
-interface PendingQuestion {
-  readonly request: AskUserQuestionRequest
-  /** Stable identity for the batch (panel remount key). */
-  readonly batchId: number
-  /** Index of the question currently shown (0-based). */
-  index: number
-  /** Committed answers by question index; an empty slot is not answered. */
-  readonly answers: Array<AskUserQuestionAnswerItem | undefined>
-  /** Uncommitted panel state by question index, used when navigating back. */
-  readonly drafts: Array<QuestionDraft | undefined>
   /**
-   * Redact answer text in the answered-questionnaire transcript record (e.g.
-   * a wizard asking for an API key): the record lines show `••••••` instead
-   * of the raw text so secrets never reach the transcript or an `/export`
-   * dump. Only LOCAL wizards set it — the model-side ask carries no such flag.
+   * The DSH `host.presentation.ask` entry point, typed for the protocol (its
+   * requests and answers are the store's shapes). The shadow-policy guard is
+   * asserted here directly — this module is the presentation capability's
+   * audited entry (`verify:adapter-shadow`) — and again, idempotently, by the
+   * shared store every asker goes through.
    */
-  readonly redact?: boolean
-  resolve: (answer: AskUserQuestionAnswer) => void
-  reject: (error: unknown) => void
-  onAbort: () => void
-}
-
-/** What the TUI renders while a question is pending. */
-export interface QuestionSnapshot {
-  /** Stable key so the panel remounts (fresh selection state) per question. */
-  readonly key: string
-  readonly question: AskUserQuestionItem
-  /** 1-based position within the batch. */
-  readonly position: number
-  /** Total questions in the batch. */
-  readonly total: number
-  /** Questions answered before the current one. */
-  readonly answered: number
-  /** Previously saved answer or draft for the current question. */
-  readonly draft?: QuestionDraft
-  /** Whether Esc / ← should navigate to the previous question. */
-  readonly canGoBack: boolean
-  /** Whether → should navigate to the next question without submitting. */
-  readonly canGoForward: boolean
+  override ask(request: AskUserQuestionRequest, options?: { redact?: boolean }): Promise<AskUserQuestionAnswer> {
+    assertCapabilityShadowPolicy('host.presentation.ask', this.runtime.mode, this.runtime.slices)
+    return super.ask(request, options)
+  }
 }
 
 const questionStores = new WeakMap<object, QuestionStore>()
@@ -99,273 +63,4 @@ export function bindQuestionStore(ctx: Parameters<typeof compositionRoot>[0], st
 export function getQuestionStore(ctx: Parameters<typeof compositionRoot>[0]): QuestionStore | undefined {
   const root = compositionRoot(ctx) as object
   return questionStores.get(root)
-}
-
-const ASK_ABORTED = 'ASK_ABORTED'
-/**
- * User-initiated cancel (Esc / Ctrl+C in the panel). dsh-plan-mode keys on
- * this code to report "the user dismissed the plan review to speak instead"
- * rather than the generic abort message, so user cancels must be told apart
- * from harness aborts (signal fired) and teardown rejects.
- */
-const ASK_CANCELLED = 'ASK_CANCELLED'
-
-function isDefined<T>(value: T | undefined): value is T {
-  return value !== undefined
-}
-
-function copyDraft(draft: QuestionDraft): QuestionDraft {
-  return {
-    selected: [...draft.selected],
-    ...(draft.custom !== undefined ? { custom: draft.custom } : {}),
-  }
-}
-
-function selectionFromAnswer(answer: AskUserQuestionAnswerItem): QuestionDraft {
-  return copyDraft(answer)
-}
-
-/**
- * Ask-user-question store: parks asks from the harness's user-interaction
- * seam, surfaces one question at a time to the TUI, and settles each ask
- * when the user answers or the batch is interrupted. The TUI subscribes for
- * re-renders and answers via {@link QuestionStore.answerCurrent}.
- */
-export class QuestionStore {
-  private readonly runtime: AdapterRuntimeOptions
-
-  constructor(runtime: AdapterRuntimeOptions = defaultAdapterRuntime()) {
-    this.runtime = runtime
-  }
-  private readonly queue: PendingQuestion[] = []
-  private active: PendingQuestion | undefined
-  private readonly listeners = new Set<() => void>()
-  private batchSeq = 0
-  /**
-   * Cached snapshot: useSyncExternalStore requires a stable reference while
-   * nothing changed (a fresh object per call would loop re-renders).
-   */
-  private snapshotCache: QuestionSnapshot | null = null
-
-  /**
-   * Subscribe to store changes (useSyncExternalStore contract).
-   * @param listener - Called after every mutation that changes the snapshot.
-   * @returns An unsubscribe function removing the listener.
-   */
-  subscribe(listener: () => void): () => void {
-    this.listeners.add(listener)
-    return () => {
-      this.listeners.delete(listener)
-    }
-  }
-
-  /**
-   * The question the TUI should render now, or null when idle.
-   * @returns The cached snapshot; the reference is stable between mutations.
-   */
-  getSnapshot(): QuestionSnapshot | null {
-    return this.snapshotCache
-  }
-
-  /**
-   * Whether a panel callback still belongs to the question it was rendered
-   * for. One stdin batch can deliver → and then Enter to the panel that
-   * was mounted for the first key, after the store has already moved.
-   */
-  stillCurrent(key: string): boolean {
-    return this.snapshotCache?.key === key
-  }
-
-  private emit(): void {
-    for (const listener of this.listeners) listener()
-  }
-
-  /** Rebuild the cached snapshot after any mutation of active/index. */
-  private rebuildSnapshot(): void {
-    const pending = this.active
-    if (pending === undefined) {
-      this.snapshotCache = null
-      return
-    }
-    const question = pending.request.questions[pending.index]
-    const savedDraft = pending.drafts[pending.index]
-    const savedAnswer = pending.answers[pending.index]
-    this.snapshotCache = question === undefined ? null : {
-      key: `${pending.batchId}-${pending.index}`,
-      question,
-      position: pending.index + 1,
-      total: pending.request.questions.length,
-      answered: pending.index,
-      ...(savedDraft !== undefined
-        ? { draft: savedDraft }
-        : savedAnswer !== undefined
-          ? { draft: selectionFromAnswer(savedAnswer) }
-          : {}),
-      canGoBack: pending.index > 0,
-      canGoForward: pending.index + 1 < pending.request.questions.length,
-    }
-  }
-
-  /**
-   * Provider entry point — called by `ctx.userQuestions.ask()` when the
-   * model runs the `ask_user_question` tool, and by local wizards (e.g.
-   * `/provider`) driving the same panel.
-   * @param request - The ask request: questions plus optional abort signal.
-   * @param options - `redact` hides answer text from the answered-questionnaire
-   *   transcript record (use for batches that collect secrets such as API keys).
-   * @returns A promise settling with the collected answers when the user
-   *   submits the batch, or rejecting when the ask is interrupted.
-   */
-  ask(request: AskUserQuestionRequest,
-      options?: { redact?: boolean }): Promise<AskUserQuestionAnswer> {
-    assertCapabilityShadowPolicy('host.presentation.ask', this.runtime.mode, this.runtime.slices)
-    return new Promise<AskUserQuestionAnswer>((resolve, reject) => {
-      const pending: PendingQuestion = {
-        request,
-        batchId: ++this.batchSeq,
-        index: 0,
-        answers: new Array<AskUserQuestionAnswerItem | undefined>(request.questions.length),
-        drafts: new Array<QuestionDraft | undefined>(request.questions.length),
-        ...(options?.redact ? { redact: true } : {}),
-        resolve,
-        reject,
-        onAbort: () => {
-          if (this.active === pending) {
-            this.active = undefined
-            this.rebuildSnapshot()
-            this.fail(pending)
-            this.startNext()
-            this.emit()
-            return
-          }
-          const at = this.queue.indexOf(pending)
-          if (at >= 0) this.queue.splice(at, 1)
-          this.fail(pending)
-        },
-      }
-      request.signal?.addEventListener('abort', pending.onAbort, { once: true })
-      this.queue.push(pending)
-      this.startNext()
-    })
-  }
-
-  /** Advance to the next queued ask, if any. */
-  private startNext(): void {
-    if (this.active !== undefined || this.queue.length === 0) return
-    this.active = this.queue.shift()
-    this.rebuildSnapshot()
-    this.emit()
-  }
-
-  /**
-   * The user submitted an answer for the current question; replaces any
-   * previous answer at that position, advances to the next unanswered
-   * question, and settles the batch once every question is answered.
-   * @param selection - Selected option labels plus optional custom text.
-   */
-  answerCurrent(selection: QuestionSelection): void {
-    const pending = this.active
-    const question = pending?.request.questions[pending.index]
-    if (pending === undefined || question === undefined) return
-    const answer: AskUserQuestionAnswerItem = {
-      id: question.id,
-      selected: [...selection.selected],
-      ...(selection.custom !== undefined && selection.custom !== ''
-        ? { custom: selection.custom }
-        : {}),
-    }
-    pending.answers[pending.index] = answer
-    pending.drafts[pending.index] = copyDraft(selection)
-    // The answers array is sparse until each question is committed. `every`
-    // skips holes, so a peek-ahead answer would look complete and settle
-    // early. Read every index explicitly.
-    const complete = pending.request.questions.every((_, index) => pending.answers[index] !== undefined)
-    if (complete) {
-      // Batch complete: settle the harness promise and drain the next queued
-      // ask if any. Filling the last gap after a → peek counts — the user
-      // should not have to walk onto an already-answered tail just to submit.
-      // The transcript record is NOT written here — it is projected from the
-      // persisted `tool/result` (issue #1009), so it survives `/resume`,
-      // rewind and every replay.
-      const answers = pending.answers.filter(isDefined)
-      this.active = undefined
-      pending.resolve({ answers })
-      this.startNext()
-    } else {
-      const after = pending.request.questions.findIndex((_, index) => index > pending.index && pending.answers[index] === undefined)
-      const firstGap = pending.request.questions.findIndex((_, index) => pending.answers[index] === undefined)
-      pending.index = after >= 0 ? after : firstGap
-    }
-    this.rebuildSnapshot()
-    this.emit()
-  }
-
-  /**
-   * Navigate to the next question without committing the current one. The
-   * caller supplies the panel's draft so a peek forward does not discard
-   * in-progress text. No-op on the last question — Enter still owns submit.
-   */
-  forwardCurrent(draft?: QuestionDraft): void {
-    const pending = this.active
-    if (pending === undefined || pending.index + 1 >= pending.request.questions.length) return
-    if (draft !== undefined) {
-      pending.drafts[pending.index] = copyDraft(draft)
-    }
-    pending.index += 1
-    this.rebuildSnapshot()
-    this.emit()
-  }
-
-  /**
-   * Navigate to the previous question without cancelling the batch. The
-   * caller supplies the panel's current draft so partially typed text can be
-   * restored when the user returns.
-   */
-  backCurrent(draft?: QuestionDraft): void {
-    const pending = this.active
-    if (pending === undefined || pending.index <= 0) return
-    if (draft !== undefined) {
-      pending.drafts[pending.index] = copyDraft(draft)
-    }
-    pending.index -= 1
-    this.rebuildSnapshot()
-    this.emit()
-  }
-
-  /** The user interrupted the questionnaire (Esc / Ctrl+C). */
-  cancelCurrent(): void {
-    const pending = this.active
-    if (pending === undefined) return
-    this.active = undefined
-    this.rebuildSnapshot()
-    this.cancel(pending)
-    this.startNext()
-    this.emit()
-  }
-
-  /** Reject the active and all queued asks (plugin teardown). */
-  rejectAll(): void {
-    const active = this.active
-    this.active = undefined
-    this.rebuildSnapshot()
-    if (active !== undefined) this.fail(active)
-    for (const pending of this.queue.splice(0)) this.fail(pending)
-    this.emit()
-  }
-
-  /** User-initiated cancel — the asker learns the user wants to speak. */
-  private cancel(pending: PendingQuestion): void {
-    pending.reject(new UserQuestionError(
-      'the user cancelled ask_user_question',
-      ASK_CANCELLED,
-    ))
-  }
-
-  /** Harness-side interruption — abort signal fired or plugin teardown. */
-  private fail(pending: PendingQuestion): void {
-    pending.reject(new UserQuestionError(
-      'ask_user_question was interrupted before the user answered',
-      ASK_ABORTED,
-    ))
-  }
 }

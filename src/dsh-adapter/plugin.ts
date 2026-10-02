@@ -25,6 +25,7 @@ import { QuestionStore, bindQuestionStore } from './questions.js'
 import { prepareQuestionAnswerer } from './questions-answerer.js'
 import { adapterRuntimeFor } from '../adapter/kernel/runtime-context.js'
 import { ApprovalStore, bindApprovalStore } from './approvals.js'
+import { PermissionStore } from '../channel/permissions.js'
 import { registerPromptDebug } from './promptDebug.js'
 import { readActivityFrames } from '../activityPrefs.js'
 import { commitFullscreenFactoryMigration, planFullscreenFactoryMigration, readAppliedMigrations } from '../migrationPrefs.js'
@@ -507,6 +508,11 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
       })
     }, 'dsh-tui Claude startup session')
   }
+  // A non-DSH session's permission prompts park in the shared store (design
+  // §4.7) the approval panel renders; its questions share the DSH
+  // questionnaire store. Teardown withdraws whatever is still parked.
+  const backendPermissions = claudeStart === undefined ? undefined : new PermissionStore()
+  if (backendPermissions !== undefined) ctx.effect(() => () => backendPermissions.settleAll())
   const { agent, handle, agentPreset, route: createdRoute } = claudeStart !== undefined
     ? { agent: undefined, handle: undefined, agentPreset: undefined, route: undefined }
     : await resolveAgent(
@@ -587,7 +593,11 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
     // A Claude session reports its model with its first turn (`system/init`);
     // until then the status line names the backend.
     model: claudeStart !== undefined ? claudeStart.label : displayRoute.model,
-    ...(claudeStart === undefined ? {} : { backendLabel: claudeStart.label, openSession: claudeStart.open }),
+    ...(claudeStart === undefined || backendPermissions === undefined ? {} : {
+      backendLabel: claudeStart.label,
+      openSession: claudeStart.open,
+      interaction: { permissions: backendPermissions, questions: questionStore },
+    }),
     // The activity projection only pushes on change; read the current value as
     // soon as this session binds so a resumed or reattached session renders its
     // line immediately instead of waiting for the next event.
@@ -1294,10 +1304,12 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
   }
   // The agent view reads parked ask ids for its "needs input" state.
   rawChannel.bindApprovalStore(approvalStore)
+  // The panel source Chat renders: the backend's own prompts off DSH.
+  const panelApprovals = backendPermissions ?? approvalStore
   const herdr = attachHerdrIntegration({
     channel,
     questions: questionStore,
-    approvals: approvalStore,
+    approvals: panelApprovals,
   })
   if (herdr !== undefined) {
     ctx.effect(() => () => herdr.dispose())
@@ -1519,7 +1531,7 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
     channel,
     renderScene: createChannelSceneOutlet(() => rawChannel.pluginScene),
     questionStore,
-    approvalStore,
+    approvalStore: panelApprovals,
     injectControllerRef,
     openHomeOnBoot,
     // The dsh-tui-extensions row's services (managed dialogs, status line,

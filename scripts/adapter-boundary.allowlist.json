@@ -83,10 +83,6 @@
     },
     {
       "from": "screens/Chat.tsx",
-      "to": "dsh-adapter/approvals.js"
-    },
-    {
-      "from": "screens/Chat.tsx",
       "to": "dsh-adapter/channel.js"
     },
     {

@@ -610,6 +610,17 @@ const GROUPS = {
 // 真实 CLI 的 verify-claude-live / verify-claude-headless 只在
 // DSH_TUI_CLAUDE_LIVE=1 时跑，不进 CI（消耗真实用量、需要凭证）。
     ["verify-claude-session-lifecycle", ['node', '--import', 'tsx/esm', 'scripts/verify-claude-session-lifecycle.ts']],
+// 共享权限面板（方案 §4.7，Phase 3）：PermissionStore 的 FIFO、选项与呈现规则、
+// 四种结局（含拒绝理由）、撤回/会话释放/拆除不二次作答；channel 桥把会话的
+// permission/question 事件接到 store 与问卷，答复经能力回到后端。
+    ["verify-permission-store", ['node', '--import', 'tsx/esm', 'scripts/verify-permission-store.ts']],
+// Claude 权限桥（假 Query）：允许一次/始终允许/拒绝的 PermissionResult、选项生成
+// 与抑制、六条死锁规则、AskUserQuestion 作答与取消、ExitPlanMode 批准/继续规划、
+// requires-action，以及翻译器的 permission_denied/计划工具/问卷记录。
+    ["verify-claude-permissions", ['node', '--import', 'tsx/esm', 'scripts/verify-claude-permissions.ts']],
+// 审批面板的选项变体（中英）：DSH 无选项=今天的两行与结局字符串、后端三选项、
+// defaultToNo 拒绝居首且无单键批准、allow-always 抑制、打字附拒绝理由。
+    ["verify-approval-panel-options", ['node', '--import', 'tsx/esm', 'scripts/verify-approval-panel-options.tsx']],
 // IDE 选区通道回归（PR #562）：纯函数（env 直连/lock 扫描与 workspace
 // 匹配过滤/hello_ack 解析/selection_changed 校验）、无 IDE 静默降级、
 // loopback 对连（token 握手 ACK、错误 token 换下一候选、断连清空）、

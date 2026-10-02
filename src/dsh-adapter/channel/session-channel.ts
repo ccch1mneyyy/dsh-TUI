@@ -19,6 +19,7 @@ import { readGrantStore } from '../../adapter/standard/grants.js'
 import type { OpenTarget } from '../../agent/backend.js'
 import type { AgentSession } from '../../agent/session.js'
 import { channelCapabilities } from '../../channel/capabilities.js'
+import { attachInteraction } from '../../channel/interaction.js'
 import { createChannelProjection } from '../../channel/projection.js'
 import { LOCAL_COMMANDS } from '../../commands.js'
 import { t } from '../../i18n.js'
@@ -271,6 +272,14 @@ export function createSessionChannelWithOwner(
     })
   }
 
+  /**
+   * The bound session's prompts ↔ the stores Chat renders (design §4.7). One
+   * link per binding: a replaced session (or a released channel) withdraws
+   * everything it parked, so no panel outlives its session.
+   */
+  let interactionLink: ReturnType<typeof attachInteraction> | undefined
+  owner.own(() => { interactionLink?.release() })
+
   /** Bind the current session: the one subscription feeding the projector. */
   const bind = (): void => {
     try {
@@ -279,7 +288,17 @@ export function createSessionChannelWithOwner(
       inputConvergence.interruptSeq += 1
       const capture = binding.capture()
       const current = (): boolean => owner.current() && binding.isCurrent(capture)
-      binding.subscribe(capture.session.subscribe((batch, meta) => router.route(batch, meta, current)))
+      interactionLink?.release()
+      const link = options.interaction === undefined
+        ? undefined
+        : attachInteraction({ ...options.interaction, debug: logForDebugging }, { sessionId: capture.session.ref.sessionId, capabilities: capture.session.capabilities })
+      interactionLink = link
+      binding.subscribe(capture.session.subscribe((batch, meta) => {
+        // Prompts first: a batch that also closes the turn must not leave a
+        // panel behind it; the generation fence applies to both halves.
+        if (current()) link?.apply(batch)
+        router.route(batch, meta, current)
+      }))
       state.status = capture.session.status === 'running' || capture.session.status === 'requires-action'
         ? 'running'
         : capture.session.status === 'disposed' ? 'disposed' : 'idle'

@@ -13,7 +13,7 @@ import { HomeWorkspaceRow } from '../components/workspaces/HomeWorkspaceRow.js'
 import { SessionListRow } from '../components/sessions/SessionListRow.js'
 import { SpinnerGlyph } from '../components/Spinner/SpinnerGlyph.js'
 import { ApprovalPanel } from '../components/approvals/ApprovalPanel.js'
-import type { ApprovalSnapshot } from '../dsh-adapter/approvals.js'
+import type { PermissionPanelDecision, PermissionPanelOutcome, PermissionPanelSnapshot } from '../channel/permissions.js'
 import { useTerminalFocus } from '../ink/hooks/use-terminal-focus.js'
 import { useAnimationFrame } from '../ink/hooks/use-animation-frame.js'
 import { isPlainReturn, isMod } from '../utils/modifiers.js'
@@ -88,8 +88,8 @@ export function SessionSupervisor({
    * permission prompt is answerable without leaving this screen — the one
    * thing a parked session cannot wait indefinitely for.
    */
-  approval: ApprovalSnapshot | null
-  onApprove(outcome: 'allowed-once' | 'rejected'): void
+  approval: PermissionPanelSnapshot | null
+  onApprove(outcome: PermissionPanelOutcome, decision: PermissionPanelDecision): void
   /**
    * This terminal's live state for a session, or undefined when it has none.
    * Read from the channel's agent-view projection so the list agrees with the

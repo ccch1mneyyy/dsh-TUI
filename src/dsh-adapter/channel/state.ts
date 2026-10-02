@@ -1,5 +1,7 @@
 import type { AgentHandle } from '@deepseek-ai/dsh-agent'
 import type { AgentSession } from '../../agent/session.js'
+import type { PermissionStore } from '../../channel/permissions.js'
+import type { QuestionStoreLike } from '../../channel/questions.js'
 import type { SessionModeSpec } from '../../sessionModes.js'
 import { normalizeJobGroupFold, normalizePageMargin, normalizeScrollGutter, normalizeStatusBar, normalizeToolBackground, type JobGroupFoldMode, type PageMarginSetting, type ScrollGutterMode, type StatusBarConfig, type ToolBackground } from '../../tuiDisplayPrefs.js'
 import { normalizeActivityPreset } from '../../components/activityFrames.js'
@@ -66,6 +68,14 @@ export interface ChannelLaunchOptions {
    * keep their own resume/new orchestration and ignore it.
    */
   openSession?: (target: { readonly kind: 'create'; readonly cwd: string }) => Promise<AgentSession>
+  /**
+   * The stores a non-DSH session's prompts park in (design §4.7): its
+   * `permission.request` events go to `permissions` (the panel Chat renders
+   * for this channel), its `question.request` events to `questions`. Absent →
+   * such events are dropped (a backend that declares no prompt capability).
+   * DSH sessions answer through their own seams and ignore it.
+   */
+  interaction?: { readonly permissions: PermissionStore; readonly questions: QuestionStoreLike }
   /** Lifetime handle of the agent when `createChannel` receives a raw DSH
    *  agent (direct embedders, fixtures); a passed `AgentSession` carries its
    *  own and this is ignored. */

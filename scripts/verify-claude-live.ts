@@ -9,8 +9,15 @@
  *     developer start-mode override) actually writes the file;
  *  3. a mid-stream cancel closes the turn as aborted;
  *  4. open → dispose ×5, then no `claude` child process of this process
- *     remains (`ps --ppid`).
+ *     remains (`ps --ppid`);
+ *  5. approvals (Phase 3), answered through the real PermissionStore and the
+ *     channel's interaction bridge, in `default` mode: a Write approved once
+ *     writes the file; a Bash rejected with a reason errors its card and the
+ *     model carries on; an interrupt while a prompt is pending closes the
+ *     panel and aborts the turn.
  *
+ * `DSH_TUI_CLAUDE_LIVE_SECTIONS=basic,permissions` limits the run (default:
+ * all) — each section costs real turns.
  * Prerequisites: `claude` on PATH or CLAUDE_CODE_EXECUTABLE; a logged-in CLI.
  * Run: DSH_TUI_CLAUDE_LIVE=1 node --import tsx/esm scripts/verify-claude-live.ts
  */
@@ -27,6 +34,10 @@ if (process.env.DSH_TUI_CLAUDE_LIVE !== '1') {
 
 const { claudeBackend } = await import('../src/backends/claude/index.js')
 const { setLang } = await import('../src/i18n.js')
+const { PermissionStore } = await import('../src/channel/permissions.js')
+const { QuestionStore } = await import('../src/channel/questions.js')
+const { attachInteraction } = await import('../src/channel/interaction.js')
+const sections = new Set((process.env.DSH_TUI_CLAUDE_LIVE_SECTIONS ?? 'basic,permissions').split(',').map(name => name.trim()))
 type AgentEvent = import('../src/agent/events.js').AgentEvent
 type AgentSession = import('../src/agent/session.js').AgentSession
 
@@ -86,6 +97,7 @@ try {
   const detection = await claudeBackend.detect(host)
   check('detect: SDK installed and CLI found', detection.installed && detection.version !== undefined, detection)
 
+  if (sections.has('basic')) {
   // 1. text turn
   {
     const session = await claudeBackend.open({ kind: 'create', cwd: project }, host)
@@ -143,6 +155,51 @@ try {
   }
   const left = await waitForNoChildren()
   check('dispose ×5: no claude child process remains (ps --ppid)', left.length === 0, left)
+  }
+
+  // 5. approvals through the shared store (default mode)
+  if (sections.has('permissions')) {
+    process.env.DSH_TUI_CLAUDE_PERMISSION_MODE = 'default'
+    const session = await claudeBackend.open({ kind: 'create', cwd: project }, host)
+    delete process.env.DSH_TUI_CLAUDE_PERMISSION_MODE
+    const permissions = new PermissionStore()
+    const link = attachInteraction({ permissions, questions: new QuestionStore(), debug: () => undefined }, { sessionId: session.ref.sessionId, capabilities: session.capabilities })
+    session.subscribe(batch => link.apply(batch))
+    const live = watch(session)
+    const panel = (): boolean => permissions.getSnapshot() !== null
+    const status = (value: string): boolean => live.events.some(event => event.type === 'session.status' && event.status === value)
+
+    await session.submit({ text: 'Use the Write tool to create approved.txt containing exactly: approved. Reply done.', clientMessageId: crypto.randomUUID() }, 'followup')
+    await live.until(panel, 120_000, 'the Write approval')
+    const write = permissions.getSnapshot()!
+    check('approve: the Write prompt parks on the panel', write.toolName.includes('Write') && write.command === 'approved.txt', write)
+    check('approve: the CLI suggests auto-accepting edits (allow always offered)', write.options?.some(option => option.kind === 'allow-always') === true, write.options)
+    check('approve: the session requires action', session.status === 'requires-action' && status('requires-action'))
+    permissions.decide('allowed-once', { optionId: 'allow-once', kind: 'allow-once' })
+    await live.until(() => turnEnds(live.events).length >= 1, 120_000, 'approved turn end')
+    check('approve: allow once wrote the file', existsSync(join(project, 'approved.txt')) && readFileSync(join(project, 'approved.txt'), 'utf8').includes('approved'))
+    check('approve: settled allow-once', live.events.some(event => event.type === 'permission.settled' && event.outcome === 'allow-once'))
+
+    await session.submit({ text: 'Use the Bash tool to run `touch dsh-tui-live-reject.txt`. If the tool is refused, reply with exactly: refused-ok', clientMessageId: crypto.randomUUID() }, 'followup')
+    await live.until(panel, 120_000, 'the Bash approval')
+    check('reject: the Bash prompt shows its command', permissions.getSnapshot()?.command?.includes('dsh-tui-live-reject') === true, permissions.getSnapshot())
+    permissions.decide('rejected', { optionId: 'reject', kind: 'reject', feedback: 'not now' })
+    await live.until(() => turnEnds(live.events).length >= 2, 120_000, 'rejected turn end')
+    const bashResult = live.events.filter((event): event is Extract<AgentEvent, { type: 'tool.result' }> => event.type === 'tool.result').at(-1)
+    check('reject: the Bash card errors', bashResult?.isError === true && (bashResult.errorText ?? '').length > 0, bashResult)
+    check('reject: the model carries on', live.events.some(event => event.type === 'assistant.message' && event.blocks.some(block => (block.text ?? '').includes('refused-ok'))) && turnEnds(live.events)[1]?.reason.kind === 'completed', turnEnds(live.events)[1])
+
+    await session.submit({ text: 'Use the Write tool to create never.txt containing exactly: never. Reply done.', clientMessageId: crypto.randomUUID() }, 'followup')
+    await live.until(panel, 120_000, 'the pending approval')
+    await session.cancel('user')
+    await live.until(() => !panel() && turnEnds(live.events).length >= 3, 40_000, 'panel closed and turn aborted')
+    check('interrupt: the pending prompt is withdrawn (panel closes)', !panel() && live.events.some(event => event.type === 'permission.settled' && event.outcome === 'cancelled'))
+    check('interrupt: the turn aborts', turnEnds(live.events)[2]?.reason.kind === 'aborted', turnEnds(live.events)[2])
+    check('interrupt: nothing was written', !existsSync(join(project, 'never.txt')))
+    link.release()
+    await session.dispose()
+    check('approvals: no claude child survives', (await waitForNoChildren()).length === 0, claudeChildren())
+  }
 } finally {
   rmSync(root, { recursive: true, force: true })
 }

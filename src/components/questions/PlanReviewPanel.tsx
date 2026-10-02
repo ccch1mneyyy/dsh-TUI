@@ -8,9 +8,12 @@
  *
  * Protocol-exact answer mapping (dsh-plan-mode):
  * - Approve: `{ selected: [intent.approve] }` — custom MUST be absent, or
- *   plan-mode treats it as keep-planning-with-feedback.
+ *   plan-mode treats it as keep-planning-with-feedback. An asker may name
+ *   further approving options (`intent.approveAlso`, e.g. Claude's "approve,
+ *   but keep asking for edits"): they follow the same clean-answer rule.
  * - Keep planning / feedback: `{ selected: [declineLabel], custom? }` where
- *   declineLabel is the first option that is not the approve label.
+ *   declineLabel is `intent.decline` when the asker names it, else the first
+ *   option that does not approve (dsh-plan-mode names none).
  * - Esc / Ctrl+C: the store rejects with ASK_CANCELLED, which plan-mode
  *   reads as "the user dismissed the review to speak instead".
  *
@@ -32,7 +35,7 @@ import { useDeclaredCursor } from '../../ink/hooks/use-declared-cursor.js'
 import { Divider } from '../design-system/Divider.js'
 import { Markdown } from '../Markdown.js'
 import { POINTER } from '../../terminal-utils/figures.js'
-import type { QuestionSelection } from '../../dsh-adapter/questions.js'
+import type { QuestionSelection } from '../../channel/questions.js'
 import { isPlainReturnInput } from '../../utils/modifiers.js'
 import { actionMatches, comboDisplay, primaryComboString } from '../../utils/keymap.js'
 import { flattenPasteInline } from '../../dsh-adapter/sanitize.js'
@@ -56,7 +59,7 @@ export type PlanReviewPanelProps = {
     readonly header?: string
     readonly detail?: string
     readonly options?: ReadonlyArray<{ readonly label: string; readonly description?: string }>
-    readonly intent?: { readonly kind: 'plan-review'; readonly approve: string }
+    readonly intent?: { readonly kind: 'plan-review'; readonly approve: string; readonly approveAlso?: readonly string[]; readonly decline?: string }
   }
   readonly onAnswer: (selection: QuestionSelection) => void
   /** Esc / Ctrl+C — dismissed to speak instead (ASK_CANCELLED). */
@@ -76,7 +79,9 @@ export function PlanReviewPanel({
 }: PlanReviewPanelProps): React.ReactNode {
   const options = question.options ?? []
   const approveLabel = question.intent?.approve ?? options[0]?.label
-  const declineLabel = options.find(option => option.label !== approveLabel)?.label
+  const approveAlso = question.intent?.approveAlso ?? []
+  const approves = (label: string | undefined): boolean => label !== undefined && (label === approveLabel || approveAlso.includes(label))
+  const declineLabel = question.intent?.decline ?? options.find(option => !approves(option.label))?.label
   /** Rows: the asker's options plus the feedback input row at the tail. */
   const rowCount = options.length + 1
   const [focusIndex, setFocusIndex] = React.useState(0)
@@ -227,11 +232,11 @@ export function PlanReviewPanel({
     const label = options[index]?.label
     if (label === undefined) return
     const text = textRef.current.trim()
-    if (label === approveLabel && text !== '') {
+    if (approves(label) && text !== '') {
       setError(t('plan-review-approve-needs-empty'))
       return
     }
-    if (label === approveLabel) {
+    if (approves(label)) {
       onAnswer({ selected: [label] })
       return
     }
@@ -402,7 +407,7 @@ export function PlanReviewPanel({
       <Box flexDirection="column" marginTop={1}>
         {options.map((option, index) => {
           const focused = index === focusIndex
-          const isApprove = option.label === approveLabel
+          const isApprove = approves(option.label)
           return (
             <Box
               key={option.label}

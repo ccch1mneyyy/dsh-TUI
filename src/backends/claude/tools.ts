@@ -23,6 +23,9 @@ export type ClaudeToolRole =
   | 'question'
   /** `TodoWrite`: the todo panel. */
   | 'todo'
+  /** `EnterPlanMode` / `ExitPlanMode`: the mode and the plan-review panel,
+   *  never a card (the translator emits no call for them). */
+  | 'plan'
 
 type Record_ = Readonly<Record<string, unknown>>
 const asRecord = (value: unknown): Record_ | undefined =>
@@ -56,13 +59,16 @@ export function claudeToolRole(name: string): ClaudeToolRole {
       return 'question'
     case 'TodoWrite':
       return 'todo'
+    case 'EnterPlanMode':
+    case 'ExitPlanMode':
+      return 'plan'
     default:
       return 'card'
   }
 }
 
 /** A path for a title: relative to the session cwd when inside it. */
-function displayPath(path: string, cwd: string): string {
+export function displayPath(path: string, cwd: string): string {
   if (!isAbsolute(path) || cwd === '') return path
   const rel = relative(cwd, path)
   return rel === '' || rel.startsWith('..') || isAbsolute(rel) ? path : rel
@@ -114,6 +120,7 @@ export function presentClaudeToolCall(name: string, rawInput: unknown, cwd: stri
   if (role === 'subagent') return { card: 'subagent' }
   if (role === 'question') return { card: 'question' }
   if (role === 'todo') return { card: 'todo' }
+  // Plan-mode tools never reach here as calls; a stray one stays a plain card.
   const input = asRecord(rawInput) ?? {}
   const meta = metaOf(name)
   const filePath = str(input.file_path) ?? str(input.notebook_path)

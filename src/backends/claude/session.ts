@@ -14,22 +14,25 @@
  *   (`interrupt_cancel_queued_v1`) because the channel re-delivers them. Until
  *   a `result`/`idle` confirms, a 30 s timer stands by to force-close the turn
  *   (`turn.end{aborted}` + notice): an interrupted turn may never report.
- * - Permissions (Phase 2): the permission callback fails closed — every
- *   prompt is denied with an explanation and a notice row; the interactive
- *   bridge replaces `decidePermission` in Phase 3. Pending callbacks are
- *   always settled: on answer, on the SDK's abort signal, on dispose.
+ * - Permissions (Phase 3): the permission bridge (`permissions.ts`) parks
+ *   every `canUseTool` prompt and announces it as `permission.request` /
+ *   `question.request`; the user's answer returns through the
+ *   `permissions` / `questions` capabilities. While prompts are parked the
+ *   session is `requires-action`. Pending prompts are always settled: on
+ *   answer, on the SDK's abort signal, at a forced turn close, on dispose.
  * - Disposal: deny pending callbacks → close the inbox (stdin EOF, the CLI
  *   exits on its own) → `close()` the query → abort the controller; then wait
  *   (bounded) for the consumer loop. Idempotent.
  * - Process death or a consumer error marks the session `disposed`, closes
  *   any open turn and says so in a notice.
  */
-import type { CanUseTool, PermissionResult, SDKUserMessage } from '@anthropic-ai/claude-agent-sdk'
+import type { SDKUserMessage } from '@anthropic-ai/claude-agent-sdk'
 import type { AgentEvent, AgentEventMeta } from '../../agent/events.js'
 import type { AgentInput, AgentSession, AgentSessionStatus, CancelCause, SubmitPlacement } from '../../agent/session.js'
 import { t } from '../../i18n.js'
 import { CLAUDE_BACKEND_ID, CLI_CAPABILITY, cliVersionDrift, VALIDATED_CLI_VERSIONS, VALIDATED_SDK_VERSION } from './contract.js'
 import { buildQueryOptions, type StartPermissionMode } from './options.js'
+import { createClaudePermissionBridge, WITHDRAWN_MESSAGE } from './permissions.js'
 import { createStderrSink, type ClaudeExecutable } from './process.js'
 import type { ClaudeSdkModule } from './sdk.js'
 import { createClaudeTranslator } from './translate.js'
@@ -43,17 +46,6 @@ declare module '../../agent/capabilities.js' {
     /** `system/init.capabilities` (open set; feature-detect, never sniff). */
     readonly cliCapabilities: readonly string[]
   }
-}
-
-/** The deny message every Phase 2 permission prompt answers with. */
-export const PHASE2_DENY_MESSAGE = 'dsh-tui: interactive approvals arrive in the next phase'
-
-/** One permission prompt as the session hands it to its decider. */
-export interface ClaudePermissionPrompt {
-  readonly toolName: string
-  readonly input: Record<string, unknown>
-  readonly toolUseID: string
-  readonly signal: AbortSignal
 }
 
 /** Timer seam (tests inject a manual clock). */
@@ -87,8 +79,6 @@ export interface ClaudeSessionDeps {
   readonly sdkVersion?: string
   /** Notices to show once the channel subscribes (start-time findings). */
   readonly startNotices?: readonly string[]
-  /** Answer a permission prompt. Phase 2 default: fail closed. */
-  readonly decidePermission?: (prompt: ClaudePermissionPrompt) => Promise<PermissionResult>
   readonly clock?: ClaudeClock
   /** How long a cancel may go unconfirmed before the turn is force-closed. */
   readonly forceSettleMs?: number
@@ -175,7 +165,6 @@ export async function openClaudeSession(deps: ClaudeSessionDeps): Promise<AgentS
   let cliVersion: string | undefined
   let cliCapabilities: readonly string[] = []
   let forceTimer: unknown
-  const pendingPermissions = new Map<string, (result: PermissionResult) => void>()
   const translator = createClaudeTranslator({ cwd: deps.cwd, userRows: 'lifecycle', debug: deps.host.debug })
 
   const emit = (events: readonly AgentEvent[], wake: AgentEventMeta['wake'] = 'sync'): void => {
@@ -197,38 +186,23 @@ export async function openClaudeSession(deps: ClaudeSessionDeps): Promise<AgentS
     forceTimer = undefined
   }
 
-  const deny = (message: string, toolUseID: string): PermissionResult =>
-    ({ behavior: 'deny', message, toolUseID, decisionClassification: 'user_reject' })
-
-  /** Phase 2: no interactive approvals yet — refuse, and say why in a row. */
-  const phase2Decide = (prompt: ClaudePermissionPrompt): Promise<PermissionResult> => {
-    emit([{
-      type: 'notice',
-      level: 'warning',
-      text: prompt.toolName === 'AskUserQuestion' ? t('claude-question-unavailable') : t('claude-approval-unavailable', { tool: prompt.toolName }),
-      callId: prompt.toolUseID,
-    }])
-    return Promise.resolve(deny(PHASE2_DENY_MESSAGE, prompt.toolUseID))
-  }
-  const decide = deps.decidePermission ?? phase2Decide
-
-  const canUseTool: CanUseTool = (toolName, input, options) => new Promise<PermissionResult>(resolve => {
-    const key = options.requestId
-    if (disposing) { resolve(deny(PHASE2_DENY_MESSAGE, options.toolUseID)); return }
-    const settle = (result: PermissionResult): void => {
-      if (!pendingPermissions.delete(key)) return
-      options.signal.removeEventListener('abort', onAbort)
-      resolve(result)
-    }
-    // The CLI withdrew the prompt (interrupt, turn end, exit): it records the
-    // refusal itself; a late answer would be ignored anyway.
-    const onAbort = (): void => settle(deny(PHASE2_DENY_MESSAGE, options.toolUseID))
-    pendingPermissions.set(key, settle)
-    options.signal.addEventListener('abort', onAbort, { once: true })
-    // A decider that throws is a refusal, never a hang.
-    void Promise.resolve()
-      .then(() => decide({ toolName, input, toolUseID: options.toolUseID, signal: options.signal }))
-      .then(settle, () => settle(deny(PHASE2_DENY_MESSAGE, options.toolUseID)))
+  /** Prompts are parked: the session needs the user (design §5.1). Only
+   *  transitions are announced; the CLI's own `session_state_changed`
+   *  frames say the same and are idempotent with these. */
+  let asking = false
+  const bridge = createClaudePermissionBridge({
+    cwd: deps.cwd,
+    emit: events => emit(events),
+    debug: deps.host.debug,
+    closing: () => disposing,
+    onPendingChange: count => {
+      const next = count > 0
+      if (next === asking) return
+      asking = next
+      if (disposing) return
+      if (next) emit([{ type: 'session.status', status: 'requires-action' }], 'none')
+      else if (translator.turnOpen) emit([{ type: 'session.status', status: 'running' }], 'none')
+    },
   })
 
   const inbox = createInbox<SDKUserMessage>()
@@ -245,7 +219,7 @@ export async function openClaudeSession(deps: ClaudeSessionDeps): Promise<AgentS
       permissionMode: deps.start.mode,
       executable: deps.executable.path,
       env: deps.env,
-      canUseTool,
+      canUseTool: bridge.canUseTool,
       stderr: stderrSink,
       abortController,
       // Echoes are the user-row fallback for a CLI without lifecycle frames;
@@ -258,7 +232,8 @@ export async function openClaudeSession(deps: ClaudeSessionDeps): Promise<AgentS
   /** Shut the query down; safe to call from any state. */
   const teardown = (): void => {
     clearForceTimer()
-    for (const settle of [...pendingPermissions.values()]) settle({ behavior: 'deny', message: PHASE2_DENY_MESSAGE })
+    // Rule 4 (design §4.7): pending prompts are denied before the CLI goes.
+    bridge.settleAll()
     inbox.close()
     try { query.close() } catch (error) { deps.host.debug(`claude: close failed (${errorText(error)})`) }
     abortController.abort()
@@ -344,9 +319,18 @@ export async function openClaudeSession(deps: ClaudeSessionDeps): Promise<AgentS
     cwd: deps.cwd,
     get status(): AgentSessionStatus {
       if (status === 'disposed') return 'disposed'
+      if (bridge.size > 0) return 'requires-action'
       return translator.turnOpen ? 'running' : status
     },
     capabilities: {
+      permissions: {
+        respond: (requestId, decision) => bridge.respond(requestId, decision),
+        pending: () => bridge.pendingViews(),
+      },
+      questions: {
+        respond: (requestId, answers) => bridge.respondQuestion(requestId, answers),
+        cancel: requestId => bridge.cancelQuestion(requestId),
+      },
       native: {
         claude: {
           kind: 'claude',
@@ -413,6 +397,8 @@ export async function openClaudeSession(deps: ClaudeSessionDeps): Promise<AgentS
         forceTimer = clock.setTimeout(() => {
           forceTimer = undefined
           if (disposing || !translator.turnOpen) return
+          // The CLI never withdrew its prompts either: close the panels too.
+          bridge.settleAll(WITHDRAWN_MESSAGE)
           emit([
             ...translator.forceCloseTurn({ kind: 'aborted' }),
             { type: 'notice', level: 'warning', text: t('claude-cancel-forced') },

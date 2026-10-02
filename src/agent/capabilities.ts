@@ -29,7 +29,9 @@ export interface AcpNative {
 /** A user decision on one permission prompt. */
 export type PermissionDecision =
   | { readonly kind: 'allow-once' }
-  | { readonly kind: 'allow-always' }
+  /** `optionId` picks one allow-always option when the prompt offers several. */
+  | { readonly kind: 'allow-always'; readonly optionId?: string }
+  /** `message` is the user's own reason, relayed to the model. */
   | { readonly kind: 'reject'; readonly message?: string }
 
 /** Answers to one structured ask, by question order. */

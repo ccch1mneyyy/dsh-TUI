@@ -10,9 +10,9 @@
  *    cancel on a CLI advertising it) and the confirmation clears the
  *    force-settle timer; with no confirmation the injected 30 s clock
  *    force-closes the turn with a notice and `requires-action`;
- *  - a permission prompt is always settled: Phase 2 denies with a notice
- *    row; a decider that never answers is settled by the SDK's abort signal
- *    and by dispose;
+ *  - a permission prompt is always settled: it parks as `permission.request`
+ *    (the full matrix lives in verify-claude-permissions); an unanswered
+ *    prompt is settled by the SDK's abort signal and by dispose;
  *  - a consumer error (process death) marks the session disposed, closes the
  *    open turn and says so; unknown message types are ignored;
  *  - a failed handshake throws after tearing the query down;
@@ -26,7 +26,7 @@ import type { AgentEvent, AgentEventMeta } from '../src/agent/events.js'
 import type { AgentSession } from '../src/agent/session.js'
 import { buildQueryOptions, OPTION_POLICY, resolveStartPermissionMode } from '../src/backends/claude/options.js'
 import { buildClaudeEnv } from '../src/backends/claude/process.js'
-import { openClaudeSession, PHASE2_DENY_MESSAGE, type ClaudeClock, type ClaudeSessionDeps } from '../src/backends/claude/session.js'
+import { openClaudeSession, type ClaudeClock, type ClaudeSessionDeps } from '../src/backends/claude/session.js'
 import { setLang, t } from '../src/i18n.js'
 
 setLang('en')
@@ -233,26 +233,12 @@ const collect = (session: AgentSession) => {
   const { clock } = manualClock()
   const fake = fakeSdk()
   const session = await openClaudeSession(baseDeps(fake.sdk, clock))
-  const query = fake.queries[0]!
   const sink = collect(session)
-  const canUseTool = query.params.options.canUseTool!
-  const controller = new AbortController()
-  const result = await canUseTool('Write', { file_path: '/fixture/project/a.txt', content: 'x' }, { signal: controller.signal, toolUseID: 'toolu_1', requestId: 'req_1' })
-  check('Phase 2: every prompt is denied with the phase message', result.behavior === 'deny' && result.message === PHASE2_DENY_MESSAGE)
-  await tick()
-  check('Phase 2: the denial explains itself in a notice row', sink.events().some(event => event.type === 'notice' && event.level === 'warning' && event.callId === 'toolu_1'))
-  const question = await canUseTool('AskUserQuestion', { questions: [] }, { signal: controller.signal, toolUseID: 'toolu_2', requestId: 'req_2' })
-  check('Phase 2: AskUserQuestion is declined too', question.behavior === 'deny')
-  await session.dispose()
-}
-{
-  const { clock } = manualClock()
-  const fake = fakeSdk()
-  const never = (): Promise<never> => new Promise(() => undefined)
-  const session = await openClaudeSession(baseDeps(fake.sdk, clock, { decidePermission: never }))
   const canUseTool = fake.queries[0]!.params.options.canUseTool!
   const aborted = new AbortController()
   const viaSignal = canUseTool('Bash', { command: 'ls' }, { signal: aborted.signal, toolUseID: 'toolu_3', requestId: 'req_3' })
+  await tick()
+  check('a prompt parks as permission.request', sink.events().some(event => event.type === 'permission.request' && event.request.requestId === 'req_3'))
   aborted.abort()
   check('a withdrawn prompt (abort signal) settles as deny', (await viaSignal).behavior === 'deny')
   const pending = canUseTool('Bash', { command: 'ls' }, { signal: new AbortController().signal, toolUseID: 'toolu_4', requestId: 'req_4' })

@@ -31,6 +31,9 @@ import { LOCAL_COMMANDS } from '../src/commands.js'
 import { createChannel } from '../src/dsh-adapter/channel.js'
 import { Config, normalizeBackendChoice } from '../src/dsh-adapter/index.js'
 import { MAX_ROWS } from '../src/channel/transcript.js'
+import { PermissionStore } from '../src/channel/permissions.js'
+import { QuestionStore } from '../src/channel/questions.js'
+import type { PermissionDecision } from '../src/agent/capabilities.js'
 import { setLang, t } from '../src/i18n.js'
 import { settled } from './lib/term-test.mjs'
 
@@ -300,6 +303,42 @@ try {
   check('backend choice: empty or unknown → default', normalizeBackendChoice('') === undefined && normalizeBackendChoice('gpt') === undefined && normalizeBackendChoice(undefined) === undefined)
   const parse = (backend: unknown): unknown => (Config as unknown as (value: unknown) => { backend?: unknown })({ backend }).backend
   check('Config accepts a stray DSH_TUI_BACKEND value without failing the boot', parse('Claude') === 'claude' && parse('') === undefined && parse('nonsense') === undefined && parse(undefined) === undefined)
+}
+
+// ── prompts park in the stores Chat renders, per binding (Phase 3) ────
+{
+  const permissions = new PermissionStore()
+  const questions = new QuestionStore()
+  const responses: { requestId: string; decision: PermissionDecision }[] = []
+  const asking = (sessionId: string): FakeSession => fakeSession(sessionId, {
+    permissions: { respond: (requestId, decision) => { responses.push({ requestId, decision }) }, pending: () => [] },
+    questions: { respond: () => undefined, cancel: () => undefined },
+  })
+  const firstAsker = asking('55555555-5555-4555-8555-555555555555')
+  const nextAsker = asking('66666666-6666-4666-8666-666666666666')
+  const prompted = createChannel(ctx, firstAsker, {
+    model: 'm', provider: '', cwd: workdir, activity: false,
+    interaction: { permissions, questions },
+    openSession: () => Promise.resolve(nextAsker),
+  })
+  try {
+    const request = { requestId: 'req-1', toolName: 'Bash', command: 'ls', options: [{ id: 'allow-once', kind: 'allow-once' as const }, { id: 'reject', kind: 'reject' as const }] }
+    firstAsker.emit([{ type: 'permission.request', request }])
+    check('a session prompt parks in the shared store', permissions.getSnapshot()?.command === 'ls' && permissions.getSnapshot()?.agentId === firstAsker.ref.sessionId)
+    check('the capability snapshot declares permissions', prompted.capabilities.permissions)
+    permissions.decide('allowed-once')
+    check('the panel decision reaches the session', responses.length === 1 && responses[0]!.requestId === 'req-1' && responses[0]!.decision.kind === 'allow-once')
+    firstAsker.emit([{ type: 'permission.request', request: { ...request, requestId: 'req-2' } }])
+    firstAsker.emit([{ type: 'question.request', request: { requestId: 'q-1', questions: [{ question: 'Pick?', options: [{ label: 'a' }] }] } }])
+    check('a session question opens the questionnaire', questions.getSnapshot()?.question.question === 'Pick?')
+    check('/new replaces the session', await prompted.newSession() === true)
+    check('the replaced session\'s prompts are withdrawn with it', await settled(() => permissions.getSnapshot() === null && questions.getSnapshot() === null) && responses.length === 1)
+    nextAsker.emit([{ type: 'permission.request', request: { ...request, requestId: 'req-3' } }])
+    check('the new session\'s prompts park', permissions.getSnapshot()?.agentId === nextAsker.ref.sessionId)
+  } finally {
+    prompted.releaseContributions()
+  }
+  check('releasing the channel withdraws the open prompt', permissions.getSnapshot() === null && responses.length === 1)
 }
 
 // ── DSH keeps today's command list ────────────────────────────────────

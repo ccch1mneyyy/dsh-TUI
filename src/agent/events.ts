@@ -77,30 +77,79 @@ export interface PendingItem {
 /** One option of a permission prompt, in the backend's own vocabulary. */
 export interface PermissionOptionView {
   readonly id: string
-  readonly label: string
   readonly kind: 'allow-once' | 'allow-always' | 'reject'
+  /**
+   * The backend's own wording (an allow-always option names what it would
+   * remember); absent = the generic localized label of its `kind`, resolved
+   * at render time so a language switch repaints it.
+   */
+  readonly label?: string
 }
 
-/** One parked permission prompt. */
+/**
+ * One parked permission prompt (design §4.7). Everything but `requestId`,
+ * `toolName` and `options` is optional presentation the backend may know;
+ * the panel shows what is present.
+ */
 export interface PermissionRequestView {
   readonly requestId: string
   readonly toolName: string
+  /** The gated tool call (pairs the prompt with its card). */
   readonly callId?: string
-  readonly agentId?: string
+  /** The tool input as the model sent it (opaque to the UI). */
+  readonly input?: Readonly<Record<string, unknown>>
+  /** Short noun phrase for the action ("Write", "Read file"). */
+  readonly displayName?: string
+  /** Full prompt sentence when the backend renders one. */
   readonly title?: string
+  /** Secondary explanation (what granting would allow). */
   readonly description?: string
+  /** Why the backend asks (its decision reason). */
+  readonly reason?: string
+  /** One-line rendering of the gated action (command, file, URL). */
+  readonly command?: string
+  /** The path outside the allowed directories that triggered the ask. */
+  readonly blockedPath?: string
+  /** The asking subagent, when the call runs inside one. */
+  readonly agentId?: string
+  /** A stray keystroke must not approve: reject comes first, no one-key approve. */
+  readonly defaultToNo?: boolean
+  /** No persistent "don't ask again" choice may be offered. */
+  readonly suppressAlwaysAllow?: boolean
+  /** A user-configured ask rule forced this prompt (no allow-always either). */
+  readonly matchedAskRule?: { readonly source: string; readonly toolName: string; readonly ruleContent?: string }
+  /** The MCP server serving an `mcp__*` tool (untrusted display text). */
+  readonly mcpServer?: { readonly name: string; readonly source: string }
+  /** A rejection may carry the user's free-text reason back to the model. */
+  readonly feedback?: boolean
   readonly options: readonly PermissionOptionView[]
 }
 
 /** How a permission prompt settled. */
 export type PermissionOutcome = 'allow-once' | 'allow-always' | 'rejected' | 'cancelled'
 
+/**
+ * A plan-review presentation of one question (the decision-card panel):
+ * `approve` and every `approveAlso` label approve (a clean answer, never with
+ * feedback); `decline` names the keep-planning option a feedback answer
+ * selects (absent = the first option that does not approve).
+ */
+export interface PlanReviewIntentView {
+  readonly kind: 'plan-review'
+  readonly approve: string
+  readonly approveAlso?: readonly string[]
+  readonly decline?: string
+}
+
 /** One question of a structured ask (`ask_user_question` / `AskUserQuestion`). */
 export interface QuestionItemView {
   readonly question: string
   readonly header?: string
+  /** Long-form body (a plan under review). */
+  readonly detail?: string
   readonly options: readonly { readonly label: string; readonly description?: string }[]
   readonly multiSelect?: boolean
+  readonly intent?: PlanReviewIntentView
 }
 
 /** One parked structured ask. */

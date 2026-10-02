@@ -27,7 +27,7 @@ import {
 import { readModelRecents, recordModelUse, type ModelRecentsRef } from '../modelRecents.js'
 import type { ChannelUi as Channel } from '../adapter/channel/ui-policy.js'
 import { sessionCwdMatches, type ChatRow, type ComposerImageRef, type EffortOption, type ExternalCommandOutcome, type PermissionPresetSnapshot, type PresetOption, type SkillInfo } from '../dsh-adapter/channel.js'
-import type { QuestionStore } from '../dsh-adapter/questions.js'
+import type { QuestionStore } from '../channel/questions.js'
 import { TuiDialogStore } from '../dsh-adapter/dialogs.js'
 import { TuiStatusStore, type TuiStatusViewUi } from '../dsh-adapter/status.js'
 import { ActivityStore, useActivity } from '../dsh-adapter/activity-store.js'
@@ -45,7 +45,7 @@ import type { TuiShortcutHost } from '../dsh-adapter/shortcuts.js'
 import type { TuiThemeHost } from '../dsh-adapter/themes.js'
 import type { TuiRewindMode } from '../dsh-adapter/extension-events.js'
 import { runProviderWizard } from '../dsh-adapter/providerWizard.js'
-import { ApprovalStore } from '../dsh-adapter/approvals.js'
+import { PermissionStore, type PermissionPanelSource } from '../channel/permissions.js'
 import { AskUserQuestionPanel } from '../components/questions/AskUserQuestionPanel.js'
 import { ApprovalPanel } from '../components/approvals/ApprovalPanel.js'
 import { ExtensionDialog } from '../components/ExtensionDialog.js'
@@ -270,7 +270,7 @@ function searchableText(row: ChatRow): string {
  * approval seam (headless verify scripts). Never parked into, so its
  * snapshot stays null and the approval panel never mounts.
  */
-let fallbackApprovalStore: ApprovalStore | undefined
+let fallbackApprovalStore: PermissionStore | undefined
 
 /**
  * Shared inert extension stores for hosts that render Chat without the
@@ -316,11 +316,13 @@ export function Chat({
   renderScene?: (id: string, channel: Channel) => React.ReactNode
   questionStore: QuestionStore
   /**
-   * The approval seam's UI store. Optional: hosts without an approval
-   * channel (headless scripts, older embeds) render Chat without it and
-   * simply never see an approval panel — the question panel keeps its seat.
+   * The approval seam's UI store — the DSH `ApprovalStore` or a backend
+   * session's shared `PermissionStore`; both present the same panel shape.
+   * Optional: hosts without an approval channel (headless scripts, older
+   * embeds) render Chat without it and simply never see an approval panel —
+   * the question panel keeps its seat.
    */
-  approvalStore?: ApprovalStore
+  approvalStore?: PermissionPanelSource
   /**
    * The managed plugin dialog queue (tuiDialogs service's store). Optional
    * for the same hosts as approvalStore; absent, plugin dialog requests
@@ -414,7 +416,7 @@ export function Chat({
   // parks here until the panel decides; shown with priority over a pending
   // questionnaire since it gates a tool about to run. Hosts that pass no
   // approvalStore share one inert instance that never holds an ask.
-  const approvals = approvalStore ?? (fallbackApprovalStore ??= new ApprovalStore())
+  const approvals: PermissionPanelSource = approvalStore ?? (fallbackApprovalStore ??= new PermissionStore())
   const approvalSnapshot = React.useSyncExternalStore(
     listener => approvals.subscribe(listener),
     () => approvals.getSnapshot(),
@@ -4211,7 +4213,7 @@ export function Chat({
       key={approvalSnapshot.key}
       approval={approvalSnapshot}
       background={approvalSnapshot.agentId !== channel.agentId}
-      onDecide={outcome => approvals.decide(outcome)}
+      onDecide={(outcome, decision) => approvals.decide(outcome, decision)}
     />
   ) : null
   const questionPanelNode = questionSnapshot !== null ? (
@@ -4336,7 +4338,7 @@ export function Chat({
         home={homeDir()}
         onClose={closeHome}
         approval={approvalSnapshot}
-        onApprove={outcome => approvals.decide(outcome)}
+        onApprove={(outcome, decision) => approvals.decide(outcome, decision)}
         onOpenSession={async (sessionId) => {
           // A refusal is reported by the screen itself (see `openSession`):
           // the composer that draws channel notifications is not mounted here.
