@@ -883,21 +883,24 @@ for (const method of ['writeProfile', 'mutateProfile', 'removeProfile'] as const
 {
   const { createChannelOwner } = await import('../src/dsh-adapter/channel/owner.js')
   const { createChannelBinding } = await import('../src/dsh-adapter/channel/binding.js')
+  const { createDshSession } = await import('../src/dsh-adapter/backend/session.js')
+  // The binding holds sessions; wrapping a fixture agent/handle touches no host service.
+  const session = (target: unknown) => createDshSession({} as never, target as never)
   const owner = createChannelOwner()
   const { agent } = fixture()
-  const binding = createChannelBinding(agent as never, undefined, owner)
+  const binding = createChannelBinding(session({ agent, handle: undefined }), owner)
   let disposed = 0
-  let finish!: (value: unknown) => void
+  let finish!: (value: ReturnType<typeof session>) => void
   const pending = binding.prepare(binding.capture(), () => new Promise(resolve => { finish = resolve }))
   owner.dispose()
-  finish({ agent, dispose: async () => { disposed += 1 } })
+  finish(session({ agent, dispose: async () => { disposed += 1 } }))
   await assert.rejects(pending, /binding changed/)
   assert.equal(disposed, 1)
   const active = createChannelOwner()
-  const next = createChannelBinding(agent as never, undefined, active)
+  const next = createChannelBinding(session({ agent, handle: undefined }), active)
   let subscriptions = 0
   next.subscribe(() => { subscriptions += 1 })
-  next.switchTo({ ...agent, id: 'replacement' } as never, undefined, () => undefined)
+  next.switchTo(session({ agent: { ...agent, id: 'replacement' }, handle: undefined }), () => undefined)
   next.bind()
   assert.equal(subscriptions, 1)
   active.dispose()
@@ -920,7 +923,8 @@ for (const method of ['writeProfile', 'mutateProfile', 'removeProfile'] as const
   const errors: unknown[] = []
   const onError = (error: unknown) => { errors.push(error) }
   process.on('unhandledRejection', onError)
-  const delivery = createInputDelivery(ctx, owner, { agent: agent as never }, () => raw, mount.channel.notify, () => undefined, () => undefined)
+  const { createDshSession } = await import('../src/dsh-adapter/backend/session.js')
+  const delivery = createInputDelivery(ctx, owner, { agent: agent as never, session: createDshSession(ctx, { agent: agent as never, handle: undefined }) }, () => raw, mount.channel.notify, () => undefined, () => undefined)
   const parked = delivery.withDecisionPending('tui/input', new Promise(resolve => { finish = resolve }))
   await tick()
   owner.dispose(); mount.dispose(); unregister(); raw.releaseContributions()

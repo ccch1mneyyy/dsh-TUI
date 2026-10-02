@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs'
 import { createAgentViewProjection } from '../src/dsh-adapter/channel/agent-view-projection.js'
 import { createBackgroundCurrentAction } from '../src/dsh-adapter/channel/background-action.js'
 import { createChannelBinding } from '../src/dsh-adapter/channel/binding.js'
+import { createDshSession } from '../src/dsh-adapter/backend/session.js'
 import { createJobProjection } from '../src/dsh-adapter/channel/job-projection.js'
 import { createChannelOwner } from '../src/dsh-adapter/channel/owner.js'
 import { createSubagentProjection } from '../src/dsh-adapter/channel/subagent-projection.js'
@@ -153,7 +154,7 @@ for (const label of ['ctx lookup throws', 'agents.get throws']) {
       return name === 'agents' ? { list: () => [], get: () => current, create: async () => ({}) } : undefined
     },
   } as never, {
-    owner, binding: createChannelBinding(main as never, undefined, owner), cwd: () => '/tmp', provider: 'provider', model: 'model',
+    owner, binding: createChannelBinding(createDshSession({} as never, { agent: main as never, handle: undefined }), owner), cwd: () => '/tmp', provider: 'provider', model: 'model',
     notify() {}, listPersisted: async () => [], createDetached: async () => { throw new Error('unused') },
     sessionSwitchVetoed: async () => { enteredDecision.resolve(); await decision; return false },
     adoptLive: async () => { adopted += 1; return { ok: true } }, resumeInto: async () => ({ ok: true }),
@@ -218,7 +219,7 @@ for (const label of ['ctx lookup throws', 'agents.get throws']) {
     const main = fakeAgent('main')
     const ctx = { on: () => () => undefined, get: () => ({ list: () => [], get: () => undefined, create: async () => ({}) }) }
     const projection = createAgentViewProjection(ctx as never, {
-      owner, binding: createChannelBinding(main as never, undefined, owner), cwd: () => '/tmp', provider: 'provider', model: 'model',
+      owner, binding: createChannelBinding(createDshSession({} as never, { agent: main as never, handle: undefined }), owner), cwd: () => '/tmp', provider: 'provider', model: 'model',
       notify() {}, listPersisted: async () => [], createDetached: async () => { throw new Error('unused') },
       sessionSwitchVetoed: async () => false, adoptLive: async () => ({ ok: true }), resumeInto: async () => ({ ok: true }),
     })

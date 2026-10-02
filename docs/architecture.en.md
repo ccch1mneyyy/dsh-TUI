@@ -56,8 +56,8 @@ The `channel.ts` responsibilities are split across these files:
 - `channel/command-completions.ts`: completion.
 - `channel/local-actions.ts`: local transcript/shell/subagent-report actions.
 - `channel/activity.ts`: the activity clock.
-- `channel/binding-events.ts`: binding event routing.
-- `channel/projection.ts`: the sole projector remains.
+- `channel/binding-events.ts`: binding event routing (subscribes to the bound `AgentSession` and hands its batches to the shared projector).
+- `channel/projection.ts`: compatibility shell — the DSH translator (`backend/translate.ts`) plus the one shared projector, `src/channel/projection.ts` (see [agent-backend-design.md](agent-backend-design.md) §6).
 
 An uninstalled or released action fails explicitly; it never pretends
 success with a no-op.

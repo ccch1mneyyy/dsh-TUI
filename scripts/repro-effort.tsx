@@ -34,6 +34,7 @@ import { Context } from '@deepseek-ai/cordis'
 import { LlmRuntime } from '@deepseek-ai/dsh-llm'
 import { createChannel } from '../src/dsh-adapter/channel.js'
 import { createChannelBinding } from '../src/dsh-adapter/channel/binding.js'
+import { createDshSession } from '../src/dsh-adapter/backend/session.js'
 import { createBindingEvents } from '../src/dsh-adapter/channel/binding-events.js'
 import { createModelActions } from '../src/dsh-adapter/channel/model-actions.js'
 import { createChannelOwner } from '../src/dsh-adapter/channel/owner.js'
@@ -214,7 +215,7 @@ function createRebindRig(options: { preferred: string; efforts: { id: string; na
     inbox: { remove() {} },
   }
   const owner = createChannelOwner()
-  const binding = createChannelBinding(agent as never, undefined, owner)
+  const binding = createChannelBinding(createDshSession(rigRoot as never, { agent: agent as never, handle: undefined }), owner)
   const selection: { current?: { provider: string; model: string; reasoningEffort?: string }; assembled?: { provider: string; model: string; reasoningEffort?: string } } = {}
   const notices: string[] = []
   const state = {
@@ -256,7 +257,7 @@ function createRebindRig(options: { preferred: string; efforts: { id: string; na
     selection: selection as never,
     modelActions: { selection: selection as never, applyPreferredEffort },
     modeActions: { refreshMode() {}, onSessionEvent() {} },
-    projector: { renderEvent() {}, settleStreaming() {}, updateSpinnerMode() {} } as never,
+    projector: { apply() {}, settleStreaming() {}, updateSpinnerMode() {} } as never,
     subagents: { onSessionEvent() { return false }, onStart() {}, onEnd() {} },
     agentView: { schedule() {} },
   })
@@ -272,7 +273,7 @@ function createRebindRig(options: { preferred: string; efforts: { id: string; na
   const bindOnce = async (first = false): Promise<void> => {
     const before = applies
     if (first) events.bind()
-    else binding.switchTo(binding.agent, undefined, () => events.bind())
+    else binding.switchTo(binding.session, () => events.bind())
     // The apply chain is promise-only (no timer anywhere in it), so a bounded
     // setImmediate spin settles it in both the fixed and the buggy tree — no
     // wall-clock window that could go green on a slow runner.

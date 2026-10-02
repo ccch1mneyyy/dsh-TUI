@@ -585,6 +585,9 @@ const GROUPS = {
 // 由拆分前投影器生成的 *.golden.json 逐字段比较；live 与 replay 的差异
 // 必须有登记的理由，不改黄金文件也必须通过。
     ["verify-projection-golden", ['node', '--import', 'tsx/esm', 'scripts/verify-projection-golden.ts']],
+// DSH 翻译器词汇覆盖（多后端方案 §6.2/§8.2）：同一批 fixture 经翻译器的
+// live/replay 两路，逐行断言 §6.2 每一类 DSH 事件产出对应 AgentEvent 与身份字段。
+    ["verify-dsh-translate", ['node', '--import', 'tsx/esm', 'scripts/verify-dsh-translate.ts']],
 // IDE 选区通道回归（PR #562）：纯函数（env 直连/lock 扫描与 workspace
 // 匹配过滤/hello_ack 解析/selection_changed 校验）、无 IDE 静默降级、
 // loopback 对连（token 握手 ACK、错误 token 换下一候选、断连清空）、

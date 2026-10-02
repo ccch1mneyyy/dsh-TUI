@@ -5,6 +5,7 @@
  */
 import assert from 'node:assert/strict'
 import { createChannelBinding } from '../src/dsh-adapter/channel/binding.js'
+import { createDshSession } from '../src/dsh-adapter/backend/session.js'
 import { createBindingEvents } from '../src/dsh-adapter/channel/binding-events.js'
 import { createModeActions } from '../src/dsh-adapter/channel/mode-actions.js'
 import { createChannelOwner } from '../src/dsh-adapter/channel/owner.js'
@@ -48,8 +49,10 @@ const makeAgent = (id: string) => ({
 })
 const agentA = makeAgent('A')
 const agentB = makeAgent('B')
+// The binding holds sessions; their bus listeners go through the same root.
+const session = (agent: unknown) => createDshSession(ctx as never, { agent: agent as never, handle: undefined })
 const owner = createChannelOwner()
-const binding = createChannelBinding(agentA as never, undefined, owner)
+const binding = createChannelBinding(session(agentA), owner)
 const state = {
   agentBindingGeneration: 0, provider: 'p', model: 'm', status: 'idle', pending: [], working: false,
   cancelPending: false, activeToolCount: 0, emit() {}, emitStream() {},
@@ -67,7 +70,7 @@ const events = createBindingEvents(ctx as never, {
   inputConvergence: { interruptSeq: 0, cancelInFlight: false }, selection,
   modelActions: { selection, async applyPreferredEffort() {} },
   modeActions: { refreshMode() {}, onSessionEvent() {} },
-  projector: { renderEvent() { projected += 1 }, settleStreaming() {}, updateSpinnerMode() {} } as never,
+  projector: { apply() { projected += 1 }, settleStreaming() {}, updateSpinnerMode() {} } as never,
   subagents,
   agentView: { schedule() {} },
 })
@@ -80,7 +83,7 @@ const assemblyGate = deferred<{ variables: Record<string, unknown> }>()
 selection.current = { provider: 'old', model: 'old-model' }
 const oldAssemblyResult = oldAssembly({}, {}, () => assemblyGate.promise)
 
-binding.switchTo(agentB as never, undefined, () => {
+binding.switchTo(session(agentB), () => {
   subagents.park(agentA as never)
   subagents.reset()
   events.bind()
@@ -88,7 +91,7 @@ binding.switchTo(agentB as never, undefined, () => {
 assert.equal(listeners.get('subagent/start')?.length, 1, 'rebind does not duplicate owner subscriptions')
 oldChild.call(scopeTarget({}, agentA), { id: 'background-child', provider: 'p' })
 assert.equal(childStarts, 0, 'parent-scoped background child does not publish foreground changes')
-binding.switchTo(agentA as never, undefined, () => {
+binding.switchTo(session(agentA), () => {
   subagents.reset()
   subagents.restore(agentA as never)
   subagents.bootstrapFromLog([])
@@ -119,7 +122,7 @@ assert.equal(listeners.get('subagent/start')?.length, 0, 'owner teardown removes
 // Registration is incremental: request install throws after assemble succeeds,
 // and owner teardown still disposes the already-installed listener immediately.
 const failingOwner = createChannelOwner()
-const failingBinding = createChannelBinding(makeAgent('fail') as never, undefined, failingOwner)
+const failingBinding = createChannelBinding(session(makeAgent('fail')), failingOwner)
 let assembledDispose = 0
 let installs = 0
 const failingAgent = failingBinding.agent as unknown as { ctx: { on(name: string, listener: Listener): () => void } }
@@ -133,7 +136,7 @@ const failingEvents = createBindingEvents(ctx as never, {
   activity: { start() {}, stop() {}, onAgentStatus() {}, onSessionEvent() {} },
   inputConvergence: { interruptSeq: 0, cancelInFlight: false }, selection: {},
   modelActions: { selection: {}, async applyPreferredEffort() {} }, modeActions: { refreshMode() {}, onSessionEvent() {} },
-  projector: { settleStreaming() {}, updateSpinnerMode() {}, renderEvent() {} } as never,
+  projector: { settleStreaming() {}, updateSpinnerMode() {}, apply() {} } as never,
   subagents: { onSessionEvent() { return false }, onStart() {}, onEnd() {} }, agentView: { schedule() {} },
 })
 assert.throws(() => failingEvents.bind(), /request registration failed/)
@@ -149,7 +152,7 @@ modeAgent.session.events.push(
   { type: 'plan/mode', data: { active: true } },
   { type: 'sandbox/mode', data: { mode: 'read-only' } },
 )
-const modeBinding = createChannelBinding(modeAgent as never, undefined, modeOwner)
+const modeBinding = createChannelBinding(session(modeAgent), modeOwner)
 modeBinding.bind()
 let durableWrites = 0
 ;(modeAgent.session as any).append = () => { durableWrites += 1 }

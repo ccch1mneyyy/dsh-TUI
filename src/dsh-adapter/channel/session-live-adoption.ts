@@ -1,4 +1,5 @@
 import type { Agent, AgentHandle } from '@deepseek-ai/dsh-agent'
+import type { AgentSession } from '../../agent/session.js'
 import { recordedModelRoute } from '../../modelRoute.js'
 import { touchAgentViewSession, touchSession, writeResumeTarget } from '../../sessionHistory.js'
 import { agentViewHasTurns } from '../agent-view.js'
@@ -35,6 +36,9 @@ export function createLiveAgentAdoption(
   state: LiveAdoptionState,
   deps: {
     binding: Pick<Binding, 'switchTo'>
+    /** Wrap the target (and the parked handle this channel owns for it, if
+     *  any) as the session handed to the binding. */
+    openSession(agent: Agent, handle: AgentHandle | undefined): AgentSession
     backgroundHandles: Map<string, AgentHandle>
     rowIds: { value: number }
     resetProjector(): void
@@ -59,8 +63,7 @@ export function createLiveAgentAdoption(
   },
 ) {
   return async (target: Agent): Promise<ResumeResult> => deps.binding.switchTo(
-    target,
-    deps.backgroundHandles.get(String(target.id)),
+    deps.openSession(target, deps.backgroundHandles.get(String(target.id))),
     (committed, disposePrevious) => {
       const previousHandle = committed.handle
       const previousSessionId = String(committed.agent.session.id)

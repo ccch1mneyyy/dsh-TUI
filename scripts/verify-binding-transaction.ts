@@ -4,8 +4,14 @@
  * Run: node --import tsx/esm scripts/verify-binding-transaction.ts
  */
 import assert from 'node:assert/strict'
+import { createDshSession } from '../src/dsh-adapter/backend/session.js'
 import { createChannelBinding } from '../src/dsh-adapter/channel/binding.js'
 import { createChannelOwner } from '../src/dsh-adapter/channel/owner.js'
+
+/** The binding holds sessions: a borrowed agent, or an owned handle. Wrapping
+ *  touches no host service, so no context is needed. */
+const session = (target: unknown) => createDshSession({} as never, target as never)
+const live = (agent: unknown) => session({ agent, handle: undefined })
 
 function deferred<T>() {
   let resolve!: (value: T) => void
@@ -32,8 +38,8 @@ function handle(id: string) {
   const owner = createChannelOwner()
   const gate = deferred<void>()
   const old = { agent: agent('draining'), dispose: () => gate.promise }
-  const binding = createChannelBinding(old.agent, old as never, owner)
-  binding.switchTo(agent('next'), undefined, () => undefined)
+  const binding = createChannelBinding(session(old), owner)
+  binding.switchTo(live(agent('next')), () => undefined)
   let drained = false
   const waiting = binding.waitForDisposal('session-draining').then(() => { drained = true })
   await binding.waitForDisposal('unrelated')
@@ -50,11 +56,11 @@ function handle(id: string) {
 // rejects the candidate and releases it exactly once.
 {
   const owner = createChannelOwner()
-  const binding = createChannelBinding(agent('initial'), undefined, owner)
+  const binding = createChannelBinding(live(agent('initial')), owner)
   const candidate = handle('late')
   const gate = deferred<typeof candidate>()
-  const pending = binding.prepare(binding.capture(), () => gate.promise as never)
-  binding.switchTo(agent('rival'), undefined, () => undefined)
+  const pending = binding.prepare(binding.capture(), async () => session(await gate.promise))
+  binding.switchTo(live(agent('rival')), () => undefined)
   gate.resolve(candidate)
   await assert.rejects(pending, /changed during preparation/u)
   assert.equal(candidate.disposeCount, 1)
@@ -63,9 +69,9 @@ function handle(id: string) {
 // A returned prepared handle stays owner-owned across an attachment await.
 {
   const owner = createChannelOwner()
-  const binding = createChannelBinding(agent('initial'), undefined, owner)
+  const binding = createChannelBinding(live(agent('initial')), owner)
   const candidate = handle('attachment-blocked')
-  await binding.prepare(binding.capture(), async () => candidate as never)
+  await binding.prepare(binding.capture(), async () => session(candidate))
   owner.dispose()
   assert.equal(candidate.disposeCount, 1)
 }
@@ -74,11 +80,11 @@ function handle(id: string) {
 // handle. A tail throw revokes and disposes the new candidate synchronously.
 {
   const owner = createChannelOwner()
-  const binding = createChannelBinding(agent('initial'), undefined, owner)
+  const binding = createChannelBinding(live(agent('initial')), owner)
   const candidate = handle('tail-throw')
   const capture = binding.capture()
-  await binding.prepare(capture, async () => candidate as never)
-  assert.throws(() => binding.adopt(candidate as never, capture, () => {
+  const prepared = await binding.prepare(capture, async () => session(candidate))
+  assert.throws(() => binding.adopt(prepared, capture, () => {
     throw new Error('tail failed')
   }), /tail failed/u)
   assert.equal(candidate.disposeCount, 1, 'no-old-handle tail failure is fail-closed')
@@ -89,12 +95,12 @@ function handle(id: string) {
 // rejects the handoff before candidate authority is written.
 {
   const owner = createChannelOwner()
-  const binding = createChannelBinding(agent('initial'), undefined, owner)
+  const binding = createChannelBinding(live(agent('initial')), owner)
   const candidate = handle('cleanup-revocation')
   const capture = binding.capture()
   binding.subscribe(() => owner.dispose())
-  await binding.prepare(capture, async () => candidate as never)
-  assert.throws(() => binding.adopt(candidate as never, capture, () => undefined), /changed before adoption/u)
+  const prepared = await binding.prepare(capture, async () => session(candidate))
+  assert.throws(() => binding.adopt(prepared, capture, () => undefined), /changed before adoption/u)
   assert.equal(binding.agent.id, 'initial')
   assert.equal(candidate.disposeCount, 1)
 }
@@ -105,14 +111,14 @@ function handle(id: string) {
 {
   const owner = createChannelOwner()
   const old = handle('old')
-  const binding = createChannelBinding(old.agent as never, old as never, owner)
+  const binding = createChannelBinding(session(old), owner)
   let secondCleanup = 0
   binding.subscribe(() => { throw new Error('unsubscribe failed') })
   binding.subscribe(() => { secondCleanup += 1 })
   const candidate = handle('cleanup-throw')
   const capture = binding.capture()
-  await binding.prepare(capture, async () => candidate as never)
-  assert.throws(() => binding.adopt(candidate as never, capture, () => undefined), /unsubscribe failed/u)
+  const prepared = await binding.prepare(capture, async () => session(candidate))
+  assert.throws(() => binding.adopt(prepared, capture, () => undefined), /unsubscribe failed/u)
   assert.equal(secondCleanup, 1)
   assert.equal(candidate.disposeCount, 1)
   assert.equal(old.disposeCount, 0, 'pre-handoff cleanup failure preserves baseline live-handle ownership')
@@ -122,15 +128,15 @@ function handle(id: string) {
 // second identity over the transaction currently being revoked.
 {
   const owner = createChannelOwner()
-  const binding = createChannelBinding(agent('initial'), undefined, owner)
+  const binding = createChannelBinding(live(agent('initial')), owner)
   const first = handle('first')
   const second = handle('second')
   const capture = binding.capture()
-  await binding.prepare(capture, async () => first as never)
+  const prepared = await binding.prepare(capture, async () => session(first))
   binding.subscribe(() => {
-    assert.throws(() => binding.switchTo(second.agent as never, undefined, () => undefined), /handoff is already in progress/u)
+    assert.throws(() => binding.switchTo(live(second.agent), () => undefined), /handoff is already in progress/u)
   })
-  assert.throws(() => binding.adopt(first as never, capture, () => undefined), /changed before adoption/u)
+  assert.throws(() => binding.adopt(prepared, capture, () => undefined), /changed before adoption/u)
   assert.equal(binding.agent.id, 'initial')
   assert.equal(first.disposeCount, 1)
 }
@@ -141,10 +147,10 @@ function handle(id: string) {
   const owner = createChannelOwner()
   const old = handle('old')
   const next = handle('next')
-  const binding = createChannelBinding(old.agent as never, old as never, owner)
+  const binding = createChannelBinding(session(old), owner)
   const capture = binding.capture()
-  await binding.prepare(capture, async () => next as never)
-  binding.adopt(next as never, capture, (previous, disposition) => {
+  const prepared = await binding.prepare(capture, async () => session(next))
+  binding.adopt(prepared, capture, (previous, disposition) => {
     assert.equal(previous.handle, old)
     disposition('park')
   })

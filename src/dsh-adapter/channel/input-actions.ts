@@ -1,6 +1,5 @@
 /** Input actions own cancellation/requeue convergence, not session binding. */
-import type { Agent } from '@deepseek-ai/dsh-agent'
-import { MessageId } from '@deepseek-ai/dsh-llm'
+import type { AgentSession } from '../../agent/session.js'
 import { t } from '../../i18n.js'
 import { touchSession } from '../../sessionHistory.js'
 import type { ChannelState, ComposerImageRef, ComposerSubmission } from './types.js'
@@ -8,7 +7,7 @@ import type { ChannelState, ComposerImageRef, ComposerSubmission } from './types
 export interface InputConvergence { cancelInFlight: boolean; interruptSeq: number }
 export function createInputActions(
   getState: () => Pick<ChannelState, 'agentId' | 'pending' | 'cancelPending' | 'emit' | 'notify'>,
-  getAgent: () => Agent,
+  getSession: () => AgentSession,
   owner: { assertActive(): void },
   input: InputConvergence,
   composer: { includeLegacyImageRefs(text: string, images: readonly ComposerImageRef[]): readonly ComposerImageRef[] },
@@ -69,16 +68,20 @@ export function createInputActions(
     removePending(id: string): boolean {
       owner.assertActive()
       const state = getState()
-      const agent = getAgent()
+      const session = getSession()
       const index = state.pending.findIndex(item => item.id === id)
       if (index === -1) return false
-      // Official dsh-agent rc.6: withdrawal goes through the agent's inbox
-      // projection — `Inbox.remove(messageId)` durably records the
-      // cancellation (an `agent/inbox/spliced` session event) and publishes
-      // `agent/inbox/discarded`, which retires the preview. Refuse when the
-      // message was already claimed (remove returns false) so the UI never
-      // pretends a ghost send was pulled back.
-      if (!agent.inbox.remove(MessageId(id))) return false
+      // The backend withdraws it (DSH: through the agent's inbox, which durably
+      // records the cancellation and reports the discard that retires the
+      // preview). Refuse when the message was already claimed so the UI never
+      // pretends a ghost send was pulled back; this contract is synchronous,
+      // so a backend that can only answer later has not withdrawn it yet.
+      const removed = session.removePending(id)
+      if (typeof removed !== 'boolean') {
+        void Promise.resolve(removed).catch(() => false)
+        return false
+      }
+      if (!removed) return false
       state.pending = state.pending.filter(item => item.id !== id)
       state.emit()
       return true
@@ -87,7 +90,7 @@ export function createInputActions(
     cancel() {
       owner.assertActive()
       const state = getState()
-      const agent = getAgent()
+      const session = getSession()
       // Keep the staged queue: an interrupt aborts the running turn but the
       // queued/steered messages are delivered as the next turn (web parity).
       // Cancellation converges asynchronously; ignore a repeated Esc/Ctrl+C
@@ -96,20 +99,20 @@ export function createInputActions(
       if (input.cancelInFlight) return
       input.cancelInFlight = true
       state.cancelPending = true
-      agent.cancel({ kind: 'user' }, { keepInbox: true })
+      void session.cancel('user')
     },
 
     interruptAndDeliver(inputs: readonly (string | ComposerSubmission)[]): number {
       owner.assertActive()
       const state = getState()
-      const agent = getAgent()
+      const session = getSession()
       const queued = inputs
         .map(input => typeof input === 'string'
           ? { text: input.trim(), images: [] as readonly ComposerImageRef[] }
           : { text: input.text.trim(), images: [...(input.images ?? [])] })
         .filter(input => input.text !== '')
       if (queued.length === 0) return 0
-      // No keepInbox: the parked copies are dropped (their discard events
+      // An `interrupt` cancel drops the parked copies (their discard events
       // retire the preview), then each message is re-queued as a fresh
       // followup. dsh-agent's cancel-convergence wake latch accepts this
       // wake immediately after cancel and starts it once the aborted turn
@@ -119,7 +122,7 @@ export function createInputActions(
       // interrupt delivery; fake/embedded agents may not emit turn/end.
       if (!input.cancelInFlight) {
         input.cancelInFlight = true
-        agent.cancel({ kind: 'user' })
+        void session.cancel('interrupt')
       }
       state.cancelPending = true
       const token = ++input.interruptSeq

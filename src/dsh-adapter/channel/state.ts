@@ -53,6 +53,9 @@ export interface ChannelLaunchOptions {
   configuredActivityFrames?: string
   agentPreset?: string
   modes?: readonly SessionModeSpec[]
+  /** Lifetime handle of the agent when `createChannel` receives a raw DSH
+   *  agent (direct embedders, fixtures); a passed `AgentSession` carries its
+   *  own and this is ignored. */
   handle?: AgentHandle
 }
 

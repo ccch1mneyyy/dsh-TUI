@@ -131,7 +131,7 @@ check('plugin.ts 把解析出的 tuiSettingsNs 传给 createChannel', () => {
   const plugin = source('dsh-adapter/plugin.ts')
   assert.match(
     plugin,
-    /const rawChannel = createChannel\(ctx, agent, \{[\s\S]{0,1200}?settingsNs: tuiSettingsNs,/,
+    /const rawChannel = createChannel\(ctx, createDshSession\(ctx, \{ agent, handle \}\), \{[\s\S]{0,1200}?settingsNs: tuiSettingsNs,/,
     'createChannel 的启动选项必须带上 settingsNs: tuiSettingsNs',
   )
 })

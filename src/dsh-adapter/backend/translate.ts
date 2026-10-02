@@ -29,8 +29,9 @@ import { transcriptImagesOf } from '../transcript-images.js'
 
 export interface DshTranslatorDeps {
   /** The host-plane tools registry (dsh-tools); absent in bare embedders —
-   *  every presenter call then soft-fails to a plain text card. */
-  readonly tools?: ToolsRegistryLike
+   *  every presenter call then soft-fails to a plain text card. Read per
+   *  presenter call (a session wrapper memoizes it). */
+  tools(): ToolsRegistryLike | undefined
   /** Presenter scope: the live agent, so preset-owned tool definitions
    *  resolve (the dsh-host-apiproxy presenter pattern). Read per call. */
   scope(): unknown
@@ -155,7 +156,7 @@ export function createDshTranslator(deps: DshTranslatorDeps) {
    *  the plain text card. */
   const presentCallView = (name: string, rawArgs: string): ToolCallView | undefined => {
     try {
-      const tool = deps.tools?.get(name, deps.scope())
+      const tool = deps.tools()?.get(name, deps.scope())
       if (tool?.presentCall === undefined) return undefined
       return tool.presentCall(JSON.parse(rawArgs)) as ToolCallView | undefined
     } catch {
@@ -172,7 +173,7 @@ export function createDshTranslator(deps: DshTranslatorDeps) {
       // registry gets a chance to (not) know them.
       const local = harnessToolResultView(name, data)
       if (local !== undefined) return local
-      const tool = deps.tools?.get(name, deps.scope())
+      const tool = deps.tools()?.get(name, deps.scope())
       if (tool?.presentResult === undefined) return undefined
       return tool.presentResult(JSON.parse(rawArgs), {
         ...toolResultPayload(data.message),

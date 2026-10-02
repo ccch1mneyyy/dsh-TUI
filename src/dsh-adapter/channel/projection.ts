@@ -50,7 +50,7 @@ const firstTextOf = (content: readonly ContentBlock[] | undefined): string =>
 /** One authoritative reducer for both durable replay and live session events. */
 export function createChannelProjection(state: ProjectionState, deps: ProjectionDependencies) {
   const translator = createDshTranslator({
-    tools: deps.tools,
+    tools: () => deps.tools,
     scope: () => deps.agent(),
     attachments: () => deps.attachments(),
   })

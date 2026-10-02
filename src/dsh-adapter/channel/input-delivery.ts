@@ -1,6 +1,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import { createUserMessage, type UserMessage } from '@deepseek-ai/dsh-llm'
+import type { AgentSession } from '../../agent/session.js'
 import { t } from '../../i18n.js'
 import { logForDebugging } from '../../utils/debug.js'
 import { dispatchTuiDecision } from '../extension-events.js'
@@ -29,6 +30,7 @@ import type {
 /** One submission's enqueue-time world: the session it was typed in, the
  *  services that resolve its references, and the capabilities live then. */
 interface UserTextOrigin {
+  readonly session: AgentSession
   readonly agent: Agent
   readonly agentId: string
   readonly generation: number
@@ -44,7 +46,7 @@ interface UserTextOrigin {
 
 /** Input FIFO, staged attachments and decision notice timers share one lifetime. */
 export function createInputDelivery(
- ctx: Context, owner: ChannelOwner, binding: { readonly agent: Agent },
+ ctx: Context, owner: ChannelOwner, binding: { readonly session: AgentSession; readonly agent: Agent },
  state: () => Pick<ChannelState, 'cwd' | 'agentId' | 'agentBindingGeneration'>,
  notify: ChannelState['notify'],
  trackPending: (message: { id: string; text: string; images?: readonly ComposerImageRef[] }, placement: PendingMessage['placement']) => void,
@@ -122,6 +124,7 @@ export function createInputDelivery(
    *  adopt the NEW session as this text's origin and deliver the old
    *  conversation's words into it. */
   const captureOrigin = (): UserTextOrigin => ({
+    session: binding.session,
     agent: binding.agent,
     agentId: state().agentId,
     generation: state().agentBindingGeneration,
@@ -178,16 +181,17 @@ export function createInputDelivery(
     })
     if (selectionAttached !== undefined) rememberSelection(message.id, selectionAttached)
     // The message is real from here on: remember its attached context BEFORE
-    // the agent call so the pre-step listener can find it (D6). A throwing
-    // followup/steer rolls both the pending preview and this entry back.
+    // the submit so the pre-step listener can find it (D6). A throwing submit
+    // rolls both the pending preview and this entry back.
     if (attach !== undefined) attachedByMessageId.set(message.id, attach)
-    // Track BEFORE the agent call: a synchronous throw inside
-    // followup/steer rolls the preview back; otherwise the inbox events
-    // retire it once the message is claimed or discarded.
+    // Track BEFORE the submit: a synchronous throw inside it rolls the
+    // preview back; otherwise the backend's pending changes retire it once
+    // the message is claimed or discarded.
     trackPending({ id: message.id, text, images }, placement)
     try {
-      if (placement === 'steer') origin.agent.steer(message)
-      else origin.agent.followup(message)
+      // The message id IS the clientMessageId every ledger above keys on; the
+      // DSH session delivers this exact message (steer/followup).
+      await origin.session.submit({ text, blocks: message.content, clientMessageId: message.id, native: message }, placement)
     } catch (error) {
       if (attach !== undefined) attachedByMessageId.delete(message.id)
       untrackPending(message.id)

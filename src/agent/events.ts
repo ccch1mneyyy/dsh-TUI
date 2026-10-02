@@ -167,8 +167,13 @@ export type AgentEvent =
    * (plugin/skill context) never render as bubbles.
    */
   | { readonly type: 'user.message'; readonly id: string; readonly anchor: string; readonly seq: number; readonly turn?: number; readonly time: number; readonly source: 'user' | 'injected' | 'goal' | 'compaction' | 'command-output' | 'notification'; readonly text: string; readonly blocks: readonly ContentBlockView[]; readonly images?: readonly ImageRef[]; readonly label?: string }
-  /** Snapshot of the backend's queue of unclaimed user inputs (REPLACE semantics). */
-  | { readonly type: 'pending.changed'; readonly items: readonly PendingItem[] }
+  /**
+   * Snapshot of the backend's queue of unclaimed user inputs (REPLACE
+   * semantics). `claimed`/`discarded` name the ids that left the queue in this
+   * change: a claimed input became part of a turn, a discarded one never will
+   * (its channel-side companions must be dropped too).
+   */
+  | { readonly type: 'pending.changed'; readonly items: readonly PendingItem[]; readonly claimed?: readonly string[]; readonly discarded?: readonly string[] }
   // ── assistant stream ────────────────────────────────────────────────
   /** A streamed attempt opened at (turn, step); a still-open earlier attempt is superseded. */
   | { readonly type: 'assistant.attempt.start'; readonly attemptId: string; readonly turn: number; readonly step: number; readonly model?: string; readonly parentCallId?: string }
@@ -241,7 +246,7 @@ export type AgentEvent =
   // ── context and modes ───────────────────────────────────────────────
   /** A context compaction started (`cancellable` only for one this process may abort). */
   | { readonly type: 'compaction.start'; readonly trigger: 'manual' | 'auto'; readonly cancellable: boolean; readonly time: number }
-  /** The compaction model call produced more output. */
+  /** The compaction model call produced `outputChars` more characters. */
   | { readonly type: 'compaction.progress'; readonly outputChars: number }
   /** A compaction closed (committed or abandoned). */
   | { readonly type: 'compaction.end'; readonly ok: boolean; readonly summary?: string; readonly preTokens?: number; readonly postTokens?: number; readonly error?: string; readonly time: number }
@@ -297,6 +302,14 @@ export type AgentEventOf<T extends AgentEventType> = Extract<AgentEvent, { reado
 /** Batch metadata: `replay` = settled history being repainted, not live. */
 export interface AgentEventMeta {
   readonly replay: boolean
+  /**
+   * How urgently the channel should publish the batch: `sync` (a durable
+   * change, the default), `frame` (high-frequency stream data, coalesced to
+   * the next render frame), `none` (nothing renderer-visible by itself). A
+   * backend knows which of its inputs are token-rate; an empty batch still
+   * carries its source's wake.
+   */
+  readonly wake?: 'sync' | 'frame' | 'none'
 }
 
 /** Shared empty batch (translators return it when an input maps to nothing). */

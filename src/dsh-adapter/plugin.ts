@@ -10,6 +10,7 @@ import Schema from '@deepseek-ai/schemastery'
 import { Config } from './index.js'
 import { configValues, createSettingsScope, resolveSettingsNamespace, type RuntimeConfig } from './compat/settings.js'
 import { createChannel } from './channel.js'
+import { createDshSession } from './backend/session.js'
 import { createChannelSceneOutlet } from './channel-scene-outlet.js'
 import { mountChannelUi } from './channel-ui.js'
 import { bindChannelCommands } from './channel/commands.js'
@@ -538,7 +539,9 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
   // (the runtime `/activity` command only changes the preset), so a hidden
   // line attaches nothing at all — no feed, no 500ms tick.
   const activityStore = createActivityStore(ctx, config.activity !== false)
-  const rawChannel = createChannel(ctx, agent, {
+  // The channel holds a backend session; this DSH one owns the resolved
+  // handle (disposed by the binding when a later adoption replaces it).
+  const rawChannel = createChannel(ctx, createDshSession(ctx, { agent, handle }), {
     // The namespace this boot actually registered the settings section under
     // (the Config owner's Loader id; custom ids are supported). Chat and the
     // channel's own settings reads look the section up by it.
@@ -597,7 +600,6 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
     // 开屏大字字体：cordis.yml 这一层的值（未设置时 undefined → 通道归一化成
     // `daily`）；/settings 的改动由 applySplashFont 实时接上。
     splashFont: config.splashFont,
-    handle,
   })
   // Register the live Channel for the adapter Kernel. The Channel driver
   // resolves it lazily from the composition root, so this can be called after

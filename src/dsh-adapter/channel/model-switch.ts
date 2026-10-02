@@ -2,9 +2,11 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { AgentHandle, CreateAgentOptions } from '@deepseek-ai/dsh-agent'
 import { randomUUID } from 'node:crypto'
 import { SessionId, type SessionEvent } from '@deepseek-ai/dsh-session'
+import type { AgentSession } from '../../agent/session.js'
 import { t } from '../../i18n.js'
 import { writeModelPref } from '../../modelPrefs.js'
 import { touchSession } from '../../sessionHistory.js'
+import { createDshSession, dshHandleOf } from '../backend/session.js'
 import { liveSessionCreateOptions, sliceLiveSessionSeed } from '../compat/index.js'
 import { composePreset, runningPresetOf } from '../presets.js'
 import { reserveNewSession } from '../../sessionMounts.js'
@@ -62,9 +64,9 @@ export function createModelSwitchAction(
     // will not name until its next beat.
     const { reservation } = await reserveNewSession(String(childId))
     const composed = await composePreset(ctx, runningPresetOf(deps.binding.agent.session))
-    let handle: AgentHandle
+    let candidate: AgentSession
     try {
-      handle = await deps.binding.prepare(adoption, () => agents.create(liveSessionCreateOptions({
+      candidate = await deps.binding.prepare(adoption, async () => createDshSession(ctx, await agents.create(liveSessionCreateOptions({
         sessionId: childId,
         seed,
         runtimeSession: deps.binding.agent.session,
@@ -77,14 +79,15 @@ export function createModelSwitchAction(
         agentPreset: composed.agentPreset,
         agentOptions: { provider, model },
         setup: composed.setup,
-      })))
+      }))))
     } catch (error) { reservation.abandon(); deps.notify(t('model-switch-failed', { err: error instanceof Error ? error.message : String(error) }), { color: 'error', timeoutMs: 8000 }); return false }
     try { await attachSessionToWorkspace(ctx, state.cwd, childId) }
     catch (error) { deps.notify(t('model-switch-attach-failed', { err: error instanceof Error ? error.message : String(error) }), { color: 'warning', timeoutMs: 8000 }) }
-    if (!deps.binding.isCurrent(adoption) || !deps.owner.current()) { await deps.binding.abandon(handle); reservation.abandon(); return false }
+    if (!deps.binding.isCurrent(adoption) || !deps.owner.current()) { await deps.binding.abandon(candidate); reservation.abandon(); return false }
+    const handle = dshHandleOf(candidate)
     let committed = false
     try {
-      const result = deps.binding.adopt<boolean>(handle, adoption, (_previous, disposePrevious) => {
+      const result = deps.binding.adopt<boolean>(candidate, adoption, (_previous, disposePrevious) => {
         resetSessionProjection(state, deps.rowIds, deps.resetProjector, deps.resetSubagents, deps.resetJobs)
         state.status = handle.agent.status
         state.agentId = handle.agent.id

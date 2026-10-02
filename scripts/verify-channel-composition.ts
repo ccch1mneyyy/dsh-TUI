@@ -19,8 +19,11 @@ assert.doesNotMatch(root, /createChannelActivity/, 'root does not mount an activ
 const events = readFileSync(new URL('../src/dsh-adapter/channel/binding-events.ts', import.meta.url), 'utf8')
 assert.match(events, /binding\.subscribe/, 'binding owns incremental subscription teardown')
 assert.match(events, /binding\.isCurrent\(capture\)/, 'retained callbacks are generation/owner-revocation safe')
-assert.match(events, /const session = capture\.agent\.session/, 'retained callbacks capture their original session identity')
+// Phase 1 (agent-backend): the binding holds an AgentSession, and the router
+// subscribes to that captured session instead of filtering raw DSH events.
+assert.match(events, /const session = capture\.session/, 'retained callbacks capture their original session identity')
 assert.doesNotMatch(events, /disposeClaimed|disposeDiscarded|disposeStart|disposeEnd/, 'router registers every disposer exactly once')
-assert.match(events, /projector\.renderEvent/, 'only router sends main events to projector')
+assert.match(events, /session\.subscribe\(/, 'the router follows the bound session')
+assert.match(events, /projector\.apply\(/, 'only router sends main events to projector')
 
 console.log('verify-channel-composition: OK')

@@ -5,6 +5,7 @@ import { SessionId, type SessionEvent } from '@deepseek-ai/dsh-session'
 import { explicitModelRoute, recordedModelRoute, resolveModelRoute, validateModelRoute } from '../../modelRoute.js'
 import { clearResumeTarget, writeResumeTarget, touchAgentViewSession, touchSession } from '../../sessionHistory.js'
 import { mountFailureText } from '../../sessions/resumeFailure.js'
+import type { AgentSession } from '../../agent/session.js'
 import { t } from '../../i18n.js'
 import { readModelPref } from '../../modelPrefs.js'
 import { migratePresetPref, readPresetPref } from '../../presetPrefs.js'
@@ -20,6 +21,7 @@ import { ensureLegacySessionEventTypes } from '../compat/index.js'
 import { snapshotLiveSessionEvents } from '../compat/liveSession.js'
 import { composePreset, resolvePersistedPreset, resolvePersistedRoute } from '../presets.js'
 import { attachSessionToWorkspace } from '../workspace.js'
+import { createDshSession, dshHandleOf } from '../backend/session.js'
 import { resetSessionProjection } from './session-reset.js'
 import type { createChannelBinding } from './binding.js'
 import type { ChannelOwner } from './owner.js'
@@ -184,23 +186,24 @@ export function createSessionResumeActions(
       const composed = await composePreset(ctx, await resolvePersistedPreset(ctx, SessionId(sessionId)))
       const explicitRoute = explicitModelRoute({ provider: options.configuredProvider, model: options.configuredModel })
       const persistedRoute = await resolvePersistedRoute(ctx, SessionId(sessionId))
-      let handle: AgentHandle
+      let candidate: AgentSession
       try {
-        handle = await deps.binding.prepare(adoption, () => agents.resume({
+        candidate = await deps.binding.prepare(adoption, async () => createDshSession(ctx, await agents.resume({
           resumeSessionId: SessionId(sessionId),
           agentOptions: {
             provider: explicitRoute?.provider ?? persistedRoute?.provider,
             model: explicitRoute?.model ?? persistedRoute?.model,
           },
           ...(composed.setup === undefined ? {} : { setup: composed.setup }),
-        }))
+        })))
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error)
         deps.notify(t('resume-failed', { err: message }), { color: 'error', timeoutMs: 8000 })
         return { ok: false, reason: 'failed', error: message }
       }
+      const handle = dshHandleOf(candidate)
       if (!deps.binding.isCurrent(adoption)) {
-        await deps.binding.abandon(handle)
+        await deps.binding.abandon(candidate)
         return { ok: false, reason: 'cancelled' }
       }
       try {
@@ -209,14 +212,14 @@ export function createSessionResumeActions(
         deps.notify(t('resume-attach-failed', { err: error instanceof Error ? error.message : String(error) }), { color: 'warning', timeoutMs: 8000 })
       }
       if (entrySession !== undefined && (!deps.owner.current() || deps.binding.agent.session !== entrySession)) {
-        await deps.binding.abandon(handle)
+        await deps.binding.abandon(candidate)
         deps.notify(t('resume-session-changed'), { color: 'error' })
         return { ok: false, reason: 'failed', error: 'live session changed during resume' }
       }
       // `adopt` is a transaction: it revokes the candidate and disposes it when
       // the tail fails, and it can also refuse before the tail ever runs. Only a
       // normal return is a commit, which is what the outer finally keys on.
-      const result = deps.binding.adopt<ResumeResult>(handle, adoption, (committedBinding, disposePrevious) => {
+      const result = deps.binding.adopt<ResumeResult>(candidate, adoption, (committedBinding, disposePrevious) => {
         const previousSessionId = String(committedBinding.agent.session.id)
         const keepPrevious = keepCurrent && committedBinding.handle !== undefined
           && (committedBinding.handle.agent.status === 'running' || agentViewHasTurns(snapshotLiveSessionEvents(committedBinding.handle.agent.session)))
@@ -468,14 +471,14 @@ export function createSessionResumeActions(
     // process holds the only write handle on a log no peer has been told about
     // yet, and the publisher would not name it until its next beat.
     const reservation = await reserveCreatedSession(sessionId)
-    let handle: AgentHandle
+    let candidate: AgentSession
     try {
-      handle = await deps.binding.prepare(adoption, () => agents.create({
+      candidate = await deps.binding.prepare(adoption, async () => createDshSession(ctx, await agents.create({
         sessionId,
         meta: { cwd: targetCwd, ...(composed.agentPreset === undefined ? {} : { agentPreset: composed.agentPreset }) },
         agentOptions: route,
         ...(composed.setup === undefined ? {} : { setup: composed.setup }),
-      }))
+      })))
     } catch (error) {
       reservation.abandon()
       if (current()) {
@@ -484,19 +487,20 @@ export function createSessionResumeActions(
       }
       return false
     }
-    if (!current()) { await deps.binding.abandon(handle); reservation.abandon(); return false }
+    const handle = dshHandleOf(candidate)
+    if (!current()) { await deps.binding.abandon(candidate); reservation.abandon(); return false }
     try {
       await attachSessionToWorkspace(ctx, targetCwd, sessionId)
     } catch (error) {
       if (current()) deps.notify(t('new-session-attach-failed', { err: error instanceof Error ? error.message : String(error) }), { color: 'warning', timeoutMs: 8000 })
     }
-    if (!current()) { await deps.binding.abandon(handle); reservation.abandon(); return false }
+    if (!current()) { await deps.binding.abandon(candidate); reservation.abandon(); return false }
     // Do not catch this synchronous commit tail. A post-commit setup failure
     // is owned by binding.adopt(), which revokes the new live handle and must
     // reject its caller rather than masquerade as an ordinary precommit false.
     let committed = false
     try {
-      const result = deps.binding.adopt(handle, adoption, (committedBinding, disposePrevious) => {
+      const result = deps.binding.adopt(candidate, adoption, (committedBinding, disposePrevious) => {
         const previousSessionId = String(committedBinding.agent.session.id)
         // The target only becomes shared channel state inside the successful
         // adoption tail. A losing prepared handle therefore cannot publish or

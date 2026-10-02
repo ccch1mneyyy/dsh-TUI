@@ -53,8 +53,9 @@ Cordis profile
 - `channel/command-completions.ts`：补全。
 - `channel/local-actions.ts`：本地 transcript/shell/子代理报告动作。
 - `channel/activity.ts`：工作状态时钟。
-- `channel/binding-events.ts`：绑定事件路由。
-- `channel/projection.ts`：唯一 projector 仍在。
+- `channel/binding-events.ts`：绑定事件路由（订阅绑定的 `AgentSession`，批次交给共享投影器）。
+- `channel/projection.ts`：兼容外壳——DSH 翻译器（`backend/translate.ts`）+ 唯一的共享投影器
+  `src/channel/projection.ts`（见 [agent-backend-design.md](agent-backend-design.md) §6）。
 
 未安装或已释放的动作明确失败，不伪装为成功 no-op。
 

@@ -10,6 +10,7 @@ import { t } from '../../i18n.js'
 import { reserveMount, type MountReservation } from '../../sessionMounts.js'
 import { mountFailureText } from '../../sessions/resumeFailure.js'
 import { composePreset } from '../presets.js'
+import { createDshSession, dshHandleOf } from '../backend/session.js'
 import { attachSessionToWorkspace } from '../workspace.js'
 import { resetSessionProjection } from './session-reset.js'
 import type { createChannelBinding } from './binding.js'
@@ -68,13 +69,14 @@ export function createBackgroundCurrentAction(
         resolveModelRoute({ provider: options.configuredProvider, model: options.configuredModel }, readModelPref(), { provider: options.provider, model: options.model }),
         { provider: options.provider, model: options.model },
       )
-      const handle = await deps.binding.prepare(adoption, () => agents.create({
+      const candidate = await deps.binding.prepare(adoption, async () => createDshSession(ctx, await agents.create({
         sessionId,
         meta: { cwd: state.cwd, ...(composed.agentPreset === undefined ? {} : { agentPreset: composed.agentPreset }) },
         agentOptions: route.route,
         ...(composed.setup === undefined ? {} : { setup: composed.setup }),
-      }))
-      if (!deps.binding.isCurrent(adoption)) { await deps.binding.abandon(handle); reservation.abandon(); return { ok: false, reason: 'failed', error: 'Channel lifetime ended' } }
+      })))
+      const handle = dshHandleOf(candidate)
+      if (!deps.binding.isCurrent(adoption)) { await deps.binding.abandon(candidate); reservation.abandon(); return { ok: false, reason: 'failed', error: 'Channel lifetime ended' } }
       try {
         await attachSessionToWorkspace(ctx, state.cwd, sessionId)
       } catch (error) {
@@ -86,13 +88,13 @@ export function createBackgroundCurrentAction(
       // still current. A replacement is not a license to target that newer
       // agent; the prepared candidate is abandoned instead.
       if (!deps.binding.isCurrent(adoption)) {
-        await deps.binding.abandon(handle)
+        await deps.binding.abandon(candidate)
         reservation.abandon()
         return { ok: false, reason: 'failed', error: 'Channel lifetime ended' }
       }
       let committed = false
       try {
-        const result = deps.binding.adopt<BackgroundResult>(handle, adoption, (previous, disposePrevious) => {
+        const result = deps.binding.adopt<BackgroundResult>(candidate, adoption, (previous, disposePrevious) => {
           const previousSessionId = String(previous.agent.session.id)
           deps.parkSubagents(previous.agent)
           if (previous.handle !== undefined) {

@@ -141,7 +141,7 @@ function project(variant: GoldenVariant, mode: 'replay' | 'live'): Projected {
   const rowIds = { value: 0 }
   const inputConvergence = { cancelInFlight: true }
   const translator = createDshTranslator({
-    tools: undefined,
+    tools: () => undefined,
     scope: () => {
       recorder.calls.agent += 1
       return {}

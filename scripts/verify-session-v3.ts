@@ -25,6 +25,7 @@ const { createInitialChannelView } = await import('../src/dsh-adapter/channel/st
 const { createSessionMetadataActions } = await import('../src/dsh-adapter/channel/session-metadata.js')
 const { createSessionTreeReader } = await import('../src/dsh-adapter/channel/session-tree.js')
 const { createTreeRewindAction } = await import('../src/dsh-adapter/channel/session-tree-actions.js')
+const { createDshSession } = await import('../src/dsh-adapter/backend/session.js')
 const { createExternalCommandInvoker } = await import('../src/dsh-adapter/channel/external-commands.js')
 const { createChannelOwner } = await import('../src/dsh-adapter/channel/owner.js')
 const { foldRows, foldBack } = await import('../src/dsh-adapter/channel/transcript.js')
@@ -263,7 +264,8 @@ try {
       create: async () => { throw new Error('unused by binding fixture') },
     } : undefined } as never, { working: false, cwd, provider: 'deepseek', model: 'model' }, {
       owner, binding: { agent, capture: () => capture, isCurrent: () => true,
-        prepare: async (_capture: unknown, _create: unknown) => { prepared = true; return { agent } }, abandon: async () => {} } as never,
+        // The binding hands back a session; this one owns a no-op handle.
+        prepare: async (_capture: unknown, _create: unknown) => { prepared = true; return createDshSession({} as never, { agent, dispose: async () => {} } as never) }, abandon: async () => {} } as never,
       settleCompaction: async () => {}, notify: noop, adoptForkedAgent: () => 'child', notifySessionSwitched: noop,
     })
     assert.equal(await rewind(String(child.id), child.seq - 1, 'fork'), '')

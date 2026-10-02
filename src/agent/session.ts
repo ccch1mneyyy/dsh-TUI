@@ -17,6 +17,12 @@ export interface AgentInput {
   readonly images?: readonly ImageRef[]
   /** Channel-generated id; the backend echoes it on pending/turn attribution. */
   readonly clientMessageId: string
+  /**
+   * A backend-native message the backend's own input pipeline already built
+   * for this input (DSH: the `UserMessage` whose id is `clientMessageId`);
+   * opaque to everyone else, ignored by backends that do not recognize it.
+   */
+  readonly native?: unknown
 }
 
 /**
@@ -29,8 +35,12 @@ export type SubmitPlacement = 'turn' | 'steer' | 'followup' | 'now'
 /** Lifecycle state of a session handle. */
 export type AgentSessionStatus = 'starting' | 'idle' | 'running' | 'requires-action' | 'disposed'
 
-/** Why a cancellation was requested. */
-export type CancelCause = 'user' | 'switch' | 'dispose'
+/**
+ * Why a cancellation was requested: `user` keeps queued inputs for the next
+ * turn; `interrupt` drops them because the caller re-delivers them at once;
+ * `switch`/`dispose` leave the session.
+ */
+export type CancelCause = 'user' | 'interrupt' | 'switch' | 'dispose'
 
 /** One live backend session. */
 export interface AgentSession {
@@ -43,8 +53,12 @@ export interface AgentSession {
   /** Follow live events; returns the unsubscriber. */
   subscribe(listener: (batch: readonly AgentEvent[], meta: AgentEventMeta) => void): () => void
   submit(input: AgentInput, placement: SubmitPlacement): Promise<{ readonly accepted: boolean; readonly reason?: string }>
-  /** Withdraw a queued input; false when the backend already claimed it. */
-  removePending(clientMessageId: string): Promise<boolean>
+  /**
+   * Withdraw a queued input; false when the backend already claimed it. A
+   * backend that can answer synchronously does (the channel's Alt+Up
+   * contract is synchronous); an async answer is not-yet-withdrawn to it.
+   */
+  removePending(clientMessageId: string): boolean | Promise<boolean>
   cancel(cause: CancelCause): Promise<{ readonly stillQueued: readonly string[] }>
   dispose(): Promise<void>
 }

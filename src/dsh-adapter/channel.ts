@@ -8,7 +8,10 @@ import { createContextBookkeeping } from './channel/context-bookkeeping.js'
 import { createChannelActionMethods, createChannelActionReadiness, type ChannelActionDelegates } from './channel/action-readiness.js'
 import { createBindingEvents } from './channel/binding-events.js'
 import { createInitialChannelView, type ChannelLaunchOptions } from './channel/state.js'
-import { createChannelProjection } from './channel/projection.js'
+import { createChannelProjection } from '../channel/projection.js'
+import type { AgentSession } from '../agent/session.js'
+import { createDshSession, isAgentSession } from './backend/session.js'
+import { dshPricingWindow } from './backend/translate.js'
 import { createManualCompaction } from './channel/compaction.js'
 import { createSessionAdoption } from './channel/session-adoption.js'
 import { createRewindPromptAction } from './channel/session-actions.js'
@@ -130,23 +133,25 @@ async function listSessionsSnapshot(ctx: Context): Promise<readonly SessionSumma
 
 /**
  * Create the live channel state for one agent session: replay the durable
- * transcript, subscribe to the agent's events, and expose every TUI action.
+ * transcript, subscribe to the session's events, and expose every TUI action.
  * @internal
  * @param ctx - The plugin context; optional services are resolved via ctx.get.
- * @param initialAgent - The agent whose session the channel renders; rewinds,
- *   resumes, and model switches replace it.
+ * @param initial - The session the channel renders; rewinds, resumes, and
+ *   model switches replace it. A raw DSH agent (direct embedders, fixtures) is
+ *   wrapped as a DSH session together with `options.handle`.
  * @param options - Boot options: model route, cwd, provider, and the
- *   reasoning-effort / working-activity / agent-handle preferences.
+ *   reasoning-effort / working-activity preferences.
  * @returns The live channel state, subscribed and ready to render.
  */
 export function createChannel(
   ctx: Context,
-  initialAgent: Agent,
+  initial: AgentSession | Agent,
   options: ChannelLaunchOptions,
 ): ChannelState {
   const owner = createChannelOwner()
   try {
-    return createChannelWithOwner(ctx, initialAgent, options, owner)
+    const initialSession = isAgentSession(initial) ? initial : createDshSession(ctx, { agent: initial, handle: options.handle })
+    return createChannelWithOwner(ctx, initialSession, options, owner)
   } catch (error) {
     // Setup is one transaction from the first acquired resource. Preserve the
     // construction failure while still attempting every registered rollback.
@@ -157,12 +162,19 @@ export function createChannel(
 
 function createChannelWithOwner(
   ctx: Context,
-  initialAgent: Agent,
+  initialSession: AgentSession,
   options: ChannelLaunchOptions,
   owner: ReturnType<typeof createChannelOwner>,
 ): ChannelState {
   const rowIds = { value: 0 }
-  const binding = createChannelBinding(initialAgent, options.handle, owner)
+  const binding = createChannelBinding(initialSession, owner)
+  /** The bound session's DSH escape hatch: this composition root still wires
+   *  DSH specialists unconditionally (Phase 1 hosts DSH sessions only). */
+  const dshNative = () => {
+    const native = binding.session.capabilities.native.dsh
+    if (native === undefined) throw new Error('dsh-tui: the bound session is not a DSH session')
+    return native
+  }
   // Detached work (/fork and agent-view dispatch) is owned until a caller
   // explicitly transfers the temporary handle to its destination ledger.
   const createDetachedHandle = createDetachedHandleFactory(owner)
@@ -407,7 +419,7 @@ function createChannelWithOwner(
   // during construction, then delegates its synchronous adoption tail to the
   // binding-owned session-adoption module.
   let adoptForkedAgent!: (
-    handle: AgentHandle,
+    candidate: AgentSession,
     capture: ReturnType<typeof binding.capture>,
     seed: readonly SessionEvent[],
     agentPreset: string | undefined,
@@ -475,7 +487,7 @@ function createChannelWithOwner(
   const actionMethods = createChannelActionMethods(getReadyActions)
 
   const state: ChannelState = {
-    ...createInputActions(() => state, () => binding.agent, owner, inputConvergence,
+    ...createInputActions(() => state, () => binding.session, owner, inputConvergence,
       composer,
       (text, placement, images) => dispatchUserText(text, placement, images),
       (command, includeInContext) => getReadyActions().runLocalCommand(command, includeInContext)),
@@ -574,8 +586,8 @@ function createChannelWithOwner(
     },
     traceEvents() {
       // Immutable per-append snapshot (dsh-session caches the frozen array);
-      // reads follow agent swaps (/resume /rewind /new) automatically.
-      return snapshotLiveSessionEvents(binding.agent.session)
+      // reads follow session swaps (/resume /rewind /new) automatically.
+      return dshNative().rawHistory()
     },
   }
 
@@ -644,7 +656,7 @@ function createChannelWithOwner(
   reportActions = createReportActions(ctx, {
     owner,
     capture: () => binding.capture(),
-    current: capture => binding.isCurrent(capture),
+    current: capture => binding.isCurrent(capture as ReturnType<typeof binding.capture>),
     cwd: () => state.cwd,
     model: () => state.model,
     provider: () => options.provider,
@@ -696,20 +708,34 @@ function createChannelWithOwner(
   }
   const bash = ctx.get('shell') as ForegroundShell | undefined
 
+  // The one shared reducer; the bound session's translator feeds it (live
+  // through binding-events, replay seeds below). DSH prices usage by the
+  // DeepSeek rate window of each request.
   const projector = createChannelProjection(state, {
-    agent: () => binding.agent, rowIds, resetContextWarning, jobs: jobStore, inputConvergence,
+    rowIds, resetContextWarning, jobs: jobStore, inputConvergence,
     checkContextWarning, notify: (...args) => notify(...args),
-    tools: ctx.get('tools') as ToolsRegistryLike | undefined, renderer: rendererRuntime,
-    attachments: () => ctx.get('attachments'),
+    renderer: rendererRuntime,
     selectionAttached: messageId => selectionAttachments.take(messageId),
+    pricingWindow: dshPricingWindow,
   })
+  /** Forget every per-session projection ledger: the projector's and the
+   *  bound session translator's (the pre-split reducer reset both at once). */
+  const resetProjection = (): void => {
+    projector.reset()
+    binding.session.capabilities.native.dsh?.resetTranslation()
+  }
   localActions = createLocalActions({
     ctx,
     owner,
     binding,
     state,
     rowIds,
-    projector,
+    projector: {
+      reset: resetProjection,
+      // Fold restore re-derives views with the bound session's presenters.
+      presentCallView: (name, rawArgs) => dshNative().presentCallView(name, rawArgs),
+      presentResultView: (name, rawArgs, data) => dshNative().presentResultView(name, rawArgs, data),
+    },
     subagents: subagentProjection,
     jobs: jobProjection,
     foldBack,
@@ -722,11 +748,15 @@ function createChannelWithOwner(
   // seed re-populates the subagent dashboard's durable discovery facts
   // (`subagent/catalog`, workflow member edges) so a resumed session keeps
   // its dispatched-children history (issue #966).
+  // The seed is translated synchronously by the bound session (adoption
+  // tails replay inside a synchronous binding transaction, which the async
+  // `AgentSession.history()` cannot serve); callers have already bound the
+  // session the seed belongs to.
   const replaySessionSeed = (events: readonly SessionEvent[]): void => {
-    projector.replayEvents(events)
+    projector.apply(dshNative().translateReplay(events), { replay: true })
     subagentProjection.bootstrapFromLog(events)
   }
-  replaySessionSeed(snapshotLiveSessionEvents(binding.agent.session))
+  replaySessionSeed(dshNative().rawHistory())
   projector.settleStreaming()
   // Attached to an idle agent: any replayed turn/start belongs to a previous
   // session run, so the spinner must not come up on boot.
@@ -759,7 +789,7 @@ function createChannelWithOwner(
     rowIds,
     // Compaction is installed below before the channel binds or exposes input.
     settleCompaction: () => settleManualCompaction(),
-    resetProjector: () => projector.reset(),
+    resetProjector: resetProjection,
     resetSubagents: subagentProjection.reset,
     resetJobs: resetJobProjection,
     replay: replaySessionSeed,
@@ -822,7 +852,7 @@ function createChannelWithOwner(
   const sessionAdoption = createSessionAdoption(state, {
     binding,
     rowIds,
-    resetProjector: () => projector.reset(),
+    resetProjector: resetProjection,
     resetSubagents: subagentProjection.reset,
     resetJobs: resetJobProjection,
     replay: replaySessionSeed,
@@ -838,9 +868,10 @@ function createChannelWithOwner(
 
   adoptLiveAgent = createLiveAgentAdoption(state, {
     binding,
+    openSession: (agent, handle) => createDshSession(ctx, { agent, handle }),
     backgroundHandles,
     rowIds,
-    resetProjector: () => projector.reset(),
+    resetProjector: resetProjection,
     resetSubagents: subagentProjection.reset,
     restoreSubagents: subagentProjection.restore,
     parkSubagents: subagentProjection.park,
@@ -875,7 +906,7 @@ function createChannelWithOwner(
     parkSubagents: subagentProjection.park,
     backgroundHandles,
     rowIds,
-    resetProjector: () => projector.reset(),
+    resetProjector: resetProjection,
     resetSubagents: subagentProjection.reset,
     resetJobs: resetJobProjection,
     replay: replaySessionSeed,
@@ -944,7 +975,7 @@ function createChannelWithOwner(
     binding,
     backgroundHandles,
     rowIds,
-    resetProjector: () => projector.reset(),
+    resetProjector: resetProjection,
     resetSubagents: subagentProjection.reset,
     parkSubagents: subagentProjection.park,
     resetJobs: resetJobProjection,
