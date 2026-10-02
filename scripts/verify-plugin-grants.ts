@@ -45,7 +45,7 @@ const { DATA_DIR } = await import('../src/utils/paths.js')
 const { mountAdmitted, testManifest, COMMAND_COORDINATE, STORAGE_COORDINATE, DECISION_COORDINATE } = await import('../scripts/lib/plugin-test-utils.js')
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
-const specDir = join(root, 'dsh-ecosystem-spec')
+const specDir = join(root, 'tui-profile')
 
 /**
  * 复制 vendored spec 做「篡改必败」夹具。**必须 `dereference: true`**：在
@@ -59,7 +59,7 @@ const copySpec = (to: string): void => cpSync(specDir, to, { recursive: true, de
 
 const data = loadSpecData(specDir)
 if (!data) {
-  console.error('vendored spec data unreadable (dsh-ecosystem-spec/)')
+  console.error('vendored spec data unreadable (tui-profile/)')
   process.exit(1)
 }
 const index = createContractIndex(data.registry, data.permissions)
@@ -836,10 +836,10 @@ check1('decision permission map is immutable',
   // D2. 篡改 contract 文件 → 剔除 + warn（fail closed），descriptor 仍过 schema。
   const tamperedRoot = mkdtempSync(join(tmpdir(), 'dsh-descriptor-tamper-'))
   cleanup.push(tamperedRoot)
-  copySpec(join(tamperedRoot, 'dsh-ecosystem-spec'))
-  const target = join(tamperedRoot, 'dsh-ecosystem-spec', 'registry', 'contracts', 'decision-events-v1alpha1.json')
+  copySpec(join(tamperedRoot, 'tui-profile'))
+  const target = join(tamperedRoot, 'tui-profile', 'registry', 'contracts', 'decision-events-v1alpha1.json')
   writeFileSync(target, `${readFileSync(target, 'utf8')}\n`)
-  const tampered = liveHostDescriptor('test-gen-2', join(tamperedRoot, 'dsh-ecosystem-spec'))
+  const tampered = liveHostDescriptor('test-gen-2', join(tamperedRoot, 'tui-profile'))
   check1('tampered private definition dropped',
     tampered.dropped.includes('tui.dsh/v1alpha1#DecisionEvents'), tampered.dropped.join(' | '))
   check1('tamper warning names the profileHash drift', tampered.warnings.some(w => w.includes('profile hash drifted')))
@@ -871,12 +871,12 @@ check1('decision permission map is immutable',
   // 绝不把 TypeError 留到 verify*/boot 自检里炸出来（fail-soft）。
   const malformedRoot = mkdtempSync(join(tmpdir(), 'dsh-spec-malformed-'))
   cleanup.push(malformedRoot)
-  copySpec(join(malformedRoot, 'dsh-ecosystem-spec'))
-  writeFileSync(join(malformedRoot, 'dsh-ecosystem-spec', 'registry', 'registry-0.15.json'),
+  copySpec(join(malformedRoot, 'tui-profile'))
+  writeFileSync(join(malformedRoot, 'tui-profile', 'registry', 'registry-0.15.json'),
     JSON.stringify({ profileVersion: 'tui-admission/0.15', std: {}, imports: null, definitions: [], facetApiVersions: [] }))
   check1('structurally malformed registry loads as unavailable',
-    loadSpecData(join(malformedRoot, 'dsh-ecosystem-spec')) === undefined)
-  const malformedBuild = liveHostDescriptor('test-gen-4', join(malformedRoot, 'dsh-ecosystem-spec'))
+    loadSpecData(join(malformedRoot, 'tui-profile')) === undefined)
+  const malformedBuild = liveHostDescriptor('test-gen-4', join(malformedRoot, 'tui-profile'))
   check1('malformed data degrades the descriptor to an empty surface (no throw)',
     malformedBuild.descriptor.contracts.length === 0 && malformedBuild.warnings.length > 0)
   // verify* 对手工构造的坏数据也只回违规字符串。
@@ -901,11 +901,11 @@ check1('decision permission map is immutable',
   // 权限注册表 malformed（permissions 不是数组）同样整体不可用。
   const malformedPermsRoot = mkdtempSync(join(tmpdir(), 'dsh-spec-malformed-perms-'))
   cleanup.push(malformedPermsRoot)
-  copySpec(join(malformedPermsRoot, 'dsh-ecosystem-spec'))
-  writeFileSync(join(malformedPermsRoot, 'dsh-ecosystem-spec', 'registry', 'permissions-0.1.json'),
+  copySpec(join(malformedPermsRoot, 'tui-profile'))
+  writeFileSync(join(malformedPermsRoot, 'tui-profile', 'registry', 'permissions-0.1.json'),
     JSON.stringify({ registryVersion: '0.1', permissions: 'nope' }))
   check1('structurally malformed permissions load as unavailable',
-    loadSpecData(join(malformedPermsRoot, 'dsh-ecosystem-spec')) === undefined)
+    loadSpecData(join(malformedPermsRoot, 'tui-profile')) === undefined)
 }
 
 // ── E. patch 面与 exports 接线 ────────────────────────────────────────────

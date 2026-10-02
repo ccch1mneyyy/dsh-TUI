@@ -583,8 +583,8 @@ async function scenarioEditState(): Promise<string> {
 
     // Vim on with an EMPTY composer: modes are user choices, not content, so
     // the snapshot must carry them even with nothing typed (the PR's write
-    // guard counts edit state). Warm-up round trip doubles as the
-    // listener-order warm-up so later Ctrl+A is owned by Chat.
+    // guard counts edit state). Chat owns Ctrl+A from the first mount
+    // (its useInput prepends, #1155), so no ordering warm-up is needed.
     await runCommand(scenario, app, '/vim')
     await waitFor(scenario, 'vim INSERT badge', () => vimBadge(app) === 'INSERT', 8000)
     await roundTripDashboard(scenario, app)

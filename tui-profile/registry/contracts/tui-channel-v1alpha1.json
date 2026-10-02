@@ -1,0 +1,30 @@
+{
+  "name": "tui.channel",
+  "version": "v1alpha1",
+  "coordinates": {
+    "apiVersion": "tui.dsh/v1alpha1",
+    "kind": "Channel"
+  },
+  "kind": "capability",
+  "caller": "a negotiated TUI endpoint",
+  "permissions": [],
+  "operations": [
+    {"name": "open", "input": "workspace/session selector", "output": "complete channel snapshot"},
+    {"name": "subscribe", "input": "channel id and last observed version", "output": "snapshot progress stream"},
+    {"name": "invoke", "input": "channel method and JSON arguments", "output": "method progress, JSON result and optional snapshot"},
+    {"name": "close", "input": "channel id", "output": "closed acknowledgement"}
+  ],
+  "wireRevision": 6,
+  "features": [
+    "commands", "credentials", "diagnostics", "files", "models", "modes",
+    "presets", "presentation", "provider-setup", "scenes", "session-history", "session-input",
+    "session-lifecycle", "session-state", "settings", "skills", "subagents",
+    "trace", "workspaces"
+  ],
+  "errors": ["CHANNEL_NOT_FOUND", "FEATURE_UNAVAILABLE", "INVALID_ARGUMENT", "PERMISSION_DENIED", "REVISION_MISMATCH", "PROVIDER_FAILURE"],
+  "concurrency": "state mutations are serialized per channel; independent read operations may run concurrently",
+  "timeout": "the caller supplies connection invocation cancellation; subscriptions remain open until cancelled or closed",
+  "cleanup": "connection close or facet deactivate releases subscriptions, uploads and channel attachments",
+  "privacyClass": "sensitive",
+  "securityBoundary": false
+}

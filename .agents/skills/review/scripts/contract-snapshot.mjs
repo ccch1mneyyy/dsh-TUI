@@ -18,13 +18,18 @@ const CONTRACT_FILES = [
   'src/plugin-host.ts',
   'cordis.patch.yml',
   'patch-surface.snapshot.json',
-  'dsh-ecosystem-spec/protocols/tui-channel.js',
+  'tui-profile/protocols/tui-channel.js',
   '.github/workflows/ci.yml',
 ]
 
 const SUBMODULE_PATHS = [
+  // `dsh-auth` only exists in the self-test fixture's synthetic repo; the real
+  // repository no longer mounts it (and never has a directory of that name), so
+  // the WORKTREE probe simply finds nothing and falls back to the gitlink.
   'dsh-auth',
-  'dsh-ecosystem-spec',
+  // `tui-profile` used to be mounted here too; it is now plain in-tree files, so
+  // it must NOT be probed as a submodule — `git -C tui-profile rev-parse HEAD`
+  // would silently report the outer repository's HEAD.
   'vendor/dsh-std',
 ]
 
@@ -237,7 +242,7 @@ function buildSnapshot(repoInput, revisionInput) {
       present: contents['src/plugin-host.ts'] != null,
       exportStatements: extractExportStatements(contents['src/plugin-host.ts']),
     },
-    protocol: extractProtocol(contents['dsh-ecosystem-spec/protocols/tui-channel.js']),
+    protocol: extractProtocol(contents['tui-profile/protocols/tui-channel.js']),
     submodules: readSubmodulePointers(repo, revision),
     files,
   })
@@ -311,7 +316,7 @@ function writeFixture(root, version, exportTarget, wireRevision) {
     'src/plugin-host.ts': "export { alpha, beta } from './impl.js'\nexport type { Gamma } from './types.js'\n",
     'cordis.patch.yml': 'version: 1\n',
     'patch-surface.snapshot.json': '{"version":1}\n',
-    'dsh-ecosystem-spec/protocols/tui-channel.js': `export const TUI_CHANNEL_API_VERSION = 'tui.dsh/v1alpha1'\nexport const TUI_CHANNEL_WIRE_REVISION = ${wireRevision}\nexport const TUI_CHANNEL_FEATURES = ['commands', 'skills']\n`,
+    'tui-profile/protocols/tui-channel.js': `export const TUI_CHANNEL_API_VERSION = 'tui.dsh/v1alpha1'\nexport const TUI_CHANNEL_WIRE_REVISION = ${wireRevision}\nexport const TUI_CHANNEL_FEATURES = ['commands', 'skills']\n`,
     '.github/workflows/ci.yml': 'name: ci\n',
   }
   for (const [path, content] of Object.entries(files)) {

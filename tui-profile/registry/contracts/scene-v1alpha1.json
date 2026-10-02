@@ -1,0 +1,13 @@
+{
+  "name":"tui.scene","version":"v1alpha1","kind":"extension",
+  "coordinates":{"apiVersion":"tui.dsh/v1alpha1","kind":"Scene"},
+  "caller":"trusted in-process dsh-TUI scene shell",
+  "permissions":[],
+  "operations":["open","close","render"],
+  "errors":["SCENE_INVALID","SCENE_CONFLICT","RENDERER_INCOMPATIBLE"],
+  "concurrency":"one scene may own the full-screen surface at a time",
+  "timeout":"scene operations are local; domain calls made by a scene retain their own deadlines",
+  "cleanup":"an open scene closes when its owning facet deactivates",
+  "privacyClass":"sensitive",
+  "securityBoundary":false
+}

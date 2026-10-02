@@ -140,7 +140,7 @@ export function apply(ctx: Context): void {
 - On an older profile without `tuiThemes`, the plugin degrades silently and
   static themes remain unaffected.
 
-See the [Plugin Admission and Development Guide](https://github.com/T-Auto/dsh-ecosystem-spec/blob/main/docs/plugin-admission-and-development.md)
+See the [Plugin Admission and Development Guide](../tui-profile/docs/plugin-admission-and-development.md)
 for the full key list, legacy-key mapping, and registration contract.
 
 ## Color formats

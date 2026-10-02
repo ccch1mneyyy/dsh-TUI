@@ -4,9 +4,11 @@
  *
  * - the compaction checkpoint renders a localized `compact-done` Divider plus
  *   a `compact` summary row (defaults FOLDED in the transcript)
- * - the context accounting (tokens.input, contextSegments, lastUsage) resets
- *   immediately, so the status bar drops without waiting for the next
- *   request's usage event
+ * - the segmented bar's composition resets immediately (contextSegments), while
+ *   OCCUPANCY is left to the official `contextPressure` projection: this
+ *   composition mounts no token meter, so the fallback sample must stay
+ *   untouched by the checkpoint (the old chars/4 rewrite of lastUsage /
+ *   tokens.input is gone on purpose — see dsh-adapter/context-occupancy.ts)
  * - MessageList renders the folded summary as one line and the full text
  *   once expanded (Ctrl+O / message-selection Enter)
  *
@@ -33,6 +35,11 @@ const toPlain = s =>
     .replace(/\x1b\[[0-9;?>:]*[a-zA-Z]/g, '')
     .replace(/\x1b\]9;[^\x07]*\x07/g, '')
 
+// Independent ASCII-only oracle for the channel's segment estimate: the shared
+// `estimateTokens` (src/dsh-adapter/channel/usage.ts) charges pure ASCII at
+// exactly this rate, and every fixture below is ASCII, so this stays an exact
+// expectation. The CJK-aware semantics (and the rates themselves) are pinned
+// separately by scripts/verify-cjk-token-estimate.ts.
 const est = text => Math.ceil(text.length / 4)
 
 // ---- channel-level: seed a pre-compact context, then compact it
@@ -126,16 +133,24 @@ check(
   JSON.stringify(channel.contextSegments),
 )
 check(
-  'lastUsage refreshed to current context estimate',
-  channel.lastUsage?.input === sysEst + summaryEst &&
-    channel.lastUsage?.output === 0 &&
-    channel.lastUsage?.cacheRead === 0,
+  'checkpoint leaves the fallback occupancy sample untouched',
+  channel.lastUsage?.input === 5000 &&
+    channel.lastUsage?.output === 100 &&
+    channel.lastUsage?.cacheRead === 3000 &&
+    channel.lastUsage?.cacheWrite === 0,
   JSON.stringify(channel.lastUsage),
 )
 check(
-  'tokens.input dropped by the removed history',
-  channel.tokens.input === 5000 - (promptEst + assistantEst) + summaryEst,
+  'checkpoint does not rewrite the cumulative tokens counter',
+  channel.tokens.input === 5000,
   String(channel.tokens.input),
+)
+check(
+  'no-meter occupancy is the billed sample, never the chars/4 segment guess',
+  channel.contextOccupancy?.source === 'sample' &&
+    channel.contextOccupancy?.usedTokens === 8000 &&
+    channel.contextOccupancy?.contextWindow === 100000,
+  JSON.stringify(channel.contextOccupancy),
 )
 
 // A second compaction with an EMPTY summary: no summary row, prompt cleared.
@@ -148,8 +163,22 @@ const rows2 = channel.rows
 check('empty summary adds no compact row', rows2[rows2.length - 1]?.kind === 'notice', JSON.stringify(rows2[rows2.length - 1]))
 check(
   'empty summary clears the prompt segment',
-  channel.contextSegments.prompt === 0 && channel.lastUsage?.input === sysEst,
+  channel.contextSegments.prompt === 0 && channel.lastUsage?.input === 5000,
   JSON.stringify(channel.lastUsage),
+)
+
+// The segment estimate is CJK-aware (#1170): a Chinese prompt must land in the
+// measured 1–1.5 chars/token band instead of the old ASCII chars/4 — the defect
+// was Chinese sessions being under-counted ~3x, and the projection wiring above
+// is what has to carry the new rate to the bar.
+const CJK_PROMPT = '这是一段中文提问，用来验证分段估算按中文口径计费，而不是英文的四字符一枚。'
+emit({ type: 'user/message', seq: 7, data: { source: { kind: 'user' }, content: [{ type: 'text', text: CJK_PROMPT }] } })
+check(
+  'segments charge Chinese text above the old chars/4 rate',
+  channel.contextSegments.prompt >= Math.ceil(CJK_PROMPT.length / 1.5) &&
+    channel.contextSegments.prompt <= Math.ceil(CJK_PROMPT.length) &&
+    channel.contextSegments.prompt > Math.ceil(CJK_PROMPT.length / 4),
+  `prompt=${channel.contextSegments.prompt} chars=${CJK_PROMPT.length}`,
 )
 
 // ---- render-level: folded by default, full text when expanded

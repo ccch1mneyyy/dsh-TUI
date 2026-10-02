@@ -1,0 +1,13 @@
+{
+  "name":"tui.settings-section","version":"v1alpha1","kind":"extension",
+  "coordinates":{"apiVersion":"tui.dsh/v1alpha1","kind":"SettingsSection"},
+  "caller":"dsh-TUI settings contribution binder",
+  "permissions":[],
+  "operations":["render"],
+  "errors":["SECTION_INVALID","NAMESPACE_CONFLICT","NAMESPACE_UNAVAILABLE"],
+  "concurrency":"one active section owns each settings namespace",
+  "timeout":"not applicable to declarative rendering; writes use the settings protocol deadline",
+  "cleanup":"removing a section removes only UI metadata and preserves settings and credentials",
+  "privacyClass":"public",
+  "securityBoundary":false
+}

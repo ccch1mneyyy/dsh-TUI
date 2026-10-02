@@ -101,7 +101,7 @@ const fileA = join(fakeHome, 'ledger-a.jsonl')
   const alpha = await namedCtx(admissionRoot, 'alpha')
   const entries: LedgerEntry[] = [
     { operation: 'create', resource: { kind: 'scene', id: 'scene-a' }, result: 'applied' },
-    { operation: 'bind', resource: { kind: 'shortcut', id: 'ctrl+shift+z' }, result: 'applied' },
+    { operation: 'bind', resource: { kind: 'shortcut', id: 'ctrl+shift+y' }, result: 'applied' },
     { operation: 'replace', resource: { kind: 'status', id: 'alpha' }, result: 'applied', replaces: { resourceId: 'alpha' } },
     { operation: 'release', resource: { kind: 'scene', id: 'scene-a' }, result: 'applied' },
     { operation: 'cleanup-failed', resource: { kind: 'subscription', id: 'alpha' }, result: 'failed', errorCode: 'DISPOSE_FAILED' },
@@ -236,7 +236,10 @@ const fileA = join(fakeHome, 'ledger-a.jsonl')
 
   new TuiShortcutRuntime(ctx)
   const shortcuts = alpha.get('tuiShortcuts') as InstanceType<typeof TuiShortcutRuntime>
-  const disposeShortcut = shortcuts.register('ctrl+shift+z', { description: '电池快捷键', handler: () => {} }, alpha)
+  // NOTE: ctrl+shift+z is no longer free — the built-in draft-undo action
+  // reserves ctrl+z, and a plugin combo whose SHIFTLESS form is reserved is
+  // refused (terminals that cannot report Shift distinctly would collide).
+  const disposeShortcut = shortcuts.register('ctrl+shift+y', { description: '电池快捷键', handler: () => {} }, alpha)
   disposeShortcut()
 
   new TuiStatusRuntime(ctx)
@@ -274,7 +277,7 @@ const fileA = join(fakeHome, 'ledger-a.jsonl')
   check1('grant deny recorded with PERMISSION_NOT_GRANTED against the denied plugin',
     deny.some(r => r.result === 'failed' && r.errorCode === 'PERMISSION_NOT_GRANTED' && r.pluginId === 'com.example.gamma'))
 
-  const shortcutBinds = byKind('shortcut', 'ctrl+shift+z')
+  const shortcutBinds = byKind('shortcut', 'ctrl+shift+y')
   check1('shortcut register records bind applied with the plugin identity',
     shortcutBinds.some(r => r.operation === 'bind' && r.result === 'applied' && r.pluginId === 'com.example.alpha'))
   check1('shortcut dispose records release applied',

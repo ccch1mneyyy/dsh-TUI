@@ -435,9 +435,17 @@ stdin.write('ui')
 await settled(() => text().includes('❯ INSERT'))
 check('vim clear: cannot undo into the discarded draft', noTokenFragment(), text())
 
+// The filler is typed BEFORE the token, on the line above it: a token pasted
+// onto a line that then receives INSERT typing is also snapshotted by the DRAFT
+// history, and this check is about the VIM stack's own eviction (the two stacks
+// are independent, so a capability the draft stack still holds is correctly
+// kept alive).
+stdin.write('z'.repeat(105))
+await enterNormal()
+stdin.write('o') // new line below + INSERT: the token starts its own line
+await settled(() => text().includes('❯ INSERT'))
 const evictedToken = await paste()
 const evictedStage = lastStageId()
-stdin.write('z'.repeat(105))
 await enterNormal()
 await selectToken(evictedToken)
 stdin.write('x')

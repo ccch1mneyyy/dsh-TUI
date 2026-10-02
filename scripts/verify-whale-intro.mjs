@@ -190,7 +190,7 @@ async function renderLogo(intro) {
       // pin 住字面：这条回归测开场动画（爱心/睡觉帧的 SGR），而字体按天轮换——
       // 碰上 100 列放不下的那款（wide 需要 113 列）鲸鱼会被阶梯撤掉，爱心就永远
       // 画不出来。基准款 bold 只要 97 列，与夹具的 100 列相容。
-      React.createElement(LogoV2, { model: 'whale-intro-probe', cwd: '/whale/cwd', intro, fontId: 'bold' }),
+      React.createElement(LogoV2, { model: 'whale-intro-probe', cwd: '/whale/cwd', intro, fontId: 'bold', companionSkin: 'whale' }),
     ),
     {
       stdout,

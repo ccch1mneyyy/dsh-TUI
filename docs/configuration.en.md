@@ -67,6 +67,11 @@ A complete common override looks like this:
 | `splashFont` | `daily` | Big-text face on the header splash: `daily` rotates by local date (the default), any other value is a face id (`bold` / `square` / `bevel` / `wide` / `dot` / `stencil` / `classic` / `slab`) pinning that one; an unknown value falls back to `daily`. Also editable through `/settings` |
 | `whaleGirl` | `false` | Swap the header's pixel whale for the maid: real raster FIRST (Kitty/Sixel); falls back to the character-art maid without them |
 | `minimal` | `false` | Minimal UI (极简界面): reduce header decoration and colors. **A display switch only** — a different thing from the kernel's `minimal` agent preset under `preset` below (that one decides which tools the model can use) |
+| `sidePanel.splitEnabled` | `true` (boolean) | Master switch of the split layout: on, `Ctrl+B` and `/panel` open the side column next to the chat; off, neither splits and `/jobs` & co. keep their full-screen panels. Applies immediately |
+| `sidePanel.open` | `false` (boolean) | Whether a session opens with the sidebar already expanded; off by default, so the upgrade leaves the layout as it was. An in-session `Ctrl+B` / `/panel toggle` is not written back here. Applies immediately |
+| `sidePanel.ratio` | `0.68` (number, 0.1–0.95) | Chat column as a fraction of the content width; while the panel has focus, `+`/`-` nudge it live for the current session (not written back). Applies immediately |
+| `sidePanel.panels` | `todo,jobs,agents` (comma-separated text) | Enabled panel ids and their order (built-ins: `todo` `info` `trajectory` `jobs` `agents` `workspace` `companion`); a well-formed id no panel claims yet stays in the tab bar for a plugin to register later, a malformed entry is refused. The `⤢` on the right edge of the bar blows the active panel up to full screen (drawn only for panels that declare a fullscreen form). Applies immediately |
+ | `companion.skin` | `deepy` | Skin of the companion-panel pet: `deepy` (default, the deepy whale kit), `whaleGirl` (the whale-girl sticker pack, 22 animations incl. interaction reactions) or `whale` (the splash's layered pixel whale); the panel itself is enabled by adding `companion` to `sidePanel.panels`. Applies immediately |
 | `modes` | built-in trio | Shift+Tab session-mode cycle (plan/sandbox/approval atom bundles); defaults to default → plan → full-access |
 | `activity` | `true` | Show the live activity row |
 | `activityFrames` | `moon8` | Activity animation preset; `/activity` changes it at runtime. A legacy saved value of `claude` is read as `moon8`, and the picker no longer offers that legacy preset |
@@ -142,7 +147,7 @@ preset registry: `@deepseek-ai/dsh-agent-preset-registry` on 0.1.7, or
 | --- | --- | --- |
 | `standard` | Standard (default) | Editing, shell, search, skills, planning, goals, subagents, and workflows |
 | `ptc` (0.1.2) / `code` (legacy 0.1.1) | PTC | Standard plus the PTC SDK presentation for composing operations in TypeScript; both names resolve compatibly across versions |
-| `minimal` | Minimal | Kernel agent preset: a single persistent-shell tool (bash on POSIX, pwsh on Windows), with no compaction, no plan mode and no runtime context. `str_replace_editor` has been opt-in since 0.1.3-alpha.2, so this preset does not include it |
+| `minimal` | Minimal | Kernel agent preset: a single persistent-shell tool (bash on POSIX, pwsh on Windows), with no compaction, no plan mode and no runtime context. `str_replace_editor` has been opt-in since 0.1.3-alpha.2, so this preset does not include it. The cost is stated up front: no compaction and no tool-result pruning (a long session can hit the context limit, oversized tool output stays in full), and `/compact` plus the questionnaire are unavailable — Help and `/` completion mark the entry, and entering/resuming the preset says so once |
 | `cordis` | Creation | Standard plus runtime inspection and plugin-experimentation tools |
 | `liangshen` | Liangshen mode | Minimal's minimal tool surface first for root and delegated agents, the full catalog after the first tool call, and a fresh anchor after compaction |
 

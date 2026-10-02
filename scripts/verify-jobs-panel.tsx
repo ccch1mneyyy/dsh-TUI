@@ -33,7 +33,7 @@ const [
   React,
   { render },
   { JobCard },
-  { JobsPanel },
+  { JobsPanel, resolveJobsRowColumns },
   { Chat },
   { QuestionStore },
   { createJobProjection },
@@ -805,6 +805,25 @@ console.log('--- D: /jobs panel owns Esc ---')
       check('D3 面板关闭后 Esc 恢复中断对话', await settled(() => cancelled.length === before + 1), JSON.stringify(cancelled))
     },
   )
+}
+
+// ---------------------------------------------------------------------------
+// Group E — 侧栏形态的列宽分配纯函数（panel variant 的行网格契约）
+// ---------------------------------------------------------------------------
+console.log('--- E: panel-variant column allocation ---')
+{
+  const full = resolveJobsRowColumns(52)
+  check('E1 宽面板（52）三列全开', full.showProgress && full.showDuration && full.showStatus && full.idWidth === 9 && full.statusWidth === 9 && !full.labelWrap)
+  const mid46 = resolveJobsRowColumns(46)
+  check('E1 中宽面板（46）无进度列、有时长与状态', !mid46.showProgress && mid46.showDuration && mid46.showStatus)
+  if (false) { const full2 = resolveJobsRowColumns(46)
+  check('E1 宽面板旧断言已迁移', false) }
+  const mid = resolveJobsRowColumns(38)
+  check('E1 中等面板（38）无进度列、有时长与状态', !mid.showProgress && mid.showDuration && mid.showStatus)
+  const narrow = resolveJobsRowColumns(30)
+  check('E1 窄面板（30）省略时长列、保留状态列', !narrow.showProgress && !narrow.showDuration && narrow.showStatus)
+  const min = resolveJobsRowColumns(28)
+  check('E1 minColumns=28 仍有状态列', min.showStatus && !min.showProgress && !min.showDuration)
 }
 
 if (failed > 0) {
