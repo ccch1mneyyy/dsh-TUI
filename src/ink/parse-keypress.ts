@@ -129,6 +129,15 @@ const WIN32_CS_SHIFT = 0x10
 // so both their keydown and keyup records are dropped.
 const WIN32_VK_MODIFIER = new Set([16, 17, 18]) // VK_SHIFT, VK_CONTROL, VK_MENU
 
+// VK_PACKET: the record's payload IS the character in Uc (SendInput /
+// keybd_event Unicode injection; Windows Terminal re-encodes a paste that way
+// under win32-input-mode). It therefore takes the same "character rides in Uc"
+// lane as conhost's Vk=0 synthesized records — without it, a pasted break
+// spelled as VK_PACKET CR/LF was swallowed whole and the reassembled paste
+// lost one newline per line boundary (#1251 UAT: a 10-line / 760-char Ctrl+V
+// folded to `1 line・751 chars` and never submitted).
+const WIN32_VK_PACKET = 231
+
 // Virtual-key code → key name for non-printing keys. Names match the
 // keyName vocabulary below so input-event's nonAlphanumericKeys filter
 // clears their raw sequence from text input. Printable keys are NOT here —
@@ -254,14 +263,335 @@ function cleanPastePayload(content: string): string {
   return content.replace(OSC_IN_PASTE, '')
 }
 
-function createPasteKey(content: string): ParsedKey {
+/**
+ * Record grammar as TEXT inside a paste payload: `CSI Vk;Sc;Uc;Kd;Cs;Rc _`
+ * with an optional leading ESC, so ONE leftmost scan covers both spellings —
+ * the complete record {@link WIN32_INPUT_RE} decodes at token level, and the
+ * ESC-less tail a consumed ESC leaves behind (ADR-0002). Matching leftmost
+ * means a complete record is always taken whole, never sliced from its middle.
+ *
+ * Shape source: keep the field shape in sync with {@link WIN32_INPUT_RE} and
+ * with `WIN32_RECORD_RESIDUE` / `WIN32_RECORD_RESIDUE_TAIL` in
+ * `components/PromptInput.tsx`, which mirror this grammar for the ingress-side
+ * residue rules.
+ */
+const WIN32_RECORD_TEXT_RE = /\u001b?\[(\d*);(\d*);(\d*);(\d*);(\d*);(\d*)_/gu
+/**
+ * The in-payload frame evidence a decode requires: at least one COMPLETE
+ * ESC-bearing record (ADR-0008). Without it the payload's own characters can
+ * spell the shape, and nothing may be rewritten.
+ */
+const WIN32_RECORD_FRAME_RE = /\u001b\[\d*(?:;\d*){5}_/u
+
+/**
+ * The character one record's `Uc` carries, or undefined when it carries none.
+ * Mirrors what the token-level translator turns a record into and what
+ * {@link win32RecordChar} then hands to the paste buffer: ESC/TAB/space/DEL
+ * are named keys there, everything above 0x20 outside the C0/C1/DEL band is
+ * text, and the rest (0, other control codes) has no character meaning and is
+ * swallowed. `Uc` is one UTF-16 code unit, so a supplementary character
+ * streams as a high half followed by its low half.
+ *
+ * EVERY surrogate half is text of its own (T-FIX-06). The halves of one
+ * character arrive next to each other and concatenate — UTF-16 concatenation
+ * IS the pairing rule — while a half whose partner never arrived stays visible
+ * instead of being consumed with nothing in return (L-012: `probe/review/
+ * minimal-counterexamples.txt` R10 measured `a` + a high-half pair + `b` as
+ * `ab`, both records eaten and zero handed back). There is deliberately NO
+ * scratch slot to carry a half across records: the previous `pending` state
+ * let an unrelated record's low half pair with an earlier orphan and printed a
+ * character the source never contained (`edge-frames.txt` D2: `aX😀b` for a
+ * stream that never held U+1F600). With no state, no two inputs can be stitched
+ * together — across records or across payload text.
+ */
+function decodedRecordChar(uc: number): string | undefined {
+  // Either half is handed back as the code unit it is; adjacency alone (never a
+  // banked half) decides whether two of them spell one supplementary char.
+  if (uc >= 0xd800 && uc <= 0xdfff) return String.fromCharCode(uc)
+  if (uc === 27) return '\x1b'
+  if (uc === 9) return '\t'
+  if (uc === 8 || uc === 0x7f) return '\x7f'
+  if (uc === 0x20) return ' '
+  if (uc > 0x20 && !(uc >= 0x7f && uc <= 0x9f)) return String.fromCharCode(uc)
+  return undefined
+}
+
+/**
+ * One numeric field of a matched record (`Vk;Sc;Uc;Kd;Cs;Rc`). A missing
+ * group and an empty field both read 0, exactly like the token-level
+ * translator's own field reader.
+ */
+function recordField(match: RegExpMatchArray, index: number): number {
+  const raw = match[index + 1]
+  return raw === undefined || raw === '' ? 0 : Number(raw)
+}
+
+/**
+ * True when a record hands the fold a character or a break — asked of the DOWN
+ * half of a transition pair before the LITERAL lane consumes it (T-FIX-05). A
+ * keyup, a bare modifier transition and a `Uc` with no character meaning carry
+ * nothing, and L-012 forbids consuming bytes on a lane that cannot hand them
+ * back: such a pair keeps its own bytes and stays subject to the ingress's
+ * residue contract, exactly as before.
+ */
+function recordCarriesText(match: RegExpMatchArray): boolean {
+  const vk = recordField(match, 0)
+  const uc = recordField(match, 2)
+  if (recordField(match, 3) !== 1) return false
+  if (WIN32_VK_MODIFIER.has(vk)) return false
+  if (uc === 13 || uc === 10) return true
+  return decodedRecordChar(uc) !== undefined
+}
+
+/**
+ * Fold ONE matched record into the decode. Its `Uc` is either a break half —
+ * CR and LF both go through {@link foldNewline} — or a character
+ * ({@link decodedRecordChar}); a record that carries neither returns the fold
+ * untouched, which is exactly what the matcher itself does with a keyup, a
+ * bare modifier transition, and a Uc with no character meaning (ADR-0002,
+ * "not decodable → nothing").
+ */
+function appendDecodedRecord(fold: NewlineFold, match: RegExpMatchArray): NewlineFold {
+  const vk = recordField(match, 0)
+  const uc = recordField(match, 2)
+  const keydown = recordField(match, 3) === 1
+  // Alt+numpad synthesis rides ONE keyup whose Uc carries the composed
+  // character (same exception the token-level translator makes); every other
+  // keyup and every bare modifier transition carries no new character and is
+  // dropped, leaving the fold flag alone exactly as the matcher does.
+  const altNumpadRelease = !keydown && vk === 18 && uc !== 0
+  if (!keydown && !altNumpadRelease) return fold
+  if (keydown && WIN32_VK_MODIFIER.has(vk)) return fold
+  if (uc === 13 || uc === 10) return foldNewline(fold, uc)
+  const ch = decodedRecordChar(uc)
+  if (ch === undefined) return fold
+  return { text: `${fold.text}${ch}`, lastWasCarriageReturn: false }
+}
+
+/**
+ * Decode the record TEXT a paste payload can carry back into the characters
+ * those records encode (DESIGN D7 direction ③).
+ *
+ * A leaked record stream is not a damaged copy of the payload — it IS the
+ * payload, spelled as records. Deleting it is lossy by construction
+ * (measurement: even a strip-free ingress still loses the newline and the
+ * line-start character), so rewriting each record's own fields is the only way
+ * "chip lines == payload lines" can hold. "Not decodable → strip" stays for
+ * the records that carry no character at all (ADR-0002).
+ *
+ * Evidence gate (ADR-0008) — BOTH must hold before a single byte is touched:
+ * the caller knows the payload was assembled by the decomposed win32 paste
+ * matcher (every byte arrived as a key record, so the record stream is the
+ * payload's own origin), and the payload itself carries a complete ESC-bearing
+ * record as frame evidence. Anything else keeps its literal bytes.
+ *
+ * Newlines reach {@link foldNewline} from BOTH lanes — a record's own Uc, and
+ * an LF byte inside the payload text between records (T08's X1: the two halves
+ * of one break may arrive as one of each) — so the rule stays single. The
+ * mirror leak (T08's X1d) needs one more input, because payload text cannot
+ * show it: `carriageReturnBreaks` names the newlines that ARE a CR half, since
+ * a Return/CR record in the matcher produced them.
+ */
+function decodeWin32RecordText(
+  payload: string,
+  carriageReturnBreaks: readonly number[] = [],
+): string {
+  if (!WIN32_RECORD_FRAME_RE.test(payload)) return payload
+  // The assembler's offsets are in payload order and this scan only moves
+  // forward, so one monotonic cursor reads them all.
+  let breakCursor = 0
+  /** Offset of a CR-half newline INSIDE the run `[from, to)`, or -1. */
+  const carriageReturnIn = (from: number, to: number): number => {
+    while (
+      breakCursor < carriageReturnBreaks.length &&
+      carriageReturnBreaks[breakCursor]! < from
+    ) {
+      breakCursor++
+    }
+    const at = carriageReturnBreaks[breakCursor]
+    return at !== undefined && at < to ? at - from : -1
+  }
+  let cursor = 0
+  let fold: NewlineFold = { text: '', lastWasCarriageReturn: false }
+  for (const match of payload.matchAll(WIN32_RECORD_TEXT_RE)) {
+    const start = match.index
+    if (start > cursor) {
+      // Bytes between two records are payload text, but an LF among them is
+      // the LF HALF of a break: it goes through the ONE rule
+      // ({@link appendPayloadText} → {@link foldNewline}) instead of being
+      // printed beside the newline a CR record already emitted — and when the
+      // assembler says this newline IS the CR half, the rule learns that too.
+      fold = appendPayloadText(fold, payload.slice(cursor, start), carriageReturnIn(cursor, start))
+    }
+    cursor = start + match[0].length
+    fold = appendDecodedRecord(fold, match)
+  }
+  // The tail after the last record is payload text like any run between two
+  // records, and it reaches the SAME rule for the same reason.
+  return appendPayloadText(fold, payload.slice(cursor), carriageReturnIn(cursor, payload.length)).text
+}
+
+/**
+ * Decode the records a LITERAL paste carries (T-FIX-05) — the VT
+ * bracketed-paste lane, whose payload arrives as bytes instead of as records,
+ * and therefore has no assembler behind it. The evidence must come from the
+ * payload itself, and the user's capture says which shape qualifies: Windows
+ * Terminal + PowerShell deliver a `Ctrl+V` payload INSIDE the bracketed-paste
+ * markers with every line break spelled as the terminal's own down+up record
+ * PAIR — the next
+ * record, ESC-bearing like its down half, same `Vk;Sc;Uc;Cs`, `Kd` 1 → 0, so
+ * `CSI 13;28;13;1;0;1_` then `CSI 13;28;13;0;0;1_` (`Uc=13`). That pair is how
+ * the terminal spells ONE pasted character (conhost
+ * `Clipboard::TextToKeyEvents`), and the ingress residue strip deletes every
+ * ESC-bearing record — pair and all — so without the decode the line break is
+ * thrown away (`1 line・751 chars` on the capture; `10 lines・760 chars` with
+ * it).
+ *
+ * The pair is the unit of both the rewrite and its evidence, which keeps the
+ * decode strictly narrower than the deletion it replaces:
+ *
+ * - the gate is the pair itself — and a NEAR-MISS pair is still a pair
+ *   ({@link recordTransition}: same `Uc`, one press + one release, either
+ *   arrival order, payload text allowed between the two spellings). A lone
+ *   record shape is the payload's own text (ADR-0008 D1) and is not rewritten,
+ *   as is an ESC-less shape even when a decodable pair sits beside it (that
+ *   shape is exactly what a user pasting a record fragment delivers);
+ * - a pair whose down half hands the fold nothing (`Uc=0`, a bare modifier
+ *   transition) is not consumed either ({@link recordCarriesText}, L-012);
+ * - the up half carries no character of its own, so consuming it drops nothing
+ *   — the one character the pair spells is its down half's `Uc` — and breaks go
+ *   through the ONE newline rule ({@link foldNewline}), so a decoded break and
+ *   an adjacent real newline still fold into a single line.
+ *
+ * What the decode does NOT do is rescue the bytes it declines to rewrite: every
+ * complete ESC-bearing record is deleted by the ingress's residue contract
+ * (ADR-0002 decision 1 / ADR-0008 decision 2, `sanitizePastedText`), so a lone
+ * record's bytes survive HERE and nowhere else. The earlier reading of this
+ * function claimed a lone record "keeps every byte" as if that held
+ * end-to-end; it never did — the ingress deletes it, and that split of
+ * responsibility is what `verify-paste-integrity.tsx` (m) pins as the declared
+ * residual. Widening the gate is safe in the other direction: every record the
+ * decode consumes would have been deleted whole anyway, so a near miss now
+ * yields the character it spells instead of nothing (T-FIX-06, F-2).
+ */
+function decodeLiteralRecordText(payload: string): string {
+  // Nothing can be rewritten without an ESC-bearing record, and a payload with
+  // no `ESC[` in it cannot spell a pair: the ordinary paste skips the scan,
+  // exactly as it did before this decode existed.
+  if (!payload.includes('\u001b[')) return payload
+  const records = [...payload.matchAll(WIN32_RECORD_TEXT_RE)]
+  let cursor = 0
+  let fold: NewlineFold = { text: '', lastWasCarriageReturn: false }
+  for (let i = 0; i < records.length; i++) {
+    const first = records[i]!
+    const second = records[i + 1]
+    if (second === undefined) continue
+    // Not consumed — either the gate found no transition, or the pair's down
+    // half carries nothing to hand back: leaving the cursor in place copies the
+    // bytes verbatim through the payload-text run below. That is the path for an
+    // ESC-less shape, a lone record, and a `Uc=0` / bare-modifier pair (L-012
+    // forbids consuming bytes on a lane that cannot hand them back).
+    const transition = recordTransition(first, second)
+    if (transition === null) continue
+    if (!recordCarriesText(transition)) continue
+    const start = first.index ?? 0
+    if (start > cursor) fold = appendPayloadText(fold, payload.slice(cursor, start))
+    cursor = (second.index ?? 0) + second[0].length
+    // Arrival order decides where the pair's one character lands: the down half
+    // hands it over at ITS position inside the pair, and the run between the
+    // two halves is payload text that keeps its place between them. (A release
+    // first is the reversed spelling; the character still arrives with its
+    // press, and nothing else sits between the two record spellings.)
+    const gap = payload.slice(start + first[0].length, second.index)
+    if (first === transition) {
+      fold = appendDecodedRecord(fold, transition)
+      if (gap !== '') fold = appendPayloadText(fold, gap)
+    } else {
+      if (gap !== '') fold = appendPayloadText(fold, gap)
+      fold = appendDecodedRecord(fold, transition)
+    }
+    // The pair was consumed WHOLE: its other half is not a candidate for the
+    // next round either, so the loop moves past it.
+    i++
+  }
+  return appendPayloadText(fold, payload.slice(cursor)).text
+}
+
+/**
+ * The DOWN half of the key transition two adjacent RECORDS spell, or null when
+ * they cannot be one character's down+up pair. The pair is the unit of evidence
+ * (ADR-0008 D1), and T-FIX-06 widened what counts as one: two ESC-bearing
+ * records of the SAME `Uc` — the field that IS the character — one press and one
+ * release, in EITHER arrival order, with payload text allowed between the two
+ * spellings (the release half is the next RECORD, not the next byte; text
+ * between two records is not a third record).
+ *
+ * `Vk`/`Sc`/`Cs` are deliberately NOT part of the identity. They describe which
+ * physical key the terminal attributed the transition to, and a synthesized
+ * release is allowed to spell them differently — conhost emits keyups with
+ * `Vk=0`/`Sc=0`, and `Cs` changes when a modifier is released before the keyup.
+ * Requiring them to match turned every such near miss into a silent deletion:
+ * the pair failed this gate, fell through to the payload-text run, and the
+ * ingress's residue strip deleted both records — and with them the break the
+ * down half encoded (`probe/review/minimal-counterexamples.txt` R1/R2/R3/R3b/
+ * R3c, each pinned by an assertion in `verify-paste-integrity.tsx` (m)).
+ *
+ * Only the DOWN half is returned: it is the half that hands the character over,
+ * and whether it came first decides where that character lands in arrival
+ * order (`verify-paste-integrity.tsx` m2).
+ */
+function recordTransition(a: RegExpMatchArray, b: RegExpMatchArray): RegExpMatchArray | null {
+  // Both halves must keep their ESC: an ESC-less spelling has no frame of its
+  // own (ADR-0008 D1) and stays literal.
+  if (!a[0].startsWith('\u001b') || !b[0].startsWith('\u001b')) return null
+  const aIsDown = recordField(a, 3) === 1
+  const bIsDown = recordField(b, 3) === 1
+  // Exactly one press and one release: two presses or two releases are not a
+  // transition, whatever else they share.
+  if (aIsDown === bIsDown) return null
+  const down = aIsDown ? a : b
+  const up = aIsDown ? b : a
+  return recordField(down, 2) === recordField(up, 2) ? down : null
+}
+
+/**
+ * Build the one paste key every paste path emits.
+ *
+ * @param content - the payload bytes of that path.
+ * @param assembledFromKeyRecords - true only for the payloads the decomposed
+ *   win32 paste matcher assembled from per-key records. That provenance is one
+ *   of the two evidences a record decode can rest on
+ *   ({@link decodeWin32RecordText}); every other caller (VT bracketed paste, a
+ *   restored drop path, the VT flush) hands over literal bytes, which
+ *   {@link decodeLiteralRecordText} rewrites only under the payload's own
+ *   paired-transition evidence.
+ * @param carriageReturnBreaks - the breaks that matcher opened with a
+ *   Return/CR record and has not closed with an LF record yet
+ *   ({@link Win32PasteState.carriageReturnBreaks}), so the decoder can fold a
+ *   leaked LF record into the newline that already stands for its CR half.
+ *   Only meaningful together with `assembledFromKeyRecords`.
+ */
+function createPasteKey(
+  content: string,
+  assembledFromKeyRecords = false,
+  carriageReturnBreaks: readonly number[] = [],
+): ParsedKey {
   // Order is a contract (D6/D1): a complete OSC 8 drop frame is RESTORED to
   // its local path BEFORE the payload hygiene — hygiene strips the very OSC
   // frame the drop is encoded in. Every paste path goes through this ONE
   // choke point (VT bracketed paste, the decomposed win32 paste, and both
-  // flush paths), so no caller has to remember the order.
+  // flush paths), so no caller has to remember the order. Record decoding
+  // (ADR-0008) sits between the restore and the hygiene: decode the leaked
+  // stream first, then let the hygiene see the payload the user actually
+  // pasted.
   const dropPath = osc8DropPath(content)
-  const text = dropPath === null ? cleanPastePayload(content) : pastePayloadForPath(dropPath)
+  const text = dropPath === null
+    ? cleanPastePayload(
+        assembledFromKeyRecords
+          ? decodeWin32RecordText(content, carriageReturnBreaks)
+          : decodeLiteralRecordText(content),
+      )
+    : pastePayloadForPath(dropPath)
   return {
     kind: 'key',
     name: '',
@@ -838,10 +1168,14 @@ function parseWin32KeyEvent(
 
   // Synthesized character records (conhost's SynthesizeKeyEvent: Vk=0,
   // Sc=0, Cs=0) carry their entire payload in Uc — including the control
-  // chars that spell the bracketed-paste markers (ESC[200~ / ESC[201~).
+  // chars that spell the bracketed-paste markers (ESC[200~ / ESC[201~) and,
+  // inside a decomposed paste, the break records (CR 13 / LF 10 / Tab 9 /
+  // Backspace 8 or DEL 127 / Escape 27). VK_PACKET records carry the same
+  // payload in Uc, so they take this lane too; only a record with NO
+  // decodable payload (Uc=0) is still swallowed.
   // Map the editing-relevant ones to named keys so the decomposed-paste
   // reassembler below can see the marker characters at all.
-  if (vk === 0) {
+  if (vk === 0 || vk === WIN32_VK_PACKET) {
     if (uc === 27) return { key: { ...base, name: 'escape', sequence: s }, repeat }
     if (uc === 13 || uc === 10) return { key: { ...base, name: 'return', sequence: s }, repeat }
     if (uc === 9) return { key: { ...base, name: 'tab', sequence: s }, repeat }
@@ -916,6 +1250,19 @@ export type Win32PasteState = {
    * newline instead of appending a second one (issue #1090).
    */
   lastWasCarriageReturn: boolean
+  /**
+   * Payload offsets of the breaks this matcher opened with a Return/CR record
+   * and has NOT closed with an LF record yet, in payload order. Only this lane
+   * can say which `\n` bytes of the assembled payload are a break's CR HALF: a
+   * half-leaked break may put its CR half in this lane (a translated Return,
+   * whose newline lands in `buffer`) and its LF half in the payload TEXT as a
+   * LEAKED record — and the characters of a leaked record are appended like
+   * any other payload character, so they would erase the only trace of where
+   * that `\n` came from ({@link appendWin32PasteChar}). The offsets travel to
+   * the payload decoder through {@link createPasteKey}, which folds exactly
+   * those newlines into the LF record that follows them (T08's X1d).
+   */
+  carriageReturnBreaks: number[]
 }
 
 // Character spellings of CSI 200~ / CSI 201~ as key records: the ESC char
@@ -960,12 +1307,93 @@ function win32RecordUc(key: ParsedKey): number | undefined {
   return field === undefined || field === '' ? 0 : parseInt(field, 10)
 }
 
+/** A buffer plus the CR+LF fold flag it carries (ADR-0002 decision 2). */
+type NewlineFold = {
+  readonly text: string
+  readonly lastWasCarriageReturn: boolean
+}
+
 /**
- * Append one paste-body key to the decomposed-paste buffer. Classic conhost
- * spells a pasted CRLF break as two records — CR (Uc=13) then LF (Uc=10) —
- * and the LF must fold into the CR's newline instead of appending a second
- * one (issue #1090). Only a CR record arms the fold, so LF-only text, a lone
- * CR, and ordinary characters (including a real `_`) keep their bytes.
+ * ADR-0002 decision 2 as ONE rule, shared by every win32 newline path — the
+ * decomposed matcher's {@link appendWin32PasteChar}, the payload decoder
+ * {@link decodeWin32RecordText}, and the payload TEXT that decoder copies
+ * between records ({@link appendPayloadText}) — so they can never disagree: a
+ * pasted CRLF break arrives as a CR half (Uc=13) followed by an LF half
+ * (Uc=10), and the LF half folds into the newline the CR already produced.
+ * Only a CR arms the fold, so LF-only text, a lone CR, and ordinary characters
+ * (including a real `_`) keep their bytes. A CR half that never travelled as a
+ * record — the translated Return of a half-leaked break — reaches this rule
+ * with uc=13 from {@link appendPayloadText}, which is the same CR provenance
+ * the matcher records in {@link Win32PasteState.carriageReturnBreaks}.
+ */
+function foldNewline(fold: NewlineFold, uc: number | undefined): NewlineFold {
+  if (uc === 10 && fold.lastWasCarriageReturn) {
+    // LF record closing the CRLF pair: the CR already emitted the newline.
+    return { text: fold.text, lastWasCarriageReturn: false }
+  }
+  return { text: `${fold.text}\n`, lastWasCarriageReturn: uc === 13 }
+}
+
+/**
+ * Append one run of payload TEXT — the bytes between two records, or the tail
+ * after the last one — through {@link foldNewline}, so an LF in it folds into
+ * the break a CR half already opened instead of printing a second newline for
+ * the same break.
+ *
+ * The two halves of a break may arrive in either lane (ADR-0002 decision 2),
+ * and T08's independent review read both orders. In X1 the CR half leaked as
+ * record text while the LF half was still a real newline, and this copy path —
+ * the one newline site that bypassed the rule — turned that ONE break into two
+ * lines (4-line source → 7 lines, chip 7 lines, AC-3②). In X1d it is the other
+ * way round: the CR half was a TRANSLATED Return, so the newline it produced is
+ * already IN this run, and the LF half leaked as record text, whose record the
+ * decoder then reads right after. `carriageReturnAt` is the assembler's answer
+ * to "which of these `\n` is that CR half" — a run offset from
+ * {@link Win32PasteState.carriageReturnBreaks} — so that byte, and only that
+ * byte, arms the fold the leaked LF record needs. Every other byte keeps its
+ * bytes and disarms the fold exactly as before, including a literal CR: its own
+ * CRLF fold belongs to the ingress, not to the decoder.
+ */
+function appendPayloadText(
+  fold: NewlineFold,
+  text: string,
+  carriageReturnAt = -1,
+): NewlineFold {
+  let out = fold.text
+  let lastWasCarriageReturn = fold.lastWasCarriageReturn
+  let at = 0
+  for (const ch of text) {
+    if (ch !== '\n') {
+      out += ch
+      lastWasCarriageReturn = false
+      at += ch.length
+      continue
+    }
+    // uc=13 when the assembler opened this newline with a Return/CR record:
+    // the ONE rule, with the provenance that byte cannot carry itself. `at`
+    // counts UTF-16 units, like the offsets it is compared against.
+    const folded = foldNewline(
+      { text: out, lastWasCarriageReturn },
+      at === carriageReturnAt ? 13 : 10,
+    )
+    out = folded.text
+    lastWasCarriageReturn = folded.lastWasCarriageReturn
+    at += 1
+  }
+  return { text: out, lastWasCarriageReturn }
+}
+
+/**
+ * Append one paste-body key to the decomposed-paste buffer. Newlines go
+ * through {@link foldNewline}; anything else keeps its own bytes.
+ *
+ * This lane is also the only place that knows a newline's PROVENANCE: a
+ * Return/CR record's break is recorded in `carriageReturnBreaks` and retired
+ * once an LF record closes it, so the payload decoder can fold a leaked LF
+ * record into the very newline whose CR half this matcher already emitted
+ * (T08's X1d). The characters of a leaked record are ordinary payload text
+ * here and deliberately leave that record alone — they are the LF half's own
+ * spelling, so the break is still open behind them.
  */
 function appendWin32PasteChar(state: Win32PasteState, key: ParsedKey): void {
   const ch = win32RecordChar(key)
@@ -976,13 +1404,20 @@ function appendWin32PasteChar(state: Win32PasteState, key: ParsedKey): void {
     return
   }
   const uc = win32RecordUc(key)
-  if (uc === 10 && state.lastWasCarriageReturn) {
-    // LF record closing the CRLF pair: the CR already emitted the newline.
-    state.lastWasCarriageReturn = false
-    return
+  const closesCarriageReturnBreak = uc === 10 && state.lastWasCarriageReturn
+  const folded = foldNewline(
+    { text: state.buffer, lastWasCarriageReturn: state.lastWasCarriageReturn },
+    uc,
+  )
+  state.buffer = folded.text
+  state.lastWasCarriageReturn = folded.lastWasCarriageReturn
+  if (closesCarriageReturnBreak) {
+    // The LF half arrived in this lane too, so the break is complete: its
+    // newline is no longer waiting and may not absorb a LATER break's LF.
+    state.carriageReturnBreaks.pop()
+  } else if (uc === 13) {
+    state.carriageReturnBreaks.push(state.buffer.length - 1)
   }
-  state.lastWasCarriageReturn = uc === 13
-  state.buffer += '\n'
 }
 
 /**
@@ -1007,13 +1442,18 @@ function feedWin32Paste(state: Win32PasteState, key: ParsedKey): ParsedKey[] {
         state.active = true
         state.buffer = ''
         state.lastWasCarriageReturn = false
+        state.carriageReturnBreaks = []
         return []
       }
-      // End marker complete: the whole paste as a single event.
-      const paste = createPasteKey(state.buffer)
+      // End marker complete: the whole paste as a single event. Its body was
+      // assembled from key records, which is exactly the provenance the
+      // payload decoder needs (a leaked record stream is spelled as text in
+      // it) — see `createPasteKey`.
+      const paste = createPasteKey(state.buffer, true, state.carriageReturnBreaks)
       state.active = false
       state.buffer = ''
       state.lastWasCarriageReturn = false
+      state.carriageReturnBreaks = []
       return [paste]
     }
     return []
@@ -1570,6 +2010,7 @@ export function parseMultipleKeypresses(
     held: [],
     buffer: '',
     lastWasCarriageReturn: false,
+    carriageReturnBreaks: [],
   }
   const win32Protocol: Win32ProtocolState = prevState.win32Protocol ?? {
     held: [],
@@ -2047,17 +2488,21 @@ export function parseMultipleKeypresses(
   if (isFlush && !deferFlush && win32Paste.active) {
     let content = win32Paste.buffer
     for (const k of win32Paste.held) content += win32RecordChar(k) ?? ''
-    keys.push(createPasteKey(content))
+    // Assembled from key records like the end-marker path, so the payload
+    // decoder gets the same provenance.
+    keys.push(createPasteKey(content, true, win32Paste.carriageReturnBreaks))
     win32Paste.active = false
     win32Paste.buffer = ''
     win32Paste.held = []
     win32Paste.matched = 0
     win32Paste.lastWasCarriageReturn = false
+    win32Paste.carriageReturnBreaks = []
   } else if (isFlush && !deferFlush && win32Paste.held.length > 0) {
     keys.push(...win32Paste.held)
     win32Paste.held = []
     win32Paste.matched = 0
     win32Paste.lastWasCarriageReturn = false
+    win32Paste.carriageReturnBreaks = []
   }
 
   // A quiet timeout ends a synthesized protocol candidate. Incomplete mouse

@@ -174,7 +174,7 @@ CLI 形态：任意终端运行 `dsh-tui migrate ...`，与 TUI 内执行同一�
 
 正文中的文件路径可打开文件操作菜单；自动识别不会从 `working/idle/needs-input` 这类斜杠分隔的词串或 `2024/01/15` 这类日期内部截出路径。
 
-**粘贴**：终端原生与 bracketed paste 保留普通文本与换行，粘贴内容到达时不会被误当 `Enter` 提交。Windows 终端以 win32-input-mode 键记录投递粘贴时，记录残留会在入口被整体剥离（多行粘贴不再留下零散 `_`），粘贴的 CRLF 折叠为单个换行；普通文本中的真实下划线与 bracketed paste 内容不受影响。
+**粘贴**：终端原生与 bracketed paste 保留普通文本与换行，粘贴内容到达时不会被误当 `Enter` 提交。Windows 终端以 win32-input-mode 键记录投递粘贴时，泄漏进载荷的记录流会按 `Uc` 还原成它编码的字符（含换行），因此输入框行数与粘贴内容一致；只有没有字符语义的记录才被剥离（多行粘贴不再留下零散 `_`），且完整记录总是先于无 ESC 尾部消费——不会连带删掉紧随的载荷字符。粘贴的 CRLF 折叠为单个换行；普通文本中的真实下划线与 bracketed paste 内容不受影响。
 
 **拖放文件**：原生 Windows 的桌面拖放（Windows Terminal / OpenConsole）以 OSC 8 超链接到达；解析器在粘贴载荷卫生之前把其中的 `file://` URI 还原为解码后的本地路径，`]8;id=…;` 参数残渣不会进入草稿。图片路径进入既有图片 stage 管线；其他文件作为可引用路径插入（含空白路径以 composer 的单 token 引号形式 `"…"` 到达）。只还原 `file://` URI 且 fail-closed：远程 authority/UNC、一个载荷里带多个不同 URI、或带多个 token 的 URI 一律拒绝并保持字面文本，不做猜测。
 

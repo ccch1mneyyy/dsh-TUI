@@ -698,6 +698,54 @@ checkBoolean('paste opener and record-shaped payload in one read do not start a 
   fragments(['\x1b[200~' + SHIFT_RECORD.slice(0, -1)]).state.win32InputStartedAt === undefined, true)
 checkBoolean('a literal pasted ESC flush is not orphan keyboard ESC provenance',
   fragments(['\x1b[200~\x1b', null, '[123', null]).text === '[123', true)
+
+// --- 8c. bracketed paste carrying the terminal's OWN break records (T-FIX-05) --
+//
+// The user's capture (`probe/capture/capture-2026-10-02T18-33-49-825Z.txt`:
+// Windows Terminal + PowerShell, Ctrl+V) delivers the payload INSIDE the
+// bracketed-paste markers with every line boundary spelled as a real win32
+// DOWN+UP record PAIR — `CSI 13;28;13;1;0;1_` then `CSI 13;28;13;0;0;1_`, so
+// `Uc=13`. That pair is the protocol's own spelling of ONE pasted character
+// (conhost's `Clipboard::TextToKeyEvents`), and the literal lane decodes it
+// back into the break it encodes: an ESC-bearing record is what the ingress
+// residue strip deletes whole, so without the decode the newline is gone
+// (measured: the 760-char / 10-line payload reads `1 line・751 chars`).
+//
+// The evidence is the PAIR, never a single record — a lone record shape is the
+// payload's own text (ADR-0008 D1) and keeps every byte, and an ESC-less shape
+// keeps them even when a decodable pair sits beside it. Every case below also
+// pins the function side (L-012): exactly ONE isPasted event, never a leaked
+// Return event that would submit mid-paste.
+const CR_PAIR = `${CSI}13;28;13;1;0;1_${CSI}13;28;13;0;0;1_`
+checkPaste('a break pair inside a bracketed paste decodes to ONE newline',
+  new Feeder().feed(`${CSI}200~alfa${CR_PAIR}bravo${CSI}201~`), 'alfa\nbravo')
+checkPaste('a break pair at the payload start decodes',
+  new Feeder().feed(`${CSI}200~${CR_PAIR}x${CSI}201~`), '\nx')
+checkPaste('a break pair at the payload end decodes',
+  new Feeder().feed(`${CSI}200~x${CR_PAIR}${CSI}201~`), 'x\n')
+checkPaste('every boundary of a three-line payload decodes',
+  new Feeder().feed(`${CSI}200~alfa${CR_PAIR}bravo${CR_PAIR}charlie${CSI}201~`), 'alfa\nbravo\ncharlie')
+checkPaste('the decoded break folds with an adjacent REAL newline (X1 in this lane)',
+  new Feeder().feed(`${CSI}200~alfa${CR_PAIR}\nbravo${CSI}201~`), 'alfa\nbravo')
+// Zero-harm side (ADR-0008 D1): nothing without its own frame evidence may be
+// rewritten — not a lone record, not an ESC-less pair, not even beside a pair.
+checkPaste('a LONE record in a bracketed paste keeps its bytes',
+  new Feeder().feed(`${CSI}200~${CSI}13;28;13;1;0;1_x${CSI}201~`), `${CSI}13;28;13;1;0;1_x`)
+checkPaste('an ESC-less pair keeps its bytes even beside a decodable pair',
+  new Feeder().feed(`${CSI}200~alfa${CR_PAIR}[13;28;13;1;0;1_[13;28;13;0;0;1_bravo${CSI}201~`),
+  'alfa\n[13;28;13;1;0;1_[13;28;13;0;0;1_bravo')
+// L-012: a pair that hands the fold nothing is NOT consumed — the literal lane
+// has no assembler to prove it is residue, so it may not drop bytes it cannot
+// hand back. Both spellings below keep their bytes verbatim.
+checkPaste('a Uc=0 pair keeps its bytes (no character to hand back)',
+  new Feeder().feed(`${CSI}200~alfa${CR_PAIR}${CSI}0;0;0;1;0;1_${CSI}0;0;0;0;0;1_bravo${CSI}201~`),
+  `alfa\n${CSI}0;0;0;1;0;1_${CSI}0;0;0;0;0;1_bravo`)
+checkPaste('a bare-modifier pair keeps its bytes (no character to hand back)',
+  new Feeder().feed(`${CSI}200~alfa${CR_PAIR}${CSI}17;29;0;1;40;1_${CSI}17;29;0;0;40;1_bravo${CSI}201~`),
+  `alfa\n${CSI}17;29;0;1;40;1_${CSI}17;29;0;0;40;1_bravo`)
+// The decode is not a mode flag: the same paste decodes with framing OFF too.
+checkPaste('the pair decodes without the win32 framing flag',
+  summarize(fragments([`${CSI}200~alfa${CR_PAIR}bravo${CSI}201~`], false).keys), 'alfa\nbravo')
 {
   const surrogateRecords = [
     `${CSI}49;2;55357;1;0;1_`, `${CSI}49;2;55357;0;0;1_`, `${CSI}49;2;56832;1;0;1_`,
@@ -930,6 +978,132 @@ for (const sequence of [`${CSI}1;2;3;1A`, `${CSI}1;2;3;1$y`]) {
   } finally {
     Date.now = originalNow
   }
+}
+
+// --- 16. VK_PACKET (231) records carry their character in Uc (T-FIX-02) ------
+//
+// VK_PACKET means "the character is in Uc" (SendInput / keybd_event Unicode
+// injection; Windows Terminal re-encodes a paste this way under
+// win32-input-mode). Printable Uc already reached text input through the
+// Uc-wins-over-Vk path, but the CONTROL characters a pasted break is spelled
+// with fell through to the swallow at the end of parseWin32KeyEvent: every
+// break record vanished, so a decomposed paste assembled without newlines
+// (user report: a 10-line / 760-char paste folded to `1 line・751 chars`).
+// These assertions put VK_PACKET on the same "character rides in Uc" lane the
+// Vk=0 synthesized records already use — and keep Uc=0 swallowed.
+
+const packetRec = (uc: number): string => pasteRecs(231, uc)
+
+check('VK_PACKET CR (Uc=13) is a Return, not a swallowed record', new Feeder().feed(`${CSI}231;0;13;1;0;1_`), [
+  wkey('return', {}, `${CSI}231;0;13;1;0;1_`),
+])
+check('VK_PACKET LF (Uc=10) is a Return too', new Feeder().feed(`${CSI}231;0;10;1;0;1_`), [
+  wkey('return', {}, `${CSI}231;0;10;1;0;1_`),
+])
+check('VK_PACKET Tab (Uc=9) is a Tab', new Feeder().feed(`${CSI}231;0;9;1;0;1_`), [
+  wkey('tab', {}, `${CSI}231;0;9;1;0;1_`),
+])
+check('VK_PACKET Backspace (Uc=8) is a Backspace', new Feeder().feed(`${CSI}231;0;8;1;0;1_`), [
+  wkey('backspace', {}, `${CSI}231;0;8;1;0;1_`),
+])
+check('VK_PACKET DEL (Uc=127) is a Backspace', new Feeder().feed(`${CSI}231;0;127;1;0;1_`), [
+  wkey('backspace', {}, `${CSI}231;0;127;1;0;1_`),
+])
+check('VK_PACKET Escape (Uc=27) is held as a candidate sequence prefix', new Feeder().feed(`${CSI}231;0;27;1;0;1_`), [])
+{
+  // …and released on the flush exactly like a real VK_ESCAPE record (the
+  // escape timer holds any translated Escape, not just the named-key one).
+  const f = new Feeder()
+  f.feed(`${CSI}231;0;27;1;0;1_`)
+  check('VK_PACKET Escape flushes as an Escape', f.feed(null), [
+    wkey('escape', {}, `${CSI}231;0;27;1;0;1_`),
+  ])
+}
+check('VK_PACKET with Uc=0 carries no payload and stays swallowed', new Feeder().feed(`${CSI}231;0;0;1;0;1_`), [])
+
+{
+  // A decomposed paste spelled with VK_PACKET records: V10/V17's break lane
+  // (CR record + LF record) must fold to ONE newline, exactly like the Vk=0
+  // synthesized lane above (#1090).
+  const f = new Feeder()
+  const body = packetRec(97) + packetRec(13) + packetRec(10) + packetRec(98)
+  checkPaste('decomposed paste with VK_PACKET CR+LF breaks yields one newline', f.feed(P2_OPEN + body + P2_CLOSE), 'a\nb')
+}
+{
+  // V11's break lane: the CR record alone.
+  const f = new Feeder()
+  const body = packetRec(97) + packetRec(13) + packetRec(98)
+  checkPaste('decomposed paste with a lone VK_PACKET CR break yields one newline', f.feed(P2_OPEN + body + P2_CLOSE), 'a\nb')
+}
+{
+  // The zero-information record must stay swallowed — a paste may not gain a
+  // newline from a Uc=0 VK_PACKET record (issue #1251 UAT's V9 shape).
+  const f = new Feeder()
+  const body = packetRec(97) + packetRec(0) + packetRec(98)
+  checkPaste('a Uc=0 VK_PACKET record adds no character inside a paste', f.feed(P2_OPEN + body + P2_CLOSE), 'ab')
+}
+
+// --- 16b. the VK_PACKET lane OUTSIDE a paste, and its two guard rails --------
+//
+// T-FIX-02 put VK_PACKET on the "the character rides in Uc" lane, which also
+// changes what a VK_PACKET record does when NO bracketed-paste marker ever
+// arrives (the review's F-3: a marker-less per-character stream dispatches one
+// Return per CR/LF instead of being swallowed). T-FIX-06 keeps that expansion
+// deliberately and pins BOTH sides here:
+//
+// - VK_PACKET's whole payload IS `Uc` (SendInput / keybd_event Unicode
+//   injection), so a marker-less character stream is typed input, not a paste:
+//   swallowing its CR would be the same silent loss #1251 fixed, and the
+//   pre-existing Vk=0 synthesized lane has always read it that way (the
+//   review's control B8). What keeps a paste out of the submit path is the
+//   EVIDENCE — the bracketed marker — never a heuristic on a bare record.
+// - the same records INSIDE the markers stay one paste event with the break
+//   intact and emit no Return at all, so a real paste still cannot submit
+//   mid-way (AC-12).
+{
+  const marker = (char: number): string => `${CSI}231;0;${char};1;0;1_`
+  // The review's B7 shape: a, CR, LF, b, CR, LF, c — every record VK_PACKET,
+  // no marker anywhere.
+  const stream = [97, 13, 10, 98, 13, 10, 99].map(marker).join('')
+  check('AC-12/F-3: a marker-less VK_PACKET character stream is typed input, not a paste',
+    new Feeder().feed(stream), [
+      wchar('a'),
+      wkey('return', {}, marker(13)),
+      wkey('return', {}, marker(10)),
+      wchar('b'),
+      wkey('return', {}, marker(13)),
+      wkey('return', {}, marker(10)),
+      wchar('c'),
+    ])
+  // ...and the single-record side this lane also owns outside a paste (§16
+  // already pins CR/LF/Tab/Backspace/DEL/Escape; repeated here as the F-3 pair
+  // so both ends of the widening are guarded in ONE place).
+  check('AC-12/F-3: a single VK_PACKET CR outside any paste is a Return',
+    new Feeder().feed(marker(13)), [wkey('return', {}, marker(13))])
+}
+{
+  // F-10 ①: the marker itself spelled with VK_PACKET records (the review's C1,
+  // `KNOWN-ISSUES.md` A-4's untested combination).
+  const marker = (char: number): string => `${CSI}231;0;${char};1;0;1_`
+  const open = [27, 91, 50, 48, 48, 126].map(marker).join('')
+  const close = [27, 91, 50, 48, 49, 126].map(marker).join('')
+  const keys = new Feeder().feed(open + marker(97) + marker(13) + marker(98) + close)
+  checkPaste('VK_PACKET-spelled markers + VK_PACKET body: ONE paste event (F-10 ①)',
+    keys, 'a\nb')
+  checkBoolean('AC-12: a marked VK_PACKET paste emits no Return key at all',
+    keys.every(key => key.kind !== 'key' || key.name !== 'return'), true)
+}
+{
+  // F-10 ②: the body spelled as down+up PAIRS (conhost's real
+  // Clipboard::TextToKeyEvents form, the review's C2/C3/C4). The assembler must
+  // not append a character twice because a release half also carries `Uc`.
+  const marker = (char: number): string => `${CSI}231;0;${char};1;0;1_`
+  const open = [27, 91, 50, 48, 48, 126].map(marker).join('')
+  const close = [27, 91, 50, 48, 49, 126].map(marker).join('')
+  checkPaste('VK_PACKET markers + down+up PAIRED body: no character is duplicated (F-10 ②)',
+    new Feeder().feed(open + pasteRecs(231, 97) + pasteRecs(231, 98) + close), 'ab')
+  checkPaste('Vk=0 markers + down+up PAIRED body with a CR pair: no character is duplicated (F-10 ②)',
+    new Feeder().feed(P2_OPEN + pasteRecs(0, 97) + pasteRecs(0, 13) + pasteRecs(0, 98) + P2_CLOSE), 'a\nb')
 }
 
 if (failures > 0) {
