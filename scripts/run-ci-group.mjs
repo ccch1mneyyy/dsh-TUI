@@ -531,6 +531,7 @@ const GROUPS = {
 // 会话索引引擎：结构化走帧、定界读与全量解码等价、损坏帧不吃掉整个
 // 日志、标题来源判定、revision 命中/失效（钉住 revision 改写日志作
 // 判据）、索引自愈与剪枝、**终态等价**（增量索引 == 全新构建）。
+    ['verify-session-model-recovery', ['node', '--import', 'tsx/esm', 'scripts/verify-session-model-recovery.ts']],
     ["verify-session-index", ['node', 'scripts/verify-session-index.mjs']],
 // 真 JSONL 混合版本库：无关追加不重读旧会话摘要，文件改写/替换仍须失效。
     ["verify-session-artifact-cache", ['node', 'scripts/verify-session-artifact-cache.mjs']],

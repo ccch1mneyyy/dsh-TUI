@@ -297,6 +297,7 @@ export async function listSummaries(
                 titleComplete: suffix.title !== undefined || previous.titleComplete,
                 hasPrompt: previous.hasPrompt || suffix.hasHumanPrompt,
                 model: suffix.model ?? previous.model,
+                modelComplete: suffix.model !== undefined || previous.modelComplete === true,
                 label: suffix.label ?? previous.label,
               }
             }
@@ -316,6 +317,7 @@ export async function listSummaries(
               titleComplete: digest.titleComplete === true,
               hasPrompt: digest.hasPrompt,
               model: digest.model ?? carried?.model,
+              modelComplete: digest.modelComplete,
               label: digest.label ?? carried?.label,
             }
           }
@@ -324,7 +326,7 @@ export async function listSummaries(
       }
     }
     if (
-      derived !== undefined && !derived.titleComplete && signal?.aborted !== true &&
+      derived !== undefined && (!derived.titleComplete || derived.modelComplete !== true) && signal?.aborted !== true &&
       titleRecoveryNeedsWork(header.id, derived.revision, enriched => notifyEnriched(header.id, enriched))
     ) {
       // A revision hit still may need enrichment, but locating that rare log

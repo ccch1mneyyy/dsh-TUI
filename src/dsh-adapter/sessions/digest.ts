@@ -113,12 +113,16 @@ function titleOf(line: LogLine): SessionTitle | undefined {
   return { text: text.trim(), source: byProvider ? 'auto' : 'renamed' }
 }
 
-/** The route recorded by a `request/context` event. */
+/** Request headers own the route; context events support historical logs. */
 function modelOf(line: LogLine): string | undefined {
-  if (line['type'] !== 'request/context') return undefined
   const data = line['data']
   if (data === null || typeof data !== 'object') return undefined
-  const model = (data as Record<string, unknown>)['model']
+  const record = data as Record<string, unknown>
+  let model: unknown
+  if (line['type'] === 'request/header') {
+    const header = record['header'] as { config?: { model?: unknown } } | undefined
+    model = header?.config?.model
+  } else if (line['type'] === 'request/context') model = record['model']
   return typeof model === 'string' && model.length > 0 ? model : undefined
 }
 
@@ -199,6 +203,7 @@ export function digestSession(path: string, cwd: string): SessionDigest {
     title: resolved ?? { text: basename(cwd), source: 'fallback' },
     hasPrompt,
     model,
+    modelComplete: model !== undefined || completeHead,
     label,
     ...(!completeHead && tailTitle === undefined ? {} : { titleComplete: true as const }),
   }
@@ -317,6 +322,41 @@ async function recoverLatestTitle(
   } finally {
     await handle.close().catch(() => {})
   }
+}
+
+export interface SessionModelRecovery {
+  readonly model: string | undefined
+  readonly complete: boolean
+}
+
+/** Reverse-page a stable log snapshot until the latest route is found or absence is proven. */
+export async function recoverSessionModel(path: string, bytes: number, signal?: AbortSignal): Promise<SessionModelRecovery> {
+  signal?.throwIfAborted()
+  let handle: SessionLogHandle
+  try { handle = await open(path, 'r') }
+  catch { signal?.throwIfAborted(); return { model: undefined, complete: false } }
+  try {
+    let end = bytes
+    while (end > 0) {
+      signal?.throwIfAborted()
+      const page = await reversePage(handle, end, signal)
+      if (page === undefined) return { model: undefined, complete: false }
+      for (let i = page.frames.length - 1; i >= 0; i--) {
+        const lines = decodeFrame(page.buffer, page.frames[i]!)
+        if (lines === undefined) return { model: undefined, complete: false }
+        for (let j = lines.length - 1; j >= 0; j--) {
+          const model = modelOf(lines[j]!)
+          if (model !== undefined) return { model, complete: true }
+        }
+        if (page.start === 0 && i === 0 && lines[0]?.['type'] !== 'session') return { model: undefined, complete: false }
+      }
+      const nextEnd = page.start + page.frames[0]!.start
+      if (nextEnd >= end) return { model: undefined, complete: false }
+      end = nextEnd
+      await scheduler.yield()
+    }
+    return { model: undefined, complete: bytes > 0 }
+  } finally { await handle.close().catch(() => {}) }
 }
 
 export interface AppendedDigest {
