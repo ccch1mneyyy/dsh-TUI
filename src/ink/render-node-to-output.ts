@@ -13,6 +13,7 @@ import {
   type TextNoSelectRun,
 } from './node-cache.js'
 import type Output from './output.js'
+import type { SoftWrapFlag } from './output.js'
 import renderBorder from './render-border.js'
 import { countPaintedFlankColumns, type Screen } from './screen.js'
 import {
@@ -28,6 +29,7 @@ import {
   wrapDecoratedLine,
   type HangInfo,
 } from './text-decoration.js'
+import { stringWidth } from './stringWidth.js'
 import { isXtermJs } from './terminal.js'
 import { terminalImageSourceFromAttributes } from './terminal-image.js'
 import type { TerminalImagePlacement } from './terminal-image.js'
@@ -543,6 +545,8 @@ function buildCharToSegmentMap(segments: StyledSegment[]): number[] {
  * @param trimEnabled - Whether whitespace trimming is enabled (wrap-trim mode).
  *   When true, we skip whitespace in the original that was trimmed from the output.
  *   When false (wrap mode), all whitespace is preserved so no skipping is needed.
+ * @param softWrap - per-line flags from wrapWithSoftWrap; a 'gap' line had its
+ *   leading separator space elided, so that original character is skipped.
  * @returns the styled wrapped text.
  */
 function applyStylesToWrappedText(
@@ -551,6 +555,7 @@ function applyStylesToWrappedText(
   charToSegment: number[],
   originalPlain: string,
   trimEnabled: boolean = false,
+  softWrap?: SoftWrapFlag[],
 ): string {
   const lines = wrappedPlain.split('\n')
   const resultLines: string[] = []
@@ -558,6 +563,7 @@ function applyStylesToWrappedText(
   let charIndex = 0
   for (let lineIdx = 0; lineIdx < lines.length; lineIdx++) {
     const line = lines[lineIdx]!
+    if (softWrap?.[lineIdx] === 'gap') charIndex++
 
     // In trim mode, skip leading whitespace that was trimmed from this line.
     // Only skip if the original has whitespace but the output line doesn't start
@@ -671,13 +677,16 @@ function applyStylesToWrappedText(
  *
  * `wrapLine` replaces the per-line wrap for decorated text (see
  * wrapDecoratedLine); without it every line wraps at maxWidth.
+ * In 'wrap' mode wrap-ansi moves the separator space to the start of the
+ * next row when a word exactly fills the width; that space is elided and
+ * the row flagged 'gap' (row count and widest line are unchanged).
  */
 function wrapWithSoftWrap(
   plainText: string,
   maxWidth: number,
   textWrap: Parameters<typeof wrapText>[2],
   wrapLine?: (line: string) => string[],
-): { wrapped: string; softWrap: boolean[] | undefined } {
+): { wrapped: string; softWrap: SoftWrapFlag[] | undefined } {
   if (textWrap !== 'wrap' && textWrap !== 'wrap-trim') {
     return {
       wrapped: wrapText(plainText, maxWidth, textWrap),
@@ -686,13 +695,22 @@ function wrapWithSoftWrap(
   }
   const origLines = plainText.split('\n')
   const outLines: string[] = []
-  const softWrap: boolean[] = []
+  const softWrap: SoftWrapFlag[] = []
   for (const orig of origLines) {
     const pieces = wrapLine !== undefined
       ? wrapLine(orig)
       : wrapText(orig, maxWidth, textWrap).split('\n')
     for (let i = 0; i < pieces.length; i++) {
-      outLines.push(pieces[i]!)
+      const piece = pieces[i]!
+      if (
+        i > 0 && textWrap === 'wrap' && piece.startsWith(' ') &&
+        stringWidth(pieces[i - 1]!) === maxWidth
+      ) {
+        outLines.push(piece.slice(1))
+        softWrap.push('gap')
+        continue
+      }
+      outLines.push(piece)
       softWrap.push(i > 0)
     }
   }
@@ -708,7 +726,7 @@ function wrapWithSoftWrap(
 function applyPaddingToText(
   node: DOMElement,
   text: string,
-  softWrap?: boolean[],
+  softWrap?: SoftWrapFlag[],
 ): string {
   const yogaNode = node.childNodes[0]?.yogaNode
 
@@ -719,7 +737,7 @@ function applyPaddingToText(
     if (softWrap && offsetY > 0) {
       // Prepend `false` for each padding line so indices stay aligned
       // with text.split('\n'). Mutate in place — caller owns the array.
-      softWrap.unshift(...Array<boolean>(offsetY).fill(false))
+      softWrap.unshift(...Array<SoftWrapFlag>(offsetY).fill(false))
     }
   }
 
@@ -1241,7 +1259,7 @@ function renderNodeToOutput(
           const needsWrapping = widestLine(plainText) > maxWidth
 
           let text: string
-          let softWrap: boolean[] | undefined
+          let softWrap: SoftWrapFlag[] | undefined
           if (needsWrapping && segments.length === 1) {
             // Single segment: wrap plain text first, then apply styles to each line
             const segment = segments[0]!
@@ -1274,6 +1292,7 @@ function renderNodeToOutput(
               charToSegment,
               plainText,
               textWrap === 'wrap-trim',
+              softWrap,
             )
             // Hyperlinks are handled per-run in applyStylesToWrappedText via
             // wrapWithOsc8Link, similar to how styles are applied per-run.
