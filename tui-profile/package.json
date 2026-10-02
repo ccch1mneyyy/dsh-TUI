@@ -1,0 +1,64 @@
+{
+  "name": "dsh-tui-profile",
+  "version": "0.1.0-experimental",
+  "private": true,
+  "type": "module",
+  "description": "In-tree TUI Profile of the dsh-TUI repository: dsh-TUI admission requirements, private tui.dsh/v1alpha1 protocol definitions, and conformance checks built on dsh-std.",
+  "exports": {
+    "./protocols": {
+      "types": "./protocols/profile-definitions.d.ts",
+      "default": "./protocols/profile-definitions.js"
+    },
+    "./tui-contributions": {
+      "types": "./protocols/tui-contributions.d.ts",
+      "default": "./protocols/tui-contributions.js"
+    },
+    "./tui-channel": {
+      "types": "./protocols/tui-channel.d.ts",
+      "default": "./protocols/tui-channel.js"
+    },
+    "./tui-channel-http": {
+      "types": "./protocols/tui-channel-http.d.ts",
+      "default": "./protocols/tui-channel-http.js"
+    },
+    "./registry/registry-0.15.json": "./registry/registry-0.15.json",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "adapters",
+    "docs",
+    "conformance",
+    "governance",
+    "proposals",
+    "protocols",
+    "registry",
+    "notes",
+    "schemas",
+    "CHANGELOG.md",
+    "PLUGIN-ADMISSION-CHECKLIST.md"
+  ],
+  "peerDependencies": {
+    "@dsh-std/command": "workspace:*",
+    "@dsh-std/connection": "workspace:*",
+    "@dsh-std/core": "workspace:*",
+    "@dsh-std/lifecycle": "workspace:*",
+    "@dsh-std/manifest": "workspace:*",
+    "@dsh-std/messages": "workspace:*",
+    "@dsh-std/presentation": "workspace:*",
+    "@dsh-std/storage": "workspace:*",
+    "@dsh-std/workspace": "workspace:*"
+  },
+  "scripts": {
+    "build:std": "node scripts/conformance.mjs --prepare-standalone",
+    "test": "node scripts/conformance.mjs",
+    "test:standalone": "node scripts/conformance.mjs --standalone",
+    "validate": "node scripts/conformance.mjs --no-build",
+    "test:validate-manifest": "node conformance/tests/validate-manifest.cli.test.js",
+    "validate:manifest": "node scripts/conformance.mjs"
+  },
+  "engines": {
+    "node": "^22.19 || >=24"
+  },
+  "packageManager": "pnpm@11.21.0",
+  "license": "MIT"
+}

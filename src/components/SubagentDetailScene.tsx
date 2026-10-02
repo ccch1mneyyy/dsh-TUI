@@ -3,12 +3,14 @@ import { Box, Text, useInput, ScrollBox, type ScrollBoxHandle, useTerminalSize }
 import type { SubagentOutputLine, SubagentState } from '../dsh-adapter/subagents.js'
 import { t } from '../i18n.js'
 import { Divider } from './design-system/Divider.js'
-import { ExitButton } from './SubagentDashboard.js'
+import { ExitButton, isPanelPlainReturn } from './SubagentDashboard.js'
 import { isPlainReturnInput } from '../utils/modifiers.js'
 import { toolNameColor } from './messages/AssistantToolUseMessage.js'
 import { Markdown } from './Markdown.js'
 import { getCliHighlightPromise } from '../terminal-utils/cliHighlight.js'
 import { isMinimalUiMode } from '../minimalUiMode.js'
+import { usePanelInput } from './sidePanel/usePanelInput.js'
+import type { SidePanelKeyFlags } from './sidePanel/types.js'
 import type { Theme } from '../theme.js'
 import { THINKING_SETTLED_MARKER } from '../terminal-utils/figures.js'
 
@@ -153,6 +155,12 @@ export interface SubagentDetailSceneProps {
   subagent: SubagentState
   onBack: () => void
   onInterrupt?: (agentId: string) => void
+  /** 'panel' 挂在侧栏宿主里（去外层 padding、键盘走 usePanelInput 分发器）；
+   *  default（缺省）与整屏形态逐字节一致。 */
+  variant?: 'default' | 'panel'
+  /** panel 形态：宿主报告焦点/可见性；非 active 时保留状态但收不到键。 */
+  focused?: boolean
+  visible?: boolean
 }
 
 /**
@@ -166,7 +174,11 @@ export function SubagentDetailScene({
   subagent,
   onBack,
   onInterrupt,
+  variant = 'default',
+  focused = true,
+  visible = true,
 }: SubagentDetailSceneProps): React.ReactNode {
+  const panelMode = variant === 'panel'
   const scrollRef = React.useRef<ScrollBoxHandle | null>(null)
   const { rows, columns } = useTerminalSize()
   const [page, setPage] = React.useState<DetailPage>('summary')
@@ -226,6 +238,7 @@ export function SubagentDetailScene({
   }, [page, isRunning, outputLength])
 
   useInput((input, key, event) => {
+    if (panelMode) return
     if (key.escape || (key.ctrl && input === 'c')) {
       event.stopImmediatePropagation()
       onBack()
@@ -266,7 +279,46 @@ export function SubagentDetailScene({
       return
     }
     event.stopImmediatePropagation()
-  })
+  }, { isActive: !panelMode })
+
+  // Panel form（v2.1 键盘契约）：这一层自己吃掉整个业务键面。Esc/Ctrl+C 必须
+  // 返回 true —— Detail → Dashboard 是面板内部的一级，绝不能落给宿主（宿主
+  // 的 Esc 回退是「焦点回聊天」）。其余未认的键返回 false，让 [/]、数字、
+  // z、+/- 继续可用。
+  const panelKeyHandler = (input: string, key: SidePanelKeyFlags): boolean => {
+    if (key.escape === true || (key.ctrl === true && input === 'c')) {
+      onBack()
+      return true
+    }
+    if (key.leftArrow === true) {
+      turnPage(-1)
+      return true
+    }
+    if (key.rightArrow === true) {
+      turnPage(1)
+      return true
+    }
+    if (key.upArrow === true) {
+      scrollRef.current?.scrollBy(-3)
+      return true
+    }
+    if (key.downArrow === true) {
+      scrollRef.current?.scrollBy(3)
+      return true
+    }
+    if (input.toLowerCase() === 'x' && isRunning && onInterrupt !== undefined) {
+      onInterrupt(subagent.agentId)
+      return true
+    }
+    if (isPanelPlainReturn(input, key)) {
+      // Enter 与整屏形态同义：输出页有思考块时先折叠它，别处退回 Dashboard。
+      if (page === 'output' && hasThinking) setThinkingOpen(open => !open)
+      else onBack()
+      return true
+    }
+    return false
+  }
+  usePanelInput(panelKeyHandler, { active: panelMode && focused && visible })
 
   const tab = (name: DetailPage, label: string): React.ReactNode => {
     const active = page === name
@@ -285,8 +337,14 @@ export function SubagentDetailScene({
     )
   }
 
+  // 外层留白：整屏形态保持原样；侧栏形态只留左右各 1 格（PanelBar 与宿主
+  // 提示行已经承担其余 chrome）。
+  const outer = panelMode
+    ? { paddingLeft: 1, paddingRight: 1, paddingTop: 0 }
+    : { paddingX: 2, paddingY: 1 }
+
   return (
-    <Box flexDirection="column" paddingX={2} paddingY={1}>
+    <Box flexDirection="column" {...outer}>
       {/* Header: identity line, stats line, timing line */}
       <Box flexDirection="row" gap={1}>
         <Text color={info.color} bold>{info.glyph}</Text>
@@ -324,7 +382,9 @@ export function SubagentDetailScene({
       <Text dimColor>{'─'.repeat(Math.max(20, Math.min(72, columns - 6)))}</Text>
 
       {/* Paged body */}
-      <Box flexDirection="column" paddingX={1} maxHeight={Math.max(10, rows - 14)}>
+      {/* 行数预算：整屏形态沿用原公式；侧栏形态的 rows 已是宿主高度，单独
+          收一档，保证底部提示行仍在可视区内。 */}
+      <Box flexDirection="column" paddingX={1} maxHeight={panelMode ? Math.max(6, rows - 10) : Math.max(10, rows - 14)}>
         <ScrollBox ref={scrollRef} flexDirection="column" flexGrow={1}>
           {page === 'summary' && (
             <Box flexDirection="column">

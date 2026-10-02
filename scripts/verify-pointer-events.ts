@@ -28,7 +28,7 @@ import { nodeCache } from '../src/ink/node-cache.js'
 import type { DOMElement } from '../src/ink/dom.js'
 import { createNode } from '../src/ink/dom.js'
 import { handleMouseEvent, default as AppComponent } from '../src/ink/components/App.js'
-import { createSelectionState, hasSelection } from '../src/ink/selection.js'
+import { createSelectionState, hasSelection, startSelection } from '../src/ink/selection.js'
 import React from 'react'
 
 let failures = 0
@@ -519,6 +519,12 @@ function makeFakeApp(): FakeApp {
       getHyperlinkAt: () => undefined,
       onOpenHyperlink: () => {},
       onMultiClick: () => {},
+      // 选择改版后 App 的 press 路径经宿主 prop 启动选区（真实宿主在
+      // ink.tsx 里带可读屏调用 startSelection；本夹具无屏，锚点语义等价
+      // ——noSelect 围栏的种子来自屏幕，这里按无屏的旧行为）。
+      onSelectionStart: (col: number, row: number) => {
+        startSelection((app.props as { selection: import('../src/ink/selection.js').SelectionState }).selection, col, row)
+      },
       onSelectionDrag: () => {},
       onWheelAt: () => false,
     },

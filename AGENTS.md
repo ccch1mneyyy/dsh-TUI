@@ -11,6 +11,7 @@ src/dsh-adapter/channel.ts  会话事件 → 视图投影 + 非 React 动作面�
 src/dsh-adapter/oauth/    内置订阅 OAuth：provider 路由、/auth、凭据存储与问卷桥接
 src/screens/        Chat.tsx 交互协调器与状态栏呈现
 src/components/     功能组件；design-system/ 是主题感知原语
+src/components/sidePanel/  侧栏分栏（几何、标签栏、PanelHost、键盘接缝）与内置面板适配
 src/themeCatalog.ts  内置、静态 JSON 与运行时插件主题的统一列表/解析
 src/ui.ts           本地渲染器、主题化 Box/Text 与公共 TUI 原语的首选门面
 src/ink/            Ink 系渲染器与终端实现——敏感基础设施，改动聚焦并附专用回归
@@ -22,7 +23,7 @@ src/*Prefs.ts 等    ~/.dsh-tui 下的持久化用户偏好与会话元数据
 presets/            随包分发的 preset（liangshen）
 bin/dsh-tui.js      dsh-tui 直达命令入口
 vendor/dsh-std      vendored 依赖（frozen lockfile 构建，见 scripts/build 相关脚本）
-dsh-ecosystem-spec/ 生态适配规范子项目（自带 CONTRIBUTING 与治理文档）
+tui-profile/        仓内 TUI Profile：插件准入 + 私有协议定义（纯文件，随本仓代码修订）
 cordis.patch.yml    profile 安装的包级覆盖层；行序、行 ID 与 insert/override 语义关键
 cordis.yml          直接 Cordis/DSH 启动的完整裸组合示例
 scripts/            无头回归、复现环境、探针与诊断；运行前先读脚本头部说明

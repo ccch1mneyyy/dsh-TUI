@@ -31,11 +31,20 @@ export const CHANNEL_UI_EFFECTS = Object.freeze({
   // Deprecated pre-rename alias of setMinimalUi (see the port's doc comment).
   'setMinimal': 'mutate',
   'commandCompletions': 'mutate',
+  // Pure description of the agent's mounted capabilities: no service is
+  // acquired, no cache warmed, no notice published (see
+  // dsh-adapter/channel/capabilities.ts).
+  'capabilities': 'read-only',
   'runExternalCommand': 'mutate',
   'runExternalCommandOutcome': 'mutate',
   'openPluginScene': 'mutate',
   'closePluginScene': 'mutate',
   'sideQuestion': 'mutate',
+  // "Send to Chat" (side-panel §6.7): staging/removing a context chip is a
+  // composer mutation; the projection itself is the read-only
+  // `attachedContexts` property below.
+  'attachContext': 'mutate',
+  'detachContext': 'mutate',
   'stagedImageGeneration': 'read-only',
   'stageImage': 'mutate',
   'stageComposerImage': 'mutate',
@@ -160,6 +169,7 @@ export const CHANNEL_UI_PROPERTIES = [
   'reasoningEffort',
   'effortLevels',
   'lastUsage',
+  'contextOccupancy',
   'tps',
   'tpsSamples',
   'activityFrames',
@@ -197,7 +207,8 @@ export const CHANNEL_UI_PROPERTIES = [
   'mode',
   'modeIndex',
   'agentPreset',
-  'selection'
+  'selection',
+  'attachedContexts'
 ] as const satisfies readonly (keyof ChannelUi)[]
 
 // Both inventories are exhaustive: adding a public property is a compile error

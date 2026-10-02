@@ -1,0 +1,149 @@
+{
+  "profileVersion": "tui-admission/0.15",
+  "std": {
+    "repository": "https://github.com/Yan-Zero/dsh-std",
+    "submodule": "vendor/dsh-std",
+    "manifestVersion": "0.15"
+  },
+  "imports": [
+    {
+      "name": "commands",
+      "coordinates": {
+        "apiVersion": "commands.dsh/v1alpha1",
+        "kind": "Command"
+      },
+      "package": "@dsh-std/command",
+      "kind": "capability",
+      "permissions": [
+        "commands.invoke"
+      ]
+    },
+    {
+      "name": "storage.local",
+      "coordinates": {
+        "apiVersion": "storage.dsh/v1alpha1",
+        "kind": "LocalStorage"
+      },
+      "package": "@dsh-std/storage",
+      "kind": "capability",
+      "permissions": [
+        "storage.local.read",
+        "storage.local.write"
+      ]
+    },
+    {
+      "name": "messages.observe",
+      "coordinates": {
+        "apiVersion": "messages.dsh/v1alpha1",
+        "kind": "MessageObserver"
+      },
+      "package": "@dsh-std/messages",
+      "kind": "event",
+      "permissions": [
+        "messages.observe.read"
+      ],
+      "eventEnvelope": "@dsh-std/messages/schema/message-observer-envelope-0.15.json"
+    },
+    {
+      "name": "presentation.open-external",
+      "coordinates": {
+        "apiVersion": "presentation.dsh/v1alpha1",
+        "kind": "OpenExternal"
+      },
+      "package": "@dsh-std/presentation",
+      "kind": "capability",
+      "permissions": []
+    },
+    {
+      "name": "presentation.user-interaction",
+      "coordinates": {
+        "apiVersion": "presentation.dsh/v1alpha1",
+        "kind": "UserInteraction"
+      },
+      "package": "@dsh-std/presentation",
+      "kind": "capability",
+      "permissions": []
+    },
+    {
+      "name": "presentation.external-redirect",
+      "coordinates": {
+        "apiVersion": "presentation.dsh/v1alpha1",
+        "kind": "ExternalRedirect"
+      },
+      "package": "@dsh-std/presentation",
+      "kind": "capability",
+      "permissions": []
+    }
+  ],
+  "definitions": [
+    {
+      "name": "tui.decision-events",
+      "authority": "dsh-tui",
+      "coordinates": {
+        "apiVersion": "tui.dsh/v1alpha1",
+        "kind": "DecisionEvents"
+      },
+      "kind": "capability",
+      "profile": "registry/contracts/decision-events-v1alpha1.json",
+      "profileHash": "sha256:56440dde1b00c210b22761a0cba139ce0a20207330567777cebe1e48b494ceb0",
+      "permissions": [
+        "session.input.intercept",
+        "session.rewind.intercept",
+        "session.switch.intercept",
+        "session.compact.intercept"
+      ]
+    },
+    {
+      "name": "tui.channel",
+      "authority": "dsh-tui",
+      "coordinates": {
+        "apiVersion": "tui.dsh/v1alpha1",
+        "kind": "Channel"
+      },
+      "kind": "capability",
+      "profile": "registry/contracts/tui-channel-v1alpha1.json",
+      "profileHash": "sha256:2d0668656d999a8cacd363cd3c76207f9392118be8a83e6dd5f81b54ae063fe6",
+      "permissions": []
+    }
+  ],
+  "extensions": [
+    {
+      "name": "workspace.provider",
+      "authority": "dsh-std",
+      "coordinates": {
+        "apiVersion": "workspace.dsh/v1alpha1",
+        "kind": "WorkspaceProvider"
+      },
+      "kind": "extension",
+      "package": "@dsh-std/workspace",
+      "permissions": []
+    },
+    {
+      "name": "tui.settings-section",
+      "authority": "dsh-tui",
+      "coordinates": {
+        "apiVersion": "tui.dsh/v1alpha1",
+        "kind": "SettingsSection"
+      },
+      "kind": "extension",
+      "profile": "registry/contracts/settings-section-v1alpha1.json",
+      "profileHash": "sha256:685b0f17fe489f458e9b799811f61c42b858330584e95ecb97e7216b5be100ac",
+      "permissions": []
+    },
+    {
+      "name": "tui.scene",
+      "authority": "dsh-tui",
+      "coordinates": {
+        "apiVersion": "tui.dsh/v1alpha1",
+        "kind": "Scene"
+      },
+      "kind": "extension",
+      "profile": "registry/contracts/scene-v1alpha1.json",
+      "profileHash": "sha256:69ce3ae26d60dea2ed170376db8a1fb5860c94bd192c62681423c1d848ec2b26",
+      "permissions": []
+    }
+  ],
+  "facetApiVersions": [
+    "v1alpha1"
+  ]
+}

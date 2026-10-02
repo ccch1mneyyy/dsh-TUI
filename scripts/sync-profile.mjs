@@ -3,7 +3,7 @@
  * sync-profile.mjs — 把当前工作区产物同步到已安装的 dsh-tui 包。
  *
  * 同步范围 = package.json `files` 列表（bin/、lib/、assets/、cordis*.yml、
- * dsh-ecosystem-spec/{registry,protocols,schemas}、presets、guide），与发布包
+ * tui-profile/{registry,protocols,schemas}、presets、guide），与发布包
  * 完全一致（guide/ 是随包用户手册，见 scripts/build-guide.mjs）。逐文件比较
  * hash，只复制有差异的文件；不删除 profile
  * 里多余的依赖文件（node_modules 等由 dsh plugin 管理）。

@@ -34,9 +34,9 @@
   },
   "type": "module",
   "imports": {
-    "#dsh-ecosystem-spec/tui-channel": "./dsh-ecosystem-spec/protocols/tui-channel.js",
-    "#dsh-ecosystem-spec/profile-definitions": "./dsh-ecosystem-spec/protocols/profile-definitions.js",
-    "#dsh-ecosystem-spec/tui-contributions": "./dsh-ecosystem-spec/protocols/tui-contributions.js"
+    "#tui-profile/tui-channel": "./tui-profile/protocols/tui-channel.js",
+    "#tui-profile/profile-definitions": "./tui-profile/protocols/profile-definitions.js",
+    "#tui-profile/tui-contributions": "./tui-profile/protocols/tui-contributions.js"
   },
   "bin": {
     "dsh-tui": "./bin/dsh-tui.js",
@@ -73,6 +73,10 @@
       "types": "./lib/types/scenes.d.ts",
       "import": "./lib/types/scenes.js"
     },
+    "./panels": {
+      "types": "./lib/types/panels.d.ts",
+      "import": "./lib/types/panels.js"
+    },
     "./extensions": {
       "types": "./lib/types/extensions.d.ts",
       "import": "./lib/types/extensions.js"
@@ -103,9 +107,9 @@
     "assets",
     "cordis.patch.yml",
     "cordis.yml",
-    "dsh-ecosystem-spec/registry",
-    "dsh-ecosystem-spec/protocols",
-    "dsh-ecosystem-spec/schemas",
+    "tui-profile/registry",
+    "tui-profile/protocols",
+    "tui-profile/schemas",
     "presets",
     "guide"
   ],
@@ -145,6 +149,7 @@
     "verify:plugin-messages": "node --import tsx/esm scripts/verify-plugin-messages.ts",
     "verify:packaged-presets": "node scripts/verify-packaged-presets.mjs",
     "verify:minimal-preset-tools": "node scripts/verify-minimal-preset-tools.mjs",
+    "verify:agent-capabilities": "node --import tsx/esm scripts/verify-agent-capabilities.ts",
     "verify:minimal-ui-naming": "node --import tsx/esm scripts/verify-minimal-ui-naming.ts",
     "verify:liangshen-bootstrap": "node scripts/verify-liangshen-bootstrap.mjs",
     "verify:liangshen-instruction-hint": "node scripts/verify-liangshen-instruction-hint.mjs",
@@ -160,6 +165,7 @@
     "verify:plugin-commands": "node --import tsx/esm scripts/verify-plugin-commands.ts",
     "verify:plugin-negotiation": "node --import tsx/esm scripts/verify-plugin-negotiation.ts",
     "verify:plugin-lifecycle": "node --import tsx/esm scripts/verify-plugin-lifecycle.ts",
+    "verify:plugin-panels": "node --import tsx/esm scripts/verify-plugin-panels.tsx",
     "verify:runtime-themes": "node --import tsx/esm scripts/verify-runtime-themes.ts",
     "verify:tips": "node --import tsx/esm scripts/verify-tips.tsx",
     "verify:thinking-preview": "node --import tsx/esm scripts/verify-thinking-preview.tsx",

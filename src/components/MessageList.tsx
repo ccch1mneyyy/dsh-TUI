@@ -274,6 +274,10 @@ function signatureParts(
       const group = row.jobGroup
       signatureScratch.push(
         row.job?.status ?? '',
+        // The label drives the card's height: it wraps inside its column and
+        // the rail is painted per line, so a label that lands later (the
+        // kernel fills it in after launch) must invalidate the cached height.
+        row.job?.label?.length ?? 0,
         row.job?.outputLines.length ?? 0,
         row.job?.detail?.length ?? 0,
         row.job?.progress?.length ?? 0,
@@ -282,8 +286,12 @@ function signatureParts(
         row.job === undefined
           ? ''
           : row.job.outputLines.slice(-4).map(line => line.text.length).join(','),
-        group === undefined ? '' : `${group.index}/${group.count}/${group.last ? 'l' : 'm'}`,
+        // Grouped members all render with the same 2-cell rail, so the only
+        // shape inputs are "is it a member", "is it the head" and "is the run
+        // folded" (a folded head paints the summary alone).
+        group !== undefined,
         group?.head === true,
+        group?.last === true,
         group?.folded === true,
       )
       break
@@ -655,9 +663,8 @@ export function MessageList({
           ...(out[k]!),
           jobGroup: {
             head: k === i,
-            index: k - i,
-            count,
             last: k === end,
+            count,
             folded,
             running,
             completed,
@@ -1913,7 +1920,10 @@ function TranscriptRow({
             <JobCard
               job={job}
               marginTopOnTurn={groupHead ? false : marginTopOnTurn}
-              rail={jobGroup === undefined ? undefined : jobGroup.last ? 'tail' : 'mid'}
+              // The bracket hugs the CARDS: the summary line above stays
+              // outside it, and the head/last member round the two ends in
+              // place (no extra cap row) — see JobCard's `rail` prop.
+              rail={jobGroup === undefined ? undefined : { open: jobGroup.head, close: jobGroup.last }}
               // Clicking a card opens the panel focused on THAT job, not the roster head.
               onClick={onOpenJobs === undefined ? undefined : () => onOpenJobs(job.id)}
             />

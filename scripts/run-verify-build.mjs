@@ -62,6 +62,7 @@ const GATES = [
   'verify:history-search',
   'verify:initial-prompt',
   'verify:minimal-preset-tools',
+  'verify:agent-capabilities',
   'verify:minimal-ui-naming',
   'verify:liangshen-bootstrap',
   'verify:inject-channel',

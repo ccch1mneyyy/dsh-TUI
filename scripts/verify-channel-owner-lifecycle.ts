@@ -59,17 +59,24 @@ import { createModelActions } from '../src/dsh-adapter/channel/model-actions.js'
   assert.equal(getRegisteredTuiChannel(ctx), undefined)
 }
 
-// The warning latch is one cell shared with projection compact reset: after a
-// compaction checkpoint, crossing the high-water mark must warn again.
+// The warning latch is one cell shared with the compact reset, and its
+// numerator is the channel's SINGLE occupancy reading (the official
+// `contextPressure` projection when a meter is mounted, else the last request's
+// billed sample). After a compaction checkpoint, crossing the high-water mark
+// must warn again.
 {
   const warnings: string[] = []
-  // The warning reads the last turn's billed usage (input + cache read +
-  // cache write), not the cumulative tokens counter — resumed sessions
-  // replay the counter at full size while the live turn stays small. Keep the
-  // two numerators on OPPOSITE sides of the threshold (window 100, buffer 20:
-  // warn only above 80 used) so a cumulative-counter implementation produces
-  // no warning at all instead of passing these assertions by accident.
-  const state = { contextWindow: 100, tokens: { input: 50 }, lastUsage: { input: 90, cacheRead: 0, cacheWrite: 0 }, pending: [], emit() {} }
+  // The two candidate numerators stay on OPPOSITE sides of the threshold
+  // (window 100, buffer 20 ⇒ warn only above 80 used): the cumulative tokens
+  // counter sits at 50 while occupancy is 90, so an implementation that reads
+  // the counter produces no warning instead of passing these assertions by
+  // accident.
+  const state = {
+    tokens: { input: 50 },
+    contextOccupancy: { usedTokens: 90, contextWindow: 100, source: 'projection' as const },
+    pending: [],
+    emit() {},
+  }
   const bookkeeping = createContextBookkeeping(
     () => state,
     text => { warnings.push(text) },
@@ -80,6 +87,29 @@ import { createModelActions } from '../src/dsh-adapter/channel/model-actions.js'
   bookkeeping.resetContextWarning()
   bookkeeping.checkContextWarning()
   assert.deepEqual(warnings, ['remaining 10%', 'remaining 10%'])
+
+  // No reading at all (no meter AND no settled request) warns about nothing,
+  // while a sample-sourced reading takes the same path as a projected one.
+  const silent = createContextBookkeeping(
+    () => ({ ...state, contextOccupancy: undefined }),
+    text => { warnings.push(text) },
+    percent => `remaining ${percent}%`,
+    20,
+  )
+  silent.checkContextWarning()
+  assert.deepEqual(warnings, ['remaining 10%', 'remaining 10%'], 'a missing reading stays silent')
+  const sampled = createContextBookkeeping(
+    () => ({ ...state, contextOccupancy: { usedTokens: 90, contextWindow: 100, source: 'sample' as const } }),
+    text => { warnings.push(text) },
+    percent => `remaining ${percent}%`,
+    20,
+  )
+  sampled.checkContextWarning()
+  assert.deepEqual(
+    warnings,
+    ['remaining 10%', 'remaining 10%', 'remaining 10%'],
+    'the fallback reading shares the warning path',
+  )
 }
 
 // Route-capacity metadata crosses an await, so a late answer can outlive the

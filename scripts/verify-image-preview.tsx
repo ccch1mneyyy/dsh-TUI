@@ -1612,8 +1612,11 @@ for (const columns of [32, 80]) {
     screen.text())
   stdin.write('\x1b')
   await settled(() => !screen.text().includes('live draft'))
-  check('chat: clearing an unsent draft releases its staged capability',
-    discarded.includes('live-draft-stage'), JSON.stringify(discarded))
+  // Ctrl+Z makes the Esc clear recoverable, so the capability must SURVIVE it;
+  // it is released when the draft's undo history ends (the submit below), and
+  // `verify-composer-image-tokens` pins the unmount release of a stack-held one.
+  check('chat: clearing an unsent draft keeps the capability for the undo step',
+    !discarded.includes('live-draft-stage'), JSON.stringify(discarded))
 
   stdin.write(`\x1b[200~${pastedImagePath}\x1b[201~`)
   check('chat: second async paste reached the staging barrier',
@@ -1669,8 +1672,8 @@ for (const columns of [32, 80]) {
 
   stdin.write('\x1b')
   await settled(() => !screen.text().includes('/status'))
-  check('chat: clearing the refused command releases its capability',
-    discarded.includes('command-image-stage'), JSON.stringify(discarded))
+  check('chat: clearing the refused command keeps its capability for the undo step',
+    !discarded.includes('command-image-stage'), JSON.stringify(discarded))
 
   // Consecutive terminal drops are serialized through save + bind + insert.
   // The second storage call must not begin before the first visible token is

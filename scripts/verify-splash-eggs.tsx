@@ -215,7 +215,7 @@ check('已 star 过的会话：标题换成"捡到小星星"', caught.title.incl
 // ── ④b 挂真实 LogoV2 读屏 ─────────────────────────────────────────────────
 const WIDTH = 120
 const TEXT_LEFT = WHALE_BOX_WIDTH + COLUMN_GAP
-const baseProps = { model: 'deepseek-v3', cwd: '/tmp/probe', skipIntro: true, fontId: 'bold', drift: null } as const
+const baseProps = { model: 'deepseek-v3', cwd: '/tmp/probe', skipIntro: true, fontId: 'bold', drift: null, companionSkin: 'whale' } as const
 
 const mount = (element: React.ReactElement): { rows: string[]; screen: ReturnType<typeof renderToScreen>['screen'] } => {
   const { screen, height } = renderToScreen(element, WIDTH)
@@ -255,7 +255,9 @@ const centeredPad = (visible: number): number => Math.max(0, Math.round(WHALE_CE
     && !first.rows.some(line => line.includes('一键支持')))
 
   // 静态渲染夹具不会再渲染一轮，用 `starReveal="instant"` 把三行一次画全，
-  // 检查排版/链接落格这些与时间无关的部分。
+  // 检查排版/链接落格这些与时间无关的部分。（2026-10 用户拍板：欢迎语/
+  // 求星标语维持原「艺术下方居中 + welcomePad 缩进」渲染路径，撤掉曾试
+  // 过的头顶气泡——以下为原始断言。）
   const { rows, screen } = mount(view(<LogoV2 {...baseProps} starChance={1} starReveal="instant" />))
   const row = bottomRow(rows)
   const line = rows[row] ?? ''

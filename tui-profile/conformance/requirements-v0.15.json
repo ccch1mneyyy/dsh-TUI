@@ -1,0 +1,68 @@
+{
+  "profileVersion": "dsh-tui-admission-v0.15",
+  "requirements": [
+    {
+      "id": "BASE-STD-001",
+      "source": "@dsh-std/* or vendor/dsh-std",
+      "test": "installed package loading and pinned submodule fallback availability",
+      "evidence": "automated"
+    },
+    {
+      "id": "TUI-PKG-001",
+      "source": "@dsh-std/manifest",
+      "fixtures": [
+        "valid-plugin.json",
+        "invalid-plugin-client-facet.json",
+        "invalid-plugin-worker-facet.json"
+      ],
+      "test": "Community v0.15 parse and projection",
+      "evidence": "automated"
+    },
+    {
+      "id": "TUI-PKG-002",
+      "source": "registry/registry-0.15.json",
+      "fixtures": [
+        "invalid-plugin-unknown-coordinate.json",
+        "invalid-plugin-optional-no-fallback.json"
+      ],
+      "test": "profile definition closure and fallback policy",
+      "evidence": "automated"
+    },
+    {
+      "id": "TUI-PRIVATE-001",
+      "source": "protocols/profile-definitions.js",
+      "fixtures": [
+        "valid-private-protocol-plugin.json"
+      ],
+      "test": "private definition registration and rejection when the Host has no live support",
+      "evidence": "automated"
+    },
+    {
+      "id": "TUI-HOST-001",
+      "source": "schemas/host-descriptor.schema.json",
+      "fixtures": [
+        "registry/host-descriptor.tui.example.json",
+        "invalid-host-unknown-contract.json",
+        "invalid-host-hash-mismatch.json"
+      ],
+      "test": "Host protocol support and definition provenance",
+      "evidence": "automated"
+    },
+    {
+      "id": "TUI-OBS-001",
+      "source": "schemas/effect-ledger-record.schema.json",
+      "fixtures": [
+        "valid-ledger-record.json"
+      ],
+      "test": "effect ownership record shape",
+      "evidence": "automated"
+    },
+    {
+      "id": "TUI-TRUST-001",
+      "source": "docs/plugin-admission-and-development.md",
+      "fixtures": [],
+      "test": "trusted-in-process disclosure review",
+      "evidence": "review"
+    }
+  ]
+}

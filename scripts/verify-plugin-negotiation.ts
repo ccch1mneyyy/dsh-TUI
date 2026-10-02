@@ -43,7 +43,7 @@ const { negotiate } = await import('../src/adapter/standard/negotiate.js')
 const { createReportActions } = await import('../src/dsh-adapter/channel/reports.js')
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
-const fixture = (name: string) => join(root, 'dsh-ecosystem-spec', 'conformance', 'fixtures', name)
+const fixture = (name: string) => join(root, 'tui-profile', 'conformance', 'fixtures', name)
 const cleanup: string[] = [fakeHome]
 
 function liveHostDescriptor(generationId: string) {

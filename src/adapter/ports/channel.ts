@@ -11,7 +11,7 @@
  *   - transcript: durable transcript/event access.
  *
  * Boundary rules:
- * - These are TUI host-internal interfaces, not dsh-std/dsh-ecosystem-spec
+ * - These are TUI host-internal interfaces, not dsh-std/tui-profile
  *   protocol definitions. No apiVersion/kind/negotiation/permission/manifest
  *   semantics appear here.
  * - No caller-supplied owner/principal/activation identity is accepted;

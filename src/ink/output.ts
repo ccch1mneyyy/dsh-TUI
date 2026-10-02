@@ -319,6 +319,15 @@ type ShiftOperation = {
   top: number
   bottom: number
   n: number
+  /**
+   * Optional column scope: when set, the model-side shift touches only this
+   * slice of each row. The TERMINAL-side DECSTBM scroll still moves whole
+   * rows (ANSI has no column-scoped hardware scroll) — log-update simulates
+   * that on the previous frame full-width, and the frame diff repairs the
+   * columns outside the slice. Undefined = legacy full-width shift.
+   */
+  columnX?: number
+  columnWidth?: number
 }
 
 type ClearOperation = {
@@ -751,8 +760,8 @@ export default class Output {
    * @param bottom - the last row of the shift region.
    * @param n - the shift amount; positive moves content up.
    */
-  shift(top: number, bottom: number, n: number): void {
-    this.operations.push({ type: 'shift', top, bottom, n })
+  shift(top: number, bottom: number, n: number, columnX?: number, columnWidth?: number): void {
+    this.operations.push({ type: 'shift', top, bottom, n, columnX, columnWidth })
   }
 
   /**
@@ -1175,7 +1184,7 @@ export default class Output {
         }
 
         case 'shift': {
-          shiftRows(screen, operation.top, operation.bottom, operation.n)
+          shiftRows(screen, operation.top, operation.bottom, operation.n, operation.columnX, operation.columnWidth)
           continue
         }
 

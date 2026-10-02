@@ -1,0 +1,38 @@
+{
+  "$schema": "https://dsh.community/schemas/dsh-plugin-0.15.json",
+  "id": "com.example.optional-deny",
+  "name": "Optional Deny",
+  "version": "0.1.0",
+  "manifestVersion": "0.15",
+  "facets": {
+    "host": {
+      "entry": "dist/main.js",
+      "apiVersion": "v1alpha1"
+    }
+  },
+  "requires": {
+    "contracts": [
+      {
+        "apiVersion": "messages.dsh/v1alpha1",
+        "kind": "MessageObserver",
+        "optional": true,
+        "fallback": "run without message observation"
+      }
+    ]
+  },
+  "permissions": [
+    {
+      "name": "messages.observe.read",
+      "scope": "session:*",
+      "reason": "observe message metadata"
+    }
+  ],
+  "contributes": {
+    "commands": []
+  },
+  "subscriptions": [],
+  "license": "MIT",
+  "source": {
+    "repository": "https://example.com/optional-deny"
+  }
+}

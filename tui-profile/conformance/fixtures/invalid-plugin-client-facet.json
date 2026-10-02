@@ -1,0 +1,17 @@
+{
+  "$schema":"https://dsh.community/schemas/dsh-plugin-0.15.json",
+  "id":"com.example.clientfacet",
+  "name":"Client Facet Plugin",
+  "version":"0.1.0",
+  "manifestVersion":"0.15",
+  "facets":{
+    "host":{"entry":"dist/host.js","apiVersion":"v1alpha1"},
+    "client":{"entry":"dist/client.js","apiVersion":"v1alpha1"}
+  },
+  "requires":{"contracts":[]},
+  "permissions":[],
+  "contributes":{"commands":[]},
+  "subscriptions":[],
+  "license":"MIT",
+  "source":{"repository":"https://example.com/clientfacet"}
+}

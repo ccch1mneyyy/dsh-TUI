@@ -24,11 +24,13 @@
 ## 功能亮点
 
 - **像素鲸鱼娘** — 开屏三选一动画，点击唤醒；开始第一个任务后定格。
+- **落地页与首次引导** — 每次启动先落在带**真输入框**的落地页（大字 + 鲸鱼 + 快捷入口，窄/矮终端自动整块降级）；首次运行走四步向导（API Key / 语言主题 / 模型工作区 / 快捷键），`/setup` 随时重跑。
 - **终端原生界面** — 流式 Markdown、工具卡、`/` 与 `@` 补全、`#L12-14` 行区间、历史搜索、中英界面。
 - **图片** — Kitty/Sixel 缩略图，居中大图可缩放平移，粘贴前按限额适配，无图形时文字回退。
 - **Mermaid 图表** — ```` ```mermaid ```` 代码块画成 Unicode 字符图。
 - **LaTeX 公式** — `$…$` 与 `$$…$$` 公式转成 Unicode 文本，块级公式里的分数与上下限竖排；`mathRendering: image` 时在支持图形的终端里把块级公式与能压成一行的行内公式排成终端图片。
 - **时间轴** — 全部回合可点；右栏时间线 / 滚动条 / 隐藏。
+- **侧栏面板** — `Ctrl+B` 在聊天右侧展开面板列（待办 / 任务），终端够宽才分栏；窄屏与 inline 模式保持整屏面板。
 - **实时状态** — 工作动画、上下文条、TPS、缓存命中率、推理强度、token、本会话费用估算（主会话 + 子代理）、Git 与会话信息。
 - **唯一的会话管理界面** — `/resume` `/home` `/agentview` `/bg` `⌸`。
 - **会话工作流** — `/new` `/compact` `/export` `/btw`、模型热切换、fork、回溯、vim、全屏草稿编辑器。
@@ -148,7 +150,7 @@ CLI 形态：任意终端运行 `dsh-tui migrate ...`，与 TUI 内执行同一�
 
 ## 快捷键与鼠标
 
-`Enter` 发送 · `Tab` 补全 · `Ctrl+Enter` 打断并发送 · `Alt+Up` 取回上一条 · `Esc` 逐层关闭，空输入双击回溯 · `Ctrl+O` 详情 · `Ctrl+R` 搜历史（`↑`/`↓` 与 `Ctrl+R` 按当前项目隔离） · `Ctrl+V` 粘贴 · `Ctrl+Shift+E` 全屏草稿编辑器 · `?` 快捷键 · `←` 转后台。
+`Enter` 发送 · `Tab` 补全 · `Ctrl+Enter` 打断并发送 · `Alt+Up` 取回上一条 · `Esc` 逐层关闭，空输入双击回溯 · `Ctrl+B` 侧栏 · `Ctrl+O` 详情 · `Ctrl+R` 搜历史（`↑`/`↓` 与 `Ctrl+R` 按当前项目隔离） · `Ctrl+V` 粘贴 · `Ctrl+Shift+E` 全屏草稿编辑器 · `?` 快捷键 · `←` 转后台。
 
 模型工作时：`Enter` 加塞、`Tab` 排队、`Ctrl+Enter` 打断并立即发送。
 
@@ -178,7 +180,7 @@ CLI 形态：任意终端运行 `dsh-tui migrate ...`，与 TUI 内执行同一�
 
 ## 内置命令
 
-`/resume` · `/home` · `/agentview` · `/bg` · `⌸` 打开同一个会话管理界面：工作区栏、实时状态、筛选、★ 固定。另有 `/model` `/new` `/compact` `/export` `/btw` `/tree` `/fork` `/rewind` `/settings` `/status` `/cost` `/jobs` `/skills` `/mcp` `/provider` `/auth` `/login` `/update`。
+`/resume` · `/home` · `/agentview` · `/bg` · `⌸` 打开同一个会话管理界面：工作区栏、实时状态、筛选、★ 固定。另有 `/model` `/new` `/compact` `/export` `/btw` `/tree` `/fork` `/rewind` `/settings` `/setup` `/status` `/cost` `/jobs` `/skills` `/mcp` `/provider` `/auth` `/login` `/update`。
 
 会话管理界面会立即显示上次成功读取的列表，同时核对持久化存储的变化。需要深度扫描日志的标题会先显示回退名称，恢复完成后在原行更新。
 移除工作区登记后，其历史会话仍可从侧栏的「仅历史」目录进入。
@@ -210,7 +212,7 @@ TUI 只负责交互与呈现：会话日志是唯一事实源，模型、工具�
 - `Ctrl+V` 需要平台剪贴板工具；不支持的位图格式直接拒绝。
 - 拖放文件仅从 OSC 8 的 `file://` URI 还原：多文件拖放、非 Windows 终端的拖放编码与无终止符的截断帧仍不在覆盖范围，超链接自身的显示名也不会被使用。
 - 后台会话活在本进程内，TUI 退出即停止。
-- `/thinking` 不持久化；`/compact` 在内核 `minimal` 预设（极简模式，只暴露一个持久 shell 工具）下不可用——它和 `/settings → 极简界面`（Minimal UI）这个界面显示开关不是一回事；`/update` 需 `dsh --profile` 启动，回合运行中会被拒绝。
+- `/thinking` 不持久化；内核 `minimal` 预设（极简模式，只暴露一个持久 shell 工具）不挂载压缩服务，也不剪枝工具结果——长会话可能撞上下文上限，超长工具输出会整段留在上下文里，`/compact` 与问卷在该预设下不可用（Help 与 `/` 补全会标注「不可用」，进入该预设时也会提示一次）；它和 `/settings → 极简界面`（Minimal UI）这个界面显示开关不是一回事；`/update` 需 `dsh --profile` 启动，回合运行中会被拒绝。
 - 状态栏 `≈¥` 与 `/cost` 是本会话估算：包含子代理用量，按各自模型 × 峰值/空闲 × 缓存分项计价；非官方/未收录模型只显示 token 并标注未计价。**估算仅供参考，以平台账单为准。**
 - 分片的 SGR 鼠标上报只在机制层修复并做了受控夹具对照；报告者的原环境（macOS→SSH、WSL2 + `dsh web`）未复测。
 
@@ -230,7 +232,7 @@ pnpm smoke
 
 ## 插件生态
 
-插件开发：[准入与开发指南](https://github.com/T-Auto/dsh-ecosystem-spec/blob/main/docs/plugin-admission-and-development.md) · [plugin-template](https://github.com/dsh-tui-ecosystem/plugin-template) · [dsh-tui-ecosystem](https://github.com/dsh-tui-ecosystem)。参考实现：`dsh-working-activity`。
+插件开发：[准入与开发指南](tui-profile/docs/plugin-admission-and-development.md) · [plugin-template](https://github.com/dsh-tui-ecosystem/plugin-template) · [dsh-tui-ecosystem](https://github.com/dsh-tui-ecosystem)。参考实现：`dsh-working-activity`。
 
 接缝分级与 API 说明：[插件开发](docs/plugins.md)。生态组织只维护收录，不背书社区插件。
 
@@ -240,7 +242,7 @@ pnpm smoke
 - **使用** — [交互与命令](docs/interaction.md) · [使用说明](docs/user-guide.md)（[English](docs/user-guide.en.md)） · [主题系统](docs/themes.md)
 - **配置** — [配置参考](docs/configuration.md)
 - **实现** — [架构与限制](docs/architecture.md) · [会话挂载运行时](docs/session-mount-runtime.md)
-- **插件** — [准入与开发指南](https://github.com/T-Auto/dsh-ecosystem-spec/blob/main/docs/plugin-admission-and-development.md) · [插件速览](docs/plugins.md)
+- **插件** — [准入与开发指南](tui-profile/docs/plugin-admission-and-development.md) · [插件速览](docs/plugins.md)
 - **参与** — [贡献与开发约定](docs/contributing.md) · [路线图](docs/roadmap.md) · [社区管理框架](docs/community-management.md)
 
 中英对照全量索引：[docs/README.md](docs/README.md)。
