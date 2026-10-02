@@ -704,7 +704,7 @@ await sleep(800)
   const switched = await channel.newSession()
   check('compact phase cancellation: /new succeeded mid-decision', switched === true)
   check('compact phase cancellation: switch immediately toasts cancellation before decision release',
-    notified('压缩进行中，已取消以执行切换'))
+    notified('压缩进行中，已取消并切换会话'))
   release(undefined)
   // The actively settled transaction exits silently after its cancellation;
   // ext-compact-stale remains covered by live, non-cancelled stale paths.

@@ -17,7 +17,6 @@ export function createModelSwitchAction(
     owner: Pick<ChannelOwner, 'current'>
     binding: Pick<Binding, 'capture' | 'isCurrent'>
     selection: ModelSelectionRef
-    settleCompaction(): Promise<void>
     applyPreferredEffort(): Promise<void>
     dropModelCompletion(): void
     notify: ChannelState['notify']
@@ -32,7 +31,6 @@ export function createModelSwitchAction(
     const capture = deps.binding.capture()
     const current = (): boolean => deps.owner.current() && deps.binding.isCurrent(capture) && generation === operation
     try {
-      await deps.settleCompaction()
       const llm = ctx.get('llm') as { listModels?(provider: string): Promise<readonly { id: string }[]> } | undefined
       if (llm?.listModels !== undefined) {
         const models = await llm.listModels(provider)
@@ -45,6 +43,7 @@ export function createModelSwitchAction(
     if (!current() || state.working) return false
     // Assembly captures this complete route for both persona variables and the
     // request waterfall. The loop persists its actual header on the next request.
+    // In-flight compaction keeps running: it summarizes on the logged route.
     deps.selection.current = { provider, model }
     state.provider = provider
     state.model = model

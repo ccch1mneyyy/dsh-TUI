@@ -607,7 +607,7 @@ dsh 意外退出时，安全模式给出**只读**的环境诊断、profile 插�
 
 | 项 | 命令 | 说明 |
 |---|---|---|
-| 模型 | `/model` | 选择器；**同会话切换模型**（保留 session ID 和历史，仅换后续请求路由）；持久化 `~/.dsh-tui/model.json`，重启与 `/new` 沿用。从没选过的话，用内置默认模型（当前为 `deepseek-flash`） |
+| 模型 | `/model` | 选择器；**同会话切换模型**（保留 session ID 和历史，仅换后续请求路由）；持久化 `~/.dsh-tui/model.json`，作为新会话的默认模型（恢复的会话沿用其最后一次请求的路由）。从没选过的话，用内置默认模型（当前为 `deepseek-flash`） |
 | 推理强度 | `/effort` | 滑杆（←/→ 实时）或 `/effort <id>`；`/effort status` 看当前；新会话默认档在 /settings → 默认推理强度 |
 | Agent 预设 | `/preset` | `standard` / `ptc`（旧 0.1.1 名 `code`）/ `minimal` / `cordis` / **梁神模式 `liangshen`**；**已开始会话不可切换** |
 | 主题 | `/theme` | `auto`（OSC 11 跟随终端背景）/ `light` / `dark` / `dark-ansi`；`/theme <名>` 直接切；`/theme status` 看解析结果 |
@@ -656,7 +656,7 @@ dsh 意外退出时，安全模式给出**只读**的环境诊断、profile 插�
 12. 会话管理界面（`/resume`、`/home`、`/agentview`、`/bg` 或输入框行首 `⌸`）：
     打字筛选、`★` 固定、`Ctrl+X` 停后台会话；切换只是**停放**。
 13. 回合运行中 `/compact`、`/model`、`/restart` 会被拒绝——先 `Ctrl+C` 或等回合结束。
-14. `/model` 在同一会话内切换后续请求的模型（ID 和历史保留），持久化后重启与 `/new` 沿用。
+14. `/model` 在同一会话内切换后续请求的模型（ID 和历史保留）；选择保存为新会话默认，恢复的会话沿用其最后一次请求的路由。
 
 **问手册**
 

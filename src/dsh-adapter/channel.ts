@@ -814,7 +814,6 @@ function createChannelWithOwner(
     owner,
     binding,
     selection,
-    settleCompaction: () => settleManualCompaction(),
     applyPreferredEffort: () => modelActions.applyPreferredEffort(),
     dropModelCompletion: () => modelActions.dropModelNodeCache(),
     notify,
