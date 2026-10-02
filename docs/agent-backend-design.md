@@ -585,6 +585,17 @@ UI 映射：`subagent.*` → 现有 `SubagentActivityStore`/`SubagentRow`/`Subag
 | `/clear` | 对 Claude = 发送 `/clear` 文本 → `conversation_reset` → `session.reset` → 投影器清空 rows（DSH 的 `/clear` 只清视图；Claude 会真正重置上下文——UI 文案区分） | `[d.ts]` |
 | 会话树 `/tree` | capability 缺席（Claude 无血缘头；`forkSession` 不记录 parent）→ 命令隐藏 | |
 
+**Phase 4b 实测修正与裁定**：
+- **P4-1**：SDK 创建的会话（entrypoint `sdk-ts`）在 `listSessions({includeProgrammatic:false})`（CLI 自己 `/resume` 选择器的口径）中**不可见**；`claude -p --resume <id> --model haiku` 能打开并看到之前的 turn（它追加的条目 entrypoint 为 `sdk-cli`）。故 catalog 一律 `includeProgrammatic:true`（代价：其他 headless 会话也列出）；交互式 `claude` 的选择器看不到 dsh-tui 会话，须按 id `claude --resume <id>`（未在交互 TTY 上复核）。
+- SDK 0.3.287 的 `customTitle` = 用户 `/rename` **或** CLI 生成的 `aiTitle`（`sdk.mjs` 里 `customTitle||aiTitle`），无法区分 → 有标题记 `auto`，否则首条提问 `prompt`，再否则目录名 `fallback`；`updatedAt = max(lastModified, 本机 last-used)`。
+- `getSessionMessages({includeSystemMessages:true})` 的 system 条目**没有 subtype**；压缩边界由随后的 `isCompactSummary` 用户消息识别。压缩后链路 = 边界、摘要、保留尾部、之后的消息（保留尾部排在摘要之后）。读 API 不带 `tool_use_result`：回放的 Read 卡退为纯文本卡（Write/Edit 由入参出 diff）。
+- 转录保留我们推送的 `uuid`（普通提问、`isQueuedCommand` 并入的 steer、`/compact` 回显都是）→ live 用户行与回放用户行的 `anchor` 相同，rewind 同一套。
+- `replay.ts` 复用 live 翻译器的块级映射，turn 由真实提问切分；空 thinking 以 API 的 `usage.output_tokens_details.thinking_tokens` 回放为与 live 相同的计数行（无计数则不显示）；子代理 `subagent.start` 紧随父 `Agent` 调用、`subagent.end`（状态取子转录尾部）在其结果后——子代理消息不进主转录；父调用被压缩掉的子代理不插入。上下文窗口无法从转录恢复（读 API 无此字段），首个 live `result` 补上；费用照常取续接后首个 `result`。
+- 续接后的 live 翻译器从回放的 turn/seq 继续编号（投影器按 (turn,step) 绑定 attempt、按 seq 去重 assistant 消息：重用编号会把 live 事件绑到/去重进历史）。
+- 核心 `/resume`：veto → 挂载账本预占 `claude:<id>` → `prepare` 内 `open({kind:'resume'})` **并** `await history()` → 竞态复查 → 同步 adopt 中先绘制历史、再订阅（Claude 的启动积压在订阅后的微任务里送达）。启动时的 `--resume` 同理：plugin 在构造 channel 前读好 `initialHistory`。一个进程一个后端：运行中的 TUI 内跨后端切换不在范围内。
+- 挂载账本：Claude 会话以 `claude:<uuid>` 发布（heartbeat 额外发布当前绑定的非 DSH 会话键），两个 dsh-tui 不会同时驱动同一 Claude 会话；同时用普通 `claude --resume` 打开同一会话**无法察觉**（CLI 不读这个账本）。
+- 基准（`scripts/bench-claude-sessions.ts`，合成 config 树、单个 9 KB 脱敏转录复制）：500 会话 项目列表 冷 264 ms / 热 169 ms，全部项目 冷 291 ms / 热 181 ms → 达标（≤ 300 ms 热），不加 mtime 缓存。
+
 ### 4.12 Auth（技术 + 条款，分开说）
 
 **技术**（`[P1]`）：SDK 直接复用了本机 `claude login` 的凭证（`init.apiKeySource:'none'`，`accountInfo().apiProvider:'firstParty'`，`subscriptionType:'Claude Team'`），TUI 零参与；`ANTHROPIC_API_KEY` 存在时 `apiKeySource:'ANTHROPIC_API_KEY'`；Bedrock/Vertex/Foundry 走各自 env（`AccountInfo.apiProvider`）。`ApiKeySource` 全集：`'ANTHROPIC_API_KEY'|'apiKeyHelper'|'/login managed key'|'none'`（其余为 legacy）`[d.ts]`。

@@ -17,7 +17,7 @@ import { basename } from 'node:path'
 import { t } from '../../i18n.js'
 import { truncateWidth } from '../../sessions/format.js'
 import { normalizeWorkspaceCwd } from '../../sessions/view.js'
-import { readSessionPins, setSessionPinned } from '../../sessionPins.js'
+import { readSessionPins, sessionPinsDir, setSessionPinned } from '../../sessionPins.js'
 import { readSessionOwners, type SessionMountOwner } from '../../sessionMounts.js'
 import type { SessionSummary } from '../../dsh-adapter/sessions/index.js'
 import type { TuiWorkspaceEntry, TuiWorkspaceTarget } from '../../workspaces.js'
@@ -97,6 +97,19 @@ export interface SessionSupervisorInput {
  */
 export function useSessionSupervisor(input: SessionSupervisorInput) {
   const { channel, home, onOpenSession, onNewSession, onStopSession, liveStateOf, columns, rows } = input
+  /**
+   * The bound backend (Phase 4b): the screen lists ITS sessions. A DSH
+   * channel (or a partial headless one without a snapshot) keeps today's
+   * screen exactly; another backend has no workspace ledger (`/workspace` is
+   * a DSH command), keeps its pins in its own file, and its rows are
+   * renamed / deleted through its catalog.
+   */
+  // oxlint-disable-next-line typescript/no-unnecessary-condition -- runtime guard: headless hosts pass partial channels
+  const backendId = channel.capabilities?.backendId ?? 'dsh'
+  const dshBackend = backendId === 'dsh'
+  // oxlint-disable-next-line typescript/no-unnecessary-condition -- runtime guard: headless hosts pass partial channels
+  const workspaceLedger = channel.capabilities?.commands.includes('workspace') ?? true
+  const pinsDir = sessionPinsDir(backendId)
 
   const [entries, setEntries] = useState<readonly RailEntry[]>([])
   // Lazy so a non-empty snapshot from this channel's previous mount paints as
@@ -139,10 +152,12 @@ export function useSessionSupervisor(input: SessionSupervisorInput) {
   }
   const holderOf = useCallback(
     (sessionId: string): number | undefined => {
-      const owner = occupancyRef.current.get(sessionId)
+      // The ledger keys a non-DSH session by its backend-qualified reference
+      // (`claude:<id>`); DSH ids stay bare.
+      const owner = occupancyRef.current.get(dshBackend ? sessionId : `${backendId}:${sessionId}`)
       return owner === undefined || owner.pid === process.pid ? undefined : owner.pid
     },
-    [],
+    [dshBackend, backendId],
   )
 
   /**
@@ -274,7 +289,10 @@ export function useSessionSupervisor(input: SessionSupervisorInput) {
    * no answer, and ←/→ is how this screen answers it.
    */
   const [activePane, setActivePane] = useState<'rail' | 'list'>('rail')
-  const [pins, setPins] = useState<ReadonlySet<string>>(() => readSessionPins())
+  const [pins, setPins] = useState<ReadonlySet<string>>(() => readSessionPins(pinsDir))
+  /** A stored session being renamed / confirmed for deletion (non-DSH rows). */
+  const [sessionRename, setSessionRename] = useState<{ id: string; draft: string } | undefined>(undefined)
+  const [confirmDelete, setConfirmDelete] = useState<string | undefined>(undefined)
 
   const [menu, setMenu] = useState<{ path: string; col: number; row: number; item: number } | undefined>(undefined)
   const [rename, setRename] = useState<{ path: string; draft: string } | undefined>(undefined)
@@ -359,7 +377,7 @@ export function useSessionSupervisor(input: SessionSupervisorInput) {
       })(),
       (async (): Promise<void> => {
         try {
-          const registry = typeof channel.listWorkspaceRegistry === 'function'
+          const registry = typeof channel.listWorkspaceRegistry === 'function' && workspaceLedger
             ? await channel.listWorkspaceRegistry()
             : []
           if (slot.requestGeneration !== generation) return
@@ -376,7 +394,7 @@ export function useSessionSupervisor(input: SessionSupervisorInput) {
       setLoading(false)
       setRefreshing(false)
     }
-  }, [channel])
+  }, [channel, workspaceLedger])
 
   React.useEffect(() => {
     void reload()
@@ -549,13 +567,55 @@ export function useSessionSupervisor(input: SessionSupervisorInput) {
   }, [])
 
   const persistPin = useCallback((id: string, pinned: boolean): void => {
-    const result = setSessionPinned(id, pinned)
+    const result = setSessionPinned(id, pinned, pinsDir)
     if (!result.ok) {
       report(t('resume-pin-save-failed'), 'error')
       return
     }
     setPins(result.pins)
-  }, [report])
+  }, [report, pinsDir])
+
+  /** Rename a stored session through the backend's catalog (non-DSH rows). */
+  const renameSession = useCallback((sessionId: string, title: string): void => {
+    const next = title.trim()
+    if (next === '') {
+      report(t('home-rename-empty'), 'error')
+      return
+    }
+    void channel.renameSessionTo(sessionId, next)
+      .then((ok) => {
+        if (ok) return reload()
+        report(t('rename-failed', { err: '' }), 'error')
+        return undefined
+      })
+      .catch(error => report(t('rename-failed', { err: message(error) }), 'error'))
+  }, [channel, reload, report])
+
+  /**
+   * Delete a stored session through the backend's catalog (non-DSH rows):
+   * never the one this terminal is in, never one another terminal holds.
+   */
+  const deleteSession = useCallback((session: SessionSummary): void => {
+    if (liveStateOf(session.id)?.current === true) {
+      report(t('supervisor-delete-current'), 'error')
+      return
+    }
+    const holder = holderOf(session.id)
+    if (holder !== undefined) {
+      report(t('supervisor-occupied', { pid: holder }), 'error')
+      return
+    }
+    void channel.deleteSession(session.id)
+      .then((ok) => {
+        if (!ok) {
+          report(t('supervisor-delete-failed', { name: session.title.text }), 'error')
+          return undefined
+        }
+        report(t('supervisor-deleted', { name: session.title.text }), 'info')
+        return reload()
+      })
+      .catch(error => report(t('session-delete-failed', { err: message(error) }), 'error'))
+  }, [channel, holderOf, liveStateOf, reload, report])
 
   const selectEntry = useCallback((entry: RailEntry): void => {
     setSelectedPath(entry.from === 'registry' ? entry.path : undefined)
@@ -698,6 +758,13 @@ export function useSessionSupervisor(input: SessionSupervisorInput) {
   const focusedSession = sessionAt(sessionIndex)
 
   return {
+    dshBackend,
+    sessionRename,
+    setSessionRename,
+    confirmDelete,
+    setConfirmDelete,
+    renameSession,
+    deleteSession,
     entries,
     sessions,
     loading,

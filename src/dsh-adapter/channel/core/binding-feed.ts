@@ -3,13 +3,18 @@
  * items 1–3): the shared projector, the session-batch router that is its only
  * writer, and the bind that follows the bound session — for any backend.
  *
- * `bind()` advances the binding generation, resets input convergence, links
- * the session's prompts to the stores Chat renders, and subscribes the router
- * to the captured session. By default it also repaints the session's durable
- * history once (asynchronously) and seeds the session-level facts from the
- * session's capabilities. An extension that owns those facts and replays its
- * seed synchronously itself (the DSH specialists) sets `ownsSessionFacts`,
- * and adds its raw per-binding listeners through `onBind`.
+ * `bind(seed?)` advances the binding generation, resets input convergence,
+ * links the session's prompts to the stores Chat renders, and subscribes the
+ * router to the captured session. By default it also paints the session's
+ * durable history and seeds the session-level facts from the session's
+ * capabilities. The history is the `seed` the caller read before the
+ * adoption (design §4.11: a resume reads `history()` ahead of the
+ * synchronous adopt), painted synchronously BEFORE the subscription — so no
+ * live event can land ahead of it; without a seed it is read once,
+ * asynchronously, and dropped if live rows painted first. An extension that
+ * owns those facts and replays its seed synchronously itself (the DSH
+ * specialists) sets `ownsSessionFacts`, and adds its raw per-binding
+ * listeners through `onBind`.
  */
 import type { Context } from '@deepseek-ai/cordis'
 import type { AgentEvent, AgentEventMeta, AgentEventOf } from '../../../agent/events.js'
@@ -173,7 +178,10 @@ export function createSessionBinder(deps: {
   /** The session-level facts kept unless the extension owns them. */
   facts?: {
     observe(batch: readonly AgentEvent[], session: AgentSession, current: () => boolean): void
-    seed(capture: BindingCapture, current: () => boolean): void
+    /** Paint the history read ahead of the bind (before the subscription). */
+    replay(history: readonly AgentEvent[]): void
+    /** After the subscription: `replayed` = the history was already painted. */
+    seed(capture: BindingCapture, current: () => boolean, replayed: boolean): void
   }
 }) {
   const { owner, binding, state, inputConvergence } = deps
@@ -186,7 +194,7 @@ export function createSessionBinder(deps: {
   if (deps.interaction !== undefined) owner.own(() => { interactionLink?.release() })
 
   /** Bind the current session: the one subscription feeding the projector. */
-  const bind = (): void => {
+  const bind = (seed?: readonly AgentEvent[]): void => {
     const hooks = deps.hooks()
     try {
       state.agentBindingGeneration = binding.bind()
@@ -209,6 +217,9 @@ export function createSessionBinder(deps: {
         interactionLink = link
       }
       const facts = hooks.ownsSessionFacts === true ? undefined : deps.facts
+      // The history read ahead of the adoption paints first: every live
+      // event follows it (design §4.11).
+      if (facts !== undefined && seed !== undefined) facts.replay(seed)
       if (facts === undefined && link === undefined) {
         register(session.subscribe((batch, meta) => deps.route(batch, meta, current)))
       } else {
@@ -222,7 +233,7 @@ export function createSessionBinder(deps: {
           deps.route(batch, meta, current)
         }))
       }
-      facts?.seed(capture, current)
+      facts?.seed(capture, current, seed !== undefined)
     } catch (error) {
       owner.dispose()
       throw error
@@ -265,12 +276,22 @@ export function createBindingFeed(ctx: Context, deps: {
     deps.hooks().resetTranslation?.()
   }
 
+  /** Paint a settled history: no live toasts, no open turn left behind. */
+  const paintHistory = (events: readonly AgentEvent[]): void => {
+    if (events.length === 0) return
+    projector.apply(events, { replay: true })
+    projector.settleStreaming()
+    state.working = false
+    state.cancelPending = false
+  }
+
   /**
-   * Repaint the session's durable history once, when it is non-empty and
-   * nothing live has painted yet. The history is asynchronous while the
-   * binding transaction is synchronous; a session opened by `create` has
-   * none, and ordering a non-empty history against live events that already
-   * arrived is the resume work of a later phase (design §8.5).
+   * The fallback for a bind without a history read ahead of it (an embedder
+   * handing `createChannel` a session whose history it never read): read it
+   * once, asynchronously, and paint it only while nothing live has painted
+   * — ordering it after live rows that already arrived would misplace both.
+   * Every core adoption (`/new`, `/resume`, a rewind's fork) and the plugin's
+   * startup session pass the history in instead (design §4.11).
    */
   const replayHistory = (capture: BindingCapture, current: () => boolean): void => {
     void capture.session.history().then(events => {
@@ -279,10 +300,7 @@ export function createBindingFeed(ctx: Context, deps: {
         logForDebugging('channel: history arrived after live rows; not replayed')
         return
       }
-      projector.apply(events, { replay: true })
-      projector.settleStreaming()
-      state.working = false
-      state.cancelPending = false
+      paintHistory(events)
       state.emit()
     }).catch((error: unknown) => {
       logForDebugging(`channel: history failed (${error instanceof Error ? error.message : String(error)})`)
@@ -304,9 +322,10 @@ export function createBindingFeed(ctx: Context, deps: {
     interaction: deps.options.interaction,
     facts: {
       observe: controls.observe,
-      seed(capture, current) {
+      replay: paintHistory,
+      seed(capture, current, replayed) {
         state.status = statusOf(capture.session)
-        replayHistory(capture, current)
+        if (!replayed) replayHistory(capture, current)
         controls.seed(capture.session, current)
       },
     },

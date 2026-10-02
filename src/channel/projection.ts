@@ -663,6 +663,9 @@ export function createChannelProjection(state: ProjectionState, deps: ChannelPro
         ...(images.length === 0 ? {} : { images }),
         ...(selectionAttached === undefined ? {} : { selectionAttached }),
         seq: event.seq,
+        // A native anchor beyond the seq (DSH anchors ARE the seq: its rows
+        // stay as they were) is what a backend rewind needs.
+        ...(event.anchor === '' || event.anchor === String(event.seq) ? {} : { anchor: event.anchor }),
       })
       state.lastUserText = text || t('transcript-image-message', { count: images.length })
       // The context estimate counts everything sent to the model — typed

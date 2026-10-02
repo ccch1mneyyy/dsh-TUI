@@ -14,6 +14,12 @@ export const CLAUDE_BACKEND_ID = 'claude'
  *  "Claude Code" (design §4.12). */
 export const CLAUDE_BACKEND_LABEL = 'Claude Agent'
 
+/** How a user re-enters a Claude session from a shell: the launcher's
+ *  backend flag plus the session id (DSH's `resume.txt` never holds one). */
+export function claudeResumeCommand(sessionId: string): string {
+  return `dsh-tui --backend claude --resume ${sessionId}`
+}
+
 /** The exact `@anthropic-ai/claude-agent-sdk` version this backend is
  *  validated against (mirrors the package.json pin). */
 export const VALIDATED_SDK_VERSION = '0.3.287'

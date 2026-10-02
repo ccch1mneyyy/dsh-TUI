@@ -11,8 +11,12 @@ import { Config, normalizeBackendChoice } from './index.js'
 import { configValues, createSettingsScope, resolveSettingsNamespace, type RuntimeConfig } from './compat/settings.js'
 import { createChannel } from './channel.js'
 import { createDshSession } from './backend/session.js'
-import type { BackendHost } from '../agent/backend.js'
+import type { BackendHost, OpenTarget, SessionCatalog } from '../agent/backend.js'
+import type { AgentEvent } from '../agent/events.js'
+import { formatSessionRef } from '../agent/refs.js'
 import type { AgentSession } from '../agent/session.js'
+import { mountFailureText } from '../sessions/resumeFailure.js'
+import type { ChannelLaunchOptions } from './channel/state.js'
 import { createChannelSceneOutlet } from './channel-scene-outlet.js'
 import { mountChannelUi } from './channel-ui.js'
 import { bindChannelCommands } from './channel/commands.js'
@@ -57,7 +61,7 @@ import { logMouseDebug } from '../utils/debug.js'
 import { Chat } from '../screens/Chat.js'
 import { openInjectChannel, type InjectController } from './inject-channel.js'
 import { startSessionMountHeartbeat } from './session-mount-heartbeat.js'
-import { reserveMount } from '../sessionMounts.js'
+import { reserveMount, reserveNewSession } from '../sessionMounts.js'
 import { getHostDialogStore, type TuiDialogRuntime } from './dialogs.js'
 import { getHostStatusStore, type TuiStatusRuntime } from './status.js'
 import { createActivityStore } from './activity-store.js'
@@ -495,7 +499,7 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
     ? await openClaudeStartup(ctx, sessionCwd, line => {
       logForDebugging(`[claude-stderr] ${line}`)
       stderrReporter.push(line)
-    })
+    }, config.sessionId, cmdlineArgs ?? process.argv.slice(2))
     : undefined
   // The Claude session (and its CLI child) belongs to this fiber until the
   // channel adopts it: a boot that throws before then disposes the fiber's
@@ -597,6 +601,11 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
       backendLabel: claudeStart.label,
       openSession: claudeStart.open,
       interaction: { permissions: backendPermissions, questions: questionStore },
+      // Phase 4b: the session browser, /resume, /fork and the rewind.
+      sessionCatalog: claudeStart.catalog,
+      sessionPrefs: claudeStart.sessionPrefs,
+      initialHistory: claudeStart.initialHistory,
+      resumeCommand: claudeStart.resumeCommand,
     }),
     // The activity projection only pushes on change; read the current value as
     // soon as this session binds so a resumed or reattached session renders its
@@ -607,7 +616,8 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
     // from the current launch directory would split @ expansion / file
     // completion (state.cwd) from the agent's own workspace record. Fresh
     // sessions record sessionCwd at creation, so both agree there.
-    cwd: agent?.session.header.cwd ?? sessionCwd,
+    // A resumed Claude session runs where it was recorded.
+    cwd: claudeStart?.session.cwd ?? agent?.session.header.cwd ?? sessionCwd,
     provider: claudeStart !== undefined ? claudeStart.backendId : displayRoute.provider,
     // Raw cordis.yml route (undefined when unset): the channel's
     // new-session path re-resolves prefs against these, and resume passes
@@ -676,11 +686,6 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
     if (!shadow) channel.submit(text)
   }
   ctx.effect(() => () => { uiMount.dispose() })
-  // `--resume <id>` names a DSH session; Claude sessions resume in a later
-  // phase, so this start is a fresh Claude session — say so.
-  if (claudeStart !== undefined && launchSessionId !== undefined) {
-    notifyChannel(t('claude-resume-unavailable'), { color: 'warning', timeoutMs: 8000 })
-  }
   // Root page-margin store: the PageMargin inset box sits ABOVE Chat, so
   // the channel version bump (which re-renders everything below Chat)
   // cannot drive it. Seed the store from config before the tree mounts;
@@ -1361,6 +1366,11 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
   // not share a fate (issue #12). Teardown only unmounts the UI; user exit
   // runs the full leave sequence below (resume marker, terminal restore,
   // update handoff or resume hint).
+  /** The session a restart / update handoff reopens: a Claude session the
+   *  CLI never persisted cannot be resumed, so the replacement starts fresh. */
+  const handoffSessionId = (): string =>
+    claudeStart === undefined || claudeStart.persisted(channel.agentId, channel.rows) ? channel.agentId : ''
+  const handoffHint = claudeStart === undefined ? undefined : (sessionId: string): string => claudeStart.resumeCommand(sessionId)
   const funnel = createExitFunnel({
     onUserExit: error => {
       // Mirror the funnel's internal exited flag for the /update and
@@ -1383,6 +1393,8 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
           })) {
             writeResumeTarget(channel.agentId)
           }
+          // A Claude session's marker is its backend's own (never resume.txt).
+          if (claudeStart !== undefined && claudeStart.persisted(channel.agentId, channel.rows)) claudeStart.sessionPrefs.setLastSession(channel.agentId)
         } catch {
           // Resume persistence is best effort and must never block the exit.
         }
@@ -1398,10 +1410,10 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
       }
       if (updateRequested) {
         try {
-          // A Claude session id is never a DSH resume target (Phase 4 adds
-          // backend-qualified resume); the marker is cleared instead.
+          // A Claude session id is never a DSH resume target: DSH's
+          // `resume.txt` is left exactly as it is; the Claude marker moves.
           if (claudeStart === undefined) writeResumeTarget(channel.agentId)
-          else clearResumeTarget()
+          else if (claudeStart.persisted(channel.agentId, channel.rows)) claudeStart.sessionPrefs.setLastSession(channel.agentId)
         } catch {
           // Resume persistence is best effort and must never block an update.
         }
@@ -1414,7 +1426,7 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
           bootedFullscreen,
           hintText,
           undefined,
-          () => runUpdate(ctx, profile, channel.agentId, updateTargetVersion),
+          () => runUpdate(ctx, profile, handoffSessionId(), updateTargetVersion, handoffHint),
         )
         return
       }
@@ -1426,7 +1438,7 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
         logRestartEvent('funnel: /restart branch entered')
         try {
           if (claudeStart === undefined) writeResumeTarget(channel.agentId)
-          else clearResumeTarget()
+          else if (claudeStart.persisted(channel.agentId, channel.rows)) claudeStart.sessionPrefs.setLastSession(channel.agentId)
           logRestartEvent('funnel: resume target written')
         } catch (error) {
           // Resume persistence is best effort and must never block a restart.
@@ -1440,7 +1452,7 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
           bootedFullscreen,
           t('restart-starting'),
           undefined,
-          () => runRestart(ctx, profile, channel.agentId),
+          () => runRestart(ctx, profile, handoffSessionId(), handoffHint),
         )
         return
       }
@@ -1449,20 +1461,34 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
       // not the boot-time agent captured above: /resume, /new and /model swap
       // the active agent, so the captured reference can go stale (see
       // isExitResumable).
-      const resumable = isExitResumable({
-        pendingCount: channel.pending.length,
-        liveAgent: ctx.agents.get(SessionId(channel.agentId)),
-        startupAgent: agent,
-      })
-      try {
-        if (resumable) writeResumeTarget(channel.agentId)
-        else clearResumeTarget()
-      } catch {
-        // Resume persistence is best effort and must never block shutdown.
+      let hint: string | undefined
+      if (claudeStart !== undefined) {
+        // A Claude session: its own marker (a bare `--backend claude
+        // --resume` reopens it) and its own command; DSH's `resume.txt` is
+        // left exactly as it is.
+        const resumable = claudeStart.persisted(channel.agentId, channel.rows)
+        try {
+          if (resumable) claudeStart.sessionPrefs.setLastSession(channel.agentId)
+        } catch {
+          // Resume persistence is best effort and must never block shutdown.
+        }
+        hint = resumable ? `Resume with the command below:\n${claudeStart.resumeCommand(channel.agentId)}` : undefined
+      } else {
+        const resumable = isExitResumable({
+          pendingCount: channel.pending.length,
+          liveAgent: ctx.agents.get(SessionId(channel.agentId)),
+          startupAgent: agent,
+        })
+        try {
+          if (resumable) writeResumeTarget(channel.agentId)
+          else clearResumeTarget()
+        } catch {
+          // Resume persistence is best effort and must never block shutdown.
+        }
+        hint = resumable
+          ? `Resume with the command below:\n${resumeCommand(profile, channel.agentId)}`
+          : undefined
       }
-      const hint = resumable
-        ? `Resume with the command below:\n${resumeCommand(profile, channel.agentId)}`
-        : undefined
       void finishExit(
         ctx,
         instance,
@@ -1669,7 +1695,12 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
   // Registered on the same teardown funnel as everything else: the disposer
   // stops the heartbeat and removes the claim, so a clean exit frees its
   // sessions at once while a killed process is reclaimed by liveness.
-  ctx.effect(() => startSessionMountHeartbeat(ctx))
+  // A non-DSH session is in no DSH registry: the bound one is published under
+  // its backend-qualified key (`claude:<id>`), so a second TUI refuses it.
+  ctx.effect(() => startSessionMountHeartbeat(ctx, () => {
+    const ref = rawChannel.sessionRef
+    return ref.backendId === 'dsh' ? [] : [formatSessionRef(ref)]
+  }))
 
   // Check in the background so registry latency never delays the first frame.
   // A failed/offline check is intentionally silent; the manual `/update`
@@ -1715,48 +1746,6 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
   // unhandled rejection instead of a clean exit. A teardown-driven settle
   // is swallowed by the funnel (issue #12).
   void instance.waitUntilExit().then(handleExit, handleExit)
-}
-
-/**
- * Open the startup session on the Claude Agent backend (design §4; Phase 2
- * creates sessions only). Loaded lazily: a DSH-only install never imports
- * the backend or its optional SDK. The returned `open` serves `/new`.
- */
-async function openClaudeStartup(ctx: Context, cwd: string, stderr: (line: string) => void): Promise<{
-  readonly session: AgentSession
-  readonly label: string
-  readonly backendId: string
-  open(target: { readonly kind: 'create'; readonly cwd: string }): Promise<AgentSession>
-}> {
-  const [{ claudeBackend }, { createOAuthCredentialSource }] = await Promise.all([
-    import('../backends/claude/index.js'),
-    // Loaded with the backend only: a DSH session never reads dsh-auth here.
-    import('./oauth-credential-source.js'),
-  ])
-  // The dsh-auth login the backend may run on (design §4.12): one source
-  // per provider, shared by every session this process opens.
-  const credentialSources = new Map<string, ReturnType<typeof createOAuthCredentialSource>>()
-  const host = (sessionCwd: string): BackendHost => ({
-    cwd: sessionCwd,
-    debug: message => logForDebugging(message),
-    warn: message => ctx.logger.warn(message),
-    stderr,
-    oauthCredential: provider => {
-      let source = credentialSources.get(provider)
-      if (source === undefined) {
-        source = createOAuthCredentialSource(provider)
-        credentialSources.set(provider, source)
-      }
-      return source
-    },
-  })
-  const session = await claudeBackend.open({ kind: 'create', cwd }, host(cwd))
-  return {
-    session,
-    label: claudeBackend.descriptor.label,
-    backendId: claudeBackend.id,
-    open: target => claudeBackend.open(target, host(target.cwd)),
-  }
 }
 
 /**
@@ -1950,6 +1939,116 @@ async function resolveAgent(
   }
   bootReservation?.settle()
   return { agent: created.agent, handle: created, agentPreset: composed.agentPreset, route }
+}
+
+/**
+ * Open the startup session on the Claude Agent backend (design §4): a fresh
+ * one, or — `dsh-tui --backend claude --resume <id>` (`DSH_TUI_RESUME_SESSION`,
+ * or the app argv; a bare `--resume` means the last Claude session this
+ * install used, never DSH's `resume.txt`) — a persisted one. Loaded lazily: a
+ * DSH-only install never imports the backend or its optional SDK.
+ *
+ * A launch-time resume is an explicit request, exactly like DSH's: a session
+ * another TUI process drives (the mount ledger key `claude:<id>`), an unknown
+ * id, or a transcript the CLI refuses fails the boot loudly — never a silent
+ * fresh session. Its history is read here, before the channel exists, so the
+ * first paint shows it ahead of any live event.
+ */
+async function openClaudeStartup(
+  ctx: Context,
+  cwd: string,
+  stderr: (line: string) => void,
+  configuredSessionId: string | undefined,
+  argv: readonly string[],
+): Promise<{
+  readonly session: AgentSession
+  readonly label: string
+  readonly backendId: string
+  readonly initialHistory: readonly AgentEvent[]
+  readonly catalog: SessionCatalog | undefined
+  readonly sessionPrefs: NonNullable<ChannelLaunchOptions['sessionPrefs']>
+  /** Whether the CLI has persisted this session (`--resume` can reopen it). */
+  persisted(sessionId: string, rows: readonly { readonly kind: string }[]): boolean
+  resumeCommand(sessionId: string): string
+  open(target: Extract<OpenTarget, { readonly kind: 'create' | 'resume' }>): Promise<AgentSession>
+}> {
+  const [{ claudeBackend, fileClaudePrefs, claudeResumeCommand }, { createOAuthCredentialSource }] = await Promise.all([
+    import('../backends/claude/index.js'),
+    // Loaded with the backend only: a DSH session never reads dsh-auth here.
+    import('./oauth-credential-source.js'),
+  ])
+  const prefs = fileClaudePrefs(undefined, message => logForDebugging(message))
+  // The dsh-auth login the backend may run on (design §4.12): one source
+  // per provider, shared by every session this process opens.
+  const credentialSources = new Map<string, ReturnType<typeof createOAuthCredentialSource>>()
+  const host = (sessionCwd: string): BackendHost => ({
+    cwd: sessionCwd,
+    debug: message => logForDebugging(message),
+    warn: message => ctx.logger.warn(message),
+    stderr,
+    oauthCredential: provider => {
+      let source = credentialSources.get(provider)
+      if (source === undefined) {
+        source = createOAuthCredentialSource(provider)
+        credentialSources.set(provider, source)
+      }
+      return source
+    },
+  })
+  const requested = (configuredSessionId ?? resumeTargetFromArgv(argv, () => prefs.read().lastSession))?.trim()
+  const resumeId = requested === undefined || requested === ''
+    ? undefined
+    : requested.startsWith(`${claudeBackend.id}:`) ? requested.slice(claudeBackend.id.length + 1) : requested
+  let session: AgentSession
+  let initialHistory: readonly AgentEvent[] = []
+  if (resumeId !== undefined) {
+    const key = formatSessionRef({ backendId: claudeBackend.id, sessionId: resumeId })
+    const reserved = await reserveMount(key)
+    if (!reserved.ok) {
+      throw new Error(`dsh-tui: cannot resume Claude session "${resumeId}": ${mountFailureText(reserved)} — ` +
+        'two processes driving one session would interleave its transcript. Close that terminal, or drop --resume to start a fresh session.')
+    }
+    try {
+      session = await claudeBackend.open({ kind: 'resume', sessionId: resumeId }, host(cwd))
+      try {
+        initialHistory = await session.history()
+      } catch (error) {
+        await session.dispose().catch(() => undefined)
+        throw error
+      }
+    } catch (error) {
+      reserved.reservation.abandon()
+      const reason = error instanceof Error ? error.message : String(error)
+      throw new Error(`dsh-tui: cannot resume Claude session "${resumeId}": ${reason} — no fresh session was started instead. ` +
+        'Drop --resume to start a fresh session.', { cause: error })
+    }
+    // The channel adopts it next; the heartbeat publishes its key from then on.
+    reserved.reservation.settle()
+    prefs.write({ lastSession: resumeId })
+    prefs.touch(resumeId)
+  } else {
+    session = await claudeBackend.open({ kind: 'create', cwd }, host(cwd))
+    // A fresh id cannot conflict: announcing it is all the ledger needs.
+    const { reservation } = await reserveNewSession(formatSessionRef(session.ref))
+    reservation.settle()
+  }
+  return {
+    session,
+    label: claudeBackend.descriptor.label,
+    backendId: claudeBackend.id,
+    initialHistory,
+    catalog: claudeBackend.catalog,
+    sessionPrefs: {
+      touch: sessionId => { prefs.touch(sessionId) },
+      setLastSession: sessionId => { prefs.write({ lastSession: sessionId }) },
+      forget: sessionId => { prefs.forget(sessionId) },
+    },
+    // The CLI writes the transcript with the first prompt it starts: a
+    // session with a user row (live or replayed) can be resumed.
+    persisted: (_sessionId, rows) => rows.some(row => row.kind === 'user'),
+    resumeCommand: claudeResumeCommand,
+    open: target => claudeBackend.open(target, host(target.kind === 'create' ? target.cwd : cwd)),
+  }
 }
 
 /**
@@ -2192,7 +2291,7 @@ function writeStream(stream: NodeJS.WriteStream, data: string): Promise<void> {
  * terminal handoff the /update path uses, minus the installation step.
  * The resume contract is dual-written (env + resume.txt) before this runs.
  */
-function runRestart(ctx: Context, profile: string | undefined, sessionId: string): void {
+function runRestart(ctx: Context, profile: string | undefined, sessionId: string, hint: (sessionId: string) => string = id => resumeCommand(profile, id)): void {
   logRestartEvent('runRestart: entered, disposing cordis root')
   disposeRootAndThen(ctx, () => {
     logRestartEvent('runRestart: root disposed, starting restartTui')
@@ -2202,7 +2301,7 @@ function runRestart(ctx: Context, profile: string | undefined, sessionId: string
         if (restartCode !== 0) {
           writeHandoffNotice(
             `\ndsh-tui restart failed to spawn (exit ${restartCode}). Your session is preserved — resume with:\n` +
-              `${resumeCommand(profile, sessionId)}\n\n`,
+              `${hint(sessionId)}\n\n`,
           )
         }
         process.exit(restartCode)
@@ -2212,7 +2311,7 @@ function runRestart(ctx: Context, profile: string | undefined, sessionId: string
         logRestartEvent('runRestart: restartTui rejected', { message })
         writeHandoffNotice(
           `\ndsh-tui restart failed: ${message}. Your session is preserved — resume with:\n` +
-            `${resumeCommand(profile, sessionId)}\n\n`,
+            `${hint(sessionId)}\n\n`,
         )
         process.exit(1)
       },
@@ -2225,6 +2324,7 @@ function runUpdate(
   profile: string | undefined,
   sessionId: string,
   targetVersion: string | undefined,
+  hint: (sessionId: string) => string = id => resumeCommand(profile, id),
 ): void {
   disposeRootAndThen(ctx, () => {
     if (profile === undefined) {
@@ -2236,7 +2336,7 @@ function runUpdate(
         if (updateCode !== 0) {
           process.stderr.write(
             `\ndsh-tui update failed (exit ${updateCode}). Your session is preserved — resume with:\n` +
-              `${resumeCommand(profile, sessionId)}\n\n`,
+              `${hint(sessionId)}\n\n`,
           )
         }
         process.exit(restartCode)
@@ -2245,7 +2345,7 @@ function runUpdate(
         const message = updateError instanceof Error ? updateError.message : String(updateError)
         process.stderr.write(
           `\ndsh-tui update failed: ${message}. Your session is preserved — resume with:\n` +
-            `${resumeCommand(profile, sessionId)}\n\n`,
+            `${hint(sessionId)}\n\n`,
         )
         process.exit(1)
       },

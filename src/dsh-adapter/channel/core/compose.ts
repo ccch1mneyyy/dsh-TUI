@@ -49,7 +49,9 @@ import { createGitBranchRefresher, resolveCoreHost, startHostSubscriptions, type
 import { createCoreLocalActions } from './local-actions.js'
 import { createCoreReports } from './reports.js'
 import { createSessionControls, localCommandsFor } from './session-controls.js'
-import { createBackendOpener, createSessionSwitch, type NewSessionOpener } from './session-switch.js'
+import { createCoreSessionActions } from './sessions.js'
+import { createWorkspaceActions } from '../workspace-actions.js'
+import { createBackendOpener, createSessionSwitch, SESSION_MOUNT_LEDGER, type NewSessionOpener, type ResumeSessionOpener } from './session-switch.js'
 
 /** Token buffer below the context window at which the context-low warning fires. */
 const CONTEXT_WARNING_BUFFER_TOKENS = 20_000
@@ -89,6 +91,9 @@ export interface ChannelExtension {
   bind?: BindingFeedHooks
   /** How `/new` opens a fresh session (default: `options.openSession`). */
   newSession?: NewSessionOpener
+  /** How the core `/resume` reopens a persisted session (default:
+   *  `options.openSession`; DSH serves `/resume` itself). */
+  resumeSession?: ResumeSessionOpener
   /** Actions served on top of the core's. */
   delegates?: Partial<ChannelActionDelegates>
   /** Runtime starts around the core's host subscriptions, before the bind. */
@@ -210,6 +215,7 @@ export function createCoreChannel(
     backendLabel,
     capabilities: session.capabilities,
     dsh: false,
+    resume: options.openSession !== undefined && options.sessionCatalog !== undefined,
   })
   const initialCapabilities = snapshotOf(initialSession)
 
@@ -273,10 +279,9 @@ export function createCoreChannel(
     discardStagedImage: composer.discardStagedImage,
     stagedImage: composer.stagedImage,
     stagedImageLimits: composer.stagedImageLimits,
-    promptRewind: () => {
-      unavailable('rewind')
-      return Promise.resolve('cancel' as const)
-    },
+    // The core rewind prompt (capability-backed); the DSH extension
+    // replaces it with its plugin-decision prompt.
+    promptRewind: row => sessionActions.promptRewind(row),
     buildSessionTree: () => {
       unavailable('tree')
       return Promise.resolve(null)
@@ -339,7 +344,8 @@ export function createCoreChannel(
     describeWorkspace: cwd => host.workspaceService.describe(cwd),
     resetIdeSelection,
     clearStagedImages,
-    opener: () => extension.newSession ?? defaultOpener,
+    opener: () => extension.newSession ?? defaultOpeners?.create,
+    resumeOpener: () => extension.resumeSession ?? defaultOpeners?.resume,
     activity: () => {
       const fifo = inputDelivery.activity()
       return {
@@ -350,15 +356,35 @@ export function createCoreChannel(
     },
     unavailable,
   })
-  /** `/new` on a session no extension claims: the backend's own `open`. */
-  const defaultOpener: NewSessionOpener | undefined = options.openSession === undefined ? undefined : createBackendOpener({
+  /** `/new` and `/resume` on a session no extension claims: the backend's
+   *  own `open`. */
+  const defaultOpeners = options.openSession === undefined ? undefined : createBackendOpener({
     open: options.openSession,
     state,
     rowIds,
     resetProjection: feed.resetProjection,
     snapshotOf,
     resetControls: controls.reset,
-    bind: feed.bind,
+    bind: seed => feed.bind(seed),
+    bound: () => binding.session,
+    mounts: SESSION_MOUNT_LEDGER,
+    ...(options.sessionPrefs === undefined ? {} : { touch: (sessionId: string) => options.sessionPrefs?.touch(sessionId) }),
+    notify,
+  })
+  /** The browser's catalog, `/resume`, `/fork` and the rewind (core). */
+  const sessionActions = createCoreSessionActions({
+    owner,
+    session: () => binding.session,
+    state: () => state,
+    notify,
+    unavailable,
+    catalog: options.sessionCatalog,
+    prefs: options.sessionPrefs,
+    resumeCommand: options.resumeCommand,
+    resume: (sessionId, kind) => sessionSwitch.resumeSession(sessionId, kind),
+    // `/resume` (the browser's open) needs the catalog too — the same rule
+    // as the capability snapshot; a rewind adopts its fork by `open` alone.
+    canOpen: options.openSession !== undefined && options.sessionCatalog !== undefined,
   })
 
   const local = createCoreLocalActions(ctx, {
@@ -384,6 +410,15 @@ export function createCoreChannel(
     },
   })
   const reports = createCoreReports({ owner, binding, state: () => state })
+  /** A fresh session in another directory (the session browser's new-session
+   *  card, `/workspace`'s handoff): the core `/new` with a target. */
+  const workspaces = createWorkspaceActions(state, {
+    owner,
+    service: host.workspaceService,
+    newSession: target => sessionSwitch.newSession(target),
+    refreshGitBranch: () => refreshGitBranch(),
+    notify,
+  })
   const refreshGitBranch = createGitBranchRefresher(ctx, {
     owner,
     state,
@@ -434,6 +469,9 @@ export function createCoreChannel(
         doctorInfo: reports.doctorInfo,
         exportSession: reports.exportSession,
         newSession: () => sessionSwitch.newSession(),
+        resolveWorkspace: workspaces.resolveWorkspace,
+        switchWorkspace: workspaces.switchWorkspace,
+        ...sessionActions.delegates,
       }
       installChannelActions(actionReadiness, {
         unavailable,
@@ -456,7 +494,9 @@ export function createCoreChannel(
       extension.start?.before?.()
       startHostSubscriptions(host, owner, state)
       extension.start?.after?.()
-      feed.bind()
+      // The startup session's history, read ahead of construction, paints
+      // before any live event (an extension owning the facts replays its own).
+      feed.bind(extension.bind?.ownsSessionFacts === true ? undefined : options.initialHistory)
       // Cordis owns the Channel lifetime. Rebinding handles the common case;
       // this effect closes the final timer and releases the DecisionEvents
       // dispatch-topology marker when the Channel's context unloads.

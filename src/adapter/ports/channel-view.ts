@@ -75,6 +75,10 @@ export interface ChatRow {
   /** Source session event seq — present on every log-derived row (rewind
    *  fork anchor on user rows; window-floor bookkeeping for the rest). */
   seq?: number
+  /** The backend's own rewind anchor of a `user` row when it is not the
+   *  row's `seq` (a Claude message uuid); absent on DSH rows, whose anchor
+   *  is the seq itself. */
+  anchor?: string
   /** True when the row's full text was folded to keep the transcript window
    *  bounded (see MAX_ROWS); the session log still holds the full content
    *  and loadOlder() restores it. */

@@ -119,6 +119,11 @@ export interface TurnRange {
  */
 export interface SessionSummary {
   readonly id: string
+  /**
+   * The backend whose catalog lists this session (`claude`, `acp:<agent>`);
+   * absent = a DSH session (every pre-multi-backend row, unchanged).
+   */
+  readonly backendId?: string
   readonly kind: SessionKind
   readonly title: SessionTitle
   /** Working directory recorded in the header; '' when it recorded none. */

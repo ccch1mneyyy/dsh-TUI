@@ -1,0 +1,61 @@
+{
+  "start": {
+    "turn": 1,
+    "seq": 5,
+    "model": "claude-haiku-4-5-20251001"
+  },
+  "events": [
+    "turn.start:user",
+    "user.message",
+    "step.start",
+    "assistant.attempt.start",
+    "delta:reasoning-tokens",
+    "tool.call",
+    "subagent.start",
+    "tool.result",
+    "subagent.end",
+    "assistant.message",
+    "step.end",
+    "step.start",
+    "assistant.attempt.start",
+    "delta:reasoning-tokens",
+    "assistant.message",
+    "step.end",
+    "turn.end:completed",
+    "model.changed"
+  ],
+  "rows": [
+    {
+      "kind": "user",
+      "text": "Use the Agent tool with subagent_type \"general-purpose\" and the prompt \"Read README.md with the Read tool and report its first line.\" Wait for it (do not run it…",
+      "anchor": "00000000-0000-4000-8000-000000000001"
+    },
+    {
+      "kind": "reasoning",
+      "text": "",
+      "reasoningTokens": 84
+    },
+    {
+      "kind": "reasoning",
+      "text": "",
+      "reasoningTokens": 44
+    },
+    {
+      "kind": "assistant",
+      "text": "The first line of README.md is \"# Fixture project\"."
+    }
+  ],
+  "state": {
+    "working": false,
+    "model": "claude-haiku-4-5-20251001",
+    "sessionTitle": "",
+    "tokens": {
+      "input": 18,
+      "output": 280,
+      "cacheRead": 37909,
+      "cacheWrite": 8952
+    },
+    "compaction": null,
+    "notices": []
+  }
+}

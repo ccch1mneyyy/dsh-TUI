@@ -1,8 +1,15 @@
 /**
  * The Claude Agent backend (docs/agent-backend-design.md §3.4, §4): detection
- * (SDK importable? executable found? validated versions? a credential?) and
- * session creation with the credential plan of §4.12 (auth.ts). Resume,
- * listing and fork are Phase 4.
+ * (SDK importable? executable found? validated versions? a credential?),
+ * session creation and resume with the credential plan of §4.12 (auth.ts),
+ * and the offline session catalog (catalog.ts).
+ *
+ * Resume (§4.11): the session's record is looked up (its recorded working
+ * directory is where the CLI must run), its model-visible transcript and
+ * subagent transcripts are read and replayed (replay.ts), and only then is
+ * the CLI started with `resume` — the replay fixes the turn / sequence
+ * numbering the live session continues from. An unknown id or a transcript
+ * the CLI refuses fails loudly; nothing falls back to a fresh session.
  */
 import { randomUUID } from 'node:crypto'
 import type { AgentBackend, BackendDetection, BackendHost, OpenTarget } from '../../agent/backend.js'
@@ -10,10 +17,12 @@ import type { AgentSession } from '../../agent/session.js'
 import { t } from '../../i18n.js'
 import { CLAUDE_BACKEND_ID, CLAUDE_BACKEND_LABEL, cliVersionDrift, sdkVersionDrift, VALIDATED_SDK_VERSION } from './contract.js'
 import { CLAUDE_OAUTH_PROVIDER, detectClaudeAuth, refreshFailureStatus, resolveClaudeAuth, type ClaudeRouteSettings } from './auth.js'
+import { createClaudeCatalog } from './catalog.js'
 import { resolveStartPermissionMode } from './options.js'
 import { fileClaudePrefs } from './prefs.js'
 import { buildClaudeEnv, readClaudeVersion, resolveClaudeExecutable } from './process.js'
-import { installedSdkVersion, loadClaudeSdk } from './sdk.js'
+import { replayClaudeTranscript, type ClaudeReplay, type ClaudeSubagentTranscript } from './replay.js'
+import { installedSdkVersion, loadClaudeSdk, type ClaudeSessionStoreSdk } from './sdk.js'
 import { openClaudeSession } from './session.js'
 
 const errorText = (error: unknown): string => error instanceof Error ? error.message : String(error)
@@ -23,6 +32,38 @@ function refreshFailedNotice(error: unknown): string {
   const status = refreshFailureStatus(error)
   return t('claude-auth-refresh-failed', { detail: status === undefined ? '' : t('claude-auth-refresh-status', { status }) })
 }
+
+/**
+ * Where a persisted session lives and what it replays as. Throws (with a
+ * user-facing sentence) when the store has no such session.
+ */
+export async function loadClaudeTranscript(
+  sdk: Pick<ClaudeSessionStoreSdk, 'getSessionInfo' | 'getSessionMessages' | 'listSubagents' | 'getSubagentMessages'>,
+  target: { readonly sessionId: string; readonly cwd?: string },
+  fallbackCwd: string,
+  debug: (message: string) => void = () => undefined,
+): Promise<{ readonly cwd: string; readonly replay: ClaudeReplay }> {
+  const info = (target.cwd === undefined ? undefined : await sdk.getSessionInfo(target.sessionId, { dir: target.cwd }))
+    ?? await sdk.getSessionInfo(target.sessionId)
+  if (info === undefined) throw new Error(t('claude-resume-not-found', { id: target.sessionId }))
+  const cwd = info.cwd ?? target.cwd ?? fallbackCwd
+  const [messages, subagentIds] = await Promise.all([
+    sdk.getSessionMessages(target.sessionId, { dir: cwd, includeSystemMessages: true }),
+    sdk.listSubagents(target.sessionId, { dir: cwd }),
+  ])
+  const subagents = new Map<string, ClaudeSubagentTranscript>()
+  await Promise.all(subagentIds.map(async agentId => {
+    const transcript = await sdk.getSubagentMessages(target.sessionId, agentId, { dir: cwd })
+    const parent = transcript.find(message => typeof message.parent_tool_use_id === 'string')?.parent_tool_use_id
+    if (typeof parent === 'string') subagents.set(parent, { agentId, messages: transcript })
+  }))
+  const title = info.customTitle?.trim()
+  const replay = replayClaudeTranscript(messages, { cwd, subagents, ...(title === undefined || title === '' ? {} : { title }), debug })
+  return { cwd, replay }
+}
+
+/** The catalog of the local session store (the SDK loads on first use). */
+const catalogPrefs = fileClaudePrefs()
 
 export const claudeBackend: AgentBackend = {
   id: CLAUDE_BACKEND_ID,
@@ -53,10 +94,16 @@ export const claudeBackend: AgentBackend = {
     }
   },
 
+  catalog: createClaudeCatalog({
+    loadSdk: loadClaudeSdk,
+    cwd: () => process.cwd(),
+    lastUsed: () => catalogPrefs.read().lastUsed ?? {},
+  }),
+
   /** Create a session in `target.cwd` (an explicit session id, so the TUI
-   *  knows it before the CLI's first `init`). */
+   *  knows it before the CLI's first `init`), or resume a persisted one. */
   async open(target: OpenTarget, host: BackendHost): Promise<AgentSession> {
-    if (target.kind !== 'create') throw new Error(t('claude-resume-unavailable'))
+    if (target.kind === 'fork') throw new Error(t('claude-open-fork-unsupported'))
     let sdk: Awaited<ReturnType<typeof loadClaudeSdk>>
     try {
       sdk = await loadClaudeSdk()
@@ -64,9 +111,13 @@ export const claudeBackend: AgentBackend = {
       host.debug(`claude: SDK import failed (${errorText(error)})`)
       throw new Error(t('claude-sdk-missing', { version: VALIDATED_SDK_VERSION }))
     }
+    const resumed = target.kind === 'resume'
+      ? await loadClaudeTranscript(sdk, target, host.cwd, message => host.debug(message))
+      : undefined
+    const cwd = resumed?.cwd ?? (target.kind === 'create' ? target.cwd : host.cwd)
     const [executable, start] = await Promise.all([
       resolveClaudeExecutable(),
-      resolveStartPermissionMode(sdk, target.cwd),
+      resolveStartPermissionMode(sdk, cwd),
     ])
     const sdkVersion = installedSdkVersion()
     // The credential (design §4.12): a dsh-auth login wins (refreshed now if
@@ -77,7 +128,7 @@ export const claudeBackend: AgentBackend = {
     // all (auth.ts): the CLI applies the settings' `env`, so a base URL set
     // in ~/.claude/settings.json counts like one in the environment.
     const settings = async (): Promise<ClaudeRouteSettings> =>
-      (await sdk.resolveSettings({ cwd: target.cwd, settingSources: ['user', 'project', 'local'] })).effective as ClaudeRouteSettings
+      (await sdk.resolveSettings({ cwd, settingSources: ['user', 'project', 'local'] })).effective as ClaudeRouteSettings
     const startNotices: string[] = []
     let plan: Awaited<ReturnType<typeof resolveClaudeAuth>>
     try {
@@ -98,8 +149,10 @@ export const claudeBackend: AgentBackend = {
     if (sdkVersionDrift(sdkVersion) !== undefined) startNotices.push(t('claude-sdk-drift', { version: sdkVersion ?? '', validated: VALIDATED_SDK_VERSION }))
     return openClaudeSession({
       sdk,
-      cwd: target.cwd,
-      sessionId: randomUUID(),
+      store: sdk,
+      cwd,
+      sessionId: target.kind === 'resume' ? target.sessionId : randomUUID(),
+      ...(resumed === undefined ? {} : { resume: resumed.replay }),
       start,
       executable,
       env: baseEnv,

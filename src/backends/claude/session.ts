@@ -28,8 +28,9 @@
  */
 import type { AccountInfo, Query, SDKUserMessage } from '@anthropic-ai/claude-agent-sdk'
 import { randomUUID } from 'node:crypto'
-import type { AccountView, SessionAuthView } from '../../agent/capabilities.js'
+import type { AccountView, RewindOutcome, RewindPreview, SessionAuthView } from '../../agent/capabilities.js'
 import type { AgentEvent, AgentEventMeta } from '../../agent/events.js'
+import type { AgentSessionRef } from '../../agent/refs.js'
 import type { AgentInput, AgentSession, AgentSessionStatus, CancelCause, SubmitPlacement } from '../../agent/session.js'
 import { t } from '../../i18n.js'
 import { CLAUDE_BACKEND_ID, CLI_CAPABILITY, cliVersionDrift, VALIDATED_CLI_VERSIONS, VALIDATED_SDK_VERSION } from './contract.js'
@@ -39,7 +40,8 @@ import { buildQueryOptions, type StartPermissionMode } from './options.js'
 import { createClaudePermissionBridge, WITHDRAWN_MESSAGE } from './permissions.js'
 import { createStderrSink, type ClaudeExecutable } from './process.js'
 import { memoryClaudePrefs, type ClaudePrefs } from './prefs.js'
-import type { ClaudeSdkModule } from './sdk.js'
+import { rewindCutPoint, type ClaudeReplay } from './replay.js'
+import type { ClaudeSdkModule, ClaudeSessionStoreSdk } from './sdk.js'
 import { createClaudeTranslator } from './translate.js'
 
 declare module '../../agent/capabilities.js' {
@@ -70,8 +72,18 @@ const REAL_CLOCK: ClaudeClock = {
 
 export interface ClaudeSessionDeps {
   readonly sdk: Pick<ClaudeSdkModule, 'query'>
+  /** The session-store API behind `/fork` and the conversation rewind
+   *  (absent = neither capability). */
+  readonly store?: Pick<ClaudeSessionStoreSdk, 'getSessionMessages' | 'forkSession'>
   readonly cwd: string
   readonly sessionId: string
+  /**
+   * Resume this persisted session instead of creating one (design §4.11):
+   * its replayed transcript is the session's `history()`, the first run
+   * passes `resume` (never `sessionId`), and live numbering continues where
+   * the replay ended.
+   */
+  readonly resume?: ClaudeReplay
   readonly start: StartPermissionMode
   readonly executable: ClaudeExecutable
   /** The child environment when no credential plan is given (tests). */
@@ -208,7 +220,7 @@ export async function openClaudeSession(deps: ClaudeSessionDeps): Promise<AgentS
    * the same id: `resume` of an id the CLI has no transcript for fails its
    * handshake ("No conversation found").
    */
-  let persisted = false
+  let persisted = deps.resume !== undefined
   /** What this session pushed, by input uuid, until the CLI starts it: a
    *  reconnect re-delivers what the old CLI never started. */
   const pushed = new Map<string, SDKUserMessage>()
@@ -223,7 +235,7 @@ export async function openClaudeSession(deps: ClaudeSessionDeps): Promise<AgentS
       else waiter.reject(error)
     }
   }
-  const translator = createClaudeTranslator({ cwd: deps.cwd, userRows: 'lifecycle', debug: deps.host.debug })
+  const translator = createClaudeTranslator({ cwd: deps.cwd, userRows: 'lifecycle', debug: deps.host.debug, ...(deps.resume === undefined ? {} : { start: deps.resume.start }) })
   translator.noteMode(deps.start.mode)
 
   const emit = (events: readonly AgentEvent[], wake: AgentEventMeta['wake'] = 'sync'): void => {
@@ -309,7 +321,7 @@ export async function openClaudeSession(deps: ClaudeSessionDeps): Promise<AgentS
     })
     return { generation, inbox, abortController, query, consumer: Promise.resolve() }
   }
-  let run = startRun(false)
+  let run = startRun(deps.resume !== undefined)
 
   /** Shut one run's CLI down; safe to call from any state. */
   const stopRun = (target: Run): void => {
@@ -634,8 +646,71 @@ export async function openClaudeSession(deps: ClaudeSessionDeps): Promise<AgentS
     return { lines }
   }
 
+  /** This session in the backend's reference vocabulary. */
+  const ownRef: AgentSessionRef = { backendId: CLAUDE_BACKEND_ID, sessionId: deps.sessionId }
+
+  /** The live query's checkpoint restore (`enableFileCheckpointing`). */
+  const rewindFiles = async (anchor: string, dryRun: boolean): Promise<RewindPreview> => {
+    const query = run.query as Partial<Pick<Query, 'rewindFiles'>>
+    if (typeof query.rewindFiles !== 'function') throw new Error(t('claude-rewind-files-unavailable'))
+    const result = await query.rewindFiles(anchor, dryRun ? { dryRun: true } : undefined)
+    if (!result.canRewind) throw new Error(result.error ?? t('claude-rewind-files-unavailable'))
+    return {
+      filesChanged: result.filesChanged ?? [],
+      ...(result.insertions === undefined ? {} : { insertions: result.insertions }),
+      ...(result.deletions === undefined ? {} : { deletions: result.deletions }),
+    }
+  }
+
+  /**
+   * `/fork` and the conversation rewind (design §4.11), both through the
+   * session store: a fork is a persisted copy under a new id (the live
+   * session is untouched); a conversation rewind forks up to the entry
+   * right before the picked user message, for the channel to open and adopt.
+   */
+  function sessionStoreCapabilities(): Pick<AgentSession['capabilities'], 'fork' | 'rewind'> {
+    const store = deps.store
+    if (store === undefined) return {}
+    const fork = async (options: { readonly upToMessageId?: string; readonly title?: string }): Promise<AgentSessionRef> => {
+      // Nothing to copy before the CLI wrote the transcript.
+      if (!persisted) throw new Error(t('claude-fork-empty'))
+      const forked = await store.forkSession(deps.sessionId, { dir: deps.cwd, ...options })
+      return { backendId: CLAUDE_BACKEND_ID, sessionId: forked.sessionId }
+    }
+    return {
+      fork: {
+        fork: (anchor, title) => fork({ ...(anchor === undefined ? {} : { upToMessageId: anchor }), ...(title === undefined ? {} : { title }) }),
+      },
+      rewind: {
+        preview: anchor => rewindFiles(anchor, true),
+        async rewind(anchor, mode): Promise<RewindOutcome> {
+          let cut: string | undefined
+          if (mode !== 'files') {
+            // Resolve the cut before touching any file: a conversation the
+            // rewind cannot cut must not leave the files rewound alone.
+            const chain = await store.getSessionMessages(deps.sessionId, { dir: deps.cwd, includeSystemMessages: true })
+            if (!chain.some(message => message.uuid === anchor)) return { kind: 'refused', reason: t('claude-rewind-not-found') }
+            cut = rewindCutPoint(chain, anchor)
+            if (cut === undefined) return { kind: 'refused', reason: t('rewind-first-message') }
+          }
+          let files: RewindPreview | undefined
+          if (mode !== 'conversation') {
+            try {
+              files = await rewindFiles(anchor, false)
+            } catch (error) {
+              return { kind: 'refused', reason: errorText(error) }
+            }
+          }
+          if (cut === undefined) return { kind: 'rewound', session: ownRef, ...(files === undefined ? {} : { files }) }
+          const session = await fork({ upToMessageId: cut })
+          return { kind: 'rewound', session, ...(files === undefined ? {} : { files }) }
+        },
+      },
+    }
+  }
+
   const session: AgentSession = {
-    ref: { backendId: CLAUDE_BACKEND_ID, sessionId: deps.sessionId },
+    ref: ownRef,
     cwd: deps.cwd,
     get status(): AgentSessionStatus {
       if (status === 'disposed') return 'disposed'
@@ -652,6 +727,7 @@ export async function openClaudeSession(deps: ClaudeSessionDeps): Promise<AgentS
         cancel: requestId => bridge.cancelQuestion(requestId),
       },
       ...controls.capabilities,
+      ...sessionStoreCapabilities(),
       account: {
         async info(): Promise<AccountView> {
           const query = run.query as Partial<Pick<Query, 'accountInfo'>>
@@ -689,9 +765,9 @@ export async function openClaudeSession(deps: ClaudeSessionDeps): Promise<AgentS
         ],
       },
     },
-    // A created session has no durable history yet; resume (Phase 4) reads
-    // the CLI's session store.
-    history: () => Promise.resolve([]),
+    // A created session has no durable history yet; a resumed one replays
+    // the transcript read before the CLI started (backend.ts).
+    history: () => Promise.resolve(deps.resume?.events ?? []),
     subscribe(listener: Listener) {
       listeners.add(listener)
       if (backlog.length > 0) {

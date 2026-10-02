@@ -184,8 +184,19 @@ dsh-tui --backend claude     # 或在 dsh-tui 配置行写 `backend: claude`
   开始，本次 `/new` 取消、消息留在当前会话）、`/clear`、`/status`、`/cost`（后端
   上报的美元费用）、`/export`（按当前显示的对话导出）、`!cmd` / `!!cmd`、IDE 选区
   通道与状态栏的 git 分支。
-- **尚未支持**：恢复 Claude 会话的 `/resume`、回退、子代理面板与图片输入。启用该
-  后端时 DeepSeek 专属命令会隐藏。
+- **会话**：`/resume` 打开会话浏览器，列出你的 Claude 会话——先是当前项目，再是全部
+  项目（dsh-TUI 创建的会话也会列出，尽管 Claude Code 自己的选择器会隐藏它们）；Enter
+  恢复（先回放历史，再继续对话），`Ctrl+R` 重命名，`Ctrl+D` 删除（不能删当前会话，
+  也不能删另一个 dsh-TUI 终端正在用的会话），置顶按后端分开保存。在 shell 中：
+  `dsh-tui --backend claude --resume <id>`，或裸 `--resume` 恢复本机最近一次用过的
+  Claude 会话（DSH 自己的 `--resume` 标记不受影响）；退出时 dsh-TUI 会打印这条命令。
+  另一个 dsh-TUI 终端已打开的会话会被拒绝（同时用普通 `claude --resume` 打开则无法
+  察觉）；`--resume` 打不开时直接报错，不会悄悄开新会话。`/fork` 生成一份之后可恢复的
+  副本（当前会话不受影响）。双击 `Esc` 回退到之前的某条提问：回退对话（在该提问之前
+  截断的副本里继续，提问回到输入框）、恢复 Claude 之后改过的文件（用 Claude 的文件
+  检查点，确认前先预览），或两者都做。
+- **尚未支持**：子代理面板、图片输入、`/tree`，以及在一个运行中的 dsh-TUI 里切换
+  后端。启用该后端时 DeepSeek 专属命令会隐藏。
 
 ## 快捷键与鼠标
 

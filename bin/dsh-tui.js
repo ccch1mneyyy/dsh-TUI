@@ -769,13 +769,28 @@ const rescueEnv = () => {
 // src/dsh-adapter/plugin.ts 的退出漏斗）。不带这个变量重试等于开一个新的空会话
 // ——正是「会话丢了」的观感。已经显式设了该变量（用户自己 `--resume`）则不覆盖；
 // 指针缺失/不可读时保持冷启动语义。
+// Claude 后端（`--backend claude`）的"上次会话"记在它自己的偏好文件里
+// （`~/.dsh-tui/backends/claude/prefs.json` 的 lastSession），DSH 的
+// resume.txt 从不保存 Claude 会话 id。
+const readClaudeLastSession = () => {
+  try {
+    const prefs = JSON.parse(readFileSync(join(homedir(), '.dsh-tui', 'backends', 'claude', 'prefs.json'), 'utf8'))
+    return typeof prefs?.lastSession === 'string' ? prefs.lastSession.trim() : ''
+  } catch {
+    return ''
+  }
+}
 const resumeEnvForRetry = () => {
   if (process.env.DSH_TUI_RESUME_SESSION !== undefined) return process.env
   let target = ''
-  try {
-    target = readFileSync(join(homedir(), '.dsh-tui', 'resume.txt'), 'utf8').trim()
-  } catch {
-    // 没有历史会话可恢复——静默冷启动。
+  if (process.env.DSH_TUI_BACKEND === 'claude') {
+    target = readClaudeLastSession()
+  } else {
+    try {
+      target = readFileSync(join(homedir(), '.dsh-tui', 'resume.txt'), 'utf8').trim()
+    } catch {
+      // 没有历史会话可恢复——静默冷启动。
+    }
   }
   return target === '' ? process.env : { ...process.env, DSH_TUI_RESUME_SESSION: target }
 }
@@ -1373,6 +1388,11 @@ if (!runningInsideProfile && ownVersion !== undefined && process.env.DSH_TUI_NO_
   const hostArgs = []
   const args = []
   const argv = process.argv.slice(2)
+  // Resume flags in command-line order: an explicit id, or `null` for a bare
+  // flag. Replayed after the whole line is read, with the original
+  // "each flag sets it, the last one wins" semantics — only a bare flag's
+  // source depends on the backend, which may be named after it.
+  const resumeFlags = []
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]
     if (a === '--') {
@@ -1412,8 +1432,8 @@ if (!runningInsideProfile && ownVersion !== undefined && process.env.DSH_TUI_NO_
       } else if (a === '--resume' && argv[i + 1] !== undefined && !argv[i + 1].startsWith('-')) {
         sessionId = argv[++i].trim()
       }
-      if (!sessionId) sessionId = readLastResumeTarget()
-      if (sessionId) setResumeEnv(sessionId)
+      // 裸 --resume：等整条命令行读完再决定（`--backend` 可能在它后面）。
+      resumeFlags.push(sessionId || null)
     } else if (
       process.env.DSH_TUI_WORKSPACE_TARGET === undefined
       && !a.startsWith('-')
@@ -1423,6 +1443,13 @@ if (!runningInsideProfile && ownVersion !== undefined && process.env.DSH_TUI_NO_
     } else {
       args.push(a)
     }
+  }
+
+  // 按出现顺序重放 --resume：裸 --resume 时 DSH 读 resume.txt（契约不变），
+  // Claude 后端读它自己的上次会话。
+  for (const flag of resumeFlags) {
+    const sessionId = flag ?? (process.env.DSH_TUI_BACKEND === 'claude' ? readClaudeLastSession() : readLastResumeTarget())
+    if (sessionId) setResumeEnv(sessionId)
   }
 
   // 启动：被委托场景下本副本自己的版本即对齐诊断所见的启动器代际。

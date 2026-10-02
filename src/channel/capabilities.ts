@@ -17,6 +17,9 @@ export function channelCapabilities(input: {
   readonly capabilities: SessionCapabilities
   /** The session carries the DSH specialists' escape hatch. */
   readonly dsh: boolean
+  /** The channel can reopen this backend's persisted sessions (its catalog
+   *  and `open` are wired); DSH sessions always can. */
+  readonly resume?: boolean
 }): ChannelCapabilities {
   const caps = input.capabilities
   const flags = {
@@ -27,9 +30,9 @@ export function channelCapabilities(input: {
     compact: input.dsh || caps.compact !== undefined,
     rewind: input.dsh || caps.rewind !== undefined,
     fork: input.dsh || caps.fork !== undefined,
-    // Resume is a backend-level act (re-open a persisted session); in this
-    // phase only DSH has the channel-side orchestration for it.
-    resume: input.dsh,
+    // Resume is a backend-level act (re-open a persisted session): the
+    // channel offers it when the backend's catalog and `open` are wired.
+    resume: input.dsh || input.resume === true,
     subagents: input.dsh || caps.subagents !== undefined,
     tasks: input.dsh || caps.tasks !== undefined,
     mcp: input.dsh || caps.mcp !== undefined,

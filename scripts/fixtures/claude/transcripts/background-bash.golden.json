@@ -1,0 +1,90 @@
+{
+  "start": {
+    "turn": 2,
+    "seq": 6,
+    "model": "claude-haiku-4-5-20251001"
+  },
+  "events": [
+    "turn.start:user",
+    "user.message",
+    "step.start",
+    "assistant.attempt.start",
+    "delta:reasoning-tokens",
+    "tool.call",
+    "tool.result",
+    "assistant.message",
+    "step.end",
+    "step.start",
+    "assistant.attempt.start",
+    "delta:reasoning-tokens",
+    "assistant.message",
+    "step.end",
+    "turn.end:completed",
+    "turn.start:notification",
+    "notice",
+    "step.start",
+    "assistant.attempt.start",
+    "delta:reasoning-tokens",
+    "assistant.message",
+    "step.end",
+    "turn.end:completed",
+    "model.changed"
+  ],
+  "rows": [
+    {
+      "kind": "user",
+      "text": "Use the Bash tool with run_in_background set to true to run `sleep 3; echo bg-done`. Then reply with exactly: started",
+      "anchor": "00000000-0000-4000-8000-000000000001"
+    },
+    {
+      "kind": "reasoning",
+      "text": "",
+      "reasoningTokens": 66
+    },
+    {
+      "kind": "tool",
+      "text": "",
+      "tool": {
+        "name": "Bash",
+        "status": "ok",
+        "result": "terminal",
+        "resultText": "Command running in background with ID: b93f4dfp3. Output is being written to: /fixture/tmp/claude-1000/-fixture-project/"
+      }
+    },
+    {
+      "kind": "reasoning",
+      "text": "",
+      "reasoningTokens": 49
+    },
+    {
+      "kind": "assistant",
+      "text": "started"
+    },
+    {
+      "kind": "notice",
+      "text": "A background task finished; the model continues"
+    },
+    {
+      "kind": "reasoning",
+      "text": "",
+      "reasoningTokens": 194
+    },
+    {
+      "kind": "assistant",
+      "text": "Background command completed successfully (exit code 0)."
+    }
+  ],
+  "state": {
+    "working": false,
+    "model": "claude-haiku-4-5-20251001",
+    "sessionTitle": "",
+    "tokens": {
+      "input": 28,
+      "output": 415,
+      "cacheRead": 61839,
+      "cacheWrite": 9163
+    },
+    "compaction": null,
+    "notices": []
+  }
+}

@@ -2,6 +2,7 @@
  * Backend registry contract (docs/agent-backend-design.md §3.4): how a
  * backend is detected, how a session is opened, and its offline catalog.
  */
+import type { PreviewEntry, SessionSummary } from '../adapter/ports/channel-session.js'
 import type { AgentSessionRef } from './refs.js'
 import type { AgentSession } from './session.js'
 
@@ -24,7 +25,10 @@ export interface BackendDetection {
 /** Which session to open. */
 export type OpenTarget =
   | { readonly kind: 'create'; readonly cwd: string }
-  | { readonly kind: 'resume'; readonly sessionId: string }
+  /** A persisted session of this backend. `cwd` narrows where the backend
+   *  looks for it (absent = the session's own recorded directory, else
+   *  every project the backend knows). */
+  | { readonly kind: 'resume'; readonly sessionId: string; readonly cwd?: string }
   | { readonly kind: 'fork'; readonly from: AgentSessionRef; readonly anchor?: string }
 
 /** A usable OAuth access token and its expiry (epoch ms). Token material:
@@ -65,19 +69,29 @@ export interface BackendHost {
   oauthCredential?(provider: string): OAuthCredentialSource | undefined
 }
 
-/** One session row of an offline catalog. */
-export interface SessionCatalogEntry {
-  readonly ref: AgentSessionRef
-  readonly title?: string
+/** Where an offline listing looks. */
+export interface SessionListScope {
+  /** The project directory (and its worktrees, where the backend groups
+   *  them); absent = the host's working directory. */
   readonly cwd?: string
-  readonly updatedAt?: number
+  /** Every project the backend knows (`cwd` is then ignored). */
+  readonly allProjects?: boolean
 }
 
-/** Offline session catalog (no session needs to be open). */
+/**
+ * A backend's offline session catalog (design §4.11): no session needs to be
+ * open. Rows are the browser's own `SessionSummary` shape with `backendId`
+ * set; the backend's store stays the source of truth (nothing is indexed in
+ * the TUI beyond what the catalog itself caches).
+ */
 export interface SessionCatalog {
-  list(cwd?: string): Promise<readonly SessionCatalogEntry[]>
-  rename?(sessionId: string, title: string): Promise<void>
-  delete?(sessionId: string): Promise<void>
+  list(scope?: SessionListScope): Promise<readonly SessionSummary[]>
+  /** One session's row, or undefined when the backend has no such session. */
+  info?(sessionId: string, cwd?: string): Promise<SessionSummary | undefined>
+  /** The trailing exchanges of a session (browser preview), newest last. */
+  preview?(sessionId: string, options?: { readonly cwd?: string; readonly limit?: number }): Promise<readonly PreviewEntry[]>
+  rename?(sessionId: string, title: string, cwd?: string): Promise<void>
+  delete?(sessionId: string, cwd?: string): Promise<void>
 }
 
 /** One agent backend. */

@@ -219,8 +219,25 @@ dsh-tui --backend claude     # or `backend: claude` in the dsh-tui config row
   `/status`, `/cost` (the backend-reported USD cost), `/export` (the
   transcript as shown), `!cmd` / `!!cmd`, the IDE selection channel and the
   git branch in the status line.
-- **Not yet**: `/resume` of Claude sessions, rewind, subagent panels and image
-  input. DeepSeek-specific commands are hidden while this backend is active.
+- **Sessions**: `/resume` opens the session browser on your Claude sessions —
+  this project's first, then every project (sessions dsh-TUI created are
+  listed too, although Claude Code's own picker hides them); Enter resumes
+  one (its history is replayed, then the conversation continues), `Ctrl+R`
+  renames, `Ctrl+D` deletes (never the open session, never one another
+  dsh-TUI terminal is using), pins are kept per backend. From a shell:
+  `dsh-tui --backend claude --resume <id>`, or a bare `--resume` for the last
+  Claude session this install used (DSH's own `--resume` marker is never
+  touched); on exit dsh-TUI prints that command. A session another dsh-TUI
+  terminal has open is refused (a concurrent plain `claude --resume` cannot
+  be detected), and a `--resume` that cannot open fails instead of starting
+  a fresh session. `/fork` writes a copy you can resume later (the open
+  session is untouched). Double-`Esc` rewinds to an earlier prompt: the
+  conversation (continuing in a copy cut just before it, the prompt back in
+  the input), the files Claude edited since (restored from Claude's file
+  checkpoints, previewed before you confirm), or both.
+- **Not yet**: subagent panels, image input, `/tree`, and switching between
+  backends inside one running dsh-TUI. DeepSeek-specific commands are hidden
+  while this backend is active.
 
 ## Keybindings & Mouse
 

@@ -20,7 +20,7 @@
 //     (the repo devDependency after `pnpm install`);
 //   - a local `claude` CLI; set CLAUDE_CODE_EXECUTABLE to its path, or leave
 //     it unset to use the SDK's bundled binary;
-//   - valid Claude credentials. A full run costs ~15 haiku turns.
+//   - valid Claude credentials. A full run costs ~18 haiku turns.
 // Usage: node scripts/probes/claude-sdk-record.mjs <output-dir> [scenario…]
 import { query } from '@anthropic-ai/claude-agent-sdk'
 import { randomUUID } from 'node:crypto'
@@ -246,6 +246,19 @@ const SCENARIOS = {
     run: async ({ send, results }) => {
       send('Use the Agent tool with subagent_type "general-purpose" and the prompt "Read README.md with the Read tool and report its first line." Wait for it (do not run it in the background), then reply with its report in one sentence.')
       await results(1)
+    },
+  },
+  // Resume replay (Phase 4b): a tool call and a foreground subagent in one
+  // turn, a manual compaction, and a turn after it. Dump its read-API view
+  // with scripts/probes/claude-transcript-dump.mjs afterwards. ~3 haiku calls.
+  'resume-replay': {
+    run: async ({ send, results }) => {
+      send('Use the Read tool to read README.md. Then use the Agent tool with subagent_type "general-purpose" and the prompt "Read src/app.js with the Read tool and report the exported function name." Wait for it (do not run it in the background). Then reply with one short sentence covering both.')
+      await results(1)
+      send('/compact')
+      await results(2)
+      send('Which file did you read yourself first? Reply with just the file name.')
+      await results(3)
     },
   },
   'background-bash': {

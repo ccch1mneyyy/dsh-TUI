@@ -11,6 +11,13 @@
  * (an in-process IDE fixture), the git-branch breadcrumb and `/export` work
  * on the Claude session — within the same single turn.
  *
+ * Phase 4b (one more turn): the session is resumed into a SECOND channel the
+ * way the plugin does it (history read before construction): the earlier
+ * turn renders before the first live row, `/resume` opens the session
+ * browser listing it, a new turn follows the history, and the double-Esc
+ * rewind's channel action on that turn's prompt hands the text back and
+ * lands on the backend's fork (whose transcript ends before it).
+ *
  * Run: DSH_TUI_CLAUDE_LIVE=1 node --import tsx/esm scripts/verify-claude-headless.tsx
  */
 process.env.FORCE_COLOR = '3'
@@ -77,12 +84,18 @@ const ctx = {
   get: (name: string) => name === 'shell' ? shell : undefined,
   logger: { warn: () => undefined, info: () => undefined, debug: () => undefined },
 } as never
+const lifecycle = {
+  openSession: (target: { kind: 'create'; cwd: string } | { kind: 'resume'; sessionId: string; cwd?: string }) => claudeBackend.open(target, host),
+  sessionCatalog: claudeBackend.catalog,
+  resumeCommand: (id: string) => `dsh-tui --backend claude --resume ${id}`,
+}
 const channel = createChannel(ctx, session, {
   model: claudeBackend.descriptor.label,
   provider: claudeBackend.id,
   cwd: root,
   activity: false,
   backendLabel: claudeBackend.descriptor.label,
+  ...lifecycle,
 })
 
 // The IDE dial has a short connect budget: let it land before the first
@@ -133,9 +146,10 @@ const clear = async (): Promise<void> => {
 try {
   // 固定窗:pacing the key handlers attach after the first frame.
   await sleep(400)
-  check('DSH-only commands are not offered', !channel.commandList.some(command => ['preset', 'tree', 'rewind', 'balance'].includes(command.name)))
-  // Phase 3: the backend's own controls are served.
-  check('Claude controls are offered', ['model', 'effort', 'compact', 'context', 'mcp', 'login'].every(name => channel.commandList.some(command => command.name === name)), channel.commandList.map(command => command.name).join(' '))
+  check('DSH-only commands are not offered', !channel.commandList.some(command => ['preset', 'tree', 'balance', 'workspace', 'migrate'].includes(command.name)))
+  // Phase 3: the backend's own controls are served; Phase 4b: the session
+  // lifecycle commands (the catalog and `open` are wired).
+  check('Claude controls are offered', ['model', 'effort', 'compact', 'context', 'mcp', 'login', 'resume', 'fork', 'rewind'].every(name => channel.commandList.some(command => command.name === name)), channel.commandList.map(command => command.name).join(' '))
   await type('/preset')
   stdin.write('\r')
   const refusal = t('cmd-unavailable-backend', { cmd: 'preset', backend: claudeBackend.descriptor.label })
@@ -161,6 +175,62 @@ try {
   instance.unmount()
   channel.releaseContributions()
   await session.dispose()
+}
+
+// ── Phase 4b: resume into a second channel, browse, a live turn, rewind ──
+const sessionId = session.ref.sessionId
+const resumed = await claudeBackend.open({ kind: 'resume', sessionId }, host)
+const initialHistory = await resumed.history()
+const second = createChannel(ctx, resumed, {
+  model: claudeBackend.descriptor.label,
+  provider: claudeBackend.id,
+  cwd: resumed.cwd,
+  activity: false,
+  backendLabel: claudeBackend.descriptor.label,
+  initialHistory,
+  ...lifecycle,
+})
+term.reset()
+const resumedInstance = await ui.render(
+  React.createElement(Chat, {
+    channel: second as never,
+    questionStore: new QuestionStore(),
+    approvalStore: new ApprovalStore(),
+    onExit: () => undefined,
+    fullscreen: false,
+    trajectorySeen: true,
+  }),
+  { stdout: stdout as never, stdin: stdin as never, stderr: stdout as never, exitOnCtrlC: false, patchConsole: false },
+)
+for (const value of instances.values()) instances.set(process.stdout, value)
+try {
+  // 固定窗:pacing the key handlers attach after the first frame.
+  await sleep(400)
+  check('resume: the earlier turn is the first thing on screen', second.rows[0]?.kind === 'user' && second.rows[0].text === 'Reply with exactly: headless-ok' && second.rows.some(row => row.kind === 'assistant' && row.text.includes('headless-ok')), second.rows.map(row => row.kind).join(' '))
+  check('resume: the history renders', await settled(() => screen().includes('headless-ok')), screen())
+  await type('/resume')
+  stdin.write('\r')
+  // The row shows the session's title (the CLI generates one: its wording
+  // varies), marked as the one this terminal is in.
+  check('resume: /resume opens the browser listing this session', await settled(() => screen().includes('Claude Agent') && /\bcurrent\b/u.test(screen()) && (second.cachedSessions() ?? []).some(row => row.id === sessionId && row.backendId === 'claude'), { timeoutMs: 15_000 }), screen())
+  stdin.write('\u001b')
+  // 固定窗:pacing the screen closes and the prompt takes keys again.
+  await sleep(300)
+  await type('Reply with exactly: resumed-ok')
+  stdin.write('\r')
+  check('resume: a live turn follows the history', await settled(() => second.rows.some(row => row.kind === 'assistant' && row.streaming !== true && row.text.includes('resumed-ok')) && !second.working, { timeoutMs: 120_000 }), screen())
+  const rows = second.rows.map(row => `${row.kind}:${row.text}`)
+  check('resume: the live rows land after every history row', rows.findIndex(row => row.includes('resumed-ok')) > rows.findIndex(row => row.startsWith('assistant:') && row.includes('headless-ok')), rows)
+  const prompt = second.rows.find(row => row.kind === 'user' && row.text === 'Reply with exactly: resumed-ok')!
+  check('rewind: the live user row carries the uuid the session pushed', typeof prompt.anchor === 'string' && prompt.anchor.length > 0)
+  const text = await second.rewindTo(prompt)
+  check('rewind: the conversation rewind hands the message back', text === 'Reply with exactly: resumed-ok', String(text))
+  check('rewind: the channel now runs the backend\'s fork', second.sessionRef.sessionId !== sessionId && second.sessionRef.backendId === 'claude')
+  check('rewind: the fork\'s transcript ends before the rewound prompt', second.rows.some(row => row.text.includes('headless-ok')) && !second.rows.some(row => row.text.includes('resumed-ok')), second.rows.map(row => `${row.kind}:${row.text}`))
+} finally {
+  resumedInstance.unmount()
+  second.releaseContributions()
+  await resumed.dispose()
   ide.close()
   delete process.env.DSH_TUI_IDE_PORT
   delete process.env.DSH_TUI_IDE_TOKEN

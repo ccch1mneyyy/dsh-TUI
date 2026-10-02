@@ -11,9 +11,15 @@ import { createRequire } from 'node:module'
 import { dirname, join } from 'node:path'
 import type * as ClaudeSdk from '@anthropic-ai/claude-agent-sdk'
 
+/** The SDK's session-store read/write API (design §4.11): the catalog, the
+ *  resume replay, fork and conversation rewind. */
+export type ClaudeSessionStoreSdk = Pick<typeof ClaudeSdk,
+  | 'listSessions' | 'getSessionInfo' | 'getSessionMessages' | 'listSubagents' | 'getSubagentMessages'
+  | 'renameSession' | 'deleteSession' | 'forkSession'>
+
 /** The SDK surface this backend calls: a structural subset, so tests can
  *  hand the session a fake module without the real CLI. */
-export type ClaudeSdkModule = Pick<typeof ClaudeSdk, 'query' | 'resolveSettings' | 'filterEscalatingDefaultMode'>
+export type ClaudeSdkModule = Pick<typeof ClaudeSdk, 'query' | 'resolveSettings' | 'filterEscalatingDefaultMode'> & ClaudeSessionStoreSdk
 
 /** Assembled at runtime on purpose (see the module comment). */
 const SDK_SPECIFIER: string = ['@anthropic-ai', 'claude-agent-sdk'].join('/')

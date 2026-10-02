@@ -19,9 +19,13 @@
  *
  * Usage: node scripts/fixtures/claude/redact.mjs <raw-dir> [out-dir]
  *        (out-dir defaults to scripts/fixtures/claude/)
- * Writes `<scenario>.jsonl` per `<scenario>.raw.jsonl`. After redacting, the
- * output is scanned for the home dir, the user name and any remaining
- * absolute path under them; a hit aborts with a non-zero exit.
+ * Writes `<scenario>.jsonl` per `<scenario>.raw.jsonl`, and
+ * `transcripts/<scenario>.jsonl` per `<scenario>.transcript.raw.jsonl` (the
+ * read-API dump of scripts/probes/claude-transcript-dump.mjs), redacted with
+ * the SAME placeholder maps as its stream so ids line up between the live
+ * recording and the replay. After redacting, the output is scanned for the
+ * home dir, the user name and any remaining absolute path under them; a hit
+ * aborts with a non-zero exit.
  */
 import fs from 'node:fs'
 import os from 'node:os'
@@ -56,7 +60,7 @@ function makeMapper(prefix, format) {
   }
 }
 
-function redactScenario(name, lines) {
+function redactScenario(name, lines, transcriptLines = []) {
   const project = path.join(rawRoot, `project-${name}`)
   const uuid = makeMapper('', n => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`)
   const msgId = makeMapper('msg_fixture_', (n, p) => `${p}${String(n).padStart(3, '0')}`)
@@ -123,10 +127,14 @@ function redactScenario(name, lines) {
 
   const entries = lines.map(line => JSON.parse(line))
   for (const delta of rejoinStreamDeltas(entries, string)) done.add(delta)
-  return entries.map(entry => {
+  const stream = entries.map(entry => {
     if (entry.msg !== undefined) entry.msg = scrubInit(entry.msg)
     return JSON.stringify(walk(entry))
   })
+  // After the stream: its placeholders keep their numbering, and the
+  // transcript's shared ids map to the same placeholders.
+  const transcript = transcriptLines.map(line => JSON.stringify(walk(JSON.parse(line))))
+  return { stream, transcript }
 }
 
 /** The payload field of each streamed delta kind. */
@@ -163,20 +171,29 @@ function rejoinStreamDeltas(entries, redactString) {
   return redacted
 }
 
-fs.mkdirSync(outDir, { recursive: true })
+fs.mkdirSync(path.join(outDir, 'transcripts'), { recursive: true })
 let failures = 0
-for (const file of fs.readdirSync(rawDir).filter(f => f.endsWith('.raw.jsonl')).sort()) {
+const readLines = file => fs.readFileSync(file, 'utf8').split('\n').filter(line => line.trim() !== '')
+for (const file of fs.readdirSync(rawDir).filter(f => f.endsWith('.raw.jsonl') && !f.endsWith('.transcript.raw.jsonl')).sort()) {
   const name = file.slice(0, -'.raw.jsonl'.length)
-  const lines = fs.readFileSync(path.join(rawDir, file), 'utf8').split('\n').filter(line => line.trim() !== '')
-  const redacted = redactScenario(name, lines)
-  const text = redacted.join('\n') + '\n'
-  for (const needle of [home, rawRoot, `/${user}/`, '@anthropic.com']) {
-    if (needle.length > 3 && text.includes(needle)) {
-      console.error(`${name}: redacted output still contains ${JSON.stringify(needle)}`)
-      failures += 1
+  const lines = readLines(path.join(rawDir, file))
+  const transcriptFile = path.join(rawDir, `${name}.transcript.raw.jsonl`)
+  const transcriptLines = fs.existsSync(transcriptFile) ? readLines(transcriptFile) : []
+  const redacted = redactScenario(name, lines, transcriptLines)
+  const outputs = [[`${name}.jsonl`, redacted.stream]]
+  // Transcripts live in their own directory: every top-level `*.jsonl` here
+  // is a stream fixture of verify-claude-translate.
+  if (transcriptLines.length > 0) outputs.push([path.join('transcripts', `${name}.jsonl`), redacted.transcript])
+  for (const [out, rows] of outputs) {
+    const text = rows.join('\n') + '\n'
+    for (const needle of [home, rawRoot, `/${user}/`, '@anthropic.com']) {
+      if (needle.length > 3 && text.includes(needle)) {
+        console.error(`${out}: redacted output still contains ${JSON.stringify(needle)}`)
+        failures += 1
+      }
     }
+    fs.writeFileSync(path.join(outDir, out), text)
+    console.log(`${out}: ${rows.length} lines`)
   }
-  fs.writeFileSync(path.join(outDir, `${name}.jsonl`), text)
-  console.log(`${name}: ${redacted.length} lines`)
 }
 process.exit(failures === 0 ? 0 : 1)

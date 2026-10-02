@@ -80,7 +80,12 @@ export function readResumeTarget(): string | undefined {
  * @param argv - the app arguments from cmdlineArgs, after the host's own options.
  * @returns The requested session id, or undefined when none was given.
  */
-export function resumeTargetFromArgv(argv: readonly string[]): string | undefined {
+export function resumeTargetFromArgv(
+  argv: readonly string[],
+  /** What a bare flag resumes: DSH's exit-time marker by default; another
+   *  backend passes its own (a Claude id never lives in `resume.txt`). */
+  readFallback: () => string | undefined = readResumeTarget,
+): string | undefined {
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]
     if (a === '--') break
@@ -91,7 +96,7 @@ export function resumeTargetFromArgv(argv: readonly string[]): string | undefine
       } else if (a === '--resume' && argv[i + 1] !== undefined && !argv[i + 1].startsWith('-')) {
         sessionId = argv[++i].trim()
       }
-      if (!sessionId) sessionId = readResumeTarget() ?? ''
+      if (!sessionId) sessionId = readFallback() ?? ''
       if (sessionId) return sessionId
     }
   }

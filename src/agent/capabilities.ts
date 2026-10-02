@@ -77,9 +77,15 @@ export interface RewindPreview {
   readonly deletions?: number
 }
 
-/** What a rewind did. */
+/**
+ * What a rewind did. `session` is the conversation to continue in: a new
+ * session (the backend's fork cut before the picked message) when the
+ * conversation was rewound — the channel opens and adopts it — or the bound
+ * session itself after a files-only rewind. `files` is what the file restore
+ * changed, when files were restored.
+ */
 export type RewindOutcome =
-  | { readonly kind: 'rewound'; readonly session: AgentSessionRef }
+  | { readonly kind: 'rewound'; readonly session: AgentSessionRef; readonly files?: RewindPreview }
   | { readonly kind: 'refused'; readonly reason: string }
 
 /** One MCP server's status. */
@@ -169,10 +175,18 @@ export interface SessionCapabilities {
     set(id: string): Promise<void>
   }
   readonly compact?: { run(): Promise<void>; cancel?(): void }
+  /**
+   * Rewind to a user message (`anchor` = its `user.message.anchor`):
+   * `preview` reports what restoring the files would change (throws when
+   * they cannot be restored); `rewind` restores files, the conversation, or
+   * both (files first).
+   */
   readonly rewind?: {
     preview?(anchor: string): Promise<RewindPreview>
     rewind(anchor: string, mode: 'conversation' | 'files' | 'both'): Promise<RewindOutcome>
   }
+  /** A persisted copy of the session (through `anchor`, inclusive, when
+   *  given); the live session is untouched. */
   readonly fork?: { fork(anchor?: string, title?: string): Promise<AgentSessionRef> }
   readonly subagents?: {
     interrupt(agentId: string): Promise<boolean>

@@ -1,4 +1,6 @@
 import type { AgentHandle } from '@deepseek-ai/dsh-agent'
+import type { OpenTarget, SessionCatalog } from '../../agent/backend.js'
+import type { AgentEvent } from '../../agent/events.js'
 import type { AgentSession } from '../../agent/session.js'
 import type { PermissionStore } from '../../channel/permissions.js'
 import type { QuestionStoreLike } from '../../channel/questions.js'
@@ -63,11 +65,35 @@ export interface ChannelLaunchOptions {
    *  snapshot, `cmd-unavailable-backend`); absent → the DSH label. */
   backendLabel?: string
   /**
-   * Open a fresh session of the bound session's own backend (`/new` on a
-   * non-DSH session). Absent → `/new` is unavailable there. DSH sessions
-   * keep their own resume/new orchestration and ignore it.
+   * Open a session of the bound session's own backend: a fresh one (`/new`
+   * on a non-DSH session) or a persisted one (`/resume`, the session
+   * browser, a conversation rewind's fork). Absent → those are unavailable
+   * there. DSH sessions keep their own resume/new orchestration and ignore
+   * it.
    */
-  openSession?: (target: { readonly kind: 'create'; readonly cwd: string }) => Promise<AgentSession>
+  openSession?: (target: Extract<OpenTarget, { readonly kind: 'create' | 'resume' }>) => Promise<AgentSession>
+  /**
+   * The backend's offline session catalog (design §4.11): the session
+   * browser's listing, preview, rename and delete for a non-DSH session.
+   * With `openSession` it enables `/resume`. DSH sessions ignore it.
+   */
+  sessionCatalog?: SessionCatalog
+  /**
+   * The backend's session preferences (design §3.6: TUI-side notes only,
+   * never the transcripts): the MRU note of each use, the launcher's
+   * last-session marker, and forgetting a deleted session.
+   */
+  sessionPrefs?: {
+    touch(sessionId: string): void
+    setLastSession(sessionId: string): void
+    forget(sessionId: string): void
+  }
+  /** The startup session's durable history, read before construction so
+   *  the first bind paints it ahead of any live event (design §4.11). */
+  initialHistory?: readonly AgentEvent[]
+  /** How a user re-enters a session of this backend from a shell (the
+   *  `/fork` notice); absent → the in-TUI `/resume` hint. */
+  resumeCommand?: (sessionId: string) => string
   /**
    * The stores a non-DSH session's prompts park in (design §4.7): its
    * `permission.request` events go to `permissions` (the panel Chat renders

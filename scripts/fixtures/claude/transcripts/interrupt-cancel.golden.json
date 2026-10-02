@@ -1,0 +1,45 @@
+{
+  "start": {
+    "turn": 1,
+    "seq": 2,
+    "model": "claude-haiku-4-5-20251001"
+  },
+  "events": [
+    "turn.start:user",
+    "user.message",
+    "step.start",
+    "assistant.attempt.start",
+    "assistant.message",
+    "step.end",
+    "turn.end:aborted",
+    "model.changed"
+  ],
+  "rows": [
+    {
+      "kind": "user",
+      "text": "Count from 1 to 200, one number per line, no other text.",
+      "anchor": "00000000-0000-4000-8000-000000000001"
+    },
+    {
+      "kind": "assistant",
+      "text": "1\n2\n3"
+    },
+    {
+      "kind": "interrupt",
+      "text": "Interrupted · What should DeepSeek do instead?"
+    }
+  ],
+  "state": {
+    "working": false,
+    "model": "claude-haiku-4-5-20251001",
+    "sessionTitle": "",
+    "tokens": {
+      "input": 10,
+      "output": 6,
+      "cacheRead": 15175,
+      "cacheWrite": 7519
+    },
+    "compaction": null,
+    "notices": []
+  }
+}

@@ -234,6 +234,7 @@ const channel = {
 
 const liveState = {
   'live-one': { status: 'working' as const, live: true, current: true, summary: 'doing work' },
+  'claude-current': { status: 'idle' as const, live: true, current: true, summary: '' },
 }
 
 /**
@@ -1951,5 +1952,83 @@ console.log('the cache read re-scopes the slot on every mount')
   await settled(() => target.landed >= 2, { timeoutMs: 4_000 })
   app.close()
 }
+// ── another backend's sessions (Phase 4b: the Claude Agent browser) ──────────
+console.log('backend browser:')
+{
+  // The ledger keys a non-DSH session by its backend-qualified reference; the
+  // DSH pins file names a Claude row that must NOT read as pinned here, and
+  // the backend's own pins file pins another.
+  const dataDir = join(fakeHome, '.dsh-tui')
+  writeFileSync(join(dataDir, 'session-mounts.json'), JSON.stringify({ version: 1, owners: [{ pid: FOREIGN_PID, startedAt: Date.now(), sessionIds: [HELD_SESSION_ID, 'claude:claude-held'] }] }, null, 2), 'utf8')
+  writeFileSync(join(dataDir, 'session-pins.json'), JSON.stringify(['claude-one']), 'utf8')
+  mkdirSync(join(dataDir, 'backends', 'claude'), { recursive: true })
+  writeFileSync(join(dataDir, 'backends', 'claude', 'session-pins.json'), JSON.stringify(['claude-two']), 'utf8')
+  const rows = [
+    session({ id: 'claude-current', backendId: 'claude', title: { text: 'claude current', source: 'auto' }, updatedAt: now - 1_000, agentPreset: undefined, model: undefined }),
+    session({ id: 'claude-one', backendId: 'claude', title: { text: 'claude one', source: 'auto' }, updatedAt: now - 2_000, agentPreset: undefined, model: undefined }),
+    session({ id: 'claude-two', backendId: 'claude', title: { text: 'claude two', source: 'prompt' }, updatedAt: now - 3_000, agentPreset: undefined, model: undefined }),
+    session({ id: 'claude-held', backendId: 'claude', title: { text: 'claude held', source: 'auto' }, updatedAt: now - 4_000, agentPreset: undefined, model: undefined }),
+  ]
+  const calls: string[] = []
+  const backend = {
+    version: 0,
+    cwd: alphaDir,
+    working: false,
+    agentId: 'claude-current',
+    capabilities: { backendId: 'claude', backendLabel: 'Claude Agent', commands: ['new', 'resume', 'rewind', 'fork'] },
+    listWorkspaceRegistry: async () => { calls.push('registry'); return registry },
+    listForeignSources: async () => { calls.push('probe'); return [] },
+    listSessions: async () => rows,
+    resumeTo: async (id: string) => { calls.push(`resumeTo:${id}`); return { ok: true } },
+    renameSessionTo: async (id: string, title: string) => { calls.push(`rename:${id}:${title}`); return true },
+    deleteSession: async (id: string) => { calls.push(`delete:${id}`); return true },
+    switchWorkspace: async () => true,
+    resolveWorkspace: async (reference: string) => ({ cwd: reference, uri: reference, label: reference, kind: 'local', badge: 'LOCAL' }),
+    stopBackgroundAgent: async () => true,
+    notify: () => {},
+    subscribe: () => () => {},
+  } as never
+  const target: StubChannel = { channel: backend, calls, plan: {}, landed: 0, config: { registry: [], cwd: alphaDir } }
+  const app = await mountSupervisor(target)
+  const text = (): string => app.lines().join('\n')
+  check('the backend browser lists that backend\'s sessions', await settled(() => text().includes('claude current') && text().includes('claude two'), { timeoutMs: 4_000 }), text())
+  check('… its one tab names the backend', text().includes('Claude Agent'))
+  check('… it never reads the DSH workspace ledger or probes foreign sources', !calls.includes('registry') && !calls.includes('probe'), calls.join(' '))
+  const line = (needle: string): string => app.lines().find(row => row.includes(needle)) ?? ''
+  check('pins are the backend\'s own (the DSH pins file does not apply)', line('claude two').includes('★') && !line('claude one').includes('★'), `${line('claude two')} | ${line('claude one')}`)
+  check('a session another terminal holds under claude:<id> reads as occupied', await settled(() => line('claude held').includes(String(FOREIGN_PID)) || text().includes(`pid ${FOREIGN_PID}`), { timeoutMs: 4_000 }), line('claude held'))
+  check('the backend\'s hint offers rename and delete', text().includes('Ctrl+R rename') || (app.write('\u001b[C'), await settled(() => text().includes('Ctrl+R rename'))))
+  // → into the list, ↓ past the new-session card to the second row.
+  app.write('\u001b[C')
+  await settled(() => text().includes('Ctrl+R rename'))
+  const focusRow = async (needle: string, up = false): Promise<boolean> => {
+    for (let i = 0; i < 8; i += 1) {
+      if ((app.lines().find(row => row.includes('❯') && row.includes(needle))) !== undefined) return true
+      app.write(up ? '\u001b[A' : '\u001b[B')
+      await sleep(60) // 固定窗:pacing 让光标移动渲染一帧
+    }
+    return app.lines().some(row => row.includes('❯') && row.includes(needle))
+  }
+  check('the cursor reaches a stored session', await focusRow('claude one'))
+  app.write('\u0012')
+  check('Ctrl+R opens the rename line with the current title', await settled(() => text().includes('claude one') && text().includes('✎')), text())
+  app.write(' (renamed)')
+  await settled(() => text().includes('✎ claude one (renamed)'))
+  app.write('\r')
+  check('… Enter renames through the catalog', await settled(() => calls.includes('rename:claude-one:claude one (renamed)')), calls.join(' '))
+  check('… and the screen re-lists', await settled(() => target.calls.length > 0))
+  await focusRow('claude two')
+  app.write('\u0004')
+  check('Ctrl+D asks before deleting', await settled(() => text().includes('Delete session claude two?')), text())
+  app.write('\r')
+  check('… Enter deletes through the catalog', await settled(() => calls.includes('delete:claude-two')), calls.join(' '))
+  check('the cursor reaches the current session', await focusRow('claude current', true))
+  app.write('\u0004')
+  await sleep(120) // 固定窗:pacing 让确认行渲染一帧
+  app.write('\r')
+  check('the session this terminal is in is never deleted', await settled(() => text().includes('cannot be deleted')) && !calls.includes('delete:claude-current'), text())
+  app.close()
+}
+
 console.log(failures === 0 ? '\nAll session-supervisor checks passed.' : `\n${failures} check(s) failed.`)
 process.exit(failures === 0 ? 0 : 1)

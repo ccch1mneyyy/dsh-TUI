@@ -27,6 +27,13 @@
  *  7. reconnect (Phase 3 review item 1): `/login`'s reconnect on a session
  *     the CLI never persisted creates it again under the same id (no "No
  *     conversation found"); after a turn it resumes the same transcript.
+ *  8. sessions (Phase 4b, 2 turns): create → 1 turn → dispose → the catalog
+ *     lists it → resume (the replayed history comes first, the live turn
+ *     continues the numbering, the model sees the earlier turn) → `/fork`
+ *     (a persisted copy with both turns; the live session untouched) →
+ *     rewind the conversation to turn 1 (a fork cut before turn 2's
+ *     prompt — the anchor is the uuid the session pushed, which the
+ *     transcript keeps) → the catalog deletes the copies.
  *
  * `DSH_TUI_CLAUDE_LIVE_SECTIONS=basic,permissions` limits the run (default:
  * all) — each section costs real turns.
@@ -51,7 +58,7 @@ const { setLang } = await import('../src/i18n.js')
 const { PermissionStore } = await import('../src/channel/permissions.js')
 const { QuestionStore } = await import('../src/channel/questions.js')
 const { attachInteraction } = await import('../src/channel/interaction.js')
-const sections = new Set((process.env.DSH_TUI_CLAUDE_LIVE_SECTIONS ?? 'basic,permissions,controls,controls-turns,reconnect').split(',').map(name => name.trim()))
+const sections = new Set((process.env.DSH_TUI_CLAUDE_LIVE_SECTIONS ?? 'basic,permissions,controls,controls-turns,reconnect,sessions').split(',').map(name => name.trim()))
 /** `controls` without `controls-turns`: the read-only reports only (no turn). */
 class SkipTurns extends Error {}
 type AgentEvent = import('../src/agent/events.js').AgentEvent
@@ -294,6 +301,59 @@ try {
       await session.dispose()
     }
     check('reconnect: no claude child survives', (await waitForNoChildren()).length === 0, claudeChildren())
+  }
+
+  // 8. sessions: resume, /fork, rewind (Phase 4b)
+  if (sections.has('sessions')) {
+    const { getSessionMessages } = await import('@anthropic-ai/claude-agent-sdk')
+    const created = await claudeBackend.open({ kind: 'create', cwd: project }, host)
+    const sessionId = created.ref.sessionId
+    const firstId = crypto.randomUUID()
+    try {
+      const live = watch(created)
+      await created.submit({ text: 'Remember the word persimmon. Reply with exactly: first-ok', clientMessageId: firstId }, 'followup')
+      await live.until(() => turnEnds(live.events).length >= 1, 120_000, 'the first turn')
+      check('sessions: the first turn completes', turnEnds(live.events)[0]?.reason.kind === 'completed', turnEnds(live.events)[0])
+    } finally {
+      await created.dispose()
+    }
+    const listed = await claudeBackend.catalog!.list({ cwd: project })
+    check('sessions: the catalog lists the session dsh-tui created (programmatic included)', listed.some(row => row.id === sessionId && row.backendId === 'claude' && row.cwd === project), listed.map(row => row.id))
+    const resumed = await claudeBackend.open({ kind: 'resume', sessionId }, host)
+    const secondId = crypto.randomUUID()
+    try {
+      const history = await resumed.history()
+      const firstUser = history.find((event): event is Extract<AgentEvent, { type: 'user.message' }> => event.type === 'user.message')
+      check('sessions: the resumed history replays the first turn, anchored at the uuid the session pushed', firstUser?.anchor === firstId && history.some(event => event.type === 'assistant.message' && event.blocks.some(block => (block.text ?? '').includes('first-ok'))), history.map(event => event.type))
+      const live = watch(resumed)
+      await resumed.submit({ text: 'Which word did I ask you to remember? Reply with that word only.', clientMessageId: secondId }, 'followup')
+      await live.until(() => turnEnds(live.events).length >= 1, 120_000, 'the resumed turn')
+      const replies = live.events.filter((event): event is Extract<AgentEvent, { type: 'assistant.message' }> => event.type === 'assistant.message')
+      check('sessions: the resumed session remembers the earlier turn', replies.at(-1)?.blocks.some(block => block.type === 'text' && /persimmon/iu.test(block.text ?? '')) === true, replies.at(-1)?.blocks)
+      const replayedTurns = history.filter(event => event.type === 'turn.start').length
+      const liveTurn = live.events.find((event): event is Extract<AgentEvent, { type: 'turn.start' }> => event.type === 'turn.start')
+      check('sessions: the live turn continues the replayed numbering', liveTurn !== undefined && liveTurn.turn > replayedTurns, liveTurn)
+      const forked = await resumed.capabilities.fork!.fork()
+      const forkChain = await getSessionMessages(forked.sessionId, { dir: project })
+      check('sessions: /fork writes a persisted copy with both turns, the live session untouched', forked.sessionId !== sessionId && forkChain.filter(message => message.type === 'user').length >= 2 && resumed.status !== 'disposed', forkChain.length)
+      const rewound = await resumed.capabilities.rewind!.rewind(secondId, 'conversation')
+      check('sessions: the conversation rewind forks before turn 2\'s prompt', rewound.kind === 'rewound' && rewound.session.sessionId !== sessionId, rewound)
+      if (rewound.kind === 'rewound') {
+        const rewoundChain = await getSessionMessages(rewound.session.sessionId, { dir: project })
+        const texts = rewoundChain.flatMap(message => {
+          const content = (message.message as { content?: unknown } | undefined)?.content
+          return typeof content === 'string' ? [content] : Array.isArray(content) ? content.flatMap(block => typeof (block as { text?: unknown }).text === 'string' ? [(block as { text: string }).text] : []) : []
+        })
+        check('sessions: the rewound copy keeps turn 1 and drops turn 2', texts.some(text => text.includes('persimmon')) && !texts.some(text => text.includes('Which word did I ask')), texts)
+        await claudeBackend.catalog!.delete!(rewound.session.sessionId, project)
+      }
+      await claudeBackend.catalog!.delete!(forked.sessionId, project)
+      const after = await claudeBackend.catalog!.list({ cwd: project })
+      check('sessions: the catalog deletes the copies', !after.some(row => row.id === forked.sessionId) && after.some(row => row.id === sessionId), after.map(row => row.id))
+    } finally {
+      await resumed.dispose()
+    }
+    check('sessions: no claude child survives', (await waitForNoChildren()).length === 0, claudeChildren())
   }
 } finally {
   rmSync(root, { recursive: true, force: true })

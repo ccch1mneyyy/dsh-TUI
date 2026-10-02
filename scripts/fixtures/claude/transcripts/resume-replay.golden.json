@@ -1,0 +1,73 @@
+{
+  "start": {
+    "turn": 2,
+    "seq": 4,
+    "model": "claude-haiku-4-5-20251001"
+  },
+  "events": [
+    "compaction.end",
+    "user.message",
+    "turn.start:system",
+    "step.start",
+    "assistant.attempt.start",
+    "delta:reasoning-tokens",
+    "assistant.message",
+    "step.end",
+    "turn.end:completed",
+    "turn.start:user",
+    "user.message",
+    "step.start",
+    "assistant.attempt.start",
+    "delta:reasoning-tokens",
+    "assistant.message",
+    "step.end",
+    "turn.end:completed",
+    "model.changed"
+  ],
+  "rows": [
+    {
+      "kind": "notice",
+      "text": "Session summary is ready"
+    },
+    {
+      "kind": "compact",
+      "text": "This session is being continued from a previous conversation that ran out of context. The summary below covers the earlier portion of the conversation.\n\nSummary…"
+    },
+    {
+      "kind": "reasoning",
+      "text": "",
+      "reasoningTokens": 69
+    },
+    {
+      "kind": "assistant",
+      "text": "The README describes a fixture project for Claude SDK, and src/app.js exports a function named `greet`."
+    },
+    {
+      "kind": "user",
+      "text": "Which file did you read yourself first? Reply with just the file name.",
+      "anchor": "00000000-0000-4000-8000-000000000140"
+    },
+    {
+      "kind": "reasoning",
+      "text": "",
+      "reasoningTokens": 192
+    },
+    {
+      "kind": "assistant",
+      "text": "README.md"
+    }
+  ],
+  "state": {
+    "working": false,
+    "model": "claude-haiku-4-5-20251001",
+    "sessionTitle": "",
+    "tokens": {
+      "input": 819,
+      "output": 299,
+      "cacheRead": 41810,
+      "cacheWrite": 5065
+    },
+    "compaction": null,
+    "notices": []
+  }
+}

@@ -4403,9 +4403,13 @@ export function Chat({
         onStopSession={async (sessionId) => channel.stopBackgroundAgent?.(sessionId) ?? false}
         liveStateOf={(sessionId) => {
           const row = agentRowOf(sessionId)
-          return row === undefined
-            ? undefined
-            : { status: row.status, live: row.live, current: row.current, summary: row.summary }
+          if (row !== undefined) return { status: row.status, live: row.live, current: row.current, summary: row.summary }
+          // A non-DSH backend has no agent view: the session this terminal is
+          // in is its only live one (the DSH view lists its own as before).
+          // oxlint-disable-next-line typescript/no-unnecessary-condition -- runtime guard: headless hosts render Chat with a partial channel
+          const backendId = (channel.capabilities as Channel['capabilities'] | undefined)?.backendId ?? 'dsh'
+          if (backendId === 'dsh' || sessionId !== channel.agentId) return undefined
+          return { status: channel.working ? 'working' : 'idle', live: true, current: true, summary: '' }
         }}
       />
     )

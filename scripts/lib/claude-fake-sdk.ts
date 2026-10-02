@@ -77,6 +77,7 @@ export function fakeClaudeSdk(init: (index: number, options: FakeQueryOptions) =
       toggleMcpServer: control('toggleMcpServer'),
       getContextUsage: control('getContextUsage'),
       accountInfo: control('accountInfo'),
+      rewindFiles: control('rewindFiles'),
       close() { fake.closed = true; ended = true; flush() },
       [Symbol.asyncIterator]() {
         return {

@@ -614,6 +614,16 @@ const GROUPS = {
 // 真实 CLI 的 verify-claude-live / verify-claude-headless 只在
 // DSH_TUI_CLAUDE_LIVE=1 时跑，不进 CI（消耗真实用量、需要凭证）。
     ["verify-claude-session-lifecycle", ['node', '--import', 'tsx/esm', 'scripts/verify-claude-session-lifecycle.ts']],
+// Claude 会话恢复回放（方案 §4.11，Phase 4b）：scripts/fixtures/claude/transcripts/ 下与流录制
+// 一起脱敏的读 API 转录 → replay → 共享投影器，与 golden 逐字段比较；按真实提问切分 turn、
+// 行锚点 = 推送时的 uuid、排队提问并入、中断/通知/本地命令回显/压缩摘要、工具结果配对、
+// 子代理不进主转录、回放与 live 同一会话行一致、resume 后 live 编号接续。
+    ["verify-claude-replay", ['node', '--import', 'tsx/esm', 'scripts/verify-claude-replay.ts']],
+// Claude 会话生命周期（假 SDK + 临时 HOME）：catalog 列表/标题来源/预览/改名/删除、resume
+// 先读转录再以 resume 启动、/fork 与 rewind（文件/对话/两者）、channel 的浏览器列表、
+// /resume 历史先于 live 绘制、claude:<id> 挂载账本（真实对端进程占用即拒绝）、失败响亮、
+// 当前/被占用会话不可删、/fork 提示、rewind 提示与三种模式、启动历史先于首个 live 事件。
+    ["verify-claude-catalog", ['node', '--import', 'tsx/esm', 'scripts/verify-claude-catalog.ts']],
 // 共享权限面板（方案 §4.7，Phase 3）：PermissionStore 的 FIFO、选项与呈现规则、
 // 四种结局（含拒绝理由）、撤回/会话释放/拆除不二次作答；channel 桥把会话的
 // permission/question 事件接到 store 与问卷，答复经能力回到后端。

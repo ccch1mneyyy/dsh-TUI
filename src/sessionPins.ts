@@ -127,6 +127,16 @@ function releasePinsLock(fd: number, dir: string): void {
 }
 
 /**
+ * Where one backend's pins live: DSH's at the data directory root (unchanged),
+ * any other backend's under `backends/<id>/` — a Claude session id pinned in
+ * the Claude browser never reorders the DSH one.
+ * @param backendId - The browser's backend (`dsh` when absent).
+ */
+export function sessionPinsDir(backendId: string | undefined, dir: string = DATA_DIR): string {
+  return backendId === undefined || backendId === 'dsh' ? dir : join(dir, 'backends', backendId.replace(/[^A-Za-z0-9._-]/gu, '_'))
+}
+
+/**
  * The persisted pin set, or empty when unset or unreadable.
  * @param dir - Prefs directory (injectable for tests).
  */

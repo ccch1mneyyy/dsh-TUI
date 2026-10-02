@@ -35,6 +35,14 @@ export interface ClaudeTranslatorOptions {
   /** Wall clock for event times (injected by fixtures for determinism). */
   readonly now?: () => number
   readonly debug?: (message: string) => void
+  /**
+   * Where a resumed session's numbering continues (design §4.11): the turn
+   * and sequence counters the replayed history ended at, and the model it
+   * last ran. Live events after a resume must neither reuse a replayed
+   * (turn, step) — the projector binds attempts by position — nor a
+   * replayed `seq` (settled assistant messages are deduplicated by it).
+   */
+  readonly start?: { readonly turn: number; readonly seq: number; readonly model?: string }
 }
 
 type Rec = Readonly<Record<string, unknown>>
@@ -208,8 +216,8 @@ export function createClaudeTranslator(options: ClaudeTranslatorOptions) {
   const now = options.now ?? Date.now
   const debug = options.debug ?? (() => undefined)
   let userRows = options.userRows
-  let seq = 0
-  let turn = 0
+  let seq = options.start?.seq ?? 0
+  let turn = options.start?.turn ?? 0
   let turnOpen = false
   let step = 0
   let stepOpen = false
@@ -229,7 +237,7 @@ export function createClaudeTranslator(options: ClaudeTranslatorOptions) {
   /** The model and permission mode the session runs, as last confirmed
    *  (init, status frames, `message_start`, or a control request the
    *  session made — see `noteModel` / `noteMode`). */
-  let currentModel = ''
+  let currentModel = options.start?.model ?? ''
   let currentMode: string | undefined
   /** The next synthetic user message is a compaction summary. */
   let summaryExpected = false
@@ -937,6 +945,21 @@ export function createClaudeTranslator(options: ClaudeTranslatorOptions) {
       return [{ type: 'mode.changed', modeId: mode }]
     },
     get turnOpen(): boolean { return turnOpen },
+    /** The last turn number used (a resumed session continues after it). */
+    get turnNumber(): number { return turn },
+    /** The last event sequence number used. */
+    get seqNumber(): number { return seq },
+    /**
+     * Open the CLI's own turn that follows a task notification (replay: the
+     * transcript records it as a `task-notification` prompt; live, the
+     * `task_notification` frame arms the same turn). Closes nothing.
+     */
+    openNotificationTurn(): AgentEvent[] {
+      const out: AgentEvent[] = []
+      notificationTurnExpected = true
+      openTurn(out, 'system')
+      return out
+    },
   }
 }
 

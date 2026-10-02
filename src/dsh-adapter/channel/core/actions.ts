@@ -94,12 +94,6 @@ export function createCapabilityDelegates(deps: {
       await effort.set(id)
       return true
     }),
-    forkSession: () => guarded('fork', false, async () => {
-      const fork = caps().fork
-      if (fork === undefined) { unavailable('fork'); return false }
-      await fork.fork()
-      return true
-    }),
     mcpStatus: () => {
       if (caps().mcp === undefined) return deps.unavailableLines('mcp')
       // Synchronous by contract: the last report, and a fresh one for next time.
