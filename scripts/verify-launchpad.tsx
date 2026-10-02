@@ -50,6 +50,7 @@ const [
   { resolveLaunchpadActions, truncateContinueTitle, LAUNCHPAD_CONTINUE_TITLE_MAX },
   { splashFontById },
   { t },
+  { applyCompanionSkin },
 ] = await Promise.all([
   import('../src/ui.js'),
   import('../src/screens/Launchpad.js'),
@@ -58,7 +59,12 @@ const [
   import('../src/components/splashFonts.js'),
   import('../src/i18n.js',
   ),
+  import('../src/tuiDisplayPrefs.js'),
 ])
+// 本脚本锁的是落地页版面/阶梯契约（WHALE_ART_ROWS=13 那套预算）：吉祥物
+// 皮肤用 store 钉在 'whale'，避免默认 deepy 把立绘换成 15 行字母格宠物
+// （吉祥物形态归 verify-splash-mascot 管）。
+applyCompanionSkin('whale')
 
 /** 夹具的默认状态：有上次会话 + 条件位全不成立（动作表 = Continue·会话与工作区·设置·帮助）。 */
 const DEFAULT_ACTIONS = resolveLaunchpadActions({ lastSessionTitle: '修个登录页', jobsRunning: false, updateAvailable: false, starDue: false })

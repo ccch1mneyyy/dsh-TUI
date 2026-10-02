@@ -85,6 +85,15 @@ export type ChatOverlay =
   | { kind: 'search' }
   | { kind: 'tips' }
   /**
+   * 帮助菜单（第八版：用户实测——启动页点「帮助」直接进了聊天页 ✗）。这个
+   * variant 只在**落地页**上打开：HelpMenu 经 Chat 的 pickerPanels 挂进
+   * OverlayAbove，盖在启动页之上（与参数选择器/工作区菜单同一姿态），
+   * Esc / 点空白 / 再点帮助入口收回，回到启动页（草稿/参数/焦点原样）。
+   * 聊天页的 `?`//help` 不走这里：那边的 helpOpen 状态与 PromptInput 内
+   * 渲染保持原样（另一个屏的事，刻意不改）。
+   */
+  | { kind: 'help' }
+  /**
    * Click-to-act file menu: opened by clicking a file path in the
    * transcript (tool cards, markdown code spans / plain text, file://
    * links). `index` is the focused action row (0 = open, 1 = reveal in
