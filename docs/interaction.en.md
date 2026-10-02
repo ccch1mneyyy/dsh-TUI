@@ -492,9 +492,7 @@ A full-screen scene (no scrollback pollution) over the whole session timeline:
 
 ### Model and preset
 
-`/model` switches through a session fork at the end of current history, because DSH has no in-place model-switch API. The old session remains in `/resume`.
-
-- A session nobody has typed into records no branch: switching models there yields an independent session with no `parentSession` (inheriting the same session-scaffolding prefix), so the first real prompt you send still triggers automatic session-title generation. A session that already holds a conversation keeps its lineage as before.
+`/model` selects the next request’s route within the same DSH session, preserving its ID, history, and title. Switching is refused during a running turn. The next request records the actual route and a model-change notice. A choice with no subsequent request is saved only as a global default; session resume still resolves its last recorded request route.
 
 - `/preset` switches in place only for a blank session. In a started session, the choice becomes the default for the next `/new` or launch.
 

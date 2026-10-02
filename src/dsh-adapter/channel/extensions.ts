@@ -474,19 +474,9 @@ export function attachDshExtensions(
   const switchModelAction = createModelSwitchAction(ctx, state, {
     owner,
     binding,
-    rowIds,
-    // Compaction is installed below before the channel binds or exposes input.
+    selection,
     settleCompaction: () => settleManualCompaction(),
-    resetProjector: resetProjection,
-    resetSubagents: subagentProjection.reset,
-    resetJobs: jobProjection.reset,
-    replay: replaySessionSeed,
-    settleReplay: projector.settleStreaming,
-    bindAgent: () => bindAgent(),
-    refreshCommands: refreshCommandList,
-    refreshLoadedContext,
-    refreshSkillCommands,
-    clearStagedImages,
+    applyPreferredEffort: () => modelActions.applyPreferredEffort(),
     dropModelCompletion: () => modelActions.dropModelNodeCache(),
     notify,
   })
