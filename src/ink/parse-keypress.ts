@@ -314,6 +314,36 @@ function decodedRecordChar(uc: number, pending: { high?: number }): string | und
 }
 
 /**
+ * One numeric field of a matched record (`Vk;Sc;Uc;Kd;Cs;Rc`). A missing
+ * group and an empty field both read 0, exactly like the token-level
+ * translator's own field reader.
+ */
+function recordField(match: RegExpMatchArray, index: number): number {
+  const raw = match[index + 1]
+  return raw === undefined || raw === '' ? 0 : Number(raw)
+}
+
+/**
+ * True when a record hands the fold a character or a break — asked of the DOWN
+ * half of a transition pair before the LITERAL lane consumes it (T-FIX-05). A
+ * keyup, a bare modifier transition and a `Uc` with no character meaning carry
+ * nothing, and L-012 forbids consuming bytes on a lane that cannot hand them
+ * back: such a pair keeps its own bytes and stays subject to the ingress's
+ * residue contract, exactly as before. `pending` is read, never advanced — the
+ * caller decides whether the pair is consumed before its surrogate half is
+ * banked.
+ */
+function recordCarriesText(match: RegExpMatchArray, pending: { high?: number }): boolean {
+  const vk = recordField(match, 0)
+  const uc = recordField(match, 2)
+  if (recordField(match, 3) !== 1) return false
+  if (WIN32_VK_MODIFIER.has(vk)) return false
+  if (uc === 13 || uc === 10) return true
+  const probe: { high?: number } = { high: pending.high }
+  return decodedRecordChar(uc, probe) !== undefined || probe.high !== undefined
+}
+
+/**
  * Fold ONE matched record into the decode. Its `Uc` is either a break half —
  * CR and LF both go through {@link foldNewline} — or a character
  * ({@link decodedRecordChar}); a record that carries neither returns the fold
@@ -327,13 +357,9 @@ function appendDecodedRecord(
   match: RegExpMatchArray,
   pending: { high?: number },
 ): NewlineFold {
-  const field = (index: number): number => {
-    const raw = match[index + 1]
-    return raw === undefined || raw === '' ? 0 : Number(raw)
-  }
-  const vk = field(0)
-  const uc = field(2)
-  const keydown = field(3) === 1
+  const vk = recordField(match, 0)
+  const uc = recordField(match, 2)
+  const keydown = recordField(match, 3) === 1
   // Alt+numpad synthesis rides ONE keyup whose Uc carries the composed
   // character (same exception the token-level translator makes); every other
   // keyup and every bare modifier transition carries no new character and is
@@ -412,14 +438,91 @@ function decodeWin32RecordText(
 }
 
 /**
+ * Decode the records a LITERAL paste carries (T-FIX-05) — the VT
+ * bracketed-paste lane, whose payload arrives as bytes instead of as records,
+ * and therefore has no assembler behind it. The evidence must come from the
+ * payload itself, and the user's capture says which shape qualifies: Windows
+ * Terminal + PowerShell deliver a `Ctrl+V` payload INSIDE the bracketed-paste
+ * markers with every line break spelled as the terminal's own down+up record
+ * PAIR — the next
+ * record, ESC-bearing like its down half, same `Vk;Sc;Uc;Cs`, `Kd` 1 → 0, so
+ * `CSI 13;28;13;1;0;1_` then `CSI 13;28;13;0;0;1_` (`Uc=13`). That pair is how
+ * the terminal spells ONE pasted character (conhost
+ * `Clipboard::TextToKeyEvents`), and the ingress residue strip deletes every
+ * ESC-bearing record — pair and all — so without the decode the line break is
+ * thrown away (`1 line・751 chars` on the capture; `10 lines・760 chars` with
+ * it).
+ *
+ * The pair is the unit of both the rewrite and its evidence, which keeps the
+ * decode strictly narrower than the deletion it replaces:
+ *
+ * - the gate is the pair itself — a lone record shape is the payload's own text
+ *   (ADR-0008 D1) and keeps every byte, as does an ESC-less shape even when a
+ *   decodable pair sits beside it (that shape is exactly what a user pasting a
+ *   record fragment delivers);
+ * - a pair whose down half hands the fold nothing (`Uc=0`, a bare modifier
+ *   transition) is not consumed either ({@link recordCarriesText}, L-012);
+ * - the up half carries no character of its own, so consuming it drops nothing
+ *   — the one character the pair spells is its down half's `Uc` — and breaks go
+ *   through the ONE newline rule ({@link foldNewline}), so a decoded break and
+ *   an adjacent real newline still fold into a single line.
+ */
+function decodeLiteralRecordText(payload: string): string {
+  // Nothing can be rewritten without an ESC-bearing record, and a payload with
+  // no `ESC[` in it cannot spell a pair: the ordinary paste skips the scan,
+  // exactly as it did before this decode existed.
+  if (!payload.includes('\u001b[')) return payload
+  const records = [...payload.matchAll(WIN32_RECORD_TEXT_RE)]
+  let cursor = 0
+  let fold: NewlineFold = { text: '', lastWasCarriageReturn: false }
+  const pending: { high?: number } = {}
+  for (let i = 0; i < records.length; i++) {
+    const down = records[i]!
+    const up = records[i + 1]
+    if (up === undefined || !isRecordTransitionPair(down, up)) continue
+    // Not consumed: leaving the cursor in place copies both records' bytes
+    // verbatim through the payload-text run below. That is the path for an
+    // ESC-less shape, a lone record, and a pair with no character to hand back.
+    if (!recordCarriesText(down, pending)) continue
+    const start = down.index ?? 0
+    if (start > cursor) fold = appendPayloadText(fold, payload.slice(cursor, start))
+    cursor = start + down[0].length + up[0].length
+    fold = appendDecodedRecord(fold, down, pending)
+    // The pair was consumed WHOLE: its up half is not a down half for the next
+    // round either, so the loop moves past it.
+    i++
+  }
+  return appendPayloadText(fold, payload.slice(cursor)).text
+}
+
+/**
+ * True when `up` is the release half of the key-transition pair `down` opens:
+ * the IMMEDIATELY next record, ESC-bearing like its down half, with identical
+ * `Vk;Sc;Uc;Cs` fields and `Kd` going 1 → 0. Both halves must keep their ESC:
+ * an ESC-less spelling has no frame of its own (ADR-0008 D1) and stays literal.
+ */
+function isRecordTransitionPair(down: RegExpMatchArray, up: RegExpMatchArray): boolean {
+  if (up.index !== (down.index ?? -1) + down[0].length) return false
+  if (!down[0].startsWith('\u001b') || !up[0].startsWith('\u001b')) return false
+  /** The half's `Vk;Sc;Uc;Cs` spelling — the fields a transition must share
+   *  (`Rc` is the repeat count and `Kd` is the direction being compared). */
+  const transitionKey = (match: RegExpMatchArray): string =>
+    [0, 1, 2, 4].map(index => recordField(match, index)).join(';')
+  return recordField(down, 3) === 1 && recordField(up, 3) === 0 &&
+    transitionKey(down) === transitionKey(up)
+}
+
+/**
  * Build the one paste key every paste path emits.
  *
  * @param content - the payload bytes of that path.
  * @param assembledFromKeyRecords - true only for the payloads the decomposed
- *   win32 paste matcher assembled from per-key records. That provenance is the
- *   evidence {@link decodeWin32RecordText} needs; every other caller (VT
- *   bracketed paste, a restored drop path, the VT flush) hands over literal
- *   bytes and must keep them literal.
+ *   win32 paste matcher assembled from per-key records. That provenance is one
+ *   of the two evidences a record decode can rest on
+ *   ({@link decodeWin32RecordText}); every other caller (VT bracketed paste, a
+ *   restored drop path, the VT flush) hands over literal bytes, which
+ *   {@link decodeLiteralRecordText} rewrites only under the payload's own
+ *   paired-transition evidence.
  * @param carriageReturnBreaks - the breaks that matcher opened with a
  *   Return/CR record and has not closed with an LF record yet
  *   ({@link Win32PasteState.carriageReturnBreaks}), so the decoder can fold a
@@ -444,7 +547,7 @@ function createPasteKey(
     ? cleanPastePayload(
         assembledFromKeyRecords
           ? decodeWin32RecordText(content, carriageReturnBreaks)
-          : content,
+          : decodeLiteralRecordText(content),
       )
     : pastePayloadForPath(dropPath)
   return {

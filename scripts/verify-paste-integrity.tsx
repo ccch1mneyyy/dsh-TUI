@@ -170,6 +170,21 @@ function pastePayload(input: string): string {
 const pasteIngress = (text: string): string =>
   sanitizePastedText(text.replace(/\r\n/gu, '\n').replace(/\r/gu, '\n'))
 
+/** The same paste payload, but with the READ BOUNDARIES of a capture: one
+ *  parser write per chunk (`pastePayload` writes the whole stream at once), so
+ *  a case can pin the exact stdin segmentation the terminal produced. */
+function pastePayloadChunks(chunks: readonly string[]): string {
+  let state = INITIAL_STATE
+  const keys: ReturnType<typeof parseMultipleKeypresses>[0] = []
+  for (const chunk of chunks) {
+    const [out, next] = parseMultipleKeypresses(state, chunk)
+    state = next
+    keys.push(...out)
+  }
+  const paste = keys.find(k => k.kind === 'key' && k.isPasted)
+  return paste && paste.kind === 'key' ? paste.sequence : ''
+}
+
 /**
  * Exact insert/delete accounting between two strings via the longest common
  * subsequence: `deleted` counts the SOURCE characters no longer there,
@@ -466,6 +481,50 @@ check(
   'ab',
 )
 
+// ── (l) the user's OWN capture: a bracketed paste that carries real records ──
+
+console.log('# (l) the user capture: VT bracketed paste with real break records')
+
+/**
+ * T-FIX-05's ground truth — `probe/capture/capture-2026-10-02T18-33-49-825Z.txt`
+ * (Windows Terminal + PowerShell, `Ctrl+V` on this very 10-line / 760-char
+ * payload). It is rebuilt here BYTE FOR BYTE and pinned by the capture's own
+ * chunk sizes (12 Ctrl records, chunk#13 = 1024 bytes, chunk#14 = 45, the `V`
+ * and Ctrl keyups; 1308 bytes in total), so the CI case is the captured stream
+ * without reading the out-of-tree file. What makes it a new form: the payload
+ * is inside the bracketed-paste markers AND every line boundary is a REAL
+ * ESC-bearing down+up record pair (`Uc=13`), with no literal newline anywhere
+ * in the delivered bytes — the bracketed-paste lane and the record lane in the
+ * same payload. The pairs are the terminal's own character spelling, so the
+ * literal lane decodes them back into the breaks they encode; a lone record
+ * (no transition evidence) still keeps its bytes (ADR-0008 d3/d4/d9).
+ */
+const CAPTURE_CR_PAIR = rec(13, 28, 13)
+const CAPTURE_PASTE = `${ESC}[200~${ALL_BOUNDARY_ROWS.join(CAPTURE_CR_PAIR)}${ESC}[201~`
+const CAPTURE_CHUNKS: readonly string[] = [
+  ...Array.from({ length: 12 }, () => `${ESC}[17;29;0;1;40;1_`),
+  CAPTURE_PASTE.slice(0, 1024),
+  CAPTURE_PASTE.slice(1024),
+  `${ESC}[86;47;22;0;40;1_`,
+  `${ESC}[17;29;0;0;32;1_`,
+]
+const CAPTURE_STREAM = CAPTURE_CHUNKS.join('')
+// Premise guards: the rebuilt stream must stay the capture's own bytes/read
+// boundaries, or the case silently stops being the reported form.
+checkNum('l1: the rebuilt stream is the capture\'s 1308 bytes in 16 chunks', CAPTURE_STREAM.length, 1308)
+checkNum('l2: ...and keeps its chunk count', CAPTURE_CHUNKS.length, 16)
+checkNum('l3: ...including the 1024-byte read boundary of chunk#13', CAPTURE_CHUNKS[12]!.length, 1024)
+checkNum('l4: ...and chunk#14\'s 45 remaining bytes', CAPTURE_CHUNKS[13]!.length, 45)
+checkNum('l5: the delivered payload carries 0 literal newlines', [...CAPTURE_PASTE].filter(ch => ch === '\n').length, 0)
+checkNum('l6: ...and spells 9 ESC-bearing break pairs, ONE per boundary', CAPTURE_PASTE.split(CAPTURE_CR_PAIR).length - 1, ALL_BOUNDARY_ROWS.length - 1)
+
+const capturePayload = pastePayloadChunks(CAPTURE_CHUNKS)
+check('l7: the parser decodes the capture\'s break pairs to the source bytes', capturePayload, ALL_BOUNDARY_SOURCE)
+checkNum('l8: ...and the source line count (10)', capturePayload.split('\n').length, ALL_BOUNDARY_ROWS.length)
+check('l9: the real ingress keeps the decoded capture byte-identical', pasteIngress(capturePayload), ALL_BOUNDARY_SOURCE)
+checkNum('l10: ...with no record residue (`_` / ESC)', residueCount(pasteIngress(capturePayload)), 0)
+checkNum('l11: ...and no source character lost (LCS deleted == 0)', align(ALL_BOUNDARY_SOURCE, pasteIngress(capturePayload)).deleted, 0)
+
 // ── (g) on the product: chip lines == source lines, Enter sends the source ──
 
 console.log('# (g) on the product: the fold chip reports the SOURCE lines, Enter sends them')
@@ -670,6 +729,20 @@ try {
   check('k18: the composer holds the source bytes', packetV17.value, ALL_BOUNDARY_SOURCE)
   checkNum('k19: chip lines == source lines (10)', packetV17.chip?.lines ?? -1, ALL_BOUNDARY_ROWS.length)
   checkNum('k20: chip chars == source chars (760)', packetV17.chip?.chars ?? -1, ALL_BOUNDARY_SOURCE.length)
+
+  // (l) on the product: the user's own capture — the bracketed paste whose
+  // breaks are real record pairs — through the real parser + composer + render.
+  // The chip must report the SOURCE lines/chars, the paste alone must NOT
+  // submit (no Return event is dispatched), and a real Enter must still send
+  // the payload byte-for-byte (L-012: symptom gone AND the function firing).
+  const captured = await deliver(CAPTURE_STREAM, false)
+  console.log(`     user capture (on the product): landed=${captured.landed} valueLines=${captured.value.split('\n').length} chip=${captured.chip === null ? 'none' : `${captured.chip.lines} lines/${captured.chip.chars} chars`} selfSubmitted=${captured.selfSubmitted}`)
+  check('l12: the composer holds the capture\'s source bytes', captured.value, ALL_BOUNDARY_SOURCE)
+  checkNum('l13: chip lines == source lines (10)', captured.chip?.lines ?? -1, ALL_BOUNDARY_ROWS.length)
+  checkNum('l14: chip chars == source chars (760)', captured.chip?.chars ?? -1, ALL_BOUNDARY_SOURCE.length)
+  checkNum('l15: the capture alone does not submit (no Return is dispatched)', captured.selfSubmitted ? 1 : 0, 0)
+  check('l16: Enter still submits the decoded payload byte-for-byte', await pressEnter(), ALL_BOUNDARY_SOURCE)
+  checkNum('l17: and no painted row carries a record-shaped run', termTest.viewportLines(term).filter(row => RECORD_SHAPE.test(row)).length, 0)
 } finally {
   await instance?.unmount()
   rmSync(dataDir, { recursive: true, force: true })

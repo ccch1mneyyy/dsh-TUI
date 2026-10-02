@@ -698,6 +698,54 @@ checkBoolean('paste opener and record-shaped payload in one read do not start a 
   fragments(['\x1b[200~' + SHIFT_RECORD.slice(0, -1)]).state.win32InputStartedAt === undefined, true)
 checkBoolean('a literal pasted ESC flush is not orphan keyboard ESC provenance',
   fragments(['\x1b[200~\x1b', null, '[123', null]).text === '[123', true)
+
+// --- 8c. bracketed paste carrying the terminal's OWN break records (T-FIX-05) --
+//
+// The user's capture (`probe/capture/capture-2026-10-02T18-33-49-825Z.txt`:
+// Windows Terminal + PowerShell, Ctrl+V) delivers the payload INSIDE the
+// bracketed-paste markers with every line boundary spelled as a real win32
+// DOWN+UP record PAIR — `CSI 13;28;13;1;0;1_` then `CSI 13;28;13;0;0;1_`, so
+// `Uc=13`. That pair is the protocol's own spelling of ONE pasted character
+// (conhost's `Clipboard::TextToKeyEvents`), and the literal lane decodes it
+// back into the break it encodes: an ESC-bearing record is what the ingress
+// residue strip deletes whole, so without the decode the newline is gone
+// (measured: the 760-char / 10-line payload reads `1 line・751 chars`).
+//
+// The evidence is the PAIR, never a single record — a lone record shape is the
+// payload's own text (ADR-0008 D1) and keeps every byte, and an ESC-less shape
+// keeps them even when a decodable pair sits beside it. Every case below also
+// pins the function side (L-012): exactly ONE isPasted event, never a leaked
+// Return event that would submit mid-paste.
+const CR_PAIR = `${CSI}13;28;13;1;0;1_${CSI}13;28;13;0;0;1_`
+checkPaste('a break pair inside a bracketed paste decodes to ONE newline',
+  new Feeder().feed(`${CSI}200~alfa${CR_PAIR}bravo${CSI}201~`), 'alfa\nbravo')
+checkPaste('a break pair at the payload start decodes',
+  new Feeder().feed(`${CSI}200~${CR_PAIR}x${CSI}201~`), '\nx')
+checkPaste('a break pair at the payload end decodes',
+  new Feeder().feed(`${CSI}200~x${CR_PAIR}${CSI}201~`), 'x\n')
+checkPaste('every boundary of a three-line payload decodes',
+  new Feeder().feed(`${CSI}200~alfa${CR_PAIR}bravo${CR_PAIR}charlie${CSI}201~`), 'alfa\nbravo\ncharlie')
+checkPaste('the decoded break folds with an adjacent REAL newline (X1 in this lane)',
+  new Feeder().feed(`${CSI}200~alfa${CR_PAIR}\nbravo${CSI}201~`), 'alfa\nbravo')
+// Zero-harm side (ADR-0008 D1): nothing without its own frame evidence may be
+// rewritten — not a lone record, not an ESC-less pair, not even beside a pair.
+checkPaste('a LONE record in a bracketed paste keeps its bytes',
+  new Feeder().feed(`${CSI}200~${CSI}13;28;13;1;0;1_x${CSI}201~`), `${CSI}13;28;13;1;0;1_x`)
+checkPaste('an ESC-less pair keeps its bytes even beside a decodable pair',
+  new Feeder().feed(`${CSI}200~alfa${CR_PAIR}[13;28;13;1;0;1_[13;28;13;0;0;1_bravo${CSI}201~`),
+  'alfa\n[13;28;13;1;0;1_[13;28;13;0;0;1_bravo')
+// L-012: a pair that hands the fold nothing is NOT consumed — the literal lane
+// has no assembler to prove it is residue, so it may not drop bytes it cannot
+// hand back. Both spellings below keep their bytes verbatim.
+checkPaste('a Uc=0 pair keeps its bytes (no character to hand back)',
+  new Feeder().feed(`${CSI}200~alfa${CR_PAIR}${CSI}0;0;0;1;0;1_${CSI}0;0;0;0;0;1_bravo${CSI}201~`),
+  `alfa\n${CSI}0;0;0;1;0;1_${CSI}0;0;0;0;0;1_bravo`)
+checkPaste('a bare-modifier pair keeps its bytes (no character to hand back)',
+  new Feeder().feed(`${CSI}200~alfa${CR_PAIR}${CSI}17;29;0;1;40;1_${CSI}17;29;0;0;40;1_bravo${CSI}201~`),
+  `alfa\n${CSI}17;29;0;1;40;1_${CSI}17;29;0;0;40;1_bravo`)
+// The decode is not a mode flag: the same paste decodes with framing OFF too.
+checkPaste('the pair decodes without the win32 framing flag',
+  summarize(fragments([`${CSI}200~alfa${CR_PAIR}bravo${CSI}201~`], false).keys), 'alfa\nbravo')
 {
   const surrogateRecords = [
     `${CSI}49;2;55357;1;0;1_`, `${CSI}49;2;55357;0;0;1_`, `${CSI}49;2;56832;1;0;1_`,
