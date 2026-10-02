@@ -14,12 +14,14 @@
  *      ↓ 可把 ▸ 移到「在浏览器中打开」，Enter 走 open 动作；
  *   E. 非历史档（24h）不弹窗、不记账；
  *   F. 回合进行中（working）不弹窗、**不记账**——留给下一次启动。
+ *   K. 登录赠金复用弹窗：宽屏女仆娘、窄屏文案、展示后回执与 Esc 关闭。
  * 运行：node --import tsx/esm scripts/verify-whale-girl.tsx
  */
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { StarAttempt } from '../src/components/StarPrompt.js'
+import type { WhaleCouponStore } from '../src/dsh-adapter/oauth/bonus.js'
 
 process.env.FORCE_COLOR = '3'
 process.env.DSH_TUI_LANG = 'zh'
@@ -40,6 +42,7 @@ const [
   { QuestionStore },
   { POINTER },
   { LOCAL_COMMANDS },
+  { WhaleCouponStore: CouponStore },
   { settle, settled, sleep },
 ] = await Promise.all([
   import('node:stream'),
@@ -51,6 +54,7 @@ const [
   import('../src/dsh-adapter/questions.js'),
   import('../src/terminal-utils/figures.js'),
   import('../src/commands.js'),
+  import('../src/dsh-adapter/oauth/bonus.js'),
   import('./lib/term-test.mjs'),
 ])
 
@@ -150,6 +154,12 @@ function makeChannel(options = {}) {
 }
 
 // ── B. 头部渲染（真实 LogoHeader） ──────────────────────────────────────────
+// 2026-10 启动页吉祥物起，艺术槽跟随 companion.skin：deepy/whaleGirl 皮肤的
+// 吉祥物按设计取代女仆娘立绘——maid 回退契约只存在于 whale 皮肤分支。
+// LogoHeader 不透传 companionSkin，用 store 钉住 'whale' 来测 maid 契约本身
+//（吉祥物形态归 verify-splash-mascot）。
+const { applyCompanionSkin } = await import('../src/tuiDisplayPrefs.js')
+applyCompanionSkin('whale')
 async function renderHeader(props: Record<string, unknown>, expect?: (plain: string) => boolean) {
   const stdout = new FakeStdout(typeof props.columns === 'number' ? props.columns as number : 120)
   const { columns, ...logoProps } = props
@@ -257,16 +267,19 @@ interface ChatHandle {
 async function mountChat(
   starPrompt: { dir: string; onStar?: () => StarAttempt | Promise<StarAttempt>; onOpen?: () => void } | null,
   working = false,
+  bonusNotices?: WhaleCouponStore,
+  columns = 100,
 ): Promise<ChatHandle> {
-  const stdout = new FakeStdout(100)
+  const stdout = new FakeStdout(columns)
   stdout.rows = 28
   const stdin = new FakeStdin()
   const instance = await render(
     // Chat 包在**视口大小**的盒子里：真实运行时是 alt-screen（根=整屏），
     // 而内联夹具的根只有内容高——弹窗卡片是 absolute 且贴根底，根太矮时
     // 卡片顶端会被裁掉（实测标题整行消失）。包一层即等价于真机的根。
-    <Box width={100} height={28} flexDirection="column">
-      <Chat channel={makeChatChannel(working) as never} questionStore={new QuestionStore()} starPrompt={starPrompt} />
+    <Box width={columns} height={28} flexDirection="column">
+      <Chat channel={makeChatChannel(working) as never} questionStore={new QuestionStore()}
+        starPrompt={starPrompt} bonusNotices={bonusNotices} />
     </Box>,
     { stdout, stdin, stderr: new FakeStderr(), exitOnCtrlC: false, patchConsole: false },
   )
@@ -491,6 +504,34 @@ const modalShown = (text: string) => text.includes('不知不觉') && text.inclu
       `opened=${opened.join(',')}`)
     await chat.unmount()
   }
+}
+
+// K：服务器确认的登录赠金复用庆祝弹窗，画出后才确认订单。
+for (const columns of [100, 40]) {
+  const coupons = new CouponStore()
+  const acknowledgements: string[] = []
+  const chat = await mountChat(null, false, coupons, columns)
+  await coupons.refresh({
+    getUnnotifiedBonuses: async () => ({ accountId: 'account-1' as never, bonuses: [{
+      orderId: 'coupon-1' as never, campaign: 'dsh_login_bonus', amount: '6.00', currency: 'CNY',
+      grantedAt: '2099-09-30T00:00:00Z', expiresAt: '2099-10-06T12:15:00Z', message: 'server copy',
+    }] }),
+    ackBonusNotified: async (_accountId, orderId) => { acknowledgements.push(orderId); return true },
+  })
+  check(`K${columns}: coupon modal uses the confirmed amount and Beijing expiry`,
+    await settled(() => chat.plain().includes('DeepSeek 送你的') && chat.plain().includes('6 元')
+      && chat.plain().includes('Deepy提醒') && chat.plain().includes('10 月 6 日 20:15'), { timeoutMs: 5000 }))
+  check(`K${columns}: coupon modal has no /model instruction`, !chat.plain().includes('想让鲸鱼券开工'))
+  check(`K${columns}: coupon notice is acknowledged once after display`,
+    await settled(() => acknowledgements.length === 1))
+  const art = chat.stdout.frames.join('')
+  check(`K${columns}: the heart-pose maid fits only the wide modal`,
+    (art.includes('253;162;169') || art.includes('244;119;167')) === (columns === 100))
+  await sleep(150) // 固定窗:pacing 弹窗输入订阅晚于首次绘制
+  chat.stdin.write('\u001b')
+  check(`K${columns}: Esc dismisses the coupon modal`,
+    await settled(() => coupons.getSnapshot() === null))
+  await chat.unmount()
 }
 
 rmSync(fixtureHome, { recursive: true, force: true })

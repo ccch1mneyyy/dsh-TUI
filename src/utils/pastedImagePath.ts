@@ -9,6 +9,7 @@
  */
 
 import { homedir } from 'node:os'
+import { fileURLToPath } from 'node:url'
 
 /** Image media type per file extension, or undefined for non-image paths.
  *  The one extension→type table shared by every composer staging path. */
@@ -35,6 +36,14 @@ const MAX_PASTED_PATH_CHARS = 4096
  *   `D:/shots/a.png` (the terminal text-paste shape of an Explorer file
  *   copy — Warp and friends forward file copies as plain path text; the
  *   backslash separators decode literally in the bare-token branch)
+ * - a `file://` URL, quoted or bare: the URI half of the OSC 8 hyperlink a
+ *   Windows drag-and-drop emits. The drop frame is recognized and decoded
+ *   before this parser runs — `readOsc8Frame` / `osc8DropPath` /
+ *   `localPathOfFileUri` in `ink/parse-keypress.ts` require a complete frame
+ *   set and hand the composer an already-decoded local path — so this branch
+ *   covers a URI that reaches the paste as literal text; decoding it here
+ *   re-attaches the drop to the image pipeline instead of inserting
+ *   `file:///C:/…` as prose.
  *
  * The decoded path must be absolute (or `~/…`, expanded) and carry a
  * supported image extension. Everything else — multiple tokens, relative
@@ -54,19 +63,19 @@ export function parsePastedImagePath(text: string): string | null {
     if (quote === "'") {
       // POSIX single quotes are wholly literal and cannot contain one.
       if (inner.includes(quote)) return null
-      path = inner
+      path = decodeFileUrl(inner) ?? inner
     } else if (isDriveLetterPath(inner)) {
       // A quoted Windows path is already literal: backslashes are
       // separators, not shell escapes (a quote itself cannot appear in a
       // path, so nothing needs unescaping here).
       path = inner
     } else {
-      path = unescapeDoubleQuoted(inner)
+      path = decodeFileUrl(inner) ?? unescapeDoubleQuoted(inner)
     }
   } else {
-    path = isDriveLetterPath(trimmed)
-      ? unescapeWindowsPath(trimmed)
-      : unescapeBackslashes(trimmed)
+    path =
+      decodeFileUrl(trimmed) ??
+      (isDriveLetterPath(trimmed) ? unescapeWindowsPath(trimmed) : unescapeBackslashes(trimmed))
   }
   if (path === null) return null
 
@@ -74,6 +83,20 @@ export function parsePastedImagePath(text: string): string | null {
   if (!isAbsolutePath(path)) return null
   if (imagePathMediaType(path) === undefined) return null
   return path
+}
+
+/**
+ * Decode a `file://` URL to a native path, or null when `text` is not one or
+ * the URL is not a local file (a UNC/authority form is left to the caller's
+ * verbatim insert — staging it would need a network read).
+ */
+function decodeFileUrl(text: string): string | null {
+  if (!/^file:\/\//iu.test(text)) return null
+  try {
+    return fileURLToPath(text)
+  } catch {
+    return null
+  }
 }
 
 /** True for `X:\…` / `X:/…` (Windows absolute, drive letter first). */

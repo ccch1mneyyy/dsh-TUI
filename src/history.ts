@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto'
 import { existsSync, readFileSync } from 'node:fs'
 import { mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 import { DATA_DIR } from './utils/paths.js'
 
@@ -14,13 +14,25 @@ export type HistoryEntry = {
   text: string
   /** Unix ms timestamp. */
   ts: number
+  /**
+   * Normalized workspace cwd the input was submitted in. Absent on entries
+   * written before history became project-scoped; those legacy entries stay
+   * visible in every project until that project's own entries push them out
+   * of the `HISTORY_LIMIT` window.
+   */
+  project?: string
 }
 
 /**
- * Entry cap for the persisted history. `↑`/`↓` and the Ctrl+R overlay read
- * the same file, so both depths come from this one number.
+ * Per-project entry cap. `↑`/`↓` and the Ctrl+R overlay read the same file,
+ * so both depths come from this one number.
  */
 export const HISTORY_LIMIT = 200
+/**
+ * Whole-file cap across all projects, so a user hopping between many
+ * workspaces cannot grow `history.jsonl` without bound.
+ */
+const HISTORY_FILE_LIMIT = 2000
 const LOCK_RETRY_LIMIT = 500
 const LOCK_RETRY_DELAY_MS = 5
 const STALE_LOCK_MS = 30_000
@@ -62,6 +74,41 @@ async function withHistoryLock(write: () => Promise<void>): Promise<void> {
   throw new Error('history lock busy')
 }
 
+/**
+ * Project key for a workspace cwd: absolute, forward slashes, no trailing
+ * slash, case-folded on Windows (whose filesystem is case-insensitive).
+ * @param cwd - Workspace cwd; blank means unscoped.
+ * @returns The normalized key, or `undefined` when unscoped.
+ */
+export function historyProjectKey(cwd: string | undefined): string | undefined {
+  if (cwd === undefined || cwd.trim() === '') return undefined
+  const normalized = resolve(cwd).replace(/\\/g, '/').replace(/(.)\/+$/, '$1')
+  return process.platform === 'win32' ? normalized.toLowerCase() : normalized
+}
+
+/** Whether `entry` belongs to the history view of `project` (undefined = all). */
+function inProject(entry: HistoryEntry, project: string | undefined): boolean {
+  return project === undefined || entry.project === undefined || entry.project === project
+}
+
+/**
+ * Keep the newest `HISTORY_LIMIT` entries of every project (legacy entries
+ * count as one bucket), then the newest `HISTORY_FILE_LIMIT` overall.
+ */
+function pruneEntries(entries: readonly HistoryEntry[]): HistoryEntry[] {
+  const counts = new Map<string, number>()
+  const kept: HistoryEntry[] = []
+  for (let index = entries.length - 1; index >= 0 && kept.length < HISTORY_FILE_LIMIT; index -= 1) {
+    const entry = entries[index]!
+    const bucket = entry.project ?? ''
+    const count = counts.get(bucket) ?? 0
+    if (count >= HISTORY_LIMIT) continue
+    counts.set(bucket, count + 1)
+    kept.push(entry)
+  }
+  return kept.reverse()
+}
+
 function parseRaw(raw: string): HistoryEntry[] {
   const entries: HistoryEntry[] = []
   for (const line of raw.split('\n')) {
@@ -70,7 +117,9 @@ function parseRaw(raw: string): HistoryEntry[] {
     try {
       const parsed = JSON.parse(trimmed) as Partial<HistoryEntry>
       if (typeof parsed.text === 'string' && parsed.text.length > 0) {
-        entries.push({ text: parsed.text, ts: typeof parsed.ts === 'number' ? parsed.ts : 0 })
+        const entry: HistoryEntry = { text: parsed.text, ts: typeof parsed.ts === 'number' ? parsed.ts : 0 }
+        if (typeof parsed.project === 'string' && parsed.project !== '') entry.project = parsed.project
+        entries.push(entry)
       }
     } catch {
       // Skip malformed lines; the file is best-effort.
@@ -96,19 +145,24 @@ async function loadRawAsync(): Promise<HistoryEntry[]> {
   }
 }
 
-async function persistEntry(trimmed: string): Promise<void> {
+async function persistEntry(trimmed: string, project: string | undefined): Promise<void> {
   try {
     await withHistoryLock(async () => {
       const entries = await loadRawAsync()
-      // Skip consecutive duplicates (repeated submits of the same
-      // command only advance the existing entry's timestamp).
-      const last = entries[entries.length - 1]
+      // Skip consecutive duplicates within the project's view (repeated
+      // submits of the same command only advance the existing entry's
+      // timestamp); another project's interleaved entry does not break it,
+      // and a legacy entry the view still shows counts as the previous one.
+      const last = entries.findLast(entry =>
+        entry.project === project || (project !== undefined && entry.project === undefined))
       if (last && last.text === trimmed) {
         last.ts = Date.now()
       } else {
-        entries.push({ text: trimmed, ts: Date.now() })
+        const entry: HistoryEntry = { text: trimmed, ts: Date.now() }
+        if (project !== undefined) entry.project = project
+        entries.push(entry)
       }
-      const sliced = entries.slice(-HISTORY_LIMIT)
+      const sliced = pruneEntries(entries)
       // Atomic replace: a direct async overwrite exposes truncated bytes to
       // the synchronous loadHistory() mid-write (review finding). Same-dir
       // temp file + rename is atomic on POSIX and Windows alike; the temp
@@ -140,16 +194,18 @@ async function persistEntry(trimmed: string): Promise<void> {
 let appendChain: Promise<void> = Promise.resolve()
 
 /**
- * Append an input to the persisted history, deduping the immediately
- * previous entry and capping the file at `HISTORY_LIMIT` entries.
+ * Append an input to the persisted history, deduping the project's
+ * immediately previous entry and capping each project at `HISTORY_LIMIT`.
  * @param text - Input to persist; blank inputs are ignored.
+ * @param cwd - Workspace cwd the input belongs to; omitted = unscoped.
  * @returns Resolves once this entry is persisted; callers on the input path
  * intentionally discard it because persistence is best-effort.
  */
-export function appendHistory(text: string): Promise<void> {
+export function appendHistory(text: string, cwd?: string): Promise<void> {
   const trimmed = text.trim()
   if (!trimmed) return Promise.resolve()
-  const queued = appendChain.then(() => persistEntry(trimmed))
+  const project = historyProjectKey(cwd)
+  const queued = appendChain.then(() => persistEntry(trimmed, project))
   // persistEntry never rejects, but keep the chain alive regardless so one
   // failure cannot stall every later append.
   appendChain = queued.catch(() => {})
@@ -157,21 +213,32 @@ export function appendHistory(text: string): Promise<void> {
 }
 
 /**
+ * Read one project's persisted history view in chronological order: its own
+ * entries plus legacy unscoped ones, capped at `HISTORY_LIMIT`.
+ */
+function loadProject(cwd: string | undefined): HistoryEntry[] {
+  const project = historyProjectKey(cwd)
+  return loadRaw().filter(entry => inProject(entry, project)).slice(-HISTORY_LIMIT)
+}
+
+/**
  * Read the persisted history, newest first.
+ * @param cwd - Workspace cwd to scope to; omitted = every project.
  * @returns The persisted entries in reverse-chronological order.
  */
-export function loadHistory(): HistoryEntry[] {
-  return loadRaw().reverse()
+export function loadHistory(cwd?: string): HistoryEntry[] {
+  return loadProject(cwd).reverse()
 }
 
 /**
  * Read the persisted history in the order the composer walks it: oldest
  * first, so `↑` reaches the newest entry first (the list tail) exactly as it
  * does for the entries this process pushed itself.
+ * @param cwd - Workspace cwd to scope to; omitted = every project.
  * @returns The persisted entries in chronological order.
  */
-export function loadHistoryOldestFirst(): HistoryEntry[] {
-  return loadRaw()
+export function loadHistoryOldestFirst(cwd?: string): HistoryEntry[] {
+  return loadProject(cwd)
 }
 
 /**

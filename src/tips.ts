@@ -37,8 +37,8 @@ export const TIPS: readonly Tip[] = [
   {
     id: 'keys-esc-levels',
     group: 'keys',
-    zh: 'Esc 逐层收：帮助 → 图片预览 → 命令/文件菜单 → 清选区 → 清空',
-    en: 'Esc peels layers: help → image preview → command/file menus → selection → clear input',
+    zh: 'Esc 逐层收：帮助 → 图片预览 → 命令/文件菜单 → 清选区 → 清附加 → 清空',
+    en: 'Esc peels layers: help → preview → menus → selection → context chip → clear input',
   },
   {
     id: 'keys-ctrl-o',
@@ -357,8 +357,8 @@ export const TIPS: readonly Tip[] = [
   {
     id: 'cmd-preset',
     group: 'commands',
-    zh: '/preset 切换 agent 预设（standard/ptc 等）',
-    en: '/preset switches presets: standard/ptc/minimal/cordis/liangshen',
+    zh: '/preset 切换内核 Agent 预设（standard/ptc 等）',
+    en: '/preset switches the kernel agent preset: standard/ptc/minimal/cordis/liangshen',
   },
   {
     id: 'cmd-preset-liangshen',
@@ -552,7 +552,7 @@ export const TIPS: readonly Tip[] = [
     id: 'flow-question-arrows',
     group: 'workflow',
     zh: '多题问卷用 ←/→ 换题，不提交；输入行要先把光标移到行首或行尾',
-    en: 'In a multi-question ask, ←/→ switches questions without submitting; on the input row the caret must already be at the edge',
+    en: 'In a multi-question ask, ←/→ switches questions; on the input row the caret must be at the edge',
   },
   {
     id: 'flow-question-fold',
@@ -687,6 +687,12 @@ export const TIPS: readonly Tip[] = [
     group: 'display',
     zh: '/settings 里 diffLayout 切双栏/单栏 diff',
     en: 'In /settings, diffLayout switches split/unified diff',
+  },
+  {
+    id: 'disp-minimal-ui',
+    group: 'display',
+    zh: '/settings「极简界面」只精简装饰；内核「极简模式」预设减少模型可用工具',
+    en: 'Minimal UI (/settings) trims decorations only; the kernel Minimal preset cuts the model\'s tools',
   },
   {
     id: 'disp-settings-save',
@@ -861,8 +867,8 @@ export const TIPS: readonly Tip[] = [
   {
     id: 'pit-minimal',
     group: 'pitfalls',
-    zh: 'minimal preset 下 /compact 与问卷不可用',
-    en: '/compact and questions are unavailable under minimal preset',
+    zh: '内核「极简模式」预设不压缩、不剪枝：长会话可能撞上限，/compact 与问卷也不可用（与「极简界面」无关）',
+    en: 'Minimal preset: no compaction or pruning — long sessions can hit the limit (not the Minimal UI)',
   },
   {
     id: 'pit-mouse-mode',

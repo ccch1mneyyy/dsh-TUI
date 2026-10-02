@@ -276,14 +276,14 @@ check('compact StatusLine shows the context bar by default', () => {
   assert.ok(/^\s*206k\/266k 77\.4%$/.test(barRow), `unexpected context-bar row:\n${barRow}`)
 })
 
-const minimalMode = await renderStatus({ minimal: true })
-check('minimal StatusLine stays free of the context bar', () => {
-  // Minimal mode pins its decoration switches OFF instead of inheriting them:
+const minimalUi = await renderStatus({ minimalUi: true })
+check('minimal UI StatusLine stays free of the context bar', () => {
+  // The minimal UI pins its decoration switches OFF instead of inheriting them:
   // the default flip above must not leak a bar row into the trimmed footer.
   // Its ctx field spells the percentage '77%' (compact), so the bar's own
   // one-decimal readout is the marker that must be absent.
-  assert.ok(!minimalMode.includes('77.4%'), `unexpected context-bar readout in:\n${minimalMode}`)
-  assert.ok(!minimalMode.includes('system'), `unexpected context-bar segment in:\n${minimalMode}`)
+  assert.ok(!minimalUi.includes('77.4%'), `unexpected context-bar readout in:\n${minimalUi}`)
+  assert.ok(!minimalUi.includes('system'), `unexpected context-bar segment in:\n${minimalUi}`)
 })
 
 const withSessionId = await renderStatus({

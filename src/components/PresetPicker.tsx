@@ -14,6 +14,10 @@ import type { PresetOption } from '../dsh-adapter/channel.js'
  * `channel.switchPreset`, Esc cancels. Broken presets are listed (the
  * roster's discovery contract) but marked with their reason; the roster
  * default is tagged.
+ *
+ * The header says "内核 Agent 预设 / Kernel agent preset" (not just "Agent
+ * preset"): this screen changes the model-facing tool catalog, and must never
+ * be confused with the `/settings → 极简界面` (Minimal UI) display switch.
  */
 export function PresetPicker({
   presets,
@@ -33,7 +37,7 @@ export function PresetPicker({
       <Box flexDirection="column">
         <Box marginBottom={1}>
           <Text color="remember" bold>
-            Agent preset
+            {t('preset-picker-title')}
           </Text>
         </Box>
         <Select

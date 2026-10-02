@@ -130,6 +130,14 @@ const METHOD_POLICY: Record<string, Record<string, MethodPolicy>> = {
     active: { kind: 'capability', capability: 'host.scenes.active' },
     subscribe: { kind: 'capability', capability: 'host.scenes.subscribe' },
   },
+  TuiPanelRuntime: {
+    register: { kind: 'capability', capability: 'host.panels.register' },
+    list: { kind: 'capability', capability: 'host.panels.list' },
+    open: { kind: 'capability', capability: 'host.panels.open' },
+    close: { kind: 'capability', capability: 'host.panels.close' },
+    badge: { kind: 'capability', capability: 'host.panels.badge' },
+    subscribe: { kind: 'capability', capability: 'host.panels.subscribe' },
+  },
   TuiSettingsSectionsRuntime: {
     register: { kind: 'capability', capability: 'host.settings.register' },
     list: { kind: 'capability', capability: 'host.settings.list' },
@@ -735,6 +743,9 @@ try {
     TuiSceneRuntime,
   } = await import('../src/dsh-adapter/scenes.js')
   const {
+    TuiPanelRuntime,
+  } = await import('../src/dsh-adapter/panels.js')
+  const {
     TuiSettingsSectionsRuntime,
   } = await import('../src/dsh-adapter/settings-sections.js')
   const {
@@ -769,6 +780,7 @@ try {
     ApprovalStore,
   } = await import('../src/dsh-adapter/approvals.js')
   const p3Scenes = new TuiSceneRuntime(passiveRoot)
+  const p3Panels = new TuiPanelRuntime(passiveRoot)
   const p3Settings = new TuiSettingsSectionsRuntime(passiveRoot)
   const p3Status = new TuiStatusRuntime(passiveRoot)
   const p3Shortcuts = new TuiShortcutRuntime(passiveRoot)
@@ -782,6 +794,7 @@ try {
   const p3Approvals = new ApprovalStore()
   process.env.DSH_TUI_ADAPTER_MODE = 'new'
   assert.throws(() => p3Scenes.register({ id: 'x', component: () => undefined } as never), /shadow policy denies/)
+  assert.throws(() => p3Panels.register({ apiVersion: 1, id: 'x', title: 'x', component: () => undefined } as never), /shadow policy denies/)
   assert.throws(() => p3Settings.register({ ns: 'x', title: 'x', fields: [] } as never), /shadow policy denies/)
   assert.throws(() => p3Status.set('x', 'y'), /shadow policy denies/)
   assert.throws(() => p3Shortcuts.register('ctrl+shift+x', { description: 'x', handler: () => undefined }), /shadow policy denies/)
@@ -895,6 +908,9 @@ try {
     TuiSceneRuntime,
   } = await import('../src/dsh-adapter/scenes.js')
   const {
+    TuiPanelRuntime,
+  } = await import('../src/dsh-adapter/panels.js')
+  const {
     TuiSettingsSectionsRuntime,
   } = await import('../src/dsh-adapter/settings-sections.js')
   const {
@@ -929,6 +945,7 @@ try {
     ApprovalStore,
   } = await import('../src/dsh-adapter/approvals.js')
   const p3Scenes = new TuiSceneRuntime(root)
+  const p3Panels = new TuiPanelRuntime(root)
   const p3Settings = new TuiSettingsSectionsRuntime(root)
   const p3Status = new TuiStatusRuntime(root)
   const p3Shortcuts = new TuiShortcutRuntime(root)
@@ -942,6 +959,7 @@ try {
   const p3Approvals = new ApprovalStore()
   process.env.DSH_TUI_ADAPTER_MODE = 'new'
   assert.throws(() => p3Scenes.register({ id: 'x', component: () => undefined } as never), /shadow policy denies/)
+  assert.throws(() => p3Panels.register({ apiVersion: 1, id: 'x', title: 'x', component: () => undefined } as never), /shadow policy denies/)
   assert.throws(() => p3Settings.register({ ns: 'x', title: 'x', fields: [] } as never), /shadow policy denies/)
   assert.throws(() => p3Status.set('x', 'y'), /shadow policy denies/)
   assert.throws(() => p3Shortcuts.register('ctrl+shift+x', { description: 'x', handler: () => undefined }), /shadow policy denies/)

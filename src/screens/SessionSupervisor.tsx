@@ -30,7 +30,7 @@ import { DSH_TAB, useForeignSessions } from './sessionSupervisor/useForeignSessi
 import { ForeignSessionPanes } from './sessionSupervisor/ForeignSessionPanes.js'
 import { SourceTabs, layoutSourceTabs, sourceTabsWidth, type SourceTab } from '../components/sessions/SourceTabs.js'
 import { stringWidth } from '../ink/stringWidth.js'
-import { RAIL_CHROME_ROWS, WORKSPACE_ROW_LINES, RAIL_MIN_TOTAL_COLUMNS, RAIL_WIDTH_MIN, RAIL_WIDTH_MAX, SESSION_ROW_LINES, SESSION_PANE_CHROME_ROWS, MenuAction, MENU_ACTIONS, MENU_WIDTH, MENU_HEIGHT, MENU_LABEL_KEYS, SupervisorLiveState, RailEntry, UNREGISTERED_RAIL_ID, message, samePath, sessionMatchesQuery } from './sessionSupervisor/model.js'
+import { RAIL_CHROME_ROWS, WORKSPACE_ROW_LINES, RAIL_MIN_TOTAL_COLUMNS, RAIL_WIDTH_MIN, RAIL_WIDTH_MAX, SESSION_ROW_LINES, SESSION_PANE_CHROME_ROWS, MENU_WIDTH, MENU_LABEL_KEYS, menuActionsFor, SupervisorLiveState, RailEntry, UNREGISTERED_RAIL_ID, message, samePath, sessionMatchesQuery } from './sessionSupervisor/model.js'
 export { sessionMatchesQuery }
 
 /**
@@ -156,6 +156,8 @@ export function SessionSupervisor({
     moveSession,
     focusedSession,
   } = useSessionSupervisor({ channel, home, onOpenSession, onNewSession, onStopSession, liveStateOf, columns, rows })
+  const menuEntry = menu === undefined ? undefined : railEntries.find(entry => samePath(entry.path, menu.path))
+  const menuActions = menuEntry === undefined ? [] : menuActionsFor(menuEntry)
 
   /**
    * The source tab: this screen's own sessions ({@link DSH_TAB}) or another
@@ -241,20 +243,20 @@ export function SessionSupervisor({
       return
     }
     if (menuRef.current !== undefined) {
+      const current = menuRef.current
+      const entry = railEntries.find(candidate => samePath(candidate.path, current.path))
+      if (entry === undefined) { closeMenu(); return }
+      const actionCount = menuActionsFor(entry).length
       if (key.upArrow) {
-        const current = menuRef.current
-        const next = { ...current, item: (current.item + MENU_ACTIONS.length - 1) % MENU_ACTIONS.length }
+        const next = { ...current, item: (current.item + actionCount - 1) % actionCount }
         menuRef.current = next
         setMenu(next)
       } else if (key.downArrow) {
-        const current = menuRef.current
-        const next = { ...current, item: (current.item + 1) % MENU_ACTIONS.length }
+        const next = { ...current, item: (current.item + 1) % actionCount }
         menuRef.current = next
         setMenu(next)
       } else if (isPlainReturn(key)) {
-        const current = menuRef.current
-        const entry = railEntries.find(candidate => samePath(candidate.path, current.path))
-        if (entry !== undefined) activateMenu(entry, current.item)
+        activateMenu(entry, current.item)
       } else {
         closeMenu()
       }
@@ -541,7 +543,12 @@ export function SessionSupervisor({
             }}
           >
             <Box height={1} flexShrink={0} overflow="hidden" paddingX={1}>
-              <Text dimColor>{truncateWidth(t('home-section-workspaces', { n: railEntries.length }), railWidth - 2)}</Text>
+              <Text dimColor>{truncateWidth(
+                railEntries.length === entries.length
+                  ? t('home-section-workspaces', { n: entries.length })
+                  : t('supervisor-workspace-groups', { registered: entries.length, history: railEntries.length - entries.length }),
+                railWidth - 2,
+              )}</Text>
             </Box>
             {!loading && railEntries.length === 0 && (
               <Box paddingX={1}>
@@ -557,6 +564,7 @@ export function SessionSupervisor({
                   path={entry.path}
                   home={home}
                   sessionCount={countOf(entry)}
+                  historyOnly={entry.from === 'unregistered'}
                   present={entry.present}
                   selected={selected !== undefined && selected.id === entry.id}
                   focused={activePane === 'rail' && railFocus === absolute}
@@ -743,20 +751,20 @@ export function SessionSupervisor({
         </Box>
       )}
 
-      {menu !== undefined && (
+      {menu !== undefined && menuEntry !== undefined && (
         <Box
           position="absolute"
           left={Math.max(0, Math.min(menu.col - inset.x + 1, Math.max(0, columns - MENU_WIDTH)))}
-          top={Math.max(0, Math.min(menu.row - inset.y + 1, Math.max(0, rows - MENU_HEIGHT)))}
+          top={Math.max(0, Math.min(menu.row - inset.y + 1, Math.max(0, rows - (menuActions.length + 2))))}
           width={MENU_WIDTH}
-          height={MENU_HEIGHT}
+          height={menuActions.length + 2}
           flexDirection="column"
           flexShrink={0}
           borderStyle="round"
           borderColor="permission"
           backgroundColor="toolCardBackground"
         >
-          {MENU_ACTIONS.map((action, index) => (
+          {menuActions.map((action, index) => (
             <Box
               key={action}
               height={1}

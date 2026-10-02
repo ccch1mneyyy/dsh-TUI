@@ -162,8 +162,8 @@ const requireSourceBaseline = process.env.DSH_REQUIRE_ALPHA_BASELINE === '1'
 if (sourceRoot !== undefined && existsSync(sourceManifest) && existsSync(sourcePatch)) {
   const resolver = prepareUpstreamSourceResolver(sourceRoot)
   const source = baseline('source', sourceManifest, sourcePatch, resolver.baseUrl)
-  if (requireSourceBaseline && source.version !== '0.2.0-rc.1') {
-    throw new Error(`required source baseline is 0.2.0-rc.1, got ${source.version}`)
+  if (requireSourceBaseline && source.version !== '0.2.0-rc.2') {
+    throw new Error(`required source baseline is 0.2.0-rc.2, got ${source.version}`)
   }
   baselines.push(source)
 } else if (requireSourceBaseline) {

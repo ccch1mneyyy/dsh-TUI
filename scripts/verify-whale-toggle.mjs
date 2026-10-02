@@ -15,6 +15,7 @@ const [
   { LogoHeader },
   { createChannel },
   { settle },
+  { applyCompanionSkin },
 ] = await Promise.all([
   import('node:assert'),
   import('node:stream'),
@@ -23,7 +24,12 @@ const [
   import('../src/components/MessageList.js'),
   import('../src/dsh-adapter/channel.js'),
   import('./lib/term-test.mjs'),
+  import('../src/tuiDisplayPrefs.js'),
 ])
+// 本脚本测的是 dsh-tui.whale 的鲸鱼路径：经 LogoHeader（不透传
+// companionSkin）渲染，把吉祥物皮肤用 store 钉在 'whale'，避免默认
+// deepy 皮肤把艺术槽换成字母格宠物（那属 verify-splash-mascot 的范围）。
+applyCompanionSkin('whale')
 
 let checks = 0
 function check(name, test) {

@@ -126,6 +126,21 @@ export type SelectionState = {
    *  Commit-time copy (copySelectionNoClear) refuses and clears instead
    *  of shipping the replaced text. Cleared on start/clear. */
   stale: boolean
+  /** Direction-aware noSelect fence. True when THIS gesture anchored on a
+   *  noSelect cell (e.g. a drag that starts inside the side-panel column):
+   *  for that gesture only, noSelect cells participate in the highlight,
+   *  word bounds, and copy text — panel text becomes selectable/copyable.
+   *  Gestures anchored anywhere else keep the exclusion verbatim, so a
+   *  chat-origin drag still never captures panel glyphs (design doc §4.6).
+   *  Set once per gesture by startSelection from the anchor cell's bit;
+   *  reset by clearSelection. */
+  includeNoSelectCells: boolean
+  /** The column run of noSelect cells containing the anchor (same gesture
+   *  class as includeNoSelectCells): the selection rectangle is clamped to
+   *  it, so a panel-origin drag that moves vertically selects only the
+   *  panel's columns on every covered row — the chat column on intermediate
+   *  rows is never captured. Undefined for gestures without the fence. */
+  fence?: { colStart: number; colEnd: number }
 }
 
 /**
@@ -145,6 +160,7 @@ export function createSelectionState(): SelectionState {
     coveredText: null,
     coveredGeometry: null,
     stale: false,
+    includeNoSelectCells: false,
   }
 }
 
@@ -155,13 +171,43 @@ export function createSelectionState(): SelectionState {
  * @param s - the selection state to mutate.
  * @param col - anchor column in screen-buffer coordinates.
  * @param row - anchor row in screen-buffer coordinates.
+ * @param screen - the current frame's screen, when the caller has it: the
+ * anchor cell's noSelect bit seeds includeNoSelectCells (the direction
+ * fence — see SelectionState). Omitted by tests that drive the state
+ * directly against a hand-built screen; the flag then stays false.
  */
 export function startSelection(
   s: SelectionState,
   col: number,
   row: number,
+  screen?: Screen,
 ): void {
   s.anchor = { col, row }
+  // Direction fence: anchoring ON a noSelect cell means this gesture is
+  // selecting inside an excluded region (the side-panel column) — its cells
+  // must participate for the drag to highlight/copy anything at all.
+  // Anchoring elsewhere keeps the exclusion (§4.6: a chat-origin drag never
+  // captures panel glyphs).
+  s.includeNoSelectCells =
+    screen !== undefined &&
+    row >= 0 &&
+    row < screen.height &&
+    col >= 0 &&
+    col < screen.width &&
+    screen.noSelect[row * screen.width + col] === 1
+  // Column fence: the contiguous noSelect run around the anchor. Clamps the
+  // selection rectangle (see selectionBounds) so a vertical panel drag never
+  // captures the chat column on intermediate rows.
+  if (s.includeNoSelectCells && screen !== undefined) {
+    const rowOff = row * screen.width
+    let colStart = col
+    while (colStart > 0 && screen.noSelect[rowOff + colStart - 1] === 1) colStart -= 1
+    let colEnd = col
+    while (colEnd + 1 < screen.width && screen.noSelect[rowOff + colEnd + 1] === 1) colEnd += 1
+    s.fence = { colStart, colEnd }
+  } else {
+    s.fence = undefined
+  }
   // Focus is not set until the first drag motion. A click-release with no
   // drag leaves focus null → hasSelection/selectionBounds return false/null
   // via the `!s.focus` check, so a bare click never highlights a cell.
@@ -254,6 +300,8 @@ export function clearSelection(s: SelectionState): void {
   s.coveredText = null
   s.coveredGeometry = null
   s.stale = false
+  s.includeNoSelectCells = false
+  s.fence = undefined
 }
 
 // Unicode-aware word character matcher: letters (any script), digits,
@@ -286,6 +334,7 @@ function wordBoundsAt(
   screen: Screen,
   col: number,
   row: number,
+  includeNoSelect = false,
 ): { lo: number; hi: number } | null {
   if (row < 0 || row >= screen.height) return null
   const width = screen.width
@@ -299,7 +348,7 @@ function wordBoundsAt(
     const cell = cellAt(screen, c, row)
     if (cell && cell.width === CellWidth.SpacerTail) c -= 1
   }
-  if (c < 0 || c >= width || noSelect[rowOff + c] === 1) return null
+  if (c < 0 || c >= width || (!includeNoSelect && noSelect[rowOff + c] === 1)) return null
 
   const startCell = cellAt(screen, c, row)
   if (!startCell) return null
@@ -311,12 +360,12 @@ function wordBoundsAt(
   let lo = c
   while (lo > 0) {
     const prev = lo - 1
-    if (noSelect[rowOff + prev] === 1) break
+    if (!includeNoSelect && noSelect[rowOff + prev] === 1) break
     const pc = cellAt(screen, prev, row)
     if (!pc) break
     if (pc.width === CellWidth.SpacerTail) {
       // Step over the spacer to the wide-char head
-      if (prev === 0 || noSelect[rowOff + prev - 1] === 1) break
+      if (prev === 0 || (!includeNoSelect && noSelect[rowOff + prev - 1] === 1)) break
       const head = cellAt(screen, prev - 1, row)
       if (!head || charClass(head.char) !== cls) break
       lo = prev - 1
@@ -330,7 +379,7 @@ function wordBoundsAt(
   let hi = c
   while (hi < width - 1) {
     const next = hi + 1
-    if (noSelect[rowOff + next] === 1) break
+    if (!includeNoSelect && noSelect[rowOff + next] === 1) break
     const nc = cellAt(screen, next, row)
     if (!nc) break
     if (nc.width === CellWidth.SpacerTail) {
@@ -370,7 +419,7 @@ export function selectWordAt(
   col: number,
   row: number,
 ): void {
-  const b = wordBoundsAt(screen, col, row)
+  const b = wordBoundsAt(screen, col, row, s.includeNoSelectCells)
   if (!b) return
   const lo = { col: b.lo, row }
   const hi = { col: b.hi, row }
@@ -537,7 +586,7 @@ export function extendSelection(
   let mLo: Point
   let mHi: Point
   if (span.kind === 'word') {
-    const b = wordBoundsAt(screen, col, row)
+    const b = wordBoundsAt(screen, col, row, s.includeNoSelectCells)
     mLo = { col: b ? b.lo : col, row }
     mHi = { col: b ? b.hi : col, row }
   } else {
@@ -1109,9 +1158,19 @@ export function selectionBounds(s: SelectionState): {
   end: { col: number; row: number }
 } | null {
   if (!s.anchor || !s.focus) return null
-  return comparePoints(s.anchor, s.focus) <= 0
-    ? { start: s.anchor, end: s.focus }
-    : { start: s.focus, end: s.anchor }
+  const start = comparePoints(s.anchor, s.focus) <= 0 ? s.anchor : s.focus
+  const end = comparePoints(s.anchor, s.focus) <= 0 ? s.focus : s.anchor
+  // Fence clamp (panel-origin gestures): restrict the rectangle to the
+  // anchor's noSelect column run on EVERY row — a vertical drag inside the
+  // side panel selects only panel columns, never the chat column that
+  // shares the intermediate rows.
+  if (s.fence !== undefined) {
+    const colStart = Math.max(start.col, s.fence.colStart)
+    const colEnd = Math.min(end.col, s.fence.colEnd)
+    if (colStart > colEnd) return null
+    return { start: { col: colStart, row: start.row }, end: { col: colEnd, row: end.row } }
+  }
+  return { start, end }
 }
 
 /**
@@ -1146,6 +1205,7 @@ function extractRowText(
   row: number,
   colStart: number,
   colEnd: number,
+  includeNoSelect = false,
 ): SelectionRow {
   const noSelect = screen.noSelect
   const copyRegion = screen.copyRegion
@@ -1156,9 +1216,11 @@ function extractRowText(
   const regions: SelectionRegion[] = []
   let lastRegion = 0
   for (let col = colStart; col <= lastCol; col++) {
-    // Skip cells marked noSelect (gutters, line numbers, diff sigils).
-    // Check before cellAt to avoid the decode cost for excluded cells.
-    if (noSelect[rowOff + col] === 1) continue
+    // Skip cells marked noSelect (gutters, line numbers, diff sigils) unless
+    // this gesture anchored inside a noSelect region (the direction fence:
+    // a panel-origin drag selects panel text). Check before cellAt to avoid
+    // the decode cost for excluded cells.
+    if (!includeNoSelect && noSelect[rowOff + col] === 1) continue
     // A copy region (a formula image) contributes one entry per run of its
     // cells: the text it stands for, at the offset those cells occupy here.
     // resolveCopyRegions inserts it once per selection.
@@ -1346,14 +1408,23 @@ export function refreshSelectionFingerprint(
     // covered row OUTSIDE the selected column range (stable head selected,
     // live tail still writing) must not latch stale — the copy would not
     // read those columns anyway.
-    const colStart = row === b.start.row ? b.start.col : 0
-    const colEnd = row === b.end.row ? b.end.col : width - 1
+    let colStart = row === b.start.row ? b.start.col : 0
+    let colEnd = row === b.end.row ? b.end.col : width - 1
+    // Mirrors getSelectedText's fence intersection (same flag, same rows):
+    // the hash must cover exactly the cells the copy would read.
+    if (s.fence !== undefined) {
+      colStart = Math.max(colStart, s.fence.colStart)
+      colEnd = Math.min(colEnd, s.fence.colEnd)
+      if (colStart > colEnd) continue
+    }
     for (let col = colStart; col <= colEnd; col++) {
       const ci = (rowOff + col) * 2
       // word1's low 2 bits are the cell width; SpacerTail/SpacerHead carry
       // no text of their own.
       if ((cells[ci + 1]! & 3) >= CellWidth.SpacerTail) continue
-      if (noSelect![rowOff + col] === 1) continue
+      // Mirrors extractRowText's noSelect skip (same fence flag): the hash
+      // must cover exactly the cells the copy would read.
+      if (noSelect![rowOff + col] === 1 && !s.includeNoSelectCells) continue
       // A copy region (a formula image) is content too: its cells are blank,
       // so without this term a formula swapped under a stationary highlight
       // would hash identically while the copied SOURCE changed. Fold the id
@@ -1464,9 +1535,16 @@ export function getSelectedText(s: SelectionState, screen: Screen): string {
   }
 
   for (let row = start.row; row <= end.row; row++) {
-    const rowStart = row === start.row ? start.col : 0
-    const rowEnd = row === end.row ? end.col : screen.width - 1
-    rows.push(extractRowText(screen, row, rowStart, rowEnd))
+    let rowStart = row === start.row ? start.col : 0
+    let rowEnd = row === end.row ? end.col : screen.width - 1
+    // Fence (panel-origin gestures) applies to EVERY row, not just the
+    // endpoints: intermediate rows must not span into the chat column.
+    if (s.fence !== undefined) {
+      rowStart = Math.max(rowStart, s.fence.colStart)
+      rowEnd = Math.min(rowEnd, s.fence.colEnd)
+      if (rowStart > rowEnd) continue
+    }
+    rows.push(extractRowText(screen, row, rowStart, rowEnd, s.includeNoSelectCells))
   }
 
   for (let i = 0; i < s.scrolledOffBelow.length; i++) {
@@ -1522,7 +1600,7 @@ export function captureScrolledRows(
     const colStart = row === start.row ? start.col : 0
     const colEnd = row === end.row ? end.col : width - 1
     const screenRow = row - screenRowOffset
-    captured.push(extractRowText(screen, screenRow, colStart, colEnd))
+    captured.push(extractRowText(screen, screenRow, colStart, colEnd, s.includeNoSelectCells))
   }
 
   if (side === 'above') {
@@ -1592,15 +1670,24 @@ export function applySelectionOverlay(
   const noSelect = screen.noSelect
   const covered = imageCoveredCells(images, width, screen.height)
   for (let row = start.row; row <= end.row && row < screen.height; row++) {
-    const colStart = row === start.row ? start.col : 0
-    const colEnd = row === end.row ? Math.min(end.col, width - 1) : width - 1
+    let colStart = row === start.row ? start.col : 0
+    let colEnd = row === end.row ? Math.min(end.col, width - 1) : width - 1
+    // Fence (panel-origin gestures) clips every row to the anchor's noSelect
+    // column run — intermediate rows never highlight the chat column.
+    if (selection.fence !== undefined) {
+      colStart = Math.max(colStart, selection.fence.colStart)
+      colEnd = Math.min(colEnd, selection.fence.colEnd)
+      if (colStart > colEnd) continue
+    }
     const rowOff = row * width
     for (let col = colStart; col <= colEnd; col++) {
       const idx = rowOff + col
       // Skip noSelect cells — gutters stay visually unchanged so it's
       // clear they're not part of the copy. Surrounding selectable cells
-      // still highlight so the selection extent remains visible.
-      if (noSelect[idx] === 1) continue
+      // still highlight so the selection extent remains visible. A gesture
+      // that ANCHORED on a noSelect cell (the direction fence) inverts this:
+      // those cells are the selection's subject, so they must highlight.
+      if (noSelect[idx] === 1 && !selection.includeNoSelectCells) continue
       // Skip cells a terminal image is painted over: Kitty draws images
       // below cells with a non-default background, so a highlighted cell
       // would hide the image (a selected formula turned into a blank box).

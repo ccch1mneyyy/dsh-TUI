@@ -139,10 +139,35 @@ export async function resolvePersistedRoute(ctx: Context, sessionId: SessionId):
 }
 
 /**
- * Keep the official Minimal preset's model-facing contract at exactly two
- * tools. The TUI mounts ask_user_question at the host layer so every other
- * preset (including user presets) can use its questionnaire UI; host-layer
- * tools otherwise merge into Minimal's scoped catalog as a third tool.
+ * Whether the host-layer `ask_user_question` tool must stay invisible to one
+ * preset's model-facing catalog.
+ *
+ * The official Minimal preset is a single-persistent-shell trajectory
+ * (`@deepseek-ai/dsh-web-app/presets/minimal.patch.yml`: `persona` +
+ * `persistent-shell`, i.e. bash on POSIX / pwsh on Windows — `str_replace_editor`
+ * has been opt-in since 0.1.3-alpha.2), while the TUI mounts
+ * ask_user_question at the HOST layer so every other preset (including user
+ * presets) can use its questionnaire UI; that host-layer tool otherwise merges
+ * into Minimal's scoped catalog as an extra tool.
+ *
+ * The recorded preset id is the only signal available at the assembly
+ * boundary: the composition exposes no per-tool manifest, and a host tool's
+ * presence in the tool registry cannot tell whether a preset declared it. This
+ * is therefore the ONE preset-id read in the capability path, shared with
+ * `resolveAgentCapabilities` so advertisement and assembly agree, and pinned
+ * by `verify:minimal-preset-tools`.
+ *
+ * @param presetId - Preset recorded for the requesting session.
+ * @returns True when the host-layer tool must be filtered out of the assembly.
+ */
+export function presetHidesHostAskTool(presetId: string | undefined): boolean {
+  return presetId === 'minimal'
+}
+
+/**
+ * Keep the official Minimal preset's model-facing catalog minimal: it declares
+ * exactly one persistent shell tool, and the host-mounted ask_user_question
+ * must not become a second one.
  *
  * This is a per-assembly filter rather than a startup-time decision because
  * one TUI process can resume, create, or recompose sessions under different
@@ -153,7 +178,7 @@ export async function resolvePersistedRoute(ctx: Context, sessionId: SessionId):
  * @returns The original assembly, except ask_user_question is absent in Minimal.
  */
 export function filterMinimalPresetTools(assembly: PromptAssembly, presetId: string | undefined): PromptAssembly {
-  if (presetId !== 'minimal' || !assembly.tools.some(tool => tool.name === ASK_USER_TOOL)) return assembly
+  if (!presetHidesHostAskTool(presetId) || !assembly.tools.some(tool => tool.name === ASK_USER_TOOL)) return assembly
   return {
     ...assembly,
     tools: assembly.tools.filter(tool => tool.name !== ASK_USER_TOOL),

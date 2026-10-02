@@ -549,30 +549,28 @@ export function createChannelProjection(state: ProjectionState, deps: Projection
             appendRow({ id: deps.rowIds.value, kind: 'compact', text: summary })
             deps.rowIds.value += 1
           }
-          // The surface replace drops the whole pre-compact history: reset
-          // the context accounting NOW so the status bar (ctx bar, tokens,
-          // context-low warning) drops immediately instead of waiting for
-          // the next request's usage event.
-          const removed =
-            state.contextSegments.prompt +
-            state.contextSegments.assistant +
-            state.contextSegments.thinking +
-            state.contextSegments.tools
-          const summaryTokens = estimateTokens(summary)
-          state.tokens.input = Math.max(0, state.tokens.input - removed) + summaryTokens
+          // The checkpoint replaces the whole pre-compact surface. Occupancy
+          // needs no rewriting here: the official token meter folds this same
+          // event and reprices the surface by its logged shadow price, so the
+          // channel's `contextOccupancy` drops the moment the checkpoint lands
+          // (the projection's change feed republishes the footer). The old
+          // chars/4 rewrite below was a worse estimate of a number the host
+          // already knows: it ignored the retained tail the official
+          // `compaction-basic` keeps (default `retainRatio` 0.16), ignored the
+          // tool catalog, and could not see the summary's real size.
+          //
+          // The SEGMENTED bar keeps its own heuristic composition (system +
+          // the summary prompt): it describes what the surface is made of,
+          // never the occupancy total.
           state.contextSegments = {
             system: state.contextSegments.system,
-            prompt: summaryTokens,
+            prompt: estimateTokens(summary),
             assistant: 0,
             thinking: 0,
             tools: 0,
           }
-          state.lastUsage = {
-            input: state.contextSegments.system + summaryTokens,
-            output: 0,
-            cacheRead: 0,
-            cacheWrite: 0,
-          }
+          // The latch must release: compaction is the remediation for a low
+          // context, so the warning has to be able to fire again afterwards.
           deps.resetContextWarning()
           break
         }
@@ -985,11 +983,15 @@ export function createChannelProjection(state: ProjectionState, deps: Projection
           tpsTurnDecodeTokens = 0
           tpsTurnSampled = false
         }
+        // Occupancy is evaluated on EVERY turn end, not only a completed one:
+        // the request that overflowed the window is exactly the one whose turn
+        // ends as an error (it writes no successful usage sample at all), and
+        // an aborted turn has still grown the surface. Replay drains a resumed
+        // session's history through the projector; its totals describe the
+        // past, not a live context-low state.
+        if (!replaying) deps.checkContextWarning()
         const reason = event.data.reason
         if (reason.kind === 'completed') {
-          // Replay drains a resumed session's history through the projector;
-          // its totals describe the past, not a live context-low state.
-          if (!replaying) deps.checkContextWarning()
           break
         }
         if (reason.kind === 'aborted' || reason.kind === 'interrupted') {
