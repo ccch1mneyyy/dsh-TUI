@@ -1,6 +1,6 @@
 import React from 'react'
 import chalk from 'chalk'
-import { Box, Text, useTheme } from '../../ui.js'
+import { Box, NoSelect, Text, useTheme } from '../../ui.js'
 import { getTheme } from '../../theme.js'
 import { alive, mix } from '../../trajectory/motion.js'
 import { parseRGB } from '../Spinner/spinnerUtils.js'
@@ -66,6 +66,8 @@ export function MiniWake({
   band,
   hint,
   tick,
+  onOpen,
+  hoverHint,
 }: {
   /** The session projected onto {@link miniWakeWidth} columns. */
   band: WaveBand
@@ -75,9 +77,20 @@ export function MiniWake({
    */
   hint?: string
   tick: number
+  /**
+   * Open the trajectory scene. The strip is the conversation's permanent
+   * pointer at that second view, so pointing AT it and clicking is the
+   * gesture the affordance implies — the key chord stays as the alternative,
+   * not the only way in.
+   */
+  onOpen?: () => void
+  /** Key chord revealed while the pointer rests on the strip (the first-run
+   *  hint has already retired by then). */
+  hoverHint?: string
 }): React.ReactNode {
   const [themeName] = useTheme()
   const theme = getTheme(themeName)
+  const [hovered, setHovered] = React.useState(false)
   if (band.buckets.length === 0) return null
 
   const logFloor = Math.log1p(Math.max(0, band.floor))
@@ -106,11 +119,24 @@ export function MiniWake({
     strip += chalk.hex(toHex(colour))(shown >= BLOCKS.length ? FULL : BLOCKS[shown - 1]!)
   }
 
+  // The hint slot narrates the affordance: first-run chord, then — while the
+  // pointer is on the strip — the chord again, because that is the moment the
+  // user is asking "what does this thing do".
+  const shownHint = hint ?? (hovered && onOpen !== undefined ? hoverHint : undefined)
   return (
-    <Box flexShrink={0} flexDirection="row" gap={1}>
-      <Text>{strip}</Text>
-      {hint !== undefined ? <Text color="subtle">{hint}</Text> : null}
-    </Box>
+    <NoSelect>
+      <Box
+        flexShrink={0}
+        flexDirection="row"
+        gap={1}
+        onClick={onOpen}
+        onMouseEnter={onOpen !== undefined ? (): void => setHovered(true) : undefined}
+        onMouseLeave={onOpen !== undefined ? (): void => setHovered(false) : undefined}
+      >
+        <Text>{strip}</Text>
+        {shownHint !== undefined ? <Text color={hovered && hint === undefined ? 'accent' : 'subtle'}>{shownHint}</Text> : null}
+      </Box>
+    </NoSelect>
   )
 }
 

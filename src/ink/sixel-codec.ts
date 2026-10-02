@@ -7,12 +7,40 @@ import type { TerminalImageSource } from './terminal-image.js'
 
 /**
  * Coverage a transparent raster needs before a pixel is painted. Sixel alpha
- * is binary and this encoder keeps only fully opaque pixels, so anti-aliased
- * edges would otherwise be dropped outright and thin every glyph stroke to a
- * hairline; promoting coverage keeps the artwork's visual weight. Biased
- * below 0.5 because formula strokes are thin to begin with.
+ * is binary, so this encoder promotes coverage to a hard mask — with an
+ * ordered dither for the intermediate band: coverage below 25% never paints,
+ * 62.5%+ always paints, and the band between checkers over a 2×2 Bayer matrix
+ * so the eye averages it into apparent translucency (soft anti-aliased edges
+ * instead of a hard 25% cutoff). Pure 1-bit sources (alpha only 0/255) get
+ * exactly the old single-threshold mask: 255 always painted, 0 never did.
  */
 const TRANSPARENT_COVERAGE_THRESHOLD = 64
+
+/** 2×2 Bayer matrix (values 0..3) for ordered dithering of the coverage band. */
+const BAYER_2X2: readonly (readonly [number, number])[] = [[0, 2], [3, 1]]
+/** Dither band: thresholds 25% / 37.5% / 50% / 62.5% at the four matrix cells. */
+const DITHER_BASE = 0.25
+const DITHER_STEP = 0.125
+
+/**
+ * Paint decision for one transparent-raster pixel: 0.25·255 = 63.75 keeps the
+ * historical "below 25% never paints" bias, 160 (= 62.5%·255 + 1) makes
+ * everything above the band solid (≥75% always paints by contract), and the
+ * band between resolves by position so constant mid coverage alternates in a
+ * checkerboard. Exported for the mask regression (gradient/const fills).
+ */
+export function sixelCoveragePaints(alpha: number, x: number, y: number): boolean {
+  if (alpha >= 160) return true
+  if (alpha < TRANSPARENT_COVERAGE_THRESHOLD) return false
+  const bayer = BAYER_2X2[y & 1]![x & 1]!
+  return alpha > (DITHER_BASE + bayer * DITHER_STEP) * 255
+}
+
+/** The pre-dither decision (single 25% threshold), kept for the mask
+ * regression's before/after comparison. */
+export function sixelCoveragePaintsThreshold(alpha: number): boolean {
+  return alpha >= TRANSPARENT_COVERAGE_THRESHOLD
+}
 
 export interface SixelCrop {
   readonly left: number
@@ -119,10 +147,17 @@ async function prepareSixel(request: SixelEncodeRequest): Promise<PreparedSixel>
   const data = await sharp(indexed).ensureAlpha().raw().toBuffer()
   if (data.byteLength !== width * height * 4) throw new Error('Invalid quantized raster size')
   if (transparent) {
-    // Binary ink: anything below the coverage threshold becomes fully
-    // transparent, everything above becomes solid.
-    for (let index = 3; index < data.length; index += 4) {
-      data[index] = data[index]! >= TRANSPARENT_COVERAGE_THRESHOLD ? 255 : 0
+    // Binary ink with an ordered-dithered coverage band (see
+    // sixelCoveragePaints): <25% transparent, ≥62.5% solid, in between by
+    // 2×2 Bayer position. Only sources that actually carry intermediate
+    // alpha change their mask; pure 0/255 rasters are byte-identical to the
+    // old single-threshold promotion.
+    let index = 3
+    for (let y = 0; y < height; y += 1) {
+      for (let x = 0; x < width; x += 1) {
+        data[index] = sixelCoveragePaints(data[index]!, x, y) ? 255 : 0
+        index += 4
+      }
     }
   }
   const palette = new Set<number>()

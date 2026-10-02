@@ -36,7 +36,7 @@ The root README lists what ships; the details live here. Chinese files have no s
 
 | 文档 / Doc | 中文 | English | 讲什么 / What it covers |
 | --- | --- | --- | --- |
-| 插件准入与开发 / Plugin admission & development | [外部规范](https://github.com/T-Auto/dsh-ecosystem-spec/blob/main/docs/plugin-admission-and-development.md) | [spec](https://github.com/T-Auto/dsh-ecosystem-spec/blob/main/docs/plugin-admission-and-development.md) | 接缝、契约与验证清单。 |
+| 插件准入与开发 / Plugin admission & development | [仓内 TUI Profile](../tui-profile/docs/plugin-admission-and-development.md) | [TUI Profile](../tui-profile/docs/plugin-admission-and-development.md) | 接缝、契约与验证清单。 |
 | 插件速览 / Plugin overview | [plugins.md](plugins.md) | [plugins.en.md](plugins.en.md) | 生态入口与接缝稳定性分级。 |
 
 ## 参与 / Contributing

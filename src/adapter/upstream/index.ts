@@ -23,6 +23,10 @@ export {
   scenesDriver,
 } from './scenes-driver.js'
 export {
+  detectPanelsCapability,
+  panelsDriver,
+} from './panels-driver.js'
+export {
   detectSettingsCapability,
   settingsDriver,
 } from './settings-driver.js'

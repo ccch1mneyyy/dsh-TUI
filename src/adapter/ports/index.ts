@@ -3,7 +3,7 @@
  *
  * Boundary rules for this directory:
  * - No imports from `@deepseek-ai/*`.
- * - No imports from `@dsh-std/*` or `dsh-ecosystem-spec` private protocol
+ * - No imports from `@dsh-std/*` or `tui-profile` private protocol
  *   definitions.
  * - No protocol version / negotiation / manifest / permission semantics.
  * - No caller-supplied OwnerRef / activationId / principal on capability

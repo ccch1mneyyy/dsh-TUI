@@ -1,6 +1,7 @@
 import type { AgentHandle } from '@deepseek-ai/dsh-agent'
+import type { ContextPressureSource } from '../context-occupancy.js'
 import type { SessionModeSpec } from '../../sessionModes.js'
-import { normalizePageMargin, normalizeScrollGutter, normalizeStatusBar, normalizeToolBackground, type PageMarginSetting, type ScrollGutterMode, type StatusBarConfig, type ToolBackground } from '../../tuiDisplayPrefs.js'
+import { normalizeJobGroupFold, normalizePageMargin, normalizeScrollGutter, normalizeStatusBar, normalizeToolBackground, type JobGroupFoldMode, type PageMarginSetting, type ScrollGutterMode, type StatusBarConfig, type ToolBackground } from '../../tuiDisplayPrefs.js'
 import { normalizeActivityPreset } from '../../components/activityFrames.js'
 import { normalizeSplashFont, type SplashFontSetting } from '../../components/splashFonts.js'
 import type { ChannelState } from './types.js'
@@ -16,6 +17,20 @@ export interface ChannelLaunchOptions {
    *  projection value only arrives on change, so a resumed session needs this
    *  read to render its line before the next event lands. */
   seedActivity?: (session: unknown) => void
+  /**
+   * Official context-occupancy source (see `dsh-adapter/context-occupancy.ts`).
+   *
+   * `read` is a cached map lookup — never a projection fold — so the channel's
+   * `contextOccupancy` accessor may call it per read; `subscribe` is the
+   * projection's own change feed, which republishes occupancy when it moves
+   * between session events (a compaction rewriting the surface, the prompt
+   * growing). Absent → the channel falls back to the last request's billed
+   * sample, which is what a composition without the token meter must do.
+   */
+  contextPressure?: ContextPressureSource
+  /** Read that source's current value when a session binds (see
+   *  {@link ChannelLaunchOptions.contextPressure}). */
+  seedContextOccupancy?: (session: unknown) => void
   activityFrames?: string
   /** Settings namespace this boot registered its section under: the Config
    *  owner's Loader id (`resolveSettingsNamespace`), which is NOT always the
@@ -25,6 +40,7 @@ export interface ChannelLaunchOptions {
   settingsNs?: string
   diffLayout?: 'auto' | 'split' | 'unified'
   thinkingFold?: 'preview' | 'full'
+  jobGroupFold?: JobGroupFoldMode
   toolBackground?: ToolBackground
   scrollGutter?: ScrollGutterMode
   pageMargin?: PageMarginSetting
@@ -41,7 +57,9 @@ export interface ChannelLaunchOptions {
   /** Maid portrait for the header splash (settings `dsh-tui.whaleGirl`;
    * off by default). */
   whaleGirl?: boolean
-  minimal?: boolean
+  /** Minimal UI (settings key `dsh-tui.minimal`, 极简界面 / "Minimal UI"):
+   *  purely a decoration switch. NOT the kernel agent preset `minimal`. */
+  minimalUi?: boolean
   contextBar?: boolean
   configuredPreset?: string
   configuredProvider?: string
@@ -69,10 +87,10 @@ export function createInitialChannelView(
   'notifications' | 'contextWindow' | 'reasoningEffort' | 'mode' | 'modeIndex' |
   'activityFrames' | 'configuredProvider' | 'configuredModel' |
   'configuredPreset' | 'configuredActivityFrames' | 'configuredLang' | 'diffLayout' |
-  'thinkingFold' | 'toolBackground' | 'scrollGutter' | 'pageMargin' |
+  'thinkingFold' | 'jobGroupFold' | 'toolBackground' | 'scrollGutter' | 'pageMargin' |
   'foldTerminalCommand' | 'promptSessionLabel' | 'expandEditor' | 'smoothStreaming' |
-  'statusBar' | 'whale' | 'whaleIdle' | 'splashFont' | 'minimal' | 'activityEnabled' | 'contextBarEnabled' |
-  'statusBar' | 'whale' | 'whaleIdle' | 'whaleGirl' | 'minimal' | 'activityEnabled' | 'contextBarEnabled' |
+  'statusBar' | 'whale' | 'whaleIdle' | 'splashFont' | 'minimalUi' | 'activityEnabled' | 'contextBarEnabled' |
+  'statusBar' | 'whale' | 'whaleIdle' | 'whaleGirl' | 'minimalUi' | 'activityEnabled' | 'contextBarEnabled' |
   'agentPreset' | 'goal' | 'todos' | 'loadedContext' | 'pending' | 'commandList' |
   'lastUsage' | 'tps' | 'tpsSamples' | 'contextSegments' | 'mainCost' | 'subagentCost' | 'subagents' | 'backgroundJobs' | 'selection'
 > {
@@ -89,11 +107,12 @@ export function createInitialChannelView(
     configuredModel: options.configuredModel, configuredPreset: options.configuredPreset,
     configuredActivityFrames: options.configuredActivityFrames, configuredLang: options.configuredLang,
     diffLayout: options.diffLayout ?? 'auto', thinkingFold: options.thinkingFold ?? 'preview',
+    jobGroupFold: normalizeJobGroupFold(options.jobGroupFold),
     toolBackground: normalizeToolBackground(options.toolBackground), scrollGutter: normalizeScrollGutter(options.scrollGutter),
     pageMargin: normalizePageMargin(options.pageMargin), foldTerminalCommand: options.foldTerminalCommand === true,
     promptSessionLabel: options.promptSessionLabel === true, expandEditor: options.expandEditor !== false,
     smoothStreaming: options.smoothStreaming !== false, statusBar: normalizeStatusBar(options.statusBar),
-    whale: options.whale !== false, whaleIdle: options.whaleIdle !== false, whaleGirl: options.whaleGirl === true, splashFont: normalizeSplashFont(options.splashFont), minimal: options.minimal === true, activityEnabled: options.activity !== false,
+    whale: options.whale !== false, whaleIdle: options.whaleIdle !== false, whaleGirl: options.whaleGirl === true, splashFont: normalizeSplashFont(options.splashFont), minimalUi: options.minimalUi === true, activityEnabled: options.activity !== false,
     contextBarEnabled: options.contextBar !== false, agentPreset: options.agentPreset, goal: undefined,
     todos: [], loadedContext: undefined, pending: [], commandList: [], lastUsage: undefined,
     tps: undefined, tpsSamples: [], contextSegments: { system: 0, prompt: 0, assistant: 0, thinking: 0, tools: 0 },

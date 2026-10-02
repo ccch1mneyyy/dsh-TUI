@@ -62,6 +62,16 @@ const ownPackage = readJson(join(ownDir, 'package.json'))
 const ownVersion = ownPackage?.name === '@deepseek-harness-tui/dsh-tui' ? ownPackage.version : undefined
 const PACKAGE = '@deepseek-harness-tui/dsh-tui'
 const PROFILE = 'dsh-tui'
+
+// 随包用户手册（guide/，见 scripts/build-guide.mjs）：交给 dsh 当内核
+// dsh-skill-filesystem 的随包技能根（rank 600 的 bundledSkillDir 默认取这个
+// 环境变量）。会话里模型常驻只多一行技能目录，用户真问到 dsh-tui 时才按需
+// 读手册。用户自己设过就不覆盖；包里没有 guide/（旧安装/裁剪包）时保持原样。
+const withGuideSkillDir = env => {
+  if (env.DSH_BUNDLED_SKILL_DIR !== undefined) return env
+  const guideDir = join(ownDir, 'guide')
+  return existsSync(guideDir) ? { ...env, DSH_BUNDLED_SKILL_DIR: guideDir } : env
+}
 // 救援 profile（最小可用）：同 home 下的空白 profile（仅 base+TUI，无第三方
 // 插件），是主 profile 装炸时的干净启动通道——创建走官方 dsh plugin add
 // （钉当前版本，同 bootstrap 语义）。
@@ -728,7 +738,7 @@ const startDshSession = (dshArgs, profile = PROFILE, env = process.env) =>
   new Promise(resolve => {
     const child = spawn(...cmd('dsh', ['--profile', profile, ...dshArgs]), {
       stdio: 'inherit',
-      env,
+      env: withGuideSkillDir(env),
       ...shellOpt,
     })
     child.on('error', err => resolve({ kind: 'error', error: err }))
@@ -749,6 +759,23 @@ const rescueEnv = () => {
   const env = { ...process.env }
   for (const key of RESCUE_DROPPED_ENV) delete env[key]
   return env
+}
+
+// 安全模式「重试正常启动」的环境（菜单选项 1，首启 fallback 与 `safe` 共用）：
+// 崩溃往往发生在 TUI 的退出漏斗之前，此时 `~/.dsh-tui/resume.txt` 是"用户上
+// 一刻在哪个会话"的唯一线索（TUI 侧崩溃分支也会写它，见
+// src/dsh-adapter/plugin.ts 的退出漏斗）。不带这个变量重试等于开一个新的空会话
+// ——正是「会话丢了」的观感。已经显式设了该变量（用户自己 `--resume`）则不覆盖；
+// 指针缺失/不可读时保持冷启动语义。
+const resumeEnvForRetry = () => {
+  if (process.env.DSH_TUI_RESUME_SESSION !== undefined) return process.env
+  let target = ''
+  try {
+    target = readFileSync(join(homedir(), '.dsh-tui', 'resume.txt'), 'utf8').trim()
+  } catch {
+    // 没有历史会话可恢复——静默冷启动。
+  }
+  return target === '' ? process.env : { ...process.env, DSH_TUI_RESUME_SESSION: target }
 }
 
 // TTY 判定：询问与菜单都要求 stdin/stdout 均可交互（readline 需要 stdin，
@@ -1071,7 +1098,7 @@ const settleFirstResult = async (result, firstArgs) => {
   if (result.kind === 'error') {
     console.error(msg('launchFailed')(result.error))
     if (isInteractive()) {
-      if (await askSafeEntry(1)) process.exit(await runSafeSession({ pendingExitCode: 1, retryDsh: () => startDshSession(firstArgs) }))
+      if (await askSafeEntry(1)) process.exit(await runSafeSession({ pendingExitCode: 1, retryDsh: () => startDshSession(firstArgs, PROFILE, resumeEnvForRetry()) }))
     } else {
       console.error(msg('safeHint')(1))
     }
@@ -1082,7 +1109,7 @@ const settleFirstResult = async (result, firstArgs) => {
     console.error(msg('profileExited')(result.code))
     if (isInteractive()) {
       if (await askSafeEntry(result.code)) {
-        process.exit(await runSafeSession({ pendingExitCode: result.code, retryDsh: () => startDshSession(firstArgs) }))
+        process.exit(await runSafeSession({ pendingExitCode: result.code, retryDsh: () => startDshSession(firstArgs, PROFILE, resumeEnvForRetry()) }))
       }
     } else {
       console.error(msg('safeHint')(result.code))

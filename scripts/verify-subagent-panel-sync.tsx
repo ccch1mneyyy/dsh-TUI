@@ -116,6 +116,22 @@ const catalog = (childId: string, label: string, at: number) =>
   })
   const unknownLine = (await unknown.channel.listSubagents())[0] ?? ''
   check('G2 未知或空闲状态不误报已归档', unknownLine.includes('状态未知'), unknownLine)
+
+  // G3 catalog 的 mode 落进 state 与卡行：continuable 徽章 + bus-first 补挂。
+  {
+    const modeHarness = makeHarness([catalog('mode-child', '模式任务', Date.now() - 30_000)])
+    const state = modeHarness.channel.subagents.find(sub => sub.agentId === 'mode-child')
+    check('G3 catalog mode 落进 state', state?.mode === 'continuable', String(state?.mode))
+    // 总线 start 先建行（无 mode），catalog 后到 → 补挂 mode。
+    const late = makeHarness([])
+    late.emit('subagent/start', { id: 'late-child', runId: 'run-late', provider: 'subagent' })
+    late.parentEvent({
+      type: 'subagent/catalog', seq: 1, time: Date.now(),
+      data: { version: 1, childId: 'late-child', childCreatedAt: Date.now(), mode: 'one-shot', label: '迟到目录' },
+    })
+    const lateState = late.channel.subagents.find(sub => sub.agentId === 'late-child')
+    check('G3 bus 先建行后 catalog 补挂 mode', lateState?.mode === 'one-shot', String(lateState?.mode))
+  }
 }
 
 // ── A + B: live lifecycle — catalog birth, epoch reset, late-end immunity ──

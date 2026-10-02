@@ -58,9 +58,11 @@ export function noticeLines(text: string | undefined, width: number): string[] {
 
 export type MenuAction = 'edit' | 'new' | 'rename' | 'remove'
 export const MENU_ACTIONS: readonly MenuAction[] = ['edit', 'new', 'rename', 'remove']
+const HISTORY_MENU_ACTIONS: readonly MenuAction[] = ['edit', 'new']
+export function menuActionsFor(entry: RailEntry): readonly MenuAction[] {
+  return entry.from === 'unregistered' ? HISTORY_MENU_ACTIONS : MENU_ACTIONS
+}
 export const MENU_WIDTH = 30
-/** One confirm line + its explanation. */
-export const MENU_HEIGHT = MENU_ACTIONS.length + 2
 
 export const MENU_LABEL_KEYS = {
   edit: 'home-menu-edit',

@@ -8,11 +8,17 @@
  *
  * 用法（ci.yml 中每个测试组一条）：
  *   - run: node scripts/run-ci-group.mjs render-scroll
- *   - run: node scripts/run-ci-group.mjs render-scroll --shard 1/2
+ *   - run: node scripts/run-ci-group.mjs render-scroll --shard 1/3
  *
- * --shard i/n：只跑本组按登记顺序 round-robin 取到第 i 片的条目（第 i、
- * i+n、i+2n… 项），ci.yml 用 matrix 把大组拆成并行 job；不带 --shard 即整组。
- * 新增测试只登记 GROUPS，不必改分片。--list 只打印本片条目不运行。
+ * --shard i/n：只跑本组第 i 片的条目，ci.yml 用 matrix 把大组拆成并行 job；
+ * 不带 --shard 即整组。分片按耗时装箱（最长处理时间优先：条目按预计耗时
+ * 从长到短，逐条放进当前最轻的一片），各片预计耗时几乎相等；片内仍按登记
+ * 顺序运行。预计耗时来自同目录的 ci-group-timings.json（本地整组实测），
+ * 表里没有的新条目按本组中位数估算。这张表只决定条目落在哪一片，不决定
+ * 跑哪些条目：每条恰好落在一片里（下方断言），表过时只会让各片不够均衡，
+ * 不会漏跑。新增测试只登记 GROUPS，不必改分片。
+ * --list 只打印本片条目与预计耗时，不运行。--record-timings 在跑完后把本次
+ * 通过条目的实测耗时写回 ci-group-timings.json（重新均衡分片时用）。
  *
  * 组定义在下方 GROUPS 表：名称 + 完整 argv + 可选附加 env。所有条目默认
  * NODE_ENV=production：产品入口本就强制生产版 React，dev 版 reconciler 每次
@@ -32,7 +38,7 @@
  *     CI 那一次失败的原始帧字节才是证据。
  */
 import { spawnSync } from 'node:child_process'
-import { appendFileSync, mkdirSync, mkdtempSync, rmSync, statSync } from 'node:fs'
+import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -43,6 +49,18 @@ const GROUPS = {
     ['verify-image-inspection', ['node', '--import', 'tsx/esm', 'scripts/verify-image-inspection.tsx']],
     ['verify-terminal-images-sixel', ['node', '--import', 'tsx/esm', 'scripts/verify-terminal-images-sixel.tsx']],
     ['verify-sixel-transcript', ['node', '--import', 'tsx/esm', 'scripts/verify-sixel-transcript.tsx']],
+// 启动落地页回归：头部（块体大字/鲸鱼/模型/目录）与快捷入口的版面、
+// 高度阶梯（full → no-chips → no-hint → input-only）、受控输入的闭环、
+// 焦点与 Enter 的归属（输入框提交 vs 入口激活）、真鼠标 SGR 点击。
+    ['verify-launchpad', ['node', '--import', 'tsx/esm', 'scripts/verify-launchpad.tsx']],
+// 首次引导向导回归：四步骨架与步骤条降级、凭证/余额文案口径、语言与主题
+// 两个面板的键盘路径、模型/强度/工作区三条切换、招式卡与两个出口
+// （Esc=skipped 不记账，最后一步 Enter=done 才写 onboarding.json）。
+    ['verify-onboarding-wizard', ['node', '--import', 'tsx/esm', 'scripts/verify-onboarding-wizard.tsx']],
+// Chat 集成层：两个屏幕在**真实 Chat** 里的编排契约（/setup 开向导、提交落点、
+// 开整屏界面的动作要先收掉当前屏、覆盖层不收、记账 skipped/done、最小模式、
+// 首启横幅不 stale）。这三类缺陷是单独挂组件的回归测不到的——先有 bug 才有它。
+    ['verify-launchpad-onboarding-chat', ['node', '--import', 'tsx/esm', 'scripts/verify-launchpad-onboarding-chat.tsx']],
 // 带断言的回归：提问面板内联输入（issue #9）+ 工具卡排版
 // （⎿ 缩进、diff 红绿行、信封剥离），失败即非零退出。
     ["repro-askpanel", ['node', '--import', 'tsx/esm', 'scripts/repro-askpanel.tsx']],
@@ -213,11 +231,39 @@ const GROUPS = {
 // DEC 2026，所以只撤 DECSTBM、BSU/ESU 保留。断言 zellij 下撤回 + DEC 2026
 // 保留 + 无 zellij 对照，终端环境按场景显式构造（不继承宿主 env，见脚本头注）。
     ["verify-zellij", ['node', '--import', 'tsx/esm', 'scripts/verify-zellij.tsx']],
+// 侧栏 Phase 1 纯函数几何契约：canSplit 92/93 边界、resolveSplit/zoom 的
+// clamp 下限（chat>=64、panel>=28、和+1=列数）、ratio 极端钳制、
+// resolveSidePanelGeometry 开关矩阵、nudgeRatio ±4 列步进与两端钳死。
+    ["verify-side-panel-geometry", ['node', '--import', 'tsx/esm', 'scripts/verify-side-panel-geometry.mjs']],
+// 侧栏 Phase 1 渲染契约：divider 列位置与 ├/│ 接缝、PanelBar 胶囊+徽章、
+// hint 随焦点切换（zh/en）、聊天侧输入框不越缝、zoom 与 93 列最小分栏
+// 不破版、geometry=null 零 diff 直通、resize 终态等价（120→100→120）。
+    ["verify-side-panel-layout", ['node', '--import', 'tsx/esm', 'scripts/verify-side-panel-layout.tsx']],
+// Companion（宠物）面板回归——纯函数层：mood 优先级格（attention 三触发各
+// 自点亮、attention 阻止入睡、celebration 到期回落、activity 缺失/done/idle
+// 退 spinnerMode、sleepAfterMs=0 永不睡）+ stepCompanionMood 的 since 保留与
+// bubble 取值（phrase 优先、label+detail 兜底、idle/sleeping 无 bubble）。
+    ["verify-companion-mood", ['node', '--import', 'tsx/esm', 'scripts/verify-companion-mood.mjs']],
+// Companion pose 层：nextCompanionPoseStep 对 nextWhaleIdleStep 的帧级 parity
+// （8 mood × heart × 50 步 pose+state+delay 逐项相等）、gestures 集合由层姿态
+// 派生（tail+fin 重叠步同时 wag+flutter、静止步空集）、blink/heart/sleepZ 镜像
+// nativeWhalePose、tick=floor(now/120)。
+    ["verify-companion-pose", ['node', '--import', 'tsx/esm', 'scripts/verify-companion-pose.mjs']],
+// Companion 渲染层：♥ tab 登记、宽幅 deepy 半块帧 + 「N 个工具」统计行、窄幅
+// compact（♥+心情标签、无皮肤帧）、display:none 零时钟订阅（计数 ClockContext
+// 代理探针）、SGR 点击艺术区触发 heart pass、Enter poke 显示完整 activity.line、
+// 左栏 §16.6 零 diff（50 次 version bump 重渲染逐行恒等）。
+    ["verify-companion-panel", ['node', '--import', 'tsx/esm', 'scripts/verify-companion-panel.tsx']],
   ],
   'input-terminal': [
 // 按键解析回归（issue #110）：Option+Enter（ESC CR）精确/合并/分块
 // 三种到达形态、CSI-u 与 modifyOtherKeys 的 Shift/Ctrl/Meta+Enter。
     ["verify-keys", ['node', '--import', 'tsx/esm', 'scripts/verify-keys.tsx']],
+// 侧栏 Phase 1 控制器键盘契约（真 stdin 注入）：ctrl+b 三态循环、面板聚焦
+// 时 ←/→ 与 [ ] 循环、数字直达、z 缩放、+/- 调宽（面板+4/chat+4）、plain
+// 键吞掉、ctrl 组合放行、alt+z 全局缩放、窄终端/编辑器打开时无效；含
+// 已知缺陷 tripwire（真 Esc 带 meta 被放行，见脚本头注）。
+    ["verify-side-panel-keys", ['node', '--import', 'tsx/esm', 'scripts/verify-side-panel-keys.tsx']],
 // 终端能力探测回归：延迟 OSC/XTVERSION 回复期间保持 raw mode，
 // 回复只进 querier，不回显成终端残影。
     ["verify-terminal-queries", ['node', '--import', 'tsx/esm', 'scripts/verify-terminal-queries.tsx']],
@@ -236,6 +282,15 @@ const GROUPS = {
 // 事件而不是逐键泄漏进输入框；截断的鼠标候选在 flush 时丢弃，单独
 // Escape/未知 CSI/物理键不受影响。
     ["verify-win32-protocol", ['node', '--import', 'tsx/esm', 'scripts/verify-win32-protocol.ts']],
+// 拖放文件粘贴回归：Windows 把拖入的文件名作为 OSC 8 超链接
+// （ESC ] 8 ; params ; file:///… ST）送入，win32-input-mode 还会把它拆成
+// 逐字符记录——ESC 被当协议消费后，OSC 参数残渣（[16;42;0;1;16;1…）会
+// 落进输入框。粘贴载荷只剥「完整 OSC 帧」（含终止符）：恢复后的拖放载荷
+// 里不得再出现 ESC 字节或 file:// 文本；CSI/ESC 字面文本与全部 C0 控制字节
+// （含 TAB/CR/LF/DEL）按原样交给 composer 压平（T05 hotfix：parser 侧删
+// C0 会吃掉 composer 应得的空格），file:// URI 仍能解码成路径进入图片/
+// 附件管线。
+    ["verify-paste-drop", ['node', '--import', 'tsx/esm', 'scripts/verify-paste-drop.ts']],
 // 退出漏斗回归（issue #12）：上下文 teardown 不得走到进程退出。
     ["verify-teardown-exit", ['node', '--import', 'tsx/esm', 'scripts/verify-teardown-exit.tsx']],
 // 退出 resume marker 回归（issue #42）：仅有实际消息或 pending 操作时保留 marker。
@@ -316,6 +371,22 @@ const GROUPS = {
 // 且有提示、已被本轮取走时如实报「撤不回来」且副本留在队列、文本不匹配的排队
 // 项一律不动。
     ["verify-prompt-history-queue-retract", ['node', 'scripts/verify-prompt-history-queue-retract.mjs']],
+// Shift+Tab 会话模式回归（真实 PromptInput + `\x1b[Z`）：一次按键恰好一次
+// cycleMode、不吃发送/排队；并钉住按键入口的失败契约——桩返回 rejected
+// promise 时入口必须自己兜住（通知 + 无 unhandledRejection + 处理器仍活），
+// 这条在缺 `.catch` 时必红。
+    ["verify-shift-tab-mode", ['node', 'scripts/verify-shift-tab-mode.mjs']],
+// SGR 鼠标上报分片回归（issue #1160 macOS→SSH 会话重启后、#1120 WSL2 + dsh web）：
+// 穷举一条 `ESC[<btn;col;rowM/m` 上报的 2-way / 3-way 切点（每个切点后一次
+// escape flush），断言草稿收到的文本里不出现上报字节（修复前 cut=2/3 与 3-way
+// 的 a=1/2/3 家族会整条泄漏）；另覆盖 provenance=false 的反吞噬表（字面 `[<`、
+// `[<35;10`、Esc 后接 `[` 必须原样通过）与 hold 上界/到期释放（>1000ms 或 >64B
+// 必须把持有字节按普通键回放，不丢字节、不重复）。
+    ["verify-mouse-report-fragments", ['node', '--import', 'tsx/esm', 'scripts/verify-mouse-report-fragments.tsx']],
+// 注：verify-permission-modes 不在此登记。该脚本在基线（dd413712）上本就有
+// 22 处失败（Shift+Tab 循环相关的动态 preset / 官方命令路径整段未过），
+// 与本次改动无关；把它放进阻塞组会直接红掉 input-terminal。等脚本自身修好
+// 后再单独登记。
   ],
   'session-workspace': [
 // 跨代理会话迁移回归（claude-code/codex/omp/zcode/grok-build → DSH sessions）：
@@ -426,6 +497,14 @@ const GROUPS = {
 // 能一路走到最旧并在那里钳住、本次进程提交的条目排在持久化条目之后且
 // 接缝处不重复、重新挂载（重启）后仍能召回。
     ["verify-prompt-history-persist", ['node', 'scripts/verify-prompt-history-persist.mjs']],
+// 草稿撤销回归：Ctrl+Z 是输入框草稿的词级撤销（两种按键编码等价、CJK 走
+// ICU 分词、700ms 空闲切步、粘贴/提交/召回/Esc 清空的栈语义、图片能力保活），
+// 且与 Esc Esc 的会话回溯不是一回事（栈空不触发 rewind）。
+    ["verify-prompt-undo", ['node', 'scripts/verify-prompt-undo.mjs']],
+// SIGCONT 恢复 raw mode 回归：Ctrl+Z 不再自停，外部 stop（kill -STOP / shell
+// suspend）后 shell 把 tty 留在自己的 cooked 模式，SIGCONT 必须把 termios 放回，
+// 否则输入框只画帧、按键被行规吃掉。
+    ["verify-sigcont-rawmode", ['node', 'scripts/verify-sigcont-rawmode.mjs']],
 // 文件补全回归（issue #278）：CMake 构建目录与任意大型兄弟目录不得
 // 独占 100 条全局预算，普通深层源码也不能被固定深度静默截断。
     ["verify-file-completion", ['node', 'scripts/verify-file-completion.mjs']],
@@ -546,6 +625,10 @@ const GROUPS = {
     ['verify-agent-lifecycle-compat', ['node', 'scripts/verify-agent-lifecycle-compat.mjs']],
     ['verify-bundled-presets', ['node', 'scripts/verify-bundled-presets.mjs']],
     ['verify-preset-startup', ['node', 'scripts/verify-preset-startup.mjs']],
+// 随包用户手册（guide/）：副本与 docs/ 逐字节一致 + SKILL.md 能被内核加载 +
+// 发布面与启动器真的把它带上。npm 包原本不含任何用户文档，用户机器上的 AI
+// 无从"查手册回答"；这条门禁保证手册在包内且没漂移。
+    ['verify-guide', ['node', 'scripts/verify-guide.mjs']],
     ['verify-message-compat', ['node', 'scripts/verify-message-compat.mjs']],
     ['verify-settings-compat', ['node', '--import', 'tsx/esm', 'scripts/verify-settings-compat.mjs']],
 // 设置读点的 ns 归属（issue #1124）：分区注册与写入用 Config owner 的 Loader id
@@ -558,12 +641,29 @@ const GROUPS = {
 // #1030：隔离 locale、持久化 /lang 与环境变量，不能靠 CI 的 zh 默认掩盖脚本依赖。
     ['verify-regression-language', ['node', 'scripts/verify-regression-language.mjs']],
     ["verify-context-warning", ['node', '--import', 'tsx/esm', 'scripts/verify-context-warning.mjs']],
+// 占用单一真源回归（PR2）：官方 `contextPressure` 投影在场时占用 = `projectedTokens ??
+// pressureTokens`（与会话累计未缓存输入解耦、随投影变更重发、非 completed 回合也评估
+// 告警、压缩检查点不改写本地量），投影缺席（裸 cordis.yml 无 token-meter）时回退到
+// 上次成功请求的计费采样且软失败不抛。
+    ["verify-context-occupancy", ['node', '--import', 'tsx/esm', 'scripts/verify-context-occupancy.ts']],
+// 分段估算口径回归（#1170）：estimateTokens 由 chars/4 改为 CJK 感知的纯函数——
+// 单条纯 ASCII 与旧口径相同（显式快路径；跨消息累加因改为逐条 ceil 会有 ≤1
+// token/条的舍入差），中文/全角按 ~1.4 字符/token、其它脚本按 ~2；单调不减、
+// 非负、代理对与 ANSI 转义的处理都在这里钉死。
+    ["verify-cjk-token-estimate", ['node', '--import', 'tsx/esm', 'scripts/verify-cjk-token-estimate.ts']],
     ["verify-channel-goal-todo", ['node', '--import', 'tsx/esm', 'scripts/verify-channel-goal-todo.mjs']],
 // IDE 选区通道回归（PR #562）：纯函数（env 直连/lock 扫描与 workspace
 // 匹配过滤/hello_ack 解析/selection_changed 校验）、无 IDE 静默降级、
 // loopback 对连（token 握手 ACK、错误 token 换下一候选、断连清空）、
 // 选区消费（text 优先/磁盘回退/截断计数/replay 指示回扫）。
     ["verify-ide-channel", ['node', '--import', 'tsx/esm', 'scripts/verify-ide-channel.tsx']],
+// 「Send to Chat」channel 层回归（侧栏设计 §6.7）：attach/detach/consume 的投影
+// 语义（id 自增、重复 sourceId+title 替换、超限截断 + truncated）与
+// <attached-context …> 块形状（转义、截断标记）；真 channel 的提交 payload 经
+// composer 路径附块、提交后 chip 清空、consume-once、真实 /new 切换清空；
+// 真 PromptInput 的 chip 上屏/在输入行上方/多枚横排/超宽单行截断，以及 Esc 分层
+// （第一次只清 chip 不动草稿，第二次才清草稿）。
+    ["verify-attached-context", ['node', '--import', 'tsx/esm', 'scripts/verify-attached-context.tsx']],
     ["verify-whale-toggle", ['node', '--import', 'tsx/esm', 'scripts/verify-whale-toggle.mjs']],
 // 开屏大字字体设置（splashFont）：每个 id 解析到自己那款、daily 交回按天轮换、
 // 非法值回落 daily、channel 往返、/settings 选项覆盖全部取值、Config 默认值，
@@ -592,6 +692,54 @@ const GROUPS = {
 // toast、kill 权限传递、无 jobs 服务降级、/new 重置）、JobCard/JobsPanel
 // 渲染冒烟（三行瀑布、settled 折叠、面板行/提示）。
     ["verify-jobs-panel", ['node', '--import', 'tsx/esm', 'scripts/verify-jobs-panel.tsx']],
+// jobs 侧栏迁移回归：SidePanelColumn/PanelHost 内挂真实 useSidePanel 与假
+// channel——badge（running→info、未见 failed→error、打开清错）、名册渲染、
+// usePanelInput 分派（↓ 移动 / 双 k kill / Esc 让出回聊天）、SGR 点击聚焦、
+// jobsFocusStore 聚焦通道（nonce 重放）。
+    ["verify-jobs-side-panel", ['node', '--import', 'tsx/esm', 'scripts/verify-jobs-side-panel.tsx']],
+// agents 侧栏迁移回归：SubagentDashboard/SubagentDetailScene 的 panel variant
+// 挂在 PanelHost 内——badge（running→info、未见 failed→error、打开清错）、
+// 面板内 dashboard 渲染（1 格外边距 + 分隔线跟随面板列宽）、Enter 进详情、
+// ←/→ 翻页、**详情 Esc 回 dashboard 且焦点仍在右栏**、dashboard Esc 让出回
+// 聊天、二级路由跨切面板保留、x 中断、SGR 点击开卡、名册缺行回落 dashboard。
+    ["verify-agents-side-panel", ['node', '--import', 'tsx/esm', 'scripts/verify-agents-side-panel.tsx']],
+// 侧栏鼠标契约：PanelBar 标签可点（切换活动面板）且 hover 高亮、⤢ 只对声明
+// capabilities.fullscreen 的面板出现并把**活动** id 交给宿主、点聊天列交还焦点。
+    ["verify-side-panel-mouse", ['node', '--import', 'tsx/esm', 'scripts/verify-side-panel-mouse.tsx']],
+// 轨迹侧栏迁移回归：TrajectoryPanel 经真实投影渲染唤醒带/账本/检视器——
+// 空态、↑/↓ 经分发器移动选中、Tab/→ 切视图、Enter 展开再收起、Esc 恒不消费、
+// SGR 真鼠标点行聚焦、visible=false 零写流（visible=true 对照有写）、28/40 列不溢出。
+    ["verify-trajectory-panel", ['node', '--import', 'tsx/esm', 'scripts/verify-trajectory-panel.tsx']],
+// 信息栏回归：分组键值渲染（模型/思考深度/模式/权限/上下文/缓存/TPS/消耗/工作目录/
+// 会话标题与 ID）、无数据回落 ——、长值截断不溢出、窄列可读、visible=false 不订阅。
+    ["verify-info-panel", ['node', '--import', 'tsx/esm', 'scripts/verify-info-panel.tsx']],
+// 工作目录（工作区）面板回归：账本渲染与当前项高亮、缺失目录标记、长路径不溢出、
+// 失败分支、↑/↓ 选择、滚轮、鼠标点行与 hover、visible=false 不重复拉取。
+    ["verify-workspace-panel", ['node', '--import', 'tsx/esm', 'scripts/verify-workspace-panel.tsx']],
+// 侧栏注册冒烟：内置面板注册齐（单格图标 + capabilities.fullscreen 位）且经真实
+// PanelHost 挂载——标签渲染、点 ⓘ 切到信息栏、点 ∿ 切到轨迹空态、⤢ 只在该出现时出现。
+    ["verify-side-panel-registry", ['node', '--import', 'tsx/esm', 'scripts/verify-side-panel-registry.tsx']],
+// 鲸娘皮肤回归：GIF→字母格素材包（22 动画/267 帧/30 色调色板，确定性构建）、
+// 皮肤注册与 mood/heart/celebrate 落点、缺素材回退、设置切换生效、两包缓存不串色。
+    ["verify-whale-girl-skin", ['node', '--import', 'tsx/esm', 'scripts/verify-whale-girl-skin.tsx']],
+  ["verify-splash-mascot", ['node', '--import', 'tsx/esm', 'scripts/verify-splash-mascot.tsx']],
+// 宠物代言通知路由：companion 为活动面板时新通知走头顶气泡、输入框 toast 不
+// 重复（同一提交切换无闪烁）；其他面板 toast 照旧；error 色恒 toast。
+    ["verify-companion-toast-routing", ['node', '--import', 'tsx/esm', 'scripts/verify-companion-toast-routing.tsx']],
+// todo 侧栏折叠回归：TodoPanelAdapter 传 onToggle/collapsed——真 SGR 点头部折叠/
+// 展开、Enter/空格切换、整屏 variant='default' 行为零变化对照；含 ink 500ms 双击
+// 窗口的探针坑（第二次同点位点击前 sleep>500ms）。
+    ["verify-todo-side-panel", ['node', '--import', 'tsx/esm', 'scripts/verify-todo-side-panel.tsx']],
+// 侧栏滚动绘制回归：窄于屏幕的 ScrollBox 滚动不再用满宽 DECSTBM 快路径——分界栏
+// 逐行 │/├ 完好、对侧列逐字节稳定（滚轮 64/65 与 ↑/↓ 双驱动、双向互证）。
+    ["verify-side-panel-scroll-paint", ['node', '--import', 'tsx/esm', 'scripts/verify-side-panel-scroll-paint.tsx']],
+// 侧栏选择围栏（方向感知）：面板内起拖可选可复制面板文字（逐行列钳制不跨
+// 聊天列）；聊天起拖维持 §4.6 不捕面板字符。真 SGR press/motion/release 驱动。
+    ["verify-side-panel-selection", ['node', '--import', 'tsx/esm', 'scripts/verify-side-panel-selection.tsx']],
+// 连续任务卡成组（JobGroupRow/JobGroupHeader）：组头汇总、组内取消空行与
+// 链式连接线、落定整组折叠、点击/悬停/Ctrl+O 展开、失败数留在折叠行、
+// 非相邻不成组、单卡原样，以及 jobGroupFold=auto/always/never 三档行为。
+    ["verify-jobs-transcript-group", ['node', '--import', 'tsx/esm', 'scripts/verify-jobs-transcript-group.tsx']],
 // #185 自愈守卫：React nested-update overflow（Minified error #185）抛出时
 // reconciler 已清零计数器，守卫在 clock.tick / reveal.tick / scrollbox.notify /
 // channel.emit(+emitStream) / selection.notify 等高频 enqueue 热点吸收该类
@@ -779,6 +927,10 @@ const GROUPS = {
 // 插件场景渲染崩溃边界：Thrower 场景必须被 PluginSceneBoundary 接住——
 // onError 精确一次、崩溃场景停止绘制、进程存活；健康场景不受影响。
     ["verify-plugin-scene-boundary", ['node', '--import', 'tsx/esm', 'scripts/verify-plugin-scene-boundary.tsx']],
+// ctx.tuiPanels 全链（§18 Phase 6）：准入/前缀 id/预算/重复 id ledger/
+// open 限速/跨插件所有权/订阅过滤/崩溃禁用/释放撤下 + 无头渲染冒烟
+// （插件面板抛错出错误卡、3 次崩溃出禁用卡、Chat 侧不受影响）。
+    ["verify-plugin-panels", ['node', '--import', 'tsx/esm', 'scripts/verify-plugin-panels.tsx']],
 // 终端点击目标回归（点击链接开浏览器 / 文件路径弹菜单）：路径判定、
 // dsh-file: URL 编解码、相对路径按 cwd 解析、file:// 转换、Windows
 // start 组装——fileTarget.ts / openExternal.ts 的纯函数部分。
@@ -842,13 +994,15 @@ if (!wholeGroup) {
   process.exit(2)
 }
 
-/** 解析 --shard i/n（缺省 1/1）与 --list。参数非法一律 exit 2，不能静默跑整组。 */
+/** 解析 --shard i/n（缺省 1/1）、--list 与 --record-timings。参数非法一律 exit 2，不能静默跑整组。 */
 const flags = process.argv.slice(3)
 let shard = { index: 1, count: 1 }
 let listOnly = false
+let recordTimings = false
 for (let i = 0; i < flags.length; i++) {
   const flag = flags[i]
   if (flag === '--list') { listOnly = true; continue }
+  if (flag === '--record-timings') { recordTimings = true; continue }
   const value = flag === '--shard' ? flags[++i] : flag.startsWith('--shard=') ? flag.slice('--shard='.length) : undefined
   const m = value === undefined ? null : /^([1-9]\d*)\/([1-9]\d*)$/.exec(value)
   if (flag !== '--shard' && !flag.startsWith('--shard=')) {
@@ -861,7 +1015,28 @@ for (let i = 0; i < flags.length; i++) {
   }
   shard = { index: Number(m[1]), count: Number(m[2]) }
 }
-const group = wholeGroup.filter((_, i) => i % shard.count === shard.index - 1)
+const TIMINGS_FILE = new URL('./ci-group-timings.json', import.meta.url)
+const timings = JSON.parse(readFileSync(TIMINGS_FILE, 'utf8'))
+const measured = timings[groupName] ?? {}
+const known = wholeGroup.map(([name]) => measured[name]).filter(s => typeof s === 'number' && s > 0).sort((a, b) => a - b)
+const fallbackSeconds = known.length > 0 ? known[Math.floor(known.length / 2)] : 1
+const estimate = name => typeof measured[name] === 'number' && measured[name] > 0 ? measured[name] : fallbackSeconds
+
+// 最长处理时间优先装箱：同耗时按登记顺序，同负载取编号小的片——同一份输入
+// 在每个 matrix job 里算出同一个划分。
+const owner = new Array(wholeGroup.length)
+const loads = new Array(shard.count).fill(0)
+for (const i of wholeGroup.map((_, i) => i).sort((a, b) => estimate(wholeGroup[b][0]) - estimate(wholeGroup[a][0]) || a - b)) {
+  let lightest = 0
+  for (let s = 1; s < shard.count; s++) if (loads[s] < loads[lightest]) lightest = s
+  owner[i] = lightest
+  loads[lightest] += estimate(wholeGroup[i][0])
+}
+if (owner.some(s => !(s >= 0 && s < shard.count))) {
+  console.error('[run-ci-group] 分片划分内部错误：有条目未分配到任何片')
+  process.exit(2)
+}
+const group = wholeGroup.filter((_, i) => owner[i] === shard.index - 1)
 const label = shard.count === 1 ? groupName : groupName + ' ' + shard.index + '/' + shard.count
 // 分片数超过组内条目数时后面的片是空的：exit 0 会报"全部 0 项通过"，ci.yml 里
 // 一个写错的 matrix 就能让整片静默变绿。空片判配置错误，与非法参数同级。
@@ -871,8 +1046,9 @@ if (group.length === 0) {
 }
 
 if (listOnly) {
-  console.log(label + '（' + group.length + '/' + wholeGroup.length + ' 项）')
-  for (const [name] of group) console.log('  ' + name)
+  console.log(label + '（' + group.length + '/' + wholeGroup.length + ' 项，预计 ' + loads[shard.index - 1].toFixed(0) + 's；各片 '
+    + loads.map(s => s.toFixed(0) + 's').join(' / ') + '）')
+  for (const [name] of group) console.log('  ' + name + '  ~' + estimate(name).toFixed(1) + 's' + (name in measured ? '' : '（无实测，按中位数）'))
   process.exit(0)
 }
 
@@ -940,6 +1116,17 @@ if (process.env.GITHUB_STEP_SUMMARY) {
     ...rows.map(r => '| ' + (r.failed ? '✗ exit ' + r.status : '✓') + ' | ' + r.name + ' | ' + fmt(r.seconds) + ' |'),
     '',
   ].join('\n'))
+}
+
+if (recordTimings) {
+  const next = JSON.parse(readFileSync(TIMINGS_FILE, 'utf8'))
+  const entries = { ...(next[groupName] ?? {}) }
+  for (const r of results) if (!r.failed) entries[r.name] = Math.round(r.seconds * 10) / 10
+  // 只保留仍登记在组里的条目，按名字排序，diff 可读。
+  const names = new Set(wholeGroup.map(([name]) => name))
+  next[groupName] = Object.fromEntries(Object.keys(entries).filter(n => names.has(n)).sort().map(n => [n, entries[n]]))
+  writeFileSync(TIMINGS_FILE, JSON.stringify(next, null, 2) + '\n')
+  console.log('[run-ci-group] 已写回 ' + groupName + ' 的实测耗时（' + results.filter(r => !r.failed).length + ' 项）')
 }
 
 const failedList = results.filter(r => r.failed)

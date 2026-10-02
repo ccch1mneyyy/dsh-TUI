@@ -7,13 +7,14 @@ import type { HostEffectClass } from '../ports/owner.js'
 
 type MethodKeys<T> = { [K in keyof T]: T[K] extends (...args: never[]) => unknown ? K : never }[keyof T]
 export type ChannelPreferences = Pick<ChannelUi,
-  | 'setDiffLayout' | 'setThinkingFold' | 'setToolBackground' | 'setScrollGutter'
+  | 'setDiffLayout' | 'setThinkingFold' | 'setJobGroupFold' | 'setToolBackground' | 'setScrollGutter'
   | 'setPageMargin' | 'setFoldTerminalCommand' | 'setPromptSessionLabel'
-  | 'setExpandEditor' | 'setSmoothStreaming' | 'setStatusBar' | 'setWhale' | 'setWhaleIdle' | 'setWhaleGirl' | 'setMinimal' | 'setSplashFont'
+  | 'setExpandEditor' | 'setSmoothStreaming' | 'setStatusBar' | 'setWhale' | 'setWhaleIdle' | 'setWhaleGirl' | 'setMinimalUi' | 'setMinimal' | 'setSplashFont'
 >
 export const CHANNEL_UI_EFFECTS = Object.freeze({
   'setDiffLayout': 'mutate',
   'setThinkingFold': 'mutate',
+  'setJobGroupFold': 'mutate',
   'setToolBackground': 'mutate',
   'setScrollGutter': 'mutate',
   'setPageMargin': 'mutate',
@@ -26,13 +27,24 @@ export const CHANNEL_UI_EFFECTS = Object.freeze({
   'setWhaleIdle': 'mutate',
   'setSplashFont': 'mutate',
   'setWhaleGirl': 'mutate',
+  'setMinimalUi': 'mutate',
+  // Deprecated pre-rename alias of setMinimalUi (see the port's doc comment).
   'setMinimal': 'mutate',
   'commandCompletions': 'mutate',
+  // Pure description of the agent's mounted capabilities: no service is
+  // acquired, no cache warmed, no notice published (see
+  // dsh-adapter/channel/capabilities.ts).
+  'capabilities': 'read-only',
   'runExternalCommand': 'mutate',
   'runExternalCommandOutcome': 'mutate',
   'openPluginScene': 'mutate',
   'closePluginScene': 'mutate',
   'sideQuestion': 'mutate',
+  // "Send to Chat" (side-panel §6.7): staging/removing a context chip is a
+  // composer mutation; the projection itself is the read-only
+  // `attachedContexts` property below.
+  'attachContext': 'mutate',
+  'detachContext': 'mutate',
   'stagedImageGeneration': 'read-only',
   'stageImage': 'mutate',
   'stageComposerImage': 'mutate',
@@ -157,11 +169,13 @@ export const CHANNEL_UI_PROPERTIES = [
   'reasoningEffort',
   'effortLevels',
   'lastUsage',
+  'contextOccupancy',
   'tps',
   'tpsSamples',
   'activityFrames',
   'diffLayout',
   'thinkingFold',
+  'jobGroupFold',
   'toolBackground',
   'scrollGutter',
   'pageMargin',
@@ -174,6 +188,8 @@ export const CHANNEL_UI_PROPERTIES = [
   'whaleIdle',
   'splashFont',
   'whaleGirl',
+  'minimalUi',
+  // Deprecated pre-rename alias of minimalUi (see the port's doc comment).
   'minimal',
   'activityEnabled',
   'contextBarEnabled',
@@ -191,7 +207,8 @@ export const CHANNEL_UI_PROPERTIES = [
   'mode',
   'modeIndex',
   'agentPreset',
-  'selection'
+  'selection',
+  'attachedContexts'
 ] as const satisfies readonly (keyof ChannelUi)[]
 
 // Both inventories are exhaustive: adding a public property is a compile error

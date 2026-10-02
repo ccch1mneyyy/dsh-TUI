@@ -131,10 +131,22 @@ const channel = [
   'channel/agent-view-projection.ts',
 ].map(path => readFileSync(new URL(`../src/dsh-adapter/${path}`, import.meta.url), 'utf8')).join('\n')
 const patch = readFileSync(new URL('../cordis.patch.yml', import.meta.url), 'utf8')
+// Ownership resolves through the session's OWN header cwd, exactly like the
+// `cwd:` handed to `createChannel`. Attaching a resumed session to the LAUNCH
+// directory instead accounts one session in two workspaces whenever the launch
+// directory is an ancestor of the session's (`~/projects` vs
+// `~/projects/app`); the durable ledger then rejects the next boot with
+// "session ... is accounted by both workspace ...". Pin the source expression
+// because the failure only surfaces one boot later, in another process.
 assert.match(
   plugin,
+  /const ownershipCwd = agent\.session\.header\.cwd \?\? meta\.cwd\r?\n\s+const attached = await attachSessionToWorkspace\(ctx, ownershipCwd, agent\.session\.id\)/,
+  'startup attaches both newly-created and resumed sessions, and a resumed session keeps its own workspace',
+)
+assert.doesNotMatch(
+  plugin,
   /await attachSessionToWorkspace\(ctx, meta\.cwd, agent\.session\.id\)/,
-  'startup attaches both newly-created and resumed sessions',
+  'startup must never account a session in the launch directory workspace',
 )
 assert.doesNotMatch(plugin, /if \(created\)/, 'startup attachment must not skip resumed legacy sessions')
 // The launch-time --resume path mounts the log before the mount publisher is

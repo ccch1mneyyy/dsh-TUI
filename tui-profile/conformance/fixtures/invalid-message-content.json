@@ -1,0 +1,3 @@
+{
+  "eventType":"messages.observe","eventVersion":"0.15","eventId":"evt-3","scope":"session:demo","sequence":2,"privacyClass":"internal","summary":"malformed content block","payload":{"kind":"message.received","messageId":"msg-3","content":[{"type":"text"}]}
+}

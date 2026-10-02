@@ -107,6 +107,16 @@ function fixture(jobs?: unknown, options: { throwOnEvent?: string; effectCleanup
   bindChannelCommands(raw, mount.channel)
   mount.channel.setWhale(false)
   assert.equal(raw.whale, false)
+  // The minimal-UI flag: `minimal` stays a live deprecated alias of
+  // `minimalUi`, both on the raw state and through the frozen UI projection,
+  // and the deprecated setter still drives the same flag.
+  mount.channel.setMinimalUi(true)
+  assert.equal(raw.minimalUi, true)
+  assert.equal(raw.minimal, true, 'deprecated `minimal` alias reads minimalUi')
+  assert.equal(mount.channel.minimal, true, 'deprecated `minimal` alias survives the UI projection')
+  mount.channel.setMinimal(false)
+  assert.equal(raw.minimalUi, false, 'deprecated `setMinimal` alias writes minimalUi')
+  assert.equal(mount.channel.minimalUi, false)
   mount.channel.submit('hello')
   await tick()
   assert.ok(writes.includes('submit'))

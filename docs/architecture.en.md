@@ -23,17 +23,29 @@ Cordis profile
 | --- | --- |
 | `src/index.ts` | Cordis plugin name, injection declaration, config interface, and Schema; keep the entry small and lazy |
 | `src/dsh-adapter/plugin.ts` | TTY guard, service assembly, Agent create/resume, React mount, and the single cleanup funnel |
+| `src/dsh-adapter/oauth/`, `src/oauth.ts` | pi-ai subscription OAuth routes, `/auth` command, credential store, and question bridge; DeepSeek account sign-in delegates to the Host, and the public subpath only forwards to the internal implementation |
 | `src/dsh-adapter/questions-answerer.ts` / `preset-resolution.ts` | Prerelease dispatch for user questions and agent presets; consumers stay unaware of upstream version branches |
 | `src/dsh-adapter/channel.ts` | Channel composition root: options/services, owner/binding, specialist wiring, one install, final start/release, and compatibility exports |
 | `src/workspaces.ts` | Local-path fallback and generic workspace-provider registry; it must contain no provider protocol, copy, or dependency |
 | `src/screens/Chat.tsx` | Modal precedence, global keys, scroll/search/selection state, and slash dispatch |
 | `src/components/` | User views and design-system primitives; no Agent or session source of truth |
+| `src/components/sidePanel/` (`SidePanelLayout`, `PanelHost`) | Chat/side-panel split: geometry (`dimensions`), the seam, the `PanelBar` tab strip and panel host, and the `useSidePanel` controller; mounted inside Chat's main return, it only arranges boxes and re-provides the TerminalSize / SurfaceEdges contexts — it never touches message rendering and never copies channel state |
 | `src/ui.ts` | Themed `Box`/`Text`, render, selection, scroll, and other public TUI primitives |
 | `src/theme.ts`, `src/themeCatalog.ts` | Built-in, static JSON, and runtime plugin theme resolution and catalog ordering |
 | `src/dsh-adapter/themes.ts` | The `ctx.tuiThemes` theme seam, registration lifecycle, and private host facade |
 | `src/ink/` | Ink-based renderer, terminal protocol, events, selection, and Yoga bridge; sensitive infrastructure |
 | `src/native-ts/yoga-layout/` | Pure JS/TS layout implementation |
 | `cordis.patch.yml` | Profile bundle layer, service rows, overrides, and mount ordering |
+
+The standard profile still mounts the internal `./oauth` entry as the
+`dsh-tui-auth` Cordis row before the TUI, with row-level
+`inject: [llm, commands]` preserving registration order. The TUI consumes
+status and actions through `ctx.dshAuth`; it does not implement model or OAuth
+protocols. pi-ai subscriptions keep their existing credential location and
+use the host's pi-ai flows; the DeepSeek account route delegates PKCE,
+credentials, and model routing to `ctx.deepseekAccount`. The TUI-only
+`dsh-tui-webserver` row supplies its browser callback. Bare `cordis.yml`
+does not insert these rows and has a different topology.
 
 The `channel.ts` responsibilities are split across these files:
 

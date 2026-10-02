@@ -6,7 +6,7 @@ import { t } from '../../i18n.js'
 import { modeDisplayName, type SessionModeSpec } from '../../sessionModes.js'
 import { snapshotLiveSessionEvents } from '../compat/liveSession.js'
 import type { createChannelBinding } from './binding.js'
-import { createModeActions } from './mode-actions.js'
+import { createModeActions, reportModeSwitchFailure } from './mode-actions.js'
 import { createPermissionIdentity, foldPermissionPreset, type PermissionIdentity } from './mode-permission.js'
 import type { PermissionModeRoster } from './mode-roster.js'
 import type { ChannelState } from './types.js'
@@ -98,8 +98,14 @@ export function createPermissionModeActions(
   state: ModeState,
   deps: Pick<
     BaseModeActionDeps,
-    'owner' | 'runtime' | 'binding' | 'sessionModes' | 'commandService' | 'executeRegistryCommand' | 'notify'
-  > & { roster: PermissionModeRoster },
+    'owner' | 'runtime' | 'binding' | 'sessionModes' | 'executeRegistryCommand' | 'notify'
+  > & {
+    roster: PermissionModeRoster
+    /** Only the permission identity reads the registry directly (#755 is the
+     *  authoritative design for `/permission`); the plan route comes from the
+     *  shared capability facts inside `createModeActions`. */
+    commandService?: { find(agent: Agent, name: string): unknown }
+  },
 ): {
   refreshMode(): void
   cycleMode(): Promise<void>
@@ -114,7 +120,6 @@ export function createPermissionModeActions(
     runtime: deps.runtime,
     binding,
     sessionModes,
-    commandService,
     executeRegistryCommand,
     notify,
   })
@@ -141,8 +146,18 @@ export function createPermissionModeActions(
    *  Permission identity is applied BEFORE plan and atom changes: dynamic
    *  presets use the official command path (or the service write fallback)
    *  and are confirmed by event/registry readback; the TUI never manufactures
-   *  permission events. */
-  const applyMode = async (spec: SessionModeSpec, capture: ModeCapture = binding.capture()): Promise<void> => {
+   *  permission events. Never rejects: a half-applied switch (identity landed,
+   *  atoms refused) is reported and the indicator is re-derived — the caller
+   *  is the Shift+Tab keyboard entry, which cannot await. */
+  const applyMode = async (spec: SessionModeSpec, capture?: ModeCapture): Promise<void> => {
+    try {
+      await applyModeUnsafe(spec, capture ?? binding.capture())
+    } catch (error) {
+      reportModeSwitchFailure(ctx, notify, refreshMode, error)
+    }
+  }
+
+  const applyModeUnsafe = async (spec: SessionModeSpec, capture: ModeCapture): Promise<void> => {
     if (!owner.current() || !binding.isCurrent(capture)) return
     // This action writes durable session policy; the permission switch writes
     // the same kind of durable identity, so it is under the same guard.
@@ -182,12 +197,17 @@ export function createPermissionModeActions(
   }
 
   /** Shift+Tab: advance from the mode DERIVED from the session log (never a
-   *  stored index), so manual `/plan` use can never desync the cycle. */
+   *  stored index), so manual `/plan` use can never desync the cycle. Never
+   *  rejects — same fail-soft contract as {@link applyMode}. */
   const cycleMode = async (): Promise<void> => {
-    const capture = binding.capture()
-    if (!owner.current() || !binding.isCurrent(capture)) return
-    const index = derivePermissionModeIndex(sessionModes, snapshotLiveSessionEvents(capture.agent.session))
-    await applyMode(sessionModes[(index + 1) % sessionModes.length]!, capture)
+    try {
+      const capture = binding.capture()
+      if (!owner.current() || !binding.isCurrent(capture)) return
+      const index = derivePermissionModeIndex(sessionModes, snapshotLiveSessionEvents(capture.agent.session))
+      await applyMode(sessionModes[(index + 1) % sessionModes.length]!, capture)
+    } catch (error) {
+      reportModeSwitchFailure(ctx, notify, refreshMode, error)
+    }
   }
 
   const onSessionEvent = (session: unknown, event: unknown): void => {

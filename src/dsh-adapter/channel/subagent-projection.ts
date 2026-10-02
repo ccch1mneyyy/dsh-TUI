@@ -157,6 +157,7 @@ function createSessionSubagentProjection(
       }
       const view: SubagentRow = {
         agentId: sub.agentId, runId: sub.runId, description: sub.description,
+        ...(sub.mode === undefined ? {} : { mode: sub.mode }),
         provider: sub.provider, model: sub.model || 'default', effort: sub.effort,
         status: sub.status, startedAt: sub.startedAt, completedAt: sub.completedAt,
         durationMs: sub.completedAt ? sub.completedAt - sub.startedAt : Date.now() - sub.startedAt,
@@ -243,7 +244,7 @@ function createSessionSubagentProjection(
   /** Register a discovered child and, when the agents registry currently
    * holds it RUNNING (idle continuable children stay registered without
    * being live), bind its session so streaming state flows. */
-  const discover = (childId: string, info: { label?: string; childCreatedAt?: number; provider?: string; runId?: string }): void => {
+  const discover = (childId: string, info: { label?: string; childCreatedAt?: number; provider?: string; runId?: string; mode?: 'one-shot' | 'continuable' | 'unknown' }): void => {
     let child: ReturnType<typeof deps.lookupChild> | undefined
     try { child = deps.lookupChild(childId) } catch { child = undefined }
     const running = child?.status === 'running'
@@ -253,6 +254,7 @@ function createSessionSubagentProjection(
       live: running,
       provider: info.provider ?? child?.options?.provider,
       model: child?.options?.model,
+      ...(info.mode === undefined ? {} : { mode: info.mode }),
     })
     if (info.runId !== undefined) store.patch(childId, { runId: info.runId })
     if (child?.session) store.linkSession(childId, child.session)
@@ -267,7 +269,7 @@ function createSessionSubagentProjection(
   /** Parent-session durable discovery events, live or folded from the log. */
   const onParentEvent = (event: unknown, historical = false): void => {
     if (!event || typeof event !== 'object') return
-    const ev = event as { type?: string; data?: { childId?: unknown; childCreatedAt?: unknown; label?: unknown; runId?: unknown; seq?: unknown; outcome?: unknown; name?: unknown; arguments?: unknown } }
+    const ev = event as { type?: string; data?: { childId?: unknown; childCreatedAt?: unknown; label?: unknown; mode?: unknown; runId?: unknown; seq?: unknown; outcome?: unknown; name?: unknown; arguments?: unknown } }
     const data = ev.data ?? {}
     const childId = typeof data.childId === 'string' ? data.childId : undefined
     if (ev.type === 'tool/call') {
@@ -280,9 +282,12 @@ function createSessionSubagentProjection(
       return
     } else if (ev.type === 'subagent/catalog') {
       if (childId === undefined) return
+      const rawMode = typeof data.mode === 'string' ? data.mode : undefined
       discover(childId, {
         label: typeof data.label === 'string' ? data.label : undefined,
         childCreatedAt: typeof data.childCreatedAt === 'number' ? data.childCreatedAt : eventTime(event),
+        // v0 rows carry no mode; v1 also retains 'unknown' children.
+        ...(rawMode === 'one-shot' || rawMode === 'continuable' || rawMode === 'unknown' ? { mode: rawMode } : {}),
       })
     } else if (ev.type === 'tool-workflow/agent-start') {
       if (childId === undefined || typeof data.runId !== 'string' || typeof data.seq !== 'number') return

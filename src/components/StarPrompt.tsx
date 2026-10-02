@@ -5,11 +5,13 @@ import { Divider } from './design-system/Divider.js'
 import { HintLine } from './design-system/HintLine.js'
 import { ListItem } from './design-system/ListItem.js'
 import { MaidPortrait, useMaidPortraits } from './maidPortrait.js'
+import { WhaleGirlHappyArt } from './WhaleGirl.js'
 import { useTerminalBackground } from './design-system/ThemeProvider.js'
 import { STANDARD_FRAME_INDEX, WhaleArt } from './Whale.js'
 import { OPENING_SEQUENCES, WHALE_FRAME_INDEX } from './whaleFrames.js'
 import type { TerminalImageSource } from '../ink/terminal-image.js'
 import type { StarMilestone } from '../usageStats.js'
+import type { WhaleCouponNotice } from '../dsh-adapter/oauth/bonus.js'
 
 /** Art slot width — the pixel whale fallback is 40 columns wide, and the
  * raster portrait fits inside the same slot so the card width never moves. */
@@ -305,6 +307,94 @@ export function StarPrompt({
                 </Text>
               </>
             )}
+          </Box>
+        </Box>
+      </Box>
+    </>
+  )
+}
+
+/** The star modal's card and maid art, used only for a confirmed login grant. */
+function couponExpiry(expiresAt: string): { month: string; day: string; time: string } | null {
+  const date = new Date(expiresAt)
+  if (Number.isNaN(date.getTime())) return null
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Asia/Shanghai', month: 'numeric', day: 'numeric',
+    hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
+  }).formatToParts(date)
+  const part = (type: string): string | undefined => parts.find(item => item.type === type)?.value
+  const month = part('month')
+  const day = part('day')
+  const hour = part('hour')
+  const minute = part('minute')
+  return month === undefined || day === undefined || hour === undefined || minute === undefined
+    ? null : { month, day, time: `${hour}:${minute}` }
+}
+
+export function WhaleCouponPrompt({
+  notice,
+  onShown,
+  onClose,
+}: {
+  readonly notice: WhaleCouponNotice
+  readonly onShown: (orderId: WhaleCouponNotice['orderId']) => void
+  readonly onClose: () => void
+}): React.ReactNode {
+  const lang = React.useSyncExternalStore(subscribeLang, getLang)
+  const { columns, rows } = useTerminalSize()
+  const imagesAvailable = useTerminalImages()
+  const portraits = useMaidPortraits(true)
+  const background = useTerminalBackground()
+  const withArt = columns >= MIN_ART_COLUMNS && rows >= MIN_ART_ROWS
+  const textColumns = withArt ? TEXT_COLUMNS : Math.max(1, Math.min(TEXT_COLUMNS, columns - 6))
+  const cardColumns = withArt ? 96 : Math.min(columns, textColumns + 6)
+  const cardRows = withArt ? ART_ROWS + 2 : Math.min(rows, 15)
+  const left = Math.max(0, Math.floor((columns - cardColumns) / 2))
+  const bottom = Math.max(0, Math.min(Math.floor((rows - cardRows) / 2), rows - cardRows))
+  const amount = notice.amount.replace(/(\.\d*?)0+$/u, '$1').replace(/\.$/u, '')
+  const unit = lang === 'zh' ? notice.currency === 'CNY' ? '元' : '美元' : notice.currency
+  const expiry = couponExpiry(notice.expiresAt)
+
+  React.useEffect(() => {
+    const timer = setTimeout(() => onShown(notice.orderId), 0)
+    return () => { clearTimeout(timer) }
+  }, [notice.orderId, onShown])
+  useInput((_input, key) => {
+    if (key.return || key.escape) onClose()
+  })
+
+  return (
+    <>
+      <Box position="absolute" bottom={0} left={0} width="100%" height={rows}
+        flexShrink={0} backdrop="dim" onClick={onClose} />
+      <Box position="absolute" left={left} bottom={bottom} width={cardColumns} height={cardRows}
+        flexDirection="column" flexShrink={0} overflow="hidden" backgroundColor={background} opaque
+        onClick={event => { event.stopImmediatePropagation() }}>
+        <Box flexDirection="row" gap={2} alignItems="center" justifyContent="center"
+          borderStyle="round" borderColor="inactive" paddingX={2} backgroundColor={background}>
+          {withArt && (
+            <Box width={ART_COLUMNS} height={ART_ROWS} flexShrink={0} flexDirection="column"
+              alignItems="center" justifyContent="center" backgroundColor={background} opaque>
+              <Confetti width={ART_COLUMNS} />
+              {imagesAvailable && portraits?.happy !== undefined
+                ? <MaidPortrait source={portraits.happy} maxColumns={ART_COLUMNS}
+                    maxRows={ART_ROWS - CONFETTI_ROWS} presentation="preview" />
+                : <WhaleGirlHappyArt source={portraits?.happy} width={ART_COLUMNS} />}
+            </Box>
+          )}
+          <Box flexDirection="column" width={textColumns} {...(withArt ? { height: ART_ROWS } : {})}>
+            <Text color="accent" bold wrap="truncate-end">{t('coupon-modal-title')}</Text>
+            <Box height={1} />
+            <Text color="success" bold wrap="wrap">{t('coupon-modal-received', { amount, unit })}</Text>
+            {expiry !== null && (
+              <>
+                <Box height={1} />
+                <Text wrap="wrap">{t('coupon-modal-expiry', expiry)}</Text>
+              </>
+            )}
+            <Box flexGrow={1} />
+            <Divider width={textColumns} />
+            <Text dimColor wrap="truncate-end"><HintLine text={t('coupon-modal-hint')} /></Text>
           </Box>
         </Box>
       </Box>

@@ -24,6 +24,8 @@
  *   newline); `dd` deletes the whole line including its newline
  * - `I` lands on the line's first non-blank; `/` works in NORMAL (inserts
  *   the slash and returns to INSERT so the command menu can open)
+ * - `/` in NORMAL is a vim-stack command: `u` reverts the slash, and after
+ *   INSERT typing a draft `Ctrl+Z` keeps the slash (never peels it alone)
  *
  * Run after build: `node scripts/verify-vim-mode.mjs`
  */
@@ -320,6 +322,21 @@ await settle(() => badge() === 'NORMAL')
 // ── '/' opens the command menu even in NORMAL ─────────────
 stdin.write('/') // inserts '/' and returns to INSERT
 check('/ in NORMAL inserts and returns to INSERT', await settled(() => screen().includes('>/ab') && badge() === 'INSERT'), JSON.stringify(screen()))
+// R3: the slash is a NORMAL command, so it lands on the VIM stack — Esc back
+// to NORMAL then `u` reverts it, leaving the draft exactly as before.
+stdin.write('\x1b') // INSERT → NORMAL
+await settle(() => badge() === 'NORMAL')
+stdin.write('u')
+check("R3: '/' is one vim-undo step (u reverts the slash)", await settled(() => screen().includes('>ab') && !screen().includes('>/ab')), JSON.stringify(screen()))
+// R3: and it must NOT enter the draft stack. After '/' + INSERT typing,
+// Ctrl+Z returns to the text that already holds the '/', never peeling the
+// slash off on its own.
+stdin.write('/') // NORMAL → INSERT, slash inserted again
+await settled(() => screen().includes('>/ab') && badge() === 'INSERT')
+stdin.write('x') // INSERT typing after the slash
+await settle(() => screen().includes('>/xab'))
+stdin.write('\x1a') // Ctrl+Z: the draft stack (not the vim one)
+check('R3: Ctrl+Z after slash typing keeps the slash', await settled(() => screen().includes('>/ab') && !screen().includes('>/xab')), JSON.stringify(screen()))
 stdin.write('\x1b') // INSERT → NORMAL
 await settle(() => badge() === 'NORMAL')
 await settle(() => badge() === 'NORMAL')

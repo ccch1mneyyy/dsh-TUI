@@ -1,0 +1,15 @@
+{
+  "$schema":"https://dsh.community/schemas/dsh-plugin-0.15.json",
+  "id":"com.example.invalid",
+  "name":"Invalid Plugin",
+  "version":"0.1.0",
+  "manifestVersion":"0.15",
+  "facets":{"host":{"entry":"dist/main.js","apiVersion":"v1alpha1"}},
+  "requires":{"contracts":[]},
+  "provides":[{"name":"git.client","version":"0.1"}],
+  "permissions":[],
+  "contributes":{"commands":[]},
+  "subscriptions":[],
+  "license":"MIT",
+  "source":{"repository":"https://example.com/invalid"}
+}
