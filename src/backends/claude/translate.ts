@@ -60,8 +60,35 @@ const COMMAND_TAG = /^<command-(name|message|args)>/u
 const EDE_DIAGNOSTIC = '[ede_diagnostic]'
 /** Command output sent as a prompt (`!!` / the CLI's bash mode). */
 const BASH_OUTPUT = /^<bash-stdout>\n?([\s\S]*?)\n?<\/bash-stdout>/u
-/** A backgrounded command's acknowledgement: where its output goes. */
-const BACKGROUND_OUTPUT = /Output is being written to: (\S+?\.output)\b/u
+/** A backgrounded command's acknowledgement: where its output goes (the
+ *  rest of the line — a path may contain spaces). */
+const BACKGROUND_OUTPUT = /Output is being written to: ([^\r\n]+)/u
+
+/**
+ * The output path a backgrounded command's acknowledgement names: the rest
+ * of its line, cut after `<taskId>.output` (the sentence that follows on the
+ * same line is not part of it), else after the first `.output` that ends a
+ * word. Undefined when the text names none.
+ */
+export function backgroundOutputPath(text: string, taskId: string): string | undefined {
+  const line = BACKGROUND_OUTPUT.exec(text)?.[1]?.trim()
+  if (line === undefined || line === '') return undefined
+  const marker = `${taskId}.output`
+  const at = line.indexOf(marker)
+  if (at !== -1) return line.slice(0, at + marker.length)
+  return /^(.+?\.output)(?=[.,;:]?(?:\s|$))/u.exec(line)?.[1]
+}
+
+/** The longest lane tool-result text kept (a subagent card shows a one-line
+ *  preview; the full output stays in the subagent's own transcript). */
+const LANE_RESULT_CHARS = 2000
+
+/** A lane payload cut to {@link LANE_RESULT_CHARS} (never a lone surrogate). */
+function clipLane(text: string): string {
+  if (text.length <= LANE_RESULT_CHARS) return text
+  const code = text.charCodeAt(LANE_RESULT_CHARS - 1)
+  return `${text.slice(0, code >= 0xd800 && code <= 0xdbff ? LANE_RESULT_CHARS - 1 : LANE_RESULT_CHARS)}…`
+}
 
 /** A task report's usage (`total_tokens`, `tool_uses`, `duration_ms`). */
 function usageOfTask(value: unknown): SubagentUsage | undefined {
@@ -276,6 +303,8 @@ export function createClaudeTranslator(options: ClaudeTranslatorOptions) {
   const laneTasks = new Map<string, string>()
   /** Where each task writes its output, as the CLI reported it. */
   const outputFiles = new Map<string, string>()
+  /** Housekeeping / watcher tasks (`skip_transcript` / `ambient`). */
+  const hiddenTasks = new Set<string>()
   /** Why the CLI auto-denied a call (`system/permission_denied`), until its
    *  error result lands on the card. */
   const deniedReasons = new Map<string, string>()
@@ -585,15 +614,20 @@ export function createClaudeTranslator(options: ClaudeTranslatorOptions) {
       return out
     }
     if (type === 'user') {
-      for (const raw of arr(body?.content)) {
-        const block = rec(raw)
-        if (block?.type !== 'tool_result') continue
+      const results = arr(body?.content).flatMap(raw => rec(raw)?.type === 'tool_result' ? [rec(raw)!] : [])
+      // Message-level, as on the main lane: it describes a single result.
+      const structured = results.length === 1 ? rec(message.tool_use_result) : undefined
+      for (const block of results) {
         const callId = str(block.tool_use_id)
         if (callId === undefined) continue
         const call = openCalls.get(callId)
         openCalls.delete(callId)
         const isError = block.is_error === true
-        const text = toolResultText(block.content)
+        const fullText = toolResultText(block.content)
+        // A lane result only feeds its subagent card (a one-line preview):
+        // its payload is cut, so replayed history that lives as long as the
+        // session never keeps whole tool outputs.
+        const text = clipLane(fullText)
         const presentation = call === undefined ? undefined : presentClaudeToolResult(call.name, call.input, { isError, text, structured: undefined }, options.cwd)
         out.push({
           type: 'tool.result',
@@ -603,12 +637,20 @@ export function createClaudeTranslator(options: ClaudeTranslatorOptions) {
           callId,
           isError,
           time: now(),
-          content: typeof block.content === 'string' ? [{ type: 'text', text }] : arr(block.content) as ContentBlockView[],
+          content: [{ type: 'text', text }],
           text: isError ? '' : text,
           ...(isError ? { errorText: text } : {}),
           ...(presentation === undefined ? {} : { presentation }),
           parentCallId: lane,
         })
+        // A background command a subagent started names its output file in
+        // its acknowledgement too.
+        const backgroundTask = str(structured?.backgroundTaskId)
+        const outputFile = backgroundTask === undefined || isError ? undefined : backgroundOutputPath(fullText, backgroundTask)
+        if (backgroundTask !== undefined && outputFile !== undefined) {
+          outputFiles.set(backgroundTask, outputFile)
+          out.push({ type: 'task.update', taskId: backgroundTask, patch: { outputFile } })
+        }
       }
       // The subagent's prompt (its first user text) is not shown.
       return out
@@ -762,7 +804,7 @@ export function createClaudeTranslator(options: ClaudeTranslatorOptions) {
         // A backgrounded command's acknowledgement names its output file
         // (`task_started` does not): the job's output tail is read from it.
         const backgroundTask = str(rec(structured)?.backgroundTaskId)
-        const outputFile = backgroundTask === undefined || isError ? undefined : BACKGROUND_OUTPUT.exec(rawText)?.[1]
+        const outputFile = backgroundTask === undefined || isError ? undefined : backgroundOutputPath(rawText, backgroundTask)
         if (backgroundTask !== undefined && outputFile !== undefined) {
           outputFiles.set(backgroundTask, outputFile)
           out.push({ type: 'task.update', taskId: backgroundTask, patch: { outputFile } })
@@ -833,6 +875,7 @@ export function createClaudeTranslator(options: ClaudeTranslatorOptions) {
   /** A background job's start: its command from the launching call when
    *  that was a shell command. */
   const jobStart = (taskId: string, taskType: string | undefined): AgentEvent => {
+    const hidden = hiddenTasks.has(taskId)
     const info = taskInfo.get(taskId)
     const call = info?.callId === undefined ? undefined : openCalls.get(info.callId)
     const command = call === undefined ? undefined : str(rec(call.input)?.command)
@@ -847,6 +890,7 @@ export function createClaudeTranslator(options: ClaudeTranslatorOptions) {
       ...(info?.callId === undefined ? {} : { callId: info.callId }),
       background: true,
       ...(outputFile === undefined ? {} : { outputFile }),
+      ...(hidden ? { hidden: true } : {}),
       time: now(),
     }
   }
@@ -905,6 +949,10 @@ export function createClaudeTranslator(options: ClaudeTranslatorOptions) {
         const description = str(message.description) ?? ''
         const callId = str(message.tool_use_id)
         taskInfo.set(taskId, { description, ...(callId === undefined ? {} : { callId }) })
+        // Housekeeping / watcher tasks are not activity: no card, no chip,
+        // no toast (the CLI says to keep them out of the transcript and the
+        // activity indicators).
+        if (message.skip_transcript === true || message.ambient === true) hiddenTasks.add(taskId)
         if (taskType === 'local_agent' || str(message.subagent_type) !== undefined) {
           taskKinds.set(taskId, 'agent')
           if (callId !== undefined) laneTasks.set(callId, taskId)
@@ -970,12 +1018,14 @@ export function createClaudeTranslator(options: ClaudeTranslatorOptions) {
         // A task never seen starting (missed frame): a usage block is what
         // only subagent reports carry.
         const kind = taskKinds.get(taskId) ?? (message.usage === undefined ? 'job' : 'agent')
+        const hidden = hiddenTasks.delete(taskId) || message.skip_transcript === true || message.ambient === true
         taskKinds.delete(taskId)
         taskInfo.delete(taskId)
         if (kind === 'foreground') return []
         // A foreground tool's task report arrives inside its own turn; only a
-        // report between turns starts the CLI's notification turn.
-        if (!turnOpen) notificationTurnExpected = true
+        // report between turns starts the CLI's notification turn (never a
+        // housekeeping task's).
+        if (!turnOpen && !hidden) notificationTurnExpected = true
         const usage = usageOfTask(message.usage)
         const outputFile = str(message.output_file)
         if (outputFile !== undefined && outputFile !== '') outputFiles.set(taskId, outputFile)

@@ -84,11 +84,31 @@ const host = { cwd: project, debug: () => undefined, warn: () => undefined, stde
  * the login, and credentials are never copied.)
  */
 const created = new Set<string>()
+/** Every session this run opened: disposed before any is deleted (a live
+ *  CLI still appending would recreate a deleted transcript). */
+const opened: AgentSession[] = []
 const openSession = async (target: Parameters<typeof claudeBackend.open>[0]): Promise<AgentSession> => {
   const session = await claudeBackend.open(target, host)
+  opened.push(session)
   created.add(session.ref.sessionId)
   return session
 }
+/** Close every opened session, then delete every created one (idempotent:
+ *  the final `finally` and Ctrl+C share it). */
+let cleaning: Promise<void> | undefined
+const cleanup = (): Promise<void> => {
+  cleaning ??= (async () => {
+    await Promise.all(opened.map(session => session.dispose().catch(() => undefined)))
+    // One never persisted has nothing to delete.
+    for (const id of created) await claudeBackend.catalog!.delete!(id, project).catch(() => undefined)
+    rmSync(root, { recursive: true, force: true })
+  })()
+  return cleaning
+}
+process.once('SIGINT', () => {
+  console.error('\nverify-claude-live: interrupted — closing and deleting this run\'s sessions')
+  void cleanup().finally(() => process.exit(130))
+})
 
 /** Subscribe and wait for predicates over the accumulated events. */
 function watch(session: AgentSession) {
@@ -371,10 +391,9 @@ try {
     check('sessions: no claude child survives', (await waitForNoChildren()).length === 0, claudeChildren())
   }
 } finally {
-  // Success or failure: no session of this run stays in the user's store
-  // (one never persisted has nothing to delete).
-  for (const id of created) await claudeBackend.catalog!.delete!(id, project).catch(() => undefined)
-  rmSync(root, { recursive: true, force: true })
+  // Success or failure: every session opened is closed first, then no
+  // session of this run stays in the user's store.
+  await cleanup()
 }
 
 console.log(`\nverify-claude-live OK (${passed} checks)`)

@@ -290,9 +290,11 @@ export type AgentEvent =
   | { readonly type: 'subagent.end'; readonly agentId: string; readonly status: 'completed' | 'failed' | 'cancelled' | 'unknown'; readonly summary?: string; readonly usage?: SubagentUsage; readonly time: number }
   /**
    * A background task started. `callId` names the tool call whose result
-   * acknowledged it; `command` is the full invocation when known.
+   * acknowledged it; `command` is the full invocation when known. `hidden`
+   * = housekeeping work the backend says is not activity (no card, no
+   * activity chip, no settlement toast).
    */
-  | { readonly type: 'task.start'; readonly taskId: string; readonly kind: string; readonly description: string; readonly command?: string; readonly callId?: string; readonly background: boolean; readonly outputFile?: string; readonly time: number }
+  | { readonly type: 'task.start'; readonly taskId: string; readonly kind: string; readonly description: string; readonly command?: string; readonly callId?: string; readonly background: boolean; readonly outputFile?: string; readonly hidden?: boolean; readonly time: number }
   /**
    * A background task changed. `outputFile` = where the task writes its
    * output (as the backend reported it; readers validate it); `progress` = a

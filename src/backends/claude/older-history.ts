@@ -10,6 +10,7 @@
  * segment at a time (a long segment in bounded slices), newest first; the
  * cursor only moves on, so a repeated "load earlier" never repeats a slice.
  */
+import { statSync } from 'node:fs'
 import type { SessionCapabilities } from '../../agent/capabilities.js'
 import type { AgentEvent } from '../../agent/events.js'
 import { t } from '../../i18n.js'
@@ -33,13 +34,23 @@ export function createClaudeTranscriptHistory(deps: ClaudeTranscriptHistoryDeps)
   const debug = deps.debug ?? (() => undefined)
   let path: string | undefined
   let cursor: OlderCursor | 'start' | 'done' = deps.compactedFrom === undefined ? 'done' : 'start'
+  /**
+   * The parsed file, keyed by its size and mtime: a "load earlier" press
+   * parses the transcript once per change, not once per call (record and
+   * older on the same press share it), and the full-record replay is kept
+   * with it.
+   */
+  let parsed: { readonly size: number; readonly mtimeMs: number; readonly entries: readonly JsonRecord[]; byUuid?: Map<string, JsonRecord>; record?: readonly AgentEvent[] } | undefined
 
-  const load = (): readonly JsonRecord[] => {
+  const load = (): NonNullable<typeof parsed> => {
     path ??= locateClaudeTranscript(deps.sessionId, deps.configDir())
     if (path === undefined) throw new Error(t('claude-transcript-missing', { id: deps.sessionId }))
+    const stat = statSync(path)
+    if (parsed !== undefined && parsed.size === stat.size && parsed.mtimeMs === stat.mtimeMs) return parsed
     const { entries, badLines } = readTranscriptEntries(path)
     if (badLines > 0) debug(`claude: ${badLines} malformed transcript line(s) skipped`)
-    return entries
+    parsed = { size: stat.size, mtimeMs: stat.mtimeMs, entries }
+    return parsed
   }
 
   const replay = (entries: readonly JsonRecord[]): readonly AgentEvent[] =>
@@ -47,14 +58,20 @@ export function createClaudeTranscriptHistory(deps: ClaudeTranscriptHistoryDeps)
 
   return {
     record(): readonly AgentEvent[] {
-      return replay(load().filter(entry => (entry.type === 'user' || entry.type === 'assistant') && entry.isSidechain !== true))
+      const file = load()
+      file.record ??= replay(file.entries.filter(entry => (entry.type === 'user' || entry.type === 'assistant') && entry.isSidechain !== true))
+      return file.record
     },
     hasOlder: () => cursor !== 'done',
     older(): readonly AgentEvent[] {
       if (cursor === 'done') return []
-      const entries = load()
-      const byUuid = new Map<string, JsonRecord>()
-      for (const entry of entries) if (typeof entry.uuid === 'string') byUuid.set(entry.uuid, entry)
+      const file = load()
+      const entries = file.entries
+      if (file.byUuid === undefined) {
+        file.byUuid = new Map<string, JsonRecord>()
+        for (const entry of entries) if (typeof entry.uuid === 'string') file.byUuid.set(entry.uuid, entry)
+      }
+      const byUuid = file.byUuid
       let current: OlderCursor | undefined
       if (cursor === 'start') {
         const head = headBoundary(entries, byUuid, deps.compactedFrom)

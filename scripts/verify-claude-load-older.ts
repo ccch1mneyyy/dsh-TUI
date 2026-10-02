@@ -32,7 +32,7 @@ process.env.HOME = home
 process.env.USERPROFILE = home
 
 const [
-  { locateClaudeTranscript, readTranscriptEntries, MAX_SLICE_ENTRIES },
+  { locateClaudeTranscript, readTranscriptEntries, preservedUuids, MAX_SLICE_ENTRIES },
   { createClaudeTranscriptHistory },
   { replayClaudeTranscript },
   { openClaudeSession },
@@ -172,6 +172,18 @@ const texts = (events: readonly AgentEvent[]): string[] => events.flatMap(event 
   for (let guard = 0; guard < 10 && bounded.hasOlder(); guard += 1) pieces.push(texts(bounded.older()))
   check('a bounded slice is cut at a prompt; slices never overlap and add up to the same history', pieces.every(piece => piece.length > 0 && piece.length <= 4) && JSON.stringify(pieces.flatMap(piece => piece).sort()) === JSON.stringify([...texts(first), ...texts(second)].sort()), pieces)
   check('the default slice bound is generous but finite', MAX_SLICE_ENTRIES === 1000)
+  // Parsed once per file change (5a review 9): repeated presses reuse it.
+  const cached = createClaudeTranscriptHistory({ sessionId: SESSION, cwd: '/fixture/project', configDir: () => configDir })
+  const once = cached.record()
+  check('the record is parsed and replayed once while the file is unchanged', cached.record() === once)
+  appendFileSync(transcriptPath, `${JSON.stringify(reply('c-a7', 'c-a6', 'msg-c7', 'appended later'))}\n`)
+  const changed = cached.record()
+  check('… a change to the file is read again', changed !== once && changed.some(event => event.type === 'assistant.message' && event.anchor === 'msg-c7'))
+  // A cyclic preserved segment cannot run the walk away (5a review 10).
+  const byUuid = new Map<string, Rec>([['t1', { uuid: 't1', parentUuid: 't2' }], ['t2', { uuid: 't2', parentUuid: 't1' }]])
+  const started = Date.now()
+  const preserved = preservedUuids({ compactMetadata: { preservedSegment: { headUuid: 'never', tailUuid: 't1' } } }, byUuid as never)
+  check('a cyclic preserved segment walk stops at once with nothing', preserved.length === 0 && Date.now() - started < 200, Date.now() - started)
 }
 
 // ── the channel ────────────────────────────────────────────────────────
@@ -208,6 +220,22 @@ async function openChannel(resume?: ReturnType<typeof replayClaudeTranscript>, s
     const addedTwo = channel.loadOlder()
     check('the next loadOlder prepends the oldest segment (its tool card settled)', addedTwo > 0 && JSON.stringify(shown().slice(0, 4)) === JSON.stringify(['user:first question', 'assistant:first answer', 'user:second questio', 'tool:Read']) && channel.rows.find(row => row.kind === 'tool')?.tool?.status === 'ok', shown())
     check('then nothing older: 0, the divider\'s reason is gone, nothing duplicated', channel.loadOlder() === 0 && !channel.olderHistory && shown().filter(text => text === 'user:first question').length === 1)
+  } finally {
+    channel.releaseContributions()
+    await session.dispose()
+  }
+}
+// The view-only `/clear` (5a review 13): older history never comes back above
+// a cleared view, and the divider is gone, as with DSH.
+{
+  const { channel, session } = await openChannel(replayClaudeTranscript(resumedChain, { cwd: '/fixture/project' }))
+  try {
+    check('before /clear: older history is offered', channel.olderHistory)
+    channel.clear()
+    check('after /clear: no "load earlier" divider', !channel.olderHistory)
+    check('… and loadOlder prepends nothing above the cleared view', channel.loadOlder() === 0 && !channel.rows.some(row => row.restored === true), channel.rows.map(row => row.kind))
+    const handed = await session.history()
+    check('the replayed history is handed over once and then let go (5a review 11)', handed.length > 0 && (await session.history()).length === 0)
   } finally {
     channel.releaseContributions()
     await session.dispose()

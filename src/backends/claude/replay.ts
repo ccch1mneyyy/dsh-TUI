@@ -43,7 +43,10 @@
  * the call's result for a foreground subagent (the hand-back report, an
  * error, an interruption), the `<task-notification>` naming it for a
  * background one (whose result only acknowledges the launch); with neither,
- * its state is `unknown` (the CLI that ran it is gone).
+ * its state is `unknown` (the CLI that ran it is gone). A subagent's own
+ * delegations (nested `Agent` calls in its transcript) are tracked the same
+ * way: ended by the result in that transcript, else `unknown` at the end of
+ * the replay.
  *
  * Not restored from the transcript: the context window (the read API has no
  * field for it; the first live `result` reports it) and the session cost (the
@@ -72,6 +75,9 @@ const BASH_INPUT = /^<bash-input>([\s\S]*?)<\/bash-input>/u
 const TASK_NOTIFICATION = /^<task-notification>/u
 /** A background subagent's launch acknowledgement (not its end). */
 const ASYNC_LAUNCH = /^Async agent launched/u
+/** Nested subagent transcripts followed at most this deep (a corrupted
+ *  store cannot recurse without bound). */
+const MAX_NESTING = 8
 
 /** One subagent transcript, keyed by the `Agent` tool call that launched it. */
 export interface ClaudeSubagentTranscript {
@@ -248,15 +254,25 @@ export function replayClaudeTranscript(messages: readonly unknown[], options: Cl
       const thinking = num(rec(rec(body?.usage)?.output_tokens_details)?.thinking_tokens)
       if (thinking !== undefined && thinking > 0) out.push(...translator.translate({ type: 'system', subtype: 'thinking_tokens', estimated_tokens: thinking }))
     }
+    delegations(blocks, 0)
+  }
+
+  /**
+   * The `Agent` calls among some assistant blocks (of the main chain, or of
+   * a subagent's own transcript — a nested delegation): each one launched a
+   * subagent (the translator pre-created it from the call); when the
+   * session kept that subagent's transcript, its own id completes it and its
+   * messages follow as its lane.
+   */
+  const delegations = (blocks: readonly (Rec | undefined)[], depth: number): void => {
     for (const block of blocks) {
       if (block?.type !== 'tool_use') continue
       const callId = str(block.id)
       const name = str(block.name)
-      if (callId === undefined || name === undefined || !AGENT_TOOLS.has(name)) continue
-      // The translator pre-created the subagent from the call (keyed by it).
+      if (callId === undefined || name === undefined || !AGENT_TOOLS.has(name) || launched.has(callId)) continue
       const input = rec(block.input)
       const background = input?.run_in_background === true
-      const transcript = options.subagents?.get(callId)
+      const transcript = depth < MAX_NESTING ? options.subagents?.get(callId) : undefined
       launched.set(callId, { agentId: transcript?.agentId ?? callId, background })
       if (transcript === undefined) continue
       out.push({
@@ -266,17 +282,45 @@ export function replayClaudeTranscript(messages: readonly unknown[], options: Cl
         description: str(input?.description) ?? '',
         ...(str(input?.subagent_type) === undefined ? {} : { kind: str(input?.subagent_type) }),
         background,
+        ...(depth > 0 ? { depth: depth + 1 } : {}),
         time: clock,
       })
-      // Its own messages, as the live lane delivered them.
-      for (const raw of transcript.messages) {
-        const message = rec(raw)
-        if (message === undefined || (message.type !== 'assistant' && message.type !== 'user')) continue
-        const time = Date.parse(str(message.timestamp) ?? '')
-        if (Number.isFinite(time)) clock = time
-        out.push(...translator.translate({ ...message, parent_tool_use_id: callId }))
-      }
+      lane(callId, transcript, depth + 1)
     }
+  }
+
+  /** A subagent's own messages, as the live lane delivered them; the
+   *  subagents IT delegated to end from its own results. */
+  const lane = (callId: string, transcript: ClaudeSubagentTranscript, depth: number): void => {
+    for (const raw of transcript.messages) {
+      const message = rec(raw)
+      if (message === undefined || (message.type !== 'assistant' && message.type !== 'user')) continue
+      const time = Date.parse(str(message.timestamp) ?? '')
+      if (Number.isFinite(time)) clock = time
+      out.push(...translator.translate({ ...message, parent_tool_use_id: callId }))
+      const content = arr(rec(message.message)?.content).map(rec)
+      if (message.type === 'assistant') {
+        delegations(content, depth)
+        continue
+      }
+      const structured = rec(message.tool_use_result ?? message.toolUseResult)
+      for (const block of content) endFromResult(block, structured)
+    }
+  }
+
+  /** A recorded tool result that ends the subagent its call launched (a
+   *  background one's result only acknowledges the launch). */
+  const endFromResult = (block: Rec | undefined, structured: Rec | undefined): void => {
+    if (block?.type !== 'tool_result') return
+    const callId = str(block.tool_use_id)
+    const agent = callId === undefined ? undefined : launched.get(callId)
+    if (callId === undefined || agent === undefined) return
+    const text = userText(block.content) ?? (typeof block.content === 'string' ? block.content : '')
+    if (agent.background || ASYNC_LAUNCH.test(text) || structured?.status === 'async_launched' || structured?.isAsync === true) {
+      agent.background = true
+      return
+    }
+    endSubagent(callId, resultOutcome(block))
   }
 
   const user = (message: Rec): void => {
@@ -288,21 +332,9 @@ export function replayClaudeTranscript(messages: readonly unknown[], options: Cl
         // drops (richer cards when "load earlier" replays it).
         const structured = message.tool_use_result ?? message.toolUseResult
         out.push(...translator.translate({ type: 'user', uuid, message: message.message, parent_tool_use_id: null, ...(structured === undefined ? {} : { tool_use_result: structured }) }))
-        for (const raw of arr(rec(message.message)?.content)) {
-          const block = rec(raw)
-          const callId = str(block?.tool_use_id)
-          const agent = callId === undefined ? undefined : launched.get(callId)
-          if (block === undefined || callId === undefined || agent === undefined) continue
-          const text = userText(block.content) ?? (typeof block.content === 'string' ? block.content : '')
-          // A background subagent's result only acknowledges the launch; its
-          // end is the notification naming it.
-          const launch = rec(structured)
-          if (agent.background || ASYNC_LAUNCH.test(text) || launch?.status === 'async_launched' || launch?.isAsync === true) {
-            agent.background = true
-            continue
-          }
-          endSubagent(callId, resultOutcome(block))
-        }
+        // A background subagent's result only acknowledges the launch; its
+        // end is the notification naming it.
+        for (const raw of arr(rec(message.message)?.content)) endFromResult(rec(raw), rec(structured))
         return
       }
       case 'summary':
@@ -373,7 +405,8 @@ export function replayClaudeTranscript(messages: readonly unknown[], options: Cl
     }
   }
   closeTurn()
-  // No recorded end: the CLI that ran it is gone, its state is unknown.
+  // No recorded end (a nested delegation included): the CLI that ran it is
+  // gone, its state is unknown.
   for (const callId of [...launched.keys()]) endSubagent(callId, { status: 'unknown' })
   if (options.title !== undefined && options.title !== '') out.push({ type: 'session.title', title: options.title, source: 'auto' })
   if (model !== undefined) out.push({ type: 'model.changed', model, source: 'resume' })

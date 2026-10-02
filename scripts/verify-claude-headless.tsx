@@ -103,6 +103,21 @@ const track = (session: AgentSession): AgentSession => {
 }
 /** Directories this run made (removed last, after the sessions are gone). */
 const scratchDirs: string[] = [root]
+/** Close every opened session, then delete every created one and the
+ *  scratch directories (idempotent: the final `finally` and Ctrl+C share it). */
+let cleaning: Promise<void> | undefined
+const cleanupSessions = (): Promise<void> => {
+  cleaning ??= (async () => {
+    await Promise.all(opened.map(item => item.dispose().catch(() => undefined)))
+    for (const [id, cwd] of createdIds) await claudeBackend.catalog!.delete!(id, cwd).catch(() => undefined)
+    for (const dir of scratchDirs) rmSync(dir, { recursive: true, force: true })
+  })()
+  return cleaning
+}
+process.once('SIGINT', () => {
+  console.error('\nverify-claude-headless: interrupted — closing and deleting this run\'s sessions')
+  void cleanupSessions().finally(() => process.exit(130))
+})
 const only5a = process.argv.includes('--only-5a')
 const session = track(await claudeBackend.open({ kind: 'create', cwd: root }, host))
 const ctx = {
@@ -328,9 +343,7 @@ try {
   delete process.env.DSH_TUI_IDE_PORT
   delete process.env.DSH_TUI_IDE_TOKEN
   term.dispose()
-  await Promise.all(opened.map(item => item.dispose().catch(() => undefined)))
-  for (const [id, cwd] of createdIds) await claudeBackend.catalog!.delete!(id, cwd).catch(() => undefined)
-  for (const dir of scratchDirs) rmSync(dir, { recursive: true, force: true })
+  await cleanupSessions()
 }
 
 console.log(`\nverify-claude-headless OK (${passed} checks)`)

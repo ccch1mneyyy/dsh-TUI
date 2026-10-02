@@ -194,7 +194,14 @@ function priorityOf(placement: SubmitPlacement, turnOpen: boolean): SDKUserMessa
 
 /** Open one session: start the query, wait for its handshake, start the
  *  consumer loop. Throws (after cleaning up) when the CLI cannot start. */
-export async function openClaudeSession(deps: ClaudeSessionDeps): Promise<AgentSession> {
+export async function openClaudeSession(input: ClaudeSessionDeps): Promise<AgentSession> {
+  // The replayed history goes to the channel once (`history()`) and is then
+  // let go: a long transcript's events must not live as long as the session.
+  const { resume, ...deps } = input
+  const resumed = resume !== undefined
+  const resumeStart = resume?.start
+  const compactedFrom = resume?.compactedFrom
+  let replayHistory: readonly AgentEvent[] | undefined = resume?.events
   const clock = deps.clock ?? REAL_CLOCK
   const forceSettleMs = deps.forceSettleMs ?? 30_000
   const prefs = deps.prefs ?? memoryClaudePrefs()
@@ -223,7 +230,7 @@ export async function openClaudeSession(deps: ClaudeSessionDeps): Promise<AgentS
    * the same id: `resume` of an id the CLI has no transcript for fails its
    * handshake ("No conversation found").
    */
-  let persisted = deps.resume !== undefined
+  let persisted = resumed
   /** What this session pushed, by input uuid, until the CLI starts it: a
    *  reconnect re-delivers what the old CLI never started. */
   const pushed = new Map<string, SDKUserMessage>()
@@ -238,7 +245,7 @@ export async function openClaudeSession(deps: ClaudeSessionDeps): Promise<AgentS
       else waiter.reject(error)
     }
   }
-  const translator = createClaudeTranslator({ cwd: deps.cwd, userRows: 'lifecycle', debug: deps.host.debug, ...(deps.resume === undefined ? {} : { start: deps.resume.start }) })
+  const translator = createClaudeTranslator({ cwd: deps.cwd, userRows: 'lifecycle', debug: deps.host.debug, ...(resumeStart === undefined ? {} : { start: resumeStart }) })
   translator.noteMode(deps.start.mode)
 
   const emit = (events: readonly AgentEvent[], wake: AgentEventMeta['wake'] = 'sync'): void => {
@@ -326,7 +333,7 @@ export async function openClaudeSession(deps: ClaudeSessionDeps): Promise<AgentS
     })
     return { generation, inbox, abortController, query, consumer: Promise.resolve() }
   }
-  let run = startRun(deps.resume !== undefined)
+  let run = startRun(resumed)
 
   /** Shut one run's CLI down; safe to call from any state. */
   const stopRun = (target: Run): void => {
@@ -352,6 +359,8 @@ export async function openClaudeSession(deps: ClaudeSessionDeps): Promise<AgentS
     teardown()
     emit([
       ...translator.forceCloseTurn({ kind: 'error', message: reason }),
+      // The process's background work went with it (the level is per process).
+      { type: 'tasks.snapshot', taskIds: [] },
       { type: 'notice', level: 'error', text: t('claude-process-exited', { reason }) },
       { type: 'session.status', status: 'disposed' },
     ])
@@ -642,7 +651,7 @@ export async function openClaudeSession(deps: ClaudeSessionDeps): Promise<AgentS
   run.consumer = consume(run)
   // A resumed transcript does not record the context window (design §4.11):
   // ask the CLI once, so the status line has it before the first `result`.
-  if (deps.resume !== undefined) {
+  if (resumed) {
     const query = run.query as Partial<Pick<Query, 'getContextUsage'>>
     if (typeof query.getContextUsage === 'function') {
       void query.getContextUsage({ detail: 'summary' }).then(usage => {
@@ -786,7 +795,7 @@ export async function openClaudeSession(deps: ClaudeSessionDeps): Promise<AgentS
         sessionId: deps.sessionId,
         cwd: deps.cwd,
         configDir: () => claudeConfigDir(authPlan.env.CLAUDE_CONFIG_DIR === undefined ? process.env : authPlan.env),
-        ...(deps.resume?.compactedFrom === undefined ? {} : { compactedFrom: deps.resume.compactedFrom }),
+        ...(compactedFrom === undefined ? {} : { compactedFrom }),
         debug: deps.host.debug,
       }),
       account: {
@@ -828,7 +837,13 @@ export async function openClaudeSession(deps: ClaudeSessionDeps): Promise<AgentS
     },
     // A created session has no durable history yet; a resumed one replays
     // the transcript read before the CLI started (backend.ts).
-    history: () => Promise.resolve(deps.resume?.events ?? []),
+    // Handed over once: the channel paints it at adoption and never asks
+    // again (a later call has nothing to repaint from memory).
+    history: () => {
+      const events = replayHistory ?? []
+      replayHistory = undefined
+      return Promise.resolve(events)
+    },
     subscribe(listener: Listener) {
       listeners.add(listener)
       if (backlog.length > 0) {

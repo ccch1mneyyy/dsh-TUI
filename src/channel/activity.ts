@@ -22,7 +22,9 @@
  * level signal: a background subagent or job missing from it with no end of
  * its own is settled as inferred (`unknown` / killed + "status unknown"); a
  * real end arriving later still overrides an inferred one (the level may
- * precede its bookend).
+ * precede its bookend). A foreground subagent still live when its turn
+ * closes (`turn.end` — also the forced close of a process that exited or
+ * reconnected) is settled the same way.
  *
  * Bounded: per-subagent output lines (160) and tool calls (200), tracked
  * subagents (100) and jobs (40), the job output tail (30 lines).
@@ -50,6 +52,15 @@ export const ACTIVITY_TAIL_INTERVAL_MS = 1000
 const MAX_TAIL_FAILURES = 5
 const ARGS_PREVIEW = 120
 const RESULT_PREVIEW = 80
+/** The longest subagent output line kept (characters; an ellipsis marks the cut). */
+export const MAX_OUTPUT_LINE_CHARS = 400
+
+/** One output line cut to {@link MAX_OUTPUT_LINE_CHARS} (never a lone surrogate). */
+function capLine(text: string): string {
+  if (text.length <= MAX_OUTPUT_LINE_CHARS) return text
+  const code = text.charCodeAt(MAX_OUTPUT_LINE_CHARS - 1)
+  return `${text.slice(0, code >= 0xd800 && code <= 0xdbff ? MAX_OUTPUT_LINE_CHARS - 1 : MAX_OUTPUT_LINE_CHARS)}…`
+}
 
 /** The child-lane event kinds (they carry the delegating call's id). */
 export type LaneEvent = AgentEventOf<'assistant.attempt.start' | 'assistant.delta' | 'assistant.message' | 'tool.call' | 'tool.result' | 'tool.progress'>
@@ -246,6 +257,7 @@ export function createActivityProjection(getState: () => ActivityState, deps: Ac
 
   const pushLine = (entry: SubagentEntry, line: SubagentOutputLine): void => {
     const state = entry.state
+    if (line.text.length > MAX_OUTPUT_LINE_CHARS) line.text = capLine(line.text)
     state.outputEvents.push(line)
     if (state.outputEvents.length > MAX_OUTPUT_EVENTS) state.outputEvents.splice(0, state.outputEvents.length - MAX_OUTPUT_EVENTS)
     state.output = state.outputEvents.map(item => item.text)
@@ -270,7 +282,9 @@ export function createActivityProjection(getState: () => ActivityState, deps: Ac
     }
     const tail = state.outputEvents.at(-1)!
     const parts = `${tail.text}${text}`.split('\n')
-    tail.text = parts[0]!
+    // A streamed line stops growing at the cap (its cut text stays as is
+    // until the line ends).
+    tail.text = tail.text.length > MAX_OUTPUT_LINE_CHARS ? tail.text : capLine(parts[0]!)
     if (parts.length > 1) {
       tail.settled = true
       for (const middle of parts.slice(1, -1)) pushLine(entry, { kind, text: middle, at: now(), settled: true })
@@ -568,7 +582,8 @@ export function createActivityProjection(getState: () => ActivityState, deps: Ac
 
   const startJob = (event: AgentEventOf<'task.start'>): void => {
     // Foreground work stays on its tool card: only background tasks are jobs.
-    if (!event.background) return
+    // Housekeeping tasks are not activity at all (no card, chip or toast).
+    if (!event.background || event.hidden === true) return
     let entry = jobs.get(event.taskId)
     if (entry === undefined) {
       entry = {
@@ -592,7 +607,7 @@ export function createActivityProjection(getState: () => ActivityState, deps: Ac
       trimJobs()
     } else {
       if (event.command !== undefined) entry.state.command = event.command
-      if (event.outputFile !== undefined) entry.state.outputFile = event.outputFile
+      if (event.outputFile !== undefined) noteOutputFile(entry, event.outputFile)
     }
     syncJob(entry)
   }
@@ -603,7 +618,7 @@ export function createActivityProjection(getState: () => ActivityState, deps: Ac
     const patch = event.patch
     const state = entry.state
     if (patch.description !== undefined && patch.description !== '') state.label = patch.description
-    if (patch.outputFile !== undefined && patch.outputFile !== '') state.outputFile = patch.outputFile
+    if (patch.outputFile !== undefined && patch.outputFile !== '') noteOutputFile(entry, patch.outputFile)
     if (patch.progress !== undefined && isLiveJob(state.status)) state.progress = patch.progress
     if (patch.status !== undefined) {
       const status = jobStatusOf(patch.status)
@@ -625,7 +640,7 @@ export function createActivityProjection(getState: () => ActivityState, deps: Ac
   const endJob = (event: AgentEventOf<'task.end'>): void => {
     const entry = jobs.get(event.taskId)
     if (entry === undefined) return
-    if (event.outputFile !== undefined && event.outputFile !== '') entry.state.outputFile = event.outputFile
+    if (event.outputFile !== undefined && event.outputFile !== '') noteOutputFile(entry, event.outputFile)
     const status: BackgroundJobStatus = event.status === 'stopped' ? 'killed' : event.status
     settleJob(entry, status, event.time, jobDetailOf(event.summary), false)
     syncJob(entry)
@@ -680,7 +695,39 @@ export function createActivityProjection(getState: () => ActivityState, deps: Ac
     }
   }
 
+  /**
+   * The turn closed (or the backend's process went away, which closes it):
+   * a foreground subagent cannot outlive the turn that delegated to it. One
+   * still live never reported its end — settled `unknown`, inferred, so a
+   * real end that arrives late still wins. Background subagents are the
+   * level signal's (`tasks.snapshot`).
+   */
+  const settleForeground = (time: number): void => {
+    for (const entry of subagents.values()) {
+      if (entry.state.background === true || !isLiveSubagent(entry.state.status)) continue
+      if (finishSubagent(entry, 'unknown', time, { inferred: true })) syncSubagent(entry)
+    }
+  }
+
   // ── output tail ───────────────────────────────────────────────────────
+
+  /**
+   * The backend named (or renamed) a job's output file: a new path is a new
+   * read target — earlier failures (reads before the path was known, or of
+   * another path) no longer count, and a watched job is read again at once.
+   */
+  function noteOutputFile(entry: JobEntry, outputFile: string): void {
+    if (entry.state.outputFile === outputFile) return
+    entry.state.outputFile = outputFile
+    entry.failures = 0
+    entry.lastReadAt = undefined
+    if (disposed || deps.readOutput === undefined || !watchers.has(entry.state.id)) return
+    const live = isLiveJob(entry.state.status)
+    if (live || !entry.finalRead) {
+      readTail(entry, !live)
+      tick ??= timer.set(onTick, ACTIVITY_TAIL_INTERVAL_MS)
+    }
+  }
 
   /**
    * One tail read of a job's output: never overlapping, at most one per
@@ -689,6 +736,8 @@ export function createActivityProjection(getState: () => ActivityState, deps: Ac
    */
   const readTail = (entry: JobEntry, final = false): void => {
     if (disposed || entry.reading || entry.failures >= MAX_TAIL_FAILURES || deps.readOutput === undefined) return
+    // Nothing to read until the backend names the file: no read, no failure.
+    if (entry.state.outputFile === undefined) return
     if (!final && entry.lastReadAt !== undefined && now() - entry.lastReadAt < ACTIVITY_TAIL_INTERVAL_MS) return
     entry.lastReadAt = now()
     const settled = !isLiveJob(entry.state.status)
@@ -738,7 +787,7 @@ export function createActivityProjection(getState: () => ActivityState, deps: Ac
     let polling = false
     for (const id of watchers.keys()) {
       const entry = jobs.get(id)
-      if (entry === undefined || entry.failures >= MAX_TAIL_FAILURES) continue
+      if (entry === undefined || entry.failures >= MAX_TAIL_FAILURES || entry.state.outputFile === undefined) continue
       if (isLiveJob(entry.state.status)) {
         readTail(entry)
         polling = true
@@ -804,6 +853,9 @@ export function createActivityProjection(getState: () => ActivityState, deps: Ac
           return
         case 'tasks.snapshot':
           applySnapshot(event)
+          return
+        case 'turn.end':
+          settleForeground(event.time)
           return
         default:
           return

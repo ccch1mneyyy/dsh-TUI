@@ -25,6 +25,7 @@
  * Run: node --import tsx/esm scripts/verify-claude-tasks.ts
  */
 import assert from 'node:assert/strict'
+import { execFileSync, spawn } from 'node:child_process'
 import { mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -234,6 +235,21 @@ mkdirSync(inside, { recursive: true })
   let dirRefused = false
   try { readTaskOutputTail(join(inside, 'dir.output'), 'dir', allowed) } catch { dirRefused = true }
   check('a directory is refused', dirRefused)
+  if (process.platform !== 'win32') {
+    // A FIFO in the file's place must be refused at once: a blocking open
+    // would park the UI thread until a writer appears. The guard opens a
+    // writer after 500 ms, so a regression fails on the elapsed time instead
+    // of hanging the script.
+    const fifo = join(inside, 'fifo1.output')
+    execFileSync('mkfifo', [fifo])
+    const unblocker = spawn('sh', ['-c', 'sleep 0.5; exec 3>"$1"; sleep 0.2', 'sh', fifo], { stdio: 'ignore' })
+    const started = Date.now()
+    let fifoRefused = false
+    try { readTaskOutputTail(fifo, 'fifo1', allowed) } catch { fifoRefused = true }
+    const elapsed = Date.now() - started
+    unblocker.kill('SIGKILL')
+    check('a FIFO named <taskId>.output is refused without blocking (non-blocking open)', fifoRefused && elapsed < 400, elapsed)
+  }
   check('the default roots are the temp dir and the Claude config dir, resolved', taskOutputRoots({ CLAUDE_CONFIG_DIR: roots }).includes(roots))
 }
 
@@ -259,7 +275,7 @@ mkdirSync(inside, { recursive: true })
     readOutput: id => { reads.push(id); return Promise.resolve(content) },
     timer: { set: callback => { timers.push(callback); return timers.length }, clear: () => { cleared += 1 } },
   })
-  activity.apply({ type: 'task.start', taskId: 'p1', kind: 'shell', description: 'tail me', background: true, time: 0 }, false)
+  activity.apply({ type: 'task.start', taskId: 'p1', kind: 'shell', description: 'tail me', background: true, outputFile: '/tmp/p1.output', time: 0 }, false)
   const unwatch = activity.watchOutput('p1')
   await tick()
   check('watching reads once at once, one interval at most once a second', reads.length === 1 && timers.length === 1 && ACTIVITY_TAIL_INTERVAL_MS === 1000)
@@ -293,13 +309,76 @@ mkdirSync(inside, { recursive: true })
     readOutput: id => { reads.push(`fail:${id}`); return Promise.reject(new Error('missing')) },
     timer: { set: callback => { timers.push(callback); return timers.length }, clear: () => undefined },
   })
-  failing.apply({ type: 'task.start', taskId: 'f1', kind: 'shell', description: 'x', background: true, time: 0 }, false)
+  failing.apply({ type: 'task.start', taskId: 'f1', kind: 'shell', description: 'x', background: true, outputFile: '/tmp/f1.output', time: 0 }, false)
   failing.watchOutput('f1')
   await tick()
   for (let index = 0; index < 8; index += 1) await fire()
   check('repeated read failures stop the polling of that job (bounded)', reads.filter(read => read === 'fail:f1').length === 5)
   activity.dispose()
   failing.dispose()
+}
+
+// ── the tail waits for the output path; a new path is a fresh start (5a review 2) ──
+{
+  const timers: (() => void)[] = []
+  const reads: string[] = []
+  let failing = true
+  let clock = 0
+  const state = { rows: [] as never[], subagents: [] as never[], backgroundJobs: [] as never[] }
+  const fire = async (): Promise<void> => {
+    clock += ACTIVITY_TAIL_INTERVAL_MS
+    timers.at(-1)?.()
+    await tick()
+  }
+  const activity = createActivityProjection(() => state as never, {
+    rowIds: { value: 0 },
+    now: () => clock,
+    readOutput: id => { reads.push(id); return failing ? Promise.reject(new Error('missing')) : Promise.resolve('late output\n') },
+    timer: { set: callback => { timers.push(callback); return timers.length }, clear: () => undefined },
+  })
+  // A job whose path the backend has not named yet (a subagent's background
+  // Bash, a foreground Bash moved to the background): watched, never read.
+  activity.apply({ type: 'task.start', taskId: 'w1', kind: 'shell', description: 'no path yet', background: true, time: 0 }, false)
+  activity.watchOutput('w1')
+  await tick()
+  for (let index = 0; index < 8; index += 1) await fire()
+  check('no output path: the watched job is neither read nor counted as failing', reads.length === 0)
+  activity.apply({ type: 'task.update', taskId: 'w1', patch: { outputFile: '/tmp/a/w1.output' } }, false)
+  await tick()
+  check('… the path arrives: it is read at once', reads.length === 1)
+  for (let index = 0; index < 8; index += 1) await fire()
+  check('… failing reads of that path stop after the bound', reads.length === 5, reads.length)
+  failing = false
+  activity.apply({ type: 'task.end', taskId: 'w1', status: 'completed', outputFile: '/tmp/b/w1.output', time: 9 }, false)
+  await tick()
+  await fire()
+  const job = (state.backgroundJobs as { id: string; outputLines: { text: string }[] }[]).find(item => item.id === 'w1')
+  check('… a new path at the end resets the bound: the final tail is still read', reads.length >= 6 && job?.outputLines.map(line => line.text).join() === 'late output', { reads: reads.length, lines: job?.outputLines })
+  activity.dispose()
+}
+
+// ── output paths with spaces; housekeeping tasks (5a review 2, 5) ──────
+{
+  const { backgroundOutputPath, createClaudeTranslator } = await import('../src/backends/claude/translate.js')
+  const ack = 'Command running in background with ID: b77. Output is being written to: /tmp/claude 1000/my project/tasks/b77.output. You will be notified when it completes.'
+  check('an output path with spaces is read whole (cut after <taskId>.output)', backgroundOutputPath(ack, 'b77') === '/tmp/claude 1000/my project/tasks/b77.output', backgroundOutputPath(ack, 'b77'))
+  check('… and without the task id in it, up to the first word-ending .output', backgroundOutputPath('Output is being written to: /tmp/a b/x.output. Next sentence.', 'other') === '/tmp/a b/x.output')
+  const translator = createClaudeTranslator({ cwd: '/fixture/project', userRows: 'lifecycle', now: () => 0 })
+  const hidden = translator.translate({ type: 'system', subtype: 'task_started', task_id: 'amb1', task_type: 'local_bash', description: 'watcher', is_backgrounded: true, skip_transcript: true, ambient: true })
+  check('task_started{skip_transcript, ambient} → task.start{hidden}', hidden.length === 1 && hidden[0]!.type === 'task.start' && (hidden[0] as { hidden?: boolean }).hidden === true, hidden)
+  const shown = translator.translate({ type: 'system', subtype: 'task_started', task_id: 'job1', task_type: 'local_bash', description: 'build', is_backgrounded: true })
+  check('… an ordinary background task is not hidden', shown.length === 1 && (shown[0] as { hidden?: boolean }).hidden === undefined)
+}
+
+// ── housekeeping tasks are not activity (5a review 5) ──────────────────
+{
+  const toasts: string[] = []
+  const state = { rows: [] as { kind: string }[], subagents: [] as never[], backgroundJobs: [] as never[] }
+  const activity = createActivityProjection(() => state as never, { rowIds: { value: 0 }, notify: text => { toasts.push(text); return () => undefined } })
+  activity.apply({ type: 'task.start', taskId: 'h1', kind: 'monitor', description: 'watcher', background: true, hidden: true, time: 0 }, false)
+  activity.apply({ type: 'task.end', taskId: 'h1', status: 'completed', time: 1 }, false)
+  check('a hidden task gets no card, no roster entry (chip) and no toast', state.rows.length === 0 && state.backgroundJobs.length === 0 && toasts.length === 0)
+  activity.dispose()
 }
 
 // ── the session reads the reported file (real timer) and renders ─────────

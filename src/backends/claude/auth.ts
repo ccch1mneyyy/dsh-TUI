@@ -34,8 +34,16 @@
  * the flag-settings layer (the SDK `settings` option, the highest
  * user-controlled tier) sets `ANTHROPIC_BASE_URL` to the first-party origin
  * and blanks the other routing variables, and the child environment drops
- * them — so a source the gate missed still cannot send the token elsewhere
- * (proved offline by scripts/probes/claude-auth-pin-probe.mjs).
+ * them — so a non-policy source the gate missed (the process environment,
+ * a global config file, user / project / local settings) still cannot send
+ * the token elsewhere (proved offline by
+ * scripts/probes/claude-auth-pin-probe.mjs). The managed (policy) tier
+ * outranks the flag tier and the SDK's `managedSettings` cannot carry `env`,
+ * so the pin does not cover it: the gate reads the on-disk policy tier when
+ * the session opens and fails closed on a non-first-party route there. The
+ * residual case is managed settings that change their route while a session
+ * runs (a policy reload the CLI picks up between turns): the gate is not
+ * re-run until the next spawn.
  *
  * The host supplies the dsh-auth credential through `ClaudeCredentialSource`
  * (the backend never reads the credential file or runs an OAuth flow

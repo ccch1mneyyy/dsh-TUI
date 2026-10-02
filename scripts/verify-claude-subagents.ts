@@ -311,5 +311,89 @@ const subagentRows = (channel: ChannelState) => channel.rows.filter(row => row.k
   }
 }
 
+// ── nested delegations end on replay (5a review 3) ─────────────────────
+{
+  const at = (n: number): string => `2026-10-02T11:00:0${n}.000Z`
+  const chain: Rec[] = [
+    { type: 'user', uuid: 'u1', message: { role: 'user', content: 'delegate deep' }, timestamp: at(0) },
+    { type: 'assistant', uuid: 'a1', message: { id: 'm1', content: [{ type: 'tool_use', id: 'c-outer', name: 'Agent', input: { description: 'outer', prompt: 'x' } }] }, timestamp: at(1) },
+    { type: 'user', uuid: 'r1', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'c-outer', content: 'The report follows:\n  outer done' }] }, timestamp: at(5) },
+  ]
+  const outer: Rec[] = [
+    { type: 'user', message: { role: 'user', content: 'outer prompt' }, timestamp: at(1) },
+    { type: 'assistant', message: { id: 'o1', content: [
+      { type: 'tool_use', id: 'c-inner-done', name: 'Agent', input: { description: 'inner done', prompt: 'y' } },
+      { type: 'tool_use', id: 'c-inner-lost', name: 'Agent', input: { description: 'inner lost', prompt: 'z' } },
+    ] }, timestamp: at(2) },
+    { type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'c-inner-done', content: 'The report follows:\n  inner finished' }] }, timestamp: at(3) },
+    { type: 'assistant', message: { id: 'o2', content: [{ type: 'text', text: 'outer wraps up' }] }, timestamp: at(4) },
+  ]
+  const inner: Rec[] = [
+    { type: 'user', message: { role: 'user', content: 'inner prompt' }, timestamp: at(2) },
+    { type: 'assistant', message: { id: 'i1', content: [{ type: 'text', text: 'inner works' }] }, timestamp: at(3) },
+  ]
+  const replay = replayClaudeTranscript(chain, { cwd: '/fixture/project', subagents: new Map([
+    ['c-outer', { agentId: 'agent-outer', messages: outer }],
+    ['c-inner-done', { agentId: 'agent-inner', messages: inner }],
+  ]) })
+  const ends = new Map(replay.events.flatMap(event => event.type === 'subagent.end' ? [[event.agentId, event] as const] : []))
+  check('replay: a nested delegation ends from the result in its parent\'s transcript', ends.get('agent-inner')?.status === 'completed' && (ends.get('agent-inner')?.summary ?? '').includes('inner finished'), ends.get('agent-inner'))
+  check('replay: … its own transcript replays on its own lane', replay.events.some(event => event.type === 'assistant.message' && event.parentCallId === 'c-inner-done'))
+  check('replay: a nested delegation with no recorded end → unknown at the end of the replay', ends.get('c-inner-lost')?.status === 'unknown')
+  const { channel, session } = await openChannel({ resume: replay })
+  try {
+    check('replay: no nested card is left running', channel.subagents.length === 3 && channel.subagents.every(item => item.status !== 'running' && item.status !== 'starting'), channel.subagents.map(item => `${item.description}:${item.status}`))
+  } finally {
+    channel.releaseContributions()
+    await session.dispose()
+  }
+}
+
+// ── a foreground subagent cannot outlive its turn (5a review 4) ───────
+{
+  const { channel, query, session } = await openChannel()
+  try {
+    await session.submit({ text: 'go', clientMessageId: 'u1' }, 'turn')
+    query.emit({ type: 'command_lifecycle', command_uuid: 'u1', state: 'started' })
+    query.emit({ type: 'stream_event', event: { type: 'message_start', message: { id: 'm1', model: 'claude-haiku', usage: {} } } })
+    query.emit({ type: 'assistant', message: { id: 'm1', content: [{ type: 'tool_use', id: 'call-fg', name: 'Agent', input: { description: 'foreground', prompt: 'x' } }] } })
+    query.emit({ type: 'system', subtype: 'task_started', task_id: 'fg-9', tool_use_id: 'call-fg', description: 'foreground', is_backgrounded: false, task_type: 'local_agent' })
+    check('a foreground subagent runs', await settled(() => channel.subagents.find(item => item.agentId === 'fg-9')?.status === 'running'))
+    // A long subagent output line is capped (5a review 12).
+    query.emit({ type: 'assistant', parent_tool_use_id: 'call-fg', message: { id: 'sub-1', content: [{ type: 'text', text: 'x'.repeat(5000) }] } })
+    check('a subagent output line is capped (400 chars + ellipsis)', await settled(() => (channel.subagents.find(item => item.agentId === 'fg-9')?.output.at(-1)?.length ?? 0) > 0) && channel.subagents.find(item => item.agentId === 'fg-9')!.output.at(-1)!.length === 401 && channel.subagents.find(item => item.agentId === 'fg-9')!.output.at(-1)!.endsWith('…'))
+    // A lane result keeps a bounded payload (5a review 11).
+    const laneEvents: import('../src/agent/events.js').AgentEvent[] = []
+    session.subscribe(batch => { laneEvents.push(...batch) })
+    query.emit({ type: 'assistant', parent_tool_use_id: 'call-fg', message: { id: 'sub-2', content: [{ type: 'tool_use', id: 'lane-read', name: 'Read', input: { file_path: '/fixture/project/big.txt' } }] } })
+    query.emit({ type: 'user', parent_tool_use_id: 'call-fg', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'lane-read', content: 'y'.repeat(50_000) }] } })
+    const laneResult = await settled(() => laneEvents.some(event => event.type === 'tool.result' && event.callId === 'lane-read'))
+      ? laneEvents.find(event => event.type === 'tool.result' && event.callId === 'lane-read') as Extract<import('../src/agent/events.js').AgentEvent, { type: 'tool.result' }>
+      : undefined
+    check('a lane tool result carries a bounded payload', laneResult !== undefined && laneResult.text.length <= 2001 && JSON.stringify(laneResult.content).length < 3000, laneResult?.text.length)
+    // The CLI exits mid-delegation: the turn is force-closed, the subagent settled.
+    query.close()
+    check('the process exits mid-delegation → the foreground subagent settles unknown', await settled(() => channel.subagents.find(item => item.agentId === 'fg-9')?.status === 'unknown'), channel.subagents.map(item => item.status))
+  } finally {
+    channel.releaseContributions()
+    await session.dispose()
+  }
+  // turn.end with a live foreground subagent; a late real end still wins.
+  const second = await openChannel()
+  try {
+    await second.session.submit({ text: 'go', clientMessageId: 'u2' }, 'turn')
+    second.query.emit({ type: 'command_lifecycle', command_uuid: 'u2', state: 'started' })
+    second.query.emit({ type: 'assistant', message: { id: 'm2', content: [{ type: 'tool_use', id: 'call-fg2', name: 'Agent', input: { description: 'fg two', prompt: 'x' } }] } })
+    second.query.emit({ type: 'system', subtype: 'task_started', task_id: 'fg-10', tool_use_id: 'call-fg2', description: 'fg two', is_backgrounded: false, task_type: 'local_agent' })
+    second.query.emit({ type: 'result', subtype: 'success', is_error: false, result: 'done', total_cost_usd: 0.001, modelUsage: {} })
+    check('turn.end settles a still-live foreground subagent as unknown', await settled(() => second.channel.subagents.find(item => item.agentId === 'fg-10')?.status === 'unknown'))
+    second.query.emit({ type: 'system', subtype: 'task_notification', task_id: 'fg-10', tool_use_id: 'call-fg2', status: 'completed', output_file: '', summary: 'late report', usage: { total_tokens: 5 } })
+    check('… a late real end still wins', await settled(() => second.channel.subagents.find(item => item.agentId === 'fg-10')?.status === 'completed'))
+  } finally {
+    second.channel.releaseContributions()
+    await second.session.dispose()
+  }
+}
+
 console.log(`\nverify-claude-subagents OK (${passed} checks)`)
 process.exit(0)

@@ -1007,6 +1007,8 @@ export function createChannelProjection(state: ProjectionState, deps: ChannelPro
         return
       case 'turn.end':
         applyTurnEnd(event)
+        // A foreground subagent cannot outlive its turn (./activity.ts).
+        deps.activity?.apply(event, replaying)
         return
       case 'context.capacity':
         // Backend-advertised context capacity; drives the context-low warning.

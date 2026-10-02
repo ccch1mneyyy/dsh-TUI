@@ -162,6 +162,15 @@ export function createCoreChannel(
   })
   owner.own(() => { activity.dispose() })
   const activityOwned = (): boolean => extension.ownsActivity !== true
+  /**
+   * The binding generation the view was last `/clear`ed in. `/clear` is
+   * view-only (every backend, as DSH): history older than the cleared view
+   * must not come back through "load earlier" — rows folded after the
+   * clear still restore — and the divider is hidden, until another session
+   * is bound.
+   */
+  let clearedGeneration: number | undefined
+  const viewCleared = (): boolean => clearedGeneration !== undefined && clearedGeneration === state.agentBindingGeneration
   /** "Load earlier" through the session's durable transcript: restore the
    *  folded rows first, then prepend the next older slice. */
   const transcriptLoadOlder = (): number => {
@@ -177,7 +186,7 @@ export function createCoreChannel(
         const restored = record === undefined ? 0 : restoreFoldedRows(state.rows, record)
         if (restored > 0) return restored
       }
-      if (!transcript.hasOlder()) return 0
+      if (viewCleared() || !transcript.hasOlder()) return 0
       return prependHistoryRows(state.rows, projectHistorySlice(transcript.older(), state.thinkingFold))
     } catch (error) {
       return failed(error)
@@ -302,7 +311,7 @@ export function createCoreChannel(
     costReport: undefined,
     rateLimit: undefined,
     get olderHistory(): boolean {
-      return extension.loadOlder === undefined && (binding.session.capabilities.transcript?.hasOlder() ?? false)
+      return extension.loadOlder === undefined && !viewCleared() && (binding.session.capabilities.transcript?.hasOlder() ?? false)
     },
     backendAuth: () => {
       const auth = binding.session.capabilities.auth
@@ -541,7 +550,10 @@ export function createCoreChannel(
         commandCompletions: files.commandCompletions(extension.completions ?? NO_COMPLETION_CATALOG),
         runLocalCommand: local.runLocalCommand,
         loadOlder: local.loadOlder,
-        clear: local.clear,
+        clear: () => {
+          local.clear()
+          clearedGeneration = state.agentBindingGeneration
+        },
         setActivityFrames: local.setActivityFrames,
         pushLocal: local.pushLocal,
         listFileCandidates: files.listFileCandidates,

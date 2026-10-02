@@ -100,8 +100,11 @@ export function preservedUuids(boundary: JsonRecord, byUuid: ReadonlyMap<string,
   const tail = str(segment?.tailUuid)
   if (head === undefined || tail === undefined) return []
   const out: string[] = []
+  // A corrupted tree cannot send the walk round a cycle (as in olderSlice).
+  const seen = new Set<string>()
   let cursor: string | undefined = tail
-  for (let steps = 0; cursor !== undefined && steps < MAX_WALK; steps += 1) {
+  while (cursor !== undefined && !seen.has(cursor) && out.length < MAX_WALK) {
+    seen.add(cursor)
     out.push(cursor)
     if (cursor === head) return out.reverse()
     cursor = str(byUuid.get(cursor)?.parentUuid)
