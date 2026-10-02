@@ -670,7 +670,8 @@ const integrationClaimChecks: ReadonlyArray<{ file: string; label: string; check
   // not the composition root; keep the AST proof at its real ownership seam.
   { file: 'dsh-adapter/channel/reports.ts', label: 'getHostFacade(...)', check: () => fileHasNamedCall('dsh-adapter/channel/reports.ts', 'getHostFacade') },
   { file: 'dsh-adapter/channel/reports.ts', label: 'collectAdapterDiagnostics(...)', check: () => fileHasNamedCall('dsh-adapter/channel/reports.ts', 'collectAdapterDiagnostics') },
-  { file: 'dsh-adapter/channel.ts', label: 'markDecisionDispatchTopology(...)', check: () => fileHasNamedCall('dsh-adapter/channel.ts', 'markDecisionDispatchTopology') },
+  // Phase 4a: every composition installs it through the core host seam.
+  { file: 'dsh-adapter/channel/core/host.ts', label: 'markDecisionDispatchTopology(...)', check: () => fileHasNamedCall('dsh-adapter/channel/core/host.ts', 'markDecisionDispatchTopology') },
   { file: 'dsh-adapter/effect-ledger.ts', label: 'createKernelLedger(...)', check: () => fileHasNamedCall('dsh-adapter/effect-ledger.ts', 'createKernelLedger') },
   { file: 'adapter/upstream/host-descriptor-driver.ts', label: 'commands.list(undefined)', check: () => fileHasMethodCallNamedWithUndefinedArg('adapter/upstream/host-descriptor-driver.ts', 'list') },
   { file: 'adapter/upstream/host-descriptor-driver.ts', label: 'probeDiagnostic()', check: () => fileHasMethodCallNamed('adapter/upstream/host-descriptor-driver.ts', 'probeDiagnostic') },

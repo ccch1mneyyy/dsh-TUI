@@ -1,6 +1,7 @@
 /** L4-4d lifecycle proof: report/metadata/file modules own effects and fence late work. */
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
+import { compositionSource } from './lib/channel-composition.mjs'
 import { createChannelOwner } from '../src/dsh-adapter/channel/owner.js'
 import { createFileActions } from '../src/dsh-adapter/channel/file-actions.js'
 import { createSessionMetadataActions } from '../src/dsh-adapter/channel/session-metadata.js'
@@ -13,10 +14,13 @@ const deferred = <T>() => {
 const tick = () => new Promise<void>(resolve => setImmediate(resolve))
 
 // Source gate: root is wiring only; implementations stay in dedicated owners.
-const root = readFileSync(new URL('../src/dsh-adapter/channel.ts', import.meta.url), 'utf8')
-for (const factory of ['createReportActions(', 'createSessionMetadataActions(', 'createFileActions(']) {
+// Phase 4a: the root is the composition (channel.ts + core/compose.ts +
+// extensions.ts); file queries are composed by the core files module.
+const root = compositionSource()
+for (const factory of ['createReportActions(', 'createSessionMetadataActions(', 'createCoreFiles(']) {
   assert.match(root, new RegExp(factory.replace(/[()]/g, '\\$&'), 'u'))
 }
+assert.match(readFileSync(new URL('../src/dsh-adapter/channel/core/files.ts', import.meta.url), 'utf8'), /createFileActions\(/u)
 for (const leaked of ['async recapRecent(', 'async sideQuestion(', 'async listFileCandidates(', 'async renameSessionTo(', 'doctorInfo() {\n      const lines']) {
   assert.equal(root.includes(leaked), false, `root must not retain ${leaked}`)
 }

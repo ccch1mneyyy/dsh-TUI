@@ -1,9 +1,11 @@
 /** Structural guard for L4 model/mode/workspace extraction. */
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
+import { compositionSource } from './lib/channel-composition.mjs'
 
 const source = (path: string) => readFileSync(new URL(`../src/dsh-adapter/${path}`, import.meta.url), 'utf8')
-const root = source('channel.ts')
+// Phase 4a: the root is the composition (channel.ts + core/compose.ts + extensions.ts).
+const root = compositionSource()
 const model = source('channel/model-actions.ts')
 const switchAction = source('channel/model-switch.ts')
 const mode = source('channel/mode-actions.ts')

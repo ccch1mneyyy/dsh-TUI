@@ -71,7 +71,7 @@ for (const relative of ['adapter/ports/channel-ui.ts', 'dsh-adapter/channel/type
 }
 
 // 4. The channel layer routes no activity events and owns no activity timer.
-for (const relative of ['dsh-adapter/channel.ts', 'dsh-adapter/channel/binding-events.ts']) {
+for (const relative of ['dsh-adapter/channel.ts', 'dsh-adapter/channel/core/compose.ts', 'dsh-adapter/channel/core/binding-feed.ts', 'dsh-adapter/channel/extensions.ts', 'dsh-adapter/channel/binding-events.ts']) {
   const text = readFileSync(join(SRC, relative), 'utf8')
   assert.doesNotMatch(text, /onModelSwitch|onCompact\(|onGitBranch|onAgentStatus/, `${relative} forwards no activity signals`)
   assert.doesNotMatch(text, /setInterval\(/, `${relative} owns no activity tick`)

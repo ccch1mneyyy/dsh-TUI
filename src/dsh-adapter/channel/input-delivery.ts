@@ -28,7 +28,7 @@ import type {
 
 /** One submission's enqueue-time world: the session it was typed in, the
  *  services that resolve its references, and the capabilities live then. */
-interface UserTextOrigin {
+export interface UserTextOrigin {
   readonly session: AgentSession
   readonly agentId: string
   readonly generation: number

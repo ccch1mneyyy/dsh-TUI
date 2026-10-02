@@ -1,6 +1,7 @@
 /** Structural and behavioral guard for L4 background extraction. */
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
+import { compositionSource } from './lib/channel-composition.mjs'
 import { createAgentViewProjection } from '../src/dsh-adapter/channel/agent-view-projection.js'
 import { createBackgroundCurrentAction } from '../src/dsh-adapter/channel/background-action.js'
 import { createChannelBinding } from '../src/dsh-adapter/channel/binding.js'
@@ -10,7 +11,8 @@ import { createChannelOwner } from '../src/dsh-adapter/channel/owner.js'
 import { createSubagentProjection } from '../src/dsh-adapter/channel/subagent-projection.js'
 
 const source = (path: string) => readFileSync(new URL(`../src/dsh-adapter/${path}`, import.meta.url), 'utf8')
-const root = source('channel.ts')
+// Phase 4a: the root is the composition (channel.ts + core/compose.ts + extensions.ts).
+const root = compositionSource()
 const agentView = source('channel/agent-view-projection.ts')
 const background = source('channel/background-action.ts')
 const jobs = source('channel/job-projection.ts')

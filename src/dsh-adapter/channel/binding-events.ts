@@ -1,8 +1,8 @@
 import type { Agent, AssistantStreamFrame, ModelSelectionRef } from '@deepseek-ai/dsh-agent'
 import type { Context } from '@deepseek-ai/cordis'
 import { carrierKeyOf } from '@deepseek-ai/dsh-scope'
-import type { AgentEvent, AgentEventMeta, AgentEventOf } from '../../agent/events.js'
 import type { ChannelProjection } from '../../channel/projection.js'
+import { createSessionBatchRouter, createSessionBinder, type BindingFeedHooks, type BindingScope } from './core/binding-feed.js'
 import type { InputConvergence } from './input-actions.js'
 import type { DshChannelBinding } from './binding.js'
 import type { ChannelOwner } from './owner.js'
@@ -72,21 +72,23 @@ export function createBindingEvents(ctx: Context, deps: {
       if (deps.owner.current()) deps.subagents.forget?.(agent)
     }))
   }
-  const router = createSessionBatchRouter({
-    state: deps.state,
-    projector: deps.projector,
-    inputConvergence: deps.inputConvergence,
-    retireAttachment: deps.retireAttachment,
-    warn: message => ctx.logger.warn(message),
-  })
-
-  const bind = (): void => {
-    try {
-      deps.state.agentBindingGeneration = deps.binding.bind()
+  /**
+   * The DSH half of every bind (core/binding-feed.ts runs it): the owner-level
+   * child listeners once, then per binding the activity seed, the model
+   * selection reset, the preferred effort and mode refresh, the model
+   * selection waterfalls, and the raw durable-event subscribers. Registered
+   * before the core's session subscription, so each raw event reaches the
+   * DSH specialists before the projector folds it (the pre-split order).
+   */
+  const hooks = {
+    // This composition maintains mode/effort/command facts through its own
+    // specialists, and replays its seed synchronously at adoption.
+    ownsSessionFacts: true,
+    onGeneration(): void {
       // DSH specialists attach only to a DSH session (design §3.5).
       if (deps.binding.session.capabilities.native.dsh !== undefined) installSubagents()
-      deps.inputConvergence.cancelInFlight = false
-      deps.inputConvergence.interruptSeq += 1
+    },
+    onBind({ capture, current, register }: BindingScope): void {
       deps.seedActivity?.(deps.binding.agent.session)
       deps.modelActions.selection.current = undefined
       deps.modelActions.selection.assembled = undefined
@@ -95,166 +97,71 @@ export function createBindingEvents(ctx: Context, deps: {
       }
       void deps.modelActions.applyPreferredEffort()
       deps.modeActions.refreshMode()
-      const capture = deps.binding.capture()
-      const session = capture.session
-      const native = session.capabilities.native.dsh
-      const current = (): boolean => deps.owner.current() && deps.binding.isCurrent(capture)
-      const register = <T extends () => void>(dispose: T): T => {
-        deps.binding.subscribe(dispose)
-        return dispose
-      }
-
-      if (native !== undefined) {
-        // Keep the upstream assembly/request pairing, but own each listener as
-        // soon as it is installed. The upstream combined disposer is too late
-        // if request registration throws, and its post-await assembly write is
-        // unsafe after a rebind (including A→B→A ABA).
-        const disposeAssembly = capture.agent.ctx.on('system-prompt/assemble', async (_assembly, _context, next) => {
-          const selected = deps.selection.current
-          const assembled = await next()
-          if (!current()) return assembled
-          deps.selection.assembled = selected
-          if (selected === undefined) return assembled
-          return {
-            ...assembled,
-            variables: {
-              ...assembled.variables,
-              provider: selected.provider,
-              model: selected.model,
-            },
-          }
-        })
-        register(disposeAssembly)
-        const disposeRequest = capture.agent.ctx.on('agent/request', async (_payload, next) => {
-          const resolved = await next()
-          if (!current()) return resolved
-          const selected = deps.selection.assembled
-          if (selected === undefined) return resolved
-          const { reasoningEffort: _inheritedEffort, ...withoutInheritedEffort } = resolved
-          return {
-            ...withoutInheritedEffort,
+      const native = capture.session.capabilities.native.dsh
+      if (native === undefined) return
+      // Keep the upstream assembly/request pairing, but own each listener as
+      // soon as it is installed. The upstream combined disposer is too late
+      // if request registration throws, and its post-await assembly write is
+      // unsafe after a rebind (including A→B→A ABA).
+      const disposeAssembly = native.agent.ctx.on('system-prompt/assemble', async (_assembly, _context, next) => {
+        const selected = deps.selection.current
+        const assembled = await next()
+        if (!current()) return assembled
+        deps.selection.assembled = selected
+        if (selected === undefined) return assembled
+        return {
+          ...assembled,
+          variables: {
+            ...assembled.variables,
             provider: selected.provider,
             model: selected.model,
-            ...(selected.reasoningEffort === undefined ? {} : { reasoningEffort: selected.reasoningEffort }),
-          }
-        })
-        register(disposeRequest)
-        // Raw durable events for the DSH specialists. Registered before the
-        // session subscription, so each event reaches them before the
-        // projector folds it (the pre-split listener order).
-        register(native.subscribeRaw(event => {
-          if (!current()) return
-          deps.messageObserver?.publish(native.agent.session, event)
-          deps.modeActions.onSessionEvent(native.agent.session, event)
-        }))
-      }
-      register(session.subscribe((batch, meta) => router.route(batch, meta, current)))
-    } catch (error) {
-      deps.owner.dispose()
-      throw error
-    }
-  }
-  return { bind }
+          },
+        }
+      })
+      register(disposeAssembly)
+      const disposeRequest = native.agent.ctx.on('agent/request', async (_payload, next) => {
+        const resolved = await next()
+        if (!current()) return resolved
+        const selected = deps.selection.assembled
+        if (selected === undefined) return resolved
+        const { reasoningEffort: _inheritedEffort, ...withoutInheritedEffort } = resolved
+        return {
+          ...withoutInheritedEffort,
+          provider: selected.provider,
+          model: selected.model,
+          ...(selected.reasoningEffort === undefined ? {} : { reasoningEffort: selected.reasoningEffort }),
+        }
+      })
+      register(disposeRequest)
+      // Raw durable events for the DSH specialists. Registered before the
+      // session subscription, so each event reaches them before the
+      // projector folds it (the pre-split listener order).
+      register(native.subscribeRaw(event => {
+        if (!current()) return
+        deps.messageObserver?.publish(native.agent.session, event)
+        deps.modeActions.onSessionEvent(native.agent.session, event)
+      }))
+    },
+  } satisfies BindingFeedHooks
+
+  // Direct regressions drive this owner alone: the same binder the channel
+  // feed runs, over the projector they hand in.
+  const router = createSessionBatchRouter({
+    state: deps.state,
+    projector: deps.projector,
+    inputConvergence: deps.inputConvergence,
+    retireAttachment: deps.retireAttachment,
+    warn: message => ctx.logger.warn(message),
+  })
+  const binder = createSessionBinder({
+    owner: deps.owner,
+    binding: deps.binding,
+    state: deps.state,
+    inputConvergence: deps.inputConvergence,
+    route: router.route,
+    hooks: () => hooks,
+  })
+  return { bind: binder.bind, hooks }
 }
 
-/**
- * The one session-batch writer path, shared by every channel composition (DSH
- * and non-DSH): binding-generation fence over the whole batch, session status
- * and pending-queue bookkeeping, compaction-progress gating, then the shared
- * projector and the renderer wake the backend asked for.
- */
-export function createSessionBatchRouter(deps: {
-  state: ChannelState
-  projector: ChannelProjection
-  inputConvergence: InputConvergence
-  /** Drop channel-side context attached to a discarded input (DSH pre-step
-   *  attachments); absent where nothing is ever attached. */
-  retireAttachment?(messageId: string): void
-  warn(message: string): void
-}) {
-  const reconcileRetiredProjection = (status: 'idle' | 'disposed'): void => {
-    if (!deps.state.working) return
-    deps.warn(`dsh-tui: agent became ${status} while the channel still projected an open turn; releasing volatile UI gates`)
-    deps.inputConvergence.cancelInFlight = false
-    deps.state.cancelPending = false
-    deps.state.working = false
-    deps.state.activeToolCount = 0
-    deps.projector.settleStreaming()
-    deps.projector.updateSpinnerMode()
-  }
-
-  /** `session.status` as the backend reports it. */
-  const applyStatus = (status: 'idle' | 'running' | 'requires-action' | 'disposed'): void => {
-    if (status === 'disposed') {
-      deps.state.status = 'disposed'
-      reconcileRetiredProjection('disposed')
-      deps.state.emit()
-      return
-    }
-    // The channel's status is idle/running only; a parked prompt is mid-turn.
-    deps.state.status = status === 'idle' ? 'idle' : 'running'
-    if (status === 'idle') reconcileRetiredProjection('idle')
-    deps.state.emit()
-  }
-  /**
-   * The backend queue lost inputs. Both a claim and a discard retire the
-   * pending preview, but ONLY a discard retires an attached-context entry: a
-   * claim fires while the loop claims the batch, BEFORE the resident
-   * `agent/pre-step` listener can append the attachment — retiring there would
-   * delete the context before it is ever injected.
-   */
-  const applyPending = (event: AgentEventOf<'pending.changed'>): void => {
-    for (const messageId of event.discarded ?? []) deps.retireAttachment?.(messageId)
-    for (const messageId of [...event.claimed ?? [], ...event.discarded ?? []]) {
-      const before = deps.state.pending.length
-      deps.state.pending = deps.state.pending.filter(item => item.id !== messageId)
-      if (deps.state.pending.length !== before) deps.state.emit()
-    }
-  }
-
-  const route = (batch: readonly AgentEvent[], meta: AgentEventMeta, current: () => boolean): void => {
-    // The generation fence covers the WHOLE batch, whatever it carries: a
-    // callback retained past a rebind (an in-flight dispatch, a compaction
-    // summary stream that outlived the binding it started under) must never
-    // write the replacement session's transcript.
-    if (!current()) return
-    let admitted: AgentEvent[] | undefined
-    let progressOnly = batch.length > 0
-    for (const [index, event] of batch.entries()) {
-      switch (event.type) {
-        case 'session.status':
-          applyStatus(event.status)
-          break
-        case 'pending.changed':
-          applyPending(event)
-          break
-        case 'compaction.progress':
-          // Summary output only advances a compaction row that is open; a
-          // stale stream after the row closed finds nothing to advance.
-          if (deps.state.compaction === undefined) {
-            admitted ??= batch.slice(0, index)
-            continue
-          }
-          break
-        default:
-          break
-      }
-      if (event.type !== 'compaction.progress') progressOnly = false
-      admitted?.push(event)
-    }
-    const events = admitted ?? batch
-    if (progressOnly) {
-      // Pure summary progress: frame-coalesced like the stream it counts.
-      if (events.length === 0) return
-      deps.projector.apply(events, meta)
-      deps.state.emitStream()
-      return
-    }
-    // The one writer of the foreground transcript.
-    deps.projector.apply(events, meta)
-    if (meta.wake === 'frame') deps.state.emitStream()
-    else if (meta.wake !== 'none') deps.state.emit()
-  }
-
-  return { route, reconcileRetiredProjection }
-}
+export { createSessionBatchRouter } from './core/binding-feed.js'

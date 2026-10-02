@@ -1,9 +1,11 @@
 /** L4-4c source gate: plugin commands, skill lifecycle and loaded context stay owned modules. */
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
+import { compositionSource } from './lib/channel-composition.mjs'
 
 const source = (path: string) => readFileSync(new URL(`../src/dsh-adapter/${path}`, import.meta.url), 'utf8')
-const root = source('channel.ts')
+// Phase 4a: the root is the composition (channel.ts + core/compose.ts + extensions.ts).
+const root = compositionSource()
 const external = source('channel/external-commands.ts')
 const skills = source('channel/skill-catalog.ts')
 const context = source('channel/loaded-context.ts')

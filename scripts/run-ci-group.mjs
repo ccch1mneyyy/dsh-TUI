@@ -593,6 +593,10 @@ const GROUPS = {
 // （通知 + 契约失败值）、能力在场时委托、/new 经后端 open、换会话后的代际
 // 栅栏；同一入口的 DSH channel 命令表与今天逐字一致。
     ["verify-backend-channel", ['node', '--import', 'tsx/esm', 'scripts/verify-backend-channel.ts']],
+// channel 构造是一个 owner 事务（Phase 4a 核心 + DSH 扩展）：核心构造、DSH 扩展
+// 挂载、首次 bind 中任一步抛错，都释放宿主监听、agent 上下文监听、决策拓扑标记、
+// IDE 选区连接（真实 loopback）与计时器，并关闭自管生命周期的非 DSH 会话。
+    ["verify-channel-rollback", ['node', '--import', 'tsx/esm', 'scripts/verify-channel-rollback.ts']],
 // 真实 Chat 挂在非 DSH channel 上：斜杠菜单/Tab 只给后端支持的命令，键入的
 // 不可用命令提示 cmd-unavailable-backend、绝不落到模型（运行中也不 steer）。
     ["verify-backend-chat", ['node', '--import', 'tsx/esm', 'scripts/verify-backend-chat.tsx']],

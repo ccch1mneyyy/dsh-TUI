@@ -27,6 +27,7 @@ import type { DshChannelBinding } from './binding.js'
 import type { ChannelOwner } from './owner.js'
 import { assertCapabilityShadowPolicy, type AdapterRuntimeOptions } from '../../adapter/kernel/runtime.js'
 import type { ChannelState, ResumeResult } from './types.js'
+import type { NewSessionOpener, NewSessionPlan } from './core/session-switch.js'
 
 type Binding = DshChannelBinding
 type ResumeState = Pick<
@@ -48,11 +49,7 @@ type ResumeState = Pick<
   | 'emit'
 > & Parameters<typeof resetSessionProjection>[0]
 
-export type NewSessionTarget = {
-  /** Internal guarded workspace handoff; never exposed on ChannelUi.newSession(). */
-  readonly cwd: string
-  readonly displayCwd?: string
-}
+export type { NewSessionTarget } from './core/session-switch.js'
 
 type ResumeAgents = {
   resume(options: {
@@ -417,34 +414,32 @@ export function createSessionResumeActions(
     return resume(sessionId, 'agent-view', true, adoption, entrySession, reservation)
   }
 
-  const newSessionWithTarget = async (target?: NewSessionTarget): Promise<boolean> => {
+  /**
+   * How a DSH `/new` opens its fresh session (the transaction itself —
+   * working check, veto, prepare/adopt, the re-check after a slow open — is
+   * the core's, core/session-switch.ts): the capability shadow gate, the
+   * agents service, compaction settled first, the preset and validated model
+   * route, the cross-process mount reservation, `agents.create`, workspace
+   * ownership, and the DSH half of the adoption tail.
+   */
+  const newSessionOpener: NewSessionOpener = {
     // The typed workspace target seam still creates a real Agent/session; it
     // must pass the same shadow policy gate as the public /new action.
-    assertCapabilityShadowPolicy('host.channel.actions.new-session', deps.runtime.mode, deps.runtime.slices)
-    const adoption = deps.binding.capture()
-    const targetCwd = target?.cwd ?? state.cwd
-    const targetDisplayCwd = target?.displayCwd
-    const current = (): boolean => deps.owner.current() && deps.binding.isCurrent(adoption)
-    if (state.working) {
-      deps.notify(t('new-session-while-working'), { color: 'warning' })
-      return false
-    }
-    const agents = ctx.get('agents') as { create(options: CreateAgentOptions): Promise<AgentHandle> } | undefined
-    if (!agents) {
+    assertAllowed: () => assertCapabilityShadowPolicy('host.channel.actions.new-session', deps.runtime.mode, deps.runtime.slices),
+    available(): boolean {
+      if (ctx.get('agents') !== undefined) return true
       deps.notify(t('new-session-unavailable'), { color: 'error' })
       return false
-    }
-    let sessionId: SessionId
-    let composed: Awaited<ReturnType<typeof composePreset>>
-    let route: { provider: string; model: string }
-    try {
-      if (await deps.sessionSwitchVetoed('new') || !current()) return false
+    },
+    async plan(target, current): Promise<NewSessionPlan | undefined> {
+      const agents = ctx.get('agents') as { create(options: CreateAgentOptions): Promise<AgentHandle> } | undefined
+      if (agents === undefined) throw new Error(t('new-session-unavailable'))
       await deps.settleCompaction()
-      if (!current()) return false
-      sessionId = SessionId(randomUUID())
+      if (!current()) return undefined
+      const sessionId = SessionId(randomUUID())
       const presetPref = options.configuredPreset === undefined ? readPresetPref() : undefined
-      composed = await composePreset(ctx, options.configuredPreset ?? presetPref)
-      if (!current()) return false
+      const composed = await composePreset(ctx, options.configuredPreset ?? presetPref)
+      if (!current()) return undefined
       const resolved = resolveModelRoute(
         { provider: options.configuredProvider, model: options.configuredModel },
         readModelPref(),
@@ -452,82 +447,49 @@ export function createSessionResumeActions(
       )
       const llm = ctx.get('llm') as { listModels(provider: string): Promise<readonly { id: string }[]> } | undefined
       const validated = await validateModelRoute(llm, resolved, { provider: options.provider, model: options.model })
-      route = validated.route
-      if (!current()) return false
+      const route = validated.route
+      if (!current()) return undefined
       if (!migratePresetPref(presetPref, composed.agentPreset)) {
         deps.notify(t('preset-switched-pref-failed', { id: composed.agentPreset ?? presetPref ?? 'unknown' }), { color: 'warning' })
       }
       if (validated.rejected !== undefined) {
         deps.notify(t('model-route-invalid', { provider: validated.rejected.provider, model: validated.rejected.model, fallback: `${route.provider}/${route.model}` }), { color: 'warning', timeoutMs: 8000 })
       }
-    } catch (error) {
-      if (current()) {
-        const message = error instanceof Error ? error.message : String(error)
-        deps.notify(t('new-session-failed', { err: message }), { color: 'error', timeoutMs: 8000 })
+      const targetCwd = target.cwd
+      let reservation: MountReservation | undefined
+      return {
+        // Reserve BEFORE the factory runs: the moment `agents.create`
+        // returns, this process holds the only write handle on a log no peer
+        // has been told about yet, and the publisher would not name it until
+        // its next beat.
+        async reserve() { reservation = await reserveCreatedSession(sessionId) },
+        open: async cwd => createDshSession(ctx, await agents.create({
+          sessionId,
+          meta: { cwd, ...(composed.agentPreset === undefined ? {} : { agentPreset: composed.agentPreset }) },
+          agentOptions: route,
+          ...(composed.setup === undefined ? {} : { setup: composed.setup }),
+        })),
+        async attach(_candidate, isCurrent) {
+          try {
+            await attachSessionToWorkspace(ctx, targetCwd, sessionId)
+          } catch (error) {
+            if (isCurrent()) deps.notify(t('new-session-attach-failed', { err: error instanceof Error ? error.message : String(error) }), { color: 'warning', timeoutMs: 8000 })
+          }
+        },
+        adopt(candidate): string {
+          const handle = dshHandleOf(candidate)
+          resetAndBind(handle, composed.agentPreset, route, false)
+          clearResumeTarget()
+          touchSession(handle.agent.id)
+          return String(handle.agent.id)
+        },
+        finish(committed) {
+          if (committed) reservation?.settle()
+          else reservation?.abandon()
+        },
       }
-      return false
-    }
-    // Reserve BEFORE the factory runs: the moment `agents.create` returns, this
-    // process holds the only write handle on a log no peer has been told about
-    // yet, and the publisher would not name it until its next beat.
-    const reservation = await reserveCreatedSession(sessionId)
-    let candidate: AgentSession
-    try {
-      candidate = await deps.binding.prepare(adoption, async () => createDshSession(ctx, await agents.create({
-        sessionId,
-        meta: { cwd: targetCwd, ...(composed.agentPreset === undefined ? {} : { agentPreset: composed.agentPreset }) },
-        agentOptions: route,
-        ...(composed.setup === undefined ? {} : { setup: composed.setup }),
-      })))
-    } catch (error) {
-      reservation.abandon()
-      if (current()) {
-        const message = error instanceof Error ? error.message : String(error)
-        deps.notify(t('new-session-failed', { err: message }), { color: 'error', timeoutMs: 8000 })
-      }
-      return false
-    }
-    const handle = dshHandleOf(candidate)
-    if (!current()) { await deps.binding.abandon(candidate); reservation.abandon(); return false }
-    try {
-      await attachSessionToWorkspace(ctx, targetCwd, sessionId)
-    } catch (error) {
-      if (current()) deps.notify(t('new-session-attach-failed', { err: error instanceof Error ? error.message : String(error) }), { color: 'warning', timeoutMs: 8000 })
-    }
-    if (!current()) { await deps.binding.abandon(candidate); reservation.abandon(); return false }
-    // Do not catch this synchronous commit tail. A post-commit setup failure
-    // is owned by binding.adopt(), which revokes the new live handle and must
-    // reject its caller rather than masquerade as an ordinary precommit false.
-    let committed = false
-    try {
-      const result = deps.binding.adopt(candidate, adoption, (committedBinding, disposePrevious) => {
-        const previousSessionId = String(committedBinding.agent.session.id)
-        // The target only becomes shared channel state inside the successful
-        // adoption tail. A losing prepared handle therefore cannot publish or
-        // roll back another workspace's cwd.
-        state.cwd = targetCwd
-        state.displayCwd = targetDisplayCwd ?? deps.describeWorkspace(targetCwd).description ?? targetCwd
-        deps.resetIdeSelection()
-        // Reset the input FIFO and the pending-decision indicators BEFORE the
-        // first emit: a submit enqueued from a session-changed subscriber must
-        // land on a fresh chain instead of behind the replaced session's parked
-        // promise (main's bind → clear → refresh order).
-        deps.clearStagedImages()
-        resetAndBind(handle, composed.agentPreset, route, false)
-        clearResumeTarget()
-        touchSession(handle.agent.id)
-        disposePrevious('dispose')
-        deps.notifySessionSwitched('new', String(handle.agent.id), previousSessionId)
-        return true
-      })
-      committed = true
-      return result
-    } finally {
-      if (committed) reservation.settle()
-      else reservation.abandon()
-    }
+    },
   }
-  const newSession = (): Promise<boolean> => newSessionWithTarget()
 
-  return { resumeInto, resumeTo, newSession, newSessionWithTarget }
+  return { resumeInto, resumeTo, newSessionOpener }
 }

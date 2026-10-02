@@ -258,7 +258,8 @@ const check1 = (name: string, ok: boolean, detail?: string) => {
 
 // ── G. channel 接线断言 ───────────────────────────────────────────────────
 {
-  const channel = readFileSync(join(root, 'src/dsh-adapter/channel.ts'), 'utf8')
+  // Phase 4a: the DSH extension (channel/extensions.ts) composes the invoker.
+  const channel = readFileSync(join(root, 'src/dsh-adapter/channel/extensions.ts'), 'utf8')
   const invoker = readFileSync(join(root, 'src/dsh-adapter/channel/external-commands.ts'), 'utf8')
   const definitionLookup = invoker.indexOf('const definition = service.find(commandAgent, name)')
   const ownerLookup = invoker.indexOf('const owner = commandOwner(ctx, definition)')

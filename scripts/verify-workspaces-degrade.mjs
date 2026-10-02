@@ -34,7 +34,9 @@ assert.doesNotMatch(
   'code-level inject must NOT hard-require tuiWorkspaces (stale patch = boot deadlock, #183)',
 )
 
-for (const rel of ['lib/types/dsh-adapter/plugin.js', 'lib/types/dsh-adapter/channel.js']) {
+// Phase 4a: the channel's host seams (the workspace runtime among them) are
+// resolved by the core for every composition (channel/core/host.ts).
+for (const rel of ['lib/types/dsh-adapter/plugin.js', 'lib/types/dsh-adapter/channel/core/host.js']) {
   const compiled = read(rel)
   assert.match(compiled, /createLocalWorkspaceRuntime/, `${rel} carries the local-only fallback`)
   assert.match(compiled, /get\('tuiWorkspaces'\)/, `${rel} reads the service optionally via ctx.get`)

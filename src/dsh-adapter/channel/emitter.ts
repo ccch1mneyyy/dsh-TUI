@@ -13,11 +13,14 @@ export function createChannelEmitter(
      * row's full text on the promise that `loadOlder` restores it from the
      * durable history; a session whose backend cannot slice its history
      * keeps every row whole instead (and shows no "load earlier" divider).
+     * A function is read at every wake (the composition decides once its
+     * extension attached).
      */
-    readonly fold?: boolean
+    readonly fold?: boolean | (() => boolean)
   } = {},
 ) {
-  const fold = options.fold !== false
+  const foldOption = options.fold
+  const fold: () => boolean = typeof foldOption === 'function' ? foldOption : foldOption === false ? () => false : () => true
   const listeners = new Set<() => void>()
   const foldCursor = { rows: undefined as unknown, index: 0 }
   let timer: ReturnType<typeof setTimeout> | undefined
@@ -27,7 +30,7 @@ export function createChannelEmitter(
     // Folding mutates retained transcript rows after a reader may have
     // cached the ingress revision. Publish that completed fold separately so
     // listeners cannot observe a stale or mixed same-version snapshot.
-    if (fold && foldRows(state.rows, MAX_ROWS, foldCursor) > 0) state.version += 1
+    if (fold() && foldRows(state.rows, MAX_ROWS, foldCursor) > 0) state.version += 1
     for (const listener of listeners) {
       try { listener() } catch (error) {
         if (!swallowNestedUpdateOverflow(error, source)) throw error

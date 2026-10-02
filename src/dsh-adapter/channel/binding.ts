@@ -289,6 +289,20 @@ export function createChannelBinding(initial: AgentSession, owner: ChannelOwner)
       await disposePending(candidate)
     },
 
+    /**
+     * Close the bound session at channel release when this cell owns its
+     * lifetime: any session that is not a DSH session (a backend session no
+     * host registry disposes — for the Claude backend, its CLI child). A DSH
+     * session's lifetime belongs to its handle's owner, never to the UI
+     * release. Deferred one microtask, so release itself never awaits or
+     * throws; idempotent with every other close of the same session.
+     */
+    releaseOwned(): void {
+      const session = currentSession
+      if (agentOf(session) !== undefined) return
+      void Promise.resolve().then(() => dispose(session))
+    },
+
     /** A registry may retain an agent while its async handle close drains. */
     async waitForDisposal(sessionId: string): Promise<void> {
       await closingSessions.get(sessionId)
@@ -365,6 +379,7 @@ export function dshChannelBinding(binding: ChannelBinding): DshChannelBinding {
     prepare: (capture, create) => binding.prepare(capture, create),
     abandon: candidate => binding.abandon(candidate),
     waitForDisposal: sessionId => binding.waitForDisposal(sessionId),
+    releaseOwned: () => binding.releaseOwned(),
     adopt: (candidate, capture, tail) => binding.adopt(candidate, capture, (previous, disposition) =>
       tail({ ...previous, agent: require(previous.agent) }, disposition)),
     switchTo: (next, tail) => binding.switchTo(next, (previous, disposition) =>

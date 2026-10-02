@@ -1,78 +1,35 @@
-import { createUserMessage } from '@deepseek-ai/dsh-llm'
-import type { SessionEvent } from '@deepseek-ai/dsh-session'
-import { markChannelReadDirty } from '../../adapter/channel/read-view.js'
-import { writeActivityFrames } from '../../activityPrefs.js'
-import { isPresetName, normalizeActivityPreset } from '../../components/activityFrames.js'
 import { t } from '../../i18n.js'
 import { snapshotLiveSessionEvents } from '../compat/liveSession.js'
-import { runForegroundShell, type ForegroundShell } from '../compat/shell.js'
-import { LOCAL_OUTPUT_LIMIT, preview, type foldBack as FoldBack } from './transcript.js'
+import type { foldBack as FoldBack } from './transcript.js'
 import type { ChannelState, ToolViewPresenter } from './types.js'
 
-/** `/activity frames <name>`: validate, persist, re-render (backend-neutral). */
-export function setActivityFrames(
-  state: Pick<ChannelState, 'activityFrames' | 'emit'>,
-  notify: ChannelState['notify'],
-  name: string,
-): boolean {
-  // A retired preset id normalizes to the current default, so the
-  // in-memory state, the persisted preference and the toast agree instead
-  // of diverging until restart.
-  const preset = normalizeActivityPreset(name) ?? name
-  if (!isPresetName(preset)) { notify(t('unknown-activity-preset', { name }), { color: 'error' }); return false }
-  if (preset === state.activityFrames) { notify(t('activity-indicator-already', { name: preset }), { color: 'success' }); return true }
-  if (!writeActivityFrames(preset)) { notify(t('activity-pref-write-failed'), { color: 'error' }); return false }
-  state.activityFrames = preset
-  state.emit()
-  notify(t('activity-indicator-switched', { name: preset }))
-  return true
-}
+export { setActivityFrames } from './core/local-actions.js'
 
-/** Owns local-only transcript mutations, shell output, and live subagent queries. */
+/**
+ * The DSH halves of the local actions (the backend-neutral ones live in
+ * core/local-actions.ts): restoring folded rows from the DSH session log,
+ * and the live subagent roster query.
+ */
 export function createLocalActions(deps: {
   ctx: { get(name: string): unknown }
   owner: { current(): boolean }
   binding: {
     capture(): unknown
     isCurrent(capture: unknown): boolean
-    readonly agent: { session: unknown; followup(message: unknown): void }
+    readonly agent: { session: unknown }
   }
   state: ChannelState
-  rowIds: { value: number }
-  projector: { reset(): void; presentCallView: NonNullable<ToolViewPresenter>['call']; presentResultView: NonNullable<ToolViewPresenter>['result'] }
-  subagents: { dropRows(): void }
-  jobs: { dropRows(): void }
+  presenters: ToolViewPresenter
   foldBack: typeof FoldBack
-  workspace: { describe(cwd: string): { kind: string; badge: string; label: string }; commandShell(cwd: string): Promise<ForegroundShell | undefined> }
-  shell?: ForegroundShell
-  notify: ChannelState['notify']
 }) {
-  const { ctx, owner, binding, state, rowIds, projector, subagents, jobs, foldBack, workspace, shell, notify } = deps
+  const { ctx, owner, binding, state, foldBack } = deps
   const current = (capture: unknown): boolean => owner.current() && binding.isCurrent(capture)
   return {
+    /** The history slicer behind "load earlier": restores folded rows from
+     *  the durable DSH log (the core emits when anything came back). */
     loadOlder(): number {
-      const restored = foldBack(state.rows, snapshotLiveSessionEvents(binding.agent.session), { call: projector.presentCallView, result: projector.presentResultView })
-      if (restored > 0) state.emit()
-      return restored
+      return foldBack(state.rows, snapshotLiveSessionEvents(binding.agent.session), deps.presenters)
     },
-    clear(): void {
-      state.rows.length = 0
-      markChannelReadDirty(state.rows)
-      rowIds.value = 0
-      projector.reset()
-      subagents.dropRows()
-      jobs.dropRows()
-      state.activeToolCount = 0
-      state.responseChars = 0
-      state.rows.push({ id: rowIds.value++, kind: 'notice', text: 'Session cleared' })
-      state.emit()
-    },
-    pushLocal(title: string, lines: readonly string[]): void {
-      state.rows.push({ id: rowIds.value++, kind: 'local', text: title })
-      for (const line of lines) state.rows.push({ id: rowIds.value++, kind: 'local-output', text: preview(line, LOCAL_OUTPUT_LIMIT) })
-      state.emit()
-    },
-    setActivityFrames: (name: string): boolean => setActivityFrames(state, notify, name),
     async listSubagents(): Promise<string[]> {
       const service = ctx.get('subagents') as {
         listChildren(sessionId: unknown, signal?: AbortSignal): Promise<Array<{ mode: string; label?: string; activity: string; id: string | { value?: string } }>>
@@ -96,26 +53,6 @@ export function createLocalActions(deps: {
         if (!current(capture)) throw error
         return [t('subagent-query-failed', { err: error instanceof Error ? error.message : String(error) })]
       }
-    },
-    async runLocalCommand(command: string, includeInContext: boolean): Promise<void> {
-      const capture = binding.capture()
-      const cwd = state.cwd
-      const target = workspace.describe(cwd)
-      state.rows.push({ id: rowIds.value++, kind: 'local', text: command, executionTarget: target.kind === 'local' ? target.badge : `${target.badge} · ${target.label}` })
-      state.emit()
-      let output = '(no output)'
-      const executor = await workspace.commandShell(cwd) ?? shell
-      if (!current(capture)) return
-      if (executor) {
-        try {
-          const result = await runForegroundShell(executor, { command, workdir: cwd, timeoutMs: 30000 })
-          output = result.stdout.text.trim() || result.stderr.text.trim() || (result.timedOut ? '(timed out)' : '(no output)')
-        } catch (error) { output = error instanceof Error ? error.message : String(error) }
-      }
-      if (!current(capture)) return
-      state.rows.push({ id: rowIds.value++, kind: 'local-output', text: preview(output, LOCAL_OUTPUT_LIMIT) })
-      state.emit()
-      if (includeInContext) binding.agent.followup(createUserMessage({ content: [{ type: 'text', text: `<bash-stdout>\n${output}\n</bash-stdout>` }], source: { kind: 'user' } }))
     },
   }
 }
