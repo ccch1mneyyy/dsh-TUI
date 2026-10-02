@@ -813,19 +813,9 @@ function createChannelWithOwner(
   switchModelAction = createModelSwitchAction(ctx, state, {
     owner,
     binding,
-    rowIds,
-    // Compaction is installed below before the channel binds or exposes input.
+    selection,
     settleCompaction: () => settleManualCompaction(),
-    resetProjector: () => projector.reset(),
-    resetSubagents: subagentProjection.reset,
-    resetJobs: resetJobProjection,
-    replay: replaySessionSeed,
-    settleReplay: projector.settleStreaming,
-    bindAgent: () => bindAgent(),
-    refreshCommands: refreshCommandList,
-    refreshLoadedContext,
-    refreshSkillCommands,
-    clearStagedImages,
+    applyPreferredEffort: () => modelActions.applyPreferredEffort(),
     dropModelCompletion: () => modelActions.dropModelNodeCache(),
     notify,
   })

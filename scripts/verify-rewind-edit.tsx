@@ -163,7 +163,8 @@ async function verify(fullscreen: boolean, columns: number, entry: 'slash' | 'es
     if (entry === 'model') {
       const previousAgentId = channel.agentId
       assert.equal(await channel.switchModel('fake', 'other-model'), true, 'model switch succeeds')
-      assert.notEqual(channel.agentId, previousAgentId, 'model switch adopts a new agent')
+      assert.equal(channel.agentId, previousAgentId, 'model switch preserves the agent and session')
+      assert.equal(forks.length, 0, 'model switch creates no historical fork')
       assert.equal(channel.model, 'other-model')
       assert.ok(await settled(() => shows('other-model')), 'new model is rendered before editing its draft')
       stdin.write('draft after model switch')

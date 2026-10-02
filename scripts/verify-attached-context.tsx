@@ -232,14 +232,14 @@ const makeHandle = agent => ({ agent, dispose: () => Promise.resolve() })
   stop()
   channel.releaseContributions()
 }
-// resume / rewind / model-switch / 后台化都必须走同一个重置漏斗（否则新会话会
+// resume / rewind / 后台化都必须走同一个重置漏斗（否则新会话会
 // 带着上一段对话的 chip，甚至把面板上下文喂给别的会话）。
 {
-  const callers = ['session-adoption.ts', 'session-live-adoption.ts', 'session-resume.ts', 'model-switch.ts', 'background-action.ts']
+  const callers = ['session-adoption.ts', 'session-live-adoption.ts', 'session-resume.ts', 'background-action.ts']
   const missing = callers.filter(file =>
     nodeFs.readFileSync(nodePath.join(import.meta.dirname, '..', 'src', 'dsh-adapter', 'channel', file), 'utf8')
       .indexOf('resetSessionProjection') < 0)
-  check('B5 rewind/resume/model-switch/background 共用 resetSessionProjection 漏斗', missing.length === 0, missing.join(','))
+  check('B5 rewind/resume/background 共用 resetSessionProjection 漏斗', missing.length === 0, missing.join(','))
   const resetSource = nodeFs.readFileSync(
     nodePath.join(import.meta.dirname, '..', 'src', 'dsh-adapter', 'channel', 'session-reset.ts'), 'utf8')
   check('B5 漏斗确实清 attachedContexts', resetSource.indexOf('state.attachedContexts = []') >= 0)

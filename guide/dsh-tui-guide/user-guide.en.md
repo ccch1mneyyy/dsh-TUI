@@ -361,7 +361,7 @@ The command menu = built-in commands (58, aliases included) + DSH registry comma
 
 | Command | Args | Effect |
 |---|---|---|
-| `/model` | none | model selector; **switching = fork the session** (history kept, only routing changes; a session nobody has typed into records no branch, keeping automatic titles for its first prompt), choice persisted to `~/.dsh-tui/model.json` |
+| `/model` | none | model selector; **switch within the same session** (ID, history, and title kept; the next request uses the new route), choice persisted to `~/.dsh-tui/model.json` |
 | `/effort` | `status` / `<id>` | reasoning effort: no-arg slider (`←/→` adjust); `status` current level; `<id>` set directly. Persisted to `~/.dsh-tui/effort.json`; new-session start level follows /settings `effortDefault` (§5.3) |
 | `/thinking` | none | extended-thinking display toggle (thinking expands item by item while streaming) |
 | `/tokens` | none | three separate figures, never two different quantities side by side: **this request**'s upload (input + cache read + cache write — the harness's four buckets are disjoint), the **session totals** (uncached input / output / cache read / cache write), and **context occupancy** |
@@ -460,7 +460,7 @@ Full-screen view of the whole session timeline (doesn't pollute scrollback); key
 
 ### 4.6 Model switching and presets
 
-- `/model`: selector. **Switching = fork the session** (history kept, only routing changes, the old session stays in `/resume`);
+- `/model`: selector. **Switch within the same session** (ID and history kept; the next request uses the new route);
   persisted to `~/.dsh-tui/model.json`.
 - Switching is rejected mid-turn.
 - `/preset` options: `standard` (default full features), `ptc`, `minimal` (the kernel's Minimal preset: one persistent-shell tool only, no compaction, no plan mode — and therefore no compaction and no tool-result pruning, so a long session can hit the context limit and `/compact` plus questions are unavailable; Help and `/` completion mark the command, and entering the preset says so once),
@@ -651,7 +651,7 @@ When dsh exits unexpectedly, safe mode gives a **read-only** environment diagnos
 
 | Item | Command | Notes |
 |---|---|---|
-| Model | `/model` | selector; **switching = fork the session** (history kept, routing only); persisted to `~/.dsh-tui/model.json`, reused on restart and `/new`. Never chosen → built-in default (currently `deepseek-flash`) |
+| Model | `/model` | selector; **switch within the same session** (ID and history kept; subsequent requests use the new route); persisted to `~/.dsh-tui/model.json`, reused on restart and `/new`. Never chosen → built-in default (currently `deepseek-flash`) |
 | Reasoning effort | `/effort` | slider (`←/→` live) or `/effort <id>`; `/effort status` for current; new-session default in /settings → default reasoning effort |
 | Agent preset | `/preset` | `standard` / `ptc` (old 0.1.1 name `code`) / `minimal` / `cordis` / **Liangshen mode `liangshen`**; **can't switch an already-started session** |
 | Theme | `/theme` | `auto` (OSC 11 follows terminal background) / `light` / `dark` / `dark-ansi`; `/theme <名>` direct; `/theme status` for the result |
@@ -701,7 +701,7 @@ When dsh exits unexpectedly, safe mode gives a **read-only** environment diagnos
 12. Session manager (`/resume`, `/home`, `/agentview`, `/bg`, or `⌸` at the input line start):
     type to filter, `★` pin, `Ctrl+X` stop a background session; switching just parks it.
 13. Mid-turn, `/compact`, `/model`, `/restart` are rejected — `Ctrl+C` first or wait for the turn to end.
-14. `/model` switch = fork (history kept), persisted and reused on restart and `/new`.
+14. `/model` switches subsequent requests in the same session (ID and history kept), persisted and reused on restart and `/new`.
 
 **Ask the manual**
 
