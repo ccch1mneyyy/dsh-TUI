@@ -352,6 +352,7 @@ export function createCoreChannel(
         inputs: fifo.dispatched + shellInputs.started,
         unsettled: fifo.unsettled || shellInputs.inFlight > 0,
         turnStarts: feed.router.turnStarts(),
+        ...(fifo.parked !== undefined ? { parked: fifo.parked } : shellInputs.inFlight > 0 ? { parked: '!!' } : {}),
       }
     },
     unavailable,

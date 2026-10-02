@@ -76,6 +76,19 @@ const project = join(root, 'project')
 mkdirSync(project)
 writeFileSync(join(project, 'README.md'), '# Live fixture\n\nThe secret word is marmalade.\n')
 const host = { cwd: project, debug: () => undefined, warn: () => undefined, stderr: () => undefined }
+/**
+ * Every Claude session this run created (opened, forked, rewound): deleted
+ * from the real ~/.claude in the final `finally`, success or failure — the
+ * catalog lists programmatic sessions, so leftovers would show up in the
+ * user's Claude browser. (CLAUDE_CONFIG_DIR is NOT isolated: that would lose
+ * the login, and credentials are never copied.)
+ */
+const created = new Set<string>()
+const openSession = async (target: Parameters<typeof claudeBackend.open>[0]): Promise<AgentSession> => {
+  const session = await claudeBackend.open(target, host)
+  created.add(session.ref.sessionId)
+  return session
+}
 
 /** Subscribe and wait for predicates over the accumulated events. */
 function watch(session: AgentSession) {
@@ -122,7 +135,7 @@ try {
   if (sections.has('basic')) {
   // 1. text turn
   {
-    const session = await claudeBackend.open({ kind: 'create', cwd: project }, host)
+    const session = await openSession({ kind: 'create', cwd: project })
     const live = watch(session)
     await session.submit({ text: 'Reply with exactly: live-ok', clientMessageId: crypto.randomUUID() }, 'followup')
     await live.until(() => turnEnds(live.events).length >= 1, 120_000, 'first turn end')
@@ -139,7 +152,7 @@ try {
   // 2. Read + Write (acceptEdits start mode via the developer override)
   {
     process.env.DSH_TUI_CLAUDE_PERMISSION_MODE = 'acceptEdits'
-    const session = await claudeBackend.open({ kind: 'create', cwd: project }, host)
+    const session = await openSession({ kind: 'create', cwd: project })
     delete process.env.DSH_TUI_CLAUDE_PERMISSION_MODE
     const live = watch(session)
     await session.submit({ text: 'Use the Read tool to read README.md. Then use the Write tool to create out.txt containing exactly the secret word from README.md. Reply done.', clientMessageId: crypto.randomUUID() }, 'followup')
@@ -155,7 +168,7 @@ try {
 
   // 3. cancel mid-stream
   {
-    const session = await claudeBackend.open({ kind: 'create', cwd: project }, host)
+    const session = await openSession({ kind: 'create', cwd: project })
     const live = watch(session)
     await session.submit({ text: 'Count from 1 to 300, one number per line, no other text.', clientMessageId: crypto.randomUUID() }, 'followup')
     await live.until(() => live.events.some(event => event.type === 'assistant.delta' && event.delta.kind === 'text'), 120_000, 'first text delta')
@@ -169,7 +182,7 @@ try {
 
   // 4. open → dispose ×5
   for (let i = 0; i < 5; i += 1) {
-    const session = await claudeBackend.open({ kind: 'create', cwd: project }, host)
+    const session = await openSession({ kind: 'create', cwd: project })
     check(`dispose ×5: session ${i + 1} opened`, session.status === 'idle')
     // The probe must see a live child, or "none left" below proves nothing.
     if (i === 0) check('dispose ×5: ps --ppid sees the live claude child', claudeChildren().length >= 1, claudeChildren())
@@ -182,7 +195,7 @@ try {
   // 5. approvals through the shared store (default mode)
   if (sections.has('permissions')) {
     process.env.DSH_TUI_CLAUDE_PERMISSION_MODE = 'default'
-    const session = await claudeBackend.open({ kind: 'create', cwd: project }, host)
+    const session = await openSession({ kind: 'create', cwd: project })
     delete process.env.DSH_TUI_CLAUDE_PERMISSION_MODE
     const permissions = new PermissionStore()
     const link = attachInteraction({ permissions, questions: new QuestionStore(), debug: () => undefined }, { sessionId: session.ref.sessionId, capabilities: session.capabilities })
@@ -229,7 +242,7 @@ try {
     const prefsFile = join(DATA_DIR, 'backends', 'claude', 'prefs.json')
     const savedPrefs = existsSync(prefsFile) ? readFileSync(prefsFile, 'utf8') : undefined
     process.env.DSH_TUI_CLAUDE_PERMISSION_MODE = 'default'
-    const session = await claudeBackend.open({ kind: 'create', cwd: project }, host)
+    const session = await openSession({ kind: 'create', cwd: project })
     delete process.env.DSH_TUI_CLAUDE_PERMISSION_MODE
     try {
       const live = watch(session)
@@ -284,7 +297,7 @@ try {
 
   // 7. reconnect before and after the first persisted turn (2 turns)
   if (sections.has('reconnect')) {
-    const session = await claudeBackend.open({ kind: 'create', cwd: project }, host)
+    const session = await openSession({ kind: 'create', cwd: project })
     try {
       const live = watch(session)
       await session.capabilities.auth!.reconnect()
@@ -306,20 +319,20 @@ try {
   // 8. sessions: resume, /fork, rewind (Phase 4b)
   if (sections.has('sessions')) {
     const { getSessionMessages } = await import('@anthropic-ai/claude-agent-sdk')
-    const created = await claudeBackend.open({ kind: 'create', cwd: project }, host)
-    const sessionId = created.ref.sessionId
+    const original = await openSession({ kind: 'create', cwd: project })
+    const sessionId = original.ref.sessionId
     const firstId = crypto.randomUUID()
     try {
-      const live = watch(created)
-      await created.submit({ text: 'Remember the word persimmon. Reply with exactly: first-ok', clientMessageId: firstId }, 'followup')
+      const live = watch(original)
+      await original.submit({ text: 'Remember the word persimmon. Reply with exactly: first-ok', clientMessageId: firstId }, 'followup')
       await live.until(() => turnEnds(live.events).length >= 1, 120_000, 'the first turn')
       check('sessions: the first turn completes', turnEnds(live.events)[0]?.reason.kind === 'completed', turnEnds(live.events)[0])
     } finally {
-      await created.dispose()
+      await original.dispose()
     }
     const listed = await claudeBackend.catalog!.list({ cwd: project })
     check('sessions: the catalog lists the session dsh-tui created (programmatic included)', listed.some(row => row.id === sessionId && row.backendId === 'claude' && row.cwd === project), listed.map(row => row.id))
-    const resumed = await claudeBackend.open({ kind: 'resume', sessionId }, host)
+    const resumed = await openSession({ kind: 'resume', sessionId })
     const secondId = crypto.randomUUID()
     try {
       const history = await resumed.history()
@@ -334,9 +347,11 @@ try {
       const liveTurn = live.events.find((event): event is Extract<AgentEvent, { type: 'turn.start' }> => event.type === 'turn.start')
       check('sessions: the live turn continues the replayed numbering', liveTurn !== undefined && liveTurn.turn > replayedTurns, liveTurn)
       const forked = await resumed.capabilities.fork!.fork()
+      created.add(forked.sessionId)
       const forkChain = await getSessionMessages(forked.sessionId, { dir: project })
       check('sessions: /fork writes a persisted copy with both turns, the live session untouched', forked.sessionId !== sessionId && forkChain.filter(message => message.type === 'user').length >= 2 && resumed.status !== 'disposed', forkChain.length)
       const rewound = await resumed.capabilities.rewind!.rewind(secondId, 'conversation')
+      if (rewound.kind === 'rewound') created.add(rewound.session.sessionId)
       check('sessions: the conversation rewind forks before turn 2\'s prompt', rewound.kind === 'rewound' && rewound.session.sessionId !== sessionId, rewound)
       if (rewound.kind === 'rewound') {
         const rewoundChain = await getSessionMessages(rewound.session.sessionId, { dir: project })
@@ -356,6 +371,9 @@ try {
     check('sessions: no claude child survives', (await waitForNoChildren()).length === 0, claudeChildren())
   }
 } finally {
+  // Success or failure: no session of this run stays in the user's store
+  // (one never persisted has nothing to delete).
+  for (const id of created) await claudeBackend.catalog!.delete!(id, project).catch(() => undefined)
   rmSync(root, { recursive: true, force: true })
 }
 

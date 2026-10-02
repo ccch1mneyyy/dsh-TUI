@@ -20,10 +20,12 @@
  *   joins the open turn, as its `started` frame does live;
  * - `[Request interrupted by user]` closes the turn as aborted (the live
  *   interrupt row); a `task-notification` prompt opens the notification
- *   turn; local-command echoes (`<command-name>`, `<local-command-*>`,
- *   `<bash-stdout>`), meta and synthetic texts never become bubbles — a
- *   user-typed slash command shows as the `/name args` it was typed as
- *   (`/compact` excepted, as live);
+ *   turn; local-command echoes (`<command-name>`, `<local-command-*>`), meta
+ *   and synthetic texts never become bubbles — a user-typed slash command
+ *   shows as the `/name args` it was typed as (`/compact` excepted, as
+ *   live); command output sent on to the model (`<bash-stdout>`, dsh-tui's
+ *   `!!`) is a prompt of its own: it closes the open turn and opens the
+ *   turn the model answers it in, shown as its output row (as live);
  * - a compact summary (`isCompactSummary`) closes the open turn and renders
  *   the compaction rows (`compaction.end` + the summary).
  *
@@ -126,7 +128,10 @@ function classifyUser(message: Rec): UserKind {
   if (text.startsWith(INTERRUPT_ECHO)) return { kind: 'interrupt' }
   const origin = str(rec(message.origin)?.kind)
   if ((origin !== undefined && origin !== 'human') || TASK_NOTIFICATION.test(text)) return { kind: 'notification' }
-  if (LOCAL_COMMAND_TAG.test(text) || BASH_OUTPUT_TAG.test(text)) return { kind: 'hidden', why: 'local output' }
+  if (LOCAL_COMMAND_TAG.test(text)) return { kind: 'hidden', why: 'local output' }
+  // Command output sent on to the model: its own turn (the translator shows
+  // it as its output row, never a bubble).
+  if (BASH_OUTPUT_TAG.test(text)) return { kind: 'prompt', text: raw, queued: false }
   if (COMMAND_TAG.test(text)) {
     const line = commandLine(text)
     // `/compact` never shows its own row (live hides it too); its summary

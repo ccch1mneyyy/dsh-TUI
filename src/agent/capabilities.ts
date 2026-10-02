@@ -85,7 +85,10 @@ export interface RewindPreview {
  * changed, when files were restored.
  */
 export type RewindOutcome =
-  | { readonly kind: 'rewound'; readonly session: AgentSessionRef; readonly files?: RewindPreview }
+  /** `conversationError`: the files were restored but the conversation
+   *  rewind then failed (`session` is the bound one) — a partial outcome the
+   *  user must hear about, never one reported as nothing done. */
+  | { readonly kind: 'rewound'; readonly session: AgentSessionRef; readonly files?: RewindPreview; readonly conversationError?: string }
   | { readonly kind: 'refused'; readonly reason: string }
 
 /** One MCP server's status. */

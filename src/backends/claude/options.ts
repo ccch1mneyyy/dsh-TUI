@@ -76,7 +76,7 @@ export const OPTION_POLICY = {
   resumeSessionAt: 'later',
   resumeDropsTurn: 'later',
   sandbox: 'omit',
-  settings: 'omit',
+  settings: 'set', // the route pin of an injected subscription token (auth.ts)
   managedSettings: 'omit',
   settingSources: 'set',
   skills: 'omit',
@@ -159,6 +159,9 @@ export type ProfileInput = {
   /** Start model / effort (the user's persisted choice); absent = the CLI's. */
   readonly model?: string
   readonly effort?: string
+  /** Flag-layer settings: the route pin of an injected subscription token
+   *  (auth.ts); absent = none. */
+  readonly settings?: { readonly env: Readonly<Record<string, string>> }
 } & (
   /** A new session under this id … */
   | { readonly sessionId: string; readonly resume?: undefined }
@@ -187,6 +190,7 @@ export function buildQueryOptions(input: ProfileInput): Options {
     ...(input.executable === undefined ? {} : { pathToClaudeCodeExecutable: input.executable }),
     ...(input.model === undefined ? {} : { model: input.model }),
     ...(input.effort === undefined ? {} : { effort: input.effort as NonNullable<Options['effort']> }),
+    ...(input.settings === undefined ? {} : { settings: { env: { ...input.settings.env } } }),
     ...(input.replayUserMessages ? { extraArgs: { 'replay-user-messages': null } } : {}),
   }
 }

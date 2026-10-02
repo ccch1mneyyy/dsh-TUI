@@ -640,6 +640,16 @@ export function createChannelProjection(state: ProjectionState, deps: ChannelPro
       deps.resetContextWarning()
       return
     }
+    // Command output a backend recorded as an input (Claude: `!!` output
+    // sent on to the model): live, the channel already showed the command
+    // and its output; a replay restores the output row.
+    if (event.source === 'command-output') {
+      if (replaying && event.text !== '') {
+        appendRow({ id: deps.rowIds.value, kind: 'local-output', text: preview(event.text, LOCAL_OUTPUT_LIMIT), seq: event.seq })
+        deps.rowIds.value += 1
+      }
+      return
+    }
     // Injected context (plugin/skill/goal source) is not a human bubble;
     // v1 renders direct human prompts only.
     if (event.source !== 'user') return

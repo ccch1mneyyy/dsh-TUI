@@ -307,11 +307,13 @@ const collect = (session: AgentSession) => {
   check('profile: no executable path → SDK bundled binary', options.pathToClaudeCodeExecutable === undefined)
   // (`pathToClaudeCodeExecutable` is set only when an executable was found.)
   const set = Object.entries(OPTION_POLICY).filter(([key, policy]) => policy === 'set' && key !== 'pathToClaudeCodeExecutable').map(([key]) => key).sort()
-  // The conditional ones: the persisted model/effort, and `resume` in place
-  // of `sessionId` for a credential reconnect.
+  // The conditional ones: the persisted model/effort, the route pin of an
+  // injected subscription token, and `resume` in place of `sessionId` for a
+  // credential reconnect.
   const withChoices = buildQueryOptions({
     cwd: '/fixture/project', sessionId: 's', permissionMode: 'default', executable: undefined, env: {}, canUseTool: (() => undefined) as unknown as Options['canUseTool'],
     stderr: () => undefined, abortController: new AbortController(), replayUserMessages: true, model: 'haiku', effort: 'low',
+    settings: { env: { ANTHROPIC_BASE_URL: 'https://api.anthropic.com' } },
   })
   const resumed = buildQueryOptions({
     cwd: '/fixture/project', resume: 's', permissionMode: 'default', executable: undefined, env: {}, canUseTool: (() => undefined) as unknown as Options['canUseTool'],
@@ -321,6 +323,7 @@ const collect = (session: AgentSession) => {
   check('profile: exactly the `set` options are built', JSON.stringify(set) === JSON.stringify(built), { set, built })
   check('profile: a reconnect resumes instead of naming a new session', resumed.resume === 's' && resumed.sessionId === undefined && options.sessionId === 's' && options.resume === undefined)
   check('profile: no model/effort unless chosen', options.model === undefined && options.effort === undefined && withChoices.model === 'haiku' && withChoices.effort === 'low')
+  check('profile: flag settings only with a route pin', options.settings === undefined && resumed.settings === undefined && (withChoices.settings as { env?: Record<string, string> } | undefined)?.env?.ANTHROPIC_BASE_URL === 'https://api.anthropic.com')
   const fakeSettings = (defaultMode: unknown) => ({
     resolveSettings: () => Promise.resolve({ effective: { permissions: { defaultMode } } }),
     filterEscalatingDefaultMode: (resolved: unknown) => (resolved as { effective: unknown }).effective,

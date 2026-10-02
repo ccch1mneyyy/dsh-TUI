@@ -121,7 +121,7 @@ export function createSessionSwitch(ctx: Context, deps: {
    * inputs dispatched (the input FIFO and `!!`), whether one is still on its
    * way, and live turns started.
    */
-  activity(): { readonly inputs: number; readonly unsettled: boolean; readonly turnStarts: number }
+  activity(): { readonly inputs: number; readonly unsettled: boolean; readonly turnStarts: number; readonly parked?: string }
   /** How `/resume` reopens a persisted session (undefined = unavailable). */
   resumeOpener?(): ResumeSessionOpener | undefined
   unavailable(name: string): void
@@ -174,6 +174,22 @@ export function createSessionSwitch(ctx: Context, deps: {
     }
   }
 
+  /**
+   * Review 6 (Phase 4b): an input still on its way to the bound session (a
+   * parked decision, an `@` read, a `!!` command) would race any switch —
+   * refuse at once, naming it, instead of after a handshake of up to a
+   * minute. Not for an opener that stale-drops parked inputs (the DSH
+   * contract).
+   */
+  const parkedInputRefused = (dropsParkedInputs: boolean): boolean => {
+    if (dropsParkedInputs) return false
+    const activity = deps.activity()
+    if (!activity.unsettled) return false
+    const parked = (activity.parked ?? '').replace(/\s+/gu, ' ').trim()
+    notify(t('session-switch-input-parked', { input: parked.length > 40 ? `${parked.slice(0, 40)}…` : parked }), { color: 'warning', timeoutMs: 8000 })
+    return true
+  }
+
   const failed = (current: () => boolean, error: unknown): false => {
     if (current()) notify(t('new-session-failed', { err: error instanceof Error ? error.message : String(error) }), { color: 'error', timeoutMs: 8000 })
     return false
@@ -223,6 +239,7 @@ export function createSessionSwitch(ctx: Context, deps: {
       return false
     }
     if (!opener.available()) return false
+    if (parkedInputRefused(opener.dropsParkedInputs === true)) return false
     const raced = raceProbe(opener.dropsParkedInputs === true)
     const abandonRaced = async (candidate: AgentSession): Promise<false> => {
       await binding.abandon(candidate)
@@ -305,6 +322,7 @@ export function createSessionSwitch(ctx: Context, deps: {
       notify(t(kind === 'rewind' ? 'rewind-while-working' : 'resume-while-working'), { color: 'warning' })
       return { ok: false, reason: 'working' }
     }
+    if (parkedInputRefused(false)) return { ok: false, reason: 'cancelled' }
     const raced = raceProbe(false)
     // A rewind asked its own question (the rewind prompt) already.
     if (kind === 'resume') {

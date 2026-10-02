@@ -17,15 +17,25 @@
  *
  * (a) applies ONLY on the first-party route (`claudeRouteOf`): with a custom
  * `ANTHROPIC_BASE_URL` / `CLAUDE_CODE_API_BASE_URL`, a Unix socket, a cloud or
- * gateway route, an `apiKeyHelper`, a managed `policyHelper`, or unreadable
- * settings, the environment passes through untouched and the token is never
- * read — the CLI would otherwise send the claude.ai token to that host. The
- * route reads every place the CLI takes its environment from: the process
- * environment, the global config's `env` (`~/.claude.json`, or
- * `$CLAUDE_CONFIG_DIR/.claude.json`, applied by the CLI before the settings
- * tiers) and the settings' `env`. Variable names are matched
- * case-insensitively everywhere (Windows environment semantics): a broader
- * match only ever fails closed.
+ * gateway route, a custom OAuth endpoint (`CLAUDE_CODE_CUSTOM_OAUTH_URL`), an
+ * `apiKeyHelper`, a managed `policyHelper`, or unreadable settings, the
+ * environment passes through untouched and the token is never read — the
+ * CLI would otherwise send the claude.ai token to that host. The route reads
+ * every place the CLI takes its environment from: the process environment,
+ * EVERY global config file the CLI may pick (`<config>/.config.json`, which
+ * wins when it exists, `.claude.json` and `.claude-custom-oauth.json` — any
+ * one non-first-party or unreadable fails closed; `<config>` is the CLI's own
+ * `CLAUDE_CONFIG_DIR`: exact case on POSIX, any case on Windows, and
+ * spellings that disagree fail closed) and the settings' `env`. Other
+ * variable names are matched case-insensitively (Windows semantics): a
+ * broader match only ever fails closed.
+ *
+ * Defense in depth: when the token IS injected, the route is also PINNED —
+ * the flag-settings layer (the SDK `settings` option, the highest
+ * user-controlled tier) sets `ANTHROPIC_BASE_URL` to the first-party origin
+ * and blanks the other routing variables, and the child environment drops
+ * them — so a source the gate missed still cannot send the token elsewhere
+ * (proved offline by scripts/probes/claude-auth-pin-probe.mjs).
  *
  * The host supplies the dsh-auth credential through `ClaudeCredentialSource`
  * (the backend never reads the credential file or runs an OAuth flow
@@ -57,6 +67,8 @@ export type ClaudeRoute =
   | { readonly kind: 'first-party' }
   | { readonly kind: 'cloud'; readonly provider: string }
   | { readonly kind: 'custom-endpoint'; readonly host: string }
+  /** `CLAUDE_CODE_CUSTOM_OAUTH_URL` (a custom OAuth deployment). */
+  | { readonly kind: 'custom-oauth' }
   | { readonly kind: 'unix-socket' }
   | { readonly kind: 'gateway' }
   | { readonly kind: 'api-key-helper' }
@@ -73,6 +85,11 @@ export interface ClaudeAuthPlan {
   /** dsh-auth: when the injected token expires (epoch ms). */
   readonly expiresAt?: number
   readonly env: Record<string, string>
+  /**
+   * dsh-auth: the flag-settings layer that pins the route to the first-party
+   * API (the SDK `settings` option); absent on every other source.
+   */
+  readonly settings?: { readonly env: Readonly<Record<string, string>> }
 }
 
 /** The settings slice the route depends on (`resolveSettings().effective`). */
@@ -87,11 +104,13 @@ export interface ClaudeRouteSettings {
 }
 
 /**
- * The global config's `env` (`~/.claude.json` / `$CLAUDE_CONFIG_DIR/.claude.json`):
- * absent file → undefined; a file that exists but cannot be read or parsed →
- * `'unreadable'` (the route is then unknown: fail closed).
+ * The global config files' `env` (see {@link claudeGlobalConfigPaths}): one
+ * `env` per existing file (or a single one); none → undefined / `[]`; any file
+ * that exists but cannot be read or parsed, or a config directory the CLI's
+ * choice of cannot be established → `'unreadable'` (the route is then
+ * unknown: fail closed).
  */
-export type ClaudeGlobalConfigReader = () => Readonly<Record<string, unknown>> | 'unreadable' | undefined
+export type ClaudeGlobalConfigReader = () => Readonly<Record<string, unknown>> | readonly Readonly<Record<string, unknown>>[] | 'unreadable' | undefined
 
 /** Reads the effective user/project/local settings (the CLI applies their
  *  `env`); a rejection means the route cannot be determined. */
@@ -160,6 +179,9 @@ const BASE_URL_KEYS: readonly string[] = ['ANTHROPIC_BASE_URL', 'CLAUDE_CODE_API
  * the others. Names match case-insensitively (see {@link valuesOf}).
  */
 export function claudeRouteOf(sources: readonly Readonly<Record<string, unknown>>[], settings: ClaudeRouteSettings): ClaudeRoute {
+  // A custom OAuth deployment changes where the token is sent and which
+  // global config file the CLI reads: never inject under one.
+  if (sources.some(env => set(env, 'CLAUDE_CODE_CUSTOM_OAUTH_URL'))) return { kind: 'custom-oauth' }
   for (const env of sources) {
     const provider = cloudProviderOf(env)
     if (provider === 'gateway') return { kind: 'gateway' }
@@ -181,28 +203,93 @@ export function claudeRouteOf(sources: readonly Readonly<Record<string, unknown>
   return { kind: 'first-party' }
 }
 
-/** The CLI's global config file for an environment (its `CLAUDE_CONFIG_DIR`,
- *  any spelling, else the home directory). */
-export function claudeGlobalConfigPath(env: Readonly<Record<string, unknown>>): string {
-  const dir = valuesOf(env, 'CLAUDE_CONFIG_DIR')[0]
-  return dir === undefined ? join(homeDir(), '.claude.json') : join(dir, '.claude.json')
+/**
+ * The CLI's config directory variable as the CLI itself reads it: the exact
+ * name `CLAUDE_CONFIG_DIR` on POSIX (environment names are case-sensitive
+ * there), any spelling on Windows. `'conflict'` when another spelling names a
+ * different directory than the one the CLI uses (the gate cannot know which
+ * files the CLI reads: fail closed).
+ */
+export function claudeConfigDirOf(env: Readonly<Record<string, unknown>>, platform: NodeJS.Platform = process.platform): string | undefined | 'conflict' {
+  const all = valuesOf(env, 'CLAUDE_CONFIG_DIR')
+  const exact = typeof env.CLAUDE_CONFIG_DIR === 'string' && env.CLAUDE_CONFIG_DIR !== '' ? env.CLAUDE_CONFIG_DIR : undefined
+  const chosen = platform === 'win32' ? all[0] : exact
+  return all.some(value => value !== chosen) ? 'conflict' : chosen
 }
 
-/** Read the global config's `env` from disk (see {@link ClaudeGlobalConfigReader}). */
-export function fileGlobalConfigReader(env: Readonly<Record<string, unknown>>): ClaudeGlobalConfigReader {
-  return () => {
-    const path = claudeGlobalConfigPath(env)
-    if (!existsSync(path)) return undefined
-    try {
-      const parsed: unknown = JSON.parse(readFileSync(path, 'utf8'))
-      if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return 'unreadable'
-      const configEnv = (parsed as Record<string, unknown>).env
-      if (configEnv === undefined || configEnv === null) return {}
-      return typeof configEnv === 'object' && !Array.isArray(configEnv) ? configEnv as Record<string, unknown> : 'unreadable'
-    } catch {
-      return 'unreadable'
-    }
+/**
+ * Every global config file the CLI may read its `env` from: `.config.json`
+ * in the config directory (it wins when it exists), and `.claude.json` /
+ * `.claude-custom-oauth.json` in `CLAUDE_CONFIG_DIR`, else the home
+ * directory. The gate reads them all (any one may be the file in effect).
+ */
+export function claudeGlobalConfigPaths(env: Readonly<Record<string, unknown>>, platform: NodeJS.Platform = process.platform): string[] | 'conflict' {
+  const dir = claudeConfigDirOf(env, platform)
+  if (dir === 'conflict') return 'conflict'
+  const configDir = dir ?? join(homeDir(), '.claude')
+  const base = dir ?? homeDir()
+  return [join(configDir, '.config.json'), join(base, '.claude.json'), join(base, '.claude-custom-oauth.json')]
+}
+
+/** The `.claude.json` global config file (kept for diagnostics). */
+export function claudeGlobalConfigPath(env: Readonly<Record<string, unknown>>, platform: NodeJS.Platform = process.platform): string {
+  const dir = claudeConfigDirOf(env, platform)
+  return join(dir === undefined || dir === 'conflict' ? homeDir() : dir, '.claude.json')
+}
+
+/** One global config file's `env`: undefined when it does not exist. */
+function readConfigEnv(path: string): Readonly<Record<string, unknown>> | 'unreadable' | undefined {
+  if (!existsSync(path)) return undefined
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(path, 'utf8'))
+    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return 'unreadable'
+    const configEnv = (parsed as Record<string, unknown>).env
+    if (configEnv === undefined || configEnv === null) return {}
+    return typeof configEnv === 'object' && !Array.isArray(configEnv) ? configEnv as Record<string, unknown> : 'unreadable'
+  } catch {
+    return 'unreadable'
   }
+}
+
+/** Read every global config file's `env` from disk (see {@link ClaudeGlobalConfigReader}). */
+export function fileGlobalConfigReader(env: Readonly<Record<string, unknown>>, platform: NodeJS.Platform = process.platform): ClaudeGlobalConfigReader {
+  return () => {
+    const paths = claudeGlobalConfigPaths(env, platform)
+    if (paths === 'conflict') return 'unreadable'
+    const envs: Readonly<Record<string, unknown>>[] = []
+    for (const path of paths) {
+      const read = readConfigEnv(path)
+      if (read === 'unreadable') return 'unreadable'
+      if (read !== undefined) envs.push(read)
+    }
+    return envs
+  }
+}
+
+/** Routing variables the pin neutralises (blank in the flag settings, gone
+ *  from the child environment). */
+const PINNED_BLANK: readonly string[] = [
+  'CLAUDE_CODE_API_BASE_URL', 'ANTHROPIC_UNIX_SOCKET', 'CLAUDE_CODE_CUSTOM_OAUTH_URL', 'CLAUDE_CODE_GATEWAY_TOKEN_FILE_DESCRIPTOR',
+  'CLAUDE_CODE_USE_BEDROCK', 'CLAUDE_CODE_USE_VERTEX', 'CLAUDE_CODE_USE_FOUNDRY', 'CLAUDE_CODE_USE_ANTHROPIC_AWS',
+  'CLAUDE_CODE_USE_ANTHROPIC_GOOGLE_CLOUD', 'CLAUDE_CODE_USE_MANTLE', 'CLAUDE_CODE_USE_GATEWAY',
+]
+
+/**
+ * The route pin of an injected subscription token: the flag-settings layer
+ * sets the first-party base URL and blanks every other routing variable
+ * (the ones above, and every routing `CLAUDE_CODE_USE_*` flag the
+ * environment spells); the child environment loses them all.
+ */
+function pinFirstParty(env: Record<string, string>): { readonly env: Readonly<Record<string, string>> } {
+  const blank = new Set(PINNED_BLANK)
+  for (const name of Object.keys(env)) {
+    const upper = name.toUpperCase()
+    if (upper.startsWith(USE_PREFIX) && !NON_ROUTING_USE_FLAGS.has(upper.slice(USE_PREFIX.length))) blank.add(upper)
+  }
+  for (const key of [...blank, ...BASE_URL_KEYS]) deleteAll(env, key)
+  const pinned: Record<string, string> = { ANTHROPIC_BASE_URL: FIRST_PARTY_ORIGIN }
+  for (const key of blank) pinned[key] = ''
+  return { env: pinned }
 }
 
 /**
@@ -235,13 +322,14 @@ export async function resolveClaudeAuth(
     try {
       const settings = await options.settings() ?? {}
       const settingsEnv = typeof settings.env === 'object' && settings.env !== null ? settings.env : {}
-      const globalEnv = (options.globalConfig ?? fileGlobalConfigReader(env))()
+      const global = (options.globalConfig ?? fileGlobalConfigReader(env))()
+      const globalEnvs = global === undefined ? [] : global === 'unreadable' ? 'unreadable' : Array.isArray(global) ? global : [global as Readonly<Record<string, unknown>>]
       // A policy helper injects settings the resolver never sees; an
       // unreadable global config hides its `env`: either way the route is
       // unknown.
-      route = globalEnv === 'unreadable' || (settings.policyHelper !== undefined && settings.policyHelper !== null)
+      route = globalEnvs === 'unreadable' || (settings.policyHelper !== undefined && settings.policyHelper !== null)
         ? { kind: 'settings-unreadable' }
-        : claudeRouteOf([env, globalEnv ?? {}, settingsEnv], settings)
+        : claudeRouteOf([env, ...globalEnvs, settingsEnv], settings)
     } catch {
       route = { kind: 'settings-unreadable' }
     }
@@ -255,8 +343,9 @@ export async function resolveClaudeAuth(
       deleteAll(env, 'ANTHROPIC_API_KEY')
       deleteAll(env, 'ANTHROPIC_AUTH_TOKEN')
       deleteAll(env, 'CLAUDE_CODE_OAUTH_TOKEN')
+      const settings = pinFirstParty(env)
       env.CLAUDE_CODE_OAUTH_TOKEN = stored.access
-      return { source: 'dsh-auth', route, expiresAt: stored.expires, env }
+      return { source: 'dsh-auth', route, expiresAt: stored.expires, env, settings }
     }
   }
   if (set(env, 'ANTHROPIC_API_KEY')) return { source: 'api-key', route, env }
@@ -313,7 +402,8 @@ export async function detectClaudeAuth(
   } catch {
     // An unreadable credential file is the host's to report; keep looking.
   }
-  const configDir = valuesOf(env, 'CLAUDE_CONFIG_DIR')[0] ?? join(homeDir(), '.claude')
+  const dir = claudeConfigDirOf(env, platform)
+  const configDir = dir === undefined || dir === 'conflict' ? join(homeDir(), '.claude') : dir
   if (existsSync(join(configDir, '.credentials.json'))) return 'ok'
   return platform === 'darwin' ? 'unknown' : 'missing'
 }

@@ -36,7 +36,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { OAuthAccess, OAuthCredentialSource } from '../src/agent/backend.js'
 import type { AgentEvent } from '../src/agent/events.js'
-import { claudeGlobalConfigPath, detectClaudeAuth, fileGlobalConfigReader, isAuthFailure, refreshFailureStatus, resolveClaudeAuth } from '../src/backends/claude/auth.js'
+import { claudeConfigDirOf, claudeGlobalConfigPath, claudeGlobalConfigPaths, detectClaudeAuth, fileGlobalConfigReader, isAuthFailure, refreshFailureStatus, resolveClaudeAuth } from '../src/backends/claude/auth.js'
 import { openClaudeSession } from '../src/backends/claude/session.js'
 import { createOAuthCredentialSource } from '../src/dsh-adapter/oauth-credential-source.js'
 import { setLang, t } from '../src/i18n.js'
@@ -163,12 +163,13 @@ const firstParty = { settings: () => Promise.resolve({}), globalConfig: () => un
     check('detection sees a mixed-case credential', await detectClaudeAuth({ anthropic_api_key: 'k', CLAUDE_CONFIG_DIR: '/nonexistent' }, undefined, 'linux') === 'ok')
   }
   {
-    // The file reader: `$CLAUDE_CONFIG_DIR/.claude.json` (any spelling of the
-    // variable), absent = no source, unparseable = fail closed.
+    // The file reader: every global config file the CLI may pick under its
+    // own CLAUDE_CONFIG_DIR, absent = no source, unparseable = fail closed.
     const dir = mkdtempSync(join(tmpdir(), 'dsh-tui-claude-global-'))
     try {
-      const reader = fileGlobalConfigReader({ claude_config_dir: dir })
-      check('global config: an absent file is no source', reader() === undefined && claudeGlobalConfigPath({ Claude_Config_Dir: dir }) === join(dir, '.claude.json'))
+      const reader = fileGlobalConfigReader({ CLAUDE_CONFIG_DIR: dir })
+      const absent = reader()
+      check('global config: absent files are no source', Array.isArray(absent) && absent.length === 0 && claudeGlobalConfigPath({ CLAUDE_CONFIG_DIR: dir }) === join(dir, '.claude.json'))
       writeFileSync(join(dir, '.claude.json'), JSON.stringify({ numStartups: 3, env: { ANTHROPIC_BASE_URL: 'https://api.deepseek.com/anthropic' } }))
       const source = fakeSource(stored)
       const plan = await resolveClaudeAuth({ PATH: '/usr/bin', CLAUDE_CONFIG_DIR: dir }, source, { settings: none })
@@ -179,9 +180,56 @@ const firstParty = { settings: () => Promise.resolve({}), globalConfig: () => un
       writeFileSync(join(dir, '.claude.json'), JSON.stringify({ numStartups: 3 }))
       const plain = await resolveClaudeAuth({ PATH: '/usr/bin', CLAUDE_CONFIG_DIR: dir }, fakeSource(stored), { settings: none })
       check('global config: no env there keeps the first-party route', plain.source === 'dsh-auth' && plain.route?.kind === 'first-party')
+      // Phase 4b review 1: the CLI picks its global config itself —
+      // `.config.json` wins when it exists, a custom OAuth deployment reads
+      // `.claude-custom-oauth.json`: the gate reads them all.
+      for (const file of ['.config.json', '.claude.json', '.claude-custom-oauth.json']) {
+        writeFileSync(join(dir, '.claude.json'), JSON.stringify({ numStartups: 3 }))
+        writeFileSync(join(dir, file), JSON.stringify({ env: { ANTHROPIC_BASE_URL: 'https://evil.example.com' } }))
+        const source = fakeSource(stored)
+        const routed = await resolveClaudeAuth({ PATH: '/usr/bin', CLAUDE_CONFIG_DIR: dir }, source, { settings: none })
+        check(`global config: a base URL in ${file} routes off first-party (never read before review 1 for .config.json / .claude-custom-oauth.json)`, routed.route?.kind === 'custom-endpoint' && routed.env.CLAUDE_CODE_OAUTH_TOKEN === undefined && source.calls.length === 0, routed.route)
+        writeFileSync(join(dir, file), '{ broken')
+        const broken = await resolveClaudeAuth({ PATH: '/usr/bin', CLAUDE_CONFIG_DIR: dir }, fakeSource(stored), { settings: none })
+        check(`global config: an unreadable ${file} fails closed`, broken.route?.kind === 'settings-unreadable' && broken.env.CLAUDE_CODE_OAUTH_TOKEN === undefined)
+        rmSync(join(dir, file), { force: true })
+      }
+      writeFileSync(join(dir, '.config.json'), JSON.stringify({ env: { CLAUDE_CODE_CUSTOM_OAUTH_URL: 'https://oauth.example.com' } }))
+      const custom = await resolveClaudeAuth({ PATH: '/usr/bin', CLAUDE_CONFIG_DIR: dir }, fakeSource(stored), { settings: none })
+      check('global config: a custom OAuth URL in a config file fails closed', custom.route?.kind === 'custom-oauth' && custom.env.CLAUDE_CODE_OAUTH_TOKEN === undefined)
+      rmSync(join(dir, '.config.json'), { force: true })
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
+  }
+  // CLAUDE_CODE_CUSTOM_OAUTH_URL anywhere fails closed.
+  await refused('CLAUDE_CODE_CUSTOM_OAUTH_URL in the environment', { CLAUDE_CODE_CUSTOM_OAUTH_URL: 'https://oauth.example.com' }, none, 'custom-oauth')
+  await refused('CLAUDE_CODE_CUSTOM_OAUTH_URL in the settings env', {}, () => Promise.resolve({ env: { CLAUDE_CODE_CUSTOM_OAUTH_URL: 'https://oauth.example.com' } }), 'custom-oauth')
+  await viaGlobal('CLAUDE_CODE_CUSTOM_OAUTH_URL in a global config env', () => ({ CLAUDE_CODE_CUSTOM_OAUTH_URL: 'https://oauth.example.com' }), 'custom-oauth')
+  await viaGlobal('a non-first-party env in ANY of several global config files', () => [{}, { ANTHROPIC_UNIX_SOCKET: '/tmp/s' }], 'unix-socket')
+  // The config directory as the CLI reads it: exact case on POSIX, any case
+  // on Windows; spellings that disagree fail closed.
+  check('config dir: the exact name on POSIX', claudeConfigDirOf({ CLAUDE_CONFIG_DIR: '/a' }, 'linux') === '/a' && claudeConfigDirOf({}, 'linux') === undefined)
+  check('config dir: a lower-case spelling the CLI ignores on POSIX is a conflict', claudeConfigDirOf({ claude_config_dir: '/b' }, 'linux') === 'conflict' && claudeGlobalConfigPaths({ claude_config_dir: '/b' }, 'linux') === 'conflict')
+  check('config dir: spellings that disagree are a conflict (both platforms)', claudeConfigDirOf({ CLAUDE_CONFIG_DIR: '/a', Claude_Config_Dir: '/b' }, 'linux') === 'conflict' && claudeConfigDirOf({ CLAUDE_CONFIG_DIR: '/a', Claude_Config_Dir: '/b' }, 'win32') === 'conflict')
+  check('config dir: spellings that agree are fine; Windows reads any case', claudeConfigDirOf({ CLAUDE_CONFIG_DIR: '/a', claude_config_dir: '/a' }, 'linux') === '/a' && claudeConfigDirOf({ claude_config_dir: 'C:\\cfg' }, 'win32') === 'C:\\cfg')
+  const paths = claudeGlobalConfigPaths({ CLAUDE_CONFIG_DIR: '/cfg' }, 'linux')
+  check('the candidates: .config.json, .claude.json and .claude-custom-oauth.json', Array.isArray(paths) && JSON.stringify(paths) === JSON.stringify([join('/cfg', '.config.json'), join('/cfg', '.claude.json'), join('/cfg', '.claude-custom-oauth.json')]), paths)
+  {
+    const source = fakeSource(stored)
+    const conflict = await resolveClaudeAuth({ PATH: '/usr/bin', CLAUDE_CONFIG_DIR: '/a', claude_config_dir: '/b' }, source, { settings: none })
+    check('a config-dir conflict fails closed (the token is never read)', conflict.route?.kind === 'settings-unreadable' && conflict.env.CLAUDE_CODE_OAUTH_TOKEN === undefined && source.calls.length === 0)
+  }
+  // The pin: an injected token travels with the first-party route pinned in
+  // the flag-settings layer, and the child env loses every routing variable.
+  {
+    const pinned = await resolveClaudeAuth({ PATH: '/usr/bin', ANTHROPIC_BASE_URL: 'https://api.anthropic.com', CLAUDE_CODE_USE_BEDROCK: '0', Claude_Code_Use_Vertex: 'false', CLAUDE_CODE_USE_POWERSHELL_TOOL: '1' }, fakeSource(stored), firstParty)
+    const pin = pinned.settings?.env ?? {}
+    check('pin: the flag settings set the first-party base URL', pinned.source === 'dsh-auth' && pin.ANTHROPIC_BASE_URL === 'https://api.anthropic.com', pin)
+    check('pin: … and blank the other routing variables (the known ones and those the env spells)', ['CLAUDE_CODE_API_BASE_URL', 'ANTHROPIC_UNIX_SOCKET', 'CLAUDE_CODE_CUSTOM_OAUTH_URL', 'CLAUDE_CODE_USE_BEDROCK', 'CLAUDE_CODE_USE_VERTEX', 'CLAUDE_CODE_USE_FOUNDRY', 'CLAUDE_CODE_USE_GATEWAY', 'CLAUDE_CODE_USE_MANTLE'].every(key => pin[key] === '') && pin.CLAUDE_CODE_USE_POWERSHELL_TOOL === undefined, pin)
+    check('pin: the child env drops them (feature flags stay)', Object.keys(pinned.env).sort().join() === 'CLAUDE_CODE_OAUTH_TOKEN,CLAUDE_CODE_USE_POWERSHELL_TOOL,PATH', Object.keys(pinned.env))
+    const notInjected = await resolveClaudeAuth({ PATH: '/usr/bin', ANTHROPIC_API_KEY: 'k' }, undefined, firstParty)
+    check('pin: only an injected token is pinned', notInjected.settings === undefined)
   }
   check('detection: any routing flag is a credential', await detectClaudeAuth({ CLAUDE_CODE_USE_MANTLE: '1', CLAUDE_CONFIG_DIR: '/nonexistent' }, undefined, 'linux') === 'ok')
   check('a refresh failure is reported by HTTP status only', refreshFailureStatus(new Error('400 Bad Request: {"error":"invalid_grant","token":"secret-body"}')) === '400' && refreshFailureStatus(Object.assign(new Error('x'), { status: 401 })) === '401' && refreshFailureStatus(new Error('socket hang up')) === undefined)
@@ -254,7 +302,7 @@ check('an ordinary error result is not', !isAuthFailure({ type: 'result', subtyp
   const debug: string[] = []
   let renewals = 0
   const renewalsAsked: (string | undefined)[] = []
-  const plan = { source: 'dsh-auth' as const, expiresAt: 1, env: { PATH: '/usr/bin', CLAUDE_CODE_OAUTH_TOKEN: TOKEN } }
+  const plan = { source: 'dsh-auth' as const, expiresAt: 1, env: { PATH: '/usr/bin', CLAUDE_CODE_OAUTH_TOKEN: TOKEN }, settings: { env: { ANTHROPIC_BASE_URL: 'https://api.anthropic.com' } } }
   const session = await openClaudeSession(claudeDeps(fake.sdk, {
     host: { debug: message => { debug.push(message) } },
     auth: {
@@ -271,6 +319,7 @@ check('an ordinary error result is not', !isAuthFailure({ type: 'result', subtyp
   await tick()
   const first = fake.queries[0]!
   check('the first query names the new session and runs on the injected token', first.options.sessionId === '00000000-0000-4000-8000-0000000000ab' && first.options.resume === undefined && first.options.env?.CLAUDE_CODE_OAUTH_TOKEN === TOKEN)
+  check('… with the plan\'s route pin as the flag settings', (first.options.settings as { env?: Record<string, string> } | undefined)?.env?.ANTHROPIC_BASE_URL === 'https://api.anthropic.com', first.options.settings)
   const failTurn = async (query: typeof first): Promise<void> => {
     query.emit({ type: 'system', subtype: 'status', status: 'requesting' })
     query.emit({ type: 'assistant', error: 'authentication_failed', message: { id: `m-${fake.queries.length}`, model: 'haiku', content: [{ type: 'text', text: 'Failed to authenticate. API Error: 401 OAuth access token is invalid.' }], usage: {} } })
@@ -282,6 +331,7 @@ check('an ordinary error result is not', !isAuthFailure({ type: 'result', subtyp
   check('… naming the refused token (compare-and-swap renewal)', renewalsAsked[0] === TOKEN)
   check('… closes the old CLI and resumes the SAME session', first.closed && fake.queries.length === 2 && fake.queries[1]!.options.resume === '00000000-0000-4000-8000-0000000000ab' && fake.queries[1]!.options.sessionId === undefined)
   check('… on the renewed credential', fake.queries[1]!.options.env?.CLAUDE_CODE_OAUTH_TOKEN === `${TOKEN}-1`)
+  check('… still pinned', (fake.queries[1]!.options.settings as { env?: Record<string, string> } | undefined)?.env?.ANTHROPIC_BASE_URL === 'https://api.anthropic.com')
   check('… and says it reconnected', events.some(event => event.type === 'notice' && event.text === t('claude-auth-reconnected')))
   check('the session is still the same live session', session.status !== 'disposed' && session.ref.sessionId === '00000000-0000-4000-8000-0000000000ab')
   const turnsBefore = events.filter(event => event.type === 'turn.start').length

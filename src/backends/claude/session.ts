@@ -308,6 +308,8 @@ export async function openClaudeSession(deps: ClaudeSessionDeps): Promise<AgentS
         permissionMode: (translator.mode ?? deps.start.mode) as StartPermissionMode['mode'],
         executable: deps.executable.path,
         env: authPlan.env,
+        // The route pin of an injected subscription token (auth.ts).
+        ...(authPlan.settings === undefined ? {} : { settings: authPlan.settings }),
         canUseTool: bridge.canUseTool,
         stderr: stderrSink,
         abortController,
@@ -702,8 +704,15 @@ export async function openClaudeSession(deps: ClaudeSessionDeps): Promise<AgentS
             }
           }
           if (cut === undefined) return { kind: 'rewound', session: ownRef, ...(files === undefined ? {} : { files }) }
-          const session = await fork({ upToMessageId: cut })
-          return { kind: 'rewound', session, ...(files === undefined ? {} : { files }) }
+          try {
+            const session = await fork({ upToMessageId: cut })
+            return { kind: 'rewound', session, ...(files === undefined ? {} : { files }) }
+          } catch (error) {
+            // The files are restored already: that outcome must not be lost
+            // with the failed conversation half.
+            if (files === undefined) throw error
+            return { kind: 'rewound', session: ownRef, files, conversationError: errorText(error) }
+          }
         },
       },
     }
@@ -903,6 +912,8 @@ function routeLabel(plan: ClaudeAuthPlan): string | undefined {
       return undefined
     case 'custom-endpoint':
       return t('claude-route-custom-endpoint', { host: route.host })
+    case 'custom-oauth':
+      return t('claude-route-custom-oauth')
     case 'unix-socket':
       return t('claude-route-unix-socket')
     case 'gateway':

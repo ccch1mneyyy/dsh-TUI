@@ -207,11 +207,17 @@ export function createCoreSessionActions(deps: {
         return null
       }
       if (outcome.files !== undefined) notify(t('rewind-files-restored', { summary: filesSummary(outcome.files) }), { timeoutMs: 6000 })
+      if (outcome.conversationError !== undefined) {
+        // Half done: the files moved, the conversation did not.
+        notify(t('rewind-conversation-failed', { err: outcome.conversationError }), { color: 'warning', timeoutMs: 10000 })
+        return null
+      }
       if (kind === 'files' || outcome.session.sessionId === deps.session().ref.sessionId) return null
       const adopted = await deps.resume(outcome.session.sessionId, 'rewind')
       if (!adopted.ok) {
-        // The fork is persisted either way: say where it is.
-        if (adopted.reason !== 'cancelled' && deps.owner.current()) {
+        // The fork is persisted either way (an open abandoned as a race
+        // too): say where it is.
+        if (deps.owner.current()) {
           notify(t('rewind-fork-kept', { command: deps.resumeCommand?.(outcome.session.sessionId) ?? `/resume ${outcome.session.sessionId}` }), { color: 'warning', timeoutMs: 10000 })
         }
         return null

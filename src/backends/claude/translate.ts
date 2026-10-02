@@ -58,6 +58,8 @@ const LOCAL_COMMAND_TAG = /^<local-command-(stdout|stderr|caveat)>/u
 const COMMAND_TAG = /^<command-(name|message|args)>/u
 /** Abort diagnostics the CLI appends to `result.errors` (never shown). */
 const EDE_DIAGNOSTIC = '[ede_diagnostic]'
+/** Command output sent as a prompt (`!!` / the CLI's bash mode). */
+const BASH_OUTPUT = /^<bash-stdout>\n?([\s\S]*?)\n?<\/bash-stdout>/u
 
 /**
  * The Claude backend's decision for every Agent Domain event type (checked by
@@ -346,6 +348,14 @@ export function createClaudeTranslator(options: ClaudeTranslatorOptions) {
     inputs.delete(uuid)
     startedInputs.delete(uuid)
     if (input.text.trim() === '/compact') return
+    // A `!!` command's output sent on to the model (or the CLI's own bash
+    // mode output): not a bubble — its output row (the channel showed it
+    // live; a replay restores it).
+    const output = BASH_OUTPUT.exec(input.text)
+    if (output !== null) {
+      out.push({ type: 'user.message', id: uuid, anchor: uuid, seq: nextSeq(), turn, time: now(), source: 'command-output', text: output[1]!.trim(), blocks: [{ type: 'text', text: input.text }] })
+      return
+    }
     out.push({ type: 'user.message', id: uuid, anchor: uuid, seq: nextSeq(), turn, time: now(), source: 'user', text: input.text, blocks: [{ type: 'text', text: input.text }] })
   }
 

@@ -423,32 +423,42 @@ try {
   const fsCtx = { on: () => () => undefined, get: (name: string) => name === 'fs' ? slowFs : name === 'shell' ? slowShell : undefined, logger: { warn: () => undefined, info: () => undefined, debug: () => undefined } } as never
   const current = fakeSession('c5c5c5c5-c5c5-4c5c-8c5c-c5c5c5c5c5c5')
   let release: ((session: FakeSession) => void) | undefined
+  let opens = 0
   const parked = createChannel(fsCtx, current, {
     model: 'm', provider: '', cwd: workdir, activity: false,
-    openSession: () => new Promise<FakeSession>(resolve => { release = resolve }),
+    openSession: () => { opens += 1; return new Promise<FakeSession>(resolve => { release = resolve }) },
+    sessionCatalog: { list: () => Promise.resolve([]) },
   })
+  const toasts = (): string[] => parked.notifications.map(item => item.text)
   try {
     // The `@` read parks the input in the FIFO: not pending, not working.
     parked.submit('read @notes.txt please')
     check('an @-mention read parks the input in the FIFO', await settled(() => releaseRead !== undefined) && parked.pending.length === 0 && current.submits.length === 0)
-    const opening = parked.newSession()
-    await settled(() => release !== undefined)
-    const candidate = fakeSession('c6c6c6c6-c6c6-4c6c-8c6c-c6c6c6c6c6c6')
-    release!(candidate)
-    check('/new is abandoned while an input is still on its way', await opening === false && await settled(() => candidate.disposed) && parked.sessionRef.sessionId === current.ref.sessionId)
+    // Phase 4b review 6: refused at once (no handshake first), naming it.
+    check('/new is refused at once while an input is still on its way, naming it', await parked.newSession() === false && opens === 0
+      && toasts().includes(t('session-switch-input-parked', { input: 'read @notes.txt please' })) && parked.sessionRef.sessionId === current.ref.sessionId, toasts())
+    const before = toasts().filter(text => text === t('session-switch-input-parked', { input: 'read @notes.txt please' })).length
+    check('/resume likewise (refused at once, nothing opened)', (await parked.resumeTo('d0d0d0d0-d0d0-4d0d-8d0d-d0d0d0d0d0d0')).ok === false && opens === 0
+      && toasts().filter(text => text === t('session-switch-input-parked', { input: 'read @notes.txt please' })).length === before + 1, toasts())
     releaseRead!()
     check('… and the parked input reaches the session it was typed in', await settled(() => current.submits.length === 1) && current.submits[0]!.input.text === 'read @notes.txt please')
     // `!!` is an input from its first keystroke: its output goes to the session.
     parked.submit('!!make test')
     await settled(() => releaseShell !== undefined)
-    release = undefined
-    const shellOpening = parked.newSession()
-    await settled(() => release !== undefined)
-    const candidate2 = fakeSession('c7c7c7c7-c7c7-4c7c-8c7c-c7c7c7c7c7c7')
-    release!(candidate2)
-    check('/new is abandoned while a `!!` command is on its way', await shellOpening === false && await settled(() => candidate2.disposed) && parked.sessionRef.sessionId === current.ref.sessionId)
+    check('/new is refused at once while a `!!` command is on its way', await parked.newSession() === false && opens === 0 && toasts().includes(t('session-switch-input-parked', { input: '!!' })), toasts())
     releaseShell!()
     check('… and its output reaches the session it ran for', await settled(() => current.submits.length === 2) && (current.submits[1]!.input.text).includes('shell output'))
+    // An input parked DURING the open still abandons the candidate (the race).
+    releaseRead = undefined
+    const opening = parked.newSession()
+    await settled(() => release !== undefined)
+    parked.submit('read @notes.txt again')
+    await settled(() => releaseRead !== undefined)
+    const candidate = fakeSession('c6c6c6c6-c6c6-4c6c-8c6c-c6c6c6c6c6c6')
+    release!(candidate)
+    check('/new is abandoned when an input parks while it opens', await opening === false && await settled(() => candidate.disposed) && parked.sessionRef.sessionId === current.ref.sessionId)
+    releaseRead!()
+    check('… and that input reaches the session it was typed in', await settled(() => current.submits.length === 3) && current.submits[2]!.input.text === 'read @notes.txt again')
   } finally {
     parked.releaseContributions()
   }

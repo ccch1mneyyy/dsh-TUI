@@ -157,9 +157,14 @@ const chain = (id: string) => [
       : anchor === 'no-checkpoint' ? { canRewind: false, error: 'No file checkpoint for this message' } : { canRewind: true, filesChanged: ['src/a.ts'], insertions: 4, deletions: 1 }),
   })
   const forks: { id: string; options: Record<string, unknown> }[] = []
+  let failFork = false
   const sessionStore = {
     getSessionMessages: () => Promise.resolve(chain('sess-1')),
-    forkSession: (id: string, options: Record<string, unknown>) => { forks.push({ id, options }); return Promise.resolve({ sessionId: `fork-${forks.length}` }) },
+    forkSession: (id: string, options: Record<string, unknown>) => {
+      if (failFork) return Promise.reject(new Error('disk full'))
+      forks.push({ id, options })
+      return Promise.resolve({ sessionId: `fork-${forks.length}` })
+    },
   }
   const session = await openClaudeSession(claudeDeps(fake.sdk, { sessionId: 'sess-1', cwd: workdir, resume: loaded.replay, store: sessionStore as never }))
   const query = fake.queries[0]!
@@ -189,6 +194,13 @@ const chain = (id: string) => [
   check('files rewind restores by checkpoint and stays in the session', filesOnly.kind === 'rewound' && filesOnly.session.sessionId === 'sess-1' && filesOnly.files?.filesChanged.length === 1 && forks.length === 2)
   const both = await rewind.rewind('sess-1-u2', 'both')
   check('both: files first, then the fork', both.kind === 'rewound' && both.files !== undefined && both.session.sessionId === 'fork-3')
+  // Phase 4b review 2: the files moved, then the fork failed — a partial
+  // outcome, never one reported as nothing done.
+  failFork = true
+  const partial = await rewind.rewind('sess-1-u2', 'both')
+  check('both, fork failing after the files: files reported, the conversation error kept, the session stays', partial.kind === 'rewound' && partial.files?.filesChanged.length === 1 && partial.conversationError === 'disk full' && partial.session.sessionId === 'sess-1', partial)
+  check('a conversation-only rewind whose fork fails still rejects (nothing was done)', await rewind.rewind('sess-1-u2', 'conversation').then(() => false, (error: Error) => error.message === 'disk full'))
+  failFork = false
   const first = await rewind.rewind('sess-1-u1', 'conversation')
   check('the very first message cannot be rewound to', first.kind === 'refused' && first.reason === t('rewind-first-message'))
   const unknown = await rewind.rewind('not-there', 'both')
@@ -365,6 +377,7 @@ try {
   // /fork and the rewind on a session with those capabilities.
   const rewinds: { anchor: string; mode: string }[] = []
   let refuse: string | undefined
+  let conversationError: string | undefined
   let previewFails = false
   const capable = fakeSession('cap-1', {
     history: userTurn(1, 1, 'cap-u1', 'first prompt', 'first answer').concat(userTurn(2, 4, 'cap-u2', 'second prompt', 'second answer')),
@@ -375,6 +388,7 @@ try {
         rewind: (anchor, mode) => {
           rewinds.push({ anchor, mode })
           if (refuse !== undefined) return Promise.resolve({ kind: 'refused' as const, reason: refuse })
+          if (conversationError !== undefined) return Promise.resolve({ kind: 'rewound' as const, session: { backendId: 'claude', sessionId: 'cap-1' }, files: { filesChanged: ['a.ts'], insertions: 3, deletions: 2 }, conversationError })
           return Promise.resolve(mode === 'files'
             ? { kind: 'rewound' as const, session: { backendId: 'claude', sessionId: 'cap-1' }, files: { filesChanged: ['a.ts'], insertions: 3, deletions: 2 } }
             : { kind: 'rewound' as const, session: { backendId: 'claude', sessionId: anchor === 'cap-u1' ? 'rewound-unopenable' : `rewound-${rewinds.length}` }, ...(mode === 'both' ? { files: { filesChanged: ['a.ts'] } } : {}) })
@@ -383,7 +397,8 @@ try {
     },
   })
   const capOpened: string[] = []
-  const rewindChannel = createChannel(ctx, capable, {
+  let raceId: string | undefined
+  const rewindChannel: ReturnType<typeof createChannel> = createChannel(ctx, capable, {
     model: 'Claude Agent', provider: 'claude', cwd: workdir, activity: false, backendLabel: 'Claude Agent',
     initialHistory: await capable.history(),
     sessionCatalog,
@@ -392,6 +407,8 @@ try {
     openSession: target => {
       capOpened.push(target.kind === 'resume' ? target.sessionId : 'create')
       if (target.kind === 'resume' && target.sessionId === 'rewound-unopenable') return Promise.reject(new Error('cannot open'))
+      // The user types while the fork opens: the open is abandoned as a race.
+      if (target.kind === 'resume' && target.sessionId === raceId) rewindChannel.submit('typed while the fork opened')
       return Promise.resolve(fakeSession(target.kind === 'resume' ? target.sessionId : 'n', { history: target.kind === 'resume' ? userTurn(1, 1, 'r-u1', 'first prompt', 'first answer') : [] }))
     },
   })
@@ -412,8 +429,17 @@ try {
     const firstRow = rewindChannel.rows.find(row => row.kind === 'user' && row.text === 'first prompt')!
     check('a fork the channel cannot open stays persisted, and the notice says how to enter it', await rewindChannel.rewindTo(firstRow) === null
       && rewindToasts().includes(t('rewind-fork-kept', { command: 'dsh-tui --backend claude --resume rewound-unopenable' })) && rewindChannel.sessionRef.sessionId === 'cap-1')
+    conversationError = 'disk full'
+    check('files restored but the conversation rewind failed: both said, nothing switches', await rewindChannel.rewindTo(second, 'both') === null
+      && rewindToasts().includes(t('rewind-conversation-failed', { err: 'disk full' })) && rewindToasts().filter(text => text === t('rewind-files-restored', { summary: `${t('rewind-files-count', { n: 1 })} · +3 −2` })).length >= 2 && rewindChannel.sessionRef.sessionId === 'cap-1', rewindToasts())
+    conversationError = undefined
+    raceId = 'rewound-5'
+    check('a fork open abandoned as a race keeps the fork and says how to enter it', await rewindChannel.rewindTo(second) === null && capOpened.at(-1) === 'rewound-5'
+      && rewindToasts().includes(t('rewind-fork-kept', { command: 'dsh-tui --backend claude --resume rewound-5' })) && rewindChannel.sessionRef.sessionId === 'cap-1', rewindToasts())
+    raceId = undefined
+    await settled(() => !rewindChannel.working && rewindChannel.pending.length === 0)
     const text = await rewindChannel.rewindTo(second)
-    check('the conversation rewind adopts the backend\'s fork and hands the message back', text === 'second prompt' && rewinds.at(-1)?.mode === 'conversation' && capOpened.at(-1) === 'rewound-4' && rewindChannel.sessionRef.sessionId === 'rewound-4')
+    check('the conversation rewind adopts the backend\'s fork and hands the message back', text === 'second prompt' && rewinds.at(-1)?.mode === 'conversation' && capOpened.at(-1) === 'rewound-6' && rewindChannel.sessionRef.sessionId === 'rewound-6')
     check('… the fork\'s history replaces the transcript', rewindChannel.rows.some(row => row.kind === 'user' && row.text === 'first prompt') && !rewindChannel.rows.some(row => row.text === 'second prompt'))
   } finally {
     rewindChannel.releaseContributions()

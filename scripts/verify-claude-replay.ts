@@ -187,6 +187,33 @@ const userRows = (name: string) => run(name).harness.state.rows.filter(row => ro
   check('… with its notice, and the notification text is no bubble', events.some(event => event.type === 'notice' && event.text === t('claude-notification-turn')) && !userRows('background-bash').some(row => row.text.includes('task-notification')))
 }
 
+// Phase 4b review 4: dsh-tui's own `!!` sends `<bash-stdout>…` as a real
+// prompt — its own turn (the model answers it), shown as the output row.
+{
+  const at = (n: number): string => `2026-10-02T11:00:0${n}.000Z`
+  const chain = [
+    { type: 'user', uuid: 'bu1', message: { role: 'user', content: 'list the files' }, timestamp: at(0) },
+    { type: 'assistant', uuid: 'ba1', message: { id: 'bm1', content: [{ type: 'text', text: 'run ls yourself' }] }, timestamp: at(1) },
+    { type: 'user', uuid: 'bu2', message: { role: 'user', content: '<bash-stdout>\nREADME.md\nsrc\n</bash-stdout>' }, timestamp: at(2) },
+    { type: 'assistant', uuid: 'ba2', message: { id: 'bm2', content: [{ type: 'text', text: 'two entries' }] }, timestamp: at(3) },
+  ]
+  const replay = replayClaudeTranscript(chain, { cwd: '/fixture/project' })
+  const harness = createProjectorHarness({ model: '' })
+  harness.apply(replay.events, true)
+  harness.projector.settleStreaming()
+  const turns = ofType(replay.events, 'turn.start')
+  const rows = harness.state.rows.filter(row => row.kind !== 'reasoning').map(row => `${row.kind}:${row.text}`)
+  check('!! output: closes the turn and opens the one the model answers it in', turns.length === 2 && turns[1]!.origin === 'user' && ofType(replay.events, 'turn.end').length === 2, turns)
+  check('!! output: shown as its output row, never a bubble; the reply follows it', JSON.stringify(rows) === JSON.stringify(['user:list the files', 'assistant:run ls yourself', 'local-output:README.md src', 'assistant:two entries']), rows)
+  // Live: the channel already showed the command and its output.
+  const translator = createClaudeTranslator({ cwd: '/fixture/project', userRows: 'lifecycle', now: () => 0 })
+  translator.registerInput('bang', '<bash-stdout>\nREADME.md\n</bash-stdout>', 'followup')
+  const live = translator.translate({ type: 'command_lifecycle', command_uuid: 'bang', state: 'started' })
+  const liveHarness = createProjectorHarness({ model: '' })
+  liveHarness.apply(live)
+  check('!! output live: a user turn, no bubble and no second output row', ofType(live, 'turn.start')[0]?.origin === 'user' && ofType(live, 'user.message')[0]?.source === 'command-output' && liveHarness.state.rows.length === 0, live)
+}
+
 // ── thinking ───────────────────────────────────────────────────────────
 {
   const rows = run('tool-read').harness.state.rows.filter(row => row.kind === 'reasoning')

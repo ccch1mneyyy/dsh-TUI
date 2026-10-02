@@ -66,6 +66,8 @@ export function createInputDelivery(
    *  left it (delivered, dropped or failed). `/new` compares them. */
   let dispatched = 0
   let settled = 0
+  /** The texts still in the FIFO, oldest first (a switch names the parked one). */
+  const inFlight: string[] = []
 
   /**
    * Attached-context registry (issue #842): `deliverUserText(..., attach)`
@@ -343,11 +345,15 @@ export function createInputDelivery(
     const origin = captureOrigin()
     const capturedImages = composer.captureDraftImages(text, images)
     dispatched += 1
+    inFlight.push(text)
     inputChain = inputChain.then(() => runUserTextDecision(text, placement, capturedImages, origin, attach)).catch((error: unknown) => {
       // The chain must survive a failed decision: log, then continue with
       // the next queued submission.
       ctx.logger.warn('dsh-tui: tui/input dispatch failed: %o', error)
-    }).finally(() => { settled += 1 })
+    }).finally(() => {
+      settled += 1
+      inFlight.shift()
+    })
   }
   /** Public companion for callers that own a line but not a draft (skill
    *  registrations): same decision pass and FIFO as a typed submit. The
@@ -372,7 +378,11 @@ export function createInputDelivery(
     dispatchUserText,
     /** Inputs dispatched so far, and whether any is still in the FIFO (a
      *  parked decision, an `@` read, an IDE-selection read). */
-    activity: (): { readonly dispatched: number; readonly unsettled: boolean } => ({ dispatched, unsettled: settled < dispatched }),
+    activity: (): { readonly dispatched: number; readonly unsettled: boolean; readonly parked?: string } => ({
+      dispatched,
+      unsettled: settled < dispatched,
+      ...(inFlight[0] === undefined ? {} : { parked: inFlight[0] }),
+    }),
     deliverUserText: deliverUserTextNow,
     claimAttachments,
     retireAttachment,

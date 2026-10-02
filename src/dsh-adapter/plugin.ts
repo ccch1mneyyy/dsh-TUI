@@ -2291,6 +2291,15 @@ function writeStream(stream: NodeJS.WriteStream, data: string): Promise<void> {
  * terminal handoff the /update path uses, minus the installation step.
  * The resume contract is dual-written (env + resume.txt) before this runs.
  */
+/**
+ * The tail of a failed restart / update notice: how to resume the session —
+ * or nothing, when there is none to resume (a Claude session the CLI never
+ * persisted hands over an empty id: a hint without an id would mislead).
+ */
+function preservedSessionTail(sessionId: string, hint: (sessionId: string) => string): string {
+  return sessionId === '' ? '\n\n' : ` Your session is preserved — resume with:\n${hint(sessionId)}\n\n`
+}
+
 function runRestart(ctx: Context, profile: string | undefined, sessionId: string, hint: (sessionId: string) => string = id => resumeCommand(profile, id)): void {
   logRestartEvent('runRestart: entered, disposing cordis root')
   disposeRootAndThen(ctx, () => {
@@ -2300,8 +2309,7 @@ function runRestart(ctx: Context, profile: string | undefined, sessionId: string
         logRestartEvent('runRestart: restartTui resolved', { restartCode })
         if (restartCode !== 0) {
           writeHandoffNotice(
-            `\ndsh-tui restart failed to spawn (exit ${restartCode}). Your session is preserved — resume with:\n` +
-              `${hint(sessionId)}\n\n`,
+            `\ndsh-tui restart failed to spawn (exit ${restartCode}).${preservedSessionTail(sessionId, hint)}`,
           )
         }
         process.exit(restartCode)
@@ -2310,8 +2318,7 @@ function runRestart(ctx: Context, profile: string | undefined, sessionId: string
         const message = restartError instanceof Error ? restartError.message : String(restartError)
         logRestartEvent('runRestart: restartTui rejected', { message })
         writeHandoffNotice(
-          `\ndsh-tui restart failed: ${message}. Your session is preserved — resume with:\n` +
-            `${hint(sessionId)}\n\n`,
+          `\ndsh-tui restart failed: ${message}.${preservedSessionTail(sessionId, hint)}`,
         )
         process.exit(1)
       },
@@ -2335,8 +2342,7 @@ function runUpdate(
       ({ updateCode, restartCode }) => {
         if (updateCode !== 0) {
           process.stderr.write(
-            `\ndsh-tui update failed (exit ${updateCode}). Your session is preserved — resume with:\n` +
-              `${hint(sessionId)}\n\n`,
+            `\ndsh-tui update failed (exit ${updateCode}).${preservedSessionTail(sessionId, hint)}`,
           )
         }
         process.exit(restartCode)
@@ -2344,8 +2350,7 @@ function runUpdate(
       updateError => {
         const message = updateError instanceof Error ? updateError.message : String(updateError)
         process.stderr.write(
-          `\ndsh-tui update failed: ${message}. Your session is preserved — resume with:\n` +
-            `${hint(sessionId)}\n\n`,
+          `\ndsh-tui update failed: ${message}.${preservedSessionTail(sessionId, hint)}`,
         )
         process.exit(1)
       },
