@@ -719,6 +719,7 @@ export function AssistantToolUseMessage({
                 toolBackground={ordinaryToolBackground}
                 reveal={revealable ? { key: `${revealKey}:split` } : undefined}
                 bars={useBarsDiff}
+                onOpenFile={onOpenFile}
               />
             ) : (
               <UnifiedDiffView
@@ -728,6 +729,7 @@ export function AssistantToolUseMessage({
                 verbose={verbose}
                 toolBackground={ordinaryToolBackground}
                 reveal={revealable ? { key: `${revealKey}:unified` } : undefined}
+                onOpenFile={onOpenFile}
               />
             )}
           </Box>

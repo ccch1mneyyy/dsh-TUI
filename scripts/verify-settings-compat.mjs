@@ -160,7 +160,7 @@ const registrationJs = ts.transpileModule(`${namespaceDeclaration}
   compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext },
 }).outputText
 const registerSection = dependencies => new Function(...Object.keys(dependencies), registrationJs)(...Object.values(dependencies))
-const declarationNames = ['scope', 'applyShortcuts', 'bootSettings', 'lastTerminalImages']
+const declarationNames = ['scope', 'applyLayout', 'applyShortcuts', 'bootSettings', 'lastTerminalImages']
 const declarations = declarationNames.map(name => {
   const statement = settingsBody.statements.find(node => ts.isVariableStatement(node)
     && node.declarationList.declarations.some(declaration => declaration.name.getText(source) === name))
@@ -177,10 +177,10 @@ const javascript = ts.transpileModule(`
   ${namespaceDeclaration}
   return ctx.inject(['settings'], settingsCtx => {
     ${declarations.join('\n')}
-    const apply = next => { observe(next); applyShortcuts(next) }
+    const apply = next => { observe(next); applyShortcuts(next); applyLayout(next) }
     apply(bootSettings)
     ${watchStatements[0].getText(source)}
-    capture(settingsCtx, scope, applyShortcuts)
+    capture(settingsCtx, scope, applyShortcuts, applyLayout)
   })
 `, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext } }).outputText
 const bindSettings = dependencies => new Function(...Object.keys(dependencies), javascript)(...Object.values(dependencies))
@@ -190,7 +190,7 @@ if (modernSchema) for (const registry of ['service', 'local']) for (const entryI
   const home = mkdtempSync(join(tmpdir(), 'dsh-tui-settings-'))
   const observed = []
   const notices = []
-  let owner, child, liveScope, applyShortcuts, runtime, legacyScopeSchema
+  let owner, child, liveScope, applyShortcuts, applyLayout, appliedDiffStyle, runtime, legacyScopeSchema
   resetKeymapOverrides()
   const defaultPaste = effectiveComboString('paste')
   try {
@@ -225,13 +225,18 @@ if (modernSchema) for (const registry of ['service', 'local']) for (const entryI
           // with Config (the `local` registry path reads values through it).
           createSettingsScope: (...args) => { legacyScopeSchema = args[3]; return createSettingsScope(...args) },
           bootedFullscreen: true, bootedTerminalImages: true,
-          t: key => key, notifyChannel: message => notices.push(message), channel: { notify: message => notices.push(message) },
+          t: key => key, notifyChannel: message => notices.push(message), shadow: false,
+          channel: {
+            notify: message => notices.push(message),
+            setDiffLayout: () => {},
+            setDiffStyle: value => { appliedDiffStyle = value },
+          },
           observe: value => observed.push(value),
-          capture(settingsCtx, scope, apply) { child = settingsCtx; liveScope = scope; applyShortcuts = apply },
+          capture(settingsCtx, scope, shortcuts, layout) { child = settingsCtx; liveScope = scope; applyShortcuts = shortcuts; applyLayout = layout },
         })
       })
     } }
-    await root.loader.create({ id: entryId, name: 'cordis:fixture', config: { diffLayout: 'split', shortcuts: { paste: 'alt+v' } } })
+    await root.loader.create({ id: entryId, name: 'cordis:fixture', config: { diffLayout: 'split', diffStyle: 'bars', shortcuts: { paste: 'alt+v' } } })
     await root.loader.await()
     assert.notEqual(owner.fiber, child.fiber, 'injection has its own lifecycle')
     assert.equal(effectiveComboString('paste'), 'alt+v')
@@ -263,6 +268,10 @@ if (modernSchema) for (const registry of ['service', 'local']) for (const entryI
     const form = new SettingsForm(host, view, section.fields)
     assert.equal(form.available, true, 'real describe() supplies the editable TUI section')
     assert.equal(form.field(diffField).text, 'split', 'the settings page shows the effective value')
+    const styleField = section.fields.find(field => field.path.length === 1 && field.path[0] === 'diffStyle')
+    assert.ok(styleField, 'the production section exposes diffStyle')
+    assert.equal(form.field(styleField).text, 'bars', 'the settings page shows the configured diff style')
+    assert.equal(appliedDiffStyle, 'bars', 'boot applies the configured diff style')
     // 开屏大字字体（splashFont）：面板选项直接由字体注册表推，所以这里同时钉住
     // 「选项覆盖全部合法取值」「未设置时显示生效值（daily）」与「每一位都能被选中
     // 并真的存进 profile」——select 的 parse 只认 options 里的值，写不进别的。
@@ -297,6 +306,12 @@ if (modernSchema) for (const registry of ['service', 'local']) for (const entryI
     // createSettingsScope 内联 schema）；`local` 注册表路径经它读值，键集必须与
     // Config.statusBar 一致，否则那条路径上同样读不到 / 存不住。
     assert.ok(legacyScopeSchema, `${registry}: the production wiring built its legacy settings scope schema`)
+    applyLayout(legacyScopeSchema({}))
+    assert.equal(appliedDiffStyle, 'bars', 'an unset legacy diffStyle preserves the deployment choice')
+    applyLayout(legacyScopeSchema({ diffStyle: 'default' }))
+    assert.equal(appliedDiffStyle, 'default', 'a saved legacy diffStyle overrides the deployment choice')
+    applyLayout(legacyScopeSchema({}))
+    assert.equal(appliedDiffStyle, 'bars', 'clearing the legacy diffStyle restores the deployment choice')
     assert.deepEqual(
       Object.keys(legacyScopeSchema.dict.statusBar.dict).sort(),
       Object.keys(Config.dict.statusBar.dict).sort(),
@@ -316,6 +331,7 @@ if (modernSchema) for (const registry of ['service', 'local']) for (const entryI
     assert.equal(form.field(costField).text, 'true', 'unset statusBar.cost shows the effective on')
     observed.length = 0
     form.edit(diffField, 'unified')
+    form.edit(styleField, 'default')
     form.edit(splashField, 'classic')
     form.edit(recapField, 'false')
     form.edit(costField, 'false')
@@ -324,6 +340,8 @@ if (modernSchema) for (const registry of ['service', 'local']) for (const entryI
     const saved = await form.save()
     assert.equal(saved, true, `form save uses the real settings mutation path: ${form.failureMessage}`)
     assert.equal(configValues(runtime).diffLayout, 'unified')
+    assert.equal(configValues(runtime).diffStyle, 'default', 'the panel persists the picked diff style')
+    assert.equal(appliedDiffStyle, 'default', 'saving diffStyle applies it live')
     assert.equal(configValues(runtime).splashFont, 'classic', 'the panel persists the picked face')
     assert.equal(configValues(runtime).recapOnOpen, false, 'the panel persists the recap switch')
     assert.equal(configValues(runtime).statusBar.cost, false, 'the panel persists the status-bar cost switch')

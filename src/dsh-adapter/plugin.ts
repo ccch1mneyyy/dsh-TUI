@@ -710,7 +710,8 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
       tuiSettingsNs,
       Schema.object({
         diffLayout: Schema.union(['auto', 'split', 'unified']).default('auto'),
-        diffStyle: Schema.union(['default', 'bars']).default('default'),
+        // Unset inherits cordis.yml; applyLayout supplies the default.
+        diffStyle: Schema.union(['default', 'bars']),
         thinkingFold: Schema.union(['preview', 'full']).default('preview'),
         jobGroupFold: Schema.union(['auto', 'always', 'never']).default('auto'),
         toolBackground: Schema.union(['none', 'subtle', 'strong']).default('none'),

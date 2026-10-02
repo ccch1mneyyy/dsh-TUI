@@ -22,7 +22,7 @@ process.env.FORCE_COLOR = '3'
 // module import resolves the startup lang (env > persisted > locale).
 process.env.DSH_TUI_LANG = 'en'
 
-const [{ PassThrough, Writable }, React, { Terminal: XTerm }, ui, { AssistantToolUseMessage }, { getCliHighlightPromise }, { parseAnsiRuns, chalkFromToken, highlightLines }, { sleep }] = await Promise.all([
+const [{ PassThrough, Writable }, React, { Terminal: XTerm }, ui, { AssistantToolUseMessage }, { getCliHighlightPromise }, { parseAnsiRuns, chalkFromToken, highlightLines }, { sleep, settled, findText }] = await Promise.all([
   import('node:stream'),
   import('react'),
   import('@xterm/headless'),
@@ -341,6 +341,77 @@ async function renderAt(cols, tool, diffLayout = 'auto', toolBackground = 'none'
 {
   const { screen } = await renderAt(70, editTool, 'auto', 'none', 'default')
   check('default 风格保持经典统一式', screen().includes('- def shout(text):') && !screen().includes('▌'))
+}
+
+// ---- 9. File separators retain their file actions in both layouts and modes.
+for (const fullscreen of [false, true]) {
+  for (const diffLayout of ['unified', 'split'] as const) {
+    const cols = diffLayout === 'split' ? 120 : 70
+    const rows = 20
+    const term = new XTerm({ cols, rows, scrollback: 100, allowProposedApi: true })
+    class FakeStdout extends Writable {
+      columns = cols
+      rows = rows
+      isTTY = true
+      _write(chunk, _e, cb) { term.write(String(chunk), cb) }
+    }
+    class FakeStdin extends PassThrough {
+      isTTY = true
+      setRawMode() { return this }
+      ref() { return this }
+      unref() { return this }
+    }
+    const stdin = new FakeStdin()
+    const opened: string[] = []
+    let toggles = 0
+    const path = '/tmp/second.py'
+    const tool = {
+      ...editTool,
+      callId: `paths-${fullscreen}-${diffLayout}`,
+      callView: {
+        card: 'diff',
+        title: 'MultiEdit',
+        diffs: [
+          { path: '/tmp/first.py', oldText: 'before', newText: 'after' },
+          { path, oldText: 'two', newText: 'TWO' },
+          { path, oldText: 'three', newText: 'THREE' },
+        ],
+      },
+    }
+    const KeySink = () => { ui.useInput(() => {}); return null }
+    const content = React.createElement(ui.Box, { flexDirection: 'column' },
+      React.createElement(KeySink),
+      React.createElement(AssistantToolUseMessage, {
+        tool, marginTopOnTurn: false, verbose: true, diffLayout, diffStyle: 'bars',
+        onOpenFile: value => opened.push(value), onClick: () => { toggles++ },
+      }),
+    )
+    const app = await render(fullscreen ? React.createElement(ui.AlternateScreen, null, content) : content,
+      { stdout: new FakeStdout(), stdin, stderr: new FakeStdout(), exitOnCtrlC: false, patchConsole: false })
+    const label = `${fullscreen ? 'fullscreen' : 'inline'} ${diffLayout}`
+    try {
+      check(`${label}: second file path is visible`, await settled(() => findText(term, path) !== null))
+      const at = findText(term, path)
+      if (at === null) continue
+      if (!fullscreen) {
+        check(`${label}: repeated-file hunk separator is visible`, findText(term, '⋯') !== null)
+        continue // Inline mode leaves mouse selection to the terminal.
+      }
+      stdin.write(`\x1b[<0;${at.col + 3};${at.row + 1}M\x1b[<0;${at.col + 3};${at.row + 1}m`)
+      check(`${label}: path opens the exact file`, await settled(() => opened.length > 0) && opened.length === 1 && opened[0] === path,
+        JSON.stringify({ opened, toggles }))
+      check(`${label}: path click does not toggle the card`, toggles === 0)
+      const separator = findText(term, '⋯')
+      check(`${label}: repeated-file hunk separator is visible`, separator !== null)
+      if (separator !== null) {
+        stdin.write(`\x1b[<0;${separator.col + 1};${separator.row + 1}M\x1b[<0;${separator.col + 1};${separator.row + 1}m`)
+        check(`${label}: hunk separator remains a card toggle`, await settled(() => toggles > 0) && toggles === 1)
+        check(`${label}: hunk separator does not open a file`, opened.length === 1)
+      }
+    } finally {
+      app.unmount()
+    }
+  }
 }
 
 console.log(failures === 0 ? 'repro-diff-split: all assertions passed' : `repro-diff-split: ${failures} FAILED`)
