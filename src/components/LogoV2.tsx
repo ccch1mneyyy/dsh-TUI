@@ -20,6 +20,7 @@ import { BRAND, FLASH, ICE, PALE, sweep } from './shimmer.js'
 import { STANDARD_FRAME_INDEX, WhaleArt } from './Whale.js'
 import { WhaleGirlArt } from './WhaleGirl.js'
 import { MAID_BOX_CENTER, MaidPortrait, useMaidPortraits } from './maidPortrait.js'
+import { SplashMascot, useSplashMascotSkin } from './sidePanel/companion/SplashMascot.js'
 import { OPENING_SEQUENCES, pickOpeningSequence, WHALE_FRAME_INDEX, type OpeningStep, type WhaleIntroId } from './whaleFrames.js'
 import { RESTING_POSE, type WhaleLayerPose } from './whaleLayers.js'
 import {
@@ -116,6 +117,7 @@ export function LogoV2({
   align = 'start',
   chrome = 'full',
   arrangement = 'row',
+  companionSkin,
 }: {
   /** 模型/effort/工作目录只画在 full 形态里；minimal（落地页）不传也行。 */
   model?: string
@@ -204,6 +206,9 @@ export function LogoV2({
    * 偏在右半边；上下排布让两块各自落在中轴上，居中这件事不再有歧义。
    */
   arrangement?: 'row' | 'column'
+  /** 测试缝：钉住启动页吉祥物皮肤（undefined——生产——读 companion.skin；
+   *  'whale'/未知 = 维持原鲸鱼/女仆娘路径，见 SplashMascot.tsx）。 */
+  companionSkin?: string
 }): React.ReactNode {
   // One intro per logo mount: the production path rolls (startup splash
   // and each /deepseek replay roll independently), the `intro` seam pins
@@ -236,6 +241,13 @@ export function LogoV2({
   React.useEffect(() => {
     if (working) setWhaleFrozen(true)
   }, [working])
+
+  // ── 启动页吉祥物（2026-10 复用轮）：companion.skin 驱动 ────────────────
+  // deepy → 字母格动画；whaleGirl → 鲸娘动画（图像协议自适应，首帧字母格
+  // 同步可画）；两者都取代艺术槽的原住民（分层鲸/静态女仆娘立绘）。
+  // 'whale'/未知皮肤 → undefined，原路径零改动。冻结/落地页（whaleIdle=
+  // false）时吉祥物定格 idle 帧 0、零时钟（SplashMascot 内部保证）。
+  const mascotSkin = useSplashMascotSkin(companionSkin)
 
   // ── Whale behaviors (ported from the dsh-ui-whale pet) ─────────────────
   // Intro-phase click → heart pass: whole heart frames over the opening
@@ -344,9 +356,9 @@ export function LogoV2({
   const pendingHeartRef = React.useRef(false)
   const tickRef = React.useRef<(() => void) | null>(null)
   React.useEffect(() => {
-    // 女仆娘档（真图或字符画）没有闲置规划器：立绘是静态的，开屏定格
-    // 后不给她留任何定时器。
-    if (!settled || !whaleIdle || !showWhale || whaleFrozen || whaleGirl) {
+    // 女仆娘档（真图或字符画）与吉祥物档（SplashMascot 自带节拍器）都
+    // 不需要鲸鱼的闲置规划器：那两条路径里分层鲸根本没画。
+    if (!settled || !whaleIdle || !showWhale || whaleFrozen || whaleGirl || mascotSkin !== undefined) {
       setIdlePose(null)
       tickRef.current = null
       return
@@ -489,6 +501,8 @@ export function LogoV2({
       >
         {showWhale && (
           <Box
+            flexDirection="column"
+            alignItems="center"
             flexShrink={0}
             onClick={(): void => {
               // Frozen (first task started): the whale is a static logo —
@@ -513,7 +527,13 @@ export function LogoV2({
               }
             }}
           >
-            {whaleGirl ? (
+            {/* 美术本体钳在 WHALE_BOX_WIDTH：文字列几何在所有皮肤形态下与
+                鲸鱼形态逐字节一致（tip 行截断/阶梯契约），吉祥物（31 格）在
+                盒内居中。 */}
+            <Box width={WHALE_BOX_WIDTH} flexDirection="column" alignItems="center">
+            {mascotSkin !== undefined ? (
+              <SplashMascot skin={mascotSkin} active={!whaleFrozen && whaleIdle} />
+            ) : whaleGirl ? (
               // 槽位**与文字列严格等高**（textColumnRows）：真图与字符画女仆
               // 娘共用同一个盒，真图解码完成换画时头部高度不跳，视觉上两者
               // 齐平、谁也不多出一截。真图**不带衬底**（transparent）：立绘
@@ -546,6 +566,7 @@ export function LogoV2({
                 width={WHALE_BOX_WIDTH}
               />
             )}
+            </Box>
           </Box>
         )}
         {/* 鲸鱼独占一档（大字放不下、又还得下鲸鱼）：文字列只剩几列，画出来

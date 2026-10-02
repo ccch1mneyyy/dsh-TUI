@@ -15,8 +15,28 @@
  *
  * PageInsetContext is deliberately NOT overridden: the chat column's
  * origin is still the content-area origin, so screen-coordinate overlays
- * (tooltips) keep their math. Geometry == null renders children bare —
- * the collapsed layout is byte-identical to today.
+ * (tooltips) keep their math.
+ *
+ * STRUCTURAL STABILITY (2026-10-02 crash fix). The collapsed state used to
+ * render bare `children`, which made split↔collapsed a tree-SHAPE change:
+ * React unmounted the whole chat column and mounted a fresh one on every
+ * Ctrl+B / editor-open / resize-across-the-threshold. That cost more than
+ * a repaint — the deletion commit ran ScrollBox's useImperativeHandle
+ * cleanup, whose ref is Chat's `setHandle` state setter, so the detached
+ * ref scheduled a state update INSIDE a commit; combined with the
+ * fullscreen editor publishing its node from an insertion effect (a store
+ * notification that renders synchronously inside the same commit) the
+ * nested-update counter ratcheted past React's limit and the process died
+ * with Minified React error #185. Keeping the chat column at a stable tree
+ * position turns every geometry change into a prop update, so nothing is
+ * deleted, no ref detaches mid-commit, and chat-side state (scroll
+ * position, draft, transcript measure cache) survives the toggle.
+ *
+ * While collapsed the wrappers are invisible by construction: the contexts
+ * re-provide the PARENT's own values (referentially identical), the chat
+ * box gets no width / no overflow / no click handler, and the outer row
+ * does not clip — so the collapsed frame stays byte-identical to the
+ * no-layout render (locked by verify-side-panel-layout).
  */
 import React from 'react'
 import { Box, Text } from '../../ui.js'
@@ -75,45 +95,68 @@ export function SidePanelLayout({
   const parentSize = useTerminalSize()
   const rows = parentSize.rows
   const screenRows = parentSize.screenRows ?? parentSize.rows
-  if (geometry === null) return <>{children}</>
-  const chatEdges = { left: outerEdges.left, right: 0 }
-  const panelEdges = { left: 0, right: outerEdges.right }
+  const split = geometry !== null
+  const panelColumns = geometry?.panel ?? 0
+  const chatEdges = React.useMemo(
+    () => ({ left: outerEdges.left, right: 0 }),
+    [outerEdges.left],
+  )
+  const panelEdges = React.useMemo(
+    () => ({ left: 0, right: outerEdges.right }),
+    [outerEdges.right],
+  )
+  // Collapsed: hand the parent's own objects straight back so consumers see
+  // byte-identical context values (and keep their memoization).
+  const chatSize = React.useMemo(
+    () => (geometry === null ? parentSize : { columns: geometry.chat, rows, screenRows }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- geometry identity changes with the split
+    [parentSize, geometry, rows, screenRows],
+  )
+  const panelSize = React.useMemo(
+    () => ({ columns: panelColumns, rows, screenRows }),
+    [panelColumns, rows, screenRows],
+  )
   return (
-    <Box flexDirection="row" flexGrow={1} flexShrink={1} overflow="hidden">
-      <SurfaceEdgesContext.Provider value={chatEdges}>
-        <TerminalSizeContext.Provider value={{ columns: geometry.chat, rows, screenRows }}>
+    <Box flexDirection="row" flexGrow={1} flexShrink={1} overflow={split ? 'hidden' : undefined}>
+      <SurfaceEdgesContext.Provider value={split ? chatEdges : outerEdges}>
+        <TerminalSizeContext.Provider value={chatSize}>
           <Box
             flexDirection="column"
-            width={geometry.chat}
+            flexGrow={split ? 0 : 1}
+            width={geometry === null ? undefined : geometry.chat}
             flexShrink={0}
-            overflow="hidden"
-            onClick={onActivateChat}
+            overflow={split ? 'hidden' : undefined}
+            onClick={split ? onActivateChat : undefined}
           >
             {children}
           </Box>
         </TerminalSizeContext.Provider>
       </SurfaceEdgesContext.Provider>
-      {/* Junction contract: SidePanelColumn keeps its PanelBar on row 0,
-          a rule on row 1, and the hint + its rule as the last two rows, so
-          the seam tees at exactly 1 and rows-2. */}
-      <DividerColumn focused={focus === 'panel'} rows={rows} junctionRows={[1, Math.max(1, rows - 2)]} />
-      <SurfaceEdgesContext.Provider value={panelEdges}>
-        <TerminalSizeContext.Provider value={{ columns: geometry.panel, rows, screenRows }}>
-          <Box
-            flexDirection="column"
-            width={geometry.panel}
-            flexShrink={0}
-            overflow="hidden"
-            onClick={onActivatePanel}
-            /* The right column is fenced out of the fullscreen linear text
-               selection: a drag across chat rows must not capture panel
-               glyphs (design doc §4.6). Panels carry their own copy action. */
-            noSelect
-          >
-            {side}
-          </Box>
-        </TerminalSizeContext.Provider>
-      </SurfaceEdgesContext.Provider>
+      {split && (
+        <>
+          {/* Junction contract: SidePanelColumn keeps its PanelBar on row 0,
+              a rule on row 1, and the hint + its rule as the last two rows, so
+              the seam tees at exactly 1 and rows-2. */}
+          <DividerColumn focused={focus === 'panel'} rows={rows} junctionRows={[1, Math.max(1, rows - 2)]} />
+          <SurfaceEdgesContext.Provider value={panelEdges}>
+            <TerminalSizeContext.Provider value={panelSize}>
+              <Box
+                flexDirection="column"
+                width={panelColumns}
+                flexShrink={0}
+                overflow="hidden"
+                onClick={onActivatePanel}
+                /* The right column is fenced out of the fullscreen linear text
+                   selection: a drag across chat rows must not capture panel
+                   glyphs (design doc §4.6). Panels carry their own copy action. */
+                noSelect
+              >
+                {side}
+              </Box>
+            </TerminalSizeContext.Provider>
+          </SurfaceEdgesContext.Provider>
+        </>
+      )}
     </Box>
   )
 }

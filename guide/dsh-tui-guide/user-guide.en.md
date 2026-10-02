@@ -263,14 +263,36 @@ one-column seam between the two surfaces.
   panels · `1`-`9` jump to the Nth · `z` or `Alt+Z` zoom · `+`/`-` resize (`+` widens the panel by 4 columns) · `↑`/`↓`/`PgUp`/`PgDn`
   go to the active panel (jobs selects and scrolls with them). Keys the panel does not take never
   reach the chat, while `Ctrl+C`/`Ctrl+D`/`Ctrl+L` and the other Ctrl combos still do.
-- **Mouse**: click the chat column to focus the chat, click the panel column to focus the panel; the
-  panel column is excluded from drag-selection.
+- **Mouse**: click the chat column to focus the chat, click the panel column to focus the panel;
+  clicking a tab on the bar switches to that panel (hover highlights it), and the `⤢` on its right
+  edge blows the active panel up to the full screen. The panel column is excluded from
+  drag-selection.
 - **Panels**: `todo` (Goals/Todos — with a split it moves here from above the input), `jobs`
   (background jobs; clicking a job card in the transcript focuses that job here), `agents`
   (subagent dashboard and detail: Enter opens the detail, Esc steps back), `companion`
   (the pet — off by default; add `companion` to `sidePanel.panels` to enable: its mood follows
   the session, click for a heart, Enter to poke; the `dsh-tui.companion.skin` setting offers
-  deepy (default, the fan-made deepy whale kit) or whale).
+  deepy (default, the fan-made deepy whale kit) or whale), `info` (model, effort, mode,
+  permissions, context usage, cache hit, tokens, TPS, spend, working dir, session title and id),
+  `trajectory` (the session's wake band + ledger + inspector: ↑/↓ select, Enter expands, Tab
+  switches to the hotspot view — ←/→ always stay the host's panel-cycling keys), `workspace`
+  (working-directory overview; Enter opens the full workspace home).
+- **Pet (companion) details**: the pet sits at the BOTTOM of the panel with a status area above
+  it (mood · subagent/session counts · current animation). Interactions: clicking its left/right
+  half pokes it (poke-left/right), three rapid clicks tickle it, **holding and dragging walks it
+  around the whole panel with the pointer (release springs it back home)**, hovering makes it look
+  toward the pointer; Enter also pokes. Job-done / interrupted notices are spoken by a speech
+  bubble above its head — while the pet panel is the ACTIVE panel the toast above the input box
+  does NOT repeat it (toasts return on any other panel; error-colored notices always toast). Moods
+  are debounced: fast tool calls no longer flicker the animation (leaving the working state takes
+  ~1.5s to settle; approvals and errors still preempt instantly). Subagent/session counts switch
+  the music / conducting / building ensemble animations. When the column is too narrow even for
+  the compact form the pet hides, leaving one line: "So cramped! {{name}} is hiding for now~".
+  The `dsh-tui.companion.skin` setting picks one of three: `deepy` (default, the fan-made whale
+  kit), `whaleGirl` (the whale-girl sticker pack — 22 animations that react to pokes, tickles and
+  drags, plus its own hearts and thumbs-up) or `whale` (the splash's pixel whale). **On terminals
+  with an image protocol (kitty/sixel) whaleGirl renders at native 240px with all 267 frames**
+  (transparent float, decoded on demand); without one it falls back to the character-art form.
 
 | Subcommand | Effect |
 |---|---|
@@ -278,8 +300,13 @@ one-column seam between the two surfaces.
 | `/panel toggle` | Really open / really close (closing returns focus to the chat) |
 | `/panel focus` | Open and focus the panel |
 | `/panel zoom` | Open and zoom the active panel |
-| `/panel <id>` | Open a panel by id: `todo` / `jobs` / `agents` / `companion` (completion lists the enabled ids) |
+| `/panel <id>` | Open a panel by id: `todo` / `info` / `trajectory` / `jobs` / `agents` / `workspace` / `companion` (completion lists the enabled ids) |
 
+- Views that used to be full-screen-only now also live in the sidebar: with the split up and the
+  matching panel enabled, `Ctrl+T` / `/trace` open the trajectory panel and `/home` opens the
+  workspace panel; the `⤢` on the panel bar puts them back on the whole screen (`⤢` is the mouse
+  path — the keyboard equivalents are each view's own full-screen shortcut: `Ctrl+T` trajectory,
+  `Ctrl+A` agents, `/jobs` jobs, `/home` the workspace home).
 - Settings: the **Side panel** group in `/settings`, or
   `dsh-tui.sidePanel.{splitEnabled,open,ratio,panels}` (see the
   [configuration reference](configuration.en.md#tui-configuration)).

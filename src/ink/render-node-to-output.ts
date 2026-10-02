@@ -9,7 +9,7 @@ import { LayoutDisplay, LayoutEdge, type LayoutNode } from './layout/node.js'
 import { nodeCache, pendingClears, textPaintCache } from './node-cache.js'
 import type Output from './output.js'
 import renderBorder from './render-border.js'
-import type { Screen } from './screen.js'
+import { countPaintedFlankColumns, type Screen } from './screen.js'
 import {
   type StyledSegment,
   squashTextNodesToSegments,
@@ -63,6 +63,14 @@ export function didLayoutShift(): boolean {
  * moved up (scrollTop increased, CSI n S).
  */
 export type ScrollHint = { top: number; bottom: number; delta: number }
+/**
+ * How many painted columns may live outside a scroll container's x-range
+ * (within the shifted rows) before the DECSTBM fast path is rejected in
+ * favor of the box-clipped full path: the hardware scroll displaces those
+ * columns and the diff must write every displaced cell back. Blank margins
+ * and the 1-2 column gutter rail qualify; a sibling split column does not.
+ */
+const DECSTBM_MAX_FLANK_COLUMNS = 4
 let scrollHint: ScrollHint | null = null
 
 // Rects of position:absolute nodes from the PREVIOUS frame, used by
@@ -1518,15 +1526,41 @@ function renderNodeToOutput(
             const delta = contentCached.y - contentY
             const regionTop = Math.floor(y + contentYoga.getComputedTop())
             const regionBottom = regionTop + innerHeight - 1
-            if (
+            // DECSTBM + SU/SD scroll WHOLE terminal rows — ANSI has no
+            // column-scoped hardware scroll — while this fast path's edge
+            // repaint covers only the box's own x-range. The model-side
+            // shift below is therefore COLUMN-SCOPED to the box: the flanks
+            // keep their correct cells in next.screen, log-update simulates
+            // the hardware scroll on the previous frame full-width, and the
+            // shift op's full-width damage makes the frame diff compare the
+            // flank cells and write them back to the terminal. (Before that
+            // scoping the model shift was full-width too, so prev and next
+            // agreed on the displaced flanks, nothing repaired them, and the
+            // damage stuck — the reported "scrolling the agents panel breaks
+            // the divider seam and the chat column".) The flank repair costs
+            // O(painted flank cells), so the hardware path is only worth it
+            // while the flanks are near-empty (blank page margins, the 1-2
+            // column gutter rail); a wide painted flank (a sibling column
+            // while split) takes the full path below, which repaints the box
+            // clipped to its own bounds.
+            const flankColumns = prevScreen
+              ? countPaintedFlankColumns(
+                  prevScreen,
+                  regionTop,
+                  regionBottom,
+                  Math.floor(x),
+                  Math.floor(x) + Math.floor(width),
+                )
+              : Number.MAX_SAFE_INTEGER
+            const inBoxScroll =
               cached?.y === y &&
               cached.height === height &&
               innerHeight > 0 &&
               Math.abs(delta) < innerHeight
-            ) {
+            if (inBoxScroll && flankColumns <= DECSTBM_MAX_FLANK_COLUMNS) {
               hint = { top: regionTop, bottom: regionBottom, delta }
               scrollHint = hint
-            } else {
+            } else if (!inBoxScroll) {
               layoutShifted = true
             }
           }
@@ -1587,7 +1621,9 @@ function renderNodeToOutput(
             const { top, bottom, delta } = hint
             const w = Math.floor(width)
             output.blit(prevScreen, Math.floor(x), top, w, bottom - top + 1)
-            output.shift(top, bottom, delta)
+            // Column-scoped: see the gate comment above. The terminal still
+            // scrolls whole rows; the diff repairs the flanks.
+            output.shift(top, bottom, delta, Math.floor(x), w)
             // Edge rows: new content entering the viewport.
             const edgeTop = delta > 0 ? bottom - delta + 1 : top
             const edgeBottom = delta > 0 ? bottom : top - delta - 1

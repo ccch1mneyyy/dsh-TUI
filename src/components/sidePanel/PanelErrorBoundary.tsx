@@ -6,6 +6,7 @@
 import React from 'react'
 import { Box, Text } from '../../ui.js'
 import { t } from '../../i18n.js'
+import { logError } from '../../utils/log.js'
 import { panelStore } from './PanelStore.js'
 
 interface BoundaryProps {
@@ -25,6 +26,9 @@ export class PanelErrorBoundary extends React.Component<BoundaryProps, BoundaryS
   }
 
   override componentDidCatch(error: Error): void {
+    // 卡片上只显示截断的 message，卸载即失忆——落盘一份带边界的完整
+    // 错误（含堆栈），否则"面板渲染出错"永远无法事后归因。
+    logError(new Error(`side panel "${this.props.panelId}" render error: ${error.message}`, { cause: error }))
     panelStore.reportError(this.props.panelId, error)
   }
 

@@ -56,6 +56,9 @@ const channelStub: unknown = {
   working: false,
   goal: undefined,
   todos: [],
+  // jobs/agents 面板默认启用（摘要 length / 名册 filter）
+  backgroundJobs: [],
+  subagents: [],
   subscribe() { return () => {} },
 }
 

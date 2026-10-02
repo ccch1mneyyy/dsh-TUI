@@ -12,16 +12,44 @@ import { JobsPanel } from '../JobsPanel.js'
 import { SubagentDashboard } from '../SubagentDashboard.js'
 import { SubagentDetailScene } from '../SubagentDetailScene.js'
 import { CompanionPanel } from './companion/CompanionPanel.js'
+import { InfoPanel } from './InfoPanel.js'
+import { TrajectoryPanel } from './TrajectoryPanel.js'
+import { WorkspacePanel } from './WorkspacePanel.js'
 import { panelStore } from './PanelStore.js'
 import { useSidePanelChannel } from './SidePanelRuntimeContext.js'
+import { usePanelInput } from './usePanelInput.js'
 import { jobsFocusStore } from './jobsFocusStore.js'
 import type { PanelProps } from './types.js'
 
 /** todo：GoalTodoPanel 的 panel variant（同一份 store，不重写业务）。 */
-function TodoPanelAdapter({ height, visible }: PanelProps): React.ReactNode {
+function TodoPanelAdapter({ width, height, focused, visible }: PanelProps): React.ReactNode {
   const channel = useSidePanelChannel()
+  // 折叠态是面板内局部 state（默认展开）——不接 Chat 的 ctrl/cmd+q 热键
+  // 状态，两个形态各自独立。头部行点击与键盘（Enter/空格）走同一 toggle：
+  // 修复前头部行 onClick 没接（GoalTodoPanel 的 onToggle 未传），
+  // 侧栏里点折叠头是死控件。
+  const [collapsed, setCollapsed] = React.useState(false)
+  const toggleCollapsed = React.useCallback(() => setCollapsed(previous => !previous), [])
+  usePanelInput((input, key) => {
+    if (key.ctrl || key.meta || key.escape) return false
+    if (key.return_ !== true && input !== ' ') return false
+    toggleCollapsed()
+    return true
+  }, { active: focused && visible })
   // 行数预算：goal 区最多 2 行 + 折叠头 1 行 + 留白 1 行，其余给 todo 列表。
-  return <GoalTodoPanel channel={channel} variant="panel" visible={visible} maxTodos={Math.max(3, height - 4)} />
+  return (
+    <GoalTodoPanel
+      channel={channel}
+      variant="panel"
+      visible={visible}
+      collapsed={collapsed}
+      onToggle={toggleCollapsed}
+      maxTodos={Math.max(3, height - 4)}
+      // 折行宽 = 面板宽 − 左右 padding 2 − 树形前缀 3 − 状态 glyph 2，
+      // 再留 1 格余量防 ink 二次折行（长行溢出超过约束会把同行定宽列挤折）。
+      wrapWidth={Math.max(10, width - 8)}
+    />
+  )
 }
 
 /**
@@ -71,11 +99,12 @@ function JobsPanelAdapter({ focused, visible }: PanelProps): React.ReactNode {
         // Send to Chat（§6.7）：任务摘要附为下一次提交的上下文；chip 在
         // 输入框上方出现，Esc 可撤、提交即消耗。
         if (typeof channel.attachContext !== 'function') return
+        const lines = job.outputLines ?? []
         const summary = [
           `后台任务 ${job.id}（${job.status}）`,
           job.command !== undefined && job.command !== '' ? `命令：${job.command}` : `命令：${job.label}`,
-          job.outputLines.length > 0
-            ? `输出（末 ${Math.min(10, job.outputLines.length)} 行）：\n${job.outputLines.slice(-10).map(line => line.text).join('\n')}`
+          lines.length > 0
+            ? `输出（末 ${Math.min(10, lines.length)} 行）：\n${lines.slice(-10).map(line => line.text).join('\n')}`
             : '（暂无输出）',
         ].join('\n')
         channel.attachContext({ source: 'panel', sourceId: job.id, title: `Job ${job.id}`, content: summary })
@@ -174,7 +203,8 @@ export function registerBuiltinPanels(): void {
     mountPolicy: 'enabled',
     defaultEnabled: true,
     minColumns: 28,
-    capabilities: { scroll: true, sendToChat: true },
+    // 整屏对应物 = /jobs 的整屏 JobsPanel；PanelBar 右端因此有 ⤢ 全屏按钮。
+    capabilities: { scroll: true, sendToChat: true, fullscreen: true },
     component: JobsPanelAdapter,
   }, 'builtin')
   panelStore.register({
@@ -185,8 +215,48 @@ export function registerBuiltinPanels(): void {
     source: 'builtin',
     mountPolicy: 'enabled',
     defaultEnabled: true,
-    capabilities: { scroll: true },
+    // 整屏对应物 = Ctrl+A 的 SubagentDashboard。
+    capabilities: { scroll: true, fullscreen: true },
     component: AgentsPanelAdapter,
+  }, 'builtin')
+  panelStore.register({
+    id: 'info',
+    titleKey: 'panel-title-info',
+    icon: 'ⓘ',
+    order: 15,
+    source: 'builtin',
+    mountPolicy: 'enabled',
+    // opt-in（在 dsh-tui.sidePanel.panels 里加入才出现，同 companion）。
+    defaultEnabled: false,
+    minColumns: 24,
+    capabilities: { scroll: true },
+    component: InfoPanel,
+  }, 'builtin')
+  panelStore.register({
+    id: 'trajectory',
+    titleKey: 'panel-title-trajectory',
+    icon: '∿',
+    order: 25,
+    source: 'builtin',
+    mountPolicy: 'enabled',
+    defaultEnabled: false,
+    minColumns: 28,
+    // 整屏对应物 = Ctrl+T / /trace 的 TrajectoryScene（分屏时那两者也走本面板）。
+    capabilities: { scroll: true, fullscreen: true },
+    component: TrajectoryPanel,
+  }, 'builtin')
+  panelStore.register({
+    id: 'workspace',
+    titleKey: 'panel-title-workspace',
+    icon: '⌗',
+    order: 35,
+    source: 'builtin',
+    mountPolicy: 'enabled',
+    defaultEnabled: false,
+    minColumns: 28,
+    // 整屏对应物 = /home 的工作区主页（分屏时 /home 也走本面板）。
+    capabilities: { scroll: true, fullscreen: true },
+    component: WorkspacePanel,
   }, 'builtin')
   panelStore.register({
     id: 'companion',

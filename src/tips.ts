@@ -38,7 +38,7 @@ export const TIPS: readonly Tip[] = [
     id: 'keys-esc-levels',
     group: 'keys',
     zh: 'Esc 逐层收：帮助 → 图片预览 → 命令/文件菜单 → 清选区 → 清附加 → 清空',
-    en: 'Esc peels layers: help → image preview → command/file menus → selection → attached context → clear input',
+    en: 'Esc peels layers: help → preview → menus → selection → context chip → clear input',
   },
   {
     id: 'keys-ctrl-o',
@@ -552,7 +552,7 @@ export const TIPS: readonly Tip[] = [
     id: 'flow-question-arrows',
     group: 'workflow',
     zh: '多题问卷用 ←/→ 换题，不提交；输入行要先把光标移到行首或行尾',
-    en: 'In a multi-question ask, ←/→ switches questions without submitting; on the input row the caret must already be at the edge',
+    en: 'In a multi-question ask, ←/→ switches questions; on the input row the caret must be at the edge',
   },
   {
     id: 'flow-question-fold',
