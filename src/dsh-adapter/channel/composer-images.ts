@@ -4,6 +4,7 @@ import { rememberImagePath, transcriptImageFromAttachment } from '../transcript-
 import { probeImageSize, adaptImageForAdmission, withinDimensionLimits } from '../../utils/imageResize.js'
 import type { AdaptOutcome, ImageSizeProbe, ResizeLimits } from '../../utils/imageResize.js'
 import { mentionAttachments } from './mentions.js'
+import type { LocalImageStore } from './core/local-images.js'
 import type { ChannelOwner } from './owner.js'
 import type {
   ChannelImageBlock,
@@ -136,7 +137,13 @@ const positiveOr = (value: unknown, fallback: number): number =>
 export function createComposerImages(
   ctx: Context,
   owner: ChannelOwner,
-  deps: { generation(): number },
+  deps: {
+    generation(): number
+    /** The in-memory store of a session that takes images itself (a
+     *  backend with the `images` capability); undefined = the DSH
+     *  attachments service, as before. */
+    localImages?(): LocalImageStore | undefined
+  },
 ): ComposerImages {
   /** Session epoch for the staged-image maps: bumped by every clear so a
    *  `saveImage` that was still in flight when the session changed cannot
@@ -208,7 +215,8 @@ export function createComposerImages(
     generation: number,
   ): Promise<StagedImageHandle> => {
     syncSession()
-    const attachments = mentionAttachments(ctx)
+    const local = deps.localImages?.()
+    const attachments = local ?? mentionAttachments(ctx)
     if (attachments === undefined) throw new Error('image attachments are unavailable in this profile')
     if (generation !== stagedImageEpoch) {
       throw new Error('the session changed while the image was being staged')
@@ -298,7 +306,7 @@ export function createComposerImages(
     const stageId = randomUUID()
     stagedImages.set(stageId, attachment)
     if (path !== undefined) rememberImagePath(String(attachment.attachmentId), path)
-    const view = transcriptImageFromAttachment(attachment, () => ctx.get('attachments'))
+    const view = local !== undefined ? local.facade(attachment) : transcriptImageFromAttachment(attachment, () => ctx.get('attachments'))
     if (view !== undefined) stagedImageViews.set(stageId, view)
     while (stagedImages.size > STAGED_IMAGE_LIMIT) {
       const oldest = stagedImages.keys().next().value as string | undefined
@@ -360,7 +368,7 @@ export function createComposerImages(
     },
     stagedImageLimits(): ComposerImageLimits | undefined {
       syncSession()
-      const limits = mentionAttachments(ctx)?.imageLimits
+      const limits = (deps.localImages?.() ?? mentionAttachments(ctx))?.imageLimits
       if (limits === undefined) return undefined
       return {
         maxImageBytes: limits.maxImageBytes,

@@ -204,21 +204,46 @@ dsh-tui --backend claude     # or `backend: claude` in the dsh-tui config row
   there — move to it and press Enter). Questions from the model (`AskUserQuestion`) use the
   questionnaire, and a plan from plan mode opens the plan review (approve with
   auto-accepted edits, approve with per-edit approval, or keep planning with
-  feedback).
+  feedback). An MCP server asking for input uses the questionnaire too: one
+  question per form field (choices, yes/no, checkboxes, or typed text checked
+  against the field — an invalid answer is asked again with the reason), then
+  *Send* or *Decline*; a server that needs a browser step shows its link in a
+  notice and in the question (clickable where the terminal supports links).
+  When the model declines a request and a fallback model is configured, a
+  question offers retrying on it. `Esc` cancels any of these.
 - **Controls**: `/model` (Claude's own model list, no provider prefix —
   `/model sonnet`; the choice is remembered for new sessions), `/effort`, `Shift+Tab`
   cycles default → accept edits → plan (auto where the model supports it; the
   mode shows in the status line when its `mode` field is on), `/compact`,
-  `/context` (Claude's context report), `/mcp`, `/doctor` (CLI, SDK, credential
-  and account), and Claude's own slash commands in completion (sent to Claude
-  as typed). Hovering the cost field shows subscription usage (5h / 7d).
+  `/context` (Claude's context report), `/mcp` (status; `/mcp reconnect
+  <server>` and `/mcp toggle <server> on|off`, server names complete),
+  `/doctor` (CLI, SDK, credential and account), and Claude's own slash
+  commands in completion (sent to Claude as typed). Hovering the cost field
+  shows subscription usage (5h / 7d); approaching or hitting a usage limit,
+  API retries, model fallbacks, automatic permission denials, sign-in errors
+  and recalled memories show as notices.
 - **Also works**: streaming replies, thinking token counts, tool cards (Read,
   Write, Edit, Bash, Glob, Grep, web and MCP tools), Ctrl+C cancel, `/new`
   (a `/new` that a message overtakes while the new session is still starting
-  is cancelled, the message stays in the current session), `/clear`,
-  `/status`, `/cost` (the backend-reported USD cost), `/export` (the
-  transcript as shown), `!cmd` / `!!cmd`, the IDE selection channel and the
-  git branch in the status line.
+  is cancelled, the message stays in the current session), `/status`, `/cost`
+  (the backend-reported USD cost), `/export` (the transcript as shown),
+  `!cmd` / `!!cmd`, the IDE selection channel and the git branch in the
+  status line. `/rename` names the session (the title Claude's own session
+  list shows), `/color` keeps an accent per Claude session (stored by
+  dsh-TUI).
+- **`/btw` and `/recap`** ask one side question over the conversation through
+  a throwaway copy of it (no tools, one turn, nothing written to the
+  session's transcript) — each is one model call; the automatic recap when a
+  session opens stays off for Claude so opening a session never costs
+  anything.
+- **Images**: paste an image or `@`-mention an image file (PNG, JPEG, GIF,
+  WebP; resized to at most 2000 px per side, at most 5 MiB each and 20 per
+  message) and it is sent with the message; staged images are held in memory
+  only. Resumed sessions show the images their prompts carried.
+- **`/clear`** clears the view only, as with DSH: Claude keeps its context.
+  When Claude itself resets the conversation (leaving plan mode with
+  *clear context*), the view, subagents and jobs are cleared with a notice,
+  and the session continues under the new session id Claude gives it.
 - **Sessions**: `/resume` opens the session browser on your Claude sessions —
   this project's first, then every project (sessions dsh-TUI created are
   listed too, although Claude Code's own picker hides them); Enter resumes
@@ -255,8 +280,8 @@ dsh-tui --backend claude     # or `backend: claude` in the dsh-tui config row
   compaction at a time, read-only from Claude's own transcript file. Long
   sessions fold old rows to keep memory bounded, and *load earlier* restores
   them from the same file.
-- **Not yet**: image input, `/tree`, and switching between backends inside
-  one running dsh-TUI. DeepSeek-specific commands are hidden while this
+- **Not yet**: `/tree`, and switching between backends inside one running
+  dsh-TUI. DeepSeek-specific commands are hidden while this
   backend is active.
 
 ## Keybindings & Mouse

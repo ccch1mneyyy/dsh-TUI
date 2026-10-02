@@ -70,6 +70,21 @@ export interface ModeOption {
   readonly label: string
 }
 
+/**
+ * The limits a backend takes images under (the composer's limit model:
+ * the media types it accepts, per-image and per-message bytes, images per
+ * message, and the per-side / total pixel caps the ingress gate resamples
+ * into).
+ */
+export interface ImageLimitsView {
+  readonly mediaTypes: readonly string[]
+  readonly maxImageBytes: number
+  readonly maxImagesPerMessage: number
+  readonly maxMessageImageBytes: number
+  readonly maxImageDimension: number
+  readonly maxImagePixels: number
+}
+
 /** What a rewind would change. */
 export interface RewindPreview {
   readonly filesChanged: readonly string[]
@@ -237,6 +252,13 @@ export interface SessionCapabilities {
   /** The session's accent colour (`/color`), kept per session; reported as
    *  a `session.color` event ('' = the theme default). */
   readonly color?: { current(): string; set(color: string): void }
+  /**
+   * The backend takes images in the message itself (Claude: base64 blocks):
+   * the channel stages pasted and `@`-mentioned images in memory under these
+   * limits instead of the DSH attachments service, and hands their facades
+   * to `submit` as `AgentInput.images`, in block order.
+   */
+  readonly images?: { readonly limits: ImageLimitsView }
   readonly commands?: {
     list(): Promise<readonly CommandInfo[]>
     run?(name: string, rawInput: string): Promise<ExternalCommandOutcome | undefined>

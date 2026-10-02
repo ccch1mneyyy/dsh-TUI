@@ -14,6 +14,7 @@ import { expandComposerMentions } from './composer-mentions.js'
 import { normalizeInputDecision } from './decisions.js'
 import { attachIdeSelection } from './ide-selection.js'
 import { mentionAttachments, mentionFs } from './mentions.js'
+import type { LocalImageStore } from './core/local-images.js'
 import type { ChannelOwner } from './owner.js'
 import type { ChannelSelection, SelectionAttachment } from '../../adapter/ports/channel-view.js'
 import type {
@@ -35,6 +36,9 @@ export interface UserTextOrigin {
   readonly cwd: string
   readonly fs: MentionFs | undefined
   readonly attachments: MentionAttachments | undefined
+  /** The in-memory image store when the session takes images itself: the
+   *  staged references resolve to its facades for `submit`. */
+  readonly localImages?: LocalImageStore
   readonly stagedImages: ReadonlyMap<string, ChannelImageBlock['attachment']>
   /** Live editor selection AT ENQUEUE (undefined = none). Captured here so a
    *  selection made while the FIFO or mention expansion parks the delivery
@@ -55,6 +59,9 @@ export function createInputDelivery(
  /** The fs surface to use when the host mounts no `fs` service (a non-DSH
   *  composition reads the local disk); absent = no fallback. */
  fallbackFs?: () => MentionFs | undefined,
+ /** The in-memory image store of a session that takes images itself (the
+  *  `images` capability); absent / undefined = the DSH attachments service. */
+ localImages?: () => LocalImageStore | undefined,
 ) {
   /**
    * `@` file mentions (issue #15): expansion reads files asynchronously, so
@@ -132,16 +139,20 @@ export function createInputDelivery(
    *  while the user /new's away — capturing the agent at run time would
    *  adopt the NEW session as this text's origin and deliver the old
    *  conversation's words into it. */
-  const captureOrigin = (): UserTextOrigin => ({
+  const captureOrigin = (): UserTextOrigin => {
+    const local = localImages?.()
+    return {
     session: binding.session,
     agentId: state().agentId,
     generation: state().agentBindingGeneration,
     cwd: state().cwd,
     fs: mentionFs(ctx) ?? fallbackFs?.(),
-    attachments: mentionAttachments(ctx),
+    attachments: local ?? mentionAttachments(ctx),
+    ...(local === undefined ? {} : { localImages: local }),
     stagedImages: composer.snapshot(),
     selection: selection(),
-  })
+    }
+  }
 
   /**
    * Expand the text's `@` mentions and deliver ONE user message: the typed
@@ -199,7 +210,15 @@ export function createInputDelivery(
     try {
       // The message id IS the clientMessageId every ledger above keys on; the
       // DSH session delivers this exact message (steer/followup).
-      await origin.session.submit({ text, blocks: message.content, clientMessageId: message.id, native: message }, placement)
+      // A session that takes images itself reads them through their
+      // in-memory facades, in block order.
+      const local = origin.localImages
+      const images = local === undefined ? undefined : expansion.blocks.flatMap(block => {
+        if (block.type !== 'image') return []
+        const view = local.facade(block.attachment)
+        return view === undefined ? [] : [view]
+      })
+      await origin.session.submit({ text, blocks: message.content, clientMessageId: message.id, native: message, ...(images === undefined || images.length === 0 ? {} : { images }) }, placement)
     } catch (error) {
       if (attach !== undefined) attachedByMessageId.delete(message.id)
       untrackPending(message.id)

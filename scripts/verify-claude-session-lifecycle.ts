@@ -5,7 +5,7 @@
  *  - open → dispose ×50 leaves no listener, no timer, no live query (close +
  *    abort + closed input stream every time; dispose is idempotent);
  *  - submit maps placements to priorities and stamps `uuid = clientMessageId`;
- *    images are refused loudly;
+ *    an image it cannot send is refused loudly (never dropped);
  *  - cancel mid-stream interrupts (cancel_queued only for an `interrupt`
  *    cancel on a CLI advertising it) and the confirmation clears the
  *    force-settle timer; with no confirmation the injected 30 s clock
@@ -176,9 +176,12 @@ const collect = (session: AgentSession) => {
   check('submit: idle followup is a plain push, then next/later/now', JSON.stringify(priorities) === JSON.stringify(['plain', 'next', 'later', 'now']), priorities)
   check('submit: uuid = clientMessageId', query.inputs[1]!.uuid === '00000000-0000-4000-8000-0000000000a2')
   check('submit: the confirmed input becomes the user row', sink.events().some(event => event.type === 'user.message' && event.text === 'first'))
-  await assert.rejects(session.submit({ text: 'img', clientMessageId: 'x', images: [{} as never] }, 'followup'), /Images cannot be sent/)
-  await assert.rejects(session.submit({ text: 'pasted', clientMessageId: 'z', blocks: [{ type: 'text', text: 'pasted' }, { type: 'image' }] }, 'followup'), /Images cannot be sent/)
-  check('submit: images (field or image blocks) are refused loudly', true)
+  // Phase 5b: images are sent (verify-claude-images); an image the session
+  // cannot send — an unreadable facade, an image block without one — is
+  // still refused loudly, never dropped from the message.
+  await assert.rejects(session.submit({ text: 'img', clientMessageId: 'x', images: [{} as never] }, 'followup'), new RegExp(t('claude-image-type-refused', { name: 'undefined', type: '?' }).replace(/[()?]/gu, '\\$&')))
+  await assert.rejects(session.submit({ text: 'pasted', clientMessageId: 'z', blocks: [{ type: 'text', text: 'pasted' }, { type: 'image' }] }, 'followup'), new RegExp(t('claude-image-gone')))
+  check('submit: an image it cannot send (bad facade, block without one) is refused loudly', !query.inputs.some(input => input.uuid === 'x' || input.uuid === 'z'))
   query.emit({ type: 'mystery_frame', payload: 1 })
   query.emit({ type: 'system', subtype: 'brand_new' })
   await tick()

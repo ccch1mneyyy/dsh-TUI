@@ -135,3 +135,21 @@
 - **Gate**（本提交的树）：`pnpm build` ✓（verify:build 全过；boundary 679 文件 / 3803 specifier；startup-argv 175/175）；`verify:package` ✓；`pnpm smoke` ✓；CI 三回归 ✓；`DSH_TUI_LANG=zh run-ci-group` channel-ui 106/108——`verify-compaction-progress` scene1 唤醒计数为已登记 flake（单跑 4 次 3 次过），`verify-claude-translate` 的 background-bash golden 在任务详情改为退出码后未重生成（重生成并审阅：详情 `exit code: 0`，150/150）；session-workspace 46/46、input-terminal 28/28；projection golden ✓（`scripts/fixtures/dsh` 零改动）、dsh-translate ✓；DSH 子代理/任务回归 subagent-settle、subagent-stream-batching、jobs-panel、jobs-transcript-group、subagent-model-route、subagent-panel-sync ✓；Claude 全部脚本 ✓（translate 150、replay 65、subagents 36、tasks 49、load-older 30、auth 207、catalog 67、lifecycle 51、permissions 52、controls 41、backend-channel 125）。
 - **Live（haiku）**：`verify-claude-headless` 全量一次（4a/4b 各 1 turn + 5a：子代理、后台 Bash、通知 turn，共 5 turn；5a 表头断言因上述布局问题失败）+ `--only-5a` 一次（子代理、后台 Bash、被中断的 turn、通知 turn，共 4 turn）13/13：中断不停后台任务、尾部来自 CLI 报告的文件。钉住探针 0 计费。合计 9 turn。两次运行结束后本次创建的会话均已从 `~/.claude` 删除（更早阶段遗留的 `-tmp-dsh-tui-claude-headless-*` 会话未动）。
 - **延后**：older 段内子代理的子转录内容；`/clear`→`conversation_reset` 清空名册；Windows 上的转录定位与 munge（P4-2）；`agentProgressSummaries`（额外模型调用，默认关）；任务输出的增量读取（现为每次读尾 64 KiB）。
+
+## Phase 5b
+
+### Phase 5b — elicitation/对话框、图片、/btw·/recap、/rename·/color、/mcp 控制、conversation_reset、提示审计、契约门禁（Opus 5.5）
+
+- **提交**：`4e95ae6a` = Phase 5a 评审跟进（13 项：FIFO 非阻塞打开、尾部读取计数复位与带空格路径、嵌套子代理回放、前台子代理在回合结束/进程退出时收敛、杂务任务隐藏、live 脚本先 dispose 再删 + SIGINT、钉住文档措辞、重连路径的钉住断言、older-history 解析缓存、环形 preserved 链、子代理通道负载截断与回放历史交出即释放、子代理输出行 400 字符上限、`/clear` 后不再前插旧历史）；`35fd0903` = checkpoint 1（elicitation/对话框、提示审计、重置、契约门禁）；`2988d154` = checkpoint 2（`/btw` `/recap` `/rename` `/color` `/mcp`）；checkpoint 3 = 本提交（图片、live、文档）。
+- **elicitation/对话框**（`dialogs.ts`）：见方案 §4.7 Phase 5b 条；问卷视图增 `hideCustomInput/defaultSelected/link`，面板渲染 OSC 8 链接。
+- **提示审计**：§5.1 各类都有带 key 的中英提示，投影器按 key 去重（toast 替换、末行原地更新）；录制夹具里真实的 87%/94% 周限额触发 `allowed_warning`，各 golden 多一条提示行（已审阅）。
+- **conversation_reset**：探针实测重置后 CLI 换用新会话 id（不是 `new_conversation_id`），会话随后续帧切换 id；核心清视图与名册并加提示行；TUI 的 `/clear` 对所有后端仍只清视图。
+- **/btw /recap**：`sideQuery` 能力（fork、`persistSession:false`、无工具、单轮、同模型/env/钉住），提示词契约移到中立的 `src/channel/side-prompts.ts`（DSH 重导出，输出逐字不变）；自动回顾对 Claude 关闭（每次打开都会花钱）。
+- **/rename /color /mcp**：见方案 §5.3 Phase 5b 条；新增 `ChannelUi.mcpControl` 与能力快照 `sideQuery/rename/color/mcpControl`（DSH 的命令集与 `/mcp` 不变）。
+- **图片**：带 `images` 能力的会话由核心在内存暂存（`core/local-images.ts`，同一套限额模型 + 现有降采样，64 张/96 MiB 上限、内容寻址），Claude 限额 PNG/JPEG/GIF/WebP、每张 5 MiB、每条 20 张、合计 20 MiB、2000 px/4 MP；`submit` 在文本后发 base64 块，用户行显示由暂存字节支撑的 `TranscriptImage`；`@` 图片同路径；回放的 base64 块成惰性 facade（首次访问才探测尺寸、`read()` 才解码）。DSH 路径不变（无该能力即仍走 attachments 服务）。
+- **verify:claude-contract**：package.json peer/dev 精确 pin、contract.ts、lockfile（含平台包）、workspace 豁免、已装 SDK 与 CLI 对齐、`OPTION_POLICY satisfies`；登记 verify:build，五类篡改均拦下。`OPTION_POLICY` 增 `side` 类（只由侧问设置的 forkSession/persistSession/maxTurns）。
+- **测试**：新 verify-claude-dialogs、-notices（夹具 `scripts/fixtures/claude/notices/messages.jsonl`）、-reset、-session-commands、-images、-contract；verify-backend-chat 增 `/mcp` 子命令。
+- **Gate**（每个 checkpoint 的树）：`pnpm build`（verify:build 85/85）、`verify:package`、smoke、CI 三回归 ✓；channel-ui 111→112→113 全过、session-workspace 46/46（cp2 首跑 verify-session-browser 为已登记 flake，单跑 4/4）、input-terminal 28/28；projection golden 与 dsh-translate 不变；DSH 图片（composer-image-tokens、transcript-images、clipboard-image、image-downsample）与 btw/auto-recap/session-color-recap 回归通过；Claude 新脚本 dialogs 42、notices 31、reset 11、session-commands 33、images 24、contract 16，其余 Claude 脚本全过。
+- **Live（haiku）**：探针 side 2 turn；verify-claude-live `5b` 段 2 turn（红色方块图片被识别、`/btw` 不写转录、`/rename` 进 catalog、`/color`）。合计 4 turn；创建的会话均在 finally 中关闭并删除。
+- **延后**：`model_refusal_fallback.retracted_message_uuids` 的行驱逐（只提示、不撤回已流出的行）、对话框的 `edit_prompt` 选项、elicitation 的 URL 自动打开浏览器、`/add-dir`、`prewarm()`、P4-2（Windows）、`/claude:usage`。
+

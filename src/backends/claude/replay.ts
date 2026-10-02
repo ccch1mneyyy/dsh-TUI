@@ -55,6 +55,7 @@
  * Pure: no I/O, no clock (event times come from the message timestamps).
  */
 import type { AgentEvent, SubagentUsage } from '../../agent/events.js'
+import { transcriptImages } from './images.js'
 import { createClaudeTranslator } from './translate.js'
 
 type Rec = Readonly<Record<string, unknown>>
@@ -141,6 +142,8 @@ function classifyUser(message: Rec): UserKind {
   const text = raw.trim()
   if (message.isCompactSummary === true) return { kind: 'summary', text }
   if (message.is_meta === true || message.isMeta === true) return { kind: 'hidden', why: 'meta' }
+  // An image-only prompt is a prompt (its row shows the images).
+  if (text === '' && arr(content).some(block => rec(block)?.type === 'image')) return { kind: 'prompt', text: '', queued: message.isQueuedCommand === true }
   if (text === '') return { kind: 'hidden', why: 'empty' }
   if (text.startsWith(INTERRUPT_ECHO)) return { kind: 'interrupt' }
   const origin = str(rec(message.origin)?.kind)
@@ -346,7 +349,9 @@ export function replayClaudeTranscript(messages: readonly unknown[], options: Cl
         // A prompt folded into a running turn joins it; any other prompt
         // starts the next turn.
         if (!kind.queued) closeTurn()
-        translator.registerInput(uuid, kind.text, 'turn')
+        // Images sent with it: lazy facades over the base64 the transcript
+        // holds (nothing decoded until shown).
+        translator.registerInput(uuid, kind.text, 'turn', transcriptImages(rec(message.message)?.content, uuid))
         out.push(...translator.translate({ type: 'command_lifecycle', command_uuid: uuid, state: 'started' }))
         return
       case 'interrupt':

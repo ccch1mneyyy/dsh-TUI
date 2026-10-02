@@ -52,6 +52,7 @@ import { rewindCutPoint, type ClaudeReplay } from './replay.js'
 import type { ClaudeSdkModule, ClaudeSessionStoreSdk } from './sdk.js'
 import { readTaskOutputTail, taskOutputRoots } from './task-output.js'
 import { claudeConfigDir } from './transcript-file.js'
+import { CLAUDE_IMAGE_LIMITS, claudeImageBlocks } from './images.js'
 import { createClaudeSideQuery } from './side-query.js'
 import { createClaudeTranslator } from './translate.js'
 
@@ -895,6 +896,9 @@ export async function openClaudeSession(input: ClaudeSessionDeps): Promise<Agent
         debug: deps.host.debug,
       }),
       ...renameCapability(),
+      // Images go in the message itself (base64 blocks), staged by the
+      // channel under these limits (images.ts).
+      images: { limits: CLAUDE_IMAGE_LIMITS },
       color: {
         current: () => prefs.color(currentSessionId),
         set(color: string): void {
@@ -990,16 +994,23 @@ export async function openClaudeSession(input: ClaudeSessionDeps): Promise<Agent
       // waiting for the session to go idle leaves the old CLI serving.
       if (reconnecting !== undefined && !reconnectDeferred) await reconnecting.catch(() => undefined)
       if (disposing || run.inbox.closed) throw new Error(t('claude-session-closed'))
-      // Pasted images and `@image` mentions arrive as image blocks; sending
-      // the text without them would silently drop part of the message.
-      if ((input.images?.length ?? 0) > 0 || (input.blocks ?? []).some(block => block.type === 'image')) {
-        throw new Error(t('claude-images-unsupported'))
-      }
+      // Pasted images and `@image` mentions arrive as image blocks with their
+      // staged facades (`input.images`, block order): each is read back and
+      // sent as a base64 block after the text. An image block without its
+      // facade (dropped from memory meanwhile) refuses the message — never
+      // the text without part of it.
+      const imageBlocks = (input.blocks ?? []).filter(block => block.type === 'image').length
+      const staged = input.images ?? []
+      if (imageBlocks > staged.length) throw new Error(t('claude-image-unreadable', { name: `#${staged.length + 1}`, err: t('claude-image-gone') }))
+      const images = staged.length === 0 ? [] : await claudeImageBlocks(staged)
+      if (disposing || run.inbox.closed) throw new Error(t('claude-session-closed'))
       const texts = (input.blocks ?? [{ type: 'text', text: input.text }])
         .flatMap(block => block.type === 'text' && typeof block.text === 'string' && block.text !== '' ? [block.text] : [])
-      const content = texts.length <= 1 ? texts[0] ?? input.text : texts.map(text => ({ type: 'text' as const, text }))
+      const content = images.length === 0 && texts.length <= 1
+        ? texts[0] ?? input.text
+        : [...texts.map(text => ({ type: 'text' as const, text })), ...images]
       const priority = priorityOf(placement, translator.turnOpen)
-      translator.registerInput(input.clientMessageId, input.text, placement)
+      translator.registerInput(input.clientMessageId, input.text, placement, staged)
       const message: SDKUserMessage = {
         type: 'user',
         message: { role: 'user', content },

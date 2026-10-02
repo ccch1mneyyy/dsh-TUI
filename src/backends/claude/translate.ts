@@ -17,7 +17,7 @@
  * Every field is narrowed from `unknown`; an unknown message type or subtype
  * is ignored (debug-logged), never fatal.
  */
-import type { AgentEvent, AgentEventOf, AgentEventType, ContentBlockView, PendingItem, SubagentUsage, TurnEndReason, UsageDelta } from '../../agent/events.js'
+import type { AgentEvent, AgentEventOf, AgentEventType, ContentBlockView, ImageRef, PendingItem, SubagentUsage, TurnEndReason, UsageDelta } from '../../agent/events.js'
 import type { TodoPanelItem } from '../../adapter/ports/channel-view.js'
 import { t } from '../../i18n.js'
 import { claudeToolRole, presentClaudeToolCall, presentClaudeToolResult } from './tools.js'
@@ -197,6 +197,8 @@ export function claudeEmits(type: AgentEventType): boolean {
 interface RegisteredInput {
   readonly text: string
   readonly placement: PendingItem['placement'] | 'turn' | 'now'
+  /** Images the message carries (facades for the user row). */
+  readonly images?: readonly ImageRef[]
 }
 
 /** The attempt (one API response) being assembled. */
@@ -432,7 +434,7 @@ export function createClaudeTranslator(options: ClaudeTranslatorOptions) {
       out.push({ type: 'user.message', id: uuid, anchor: uuid, seq: nextSeq(), turn, time: now(), source: 'command-output', text: output[1]!.trim(), blocks: [{ type: 'text', text: input.text }] })
       return
     }
-    out.push({ type: 'user.message', id: uuid, anchor: uuid, seq: nextSeq(), turn, time: now(), source: 'user', text: input.text, blocks: [{ type: 'text', text: input.text }] })
+    out.push({ type: 'user.message', id: uuid, anchor: uuid, seq: nextSeq(), turn, time: now(), source: 'user', text: input.text, blocks: [{ type: 'text', text: input.text }], ...(input.images === undefined || input.images.length === 0 ? {} : { images: input.images }) })
   }
 
   const translateLifecycle = (message: Rec): AgentEvent[] => {
@@ -1261,8 +1263,8 @@ export function createClaudeTranslator(options: ClaudeTranslatorOptions) {
     forceCloseTurn,
     /** A pushed input: its text becomes the user row once the CLI confirms
      *  it; a queued placement is a pending preview until then. */
-    registerInput(uuid: string, text: string, placement: RegisteredInput['placement']): void {
-      inputs.set(uuid, { text, placement })
+    registerInput(uuid: string, text: string, placement: RegisteredInput['placement'], images?: readonly ImageRef[]): void {
+      inputs.set(uuid, { text, placement, ...(images === undefined || images.length === 0 ? {} : { images }) })
       if (placement === 'steer' || placement === 'followup') pending.set(uuid, { id: uuid, text, placement })
       if (text.trim() === '/compact') compactRequested = true
     },

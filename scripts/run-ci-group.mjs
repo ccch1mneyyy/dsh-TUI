@@ -681,6 +681,11 @@ const GROUPS = {
 // 首次落盘补写）；/color 按会话 id 存 prefs（上限 200、最旧淘汰、重开恢复）；
 // /mcp reconnect|toggle 走能力并补全子命令/服务器名/on|off；DSH 的命令集不变。
     ["verify-claude-session-commands", ['node', '--import', 'tsx/esm', 'scripts/verify-claude-session-commands.ts']],
+// Claude 图片输入（Phase 5b，假 Query）：带 images 能力的会话由核心在内存暂存（不经 DSH
+// attachments 服务；同一限额模型、内容寻址、有界淘汰），submit 在文本后发 base64 块，
+// 限额（类型/5 MiB/20 张/合计 20 MiB）与"图片块缺 facade 即拒发"；用户行由暂存字节
+// 支撑，@ 图片同路径；回放 base64 成惰性 facade；无该能力的会话（DSH）行为不变。
+    ["verify-claude-images", ['node', '--import', 'tsx/esm', 'scripts/verify-claude-images.ts']],
 // IDE 选区通道回归（PR #562）：纯函数（env 直连/lock 扫描与 workspace
 // 匹配过滤/hello_ack 解析/selection_changed 校验）、无 IDE 静默降级、
 // loopback 对连（token 握手 ACK、错误 token 换下一候选、断连清空）、

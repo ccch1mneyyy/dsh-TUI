@@ -230,6 +230,7 @@
     "verify:claude-notices": "node --import tsx/esm scripts/verify-claude-notices.ts",
     "verify:claude-reset": "node --import tsx/esm scripts/verify-claude-reset.ts",
     "verify:claude-session-commands": "node --import tsx/esm scripts/verify-claude-session-commands.ts",
+    "verify:claude-images": "node --import tsx/esm scripts/verify-claude-images.ts",
     "verify:claude-live": "DSH_TUI_CLAUDE_LIVE=1 node --import tsx/esm scripts/verify-claude-live.ts",
     "verify:claude-headless": "DSH_TUI_CLAUDE_LIVE=1 node --import tsx/esm scripts/verify-claude-headless.tsx",
     "verify:adapter-channel": "node --import tsx/esm scripts/verify-adapter-channel.ts",

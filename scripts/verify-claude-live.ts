@@ -34,6 +34,12 @@
  *     rewind the conversation to turn 1 (a fork cut before turn 2's
  *     prompt — the anchor is the uuid the session pushed, which the
  *     transcript keeps) → the catalog deletes the copies.
+ *  9. phase 5b (`DSH_TUI_CLAUDE_LIVE_SECTIONS=5b`, 2 turns): a tiny PNG
+ *     sent as a base64 image block is seen ("what color is this
+ *     square?" → red); `/btw` over that conversation answers through the
+ *     side query (a throwaway fork) and writes NO transcript file;
+ *     `/rename` writes the title the catalog then lists; `/color` is kept
+ *     for the session id.
  *
  * `DSH_TUI_CLAUDE_LIVE_SECTIONS=basic,permissions` limits the run (default:
  * all) — each section costs real turns.
@@ -58,7 +64,7 @@ const { setLang } = await import('../src/i18n.js')
 const { PermissionStore } = await import('../src/channel/permissions.js')
 const { QuestionStore } = await import('../src/channel/questions.js')
 const { attachInteraction } = await import('../src/channel/interaction.js')
-const sections = new Set((process.env.DSH_TUI_CLAUDE_LIVE_SECTIONS ?? 'basic,permissions,controls,controls-turns,reconnect,sessions').split(',').map(name => name.trim()))
+const sections = new Set((process.env.DSH_TUI_CLAUDE_LIVE_SECTIONS ?? 'basic,permissions,controls,controls-turns,reconnect,sessions,5b').split(',').map(name => name.trim()))
 /** `controls` without `controls-turns`: the read-only reports only (no turn). */
 class SkipTurns extends Error {}
 type AgentEvent = import('../src/agent/events.js').AgentEvent
@@ -389,6 +395,62 @@ try {
       await resumed.dispose()
     }
     check('sessions: no claude child survives', (await waitForNoChildren()).length === 0, claudeChildren())
+  }
+  // 9. phase 5b: an image turn, /btw (no transcript), /rename, /color
+  if (sections.has('5b')) {
+    const { readdirSync, existsSync: exists } = await import('node:fs')
+    const { homedir } = await import('node:os')
+    const { deflateSync } = await import('node:zlib')
+    const { createLocalImageStore } = await import('../src/dsh-adapter/channel/core/local-images.js')
+    const { CLAUDE_IMAGE_LIMITS } = await import('../src/backends/claude/images.js')
+    /** A 16×16 solid red PNG, built by hand. */
+    const redPng = (): Uint8Array => {
+      const table = new Uint32Array(256).map((_, n) => { let c = n; for (let k = 0; k < 8; k += 1) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1; return c >>> 0 })
+      const crc = (bytes: Uint8Array): number => { let c = 0xffffffff; for (const byte of bytes) c = table[(c ^ byte) & 0xff]! ^ (c >>> 8); return (c ^ 0xffffffff) >>> 0 }
+      const chunk = (type: string, data: Uint8Array): Buffer => {
+        const head = Buffer.alloc(8); head.writeUInt32BE(data.length, 0); head.write(type, 4, 'ascii')
+        const tail = Buffer.alloc(4); tail.writeUInt32BE(crc(Buffer.concat([head.subarray(4), data])), 0)
+        return Buffer.concat([head, data, tail])
+      }
+      const ihdr = Buffer.alloc(13); ihdr.writeUInt32BE(16, 0); ihdr.writeUInt32BE(16, 4); ihdr.set([8, 2, 0, 0, 0], 8)
+      const rows = Buffer.alloc((16 * 3 + 1) * 16)
+      for (let y = 0; y < 16; y += 1) for (let x = 0; x < 16; x += 1) rows.set([255, 0, 0], y * 49 + 1 + x * 3)
+      return new Uint8Array(Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), chunk('IHDR', ihdr), chunk('IDAT', deflateSync(rows)), chunk('IEND', new Uint8Array())]))
+    }
+    /** Transcript files in every project directory naming this run's project. */
+    const projectDir = join(process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), '.claude'), 'projects')
+    const transcripts = (): string[] => {
+      const tag = root.split('/').at(-1)!
+      return exists(projectDir) ? readdirSync(projectDir).filter(dir => dir.includes(tag)).flatMap(dir => readdirSync(join(projectDir, dir)).filter(file => file.endsWith('.jsonl')).map(file => `${dir}/${file}`)) : []
+    }
+    const session = await openSession({ kind: 'create', cwd: project })
+    try {
+      const live = watch(session)
+      const store = createLocalImageStore(() => CLAUDE_IMAGE_LIMITS)
+      const ref = await store.saveImage({ data: redPng(), mediaType: 'image/png', name: 'square.png' })
+      const id = crypto.randomUUID()
+      await session.submit({ text: 'What color is this square? Reply with one word.', blocks: [{ type: 'text', text: 'What color is this square? Reply with one word.' }, { type: 'image' }], images: [store.facade(ref)!], clientMessageId: id }, 'turn')
+      await live.until(() => turnEnds(live.events).length >= 1, 120_000, 'the image turn')
+      const reply = live.events.filter((event): event is Extract<AgentEvent, { type: 'assistant.message' }> => event.type === 'assistant.message').at(-1)
+      check('5b: the model sees the image (a red square)', reply?.blocks.some(block => block.type === 'text' && /red/iu.test(block.text ?? '')) === true, reply?.blocks)
+      check('5b: the user row carries the image', live.events.some(event => event.type === 'user.message' && event.id === id && (event.images?.length ?? 0) === 1))
+      const before = transcripts()
+      let streamed = ''
+      const btw = await session.capabilities.sideQuery!.ask('In one word: what color was the square?', { onText: delta => { streamed += delta } })
+      check('5b: /btw answers over the conversation (side query)', btw.answer !== null && /red/iu.test(btw.answer) && streamed.trim() !== '', btw)
+      const after = transcripts()
+      check('5b: the side query wrote no transcript file', JSON.stringify(after) === JSON.stringify(before), { before, after })
+      check('5b: the session itself is untouched by the side query', session.status !== 'disposed' && turnEnds(live.events).length === 1)
+      await session.capabilities.rename!.rename('Live 5b square')
+      const listed = await claudeBackend.catalog!.list({ cwd: project })
+      check('5b: /rename writes the title the catalog lists', listed.some(row => row.id === session.ref.sessionId && row.title.text === 'Live 5b square'), listed.map(row => row.title))
+      session.capabilities.color!.set('purple')
+      check('5b: /color is kept for the session id', session.capabilities.color!.current() === 'purple')
+      session.capabilities.color!.set('')
+    } finally {
+      await session.dispose()
+    }
+    check('5b: no claude child survives', (await waitForNoChildren()).length === 0, claudeChildren())
   }
 } finally {
   // Success or failure: every session opened is closed first, then no

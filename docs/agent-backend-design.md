@@ -534,6 +534,7 @@ CLI ──can_use_tool──▶ SDK ──canUseTool(toolName, input, opts)─�
 - **`permission_denied` 系统消息**（`[d.ts]`）：自动拒绝（auto 分类器/dontAsk/规则）→ `notice{level:'warning', callId}` 并把工具卡标 error（`decision_reason`）。
 - **模式**：`modes` capability 列表 = `default|acceptEdits|plan|auto|bypassPermissions(仅 allowBypass)`（`dontAsk` 不提供）；`set` → `q.setPermissionMode()`，确认来自 `system/status{permissionMode}`（`[P1]`）→ `mode.changed`。Shift+Tab 循环对 Claude = `default → acceptEdits → plan → default`（`auto` 需模型 `supportsAutoMode` `[P1] supportedModels`）。
 - **MCP elicitation**：`onElicitation` form → QuestionStore（JSON schema 转问题：string/enum/boolean 字段各一题，其余作为自定义文本）；url → `notice` + 复制链接提示，返回 `{action:'accept'}`；不支持的 → `{action:'decline'}`。
+- **Phase 5b 实施（`src/backends/claude/dialogs.ts`）**：form 每字段一题（枚举含 enumNames/oneOf 标题、布尔是/否带默认、多选数组为复选、string/number/integer 与其余字段走文本行并按 minLength/maxLength/format/pattern/minimum/maximum 校验，无效项只重问该项并写明原因，可选项有「跳过」），末题「发送/拒绝」→ `accept{content}`（值按类型）/`decline`，关闭面板 → `cancel`；url 模式发 info 提示行（含 URL）+ 带 `link` 的问题（面板以 OSC 8 渲染），`system/elicitation_complete` 关闭为 accept。`onUserDialog` + `supportedDialogKinds:['refusal_fallback_prompt']`：payload `{originalModel, fallbackModel, apiRefusalCategory?, guidanceText?, retractedMessageUuids?}`、结果 `retry_fallback|edit_prompt|cancelled`（取自 CLI 2.1.287 二进制中的 zod 定义），面板两项：重试 → `completed/retry_fallback`、取消 → `completed/cancelled`，关闭 → `{behavior:'cancelled'}`；未声明种类按 `UserDialogRequest` 注释答 `cancelled`（d.ts 中 `SDKControlRequestUserDialogRequest` 注释称"未声明的种类不应作答"，二者矛盾；我们只声明一种，单客户端下不会收到其他种类）。全部受 SDK signal 控制，重投同一 requestId 等同一答复。
 
 ### 4.8 子代理与后台任务
 
@@ -590,6 +591,7 @@ UI 映射：`subagent.*` → 现有 `SubagentActivityStore`/`SubagentRow`/`Subag
 | compact | `compact.run()` = push 文本 `/compact`；`system/status{status:'compacting'}`→`compaction.start`；`compact_boundary` → `compaction.end{ok, preTokens, postTokens}` + 合成 user 消息（`isSynthetic`）→ `user.message{source:'compaction'}`（投影为 `compact` 行，复用 DSH 的 `compact-done` 行与上下文计数重置）；`status{compact_result:'failed'}` → `compaction.end{ok:false}`；`local_command_output`/`<local-command-stdout>` 回显不渲染 | `[P2]` |
 | 自动压缩 | 同上，`trigger:'auto'` | `[d.ts]` |
 | `/clear` | 对 Claude = 发送 `/clear` 文本 → `conversation_reset` → `session.reset` → 投影器清空 rows（DSH 的 `/clear` 只清视图；Claude 会真正重置上下文——UI 文案区分） | `[d.ts]` |
+| `/clear`（Phase 5b 裁定） | TUI 的 `/clear` 对所有后端都只清视图（与 DSH 同义，不发给 CLI）。CLI 自己的重置（计划模式退出时清空上下文等）→ `conversation_reset` → `session.reset` → 核心清空行、子代理/任务名册、用量/费用/标题并加提示行，"加载更早消息"不带回旧对话。探针实测（`claude-sdk-probe-5b.mjs reset`，0 计费）：重置后 CLI 以**新的会话 id** 继续（随后各帧的 `session_id`，并非 `new_conversation_id`），会话的 ref、fork、rewind、重连与启动器 resume 标记随之切换 | 探针 |
 | 会话树 `/tree` | capability 缺席（Claude 无血缘头；`forkSession` 不记录 parent）→ 命令隐藏 | |
 
 **Phase 4b 实测修正与裁定**：
@@ -722,7 +724,7 @@ UI 映射：`subagent.*` → 现有 `SubagentActivityStore`/`SubagentRow`/`Subag
 
 | 命令 | 行为 |
 | --- | --- |
-| `new clear compact resume rename recap rewind fork export btw bg model effort status tokens skills mcp agents context workspace jobs settings` | 走 capability（§4.9–4.11）；`recap`/`btw` 需要无工具单轮 LLM 调用 → Claude 下用 `forkSession` + 一次性 `query({prompt, options:{resume: forkId, maxTurns:1, tools:[]}})` 再 `deleteSession`（Phase 5；之前显示"不可用"） |
+| `new clear compact resume rename recap rewind fork export btw bg model effort status tokens skills mcp agents context workspace jobs settings` | 走 capability（§4.9–4.11）；`recap`/`btw` 需要无工具单轮 LLM 调用 → Claude 下用 `forkSession` + 一次性 `query({prompt, options:{resume: forkId, maxTurns:1, tools:[]}})` 再 `deleteSession`（Phase 5；之前显示"不可用"）。**Phase 5b 实施**：能力 `sideQuery` = `query({prompt, options:{resume:<当前 id>, forkSession:true, persistSession:false, tools:[], maxTurns:1, model:<当前>}})`，沿用会话的 env/凭证/钉住与系统提示，流式进现有面板、结束即 close；探针实测不写转录文件（无需 deleteSession）、约 3 s、haiku 约 $0.045。打开会话时的自动回顾对 Claude 保持关闭。`/rename` → `renameSession` + `session.title{user}`（未落盘时先记下，首帧落盘补写）；`/color` 按 Claude 会话 id 存 `~/.dsh-tui/backends/claude/prefs.json`（上限 200，最旧淘汰）；`/mcp reconnect|toggle` 走 mcp 能力，补全取自最近一次状态报告 |
 | `preset permission plan goal tree trace migrate provider login balance cost config init reload setup` | capability 缺席 → 不出现在菜单；直接输入时 `notify(t('cmd-unavailable-backend',{cmd, backend}))` |
 | `doctor plugins` | 后端版本/能力/凭证来源/CLI 路径（新增 Claude 段） |
 | `/claude:usage` | `q.usage_EXPERIMENTAL…()`（实验 API，仅本命令使用，失败降级为 notice） |

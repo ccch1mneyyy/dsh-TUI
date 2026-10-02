@@ -50,6 +50,7 @@ import { createBindingFeed, type BindingFeedHooks } from './binding-feed.js'
 import { createCoreFiles, NO_COMPLETION_CATALOG, type CompletionCatalog } from './files.js'
 import { createGitBranchRefresher, resolveCoreHost, startHostSubscriptions, type CoreHost } from './host.js'
 import { createCoreLocalActions } from './local-actions.js'
+import { createLocalImageStore, type LocalImageStore } from './local-images.js'
 import { createCoreReports } from './reports.js'
 import { createSessionControls, localCommandsFor } from './session-controls.js'
 import { createCoreSessionActions } from './sessions.js'
@@ -61,6 +62,9 @@ const CONTEXT_WARNING_BUFFER_TOKENS = 20_000
 
 /** A session without a durable log of its own for `/trace`. */
 const NO_TRACE: readonly never[] = Object.freeze([])
+
+/** No image may be staged (a session lost the capability mid-call). */
+const NO_IMAGES = Object.freeze({ mediaTypes: Object.freeze([]), maxImageBytes: 0, maxImagesPerMessage: 0, maxMessageImageBytes: 0, maxImageDimension: 0, maxImagePixels: 0 })
 
 /** The job registry feed is a DSH host service; nothing feeds it by default. */
 const NO_JOB_FEED = { onOutputSeen: () => undefined, onStarted: () => undefined }
@@ -239,7 +243,18 @@ export function createCoreChannel(
     void ideChannel.rebind(state.cwd).catch(() => {})
   }
   const selectionAttachments = createSelectionAttachments()
-  const composer = createComposerImages(ctx, owner, { generation: () => state.agentBindingGeneration })
+  /**
+   * Images for a session that takes them itself (the `images` capability):
+   * held in memory by the core (local-images.ts), under the bound session's
+   * limits; a DSH session keeps the attachments service.
+   */
+  let localImageStore: LocalImageStore | undefined
+  const localImages = (): LocalImageStore | undefined => {
+    if (binding.session.capabilities.images === undefined) return undefined
+    localImageStore ??= createLocalImageStore(() => binding.session.capabilities.images?.limits ?? NO_IMAGES)
+    return localImageStore
+  }
+  const composer = createComposerImages(ctx, owner, { generation: () => state.agentBindingGeneration, localImages })
   const files = createCoreFiles(ctx, {
     owner,
     binding,
@@ -252,7 +267,7 @@ export function createCoreChannel(
   const inputDelivery = createInputDelivery(ctx, owner, binding, () => state,
     (...args) => notify(...args), trackPending, untrackPending, composer,
     () => currentSelection, (messageId, info) => selectionAttachments.remember(messageId, info),
-    files.fallbackFs)
+    files.fallbackFs, localImages)
   const { dispatchUserText, withDecisionPending, clearStagedImages } = inputDelivery
   /** Monotonic token: only the latest `interruptAndDeliver` re-queues, so a
    *  second interrupt while the abort settles cannot double-deliver. */
