@@ -23,9 +23,14 @@
     "delta:tool-args",
     "delta:tool-args",
     "delta:tool-args",
-    "assistant.message",
     "tool.result",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "tool.call",
     "session.status",
+    "assistant.message",
     "session.status",
     "tool.result",
     "step.end",
@@ -72,6 +77,21 @@
       }
     },
     {
+      "kind": "tool",
+      "text": "",
+      "tool": {
+        "name": "Bash",
+        "status": "error",
+        "call": {
+          "card": "terminal",
+          "displayKey": "tool-name-bash",
+          "category": "exec"
+        },
+        "result": null,
+        "errorText": "Exit code 2\nls: cannot access '/definitely-missing-dir': No such file or directory"
+      }
+    },
+    {
       "kind": "assistant",
       "text": "The first command succeeded and echoed \"fixture-ok\", while the second failed with exit code 2 because the directory doesn't exist."
     }
@@ -87,7 +107,7 @@
     "contextWindow": 200000,
     "tokens": {
       "input": 18,
-      "output": 81,
+      "output": 291,
       "cacheRead": 38149,
       "cacheWrite": 9046
     },

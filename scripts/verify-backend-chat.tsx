@@ -134,6 +134,18 @@ try {
   emit([{ type: 'turn.end', turn: 1, reason: { kind: 'completed' }, time: Date.now() }])
   await clearLine()
 
+  // Review fix: keys that open DSH-only surfaces explain themselves instead
+  // of opening an empty UI (or cycling nothing).
+  stdin.write('\x1b[Z')
+  check('Shift+Tab without native modes explains itself', await settled(() => toasts().includes(t('capability-unavailable', { name: 'mode' }))), toasts())
+  stdin.write('\x14')
+  check('Ctrl+T without a trace explains itself and opens no scene', await settled(() => toasts().includes(t('capability-unavailable', { name: 'trace' }))) && !screen().includes('trajectory'), toasts())
+  stdin.write('\x1b')
+  // 固定窗:pacing the double-Esc detector needs two distinct key events.
+  await sleep(80)
+  stdin.write('\x1b')
+  check('double-Esc without rewind explains itself', await settled(() => toasts().includes(t('capability-unavailable', { name: 'rewind' }))), toasts())
+
   await typeLine('hello backend')
   stdin.write('\r')
   check('plain text goes to session.submit', await settled(() => submits.length === 1) && submits[0]!.input.text === 'hello backend', JSON.stringify(submits))

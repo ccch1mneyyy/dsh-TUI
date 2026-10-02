@@ -1,13 +1,13 @@
 import type { AgentHandle } from '@deepseek-ai/dsh-agent'
 import type { AgentSession } from '../../agent/session.js'
-
-/** The DSH backend's user-facing name (capability snapshot default). */
-export const DSH_BACKEND_LABEL = 'DSH'
 import type { SessionModeSpec } from '../../sessionModes.js'
 import { normalizeJobGroupFold, normalizePageMargin, normalizeScrollGutter, normalizeStatusBar, normalizeToolBackground, type JobGroupFoldMode, type PageMarginSetting, type ScrollGutterMode, type StatusBarConfig, type ToolBackground } from '../../tuiDisplayPrefs.js'
 import { normalizeActivityPreset } from '../../components/activityFrames.js'
 import { normalizeSplashFont, type SplashFontSetting } from '../../components/splashFonts.js'
 import type { ChannelState } from './types.js'
+
+/** The DSH backend's user-facing name (capability snapshot default). */
+export const DSH_BACKEND_LABEL = 'DSH'
 
 /** Launch configuration belongs to channel construction, not the composition root. */
 export interface ChannelLaunchOptions {

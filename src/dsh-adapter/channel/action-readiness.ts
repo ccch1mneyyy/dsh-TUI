@@ -219,7 +219,9 @@ export function createUnavailableActionDelegates(
     switchModel: () => refuseAsync('model', false),
     listEfforts: () => refuseAsync('effort', { efforts: [], defaultEffort: undefined }),
     setEffort: () => refuseAsync('effort', false),
-    setDefaultEffort: () => { unavailable('effort') },
+    // Silent: the settings layer applies the configured default on every
+    // boot (not a user action), and a toast per launch would be noise.
+    setDefaultEffort: () => undefined,
     cycleMode: () => refuseAsync('mode', undefined),
     clear: () => { unavailable('clear') },
     setActivityFrames: () => refuse('activity', false),

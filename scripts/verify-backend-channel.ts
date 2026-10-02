@@ -29,6 +29,8 @@ import type { AgentInput, AgentSession, SubmitPlacement } from '../src/agent/ses
 import type { SessionCapabilities } from '../src/agent/capabilities.js'
 import { LOCAL_COMMANDS } from '../src/commands.js'
 import { createChannel } from '../src/dsh-adapter/channel.js'
+import { Config, normalizeBackendChoice } from '../src/dsh-adapter/index.js'
+import { MAX_ROWS } from '../src/channel/transcript.js'
 import { setLang, t } from '../src/i18n.js'
 import { settled } from './lib/term-test.mjs'
 
@@ -254,6 +256,50 @@ try {
   } finally {
     backed.releaseContributions()
   }
+}
+
+// ── review fixes: rejecting capabilities, silent boot effort, no fold,
+//    `!!` after the session closed, backend config normalization ──────────
+{
+  const failing = fakeSession('44444444-4444-4444-8444-444444444444', {
+    modes: { list: () => [{ id: 'default', label: 'Default' }, { id: 'plan', label: 'Plan' }], current: () => 'default', set: () => Promise.reject(new Error('mode refused by cli')) },
+    models: { list: () => Promise.reject(new Error('catalog down')), current: () => ({ model: 'm' }), set: () => Promise.reject(new Error('switch refused')) },
+  })
+  failing.submit = () => Promise.reject(new Error('session closed'))
+  const shell = { resolve: (request: unknown) => request, run: () => Promise.resolve({ stdout: { text: 'shell-out' }, stderr: { text: '' }, timedOut: false }) }
+  const shellCtx = { on: () => () => undefined, get: (name: string) => name === 'shell' ? shell : undefined, logger: { warn: () => undefined, info: () => undefined, debug: () => undefined } } as never
+  const guarded = createChannel(shellCtx, failing, { model: 'm', provider: '', cwd: workdir, activity: false })
+  const unhandled: unknown[] = []
+  const onUnhandled = (reason: unknown): void => { unhandled.push(reason) }
+  process.on('unhandledRejection', onUnhandled)
+  try {
+    await guarded.cycleMode()
+    check('a rejecting mode capability resolves and reports', guarded.notifications.some(item => item.text === t('capability-failed', { name: 'mode', err: 'mode refused by cli' })))
+    check('a rejecting model list answers empty', (await guarded.listModels()).length === 0)
+    check('a rejecting model switch answers false', await guarded.switchModel('', 'x') === false)
+    const toastCount = guarded.notifications.length
+    guarded.setDefaultEffort(undefined)
+    check('the boot-time default effort apply is silent', guarded.notifications.length === toastCount)
+    for (let index = 0; index < MAX_ROWS + 20; index += 1) guarded.pushLocal(`/row-${index}`, [])
+    failing.emit([
+      { type: 'turn.start', turn: 1, origin: 'user', time: 1 },
+      { type: 'user.message', id: 'u1', anchor: 'u1', seq: 1, turn: 1, time: 1, source: 'user', text: 'x'.repeat(400), blocks: [{ type: 'text', text: 'x'.repeat(400) }] },
+      { type: 'turn.end', turn: 1, reason: { kind: 'completed' }, time: 2 },
+    ])
+    for (let index = 0; index < MAX_ROWS; index += 1) guarded.pushLocal(`/tail-${index}`, [])
+    check('rows past the window are never folded without history slicing', !guarded.rows.some(row => row.folded === true) && guarded.rows.some(row => row.kind === 'user' && row.text.length === 400))
+    guarded.submit('!!echo hi')
+    check('`!!` after the session closed reports instead of rejecting', await settled(() => guarded.notifications.some(item => item.text === t('send-failed', { err: 'session closed' }))))
+    await new Promise(resolve => setImmediate(resolve))
+    check('no unhandled rejection escaped', unhandled.length === 0, unhandled.map(String))
+  } finally {
+    process.off('unhandledRejection', onUnhandled)
+    guarded.releaseContributions()
+  }
+  check('backend choice: case and blanks normalize', normalizeBackendChoice(' Claude ') === 'claude' && normalizeBackendChoice('DSH') === 'dsh')
+  check('backend choice: empty or unknown → default', normalizeBackendChoice('') === undefined && normalizeBackendChoice('gpt') === undefined && normalizeBackendChoice(undefined) === undefined)
+  const parse = (backend: unknown): unknown => (Config as unknown as (value: unknown) => { backend?: unknown })({ backend }).backend
+  check('Config accepts a stray DSH_TUI_BACKEND value without failing the boot', parse('Claude') === 'claude' && parse('') === undefined && parse('nonsense') === undefined && parse(undefined) === undefined)
 }
 
 // ── DSH keeps today's command list ────────────────────────────────────

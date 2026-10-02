@@ -105,7 +105,7 @@ function golden(result: Run): unknown {
 }
 
 const names = readdirSync(FIXTURES).filter(file => file.endsWith('.jsonl')).map(file => file.slice(0, -'.jsonl'.length)).sort()
-check('fixtures cover the Phase 2 scenarios', ['simple-text', 'thinking-tokens', 'tool-read', 'write-edit', 'bash', 'interrupt-now', 'interrupt-cancel', 'fold-in-next', 'compaction', 'permission-deny', 'background-bash'].every(name => names.includes(name)), names)
+check('fixtures cover the §8.3 scenarios', ['simple-text', 'partial-text', 'thinking-tokens', 'tool-read', 'parallel-tool', 'write-edit', 'bash', 'interrupt-now', 'interrupt-cancel', 'fold-in-next', 'compaction', 'permission-allow', 'permission-deny', 'subagent', 'background-bash'].every(name => names.includes(name)), names)
 
 const runs = new Map<string, Run>()
 for (const name of names) {
@@ -196,6 +196,63 @@ for (const [name, result] of runs) {
   const background = get('background-bash')
   check('background Bash: a background shell task starts', of(background.events, 'task.start').some(event => event.background && event.kind === 'shell'))
   check('background Bash: the notification turn is not a user turn', of(background.events, 'turn.start').some(event => event.origin === 'notification') && background.harness.state.rows.some(row => row.kind === 'notice'))
+}
+
+// ── parallel tools / subagent channel / allowed permission / partials ──
+{
+  // Review fix (Phase 2 → 3): the CLI drains the first result while the same
+  // API message still streams the second call; the attempt stays open.
+  const parallel = get('parallel-tool')
+  const cards = parallel.harness.state.rows.filter(row => row.kind === 'tool')
+  check('parallel: both Read calls get a card', cards.length === 2 && cards.every(row => row.tool?.name === 'Read'), cards.map(row => row.tool?.name))
+  check('parallel: both results land on their cards', cards.every(row => row.tool?.status === 'ok' && row.tool.resultView?.card === 'read'), cards.map(row => row.tool?.status))
+  const calls = of(parallel.events, 'tool.call').map(event => event.callId)
+  check('parallel: every result pairs with a call', of(parallel.events, 'tool.result').every(event => calls.includes(event.callId)) && calls.length === 2)
+  const firstMessage = of(parallel.events, 'assistant.message')[0]
+  check('parallel: the first message settles after its second call, with its output usage', firstMessage !== undefined && (firstMessage.usage?.output ?? 0) > 0
+    && parallel.events.indexOf(firstMessage) > parallel.events.indexOf(of(parallel.events, 'tool.call')[1]!), firstMessage?.usage)
+  check('parallel: no late-block drop', parallel.harness.state.rows.some(row => row.kind === 'assistant' && row.text.trim() !== ''))
+  const bash = get('bash').harness.state.rows.filter(row => row.kind === 'tool')
+  check('bash: both calls of the one message get cards', bash.length === 2, bash.length)
+
+  const sub = get('subagent')
+  check('subagent: subagent channel messages stay off the main transcript', sub.harness.state.rows.filter(row => row.kind === 'user').length === 1 && sub.harness.state.rows.filter(row => row.kind === 'tool').length === 0 && sub.harness.state.rows.filter(row => row.kind === 'assistant').length === 1, sub.harness.state.rows.map(row => row.kind))
+  check('subagent: one subagent starts and ends, no task card', of(sub.events, 'subagent.start').length === 1 && of(sub.events, 'subagent.end').length === 1 && of(sub.events, 'task.end').length === 0)
+  check('subagent: the main reply survives', sub.harness.state.rows.some(row => row.kind === 'assistant' && row.text.trim() !== ''))
+
+  const allow = get('permission-allow')
+  check('allowed permission: the Write card succeeds', allow.harness.state.rows.some(row => row.kind === 'tool' && row.tool?.name === 'Write' && row.tool.status === 'ok'))
+  const partial = get('partial-text')
+  const textDeltas = of(partial.events, 'assistant.delta').filter(event => event.delta.kind === 'text').length
+  const reply = partial.harness.state.rows.find(row => row.kind === 'assistant')
+  check('partial text: many deltas settle into one complete reply', textDeltas > 1 && reply !== undefined && reply.text.split('\n').filter(line => line.trim() !== '').length >= 5 && reply.streaming !== true, { textDeltas, text: reply?.text })
+}
+
+// ── task kinds / origins / message-level structured result (review fixes) ──
+{
+  const background = get('background-bash')
+  check('background Bash: a job ends as a task, never as a subagent', of(background.events, 'task.end').length === 1 && of(background.events, 'subagent.end').length === 0)
+  check('fold-in: a foreground Bash report ends nothing', of(get('fold-in-next').events, 'task.end').length === 0 && of(get('fold-in-next').events, 'subagent.end').length === 0)
+  const translator = createClaudeTranslator({ cwd: '/fixture/project', userRows: 'lifecycle' })
+  const unknown = translator.translate({ type: 'command_lifecycle', command_uuid: 'not-ours', state: 'started' })
+  check('a started frame for an unknown uuid opens a system turn', of(unknown, 'turn.start')[0]?.origin === 'system' && of(unknown, 'user.message').length === 0, unknown)
+  const replay = createClaudeTranslator({ cwd: '/fixture/project', userRows: 'replay' })
+  replay.registerInput('mine', 'hello', 'turn')
+  const started = replay.translate({ type: 'command_lifecycle', command_uuid: 'mine', state: 'started' })
+  check('echo fallback: started for our input opens a user turn', of(started, 'turn.start')[0]?.origin === 'user' && of(started, 'turn.start')[0]?.userMessageId === 'mine', started)
+  const echoed = replay.translate({ type: 'user', isReplay: true, uuid: 'mine', message: { role: 'user', content: 'hello' } })
+  check('echo fallback: the echo brings the row into the same turn', of(echoed, 'user.message').length === 1 && of(echoed, 'turn.start').length === 0)
+  const two = createClaudeTranslator({ cwd: '/fixture/project', userRows: 'lifecycle' })
+  two.translate({ type: 'stream_event', event: { type: 'message_start', message: { id: 'm1', model: 'x', usage: {} } } })
+  two.translate({ type: 'assistant', message: { id: 'm1', content: [
+    { type: 'tool_use', id: 't1', name: 'Read', input: { file_path: '/fixture/project/a' } },
+    { type: 'tool_use', id: 't2', name: 'Read', input: { file_path: '/fixture/project/b' } },
+  ] } })
+  const results = two.translate({ type: 'user', tool_use_result: { file: { filePath: '/fixture/project/a', content: 'A' } }, message: { role: 'user', content: [
+    { type: 'tool_result', tool_use_id: 't1', content: 'A' },
+    { type: 'tool_result', tool_use_id: 't2', content: 'B' },
+  ] } })
+  check('a message-level tool_use_result is not applied to several result blocks', of(results, 'tool.result').length === 2 && of(results, 'tool.result').every(event => event.structured === undefined))
 }
 
 // ── robustness ────────────────────────────────────────────────────────

@@ -2289,6 +2289,12 @@ export function PromptInput({
     // indentation arm so the expanded editor participates in the cycle too —
     // the parser reports backtab as key.tab + key.shift.
     if (key.tab && key.shift) {
+      // A backend without native modes has nothing to cycle (capability
+      // snapshots absent on test stubs = DSH).
+      if ((channel.capabilities as Channel['capabilities'] | undefined)?.modes === false) {
+        channel.notify(t('capability-unavailable', { name: 'mode' }), { color: 'warning', timeoutMs: 4000 })
+        return
+      }
       // The key is consumed either way. `cycleMode` is best-effort inside the
       // channel, but a dropped rejection here would be an unhandledRejection
       // (the process guard rethrows everything that is not React #185), and

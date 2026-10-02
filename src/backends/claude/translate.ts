@@ -197,6 +197,13 @@ export function createClaudeTranslator(options: ClaudeTranslatorOptions) {
   /** A background task just reported: the CLI's next unprompted turn is the
    *  model reacting to it (a notification turn, not a user turn). */
   let notificationTurnExpected = false
+  /**
+   * What each started task is, from its `task_started`: a subagent, a
+   * background job, or a foreground tool's progress report. Its
+   * `task_notification` ends exactly that (a foreground Bash ends nothing —
+   * its card settles with the tool result).
+   */
+  const taskKinds = new Map<string, 'agent' | 'job' | 'foreground'>()
 
   const nextSeq = (): number => ++seq
 
@@ -270,9 +277,14 @@ export function createClaudeTranslator(options: ClaudeTranslatorOptions) {
     const input = inputs.get(uuid)
     if (pending.delete(uuid)) out.push({ type: 'pending.changed', items: [...pending.values()], claimed: [uuid] })
     // Started while a turn is open = folded into that turn (Phase 0 P2-1):
-    // a user row, no new turn.
+    // a user row, no new turn. Only an input this session pushed makes the
+    // turn the user's: an unknown uuid (another client's, a CLI-internal
+    // command) opens a system turn.
+    if (input === undefined) {
+      openTurn(out, 'system')
+      return
+    }
     openTurn(out, 'user', uuid)
-    if (input === undefined) return
     inputs.delete(uuid)
     if (input.text.trim() === '/compact') return
     out.push({ type: 'user.message', id: uuid, anchor: uuid, seq: nextSeq(), turn, time: now(), source: 'user', text: input.text, blocks: [{ type: 'text', text: input.text }] })
@@ -285,8 +297,14 @@ export function createClaudeTranslator(options: ClaudeTranslatorOptions) {
     const out: AgentEvent[] = []
     switch (state) {
       case 'started':
-        if (userRows === 'lifecycle') confirmInput(out, uuid)
-        else if (pending.delete(uuid)) out.push({ type: 'pending.changed', items: [...pending.values()], claimed: [uuid] })
+        if (userRows === 'lifecycle') {
+          confirmInput(out, uuid)
+          break
+        }
+        // Echo fallback: the echo brings the row, but the turn is already
+        // the user's when the input is one this session pushed.
+        if (pending.delete(uuid)) out.push({ type: 'pending.changed', items: [...pending.values()], claimed: [uuid] })
+        if (inputs.has(uuid)) openTurn(out, 'user', uuid)
         break
       case 'cancelled':
       case 'discarded':
@@ -476,7 +494,15 @@ export function createClaudeTranslator(options: ClaudeTranslatorOptions) {
       return block?.type === 'tool_result' ? [block] : []
     })
     if (results.length > 0) {
-      settleAttempt(out)
+      // The open attempt is NOT settled here: the CLI drains finished tool
+      // results while the same API message is still streaming (parallel
+      // calls), so a later block of that message — another tool_use, more
+      // text, the closing usage — still belongs to it. It settles on
+      // `message_stop`, a new message id, an abort, `result` or a forced
+      // close.
+      // `tool_use_result` is message-level: it describes the one result of a
+      // single-result message and nothing when several share the message.
+      const structured = results.length === 1 ? message.tool_use_result : undefined
       for (const block of results) {
         const callId = str(block.tool_use_id)
         if (callId === undefined) continue
@@ -484,7 +510,6 @@ export function createClaudeTranslator(options: ClaudeTranslatorOptions) {
         openCalls.delete(callId)
         const isError = block.is_error === true
         const text = toolResultText(block.content)
-        const structured = message.tool_use_result
         const presentation = call === undefined ? undefined : presentClaudeToolResult(call.name, call.input, { isError, text, structured }, options.cwd)
         out.push({
           type: 'tool.result',
@@ -617,11 +642,16 @@ export function createClaudeTranslator(options: ClaudeTranslatorOptions) {
         const description = str(message.description) ?? ''
         const callId = str(message.tool_use_id)
         if (taskType === 'local_agent' || str(message.subagent_type) !== undefined) {
+          taskKinds.set(taskId, 'agent')
           return [{ type: 'subagent.start', agentId: taskId, ...(callId === undefined ? {} : { parentCallId: callId }), description, ...(str(message.subagent_type) === undefined ? {} : { kind: str(message.subagent_type) }), background, time: now() }]
         }
         // Phase 0 correction: a foreground Bash that runs ~3s also reports
         // `task_started{is_backgrounded:false}` — not a background job.
-        if (!background) return []
+        if (!background) {
+          taskKinds.set(taskId, 'foreground')
+          return []
+        }
+        taskKinds.set(taskId, 'job')
         const kind = taskType === 'local_bash' ? 'shell' : taskType === 'local_workflow' ? 'workflow' : taskType ?? 'task'
         return [{ type: 'task.start', taskId, kind, description, ...(callId === undefined ? {} : { callId }), background: true, time: now() }]
       }
@@ -651,13 +681,17 @@ export function createClaudeTranslator(options: ClaudeTranslatorOptions) {
         if (taskId === undefined) return []
         const summary = str(message.summary)
         const done = status === 'failed' ? 'failed' : status === 'stopped' ? 'stopped' : 'completed'
+        // A task never seen starting (missed frame): a usage block is what
+        // only subagent reports carry.
+        const kind = taskKinds.get(taskId) ?? (message.usage === undefined ? 'job' : 'agent')
+        taskKinds.delete(taskId)
+        if (kind === 'foreground') return []
         // A foreground tool's task report arrives inside its own turn; only a
         // report between turns starts the CLI's notification turn.
         if (!turnOpen) notificationTurnExpected = true
-        return [
-          { type: 'subagent.end', agentId: taskId, status: done === 'stopped' ? 'cancelled' : done, ...(summary === undefined ? {} : { summary }), time: now() },
-          { type: 'task.end', taskId, status: done, ...(summary === undefined ? {} : { summary }), time: now() },
-        ]
+        return kind === 'agent'
+          ? [{ type: 'subagent.end', agentId: taskId, status: done === 'stopped' ? 'cancelled' : done, ...(summary === undefined ? {} : { summary }), time: now() }]
+          : [{ type: 'task.end', taskId, status: done, ...(summary === undefined ? {} : { summary }), time: now() }]
       }
       case 'background_tasks_changed': {
         const ids = arr(message.tasks).flatMap(item => {

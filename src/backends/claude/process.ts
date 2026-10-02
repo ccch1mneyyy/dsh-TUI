@@ -27,8 +27,18 @@ export interface ClaudeExecutable {
   readonly source: ClaudeExecutableSource
 }
 
-/** Variables a parent Claude Code session exports that must not leak. */
-const SCRUBBED_EXACT = ['CLAUDECODE', 'CLAUDE_CODE_ENTRYPOINT', 'CLAUDE_CODE_SESSION_ID'] as const
+/**
+ * Variables a parent Claude Code session exports that must not leak. The CLI
+ * reads several of them at start: `CLAUDE_CODE_CHILD_SESSION` and
+ * `CLAUDE_CODE_SESSION_ATTENDED` would make our child run as the parent's
+ * child session; the pid, exec path, effort, invoked skills, agent marker
+ * and trace parent would attribute it to the parent's process and trace.
+ */
+const SCRUBBED_EXACT = [
+  'CLAUDECODE', 'CLAUDE_CODE_ENTRYPOINT', 'CLAUDE_CODE_SESSION_ID',
+  'CLAUDE_CODE_CHILD_SESSION', 'CLAUDE_CODE_SESSION_ATTENDED', 'CLAUDE_PID', 'AI_AGENT',
+  'TRACEPARENT', 'CLAUDE_CODE_EXECPATH', 'CLAUDE_EFFORT', 'CLAUDE_CODE_INVOKED_SKILLS',
+] as const
 const SCRUBBED_PREFIX = 'CLAUDE_CODE_MESSAGING_'
 
 /** Look `name` up on PATH with the platform's own tool; undefined if absent. */

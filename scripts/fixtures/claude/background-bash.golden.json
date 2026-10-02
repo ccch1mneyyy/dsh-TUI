@@ -32,7 +32,6 @@
     "session.status",
     "tasks.snapshot",
     "task.update",
-    "subagent.end",
     "task.end",
     "session.status",
     "turn.start",

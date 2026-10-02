@@ -7,7 +7,7 @@ import * as toolAskUser from '@deepseek-ai/dsh-tool-ask-user'
 import type { Context } from '@deepseek-ai/cordis'
 import type { SettingsNamespace } from '@deepseek-ai/dsh-settings'
 import Schema from '@deepseek-ai/schemastery'
-import { Config } from './index.js'
+import { Config, normalizeBackendChoice } from './index.js'
 import { configValues, createSettingsScope, resolveSettingsNamespace, type RuntimeConfig } from './compat/settings.js'
 import { createChannel } from './channel.js'
 import { createDshSession } from './backend/session.js'
@@ -485,13 +485,28 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
   // The `backend` row reads DSH_TUI_BACKEND (`dsh-tui --backend`), but a
   // launcher whose bundle patch predates that row (the issue #183 copy skew)
   // never passes it — so the variable is also read here, below the config.
-  const backendChoice = config.backend ?? (process.env.DSH_TUI_BACKEND === 'claude' ? 'claude' : undefined)
+  const rawBackend = process.env.DSH_TUI_BACKEND
+  const backendChoice = config.backend ?? normalizeBackendChoice(rawBackend)
+  if (rawBackend !== undefined && rawBackend.trim() !== '' && normalizeBackendChoice(rawBackend) === undefined) {
+    ctx.logger.warn(`dsh-tui: DSH_TUI_BACKEND="${rawBackend}" names no known backend (dsh, claude); starting on dsh`)
+  }
   const claudeStart = backendChoice === 'claude'
     ? await openClaudeStartup(ctx, sessionCwd, line => {
       logForDebugging(`[claude-stderr] ${line}`)
       stderrReporter.push(line)
     })
     : undefined
+  // The Claude session (and its CLI child) belongs to this fiber until the
+  // channel adopts it: a boot that throws before then disposes the fiber's
+  // effects, and this one stops the child instead of leaking it. Dispose is
+  // idempotent, so the channel's own release later is unaffected.
+  if (claudeStart !== undefined) {
+    ctx.effect(() => () => {
+      void claudeStart.session.dispose().catch((error: unknown) => {
+        logForDebugging(`dsh-tui: Claude session dispose failed (${error instanceof Error ? error.message : String(error)})`)
+      })
+    }, 'dsh-tui Claude startup session')
+  }
   const { agent, handle, agentPreset, route: createdRoute } = claudeStart !== undefined
     ? { agent: undefined, handle: undefined, agentPreset: undefined, route: undefined }
     : await resolveAgent(
@@ -1493,7 +1508,10 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
    * so a process that dies before the first frame does not consume it.
    */
   const homeSeen = readHomePrefs().seen === true
+  // The workspace home lists DSH sessions and workspaces; a non-DSH session
+  // has neither to show (it would open on two "unsupported" toasts).
   const openHomeOnBoot = !homeSeen
+    && claudeStart === undefined
     && launchSessionId === undefined
     && requestedWorkspace === undefined
     && initialPrompt === ''

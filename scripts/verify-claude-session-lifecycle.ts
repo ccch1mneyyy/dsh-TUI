@@ -303,8 +303,13 @@ const collect = (session: AgentSession) => {
 
 // ── units: env, options, start mode ───────────────────────────────────
 {
-  const env = buildClaudeEnv({ PATH: '/usr/bin', CLAUDECODE: '1', CLAUDE_CODE_ENTRYPOINT: 'cli', CLAUDE_CODE_SESSION_ID: 'parent', CLAUDE_CODE_MESSAGING_SOCKET: '/tmp/s', ANTHROPIC_API_KEY: 'kept' })
-  check('env: parent Claude Code session variables are scrubbed', env.CLAUDECODE === undefined && env.CLAUDE_CODE_ENTRYPOINT === undefined && env.CLAUDE_CODE_SESSION_ID === undefined && env.CLAUDE_CODE_MESSAGING_SOCKET === undefined)
+  const parent = {
+    CLAUDECODE: '1', CLAUDE_CODE_ENTRYPOINT: 'cli', CLAUDE_CODE_SESSION_ID: 'parent', CLAUDE_CODE_MESSAGING_SOCKET: '/tmp/s',
+    CLAUDE_CODE_CHILD_SESSION: '1', CLAUDE_CODE_SESSION_ATTENDED: '1', CLAUDE_PID: '42', AI_AGENT: 'claude-code',
+    TRACEPARENT: '00-abc-def-01', CLAUDE_CODE_EXECPATH: '/parent/claude', CLAUDE_EFFORT: 'high', CLAUDE_CODE_INVOKED_SKILLS: 'x',
+  }
+  const env = buildClaudeEnv({ PATH: '/usr/bin', ...parent, ANTHROPIC_API_KEY: 'kept' })
+  check('env: parent Claude Code session variables are scrubbed', Object.keys(parent).every(key => env[key] === undefined), Object.keys(parent).filter(key => env[key] !== undefined))
   check('env: client app + session state events, credentials untouched', env.CLAUDE_AGENT_SDK_CLIENT_APP?.startsWith('dsh-tui/') === true && env.CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS === '1' && env.ANTHROPIC_API_KEY === 'kept' && env.PATH === '/usr/bin')
   const options = buildQueryOptions({
     cwd: '/fixture/project', sessionId: 's', permissionMode: 'default', executable: undefined, env: {}, canUseTool: (() => undefined) as unknown as Options['canUseTool'],
@@ -327,6 +332,10 @@ const collect = (session: AgentSession) => {
   const bypass = await resolveStartPermissionMode(fakeSettings('bypassPermissions'), '/p', {})
   check('start mode: bypassPermissions from settings is downgraded', bypass.mode === 'default' && bypass.downgradedFrom === 'bypassPermissions')
   check('start mode: the developer override wins', (await resolveStartPermissionMode(fakeSettings('plan'), '/p', { DSH_TUI_CLAUDE_PERMISSION_MODE: 'acceptEdits' })).mode === 'acceptEdits')
+  for (const refused of ['bypassPermissions', 'auto', 'nonsense']) {
+    const start = await resolveStartPermissionMode(fakeSettings('plan'), '/p', { DSH_TUI_CLAUDE_PERMISSION_MODE: refused })
+    check(`start mode: the override refuses ${refused} (settings win, the refusal is reported)`, start.mode === 'plan' && start.source === 'settings' && start.ignoredOverride === refused, start)
+  }
 }
 
 console.log(`\nverify-claude-session-lifecycle OK (${passed} checks)`)

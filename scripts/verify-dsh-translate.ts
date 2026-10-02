@@ -116,6 +116,25 @@ check('compaction bracket → compaction.start/end', of(live, 'compaction.start'
   harness.apply([{ type: 'preset.selected', preset: 'code', aliases: 'ptc' as unknown as readonly string[] }])
   check('prototype-key preset projects without throwing', harness.state.rows.filter(row => row.kind === 'notice').length === 2)
 }
+// Documented deviation (design §6.4): a card the window cap folded while it
+// ran keeps only its preview when the result lands — the full payload and the
+// presentation view are NOT re-attached past the fold line (pre-split code
+// re-attached them, defeating the fold's memory bound).
+{
+  const harness = createProjectorHarness()
+  harness.apply([
+    { type: 'turn.start', turn: 1, origin: 'user', time: 0 },
+    { type: 'tool.call', seq: 1, turn: 1, step: 1, callId: 'fold-1', name: 'Bash', argsJson: '{"command":"ls"}', time: 0 },
+  ])
+  const card = harness.state.rows.find(row => row.kind === 'tool')!
+  card.folded = true
+  harness.apply([{
+    type: 'tool.result', seq: 2, turn: 1, step: 1, callId: 'fold-1', isError: false, time: 0,
+    content: [{ type: 'text', text: 'listing' }], text: 'listing',
+    presentation: { card: 'terminal', output: 'listing', exitCode: 0 },
+  }])
+  check('folded running card: the result keeps the preview, no full payload or view', card.tool?.status === 'ok' && card.tool.resultText === 'listing' && card.tool.resultFull === undefined && card.tool.resultView === undefined)
+}
 const customs = of(live, 'custom').map(event => event.nativeType)
 check('unknown plugin events → custom', customs.includes('fixture-plugin/note') && customs.includes('other-plugin/ping') && customs.includes('developer/message'))
 

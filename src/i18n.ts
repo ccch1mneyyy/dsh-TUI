@@ -177,6 +177,7 @@ const dict = {
   'session-cleared': { zh: '会话已清屏', en: 'Session cleared' },
   'cost-source-backend': { zh: '后端上报的会话费用', en: 'session cost reported by the backend' },
   'capability-unavailable': { zh: '当前后端不支持：{{name}}', en: 'Not supported by this backend: {{name}}' },
+  'capability-failed': { zh: '{{name}} 失败 · {{err}}', en: '{{name}} failed · {{err}}' },
   // ── backends/claude (Claude Agent backend) ─────────────────────────
   'claude-approval-unavailable': { zh: '交互式审批将在下一阶段提供：已拒绝 {{tool}}（Claude 后端目前不能询问你）', en: 'Interactive approvals arrive in the next phase: {{tool}} was denied (the Claude backend cannot ask you yet)' },
   'claude-question-unavailable': { zh: '交互式提问将在下一阶段提供：已拒绝这次提问', en: 'Interactive questions arrive in the next phase: the question was declined' },
@@ -192,6 +193,8 @@ const dict = {
   'claude-session-closed': { zh: 'Claude 会话已关闭', en: 'The Claude session is closed' },
   'claude-start-timeout': { zh: 'Claude CLI 未在时限内完成启动握手', en: 'The Claude CLI did not finish its start handshake in time' },
   'claude-start-mode-downgraded': { zh: '设置中的权限模式 {{mode}} 需要显式选择，本会话以 default 启动', en: 'The configured permission mode {{mode}} needs an explicit choice; this session starts in default' },
+  'claude-start-mode-env': { zh: '权限模式由 DSH_TUI_CLAUDE_PERMISSION_MODE 指定：{{mode}}', en: 'Permission mode set by DSH_TUI_CLAUDE_PERMISSION_MODE: {{mode}}' },
+  'claude-start-mode-env-ignored': { zh: '已忽略 DSH_TUI_CLAUDE_PERMISSION_MODE={{mode}}（只接受 default/acceptEdits/plan/dontAsk）', en: 'Ignored DSH_TUI_CLAUDE_PERMISSION_MODE={{mode}} (accepts default/acceptEdits/plan/dontAsk only)' },
   'claude-input-refused': { zh: 'Claude 拒绝了这条输入', en: 'Claude refused this input' },
   'claude-assistant-error': { zh: 'Claude 错误：{{error}}', en: 'Claude error: {{error}}' },
   'claude-api-retry': { zh: 'API 重试 {{attempt}}/{{max}}…', en: 'API retry {{attempt}}/{{max}}…' },

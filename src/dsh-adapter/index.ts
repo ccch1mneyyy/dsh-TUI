@@ -199,9 +199,20 @@ export interface Config {
   modes?: SessionModeSpec[]
 }
 
+/** The backend a configured value names: case-insensitive, trimmed;
+ *  empty or unknown → undefined (the DSH default). */
+export function normalizeBackendChoice(value: unknown): 'dsh' | 'claude' | undefined {
+  if (typeof value !== 'string') return undefined
+  const id = value.trim().toLowerCase()
+  return id === 'dsh' || id === 'claude' ? id : undefined
+}
+
 export const Config: Schema<Config, RuntimeConfig<Config>> = editableConfig<Config>(Schema.object({
   sessionId: Schema.string().required(false),
-  backend: Schema.union(['dsh', 'claude']).required(false),
+  // A transform, not a union: the row reads `DSH_TUI_BACKEND`, and a stray
+  // export (`Claude`, a typo) must not fail the whole boot — case and blanks
+  // are normalized and anything unknown means the default (plugin.ts warns).
+  backend: Schema.transform(Schema.string(), value => normalizeBackendChoice(value)),
   // No schema defaults on the route: a `.default()` here would make an
   // unset key indistinguishable from an explicit cordis.yml choice and the
   // persisted `/model` preference could never win (issue #30). The defaults

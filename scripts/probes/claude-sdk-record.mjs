@@ -211,6 +211,32 @@ const SCENARIOS = {
       await results(1)
     },
   },
+  'partial-text': {
+    run: async ({ send, results }) => { send('Write a five-line poem about the sea, one line per sentence, no title.'); await results(1) },
+  },
+  // Two tool calls in ONE API message: the CLI drains the first result while
+  // the message still streams the second call (the attempt must stay open).
+  'parallel-tool': {
+    run: async ({ send, results }) => {
+      send('In ONE response, call the Read tool twice in parallel (two tool_use blocks in the same message): README.md and src/app.js. Then tell me the first line of each in one sentence.')
+      await results(1)
+    },
+  },
+  'permission-allow': {
+    permission: 'allow',
+    run: async ({ send, results }) => {
+      send('Use the Write tool to create allowed.txt containing exactly: ok. Then reply with exactly: written')
+      await results(1)
+    },
+  },
+  // A foreground subagent: its messages carry `parent_tool_use_id` (text is
+  // forwarded with forwardSubagentText) and must stay off the main transcript.
+  'subagent': {
+    run: async ({ send, results }) => {
+      send('Use the Agent tool with subagent_type "general-purpose" and the prompt "Read README.md with the Read tool and report its first line." Wait for it (do not run it in the background), then reply with its report in one sentence.')
+      await results(1)
+    },
+  },
   'background-bash': {
     run: async ({ send, waitFor, results }) => {
       send('Use the Bash tool with run_in_background set to true to run `sleep 3; echo bg-done`. Then reply with exactly: started')

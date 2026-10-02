@@ -988,13 +988,20 @@ export function Chat({
 
   /** Open the scene, mark failures seen, and retire the key hint for good. */
   const openScene = React.useCallback(() => {
+    // The trajectory reads the DSH session trace; a backend without it would
+    // open an empty scene (capability snapshots absent on test stubs = DSH).
+    const capabilities = channel.capabilities as Channel['capabilities'] | undefined
+    if (capabilities !== undefined && !capabilities.commands.includes('trace')) {
+      channel.notify(t('capability-unavailable', { name: 'trace' }), { color: 'warning', timeoutMs: 4000 })
+      return
+    }
     seenFailuresRef.current = trajectoryRef.current?.counts.errors ?? 0
     setTrajectorySeen(previous => {
       if (!previous) writeTrajectorySeen()
       return true
     })
     setSceneOpen(true)
-  }, [])
+  }, [channel])
 
   /**
    * Leave the session supervisor for the conversation.
@@ -3024,6 +3031,10 @@ export function Chat({
     : NO_ROWS
   /** Open the rewind picker (from PromptInput's double-Esc on an empty input). */
   const openRewind = () => {
+    if ((channel.capabilities as Channel['capabilities'] | undefined)?.rewind === false) {
+      channel.notify(t('capability-unavailable', { name: 'rewind' }), { color: 'warning', timeoutMs: 4000 })
+      return
+    }
     // The overlay is not 'rewind' yet this render, so rewindRows is empty —
     // scan directly instead of reading the gated list.
     const candidates = channel.rows

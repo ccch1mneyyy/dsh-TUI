@@ -10,6 +10,13 @@
     "delta:reasoning-tokens",
     "delta:reasoning-tokens",
     "delta:reasoning-tokens",
+    "delta:reasoning-tokens",
+    "delta:reasoning-tokens",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
     "delta:tool-args",
     "delta:tool-args",
     "delta:tool-args",
@@ -20,24 +27,13 @@
     "delta:tool-args",
     "delta:tool-args",
     "tool.call",
+    "session.status",
     "assistant.message",
+    "session.status",
     "tool.result",
-    "pending.changed",
-    "user.message",
     "step.end",
     "step.start",
     "assistant.attempt.start",
-    "delta:reasoning-tokens",
-    "delta:reasoning-tokens",
-    "delta:reasoning-tokens",
-    "delta:text",
-    "delta:text",
-    "delta:text",
-    "delta:text",
-    "delta:text",
-    "delta:text",
-    "delta:text",
-    "delta:text",
     "delta:text",
     "assistant.message",
     "step.end",
@@ -48,42 +44,33 @@
   "rows": [
     {
       "kind": "user",
-      "text": "Use the Bash tool to run `sleep 4 && echo slept`, then summarize the output in one sentence."
+      "text": "Use the Write tool to create allowed.txt containing exactly: ok. Then reply with exactly: written"
     },
     {
       "kind": "reasoning",
       "text": "",
-      "reasoningTokens": 129
+      "reasoningTokens": 208
     },
     {
       "kind": "tool",
       "text": "",
       "tool": {
-        "name": "Bash",
+        "name": "Write",
         "status": "ok",
         "call": {
-          "card": "terminal",
-          "displayKey": "tool-name-bash",
-          "category": "exec"
+          "card": "diff",
+          "displayKey": "tool-name-write",
+          "category": "mutate"
         },
         "result": {
-          "card": "terminal"
+          "card": "diff"
         },
-        "resultText": "slept"
+        "resultText": "File created successfully at: /fixture/project/allowed.txt (file state is current in your context — no need to Read it b"
       }
     },
     {
-      "kind": "user",
-      "text": "Also end your reply with the word NEXT-OK."
-    },
-    {
-      "kind": "reasoning",
-      "text": "",
-      "reasoningTokens": 136
-    },
-    {
       "kind": "assistant",
-      "text": "The command waited 4 seconds and then printed \"slept\" to the output.\n\nNEXT-OK"
+      "text": "written"
     }
   ],
   "state": {
@@ -91,15 +78,15 @@
     "model": "claude-haiku-4-5-20251001",
     "costReport": {
       "currency": "USD",
-      "amount": 0.023462100000000003,
+      "amount": 0.024805900000000002,
       "source": "backend"
     },
     "contextWindow": 200000,
     "tokens": {
       "input": 18,
-      "output": 245,
-      "cacheRead": 37881,
-      "cacheWrite": 8729
+      "output": 344,
+      "cacheRead": 38139,
+      "cacheWrite": 9141
     },
     "todos": [],
     "compaction": null,

@@ -421,7 +421,7 @@ DSH specialist 挂载规则：`createChannel(ctx, session, options)` 内部 `if 
 | `perTaskStopAffordance` | `true` | 让 `interrupt()` 不杀后台任务；TUI 提供逐任务 stop `[d.ts]` |
 | `enableFileCheckpointing` | `true` | `rewindFiles` 需要 `[P1]` dryRun 成功 |
 | `includeHookEvents` | `false` | 噪音 |
-| `env` | `{ ...process.env, CLAUDE_AGENT_SDK_CLIENT_APP: 'dsh-tui/<version>', CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS: '1' }`，并**删除** `CLAUDECODE`、`CLAUDE_CODE_ENTRYPOINT`、`CLAUDE_CODE_SESSION_ID`、`CLAUDE_CODE_MESSAGING_*`（dsh-tui 本身可能运行在 Claude Code 终端里，`[P1]` 本机 env 即如此） | `env` **整体替换**子进程环境 `[d.ts]`；`session_state_changed` 在 2.1.88 源码里受该 env 门控 `[hist]`，`[acp]` 亦设置。**实测修正 (Phase 0, P3-1)**：设置该 env 后 CLI 2.1.287 发出 `system/session_state_changed`（未设置的 P1/P2 一次都没有）：`running` 在 idle→running 时发、早于 `command_lifecycle queued`；`idle` 在 `result` 与 `command_lifecycle completed` 之后 0–5ms；背靠背的 turn 之间不回 `idle`。保留该 env；`requires_action` 本次未触发（工具被 CLI 规则直接放行，没走 `canUseTool`），留给 Phase 3 权限探针 |
+| `env` | `{ ...process.env, CLAUDE_AGENT_SDK_CLIENT_APP: 'dsh-tui/<version>', CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS: '1' }`，并**删除** `CLAUDECODE`、`CLAUDE_CODE_ENTRYPOINT`、`CLAUDE_CODE_SESSION_ID`、`CLAUDE_CODE_MESSAGING_*`，以及（Phase 2 评审补充）`CLAUDE_CODE_CHILD_SESSION`、`CLAUDE_CODE_SESSION_ATTENDED`（CLI 启动时读取，会把子进程当成父会话的 child session）、`CLAUDE_PID`、`AI_AGENT`、`TRACEPARENT`、`CLAUDE_CODE_EXECPATH`、`CLAUDE_EFFORT`、`CLAUDE_CODE_INVOKED_SKILLS`（dsh-tui 本身可能运行在 Claude Code 终端里，`[P1]` 本机 env 即如此） | `env` **整体替换**子进程环境 `[d.ts]`；`session_state_changed` 在 2.1.88 源码里受该 env 门控 `[hist]`，`[acp]` 亦设置。**实测修正 (Phase 0, P3-1)**：设置该 env 后 CLI 2.1.287 发出 `system/session_state_changed`（未设置的 P1/P2 一次都没有）：`running` 在 idle→running 时发、早于 `command_lifecycle queued`；`idle` 在 `result` 与 `command_lifecycle completed` 之后 0–5ms；背靠背的 turn 之间不回 `idle`。保留该 env；`requires_action` 本次未触发（工具被 CLI 规则直接放行，没走 `canUseTool`），留给 Phase 3 权限探针 |
 | `pathToClaudeCodeExecutable` | §4.2 | |
 | `stderr` | 回调 → `logForDebugging` + 去重后 `notify`（复用 `childStderr.ts` 的 reporter） | TUI 渲染期 stdout/stderr 必须安静（AGENTS.md 红线）；子进程 stderr 若继承会污染 alt-screen |
 | `model` | 省略（跟随 settings.model）或 TUI 持久化的 `/model` 选择 | 保真 |
@@ -756,6 +756,7 @@ UI 映射：`subagent.*` → 现有 `SubagentActivityStore`/`SubagentRow`/`Subag
 1. Phase 0 用**当前**投影器对 `scripts/fixtures/dsh/*.jsonl`（录制的真实会话日志：含流式帧、压缩、rewind seed、子代理、jobs、goal/todo、旧版 `assistant/chunk`）生成黄金 `*.rows.json`（`ChatRow[]` + 关键状态字段）。
 2. Phase 1 的 `scripts/verify-projection-golden.ts` 用"DSH 翻译器 + 共享投影器"重跑同一 fixture，深比较（忽略 `startedAt/durationMs` 等时钟字段，用注入时钟固定）。
 3. 现有 CI 组 `channel-ui`（58 项）、`session-workspace`、`input-terminal`、`render-scroll` 与 CI3 全部不改断言地通过。
+4. **已登记的有意偏差**（Phase 2 评审确认）：运行中即被窗口上限折叠（`folded`）的工具卡收到结果时，只更新状态与预览 `resultText`，**不**再挂回 `resultFull`/`resultView`（拆分前会挂回，等于撤销折叠的内存上限）；由 `verify-dsh-translate` 的定点断言固定。
 
 ---
 

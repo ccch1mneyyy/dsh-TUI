@@ -56,6 +56,10 @@ export const claudeBackend: AgentBackend = {
     const sdkVersion = installedSdkVersion()
     const startNotices: string[] = []
     if (start.downgradedFrom !== undefined) startNotices.push(t('claude-start-mode-downgraded', { mode: start.downgradedFrom }))
+    // The developer override is never silent: a live-test leftover in the
+    // environment would otherwise change every approval without a trace.
+    if (start.source === 'env') startNotices.push(t('claude-start-mode-env', { mode: start.mode }))
+    if (start.ignoredOverride !== undefined) startNotices.push(t('claude-start-mode-env-ignored', { mode: start.ignoredOverride }))
     if (sdkVersionDrift(sdkVersion) !== undefined) startNotices.push(t('claude-sdk-drift', { version: sdkVersion ?? '', validated: VALIDATED_SDK_VERSION }))
     return openClaudeSession({
       sdk,

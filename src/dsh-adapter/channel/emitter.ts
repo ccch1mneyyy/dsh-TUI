@@ -7,7 +7,17 @@ export function createChannelEmitter(
   getState: () => Pick<ChannelState, 'rows' | 'version'>,
   /** Returns true when the deferred projector changed renderer-visible data. */
   beforeStream: () => boolean,
+  options: {
+    /**
+     * Fold rows past the transcript window (default on). Folding drops a
+     * row's full text on the promise that `loadOlder` restores it from the
+     * durable history; a session whose backend cannot slice its history
+     * keeps every row whole instead (and shows no "load earlier" divider).
+     */
+    readonly fold?: boolean
+  } = {},
 ) {
+  const fold = options.fold !== false
   const listeners = new Set<() => void>()
   const foldCursor = { rows: undefined as unknown, index: 0 }
   let timer: ReturnType<typeof setTimeout> | undefined
@@ -17,7 +27,7 @@ export function createChannelEmitter(
     // Folding mutates retained transcript rows after a reader may have
     // cached the ingress revision. Publish that completed fold separately so
     // listeners cannot observe a stale or mixed same-version snapshot.
-    if (foldRows(state.rows, MAX_ROWS, foldCursor) > 0) state.version += 1
+    if (fold && foldRows(state.rows, MAX_ROWS, foldCursor) > 0) state.version += 1
     for (const listener of listeners) {
       try { listener() } catch (error) {
         if (!swallowNestedUpdateOverflow(error, source)) throw error

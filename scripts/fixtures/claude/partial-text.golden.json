@@ -1,0 +1,69 @@
+{
+  "events": [
+    "session.status",
+    "turn.start",
+    "user.message",
+    "session.ready",
+    "rate-limit",
+    "step.start",
+    "assistant.attempt.start",
+    "delta:reasoning-tokens",
+    "delta:reasoning-tokens",
+    "delta:reasoning-tokens",
+    "delta:reasoning-tokens",
+    "delta:reasoning-tokens",
+    "delta:text",
+    "delta:text",
+    "delta:text",
+    "delta:text",
+    "delta:text",
+    "delta:text",
+    "delta:text",
+    "delta:text",
+    "delta:text",
+    "delta:text",
+    "delta:text",
+    "delta:text",
+    "delta:text",
+    "delta:text",
+    "assistant.message",
+    "step.end",
+    "context.capacity",
+    "turn.end",
+    "session.status"
+  ],
+  "rows": [
+    {
+      "kind": "user",
+      "text": "Write a five-line poem about the sea, one line per sentence, no title."
+    },
+    {
+      "kind": "reasoning",
+      "text": "",
+      "reasoningTokens": 281
+    },
+    {
+      "kind": "assistant",
+      "text": "Waves crash upon the shore with endless force.\nThe deep blue holds secrets in its vast expanse.\nSalt air whispers stories of ancient voyages.\nLife thrives in cu…"
+    }
+  ],
+  "state": {
+    "working": false,
+    "model": "claude-haiku-4-5-20251001",
+    "costReport": {
+      "currency": "USD",
+      "amount": 0.0188935,
+      "source": "backend"
+    },
+    "contextWindow": 200000,
+    "tokens": {
+      "input": 10,
+      "output": 269,
+      "cacheRead": 15175,
+      "cacheWrite": 7523
+    },
+    "todos": [],
+    "compaction": null,
+    "notices": []
+  }
+}

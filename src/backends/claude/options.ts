@@ -93,10 +93,13 @@ export const OPTION_POLICY = {
  *  the CLI (`project` is the one that brings CLAUDE.md, Phase 0 probe P1). */
 export const SETTING_SOURCES: SettingSource[] = ['user', 'project', 'local']
 
-/** Modes the start resolution accepts. `bypassPermissions` needs an explicit
- *  user choice (Phase 3) and is never started from settings in Phase 2. */
+/** Modes the start resolution accepts from settings. `bypassPermissions`
+ *  needs an explicit user choice and is never started from settings. */
 const START_MODES: readonly PermissionMode[] = ['default', 'acceptEdits', 'plan', 'auto', 'dontAsk']
 const ALL_MODES: readonly PermissionMode[] = [...START_MODES, 'bypassPermissions']
+/** Modes the developer override may start in: never `bypassPermissions`,
+ *  and not `auto` either (it depends on the model's classifier support). */
+const OVERRIDE_MODES: readonly PermissionMode[] = ['default', 'acceptEdits', 'plan', 'dontAsk']
 
 const isPermissionMode = (value: unknown): value is PermissionMode =>
   typeof value === 'string' && (ALL_MODES as readonly string[]).includes(value)
@@ -107,6 +110,8 @@ export interface StartPermissionMode {
   /** Set when the configured mode was not honoured. */
   readonly downgradedFrom?: PermissionMode
   readonly source: 'env' | 'settings' | 'default'
+  /** `DSH_TUI_CLAUDE_PERMISSION_MODE` was set to a value the override refuses. */
+  readonly ignoredOverride?: string
 }
 
 /**
@@ -122,7 +127,10 @@ export async function resolveStartPermissionMode(
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<StartPermissionMode> {
   const override = env.DSH_TUI_CLAUDE_PERMISSION_MODE
-  if (isPermissionMode(override)) return { mode: override, source: 'env' }
+  if (override !== undefined && override !== '' && (OVERRIDE_MODES as readonly string[]).includes(override)) {
+    return { mode: override as PermissionMode, source: 'env' }
+  }
+  const ignoredOverride = override === undefined || override === '' ? undefined : override
   let configured: unknown
   try {
     const resolved = await sdk.resolveSettings({ cwd, settingSources: SETTING_SOURCES })
@@ -132,9 +140,10 @@ export async function resolveStartPermissionMode(
   } catch {
     configured = undefined
   }
-  if (!isPermissionMode(configured)) return { mode: 'default', source: 'default' }
-  if (!(START_MODES as readonly string[]).includes(configured)) return { mode: 'default', downgradedFrom: configured, source: 'settings' }
-  return { mode: configured, source: 'settings' }
+  const ignored = ignoredOverride === undefined ? {} : { ignoredOverride }
+  if (!isPermissionMode(configured)) return { mode: 'default', source: 'default', ...ignored }
+  if (!(START_MODES as readonly string[]).includes(configured)) return { mode: 'default', downgradedFrom: configured, source: 'settings', ...ignored }
+  return { mode: configured, source: 'settings', ...ignored }
 }
 
 export interface ProfileInput {

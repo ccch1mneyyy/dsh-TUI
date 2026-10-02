@@ -10,7 +10,26 @@
     "delta:reasoning-tokens",
     "delta:reasoning-tokens",
     "delta:reasoning-tokens",
+    "delta:reasoning-tokens",
+    "delta:reasoning-tokens",
     "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "tool.call",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "tool.result",
     "delta:tool-args",
     "delta:tool-args",
     "delta:tool-args",
@@ -22,16 +41,12 @@
     "tool.call",
     "assistant.message",
     "tool.result",
-    "pending.changed",
-    "user.message",
     "step.end",
     "step.start",
     "assistant.attempt.start",
     "delta:reasoning-tokens",
     "delta:reasoning-tokens",
     "delta:reasoning-tokens",
-    "delta:text",
-    "delta:text",
     "delta:text",
     "delta:text",
     "delta:text",
@@ -48,42 +63,55 @@
   "rows": [
     {
       "kind": "user",
-      "text": "Use the Bash tool to run `sleep 4 && echo slept`, then summarize the output in one sentence."
+      "text": "In ONE response, call the Read tool twice in parallel (two tool_use blocks in the same message): README.md and src/app.js. Then tell me the first line of each i…"
     },
     {
       "kind": "reasoning",
       "text": "",
-      "reasoningTokens": 129
+      "reasoningTokens": 258
     },
     {
       "kind": "tool",
       "text": "",
       "tool": {
-        "name": "Bash",
+        "name": "Read",
         "status": "ok",
         "call": {
-          "card": "terminal",
-          "displayKey": "tool-name-bash",
-          "category": "exec"
+          "card": "generic",
+          "displayKey": "tool-name-read",
+          "category": "other"
         },
         "result": {
-          "card": "terminal"
+          "card": "read"
         },
-        "resultText": "slept"
+        "resultText": "1 # Fixture project 2 3 A tiny project for recording Claude SDK fixtures. 4"
       }
     },
     {
-      "kind": "user",
-      "text": "Also end your reply with the word NEXT-OK."
+      "kind": "tool",
+      "text": "",
+      "tool": {
+        "name": "Read",
+        "status": "ok",
+        "call": {
+          "card": "generic",
+          "displayKey": "tool-name-read",
+          "category": "other"
+        },
+        "result": {
+          "card": "read"
+        },
+        "resultText": "1 export function greet(name) { 2 return `hello ${name}` 3 } 4"
+      }
     },
     {
       "kind": "reasoning",
       "text": "",
-      "reasoningTokens": 136
+      "reasoningTokens": 132
     },
     {
       "kind": "assistant",
-      "text": "The command waited 4 seconds and then printed \"slept\" to the output.\n\nNEXT-OK"
+      "text": "README.md starts with \"# Fixture project\" and src/app.js starts with \"export function greet(name) {\"."
     }
   ],
   "state": {
@@ -91,15 +119,15 @@
     "model": "claude-haiku-4-5-20251001",
     "costReport": {
       "currency": "USD",
-      "amount": 0.023462100000000003,
+      "amount": 0.025816900000000004,
       "source": "backend"
     },
     "contextWindow": 200000,
     "tokens": {
       "input": 18,
-      "output": 245,
-      "cacheRead": 37881,
-      "cacheWrite": 8729
+      "output": 568,
+      "cacheRead": 37899,
+      "cacheWrite": 9074
     },
     "todos": [],
     "compaction": null,

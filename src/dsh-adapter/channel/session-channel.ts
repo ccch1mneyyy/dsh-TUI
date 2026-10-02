@@ -90,6 +90,17 @@ export function createSessionChannelWithOwner(
 ): ChannelState {
   const rowIds = { value: 0 }
   const binding = createChannelBinding(initialSession, owner)
+  // A non-DSH session owns its own lifetime (no host registry disposes it):
+  // releasing the channel closes the bound session — for the Claude backend
+  // that is what stops its CLI child process. Registered first, so a throw
+  // anywhere later in this composition still stops it (the caller disposes
+  // `owner` on throw). Replaced sessions are closed by the binding at
+  // adoption.
+  owner.own(() => {
+    void Promise.resolve().then(() => binding.session.dispose()).catch((error: unknown) => {
+      logForDebugging(`session-channel: dispose failed (${error instanceof Error ? error.message : String(error)})`)
+    })
+  })
   const backendLabel = options.backendLabel ?? initialSession.ref.backendId
   const snapshotOf = (session: AgentSession) => channelCapabilities({
     backendId: session.ref.backendId,
@@ -116,7 +127,9 @@ export function createSessionChannelWithOwner(
   installDecisionGuard(ctx, getHostGrantStore(ctx.get('tuiPluginHost')) ?? fallbackGrantStore)
   owner.own(markDecisionDispatchTopology(ctx))
 
-  const emitter = createChannelEmitter(() => state, () => false)
+  // No history slicing (`loadOlder`) behind a non-DSH session yet: folded
+  // rows could never be restored, so the window is not folded at all.
+  const emitter = createChannelEmitter(() => state, () => false, { fold: false })
   owner.own(() => emitter.dispose())
   const notify: ChannelState['notify'] = (...args) => {
     if (!owner.current()) return () => undefined
@@ -222,15 +235,6 @@ export function createSessionChannelWithOwner(
     traceEvents: () => NO_TRACE,
   }
   registerChannelOwner(state, owner)
-  // A non-DSH session owns its own lifetime (no host registry disposes it):
-  // releasing the channel closes the bound session — for the Claude backend
-  // that is what stops its CLI child process. Replaced sessions are closed by
-  // the binding at adoption.
-  owner.own(() => {
-    void Promise.resolve().then(() => binding.session.dispose()).catch((error: unknown) => {
-      logForDebugging(`session-channel: dispose failed (${error instanceof Error ? error.message : String(error)})`)
-    })
-  })
 
   const projector = createChannelProjection(state, {
     rowIds, resetContextWarning, jobs: NO_JOB_FEED, inputConvergence,
@@ -328,7 +332,13 @@ export function createSessionChannelWithOwner(
     state.rows.push({ id: rowIds.value++, kind: 'local-output', text: preview(output, LOCAL_OUTPUT_LIMIT) })
     state.emit()
     if (includeInContext) {
-      await capture.session.submit({ text: `<bash-stdout>\n${output}\n</bash-stdout>`, clientMessageId: randomUUID() }, 'followup')
+      // This runs detached (`void runLocalCommand`): a session that closed
+      // meanwhile (the CLI exited) must not surface as an unhandled rejection.
+      try {
+        await capture.session.submit({ text: `<bash-stdout>\n${output}\n</bash-stdout>`, clientMessageId: randomUUID() }, 'followup')
+      } catch (error) {
+        if (current()) notify(t('send-failed', { err: error instanceof Error ? error.message : String(error) }), { color: 'error', timeoutMs: 8000 })
+      }
     }
   }
 
@@ -423,7 +433,17 @@ export function createSessionChannelWithOwner(
 
   // Capability-backed delegates: an action whose typed capability the session
   // declares delegates to it; everything else stays explicitly unavailable.
+  // Callers `void` most of these, so a rejecting capability is reported here
+  // and answers the action's failure value — never an unhandled rejection.
   const caps = (): AgentSession['capabilities'] => binding.session.capabilities
+  const guarded = async <T>(name: string, fallback: T, run: () => Promise<T>): Promise<T> => {
+    try {
+      return await run()
+    } catch (error) {
+      if (owner.current()) notify(t('capability-failed', { name, err: error instanceof Error ? error.message : String(error) }), { color: 'error', timeoutMs: 8000 })
+      return fallback
+    }
+  }
   const capabilityBacked: Partial<ChannelActionDelegates> = {}
   if (initialSession.capabilities.compact !== undefined) {
     capabilityBacked.compact = () => {
@@ -433,31 +453,37 @@ export function createSessionChannelWithOwner(
         notify(t('compact-failed', { err: error instanceof Error ? error.message : String(error) }), { color: 'error' })
       })
     }
-    capabilityBacked.cancelCompact = () => { caps().compact?.cancel?.() }
+    capabilityBacked.cancelCompact = () => {
+      try {
+        caps().compact?.cancel?.()
+      } catch (error) {
+        logForDebugging(`session-channel: compact cancel failed (${error instanceof Error ? error.message : String(error)})`)
+      }
+    }
   }
   if (initialSession.capabilities.modes !== undefined) {
-    capabilityBacked.cycleMode = async () => {
+    capabilityBacked.cycleMode = () => guarded('mode', undefined, async () => {
       const modes = caps().modes
       if (modes === undefined) { unavailable('mode'); return }
       const list = modes.list()
       if (list.length === 0) return
       const index = list.findIndex(mode => mode.id === modes.current())
       await modes.set(list[(index + 1) % list.length]!.id)
-    }
+    })
   }
   if (initialSession.capabilities.models !== undefined) {
-    capabilityBacked.listModels = async () => {
+    capabilityBacked.listModels = () => guarded('model', [], async () => {
       const models = caps().models
       if (models === undefined) { unavailable('model'); return [] }
       return (await models.list()).map(model => ({ provider: model.provider ?? backendLabel, id: model.id, name: model.label, ...(model.description === undefined ? {} : { description: model.description }) }))
-    }
-    capabilityBacked.switchModel = async (provider, model) => {
+    })
+    capabilityBacked.switchModel = (provider, model) => guarded('model', false, async () => {
       const models = caps().models
       if (models === undefined) { unavailable('model'); return false }
       const outcome = await models.set({ ...(provider === '' || provider === backendLabel ? {} : { provider }), model })
       if (outcome.kind === 'refused') notify(outcome.reason, { color: 'warning' })
       return outcome.kind === 'switched'
-    }
+    })
   }
   if (initialSession.capabilities.effort !== undefined) {
     capabilityBacked.listEfforts = () => {
@@ -465,20 +491,20 @@ export function createSessionChannelWithOwner(
       if (effort === undefined) { unavailable('effort'); return Promise.resolve({ efforts: [], defaultEffort: undefined }) }
       return Promise.resolve({ efforts: effort.levels().map(level => ({ id: level.id, name: level.label })), defaultEffort: effort.current() })
     }
-    capabilityBacked.setEffort = async id => {
+    capabilityBacked.setEffort = id => guarded('effort', false, async () => {
       const effort = caps().effort
       if (effort === undefined || !effort.levels().some(level => level.id === id)) { unavailable('effort'); return false }
       await effort.set(id)
       return true
-    }
+    })
   }
   if (initialSession.capabilities.fork !== undefined) {
-    capabilityBacked.forkSession = async () => {
+    capabilityBacked.forkSession = () => guarded('fork', false, async () => {
       const fork = caps().fork
       if (fork === undefined) { unavailable('fork'); return false }
       await fork.fork()
       return true
-    }
+    })
   }
 
   const openSession = options.openSession
