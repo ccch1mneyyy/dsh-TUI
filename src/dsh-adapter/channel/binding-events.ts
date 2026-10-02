@@ -1,10 +1,10 @@
 import type { Agent, AssistantStreamFrame, ModelSelectionRef } from '@deepseek-ai/dsh-agent'
 import type { Context } from '@deepseek-ai/cordis'
 import { carrierKeyOf } from '@deepseek-ai/dsh-scope'
-import type { AgentEvent, AgentEventOf } from '../../agent/events.js'
+import type { AgentEvent, AgentEventMeta, AgentEventOf } from '../../agent/events.js'
 import type { ChannelProjection } from '../../channel/projection.js'
 import type { InputConvergence } from './input-actions.js'
-import type { ChannelBinding } from './binding.js'
+import type { DshChannelBinding } from './binding.js'
 import type { ChannelOwner } from './owner.js'
 import type { ChannelState } from './types.js'
 
@@ -19,7 +19,7 @@ import type { ChannelState } from './types.js'
  */
 export function createBindingEvents(ctx: Context, deps: {
   owner: ChannelOwner
-  binding: ChannelBinding
+  binding: DshChannelBinding
   state: ChannelState
   /** Read the activity projection's current value for a freshly bound session.
    *  A projection value only arrives when it changes, so a resumed or
@@ -72,45 +72,13 @@ export function createBindingEvents(ctx: Context, deps: {
       if (deps.owner.current()) deps.subagents.forget?.(agent)
     }))
   }
-  const reconcileRetiredProjection = (status: 'idle' | 'disposed'): void => {
-    if (!deps.state.working) return
-    ctx.logger.warn(`dsh-tui: agent became ${status} while the channel still projected an open turn; releasing volatile UI gates`)
-    deps.inputConvergence.cancelInFlight = false
-    deps.state.cancelPending = false
-    deps.state.working = false
-    deps.state.activeToolCount = 0
-    deps.projector.settleStreaming()
-    deps.projector.updateSpinnerMode()
-  }
-
-  /** `agent/status` / `agent/disposed` as the session reports them. */
-  const applyStatus = (status: 'idle' | 'running' | 'requires-action' | 'disposed'): void => {
-    if (status === 'disposed') {
-      deps.state.status = 'disposed'
-      reconcileRetiredProjection('disposed')
-      deps.state.emit()
-      return
-    }
-    // A DSH agent is only ever idle or running; a parked prompt is mid-turn.
-    deps.state.status = status === 'idle' ? 'idle' : 'running'
-    if (status === 'idle') reconcileRetiredProjection('idle')
-    deps.state.emit()
-  }
-  /**
-   * The backend queue lost inputs. Both a claim and a discard retire the
-   * pending preview, but ONLY a discard retires an attached-context entry: a
-   * claim fires while the loop claims the batch, BEFORE the resident
-   * `agent/pre-step` listener can append the attachment — retiring there would
-   * delete the context before it is ever injected.
-   */
-  const applyPending = (event: AgentEventOf<'pending.changed'>): void => {
-    for (const messageId of event.discarded ?? []) deps.retireAttachment?.(messageId)
-    for (const messageId of [...event.claimed ?? [], ...event.discarded ?? []]) {
-      const before = deps.state.pending.length
-      deps.state.pending = deps.state.pending.filter(item => item.id !== messageId)
-      if (deps.state.pending.length !== before) deps.state.emit()
-    }
-  }
+  const router = createSessionBatchRouter({
+    state: deps.state,
+    projector: deps.projector,
+    inputConvergence: deps.inputConvergence,
+    retireAttachment: deps.retireAttachment,
+    warn: message => ctx.logger.warn(message),
+  })
 
   const bind = (): void => {
     try {
@@ -180,53 +148,113 @@ export function createBindingEvents(ctx: Context, deps: {
           deps.modeActions.onSessionEvent(native.agent.session, event)
         }))
       }
-      register(session.subscribe((batch, meta) => {
-        // The generation fence covers the WHOLE batch, whatever it carries: a
-        // callback retained past a rebind (an in-flight dispatch, a compaction
-        // summary stream that outlived the binding it started under) must
-        // never write the replacement session's transcript.
-        if (!current()) return
-        let admitted: AgentEvent[] | undefined
-        let progressOnly = batch.length > 0
-        for (const [index, event] of batch.entries()) {
-          switch (event.type) {
-            case 'session.status':
-              applyStatus(event.status)
-              break
-            case 'pending.changed':
-              applyPending(event)
-              break
-            case 'compaction.progress':
-              // Summary output only advances a compaction row that is open; a
-              // stale stream after the row closed finds nothing to advance.
-              if (deps.state.compaction === undefined) {
-                admitted ??= batch.slice(0, index)
-                continue
-              }
-              break
-            default:
-              break
-          }
-          if (event.type !== 'compaction.progress') progressOnly = false
-          admitted?.push(event)
-        }
-        const events = admitted ?? batch
-        if (progressOnly) {
-          // Pure summary progress: frame-coalesced like the stream it counts.
-          if (events.length === 0) return
-          deps.projector.apply(events, meta)
-          deps.state.emitStream()
-          return
-        }
-        // The one writer of the foreground transcript.
-        deps.projector.apply(events, meta)
-        if (meta.wake === 'frame') deps.state.emitStream()
-        else if (meta.wake !== 'none') deps.state.emit()
-      }))
+      register(session.subscribe((batch, meta) => router.route(batch, meta, current)))
     } catch (error) {
       deps.owner.dispose()
       throw error
     }
   }
   return { bind }
+}
+
+/**
+ * The one session-batch writer path, shared by every channel composition (DSH
+ * and non-DSH): binding-generation fence over the whole batch, session status
+ * and pending-queue bookkeeping, compaction-progress gating, then the shared
+ * projector and the renderer wake the backend asked for.
+ */
+export function createSessionBatchRouter(deps: {
+  state: ChannelState
+  projector: ChannelProjection
+  inputConvergence: InputConvergence
+  /** Drop channel-side context attached to a discarded input (DSH pre-step
+   *  attachments); absent where nothing is ever attached. */
+  retireAttachment?(messageId: string): void
+  warn(message: string): void
+}) {
+  const reconcileRetiredProjection = (status: 'idle' | 'disposed'): void => {
+    if (!deps.state.working) return
+    deps.warn(`dsh-tui: agent became ${status} while the channel still projected an open turn; releasing volatile UI gates`)
+    deps.inputConvergence.cancelInFlight = false
+    deps.state.cancelPending = false
+    deps.state.working = false
+    deps.state.activeToolCount = 0
+    deps.projector.settleStreaming()
+    deps.projector.updateSpinnerMode()
+  }
+
+  /** `session.status` as the backend reports it. */
+  const applyStatus = (status: 'idle' | 'running' | 'requires-action' | 'disposed'): void => {
+    if (status === 'disposed') {
+      deps.state.status = 'disposed'
+      reconcileRetiredProjection('disposed')
+      deps.state.emit()
+      return
+    }
+    // The channel's status is idle/running only; a parked prompt is mid-turn.
+    deps.state.status = status === 'idle' ? 'idle' : 'running'
+    if (status === 'idle') reconcileRetiredProjection('idle')
+    deps.state.emit()
+  }
+  /**
+   * The backend queue lost inputs. Both a claim and a discard retire the
+   * pending preview, but ONLY a discard retires an attached-context entry: a
+   * claim fires while the loop claims the batch, BEFORE the resident
+   * `agent/pre-step` listener can append the attachment — retiring there would
+   * delete the context before it is ever injected.
+   */
+  const applyPending = (event: AgentEventOf<'pending.changed'>): void => {
+    for (const messageId of event.discarded ?? []) deps.retireAttachment?.(messageId)
+    for (const messageId of [...event.claimed ?? [], ...event.discarded ?? []]) {
+      const before = deps.state.pending.length
+      deps.state.pending = deps.state.pending.filter(item => item.id !== messageId)
+      if (deps.state.pending.length !== before) deps.state.emit()
+    }
+  }
+
+  const route = (batch: readonly AgentEvent[], meta: AgentEventMeta, current: () => boolean): void => {
+    // The generation fence covers the WHOLE batch, whatever it carries: a
+    // callback retained past a rebind (an in-flight dispatch, a compaction
+    // summary stream that outlived the binding it started under) must never
+    // write the replacement session's transcript.
+    if (!current()) return
+    let admitted: AgentEvent[] | undefined
+    let progressOnly = batch.length > 0
+    for (const [index, event] of batch.entries()) {
+      switch (event.type) {
+        case 'session.status':
+          applyStatus(event.status)
+          break
+        case 'pending.changed':
+          applyPending(event)
+          break
+        case 'compaction.progress':
+          // Summary output only advances a compaction row that is open; a
+          // stale stream after the row closed finds nothing to advance.
+          if (deps.state.compaction === undefined) {
+            admitted ??= batch.slice(0, index)
+            continue
+          }
+          break
+        default:
+          break
+      }
+      if (event.type !== 'compaction.progress') progressOnly = false
+      admitted?.push(event)
+    }
+    const events = admitted ?? batch
+    if (progressOnly) {
+      // Pure summary progress: frame-coalesced like the stream it counts.
+      if (events.length === 0) return
+      deps.projector.apply(events, meta)
+      deps.state.emitStream()
+      return
+    }
+    // The one writer of the foreground transcript.
+    deps.projector.apply(events, meta)
+    if (meta.wake === 'frame') deps.state.emitStream()
+    else if (meta.wake !== 'none') deps.state.emit()
+  }
+
+  return { route, reconcileRetiredProjection }
 }

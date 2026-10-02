@@ -588,6 +588,18 @@ const GROUPS = {
 // DSH 翻译器词汇覆盖（多后端方案 §6.2/§8.2）：同一批 fixture 经翻译器的
 // live/replay 两路，逐行断言 §6.2 每一类 DSH 事件产出对应 AgentEvent 与身份字段。
     ["verify-dsh-translate", ['node', '--import', 'tsx/esm', 'scripts/verify-dsh-translate.ts']],
+// 非 DSH 会话上的 channel（多后端方案 §3.5，Phase 2 checkpoint B）：能力快照、
+// 只提供后端支持的命令、通用动作走 AgentSession、DSH 专属动作显式不可用
+// （通知 + 契约失败值）、能力在场时委托、/new 经后端 open、换会话后的代际
+// 栅栏；同一入口的 DSH channel 命令表与今天逐字一致。
+    ["verify-backend-channel", ['node', '--import', 'tsx/esm', 'scripts/verify-backend-channel.ts']],
+// 真实 Chat 挂在非 DSH channel 上：斜杠菜单/Tab 只给后端支持的命令，键入的
+// 不可用命令提示 cmd-unavailable-backend、绝不落到模型（运行中也不 steer）。
+    ["verify-backend-chat", ['node', '--import', 'tsx/esm', 'scripts/verify-backend-chat.tsx']],
+// 只有 token 计数、没有正文的思考行（方案 §4.5 (b)）：投影器 reasoning-tokens
+// → ChatRow.reasoningTokens，流式一行「思考中 · ~N tokens」、落定「已思考 ·
+// ~N tokens」，正文到达时正文优先；中英双语。
+    ["verify-thinking-tokens", ['node', '--import', 'tsx/esm', 'scripts/verify-thinking-tokens.tsx']],
 // IDE 选区通道回归（PR #562）：纯函数（env 直连/lock 扫描与 workspace
 // 匹配过滤/hello_ack 解析/selection_changed 校验）、无 IDE 静默降级、
 // loopback 对连（token 握手 ACK、错误 token 换下一候选、断连清空）、

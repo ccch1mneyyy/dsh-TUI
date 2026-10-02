@@ -12,11 +12,11 @@ import { composePreset, resolvePersistedPreset, runningPresetOf } from '../prese
 import { attachSessionToWorkspace } from '../workspace.js'
 import { reserveNewSession } from '../../sessionMounts.js'
 import { forkTarget, rewindTarget, turnUserText } from '../sessionTree.js'
-import type { createChannelBinding } from './binding.js'
+import type { DshChannelBinding } from './binding.js'
 import type { ChannelOwner } from './owner.js'
 import type { ChannelState } from './types.js'
 
-type Binding = ReturnType<typeof createChannelBinding>
+type Binding = DshChannelBinding
 type TreeRewindState = Pick<ChannelState, 'working' | 'cwd' | 'provider' | 'model'>
 
 async function waitForTurnEnd(session: unknown, fromSeq: number, timeoutMs: number): Promise<boolean> {

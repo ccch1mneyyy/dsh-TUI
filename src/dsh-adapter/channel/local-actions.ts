@@ -9,6 +9,25 @@ import { runForegroundShell, type ForegroundShell } from '../compat/shell.js'
 import { LOCAL_OUTPUT_LIMIT, preview, type foldBack as FoldBack } from './transcript.js'
 import type { ChannelState, ToolViewPresenter } from './types.js'
 
+/** `/activity frames <name>`: validate, persist, re-render (backend-neutral). */
+export function setActivityFrames(
+  state: Pick<ChannelState, 'activityFrames' | 'emit'>,
+  notify: ChannelState['notify'],
+  name: string,
+): boolean {
+  // A retired preset id normalizes to the current default, so the
+  // in-memory state, the persisted preference and the toast agree instead
+  // of diverging until restart.
+  const preset = normalizeActivityPreset(name) ?? name
+  if (!isPresetName(preset)) { notify(t('unknown-activity-preset', { name }), { color: 'error' }); return false }
+  if (preset === state.activityFrames) { notify(t('activity-indicator-already', { name: preset }), { color: 'success' }); return true }
+  if (!writeActivityFrames(preset)) { notify(t('activity-pref-write-failed'), { color: 'error' }); return false }
+  state.activityFrames = preset
+  state.emit()
+  notify(t('activity-indicator-switched', { name: preset }))
+  return true
+}
+
 /** Owns local-only transcript mutations, shell output, and live subagent queries. */
 export function createLocalActions(deps: {
   ctx: { get(name: string): unknown }
@@ -53,19 +72,7 @@ export function createLocalActions(deps: {
       for (const line of lines) state.rows.push({ id: rowIds.value++, kind: 'local-output', text: preview(line, LOCAL_OUTPUT_LIMIT) })
       state.emit()
     },
-    setActivityFrames(name: string): boolean {
-      // A retired preset id normalizes to the current default, so the
-      // in-memory state, the persisted preference and the toast agree instead
-      // of diverging until restart.
-      const preset = normalizeActivityPreset(name) ?? name
-      if (!isPresetName(preset)) { notify(t('unknown-activity-preset', { name }), { color: 'error' }); return false }
-      if (preset === state.activityFrames) { notify(t('activity-indicator-already', { name: preset }), { color: 'success' }); return true }
-      if (!writeActivityFrames(preset)) { notify(t('activity-pref-write-failed'), { color: 'error' }); return false }
-      state.activityFrames = preset
-      state.emit()
-      notify(t('activity-indicator-switched', { name: preset }))
-      return true
-    },
+    setActivityFrames: (name: string): boolean => setActivityFrames(state, notify, name),
     async listSubagents(): Promise<string[]> {
       const service = ctx.get('subagents') as {
         listChildren(sessionId: unknown, signal?: AbortSignal): Promise<Array<{ mode: string; label?: string; activity: string; id: string | { value?: string } }>>

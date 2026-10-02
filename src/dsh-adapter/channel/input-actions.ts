@@ -6,13 +6,16 @@ import type { ChannelState, ComposerImageRef, ComposerSubmission } from './types
 
 export interface InputConvergence { cancelInFlight: boolean; interruptSeq: number }
 export function createInputActions(
-  getState: () => Pick<ChannelState, 'agentId' | 'pending' | 'cancelPending' | 'emit' | 'notify'>,
+  getState: () => Pick<ChannelState, 'agentId' | 'pending' | 'cancelPending' | 'emit' | 'notify' | 'capabilities'>,
   getSession: () => AgentSession,
   owner: { assertActive(): void },
   input: InputConvergence,
   composer: { includeLegacyImageRefs(text: string, images: readonly ComposerImageRef[]): readonly ComposerImageRef[] },
   dispatchUserText: (text: string, placement: 'steer' | 'followup', images?: readonly ComposerImageRef[]) => void,
   runLocalCommand: (command: string, includeInContext: boolean) => Promise<void>,
+  /** Move the used session to the front of the `/resume` MRU (DSH session
+   *  history); a backend whose sessions that list cannot open passes a no-op. */
+  touch: (sessionId: string) => void = touchSession,
 ): Pick<ChannelState, 'submit' | 'steer' | 'removePending' | 'cancel' | 'interruptAndDeliver'> {
   return {
     submit(text, images = []) {
@@ -41,7 +44,7 @@ export function createInputActions(
       }
       // The current session is being used — move it to the MRU front
       // (/resume sorts by last-used).
-      touchSession(state.agentId)
+      touch(state.agentId)
       dispatchUserText(trimmed, 'followup', submittedImages)
     },
 
@@ -53,7 +56,7 @@ export function createInputActions(
       const state = getState()
       const trimmed = text.trim()
       if (!trimmed) return
-      touchSession(state.agentId)
+      touch(state.agentId)
       // Same tui/input decision pass as submit; the delivery re-validates
       // the live agent after the await. Official dsh-agent rc.6: steer() is
       // synchronous void — the message enters the next-step inbox; a
@@ -71,13 +74,20 @@ export function createInputActions(
       const session = getSession()
       const index = state.pending.findIndex(item => item.id === id)
       if (index === -1) return false
+      // A backend that cannot withdraw synchronously is never asked: starting
+      // an async removal and reporting failure here would leave the message
+      // both "kept" in the UI and maybe-withdrawn in the backend. The caller
+      // (PromptInput) keeps it queued and says it cannot be retracted.
+      if (!state.capabilities.retractPending) return false
       // The backend withdraws it (DSH: through the agent's inbox, which durably
       // records the cancellation and reports the discard that retires the
       // preview). Refuse when the message was already claimed so the UI never
-      // pretends a ghost send was pulled back; this contract is synchronous,
-      // so a backend that can only answer later has not withdrawn it yet.
+      // pretends a ghost send was pulled back; this contract is synchronous.
       const removed = session.removePending(id)
       if (typeof removed !== 'boolean') {
+        // Contract violation (retractPending declared, async answer): never
+        // report a withdrawal that has not happened; the backend's own
+        // pending.changed retires the preview if it does go through.
         void Promise.resolve(removed).catch(() => false)
         return false
       }
@@ -131,7 +141,7 @@ export function createInputActions(
         // double-deliver: only the latest request's re-queue runs.
         if (input.interruptSeq !== token) return
         for (const entry of queued) {
-          touchSession(state.agentId)
+          touch(state.agentId)
           // Same tui/input decision pass as a typed submit: Ctrl+Enter must
           // not bypass a plugin's cancel/transform policy, and re-queued
           // texts keep submission order through the one FIFO chain.

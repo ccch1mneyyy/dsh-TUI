@@ -2,10 +2,10 @@ import type { AgentSession } from '../../agent/session.js'
 import { dshHandleOf } from '../backend/session.js'
 import type { SessionEvent, SessionId } from '@deepseek-ai/dsh-session'
 import type { ChannelState } from './types.js'
-import type { createChannelBinding } from './binding.js'
+import type { DshChannelBinding } from './binding.js'
 import { resetSessionProjection } from './session-reset.js'
 
-type Binding = ReturnType<typeof createChannelBinding>
+type Binding = DshChannelBinding
 type AdoptionState = Pick<
   ChannelState,
   | 'status'

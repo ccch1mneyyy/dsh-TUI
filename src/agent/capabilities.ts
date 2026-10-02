@@ -113,6 +113,13 @@ export interface LoadedContextView {
 
 /** Every optional capability of one live session. */
 export interface SessionCapabilities {
+  /**
+   * The backend can withdraw a queued input synchronously: `removePending`
+   * answers with a plain boolean. Absent = queued inputs cannot be retracted,
+   * and the channel never starts a withdrawal (Alt+Up keeps the message
+   * queued instead of racing an async removal it would report as failed).
+   */
+  readonly retractPending?: true
   readonly permissions?: {
     respond(requestId: string, decision: PermissionDecision): void
     pending(): readonly PermissionRequestView[]
@@ -159,6 +166,9 @@ export interface SessionCapabilities {
   readonly context?: { usage(detail: 'summary' | 'full'): Promise<ContextUsageView> }
   readonly account?: { info(): Promise<AccountView> }
   readonly loadedContext?: { snapshot(): Promise<LoadedContextView | undefined> }
+  /** Backend-specific `/doctor` lines (version drift, executable, …), already
+   *  localized by the backend. */
+  readonly diagnostics?: { lines(): readonly string[] }
   /** Backend escape hatches; read only from the owning backend's directory. */
   readonly native: { readonly dsh?: DshNative; readonly claude?: ClaudeNative; readonly acp?: AcpNative }
 }

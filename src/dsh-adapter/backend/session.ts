@@ -176,7 +176,8 @@ export function createDshSession(ctx: Context, target: DshSessionTarget): AgentS
       if (disposed) return 'disposed'
       return agent.status === 'running' ? 'running' : 'idle'
     },
-    capabilities: { native: { dsh: native } },
+    // DSH withdraws through the agent inbox synchronously (`removePending`).
+    capabilities: { retractPending: true, native: { dsh: native } },
     // A throwaway translator: `history()` is a read, so it must neither reset
     // the live translator's frame fence nor leave the replay's open calls in
     // the live open-call ledger. (Adoption seeds still go through

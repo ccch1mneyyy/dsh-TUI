@@ -6,10 +6,10 @@ import { agentViewHasTurns } from '../agent-view.js'
 import { snapshotLiveSessionEvents } from '../compat/liveSession.js'
 import { runningPresetOf } from '../presets.js'
 import { resetSessionProjection } from './session-reset.js'
-import type { createChannelBinding } from './binding.js'
+import type { DshChannelBinding } from './binding.js'
 import type { ChannelState, ResumeResult } from './types.js'
 
-type Binding = ReturnType<typeof createChannelBinding>
+type Binding = DshChannelBinding
 type LiveAdoptionState = Pick<
   ChannelState,
   | 'status'

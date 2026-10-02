@@ -172,3 +172,115 @@ export function createChannelActionReadiness() {
     },
   }
 }
+
+/**
+ * The explicit-unavailable half of a non-DSH composition (design §3.5): one
+ * delegate per public action, each failing per its own contract — `false`,
+ * `null`, `undefined`, an empty list or an `{ ok: false }` result — and, for
+ * an action the user invoked, saying so through `unavailable(name)` (which
+ * notifies `capability-unavailable`). Nothing here pretends to succeed.
+ *
+ * Passive reads the renderer performs on its own (agent-view rows and their
+ * subscription, the cached session list, workspace sub-commands, cache
+ * invalidation, approval-store wiring) answer with their empty value
+ * silently: they are not user actions, and a toast per render would be
+ * noise. The composition overrides the generic actions (submit path, clear,
+ * local rows, file queries, completions, `/new`, `/doctor`) and every action
+ * whose capability the session does have.
+ */
+export function createUnavailableActionDelegates(
+  unavailable: (name: string) => void,
+  unavailableLines: (name: string) => string[],
+): ChannelActionDelegates {
+  const refuse = <T>(name: string, value: T): T => {
+    unavailable(name)
+    return value
+  }
+  const refuseAsync = <T>(name: string, value: T): Promise<T> => Promise.resolve(refuse(name, value))
+  return {
+    commandCompletions: () => [],
+    runLocalCommand: () => refuseAsync('shell', undefined),
+    runPermissionPreset: () => refuseAsync('permission', false),
+    loadOlder: () => 0,
+    rewindTo: () => refuseAsync('rewind', null),
+    rewindToNode: () => refuseAsync('tree', null),
+    forkSession: () => refuseAsync('fork', false),
+    resumeTo: () => refuseAsync('resume', { ok: false, reason: 'unavailable' } as const),
+    newSession: () => refuseAsync('new', false),
+    listWorkspaces: () => refuseAsync('workspace', []),
+    listWorkspaceRegistry: () => refuseAsync('workspace', []),
+    removeWorkspace: () => refuseAsync('workspace', false),
+    renameWorkspaceAt: () => refuseAsync('workspace', false),
+    resolveWorkspace: () => refuseAsync('workspace', undefined),
+    switchWorkspace: () => refuseAsync('workspace', false),
+    renameWorkspace: () => refuseAsync('workspace', false),
+    workspaceCommands: () => [],
+    runWorkspaceCommand: () => refuseAsync('workspace', undefined),
+    switchModel: () => refuseAsync('model', false),
+    listEfforts: () => refuseAsync('effort', { efforts: [], defaultEffort: undefined }),
+    setEffort: () => refuseAsync('effort', false),
+    setDefaultEffort: () => { unavailable('effort') },
+    cycleMode: () => refuseAsync('mode', undefined),
+    clear: () => { unavailable('clear') },
+    setActivityFrames: () => refuse('activity', false),
+    listPresets: () => refuseAsync('preset', []),
+    switchPreset: () => refuseAsync('preset', false),
+    listModels: () => refuseAsync('model', []),
+    listProviders: () => refuseAsync('provider', []),
+    invalidateModelCompletion: () => undefined,
+    listSkills: () => refuseAsync('skills', undefined),
+    describeCredential: () => refuseAsync('login', undefined),
+    // No DeepSeek account stands behind this backend: report the key as
+    // absent rather than inventing a network/HTTP failure.
+    balanceInfo: () => refuseAsync('balance', { ok: false, reason: 'no-key' } as const),
+    sideQuestion: () => {
+      unavailable('btw')
+      return Promise.resolve({ answer: null, error: unavailableLines('btw').join(' ') })
+    },
+    listFileCandidates: () => Promise.resolve([]),
+    listFiles: () => Promise.resolve([]),
+    cachedSessions: () => undefined,
+    listSessions: () => refuseAsync('resume', []),
+    previewSession: () => refuseAsync('resume', []),
+    listForeignSources: () => refuseAsync('migrate', []),
+    listForeignSessions: () => refuseAsync('migrate', []),
+    importForeignSession: () => refuseAsync('migrate', { kind: 'failed', reason: 'unknown-source' } as const),
+    bindApprovalStore: () => undefined,
+    agentViewRows: () => NO_AGENT_VIEW_ROWS,
+    subscribeAgentView: () => () => undefined,
+    dispatchBackgroundAgent: () => refuseAsync('agentview', { ok: false, reason: 'unavailable' } as const),
+    stopBackgroundAgent: () => refuseAsync('agentview', false),
+    attachToAgent: () => refuseAsync('agentview', { ok: false, reason: 'unavailable' } as const),
+    peekAgentSession: () => refuseAsync('agentview', []),
+    replyToAgent: () => refuseAsync('agentview', false),
+    backgroundCurrent: () => refuseAsync('bg', { ok: false } as const),
+    setResumeTarget: () => { unavailable('resume') },
+    renameSession: () => { unavailable('rename') },
+    setSessionColor: () => { unavailable('color') },
+    recapRecent: () => {
+      unavailable('recap')
+      return Promise.resolve({ summary: null, error: unavailableLines('recap').join(' ') })
+    },
+    deleteSession: () => refuseAsync('resume', false),
+    renameSessionTo: () => refuseAsync('rename', false),
+    compact: () => { unavailable('compact') },
+    // Contract: a no-op when this process runs no compaction it may abort.
+    cancelCompact: () => undefined,
+    // Contract: `undefined` = no such registry command, so the caller sends
+    // the line to the model — exactly what a backend with its own command
+    // set (Claude's native slash commands) needs.
+    runExternalCommand: () => Promise.resolve(undefined),
+    runExternalCommandOutcome: () => Promise.resolve(undefined),
+    pushLocal: () => { unavailable('pushLocal') },
+    // Report lines ARE the explicit answer for these three reports.
+    mcpStatus: () => unavailableLines('mcp'),
+    exportSession: () => refuse('export', null),
+    initWorkspace: () => refuse('init', null),
+    doctorInfo: () => unavailableLines('doctor'),
+    pluginsInfo: () => unavailableLines('plugins'),
+    listSubagents: () => Promise.resolve(unavailableLines('agents')),
+  }
+}
+
+/** Stable empty agent-view snapshot (useSyncExternalStore needs one reference). */
+const NO_AGENT_VIEW_ROWS: readonly never[] = Object.freeze([])

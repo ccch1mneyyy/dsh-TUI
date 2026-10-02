@@ -23,12 +23,12 @@ import { composePreset, resolvePersistedPreset, resolvePersistedRoute } from '..
 import { attachSessionToWorkspace } from '../workspace.js'
 import { createDshSession, dshHandleOf } from '../backend/session.js'
 import { resetSessionProjection } from './session-reset.js'
-import type { createChannelBinding } from './binding.js'
+import type { DshChannelBinding } from './binding.js'
 import type { ChannelOwner } from './owner.js'
 import { assertCapabilityShadowPolicy, type AdapterRuntimeOptions } from '../../adapter/kernel/runtime.js'
 import type { ChannelState, ResumeResult } from './types.js'
 
-type Binding = ReturnType<typeof createChannelBinding>
+type Binding = DshChannelBinding
 type ResumeState = Pick<
   ChannelState,
   | 'working'

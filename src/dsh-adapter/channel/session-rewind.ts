@@ -11,11 +11,11 @@ import { normalizeRewindDoneSummary } from './decisions.js'
 import { composePreset, runningPresetOf } from '../presets.js'
 import { attachSessionToWorkspace } from '../workspace.js'
 import { reserveNewSession } from '../../sessionMounts.js'
-import type { createChannelBinding } from './binding.js'
+import type { DshChannelBinding } from './binding.js'
 import type { ChannelOwner } from './owner.js'
 import type { ChannelState, ChatRow } from './types.js'
 
-type Binding = ReturnType<typeof createChannelBinding>
+type Binding = DshChannelBinding
 type RewindState = Pick<ChannelState, 'working' | 'cwd' | 'provider' | 'model'>
 
 async function waitForTurnEnd(

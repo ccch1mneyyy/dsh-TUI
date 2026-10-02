@@ -23,6 +23,7 @@ export type SessionResetState = Pick<
   | 'tpsSamples'
   | 'lastUsage'
   | 'contextSegments'
+  | 'costReport'
 >
 
 /**
@@ -72,6 +73,8 @@ export function resetSessionProjection(
   state.tps = undefined
   state.tpsSamples = []
   state.lastUsage = undefined
+  // A backend-reported cost belongs to the session that reported it.
+  state.costReport = undefined
   state.contextSegments = {
     system: 0,
     prompt: 0,

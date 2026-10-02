@@ -1,5 +1,4 @@
 import type { Context } from '@deepseek-ai/cordis'
-import type { Agent } from '@deepseek-ai/dsh-agent'
 import { createUserMessage, type UserMessage } from '@deepseek-ai/dsh-llm'
 import type { AgentSession } from '../../agent/session.js'
 import { t } from '../../i18n.js'
@@ -31,7 +30,6 @@ import type {
  *  services that resolve its references, and the capabilities live then. */
 interface UserTextOrigin {
   readonly session: AgentSession
-  readonly agent: Agent
   readonly agentId: string
   readonly generation: number
   readonly cwd: string
@@ -46,7 +44,7 @@ interface UserTextOrigin {
 
 /** Input FIFO, staged attachments and decision notice timers share one lifetime. */
 export function createInputDelivery(
- ctx: Context, owner: ChannelOwner, binding: { readonly session: AgentSession; readonly agent: Agent },
+ ctx: Context, owner: ChannelOwner, binding: { readonly session: AgentSession },
  state: () => Pick<ChannelState, 'cwd' | 'agentId' | 'agentBindingGeneration'>,
  notify: ChannelState['notify'],
  trackPending: (message: { id: string; text: string; images?: readonly ComposerImageRef[] }, placement: PendingMessage['placement']) => void,
@@ -54,6 +52,9 @@ export function createInputDelivery(
  composer: ComposerImages,
  selection: () => ChannelSelection | undefined,
  rememberSelection: (messageId: string, info: SelectionAttachment) => void,
+ /** The fs surface to use when the host mounts no `fs` service (a non-DSH
+  *  composition reads the local disk); absent = no fallback. */
+ fallbackFs?: () => MentionFs | undefined,
 ) {
   /**
    * `@` file mentions (issue #15): expansion reads files asynchronously, so
@@ -114,9 +115,11 @@ export function createInputDelivery(
     attachedByMessageId.clear()
   })
 
-  /** D-6 fence: the submission belongs to the session it was typed in. */
+  /** D-6 fence: the submission belongs to the session it was typed in (the
+   *  bound session object plus the binding generation every adoption
+   *  advances — any backend, no DSH agent needed). */
   const current = (origin: UserTextOrigin): boolean =>
-    owner.current() && binding.agent === origin.agent && state().agentBindingGeneration === origin.generation
+    owner.current() && binding.session === origin.session && state().agentBindingGeneration === origin.generation
 
   /** D-6: bind the submission to the session it was typed in AT ENQUEUE
    *  TIME. The FIFO chain may park this task behind a slow predecessor
@@ -125,11 +128,10 @@ export function createInputDelivery(
    *  conversation's words into it. */
   const captureOrigin = (): UserTextOrigin => ({
     session: binding.session,
-    agent: binding.agent,
     agentId: state().agentId,
     generation: state().agentBindingGeneration,
     cwd: state().cwd,
-    fs: mentionFs(ctx),
+    fs: mentionFs(ctx) ?? fallbackFs?.(),
     attachments: mentionAttachments(ctx),
     stagedImages: composer.snapshot(),
     selection: selection(),
@@ -281,9 +283,9 @@ export function createInputDelivery(
     origin: UserTextOrigin,
     attach?: UserMessage,
   ): Promise<void> => {
-    // Stale detection compares the AGENT REFERENCE, not the id: session ids
+    // Stale detection compares the SESSION REFERENCE, not the id: session ids
     // are reusable (A → /new → /resume A lands back on the same id with a
-    // fresh agent), so an id check has an ABA hole. Both origin values are
+    // fresh session), so an id check has an ABA hole. Both origin values are
     // ENQUEUE-time captures (see dispatchUserText): a decision parked behind
     // a slow predecessor must still be judged against the session its text
     // was typed in, not whichever session is live when it finally runs.

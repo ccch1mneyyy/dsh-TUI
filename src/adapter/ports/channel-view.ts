@@ -68,6 +68,10 @@ export interface ChatRow {
   time?: number
   /** Present on `reasoning` rows once settled: thinking wall-clock duration. */
   durationMs?: number
+  /** Present on `reasoning` rows of a backend that reports thinking only as
+   *  an estimated token count (no thinking text): the latest estimate. The
+   *  text, when any arrives, still wins over the count. */
+  reasoningTokens?: number
   /** Source session event seq — present on every log-derived row (rewind
    *  fork anchor on user rows; window-floor bookkeeping for the rest). */
   seq?: number
@@ -742,6 +746,50 @@ export type AgentViewDispatchResult =
 export type BackgroundResult =
   | { readonly ok: true; readonly backgroundedSessionId: string }
   | { readonly ok: false }
+
+/**
+ * Plain readonly capability snapshot of the bound backend session, for UI
+ * decisions (which commands to offer, which affordances to render). It is
+ * data, never a capability handle: the channel owns the actions.
+ */
+export interface ChannelCapabilities {
+  /** Backend id of the bound session (`dsh`, `claude`, `acp:<agent>`). */
+  readonly backendId: string
+  /** User-facing backend name (status notices, `cmd-unavailable-backend`). */
+  readonly backendLabel: string
+  /** Local slash-command names this backend supports (menu, Tab, dispatch). */
+  readonly commands: readonly string[]
+  /** Queued inputs can be withdrawn synchronously (Alt+Up). */
+  readonly retractPending: boolean
+  readonly permissions: boolean
+  readonly models: boolean
+  readonly effort: boolean
+  readonly modes: boolean
+  readonly compact: boolean
+  readonly rewind: boolean
+  readonly fork: boolean
+  readonly resume: boolean
+  readonly subagents: boolean
+  readonly tasks: boolean
+  readonly mcp: boolean
+}
+
+/**
+ * Cross-backend session identity as the UI sees it. Structurally the Agent
+ * Domain's `AgentSessionRef` (src/agent/refs.ts); restated here because the
+ * ports never import outside their own directory.
+ */
+export interface ChannelSessionRef {
+  readonly backendId: string
+  readonly sessionId: string
+}
+
+/** A backend-reported (or locally estimated) session cost. */
+export interface ChannelCostReport {
+  readonly currency: string
+  readonly amount: number
+  readonly source: 'backend' | 'estimate'
+}
 
 export type AgentStatus = 'idle' | 'running'
 export interface LlmModelInfo { provider: string; id: string; name: string; description?: string; inputModalities?: readonly string[] }

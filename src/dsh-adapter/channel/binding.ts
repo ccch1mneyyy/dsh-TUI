@@ -1,21 +1,23 @@
 import type { Agent, AgentHandle } from '@deepseek-ai/dsh-agent'
 import type { AgentSession } from '../../agent/session.js'
-import { dshAgentOf } from '../backend/session.js'
 import type { ChannelOwner } from './owner.js'
 
 export interface BindingCapture {
   readonly session: AgentSession
-  readonly agent: Agent
+  /** DSH convenience: the captured session's agent; undefined off DSH. */
+  readonly agent: Agent | undefined
   readonly generation: number
 }
 
 export interface BindingCommit {
   readonly session: AgentSession
-  readonly agent: Agent
+  readonly agent: Agent | undefined
   readonly handle: AgentHandle | undefined
   readonly generation: number
 }
 
+/** The DSH agent a session drives, if it is a DSH session (convenience view). */
+const agentOf = (session: AgentSession): Agent | undefined => session.capabilities.native.dsh?.agent
 /** The DSH lifetime handle a session owns, if any (DSH convenience view). */
 const handleOf = (session: AgentSession): AgentHandle | undefined => session.capabilities.native.dsh?.handle
 
@@ -24,17 +26,19 @@ type PreviousDisposition = 'dispose' | 'park'
 /**
  * Sole writer of the attached session identity and binding generation.
  *
- * The cell holds an `AgentSession`; `agent`/`handle` are DSH convenience views
- * of `capabilities.native.dsh` for the DSH specialists, and every identity and
- * ownership rule below is still decided on them, exactly as when the cell
- * held the Agent/handle pair directly. A prepared session remains owned by
- * this cell until its synchronous adoption tail returns.  The tail is deliberately callback-shaped: it cannot leave a
- * committed identity waiting for a microtask watchdog to infer whether setup
- * completed, and a throw always revokes the transaction immediately.
+ * The cell holds an `AgentSession` of any backend and every identity rule
+ * below is decided on that session object (plus the generation, which every
+ * adoption advances). `agent`/`handle` are DSH convenience views of
+ * `capabilities.native.dsh` for the DSH specialists — `undefined` on a
+ * non-DSH session; a DSH session's lifetime is still keyed by its handle, so
+ * two wrappers of one owned agent close it once. A prepared session remains
+ * owned by this cell until its synchronous adoption tail returns. The tail
+ * is deliberately callback-shaped: it cannot leave a committed identity
+ * waiting for a microtask watchdog to infer whether setup completed, and a
+ * throw always revokes the transaction immediately.
  */
 export function createChannelBinding(initial: AgentSession, owner: ChannelOwner) {
   let currentSession = initial
-  let currentAgent = dshAgentOf(initial)
   let currentHandle = handleOf(initial)
   let generation = 0
   let started = false
@@ -67,7 +71,7 @@ export function createChannelBinding(initial: AgentSession, owner: ChannelOwner)
       close = Promise.resolve()
     }
     closing.set(lifetime, close)
-    const id = String(dshAgentOf(candidate).session.id)
+    const id = candidate.ref.sessionId
     closingSessions.set(id, close)
     void close.then(() => {
       if (closingSessions.get(id) === close) closingSessions.delete(id)
@@ -94,7 +98,7 @@ export function createChannelBinding(initial: AgentSession, owner: ChannelOwner)
     return failure
   }
   const isCaptureCurrent = (capture: BindingCapture): boolean =>
-    owner.current() && capture.agent === currentAgent && capture.generation === generation
+    owner.current() && capture.session === currentSession && capture.generation === generation
   /**
    * Start a close without waiting for it. The callers below are synchronous
    * transaction boundaries — they must not turn into awaits — but the close
@@ -115,7 +119,13 @@ export function createChannelBinding(initial: AgentSession, owner: ChannelOwner)
     // ledger. Disposal is centralised here so no adoption tail can double-call
     // an old handle while its transaction is being revoked. Neither path waits:
     // an ordinary session switch must not block on the handle it just left.
-    if (disposition === 'dispose' && previous.handle !== undefined && previous.handle !== currentHandle) {
+    // A DSH session's lifetime is its handle (a borrowed registry agent has
+    // none and is never closed here); a non-DSH session owns its own
+    // lifetime, so the cell closes the session object it replaced.
+    const owned = previous.handle !== undefined
+      ? previous.handle !== currentHandle
+      : previous.agent === undefined && previous.session !== currentSession
+    if (disposition === 'dispose' && owned) {
       startClose(dispose(previous.session))
     }
   }
@@ -139,7 +149,7 @@ export function createChannelBinding(initial: AgentSession, owner: ChannelOwner)
     assertPrepared(candidate, capture)
     const token = Symbol('channel-binding-handoff')
     handoff = token
-    const previous: BindingCommit = { session: currentSession, agent: currentAgent, handle: currentHandle, generation }
+    const previous: BindingCommit = { session: currentSession, agent: agentOf(currentSession), handle: currentHandle, generation }
     let disposition: PreviousDisposition | undefined
     const decidePrevious = (next: PreviousDisposition): void => {
       if (disposition === undefined || disposition === next) { disposition = next; return }
@@ -159,7 +169,6 @@ export function createChannelBinding(initial: AgentSession, owner: ChannelOwner)
       assertPrepared(candidate, capture)
       pending.delete(candidate)
       currentSession = candidate
-      currentAgent = dshAgentOf(candidate)
       currentHandle = handleOf(candidate)
       generation += 1
       const result = tail(previous, decidePrevious)
@@ -194,11 +203,10 @@ export function createChannelBinding(initial: AgentSession, owner: ChannelOwner)
       handoff = undefined
       throw new Error('dsh-tui: Channel binding handoff is already in progress')
     }
-    const agent = dshAgentOf(next)
     const nextHandle = handleOf(next)
     const token = Symbol('channel-binding-handoff')
     handoff = token
-    const previous: BindingCommit = { session: currentSession, agent: currentAgent, handle: currentHandle, generation }
+    const previous: BindingCommit = { session: currentSession, agent: agentOf(currentSession), handle: currentHandle, generation }
     let disposition: PreviousDisposition | undefined
     const decidePrevious = (nextDisposition: PreviousDisposition): void => {
       if (disposition === undefined || disposition === nextDisposition) { disposition = nextDisposition; return }
@@ -212,11 +220,10 @@ export function createChannelBinding(initial: AgentSession, owner: ChannelOwner)
       if (cleanupFailure !== undefined) throw cleanupFailure
       if (handoff !== token || !owner.current()) throw new Error('dsh-tui: Channel binding changed during adoption')
       currentSession = next
-      currentAgent = agent
       currentHandle = nextHandle
       generation += 1
       const result = tail(previous, decidePrevious)
-      if (handoff !== token || !owner.current() || currentAgent !== agent || currentHandle !== nextHandle) {
+      if (handoff !== token || !owner.current() || currentSession !== next || currentHandle !== nextHandle) {
         throw new Error('dsh-tui: Channel binding changed during adoption')
       }
       succeeded = true
@@ -234,12 +241,13 @@ export function createChannelBinding(initial: AgentSession, owner: ChannelOwner)
 
   return {
     get session() { return currentSession },
-    /** DSH convenience: `capabilities.native.dsh.agent` of the bound session. */
-    get agent() { return currentAgent },
+    /** DSH convenience: `capabilities.native.dsh.agent` of the bound session;
+     *  undefined when the bound session is not a DSH session. */
+    get agent(): Agent | undefined { return agentOf(currentSession) },
     /** DSH convenience: the bound session's lifetime handle, if it owns one. */
     get handle() { return currentHandle },
     get generation() { return generation },
-    capture(): BindingCapture { return { session: currentSession, agent: currentAgent, generation } },
+    capture(): BindingCapture { return { session: currentSession, agent: agentOf(currentSession), generation } },
     isCurrent(capture: BindingCapture) { return isCaptureCurrent(capture) },
 
     /**
@@ -308,3 +316,61 @@ export function createChannelBinding(initial: AgentSession, owner: ChannelOwner)
 }
 
 export type ChannelBinding = ReturnType<typeof createChannelBinding>
+
+/** A capture taken through the DSH view: its agent is always present. */
+export interface DshBindingCapture extends BindingCapture {
+  readonly agent: Agent
+}
+
+/**
+ * The binding as the DSH specialists see it: `agent` (and every capture's
+ * agent) is the bound DSH agent. The specialists attach only when the bound
+ * session is a DSH session (design §3.5), so reading `agent` through this
+ * view on a non-DSH binding is a wiring bug and throws loudly instead of
+ * handing a specialist `undefined`.
+ */
+/** A commit seen through the DSH view: the replaced session's agent. */
+export interface DshBindingCommit extends BindingCommit {
+  readonly agent: Agent
+}
+
+type Disposition = (next: PreviousDisposition) => void
+
+export type DshChannelBinding = Omit<ChannelBinding, 'agent' | 'capture' | 'adopt' | 'switchTo'> & {
+  readonly agent: Agent
+  capture(): DshBindingCapture
+  adopt<T>(candidate: AgentSession, capture: BindingCapture, tail: (previous: DshBindingCommit, disposition: Disposition) => T): T
+  switchTo<T>(next: AgentSession, tail: (previous: DshBindingCommit, disposition: Disposition) => T): T
+}
+
+/** Wrap a binding for the DSH specialists (a live view, not a snapshot). */
+export function dshChannelBinding(binding: ChannelBinding): DshChannelBinding {
+  const require = (agent: Agent | undefined): Agent => {
+    if (agent === undefined) {
+      const ref = binding.session.ref
+      throw new Error(`dsh-tui: session ${ref.backendId}:${ref.sessionId} is not a DSH session`)
+    }
+    return agent
+  }
+  return {
+    get session() { return binding.session },
+    get agent() { return require(binding.agent) },
+    get handle() { return binding.handle },
+    get generation() { return binding.generation },
+    capture(): DshBindingCapture {
+      const capture = binding.capture()
+      return { ...capture, agent: require(capture.agent) }
+    },
+    isCurrent: capture => binding.isCurrent(capture),
+    prepare: (capture, create) => binding.prepare(capture, create),
+    abandon: candidate => binding.abandon(candidate),
+    waitForDisposal: sessionId => binding.waitForDisposal(sessionId),
+    adopt: (candidate, capture, tail) => binding.adopt(candidate, capture, (previous, disposition) =>
+      tail({ ...previous, agent: require(previous.agent) }, disposition)),
+    switchTo: (next, tail) => binding.switchTo(next, (previous, disposition) =>
+      tail({ ...previous, agent: require(previous.agent) }, disposition)),
+    bind: () => binding.bind(),
+    subscribe: dispose => binding.subscribe(dispose),
+    clearSubscriptions: afterEach => binding.clearSubscriptions(afterEach),
+  }
+}

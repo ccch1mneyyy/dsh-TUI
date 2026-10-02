@@ -1424,6 +1424,7 @@ export function MessageList({
               selectionAttached={row.selectionAttached}
               streaming={displayStreaming}
               durationMs={row.durationMs}
+              reasoningTokens={row.reasoningTokens}
               time={row.time}
               marginTopOnTurn={marginTopOnTurn}
               isSelected={selectedId === row.id}
@@ -1498,6 +1499,8 @@ type MemoRowProps = {
   sessionCwd: string | undefined
   streaming: boolean
   durationMs: number | undefined
+  /** Estimated thinking tokens of a count-only reasoning row. */
+  reasoningTokens: number | undefined
   time: number | undefined
   marginTopOnTurn: boolean
   isSelected: boolean
@@ -1585,6 +1588,7 @@ function TranscriptRow({
   sessionCwd,
   streaming,
   durationMs,
+  reasoningTokens,
   time,
   marginTopOnTurn,
   isSelected,
@@ -1776,6 +1780,7 @@ function TranscriptRow({
             // expandedRows/Ctrl+O; a live row is always preview or full.
             verbose={isExpanded || expanded || (streaming && !streamPreview)}
             durationMs={durationMs}
+            reasoningTokens={reasoningTokens}
             isSelected={isSelected}
             onClick={streaming ? streamViewOnClick : foldOnClick}
           />

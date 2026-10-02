@@ -1,4 +1,8 @@
 import type { AgentHandle } from '@deepseek-ai/dsh-agent'
+import type { AgentSession } from '../../agent/session.js'
+
+/** The DSH backend's user-facing name (capability snapshot default). */
+export const DSH_BACKEND_LABEL = 'DSH'
 import type { SessionModeSpec } from '../../sessionModes.js'
 import { normalizeJobGroupFold, normalizePageMargin, normalizeScrollGutter, normalizeStatusBar, normalizeToolBackground, type JobGroupFoldMode, type PageMarginSetting, type ScrollGutterMode, type StatusBarConfig, type ToolBackground } from '../../tuiDisplayPrefs.js'
 import { normalizeActivityPreset } from '../../components/activityFrames.js'
@@ -53,6 +57,15 @@ export interface ChannelLaunchOptions {
   configuredActivityFrames?: string
   agentPreset?: string
   modes?: readonly SessionModeSpec[]
+  /** User-facing name of the backend serving the session (capability
+   *  snapshot, `cmd-unavailable-backend`); absent → the DSH label. */
+  backendLabel?: string
+  /**
+   * Open a fresh session of the bound session's own backend (`/new` on a
+   * non-DSH session). Absent → `/new` is unavailable there. DSH sessions
+   * keep their own resume/new orchestration and ignore it.
+   */
+  openSession?: (target: { readonly kind: 'create'; readonly cwd: string }) => Promise<AgentSession>
   /** Lifetime handle of the agent when `createChannel` receives a raw DSH
    *  agent (direct embedders, fixtures); a passed `AgentSession` carries its
    *  own and this is ignored. */

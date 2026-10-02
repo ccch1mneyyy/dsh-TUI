@@ -1,5 +1,5 @@
 /** Host-owned in-process Channel contract. No runtime or upstream imports. */
-import type { ChatRow, AgentStatus, TokenUsage, SessionCostByModel, SubagentCostEntry, NotificationItem, ChannelGoal, TodoPanelItem, LoadedContext, PendingMessage, ChannelSceneMetadata, SubagentState, SubagentControl, BackgroundJobState, JobControl, StagedImageInput, StagedImageHandle, ComposerImageRef, ComposerSubmission, ExternalCommandOutcome, TranscriptImage, ResumeResult, EffortOption, PermissionPresetSnapshot, PresetOption, LlmModelInfo, LlmProviderInfo, SkillInfo, CredentialStatus, AgentViewRow, AgentViewDispatchResult, BackgroundResult, RawTrajEvent, ChannelSelection, CompactionStatus } from './channel-view.js'
+import type { ChatRow, AgentStatus, TokenUsage, SessionCostByModel, SubagentCostEntry, NotificationItem, ChannelGoal, TodoPanelItem, LoadedContext, PendingMessage, ChannelSceneMetadata, SubagentState, SubagentControl, BackgroundJobState, JobControl, StagedImageInput, StagedImageHandle, ComposerImageRef, ComposerSubmission, ExternalCommandOutcome, TranscriptImage, ResumeResult, EffortOption, PermissionPresetSnapshot, PresetOption, LlmModelInfo, LlmProviderInfo, SkillInfo, CredentialStatus, AgentViewRow, AgentViewDispatchResult, BackgroundResult, RawTrajEvent, ChannelSelection, CompactionStatus, ChannelCapabilities, ChannelCostReport, ChannelSessionRef } from './channel-view.js'
 import type { SpinnerMode, ToolBackground, ScrollGutterMode, PageMarginSetting, StatusBarConfig, SessionModeSpec, SplashFontSetting, JobGroupFoldMode } from './channel-display.js'
 import type { LocalCommand, CommandCompletion, BalanceResult, FileCandidate, RecapOutcome } from './channel-catalog.js'
 import type { TuiRewindMode, SessionTreeData, SessionSummary, PreviewEntry, ForeignSource, ForeignSessionRow, ForeignImportOutcome } from './channel-session.js'
@@ -36,6 +36,17 @@ export interface ChannelUi {
   readonly sessionId: string
   /** TUI-owned generation that changes on every live Agent rebind. */
   readonly agentBindingGeneration: number
+  /** Cross-backend identity of the bound session (`backendId` + the
+   *  backend's own session id); follows every rebind. */
+  readonly sessionRef: ChannelSessionRef
+  /** What the bound backend session supports, as plain data: the UI hides
+   *  commands and affordances whose capability is absent instead of letting
+   *  them fail. A DSH session supports everything the TUI offers. */
+  readonly capabilities: ChannelCapabilities
+  /** The session cost the backend itself reported (Claude
+   *  `total_cost_usd`), or undefined when the backend reports none — the
+   *  status line then falls back to its local estimate. */
+  readonly costReport: ChannelCostReport | undefined
   /** `dsh-tui.recapOnOpen` (default on): auto-summarize the session tail
    *  into the dim AutoRecapRow when the session opens/resumes. Read live
    *  (settings service), so a `/settings` change applies on the next

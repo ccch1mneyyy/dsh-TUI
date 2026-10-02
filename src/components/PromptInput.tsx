@@ -31,7 +31,7 @@ import type {
   StagedImageHandle,
 } from '../dsh-adapter/channel.js'
 import type { TranscriptImage } from '../dsh-adapter/transcript-images.js'
-import { isHiddenCommandName, parseCommandName } from '../commands.js'
+import { isHiddenCommandName, isUnavailableLocalCommand, parseCommandName } from '../commands.js'
 import { appendHistory, HISTORY_LIMIT, loadHistoryOldestFirst } from '../history.js'
 import { mentionAtCaret } from '../utils/mentions.js'
 import { preserveSelection, type FileCandidate } from '../utils/fileSuggestions.js'
@@ -1538,6 +1538,18 @@ export function PromptInput({
     const parsed = parseCommandName(text)
     if (parsed === undefined) return false
     const command = channel.commandList.find(entry => entry.name === parsed.name)
+    // A built-in the bound backend does not serve is hidden from the menu and
+    // Tab, and a typed one must neither run nor reach the model as text. A
+    // partial embedder channel carries no snapshot: everything is served.
+    // oxlint-disable-next-line typescript/no-unnecessary-condition -- partial embedder channels omit the snapshot
+    const capabilities = channel.capabilities as Channel['capabilities'] | undefined
+    if (command === undefined && isUnavailableLocalCommand(parsed.name, capabilities)) {
+      channel.notify(t('cmd-unavailable-backend', { cmd: parsed.name, backend: capabilities?.backendLabel ?? '' }), {
+        color: 'warning',
+        timeoutMs: 4000,
+      })
+      return true
+    }
     const known = command !== undefined || isHiddenCommandName(parsed.name)
     if (!known) return false
     const generation = syncImageGeneration()
@@ -1652,6 +1664,9 @@ export function PromptInput({
         ((parsed.name === 'btw' || parsed.name === 'skills')
           && channel.commandList.some(c => c.name === parsed.name))
         || isHiddenCommandName(parsed.name)
+        // A built-in the backend lacks is refused here too, never steered in.
+        // oxlint-disable-next-line typescript/no-unnecessary-condition -- partial embedder channels omit the snapshot
+        || isUnavailableLocalCommand(parsed.name, channel.capabilities as Channel['capabilities'] | undefined)
       )) {
         if (tryRunCommand(value)) return
       }

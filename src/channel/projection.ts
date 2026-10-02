@@ -33,6 +33,7 @@ export interface ProjectionState extends Mutable<Pick<ChannelUi,
   | 'thinkingFold' | 'activeToolCount' | 'spinnerMode' | 'goal' | 'contextSegments' | 'tokens' | 'mainCost'
   | 'model' | 'lastUsage' | 'lastUserText' | 'responseChars' | 'tps' | 'cancelPending' | 'working'
   | 'compaction' | 'turnStart' | 'contextWindow' | 'reasoningEffort' | 'sessionTitle' | 'agentPreset' | 'sessionColor'
+  | 'costReport'
 >> {
   rows: ChatRow[]
   tpsSamples: { tps: number; at: number }[]
@@ -410,6 +411,15 @@ export function createChannelProjection(state: ProjectionState, deps: ChannelPro
         const row = ensureReasoning(seq, turn, step)
         appendTextDelta(row, delta.text, seq !== undefined)
       }
+    } else if (delta.kind === 'reasoning-tokens') {
+      // Thinking reported only as an estimated token count (design §4.5 (b)):
+      // the reasoning row opens with no text and shows the live count; text
+      // that arrives later still wins in the view.
+      const row = ensureReasoning(seq, turn, step)
+      if (row.reasoningTokens !== delta.estimated) {
+        row.reasoningTokens = delta.estimated
+        touchRow(row)
+      }
     }
     const tps = tpsStep
     if (
@@ -445,7 +455,9 @@ export function createChannelProjection(state: ProjectionState, deps: ChannelPro
       ? lastReasoningRow.row : reasoning
     if (settledReasoning !== undefined) {
       if (reasoningText === '') {
-        if (canonical) removeRow(settledReasoning)
+        // A count-only thinking row (no text was ever recorded) settles as
+        // its one-line summary instead of vanishing with the empty block.
+        if (canonical && settledReasoning.reasoningTokens === undefined) removeRow(settledReasoning)
       } else {
         settledReasoning.text = reasoningText
         settledReasoning.seq ??= event.seq
@@ -767,6 +779,9 @@ export function createChannelProjection(state: ProjectionState, deps: ChannelPro
     callId === undefined || callId === settledCardCallId
 
   const applyTurnEnd = (event: AgentEventOf<'turn.end'>): void => {
+    // A backend-reported session cost (cumulative, e.g. Claude
+    // `total_cost_usd`) replaces the previous report; DSH reports none.
+    if (event.cost !== undefined) state.costReport = event.cost
     if (activeAttempt !== undefined) discardAttempt(activeAttempt.turn, activeAttempt.step)
     openStep = undefined
     deps.inputConvergence.cancelInFlight = false
@@ -947,6 +962,15 @@ export function createChannelProjection(state: ProjectionState, deps: ChannelPro
         // Backend-advertised context capacity; drives the context-low warning.
         state.contextWindow = event.contextWindow
         return
+      case 'session.ready':
+        // The backend's own account of the session it opened: the model it
+        // actually runs (status line) and its context window when known.
+        if (event.model !== '') state.model = event.model
+        if (event.contextWindow !== undefined) state.contextWindow = event.contextWindow
+        return
+      case 'model.changed':
+        if (event.model !== '') state.model = event.model
+        return
       case 'system.prompt':
         // The latest system prompt holds the active instructions (an empty
         // render clears them); the context bar's system segment tracks it.
@@ -1045,11 +1069,26 @@ export function createChannelProjection(state: ProjectionState, deps: ChannelPro
         }
         return
       }
+      case 'notice': {
+        // A backend notice: `info` is a transcript fact (a dim notice row);
+        // `notice` is a passing toast; `warning`/`error` are both — the row
+        // keeps the explanation next to the work it concerns, the toast makes
+        // sure it is seen. Replay repaints rows only, never toasts.
+        const text = cleanRenderText(event.text, NOTICE_CELLS)
+        if (text === '') return
+        if (event.level !== 'notice') {
+          appendRow({ id: deps.rowIds.value, kind: 'notice', text })
+          deps.rowIds.value += 1
+        }
+        if (!replaying && event.level !== 'info') {
+          deps.notify(text, event.level === 'notice' ? { timeoutMs: 4000 } : { color: event.level, timeoutMs: 8000 })
+        }
+        return
+      }
       // Owned outside the transcript reducer in this phase: session status
       // and pending inputs by the channel binding, subagents/tasks by their
       // specialists, permissions/questions by their stores; the remaining
       // vocabulary has no channel state yet (design §8.3+).
-      case 'session.ready':
       case 'session.reset':
       case 'session.status':
       case 'pending.changed':
@@ -1065,11 +1104,9 @@ export function createChannelProjection(state: ProjectionState, deps: ChannelPro
       case 'task.end':
       case 'tasks.snapshot':
       case 'context.usage':
-      case 'model.changed':
       case 'effort.changed':
       case 'mode.changed':
       case 'commands.changed':
-      case 'notice':
       case 'rate-limit':
         return
       default: {

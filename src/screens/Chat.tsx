@@ -78,7 +78,7 @@ import { BalanceReportRow } from '../components/BalanceReportRow.js'
 import type { BalanceResult } from '../deepseekBalance.js'
 import { estimateSessionCostSnapshotCny } from '../deepseekPricing.js'
 import { LoadedContextPanel } from '../components/LoadedContextPanel.js'
-import { StatusLine } from './StatusLine.js'
+import { formatCostReport, StatusLine } from './StatusLine.js'
 import { WorkingSpinner, useThinkingStatus } from '../components/WorkingSpinner.js'
 import { ActivityLine, contextPressurePct } from '../components/ActivityLine.js'
 import { ModelPicker } from '../components/ModelPicker.js'
@@ -2463,6 +2463,16 @@ export function Chat({
           const total = usage.input + usage.cacheRead + usage.cacheWrite
           const rate = total > 0 ? ((usage.cacheRead / total) * 100).toFixed(1) : '0.0'
           lines.push(t('cost-cache-hit-rate', { rate, read: formatTokens(usage.cacheRead), write: formatTokens(usage.cacheWrite) }))
+        }
+        // A backend that reports its own session cost (Claude) states the
+        // bill itself; the DeepSeek estimate below would only be noise.
+        // oxlint-disable-next-line typescript/no-unnecessary-condition -- partial embedder channels omit the report
+        const report = channel.costReport
+        if (report !== undefined) {
+          lines.push(`${formatCostReport(report)} · ${t(report.source === 'backend' ? 'cost-source-backend' : 'status-cost-note')}`)
+          setHelpOpen(false)
+          channel.pushLocal('/cost', lines)
+          return true
         }
         // 金额与拆解：主会话按模型分桶 + 子代理按各自 (provider, model) 分桶；
         // 全部未计价时只报 token 并标注未计价，不显示 ¥0.00 金额行（DESIGN D4/D6）。

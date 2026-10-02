@@ -14,6 +14,15 @@ import { formatJobDuration, type BackgroundJobState } from '../dsh-adapter/jobs.
 const NO_BACKGROUND_JOBS: readonly BackgroundJobState[] = []
 import type { ChannelUi as Channel } from '../adapter/channel/ui-policy.js'
 /** 同上：partial channel 字面量可能早于 mainCost/subagentCost 字段（R4 兼容）。 */
+/** A reported session cost: `$0.0123` for USD (sub-dollar keeps 4 places,
+ *  a session often costs cents), `12.34 EUR` for any other currency. */
+export function formatCostReport(report: { readonly currency: string; readonly amount: number }): string {
+  const digits = report.amount < 1 ? 4 : 2
+  return report.currency === 'USD'
+    ? `$${report.amount.toFixed(digits)}`
+    : `${report.amount.toFixed(digits)} ${report.currency}`
+}
+
 const NO_MAIN_COST: Channel['mainCost'] = {}
 const NO_SUBAGENT_COST: Channel['subagentCost'] = []
 import type { SelectionSnapshot } from '../dsh-adapter/ide-channel.js'
@@ -371,7 +380,20 @@ const selectionBadge = formatSelectionBadge(channel.selection)
     // work no longer silently undercounts. The trailing 峰/谷 marker shows
     // the current billing window; the total>0 shape is unchanged. Hover shows
     // the breakdown.
-    ...(statusBar.cost && isDeepSeekOfficialProvider(channel.provider)
+    // A backend that reports its own session cost (Claude `total_cost_usd`)
+    // wins over the local DeepSeek estimate: the reported figure is the bill.
+    ...(statusBar.cost && channel.costReport !== undefined
+      ? [{
+          key: 'cost',
+          id: 'cost' as const,
+          node: (
+            <Text color="inactiveShimmer">
+              {channel.costReport.source === 'estimate' ? t('status-cost-label') : ''}{formatCostReport(channel.costReport)}
+            </Text>
+          ),
+        }]
+      : []),
+    ...(statusBar.cost && channel.costReport === undefined && isDeepSeekOfficialProvider(channel.provider)
       ? (() => {
         const estimate = estimateSessionCostSnapshotCny({
           provider: channel.provider,
@@ -712,6 +734,17 @@ function buildHoverDetail(
       )
     }
     case 'cost': {
+      const report = channel.costReport
+      if (report !== undefined) {
+        const { input, output, cacheRead } = channel.tokens
+        return (
+          <Text wrap="truncate">
+            {formatCostReport(report)} · {dim('in ')}{formatTokens(input)}
+            {' · '}{dim('out ')}{formatTokens(output)} · {dim('cache ')}{formatTokens(cacheRead)}
+            {' · '}{t(report.source === 'backend' ? 'cost-source-backend' : 'status-cost-note')}
+          </Text>
+        )
+      }
       const estimate = estimateSessionCostSnapshotCny({
         provider: channel.provider,
         main: channel.mainCost ?? NO_MAIN_COST,

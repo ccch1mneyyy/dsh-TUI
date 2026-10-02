@@ -1,3 +1,4 @@
+import type { DshBindingCapture, DshChannelBinding } from './binding.js'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import { createUserMessage, type Message } from '@deepseek-ai/dsh-llm'
 import type { Context } from '@deepseek-ai/cordis'
@@ -24,12 +25,8 @@ declare module '@deepseek-ai/dsh-llm' {
 
 const PREVIEW_ENTRIES = 8
 
-type Capture = { readonly agent: Agent; readonly generation: number }
-type Binding = {
-  readonly agent: Agent
-  capture(): Capture
-  isCurrent(capture: Capture): boolean
-}
+type Capture = DshBindingCapture
+type Binding = Pick<DshChannelBinding, 'agent' | 'capture' | 'isCurrent'>
 
 /** Session-scoped metadata, persistence queries, and tool-less LLM reads. */
 export function createSessionMetadataActions(ctx: Context, deps: {

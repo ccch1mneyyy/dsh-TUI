@@ -173,6 +173,11 @@ const dict = {
   'input-images-staged': { zh: '已附加 {{count}} 张图片', en: { one: 'Attached {{count}} image', other: 'Attached {{count}} images' } },
   'input-images-staged-adapted': { zh: '已附加 {{count}} 张图片 · {{adapted}} 张已适配', en: { one: 'Attached {{count}} image · {{adapted}} adapted', other: 'Attached {{count}} images · {{adapted}} adapted' } },
   'send-failed': { zh: '发送失败 · {{err}}', en: 'Send failed · {{err}}' },
+  // ── backends: capability-gated actions and commands ─────────────────
+  'session-cleared': { zh: '会话已清屏', en: 'Session cleared' },
+  'cost-source-backend': { zh: '后端上报的会话费用', en: 'session cost reported by the backend' },
+  'capability-unavailable': { zh: '当前后端不支持：{{name}}', en: 'Not supported by this backend: {{name}}' },
+  'cmd-unavailable-backend': { zh: '/{{cmd}} 在 {{backend}} 后端下不可用', en: '/{{cmd}} is not available with the {{backend}} backend' },
   'export-user-section': { zh: '## 用户', en: '## User' },
   'export-thinking-section': { zh: '## 思考', en: '## Thinking' },
   'export-assistant-section': { zh: '## 助手', en: '## Assistant' },
@@ -192,6 +197,7 @@ const dict = {
   'doctor-context-window': { zh: '上下文窗口: {{window}} tokens', en: 'Context window: {{window}} tokens' },
   'doctor-unknown': { zh: '未知', en: 'unknown' },
   'doctor-session': { zh: '会话: {{id}}', en: 'Session: {{id}}' },
+  'doctor-backend': { zh: '后端: {{label}} ({{id}})', en: 'Backend: {{label}} ({{id}})' },
   'doctor-config': { zh: '配置: {{candidate}} {{state}}', en: 'Config: {{candidate}} {{state}}' },
   'doctor-config-missing': { zh: '（不存在）', en: '(missing)' },
   'doctor-storage': { zh: '会话存储: {{dir}} {{state}}', en: 'Session storage: {{dir}} {{state}}' },
@@ -1128,6 +1134,9 @@ const dict = {
   'thinking-disabled': { zh: '隐藏', en: 'Hidden' },
   'thinking-disabled-desc': { zh: '隐藏思考过程；模型仍会照常思考', en: 'Hide reasoning; the model will still think as usual' },
   'thinking-label': { zh: '思考', en: 'Thinking' },
+  // Thinking reported only as an estimated token count (no thinking text).
+  'thinking-tokens-live': { zh: '思考中 · ~{{n}} tokens', en: 'Thinking · ~{{n}} tokens' },
+  'thinking-tokens-done': { zh: '已思考 · ~{{n}} tokens', en: 'Thought · ~{{n}} tokens' },
 
   // ── components/HistorySearchDialog.tsx ──────────────────────────────
   'history-search-title': { zh: '搜索历史', en: 'Search history' },

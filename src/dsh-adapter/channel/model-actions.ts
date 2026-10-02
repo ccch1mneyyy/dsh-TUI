@@ -7,11 +7,11 @@ import { snapshotLiveSessionEvents } from '../compat/liveSession.js'
 import { getLang, t, tOr, type Lang } from '../../i18n.js'
 import { migratePresetPref, writePresetPref } from '../../presetPrefs.js'
 import { presetDisplayId, resolveCompatiblePreset, rosterOf, type AgentPresetInfo } from '../preset-resolution.js'
-import type { createChannelBinding } from './binding.js'
+import type { DshChannelBinding } from './binding.js'
 import type { ChannelOwner } from './owner.js'
 import type { ChannelState, EffortOption, PresetOption } from './types.js'
 
-type Binding = ReturnType<typeof createChannelBinding>
+type Binding = DshChannelBinding
 
 /**
  * Route metadata, effort preference and preset/model catalog actions.

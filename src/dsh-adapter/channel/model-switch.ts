@@ -11,13 +11,13 @@ import { liveSessionCreateOptions, sliceLiveSessionSeed } from '../compat/index.
 import { composePreset, runningPresetOf } from '../presets.js'
 import { reserveNewSession } from '../../sessionMounts.js'
 import { attachSessionToWorkspace } from '../workspace.js'
-import type { createChannelBinding } from './binding.js'
+import type { DshChannelBinding } from './binding.js'
 import type { ChannelOwner } from './owner.js'
 import { resetSessionProjection } from './session-reset.js'
 import { childRecordsLineage } from './session-lineage.js'
 import type { ChannelState } from './types.js'
 
-type Binding = ReturnType<typeof createChannelBinding>
+type Binding = DshChannelBinding
 type SwitchState = Parameters<typeof resetSessionProjection>[0] & Pick<ChannelState,
   'cwd' | 'working' | 'status' | 'agentId' | 'sessionId' | 'agentPreset' | 'provider' | 'model' | 'contextWindow' | 'effortLevels' | 'reasoningEffort' | 'emit'>
 

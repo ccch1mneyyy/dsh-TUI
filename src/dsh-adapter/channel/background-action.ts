@@ -13,11 +13,11 @@ import { composePreset } from '../presets.js'
 import { createDshSession, dshHandleOf } from '../backend/session.js'
 import { attachSessionToWorkspace } from '../workspace.js'
 import { resetSessionProjection } from './session-reset.js'
-import type { createChannelBinding } from './binding.js'
+import type { DshChannelBinding } from './binding.js'
 import type { ChannelOwner } from './owner.js'
 import type { BackgroundResult, ChannelState } from './types.js'
 
-type Binding = ReturnType<typeof createChannelBinding>
+type Binding = DshChannelBinding
 
 /** `/bg` foreground handoff. The binding remains the sole identity writer;
  * this action only parks the exact previous handle passed by its transaction. */

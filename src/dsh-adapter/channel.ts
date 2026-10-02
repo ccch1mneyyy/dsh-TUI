@@ -1,16 +1,18 @@
 import { createSessionTreeReader } from './channel/session-tree.js'
 import { createInputDelivery } from './channel/input-delivery.js'
-import { createChannelBinding } from './channel/binding.js'
+import { createChannelBinding, dshChannelBinding } from './channel/binding.js'
 import { createCommandCompletions } from './channel/command-completions.js'
 import { createLocalActions } from './channel/local-actions.js'
 import { createDetachedHandleFactory } from './channel/lifetime-resources.js'
 import { createContextBookkeeping } from './channel/context-bookkeeping.js'
 import { createChannelActionMethods, createChannelActionReadiness, type ChannelActionDelegates } from './channel/action-readiness.js'
 import { createBindingEvents } from './channel/binding-events.js'
-import { createInitialChannelView, type ChannelLaunchOptions } from './channel/state.js'
+import { createInitialChannelView, DSH_BACKEND_LABEL, type ChannelLaunchOptions } from './channel/state.js'
 import { createChannelProjection } from '../channel/projection.js'
+import { channelCapabilities } from '../channel/capabilities.js'
 import type { AgentSession } from '../agent/session.js'
 import { createDshSession, isAgentSession } from './backend/session.js'
+import { createSessionChannelWithOwner } from './channel/session-channel.js'
 import { dshPricingWindow } from './backend/translate.js'
 import { createManualCompaction } from './channel/compaction.js'
 import { createSessionAdoption } from './channel/session-adoption.js'
@@ -151,6 +153,11 @@ export function createChannel(
   const owner = createChannelOwner()
   try {
     const initialSession = isAgentSession(initial) ? initial : createDshSession(ctx, { agent: initial, handle: options.handle })
+    // DSH specialists attach only to a DSH session (design §3.5); any other
+    // backend gets the backend-neutral composition.
+    if (initialSession.capabilities.native.dsh === undefined) {
+      return createSessionChannelWithOwner(ctx, initialSession, options, owner)
+    }
     return createChannelWithOwner(ctx, initialSession, options, owner)
   } catch (error) {
     // Setup is one transaction from the first acquired resource. Preserve the
@@ -167,7 +174,9 @@ function createChannelWithOwner(
   owner: ReturnType<typeof createChannelOwner>,
 ): ChannelState {
   const rowIds = { value: 0 }
-  const binding = createChannelBinding(initialSession, owner)
+  // The DSH specialists below read the binding through its DSH view (the
+  // bound session is a DSH session for this whole composition).
+  const binding = dshChannelBinding(createChannelBinding(initialSession, owner))
   /** The bound session's DSH escape hatch: this composition root still wires
    *  DSH specialists unconditionally (Phase 1 hosts DSH sessions only). */
   const dshNative = () => {
@@ -523,6 +532,18 @@ function createChannelWithOwner(
       return state.minimalUi
     },
     commandList: LOCAL_COMMANDS,
+    // A DSH session supports everything the TUI offers (design §3.5).
+    capabilities: channelCapabilities({
+      backendId: initialSession.ref.backendId,
+      backendLabel: options.backendLabel ?? DSH_BACKEND_LABEL,
+      capabilities: initialSession.capabilities,
+      dsh: true,
+    }),
+    get sessionRef() {
+      const ref = binding.session.ref
+      return { backendId: ref.backendId, sessionId: ref.sessionId }
+    },
+    costReport: undefined,
     ...actionMethods,
     subagentControl,
     jobControl,

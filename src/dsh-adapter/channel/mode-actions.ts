@@ -6,9 +6,9 @@ import { modeDisplayName, type SessionModeSpec } from '../../sessionModes.js'
 import { assertShadowPolicy, type AdapterRuntimeOptions } from '../../adapter/kernel/runtime.js'
 import type { ChannelState } from './types.js'
 import { snapshotLiveSessionEvents } from '../compat/liveSession.js'
-import type { createChannelBinding } from './binding.js'
+import type { DshChannelBinding } from './binding.js'
 
-type Binding = ReturnType<typeof createChannelBinding>
+type Binding = DshChannelBinding
 type ModeState = Pick<ChannelState, 'mode' | 'modeIndex' | 'emit'>
 
 /**

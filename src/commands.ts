@@ -105,6 +105,64 @@ export const LOCAL_COMMANDS: LocalCommand[] = [
 ]
 
 /**
+ * What a built-in command needs from the bound backend session: `any` works
+ * on every backend (UI-only, or served by the channel's backend-neutral
+ * core); a capability name needs that session capability; `dsh` needs the
+ * DSH-only specialists (design §3.5, §5.3). Commands not listed here default
+ * to `dsh`, so a new built-in never silently appears on a backend that
+ * cannot serve it.
+ */
+export type LocalCommandRequirement =
+  | 'any' | 'dsh' | 'models' | 'effort' | 'compact' | 'rewind' | 'fork' | 'resume'
+  | 'subagents' | 'tasks' | 'mcp'
+
+const LOCAL_COMMAND_REQUIREMENTS: ReadonlyMap<string, LocalCommandRequirement> = new Map<string, LocalCommandRequirement>([
+  ['new', 'any'], ['clear', 'any'], ['status', 'any'], ['cost', 'any'], ['tokens', 'any'],
+  ['settings', 'any'], ['star', 'any'], ['doctor', 'any'], ['help', 'any'], ['tips', 'any'],
+  ['exit', 'any'], ['quit', 'any'], ['q', 'any'], ['theme', 'any'], ['lang', 'any'],
+  ['activity', 'any'], ['thinking', 'any'], ['vim', 'any'], ['terminal-setup', 'any'],
+  ['connect', 'any'], ['update', 'any'],
+  ['compact', 'compact'], ['resume', 'resume'], ['rewind', 'rewind'], ['fork', 'fork'],
+  ['model', 'models'], ['effort', 'effort'], ['agents', 'subagents'], ['jobs', 'tasks'], ['mcp', 'mcp'],
+])
+
+/** The requirement of one built-in command name (unlisted → `dsh`). */
+export function localCommandRequirement(name: string): LocalCommandRequirement {
+  return LOCAL_COMMAND_REQUIREMENTS.get(name) ?? 'dsh'
+}
+
+/**
+ * Names of the built-in commands a backend supports, in catalog order. A DSH
+ * session supports every built-in (today's list, unchanged); any other
+ * session supports the `any` commands plus those whose capability it has.
+ */
+export function supportedLocalCommandNames(
+  backend: { readonly dsh: boolean; readonly has: (capability: Exclude<LocalCommandRequirement, 'any' | 'dsh'>) => boolean },
+): readonly string[] {
+  return LOCAL_COMMANDS.filter(command => {
+    if (backend.dsh) return true
+    const requirement = localCommandRequirement(command.name)
+    if (requirement === 'any') return true
+    if (requirement === 'dsh') return false
+    return backend.has(requirement)
+  }).map(command => command.name)
+}
+
+/**
+ * Whether a typed name is a built-in command the bound backend lacks. Such a
+ * line must neither run nor reach the model: the caller shows
+ * `cmd-unavailable-backend`. An absent snapshot (a partial embedder channel)
+ * means everything is supported.
+ */
+export function isUnavailableLocalCommand(
+  name: string,
+  capabilities: { readonly commands: readonly string[] } | undefined,
+): boolean {
+  if (capabilities === undefined) return false
+  return LOCAL_COMMANDS.some(command => command.name === name) && !capabilities.commands.includes(name)
+}
+
+/**
  * Hidden slash commands: intentionally not exposed in the `/` suggestion
  * menu or Help, but still recognized as local commands when typed. They are
  * kept out of `LOCAL_COMMANDS` so `filterCommands`/`completeCommands` never
