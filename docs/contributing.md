@@ -83,6 +83,9 @@ draft、只跑一次 CI 就关，`pr-gate` 与 `issue-link` 都按机器人放�
 - `src/index.ts`：公共 Cordis 插件入口、配置 Schema，与对运行时插件的惰性移交。
 - `src/dsh-adapter/plugin.ts`：TTY 校验、服务注册、Agent 创建/恢复、React 树挂载，以及
   终端/进程的收尾清理。
+- `src/dsh-adapter/oauth/`：pi-ai 订阅 OAuth 的 provider 路由、`/auth` 命令、
+  凭据存储与 user-questions 桥接；DeepSeek 账号授权委派给宿主服务，
+  经 `src/oauth.ts` 子入口挂载。
 - `src/dsh-adapter/questions-answerer.ts` 与 `preset-resolution.ts`：
   隔离 user-questions / agent-preset 的上游预发布兼容分派，避免把版本分支
   散进 bootstrap 与 channel 动作面。
@@ -161,7 +164,7 @@ Cordis config
   字段是 pnpm 版本的唯一真源，CI 与 corepack 都从这里取值。
 - 干净检出安装：先 `git clone --recurse-submodules`（或在已有检出里
   `git submodule update --init --recursive`），再 `pnpm install --frozen-lockfile`。
-  `vendor/dsh-std` 与 `dsh-auth` 是 workspace / `link:` 依赖，子模块为空时安装必失败。
+  `vendor/dsh-std` 是 workspace 依赖，子模块为空时安装必失败。
 - `pnpm-lock.yaml` 是唯一锁文件。npm 消费方不读依赖包的 lockfile，
   `package-lock.json` 已移除（见 #173 后续处理）。
 - 有意改依赖时：用 `pnpm add` 更新 `pnpm-lock.yaml`，检查完整 lockfile diff，
@@ -190,6 +193,15 @@ Cordis config
 
 - 该命令先删除整个 `lib/`，再用 `tsc -p tsconfig.json` 把 `src/` 输出到
   `lib/types/`，最后运行适配边界、上游契约与 patch surface 门禁。
+- 编译前的 vendor 构建（`vendor/dsh-std`、`vendor/mathjax-tex-svg`）由
+  `scripts/build-vendor.mjs` 负责：输入（子模块源码、锁文件、构建命令、Node
+  版本）与产物文件逐字节都和上次成功构建一致时跳过，否则照常重建；
+  `node scripts/build-vendor.mjs --force` 强制重建。指纹记在
+  `node_modules/.cache/dsh-tui/vendor-build.json`。
+- `verify:build` 按 CPU 数并行跑全部门禁，每个门禁独立临时 HOME，输出按门禁
+  整块打印；`pnpm verify:build --jobs 1`（或 `DSH_TUI_VERIFY_JOBS=1`）恢复
+  串行、实时输出，便于排查单个门禁。门禁不得依赖其他门禁留下的状态；确实需要
+  独占机器的门禁登记进 `scripts/run-verify-build.mjs` 的 `SERIAL`，并写明原因。
 - `prepare` 生命周期只服务**源码检出场景**的自举编译（vendor 子模块缺失时
   快速失败，见 scripts/prepare-guard.mjs）。
 - Git URL 依赖安装自 vendoring（#308）起三重阻断（workspace 依赖/子模块/
@@ -230,9 +242,14 @@ CI 另按 `.github/workflows/ci.yml` 的 `changes` 路径白名单分流：`AGEN
 `.agents/skills/` 和源码中的注释不在文档豁免内，仍会触发代码门禁。本地无需
 重建不代表 CI 会跳过；提交时保留所需门禁并如实说明本地验证范围。
 
-`verify:build` 也检查源码输入卫生、渲染原语、主题与活动偏好迁移、状态动画、
-表格布局、mermaid 图表、LaTeX 公式和侧问行为。源码卫生检查只拦截已列明的命名与编译产物回归，不替代
+`verify:build` 也检查源码输入卫生、渲染原语、终端尺寸来源（`ink/` 之外只经
+`useTerminalSize()`）、主题与活动偏好迁移、状态动画、表格布局、mermaid 图表、
+LaTeX 公式和侧问行为。源码卫生检查只拦截已列明的命名与编译产物回归，不替代
 来源或许可证审计。
+
+CI 的测试组按 `scripts/ci-group-timings.json` 的实测耗时分片（每条恰好落在
+一片，表只影响均衡）；新增脚本不必改表，需要重新均衡时整组跑一次
+`node scripts/run-ci-group.mjs <组> --record-timings`。
 
 CI 在安装后运行：
 
@@ -273,6 +290,7 @@ CI 回归都要跑。窄改动还要跑最近的聚焦脚本：
 | 提示队列行为 | `node scripts/verify-queue.mjs` |
 | Goal/todo 投影与渲染 | `node scripts/verify-channel-goal-todo.mjs` + `node scripts/verify-goal-todo.mjs` |
 | Compaction 与折叠 transcript 行 | `node scripts/verify-compact.mjs` |
+| 命令能力事实（compaction / plan / 问卷 / 剪枝的路由与 Help + `/` 的不可用标注） | `pnpm verify:agent-capabilities` |
 | 压缩 × 会话切换生命周期（取消先于 fork 快照、persistence 分类提示） | `node --import tsx/esm scripts/verify-compact-switch.tsx` |
 | 主题加载、持久化与运行时插件接缝 | `node --import tsx/esm scripts/verify-themes.mjs`、`node --import tsx/esm scripts/verify-runtime-themes.ts` |
 | 默认推理强度等偏好链（effortPrefs / settings 默认值） | `node --import tsx/esm scripts/verify-effort-default.ts` |
@@ -455,7 +473,7 @@ TypeScript 源的脚本在头部声明 `node --import tsx/esm <script>` 形式�
 | 用户可见的文档化行为 | 中英文 README，外加适用的配置注释/帮助文本 |
 | 贡献入口或 PR 门禁 | `.mergify.yml`、`docs/contributing.md`、`docs/contributing.en.md`、`.github/workflows/pr-gate.yml`、`.github/scripts/pr-intake/`、`.github/APPROVED_CONTRIBUTORS` |
 | 包版本或依赖 | `package.json`、`pnpm-lock.yaml`、适用时的生成/发布产物；不要顺手搅动旧 npm 锁文件 |
-| 上游验证线 bump | `src/dsh-adapter/contract.ts`、`package.json` peer+dev 两组范围、随包内置的 `dsh-auth/package.json` 与 `dsh-auth/pnpm-lock.yaml`、`pnpm-workspace.yaml`、`.github/workflows/ci.yml` alpha-compat 的上游 SHA、`scripts/verify-{alpha-source,patch-surface,web-coexistence,upstream-contract}` 内的版本常量、`patch-surface.snapshot.json`、`ADAPTER.md`、`docs/user-guide.md`；步骤见 [ADAPTER.md](../ADAPTER.md) 升级流程 |
+| 上游验证线 bump | `src/dsh-adapter/contract.ts`、`src/dsh-adapter/oauth/`、`package.json` peer+dev 两组范围、`pnpm-workspace.yaml`、`.github/workflows/ci.yml` alpha-compat 的上游 SHA、`scripts/verify-{alpha-source,patch-surface,web-coexistence,upstream-contract}` 内的版本常量、`patch-surface.snapshot.json`、`ADAPTER.md`、`docs/user-guide.md`；步骤见 [ADAPTER.md](../ADAPTER.md) 升级流程 |
 
 ## Git 与发布安全（Git And Release Safety）
 

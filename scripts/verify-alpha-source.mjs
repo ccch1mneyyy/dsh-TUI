@@ -11,7 +11,7 @@ import { fileURLToPath } from 'node:url'
 import { rcompare, valid } from 'semver'
 import ts from 'typescript'
 
-const EXPECTED_UPSTREAM_VERSION = process.env.DSH_HARNESS_EXPECTED_VERSION ?? '0.2.0-rc.1'
+const EXPECTED_UPSTREAM_VERSION = process.env.DSH_HARNESS_EXPECTED_VERSION ?? '0.2.0-rc.2'
 const tuiRoot = resolve(import.meta.dirname, '..')
 if (!process.env.DSH_HARNESS_SOURCE_ROOT) {
   console.error(`DSH_HARNESS_SOURCE_ROOT is unset: point it at a deepseek-harness checkout of dsh-v${EXPECTED_UPSTREAM_VERSION}`)
@@ -141,7 +141,6 @@ if (process.platform === 'win32' && parse(sourceRoot).root !== typeRoot) {
 }
 const projects = [
   { label: 'dsh-tui', config: join(tuiRoot, 'tsconfig.json') },
-  { label: 'dsh-auth', config: join(tuiRoot, 'dsh-auth/tsconfig.json') },
 ]
 for (const project of projects) {
   const tempRoot = mkdtempSync(join(tmpdir(), `dsh-tui-alpha-tsc-${project.label}-`))

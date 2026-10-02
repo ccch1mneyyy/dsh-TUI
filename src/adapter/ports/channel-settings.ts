@@ -144,7 +144,8 @@ export interface OAuthProviderStatus {
 export interface OAuthLoginResult {
   readonly provider: string
   readonly oauthLabel: string
-  readonly expiresAt: number
+  /** Undefined for Host-owned account grants without a token expiry. */
+  readonly expiresAt: number | undefined
 }
 
 /**

@@ -5,11 +5,13 @@ import { createCommandCompletions } from './channel/command-completions.js'
 import { createLocalActions } from './channel/local-actions.js'
 import { createDetachedHandleFactory } from './channel/lifetime-resources.js'
 import { createContextBookkeeping } from './channel/context-bookkeeping.js'
+import { resolveContextOccupancy } from './context-occupancy.js'
 import { createChannelActionMethods, createChannelActionReadiness, type ChannelActionDelegates } from './channel/action-readiness.js'
 import { createBindingEvents } from './channel/binding-events.js'
 import { createInitialChannelView, type ChannelLaunchOptions } from './channel/state.js'
 import { createChannelProjection } from './channel/projection.js'
 import { createManualCompaction } from './channel/compaction.js'
+import { agentCapabilityEvidence, annotateCommandCapabilities, resolveAgentCapabilities } from './channel/capabilities.js'
 import { createSessionAdoption } from './channel/session-adoption.js'
 import { createRewindPromptAction } from './channel/session-actions.js'
 import { createForkSessionAction } from './channel/session-fork.js'
@@ -34,6 +36,7 @@ import { createSkillCatalog } from './channel/skill-catalog.js'
 import { createBackgroundCurrentAction } from './channel/background-action.js'
 import { createSubagentProjection } from './channel/subagent-projection.js'
 import { createChannelNotifications } from './channel/notifications.js'
+import { createAttachedContextRegistry } from './channel/attached-context.js'
 import { createSelectionAttachments } from './channel/ide-selection.js'
 import { IdeChannel, ideLockDir, type SelectionSnapshot } from './ide-channel.js'
 import type { Context } from '@deepseek-ai/cordis'
@@ -79,7 +82,7 @@ import { createSettingsHosts } from './channel/settings-host.js'
 import { createChannelOwner, registerChannelOwner } from './channel/owner.js'
 import { ARGS_PREVIEW_LIMIT, foldBack, harnessToolResultView, LOCAL_OUTPUT_LIMIT, prepareReplayEvents, preview, RESULT_PREVIEW_LIMIT, toolErrorText } from './channel/transcript.js'
 import type { AgentViewRow, Channel, ChannelGoal, ChannelImageBlock, ChannelState, ChatRow, CredentialStatus, EffortOption, JobControl, LoadedContextEntry, LoadedContextFile, LoadedContextSkill, LoadedContextTool, MentionFs, NotificationItem, PendingMessage, PresetOption, ResumeResult, StagedImageInput, SubagentControl, SubagentRow, TodoPanelItem, ToolCallView, ToolResultView, ToolsRegistryLike } from './channel/types.js'
-import { estimateTokens, isTokenDelta, tokenDeltaChars, usageOutputTokens } from './channel/usage.js'
+import { isTokenDelta, tokenDeltaChars, usageOutputTokens } from './channel/usage.js'
 import { getHostCommandTrees } from './command-trees.js'
 import { installDecisionGuard, markDecisionDispatchTopology } from './decision-guard.js'
 import type {
@@ -220,6 +223,7 @@ function createChannelWithOwner(
   const jobControl = jobProjection.control
   const attachJobs = jobProjection.attach
   const resetJobProjection = jobProjection.reset
+  const reanchorJobProjection = jobProjection.reanchor
 
 
   // The DSH slash-command registry (optional service): /plan, /goal and
@@ -345,10 +349,16 @@ function createChannelWithOwner(
     void ideChannel.rebind(state.cwd).catch(() => {})
   }
   const selectionAttachments = createSelectionAttachments()
+  // "Send to Chat" (side-panel §6.7): staged panel contexts are a session-scoped
+  // projection like the selection above — the registry writes through the live
+  // state (so the shared `session-projection reset` clears them with everything
+  // else) and the submit path takes them off in one step.
+  const contextRegistry = createAttachedContextRegistry(() => state, () => state.emit())
   const composer = createComposerImages(ctx, owner, { generation: () => state.agentBindingGeneration })
   const inputDelivery = createInputDelivery(ctx, owner, binding, () => state,
     (...args) => notify(...args), trackPending, untrackPending, composer,
-    () => currentSelection, (messageId, info) => selectionAttachments.remember(messageId, info))
+    () => currentSelection, (messageId, info) => selectionAttachments.remember(messageId, info),
+    () => contextRegistry.consume())
   const { dispatchUserText, deliverUserText, retireAttachment, withDecisionPending, clearStagedImages } = inputDelivery
   /**
    * The `tui/session-switch` decision event (pi's `session_before_switch`),
@@ -472,6 +482,13 @@ function createChannelWithOwner(
     return actionReadiness.getReadyActions()
   }
   const actionMethods = createChannelActionMethods(getReadyActions)
+  // Capability facts for the bound agent (channel/capabilities.ts). Reads are
+  // service lookups, so both consumers may call it freely: the public
+  // `capabilities()` accessor and the command-list annotation below.
+  const capabilitiesOf = () => resolveAgentCapabilities(agentCapabilityEvidence(ctx, binding.agent))
+  // Official occupancy source (absent in compositions without the token meter):
+  // `read` is a cached lookup, so the accessor on the state below stays cheap.
+  const contextPressure = options.contextPressure
 
   const state: ChannelState = {
     ...createInputActions(() => state, () => binding.agent, owner, inputConvergence,
@@ -509,7 +526,25 @@ function createChannelWithOwner(
     get minimal(): boolean {
       return state.minimalUi
     },
-    commandList: LOCAL_COMMANDS,
+    /**
+     * Context occupancy is DERIVED here, not stored: it combines the cached
+     * host projection value (a map lookup) with this channel's own fallback
+     * sample and capacity. An accessor is what keeps "one source of truth"
+     * true without republishing a derived value from every mutation site that
+     * can move the window or the sample (replay, resume, model switch, reset).
+     */
+    get contextOccupancy() {
+      return resolveContextOccupancy(
+        contextPressure?.read(state.sessionId),
+        state.lastUsage,
+        state.contextWindow,
+      )
+    },
+    // Annotated from the start: Help and `/` completion read `commandList`
+    // before the first skill-catalog refresh publishes a new one, and a command
+    // whose capability is missing must never look usable in that window.
+    commandList: annotateCommandCapabilities(LOCAL_COMMANDS, capabilitiesOf()),
+    capabilities: capabilitiesOf,
     ...actionMethods,
     subagentControl,
     jobControl,
@@ -520,6 +555,11 @@ function createChannelWithOwner(
     discardStagedImage: composer.discardStagedImage,
     stagedImage: composer.stagedImage,
     stagedImageLimits: composer.stagedImageLimits,
+    // "Send to Chat" projection + actions (see `contextRegistry` above; its
+    // methods close over the registry's own state, so they carry no `this`).
+    attachedContexts: [],
+    attachContext: contextRegistry.attach,
+    detachContext: contextRegistry.detach,
     /**
      * The `tui/rewind-prompt` decision event (pi's `session_before_fork`):
      * fired when the rewind picker confirms a message, before any fork
@@ -583,6 +623,18 @@ function createChannelWithOwner(
   // owner already makes teardown and construction failure fail closed.
   registerChannelOwner(state, owner)
 
+  // The projection's change feed is the only thing that can move occupancy
+  // between session events (a compaction rewriting the surface, the prompt
+  // growing before the next request); republish so the footer, the status
+  // commands and the warning read the fresh value immediately. The store is
+  // host-wide, so the emit is unconditional — the accessor already ignores
+  // another session's value.
+  if (contextPressure !== undefined) {
+    owner.own(contextPressure.subscribe(() => {
+      if (owner.current()) state.emit()
+    }))
+  }
+
   // Agent-view is activated after the complete state/action surface exists:
   // no roster callback or persistence continuation can observe an unbound UI.
   agentView = createAgentViewProjection(ctx, {
@@ -619,7 +671,13 @@ function createChannelWithOwner(
     commandService,
     agent: () => binding.agent,
     cwd: () => state.cwd,
-    setCommands(commands) { state.commandList = commands; state.emit() },
+    setCommands(commands) {
+      // Annotate before publishing: Help and `/` completion both read
+      // `commandList`, so a command whose capability is missing says so
+      // instead of looking usable and failing on use.
+      state.commandList = annotateCommandCapabilities(commands, capabilitiesOf())
+      state.emit()
+    },
     commandDescriptions: name => commandTrees?.descriptions(name),
     // Attached-context pass-through (T03 consumes the third parameter in the
     // fallback branch): the skill catalog never loses the FIFO/decision fence.
@@ -801,6 +859,7 @@ function createChannelWithOwner(
     binding,
     state,
     seedActivity: options.seedActivity,
+    seedContextOccupancy: options.seedContextOccupancy,
     inputConvergence,
     selection,
     modelActions,
@@ -811,7 +870,12 @@ function createChannelWithOwner(
     messageObserver,
     retireAttachment,
   })
-  const bindAgent = bindingEvents.bind
+  const rawBindAgent = bindingEvents.bind
+  /** Bind the new agent, then re-anchor the job projection: its event
+   *  subscription is deliberately owner-agnostic, so this is what makes the
+   *  /jobs roster follow a session switch immediately instead of waiting for
+   *  the new session's first job event. */
+  const bindAgent = (): void => { rawBindAgent(); reanchorJobProjection() }
 
   const sessionAdoption = createSessionAdoption(state, {
     binding,
@@ -1119,5 +1183,5 @@ function createChannelWithOwner(
 export type { ChannelLaunchOptions } from './channel/state.js'
 export { expandMentions } from './channel/mentions.js'
 export { sessionCwdMatches } from './channel/paths.js'
-export type { AgentViewDispatchResult, AgentViewRow, AgentViewStatus, BackgroundResult, Channel, ChannelGoal, ChannelState, ChatRow, ComposerImageRef, ComposerSubmission, CredentialStatus, EffortOption, ExternalCommandOutcome, JobControl, JobRow, LoadedContext, LoadedContextEntry, LoadedContextFile, LoadedContextSkill, LoadedContextTool, MentionAttachments, MentionExpansion, MentionFs, NotificationItem, PendingMessage, PermissionPresetAvailability, PermissionPresetCurrent, PermissionPresetOption, PermissionPresetSnapshot, PresetOption, ResumeResult, SkillInfo, StagedImageHandle, StagedImageInput, SubagentControl, SubagentRow, TodoPanelItem, TokenBucket, TokenUsage, ToolCallView, ToolFileDiff, ToolResultView, ToolRow, ToolViewPresenter, TranscriptImage } from './channel/types.js'
+export type { AgentViewDispatchResult, AgentViewRow, AgentViewStatus, BackgroundResult, Channel, ChannelGoal, ChannelState, ChatRow, ComposerImageRef, ComposerSubmission, CredentialStatus, EffortOption, ExternalCommandOutcome, JobControl, JobGroupRow, JobRow, LoadedContext, LoadedContextEntry, LoadedContextFile, LoadedContextSkill, LoadedContextTool, MentionAttachments, MentionExpansion, MentionFs, NotificationItem, PendingMessage, PermissionPresetAvailability, PermissionPresetCurrent, PermissionPresetOption, PermissionPresetSnapshot, PresetOption, ResumeResult, SkillInfo, StagedImageHandle, StagedImageInput, SubagentControl, SubagentRow, TodoPanelItem, TokenBucket, TokenUsage, ToolCallView, ToolFileDiff, ToolResultView, ToolRow, ToolViewPresenter, TranscriptImage } from './channel/types.js'
 export { emptyTokenUsage } from './channel/usage.js'

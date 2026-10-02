@@ -275,6 +275,8 @@ function diskCacheCell(read: () => readonly unknown[] | undefined): CacheCell {
 interface StubChannelConfig {
   readonly registry: readonly unknown[]
   readonly cwd: string
+  /** Simulate a successful host registry removal without touching user data. */
+  readonly removeWorkspace?: (path: string) => boolean
   /** Rows the listing answers with; the shared stub listing by default. */
   readonly sessions?: readonly unknown[]
   /** True when the registry read itself fails (service missing / throwing). */
@@ -401,8 +403,15 @@ function makeChannel(config: StubChannelConfig): StubChannel {
     },
     ...(config.foreign === undefined ? {} : foreignFacade(config.foreign, calls)),
     switchWorkspace: async () => true,
-    resolveWorkspace: async (reference: string) => ({ cwd: reference, uri: reference, label: reference, kind: 'local', badge: 'LOCAL' }),
+    resolveWorkspace: async (reference: string) => {
+      calls.push(`resolveWorkspace:${reference}`)
+      return { cwd: reference, uri: reference, label: reference, kind: 'local', badge: 'LOCAL' }
+    },
     stopBackgroundAgent: async () => true,
+    removeWorkspace: async (path: string) => {
+      calls.push(`removeWorkspace:${path}`)
+      return config.removeWorkspace?.(path) ?? false
+    },
     notify: () => {},
     subscribe: () => () => {},
   } as never
@@ -449,6 +458,8 @@ interface SupervisorScreen {
   lines: () => string[]
   /** One real SGR click on the first occurrence of `needle`. */
   click: (needle: string) => Promise<void>
+  /** One real SGR right click on the first occurrence of `needle`. */
+  rightClick: (needle: string) => Promise<void>
   /**
    * True when `text` was written to the terminal at ANY point, even when a
    * later frame erased it again. `lines()` reads the final composition, so a
@@ -510,6 +521,13 @@ async function mountSupervisor(target: StubChannel): Promise<SupervisorScreen> {
       if (found === null) throw new Error(`text not found: ${needle}`)
       input.write(`\u001b[<0;${found.col + 1};${found.row + 1}M\u001b[<0;${found.col + 1};${found.row + 1}m`)
       await sleep(120) // 固定窗:pacing 输入泵需要一轮事件循环把点击交给解析器
+    },
+    rightClick: async (needle: string) => {
+      await settled(() => findText(screen, needle) !== null)
+      const found = findText(screen, needle)
+      if (found === null) throw new Error(`text not found: ${needle}`)
+      input.write(`\u001b[<2;${found.col + 1};${found.row + 1}M\u001b[<2;${found.col + 1};${found.row + 1}m`)
+      await sleep(120) // 固定窗:pacing 输入泵需要一轮事件循环把右键交给解析器
     },
     saw: (text: string) => out.painted.join('').includes(text),
     calls: target.calls,
@@ -1466,6 +1484,59 @@ console.log('an unregistered directory does not hide its sessions')
     !/No workspaces yet/.test(shown()),
     shown(),
   )
+  app.close()
+}
+
+console.log('removing a registration keeps its history visibly distinct (#1040)')
+{
+  const records = [{ id: 'w-alpha', path: alphaDir, title: 'Alpha', present: true, sessionCount: 0 }]
+  const app = await openSupervisor({
+    registry: records,
+    cwd: alphaDir,
+    removeWorkspace: path => {
+      const index = records.findIndex(record => record.path === path)
+      if (index < 0) return false
+      records.splice(index, 1)
+      return true
+    },
+  })
+  const shown = () => app.lines().join('\n')
+  check('registered directory starts without a history label',
+    await settled(() => shown().includes('Workspaces (1)') && !shown().includes('History only'), { timeoutMs: 6_000 }), shown())
+  app.write('\r')
+  await settled(() => shown().includes('Remove from list'))
+  app.write('\u001b[B\u001b[B\u001b[B\r')
+  await settled(() => shown().includes('Remove workspace'))
+  app.write('\r')
+  check('successful removal is acknowledged and the rail distinguishes history',
+    await settled(() => shown().includes('Workspace registration removed')
+      && shown().includes('Workspaces 0 · History 1')
+      && shown().includes('History only · alpha'), { timeoutMs: 6_000 }), shown())
+  check('past sessions stay reachable after registration removal', shown().includes('free session'), shown())
+  check('the host removal action ran once', app.calls.filter(call => call === `removeWorkspace:${alphaDir}`).length === 1)
+  app.close()
+}
+
+console.log('history-only rows offer no registration-only actions (#1041)')
+{
+  const app = await openSupervisor({ registry: [], cwd: alphaDir })
+  const shown = () => app.lines().join('\n')
+  await settled(() => shown().includes('History only · alpha'))
+  app.write('\r')
+  check('keyboard menu omits rename and remove on a history row',
+    await settled(() => shown().includes('New session here')
+      && !shown().includes('Rename workspace') && !shown().includes('Remove from list')), shown())
+  app.write('\u001b[A\r') // Up wraps from Edit to New in the two-action menu.
+  check('keyboard can activate the last available action',
+    await settled(() => app.calls.includes(`resolveWorkspace:${alphaDir}`)), app.calls.join(', '))
+  await app.rightClick('History only · alpha')
+  check('right click opens the same reduced menu',
+    await settled(() => shown().includes('New session here')
+      && !shown().includes('Rename workspace') && !shown().includes('Remove from list')), shown())
+  await app.click('New session here')
+  check('mouse activates an available action without invoking removal',
+    await settled(() => app.calls.filter(call => call === `resolveWorkspace:${alphaDir}`).length === 2)
+      && !app.calls.some(call => call.startsWith('removeWorkspace:')), app.calls.join(', '))
   app.close()
 }
 

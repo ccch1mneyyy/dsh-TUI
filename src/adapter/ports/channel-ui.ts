@@ -1,7 +1,8 @@
 /** Host-owned in-process Channel contract. No runtime or upstream imports. */
-import type { ChatRow, AgentStatus, TokenUsage, SessionCostByModel, SubagentCostEntry, NotificationItem, ChannelGoal, TodoPanelItem, LoadedContext, PendingMessage, ChannelSceneMetadata, SubagentState, SubagentControl, BackgroundJobState, JobControl, StagedImageInput, StagedImageHandle, ComposerImageRef, ComposerSubmission, ExternalCommandOutcome, TranscriptImage, ResumeResult, EffortOption, PermissionPresetSnapshot, PresetOption, LlmModelInfo, LlmProviderInfo, SkillInfo, CredentialStatus, AgentViewRow, AgentViewDispatchResult, BackgroundResult, RawTrajEvent, ChannelSelection, CompactionStatus } from './channel-view.js'
-import type { SpinnerMode, ToolBackground, ScrollGutterMode, PageMarginSetting, StatusBarConfig, SessionModeSpec, SplashFontSetting } from './channel-display.js'
+import type { ChatRow, AgentStatus, TokenUsage, SessionCostByModel, SubagentCostEntry, NotificationItem, ChannelGoal, TodoPanelItem, LoadedContext, PendingMessage, ChannelSceneMetadata, SubagentState, SubagentControl, BackgroundJobState, JobControl, StagedImageInput, StagedImageHandle, ComposerImageRef, ComposerSubmission, ExternalCommandOutcome, TranscriptImage, ResumeResult, EffortOption, PermissionPresetSnapshot, PresetOption, LlmModelInfo, LlmProviderInfo, SkillInfo, CredentialStatus, AgentViewRow, AgentViewDispatchResult, BackgroundResult, RawTrajEvent, ChannelSelection, AttachedContext, CompactionStatus, ContextOccupancy } from './channel-view.js'
+import type { SpinnerMode, ToolBackground, ScrollGutterMode, PageMarginSetting, StatusBarConfig, SessionModeSpec, SplashFontSetting, JobGroupFoldMode } from './channel-display.js'
 import type { LocalCommand, CommandCompletion, BalanceResult, FileCandidate, RecapOutcome } from './channel-catalog.js'
+import type { AgentCapabilities } from './channel-capabilities.js'
 import type { TuiRewindMode, SessionTreeData, SessionSummary, PreviewEntry, ForeignSource, ForeignSessionRow, ForeignImportOutcome } from './channel-session.js'
 import type { TuiWorkspaceTarget, TuiWorkspaceCommand, TuiWorkspaceCommandResult, TuiWorkspaceEntry } from './channel-workspace.js'
 import type { ProviderSetupHost, OAuthProviderStatus, SettingsHost, TuiSettingsSection } from './channel-settings.js'
@@ -112,6 +113,24 @@ export interface ChannelUi {
   readonly lastUsage:
     | { input: number; output: number; cacheRead: number; cacheWrite: number }
     | undefined
+  /**
+   * Context occupancy — the ONE source of truth for the footer's `ctx` field,
+   * the segmented context bar, the working-activity line's `⚠ ctx N%` prefix,
+   * `/tokens` + `/status`, and the context-low warning. Read from DSH's own
+   * `contextPressure` session projection (`projectedTokens ?? pressureTokens`,
+   * the same number the Web UI shows) and refreshed by that projection's change
+   * feed — never by a per-render fold.
+   *
+   * `undefined` only before anything is known: no request yet AND no meter (a
+   * bare `cordis.yml` composition). {@link ContextOccupancy.source} says which
+   * path answered; see `dsh-adapter/context-occupancy.ts` for the deliberate
+   * divergence from the official "render nothing" behavior.
+   *
+   * Required-and-undefined rather than optional, matching `compaction`: the
+   * effect inventory in `adapter/channel/ui-policy.ts` maps over
+   * `keyof ChannelUi`, and an optional member would widen that union.
+   */
+  readonly contextOccupancy: ContextOccupancy | undefined
   /** Output tokens per second of the current/last turn's response, when known. */
   readonly tps: number | undefined
   /** Per-turn tps samples (sparkline history), oldest first. */
@@ -123,6 +142,11 @@ export interface ChannelUi {
   /** Thinking-block display (`preview` = 2-3 line live stream + fold per
    *  step; `full` = expanded until turn end). */
   readonly thinkingFold: 'preview' | 'full'
+  /** Grouping/folding of runs of consecutive background-job cards (settings
+   *  `dsh-tui.jobGroupFold`): `auto` folds a settled run of 3+ into its
+   *  summary line, `always` folds any run of 2+, `never` never folds on its
+   *  own (a header click still folds a single run). */
+  readonly jobGroupFold: JobGroupFoldMode
   /** Live tool-card background treatment. */
   readonly toolBackground: ToolBackground
   /** What the fullscreen transcript's right gutter shows (settings
@@ -177,16 +201,17 @@ export interface ChannelUi {
    *  Kept because plugin scenes receive this port through
    *  `TuiSceneProps.channel` (a published surface). Use `minimalUi`.
    *
-   *  REMOVAL: v0.12 — the first minor after the rename shipped in v0.11.2,
-   *  which is the one-minor deprecation window `docs/plugins.md` promises for
-   *  a frozen seam. Delete `minimal` (and `setMinimal()` below, plus the
-   *  `'setMinimal': 'mutate'` row in `adapter/channel/ui-policy.ts`) in
-   *  v0.12, gated on one concrete audit: scan the scene-plugin consumption
-   *  surface — this repo's `src/**` re-exports and every plugin reached
-   *  through `TuiSceneProps.channel` on the dsh-tui-ecosystem org — for a
-   *  read of `.minimal` or a call to `.setMinimal(`. Zero consumer hits →
-   *  delete in v0.12; a hit found at that cut is migrated in the same
-   *  release instead of pushing the removal out again. */
+   *  REMOVAL: v0.13 — the rename and deprecated aliases first ship in
+   *  v0.12.0, leaving one released minor-version deprecation window as
+   *  `docs/plugins.md` promises for a frozen seam. Delete `minimal` (and
+   *  `setMinimal()` below, plus the `'setMinimal': 'mutate'` row in
+   *  `adapter/channel/ui-policy.ts`) in v0.13, gated on one concrete audit:
+   *  scan the scene-plugin consumption surface — this repo's `src/**`
+   *  re-exports and every plugin reached through `TuiSceneProps.channel`
+   *  on the dsh-tui-ecosystem org — for a read of `.minimal` or a call to
+   *  `.setMinimal(`. Zero consumer hits → delete in v0.13; a hit found at
+   *  that cut is migrated in the same release instead of pushing the
+   *  removal out again. */
   readonly minimal: boolean
   /** Whether the working-activity line is shown (config.activity); the line
    * itself is read from the plugin's session projection, not this port. */
@@ -231,6 +256,19 @@ export interface ChannelUi {
   readonly commandList: readonly LocalCommand[]
   /** Context-aware slash completions, including plugin subcommands. */
   commandCompletions(input: string): readonly CommandCompletion[]
+  /**
+   * What the CURRENT agent's composition actually serves (compaction, pruning,
+   * questionnaire, skills, and the route `/compact` and `/plan` take), with
+   * the evidence for each fact documented in
+   * `dsh-adapter/channel/capabilities.ts`.
+   *
+   * Resolved from live services through the agent's own preset scope chain —
+   * never from a preset-id table — so a user preset that adds a service back
+   * gets the full feature set with no consumer change. Consumers use it to
+   * refuse-with-reason instead of failing on use, and to mark an entry whose
+   * capability is missing in Help and `/` completion.
+   */
+  capabilities(): AgentCapabilities
   /**
    * Run a plugin-registered slash command against the live agent (DSH
    * `dsh-commands` registry): logs `command/run`/`command/done` and returns
@@ -315,6 +353,24 @@ export interface ChannelUi {
     readonly maxImageDimension: number
     readonly maxImagePixels: number
   } | undefined
+  /**
+   * Contexts a side panel staged for the NEXT submission ("Send to Chat",
+   * side-panel design §6.7), oldest first. The composer renders one chip per
+   * entry above the input row; the submission that captures them consumes and
+   * clears the list, and every session-scoped reset (resume / rewind / new /
+   * model switch) empties it with the other session projections.
+   */
+  readonly attachedContexts: readonly AttachedContext[]
+  /**
+   * Stage one panel context on the composer. The body is capped at the shared
+   * `MENTION_MAX_FILE_CHARS` limit when it is staged (`truncated` records the
+   * cut), and a duplicate `sourceId` + `title` REPLACES the existing entry
+   * instead of stacking a second chip.
+   */
+  attachContext(input: { source: 'panel'; sourceId: string; title: string; content: string }): void
+  /** Drop one staged context by its `id` (an unknown id is a no-op). */
+  detachContext(id: string): void
+
   submit(text: string, images?: readonly ComposerImageRef[]): void
   /**
    * Steer a message into the running turn (Codex/pi semantics): injected at
@@ -621,6 +677,7 @@ export interface ChannelUi {
   traceEvents(): readonly RawTrajEvent[]
   setDiffLayout(layout: 'auto' | 'split' | 'unified'): void
   setThinkingFold(mode: 'preview' | 'full'): void
+  setJobGroupFold(mode: JobGroupFoldMode): void
   setToolBackground(background: ToolBackground): void
   setScrollGutter(mode: ScrollGutterMode): void
   setPageMargin(setting: PageMarginSetting): void
@@ -636,7 +693,7 @@ export interface ChannelUi {
   /** @deprecated Pre-rename alias of {@link setMinimalUi}. Kept for plugin
    *  scenes that call `channel.setMinimal()`; use `setMinimalUi`.
    *
-   *  REMOVAL: v0.12, under the same audit as `minimal` above — a scene-plugin
+   *  REMOVAL: v0.13, under the same audit as `minimal` above — a scene-plugin
    *  consumption scan of `.minimal` / `.setMinimal(` with zero remaining
    *  callers. */
   setMinimal(enabled: boolean): void

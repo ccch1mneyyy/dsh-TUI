@@ -9,6 +9,31 @@
  */
 import type { Color } from '../ink/styles.js'
 import { stringWidth } from '../ink/stringWidth.js'
+import type { ContextOccupancy } from '../adapter/ports/channel-view.js'
+import { resolveContextOccupancy } from '../dsh-adapter/context-occupancy.js'
+
+/**
+ * The occupancy reading a screen renders.
+ *
+ * The channel publishes `contextOccupancy` (see
+ * `dsh-adapter/context-occupancy.ts`); this resolves the same reading for ports
+ * that do not carry the member — the partial channel literals the verify/repro
+ * harnesses hand the real screens, and third-party scenes built against an
+ * older port. The channel itself always publishes it, so a production render
+ * has exactly one source, and a member that IS present is never second-guessed.
+ * @param channel - The channel surface (or a partial one).
+ * @returns Occupancy for the footer/bar/warning, or `undefined` when unknown.
+ */
+export function channelContextOccupancy(channel: {
+  readonly contextOccupancy?: ContextOccupancy | undefined
+  readonly lastUsage?: { input: number; cacheRead: number; cacheWrite: number } | undefined
+  readonly contextWindow: number | undefined
+}): ContextOccupancy | undefined {
+  if (channel.contextOccupancy !== undefined) return channel.contextOccupancy
+  // Same formula the channel's own accessor uses; no projection value can be
+  // shadowed here because this branch only runs when the port has none.
+  return resolveContextOccupancy(undefined, channel.lastUsage, channel.contextWindow)
+}
 
 /** Context bar segments — DeepSeek blue family (dark-theme friendly: deep
  *  navy → brand blue, neutral grey free segment).

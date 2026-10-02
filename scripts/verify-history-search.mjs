@@ -47,6 +47,41 @@ try {
   assert.equal(capped[0]?.text, 'cmd 249')
   assert.equal(capped.at(-1)?.text, 'cmd 50')
 
+  // Project scoping: each workspace walks its own entries plus the legacy
+  // (unscoped) ones; another project's inputs never leak in, and the
+  // per-project cap does not evict a different project's entries.
+  const projectA = join(fakeHome, 'repo-a')
+  const projectB = join(fakeHome, 'repo-b')
+  await appendHistory('only in a', projectA)
+  await appendHistory('only in b', projectB)
+  await appendHistory('only in a', `${projectA}/`)
+  const viewA = loadHistory(projectA).map(entry => entry.text)
+  const viewB = loadHistory(projectB).map(entry => entry.text)
+  assert.equal(viewA[0], 'only in a', 'project A sees its newest entry first')
+  assert.equal(viewA.filter(text => text === 'only in a').length, 1, 'same-project consecutive duplicate dedupes across an interleaved project')
+  assert.equal(viewA.includes('only in b'), false, 'project A never sees project B entries')
+  assert.equal(viewB[0], 'only in b', 'project B sees its own entry')
+  assert.equal(viewB.includes('only in a'), false, 'project B never sees project A entries')
+  assert.equal(viewB.includes('cmd 249'), true, 'legacy unscoped entries stay visible per project')
+  for (let index = 0; index < 250; index += 1) {
+    await appendHistory(`a cmd ${index}`, projectA)
+  }
+  const cappedA = loadHistory(projectA)
+  assert.equal(cappedA.length, 200, 'per-project view stays capped')
+  assert.equal(cappedA[0]?.text, 'a cmd 249')
+  assert.equal(cappedA.at(-1)?.text, 'a cmd 50', 'own entries push legacy ones out of the view')
+  assert.equal(loadHistory(projectB)[0]?.text, 'only in b', 'another project survives the per-project cap')
+
+  // A project's first submit that repeats the newest legacy entry its view
+  // already shows dedupes against it instead of doubling the walk's head.
+  const projectC = join(fakeHome, 'repo-c')
+  await appendHistory('cmd 249', projectC)
+  const viewC = loadHistory(projectC).map(entry => entry.text)
+  assert.equal(viewC[0], 'cmd 249', 'project C still heads its view with the repeated input')
+  assert.notEqual(viewC[1], 'cmd 249', 'a repeat of the newest legacy entry does not duplicate it')
+  await appendHistory('only in c', projectC)
+  assert.equal(loadHistory(projectC)[0]?.text, 'only in c', 'a new input still lands after the legacy dedup')
+
   const staleLock = join(fakeHome, '.dsh-tui', 'history.jsonl.lock')
   mkdirSync(staleLock, { recursive: true })
   const old = new Date(Date.now() - 60_000)

@@ -322,19 +322,37 @@ English summary:
 
 // ─── 组装 ───────────────────────────────────────────────────────────────────
 
+// 产物编码矩阵（ADR-0006）：行尾与 BOM 是每个宿主对文本的硬契约，在这里逐文件
+// 显式声明；数据表不提供 `name → string` 简写——新增产物必须选择策略，而不是
+// 默默继承某个默认值。
+//   .bat → CRLF：cmd.exe 逐行解析，LF-only 会被误切（issue #1068）
+//   .ps1 → UTF-8 with BOM：Windows PowerShell 5.1 默认按 ANSI 解码，无 BOM 中文乱码
+//   .sh  → LF 无 BOM：POSIX 契约，行尾 0x0D 会污染 shebang / 参数
 const files = {
-  'install.bat': INSTALL_BAT,
-  'install.ps1': INSTALL_PS1,
-  'install.sh': INSTALL_SH,
-  '启动 dsh-tui.bat': LAUNCH_BAT,
-  '使用说明.txt': README_TXT,
+  'install.bat': { text: INSTALL_BAT, eol: 'crlf', bom: false },
+  'install.ps1': { text: INSTALL_PS1, eol: 'lf', bom: true },
+  'install.sh': { text: INSTALL_SH, eol: 'lf', bom: false },
+  '启动 dsh-tui.bat': { text: LAUNCH_BAT, eol: 'crlf', bom: false },
+  '使用说明.txt': { text: README_TXT, eol: 'lf', bom: false },
+}
+
+// 策略 → 字节的唯一转换点：模板始终以 LF 书写（不在模板字面量里硬编码 \r\n），
+// 这里按该文件自己的策略展开行尾、按需前置 BOM。CRLF 只作用于声明了 crlf 的文件，
+// 不做全局统一替换——那会破坏 install.sh 的 POSIX LF 契约（ADR-0006）。
+const EOL_SEQUENCE = { lf: '\n', crlf: '\r\n' }
+const encodeBundleFile = ({ text, eol, bom }) => {
+  if (!EOL_SEQUENCE[eol]) throw new Error(`未知行尾策略: ${eol}`)
+  return (bom ? '\uFEFF' : '') + text.split(/\r?\n/).join(EOL_SEQUENCE[eol])
 }
 
 const stageDir = join(outDir, pkgDirName)
 rmSync(stageDir, { recursive: true, force: true })
 mkdirSync(stageDir, { recursive: true })
-for (const [name, content] of Object.entries(files)) {
+for (const [name, spec] of Object.entries(files)) {
+  const content = encodeBundleFile(spec)
   writeFileSync(join(stageDir, name), content, 'utf8')
+  // 字节数按最终写入内容统计：BOM 的 3 字节与 CRLF 的增量都计入，与用户解压后
+  // 得到的文件逐字节一致。
   console.log(`  write ${name} (${Buffer.byteLength(content, 'utf8')} bytes)`)
 }
 

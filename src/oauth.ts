@@ -1,14 +1,9 @@
 /**
- * Re-export of the `@deepseek-harness-tui/dsh-auth` plugin under this
- * package's own name, so the bundle patch layer can mount the OAuth row as
- * `@deepseek-harness-tui/dsh-tui/oauth` instead of the bare package name —
- * the same anchor the working-activity row uses (#60): the dsh Loader
- * resolves row names from the *profile* directory, where only the profile's
- * direct dependencies are linked, and pnpm's isolated layout never hoists a
- * transitive dependency there. Mounting through this subpath keeps plugin
- * resolution anchored at @deepseek-harness-tui/dsh-tui itself, always a
- * direct profile dependency, under every package-manager layout.
+ * Public entry for the built-in OAuth Cordis module. The bundle patch keeps
+ * mounting this subpath so existing profile overrides and loader ordering
+ * remain compatible after the former dsh-auth package was folded into the
+ * TUI's adapter tree.
  *
  * @module @deepseek-harness-tui/dsh-tui/oauth
  */
-export * from '@deepseek-harness-tui/dsh-auth'
+export * from './dsh-adapter/oauth/index.js'

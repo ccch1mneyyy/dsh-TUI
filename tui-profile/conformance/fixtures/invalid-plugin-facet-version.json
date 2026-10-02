@@ -1,0 +1,14 @@
+{
+  "$schema":"https://dsh.community/schemas/dsh-plugin-0.15.json",
+  "id":"com.example.facetver",
+  "name":"Unregistered Facet Version Plugin",
+  "version":"0.1.0",
+  "manifestVersion":"0.15",
+  "facets":{"host":{"entry":"dist/main.js","apiVersion":"v2beta1"}},
+  "requires":{"contracts":[]},
+  "permissions":[],
+  "contributes":{"commands":[]},
+  "subscriptions":[],
+  "license":"MIT",
+  "source":{"repository":"https://example.com/facetver"}
+}

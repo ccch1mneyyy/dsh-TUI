@@ -2,10 +2,16 @@ import type { LocalCommand, LocalizedDescriptions, CommandCompletion } from './a
 export type { LocalCommand, LocalizedDescriptions, CommandCompletion } from './adapter/ports/channel-catalog.js'
 /**
  * Local slash commands for dsh-tui, presented as `/name — description`.
- * The built-in set is merged with plugin-registered
- * commands (plan/goal/…) from the DSH command registry (`dsh-commands`) —
- * `runCommand` in the Chat screen dispatches either kind, with the registry
- * handler winning for names both sides declare.
+ * The built-in set is merged with plugin-registered commands (plan/goal/…)
+ * from the DSH command registry (`dsh-commands`); `runCommand` in the Chat
+ * screen dispatches either kind.
+ *
+ * Locals win on name collisions: the merge skips a registry descriptor whose
+ * name a local command already declares (`channel/skill-catalog.ts`), and the
+ * Chat switch answers the local name before the registry path. `/compact` is
+ * the live case — the TUI's own transaction is the primary route and the
+ * official `dsh-command-compact` handler is only the fallback when the local
+ * path cannot run (see `dsh-adapter/channel/capabilities.ts`).
  */
 
 import { getLang, tOr } from './i18n.js'
@@ -60,12 +66,14 @@ export const LOCAL_COMMANDS: LocalCommand[] = [
   { name: 'config', description: 'Show the dsh-tui configuration source' },
   { name: 'reload', description: 'Reload preference files from disk and apply live' },
   { name: 'settings', description: 'View and edit plugin settings' },
+  { name: 'setup', description: 'Re-run the first-run guide (API key / language + theme / model + workspace / shortcuts)' },
   { name: 'star', description: 'Star this project on GitHub (one-key via the gh CLI)' },
   { name: 'doctor', description: 'Run environment checks' },
   { name: 'migrate', description: 'Import conversations from other coding agents (claude-code / codex / omp / zcode / grok-build)' },
   { name: 'init', description: 'Create AGENTS.md in the working directory' },
   { name: 'agents', description: 'Show subagents of this session' },
   { name: 'jobs', description: 'Show background jobs of this session' },
+  { name: 'panel', description: 'Side panel: toggle / focus / zoom / switch panels' },
   // Model / display
   { name: 'activity', description: 'Switch the working-activity indicator preset' },
   { name: 'preset', description: 'Switch the agent preset (including Liangshen mode)' },

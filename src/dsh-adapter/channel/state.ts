@@ -1,6 +1,7 @@
 import type { AgentHandle } from '@deepseek-ai/dsh-agent'
+import type { ContextPressureSource } from '../context-occupancy.js'
 import type { SessionModeSpec } from '../../sessionModes.js'
-import { normalizePageMargin, normalizeScrollGutter, normalizeStatusBar, normalizeToolBackground, type PageMarginSetting, type ScrollGutterMode, type StatusBarConfig, type ToolBackground } from '../../tuiDisplayPrefs.js'
+import { normalizeJobGroupFold, normalizePageMargin, normalizeScrollGutter, normalizeStatusBar, normalizeToolBackground, type JobGroupFoldMode, type PageMarginSetting, type ScrollGutterMode, type StatusBarConfig, type ToolBackground } from '../../tuiDisplayPrefs.js'
 import { normalizeActivityPreset } from '../../components/activityFrames.js'
 import { normalizeSplashFont, type SplashFontSetting } from '../../components/splashFonts.js'
 import type { ChannelState } from './types.js'
@@ -16,6 +17,20 @@ export interface ChannelLaunchOptions {
    *  projection value only arrives on change, so a resumed session needs this
    *  read to render its line before the next event lands. */
   seedActivity?: (session: unknown) => void
+  /**
+   * Official context-occupancy source (see `dsh-adapter/context-occupancy.ts`).
+   *
+   * `read` is a cached map lookup — never a projection fold — so the channel's
+   * `contextOccupancy` accessor may call it per read; `subscribe` is the
+   * projection's own change feed, which republishes occupancy when it moves
+   * between session events (a compaction rewriting the surface, the prompt
+   * growing). Absent → the channel falls back to the last request's billed
+   * sample, which is what a composition without the token meter must do.
+   */
+  contextPressure?: ContextPressureSource
+  /** Read that source's current value when a session binds (see
+   *  {@link ChannelLaunchOptions.contextPressure}). */
+  seedContextOccupancy?: (session: unknown) => void
   activityFrames?: string
   /** Settings namespace this boot registered its section under: the Config
    *  owner's Loader id (`resolveSettingsNamespace`), which is NOT always the
@@ -25,6 +40,7 @@ export interface ChannelLaunchOptions {
   settingsNs?: string
   diffLayout?: 'auto' | 'split' | 'unified'
   thinkingFold?: 'preview' | 'full'
+  jobGroupFold?: JobGroupFoldMode
   toolBackground?: ToolBackground
   scrollGutter?: ScrollGutterMode
   pageMargin?: PageMarginSetting
@@ -71,7 +87,7 @@ export function createInitialChannelView(
   'notifications' | 'contextWindow' | 'reasoningEffort' | 'mode' | 'modeIndex' |
   'activityFrames' | 'configuredProvider' | 'configuredModel' |
   'configuredPreset' | 'configuredActivityFrames' | 'configuredLang' | 'diffLayout' |
-  'thinkingFold' | 'toolBackground' | 'scrollGutter' | 'pageMargin' |
+  'thinkingFold' | 'jobGroupFold' | 'toolBackground' | 'scrollGutter' | 'pageMargin' |
   'foldTerminalCommand' | 'promptSessionLabel' | 'expandEditor' | 'smoothStreaming' |
   'statusBar' | 'whale' | 'whaleIdle' | 'splashFont' | 'minimalUi' | 'activityEnabled' | 'contextBarEnabled' |
   'statusBar' | 'whale' | 'whaleIdle' | 'whaleGirl' | 'minimalUi' | 'activityEnabled' | 'contextBarEnabled' |
@@ -91,6 +107,7 @@ export function createInitialChannelView(
     configuredModel: options.configuredModel, configuredPreset: options.configuredPreset,
     configuredActivityFrames: options.configuredActivityFrames, configuredLang: options.configuredLang,
     diffLayout: options.diffLayout ?? 'auto', thinkingFold: options.thinkingFold ?? 'preview',
+    jobGroupFold: normalizeJobGroupFold(options.jobGroupFold),
     toolBackground: normalizeToolBackground(options.toolBackground), scrollGutter: normalizeScrollGutter(options.scrollGutter),
     pageMargin: normalizePageMargin(options.pageMargin), foldTerminalCommand: options.foldTerminalCommand === true,
     promptSessionLabel: options.promptSessionLabel === true, expandEditor: options.expandEditor !== false,

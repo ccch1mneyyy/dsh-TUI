@@ -52,7 +52,9 @@ export function useTerminalViewport(): [
     }
 
     const height = element.yogaNode.getComputedHeight()
-    const rows = terminalSize.rows
+    // screenRows (the real viewport height) when a narrowing surface
+    // shrank the context for layout; plain rows otherwise.
+    const rows = terminalSize.screenRows ?? terminalSize.rows
 
     // Walk the DOM parent chain (not yoga.getParent()) so we can detect
     // scroll containers and subtract their scrollTop. Yoga computes layout

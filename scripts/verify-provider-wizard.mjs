@@ -24,6 +24,8 @@
  *    guard threw before the wizard could open).
  * 13. OAuth branch: mode gains a third option, picking an unsigned provider
  *    runs login, pushes a masked summary, reports success.
+ * 13b. Host-owned DeepSeek account: no token expiry is invented in the
+ *    provider picker or successful-login summary.
  * 14. OAuth branch, signed-in provider choosing sign-out: logout runs, no
  *    login attempt, outcome 'signed-out'.
  * 15. OAuth branch, login failure: error surfaced with the cause.
@@ -559,7 +561,7 @@ function oauthStub(behavior = {}) {
     login: async provider => {
       calls.logins.push(provider)
       if (behavior.loginThrows) throw new Error(behavior.loginThrows)
-      return { provider, oauthLabel: 'OpenAI (ChatGPT Plus/Pro)', expiresAt: 1_787_000_000_000 }
+      return behavior.loginResult ?? { provider, oauthLabel: 'OpenAI (ChatGPT Plus/Pro)', expiresAt: 1_787_000_000_000 }
     },
     logout: async provider => {
       calls.logouts.push(provider)
@@ -589,6 +591,40 @@ function oauthStub(behavior = {}) {
     JSON.stringify(calls.pushed))
   check('13 oauth: success notified',
     calls.notifications.some(n => n.color === 'success'))
+}
+
+// 13b. DeepSeek account grants have no token expiry; neither the picker nor
+// the summary may render the Unix epoch as a fabricated expiry date.
+{
+  const deepSeekStatus = {
+    provider: 'deepseek-account', label: 'DeepSeek Account', oauthLabel: 'DeepSeek',
+    loginLabel: 'Sign in with DeepSeek', signedIn: false, expiresAt: undefined, expired: false,
+  }
+  const oauth = oauthStub({
+    providers: [deepSeekStatus],
+    loginResult: { provider: 'deepseek-account', oauthLabel: 'DeepSeek', expiresAt: undefined },
+  })
+  const { deps, calls } = makeDeps({
+    mode: { selected: [t('provider-opt-oauth')] },
+    'oauth-provider': { selected: ['deepseek-account'] },
+  }, { oauth })
+  const outcome = await runProviderWizard(deps)
+  check('13b deepseek: delegated login succeeds', outcome === 'added' && eq(oauth.calls.logins, ['deepseek-account']))
+  check('13b deepseek: summary has no fabricated expiry', calls.pushed.length === 1
+    && calls.pushed[0].lines.length === 3
+    && !JSON.stringify(calls.pushed).includes('1970')
+    && calls.pushed[0].lines.some(line => line.includes('/model')))
+
+  const signed = oauthStub({ providers: [{ ...deepSeekStatus, signedIn: true }] })
+  const signedRun = makeDeps({
+    mode: { selected: [t('provider-opt-oauth')] },
+    'oauth-provider': { selected: ['deepseek-account'] },
+    'oauth-signed-action': { selected: [t('provider-opt-confirm-cancel')] },
+  }, { oauth: signed })
+  await runProviderWizard(signedRun.deps)
+  const description = signedRun.calls.optionDescriptions['oauth-provider']?.['deepseek-account'] ?? ''
+  check('13b deepseek: signed-in picker state has no fabricated expiry',
+    description.includes(t('provider-oauth-state-in-no-expiry')) && !description.includes('1970'), description)
 }
 
 // 14. OAuth branch, signed-in provider choosing sign-out: logout runs, no

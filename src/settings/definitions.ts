@@ -16,6 +16,19 @@ import type { ShortcutActionId } from '../utils/keymap.js'
 export type SettingDefinition = Pick<TuiSettingsField, 'label' | 'descriptions' | 'hint' | 'hintDescriptions' | 'kind' | 'group' | 'options'>
 
 export const SETTING_DEFINITIONS = {
+  'companion.skin': {
+    label: 'Companion skin',
+    descriptions: { zh: '宠物皮肤' },
+    group: 'splash',
+    hint: 'Look of the companion panel pet (enable the panel by adding \'companion\' to sidePanel.panels): deepy (default, the deepy whale kit), whale (the same layered pixel whale as the splash) or whaleGirl (the user-provided whale-girl sticker pack, 22 animations). Applies immediately.',
+    hintDescriptions: { zh: '伙伴面板里宠物的外形（面板需在 sidePanel.panels 里加入 companion 启用）：deepy（默认，deepy 小鲸鱼素材包）、whale（与开屏同款的分层像素鲸鱼）或 whaleGirl（用户提供的鲸娘表情包，22 个动画）。立即生效。' },
+    kind: 'select',
+    options: [
+      { value: 'deepy', label: 'Deepy', descriptions: { zh: 'Deepy 小鲸鱼' } },
+      { value: 'whaleGirl', label: 'Whale girl', descriptions: { zh: '鲸娘' } },
+      { value: 'whale', label: 'Whale', descriptions: { zh: '像素鲸鱼' } },
+    ],
+  },
   'diffLayout': {
     label: 'Diff layout',
     descriptions: { zh: 'diff 布局' },
@@ -78,6 +91,19 @@ export const SETTING_DEFINITIONS = {
     options: [
       { value: 'transparent', label: 'Transparent', descriptions: { zh: '透明（透出终端背景）' } },
       { value: 'terminal', label: 'Terminal colour', descriptions: { zh: '合成到终端底色' } },
+    ],
+  },
+  'jobGroupFold': {
+    label: 'Job card groups',
+    descriptions: { zh: '后台任务分组' },
+    group: 'conversation',
+    hint: 'Consecutive background-job cards render as one group with a summary header. Auto folds a run of 3+ once every job settled; Always folds any run of 2+ right away; Never keeps every card (click the header to fold one run by hand, Ctrl+O to expand all).',
+    hintDescriptions: { zh: '连续的后台任务卡渲染成一组并带汇总头。自动：整组落定且 3 个以上时折叠成一行；总是：2 个以上立即折叠；从不：每张卡都留着（点组头可手工折叠单组，Ctrl+O 展开全部）。' },
+    kind: 'select',
+    options: [
+      { value: 'auto', label: 'Auto (3+ settled)', descriptions: { zh: '自动（落定 3 个以上）' } },
+      { value: 'always', label: 'Always (2+)', descriptions: { zh: '总是（2 个以上）' } },
+      { value: 'never', label: 'Never fold', descriptions: { zh: '从不折叠' } },
     ],
   },
   'lang': {
@@ -189,6 +215,38 @@ export const SETTING_DEFINITIONS = {
       { value: 'scrollbar', label: 'Scrollbar', descriptions: { zh: '滚动条' } },
       { value: 'hidden', label: 'Hidden', descriptions: { zh: '隐藏' } },
     ],
+  },
+  'sidePanel.open': {
+    label: 'Side panel starts open',
+    descriptions: { zh: '启动时展开侧栏' },
+    group: 'side-panel',
+    hint: 'Whether a session opens with the sidebar already expanded (Ctrl+B or /panel toggles it any time). Off by default, so the upgrade leaves the layout exactly as it was until asked; the in-session toggle is not persisted. Applies immediately.',
+    hintDescriptions: { zh: '打开会话时侧栏是否已展开（随时可用 Ctrl+B 或 /panel 切换）。默认关闭，升级后界面与原来完全一致，除非主动开启；会话内的切换不会写回设置。立即生效。' },
+    kind: 'boolean',
+  },
+  'sidePanel.panels': {
+    label: 'Enabled panels',
+    descriptions: { zh: '启用的面板' },
+    group: 'side-panel',
+    hint: 'Comma-separated panel ids in PanelBar order (default `todo,jobs,agents`). Ids are lowercase words (a-z, 0-9, _, -) or a `plugin:panel` namespace; a well-formed id no panel claims yet stays in the bar for a plugin that registers it later, while a malformed entry is refused. Add `companion` to enable the pet panel. Applies immediately.',
+    hintDescriptions: { zh: '按标签栏顺序排列的面板 id，逗号分隔（默认 `todo,jobs,agents`）。id 为小写词组（a-z、0-9、_、-）或 `plugin:panel` 命名空间；格式合法但尚无面板认领的 id 会留在标签栏，等插件稍后注册，格式非法的输入会被直接拒绝。加上 `companion` 可启用宠物面板。立即生效。' },
+    kind: 'text',
+  },
+  'sidePanel.ratio': {
+    label: 'Chat column width',
+    descriptions: { zh: '聊天列占比' },
+    group: 'side-panel',
+    hint: 'Chat column as a fraction of the content width: 0.1-0.95, default 0.68. Type a decimal such as `0.6`; while the panel has focus the +/- shortcuts nudge it live for the current session. Applies immediately.',
+    hintDescriptions: { zh: '聊天列占内容宽度的比例：0.1-0.95，默认 0.68。输入小数如 `0.6`；面板获得焦点时可用 +/- 在会话内实时微调。立即生效。' },
+    kind: 'number',
+  },
+  'sidePanel.splitEnabled': {
+    label: 'Split layout',
+    descriptions: { zh: '分栏布局' },
+    group: 'side-panel',
+    hint: 'Master switch of the split layout: on (default) Ctrl+B and /panel open the side column next to the chat; off makes both fall back to the fullscreen panels. Applies immediately.',
+    hintDescriptions: { zh: '分栏总开关：开启（默认）时 Ctrl+B 与 /panel 在聊天右侧展开侧栏；关闭时两者都退回整屏面板。立即生效。' },
+    kind: 'boolean',
   },
   'smoothStreaming': {
     label: 'Smooth streaming',
@@ -429,6 +487,7 @@ export const SETTING_GROUPS = [
   { id: 'rendering', mode: 'inline', title: 'Rendering', descriptions: { zh: '图表与图片' } },
   { id: 'math', mode: 'page', title: 'Formula', descriptions: { zh: '公式设置' } },
   { id: 'status-bar', mode: 'page', title: 'Status bar', descriptions: { zh: '底栏设置' } },
+  { id: 'side-panel', mode: 'page', title: 'Side panel', descriptions: { zh: '侧栏' } },
   { id: 'shortcuts', mode: 'page', title: 'Shortcuts', descriptions: { zh: '快捷键' } },
 ] as const
 
@@ -494,6 +553,12 @@ export const SHORTCUT_FIELD_META: Record<ShortcutActionId, { label: string; zh: 
     hintEn: d => `Toggle the startup loaded-context panel. Default: ${d}.`,
     hintZh: d => `切换启动时的已加载上下文面板。默认 ${d}。`,
   },
+  continue: {
+    label: 'Continue last session shortcut',
+    zh: '继续上次会话快捷键',
+    hintEn: d => `On the launchpad, resume the most recent session. Default: ${d}. Only bound while the launchpad is up.`,
+    hintZh: d => `在启动页上继续最近一条会话。默认 ${d}。仅在启动页生效。`,
+  },
   showAll: {
     label: 'Show-all shortcut',
     zh: '显示全部消息快捷键',
@@ -529,5 +594,23 @@ export const SHORTCUT_FIELD_META: Record<ShortcutActionId, { label: string; zh: 
     zh: '一键 star 快捷键',
     hintEn: d => `Star the project via the gh CLI (same action as /star and the splash line's click). Default: ${d}.`,
     hintZh: d => `用 gh 给项目点 star（与 /star、开屏标语点击同一个动作）。默认 ${d}。`,
+  },
+  undo: {
+    label: 'Draft undo shortcut',
+    zh: '草稿撤销快捷键',
+    hintEn: d => `Undo the prompt draft one word-level step at a time (text, caret and images together). Draft-only: submitted or history-recalled text is out of scope (Esc Esc rewinds turns, Ctrl+R recalls history). Default: ${d}.`,
+    hintZh: d => `按词撤销输入框草稿（文本、光标、图片一起回退）。只作用于草稿：提交或用历史召回后不可撤销；与 Esc Esc 回溯、Ctrl+R 历史召回不是一回事。默认 ${d}。`,
+  },
+  sidePanel: {
+    label: 'Side panel shortcut',
+    zh: '侧栏快捷键',
+    hintEn: d => `Smart three-state sidebar toggle: closed → open+focus → focus chat → closed. Default: ${d}. tmux users should remap it (the prefix eats Ctrl+B).`,
+    hintZh: d => `侧栏智能三态：关闭 → 打开并聚焦 → 焦点回聊天 → 关闭。默认 ${d}。tmux 用户请改键（前缀会吞掉它）。`,
+  },
+  sidePanelZoom: {
+    label: 'Side panel zoom shortcut',
+    zh: '侧栏缩放快捷键',
+    hintEn: d => `Zoom the active side panel (chat keeps its minimum width). Default: ${d}.`,
+    hintZh: d => `缩放当前侧栏面板（聊天列保留最小宽度）。默认 ${d}。`,
   },
 }

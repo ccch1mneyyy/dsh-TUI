@@ -1,14 +1,18 @@
 import React from 'react'
 import { Box, Text, useInput, ScrollBox, type ScrollBoxHandle, useTerminalSize } from '../ui.js'
-import type { SubagentState } from '../dsh-adapter/subagents.js'
+import type { SubagentOutputLine, SubagentState } from '../dsh-adapter/subagents.js'
 import { t } from '../i18n.js'
 import { Divider } from './design-system/Divider.js'
-import { ExitButton } from './SubagentDashboard.js'
+import { ExitButton, isPanelPlainReturn } from './SubagentDashboard.js'
 import { isPlainReturnInput } from '../utils/modifiers.js'
 import { toolNameColor } from './messages/AssistantToolUseMessage.js'
+import { Markdown } from './Markdown.js'
 import { getCliHighlightPromise } from '../terminal-utils/cliHighlight.js'
 import { isMinimalUiMode } from '../minimalUiMode.js'
+import { usePanelInput } from './sidePanel/usePanelInput.js'
+import type { SidePanelKeyFlags } from './sidePanel/types.js'
 import type { Theme } from '../theme.js'
+import { THINKING_SETTLED_MARKER } from '../terminal-utils/figures.js'
 
 function formatDuration(ms: number): string {
   if (ms < 1000) return `${ms}ms`
@@ -104,10 +108,59 @@ function JsonArgsText({ raw }: { raw: string }): React.ReactNode {
   return <Text dimColor wrap="wrap">{flat}</Text>
 }
 
+/**
+ * One rendered row of the output page: either a run of consecutive reasoning
+ * rows (folded into the chat's thinking grammar, \`⚓ Thinking · 12s\`) or a
+ * single event line. Folding by RUN keeps the transcript order intact while
+ * stopping a long chain of thought from burying the answer.
+ */
+type DetailBlock =
+  | { kind: 'thinking'; lines: SubagentOutputLine[] }
+  | { kind: 'prose'; lines: SubagentOutputLine[] }
+  | { kind: 'line'; line: SubagentOutputLine }
+
+function groupOutputEvents(events: readonly SubagentOutputLine[]): DetailBlock[] {
+  const blocks: DetailBlock[] = []
+  for (const line of events) {
+    if (line.kind === 'thinking') {
+      const last = blocks[blocks.length - 1]
+      if (last !== undefined && last.kind === 'thinking') last.lines.push(line)
+      else blocks.push({ kind: 'thinking', lines: [line] })
+      continue
+    }
+    // Consecutive prose lines are ONE markdown document: without the fold a
+    // `**bold**` line, its list items and its paragraph break would render as
+    // raw syntax separated by blank rows. Activity pointers and tool/error
+    // rows stay independent single lines.
+    if (line.kind === 'text' && !isActivityLine(line.text)) {
+      const last = blocks[blocks.length - 1]
+      if (last !== undefined && last.kind === 'prose') last.lines.push(line)
+      else blocks.push({ kind: 'prose', lines: [line] })
+      continue
+    }
+    blocks.push({ kind: 'line', line })
+  }
+  return blocks
+}
+
+/** The child's own status line reaches us as a text delta (\`⏵ reading …\`);
+ *  it is activity, not prose, so it renders as a dim pointer row. */
+const ACTIVITY_GLYPHS = ['⏵', '▶', '▸', '»']
+
+function isActivityLine(text: string): boolean {
+  return ACTIVITY_GLYPHS.includes(text.trimStart().slice(0, 1))
+}
+
 export interface SubagentDetailSceneProps {
   subagent: SubagentState
   onBack: () => void
   onInterrupt?: (agentId: string) => void
+  /** 'panel' 挂在侧栏宿主里（去外层 padding、键盘走 usePanelInput 分发器）；
+   *  default（缺省）与整屏形态逐字节一致。 */
+  variant?: 'default' | 'panel'
+  /** panel 形态：宿主报告焦点/可见性；非 active 时保留状态但收不到键。 */
+  focused?: boolean
+  visible?: boolean
 }
 
 /**
@@ -121,7 +174,11 @@ export function SubagentDetailScene({
   subagent,
   onBack,
   onInterrupt,
+  variant = 'default',
+  focused = true,
+  visible = true,
 }: SubagentDetailSceneProps): React.ReactNode {
+  const panelMode = variant === 'panel'
   const scrollRef = React.useRef<ScrollBoxHandle | null>(null)
   const { rows, columns } = useTerminalSize()
   const [page, setPage] = React.useState<DetailPage>('summary')
@@ -135,6 +192,25 @@ export function SubagentDetailScene({
   const totalTokens = subagent.tokens?.total ?? ((subagent.tokens?.input ?? 0) + (subagent.tokens?.output ?? 0) || 0)
   const pageIndex = PAGES.indexOf(page)
 
+  /** Folded reasoning runs (the transcript's thinking grammar). Enter flips
+   *  every run at once so one key stays predictable across thought steps. */
+  const [thinkingOpen, setThinkingOpen] = React.useState(false)
+  const blocks = groupOutputEvents(subagent.outputEvents)
+  const hasThinking = blocks.some(block => block.kind === 'thinking')
+  const settled = !isRunning
+  // The deliverable is the LAST prose block: a `── Conclusion ──` rule goes in
+  // front of it once the run settles, so the answer is never the last line of
+  // a wall of reasoning.
+  const answerBlock = ((): number => {
+    if (!settled) return -1
+    for (let i = blocks.length - 1; i >= 0; i--) {
+      const block = blocks[i]!
+      if (block.kind === 'prose' && block.lines.some(p => p.text.trim() !== '')) return i
+      if (block.kind === 'line' && block.line.kind === 'text' && block.line.text.trim() !== '') return i
+    }
+    return -1
+  })()
+
   const turnPage = (delta: number): void => {
     const next = (pageIndex + delta + PAGES.length) % PAGES.length
     setPage(PAGES[next]!)
@@ -144,6 +220,17 @@ export function SubagentDetailScene({
   // tail -f: while the subagent runs and the output page is showing, follow
   // the newest streamed line. Page switches or settlement stop the follow so
   // manual ↑ scrolling wins.
+  // Expanding the reasoning grows the box past its viewport, and the renderer
+  // then treats the growth as "was at bottom" (maxScroll was 0 while the folded
+  // body fit) and re-pins the view to the bottom — pushing the fold header out
+  // of sight. Re-anchor AFTER that frame: the first immediate lands behind the
+  // renderer's own scheduling, and the second behind the re-pin frame it caused.
+  React.useEffect(() => {
+    if (page !== 'output') return
+    const first = setImmediate(() => scrollRef.current?.scrollTo?.(0))
+    return () => clearImmediate(first)
+  }, [thinkingOpen, page])
+
   const outputLength = subagent.outputEvents.length
   React.useEffect(() => {
     if (page !== 'output' || !isRunning) return
@@ -151,6 +238,7 @@ export function SubagentDetailScene({
   }, [page, isRunning, outputLength])
 
   useInput((input, key, event) => {
+    if (panelMode) return
     if (key.escape || (key.ctrl && input === 'c')) {
       event.stopImmediatePropagation()
       onBack()
@@ -183,11 +271,54 @@ export function SubagentDetailScene({
     }
     if (isPlainReturnInput(input, key)) {
       event.stopImmediatePropagation()
-      onBack()
+      // Enter folds the reasoning while the output page is showing (the
+      // transcript's ctrl+o equivalent). Elsewhere it keeps its "leave the
+      // detail" meaning, which Esc and the ✕ button still provide.
+      if (page === 'output' && hasThinking) setThinkingOpen(open => !open)
+      else onBack()
       return
     }
     event.stopImmediatePropagation()
-  })
+  }, { isActive: !panelMode })
+
+  // Panel form（v2.1 键盘契约）：这一层自己吃掉整个业务键面。Esc/Ctrl+C 必须
+  // 返回 true —— Detail → Dashboard 是面板内部的一级，绝不能落给宿主（宿主
+  // 的 Esc 回退是「焦点回聊天」）。其余未认的键返回 false，让 [/]、数字、
+  // z、+/- 继续可用。
+  const panelKeyHandler = (input: string, key: SidePanelKeyFlags): boolean => {
+    if (key.escape === true || (key.ctrl === true && input === 'c')) {
+      onBack()
+      return true
+    }
+    if (key.leftArrow === true) {
+      turnPage(-1)
+      return true
+    }
+    if (key.rightArrow === true) {
+      turnPage(1)
+      return true
+    }
+    if (key.upArrow === true) {
+      scrollRef.current?.scrollBy(-3)
+      return true
+    }
+    if (key.downArrow === true) {
+      scrollRef.current?.scrollBy(3)
+      return true
+    }
+    if (input.toLowerCase() === 'x' && isRunning && onInterrupt !== undefined) {
+      onInterrupt(subagent.agentId)
+      return true
+    }
+    if (isPanelPlainReturn(input, key)) {
+      // Enter 与整屏形态同义：输出页有思考块时先折叠它，别处退回 Dashboard。
+      if (page === 'output' && hasThinking) setThinkingOpen(open => !open)
+      else onBack()
+      return true
+    }
+    return false
+  }
+  usePanelInput(panelKeyHandler, { active: panelMode && focused && visible })
 
   const tab = (name: DetailPage, label: string): React.ReactNode => {
     const active = page === name
@@ -206,14 +337,22 @@ export function SubagentDetailScene({
     )
   }
 
+  // 外层留白：整屏形态保持原样；侧栏形态只留左右各 1 格（PanelBar 与宿主
+  // 提示行已经承担其余 chrome）。
+  const outer = panelMode
+    ? { paddingLeft: 1, paddingRight: 1, paddingTop: 0 }
+    : { paddingX: 2, paddingY: 1 }
+
   return (
-    <Box flexDirection="column" paddingX={2} paddingY={1}>
+    <Box flexDirection="column" {...outer}>
       {/* Header: identity line, stats line, timing line */}
       <Box flexDirection="row" gap={1}>
         <Text color={info.color} bold>{info.glyph}</Text>
         <Text bold>{`${t('subagent-card-prefix')}${subagent.description}`}</Text>
         <Text dimColor>·</Text>
         <Text color={info.color}>{info.label}</Text>
+        {subagent.mode === 'continuable' && <Text color="warning">{t('subagent-mode-continuable')}</Text>}
+        {subagent.mode === 'one-shot' && <Text dimColor>{t('subagent-mode-one-shot')}</Text>}
         <Box flexGrow={1} />
         {/* 可点击退出（Esc/Enter 的鼠标等价），hover 提亮 */}
         <ExitButton onClick={onBack} />
@@ -225,7 +364,7 @@ export function SubagentDetailScene({
       <Text dimColor>
         {`${t('subagent-started')} ${formatTimestamp(subagent.startedAt)}`
         + (subagent.completedAt ? ` · ${t('subagent-completed')} ${formatTimestamp(subagent.completedAt)}` : '')}
-        {` · id ${subagent.agentId}`}
+        {` · id ${subagent.agentId.slice(0, 8)}`}
       </Text>
       {subagent.error && (
         <Box marginTop={0}>
@@ -236,14 +375,16 @@ export function SubagentDetailScene({
       {/* Tab bar with page indicator */}
       <Box flexDirection="row" gap={0} marginTop={1}>
         {tab('summary', t('subagent-tab-summary'))}
-        {tab('output', t('subagent-output-label'))}
-        {tab('tools', t('subagent-tools'))}
+        {tab('output', subagent.outputEvents.length > 0 ? `${t('subagent-output-label')} ${subagent.outputEvents.length}` : t('subagent-output-label'))}
+        {tab('tools', subagent.toolCalls.length > 0 ? `${t('subagent-tools')} ${subagent.toolCalls.length}` : t('subagent-tools'))}
         <Text dimColor>{`  ${pageIndex + 1}/${PAGES.length}`}</Text>
       </Box>
       <Text dimColor>{'─'.repeat(Math.max(20, Math.min(72, columns - 6)))}</Text>
 
       {/* Paged body */}
-      <Box flexDirection="column" paddingX={1} maxHeight={Math.max(10, rows - 14)}>
+      {/* 行数预算：整屏形态沿用原公式；侧栏形态的 rows 已是宿主高度，单独
+          收一档，保证底部提示行仍在可视区内。 */}
+      <Box flexDirection="column" paddingX={1} maxHeight={panelMode ? Math.max(6, rows - 10) : Math.max(10, rows - 14)}>
         <ScrollBox ref={scrollRef} flexDirection="column" flexGrow={1}>
           {page === 'summary' && (
             <Box flexDirection="column">
@@ -265,16 +406,71 @@ export function SubagentDetailScene({
             subagent.outputEvents.length === 0 && subagent.output.length === 0 ? (
               <Text dimColor>{t('subagent-no-output')}</Text>
             ) : (
-              subagent.outputEvents.map((line, index) => (
-                <Text
-                  key={index}
-                  wrap="wrap"
-                  dimColor={line.kind === 'thinking' || line.kind === 'system'}
-                  color={line.kind === 'error' ? 'error' : undefined}
-                >
-                  {line.kind === 'thinking' ? '  ⌁ ' : '  '}{line.text}{!line.settled && isRunning ? ' ▍' : ''}
-                </Text>
-              ))
+              blocks.map((block, index) => {
+                if (block.kind === 'thinking') {
+                  const text = block.lines.map(line => line.text).join('\n')
+                  const chars = text.replace(/\s+/g, '').length
+                  const label = `${THINKING_SETTLED_MARKER} ${t('subagent-thinking-fold', { count: block.lines.length, chars })}`
+                  const hint = thinkingOpen ? t('subagent-thinking-collapse') : t('subagent-thinking-expand')
+                  return (
+                    <Box key={`think-${index}`} flexDirection="column">
+                      <Text italic dimColor>{`${label}  ·  ${hint}`}</Text>
+                      {thinkingOpen ? (
+                        <Box flexDirection="column" paddingLeft={2}>
+                          {block.lines.map((line, i) => (
+                            <Text key={i} dimColor italic wrap="wrap">{line.text}</Text>
+                          ))}
+                        </Box>
+                      ) : (
+                        <Text dimColor italic wrap="truncate-end">{`  ${block.lines[0]?.text.replace(/\s+/g, ' ').trim() ?? ''}`}</Text>
+                      )}
+                    </Box>
+                  )
+                }
+                if (block.kind === 'prose') {
+                  const proseText = block.lines.map(p => p.text).join('\n')
+                  const proseUnsettled = isRunning && block.lines.some(p => p.settled === false)
+                  const isProseAnswer = index === answerBlock
+                  return (
+                    <Box key={`prose-${index}`} flexDirection="column" marginTop={index === 0 ? 0 : 1}>
+                      {isProseAnswer && (
+                        <Text dimColor>{`── ${t('subagent-conclusion')} ${'─'.repeat(Math.max(8, Math.min(60, columns - 16)))}`}</Text>
+                      )}
+                      <Markdown dimColor={false} cacheTokens>{proseText}</Markdown>
+                      {proseUnsettled && <Text dimColor>{'▌'}</Text>}
+                    </Box>
+                  )
+                }
+                const line = block.line
+                const unsettled = !line.settled && isRunning ? ' ▍' : ''
+                if (line.kind === 'text' && isActivityLine(line.text)) {
+                  return (
+                    <Box key={`act-${index}`} flexDirection="row" gap={1}>
+                      <Text color="accent">{'⏵'}</Text>
+                      <Text dimColor wrap="truncate-end">{line.text.replace(/^[\s⏵▶▸»]+/, '')}{unsettled}</Text>
+                    </Box>
+                  )
+                }
+                const isAnswer = index === answerBlock
+                // Tool / error / system rows get a leading row gap so a wall
+                // of streamed rows stops reading as one cramped paragraph.
+                const rowGap = line.kind === 'tool' || line.kind === 'error' || line.kind === 'system'
+                return (
+                  <Box key={`line-${index}`} flexDirection="column" marginTop={rowGap && index !== 0 ? 1 : 0}>
+                    {isAnswer && (
+                      <Text dimColor>{`── ${t('subagent-conclusion')} ${'─'.repeat(Math.max(8, Math.min(60, columns - 16)))}`}</Text>
+                    )}
+                    <Text
+                      wrap="wrap"
+                      bold={isAnswer}
+                      dimColor={line.kind === 'system'}
+                      color={line.kind === 'error' ? 'error' : line.kind === 'tool' ? 'accent' : undefined}
+                    >
+                      {line.kind === 'tool' ? `● ${line.text}` : line.text}{unsettled}
+                    </Text>
+                  </Box>
+                )
+              })
             )
           )}
           {page === 'tools' && (
@@ -316,7 +512,8 @@ export function SubagentDetailScene({
       {/* Footer hint */}
       <Box marginTop={0} flexDirection="row">
         <Text dimColor>
-          {`←/→ ${t('subagent-hint-page')} · ↑/↓ ${t('subagent-hint-scroll')}`}
+          {`←/→ ${t('subagent-hint-page')} · ↑/↓ ${t('subagent-hint-scroll')}`
+            + (page === 'output' && hasThinking ? ` · ${t('subagent-hint-fold')}` : '')}
         </Text>
         {isRunning && onInterrupt && (
           <>
