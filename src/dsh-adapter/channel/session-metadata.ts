@@ -56,14 +56,22 @@ export function createSessionMetadataActions(ctx: Context, deps: {
   const remember = (source: SessionSource, rows: readonly SessionSummary[]): void => {
     lastListing = { source: source.identity ?? source, rows }
   }
+  /** Sessions DSH archived (e.g. from dsh web) stay out of every list and count (#1042). */
+  const unarchived = (rows: readonly SessionSummary[]): readonly SessionSummary[] => {
+    const archived = (ctx.get('workspaceRegistry') as { archivedSessionIds?: readonly string[] } | undefined)?.archivedSessionIds
+    if (archived === undefined || archived.length === 0) return rows
+    const hidden = new Set<string>(archived)
+    return rows.filter(row => !hidden.has(row.id))
+  }
   const cachedSessions = (): readonly SessionSummary[] | undefined => {
     const source = persistence()
     if (source === undefined) return undefined
     // Providers without a durable scope still keep same-instance reopen fast.
     // A replaced service never inherits this in-memory view.
-    return lastListing?.source === (source.identity ?? source)
+    const rows = lastListing?.source === (source.identity ?? source)
       ? lastListing.rows
       : readListingSnapshot(source)
+    return rows === undefined ? undefined : unarchived(rows)
   }
   const listSessions = async (onEnriched?: (summary: SessionSummary) => void, onPartial?: (rows: readonly SessionSummary[]) => void): Promise<readonly SessionSummary[]> => {
     const generation = ++listingGeneration
@@ -74,15 +82,15 @@ export function createSessionMetadataActions(ctx: Context, deps: {
       return []
     }
     let summaries: readonly SessionSummary[] = []
-    summaries = await listSummaries(source, deps.owner.signal, enriched => {
+    summaries = unarchived(await listSummaries(source, deps.owner.signal, enriched => {
       if (!current(capture) || generation !== listingGeneration) return
       summaries = summaries.map(row => row.id === enriched.id ? enriched : row)
       remember(source, summaries)
       deps.setPersistedSessions(summaries)
       onEnriched?.(enriched)
     }, rows => {
-      if (current(capture) && generation === listingGeneration) onPartial?.(rows)
-    })
+      if (current(capture) && generation === listingGeneration) onPartial?.(unarchived(rows))
+    }))
     if (!current(capture) || generation !== listingGeneration) return []
     remember(source, summaries)
     deps.setPersistedSessions(summaries)
