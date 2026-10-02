@@ -136,6 +136,7 @@ import { TerminalWriteContext } from '../ink/useTerminalNotification.js'
 import instances from '../ink/instances.js'
 import { useAnimationFrame } from '../ink/hooks/use-animation-frame.js'
 import { useExternalVersion } from '../hooks/useExternalVersion.js'
+import { useDragToScroll } from '../hooks/useDragToScroll.js'
 import { TrajectoryScene } from './TrajectoryScene.js'
 import { markHomeSeen } from '../homePrefs.js'
 import { markOnboardingDone } from '../onboardingPrefs.js'
@@ -539,6 +540,7 @@ export function Chat({
   const [expanded, setExpanded] = React.useState(false)
   const [helpOpen, setHelpOpen] = React.useState(false)
   const [handle, setHandle] = React.useState<ScrollBoxHandle | null>(null)
+  useDragToScroll(handle)
   /**
    * Conversation timeline snapshot (reported by MessageList): one entry
    * per user turn plus the viewport-derived navigation targets. The

@@ -1079,7 +1079,12 @@ export function shiftSelectionForViewportResize(
     const drop = Math.min(oldTop - newTop, s.scrolledOffAbove.length)
     s.scrolledOffAbove.length -= drop
   }
-  if (newTop > oldTop) captureScrolledRows(s, screen, oldTop, newTop - 1, 'above')
+  // A live drag's focus is the pointer, not text. The sticky header mounts
+  // over it when drag-to-scroll leaves the bottom, in the same frame the
+  // rows moved, so banking the covered row would file it out of order; the
+  // clamp below moves the focus to the new top instead (#1272).
+  const pointerCovered = s.isDragging && s.focus !== null && s.focus.row < newTop
+  if (newTop > oldTop && !pointerCovered) captureScrolledRows(s, screen, oldTop, newTop - 1, 'above')
   if (newBottom < oldBottom)
     captureScrolledRows(s, screen, newBottom + 1, oldBottom, 'below')
   if (!s.focus) {
@@ -1389,7 +1394,9 @@ export function refreshSelectionFingerprint(
   // keyboard pan, multi-click — the user redefined what is highlighted, so
   // the next copy legitimately reads the new band's CURRENT text. Only a
   // stationary highlight can go stale.
-  const geometry = `${b.start.row}:${b.start.col}-${b.end.row}:${b.end.col}`
+  // The virtual rows count too: drag-to-scroll moves a clamped anchor past
+  // the edge without moving its on-screen cell (#1272).
+  const geometry = `${b.start.row}:${b.start.col}-${b.end.row}:${b.end.col}@${s.virtualAnchorRow ?? ''}:${s.virtualFocusRow ?? ''}`
   if (geometry !== s.coveredGeometry) {
     s.coveredGeometry = geometry
     s.coveredFingerprint = null
