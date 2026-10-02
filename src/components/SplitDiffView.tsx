@@ -4,6 +4,7 @@ import * as JsDiff from 'diff'
 import { extname } from 'node:path'
 import type { ToolFileDiff } from '../dsh-adapter/channel.js'
 import type { Color } from '../ink/styles.js'
+import type { ClickEvent } from '../ink/events/click-event.js'
 import { getCliHighlightPromise, type CliHighlight } from '../terminal-utils/cliHighlight.js'
 import { chalkFromToken } from '../terminal-utils/syntaxTheme.js'
 import { highlightLines, syntaxThemeSignature, type SyntaxRun } from '../terminal-utils/syntaxRuns.js'
@@ -416,6 +417,8 @@ type DiffViewProps = {
   readonly maxRows: number
   readonly verbose: boolean
   readonly toolBackground?: ToolBackground
+  /** File separators open the owning card's file-action menu. */
+  readonly onOpenFile?: (path: string) => void
   /**
    * Smooth-streaming participation (the card owning this view computes
    * eligibility): when present, the capped row list reveals line-by-line at
@@ -544,7 +547,23 @@ function FoldHint({ hidden }: { readonly hidden: number }): React.ReactNode {
     : null
 }
 
-function SeparatorRow({ separator, width }: { readonly separator: string; readonly width: number }): React.ReactNode {
+function SeparatorRow({ separator, width, onOpenFile }: {
+  readonly separator: string
+  readonly width: number
+  readonly onOpenFile?: (path: string) => void
+}): React.ReactNode {
+  if (separator !== '⋯' && onOpenFile !== undefined) {
+    return (
+      <Box width={width}>
+        <Box onClick={(event: ClickEvent) => {
+          event.stopImmediatePropagation()
+          onOpenFile(separator)
+        }}>
+          <Text color="ide" underline wrap="truncate">{`  ${separator}`}</Text>
+        </Box>
+      </Box>
+    )
+  }
   return (
     <Box width={width}>
       <Text dimColor wrap="truncate">
@@ -565,7 +584,7 @@ export function SplitDiffView(props: DiffViewProps & {
   return (
     <Box flexDirection="column" width={paneWidth * 2 + 1}>
       {shown.map((row, index) => {
-        if ('separator' in row) return <SeparatorRow key={index} separator={row.separator} width={paneWidth * 2 + 1} />
+        if ('separator' in row) return <SeparatorRow key={index} separator={row.separator} width={paneWidth * 2 + 1} onOpenFile={props.onOpenFile} />
         const side = sides(row)
         return (
           <Box key={index} flexDirection="row">
@@ -591,7 +610,7 @@ export function UnifiedDiffView(props: DiffViewProps): React.ReactNode {
   return (
     <Box flexDirection="column" width={width}>
       {shown.map((row, index) => {
-        if ('separator' in row) return <SeparatorRow key={index} separator={row.separator} width={width} />
+        if ('separator' in row) return <SeparatorRow key={index} separator={row.separator} width={width} onOpenFile={props.onOpenFile} />
         const side = sides(row)
         return (
           <PaneLine
