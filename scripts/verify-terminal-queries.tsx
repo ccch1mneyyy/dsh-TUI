@@ -482,6 +482,9 @@ for (const [label, seeded] of [
     ['DA1', DA1_REPLY, DA1_SPLIT, 'da1'],
     ['DA2', '\x1b[>0;276;0c', 4, 'da2'],
     ['DSR (DECXCPR)', '\x1b[?3;1R', 4, 'cursorPosition'],
+    // Windows Terminal appends the page number (_CursorPositionReport); the
+    // shape must hold across a split read and still parse as one response.
+    ['DSR (DECXCPR, WT page)', '\x1b[?16;1;1R', 7, 'cursorPosition'],
     ['DECRPM', '\x1b[?25;1$y', 5, 'decrpm'],
     ['XTVERSION', '\x1bP>|xterm.js(5.5.0)\x1b\\', 8, 'xtversion'],
     ['kitty flags', '\x1b[?1u', 3, 'kittyKeyboard'],
