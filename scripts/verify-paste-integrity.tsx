@@ -412,6 +412,60 @@ checkNum('j5: …of which exactly ONE keeps its ESC (the arming evidence)', ALL_
 checkNum('j6: the LCS alignment reads deleted == 0 (no source character lost)', allBoundaryLoss.deleted, 0)
 checkNum('j7: the restored value carries no record residue (`_` / ESC)', residueCount(allBoundaryValue), 0)
 
+// ── (k) VK_PACKET (231): the character rides in Uc (T-FIX-02) ───────────────
+
+console.log('# (k) VK_PACKET records: a pasted break is a Return, not a swallow')
+
+/**
+ * T-FIX-01's convicted forms, replayed on the reported payload. VK_PACKET is
+ * the "the character is in Uc" virtual key: Unicode-injected input, and the
+ * spelling Windows Terminal re-encodes a paste into under win32-input-mode.
+ * V10 spells every character as `231;0;<cp>` and every break as a CR record
+ * plus its LF record; V11 keeps only the CR record; V17 keeps the real Vk/Sc
+ * char lane and the VK_PACKET break lane. All three folded to
+ * `1 line・751 chars` on BOTH legs before the fix — the break records were
+ * swallowed whole, so the assembled payload carried no newline at all.
+ */
+const packetRec = (ch: string): string => rec(231, 0, ch.codePointAt(0)!)
+const PACKET_CR = rec(231, 0, 13)
+const PACKET_CRLF = `${PACKET_CR}${rec(231, 0, 10)}`
+/** The file's own "real Vk/Sc" char records (the lane `tailOf` spells). */
+const realRec = (ch: string): string => {
+  const [vk, sc, uc, cs] = fieldsFor(ch)
+  return rec(vk, sc, uc, cs)
+}
+/** One payload body: every `\n` spelled as `breakRecs`, every other character
+ *  as its own record through `charRec`. */
+const packetBody = (text: string, breakRecs: string, charRec: (ch: string) => string): string =>
+  [...text].map(ch => (ch === '\n' ? breakRecs : charRec(ch))).join('')
+
+const PACKET_V10_BODY = packetBody(ALL_BOUNDARY_SOURCE, PACKET_CRLF, packetRec)
+const PACKET_V10 = pasteStream(PACKET_V10_BODY)
+const PACKET_V11 = pasteStream(packetBody(ALL_BOUNDARY_SOURCE, PACKET_CR, packetRec))
+const PACKET_V17 = pasteStream(packetBody(ALL_BOUNDARY_SOURCE, PACKET_CRLF, realRec))
+/** The payload these streams hand the composer, through the real ingress. */
+const packetValue = (stream: string): string => pasteIngress(pastePayload(stream))
+const v10Value = packetValue(PACKET_V10)
+
+check('k1: V10 (VK_PACKET chars + 231;0;13/10 breaks) restores the source', v10Value, ALL_BOUNDARY_SOURCE)
+checkNum('k2: ...and the 10 source lines', v10Value.split('\n').length, ALL_BOUNDARY_ROWS.length)
+checkNum('k3: ...and all 760 characters', v10Value.length, ALL_BOUNDARY_SOURCE.length)
+checkNum('k4: ...with no source character lost (LCS deleted == 0)', align(ALL_BOUNDARY_SOURCE, v10Value).deleted, 0)
+checkNum('k5: ...and no record residue (`_` / ESC)', residueCount(v10Value), 0)
+check('k6: V11 (only the CR record) restores the source too', packetValue(PACKET_V11), ALL_BOUNDARY_SOURCE)
+check('k7: V17 (real Vk/Sc chars + VK_PACKET breaks) restores the source', packetValue(PACKET_V17), ALL_BOUNDARY_SOURCE)
+// Premise guards: without these the case could silently stop being the
+// convicted shape (a literal newline left in it, or a missing break record).
+checkNum('k8: the delivered V10 form carries 0 literal newline characters', [...PACKET_V10_BODY].filter(ch => ch === '\n').length, 0)
+checkNum('k9: ...and spells 9 VK_PACKET CR records, ONE per boundary', PACKET_V10_BODY.split(PACKET_CR).length - 1, ALL_BOUNDARY_ROWS.length - 1)
+// The zero-information record stays swallowed (V9): a Uc=0 VK_PACKET record
+// may not be invented into a character OR a break.
+check(
+  'k10: a Uc=0 VK_PACKET record adds no character and no newline',
+  pastePayload(pasteStream(perCharRecords('a'), rec(231, 0, 0), perCharRecords('b'))),
+  'ab',
+)
+
 // ── (g) on the product: chip lines == source lines, Enter sends the source ──
 
 console.log('# (g) on the product: the fold chip reports the SOURCE lines, Enter sends them')
@@ -486,12 +540,28 @@ type Round = {
   readonly submitted: string
   readonly chip: { lines: number; chars: number } | null
   readonly landed: boolean
+  /** true when the paste ALONE dispatched a submit, before Enter was pressed */
+  readonly selfSubmitted: boolean
 }
 
-/** One delivery round: paste -> read value + chip -> Enter -> read submit.
- *  `stream` is the decomposed win32-paste byte stream itself, so a round can
- *  use the mixed lanes a half-leaked break needs (`pasteStream`). */
-async function deliver(stream: string): Promise<Round> {
+/** Enter, with the second press the folded-composer path sometimes needs
+ *  (a first press can land while the frame is still settling). Returns the
+ *  submitted payload, or '' when nothing was dispatched. */
+async function pressEnter(): Promise<string> {
+  stdinObj.write('\r')
+  const first = await settled(() => submittedCount > 0, { timeoutMs: 900 })
+  if (!first) {
+    stdinObj.write('\r')
+    await settled(() => submittedCount > 0, { timeoutMs: SUBMIT_MS })
+  }
+  return submittedCount > 0 ? lastSubmitted : ''
+}
+/** One delivery round: paste -> read value + chip -> (unless `submit` is
+ *  false) Enter -> read submit. `stream` is the decomposed win32-paste byte
+ *  stream itself, so a round can use the mixed lanes a half-leaked break needs
+ *  (`pasteStream`). `submit: false` leaves the prompt untouched and reports
+ *  whether the paste alone submitted anything. */
+async function deliver(stream: string, submit = true): Promise<Round> {
   composerRef.current?.clear()
   await settled(() => composerText() === '' && chipOnScreen() === null, { timeoutMs: 3000 })
   submittedCount = 0
@@ -507,13 +577,9 @@ async function deliver(stream: string): Promise<Round> {
   }, { timeoutMs: LAND_MS })
   const value = composerText()
   const chip = chipOnScreen()
-  stdinObj.write('\r')
-  let sent = await settled(() => submittedCount > 0, { timeoutMs: 900 })
-  if (!sent) {
-    stdinObj.write('\r')
-    sent = await settled(() => submittedCount > 0, { timeoutMs: SUBMIT_MS })
-  }
-  return { value, submitted: submittedCount > 0 ? lastSubmitted : '', chip, landed }
+  const selfSubmitted = submittedCount > 0
+  if (!submit) return { value, submitted: '', chip, landed, selfSubmitted }
+  return { value, submitted: await pressEnter(), chip, landed, selfSubmitted }
 }
 
 // 4 rows, each over 160 characters: the fold gate is ≥6 lines OR ≥600 chars
@@ -581,6 +647,29 @@ try {
   check('j11: Enter submits the source byte-for-byte', allBoundary.submitted, ALL_BOUNDARY_SOURCE)
   checkNum('j12: the painted chip row carries no record residue (`_`)', residueCount(chipRowOnScreen()), 0)
   checkNum('j13: and no painted row carries a record-shaped run', termTest.viewportLines(term).filter(row => RECORD_SHAPE.test(row)).length, 0)
+
+  // (k) on the product: T-FIX-01's convicted VK_PACKET forms, through the real
+  // parser + composer + render. The chip must report the SOURCE lines and
+  // chars, the paste alone must NOT submit (no Return record is dispatched),
+  // and a real Enter must still send the payload byte-for-byte (L-012).
+  const packetV10 = await deliver(PACKET_V10, false)
+  console.log(`     VK_PACKET V10 (on the product): landed=${packetV10.landed} valueLines=${packetV10.value.split('\n').length} chip=${packetV10.chip === null ? 'none' : `${packetV10.chip.lines} lines/${packetV10.chip.chars} chars`} selfSubmitted=${packetV10.selfSubmitted}`)
+  check('k11: the composer holds the source bytes', packetV10.value, ALL_BOUNDARY_SOURCE)
+  checkNum('k12: chip lines == source lines (10)', packetV10.chip?.lines ?? -1, ALL_BOUNDARY_ROWS.length)
+  checkNum('k13: chip chars == source chars (760)', packetV10.chip?.chars ?? -1, ALL_BOUNDARY_SOURCE.length)
+  checkNum('k14: the paste alone does not submit (no Return is dispatched)', packetV10.selfSubmitted ? 1 : 0, 0)
+  check('k15: Enter still submits the restored payload byte-for-byte', await pressEnter(), ALL_BOUNDARY_SOURCE)
+
+  const packetV11 = await deliver(PACKET_V11, false)
+  console.log(`     VK_PACKET V11 (on the product): landed=${packetV11.landed} valueLines=${packetV11.value.split('\n').length} chip=${packetV11.chip === null ? 'none' : `${packetV11.chip.lines} lines/${packetV11.chip.chars} chars`} selfSubmitted=${packetV11.selfSubmitted}`)
+  check('k16: the composer holds the source bytes', packetV11.value, ALL_BOUNDARY_SOURCE)
+  checkNum('k17: chip lines == source lines (10)', packetV11.chip?.lines ?? -1, ALL_BOUNDARY_ROWS.length)
+
+  const packetV17 = await deliver(PACKET_V17, false)
+  console.log(`     VK_PACKET V17 (on the product): landed=${packetV17.landed} valueLines=${packetV17.value.split('\n').length} chip=${packetV17.chip === null ? 'none' : `${packetV17.chip.lines} lines/${packetV17.chip.chars} chars`} selfSubmitted=${packetV17.selfSubmitted}`)
+  check('k18: the composer holds the source bytes', packetV17.value, ALL_BOUNDARY_SOURCE)
+  checkNum('k19: chip lines == source lines (10)', packetV17.chip?.lines ?? -1, ALL_BOUNDARY_ROWS.length)
+  checkNum('k20: chip chars == source chars (760)', packetV17.chip?.chars ?? -1, ALL_BOUNDARY_SOURCE.length)
 } finally {
   await instance?.unmount()
   rmSync(dataDir, { recursive: true, force: true })

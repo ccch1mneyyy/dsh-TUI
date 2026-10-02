@@ -932,6 +932,69 @@ for (const sequence of [`${CSI}1;2;3;1A`, `${CSI}1;2;3;1$y`]) {
   }
 }
 
+// --- 16. VK_PACKET (231) records carry their character in Uc (T-FIX-02) ------
+//
+// VK_PACKET means "the character is in Uc" (SendInput / keybd_event Unicode
+// injection; Windows Terminal re-encodes a paste this way under
+// win32-input-mode). Printable Uc already reached text input through the
+// Uc-wins-over-Vk path, but the CONTROL characters a pasted break is spelled
+// with fell through to the swallow at the end of parseWin32KeyEvent: every
+// break record vanished, so a decomposed paste assembled without newlines
+// (user report: a 10-line / 760-char paste folded to `1 line・751 chars`).
+// These assertions put VK_PACKET on the same "character rides in Uc" lane the
+// Vk=0 synthesized records already use — and keep Uc=0 swallowed.
+
+const packetRec = (uc: number): string => pasteRecs(231, uc)
+
+check('VK_PACKET CR (Uc=13) is a Return, not a swallowed record', new Feeder().feed(`${CSI}231;0;13;1;0;1_`), [
+  wkey('return', {}, `${CSI}231;0;13;1;0;1_`),
+])
+check('VK_PACKET LF (Uc=10) is a Return too', new Feeder().feed(`${CSI}231;0;10;1;0;1_`), [
+  wkey('return', {}, `${CSI}231;0;10;1;0;1_`),
+])
+check('VK_PACKET Tab (Uc=9) is a Tab', new Feeder().feed(`${CSI}231;0;9;1;0;1_`), [
+  wkey('tab', {}, `${CSI}231;0;9;1;0;1_`),
+])
+check('VK_PACKET Backspace (Uc=8) is a Backspace', new Feeder().feed(`${CSI}231;0;8;1;0;1_`), [
+  wkey('backspace', {}, `${CSI}231;0;8;1;0;1_`),
+])
+check('VK_PACKET DEL (Uc=127) is a Backspace', new Feeder().feed(`${CSI}231;0;127;1;0;1_`), [
+  wkey('backspace', {}, `${CSI}231;0;127;1;0;1_`),
+])
+check('VK_PACKET Escape (Uc=27) is held as a candidate sequence prefix', new Feeder().feed(`${CSI}231;0;27;1;0;1_`), [])
+{
+  // …and released on the flush exactly like a real VK_ESCAPE record (the
+  // escape timer holds any translated Escape, not just the named-key one).
+  const f = new Feeder()
+  f.feed(`${CSI}231;0;27;1;0;1_`)
+  check('VK_PACKET Escape flushes as an Escape', f.feed(null), [
+    wkey('escape', {}, `${CSI}231;0;27;1;0;1_`),
+  ])
+}
+check('VK_PACKET with Uc=0 carries no payload and stays swallowed', new Feeder().feed(`${CSI}231;0;0;1;0;1_`), [])
+
+{
+  // A decomposed paste spelled with VK_PACKET records: V10/V17's break lane
+  // (CR record + LF record) must fold to ONE newline, exactly like the Vk=0
+  // synthesized lane above (#1090).
+  const f = new Feeder()
+  const body = packetRec(97) + packetRec(13) + packetRec(10) + packetRec(98)
+  checkPaste('decomposed paste with VK_PACKET CR+LF breaks yields one newline', f.feed(P2_OPEN + body + P2_CLOSE), 'a\nb')
+}
+{
+  // V11's break lane: the CR record alone.
+  const f = new Feeder()
+  const body = packetRec(97) + packetRec(13) + packetRec(98)
+  checkPaste('decomposed paste with a lone VK_PACKET CR break yields one newline', f.feed(P2_OPEN + body + P2_CLOSE), 'a\nb')
+}
+{
+  // The zero-information record must stay swallowed — a paste may not gain a
+  // newline from a Uc=0 VK_PACKET record (issue #1251 UAT's V9 shape).
+  const f = new Feeder()
+  const body = packetRec(97) + packetRec(0) + packetRec(98)
+  checkPaste('a Uc=0 VK_PACKET record adds no character inside a paste', f.feed(P2_OPEN + body + P2_CLOSE), 'ab')
+}
+
 if (failures > 0) {
   console.error(`\n${failures} assertion(s) failed`)
   process.exit(1)

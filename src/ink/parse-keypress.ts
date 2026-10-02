@@ -129,6 +129,15 @@ const WIN32_CS_SHIFT = 0x10
 // so both their keydown and keyup records are dropped.
 const WIN32_VK_MODIFIER = new Set([16, 17, 18]) // VK_SHIFT, VK_CONTROL, VK_MENU
 
+// VK_PACKET: the record's payload IS the character in Uc (SendInput /
+// keybd_event Unicode injection; Windows Terminal re-encodes a paste that way
+// under win32-input-mode). It therefore takes the same "character rides in Uc"
+// lane as conhost's Vk=0 synthesized records — without it, a pasted break
+// spelled as VK_PACKET CR/LF was swallowed whole and the reassembled paste
+// lost one newline per line boundary (#1251 UAT: a 10-line / 760-char Ctrl+V
+// folded to `1 line・751 chars` and never submitted).
+const WIN32_VK_PACKET = 231
+
 // Virtual-key code → key name for non-printing keys. Names match the
 // keyName vocabulary below so input-event's nonAlphanumericKeys filter
 // clears their raw sequence from text input. Printable keys are NOT here —
@@ -1014,10 +1023,14 @@ function parseWin32KeyEvent(
 
   // Synthesized character records (conhost's SynthesizeKeyEvent: Vk=0,
   // Sc=0, Cs=0) carry their entire payload in Uc — including the control
-  // chars that spell the bracketed-paste markers (ESC[200~ / ESC[201~).
+  // chars that spell the bracketed-paste markers (ESC[200~ / ESC[201~) and,
+  // inside a decomposed paste, the break records (CR 13 / LF 10 / Tab 9 /
+  // Backspace 8 or DEL 127 / Escape 27). VK_PACKET records carry the same
+  // payload in Uc, so they take this lane too; only a record with NO
+  // decodable payload (Uc=0) is still swallowed.
   // Map the editing-relevant ones to named keys so the decomposed-paste
   // reassembler below can see the marker characters at all.
-  if (vk === 0) {
+  if (vk === 0 || vk === WIN32_VK_PACKET) {
     if (uc === 27) return { key: { ...base, name: 'escape', sequence: s }, repeat }
     if (uc === 13 || uc === 10) return { key: { ...base, name: 'return', sequence: s }, repeat }
     if (uc === 9) return { key: { ...base, name: 'tab', sequence: s }, repeat }
