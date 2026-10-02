@@ -11,7 +11,7 @@ import { TrajectoryPanel } from './TrajectoryPanel.js'
 import { WorkspacePanel } from './WorkspacePanel.js'
 import { BtwPanelAdapter } from './btw/BtwPanelAdapter.js'
 import { panelStore } from './PanelStore.js'
-import { useSidePanelChannel } from './SidePanelRuntimeContext.js'
+import { SidePanelRuntimeContext, useSidePanelChannel } from './SidePanelRuntimeContext.js'
 import { usePanelInput } from './usePanelInput.js'
 import { jobsFocusStore } from './jobsFocusStore.js'
 import { agentViewStore } from './agentViewStore.js'
@@ -21,6 +21,7 @@ import type { PanelProps } from './types.js'
 /** todo：GoalTodoPanel 的 panel variant（同一份 store，不重写业务）。 */
 function TodoPanelAdapter({ width, height, focused, visible }: PanelProps): React.ReactNode {
   const channel = useSidePanelChannel()
+  const onOpenGoal = React.useContext(SidePanelRuntimeContext)?.openGoalDetails
   // 折叠态是面板内局部 state（默认展开）——不接 Chat 的 ctrl/cmd+q 热键
   // 状态，两个形态各自独立。头部行点击与键盘（Enter/空格）走同一 toggle：
   // 修复前头部行 onClick 没接（GoalTodoPanel 的 onToggle 未传），
@@ -41,6 +42,7 @@ function TodoPanelAdapter({ width, height, focused, visible }: PanelProps): Reac
       visible={visible}
       collapsed={collapsed}
       onToggle={toggleCollapsed}
+      onOpenGoal={onOpenGoal}
       maxTodos={Math.max(3, height - 4)}
       // 折行宽 = 面板宽 − 左右 padding 2 − 树形前缀 3 − 状态 glyph 2，
       // 再留 1 格余量防 ink 二次折行（长行溢出超过约束会把同行定宽列挤折）。

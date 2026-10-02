@@ -28,6 +28,7 @@ export interface SidePanelRuntimeContextValue {
    *  未接（或该 Panel 没有整屏形态）时 undefined，按钮照画但点击无效——
    *  宿主是否可展开由 PanelDefinition.capabilities.fullscreen 决定。 */
   readonly openFullscreen?: (panelId: string) => void
+  readonly openGoalDetails?: () => void
 }
 
 export const SidePanelRuntimeContext = React.createContext<SidePanelRuntimeContextValue | null>(null)
