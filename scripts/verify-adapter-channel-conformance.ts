@@ -1,8 +1,8 @@
 /**
- * P5 Channel Provider-Consumer / dsh-ecosystem-spec conformance gate.
+ * P5 Channel Provider-Consumer / tui-profile conformance gate.
  *
  * Proves:
- * - the official `dsh-ecosystem-spec/conformance/fixtures/valid-tui-channel.json`
+ * - the official `tui-profile/conformance/fixtures/valid-tui-channel.json`
  *   fixture is loaded and validated by the vendored protocol validators;
  * - real DSH session events can be projected to `TuiChannelSnapshot` and
  *   replayed through provider/consumer;
@@ -44,8 +44,8 @@ import {
 const ROOT = resolve(import.meta.dirname, '..')
 let checks = 0
 
-// ── official dsh-ecosystem-spec fixture ────────────────────────────────────
-const officialFixturePath = join(ROOT, 'dsh-ecosystem-spec', 'conformance', 'fixtures', 'valid-tui-channel.json')
+// ── official tui-profile fixture ──────────────────────────────────────────
+const officialFixturePath = join(ROOT, 'tui-profile', 'conformance', 'fixtures', 'valid-tui-channel.json')
 const official = JSON.parse(readFileSync(officialFixturePath, 'utf8')) as {
   requirement: { wireRevision: number; features: readonly string[] }
   support: { wireRevision: number; features: readonly string[] }

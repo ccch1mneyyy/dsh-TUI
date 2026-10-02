@@ -1,14 +1,12 @@
+import type { ContextOccupancy } from '../../adapter/ports/channel-view.js'
 import type { ComposerImageRef, PendingMessage } from './types.js'
 
 /** Small mutable cells for Channel-local warning and pending-message state. */
 export function createContextBookkeeping(
   state: () => {
-    contextWindow: number | undefined
-    tokens: { input: number }
-    /** Last turn's billed token shape; the honest numerator for the
-     * context-low warning (input alone misses cached reads/writes, which
-     * resumed sessions replay back at full size). */
-    lastUsage: { input: number; cacheRead: number; cacheWrite: number } | undefined
+    /** The channel's single occupancy reading (projection first, sample
+     *  fallback) — the honest numerator for the context-low warning. */
+    contextOccupancy: ContextOccupancy | undefined
     pending: PendingMessage[]
     emit(): void
   },
@@ -19,12 +17,16 @@ export function createContextBookkeeping(
   const warning = { value: false }
   const checkContextWarning = (): void => {
     const channel = state()
-    if (warning.value || channel.contextWindow === undefined || channel.lastUsage === undefined) return
-    const used = channel.lastUsage.input + channel.lastUsage.cacheRead + channel.lastUsage.cacheWrite
-    const remaining = channel.contextWindow - used
+    const occupancy = channel.contextOccupancy
+    // No window (no route capacity) is the only reason to stay silent: the
+    // numerator is now the projected occupancy, which exists as soon as a
+    // meter (any normal deployment) or one settled request knows anything.
+    if (warning.value || occupancy === undefined || occupancy.contextWindow === undefined) return
+    if (occupancy.contextWindow <= 0) return
+    const remaining = occupancy.contextWindow - occupancy.usedTokens
     if (remaining >= warningBufferTokens) return
     warning.value = true
-    notify(lowContextText(Math.max(0, Math.round((remaining / channel.contextWindow) * 100))), {
+    notify(lowContextText(Math.max(0, Math.round((remaining / occupancy.contextWindow) * 100))), {
       color: 'warning', timeoutMs: 8000,
     })
   }

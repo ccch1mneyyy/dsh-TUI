@@ -775,7 +775,7 @@ export class TuiPluginHostRuntime extends Service implements TuiPluginHost {
   selfCheck(): string[] {
     this.assertEffect('host.diagnostics')
     const data = loadSpecData()
-    if (data === undefined) return ['vendored spec data unavailable (dsh-ecosystem-spec/)']
+    if (data === undefined) return ['vendored spec data unavailable (tui-profile/)']
     return [...verifyRegistry(data), ...verifyContractProfiles(data)]
   }
 }

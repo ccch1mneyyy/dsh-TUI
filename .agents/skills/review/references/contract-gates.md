@@ -1,5 +1,5 @@
 # dsh-TUI 契约门禁
-真源为当前目标分支的 package.json、ADAPTER.md、src/dsh-adapter/contract.ts、src/plugin-host.ts、cordis.patch.yml、patch-surface.snapshot.json、dsh-ecosystem-spec/protocols/tui-channel.js、CI 及 docs/contributing.md。本文件仅检查顺序，不存日期化常量；契约变更缺兼容策略/迁移/验证默认阻断，新增公共面也须显审。
+真源为当前目标分支的 package.json、ADAPTER.md、src/dsh-adapter/contract.ts、src/plugin-host.ts、cordis.patch.yml、patch-surface.snapshot.json、tui-profile/protocols/tui-channel.js、CI 及 docs/contributing.md。本文件仅检查顺序，不存日期化常量；契约变更缺兼容策略/迁移/验证默认阻断，新增公共面也须显审。
 
 ## 先生成结构化快照
 执行顺序及命令以 SKILL.md 阶段 0 为唯一真源。快照比较包清单的 version/packageManager/engines/imports/bin/exports/dependencies/peerDependencies/devDependencies/scripts，adapter contract、plugin-host shim、patch/snapshot、tui-channel、CI/治理文档摘要，shim exports 及可稳定提取的 apiVersion/wireRevision/features；只定位、不替代语义审查，动态写法解析不到须直接读源。
@@ -20,7 +20,7 @@
 上列 patch 的行 ID、顺序、insert/override/disabled 语义须与 snapshot 一致；单边变默认阻断，双边变须重跑生成路径证来自真实输入而非手改绿。生成器同改须先用旧生成器复算再审差异；上游版本变后须证 patch 可应用真实目标，不只比数字。
 
 ## 门 5｜机器消费协议与 plugin-host 公共面
-**tui-channel**：从上列协议源提取 apiVersion/wireRevision/features、open/subscribe/invoke 等输入输出校验、已知字段/`x-*` 扩展/开放 state 边界；revision/features/字段/错误/握手变化须走 spec 治理并同步双端与验证，不以本仓单侧重定义协议。
+**tui-channel**：从上列协议源提取 apiVersion/wireRevision/features、open/subscribe/invoke 等输入输出校验、已知字段/`x-*` 扩展/开放 state 边界；revision/features/字段/错误/握手变化须同改 `tui-profile/` 正文与两端验证，不以本仓单侧重定义协议（该 profile 随本仓代码修订，不再有独立社区治理流程）。
 **plugin-host**：公共 re-export shim，逐次提取最新目标分支/head 的全部类型 exports/签名来源、运行 exports、常量值/限额/超时/错误码、admission/extension/permission 坐标，不手抄固定数量。删除/改名/改签名或常量语义默认阻断，直到补版本、迁移、文档、契约测试。
 
 ## 门 6｜CLI、环境变量与脚本消费面
@@ -30,7 +30,7 @@
 - src/ink/、src/native-ts/：敏感移植设施，聚焦修改、专用渲染/终端回归，不批量格式化。
 - vendor/：依当前子模块/vendored 规则，不混无出处手改。
 - lib/：当前为生成物，出现 diff 先对照真源/贡献指南，不手改当源码。
-- dsh-ecosystem-spec/：遵守自身治理。
+- tui-profile/：仓内 TUI Profile（准入 + 私有协议定义），随本仓代码修订、无独立治理流程；改它等同改契约——`registry/registry-0.15.json` 的 profileHash、`protocols/` 常量、`conformance/` fixture、adapter note 与 `src/adapter/spec` 派生常量必须同改同证，且本目录必须保持纯文件（不得重新挂成 submodule）。
 - .github/workflows/、scripts/verify-*：查 permissions、不可信 PR 执行、fail-open、路径过滤、挂载链、坏基线。
 
 ## 门禁自修改的证明义务

@@ -29,6 +29,17 @@ export type ScrollGutterMode = 'timeline' | 'scrollbar' | 'hidden'
 export type PageMarginSetting = PageMarginMode | PageMarginSpec
 
 /**
+ * Consecutive background-job cards (settings `dsh-tui.jobGroupFold`): a run
+ * of ≥2 adjacent job cards always renders as one group (chain rail + summary
+ * header); this setting decides when the run also FOLDS into that header.
+ *  - `auto` (default): fold a run of 3+ once every member settled;
+ *  - `always`: fold any run of 2+, live members included;
+ *  - `never`: keep every card — the click on the header still folds one run
+ *    by hand, and Ctrl+O still expands everything.
+ */
+export type JobGroupFoldMode = 'auto' | 'always' | 'never'
+
+/**
  * Root page inset (settings `dsh-tui.pageMargin`): some terminals carry
  * their own viewport padding (Windows Terminal's 8px default, GUI
  * emulators), others — bare WSL, tmux, SSH — have none, so the UI text

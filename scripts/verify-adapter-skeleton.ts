@@ -2,11 +2,11 @@
  * Verify the new adapter/ skeleton boundaries.
  *
  * This is a P0/P1 gate skeleton:
- * - ports/ may not import @deepseek-ai, @dsh-std or dsh-ecosystem-spec.
+ * - ports/ may not import @deepseek-ai, @dsh-std or tui-profile.
  * - kernel/ may not import @deepseek-ai or @dsh-std directly.
  * - upstream/ may import @deepseek-ai in the future, but must not import
- *   @dsh-std or dsh-ecosystem-spec private protocol.
- * - standard/ may import @dsh-std and dsh-ecosystem-spec, but never
+ *   @dsh-std or tui-profile private protocol.
+ * - standard/ may import @dsh-std and tui-profile, but never
  *   @deepseek-ai.
  * - legacy shim paths are verified absent.
  *
@@ -39,8 +39,8 @@ function collect(dir: string, out: string[] = []): string[] {
 // Matches real module specifiers only (import/export from, bare import,
 // dynamic import/require/import.meta.resolve); comments containing the words
 // are not violations.
-const ANY_ADAPTER_FORBIDDEN = /(?:import|export)\s[^'"]*?from\s*['"](?:@deepseek-ai\/|@dsh-std\/|#dsh-ecosystem-spec)|import\s*['"](?:@deepseek-ai\/|@dsh-std\/|#dsh-ecosystem-spec)|(?:import\s*\(|require\s*\(|import\.meta\.resolve\s*\()\s*['"](?:@deepseek-ai\/|@dsh-std\/|#dsh-ecosystem-spec)/u
-const UPSTREAM_FORBIDDEN = /(?:import|export)\s[^'"]*?from\s*['"](?:@dsh-std\/|#dsh-ecosystem-spec)|import\s*['"](?:@dsh-std\/|#dsh-ecosystem-spec)|(?:import\s*\(|require\s*\(|import\.meta\.resolve\s*\()\s*['"](?:@dsh-std\/|#dsh-ecosystem-spec)/u
+const ANY_ADAPTER_FORBIDDEN = /(?:import|export)\s[^'"]*?from\s*['"](?:@deepseek-ai\/|@dsh-std\/|#tui-profile)|import\s*['"](?:@deepseek-ai\/|@dsh-std\/|#tui-profile)|(?:import\s*\(|require\s*\(|import\.meta\.resolve\s*\()\s*['"](?:@deepseek-ai\/|@dsh-std\/|#tui-profile)/u
+const UPSTREAM_FORBIDDEN = /(?:import|export)\s[^'"]*?from\s*['"](?:@dsh-std\/|#tui-profile)|import\s*['"](?:@dsh-std\/|#tui-profile)|(?:import\s*\(|require\s*\(|import\.meta\.resolve\s*\()\s*['"](?:@dsh-std\/|#tui-profile)/u
 const OFFICIAL_FORBIDDEN = /(?:import|export)\s[^'"]*?from\s*['"]@deepseek-ai\/|import\s*['"]@deepseek-ai\/|(?:import\s*\(|require\s*\(|import\.meta\.resolve\s*\()\s*['"]@deepseek-ai\//u
 
 const failures: string[] = []
@@ -55,7 +55,7 @@ const checkNoImports = (layer: keyof typeof LAYERS, regex: RegExp, label: string
 
 checkNoImports('ports', ANY_ADAPTER_FORBIDDEN, '@deepseek-ai/* or dsh-std/spec')
 checkNoImports('kernel', ANY_ADAPTER_FORBIDDEN, '@deepseek-ai/* or dsh-std/spec')
-checkNoImports('upstream', UPSTREAM_FORBIDDEN, '@dsh-std/dsh-ecosystem-spec')
+checkNoImports('upstream', UPSTREAM_FORBIDDEN, '@dsh-std/* or tui-profile')
 const UPSTREAM_STANDARD_SPEC_IMPORT = /(?:import|export)\s[^'"]*?from\s*['"](?:\.\.\/)+(?:standard|spec)\/|(?:import\s*\(|require\s*\(|import\.meta\.resolve\s*\()\s*['"](?:\.\.\/)+(?:standard|spec)\//u
 checkNoImports('upstream', UPSTREAM_STANDARD_SPEC_IMPORT, '../standard or ../spec (shared values must come through kernel)')
 checkNoImports('standard', OFFICIAL_FORBIDDEN, '@deepseek-ai/*')

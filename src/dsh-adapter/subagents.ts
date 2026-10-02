@@ -110,8 +110,17 @@ export class SubagentActivityStore {
    * `live` marks a child the agents registry currently holds, which keeps the
    * row running; an idle historical child shows as `unknown` (the parent log
    * alone cannot prove how its last epoch ended). */
-  onDiscovered(agentId: string, info: { label?: string; childCreatedAt?: number; live?: boolean; provider?: string; model?: string } = {}): void {
-    if (this.states.has(agentId)) return
+  onDiscovered(agentId: string, info: { label?: string; childCreatedAt?: number; live?: boolean; provider?: string; model?: string; mode?: 'one-shot' | 'continuable' | 'unknown' } = {}): void {
+    const existing = this.states.get(agentId)
+    if (existing !== undefined) {
+      // A bus edge usually created the row first; the durable catalog fact
+      // still carries the one thing the edge never knows — the mode.
+      if (info.mode !== undefined && existing.mode === undefined) {
+        existing.mode = info.mode
+        this.notify()
+      }
+      return
+    }
     this.states.set(agentId, {
       agentId,
       description: info.label ?? `${info.provider ?? 'subagent'} task`,
@@ -120,6 +129,7 @@ export class SubagentActivityStore {
       status: info.live ? 'running' : 'unknown',
       startedAt: info.childCreatedAt ?? Date.now(),
       sessionId: agentId,
+      ...(info.mode === undefined ? {} : { mode: info.mode }),
       output: [],
       outputEvents: [],
       toolCalls: [],

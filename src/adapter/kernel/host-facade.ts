@@ -9,7 +9,7 @@
  * - It performs no business logic, no protocol translation, no capability
  *   detection, no registry, and stores no mutable host state.
  * - It is for TUI host-internal code only. External plugins continue to use
- *   dsh-std / dsh-ecosystem-spec public protocol surfaces.
+ *   dsh-std / tui-profile public protocol surfaces.
  * - It only exposes Host Ports; admission, permission evaluation and ledger
  *   writes are Kernel/Standard internal services and must never be exposed
  *   as ordinary Host Ports.
@@ -19,6 +19,7 @@ import type { HostDescriptorPort } from '../ports/descriptor.js'
 import type { HostPresentationPort } from '../ports/presentation.js'
 import type { HostWorkspacePort } from '../ports/workspace.js'
 import type { HostScenesPort } from '../ports/scenes.js'
+import type { HostPanelsPort } from '../ports/panels.js'
 import type { HostSettingsPort } from '../ports/settings.js'
 import type {
   HostStatusPort,
@@ -42,6 +43,7 @@ export interface HostFacade {
   readonly presentation?: HostPresentationPort
   readonly workspace?: HostWorkspacePort
   readonly scenes?: HostScenesPort
+  readonly panels?: HostPanelsPort
   readonly settings?: HostSettingsPort
   readonly status?: HostStatusPort
   readonly shortcuts?: HostShortcutsPort
@@ -58,6 +60,7 @@ export interface HostFacadePorts {
   readonly presentation?: HostPresentationPort
   readonly workspace?: HostWorkspacePort
   readonly scenes?: HostScenesPort
+  readonly panels?: HostPanelsPort
   readonly settings?: HostSettingsPort
   readonly status?: HostStatusPort
   readonly shortcuts?: HostShortcutsPort
@@ -101,6 +104,13 @@ const PORT_METHOD_CAPABILITIES: Readonly<Record<string, Readonly<Record<string, 
     close: 'host.scenes.close',
     active: 'host.scenes.active',
     subscribe: 'host.scenes.subscribe',
+  }),
+  panels: Object.freeze({
+    register: 'host.panels.register',
+    list: 'host.panels.list',
+    open: 'host.panels.open',
+    close: 'host.panels.close',
+    subscribe: 'host.panels.subscribe',
   }),
   settings: Object.freeze({
     register: 'host.settings.register',

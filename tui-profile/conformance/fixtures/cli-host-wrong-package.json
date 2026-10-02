@@ -1,0 +1,33 @@
+{
+  "$schema": "urn:dsh-tui:host-descriptor:0.15",
+  "hostId": "dsh-tui.wrong-package",
+  "hostVersion": "0.1.0-experimental",
+  "facetApiVersions": [
+    "v1alpha1"
+  ],
+  "contracts": [
+    {
+      "apiVersion": "commands.dsh/v1alpha1",
+      "kind": "Command",
+      "definition": {
+        "source": "dsh-std",
+        "package": "@dsh-std/messages"
+      },
+      "permissions": [
+        "commands.invoke"
+      ]
+    }
+  ],
+  "runtime": {
+    "location": "remote",
+    "generationId": "example-generation-1",
+    "headless": true,
+    "remoteAttach": true
+  },
+  "trustLevel": "trusted-in-process",
+  "platform": {
+    "os": "linux",
+    "arch": "x64",
+    "node": ">=22.19"
+  }
+}

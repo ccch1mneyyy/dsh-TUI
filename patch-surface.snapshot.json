@@ -10,11 +10,13 @@
     "dsh-tui-command-trees",
     "dsh-tui-settings-sections",
     "dsh-tui-scenes",
+    "dsh-tui-panels",
     "dsh-tui-plugin-host",
     "dsh-tui-extensions",
     "dsh-tui-agent-presets",
     "dsh-tui-agent-preset-registry",
     "dsh-tui-cordis-host-runner",
+    "dsh-tui-webserver",
     "dsh-tui-auth",
     "dsh-tui",
     "working-activity"
@@ -96,6 +98,14 @@
       "insertsSharedWithWebApp": []
     },
     "0.2.0-rc.1": {
+      "disablesBeyondWebApp": [],
+      "webAppDisablesBeyondTui": [
+        "tool-plugin-manager",
+        "workflow-ptc"
+      ],
+      "insertsSharedWithWebApp": []
+    },
+    "0.2.0-rc.2": {
       "disablesBeyondWebApp": [],
       "webAppDisablesBeyondTui": [
         "tool-plugin-manager",

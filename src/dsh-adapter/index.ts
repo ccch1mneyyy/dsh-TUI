@@ -9,7 +9,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import Schema from '@deepseek-ai/schemastery'
 import type { SessionModeSpec } from '../sessionModes.js'
-import { DEFAULT_STATUS_BAR, normalizePageMargin, type ImageBacking, type MathImageBacking, type MathImageScale, type MathRendering, type PageMarginSetting, type ScrollGutterMode, type StatusBarConfig, type ToolBackground } from '../tuiDisplayPrefs.js'
+import { DEFAULT_COMPANION_SKIN, DEFAULT_SIDE_PANEL_IDS, DEFAULT_STATUS_BAR, normalizeCompanionSkin, normalizePageMargin, normalizeSidePanelPanels, normalizeSidePanelRatio, type ImageBacking, type MathImageBacking, type MathImageScale, type MathRendering, type PageMarginSetting, type ScrollGutterMode, type StatusBarConfig, type ToolBackground } from '../tuiDisplayPrefs.js'
 import { SHORTCUT_ACTIONS, type ShortcutActionId } from '../utils/keymap.js'
 import { normalizeSplashFont, type SplashFontSetting } from '../components/splashFonts.js'
 import { editableConfig, type RuntimeConfig } from './compat/settings.js'
@@ -108,6 +108,12 @@ export interface Config {
    *  preview and folds each step when it settles; `full` keeps thinking
    *  expanded until the whole turn ends. Editable live from `/settings`. */
   thinkingFold?: 'preview' | 'full'
+  /** Grouping/folding of consecutive background-job cards: `auto` (default)
+   *  groups any run of ≥2 adjacent job cards and folds a run of 3+ into its
+   *  summary line once every member settled; `always` folds any run of 2+
+   *  immediately; `never` never folds on its own (a click on the group
+   *  header still folds one run). Editable live from `/settings`. */
+  jobGroupFold?: 'auto' | 'always' | 'never'
   /** Tool-card background strength; defaults to no added background. */
   toolBackground?: ToolBackground
   /** What the fullscreen transcript's right gutter shows (settings
@@ -174,6 +180,32 @@ export interface Config {
   recapOnOpen?: boolean
   /** Status-footer field visibility and compact presentation preferences. */
   statusBar?: Partial<StatusBarConfig>
+  /** Side panel (settings `dsh-tui.sidePanel.*`): the two-column layout's
+   *  master switch, its startup state, the chat-column fraction, and the
+   *  enabled panels in PanelBar order. Every member is normalized at parse
+   *  time, so a hand-edited value can never wedge the layout. */
+  sidePanel?: {
+    /** Master switch of the split layout; on by default. Off makes /panel
+     *  and Ctrl+B fall back to the fullscreen panels. */
+    splitEnabled?: boolean
+    /** Whether a session opens with the sidebar expanded (off by default, so
+     *  the upgrade leaves the layout alone); Ctrl+B toggles it live. */
+    open?: boolean
+    /** Chat column as a fraction of the content width, clamped to 0.1–0.95
+     *  (default 0.68); +/- while the panel is focused nudges it live. */
+    ratio?: number
+    /** Enabled panel ids, comma-separated, in PanelBar order (default
+     *  `todo,jobs,agents`; add `companion` to enable the pet panel). A
+     *  malformed id is dropped, an unknown one survives for a plugin. */
+    panels?: string
+  }
+  /** Companion pet (settings `dsh-tui.companion.*`): which skin the panel
+   *  pet wears. */
+  companion?: {
+    /** 'deepy' (default, the deepy whale kit) or 'whale' (the splash's
+     *  layered pixel whale). Unknown ids normalize to deepy. */
+    skin?: string
+  }
   /** Built-in action-shortcut overrides (`paste: 'alt+v'`), keyed by action
    *  id (see the keymap utility). Combos are `ctrl+`/`alt+`/`shift+` plus a
    *  key; several combos may be comma-separated. Unset actions keep their
@@ -223,6 +255,7 @@ export const Config: Schema<Config, RuntimeConfig<Config>> = editableConfig<Conf
   preset: Schema.string().required(false),
   diffLayout: Schema.union(['auto', 'split', 'unified']).default('auto'),
   thinkingFold: Schema.union(['preview', 'full']).default('preview'),
+  jobGroupFold: Schema.union(['auto', 'always', 'never']).default('auto'),
   toolBackground: Schema.union(['none', 'subtle', 'strong']).default('none'),
   scrollGutter: Schema.union(['timeline', 'scrollbar', 'hidden']).default('timeline'),
   // Preset names AND custom `NxM` specs must survive validation (a custom
@@ -266,6 +299,28 @@ export const Config: Schema<Config, RuntimeConfig<Config>> = editableConfig<Conf
     trajectory: Schema.boolean().default(DEFAULT_STATUS_BAR.trajectory),
     shortcutHint: Schema.boolean().default(DEFAULT_STATUS_BAR.shortcutHint),
   }).default({ ...DEFAULT_STATUS_BAR }),
+  // Side-panel preferences, same shape as statusBar: every member carries a
+  // default so an unset cordis.yml block and a partially hand-written one
+  // both resolve, and the transforms keep junk (a string ratio, an id with
+  // illegal characters) out of the live stores.
+  sidePanel: Schema.object({
+    splitEnabled: Schema.boolean().default(true),
+    open: Schema.boolean().default(false),
+    ratio: Schema.transform(
+      Schema.number().default(0.68),
+      value => normalizeSidePanelRatio(value),
+    ),
+    panels: Schema.transform(
+      Schema.string().default(DEFAULT_SIDE_PANEL_IDS),
+      value => normalizeSidePanelPanels(value),
+    ),
+  }).default({ splitEnabled: true, open: false, ratio: 0.68, panels: DEFAULT_SIDE_PANEL_IDS }),
+  companion: Schema.object({
+    skin: Schema.transform(
+      Schema.string().default(DEFAULT_COMPANION_SKIN),
+      value => normalizeCompanionSkin(value),
+    ),
+  }).default({ skin: DEFAULT_COMPANION_SKIN }),
   // One optional combo string per customizable action (no defaults: unset
   // keeps the built-in binding; see Config.shortcuts).
   shortcuts: Schema.object(

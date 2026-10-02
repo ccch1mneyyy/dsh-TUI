@@ -1,9 +1,9 @@
 /**
- * dsh-ecosystem-spec derived protocol constants.
+ * tui-profile derived protocol constants.
  *
  * This is the explicit derivation layer required by the adapter boundary.
  *
- * Sources (all are committed dsh-ecosystem-spec assets, not local patches):
+ * Sources (all are committed tui-profile assets, not local patches):
  * - `registry/permissions-0.1.json` is the machine-readable permission policy
  *   table; `EXPECTED_PERMISSIONS` and the intercept permission names are
  *   derived directly from it.
@@ -86,7 +86,7 @@ export const TUI_EXTENSION_PERMISSION_NAMES: readonly string[] = Object.freeze(
     .map(permission => permission.name),
 )
 
-/** All intercept permissions exported by dsh-ecosystem-spec. */
+/** All intercept permissions exported by tui-profile. */
 export const INTERCEPT_PERMISSIONS: ReadonlySet<string> = new Set(TUI_EXTENSION_PERMISSION_NAMES)
 
 /** Decision event point names (subscribe/notification vocabulary). */
@@ -147,8 +147,8 @@ export const HOST_SUPPORTED_CONTRACTS: readonly { apiVersion: string; kind: stri
 function locateSpecRoot(start: string = dirname(fileURLToPath(import.meta.url))): string | undefined {
   let dir = start
   for (let index = 0; index < 8; index++) {
-    if (existsSync(join(dir, 'dsh-ecosystem-spec', 'registry', 'permissions-0.1.json'))) {
-      return join(dir, 'dsh-ecosystem-spec')
+    if (existsSync(join(dir, 'tui-profile', 'registry', 'permissions-0.1.json'))) {
+      return join(dir, 'tui-profile')
     }
     const parent = dirname(dir)
     if (parent === dir) return undefined

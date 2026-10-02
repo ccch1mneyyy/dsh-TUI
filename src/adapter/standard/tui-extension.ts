@@ -2,7 +2,7 @@
  * dsh-TUI private protocol registration on the shared dsh-std catalog.
  *
  * Private protocol definitions are NOT authored here. The canonical
- * dsh-ecosystem-spec definitions are loaded through `src/adapter/spec/`; this
+ * tui-profile definitions are loaded through `src/adapter/spec/`; this
  * module only registers public dsh-std protocols and delegates the private
  * TUI profile definitions to the spec boundary.
  */

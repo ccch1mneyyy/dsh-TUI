@@ -2,7 +2,8 @@ import React, { useState } from 'react'
 import { getLang, subscribeLang, t, type Lang } from '../i18n.js'
 import { Box, Text, useTerminalSize, type ScrollBoxHandle } from '../ui.js'
 import type { ClickEvent } from '../ink/events/click-event.js'
-import type { ChatRow, ToolRow, ToolCallView, ToolResultView, SubagentRow, JobRow } from '../dsh-adapter/channel.js'
+import type { ChatRow, ToolRow, ToolCallView, ToolResultView, SubagentRow, JobGroupRow, JobRow } from '../dsh-adapter/channel.js'
+import type { JobGroupFoldMode } from '../tuiDisplayPrefs.js'
 import { normalizeIdePath } from '../dsh-adapter/ide-channel.js'
 import type { TranscriptImage } from '../dsh-adapter/transcript-images.js'
 import type { DOMElement } from '../ink/dom.js'
@@ -13,6 +14,7 @@ import { AssistantThinkingMessage } from './messages/AssistantThinkingMessage.js
 import { AssistantToolUseMessage } from './messages/AssistantToolUseMessage.js'
 import { SubagentMessage } from './Chat/SubagentMessage.js'
 import { JobCard } from './Chat/JobCard.js'
+import { JobGroupHeader } from './Chat/JobGroupHeader.js'
 import { isMinimalUiMode } from '../minimalUiMode.js'
 import { noteFrameCause, noteListGeometry } from '../ink/geometry-trace.js'
 import { getTerminalFlushTick } from '../ink/flush-tick.js'
@@ -50,6 +52,14 @@ import { primaryComboString } from '../utils/keymap.js'
  *  paint (<1s) with the rest behind the show-previous divider. The transcript
  *  is a viewport, not a printout; load-earlier restores older rows. */
 const RENDERED_ROW_CAP = 120
+
+/** Threshold of the `auto` jobGroupFold policy: a run of this many (or
+ *  more) FULLY SETTLED jobs folds into its own summary line. Two jobs are
+ *  still a pair worth reading card by card — the group rail alone already
+ *  saves their separator lines there. `always` uses 2, `never` uses none.
+ *  Ctrl+O and a click on the summary reopen any group; clicking again folds
+ *  it back. */
+const JOB_GROUP_FOLD_MIN = 3
 
 // --- layout virtualization constants -------------------------------------
 // Offscreen rows render as fixed-height spacers whose heights come from the
@@ -171,6 +181,20 @@ export function displaySelectionPath(
  * (parts.slice()).
  */
 const signatureScratch: Array<string | number | boolean> = []
+
+/** Status code for the job-group fingerprint (a hash input only — the values
+ *  just have to be distinct per status). */
+function jobStatusCode(status: string): number {
+  switch (status) {
+    case 'running': return 1
+    case 'stopping': return 2
+    case 'completed': return 3
+    case 'failed': return 4
+    case 'killed': return 5
+    default: return 7
+  }
+}
+
 function signatureParts(
   row: ChatRow,
   columns: number,
@@ -239,6 +263,39 @@ function signatureParts(
         row.subagent?.error?.length ?? 0,
       )
       break
+    case 'job': {
+      // Card height inputs: the group decoration reshapes the row wholesale
+      // (the head adds the summary line, a folded run collapses into it, the
+      // rail shifts the body two columns right), the waterfall grows and
+      // shrinks with mirrored output, and settling drops the progress chip
+      // and the waterfall while it may add the detail tail. Missing any of
+      // them leaves an offscreen card's cached height stale → blank band /
+      // unreachable scroll bottom (the subagent card's lesson).
+      const group = row.jobGroup
+      signatureScratch.push(
+        row.job?.status ?? '',
+        // The label drives the card's height: it wraps inside its column and
+        // the rail is painted per line, so a label that lands later (the
+        // kernel fills it in after launch) must invalidate the cached height.
+        row.job?.label?.length ?? 0,
+        row.job?.outputLines.length ?? 0,
+        row.job?.detail?.length ?? 0,
+        row.job?.progress?.length ?? 0,
+        // The waterfall wraps its tail and keeps the last rows, so how much
+        // text those tail lines carry decides how many rows actually paint.
+        row.job === undefined
+          ? ''
+          : row.job.outputLines.slice(-4).map(line => line.text.length).join(','),
+        // Grouped members all render with the same 2-cell rail, so the only
+        // shape inputs are "is it a member", "is it the head" and "is the run
+        // folded" (a folded head paints the summary alone).
+        group !== undefined,
+        group?.head === true,
+        group?.last === true,
+        group?.folded === true,
+      )
+      break
+    }
     case 'compact':
       // Folded one-liner vs full summary text.
       signatureScratch.push(expanded, expandedRows.has(row.id))
@@ -290,6 +347,7 @@ export function MessageList({
   model,
   diffLayout = 'auto',
   thinkingFold = 'preview',
+  jobGroupFold = 'auto',
   toolBackground = 'none',
   foldTerminalCommand = false,
   smoothStreaming = false,
@@ -327,6 +385,11 @@ export function MessageList({
   diffLayout?: 'auto' | 'split' | 'unified'
   /** Thinking-block display mode from channel (`preview`/`full`). */
   thinkingFold?: 'preview' | 'full'
+  /** Grouping/folding of consecutive job-card runs (settings
+   *  `dsh-tui.jobGroupFold`): `auto` folds a settled run of ≥3 into its
+   *  summary header, `always` folds any run of ≥2, `never` leaves runs open
+   *  (a header click still folds one by hand). */
+  jobGroupFold?: JobGroupFoldMode
   /** Tool-card background treatment from the live channel settings. */
   toolBackground?: ToolBackground
   /** Terminal-card header folding from the live channel settings. */
@@ -398,7 +461,7 @@ export function MessageList({
   /** 打开子代理详情场景（transcript 内点击子代理卡）。 */
   onOpenSubagent?: (agentId: string) => void
   /** 打开 /jobs 后台任务面板（transcript 内点击任务卡）。 */
-  onOpenJobs?: () => void
+  onOpenJobs?: (focusId?: string) => void
   /** 点击工具卡内的文件路径（打开文件操作菜单）。 */
   onOpenFile?: (path: string) => void
   /** Session working directory (fs path, `channel.cwd`): the IDE-selection
@@ -435,6 +498,9 @@ export function MessageList({
      * in place, rows identity/length unchanged) changes empty-assistant
      * filtering below, so the cache must rebuild on any bit change. */
     streamBits: Uint8Array
+    /** Job-status/toggle fingerprint (see below): job cards settle IN PLACE,
+     *  and a settling run changes how — and whether — its members render. */
+    jobsSig: number
   } | null>(null)
   /** Generation counter for the visibleRows cache (timeline memo key). */
   const visGenRef = React.useRef(0)
@@ -451,12 +517,25 @@ export function MessageList({
       if (bits[i] !== (rows[i]!.streaming === true ? 1 : 0)) { streamBitsSame = false; break }
     }
   }
+  // Job-group fingerprint: job statuses land IN PLACE (`row.job` is
+  // re-assigned by the projection, the row array never moves) and the expand
+  // toggles live in a Set — none of that shows up in the rows identity or
+  // length key above, yet both decide whether a consecutive-job run folds,
+  // and a folded run REMOVES its members from the visible window. One
+  // allocation-free pass over the row list (only job rows feed the hash).
+  let jobsSig = (expanded ? 1 : 0) * 7 + (jobGroupFold === 'always' ? 1 : jobGroupFold === 'never' ? 2 : 3)
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i]!
+    if (row.kind !== 'job' || row.job === undefined) continue
+    jobsSig = (jobsSig * 33 + row.id + jobStatusCode(row.job.status) + (expandedRows.has(row.id) ? 7 : 0)) | 0
+  }
   if (
     visibleCache === null ||
     visibleCache.rows !== rows ||
     visibleCache.rowsLength !== rows.length ||
     visibleCache.showAll !== (showAll || hiddenCount <= 0) ||
     visibleCache.thinkingVisible !== thinkingVisible ||
+    visibleCache.jobsSig !== jobsSig ||
     !streamBitsSame
   ) {
     const sliced = showAll || hiddenCount <= 0
@@ -489,22 +568,129 @@ export function MessageList({
         break
       }
     }
-    const out = hasEmptyAssistant
+    // The transcript can arrive FROZEN end to end: the session projection
+    // freezes both the row array and every row object (session-projection.ts
+    // `Object.freeze(rows.map(row => Object.freeze({ ...row })))`), so the
+    // pass-through branch below must COPY rather than alias it. The group
+    // decoration further down is render-local derived state: it rides
+    // shallow copies inside this writable array, never the shared row
+    // objects (an in-place write throws on a frozen row and takes the TUI
+    // down at startup — the resume/replay first frame delivers exactly
+    // that shape).
+    const out: ChatRow[] = hasEmptyAssistant
       ? sliced.filter(row =>
           !rendersEmptyAssistant(row) &&
           (thinkingVisible || row.kind !== 'reasoning'),
         )
       : thinkingVisible
-        ? sliced
+        ? sliced.slice()
         : sliced.filter(row => row.kind !== 'reasoning')
-    // Every rendered block gets a 1-row top margin except the
-    // first. Pre-pass over the FULL list so a windowed row keeps the exact
-    // spacing it would have in a fully-mounted list.
+    // --- consecutive-job groups ------------------------------------------
+    // A batch of run_in_background calls lands as N adjacent job cards (the
+    // projection pushes the whole roster in one sync) and EVERY card pays
+    // the 1-row block margin — a pile of near-identical rows for work nobody
+    // reads card by card. Read ≥2 adjacent job rows as ONE group instead:
+    // members drop the blank line between them, hang off a shared chain
+    // rail, and the head row carries the run summary. A fully settled run
+    // (≥ JOB_GROUP_FOLD_MIN) folds into that summary alone.
+    //
+    // Folded members are removed HERE, before virtualization, so window
+    // indices line up (same rule as the thinking filter). The fold is the
+    // ordinary per-row expand gesture: clicking the summary — or Ctrl+O —
+    // reopens the run, clicking again folds it back.
+    //
+    // Runs are detected in the VISIBLE list, so a run whose head fell behind
+    // the RENDERED_ROW_CAP fold window is read from the first visible member
+    // (the header then counts what is on screen — never a headerless rail).
+    const foldedMembers = new Set<number>()
+    for (let i = 0; i < out.length; i++) {
+      const head = out[i]!
+      if (head.kind !== 'job' || head.job === undefined) continue
+      let end = i
+      while (end + 1 < out.length) {
+        const next = out[end + 1]!
+        if (next.kind !== 'job' || next.job === undefined) break
+        end++
+      }
+      const count = end - i + 1
+      if (count < 2) {
+        // A lone card renders exactly as it did before groups existed (no
+        // rail, its own block margin). Nothing to clear: the decoration
+        // lives on per-pass shallow copies, never on the shared rows.
+        i = end
+        continue
+      }
+      let running = 0
+      let completed = 0
+      let failed = 0
+      let killed = 0
+      let startedAt = Number.POSITIVE_INFINITY
+      let endedAt: number | undefined
+      for (let k = i; k <= end; k++) {
+        const job = out[k]!.job!
+        switch (job.status) {
+          case 'running':
+          case 'stopping':
+            running++
+            break
+          case 'completed':
+            completed++
+            break
+          case 'killed':
+            killed++
+            break
+          default:
+            failed++
+        }
+        startedAt = Math.min(startedAt, job.startedAt)
+        if (job.finishedAt !== undefined) endedAt = Math.max(endedAt ?? job.finishedAt, job.finishedAt)
+      }
+      // A live member means the run is not over: no duration to freeze.
+      if (running > 0) endedAt = undefined
+      // Fold policy (settings `dsh-tui.jobGroupFold`): `auto` waits for the
+      // whole run to settle, `always` folds a run of 2+ immediately (live
+      // members included — the header still reports what is running), and
+      // `never` leaves the decision to a header click. Ctrl+O force-expands
+      // every run; the header click lands in expandedRows.
+      const foldMin = jobGroupFold === 'always' ? 2 : JOB_GROUP_FOLD_MIN
+      const folded = jobGroupFold !== 'never' && count >= foldMin &&
+        (jobGroupFold === 'always' || running === 0) && !expanded && !expandedRows.has(head.id)
+      for (let k = i; k <= end; k++) {
+        // Copy-on-write: decorate a shallow copy. `out[k].jobGroup = …` in
+        // place throws on the frozen rows the session projection delivers
+        // (resume/replay), crashing the TUI at startup.
+        out[k] = {
+          ...(out[k]!),
+          jobGroup: {
+            head: k === i,
+            last: k === end,
+            count,
+            folded,
+            running,
+            completed,
+            failed,
+            killed,
+            startedAt,
+            ...(endedAt === undefined ? {} : { endedAt }),
+          },
+        }
+      }
+      if (folded) {
+        for (let k = i + 1; k <= end; k++) foldedMembers.add(out[k]!.id)
+      }
+      i = end
+    }
+    const visibleOut = foldedMembers.size === 0 ? out : out.filter(row => !foldedMembers.has(row.id))
+    // Every rendered block gets a 1-row top margin except the first. Pre-pass
+    // over the FULL list so a windowed row keeps the exact spacing it would
+    // have in a fully-mounted list. Group members are the exception: they sit
+    // flush under their head, which is the separator line the group removes.
     const margins = new Map<number, boolean>()
     {
       let prev: ChatRow['kind'] | undefined
-      for (const row of out) {
-        margins.set(row.id, prev !== undefined)
+      for (const row of visibleOut) {
+        const member = row.jobGroup !== undefined && !row.jobGroup.head
+        margins.set(row.id, prev !== undefined && !member)
         prev = row.kind
       }
     }
@@ -515,9 +701,10 @@ export function MessageList({
       rowsLength: rows.length,
       showAll: showAll || hiddenCount <= 0,
       thinkingVisible,
-      out,
+      out: visibleOut,
       margins,
       streamBits,
+      jobsSig,
     }
     visGenRef.current++
   }
@@ -1209,6 +1396,7 @@ export function MessageList({
           const tool = row.tool
           const subagent = row.kind === 'subagent' ? row.subagent : undefined
           const job = row.kind === 'job' ? row.job : undefined
+          const jobGroup = row.kind === 'job' ? row.jobGroup : undefined
           const revealVersion = smoothStreaming && row.kind === 'tool' && row.fresh === true &&
             row.tool?.status === 'running' && row.tool.resultView === undefined
             ? getRevealVersion()
@@ -1273,6 +1461,7 @@ export function MessageList({
               toolDurationMs={tool?.durationMs}
               subagent={subagent}
               job={job}
+              jobGroup={jobGroup}
               onToggleRow={onToggleRow}
               onToggleStreamView={onToggleStreamView}
               streamViewToggled={streamViewToggledRows.has(row.id)}
@@ -1360,13 +1549,15 @@ type MemoRowProps = {
   subagent: SubagentRow | undefined
   // JobRow, same update contract as SubagentRow (replaced per job commit).
   job: JobRow | undefined
+  /** Group decoration for a run of consecutive job cards (see JobGroupRow). */
+  jobGroup: JobGroupRow | undefined
   onToggleRow: (rowId: number) => void
   /** 流式 reasoning 行在三行预览/全文间切换；落定行用 onToggleRow。 */
   onToggleStreamView: (rowId: number) => void
   /** 是否反转该流式行的 thinkingFold 默认视图。 */
   streamViewToggled: boolean
   onOpenSubagent: ((agentId: string) => void) | undefined
-  onOpenJobs: (() => void) | undefined
+  onOpenJobs: ((focusId?: string) => void) | undefined
   onOpenFile: ((path: string) => void) | undefined
   onPreviewImage: ((image: TranscriptImage) => void) | undefined
   suppressImageGraphics: boolean
@@ -1431,6 +1622,7 @@ function TranscriptRow({
   toolDurationMs,
   subagent,
   job,
+  jobGroup,
   onToggleRow,
   onToggleStreamView,
   streamViewToggled,
@@ -1462,6 +1654,11 @@ function TranscriptRow({
     if (event.cellIsBlank) return
     onToggleStreamView(rowId)
   }, [onToggleStreamView, rowId])
+  // 任务组：点击组头行折叠/展开整组（与工具卡的折叠同一套手势：行点击 =
+  // expandedRows 切换，Ctrl+O 展开全部）。
+  const toggleJobGroup = React.useCallback((): void => {
+    onToggleRow(rowId)
+  }, [onToggleRow, rowId])
   // 子代理卡：点击打开详情场景（不是折叠）。
   const openSubagent = React.useCallback(() => {
     if (subagent !== undefined) onOpenSubagent?.(subagent.agentId)
@@ -1703,17 +1900,37 @@ function TranscriptRow({
           />
         </Box>
       )
-    case 'job':
+    case 'job': {
       if (!job) return null
+      // A grouped run renders as ONE block: the head row carries the summary
+      // line, members hang off the shared rail, and a FOLDED run keeps only
+      // that summary (its members were dropped from the window upstream).
+      const groupHead = jobGroup !== undefined && jobGroup.head
       return (
-        <Box flexDirection="column" ref={ref}>
-          <JobCard
-            job={job}
-            marginTopOnTurn={marginTopOnTurn}
-            onClick={onOpenJobs}
-          />
+        <Box
+          flexDirection="column"
+          // The head's block margin moves UP to the group (the summary line
+          // is what separates the run from what precedes it); the card under
+          // it must not add a second blank line.
+          marginTop={groupHead && marginTopOnTurn ? 1 : 0}
+          ref={ref}
+        >
+          {groupHead && <JobGroupHeader group={jobGroup} onToggle={toggleJobGroup} />}
+          {groupHead && jobGroup.folded ? null : (
+            <JobCard
+              job={job}
+              marginTopOnTurn={groupHead ? false : marginTopOnTurn}
+              // The bracket hugs the CARDS: the summary line above stays
+              // outside it, and the head/last member round the two ends in
+              // place (no extra cap row) — see JobCard's `rail` prop.
+              rail={jobGroup === undefined ? undefined : { open: jobGroup.head, close: jobGroup.last }}
+              // Clicking a card opens the panel focused on THAT job, not the roster head.
+              onClick={onOpenJobs === undefined ? undefined : () => onOpenJobs(job.id)}
+            />
+          )}
         </Box>
       )
+    }
   }
 }
 

@@ -2,6 +2,7 @@ import { spawnSync } from 'node:child_process'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { readFile } from 'node:fs/promises'
+import { GUIDE_DIR, guideFiles } from './guide-sources.mjs'
 
 const input = await new Promise((resolve, reject) => {
   let value = ''
@@ -51,6 +52,12 @@ for (const presetFile of [
   'presets/liangshen/tool-bootstrap.mjs',
 ]) {
   if (!packed.has(presetFile)) throw new Error(`packaged preset file missing from tarball: ${presetFile}`)
+}
+// 随包用户手册必须真的进 tarball：它是 npm 用户机器上唯一的一份手册，
+// 少了 guide/ 就等于"AI 无从查起"。（`skills/` 仍按 #613 的结论不打包。）
+for (const guideFile of ['SKILL.md', ...guideFiles()]) {
+  const entry = `${GUIDE_DIR}/${guideFile}`
+  if (!packed.has(entry)) throw new Error(`packaged user guide missing from tarball: ${entry}`)
 }
 for (const path of packed) {
   const lower = path.toLowerCase()

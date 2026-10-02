@@ -161,4 +161,3 @@ process.off('unhandledRejection', onRejection)
 check('no rejection escaped the whole run', rejections.length === 0, rejections.map(String).join(' | '))
 
 process.exit(failed)
-

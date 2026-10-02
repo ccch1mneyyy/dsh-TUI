@@ -62,6 +62,16 @@ const ownPackage = readJson(join(ownDir, 'package.json'))
 const ownVersion = ownPackage?.name === '@deepseek-harness-tui/dsh-tui' ? ownPackage.version : undefined
 const PACKAGE = '@deepseek-harness-tui/dsh-tui'
 const PROFILE = 'dsh-tui'
+
+// 随包用户手册（guide/，见 scripts/build-guide.mjs）：交给 dsh 当内核
+// dsh-skill-filesystem 的随包技能根（rank 600 的 bundledSkillDir 默认取这个
+// 环境变量）。会话里模型常驻只多一行技能目录，用户真问到 dsh-tui 时才按需
+// 读手册。用户自己设过就不覆盖；包里没有 guide/（旧安装/裁剪包）时保持原样。
+const withGuideSkillDir = env => {
+  if (env.DSH_BUNDLED_SKILL_DIR !== undefined) return env
+  const guideDir = join(ownDir, 'guide')
+  return existsSync(guideDir) ? { ...env, DSH_BUNDLED_SKILL_DIR: guideDir } : env
+}
 // 救援 profile（最小可用）：同 home 下的空白 profile（仅 base+TUI，无第三方
 // 插件），是主 profile 装炸时的干净启动通道——创建走官方 dsh plugin add
 // （钉当前版本，同 bootstrap 语义）。
@@ -728,7 +738,7 @@ const startDshSession = (dshArgs, profile = PROFILE, env = process.env) =>
   new Promise(resolve => {
     const child = spawn(...cmd('dsh', ['--profile', profile, ...dshArgs]), {
       stdio: 'inherit',
-      env,
+      env: withGuideSkillDir(env),
       ...shellOpt,
     })
     child.on('error', err => resolve({ kind: 'error', error: err }))
