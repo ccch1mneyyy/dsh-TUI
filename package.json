@@ -191,6 +191,7 @@
     "verify:live-session": "node --import tsx/esm scripts/verify-live-session.ts",
     "sync:profile": "node scripts/sync-profile.mjs",
     "sync:profile:check": "node scripts/sync-profile.mjs --check",
+    "verify:sync-profile": "node scripts/verify-sync-profile.mjs",
     "bundle:installer": "node scripts/make-installer-bundle.mjs",
     "bundle:standalone": "node scripts/make-standalone-bundle.mjs",
     "verify:image-downsample": "node --import tsx/esm scripts/verify-image-downsample.tsx",

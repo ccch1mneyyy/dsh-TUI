@@ -113,6 +113,7 @@ const GATES = [
   'verify:migrate-sessions',
   'verify:fixed-window',
   'verify:source-hygiene',
+  'verify:sync-profile',
   'verify:renderer-primitives',
   'verify:terminal-size-source',
   'verify:product-migration',
