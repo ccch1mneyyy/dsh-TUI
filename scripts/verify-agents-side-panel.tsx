@@ -67,6 +67,8 @@ const interrupted: string[] = []
 const channel = {
   get version() { return channelVersion },
   get subagents() { return subagents },
+  // jobs 面板默认启用，适配器读名册（jobs.length 摘要）
+  backgroundJobs: [] as unknown[],
   subagentControl: {
     interrupt(id: string) { interrupted.push(id); return true },
   },

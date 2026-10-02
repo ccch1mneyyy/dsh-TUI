@@ -89,6 +89,7 @@ import { StatusLine } from './StatusLine.js'
 import { WorkingSpinner, useThinkingStatus } from '../components/WorkingSpinner.js'
 import { ActivityLine, contextPressurePct } from '../components/ActivityLine.js'
 import { ModelPicker } from '../components/ModelPicker.js'
+import { HelpMenu } from '../components/HelpMenu.js'
 import { PluginSceneBoundary } from '../components/PluginSceneBoundary.js'
 import { PluginStatusViewBoundary } from '../components/PluginStatusViewBoundary.js'
 import { ImagePreviewOverlay } from '../components/ImagePreviewOverlay.js'
@@ -214,6 +215,9 @@ const LAUNCHPAD_OVERLAY_KINDS: ReadonlySet<string> = new Set([
   // 第七版：左下角工作目录铭牌点开的工作区菜单（及其二级选择器/流程层）
   // 也是「盖在落地页之上」的姿态——同一套 pickerPanels 挂载，Esc 回落地页。
   'workspace-menu', 'workspace-picker', 'workspace-flow',
+  // 第八版：帮助入口也走「盖在落地页之上」的浮层姿态（overlay kind 'help'，
+  // HelpMenu 经 pickerPanels 挂进 OverlayAbove）——不再收掉落地页进对话页。
+  'help',
 ])
 
 function cleanCommandError(error: unknown): string {
@@ -662,6 +666,15 @@ export function Chat({
   const [launchpadCaret, setLaunchpadCaret] = React.useState(0)
   const [launchpadFocus, setLaunchpadFocus] = React.useState(-1)
   /**
+   * 「整屏盖启动页」的显式授权（第七版防御位，用户实测回归：启动页一闪而过
+   * 被顶掉）。整屏分支排在落地页**之前**，任何一处状态在开机后被异步置真
+   * （杂散输入/宿主事件/未来新代码）都会把落地页挤掉。授权位只有**从落地页
+   * 出发的交互**（入口行/空输入 Esc/目录铭牌/命令面板里的整屏命令、Continue
+   * 的兜底浏览器）才置真；覆盖屏全部收起时自动落 false。开机后即便某个整屏
+   * 状态被误置真，落地页仍在最上层——「浮层可以盖、整屏必须经授权」。
+   */
+  const launchpadCoverRef = React.useRef(false)
+  /**
    * 这一帧到底出不出落地页：状态开着还不够，minimal 模式（`dsh-tui.minimal`）
    * 下它整块不存在——`minimalMode.ts` 的标志由 channel 在设置落地后写入，
    * 建 state 时读不到，所以判定必须放在**渲染期**读（与其它 minimal 门同一口径）。
@@ -943,6 +956,13 @@ export function Chat({
   const [effortOptions, setEffortOptions] = React.useState<readonly EffortOption[]>([])
   const [themeName, setTheme] = useTheme()
   const { rows: terminalRows } = useTerminalSize()
+  /**
+   * 帮助盖屏（第八版，overlay kind 'help'）的滚动视口：HelpMenu 自带
+   * ScrollBox，键盘（↑/↓/PgUp/PgDn/Home/End）由 Chat 的 overlay 分支驱动。
+   * 视口预算与 PromptInput 的 helpViewportHeight 同式（PR #446 的口径）。
+   */
+  const helpCoverScrollRef = React.useRef<ScrollBoxHandle | null>(null)
+  const helpCoverViewportHeight = Math.max(3, Math.min(terminalRows - 7, 15))
   const [showAllMessages, setShowAllMessages] = React.useState(false)
   /** Scope the fold to this question: an aborted ask can promote its queued
    *  successor without ever publishing an idle (null) snapshot. */
@@ -1135,6 +1155,8 @@ export function Chat({
     split: boolean
     enabledPanelIds: readonly string[]
     openPanel: (id: string, opts?: { focus?: boolean }) => void
+    /** 切到整屏前把键盘交还聊天：从整屏返回时不会**落在面板里**吞掉输入。 */
+    focusChat: () => void
   } | null>(null)
   // MessageList forwards these open handlers to every memoized row. Their
   // identities must survive token/metrics updates, including for tool rows.
@@ -1189,13 +1211,57 @@ export function Chat({
     setSceneOpen(false)
   }, [])
 
-  /** Open the scene, mark failures seen, and retire the key hint for good. */
-  const openScene = React.useCallback(() => {
+  /**
+   * 整屏分支的「盖启动页」闸门（第七版防御位，用户实测回归：启动页一闪
+   * 而过被顶掉）。落地页在屏上时，只有**经 `launchpadCoverRef` 授权**
+   * （= 从落地页出发的交互打开）的整屏才盖它；否则该整屏状态被无视
+   * （渲染落到落地页），启动页永远不被开机期的杂散状态挤掉。落地页不在
+   * 屏上时闸门恒开（普通姿态与从前逐字节一致）。
+   *
+   * ⚠ 这一段必须排在组件**所有** early-return 之前（hooks 规则）：曾放在
+   * onboarding/interrupt 分支之后，向导一开就少跑这个 effect，React 直接
+   * 报 hooks 乱序（verify-launchpad-onboarding-chat A2/E5/H2 全红）。
+   */
+  const launchpadGate = (): boolean => !launchpadShown || launchpadCoverRef.current
+  // 覆盖屏全部收起时收回授权：下一次打开必须再经过落地页自己的交互。
+  const launchpadCoverScreenUp = supervisorOpen || treeOpen || settingsOpen
+    || jobsPanelOpen || subagentDashboardOpen || subagentDetailId !== null || sceneOpen
+  React.useEffect(() => {
+    if (!launchpadCoverScreenUp) launchpadCoverRef.current = false
+  }, [launchpadCoverScreenUp])
+  /**
+   * 从落地页出发的交互要开整屏前先授权（配合 `launchpadGate`）：调用点只在
+   * 落地页自己的回调里（onAction / onCommandPick / onEscape 的会话浏览路）。
+   * 异步误置真的整屏状态没有这道授权 → 闸门挡下，落地页留在最上层。
+   */
+  const authorizeLaunchpadCover = (): void => { launchpadCoverRef.current = true }
+
+  /**
+   * Open the trajectory, mark failures seen, and retire the key hint for good.
+   *
+   * Ctrl+T and `/trace` share this one entry point, and it is SPLIT-AWARE the
+   * same way `/jobs` and `/agents` already are: while the sidebar is
+   * rendering, the trajectory opens as the `trajectory` panel inside it
+   * instead of taking the whole screen. `options.fullscreen` is the escape
+   * hatch the panel's own ⤢ button uses — without it that button would route
+   * straight back into the panel it is trying to leave.
+   */
+  const openScene = React.useCallback((options?: { readonly fullscreen?: boolean }) => {
     seenFailuresRef.current = trajectoryRef.current?.counts.errors ?? 0
     setTrajectorySeen(previous => {
       if (!previous) writeTrajectorySeen()
       return true
     })
+    const controller = sidePanelRef.current
+    if (
+      options?.fullscreen !== true
+      && controller !== null
+      && controller.split
+      && controller.enabledPanelIds.includes('trajectory')
+    ) {
+      controller.openPanel('trajectory', { focus: true })
+      return
+    }
     setSceneOpen(true)
   }, [])
 
@@ -2130,6 +2196,13 @@ export function Chat({
     if (text === '') return
     void appendHistory(text)
     const parsed = text.startsWith('/') ? parseCommandName(text) : undefined
+    // 第八版：/help 在落地页上也是盖屏浮层（补全面板被 Esc 收掉后直接
+    // Enter 的那条路）——不收落地页、不进对话页。聊天页里 /help 的行为
+    // 不变（那边不走这个回调）。
+    if (parsed !== undefined && parsed.name === 'help' && launchpadOpen) {
+      dispatchOverlay({ type: 'open', overlay: { kind: 'help' } })
+      return
+    }
     // 与 composer 的 tryRunCommand 同一条判定：合并命令表（LOCAL_COMMANDS +
     // channel.commandList 的插件/registry 命令）里有名字才是命令；hidden
     // 命令照旧认。判定之外的 / 开头行才走 submit（与聊天页 Enter 行为一致）。
@@ -2145,7 +2218,7 @@ export function Chat({
     // （内容已作为首轮发出，绝不"既发了又留在框里"），也没有交接提示——
     // 没有草稿要交，一句"已放进输入框"的 toast 反而是假的。
     channel.submit(text)
-  }, [channel])
+  }, [channel, launchpadOpen])
 
   /**
    * The screen's command dispatcher. Every entry point reaches this one
@@ -2626,7 +2699,20 @@ export function Chat({
        * commands is about muscle memory, not about three surfaces — every one
        * of them lands here, on the same runtime.
        */
-      case 'home':
+      case 'home': {
+        setHelpOpen(false)
+        // Split-aware, like /trace and /jobs: while the sidebar is rendering
+        // and the workspace panel is enabled, the workspace view opens THERE.
+        // The panel's own ⤢ goes back to the full-screen home.
+        const controller = sidePanelRef.current
+        if (controller !== null && controller.split && controller.enabledPanelIds.includes('workspace')) {
+          controller.openPanel('workspace', { focus: true })
+          return true
+        }
+        agentViewOpenSessionRef.current = channel.agentId
+        setSupervisorOpen(true)
+        return true
+      }
       case 'agentview': {
         setHelpOpen(false)
         // The screen opens immediately and loads its own list. Waiting for the
@@ -3472,8 +3558,46 @@ export function Chat({
     fullscreen,
     editorOpen: promptEditorOpen,
   })
+  /**
+   * 「全屏」出口（PanelBar 的 ⤢）：把侧栏里那个面板的内容切到它原本的整屏
+   * 形态。只映射**真的有整屏对应物**的面板 id（能力位 capabilities.fullscreen
+   * 决定按钮画不画，这里决定点了去哪）；没映射到的 id 静默无操作——按钮与
+   * 落地页、键盘入口共用同一个状态位，所以从整屏返回时侧栏还在原处。
+   */
+  const openPanelFullscreen = React.useCallback((panelId: string): void => {
+    if (panelId === 'jobs') {
+      sidePanelRef.current?.focusChat()
+      setJobsPanelOpen(true)
+      return
+    }
+    if (panelId === 'agents') {
+      sidePanelRef.current?.focusChat()
+      setSubagentDashboardOpen(true)
+      return
+    }
+    if (panelId === 'trajectory') {
+      sidePanelRef.current?.focusChat()
+      // 强制整屏：默认的 openScene 在分屏下会路由回面板（见它的注释）。
+      openScene({ fullscreen: true })
+      return
+    }
+    if (panelId === 'workspace') {
+      sidePanelRef.current?.focusChat()
+      setSupervisorOpen(true)
+    }
+  }, [openScene])
   // openJobsPanel（在上方、identity 稳定）经 ref 读取最新控制器。
   sidePanelRef.current = sidePanel
+  /**
+   * 宠物「代言」判定：分屏开着且 companion 是活动面板时，新通知由宠物头顶
+   * 气泡说出，输入框上方的 toast 不再重复同一条。error 色恒不压制（可能
+   * 要行动）。渲染期读控制器状态——与气泡同一提交，无先闪后消的竞态。
+   */
+  const petSaysNotices = React.useCallback(
+    (item: Channel['notifications'][number]): boolean =>
+      item.color !== 'error' && sidePanel.split && sidePanel.activePanelId === 'companion',
+    [sidePanel.split, sidePanel.activePanelId],
+  )
   // 聊天列宽：收起时 = 内容区全宽（与现状逐字节一致），分栏时 = 左栏宽。
   // 所有显式下传的宽度（gutter / 图片预览区 / wake 条）都改用它；转录
   // 子树则经 SidePanelLayout 的 TerminalSizeContext 覆盖自动拿到。
@@ -3881,6 +4005,27 @@ export function Chat({
     }
     if (expanded && input === 'N' && searchQuery && searchCount > 0 && !key.ctrl && !key.meta && !key.super) {
       setSearchCurrent(i => (i <= 0 ? searchCount - 1 : i - 1))
+      event.stopImmediatePropagation()
+      return
+    }
+    if (overlay.kind === 'help') {
+      // 帮助盖屏（第八版）：Esc/Ctrl+C/Enter 收起回落地页；纵向导航归这个
+      // 视口（与 PromptInput 的 helpOpen 分支同一套键位），其余按键模态吞掉
+      // ——绝不漏进落地页草稿。
+      const page = Math.max(1, helpCoverViewportHeight - 2)
+      if (key.upArrow || key.wheelUp) {
+        helpCoverScrollRef.current?.scrollBy(key.wheelUp ? -3 : -1)
+      } else if (key.downArrow || key.wheelDown) {
+        helpCoverScrollRef.current?.scrollBy(key.wheelDown ? 3 : 1)
+      } else if (key.pageUp || key.pageDown) {
+        helpCoverScrollRef.current?.scrollBy(key.pageUp ? -page : page)
+      } else if (key.home) {
+        helpCoverScrollRef.current?.scrollTo(0)
+      } else if (key.end) {
+        helpCoverScrollRef.current?.scrollTo(Number.MAX_SAFE_INTEGER)
+      } else if (key.escape || (key.ctrl && (input === 'c' || input === 'd')) || plainReturn) {
+        dispatchOverlay({ type: 'close' })
+      }
       event.stopImmediatePropagation()
       return
     }
@@ -4694,6 +4839,25 @@ export function Chat({
    */
   const pickerPanels = (
     <>
+          {overlay.kind === 'help' && (
+            <Box flexDirection="column" marginBottom={1}>
+              <HelpMenu
+                commands={channel.commandList}
+                viewportHeight={helpCoverViewportHeight}
+                viewportWidth={chatColumns}
+                scrollRef={helpCoverScrollRef}
+                onCommandPick={(name) => {
+                  // 点击命令行 = 把 /name 填进落地页草稿（聊天页 Tab 补全的
+                  // 鼠标等价），浮层收起、人还在启动页（第八版：不许进对话页）。
+                  dispatchOverlay({ type: 'close' })
+                  const filled = '/' + name + ' '
+                  setLaunchpadDraft(filled)
+                  setLaunchpadCaret(filled.length)
+                  setLaunchpadFocus(-1)
+                }}
+              />
+            </Box>
+          )}
           {overlay.kind === 'thinking' && (
             <ThinkingToggle
               currentValue={thinkingVisible}
@@ -5135,7 +5299,7 @@ export function Chat({
    * while they read the list, which is why closing the screen only repaints
    * the transcript when the attached session actually changed.
    */
-  if (supervisorOpen) {
+  if (supervisorOpen && launchpadGate()) {
     /**
      * Live state per session, from the channel's own agent-view projection.
      * Reading the projection rather than a parallel source is what keeps this
@@ -5204,7 +5368,7 @@ export function Chat({
   // conversation (an early return after every hook above has run), so there
   // is no transcript underneath to be repainted or bled through. The dropped
   // turn's prompt returns through the same fill path a rewind picker uses.
-  if (treeOpen) {
+  if (treeOpen && launchpadGate()) {
     const tree = (
       <SessionTree
         channel={channel}
@@ -5225,14 +5389,14 @@ export function Chat({
   // The settings screen follows the browser's rule exactly: it REPLACES the
   // conversation (an early return after every hook above has run), so there
   // is no transcript underneath to be repainted or bled through.
-  if (settingsOpen) {
+  if (settingsOpen && launchpadGate()) {
     const screen = <Settings channel={channel} onClose={() => setSettingsOpen(false)} />
     return fullscreen ? screen : <AlternateScreen>{screen}</AlternateScreen>
   }
 
   // Subagent detail scene: displays detailed view of a specific subagent.
   // Like the browser and settings, it replaces the conversation entirely.
-  if (subagentDetailId !== null) {
+  if (subagentDetailId !== null && launchpadGate()) {
     const subagent = channel.subagents.find(s => s.agentId === subagentDetailId)
     if (!subagent) {
       // Agent not found, go back to the dashboard (side panel when split).
@@ -5255,7 +5419,7 @@ export function Chat({
 
   // Jobs panel: background jobs (running/killed) with kill/inspect actions.
   // Like the browser and settings, it replaces the conversation entirely.
-  if (jobsPanelOpen) {
+  if (jobsPanelOpen && launchpadGate()) {
     const panel = (
       <JobsPanel
         jobs={channel.backgroundJobs ?? []}
@@ -5275,7 +5439,7 @@ export function Chat({
 
   // Subagent dashboard: displays all active and completed subagents.
   // Like the browser and settings, it replaces the conversation entirely.
-  if (subagentDashboardOpen) {
+  if (subagentDashboardOpen && launchpadGate()) {
     const dashboard = (
       <SubagentDashboard
         subagents={[...channel.subagents]}
@@ -5316,7 +5480,7 @@ export function Chat({
   // `<AlternateScreen>` is skipped when the app is already fullscreen —
   // nesting it would emit a second DEC 1049, and its unmount would drop the
   // whole app back to the main screen.
-  if (sceneOpen) {
+  if (sceneOpen && launchpadGate()) {
     const scene = <TrajectoryScene channel={channel} build={trajectory} onClose={closeScene} />
     return fullscreen ? scene : <AlternateScreen>{scene}</AlternateScreen>
   }
@@ -5383,10 +5547,17 @@ export function Chat({
           // 四段 → 既有命令：model→/model、effort→/effort、preset→/preset、
           // permission→/permission。全部在 overlayCommandNames 白名单里，
           // 落地页不收，选择器盖上来。
+          // 第八版切换式（用户原话「点一下是展开 再点一下收起来」）：**同一段**
+          // 再点/再按 Enter = 收起（展开 ↔ 收起，键盘与鼠标同一条 onParamPick）。
+          // 点另一段仍直接切换，点空白/Esc 仍收起（上一版契约不回退）。
+          if (overlay.kind === segment) {
+            dispatchOverlay({ type: 'close' })
+            return
+          }
           // BUG 3（点另一段直接切换）：/effort 的选择器是异步 open-if（when:
           // ['none']），盖着别的选择器时会被丢弃——这就是"点了没反应"的根因。
           // 先把屏上的参数选择器收掉再开新的，一个在屏、且就是点的那段。
-          if (overlay.kind !== 'none' && overlay.kind !== segment) {
+          if (overlay.kind !== 'none') {
             dispatchOverlay({ type: 'close' })
           }
           void runCommand(segment, '')
@@ -5398,13 +5569,26 @@ export function Chat({
         onSubmit={closeLaunchpad}
         onFocusChange={setLaunchpadFocus}
         onAction={(action) => {
+          // 第八版（用户实测：「刚点帮助，不知道为什么直接进入聊天页面了」）：
+          // 帮助**不属于**离开启动页的两条路（Enter 发非命令消息 / 会话浏览
+          // 里选中会话）——它盖在落地页之上（overlay kind 'help'），再点同一
+          // 入口 = 收起（与参数段同一条切换语义）。
+          if (action.command === 'help') {
+            dispatchOverlay(overlay.kind === 'help'
+              ? { type: 'close' }
+              : { type: 'open', overlay: { kind: 'help' } })
+            return
+          }
           // 第七版姿态：覆盖层命令（overlayCommandNames）盖在落地页之上；
           // **整屏命令**（launchpadScreenCommands：会话与工作区 / 设置 / 后台
           // 任务 / 家谱 / 子代理 / 引导）也盖在落地页之上——落地页不收，
-          // Esc 退出整屏回到落地页（草稿/参数/焦点都在）。其余命令（star /
-          // update / help——反馈在对话页的转录/通知/帮助面板）仍收掉落地页
+          // Esc 退出整屏回到落地页（草稿/参数/焦点都在）。整屏要先过
+          // launchpadGate 的授权位（防御：异步误置的整屏状态盖不走启动页）。
+          // 其余命令（star / update——反馈在对话页的转录/通知）仍收掉落地页
           // 再执行，这是用户主动执行命令，不是「返回」。
-          if (!launchpadScreenCommands.has(action.command) && !overlayCommandNames.has(action.command)) {
+          if (launchpadScreenCommands.has(action.command)) {
+            authorizeLaunchpadCover()
+          } else if (!overlayCommandNames.has(action.command)) {
             setLaunchpadOpen(false)
           }
           void runCommand(action.command, '')
@@ -5416,8 +5600,9 @@ export function Chat({
           }
           // 空输入按 Esc：这一屏的"下一步"通常是去挑工作区/会话。第七版：
           // 会话浏览器**盖在落地页之上**（落地页不收）——Esc 退出浏览器回到
-          // 落地页，绝不落到对话页。
+          // 落地页，绝不落到对话页。这是从落地页出发的交互：过闸门授权。
           agentViewOpenSessionRef.current = channel.agentId
+          authorizeLaunchpadCover()
           setSupervisorOpen(true)
         }}
         onBlankClick={() => {
@@ -5444,10 +5629,17 @@ export function Chat({
         onCommandPick={(commandLine) => {
           // 补全面板选中（Enter/Tab/点击）：走 runCommand，与快捷入口同一条
           // 白名单口径——覆盖层与整屏命令（第七版 launchpadScreenCommands）
-          // 不收落地页（盖在它之上），其余收掉再执行。
+          // 不收落地页（盖在它之上），其余收掉再执行。/help 与快捷入口同一条
+          // 拦截：盖屏浮层，不进对话页（第八版）。
           const parsed = parseCommandName(commandLine)
           if (parsed === undefined) return
-          if (!overlayCommandNames.has(parsed.name) && !launchpadScreenCommands.has(parsed.name)) {
+          if (parsed.name === 'help') {
+            dispatchOverlay({ type: 'open', overlay: { kind: 'help' } })
+            return
+          }
+          if (launchpadScreenCommands.has(parsed.name)) {
+            authorizeLaunchpadCover()
+          } else if (!overlayCommandNames.has(parsed.name)) {
             setLaunchpadOpen(false)
           }
           void runCommand(parsed.name, parsed.rawInput)
@@ -5540,6 +5732,8 @@ export function Chat({
               approvals: approvalSnapshot !== null ? 1 : 0,
               questions: questionSnapshot !== null ? 1 : 0,
             }}
+            trajectory={trajectory}
+            onExpand={openPanelFullscreen}
           />
         }
       >
@@ -5854,6 +6048,11 @@ export function Chat({
           key="prompt-input"
           channel={channel}
           suspended={promptReplacementOpen}
+          // 宠物面板是活动面板时，通知由它的头顶气泡「说出来」，输入框上方
+          // 不再重复弹同一条（error 色除外——可能要行动的信号永远走 toast）。
+          // 渲染期判定（split + activePanelId），与气泡同一次提交切换，不会
+          // 先闪一帧 toast 再消失。
+          toastSuppressed={petSaysNotices}
           draftCache={promptDraftRef.current}
           helpOpen={helpOpen}
           onToggleHelp={() =>{  setHelpOpen(previous => !previous) }}

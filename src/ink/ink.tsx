@@ -2497,12 +2497,29 @@ export default class Ink {
     const screen = this.frontFrame.screen;
     // selectWordAt/selectLineAt no-op on noSelect/out-of-bounds. Seed with
     // a char-mode selection so the press still starts a drag even if the
-    // word/line scan finds nothing selectable.
-    startSelection(this.selection, col, row);
+    // word/line scan finds nothing selectable. The screen seeds the
+    // direction fence: a multi-click anchored on a noSelect cell (the
+    // side-panel column) selects that region's text.
+    startSelection(this.selection, col, row, screen);
     if (count === 2) selectWordAt(this.selection, screen, col, row);else selectLineAt(this.selection, screen, row);
     // Ensure hasSelection is true so release doesn't re-dispatch onClickAt.
     // selectWordAt no-ops on noSelect; selectLineAt no-ops out-of-bounds.
     if (!this.selection.focus) this.selection.focus = this.selection.anchor;
+    this.notifySelectionChange();
+  }
+
+  /**
+   * Begin a char-mode selection at (col, row), reading the anchor cell's
+   * noSelect bit from the current frame so the gesture's direction fence is
+   * seeded (SelectionState.includeNoSelectCells): a drag that starts inside
+   * a noSelect region — the side-panel column — selects that region's own
+   * text; a chat-origin drag keeps excluding panel glyphs (design §4.6).
+   * Bound as the App prop onSelectionStart (replacing App's direct
+   * startSelection calls, which had no screen to read the bit from).
+   */
+  handleSelectionStart(col: number, row: number): void {
+    if (!this.altScreenActive) return;
+    startSelection(this.selection, col, row, this.frontFrame.screen);
     this.notifySelectionChange();
   }
 
@@ -2641,7 +2658,7 @@ export default class Ink {
   };
   render(node: ReactNode): void {
     this.currentNode = node;
-    const tree = <App ref={this.setAppRef} stdin={this.options.stdin} stdout={this.options.stdout} stderr={this.options.stderr} exitOnCtrlC={this.options.exitOnCtrlC} onExit={this.unmount} terminalColumns={this.terminalColumns} terminalRows={this.terminalRows} selection={this.selection} onSelectionChange={this.notifySelectionChange} onClickAt={this.dispatchClick} onContextMenuAt={this.dispatchContextMenu} onHoverAt={this.dispatchHover} onWheelAt={this.dispatchWheelAt} getHyperlinkAt={this.getHyperlinkAt} onOpenHyperlink={this.openHyperlink} onMultiClick={this.handleMultiClick} onSelectionDrag={this.handleSelectionDrag} onDragTargetAt={this.findDragTargetAt} onDragDispatch={this.dispatchDrag} onPointerGestureChange={this.setPointerGestureActive} onProtocolCandidateChange={this.setProtocolCandidateActive} onReleaseTail={this.drainReleaseTail} onClickProbe={this.clickProbeAtBatchTail} onStdinResume={this.reassertTerminalModes} onTerminalFocus={this.handleTerminalFocusProbe} onCursorDeclaration={this.setCursorDeclaration} dispatchKeyboardEvent={this.dispatchKeyboardEvent}>
+    const tree = <App ref={this.setAppRef} stdin={this.options.stdin} stdout={this.options.stdout} stderr={this.options.stderr} exitOnCtrlC={this.options.exitOnCtrlC} onExit={this.unmount} terminalColumns={this.terminalColumns} terminalRows={this.terminalRows} selection={this.selection} onSelectionChange={this.notifySelectionChange} onClickAt={this.dispatchClick} onContextMenuAt={this.dispatchContextMenu} onHoverAt={this.dispatchHover} onWheelAt={this.dispatchWheelAt} getHyperlinkAt={this.getHyperlinkAt} onOpenHyperlink={this.openHyperlink} onMultiClick={this.handleMultiClick} onSelectionStart={this.handleSelectionStart} onSelectionDrag={this.handleSelectionDrag} onDragTargetAt={this.findDragTargetAt} onDragDispatch={this.dispatchDrag} onPointerGestureChange={this.setPointerGestureActive} onProtocolCandidateChange={this.setProtocolCandidateActive} onReleaseTail={this.drainReleaseTail} onClickProbe={this.clickProbeAtBatchTail} onStdinResume={this.reassertTerminalModes} onTerminalFocus={this.handleTerminalFocusProbe} onCursorDeclaration={this.setCursorDeclaration} dispatchKeyboardEvent={this.dispatchKeyboardEvent}>
         <TerminalWriteProvider value={this.writeRaw}>
           <TerminalImagesContext.Provider value={this.terminalImages}>
             {node}

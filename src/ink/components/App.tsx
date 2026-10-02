@@ -26,7 +26,6 @@ import {
 	finishSelection,
 	hasSelection,
 	type SelectionState,
-	startSelection,
 } from "../selection.js";
 import {
 	isXtermJs,
@@ -133,6 +132,13 @@ type Props = {
 	// screen buffer to find word/line boundaries and mutates selection,
 	// setting isDragging=true so a subsequent drag extends by word/line.
 	readonly onMultiClick: (col: number, row: number, count: 2 | 3) => void;
+	// Called on a left press that begins a text selection (fresh press,
+	// modifier press, dormant-drag replay). Lives on Ink like
+	// onSelectionDrag: seeding the gesture needs the screen buffer to read
+	// the anchor cell's noSelect bit (the direction fence — a drag anchored
+	// inside a noSelect region, e.g. the side-panel column, selects that
+	// region's text; chat-origin drags keep excluding it).
+	readonly onSelectionStart: (col: number, row: number) => void;
 	// Called on drag-motion. Mode-aware: char mode updates focus to the
 	// exact cell; word/line mode snaps to word/line boundaries. Needs
 	// screen-buffer access (word boundaries) so lives on Ink, not here.
@@ -1195,7 +1201,7 @@ export function handleMouseEvent(app: App, m: ParsedMouse): void {
 			app.lastClickRow = -1;
 			// Do not immediately seed the chain again: a Shift+click followed by
 			// a plain click in the same cell must remain two single clicks.
-			startSelection(sel, col, row);
+			app.props.onSelectionStart(col, row);
 			sel.lastPressHadAlt = (m.button & 0x08) !== 0;
 			app.props.onSelectionChange();
 			return;
@@ -1226,7 +1232,7 @@ export function handleMouseEvent(app: App, m: ParsedMouse): void {
 			app.props.onMultiClick(col, row, count);
 			return;
 		}
-		startSelection(sel, col, row);
+		app.props.onSelectionStart(col, row);
 		// SGR bit 0x08 = alt (xterm.js wires altKey here, not metaKey — see
 		// comment at the hyperlink-open guard below). On macOS xterm.js,
 		// receiving alt means macOptionClickForcesSelection is OFF (otherwise
@@ -1262,7 +1268,7 @@ export function handleMouseEvent(app: App, m: ParsedMouse): void {
 				);
 				return;
 			}
-			startSelection(sel, col, row);
+			app.props.onSelectionStart(col, row);
 			replayedDormantDrag = true;
 		}
 		// Classic X10 encodes every release as low bits 3. If a left selection is

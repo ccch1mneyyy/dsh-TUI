@@ -111,7 +111,7 @@ function renderOutputRuns(job: BackgroundJobState): OutputRun[] {
     runs.push({ kind: 'markdown', text: markdown.join('\n') })
     markdown = []
   }
-  for (const line of job.outputLines) {
+  for (const line of job.outputLines ?? []) {
     if (line.gapBefore === true) {
       flush()
       runs.push({ kind: 'gap' })
@@ -231,7 +231,7 @@ function JobRowLine({ job, focused, armed, columns, onFocus }: {
               </Text>
             </Box>
           )}
-          {job.outputLines.length > 0 ? (
+          {(job.outputLines?.length ?? 0) > 0 ? (
             <Box flexDirection="column" marginTop={1}>
               {renderOutputRuns(job).map((run, runIndex) => (
                 <Box

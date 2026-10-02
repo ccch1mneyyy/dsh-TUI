@@ -547,6 +547,13 @@ export interface PromptInputProps {
   /** Keep the draft mounted while another prompt-slot panel owns the UI. */
   suspended?: boolean
   /**
+   * Host judgement "this notice needs no toast" — the pet panel says it with
+   * its speech bubble instead while it is the active panel. Evaluated during
+   * render (not via an effect-written ledger) so toast and bubble swap in
+   * the same commit without a one-frame flash. Errors are never suppressed.
+   */
+  toastSuppressed?: (item: Channel['notifications'][number]) => boolean
+  /**
    * Owner-held slot for the unsent draft.
    *
    * The prompt owns its text in local state, and several screens REPLACE the
@@ -665,6 +672,7 @@ export interface PromptInputProps {
  */
 export function PromptInput({
   channel,
+  toastSuppressed,
   suspended = false,
   draftCache,
   helpOpen,
@@ -3641,6 +3649,12 @@ export function PromptInput({
 
   const lastNotification =
     channel.notifications[channel.notifications.length - 1]
+  // The pet panel can "say" a notice with its speech bubble instead: while
+  // that panel is the ACTIVE one the host suppresses the duplicate toast
+  // here (errors always toast — they may need action). Same render, same
+  // commit, so the swap cannot flash one frame of toast first.
+  const toastVisible =
+    lastNotification !== undefined && (toastSuppressed?.(lastNotification) ?? false) !== true
 
   // Park the native terminal cursor at the input caret (via the renderer's
   // cursor-declaration mechanism). Terminal emulators render IME preedit
@@ -4202,7 +4216,7 @@ export function PromptInput({
           ))}
         </Box>
       )}
-      {lastNotification && (
+      {lastNotification && toastVisible && (
         // position=absolute takes zero layout height so the transcript never
         // shifts when a notification appears/disappears; the layer floats one
         // row above the prompt border, right-aligned.

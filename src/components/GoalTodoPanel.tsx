@@ -1,5 +1,6 @@
 import React from 'react'
 import { Box, Text, useAnimationFrame } from '../ui.js'
+import wrapText from '../ink/wrap-text.js'
 import type { ChannelUi as Channel } from '../adapter/channel/ui-policy.js'
 import type { ChannelGoal, TodoPanelItem } from '../dsh-adapter/channel.js'
 import { t } from '../i18n.js'
@@ -117,6 +118,7 @@ export function GoalTodoPanel({
   variant = 'default',
   visible = true,
   maxTodos,
+  wrapWidth,
 }: {
   channel: Channel
   /** Fold the whole todo section to its summary header line. */
@@ -131,6 +133,10 @@ export function GoalTodoPanel({
   visible?: boolean
   /** 覆盖 MAX_TODOS（panel variant 按宿主高度传入）。 */
   maxTodos?: number
+  /** panel variant：todo 行按此宽度折行——单条最多 2 行，超出部分截断
+   *  加省略号；maxTodos 预算按「行」折算，放不下仍走「…N more」。缺省
+   *  （default 形态）不折行，保持单行 truncate 的 chat 页现状。 */
+  wrapWidth?: number
 }): React.ReactNode {
   const goal = channel.goal
   const allTodos = channel.todos ?? []
@@ -138,9 +144,15 @@ export function GoalTodoPanel({
   // Completed rows are useful progress while a turn is running, but become
   // stale footer noise once the agent is idle. Keep unfinished work visible;
   // the header count carries the done summary either way.
-  const todos = channel.working
+  // panel 形态不自动隐藏完成行：侧栏折叠头常驻显示 ✓ done/total，用户
+  // 「点开」是显式展开动作——idle 时把完成行过滤光就是「明明有 9 个、
+  // 点开一条都没有」（完成行以 dim 呈现，进度语义不丢）。default 形态
+  // （chat 页底部 chrome）保留原 auto-fold。
+  const todos = variant === 'panel'
     ? allTodos
-    : allTodos.filter(todo => todo.status !== 'completed')
+    : channel.working
+      ? allTodos
+      : allTodos.filter(todo => todo.status !== 'completed')
 
   // Local goal timer: remember when this goal id first rendered. Written in
   // render (idempotent lazy ref init) so a fresh mount with a live goal
@@ -175,12 +187,32 @@ export function GoalTodoPanel({
   // All-completed idle snapshot with no goal: nothing left to narrate —
   // the whole panel folds away (historical behavior).
   const anyUnfinished = allTodos.some(todo => todo.status !== 'completed')
-  const showTodoSection = allTodos.length > 0 && (channel.working || anyUnfinished || goal !== undefined)
+  const showTodoSection = allTodos.length > 0 &&
+    (channel.working || anyUnfinished || goal !== undefined || variant === 'panel')
   if (goal === undefined && !showTodoSection) return null
 
   const budget = maxTodos ?? MAX_TODOS
-  const visibleTodos = todos.slice(0, budget)
-  const hidden = todos.length - visibleTodos.length
+  // 折行形态（panel）：每条 todo 占 1~2 行，预算按「行」折算——放不下
+  // 的整条让位给「…N more」，不撑破面板高度（§16.6 盒高恒定）。cap：
+  // 折出 >2 行时保留第一行、其余拼回一行截断加省略号（wrapText truncate）。
+  // 单行形态（default）：与原 slice 语义逐字节一致。
+  const display: Array<{ todo: (typeof todos)[number]; lines: string[] }> = []
+  if (wrapWidth !== undefined && wrapWidth > 4) {
+    let used = 0
+    for (const todo of todos) {
+      const wrapped = wrapText(todo.content, wrapWidth, 'wrap').split('\n')
+      const lines = wrapped.length <= 2
+        ? wrapped
+        : [wrapped[0]!, wrapText(wrapped.slice(1).join(''), wrapWidth, 'truncate')!]
+      if (display.length > 0 && used + lines.length > budget) break
+      display.push({ todo, lines })
+      used += lines.length
+    }
+  } else {
+    for (const todo of todos.slice(0, budget)) display.push({ todo, lines: [todo.content] })
+  }
+  const visibleTodos = display
+  const hidden = todos.length - display.length
   // Collapsed preview: the live task when one runs, else the next open row.
   const preview = allTodos.find(todo => todo.status === 'in_progress')
     ?? allTodos.find(todo => todo.status !== 'completed')
@@ -256,17 +288,29 @@ export function GoalTodoPanel({
           </Box>
           {!collapsed && (
             <Box flexDirection="column">
-              {visibleTodos.map((todo, index) => {
+              {visibleTodos.map((item, index) => {
                 const last = index === visibleTodos.length - 1 && hidden === 0
-                return (
-                  <Box key={index} flexDirection="row" height={1}>
-                    <BranchPrefix last={last} />
-                    <TodoGlyph status={todo.status} />
-                    <Text wrap="truncate" dimColor={todo.status === 'completed'}>
-                      {todo.content}
+                return item.lines.map((line, li) => (
+                  <Box key={li} flexDirection="row" height={1}>
+                    {li === 0 ? (
+                      <>
+                        <BranchPrefix last={last} />
+                        <TodoGlyph status={item.todo.status} />
+                      </>
+                    ) : (
+                      // 折行续行前缀按树形语义分支：'│' 对齐首行树形前缀的
+                      // 干（col 0）——仅非末条（├─，下面还有兄弟，树干要继续
+                      // 通下去）；末条（└─，树到此为止）续行用 5 格空格，
+                      // 不得再挂干。后随格数与首行正文对齐（前缀 3 + glyph 2
+                      // = 5 格）。todo 的折行是渲染前 wrapText 预算好的（不像
+                      // jobs 由 ink 在列内部折、加不了前缀），逐行手写不会断。
+                      <Text dimColor>{last ? '     ' : '\u2502    '}</Text>
+                    )}
+                    <Text wrap="truncate" dimColor={item.todo.status === 'completed'}>
+                      {line}
                     </Text>
                   </Box>
-                )
+                ))
               })}
               {hidden > 0 && (
                 <Box flexDirection="row" height={1}>

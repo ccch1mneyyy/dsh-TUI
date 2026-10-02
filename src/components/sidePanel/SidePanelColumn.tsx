@@ -29,6 +29,10 @@ export interface SidePanelColumnProps {
   readonly channel: ChannelUi
   readonly activity?: import('../../dsh-adapter/activity-store.js').ActivityView
   readonly attention?: { readonly approvals: number; readonly questions: number }
+  /** 宿主提供的「全屏」出口（Chat 把活动面板切到整屏形态）。 */
+  readonly onExpand?: (panelId: string) => void
+  /** 会话轨迹投影（轨迹 Panel 的数据源）。 */
+  readonly trajectory?: import('../../dsh-adapter/trajectory/index.js').TrajBuild
 }
 
 function fallbackTitle(id: string): string {
@@ -65,7 +69,7 @@ function EmptyNone(): React.ReactNode {
   )
 }
 
-export function SidePanelColumn({ width, controller, channel, activity, attention }: SidePanelColumnProps): React.ReactNode {
+export function SidePanelColumn({ width, controller, channel, activity, attention, onExpand, trajectory }: SidePanelColumnProps): React.ReactNode {
   const focused = controller.focus === 'panel'
   const { rows } = useTerminalSize()
   const entries = React.useSyncExternalStore(panelStore.subscribe, () => panelStore.list())
@@ -82,15 +86,45 @@ export function SidePanelColumn({ width, controller, channel, activity, attentio
   })
   const anyRegistered = tabs.length > 0 && entries.length > 0 &&
     controller.enabledPanelIds.some(id => entries.some(entry => entry.definition.id === id))
+  // ⤢ 只对「活动面板 + 声明了整屏形态 + 宿主接了出口」出现：能力位是
+  // 声明的唯一真源，没有整屏对应物的面板（info/companion）不画。
+  const activeEntry = entries.find(entry => entry.definition.id === controller.activePanelId)
+  const canExpand = activeEntry?.definition.capabilities?.fullscreen === true && onExpand !== undefined
+  // 标签点击与 ←/→ 宿主键走同一条路（openPanel 会顺带把焦点给右栏）。
+  const onSelectPanel = React.useCallback(
+    (id: string) => { controller.openPanel(id, { focus: true }) },
+    // openPanel 在 useSidePanel 里是空依赖 useCallback（引用稳定）；
+    // controller 对象本身每次渲染都是新的，不能进依赖表。
+    [controller.openPanel],
+  )
   // Host 高度 = 列高 - PanelBar/上规/下规/hint 四行 chrome。
   const hostHeight = Math.max(1, rows - 4)
   return (
     <Box flexDirection="column" width={width} flexGrow={1}>
-      <PanelBar tabs={tabs} activeId={controller.activePanelId} width={width - 2} focused={focused} />
+      <PanelBar
+        tabs={tabs}
+        activeId={controller.activePanelId}
+        width={width - 2}
+        focused={focused}
+        canExpand={canExpand}
+        onExpand={canExpand ? () => onExpand?.(controller.activePanelId ?? '') : undefined}
+        onSelect={onSelectPanel}
+      />
       <Rule focused={focused} />
       <Box flexDirection="column" flexGrow={1} overflow="hidden">
         {anyRegistered
-          ? <PanelHost controller={controller} channel={channel} width={width} height={hostHeight} activity={activity} attention={attention} />
+          ? (
+            <PanelHost
+              controller={controller}
+              channel={channel}
+              width={width}
+              height={hostHeight}
+              activity={activity}
+              attention={attention}
+              trajectory={trajectory}
+              openFullscreen={onExpand}
+            />
+          )
           : <EmptyNone />}
       </Box>
       <Rule focused={focused} />

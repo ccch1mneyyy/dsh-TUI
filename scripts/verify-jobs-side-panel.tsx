@@ -60,6 +60,8 @@ const kills: string[] = []
 const channel = {
   get version() { return channelVersion },
   get backgroundJobs() { return jobs },
+  // agents 面板默认启用，适配器读名册（subagents.filter）
+  subagents: [] as unknown[],
   jobControl: {
     kill(id: string) { kills.push(id); return true },
   },

@@ -692,6 +692,39 @@ const GROUPS = {
 // ←/→ 翻页、**详情 Esc 回 dashboard 且焦点仍在右栏**、dashboard Esc 让出回
 // 聊天、二级路由跨切面板保留、x 中断、SGR 点击开卡、名册缺行回落 dashboard。
     ["verify-agents-side-panel", ['node', '--import', 'tsx/esm', 'scripts/verify-agents-side-panel.tsx']],
+// 侧栏鼠标契约：PanelBar 标签可点（切换活动面板）且 hover 高亮、⤢ 只对声明
+// capabilities.fullscreen 的面板出现并把**活动** id 交给宿主、点聊天列交还焦点。
+    ["verify-side-panel-mouse", ['node', '--import', 'tsx/esm', 'scripts/verify-side-panel-mouse.tsx']],
+// 轨迹侧栏迁移回归：TrajectoryPanel 经真实投影渲染唤醒带/账本/检视器——
+// 空态、↑/↓ 经分发器移动选中、Tab/→ 切视图、Enter 展开再收起、Esc 恒不消费、
+// SGR 真鼠标点行聚焦、visible=false 零写流（visible=true 对照有写）、28/40 列不溢出。
+    ["verify-trajectory-panel", ['node', '--import', 'tsx/esm', 'scripts/verify-trajectory-panel.tsx']],
+// 信息栏回归：分组键值渲染（模型/思考深度/模式/权限/上下文/缓存/TPS/消耗/工作目录/
+// 会话标题与 ID）、无数据回落 ——、长值截断不溢出、窄列可读、visible=false 不订阅。
+    ["verify-info-panel", ['node', '--import', 'tsx/esm', 'scripts/verify-info-panel.tsx']],
+// 工作目录（工作区）面板回归：账本渲染与当前项高亮、缺失目录标记、长路径不溢出、
+// 失败分支、↑/↓ 选择、滚轮、鼠标点行与 hover、visible=false 不重复拉取。
+    ["verify-workspace-panel", ['node', '--import', 'tsx/esm', 'scripts/verify-workspace-panel.tsx']],
+// 侧栏注册冒烟：内置面板注册齐（单格图标 + capabilities.fullscreen 位）且经真实
+// PanelHost 挂载——标签渲染、点 ⓘ 切到信息栏、点 ∿ 切到轨迹空态、⤢ 只在该出现时出现。
+    ["verify-side-panel-registry", ['node', '--import', 'tsx/esm', 'scripts/verify-side-panel-registry.tsx']],
+// 鲸娘皮肤回归：GIF→字母格素材包（22 动画/267 帧/30 色调色板，确定性构建）、
+// 皮肤注册与 mood/heart/celebrate 落点、缺素材回退、设置切换生效、两包缓存不串色。
+    ["verify-whale-girl-skin", ['node', '--import', 'tsx/esm', 'scripts/verify-whale-girl-skin.tsx']],
+  ["verify-splash-mascot", ['node', '--import', 'tsx/esm', 'scripts/verify-splash-mascot.tsx']],
+// 宠物代言通知路由：companion 为活动面板时新通知走头顶气泡、输入框 toast 不
+// 重复（同一提交切换无闪烁）；其他面板 toast 照旧；error 色恒 toast。
+    ["verify-companion-toast-routing", ['node', '--import', 'tsx/esm', 'scripts/verify-companion-toast-routing.tsx']],
+// todo 侧栏折叠回归：TodoPanelAdapter 传 onToggle/collapsed——真 SGR 点头部折叠/
+// 展开、Enter/空格切换、整屏 variant='default' 行为零变化对照；含 ink 500ms 双击
+// 窗口的探针坑（第二次同点位点击前 sleep>500ms）。
+    ["verify-todo-side-panel", ['node', '--import', 'tsx/esm', 'scripts/verify-todo-side-panel.tsx']],
+// 侧栏滚动绘制回归：窄于屏幕的 ScrollBox 滚动不再用满宽 DECSTBM 快路径——分界栏
+// 逐行 │/├ 完好、对侧列逐字节稳定（滚轮 64/65 与 ↑/↓ 双驱动、双向互证）。
+    ["verify-side-panel-scroll-paint", ['node', '--import', 'tsx/esm', 'scripts/verify-side-panel-scroll-paint.tsx']],
+// 侧栏选择围栏（方向感知）：面板内起拖可选可复制面板文字（逐行列钳制不跨
+// 聊天列）；聊天起拖维持 §4.6 不捕面板字符。真 SGR press/motion/release 驱动。
+    ["verify-side-panel-selection", ['node', '--import', 'tsx/esm', 'scripts/verify-side-panel-selection.tsx']],
 // 连续任务卡成组（JobGroupRow/JobGroupHeader）：组头汇总、组内取消空行与
 // 链式连接线、落定整组折叠、点击/悬停/Ctrl+O 展开、失败数留在折叠行、
 // 非相邻不成组、单卡原样，以及 jobGroupFold=auto/always/never 三档行为。

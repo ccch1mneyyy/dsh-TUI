@@ -386,12 +386,13 @@ export const applySidePanelPanels = sidePanelPanelsStore.apply
 
 /**
  * Companion 皮肤（设置 `dsh-tui.companion.skin`）：内置 'deepy'（默认，
- * assets/deepy 素材包）与 'whale'（开屏像素鲸鱼同款分层动画）；插件
+ * assets/deepy 素材包）、'whaleGirl'（用户提供的鲸娘素材包，assets/
+ * whaleGirl）与 'whale'（开屏像素鲸鱼同款分层动画）；插件
  * 皮肤 id（'plugin:sub' 命名空间）随 Phase 7 开放注册后同样可写——
  * 未注册/未知的 id 一律回退 deepy，不阻断启动。
  */
 export type CompanionSkinSetting = string
-export const COMPANION_SKIN_IDS = ['deepy', 'whale'] as const
+export const COMPANION_SKIN_IDS = ['deepy', 'whaleGirl', 'whale'] as const
 export const DEFAULT_COMPANION_SKIN: CompanionSkinSetting = 'deepy'
 
 export function normalizeCompanionSkin(value: unknown): CompanionSkinSetting {

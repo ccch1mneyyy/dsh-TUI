@@ -21,6 +21,9 @@ export interface PanelCapabilities {
   readonly selection?: boolean
   readonly zoom?: boolean
   readonly sendToChat?: boolean
+  /** 有整屏对应物：PanelBar 右端出现 ⤢「全屏」按钮（点击交给宿主
+   *  openFullscreen(panelId)）。没有整屏形态的面板不声明，按钮不出现。 */
+  readonly fullscreen?: boolean
 }
 
 export interface PanelProps {
