@@ -2,9 +2,9 @@
  * 压缩 × 会话切换生命周期回归（真实 channel.compact / switchModel + 可控
  * fake compaction 服务）：
  *
- *  1. 取消先于快照——压缩进行中 /model：switchModel 必须先 abort 并等压缩
- *     落定、再切片 source 快照（顺序断言），seed 不含任何压缩产物；
- *     toast 报「已取消并切换」，且不再追加误导性的通用「压缩失败」。
+ *  1. 压缩进行中 /model：switchModel 必须先 abort 并等压缩落定，再选择
+ *     后续请求路由；不读取 fork seed、不创建新会话；
+ *     toast 报「已取消以执行切换」，且不再追加误导性的通用「压缩失败」。
  *  2. persistence 分类——checkpoint 已提交但落盘失败（code:'persistence'）
  *     的拒绝必须与通用失败分开提示（含「压缩已生效」语义，不再裸报失败）。
  *  3. 已落定不阻塞——压缩正常完成后切换不再触发取消路径。
@@ -180,25 +180,21 @@ const toasts = (channel: { notifications: readonly { text: string }[] }) =>
   stamps.delete('snapshot')
   const switchResult = await channel.switchModel('fake-provider', 'model-b')
   check('scene1: switch succeeds', switchResult === true, JSON.stringify(order))
-  // 严格顺序：取消落定后才能读取 seed；读取完成后才能 create。
+  // 取消落定后再提交新路由；模型切换不再复制会话。
   const abortedAt = compaction.calls[0]?.abortedAt
-  const snapshotAt = stamps.get('snapshot')
-  const createAt = stamps.get('create')
-  check(
-    'scene1: abort precedes seed snapshot, which precedes create',
-    abortedAt !== undefined && snapshotAt !== undefined && createAt !== undefined
-      && abortedAt <= snapshotAt && snapshotAt <= createAt,
-    `abortedAt=${String(abortedAt)} snapshotAt=${String(snapshotAt)} createAt=${String(createAt)}`,
-  )
+  check('scene1: compaction is cancelled before route adoption',
+    abortedAt !== undefined && channel.model === 'model-b', JSON.stringify(order))
+  check('scene1: route adoption does not snapshot or create a session',
+    !stamps.has('snapshot') && !order.includes('create'), JSON.stringify(order))
 
   // toast：取消提示出现；随后不追加通用「压缩失败」（抑制闩）。
   await settle(() => channel.notifications.length >= 2)
   await sleep(150) // 固定窗:探针 抑制闩：观察窗内不得再追加通用「压缩失败」提示
   const text = toasts(channel)
-  check('scene1: cancel toast shown', text.includes('已取消并切换'), text)
+  check('scene1: cancel toast shown', text.includes('已取消以执行切换'), text)
   check('scene1: no misleading generic failure toast', !/压缩失败 ·/.test(text), text)
   // seed 快照不含压缩产物（checkpoint 事件从未写入——abort 先于提交）。
-  check('scene1: create happened after cancel', order.includes('create'), JSON.stringify(order))
+  check('scene1: no child session is created', !order.includes('create'), JSON.stringify(order))
 }
 
 // ==== 场景 2：/fork —— 取消必须先于快照 ======================================
@@ -284,7 +280,7 @@ const toasts = (channel: { notifications: readonly { text: string }[] }) =>
   const switchResult = await channel.switchModel('fake-provider', 'model-b')
   check('scene7: switch succeeds', switchResult === true, JSON.stringify(order))
   const text = toasts(channel)
-  check('scene7: no cancel toast for a settled compaction', !text.includes('已取消并切换'), text)
+  check('scene7: no cancel toast for a settled compaction', !text.includes('已取消以执行切换'), text)
   check('scene7: compaction ran exactly once', compaction.calls.length === 1, String(compaction.calls.length))
 }
 

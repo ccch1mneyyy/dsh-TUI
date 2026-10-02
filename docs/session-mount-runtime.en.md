@@ -209,7 +209,7 @@ read-only home then costs one loud refusal, where guessing wrong costs an
 unrecoverable interleaved log.
 
 **The one exception is a session id that was just minted** (`/new`, `/bg`,
-fork, rewind, model switch, boot create): it cannot be somebody else's, so a
+fork, rewind, boot create): it cannot be somebody else's, so a
 refusal there is "could not announce it", not a conflict.
 
 The create proceeds with a warning. Blocking a user from starting a new session

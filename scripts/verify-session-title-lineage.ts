@@ -1,161 +1,84 @@
-/**
- * 会话血缘 × 自动标题回归：空白会话上的 `/model` 不得让首个真实 prompt
- * 永远拿不到自动生成的 session title。
- *
- *  1. 纯函数矩阵（childRecordsLineage）：只有会话脚手架事件的 seed 不记
- *     血缘；人写的 user/message（纯图片也算）记血缘；插件来源的 user-role
- *     消息不记。
- *  2. 真链路（channel.switchModel + fake agents）：空白源的子会话
- *     `meta.parentSession` 必须缺席（上游 dsh-session-title 只在
- *     `parentSession === undefined` 的会话上为首条人消息安排生成）；已对话
- *     的源仍必须记血缘（既有 /model 分支语义不得被这次修复削掉）。
- *
- * 背景：/model 过去无条件把当前会话重建成 seeded fork 并写 parentSession，
- * 而上游的 first-prompt provider 对有 parent 的会话永久不合格（fork 不重试，
- * 只有 ctx.sessionTitle.refresh() 才重来，TUI 没有这个面）。于是“先 /model
- * 再提问”的新会话只剩 fallback 标题——首条 prompt 的 40 字节腰斩。
- *
- * 运行：node --import tsx/esm scripts/verify-session-title-lineage.ts
+/** Same-session model selection and first-prompt title eligibility.
+ * Run: node --import tsx/esm scripts/verify-session-title-lineage.ts
  */
-// 隔离家目录：switchModel 会把选择写进 ~/.dsh-tui/model.json（modelPrefs 在
-// 模块加载时按 homedir() 解析）。必须在 import src 之前；HOME 与
-// USERPROFILE 成对设置，两个平台都隔离。
+import assert from 'node:assert/strict'
 import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-const reproHome = mkdtempSync(join(tmpdir(), 'dshtui-title-lineage-'))
-process.env.HOME = reproHome
-process.env.USERPROFILE = reproHome
+const testHome = mkdtempSync(join(tmpdir(), 'dshtui-model-selection-'))
+process.env.HOME = testHome
+process.env.USERPROFILE = testHome
+process.env.DSH_TUI_LANG = 'en'
+const { createChannel } = await import('../src/dsh-adapter/channel.js')
 
-const [{ createChannel }, { childRecordsLineage }, { settled }] = await Promise.all([
-  import('../src/dsh-adapter/channel.js'),
-  import('../src/dsh-adapter/channel/session-lineage.js'),
-  import('./lib/term-test.mjs'),
-])
-
-let failed = 0
-function check(name: string, ok: boolean, extra = ''): void {
-  console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}${extra ? `  (${extra})` : ''}`)
-  if (!ok) failed += 1
+for (const prompted of [false, true]) {
+  const handlers = new Map<string, Function>()
+  const events = prompted ? [{ seq: 0, time: 1, type: 'user/message', data: { source: { kind: 'user' }, content: [{ type: 'text', text: 'hello' }] } }] : []
+  let lastConfig = { provider: 'p', model: 'a', reasoningEffort: 'high' }
+  const header = { id: 'session', ...(prompted ? { parentSession: 'existing-parent' } : {}) }
+  const session = { id: 'session', seq: events.length, events, header, requestHeader: () => ({ config: lastConfig }) }
+  const agent = { id: 'session', status: 'idle', options: { provider: 'p', model: 'a' }, session,
+    ctx: { on(name: string, fn: Function) { handlers.set(name, fn); return () => handlers.delete(name) } },
+    followup() {}, steer() {}, inbox: { remove: () => true } }
+  let creates = 0
+  const ctx = { on: () => () => {}, logger: { warn() {} }, get(name: string) {
+    if (name === 'agents') return { create() { creates++; throw new Error('model switch must not create an agent') } }
+    if (name === 'llm') return { listProviders: () => [{ id: 'p' }], listModels: async () => ['a', 'b'].map(id => ({ id, provider: 'p', name: id })) }
+  } }
+  const channel = createChannel(ctx as never, agent as never, { model: 'a', provider: 'p', cwd: '/tmp/demo', activity: false })
+  const before = channel.rows
+  for (const model of ['b', 'a']) {
+    assert.equal(await channel.switchModel('p', model), true)
+    assert.equal(channel.sessionId, 'session')
+    assert.equal(channel.agentId, 'session')
+    assert.equal(session.header, header)
+    assert.equal(session.events, events)
+    assert.equal(channel.rows, before, 'switch preserves transcript projection')
+    const assembly = await handlers.get('system-prompt/assemble')!({}, {}, async () => ({ variables: { model: 'a', provider: 'p' } }))
+    const request = await handlers.get('agent/request')!({}, async () => lastConfig)
+    assert.equal(assembly.variables.model, model)
+    assert.equal(request.model, model)
+    assert.equal(request.reasoningEffort, undefined, 'old model effort cannot leak')
+    const input = { role: 'user', content: [] }
+    const decision = await handlers.get('agent/pre-step')!({ agent, messages: [input], signal: new AbortController().signal, step: 1 }, async () => ({ kind: 'accept', messages: [input] }))
+    assert.equal(decision.messages.at(-1).source.kind, 'model-selection')
+    lastConfig = request
+  }
+  assert.equal(creates, 0)
+  assert.equal(await channel.switchModel('p', 'a'), true)
+  assert.equal(await channel.switchModel('p', 'missing'), false)
+  assert.equal(channel.model, 'a')
+  channel.releaseContributions()
 }
-
-type AnyEvent = { readonly seq: number, readonly time: number, readonly type: string, readonly data: Record<string, unknown> }
-const ev = (seq: number, type: string, data: Record<string, unknown> = {}): AnyEvent =>
-  ({ seq, time: 1_700_000_000_000 + seq, type, data })
-
-// ==== 1. 纯函数矩阵 ==========================================================
+const { createModelSwitchAction } = await import('../src/dsh-adapter/channel/model-switch.js')
 {
-  const scaffolding = [
-    ev(0, 'permission/preset', { preset: 'danger-full-access' }),
-    ev(1, 'sandbox/mode', { mode: 'workspace-write' }),
-    ev(2, 'approval/policy', { policy: 'ask' }),
-  ]
-  check('lineage: an empty seed records none', childRecordsLineage([]) === false)
-  check('lineage: session scaffolding records none', childRecordsLineage(scaffolding) === false)
-  check(
-    'lineage: a human prompt records lineage',
-    childRecordsLineage([...scaffolding, ev(3, 'user/message', {
-      source: { kind: 'user' }, content: [{ type: 'text', text: '改一下标题' }],
-    })]) === true,
-  )
-  check(
-    'lineage: an image-only human prompt still records lineage',
-    childRecordsLineage([ev(0, 'user/message', {
-      source: { kind: 'user' }, content: [{ type: 'image', attachment: { attachmentId: 'sha256:x' } }],
-    })]) === true,
-  )
-  check(
-    'lineage: a plugin-sourced user-role message records none',
-    childRecordsLineage([
-      ev(0, 'user/message', { source: { kind: 'plugin', plugin: 'x' }, content: [{ type: 'text', text: 'injected' }] }),
-      ev(1, 'user/message', { content: [{ type: 'text', text: 'sourceless' }] }),
-    ]) === false,
-    'both non-human sources must stay non-lineage',
-  )
-}
-
-// ==== 2. 真链路：switchModel 建子会话时写的 meta.parentSession ===============
-const stubAgentCtx = { on: () => () => {} }
-function makeAgent(id: string, sessionId: string, sessionEvents: readonly unknown[]) {
-  return {
-    id,
-    status: 'idle',
-    session: { id: sessionId, seq: sessionEvents.length, events: sessionEvents, header: {} },
-    ctx: stubAgentCtx,
-    followup() {},
-    steer() {},
-    inbox: { remove: () => true },
-  } as never
-}
-
-function assemble(sourceEvents: readonly AnyEvent[]) {
-  const creates: Array<Record<string, unknown>> = []
-  const services: Record<string, unknown> = {
-    agents: {
-      async create(options: Record<string, unknown>) {
-        creates.push(options)
-        const seed = (options['seed'] ?? []) as readonly unknown[]
-        return { agent: makeAgent(`fork-${creates.length}`, `child-${creates.length}`, seed), dispose: async () => {} }
-      },
-    },
-    llm: {
-      listProviders: () => [{ id: 'fake-provider' }],
-      listModels: async () => [{ provider: 'fake-provider', id: 'model-b', name: 'Model B' }],
-    },
-  }
-  const ctx = {
-    on: () => () => {},
-    get: (name: string) => services[name],
-    logger: { warn() {} },
-  }
-  const channel = createChannel(ctx as never, makeAgent('a1', 'source-session', sourceEvents) as never, {
-    model: 'model-a',
-    cwd: '/tmp/demo',
-    provider: 'fake-provider',
-    activity: false,
+  let generation = 0
+  let active = true
+  let resolveCatalog!: (models: readonly { id: string }[]) => void
+  const state = { provider: 'p', model: 'a', working: false, emit() {} }
+  const selection = { current: undefined, assembled: undefined }
+  const switchModel = createModelSwitchAction({ get: () => ({ listModels: () => new Promise(resolve => { resolveCatalog = resolve }) }) } as never, state as never, {
+    owner: { current: () => active },
+    binding: { capture: () => ({ generation }), isCurrent: capture => capture.generation === generation } as never,
+    selection, settleCompaction: async () => {}, applyPreferredEffort: async () => {}, dropModelCompletion() {}, notify() {},
   })
-  return { channel, creates }
+  const tick = () => new Promise(resolve => setImmediate(resolve))
+  const stale = switchModel('p', 'b')
+  await tick()
+  assert.equal(await switchModel('p', 'a'), true, 'same-route choice cancels pending selection')
+  resolveCatalog([{ id: 'b' }])
+  assert.equal(await stale, false)
+  assert.equal(state.model, 'a')
+  const rebound = switchModel('p', 'b')
+  await tick()
+  generation++
+  resolveCatalog([{ id: 'b' }])
+  assert.equal(await rebound, false, 'replaced binding cannot be changed by old catalog read')
+  const revoked = switchModel('p', 'b')
+  await tick()
+  active = false
+  resolveCatalog([{ id: 'b' }])
+  assert.equal(await revoked, false)
+  assert.equal(state.model, 'a')
 }
-
-const blankSource = [
-  ev(0, 'permission/preset', { preset: 'danger-full-access' }),
-  ev(1, 'sandbox/mode', { mode: 'workspace-write' }),
-  ev(2, 'approval/policy', { policy: 'ask' }),
-  ev(3, 'subagent/model-selection-policy', { allowedModels: [] }),
-]
-{
-  const { channel, creates } = assemble(blankSource)
-  const switched = await channel.switchModel('fake-provider', 'model-b')
-  const adopted = await settled(() => creates.length === 1)
-  check('blank: switch succeeds and creates exactly one child', switched === true && adopted, `creates=${creates.length}`)
-  const meta = (creates[0]?.['meta'] ?? {}) as Record<string, unknown>
-  check('blank: the child records no parentSession', meta['parentSession'] === undefined, JSON.stringify(meta))
-  check('blank: the child still inherits the seed', ((creates[0]?.['seed'] ?? []) as unknown[]).length === blankSource.length)
-  // The inherited cut survives the missing lineage: whatever shape the runtime
-  // line encodes it in, a seeded root still marks its prefix as inherited.
-  check(
-    'blank: the child is a seeded root (the inherited cut is still marked)',
-    meta['isSeeded'] === true || meta['seedLength'] === blankSource.length,
-    JSON.stringify(meta),
-  )
-}
-
-{
-  const { channel, creates } = assemble([
-    ...blankSource,
-    ev(4, 'turn/start', { turn: 0 }),
-    ev(5, 'user/message', { source: { kind: 'user' }, content: [{ type: 'text', text: '第一个问题' }] }),
-    ev(6, 'turn/end', { turn: 0, reason: { kind: 'completed' } }),
-  ])
-  const switched = await channel.switchModel('fake-provider', 'model-b')
-  const adopted = await settled(() => creates.length === 1)
-  check('prompted: switch succeeds and creates exactly one child', switched === true && adopted, `creates=${creates.length}`)
-  const meta = (creates[0]?.['meta'] ?? {}) as Record<string, unknown>
-  check(
-    'prompted: the child still records the source as its parent',
-    String(meta['parentSession']) === 'source-session',
-    JSON.stringify(meta),
-  )
-}
-
-process.exit(failed)
+console.log('verify:session-title-lineage OK (same identity, title eligibility, A→B→A, routing, effort, notice, invalid route)')

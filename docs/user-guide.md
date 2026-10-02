@@ -341,7 +341,7 @@ dsh-tui
 | 命令 | 参数 | 作用 |
 |---|---|---|
 | `/channel` | 无 | 中转渠道档案（仅 Claude 后端）；**回合运行中导入 / 新建 / 管理，以及需要重启进程的切换会被拒绝**（选择器本身仍可打开），见 [交互与命令](interaction.md#渠道档案channel仅-claude) |
-| `/model` | 无 | 模型选择器；**切换 = fork 会话续聊**（历史保留、仅换路由；还没有人说过话的会话不记分支，保留首个 prompt 的自动标题），选择持久化到 `~/.dsh-tui/model.json` |
+| `/model` | 无 | 模型选择器；**同会话切换模型**（保留 session ID、历史和标题，下一次请求使用新路由），选择持久化到 `~/.dsh-tui/model.json` |
 | `/effort` | `status` / `<id>` | 推理强度：无参滑杆（`←/→` 实时调整）；`status` 当前档位；`<id>` 直接设定。持久化 `~/.dsh-tui/effort.json`；新会话起始档看 /settings 的 `effortDefault`（§5.3） |
 | `/thinking` | 无 | 扩展思考显示开关（流式时思考逐条展开） |
 | `/tokens` | 无 | 分三段报数，不再并列两个不同量：**本次请求**上传量（input + 缓存读 + 缓存写，harness 的四个桶互斥）、**会话累计**（未缓存输入 / 输出 / 缓存读 / 缓存写）、**上下文占用** |
@@ -441,7 +441,7 @@ dsh-TUI 不预装通用技能；`/skills` 浏览 DSH 发现的技能，可直调
 
 ### 4.6 模型切换与预设
 
-- `/model`：选择器。**切换 = fork 会话续聊**（历史保留、仅换路由，旧会话留在 `/resume`）；
+- `/model`：选择器。**同会话切换模型**（保留 session ID 和历史，下一次请求使用新路由）；
   持久化 `~/.dsh-tui/model.json`，下次启动直接沿用它（cordis.yml/profile 中的
   `provider`/`model` 只是首次启动的部署默认值）。
 - DSH 的顶部标签以「最近使用」开头，再列各提供商，`Tab` / `Shift+Tab` 切换提供商；Codex 与 Claude 直接显示模型目录，不显示这些标签。所有后端均用 `↑/↓` 选模型、`←/→` 调推理等级、`Enter` 一并应用、`Esc` 取消草稿，支持点击可用的标签、模型、档位与选择/取消提示，以及滚轮移动模型焦点。点击推理档位会立即应用当前聚焦模型与该强度，并关闭选择器。
@@ -626,7 +626,7 @@ dsh 意外退出时，安全模式给出**只读**的环境诊断、profile 插�
 
 | 项 | 命令 | 说明 |
 |---|---|---|
-| 模型 | `/model` | 选择器；**切换 = fork 会话续聊**（历史保留、仅换路由）；持久化 `~/.dsh-tui/model.json`，重启与 `/new` 沿用——它**优先于** cordis.yml/profile 里写的 `provider`/`model`（后者只是首次启动的部署默认值）。从没选过的话，用配置值，再没有才用 Harness 默认（当前为 `deepseek-flash`） |
+| 模型 | `/model` | 选择器；**同会话切换模型**（保留 session ID 和历史，仅换后续请求路由）；持久化 `~/.dsh-tui/model.json`，重启与 `/new` 沿用——它**优先于** cordis.yml/profile 里写的 `provider`/`model`（后者只是首次启动的部署默认值）。从没选过的话，用配置值，再没有才用 Harness 默认（当前为 `deepseek-flash`） |
 | 推理强度 | `/effort` | 滑杆（←/→ 实时）或 `/effort <id>`；`/effort status` 看当前；持久化 `~/.dsh-tui/effort.json` 并被下一次启动沿用（优先于 cordis.yml 的 `effort`），新会话默认档在 /settings → 默认推理强度 |
 | Agent 预设 | `/preset` | `standard` / `ptc`（旧 0.1.1 名 `code`）/ `minimal` / `cordis` / **梁神模式 `liangshen`**；**已开始会话不可切换** |
 | 主题 | `/theme` | `auto`（OSC 11 跟随终端背景）/ `light` / `dark` / `dark-ansi`；`/theme <名>` 直接切；`/theme status` 看解析结果 |
@@ -675,7 +675,7 @@ dsh 意外退出时，安全模式给出**只读**的环境诊断、profile 插�
 12. 会话管理界面（`/resume`、`/home`、`/agentview`、`/bg` 或输入框行首 `⌸`）：
     打字筛选、`★` 固定、`Ctrl+X` 停后台会话；切换只是**停放**。
 13. 回合运行中 `/compact`、`/model`、`/restart` 会被拒绝——先 `Ctrl+C` 或等回合结束。
-14. `/model` 切换 = fork 续聊（历史保留），持久化后重启与 `/new` 沿用。
+14. `/model` 在同一会话内切换后续请求的模型（ID 和历史保留），持久化后重启与 `/new` 沿用。
 
 **问手册**
 

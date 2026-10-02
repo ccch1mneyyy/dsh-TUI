@@ -704,7 +704,7 @@ await sleep(800)
   const switched = await channel.newSession()
   check('compact phase cancellation: /new succeeded mid-decision', switched === true)
   check('compact phase cancellation: switch immediately toasts cancellation before decision release',
-    notified('压缩进行中，已取消并切换会话'))
+    notified('压缩进行中，已取消以执行切换'))
   release(undefined)
   // The actively settled transaction exits silently after its cancellation;
   // ext-compact-stale remains covered by live, non-cancelled stale paths.
@@ -915,7 +915,6 @@ await sleep(800)
     ['session-resume.ts', 'resetAndBind('],
     ['session-adoption.ts', 'deps.bindAgent()'],
     ['session-live-adoption.ts', 'deps.bindAgent()'],
-    ['model-switch.ts', 'deps.bindAgent()'],
     ['background-action.ts', 'deps.bindAgent()'],
   ]
   const misplaced = tails.filter(([file, marker]) => {
