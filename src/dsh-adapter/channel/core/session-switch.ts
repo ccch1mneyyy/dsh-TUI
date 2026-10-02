@@ -52,6 +52,15 @@ export interface NewSessionPlan {
 
 /** How a backend opens a fresh session for `/new`. */
 export interface NewSessionOpener {
+  /**
+   * The backend's own contract for an input still in the channel's FIFO
+   * when `/new` adopts (a parked `tui/input` decision, an `@` or IDE read):
+   * `true` = it is stale-dropped with a notice, never delivered anywhere
+   * (DSH, pinned by verify-session-reset-hygiene scenario 8); absent = the
+   * input belongs to the session it was typed in, so `/new` is abandoned
+   * instead (a backend handshake can take a minute — Phase 4a review 6).
+   */
+  readonly dropsParkedInputs?: boolean
   /** Synchronous gate before anything else (throws to refuse). */
   assertAllowed?(): void
   /** Whether a session can be opened at all; notifies when not. */
@@ -74,6 +83,12 @@ export function createSessionSwitch(ctx: Context, deps: {
   resetIdeSelection(): void
   clearStagedImages(): void
   opener(): NewSessionOpener | undefined
+  /**
+   * Monotonic activity of the bound session, compared across the open:
+   * inputs dispatched (the input FIFO and `!!`), whether one is still on its
+   * way, and live turns started.
+   */
+  activity(): { readonly inputs: number; readonly unsettled: boolean; readonly turnStarts: number }
   unavailable(name: string): void
 }) {
   const { binding, notify } = deps
@@ -151,6 +166,29 @@ export function createSessionSwitch(ctx: Context, deps: {
     // inputs while idle keeps them); only input that arrives during the
     // switch counts as racing it.
     const queuedAtStart = new Set(state.pending.map(item => item.id))
+    const activityAtStart = deps.activity()
+    /**
+     * Review item 9 (and its Phase 4a follow-up): the open may have taken
+     * long (a backend handshake), and the session may have run — or still be
+     * running — work the user started meanwhile: a turn (even one that
+     * already finished: `working` alone misses it), a prompt queued in the
+     * backend, or an input still in the channel's own FIFO (a parked
+     * decision, an `@` or IDE-selection read, a `!!` command). Adopting now
+     * would dispose that session and lose it: the candidate is abandoned.
+     */
+    const raced = (): boolean => {
+      const live = deps.state()
+      const activity = deps.activity()
+      return live.working
+        || live.pending.some(item => !queuedAtStart.has(item.id))
+        || activity.turnStarts !== activityAtStart.turnStarts
+        || (opener.dropsParkedInputs !== true && (activity.inputs !== activityAtStart.inputs || activity.unsettled))
+    }
+    const abandonRaced = async (candidate: AgentSession): Promise<false> => {
+      await binding.abandon(candidate)
+      if (current()) notify(t('new-session-raced'), { color: 'warning', timeoutMs: 8000 })
+      return false
+    }
     let plan: NewSessionPlan
     try {
       if (await sessionSwitchVetoed('new') || !current()) return false
@@ -173,21 +211,14 @@ export function createSessionSwitch(ctx: Context, deps: {
         return failed(current, error)
       }
       if (!current()) { await binding.abandon(candidate); return false }
+      // Checked before the attach too: an abandoned candidate must not have
+      // been accounted to a workspace first (DSH ownership is durable).
+      if (raced()) return await abandonRaced(candidate)
       if (plan.attach !== undefined) {
         await plan.attach(candidate, current)
         if (!current()) { await binding.abandon(candidate); return false }
       }
-      // Review item 9: the open may have taken long (a backend handshake),
-      // and the session may have started a turn meanwhile, or taken a
-      // prompt the user sent while waiting. Adopting now would dispose that
-      // session mid-turn and lose the prompt: abandon the candidate and keep
-      // the session the user is working in.
-      const live = deps.state()
-      if (live.working || live.pending.some(item => !queuedAtStart.has(item.id))) {
-        await binding.abandon(candidate)
-        if (current()) notify(t('new-session-raced'), { color: 'warning', timeoutMs: 8000 })
-        return false
-      }
+      if (raced()) return await abandonRaced(candidate)
       const result = binding.adopt(candidate, adoption, (previous, disposePrevious) => {
         const previousSessionId = previous.session.ref.sessionId
         const tail = deps.state()

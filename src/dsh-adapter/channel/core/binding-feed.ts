@@ -103,6 +103,10 @@ export function createSessionBatchRouter(deps: {
     }
   }
 
+  /** Monotonic count of live turns that started on a bound session (`/new`
+   *  compares it across its open: a whole turn may come and go meanwhile). */
+  let turnStarts = 0
+
   const route = (batch: readonly AgentEvent[], meta: AgentEventMeta, current: () => boolean): void => {
     // The generation fence covers the WHOLE batch, whatever it carries: a
     // callback retained past a rebind (an in-flight dispatch, a compaction
@@ -113,6 +117,9 @@ export function createSessionBatchRouter(deps: {
     let progressOnly = batch.length > 0
     for (const [index, event] of batch.entries()) {
       switch (event.type) {
+        case 'turn.start':
+          if (!meta.replay) turnStarts += 1
+          break
         case 'session.status':
           applyStatus(event.status)
           break
@@ -147,7 +154,7 @@ export function createSessionBatchRouter(deps: {
     else if (meta.wake !== 'none') deps.state.emit()
   }
 
-  return { route, reconcileRetiredProjection }
+  return { route, reconcileRetiredProjection, turnStarts: (): number => turnStarts }
 }
 
 /**

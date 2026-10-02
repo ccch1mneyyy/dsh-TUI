@@ -327,6 +327,8 @@ export function createCoreChannel(
     hooks: () => extension.bind ?? {},
   })
 
+  /** `!!` commands on their way to the session (`/new` waits them out). */
+  const shellInputs = { started: 0, inFlight: 0 }
   const sessionSwitch = createSessionSwitch(ctx, {
     owner,
     binding,
@@ -338,6 +340,14 @@ export function createCoreChannel(
     resetIdeSelection,
     clearStagedImages,
     opener: () => extension.newSession ?? defaultOpener,
+    activity: () => {
+      const fifo = inputDelivery.activity()
+      return {
+        inputs: fifo.dispatched + shellInputs.started,
+        unsettled: fifo.unsettled || shellInputs.inFlight > 0,
+        turnStarts: feed.router.turnStarts(),
+      }
+    },
     unavailable,
   })
   /** `/new` on a session no extension claims: the backend's own `open`. */
@@ -362,6 +372,16 @@ export function createCoreChannel(
     unavailable,
     dropRows: () => { extension.dropRows?.() },
     loadOlder: () => extension.loadOlder,
+    beginInput: () => {
+      shellInputs.started += 1
+      shellInputs.inFlight += 1
+      let ended = false
+      return () => {
+        if (ended) return
+        ended = true
+        shellInputs.inFlight -= 1
+      }
+    },
   })
   const reports = createCoreReports({ owner, binding, state: () => state })
   const refreshGitBranch = createGitBranchRefresher(ctx, {

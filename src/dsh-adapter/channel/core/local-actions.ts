@@ -52,6 +52,8 @@ export function createCoreLocalActions(ctx: Context, deps: {
   /** Restore folded rows from the backend's durable history; absent = the
    *  backend cannot slice it (and nothing is folded). */
   loadOlder(): (() => number) | undefined
+  /** An input on its way to the session (`!!`): returns its end. */
+  beginInput?(): () => void
 }) {
   const { owner, binding, state, rowIds, notify } = deps
 
@@ -90,39 +92,50 @@ export function createCoreLocalActions(ctx: Context, deps: {
      * `!!` sends the output on as a followup of the session it ran for.
      */
     async runLocalCommand(command: string, includeInContext: boolean): Promise<void> {
-      const capture = binding.capture()
-      const current = (): boolean => owner.current() && binding.isCurrent(capture)
-      const cwd = state.cwd
-      const target = deps.workspace.describe(cwd)
-      state.rows.push({ id: rowIds.value++, kind: 'local', text: command, executionTarget: target.kind === 'local' ? target.badge : `${target.badge} · ${target.label}` })
-      state.emit()
-      const executor = await deps.workspace.commandShell(cwd) ?? ctx.get('shell') as ForegroundShell | undefined
-      if (!current()) return
-      if (executor === undefined) {
-        deps.unavailable('shell')
-        return
-      }
-      let output: string
+      // `!!` is an input from its first keystroke: `/new` must not adopt
+      // over a command whose output is about to reach this session.
+      const end = includeInContext ? deps.beginInput?.() : undefined
       try {
-        const result = await runForegroundShell(executor, { command, workdir: cwd, timeoutMs: 30000 })
-        output = result.stdout.text.trim() || result.stderr.text.trim() || (result.timedOut ? '(timed out)' : '(no output)')
-      } catch (error) {
-        output = error instanceof Error ? error.message : String(error)
-      }
-      if (!current()) return
-      state.rows.push({ id: rowIds.value++, kind: 'local-output', text: preview(output, LOCAL_OUTPUT_LIMIT) })
-      state.emit()
-      if (includeInContext) {
-        // This runs detached (`void runLocalCommand`): a session that closed
-        // meanwhile (a backend process that exited) must not surface as an
-        // unhandled rejection.
-        try {
-          await capture.session.submit({ text: `<bash-stdout>\n${output}\n</bash-stdout>`, clientMessageId: randomUUID() }, 'followup')
-        } catch (error) {
-          if (current()) notify(t('send-failed', { err: error instanceof Error ? error.message : String(error) }), { color: 'error', timeoutMs: 8000 })
-        }
+        await runLocal(command, includeInContext)
+      } finally {
+        end?.()
       }
     },
+  }
+
+  async function runLocal(command: string, includeInContext: boolean): Promise<void> {
+    const capture = binding.capture()
+    const current = (): boolean => owner.current() && binding.isCurrent(capture)
+    const cwd = state.cwd
+    const target = deps.workspace.describe(cwd)
+    state.rows.push({ id: rowIds.value++, kind: 'local', text: command, executionTarget: target.kind === 'local' ? target.badge : `${target.badge} · ${target.label}` })
+    state.emit()
+    const executor = await deps.workspace.commandShell(cwd) ?? ctx.get('shell') as ForegroundShell | undefined
+    if (!current()) return
+    if (executor === undefined) {
+      deps.unavailable('shell')
+      return
+    }
+    let output: string
+    try {
+      const result = await runForegroundShell(executor, { command, workdir: cwd, timeoutMs: 30000 })
+      output = result.stdout.text.trim() || result.stderr.text.trim() || (result.timedOut ? '(timed out)' : '(no output)')
+    } catch (error) {
+      output = error instanceof Error ? error.message : String(error)
+    }
+    if (!current()) return
+    state.rows.push({ id: rowIds.value++, kind: 'local-output', text: preview(output, LOCAL_OUTPUT_LIMIT) })
+    state.emit()
+    if (includeInContext) {
+      // This runs detached (`void runLocalCommand`): a session that closed
+      // meanwhile (a backend process that exited) must not surface as an
+      // unhandled rejection.
+      try {
+        await capture.session.submit({ text: `<bash-stdout>\n${output}\n</bash-stdout>`, clientMessageId: randomUUID() }, 'followup')
+      } catch (error) {
+        if (current()) notify(t('send-failed', { err: error instanceof Error ? error.message : String(error) }), { color: 'error', timeoutMs: 8000 })
+      }
+    }
   }
 }
 

@@ -390,8 +390,99 @@ try {
     const candidate3 = fakeSession('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa')
     release!(candidate3)
     check('an uncontested /new still switches', await third === true && racing.sessionRef.sessionId === candidate3.ref.sessionId && await settled(() => current.disposed))
+    // Phase 4a review 5: a WHOLE turn that started and ended during the open
+    // (`working` is false again, nothing pending) still races the switch.
+    const fourth = racing.newSession()
+    await opening()
+    candidate3.emit([{ type: 'turn.start', turn: 1, origin: 'user', time: 1 }])
+    candidate3.emit([{ type: 'turn.end', turn: 1, reason: { kind: 'completed' }, time: 2 }])
+    const candidate4 = fakeSession('a4a4a4a4-a4a4-4a4a-8a4a-a4a4a4a4a4a4')
+    release!(candidate4)
+    check('/new is abandoned when a whole turn came and went during the open', await fourth === false && await settled(() => candidate4.disposed) && racing.sessionRef.sessionId === candidate3.ref.sessionId && !racing.working)
   } finally {
     racing.releaseContributions()
+  }
+}
+
+// ── /new never drops an input still in the channel's FIFO (Phase 4a review 6) ──
+{
+  let releaseRead: (() => void) | undefined
+  const slowFs = {
+    resolve: (path: string) => Promise.resolve({ displayPath: path }),
+    stat: () => Promise.resolve({ type: 'file' as const }),
+    readText: () => new Promise<string>(resolve => { releaseRead = () => resolve('slow file body') }),
+    listDir: () => Promise.resolve([]),
+  }
+  let releaseShell: (() => void) | undefined
+  const slowShell = {
+    resolve: (request: unknown) => request,
+    run: () => new Promise<{ stdout: { text: string }; stderr: { text: string }; timedOut: boolean }>(resolve => {
+      releaseShell = () => resolve({ stdout: { text: 'shell output' }, stderr: { text: '' }, timedOut: false })
+    }),
+  }
+  const fsCtx = { on: () => () => undefined, get: (name: string) => name === 'fs' ? slowFs : name === 'shell' ? slowShell : undefined, logger: { warn: () => undefined, info: () => undefined, debug: () => undefined } } as never
+  const current = fakeSession('c5c5c5c5-c5c5-4c5c-8c5c-c5c5c5c5c5c5')
+  let release: ((session: FakeSession) => void) | undefined
+  const parked = createChannel(fsCtx, current, {
+    model: 'm', provider: '', cwd: workdir, activity: false,
+    openSession: () => new Promise<FakeSession>(resolve => { release = resolve }),
+  })
+  try {
+    // The `@` read parks the input in the FIFO: not pending, not working.
+    parked.submit('read @notes.txt please')
+    check('an @-mention read parks the input in the FIFO', await settled(() => releaseRead !== undefined) && parked.pending.length === 0 && current.submits.length === 0)
+    const opening = parked.newSession()
+    await settled(() => release !== undefined)
+    const candidate = fakeSession('c6c6c6c6-c6c6-4c6c-8c6c-c6c6c6c6c6c6')
+    release!(candidate)
+    check('/new is abandoned while an input is still on its way', await opening === false && await settled(() => candidate.disposed) && parked.sessionRef.sessionId === current.ref.sessionId)
+    releaseRead!()
+    check('… and the parked input reaches the session it was typed in', await settled(() => current.submits.length === 1) && current.submits[0]!.input.text === 'read @notes.txt please')
+    // `!!` is an input from its first keystroke: its output goes to the session.
+    parked.submit('!!make test')
+    await settled(() => releaseShell !== undefined)
+    release = undefined
+    const shellOpening = parked.newSession()
+    await settled(() => release !== undefined)
+    const candidate2 = fakeSession('c7c7c7c7-c7c7-4c7c-8c7c-c7c7c7c7c7c7')
+    release!(candidate2)
+    check('/new is abandoned while a `!!` command is on its way', await shellOpening === false && await settled(() => candidate2.disposed) && parked.sessionRef.sessionId === current.ref.sessionId)
+    releaseShell!()
+    check('… and its output reaches the session it ran for', await settled(() => current.submits.length === 2) && (current.submits[1]!.input.text).includes('shell output'))
+  } finally {
+    parked.releaseContributions()
+  }
+}
+
+// ── a raced /new never attaches its candidate first (Phase 4a review 7) ──
+{
+  const { createCoreChannel } = await import('../src/dsh-adapter/channel/core/compose.js')
+  const { createChannelOwner } = await import('../src/dsh-adapter/channel/owner.js')
+  const owner = createChannelOwner()
+  const current = fakeSession('d7d7d7d7-d7d7-4d7d-8d7d-d7d7d7d7d7d7')
+  const core = createCoreChannel(ctx, current, { model: 'm', provider: '', cwd: workdir, activity: false }, owner)
+  let release: ((session: FakeSession) => void) | undefined
+  const attached: string[] = []
+  core.extend({
+    newSession: {
+      available: () => true,
+      plan: () => Promise.resolve({
+        open: () => new Promise<FakeSession>(resolve => { release = resolve }),
+        attach: candidate => { attached.push(candidate.ref.sessionId); return Promise.resolve() },
+        adopt: candidate => candidate.ref.sessionId,
+      }),
+    },
+  })
+  const state = core.start()
+  try {
+    const opening = state.newSession()
+    await settled(() => release !== undefined)
+    current.emit([{ type: 'turn.start', turn: 1, origin: 'user', time: 1 }])
+    const candidate = fakeSession('d8d8d8d8-d8d8-4d8d-8d8d-d8d8d8d8d8d8')
+    release!(candidate)
+    check('a raced candidate is abandoned BEFORE its workspace attach', await opening === false && attached.length === 0 && await settled(() => candidate.disposed))
+  } finally {
+    state.releaseContributions()
   }
 }
 

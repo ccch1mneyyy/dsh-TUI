@@ -672,6 +672,8 @@ const integrationClaimChecks: ReadonlyArray<{ file: string; label: string; check
   { file: 'dsh-adapter/channel/reports.ts', label: 'collectAdapterDiagnostics(...)', check: () => fileHasNamedCall('dsh-adapter/channel/reports.ts', 'collectAdapterDiagnostics') },
   // Phase 4a: every composition installs it through the core host seam.
   { file: 'dsh-adapter/channel/core/host.ts', label: 'markDecisionDispatchTopology(...)', check: () => fileHasNamedCall('dsh-adapter/channel/core/host.ts', 'markDecisionDispatchTopology') },
+  // …and the core composition actually runs that seam (Phase 4a review 11).
+  { file: 'dsh-adapter/channel/core/compose.ts', label: 'resolveCoreHost(...)', check: () => fileHasNamedCall('dsh-adapter/channel/core/compose.ts', 'resolveCoreHost') },
   { file: 'dsh-adapter/effect-ledger.ts', label: 'createKernelLedger(...)', check: () => fileHasNamedCall('dsh-adapter/effect-ledger.ts', 'createKernelLedger') },
   { file: 'adapter/upstream/host-descriptor-driver.ts', label: 'commands.list(undefined)', check: () => fileHasMethodCallNamedWithUndefinedArg('adapter/upstream/host-descriptor-driver.ts', 'list') },
   { file: 'adapter/upstream/host-descriptor-driver.ts', label: 'probeDiagnostic()', check: () => fileHasMethodCallNamed('adapter/upstream/host-descriptor-driver.ts', 'probeDiagnostic') },

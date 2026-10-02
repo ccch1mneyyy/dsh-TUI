@@ -218,6 +218,7 @@ const dict = {
   'claude-auth-refresh-status': { zh: ' · HTTP {{status}}', en: ' · HTTP {{status}}' },
   'claude-auth-reconnect-failed': { zh: '重新连接 Claude 会话失败（详情见调试日志；可用 /login 重新登录）', en: 'Reconnecting the Claude session failed (details in the debug log; sign in again with /login)' },
   'claude-auth-reconnect-deferred': { zh: '当前回合结束后再用新凭证重新连接', en: 'Reconnecting with the new credential once the current turn ends' },
+  'claude-auth-reconnect-forced': { zh: '等待当前回合结束超时，现在重新连接——这会中断正在运行的回合', en: 'The turn did not finish in time; reconnecting now — this interrupts the running turn' },
   'claude-auth-inputs-dropped': { zh: '重新连接失败，{{n}} 条尚未开始的消息未能送达', en: 'Reconnecting failed; {{n}} message(s) that had not started were not delivered' },
   'claude-auth-route': { zh: '未使用订阅登录：{{route}}', en: 'Subscription sign-in not used: {{route}}' },
   'claude-route-custom-endpoint': { zh: '自定义端点 {{host}}（ANTHROPIC_BASE_URL）', en: 'custom endpoint {{host}} (ANTHROPIC_BASE_URL)' },

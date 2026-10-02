@@ -36,11 +36,11 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { OAuthAccess, OAuthCredentialSource } from '../src/agent/backend.js'
 import type { AgentEvent } from '../src/agent/events.js'
-import { detectClaudeAuth, isAuthFailure, refreshFailureStatus, resolveClaudeAuth } from '../src/backends/claude/auth.js'
+import { claudeGlobalConfigPath, detectClaudeAuth, fileGlobalConfigReader, isAuthFailure, refreshFailureStatus, resolveClaudeAuth } from '../src/backends/claude/auth.js'
 import { openClaudeSession } from '../src/backends/claude/session.js'
 import { createOAuthCredentialSource } from '../src/dsh-adapter/oauth-credential-source.js'
 import { setLang, t } from '../src/i18n.js'
-import { claudeDeps, fakeClaudeSdk, tick } from './lib/claude-fake-sdk.js'
+import { claudeDeps, fakeClaudeSdk, manualClock, tick } from './lib/claude-fake-sdk.js'
 
 setLang('en')
 let passed = 0
@@ -51,6 +51,9 @@ const check = (label: string, ok: boolean, detail?: unknown): void => {
 }
 
 const TOKEN = 'sk-ant-oat01-FAKE-TOKEN-never-printed'
+/** A promise's outcome, or `'timed out'` (a hang fails loudly, not forever). */
+const within = <T>(promise: Promise<T>, ms = 3000): Promise<T | 'timed out'> =>
+  Promise.race([promise, new Promise<'timed out'>(resolve => { setTimeout(() => resolve('timed out'), ms) })])
 const fakeSource = (credential: OAuthAccess | undefined, onFresh: (rejected: string | undefined) => OAuthAccess | undefined = () => credential): OAuthCredentialSource & { calls: (string | undefined)[] } => {
   const calls: (string | undefined)[] = []
   return {
@@ -62,8 +65,9 @@ const fakeSource = (credential: OAuthAccess | undefined, onFresh: (rejected: str
     },
   }
 }
-/** Effective settings with nothing route-relevant (the first-party route). */
-const firstParty = { settings: () => Promise.resolve({}) }
+/** Effective settings with nothing route-relevant (the first-party route);
+ *  no global config `env` (hermetic: the real ~/.claude.json is never read). */
+const firstParty = { settings: () => Promise.resolve({}), globalConfig: () => undefined }
 
 // ── precedence ────────────────────────────────────────────────────────
 {
@@ -91,7 +95,7 @@ const firstParty = { settings: () => Promise.resolve({}) }
   const userEnv = { PATH: '/usr/bin', ANTHROPIC_AUTH_TOKEN: 'user-gateway-key' }
   const refused = async (label: string, env: Record<string, string>, settings: () => Promise<Record<string, unknown> | undefined>, route: string): Promise<void> => {
     const source = fakeSource(stored)
-    const plan = await resolveClaudeAuth({ ...userEnv, ...env }, source, { settings })
+    const plan = await resolveClaudeAuth({ ...userEnv, ...env }, source, { settings, globalConfig: () => undefined })
     check(`no injection: ${label}`, plan.source !== 'dsh-auth' && plan.env.CLAUDE_CODE_OAUTH_TOKEN === undefined && !JSON.stringify(plan).includes(TOKEN), plan.route)
     check(`… the environment passes untouched: ${label}`, plan.env.ANTHROPIC_AUTH_TOKEN === 'user-gateway-key' && Object.entries({ ...userEnv, ...env }).every(([key, value]) => plan.env[key] === value))
     check(`… the token is never even read: ${label}`, source.calls.length === 0)
@@ -130,6 +134,54 @@ const firstParty = { settings: () => Promise.resolve({}) }
   ] as const) {
     const plan = await resolveClaudeAuth({ ...userEnv, ...env }, fakeSource(stored), firstParty)
     check(`injected on the first-party route: ${label}`, plan.source === 'dsh-auth' && plan.env.CLAUDE_CODE_OAUTH_TOKEN === TOKEN && plan.env.ANTHROPIC_AUTH_TOKEN === undefined)
+  }
+  // Phase 4a review 1: the global config's `env` (applied by the CLI before
+  // the settings tiers) is a third source; an unreadable one fails closed.
+  const viaGlobal = async (label: string, globalConfig: () => Record<string, unknown> | 'unreadable' | undefined, route: string, settings: () => Promise<Record<string, unknown>> = none): Promise<void> => {
+    const source = fakeSource(stored)
+    const plan = await resolveClaudeAuth({ ...userEnv }, source, { settings, globalConfig })
+    check(`no injection: ${label}`, plan.env.CLAUDE_CODE_OAUTH_TOKEN === undefined && source.calls.length === 0 && plan.route?.kind === route, plan.route)
+  }
+  await viaGlobal('ANTHROPIC_BASE_URL in the global config env', () => ({ ANTHROPIC_BASE_URL: 'https://api.deepseek.com/anthropic' }), 'custom-endpoint')
+  await viaGlobal('a routing flag in the global config env', () => ({ CLAUDE_CODE_USE_BEDROCK: '1' }), 'cloud')
+  await viaGlobal('a global config that cannot be read', () => 'unreadable', 'settings-unreadable')
+  // Review 9: a managed policy helper injects what the resolver cannot see;
+  // the Files API base URL carries the bearer too.
+  await viaGlobal('a managed policyHelper', () => undefined, 'settings-unreadable', () => Promise.resolve({ policyHelper: { path: '/opt/policy' } }))
+  await refused('CLAUDE_CODE_API_BASE_URL to a third-party host', { CLAUDE_CODE_API_BASE_URL: 'https://files.example.com' }, none, 'custom-endpoint')
+  // Review 2 (Windows semantics): names are case-insensitive — every spelling
+  // routes, and every spelling of a credential is scrubbed.
+  await refused('a lower-case anthropic_base_url', { anthropic_base_url: 'https://evil.example.com' }, none, 'custom-endpoint')
+  await refused('a mixed-case Anthropic_Unix_Socket', { Anthropic_Unix_Socket: '/tmp/s.sock' }, none, 'unix-socket')
+  await refused('a lower-case routing flag', { claude_code_use_vertex: '1' }, none, 'cloud')
+  await refused('a mixed-case base URL in the settings env', {}, () => Promise.resolve({ env: { Anthropic_Base_Url: 'https://evil.example.com' } }), 'custom-endpoint')
+  await viaGlobal('a lower-case base URL in the global config env', () => ({ anthropic_base_url: 'https://evil.example.com' }), 'custom-endpoint')
+  {
+    const plan = await resolveClaudeAuth({ PATH: '/usr/bin', Anthropic_Api_Key: 'stale-key', anthropic_auth_token: 'stale-bearer', Claude_Code_Oauth_Token: 'stale-oauth' }, fakeSource(stored), firstParty)
+    check('every spelling of a ranking credential is scrubbed under the dsh-auth login', plan.source === 'dsh-auth' && plan.env.CLAUDE_CODE_OAUTH_TOKEN === TOKEN && Object.keys(plan.env).sort().join() === 'CLAUDE_CODE_OAUTH_TOKEN,PATH', Object.keys(plan.env))
+    check('a mixed-case API key is still the environment\'s credential', (await resolveClaudeAuth({ Anthropic_Api_Key: 'k' }, undefined, firstParty)).source === 'api-key')
+    check('detection sees a mixed-case credential', await detectClaudeAuth({ anthropic_api_key: 'k', CLAUDE_CONFIG_DIR: '/nonexistent' }, undefined, 'linux') === 'ok')
+  }
+  {
+    // The file reader: `$CLAUDE_CONFIG_DIR/.claude.json` (any spelling of the
+    // variable), absent = no source, unparseable = fail closed.
+    const dir = mkdtempSync(join(tmpdir(), 'dsh-tui-claude-global-'))
+    try {
+      const reader = fileGlobalConfigReader({ claude_config_dir: dir })
+      check('global config: an absent file is no source', reader() === undefined && claudeGlobalConfigPath({ Claude_Config_Dir: dir }) === join(dir, '.claude.json'))
+      writeFileSync(join(dir, '.claude.json'), JSON.stringify({ numStartups: 3, env: { ANTHROPIC_BASE_URL: 'https://api.deepseek.com/anthropic' } }))
+      const source = fakeSource(stored)
+      const plan = await resolveClaudeAuth({ PATH: '/usr/bin', CLAUDE_CONFIG_DIR: dir }, source, { settings: none })
+      check('global config: its env routes the session off first-party (read from disk)', plan.route?.kind === 'custom-endpoint' && plan.env.CLAUDE_CODE_OAUTH_TOKEN === undefined && source.calls.length === 0, plan.route)
+      writeFileSync(join(dir, '.claude.json'), '{ not json')
+      const broken = await resolveClaudeAuth({ PATH: '/usr/bin', CLAUDE_CONFIG_DIR: dir }, fakeSource(stored), { settings: none })
+      check('global config: an unparseable file fails closed', broken.route?.kind === 'settings-unreadable' && broken.env.CLAUDE_CODE_OAUTH_TOKEN === undefined)
+      writeFileSync(join(dir, '.claude.json'), JSON.stringify({ numStartups: 3 }))
+      const plain = await resolveClaudeAuth({ PATH: '/usr/bin', CLAUDE_CONFIG_DIR: dir }, fakeSource(stored), { settings: none })
+      check('global config: no env there keeps the first-party route', plain.source === 'dsh-auth' && plain.route?.kind === 'first-party')
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
   }
   check('detection: any routing flag is a credential', await detectClaudeAuth({ CLAUDE_CODE_USE_MANTLE: '1', CLAUDE_CONFIG_DIR: '/nonexistent' }, undefined, 'linux') === 'ok')
   check('a refresh failure is reported by HTTP status only', refreshFailureStatus(new Error('400 Bad Request: {"error":"invalid_grant","token":"secret-body"}')) === '400' && refreshFailureStatus(Object.assign(new Error('x'), { status: 401 })) === '401' && refreshFailureStatus(new Error('socket hang up')) === undefined)
@@ -329,18 +381,20 @@ check('an ordinary error result is not', !isAuthFailure({ type: 'result', subtyp
   const login = session.capabilities.auth!.reconnect()
   await settle()
   check('/login during a running turn defers the reconnect, with a notice', fake.queries.length === 1 && notices().includes(t('claude-auth-reconnect-deferred')) && !first.closed)
-  const later = session.submit({ text: 'sent while waiting', clientMessageId: 'u-2' }, 'followup')
+  // Phase 4a review 8: while the reconnect is deferred the serving CLI keeps
+  // taking input (a steer must not wait behind a turn's end).
+  const sent = await within(session.submit({ text: 'sent while waiting', clientMessageId: 'u-2' }, 'followup'))
   await settle()
-  check('… a message sent meanwhile is held for the new CLI', !first.inputs.some(input => input.uuid === 'u-2'))
+  check('… a message sent meanwhile goes to the serving CLI at once', sent !== 'timed out' && first.inputs.some(input => input.uuid === 'u-2'))
   first.emit({ type: 'result', subtype: 'success', is_error: false, result: 'done' })
+  await settle()
+  check('… the reconnect still waits for the input queued behind the turn', fake.queries.length === 1 && !first.closed)
+  first.emit({ type: 'command_lifecycle', command_uuid: 'u-2', state: 'started' })
+  first.emit({ type: 'result', subtype: 'success', is_error: false, result: 'done too' })
   await login
-  await later
   await settle()
   const second = fake.queries[1]!
-  check('… it reconnects once the turn ended', fake.queries.length === 2 && first.closed)
-  check('… and the held message reaches the new CLI', second.inputs.some(input => input.uuid === 'u-2'))
-  second.emit({ type: 'command_lifecycle', command_uuid: 'u-2', state: 'started' })
-  await settle()
+  check('… it reconnects once the turn and its queue ended', fake.queries.length === 2 && first.closed && second.inputs.length === 0)
   // An auth failure with inputs queued behind the failing turn: the ones the
   // old CLI never started are pushed again, in order, as plain pushes.
   await session.submit({ text: 'queued one', clientMessageId: 'u-3' }, 'followup')
@@ -408,6 +462,95 @@ check('an ordinary error result is not', !isAuthFailure({ type: 'result', subtyp
   for (let i = 0; i < 10; i += 1) await tick()
   check('inputs a failed reconnect cannot deliver are retired with a notice', dropped.some(event => event.type === 'pending.changed' && (event.discarded ?? []).includes('u-9')) && dropped.some(event => event.type === 'notice' && event.text === t('claude-auth-inputs-dropped', { n: 1 })))
   await dropping.dispose()
+}
+
+// ── an auth failure stops the old CLI before renewing: its queue is re-pushed whole (Phase 4a review 3) ──
+{
+  const fake = fakeClaudeSdk()
+  const plan = { source: 'claude-login' as const, env: { PATH: '/usr/bin' } }
+  let renewGate: (() => void) | undefined
+  const session = await openClaudeSession(claudeDeps(fake.sdk, { auth: { plan, renew: () => new Promise(resolve => { renewGate = () => resolve(plan) }) } }))
+  const events: AgentEvent[] = []
+  session.subscribe(batch => { events.push(...batch) })
+  const settle = async (): Promise<void> => { for (let i = 0; i < 6; i += 1) await tick() }
+  await tick()
+  const first = fake.queries[0]!
+  await session.submit({ text: 'failing turn', clientMessageId: 'u-1' }, 'followup')
+  await settle()
+  first.emit({ type: 'command_lifecycle', command_uuid: 'u-1', state: 'started' })
+  await session.submit({ text: 'queued two', clientMessageId: 'u-2' }, 'followup')
+  await session.submit({ text: 'queued three', clientMessageId: 'u-3' }, 'followup')
+  await settle()
+  first.emit({ type: 'result', subtype: 'success', is_error: true, result: 'Failed to authenticate. API Error: 401' })
+  await settle()
+  check('the old CLI is stopped BEFORE the renewal completes', first.closed && renewGate !== undefined && fake.queries.length === 1)
+  // The stopped CLI's late frames (it had started u-2 and failed it) are
+  // not the session's any more.
+  first.emit({ type: 'command_lifecycle', command_uuid: 'u-2', state: 'started' })
+  first.emit({ type: 'result', subtype: 'success', is_error: true, result: 'Failed to authenticate. API Error: 401' })
+  await settle()
+  renewGate!()
+  await settle()
+  const second = fake.queries[1]!
+  check('every input the old CLI had not started is re-pushed, in order', JSON.stringify(second.inputs.map(input => input.uuid)) === JSON.stringify(['u-2', 'u-3']), second.inputs.map(input => input.uuid))
+  check('… no user row or second failure from the stopped CLI', !events.some(event => event.type === 'user.message' && event.id === 'u-2') && !events.some(event => event.type === 'notice' && event.text === t('claude-auth-failed-login')))
+  check('… and the session never read the stop as a process exit', session.status !== 'disposed' && !events.some(event => event.type === 'notice' && event.text.includes(t('claude-process-ended'))))
+  await session.dispose()
+  check('every query this session opened is closed', fake.queries.every(query => query.closed))
+}
+
+// ── a dispose during a resume handshake leaves no CLI behind (Phase 4a review 4) ──
+{
+  let refuse: (() => void) | undefined
+  const fake = fakeClaudeSdk((_index, options) => {
+    if (typeof options.resume === 'string') return new Promise((_resolve, reject) => { refuse = () => reject(new Error(`No conversation found with session ID: ${String(options.resume)}`)) })
+    return { capabilities: ['msg_lifecycle_v1', 'interrupt_receipt_v1'] }
+  })
+  const plan = { source: 'claude-login' as const, env: { PATH: '/usr/bin' } }
+  const session = await openClaudeSession(claudeDeps(fake.sdk, { auth: { plan, renew: () => Promise.resolve(plan) } }))
+  session.subscribe(() => undefined)
+  await tick()
+  // Persisted (a result arrived): the next reconnect resumes.
+  fake.queries[0]!.emit({ type: 'result', subtype: 'success', is_error: false, result: 'ok' })
+  for (let i = 0; i < 4; i += 1) await tick()
+  const reconnect = session.capabilities.auth!.reconnect().catch(() => undefined)
+  for (let i = 0; i < 6; i += 1) await tick()
+  check('a resume handshake is in flight', fake.queries.length === 2 && refuse !== undefined)
+  const disposed = session.dispose()
+  refuse!()
+  await reconnect
+  await disposed
+  for (let i = 0; i < 6; i += 1) await tick()
+  check('the "No conversation found" fallback does not spawn after a dispose', fake.queries.length === 2)
+  check('… every query the session opened is closed', fake.queries.every(query => query.closed))
+}
+
+// ── a deferred /login reconnect is bounded (Phase 4a review 8) ─────────
+{
+  const fake = fakeClaudeSdk()
+  const timer = manualClock()
+  const plan = { source: 'claude-login' as const, env: { PATH: '/usr/bin' } }
+  const session = await openClaudeSession(claudeDeps(fake.sdk, { clock: timer.clock, reconnectDeferMs: 120_000, auth: { plan, renew: () => Promise.resolve(plan) } }))
+  const events: AgentEvent[] = []
+  session.subscribe(batch => { events.push(...batch) })
+  const settle = async (): Promise<void> => { for (let i = 0; i < 6; i += 1) await tick() }
+  await tick()
+  const first = fake.queries[0]!
+  await session.submit({ text: 'a turn that never ends', clientMessageId: 'u-1' }, 'followup')
+  await settle()
+  first.emit({ type: 'command_lifecycle', command_uuid: 'u-1', state: 'started' })
+  await settle()
+  const login = session.capabilities.auth!.reconnect()
+  await settle()
+  timer.advance(119_000)
+  await settle()
+  check('a deferred /login reconnect waits for the running turn…', fake.queries.length === 1 && !first.closed)
+  timer.advance(1_000)
+  const reconnected = await within(login)
+  await settle()
+  check('… at most 120 s, then reconnects anyway', reconnected !== 'timed out' && fake.queries.length === 2 && first.closed)
+  check('… saying it interrupts the turn', events.some(event => event.type === 'notice' && event.text === t('claude-auth-reconnect-forced')) && events.some(event => event.type === 'turn.end' && event.reason.kind === 'aborted'))
+  await session.dispose()
 }
 
 console.log(`\nverify-claude-auth OK (${passed} checks)`)

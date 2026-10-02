@@ -107,6 +107,8 @@ export interface ClaudeSessionDeps {
   readonly initTimeoutMs?: number
   /** Bound on waiting for the consumer loop after `close()`. */
   readonly closeTimeoutMs?: number
+  /** Bound on a `/login` reconnect waiting for the running turn (120 s). */
+  readonly reconnectDeferMs?: number
 }
 
 type Listener = (batch: readonly AgentEvent[], meta: AgentEventMeta) => void
@@ -401,12 +403,19 @@ export async function openClaudeSession(deps: ClaudeSessionDeps): Promise<AgentS
     }
   }
 
+  /**
+   * Runs stopped on purpose ahead of their replacement (an auth-failure
+   * reconnect stops the old CLI before it renews the credential): their late
+   * messages are not the session's any more, and their end is not a loss.
+   */
+  const retired = new WeakSet<Run>()
+
   /** Consume one run until it ends; an ended run that is no longer the
    *  current one was replaced on purpose (reconnect), not lost. */
   const consume = (target: Run): Promise<void> => (async (): Promise<void> => {
     try {
       for await (const message of target.query) {
-        if (target !== run) return
+        if (target !== run || retired.has(target)) return
         let events: readonly AgentEvent[]
         try {
           events = translator.translate(message)
@@ -422,9 +431,9 @@ export async function openClaudeSession(deps: ClaudeSessionDeps): Promise<AgentS
         afterMessage(message, events)
         if (idleWaiters.length > 0) settleIdleWaiters()
       }
-      if (target === run) onExit(undefined)
+      if (target === run && !retired.has(target)) onExit(undefined)
     } catch (error) {
-      if (target === run) onExit(error)
+      if (target === run && !retired.has(target)) onExit(error)
     }
   })()
 
@@ -442,7 +451,9 @@ export async function openClaudeSession(deps: ClaudeSessionDeps): Promise<AgentS
     try {
       await handshake(run)
     } catch (error) {
-      if (!resume || !NO_CONVERSATION.test(errorText(error))) throw error
+      // A dispose during the handshake must not spawn the fallback: nothing
+      // would ever stop it.
+      if (disposing || !resume || !NO_CONVERSATION.test(errorText(error))) throw error
       deps.host.debug(`claude: resume refused (${errorText(error)}); creating the session again`)
       stopRun(run)
       run = startRun(false)
@@ -455,26 +466,71 @@ export async function openClaudeSession(deps: ClaudeSessionDeps): Promise<AgentS
    * §4.12): the old CLI's prompts are withdrawn and an open turn closed, the
    * new query continues the session id, the translator keeps its state, and
    * the inputs the old CLI never started are pushed again, in order.
+   *
+   * After an authentication failure the old CLI is stopped FIRST — before
+   * the renewal awaits — so its queue cannot start (and fail on the refused
+   * credential) meanwhile: every input it had not started is re-pushed. A
+   * `/login` reconnect instead waits for the running turn and the inputs
+   * queued behind it (submits keep going to the old CLI meanwhile), for at
+   * most {@link RECONNECT_DEFER_MS}; then it reconnects anyway, saying that
+   * it interrupts the turn.
    */
   let reconnecting: Promise<void> | undefined
+  /** A `/login` reconnect is waiting for the session to go idle. */
+  let reconnectDeferred = false
+  const RECONNECT_DEFER_MS = deps.reconnectDeferMs ?? 120_000
+
+  /** Withdraw the old CLI's prompts, close its turn, stop it; what it never
+   *  started is re-pushed to the replacement. */
+  const stopForReconnect = (): { readonly unstarted: readonly string[] } => {
+    const previous = run
+    bridge.settleAll(WITHDRAWN_MESSAGE)
+    clearForceTimer()
+    emit(translator.forceCloseTurn({ kind: 'aborted' }))
+    const unstarted = translator.unstartedInputs()
+    retired.add(previous)
+    stopRun(previous)
+    return { unstarted }
+  }
+
+  /** Wait (bounded) until no turn runs and nothing queued would start. */
+  const waitIdleBounded = async (): Promise<void> => {
+    if (idle()) return
+    let timer: unknown
+    const timedOut = await Promise.race([
+      new Promise<false>((resolve, reject) => { idleWaiters.push({ resolve: () => resolve(false), reject }) }),
+      new Promise<true>(resolve => { timer = clock.setTimeout(() => resolve(true), RECONNECT_DEFER_MS) }),
+    ]).finally(() => clock.clearTimeout(timer))
+    if (timedOut && !disposing) emit([{ type: 'notice', level: 'warning', text: t('claude-auth-reconnect-forced') }])
+  }
+
   const reconnect = (renewal: { readonly rejected?: string }, options: { readonly waitIdle?: boolean } = {}): Promise<void> => {
     if (disposing) return Promise.reject(new Error(t('claude-session-closed')))
     reconnecting ??= (async (): Promise<void> => {
-      if (deps.auth !== undefined) authPlan = await deps.auth.renew(renewal)
-      // A `/login` reconnect never interrupts work: it waits (after the
-      // renewal, so nothing can start between the check and the restart)
-      // until the running turn and the inputs queued behind it are done.
-      // New submissions wait for the reconnect meanwhile.
-      if (options.waitIdle === true && !idle()) {
-        await new Promise<void>((resolve, reject) => { idleWaiters.push({ resolve, reject }) })
+      const deferred = options.waitIdle === true
+      let stopped = deferred ? undefined : stopForReconnect()
+      let renewError: unknown
+      // A deferred reconnect leaves the old CLI serving submits until it
+      // actually swaps (renewal and the idle wait included).
+      reconnectDeferred = deferred
+      try {
+        if (deps.auth !== undefined) {
+          try {
+            authPlan = await deps.auth.renew(renewal)
+          } catch (error) {
+            // The old CLI is already gone: reconnect on the current
+            // credential (its inputs still run), report the renewal after.
+            if (stopped === undefined) throw error
+            renewError = error
+          }
+        }
+        if (deferred) await waitIdleBounded()
+      } finally {
+        reconnectDeferred = false
       }
       if (disposing) return
-      const previous = run
-      bridge.settleAll(WITHDRAWN_MESSAGE)
-      clearForceTimer()
-      emit(translator.forceCloseTurn({ kind: 'aborted' }))
-      const unstarted = translator.unstartedInputs()
-      stopRun(previous)
+      stopped ??= stopForReconnect()
+      const { unstarted } = stopped
       try {
         await openRun()
       } catch (error) {
@@ -485,8 +541,11 @@ export async function openClaudeSession(deps: ClaudeSessionDeps): Promise<AgentS
         onExit(error)
         throw error
       }
-      // A dispose during the handshake already stopped the new run.
-      if (disposing) return
+      // A dispose during the handshake: the replacement must not outlive it.
+      if (disposing) {
+        stopRun(run)
+        return
+      }
       const next = run
       const lost: string[] = []
       for (const uuid of unstarted) {
@@ -502,6 +561,7 @@ export async function openClaudeSession(deps: ClaudeSessionDeps): Promise<AgentS
       }
       if (lost.length > 0) emit([...translator.dropInputs(lost), { type: 'notice', level: 'warning', text: t('claude-auth-inputs-dropped', { n: lost.length }) }])
       next.consumer = consume(next)
+      if (renewError !== undefined) throw renewError
     })().finally(() => { reconnecting = undefined })
     return reconnecting
   }
@@ -646,8 +706,9 @@ export async function openClaudeSession(deps: ClaudeSessionDeps): Promise<AgentS
     },
     async submit(input: AgentInput, placement: SubmitPlacement) {
       // A credential reconnect is swapping the CLI: the input goes to the
-      // new one (the old one's stdin is closed).
-      if (reconnecting !== undefined) await reconnecting.catch(() => undefined)
+      // new one (the old one's stdin is closed). A `/login` reconnect still
+      // waiting for the session to go idle leaves the old CLI serving.
+      if (reconnecting !== undefined && !reconnectDeferred) await reconnecting.catch(() => undefined)
       if (disposing || run.inbox.closed) throw new Error(t('claude-session-closed'))
       // Pasted images and `@image` mentions arrive as image blocks; sending
       // the text without them would silently drop part of the message.

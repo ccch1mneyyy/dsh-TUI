@@ -423,6 +423,9 @@ export function createSessionResumeActions(
    * ownership, and the DSH half of the adoption tail.
    */
   const newSessionOpener: NewSessionOpener = {
+    // An input still in the FIFO when /new adopts is stale-dropped (with a
+    // notice), never delivered to either session — the DSH contract.
+    dropsParkedInputs: true,
     // The typed workspace target seam still creates a real Agent/session; it
     // must pass the same shadow policy gate as the public /new action.
     assertAllowed: () => assertCapabilityShadowPolicy('host.channel.actions.new-session', deps.runtime.mode, deps.runtime.slices),
