@@ -75,6 +75,7 @@ const [
   { SessionSupervisor, sessionMatchesQuery, railWindowTop },
   { layoutSourceTabs },
   { groupForeignRows, foreignRowMatchesQuery, FOREIGN_UNKNOWN_GROUP },
+  { wrapPathWidth },
   // The REAL persistent listing cache, so one case can put actual bytes under
   // this run's fake home and prove the screen paints them.
   { beginListingSnapshot, readListingSnapshot },
@@ -83,6 +84,7 @@ const [
   import('../src/screens/SessionSupervisor.js'),
   import('../src/components/sessions/SourceTabs.js'),
   import('../src/screens/sessionSupervisor/useForeignSessions.js'),
+  import('../src/sessions/format.js'),
   import('../src/dsh-adapter/sessions/snapshot.js'),
 ])
 
@@ -1175,12 +1177,16 @@ check('branch substring matches', sessionMatchesQuery(sessions[0] as never, 'mai
 check('non-match is rejected', !sessionMatchesQuery(sessions[0] as never, 'zzzz'))
 check('rail window keeps the focused entry visible', railWindowTop(4, 20, 6) <= 3)
 check('rail window clamps at zero', railWindowTop(0, 20, 6) === 0)
+const spacedPath = '/Users/名字/My Project/🧪-session'
+const pathChunks = wrapPathWidth(spacedPath, 12)
+check('path wrapping preserves spaces and Unicode graphemes', pathChunks.join('') === spacedPath && pathChunks.every(chunk => [...chunk].length > 0), pathChunks.join(' | '))
 
 console.log('one surface:')
 check('screen title renders', text().includes('Sessions'))
 check('workspace rail renders', text().includes('Workspaces'))
 check('the rail has no add-workspace row', !text().includes('Add workspace'))
 check('session pane header renders', text().includes('Sessions in Alpha'))
+check('the selected DSH directory is visible as an absolute path above both panes', line(2).includes(alphaDir), line(2))
 check(
   'the rail opens on the terminal own workspace, not the first ledger entry',
   text().includes('Sessions in Alpha') && !text().includes('Sessions in Beta'),
@@ -1567,6 +1573,18 @@ console.log('a registry that FAILS does not take the history with it')
   absent.close()
   app.close()
 }
+console.log('narrow header prioritizes the project over redundant counts')
+{
+  const narrow = await openSupervisor({
+    registry: [{ id: 'long-title', path: alphaDir, title: 'dsh-TUI-contrib', present: true, sessionCount: 0 }],
+    cwd: alphaDir,
+    cols: 56,
+  })
+  await settled(() => narrow.lines().join('\n').includes('Sessions in dsh-TUI-contrib'))
+  check('56 cols: selected project name remains intact', narrow.lines().some(line => line.includes('Sessions in dsh-TUI-contrib')))
+  check('56 cols: counts collapse to a single number', narrow.lines().some(line => /Sessions in dsh-TUI-contrib\s+3\s*$/u.test(line)))
+  narrow.close()
+}
 console.log('a refused open shows its REASON on this screen (#939)')
 {
   // The screen replaces the conversation, so the composer that draws channel
@@ -1764,6 +1782,9 @@ console.log('source tabs: strip, switching and import')
     shown(),
   )
   check('the list shows the selected directory only', shown().includes('fix the parser') && !shown().includes('ghost chat'), shown())
+  check('the selected Claude Code directory uses the same full-path bar', app.lines()[2]?.includes(alphaDir) ?? false, app.lines()[2])
+  const parserLine = app.lines().findIndex(line => line.includes('fix the parser'))
+  check('foreign session facts do not repeat the directory', parserLine >= 0 && !app.lines()[parserLine + 1]?.includes(alphaDir), app.lines()[parserLine + 1])
   check('there is no new-session card', !shown().includes('+ New session'), shown())
 
   const cursorOn = (title: string): boolean => app.lines().some(line => line.includes(title) && line.includes('❯'))
@@ -1808,6 +1829,7 @@ console.log('source tabs: strip, switching and import')
     await settled(() => shown().includes('Codex · sessions in Alpha')),
     shown(),
   )
+  check('Codex shows the same selected directory once above the panes', app.lines()[2]?.includes(alphaDir) ?? false, app.lines()[2])
   check('switching source clears the query', shown().includes('codex refactor'), shown())
   app.write('\u001b[Z')
   check(

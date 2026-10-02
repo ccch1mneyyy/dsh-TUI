@@ -467,7 +467,6 @@ const dict = {
   'home-workspace-missing': { zh: '目录不存在', en: 'directory missing' },
   'home-no-workspaces': { zh: '还没有工作区 · 在任意目录启动 dsh-tui 即可自动加入', en: 'No workspaces yet · start dsh-tui in a directory to add it' },
   'home-sessions-title': { zh: '{{name}} 的会话', en: 'Sessions in {{name}}' },
-  'home-sessions-count': { zh: '{{n}} 个会话', en: { one: '{{n}} session', other: '{{n}} sessions' } },
   'home-no-sessions': { zh: '这个工作区还没有会话 · Enter 新建一个', en: 'No sessions in this workspace yet · Enter starts one' },
   'home-sessions-loading': { zh: '正在读取会话…', en: 'Loading sessions…' },
   'home-sessions-refreshing': { zh: '后台刷新中', en: 'refreshing' },
