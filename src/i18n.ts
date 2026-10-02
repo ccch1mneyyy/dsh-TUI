@@ -715,8 +715,8 @@ const dict = {
     en: 'Compaction took effect, but its durability flush failed — history is now the summary',
   },
   'compact-cancelled-switch': {
-    zh: '压缩进行中，已取消以执行切换',
-    en: 'In-flight compaction cancelled for the switch',
+    zh: '压缩进行中，已取消并切换会话',
+    en: 'In-flight compaction cancelled for the session switch',
   },
   // 压缩状态行（prompt 上方的 spinner 槽位）。压缩只暴露两个可观测阶段：
   // 首块输出前是在重放上下文（无可计数），之后才有生成量。
