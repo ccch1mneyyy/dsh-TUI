@@ -42,6 +42,18 @@ export function resumeFailureText(result: ResumeResult): string | undefined {
 }
 
 /**
+ * Whether a resume failed because another process (such as `dsh web`) holds
+ * the session's write lock — the one refusal the user can act on (#1045).
+ * Matched by name: the persistence error class lives behind the adapter.
+ * @param error - What the resume threw.
+ * @returns True for `SessionAlreadyOwnedError`, directly or as a cause.
+ */
+export function isSessionOwnedElsewhere(error: unknown): boolean {
+  for (let e = error; e instanceof Error; e = e.cause) if (e.name === 'SessionAlreadyOwnedError') return true
+  return false
+}
+
+/**
  * The sentence for a ledger refusal that did NOT find a holder.
  *
  * A refusal to CHECK is not a refusal by a peer, so it must not borrow the

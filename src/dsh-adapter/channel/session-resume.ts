@@ -4,7 +4,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import { SessionId, type SessionEvent } from '@deepseek-ai/dsh-session'
 import { explicitModelRoute, recordedModelRoute, resolveModelRoute, validateModelRoute } from '../../modelRoute.js'
 import { clearResumeTarget, writeResumeTarget, touchAgentViewSession, touchSession } from '../../sessionHistory.js'
-import { mountFailureText } from '../../sessions/resumeFailure.js'
+import { isSessionOwnedElsewhere, mountFailureText } from '../../sessions/resumeFailure.js'
 import { t } from '../../i18n.js'
 import { readModelPref } from '../../modelPrefs.js'
 import { migratePresetPref, readPresetPref } from '../../presetPrefs.js'
@@ -195,7 +195,9 @@ export function createSessionResumeActions(
           ...(composed.setup === undefined ? {} : { setup: composed.setup }),
         }))
       } catch (error) {
-        const message = error instanceof Error ? error.message : String(error)
+        const message = isSessionOwnedElsewhere(error)
+          ? t('resume-session-locked')
+          : error instanceof Error ? error.message : String(error)
         deps.notify(t('resume-failed', { err: message }), { color: 'error', timeoutMs: 8000 })
         return { ok: false, reason: 'failed', error: message }
       }

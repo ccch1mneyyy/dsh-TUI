@@ -41,6 +41,7 @@ import { shouldOfferOnboarding } from '../onboardingPrefs.js'
 import { resolveSessionCwd } from '../utils/workspaceRoot.js'
 import { beginRestartAttempt, checkForTuiUpdate, installedTuiVersion, isBootDeadlockTarget, isStandaloneRuntime, isVersionNewer, logRestartEvent, resolveDshProfileName, resolveTuiUpdateTarget, restartTui, updateTuiAndRestart, writeHandoffNotice } from '../update.js'
 import { getLang, isLang, resolveStartupLang, setLang, t, writeLangPref } from '../i18n.js'
+import { isSessionOwnedElsewhere } from '../sessions/resumeFailure.js'
 import { DEFAULT_PAGE_MARGIN, DEFAULT_SIDE_PANEL_IDS, DEFAULT_STATUS_BAR, SIDE_PANEL_ID_PATTERN, applyCompanionSkin, applyImageBacking, applyMathImageBacking, applyMathImageScale, applyMathRendering, applyMermaidDiagrams, type ImageBacking, type MathImageBacking, type MathImageScale, type MathRendering, applyPageMargin, applySidePanelOpen, applySidePanelPanels, applySidePanelRatio, applySidePanelSplitEnabled, isPageMarginMode, normalizeJobGroupFold, normalizePageMargin, normalizeScrollGutter, normalizeSidePanelPanels, normalizeSidePanelRatio, normalizeStatusBar, normalizeToolBackground, parsePageMarginSpec, resolveMathRendering, type PageMarginSetting, type ScrollGutterMode, type StatusBarConfig, type ToolBackground } from '../tuiDisplayPrefs.js'
 import {
   draftComboConflicts,
@@ -1916,6 +1917,13 @@ async function resolveAgent(
       // "resume did nothing" failure mode — the warn below never reached a
       // terminal). Fail the boot loudly instead; the loader surfaces this to
       // stderr. The in-session /resume picker has its own error path.
+      if (isSessionOwnedElsewhere(error)) {
+        throw new Error(
+          `dsh-tui: cannot resume session "${requestedSessionId}": another DSH process (such as dsh web) is writing to it. ` +
+          'Close it there or exit that process, then resume again.',
+          { cause: error },
+        )
+      }
       const reason = error instanceof Error ? error.message : String(error)
       throw new Error(
         `dsh-tui: cannot resume session "${requestedSessionId}": ${reason} — ` +

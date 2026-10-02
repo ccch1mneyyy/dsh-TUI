@@ -286,6 +286,7 @@ const dict = {
   'tree-branch-live': { zh: '当前会话', en: 'live session' },
   'resume-while-working': { zh: '回合运行中，无法恢复会话', en: 'Cannot resume while a turn is running' },
   'resume-unavailable': { zh: '恢复不可用——agents 服务未加载', en: 'Resume unavailable — agents service not loaded' },
+  'resume-session-locked': { zh: '该会话正被另一个 DSH 进程（如 dsh web）写入；先在那边关闭它或退出该进程，再来恢复', en: 'Another DSH process (such as dsh web) is writing to this session; close it there or exit that process, then resume again' },
   'resume-session-occupied': { zh: '该会话正被其他 TUI 终端占用（进程 {{pid}}），无法进入', en: 'Another TUI terminal holds this session (pid {{pid}}); cannot enter' },
   'resume-mount-busy': { zh: '无法确认该会话是否被其他终端占用（占用检查正忙），请稍后重试', en: 'Could not confirm whether another terminal holds this session (the occupancy check is busy); retry in a moment' },
   'resume-mount-unavailable': { zh: '无法验证该会话的占用状态 · {{detail}}', en: 'Could not verify this session\'s occupancy · {{detail}}' },
