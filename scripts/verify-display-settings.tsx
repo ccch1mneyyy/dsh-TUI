@@ -117,7 +117,7 @@ const wake = {
     floor: 1,
     turns: [[1, 0]],
   },
-  tick: 0,
+  animate: false,
 }
 
 async function renderStatus(

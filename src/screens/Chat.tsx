@@ -155,7 +155,6 @@ import { statSync } from 'node:fs'
 import { setClipboard } from '../ink/termio/osc.js'
 import { TerminalWriteContext } from '../ink/useTerminalNotification.js'
 import instances from '../ink/instances.js'
-import { useAnimationFrame } from '../ink/hooks/use-animation-frame.js'
 import { useExternalVersion } from '../hooks/useExternalVersion.js'
 import { TrajectoryScene } from './TrajectoryScene.js'
 import { markHomeSeen } from '../homePrefs.js'
@@ -313,6 +312,23 @@ function contextOccupancyLine(channel: Channel): string | undefined {
 
 /** Terminal-title spinner frames. */
 const TITLE_SPINNER_FRAMES = ['⠂', '⠐']
+
+/** Terminal tab title: the session title when set, else "dsh-TUI"; a `⠂/⠐`
+ *  spinner prefix while a turn is working (960ms cadence, only while the
+ *  terminal is focused), a static `✦` otherwise. Its own component so the
+ *  spinner re-renders this leaf, not the whole Chat tree (#1207). */
+function TerminalTitle({ working, focused, title }: { working: boolean; focused: boolean; title: string }): null {
+  const [frame, setFrame] = React.useState(0)
+  React.useEffect(() => {
+    if (!working || !focused) return
+    const interval = setInterval(() => {
+      setFrame(f => (f + 1) % TITLE_SPINNER_FRAMES.length)
+    }, 960)
+    return () => { clearInterval(interval) }
+  }, [working, focused])
+  useTerminalTitle(`${working ? (TITLE_SPINNER_FRAMES[frame] ?? '✦') : '✦'} 🐋 ${title}`)
+  return null
+}
 
 /** Searchable transcript text for one row (`/` incsearch):
  *  user text, assistant text, thinking, tool args/results, local output). */
@@ -2039,11 +2055,6 @@ export function Chat({
   loadingStartTimeRef.current = channel.turnStart
   const thinkingStatus = useThinkingStatus(channel.spinnerMode === 'thinking')
 
-  // Terminal tab title: the session
-  // title when set, else "dsh-TUI"; a `⠂/⠐` spinner prefix while a turn is
-  // working (960ms cadence, only while the terminal is focused), a static
-  // `✦` otherwise. dsh-TUI brands the idle prefix with the DeepSeek whale.
-  const [titleFrame, setTitleFrame] = React.useState(0)
   const terminalFocused = useTerminalFocus()
   // Mouse text selection auto-copy: active only in
   // fullscreen (<AlternateScreen> supplies mouse tracking); a no-op
@@ -2089,19 +2100,6 @@ export function Chat({
   )
   const { clearSelection: clearMouseSelection, hasSelection: hasMouseSelection } =
     useSelection()
-  React.useEffect(() => {
-    if (!channel.working || !terminalFocused) return
-    const interval = setInterval(() => {
-      setTitleFrame(f => (f + 1) % TITLE_SPINNER_FRAMES.length)
-    }, 960)
-    return () =>{  clearInterval(interval) }
-  }, [channel.working, terminalFocused])
-  const titlePrefix = channel.working
-    ? (TITLE_SPINNER_FRAMES[titleFrame] ?? '✦')
-    : '✦'
-  useTerminalTitle(
-    `${titlePrefix} 🐋 ${channel.sessionTitle}`,
-  )
 
   const handleWorkspaceResult = (result: TuiWorkspaceCommandResult): void => {
     workspaceFlowAbortRef.current = null
@@ -3989,7 +3987,6 @@ export function Chat({
     // oxlint-disable-next-line react-hooks/exhaustive-deps
     [trajectory.nodes, trajectory.counts.rows, wakeWidth],
   )
-  const [wakeTickRef, wakeTime] = useAnimationFrame(channel.working ? 120 : null)
   /**
    * The key hint beside the strip retires itself once the trajectory has been
    * opened — teaching belongs in the first minute, not on every frame forever.
@@ -6272,7 +6269,8 @@ export function Chat({
     : null
 
   return (
-    <Box ref={wakeTickRef} flexDirection="column" flexGrow={1} width="100%">
+    <Box flexDirection="column" flexGrow={1} width="100%">
+      <TerminalTitle working={channel.working} focused={terminalFocused} title={channel.sessionTitle} />
       {/* 分栏布局：geometry 为 null（收起 / 窄屏 / inline / 编辑器展开）
           时 SidePanelLayout 原样渲染 children，与现状逐字节一致；分栏时
           左栏拿到 chatColumns 的 TerminalSizeContext 覆盖与出血边界。 */}
@@ -6672,7 +6670,7 @@ export function Chat({
               : {
                   band: wakeBand,
                   hint: trajectorySeen ? undefined : primaryComboString('trajectory'),
-                  tick: Math.floor(wakeTime / 120),
+                  animate: channel.working,
                   onOpen: openScene,
                   hoverHint: primaryComboString('trajectory'),
                 }
