@@ -1248,7 +1248,7 @@ function extractRowText(
   }
   // Negative marker: the renderer elided the separator space that wrapped
   // onto the next row (this row filled the width exactly).
-  if (next < 0 && lastCol === contentEnd - 1) line += ' '
+  if (next < 0 && colStart <= lastCol && lastCol === contentEnd - 1) line += ' '
   // The trailing trim may only eat blanks written AFTER the last region: a
   // region's cells are content (a formula's box), so the space separating it
   // from the text before it survives. The markers this replaced were never
