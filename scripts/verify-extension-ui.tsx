@@ -547,6 +547,13 @@ const plugin = pluginCtx
   plugin.tuiShortcuts.register('ctrl+shift+t', { description: 'x', handler: noop })
   check('tuiShortcuts: shift-supersets of reserved combos refused (ctrl+shift+g/t)',
     plugin.tuiShortcuts.list().length === 0 && warnCount('reserved by a built-in binding') === 6)
+  // The side panel's two built-in combos (ctrl+b toggles the three states,
+  // alt+z zooms) are reserved like every other action default — a plugin can
+  // never shadow them, and the free-combo fixtures below must stay off them.
+  plugin.tuiShortcuts.register('ctrl+b', { description: 'x', handler: noop })
+  plugin.tuiShortcuts.register('alt+z', { description: 'x', handler: noop })
+  check('tuiShortcuts: side-panel combos reserved (ctrl+b, alt+z)',
+    plugin.tuiShortcuts.list().length === 0 && warnCount('reserved by a built-in binding') === 8)
   // …but a shift-superset of a NON-reserved combo still registers (and its
   // disposer removes it, keeping the registry empty for later sections).
   const disposeShiftX = plugin.tuiShortcuts.register('ctrl+shift+x', { description: 'ok', handler: noop })
@@ -561,8 +568,8 @@ const plugin = pluginCtx
   plugin.tuiShortcuts.register('not-a-combo', { description: 'x', handler: noop })
   check('tuiShortcuts: malformed combo refused', warnCount('need ctrl/alt plus one key') === 2)
   const duplicateBefore = warnCount('already registered')
-  plugin.tuiShortcuts.register('ctrl+b', { description: 'first', handler: noop })
-  plugin.tuiShortcuts.register('ctrl+b', { description: 'second', handler: noop })
+  plugin.tuiShortcuts.register('alt+n', { description: 'first', handler: noop })
+  plugin.tuiShortcuts.register('alt+n', { description: 'second', handler: noop })
   check('tuiShortcuts: duplicate refused',
     plugin.tuiShortcuts.list().length === 1 && warnCount('already registered') === duplicateBefore + 1)
   plugin.tuiShortcuts.register('ctrl+h', { description: '  ', handler: noop })
@@ -570,8 +577,8 @@ const plugin = pluginCtx
 
   // dispatch: hit runs the handler and consumes; miss passes through.
   let fired = 0
-  plugin.tuiShortcuts.register('alt+z', { description: 'fire', handler: () => { fired += 1 } })
-  check('tuiShortcuts.dispatch: matching key consumed', shortcutHost.dispatch('z', { meta: true }) === true)
+  plugin.tuiShortcuts.register('alt+m', { description: 'fire', handler: () => { fired += 1 } })
+  check('tuiShortcuts.dispatch: matching key consumed', shortcutHost.dispatch('m', { meta: true }) === true)
   check('tuiShortcuts.dispatch: handler ran', await settled(() => fired === 1))
   check('tuiShortcuts.dispatch: non-matching key passes through', shortcutHost.dispatch('q', { ctrl: true }) === false)
 

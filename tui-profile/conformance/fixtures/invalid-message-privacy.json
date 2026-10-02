@@ -1,0 +1,3 @@
+{
+  "eventType":"messages.observe","eventVersion":"0.15","eventId":"evt-2","scope":"session:demo","sequence":1,"privacyClass":"secret","summary":"invalid","payload":{"kind":"message.received","content":[{"type":"text","text":"x"}]}
+}

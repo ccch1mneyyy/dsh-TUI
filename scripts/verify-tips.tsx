@@ -192,8 +192,12 @@ for (const lang of ['zh', 'en'] as const) {
     // The notice wraps at the fake terminal's 120 columns and continuation
     // lines re-indent to the whale column, so squash ALL whitespace on both
     // sides before substring assertions — robust to any wrap/indent point.
+    // 吉祥物形态（默认 companion.skin）下艺术列（气泡+吉祥物 ~18 行）比
+    // 文字列高，折行的通告续行与吉祥物美术**同行**——帧流里块字形（▀▄█▌░）
+    // 会插进折断文本的两半之间。通告本身完整可读（各自在列内），断言前
+    // 把块字形美术剥掉，文本恢复连续。
     const squash = (text: string): string => text.replace(/\s+/g, '')
-    const flat = squash(plainText(stdout.frames))
+    const flat = squash(plainText(stdout.frames).replace(/[▀▄█▌░]/g, ''))
     if (!plainText(stdout.frames).includes('⚠')) throw new Error(`logo drift ${summary.kind} (${lang}): notice missing`)
     const expected = squash(lang === 'zh' ? zh : en)
     if (!flat.includes(expected)) throw new Error(`logo drift ${summary.kind} (${lang}): copy "${expected}" missing`)

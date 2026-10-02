@@ -103,7 +103,7 @@
 ### 当前已完成
 - 已增加可选 meta 字段：model、mode、agentPreset、settingsSections、scene、diagnostic、trace、context、pending。
 - 已从 `assistant/message.usage` 提取 `usage`，从 `request/context` 提取 `context`。
-- 保持诚实定位：仍为 minimal transcript replay，不宣称完整 RFC 0007 conformance。
+- 保持诚实定位：仍为 minimal transcript replay，不宣称完整 Channel 协议（`tui-profile/notes/0007`）conformance。
 
 ### 收益
 - 使 Channel Provider-Consumer 真正符合协议，可供外部消费者/插件可靠使用。
@@ -111,11 +111,11 @@
 - 为多前端、远程 Channel 互操作打基础。
 
 ### 风险
-- 需要与 `dsh-ecosystem-spec` / `dsh-std` 规范对齐，可能跨仓库协调。
+- 需要与 `dsh-std` 公共协议对齐；TUI 侧口径写在仓内 `tui-profile/`，不再需要跨仓库协调。
 - 当前无外部消费者强依赖，短期用户收益有限。
 
 ### 里程碑
-1. 确定 RFC 0007 完整 state 字段清单；
+1. 确定 Channel 协议（`tui-profile/notes/0007`）完整 state 字段清单；
 2. 从 DSH session / settings / scenes / diagnostics 建立真实投影；
 3. conformance 使用官方完整 fixture；
 4. 更新文档，移除 “minimal” 限制；
@@ -123,9 +123,10 @@
 
 ---
 
-## 跨仓库待同步（L6 已生成补丁）
+## profile 文档路径（已随 TUI Profile 迁入仓内）
 
-- `docs/adapter-cross-repo-sync.patch` 已准备好，应用于 `dsh-ecosystem-spec` 仓库：
-  - `docs/plugin-admission-and-development.md`
-  - `adapters/dsh-tui-v0.15.md`
-  - 将 `src/plugin-spec/*` 更新为 `src/adapter/standard/*`。
+- 原 `docs/adapter-cross-repo-sync.patch` 描述的跨仓库同步已不再需要：TUI Profile
+  文档现在就是本仓库的 `tui-profile/` 纯文件，改它等同改本仓库文档。
+- 该补丁里的旧路径引用（`src/plugin-spec/*` → `src/adapter/standard/*`）已在
+  `tui-profile/docs/plugin-admission-and-development.md` 与
+  `tui-profile/adapters/dsh-tui-v0.15.md` 中直接修正。

@@ -35,11 +35,13 @@ import { ensurePackagedPresets } from './packaged-presets.js'
 import { registerBundledPresets } from './bundled-presets.js'
 import { ensureLegacySessionEventTypes, snapshotLiveSessionEvents } from './compat/index.js'
 import { clearResumeTarget, resumeTargetFromArgv, writeResumeTarget } from '../sessionHistory.js'
+import { initialPromptFromCmdlineArgs } from './startup-args.js'
 import { readHomePrefs } from '../homePrefs.js'
+import { shouldOfferOnboarding } from '../onboardingPrefs.js'
 import { resolveSessionCwd } from '../utils/workspaceRoot.js'
 import { beginRestartAttempt, checkForTuiUpdate, installedTuiVersion, isBootDeadlockTarget, isStandaloneRuntime, isVersionNewer, logRestartEvent, resolveDshProfileName, resolveTuiUpdateTarget, restartTui, updateTuiAndRestart, writeHandoffNotice } from '../update.js'
 import { getLang, isLang, resolveStartupLang, setLang, t, writeLangPref } from '../i18n.js'
-import { DEFAULT_PAGE_MARGIN, DEFAULT_STATUS_BAR, applyImageBacking, applyMathImageBacking, applyMathImageScale, applyMathRendering, applyMermaidDiagrams, type ImageBacking, type MathImageBacking, type MathImageScale, type MathRendering, applyPageMargin, isPageMarginMode, normalizeJobGroupFold, normalizePageMargin, normalizeScrollGutter, normalizeStatusBar, normalizeToolBackground, parsePageMarginSpec, resolveMathRendering, type PageMarginSetting, type ScrollGutterMode, type StatusBarConfig, type ToolBackground } from '../tuiDisplayPrefs.js'
+import { DEFAULT_PAGE_MARGIN, DEFAULT_SIDE_PANEL_IDS, DEFAULT_STATUS_BAR, SIDE_PANEL_ID_PATTERN, applyCompanionSkin, applyImageBacking, applyMathImageBacking, applyMathImageScale, applyMathRendering, applyMermaidDiagrams, type ImageBacking, type MathImageBacking, type MathImageScale, type MathRendering, applyPageMargin, applySidePanelOpen, applySidePanelPanels, applySidePanelRatio, applySidePanelSplitEnabled, isPageMarginMode, normalizeJobGroupFold, normalizePageMargin, normalizeScrollGutter, normalizeSidePanelPanels, normalizeSidePanelRatio, normalizeStatusBar, normalizeToolBackground, parsePageMarginSpec, resolveMathRendering, type PageMarginSetting, type ScrollGutterMode, type StatusBarConfig, type ToolBackground } from '../tuiDisplayPrefs.js'
 import {
   draftComboConflicts,
   effectiveComboString,
@@ -57,6 +59,7 @@ import { reserveMount } from '../sessionMounts.js'
 import { getHostDialogStore, type TuiDialogRuntime } from './dialogs.js'
 import { getHostStatusStore, type TuiStatusRuntime } from './status.js'
 import { createActivityStore } from './activity-store.js'
+import { createContextOccupancyStore } from './context-occupancy.js'
 import { getHostToastStore, type TuiToastRuntime } from './toast.js'
 import { getHostShortcuts, type TuiShortcutRuntime } from './shortcuts.js'
 import { getHostThemes, type TuiThemeRuntime } from './themes.js'
@@ -100,35 +103,31 @@ let lastBootedFullscreen: boolean | undefined
 // Image preferences also stay fixed across host recomposes until /restart.
 let lastBootedTerminalImages: boolean | undefined
 
+// Kept importable from here: the startup parser moved to its own dependency-free
+// module so argv probes can load it without the whole plugin graph.
+export { initialPromptFromCmdlineArgs }
+
 /**
  * Extract the startup prompt from raw app argv, excluding session selectors
  * and Web startup flag values. `--trusted-host` consumes multiple authorities
  * up to the next flag; none of them are prompt text (issue #882). An app-level
  * `--` ends flag parsing; all following tokens are literal prompt text.
  */
-export function initialPromptFromCmdlineArgs(args: readonly string[] | undefined): string {
-  if (args === undefined) return ''
-  const promptArgs: string[] = []
-  for (let i = 0; i < args.length; i += 1) {
-    const arg = args[i]!
-    if (arg === '--') {
-      promptArgs.push(...args.slice(i + 1))
-      break
-    }
-    if (arg === '--resume' || arg === '--host' || arg === '--port') {
-      if (args[i + 1] !== undefined && !args[i + 1]!.startsWith('-')) i += 1
-      continue
-    }
-    if (arg === '--trusted-host') {
-      while (args[i + 1] !== undefined && !args[i + 1]!.startsWith('-')) i += 1
-      continue
-    }
-    if (arg.startsWith('--resume=')) continue
-    if (arg.startsWith('-')) continue
-    promptArgs.push(arg)
-  }
-  return promptArgs.join(' ').trim()
+/**
+ * 落地页 / 首启引导该不该在这次启动出现。
+ *
+ * 只看「用户有没有说要回到哪儿」：`--resume` 目标与首句都算他知道自己要去哪。
+ * **工作区目标不算**——`dst` 默认把 cwd 当工作区目标喂进来，算进去就等于在本机
+ * 最主流的启动方式下把这两个屏永久关掉（实测事故，见调用点的口径注释）。
+ *
+ * @param input.launchSessionId - 本次要恢复的会话（--resume / DSH_TUI_RESUME_SESSION）。
+ * @param input.initialPrompt - 命令行里带的首句提示词（无则空串）。
+ * @returns true 表示这次是「普通启动」。
+ */
+export function isLandingLaunch(input: { launchSessionId?: string; initialPrompt: string }): boolean {
+  return input.launchSessionId === undefined && input.initialPrompt === ''
 }
+
 
 /**
  * How this process should treat the TUI frontend, given the terminal it runs on.
@@ -436,6 +435,16 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
       'The bundle patch is older than the installed dsh-tui package — update the globally installed dsh-tui launcher to match the profile (issue #183).',
     )
   }
+  // Same skew guard for the side-panel registry (dsh-tui-panels row): the
+  // tuiPanels runtime is what admits plugin panels into the PanelStore, so
+  // register() warns and returns undefined for every plugin when the row is
+  // absent — say why on profile launches.
+  if (ctx.get('tuiPanels') === undefined && resolveDshProfileName() !== undefined) {
+    ctx.logger.warn(
+      'dsh-tui: tuiPanels service is not mounted; plugin side panels will never register. ' +
+      'The bundle patch is older than the installed dsh-tui package — update the globally installed dsh-tui launcher to match the profile (issue #183).',
+    )
+  }
   // Same skew guard for the plugin-UI services (dsh-tui-extensions row):
   // managed dialogs park unanswered, status contributions never render,
   // shortcuts never match, custom-entry renderers stay invisible, and runtime
@@ -538,6 +547,13 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
   // (the runtime `/activity` command only changes the preset), so a hidden
   // line attaches nothing at all — no feed, no 500ms tick.
   const activityStore = createActivityStore(ctx, config.activity !== false)
+  // Read side of the token meter's `contextPressure` unit: the ONE occupancy
+  // source for the footer, the segmented bar, the status commands and the
+  // context-low warning. Created unconditionally (unlike the activity store,
+  // there is no config gate: hiding the bar must not make the warning or the
+  // footer read a stale sample). A composition without the meter leaves it
+  // empty and the channel falls back to the last-request sample.
+  const contextOccupancyStore = createContextOccupancyStore(ctx)
   const rawChannel = createChannel(ctx, agent, {
     // The namespace this boot actually registered the settings section under
     // (the Config owner's Loader id; custom ids are supported). Chat and the
@@ -548,6 +564,10 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
     // soon as this session binds so a resumed or reattached session renders its
     // line immediately instead of waiting for the next event.
     seedActivity: session => activityStore.seed(session),
+    // Same reason as the activity line: the occupancy projection only pushes on
+    // change, so a resumed session reads one baseline at bind time.
+    contextPressure: contextOccupancyStore,
+    seedContextOccupancy: session => contextOccupancyStore.seed(session),
     // A RESUMED session keeps its persisted header cwd (issue #96 review):
     // pre-upgrade sessions recorded the launch directory, and re-resolving
     // from the current launch directory would split @ expansion / file
@@ -630,6 +650,15 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
   // mermaid and LaTeX switches ride the same kind of store (Markdown is
   // memoized by content, so no prop reaches the diagram/formula nodes).
   applyPageMargin(config.pageMargin)
+  // Side panel (settings `dsh-tui.sidePanel.*`): same reason as pageMargin —
+  // the useSidePanel controller reads these module-level stores ABOVE the
+  // channel's version bump, so a Ctrl+B toggle re-renders Chat without any
+  // session change. applyDisplay below mirrors every settings edit into them.
+  applySidePanelSplitEnabled(config.sidePanel?.splitEnabled)
+  applySidePanelOpen(config.sidePanel?.open)
+  applySidePanelRatio(config.sidePanel?.ratio)
+  applySidePanelPanels(config.sidePanel?.panels)
+  applyCompanionSkin(config.companion?.skin)
   applyMermaidDiagrams(config.mermaidDiagrams)
   applyMathRendering(resolveMathRendering({}, config))
   applyMathImageScale(config.mathImageScale ?? 'auto')
@@ -740,6 +769,22 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
           trajectory: Schema.boolean().default(DEFAULT_STATUS_BAR.trajectory),
           shortcutHint: Schema.boolean().default(DEFAULT_STATUS_BAR.shortcutHint),
         }).default({ ...DEFAULT_STATUS_BAR }),
+        // Side-panel preferences. No schema defaults on purpose (same rule as
+        // foldTerminalCommand/expandEditor above): a default here would come
+        // back from scope.get()/watch() and shadow an explicit cordis.yml
+        // `sidePanel` block while the user layer is unset. applyDisplay
+        // resolves `?? config.sidePanel?.x` and the apply* stores normalize
+        // undefined to the documented defaults (true / false / 0.68 / the
+        // built-in panel trio).
+        sidePanel: Schema.object({
+          splitEnabled: Schema.boolean(),
+          open: Schema.boolean(),
+          ratio: Schema.number(),
+          panels: Schema.string(),
+        }),
+        companion: Schema.object({
+          skin: Schema.string(),
+        }),
         // Header pixel whale art; on unless settings.yaml says otherwise.
         whale: Schema.boolean().default(true),
         // Idle whale behaviors after the intro settles; on by default —
@@ -810,6 +855,17 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
       imageBacking?: ImageBacking
       latexMath?: boolean
       statusBar?: Partial<StatusBarConfig>
+      /** Side-panel preferences; every member is optional, and an unset one
+       *  falls through to cordis.yml and then to the store's own default. */
+      sidePanel?: {
+        splitEnabled?: boolean
+        open?: boolean
+        ratio?: number
+        panels?: string
+      }
+      companion?: {
+        skin?: string
+      }
       shortcuts?: Partial<Record<ShortcutActionId, string>>
     }
     const applyLayout = (value: SettingsValue): void => {
@@ -882,6 +938,15 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
       applyMathImageBacking(value.mathImageBacking ?? config.mathImageBacking ?? 'transparent')
       applyImageBacking(value.imageBacking ?? config.imageBacking ?? 'transparent')
       channel.setStatusBar(normalizeStatusBar(value.statusBar ?? config.statusBar))
+      // Side panel: no channel member — the layout owns module-level stores
+      // (they sit above the channel's version bump), so /settings writes them
+      // directly and useSidePanel's own subscriptions re-lay out at once. An
+      // unset user layer falls back to cordis.yml, then to the store default.
+      applySidePanelSplitEnabled(value.sidePanel?.splitEnabled ?? config.sidePanel?.splitEnabled)
+      applySidePanelOpen(value.sidePanel?.open ?? config.sidePanel?.open)
+      applySidePanelRatio(value.sidePanel?.ratio ?? config.sidePanel?.ratio)
+      applySidePanelPanels(value.sidePanel?.panels ?? config.sidePanel?.panels)
+      applyCompanionSkin(value.companion?.skin ?? config.companion?.skin)
     }
     // Legacy user scopes layer over cordis.yml. Modern Config is already
     // resolved: an unset action must not revive its startup override.
@@ -1194,6 +1259,62 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
           ...settingField('statusBar.shortcutHint'),
         },
         {
+          ...settingField('sidePanel.splitEnabled'),
+          format(value: unknown): string {
+            // Unset in the user layer: the effective default is on.
+            return String(typeof value === 'boolean' ? value : config.sidePanel?.splitEnabled !== false)
+          },
+        },
+        {
+          ...settingField('sidePanel.open'),
+          format(value: unknown): string {
+            // Unset in the user layer: the effective default is off.
+            return String(typeof value === 'boolean' ? value : config.sidePanel?.open === true)
+          },
+        },
+        {
+          ...settingField('sidePanel.ratio'),
+          placeholder: '0.68',
+          format(value: unknown): string {
+            // Unset in the user layer: show the effective fraction.
+            const ratio = typeof value === 'number' && Number.isFinite(value) ? value : config.sidePanel?.ratio
+            return String(ratio ?? 0.68)
+          },
+          parse(text: string) {
+            const draft = text.trim()
+            if (draft === '') return { kind: 'clear' }
+            const ratio = Number(draft)
+            // Range gate mirrors the geometry contract (0.1–0.95): an
+            // out-of-range draft would be silently clamped by the store, so
+            // refuse it and let the editor keep the error badge instead.
+            if (!Number.isFinite(ratio) || ratio < 0.1 || ratio > 0.95) return undefined
+            return { kind: 'set', value: ratio }
+          },
+        },
+        {
+          ...settingField('sidePanel.panels'),
+          placeholder: DEFAULT_SIDE_PANEL_IDS,
+          format(value: unknown): string {
+            // Unset in the user layer: show the effective list.
+            return typeof value === 'string' && value.trim() !== ''
+              ? value
+              : config.sidePanel?.panels ?? DEFAULT_SIDE_PANEL_IDS
+          },
+          parse(text: string) {
+            const draft = text.trim()
+            if (draft === '') return { kind: 'clear' }
+            // Strict gate: every token must be a well-formed panel id. The
+            // store would drop a typo silently, so a draft that does not
+            // round-trip is refused instead of saved as something else.
+            const tokens = draft.split(',').map(token => token.trim().toLowerCase()).filter(token => token !== '')
+            if (tokens.length === 0 || tokens.some(token => !SIDE_PANEL_ID_PATTERN.test(token))) return undefined
+            return { kind: 'set', value: normalizeSidePanelPanels(draft) }
+          },
+        },
+        {
+          ...settingField('companion.skin'),
+        },
+        {
           ...settingField('whale'),
         },
         {
@@ -1454,10 +1575,33 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
    * so a process that dies before the first frame does not consume it.
    */
   const homeSeen = readHomePrefs().seen === true
-  const openHomeOnBoot = !homeSeen
-    && launchSessionId === undefined
-    && requestedWorkspace === undefined
-    && initialPrompt === ''
+  /**
+   * 「普通启动」在这里有两档口径，差在**工作区目标算不算**：
+   *
+   *   - 落地页与首启引导只认「没说要回到哪儿」：没有 resume 目标、没有首句。
+   *   - home（会话与工作区）还多认一条「没说在哪儿干活」——那一屏问的就是这个。
+   *
+   * 工作区目标**不能**进前者的判定：`dst` 那类 launcher 默认把 cwd 当工作区
+   * 目标喂进来（D:/node/dst.cmd 里 set DSH_TUI_WORKSPACE_TARGET=%CD%），一旦
+   * 算进去，落地页在本机最主流的启动方式下**永远不出**——用户实测「既没看到
+   * ob 也没看到 lp」的根因就是这一条。
+   */
+  const noResume = isLandingLaunch({ launchSessionId, initialPrompt })
+  const openHomeOnBoot = !homeSeen && noResume && requestedWorkspace === undefined
+  /**
+   * The launchpad is NOT one-shot the way the workspace home is: every
+   * ordinary launch starts on it, because it is where the first sentence gets
+   * typed rather than a tutorial that retires itself. `DSH_TUI_NO_LAUNCHPAD=1`
+   * is the escape hatch (an automation that wants the old blank conversation
+   * and no dialog in front of it).
+   */
+  const launchpadOnBoot = noResume && process.env.DSH_TUI_NO_LAUNCHPAD !== '1'
+  /**
+   * The first-run guide. Gated on its own preference (not on `homeSeen`): the
+   * two answer different questions, and an install that already knows its
+   * workspace may still never have configured a key.
+   */
+  const onboardingOnBoot = noResume && shouldOfferOnboarding()
   const chat = React.createElement(Chat, {
     channel,
     renderScene: createChannelSceneOutlet(() => rawChannel.pluginScene),
@@ -1465,6 +1609,8 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
     approvalStore,
     injectControllerRef,
     openHomeOnBoot,
+    launchpadOnBoot,
+    onboardingOnBoot,
     // The dsh-tui-extensions row's services (managed dialogs, status line,
     // shortcuts). Soft-consumed: absent the row (stale patch, bare embed),
     // Chat falls back to inert stores and no shortcut registry.

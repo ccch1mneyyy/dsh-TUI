@@ -20,6 +20,7 @@ import { BRAND, FLASH, ICE, PALE, sweep } from './shimmer.js'
 import { STANDARD_FRAME_INDEX, WhaleArt } from './Whale.js'
 import { WhaleGirlArt } from './WhaleGirl.js'
 import { MAID_BOX_CENTER, MaidPortrait, useMaidPortraits } from './maidPortrait.js'
+import { SplashMascot, useSplashMascotSkin } from './sidePanel/companion/SplashMascot.js'
 import { OPENING_SEQUENCES, pickOpeningSequence, WHALE_FRAME_INDEX, type OpeningStep, type WhaleIntroId } from './whaleFrames.js'
 import { RESTING_POSE, type WhaleLayerPose } from './whaleLayers.js'
 import {
@@ -96,9 +97,9 @@ function capitalize(text: string): string {
  * its own width.
  */
 export function LogoV2({
-  model,
+  model = '',
   effort,
-  cwd,
+  cwd = '',
   skipIntro = false,
   intro,
   tip,
@@ -113,10 +114,15 @@ export function LogoV2({
   drift,
   egg,
   starChance,
+  align = 'start',
+  chrome = 'full',
+  arrangement = 'row',
+  companionSkin,
 }: {
-  model: string
+  /** 模型/effort/工作目录只画在 full 形态里；minimal（落地页）不传也行。 */
+  model?: string
   effort?: string | undefined
-  cwd: string
+  cwd?: string
   /** Test seam: mount straight into the settled header (probes skip the intro). */
   skipIntro?: boolean
   /** Test seam: pin the intro animation instead of rolling one at startup. */
@@ -164,6 +170,45 @@ export function LogoV2({
   /** Test seam: pin/suppress the upstream-drift notice (`null` forces it off;
    * `undefined` — the production default — auto-detects the install). */
   drift?: UpstreamDriftSummary | null
+  /**
+   * 排版对齐，默认 `start` = 转录区顶部那一版（逐字节不变）：
+   *
+   * - `start`  —— 并排行**占满整行**（`width="100%"`），欢迎语靠
+   *   `welcomePad` 对齐到鲸鱼的视觉中线。转录区顶部要的正是这个：它左对齐在
+   *   内容列上，下面的消息行也跟着左对齐。
+   * - `center` —— 落地页要的那一版：**整块按内容宽度居中**（并排行不再是
+   *   100% 宽，根盒 `alignItems="center"`），欢迎语交给外层居中、不再自己
+   *   加缩进。缩进那套是"左对齐时把标语钉在鲸鱼下方"的解，居中的版面上
+   *   再用一次就整体右移了。
+   *
+   * 内容完全同源（鲸鱼、字体、彩蛋、提示、漂移告警都走同一套代码），只有
+   * 对齐交给父级。
+   */
+  align?: 'start' | 'center'
+  /**
+   * 装饰密度，默认 full = 转录区顶部那一版（逐字节不变）：词标 + 版本、
+   * 模型/effort、工作目录、启动提示、漂移告警、欢迎语一应俱全。
+   *
+   * - full    —— 对话页开屏的信息密度（「我在哪、用的哪个模型」的答案）。
+   * - minimal —— 落地页那一版（opencode 式留白）：只留立绘与块体
+   *   DEEPSEEK/HARNESS 大字，其余信息行一概不画；欢迎语平时也不画
+   *   （落地页的版面契约里它整行删除），只有求 star 里程碑标语出现时才
+   *   画那几行——里程碑的露出不因落地页改版而丢。
+   *
+   * 内容与交互（字体、彩蛋、点击爱心/女仆娘、idle 规划器）两条 chrome
+   * 完全同源，差异只在文字列的密度。
+   */
+  chrome?: 'full' | 'minimal'
+  /**
+   * 立绘与词标的排布：`row`（默认，转录区开屏形态：图在左、字在右）或
+   * `column`（落地页形态：图在上、字在下，两者各自水平居中）。
+   * 用户实测反馈「logo 和标题一定要居中」——并排时是**整组**居中，词标仍然
+   * 偏在右半边；上下排布让两块各自落在中轴上，居中这件事不再有歧义。
+   */
+  arrangement?: 'row' | 'column'
+  /** 测试缝：钉住启动页吉祥物皮肤（undefined——生产——读 companion.skin；
+   *  'whale'/未知 = 维持原鲸鱼/女仆娘路径，见 SplashMascot.tsx）。 */
+  companionSkin?: string
 }): React.ReactNode {
   // One intro per logo mount: the production path rolls (startup splash
   // and each /deepseek replay roll independently), the `intro` seam pins
@@ -196,6 +241,13 @@ export function LogoV2({
   React.useEffect(() => {
     if (working) setWhaleFrozen(true)
   }, [working])
+
+  // ── 启动页吉祥物（2026-10 复用轮）：companion.skin 驱动 ────────────────
+  // deepy → 字母格动画；whaleGirl → 鲸娘动画（图像协议自适应，首帧字母格
+  // 同步可画）；两者都取代艺术槽的原住民（分层鲸/静态女仆娘立绘）。
+  // 'whale'/未知皮肤 → undefined，原路径零改动。冻结/落地页（whaleIdle=
+  // false）时吉祥物定格 idle 帧 0、零时钟（SplashMascot 内部保证）。
+  const mascotSkin = useSplashMascotSkin(companionSkin)
 
   // ── Whale behaviors (ported from the dsh-ui-whale pet) ─────────────────
   // Intro-phase click → heart pass: whole heart frames over the opening
@@ -246,7 +298,21 @@ export function LogoV2({
   const titleFont = dailyEgg === null ? font : withTagline(font, dailyEgg.top, dailyEgg.bottom)
 
   // 窄终端阶梯：鲸鱼 + 大字 → 纯大字 → 纯鲸鱼 → 一行纯文字（阈值随字体字身宽度变）。
-  const { showWhale, showBigTitle, showPlainTitle } = resolveSplashLayout(columns, { whale, font: titleFont })
+  const splash = resolveSplashLayout(columns, { whale, font: titleFont })
+  /**
+   * 上下排布（落地页）时立绘与词标**不共行**，宽轴那套「谁挤掉谁」的判定不适用：
+   * 立绘只看自己放不放得下（盒宽）。照并排阈值走会在 55–96 列这一大段把立绘判掉，
+   * 而落地页明明有一整行宽度给它——实测症状是「撤立绘」那一档不生效：矮屏上鲸鱼
+   * 照画，把大字与卡片挤出屏幕。
+   */
+  const stacked = arrangement === 'column'
+  const { showWhale, showBigTitle, showPlainTitle } = stacked
+    ? {
+        showWhale: whale && columns >= WHALE_BOX_WIDTH,
+        showBigTitle: splash.showBigTitle,
+        showPlainTitle: !splash.showBigTitle,
+      }
+    : splash
 
   // 女仆娘档优先走**真图**（Kitty/Sixel 终端图像协议，见 `maidPortrait.tsx`）；
   // 协议不可用（内联模式、终端不支持）或资产解码失败时，回落到字符画版
@@ -290,9 +356,9 @@ export function LogoV2({
   const pendingHeartRef = React.useRef(false)
   const tickRef = React.useRef<(() => void) | null>(null)
   React.useEffect(() => {
-    // 女仆娘档（真图或字符画）没有闲置规划器：立绘是静态的，开屏定格
-    // 后不给她留任何定时器。
-    if (!settled || !whaleIdle || !showWhale || whaleFrozen || whaleGirl) {
+    // 女仆娘档（真图或字符画）与吉祥物档（SplashMascot 自带节拍器）都
+    // 不需要鲸鱼的闲置规划器：那两条路径里分层鲸根本没画。
+    if (!settled || !whaleIdle || !showWhale || whaleFrozen || whaleGirl || mascotSkin !== undefined) {
       setIdlePose(null)
       tickRef.current = null
       return
@@ -397,9 +463,14 @@ export function LogoV2({
   // line than `logo-tagline`, so reusing the tagline's width would push it
   // visibly off-center.
   const welcomeWidth = starLine === null ? stringWidth(tagline) : starLine.width
-  const welcomePad = showWhale
-    ? Math.max(0, Math.round((whaleGirl ? MAID_BOX_CENTER : WHALE_CENTER) - welcomeWidth / 2))
-    : 2
+  // 居中排版（落地页）交给父级的 `alignItems="center"`，缩进一律为 0；只有
+  // 转录区顶部那一版才需要"把标语钉在鲸鱼下方"。这条判据与根盒的
+  // `align` 走同一个开关，否则两种对齐会各偏一点。
+  const welcomePad = align === 'center'
+    ? 0
+    : showWhale
+      ? Math.max(0, Math.round((whaleGirl ? MAID_BOX_CENTER : WHALE_CENTER) - welcomeWidth / 2))
+      : 2
 
   // 两行标题各自用字体声明的字距；下排再按 `bottomIndent` 居中——
   // 两者一起保证画出来的列数相等（见 splashFonts 的 tagline 契约）。
@@ -408,17 +479,30 @@ export function LogoV2({
   const { top, bottom, topKerning, bottomKerning, bottomIndent } = titleFont.tagline
   const bigDeepSeek = renderBigText(titleFont, top, t, titleFont.palette?.from ?? wordmarkRGB, titleFont.palette?.to ?? taglineRGB, FLASH, 60, topKerning)
   const bigHarness = renderBigText(titleFont, bottom, t, titleFont.palette?.from ?? taglineRGB, titleFont.palette?.to ?? PALE, FLASH, 60, bottomKerning, bottomIndent)
-  // 立绘槽位的**唯一真源**：文字列的实际行数——词标 1 + 两排大字 + 两排
-  // 之间空 1 行 + 模型/目录/提示 3 行。槽位与它等高，图片既不压过文字列
+  // 立绘槽位的**唯一真源**：文字列的实际行数。full = 词标 1 + 两排大字 +
+  // 两排之间空 1 行 + 模型/目录/提示 3 行；minimal = 只有两排大字 + 空行
+  //（信息行整块不画，见 chrome prop）。槽位与它等高，图片既不压过文字列
   // 也不留一截在下面（实机反馈「超出去、不和谐」）；大字换字体/换词时也
-  // 自动跟着变，不写死 15。
-  const textColumnRows = bigDeepSeek.length + bigHarness.length + 5
+  // 自动跟着变，不写死数字。
+  const textColumnRows = bigDeepSeek.length + bigHarness.length + (chrome === 'minimal' ? 1 : 5)
 
   return (
-    <Box ref={ref} flexDirection="column" marginTop={1}>
-      <Box flexDirection="row" gap={COLUMN_GAP} width="100%" alignItems="center">
+    <Box
+      ref={ref}
+      flexDirection="column"
+      marginTop={1}
+      {...(align === 'center' ? { alignItems: 'center' } : {})}
+    >
+      <Box
+        flexDirection={arrangement === 'column' ? 'column' : 'row'}
+        gap={arrangement === 'column' ? 1 : COLUMN_GAP}
+        alignItems="center"
+        {...(align === 'center' || arrangement === 'column' ? {} : { width: '100%' })}
+      >
         {showWhale && (
           <Box
+            flexDirection="column"
+            alignItems="center"
             flexShrink={0}
             onClick={(): void => {
               // Frozen (first task started): the whale is a static logo —
@@ -443,7 +527,13 @@ export function LogoV2({
               }
             }}
           >
-            {whaleGirl ? (
+            {/* 美术本体钳在 WHALE_BOX_WIDTH：文字列几何在所有皮肤形态下与
+                鲸鱼形态逐字节一致（tip 行截断/阶梯契约），吉祥物（31 格）在
+                盒内居中。 */}
+            <Box width={WHALE_BOX_WIDTH} flexDirection="column" alignItems="center">
+            {mascotSkin !== undefined ? (
+              <SplashMascot skin={mascotSkin} active={!whaleFrozen && whaleIdle} />
+            ) : whaleGirl ? (
               // 槽位**与文字列严格等高**（textColumnRows）：真图与字符画女仆
               // 娘共用同一个盒，真图解码完成换画时头部高度不跳，视觉上两者
               // 齐平、谁也不多出一截。真图**不带衬底**（transparent）：立绘
@@ -476,16 +566,21 @@ export function LogoV2({
                 width={WHALE_BOX_WIDTH}
               />
             )}
+            </Box>
           </Box>
         )}
         {/* 鲸鱼独占一档（大字放不下、又还得下鲸鱼）：文字列只剩几列，画出来
             只会是 `✦ dsh…` 这种残句——整列不画，开屏就留鲸鱼 + 下面的标语。 */}
         {(showBigTitle || showPlainTitle) && (
           <Box flexDirection="column" flexShrink={1}>
-            <Text wrap="truncate-end">
-              {sweep('✦ dsh-TUI', t, wordmarkRGB, wordmarkShimmerRGB, 60)}
-              <Text dimColor>{'  v' + VERSION}</Text>
-            </Text>
+            {/* 词标 + 版本号是 full 形态的信息面：落地页只要品牌本身
+                （用户实测反馈「版号可以删掉」），minimal 一行都不画。 */}
+            {chrome !== 'minimal' && (
+              <Text wrap="truncate-end">
+                {sweep('✦ dsh-TUI', t, wordmarkRGB, wordmarkShimmerRGB, 60)}
+                <Text dimColor>{'  v' + VERSION}</Text>
+              </Text>
+            )}
             {showBigTitle ? (
               <>
                 {bigDeepSeek.map((row, index) => (
@@ -507,19 +602,26 @@ export function LogoV2({
                 </Text>
               )
             )}
-            <Text wrap="truncate-end">
-              {model}
-              {effort !== undefined && <Text dimColor>{' · ' + capitalize(effort) + ' effort'}</Text>}
-            </Text>
-            <Text dimColor wrap="truncate-end">
-              {cwd}
-            </Text>
-            <Text wrap="truncate-end">
-              <Text dimColor>{tr('logo-tip-prefix')}</Text>
-              {getLang() === 'zh' ? randomTip.zh : randomTip.en}
-              <Text dimColor>{' · /tips ' + tr('logo-tip-more')}</Text>
-            </Text>
-            {driftLine != null && (
+            {/* 模型/effort、工作目录、启动提示、漂移告警同上：这些是
+                「我在哪、用哪个模型」的答案，属于对话页开屏；落地页要留白
+                （用户实测反馈「工作目录、tip 可以删掉」）。 */}
+            {chrome !== 'minimal' && (
+              <>
+                <Text wrap="truncate-end">
+                  {model}
+                  {effort !== undefined && <Text dimColor>{' · ' + capitalize(effort) + ' effort'}</Text>}
+                </Text>
+                <Text dimColor wrap="truncate-end">
+                  {cwd}
+                </Text>
+                <Text wrap="truncate-end">
+                  <Text dimColor>{tr('logo-tip-prefix')}</Text>
+                  {getLang() === 'zh' ? randomTip.zh : randomTip.en}
+                  <Text dimColor>{' · /tips ' + tr('logo-tip-more')}</Text>
+                </Text>
+              </>
+            )}
+            {chrome !== 'minimal' && driftLine != null && (
               <Text color="warning" wrap="wrap">
                 ⚠{' '}
                 {tOr(
@@ -539,6 +641,10 @@ export function LogoV2({
       {/* 求 star 彩蛋整块可点：点一下 = 一次一键 star（与 `/star`、`Alt+S`
           同一个动作；终端里按 Ctrl/Cmd 点 `Star` 那几个字才是开浏览器）。
           平时那句欢迎语不可点——只有彩蛋在邀请用户。 */}
+      {/* minimal 形态平时整块不画：落地页版面只要「图 + 大字」，欢迎语在
+          那边曾与落地页自己的一行重复（用户实测「重复了两次 删掉」）；
+          求 star 里程碑出现时仍画那几行——里程碑露出不因落地页改版而丢。 */}
+      {(chrome !== 'minimal' || starLine !== null) && (
       <Box flexDirection="column" marginTop={1} {...(starLine === null || onStarClick === undefined ? {} : { onClick: onStarClick })}>
         {starLine === null ? (
           <Box paddingLeft={welcomePad}>
@@ -562,6 +668,7 @@ export function LogoV2({
           </>
         )}
       </Box>
+      )}
     </Box>
   )
 }

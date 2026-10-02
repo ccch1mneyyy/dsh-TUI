@@ -1,6 +1,13 @@
 /**
  * Regression for #770: /resume must not raise live warnings from replayed
  * totals, historical windows, or failed turns. Run against the compiled channel.
+ *
+ * The warning's numerator is the channel's SINGLE occupancy reading (the
+ * official `contextPressure` projection when a token meter is mounted, else the
+ * last request's billed sample — see dsh-adapter/context-occupancy.ts). The
+ * sections below that build a channel WITHOUT `contextPressure` therefore cover
+ * the fallback path on purpose; the closing section mounts one and pins the
+ * projected numerator.
  */
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -48,6 +55,7 @@ function makeAgent(id, sessionId, events = []) {
 // 30k left of 100k) stays above the 20k warning buffer while the billed
 // numerator (70k + 6k + 6k = 82k used, 18k left) crosses it. A
 // cumulative-tokens implementation and a cache-ignoring one both fail here.
+// (This is the no-meter fallback path: the channel has no `contextPressure`.)
 const usage = {
   inputTokens: 70_000,
   outputTokens: 1_000,
@@ -235,6 +243,76 @@ check(
     lateChannel.notifications.length === notificationsBeforeRelease,
     JSON.stringify(lateChannel.notifications),
   )
+}
+
+// ── 投影在场：官方 contextPressure 才是告警（与页脚占用）的分子 ────────────
+// 这一组刻意让 channel 里**没有**任何成功 usage 采样（lastUsage undefined）——
+// 正是「请求被拒/溢出」留下的状态：旧实现（只认 lastUsage 求和）永不告警。
+{
+  const source = { value: { pressureTokens: 700_000, projectedTokens: 990_000, contextWindow: 1_000_000 } }
+  const feed = new Set()
+  const contextPressure = {
+    read: () => source.value,
+    subscribe(listener) { feed.add(listener); return () => feed.delete(listener) },
+  }
+  const projCtx = new Context()
+  projCtx.provide('llm', {
+    resolveModelInfo: () => Promise.resolve({ context: { contextWindow: 1_000_000 }, reasoning: { efforts: [] } }),
+  })
+  const projAgent = makeAgent('projection-agent', 'projection-session')
+  const projChannel = createChannel(projCtx, projAgent, {
+    model: 'test-model',
+    provider: 'test-provider',
+    cwd: '/tmp/context-warning',
+    activity: false,
+    contextPressure,
+    seedContextOccupancy: () => {},
+  })
+  const countProjectedWarnings = () => projChannel.notifications.filter(item =>
+    /Context low|上下文即将耗尽/u.test(item.text),
+  ).length
+  check(
+    'projection: occupancy is the official projected value',
+    projChannel.contextOccupancy?.source === 'projection' &&
+      projChannel.contextOccupancy?.usedTokens === 990_000 &&
+      projChannel.contextOccupancy?.contextWindow === 1_000_000,
+    JSON.stringify(projChannel.contextOccupancy),
+  )
+  // 解耦：把「会话累计未缓存输入」堆到荒谬的大值也不改变占用读数。
+  projChannel.tokens.input = 12_345_678
+  check(
+    'projection: occupancy is decoupled from the cumulative counter',
+    projChannel.contextOccupancy?.usedTokens === 990_000,
+    String(projChannel.tokens.input),
+  )
+  check('projection: no settled usage sample exists yet', projChannel.lastUsage === undefined)
+  const projEmit = (type, data) => {
+    const event = { type, seq: ++projAgent.session.seq, time: projAgent.session.seq, data }
+    projAgent.session.events.push(event)
+    projCtx.emit('session/event', projAgent.session, event)
+  }
+  const warningsBefore = countProjectedWarnings()
+  projEmit('turn/start', { turn: 1 })
+  projEmit('turn/end', {
+    turn: 1,
+    reason: { kind: 'error', error: { name: 'Error', message: 'context length exceeded' } },
+  })
+  check(
+    'projection: a failed turn end still evaluates the warning',
+    countProjectedWarnings() === warningsBefore + 1,
+    `${warningsBefore} → ${countProjectedWarnings()}`,
+  )
+  // 投影变更 → channel 重发（页脚/告警立刻看到新值，不等下一次请求）。
+  const versionBefore = projChannel.version
+  source.value = { pressureTokens: 700_000, projectedTokens: 100_000, contextWindow: 1_000_000 }
+  for (const listener of [...feed]) listener()
+  check('projection: a change republishes through the channel', projChannel.version > versionBefore)
+  check(
+    'projection: the UI reads the republished value',
+    projChannel.contextOccupancy?.usedTokens === 100_000,
+    JSON.stringify(projChannel.contextOccupancy),
+  )
+  projChannel.releaseContributions()
 }
 
 process.exit(failed)

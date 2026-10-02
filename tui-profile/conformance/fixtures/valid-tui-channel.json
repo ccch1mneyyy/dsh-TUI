@@ -1,0 +1,34 @@
+{
+  "requirement": {
+    "wireRevision": 6,
+    "features": ["session-state", "session-input"]
+  },
+  "support": {
+    "wireRevision": 6,
+    "features": ["session-input", "session-state"]
+  },
+  "open": {
+    "workspace": "file:///workspace",
+    "sessionId": "session-1",
+    "options": {"locale": "zh-CN"}
+  },
+  "snapshot": {
+    "wireRevision": 6,
+    "channelId": "channel-1",
+    "version": 3,
+    "state": {
+      "status": "idle",
+      "rows": [],
+      "sessionTitle": "workspace",
+      "homeDir": "/home/example",
+      "pathCaseInsensitive": false,
+      "settingsSections": [
+        {
+          "ns": "provider",
+          "title": "Provider",
+          "fields": [{"path": ["enabled"], "label": "Enabled", "kind": "boolean"}]
+        }
+      ]
+    }
+  }
+}

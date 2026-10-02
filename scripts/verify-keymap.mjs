@@ -84,6 +84,16 @@ check('ctrl+shift+v does NOT match paste (native terminal paste)', !actionMatche
 check('default editor matches ctrl+g', actionMatches('editor', 'g', { ctrl: true }))
 check('default trajectory matches ctrl+t', actionMatches('trajectory', 't', { ctrl: true }))
 check('default history matches ctrl+r', actionMatches('history', 'r', { ctrl: true }))
+check('default undo matches ctrl+z', actionMatches('undo', 'z', { ctrl: true }))
+check('undo display string', effectiveComboString('undo') === 'ctrl+z', effectiveComboString('undo'))
+// macOS primary-modifier polarity, asserted on Linux via the platformAlias
+// seam: ordinary ctrl combos still alias to Cmd, `undo` (exactPrimary) must
+// not — Cmd+Z belongs to whatever the rest of macOS gives it.
+check('mac alias: ctrl+v paste also matches super+v', actionMatches('paste', 'v', { super: true }, true))
+check('mac alias: a remapped editor combo matches super+g', actionMatches('editor', 'g', { super: true }, true))
+check('mac alias: super+z does NOT match undo (exactPrimary)', !actionMatches('undo', 'z', { super: true }, true))
+check('mac alias: ctrl+z still matches undo', actionMatches('undo', 'z', { ctrl: true }, true))
+check('no alias on linux: super+v does NOT match paste', !actionMatches('paste', 'v', { super: true }, false))
 check('default paste display string', effectiveComboString('paste') === 'ctrl+v, alt+v', effectiveComboString('paste'))
 
 // ---- overrides ------------------------------------------------------------

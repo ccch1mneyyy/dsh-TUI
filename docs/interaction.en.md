@@ -17,6 +17,7 @@
 | `Ctrl+G` | Edit the current input in an external editor (`$VISUAL` → `$EDITOR`); saving and quitting fills it back, `:cq`/non-zero exit keeps the draft; with neither variable set the TUI asks you to configure one (no `vi` fallback) |
 | `Ctrl+Shift+E` | Expand the fullscreen draft editor (or click the `⛶` affordance at the end of the input row): line numbers + current-line highlight + live line/char stats<br>`Enter` inserts a newline, `Ctrl+Enter` or the Send button sends, `Esc` or the Collapse button keeps the draft and returns<br>wheel-scrolls freely; click/drag/double-click selection work as in the inline prompt; remappable via `/settings` |
 | `Esc` | Ladder: close help → close the image preview → close the command menu → close the file menu (only the current `@` token)<br>→ **with a selection in the prompt input: only clear it (text untouched)** → interrupt the turn and redeliver pending messages → clear non-empty input → double-tap on empty input = rewind<br>in fullscreen, an active mouse selection is cleared first (not copied) |
+| `Ctrl+Z` | Undo the prompt draft's last word-level edit (text, caret and images together). Draft-only: a submit, a history recall (`Ctrl+R`/`↑`) or a session switch ends the history; it is NOT the message/conversation rewind behind `Esc Esc`. Remappable via `/settings` |
 | `Esc` / `Ctrl+C` / `Enter` while an image preview is open | Close the preview and restore the surface underneath; other keys are not passed through |
 | `Left` / `Right` in the image modal | Previous / next image, no wrapping; caret peeks keep arrows with the prompt |
 | `←` (empty input) | Background this session and open the session-management screen (same as `/bg`) |
@@ -24,6 +25,8 @@
 | `Ctrl+D` | Same ladder as `Ctrl+C`: interrupt while working (press again to force-exit if the interrupt stalls); press twice while idle to exit |
 | `Ctrl+O` | Toggle transcript/verbose detail, including full reasoning and tool arguments/output; also the escape hatch for the **long-line fold** (a single line over 1000 chars is clipped to 1000 with a `… N chars folded` marker — see the user guide §5). Clicking the folded row (or the tool card face) toggles it too |
 | `Ctrl+P` | Toggle the loaded-context panel shown at startup (while it is on screen) |
+| `Ctrl+B` | Side panel, three states: closed → open and focus the right column; open with the chat focused → focus the right column; panel focused → close and return to the chat. Splits only under `fullscreen` at a content width of ≥93 columns; on narrow terminals and in inline mode the key does nothing (`/jobs` & co. keep their full-screen panels — see the user guide §2.8) |
+| `Alt+Z` | Zoom the active side panel (the chat column keeps its minimum width); press again to restore |
 | `Ctrl+T` | Open the trajectory scene (same as `/trace`); `q`/`Esc` returns to the conversation |
 | `Ctrl+R` | Open input-history search; repeat or press `Down` for the next result |
 | `Ctrl+L` | Clear and force a physical terminal redraw |
@@ -33,8 +36,8 @@
 | `Shift+Up` | Enter message selection; arrows move, `Enter` expands one row, `Esc` exits |
 
 **Remapping shortcuts**: paste, history search, external editor, `Ctrl+O/T/P/R/L`,
-subagent dashboard, show-all, and todo fold are remappable in `/settings` → `dsh-tui` →
-`Shortcuts`.
+side panel (`Ctrl+B`/`Alt+Z`), subagent dashboard, show-all, and todo fold are remappable in
+`/settings` → `dsh-tui` → `Shortcuts`.
 
 - Enter combos like `alt+v`; comma-separate several; leave blank to restore defaults. Saves apply live.
 - Combos that clash with the fixed editing keys or another action are rejected.
@@ -67,6 +70,66 @@ subagent dashboard, show-all, and todo fold are remappable in `/settings` → `d
   inline, accessibility, and multiplexer sessions).
 - Plugins provide the keyboard path for the same action through a slash command or `tuiShortcuts`.
 - A refused rich registration returns `undefined`; an admitted one returns a disposer that removes both the view and its Cordis effect.
+
+### Launchpad and first-run guide
+
+The startup **launchpad** and the **first-run wizard** each own the keyboard; both only hand
+results back to the chat screen and add no new behavior.
+
+- **Launchpad**: printable input goes into the input box (the prefix turns from `❯` to `⌘` when the line
+  starts with `/`), `Backspace`/`Delete`/`←`/`→`/`Home`/`End` edit it; the caret is an **inverse block
+  sitting on the current character** (inverse on that one character; an inverse blank cell at end of
+  line), blinking is a pure style toggle (inverse ↔ regular, ~550ms per phase) and never occupies an
+  extra cell or eats a character; `Alt+R` continues the most recent session (= the first entry row slot,
+  bound only on this screen, no-op when there is nothing to continue, remappable in `/settings`);
+  a leading `/` opens the
+  **command palette** (the same data source and component as the chat composer: `↑`/`↓` move the selection,
+  `Enter`/`Tab`/click **run** the selected command, `Esc` dismisses only the palette and keeps the draft);
+  with the palette dismissed, `Enter` **sends** the line straight away (a leading `/` line — including
+  plugin/registry commands — goes through the chat page's merged command table and never reaches the model);
+  `↑`/`↓`/`Tab` walk the focus ring (input box → the four param segments under the box → the quick
+  actions → the Tips line) and `Enter` activates the focused one (`Enter` on the Tips line rotates the
+  tip), while typing returns focus to the input box; `Esc` clears
+  a non-empty line and opens sessions when empty, and `Ctrl+C` on an empty line takes the exit funnel.
+- **Launchpad param row** (under the box: model · effort · mode · permission; model shows the bare model
+  name and mode shows the agent preset's display name — Standard/PTC/minimal…): each segment is
+  **clickable** and opens the very same picker the chat page uses (`/model` · `/effort` · `/preset` ·
+  `/permission`); the picker renders **above** the launchpad and owns the keyboard
+  (`Esc` closes it back onto the launchpad), the picked value updates the row in place and the typed draft
+  is untouched; clicking inside the picker selects, **clicking elsewhere closes it and clicking another
+  segment switches to that picker**.
+- **Entry row (v7, four slots)**: `Continue "…"` (Alt+R; the slot is absent when there is nothing to
+  continue) · `Sessions & workspaces` (`/home` — history and workspaces merged into one entry) ·
+  `Settings` (`/settings`) · a **conditional slot** (priority: background jobs running → `Background
+  jobs`; update detected → `Update available`; usage milestone reached and never starred → `Feed us a
+  star`; fallback `Help`). Full screens opened from the launchpad (sessions & workspaces / settings /
+  background jobs / the family tree / the wizard) render **above the launchpad** — `Esc` closes them
+  back onto the launchpad (draft, params and focus intact); **the only way off the launchpad into the
+  chat is submitting a non-command line with Enter**. Overlays on the launchpad side (pickers, the
+  command palette) are a **clean cutout** — every cell in the overlay rect is space-filled (host
+  glyphs never bleed through), yet no background color is emitted (no white block; Kitty splash
+  art still shows through the terminal-default cells; the chat page's pickers are unaffected).
+- **Tips line**: click to rotate (three tips cycle; the first-run tip has top priority and never rotates);
+  keyboard path = focus ring + `Enter`; as of v7 it also **auto-rotates** (~10s per tip; a manual
+  rotate resets the timer) — the switch changes only the text, never the row height or centering.
+- **Corner plates (v7)**: the bottom-left working directory is **clickable** — it opens the existing
+  `/workspace` menu (rendered above the launchpad; `Esc` returns to the launchpad), keyboard path =
+  the focus ring's last slot + `Enter`, hover/focus = text highlight; the bottom-right plate shows
+  **two versions stacked vertically**: `dsh-tui v<TUI>` on the first row, `dsh-core v<kernel>` on
+  the second (the kernel version is read from the host/kernel package manifests; only the TUI row
+  is drawn when neither resolves), both right-aligned with the cwd plate top-aligned to the first
+  row, truncated per the existing truncate-middle contract on narrow terminals.
+- **Wizard**: `←`/`→` change step (except the effort slider in step 3 and a drilled-in model list, where the
+  horizontal keys belong to the child control), `Tab` switches between the language/theme and
+  model/effort/workspace panes, `↑`/`↓` move the selection; `Enter` runs the step (step 1 = re-check
+  connectivity, step 3 = drill into a provider / switch model / open the workspace picker — **effort is not
+  on Enter**, it is `←`/`→` only and applies as you move); the theme pane previews on cursor move while the
+  **language pane applies on `Enter`**; `Enter` on the last step finishes and records the guide when the
+  focused card is a shortcut card, and tries the command when it is a command card; `Esc` skips
+  (**not recorded**, asked again next launch).
+- **Mouse** (fullscreen): the launchpad's quick actions (hover = the label turns accent-blue and bold,
+  leaving restores the dim look), param segments, command palette, Tips line, the wizard's "Try it" cards
+  and the workspace picker are clickable, and a click lands on the same command path as the keyboard.
 
 ## Editing keys
 
@@ -591,7 +654,7 @@ The command menu merges local commands with the DSH command registry. Type `/` t
 **Status**
 
 - `/context`, `/status`, `/cost`, `/balance` — official DeepSeek balance: summary row + hover details, click to refresh.
-- `/config`, `/doctor`, `/init`, `/agents`, `/jobs` — background jobs panel: status/elapsed/exit code, `k` kills.
+- `/config`, `/doctor`, `/init`, `/agents`, `/jobs` — background jobs panel: status/elapsed/exit code, `k` kills; with the split layout on and the terminal wide enough it opens as a right-column panel instead (narrow terminals and inline mode keep the full-screen panel).
 - `/settings`.
 
 **Model and display**
@@ -600,6 +663,7 @@ The command menu merges local commands with the DSH command registry. Type `/` t
   session accent color: bare opens the palette picker, `<name>` sets directly, `status`/`reset`;
   input border + session-name chip at the top-right, per-session; chip off by default, enable
   in `/settings`.
+- `/panel` — side panel: toggle / focus / zoom / switch panels (subcommands in the user guide §2.8).
 - `/lang`.
 
 **Account and policy**
@@ -654,7 +718,7 @@ Additional forms:
 - Exiting plan mode restores the pre-plan atoms first, then the durable preset you were on before plan mode (while the registry still offers it).
 - When the registry service is absent, TUI uses its legacy three-row compatibility roster; a mounted but broken service is unavailable and fails closed.
 - `/lang` toggles the interface language (see "Interface language").
-- `/compact` compresses the session history; unavailable under the kernel Minimal agent preset (`minimal`, a single persistent-shell tool) — unrelated to the display-side Minimal UI switch.
+- `/compact` compresses the session history; unavailable under the kernel Minimal agent preset (`minimal`, a single persistent-shell tool), which mounts no compaction and does not prune tool results — a long session can hit the context limit and oversized tool output stays in full (Help and `/` completion mark the entry, and entering the preset says so once) — unrelated to the display-side Minimal UI switch.
 - `/thinking` toggles extended reasoning display; UI state only — **not persisted**.
 - After startup, the TUI checks npm for a newer version in the background and shows a notification when one is available.
 - The check follows the npm registry configuration (`NPM_CONFIG_REGISTRY` or `~/.npmrc`),

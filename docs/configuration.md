@@ -64,6 +64,11 @@ Config；旧版仍使用 `~/.dsh/settings.yaml`。不要把旧文件路径当成
 | `splashFont` | `daily` | 开屏大字字体：`daily` 按本地日期轮换（默认），其余取字体 id（`bold` / `square` / `bevel` / `wide` / `dot` / `stencil` / `classic` / `slab`）pin 住那一款；非法值回落 `daily`。也可经 `/settings` 修改 |
 | `whaleGirl` | `false` | 把标题的像素鲸鱼换成女仆娘：**最优先**真图（Kitty/Sixel）；不支持时回落字符画版女仆娘 |
 | `minimal` | `false` | 极简界面（Minimal UI）：精简标题装饰与配色。**这是界面显示开关**，与下面 `preset` 里的内核「极简模式」预设完全是两件事（那个才决定模型能用哪些工具） |
+| `sidePanel.splitEnabled` | `true`（布尔） | 分栏总开关：开启时 `Ctrl+B` 与 `/panel` 在聊天右侧展开侧栏；关闭时两者都不再分栏，`/jobs` 等仍走整屏面板。立即生效 |
+| `sidePanel.open` | `false`（布尔） | 启动时侧栏是否已展开；默认关闭，升级后布局与原来一致。会话内的 `Ctrl+B` / `/panel toggle` 不写回这里。立即生效 |
+| `sidePanel.ratio` | `0.68`（数值，0.1–0.95） | 聊天列占内容宽度的比例；侧栏有焦点时 `+`/`-` 在当前会话内实时微调（不写回）。立即生效 |
+| `sidePanel.panels` | `todo,jobs,agents`（逗号分隔文本） | 启用的面板 id 与顺序（内置：`todo` `info` `trajectory` `jobs` `agents` `workspace` `companion`）；格式合法但暂无面板认领的 id 会留在标签栏等插件注册，格式非法的条目被拒绝。面板栏右端的 `⤢` 把当前面板放大成整屏（只对声明了整屏形态的面板出现）。立即生效 |
+ | `companion.skin` | `deepy` | 宠物面板的皮肤：`deepy`（默认，deepy 小鲸鱼素材包）、`whaleGirl`（鲸娘表情包，22 个动画含互动反应）或 `whale`（与开屏同款分层像素鲸鱼）；面板需在 `sidePanel.panels` 加入 `companion` 启用。立即生效 |
 | `modes` | 内置三档 | Shift+Tab 会话模式循环（plan/sandbox/approval 原子组合）；缺省为 默认 → 计划 → 完全访问 |
 | `activity` | `true` | 是否显示实时工作状态行 |
 | `activityFrames` | `moon8` | 工作状态动画预设；也可通过 `/activity` 修改。旧配置值 `claude` 读取时映射为 `moon8`，选择器不再显示该旧预设 |
@@ -127,7 +132,7 @@ Config；旧版仍使用 `~/.dsh/settings.yaml`。不要把旧文件路径当成
 | --- | --- | --- |
 | `standard` | 标准模式（默认） | 编辑、Shell、检索、Skills、计划、Goals、子代理与工作流 |
 | `ptc`（0.1.2）/ `code`（旧 0.1.1） | PTC 模式 | 标准能力，加 PTC SDK 呈现工具，可用 TypeScript 组合多步操作；两个名字可跨版本兼容解析 |
-| `minimal` | 极简模式 | 内核 Agent 预设：只暴露一个持久 shell 工具（POSIX 为 bash，Windows 为 pwsh），不带 compaction、计划模式与运行时上下文。`str_replace_editor` 自 0.1.3-alpha.2 起是 opt-in，该预设不含它 |
+| `minimal` | 极简模式 | 内核 Agent 预设：只暴露一个持久 shell 工具（POSIX 为 bash，Windows 为 pwsh），不带 compaction、计划模式与运行时上下文。`str_replace_editor` 自 0.1.3-alpha.2 起是 opt-in，该预设不含它。代价也如实说：没有压缩、也不剪枝工具结果（长会话可能撞上下文上限，超长工具输出整段留在上下文里），`/compact` 与问卷在该预设下不可用——Help 与 `/` 补全标注「不可用」，进入/恢复该预设时提示一次 |
 | `cordis` | 创造模式 | 标准能力，加运行时检查与插件实验工具 |
 | `liangshen` | 梁神模式 | 主 Agent 与子 Agent 首轮均保持极简模式的最小工具面，首次工具调用后开放完整目录，压缩后重新锚定 |
 

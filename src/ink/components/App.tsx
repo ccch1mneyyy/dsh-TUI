@@ -26,7 +26,6 @@ import {
 	finishSelection,
 	hasSelection,
 	type SelectionState,
-	startSelection,
 } from "../selection.js";
 import {
 	isXtermJs,
@@ -52,7 +51,6 @@ import {
 import {
 	DBP,
 	DFE,
-	DISABLE_MOUSE_TRACKING,
 	EBP,
 	EFE,
 	HIDE_CURSOR,
@@ -68,9 +66,6 @@ import StdinContext from "./StdinContext.js";
 import { TerminalFocusProvider } from "./TerminalFocusContext.js";
 import { TerminalSizeContext } from "./TerminalSizeContext.js";
 import { TerminalWriteProvider } from "../useTerminalNotification.js";
-
-// Platforms that support Unix-style process suspension (SIGSTOP/SIGCONT)
-const SUPPORTS_SUSPEND = process.platform !== "win32";
 
 // After this many milliseconds of stdin silence, the next chunk triggers
 // a terminal mode re-assert (mouse tracking). Catches tmux detach→attach,
@@ -137,6 +132,13 @@ type Props = {
 	// screen buffer to find word/line boundaries and mutates selection,
 	// setting isDragging=true so a subsequent drag extends by word/line.
 	readonly onMultiClick: (col: number, row: number, count: 2 | 3) => void;
+	// Called on a left press that begins a text selection (fresh press,
+	// modifier press, dormant-drag replay). Lives on Ink like
+	// onSelectionDrag: seeding the gesture needs the screen buffer to read
+	// the anchor cell's noSelect bit (the direction fence — a drag anchored
+	// inside a noSelect region, e.g. the side-panel column, selects that
+	// region's text; chat-origin drags keep excluding it).
+	readonly onSelectionStart: (col: number, row: number) => void;
 	// Called on drag-motion. Mode-aware: char mode updates focus to the
 	// exact cell; word/line mode snaps to word/line boundaries. Needs
 	// screen-buffer access (word boundaries) so lives on Ink, not here.
@@ -769,10 +771,6 @@ export default class App extends PureComponent<Props, State> {
 		if (input === "\x03" && this.props.exitOnCtrlC) {
 			this.handleExit();
 		}
-
-		// Note: Ctrl+Z (suspend) is now handled in processKeysInBatch using the
-		// parsed key to support both raw (\x1a) and CSI u format from Kitty
-		// keyboard protocol terminals (Ghostty, iTerm2, kitty, WezTerm)
 	};
 	handleExit = (error?: Error): void => {
 		if (this.isRawModeSupported()) {
@@ -785,55 +783,23 @@ export default class App extends PureComponent<Props, State> {
 		// and Clock (interval speed) — no App setState needed.
 		setTerminalFocused(isFocused);
 	};
-	handleSuspend = (): void => {
-		if (!this.isRawModeSupported()) {
+	/**
+	 * Re-assert raw mode after an EXTERNAL stop+continue (SIGCONT). While the
+	 * job is stopped the shell owns the tty and leaves it in its own cooked
+	 * modes; the job is expected to restore its termios when it continues.
+	 * The readable listener survives the stop, so only the termios flag comes
+	 * back — deliberately not through handleSetRawMode, which would
+	 * double-count the raw-mode requests and re-add listeners.
+	 *
+	 * No `stdin.isRaw` guard: Node caches that flag as a plain property on the
+	 * stream, so it still reads `true` after the shell reset termios behind our
+	 * back. `setRawMode(true)` is an idempotent ioctl.
+	 */
+	reassertRawMode = (): void => {
+		if (this.rawModeEnabledCount === 0 || !this.isRawModeSupported()) {
 			return;
 		}
-
-		// Store the exact raw mode count to restore it properly
-		const rawModeCountBeforeSuspend = this.rawModeEnabledCount;
-
-		// Completely disable raw mode before suspending
-		while (this.rawModeEnabledCount > 0) {
-			this.handleSetRawMode(false);
-		}
-
-		// Show cursor, disable focus reporting, and disable mouse tracking
-		// before suspending. DISABLE_MOUSE_TRACKING is a no-op if tracking
-		// wasn't enabled, so it's safe to emit unconditionally — without
-		// it, SGR mouse sequences would appear as garbled text at the
-		// shell prompt while suspended.
-		if (this.props.stdout.isTTY) {
-			this.props.stdout.write(SHOW_CURSOR + DFE + DISABLE_MOUSE_TRACKING);
-		}
-
-		// Notify the application of suspension. The listener manages its notification
-		this.internal_eventEmitter.emit("suspend");
-
-		// Set up resume handler
-		const resumeHandler = () => {
-			// Restore raw mode to exact previous state
-			for (let i = 0; i < rawModeCountBeforeSuspend; i++) {
-				if (this.isRawModeSupported()) {
-					this.handleSetRawMode(true);
-				}
-			}
-
-			// Hide cursor (unless in accessibility mode) and re-enable focus reporting after resuming
-			if (this.props.stdout.isTTY) {
-				if (!isEnvTruthy(process.env.DSH_TUI_ACCESSIBILITY)) {
-					this.props.stdout.write(HIDE_CURSOR);
-				}
-				// Re-enable focus reporting to restore terminal state
-				this.props.stdout.write(EFE);
-			}
-
-			// Notify the application that the terminal resumed
-			this.internal_eventEmitter.emit("resume");
-			process.removeListener("SIGCONT", resumeHandler);
-		};
-		process.on("SIGCONT", resumeHandler);
-		process.kill(process.pid, "SIGSTOP");
+		this.props.stdin.setRawMode(true);
 	};
 }
 
@@ -958,12 +924,6 @@ function processKeysInBatch(
 			setTerminalFocused(true);
 		}
 
-		// Handle Ctrl+Z (suspend) using parsed key to support both raw (\x1a) and
-		// CSI u format (\x1b[122;5u) from Kitty keyboard protocol terminals
-		if (item.name === "z" && item.ctrl && SUPPORTS_SUSPEND) {
-			app.handleSuspend();
-			continue;
-		}
 		// Wheel keys carry the pointer position (SGR/X10 col/row). Route
 		// position-first: if a scroll container sits under the pointer, its
 		// onWheel consumes the event and the legacy global keybinding path
@@ -1241,7 +1201,7 @@ export function handleMouseEvent(app: App, m: ParsedMouse): void {
 			app.lastClickRow = -1;
 			// Do not immediately seed the chain again: a Shift+click followed by
 			// a plain click in the same cell must remain two single clicks.
-			startSelection(sel, col, row);
+			app.props.onSelectionStart(col, row);
 			sel.lastPressHadAlt = (m.button & 0x08) !== 0;
 			app.props.onSelectionChange();
 			return;
@@ -1272,7 +1232,7 @@ export function handleMouseEvent(app: App, m: ParsedMouse): void {
 			app.props.onMultiClick(col, row, count);
 			return;
 		}
-		startSelection(sel, col, row);
+		app.props.onSelectionStart(col, row);
 		// SGR bit 0x08 = alt (xterm.js wires altKey here, not metaKey — see
 		// comment at the hyperlink-open guard below). On macOS xterm.js,
 		// receiving alt means macOptionClickForcesSelection is OFF (otherwise
@@ -1308,7 +1268,7 @@ export function handleMouseEvent(app: App, m: ParsedMouse): void {
 				);
 				return;
 			}
-			startSelection(sel, col, row);
+			app.props.onSelectionStart(col, row);
 			replayedDormantDrag = true;
 		}
 		// Classic X10 encodes every release as low bits 3. If a left selection is

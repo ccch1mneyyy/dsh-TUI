@@ -1,0 +1,20 @@
+{
+  "$schema":"urn:dsh-std:community-draft:dsh-plugin:0.15",
+  "manifestVersion":"0.15",
+  "id":"com.example.tui-contributions",
+  "name":"TUI Contributions",
+  "version":"1.0.0",
+  "facets":{"host":{"entry":"host.js","apiVersion":"v1alpha1"}},
+  "requires":{"contracts":[]},
+  "permissions":[],
+  "contributes":{
+    "commands":[],
+    "x-dsh-tui":[
+      {"apiVersion":"workspace.dsh/v1alpha1","kind":"WorkspaceProvider","id":"com.example.workspace","name":"example-workspace","spec":{"title":"Example","workspaceDomain":"example.workspaces","operations":["list","get","resolve"],"locatorKinds":["example"],"mutationConcurrency":"serialized"}},
+      {"apiVersion":"tui.dsh/v1alpha1","kind":"SettingsSection","id":"com.example.settings","name":"example_settings","spec":{"namespace":"example","title":"Example","fields":[{"path":["enabled"],"label":"Enabled","kind":"boolean"}]}},
+      {"apiVersion":"tui.dsh/v1alpha1","kind":"Scene","id":"com.example.scene","name":"example_scene","spec":{"title":"Example"}}
+    ]
+  },
+  "subscriptions":[],
+  "license":"MIT"
+}

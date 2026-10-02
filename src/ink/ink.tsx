@@ -381,9 +381,26 @@ export default class Ink {
       return;
     }
 
+    // While paused an external editor owns the tty (`$VISUAL`/`$EDITOR` runs
+    // with inherited stdio in the same process group, and its own Ctrl+Z
+    // suspends the whole group). Re-asserting termios or repainting here would
+    // stomp the editor's modes and screen, so a SIGCONT during the handoff is
+    // left entirely to the child.
+    if (this.isPaused) {
+      return;
+    }
+
+    // A SIGCONT can come from an EXTERNAL stop (kill -STOP, shell `suspend`,
+    // SIGTSTP) now that the app no longer stops itself: while we were stopped
+    // the shell owned the tty and left it in ITS cooked modes. A job is
+    // expected to restore its own termios when it continues — without this the
+    // composer keeps drawing frames while the line discipline echoes every
+    // keystroke and delivers nothing until Enter.
+    this.app?.reassertRawMode();
+
     // Alt screen: after SIGCONT, content is stale (shell may have written
-    // to main screen, switching focus away) and mouse tracking was
-    // disabled by handleSuspend.
+    // to main screen, switching focus away) and the DEC private modes the app
+    // enabled were reset by whoever owned the tty meanwhile.
     if (this.altScreenActive) {
       this.reenterAltScreen();
       return;
@@ -393,9 +410,10 @@ export default class Ink {
     this.frontFrame = emptyFrame(this.frontFrame.viewport.height, this.frontFrame.viewport.width, this.stylePool, this.charPool, this.hyperlinkPool);
     this.backFrame = emptyFrame(this.backFrame.viewport.height, this.backFrame.viewport.width, this.stylePool, this.charPool, this.hyperlinkPool);
     this.log.reset();
-    // Physical cursor position is unknown after the shell took over during
-    // suspend. Clear displayCursor so the next frame's cursor preamble
-    // doesn't emit a relative move from a stale park position.
+    // Physical cursor position is unknown after the shell took over during a
+    // stop (external SIGSTOP / shell `suspend`). Clear displayCursor so the
+    // next frame's cursor preamble doesn't emit a relative move from a stale
+    // park position.
     this.displayCursor = null;
   };
 
@@ -2479,12 +2497,29 @@ export default class Ink {
     const screen = this.frontFrame.screen;
     // selectWordAt/selectLineAt no-op on noSelect/out-of-bounds. Seed with
     // a char-mode selection so the press still starts a drag even if the
-    // word/line scan finds nothing selectable.
-    startSelection(this.selection, col, row);
+    // word/line scan finds nothing selectable. The screen seeds the
+    // direction fence: a multi-click anchored on a noSelect cell (the
+    // side-panel column) selects that region's text.
+    startSelection(this.selection, col, row, screen);
     if (count === 2) selectWordAt(this.selection, screen, col, row);else selectLineAt(this.selection, screen, row);
     // Ensure hasSelection is true so release doesn't re-dispatch onClickAt.
     // selectWordAt no-ops on noSelect; selectLineAt no-ops out-of-bounds.
     if (!this.selection.focus) this.selection.focus = this.selection.anchor;
+    this.notifySelectionChange();
+  }
+
+  /**
+   * Begin a char-mode selection at (col, row), reading the anchor cell's
+   * noSelect bit from the current frame so the gesture's direction fence is
+   * seeded (SelectionState.includeNoSelectCells): a drag that starts inside
+   * a noSelect region — the side-panel column — selects that region's own
+   * text; a chat-origin drag keeps excluding panel glyphs (design §4.6).
+   * Bound as the App prop onSelectionStart (replacing App's direct
+   * startSelection calls, which had no screen to read the bit from).
+   */
+  handleSelectionStart(col: number, row: number): void {
+    if (!this.altScreenActive) return;
+    startSelection(this.selection, col, row, this.frontFrame.screen);
     this.notifySelectionChange();
   }
 
@@ -2623,7 +2658,7 @@ export default class Ink {
   };
   render(node: ReactNode): void {
     this.currentNode = node;
-    const tree = <App ref={this.setAppRef} stdin={this.options.stdin} stdout={this.options.stdout} stderr={this.options.stderr} exitOnCtrlC={this.options.exitOnCtrlC} onExit={this.unmount} terminalColumns={this.terminalColumns} terminalRows={this.terminalRows} selection={this.selection} onSelectionChange={this.notifySelectionChange} onClickAt={this.dispatchClick} onContextMenuAt={this.dispatchContextMenu} onHoverAt={this.dispatchHover} onWheelAt={this.dispatchWheelAt} getHyperlinkAt={this.getHyperlinkAt} onOpenHyperlink={this.openHyperlink} onMultiClick={this.handleMultiClick} onSelectionDrag={this.handleSelectionDrag} onDragTargetAt={this.findDragTargetAt} onDragDispatch={this.dispatchDrag} onPointerGestureChange={this.setPointerGestureActive} onProtocolCandidateChange={this.setProtocolCandidateActive} onReleaseTail={this.drainReleaseTail} onClickProbe={this.clickProbeAtBatchTail} onStdinResume={this.reassertTerminalModes} onTerminalFocus={this.handleTerminalFocusProbe} onCursorDeclaration={this.setCursorDeclaration} dispatchKeyboardEvent={this.dispatchKeyboardEvent}>
+    const tree = <App ref={this.setAppRef} stdin={this.options.stdin} stdout={this.options.stdout} stderr={this.options.stderr} exitOnCtrlC={this.options.exitOnCtrlC} onExit={this.unmount} terminalColumns={this.terminalColumns} terminalRows={this.terminalRows} selection={this.selection} onSelectionChange={this.notifySelectionChange} onClickAt={this.dispatchClick} onContextMenuAt={this.dispatchContextMenu} onHoverAt={this.dispatchHover} onWheelAt={this.dispatchWheelAt} getHyperlinkAt={this.getHyperlinkAt} onOpenHyperlink={this.openHyperlink} onMultiClick={this.handleMultiClick} onSelectionStart={this.handleSelectionStart} onSelectionDrag={this.handleSelectionDrag} onDragTargetAt={this.findDragTargetAt} onDragDispatch={this.dispatchDrag} onPointerGestureChange={this.setPointerGestureActive} onProtocolCandidateChange={this.setProtocolCandidateActive} onReleaseTail={this.drainReleaseTail} onClickProbe={this.clickProbeAtBatchTail} onStdinResume={this.reassertTerminalModes} onTerminalFocus={this.handleTerminalFocusProbe} onCursorDeclaration={this.setCursorDeclaration} dispatchKeyboardEvent={this.dispatchKeyboardEvent}>
         <TerminalWriteProvider value={this.writeRaw}>
           <TerminalImagesContext.Provider value={this.terminalImages}>
             {node}

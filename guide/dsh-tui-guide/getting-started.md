@@ -268,11 +268,13 @@ pnpm build
 pnpm smoke
 ```
 
-本仓库有两个子模块，其中安装必需的是 `vendor/dsh-std`：
+本仓库只有一个子模块，且安装必需：
 
 - `vendor/dsh-std`：`pnpm-workspace.yaml` 把 `vendor/dsh-std/packages/*` 列为
   workspace 包。
-- `dsh-ecosystem-spec`：生态适配规范，供契约检查使用。
+
+TUI Profile（插件准入与私有协议定义）在 `tui-profile/`，是**普通文件**（不再是
+子模块），随本仓库代码一起检出与修订，供契约检查使用。
 
 漏掉 `--recurse-submodules` 会让这些目录为空，
 `pnpm install --frozen-lockfile` 直接失败。已经克隆过的检出补一条：

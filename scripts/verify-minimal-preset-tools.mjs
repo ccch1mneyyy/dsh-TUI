@@ -1,37 +1,49 @@
-/** Regression checks for the official two-tool Minimal preset. Run against
- * compiled output. */
+/** Regression checks for the official Minimal preset (one persistent shell
+ * tool) and the host-layer ask_user_question carve-out. Run against compiled
+ * output. */
 
 import assert from 'node:assert/strict'
 import { createChannel } from '../lib/types/dsh-adapter/channel.js'
 import {
   composePreset,
   filterMinimalPresetTools,
+  presetHidesHostAskTool,
   resolvePersistedPreset,
   runningPresetOf,
 } from '../lib/types/dsh-adapter/presets.js'
 import { settled } from './lib/term-test.mjs'
 import { setLang } from '../lib/types/i18n.js'
 
-const bash = { name: 'bash' }
-const editor = { name: 'str_replace_editor' }
+// The official Minimal composition
+// (`@deepseek-ai/dsh-web-app/presets/minimal.patch.yml`: `persona` +
+// `persistent-shell`) exposes EXACTLY ONE tool — the persistent shell, which is
+// `bash` on POSIX and `pwsh` on Windows. `str_replace_editor` became opt-in in
+// 0.1.3-alpha.2 and is not part of it; neither is the host-mounted
+// ask_user_question.
+const shell = { name: process.platform === 'win32' ? 'pwsh' : 'bash' }
 const ask = { name: 'ask_user_question' }
 const assembly = {
   sections: [],
   contexts: [],
-  tools: [bash, editor, ask],
+  tools: [shell, ask],
   variables: {},
 }
 
 const minimal = filterMinimalPresetTools(assembly, 'minimal')
-assert.deepEqual(minimal.tools.map(tool => tool.name), ['bash', 'str_replace_editor'])
+assert.deepEqual(minimal.tools.map(tool => tool.name), [shell.name])
 assert.notEqual(minimal, assembly)
+assert.equal(presetHidesHostAskTool('minimal'), true)
 
 for (const preset of ['standard', 'ptc', 'cordis', 'liangshen', undefined]) {
   assert.equal(filterMinimalPresetTools(assembly, preset), assembly)
+  assert.equal(presetHidesHostAskTool(preset), false)
 }
+// A user preset that merely mentions the shell keeps the host tool: only the
+// official id is carved out (see presets.presetHidesHostAskTool).
+assert.equal(filterMinimalPresetTools(assembly, 'minimal-copy'), assembly)
 
-const alreadyTwoTools = { ...assembly, tools: [bash, editor] }
-assert.equal(filterMinimalPresetTools(alreadyTwoTools, 'minimal'), alreadyTwoTools)
+const shellOnly = { ...assembly, tools: [shell] }
+assert.equal(filterMinimalPresetTools(shellOnly, 'minimal'), shellOnly)
 
 const legacyHeaderSession = {
   header: { agentPreset: 'code' },
@@ -256,17 +268,20 @@ async function loadedContextWith(tools, complete = true) {
   return { context: channel.loadedContext, unscopedReads }
 }
 
-const minimalContext = await loadedContextWith([bash, editor])
+// The Minimal-shaped catalogs below keep the real one-tool shape (the
+// persistent shell) at the front; the skill catalog read is decided by the
+// `skill` tool, not by the shell.
+const minimalContext = await loadedContextWith([shell])
 assert.deepEqual(minimalContext.context.skills, [])
 assert.equal(minimalContext.unscopedReads, 0)
 
-const standardContext = await loadedContextWith([bash, editor, { name: 'skill' }])
+const standardContext = await loadedContextWith([shell, { name: 'skill' }])
 assert.deepEqual(standardContext.context.skills, [{ name: 'audit', description: 'Audit code' }])
 assert.equal(standardContext.unscopedReads, 0)
 
-const incompleteContext = await loadedContextWith([bash, editor, { name: 'skill' }], false)
+const incompleteContext = await loadedContextWith([shell, { name: 'skill' }], false)
 assert.deepEqual(incompleteContext.context.skills, [])
-assert.deepEqual(incompleteContext.context.tools.map(tool => tool.name), ['bash', 'str_replace_editor', 'skill'])
+assert.deepEqual(incompleteContext.context.tools.map(tool => tool.name), [shell.name, 'skill'])
 assert.equal(incompleteContext.unscopedReads, 0)
 
 console.log('minimal preset tool filtering verified')
