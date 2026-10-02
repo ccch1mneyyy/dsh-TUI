@@ -10,7 +10,7 @@
  * `satisfies Record<keyof Options, …>`: an option the SDK adds or removes
  * fails `tsc` here until someone decides what the profile does with it.
  */
-import type { CanUseTool, Options, PermissionMode, SettingSource } from '@anthropic-ai/claude-agent-sdk'
+import type { CanUseTool, OnElicitation, OnUserDialog, Options, PermissionMode, SettingSource } from '@anthropic-ai/claude-agent-sdk'
 import type { ClaudeSdkModule } from './sdk.js'
 
 /** How the profile treats an option: `set` here, `omit` (CLI default /
@@ -40,9 +40,9 @@ export const OPTION_POLICY = {
   forkSession: 'later', // Phase 4
   betas: 'omit',
   hooks: 'omit',
-  onElicitation: 'later', // Phase 5
-  onUserDialog: 'later', // Phase 5
-  supportedDialogKinds: 'later',
+  onElicitation: 'set', // MCP elicitation → the questionnaire (dialogs.ts)
+  onUserDialog: 'set', // the refusal-fallback dialog (dialogs.ts)
+  supportedDialogKinds: 'set', // exactly the kinds dialogs.ts renders
   perTaskStopAffordance: 'set',
   persistSession: 'omit',
   sessionStore: 'omit',
@@ -152,6 +152,11 @@ export type ProfileInput = {
   readonly executable: string | undefined
   readonly env: Record<string, string>
   readonly canUseTool: CanUseTool
+  /** MCP elicitation and the CLI's user dialogs (dialogs.ts); absent = the
+   *  SDK defaults (elicitation declined, no dialog kinds declared). */
+  readonly onElicitation?: OnElicitation
+  readonly onUserDialog?: OnUserDialog
+  readonly supportedDialogKinds?: readonly string[]
   readonly stderr: (data: string) => void
   readonly abortController: AbortController
   /** Fall back to echoed user messages when the CLI has no lifecycle frames. */
@@ -180,6 +185,9 @@ export function buildQueryOptions(input: ProfileInput): Options {
     tools: { type: 'preset', preset: 'claude_code' },
     permissionMode: input.permissionMode,
     canUseTool: input.canUseTool,
+    ...(input.onElicitation === undefined ? {} : { onElicitation: input.onElicitation }),
+    // The SDK refuses declared kinds without the callback.
+    ...(input.onUserDialog === undefined ? {} : { onUserDialog: input.onUserDialog, supportedDialogKinds: [...(input.supportedDialogKinds ?? [])] }),
     includePartialMessages: true,
     forwardSubagentText: true,
     perTaskStopAffordance: true,

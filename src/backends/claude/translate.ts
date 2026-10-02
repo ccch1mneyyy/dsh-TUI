@@ -90,6 +90,28 @@ function clipLane(text: string): string {
   return `${text.slice(0, code >= 0xd800 && code <= 0xdbff ? LANE_RESULT_CHARS - 1 : LANE_RESULT_CHARS)}…`
 }
 
+/** The user-facing name of a rate-limit window. */
+function rateLimitWindow(type: string): string {
+  switch (type) {
+    case 'five_hour': return t('status-rate-limit-five-hour')
+    case 'seven_day': return t('status-rate-limit-seven-day')
+    case 'seven_day_opus': return `${t('status-rate-limit-seven-day')} Opus`
+    case 'seven_day_sonnet': return `${t('status-rate-limit-seven-day')} Sonnet`
+    default: return type === '' ? '?' : type
+  }
+}
+
+/** A duration until a reset, coarse (`3d 1h`, `2h 5m`, `7m`). */
+export function formatDuration(ms: number): string {
+  const minutes = Math.max(1, Math.round(ms / 60_000))
+  const days = Math.floor(minutes / 1440)
+  const hours = Math.floor((minutes % 1440) / 60)
+  const rest = minutes % 60
+  if (days > 0) return `${days}d ${hours}h`
+  if (hours > 0) return `${hours}h ${rest}m`
+  return `${rest}m`
+}
+
 /** A task report's usage (`total_tokens`, `tool_uses`, `duration_ms`). */
 function usageOfTask(value: unknown): SubagentUsage | undefined {
   const usage = rec(value)
@@ -305,6 +327,9 @@ export function createClaudeTranslator(options: ClaudeTranslatorOptions) {
   const outputFiles = new Map<string, string>()
   /** Housekeeping / watcher tasks (`skip_transcript` / `ambient`). */
   const hiddenTasks = new Set<string>()
+  /** The last rate-limit state announced (`status:window`): a warning is
+   *  said once per state, not on every turn's repeat of it. */
+  let rateLimitState: string | undefined
   /** Why the CLI auto-denied a call (`system/permission_denied`), until its
    *  error result lands on the card. */
   const deniedReasons = new Map<string, string>()
@@ -895,6 +920,29 @@ export function createClaudeTranslator(options: ClaudeTranslatorOptions) {
     }
   }
 
+  /**
+   * A subscription limit warning (`allowed_warning`) or refusal (`rejected`)
+   * as a notice, once per state (the CLI repeats the event every turn);
+   * `allowed` re-arms it.
+   */
+  const rateLimitNotice = (info: Rec | undefined): AgentEvent[] => {
+    const status = str(info?.status)
+    const type = str(info?.rateLimitType) ?? ''
+    const state = `${status ?? ''}:${type}`
+    if (status !== 'allowed_warning' && status !== 'rejected') {
+      rateLimitState = undefined
+      return []
+    }
+    if (state === rateLimitState) return []
+    rateLimitState = state
+    const window = rateLimitWindow(type)
+    const resetsAt = num(info?.resetsAt)
+    const resets = resetsAt === undefined ? '' : t('claude-rate-limit-resets', { time: t('claude-rate-limit-in', { duration: formatDuration(resetsAt * 1000 - now()) }) })
+    if (status === 'rejected') return [{ type: 'notice', level: 'error', key: 'rate-limit', text: t('claude-rate-limit-rejected', { window, resets }) }]
+    const utilization = num(info?.utilization)
+    return [{ type: 'notice', level: 'warning', key: 'rate-limit', text: t('claude-rate-limit-warning', { window, percent: utilization === undefined ? '?' : Math.round(utilization * 100), resets }) }]
+  }
+
   const translateSystem = (message: Rec): AgentEvent[] => {
     const subtype = str(message.subtype)
     switch (subtype) {
@@ -1048,18 +1096,62 @@ export function createClaudeTranslator(options: ClaudeTranslatorOptions) {
           type: 'notice',
           level: 'warning',
           text: reason === '' ? t('claude-permission-denied', { tool: str(message.tool_name) ?? '' }) : t('claude-permission-denied-reason', { tool: str(message.tool_name) ?? '', reason }),
-          ...(callId === undefined ? {} : { callId }),
+          ...(callId === undefined ? {} : { callId, key: `permission-denied:${callId}` }),
         }]
       }
-      case 'api_retry':
-        return [{ type: 'notice', level: 'notice', key: 'api-retry', text: t('claude-api-retry', { attempt: String(num(message.attempt) ?? '?'), max: String(num(message.max_retries) ?? '?') }) }]
-      case 'informational':
-      case 'notification': {
-        const text = str(message.message) ?? str(message.text) ?? str(message.content)
-        if (text === undefined || text === '') return []
-        const level = str(message.level)
-        return [{ type: 'notice', level: level === 'warning' || level === 'error' ? level : 'info', text }]
+      case 'api_retry': {
+        // One passing toast, replaced attempt by attempt (same key).
+        const status = num(message.error_status)
+        return [{
+          type: 'notice',
+          level: 'notice',
+          key: 'api-retry',
+          text: t('claude-api-retry', { attempt: String(num(message.attempt) ?? '?'), max: String(num(message.max_retries) ?? '?'), detail: status === undefined ? '' : t('claude-api-retry-status', { status }) }),
+        }]
       }
+      case 'informational': {
+        // Levels (SDK): `info` is transcript-only, `notice` a quiet gray
+        // line — both a row here; `suggestion` a toast; `warning` both.
+        // A tool use's progress messages share a key (deduplicated).
+        const text = str(message.content) ?? str(message.message) ?? str(message.text)
+        if (text === undefined || text.trim() === '') return []
+        const level = str(message.level)
+        const toolUse = str(message.tool_use_id)
+        return [{
+          type: 'notice',
+          level: level === 'warning' || level === 'error' ? 'warning' : level === 'suggestion' ? 'notice' : 'info',
+          text,
+          ...(toolUse === undefined ? {} : { key: `informational:${toolUse}` }),
+        }]
+      }
+      case 'notification': {
+        // The REPL notification queue: `low` a row, `medium` a toast,
+        // `high` / `immediate` a warning; the CLI's key dedupes.
+        const text = str(message.text) ?? str(message.message) ?? str(message.content)
+        if (text === undefined || text.trim() === '') return []
+        const priority = str(message.priority)
+        const key = str(message.key)
+        return [{
+          type: 'notice',
+          level: priority === 'high' || priority === 'immediate' ? 'warning' : priority === 'medium' ? 'notice' : 'info',
+          text,
+          ...(key === undefined || key === '' ? {} : { key: `notification:${key}` }),
+        }]
+      }
+      case 'memory_recall': {
+        // The CLI's "Recalled from memory" line, as a transcript row.
+        const memories = arr(message.memories)
+        if (memories.length === 0) return []
+        return [{
+          type: 'notice',
+          level: 'info',
+          key: 'memory-recall',
+          text: message.mode === 'synthesize' ? t('claude-memory-synthesized') : t('claude-memory-recalled', { count: memories.length }),
+        }]
+      }
+      case 'elicitation_complete':
+        // The session closes the URL elicitation it names (dialogs.ts).
+        return []
       case 'local_command_output': {
         const text = str(message.content) ?? str(message.output)
         return text === undefined || text === '' ? [] : [{ type: 'notice', level: 'info', text }]
@@ -1077,7 +1169,24 @@ export function createClaudeTranslator(options: ClaudeTranslatorOptions) {
       }
       case 'model_refusal_fallback': {
         const model = str(message.fallback_model) ?? str(message.model)
-        return model === undefined ? [] : [{ type: 'model.changed', model, source: 'fallback' }, { type: 'notice', level: 'warning', text: t('claude-model-fallback', { model }) }]
+        if (model === undefined) return []
+        const original = str(message.original_model) ?? currentModel
+        const category = str(message.api_refusal_category)
+        // `local`: only a subagent / side question fell back; the session
+        // model is unchanged.
+        if (message.scope === 'local') return [{ type: 'notice', level: 'info', key: 'model-fallback-local', text: t('claude-model-fallback-local', { model, original }) }]
+        const out: AgentEvent[] = []
+        if (model !== currentModel) {
+          currentModel = model
+          out.push({ type: 'model.changed', model, source: 'fallback' })
+        }
+        out.push({ type: 'notice', level: 'warning', key: 'model-fallback', text: t('claude-model-fallback', { model, original, category: category === undefined || category === '' ? '' : t('claude-refusal-category-suffix', { category }) }) })
+        return out
+      }
+      case 'model_refusal_no_fallback': {
+        const model = str(message.original_model) ?? currentModel
+        const category = str(message.api_refusal_category)
+        return [{ type: 'notice', level: 'warning', key: 'model-refusal', text: t('claude-model-refused', { model, category: category === undefined || category === '' ? '' : t('claude-refusal-category-suffix', { category }) }) }]
       }
       default:
         debug(`claude: system/${subtype ?? '?'} ignored`)
@@ -1130,7 +1239,13 @@ export function createClaudeTranslator(options: ClaudeTranslatorOptions) {
           const utilization = num(rec(value)?.utilization)
           return utilization === undefined ? [] : [{ name, utilization, ...(num(rec(value)?.resetsAt) === undefined ? {} : { resetsAt: num(rec(value)?.resetsAt) }) }]
         })
-        return [{ type: 'rate-limit', info: { windows } }]
+        return [{ type: 'rate-limit', info: { windows } }, ...rateLimitNotice(info)]
+      }
+      case 'auth_status': {
+        // Progress output is the CLI's own sign-in flow (none in headless
+        // use); only an error is the user's business.
+        const error = str(message.error)
+        return error === undefined || error.trim() === '' ? [] : [{ type: 'notice', level: 'error', key: 'auth-status', text: t('claude-auth-status-error', { error }) }]
       }
       case 'conversation_reset':
         return [{ type: 'session.reset', trigger: str(message.trigger) ?? 'reset' }]

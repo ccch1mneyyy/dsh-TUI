@@ -20,6 +20,12 @@
  *   `permissions` / `questions` capabilities. While prompts are parked the
  *   session is `requires-action`. Pending prompts are always settled: on
  *   answer, on the SDK's abort signal, at a forced turn close, on dispose.
+ * - MCP elicitation and the CLI's user dialogs (Phase 5b, dialogs.ts) park
+ *   the same way (`question.request`), answered through the same
+ *   `questions` capability; `system/elicitation_complete` closes a URL one.
+ * - A `conversation_reset` (a plan-mode exit that clears the context) moves
+ *   the CLI to a new session id: the next frame names it, and from then on
+ *   it is this session's id (ref, fork, rewind, reconnect, transcript).
  * - Disposal: deny pending callbacks → close the inbox (stdin EOF, the CLI
  *   exits on its own) → `close()` the query → abort the controller; then wait
  *   (bounded) for the consumer loop. Idempotent.
@@ -37,6 +43,7 @@ import { CLAUDE_BACKEND_ID, CLI_CAPABILITY, cliVersionDrift, VALIDATED_CLI_VERSI
 import { CLAUDE_OAUTH_PROVIDER, detectClaudeAuth, isAuthFailure, type ClaudeAuthPlan } from './auth.js'
 import { accountView, createClaudeControls } from './controls.js'
 import { buildQueryOptions, type StartPermissionMode } from './options.js'
+import { createClaudeDialogBridge, SUPPORTED_DIALOG_KINDS } from './dialogs.js'
 import { createClaudePermissionBridge, WITHDRAWN_MESSAGE } from './permissions.js'
 import { createStderrSink, type ClaudeExecutable } from './process.js'
 import { memoryClaudePrefs, type ClaudePrefs } from './prefs.js'
@@ -202,6 +209,11 @@ export async function openClaudeSession(input: ClaudeSessionDeps): Promise<Agent
   const resumeStart = resume?.start
   const compactedFrom = resume?.compactedFrom
   let replayHistory: readonly AgentEvent[] | undefined = resume?.events
+  /** The CLI's current session id: the opened one until a
+   *  `conversation_reset` moves the CLI to a new one. */
+  let currentSessionId = deps.sessionId
+  /** A reset was seen; the next frame naming another id adopts it. */
+  let resetPending = false
   const clock = deps.clock ?? REAL_CLOCK
   const forceSettleMs = deps.forceSettleMs ?? 30_000
   const prefs = deps.prefs ?? memoryClaudePrefs()
@@ -281,8 +293,24 @@ export async function openClaudeSession(input: ClaudeSessionDeps): Promise<Agent
       if (next === asking) return
       asking = next
       if (disposing) return
-      if (next) emit([{ type: 'session.status', status: 'requires-action' }], 'none')
-      else if (translator.turnOpen) emit([{ type: 'session.status', status: 'running' }], 'none')
+      if (next && !dialogsOpen) emit([{ type: 'session.status', status: 'requires-action' }], 'none')
+      else if (!next && !dialogsOpen && translator.turnOpen) emit([{ type: 'session.status', status: 'running' }], 'none')
+    },
+  })
+
+  /** MCP elicitation and user dialogs (dialogs.ts): parked like prompts. */
+  let dialogsOpen = false
+  const dialogs = createClaudeDialogBridge({
+    emit: events => emit(events),
+    debug: deps.host.debug,
+    closing: () => disposing,
+    onPendingChange: count => {
+      const next = count > 0
+      if (next === dialogsOpen) return
+      dialogsOpen = next
+      if (disposing) return
+      if (next && !asking) emit([{ type: 'session.status', status: 'requires-action' }], 'none')
+      else if (!next && !asking && translator.turnOpen) emit([{ type: 'session.status', status: 'running' }], 'none')
     },
   })
 
@@ -314,13 +342,16 @@ export async function openClaudeSession(input: ClaudeSessionDeps): Promise<Agent
         cwd: deps.cwd,
         // A reconnect resumes the same session (same id, same transcript);
         // the SDK refuses `sessionId` together with `resume`.
-        ...(resume ? { resume: deps.sessionId } : { sessionId: deps.sessionId }),
+        ...(resume ? { resume: currentSessionId } : { sessionId: currentSessionId }),
         permissionMode: (translator.mode ?? deps.start.mode) as StartPermissionMode['mode'],
         executable: deps.executable.path,
         env: authPlan.env,
         // The route pin of an injected subscription token (auth.ts).
         ...(authPlan.settings === undefined ? {} : { settings: authPlan.settings }),
         canUseTool: bridge.canUseTool,
+        onElicitation: dialogs.onElicitation,
+        onUserDialog: dialogs.onUserDialog,
+        supportedDialogKinds: SUPPORTED_DIALOG_KINDS,
         stderr: stderrSink,
         abortController,
         ...(startModel === undefined ? {} : { model: startModel }),
@@ -347,6 +378,7 @@ export async function openClaudeSession(input: ClaudeSessionDeps): Promise<Agent
     clearForceTimer()
     // Rule 4 (design §4.7): pending prompts are denied before the CLI goes.
     bridge.settleAll()
+    dialogs.settleAll()
     stopRun(run)
   }
 
@@ -392,8 +424,33 @@ export async function openClaudeSession(input: ClaudeSessionDeps): Promise<Agent
     return result
   }
 
+  /** The CLI continues under another session id (after a reset). */
+  const adoptSessionId = (next: string): void => {
+    const previous = currentSessionId
+    currentSessionId = next
+    deps.host.debug(`claude: the session continues as ${next} (was ${previous})`)
+    try {
+      prefs.touch(next)
+      if (prefs.read().lastSession === previous) prefs.write({ lastSession: next })
+    } catch (error) {
+      deps.host.debug(`claude: prefs update after reset failed (${errorText(error)})`)
+    }
+  }
+
   const afterMessage = (message: unknown, events: readonly AgentEvent[]): void => {
     const value = rec(message)
+    if (value?.type === 'system' && value.subtype === 'elicitation_complete' && typeof value.mcp_server_name === 'string' && typeof value.elicitation_id === 'string') {
+      dialogs.complete(value.mcp_server_name, value.elicitation_id)
+    }
+    // Probe (Phase 5b, claude-sdk-probe-5b `reset`): after a reset the CLI
+    // runs under a NEW session id, named by the frames that follow (not the
+    // frame's `new_conversation_id`).
+    if (value?.type === 'conversation_reset') {
+      resetPending = true
+    } else if (resetPending && typeof value?.session_id === 'string' && value.session_id !== '' && value.session_id !== currentSessionId) {
+      resetPending = false
+      adoptSessionId(value.session_id)
+    }
     if (value?.type === 'result' || (value?.type === 'system' && value.subtype === 'session_state_changed' && value.state === 'idle')) {
       clearForceTimer()
     }
@@ -511,6 +568,7 @@ export async function openClaudeSession(input: ClaudeSessionDeps): Promise<Agent
   const stopForReconnect = (): { readonly unstarted: readonly string[] } => {
     const previous = run
     bridge.settleAll(WITHDRAWN_MESSAGE)
+    dialogs.settleAll()
     clearForceTimer()
     emit(translator.forceCloseTurn({ kind: 'aborted' }))
     const unstarted = translator.unstartedInputs()
@@ -677,7 +735,9 @@ export async function openClaudeSession(input: ClaudeSessionDeps): Promise<Agent
   }
 
   /** This session in the backend's reference vocabulary. */
-  const ownRef: AgentSessionRef = { backendId: CLAUDE_BACKEND_ID, sessionId: deps.sessionId }
+  /** This session in the backend's reference vocabulary (its id follows a
+   *  conversation reset). */
+  const ownRef: AgentSessionRef = { backendId: CLAUDE_BACKEND_ID, get sessionId() { return currentSessionId } }
 
   /** The live query's checkpoint restore (`enableFileCheckpointing`). */
   const rewindFiles = async (anchor: string, dryRun: boolean): Promise<RewindPreview> => {
@@ -704,7 +764,7 @@ export async function openClaudeSession(input: ClaudeSessionDeps): Promise<Agent
     const fork = async (options: { readonly upToMessageId?: string; readonly title?: string }): Promise<AgentSessionRef> => {
       // Nothing to copy before the CLI wrote the transcript.
       if (!persisted) throw new Error(t('claude-fork-empty'))
-      const forked = await store.forkSession(deps.sessionId, { dir: deps.cwd, ...options })
+      const forked = await store.forkSession(currentSessionId, { dir: deps.cwd, ...options })
       return { backendId: CLAUDE_BACKEND_ID, sessionId: forked.sessionId }
     }
     return {
@@ -718,7 +778,7 @@ export async function openClaudeSession(input: ClaudeSessionDeps): Promise<Agent
           if (mode !== 'files') {
             // Resolve the cut before touching any file: a conversation the
             // rewind cannot cut must not leave the files rewound alone.
-            const chain = await store.getSessionMessages(deps.sessionId, { dir: deps.cwd, includeSystemMessages: true })
+            const chain = await store.getSessionMessages(currentSessionId, { dir: deps.cwd, includeSystemMessages: true })
             if (!chain.some(message => message.uuid === anchor)) return { kind: 'refused', reason: t('claude-rewind-not-found') }
             cut = rewindCutPoint(chain, anchor)
             if (cut === undefined) return { kind: 'refused', reason: t('rewind-first-message') }
@@ -760,7 +820,7 @@ export async function openClaudeSession(input: ClaudeSessionDeps): Promise<Agent
     cwd: deps.cwd,
     get status(): AgentSessionStatus {
       if (status === 'disposed') return 'disposed'
-      if (bridge.size > 0) return 'requires-action'
+      if (bridge.size > 0 || dialogs.size > 0) return 'requires-action'
       return translator.turnOpen ? 'running' : status
     },
     capabilities: {
@@ -769,8 +829,14 @@ export async function openClaudeSession(input: ClaudeSessionDeps): Promise<Agent
         pending: () => bridge.pendingViews(),
       },
       questions: {
-        respond: (requestId, answers) => bridge.respondQuestion(requestId, answers),
-        cancel: requestId => bridge.cancelQuestion(requestId),
+        respond: (requestId, answers) => {
+          if (dialogs.owns(requestId)) dialogs.respond(requestId, answers)
+          else bridge.respondQuestion(requestId, answers)
+        },
+        cancel: requestId => {
+          if (dialogs.owns(requestId)) dialogs.cancel(requestId)
+          else bridge.cancelQuestion(requestId)
+        },
       },
       ...controls.capabilities,
       ...sessionStoreCapabilities(),
@@ -792,7 +858,7 @@ export async function openClaudeSession(input: ClaudeSessionDeps): Promise<Agent
         },
       },
       transcript: createClaudeTranscriptHistory({
-        sessionId: deps.sessionId,
+        sessionId: () => currentSessionId,
         cwd: deps.cwd,
         configDir: () => claudeConfigDir(authPlan.env.CLAUDE_CONFIG_DIR === undefined ? process.env : authPlan.env),
         ...(compactedFrom === undefined ? {} : { compactedFrom }),
@@ -819,7 +885,7 @@ export async function openClaudeSession(input: ClaudeSessionDeps): Promise<Agent
       native: {
         claude: {
           kind: 'claude',
-          sessionId: deps.sessionId,
+          get sessionId() { return currentSessionId },
           get cliVersion() { return cliVersion },
           get cliCapabilities() { return cliCapabilities },
         },
@@ -898,6 +964,7 @@ export async function openClaudeSession(input: ClaudeSessionDeps): Promise<Agent
           if (disposing || !translator.turnOpen) return
           // The CLI never withdrew its prompts either: close the panels too.
           bridge.settleAll(WITHDRAWN_MESSAGE)
+          dialogs.settleAll()
           emit([
             ...translator.forceCloseTurn({ kind: 'aborted' }),
             { type: 'notice', level: 'warning', text: t('claude-cancel-forced') },

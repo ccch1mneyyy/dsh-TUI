@@ -150,6 +150,12 @@ export interface QuestionItemView {
   readonly options: readonly { readonly label: string; readonly description?: string }[]
   readonly multiSelect?: boolean
   readonly intent?: PlanReviewIntentView
+  /** Only the options answer it (no free-text row). */
+  readonly hideCustomInput?: boolean
+  /** Option labels selected / focused when the question first shows. */
+  readonly defaultSelected?: readonly string[]
+  /** A URL the question is about (rendered as a link where supported). */
+  readonly link?: string
 }
 
 /** One parked structured ask. */

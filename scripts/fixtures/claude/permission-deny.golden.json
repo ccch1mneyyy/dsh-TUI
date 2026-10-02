@@ -5,6 +5,7 @@
     "user.message",
     "session.ready",
     "rate-limit",
+    "notice",
     "step.start",
     "assistant.attempt.start",
     "delta:reasoning-tokens",
@@ -47,6 +48,10 @@
     {
       "kind": "user",
       "text": "Use the Write tool to create denied.txt containing x. If it is refused, reply with exactly: refused"
+    },
+    {
+      "kind": "notice",
+      "text": "Approaching the 7d usage limit (87%) — resets in 1d 0h"
     },
     {
       "kind": "reasoning",
@@ -95,7 +100,9 @@
     },
     "todos": [],
     "compaction": null,
-    "notices": [],
+    "notices": [
+      "Approaching the 7d usage limit (87%) — resets in 1d 0h"
+    ],
     "subagents": [],
     "jobs": []
   }

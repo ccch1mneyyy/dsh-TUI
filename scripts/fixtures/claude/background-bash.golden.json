@@ -5,6 +5,7 @@
     "user.message",
     "session.ready",
     "rate-limit",
+    "notice",
     "step.start",
     "assistant.attempt.start",
     "delta:reasoning-tokens",
@@ -59,6 +60,10 @@
     {
       "kind": "user",
       "text": "Use the Bash tool with run_in_background set to true to run `sleep 3; echo bg-done`. Then reply with exactly: started"
+    },
+    {
+      "kind": "notice",
+      "text": "Approaching the 7d usage limit (87%) — resets in 1d 0h"
     },
     {
       "kind": "reasoning",
@@ -129,6 +134,7 @@
     "todos": [],
     "compaction": null,
     "notices": [
+      "Approaching the 7d usage limit (87%) — resets in 1d 0h",
       "Background job completed: sleep 3; echo bg-done (b93f4dfp3 · 0s)"
     ],
     "subagents": [],

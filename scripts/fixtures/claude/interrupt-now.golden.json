@@ -5,6 +5,7 @@
     "user.message",
     "session.ready",
     "rate-limit",
+    "notice",
     "step.start",
     "assistant.attempt.start",
     "delta:reasoning-tokens",
@@ -30,6 +31,10 @@
     {
       "kind": "user",
       "text": "Count from 1 to 200, one number per line, no other text."
+    },
+    {
+      "kind": "notice",
+      "text": "Approaching the 7d usage limit (87%) — resets in 1d 0h"
     },
     {
       "kind": "reasoning",
@@ -70,7 +75,9 @@
     },
     "todos": [],
     "compaction": null,
-    "notices": [],
+    "notices": [
+      "Approaching the 7d usage limit (87%) — resets in 1d 0h"
+    ],
     "subagents": [],
     "jobs": []
   }

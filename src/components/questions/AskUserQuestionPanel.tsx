@@ -38,6 +38,7 @@ import { isPlainReturnInput } from '../../utils/modifiers.js'
 import { actionMatches, comboDisplay, effectiveComboDisplay, primaryComboString } from '../../utils/keymap.js'
 import { flattenPasteInline } from '../../dsh-adapter/sanitize.js'
 import { readClipboard, type ClipboardRead } from '../../utils/clipboard.js'
+import { createHyperlink } from '../../terminal-utils/hyperlink.js'
 import { listWindow } from '../listWindow.js'
 
 /** Unmodified arrows switch questions; Ctrl/Alt/Super/Shift stay caret motion. */
@@ -76,6 +77,11 @@ export type AskUserQuestionPanelProps = {
      *  (single-select) shown on first display, before any saved draft — e.g.
      *  the models already enabled on a provider being edited. */
     readonly defaultSelected?: readonly string[]
+    /** A URL the question is about (an MCP server's sign-in page): one line
+     *  under the detail, an OSC 8 hyperlink where the terminal supports it
+     *  (plain otherwise; a scheme that is not http(s)/file/mailto shows
+     *  nothing — the notice row still names it). */
+    readonly link?: string
     /** Presentation intent tag (rc.6): 'plan-review' switches to the
      *  decision-card layout; an intent never changes the protocol. */
     readonly intent?: { readonly kind: 'plan-review'; readonly approve: string; readonly approveAlso?: readonly string[]; readonly decline?: string }
@@ -243,7 +249,9 @@ export function AskUserQuestionPanel({
   // Optional header/detail/input/error rows are charged explicitly. Long
   // lists then use fixed one/two-line rows so listWindow's budget is exact;
   // short questionnaires retain their existing wrapped presentation.
-  const detailRows = question.detail === undefined ? 0 : question.detail.split('\n').length + 1
+  const linkText = question.link === undefined || question.link === '' ? '' : createHyperlink(question.link)
+  const detailRows = (question.detail === undefined ? 0 : question.detail.split('\n').length + 1)
+    + (linkText === '' ? 0 : question.detail === undefined ? 2 : 1)
   const reservedRows = 12
     + (question.header === undefined ? 0 : 1)
     + detailRows
@@ -791,13 +799,14 @@ export function AskUserQuestionPanel({
         <Text bold wrap="wrap">
           {question.question}
         </Text>
-        {question.detail !== undefined && (
+        {(question.detail !== undefined || linkText !== '') && (
           <Box flexDirection="column" marginTop={1}>
-            {question.detail.split('\n').map((line, index) => (
+            {question.detail?.split('\n').map((line, index) => (
               <Text key={index} dimColor italic wrap="wrap">
                 {line}
               </Text>
             ))}
+            {linkText !== '' && <Text wrap="wrap">{linkText}</Text>}
           </Box>
         )}
       </Box>

@@ -5,6 +5,7 @@
     "user.message",
     "session.ready",
     "rate-limit",
+    "notice",
     "step.start",
     "assistant.attempt.start",
     "delta:reasoning-tokens",
@@ -30,6 +31,10 @@
     {
       "kind": "user",
       "text": "Think it through, then answer with just the number: what is 17 * 23?"
+    },
+    {
+      "kind": "notice",
+      "text": "Approaching the 7d usage limit (87%) — resets in 1d 0h"
     },
     {
       "kind": "reasoning",
@@ -58,7 +63,9 @@
     },
     "todos": [],
     "compaction": null,
-    "notices": [],
+    "notices": [
+      "Approaching the 7d usage limit (87%) — resets in 1d 0h"
+    ],
     "subagents": [],
     "jobs": []
   }

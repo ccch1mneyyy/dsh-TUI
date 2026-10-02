@@ -30,6 +30,9 @@ import { addUsageToBucket, emptyCostBuckets, estimateTokens, usageOutputTokens, 
 type Mutable<T> = { -readonly [K in keyof T]: T[K] }
 
 /** The channel state slice the projector writes. */
+/** Notice keys whose live toast is tracked (a repeat replaces it). */
+const MAX_KEYED_TOASTS = 32
+
 export interface ProjectionState extends Mutable<Pick<ChannelUi,
   | 'thinkingFold' | 'activeToolCount' | 'spinnerMode' | 'goal' | 'contextSegments' | 'tokens' | 'mainCost'
   | 'model' | 'lastUsage' | 'lastUserText' | 'responseChars' | 'tps' | 'cancelPending' | 'working'
@@ -148,6 +151,10 @@ export function createChannelProjection(state: ProjectionState, deps: ChannelPro
   const lastTextDelta = new Map<ChatRow, string>()
   const stepKey = (turn: number, step: number): string => `${turn}:${step}`
   const touchRow = (row: ChatRow): void => { markChannelReadDirty(row); markChannelReadDirty(state.rows) }
+  /** The last keyed notice row (updated in place while it stays last). */
+  let keyedNoticeRow: { readonly key: string; readonly row: ChatRow } | undefined
+  /** The live toast of each notice key (a repeat replaces it). */
+  const keyedToasts = new Map<string, () => void>()
   const appendRow = (row: ChatRow): void => { state.rows.push(row); markChannelReadDirty(state.rows) }
   const removeRow = (row: ChatRow): void => {
     const index = state.rows.indexOf(row)
@@ -1126,14 +1133,37 @@ export function createChannelProjection(state: ProjectionState, deps: ChannelPro
         // `notice` is a passing toast; `warning`/`error` are both — the row
         // keeps the explanation next to the work it concerns, the toast makes
         // sure it is seen. Replay repaints rows only, never toasts.
+        //
+        // A `key` dedupes repeats of one condition (an API retry counting
+        // up, a limit warning): its toast replaces the key's previous toast,
+        // and its row is updated in place while that row is still the last
+        // one (once other rows follow, a new row keeps the history true).
         const text = cleanRenderText(event.text, NOTICE_CELLS)
         if (text === '') return
         if (event.level !== 'notice') {
-          appendRow({ id: deps.rowIds.value, kind: 'notice', text })
-          deps.rowIds.value += 1
+          const last = state.rows.at(-1)
+          if (event.key !== undefined && keyedNoticeRow?.key === event.key && last !== undefined && last === keyedNoticeRow.row) {
+            last.text = text
+            touchRow(last)
+          } else {
+            const row: ChatRow = { id: deps.rowIds.value, kind: 'notice', text }
+            appendRow(row)
+            deps.rowIds.value += 1
+            keyedNoticeRow = event.key === undefined ? undefined : { key: event.key, row }
+          }
         }
         if (!replaying && event.level !== 'info') {
-          deps.notify(text, event.level === 'notice' ? { timeoutMs: 4000 } : { color: event.level, timeoutMs: 8000 })
+          if (event.key !== undefined) keyedToasts.get(event.key)?.()
+          const dismiss = deps.notify(text, event.level === 'notice' ? { timeoutMs: 4000 } : { color: event.level, timeoutMs: 8000 })
+          if (event.key !== undefined) {
+            keyedToasts.delete(event.key)
+            keyedToasts.set(event.key, dismiss)
+            // Bounded: keys are per condition (a call, a tool use).
+            for (const stale of keyedToasts.keys()) {
+              if (keyedToasts.size <= MAX_KEYED_TOASTS) break
+              keyedToasts.delete(stale)
+            }
+          }
         }
         return
       }
@@ -1192,6 +1222,7 @@ export function createChannelProjection(state: ProjectionState, deps: ChannelPro
 
   /** Forget every per-session projection ledger (adoption, `/clear`). */
   function reset(): void {
+    keyedNoticeRow = undefined
     streaming = undefined
     reasoning = undefined
     sealedReasoning.length = 0

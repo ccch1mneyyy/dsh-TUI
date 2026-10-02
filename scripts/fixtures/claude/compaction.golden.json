@@ -9,6 +9,7 @@
     "delta:reasoning-tokens",
     "delta:reasoning-tokens",
     "rate-limit",
+    "notice",
     "delta:reasoning-tokens",
     "delta:reasoning-tokens",
     "delta:reasoning-tokens",
@@ -106,6 +107,10 @@
       "reasoningTokens": 428
     },
     {
+      "kind": "notice",
+      "text": "Approaching the 7d usage limit (87%) — resets in 1d 0h"
+    },
+    {
       "kind": "tool",
       "text": "",
       "tool": {
@@ -152,7 +157,9 @@
     },
     "todos": [],
     "compaction": null,
-    "notices": [],
+    "notices": [
+      "Approaching the 7d usage limit (87%) — resets in 1d 0h"
+    ],
     "subagents": [],
     "jobs": []
   }

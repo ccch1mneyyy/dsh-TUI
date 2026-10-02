@@ -5,6 +5,7 @@
     "user.message",
     "session.ready",
     "rate-limit",
+    "notice",
     "step.start",
     "assistant.attempt.start",
     "delta:reasoning-tokens",
@@ -38,6 +39,10 @@
       "text": "Write a five-line poem about the sea, one line per sentence, no title."
     },
     {
+      "kind": "notice",
+      "text": "Approaching the 7d usage limit (94%) — resets in 1d 0h"
+    },
+    {
       "kind": "reasoning",
       "text": "",
       "reasoningTokens": 281
@@ -64,7 +69,9 @@
     },
     "todos": [],
     "compaction": null,
-    "notices": [],
+    "notices": [
+      "Approaching the 7d usage limit (94%) — resets in 1d 0h"
+    ],
     "subagents": [],
     "jobs": []
   }

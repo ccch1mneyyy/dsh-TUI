@@ -5,6 +5,7 @@
     "user.message",
     "session.ready",
     "rate-limit",
+    "notice",
     "step.start",
     "assistant.attempt.start",
     "delta:reasoning-tokens",
@@ -99,6 +100,10 @@
       "text": "Use the Write tool to create notes.txt containing exactly the line: alpha. Then use the Edit tool to change alpha to beta. Reply done."
     },
     {
+      "kind": "notice",
+      "text": "Approaching the 7d usage limit (87%) — resets in 1d 0h"
+    },
+    {
       "kind": "reasoning",
       "text": "",
       "reasoningTokens": 679
@@ -168,7 +173,9 @@
     },
     "todos": [],
     "compaction": null,
-    "notices": [],
+    "notices": [
+      "Approaching the 7d usage limit (87%) — resets in 1d 0h"
+    ],
     "subagents": [],
     "jobs": []
   }

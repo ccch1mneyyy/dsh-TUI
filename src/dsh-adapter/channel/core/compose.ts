@@ -20,6 +20,7 @@
  * unavailable.
  */
 import type { Context } from '@deepseek-ai/cordis'
+import { markChannelReadDirty } from '../../../adapter/channel/read-view.js'
 import type { OAuthSetupHost } from '../../../adapter/ports/channel-settings.js'
 import type { AgentSession } from '../../../agent/session.js'
 import { createActivityProjection } from '../../../channel/activity.js'
@@ -414,7 +415,46 @@ export function createCoreChannel(
     retireAttachment: inputDelivery.retireAttachment,
     controls,
     hooks: () => extension.bind ?? {},
+    onReset: event => { resetConversation(event) },
   })
+  /**
+   * The backend reset the conversation in place (Claude `conversation_reset`:
+   * a plan-mode exit that clears the context, a fresh-session flow): what the
+   * view shows belonged to the discarded conversation — the rows, the
+   * subagent and job rosters, the usage and cost of it, its title — so it
+   * goes, as on a session switch, and a notice row says why. Queued inputs
+   * stay (the backend still runs them). Unlike the TUI's own view-only
+   * `/clear`, this follows a reset the backend made.
+   */
+  const resetConversation = (event: { readonly trigger: string }): void => {
+    state.rows.length = 0
+    markChannelReadDirty(state.rows)
+    rowIds.value = 0
+    feed.resetProjection()
+    extension.dropRows?.()
+    if (activityOwned()) activity.reset()
+    state.todos = []
+    state.sessionTitle = ''
+    state.tokens = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, peak: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, idle: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } }
+    state.mainCost = {}
+    state.subagentCost = []
+    state.costReport = undefined
+    state.lastUsage = undefined
+    state.contextSegments = { system: 0, prompt: 0, assistant: 0, thinking: 0, tools: 0 }
+    state.activeToolCount = 0
+    state.responseChars = 0
+    state.compaction = undefined
+    resetContextWarning()
+    // The history before the reset is another conversation's: "load
+    // earlier" never brings it back above this view.
+    clearedGeneration = state.agentBindingGeneration
+    const key = event.trigger === 'clear' ? 'conversation-reset-clear'
+      : event.trigger === 'plan_mode_exit' ? 'conversation-reset-plan'
+        : event.trigger === 'fresh_session' ? 'conversation-reset-fresh'
+          : 'conversation-reset'
+    state.rows.push({ id: rowIds.value++, kind: 'notice', text: t(key) })
+    state.emit()
+  }
 
   /** `!!` commands on their way to the session (`/new` waits them out). */
   const shellInputs = { started: 0, inFlight: 0 }

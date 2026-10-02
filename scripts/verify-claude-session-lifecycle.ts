@@ -314,6 +314,7 @@ const collect = (session: AgentSession) => {
     cwd: '/fixture/project', sessionId: 's', permissionMode: 'default', executable: undefined, env: {}, canUseTool: (() => undefined) as unknown as Options['canUseTool'],
     stderr: () => undefined, abortController: new AbortController(), replayUserMessages: true, model: 'haiku', effort: 'low',
     settings: { env: { ANTHROPIC_BASE_URL: 'https://api.anthropic.com' } },
+    onElicitation: (() => undefined) as unknown as Options['onElicitation'], onUserDialog: (() => undefined) as unknown as Options['onUserDialog'], supportedDialogKinds: ['refusal_fallback_prompt'],
   })
   const resumed = buildQueryOptions({
     cwd: '/fixture/project', resume: 's', permissionMode: 'default', executable: undefined, env: {}, canUseTool: (() => undefined) as unknown as Options['canUseTool'],

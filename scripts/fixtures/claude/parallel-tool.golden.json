@@ -5,6 +5,7 @@
     "user.message",
     "session.ready",
     "rate-limit",
+    "notice",
     "step.start",
     "assistant.attempt.start",
     "delta:reasoning-tokens",
@@ -64,6 +65,10 @@
     {
       "kind": "user",
       "text": "In ONE response, call the Read tool twice in parallel (two tool_use blocks in the same message): README.md and src/app.js. Then tell me the first line of each i…"
+    },
+    {
+      "kind": "notice",
+      "text": "Approaching the 7d usage limit (94%) — resets in 1d 0h"
     },
     {
       "kind": "reasoning",
@@ -131,7 +136,9 @@
     },
     "todos": [],
     "compaction": null,
-    "notices": [],
+    "notices": [
+      "Approaching the 7d usage limit (94%) — resets in 1d 0h"
+    ],
     "subagents": [],
     "jobs": []
   }

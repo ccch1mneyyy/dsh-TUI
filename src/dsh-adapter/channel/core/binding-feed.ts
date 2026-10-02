@@ -66,6 +66,10 @@ export function createSessionBatchRouter(deps: {
   /** Drop channel-side context attached to a discarded input (DSH pre-step
    *  attachments); absent where nothing is ever attached. */
   retireAttachment?(messageId: string): void
+  /** The backend reset the conversation in place (`session.reset`, live):
+   *  the events before it in the batch are projected first, those after it
+   *  land on the cleared view. Absent = the event is projected (ignored). */
+  onReset?(event: AgentEventOf<'session.reset'>): void
   warn(message: string): void
 }) {
   const reconcileRetiredProjection = (status: 'idle' | 'disposed'): void => {
@@ -153,8 +157,21 @@ export function createSessionBatchRouter(deps: {
       deps.state.emitStream()
       return
     }
-    // The one writer of the foreground transcript.
-    deps.projector.apply(events, meta)
+    // The one writer of the foreground transcript. A live conversation
+    // reset splits the batch: what came before it is projected first.
+    const onReset = meta.replay ? undefined : deps.onReset
+    if (onReset !== undefined && events.some(event => event.type === 'session.reset')) {
+      let start = 0
+      events.forEach((event, index) => {
+        if (event.type !== 'session.reset') return
+        if (index > start) deps.projector.apply(events.slice(start, index), meta)
+        onReset(event)
+        start = index + 1
+      })
+      if (start < events.length) deps.projector.apply(events.slice(start), meta)
+    } else {
+      deps.projector.apply(events, meta)
+    }
     if (meta.wake === 'frame') deps.state.emitStream()
     else if (meta.wake !== 'none') deps.state.emit()
   }
@@ -255,6 +272,8 @@ export function createBindingFeed(ctx: Context, deps: {
   retireAttachment(messageId: string): void
   controls: SessionControls
   hooks(): BindingFeedHooks
+  /** A live `session.reset` (see createSessionBatchRouter). */
+  onReset?(event: AgentEventOf<'session.reset'>): void
 }) {
   const { owner, binding, state, inputConvergence, controls } = deps
   // The projector reads its deps per use, so an extension can install its
@@ -266,6 +285,7 @@ export function createBindingFeed(ctx: Context, deps: {
     projector,
     inputConvergence,
     retireAttachment: deps.retireAttachment,
+    ...(deps.onReset === undefined ? {} : { onReset: deps.onReset }),
     warn: message => ctx.logger.warn(message),
   })
 

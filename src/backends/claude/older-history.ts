@@ -19,7 +19,9 @@ import { replayClaudeTranscript } from './replay.js'
 import { cursorBefore, headBoundary, locateClaudeTranscript, olderSlice, readTranscriptEntries, type OlderCursor } from './transcript-file.js'
 
 export interface ClaudeTranscriptHistoryDeps {
-  readonly sessionId: string
+  /** The session (a function when it can change: a conversation reset moves
+   *  the CLI to a new session id, whose file has no older history yet). */
+  readonly sessionId: string | (() => string)
   readonly cwd: string
   /** The CLI's config directory (where its `projects/` live). */
   configDir(): string
@@ -32,6 +34,8 @@ export interface ClaudeTranscriptHistoryDeps {
 
 export function createClaudeTranscriptHistory(deps: ClaudeTranscriptHistoryDeps): NonNullable<SessionCapabilities['transcript']> {
   const debug = deps.debug ?? (() => undefined)
+  const sessionIdOf = (): string => typeof deps.sessionId === 'function' ? deps.sessionId() : deps.sessionId
+  let boundId = sessionIdOf()
   let path: string | undefined
   let cursor: OlderCursor | 'start' | 'done' = deps.compactedFrom === undefined ? 'done' : 'start'
   /**
@@ -42,9 +46,20 @@ export function createClaudeTranscriptHistory(deps: ClaudeTranscriptHistoryDeps)
    */
   let parsed: { readonly size: number; readonly mtimeMs: number; readonly entries: readonly JsonRecord[]; byUuid?: Map<string, JsonRecord>; record?: readonly AgentEvent[] } | undefined
 
+  /** The session moved to another id: its file, no older segments known. */
+  const follow = (): void => {
+    const id = sessionIdOf()
+    if (id === boundId) return
+    boundId = id
+    path = undefined
+    parsed = undefined
+    cursor = 'done'
+  }
+
   const load = (): NonNullable<typeof parsed> => {
-    path ??= locateClaudeTranscript(deps.sessionId, deps.configDir())
-    if (path === undefined) throw new Error(t('claude-transcript-missing', { id: deps.sessionId }))
+    follow()
+    path ??= locateClaudeTranscript(boundId, deps.configDir())
+    if (path === undefined) throw new Error(t('claude-transcript-missing', { id: boundId }))
     const stat = statSync(path)
     if (parsed !== undefined && parsed.size === stat.size && parsed.mtimeMs === stat.mtimeMs) return parsed
     const { entries, badLines } = readTranscriptEntries(path)
@@ -62,7 +77,10 @@ export function createClaudeTranscriptHistory(deps: ClaudeTranscriptHistoryDeps)
       file.record ??= replay(file.entries.filter(entry => (entry.type === 'user' || entry.type === 'assistant') && entry.isSidechain !== true))
       return file.record
     },
-    hasOlder: () => cursor !== 'done',
+    hasOlder: () => {
+      follow()
+      return cursor !== 'done'
+    },
     older(): readonly AgentEvent[] {
       if (cursor === 'done') return []
       const file = load()

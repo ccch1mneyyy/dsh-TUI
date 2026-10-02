@@ -50,6 +50,9 @@ export interface QuestionItem {
   readonly hideCustomInput?: boolean
   /** Pre-checked option labels / default-focused option. */
   readonly defaultSelected?: readonly string[]
+  /** A URL the question is about: shown under it as a link (OSC 8 where
+   *  the terminal supports hyperlinks). */
+  readonly link?: string
 }
 
 /** One ask: a batch of questions plus its cancellation lifetime. */

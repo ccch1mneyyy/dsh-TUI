@@ -5,6 +5,7 @@
     "user.message",
     "session.ready",
     "rate-limit",
+    "notice",
     "step.start",
     "assistant.attempt.start",
     "delta:reasoning-tokens",
@@ -45,6 +46,10 @@
     {
       "kind": "user",
       "text": "Use the Write tool to create allowed.txt containing exactly: ok. Then reply with exactly: written"
+    },
+    {
+      "kind": "notice",
+      "text": "Approaching the 7d usage limit (94%) — resets in 1d 0h"
     },
     {
       "kind": "reasoning",
@@ -90,7 +95,9 @@
     },
     "todos": [],
     "compaction": null,
-    "notices": [],
+    "notices": [
+      "Approaching the 7d usage limit (94%) — resets in 1d 0h"
+    ],
     "subagents": [],
     "jobs": []
   }

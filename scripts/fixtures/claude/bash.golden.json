@@ -5,6 +5,7 @@
     "user.message",
     "session.ready",
     "rate-limit",
+    "notice",
     "step.start",
     "assistant.attempt.start",
     "delta:reasoning-tokens",
@@ -53,6 +54,10 @@
     {
       "kind": "user",
       "text": "Use the Bash tool to run `echo fixture-ok`, then use the Bash tool to run `ls /definitely-missing-dir`. Report both outcomes in one short sentence."
+    },
+    {
+      "kind": "notice",
+      "text": "Approaching the 7d usage limit (87%) — resets in 1d 0h"
     },
     {
       "kind": "reasoning",
@@ -113,7 +118,9 @@
     },
     "todos": [],
     "compaction": null,
-    "notices": [],
+    "notices": [
+      "Approaching the 7d usage limit (87%) — resets in 1d 0h"
+    ],
     "subagents": [],
     "jobs": []
   }

@@ -49,6 +49,9 @@ function storeRequest(request: QuestionRequestView, signal: AbortSignal): Questi
       options: question.options.map(option => ({ label: option.label, ...(option.description === undefined ? {} : { description: option.description }) })),
       ...(question.multiSelect === true ? { multiSelect: true } : {}),
       ...(question.intent === undefined ? {} : { intent: question.intent }),
+      ...(question.hideCustomInput === true ? { hideCustomInput: true } : {}),
+      ...(question.defaultSelected === undefined || question.defaultSelected.length === 0 ? {} : { defaultSelected: [...question.defaultSelected] }),
+      ...(question.link === undefined || question.link === '' ? {} : { link: question.link }),
     })),
   }
 }

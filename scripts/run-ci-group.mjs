@@ -660,6 +660,21 @@ const GROUPS = {
 // 的能力委托与持久化，channel 侧的原生模式标签、后端命令合并、/mcp、/context、
 // 订阅用量、/login 宿主，以及状态栏模式标签与 /context 面板的无头渲染。
     ["verify-claude-controls", ['node', '--import', 'tsx/esm', 'scripts/verify-claude-controls.tsx']],
+// Claude 的 MCP elicitation 与用户对话框（方案 §4.3/§4.7，Phase 5b，假 Query）：表单字段
+// → 问卷（枚举/布尔/多选/文本与数字校验、无效项重问、可选项可跳过）→ accept/decline/
+// cancel；URL 模式的提示行与链接、elicitation_complete 关闭；不支持的模式拒绝；
+// refusal_fallback_prompt 重试/取消/关闭、未声明种类直接 cancelled、重投同一答复；
+// 中断与释放收回面板；经 channel 桥与真实 QuestionStore 端到端，面板渲染链接。
+    ["verify-claude-dialogs", ['node', '--import', 'tsx/esm', 'scripts/verify-claude-dialogs.ts']],
+// Claude 提示审计（方案 §5.1，Phase 5b）：fixtures/claude/notices 下的消息夹具逐类
+// 断言（api_retry、模型拒绝回退/无回退、informational 级别、notification 优先级、
+// 限流告警/拒绝只报一次、permission_denied、auth_status 错误、memory_recall、
+// conversation_reset、elicitation_complete），投影器按 key 去重（toast 替换、行原地更新）。
+    ["verify-claude-notices", ['node', '--import', 'tsx/esm', 'scripts/verify-claude-notices.ts']],
+// Claude 对话重置（方案 §4.11，Phase 5b，假 Query）：conversation_reset → 清空行、
+// 名册、用量/费用/标题并加提示行，批内重置先投影其前的事件；之后按新会话 id
+// （ref、sessionRef、/fork、重连、启动器 resume 标记）；TUI 的 /clear 仍只清视图。
+    ["verify-claude-reset", ['node', '--import', 'tsx/esm', 'scripts/verify-claude-reset.ts']],
 // IDE 选区通道回归（PR #562）：纯函数（env 直连/lock 扫描与 workspace
 // 匹配过滤/hello_ack 解析/selection_changed 校验）、无 IDE 静默降级、
 // loopback 对连（token 握手 ACK、错误 token 换下一候选、断连清空）、
