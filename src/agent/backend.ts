@@ -9,6 +9,11 @@ import type { AgentSession } from './session.js'
 export interface BackendDetection {
   readonly installed: boolean
   readonly authenticated?: boolean
+  /**
+   * Whether a credential the backend can use was found without a network
+   * call: `unknown` when the backend cannot tell (a platform keychain).
+   */
+  readonly auth?: 'ok' | 'missing' | 'unknown'
   readonly version?: string
   /** A version outside the validated range (warn, never block). */
   readonly drift?: string
@@ -22,6 +27,25 @@ export type OpenTarget =
   | { readonly kind: 'resume'; readonly sessionId: string }
   | { readonly kind: 'fork'; readonly from: AgentSessionRef; readonly anchor?: string }
 
+/** A usable OAuth access token and its expiry (epoch ms). Token material:
+ *  only ever handed to the backend's child process, never logged. */
+export interface OAuthAccess {
+  readonly access: string
+  readonly expires: number
+}
+
+/** The host's stored OAuth login for one provider (dsh-auth on DSH hosts). */
+export interface OAuthCredentialSource {
+  /**
+   * The stored credential, refreshed first when it is about to expire (or
+   * always, with `force`); undefined when none is stored. Rejects when a
+   * needed refresh fails.
+   */
+  fresh(options?: { readonly force?: boolean }): Promise<OAuthAccess | undefined>
+  /** Whether a credential is stored, without touching the network. */
+  stored(): Promise<boolean>
+}
+
 /** Host services a backend may use while detecting or opening. */
 export interface BackendHost {
   readonly cwd: string
@@ -32,6 +56,9 @@ export interface BackendHost {
   /** One line a backend child process wrote to stderr (never the terminal:
    *  the host logs it and folds repeats into notices). */
   stderr?(line: string): void
+  /** The host's stored OAuth login for a provider id (`anthropic`), when the
+   *  host keeps one. */
+  oauthCredential?(provider: string): OAuthCredentialSource | undefined
 }
 
 /** One session row of an offline catalog. */

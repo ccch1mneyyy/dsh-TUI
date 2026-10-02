@@ -33,6 +33,8 @@ export function channelCapabilities(input: {
     subagents: input.dsh || caps.subagents !== undefined,
     tasks: input.dsh || caps.tasks !== undefined,
     mcp: input.dsh || caps.mcp !== undefined,
+    context: input.dsh || caps.context !== undefined,
+    login: input.dsh || caps.auth !== undefined,
   }
   return Object.freeze({
     backendId: input.backendId,

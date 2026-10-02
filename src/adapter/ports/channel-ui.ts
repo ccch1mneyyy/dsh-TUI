@@ -1,10 +1,22 @@
 /** Host-owned in-process Channel contract. No runtime or upstream imports. */
-import type { ChatRow, AgentStatus, TokenUsage, SessionCostByModel, SubagentCostEntry, NotificationItem, ChannelGoal, TodoPanelItem, LoadedContext, PendingMessage, ChannelSceneMetadata, SubagentState, SubagentControl, BackgroundJobState, JobControl, StagedImageInput, StagedImageHandle, ComposerImageRef, ComposerSubmission, ExternalCommandOutcome, TranscriptImage, ResumeResult, EffortOption, PermissionPresetSnapshot, PresetOption, LlmModelInfo, LlmProviderInfo, SkillInfo, CredentialStatus, AgentViewRow, AgentViewDispatchResult, BackgroundResult, RawTrajEvent, ChannelSelection, CompactionStatus, ChannelCapabilities, ChannelCostReport, ChannelSessionRef } from './channel-view.js'
+import type { ChatRow, AgentStatus, TokenUsage, SessionCostByModel, SubagentCostEntry, NotificationItem, ChannelGoal, TodoPanelItem, LoadedContext, PendingMessage, ChannelSceneMetadata, SubagentState, SubagentControl, BackgroundJobState, JobControl, StagedImageInput, StagedImageHandle, ComposerImageRef, ComposerSubmission, ExternalCommandOutcome, TranscriptImage, ResumeResult, EffortOption, PermissionPresetSnapshot, PresetOption, LlmModelInfo, LlmProviderInfo, SkillInfo, CredentialStatus, AgentViewRow, AgentViewDispatchResult, BackgroundResult, RawTrajEvent, ChannelSelection, CompactionStatus, ChannelCapabilities, ChannelCostReport, ChannelRateLimit, ChannelSessionRef } from './channel-view.js'
 import type { SpinnerMode, ToolBackground, ScrollGutterMode, PageMarginSetting, StatusBarConfig, SessionModeSpec, SplashFontSetting, JobGroupFoldMode } from './channel-display.js'
 import type { LocalCommand, CommandCompletion, BalanceResult, FileCandidate, RecapOutcome } from './channel-catalog.js'
 import type { TuiRewindMode, SessionTreeData, SessionSummary, PreviewEntry, ForeignSource, ForeignSessionRow, ForeignImportOutcome } from './channel-session.js'
 import type { TuiWorkspaceTarget, TuiWorkspaceCommand, TuiWorkspaceCommandResult, TuiWorkspaceEntry } from './channel-workspace.js'
-import type { ProviderSetupHost, OAuthProviderStatus, SettingsHost, TuiSettingsSection } from './channel-settings.js'
+import type { ProviderSetupHost, OAuthProviderStatus, OAuthSetupHost, SettingsHost, TuiSettingsSection } from './channel-settings.js'
+
+/** One backend session's sign-in surface (`ChannelUi.backendAuth`). */
+export interface BackendAuthHost {
+  /** The host OAuth provider id the backend signs in with (`anthropic`). */
+  readonly provider: string | undefined
+  /** The host's OAuth sign-in surface (dsh-auth), when mounted. */
+  readonly oauth: OAuthSetupHost | undefined
+  /** Localized status lines (credential source, account; never tokens). */
+  status(): Promise<readonly string[]>
+  /** Restart the backend on the freshly stored credential. */
+  reconnect(): Promise<void>
+}
 
 /**
  * The public channel surface a screen renders: the full transcript and live
@@ -47,6 +59,9 @@ export interface ChannelUi {
    *  `total_cost_usd`), or undefined when the backend reports none — the
    *  status line then falls back to its local estimate. */
   readonly costReport: ChannelCostReport | undefined
+  /** Subscription usage windows the backend reported (Claude
+   *  `rate_limit_event`), or undefined when it reports none. */
+  readonly rateLimit: ChannelRateLimit | undefined
   /** `dsh-tui.recapOnOpen` (default on): auto-summarize the session tail
    *  into the dim AutoRecapRow when the session opens/resumes. Read live
    *  (settings service), so a `/settings` change applies on the next
@@ -496,6 +511,13 @@ export interface ChannelUi {
   /** OAuth sign-in states from a mounted dsh-auth-style plugin; undefined
    *  without the plugin, so `/login` renders exactly what it did before. */
   oauthProviderStatuses(): Promise<readonly OAuthProviderStatus[] | undefined>
+  /**
+   * The bound backend session's own sign-in for `/login` (status lines, the
+   * host's OAuth sign-in preselected on the backend's provider, reconnect on
+   * the fresh credential); undefined for a DSH session, whose `/login`
+   * reports the DSH credentials.
+   */
+  backendAuth(): BackendAuthHost | undefined
   /**
    * Runtime capabilities for the `/settings` screen, over the settings /
    * credentials seams; undefined when the composition lacks the settings

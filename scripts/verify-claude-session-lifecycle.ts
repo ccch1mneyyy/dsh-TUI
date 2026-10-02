@@ -307,8 +307,20 @@ const collect = (session: AgentSession) => {
   check('profile: no executable path → SDK bundled binary', options.pathToClaudeCodeExecutable === undefined)
   // (`pathToClaudeCodeExecutable` is set only when an executable was found.)
   const set = Object.entries(OPTION_POLICY).filter(([key, policy]) => policy === 'set' && key !== 'pathToClaudeCodeExecutable').map(([key]) => key).sort()
-  const built = Object.keys(options).sort()
+  // The conditional ones: the persisted model/effort, and `resume` in place
+  // of `sessionId` for a credential reconnect.
+  const withChoices = buildQueryOptions({
+    cwd: '/fixture/project', sessionId: 's', permissionMode: 'default', executable: undefined, env: {}, canUseTool: (() => undefined) as unknown as Options['canUseTool'],
+    stderr: () => undefined, abortController: new AbortController(), replayUserMessages: true, model: 'haiku', effort: 'low',
+  })
+  const resumed = buildQueryOptions({
+    cwd: '/fixture/project', resume: 's', permissionMode: 'default', executable: undefined, env: {}, canUseTool: (() => undefined) as unknown as Options['canUseTool'],
+    stderr: () => undefined, abortController: new AbortController(), replayUserMessages: true,
+  })
+  const built = [...new Set([...Object.keys(withChoices), ...Object.keys(resumed)])].sort()
   check('profile: exactly the `set` options are built', JSON.stringify(set) === JSON.stringify(built), { set, built })
+  check('profile: a reconnect resumes instead of naming a new session', resumed.resume === 's' && resumed.sessionId === undefined && options.sessionId === 's' && options.resume === undefined)
+  check('profile: no model/effort unless chosen', options.model === undefined && options.effort === undefined && withChoices.model === 'haiku' && withChoices.effort === 'low')
   const fakeSettings = (defaultMode: unknown) => ({
     resolveSettings: () => Promise.resolve({ effective: { permissions: { defaultMode } } }),
     filterEscalatingDefaultMode: (resolved: unknown) => (resolved as { effective: unknown }).effective,

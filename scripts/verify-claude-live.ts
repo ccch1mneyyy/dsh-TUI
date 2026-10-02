@@ -14,7 +14,11 @@
  *     channel's interaction bridge, in `default` mode: a Write approved once
  *     writes the file; a Bash rejected with a reason errors its card and the
  *     model carries on; an interrupt while a prompt is pending closes the
- *     panel and aborts the turn.
+ *     panel and aborts the turn;
+ *  6. controls (Phase 3): `/model` haiku → sonnet in place (confirmed by the
+ *     reply's model), `/effort low`, Shift+Tab's acceptEdits then a Write
+ *     with no prompt, `/compact` (compaction start/end). The persisted
+ *     `/model` / `/effort` choice file is restored afterwards.
  *
  * `DSH_TUI_CLAUDE_LIVE_SECTIONS=basic,permissions` limits the run (default:
  * all) — each section costs real turns.
@@ -37,7 +41,9 @@ const { setLang } = await import('../src/i18n.js')
 const { PermissionStore } = await import('../src/channel/permissions.js')
 const { QuestionStore } = await import('../src/channel/questions.js')
 const { attachInteraction } = await import('../src/channel/interaction.js')
-const sections = new Set((process.env.DSH_TUI_CLAUDE_LIVE_SECTIONS ?? 'basic,permissions').split(',').map(name => name.trim()))
+const sections = new Set((process.env.DSH_TUI_CLAUDE_LIVE_SECTIONS ?? 'basic,permissions,controls,controls-turns').split(',').map(name => name.trim()))
+/** `controls` without `controls-turns`: the read-only reports only (no turn). */
+class SkipTurns extends Error {}
 type AgentEvent = import('../src/agent/events.js').AgentEvent
 type AgentSession = import('../src/agent/session.js').AgentSession
 
@@ -199,6 +205,59 @@ try {
     link.release()
     await session.dispose()
     check('approvals: no claude child survives', (await waitForNoChildren()).length === 0, claudeChildren())
+  }
+
+  // 6. controls
+  if (sections.has('controls')) {
+    const { DATA_DIR } = await import('../src/utils/paths.js')
+    const prefsFile = join(DATA_DIR, 'backends', 'claude', 'prefs.json')
+    const savedPrefs = existsSync(prefsFile) ? readFileSync(prefsFile, 'utf8') : undefined
+    process.env.DSH_TUI_CLAUDE_PERMISSION_MODE = 'default'
+    const session = await claudeBackend.open({ kind: 'create', cwd: project }, host)
+    delete process.env.DSH_TUI_CLAUDE_PERMISSION_MODE
+    try {
+      const live = watch(session)
+      const caps = session.capabilities
+      // Read-only reports first (no turn needed): context usage, account, /login.
+      const usage = await caps.context!.usage('summary')
+      check('controls: context usage reports a window and its categories', usage.max !== undefined && usage.max > 0 && usage.categories.some(category => category.kind === 'used' && category.tokens > 0), { max: usage.max, categories: usage.categories.length })
+      const account = await caps.account!.info()
+      check('controls: account info has a provider (never an email)', account.provider !== undefined && !JSON.stringify(account).includes('@'))
+      const auth = await caps.auth!.status()
+      check('controls: /login status names a source', auth.lines.length > 0 && auth.lines[0]!.length > 0, auth.lines)
+      if (!sections.has('controls-turns')) throw new SkipTurns()
+      const models = await caps.models!.list()
+      check('controls: the model catalog lists haiku and sonnet', models.some(model => model.id === 'haiku') && models.some(model => model.id === 'sonnet'), models.map(model => model.id))
+      check('controls: switch to sonnet in place', (await caps.models!.set({ model: 'sonnet' })).kind === 'switched')
+      const levels = caps.effort!.levels().map(level => level.id)
+      check('controls: sonnet offers effort levels', levels.includes('low'), levels)
+      await caps.effort!.set('low')
+      check('controls: /effort low', caps.effort!.current() === 'low')
+      await session.submit({ text: 'Reply with exactly: sonnet-ok', clientMessageId: crypto.randomUUID() }, 'followup')
+      await live.until(() => turnEnds(live.events).length >= 1, 120_000, 'sonnet turn end')
+      const replyModel = live.events.filter((event): event is Extract<AgentEvent, { type: 'assistant.attempt.start' }> => event.type === 'assistant.attempt.start').at(-1)?.model ?? ''
+      check('controls: the reply ran on sonnet (message_start.model)', /sonnet/iu.test(replyModel) && turnEnds(live.events)[0]?.reason.kind === 'completed', replyModel)
+      check('controls: back to haiku', (await caps.models!.set({ model: 'haiku' })).kind === 'switched')
+
+      await caps.modes!.set('acceptEdits')
+      check('controls: Shift+Tab mode acceptEdits is current', caps.modes!.current() === 'acceptEdits')
+      await session.submit({ text: 'Use the Write tool to create accepted.txt containing exactly: accepted. Reply done.', clientMessageId: crypto.randomUUID() }, 'followup')
+      await live.until(() => turnEnds(live.events).length >= 2, 120_000, 'acceptEdits turn end')
+      const lastModel = live.events.filter((event): event is Extract<AgentEvent, { type: 'assistant.attempt.start' }> => event.type === 'assistant.attempt.start').at(-1)?.model ?? ''
+      check('controls: the switch back ran on haiku', /haiku/iu.test(lastModel), lastModel)
+      check('controls: acceptEdits wrote without a prompt', existsSync(join(project, 'accepted.txt')) && !live.events.some(event => event.type === 'permission.request'))
+
+      await caps.compact!.run()
+      await live.until(() => live.events.some(event => event.type === 'compaction.end'), 180_000, 'compaction end')
+      check('controls: /compact compacts (start + committed end)', live.events.some(event => event.type === 'compaction.start') && live.events.some(event => event.type === 'compaction.end' && event.ok))
+    } catch (error) {
+      if (!(error instanceof SkipTurns)) throw error
+    } finally {
+      await session.dispose()
+      if (savedPrefs === undefined) rmSync(prefsFile, { force: true })
+      else writeFileSync(prefsFile, savedPrefs)
+    }
+    check('controls: no claude child survives', (await waitForNoChildren()).length === 0, claudeChildren())
   }
 } finally {
   rmSync(root, { recursive: true, force: true })

@@ -104,7 +104,9 @@ const clear = async (): Promise<void> => {
 try {
   // 固定窗:pacing the key handlers attach after the first frame.
   await sleep(400)
-  check('DSH-only commands are not offered', !channel.commandList.some(command => ['preset', 'tree', 'rewind', 'model', 'balance'].includes(command.name)))
+  check('DSH-only commands are not offered', !channel.commandList.some(command => ['preset', 'tree', 'rewind', 'balance'].includes(command.name)))
+  // Phase 3: the backend's own controls are served.
+  check('Claude controls are offered', ['model', 'effort', 'compact', 'context', 'mcp', 'login'].every(name => channel.commandList.some(command => command.name === name)), channel.commandList.map(command => command.name).join(' '))
   await type('/preset')
   stdin.write('\r')
   const refusal = t('cmd-unavailable-backend', { cmd: 'preset', backend: claudeBackend.descriptor.label })

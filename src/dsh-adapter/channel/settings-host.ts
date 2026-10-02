@@ -7,7 +7,7 @@ import type { OAuthProviderStatus, OAuthSetupHost, ProfilePathOp, ProviderSetupH
 import type { SettingsHost } from '../settingsEditor.js'
 import { settingsValue } from '../compat/settings.js'
 
-export function createSettingsHosts(ctx: Context, assertActive: () => void = () => undefined): Pick<ChannelState, 'settingsHost' | 'providerSetup' | 'oauthProviderStatuses'> {
+export function createSettingsHosts(ctx: Context, assertActive: () => void = () => undefined): Pick<ChannelState, 'settingsHost' | 'providerSetup' | 'oauthProviderStatuses' | 'backendAuth'> {
   let settingsHostResolved = false
   let settingsHostCache: SettingsHost | undefined
   return {
@@ -318,6 +318,10 @@ export function createSettingsHosts(ctx: Context, assertActive: () => void = () 
         },
       }
     },
+
+    // The DSH session's sign-in is the DSH credentials `/login` reports; a
+    // non-DSH composition overrides this with its backend's own.
+    backendAuth: () => undefined,
 
     async oauthProviderStatuses(): Promise<readonly OAuthProviderStatus[] | undefined> {
       // Same optional seam the wizard's OAuth branch reads: absent plugin →

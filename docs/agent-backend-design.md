@@ -594,6 +594,7 @@ UI 映射：`subagent.*` → 现有 `SubagentActivityStore`/`SubagentRow`/`Subag
    - (b) 用户环境里的 `ANTHROPIC_API_KEY` / Bedrock·Vertex·Foundry env 原样透传；
    - (c) 本机 `claude login` 状态：不注入任何东西，SDK 自行发现（`[P1]` `apiKeySource:'none'` + `apiProvider:'firstParty'`）。
    三者都没有 → `detect()` 返回 `auth:'missing'`，Launchpad/`/login` 引导走 dsh-auth 的 `anthropic` 登录向导（现有 `runOAuthWizard`，`providerWizard.ts:953`）。
+   **Phase 3 实施偏差/实测**：云厂商路由（`CLAUDE_CODE_USE_BEDROCK/VERTEX/FOUNDRY`）先于 (a)——CLI 在云路由下忽略 Anthropic 凭证，注入令牌只会让 `/login` 报错来源；启动时 dsh-auth 刷新失败不阻断，回落 (b)/(c) 并给 notice。无效 OAuth 令牌的实测失败形态是 `assistant.error:'authentication_failed'` + `result{subtype:'success', is_error:true, terminal_reason:'api_error', result:'Failed to authenticate. API Error: 401 …'}`（不含 "Please run /login"）；仅一个失败 turn 的会话可用 `resume` 续上。
 2. 令牌生命周期：spawn 前经 dsh-auth 读取（它会在过期前刷新）；会话中收到 `assistant.error:'authentication_failed'` 或 `result{is_error, result:/Please run \/login/}` → 刷新一次 → `close()` 当前 query → `query({resume: sessionId})` 带新 env 透明重连（只重试一次，失败则 notice + 引导 `/login`）。`prewarm()` 若启用，令牌只能在 `claim()` 时注入（`[d.ts]`）。
 3. 状态展示：`accountInfo()`（organization/subscriptionType/apiProvider）与 `init.apiKeySource` → `/doctor`、`/login` 状态行；`rate_limit_event` → 订阅用量。
 4. 条款与品牌（记录为已知风险，由维护者承担）：官方文档的"第三方不得提供 claude.ai 登录"条款见上；建议后端显示名用 "Claude Agent"、不复刻 Claude Code 视觉元素（品牌指引允许 "{Name} Powered by Claude"）。

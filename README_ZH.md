@@ -155,16 +155,31 @@ cd ~/.dsh/profiles/dsh-tui && pnpm add @anthropic-ai/claude-agent-sdk@0.3.287
 dsh-tui --backend claude     # 或在 dsh-tui 配置行写 `backend: claude`
 ```
 
-- **凭证**由 SDK 自行发现：你已有的 `claude` 登录，或环境中的
-  `ANTHROPIC_API_KEY` / 云厂商变量。dsh-TUI 不读取、不保存它们。
+- **凭证**按以下顺序选用：你的 dsh-auth `anthropic` 登录（即 `/provider` 提供的同一套
+  OAuth；`/login` 会直接打开它并在登录后重连会话——使用它时不把
+  `ANTHROPIC_API_KEY` / `ANTHROPIC_AUTH_TOKEN` 交给 CLI，保证你显式的登录生效），
+  其次是环境中的 `ANTHROPIC_API_KEY` / 云厂商变量，最后是你已有的 `claude login`。
+  `/login` 会显示当前会话用的是哪一种。令牌将过期时在启动 CLI 前刷新；会话中被
+  CLI 拒绝时，dsh-TUI 刷新后以同一会话重连一次，仍失败则提示你 `/login`。令牌
+  内容从不写入日志。
 - **可执行文件**：`PATH` 上的 `claude`，否则 SDK 自带二进制。项目 `CLAUDE.md`、
   设置、hooks、MCP 服务器与插件按 CLI 的方式加载。
-- **本阶段可用**：流式回复、思考 token 计数、工具卡（Read、Write、Edit、Bash、
+- **审批**沿用 DSH 的同一个面板：允许一次、始终允许（标签写明 CLI 会记住什么——
+  例如本会话自动接受编辑，或本项目的一条权限规则；由 CLI 保存，dsh-TUI 不写任何
+  设置文件）与拒绝；在面板上直接打字可附拒绝理由。模型的提问（`AskUserQuestion`）
+  走问卷面板，计划模式提交的计划打开计划评审（批准并自动接受编辑、批准但逐个确认
+  编辑、或带反馈继续规划）。
+- **控制**：`/model`（Claude 自己的模型列表，不需要 provider 前缀——`/model sonnet`；
+  选择会记住用于新会话）、`/effort`、`Shift+Tab` 在 默认 → 自动接受编辑 → 计划模式
+  间循环（模型支持时含自动审批；状态栏打开 `mode` 字段时显示当前模式）、`/compact`、
+  `/context`（Claude 的上下文报告）、`/mcp`、`/doctor`（CLI、SDK、凭证与账户），
+  补全中还会列出 Claude 自己的斜杠命令（原样发给 Claude）。悬停费用字段可看
+  订阅用量（5小时 / 7天）。
+- **同样可用**：流式回复、思考 token 计数、工具卡（Read、Write、Edit、Bash、
   Glob、Grep、网络与 MCP 工具）、Ctrl+C 中断、`/new`、`/clear`、`/status`、
-  `/cost`（后端上报的美元费用）、`/doctor`。
-- **尚未支持**：交互式审批——需要你批准的工具调用会被拒绝并给出提示（可在 Claude
-  设置里放行，或以 `acceptEdits` 等 `defaultMode` 启动）；`/model`、`/effort`、
-  `/resume`、回退、子代理面板与图片输入。启用该后端时 DeepSeek 专属命令会隐藏。
+  `/cost`（后端上报的美元费用）。
+- **尚未支持**：恢复 Claude 会话的 `/resume`、回退、子代理面板与图片输入。启用该
+  后端时 DeepSeek 专属命令会隐藏。
 
 ## 快捷键与鼠标
 

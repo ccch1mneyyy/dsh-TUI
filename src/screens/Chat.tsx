@@ -44,7 +44,7 @@ const MATH_PREVIEW_MAX_ROWS = 64
 import type { TuiShortcutHost } from '../dsh-adapter/shortcuts.js'
 import type { TuiThemeHost } from '../dsh-adapter/themes.js'
 import type { TuiRewindMode } from '../dsh-adapter/extension-events.js'
-import { runProviderWizard } from '../dsh-adapter/providerWizard.js'
+import { runOAuthLogin, runProviderWizard } from '../dsh-adapter/providerWizard.js'
 import { PermissionStore, type PermissionPanelSource } from '../channel/permissions.js'
 import { AskUserQuestionPanel } from '../components/questions/AskUserQuestionPanel.js'
 import { ApprovalPanel } from '../components/approvals/ApprovalPanel.js'
@@ -2194,7 +2194,10 @@ export function Chat({
           setHelpOpen(false)
           const spec = parts[0]!
           const slash = spec.indexOf('/')
-          const provider = slash >= 0 ? spec.slice(0, slash) : undefined
+          // A non-DSH backend has one provider (itself): `/model haiku`.
+          const singleProvider = (channel.capabilities as Channel['capabilities'] | undefined)?.backendId !== undefined
+            && channel.capabilities.backendId !== 'dsh'
+          const provider = slash >= 0 ? spec.slice(0, slash) : singleProvider ? channel.provider : undefined
           const id = slash >= 0 ? spec.slice(slash + 1) : spec
           if (provider === undefined || id.length === 0 || provider.length === 0) {
             channel.notify(t('model-usage'), { color: 'warning' })
@@ -2640,6 +2643,40 @@ export function Chat({
         return true
       case 'login': {
         setHelpOpen(false)
+        // A non-DSH session signs in its own backend (design §4.12): its
+        // credential status, then the host's OAuth sign-in preselected on
+        // the backend's provider, then a reconnect on the fresh credential.
+        const backendAuth = channel.backendAuth?.()
+        if (backendAuth !== undefined) {
+          const backend = (channel.capabilities as Channel['capabilities'] | undefined)?.backendLabel ?? ''
+          void backendAuth.status()
+            .catch((error: unknown) => [t('capability-failed', { name: 'login', err: error instanceof Error ? error.message : String(error) })])
+            .then(async lines => {
+              channel.pushLocal('/login', [
+                t('login-backend-heading', { backend }),
+                ...lines,
+                ...(backendAuth.oauth === undefined ? [t('login-backend-no-oauth')] : []),
+              ])
+              if (backendAuth.oauth === undefined || backendAuth.provider === undefined) return
+              const outcome = await runOAuthLogin({
+                ask: (request, options) => questionStore.ask(request, options),
+                notify: (text, options) => channel.notify(text, options),
+                pushLocal: (title, rows) => channel.pushLocal(title, rows),
+              }, backendAuth.oauth, backendAuth.provider)
+              if (outcome !== 'added' && outcome !== 'signed-out') return
+              try {
+                await backendAuth.reconnect()
+                channel.notify(t('login-backend-reconnected', { backend }), { color: 'success' })
+              } catch (error) {
+                channel.notify(t('login-backend-reconnect-failed', { err: error instanceof Error ? error.message : String(error) }), { color: 'error', timeoutMs: 8000 })
+              }
+            })
+            .catch(() => {
+              // The wizard notifies its own failures; this only keeps an
+              // unexpected reject from becoming an unhandled rejection.
+            })
+          return true
+        }
         void channel.describeCredential('DEEPSEEK_API_KEY')
           .catch(() => undefined)
           .then(async status => {

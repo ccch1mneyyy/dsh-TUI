@@ -544,6 +544,7 @@ function createChannelWithOwner(
       return { backendId: ref.backendId, sessionId: ref.sessionId }
     },
     costReport: undefined,
+    rateLimit: undefined,
     ...actionMethods,
     subagentControl,
     jobControl,

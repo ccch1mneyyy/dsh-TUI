@@ -784,6 +784,10 @@ export interface ChannelCapabilities {
   readonly subagents: boolean
   readonly tasks: boolean
   readonly mcp: boolean
+  /** `/context` reads a backend-measured context report. */
+  readonly context: boolean
+  /** `/login` signs the backend session in (DSH: the DSH credentials). */
+  readonly login: boolean
 }
 
 /**
@@ -794,6 +798,12 @@ export interface ChannelCapabilities {
 export interface ChannelSessionRef {
   readonly backendId: string
   readonly sessionId: string
+}
+
+/** Subscription usage windows (`five_hour`, `seven_day`, …): utilization
+ *  0–1 and the reset time (epoch seconds) when known. */
+export interface ChannelRateLimit {
+  readonly windows: readonly { readonly name: string; readonly utilization: number; readonly resetsAt?: number }[]
 }
 
 /** A backend-reported (or locally estimated) session cost. */

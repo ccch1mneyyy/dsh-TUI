@@ -621,6 +621,14 @@ const GROUPS = {
 // 审批面板的选项变体（中英）：DSH 无选项=今天的两行与结局字符串、后端三选项、
 // defaultToNo 拒绝居首且无单键批准、allow-always 抑制、打字附拒绝理由。
     ["verify-approval-panel-options", ['node', '--import', 'tsx/esm', 'scripts/verify-approval-panel-options.tsx']],
+// Claude 凭证（方案 §4.12，D-AUTH）：dsh-auth 登录 > 环境 > 本机 claude login 的优先级
+// 与 env 清洗、到期前刷新（凭证文件锁内落盘）、探测、认证失败刷新后以同一会话
+// resume 一次、二次失败引导 /login，且任何事件/提示/日志都不含令牌。
+    ["verify-claude-auth", ['node', '--import', 'tsx/esm', 'scripts/verify-claude-auth.ts']],
+// Claude 控制面（假 Query）：model/effort/mode/compact/commands/mcp/context/account
+// 的能力委托与持久化，channel 侧的原生模式标签、后端命令合并、/mcp、/context、
+// 订阅用量、/login 宿主，以及状态栏模式标签与 /context 面板的无头渲染。
+    ["verify-claude-controls", ['node', '--import', 'tsx/esm', 'scripts/verify-claude-controls.tsx']],
 // IDE 选区通道回归（PR #562）：纯函数（env 直连/lock 扫描与 workspace
 // 匹配过滤/hello_ack 解析/selection_changed 校验）、无 IDE 静默降级、
 // loopback 对连（token 握手 ACK、错误 token 换下一候选、断连清空）、

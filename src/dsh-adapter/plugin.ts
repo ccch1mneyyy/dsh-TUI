@@ -1728,12 +1728,27 @@ async function openClaudeStartup(ctx: Context, cwd: string, stderr: (line: strin
   readonly backendId: string
   open(target: { readonly kind: 'create'; readonly cwd: string }): Promise<AgentSession>
 }> {
-  const { claudeBackend } = await import('../backends/claude/index.js')
+  const [{ claudeBackend }, { createOAuthCredentialSource }] = await Promise.all([
+    import('../backends/claude/index.js'),
+    // Loaded with the backend only: a DSH session never reads dsh-auth here.
+    import('./oauth-credential-source.js'),
+  ])
+  // The dsh-auth login the backend may run on (design §4.12): one source
+  // per provider, shared by every session this process opens.
+  const credentialSources = new Map<string, ReturnType<typeof createOAuthCredentialSource>>()
   const host = (sessionCwd: string): BackendHost => ({
     cwd: sessionCwd,
     debug: message => logForDebugging(message),
     warn: message => ctx.logger.warn(message),
     stderr,
+    oauthCredential: provider => {
+      let source = credentialSources.get(provider)
+      if (source === undefined) {
+        source = createOAuthCredentialSource(provider)
+        credentialSources.set(provider, source)
+      }
+      return source
+    },
   })
   const session = await claudeBackend.open({ kind: 'create', cwd }, host(cwd))
   return {

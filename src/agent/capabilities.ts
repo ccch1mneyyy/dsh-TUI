@@ -94,18 +94,41 @@ export type ExternalCommandOutcome =
   | { readonly kind: 'handled' }
   | { readonly kind: 'failed'; readonly reason: string }
 
+/** One named context contributor and its token cost. */
+export interface ContextItemView {
+  readonly name: string
+  readonly tokens: number
+}
+
 /** Backend-measured context usage. */
 export interface ContextUsageView {
   readonly used: number
   readonly max?: number
   readonly categories: readonly { readonly name: string; readonly tokens: number; readonly kind: string }[]
+  /** System prompt sections. */
+  readonly sections?: readonly ContextItemView[]
+  /** Instruction / memory files loaded for the cwd. */
+  readonly files?: readonly { readonly path: string; readonly tokens: number }[]
+  /** Skills whose descriptions are in context. */
+  readonly skills?: readonly ContextItemView[]
+  /** Tools in context (`server` for MCP tools). */
+  readonly tools?: readonly (ContextItemView & { readonly server?: string })[]
 }
 
-/** Signed-in account summary. */
+/** Signed-in account summary (never an email address). */
 export interface AccountView {
   readonly organization?: string
   readonly subscription?: string
   readonly provider?: string
+  /** Where the credential the backend uses comes from (backend vocabulary). */
+  readonly tokenSource?: string
+  readonly apiKeySource?: string
+}
+
+/** The credential a session runs on and how to renew it. */
+export interface SessionAuthView {
+  /** Localized lines for `/login` (source, account; never token material). */
+  readonly lines: readonly string[]
 }
 
 /** What a fresh conversation loads (system prompt sections, files, skills). */
@@ -167,6 +190,16 @@ export interface SessionCapabilities {
   }
   readonly context?: { usage(detail: 'summary' | 'full'): Promise<ContextUsageView> }
   readonly account?: { info(): Promise<AccountView> }
+  /**
+   * The session's sign-in: `/login` shows `status()`, then offers the host's
+   * OAuth sign-in for `oauthProvider` and `reconnect()`s so the next turn
+   * runs on the fresh credential.
+   */
+  readonly auth?: {
+    readonly oauthProvider?: string
+    status(): Promise<SessionAuthView>
+    reconnect(): Promise<void>
+  }
   readonly loadedContext?: { snapshot(): Promise<LoadedContextView | undefined> }
   /** Backend-specific `/doctor` lines (version drift, executable, …), already
    *  localized by the backend. */

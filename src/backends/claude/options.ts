@@ -53,13 +53,13 @@ export const OPTION_POLICY = {
   forwardSubagentText: 'set',
   verbatimPrompts: 'omit',
   thinking: 'omit',
-  effort: 'later', // `/effort` (Phase 3)
+  effort: 'set', // the persisted `/effort` choice (Phase 3)
   maxThinkingTokens: 'omit',
   maxTurns: 'omit',
   maxBudgetUsd: 'omit',
   taskBudget: 'omit',
   mcpServers: 'omit',
-  model: 'later', // `/model` (Phase 3)
+  model: 'set', // the persisted `/model` choice (Phase 3)
   outputFormat: 'omit',
   pathToClaudeCodeExecutable: 'set',
   permissionMode: 'set',
@@ -71,7 +71,7 @@ export const OPTION_POLICY = {
   pluginDelivery: 'omit',
   promptSuggestions: 'omit',
   agentProgressSummaries: 'omit',
-  resume: 'later', // Phase 4
+  resume: 'set', // credential reconnect (Phase 3); /resume is Phase 4
   sessionId: 'set',
   resumeSessionAt: 'later',
   resumeDropsTurn: 'later',
@@ -146,9 +146,8 @@ export async function resolveStartPermissionMode(
   return { mode: configured, source: 'settings', ...ignored }
 }
 
-export interface ProfileInput {
+export type ProfileInput = {
   readonly cwd: string
-  readonly sessionId: string
   readonly permissionMode: PermissionMode
   readonly executable: string | undefined
   readonly env: Record<string, string>
@@ -157,14 +156,22 @@ export interface ProfileInput {
   readonly abortController: AbortController
   /** Fall back to echoed user messages when the CLI has no lifecycle frames. */
   readonly replayUserMessages: boolean
-}
+  /** Start model / effort (the user's persisted choice); absent = the CLI's. */
+  readonly model?: string
+  readonly effort?: string
+} & (
+  /** A new session under this id … */
+  | { readonly sessionId: string; readonly resume?: undefined }
+  /** … or the same session resumed (the SDK refuses both together). */
+  | { readonly resume: string; readonly sessionId?: undefined }
+)
 
 /** Assemble the `query()` options of one session. */
 export function buildQueryOptions(input: ProfileInput): Options {
   return {
     abortController: input.abortController,
     cwd: input.cwd,
-    sessionId: input.sessionId,
+    ...(input.resume === undefined ? { sessionId: input.sessionId } : { resume: input.resume }),
     systemPrompt: { type: 'preset', preset: 'claude_code' },
     settingSources: SETTING_SOURCES,
     tools: { type: 'preset', preset: 'claude_code' },
@@ -178,6 +185,8 @@ export function buildQueryOptions(input: ProfileInput): Options {
     env: input.env,
     stderr: input.stderr,
     ...(input.executable === undefined ? {} : { pathToClaudeCodeExecutable: input.executable }),
+    ...(input.model === undefined ? {} : { model: input.model }),
+    ...(input.effort === undefined ? {} : { effort: input.effort as NonNullable<Options['effort']> }),
     ...(input.replayUserMessages ? { extraArgs: { 'replay-user-messages': null } } : {}),
   }
 }

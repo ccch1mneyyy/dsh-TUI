@@ -220,7 +220,14 @@ export function createClaudeTranslator(options: ClaudeTranslatorOptions) {
   const inputs = new Map<string, RegisteredInput>()
   /** Inputs the channel still shows as queued (pending previews). */
   const pending = new Map<string, PendingItem>()
-  let init: { model: string; permissionMode: string | undefined; commands: string } | undefined
+  /** The last `system/init` command list (re-sent every turn; only changes
+   *  are reported). Undefined until the first init. */
+  let initCommands: string | undefined
+  /** The model and permission mode the session runs, as last confirmed
+   *  (init, status frames, `message_start`, or a control request the
+   *  session made — see `noteModel` / `noteMode`). */
+  let currentModel = ''
+  let currentMode: string | undefined
   /** The next synthetic user message is a compaction summary. */
   let summaryExpected = false
   /** A `/compact` this session pushed is in flight (manual trigger). */
@@ -299,6 +306,12 @@ export function createClaudeTranslator(options: ClaudeTranslatorOptions) {
     stepOpen = true
     out.push({ type: 'step.start', turn, step })
     out.push({ type: 'assistant.attempt.start', attemptId: id, turn, step, ...(model === undefined ? {} : { model }) })
+    // `message_start.model` is the CLI's own confirmation of the model a
+    // request ran on (design §4.10): an in-place switch shows up here first.
+    if (model !== undefined && model !== '' && currentModel !== '' && model !== currentModel) {
+      currentModel = model
+      out.push({ type: 'model.changed', model, source: 'settings' })
+    }
     attempt = { id, step, model, reasoning: '', text: '', blocks: 0, aborted: false, usage, outputTokens: undefined, streamTools: new Map() }
     return attempt
   }
@@ -360,7 +373,7 @@ export function createClaudeTranslator(options: ClaudeTranslatorOptions) {
     const permissionMode = str(message.permissionMode)
     const commands = arr(message.slash_commands).filter((name): name is string => typeof name === 'string')
     const out: AgentEvent[] = []
-    if (init === undefined) {
+    if (initCommands === undefined) {
       out.push({
         type: 'session.ready',
         sessionId: str(message.session_id) ?? '',
@@ -370,11 +383,13 @@ export function createClaudeTranslator(options: ClaudeTranslatorOptions) {
         ...(str(message.claude_code_version) === undefined ? {} : { backendVersion: str(message.claude_code_version) }),
       })
     } else {
-      if (model !== '' && model !== init.model) out.push({ type: 'model.changed', model, source: 'settings' })
-      if (permissionMode !== undefined && permissionMode !== init.permissionMode) out.push({ type: 'mode.changed', modeId: permissionMode })
-      if (commands.join('\n') !== init.commands) out.push({ type: 'commands.changed', commands: commands.map(name => ({ name })) })
+      if (model !== '' && model !== currentModel) out.push({ type: 'model.changed', model, source: 'settings' })
+      if (permissionMode !== undefined && permissionMode !== currentMode) out.push({ type: 'mode.changed', modeId: permissionMode })
+      if (commands.join('\n') !== initCommands) out.push({ type: 'commands.changed', commands: commands.map(name => ({ name })) })
     }
-    init = { model, permissionMode, commands: commands.join('\n') }
+    initCommands = commands.join('\n')
+    if (model !== '') currentModel = model
+    if (permissionMode !== undefined) currentMode = permissionMode
     return out
   }
 
@@ -520,8 +535,8 @@ export function createClaudeTranslator(options: ClaudeTranslatorOptions) {
   /** What a settled plan-mode tool means for the transcript and the mode. */
   const planOutcome = (name: string, isError: boolean): AgentEvent[] => {
     if (name === 'EnterPlanMode') {
-      if (isError || init?.permissionMode === 'plan') return []
-      if (init !== undefined) init = { ...init, permissionMode: 'plan' }
+      if (isError || currentMode === 'plan') return []
+      currentMode = 'plan'
       return [{ type: 'mode.changed', modeId: 'plan' }]
     }
     return [{ type: 'notice', level: 'info', text: t(isError ? 'claude-plan-kept' : 'claude-plan-approved') }]
@@ -660,8 +675,8 @@ export function createClaudeTranslator(options: ClaudeTranslatorOptions) {
         if (status === 'compacting') out.push({ type: 'compaction.start', trigger: compactRequested ? 'manual' : 'auto', cancellable: false, time: now() })
         if (message.compact_result === 'failed') out.push({ type: 'compaction.end', ok: false, error: str(message.compact_error) ?? '', time: now() })
         const mode = str(message.permissionMode)
-        if (mode !== undefined && mode !== init?.permissionMode) {
-          if (init !== undefined) init = { ...init, permissionMode: mode }
+        if (mode !== undefined && mode !== currentMode) {
+          currentMode = mode
           out.push({ type: 'mode.changed', modeId: mode })
         }
         return out
@@ -878,6 +893,23 @@ export function createClaudeTranslator(options: ClaudeTranslatorOptions) {
     /** Switch the user-row source once the CLI's capabilities are known. */
     setUserRows(mode: ClaudeUserRows): void {
       userRows = mode
+    },
+    /** The model as last confirmed ('' before the first init). */
+    get model(): string { return currentModel },
+    /** The permission mode as last confirmed. */
+    get mode(): string | undefined { return currentMode },
+    /** A model the session switched to by control request: tracked, and
+     *  reported once (a later identical init/message_start stays quiet). */
+    noteModel(model: string): AgentEvent[] {
+      if (model === '' || model === currentModel) return []
+      currentModel = model
+      return [{ type: 'model.changed', model, source: 'user' }]
+    },
+    /** A permission mode the session set by control request (or started in). */
+    noteMode(mode: string): AgentEvent[] {
+      if (mode === currentMode) return []
+      currentMode = mode
+      return [{ type: 'mode.changed', modeId: mode }]
     },
     get turnOpen(): boolean { return turnOpen },
   }

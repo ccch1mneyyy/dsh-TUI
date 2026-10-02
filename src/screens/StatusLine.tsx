@@ -649,6 +649,16 @@ type UsageSnapshot = {
  * hovered (or the hover outlived its data, which the field gating makes
  * near-impossible).
  */
+/** `5h 68% · 7d 87%` for the subscription windows a backend reported. */
+function formatRateLimit(rateLimit: Channel['rateLimit']): string | undefined {
+  const windows = rateLimit?.windows ?? []
+  if (windows.length === 0) return undefined
+  const label = (name: string): string => name === 'five_hour'
+    ? t('status-rate-limit-five-hour')
+    : name === 'seven_day' ? t('status-rate-limit-seven-day') : name
+  return windows.map(window => `${label(window.name)} ${Math.round(window.utilization * 100)}%`).join(' · ')
+}
+
 function buildHoverDetail(
   hover: HoverTarget | null,
   channel: Channel,
@@ -737,11 +747,15 @@ function buildHoverDetail(
       const report = channel.costReport
       if (report !== undefined) {
         const { input, output, cacheRead } = channel.tokens
+        // Subscription windows the backend reported ride along: the bill and
+        // the plan's remaining room answer the same "what did this cost" glance.
+        const usage = formatRateLimit(channel.rateLimit)
         return (
           <Text wrap="truncate">
             {formatCostReport(report)} · {dim('in ')}{formatTokens(input)}
             {' · '}{dim('out ')}{formatTokens(output)} · {dim('cache ')}{formatTokens(cacheRead)}
             {' · '}{t(report.source === 'backend' ? 'cost-source-backend' : 'status-cost-note')}
+            {usage === undefined ? null : <>{' · '}{t('status-rate-limit', { usage })}</>}
           </Text>
         )
       }

@@ -26,14 +26,19 @@
  * - Process death or a consumer error marks the session `disposed`, closes
  *   any open turn and says so in a notice.
  */
-import type { SDKUserMessage } from '@anthropic-ai/claude-agent-sdk'
+import type { AccountInfo, Query, SDKUserMessage } from '@anthropic-ai/claude-agent-sdk'
+import { randomUUID } from 'node:crypto'
+import type { AccountView, SessionAuthView } from '../../agent/capabilities.js'
 import type { AgentEvent, AgentEventMeta } from '../../agent/events.js'
 import type { AgentInput, AgentSession, AgentSessionStatus, CancelCause, SubmitPlacement } from '../../agent/session.js'
 import { t } from '../../i18n.js'
 import { CLAUDE_BACKEND_ID, CLI_CAPABILITY, cliVersionDrift, VALIDATED_CLI_VERSIONS, VALIDATED_SDK_VERSION } from './contract.js'
+import { CLAUDE_OAUTH_PROVIDER, detectClaudeAuth, isAuthFailure, type ClaudeAuthPlan } from './auth.js'
+import { accountView, createClaudeControls } from './controls.js'
 import { buildQueryOptions, type StartPermissionMode } from './options.js'
 import { createClaudePermissionBridge, WITHDRAWN_MESSAGE } from './permissions.js'
 import { createStderrSink, type ClaudeExecutable } from './process.js'
+import { memoryClaudePrefs, type ClaudePrefs } from './prefs.js'
 import type { ClaudeSdkModule } from './sdk.js'
 import { createClaudeTranslator } from './translate.js'
 
@@ -69,7 +74,19 @@ export interface ClaudeSessionDeps {
   readonly sessionId: string
   readonly start: StartPermissionMode
   readonly executable: ClaudeExecutable
+  /** The child environment when no credential plan is given (tests). */
   readonly env: Record<string, string>
+  /** The credential the session spawns with and how to renew it after an
+   *  authentication failure (design §4.12; auth.ts). */
+  readonly auth?: {
+    readonly plan: ClaudeAuthPlan
+    renew(): Promise<ClaudeAuthPlan>
+  }
+  /** The user's persisted `/model` and `/effort` choices (memory if absent). */
+  readonly prefs?: ClaudePrefs
+  /** A start model / effort when nothing is persisted (none = the CLI's). */
+  readonly model?: string
+  readonly effort?: string
   readonly host: {
     debug(message: string): void
     /** One child stderr line (deduplicated into notices by the host). */
@@ -156,6 +173,7 @@ function priorityOf(placement: SubmitPlacement, turnOpen: boolean): SDKUserMessa
 export async function openClaudeSession(deps: ClaudeSessionDeps): Promise<AgentSession> {
   const clock = deps.clock ?? REAL_CLOCK
   const forceSettleMs = deps.forceSettleMs ?? 30_000
+  const prefs = deps.prefs ?? memoryClaudePrefs()
   const listeners = new Set<Listener>()
   /** Batches produced before the channel subscribed (handshake, start notices). */
   const backlog: [readonly AgentEvent[], AgentEventMeta][] = []
@@ -164,8 +182,19 @@ export async function openClaudeSession(deps: ClaudeSessionDeps): Promise<AgentS
   let disposePromise: Promise<void> | undefined
   let cliVersion: string | undefined
   let cliCapabilities: readonly string[] = []
+  /** `system/init.apiKeySource`: the CLI's own account of its credential. */
+  let apiKeySource: string | undefined
+  /** `accountInfo()` once fetched (never surfaces the email). */
+  let account: AccountInfo | undefined
   let forceTimer: unknown
+  /** The credential plan the live query runs on. */
+  let authPlan: ClaudeAuthPlan = deps.auth?.plan ?? { source: 'claude-login', env: deps.env }
+  /** Automatic reconnects after an authentication failure since the last
+   *  successful turn (design §4.12: one, then the user is sent to /login). */
+  let authAttempts = 0
+  let authFailed = false
   const translator = createClaudeTranslator({ cwd: deps.cwd, userRows: 'lifecycle', debug: deps.host.debug })
+  translator.noteMode(deps.start.mode)
 
   const emit = (events: readonly AgentEvent[], wake: AgentEventMeta['wake'] = 'sync'): void => {
     if (events.length === 0) return
@@ -205,38 +234,66 @@ export async function openClaudeSession(deps: ClaudeSessionDeps): Promise<AgentS
     },
   })
 
-  const inbox = createInbox<SDKUserMessage>()
-  const abortController = new AbortController()
   const stderrSink = createStderrSink(line => {
     deps.host.debug(`[claude-stderr] ${line}`)
     deps.host.stderr?.(line)
   })
-  const query = deps.sdk.query({
-    prompt: inbox,
-    options: buildQueryOptions({
-      cwd: deps.cwd,
-      sessionId: deps.sessionId,
-      permissionMode: deps.start.mode,
-      executable: deps.executable.path,
-      env: deps.env,
-      canUseTool: bridge.canUseTool,
-      stderr: stderrSink,
-      abortController,
-      // Echoes are the user-row fallback for a CLI without lifecycle frames;
-      // requesting them is harmless when lifecycle frames win (the
-      // translator ignores an echo of an input it already confirmed).
-      replayUserMessages: true,
-    }),
-  })
 
-  /** Shut the query down; safe to call from any state. */
+  /** One live `query()`: its stdin, its controller and its generation. A
+   *  reconnect (credential renewal) replaces the run; the session, its id
+   *  and the translator state stay. */
+  interface Run {
+    readonly generation: number
+    readonly inbox: ReturnType<typeof createInbox<SDKUserMessage>>
+    readonly abortController: AbortController
+    readonly query: ReturnType<ClaudeSessionDeps['sdk']['query']>
+    consumer: Promise<void>
+  }
+  let generation = 0
+  const startRun = (resume: boolean): Run => {
+    generation += 1
+    const inbox = createInbox<SDKUserMessage>()
+    const abortController = new AbortController()
+    const startModel = prefs.read().model ?? deps.model
+    const startEffort = prefs.read().effort ?? deps.effort
+    const query = deps.sdk.query({
+      prompt: inbox,
+      options: buildQueryOptions({
+        cwd: deps.cwd,
+        // A reconnect resumes the same session (same id, same transcript);
+        // the SDK refuses `sessionId` together with `resume`.
+        ...(resume ? { resume: deps.sessionId } : { sessionId: deps.sessionId }),
+        permissionMode: (translator.mode ?? deps.start.mode) as StartPermissionMode['mode'],
+        executable: deps.executable.path,
+        env: authPlan.env,
+        canUseTool: bridge.canUseTool,
+        stderr: stderrSink,
+        abortController,
+        ...(startModel === undefined ? {} : { model: startModel }),
+        ...(startEffort === undefined ? {} : { effort: startEffort }),
+        // Echoes are the user-row fallback for a CLI without lifecycle
+        // frames; requesting them is harmless when lifecycle frames win (the
+        // translator ignores an echo of an input it already confirmed).
+        replayUserMessages: true,
+      }),
+    })
+    return { generation, inbox, abortController, query, consumer: Promise.resolve() }
+  }
+  let run = startRun(false)
+
+  /** Shut one run's CLI down; safe to call from any state. */
+  const stopRun = (target: Run): void => {
+    target.inbox.close()
+    try { target.query.close() } catch (error) { deps.host.debug(`claude: close failed (${errorText(error)})`) }
+    target.abortController.abort()
+  }
+
+  /** Shut the session down; safe to call from any state. */
   const teardown = (): void => {
     clearForceTimer()
     // Rule 4 (design §4.7): pending prompts are denied before the CLI goes.
     bridge.settleAll()
-    inbox.close()
-    try { query.close() } catch (error) { deps.host.debug(`claude: close failed (${errorText(error)})`) }
-    abortController.abort()
+    stopRun(run)
   }
 
   /** The CLI went away (or the loop failed) without our dispose. */
@@ -253,13 +310,49 @@ export async function openClaudeSession(deps: ClaudeSessionDeps): Promise<AgentS
     ])
   }
 
+  const fetchAccount = (target: Run): void => {
+    const query = target.query as Partial<Pick<Query, 'accountInfo'>>
+    if (typeof query.accountInfo !== 'function') return
+    void query.accountInfo().then(info => { if (target === run) account = info }, (error: unknown) => {
+      deps.host.debug(`claude: accountInfo failed (${errorText(error)})`)
+    })
+  }
+
+  /** The handshake of one run: capabilities, model catalog, commands. */
+  const handshake = async (target: Run): Promise<Rec | undefined> => {
+    let timer: unknown
+    const init = await Promise.race([
+      target.query.initializationResult(),
+      new Promise<never>((_, reject) => {
+        timer = clock.setTimeout(() => reject(new Error(t('claude-start-timeout'))), deps.initTimeoutMs ?? 60_000)
+      }),
+    ]).finally(() => clock.clearTimeout(timer))
+    const result = rec(init)
+    const capabilities = result?.capabilities
+    if (Array.isArray(capabilities)) cliCapabilities = capabilities.filter((item): item is string => typeof item === 'string')
+    if (cliCapabilities.length > 0 && !cliCapabilities.includes(CLI_CAPABILITY.lifecycle)) translator.setUserRows('replay')
+    fetchAccount(target)
+    return result
+  }
+
   const afterMessage = (message: unknown, events: readonly AgentEvent[]): void => {
     const value = rec(message)
     if (value?.type === 'result' || (value?.type === 'system' && value.subtype === 'session_state_changed' && value.state === 'idle')) {
       clearForceTimer()
     }
-    if (value?.type === 'system' && value.subtype === 'init' && Array.isArray(value.capabilities)) {
-      cliCapabilities = value.capabilities.filter((item): item is string => typeof item === 'string')
+    if (value?.type === 'system' && value.subtype === 'init') {
+      if (Array.isArray(value.capabilities)) cliCapabilities = value.capabilities.filter((item): item is string => typeof item === 'string')
+      if (typeof value.apiKeySource === 'string') apiKeySource = value.apiKeySource
+      if (Array.isArray(value.terminal_slash_commands)) controls.setTerminalOnly(value.terminal_slash_commands.filter((item): item is string => typeof item === 'string'))
+    }
+    if (isAuthFailure(message)) authFailed = true
+    if (value?.type === 'result') {
+      if (authFailed) {
+        authFailed = false
+        onAuthFailure()
+      } else if (value.is_error !== true) {
+        authAttempts = 0
+      }
     }
     for (const event of events) {
       if (event.type !== 'session.ready' || event.backendVersion === undefined || cliVersion !== undefined) continue
@@ -271,29 +364,12 @@ export async function openClaudeSession(deps: ClaudeSessionDeps): Promise<AgentS
     }
   }
 
-  try {
-    const handshake = query.initializationResult()
-    let timer: unknown
-    const init = await Promise.race([
-      handshake,
-      new Promise<never>((_, reject) => {
-        timer = clock.setTimeout(() => reject(new Error(t('claude-start-timeout'))), deps.initTimeoutMs ?? 60_000)
-      }),
-    ]).finally(() => clock.clearTimeout(timer))
-    const capabilities = rec(init)?.capabilities
-    if (Array.isArray(capabilities)) cliCapabilities = capabilities.filter((item): item is string => typeof item === 'string')
-    if (cliCapabilities.length > 0 && !cliCapabilities.includes(CLI_CAPABILITY.lifecycle)) translator.setUserRows('replay')
-  } catch (error) {
-    disposing = true
-    teardown()
-    throw error
-  }
-  status = 'idle'
-  for (const text of deps.startNotices ?? []) emit([{ type: 'notice', level: 'warning', text }])
-
-  const consumer = (async (): Promise<void> => {
+  /** Consume one run until it ends; an ended run that is no longer the
+   *  current one was replaced on purpose (reconnect), not lost. */
+  const consume = (target: Run): Promise<void> => (async (): Promise<void> => {
     try {
-      for await (const message of query) {
+      for await (const message of target.query) {
+        if (target !== run) return
         let events: readonly AgentEvent[]
         try {
           events = translator.translate(message)
@@ -302,17 +378,101 @@ export async function openClaudeSession(deps: ClaudeSessionDeps): Promise<AgentS
           deps.host.debug(`claude: translate failed (${errorText(error)})`)
           continue
         }
-        afterMessage(message, events)
         for (const event of events) {
           if (event.type === 'session.status' && event.status !== 'disposed' && !disposing) status = event.status
         }
         emit(events, wakeOf(message, events))
+        afterMessage(message, events)
       }
-      onExit(undefined)
+      if (target === run) onExit(undefined)
     } catch (error) {
-      onExit(error)
+      if (target === run) onExit(error)
     }
   })()
+
+  /**
+   * Restart the CLI on the same session with a renewed credential (design
+   * §4.12): the old CLI's prompts are withdrawn and an open turn closed, the
+   * new query resumes the session id, and the translator keeps its state.
+   */
+  let reconnecting: Promise<void> | undefined
+  const reconnect = (): Promise<void> => {
+    if (disposing) return Promise.reject(new Error(t('claude-session-closed')))
+    reconnecting ??= (async (): Promise<void> => {
+      if (deps.auth !== undefined) authPlan = await deps.auth.renew()
+      if (disposing) return
+      const previous = run
+      bridge.settleAll(WITHDRAWN_MESSAGE)
+      clearForceTimer()
+      emit(translator.forceCloseTurn({ kind: 'aborted' }))
+      stopRun(previous)
+      run = startRun(true)
+      try {
+        await handshake(run)
+      } catch (error) {
+        onExit(error)
+        throw error
+      }
+      run.consumer = consume(run)
+    })().finally(() => { reconnecting = undefined })
+    return reconnecting
+  }
+
+  /** The CLI refused the credential: renew and resume once, then send the
+   *  user to `/login` (never a loop of failing turns). */
+  const onAuthFailure = (): void => {
+    if (disposing) return
+    if (authAttempts >= 1) {
+      emit([{ type: 'notice', level: 'error', text: t('claude-auth-failed-login') }])
+      return
+    }
+    authAttempts += 1
+    reconnect().then(() => {
+      emit([{ type: 'notice', level: 'warning', text: t('claude-auth-reconnected') }])
+    }, (error: unknown) => {
+      emit([{ type: 'notice', level: 'error', text: t('claude-auth-refresh-failed', { err: errorText(error) }) }])
+    })
+  }
+
+  const controls = createClaudeControls({
+    query: () => run.query,
+    emit: events => emit(events),
+    submitText: async text => {
+      await session.submit({ text, clientMessageId: randomUUID() }, 'turn')
+    },
+    currentModel: () => translator.model,
+    currentMode: () => translator.mode ?? deps.start.mode,
+    noteModel: model => translator.noteModel(model),
+    noteMode: mode => translator.noteMode(mode),
+    prefs,
+    debug: deps.host.debug,
+  })
+
+  try {
+    const init = await handshake(run)
+    controls.seed(init)
+  } catch (error) {
+    disposing = true
+    teardown()
+    throw error
+  }
+  status = 'idle'
+  for (const text of deps.startNotices ?? []) emit([{ type: 'notice', level: 'warning', text }])
+  // The start mode is the session's first mode (the CLI confirms it with its
+  // first `init`); the status line shows it from the start.
+  emit([{ type: 'mode.changed', modeId: translator.mode ?? deps.start.mode }], 'none')
+  run.consumer = consume(run)
+
+  /** `/login` lines: where the credential comes from, never the token. */
+  const authStatus = async (): Promise<SessionAuthView> => {
+    const lines = [t('claude-auth-source', { source: authSourceLabel(authPlan) })]
+    if (authPlan.source === 'claude-login' && await detectClaudeAuth(process.env, undefined) === 'missing' && account?.subscriptionType === undefined) {
+      lines.push(t('claude-auth-missing-hint'))
+    }
+    lines.push(t('claude-auth-cli', { source: apiKeySource ?? t('doctor-unknown'), token: account?.tokenSource ?? t('doctor-unknown') }))
+    if (account !== undefined) lines.push(...accountLines(accountView(account, apiKeySource)))
+    return { lines }
+  }
 
   const session: AgentSession = {
     ref: { backendId: CLAUDE_BACKEND_ID, sessionId: deps.sessionId },
@@ -331,6 +491,22 @@ export async function openClaudeSession(deps: ClaudeSessionDeps): Promise<AgentS
         respond: (requestId, answers) => bridge.respondQuestion(requestId, answers),
         cancel: requestId => bridge.cancelQuestion(requestId),
       },
+      ...controls.capabilities,
+      account: {
+        async info(): Promise<AccountView> {
+          const query = run.query as Partial<Pick<Query, 'accountInfo'>>
+          if (typeof query.accountInfo === 'function') account = await query.accountInfo()
+          return accountView(account ?? {}, apiKeySource)
+        },
+      },
+      auth: {
+        oauthProvider: CLAUDE_OAUTH_PROVIDER,
+        status: authStatus,
+        async reconnect(): Promise<void> {
+          authAttempts = 0
+          await reconnect()
+        },
+      },
       native: {
         claude: {
           kind: 'claude',
@@ -344,7 +520,9 @@ export async function openClaudeSession(deps: ClaudeSessionDeps): Promise<AgentS
           t('claude-doctor-cli', { path: deps.executable.path ?? t('claude-doctor-bundled'), source: deps.executable.source, version: cliVersion ?? t('doctor-unknown') }),
           ...(cliVersionDrift(cliVersion) === undefined ? [] : [t('claude-version-drift', { version: cliVersion ?? '', validated: VALIDATED_CLI_VERSIONS.join(', ') })]),
           t('claude-doctor-sdk', { version: deps.sdkVersion ?? t('doctor-unknown'), validated: VALIDATED_SDK_VERSION }),
-          t('claude-doctor-mode', { mode: deps.start.mode, source: deps.start.source }),
+          t('claude-doctor-mode', { mode: translator.mode ?? deps.start.mode, source: deps.start.source }),
+          t('claude-auth-source', { source: authSourceLabel(authPlan) }),
+          ...(account === undefined ? [] : accountLines(accountView(account, apiKeySource))),
         ],
       },
     },
@@ -363,12 +541,15 @@ export async function openClaudeSession(deps: ClaudeSessionDeps): Promise<AgentS
       }
       return () => { listeners.delete(listener) }
     },
-    submit(input: AgentInput, placement: SubmitPlacement) {
-      if (disposing || inbox.closed) return Promise.reject(new Error(t('claude-session-closed')))
+    async submit(input: AgentInput, placement: SubmitPlacement) {
+      // A credential reconnect is swapping the CLI: the input goes to the
+      // new one (the old one's stdin is closed).
+      if (reconnecting !== undefined) await reconnecting.catch(() => undefined)
+      if (disposing || run.inbox.closed) throw new Error(t('claude-session-closed'))
       // Pasted images and `@image` mentions arrive as image blocks; sending
       // the text without them would silently drop part of the message.
       if ((input.images?.length ?? 0) > 0 || (input.blocks ?? []).some(block => block.type === 'image')) {
-        return Promise.reject(new Error(t('claude-images-unsupported')))
+        throw new Error(t('claude-images-unsupported'))
       }
       const texts = (input.blocks ?? [{ type: 'text', text: input.text }])
         .flatMap(block => block.type === 'text' && typeof block.text === 'string' && block.text !== '' ? [block.text] : [])
@@ -376,7 +557,7 @@ export async function openClaudeSession(deps: ClaudeSessionDeps): Promise<AgentS
       const priority = priorityOf(placement, translator.turnOpen)
       translator.registerInput(input.clientMessageId, input.text, placement)
       try {
-        inbox.push({
+        run.inbox.push({
           type: 'user',
           message: { role: 'user', content },
           parent_tool_use_id: null,
@@ -385,9 +566,9 @@ export async function openClaudeSession(deps: ClaudeSessionDeps): Promise<AgentS
         })
       } catch (error) {
         translator.unregisterInput(input.clientMessageId)
-        return Promise.reject(error instanceof Error ? error : new Error(String(error)))
+        throw error instanceof Error ? error : new Error(String(error))
       }
-      return Promise.resolve({ accepted: true })
+      return { accepted: true }
     },
     // No synchronous withdrawal (`retractPending` absent): never called.
     removePending: () => false,
@@ -411,6 +592,7 @@ export async function openClaudeSession(deps: ClaudeSessionDeps): Promise<AgentS
       const cancelQueued = cause !== 'user' && cliCapabilities.includes(CLI_CAPABILITY.interruptCancelQueued)
       // The documented `cancel_queued` interrupt field is reachable through
       // the runtime method's option bag (absent from the TS signature).
+      const query = run.query
       const interrupt = query.interrupt as (options?: { cancelQueued?: boolean }) => Promise<unknown>
       try {
         const receipt = rec(await interrupt.call(query, cancelQueued ? { cancelQueued: true } : undefined))
@@ -430,7 +612,7 @@ export async function openClaudeSession(deps: ClaudeSessionDeps): Promise<AgentS
         teardown()
         let timer: unknown
         await Promise.race([
-          consumer,
+          run.consumer,
           new Promise<void>(resolve => { timer = clock.setTimeout(resolve, deps.closeTimeoutMs ?? 5000) }),
         ])
         clock.clearTimeout(timer)
@@ -442,4 +624,32 @@ export async function openClaudeSession(deps: ClaudeSessionDeps): Promise<AgentS
     },
   }
   return session
+}
+
+/** The `/login` and `/doctor` name of a credential source. */
+function authSourceLabel(plan: ClaudeAuthPlan): string {
+  switch (plan.source) {
+    case 'dsh-auth':
+      return plan.expiresAt === undefined ? t('claude-auth-source-dsh-auth') : t('claude-auth-source-dsh-auth-expires', { time: new Date(plan.expiresAt).toISOString() })
+    case 'api-key':
+      return 'ANTHROPIC_API_KEY'
+    case 'auth-token':
+      return 'ANTHROPIC_AUTH_TOKEN'
+    case 'oauth-env':
+      return 'CLAUDE_CODE_OAUTH_TOKEN'
+    case 'cloud':
+      return t('claude-auth-source-cloud', { provider: plan.cloud ?? '' })
+    case 'claude-login':
+      return t('claude-auth-source-claude-login')
+    default: {
+      const unknown: never = plan.source
+      return unknown
+    }
+  }
+}
+
+/** Account lines (never the email). */
+function accountLines(view: AccountView): string[] {
+  const parts = [view.organization, view.subscription, view.provider].filter((part): part is string => part !== undefined && part !== '')
+  return parts.length === 0 ? [] : [t('claude-auth-account', { account: parts.join(' · ') })]
 }

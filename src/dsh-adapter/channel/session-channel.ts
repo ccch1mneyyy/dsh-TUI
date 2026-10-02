@@ -16,7 +16,10 @@ import { randomUUID } from 'node:crypto'
 import { markChannelReadDirty } from '../../adapter/channel/read-view.js'
 import { adapterRuntimeFor } from '../../adapter/kernel/runtime-context.js'
 import { readGrantStore } from '../../adapter/standard/grants.js'
+import type { LocalCommand } from '../../adapter/ports/channel-catalog.js'
+import type { OAuthSetupHost } from '../../adapter/ports/channel-settings.js'
 import type { OpenTarget } from '../../agent/backend.js'
+import type { AgentEvent } from '../../agent/events.js'
 import type { AgentSession } from '../../agent/session.js'
 import { channelCapabilities } from '../../channel/capabilities.js'
 import { attachInteraction } from '../../channel/interaction.js'
@@ -201,6 +204,19 @@ export function createSessionChannelWithOwner(
       return { backendId: ref.backendId, sessionId: ref.sessionId }
     },
     costReport: undefined,
+    rateLimit: undefined,
+    backendAuth: () => {
+      const auth = binding.session.capabilities.auth
+      if (auth === undefined) return undefined
+      return {
+        provider: auth.oauthProvider,
+        // The host's OAuth sign-in (dsh-auth), the same surface `/provider`
+        // offers; absent when the plugin is not mounted.
+        oauth: (ctx.get('dshAuth') as { api?: OAuthSetupHost } | undefined)?.api,
+        status: async () => [...(await auth.status()).lines],
+        reconnect: () => auth.reconnect(),
+      }
+    },
     ...actionMethods,
     subagentControl: { interrupt: () => { unavailable('agents'); return false } },
     jobControl: { kill: () => { unavailable('jobs'); return false } },
@@ -272,6 +288,150 @@ export function createSessionChannelWithOwner(
     })
   }
 
+  // ── backend-native controls (design §4.9–4.10, §5.3–5.4) ─────────────
+  // The projector owns the transcript; these are the session-level facts
+  // only a non-DSH backend reports: its native permission mode, effort, own
+  // slash commands, subscription usage, and the context / MCP reports the
+  // synchronous `/context` and `/mcp` read.
+
+  /** The backend's own commands, merged after the local ones. */
+  let backendCommands: LocalCommand[] = []
+  const refreshCommandList = (): void => {
+    // Local names win, served here or not: a typed `/init` is the local
+    // command (or its explicit unavailability), never the backend's.
+    const local = new Set(LOCAL_COMMANDS.map(command => command.name))
+    state.commandList = [...commandListOf(state.capabilities.commands), ...backendCommands.filter(command => !local.has(command.name))]
+  }
+  const loadBackendCommands = (session: AgentSession, current: () => boolean): void => {
+    const commands = session.capabilities.commands
+    if (commands === undefined) return
+    void commands.list().then(list => {
+      if (!current()) return
+      backendCommands = list.map(command => ({
+        name: command.name,
+        description: command.description ?? '',
+        tag: backendLabel,
+        skill: true,
+        origin: 'backend' as const,
+      }))
+      refreshCommandList()
+      state.emit()
+    }).catch((error: unknown) => {
+      logForDebugging(`session-channel: backend commands failed (${error instanceof Error ? error.message : String(error)})`)
+    })
+  }
+
+  /** The native mode as the status line shows it: the base mode unmarked,
+   *  any other one labelled by the backend (plan mode in its own colour). */
+  const applyMode = (session: AgentSession, modeId: string): void => {
+    const list = session.capabilities.modes?.list() ?? []
+    const index = list.findIndex(mode => mode.id === modeId)
+    state.mode = { id: `${session.ref.backendId}:${modeId}`, label: list[index]?.label ?? modeId, ...(modeId === 'plan' ? { plan: true } : {}) }
+    state.modeIndex = index === 0 ? 0 : Math.max(1, index)
+  }
+
+  const applyEffort = (session: AgentSession, effort: string | null | undefined): void => {
+    const levels = session.capabilities.effort?.levels() ?? []
+    state.effortLevels = levels.length === 0 ? undefined : levels.map(level => level.id)
+    state.reasoningEffort = effort ?? undefined
+  }
+
+  /** `/mcp` is synchronous: it reads the last report (refreshed per turn). */
+  let mcpLines: string[] | undefined
+  const refreshMcp = (session: AgentSession, current: () => boolean): void => {
+    const mcp = session.capabilities.mcp
+    if (mcp === undefined) return
+    void mcp.status().then(servers => {
+      if (!current()) return
+      mcpLines = servers.length === 0
+        ? [t('claude-mcp-none')]
+        : [
+            t('claude-mcp-heading', { n: servers.length }),
+            ...servers.map(server => t('claude-mcp-row', {
+              name: server.name,
+              status: server.status,
+              tools: server.toolCount === undefined ? '' : t('claude-mcp-tools', { n: server.toolCount }),
+            })),
+            ...(servers.some(server => server.status === 'needs-auth') ? [t('claude-mcp-needs-auth')] : []),
+          ]
+    }).catch((error: unknown) => {
+      logForDebugging(`session-channel: mcp status failed (${error instanceof Error ? error.message : String(error)})`)
+    })
+  }
+
+  /** `/context` reads `loadedContext`: the backend's own measurement. */
+  const refreshContext = (session: AgentSession, current: () => boolean): void => {
+    const context = session.capabilities.context
+    if (context === undefined) return
+    void context.usage('summary').then(usage => {
+      if (!current()) return
+      const tokens = (n: number): string => t('claude-context-tokens', { n: n.toLocaleString() })
+      // The summary report may carry no per-section split (the CLI answers
+      // it from the last response's usage): the used categories stand in.
+      const sections = usage.sections ?? []
+      const used = usage.categories.filter(category => category.kind === 'used')
+      state.loadedContext = {
+        sections: (sections.length > 0 ? sections : used).map(item => ({ name: item.name, text: tokens(item.tokens) })),
+        contexts: sections.length > 0 ? used.map(category => ({ name: category.name, text: tokens(category.tokens) })) : [],
+        files: (usage.files ?? []).map(file => ({ displayPath: file.path.startsWith(`${state.cwd}/`) ? `./${file.path.slice(state.cwd.length + 1)}` : file.path })),
+        skills: (usage.skills ?? []).map(skill => ({ name: skill.name, description: tokens(skill.tokens) })),
+        tools: (usage.tools ?? []).map(tool => ({ name: tool.server === undefined ? tool.name : `${tool.server} › ${tool.name}`, description: tokens(tool.tokens) })),
+      }
+      if (state.contextWindow === undefined && usage.max !== undefined && usage.max > 0) state.contextWindow = usage.max
+      state.emit()
+    }).catch((error: unknown) => {
+      logForDebugging(`session-channel: context usage failed (${error instanceof Error ? error.message : String(error)})`)
+    })
+  }
+
+  /** A freshly bound session: read what it already knows. */
+  const seedBackendSide = (session: AgentSession, current: () => boolean): void => {
+    backendCommands = []
+    mcpLines = undefined
+    const modes = session.capabilities.modes
+    if (modes !== undefined) applyMode(session, modes.current())
+    if (session.capabilities.effort !== undefined) applyEffort(session, session.capabilities.effort.current())
+    loadBackendCommands(session, current)
+    refreshMcp(session, current)
+    refreshContext(session, current)
+  }
+
+  /** The session-level events the shared projector leaves to the channel. */
+  const applyBackendSide = (batch: readonly AgentEvent[], session: AgentSession): void => {
+    const current = (): boolean => owner.current() && binding.session === session
+    let changed = false
+    for (const event of batch) {
+      switch (event.type) {
+        case 'mode.changed':
+          applyMode(session, event.modeId)
+          changed = true
+          break
+        case 'effort.changed':
+          applyEffort(session, event.effort)
+          changed = true
+          break
+        case 'model.changed':
+          // Effort levels follow the model.
+          if (session.capabilities.effort !== undefined) applyEffort(session, session.capabilities.effort.current())
+          break
+        case 'commands.changed':
+          loadBackendCommands(session, current)
+          break
+        case 'rate-limit':
+          state.rateLimit = { windows: event.info.windows }
+          changed = true
+          break
+        case 'turn.end':
+          refreshContext(session, current)
+          refreshMcp(session, current)
+          break
+        default:
+          break
+      }
+    }
+    if (changed) state.emit()
+  }
+
   /**
    * The bound session's prompts ↔ the stores Chat renders (design §4.7). One
    * link per binding: a replaced session (or a released channel) withdraws
@@ -296,13 +456,17 @@ export function createSessionChannelWithOwner(
       binding.subscribe(capture.session.subscribe((batch, meta) => {
         // Prompts first: a batch that also closes the turn must not leave a
         // panel behind it; the generation fence applies to both halves.
-        if (current()) link?.apply(batch)
+        if (current()) {
+          link?.apply(batch)
+          applyBackendSide(batch, capture.session)
+        }
         router.route(batch, meta, current)
       }))
       state.status = capture.session.status === 'running' || capture.session.status === 'requires-action'
         ? 'running'
         : capture.session.status === 'disposed' ? 'disposed' : 'idle'
       replayHistory(capture)
+      seedBackendSide(capture.session, current)
     } catch (error) {
       owner.dispose()
       throw error
@@ -422,7 +586,8 @@ export function createSessionChannelWithOwner(
       state.sessionId = candidate.ref.sessionId
       const capabilities = snapshotOf(candidate)
       state.capabilities = capabilities
-      state.commandList = commandListOf(capabilities.commands)
+      backendCommands = []
+      refreshCommandList()
       bind()
       state.emit()
       disposePrevious('dispose')
@@ -494,12 +659,14 @@ export function createSessionChannelWithOwner(
     capabilityBacked.listModels = () => guarded('model', [], async () => {
       const models = caps().models
       if (models === undefined) { unavailable('model'); return [] }
-      return (await models.list()).map(model => ({ provider: model.provider ?? backendLabel, id: model.id, name: model.label, ...(model.description === undefined ? {} : { description: model.description }) }))
+      // One provider: the backend itself (the picker drills straight into
+      // its models; `/model <id>` needs no provider segment).
+      return (await models.list()).map(model => ({ provider: model.provider ?? state.provider, id: model.id, name: model.label, ...(model.description === undefined ? {} : { description: model.description }) }))
     })
     capabilityBacked.switchModel = (provider, model) => guarded('model', false, async () => {
       const models = caps().models
       if (models === undefined) { unavailable('model'); return false }
-      const outcome = await models.set({ ...(provider === '' || provider === backendLabel ? {} : { provider }), model })
+      const outcome = await models.set({ ...(provider === '' || provider === backendLabel || provider === state.provider ? {} : { provider }), model })
       if (outcome.kind === 'refused') notify(outcome.reason, { color: 'warning' })
       return outcome.kind === 'switched'
     })
@@ -516,6 +683,7 @@ export function createSessionChannelWithOwner(
       await effort.set(id)
       return true
     })
+
   }
   if (initialSession.capabilities.fork !== undefined) {
     capabilityBacked.forkSession = () => guarded('fork', false, async () => {
@@ -524,6 +692,14 @@ export function createSessionChannelWithOwner(
       await fork.fork()
       return true
     })
+  }
+
+  if (initialSession.capabilities.mcp !== undefined) {
+    capabilityBacked.mcpStatus = () => {
+      // Synchronous by contract: the last report, and a fresh one for next time.
+      refreshMcp(binding.session, () => owner.current())
+      return mcpLines ?? [t('claude-mcp-loading')]
+    }
   }
 
   const openSession = options.openSession

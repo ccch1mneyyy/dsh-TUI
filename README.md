@@ -178,20 +178,38 @@ cd ~/.dsh/profiles/dsh-tui && pnpm add @anthropic-ai/claude-agent-sdk@0.3.287
 dsh-tui --backend claude     # or `backend: claude` in the dsh-tui config row
 ```
 
-- **Credentials** are found by the SDK itself: your existing `claude` login, or
-  `ANTHROPIC_API_KEY` / cloud-provider variables in the environment. dsh-TUI
-  neither reads nor stores them.
+- **Credentials**, in this order: your dsh-auth `anthropic` sign-in (the
+  same OAuth `/provider` offers; `/login` opens it preselected and reconnects
+  the session afterwards — while it is used, `ANTHROPIC_API_KEY` /
+  `ANTHROPIC_AUTH_TOKEN` are kept away from the CLI so your explicit sign-in
+  wins), else `ANTHROPIC_API_KEY` / cloud-provider variables in your
+  environment, else your existing `claude login`. `/login` shows which one the
+  session runs on. A token that expires is refreshed before the CLI starts; if
+  the CLI rejects it mid-session, dsh-TUI renews it and resumes the same
+  session once, then asks you to `/login`. Token material is never logged.
 - **Executable**: `claude` on `PATH`, else the SDK's bundled binary. Project
   `CLAUDE.md`, settings, hooks, MCP servers and plugins load exactly as the CLI
   loads them.
-- **Works in this phase**: streaming replies, thinking token counts, tool cards
-  (Read, Write, Edit, Bash, Glob, Grep, web and MCP tools), Ctrl+C cancel,
-  `/new`, `/clear`, `/status`, `/cost` (the backend-reported USD cost), `/doctor`.
-- **Not yet**: interactive approvals — a tool call that would need your
-  approval is denied with a notice (allow it in your Claude settings, or start
-  from a `defaultMode` such as `acceptEdits`); `/model`, `/effort`, `/resume`,
-  rewind, subagent panels and image input. DeepSeek-specific commands are
-  hidden while this backend is active.
+- **Approvals** use the same panel as DSH: allow once, allow always (the label
+  says what the CLI will remember — e.g. auto-accepting edits for this session
+  or a permission rule for this project; the CLI stores it, dsh-TUI writes no
+  settings file) and reject; typing on the panel sends a reason with the
+  rejection. Questions from the model (`AskUserQuestion`) use the
+  questionnaire, and a plan from plan mode opens the plan review (approve with
+  auto-accepted edits, approve with per-edit approval, or keep planning with
+  feedback).
+- **Controls**: `/model` (Claude's own model list, no provider prefix —
+  `/model sonnet`; the choice is remembered for new sessions), `/effort`, `Shift+Tab`
+  cycles default → accept edits → plan (auto where the model supports it; the
+  mode shows in the status line when its `mode` field is on), `/compact`,
+  `/context` (Claude's context report), `/mcp`, `/doctor` (CLI, SDK, credential
+  and account), and Claude's own slash commands in completion (sent to Claude
+  as typed). Hovering the cost field shows subscription usage (5h / 7d).
+- **Also works**: streaming replies, thinking token counts, tool cards (Read,
+  Write, Edit, Bash, Glob, Grep, web and MCP tools), Ctrl+C cancel, `/new`,
+  `/clear`, `/status`, `/cost` (the backend-reported USD cost).
+- **Not yet**: `/resume` of Claude sessions, rewind, subagent panels and image
+  input. DeepSeek-specific commands are hidden while this backend is active.
 
 ## Keybindings & Mouse
 
