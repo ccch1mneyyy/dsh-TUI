@@ -589,6 +589,7 @@ Common items below, full list on the /settings screen. Most topics (**Appearance
 | splashFont | big-text face on the header splash: Daily rotation (default, changes with the local date) / bold / square / bevel / wide / dot matrix / stencil / thin (classic) / slab. Picking a face pins it; picking Daily rotation restores the rotation. Applies immediately |
 | whaleGirl | maid portrait (default off): swaps the header's pixel whale for the author-drawn maid as a **real raster** (Kitty/Sixel); falls back to the pixel whale without graphics support |
 | diffLayout | Edit/Write diff layout: auto (two columns ≥110 cols) / split / unified |
+| diffStyle | Edit/Write diff look: default (−/+ rows) / bars (▌ bars + tinted rows, removals above additions) |
 | thinkingFold | thinking block: preview (2-3 line preview + folded when settled) / full (expanded to end of turn) |
 | jobGroupFold | consecutive background-job cards: auto (default — runs of 2+ group, a settled run of 3+ folds into its summary line) / always (any run of 2+ folds right away, live jobs included) / never (never folds on its own, every card stays). The group header summarizes status and total time; click it or press Ctrl+O to expand |
 | effortDefault | default reasoning effort: auto / off / low / high / max. Start level for new sessions (details below) |
