@@ -76,6 +76,8 @@ export interface DerivedEntry {
   readonly titleComplete: boolean
   readonly hasPrompt: boolean
   readonly model: string | undefined
+  /** Older caches lack this proof and are enriched even on a revision hit. */
+  readonly modelComplete?: boolean
   readonly label: string | undefined
 }
 
@@ -141,6 +143,7 @@ function readEntry(value: unknown, derivedValid: boolean): IndexEntry | undefine
       titleComplete,
       hasPrompt: derived['hasPrompt'] === true,
       model: typeof derived['model'] === 'string' ? derived['model'] : undefined,
+      modelComplete: derived['modelComplete'] === true,
       label: typeof derived['label'] === 'string' ? derived['label'] : undefined,
     },
   }
