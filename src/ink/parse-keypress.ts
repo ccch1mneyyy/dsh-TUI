@@ -189,11 +189,14 @@ const KITTY_FLAGS_RE = /^\x1b\[\?(\d+)u$/
 // Kitty graphics APC response: ESC_G key=value,...;OK|error ESC\\
 // eslint-disable-next-line no-control-regex
 const KITTY_GRAPHICS_RE = /^\x1b_G([^;]*);([^\x1b]*)\x1b\\$/
-// DECXCPR cursor position: CSI ? row ; col R
+// DECXCPR cursor position: CSI ? row ; col R (xterm, kitty, iTerm2, …).
+// Windows Terminal answers the extended report with the page number as well —
+// CSI ? row ; col ; page R (adaptDispatch.cpp _CursorPositionReport) — so the
+// trailing parameter is optional here and ignored by callers.
 // The ? marker disambiguates from modified F3 keys (Shift+F3 = CSI 1;2 R,
 // Ctrl+F3 = CSI 1;5 R, etc.) — plain CSI row;col R is genuinely ambiguous.
 // eslint-disable-next-line no-control-regex
-const CURSOR_POSITION_RE = /^\x1b\[\?(\d+);(\d+)R$/
+const CURSOR_POSITION_RE = /^\x1b\[\?(\d+);(\d+)(?:;\d+)?R$/
 // XTWINOPS pixel-size replies: CSI 6;height;width t (cell) and
 // CSI 4;height;width t (text area).
 // eslint-disable-next-line no-control-regex
@@ -577,9 +580,10 @@ const INCOMPLETE_RESPONSE_PREFIXES: ReadonlyArray<
   // `$` + final.
   ['decrpm', /^\x1b\[\?\d*(?:;\d*)?$/],
   ['decrpm', /^\x1b\[\?\d+;\d+\$$/],
-  // Kitty flags and DECXCPR: one `?` + at most two numeric params.
+  // Kitty flags and DECXCPR: one `?` + at most three numeric params
+  // (row;col — plus the page number Windows Terminal appends).
   ['kittyKeyboard', /^\x1b\[\?\d*$/],
-  ['cursorPosition', /^\x1b\[\?\d*(?:;\d*)?$/],
+  ['cursorPosition', /^\x1b\[\?\d*(?:;\d*){0,2}$/],
   // DA2: any `>`-parameter list.
   ['da2', /^\x1b\[>[\d;]*$/],
   // XTWINOPS: `6;h;w t` / `4;h;w t`, up to the final byte.

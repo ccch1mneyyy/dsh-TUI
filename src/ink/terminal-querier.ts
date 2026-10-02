@@ -147,7 +147,9 @@ export function terminalWindowSizePixels(): TerminalQuery<TerminalPixelSizeRespo
 
 /**
  * DECXCPR: request cursor position with DEC-private marker (CSI ? 6 n).
- * Terminal replies with CSI ? row ; col R. The `?` marker is critical —
+ * Terminal replies with CSI ? row ; col R — Windows Terminal appends the page
+ * number (CSI ? row ; col ; page R, see AdaptDispatch::_CursorPositionReport),
+ * which the input parser accepts and ignores. The `?` marker is critical —
  * the plain DSR form (CSI 6 n → CSI row;col R) is ambiguous with
  * modified F3 keys (Shift+F3 = CSI 1;2 R, etc.).
  * @returns a query whose response is the cursor-position reply.

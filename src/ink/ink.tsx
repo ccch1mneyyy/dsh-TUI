@@ -47,7 +47,7 @@ import { isDecstbmSafe, SYNC_OUTPUT_SUPPORTED, serializeDiff, supportsDecrqmProb
 import { CURSOR_HOME, cursorMove, cursorPosition, DISABLE_KITTY_KEYBOARD, DISABLE_MODIFY_OTHER_KEYS, DISABLE_WIN32_INPUT_MODE, ENABLE_KITTY_KEYBOARD, ENABLE_MODIFY_OTHER_KEYS, ENABLE_WIN32_INPUT_MODE, ERASE_SCREEN, ERASE_SCROLLBACK, SGR_RESET } from './termio/csi.js';
 import { DBP, DFE, DISABLE_MOUSE_TRACKING, ENABLE_MOUSE_TRACKING, ENTER_ALT_SCREEN, EXIT_ALT_SCREEN, SHOW_CURSOR } from './termio/dec.js';
 import { CLEAR_ITERM2_PROGRESS, CLEAR_TAB_STATUS, setClipboard, supportsTabStatus, wrapForMultiplexer } from './termio/osc.js';
-import { decrqm, kittyGraphics, terminalCellSizePixels, terminalWindowSizePixels } from './terminal-querier.js';
+import { cursorPosition as cursorPositionQuery, decrqm, kittyGraphics, terminalCellSizePixels, terminalWindowSizePixels } from './terminal-querier.js';
 import { TerminalWriteProvider } from './useTerminalNotification.js';
 import { TerminalImagesContext } from './hooks/use-terminal-images.js';
 import { DEFAULT_TERMINAL_CELL_SIZE, resolveTerminalCellSize, type TerminalImagePlacement } from './terminal-image.js';
@@ -69,6 +69,14 @@ const ERASE_THEN_HOME_PATCH = Object.freeze({
   content: ERASE_SCREEN + CURSOR_HOME
 });
 const TERMINAL_REPLY_QUARANTINE_MS = 120;
+// Sixel cursor-check circuit breaker. More than SIXEL_HEAL_BURST heals inside
+// SIXEL_HEAL_WINDOW_MS means our parked-cursor expectation is wrong for this
+// terminal, not that the terminal keeps corrupting the same frame — a
+// systematic mismatch would otherwise clear the screen every frame forever,
+// so the check mutes itself (SIXEL_HEAL_MUTE_MS) instead of fighting it.
+const SIXEL_HEAL_WINDOW_MS = 10_000;
+const SIXEL_HEAL_BURST = 3;
+const SIXEL_HEAL_MUTE_MS = 60_000;
 
 // Cached per-Ink-instance, invalidated on resize. frame.cursor.y for
 // alt-screen is always terminalRows - 1 (renderer.ts).
@@ -229,6 +237,11 @@ export default class Ink {
   // render() takes; deferring into the atomic block means old content stays
   // visible until the new frame is fully ready.
   private needsEraseBeforePaint = false;
+  // Sixel corruption self-heal (see verifySixelPark): one DECXCPR round trip
+  // in flight at a time, plus the timestamps of recent heals for the breaker.
+  private sixelParkCheckPending = false;
+  private sixelHealTimes: number[] = [];
+  private sixelParkCheckMutedUntil = 0;
   // Native cursor positioning: a component (via useDeclaredCursor) declares
   // where the terminal cursor should be parked after each frame. Terminal
   // emulators render IME preedit text at the physical cursor position, and
@@ -1126,8 +1139,9 @@ export default class Ink {
         if (this.altScreenActive) {
           // Absolute CUP (1-indexed); next frame's CSI H resets regardless.
           // Emitted after altScreenParkPatch so the declared position wins.
-          const row = Math.min(Math.max(target.y + 1, 1), terminalRows);
-          const col = Math.min(Math.max(target.x + 1, 1), terminalWidth);
+          // One source of truth with the sixel cursor check, which judges a
+          // DECXCPR report against this same cell.
+          const { row, col } = this.altScreenParkCell(target);
           optimized.push({
             type: 'stdout',
             content: cursorPosition(row, col)
@@ -1174,6 +1188,14 @@ export default class Ink {
     const tWrite = performance.now();
     writeDiffToTerminal(this.terminal, optimized, this.altScreenActive && !SYNC_OUTPUT_SUPPORTED);
     const writeMs = performance.now() - tWrite;
+    // The sixel graphics just pushed are one long DCS string; ConPTY can cut it
+    // short with its own in-band signalling and the tail then lands on screen
+    // as literal text. Cross-check the cursor this frame parked before the
+    // screen is trusted again (see verifySixelPark). Frames without graphics
+    // pay nothing — no query is written at all.
+    if (graphicsOutput !== '' && this.altScreenActive) {
+      this.verifySixelPark(this.altScreenParkCell(target));
+    }
     // One frame reached the terminal. Components holding a widened mount
     // window until its content is actually flushed (MessageList's paint
     // expansion hold) key off this tick — a commit can be superseded before
@@ -2036,6 +2058,101 @@ export default class Ink {
     // Fresh frontFrame is blank rows×cols — blitting from it would copy
     // blanks over content. Next alt-screen frame must full-render.
     this.prevFrameContaminated = true;
+  }
+
+  /**
+   * The cell an alt-screen frame leaves the physical cursor on: the declared
+   * position (clamped exactly like the CUP we emit) when a component declared
+   * one, else the bottom-left park row makeAltScreenParkPatch uses. Shared by
+   * the CUP emission and the sixel cursor check, so the two can never disagree
+   * about where the frame parked.
+   */
+  private altScreenParkCell(target: { x: number; y: number } | null): { row: number; col: number } {
+    if (target === null) return { row: this.terminalRows, col: 1 };
+    return {
+      row: Math.min(Math.max(target.y + 1, 1), this.terminalRows),
+      col: Math.min(Math.max(target.x + 1, 1), this.terminalColumns)
+    };
+  }
+
+  /**
+   * Sixel corruption self-heal.
+   *
+   * A sixel image is a single DCS string, and a terminal consumes it as pixels
+   * only while that string stays open. ConPTY writes its own sequences into the
+   * same output stream without checking whether a DCS is in flight: focus and
+   * unfocus events are "injected into the output stream without checking
+   * whether the VT output is currently in a ground state"
+   * (microsoft/terminal#17510), and on resize it needs a DSR/CPR round trip
+   * that interrupts whatever string is being parsed (microsoft/terminal#19621).
+   * An injection terminates the string early and the REST OF THE PAYLOAD is
+   * printed as literal text — the '?', '#', '!' run users report as a garbled
+   * screen. The diff renderer cannot repair it: those cells are blank in the
+   * model, so an unchanged cell is never rewritten and the garbage survives
+   * until the user presses Ctrl+L.
+   *
+   * The parked cursor is the witness. The frame ends by placing the physical
+   * cursor on {@link altScreenParkCell}; leaked payload text advances and wraps
+   * it, so a report that disagrees with our own placement proves the screen no
+   * longer matches the model. Recovery is then exactly the Ctrl+L path — a
+   * physical erase plus a full repaint, the only thing that can reclaim cells
+   * our model calls blank, because a diff never writes those.
+   *
+   * Only graphics frames are checked, and only the protocols that ship images
+   * as one long control string (sixel's DCS, and kitty's APC on terminals
+   * where that is reachable) — a frame without graphics writes no query at
+   * all. Deliberately timid everywhere else: an unanswered report is ignored
+   * (a terminal that ignores DECXCPR, or a reply that loses the race against
+   * the flush sentinel, must never trigger a clear), a resize in flight
+   * invalidates the comparison, and repeated heals mute the check instead of
+   * clearing the screen every single frame. A terminal that answers CPR with a
+   * stale position is indistinguishable from a corrupted screen here; that is
+   * what the breaker bounds (three clears, then a minute of silence).
+   */
+  private verifySixelPark(expected: { row: number; col: number }): void {
+    if (this.sixelParkCheckPending || this.isUnmounted || this.isPaused) return;
+    if (this.terminalQueriesSuspended || !this.altScreenActive) return;
+    const now = Date.now();
+    if (now < this.sixelParkCheckMutedUntil) return;
+    const querier = this.app?.querier;
+    if (querier === undefined) return;
+    // Written after the frame, so the terminal answers for the post-park
+    // cursor. flush() bounds the wait: a terminal that ignores DECXCPR
+    // resolves undefined once the DA1 sentinel answers first.
+    const geometry = `${this.terminalRows}x${this.terminalColumns}`;
+    this.sixelParkCheckPending = true;
+    void Promise.all([querier.send(cursorPositionQuery()), querier.flush()])
+      .then(([reply]) => {
+        this.sixelParkCheckPending = false;
+        if (this.isUnmounted || this.isPaused || this.terminalQueriesSuspended) return;
+        if (reply === undefined) return;
+        // A resize in flight re-parks the cursor on the new grid, so a report
+        // measured against the old geometry proves nothing — and the terminal
+        // rebuilds its own idea of the cursor on resize. Skip the frame rather
+        // than clear a healthy screen.
+        if (geometry !== `${this.terminalRows}x${this.terminalColumns}`) return;
+        if (reply.row === expected.row && reply.col === expected.col) return;
+        const at = Date.now();
+        this.sixelHealTimes = this.sixelHealTimes.filter(time => at - time < SIXEL_HEAL_WINDOW_MS);
+        this.sixelHealTimes.push(at);
+        if (this.sixelHealTimes.length > SIXEL_HEAL_BURST) {
+          this.sixelHealTimes = [];
+          this.sixelParkCheckMutedUntil = at + SIXEL_HEAL_MUTE_MS;
+          logForDebugging(
+            `sixel cursor check muted: ${SIXEL_HEAL_BURST} mismatches within ${SIXEL_HEAL_WINDOW_MS}ms (expected ${expected.row},${expected.col})`,
+            { level: 'warn' }
+          );
+          return;
+        }
+        logForDebugging(
+          `sixel payload cut short: parked at ${expected.row},${expected.col} but the cursor is at ${reply.row},${reply.col} — clearing the screen to reclaim leaked payload text`,
+          { level: 'warn' }
+        );
+        this.forceRedraw();
+      })
+      .catch(() => {
+        this.sixelParkCheckPending = false;
+      });
   }
 
   /**
