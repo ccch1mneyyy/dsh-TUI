@@ -1,24 +1,11 @@
 import {
   type StreamChunk
 } from '@deepseek-ai/dsh-llm'
-import type { TokenUsage } from './types.js'
+import { emptyTokenUsage, estimateTokens } from '../../channel/usage.js'
 
-/** 全零 token 累计（新会话 / 复位用）。 */
-export function emptyTokenUsage(): TokenUsage {
-  return {
-    input: 0,
-    output: 0,
-    cacheRead: 0,
-    cacheWrite: 0,
-    peak: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    idle: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-  }
-}
-
-/** Context-bar token estimate (pi-nano-context: ~4 chars per token). */
-export function estimateTokens(text: string): number {
-  return Math.ceil(text.length / 4)
-}
+// The neutral helpers live with the shared projector (src/channel/usage.ts);
+// re-exported here for the existing importers.
+export { emptyTokenUsage, estimateTokens }
 
 /** Whether one stream chunk advances the first-token/decode boundary. */
 export function isTokenDelta(chunk: StreamChunk): boolean {
@@ -46,7 +33,7 @@ export function tokenDeltaChars(chunk: StreamChunk): number {
   }
 }
 
-/** Provider output count when usable; durable imports may predate strict validation. */
+/** DSH-shaped (`outputTokens`) output count when usable; durable imports may predate strict validation. */
 export function usageOutputTokens(usage: unknown): number | undefined {
   if (typeof usage !== 'object' || usage === null) return undefined
   const value = (usage as { outputTokens?: unknown }).outputTokens

@@ -1,8 +1,8 @@
 /**
- * Capture the projection goldens from the CURRENT projector (Phase 0 of
- * docs/agent-backend-design.md §6.4): runs every DSH fixture through
- * `createChannelProjection` (pipeline and determinism rules in
- * scripts/lib/projection-golden.ts) and writes
+ * Capture the projection goldens (docs/agent-backend-design.md §6.4; the
+ * committed ones are the Phase 0 capture of the pre-split reducer): runs
+ * every DSH fixture through the DSH translator + shared projector (pipeline
+ * and determinism rules in scripts/lib/projection-golden.ts) and writes
  * `scripts/fixtures/dsh/<fixture>[.<variant>].golden.json`.
  *
  * Refuses to write when a fixture drifted from its generator or when live and

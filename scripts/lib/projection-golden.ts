@@ -1,15 +1,19 @@
 /**
  * Projection golden pipeline shared by scripts/capture-projection-golden.ts
- * (writes) and scripts/verify-projection-golden.ts (compares) — the Phase 0
+ * (writes) and scripts/verify-projection-golden.ts (compares) — the
  * equivalence anchor of docs/agent-backend-design.md §6.4.
  *
- * Each fixture under scripts/fixtures/dsh/ runs through the CURRENT
- * `createChannelProjection` twice:
- *   - replay: `replayEvents(log)`, then every frame through
- *     `renderStreamFrame`, then `settleStreaming()` — what /resume, rewind and
- *     a reattaching client produce;
- *   - live: `renderEvent` per durable event in order, then the same frames
+ * Each fixture under scripts/fixtures/dsh/ runs through the DSH translator
+ * (`createDshTranslator`, src/dsh-adapter/backend/translate.ts) feeding the
+ * shared projector (`createChannelProjection`, src/channel/projection.ts) —
+ * the pipeline the channel uses — twice:
+ *   - replay: `apply(translateReplay(log), { replay: true })`, then every
+ *     frame through `translateFrame`, then `settleStreaming()` — what
+ *     /resume, rewind and a reattaching client produce;
+ *   - live: `translateEvent` per durable event in order, then the same frames
  *     and settle — what an attached client accumulates.
+ * The goldens were captured in Phase 0 from the single pre-split DSH reducer;
+ * Phase 1 must reproduce them byte-for-byte.
  * The golden stores the replay snapshot in full and documents every place the
  * live snapshot differs (`liveRows` / `liveState` / `liveDiff`), each with the
  * reason it is legitimate; an unexplained difference fails both scripts. It
@@ -17,13 +21,14 @@
  * behaviour (spinner phases, when a thinking row folds) is pinned too.
  *
  * Determinism: the language is pinned to zh, debug logging is off, and
- * `Date.now` is replaced BEFORE the projection module loads by a clock that
+ * `Date.now` is replaced BEFORE the projection modules load by a clock that
  * starts at a fixed instant for every run and advances 1ms per call, so
  * `startedAt`/`durationMs`/`turnStart` are stable. Event and frame times come
  * from the fixtures, so TPS and peak/idle cost buckets are stable too.
  * Dependencies are stubs without Cordis: no tools registry (cards keep raw
  * text), no attachments, no IDE selections; notify, jobs, context-warning
- * hooks and the plugin renderer only record their calls.
+ * hooks, the presenter scope (`calls.agent`) and the plugin renderer only
+ * record their calls. The DSH pricing window is the production one.
  */
 import { readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -35,11 +40,12 @@ const CLOCK_BASE = Date.UTC(2026, 0, 5, 0, 0, 0)
 let clock = CLOCK_BASE
 Date.now = () => clock++
 
-const { createChannelProjection } = await import('../../src/dsh-adapter/channel/projection.js')
+const { createChannelProjection } = await import('../../src/channel/projection.js')
+const { createDshTranslator, dshPricingWindow } = await import('../../src/dsh-adapter/backend/translate.js')
 const { createInitialChannelView } = await import('../../src/dsh-adapter/channel/state.js')
 const { FIXTURE_DIR, buildFixtures, staleFixtureFiles } = await import('../fixtures/dsh/generate.js')
 
-type Projection = ReturnType<typeof createChannelProjection>
+type Translator = ReturnType<typeof createDshTranslator>
 type ProjectionArgs = Parameters<typeof createChannelProjection>
 type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue }
 
@@ -116,14 +122,14 @@ interface Recorder {
 
 interface Projected {
   readonly snapshot: JsonValue
-  /** Live path only: one line per input; replayEvents is atomic, so replay has none. */
+  /** Live path only: one line per input; a replay batch is atomic, so replay has none. */
   readonly timeline: readonly string[]
 }
 
 function project(variant: GoldenVariant, mode: 'replay' | 'live'): Projected {
   clock = CLOCK_BASE
-  const events = readJsonl(join(FIXTURE_DIR, `${variant.fixture}.jsonl`)) as Parameters<Projection['replayEvents']>[0]
-  const frames = readJsonl(join(FIXTURE_DIR, `${variant.fixture}.frames.jsonl`)) as Parameters<Projection['renderStreamFrame']>[0][]
+  const events = readJsonl(join(FIXTURE_DIR, `${variant.fixture}.jsonl`)) as Parameters<Translator['translateReplay']>[0]
+  const frames = readJsonl(join(FIXTURE_DIR, `${variant.fixture}.frames.jsonl`)) as Parameters<Translator['translateFrame']>[0][]
   const recorder: Recorder = {
     calls: { notify: [], jobsOnStarted: [], jobsOnOutputSeen: [], rendererRender: [], checkContextWarning: 0, resetContextWarning: 0, agent: 0 },
   }
@@ -134,11 +140,15 @@ function project(variant: GoldenVariant, mode: 'replay' | 'live'): Projected {
   const state: ProjectionArgs[0] = { ...view, emit: () => undefined }
   const rowIds = { value: 0 }
   const inputConvergence = { cancelInFlight: true }
-  const deps: ProjectionArgs[1] = {
-    agent: () => {
+  const translator = createDshTranslator({
+    tools: undefined,
+    scope: () => {
       recorder.calls.agent += 1
-      return {} as never
+      return {}
     },
+    attachments: () => undefined,
+  })
+  const deps: ProjectionArgs[1] = {
     rowIds,
     resetContextWarning: () => { recorder.calls.resetContextWarning += 1 },
     jobs: {
@@ -151,9 +161,7 @@ function project(variant: GoldenVariant, mode: 'replay' | 'live'): Projected {
       recorder.calls.notify.push(toJson({ text, options }))
       return () => undefined
     },
-    tools: undefined,
     renderer: {
-      register: () => () => undefined,
       render: (type, payload) => {
         recorder.calls.rendererRender.push(type)
         if (type !== 'fixture-plugin/note' || typeof payload !== 'object' || payload === null) return undefined
@@ -164,8 +172,8 @@ function project(variant: GoldenVariant, mode: 'replay' | 'live'): Projected {
         }
       },
     },
-    attachments: () => undefined,
     selectionAttached: () => undefined,
+    pricingWindow: dshPricingWindow,
   }
   const projector = createChannelProjection(state, deps)
   // The transient view after each live input: spinner phase, open streaming
@@ -178,15 +186,15 @@ function project(variant: GoldenVariant, mode: 'replay' | 'live'): Projected {
     const goal = state.goal === undefined ? '-' : `${state.goal.id}:${state.goal.phase}:${state.goal.roundsStarted}`
     timeline.push(`${input} | rows=${state.rows.length} streaming=[${streamingIds}] spin=${state.spinnerMode} working=${state.working ? 1 : 0} tools=${state.activeToolCount} chars=${state.responseChars} goal=${goal} todos=${state.todos.length} compaction=${state.compaction?.phase ?? '-'}`)
   }
-  if (mode === 'replay') projector.replayEvents(events)
+  if (mode === 'replay') projector.apply(translator.translateReplay(events), { replay: true })
   else {
     for (const event of events) {
-      projector.renderEvent(event)
+      projector.apply(translator.translateEvent(event), { replay: false })
       mark(`#${event.seq} ${event.type}`)
     }
   }
   for (const frame of frames) {
-    projector.renderStreamFrame(frame)
+    projector.apply(translator.translateFrame(frame), { replay: false })
     mark(`frame r${frame.revision} ${frame.type} ${frame.attemptId}`)
   }
   projector.settleStreaming()

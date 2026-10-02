@@ -3,7 +3,7 @@ import type {
   TuiRewindMode,
   TuiRewindPromptDecision,
 } from '../extension-events.js'
-import { cleanRenderText, cleanScalarText } from '../sanitize.js'
+import { cleanRenderText, cleanScalarText, NOTICE_CELLS } from '../sanitize.js'
 
 /** `tui/input` return normalization: transform/handled/cancel or no opinion.
  *  A blank `{ text }` rewrite is NOT a decision — it is logged and the chain
@@ -82,9 +82,9 @@ export function normalizeRewindPromptDecision(
   return undefined
 }
 
-/** Toast-bound plugin text (veto reasons, handled notices, rewind summaries)
- *  is render-path data too: same sanitization, toast-width cap. */
-export const NOTICE_CELLS = 200
+/** Toast-width cap; defined beside the sanitizer it pairs with
+ *  (`src/channel/sanitize.ts`) and re-exported for existing importers. */
+export { NOTICE_CELLS }
 
 /** `tui/rewind-done` return normalization: the first non-empty STRING is the
  *  summary; anything else is not a decision. */

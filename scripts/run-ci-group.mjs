@@ -581,9 +581,9 @@ const GROUPS = {
     ["verify-context-warning", ['node', '--import', 'tsx/esm', 'scripts/verify-context-warning.mjs']],
     ["verify-channel-goal-todo", ['node', '--import', 'tsx/esm', 'scripts/verify-channel-goal-todo.mjs']],
 // 投影黄金基线（多后端方案 §6.4）：scripts/fixtures/dsh/ 的合成 DSH 日志
-// + 流帧经当前 createChannelProjection 的 replay 与 live 两路，与提交的
-// *.golden.json 逐字段比较；live 与 replay 的差异必须有登记的理由。
-// Phase 1 换成「DSH 翻译器 + 共享投影器」后不改黄金文件也必须通过。
+// + 流帧经「DSH 翻译器 + 共享投影器」的 replay 与 live 两路，与 Phase 0
+// 由拆分前投影器生成的 *.golden.json 逐字段比较；live 与 replay 的差异
+// 必须有登记的理由，不改黄金文件也必须通过。
     ["verify-projection-golden", ['node', '--import', 'tsx/esm', 'scripts/verify-projection-golden.ts']],
 // IDE 选区通道回归（PR #562）：纯函数（env 直连/lock 扫描与 workspace
 // 匹配过滤/hello_ack 解析/selection_changed 校验）、无 IDE 静默降级、

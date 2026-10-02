@@ -33,3 +33,7 @@
 - **决策**：D0-1 UI 值 import 规则按（UI 文件, dsh-adapter 目标）登记，未登记即失败、过期条目也失败（只减不增），通过时一行警告（`--verbose` 列明细）；类型判定 = `import type`/全部内联 `type`/`.d.ts`/类型位置的 `import()`。D0-2 门禁顺带落实 §3.1 的 `agent ↛ channel`。D0-3 golden = replay 全快照 + live 差异（`liveRows`/`liveState`/`liveDiff` 逐条理由，未登记理由拒绝写入）+ `liveTimeline`（逐输入瞬态视图）；初始 state 用 `createInitialChannelView`（`agentPreset:'ptc'` 覆盖改名分支），renderer stub 覆盖 tuiRenderers 接缝，`v3-turns` 另跑 `thinkingFold:'full'`。D0-4 不做真实日志脱敏 fixture：本机日志为 zstd v4，工具参数 JSON/路径无法靠等长占位安全脱敏，合成 fixture 已覆盖 §6.2 各族。D0-5 探针 CLI 路径经 env `CLAUDE_CODE_EXECUTABLE` 传入，仓库不写本机路径。D0-6 hygiene 豁免：89264a82 的方案文档与两份探针本就让 `verify:source-hygiene` 失败，Claude 后端也必须设置/清洗这些变量；其余文件规则不变（已用反例验证）。
 - **延后**：P2-2；`requires_action` 与 `cancelAsyncMessage` 语义（Phase 3 权限探针）；`interrupt()` 对前台工具的效果（若 Phase 2 演练嫌 `now` 延迟）；传递 import（经中间模块碰厂商包）门禁仍不查。
 - **Phase 1 前置**：保持 `verify:projection-golden` 不改黄金文件通过（`liveDiff` 不得新增条目）；`assistant/chunk` 旧日志的 live/replay 差异是现状，翻译器须原样保留；翻译器状态（attempt/revision/seq 幂等、legacy 前缀合并）以 golden 的 `liveTimeline` 为准；新目录 `src/agent/`、`src/channel/` 已受门禁约束。
+
+## Phase 1
+
+- **Checkpoint 1（进行中，提交 2 完成后改写本节）**：`src/agent/`（领域类型）、`src/channel/projection.ts`（共享投影器，`apply(events,{replay})`）、`src/dsh-adapter/backend/translate.ts`（DSH 翻译器）落地；`src/dsh-adapter/channel/projection.ts` 退为「翻译器 + 共享投影器」兼容外壳；黄金管线已切到新管线，`verify:projection-golden` 不改黄金通过（5 份、72 行、28 处 live 差异）。

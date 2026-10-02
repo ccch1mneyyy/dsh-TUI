@@ -1,11 +1,10 @@
 /**
  * Projection golden gate (docs/agent-backend-design.md §6.4): replays every
- * DSH fixture in scripts/fixtures/dsh/ through the current
- * `createChannelProjection` (replay and live paths, pipeline in
+ * DSH fixture in scripts/fixtures/dsh/ through the DSH translator + shared
+ * projector (replay and live paths, pipeline in
  * scripts/lib/projection-golden.ts) and deep-compares the result with the
- * committed `*.golden.json`. Phase 1 swaps the projector for "DSH translator
- * + shared projector" and must keep this gate green without touching a
- * golden.
+ * committed `*.golden.json`, captured in Phase 0 from the pre-split reducer.
+ * The split pipeline must keep this gate green without touching a golden.
  *
  * Fails when: a fixture file drifted from scripts/fixtures/dsh/generate.ts; a
  * golden is missing, orphaned or differs (the first differing paths are
