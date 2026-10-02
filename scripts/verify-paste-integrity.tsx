@@ -525,6 +525,112 @@ check('l9: the real ingress keeps the decoded capture byte-identical', pasteIngr
 checkNum('l10: ...with no record residue (`_` / ESC)', residueCount(pasteIngress(capturePayload)), 0)
 checkNum('l11: ...and no source character lost (LCS deleted == 0)', align(ALL_BOUNDARY_SOURCE, pasteIngress(capturePayload)).deleted, 0)
 
+// ── (m) T-FIX-06: near-miss transitions decode; surrogate halves come back ──
+
+console.log('# (m) T-FIX-06: near-miss transitions decode, surrogate halves come back')
+
+/** ONE half of a transition (`rec()` above spells the whole down+up pair). */
+const half = (vk: number, sc: number, uc: number, kd: number, cs = 0): string =>
+  `${CSI}${vk};${sc};${uc};${kd};${cs};1_`
+/** The literal lane's payload for `a` <records> `b` — a VT bracketed paste. */
+const literalPayload = (...parts: readonly string[]): string =>
+  pastePayload(`${ESC}[200~a${parts.join('')}b${ESC}[201~`)
+/** ...and the same payload through the real ingress. */
+const literalValue = (...parts: readonly string[]): string => pasteIngress(literalPayload(...parts))
+/** A supplementary character's half, spelled as its own down+up pair. */
+const surrogatePair = (uc: number): string => half(65, 30, uc, 1) + half(65, 30, uc, 0)
+
+/**
+ * F-2 (`probe/review/minimal-counterexamples.txt` R1/R2/R3/R3b/R3c, promoted
+ * to assertions by T-FIX-06). The transition PAIR is what proves a record
+ * stream — and a near miss is still a pair: the same `Uc` (which IS the
+ * character), one press + one release, in EITHER order, with payload text
+ * allowed between them (the release half is the next RECORD, not the next
+ * byte). `Vk;Sc;Cs` belong to the release's own spelling, not to the identity:
+ * conhost's synthesized keyup may carry a different `Vk`/`Sc`, and `Cs` can
+ * change while a modifier is released before the keyup.
+ *
+ * Before T-FIX-06 every near miss failed the exact-identity gate and fell
+ * through the decode into the ingress's residue strip, which deletes complete
+ * ESC-bearing records whole — `ab`, with no reading left that could prove a
+ * break had ever been there.
+ */
+check('m1: a NON-ADJACENT pair (payload text between the halves) decodes',
+  literalValue(half(13, 28, 13, 1), 'X', half(13, 28, 13, 0)), 'a\nXb')
+check('m2: a pair spelled UP-then-DOWN decodes',
+  literalValue(half(13, 28, 13, 0), half(13, 28, 13, 1)), 'a\nb')
+check('m3: ...a differing Cs does not unmake the pair',
+  literalValue(half(13, 28, 13, 1, 0), half(13, 28, 13, 0, 1)), 'a\nb')
+check('m4: ...nor a differing Sc (a synthesized release carries 0)',
+  literalValue(half(13, 28, 13, 1), half(13, 0, 13, 0)), 'a\nb')
+check('m5: ...nor a differing Vk',
+  literalValue(half(13, 28, 13, 1), half(0, 28, 13, 0)), 'a\nb')
+check('m6: control — the exact adjacent pair still decodes to ONE break',
+  literalValue(half(13, 28, 13, 1), half(13, 28, 13, 0)), 'a\nb')
+
+/**
+ * F-1 (`minimal-counterexamples.txt` R10, `edge-frames.txt` D2). `Uc` is ONE
+ * UTF-16 code unit, so a supplementary character streams as a high half
+ * followed by its low half. T-FIX-06 removed the shared `pending` scratch slot
+ * entirely: EVERY half is handed back as its own code unit, so two halves that
+ * arrive next to each other concatenate into the character they spell (UTF-16
+ * concatenation IS the pairing rule, exactly as the decomposed lane's paste
+ * buffer does it) and a half whose partner never arrives stays visible instead
+ * of being consumed with NOTHING in return (L-012). No state survives a
+ * record, so two unrelated records can never be stitched into a character the
+ * source never contained.
+ */
+check('m7: a lone high half is handed back, not consumed with zero return (R10)',
+  literalValue(surrogatePair(0xd83d)), 'a\ud83db')
+check('m8: ...and it may NOT be stitched onto another character\u2019s low half (D2)',
+  literalValue(surrogatePair(0xd83d), 'X', surrogatePair(0xde00)), 'a\ud83dX\ude00b')
+check('m9: ...nor across payload text — there is no state left to leak',
+  literalValue(surrogatePair(0xd83d), 'xy', surrogatePair(0xde00)), 'a\ud83dxy\ude00b')
+check('m10: control — two ADJACENT halves still compose ONE supplementary char',
+  literalValue(surrogatePair(0xd83d), surrogatePair(0xde00)), 'a\u{1f600}b')
+check('m11: arrival order is kept when three halves stream (R10 + edge-frames D1)',
+  literalValue(surrogatePair(0xd83d), surrogatePair(0xd83e), surrogatePair(0xde00)), 'a\ud83d\ud83e\ude00b')
+{
+  const stream = `${ESC}[200~a${surrogatePair(0xd83d)}b${ESC}[201~`
+  const cut = stream.indexOf(half(65, 30, 0xd83d, 0)) + 4
+  check('m12: a chunk boundary inside the pair changes nothing',
+    pasteIngress(pastePayloadChunks([stream.slice(0, cut), stream.slice(cut)])), 'a\ud83db')
+}
+
+/**
+ * The DECLARED residual of the deletion side — pinned instead of implied. A
+ * LONE record has no transition evidence, so the decoder keeps its bytes
+ * (`verify-win32-input.tsx` §8c, d8); the ingress's residue contract then
+ * deletes a complete ESC-bearing record whole (ADR-0002 decision 1 / ADR-0008
+ * decision 2, pinned by (a)/(b)/(d) above and by `verify-paste-residue`). The
+ * decode cannot rescue those bytes, and the earlier "keeps every byte" claim
+ * was only ever true of the REWRITE, never of that deletion — these assertions
+ * say so out loud.
+ */
+check('m13: residual — a lone record keeps its bytes in the payload',
+  literalPayload(half(13, 28, 13, 1)), `a${half(13, 28, 13, 1)}b`)
+check('m14: residual — ...and the ingress then deletes that complete record',
+  literalValue(half(13, 28, 13, 1)), 'ab')
+check('m15: residual — a Uc=0 pair likewise survives the decoder and not the ingress',
+  literalValue(half(13, 28, 0, 1), half(13, 28, 0, 0)), 'ab')
+
+/**
+ * The SAME `decodedRecordChar` serves the ASSEMBLED lane
+ * (`decodeWin32RecordText`), whose input is the record text a decomposed paste
+ * leaked. A one-lane fix on a shared helper leaves the other caller guarded by
+ * nothing but a probe (brooks-review, Change Propagation), so the second caller
+ * gets the same three cases — the leaked spelling arrives CHARACTER BY
+ * CHARACTER, exactly as the (c)/(e)/(j) fixtures deliver it.
+ */
+const leakedHalf = (uc: number): string => `${ESC}[65;30;${uc};1;0;1_`
+const assembledValue = (text: string): string => pasteIngress(pastePayload(decomposedStream(text)))
+check('m16: the ASSEMBLED lane hands a lone half back too (shared helper)',
+  assembledValue(`a${leakedHalf(0xd83d)}b`), 'a\ud83db')
+check('m17: ...and cannot stitch one record\u2019s half onto another\u2019s across payload text',
+  assembledValue(`a${leakedHalf(0xd83d)}X${leakedHalf(0xde00)}b`), 'a\ud83dX\ude00b')
+check('m18: control — adjacent halves in the assembled lane still compose ONE char',
+  assembledValue(`a${leakedHalf(0xd83d)}${leakedHalf(0xde00)}b`), 'a\u{1f600}b')
+
 // ── (g) on the product: chip lines == source lines, Enter sends the source ──
 
 console.log('# (g) on the product: the fold chip reports the SOURCE lines, Enter sends them')

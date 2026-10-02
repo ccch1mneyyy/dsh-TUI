@@ -37,6 +37,17 @@ const EDITABLE_CONTROL = /[\u0000-\u0009\u000b-\u001f\u007f]/u
  * record grammar (exactly five `;` separators) matches, so a real `_` and
  * ordinary bracket text survive untouched.
  *
+ * This rule is the DELETION side of the paste-integrity contract, and the
+ * split of responsibility with the parser is deliberate (T-FIX-06): the
+ * parser's record decoders (`parse-keypress.ts` `decodeWin32RecordText` /
+ * `decodeLiteralRecordText`) REWRITE a record stream they can prove is one —
+ * a transition pair, near-miss spellings included — and this rule then deletes
+ * whatever complete record is left over. So a shape the decoder declines
+ * (a lone record with no transition evidence, an ESC-less tail) has its bytes
+ * deleted HERE, not rescued: "the decoder keeps its bytes" is a statement
+ * about the rewrite, never about the text the user finally sees. That residual
+ * is pinned in `scripts/verify-paste-integrity.tsx` (m13-m15).
+ *
  * Shape source: the same grammar `parse-keypress.ts` decodes at token level
  * (`WIN32_INPUT_RE`) and rewrites back into characters for a leaked payload
  * (`WIN32_RECORD_TEXT_RE`); the expressions must stay in sync.

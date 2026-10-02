@@ -1043,6 +1043,69 @@ check('VK_PACKET with Uc=0 carries no payload and stays swallowed', new Feeder()
   checkPaste('a Uc=0 VK_PACKET record adds no character inside a paste', f.feed(P2_OPEN + body + P2_CLOSE), 'ab')
 }
 
+// --- 16b. the VK_PACKET lane OUTSIDE a paste, and its two guard rails --------
+//
+// T-FIX-02 put VK_PACKET on the "the character rides in Uc" lane, which also
+// changes what a VK_PACKET record does when NO bracketed-paste marker ever
+// arrives (the review's F-3: a marker-less per-character stream dispatches one
+// Return per CR/LF instead of being swallowed). T-FIX-06 keeps that expansion
+// deliberately and pins BOTH sides here:
+//
+// - VK_PACKET's whole payload IS `Uc` (SendInput / keybd_event Unicode
+//   injection), so a marker-less character stream is typed input, not a paste:
+//   swallowing its CR would be the same silent loss #1251 fixed, and the
+//   pre-existing Vk=0 synthesized lane has always read it that way (the
+//   review's control B8). What keeps a paste out of the submit path is the
+//   EVIDENCE — the bracketed marker — never a heuristic on a bare record.
+// - the same records INSIDE the markers stay one paste event with the break
+//   intact and emit no Return at all, so a real paste still cannot submit
+//   mid-way (AC-12).
+{
+  const marker = (char: number): string => `${CSI}231;0;${char};1;0;1_`
+  // The review's B7 shape: a, CR, LF, b, CR, LF, c — every record VK_PACKET,
+  // no marker anywhere.
+  const stream = [97, 13, 10, 98, 13, 10, 99].map(marker).join('')
+  check('AC-12/F-3: a marker-less VK_PACKET character stream is typed input, not a paste',
+    new Feeder().feed(stream), [
+      wchar('a'),
+      wkey('return', {}, marker(13)),
+      wkey('return', {}, marker(10)),
+      wchar('b'),
+      wkey('return', {}, marker(13)),
+      wkey('return', {}, marker(10)),
+      wchar('c'),
+    ])
+  // ...and the single-record side this lane also owns outside a paste (§16
+  // already pins CR/LF/Tab/Backspace/DEL/Escape; repeated here as the F-3 pair
+  // so both ends of the widening are guarded in ONE place).
+  check('AC-12/F-3: a single VK_PACKET CR outside any paste is a Return',
+    new Feeder().feed(marker(13)), [wkey('return', {}, marker(13))])
+}
+{
+  // F-10 ①: the marker itself spelled with VK_PACKET records (the review's C1,
+  // `KNOWN-ISSUES.md` A-4's untested combination).
+  const marker = (char: number): string => `${CSI}231;0;${char};1;0;1_`
+  const open = [27, 91, 50, 48, 48, 126].map(marker).join('')
+  const close = [27, 91, 50, 48, 49, 126].map(marker).join('')
+  const keys = new Feeder().feed(open + marker(97) + marker(13) + marker(98) + close)
+  checkPaste('VK_PACKET-spelled markers + VK_PACKET body: ONE paste event (F-10 ①)',
+    keys, 'a\nb')
+  checkBoolean('AC-12: a marked VK_PACKET paste emits no Return key at all',
+    keys.every(key => key.kind !== 'key' || key.name !== 'return'), true)
+}
+{
+  // F-10 ②: the body spelled as down+up PAIRS (conhost's real
+  // Clipboard::TextToKeyEvents form, the review's C2/C3/C4). The assembler must
+  // not append a character twice because a release half also carries `Uc`.
+  const marker = (char: number): string => `${CSI}231;0;${char};1;0;1_`
+  const open = [27, 91, 50, 48, 48, 126].map(marker).join('')
+  const close = [27, 91, 50, 48, 49, 126].map(marker).join('')
+  checkPaste('VK_PACKET markers + down+up PAIRED body: no character is duplicated (F-10 ②)',
+    new Feeder().feed(open + pasteRecs(231, 97) + pasteRecs(231, 98) + close), 'ab')
+  checkPaste('Vk=0 markers + down+up PAIRED body with a CR pair: no character is duplicated (F-10 ②)',
+    new Feeder().feed(P2_OPEN + pasteRecs(0, 97) + pasteRecs(0, 13) + pasteRecs(0, 98) + P2_CLOSE), 'a\nb')
+}
+
 if (failures > 0) {
   console.error(`\n${failures} assertion(s) failed`)
   process.exit(1)

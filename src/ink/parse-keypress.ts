@@ -290,21 +290,24 @@ const WIN32_RECORD_FRAME_RE = /\u001b\[\d*(?:;\d*){5}_/u
  * are named keys there, everything above 0x20 outside the C0/C1/DEL band is
  * text, and the rest (0, other control codes) has no character meaning and is
  * swallowed. `Uc` is one UTF-16 code unit, so a supplementary character
- * streams as a high half followed by its low half; an orphaned half is
- * dropped. `pending` is the surrogate scratch slot.
+ * streams as a high half followed by its low half.
+ *
+ * EVERY surrogate half is text of its own (T-FIX-06). The halves of one
+ * character arrive next to each other and concatenate — UTF-16 concatenation
+ * IS the pairing rule — while a half whose partner never arrived stays visible
+ * instead of being consumed with nothing in return (L-012: `probe/review/
+ * minimal-counterexamples.txt` R10 measured `a` + a high-half pair + `b` as
+ * `ab`, both records eaten and zero handed back). There is deliberately NO
+ * scratch slot to carry a half across records: the previous `pending` state
+ * let an unrelated record's low half pair with an earlier orphan and printed a
+ * character the source never contained (`edge-frames.txt` D2: `aX😀b` for a
+ * stream that never held U+1F600). With no state, no two inputs can be stitched
+ * together — across records or across payload text.
  */
-function decodedRecordChar(uc: number, pending: { high?: number }): string | undefined {
-  if (uc >= 0xd800 && uc <= 0xdbff) {
-    pending.high = uc
-    return undefined
-  }
-  if (uc >= 0xdc00 && uc <= 0xdfff) {
-    // Orphaned low half (no pending high) is swallowed, never resurrected.
-    const high = pending.high
-    pending.high = undefined
-    return high === undefined ? undefined : String.fromCharCode(high, uc)
-  }
-  pending.high = undefined
+function decodedRecordChar(uc: number): string | undefined {
+  // Either half is handed back as the code unit it is; adjacency alone (never a
+  // banked half) decides whether two of them spell one supplementary char.
+  if (uc >= 0xd800 && uc <= 0xdfff) return String.fromCharCode(uc)
   if (uc === 27) return '\x1b'
   if (uc === 9) return '\t'
   if (uc === 8 || uc === 0x7f) return '\x7f'
@@ -329,18 +332,15 @@ function recordField(match: RegExpMatchArray, index: number): number {
  * keyup, a bare modifier transition and a `Uc` with no character meaning carry
  * nothing, and L-012 forbids consuming bytes on a lane that cannot hand them
  * back: such a pair keeps its own bytes and stays subject to the ingress's
- * residue contract, exactly as before. `pending` is read, never advanced — the
- * caller decides whether the pair is consumed before its surrogate half is
- * banked.
+ * residue contract, exactly as before.
  */
-function recordCarriesText(match: RegExpMatchArray, pending: { high?: number }): boolean {
+function recordCarriesText(match: RegExpMatchArray): boolean {
   const vk = recordField(match, 0)
   const uc = recordField(match, 2)
   if (recordField(match, 3) !== 1) return false
   if (WIN32_VK_MODIFIER.has(vk)) return false
   if (uc === 13 || uc === 10) return true
-  const probe: { high?: number } = { high: pending.high }
-  return decodedRecordChar(uc, probe) !== undefined || probe.high !== undefined
+  return decodedRecordChar(uc) !== undefined
 }
 
 /**
@@ -349,14 +349,9 @@ function recordCarriesText(match: RegExpMatchArray, pending: { high?: number }):
  * ({@link decodedRecordChar}); a record that carries neither returns the fold
  * untouched, which is exactly what the matcher itself does with a keyup, a
  * bare modifier transition, and a Uc with no character meaning (ADR-0002,
- * "not decodable → nothing"). `pending` is the surrogate scratch slot shared
- * across the payload's records.
+ * "not decodable → nothing").
  */
-function appendDecodedRecord(
-  fold: NewlineFold,
-  match: RegExpMatchArray,
-  pending: { high?: number },
-): NewlineFold {
+function appendDecodedRecord(fold: NewlineFold, match: RegExpMatchArray): NewlineFold {
   const vk = recordField(match, 0)
   const uc = recordField(match, 2)
   const keydown = recordField(match, 3) === 1
@@ -368,7 +363,7 @@ function appendDecodedRecord(
   if (!keydown && !altNumpadRelease) return fold
   if (keydown && WIN32_VK_MODIFIER.has(vk)) return fold
   if (uc === 13 || uc === 10) return foldNewline(fold, uc)
-  const ch = decodedRecordChar(uc, pending)
+  const ch = decodedRecordChar(uc)
   if (ch === undefined) return fold
   return { text: `${fold.text}${ch}`, lastWasCarriageReturn: false }
 }
@@ -418,7 +413,6 @@ function decodeWin32RecordText(
   }
   let cursor = 0
   let fold: NewlineFold = { text: '', lastWasCarriageReturn: false }
-  const pending: { high?: number } = {}
   for (const match of payload.matchAll(WIN32_RECORD_TEXT_RE)) {
     const start = match.index
     if (start > cursor) {
@@ -430,7 +424,7 @@ function decodeWin32RecordText(
       fold = appendPayloadText(fold, payload.slice(cursor, start), carriageReturnIn(cursor, start))
     }
     cursor = start + match[0].length
-    fold = appendDecodedRecord(fold, match, pending)
+    fold = appendDecodedRecord(fold, match)
   }
   // The tail after the last record is payload text like any run between two
   // records, and it reaches the SAME rule for the same reason.
@@ -456,16 +450,29 @@ function decodeWin32RecordText(
  * The pair is the unit of both the rewrite and its evidence, which keeps the
  * decode strictly narrower than the deletion it replaces:
  *
- * - the gate is the pair itself — a lone record shape is the payload's own text
- *   (ADR-0008 D1) and keeps every byte, as does an ESC-less shape even when a
- *   decodable pair sits beside it (that shape is exactly what a user pasting a
- *   record fragment delivers);
+ * - the gate is the pair itself — and a NEAR-MISS pair is still a pair
+ *   ({@link recordTransition}: same `Uc`, one press + one release, either
+ *   arrival order, payload text allowed between the two spellings). A lone
+ *   record shape is the payload's own text (ADR-0008 D1) and is not rewritten,
+ *   as is an ESC-less shape even when a decodable pair sits beside it (that
+ *   shape is exactly what a user pasting a record fragment delivers);
  * - a pair whose down half hands the fold nothing (`Uc=0`, a bare modifier
  *   transition) is not consumed either ({@link recordCarriesText}, L-012);
  * - the up half carries no character of its own, so consuming it drops nothing
  *   — the one character the pair spells is its down half's `Uc` — and breaks go
  *   through the ONE newline rule ({@link foldNewline}), so a decoded break and
  *   an adjacent real newline still fold into a single line.
+ *
+ * What the decode does NOT do is rescue the bytes it declines to rewrite: every
+ * complete ESC-bearing record is deleted by the ingress's residue contract
+ * (ADR-0002 decision 1 / ADR-0008 decision 2, `sanitizePastedText`), so a lone
+ * record's bytes survive HERE and nowhere else. The earlier reading of this
+ * function claimed a lone record "keeps every byte" as if that held
+ * end-to-end; it never did — the ingress deletes it, and that split of
+ * responsibility is what `verify-paste-integrity.tsx` (m) pins as the declared
+ * residual. Widening the gate is safe in the other direction: every record the
+ * decode consumes would have been deleted whole anyway, so a near miss now
+ * yields the character it spells instead of nothing (T-FIX-06, F-2).
  */
 function decodeLiteralRecordText(payload: string): string {
   // Nothing can be rewritten without an ESC-bearing record, and a payload with
@@ -475,41 +482,76 @@ function decodeLiteralRecordText(payload: string): string {
   const records = [...payload.matchAll(WIN32_RECORD_TEXT_RE)]
   let cursor = 0
   let fold: NewlineFold = { text: '', lastWasCarriageReturn: false }
-  const pending: { high?: number } = {}
   for (let i = 0; i < records.length; i++) {
-    const down = records[i]!
-    const up = records[i + 1]
-    if (up === undefined || !isRecordTransitionPair(down, up)) continue
-    // Not consumed: leaving the cursor in place copies both records' bytes
-    // verbatim through the payload-text run below. That is the path for an
-    // ESC-less shape, a lone record, and a pair with no character to hand back.
-    if (!recordCarriesText(down, pending)) continue
-    const start = down.index ?? 0
+    const first = records[i]!
+    const second = records[i + 1]
+    if (second === undefined) continue
+    // Not consumed — either the gate found no transition, or the pair's down
+    // half carries nothing to hand back: leaving the cursor in place copies the
+    // bytes verbatim through the payload-text run below. That is the path for an
+    // ESC-less shape, a lone record, and a `Uc=0` / bare-modifier pair (L-012
+    // forbids consuming bytes on a lane that cannot hand them back).
+    const transition = recordTransition(first, second)
+    if (transition === null) continue
+    if (!recordCarriesText(transition)) continue
+    const start = first.index ?? 0
     if (start > cursor) fold = appendPayloadText(fold, payload.slice(cursor, start))
-    cursor = start + down[0].length + up[0].length
-    fold = appendDecodedRecord(fold, down, pending)
-    // The pair was consumed WHOLE: its up half is not a down half for the next
-    // round either, so the loop moves past it.
+    cursor = (second.index ?? 0) + second[0].length
+    // Arrival order decides where the pair's one character lands: the down half
+    // hands it over at ITS position inside the pair, and the run between the
+    // two halves is payload text that keeps its place between them. (A release
+    // first is the reversed spelling; the character still arrives with its
+    // press, and nothing else sits between the two record spellings.)
+    const gap = payload.slice(start + first[0].length, second.index)
+    if (first === transition) {
+      fold = appendDecodedRecord(fold, transition)
+      if (gap !== '') fold = appendPayloadText(fold, gap)
+    } else {
+      if (gap !== '') fold = appendPayloadText(fold, gap)
+      fold = appendDecodedRecord(fold, transition)
+    }
+    // The pair was consumed WHOLE: its other half is not a candidate for the
+    // next round either, so the loop moves past it.
     i++
   }
   return appendPayloadText(fold, payload.slice(cursor)).text
 }
 
 /**
- * True when `up` is the release half of the key-transition pair `down` opens:
- * the IMMEDIATELY next record, ESC-bearing like its down half, with identical
- * `Vk;Sc;Uc;Cs` fields and `Kd` going 1 → 0. Both halves must keep their ESC:
- * an ESC-less spelling has no frame of its own (ADR-0008 D1) and stays literal.
+ * The DOWN half of the key transition two adjacent RECORDS spell, or null when
+ * they cannot be one character's down+up pair. The pair is the unit of evidence
+ * (ADR-0008 D1), and T-FIX-06 widened what counts as one: two ESC-bearing
+ * records of the SAME `Uc` — the field that IS the character — one press and one
+ * release, in EITHER arrival order, with payload text allowed between the two
+ * spellings (the release half is the next RECORD, not the next byte; text
+ * between two records is not a third record).
+ *
+ * `Vk`/`Sc`/`Cs` are deliberately NOT part of the identity. They describe which
+ * physical key the terminal attributed the transition to, and a synthesized
+ * release is allowed to spell them differently — conhost emits keyups with
+ * `Vk=0`/`Sc=0`, and `Cs` changes when a modifier is released before the keyup.
+ * Requiring them to match turned every such near miss into a silent deletion:
+ * the pair failed this gate, fell through to the payload-text run, and the
+ * ingress's residue strip deleted both records — and with them the break the
+ * down half encoded (`probe/review/minimal-counterexamples.txt` R1/R2/R3/R3b/
+ * R3c, each pinned by an assertion in `verify-paste-integrity.tsx` (m)).
+ *
+ * Only the DOWN half is returned: it is the half that hands the character over,
+ * and whether it came first decides where that character lands in arrival
+ * order (`verify-paste-integrity.tsx` m2).
  */
-function isRecordTransitionPair(down: RegExpMatchArray, up: RegExpMatchArray): boolean {
-  if (up.index !== (down.index ?? -1) + down[0].length) return false
-  if (!down[0].startsWith('\u001b') || !up[0].startsWith('\u001b')) return false
-  /** The half's `Vk;Sc;Uc;Cs` spelling — the fields a transition must share
-   *  (`Rc` is the repeat count and `Kd` is the direction being compared). */
-  const transitionKey = (match: RegExpMatchArray): string =>
-    [0, 1, 2, 4].map(index => recordField(match, index)).join(';')
-  return recordField(down, 3) === 1 && recordField(up, 3) === 0 &&
-    transitionKey(down) === transitionKey(up)
+function recordTransition(a: RegExpMatchArray, b: RegExpMatchArray): RegExpMatchArray | null {
+  // Both halves must keep their ESC: an ESC-less spelling has no frame of its
+  // own (ADR-0008 D1) and stays literal.
+  if (!a[0].startsWith('\u001b') || !b[0].startsWith('\u001b')) return null
+  const aIsDown = recordField(a, 3) === 1
+  const bIsDown = recordField(b, 3) === 1
+  // Exactly one press and one release: two presses or two releases are not a
+  // transition, whatever else they share.
+  if (aIsDown === bIsDown) return null
+  const down = aIsDown ? a : b
+  const up = aIsDown ? b : a
+  return recordField(down, 2) === recordField(up, 2) ? down : null
 }
 
 /**
