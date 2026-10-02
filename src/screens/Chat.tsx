@@ -5833,6 +5833,7 @@ export function Chat({
             }}
             trajectory={trajectory}
             onExpand={openPanelFullscreen}
+            onOpenGoal={openGoalDetails}
           />
         }
       >
