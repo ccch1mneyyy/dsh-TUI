@@ -212,9 +212,20 @@ function constraintHint(field: FormField): string | undefined {
   }
 }
 
+/** The option labels of one form flow, fixed when it parks: answers are
+ *  matched against the very strings the panel showed (a language switch
+ *  meanwhile must not turn an answer into a mismatch). */
+interface FormLabels {
+  readonly skip: string
+  readonly yes: string
+  readonly no: string
+}
+
+const formLabels = (): FormLabels => ({ skip: t('claude-elicit-skip'), yes: t('claude-elicit-yes'), no: t('claude-elicit-no') })
+
 /** A field's question (with the reason it is asked again, if any). */
-function fieldQuestion(field: FormField, header: string, lead: string | undefined, error: string | undefined): QuestionItemView {
-  const skip = t('claude-elicit-skip')
+function fieldQuestion(field: FormField, header: string, lead: string | undefined, error: string | undefined, labels: FormLabels = formLabels()): QuestionItemView {
+  const skip = labels.skip
   const detail = [
     error === undefined ? undefined : t('claude-elicit-invalid', { reason: error }),
     lead,
@@ -231,8 +242,7 @@ function fieldQuestion(field: FormField, header: string, lead: string | undefine
       return { ...base, options: [...field.choices!.map(choice => ({ label: choice.label })), ...optional], hideCustomInput: true, ...defaults(field.choices!.filter(choice => choice.value === fallback).map(choice => choice.label)) }
     }
     case 'boolean': {
-      const yes = t('claude-elicit-yes')
-      const no = t('claude-elicit-no')
+      const { yes, no } = labels
       const fallback = field.schema.default
       return { ...base, options: [{ label: yes }, { label: no }, ...optional], hideCustomInput: true, ...defaults(fallback === true ? [yes] : fallback === false ? [no] : []) }
     }
@@ -246,10 +256,10 @@ function fieldQuestion(field: FormField, header: string, lead: string | undefine
 }
 
 /** One answered field: its value, `skip`, or why it is invalid. */
-function fieldValue(field: FormField, answer: QuestionAnswers['answers'][number] | undefined): { readonly value: FormValue } | { readonly skip: true } | { readonly error: string } {
+function fieldValue(field: FormField, answer: QuestionAnswers['answers'][number] | undefined, labels: FormLabels = formLabels()): { readonly value: FormValue } | { readonly skip: true } | { readonly error: string } {
   const selected = answer?.selected ?? []
   const custom = answer?.custom?.trim() ?? ''
-  const skip = t('claude-elicit-skip')
+  const skip = labels.skip
   const skipped = selected.includes(skip)
   switch (field.kind) {
     case 'choice': {
@@ -258,8 +268,8 @@ function fieldValue(field: FormField, answer: QuestionAnswers['answers'][number]
       return skipped && !field.required ? { skip: true } : { error: t('claude-elicit-invalid-choice') }
     }
     case 'boolean':
-      if (selected[0] === t('claude-elicit-yes')) return { value: true }
-      if (selected[0] === t('claude-elicit-no')) return { value: false }
+      if (selected[0] === labels.yes) return { value: true }
+      if (selected[0] === labels.no) return { value: false }
       return skipped && !field.required ? { skip: true } : { error: t('claude-elicit-invalid-choice') }
     case 'multi': {
       const values = field.choices!.filter(choice => selected.includes(choice.label)).map(choice => choice.value)
@@ -295,6 +305,8 @@ interface Pending {
   dismiss(): void
   /** Withdraw (abort, dispose): answer the SDK's cancel shape. */
   withdraw(): void
+  /** URL mode: the server reported the flow done (accept). */
+  complete?(): void
   /** A redelivered request (same request id) waits for the same answer. */
   join(resolve: (result: never) => void): void
   /** URL mode: the server and elicitation id `elicitation_complete` names. */
@@ -380,6 +392,7 @@ export function createClaudeDialogBridge(deps: ClaudeDialogBridgeDeps) {
       withdraw: () => finish(built.cancelled),
       join: (more: (result: never) => void) => { resolvers.push(more as (result: R) => void) },
       ...(built.url === undefined ? {} : { url: built.url }),
+      ...(built.complete === undefined ? {} : { complete: built.complete }),
     }
     byFlow.set(flow, entry)
     byAsk.set(flow, entry)
@@ -395,6 +408,7 @@ export function createClaudeDialogBridge(deps: ClaudeDialogBridgeDeps) {
     const lead = [request.title, request.message].filter((line): line is string => line !== undefined && line.trim() !== '').join('\n')
     const send = t('claude-elicit-send')
     const decline = t('claude-elicit-decline')
+    const labels = formLabels()
     const confirm: QuestionItemView = {
       question: t('claude-elicit-confirm', { server: request.serverName }),
       header,
@@ -408,7 +422,7 @@ export function createClaudeDialogBridge(deps: ClaudeDialogBridgeDeps) {
     let sending = false
     park<ElicitationResult>(flow, signal, resolve, (finish, reask) => ({
       kind: 'form',
-      questions: [...fields.map((field, index) => fieldQuestion(field, header, index === 0 ? lead : undefined, undefined)), confirm],
+      questions: [...fields.map((field, index) => fieldQuestion(field, header, index === 0 ? lead : undefined, undefined, labels)), confirm],
       cancelled: { action: 'cancel' },
       answer: answers => {
         // The send / decline choice is asked once, after the first round.
@@ -422,14 +436,14 @@ export function createClaudeDialogBridge(deps: ClaudeDialogBridgeDeps) {
         }
         const invalid: { field: FormField; error: string }[] = []
         asked.forEach((field, index) => {
-          const outcome = fieldValue(field, answers.answers[index])
+          const outcome = fieldValue(field, answers.answers[index], labels)
           if ('error' in outcome) invalid.push({ field, error: outcome.error })
           else if ('skip' in outcome) values.delete(field.key)
           else values.set(field.key, outcome.value)
         })
         if (invalid.length > 0) {
           asked = invalid.map(item => item.field)
-          reask(invalid.map(item => fieldQuestion(item.field, header, undefined, item.error)))
+          reask(invalid.map(item => fieldQuestion(item.field, header, undefined, item.error, labels)))
           return
         }
         finish({ action: 'accept', content: Object.fromEntries(values) })
@@ -463,6 +477,7 @@ export function createClaudeDialogBridge(deps: ClaudeDialogBridgeDeps) {
       cancelled: { action: 'cancel' },
       answer: answers => finish({ action: answers.answers[0]?.selected[0] === accept ? 'accept' : 'decline' }),
       dismiss: () => finish({ action: 'cancel' }),
+      complete: () => finish({ action: 'accept' }),
     }))
   }
 
@@ -562,7 +577,7 @@ export function createClaudeDialogBridge(deps: ClaudeDialogBridgeDeps) {
       for (const entry of [...byFlow.values()]) {
         if (entry.kind !== 'url' || entry.url?.server !== server || entry.url.elicitationId !== elicitationId) continue
         deps.emit([{ type: 'notice', level: 'info', key: `elicit-url:${elicitationId}`, text: t('claude-elicit-url-complete', { server }) }])
-        entry.answer({ answers: [{ selected: [t('claude-elicit-url-accept')] }] })
+        entry.complete?.()
       }
     },
     get size(): number { return byFlow.size },

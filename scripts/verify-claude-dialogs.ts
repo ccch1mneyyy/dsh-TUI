@@ -194,6 +194,17 @@ const answer = (...items: { selected?: string[]; custom?: string }[]) => ({ answ
   check('URL mode without a URL is declined', JSON.stringify(noUrl) === '{"action":"decline"}')
   const unsupported = await elicit({ serverName: 'odd', message: 'Huh', mode: 'hologram' }, { signal: new AbortController().signal, requestId: 'u5' })
   check('a mode this client cannot render is declined, with a notice', JSON.stringify(unsupported) === '{"action":"decline"}' && events.some(event => event.type === 'notice' && event.level === 'warning' && event.text === t('claude-elicit-unsupported', { server: 'odd', mode: 'hologram' })))
+  // Labels are fixed when the flow parks: a language switch while the
+  // panel is open does not turn the answer into a mismatch.
+  const switched = elicit({ serverName: 'acme', message: 'Lang', requestedSchema: { type: 'object', properties: { ok: { type: 'boolean' } }, required: ['ok'] } }, { signal: new AbortController().signal, requestId: 'u6' })
+  await tick()
+  const shownLabels = lastAsk()!.questions.map(question => question.options.map(option => option.label))
+  setLang('zh')
+  session.capabilities.questions!.respond(lastAsk()!.requestId, answer({ selected: [shownLabels[0]![0]!] }, { selected: [shownLabels[1]![0]!] }))
+  // A mismatch would re-ask instead of answering: bounded, it fails here.
+  const switchedResult = await Promise.race([switched, new Promise(resolve => { setTimeout(() => resolve('re-asked instead of answered'), 2000) })])
+  setLang('en')
+  check('a language switch while the panel is open keeps the answer valid', JSON.stringify(switchedResult) === '{"action":"accept","content":{"ok":true}}', switchedResult)
   // Dispose with one still open.
   const open1 = elicit({ serverName: 'github', message: 'Left open', mode: 'url', url, elicitationId: 'e9' }, { signal: new AbortController().signal, requestId: 'u9' })
   await tick()
