@@ -227,6 +227,8 @@ type ShadeOperation = {
   region: Rectangle
 }
 
+export type SoftWrapFlag = boolean | 'gap'
+
 type WriteOperation = {
   type: 'write'
   x: number
@@ -241,8 +243,10 @@ type WriteOperation = {
    * Undefined means the producer didn't track wrapping (e.g. fills,
    * raw-ansi): the rows it paints are marked "not a continuation", since it
    * replaced whatever was there — see the write case in `get()`.
+   * 'gap' marks a continuation whose separator space was elided because
+   * line i-1 exactly filled the width; copy re-inserts it.
    */
-  softWrap?: boolean[]
+  softWrap?: SoftWrapFlag[]
 }
 
 type ClipOperation = {
@@ -1011,7 +1015,7 @@ export default class Output {
    * @param softWrap - per-line soft-wrap flags parallel to text.split('\n').
    * @param lines - optional pre-split physical lines, exactly text.split('\n').
    */
-  write(x: number, y: number, text: string, softWrap?: boolean[], lines?: readonly string[]): void {
+  write(x: number, y: number, text: string, softWrap?: SoftWrapFlag[], lines?: readonly string[]): void {
     if (!text) {
       return
     }
@@ -1257,7 +1261,7 @@ export default class Output {
           const writeX = clipHorizontally ? Math.max(x, clip.x1!) : x
           // Copy joins need only the preceding (horizontally clipped) line,
           // not every discarded line. Preserve its content-end coordinate.
-          if (softWrap && from > 0 && softWrap[from] === true) {
+          if (softWrap && from > 0 && softWrap[from]) {
             prevContentEnd = writeX + stringWidth(clipLine(lines[from - 1]!))
           }
           lines = lines.slice(from, to)
@@ -1293,8 +1297,8 @@ export default class Output {
             // from writeLineToScreen is tab-expansion-aware, unlike
             // x+stringWidth(line) which treats tabs as width 0.
             if (softWrap) {
-              const isSW = softWrap[swFrom + offsetY] === true
-              swBits[lineY] = isSW ? prevContentEnd : 0
+              const flag = softWrap[swFrom + offsetY]
+              swBits[lineY] = flag === 'gap' ? -prevContentEnd : flag ? prevContentEnd : 0
               prevContentEnd = contentEnd
             } else {
               // Paint order: a producer that doesn't track wrapping (fills,
