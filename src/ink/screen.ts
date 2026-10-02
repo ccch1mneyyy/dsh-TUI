@@ -628,8 +628,10 @@ export type Screen = Size & {
    * inserted by wrapAnsi, not in the source), and row r-1's written
    * content ends at absolute column N (exclusive — cells [0..N) are the
    * fragment, past N is unwritten padding). 0 means row r is NOT a
-   * continuation (hard newline or first row). Selection copy checks
-   * softWrap[r]>0 to join row r onto row r-1 without a newline, and
+   * continuation (hard newline or first row). N<0 is the same with
+   * content end -N, plus a separator space elided at the wrap point
+   * (row r-1 filled the width exactly); copy re-inserts it. Selection
+   * copy checks softWrap[r]!==0 to join row r onto row r-1 without a newline, and
    * reads softWrap[r+1] to know row r's content end when row r+1
    * continues from it. The content-end column is needed because an
    * unwritten cell and a written-unstyled-space are indistinguishable in
