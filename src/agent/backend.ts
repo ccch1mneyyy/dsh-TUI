@@ -29,6 +29,9 @@ export interface BackendHost {
   debug(message: string): void
   /** User-visible warning (localized by the caller). */
   warn(message: string): void
+  /** One line a backend child process wrote to stderr (never the terminal:
+   *  the host logs it and folds repeats into notices). */
+  stderr?(line: string): void
 }
 
 /** One session row of an offline catalog. */

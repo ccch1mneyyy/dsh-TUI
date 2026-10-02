@@ -34,6 +34,12 @@ export const inject = ['agents']
 export interface Config {
   /** Existing session to attach; a fresh session is created when absent. */
   sessionId?: string
+  /** Agent backend the session runs on: `dsh` (default) — the DeepSeek
+   *  Harness agent; `claude` — EXPERIMENTAL Claude Agent backend driving the
+   *  local Claude CLI through the Claude Agent SDK (optional peer
+   *  `@anthropic-ai/claude-agent-sdk`). `dsh-tui --backend claude` sets it
+   *  through `DSH_TUI_BACKEND`. */
+  backend?: 'dsh' | 'claude'
   /** LLM provider route. The route resolves atomically (issue #67): when
    *  cordis.yml names BOTH `provider` and `model`, that pair wins; otherwise
    *  the `/model` choice persisted in `~/.dsh-tui/model.json` wins whole;
@@ -195,6 +201,7 @@ export interface Config {
 
 export const Config: Schema<Config, RuntimeConfig<Config>> = editableConfig<Config>(Schema.object({
   sessionId: Schema.string().required(false),
+  backend: Schema.union(['dsh', 'claude']).required(false),
   // No schema defaults on the route: a `.default()` here would make an
   // unset key indistinguishable from an explicit cordis.yml choice and the
   // persisted `/model` preference could never win (issue #30). The defaults

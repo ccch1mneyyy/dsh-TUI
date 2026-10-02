@@ -1,0 +1,94 @@
+{
+  "events": [
+    "session.status",
+    "turn.start",
+    "user.message",
+    "session.ready",
+    "rate-limit",
+    "step.start",
+    "assistant.attempt.start",
+    "delta:reasoning-tokens",
+    "delta:reasoning-tokens",
+    "delta:reasoning-tokens",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "tool.call",
+    "assistant.message",
+    "tool.result",
+    "step.end",
+    "step.start",
+    "assistant.attempt.start",
+    "delta:text",
+    "delta:text",
+    "delta:text",
+    "delta:text",
+    "delta:text",
+    "delta:text",
+    "assistant.message",
+    "step.end",
+    "context.capacity",
+    "turn.end",
+    "session.status"
+  ],
+  "rows": [
+    {
+      "kind": "user",
+      "text": "Use the Read tool to read README.md, then tell me its first line."
+    },
+    {
+      "kind": "reasoning",
+      "text": "",
+      "reasoningTokens": 162
+    },
+    {
+      "kind": "tool",
+      "text": "",
+      "tool": {
+        "name": "Read",
+        "status": "ok",
+        "call": {
+          "card": "generic",
+          "displayKey": "tool-name-read",
+          "category": "other"
+        },
+        "result": {
+          "card": "read"
+        },
+        "resultText": "1 # Fixture project 2 3 A tiny project for recording Claude SDK fixtures. 4"
+      }
+    },
+    {
+      "kind": "assistant",
+      "text": "The first line of README.md is:\n\n**# Fixture project**"
+    }
+  ],
+  "state": {
+    "working": false,
+    "model": "claude-haiku-4-5-20251001",
+    "costReport": {
+      "currency": "USD",
+      "amount": 0.0236728,
+      "source": "backend"
+    },
+    "contextWindow": 200000,
+    "tokens": {
+      "input": 18,
+      "output": 290,
+      "cacheRead": 37868,
+      "cacheWrite": 8722
+    },
+    "todos": [],
+    "compaction": null,
+    "notices": []
+  }
+}

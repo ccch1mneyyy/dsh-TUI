@@ -11,7 +11,7 @@ import { useTooltip } from '../Tooltip.js'
 import { formatDuration } from '../../terminal-utils/format.js'
 import { formatClock } from '../../trajectory/format.js'
 import { foldLongLines } from '../../utils/fold-long-lines.js'
-import { getLang, t, type I18nKey } from '../../i18n.js'
+import { getLang, t, tOr, type I18nKey } from '../../i18n.js'
 import type { ToolBackground } from '../../tuiDisplayPrefs.js'
 import type { Theme } from '../../theme.js'
 import type { ClickEvent } from '../../ink/events/click-event.js'
@@ -97,7 +97,10 @@ const TOOL_NAME_KEYS: Record<string, I18nKey> = {
   web_search: 'tool-name-web_search',
 }
 
-function displayName(name: string): string {
+function displayName(name: string, displayKey?: string): string {
+  // A backend that names its tools its own way (Claude `Read`, `Bash`)
+  // supplies the key with the card view; the raw name is the fallback.
+  if (displayKey !== undefined) return tOr(displayKey, name)
   const key = TOOL_NAME_KEYS[name]
   if (key !== undefined) return t(key)
   if (name.length === 0) return name
@@ -166,7 +169,11 @@ const plain = (text: string): BodyLine => ({ text, tone: 'plain' })
  *  mirrors the transcript tool-card name styling. */
 const TOOL_NAME_MUTATE = new Set(['edit', 'write', 'multiedit', 'notebookedit'])
 const TOOL_NAME_EXEC = new Set(['bash', 'bashpersistent', 'sh', 'shell', 'terminal'])
-export function toolNameColor(raw: string): keyof Theme {
+export function toolNameColor(raw: string, category?: 'mutate' | 'exec' | 'other'): keyof Theme {
+  // A backend-declared colour family wins over the id heuristics below.
+  if (category === 'mutate') return 'toolNameMutate'
+  if (category === 'exec') return 'toolNameExec'
+  if (category === 'other') return 'accent'
   const n = raw.toLowerCase()
   if (TOOL_NAME_MUTATE.has(n)) return 'toolNameMutate'
   if (TOOL_NAME_EXEC.has(n)) return 'toolNameExec'
@@ -546,11 +553,11 @@ export function AssistantToolUseMessage({
   const isError = tool.status === 'error'
   const displayArgs = verbose ? tool.argsFull ?? tool.argsText : tool.argsText
   const result = tool.resultFull ?? tool.resultText
-  const name = displayName(tool.name)
-  const minWidth = stringWidth(name) + 2
   // The settled view carries the applied diff / actual output; while running,
   // the call view already shows the pending change.
   const view = tool.resultView ?? tool.callView
+  const name = displayName(tool.name, view?.displayKey ?? tool.callView?.displayKey)
+  const minWidth = stringWidth(name) + 2
   const filePath = filePathFromTool(tool, view)
   const syntaxLanguage = view?.card === 'read' || view?.card === 'generic' || view === undefined
     ? languageFromPath(filePath)
@@ -688,7 +695,7 @@ export function AssistantToolUseMessage({
             isError={isError}
             toolName={tool.name}
           />
-          <HeaderTitle name={name} title={headerTitle} isTerminal={headerIsTerminal} folded={foldedHeader} displayArgs={displayArgs} argsLanguage={argsLanguage} nameColor={toolNameColor(tool.name)} filePath={filePath} onOpenFile={onOpenFile} metaTooltip={() => toolCardMetaTooltip(tool, isRunning, isError)} headerTextBudget={headerTextBudget} />
+          <HeaderTitle name={name} title={headerTitle} isTerminal={headerIsTerminal} folded={foldedHeader} displayArgs={displayArgs} argsLanguage={argsLanguage} nameColor={toolNameColor(tool.name, view?.category ?? tool.callView?.category)} filePath={filePath} onOpenFile={onOpenFile} metaTooltip={() => toolCardMetaTooltip(tool, isRunning, isError)} headerTextBudget={headerTextBudget} />
           {!isRunning && (
             <Box flexWrap="nowrap">
               <Text dimColor={!hovered}>{elapsedText}</Text>

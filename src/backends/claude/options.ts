@@ -1,0 +1,174 @@
+/**
+ * The Claude Code Fidelity Profile (docs/agent-backend-design.md §4.3): the
+ * `query()` options that make a dsh-tui Claude session behave like `claude`
+ * in the same project — the CLI's own system prompt, every settings source
+ * (CLAUDE.md, hooks, MCP, plugins load as in the CLI), its tool preset, an
+ * explicit start permission mode, streaming partials, subagent text and
+ * per-task stop, file checkpoints, and the host's permission callback.
+ *
+ * `OPTION_POLICY` classifies EVERY SDK option. It is checked with
+ * `satisfies Record<keyof Options, …>`: an option the SDK adds or removes
+ * fails `tsc` here until someone decides what the profile does with it.
+ */
+import type { CanUseTool, Options, PermissionMode, SettingSource } from '@anthropic-ai/claude-agent-sdk'
+import type { ClaudeSdkModule } from './sdk.js'
+
+/** How the profile treats an option: `set` here, `omit` (CLI default /
+ *  settings decide), or `later` (a later phase maps a TUI feature to it). */
+type OptionPolicy = 'set' | 'omit' | 'later'
+
+export const OPTION_POLICY = {
+  abortController: 'set',
+  additionalDirectories: 'later', // `/add-dir` (Phase 5)
+  projectConfigRoot: 'omit',
+  agent: 'omit',
+  agents: 'omit',
+  allowedTools: 'omit',
+  canUseTool: 'set',
+  continue: 'omit',
+  cwd: 'set',
+  disallowedTools: 'omit',
+  toolAliases: 'omit',
+  tools: 'set',
+  env: 'set',
+  executable: 'omit',
+  executableArgs: 'omit',
+  extraArgs: 'set', // only when the CLI lacks msg_lifecycle_v1 (replay-user-messages)
+  fallbackModel: 'omit',
+  enableFileCheckpointing: 'set',
+  toolConfig: 'omit',
+  forkSession: 'later', // Phase 4
+  betas: 'omit',
+  hooks: 'omit',
+  onElicitation: 'later', // Phase 5
+  onUserDialog: 'later', // Phase 5
+  supportedDialogKinds: 'later',
+  perTaskStopAffordance: 'set',
+  persistSession: 'omit',
+  sessionStore: 'omit',
+  sessionStoreFlush: 'omit',
+  loadTimeoutMs: 'omit',
+  includeHookEvents: 'set',
+  includePartialMessages: 'set',
+  forwardSubagentText: 'set',
+  verbatimPrompts: 'omit',
+  thinking: 'omit',
+  effort: 'later', // `/effort` (Phase 3)
+  maxThinkingTokens: 'omit',
+  maxTurns: 'omit',
+  maxBudgetUsd: 'omit',
+  taskBudget: 'omit',
+  mcpServers: 'omit',
+  model: 'later', // `/model` (Phase 3)
+  outputFormat: 'omit',
+  pathToClaudeCodeExecutable: 'set',
+  permissionMode: 'set',
+  planModeInstructions: 'omit',
+  allowDangerouslySkipPermissions: 'later', // explicit bypass mode (Phase 3)
+  permissionPromptToolName: 'omit',
+  permissionPrompts: 'omit',
+  plugins: 'omit',
+  pluginDelivery: 'omit',
+  promptSuggestions: 'omit',
+  agentProgressSummaries: 'omit',
+  resume: 'later', // Phase 4
+  sessionId: 'set',
+  resumeSessionAt: 'later',
+  resumeDropsTurn: 'later',
+  sandbox: 'omit',
+  settings: 'omit',
+  managedSettings: 'omit',
+  settingSources: 'set',
+  skills: 'omit',
+  debug: 'omit',
+  debugFile: 'omit',
+  stderr: 'set',
+  strictMcpConfig: 'omit',
+  systemPrompt: 'set',
+  title: 'omit',
+  spawnClaudeCodeProcess: 'omit',
+} as const satisfies Record<keyof Options, OptionPolicy>
+
+/** Every settings source, so CLAUDE.md, hooks, MCP and plugins load as in
+ *  the CLI (`project` is the one that brings CLAUDE.md, Phase 0 probe P1). */
+export const SETTING_SOURCES: SettingSource[] = ['user', 'project', 'local']
+
+/** Modes the start resolution accepts. `bypassPermissions` needs an explicit
+ *  user choice (Phase 3) and is never started from settings in Phase 2. */
+const START_MODES: readonly PermissionMode[] = ['default', 'acceptEdits', 'plan', 'auto', 'dontAsk']
+const ALL_MODES: readonly PermissionMode[] = [...START_MODES, 'bypassPermissions']
+
+const isPermissionMode = (value: unknown): value is PermissionMode =>
+  typeof value === 'string' && (ALL_MODES as readonly string[]).includes(value)
+
+/** What the start-mode resolution decided, and why (for a notice). */
+export interface StartPermissionMode {
+  readonly mode: PermissionMode
+  /** Set when the configured mode was not honoured. */
+  readonly downgradedFrom?: PermissionMode
+  readonly source: 'env' | 'settings' | 'default'
+}
+
+/**
+ * The explicit start permission mode (design §4.3: never omitted — the CLI
+ * default may be `auto`). `DSH_TUI_CLAUDE_PERMISSION_MODE` is a developer
+ * override for live tests (documented in the progress log, not in README);
+ * otherwise the user's settings cascade after the CLI's own trust filter for
+ * escalating modes from repo-committed files; otherwise `default`.
+ */
+export async function resolveStartPermissionMode(
+  sdk: Pick<ClaudeSdkModule, 'resolveSettings' | 'filterEscalatingDefaultMode'>,
+  cwd: string,
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<StartPermissionMode> {
+  const override = env.DSH_TUI_CLAUDE_PERMISSION_MODE
+  if (isPermissionMode(override)) return { mode: override, source: 'env' }
+  let configured: unknown
+  try {
+    const resolved = await sdk.resolveSettings({ cwd, settingSources: SETTING_SOURCES })
+    const effective: unknown = sdk.filterEscalatingDefaultMode(resolved)
+    const permissions = typeof effective === 'object' && effective !== null ? (effective as { permissions?: unknown }).permissions : undefined
+    configured = typeof permissions === 'object' && permissions !== null ? (permissions as { defaultMode?: unknown }).defaultMode : undefined
+  } catch {
+    configured = undefined
+  }
+  if (!isPermissionMode(configured)) return { mode: 'default', source: 'default' }
+  if (!(START_MODES as readonly string[]).includes(configured)) return { mode: 'default', downgradedFrom: configured, source: 'settings' }
+  return { mode: configured, source: 'settings' }
+}
+
+export interface ProfileInput {
+  readonly cwd: string
+  readonly sessionId: string
+  readonly permissionMode: PermissionMode
+  readonly executable: string | undefined
+  readonly env: Record<string, string>
+  readonly canUseTool: CanUseTool
+  readonly stderr: (data: string) => void
+  readonly abortController: AbortController
+  /** Fall back to echoed user messages when the CLI has no lifecycle frames. */
+  readonly replayUserMessages: boolean
+}
+
+/** Assemble the `query()` options of one session. */
+export function buildQueryOptions(input: ProfileInput): Options {
+  return {
+    abortController: input.abortController,
+    cwd: input.cwd,
+    sessionId: input.sessionId,
+    systemPrompt: { type: 'preset', preset: 'claude_code' },
+    settingSources: SETTING_SOURCES,
+    tools: { type: 'preset', preset: 'claude_code' },
+    permissionMode: input.permissionMode,
+    canUseTool: input.canUseTool,
+    includePartialMessages: true,
+    forwardSubagentText: true,
+    perTaskStopAffordance: true,
+    enableFileCheckpointing: true,
+    includeHookEvents: false,
+    env: input.env,
+    stderr: input.stderr,
+    ...(input.executable === undefined ? {} : { pathToClaudeCodeExecutable: input.executable }),
+    ...(input.replayUserMessages ? { extraArgs: { 'replay-user-messages': null } } : {}),
+  }
+}

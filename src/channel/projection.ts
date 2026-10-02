@@ -691,6 +691,9 @@ export function createChannelProjection(state: ProjectionState, deps: ChannelPro
     // subagent reducer owns pending descriptions, including delegations made
     // while this transcript is parked.
     if (presentation?.card === 'subagent') return
+    // A todo-list write renders in the todo panel (the backend emits
+    // `todo.write` with it); a card would repeat the list.
+    if (presentation?.card === 'todo') return
     // Reasoning that led to a tool call is done thinking — fold the preview
     // now, before the tool card grows the transcript past it (see
     // foldLiveReasoning).

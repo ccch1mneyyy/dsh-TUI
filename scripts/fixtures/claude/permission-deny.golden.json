@@ -1,0 +1,100 @@
+{
+  "events": [
+    "session.status",
+    "turn.start",
+    "user.message",
+    "session.ready",
+    "rate-limit",
+    "step.start",
+    "assistant.attempt.start",
+    "delta:reasoning-tokens",
+    "delta:reasoning-tokens",
+    "delta:reasoning-tokens",
+    "delta:reasoning-tokens",
+    "delta:reasoning-tokens",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "tool.call",
+    "session.status",
+    "assistant.message",
+    "session.status",
+    "tool.result",
+    "step.end",
+    "step.start",
+    "assistant.attempt.start",
+    "delta:reasoning-tokens",
+    "delta:reasoning-tokens",
+    "delta:reasoning-tokens",
+    "delta:text",
+    "assistant.message",
+    "step.end",
+    "context.capacity",
+    "turn.end",
+    "session.status"
+  ],
+  "rows": [
+    {
+      "kind": "user",
+      "text": "Use the Write tool to create denied.txt containing x. If it is refused, reply with exactly: refused"
+    },
+    {
+      "kind": "reasoning",
+      "text": "",
+      "reasoningTokens": 252
+    },
+    {
+      "kind": "tool",
+      "text": "",
+      "tool": {
+        "name": "Write",
+        "status": "error",
+        "call": {
+          "card": "diff",
+          "displayKey": "tool-name-write",
+          "category": "mutate"
+        },
+        "result": null,
+        "errorText": "dsh-tui: interactive approvals arrive in the next phase"
+      }
+    },
+    {
+      "kind": "reasoning",
+      "text": "",
+      "reasoningTokens": 163
+    },
+    {
+      "kind": "assistant",
+      "text": "refused"
+    }
+  ],
+  "state": {
+    "working": false,
+    "model": "claude-haiku-4-5-20251001",
+    "costReport": {
+      "currency": "USD",
+      "amount": 0.0251567,
+      "source": "backend"
+    },
+    "contextWindow": 200000,
+    "tokens": {
+      "input": 18,
+      "output": 424,
+      "cacheRead": 38137,
+      "cacheWrite": 9113
+    },
+    "todos": [],
+    "compaction": null,
+    "notices": []
+  }
+}

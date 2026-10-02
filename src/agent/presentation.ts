@@ -5,25 +5,22 @@
  * a call gets, so neither the shared projector nor the UI ever picks a card by
  * tool name.
  */
-import type { ToolCallView, ToolResultView } from '../adapter/ports/channel-view.js'
+import type { ToolCallView, ToolResultView, ToolViewMeta } from '../adapter/ports/channel-view.js'
 
 export type { ToolCallView, ToolResultView }
 
-/** Optional decoration a backend may attach to a structured card. */
-export interface ToolPresentationMeta {
-  /** i18n key of the display name (`tool-name-*` family); absent = raw name. */
-  readonly displayKey?: string
-  /** Colour family: file mutations, command execution, everything else. */
-  readonly category?: 'mutate' | 'exec' | 'other'
-}
+/** Optional decoration a backend may attach to a structured card (the
+ *  host-plane `ToolViewMeta`: display-name key and colour family). */
+export type ToolPresentationMeta = ToolViewMeta
 
 /**
  * The call renders through another surface, never as a tool card:
  * `question` — the interactive questionnaire panel (the answered record is
- * projected from the paired result); `subagent` — the live subagent row.
+ * projected from the paired result); `subagent` — the live subagent row;
+ * `todo` — the todo panel (the backend emits `todo.write` for it).
  */
 export interface SuppressedToolPresentation {
-  readonly card: 'question' | 'subagent'
+  readonly card: 'question' | 'subagent' | 'todo'
 }
 
 /** How one tool call renders: a structured card shape, or suppression. */
@@ -39,5 +36,5 @@ export type ToolPresentation = ToolCallPresentation | ToolResultPresentation
 export function isSuppressedPresentation(
   presentation: ToolCallPresentation | undefined,
 ): presentation is SuppressedToolPresentation {
-  return presentation !== undefined && (presentation.card === 'question' || presentation.card === 'subagent')
+  return presentation !== undefined && (presentation.card === 'question' || presentation.card === 'subagent' || presentation.card === 'todo')
 }

@@ -600,6 +600,16 @@ const GROUPS = {
 // → ChatRow.reasoningTokens，流式一行「思考中 · ~N tokens」、落定「已思考 ·
 // ~N tokens」，正文到达时正文优先；中英双语。
     ["verify-thinking-tokens", ['node', '--import', 'tsx/esm', 'scripts/verify-thinking-tokens.tsx']],
+// Claude 后端翻译器（方案 §5.1，Phase 2）：scripts/fixtures/claude/ 下脱敏的真实
+// SDK 消息序列 → 翻译器 → 共享投影器，与提交的 golden 逐字段比较，外加 Phase 0
+// 各项实测修正的定点断言（先判 terminal_reason、[ede_diagnostic] 不上屏、中断
+// 回显不成气泡、前台 Bash 不建任务卡、attempt.start 先于 delta、工具结果文本）。
+    ["verify-claude-translate", ['node', '--import', 'tsx/esm', 'scripts/verify-claude-translate.ts']],
+// Claude 会话生命周期（假 Query，无网络）：开关 ×50 无残留、放置→priority、
+// 取消与 30s 强制收敛（注入时钟）、权限回调必定落定、进程死亡、握手失败。
+// 真实 CLI 的 verify-claude-live / verify-claude-headless 只在
+// DSH_TUI_CLAUDE_LIVE=1 时跑，不进 CI（消耗真实用量、需要凭证）。
+    ["verify-claude-session-lifecycle", ['node', '--import', 'tsx/esm', 'scripts/verify-claude-session-lifecycle.ts']],
 // IDE 选区通道回归（PR #562）：纯函数（env 直连/lock 扫描与 workspace
 // 匹配过滤/hello_ack 解析/selection_changed 校验）、无 IDE 静默降级、
 // loopback 对连（token 握手 ACK、错误 token 换下一候选、断连清空）、

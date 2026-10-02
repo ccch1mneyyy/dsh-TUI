@@ -1,0 +1,58 @@
+{
+  "events": [
+    "session.status",
+    "turn.start",
+    "user.message",
+    "session.ready",
+    "rate-limit",
+    "step.start",
+    "assistant.attempt.start",
+    "delta:reasoning-tokens",
+    "delta:reasoning-tokens",
+    "delta:reasoning-tokens",
+    "delta:text",
+    "assistant.message",
+    "step.end",
+    "context.capacity",
+    "turn.end",
+    "session.status"
+  ],
+  "rows": [
+    {
+      "kind": "user",
+      "text": "Count from 1 to 200, one number per line, no other text."
+    },
+    {
+      "kind": "reasoning",
+      "text": "",
+      "reasoningTokens": 125
+    },
+    {
+      "kind": "assistant",
+      "text": "1\n2\n3"
+    },
+    {
+      "kind": "interrupt",
+      "text": "Interrupted · What should DeepSeek do instead?"
+    }
+  ],
+  "state": {
+    "working": false,
+    "model": "claude-haiku-4-5-20251001",
+    "costReport": {
+      "currency": "USD",
+      "amount": 0.00099,
+      "source": "backend"
+    },
+    "contextWindow": 200000,
+    "tokens": {
+      "input": 10,
+      "output": 6,
+      "cacheRead": 15175,
+      "cacheWrite": 7519
+    },
+    "todos": [],
+    "compaction": null,
+    "notices": []
+  }
+}

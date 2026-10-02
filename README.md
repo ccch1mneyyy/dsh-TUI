@@ -166,6 +166,33 @@ Full guide: [Session migration](docs/migrate.en.md).
 
 **VS Code**: use the integrated terminal or the `dsh-tui-vscode` extension. See [VS Code guide](docs/vscode.en.md). **Herdr**: run `dsh-tui` in a [Herdr](https://herdr.dev) pane; `idle` / `working` / `blocked` are reported through its local integration API.
 
+### Experimental: Claude backend
+
+dsh-TUI can run its session on the **Claude Agent** backend instead of the
+DeepSeek Harness agent: the same TUI, driving your local `claude` CLI through
+the Claude Agent SDK.
+
+```sh
+# once, in the dsh-tui profile (the SDK is an optional peer dependency)
+cd ~/.dsh/profiles/dsh-tui && pnpm add @anthropic-ai/claude-agent-sdk@0.3.287
+dsh-tui --backend claude     # or `backend: claude` in the dsh-tui config row
+```
+
+- **Credentials** are found by the SDK itself: your existing `claude` login, or
+  `ANTHROPIC_API_KEY` / cloud-provider variables in the environment. dsh-TUI
+  neither reads nor stores them.
+- **Executable**: `claude` on `PATH`, else the SDK's bundled binary. Project
+  `CLAUDE.md`, settings, hooks, MCP servers and plugins load exactly as the CLI
+  loads them.
+- **Works in this phase**: streaming replies, thinking token counts, tool cards
+  (Read, Write, Edit, Bash, Glob, Grep, web and MCP tools), Ctrl+C cancel,
+  `/new`, `/clear`, `/status`, `/cost` (the backend-reported USD cost), `/doctor`.
+- **Not yet**: interactive approvals — a tool call that would need your
+  approval is denied with a notice (allow it in your Claude settings, or start
+  from a `defaultMode` such as `acceptEdits`); `/model`, `/effort`, `/resume`,
+  rewind, subagent panels and image input. DeepSeek-specific commands are
+  hidden while this backend is active.
+
 ## Keybindings & Mouse
 
 `Enter` send · `Tab` complete · `Ctrl+Enter` interrupt and send · `Alt+Up` recall the last message · `Esc` dismiss, double-`Esc` rewinds · `Ctrl+O` details · `Ctrl+R` history · `Ctrl+V` paste · `Ctrl+Shift+E` fullscreen draft editor · `?` shortcuts · `←` background the session.

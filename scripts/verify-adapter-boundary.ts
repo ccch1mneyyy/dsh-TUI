@@ -23,6 +23,9 @@
  *                                  (reported as one warning); an unlisted one
  *                                  fails, and so does a listed one that no
  *                                  longer exists, so the list only shrinks
+ *   src/backends/<x>/**            no src/backends/<y>/** (each backend is an
+ *                                  island: shared code belongs in src/agent/
+ *                                  or src/channel/)
  *   native.dsh / .claude / .acp    only inside src/dsh-adapter/** /
  *                                  src/backends/claude/** / src/backends/acp/**
  *
@@ -208,6 +211,11 @@ for (const file of files) {
       const hit = layer.forbidden.find(dir => under(target, dir))
       if (hit && layer.allow?.includes(`${path} -> ${target.replace(/\.js$/u, '.ts')}`) === true) continue
       if (hit) violations.push(`${where} imports src/${target}; src/${layer.dir} must not depend on src/${hit}`)
+    }
+    if (under(path, 'backends/') && under(target, 'backends/')) {
+      const own = path.split('/')[1]
+      const other = target.split('/')[1]
+      if (own !== other) violations.push(`${where} imports src/${target}; src/backends/${own}/ must not depend on another backend (src/backends/${other}/)`)
     }
     if (!UI_DIRS.some(dir => under(path, dir))) continue
     if (under(target, 'backends/')) {

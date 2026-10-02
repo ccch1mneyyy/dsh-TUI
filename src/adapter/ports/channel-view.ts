@@ -119,10 +119,21 @@ export interface ToolRow {
 }
 
 /** Pending-call render intent (structural subset of dsh-tools ToolCallView). */
-export type ToolCallView =
+export type ToolCallView = ToolViewMeta & (
   | { readonly card: 'generic'; readonly title: string; readonly kind?: string }
   | { readonly card: 'terminal'; readonly title: string; readonly description?: string; readonly cwd?: string }
   | { readonly card: 'diff'; readonly title: string; readonly diffs: readonly ToolFileDiff[] }
+)
+
+/**
+ * Optional backend decoration of a tool view: the i18n key of the tool's
+ * display name (`tool-name-*`; absent = the card localizes the raw tool id)
+ * and its colour family (absent = derived from the tool id).
+ */
+export interface ToolViewMeta {
+  readonly displayKey?: string
+  readonly category?: 'mutate' | 'exec' | 'other'
+}
 
 /** One file change in a tool presentation (dsh-tools FileDiff). */
 export interface ToolFileDiff {
@@ -134,7 +145,7 @@ export interface ToolFileDiff {
 
 /** Completed-call render intent (structural subset of dsh-tools
  *  ToolResultView). `web` results and unknown shapes fall back to raw text. */
-export type ToolResultView =
+export type ToolResultView = ToolViewMeta & (
   | { readonly card: 'generic'; readonly title?: string; readonly content?: ReadonlyArray<{ readonly type: string; readonly text?: string }> }
   | { readonly card: 'terminal'; readonly title?: string; readonly output?: string; readonly exitCode?: number; readonly signal?: string }
   | { readonly card: 'diff'; readonly title?: string; readonly diffs: readonly ToolFileDiff[] }
@@ -148,6 +159,7 @@ export type ToolResultView =
       readonly total: number
     }
   | { readonly card: 'search'; readonly shape: 'paths'; readonly title?: string; readonly paths: readonly string[]; readonly truncated: boolean; readonly total: number }
+)
 
 export interface SubagentRow {
   agentId: string

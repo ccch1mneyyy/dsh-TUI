@@ -464,6 +464,7 @@ const MSG = {
       `Options:\n` +
       `  --resume [id]          Resume the last (or the given) session\n` +
       `  -c, --continue         Same as --resume\n` +
+      `  --backend <dsh|claude> Agent backend (claude = experimental Claude Agent)\n` +
       `  -- <prompt...>        Treat the remaining arguments as literal prompt text\n` +
       `  <path|url>             Open with the given workspace target\n\n` +
       `Leading DSH options (e.g. --dump-config, --patch <path>) are forwarded unchanged.\n` +
@@ -481,6 +482,7 @@ const MSG = {
       `选项：\n` +
       `  --resume [id]          恢复上次（或指定 id 的）会话\n` +
       `  -c, --continue         同 --resume\n` +
+      `  --backend <dsh|claude> Agent 后端（claude = 实验性 Claude Agent）\n` +
       `  -- <提示词...>         将剩余参数作为字面提示词\n` +
       `  <路径|URL>             以指定工作区目标启动\n\n` +
       `前置 DSH 选项（如 --dump-config、--patch <路径>）原样转发。\n` +
@@ -1390,6 +1392,18 @@ if (!runningInsideProfile && ownVersion !== undefined && process.env.DSH_TUI_NO_
         hostArgs.push(a)
         continue
       }
+    }
+    // `--backend <id>`: which agent backend the app opens its session with
+    // (the dsh-tui row reads DSH_TUI_BACKEND; absent → dsh).
+    if (a === '--backend' || a.startsWith('--backend=')) {
+      const backend = a.startsWith('--backend=') ? a.slice('--backend='.length).trim() : (argv[i + 1] ?? '').trim()
+      if (a === '--backend' && argv[i + 1] !== undefined) i += 1
+      if (backend !== 'dsh' && backend !== 'claude') {
+        console.error(lang === 'zh' ? `未知的 --backend：${backend}（可选 dsh / claude）` : `Unknown --backend: ${backend} (expected dsh or claude)`)
+        process.exit(2)
+      }
+      process.env.DSH_TUI_BACKEND = backend
+      continue
     }
     if (a === '--resume' || a === '-c' || a === '--continue' || a.startsWith('--resume=')) {
       let sessionId = ''

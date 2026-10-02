@@ -11,6 +11,8 @@ import { Config } from './index.js'
 import { configValues, createSettingsScope, resolveSettingsNamespace, type RuntimeConfig } from './compat/settings.js'
 import { createChannel } from './channel.js'
 import { createDshSession } from './backend/session.js'
+import type { BackendHost } from '../agent/backend.js'
+import type { AgentSession } from '../agent/session.js'
 import { createChannelSceneOutlet } from './channel-scene-outlet.js'
 import { mountChannelUi } from './channel-ui.js'
 import { bindChannelCommands } from './channel/commands.js'
@@ -476,15 +478,32 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
   const cmdline = (ctx as { cmdlineArgs?: { get?: () => readonly string[]; args?: readonly string[] } }).cmdlineArgs
   const cmdlineArgs = cmdline?.get?.() ?? cmdline?.args
   const launchSessionId = config.sessionId ?? resumeTargetFromArgv(cmdlineArgs ?? process.argv.slice(2))
-  const { agent, handle, agentPreset, route: createdRoute } = await resolveAgent(
-    ctx,
-    launchSessionId,
-    configuredRoute,
-    startupRoute,
-    meta,
-    config.preset,
-  )
-  try {
+  // The session's backend (Config `backend`, `dsh-tui --backend`). A non-DSH
+  // backend opens its own session here and skips everything DSH-specific
+  // below (preset composition, route validation, workspace ownership, the
+  // approval answerer); the DSH path is unchanged.
+  // The `backend` row reads DSH_TUI_BACKEND (`dsh-tui --backend`), but a
+  // launcher whose bundle patch predates that row (the issue #183 copy skew)
+  // never passes it — so the variable is also read here, below the config.
+  const backendChoice = config.backend ?? (process.env.DSH_TUI_BACKEND === 'claude' ? 'claude' : undefined)
+  const claudeStart = backendChoice === 'claude'
+    ? await openClaudeStartup(ctx, sessionCwd, line => {
+      logForDebugging(`[claude-stderr] ${line}`)
+      stderrReporter.push(line)
+    })
+    : undefined
+  const { agent, handle, agentPreset, route: createdRoute } = claudeStart !== undefined
+    ? { agent: undefined, handle: undefined, agentPreset: undefined, route: undefined }
+    : await resolveAgent(
+      ctx,
+      launchSessionId,
+      configuredRoute,
+      startupRoute,
+      meta,
+      config.preset,
+    )
+  // Workspace ownership is a DSH session-store fact (skipped off DSH).
+  if (agent !== undefined) try {
     // Opening a persisted TUI session is an explicit ownership action too.
     // Older TUI versions only wrote the Session log, so attaching on every
     // startup repairs those durable-but-ungrouped sessions idempotently.
@@ -541,12 +560,19 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
   const activityStore = createActivityStore(ctx, config.activity !== false)
   // The channel holds a backend session; this DSH one owns the resolved
   // handle (disposed by the binding when a later adoption replaces it).
-  const rawChannel = createChannel(ctx, createDshSession(ctx, { agent, handle }), {
+  let startupSession: AgentSession
+  if (claudeStart !== undefined) startupSession = claudeStart.session
+  else if (agent !== undefined) startupSession = createDshSession(ctx, { agent, handle })
+  else throw new Error('dsh-tui: no startup session was opened')
+  const rawChannel = createChannel(ctx, startupSession, {
     // The namespace this boot actually registered the settings section under
     // (the Config owner's Loader id; custom ids are supported). Chat and the
     // channel's own settings reads look the section up by it.
     settingsNs: tuiSettingsNs,
-    model: displayRoute.model,
+    // A Claude session reports its model with its first turn (`system/init`);
+    // until then the status line names the backend.
+    model: claudeStart !== undefined ? claudeStart.label : displayRoute.model,
+    ...(claudeStart === undefined ? {} : { backendLabel: claudeStart.label, openSession: claudeStart.open }),
     // The activity projection only pushes on change; read the current value as
     // soon as this session binds so a resumed or reattached session renders its
     // line immediately instead of waiting for the next event.
@@ -556,8 +582,8 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
     // from the current launch directory would split @ expansion / file
     // completion (state.cwd) from the agent's own workspace record. Fresh
     // sessions record sessionCwd at creation, so both agree there.
-    cwd: agent.session.header.cwd ?? sessionCwd,
-    provider: displayRoute.provider,
+    cwd: agent?.session.header.cwd ?? sessionCwd,
+    provider: claudeStart !== undefined ? claudeStart.backendId : displayRoute.provider,
     // Raw cordis.yml route (undefined when unset): the channel's
     // new-session path re-resolves prefs against these, and resume passes
     // only explicit values so the target session's own record wins.
@@ -625,6 +651,11 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
     if (!shadow) channel.submit(text)
   }
   ctx.effect(() => () => { uiMount.dispose() })
+  // `--resume <id>` names a DSH session; Claude sessions resume in a later
+  // phase, so this start is a fresh Claude session — say so.
+  if (claudeStart !== undefined && launchSessionId !== undefined) {
+    notifyChannel(t('claude-resume-unavailable'), { color: 'warning', timeoutMs: 8000 })
+  }
   // Root page-margin store: the PageMargin inset box sits ABOVE Chat, so
   // the channel version bump (which re-renders everything below Chat)
   // cannot drive it. Seed the store from config before the tree mounts;
@@ -1230,7 +1261,9 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
   // (/new, /resume, rewind), so ownership is re-evaluated per request.
   const approvalStore = new ApprovalStore(adapterRuntimeFor(ctx))
   bindApprovalStore(ctx, approvalStore)
-  if (ctx.get('approval') !== undefined) {
+  // A non-DSH backend owns its own permission prompts (Phase 3 bridge): the
+  // DSH answerer is not registered for it.
+  if (ctx.get('approval') !== undefined && claudeStart === undefined) {
     ctx.on('approval/request', (req, next) =>
       approvalStore.park(req).catch(() => next()))
     // Badge-flip push (P-4): React does not know the session log appended —
@@ -1338,7 +1371,10 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
       }
       if (updateRequested) {
         try {
-          writeResumeTarget(channel.agentId)
+          // A Claude session id is never a DSH resume target (Phase 4 adds
+          // backend-qualified resume); the marker is cleared instead.
+          if (claudeStart === undefined) writeResumeTarget(channel.agentId)
+          else clearResumeTarget()
         } catch {
           // Resume persistence is best effort and must never block an update.
         }
@@ -1362,7 +1398,8 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
         beginRestartAttempt(channel.agentId)
         logRestartEvent('funnel: /restart branch entered')
         try {
-          writeResumeTarget(channel.agentId)
+          if (claudeStart === undefined) writeResumeTarget(channel.agentId)
+          else clearResumeTarget()
           logRestartEvent('funnel: resume target written')
         } catch (error) {
           // Resume persistence is best effort and must never block a restart.
@@ -1582,7 +1619,7 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
   // integration — a bind failure degrades to "no channel" and never fails the
   // session. Closed on teardown so the socket and discovery record do not leak.
   const injectChannel = openInjectChannel(
-    agent.session.id,
+    agent?.session.id ?? channel.agentId,
     channel.cwd,
     {
       append: (text) => injectControllerRef.current?.append(text),
@@ -1648,6 +1685,33 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
   // unhandled rejection instead of a clean exit. A teardown-driven settle
   // is swallowed by the funnel (issue #12).
   void instance.waitUntilExit().then(handleExit, handleExit)
+}
+
+/**
+ * Open the startup session on the Claude Agent backend (design §4; Phase 2
+ * creates sessions only). Loaded lazily: a DSH-only install never imports
+ * the backend or its optional SDK. The returned `open` serves `/new`.
+ */
+async function openClaudeStartup(ctx: Context, cwd: string, stderr: (line: string) => void): Promise<{
+  readonly session: AgentSession
+  readonly label: string
+  readonly backendId: string
+  open(target: { readonly kind: 'create'; readonly cwd: string }): Promise<AgentSession>
+}> {
+  const { claudeBackend } = await import('../backends/claude/index.js')
+  const host = (sessionCwd: string): BackendHost => ({
+    cwd: sessionCwd,
+    debug: message => logForDebugging(message),
+    warn: message => ctx.logger.warn(message),
+    stderr,
+  })
+  const session = await claudeBackend.open({ kind: 'create', cwd }, host(cwd))
+  return {
+    session,
+    label: claudeBackend.descriptor.label,
+    backendId: claudeBackend.id,
+    open: target => claudeBackend.open(target, host(target.cwd)),
+  }
 }
 
 /**
@@ -1898,9 +1962,12 @@ export function createExitFunnel(deps: { onUserExit: (error?: unknown) => void }
 export function isExitResumable(deps: {
   pendingCount: number
   liveAgent: Agent | undefined
-  startupAgent: Agent
+  /** Undefined when the session runs on a non-DSH backend: its id is never
+   *  a DSH resume target. */
+  startupAgent: Agent | undefined
 }): boolean {
   const agent = deps.liveAgent ?? deps.startupAgent
+  if (agent === undefined) return false
   return (
     deps.pendingCount > 0 ||
     snapshotLiveSessionEvents(agent.session).some(

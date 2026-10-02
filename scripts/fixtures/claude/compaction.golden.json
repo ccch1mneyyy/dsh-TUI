@@ -1,0 +1,157 @@
+{
+  "events": [
+    "session.status",
+    "turn.start",
+    "user.message",
+    "session.ready",
+    "step.start",
+    "assistant.attempt.start",
+    "delta:reasoning-tokens",
+    "delta:reasoning-tokens",
+    "rate-limit",
+    "delta:reasoning-tokens",
+    "delta:reasoning-tokens",
+    "delta:reasoning-tokens",
+    "delta:reasoning-tokens",
+    "delta:reasoning-tokens",
+    "delta:reasoning-tokens",
+    "delta:reasoning-tokens",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "tool.call",
+    "assistant.message",
+    "tool.result",
+    "step.end",
+    "step.start",
+    "assistant.attempt.start",
+    "delta:text",
+    "assistant.message",
+    "step.end",
+    "context.capacity",
+    "turn.end",
+    "session.status",
+    "session.status",
+    "turn.start",
+    "compaction.start",
+    "compaction.end",
+    "user.message",
+    "context.capacity",
+    "turn.end",
+    "session.status"
+  ],
+  "rows": [
+    {
+      "kind": "user",
+      "text": "Remember the word pineapple. Reply with exactly: ok"
+    },
+    {
+      "kind": "reasoning",
+      "text": "",
+      "reasoningTokens": 428
+    },
+    {
+      "kind": "tool",
+      "text": "",
+      "tool": {
+        "name": "Write",
+        "status": "ok",
+        "call": {
+          "card": "diff",
+          "displayKey": "tool-name-write",
+          "category": "mutate"
+        },
+        "result": {
+          "card": "diff"
+        },
+        "resultText": "File created successfully at: /fixture/home/.claude/projects/-fixture-project/memory/remember_word.md"
+      }
+    },
+    {
+      "kind": "assistant",
+      "text": "ok"
+    },
+    {
+      "kind": "notice",
+      "text": "Session summary is ready"
+    },
+    {
+      "kind": "compact",
+      "text": "This session is being continued from a previous conversation that ran out of context. The summary below covers the earlier portion of the conversation.\n\nSummary…"
+    }
+  ],
+  "state": {
+    "working": false,
+    "model": "claude-haiku-4-5-20251001",
+    "costReport": {
+      "currency": "USD",
+      "amount": 0.04069545,
+      "source": "backend"
+    },
+    "contextWindow": 200000,
+    "tokens": {
+      "input": 856,
+      "output": 544,
+      "cacheRead": 38126,
+      "cacheWrite": 9309
+    },
+    "todos": [],
+    "compaction": null,
+    "notices": []
+  }
+}

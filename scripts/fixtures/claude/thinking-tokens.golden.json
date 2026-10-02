@@ -1,0 +1,63 @@
+{
+  "events": [
+    "session.status",
+    "turn.start",
+    "user.message",
+    "session.ready",
+    "rate-limit",
+    "step.start",
+    "assistant.attempt.start",
+    "delta:reasoning-tokens",
+    "delta:reasoning-tokens",
+    "delta:reasoning-tokens",
+    "delta:text",
+    "delta:text",
+    "delta:text",
+    "delta:text",
+    "delta:text",
+    "delta:text",
+    "delta:text",
+    "delta:text",
+    "delta:text",
+    "delta:text",
+    "assistant.message",
+    "step.end",
+    "context.capacity",
+    "turn.end",
+    "session.status"
+  ],
+  "rows": [
+    {
+      "kind": "user",
+      "text": "Think it through, then answer with just the number: what is 17 * 23?"
+    },
+    {
+      "kind": "reasoning",
+      "text": "",
+      "reasoningTokens": 177
+    },
+    {
+      "kind": "assistant",
+      "text": "17 × 23 = (17 × 20) + (17 × 3) = 340 + 51 = 391\n\n**391**"
+    }
+  ],
+  "state": {
+    "working": false,
+    "model": "claude-haiku-4-5-20251001",
+    "costReport": {
+      "currency": "USD",
+      "amount": 0.0191395,
+      "source": "backend"
+    },
+    "contextWindow": 200000,
+    "tokens": {
+      "input": 10,
+      "output": 213,
+      "cacheRead": 15175,
+      "cacheWrite": 7785
+    },
+    "todos": [],
+    "compaction": null,
+    "notices": []
+  }
+}

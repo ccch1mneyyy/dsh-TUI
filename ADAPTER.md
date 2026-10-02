@@ -5,7 +5,9 @@
 厂商包只允许在各自目录内被 import:`@deepseek-ai/*` 仅 `src/dsh-adapter/`,
 `@anthropic-ai/*` 仅 `src/backends/claude/`,`@agentclientprotocol/*` 仅 `src/backends/acp/`,
 `@dsh-std/*` 仅 `src/adapter/standard/` 与 `src/dsh-adapter/`。中立层 `src/agent/`、`src/channel/`
-不得 import 厂商包、`src/dsh-adapter/` 与 `src/backends/`(`src/agent/` 也不得 import `src/channel/`)。
+不得 import 厂商包、`src/dsh-adapter/` 与 `src/backends/`(`src/agent/` 也不得 import `src/channel/`),
+也不碰 `src/ink/`(唯一登记的允许边:`src/channel/sanitize.ts → src/ink/stringWidth.ts`)。
+`src/backends/<x>/` 不得 import 其他后端目录(共享代码放 `src/agent/` 或 `src/channel/`)。
 UI 层(`screens/`、`components/`、`hooks/`、`ink/`)不得 import `src/backends/`,从 `src/dsh-adapter/`
 只取类型,经 adapter 的 facade(`src/dsh-adapter/types.ts` 的类型 re-export、`channel.ts`/`plugin.ts`
 等运行期服务)间接接触上游;存量值 import 登记在 `scripts/adapter-boundary.allowlist.json`,只减不增。

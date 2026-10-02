@@ -91,6 +91,8 @@
     #  feeds the chosen session id through this env var (see
     #  src/sessionHistory.ts for the launcher contract).
     sessionId: !!js process.env.DSH_TUI_RESUME_SESSION ?? undefined
+    # Agent backend (`dsh-tui --backend claude` → DSH_TUI_BACKEND): absent → dsh.
+    backend: !!js process.env.DSH_TUI_BACKEND ?? undefined
     workspace: !!js process.env.DSH_TUI_WORKSPACE_TARGET ?? undefined
 
 # The DeepSeek adapter. Shipped default: full thinking at max effort.

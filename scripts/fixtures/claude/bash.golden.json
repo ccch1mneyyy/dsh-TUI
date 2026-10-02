@@ -1,0 +1,98 @@
+{
+  "events": [
+    "session.status",
+    "turn.start",
+    "user.message",
+    "session.ready",
+    "rate-limit",
+    "step.start",
+    "assistant.attempt.start",
+    "delta:reasoning-tokens",
+    "delta:reasoning-tokens",
+    "delta:reasoning-tokens",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "tool.call",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "delta:tool-args",
+    "assistant.message",
+    "tool.result",
+    "session.status",
+    "session.status",
+    "tool.result",
+    "step.end",
+    "step.start",
+    "assistant.attempt.start",
+    "delta:text",
+    "delta:text",
+    "delta:text",
+    "delta:text",
+    "delta:text",
+    "delta:text",
+    "delta:text",
+    "assistant.message",
+    "step.end",
+    "context.capacity",
+    "turn.end",
+    "session.status"
+  ],
+  "rows": [
+    {
+      "kind": "user",
+      "text": "Use the Bash tool to run `echo fixture-ok`, then use the Bash tool to run `ls /definitely-missing-dir`. Report both outcomes in one short sentence."
+    },
+    {
+      "kind": "reasoning",
+      "text": "",
+      "reasoningTokens": 135
+    },
+    {
+      "kind": "tool",
+      "text": "",
+      "tool": {
+        "name": "Bash",
+        "status": "ok",
+        "call": {
+          "card": "terminal",
+          "displayKey": "tool-name-bash",
+          "category": "exec"
+        },
+        "result": {
+          "card": "terminal"
+        },
+        "resultText": "fixture-ok"
+      }
+    },
+    {
+      "kind": "assistant",
+      "text": "The first command succeeded and echoed \"fixture-ok\", while the second failed with exit code 2 because the directory doesn't exist."
+    }
+  ],
+  "state": {
+    "working": false,
+    "model": "claude-haiku-4-5-20251001",
+    "costReport": {
+      "currency": "USD",
+      "amount": 0.024404900000000004,
+      "source": "backend"
+    },
+    "contextWindow": 200000,
+    "tokens": {
+      "input": 18,
+      "output": 81,
+      "cacheRead": 38149,
+      "cacheWrite": 9046
+    },
+    "todos": [],
+    "compaction": null,
+    "notices": []
+  }
+}

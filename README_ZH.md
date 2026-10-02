@@ -144,6 +144,28 @@ CLI 形态：任意终端运行 `dsh-tui migrate ...`，与 TUI 内执行同一�
 
 **VS Code**：用集成终端，或用 `dsh-tui-vscode` 扩展。见 [VS Code 使用指南](docs/vscode.md)。**Herdr**：在 [Herdr](https://herdr.dev) 窗格运行 `dsh-tui`，经其本地集成 API 报告 `idle` / `working` / `blocked`。
 
+### 实验性：Claude 后端
+
+dsh-TUI 可以把会话跑在 **Claude Agent** 后端上，而不是 DeepSeek Harness 智能体：
+同一个 TUI，通过 Claude Agent SDK 驱动你本机的 `claude` CLI。
+
+```sh
+# 一次性：在 dsh-tui profile 中安装（SDK 是可选 peer 依赖）
+cd ~/.dsh/profiles/dsh-tui && pnpm add @anthropic-ai/claude-agent-sdk@0.3.287
+dsh-tui --backend claude     # 或在 dsh-tui 配置行写 `backend: claude`
+```
+
+- **凭证**由 SDK 自行发现：你已有的 `claude` 登录，或环境中的
+  `ANTHROPIC_API_KEY` / 云厂商变量。dsh-TUI 不读取、不保存它们。
+- **可执行文件**：`PATH` 上的 `claude`，否则 SDK 自带二进制。项目 `CLAUDE.md`、
+  设置、hooks、MCP 服务器与插件按 CLI 的方式加载。
+- **本阶段可用**：流式回复、思考 token 计数、工具卡（Read、Write、Edit、Bash、
+  Glob、Grep、网络与 MCP 工具）、Ctrl+C 中断、`/new`、`/clear`、`/status`、
+  `/cost`（后端上报的美元费用）、`/doctor`。
+- **尚未支持**：交互式审批——需要你批准的工具调用会被拒绝并给出提示（可在 Claude
+  设置里放行，或以 `acceptEdits` 等 `defaultMode` 启动）；`/model`、`/effort`、
+  `/resume`、回退、子代理面板与图片输入。启用该后端时 DeepSeek 专属命令会隐藏。
+
 ## 快捷键与鼠标
 
 `Enter` 发送 · `Tab` 补全 · `Ctrl+Enter` 打断并发送 · `Alt+Up` 取回上一条 · `Esc` 逐层关闭，空输入双击回溯 · `Ctrl+O` 详情 · `Ctrl+R` 搜历史 · `Ctrl+V` 粘贴 · `Ctrl+Shift+E` 全屏草稿编辑器 · `?` 快捷键 · `←` 转后台。

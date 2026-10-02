@@ -85,8 +85,9 @@ for (const relative of ['dsh-adapter/channel.ts', 'dsh-adapter/channel/binding-e
 //    merely losing a line. The ordering IS the invariant, so assert the order.
 const pluginSource = readFileSync(join(SRC, 'dsh-adapter/plugin.ts'), 'utf8')
 const storeDeclaration = pluginSource.indexOf('const activityStore = createActivityStore(ctx, ')
-// The channel receives the resolved agent wrapped as a DSH backend session.
-const channelConstruction = pluginSource.indexOf('const rawChannel = createChannel(ctx, createDshSession(ctx, { agent, handle }), {')
+// The channel receives the startup backend session (DSH: the resolved agent
+// wrapped by createDshSession; Claude: the backend's own session).
+const channelConstruction = pluginSource.indexOf('const rawChannel = createChannel(ctx, startupSession, {')
 assert.notEqual(storeDeclaration, -1, 'plugin.ts declares the activity store')
 assert.notEqual(channelConstruction, -1, 'plugin.ts constructs the channel')
 assert.ok(
