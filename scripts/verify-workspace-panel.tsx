@@ -44,7 +44,10 @@ function check(name: string, ok: boolean, extra = ''): void {
 
 // --- registry fixture --------------------------------------------------------
 interface StubEntry { id: string; path: string; title: string; present: boolean; sessionCount: number }
-const CURRENT = { id: 'w-cur', path: 'D:\\code\\projects\\dsh-tui', title: 'dsh-tui', present: true, sessionCount: 3 }
+// 跨平台：current 高亮断言要求 entry.path 与 channel.cwd 在任何平台的
+// normalizeWorkspaceCwd 下都判等——两侧同形（同盘符大小写、同分隔符），
+// 大小写/斜线容错由 normalizeWorkspaceCwd 的单测覆盖，不在这里赌平台行为。
+const CURRENT = { id: 'w-cur', path: 'd:/code/projects/dsh-tui', title: 'dsh-tui', present: true, sessionCount: 3 }
 const MISSING = { id: 'w-miss', path: 'D:\\gone\\dir', title: 'gone-dir', present: false, sessionCount: 1 }
 const LONGP = { id: 'w-long', path: 'C:\\Users\\someone\\very\\deep\\nested\\directory\\tree\\with\\a\\long\\tail\\project-name-here', title: 'long-project', present: true, sessionCount: 0 }
 const MANY: StubEntry[] = Array.from({ length: 24 }, (_, i) => ({ id: 'w-' + i, path: 'D:\\ws\\proj-' + i, title: 'proj-' + i, present: true, sessionCount: i }))
