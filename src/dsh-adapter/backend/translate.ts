@@ -17,7 +17,7 @@
 import type { AssistantStreamFrame } from '@deepseek-ai/dsh-agent'
 import type { ContentBlock, StreamChunk, TokenUsage } from '@deepseek-ai/dsh-llm'
 import type { SessionEvent, TurnEndReason as DshTurnEndReason } from '@deepseek-ai/dsh-session'
-import { NO_EVENTS, type AgentEvent, type AgentEventOf, type GoalSnapshot, type TurnEndReason, type UsageDelta } from '../../agent/events.js'
+import { NO_EVENTS, type AgentEvent, type AgentEventOf, type AgentEventType, type GoalSnapshot, type TurnEndReason, type UsageDelta } from '../../agent/events.js'
 import type { SuppressedToolPresentation, ToolCallPresentation, ToolResultPresentation } from '../../agent/presentation.js'
 import type { PricingWindow } from '../../channel/usage.js'
 import { isPeakHour } from '../../deepseekPricing.js'
@@ -48,12 +48,82 @@ export function dshPricingWindow(time: number): PricingWindow {
   return isPeakHour(new Date(time)) ? 'peak' : 'idle'
 }
 
-/** Official presets recorded under a former name (blank-session preset
- *  markers show the user's current spelling, issue #8). */
-const PRESET_ALIASES: Readonly<Record<string, readonly string[]>> = {
-  code: ['ptc'],
-  ptc: ['code'],
+/**
+ * The DSH backend's decision for every Agent Domain event type: whether this
+ * translator (or its session, for the bus-derived `session.status`,
+ * `pending.changed` and `compaction.progress`) ever emits it. The exhaustive
+ * switch is the point: a new `AgentEvent` variant fails `tsc` here until the
+ * DSH side decides, and `verify:agent-domain` checks every translated fixture
+ * event against it.
+ */
+export function dshEmits(type: AgentEventType): boolean {
+  switch (type) {
+    case 'session.title':
+    case 'session.color':
+    case 'session.status':
+    case 'turn.start':
+    case 'turn.end':
+    case 'step.start':
+    case 'step.end':
+    case 'user.message':
+    case 'pending.changed':
+    case 'assistant.attempt.start':
+    case 'assistant.delta':
+    case 'assistant.attempt.end':
+    case 'assistant.message':
+    case 'tool.call':
+    case 'tool.result':
+    case 'task.start':
+    case 'task.output':
+    case 'compaction.start':
+    case 'compaction.progress':
+    case 'compaction.end':
+    case 'context.capacity':
+    case 'goal.change':
+    case 'todo.write':
+    case 'preset.selected':
+    case 'system.prompt':
+    case 'request.header':
+    case 'custom':
+      return true
+    // Owned elsewhere on DSH (subagent/job specialists, approval and question
+    // stores, model/mode actions) or not a DSH concept.
+    case 'session.ready':
+    case 'session.reset':
+    case 'tool.progress':
+    case 'permission.request':
+    case 'permission.settled':
+    case 'question.request':
+    case 'question.settled':
+    case 'subagent.start':
+    case 'subagent.progress':
+    case 'subagent.end':
+    case 'task.update':
+    case 'task.end':
+    case 'tasks.snapshot':
+    case 'context.usage':
+    case 'model.changed':
+    case 'effort.changed':
+    case 'mode.changed':
+    case 'commands.changed':
+    case 'notice':
+    case 'rate-limit':
+      return false
+    default: {
+      const unhandled: never = type
+      return unhandled
+    }
+  }
 }
+
+/** Official presets recorded under a former name (blank-session preset
+ *  markers show the user's current spelling, issue #8). A Map, not an object
+ *  literal: the key is untrusted log data, and a plain-object lookup would
+ *  resolve `constructor`/`toString`/… through `Object.prototype`. */
+const PRESET_ALIASES: ReadonlyMap<string, readonly string[]> = new Map([
+  ['code', ['ptc']],
+  ['ptc', ['code']],
+])
 
 const QUESTION: SuppressedToolPresentation = { card: 'question' }
 const SUBAGENT: SuppressedToolPresentation = { card: 'subagent' }
@@ -387,7 +457,7 @@ export function createDshTranslator(deps: DshTranslatorDeps) {
         // dsh-session's typed union — matched by name.
         const recorded = (data as { agentPreset?: unknown }).agentPreset
         const preset = typeof recorded === 'string' ? recorded : 'unknown'
-        const aliases = PRESET_ALIASES[preset]
+        const aliases = PRESET_ALIASES.get(preset)
         return [{ type: 'preset.selected', preset, ...(aliases === undefined ? {} : { aliases }) }]
       }
       case 'session/color': {

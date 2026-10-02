@@ -16,6 +16,7 @@ import { join } from 'node:path'
 import type { AgentEvent } from '../src/agent/events.js'
 import { createDshTranslator, dshPricingWindow } from '../src/dsh-adapter/backend/translate.js'
 import { FIXTURE_DIR, buildFixtures } from './fixtures/dsh/generate.js'
+import { createProjectorHarness } from './lib/projector-harness.js'
 
 type Translator = ReturnType<typeof createDshTranslator>
 const readJsonl = (path: string): unknown[] => {
@@ -103,6 +104,18 @@ check('session/color → session.color (\'\' clears)', of(live, 'session.color')
 check('valid todo/write → todo.write; malformed dropped', of(live, 'todo.write').length === 2)
 check('agent-preset/selected → preset.selected with aliases', of(live, 'preset.selected').some(event => event.preset === 'code' && event.aliases?.includes('ptc') === true))
 check('compaction bracket → compaction.start/end', of(live, 'compaction.start').length === 2 && of(live, 'compaction.end').length === 1)
+// Untrusted preset names must not resolve through Object.prototype: a
+// `constructor` marker gets no aliases and still projects as a notice row.
+{
+  const translator = createDshTranslator({ tools: () => undefined, scope: () => ({}), attachments: () => undefined })
+  const marker = { type: 'agent-preset/selected', seq: 9001, time: 0, data: { agentPreset: 'constructor' } } as unknown as Parameters<Translator['translateEvent']>[0]
+  const [selected] = translator.translateEvent(marker)
+  check('prototype-key preset → preset.selected without aliases', selected?.type === 'preset.selected' && selected.preset === 'constructor' && selected.aliases === undefined)
+  const harness = createProjectorHarness({ agentPreset: 'ptc' })
+  harness.apply(translator.translateEvent(marker))
+  harness.apply([{ type: 'preset.selected', preset: 'code', aliases: 'ptc' as unknown as readonly string[] }])
+  check('prototype-key preset projects without throwing', harness.state.rows.filter(row => row.kind === 'notice').length === 2)
+}
 const customs = of(live, 'custom').map(event => event.nativeType)
 check('unknown plugin events → custom', customs.includes('fixture-plugin/note') && customs.includes('other-plugin/ping') && customs.includes('developer/message'))
 

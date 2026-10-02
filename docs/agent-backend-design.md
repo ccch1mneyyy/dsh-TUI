@@ -152,6 +152,7 @@
 
 依赖方向：`UI → ports`；`channel → agent + ports + 宿主服务`；`backends/* → agent + 各自厂商 SDK`；`agent → 无`。
 禁止：`agent`/`channel` import 厂商包；UI import `backends/*`；`backends/*` 互相 import；`backends/*` 直接改 `ChannelState`。
+`agent`/`channel` 也不 import `src/ink/**`，唯一登记的允许边是 `src/channel/sanitize.ts → src/ink/stringWidth.ts`（纯叶子：显示单元宽度，无渲染器状态；Phase 2 起 `verify:boundary` 按文件对放行）。
 
 ### 3.2 目录
 

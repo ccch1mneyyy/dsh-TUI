@@ -82,11 +82,12 @@ export function createDshSession(ctx: Context, target: DshSessionTarget): AgentS
   // it once per channel), on the first presenter call: wrapping an agent
   // touches no host service.
   let tools: { readonly registry: ToolsRegistryLike | undefined } | undefined
-  const translator = createDshTranslator({
+  const translatorDeps = {
     tools: () => (tools ??= { registry: ctx.get('tools') as ToolsRegistryLike | undefined }).registry,
     scope: () => agent,
     attachments: () => ctx.get('attachments'),
-  })
+  }
+  const translator = createDshTranslator(translatorDeps)
   let disposed = false
   /** Inputs this session queued that the inbox has not claimed or discarded. */
   const pending = new Map<string, PendingItem>()
@@ -176,7 +177,11 @@ export function createDshSession(ctx: Context, target: DshSessionTarget): AgentS
       return agent.status === 'running' ? 'running' : 'idle'
     },
     capabilities: { native: { dsh: native } },
-    history: () => Promise.resolve(translator.translateReplay(snapshotLiveSessionEvents(agent.session))),
+    // A throwaway translator: `history()` is a read, so it must neither reset
+    // the live translator's frame fence nor leave the replay's open calls in
+    // the live open-call ledger. (Adoption seeds still go through
+    // `native.translateReplay`, which is a deliberate live reset.)
+    history: () => Promise.resolve(createDshTranslator(translatorDeps).translateReplay(snapshotLiveSessionEvents(agent.session))),
 
     subscribe(listener) {
       // A callback the bus retained past unsubscription (a dispatch already

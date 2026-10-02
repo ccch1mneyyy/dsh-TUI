@@ -25,19 +25,21 @@ export function formatSessionRef(ref: AgentSessionRef): string {
 }
 
 /**
- * Parse {@link formatSessionRef} output. The backend id is the text before
- * the FIRST colon only when it names a known backend; any other string is a
- * bare DSH session id (DSH ids never need escaping this way).
+ * Parse {@link formatSessionRef} output. Backend ids may themselves contain
+ * a colon (`acp:gemini`), so the prefix is the LONGEST known backend id the
+ * text starts with (followed by `:` and a non-empty session id); any other
+ * string is a bare DSH session id (DSH ids never need escaping this way).
  */
 export function parseSessionRef(text: string, knownBackends: readonly string[]): AgentSessionRef {
-  const colon = text.indexOf(':')
-  if (colon > 0) {
-    const backendId = text.slice(0, colon)
-    if (backendId !== DEFAULT_BACKEND_ID && knownBackends.includes(backendId)) {
-      return { backendId, sessionId: text.slice(colon + 1) }
-    }
+  let match: string | undefined
+  for (const backendId of knownBackends) {
+    if (backendId === '' || backendId === DEFAULT_BACKEND_ID) continue
+    if (text.length <= backendId.length + 1 || !text.startsWith(`${backendId}:`)) continue
+    if (match === undefined || backendId.length > match.length) match = backendId
   }
-  return { backendId: DEFAULT_BACKEND_ID, sessionId: text }
+  return match === undefined
+    ? { backendId: DEFAULT_BACKEND_ID, sessionId: text }
+    : { backendId: match, sessionId: text.slice(match.length + 1) }
 }
 
 /** Value equality of two references. */

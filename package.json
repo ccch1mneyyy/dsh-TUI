@@ -216,6 +216,7 @@
     "verify:channel-ui": "node --import tsx/esm scripts/verify-channel-ui.ts",
     "verify:projection-golden": "node --import tsx/esm scripts/verify-projection-golden.ts",
     "verify:dsh-translate": "node --import tsx/esm scripts/verify-dsh-translate.ts",
+    "verify:agent-domain": "node --import tsx/esm scripts/verify-agent-domain.ts",
     "verify:adapter-channel": "node --import tsx/esm scripts/verify-adapter-channel.ts",
     "verify:binding-transaction": "node --import tsx/esm scripts/verify-binding-transaction.ts",
     "verify:session-extraction": "node --import tsx/esm scripts/verify-session-extraction.ts",

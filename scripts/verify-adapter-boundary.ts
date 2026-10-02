@@ -10,7 +10,11 @@
  *   src/agent/**, src/channel/**   no vendor package (rows above), no
  *                                  src/dsh-adapter/** or src/backends/**;
  *                                  src/agent/** also not src/channel/**
- *                                  (the domain sits below the projection)
+ *                                  (the domain sits below the projection);
+ *                                  no src/ink/** except the explicit edge
+ *                                  src/channel/sanitize.ts → src/ink/stringWidth.ts
+ *                                  (a pure leaf: display-cell width, no
+ *                                  renderer state)
  *   src/{screens,components,hooks,ink}/**
  *                                  no src/backends/** at all; type-only imports
  *                                  of src/dsh-adapter/** are fine, value imports
@@ -57,10 +61,11 @@ const VENDOR_RULES: readonly VendorRule[] = [
   { label: '@dsh-std/*', pattern: /^@dsh-std\//u, allowedIn: ['adapter/standard/', 'dsh-adapter/'] },
 ]
 
-/** Internal targets each neutral layer must not reach. */
-const LAYER_RULES: readonly { readonly dir: string; readonly forbidden: readonly string[] }[] = [
-  { dir: 'agent/', forbidden: ['dsh-adapter/', 'backends/', 'channel/'] },
-  { dir: 'channel/', forbidden: ['dsh-adapter/', 'backends/'] },
+/** Internal targets each neutral layer must not reach; `allow` lists the
+ *  explicit file→file edges that are exempt (pure leaves, design §3.1). */
+const LAYER_RULES: readonly { readonly dir: string; readonly forbidden: readonly string[]; readonly allow?: readonly string[] }[] = [
+  { dir: 'agent/', forbidden: ['dsh-adapter/', 'backends/', 'channel/', 'ink/'] },
+  { dir: 'channel/', forbidden: ['dsh-adapter/', 'backends/', 'ink/'], allow: ['channel/sanitize.ts -> ink/stringWidth.ts'] },
 ]
 
 const UI_DIRS = ['screens/', 'components/', 'hooks/', 'ink/']
@@ -201,6 +206,7 @@ for (const file of files) {
     for (const layer of LAYER_RULES) {
       if (!under(path, layer.dir)) continue
       const hit = layer.forbidden.find(dir => under(target, dir))
+      if (hit && layer.allow?.includes(`${path} -> ${target.replace(/\.js$/u, '.ts')}`) === true) continue
       if (hit) violations.push(`${where} imports src/${target}; src/${layer.dir} must not depend on src/${hit}`)
     }
     if (!UI_DIRS.some(dir => under(path, dir))) continue

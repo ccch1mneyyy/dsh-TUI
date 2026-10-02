@@ -737,11 +737,17 @@ export function createChannelProjection(state: ProjectionState, deps: ChannelPro
     } else {
       card.tool.status = 'ok'
       const result = event.text
-      card.tool.resultFull = result || undefined
       card.tool.resultText = result ? preview(result, RESULT_PREVIEW_LIMIT) : undefined
-      // The tool's own settled-state view (applied diff, terminal output,
-      // read content…) wins over the raw text body.
-      card.tool.resultView = event.presentation
+      // A card the window cap already folded while it ran keeps only its
+      // preview: foldRows drops the full payload and the presentation views
+      // by design (the durable record re-derives them on loadOlder), so a
+      // late result must not re-attach them past the fold line.
+      if (card.folded !== true) {
+        card.tool.resultFull = result || undefined
+        // The tool's own settled-state view (applied diff, terminal output,
+        // read content…) wins over the raw text body.
+        card.tool.resultView = event.presentation
+      }
       state.contextSegments.tools += estimateTokens(result)
       settledCardCallId = callId
     }
@@ -972,7 +978,10 @@ export function createChannelProjection(state: ProjectionState, deps: ChannelPro
         // produced the turns after it. A recording under an alias of the
         // current preset shows the current spelling.
         const current = state.agentPreset
-        const preset = current !== undefined && event.aliases?.includes(current) === true ? current : event.preset
+        // `aliases` crosses a backend boundary: only a real array is trusted
+        // (a translator bug must not turn a marker into a projector throw).
+        const aliases: unknown = event.aliases
+        const preset = current !== undefined && Array.isArray(aliases) && aliases.includes(current) ? current : event.preset
         appendRow({
           id: deps.rowIds.value,
           kind: 'notice',

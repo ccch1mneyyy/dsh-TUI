@@ -1,7 +1,7 @@
 import type { Agent, AssistantStreamFrame, ModelSelectionRef } from '@deepseek-ai/dsh-agent'
 import type { Context } from '@deepseek-ai/cordis'
 import { carrierKeyOf } from '@deepseek-ai/dsh-scope'
-import type { AgentEventOf } from '../../agent/events.js'
+import type { AgentEvent, AgentEventOf } from '../../agent/events.js'
 import type { ChannelProjection } from '../../channel/projection.js'
 import type { InputConvergence } from './input-actions.js'
 import type { ChannelBinding } from './binding.js'
@@ -181,23 +181,45 @@ export function createBindingEvents(ctx: Context, deps: {
         }))
       }
       register(session.subscribe((batch, meta) => {
-        // A compaction summary stream that started under this binding keeps
-        // feeding the live compaction row until it ends, whatever binding is
-        // current by then (pre-split semantics); the row itself is reset on
-        // adoption, so a stale stream finds nothing to advance.
-        if (batch[0]?.type === 'compaction.progress') {
-          if (deps.state.compaction === undefined) return
-          deps.projector.apply(batch, meta)
+        // The generation fence covers the WHOLE batch, whatever it carries: a
+        // callback retained past a rebind (an in-flight dispatch, a compaction
+        // summary stream that outlived the binding it started under) must
+        // never write the replacement session's transcript.
+        if (!current()) return
+        let admitted: AgentEvent[] | undefined
+        let progressOnly = batch.length > 0
+        for (const [index, event] of batch.entries()) {
+          switch (event.type) {
+            case 'session.status':
+              applyStatus(event.status)
+              break
+            case 'pending.changed':
+              applyPending(event)
+              break
+            case 'compaction.progress':
+              // Summary output only advances a compaction row that is open; a
+              // stale stream after the row closed finds nothing to advance.
+              if (deps.state.compaction === undefined) {
+                admitted ??= batch.slice(0, index)
+                continue
+              }
+              break
+            default:
+              break
+          }
+          if (event.type !== 'compaction.progress') progressOnly = false
+          admitted?.push(event)
+        }
+        const events = admitted ?? batch
+        if (progressOnly) {
+          // Pure summary progress: frame-coalesced like the stream it counts.
+          if (events.length === 0) return
+          deps.projector.apply(events, meta)
           deps.state.emitStream()
           return
         }
-        if (!current()) return
-        for (const event of batch) {
-          if (event.type === 'session.status') applyStatus(event.status)
-          else if (event.type === 'pending.changed') applyPending(event)
-        }
         // The one writer of the foreground transcript.
-        deps.projector.apply(batch, meta)
+        deps.projector.apply(events, meta)
         if (meta.wake === 'frame') deps.state.emitStream()
         else if (meta.wake !== 'none') deps.state.emit()
       }))
