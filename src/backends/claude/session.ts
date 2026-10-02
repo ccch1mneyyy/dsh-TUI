@@ -80,7 +80,11 @@ export interface ClaudeSessionDeps {
    *  authentication failure (design §4.12; auth.ts). */
   readonly auth?: {
     readonly plan: ClaudeAuthPlan
-    renew(): Promise<ClaudeAuthPlan>
+    /** A fresh plan; `rejected` is the token the CLI just refused (renew it
+     *  only if the store still holds that one), absent for `/login`. */
+    renew(renewal: { readonly rejected?: string }): Promise<ClaudeAuthPlan>
+    /** The user-facing sentence for a failed renewal (no error details). */
+    failureNotice?(error: unknown): string
   }
   /** The user's persisted `/model` and `/effort` choices (memory if absent). */
   readonly prefs?: ClaudePrefs
@@ -110,6 +114,9 @@ type Rec = Readonly<Record<string, unknown>>
 const rec = (value: unknown): Rec | undefined =>
   typeof value === 'object' && value !== null && !Array.isArray(value) ? value as Rec : undefined
 const errorText = (error: unknown): string => error instanceof Error ? error.message : String(error)
+
+/** The CLI's answer to `resume` of a session it has no transcript for. */
+const NO_CONVERSATION = /No conversation found with session ID/iu
 
 /** A minimal push-based async iterable: the session's stdin. */
 function createInbox<T>() {
@@ -193,6 +200,27 @@ export async function openClaudeSession(deps: ClaudeSessionDeps): Promise<AgentS
    *  successful turn (design §4.12: one, then the user is sent to /login). */
   let authAttempts = 0
   let authFailed = false
+  /**
+   * The CLI wrote this session's transcript (an input started, or a turn
+   * reported its result). Until then a restart must CREATE the session with
+   * the same id: `resume` of an id the CLI has no transcript for fails its
+   * handshake ("No conversation found").
+   */
+  let persisted = false
+  /** What this session pushed, by input uuid, until the CLI starts it: a
+   *  reconnect re-delivers what the old CLI never started. */
+  const pushed = new Map<string, SDKUserMessage>()
+  /** Callers waiting for the open turn to close (a deferred `/login`). */
+  const idleWaiters: { resolve(): void; reject(error: Error): void }[] = []
+  /** No turn open and nothing queued the CLI would start next. */
+  const idle = (): boolean => !translator.turnOpen && translator.unstartedInputs().length === 0
+  const settleIdleWaiters = (error?: Error): void => {
+    if (error === undefined && !idle()) return
+    for (const waiter of idleWaiters.splice(0)) {
+      if (error === undefined) waiter.resolve()
+      else waiter.reject(error)
+    }
+  }
   const translator = createClaudeTranslator({ cwd: deps.cwd, userRows: 'lifecycle', debug: deps.host.debug })
   translator.noteMode(deps.start.mode)
 
@@ -308,6 +336,7 @@ export async function openClaudeSession(deps: ClaudeSessionDeps): Promise<AgentS
       { type: 'notice', level: 'error', text: t('claude-process-exited', { reason }) },
       { type: 'session.status', status: 'disposed' },
     ])
+    settleIdleWaiters(new Error(t('claude-session-closed')))
   }
 
   const fetchAccount = (target: Run): void => {
@@ -345,14 +374,22 @@ export async function openClaudeSession(deps: ClaudeSessionDeps): Promise<AgentS
       if (typeof value.apiKeySource === 'string') apiKeySource = value.apiKeySource
       if (Array.isArray(value.terminal_slash_commands)) controls.setTerminalOnly(value.terminal_slash_commands.filter((item): item is string => typeof item === 'string'))
     }
-    if (isAuthFailure(message)) authFailed = true
+    if (value?.type === 'result' || (value?.type === 'command_lifecycle' && value.state === 'started')) persisted = true
+    // While a reconnect is renewing the credential, the old CLI's late
+    // failing turn is the failure being handled, not a new one.
+    if (reconnecting === undefined && isAuthFailure(message)) authFailed = true
     if (value?.type === 'result') {
-      if (authFailed) {
+      if (reconnecting !== undefined) {
+        authFailed = false
+      } else if (authFailed) {
         authFailed = false
         onAuthFailure()
       } else if (value.is_error !== true) {
         authAttempts = 0
       }
+      // Forget pushes the CLI has started (only unstarted ones are kept).
+      const unstarted = new Set(translator.unstartedInputs())
+      for (const uuid of pushed.keys()) if (!unstarted.has(uuid)) pushed.delete(uuid)
     }
     for (const event of events) {
       if (event.type !== 'session.ready' || event.backendVersion === undefined || cliVersion !== undefined) continue
@@ -383,6 +420,7 @@ export async function openClaudeSession(deps: ClaudeSessionDeps): Promise<AgentS
         }
         emit(events, wakeOf(message, events))
         afterMessage(message, events)
+        if (idleWaiters.length > 0) settleIdleWaiters()
       }
       if (target === run) onExit(undefined)
     } catch (error) {
@@ -391,31 +429,91 @@ export async function openClaudeSession(deps: ClaudeSessionDeps): Promise<AgentS
   })()
 
   /**
+   * Start a replacement run and complete its handshake. A session the CLI
+   * has persisted is resumed; one it has not is created again under the
+   * same id — and a resume the CLI answers with "No conversation found"
+   * falls back to that create.
+   */
+  const openRun = async (): Promise<void> => {
+    const resume = persisted
+    // The replacement becomes the current run at once, so the old run's
+    // consumer — ending as its CLI closes — knows it was replaced, not lost.
+    run = startRun(resume)
+    try {
+      await handshake(run)
+    } catch (error) {
+      if (!resume || !NO_CONVERSATION.test(errorText(error))) throw error
+      deps.host.debug(`claude: resume refused (${errorText(error)}); creating the session again`)
+      stopRun(run)
+      run = startRun(false)
+      await handshake(run)
+    }
+  }
+
+  /**
    * Restart the CLI on the same session with a renewed credential (design
    * §4.12): the old CLI's prompts are withdrawn and an open turn closed, the
-   * new query resumes the session id, and the translator keeps its state.
+   * new query continues the session id, the translator keeps its state, and
+   * the inputs the old CLI never started are pushed again, in order.
    */
   let reconnecting: Promise<void> | undefined
-  const reconnect = (): Promise<void> => {
+  const reconnect = (renewal: { readonly rejected?: string }, options: { readonly waitIdle?: boolean } = {}): Promise<void> => {
     if (disposing) return Promise.reject(new Error(t('claude-session-closed')))
     reconnecting ??= (async (): Promise<void> => {
-      if (deps.auth !== undefined) authPlan = await deps.auth.renew()
+      if (deps.auth !== undefined) authPlan = await deps.auth.renew(renewal)
+      // A `/login` reconnect never interrupts work: it waits (after the
+      // renewal, so nothing can start between the check and the restart)
+      // until the running turn and the inputs queued behind it are done.
+      // New submissions wait for the reconnect meanwhile.
+      if (options.waitIdle === true && !idle()) {
+        await new Promise<void>((resolve, reject) => { idleWaiters.push({ resolve, reject }) })
+      }
       if (disposing) return
       const previous = run
       bridge.settleAll(WITHDRAWN_MESSAGE)
       clearForceTimer()
       emit(translator.forceCloseTurn({ kind: 'aborted' }))
+      const unstarted = translator.unstartedInputs()
       stopRun(previous)
-      run = startRun(true)
       try {
-        await handshake(run)
+        await openRun()
       } catch (error) {
+        // Nothing can deliver them now: retire their previews, say so.
+        const dropped = translator.dropInputs(unstarted)
+        pushed.clear()
+        if (dropped.length > 0) emit([...dropped, { type: 'notice', level: 'warning', text: t('claude-auth-inputs-dropped', { n: unstarted.length }) }])
         onExit(error)
         throw error
       }
-      run.consumer = consume(run)
+      // A dispose during the handshake already stopped the new run.
+      if (disposing) return
+      const next = run
+      const lost: string[] = []
+      for (const uuid of unstarted) {
+        const message = pushed.get(uuid)
+        if (message === undefined) { lost.push(uuid); continue }
+        // A fresh CLI is idle: each input is a plain push, in order.
+        const { priority: _priority, ...plain } = message
+        try {
+          next.inbox.push(plain)
+        } catch {
+          lost.push(uuid)
+        }
+      }
+      if (lost.length > 0) emit([...translator.dropInputs(lost), { type: 'notice', level: 'warning', text: t('claude-auth-inputs-dropped', { n: lost.length }) }])
+      next.consumer = consume(next)
     })().finally(() => { reconnecting = undefined })
     return reconnecting
+  }
+
+  /** The token the live run spawned with, when it is the dsh-auth login. */
+  const injectedToken = (): string | undefined =>
+    authPlan.source === 'dsh-auth' ? authPlan.env.CLAUDE_CODE_OAUTH_TOKEN : undefined
+
+  /** A failed renewal as the user sees it (details stay in the debug log). */
+  const renewalFailed = (error: unknown): string => {
+    deps.host.debug(`claude: reconnect failed (${errorText(error)})`)
+    return deps.auth?.failureNotice?.(error) ?? t('claude-auth-reconnect-failed')
   }
 
   /** The CLI refused the credential: renew and resume once, then send the
@@ -427,10 +525,10 @@ export async function openClaudeSession(deps: ClaudeSessionDeps): Promise<AgentS
       return
     }
     authAttempts += 1
-    reconnect().then(() => {
+    reconnect({ rejected: injectedToken() }).then(() => {
       emit([{ type: 'notice', level: 'warning', text: t('claude-auth-reconnected') }])
     }, (error: unknown) => {
-      emit([{ type: 'notice', level: 'error', text: t('claude-auth-refresh-failed', { err: errorText(error) }) }])
+      emit([{ type: 'notice', level: 'error', text: renewalFailed(error) }])
     })
   }
 
@@ -466,6 +564,8 @@ export async function openClaudeSession(deps: ClaudeSessionDeps): Promise<AgentS
   /** `/login` lines: where the credential comes from, never the token. */
   const authStatus = async (): Promise<SessionAuthView> => {
     const lines = [t('claude-auth-source', { source: authSourceLabel(authPlan) })]
+    const route = routeLabel(authPlan)
+    if (route !== undefined) lines.push(t('claude-auth-route', { route }))
     if (authPlan.source === 'claude-login' && await detectClaudeAuth(process.env, undefined) === 'missing' && account?.subscriptionType === undefined) {
       lines.push(t('claude-auth-missing-hint'))
     }
@@ -504,7 +604,10 @@ export async function openClaudeSession(deps: ClaudeSessionDeps): Promise<AgentS
         status: authStatus,
         async reconnect(): Promise<void> {
           authAttempts = 0
-          await reconnect()
+          // Never under a running turn: the restart would abort it and drop
+          // what the user queued behind it. Reconnect once it ends.
+          if (!idle()) emit([{ type: 'notice', level: 'info', text: t('claude-auth-reconnect-deferred') }])
+          await reconnect({}, { waitIdle: true })
         },
       },
       native: {
@@ -556,18 +659,20 @@ export async function openClaudeSession(deps: ClaudeSessionDeps): Promise<AgentS
       const content = texts.length <= 1 ? texts[0] ?? input.text : texts.map(text => ({ type: 'text' as const, text }))
       const priority = priorityOf(placement, translator.turnOpen)
       translator.registerInput(input.clientMessageId, input.text, placement)
+      const message: SDKUserMessage = {
+        type: 'user',
+        message: { role: 'user', content },
+        parent_tool_use_id: null,
+        uuid: input.clientMessageId as SDKUserMessage['uuid'],
+        ...(priority === undefined ? {} : { priority }),
+      }
       try {
-        run.inbox.push({
-          type: 'user',
-          message: { role: 'user', content },
-          parent_tool_use_id: null,
-          uuid: input.clientMessageId as SDKUserMessage['uuid'],
-          ...(priority === undefined ? {} : { priority }),
-        })
+        run.inbox.push(message)
       } catch (error) {
         translator.unregisterInput(input.clientMessageId)
         throw error instanceof Error ? error : new Error(String(error))
       }
+      pushed.set(input.clientMessageId, message)
       return { accepted: true }
     },
     // No synchronous withdrawal (`retractPending` absent): never called.
@@ -585,6 +690,7 @@ export async function openClaudeSession(deps: ClaudeSessionDeps): Promise<AgentS
             { type: 'notice', level: 'warning', text: t('claude-cancel-forced') },
             { type: 'session.status', status: 'requires-action' },
           ])
+          settleIdleWaiters()
         }, forceSettleMs)
       }
       // `interrupt` re-delivers the queue itself, so the queued inputs go with
@@ -617,6 +723,7 @@ export async function openClaudeSession(deps: ClaudeSessionDeps): Promise<AgentS
         ])
         clock.clearTimeout(timer)
         if (!wasDisposed) emit([{ type: 'session.status', status: 'disposed' }], 'none')
+        settleIdleWaiters(new Error(t('claude-session-closed')))
         listeners.clear()
         backlog.length = 0
       })()
@@ -643,6 +750,32 @@ function authSourceLabel(plan: ClaudeAuthPlan): string {
       return t('claude-auth-source-claude-login')
     default: {
       const unknown: never = plan.source
+      return unknown
+    }
+  }
+}
+
+/** Why the subscription sign-in is not in use, when the route is not
+ *  first-party (the origin host at most — never a full URL). */
+function routeLabel(plan: ClaudeAuthPlan): string | undefined {
+  const route = plan.route
+  if (route === undefined) return undefined
+  switch (route.kind) {
+    case 'first-party':
+    case 'cloud':
+      return undefined
+    case 'custom-endpoint':
+      return t('claude-route-custom-endpoint', { host: route.host })
+    case 'unix-socket':
+      return t('claude-route-unix-socket')
+    case 'gateway':
+      return t('claude-route-gateway')
+    case 'api-key-helper':
+      return t('claude-route-api-key-helper')
+    case 'settings-unreadable':
+      return t('claude-route-settings-unreadable')
+    default: {
+      const unknown: never = route
       return unknown
     }
   }

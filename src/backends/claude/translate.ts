@@ -218,6 +218,9 @@ export function createClaudeTranslator(options: ClaudeTranslatorOptions) {
   const settledAttempts = new Set<string>()
   const openCalls = new Map<string, { readonly name: string; readonly input: unknown }>()
   const inputs = new Map<string, RegisteredInput>()
+  /** Registered inputs the CLI already started whose echo (the user row of
+   *  the replay fallback) has not arrived yet. */
+  const startedInputs = new Set<string>()
   /** Inputs the channel still shows as queued (pending previews). */
   const pending = new Map<string, PendingItem>()
   /** The last `system/init` command list (re-sent every turn; only changes
@@ -333,6 +336,7 @@ export function createClaudeTranslator(options: ClaudeTranslatorOptions) {
     }
     openTurn(out, 'user', uuid)
     inputs.delete(uuid)
+    startedInputs.delete(uuid)
     if (input.text.trim() === '/compact') return
     out.push({ type: 'user.message', id: uuid, anchor: uuid, seq: nextSeq(), turn, time: now(), source: 'user', text: input.text, blocks: [{ type: 'text', text: input.text }] })
   }
@@ -351,12 +355,16 @@ export function createClaudeTranslator(options: ClaudeTranslatorOptions) {
         // Echo fallback: the echo brings the row, but the turn is already
         // the user's when the input is one this session pushed.
         if (pending.delete(uuid)) out.push({ type: 'pending.changed', items: [...pending.values()], claimed: [uuid] })
-        if (inputs.has(uuid)) openTurn(out, 'user', uuid)
+        if (inputs.has(uuid)) {
+          startedInputs.add(uuid)
+          openTurn(out, 'user', uuid)
+        }
         break
       case 'cancelled':
       case 'discarded':
       case 'refused':
         inputs.delete(uuid)
+        startedInputs.delete(uuid)
         if (pending.delete(uuid)) out.push({ type: 'pending.changed', items: [...pending.values()], discarded: [uuid] })
         if (state === 'refused') out.push({ type: 'notice', level: 'warning', text: t('claude-input-refused') })
         break
@@ -888,7 +896,24 @@ export function createClaudeTranslator(options: ClaudeTranslatorOptions) {
     /** Forget an input the session failed to push. */
     unregisterInput(uuid: string): void {
       inputs.delete(uuid)
+      startedInputs.delete(uuid)
       pending.delete(uuid)
+    },
+    /** Pushed inputs the CLI has not started yet, in push order (a
+     *  reconnect re-delivers them to the new CLI). */
+    unstartedInputs(): readonly string[] {
+      return [...inputs.keys()].filter(uuid => !startedInputs.has(uuid))
+    },
+    /** Give up on inputs that can no longer be delivered: their previews
+     *  are retired as discarded. */
+    dropInputs(uuids: readonly string[]): AgentEvent[] {
+      const discarded: string[] = []
+      for (const uuid of uuids) {
+        inputs.delete(uuid)
+        startedInputs.delete(uuid)
+        if (pending.delete(uuid)) discarded.push(uuid)
+      }
+      return discarded.length === 0 ? [] : [{ type: 'pending.changed', items: [...pending.values()], discarded }]
     },
     /** Switch the user-row source once the CLI's capabilities are known. */
     setUserRows(mode: ClaudeUserRows): void {

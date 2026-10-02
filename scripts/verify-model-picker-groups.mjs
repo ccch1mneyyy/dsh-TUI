@@ -24,7 +24,7 @@ import {
   readModelRecents,
   recordModelUse,
 } from '../lib/types/modelRecents.js'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -149,6 +149,14 @@ const model = (provider, id) => ({ provider, id, name: id })
     const capped = readModelRecents(dir)
     check('7 persist: capped at the limit', capped.length === MODEL_RECENTS_LIMIT
       && capped[0].id === 'bulk-19', `len=${capped.length} first=${capped[0]?.id}`)
+    // Per backend (Phase 3 review item 7): another backend's picks live in
+    // their own file and never evict the DSH list; the DSH file is unchanged.
+    const dshBefore = readFileSync(join(dir, 'model-recents.json'), 'utf8')
+    for (let i = 0; i < 12; i += 1) recordModelUse(ref('claude', `c-${i}`), dir, 'claude')
+    check('7 persist: another backend keeps its own list',
+      readModelRecents(dir, 'claude')[0]?.id === 'c-11' && existsSync(join(dir, 'backends', 'claude', 'model-recents.json')))
+    check('7 persist: … and leaves the DSH file byte-for-byte unchanged',
+      readFileSync(join(dir, 'model-recents.json'), 'utf8') === dshBefore && readModelRecents(dir, 'dsh')[0]?.id === 'bulk-19')
     const corrupt = join(dir, 'model-recents.json')
     writeFileSync(corrupt, '{nope')
     check('7 persist: corrupt file reads as empty', eq(readModelRecents(dir), []))

@@ -37,11 +37,15 @@ export interface OAuthAccess {
 /** The host's stored OAuth login for one provider (dsh-auth on DSH hosts). */
 export interface OAuthCredentialSource {
   /**
-   * The stored credential, refreshed first when it is about to expire (or
-   * always, with `force`); undefined when none is stored. Rejects when a
-   * needed refresh fails.
+   * The stored credential, refreshed first when it is about to expire;
+   * undefined when none is stored. Rejects when a needed refresh fails.
+   *
+   * `rejected` is the access token the backend just refused: it is refreshed
+   * only while the store still holds that very token (compare-and-swap) — a
+   * credential rotated meanwhile (a fresh `/login`, another process's
+   * refresh) is returned as is, never force-refreshed.
    */
-  fresh(options?: { readonly force?: boolean }): Promise<OAuthAccess | undefined>
+  fresh(options?: { readonly rejected?: string }): Promise<OAuthAccess | undefined>
   /** Whether a credential is stored, without touching the network. */
   stored(): Promise<boolean>
 }

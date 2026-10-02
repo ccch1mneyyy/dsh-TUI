@@ -1,8 +1,10 @@
 /**
  * LIVE Claude backend check — real `claude` CLI, real credentials, real (small)
  * usage. NOT part of CI: it runs only with DSH_TUI_CLAUDE_LIVE=1 and prints
- * SKIP otherwise. Uses haiku (ANTHROPIC_MODEL=haiku for the child) and a
- * throwaway project directory.
+ * SKIP otherwise. HAIKU ONLY (maintainer cost rule, 2026-10-02): the child's
+ * model is pinned to haiku and the run refuses to start when the environment
+ * or a persisted `/model` choice names another model
+ * (scripts/lib/claude-haiku-only.mjs). Throwaway project directory.
  *
  *  1. a text turn streams and settles (user row confirmed, reply, cost);
  *  2. Read + Write with DSH_TUI_CLAUDE_PERMISSION_MODE=acceptEdits (the
@@ -15,10 +17,16 @@
  *     writes the file; a Bash rejected with a reason errors its card and the
  *     model carries on; an interrupt while a prompt is pending closes the
  *     panel and aborts the turn;
- *  6. controls (Phase 3): `/model` haiku → sonnet in place (confirmed by the
- *     reply's model), `/effort low`, Shift+Tab's acceptEdits then a Write
- *     with no prompt, `/compact` (compaction start/end). The persisted
- *     `/model` / `/effort` choice file is restored afterwards.
+ *  6. controls (Phase 3): a haiku-only `/model` round trip — the `haiku`
+ *     alias, then its full id, each switched in place (`setModel`, reported
+ *     as `model.changed`) and confirmed by the next reply's model; `/effort`
+ *     when haiku offers levels; Shift+Tab's acceptEdits then a Write with no
+ *     prompt; `/compact` (compaction start/end). Switching to OTHER models is
+ *     covered by the fake-SDK verify-claude-controls only. The persisted
+ *     `/model` / `/effort` choice file is restored afterwards;
+ *  7. reconnect (Phase 3 review item 1): `/login`'s reconnect on a session
+ *     the CLI never persisted creates it again under the same id (no "No
+ *     conversation found"); after a turn it resumes the same transcript.
  *
  * `DSH_TUI_CLAUDE_LIVE_SECTIONS=basic,permissions` limits the run (default:
  * all) — each section costs real turns.
@@ -36,19 +44,20 @@ if (process.env.DSH_TUI_CLAUDE_LIVE !== '1') {
   process.exit(0)
 }
 
+const { pinHaikuOrExit, isHaiku } = await import('./lib/claude-haiku-only.mjs')
+pinHaikuOrExit('verify-claude-live', (await import('../src/utils/paths.js')).DATA_DIR)
 const { claudeBackend } = await import('../src/backends/claude/index.js')
 const { setLang } = await import('../src/i18n.js')
 const { PermissionStore } = await import('../src/channel/permissions.js')
 const { QuestionStore } = await import('../src/channel/questions.js')
 const { attachInteraction } = await import('../src/channel/interaction.js')
-const sections = new Set((process.env.DSH_TUI_CLAUDE_LIVE_SECTIONS ?? 'basic,permissions,controls,controls-turns').split(',').map(name => name.trim()))
+const sections = new Set((process.env.DSH_TUI_CLAUDE_LIVE_SECTIONS ?? 'basic,permissions,controls,controls-turns,reconnect').split(',').map(name => name.trim()))
 /** `controls` without `controls-turns`: the read-only reports only (no turn). */
 class SkipTurns extends Error {}
 type AgentEvent = import('../src/agent/events.js').AgentEvent
 type AgentSession = import('../src/agent/session.js').AgentSession
 
 setLang('en')
-process.env.ANTHROPIC_MODEL ??= 'haiku'
 let passed = 0
 const check = (label: string, ok: boolean, detail?: unknown): void => {
   assert.ok(ok, detail === undefined ? label : `${label}: ${typeof detail === 'string' ? detail : JSON.stringify(detail).slice(0, 600)}`)
@@ -227,24 +236,30 @@ try {
       check('controls: /login status names a source', auth.lines.length > 0 && auth.lines[0]!.length > 0, auth.lines)
       if (!sections.has('controls-turns')) throw new SkipTurns()
       const models = await caps.models!.list()
-      check('controls: the model catalog lists haiku and sonnet', models.some(model => model.id === 'haiku') && models.some(model => model.id === 'sonnet'), models.map(model => model.id))
-      check('controls: switch to sonnet in place', (await caps.models!.set({ model: 'sonnet' })).kind === 'switched')
+      check('controls: the model catalog lists haiku', models.some(model => model.id === 'haiku'), models.map(model => model.id))
+      const modelChanges = (): string[] => live.events.flatMap(event => event.type === 'model.changed' ? [event.model] : [])
+      check('controls: /model haiku (the alias) switches in place', (await caps.models!.set({ model: 'haiku' })).kind === 'switched' && modelChanges().some(isHaiku), modelChanges())
       const levels = caps.effort!.levels().map(level => level.id)
-      check('controls: sonnet offers effort levels', levels.includes('low'), levels)
-      await caps.effort!.set('low')
-      check('controls: /effort low', caps.effort!.current() === 'low')
-      await session.submit({ text: 'Reply with exactly: sonnet-ok', clientMessageId: crypto.randomUUID() }, 'followup')
-      await live.until(() => turnEnds(live.events).length >= 1, 120_000, 'sonnet turn end')
-      const replyModel = live.events.filter((event): event is Extract<AgentEvent, { type: 'assistant.attempt.start' }> => event.type === 'assistant.attempt.start').at(-1)?.model ?? ''
-      check('controls: the reply ran on sonnet (message_start.model)', /sonnet/iu.test(replyModel) && turnEnds(live.events)[0]?.reason.kind === 'completed', replyModel)
-      check('controls: back to haiku', (await caps.models!.set({ model: 'haiku' })).kind === 'switched')
+      if (levels.length > 0) {
+        await caps.effort!.set(levels[0]!)
+        check(`controls: /effort ${levels[0]}`, caps.effort!.current() === levels[0])
+      } else {
+        console.log('NOTE controls: haiku offers no effort levels (/effort is covered by verify-claude-controls)')
+      }
+      await session.submit({ text: 'Reply with exactly: haiku-ok', clientMessageId: crypto.randomUUID() }, 'followup')
+      await live.until(() => turnEnds(live.events).length >= 1, 120_000, 'haiku turn end')
+      const attemptModel = (): string => live.events.filter((event): event is Extract<AgentEvent, { type: 'assistant.attempt.start' }> => event.type === 'assistant.attempt.start').at(-1)?.model ?? ''
+      const fullId = attemptModel()
+      check('controls: the reply ran on haiku, under its full id (message_start.model)', isHaiku(fullId) && fullId !== 'haiku' && turnEnds(live.events)[0]?.reason.kind === 'completed', fullId)
+      // `switched` is answered only after the CLI accepted `setModel`; the
+      // next reply's model confirms it.
+      check('controls: /model <full haiku id> switches in place (setModel accepted)', (await caps.models!.set({ model: fullId })).kind === 'switched' && isHaiku(caps.models!.current().model), caps.models!.current())
 
       await caps.modes!.set('acceptEdits')
       check('controls: Shift+Tab mode acceptEdits is current', caps.modes!.current() === 'acceptEdits')
       await session.submit({ text: 'Use the Write tool to create accepted.txt containing exactly: accepted. Reply done.', clientMessageId: crypto.randomUUID() }, 'followup')
       await live.until(() => turnEnds(live.events).length >= 2, 120_000, 'acceptEdits turn end')
-      const lastModel = live.events.filter((event): event is Extract<AgentEvent, { type: 'assistant.attempt.start' }> => event.type === 'assistant.attempt.start').at(-1)?.model ?? ''
-      check('controls: the switch back ran on haiku', /haiku/iu.test(lastModel), lastModel)
+      check('controls: the full-id switch is confirmed by the next reply (haiku)', attemptModel() === fullId, attemptModel())
       check('controls: acceptEdits wrote without a prompt', existsSync(join(project, 'accepted.txt')) && !live.events.some(event => event.type === 'permission.request'))
 
       await caps.compact!.run()
@@ -258,6 +273,27 @@ try {
       else writeFileSync(prefsFile, savedPrefs)
     }
     check('controls: no claude child survives', (await waitForNoChildren()).length === 0, claudeChildren())
+  }
+
+  // 7. reconnect before and after the first persisted turn (2 turns)
+  if (sections.has('reconnect')) {
+    const session = await claudeBackend.open({ kind: 'create', cwd: project }, host)
+    try {
+      const live = watch(session)
+      await session.capabilities.auth!.reconnect()
+      check('reconnect: a never-persisted session reconnects and stays live', session.status !== 'disposed' && !live.events.some(event => event.type === 'session.status' && event.status === 'disposed'))
+      await session.submit({ text: 'Remember the word quince. Reply with exactly: noted', clientMessageId: crypto.randomUUID() }, 'followup')
+      await live.until(() => turnEnds(live.events).length >= 1, 120_000, 'turn after the first reconnect')
+      check('reconnect: the session takes a turn after it', turnEnds(live.events)[0]?.reason.kind === 'completed', turnEnds(live.events)[0])
+      await session.capabilities.auth!.reconnect()
+      await session.submit({ text: 'Which word did I ask you to remember? Reply with that word only.', clientMessageId: crypto.randomUUID() }, 'followup')
+      await live.until(() => turnEnds(live.events).length >= 2, 120_000, 'turn after the resume')
+      const replies = live.events.filter((event): event is Extract<AgentEvent, { type: 'assistant.message' }> => event.type === 'assistant.message')
+      check('reconnect: a persisted session resumes its own transcript', replies.at(-1)?.blocks.some(block => block.type === 'text' && /quince/iu.test(block.text ?? '')) === true, replies.at(-1)?.blocks)
+    } finally {
+      await session.dispose()
+    }
+    check('reconnect: no claude child survives', (await waitForNoChildren()).length === 0, claudeChildren())
   }
 } finally {
   rmSync(root, { recursive: true, force: true })

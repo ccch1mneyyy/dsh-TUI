@@ -184,9 +184,15 @@ dsh-tui --backend claude     # or `backend: claude` in the dsh-tui config row
   `ANTHROPIC_AUTH_TOKEN` are kept away from the CLI so your explicit sign-in
   wins), else `ANTHROPIC_API_KEY` / cloud-provider variables in your
   environment, else your existing `claude login`. `/login` shows which one the
-  session runs on. A token that expires is refreshed before the CLI starts; if
-  the CLI rejects it mid-session, dsh-TUI renews it and resumes the same
-  session once, then asks you to `/login`. Token material is never logged.
+  session runs on. The dsh-auth sign-in is used **only for Anthropic's own
+  API**: when `ANTHROPIC_BASE_URL` (in your environment or a Claude settings
+  `env`) points anywhere other than `https://api.anthropic.com`, or a Unix
+  socket, a cloud-provider or gateway route, or an `apiKeyHelper`
+  is configured, your environment is passed through untouched and `/login`
+  names the route instead. A token that expires is refreshed before the CLI
+  starts; if the CLI rejects it mid-session, dsh-TUI renews it and resumes the
+  same session once, then asks you to `/login` (a `/login` during a running
+  turn reconnects after it). Token material is never logged.
 - **Executable**: `claude` on `PATH`, else the SDK's bundled binary. Project
   `CLAUDE.md`, settings, hooks, MCP servers and plugins load exactly as the CLI
   loads them.

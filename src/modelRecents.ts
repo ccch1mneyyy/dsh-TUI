@@ -6,11 +6,16 @@
  * Entries are `{ provider, id }` refs, most-recent-first, deduped, capped at
  * {@link MODEL_RECENTS_LIMIT}.
  *
+ * The list is per backend: a DSH session keeps `model-recents.json` exactly
+ * as before, any other backend `backends/<id>/model-recents.json` — its
+ * model ids are not DSH routes, and sharing one capped list would let one
+ * backend's picks evict the other's.
+ *
  * @module dsh-tui/modelRecents
  */
 
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { DATA_DIR } from './utils/paths.js'
 
 const PREFS_DIR = DATA_DIR
@@ -32,6 +37,12 @@ function asRef(value: unknown): ModelRecentsRef | undefined {
     && typeof record['id'] === 'string' && record['id'] !== ''
     ? { provider: record['provider'], id: record['id'] }
     : undefined
+}
+
+/** The recents file of one backend, relative to the prefs directory. */
+export function modelRecentsFile(backendId?: string): string {
+  if (backendId === undefined || backendId === '' || backendId === 'dsh') return 'model-recents.json'
+  return join('backends', backendId.replace(/[^a-z0-9-]/giu, '_'), 'model-recents.json')
 }
 
 /**
@@ -65,9 +76,9 @@ export function parseModelRecents(text: string): readonly ModelRecentsRef[] {
  * The persisted recent-model refs, most-recent-first.
  * @param dir - Prefs directory (injectable for tests).
  */
-export function readModelRecents(dir: string = PREFS_DIR): readonly ModelRecentsRef[] {
+export function readModelRecents(dir: string = PREFS_DIR, backendId?: string): readonly ModelRecentsRef[] {
   try {
-    return parseModelRecents(readFileSync(join(dir, 'model-recents.json'), 'utf8'))
+    return parseModelRecents(readFileSync(join(dir, modelRecentsFile(backendId)), 'utf8'))
   } catch {
     return []
   }
@@ -79,18 +90,20 @@ export function readModelRecents(dir: string = PREFS_DIR): readonly ModelRecents
  * model switch that caused it.
  * @param ref - The provider/model just switched to.
  * @param dir - Prefs directory (injectable for tests).
+ * @param backendId - The session's backend (absent / `dsh` = the DSH list).
  * @returns The new list (also what a subsequent read returns on success).
  */
-export function recordModelUse(ref: ModelRecentsRef, dir: string = PREFS_DIR): readonly ModelRecentsRef[] {
+export function recordModelUse(ref: ModelRecentsRef, dir: string = PREFS_DIR, backendId?: string): readonly ModelRecentsRef[] {
   const next: ModelRecentsRef[] = [ref]
-  for (const seen of readModelRecents(dir)) {
+  for (const seen of readModelRecents(dir, backendId)) {
     if (seen.provider === ref.provider && seen.id === ref.id) continue
     next.push(seen)
     if (next.length >= MODEL_RECENTS_LIMIT) break
   }
   try {
-    mkdirSync(dir, { recursive: true })
-    writeFileSync(join(dir, 'model-recents.json'), `${JSON.stringify({ models: next }, null, 2)}\n`)
+    const file = join(dir, modelRecentsFile(backendId))
+    mkdirSync(dirname(file), { recursive: true })
+    writeFileSync(file, `${JSON.stringify({ models: next }, null, 2)}\n`)
   } catch {
     // Best-effort like every other pref: the in-memory list still serves
     // this session; the next successful write re-persists.

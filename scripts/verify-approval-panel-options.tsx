@@ -9,8 +9,14 @@
  *  - `defaultToNo`: the rejection comes first and is focused, and no digit
  *    approves;
  *  - `suppressAlwaysAllow` / a forcing ask rule: no allow-always row;
- *  - `feedback`: typing composes a reason shown on the rejection row; Enter
- *    sends it, Esc rejects without it; backspace edits it;
+ *  - `feedback`: once the rejection row has focus (↓ / Tab) typing composes
+ *    a reason shown on it — digits included; Enter sends it, Esc rejects
+ *    without it; backspace edits it. Before that, typing is not captured and
+ *    allow-always is never a digit shortcut (focus + Enter only);
+ *  - a long reason shows as at most two rows (its tail) and keeps the
+ *    options and the hint on screen in a 40×24 terminal;
+ *  - every decision names its panel key (a withdrawn panel cannot answer
+ *    the next prompt);
  *  - subagent and blocked-path lines; the DSH background and `[external]`
  *    lines are unchanged.
  *
@@ -144,17 +150,44 @@ try {
     await show({ ...backend, key: `f-${lang}`, feedback: true, subagentId: 'agent-1234567890', blockedPath: '../outside/a.txt' })
     check(`${lang}: the feedback hint`, await settled(() => screen().includes(t('approval-hint-feedback'))), screen())
     check(`${lang}: the subagent and blocked-path lines`, screen().includes(t('approval-subagent', { id: 'agent-12' })) && screen().includes(t('approval-blocked-path', { path: '../outside/a.txt' })), screen())
+    const beforeDigit = decisions.length
+    await press('2')
+    await press('x')
+    check(`${lang}: a reason prompt — digit 2 never picks allow-always, typing is not captured before focus`, decisions.length === beforeDigit && !screen().includes(t('approval-feedback-row', { label: t('approval-no'), reason: 'x' })), screen())
+    await press('\t')
+    await press('\t')
     for (const char of 'use tmpx') await press(char)
     await press('\x7f')
     check(`${lang}: typing shows the reason on the rejection row`, await settled(() => screen().includes(t('approval-feedback-row', { label: t('approval-no'), reason: 'use tmp' }))), screen())
     await press('\r')
     check(`${lang}: Enter sends the rejection with the reason`, decisions.at(-1)?.outcome === 'rejected' && decisions.at(-1)?.decision.feedback === 'use tmp', decisions.at(-1))
+    check(`${lang}: the decision names its panel`, decisions.at(-1)?.decision.key === `f-${lang}`)
+    await show({ ...backend, key: `fd-${lang}`, feedback: true })
+    await press('\x1b[B')
+    await press('\x1b[B')
+    for (const char of '2 files') await press(char)
+    check(`${lang}: in the reason field digits are text`, await settled(() => screen().includes(t('approval-feedback-row', { label: t('approval-no'), reason: '2 files' }))), screen())
+    await press('\r')
+    check(`${lang}: … and the reason is sent with the rejection`, decisions.at(-1)?.outcome === 'rejected' && decisions.at(-1)?.decision.feedback === '2 files', decisions.at(-1))
+    await show({ ...backend, key: `fa-${lang}`, feedback: true })
+    await press('\t')
+    await press('\r')
+    check(`${lang}: allow-always takes focus plus Enter`, decisions.at(-1)?.outcome === 'allowed-always' && decisions.at(-1)?.decision.key === `fa-${lang}`, decisions.at(-1))
     await show({ ...backend, key: `f2-${lang}`, feedback: true })
+    await press('\t')
+    await press('\t')
     for (const char of 'why') await press(char)
     const beforeEsc = decisions.length
     await press('\x1b')
     check(`${lang}: Esc rejects without the reason`, await settled(() => decisions.length === beforeEsc + 1) && decisions.at(-1)?.outcome === 'rejected' && decisions.at(-1)?.decision.feedback === undefined, decisions.at(-1))
   }
+
+  // ── DSH: digit shortcuts unchanged, decisions name the panel ───
+  setLang('en')
+  await show({ key: 'dsh-keys', toolName: 'Bash', agentId: 'session-1' })
+  await press('\t')
+  await press('1')
+  check('DSH: Tab does nothing, digit 1 still allows once', decisions.at(-1)?.outcome === 'allowed-once' && decisions.at(-1)?.decision.key === 'dsh-keys', decisions.at(-1))
 
   // ── DSH-only lines stay ─────────────────────────────────────────
   setLang('en')
@@ -163,6 +196,57 @@ try {
 } finally {
   app.unmount()
   terminal.dispose()
+}
+
+// ── a long reason in a 40×24 terminal (review item 5) ─────────────────
+{
+  const cols = 40
+  const rows = 24
+  const narrow = new Terminal({ cols, rows, scrollback: 0, allowProposedApi: true })
+  class NarrowStdout extends Writable {
+    columns = cols
+    rows = rows
+    isTTY = true
+    _write(chunk: unknown, _encoding: BufferEncoding, callback: () => void) {
+      narrow.write(String(chunk), callback)
+    }
+  }
+  const narrowStdin = new FakeStdin()
+  const narrowScreen = (): string[] => Array.from({ length: rows }, (_, y) => narrow.buffer.active.getLine(y)?.translateToString(true) ?? '')
+  setLang('en')
+  const narrowApp = await render(React.createElement(ApprovalPanel, { key: 'narrow', approval: { ...backend, key: 'narrow', feedback: true }, onDecide }), {
+    stdout: new NarrowStdout(), stdin: narrowStdin, stderr: new NarrowStdout(), exitOnCtrlC: false, patchConsole: false,
+  })
+  try {
+    // 固定窗:pacing the panel applies one input chunk on its own render tick.
+    await sleep(60)
+    narrowStdin.write('\t')
+    // 固定窗:pacing the panel applies one input chunk on its own render tick.
+    await sleep(40)
+    narrowStdin.write('\t')
+    // 固定窗:pacing the panel applies one input chunk on its own render tick.
+    await sleep(40)
+    const reason = `${'word '.repeat(119)}TAILEND`
+    narrowStdin.write(`\x1b[200~${reason}\x1b[201~`)
+    // 固定窗:pacing the panel applies one input chunk on its own render tick.
+    await sleep(80)
+    const lines = narrowScreen()
+    const text = lines.join('\n')
+    check('40×24: every option row and the hint stay on screen', await settled(() => {
+      const view = narrowScreen().join('\n')
+      return view.includes('1. ') && view.includes('2. ') && view.includes('3. ') && view.includes(t('approval-hint-feedback').slice(0, 10))
+    }), text)
+    const reasonRows = narrowScreen().filter(line => line.includes('word'))
+    check('40×24: the reason takes at most two rows', reasonRows.length >= 1 && reasonRows.length <= 2, reasonRows)
+    check('40×24: the reason shows its tail (where the typing is)', narrowScreen().join('\n').includes('TAILEND') && narrowScreen().join('\n').includes('…'), narrowScreen())
+    narrowStdin.write('\r')
+    // 固定窗:pacing the panel applies one input chunk on its own render tick.
+    await sleep(60)
+    check('40×24: the full reason is sent', decisions.at(-1)?.decision.feedback === reason.trim(), decisions.at(-1)?.decision.feedback?.length)
+  } finally {
+    narrowApp.unmount()
+    narrow.dispose()
+  }
 }
 console.log(`\nverify-approval-panel-options OK (${passed} checks)`)
 process.exit(0)

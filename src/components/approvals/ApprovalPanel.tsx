@@ -12,11 +12,21 @@
  * ask rule), put the rejection first with no one-key approve
  * (`defaultToNo`), and accept a typed reason with a rejection (`feedback`).
  * Esc and Ctrl+C reject (fail closed; Esc cancels the request).
+ *
+ * On a prompt that takes a reason, the reason is typed into the rejection
+ * row once it has focus (↓ / Tab): there digits are text, so a reason that
+ * starts with "2" can never pick allow-always, and allow-always is never a
+ * digit shortcut — it takes focus plus Enter. The reason shows as at most
+ * two lines (its tail, where the typing happens); the full text is sent.
+ * A DSH prompt (two rows, no reason) keeps its digit shortcuts unchanged.
+ * Every decision carries the panel key, so a keystroke this panel handles
+ * after its prompt was withdrawn cannot answer the next one.
  */
 
 import React from 'react'
 import { t } from '../../i18n.js'
-import { Box, Text, useInput } from '../../ui.js'
+import { stringWidth } from '../../ink/stringWidth.js'
+import { Box, Text, useInput, useTerminalSize } from '../../ui.js'
 import { isPlainReturnInput } from '../../utils/modifiers.js'
 import { Divider } from '../design-system/Divider.js'
 import { POINTER } from '../../terminal-utils/figures.js'
@@ -47,6 +57,58 @@ export type ApprovalPanelProps = {
 /** A feedback reason is a short sentence, not a document. */
 const FEEDBACK_MAX_POINTS = 2000
 
+/** Horizontal cells the panel spends outside an option's text: the
+ *  padding (2 + 2) and the focus pointer column. */
+const ROW_CHROME_CELLS = 5
+/** The reason never takes more than this many rows of the option list. */
+const FEEDBACK_MAX_LINES = 2
+
+/** The longest tail of `text` that fits in `cells` display cells. */
+function tailWithin(text: string, cells: number): string {
+  const points = [...text]
+  let width = 0
+  let start = points.length
+  while (start > 0) {
+    const next = stringWidth(points[start - 1]!)
+    if (width + next > cells) break
+    width += next
+    start -= 1
+  }
+  return points.slice(start).join('')
+}
+
+/** Hard-wrap `text` into rows of at most `cells` display cells. */
+function hardWrap(text: string, cells: number): string[] {
+  const rows: string[] = []
+  let row = ''
+  let width = 0
+  for (const point of text) {
+    const next = stringWidth(point)
+    if (width + next > cells && row !== '') {
+      rows.push(row)
+      row = ''
+      width = 0
+    }
+    row += point
+    width += next
+  }
+  if (row !== '' || rows.length === 0) rows.push(row)
+  return rows
+}
+
+/**
+ * The rejection row with its reason, as at most two hard-wrapped rows: when
+ * the reason does not fit, its tail (the typing position) is shown after an
+ * ellipsis.
+ */
+export function feedbackRowLines(prefix: string, label: string, reason: string, columns: number): string[] {
+  const cells = Math.max(8, columns - ROW_CHROME_CELLS)
+  const head = `${prefix}${t('approval-feedback-row', { label, reason: '' })}`
+  const budget = FEEDBACK_MAX_LINES * cells - stringWidth(head)
+  const shown = stringWidth(reason) <= budget ? reason : `…${tailWithin(reason, Math.max(0, budget - 1))}`
+  return hardWrap(`${prefix}${t('approval-feedback-row', { label, reason: shown })}`, cells).slice(0, FEEDBACK_MAX_LINES)
+}
+
 /** The localized label of an option without backend wording. */
 function optionLabel(option: PermissionOptionView): string {
   if (option.label !== undefined && option.label !== '') return option.label
@@ -55,9 +117,17 @@ function optionLabel(option: PermissionOptionView): string {
 
 export function ApprovalPanel({ approval, background = false, onDecide }: ApprovalPanelProps): React.ReactNode {
   const options = visiblePermissionOptions(approval)
+  const { columns } = useTerminalSize()
   // `defaultToNo` opens on the rejection (sorted first); otherwise on the
-  // first option, as the DSH panel always has.
-  const [focusIndex, setFocusIndex] = React.useState(0)
+  // first option, as the DSH panel always has. The ref is the synchronous
+  // source of truth: one stdin chunk can carry a focus move and the typing
+  // after it inside a single React batch.
+  const [focusIndex, setFocusIndexState] = React.useState(0)
+  const focusRef = React.useRef(0)
+  const setFocusIndex = (next: number | ((index: number) => number)): void => {
+    focusRef.current = typeof next === 'function' ? next(focusRef.current) : next
+    setFocusIndexState(focusRef.current)
+  }
   // Hover highlight per decision row (mouse affordance; the click handler
   // below mirrors the keyboard Enter on the focused row).
   const [hoverIndex, setHoverIndex] = React.useState(-1)
@@ -79,19 +149,20 @@ export function ApprovalPanel({ approval, background = false, onDecide }: Approv
     onDecide(panelOutcomeOf(option.kind), {
       optionId: option.id,
       kind: option.kind,
+      key: approval.key,
       ...(text === '' ? {} : { feedback: text }),
     })
   }
   /** Esc / Ctrl+C: the plain rejection (a typed reason is not sent). */
   const reject = (): void => {
     if (rejectIndex >= 0) decide(rejectIndex, false)
-    else onDecide('rejected', { optionId: 'reject', kind: 'reject' })
+    else onDecide('rejected', { optionId: 'reject', kind: 'reject', key: approval.key })
   }
-  /** Typing goes to the rejection reason and focuses the rejection row. */
+  /** The reason field is the focused rejection row of a prompt that takes one. */
+  const reasonFocused = (): boolean => acceptsFeedback && rejectIndex >= 0 && focusRef.current === rejectIndex
   const appendFeedback = (text: string): void => {
     const points = [...feedbackRef.current, ...text]
     applyFeedback(points.slice(0, FEEDBACK_MAX_POINTS).join(''))
-    if (rejectIndex >= 0) setFocusIndex(rejectIndex)
   }
 
   useInput((input, key) => {
@@ -99,37 +170,42 @@ export function ApprovalPanel({ approval, background = false, onDecide }: Approv
       reject()
       return
     }
-    if (key.upArrow) {
+    if (key.upArrow || (acceptsFeedback && key.tab && key.shift)) {
       setFocusIndex(index => (index + options.length - 1) % options.length)
       return
     }
-    if (key.downArrow) {
+    if (key.downArrow || (acceptsFeedback && key.tab)) {
       setFocusIndex(index => (index + 1) % options.length)
       return
     }
     if (isPlainReturnInput(input, key)) {
-      decide(focusIndex, true)
+      decide(focusRef.current, true)
       return
     }
-    if (acceptsFeedback && key.isPasted === true) {
-      const text = flattenPasteInline(input)
-      if (text.trim() !== '') appendFeedback(text)
+    if (reasonFocused()) {
+      // The reason field: everything printable is text, digits included.
+      if (key.isPasted === true) {
+        const text = flattenPasteInline(input)
+        if (text.trim() !== '') appendFeedback(text)
+        return
+      }
+      if (key.backspace) {
+        applyFeedback([...feedbackRef.current].slice(0, -1).join(''))
+        return
+      }
+      if (!key.ctrl && !key.meta && input !== '' && !/[\u0000-\u001f\u007f]/u.test(input)) appendFeedback(input)
       return
     }
-    if (acceptsFeedback && key.backspace) {
-      applyFeedback([...feedbackRef.current].slice(0, -1).join(''))
-      return
-    }
-    // Digits pick an option while no reason is being typed. With
-    // `defaultToNo` no single key approves: only a rejection may be picked.
-    if (/^[1-9]$/u.test(input) && feedbackRef.current === '') {
+    // Digits pick an option. With `defaultToNo` no single key approves (only
+    // a rejection may be picked); on a prompt that takes a reason the
+    // persistent allow-always is never a single key either.
+    if (/^[1-9]$/u.test(input)) {
       const index = Number(input) - 1
       const option = options[index]
-      if (option !== undefined && (approval.defaultToNo !== true || option.kind === 'reject')) decide(index, false)
-      return
-    }
-    if (acceptsFeedback && !key.ctrl && !key.meta && input !== '' && !/[\u0000-\u001f\u007f]/u.test(input)) {
-      appendFeedback(input)
+      if (option === undefined) return
+      if (approval.defaultToNo === true && option.kind !== 'reject') return
+      if (acceptsFeedback && option.kind === 'allow-always') return
+      decide(index, false)
     }
   }, { isActive: true })
 
@@ -173,9 +249,9 @@ export function ApprovalPanel({ approval, background = false, onDecide }: Approv
           const focused = index === focusIndex
           const hovered = index === hoverIndex
           const label = optionLabel(option)
-          const text = acceptsFeedback && option.kind === 'reject' && feedback !== ''
-            ? t('approval-feedback-row', { label, reason: feedback })
-            : label
+          const reasonLines = acceptsFeedback && option.kind === 'reject' && feedback !== ''
+            ? feedbackRowLines(`${index + 1}. `, label, feedback, columns)
+            : undefined
           return (
             <Box
               key={option.id}
@@ -191,9 +267,19 @@ export function ApprovalPanel({ approval, background = false, onDecide }: Approv
                   {focused ? POINTER : ' '}
                 </Text>
               </Box>
-              <Text bold={focused} color={focused ? 'accent' : undefined} wrap="wrap">
-                {index + 1}. {text}
-              </Text>
+              {reasonLines === undefined ? (
+                <Text bold={focused} color={focused ? 'accent' : undefined} wrap="wrap">
+                  {index + 1}. {label}
+                </Text>
+              ) : (
+                <Box flexDirection="column">
+                  {reasonLines.map((line, row) => (
+                    <Text key={row} bold={focused} color={focused ? 'accent' : undefined} wrap="truncate-end">
+                      {line}
+                    </Text>
+                  ))}
+                </Box>
+              )}
             </Box>
           )
         })}

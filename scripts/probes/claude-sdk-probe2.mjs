@@ -15,11 +15,22 @@
 //
 // Probe 2: permission edge cases (AskUserQuestion via canUseTool, deny,
 // pending-permission + interrupt → signal?), omitted permissionMode, thinking
-// text visibility on sonnet, /compact as prompt, fork + resume replay shape,
+// text visibility (haiku only), /compact as prompt, fork + resume replay shape,
 // and startup latency. Output: trace2.jsonl.
 import { query, getSessionMessages, forkSession, getSessionInfo } from '@anthropic-ai/claude-agent-sdk'
 import fs from 'node:fs'
 import path from 'node:path'
+
+// Maintainer cost rule (2026-10-02): every real-CLI run uses haiku only —
+// never sonnet or opus. The query pins `model: 'haiku'` and this guard
+// refuses to run when the environment would point the alias elsewhere.
+for (const name of ['ANTHROPIC_MODEL', 'ANTHROPIC_DEFAULT_HAIKU_MODEL', 'ANTHROPIC_SMALL_FAST_MODEL']) {
+  const value = process.env[name]
+  if (value !== undefined && value !== '' && !/haiku/iu.test(value)) {
+    console.error(`refusing to run: ${name}=${value} — real-CLI runs use haiku only`)
+    process.exit(2)
+  }
+}
 
 const root = process.argv[2]
 const cwd = path.join(root, 'project')
@@ -49,7 +60,7 @@ const runSession = async (label, options, phases, hooks = {}) => {
   const send = (text) => { const uuid = crypto.randomUUID(); sendUuids.push(uuid); log('send', { label, text, uuid }); inbox.push({ type: 'user', message: { role: 'user', content: text }, parent_tool_use_id: null, session_id: '', uuid }) }
   const started = Date.now()
   let firstInitMs
-  const q = query({ prompt: inbox, options: { cwd, model: 'haiku', includePartialMessages: true, pathToClaudeCodeExecutable: '/home/coder/.local/bin/claude', env, stderr: d => log('stderr', { label, data: d.slice(0, 400) }), ...options, canUseTool: (toolName, input, opts) => hooks.canUseTool ? hooks.canUseTool(toolName, input, opts, q) : Promise.resolve({ behavior: 'allow' }) } })
+  const q = query({ prompt: inbox, options: { cwd, includePartialMessages: true, pathToClaudeCodeExecutable: '/home/coder/.local/bin/claude', env, stderr: d => log('stderr', { label, data: d.slice(0, 400) }), ...options, model: 'haiku', canUseTool: (toolName, input, opts) => hooks.canUseTool ? hooks.canUseTool(toolName, input, opts, q) : Promise.resolve({ behavior: 'allow' }) } })
   let phase = -1
   let turnMsgs = 0
   const counts = {}
@@ -114,7 +125,7 @@ const sidsA = await (async () => {
     { name: 'ask-user-question', text: 'Use the AskUserQuestion tool to ask me whether I prefer Tea or Coffee (options: Tea, Coffee). After I answer, reply with exactly: you chose <answer>' },
     { name: 'deny', text: 'Run the shell command `rm -rf /tmp/probe-nonexistent-dir-xyz` with the Bash tool, then reply exactly: attempted' },
     { name: 'pending-interrupt', text: 'Run the shell command `touch /tmp/probe-marker-1` with the Bash tool, then reply exactly: touched' },
-    { name: 'sonnet-thinking', text: 'Think step by step about why the sky is blue, then answer in one sentence.', before: async (q) => { log('control', { call: 'setModel sonnet' }); await q.setModel('sonnet') } },
+    { name: 'haiku-thinking', text: 'Think step by step about why the sky is blue, then answer in one sentence.' },
     { name: 'compact', text: '/compact' },
     { name: 'after-compact', text: 'What is the codeword? Answer with just the word.' },
   ], { canUseTool })

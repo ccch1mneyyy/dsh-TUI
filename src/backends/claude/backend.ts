@@ -9,7 +9,7 @@ import type { AgentBackend, BackendDetection, BackendHost, OpenTarget } from '..
 import type { AgentSession } from '../../agent/session.js'
 import { t } from '../../i18n.js'
 import { CLAUDE_BACKEND_ID, CLAUDE_BACKEND_LABEL, cliVersionDrift, sdkVersionDrift, VALIDATED_SDK_VERSION } from './contract.js'
-import { CLAUDE_OAUTH_PROVIDER, detectClaudeAuth, resolveClaudeAuth } from './auth.js'
+import { CLAUDE_OAUTH_PROVIDER, detectClaudeAuth, refreshFailureStatus, resolveClaudeAuth, type ClaudeRouteSettings } from './auth.js'
 import { resolveStartPermissionMode } from './options.js'
 import { fileClaudePrefs } from './prefs.js'
 import { buildClaudeEnv, readClaudeVersion, resolveClaudeExecutable } from './process.js'
@@ -17,6 +17,12 @@ import { installedSdkVersion, loadClaudeSdk } from './sdk.js'
 import { openClaudeSession } from './session.js'
 
 const errorText = (error: unknown): string => error instanceof Error ? error.message : String(error)
+
+/** The user-facing refresh failure: a fixed sentence, the HTTP status at most. */
+function refreshFailedNotice(error: unknown): string {
+  const status = refreshFailureStatus(error)
+  return t('claude-auth-refresh-failed', { detail: status === undefined ? '' : t('claude-auth-refresh-status', { status }) })
+}
 
 export const claudeBackend: AgentBackend = {
   id: CLAUDE_BACKEND_ID,
@@ -67,16 +73,22 @@ export const claudeBackend: AgentBackend = {
     // it is about to expire), else the environment, else the local login.
     const credentials = host.oauthCredential?.(CLAUDE_OAUTH_PROVIDER)
     const baseEnv = buildClaudeEnv()
+    // The route decides whether the subscription token may be injected at
+    // all (auth.ts): the CLI applies the settings' `env`, so a base URL set
+    // in ~/.claude/settings.json counts like one in the environment.
+    const settings = async (): Promise<ClaudeRouteSettings> =>
+      (await sdk.resolveSettings({ cwd: target.cwd, settingSources: ['user', 'project', 'local'] })).effective as ClaudeRouteSettings
     const startNotices: string[] = []
     let plan: Awaited<ReturnType<typeof resolveClaudeAuth>>
     try {
-      plan = await resolveClaudeAuth(baseEnv, credentials)
+      plan = await resolveClaudeAuth(baseEnv, credentials, { settings })
     } catch (error) {
       // A failed refresh must not stop the start: the session runs on the
-      // environment or the local login, and says why.
+      // environment or the local login, and says why (status only: the
+      // refresh error can carry the OAuth endpoint's response body).
       host.debug(`claude: dsh-auth refresh failed (${errorText(error)})`)
-      startNotices.push(t('claude-auth-refresh-failed', { err: errorText(error) }))
-      plan = await resolveClaudeAuth(baseEnv, undefined)
+      startNotices.push(refreshFailedNotice(error))
+      plan = await resolveClaudeAuth(baseEnv, undefined, { settings })
     }
     if (start.downgradedFrom !== undefined) startNotices.push(t('claude-start-mode-downgraded', { mode: start.downgradedFrom }))
     // The developer override is never silent: a live-test leftover in the
@@ -93,9 +105,12 @@ export const claudeBackend: AgentBackend = {
       env: baseEnv,
       auth: {
         plan,
-        // A reconnect after an authentication failure (or `/login`) forces a
-        // refresh of the dsh-auth token and re-reads the environment.
-        renew: () => resolveClaudeAuth(buildClaudeEnv(), credentials, { force: true }),
+        // A reconnect re-reads the environment and settings. After an
+        // authentication failure the refused token is refreshed only if
+        // dsh-auth still holds it (compare-and-swap); `/login` uses the
+        // stored credential as is.
+        renew: renewal => resolveClaudeAuth(buildClaudeEnv(), credentials, { settings, ...(renewal.rejected === undefined ? {} : { rejected: renewal.rejected }) }),
+        failureNotice: refreshFailedNotice,
       },
       prefs: fileClaudePrefs(undefined, message => host.debug(message)),
       host: { debug: message => host.debug(message), ...(host.stderr === undefined ? {} : { stderr: (line: string) => host.stderr?.(line) }) },

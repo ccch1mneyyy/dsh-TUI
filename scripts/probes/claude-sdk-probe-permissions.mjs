@@ -22,6 +22,17 @@ import { randomUUID } from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 
+// Maintainer cost rule (2026-10-02): every real-CLI run uses haiku only —
+// never sonnet or opus. The query pins `model: 'haiku'` and this guard
+// refuses to run when the environment would point the alias elsewhere.
+for (const name of ['ANTHROPIC_MODEL', 'ANTHROPIC_DEFAULT_HAIKU_MODEL', 'ANTHROPIC_SMALL_FAST_MODEL']) {
+  const value = process.env[name]
+  if (value !== undefined && value !== '' && !/haiku/iu.test(value)) {
+    console.error(`refusing to run: ${name}=${value} — real-CLI runs use haiku only`)
+    process.exit(2)
+  }
+}
+
 const root = process.argv[2]
 if (!root) {
   console.error('usage: node claude-sdk-probe-permissions.mjs <output-dir> [scenario…]')

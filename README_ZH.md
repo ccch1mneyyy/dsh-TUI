@@ -159,9 +159,12 @@ dsh-tui --backend claude     # 或在 dsh-tui 配置行写 `backend: claude`
   OAuth；`/login` 会直接打开它并在登录后重连会话——使用它时不把
   `ANTHROPIC_API_KEY` / `ANTHROPIC_AUTH_TOKEN` 交给 CLI，保证你显式的登录生效），
   其次是环境中的 `ANTHROPIC_API_KEY` / 云厂商变量，最后是你已有的 `claude login`。
-  `/login` 会显示当前会话用的是哪一种。令牌将过期时在启动 CLI 前刷新；会话中被
-  CLI 拒绝时，dsh-TUI 刷新后以同一会话重连一次，仍失败则提示你 `/login`。令牌
-  内容从不写入日志。
+  `/login` 会显示当前会话用的是哪一种。dsh-auth 登录**只用于 Anthropic 官方 API**：
+  当 `ANTHROPIC_BASE_URL`（环境变量或 Claude 设置的 `env`）指向
+  `https://api.anthropic.com` 以外的地址，或配置了 Unix 套接字、云厂商/网关路由、
+  `apiKeyHelper` 时，环境原样交给 CLI，`/login` 改为显示当前路由。令牌将过期时在启动 CLI 前刷新；会话中被 CLI 拒绝时，dsh-TUI 刷新后以
+  同一会话重连一次，仍失败则提示你 `/login`（回合进行中执行 `/login` 会在回合结束
+  后再重连）。令牌内容从不写入日志。
 - **可执行文件**：`PATH` 上的 `claude`，否则 SDK 自带二进制。项目 `CLAUDE.md`、
   设置、hooks、MCP 服务器与插件按 CLI 的方式加载。
 - **审批**沿用 DSH 的同一个面板：允许一次、始终允许（标签写明 CLI 会记住什么——

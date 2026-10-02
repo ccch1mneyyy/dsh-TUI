@@ -1,7 +1,9 @@
 /**
  * LIVE headless Chat on the Claude backend — real `claude` CLI, real (small)
  * usage. NOT part of CI: runs only with DSH_TUI_CLAUDE_LIVE=1, prints SKIP
- * otherwise. Mounts the real `Chat` (headless renderer, like scripts/smoke.tsx)
+ * otherwise. HAIKU ONLY (maintainer cost rule, 2026-10-02): the model is
+ * pinned and the run refuses to start on any other
+ * (scripts/lib/claude-haiku-only.mjs). Mounts the real `Chat` (headless renderer, like scripts/smoke.tsx)
  * over a channel bound to a Claude Agent session (haiku), submits a prompt
  * through the prompt input and waits until the assistant's reply renders;
  * also checks that DSH-only commands are hidden and refused.
@@ -14,6 +16,9 @@ if (process.env.DSH_TUI_CLAUDE_LIVE !== '1') {
   console.log('SKIP verify-claude-headless (set DSH_TUI_CLAUDE_LIVE=1 to run against the real Claude CLI)')
   process.exit(0)
 }
+
+const { pinHaikuOrExit } = await import('./lib/claude-haiku-only.mjs')
+pinHaikuOrExit('verify-claude-headless', (await import('../src/utils/paths.js')).DATA_DIR)
 
 const [{ Writable, PassThrough }, { mkdtempSync, rmSync, writeFileSync }, { tmpdir }, { join }, React, { Terminal: XTerm }, ui, { Chat }, { QuestionStore }, { ApprovalStore }, { createChannel }, { claudeBackend }, { setLang, t }, { default: instances }, { settled, sleep, viewportLines }] =
   await Promise.all([
@@ -35,7 +40,6 @@ const [{ Writable, PassThrough }, { mkdtempSync, rmSync, writeFileSync }, { tmpd
   ])
 
 setLang('en')
-process.env.ANTHROPIC_MODEL ??= 'haiku'
 let passed = 0
 const check = (label: string, ok: boolean, detail = ''): void => {
   if (!ok) throw new Error(`${label}${detail ? `\n${detail}` : ''}`)

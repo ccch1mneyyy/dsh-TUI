@@ -13,6 +13,13 @@
  *
  * The pi-ai catalog is loaded only when a refresh is actually due: a backend
  * session whose token is still fresh never pays for it.
+ *
+ * A refresh is compare-and-swap: due only while the stored token is about to
+ * expire or is still the one the backend refused, re-checked under the
+ * credential file's lock right before the network call. Residual race: a
+ * writer that rotates the token WITHOUT that lock (outside dsh-auth's
+ * `CredentialFile`) can still interleave with a refresh here; closing it
+ * would need dsh-auth itself to version its credentials.
  */
 import type { OAuthAccess, OAuthCredentialSource } from '../agent/backend.js'
 import { asStoredCredential, CredentialFile, defaultCredentialsFile, type StoredOAuthCredential } from './oauth/credentials.js'
@@ -56,16 +63,22 @@ export function createOAuthCredentialSource(
       return access(await store.read(provider)) !== undefined
     },
     async fresh(request = {}): Promise<OAuthAccess | undefined> {
+      // Due: about to expire, or still the very token the backend refused.
+      // A token that differs from the refused one was rotated by someone
+      // else (a fresh `/login`, another request's refresh): use it as is.
+      const due = (credential: OAuthAccess): boolean =>
+        credential.expires - now() <= REFRESH_MARGIN_MS ||
+        (request.rejected !== undefined && credential.access === request.rejected)
       const current = access(await store.read(provider))
       if (current === undefined) return undefined
-      if (request.force !== true && current.expires - now() > REFRESH_MARGIN_MS) return current
-      // Refresh under the file's own lock: a concurrent dsh-auth request (or
-      // another process) that already rotated the token wins, and its
-      // credential is what comes back.
+      if (!due(current)) return current
+      // Re-read and refresh under the file's own lock (compare-and-swap): a
+      // concurrent dsh-auth request or another process that already rotated
+      // the token wins, and its credential is what comes back.
       const next = await store.modify(provider, async stored => {
         const credential = asStoredCredential(stored)
         if (credential === undefined) return undefined
-        if (request.force !== true && credential.expires - now() > REFRESH_MARGIN_MS) return undefined
+        if (!due({ access: credential.access, expires: credential.expires })) return undefined
         return refresh(provider, credential, AbortSignal.timeout(REFRESH_TIMEOUT_MS))
       })
       return access(next)

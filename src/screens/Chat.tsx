@@ -535,7 +535,9 @@ export function Chat({
   /** Provider display identities for the /model group level; refreshed alongside `models`. */
   const [providerInfos, setProviderInfos] = React.useState<readonly LlmProviderInfo[]>([])
   /** /model 最近使用分组：成功切换即记录（去重置顶，上限 10），重启保留。 */
-  const [modelRecents, setModelRecents] = React.useState<readonly ModelRecentsRef[]>(() => readModelRecents())
+  // Recents are per backend: a Claude session's picks never evict the DSH list.
+  const recentsBackend = channel.capabilities?.backendId
+  const [modelRecents, setModelRecents] = React.useState<readonly ModelRecentsRef[]>(() => readModelRecents(undefined, recentsBackend))
   /** Two-level /model: the drilled-in provider route; undefined = group level.
    *  Reset on open; stale ids resolve back to the group level via `activeModelGroup`. */
   const [modelGroup, setModelGroup] = React.useState<string | undefined>(undefined)
@@ -567,7 +569,7 @@ export function Chat({
     return channel.switchModel(provider, id).then((ok) => {
       if (!ok) return ok
       if (name !== undefined) channel.notify(t('model-switched', { name }))
-      setModelRecents(recordModelUse({ provider, id }))
+      setModelRecents(recordModelUse({ provider, id }, undefined, recentsBackend))
       return ok
     })
   }
@@ -2224,7 +2226,7 @@ export function Chat({
         let recentsNow = modelRecents
         if (channel.provider !== '' && channel.model !== ''
           && !recentsNow.some(ref => ref.provider === channel.provider && ref.id === channel.model)) {
-          recentsNow = recordModelUse({ provider: channel.provider, id: channel.model })
+          recentsNow = recordModelUse({ provider: channel.provider, id: channel.model }, undefined, recentsBackend)
           setModelRecents(recentsNow)
         }
         // Two-level landing: recents (when catalogued) focus their pinned

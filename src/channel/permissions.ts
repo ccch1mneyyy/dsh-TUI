@@ -67,6 +67,12 @@ export interface PermissionPanelDecision {
   readonly optionId: string
   readonly kind: PermissionOptionView['kind']
   readonly feedback?: string
+  /**
+   * The snapshot key of the panel that decided. A store ignores a decision
+   * whose key is not its active prompt's: a keystroke a just-withdrawn panel
+   * still handled must never answer the prompt that replaced it.
+   */
+  readonly key?: string
 }
 
 /**
@@ -187,6 +193,7 @@ export class PermissionStore implements PermissionPanelSource {
   decide(outcome: PermissionPanelOutcome, decision?: PermissionPanelDecision): void {
     const parked = this.active
     if (parked === undefined) return
+    if (decision?.key !== undefined && decision.key !== parked.key) return
     const kind = decision?.kind ?? (outcome === 'allowed-once' ? 'allow-once' : outcome === 'allowed-always' ? 'allow-always' : 'reject')
     const options = parked.ask.request.options
     // A choice the prompt never offered is refused (fail closed): only the

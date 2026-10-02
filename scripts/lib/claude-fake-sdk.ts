@@ -25,7 +25,7 @@ export interface FakeQuery {
 }
 
 /** The fake SDK: `queries` in creation order. */
-export function fakeClaudeSdk(init: (index: number) => Record<string, unknown> = () => ({ capabilities: ['msg_lifecycle_v1', 'interrupt_receipt_v1'] }), controls: FakeControls = {}) {
+export function fakeClaudeSdk(init: (index: number, options: FakeQueryOptions) => Record<string, unknown> | Promise<Record<string, unknown>> = () => ({ capabilities: ['msg_lifecycle_v1', 'interrupt_receipt_v1'] }), controls: FakeControls = {}) {
   const queries: FakeQuery[] = []
   const query = (params: { prompt: AsyncIterable<Record<string, unknown>>; options: FakeQueryOptions }) => {
     const index = queries.length
@@ -58,7 +58,14 @@ export function fakeClaudeSdk(init: (index: number) => Record<string, unknown> =
       calls,
       closed: false,
       emit(message: unknown) { outbox.push(message); flush() },
-      initializationResult: () => Promise.resolve(init(index)),
+      // A throwing (or rejecting) `init` is a CLI that fails its handshake.
+      initializationResult: (): Promise<unknown> => {
+        try {
+          return Promise.resolve(init(index, params.options))
+        } catch (error) {
+          return Promise.reject(error)
+        }
+      },
       interrupt: control('interrupt'),
       setModel: control('setModel'),
       setPermissionMode: control('setPermissionMode'),

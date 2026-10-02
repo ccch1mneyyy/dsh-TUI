@@ -211,4 +211,22 @@ type Settled = { requestId: string; outcome: PermissionOutcome; decision?: Permi
   check('the interruption error is injectable (the DSH protocol error)', injectedError.custom === true && injectedError.code === 'ASK_ABORTED')
 }
 
+// ── a decision names its panel: a withdrawn panel cannot answer the next ──
+{
+  const store = new PermissionStore()
+  const settled: Settled[] = []
+  const park = (requestId: string): void => {
+    store.park({ sessionId: 's1', request: view(requestId), settle: (outcome, decision) => settled.push({ requestId, outcome, ...(decision === undefined ? {} : { decision }) }) })
+  }
+  park('k1')
+  park('k2')
+  const stale = store.getSnapshot()!.key
+  check('the backend withdraws the first prompt', store.withdraw('s1', 'k1') && settled.at(-1)?.outcome === 'cancelled')
+  const next = store.getSnapshot()!.key
+  store.decide('allowed-always', { optionId: 'allow-always', kind: 'allow-always', key: stale })
+  check('a keystroke of the withdrawn panel does not answer the next prompt', settled.length === 1 && store.getSnapshot()?.key === next)
+  store.decide('rejected', { optionId: 'reject', kind: 'reject', key: next })
+  check('the current panel\'s decision settles its prompt', settled.at(-1)?.requestId === 'k2' && settled.at(-1)?.outcome === 'rejected')
+}
+
 console.log(`\nverify-permission-store OK (${passed} checks)`)

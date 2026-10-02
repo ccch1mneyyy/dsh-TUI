@@ -477,11 +477,13 @@ export class ApprovalStore implements PermissionPanelSource {
    * @param outcome - `'allowed-once'` or `'rejected'`. The protocol has no
    *   allow-always and the panel never offers it for a DSH ask; one arriving
    *   anyway is refused (fail closed). The panel's option detail carries
-   *   nothing the protocol can use.
+   *   nothing the protocol can use beyond its panel key.
    */
-  decide(outcome: PermissionPanelOutcome, _decision?: PermissionPanelDecision): void {
+  decide(outcome: PermissionPanelOutcome, decision?: PermissionPanelDecision): void {
     const pending = this.active
     if (pending === undefined) return
+    // A keystroke the withdrawn panel still handled answers nothing.
+    if (decision?.key !== undefined && decision.key !== pending.key) return
     this.noteConsumed(pending)
     this.active = undefined
     this.rebuildSnapshot()
