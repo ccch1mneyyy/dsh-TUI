@@ -334,6 +334,10 @@ export function StatusLine({
   }
 
 const selectionBadge = formatSelectionBadge(channel.selection)
+  // The short id names the backend's own session (design §8.7): what
+  // `--resume` takes. A DSH session's id is its agent id; stub channels
+  // without a session ref fall back to the agent id.
+  const sessionShortId = channel.sessionRef?.sessionId ?? channel.agentId
   // Background-job chip (ctx.jobs; /jobs): live count of running/stopping
   // jobs, shown only while non-zero — a silent zero is not information.
   // Not preference-gated: it is transient situational state like the goal
@@ -473,11 +477,11 @@ const selectionBadge = formatSelectionBadge(channel.selection)
     // Short id last: a provenance tag trails the content it identifies, and
     // the 8-char form is what the session log filename starts with, so a
     // truncated rendering still names the right log for --resume.
-    ...(statusBar.sessionId && channel.agentId
+    ...(statusBar.sessionId && sessionShortId
       ? [{
           key: 'sessionId',
           id: 'sessionId' as const,
-          node: <Text dimColor>{`#${channel.agentId.slice(0, 8)}`}</Text>,
+          node: <Text dimColor>{`#${sessionShortId.slice(0, 8)}`}</Text>,
         }]
       : []),
   ]
@@ -831,7 +835,7 @@ function buildHoverDetail(
     case 'sessionId':
       return (
         <Text wrap="truncate">
-          {dim('# ')}{channel.agentId} · {t('status-detail-session-id')}
+          {dim('# ')}{channel.sessionRef?.sessionId ?? channel.agentId} · {t('status-detail-session-id')}
         </Text>
       )
     case 'cwd':

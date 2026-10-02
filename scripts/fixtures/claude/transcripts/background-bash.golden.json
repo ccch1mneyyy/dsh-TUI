@@ -4,6 +4,7 @@
     "seq": 6,
     "model": "claude-haiku-4-5-20251001"
   },
+  "compactedFrom": null,
   "events": [
     "turn.start:user",
     "user.message",
@@ -39,6 +40,7 @@
     {
       "kind": "reasoning",
       "text": "",
+      "anchor": "msg_fixture_001",
       "reasoningTokens": 66
     },
     {
@@ -54,11 +56,13 @@
     {
       "kind": "reasoning",
       "text": "",
+      "anchor": "msg_fixture_002",
       "reasoningTokens": 49
     },
     {
       "kind": "assistant",
-      "text": "started"
+      "text": "started",
+      "anchor": "msg_fixture_002"
     },
     {
       "kind": "notice",
@@ -67,11 +71,13 @@
     {
       "kind": "reasoning",
       "text": "",
+      "anchor": "msg_fixture_003",
       "reasoningTokens": 194
     },
     {
       "kind": "assistant",
-      "text": "Background command completed successfully (exit code 0)."
+      "text": "Background command completed successfully (exit code 0).",
+      "anchor": "msg_fixture_003"
     }
   ],
   "state": {

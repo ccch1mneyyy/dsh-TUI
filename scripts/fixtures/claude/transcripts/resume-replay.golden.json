@@ -4,6 +4,7 @@
     "seq": 4,
     "model": "claude-haiku-4-5-20251001"
   },
+  "compactedFrom": "00000000-0000-4000-8000-000000000136",
   "events": [
     "compaction.end",
     "user.message",
@@ -36,11 +37,13 @@
     {
       "kind": "reasoning",
       "text": "",
+      "anchor": "msg_fixture_004",
       "reasoningTokens": 69
     },
     {
       "kind": "assistant",
-      "text": "The README describes a fixture project for Claude SDK, and src/app.js exports a function named `greet`."
+      "text": "The README describes a fixture project for Claude SDK, and src/app.js exports a function named `greet`.",
+      "anchor": "msg_fixture_004"
     },
     {
       "kind": "user",
@@ -50,11 +53,13 @@
     {
       "kind": "reasoning",
       "text": "",
+      "anchor": "msg_fixture_005",
       "reasoningTokens": 192
     },
     {
       "kind": "assistant",
-      "text": "README.md"
+      "text": "README.md",
+      "anchor": "msg_fixture_005"
     }
   ],
   "state": {

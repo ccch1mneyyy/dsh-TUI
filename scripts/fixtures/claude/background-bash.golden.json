@@ -21,6 +21,7 @@
     "tasks.snapshot",
     "task.start",
     "tool.result",
+    "task.update",
     "step.end",
     "step.start",
     "assistant.attempt.start",
@@ -82,6 +83,17 @@
       }
     },
     {
+      "kind": "job",
+      "text": "sleep 3; echo bg-done",
+      "job": {
+        "id": "b93f4dfp3",
+        "kind": "shell",
+        "label": "sleep 3; echo bg-done",
+        "status": "completed",
+        "detail": "exit code: 0"
+      }
+    },
+    {
       "kind": "assistant",
       "text": "started"
     },
@@ -116,6 +128,17 @@
     },
     "todos": [],
     "compaction": null,
-    "notices": []
+    "notices": [
+      "Background job completed: sleep 3; echo bg-done (b93f4dfp3 · 0s)"
+    ],
+    "subagents": [],
+    "jobs": [
+      {
+        "id": "b93f4dfp3",
+        "status": "completed",
+        "command": "sleep 3; echo bg-done",
+        "outputFile": "/fixture/tmp/claude-1000/-fixture-project/00000000-0000-4000-8000-000000000003/tasks/b93f4dfp3.output"
+      }
+    ]
   }
 }

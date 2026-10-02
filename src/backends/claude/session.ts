@@ -40,8 +40,11 @@ import { buildQueryOptions, type StartPermissionMode } from './options.js'
 import { createClaudePermissionBridge, WITHDRAWN_MESSAGE } from './permissions.js'
 import { createStderrSink, type ClaudeExecutable } from './process.js'
 import { memoryClaudePrefs, type ClaudePrefs } from './prefs.js'
+import { createClaudeTranscriptHistory } from './older-history.js'
 import { rewindCutPoint, type ClaudeReplay } from './replay.js'
 import type { ClaudeSdkModule, ClaudeSessionStoreSdk } from './sdk.js'
+import { readTaskOutputTail, taskOutputRoots } from './task-output.js'
+import { claudeConfigDir } from './transcript-file.js'
 import { createClaudeTranslator } from './translate.js'
 
 declare module '../../agent/capabilities.js' {
@@ -560,6 +563,9 @@ export async function openClaudeSession(deps: ClaudeSessionDeps): Promise<AgentS
         stopRun(run)
         return
       }
+      // Background work belonged to the old CLI process; the new one starts
+      // with none (the level signal is per process).
+      emit([{ type: 'tasks.snapshot', taskIds: [] }])
       const next = run
       const lost: string[] = []
       for (const uuid of unstarted) {
@@ -634,6 +640,19 @@ export async function openClaudeSession(deps: ClaudeSessionDeps): Promise<AgentS
   // first `init`); the status line shows it from the start.
   emit([{ type: 'mode.changed', modeId: translator.mode ?? deps.start.mode }], 'none')
   run.consumer = consume(run)
+  // A resumed transcript does not record the context window (design §4.11):
+  // ask the CLI once, so the status line has it before the first `result`.
+  if (deps.resume !== undefined) {
+    const query = run.query as Partial<Pick<Query, 'getContextUsage'>>
+    if (typeof query.getContextUsage === 'function') {
+      void query.getContextUsage({ detail: 'summary' }).then(usage => {
+        if (disposing || !Number.isFinite(usage.maxTokens) || usage.maxTokens <= 0) return
+        emit([{ type: 'context.capacity', contextWindow: usage.maxTokens }])
+      }, (error: unknown) => {
+        deps.host.debug(`claude: context usage after resume failed (${errorText(error)})`)
+      })
+    }
+  }
 
   /** `/login` lines: where the credential comes from, never the token. */
   const authStatus = async (): Promise<SessionAuthView> => {
@@ -718,6 +737,15 @@ export async function openClaudeSession(deps: ClaudeSessionDeps): Promise<AgentS
     }
   }
 
+  /** Stop a task (subagent or job) by the id the channel knows it by. */
+  const stopTask = async (id: string): Promise<boolean> => {
+    const taskId = translator.taskIdOf(id)
+    const query = run.query as Partial<Pick<Query, 'stopTask'>>
+    if (taskId === undefined || typeof query.stopTask !== 'function' || disposing) return false
+    await query.stopTask(taskId)
+    return true
+  }
+
   const session: AgentSession = {
     ref: ownRef,
     cwd: deps.cwd,
@@ -737,6 +765,30 @@ export async function openClaudeSession(deps: ClaudeSessionDeps): Promise<AgentS
       },
       ...controls.capabilities,
       ...sessionStoreCapabilities(),
+      // Design §4.8: a subagent or background job is stopped by its task id
+      // (`stopTask`; the CLI reports the stop as its notification).
+      subagents: {
+        interrupt: agentId => stopTask(agentId),
+      },
+      tasks: {
+        stop: taskId => stopTask(taskId),
+        readOutput: taskId => {
+          const file = translator.outputFileOf(taskId)
+          if (file === undefined) return Promise.reject(new Error(t('claude-task-output-unknown', { id: taskId })))
+          try {
+            return Promise.resolve(readTaskOutputTail(file, taskId, taskOutputRoots(authPlan.env)))
+          } catch (error) {
+            return Promise.reject(error instanceof Error ? error : new Error(String(error)))
+          }
+        },
+      },
+      transcript: createClaudeTranscriptHistory({
+        sessionId: deps.sessionId,
+        cwd: deps.cwd,
+        configDir: () => claudeConfigDir(authPlan.env.CLAUDE_CONFIG_DIR === undefined ? process.env : authPlan.env),
+        ...(deps.resume?.compactedFrom === undefined ? {} : { compactedFrom: deps.resume.compactedFrom }),
+        debug: deps.host.debug,
+      }),
       account: {
         async info(): Promise<AccountView> {
           const query = run.query as Partial<Pick<Query, 'accountInfo'>>

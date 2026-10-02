@@ -137,6 +137,7 @@ export const CHANNEL_UI_PROPERTIES = [
   'capabilities',
   'costReport',
   'rateLimit',
+  'olderHistory',
   'autoRecapOnOpen',
   'settingsNamespace',
   'model',

@@ -4,6 +4,7 @@
     "seq": 6,
     "model": "claude-haiku-4-5-20251001"
   },
+  "compactedFrom": null,
   "events": [
     "turn.start:user",
     "user.message",
@@ -32,6 +33,7 @@
     {
       "kind": "reasoning",
       "text": "",
+      "anchor": "msg_fixture_001",
       "reasoningTokens": 63
     },
     {
@@ -52,11 +54,13 @@
     {
       "kind": "reasoning",
       "text": "",
+      "anchor": "msg_fixture_002",
       "reasoningTokens": 64
     },
     {
       "kind": "assistant",
-      "text": "The command waited 4 seconds and then printed \"slept\" to the output.\n\nNEXT-OK"
+      "text": "The command waited 4 seconds and then printed \"slept\" to the output.\n\nNEXT-OK",
+      "anchor": "msg_fixture_002"
     }
   ],
   "state": {

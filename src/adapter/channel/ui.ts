@@ -82,7 +82,17 @@ export function createChannelUi(channel: ChannelUi, mode: AdapterMode, lease: Ch
       get() {
         check('read-only')
         if (key === 'subagentControl') return methods(channel.subagentControl, { interrupt: 'mutate' })
-        if (key === 'jobControl') return channel.jobControl === undefined ? undefined : methods(channel.jobControl, { kill: 'mutate' })
+        if (key === 'jobControl') {
+          const control = channel.jobControl as ChannelUi['jobControl'] | undefined
+          if (control === undefined) return undefined
+          const projected = methods(control, { kill: 'mutate' } as Readonly<Record<keyof typeof control, HostEffectClass>>)
+          const watch = control.watchOutput
+          if (watch === undefined) return projected
+          // A renderer observation of an on-screen card (like `subscribe`):
+          // the lease owns the unwatch, so a card unmounting after the
+          // channel's release is a no-op.
+          return Object.freeze({ ...projected, watchOutput: (id: string) => { check('read-only'); return lease.own(watch.call(control, id)) } })
+        }
         if (key === 'autoRecapOnOpen' && (mode === 'passive-shadow' || mode === 'replay-shadow')) return false
         if (key === 'pluginScene') {
           const scene = channel.pluginScene

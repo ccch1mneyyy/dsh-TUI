@@ -4,6 +4,7 @@
     "seq": 5,
     "model": "claude-haiku-4-5-20251001"
   },
+  "compactedFrom": null,
   "events": [
     "turn.start:user",
     "user.message",
@@ -31,6 +32,7 @@
     {
       "kind": "reasoning",
       "text": "",
+      "anchor": "msg_fixture_001",
       "reasoningTokens": 111
     },
     {
@@ -46,11 +48,13 @@
     {
       "kind": "reasoning",
       "text": "",
+      "anchor": "msg_fixture_002",
       "reasoningTokens": 48
     },
     {
       "kind": "assistant",
-      "text": "The first line of README.md is:\n\n**# Fixture project**"
+      "text": "The first line of README.md is:\n\n**# Fixture project**",
+      "anchor": "msg_fixture_002"
     }
   ],
   "state": {

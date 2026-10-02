@@ -624,6 +624,23 @@ const GROUPS = {
 // /resume 历史先于 live 绘制、claude:<id> 挂载账本（真实对端进程占用即拒绝）、失败响亮、
 // 当前/被占用会话不可删、/fork 提示、rewind 提示与三种模式、启动历史先于首个 live 事件。
     ["verify-claude-catalog", ['node', '--import', 'tsx/esm', 'scripts/verify-claude-catalog.ts']],
+// Claude 子代理（方案 §4.8，Phase 5a，假 SDK + 录制 fixture）：Agent 调用预建卡片、
+// task_started 以任务 id 补全（同一 lane 重键）、子通道的文本/工具进卡片与面板而不进
+// 主转录、task_progress/task_notification 的用量与终态、stopTask 停止、后台子代理与
+// 层级信号（缺席即推断 unknown，真实结束仍覆盖）、resume 回放子转录内容与终态推断，
+// 以及 /agents、仪表盘与详情场景的无头渲染。
+    ["verify-claude-subagents", ['node', '--import', 'tsx/esm', 'scripts/verify-claude-subagents.ts']],
+// Claude 后台任务（假 SDK + 录制 fixture）：后台 Bash 生命周期（任务卡、确认文本里的
+// 输出文件、状态栏 chip、一次落定提示）、前台 Bash 只有工具卡、tasks.snapshot 的
+// REPLACE 语义、kill → stopTask、用户中断不停任务；输出尾部只读 CLI 报告的路径并校验
+// （<id>.output、解析符号链接后仍在 CLI 目录内、普通文件、最后 64 KiB）、每秒至多一次、
+// 取消观察即停；任务卡与 /jobs 面板的无头渲染。
+    ["verify-claude-tasks", ['node', '--import', 'tsx/esm', 'scripts/verify-claude-tasks.ts']],
+// Claude「加载更早消息」（方案 §4.11 压缩前历史）：按会话 id 扫描定位原生 JSONL、坏行容忍、
+// 超限拒读；两次压缩的转录按 parentUuid 链逐段回溯（保留段的拼接与排除）、有界分片不重叠、
+// 用尽后幂等；channel 上 olderHistory 显示分隔线、loadOlder 逐段前插（负 id、restored）；
+// Claude 长会话重新折叠（只折有锚点的行）、保留文本有界、loadOlder 先从转录恢复折叠行。
+    ["verify-claude-load-older", ['node', '--import', 'tsx/esm', 'scripts/verify-claude-load-older.ts']],
 // 共享权限面板（方案 §4.7，Phase 3）：PermissionStore 的 FIFO、选项与呈现规则、
 // 四种结局（含拒绝理由）、撤回/会话释放/拆除不二次作答；channel 桥把会话的
 // permission/question 事件接到 store 与问卷，答复经能力回到后端。

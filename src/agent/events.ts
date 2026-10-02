@@ -164,6 +164,8 @@ export interface QuestionRequestView {
 export interface SubagentUsage {
   readonly input?: number
   readonly output?: number
+  /** All tokens the subagent consumed so far (when only a total is known). */
+  readonly total?: number
   readonly toolUses?: number
   readonly durationMs?: number
 }
@@ -273,8 +275,15 @@ export type AgentEvent =
   /** A structured ask settled (answered or cancelled). */
   | { readonly type: 'question.settled'; readonly requestId: string }
   // ── subagents and background tasks ──────────────────────────────────
-  /** A subagent started. */
-  | { readonly type: 'subagent.start'; readonly agentId: string; readonly parentCallId?: string; readonly description: string; readonly kind?: string; readonly model?: string; readonly background: boolean; readonly time: number }
+  /**
+   * A subagent started. `parentCallId` names the delegating tool call (its
+   * lane: child-lane events carry it as their `parentCallId`). A second start
+   * for the same lane completes the first: a backend that learns the
+   * subagent's own id after the call (Claude: `task_started` follows the
+   * `Agent` tool call) re-keys the lane's subagent to the new `agentId`.
+   * `depth` = spawn nesting (1 = spawned by the main loop).
+   */
+  | { readonly type: 'subagent.start'; readonly agentId: string; readonly parentCallId?: string; readonly description: string; readonly kind?: string; readonly model?: string; readonly background: boolean; readonly depth?: number; readonly time: number }
   /** A subagent reported progress. */
   | { readonly type: 'subagent.progress'; readonly agentId: string; readonly summary?: string; readonly lastTool?: string; readonly usage?: SubagentUsage }
   /** A subagent finished. */
@@ -284,12 +293,16 @@ export type AgentEvent =
    * acknowledged it; `command` is the full invocation when known.
    */
   | { readonly type: 'task.start'; readonly taskId: string; readonly kind: string; readonly description: string; readonly command?: string; readonly callId?: string; readonly background: boolean; readonly outputFile?: string; readonly time: number }
-  /** A background task changed. */
-  | { readonly type: 'task.update'; readonly taskId: string; readonly patch: { readonly status?: TaskStatus; readonly description?: string; readonly error?: string; readonly background?: boolean } }
+  /**
+   * A background task changed. `outputFile` = where the task writes its
+   * output (as the backend reported it; readers validate it); `progress` = a
+   * one-line live status.
+   */
+  | { readonly type: 'task.update'; readonly taskId: string; readonly patch: { readonly status?: TaskStatus; readonly description?: string; readonly error?: string; readonly background?: boolean; readonly outputFile?: string; readonly progress?: string } }
   /** Output of a background task was observed (`callId` = the tool call that read it). */
   | { readonly type: 'task.output'; readonly taskId: string; readonly text: string; readonly time: number; readonly callId?: string }
   /** A background task finished. */
-  | { readonly type: 'task.end'; readonly taskId: string; readonly status: 'completed' | 'failed' | 'stopped'; readonly summary?: string; readonly time: number }
+  | { readonly type: 'task.end'; readonly taskId: string; readonly status: 'completed' | 'failed' | 'stopped'; readonly summary?: string; readonly outputFile?: string; readonly time: number }
   /** The complete set of live background tasks (REPLACE semantics). */
   | { readonly type: 'tasks.snapshot'; readonly taskIds: readonly string[] }
   // ── context and modes ───────────────────────────────────────────────

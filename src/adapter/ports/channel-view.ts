@@ -75,9 +75,11 @@ export interface ChatRow {
   /** Source session event seq — present on every log-derived row (rewind
    *  fork anchor on user rows; window-floor bookkeeping for the rest). */
   seq?: number
-  /** The backend's own rewind anchor of a `user` row when it is not the
-   *  row's `seq` (a Claude message uuid); absent on DSH rows, whose anchor
-   *  is the seq itself. */
+  /** The backend's own durable anchor of a row when it is not the row's
+   *  `seq`: a `user` row's rewind anchor (a Claude message uuid), an
+   *  `assistant`/`reasoning` row's message (a Claude API message id — how
+   *  "load earlier" finds the record a folded row came from); absent on DSH
+   *  rows, whose anchor is the seq itself. */
   anchor?: string
   /** True when the row's full text was folded to keep the transcript window
    *  bounded (see MAX_ROWS); the session log still holds the full content
@@ -185,6 +187,10 @@ export interface SubagentRow {
   summary?: string
   stopReason?: string
   error?: string
+  /** Runs in the background (the delegating call returned at launch). */
+  background?: boolean
+  /** Spawn nesting: 1 = spawned by the main loop, N+1 = by a depth-N agent. */
+  depth?: number
 }
 
 export interface SubagentState {
@@ -212,6 +218,10 @@ export interface SubagentState {
   toolCalls: SubagentToolCall[]
   tokens?: SubagentTokenUsage
   summary?: string
+  /** Runs in the background (the delegating call returned at launch). */
+  background?: boolean
+  /** Spawn nesting: 1 = spawned by the main loop, N+1 = by a depth-N agent. */
+  depth?: number
 }
 
 /** Unified subagent activity domain model used by the adapter and every view. */
@@ -546,6 +556,9 @@ export interface BackgroundJobState {
   outputDropped?: boolean
   /** Producer-retained spill files holding the complete output stream. */
   spillPaths?: readonly string[]
+  /** Where the backend writes the job's output (as the backend reported
+   *  it); the output tail is read from it while the job is on screen. */
+  outputFile?: string
 }
 
 /**
@@ -555,6 +568,12 @@ export interface BackgroundJobState {
  */
 export interface JobControl {
   kill(id: string): boolean
+  /**
+   * The job's card or panel entry is on screen: keep its output tail fresh
+   * (a backend whose output is read on demand polls at most once a second
+   * while watched). Returns the unwatch; absent = the output is pushed.
+   */
+  watchOutput?(id: string): () => void
 }
 
 export interface StagedImageInput {

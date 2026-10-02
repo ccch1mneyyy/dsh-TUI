@@ -57,9 +57,12 @@
     "delta:tool-args",
     "tool.call",
     "subagent.start",
+    "subagent.start",
     "assistant.message",
     "subagent.progress",
-    "task.update",
+    "tool.call",
+    "tool.result",
+    "assistant.message",
     "subagent.end",
     "tool.result",
     "step.end",
@@ -140,6 +143,24 @@
       }
     },
     {
+      "kind": "subagent",
+      "text": "Read src/app.js and report exported function",
+      "subagent": {
+        "agentId": "a1f5db6eabc1b18a2",
+        "status": "completed",
+        "kind": "general-purpose",
+        "background": false,
+        "tools": [
+          "Read:completed"
+        ],
+        "outputLines": [
+          "The exported function name is **`greet`**."
+        ],
+        "tokens": 14612,
+        "summary": "The exported function name is **`greet`**."
+      }
+    },
+    {
       "kind": "reasoning",
       "text": "",
       "reasoningTokens": 144
@@ -187,6 +208,15 @@
     },
     "todos": [],
     "compaction": null,
-    "notices": []
+    "notices": [],
+    "subagents": [
+      {
+        "agentId": "a1f5db6eabc1b18a2",
+        "status": "completed",
+        "depth": 1,
+        "output": 1
+      }
+    ],
+    "jobs": []
   }
 }

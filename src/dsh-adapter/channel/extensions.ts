@@ -251,6 +251,8 @@ export function attachDshExtensions(
     conversationKey: session => session.capabilities.native.dsh?.agent ?? session,
     flushDeferred: () => subagentProjection.flush(),
     loadOlder: dshLocal.loadOlder,
+    // Subagents and jobs come from the DSH host services (projections above).
+    ownsActivity: true,
     // The DSH workspace may be remote: no local-disk stand-in for `fs`.
     localFs: false,
     dropRows: () => {

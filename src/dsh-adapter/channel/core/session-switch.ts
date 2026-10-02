@@ -412,6 +412,8 @@ export function createBackendOpener(deps: {
   state: ChannelState
   rowIds: { value: number }
   resetProjection(): void
+  /** Forget the replaced session's subagents and background jobs. */
+  resetActivity?(): void
   snapshotOf(session: AgentSession): ChannelCapabilities
   /** Forget the replaced session's backend commands and reports. */
   resetControls(): void
@@ -436,7 +438,7 @@ export function createBackendOpener(deps: {
     }
   }
   const adoptWith = (candidate: AgentSession, history: readonly AgentEvent[]): string => {
-    resetSessionProjection(state, deps.rowIds, deps.resetProjection, () => undefined, () => undefined)
+    resetSessionProjection(state, deps.rowIds, deps.resetProjection, () => { deps.resetActivity?.() }, () => undefined)
     state.agentId = candidate.ref.sessionId
     state.sessionId = candidate.ref.sessionId
     state.capabilities = deps.snapshotOf(candidate)

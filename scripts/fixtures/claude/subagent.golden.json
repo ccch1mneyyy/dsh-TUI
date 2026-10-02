@@ -22,9 +22,12 @@
     "delta:tool-args",
     "tool.call",
     "subagent.start",
+    "subagent.start",
     "assistant.message",
     "subagent.progress",
-    "task.update",
+    "tool.call",
+    "tool.result",
+    "assistant.message",
     "subagent.end",
     "tool.result",
     "step.end",
@@ -52,6 +55,25 @@
       "reasoningTokens": 151
     },
     {
+      "kind": "subagent",
+      "text": "Read README.md first line",
+      "subagent": {
+        "agentId": "aedea1ecd3a81bb44",
+        "status": "completed",
+        "kind": "general-purpose",
+        "background": false,
+        "tools": [
+          "Read:completed"
+        ],
+        "outputLines": [
+          "The first line of the README.md file is:",
+          "**# Fixture project**"
+        ],
+        "tokens": 14536,
+        "summary": "The first line of the README.md file is:\n\n**# Fixture project**"
+      }
+    },
+    {
       "kind": "assistant",
       "text": "The first line of README.md is \"# Fixture project\"."
     }
@@ -73,6 +95,15 @@
     },
     "todos": [],
     "compaction": null,
-    "notices": []
+    "notices": [],
+    "subagents": [
+      {
+        "agentId": "aedea1ecd3a81bb44",
+        "status": "completed",
+        "depth": 1,
+        "output": 2
+      }
+    ],
+    "jobs": []
   }
 }

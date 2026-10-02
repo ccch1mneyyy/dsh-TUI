@@ -27,6 +27,8 @@ function status(row: SubagentRow): { glyph: string; label: string; color: keyof 
   if (row.status === 'completed') return { glyph: minimalUi ? '✓' : '🟢', label: t('subagent-status-completed'), color: minimalUi ? undefined : 'success' }
   if (row.status === 'failed') return { glyph: minimalUi ? '×' : '🔴', label: t('subagent-status-failed'), color: minimalUi ? undefined : 'error' }
   if (row.status === 'cancelled') return { glyph: minimalUi ? '×' : '🔴', label: t('subagent-status-cancelled'), color: minimalUi ? undefined : 'error' }
+  // No end was ever reported (the run's process is gone): settled, unknown.
+  if (row.status === 'unknown') return { glyph: minimalUi ? '·' : '⚪', label: t('subagent-status-unknown'), color: minimalUi ? undefined : 'subtle' }
   return { glyph: minimalUi ? '·' : '🟡', label: t('subagent-status-running'), color: minimalUi ? undefined : 'warning' }
 }
 /** Hard single-line clip by display width — a wrapped waterfall row would
@@ -64,7 +66,7 @@ export function SubagentMessage({ subagent, marginTopOnTurn, activityFrames, onC
   isExpanded: boolean
   onClick?(event: ClickEvent): void
 }): React.ReactNode {
-  const settled = subagent.status === 'completed' || subagent.status === 'failed' || subagent.status === 'cancelled'
+  const settled = subagent.status === 'completed' || subagent.status === 'failed' || subagent.status === 'cancelled' || subagent.status === 'unknown'
   // 动画订阅仅限运行中的卡片：settled 后传 null 退出共享 clock（keepAlive
   // 归零 → interval 清除），否则历史里的每张完成卡片都以 120ms 永久驱动
   // React commit。viewportRef 必须挂到根节点——useTerminalViewport 初始

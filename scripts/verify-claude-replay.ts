@@ -79,7 +79,8 @@ interface Projected {
 function project(name: string, title?: string): Projected {
   const { main, subagents } = readTranscript(name)
   const replay = replayClaudeTranscript(main, { cwd: '/fixture/project', subagents, ...(title === undefined ? {} : { title }) })
-  const harness = createProjectorHarness({ model: '' })
+  // As the channel core projects a non-DSH session: subagent cards too.
+  const harness = createProjectorHarness({ model: '', activity: true, now: () => 0 })
   harness.apply(replay.events, true)
   harness.projector.settleStreaming()
   return { replay, harness }
@@ -90,6 +91,7 @@ function golden(result: Projected): unknown {
   const state = result.harness.state
   return {
     start: result.replay.start,
+    compactedFrom: result.replay.compactedFrom ?? null,
     events: result.replay.events.map(event => event.type === 'assistant.delta' ? `delta:${event.delta.kind}` : event.type === 'turn.end' ? `turn.end:${event.reason.kind}` : event.type === 'turn.start' ? `turn.start:${event.origin}` : event.type),
     rows: state.rows.map(row => ({
       kind: row.kind,
@@ -104,6 +106,16 @@ function golden(result: Projected): unknown {
           result: row.tool.resultView === undefined ? null : row.tool.resultView.card,
           ...(row.tool.errorText === undefined ? {} : { errorText: row.tool.errorText.slice(0, 120) }),
           ...(row.tool.resultText === undefined ? {} : { resultText: row.tool.resultText.slice(0, 120) }),
+        },
+      }),
+      ...(row.subagent === undefined ? {} : {
+        subagent: {
+          agentId: row.subagent.agentId,
+          status: row.subagent.status,
+          tools: row.subagent.toolCalls.map(tool => `${tool.name}:${tool.status}`),
+          outputLines: row.subagent.outputLines,
+          tokens: row.subagent.tokens?.total ?? null,
+          summary: row.subagent.summary === undefined ? null : row.subagent.summary.slice(0, 120),
         },
       }),
     })),
@@ -229,7 +241,14 @@ const userRows = (name: string) => run(name).harness.state.rows.filter(row => ro
   const callAt = events.indexOf(call)
   const resultAt = events.findIndex(event => event.type === 'tool.result' && event.callId === call.callId)
   check('the subagent starts right after its Agent call', start !== undefined && start.parentCallId === call.callId && events.indexOf(start) > callAt && events.indexOf(start) < resultAt)
-  check('… and ends after the call\'s result, its state from the transcript tail', end !== undefined && events.indexOf(end) > resultAt && end.status === 'completed' && (end.summary ?? '').length > 0)
+  const named = ofType(events, 'subagent.start')[1]
+  check('… the call pre-creates it, its transcript names it (same lane)', start?.agentId === call.callId && named !== undefined && named.parentCallId === call.callId && named.agentId !== call.callId && named.agentId === [...readTranscript('subagent').subagents.values()][0]!.agentId)
+  check('… and ends after the call\'s result, its state from the hand-back report', end !== undefined && events.indexOf(end) > resultAt && end.status === 'completed' && (end.summary ?? '').includes('Fixture project') && !(end.summary ?? '').includes('Subagent hand-back') && (end.usage?.total ?? 0) > 0, end)
+  const lane = events.filter(event => (event.type === 'tool.call' || event.type === 'tool.result' || event.type === 'assistant.message') && event.parentCallId === call.callId)
+  check('its own messages replay on its lane, between its start and end (replay: true batch)', lane.some(event => event.type === 'tool.call' && event.name === 'Read') && lane.some(event => event.type === 'tool.result') && lane.some(event => event.type === 'assistant.message')
+    && lane.every(event => events.indexOf(event) > events.indexOf(named!) && events.indexOf(event) < events.indexOf(end!)), lane.map(event => event.type))
+  const card = run('subagent').harness.state.rows.filter(row => row.kind === 'subagent')
+  check('one settled card with its tool and report', card.length === 1 && card[0]!.subagent?.status === 'completed' && card[0]!.subagent.toolCalls.map(tool => tool.name).join() === 'Read' && card[0]!.subagent.outputLines.length > 0, card[0]?.subagent)
   const { subagents } = readTranscript('subagent')
   const subTexts = [...subagents.values()].flatMap(agent => agent.messages).flatMap(message => {
     const content = (message.message as Rec | undefined)?.content
@@ -242,7 +261,7 @@ const userRows = (name: string) => run(name).harness.state.rows.filter(row => ro
 type Line = { dir: string; msg?: Rec; placement?: 'turn' | 'steer' | 'followup' | 'now' }
 const liveRows = (name: string) => {
   const translator = createClaudeTranslator({ cwd: '/fixture/project', userRows: 'lifecycle', now: () => 0 })
-  const harness = createProjectorHarness({ model: '' })
+  const harness = createProjectorHarness({ model: '', activity: true, now: () => 0 })
   const lines = readFileSync(join(FIXTURES, `${name}.jsonl`), 'utf8').split('\n').filter(line => line.trim() !== '').map(line => JSON.parse(line) as Line)
   for (const line of lines) {
     if (line.dir === 'in' && line.msg !== undefined) {
@@ -255,9 +274,11 @@ const liveRows = (name: string) => {
   harness.projector.settleStreaming()
   return harness.state.rows
 }
-const shape = (rows: readonly { kind: string; text: string; anchor?: string; tool?: { name: string } }[]): string[] =>
-  rows.filter(row => row.kind === 'user' || row.kind === 'assistant' || row.kind === 'tool' || row.kind === 'interrupt')
-    .map(row => `${row.kind}:${row.kind === 'tool' ? row.tool?.name : row.text.trim()}${row.anchor === undefined ? '' : `@${row.anchor}`}`)
+const shape = (rows: readonly { kind: string; text: string; anchor?: string; tool?: { name: string }; subagent?: { agentId: string; status: string; toolCalls: readonly { name: string }[] } }[]): string[] =>
+  rows.filter(row => row.kind === 'user' || row.kind === 'assistant' || row.kind === 'tool' || row.kind === 'interrupt' || row.kind === 'subagent')
+    .map(row => row.kind === 'subagent'
+      ? `subagent:${row.subagent?.agentId}:${row.subagent?.status}:${row.subagent?.toolCalls.map(tool => tool.name).join()}`
+      : `${row.kind}:${row.kind === 'tool' ? row.tool?.name : row.text.trim()}${row.anchor === undefined || row.kind === 'assistant' ? '' : `@${row.anchor}`}`)
 for (const name of ['tool-read', 'parallel-tool', 'fold-in-next', 'subagent', 'interrupt-cancel']) {
   const live = shape(liveRows(name))
   const replayed = shape(run(name).harness.state.rows)
@@ -307,6 +328,7 @@ for (const name of ['tool-read', 'parallel-tool', 'fold-in-next', 'subagent', 'i
   check('resume-replay: the turn after the compaction is replayed after the compaction rows', rows.findIndex(row => row.kind === 'compact') >= 0 && rows.findIndex(row => row.kind === 'compact') < rows.findLastIndex(row => row.kind === 'user'))
   check('resume-replay: a model restored for the status line', events.at(-1)?.type === 'model.changed' && result.harness.state.model.includes('haiku'))
   check('resume-replay: a subagent whose launching call was compacted away is not inserted', readTranscript('resume-replay').subagents.size === 1 && !events.some(event => event.type === 'subagent.start' || event.type === 'subagent.end'))
+  check('resume-replay: a chain that begins at a compaction names where (older history exists)', result.replay.compactedFrom === readTranscript('resume-replay').main[0]!.uuid && run('tool-read').replay.compactedFrom === undefined)
   const titled = project('resume-replay', 'A titled session')
   check('a catalog title replays as the session title', titled.harness.state.sessionTitle === 'A titled session')
 }

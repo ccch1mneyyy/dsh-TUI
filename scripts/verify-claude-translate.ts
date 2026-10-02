@@ -45,7 +45,8 @@ function run(name: string): Run {
   let clock = Date.UTC(2026, 9, 1, 12, 0, 0)
   const now = (): number => (clock += 7)
   const translator = createClaudeTranslator({ cwd: '/fixture/project', userRows: 'lifecycle', now })
-  const harness = createProjectorHarness({ model: '' })
+  // As the channel core projects a non-DSH session: subagents and jobs too.
+  const harness = createProjectorHarness({ model: '', activity: true, now })
   const events: AgentEvent[] = []
   const realNow = Date.now
   // The projector reads the wall clock for row timing; pin it too.
@@ -90,6 +91,21 @@ function golden(result: Run): unknown {
           ...(row.tool.resultText === undefined ? {} : { resultText: row.tool.resultText.slice(0, 120) }),
         },
       }),
+      ...(row.subagent === undefined ? {} : {
+        subagent: {
+          agentId: row.subagent.agentId,
+          status: row.subagent.status,
+          kind: row.subagent.provider ?? null,
+          background: row.subagent.background ?? false,
+          tools: row.subagent.toolCalls.map(tool => `${tool.name}:${tool.status}`),
+          outputLines: row.subagent.outputLines,
+          tokens: row.subagent.tokens?.total ?? null,
+          summary: row.subagent.summary === undefined ? null : row.subagent.summary.slice(0, 120),
+        },
+      }),
+      ...(row.job === undefined ? {} : {
+        job: { id: row.job.id, kind: row.job.kind, label: row.job.label, status: row.job.status, detail: row.job.detail ?? null },
+      }),
     })),
     state: {
       working: state.working,
@@ -100,6 +116,8 @@ function golden(result: Run): unknown {
       todos: state.todos,
       compaction: state.compaction ?? null,
       notices: result.harness.notices,
+      subagents: state.subagents.map(sub => ({ agentId: sub.agentId, status: sub.status, depth: sub.depth ?? null, output: sub.output.length })),
+      jobs: state.backgroundJobs.map(job => ({ id: job.id, status: job.status, command: job.command ?? null, outputFile: job.outputFile ?? null })),
     },
   }
 }
@@ -196,6 +214,11 @@ for (const [name, result] of runs) {
   const background = get('background-bash')
   check('background Bash: a background shell task starts', of(background.events, 'task.start').some(event => event.background && event.kind === 'shell'))
   check('background Bash: the notification turn is not a user turn', of(background.events, 'turn.start').some(event => event.origin === 'notification') && background.harness.state.rows.some(row => row.kind === 'notice'))
+  const jobs = background.harness.state.rows.filter(row => row.kind === 'job')
+  check('background Bash: one job card after its Bash card, completed', jobs.length === 1 && jobs[0]!.job?.status === 'completed' && background.harness.state.rows.indexOf(jobs[0]!) === background.harness.state.rows.findIndex(row => row.kind === 'tool') + 1, background.harness.state.rows.map(row => row.kind))
+  const job = background.harness.state.backgroundJobs[0]
+  check('background Bash: the job knows its command and the output file the CLI named', job?.command === 'sleep 3; echo bg-done' && job.outputFile?.endsWith(`/tasks/${job.id}.output`) === true, job)
+  check('background Bash: the output file comes from the acknowledgement, before the end', of(background.events, 'task.update').some(event => event.patch.outputFile !== undefined) && background.events.findIndex(event => event.type === 'task.update') < background.events.findIndex(event => event.type === 'task.end'))
 }
 
 // ── parallel tools / subagent channel / allowed permission / partials ──
@@ -217,7 +240,18 @@ for (const [name, result] of runs) {
 
   const sub = get('subagent')
   check('subagent: subagent channel messages stay off the main transcript', sub.harness.state.rows.filter(row => row.kind === 'user').length === 1 && sub.harness.state.rows.filter(row => row.kind === 'tool').length === 0 && sub.harness.state.rows.filter(row => row.kind === 'assistant').length === 1, sub.harness.state.rows.map(row => row.kind))
-  check('subagent: one subagent starts and ends, no task card', of(sub.events, 'subagent.start').length === 1 && of(sub.events, 'subagent.end').length === 1 && of(sub.events, 'task.end').length === 0)
+  // Phase 5a: the `Agent` call pre-creates the subagent, `task_started`
+  // completes it on the same lane — one subagent, one card, no task card.
+  const starts = of(sub.events, 'subagent.start')
+  check('subagent: the call pre-creates it, task_started completes it on the same lane', starts.length === 2 && starts[0]!.agentId === starts[0]!.parentCallId && starts[1]!.parentCallId === starts[0]!.parentCallId && starts[1]!.agentId !== starts[0]!.agentId && starts[1]!.depth === 1, starts)
+  check('subagent: one subagent ends, no task card', of(sub.events, 'subagent.end').length === 1 && of(sub.events, 'task.end').length === 0 && sub.harness.state.rows.filter(row => row.kind === 'job').length === 0)
+  const card = sub.harness.state.rows.filter(row => row.kind === 'subagent')
+  check('subagent: one card, keyed by the task id, completed with its tool and report', card.length === 1 && card[0]!.subagent?.agentId === starts[1]!.agentId && card[0]!.subagent.status === 'completed'
+    && card[0]!.subagent.toolCalls.length === 1 && card[0]!.subagent.toolCalls[0]!.name === 'Read' && card[0]!.subagent.toolCalls[0]!.status === 'completed'
+    && (card[0]!.subagent.summary ?? '').includes('Fixture project') && (card[0]!.subagent.tokens?.total ?? 0) > 0, card[0]?.subagent)
+  const lane = sub.events.filter(event => (event.type === 'tool.call' || event.type === 'tool.result' || event.type === 'assistant.message') && event.parentCallId !== undefined)
+  check('subagent: its own Read and text arrive on its lane (parentCallId)', lane.some(event => event.type === 'tool.call' && event.name === 'Read') && lane.some(event => event.type === 'tool.result') && lane.some(event => event.type === 'assistant.message'), lane.map(event => event.type))
+  check('subagent: the card sits where the Agent call was (before the reply)', sub.harness.state.rows.findIndex(row => row.kind === 'subagent') < sub.harness.state.rows.findIndex(row => row.kind === 'assistant'), sub.harness.state.rows.map(row => row.kind))
   check('subagent: the main reply survives', sub.harness.state.rows.some(row => row.kind === 'assistant' && row.text.trim() !== ''))
 
   const allow = get('permission-allow')

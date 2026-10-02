@@ -18,6 +18,9 @@ export interface JobsPanelProps {
   onClose: () => void
   /** Kill the focused live job (`job_kill` with the session's authority). */
   onKill: (id: string) => void
+  /** Keep the focused job's output tail fresh while the panel shows it
+   *  (a backend whose output is read on demand); returns the unwatch. */
+  onWatchOutput?: (id: string) => () => void
 }
 
 function statusInfo(status: BackgroundJobStatus): { glyph: string; label: string; color: keyof Theme | undefined } {
@@ -232,7 +235,7 @@ function timeOf(ms: number): string {
  * row expands a detail block (full label, start/finish times, mirrored
  * output tail). The panel is the deep view behind the transcript job cards.
  */
-export function JobsPanel({ jobs, onClose, onKill, initialFocusId }: JobsPanelProps): React.ReactNode {
+export function JobsPanel({ jobs, onClose, onKill, initialFocusId, onWatchOutput }: JobsPanelProps): React.ReactNode {
   const [focusIndex, setFocusIndex] = React.useState(() => {
     if (initialFocusId === undefined) return 0
     const found = jobs.findIndex(job => job.id === initialFocusId)
@@ -268,6 +271,10 @@ export function JobsPanel({ jobs, onClose, onKill, initialFocusId }: JobsPanelPr
   }, [])
 
   const focus = Math.min(focusIndex, Math.max(0, jobs.length - 1))
+  // The focused job's detail shows its output: keep that tail fresh while
+  // the panel is open (a settled job is read once more, then left alone).
+  const focusedId = jobs[focus]?.id
+  React.useEffect(() => (focusedId === undefined || onWatchOutput === undefined ? undefined : onWatchOutput(focusedId)), [focusedId, onWatchOutput])
 
   // The armed confirmation decays after 4s so a stray later `k` never kills.
   React.useEffect(() => {

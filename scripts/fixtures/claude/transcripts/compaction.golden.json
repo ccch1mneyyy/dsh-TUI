@@ -4,6 +4,7 @@
     "seq": 2,
     "model": "claude-haiku-4-5-20251001"
   },
+  "compactedFrom": "00000000-0000-4000-8000-000000000114",
   "events": [
     "compaction.end",
     "user.message",
@@ -28,11 +29,13 @@
     {
       "kind": "reasoning",
       "text": "",
+      "anchor": "msg_fixture_002",
       "reasoningTokens": 36
     },
     {
       "kind": "assistant",
-      "text": "ok"
+      "text": "ok",
+      "anchor": "msg_fixture_002"
     }
   ],
   "state": {

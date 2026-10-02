@@ -62,6 +62,10 @@ export interface ChannelUi {
   /** Subscription usage windows the backend reported (Claude
    *  `rate_limit_event`), or undefined when it reports none. */
   readonly rateLimit: ChannelRateLimit | undefined
+  /** The bound session has durable history older than the painted
+   *  transcript (a compaction cut it off before a resume): "load earlier"
+   *  shows even when no row is folded, and `loadOlder()` prepends it. */
+  readonly olderHistory: boolean
   /** `dsh-tui.recapOnOpen` (default on): auto-summarize the session tail
    *  into the dim AutoRecapRow when the session opens/resumes. Read live
    *  (settings service), so a `/settings` change applies on the next

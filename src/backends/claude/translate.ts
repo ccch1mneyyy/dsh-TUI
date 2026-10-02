@@ -17,7 +17,7 @@
  * Every field is narrowed from `unknown`; an unknown message type or subtype
  * is ignored (debug-logged), never fatal.
  */
-import type { AgentEvent, AgentEventOf, AgentEventType, ContentBlockView, PendingItem, TurnEndReason, UsageDelta } from '../../agent/events.js'
+import type { AgentEvent, AgentEventOf, AgentEventType, ContentBlockView, PendingItem, SubagentUsage, TurnEndReason, UsageDelta } from '../../agent/events.js'
 import type { TodoPanelItem } from '../../adapter/ports/channel-view.js'
 import { t } from '../../i18n.js'
 import { claudeToolRole, presentClaudeToolCall, presentClaudeToolResult } from './tools.js'
@@ -60,6 +60,19 @@ const COMMAND_TAG = /^<command-(name|message|args)>/u
 const EDE_DIAGNOSTIC = '[ede_diagnostic]'
 /** Command output sent as a prompt (`!!` / the CLI's bash mode). */
 const BASH_OUTPUT = /^<bash-stdout>\n?([\s\S]*?)\n?<\/bash-stdout>/u
+/** A backgrounded command's acknowledgement: where its output goes. */
+const BACKGROUND_OUTPUT = /Output is being written to: (\S+?\.output)\b/u
+
+/** A task report's usage (`total_tokens`, `tool_uses`, `duration_ms`). */
+function usageOfTask(value: unknown): SubagentUsage | undefined {
+  const usage = rec(value)
+  if (usage === undefined) return undefined
+  const total = num(usage.total_tokens)
+  const toolUses = num(usage.tool_uses)
+  const durationMs = num(usage.duration_ms)
+  if (total === undefined && toolUses === undefined && durationMs === undefined) return undefined
+  return { ...(total === undefined ? {} : { total }), ...(toolUses === undefined ? {} : { toolUses }), ...(durationMs === undefined ? {} : { durationMs }) }
+}
 
 /**
  * The Claude backend's decision for every Agent Domain event type (checked by
@@ -255,6 +268,14 @@ export function createClaudeTranslator(options: ClaudeTranslatorOptions) {
    * its card settles with the tool result).
    */
   const taskKinds = new Map<string, 'agent' | 'job' | 'foreground'>()
+  /** What each task's `task_started` said (a foreground Bash moved to the
+   *  background becomes a job then, with this description). */
+  const taskInfo = new Map<string, { readonly description: string; readonly callId?: string }>()
+  /** The delegating `Agent` call (subagent lane) → its task id, once
+   *  `task_started` named it (a stop request needs the task id). */
+  const laneTasks = new Map<string, string>()
+  /** Where each task writes its output, as the CLI reported it. */
+  const outputFiles = new Map<string, string>()
   /** Why the CLI auto-denied a call (`system/permission_denied`), until its
    *  error result lands on the card. */
   const deniedReasons = new Map<string, string>()
@@ -486,6 +507,117 @@ export function createClaudeTranslator(options: ClaudeTranslatorOptions) {
     }
   }
 
+  /**
+   * The subagent an `Agent` / `Task` call delegates to, pre-created from the
+   * call itself (design §4.8: the call arrives before `task_started`): keyed
+   * by the call id until `task_started` names the subagent.
+   */
+  const delegation = (callId: string, input: unknown): AgentEvent => {
+    const args = rec(input)
+    return {
+      type: 'subagent.start',
+      agentId: callId,
+      parentCallId: callId,
+      description: str(args?.description) ?? '',
+      ...(str(args?.subagent_type) === undefined ? {} : { kind: str(args?.subagent_type) }),
+      ...(str(args?.model) === undefined ? {} : { model: str(args?.model) }),
+      background: args?.run_in_background === true,
+      time: now(),
+    }
+  }
+
+  /**
+   * A subagent's own traffic (`parent_tool_use_id` = the delegating call,
+   * with `forwardSubagentText`): its text and thinking, tool calls and
+   * results as child-lane events for its card and panels. The main lane's
+   * turn / step / attempt state is never touched; a nested delegation is
+   * pre-created like a main-lane one.
+   */
+  const translateLane = (lane: string, type: string, message: Rec): AgentEvent[] => {
+    const body = rec(message.message)
+    const out: AgentEvent[] = []
+    if (type === 'assistant') {
+      const id = str(body?.id) ?? `lane-${seq + 1}`
+      const blocks: ContentBlockView[] = []
+      for (const raw of arr(body?.content)) {
+        const block = rec(raw)
+        switch (str(block?.type)) {
+          case 'thinking': {
+            const text = str(block?.thinking) ?? ''
+            if (text !== '') blocks.push({ type: 'reasoning', text })
+            break
+          }
+          case 'text': {
+            const text = str(block?.text) ?? ''
+            if (text !== '') blocks.push({ type: 'text', text })
+            break
+          }
+          default:
+            break
+        }
+      }
+      if (blocks.length > 0) {
+        out.push({ type: 'assistant.message', seq: nextSeq(), anchor: id, turn, step, attemptId: id, time: now(), blocks, canonical: false, parentCallId: lane })
+      }
+      for (const raw of arr(body?.content)) {
+        const block = rec(raw)
+        if (block?.type !== 'tool_use') continue
+        const callId = str(block.id)
+        const name = str(block.name)
+        if (callId === undefined || name === undefined) continue
+        openCalls.set(callId, { name, input: block.input })
+        const presentation = presentClaudeToolCall(name, block.input, options.cwd)
+        out.push({
+          type: 'tool.call',
+          seq: nextSeq(),
+          anchor: callId,
+          turn,
+          step,
+          callId,
+          name,
+          argsJson: JSON.stringify(block.input ?? {}),
+          parentCallId: lane,
+          time: now(),
+          ...(presentation === undefined ? {} : { presentation }),
+        })
+        if (claudeToolRole(name) === 'subagent') out.push(delegation(callId, block.input))
+      }
+      return out
+    }
+    if (type === 'user') {
+      for (const raw of arr(body?.content)) {
+        const block = rec(raw)
+        if (block?.type !== 'tool_result') continue
+        const callId = str(block.tool_use_id)
+        if (callId === undefined) continue
+        const call = openCalls.get(callId)
+        openCalls.delete(callId)
+        const isError = block.is_error === true
+        const text = toolResultText(block.content)
+        const presentation = call === undefined ? undefined : presentClaudeToolResult(call.name, call.input, { isError, text, structured: undefined }, options.cwd)
+        out.push({
+          type: 'tool.result',
+          seq: nextSeq(),
+          turn,
+          step,
+          callId,
+          isError,
+          time: now(),
+          content: typeof block.content === 'string' ? [{ type: 'text', text }] : arr(block.content) as ContentBlockView[],
+          text: isError ? '' : text,
+          ...(isError ? { errorText: text } : {}),
+          ...(presentation === undefined ? {} : { presentation }),
+          parentCallId: lane,
+        })
+      }
+      // The subagent's prompt (its first user text) is not shown.
+      return out
+    }
+    // Streamed partials of a subagent: its settled messages carry the content.
+    debug(`claude: subagent stream frame ignored (${lane})`)
+    return out
+  }
+
   const translateAssistant = (message: Rec): AgentEvent[] => {
     const body = rec(message.message)
     const id = str(body?.id)
@@ -536,6 +668,7 @@ export function createClaudeTranslator(options: ClaudeTranslatorOptions) {
             time: now(),
             ...(presentation === undefined ? {} : { presentation }),
           })
+          if (claudeToolRole(name) === 'subagent') out.push(delegation(callId, input))
           if (claudeToolRole(name) === 'todo') {
             const todos = arr(rec(input)?.todos).flatMap((item): TodoPanelItem[] => {
               const todo = rec(item)
@@ -626,6 +759,14 @@ export function createClaudeTranslator(options: ClaudeTranslatorOptions) {
           ...(structured === undefined ? {} : { structured }),
           ...(presentation === undefined ? {} : { presentation }),
         })
+        // A backgrounded command's acknowledgement names its output file
+        // (`task_started` does not): the job's output tail is read from it.
+        const backgroundTask = str(rec(structured)?.backgroundTaskId)
+        const outputFile = backgroundTask === undefined || isError ? undefined : BACKGROUND_OUTPUT.exec(rawText)?.[1]
+        if (backgroundTask !== undefined && outputFile !== undefined) {
+          outputFiles.set(backgroundTask, outputFile)
+          out.push({ type: 'task.update', taskId: backgroundTask, patch: { outputFile } })
+        }
       }
       return out
     }
@@ -689,6 +830,27 @@ export function createClaudeTranslator(options: ClaudeTranslatorOptions) {
     return out
   }
 
+  /** A background job's start: its command from the launching call when
+   *  that was a shell command. */
+  const jobStart = (taskId: string, taskType: string | undefined): AgentEvent => {
+    const info = taskInfo.get(taskId)
+    const call = info?.callId === undefined ? undefined : openCalls.get(info.callId)
+    const command = call === undefined ? undefined : str(rec(call.input)?.command)
+    const kind = taskType === 'local_bash' ? 'shell' : taskType === 'local_workflow' ? 'workflow' : taskType === 'monitor' || taskType === 'local_monitor' ? 'monitor' : taskType ?? 'task'
+    const outputFile = outputFiles.get(taskId)
+    return {
+      type: 'task.start',
+      taskId,
+      kind,
+      description: info?.description ?? '',
+      ...(command === undefined ? {} : { command }),
+      ...(info?.callId === undefined ? {} : { callId: info.callId }),
+      background: true,
+      ...(outputFile === undefined ? {} : { outputFile }),
+      time: now(),
+    }
+  }
+
   const translateSystem = (message: Rec): AgentEvent[] => {
     const subtype = str(message.subtype)
     switch (subtype) {
@@ -742,9 +904,13 @@ export function createClaudeTranslator(options: ClaudeTranslatorOptions) {
         const background = message.is_backgrounded === true
         const description = str(message.description) ?? ''
         const callId = str(message.tool_use_id)
+        taskInfo.set(taskId, { description, ...(callId === undefined ? {} : { callId }) })
         if (taskType === 'local_agent' || str(message.subagent_type) !== undefined) {
           taskKinds.set(taskId, 'agent')
-          return [{ type: 'subagent.start', agentId: taskId, ...(callId === undefined ? {} : { parentCallId: callId }), description, ...(str(message.subagent_type) === undefined ? {} : { kind: str(message.subagent_type) }), background, time: now() }]
+          if (callId !== undefined) laneTasks.set(callId, taskId)
+          const depth = num(message.spawn_depth)
+          // Completes the subagent the `Agent` call pre-created (same lane).
+          return [{ type: 'subagent.start', agentId: taskId, ...(callId === undefined ? {} : { parentCallId: callId }), description, ...(str(message.subagent_type) === undefined ? {} : { kind: str(message.subagent_type) }), background, ...(depth === undefined ? {} : { depth }), time: now() }]
         }
         // Phase 0 correction: a foreground Bash that runs ~3s also reports
         // `task_started{is_backgrounded:false}` — not a background job.
@@ -753,28 +919,47 @@ export function createClaudeTranslator(options: ClaudeTranslatorOptions) {
           return []
         }
         taskKinds.set(taskId, 'job')
-        const kind = taskType === 'local_bash' ? 'shell' : taskType === 'local_workflow' ? 'workflow' : taskType ?? 'task'
-        return [{ type: 'task.start', taskId, kind, description, ...(callId === undefined ? {} : { callId }), background: true, time: now() }]
+        return [jobStart(taskId, taskType)]
       }
       case 'task_progress': {
         const taskId = str(message.task_id)
         if (taskId === undefined) return []
-        const usage = rec(message.usage)
+        const summary = str(message.summary)
+        // A backgrounded job's progress is its one-line status.
+        if (taskKinds.get(taskId) === 'job') return summary === undefined ? [] : [{ type: 'task.update', taskId, patch: { progress: summary } }]
+        const usage = usageOfTask(message.usage)
         return [{
           type: 'subagent.progress',
           agentId: taskId,
-          ...(str(message.summary) === undefined ? {} : { summary: str(message.summary) }),
+          ...(summary === undefined ? {} : { summary }),
           ...(str(message.last_tool_name) === undefined ? {} : { lastTool: str(message.last_tool_name) }),
-          ...(usage === undefined ? {} : { usage: { output: num(usage.total_tokens), toolUses: num(usage.tool_uses), durationMs: num(usage.duration_ms) } }),
+          ...(usage === undefined ? {} : { usage }),
         }]
       }
       case 'task_updated': {
         const taskId = str(message.task_id)
         const patch = rec(message.patch)
-        const status = str(patch?.status)
-        if (taskId === undefined || status === undefined) return []
+        if (taskId === undefined || patch === undefined) return []
+        const out: AgentEvent[] = []
+        const kind = taskKinds.get(taskId)
+        if (patch.is_backgrounded === true) {
+          // A foreground Bash moved to the background is a job from now on;
+          // a foreground subagent moved there runs in the background.
+          if (kind === 'foreground') {
+            taskKinds.set(taskId, 'job')
+            out.push(jobStart(taskId, 'local_bash'))
+          } else if (kind === 'agent') {
+            const info = taskInfo.get(taskId)
+            out.push({ type: 'subagent.start', agentId: taskId, ...(info?.callId === undefined ? {} : { parentCallId: info.callId }), description: '', background: true, time: now() })
+          }
+        }
+        // A subagent ends with its notification (summary, usage); the status
+        // patch before it adds nothing. A foreground tool's task is its card.
+        const status = str(patch.status)
+        if (status === undefined || taskKinds.get(taskId) !== 'job') return out
         const mapped = status === 'running' || status === 'pending' || status === 'completed' || status === 'failed' ? status : status === 'killed' || status === 'stopped' ? 'stopped' : undefined
-        return mapped === undefined ? [] : [{ type: 'task.update', taskId, patch: { status: mapped } }]
+        if (mapped !== undefined) out.push({ type: 'task.update', taskId, patch: { status: mapped, ...(str(patch.error) === undefined ? {} : { error: str(patch.error) }) } })
+        return out
       }
       case 'task_notification': {
         const taskId = str(message.task_id)
@@ -786,13 +971,17 @@ export function createClaudeTranslator(options: ClaudeTranslatorOptions) {
         // only subagent reports carry.
         const kind = taskKinds.get(taskId) ?? (message.usage === undefined ? 'job' : 'agent')
         taskKinds.delete(taskId)
+        taskInfo.delete(taskId)
         if (kind === 'foreground') return []
         // A foreground tool's task report arrives inside its own turn; only a
         // report between turns starts the CLI's notification turn.
         if (!turnOpen) notificationTurnExpected = true
+        const usage = usageOfTask(message.usage)
+        const outputFile = str(message.output_file)
+        if (outputFile !== undefined && outputFile !== '') outputFiles.set(taskId, outputFile)
         return kind === 'agent'
-          ? [{ type: 'subagent.end', agentId: taskId, status: done === 'stopped' ? 'cancelled' : done, ...(summary === undefined ? {} : { summary }), time: now() }]
-          : [{ type: 'task.end', taskId, status: done, ...(summary === undefined ? {} : { summary }), time: now() }]
+          ? [{ type: 'subagent.end', agentId: taskId, status: done === 'stopped' ? 'cancelled' : done, ...(summary === undefined ? {} : { summary }), ...(usage === undefined ? {} : { usage }), time: now() }]
+          : [{ type: 'task.end', taskId, status: done, ...(summary === undefined ? {} : { summary }), ...(outputFile === undefined || outputFile === '' ? {} : { outputFile }), time: now() }]
       }
       case 'background_tasks_changed': {
         const ids = arr(message.tasks).flatMap(item => {
@@ -864,9 +1053,9 @@ export function createClaudeTranslator(options: ClaudeTranslatorOptions) {
     const message = rec(raw)
     const type = str(message?.type)
     if (message === undefined || type === undefined) return []
-    // Subagent channel: projecting subagents into their panels is Phase 5;
-    // their messages must not interleave with the main transcript.
-    if (message.parent_tool_use_id !== undefined && message.parent_tool_use_id !== null && (type === 'assistant' || type === 'user' || type === 'stream_event')) return []
+    // A subagent's lane: its own events, never the main transcript's.
+    const lane = str(message.parent_tool_use_id)
+    if (lane !== undefined && (type === 'assistant' || type === 'user' || type === 'stream_event')) return translateLane(lane, type, message)
     switch (type) {
       case 'command_lifecycle':
         return translateLifecycle(message)
@@ -883,7 +1072,7 @@ export function createClaudeTranslator(options: ClaudeTranslatorOptions) {
       case 'tool_progress': {
         const callId = str(message.tool_use_id)
         if (callId === undefined || message.heartbeat === true) return []
-        return [{ type: 'tool.progress', callId, elapsedMs: (num(message.elapsed_time_seconds) ?? 0) * 1000 }]
+        return [{ type: 'tool.progress', callId, elapsedMs: (num(message.elapsed_time_seconds) ?? 0) * 1000, ...(lane === undefined ? {} : { parentCallId: lane }) }]
       }
       case 'rate_limit_event': {
         const info = rec(message.rate_limit_info)
@@ -955,6 +1144,16 @@ export function createClaudeTranslator(options: ClaudeTranslatorOptions) {
       return [{ type: 'mode.changed', modeId: mode }]
     },
     get turnOpen(): boolean { return turnOpen },
+    /** The task id a subagent / job id names: a task id itself, or the
+     *  delegating call of a subagent `task_started` already named. */
+    taskIdOf(id: string): string | undefined {
+      if (taskKinds.has(id) || outputFiles.has(id)) return id
+      return laneTasks.get(id)
+    },
+    /** The output file the CLI reported for a task. */
+    outputFileOf(taskId: string): string | undefined {
+      return outputFiles.get(taskId)
+    },
     /** The last turn number used (a resumed session continues after it). */
     get turnNumber(): number { return turn },
     /** The last event sequence number used. */

@@ -22,7 +22,9 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type { OAuthSetupHost } from '../../../adapter/ports/channel-settings.js'
 import type { AgentSession } from '../../../agent/session.js'
+import { createActivityProjection } from '../../../channel/activity.js'
 import { channelCapabilities } from '../../../channel/capabilities.js'
+import { anchoredRow, prependHistoryRows, projectHistorySlice, restoreFoldedRows } from '../../../channel/history-restore.js'
 import { t } from '../../../i18n.js'
 import { DEFAULT_SESSION_MODES } from '../../../sessionModes.js'
 import { IdeChannel, ideLockDir, type SelectionSnapshot } from '../../ide-channel.js'
@@ -74,8 +76,14 @@ export interface ChannelExtension {
    *  renderer-visible data changed (DSH: the subagent stream batcher). */
   flushDeferred?(): boolean
   /** Restore folded rows from the backend's durable history. Its presence
-   *  enables folding past the transcript window; absent, nothing folds. */
+   *  enables folding past the transcript window; absent, the session's
+   *  `transcript` capability does (folding only the rows it can restore),
+   *  and without either nothing folds. */
   loadOlder?(): number
+  /** The extension projects subagents and background jobs itself (DSH: its
+   *  host-service specialists): the core's event-driven activity projection
+   *  stays inert and its controls are the extension's. */
+  readonly ownsActivity?: boolean
   /** Whether the local disk stands in for a missing host `fs` service
    *  (default true; the DSH workspace may be remote, so DSH says false). */
   localFs?: boolean
@@ -123,8 +131,10 @@ export function createCoreChannel(
 
   const emitter = createChannelEmitter(() => state, () => extension.flushDeferred?.() ?? false, {
     // Folding drops a row's full text on the promise that `loadOlder`
-    // restores it; without a history slicer every row stays whole.
-    fold: () => extension.loadOlder !== undefined,
+    // restores it; without a history slicer every row stays whole. A
+    // session's durable transcript restores only rows with a stable anchor.
+    fold: () => extension.loadOlder !== undefined || binding.session.capabilities.transcript !== undefined,
+    restorable: row => extension.loadOlder !== undefined || anchoredRow(row),
   })
   // The emitter exists before the complete state surface. Put it in the
   // construction rollback funnel immediately; normal release remains
@@ -139,6 +149,40 @@ export function createCoreChannel(
     notify(t('capability-unavailable', { name }), { color: 'warning', timeoutMs: 4000 })
   }
   const unavailableLines = (name: string): string[] => [t('capability-unavailable', { name })]
+  /**
+   * Subagents and background jobs of a session no extension projects
+   * (design §4.8): fed by the shared projector in stream order; output tails
+   * read through the session's `tasks` capability while a card is watched.
+   */
+  const activity = createActivityProjection(() => state, {
+    rowIds,
+    notify: (...args) => notify(...args),
+    emit: () => { if (owner.current()) state.emit() },
+    readOutput: taskId => binding.session.capabilities.tasks?.readOutput?.(taskId),
+  })
+  owner.own(() => { activity.dispose() })
+  const activityOwned = (): boolean => extension.ownsActivity !== true
+  /** "Load earlier" through the session's durable transcript: restore the
+   *  folded rows first, then prepend the next older slice. */
+  const transcriptLoadOlder = (): number => {
+    const transcript = binding.session.capabilities.transcript
+    if (transcript === undefined) return 0
+    const failed = (error: unknown): number => {
+      notify(t('capability-failed', { name: 'load earlier', err: error instanceof Error ? error.message : String(error) }), { color: 'error', timeoutMs: 8000 })
+      return 0
+    }
+    try {
+      if (state.rows.some(row => row.folded === true)) {
+        const record = transcript.record()
+        const restored = record === undefined ? 0 : restoreFoldedRows(state.rows, record)
+        if (restored > 0) return restored
+      }
+      if (!transcript.hasOlder()) return 0
+      return prependHistoryRows(state.rows, projectHistorySlice(transcript.older(), state.thinkingFold))
+    } catch (error) {
+      return failed(error)
+    }
+  }
   const bookkeeping = createContextBookkeeping(
     () => state,
     (text, notifyOptions) => notify(text, notifyOptions),
@@ -257,6 +301,9 @@ export function createCoreChannel(
     },
     costReport: undefined,
     rateLimit: undefined,
+    get olderHistory(): boolean {
+      return extension.loadOlder === undefined && (binding.session.capabilities.transcript?.hasOlder() ?? false)
+    },
     backendAuth: () => {
       const auth = binding.session.capabilities.auth
       if (auth === undefined) return undefined
@@ -270,8 +317,35 @@ export function createCoreChannel(
       }
     },
     ...actionMethods,
-    subagentControl: { interrupt: () => { unavailable('agents'); return false } },
-    jobControl: { kill: () => { unavailable('jobs'); return false } },
+    subagentControl: {
+      interrupt: agentId => {
+        const control = binding.session.capabilities.subagents
+        if (control === undefined) { unavailable('agents'); return false }
+        const subagent = activity.subagent(agentId)
+        if (subagent === undefined || (subagent.status !== 'running' && subagent.status !== 'starting')) return false
+        void control.interrupt(subagent.agentId).then(stopped => {
+          if (!stopped && owner.current()) notify(t('subagent-interrupt-failed', { id: subagent.agentId.slice(0, 8) }), { color: 'warning', timeoutMs: 6000 })
+        }, (error: unknown) => {
+          if (owner.current()) notify(t('capability-failed', { name: 'agents', err: error instanceof Error ? error.message : String(error) }), { color: 'error', timeoutMs: 8000 })
+        })
+        return true
+      },
+    },
+    jobControl: {
+      kill: id => {
+        const tasks = binding.session.capabilities.tasks
+        if (tasks === undefined) { unavailable('jobs'); return false }
+        const job = activity.job(id)
+        if (job === undefined || (job.status !== 'running' && job.status !== 'stopping')) return false
+        void tasks.stop(id).then(stopped => {
+          if (!stopped && owner.current()) notify(t('jobs-kill-failed', { id }), { color: 'error', timeoutMs: 6000 })
+        }, (error: unknown) => {
+          if (owner.current()) notify(t('capability-failed', { name: 'jobs', err: error instanceof Error ? error.message : String(error) }), { color: 'error', timeoutMs: 8000 })
+        })
+        return true
+      },
+      watchOutput: id => activity.watchOutput(id),
+    },
     stagedImageGeneration: composer.stagedImageGeneration,
     stageImage: composer.stageImage,
     stageComposerImage: composer.stageComposerImage,
@@ -323,6 +397,7 @@ export function createCoreChannel(
     projection: {
       rowIds, resetContextWarning,
       jobs: NO_JOB_FEED,
+      activity: { apply: (event, replaying) => { if (activityOwned()) activity.apply(event, replaying) } },
       checkContextWarning, notify: (...args) => notify(...args),
       renderer: host.rendererRuntime,
       selectionAttached: messageId => selectionAttachments.take(messageId),
@@ -364,6 +439,7 @@ export function createCoreChannel(
     state,
     rowIds,
     resetProjection: feed.resetProjection,
+    resetActivity: () => { activity.reset() },
     snapshotOf,
     resetControls: controls.reset,
     bind: seed => feed.bind(seed),
@@ -397,8 +473,11 @@ export function createCoreChannel(
     resetProjection: feed.resetProjection,
     notify,
     unavailable,
-    dropRows: () => { extension.dropRows?.() },
-    loadOlder: () => extension.loadOlder,
+    dropRows: () => {
+      extension.dropRows?.()
+      if (activityOwned()) activity.dropRows()
+    },
+    loadOlder: () => extension.loadOlder ?? (binding.session.capabilities.transcript === undefined ? undefined : transcriptLoadOlder),
     beginInput: () => {
       shellInputs.started += 1
       shellInputs.inFlight += 1
@@ -470,6 +549,8 @@ export function createCoreChannel(
         doctorInfo: reports.doctorInfo,
         exportSession: reports.exportSession,
         newSession: () => sessionSwitch.newSession(),
+        // `/agents` from the event-driven roster (the DSH extension serves its own).
+        listSubagents: () => Promise.resolve(binding.session.capabilities.subagents === undefined ? unavailableLines('agents') : activity.listLines()),
         resolveWorkspace: workspaces.resolveWorkspace,
         switchWorkspace: workspaces.switchWorkspace,
         ...sessionActions.delegates,

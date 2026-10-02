@@ -195,7 +195,28 @@ export interface SessionCapabilities {
     interrupt(agentId: string): Promise<boolean>
     history?(agentId: string): Promise<readonly AgentEvent[]>
   }
+  /**
+   * Background tasks: `stop` asks the backend to stop one; `readOutput`
+   * reads the tail of its output (bounded by the backend; rejects when the
+   * task has no readable output).
+   */
   readonly tasks?: { stop(taskId: string): Promise<boolean>; readOutput?(taskId: string): Promise<string> }
+  /**
+   * The durable record behind "load earlier" (design §4.11): read-only,
+   * synchronous and bounded (a user click waits for it).
+   * `record()` replays everything the backend persisted for the bound
+   * session — the source folded rows are restored from (rows match by their
+   * stable anchors: user / assistant `anchor`, tool `callId`); undefined when
+   * it cannot be read now. `older()` returns the next slice older than what
+   * `history()` replayed (history a compaction cut off), oldest first, and
+   * advances past it — an empty slice when nothing older remains;
+   * `hasOlder()` says whether one may still exist.
+   */
+  readonly transcript?: {
+    record(): readonly AgentEvent[] | undefined
+    hasOlder(): boolean
+    older(): readonly AgentEvent[]
+  }
   readonly mcp?: {
     status(): Promise<readonly McpServerView[]>
     reconnect?(name: string): Promise<void>

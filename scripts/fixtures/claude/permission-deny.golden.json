@@ -95,6 +95,8 @@
     },
     "todos": [],
     "compaction": null,
-    "notices": []
+    "notices": [],
+    "subagents": [],
+    "jobs": []
   }
 }

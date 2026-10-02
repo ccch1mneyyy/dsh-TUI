@@ -234,10 +234,30 @@ dsh-tui --backend claude     # or `backend: claude` in the dsh-tui config row
   session is untouched). Double-`Esc` rewinds to an earlier prompt: the
   conversation (continuing in a copy cut just before it, the prompt back in
   the input), the files Claude edited since (restored from Claude's file
-  checkpoints, previewed before you confirm), or both.
-- **Not yet**: subagent panels, image input, `/tree`, and switching between
-  backends inside one running dsh-TUI. DeepSeek-specific commands are hidden
-  while this backend is active.
+  checkpoints, previewed before you confirm), or both. The status line's
+  short session id is the Claude session id `--resume` takes, and a resumed
+  session shows its context window before its first reply.
+- **Subagents**: each `Agent` delegation is a subagent card in the transcript
+  (its own text, tool calls and token count stream into the card, never into
+  the main conversation); `/agents` lists them, `Ctrl+A` opens the subagent
+  dashboard and its detail view, where a running one can be stopped. A
+  resumed session shows its subagents with their recorded output; one whose
+  end the transcript never recorded shows as *status unknown*.
+- **Background jobs**: a command Claude runs in the background (`Bash` with
+  `run_in_background`, or a running command moved to the background) is a job
+  card with the status-line chip, `/jobs` lists them (`k` twice stops one);
+  the card and the panel show the tail of the job's output file while they
+  are on screen (read-only, the last 64 KiB, at most once a second, only the
+  file Claude itself reported). Interrupting a turn never stops a job;
+  a job Claude stops reporting shows as *status unknown*.
+- **Older history**: a session resumed after a compaction shows *load earlier*
+  at the top; it brings back the conversation the compaction cut off, one
+  compaction at a time, read-only from Claude's own transcript file. Long
+  sessions fold old rows to keep memory bounded, and *load earlier* restores
+  them from the same file.
+- **Not yet**: image input, `/tree`, and switching between backends inside
+  one running dsh-TUI. DeepSeek-specific commands are hidden while this
+  backend is active.
 
 ## Keybindings & Mouse
 

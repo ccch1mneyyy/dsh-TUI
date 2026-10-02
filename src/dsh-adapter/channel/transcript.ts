@@ -21,7 +21,10 @@ export { ARGS_PREVIEW_LIMIT, LOCAL_OUTPUT_LIMIT, MAX_ROWS, preview, RESULT_PREVI
 export function foldRows(
   rows: ChatRow[],
   cap: number,
-  cursor?: { rows: unknown; index: number },
+  cursor?: { rows: unknown; index: number; head?: unknown },
+  /** Rows the backend can restore (default: every foldable kind); any
+   *  other row keeps its full text. */
+  restorable?: (row: ChatRow) => boolean,
 ): number {
   const excess = rows.length - cap
   if (excess <= 0) {
@@ -32,14 +35,20 @@ export function foldRows(
   // folded/restored exemptions are permanent, so everything below a cursor
   // over the SAME array identity needs no re-inspection. emit/emitStream
   // fold on every frame during streaming — a full rescan of a long window
-  // there was the O(rows) per-frame term of long-session streaming.
-  const from = cursor === undefined ? 0 : cursor.rows === rows ? cursor.index : 0
-  if (cursor !== undefined) cursor.rows = rows
+  // there was the O(rows) per-frame term of long-session streaming. Rows
+  // prepended ahead of the window (older history) shift every index: a new
+  // head restarts the pass.
+  const from = cursor === undefined ? 0 : cursor.rows === rows && cursor.head === rows[0] ? cursor.index : 0
+  if (cursor !== undefined) {
+    cursor.rows = rows
+    cursor.head = rows[0]
+  }
   if (excess <= from) return 0
   let folded = 0
   for (const row of rows.slice(from, excess)) {
     if (row.folded || row.restored) continue
     if (row.kind !== 'user' && row.kind !== 'assistant' && row.kind !== 'reasoning' && row.kind !== 'tool') continue
+    if (restorable !== undefined && !restorable(row)) continue
     row.folded = true
     folded += 1
     if (row.kind === 'tool' && row.tool) {

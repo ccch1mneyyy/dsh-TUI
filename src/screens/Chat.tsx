@@ -962,6 +962,17 @@ export function Chat({
     if (typeof focusId === 'string' && focusId !== '') setJobsPanelFocusId(focusId)
     setJobsPanelOpen(true)
   }, [])
+  // A job card / the panel keeps its output tail fresh while on screen, when
+  // the backend reads output on demand. The control is re-projected on every
+  // read; this handler keeps one identity per channel capability so the
+  // memoized rows are not re-rendered by it.
+  const jobControlRef = React.useRef(channel.jobControl)
+  jobControlRef.current = channel.jobControl
+  const jobOutputWatchable = typeof channel.jobControl?.watchOutput === 'function'
+  const watchJobOutput = React.useMemo(
+    () => jobOutputWatchable ? (id: string) => jobControlRef.current?.watchOutput?.(id) ?? (() => undefined) : undefined,
+    [jobOutputWatchable],
+  )
   /** Detail view for a specific subagent (opened from dashboard). */
   const [subagentDetailId, setSubagentDetailId] = React.useState<string | null>(null)
   /**
@@ -4479,6 +4490,7 @@ export function Chat({
         jobs={channel.backgroundJobs ?? []}
         initialFocusId={jobsPanelFocusId ?? undefined}
         onClose={() => { setJobsPanelOpen(false); setJobsPanelFocusId(null) }}
+        onWatchOutput={watchJobOutput}
         onKill={(id) => {
           // Stub channels (verify harnesses) have no jobControl — surface
           // the same failure toast as a refused kill instead of throwing.
@@ -4680,6 +4692,8 @@ export function Chat({
           historyPaintEnabled={!fullscreen}
           onToggleAll={() =>{  setShowAllMessages(previous => !previous) }}
           onLoadOlder={() => channel.loadOlder()}
+          olderHistory={channel.olderHistory}
+          onWatchJobOutput={watchJobOutput}
           registerRowRef={registerRowRef}
           scrollHandle={handle}
           forceMountRowId={forceMountRowId}

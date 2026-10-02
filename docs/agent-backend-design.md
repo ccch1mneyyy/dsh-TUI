@@ -552,6 +552,13 @@ CLI ──can_use_tool──▶ SDK ──canUseTool(toolName, input, opts)─�
 
 UI 映射：`subagent.*` → 现有 `SubagentActivityStore`/`SubagentRow`/`SubagentCard`/`SubagentDashboard`（字段 `agentId, description, model(resolvedModel), status, startedAt, outputEvents(text/thinking/tool), toolCalls, tokens(total), summary`）；`task.*` → 现有 `BackgroundJobStore`/`JobsPanel`/状态栏 chip（`id, kind:'shell', label, command, status, outputLines`），`tasks.stop` → `q.stopTask(taskId)`；`readOutput` → 读 `outputFile`（受 `~/.claude` 路径限制，只读）。turn 结束时若 `tasks.snapshot` 非空，状态栏保留"后台 N 任务"chip（现有 jobs chip）。
 
+**Phase 5a 实测修正与裁定**：
+- 子代理通道只有完整消息（`forwardSubagentText` 下没有子代理的 `stream_event`）；翻译器把它们译成带 `parentCallId` 的 `assistant.message`/`tool.call`/`tool.result`/`tool.progress`，由中立的 `src/channel/activity.ts` 收进卡片与面板，绝不进主转录。`Agent`/`Task` 调用即发 `subagent.start{agentId: callId}` 预建，`task_started` 以同一 lane 发第二个 `subagent.start{agentId: task_id, depth}` 补全并重键。
+- 后台 Bash 的 `task_started` **没有** `output_file`；路径在命令确认文本（"Output is being written to: …"，伴随 `tool_use_result.backgroundTaskId`）与 `task_notification.output_file` 里 → `task.update{outputFile}` / `task.end{outputFile}`。尾部只读这个 CLI 报告的路径并校验（`<taskId>.output`、解析符号链接后仍在临时目录/`/tmp`/配置目录内、普通文件、`O_NOFOLLOW`），最后 64 KiB，卡片/面板在屏时每秒至多一次。
+- `background_tasks_changed` 先于对应的 `task_updated`/`task_notification` 到达：缺席即推断落定（任务 killed+"状态未知"、子代理 `unknown`，无提示），随后的真实结束仍覆盖并只提示一次。任务卡详情只取退出码（`exit code: N`）——CLI 的整句报告做固定列会把标签挤成一字一行。
+- 回放：子转录内容作为同一 lane 的事件插在父调用之后；终态取主链里的父结果（hand-back 报告 + `<usage>`、`is_error`→failed、中断→cancelled）或 `<task-notification>`（后台），都没有→`unknown`。
+- 用户中断（`interrupt`）不停后台任务（`perTaskStopAffordance`，live 实测）；停止走 `stopTask(taskId)`，CLI 以 `stopped` 通知确认。
+
 ### 4.9 MCP / commands / skills / settings / CLAUDE.md
 
 - MCP：`system/init.mcp_servers[{name,status,source}]` + `q.mcpServerStatus()`（`[P1]` 含 `tools[]`、`needs-auth`）→ `/mcp` 报告（替换 DSH 的 `tools.schemas()` 解析）；`reconnect/toggle` capability 对应 `q.reconnectMcpServer/toggleMcpServer`；`needs-auth` 的服务器显示提示"在 `claude /mcp` 里完成授权"（`mcpAuthenticate` 未在 d.ts 声明，不使用）。
@@ -595,6 +602,7 @@ UI 映射：`subagent.*` → 现有 `SubagentActivityStore`/`SubagentRow`/`Subag
 - 核心 `/resume`：veto → 挂载账本预占 `claude:<id>` → `prepare` 内 `open({kind:'resume'})` **并** `await history()` → 竞态复查 → 同步 adopt 中先绘制历史、再订阅（Claude 的启动积压在订阅后的微任务里送达）。启动时的 `--resume` 同理：plugin 在构造 channel 前读好 `initialHistory`。一个进程一个后端：运行中的 TUI 内跨后端切换不在范围内。
 - 挂载账本：Claude 会话以 `claude:<uuid>` 发布（heartbeat 额外发布当前绑定的非 DSH 会话键），两个 dsh-tui 不会同时驱动同一 Claude 会话；同时用普通 `claude --resume` 打开同一会话**无法察觉**（CLI 不读这个账本）。
 - 基准（`scripts/bench-claude-sessions.ts`，合成 config 树、单个 9 KB 脱敏转录复制）：500 会话 项目列表 冷 264 ms / 热 169 ms，全部项目 冷 291 ms / 热 181 ms → 达标（≤ 300 ms 热），不加 mtime 缓存。
+- **Phase 5a（压缩前历史）**：原生 JSONL 里压缩边界是 `system/compact_boundary{parentUuid:null, logicalParentUuid, compactMetadata.preservedMessages{anchorUuid, uuids}}`（旧版 `preservedSegment{headUuid, anchorUuid, tailUuid}`）。`loadOlder` 从 resume 链首的边界起逐段回溯：一段 = 从边界的 `logicalParentUuid` 沿 `parentUuid` 走到下一个 `parentUuid:null`（更早的边界或会话首条），把更早边界保留的条目拼到其摘要之后、去掉更新边界保留的条目（已在新视图里），经同一个 `replayClaudeTranscript` 成事件、在临时投影里成行、以负 id + `restored` 前插；单段过长按 1000 条切片（向前延伸到提问边界），游标只进不退。文件 >64 MiB 拒读。折叠行的恢复同样读此文件（行以 `anchor`=uuid/消息 id 或 `callId` 匹配）；Claude 会话因此重新开启折叠，只折有锚点的行。
 
 ### 4.12 Auth（技术 + 条款，分开说）
 

@@ -20,6 +20,7 @@ import { markChannelReadDirty } from '../adapter/channel/read-view.js'
 import type { AgentEvent, AgentEventMeta, AgentEventOf, ContentBlockView, GoalSnapshot, ImageRef } from '../agent/events.js'
 import { t } from '../i18n.js'
 import { logForDebugging } from '../utils/debug.js'
+import { laneOf } from './activity.js'
 import { buildQuestionRecord, parseQuestionRecordAnswers, parseQuestionRecordQuestions } from './question-record.js'
 import { cleanRenderText, NOTICE_CELLS } from './sanitize.js'
 import { replaySelectionAttachment } from './selection-record.js'
@@ -53,6 +54,15 @@ export interface ChannelProjectionDeps {
   notify: ChannelUi['notify']
   /** Background-job registry feed (DSH `jobs` service mirror). */
   jobs: { onOutputSeen(id: string, text: string, at?: number): void; onStarted(id: string, command: string): void }
+  /**
+   * The backend-neutral subagent / background-task projection
+   * (`./activity.ts`): every `subagent.*` / `task.*` / `tasks.snapshot` event
+   * and every child-lane event (`parentCallId` set) is handed to it in stream
+   * order, so its transcript cards land where the delegation happened. Child-
+   * lane events never reach the main transcript. Absent (a DSH composition,
+   * whose specialists own these facts) = nothing is forwarded.
+   */
+  activity?: { apply(event: AgentEvent, replaying: boolean): void }
   inputConvergence: { cancelInFlight: boolean }
   renderer?: ProjectionRenderer
   /** What a submitted message's IDE selection attached (keyed by the message
@@ -451,6 +461,10 @@ export function createChannelProjection(state: ProjectionState, deps: ChannelPro
     const reasoningText = event.blocks
       .map(block => (block.type === 'reasoning' ? block.text : ''))
       .join('')
+    // A backend's own message anchor beyond the seq (DSH anchors ARE the
+    // seq: its rows stay as they were) is how "load earlier" finds the
+    // durable message a folded row came from.
+    const anchor = event.anchor === '' || event.anchor === String(event.seq) ? undefined : event.anchor
     const settledReasoning = lastReasoningRow !== undefined && lastReasoningRow.turn === event.turn && lastReasoningRow.step === event.step
       ? lastReasoningRow.row : reasoning
     if (settledReasoning !== undefined) {
@@ -458,9 +472,11 @@ export function createChannelProjection(state: ProjectionState, deps: ChannelPro
         // A count-only thinking row (no text was ever recorded) settles as
         // its one-line summary instead of vanishing with the empty block.
         if (canonical && settledReasoning.reasoningTokens === undefined) removeRow(settledReasoning)
+        else if (anchor !== undefined && settledReasoning.anchor === undefined) settledReasoning.anchor = anchor
       } else {
         settledReasoning.text = reasoningText
         settledReasoning.seq ??= event.seq
+        if (anchor !== undefined) settledReasoning.anchor ??= anchor
         touchRow(settledReasoning)
       }
     } else if (reasoningText !== '') {
@@ -471,6 +487,7 @@ export function createChannelProjection(state: ProjectionState, deps: ChannelPro
         kind: 'reasoning',
         text: reasoningText,
         seq: event.seq,
+        ...(anchor === undefined ? {} : { anchor }),
       }
       deps.rowIds.value += 1
       const textRow = assistantRowsByStep.get(stepKey(event.turn as number, event.step as number))
@@ -503,6 +520,7 @@ export function createChannelProjection(state: ProjectionState, deps: ChannelPro
     } else if (row !== undefined) {
       if (msgKey !== undefined) assistantRowsByStep.set(msgKey, row)
       row.seq ??= event.seq
+      if (anchor !== undefined) row.anchor ??= anchor
       row.time = event.time
       if (text || canonical) row.text = text
       row.images = images.length === 0 ? undefined : images
@@ -859,6 +877,12 @@ export function createChannelProjection(state: ProjectionState, deps: ChannelPro
   }
 
   const applyEvent = (event: AgentEvent): void => {
+    // A subagent's own lane (its assistant and tool traffic) belongs to its
+    // card and panels, never to the main transcript.
+    if (laneOf(event) !== undefined) {
+      deps.activity?.apply(event, replaying)
+      return
+    }
     switch (event.type) {
       case 'goal.change':
         if (event.operation === 'round') {
@@ -949,11 +973,21 @@ export function createChannelProjection(state: ProjectionState, deps: ChannelPro
         // the transcript instead of polling the job itself.
         // oxlint-disable-next-line typescript/no-unnecessary-condition -- durable replay data may lack a time
         if (taskFeedAdmitted(event.callId)) deps.jobs.onOutputSeen(event.taskId, event.text, event.time ?? Date.now())
+        deps.activity?.apply(event, replaying)
         return
       case 'task.start':
         // A background-start ack pairs the job with its tool call: the FULL
         // command (the registry label is the friendly description).
         if (event.command !== undefined && taskFeedAdmitted(event.callId)) deps.jobs.onStarted(event.taskId, event.command)
+        deps.activity?.apply(event, replaying)
+        return
+      case 'subagent.start':
+      case 'subagent.progress':
+      case 'subagent.end':
+      case 'task.update':
+      case 'task.end':
+      case 'tasks.snapshot':
+        deps.activity?.apply(event, replaying)
         return
       case 'turn.start':
         deps.inputConvergence.cancelInFlight = false
@@ -1101,10 +1135,9 @@ export function createChannelProjection(state: ProjectionState, deps: ChannelPro
         }
         return
       }
-      // Owned outside the transcript reducer in this phase: session status
-      // and pending inputs by the channel binding, subagents/tasks by their
-      // specialists, permissions/questions by their stores; the remaining
-      // vocabulary has no channel state yet (design §8.3+).
+      // Owned outside the transcript reducer: session status and pending
+      // inputs by the channel binding, permissions/questions by their
+      // stores; the remaining vocabulary has no channel state yet.
       case 'session.reset':
       case 'session.status':
       case 'pending.changed':
@@ -1113,12 +1146,6 @@ export function createChannelProjection(state: ProjectionState, deps: ChannelPro
       case 'permission.settled':
       case 'question.request':
       case 'question.settled':
-      case 'subagent.start':
-      case 'subagent.progress':
-      case 'subagent.end':
-      case 'task.update':
-      case 'task.end':
-      case 'tasks.snapshot':
       case 'context.usage':
       case 'effort.changed':
       case 'mode.changed':

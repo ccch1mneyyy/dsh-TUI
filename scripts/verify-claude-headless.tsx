@@ -18,7 +18,13 @@
  * rewind's channel action on that turn's prompt hands the text back and
  * lands on the backend's fork (whose transcript ends before it).
  *
- * Run: DSH_TUI_CLAUDE_LIVE=1 node --import tsx/esm scripts/verify-claude-headless.tsx
+ * Phase 5a (four turns, `--only-5a` runs just this part): a subagent turn
+ * (the Agent call's card runs, settles with its Read, `/agents` lists it), a
+ * background Bash (its job card and status-line chip, the output tail read
+ * from the file the CLI reported), a user interrupt of a third turn that must
+ * not stop the job, and the CLI's own notification turn when it finishes.
+ *
+ * Run: DSH_TUI_CLAUDE_LIVE=1 node --import tsx/esm scripts/verify-claude-headless.tsx [--only-5a]
  */
 process.env.FORCE_COLOR = '3'
 
@@ -88,12 +94,16 @@ const host = { cwd: root, debug: () => undefined, warn: () => undefined, stderr:
  * that would lose the login, and credentials are never copied).
  */
 const opened: AgentSession[] = []
-const createdIds = new Set<string>()
+/** Created session id → its working directory (where the store keeps it). */
+const createdIds = new Map<string, string>()
 const track = (session: AgentSession): AgentSession => {
   opened.push(session)
-  createdIds.add(session.ref.sessionId)
+  createdIds.set(session.ref.sessionId, session.cwd)
   return session
 }
+/** Directories this run made (removed last, after the sessions are gone). */
+const scratchDirs: string[] = [root]
+const only5a = process.argv.includes('--only-5a')
 const session = track(await claudeBackend.open({ kind: 'create', cwd: root }, host))
 const ctx = {
   on: () => () => undefined,
@@ -160,7 +170,11 @@ const clear = async (): Promise<void> => {
 }
 
 try {
-  try {
+  if (only5a) {
+    instance.unmount()
+    channel.releaseContributions()
+    await session.dispose()
+  } else try {
     // 固定窗:pacing the key handlers attach after the first frame.
     await sleep(400)
     check('DSH-only commands are not offered', !channel.commandList.some(command => ['preset', 'tree', 'balance', 'workspace', 'migrate'].includes(command.name)))
@@ -195,6 +209,8 @@ try {
   }
 
   // ── Phase 4b: resume into a second channel, browse, a live turn, rewind ──
+  if (!only5a) await phase4b()
+  async function phase4b(): Promise<void> {
   const sessionId = session.ref.sessionId
   const resumed = track(await claudeBackend.open({ kind: 'resume', sessionId }, host))
   const initialHistory = await resumed.history()
@@ -248,18 +264,73 @@ try {
     resumedInstance.unmount()
     second.releaseContributions()
     // The session the rewind adopted is one this run created too.
-    createdIds.add(second.sessionRef.sessionId)
-    ide.close()
-    delete process.env.DSH_TUI_IDE_PORT
-    delete process.env.DSH_TUI_IDE_TOKEN
-    term.dispose()
+    createdIds.set(second.sessionRef.sessionId, root)
+  }
+  }
+
+  // ── Phase 5a: a subagent, a background job, an interrupt that spares it ──
+  const root5 = mkdtempSync(join(tmpdir(), 'dsh-tui-claude-headless-5a-'))
+  scratchDirs.push(root5)
+  writeFileSync(join(root5, 'README.md'), '# subagent fixture line\n')
+  const s5 = track(await claudeBackend.open({ kind: 'create', cwd: root5 }, { ...host, cwd: root5 }))
+  const c5 = createChannel(ctx, s5, { model: claudeBackend.descriptor.label, provider: claudeBackend.id, cwd: root5, activity: false, backendLabel: claudeBackend.descriptor.label })
+  term.reset()
+  const i5 = await ui.render(
+    React.createElement(Chat, { channel: c5 as never, questionStore: new QuestionStore(), approvalStore: new ApprovalStore(), onExit: () => undefined, fullscreen: false, trajectorySeen: true }),
+    { stdout: stdout as never, stdin: stdin as never, stderr: stdout as never, exitOnCtrlC: false, patchConsole: false },
+  )
+  for (const value of instances.values()) instances.set(process.stdout, value)
+  // Approve whatever the CLI asks (the background Bash) once.
+  const approver = setInterval(() => {
+    const permissions = s5.capabilities.permissions
+    for (const request of permissions?.pending() ?? []) permissions?.respond(request.requestId, { kind: 'allow-once' })
+  }, 200)
+  try {
+    // 固定窗:pacing the key handlers attach after the first frame.
+    await sleep(400)
+    check('5a: /agents and /jobs are offered', c5.commandList.some(command => command.name === 'agents') && c5.commandList.some(command => command.name === 'jobs'))
+    await type('Use the Agent tool with subagent_type "general-purpose" and the prompt "Read README.md with the Read tool and report its first line." Wait for it (do not run it in the background), then reply with its report in one sentence.')
+    stdin.write('\r')
+    check('5a: the Agent call becomes a running subagent card', await settled(() => c5.rows.some(row => row.kind === 'subagent' && row.subagent?.status === 'running'), { timeoutMs: 120_000 }), c5.rows.map(row => row.kind).join(' '))
+    check('5a: the subagent settles with its own Read, the reply follows', await settled(() => c5.subagents[0]?.status === 'completed' && !c5.working && c5.rows.some(row => row.kind === 'assistant' && row.text.includes('subagent fixture line')), { timeoutMs: 180_000 }), JSON.stringify(c5.subagents[0]))
+    const sub = c5.subagents[0]!
+    check('5a: its tools and text stayed on its card (not the main transcript)', sub.toolCalls.some(tool => tool.name === 'Read' && tool.status === 'completed') && !c5.rows.some(row => row.kind === 'tool' && row.tool?.name === 'Read') && /^[0-9a-f]{8,}$/u.test(sub.agentId), JSON.stringify(sub))
+    check('5a: the settled card renders', await settled(() => screen().includes(t('subagent-card-prefix')) && screen().includes(t('subagent-status-completed'))), screen())
+    await type('/agents')
+    stdin.write('\r')
+    check('5a: /agents lists it', await settled(() => screen().includes(sub.agentId.slice(0, 8))), screen())
+
+    await type('Use the Bash tool with run_in_background set to true to run `sleep 25; echo bg-live-done`. Then reply with exactly: started')
+    stdin.write('\r')
+    check('5a: a background Bash is a running job with the file the CLI reported', await settled(() => c5.backgroundJobs[0]?.status === 'running' && (c5.backgroundJobs[0]?.outputFile ?? '').endsWith(`${c5.backgroundJobs[0]?.id}.output`), { timeoutMs: 120_000 }), JSON.stringify(c5.backgroundJobs))
+    // (The chip itself is rendered by verify-claude-tasks: here the status
+    // line also carries the IDE selection and truncates.)
+    check('5a: the running job card renders, the chip counts it, the turn is over', await settled(() => screen().includes(`${t('jobs-card-prefix')}${c5.backgroundJobs[0]!.id}`) && !c5.working, { timeoutMs: 120_000 })
+      && c5.backgroundJobs.filter(job => job.status === 'running').length === 1, screen())
+    // A user interrupt of another turn while the job runs.
+    await type('Count from 1 to 300, one number per line, nothing else.')
+    stdin.write('\r')
+    check('5a: a third turn starts streaming', await settled(() => c5.working && c5.rows.some(row => row.kind === 'assistant' && /\b3\b/u.test(row.text)), { timeoutMs: 120_000 }))
+    c5.cancel()
+    check('5a: the interrupt closes the turn', await settled(() => !c5.working && c5.rows.some(row => row.kind === 'interrupt'), { timeoutMs: 60_000 }), screen())
+    check('5a: … and the job keeps running (an interrupt never stops a task)', c5.backgroundJobs[0]?.status === 'running', JSON.stringify(c5.backgroundJobs[0]))
+    check('5a: the job completes on its own, its tail read from its output file', await settled(() => c5.backgroundJobs[0]?.status === 'completed' && c5.backgroundJobs[0].outputLines.some(line => line.text.includes('bg-live-done')), { timeoutMs: 120_000 }), JSON.stringify(c5.backgroundJobs[0]))
+    check('5a: the CLI reports it in its notification turn', await settled(() => !c5.working && c5.rows.some(row => row.kind === 'notice' && row.text === t('claude-notification-turn')), { timeoutMs: 120_000 }), c5.rows.map(row => `${row.kind}:${row.text.slice(0, 40)}`).join(' | '))
+  } finally {
+    clearInterval(approver)
+    i5.unmount()
+    c5.releaseContributions()
   }
 } finally {
   // Success or failure: every session opened is closed, and every one this
   // run created is deleted from the store.
+  ide.close()
+  delete process.env.DSH_TUI_IDE_PORT
+  delete process.env.DSH_TUI_IDE_TOKEN
+  term.dispose()
   await Promise.all(opened.map(item => item.dispose().catch(() => undefined)))
-  for (const id of createdIds) await claudeBackend.catalog!.delete!(id, root).catch(() => undefined)
-  rmSync(root, { recursive: true, force: true })
+  for (const [id, cwd] of createdIds) await claudeBackend.catalog!.delete!(id, cwd).catch(() => undefined)
+  for (const dir of scratchDirs) rmSync(dir, { recursive: true, force: true })
 }
 
 console.log(`\nverify-claude-headless OK (${passed} checks)`)

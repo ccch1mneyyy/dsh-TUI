@@ -35,11 +35,15 @@
  * count row the live `thinking_tokens` estimate produces; an empty block
  * without a count is not shown (as live: nothing to show).
  *
- * Subagents: a subagent's own messages stay off the main transcript (live
- * drops `parent_tool_use_id` traffic too); its `subagent.start` follows the
- * parent `Agent` tool call and its `subagent.end` (terminal state inferred
- * from the tail of its transcript) follows the call's result — immediately,
- * for a background subagent whose result only acknowledges the launch.
+ * Subagents: the parent `Agent` call pre-creates its subagent (as live);
+ * when the session kept the subagent's transcript, a `subagent.start` with
+ * the subagent's own id completes it, followed by its messages as child-lane
+ * events (`parentCallId` = the call) — its card and panels, never the main
+ * transcript. Its `subagent.end` comes from what the main chain recorded:
+ * the call's result for a foreground subagent (the hand-back report, an
+ * error, an interruption), the `<task-notification>` naming it for a
+ * background one (whose result only acknowledges the launch); with neither,
+ * its state is `unknown` (the CLI that ran it is gone).
  *
  * Not restored from the transcript: the context window (the read API has no
  * field for it; the first live `result` reports it) and the session cost (the
@@ -47,7 +51,7 @@
  *
  * Pure: no I/O, no clock (event times come from the message timestamps).
  */
-import type { AgentEvent } from '../../agent/events.js'
+import type { AgentEvent, SubagentUsage } from '../../agent/events.js'
 import { createClaudeTranslator } from './translate.js'
 
 type Rec = Readonly<Record<string, unknown>>
@@ -66,6 +70,8 @@ const COMMAND_TAG = /^<command-(name|message|args)>/u
 const BASH_OUTPUT_TAG = /^<bash-(stdout|stderr)>/u
 const BASH_INPUT = /^<bash-input>([\s\S]*?)<\/bash-input>/u
 const TASK_NOTIFICATION = /^<task-notification>/u
+/** A background subagent's launch acknowledgement (not its end). */
+const ASYNC_LAUNCH = /^Async agent launched/u
 
 /** One subagent transcript, keyed by the `Agent` tool call that launched it. */
 export interface ClaudeSubagentTranscript {
@@ -87,6 +93,11 @@ export interface ClaudeReplay {
   /** The counters (and model) the live translator of the resumed session
    *  continues from. */
   readonly start: { readonly turn: number; readonly seq: number; readonly model?: string }
+  /**
+   * The chain began at a compaction (its boundary's uuid, or the summary's
+   * when no boundary entry led it): older history exists on disk.
+   */
+  readonly compactedFrom?: string
 }
 
 /** First text of a user `message.content` (string or block array). */
@@ -144,23 +155,49 @@ function classifyUser(message: Rec): UserKind {
   return { kind: 'prompt', text: raw, queued: message.isQueuedCommand === true }
 }
 
-/** The terminal state a subagent transcript's tail shows. */
-function subagentOutcome(messages: readonly unknown[]): { status: 'completed' | 'failed' | 'unknown'; summary?: string } {
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const message = rec(messages[index])
-    if (message === undefined) continue
-    const body = rec(message.message)
-    if (message.type === 'assistant') {
-      const texts = arr(body?.content).flatMap(block => rec(block)?.type === 'text' ? [str(rec(block)?.text) ?? ''] : [])
-      const summary = texts.join('').trim()
-      if (summary !== '') return { status: 'completed', summary }
-      continue
-    }
-    if (message.type === 'user' && arr(body?.content).some(block => rec(block)?.type === 'tool_result' && rec(block)?.is_error === true)) {
-      return { status: 'failed' }
-    }
+type SubagentOutcome = { readonly status: 'completed' | 'failed' | 'cancelled' | 'unknown'; readonly summary?: string; readonly usage?: SubagentUsage }
+
+/** The report inside a foreground subagent's hand-back result (the frame
+ *  stripped, the indentation removed). */
+function handBackReport(text: string): string {
+  const marker = text.indexOf('The report follows:')
+  let body = marker === -1 ? text : text.slice(marker + 'The report follows:'.length)
+  body = body.replace(/\n?agentId: [\s\S]*$/u, '').replace(/<usage>[\s\S]*?<\/usage>/gu, '')
+  return body.split('\n').map(line => line.replace(/^ {2}/u, '')).join('\n').trim()
+}
+
+/** `<usage>subagent_tokens: N …</usage>` of a hand-back result. */
+function handBackUsage(text: string): SubagentUsage | undefined {
+  const usage = /<usage>([\s\S]*?)<\/usage>/u.exec(text)?.[1]
+  if (usage === undefined) return undefined
+  const field = (name: string): number | undefined => {
+    const value = Number(new RegExp(`${name}:\\s*(\\d+)`, 'u').exec(usage)?.[1])
+    return Number.isFinite(value) ? value : undefined
   }
-  return { status: 'unknown' }
+  const total = field('subagent_tokens') ?? field('total_tokens')
+  const toolUses = field('tool_uses')
+  const durationMs = field('duration_ms')
+  return total === undefined && toolUses === undefined ? undefined : { ...(total === undefined ? {} : { total }), ...(toolUses === undefined ? {} : { toolUses }), ...(durationMs === undefined ? {} : { durationMs }) }
+}
+
+/** What a foreground subagent's recorded result says about its end. */
+function resultOutcome(block: Rec): SubagentOutcome {
+  const text = userText(block.content) ?? (typeof block.content === 'string' ? block.content : '')
+  if (block.is_error === true) return { status: 'failed', ...(text === '' ? {} : { summary: text }) }
+  if (text.startsWith(INTERRUPT_ECHO)) return { status: 'cancelled' }
+  const usage = handBackUsage(text)
+  const summary = handBackReport(text)
+  return { status: 'completed', ...(summary === '' ? {} : { summary }), ...(usage === undefined ? {} : { usage }) }
+}
+
+/** A `<task-notification>` prompt's fields. */
+function notificationOf(text: string): { readonly taskId?: string; readonly callId?: string; readonly status?: string; readonly summary?: string } {
+  const tag = (name: string): string | undefined => new RegExp(`<${name}>([\\s\\S]*?)</${name}>`, 'u').exec(text)?.[1]?.trim()
+  const taskId = tag('task-id')
+  const callId = tag('tool-use-id')
+  const status = tag('status')
+  const summary = tag('summary') ?? tag('result')
+  return { ...(taskId === undefined ? {} : { taskId }), ...(callId === undefined ? {} : { callId }), ...(status === undefined ? {} : { status }), ...(summary === undefined ? {} : { summary }) }
 }
 
 /** Replay one transcript chain. */
@@ -174,8 +211,8 @@ export function replayClaudeTranscript(messages: readonly unknown[], options: Cl
   let model: string | undefined
   /** API message ids whose thinking count was already replayed. */
   const counted = new Set<string>()
-  /** Subagents launched by a call whose result has not been replayed yet. */
-  const launched = new Map<string, { readonly agentId: string; readonly background: boolean; readonly messages: readonly unknown[] }>()
+  /** Subagents launched by a call whose end has not been replayed yet. */
+  const launched = new Map<string, { readonly agentId: string; background: boolean }>()
 
   const closeTurn = (): void => {
     if (!translator.turnOpen) { interrupted = false; return }
@@ -183,12 +220,18 @@ export function replayClaudeTranscript(messages: readonly unknown[], options: Cl
     interrupted = false
   }
 
-  const endSubagent = (callId: string): void => {
+  const endSubagent = (callId: string, outcome: SubagentOutcome): void => {
     const agent = launched.get(callId)
     if (agent === undefined) return
     launched.delete(callId)
-    const outcome = subagentOutcome(agent.messages)
-    out.push({ type: 'subagent.end', agentId: agent.agentId, status: outcome.status, ...(outcome.summary === undefined ? {} : { summary: outcome.summary }), time: clock })
+    out.push({
+      type: 'subagent.end',
+      agentId: agent.agentId,
+      status: outcome.status,
+      ...(outcome.summary === undefined ? {} : { summary: outcome.summary }),
+      ...(outcome.usage === undefined ? {} : { usage: outcome.usage }),
+      time: clock,
+    })
   }
 
   const assistant = (message: Rec): void => {
@@ -210,10 +253,12 @@ export function replayClaudeTranscript(messages: readonly unknown[], options: Cl
       const callId = str(block.id)
       const name = str(block.name)
       if (callId === undefined || name === undefined || !AGENT_TOOLS.has(name)) continue
-      const transcript = options.subagents?.get(callId)
-      if (transcript === undefined) continue
+      // The translator pre-created the subagent from the call (keyed by it).
       const input = rec(block.input)
       const background = input?.run_in_background === true
+      const transcript = options.subagents?.get(callId)
+      launched.set(callId, { agentId: transcript?.agentId ?? callId, background })
+      if (transcript === undefined) continue
       out.push({
         type: 'subagent.start',
         agentId: transcript.agentId,
@@ -223,10 +268,14 @@ export function replayClaudeTranscript(messages: readonly unknown[], options: Cl
         background,
         time: clock,
       })
-      launched.set(callId, { agentId: transcript.agentId, background, messages: transcript.messages })
-      // A background subagent's result only acknowledges the launch; its
-      // terminal state is what its transcript shows.
-      if (background) endSubagent(callId)
+      // Its own messages, as the live lane delivered them.
+      for (const raw of transcript.messages) {
+        const message = rec(raw)
+        if (message === undefined || (message.type !== 'assistant' && message.type !== 'user')) continue
+        const time = Date.parse(str(message.timestamp) ?? '')
+        if (Number.isFinite(time)) clock = time
+        out.push(...translator.translate({ ...message, parent_tool_use_id: callId }))
+      }
     }
   }
 
@@ -235,10 +284,24 @@ export function replayClaudeTranscript(messages: readonly unknown[], options: Cl
     const kind = classifyUser(message)
     switch (kind.kind) {
       case 'results': {
-        out.push(...translator.translate({ type: 'user', uuid, message: message.message, parent_tool_use_id: null }))
-        for (const block of arr(rec(message.message)?.content)) {
-          const callId = str(rec(block)?.tool_use_id)
-          if (callId !== undefined) endSubagent(callId)
+        // The raw transcript file keeps the structured result the read API
+        // drops (richer cards when "load earlier" replays it).
+        const structured = message.tool_use_result ?? message.toolUseResult
+        out.push(...translator.translate({ type: 'user', uuid, message: message.message, parent_tool_use_id: null, ...(structured === undefined ? {} : { tool_use_result: structured }) }))
+        for (const raw of arr(rec(message.message)?.content)) {
+          const block = rec(raw)
+          const callId = str(block?.tool_use_id)
+          const agent = callId === undefined ? undefined : launched.get(callId)
+          if (block === undefined || callId === undefined || agent === undefined) continue
+          const text = userText(block.content) ?? (typeof block.content === 'string' ? block.content : '')
+          // A background subagent's result only acknowledges the launch; its
+          // end is the notification naming it.
+          const launch = rec(structured)
+          if (agent.background || ASYNC_LAUNCH.test(text) || launch?.status === 'async_launched' || launch?.isAsync === true) {
+            agent.background = true
+            continue
+          }
+          endSubagent(callId, resultOutcome(block))
         }
         return
       }
@@ -257,10 +320,20 @@ export function replayClaudeTranscript(messages: readonly unknown[], options: Cl
       case 'interrupt':
         interrupted = true
         return
-      case 'notification':
+      case 'notification': {
+        // The notification a background subagent's end was reported with.
+        const notice = notificationOf(userText(rec(message.message)?.content) ?? '')
+        const callId = notice.callId !== undefined && launched.has(notice.callId)
+          ? notice.callId
+          : [...launched].find(([, agent]) => agent.agentId === notice.taskId)?.[0]
+        if (callId !== undefined) {
+          const status = notice.status === 'completed' ? 'completed' : notice.status === 'failed' ? 'failed' : notice.status === 'stopped' || notice.status === 'killed' ? 'cancelled' : 'unknown'
+          endSubagent(callId, { status, ...(notice.summary === undefined ? {} : { summary: notice.summary }) })
+        }
         closeTurn()
         out.push(...translator.openNotificationTurn())
         return
+      }
       case 'hidden':
         debug(`claude replay: ${kind.why} user message not projected`)
         return
@@ -271,13 +344,20 @@ export function replayClaudeTranscript(messages: readonly unknown[], options: Cl
     }
   }
 
+  // A chain that begins at a compaction (the boundary entry, then the
+  // summary) has older history on disk.
+  const first = rec(messages[0])
+  const second = rec(messages[1])
+  const compactedFrom = first?.isCompactSummary === true
+    ? str(first.uuid)
+    : first?.type === 'system' && second?.isCompactSummary === true ? str(first.uuid) : undefined
   for (const raw of messages) {
     const message = rec(raw)
     if (message === undefined) continue
     const time = Date.parse(str(message.timestamp) ?? '')
     if (Number.isFinite(time)) clock = time
     // Subagent traffic never interleaves with the main transcript.
-    if (message.parent_tool_use_id !== undefined && message.parent_tool_use_id !== null) continue
+    if ((message.parent_tool_use_id !== undefined && message.parent_tool_use_id !== null) || message.isSidechain === true) continue
     switch (message.type) {
       case 'assistant':
         assistant(message)
@@ -293,10 +373,15 @@ export function replayClaudeTranscript(messages: readonly unknown[], options: Cl
     }
   }
   closeTurn()
-  for (const callId of [...launched.keys()]) endSubagent(callId)
+  // No recorded end: the CLI that ran it is gone, its state is unknown.
+  for (const callId of [...launched.keys()]) endSubagent(callId, { status: 'unknown' })
   if (options.title !== undefined && options.title !== '') out.push({ type: 'session.title', title: options.title, source: 'auto' })
   if (model !== undefined) out.push({ type: 'model.changed', model, source: 'resume' })
-  return { events: out, start: { turn: translator.turnNumber, seq: translator.seqNumber, ...(model === undefined ? {} : { model }) } }
+  return {
+    events: out,
+    start: { turn: translator.turnNumber, seq: translator.seqNumber, ...(model === undefined ? {} : { model }) },
+    ...(compactedFrom === undefined ? {} : { compactedFrom }),
+  }
 }
 
 /**

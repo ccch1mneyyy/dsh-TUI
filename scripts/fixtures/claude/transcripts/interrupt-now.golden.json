@@ -4,6 +4,7 @@
     "seq": 4,
     "model": "claude-haiku-4-5-20251001"
   },
+  "compactedFrom": null,
   "events": [
     "turn.start:user",
     "user.message",
@@ -30,7 +31,8 @@
     },
     {
       "kind": "assistant",
-      "text": "1\n2\n3"
+      "text": "1\n2\n3",
+      "anchor": "msg_fixture_001"
     },
     {
       "kind": "user",
@@ -40,11 +42,13 @@
     {
       "kind": "reasoning",
       "text": "",
+      "anchor": "msg_fixture_002",
       "reasoningTokens": 35
     },
     {
       "kind": "assistant",
-      "text": "NOW-OK"
+      "text": "NOW-OK",
+      "anchor": "msg_fixture_002"
     }
   ],
   "state": {

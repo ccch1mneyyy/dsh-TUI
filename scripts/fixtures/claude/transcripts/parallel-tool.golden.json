@@ -4,6 +4,7 @@
     "seq": 7,
     "model": "claude-haiku-4-5-20251001"
   },
+  "compactedFrom": null,
   "events": [
     "turn.start:user",
     "user.message",
@@ -33,6 +34,7 @@
     {
       "kind": "reasoning",
       "text": "",
+      "anchor": "msg_fixture_001",
       "reasoningTokens": 264
     },
     {
@@ -58,11 +60,13 @@
     {
       "kind": "reasoning",
       "text": "",
+      "anchor": "msg_fixture_002",
       "reasoningTokens": 66
     },
     {
       "kind": "assistant",
-      "text": "README.md starts with \"# Fixture project\" and src/app.js starts with \"export function greet(name) {\"."
+      "text": "README.md starts with \"# Fixture project\" and src/app.js starts with \"export function greet(name) {\".",
+      "anchor": "msg_fixture_002"
     }
   ],
   "state": {

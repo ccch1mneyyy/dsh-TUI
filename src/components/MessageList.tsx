@@ -347,6 +347,7 @@ export function MessageList({
   showAll,
   onToggleAll,
   onLoadOlder,
+  olderHistory,
   thinkingVisible = true,
   historyPaintEnabled = true,
   registerRowRef,
@@ -359,6 +360,7 @@ export function MessageList({
   failureHint,
   onOpenSubagent,
   onOpenJobs,
+  onWatchJobOutput,
   onOpenFile,
   sessionCwd,
   onPreviewImage,
@@ -396,8 +398,14 @@ export function MessageList({
   showAll: boolean
   onToggleAll: () => void
   /** Restore folded-away older rows from the session log; shown only when
-   *  rows were folded. */
+   *  rows were folded (or `olderHistory` says more exists before them). */
   onLoadOlder?: () => void
+  /** The session has history older than the first row (a compaction cut it
+   *  off before a resume): the "load earlier" divider shows without any
+   *  folded row. */
+  olderHistory?: boolean
+  /** A job card on screen keeps its output tail fresh (returns the unwatch). */
+  onWatchJobOutput?: (id: string) => () => void
   thinkingVisible?: boolean
   /**
    * Whether rows outside the virtualization window must still be painted
@@ -1373,7 +1381,7 @@ export function MessageList({
 
   return (
     <>
-      {rows.some(row => row.folded) && (
+      {(olderHistory === true || rows.some(row => row.folded)) && (
         <ClickableDivider title={t('load-earlier')} onClick={onLoadOlder} />
       )}
       {!showAll && hiddenCount > 0 && (
@@ -1461,6 +1469,7 @@ export function MessageList({
               streamViewToggled={streamViewToggledRows.has(row.id)}
               onOpenSubagent={onOpenSubagent}
               onOpenJobs={onOpenJobs}
+              onWatchJobOutput={onWatchJobOutput}
               onOpenFile={onOpenFile}
               sessionCwd={sessionCwd}
               onPreviewImage={onPreviewImage}
@@ -1554,6 +1563,7 @@ type MemoRowProps = {
   streamViewToggled: boolean
   onOpenSubagent: ((agentId: string) => void) | undefined
   onOpenJobs: ((focusId?: string) => void) | undefined
+  onWatchJobOutput: ((id: string) => () => void) | undefined
   onOpenFile: ((path: string) => void) | undefined
   onPreviewImage: ((image: TranscriptImage) => void) | undefined
   suppressImageGraphics: boolean
@@ -1625,6 +1635,7 @@ function TranscriptRow({
   streamViewToggled,
   onOpenSubagent,
   onOpenJobs,
+  onWatchJobOutput,
   onOpenFile,
   onPreviewImage,
   suppressImageGraphics,
@@ -1921,6 +1932,7 @@ function TranscriptRow({
               rail={jobGroup === undefined ? undefined : jobGroup.last ? 'tail' : 'mid'}
               // Clicking a card opens the panel focused on THAT job, not the roster head.
               onClick={onOpenJobs === undefined ? undefined : () => onOpenJobs(job.id)}
+              onWatchOutput={onWatchJobOutput}
             />
           )}
         </Box>
