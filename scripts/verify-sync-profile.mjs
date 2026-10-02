@@ -36,19 +36,20 @@ const check = (name, ok, detail) => {
 /** 子进程上限：`sync-profile.mjs` 一旦挂起，门禁必须**有界失败**而不是静默吞掉整条构建。
  *  可用 `DSH_TUI_SYNC_PROFILE_TIMEOUT_MS` 覆盖（本地排查/验证超时路径用，例如设成 `1`）。
  *
- *  **只接受正数**：`spawnSync` 把 `timeout: 0` 当成"没有上限"，而空串经 `Number('')` 也是 0——
- *  这类值必须落回默认值，否则本门禁要堵的洞会被一个环境变量重新打开。 */
+ *  **只接受正整数**：`spawnSync` 把 `timeout: 0` 当成"没有上限"（空串经 `Number('')` 也是 0），
+ *  而小数会直接抛 `ERR_OUT_OF_RANGE`（`timeout` 必须是无符号整数）——这两类值都必须落回默认值，
+ *  否则本门禁要堵的洞会被一个环境变量重新打开，或者门禁自己先崩掉。 */
 const DEFAULT_SYNC_TIMEOUT_MS = 60_000
 const RAW_SYNC_TIMEOUT_MS = process.env.DSH_TUI_SYNC_PROFILE_TIMEOUT_MS
 const PARSED_SYNC_TIMEOUT_MS = Number(RAW_SYNC_TIMEOUT_MS)
 const SYNC_TIMEOUT_MS =
-  RAW_SYNC_TIMEOUT_MS !== undefined && Number.isFinite(PARSED_SYNC_TIMEOUT_MS) && PARSED_SYNC_TIMEOUT_MS > 0
+  RAW_SYNC_TIMEOUT_MS !== undefined && Number.isInteger(PARSED_SYNC_TIMEOUT_MS) && PARSED_SYNC_TIMEOUT_MS > 0
     ? PARSED_SYNC_TIMEOUT_MS
     : DEFAULT_SYNC_TIMEOUT_MS
 if (RAW_SYNC_TIMEOUT_MS !== undefined && SYNC_TIMEOUT_MS !== PARSED_SYNC_TIMEOUT_MS) {
   console.error(
     `verify-sync-profile: ignoring DSH_TUI_SYNC_PROFILE_TIMEOUT_MS=${JSON.stringify(RAW_SYNC_TIMEOUT_MS)}` +
-      ` (needs a positive number); using ${DEFAULT_SYNC_TIMEOUT_MS}ms instead`,
+      ` (needs a positive integer); using ${DEFAULT_SYNC_TIMEOUT_MS}ms instead`,
   )
 }
 
