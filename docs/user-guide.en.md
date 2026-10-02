@@ -678,7 +678,7 @@ When dsh exits unexpectedly, safe mode gives a **read-only** environment diagnos
 
 | Item | Command | Notes |
 |---|---|---|
-| Model | `/model` | selector; **switch within the same session** (ID and history kept; subsequent requests use the new route); persisted to `~/.dsh-tui/model.json` and reused on restart and `/new` — it OUTRANKS a `provider`/`model` pair written in cordis.yml/profile (that pair is only the first-run deployment default). Never chosen → the configured pair, else the harness default (currently `deepseek-flash`) |
+| Model | `/model` | selector; **switch within the same session** (ID and history kept; subsequent requests use the new route); persisted to `~/.dsh-tui/model.json` and reused on restart and `/new` (a resumed session keeps its last recorded request route) — it OUTRANKS a `provider`/`model` pair written in cordis.yml/profile (that pair is only the first-run deployment default). Never chosen → the configured pair, else the harness default (currently `deepseek-flash`) |
 | Reasoning effort | `/effort` | slider (`←/→` live) or `/effort <id>`; `/effort status` for current; new-session default in /settings → default reasoning effort |
 | Agent preset | `/preset` | `standard` / `ptc` (old 0.1.1 name `code`) / `minimal` / `cordis` / **Liangshen mode `liangshen`**; **can't switch an already-started session** |
 | Theme | `/theme` | `auto` (OSC 11 follows terminal background) / `light` / `dark` / `dark-ansi`; `/theme <名>` direct; `/theme status` for the result |
@@ -728,7 +728,7 @@ When dsh exits unexpectedly, safe mode gives a **read-only** environment diagnos
 12. Session manager (`/resume`, `/home`, `/agentview`, `/bg`, or `⌸` at the input line start):
     type to filter, `★` pin, `Ctrl+X` stop a background session; switching just parks it.
 13. Mid-turn, `/compact`, `/model`, `/restart` are rejected — `Ctrl+C` first or wait for the turn to end.
-14. `/model` switches subsequent requests in the same session (ID and history kept), persisted and reused on restart and `/new`.
+14. `/model` switches subsequent requests in the same session (ID and history kept); the choice is saved as the default for new sessions, while a resumed session keeps its last recorded request route.
 
 **Ask the manual**
 

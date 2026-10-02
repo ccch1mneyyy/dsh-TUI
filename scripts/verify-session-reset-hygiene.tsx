@@ -5,7 +5,7 @@
  *   1. 会话切换（/new）重置子代理投影——快照清空、行 map 清空，重复 agentId 重建卡片而非孤儿更新；
  *   2. 排队的任务描述不跨会话泄漏到新会话第一张卡；
  *   3. /clear 只清行 map——同会话在途子代理的下一个事件重建卡片，仪表盘继续跟踪；
- *   4. staged image token 是会话作用域——switchModel 的同步订阅窗口也不能把旧图送入新 agent；
+ *   4. switchModel 在同一会话内换路由——不建新 agent，staged image 代际不推进；
  *   5. resumeTo 的竞争切换守卫——await 期间被 /new 抢先提交时，恢复放弃且不动新会话；
  *   6. /new 的 deferred attachment 阶段被 owner teardown 抢先——立即回收 prepared handle，
  *      且 /new 不得完成为成功切换；
@@ -158,62 +158,26 @@ const subagentRows = (channel: { rows: Array<{ kind: string }> }) => channel.row
   check('3d. 在途子代理下一个事件重建卡片', subagentRows(channel).length === 1)
 }
 
-// ── 场景 4：staged image 不跨 switchModel 泄漏 ──────────────────────────
+// ── 场景 4：switchModel 保持会话，不重置 staged image 作用域 ─────────────
 {
   const ctx = new Context()
   const provide = (ctx as unknown as { provide(name: string, value: unknown): void }).provide.bind(ctx)
   const initial = makeAgent('agent-d', 'sess-d')
-  const switched = makeAgent('agent-d2', 'sess-d2')
-  const sent: unknown[][] = []
-  initial.followup = message => sent.push((message as { content: unknown[] }).content)
-  switched.followup = message => sent.push((message as { content: unknown[] }).content)
-  provide('agents', { create: () => Promise.resolve(makeHandle(switched)) })
-  provide('sessions', { fork: () => ({ events: [] }) })
-  provide('attachments', {
-    imageLimits: {
-      maxImageBytes: 1_000_000,
-      maxImagesPerMessage: 4,
-      maxMessageImageBytes: 4_000_000,
-      mediaTypes: ['image/png'],
-      maxImageDimension: 8192,
-      maxImagePixels: 64_000_000,
-    },
-    saveImage: () => Promise.resolve({ ref: 'img-1', mediaType: 'image/png', bytes: 8 }),
-  })
+  let created = 0
+  provide('agents', { create: () => { created += 1; return Promise.resolve(makeHandle(makeAgent('agent-d2', 'sess-d2'))) } })
   const channel = createChannel(ctx as never, initial as never, {
     model: 'm0', cwd: '/tmp/demo', provider: 'p0', activity: false,
   })
-
-  const staged = await channel.stageComposerImage(
-    { data: TINY_PNG, mediaType: 'image/png' },
-    channel.stagedImageGeneration(),
-  )
-  const token = '[Image #1]'
-  const refs = [{ token, stageId: staged.stageId }]
-  check('4a. stageComposerImage 签发 opaque capability', typeof staged.stageId === 'string' && staged.stageId !== '', staged.stageId)
-  channel.submit(`see ${token}`, refs)
-  check('4b. 切换前发送附带图片块', await settled(() => sent.length === 1
-    && (sent[0] as Array<{ type: string }>).filter(block => block.type === 'image').length === 1))
   const generationBeforeSwitch = channel.stagedImageGeneration()
-  let subscriberGeneration = generationBeforeSwitch
-  let subscriberSubmitted = false
-  const unsubscribe = channel.subscribe(() => {
-    if (channel.agentId !== switched.id || subscriberSubmitted) return
-    subscriberSubmitted = true
-    subscriberGeneration = channel.stagedImageGeneration()
-    // Public subscribers run synchronously inside state.emit(). If the old
-    // capability map is cleared after refreshCommandList(), this exact send
-    // leaks the old image into the replacement agent.
-    channel.submit(`subscriber ${token}`, refs)
-  })
-  check('4c. switchModel 成功', (await channel.switchModel('p0', 'm1')) === true)
-  check('4d. 同步订阅者在新 agent 可见时已被唤醒', subscriberSubmitted)
-  check('4e. 订阅者观察新 agent 时图片代际已推进',
-    subscriberGeneration > generationBeforeSwitch,
-    `${generationBeforeSwitch} -> ${subscriberGeneration}`)
-  check('4f. 订阅窗口提交旧 capability 不附图（会话作用域）', await settled(() => sent.length === 2
-    && (sent[1] as Array<{ type: string }>).filter(block => block.type === 'image').length === 0))
-  unsubscribe()
+  check('4a. switchModel 成功', (await channel.switchModel('p0', 'm1')) === true)
+  check('4b. 不创建新 agent', created === 0, String(created))
+  check('4c. agent 与 session 身份保持',
+    channel.agentId === initial.id && channel.sessionId === initial.session.id,
+    `${channel.agentId} ${channel.sessionId}`)
+  check('4d. staged image 代际不推进（同一会话作用域）',
+    channel.stagedImageGeneration() === generationBeforeSwitch,
+    `${generationBeforeSwitch} -> ${channel.stagedImageGeneration()}`)
+  check('4e. 路由已切换', channel.model === 'm1', channel.model)
 }
 
 // ── 场景 5：resumeTo 竞争切换守卫 ────────────────────────────────────────
