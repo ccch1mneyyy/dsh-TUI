@@ -49,6 +49,12 @@ const GROUPS = {
     ['verify-image-inspection', ['node', '--import', 'tsx/esm', 'scripts/verify-image-inspection.tsx']],
     ['verify-terminal-images-sixel', ['node', '--import', 'tsx/esm', 'scripts/verify-terminal-images-sixel.tsx']],
     ['verify-sixel-transcript', ['node', '--import', 'tsx/esm', 'scripts/verify-sixel-transcript.tsx']],
+// 光标自愈：ConPTY 会往在途 DCS 里插自己的序列（focus/unfocus、resize 的
+// DSR/CPR），sixel 载荷被截断后剩下的字符落到屏幕上当文本，差分渲染看不见
+// 也就永远不修（要用户按 Ctrl+L）。帧尾用 DECXCPR 校验 park 位置，对不上就
+// 走 Ctrl+L 那条擦除+整屏重画，并带熔断。断言：图形帧必校验且被 DA1 兜底、
+// 正确/无应答不动作、错位会清屏重画并把泄漏文字收回、熔断有界、无图不查询。
+    ['verify-sixel-cursor-heal', ['node', '--import', 'tsx/esm', 'scripts/verify-sixel-cursor-heal.tsx']],
 // 启动落地页回归：头部（块体大字/鲸鱼/模型/目录）与快捷入口的版面、
 // 高度阶梯（full → no-chips → no-hint → input-only）、受控输入的闭环、
 // 焦点与 Enter 的归属（输入框提交 vs 入口激活）、真鼠标 SGR 点击。
