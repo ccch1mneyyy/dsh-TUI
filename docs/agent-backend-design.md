@@ -132,11 +132,12 @@
                  createChannelUi + read-view + host-registry   (src/adapter/channel；复用)
                                  │
             ┌────────────────────┴─────────────────────┐
-            │  Channel 组合根  src/dsh-adapter/channel.ts │  ← 本次改为接收 AgentSession
+            │  Channel 入口  src/dsh-adapter/channel.ts   │  ← 接收 AgentSession（或裸 DSH Agent）
+            │   ├ dsh-adapter/channel/core/  后端中立核心 │  ← 任何会话都走它（Phase 4a）
             │   ├ src/channel/projection.ts  共享投影器    │  ← AgentEvent → ChannelState（唯一 reducer）
             │   ├ src/channel/{subagents,tasks,pending,   │
             │   │     permissions,questions,usage}.ts     │  ← 中立 store（从 dsh-adapter 迁入）
-            │   └ dsh-adapter/channel/*  DSH 专属 specialist│  ← 仅当 session.native.dsh 存在时挂载
+            │   └ dsh-adapter/channel/extensions.ts       │  ← DSH specialist：仅当 native.dsh 存在时挂载
             └────────────────────┬─────────────────────┘
                                  │ AgentSession / AgentEvent / capabilities
                         src/agent/  (Agent Domain；零厂商依赖)
@@ -187,6 +188,17 @@ src/backends/claude/            Claude 后端（唯一允许 import @anthropic-a
   i18n.ts                       后端自带的用户可见文案键（注册到 src/i18n.ts 的 backend-claude-* 家族）
 src/dsh-adapter/backend/        DSH 后端（DSH 翻译器 + 会话）
   backend.ts  session.ts  translate.ts  replay.ts  catalog.ts
+src/dsh-adapter/channel.ts      Channel 入口：createCoreChannel → （native.dsh 时）attachDshExtensions → start（Phase 4a）
+src/dsh-adapter/channel/core/   后端中立核心（Phase 4a；新增后端不写 channel 代码）
+  compose.ts                    createCoreChannel(ctx, session, options, owner) → { state, extend, start, … }
+  host.ts                       宿主接缝查找、决策闸门 + 拓扑标记、settings/scenes 订阅、git 分支面包屑
+  binding-feed.ts               共享投影器 + 会话批次路由 + bind()/状态/历史回放（扩展经钩子加原始订阅者与同步种子回放）
+  session-controls.ts           按能力上报的会话事实（原生模式、effort、后端命令、/mcp、/context、订阅用量）
+  session-switch.ts             session-switch 否决、session-switched 通知、通用 /new（注入 opener；握手后复查）
+  local-actions.ts              /clear、本地行、!cmd/!!cmd（工作区 shell）、/activity frames、loadOlder 分发
+  actions.ts                    一次安装：不可用 → 能力委托（每次调用重新解析）→ 核心 → 扩展
+  files.ts / reports.ts         文件查询与补全；/doctor（含 diagnostics.lines()）、/export（来自投影行）
+src/dsh-adapter/channel/extensions.ts  attachDshExtensions：DSH specialist 的接线（内部实现不变）
 src/backends/acp/               Phase 6 骨架（见 §7）
 scripts/probes/claude-sdk-probe.mjs        探针（维护者工具，不进 CI）
 scripts/fixtures/claude/*.jsonl            脱敏的真实 SDK 消息序列（CI fixture）
@@ -359,7 +371,7 @@ Channel（组合根 + `src/channel/*`）只做六件事：
 5. 输入管线（FIFO、@ 提及、图片、IDE 选区、`tui/input` 决策）与 `submit/steer/interruptAndDeliver` 的放置语义；
 6. 宿主接缝（settings/scenes/themes/dialogs/notify）。
 
-DSH specialist 挂载规则：`createChannel(ctx, session, options)` 内部 `if (session.capabilities.native.dsh) attachDshSpecialists(...)`，它们继续通过 `native.dsh.agent/ctx` 工作（Phase 1 不改它们的内部实现）。Claude 会话下这些 specialist 不存在，对应的 `ChannelUi` 成员由 §5.3 的 capability 路径接管或明确不可用。
+DSH specialist 挂载规则（Phase 4a 落地）：`createChannel(ctx, session, options)` = `createCoreChannel(ctx, session, options, owner)` →（`session.capabilities.native.dsh` 存在时）`attachDshExtensions(core, ctx, native.dsh, options)` → `core.start()`；三步在同一个 owner 事务里，任一步抛错全部回滚。核心对每个会话都一样：binding、输入管线、共享投影器、宿主接缝、IDE 选区、git 分支、`/export`（来自投影行）、`!cmd`（工作区目标）、通用 `/new`、按能力委托的动作；扩展经 `extend()` 钩入（DSH：同步种子回放、原始订阅者、作业喂入与峰谷计价、日志折叠恢复、`/new` 的 preset/路由/挂载预约/工作区归属 opener）并把自己的动作叠在核心之上，DSH specialist 继续通过 `native.dsh.agent/ctx` 工作，内部实现不变。Claude 会话下这些 specialist 不存在，对应的 `ChannelUi` 成员由 §5.3 的 capability 路径接管或明确不可用。新增后端不需要 channel 代码。
 
 ### 3.6 Source-of-truth 规则
 

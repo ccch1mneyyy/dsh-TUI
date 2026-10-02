@@ -3,6 +3,7 @@
  */
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
+import { compositionSource } from './lib/channel-composition.mjs'
 import { Context } from '@deepseek-ai/cordis'
 import { createChannel } from '../src/dsh-adapter/channel.js'
 import { bindChannelCommands } from '../src/dsh-adapter/channel/commands.js'
@@ -964,7 +965,8 @@ assert.match(plugin, /bindChannelCommands\(rawChannel, channel\)/)
 assert.ok(!plugin.includes('ViaChannelFacade('), 'bootstrap must not use legacy raw-fallback helpers')
 const rawCalls = [...plugin.matchAll(/rawChannel\.([A-Za-z]+)\s*\(/g)].map(match => match[1])
 assert.deepEqual(rawCalls.sort(), ['bindApprovalStore', 'releaseContributions'])
-const impl = readFileSync(new URL('../src/dsh-adapter/channel.ts', import.meta.url), 'utf8')
+// Phase 4a: every composition root (channel.ts + core/compose.ts + extensions.ts).
+const impl = compositionSource()
 for (const [name, effect] of Object.entries(CHANNEL_UI_EFFECTS)) {
   if (effect === 'mutate') assert.ok(!new RegExp(`\\bstate\\.${name}\\s*\\(`).test(impl), `internal raw mutation: ${name}`)
 }

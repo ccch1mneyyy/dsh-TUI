@@ -199,8 +199,9 @@ dsh-tui --backend claude     # or `backend: claude` in the dsh-tui config row
 - **Approvals** use the same panel as DSH: allow once, allow always (the label
   says what the CLI will remember — e.g. auto-accepting edits for this session
   or a permission rule for this project; the CLI stores it, dsh-TUI writes no
-  settings file) and reject; typing on the panel sends a reason with the
-  rejection. Questions from the model (`AskUserQuestion`) use the
+  settings file) and reject; with the focus on the reject row (↓ / Tab), type
+  a reason to send with the rejection (allow always is never a single digit
+  there — move to it and press Enter). Questions from the model (`AskUserQuestion`) use the
   questionnaire, and a plan from plan mode opens the plan review (approve with
   auto-accepted edits, approve with per-edit approval, or keep planning with
   feedback).
@@ -212,8 +213,12 @@ dsh-tui --backend claude     # or `backend: claude` in the dsh-tui config row
   and account), and Claude's own slash commands in completion (sent to Claude
   as typed). Hovering the cost field shows subscription usage (5h / 7d).
 - **Also works**: streaming replies, thinking token counts, tool cards (Read,
-  Write, Edit, Bash, Glob, Grep, web and MCP tools), Ctrl+C cancel, `/new`,
-  `/clear`, `/status`, `/cost` (the backend-reported USD cost).
+  Write, Edit, Bash, Glob, Grep, web and MCP tools), Ctrl+C cancel, `/new`
+  (a `/new` that a message overtakes while the new session is still starting
+  is cancelled, the message stays in the current session), `/clear`,
+  `/status`, `/cost` (the backend-reported USD cost), `/export` (the
+  transcript as shown), `!cmd` / `!!cmd`, the IDE selection channel and the
+  git branch in the status line.
 - **Not yet**: `/resume` of Claude sessions, rewind, subagent panels and image
   input. DeepSeek-specific commands are hidden while this backend is active.
 

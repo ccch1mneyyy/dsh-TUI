@@ -121,6 +121,9 @@ export function startWsFixture(
         + '\r\n',
       )
       socketRef = socket
+      // A client that drops the link (stop/rebind) resets the socket; that is
+      // the client's business, not a fixture crash.
+      socket.on('error', () => { socket.destroy() })
       socket.on('data', chunk => {
         buffer = Buffer.concat([buffer, chunk])
         for (;;) {

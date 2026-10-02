@@ -131,11 +131,15 @@ boundaries and helpers over introducing parallel abstractions.
   - Upstream offers no supported way to discover or reserve a verifiably
     exclusive claimant, so the legacy seat guard and its warning cannot be
     reproduced locally.
-- `src/dsh-adapter/channel.ts`: event-to-view projection and the non-React
-  action surface.
-  - It translates DSH session events into transcript rows.
-  - It implements submit, steering, rewind, resume, model/preset switching,
-    local reports, and related state transitions.
+- `src/dsh-adapter/channel.ts`: the channel entry — the backend-neutral core
+  `channel/core/` (binding, input pipeline, shared-projector wiring, host
+  seams, `/new`, local actions, files/reports, capability-backed actions)
+  plus `channel/extensions.ts`, attached only to a DSH session (the wiring of
+  the DSH specialists: rewind, resume, agent view, subagents/jobs,
+  model/preset/mode, recap, …).
+  - Backend translators turn session events into `AgentEvent`s; the one
+    shared projector, `src/channel/projection.ts`, turns those into
+    transcript rows. Adding a backend needs no channel code.
 - `src/screens/Chat.tsx`: top-level interaction coordinator. It owns modal
   precedence, global keyboard handling, scroll/search/selection state, slash
   command dispatch, and composition of the chat screen.
@@ -179,7 +183,7 @@ Cordis config
   -> src/index.ts
   -> src/dsh-adapter/plugin.ts
   -> DSH agent/session services
-  -> src/dsh-adapter/channel.ts (session events -> Channel snapshot)
+  -> src/dsh-adapter/channel.ts (core + DSH extensions; AgentEvent -> shared projector -> Channel snapshot)
   -> src/screens/Chat.tsx
   -> src/components/*
   -> src/ui.ts
@@ -190,7 +194,9 @@ Cordis config
 Keep ownership in the layer where it belongs:
 
 - Agent/session/tool facts come from DSH services and durable session events.
-- Projection and TUI actions belong in `dsh-adapter/channel.ts`, not in presentation
+- Projection belongs in the shared projector `src/channel/projection.ts`; TUI
+  actions belong in the channel core (`dsh-adapter/channel/core/`) and the DSH
+  extensions (`dsh-adapter/channel/extensions.ts`), not in presentation
   components.
 - Interaction modes and key precedence belong in `Chat.tsx` or the focused
   modal/input component.
@@ -604,7 +610,7 @@ guide owns detailed contracts such as the toolchain and verification matrix.
 | Other plugin config or environment behavior | `src/dsh-adapter/index.ts`, runtime consumer, `cordis.patch.yml`, `cordis.yml` (comments: example values and essential semantics only), `README.md`, `README_ZH.md` |
 | Slash commands or shortcuts | `src/commands.ts`, `src/screens/Chat.tsx`, help/input components, both READMEs, relevant skill mapping/tests |
 | Theme contract, plugin seam, or persisted theme behavior | `src/theme.ts`, `src/themeCatalog.ts`, `src/dsh-adapter/themes.ts`, all palettes, theme provider/picker, custom-theme parser, theme verification, both READMEs, plugin docs |
-| Session/channel behavior | `src/dsh-adapter/channel.ts`, affected UI projections, compiled output, focused channel/replay regression |
+| Session/channel behavior | Backend-neutral: `src/dsh-adapter/channel/core/`; DSH-only: `channel/extensions.ts` and its specialists; affected UI projections, compiled output, focused channel/replay regression (incl. `verify-backend-channel`, `verify-channel-rollback`) |
 | Renderer/layout behavior | `src/ink/` or Yoga source, compiled output, CI regressions, focused scroll/resize/PTY probe |
 | Skill discovery or presentation | DSH adapter, slash-command merge, `/skills`, and focused regressions; maintainer-only skills live in `.agents/skills/` and must stay out of npm |
 | User-facing documented behavior | Chinese and English READMEs, plus config comments/help text where applicable |

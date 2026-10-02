@@ -169,7 +169,8 @@ dsh-tui --backend claude     # 或在 dsh-tui 配置行写 `backend: claude`
   设置、hooks、MCP 服务器与插件按 CLI 的方式加载。
 - **审批**沿用 DSH 的同一个面板：允许一次、始终允许（标签写明 CLI 会记住什么——
   例如本会话自动接受编辑，或本项目的一条权限规则；由 CLI 保存，dsh-TUI 不写任何
-  设置文件）与拒绝；在面板上直接打字可附拒绝理由。模型的提问（`AskUserQuestion`）
+  设置文件）与拒绝；焦点移到"拒绝"行（↓ / Tab）后打字可附拒绝理由（此时"始终允许"
+  不再有数字快捷键——移过去按 Enter）。模型的提问（`AskUserQuestion`）
   走问卷面板，计划模式提交的计划打开计划评审（批准并自动接受编辑、批准但逐个确认
   编辑、或带反馈继续规划）。
 - **控制**：`/model`（Claude 自己的模型列表，不需要 provider 前缀——`/model sonnet`；
@@ -179,8 +180,10 @@ dsh-tui --backend claude     # 或在 dsh-tui 配置行写 `backend: claude`
   补全中还会列出 Claude 自己的斜杠命令（原样发给 Claude）。悬停费用字段可看
   订阅用量（5小时 / 7天）。
 - **同样可用**：流式回复、思考 token 计数、工具卡（Read、Write、Edit、Bash、
-  Glob、Grep、网络与 MCP 工具）、Ctrl+C 中断、`/new`、`/clear`、`/status`、
-  `/cost`（后端上报的美元费用）。
+  Glob、Grep、网络与 MCP 工具）、Ctrl+C 中断、`/new`（新会话仍在启动时若有消息抢先
+  开始，本次 `/new` 取消、消息留在当前会话）、`/clear`、`/status`、`/cost`（后端
+  上报的美元费用）、`/export`（按当前显示的对话导出）、`!cmd` / `!!cmd`、IDE 选区
+  通道与状态栏的 git 分支。
 - **尚未支持**：恢复 Claude 会话的 `/resume`、回退、子代理面板与图片输入。启用该
   后端时 DeepSeek 专属命令会隐藏。
 

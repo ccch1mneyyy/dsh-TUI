@@ -18,10 +18,17 @@
  * A DSH channel built from the same entry point keeps today's command list
  * exactly (capability snapshot = every built-in, `commandList` untouched).
  *
+ * Phase 4a: a non-DSH session is served by the same channel core as DSH, so
+ * the backend-neutral features reach it too — the IDE selection channel
+ * (consumed into the submitted message, indicator on the user row), the git
+ * branch breadcrumb, `/export` from the projected rows, `!cmd` with its
+ * workspace target — and `/new` never tears down a turn that started (or a
+ * prompt that arrived) while the new session was opening (review item 9).
+ *
  * Run: node --import tsx/esm scripts/verify-backend-channel.ts
  */
 import assert from 'node:assert/strict'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { AgentEvent, AgentEventMeta } from '../src/agent/events.js'
@@ -36,6 +43,7 @@ import { QuestionStore } from '../src/channel/questions.js'
 import type { PermissionDecision } from '../src/agent/capabilities.js'
 import { setLang, t } from '../src/i18n.js'
 import { settled } from './lib/term-test.mjs'
+import { startWsFixture } from './lib/ide-ws-fixture.js'
 
 setLang('en')
 let passed = 0
@@ -339,6 +347,101 @@ try {
     prompted.releaseContributions()
   }
   check('releasing the channel withdraws the open prompt', permissions.getSnapshot() === null && responses.length === 1)
+}
+
+// ── /new never races a turn or a prompt during the open (item 9) ─────
+{
+  const current = fakeSession('77777777-7777-4777-8777-777777777777')
+  let release: ((session: FakeSession) => void) | undefined
+  const racing = createChannel(ctx, current, {
+    model: 'm', provider: '', cwd: workdir, activity: false,
+    openSession: () => new Promise<FakeSession>(resolve => { release = resolve }),
+  })
+  const opening = async (): Promise<() => void> => {
+    release = undefined
+    await settled(() => release !== undefined)
+    return () => undefined
+  }
+  try {
+    // A turn starts on the current session while the new one is opening.
+    const first = racing.newSession()
+    await opening()
+    current.emit([{ type: 'turn.start', turn: 1, origin: 'user', time: 1 }])
+    const candidate = fakeSession('88888888-8888-4888-8888-888888888888')
+    release!(candidate)
+    check('/new is abandoned when a turn started during the open', await first === false)
+    check('… the candidate is disposed', await settled(() => candidate.disposed))
+    check('… the current session stays bound and alive', !current.disposed && current.listenerCount() === 1 && racing.sessionRef.sessionId === current.ref.sessionId)
+    check('… and the user is told why', racing.notifications.some(item => item.text === t('new-session-raced')))
+    current.emit([{ type: 'turn.end', turn: 1, reason: { kind: 'completed' }, time: 2 }])
+    // A prompt sent while the new session is opening (not started yet).
+    const second = racing.newSession()
+    await opening()
+    racing.submit('typed while the new session opened')
+    await settled(() => current.submits.length === 1)
+    const candidate2 = fakeSession('99999999-9999-4999-8999-999999999999')
+    release!(candidate2)
+    check('/new is abandoned when a prompt arrived during the open', await second === false && await settled(() => candidate2.disposed))
+    check('… the prompt went to the session it was typed in', current.submits[0]!.input.text === 'typed while the new session opened' && !current.disposed)
+    // Nothing raced: the switch proceeds.
+    current.emit([{ type: 'pending.changed', items: [], claimed: [current.submits[0]!.input.clientMessageId] }], { wake: 'none' })
+    const third = racing.newSession()
+    await opening()
+    const candidate3 = fakeSession('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa')
+    release!(candidate3)
+    check('an uncontested /new still switches', await third === true && racing.sessionRef.sessionId === candidate3.ref.sessionId && await settled(() => current.disposed))
+  } finally {
+    racing.releaseContributions()
+  }
+}
+
+// ── backend-neutral features on a non-DSH session (Phase 4a core) ────
+{
+  // IDE selection: a real loopback IDE fixture pushes a selection; the
+  // submit attaches it and the confirmed user row shows the indicator.
+  const fixture = await startWsFixture('tok-backend-channel', [workdir], { clearSelectionAfterMs: null })
+  process.env.DSH_TUI_IDE_PORT = String(fixture.port)
+  process.env.DSH_TUI_IDE_TOKEN = 'tok-backend-channel'
+  const commands: string[] = []
+  const shell = {
+    resolve: (request: unknown) => request,
+    run: (spec: { command: string }) => {
+      commands.push(spec.command)
+      return Promise.resolve({ stdout: { text: spec.command.startsWith('git branch') ? 'feature-x\n' : 'ran' }, stderr: { text: '' }, timedOut: false })
+    },
+  }
+  const shellCtx = { on: () => () => undefined, get: (name: string) => name === 'shell' ? shell : undefined, logger: { warn: () => undefined, info: () => undefined, debug: () => undefined } } as never
+  const neutral = fakeSession('bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb')
+  const channel = createChannel(shellCtx, neutral, { model: 'm', provider: '', cwd: workdir, activity: false, backendLabel: 'Fake Agent' })
+  try {
+    check('IDE selection reaches a non-DSH channel', await settled(() => channel.selection !== undefined, { timeoutMs: 5000 }))
+    channel.submit('explain the selection')
+    check('… and is attached to the submitted message', await settled(() => neutral.submits.length === 1) && (neutral.submits[0]!.input.blocks ?? []).some(block => block.type === 'text' && typeof block.text === 'string' && block.text.includes('fa.ts')), neutral.submits[0]?.input.blocks)
+    const id = neutral.submits[0]!.input.clientMessageId
+    neutral.emit([
+      { type: 'turn.start', turn: 1, origin: 'user', userMessageId: id, time: 1 },
+      { type: 'user.message', id, anchor: id, seq: 1, turn: 1, time: 1, source: 'user', text: 'explain the selection', blocks: [{ type: 'text', text: 'explain the selection' }] },
+      { type: 'step.start', turn: 1, step: 1 },
+      { type: 'assistant.attempt.start', attemptId: 'm1', turn: 1, step: 1 },
+      { type: 'assistant.message', seq: 2, anchor: 'm1', turn: 1, step: 1, attemptId: 'm1', time: 2, canonical: true, blocks: [{ type: 'text', text: 'It lists three files.' }] },
+      { type: 'step.end', turn: 1, step: 1 },
+      { type: 'turn.end', turn: 1, reason: { kind: 'completed' }, time: 3 },
+    ])
+    check('… the user row shows the selection indicator', channel.rows.some(row => row.kind === 'user' && row.selectionAttached !== undefined))
+    check('the git branch breadcrumb works on a non-DSH session', await settled(() => channel.gitBranch === 'feature-x') && commands[0] === 'git branch --show-current')
+    check('/export is offered', channel.commandList.some(command => command.name === 'export') && channel.capabilities.commands.includes('export'))
+    const exported = channel.exportSession()
+    const text = exported === null ? '' : readFileSync(exported, 'utf8')
+    check('/export writes the projected transcript', exported !== null && text.includes('explain the selection') && text.includes('It lists three files.'), exported)
+    channel.submit('!echo hi')
+    check('`!cmd` runs in the workspace shell, its target badge on the row', await settled(() => channel.rows.some(row => row.kind === 'local-output' && row.text === 'ran')) && channel.rows.some(row => row.kind === 'local' && row.text === 'echo hi' && row.executionTarget !== undefined))
+  } finally {
+    channel.releaseContributions()
+    delete process.env.DSH_TUI_IDE_PORT
+    delete process.env.DSH_TUI_IDE_TOKEN
+    fixture.close()
+  }
+  check('releasing the channel disposes the session it owns', await settled(() => neutral.disposed))
 }
 
 // ── DSH keeps today's command list ────────────────────────────────────

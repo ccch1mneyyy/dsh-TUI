@@ -98,9 +98,12 @@ draft、只跑一次 CI 就关，`pr-gate` 与 `issue-link` 都按机器人放�
     也能观察、替换或拒绝下游结果；`{ prepend: true }` 会把 listener 插到队首。
   - 上游没有受支持的方法发现或保留可验证的独占 claimant，
     因此 legacy seat guard 及其告警无法在本地复现。
-- `src/dsh-adapter/channel.ts`：事件到视图的投影 + 非 React 的动作面。把 DSH 会话事件
-  翻译成 transcript 行，实现 submit、steer、rewind、resume、模型/preset 切换、
-  本地报告及相关状态迁移。
+- `src/dsh-adapter/channel.ts`：Channel 入口——后端中立核心
+  `channel/core/`（绑定、输入管线、共享投影器的接线、宿主接缝、`/new`、本地动作、
+  文件/报告、按能力委托的动作）+ 仅 DSH 会话挂载的扩展 `channel/extensions.ts`
+  （rewind、resume、agent view、子代理/任务、模型/preset/模式、recap 等 DSH
+  specialist 的接线）。会话事件由后端翻译器转成 `AgentEvent`，经唯一的共享投影器
+  `src/channel/projection.ts` 成为 transcript 行。新增后端不写 channel 代码。
 - `src/screens/Chat.tsx`：顶层交互协调器。负责模态优先级、全局键盘、滚动/
   搜索/选区状态、slash 命令分发与聊天屏组装。
 - `src/screens/StatusLine.tsx` 与 `src/screens/StatusMetrics.ts`：底部状态栏
@@ -138,7 +141,7 @@ Cordis config
   -> src/index.ts
   -> src/dsh-adapter/plugin.ts
   -> DSH agent/session services
-  -> src/dsh-adapter/channel.ts (session events -> Channel snapshot)
+  -> src/dsh-adapter/channel.ts（core + DSH extensions；AgentEvent -> 共享投影器 -> Channel snapshot）
   -> src/screens/Chat.tsx
   -> src/components/*
   -> src/ui.ts
@@ -149,7 +152,9 @@ Cordis config
 职责归属在各层，不要越权：
 
 - Agent/会话/工具事实来自 DSH 服务与持久化会话事件。
-- 投影与 TUI 动作属于 `dsh-adapter/channel.ts`，不属于呈现组件。
+- 投影属于共享投影器 `src/channel/projection.ts`，TUI 动作属于 channel 核心
+  （`dsh-adapter/channel/core/`）与 DSH 扩展（`dsh-adapter/channel/extensions.ts`），
+  不属于呈现组件。
 - 交互模式与按键优先级属于 `Chat.tsx` 或当前聚焦的模态/输入组件。
 - 可复用的视觉行为属于 `components/` 与主题感知原语。
 - 终端协议、布局、命中测试、选区与帧差分行为属于 `ink/`。
@@ -452,7 +457,7 @@ TypeScript 源的脚本在头部声明 `node --import tsx/esm <script>` 形式�
 | 其他插件配置或环境行为 | `src/dsh-adapter/index.ts`、运行时消费、`cordis.patch.yml`、`cordis.yml`（注释只写示例值与必要语义）、`README.md`、`README_ZH.md` |
 | Slash 命令或快捷键 | `src/commands.ts`、`src/screens/Chat.tsx`、帮助/输入组件、双 README、相关技能映射/测试 |
 | 主题契约、插件接缝或持久化主题行为 | `src/theme.ts`、`src/themeCatalog.ts`、`src/dsh-adapter/themes.ts`、所有色板、主题 provider/picker、自定义主题解析器、主题验证、双 README、插件文档 |
-| 会话/channel 行为 | `src/dsh-adapter/channel.ts`、受影响的 UI 投影、编译产物、聚焦 channel/回放回归 |
+| 会话/channel 行为 | 后端中立的放 `src/dsh-adapter/channel/core/`，DSH 专属的放 `channel/extensions.ts` 及其 specialist、受影响的 UI 投影、编译产物、聚焦 channel/回放回归（含 `verify-backend-channel`、`verify-channel-rollback`） |
 | 渲染器/布局行为 | `src/ink/` 或 Yoga 源、编译产物、CI 回归、聚焦滚动/resize/PTY 探针 |
 | 技能发现或呈现 | DSH adapter、slash 命令合并、`/skills` 与相关回归；项目维护技能放 `.agents/skills/` 且不得加入 npm 包 |
 | 用户可见的文档化行为 | 中英文 README，外加适用的配置注释/帮助文本 |

@@ -11,7 +11,6 @@ import type { AgentSession } from '../agent/session.js'
 import { createDshSession, isAgentSession } from './backend/session.js'
 import { createCoreChannel } from './channel/core/compose.js'
 import { attachDshExtensions } from './channel/extensions.js'
-import { createSessionChannelWithOwner } from './channel/session-channel.js'
 import { createChannelOwner } from './channel/owner.js'
 import type { ChannelLaunchOptions } from './channel/state.js'
 import type { ChannelState } from './channel/types.js'
@@ -37,13 +36,11 @@ export function createChannel(
   const owner = createChannelOwner()
   try {
     const session = isAgentSession(initial) ? initial : createDshSession(ctx, { agent: initial, handle: options.handle })
-    const native = session.capabilities.native.dsh
-    // Phase 4a checkpoint 1: a non-DSH session still takes its own
-    // composition; checkpoint 2 routes it through the core below.
-    if (native === undefined) return createSessionChannelWithOwner(ctx, session, options, owner)
     const core = createCoreChannel(ctx, session, options, owner)
-    // DSH specialists attach only to a DSH session (design §3.5).
-    attachDshExtensions(core, ctx, native, options)
+    // DSH specialists attach only to a DSH session (design §3.5); any other
+    // backend is served by the core and its session's capabilities alone.
+    const native = session.capabilities.native.dsh
+    if (native !== undefined) attachDshExtensions(core, ctx, native, options)
     return core.start()
   } catch (error) {
     // Setup is one transaction from the first acquired resource. Preserve the
